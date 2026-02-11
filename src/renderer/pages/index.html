@@ -1,0 +1,1128 @@
+<!DOCTYPE html>
+<!--
+  SPDX-License-Identifier: GPL-3.0-or-later
+  Copyright (c) 2026 B5-Software
+  This file is part of Could I Be Your Partner.
+-->
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' file: data: blob:; font-src 'self' data:; media-src 'self' blob:; connect-src 'self' https://www.geogebra.org data:;">
+  <title>Could I Be Your Partner</title>
+  <link rel="icon" href="../../../assets/icons/icon.png">
+  <link rel="stylesheet" href="../../../node_modules/katex/dist/katex.min.css">
+  <link rel="stylesheet" href="../css/theme.css">
+  <link rel="stylesheet" href="../css/main.css">
+  <link rel="stylesheet" href="../css/chat.css">
+  <link rel="stylesheet" href="../css/settings.css">
+  <link rel="stylesheet" href="../css/components.css">
+  <link rel="stylesheet" href="../../../assets/fonts/fontawesome.min.css">
+  <script src="../../../assets/geogebra/deployggb.js"></script>
+</head>
+<body>
+  <!-- Custom Titlebar -->
+  <div id="titlebar">
+    <div class="titlebar-drag">
+      <div class="titlebar-icon"><img src="../../../assets/icons/icon.png" alt="App"></div>
+      <span class="titlebar-text">Could I Be Your Partner</span>
+    </div>
+    <div class="titlebar-center">
+      <input type="text" class="titlebar-title-edit hidden" id="titlebar-title-edit" maxlength="50">
+      <span class="titlebar-title" id="titlebar-title" title="单击编辑">未命名对话</span>
+    </div>
+    <div class="titlebar-controls">
+      <button class="titlebar-btn" id="btn-minimize" title="最小化"><i class="fa-solid fa-minus"></i></button>
+      <button class="titlebar-btn" id="btn-maximize" title="最大化"><i class="fa-regular fa-square"></i></button>
+      <button class="titlebar-btn titlebar-close" id="btn-close" title="关闭"><i class="fa-solid fa-xmark"></i></button>
+    </div>
+  </div>
+
+  <div id="app">
+    <!-- Sidebar -->
+    <aside id="sidebar">
+      <div class="sidebar-header">
+        <div class="app-logo">
+          <img src="../../../assets/icons/icon.png" alt="App">
+        </div>
+        <h1 class="app-title">CIBYP</h1>
+      </div>
+      <nav class="sidebar-nav">
+        <button class="nav-item active" data-page="chat" title="对话">
+          <i class="fa-solid fa-comments"></i>
+          <span>对话</span>
+        </button>
+        <button class="nav-item" data-page="history" title="历史">
+          <i class="fa-solid fa-clock-rotate-left"></i>
+          <span>历史</span>
+        </button>
+        <button class="nav-item" data-page="tools" title="工具">
+          <i class="fa-solid fa-toolbox"></i>
+          <span>工具</span>
+        </button>
+        <button class="nav-item" data-page="skills" title="技能">
+          <i class="fa-solid fa-lightbulb"></i>
+          <span>技能</span>
+        </button>
+        <button class="nav-item" data-page="knowledge" title="知识库">
+          <i class="fa-solid fa-database"></i>
+          <span>知识库</span>
+        </button>
+        <button class="nav-item" data-page="memory" title="记忆">
+          <i class="fa-solid fa-brain"></i>
+          <span>记忆</span>
+        </button>
+      </nav>
+      <div class="sidebar-footer">
+        <button class="nav-item" data-page="settings" title="设置">
+          <i class="fa-solid fa-gear"></i>
+          <span>设置</span>
+        </button>
+        <button class="nav-item" data-page="about" title="关于">
+          <i class="fa-solid fa-circle-info"></i>
+          <span>关于</span>
+        </button>
+      </div>
+    </aside>
+
+    <!-- Main Content -->
+    <main id="main-content">
+      <!-- Chat Page -->
+      <section id="page-chat" class="page active">
+        <div class="chat-container">
+          <div class="chat-header">
+            <div class="agent-info">
+              <div class="agent-avatar" id="agent-avatar-display">
+                <i class="fa-solid fa-robot"></i>
+              </div>
+              <div class="agent-meta">
+                <h2 id="agent-name-display">AI Agent</h2>
+                <span class="agent-status" id="agent-status">
+                  <i class="fa-solid fa-circle"></i> 待命中
+                </span>
+                <div class="agent-tarot" id="agent-tarot" title="命运之牌：未抽取">命运之牌：未抽取</div>
+              </div>
+            </div>
+            <div class="context-progress header-context-progress">
+              <div class="progress-bar">
+                <div class="progress-fill" id="context-progress-fill" style="width: 0%"></div>
+              </div>
+              <span class="progress-text" id="context-progress-text">0/8192</span>
+            </div>
+            <div class="chat-actions">
+              <button class="btn-icon" id="btn-open-workspace" title="打开工作目录">
+                <i class="fa-solid fa-folder-open"></i>
+              </button>
+              <button class="btn-icon" id="btn-new-chat" title="新对话">
+                <i class="fa-solid fa-plus"></i>
+              </button>
+              <button class="btn-icon" id="btn-clear-chat" title="清空对话">
+                <i class="fa-solid fa-trash-can"></i>
+              </button>
+            </div>
+          </div>
+
+          <div class="chat-messages" id="chat-messages">
+            <div class="welcome-message">
+              <div class="welcome-icon">
+                <i class="fa-solid fa-wand-magic-sparkles"></i>
+              </div>
+              <h2>你好，我是你的AI伙伴</h2>
+              <p>我可以帮你完成各种任务，包括文件操作、代码编写、信息搜索、图像生成等。告诉我你需要什么帮助吧！</p>
+              <div class="quick-actions">
+                <button class="quick-action-btn" data-prompt="帮我搜索一下最新的科技新闻">
+                  <i class="fa-solid fa-magnifying-glass"></i> 搜索新闻
+                </button>
+                <button class="quick-action-btn" data-prompt="帮我生成一张风景图片">
+                  <i class="fa-solid fa-image"></i> 生成图片
+                </button>
+                <button class="quick-action-btn" data-prompt="帮我创建一个待办事项列表">
+                  <i class="fa-solid fa-list-check"></i> 待办事项
+                </button>
+                <button class="quick-action-btn" data-prompt="帮我写一段JavaScript代码">
+                  <i class="fa-solid fa-code"></i> 编写代码
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <!-- Attachments Preview -->
+          <div class="attachments-preview hidden" id="attachments-preview"></div>
+
+          <!-- Todo List Panel -->
+          <div class="todo-panel hidden" id="todo-panel">
+            <div class="todo-header">
+              <h3><i class="fa-solid fa-list-check"></i> 待办事项</h3>
+              <button class="btn-icon" id="btn-close-todo">
+                <i class="fa-solid fa-xmark"></i>
+              </button>
+            </div>
+            <div class="todo-list" id="todo-list"></div>
+            <div class="todo-input-area">
+              <input type="text" id="todo-input" placeholder="添加新的待办事项...">
+              <button class="btn-primary btn-sm" id="btn-add-todo">
+                <i class="fa-solid fa-plus"></i>
+              </button>
+            </div>
+          </div>
+
+          <!-- Approval Panel -->
+          <div class="approval-panel hidden" id="approval-panel">
+            <div class="approval-header">
+              <i class="fa-solid fa-triangle-exclamation"></i>
+              <h3>敏感操作确认</h3>
+            </div>
+            <div class="approval-content" id="approval-content"></div>
+            <div class="approval-actions">
+              <button class="btn-secondary" id="btn-deny">
+                <i class="fa-solid fa-xmark"></i> 拒绝
+              </button>
+              <button class="btn-danger" id="btn-approve">
+                <i class="fa-solid fa-check"></i> 批准执行
+              </button>
+            </div>
+          </div>
+
+          <div class="chat-input-area">
+            <div class="input-wrapper">
+              <textarea id="chat-input" placeholder="输入消息，让AI Agent帮你完成任务..." rows="1"></textarea>
+              <div class="input-actions">
+                <button class="btn-icon" id="btn-attach-file" title="附加文件">
+                  <i class="fa-solid fa-paperclip"></i>
+                </button>
+                <button class="btn-icon" id="btn-camera" title="拍照">
+                  <i class="fa-solid fa-camera"></i>
+                </button>
+                <button class="btn-icon" id="btn-todo-toggle" title="待办事项">
+                  <i class="fa-solid fa-list-check"></i>
+                </button>
+                <button class="btn-primary btn-send" id="btn-send" title="发送">
+                  <i class="fa-solid fa-paper-plane"></i>
+                </button>
+                <button class="btn-danger btn-send hidden" id="btn-stop" title="停止">
+                  <i class="fa-solid fa-stop"></i>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- GeoGebra Side Panel -->
+      <div id="geogebra-panel" class="geogebra-panel hidden">
+        <div class="geogebra-header">
+          <h3><i class="fa-solid fa-chart-line"></i> GeoGebra</h3>
+          <button class="btn-icon" id="btn-close-geogebra" title="关闭">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+        </div>
+        <div class="geogebra-body">
+          <div id="ggb-element"></div>
+        </div>
+      </div>
+
+      <!-- Canvas Side Panel -->
+      <div id="canvas-panel" class="geogebra-panel hidden">
+        <div class="geogebra-header">
+          <h3><i class="fa-solid fa-paintbrush"></i> 画布</h3>
+          <button class="btn-icon" id="btn-close-canvas" title="关闭">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+        </div>
+        <div class="geogebra-body">
+          <svg id="canvas-svg" width="100%" height="100%" style="background: var(--bg-primary); border: 1px solid var(--border-color);">
+            <!-- Canvas objects will be added here -->
+          </svg>
+        </div>
+      </div>
+
+      <!-- History Page -->
+      <section id="page-history" class="page">
+        <div class="page-header">
+          <h2><i class="fa-solid fa-clock-rotate-left"></i> 对话历史</h2>
+          <p class="page-desc">查看和继续以前的对话</p>
+        </div>
+        <div class="history-list" id="history-list">
+          <div class="empty-state">
+            <i class="fa-solid fa-clock-rotate-left"></i>
+            <p>暂无对话历史</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Tools Page -->
+      <section id="page-tools" class="page">
+        <div class="page-header">
+          <h2><i class="fa-solid fa-toolbox"></i> 工具管理</h2>
+          <p class="page-desc">启用或禁用AI Agent可以使用的工具</p>
+        </div>
+        <div class="tools-grid" id="tools-grid"></div>
+      </section>
+
+      <!-- Skills Page -->
+      <section id="page-skills" class="page">
+        <div class="page-header">
+          <h2><i class="fa-solid fa-lightbulb"></i> 技能管理</h2>
+          <p class="page-desc">管理AI Agent的技能，也可以让Agent自动生成</p>
+          <button class="btn-primary" id="btn-add-skill">
+            <i class="fa-solid fa-plus"></i> 添加技能
+          </button>
+        </div>
+        <div class="skills-list" id="skills-list">
+          <div class="empty-state">
+            <i class="fa-solid fa-lightbulb"></i>
+            <p>暂无技能，点击上方按钮添加</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Knowledge Base Page -->
+      <section id="page-knowledge" class="page">
+        <div class="page-header">
+          <h2><i class="fa-solid fa-database"></i> 知识库</h2>
+          <p class="page-desc">AI Agent的知识存储，支持搜索和管理</p>
+          <div class="page-header-actions">
+            <div class="search-bar">
+              <i class="fa-solid fa-magnifying-glass"></i>
+              <input type="text" id="knowledge-search" placeholder="搜索知识库...">
+            </div>
+            <button class="btn-primary" id="btn-import-knowledge">
+              <i class="fa-solid fa-file-import"></i> 导入文件
+            </button>
+          </div>
+        </div>
+        <div class="knowledge-list" id="knowledge-list">
+          <div class="empty-state">
+            <i class="fa-solid fa-database"></i>
+            <p>知识库为空，AI Agent会在工作中自动积累知识</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Memory Page -->
+      <section id="page-memory" class="page">
+        <div class="page-header">
+          <h2><i class="fa-solid fa-brain"></i> 长期记忆</h2>
+          <p class="page-desc">AI Agent的持久化记忆，帮助它记住重要信息</p>
+          <div class="search-bar">
+            <i class="fa-solid fa-magnifying-glass"></i>
+            <input type="text" id="memory-search" placeholder="搜索记忆...">
+          </div>
+        </div>
+        <div class="memory-list" id="memory-list">
+          <div class="empty-state">
+            <i class="fa-solid fa-brain"></i>
+            <p>暂无长期记忆，AI Agent会在工作中自动记录</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Settings Page -->
+      <section id="page-settings" class="page">
+        <div class="page-header">
+          <h2><i class="fa-solid fa-gear"></i> 设置</h2>
+        </div>
+        <div class="settings-shell">
+          <div class="settings-tabs">
+            <button class="settings-tab active" data-tab="ai"><i class="fa-solid fa-user-astronaut"></i> AI 形象</button>
+            <button class="settings-tab" data-tab="llm"><i class="fa-solid fa-microchip"></i> LLM</button>
+            <button class="settings-tab" data-tab="image"><i class="fa-solid fa-image"></i> 生图</button>
+            <button class="settings-tab" data-tab="theme"><i class="fa-solid fa-palette"></i> 主题</button>
+            <button class="settings-tab" data-tab="network"><i class="fa-solid fa-network-wired"></i> 网络</button>
+            <button class="settings-tab" data-tab="entropy"><i class="fa-solid fa-dice"></i> 熵源</button>
+            <button class="settings-tab" data-tab="firmware"><i class="fa-solid fa-microchip"></i> TRNG固件</button>
+            <button class="settings-tab" data-tab="security"><i class="fa-solid fa-shield-halved"></i> 安全</button>
+          </div>
+          <div class="settings-panels">
+            <div class="settings-panel active" data-tab="ai">
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-user-astronaut"></i> AI 形象设定</h3>
+                <div class="setting-item">
+                  <label>名字</label>
+                  <input type="text" id="setting-ai-name" placeholder="Partner">
+                </div>
+                <div class="setting-item">
+                  <label>头像</label>
+                  <div class="avatar-row">
+                    <div class="avatar-preview" id="setting-ai-avatar-preview">
+                      <i class="fa-solid fa-robot"></i>
+                    </div>
+                    <div class="avatar-actions">
+                      <input type="text" id="setting-ai-avatar" placeholder="选择图片文件或填写路径">
+                      <button class="btn-secondary" id="btn-ai-avatar-pick"><i class="fa-solid fa-image"></i> 选择图片</button>
+                    </div>
+                  </div>
+                </div>
+                <div class="setting-item">
+                  <label>Bio</label>
+                  <input type="text" id="setting-ai-bio" placeholder="你的全能AI伙伴~">
+                </div>
+                <div class="setting-item">
+                  <label>人称代词</label>
+                  <input type="text" id="setting-ai-pronouns" placeholder="Ta">
+                </div>
+                <div class="setting-item">
+                  <label>性格</label>
+                  <input type="text" id="setting-ai-personality" placeholder="活泼可爱、热情友善">
+                </div>
+                <div class="setting-item">
+                  <label>自定义提示词 (追加到系统提示词末尾)</label>
+                  <textarea id="setting-ai-custom-prompt" placeholder="你可以在这里添加额外的性格描述、说话风格等..." rows="4"></textarea>
+                </div>
+              </div>
+            </div>
+
+            <div class="settings-panel" data-tab="llm">
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-microchip"></i> LLM 配置</h3>
+                <div class="setting-item">
+                  <label>API URL</label>
+                  <input type="text" id="setting-llm-url" placeholder="https://api.openai.com/v1/chat/completions">
+                </div>
+                <div class="setting-item">
+                  <label>API Key</label>
+                  <div class="input-with-toggle">
+                    <input type="password" id="setting-llm-key" placeholder="sk-...">
+                    <button class="btn-icon btn-toggle-pwd" data-target="setting-llm-key">
+                      <i class="fa-solid fa-eye"></i>
+                    </button>
+                  </div>
+                </div>
+                <div class="setting-item">
+                  <label>模型</label>
+                  <input type="text" id="setting-llm-model" placeholder="gpt-4o">
+                </div>
+                <div class="setting-item">
+                  <label>温度 <span class="setting-value" id="setting-temp-val">0.7</span></label>
+                  <input type="range" id="setting-llm-temp" min="0" max="2" step="0.1" value="0.7">
+                </div>
+                <div class="setting-item">
+                  <label>最大上下文长度</label>
+                  <input type="number" id="setting-llm-ctx" min="1024" max="1000000" value="8192">
+                </div>
+                <div class="setting-item">
+                  <label>LLM返回Token上限</label>
+                  <input type="number" id="setting-llm-max-response" min="256" max="100000" value="8192">
+                </div>
+                <div class="setting-item">
+                  <label>每日最大Token用量 (0为不限制)</label>
+                  <input type="number" id="setting-llm-daily-limit" min="0" step="1000" placeholder="例如 200000">
+                  <div class="setting-hint" id="setting-llm-usage">今日已用: 0</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="settings-panel" data-tab="image">
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-image"></i> 生图模型配置</h3>
+                <div class="setting-item">
+                  <label>API URL</label>
+                  <input type="text" id="setting-img-url" placeholder="https://api.siliconflow.cn/v1/images/generations">
+                </div>
+                <div class="setting-item">
+                  <label>API Key</label>
+                  <div class="input-with-toggle">
+                    <input type="password" id="setting-img-key" placeholder="sk-...">
+                    <button class="btn-icon btn-toggle-pwd" data-target="setting-img-key">
+                      <i class="fa-solid fa-eye"></i>
+                    </button>
+                  </div>
+                </div>
+                <div class="setting-item">
+                  <label>模型</label>
+                  <input type="text" id="setting-img-model" placeholder="Kwai-Kolors/Kolors">
+                </div>
+                <div class="setting-item">
+                  <label>图像分辨率</label>
+                  <select id="setting-img-size">
+                    <option value="512x512">512x512</option>
+                    <option value="768x768">768x768</option>
+                    <option value="1024x1024" selected>1024x1024</option>
+                    <option value="1024x768">1024x768</option>
+                    <option value="768x1024">768x1024</option>
+                  </select>
+                </div>
+                <div class="setting-item">
+                  <label>每日最大生成图片数 (0为不限制)</label>
+                  <input type="number" id="setting-img-daily-limit" min="0" step="1" placeholder="例如 50">
+                  <div class="setting-hint" id="setting-img-usage">今日已用: 0</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="settings-panel" data-tab="theme">
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-palette"></i> 主题</h3>
+                <div class="setting-item">
+                  <label>外观模式</label>
+                  <div class="theme-mode-selector">
+                    <button class="theme-mode-btn active" data-mode="system">
+                      <i class="fa-solid fa-display"></i> 跟随系统
+                    </button>
+                    <button class="theme-mode-btn" data-mode="light">
+                      <i class="fa-solid fa-sun"></i> 浅色
+                    </button>
+                    <button class="theme-mode-btn" data-mode="dark">
+                      <i class="fa-solid fa-moon"></i> 深色
+                    </button>
+                  </div>
+                </div>
+                <div class="setting-item">
+                  <label>强调色</label>
+                  <div class="color-picker-row">
+                    <input type="color" id="setting-accent-color" value="#4f8cff">
+                    <div class="preset-colors" id="accent-presets">
+                      <span class="color-dot" data-color="#4f8cff" style="background:#4f8cff" title="天空蓝"></span>
+                      <span class="color-dot" data-color="#00b894" style="background:#00b894" title="薄荷绿"></span>
+                      <span class="color-dot" data-color="#e17055" style="background:#e17055" title="珊瑚橙"></span>
+                      <span class="color-dot" data-color="#0984e3" style="background:#0984e3" title="海洋蓝"></span>
+                      <span class="color-dot" data-color="#00cec9" style="background:#00cec9" title="青碧"></span>
+                      <span class="color-dot" data-color="#e84393" style="background:#e84393" title="玫瑰红"></span>
+                    </div>
+                  </div>
+                </div>
+                <div class="setting-item">
+                  <label>背景色</label>
+                  <div class="color-picker-row">
+                    <input type="color" id="setting-bg-color" value="#f5f7fa">
+                    <div class="preset-colors" id="bg-presets">
+                      <span class="color-dot" data-color="#f5f7fa" style="background:#f5f7fa" title="清新白"></span>
+                      <span class="color-dot" data-color="#f0f5ff" style="background:#f0f5ff" title="冰蓝"></span>
+                      <span class="color-dot" data-color="#f0fff4" style="background:#f0fff4" title="嫩叶绿"></span>
+                      <span class="color-dot" data-color="#fff5f5" style="background:#fff5f5" title="浅樱"></span>
+                      <span class="color-dot" data-color="#1a1a2e" style="background:#1a1a2e" title="深邃蓝"></span>
+                      <span class="color-dot" data-color="#1e1e1e" style="background:#1e1e1e" title="墨黑"></span>
+                    </div>
+                  </div>
+                </div>
+                <div class="setting-item">
+                  <label>推荐配色方案</label>
+                  <div class="color-schemes" id="color-schemes">
+                    <button class="scheme-btn" data-accent="#4f8cff" data-bg="#f5f7fa" title="清新蓝">
+                      <span style="background:#4f8cff"></span><span style="background:#f5f7fa"></span>
+                    </button>
+                    <button class="scheme-btn" data-accent="#00b894" data-bg="#f0fff4" title="自然绿">
+                      <span style="background:#00b894"></span><span style="background:#f0fff4"></span>
+                    </button>
+                    <button class="scheme-btn" data-accent="#0984e3" data-bg="#f0f5ff" title="海洋">
+                      <span style="background:#0984e3"></span><span style="background:#f0f5ff"></span>
+                    </button>
+                    <button class="scheme-btn" data-accent="#e17055" data-bg="#fff5f5" title="珊瑚">
+                      <span style="background:#e17055"></span><span style="background:#fff5f5"></span>
+                    </button>
+                    <button class="scheme-btn" data-accent="#00cec9" data-bg="#f0fffe" title="青碧">
+                      <span style="background:#00cec9"></span><span style="background:#f0fffe"></span>
+                    </button>
+                    <button class="scheme-btn" data-accent="#6c5ce7" data-bg="#f4f1ff" title="紫雾">
+                      <span style="background:#6c5ce7"></span><span style="background:#f4f1ff"></span>
+                    </button>
+                    <button class="scheme-btn" data-accent="#fd79a8" data-bg="#fff0f6" title="粉黛">
+                      <span style="background:#fd79a8"></span><span style="background:#fff0f6"></span>
+                    </button>
+                    <button class="scheme-btn" data-accent="#e84393" data-bg="#fff0f8" title="玫瑰">
+                      <span style="background:#e84393"></span><span style="background:#fff0f8"></span>
+                    </button>
+                    <button class="scheme-btn" data-accent="#2d98da" data-bg="#f1f8ff" title="浅海">
+                      <span style="background:#2d98da"></span><span style="background:#f1f8ff"></span>
+                    </button>
+                    <button class="scheme-btn" data-accent="#20bf6b" data-bg="#f1fff7" title="薄荷">
+                      <span style="background:#20bf6b"></span><span style="background:#f1fff7"></span>
+                    </button>
+                    <button class="scheme-btn" data-accent="#f7b731" data-bg="#fff9e6" title="柔金">
+                      <span style="background:#f7b731"></span><span style="background:#fff9e6"></span>
+                    </button>
+                    <button class="scheme-btn" data-accent="#eb3b5a" data-bg="#fff1f2" title="石榴">
+                      <span style="background:#eb3b5a"></span><span style="background:#fff1f2"></span>
+                    </button>
+                    <button class="scheme-btn" data-accent="#0fb9b1" data-bg="#f0fffc" title="湖光">
+                      <span style="background:#0fb9b1"></span><span style="background:#f0fffc"></span>
+                    </button>
+                    <button class="scheme-btn" data-accent="#3867d6" data-bg="#f0f5ff" title="蔚蓝">
+                      <span style="background:#3867d6"></span><span style="background:#f0f5ff"></span>
+                    </button>
+                    <button class="scheme-btn" data-accent="#8854d0" data-bg="#f6f0ff" title="薰衣">
+                      <span style="background:#8854d0"></span><span style="background:#f6f0ff"></span>
+                    </button>
+                    <button class="scheme-btn" data-accent="#fa8231" data-bg="#fff3e6" title="暖橙">
+                      <span style="background:#fa8231"></span><span style="background:#fff3e6"></span>
+                    </button>
+                    <button class="scheme-btn" data-accent="#26de81" data-bg="#effff5" title="清绿">
+                      <span style="background:#26de81"></span><span style="background:#effff5"></span>
+                    </button>
+                    <button class="scheme-btn" data-accent="#45aaf2" data-bg="#eef7ff" title="晴空">
+                      <span style="background:#45aaf2"></span><span style="background:#eef7ff"></span>
+                    </button>
+                    <button class="scheme-btn" data-accent="#a55eea" data-bg="#f7f0ff" title="淡紫">
+                      <span style="background:#a55eea"></span><span style="background:#f7f0ff"></span>
+                    </button>
+                    <button class="scheme-btn" data-accent="#2bcbba" data-bg="#eefdfc" title="薄荷冰">
+                      <span style="background:#2bcbba"></span><span style="background:#eefdfc"></span>
+                    </button>
+                    <button class="scheme-btn" data-accent="#fed330" data-bg="#fffbe6" title="柠檬">
+                      <span style="background:#fed330"></span><span style="background:#fffbe6"></span>
+                    </button>
+                    <button class="scheme-btn" data-accent="#fd9644" data-bg="#fff2e6" title="杏橙">
+                      <span style="background:#fd9644"></span><span style="background:#fff2e6"></span>
+                    </button>
+                    <button class="scheme-btn" data-accent="#4b7bec" data-bg="#edf2ff" title="清澈蓝">
+                      <span style="background:#4b7bec"></span><span style="background:#edf2ff"></span>
+                    </button>
+                    <button class="scheme-btn" data-accent="#fc5c65" data-bg="#fff0f1" title="樱红">
+                      <span style="background:#fc5c65"></span><span style="background:#fff0f1"></span>
+                    </button>
+                    <button class="scheme-btn" data-accent="#45aaf2" data-bg="#f6fbff" title="天光">
+                      <span style="background:#45aaf2"></span><span style="background:#f6fbff"></span>
+                    </button>
+                    <button class="scheme-btn" data-accent="#2ecc71" data-bg="#f2fff7" title="嫩绿">
+                      <span style="background:#2ecc71"></span><span style="background:#f2fff7"></span>
+                    </button>
+                    <button class="scheme-btn" data-accent="#9b59b6" data-bg="#f9f1ff" title="紫晶">
+                      <span style="background:#9b59b6"></span><span style="background:#f9f1ff"></span>
+                    </button>
+                    <button class="scheme-btn" data-accent="#16a085" data-bg="#eefdf8" title="青松">
+                      <span style="background:#16a085"></span><span style="background:#eefdf8"></span>
+                    </button>
+                    <button class="scheme-btn" data-accent="#e67e22" data-bg="#fff3e9" title="焦糖">
+                      <span style="background:#e67e22"></span><span style="background:#fff3e9"></span>
+                    </button>
+                    <button class="scheme-btn" data-accent="#e74c3c" data-bg="#fff0ed" title="赤霞">
+                      <span style="background:#e74c3c"></span><span style="background:#fff0ed"></span>
+                    </button>
+                    <button class="scheme-btn" data-accent="#1abc9c" data-bg="#f0fffb" title="海风">
+                      <span style="background:#1abc9c"></span><span style="background:#f0fffb"></span>
+                    </button>
+                    <button class="scheme-btn" data-accent="#34495e" data-bg="#f4f6f8" title="冷灰">
+                      <span style="background:#34495e"></span><span style="background:#f4f6f8"></span>
+                    </button>
+
+                    <button class="scheme-btn" data-accent="#e84393" data-bg="#16213e" title="暗夜玫瑰">
+                      <span style="background:#e84393"></span><span style="background:#16213e"></span>
+                    </button>
+                    <button class="scheme-btn" data-accent="#00cec9" data-bg="#0f1c1c" title="深湖">
+                      <span style="background:#00cec9"></span><span style="background:#0f1c1c"></span>
+                    </button>
+                    <button class="scheme-btn" data-accent="#6c5ce7" data-bg="#1b1433" title="深紫">
+                      <span style="background:#6c5ce7"></span><span style="background:#1b1433"></span>
+                    </button>
+                    <button class="scheme-btn" data-accent="#fd79a8" data-bg="#2a0f1f" title="莓夜">
+                      <span style="background:#fd79a8"></span><span style="background:#2a0f1f"></span>
+                    </button>
+                    <button class="scheme-btn" data-accent="#0984e3" data-bg="#0b1b2e" title="深海蓝">
+                      <span style="background:#0984e3"></span><span style="background:#0b1b2e"></span>
+                    </button>
+                    <button class="scheme-btn" data-accent="#00b894" data-bg="#0f2621" title="松夜">
+                      <span style="background:#00b894"></span><span style="background:#0f2621"></span>
+                    </button>
+                    <button class="scheme-btn" data-accent="#f7b731" data-bg="#2a2312" title="暗金">
+                      <span style="background:#f7b731"></span><span style="background:#2a2312"></span>
+                    </button>
+                    <button class="scheme-btn" data-accent="#eb3b5a" data-bg="#2a1015" title="赤夜">
+                      <span style="background:#eb3b5a"></span><span style="background:#2a1015"></span>
+                    </button>
+                    <button class="scheme-btn" data-accent="#2d98da" data-bg="#101b24" title="夜航">
+                      <span style="background:#2d98da"></span><span style="background:#101b24"></span>
+                    </button>
+                    <button class="scheme-btn" data-accent="#20bf6b" data-bg="#0f2419" title="深林">
+                      <span style="background:#20bf6b"></span><span style="background:#0f2419"></span>
+                    </button>
+                    <button class="scheme-btn" data-accent="#fa8231" data-bg="#2b1a0b" title="暖夜">
+                      <span style="background:#fa8231"></span><span style="background:#2b1a0b"></span>
+                    </button>
+                    <button class="scheme-btn" data-accent="#8854d0" data-bg="#1a1230" title="夜紫">
+                      <span style="background:#8854d0"></span><span style="background:#1a1230"></span>
+                    </button>
+                    <button class="scheme-btn" data-accent="#a55eea" data-bg="#1d0f2e" title="夜绯">
+                      <span style="background:#a55eea"></span><span style="background:#1d0f2e"></span>
+                    </button>
+                    <button class="scheme-btn" data-accent="#3867d6" data-bg="#0f1626" title="深蓝">
+                      <span style="background:#3867d6"></span><span style="background:#0f1626"></span>
+                    </button>
+                    <button class="scheme-btn" data-accent="#2bcbba" data-bg="#0f1c1a" title="墨青">
+                      <span style="background:#2bcbba"></span><span style="background:#0f1c1a"></span>
+                    </button>
+                    <button class="scheme-btn" data-accent="#fed330" data-bg="#2a2212" title="深柠">
+                      <span style="background:#fed330"></span><span style="background:#2a2212"></span>
+                    </button>
+                    <button class="scheme-btn" data-accent="#fd9644" data-bg="#2b1c12" title="炉火">
+                      <span style="background:#fd9644"></span><span style="background:#2b1c12"></span>
+                    </button>
+                    <button class="scheme-btn" data-accent="#4b7bec" data-bg="#121a2b" title="午夜蓝">
+                      <span style="background:#4b7bec"></span><span style="background:#121a2b"></span>
+                    </button>
+                    <button class="scheme-btn" data-accent="#fc5c65" data-bg="#2b1315" title="暗樱">
+                      <span style="background:#fc5c65"></span><span style="background:#2b1315"></span>
+                    </button>
+                    <button class="scheme-btn" data-accent="#1abc9c" data-bg="#0f1f1c" title="深绿松">
+                      <span style="background:#1abc9c"></span><span style="background:#0f1f1c"></span>
+                    </button>
+                    <button class="scheme-btn" data-accent="#2ecc71" data-bg="#0f2015" title="翠夜">
+                      <span style="background:#2ecc71"></span><span style="background:#0f2015"></span>
+                    </button>
+                    <button class="scheme-btn" data-accent="#9b59b6" data-bg="#1b1026" title="夜晶">
+                      <span style="background:#9b59b6"></span><span style="background:#1b1026"></span>
+                    </button>
+                    <button class="scheme-btn" data-accent="#16a085" data-bg="#0d1f1b" title="深松">
+                      <span style="background:#16a085"></span><span style="background:#0d1f1b"></span>
+                    </button>
+                    <button class="scheme-btn" data-accent="#e67e22" data-bg="#2b1b10" title="暗橙">
+                      <span style="background:#e67e22"></span><span style="background:#2b1b10"></span>
+                    </button>
+                    <button class="scheme-btn" data-accent="#e74c3c" data-bg="#2a1210" title="暗红">
+                      <span style="background:#e74c3c"></span><span style="background:#2a1210"></span>
+                    </button>
+                    <button class="scheme-btn" data-accent="#34495e" data-bg="#11161c" title="夜石">
+                      <span style="background:#34495e"></span><span style="background:#11161c"></span>
+                    </button>
+                    <button class="scheme-btn" data-accent="#7f8c8d" data-bg="#151a1b" title="深灰">
+                      <span style="background:#7f8c8d"></span><span style="background:#151a1b"></span>
+                    </button>
+                    <button class="scheme-btn" data-accent="#f39c12" data-bg="#2a1f0f" title="琥珀夜">
+                      <span style="background:#f39c12"></span><span style="background:#2a1f0f"></span>
+                    </button>
+                    <button class="scheme-btn" data-accent="#c0392b" data-bg="#220d0a" title="绯红夜">
+                      <span style="background:#c0392b"></span><span style="background:#220d0a"></span>
+                    </button>
+                    <button class="scheme-btn" data-accent="#2980b9" data-bg="#0d1720" title="极夜蓝">
+                      <span style="background:#2980b9"></span><span style="background:#0d1720"></span>
+                    </button>
+                    <button class="scheme-btn" data-accent="#27ae60" data-bg="#0c1b12" title="深绿">
+                      <span style="background:#27ae60"></span><span style="background:#0c1b12"></span>
+                    </button>
+                    <button class="scheme-btn" data-accent="#8e44ad" data-bg="#170f24" title="夜紫罗">
+                      <span style="background:#8e44ad"></span><span style="background:#170f24"></span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="settings-panel" data-tab="entropy">
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-dice"></i> 熵源设定</h3>
+                <p class="setting-hint">为命运之牌（Agent + SubAgent 抽牌、工具调用抽牌）设定随机数来源。</p>
+                <div class="setting-item">
+                  <label>熵源类型</label>
+                  <div class="entropy-source-selector">
+                    <button class="entropy-mode-btn active" data-source="csprng">
+                      <i class="fa-solid fa-microchip"></i> CSPRNG
+                      <small>系统级密码学安全伪随机</small>
+                    </button>
+                    <button class="entropy-mode-btn" data-source="trng">
+                      <i class="fa-solid fa-satellite-dish"></i> TRNG
+                      <small>ESP32 硬件真随机数</small>
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <div class="settings-group entropy-trng-settings" id="entropy-trng-settings" style="display:none">
+                <h3><i class="fa-solid fa-satellite-dish"></i> TRNG 设备配置</h3>
+                <div class="setting-item">
+                  <label>连接方式</label>
+                  <div class="entropy-source-selector">
+                    <button class="trng-mode-btn active" data-mode="network">
+                      <i class="fa-solid fa-wifi"></i> 网络 API
+                    </button>
+                    <button class="trng-mode-btn" data-mode="serial">
+                      <i class="fa-solid fa-plug"></i> 串口
+                    </button>
+                  </div>
+                </div>
+                <div class="trng-network-settings" id="trng-network-settings">
+                  <div class="setting-item">
+                    <label>设备 IP 地址</label>
+                    <input type="text" id="setting-trng-host" placeholder="192.168.4.1" value="192.168.4.1">
+                  </div>
+                  <div class="setting-item">
+                    <label>设备端口</label>
+                    <input type="number" id="setting-trng-port" placeholder="80" value="80" min="1" max="65535">
+                  </div>
+                </div>
+                <div class="trng-serial-settings" id="trng-serial-settings" style="display:none">
+                  <div class="setting-item">
+                    <label>串口</label>
+                    <div class="serial-port-row">
+                      <select id="setting-trng-serial-port">
+                        <option value="">选择串口...</option>
+                      </select>
+                      <button class="btn-secondary" id="btn-refresh-ports"><i class="fa-solid fa-rotate"></i> 刷新</button>
+                    </div>
+                    <div class="setting-hint" id="trng-port-status"></div>
+                  </div>
+                  <div class="setting-item">
+                    <label>波特率</label>
+                    <select id="setting-trng-serial-baud">
+                      <option value="9600">9600</option>
+                      <option value="19200">19200</option>
+                      <option value="38400">38400</option>
+                      <option value="57600">57600</option>
+                      <option value="115200" selected>115200</option>
+                      <option value="230400">230400</option>
+                      <option value="460800">460800</option>
+                      <option value="921600">921600</option>
+                    </select>
+                  </div>
+                </div>
+                <div class="setting-item">
+                  <button class="btn-secondary" id="btn-trng-test"><i class="fa-solid fa-vial"></i> 测试 TRNG 连接</button>
+                  <div class="setting-hint" id="trng-test-result"></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="settings-panel" data-tab="firmware">
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-microchip"></i> ESP32 TRNG 固件烧录教程</h3>
+                <p class="setting-hint">
+                  如果你需要使用 TRNG 硬件真随机数生成器，需要先将固件烧录到 ESP32 开发板上。
+                </p>
+                <div class="firmware-export-section">
+                  <div class="setting-item">
+                    <label>步骤 1：导出固件源代码</label>
+                    <button class="btn-primary" id="btn-export-firmware">
+                      <i class="fa-solid fa-file-export"></i> 导出固件源码到指定目录
+                    </button>
+                    <p class="setting-hint">
+                      导出 CIBYP-TRNG 固件源代码，以便在 Arduino IDE 中打开。
+                    </p>
+                  </div>
+                  <div class="setting-item">
+                    <label>步骤 2：安装 Arduino IDE 2</label>
+                    <p class="setting-hint">
+                      1. 访问 <a href="#" class="link-arduino-download">https://www.arduino.cc/en/software</a> 下载 Arduino IDE 2.x<br>
+                      2. 安装完成后打开 Arduino IDE
+                    </p>
+                  </div>
+                  <div class="setting-item">
+                    <label>步骤 3：安装 ESP32 开发板支持</label>
+                    <p class="setting-hint">
+                      1. File → Preferences → Additional Boards Manager URLs<br>
+                      2. 添加：<code>https://espressif.github.io/arduino-esp32/package_esp32_index.json</code><br>
+                      3. Tools → Board → Boards Manager → 搜索 "ESP32"<br>
+                      4. 安装 "esp32 by Espressif Systems"
+                    </p>
+                  </div>
+                  <div class="setting-item">
+                    <label>步骤 4：配置和烧录</label>
+                    <p class="setting-hint">
+                      1. 在 Arduino IDE 中打开导出的 <code>CIBYP-TRNG.ino</code> 文件<br>
+                      2. Tools → Board → esp32 → 选择你的 ESP32 型号（如 ESP32 Dev Module）<br>
+                      3. Tools → Port → 选择对应的 COM 端口<br>
+                      4. （可选）在代码中修改 WiFi SSID 和密码<br>
+                      5. 点击 Arduino IDE 顶部的 "Upload" 按钮（右箭头图标）<br>
+                      6. 等待编译和烧录完成
+                    </p>
+                  </div>
+                  <div class="setting-item">
+                    <label>常见问题</label>
+                    <div class="firmware-faq">
+                      <details>
+                        <summary>烧录失败怎么办？</summary>
+                        <p>
+                          - 确认 USB 线支持数据传输（不是充电线）<br>
+                          - 确认已选择正确的 COM 端口<br>
+                          - 尝试按住 ESP32 的 BOOT 按钮再点击 Upload<br>
+                          - 降低 Upload Speed 到 115200
+                        </p>
+                      </details>
+                      <details>
+                        <summary>无法连接 WiFi？</summary>
+                        <p>
+                          - 检查 WiFi SSID 和密码是否正确<br>
+                          - 确认 WiFi 是 2.4GHz（ESP32 不支持 5GHz）<br>
+                          - 查看串口监视器的日志信息
+                        </p>
+                      </details>
+                      <details>
+                        <summary>串口无数据输出？</summary>
+                        <p>
+                          - 确认波特率设置正确（默认 115200）<br>
+                          - 检查 USB 驱动是否正确安装<br>
+                          - 尝试重新插拔 USB 线或重启 ESP32
+                        </p>
+                      </details>
+                    </div>
+                  </div>
+                  <div class="setting-item">
+                    <label>更多信息</label>
+                    <p class="setting-hint">
+                      请参阅导出的固件目录中的 README.md 文件。
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="settings-panel" data-tab="network">
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-network-wired"></i> 网络代理</h3>
+                <div class="setting-item">
+                  <label>代理模式</label>
+                  <div class="btn-group" style="margin-top:8px;">
+                    <button class="proxy-mode-btn btn-secondary" data-mode="none">不使用代理</button>
+                    <button class="proxy-mode-btn btn-secondary active" data-mode="system">系统代理</button>
+                    <button class="proxy-mode-btn btn-secondary" data-mode="manual">手动配置</button>
+                  </div>
+                </div>
+                <div id="manual-proxy-settings" style="display:none;margin-top:16px;">
+                  <div class="setting-item">
+                    <label>HTTP 代理</label>
+                    <input type="text" id="setting-proxy-http" placeholder="http://127.0.0.1:7890">
+                    <p class="setting-hint">HTTP和HTTPS请求使用的代理地址</p>
+                  </div>
+                  <div class="setting-item">
+                    <label>HTTPS 代理</label>
+                    <input type="text" id="setting-proxy-https" placeholder="http://127.0.0.1:7890">
+                    <p class="setting-hint">可选，留空则使用HTTP代理设置</p>
+                  </div>
+                  <div class="setting-item">
+                    <label>不代理的地址</label>
+                    <input type="text" id="setting-proxy-bypass" placeholder="localhost,127.0.0.1,*.local">
+                    <p class="setting-hint">逗号分隔的不使用代理的主机名或IP</p>
+                  </div>
+                </div>
+                <p class="setting-hint">
+                  <i class="fa-solid fa-circle-info"></i> 
+                  代理设置将影响所有网络请求（API调用、网页抓取等）。重启应用后生效。
+                </p>
+              </div>
+            </div>
+
+            <div class="settings-panel" data-tab="security">
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-shield-halved"></i> 安全</h3>
+                <div class="setting-item">
+                  <label class="toggle-label">
+                    <span>自动批准敏感操作</span>
+                    <div class="toggle-switch">
+                      <input type="checkbox" id="setting-auto-approve">
+                      <span class="toggle-slider"></span>
+                    </div>
+                  </label>
+                  <p class="setting-warning">
+                    <i class="fa-solid fa-triangle-exclamation"></i>
+                    开启后，AI Agent将自动执行包括文件删除、终端命令等敏感操作，存在安全风险。请确保你信任当前运行的任务。
+                  </p>
+                </div>
+              </div>
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-chart-line"></i> 使用量管理</h3>
+                <div class="setting-item">
+                  <button class="btn-reset-usage" id="btn-reset-usage">
+                    <i class="fa-solid fa-rotate-left"></i> 重置每日使用量
+                  </button>
+                  <p class="setting-hint">
+                    重置今日的Token用量和图片生成数统计，谨慎使用。
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- About Page -->
+      <section id="page-about" class="page">
+        <div class="about-container">
+          <div class="about-logo">
+            <img src="../../../assets/icons/icon.png" alt="App">
+          </div>
+          <h2>Could I Be Your Partner</h2>
+          <p class="about-version">v1.0.0</p>
+          <p class="about-desc">全自动AI Agent，帮助完成一切任务</p>
+          <div class="about-divider"></div>
+          <p class="about-author">
+            <i class="fa-solid fa-code"></i> 由 <strong>B5-Software</strong> 开发
+          </p>
+          <p class="about-license">
+            <i class="fa-solid fa-scale-balanced"></i> License: GPL-3.0-or-later
+          </p>
+          <div class="about-features">
+            <div class="feature-item">
+              <i class="fa-solid fa-microchip"></i>
+              <span>智能AI Agent</span>
+            </div>
+            <div class="feature-item">
+              <i class="fa-solid fa-toolbox"></i>
+              <span>60+内置工具</span>
+            </div>
+            <div class="feature-item">
+              <i class="fa-solid fa-brain"></i>
+              <span>长期记忆</span>
+            </div>
+            <div class="feature-item">
+              <i class="fa-solid fa-database"></i>
+              <span>知识库</span>
+            </div>
+            <div class="feature-item">
+              <i class="fa-solid fa-lightbulb"></i>
+              <span>技能系统</span>
+            </div>
+            <div class="feature-item">
+              <i class="fa-solid fa-window-maximize"></i>
+              <span>上下文管理</span>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- Skill Modal -->
+  <div class="modal-overlay hidden" id="skill-modal">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="skill-modal-title">添加技能</h3>
+        <button class="btn-icon" id="btn-close-skill-modal">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="skill-edit-id" value="">
+        <div class="setting-item">
+          <label>技能名称</label>
+          <input type="text" id="skill-name" placeholder="例如：翻译助手">
+        </div>
+        <div class="setting-item">
+          <label>描述</label>
+          <textarea id="skill-desc" placeholder="描述这个技能的功能..." rows="3"></textarea>
+        </div>
+        <div class="setting-item">
+          <label>系统提示词</label>
+          <textarea id="skill-prompt" placeholder="你是一个专业的翻译助手..." rows="5"></textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-secondary" id="btn-cancel-skill">取消</button>
+        <button class="btn-primary" id="btn-save-skill">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Image Preview Modal -->
+  <div class="modal-overlay hidden" id="image-preview-modal">
+    <div class="modal image-modal">
+      <div class="image-modal-header">
+        <div class="image-modal-title">
+          <i class="fa-solid fa-image"></i>
+          <span>图片预览</span>
+        </div>
+        <div class="image-modal-actions">
+          <button class="btn-icon" id="btn-close-image-modal" title="关闭">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+        </div>
+      </div>
+      <div class="image-modal-body">
+        <div class="image-modal-frame">
+          <img id="image-preview-img" src="" alt="预览">
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Confirm Modal -->
+  <div class="modal-overlay hidden" id="confirm-modal">
+    <div class="modal confirm-modal">
+      <div class="modal-header">
+        <h3><i class="fa-solid fa-triangle-exclamation"></i> 确认操作</h3>
+        <button class="btn-icon" id="btn-close-confirm">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+      <div class="modal-body confirm-modal-body">
+        <!-- 动态填充确认消息 -->
+      </div>
+      <div class="modal-footer">
+        <button class="btn-secondary" id="btn-cancel-confirm">取消</button>
+        <button class="btn-danger" id="btn-accept-confirm">
+          <i class="fa-solid fa-check"></i> 确认
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Message Modal -->
+  <div class="modal-overlay hidden" id="message-modal">
+    <div class="modal message-modal">
+      <div class="modal-header">
+        <h3 id="message-modal-title"><i class="fa-solid fa-info-circle"></i> 提示</h3>
+        <button class="btn-icon" id="btn-close-message">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+      <div class="modal-body message-modal-body">
+        <!-- 动态填充消息内容 -->
+      </div>
+      <div class="modal-footer">
+        <button class="btn-primary" id="btn-ok-message">确定</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Memory Edit Modal -->
+  <div class="modal-overlay hidden" id="memory-edit-modal">
+    <div class="modal memory-edit-modal">
+      <div class="modal-header">
+        <h3><i class="fa-solid fa-pen"></i> 编辑记忆</h3>
+        <button class="btn-icon" id="btn-close-memory-edit">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+      <div class="modal-body">
+        <div class="setting-item">
+          <label>内容</label>
+          <textarea id="memory-edit-content" rows="5" placeholder="输入记忆内容..."></textarea>
+        </div>
+        <div class="setting-item">
+          <label>标签（用逗号分隔）</label>
+          <input type="text" id="memory-edit-tags" placeholder="例如：项目,灵感">
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-secondary" id="btn-cancel-memory-edit">取消</button>
+        <button class="btn-primary" id="btn-save-memory-edit">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Camera Modal -->
+  <div class="modal-overlay hidden" id="camera-modal">
+    <div class="modal camera-modal">
+      <div class="modal-header">
+        <h3><i class="fa-solid fa-camera"></i> 拍照</h3>
+        <button class="btn-icon" id="btn-close-camera">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+      <div class="modal-body camera-modal-body">
+        <video id="camera-video" autoplay playsinline></video>
+        <canvas id="camera-canvas" style="display:none"></canvas>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-secondary" id="btn-cancel-camera">取消</button>
+        <button class="btn-primary" id="btn-capture-photo">
+          <i class="fa-solid fa-camera"></i> 拍照
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- KaTeX Initialization -->
+  <script>
+    // 从本地 node_modules 加载 KaTeX
+    const script = document.createElement('script');
+    script.src = '../../../node_modules/katex/dist/katex.min.js';
+    document.head.appendChild(script);
+    const scriptAuto = document.createElement('script');
+    scriptAuto.src = '../../../node_modules/katex/dist/contrib/auto-render.min.js';
+    document.head.appendChild(scriptAuto);
+  </script>
+
+  <script src="../js/theme.js"></script>
+  <script src="../js/tools-def.js"></script>
+  <script src="../js/context-manager.js"></script>
+  <script src="../js/agent.js"></script>
+  <script src="../js/app.js"></script>
+</body>
+</html>
+

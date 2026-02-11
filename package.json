@@ -1,0 +1,64 @@
+{
+  "name": "could-i-be-your-partner",
+  "version": "1.0.0",
+  "description": "全自动AI Agent，帮助完成一切任务",
+  "license": "GPL-3.0-or-later",
+  "main": "src/main/main.js",
+  "scripts": {
+    "start": "electron .",
+    "test": "node tests/run-tests.js",
+    "build": "electron-builder",
+    "build:win": "electron-builder --win",
+    "build:mac": "electron-builder --mac",
+    "build:linux": "electron-builder --linux",
+    "dist": "electron-builder"
+  },
+  "author": "B5-Software",
+  "build": {
+    "appId": "com.b5software.cibyp",
+    "productName": "Could I Be Your Partner",
+    "files": [
+      "**/*"
+    ],
+    "asarUnpack": [
+      "assets/ocr/**/*"
+    ],
+    "win": {
+      "icon": "assets/icons/icons/icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false
+    },
+    "mac": {
+      "icon": "assets/icons/icons/icon.icns"
+    },
+    "linux": {
+      "icon": "assets/icons/icons"
+    }
+  },
+  "devDependencies": {
+    "@electron/rebuild": "^4.0.3",
+    "@serialport/bindings-cpp": "^13.0.1",
+    "electron": "40.1.0",
+    "electron-builder": "^26.7.0",
+    "node-gyp": "^12.2.0"
+  },
+  "dependencies": {
+    "adm-zip": "^0.5.16",
+    "better-sqlite3": "^12.6.2",
+    "chardet": "^2.1.1",
+    "iconv-lite": "^0.7.2",
+    "katex": "^0.16.28",
+    "node-pty": "^1.0.0",
+    "serialport": "^13.0.0",
+    "tesseract.js": "^5.1.1"
+  }
+}
