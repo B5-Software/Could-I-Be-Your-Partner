@@ -23,9 +23,18 @@
 - **长期记忆**：持久化存储重要信息，Agent 可自主访问和更新
 - **会话历史**：自动保存所有对话记录，支持历史回溯
 
-### 60+ 专业工具集
+### 120+ 专业工具集
 
-包括文件操作、代码执行、终端命令、网络请求、图片生成、OCR 识别、GeoGebra 数学引擎、画布绘制等。
+包括核心文件操作、安全代码执行、终端命令、高级网络请求（HTTP/DNS/Ping等）、全方位数学求解（几何、代数、矩阵、7维特征向量、微积分、数统等）、数据与文档分析（Office 文件拆解、内嵌 Spreadsheet 表格编辑器处理）、硬件交互（本地串口通信）、图片生成、OCR 识别、GeoGebra 数学引擎、Canvas 图形绘制等。
+
+### 丰富的内置小游戏与扩展
+
+- 内置益智类游戏服务：支持「飞花令」、「谁是卧底」等内嵌交互式娱乐。
+- 内联支持：使用应用内的单独页面弹窗直接进行游玩。
+
+### 硬件与 IoT 支持
+
+集成了针对物理外设的对接能力，包含 `CIBYP-TRNG` (真随机数生成器) 硬件通信支持和各种基于串口控制的功能扩展。
 
 ### 精致的用户界面
 
@@ -112,36 +121,35 @@ npm test
 .
 ├── src/
 │   ├── main/                    # Electron 主进程
-│   │   └── main.js             # 主进程文件，IPC 处理器、数据持久化
+│   │   ├── main.js             # 主进程文件，IPC 处理器、数据持久化
+│   │   ├── email-service.js    # 邮件底层服务
+│   │   ├── spreadsheet-io.js   # 基于本地的表格处理 IO
+│   │   └── web-control-service.js # Web 自动化控制
 │   ├── preload/                 # 预加载脚本
-│   │   └── preload.js          # IPC 通道暴露
+│   │   ├── preload.js          # 主 IPC 通道暴露
+│   │   └── *-preload.js        # 多窗口（飞花令/谁是卧底等）专用上下文桥
 │   ├── renderer/                # 渲染进程（UI 层）
 │   │   ├── js/
 │   │   │   ├── app.js          # 主应用控制器
-│   │   │   ├── agent.js        # AI Agent 引擎核心
+│   │   │   ├── agent.js        # AI Agent 引擎核心包含指令与工具路由
 │   │   │   ├── context-manager.js  # 上下文管理系统
-│   │   │   ├── theme.js        # 主题管理
-│   │   │   └── tools-def.js    # 工具定义（58+ 工具）
+│   │   │   ├── spreadsheet.js  # 数据表格前端逻辑
+│   │   │   ├── tools-def.js    # 工具定义（120+ 工具）
+│   │   │   └── sanguosha.js / undercover.js / flyingflower.js # 子应用小游戏逻辑
 │   │   ├── css/
-│   │   │   ├── main.css        # 主样式表
-│   │   │   ├── chat.css        # 聊天界面样式
-│   │   │   ├── settings.css    # 设置面板样式
-│   │   │   ├── components.css  # 组件样式
-│   │   │   └── theme.css       # 主题色 CSS 变量
+│   │   │   └── *.css           # 聊天、主题与各个小游戏特定功能界面样式
 │   │   └── pages/
-│   │       └── index.html      # 主 HTML 模板
+│   │       ├── index.html      # 主 HTML 模板
+│   │       └── *.html          # 小游戏子界面等
 │   ├── data/
 │   │   └── tarot.js            # 塔罗牌数据（78 张牌）
 │   └── tools/
-│       └── js-runner.js        # 安全的 JavaScript 代码执行容器
-├── assets/
-│   ├── fonts/
-│   │   └── fontawesome.min.css  # Font Awesome 6.x 本地化
-│   ├── geogebra/                # GeoGebra 数学引擎（本地化）
-│   ├── icons/
-│   └── ocr/                     # Tesseract OCR 支持文件
+│       └── js-runner.js        # 安全与隔离的 JavaScript 代码执行容器
+├── assets/                      # 本地化静态核心资源 (GeoGebra, Tesseract OCR 等)
+├── IoT-Firmware/              
+│   └── CIBYP-TRNG/              # 真随机数或 IoT 硬件对接固件源码
 ├── tests/
-│   └── run-tests.js            # 测试框架
+│   └── run-tests.js            # 测试与 CI 框架
 ├── package.json                 # NPM 项目配置
 ├── instruction                  # 项目需求文档
 └── README.md                    # 本文件
@@ -191,27 +199,26 @@ AI Agent 的大脑，负责：
 
 ### 工具定义 (`tools-def.js`)
 
-包含 60+ 工具的完整列表：
+目前包含 120+ 工具的完整列表（由于种类繁多，仅展示核心类）：
 
 | 分类 | 工具 | 说明 |
 |------|------|------|
-| **文件** | readFile, editFile, createFile, deleteFile, moveFile, copyFile, listDirectory, etc. | 完整文件系统访问 |
+| **文件** | readFile, editFile, createFile, deleteFile, moveFile, copyFile, listDirectory, 等 | 完整文件系统访问 |
 | **代码** | runJavaScriptCode, runShellScriptCode, runNodeJavaScriptCode | 安全代码执行 |
 | **终端** | makeTerminal, runTerminalCommand, awaitTerminalCommand, killTerminal | 终端集成 |
-| **网络** | webSearch, webFetch, downloadFile | 网络能力 |
-| **知识** | knowledgeBaseSearch/Add/Update/Delete | 知识库管理 |
-| **记忆** | memorySearch/Add/Update/Delete | 长期记忆 |
-| **生图** | generateImage | AI 文生图 |
-| **GeoGebra** | initGeogebra, runGeogebraCommand, addFunctionToGeogebra, etc. | 数学引擎 |
-| **OCR** | extractTextFromImage | 文字识别 |
-| **交互** | askQuestions, getTarot | 特殊交互 |
+| **网络** | webSearch, webFetch, downloadFile, httpRequest, ping, dnsLookup, portScan 等 | 爬虫抓取与网络运维命令对接 |
+| **知识与记忆** | knowledgeBaseSearch/Add/Update/Delete, memory* | 长期知识与对话记忆管理 |
+| **多模态与格式** | generateImage, extractTextFromImage, officeUnpack, officeWordExtract | 图片生成/文字识别，Office拆解 |
+| **计算与表格** | calculator, matrixMath, vectorMath(含7维), solvePolynomial, sum, 等 | 最全的高等数学计算及基于Spreadsheet的表格查询修改 |
+| **IoT/串口** | serialListPorts, serialOpenPort, serialWritePort, serialReadPort | 对发开发板和内接硬件支持 |
+| **可视化互动** | initGeogebra, addCanvasObject, askQuestions, inviteGame(飞花令等) | 绘画几何、多模态收集与内置小游戏启动 |
 
 ### 塔罗数据 (`tarot.js`)
 
 包含 78 张塔罗牌的中英文定义：
 
-- 22 张大阿卡那
-- 56 张小阿卡那（4 种花色 × 14 级）
+- 22 张 Major Arcana
+- 56 张 Minor Arcana（4 种花色 × 14 级）
 - 每张牌含：正位义、逆位义、Font Awesome 图标
 
 ---
@@ -471,15 +478,17 @@ A: 进入设置面板 → AI 人设，修改名称、性格、个人简介、代
 
 | 技术 | 版本 | 用途 |
 |------|------|------|
-| Electron | 40.1.0 | 桌面应用框架 |
+| Electron | ^30.x/40.1.0 | 桌面应用框架 |
 | Node.js | >= 18.x | 后端运行时 |
 | HTML5/CSS3 | - | UI 标记和样式 |
 | Vanilla JavaScript | ES2020+ | 前端逻辑 |
-| Font Awesome | 6.x | 图标库 |
+| Font Awesome | 6.x | 本地图标库 |
 | KaTeX | - | 数学公式渲染 |
 | GeoGebra | - | 数学引擎 |
 | Tesseract | - | OCR 文字识别 |
-| electron-builder | - | 应用打包工具 |
+| Playwright(概念) / Fetch | - | 基于无头环境和fetch的高级网页渲染抓取 |
+| x-spreadsheet | - | 精简内嵌的可视化电子表格面板驱动 |
+| electron-builder | ^24.x / 25.x | 应用打包工具 |
 
 ---
 
