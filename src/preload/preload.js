@@ -71,6 +71,22 @@ contextBridge.exposeInMainWorld('api', {
   openBrowser: (url) => ipcRenderer.invoke('shell:openBrowser', url),
   openFileExplorer: (p) => ipcRenderer.invoke('shell:openFileExplorer', p),
 
+  // Calculator
+  calcEvaluate: (expression) => ipcRenderer.invoke('calc:evaluate', expression),
+  calcFactorInteger: (value) => ipcRenderer.invoke('calc:factorInteger', value),
+  calcGcdLcm: (values) => ipcRenderer.invoke('calc:gcdLcm', values),
+  calcBaseConvert: (value, fromBase, toBase) => ipcRenderer.invoke('calc:baseConvert', value, fromBase, toBase),
+  calcFactorial: (n) => ipcRenderer.invoke('calc:factorial', n),
+  calcComplexMath: (operation, a, b, exponent) => ipcRenderer.invoke('calc:complexMath', operation, a, b, exponent),
+  calcMatrixMath: (operation, A, B) => ipcRenderer.invoke('calc:matrixMath', operation, A, B),
+  calcVectorMath: (operation, a, b, c) => ipcRenderer.invoke('calc:vectorMath', operation, a, b, c),
+  calcSolveInequality: (coefficients, relation, variable) => ipcRenderer.invoke('calc:solveInequality', coefficients, relation, variable),
+  calcSolveLinearSystem: (A, b) => ipcRenderer.invoke('calc:solveLinearSystem', A, b),
+  calcSolvePolynomial: (coefficients) => ipcRenderer.invoke('calc:solvePolynomial', coefficients),
+  calcDistribution: (distribution, operation, params, x) => ipcRenderer.invoke('calc:distributionCalc', distribution, operation, params, x),
+  calcCombinatorics: (operation, n, r, repetition) => ipcRenderer.invoke('calc:combinatorics', operation, n, r, repetition),
+  calcFractionBaseConvert: (value, fromBase, toBase, precision) => ipcRenderer.invoke('calc:fractionBaseConvert', value, fromBase, toBase, precision),
+
   // Code Execution
   runJS: (code) => ipcRenderer.invoke('code:runJS', code),
   runNodeJS: (code) => ipcRenderer.invoke('code:runNodeJS', code),
@@ -82,6 +98,8 @@ contextBridge.exposeInMainWorld('api', {
   // Web
   webSearch: (q, workspacePath) => ipcRenderer.invoke('web:search', q, workspacePath),
   webFetch: (url) => ipcRenderer.invoke('web:fetch', url),
+  webOffscreenSnapshotOCR: (options) => ipcRenderer.invoke('web:offscreenSnapshotOCR', options),
+  webOffscreenRenderedContent: (options) => ipcRenderer.invoke('web:offscreenRenderedContent', options),
 
   // Tarot
   drawTarot: () => ipcRenderer.invoke('tarot:draw'),
@@ -104,6 +122,7 @@ contextBridge.exposeInMainWorld('api', {
 
   // Paths
   getPath: (name) => ipcRenderer.invoke('app:getPath', name),
+  getAppVersion: () => ipcRenderer.invoke('app:getVersion'),
 
   // Dialog
   confirmSensitive: (msg) => ipcRenderer.invoke('dialog:confirm', msg),
@@ -133,9 +152,25 @@ contextBridge.exposeInMainWorld('api', {
   // OCR
   ocrRecognize: (imagePath) => ipcRenderer.invoke('ocr:recognize', imagePath),
 
+  // QR Code
+  qrScan: (imagePath) => ipcRenderer.invoke('qr:scan', imagePath),
+  qrGenerate: (text, workspacePath, filename) => ipcRenderer.invoke('qr:generate', text, workspacePath, filename),
+
   // Download
   downloadFile: (url, filename, workspacePath) => ipcRenderer.invoke('file:download', url, filename, workspacePath),
-  
+
+  // Network Tools
+  httpRequest: (opts) => ipcRenderer.invoke('net:httpRequest', opts),
+  httpFormPost: (opts) => ipcRenderer.invoke('net:httpFormPost', opts),
+  dnsLookup: (hostname, rrtype) => ipcRenderer.invoke('net:dnsLookup', hostname, rrtype),
+  ping: (host, count) => ipcRenderer.invoke('net:ping', host, count),
+  whois: (domain) => ipcRenderer.invoke('net:whois', domain),
+  urlShorten: (url) => ipcRenderer.invoke('net:urlShorten', url),
+  urlEncodeDecode: (input, operation) => ipcRenderer.invoke('net:urlEncodeDecode', input, operation),
+  checkSSLCert: (hostname, port) => ipcRenderer.invoke('net:checkSSLCert', hostname, port),
+  traceroute: (host) => ipcRenderer.invoke('net:traceroute', host),
+  portScan: (host, ports, timeout) => ipcRenderer.invoke('net:portScan', host, ports, timeout),
+
   // Firmware
   firmwareExport: () => ipcRenderer.invoke('firmware:export'),
   
@@ -143,4 +178,89 @@ contextBridge.exposeInMainWorld('api', {
   onShowConfirmDialog: (cb) => ipcRenderer.on('show-confirm-dialog', (_, data) => cb(data)),
   sendConfirmDialogResponse: (response) => ipcRenderer.send('confirm-dialog-response', response),
   // File picker dialog uses system dialog now
+
+  // Sanguosha Game
+  openSanguosha: (aiCount) => ipcRenderer.invoke('sanguosha:open', aiCount),
+
+  // Flying Flower Game
+  openFlyingFlower: (aiCount) => ipcRenderer.invoke('flyingflower:open', aiCount),
+
+  // Undercover Game
+  openUndercover: (aiCount) => ipcRenderer.invoke('undercover:open', aiCount),
+
+  // MCP
+  mcpListServers: () => ipcRenderer.invoke('mcp:listServers'),
+  mcpAddServer: (config) => ipcRenderer.invoke('mcp:addServer', config),
+  mcpRemoveServer: (name) => ipcRenderer.invoke('mcp:removeServer', name),
+  mcpUpdateServer: (name, updates) => ipcRenderer.invoke('mcp:updateServer', name, updates),
+  mcpConnect: (name) => ipcRenderer.invoke('mcp:connect', name),
+  mcpDisconnect: (name) => ipcRenderer.invoke('mcp:disconnect', name),
+  mcpListTools: (serverName) => ipcRenderer.invoke('mcp:listTools', serverName),
+  mcpCallTool: (serverName, toolName, args) => ipcRenderer.invoke('mcp:callTool', serverName, toolName, args),
+  mcpGetStatus: () => ipcRenderer.invoke('mcp:getStatus'),
+
+  // Serial Port
+  serialListPorts: () => ipcRenderer.invoke('serial:listPorts'),
+  serialOpenPort: (path, options) => ipcRenderer.invoke('serial:openPort', path, options),
+  serialWritePort: (path, data, encoding) => ipcRenderer.invoke('serial:writePort', path, data, encoding),
+  serialReadPort: (path, timeout, encoding) => ipcRenderer.invoke('serial:readPort', path, timeout, encoding),
+  serialClosePort: (path) => ipcRenderer.invoke('serial:closePort', path),
+  serialSetSignals: (path, signals) => ipcRenderer.invoke('serial:setSignals', path, signals),
+
+  // Office
+  officeUnpack: (path) => ipcRenderer.invoke('office:unpack', path),
+  officeListContents: (dir) => ipcRenderer.invoke('office:listContents', dir),
+  officeRepack: (dir, outputPath) => ipcRenderer.invoke('office:repack', dir, outputPath),
+  officeGetSlideTexts: (dir, slideFile) => ipcRenderer.invoke('office:getSlideTexts', dir, slideFile),
+  officeSetSlideTexts: (dir, slideFile, translations) => ipcRenderer.invoke('office:setSlideTexts', dir, slideFile, translations),
+  officeWordExtract: (pathOrDir, options) => ipcRenderer.invoke('office:wordExtract', pathOrDir, options),
+  officeWordApplyTexts: (pathOrDir, updates) => ipcRenderer.invoke('office:wordApplyTexts', pathOrDir, updates),
+  officeWordGetStyles: (pathOrDir) => ipcRenderer.invoke('office:wordGetStyles', pathOrDir),
+  officeWordFillTemplate: (pathOrDir, replacements) => ipcRenderer.invoke('office:wordFillTemplate', pathOrDir, replacements),
+
+  // Spreadsheet File I/O
+  spreadsheetImportFile: (filePath) => ipcRenderer.invoke('spreadsheet:importFile', filePath),
+  spreadsheetExportFile: (filePath, cells, sheetName) => ipcRenderer.invoke('spreadsheet:exportFile', filePath, cells, sheetName),
+
+  // Email
+  emailGenerateTOTP: () => ipcRenderer.invoke('email:generateTOTP'),
+  emailSaveTOTPSecret: (secret) => ipcRenderer.invoke('email:saveTOTPSecret', secret),
+  emailVerifyTOTP: (code) => ipcRenderer.invoke('email:verifyTOTP', code),
+  emailConnect: () => ipcRenderer.invoke('email:connect'),
+  emailDisconnect: () => ipcRenderer.invoke('email:disconnect'),
+  emailSend: (to, subject, html, text) => ipcRenderer.invoke('email:send', to, subject, html, text),
+  emailFetchNew: () => ipcRenderer.invoke('email:fetchNew'),
+  emailStartPolling: () => ipcRenderer.invoke('email:startPolling'),
+  emailStopPolling: () => ipcRenderer.invoke('email:stopPolling'),
+  emailRequestApproval: (toolName, args, chatMd) => ipcRenderer.invoke('email:requestApproval', toolName, args, chatMd),
+  emailSendConversation: (messages, title) => ipcRenderer.invoke('email:sendConversation', messages, title),
+  onEmailReceived: (cb) => ipcRenderer.on('email:received', (_, email) => cb(email)),
+
+  // Web Control
+  webControlStart: () => ipcRenderer.invoke('webControl:start'),
+  webControlStop: () => ipcRenderer.invoke('webControl:stop'),
+  webControlGetStatus: () => ipcRenderer.invoke('webControl:getStatus'),
+  webControlHashPassword: (password) => ipcRenderer.invoke('webControl:hashPassword', password),
+  webControlGenerateTOTP: () => ipcRenderer.invoke('webControl:generateTOTP'),
+  webControlVerifyTOTP: (code) => ipcRenderer.invoke('webControl:verifyTOTP', code),
+  webControlPushMessage: (role, content, extra) => ipcRenderer.send('webControl:pushMessage', role, content, extra),
+  webControlPushStatus: (status) => ipcRenderer.send('webControl:pushStatus', status),
+  webControlPushApproval: (toolName, args) => ipcRenderer.send('webControl:pushApproval', toolName, args),
+  webControlClearApproval: () => ipcRenderer.send('webControl:clearApproval'),
+  webControlPushToolCall: (toolName, args, status, result) => ipcRenderer.send('webControl:pushToolCall', toolName, args, status, result),
+  webControlPushConversationSwitch: (conversationId) => ipcRenderer.send('webControl:pushConversationSwitch', conversationId),
+  webControlPushHistoryMessages: (messages) => ipcRenderer.send('webControl:pushHistoryMessages', messages),
+  webControlPushTheme: (vars) => ipcRenderer.send('webControl:pushTheme', vars),
+  webControlPushTarot: (card) => ipcRenderer.send('webControl:pushTarot', card),
+  webControlPushTitle: (title) => ipcRenderer.send('webControl:pushTitle', title),
+  webControlSetWorkDir: (dir) => ipcRenderer.send('webControl:setWorkDir', dir),
+  webControlSetAvatars: (avatars) => ipcRenderer.send('webControl:setAvatars', avatars),
+  avatarPickAndEncode: () => ipcRenderer.invoke('avatar:pickAndEncode'),
+  avatarEncodeFile: (filePath) => ipcRenderer.invoke('avatar:encodeFile', filePath),
+  onWebControlNewChat: (cb) => ipcRenderer.on('webControl:newChat', () => cb()),
+  onWebControlSendMessage: (cb) => ipcRenderer.on('webControl:sendMessage', (_, message) => cb(message)),
+  onWebControlStopAgent: (cb) => ipcRenderer.on('webControl:stopAgent', () => cb()),
+  onWebControlApprovalResponse: (cb) => ipcRenderer.on('webControl:approvalResponse', (_, approved) => cb(approved)),
+  onWebControlLoadConversation: (cb) => ipcRenderer.on('webControl:loadConversation', (_, id) => cb(id)),
+  onGameFinished: (cb) => ipcRenderer.on('game:finished', (_, data) => cb(data)),
 });

@@ -8,6 +8,67 @@
 /* Components: Tools Grid, Skills List, Modal, Knowledge/Memory */
 
 /* Tools Grid */
+.tools-header-actions {
+  margin-top: 12px;
+}
+
+.tools-auto-optimize {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.tools-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.tool-group {
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 12px;
+}
+
+.tool-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+  gap: 10px;
+}
+
+.tool-group-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.tool-group-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.tool-group-count {
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+.tool-group-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
 .tools-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
@@ -33,6 +94,15 @@
 
 .tool-card.disabled { opacity: 0.5; }
 
+.tool-card.optimized-active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent-bg-hover), var(--shadow-sm);
+}
+
+.tool-card.optimized-muted:not(.disabled) {
+  opacity: 0.68;
+}
+
 .tool-icon {
   width: 36px;
   height: 36px;
@@ -55,6 +125,68 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tool-badge-mcp {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--accent);
+  background: var(--accent-bg);
+  border: 1px solid var(--accent-bg-hover, var(--accent-bg));
+  border-radius: 10px;
+  padding: 1px 7px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.tool-badge-mcp i {
+  font-size: 9px;
+}
+
+.mcp-refresh-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  background: var(--accent-bg);
+  color: var(--accent);
+  border-radius: 50%;
+  cursor: pointer;
+  font-size: 11px;
+  margin-left: 6px;
+  transition: all var(--transition);
+  flex-shrink: 0;
+}
+
+.mcp-refresh-btn:hover {
+  background: var(--accent-bg-hover, var(--accent-bg));
+  transform: scale(1.1);
+}
+
+.mcp-refresh-btn.spinning i {
+  animation: spin-mcp 0.8s linear infinite;
+}
+
+@keyframes spin-mcp {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.mcp-tool-group {
+  border-color: var(--accent-bg-hover, var(--border));
+}
+
+.mcp-tool-group .tool-group-title i {
+  color: var(--accent);
+  margin-right: 4px;
 }
 
 .tool-desc {
@@ -121,10 +253,20 @@
   line-height: 1.5;
 }
 
+.skill-meta {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
 .skill-actions {
   display: flex;
   gap: 4px;
   align-items: flex-start;
+}
+
+.skills-header-actions {
+  margin-top: 16px;
 }
 
 /* Knowledge & Memory List Items */
@@ -580,4 +722,244 @@
   margin-top: 0;
   flex: 1;
   min-width: 200px;
+}
+
+/* ---- Game Invitation Card ---- */
+.game-invite-card {
+  background: linear-gradient(135deg, var(--bg-secondary) 0%, var(--accent-bg) 100%);
+  border: 1.5px solid var(--accent);
+  border-radius: var(--radius-lg, 12px);
+  padding: 20px 24px;
+  margin: 8px 0;
+  max-width: 420px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+  animation: gameCardSlideIn 0.4s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@keyframes gameCardSlideIn {
+  from { opacity: 0; transform: translateY(16px) scale(0.96); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.game-invite-header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 14px;
+}
+
+.game-invite-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: var(--radius-md, 8px);
+  background: var(--accent);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  flex-shrink: 0;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+}
+
+.game-invite-info h4 {
+  margin: 0 0 4px 0;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.game-invite-info p {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.4;
+}
+
+.game-invite-msg {
+  font-size: 14px;
+  color: var(--text-primary);
+  margin-bottom: 16px;
+  padding: 10px 14px;
+  background: var(--bg-primary);
+  border-radius: var(--radius-sm, 6px);
+  border-left: 3px solid var(--accent);
+  line-height: 1.5;
+}
+
+.game-invite-agents {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 16px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.game-invite-agents label {
+  white-space: nowrap;
+}
+
+.game-invite-agents input[type="number"] {
+  width: 60px;
+  padding: 4px 8px;
+  font-size: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 6px);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  text-align: center;
+}
+
+.game-invite-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.game-invite-actions button {
+  padding: 8px 20px;
+  border-radius: var(--radius-sm, 6px);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  border: none;
+  transition: all 0.2s;
+}
+
+.game-invite-actions .btn-game-accept {
+  background: var(--accent);
+  color: #fff;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.12);
+}
+
+.game-invite-actions .btn-game-accept:hover {
+  filter: brightness(1.1);
+  transform: translateY(-1px);
+}
+
+.game-invite-actions .btn-game-ignore {
+  background: var(--bg-tertiary, var(--bg-secondary));
+  color: var(--text-secondary);
+}
+
+.game-invite-actions .btn-game-ignore:hover {
+  background: var(--bg-hover);
+}
+
+.game-invite-card.accepted {
+  border-color: var(--success, #27ae60);
+  opacity: 0.85;
+  pointer-events: none;
+}
+
+.game-invite-card.accepted::after {
+  content: '';
+  display: block;
+  text-align: center;
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--success, #27ae60);
+}
+
+.game-invite-card.ignored {
+  border-color: var(--border);
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+/* ---- MCP Server Card ---- */
+.mcp-server-card {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 14px 16px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  transition: all var(--transition);
+  margin-bottom: 8px;
+}
+
+.mcp-server-card:hover {
+  border-color: var(--accent);
+  box-shadow: var(--shadow-sm);
+}
+
+.mcp-server-icon {
+  width: 36px;
+  height: 36px;
+  background: var(--accent-bg);
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent);
+  font-size: 15px;
+  flex-shrink: 0;
+}
+
+.mcp-server-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.mcp-server-info h4 {
+  margin: 0 0 2px 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.mcp-server-info p {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.mcp-server-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.mcp-server-status .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-secondary);
+}
+
+.mcp-server-status .dot.connected { background: var(--success, #27ae60); }
+.mcp-server-status .dot.error { background: var(--error-color, #e74c3c); }
+
+.mcp-server-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.mcp-servers-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mcp-add-form {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 16px;
+  margin-top: 12px;
+}
+
+.mcp-add-form .setting-item {
+  margin-bottom: 12px;
+}
+
+.mcp-add-form .setting-item:last-child {
+  margin-bottom: 0;
 }

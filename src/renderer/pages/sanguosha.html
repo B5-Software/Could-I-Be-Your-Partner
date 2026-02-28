@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>三国杀</title>
+  <link rel="stylesheet" href="../css/theme.css">
+  <link rel="stylesheet" href="../css/sanguosha.css">
+  <link rel="stylesheet" href="../../../assets/fonts/fontawesome.min.css">
+</head>
+<body>
+  <!-- Title Bar -->
+  <div class="sg-titlebar">
+    <span class="sg-titlebar-title"><i class="fa-solid fa-khanda"></i> 三国杀</span>
+    <div class="sg-titlebar-btns">
+      <button class="btn-close" id="btn-close" title="关闭"><i class="fa-solid fa-xmark"></i></button>
+    </div>
+  </div>
+
+  <!-- Game Container -->
+  <div class="sg-game" id="game-container">
+    <div class="sg-board">
+      <!-- Opponents -->
+      <div class="sg-opponents" id="opponents-area"></div>
+
+      <!-- Center Play Area -->
+      <div class="sg-play-area">
+        <div class="sg-game-info" id="game-info">
+          <div><span class="label">回合:</span> <span id="info-turn">1</span></div>
+          <div><span class="label">牌堆:</span> <span id="info-deck">0</span></div>
+          <div><span class="label">弃牌:</span> <span id="info-discard">0</span></div>
+          <div><span class="label">阶段:</span> <span id="info-phase">准备</span></div>
+        </div>
+        <div class="sg-play-pile" id="play-pile"></div>
+
+        <!-- Log -->
+        <div class="sg-log-panel">
+          <div class="sg-log-header">游戏日志</div>
+          <div class="sg-log-content" id="game-log"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Player Hand -->
+    <div class="sg-hand-area">
+      <div class="sg-player-info-bar">
+        <span class="sg-my-hero" id="my-hero-name">—</span>
+        <span class="sg-my-role" id="my-role">—</span>
+        <div class="sg-my-hp" id="my-hp"></div>
+        <span style="flex:1"></span>
+        <span class="sg-player-cards-count" id="my-cards-count">手牌: 0</span>
+      </div>
+      <div class="sg-hand-cards" id="hand-cards"></div>
+    </div>
+
+    <!-- Action Bar -->
+    <div class="sg-action-bar" id="action-bar">
+      <button class="btn-play" id="btn-play" disabled>出牌</button>
+      <button class="btn-skill" id="btn-skill" disabled>技能</button>
+      <button class="btn-end-turn" id="btn-end-turn" disabled>结束出牌</button>
+    </div>
+  </div>
+
+  <script src="../js/sanguosha.js"></script>
+</body>
+</html>

@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>谁是卧底</title>
+  <link rel="stylesheet" href="../css/theme.css">
+  <link rel="stylesheet" href="../css/undercover.css">
+  <link rel="stylesheet" href="../../../assets/fonts/fontawesome.min.css">
+</head>
+<body>
+  <!-- Title Bar -->
+  <div class="uc-titlebar">
+    <span class="uc-titlebar-title"><i class="fa-solid fa-user-secret"></i> 谁是卧底</span>
+    <div class="uc-titlebar-btns">
+      <button class="btn-close" id="btn-close" title="关闭"><i class="fa-solid fa-xmark"></i></button>
+    </div>
+  </div>
+
+  <!-- Game Container -->
+  <div class="uc-game" id="game-container">
+    <!-- Top Info -->
+    <div class="uc-info-bar">
+      <div class="uc-round-info">第 <span id="round-num">1</span> 轮</div>
+      <div class="uc-phase-info" id="phase-info">描述阶段</div>
+      <div class="uc-alive-info"><span id="alive-count">0</span> 人存活</div>
+    </div>
+
+    <!-- Main Layout -->
+    <div class="uc-main">
+      <!-- Players Panel -->
+      <div class="uc-players-panel">
+        <div class="uc-panel-header"><i class="fa-solid fa-users"></i> 玩家</div>
+        <div class="uc-players-list" id="players-list"></div>
+        <div class="uc-my-word-area">
+          <div class="uc-my-word-label">你的词语</div>
+          <div class="uc-my-word" id="my-word">???</div>
+        </div>
+      </div>
+
+      <!-- Center Area: Descriptions & Voting -->
+      <div class="uc-center">
+        <!-- Description History -->
+        <div class="uc-description-area">
+          <div class="uc-desc-header"><i class="fa-solid fa-comment-dots"></i> 发言记录</div>
+          <div class="uc-desc-list" id="desc-list"></div>
+        </div>
+
+        <!-- User Input for Description -->
+        <div class="uc-input-area" id="desc-input-area">
+          <div class="uc-input-hint" id="desc-hint">轮到你描述你的词语了（不能直接说出词语）</div>
+          <div class="uc-input-row">
+            <input type="text" class="uc-input" id="desc-input" placeholder="用一句话描述你的词..." autocomplete="off" />
+            <button class="uc-btn-submit" id="btn-desc-submit"><i class="fa-solid fa-paper-plane"></i> 提交</button>
+          </div>
+        </div>
+
+        <!-- Voting Area -->
+        <div class="uc-vote-area hidden" id="vote-area">
+          <div class="uc-vote-hint">请投票选出你认为的卧底</div>
+          <div class="uc-vote-options" id="vote-options"></div>
+          <button class="uc-btn-vote" id="btn-vote" disabled><i class="fa-solid fa-check"></i> 确认投票</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Status/Game Over Overlay -->
+    <div class="uc-status-overlay hidden" id="status-overlay">
+      <div class="uc-status-content" id="status-content"></div>
+    </div>
+  </div>
+
+  <script src="../js/undercover.js"></script>
+</body>
+</html>

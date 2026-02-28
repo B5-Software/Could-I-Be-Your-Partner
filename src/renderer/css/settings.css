@@ -15,7 +15,9 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   padding: 20px;
-  min-height: 520px;
+  min-height: 0;
+  flex: 1;
+  overflow: hidden;
   font-family: "Georgia", "Times New Roman", "Songti SC", "SimSun", serif;
 }
 
@@ -23,8 +25,8 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
-  position: sticky;
-  top: 12px;
+  overflow-y: auto;
+  max-height: 100%;
 }
 
 .settings-tab {
@@ -59,6 +61,9 @@
   display: flex;
   flex-direction: column;
   gap: 18px;
+  overflow-y: auto;
+  max-height: 100%;
+  padding-right: 6px;
 }
 
 .settings-panel {
@@ -67,7 +72,9 @@
 }
 
 .settings-panel.active {
-  display: block;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
 }
 
 .settings-group {
@@ -75,6 +82,7 @@
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
   padding: 20px;
+  flex-shrink: 0;
 }
 
 .settings-group h3 {
@@ -174,8 +182,13 @@
 
 .avatar-actions {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   gap: 8px;
+  align-items: center;
+}
+
+.avatar-actions .btn-secondary {
+  flex: 1;
 }
 
 .setting-hint {
@@ -378,3 +391,36 @@
 }
 
 .setting-warning i { margin-top: 2px; flex-shrink: 0; }
+
+/* Inline input (e.g. TOTP verify code) */
+.email-inline-input {
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 14px;
+  width: 140px;
+  outline: none;
+  transition: border-color var(--transition);
+  font-family: inherit;
+}
+
+.email-inline-input:focus {
+  border-color: var(--accent);
+}
+
+/* Scrollbar for settings panels */
+.settings-panels::-webkit-scrollbar {
+  width: 5px;
+}
+.settings-panels::-webkit-scrollbar-track {
+  background: transparent;
+}
+.settings-panels::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+.settings-panels::-webkit-scrollbar-thumb:hover {
+  background: var(--text-tertiary);
+}

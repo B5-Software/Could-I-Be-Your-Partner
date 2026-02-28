@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>飞花令</title>
+  <link rel="stylesheet" href="../css/theme.css">
+  <link rel="stylesheet" href="../css/flyingflower.css">
+  <link rel="stylesheet" href="../../../assets/fonts/fontawesome.min.css">
+</head>
+<body>
+  <!-- Title Bar -->
+  <div class="ff-titlebar">
+    <span class="ff-titlebar-title"><i class="fa-solid fa-feather"></i> 飞花令</span>
+    <div class="ff-titlebar-btns">
+      <button class="btn-close" id="btn-close" title="关闭"><i class="fa-solid fa-xmark"></i></button>
+    </div>
+  </div>
+
+  <!-- Game Container -->
+  <div class="ff-game" id="game-container">
+    <!-- Keyword Display -->
+    <div class="ff-keyword-area">
+      <div class="ff-keyword-label">关键字</div>
+      <div class="ff-keyword" id="keyword-display">花</div>
+      <div class="ff-round-info">第 <span id="round-num">1</span> 轮 · <span id="alive-count">0</span> 人在场</div>
+    </div>
+
+    <!-- Players Bar -->
+    <div class="ff-players-bar" id="players-bar"></div>
+
+    <!-- Poetry History -->
+    <div class="ff-history-area">
+      <div class="ff-history-header">
+        <i class="fa-solid fa-scroll"></i> 诗句记录
+      </div>
+      <div class="ff-history-list" id="history-list"></div>
+    </div>
+
+    <!-- User Input Area -->
+    <div class="ff-input-area" id="input-area">
+      <div class="ff-input-hint" id="input-hint">轮到你了，请输入含有关键字的诗句</div>
+      <div class="ff-input-row">
+        <input type="text" class="ff-input" id="poetry-input" placeholder="输入诗句..." autocomplete="off" />
+        <button class="ff-btn-submit" id="btn-submit"><i class="fa-solid fa-paper-plane"></i> 提交</button>
+        <button class="ff-btn-pass" id="btn-pass"><i class="fa-solid fa-forward"></i> 认输</button>
+      </div>
+    </div>
+
+    <!-- Status/Game Over Overlay -->
+    <div class="ff-status-overlay hidden" id="status-overlay">
+      <div class="ff-status-content" id="status-content"></div>
+    </div>
+  </div>
+
+  <script src="../js/flyingflower.js"></script>
+</body>
+</html>

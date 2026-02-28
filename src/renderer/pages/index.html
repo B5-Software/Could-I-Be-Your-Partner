@@ -110,6 +110,9 @@
               <span class="progress-text" id="context-progress-text">0/8192</span>
             </div>
             <div class="chat-actions">
+              <button class="btn-icon hidden" id="btn-reoptimize-tools" title="手动重新优化工具选择">
+                <i class="fa-solid fa-wand-magic-sparkles"></i>
+              </button>
               <button class="btn-icon" id="btn-open-workspace" title="打开工作目录">
                 <i class="fa-solid fa-folder-open"></i>
               </button>
@@ -236,6 +239,24 @@
         </div>
       </div>
 
+      <!-- Spreadsheet Side Panel -->
+      <div id="spreadsheet-panel" class="geogebra-panel hidden">
+        <div class="geogebra-header">
+          <h3><i class="fa-solid fa-table-cells"></i> 数据表格</h3>
+          <button class="btn-icon" id="btn-close-spreadsheet" title="关闭">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+        </div>
+        <div class="ss-formula-bar">
+          <span class="ss-addr">A1</span>
+          <span class="ss-fx-label">fx</span>
+          <input class="ss-fx" type="text" placeholder="输入值或公式（如 =SUM(A1:A10)）" />
+        </div>
+        <div class="geogebra-body" id="spreadsheet-body">
+          <!-- SpreadsheetUI renders here -->
+        </div>
+      </div>
+
       <!-- History Page -->
       <section id="page-history" class="page">
         <div class="page-header">
@@ -255,8 +276,18 @@
         <div class="page-header">
           <h2><i class="fa-solid fa-toolbox"></i> 工具管理</h2>
           <p class="page-desc">启用或禁用AI Agent可以使用的工具</p>
+          <div class="tools-header-actions">
+            <label class="tools-auto-optimize">
+              <span>自动优化工具选择</span>
+              <div class="toggle-switch">
+                <input type="checkbox" id="toggle-auto-optimize-tools">
+                <span class="toggle-slider"></span>
+              </div>
+            </label>
+          </div>
         </div>
-        <div class="tools-grid" id="tools-grid"></div>
+        <div class="tools-stats" id="tools-stats"></div>
+        <div class="tools-groups" id="tools-groups"></div>
       </section>
 
       <!-- Skills Page -->
@@ -264,9 +295,14 @@
         <div class="page-header">
           <h2><i class="fa-solid fa-lightbulb"></i> 技能管理</h2>
           <p class="page-desc">管理AI Agent的技能，也可以让Agent自动生成</p>
-          <button class="btn-primary" id="btn-add-skill">
-            <i class="fa-solid fa-plus"></i> 添加技能
-          </button>
+          <div class="page-header-actions skills-header-actions">
+            <button class="btn-secondary" id="btn-import-standard-skill">
+              <i class="fa-solid fa-file-import"></i> 导入 SKILL.md
+            </button>
+            <button class="btn-primary" id="btn-add-skill">
+              <i class="fa-solid fa-plus"></i> 添加技能
+            </button>
+          </div>
         </div>
         <div class="skills-list" id="skills-list">
           <div class="empty-state">
@@ -325,6 +361,7 @@
         <div class="settings-shell">
           <div class="settings-tabs">
             <button class="settings-tab active" data-tab="ai"><i class="fa-solid fa-user-astronaut"></i> AI 形象</button>
+            <button class="settings-tab" data-tab="user"><i class="fa-solid fa-user"></i> 个人资料</button>
             <button class="settings-tab" data-tab="llm"><i class="fa-solid fa-microchip"></i> LLM</button>
             <button class="settings-tab" data-tab="image"><i class="fa-solid fa-image"></i> 生图</button>
             <button class="settings-tab" data-tab="theme"><i class="fa-solid fa-palette"></i> 主题</button>
@@ -332,6 +369,9 @@
             <button class="settings-tab" data-tab="entropy"><i class="fa-solid fa-dice"></i> 熵源</button>
             <button class="settings-tab" data-tab="firmware"><i class="fa-solid fa-microchip"></i> TRNG固件</button>
             <button class="settings-tab" data-tab="security"><i class="fa-solid fa-shield-halved"></i> 安全</button>
+            <button class="settings-tab" data-tab="mcp"><i class="fa-solid fa-plug"></i> MCP</button>
+            <button class="settings-tab" data-tab="email"><i class="fa-solid fa-envelope"></i> 邮箱</button>
+            <button class="settings-tab" data-tab="webcontrol"><i class="fa-solid fa-globe"></i> Web控制</button>
           </div>
           <div class="settings-panels">
             <div class="settings-panel active" data-tab="ai">
@@ -348,8 +388,8 @@
                       <i class="fa-solid fa-robot"></i>
                     </div>
                     <div class="avatar-actions">
-                      <input type="text" id="setting-ai-avatar" placeholder="选择图片文件或填写路径">
                       <button class="btn-secondary" id="btn-ai-avatar-pick"><i class="fa-solid fa-image"></i> 选择图片</button>
+                      <button class="btn-secondary" id="btn-ai-avatar-clear">清除头像</button>
                     </div>
                   </div>
                 </div>
@@ -368,6 +408,34 @@
                 <div class="setting-item">
                   <label>自定义提示词 (追加到系统提示词末尾)</label>
                   <textarea id="setting-ai-custom-prompt" placeholder="你可以在这里添加额外的性格描述、说话风格等..." rows="4"></textarea>
+                </div>
+              </div>
+            </div>
+
+            <!-- User Profile -->
+            <div class="settings-panel" data-tab="user">
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-user"></i> 个人资料</h3>
+                <p class="setting-hint" style="margin-bottom:12px">设置你自己的个人信息，AI 会记住你的名字和简介。</p>
+                <div class="setting-item">
+                  <label>昵称</label>
+                  <input type="text" id="setting-user-name" placeholder="填写你的昵称">
+                </div>
+                <div class="setting-item">
+                  <label>头像</label>
+                  <div class="avatar-row">
+                    <div class="avatar-preview" id="setting-user-avatar-preview">
+                      <i class="fa-solid fa-user"></i>
+                    </div>
+                    <div class="avatar-actions">
+                      <button class="btn-secondary" id="btn-user-avatar-pick"><i class="fa-solid fa-image"></i> 选择图片</button>
+                      <button class="btn-secondary" id="btn-user-avatar-clear">清除头像</button>
+                    </div>
+                  </div>
+                </div>
+                <div class="setting-item">
+                  <label>Bio (个人简介)</label>
+                  <textarea id="setting-user-bio" placeholder="写几句话介绍一下自己吧~" rows="3"></textarea>
                 </div>
               </div>
             </div>
@@ -916,18 +984,270 @@
                 </div>
               </div>
             </div>
+
+            <!-- MCP Settings -->
+            <div class="settings-panel" data-tab="mcp">
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-plug"></i> MCP 服务器</h3>
+                <p class="setting-hint" style="margin-bottom:12px">
+                  Model Context Protocol (MCP) 允许 AI Agent 连接外部工具服务器，扩展能力。添加服务器后点击连接即可使用。
+                </p>
+                <div class="mcp-servers-list" id="mcp-servers-list">
+                  <!-- dynamically rendered -->
+                </div>
+                <button class="btn-secondary" id="btn-mcp-add" style="margin-top:12px">
+                  <i class="fa-solid fa-plus"></i> 添加 MCP 服务器
+                </button>
+                <div class="mcp-add-form hidden" id="mcp-add-form">
+                  <div class="setting-item">
+                    <label>服务器名称</label>
+                    <input type="text" id="mcp-new-name" placeholder="my-server">
+                  </div>
+                  <div class="setting-item">
+                    <label>启动命令</label>
+                    <input type="text" id="mcp-new-command" placeholder="npx -y @modelcontextprotocol/server-xxx">
+                  </div>
+                  <div class="setting-item">
+                    <label>参数 (JSON 数组，可选)</label>
+                    <input type="text" id="mcp-new-args" placeholder='["--port", "3000"]'>
+                  </div>
+                  <div class="setting-item">
+                    <label>环境变量 (JSON 对象，可选)</label>
+                    <input type="text" id="mcp-new-env" placeholder='{"API_KEY": "xxx"}'>
+                  </div>
+                  <div class="setting-item">
+                    <label>工作目录 (可选)</label>
+                    <input type="text" id="mcp-new-cwd" placeholder="留空则使用默认目录">
+                  </div>
+                  <div class="setting-item">
+                    <label class="toggle-label">
+                      <span>启动时自动连接</span>
+                      <div class="toggle-switch">
+                        <input type="checkbox" id="mcp-new-autoconnect">
+                        <span class="toggle-slider"></span>
+                      </div>
+                    </label>
+                  </div>
+                  <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:8px">
+                    <button class="btn-secondary" id="btn-mcp-cancel">取消</button>
+                    <button class="btn-primary" id="btn-mcp-save">保存</button>
+                  </div>
+                </div>
+              </div>
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-list"></i> 已连接工具</h3>
+                <div id="mcp-connected-tools" style="font-size:13px;color:var(--text-secondary)">
+                  暂无已连接的 MCP 服务器
+                </div>
+              </div>
+            </div>
+            <!-- Email Settings -->
+            <div class="settings-panel" data-tab="email">
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-flask"></i> 实验性功能</h3>
+                <div class="setting-warning">
+                  <i class="fa-solid fa-triangle-exclamation"></i>
+                  <span>邮件控制功能尚处于实验阶段，可能不稳定或不完全可用。请谨慎使用。</span>
+                </div>
+              </div>
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-sliders"></i> 邮件模式</h3>
+                <div class="setting-item">
+                  <label>控制模式</label>
+                  <select id="setting-email-mode">
+                    <option value="send-only">只发（发送对话摘要）</option>
+                    <option value="receive-only">只收（接收邮件指令）</option>
+                    <option value="send-receive">发+收（完整控制）</option>
+                  </select>
+                </div>
+              </div>
+              <div class="settings-group" id="email-smtp-group">
+                <h3><i class="fa-solid fa-server"></i> SMTP 发信配置</h3>
+                <div class="setting-item">
+                  <label>SMTP 服务器</label>
+                  <input type="text" id="setting-email-smtp-host" placeholder="smtp.example.com">
+                </div>
+                <div class="setting-item">
+                  <label>端口</label>
+                  <input type="number" id="setting-email-smtp-port" placeholder="587" value="587">
+                </div>
+                <div class="setting-item">
+                  <label class="toggle-label">
+                    <span>使用 TLS/SSL</span>
+                    <div class="toggle-switch">
+                      <input type="checkbox" id="setting-email-smtp-secure" checked>
+                      <span class="toggle-slider"></span>
+                    </div>
+                  </label>
+                </div>
+              </div>
+              <div class="settings-group" id="email-imap-group">
+                <h3><i class="fa-solid fa-inbox"></i> IMAP 收信配置</h3>
+                <div class="setting-item">
+                  <label>IMAP 服务器</label>
+                  <input type="text" id="setting-email-imap-host" placeholder="imap.example.com">
+                </div>
+                <div class="setting-item">
+                  <label>端口</label>
+                  <input type="number" id="setting-email-imap-port" placeholder="993" value="993">
+                </div>
+                <div class="setting-item">
+                  <label class="toggle-label">
+                    <span>使用 TLS</span>
+                    <div class="toggle-switch">
+                      <input type="checkbox" id="setting-email-imap-tls" checked>
+                      <span class="toggle-slider"></span>
+                    </div>
+                  </label>
+                </div>
+              </div>
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-user-lock"></i> 帐号凭据</h3>
+                <div class="setting-item">
+                  <label>邮箱帐号</label>
+                  <input type="text" id="setting-email-user" placeholder="ai-partner@example.com">
+                </div>
+                <div class="setting-item">
+                  <label>授权码 / 密码</label>
+                  <input type="password" id="setting-email-pass" placeholder="请使用应用专用密码">
+                </div>
+                <div class="setting-item">
+                  <label>用户邮箱地址（你自己的邮箱，用于接收和发送指令）</label>
+                  <input type="text" id="setting-email-owner" placeholder="your-email@example.com">
+                </div>
+              </div>
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-shield-halved"></i> TOTP 两步验证</h3>
+                <p style="font-size:13px;color:var(--text-secondary);margin-bottom:12px">
+                  用于邮件审批验证。点击生成密钥后，请用手机验证器App（如 Microsoft Authenticator、Google Authenticator）扫描二维码。
+                </p>
+                <div id="email-totp-qr-area" style="text-align:center;margin-bottom:12px;display:none">
+                  <img id="email-totp-qr-img" style="max-width:200px;border-radius:8px;border:1px solid var(--border-color)">
+                  <p id="email-totp-secret-text" style="font-size:12px;color:var(--text-secondary);margin-top:6px;word-break:break-all"></p>
+                </div>
+                <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+                  <button class="btn-secondary" id="btn-email-gen-totp"><i class="fa-solid fa-key"></i> 生成 TOTP 密钥</button>
+                  <input type="text" class="email-inline-input" id="email-totp-verify-code" placeholder="输入6位验证码">
+                  <button class="btn-secondary" id="btn-email-verify-totp"><i class="fa-solid fa-check"></i> 验证</button>
+                  <span id="email-totp-verify-result" style="font-size:13px"></span>
+                </div>
+                <div class="setting-item" style="margin-top:12px">
+                  <label>当前密钥</label>
+                  <input type="text" id="setting-email-totp-secret" readonly placeholder="尚未生成" style="color:var(--text-secondary)">
+                </div>
+              </div>
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-sliders"></i> 邮件控制选项</h3>
+                <div class="setting-item">
+                  <label>轮询间隔（秒）</label>
+                  <input type="number" id="setting-email-poll-interval" placeholder="30" value="30" min="10">
+                </div>
+                <div class="setting-item">
+                  <label>审批邮件重发间隔（分钟）</label>
+                  <input type="number" id="setting-email-resend-interval" placeholder="30" value="30" min="1">
+                </div>
+                <div class="setting-item">
+                  <label>最大重发次数</label>
+                  <input type="number" id="setting-email-max-resends" placeholder="3" value="3" min="0">
+                </div>
+              </div>
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-power-off"></i> 启用管理</h3>
+                <div class="setting-item">
+                  <label class="toggle-label">
+                    <span>启用邮件控制</span>
+                    <div class="toggle-switch">
+                      <input type="checkbox" id="setting-email-enabled">
+                      <span class="toggle-slider"></span>
+                    </div>
+                  </label>
+                </div>
+                <div style="display:flex;gap:8px;margin-top:12px">
+                  <button class="btn-primary" id="btn-email-test"><i class="fa-solid fa-vial"></i> 测试连接</button>
+                  <button class="btn-secondary" id="btn-email-save"><i class="fa-solid fa-floppy-disk"></i> 保存设置</button>
+                </div>
+                <p id="email-test-result" style="font-size:13px;margin-top:8px"></p>
+              </div>
+            </div>
+
+            <!-- Web Control Panel -->
+            <div class="settings-panel" data-tab="webcontrol">
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-globe"></i> Web 远程控制</h3>
+                <p style="font-size:13px;color:var(--text-secondary);margin-bottom:12px">
+                  通过任何浏览器远程控制 AI 助手。支持发消息、审批工具、查看对话历史。<br>
+                  <strong>注意：</strong>独立窗口小游戏（飞花令/三国杀/谁是卧底）在Web控制模式下不可用，GeoGebra仅在主机运行。
+                </p>
+              </div>
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-lock"></i> 访问安全</h3>
+                <div class="setting-item">
+                  <label>访问密码</label>
+                  <input type="password" id="setting-wc-password" placeholder="设置访问密码">
+                </div>
+                <div class="setting-item">
+                  <label class="toggle-label">
+                    <span>启用 2FA 两步验证</span>
+                    <div class="toggle-switch">
+                      <input type="checkbox" id="setting-wc-enable-2fa">
+                      <span class="toggle-slider"></span>
+                    </div>
+                  </label>
+                </div>
+                <div id="wc-2fa-area" style="display:none">
+                  <div id="wc-totp-qr-area" style="text-align:center;margin-bottom:12px;display:none">
+                    <img id="wc-totp-qr-img" style="max-width:200px;border-radius:8px;border:1px solid var(--border-color)">
+                    <p id="wc-totp-secret-text" style="font-size:12px;color:var(--text-secondary);margin-top:6px;word-break:break-all"></p>
+                  </div>
+                  <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px">
+                    <button class="btn-secondary" id="btn-wc-gen-totp"><i class="fa-solid fa-key"></i> 生成 TOTP 密钥</button>
+                    <input type="text" class="email-inline-input" id="wc-totp-verify-code" placeholder="输入6位验证码">
+                    <button class="btn-secondary" id="btn-wc-verify-totp"><i class="fa-solid fa-check"></i> 验证</button>
+                    <span id="wc-totp-verify-result" style="font-size:13px"></span>
+                  </div>
+                </div>
+              </div>
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-server"></i> 服务器设置</h3>
+                <div class="setting-item">
+                  <label>端口</label>
+                  <input type="number" id="setting-wc-port" value="3456" min="1024" max="65535">
+                </div>
+                <div class="setting-item">
+                  <label class="toggle-label">
+                    <span>启用 Web 控制</span>
+                    <div class="toggle-switch">
+                      <input type="checkbox" id="setting-wc-enabled">
+                      <span class="toggle-slider"></span>
+                    </div>
+                  </label>
+                </div>
+                <div class="setting-item">
+                  <label class="toggle-label">
+                    <span>启动时自动开启 Web 控制</span>
+                    <div class="toggle-switch">
+                      <input type="checkbox" id="setting-wc-autostart">
+                      <span class="toggle-slider"></span>
+                    </div>
+                  </label>
+                </div>
+                <div style="display:flex;gap:8px;margin-top:12px">
+                  <button class="btn-primary" id="btn-wc-toggle"><i class="fa-solid fa-play"></i> 启动</button>
+                  <button class="btn-secondary" id="btn-wc-save"><i class="fa-solid fa-floppy-disk"></i> 保存设置</button>
+                </div>
+                <p id="wc-status-result" style="font-size:13px;margin-top:8px"></p>
+              </div>
+            </div>
           </div>
         </div>
       </section>
-
-      <!-- About Page -->
       <section id="page-about" class="page">
         <div class="about-container">
           <div class="about-logo">
             <img src="../../../assets/icons/icon.png" alt="App">
           </div>
           <h2>Could I Be Your Partner</h2>
-          <p class="about-version">v1.0.0</p>
+          <p class="about-version" id="about-version">v-</p>
           <p class="about-desc">全自动AI Agent，帮助完成一切任务</p>
           <div class="about-divider"></div>
           <p class="about-author">
@@ -943,7 +1263,7 @@
             </div>
             <div class="feature-item">
               <i class="fa-solid fa-toolbox"></i>
-              <span>60+内置工具</span>
+              <span id="about-builtins-count">-内置工具</span>
             </div>
             <div class="feature-item">
               <i class="fa-solid fa-brain"></i>
@@ -1122,6 +1442,7 @@
   <script src="../js/tools-def.js"></script>
   <script src="../js/context-manager.js"></script>
   <script src="../js/agent.js"></script>
+  <script src="../js/spreadsheet.js"></script>
   <script src="../js/app.js"></script>
 </body>
 </html>
