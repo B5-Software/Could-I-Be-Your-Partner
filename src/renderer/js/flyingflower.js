@@ -19,6 +19,19 @@
   let gameOver = false;
   let userInputResolve = null;
 
+  // ---- PRNG (TRNG-seeded) ----
+  function mulberry32(seed) {
+    let s = seed >>> 0;
+    return function () {
+      s += 0x6D2B79F5;
+      let t = s;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+  let gameRng = () => Math.random();
+
   // ---- Theme ----
   async function applyTheme() {
     try {
@@ -318,6 +331,18 @@
   async function start() {
     await applyTheme();
 
+    // Initialize entropy source
+    try {
+      const trng = await window.gameAPI.trngGetSeed();
+      if (trng && trng.ok) {
+        gameRng = mulberry32(trng.seed);
+        if (trng.entropySource === 'TRNG') {
+          const badge = document.getElementById('game-trng-badge');
+          if (badge) badge.style.display = 'inline-flex';
+        }
+      }
+    } catch { /* use default Math.random */ }
+
     let aiCount = 3;
     try {
       const config = await window.gameAPI.getGameConfig();
@@ -328,7 +353,7 @@
     } catch { /* use defaults */ }
 
     if (!keyword) {
-      keyword = KEYWORDS[Math.floor(Math.random() * KEYWORDS.length)];
+      keyword = KEYWORDS[Math.floor(gameRng() * KEYWORDS.length)];
     }
 
     $('keyword-display').textContent = keyword;

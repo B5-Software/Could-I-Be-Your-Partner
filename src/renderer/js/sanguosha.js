@@ -51,6 +51,19 @@
     jianma:           { name: '-1马',    icon: '<i class="fa-solid fa-horse-head"></i>',         type: 'equip', subtype: 'horse_atk',            cssClass: 'sg-card-type-equip' },
   };
 
+  // ========== PRNG (TRNG-seeded) ==========
+  function mulberry32(seed) {
+    let s = seed >>> 0;
+    return function () {
+      s += 0x6D2B79F5;
+      let t = s;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+  let gameRng = () => Math.random();
+
   // ========== Build Deck ==========
   function buildDeck() {
     const deck = [];
@@ -99,7 +112,7 @@
 
     // Shuffle
     for (let i = deck.length - 1; i > 0; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
+      const j = Math.floor(gameRng() * (i + 1));
       [deck[i], deck[j]] = [deck[j], deck[i]];
     }
     return deck;
@@ -160,13 +173,13 @@
       const roleList = (ROLES_CONFIG[totalPlayers] || ROLES_CONFIG[4]).slice();
       // Shuffle ALL roles (fully random identity assignment)
       for (let i = roleList.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
+        const j = Math.floor(gameRng() * (i + 1));
         [roleList[i], roleList[j]] = [roleList[j], roleList[i]];
       }
       const allRoles = roleList;
 
       // Pick heroes
-      const shuffledHeroes = [...HEROES].sort(() => Math.random() - 0.5);
+      const shuffledHeroes = [...HEROES].sort(() => gameRng() - 0.5);
 
       this.players = [];
       for (let i = 0; i < totalPlayers; i++) {
@@ -206,7 +219,7 @@
           // Create emergency cards
           return { id: Date.now() + Math.random(), key: 'sha', suit: '♠', number: 'A', ...CARD_TYPES.sha };
         }
-        this.deck = [...this.discardPile].sort(() => Math.random() - 0.5);
+        this.deck = [...this.discardPile].sort(() => gameRng() - 0.5);
         this.discardPile = [];
       }
       return this.deck.pop();
@@ -283,7 +296,7 @@
 
       // Fankui (司马懿 skill)
       if (target.hero.skillFn === 'fankui' && source && source.hand.length > 0) {
-        const stolen = source.hand.splice(Math.floor(Math.random() * source.hand.length), 1)[0];
+        const stolen = source.hand.splice(Math.floor(gameRng() * source.hand.length), 1)[0];
         if (stolen) {
           target.hand.push(stolen);
           this.log(`${target.hero.name} 发动【反馈】获得 ${source.hero.name} 一张牌`, 'action');
@@ -599,7 +612,7 @@ ${player.hero.skillFn === 'paoxiao' ? '(咆哮技能：可无限出杀)' : ''}
       for (const t of targets) {
         if (text.includes(t.hero.name)) return t;
       }
-      return targets.length > 0 ? targets[Math.floor(Math.random() * targets.length)] : null;
+      return targets.length > 0 ? targets[Math.floor(gameRng() * targets.length)] : null;
     }
 
     _fallbackSelectTarget(player, targets) {
@@ -611,7 +624,7 @@ ${player.hero.skillFn === 'paoxiao' ? '(咆哮技能：可无限出杀)' : ''}
         const zg = targets.find(t => t.role === 'zhugong');
         if (zg) return zg;
       }
-      return targets[Math.floor(Math.random() * targets.length)];
+      return targets[Math.floor(gameRng() * targets.length)];
     }
 
     aiSelectTarget(player, targets) {
@@ -748,13 +761,13 @@ ${player.hero.skillFn === 'paoxiao' ? '(咆哮技能：可无限出杀)' : ''}
           this.log(`${player.hero.name} 对 ${target.hero.name} 使用【过河拆桥】`, 'action');
           // Remove a random card from target
           if (target.hand.length > 0) {
-            const removed = target.hand.splice(Math.floor(Math.random() * target.hand.length), 1)[0];
+            const removed = target.hand.splice(Math.floor(gameRng() * target.hand.length), 1)[0];
             this.discardCard(removed);
             this.log(`拆掉了 ${target.hero.name} 的一张手牌`, 'action');
           } else {
             const equipSlots = Object.entries(target.equip).filter(([k, v]) => v);
             if (equipSlots.length > 0) {
-              const [slot, equipCard] = equipSlots[Math.floor(Math.random() * equipSlots.length)];
+              const [slot, equipCard] = equipSlots[Math.floor(gameRng() * equipSlots.length)];
               target.equip[slot] = null;
               this.discardCard(equipCard);
               this.log(`拆掉了 ${target.hero.name} 的 ${equipCard.name}`, 'action');
@@ -767,7 +780,7 @@ ${player.hero.skillFn === 'paoxiao' ? '(咆哮技能：可无限出杀)' : ''}
           if (!target) break;
           this.log(`${player.hero.name} 对 ${target.hero.name} 使用【顺手牵羊】`, 'action');
           if (target.hand.length > 0) {
-            const stolen = target.hand.splice(Math.floor(Math.random() * target.hand.length), 1)[0];
+            const stolen = target.hand.splice(Math.floor(gameRng() * target.hand.length), 1)[0];
             player.hand.push(stolen);
             this.log(`偷走了 ${target.hero.name} 的一张手牌`, 'action');
           }
@@ -1049,7 +1062,28 @@ ${player.hero.skillFn === 'paoxiao' ? '(咆哮技能：可无限出杀)' : ''}
       const player = this.players[this.humanIndex];
       if (!player.hand.find(c => c.id === card.id)) return;
 
-      // Validation
+      // Validation — response-only cards
+      if (card.key === 'shan') {
+        this.log('【闪】只能在被攻击时使用，不能在出牌阶段主动打出');
+        return;
+      }
+      if (card.key === 'wuxiekeji') {
+        this.log('【无懈可击】只能在锦囊牌结算时使用，不能主动打出');
+        return;
+      }
+
+      // Tao can't heal if already at full HP
+      if (card.key === 'tao' && player.hp >= player.maxHp) {
+        this.log('HP 已满，无法使用【桃】');
+        return;
+      }
+
+      // Cards that require an OTHER player as target
+      if (card.key === 'juedou' || card.key === 'guohechaiqiao' || card.key === 'shunshouqianyang') {
+        if (!target) { this.log('请选择目标'); return; }
+        if (target.index === player.index) { this.log('此牌不能对自己使用'); return; }
+      }
+
       if (card.key === 'sha') {
         const canMulti = player.hero.skillFn === 'paoxiao' || (player.equip.weapon && player.equip.weapon.key === 'zhugenu');
         if (player.shaUsedThisTurn && !canMulti) {
@@ -1057,11 +1091,8 @@ ${player.hero.skillFn === 'paoxiao' ? '(咆哮技能：可无限出杀)' : ''}
           return;
         }
         if (!target) { this.log('请选择目标'); return; }
+        if (target.index === player.index) { this.log('不能对自己使用【杀】'); return; }
         if (!this.isInRange(player, target)) { this.log('目标不在攻击范围内'); return; }
-      }
-      if ((card.key === 'juedou' || card.key === 'guohechaiqiao' || card.key === 'shunshouqianyang') && !target) {
-        this.log('请选择目标');
-        return;
       }
 
       await this.executeCard(player, card, target || player);
@@ -1548,6 +1579,18 @@ ${player.hero.skillFn === 'paoxiao' ? '(咆哮技能：可无限出杀)' : ''}
   async function startGame() {
     await applyTheme();
 
+    // Initialize entropy source
+    try {
+      const trng = await window.sanguoshaAPI.trngGetSeed();
+      if (trng && trng.ok) {
+        gameRng = mulberry32(trng.seed);
+        if (trng.entropySource === 'TRNG') {
+          const badge = document.getElementById('game-trng-badge');
+          if (badge) badge.style.display = 'inline-flex';
+        }
+      }
+    } catch { /* use default Math.random */ }
+
     let aiCount = 3;
     try {
       const config = await window.sanguoshaAPI.getGameConfig();
@@ -1561,7 +1604,7 @@ ${player.hero.skillFn === 'paoxiao' ? '(咆哮技能：可无限出杀)' : ''}
     const humanRole = tempGame.players[0].role;
 
     // Show hero selection
-    const shuffled = [...HEROES].sort(() => Math.random() - 0.5);
+    const shuffled = [...HEROES].sort(() => gameRng() - 0.5);
     showHeroSelect(shuffled, 5, humanRole, async (selectedHero) => {
       game = tempGame;
       // Replace human hero with selected one

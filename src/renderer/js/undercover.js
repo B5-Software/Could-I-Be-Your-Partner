@@ -24,6 +24,19 @@
   let userVoteResolve = null;
   let allDescriptions = []; // { round, name, text }
 
+  // ---- PRNG (TRNG-seeded) ----
+  function mulberry32(seed) {
+    let s = seed >>> 0;
+    return function () {
+      s += 0x6D2B79F5;
+      let t = s;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+  let gameRng = () => Math.random();
+
   // ---- Theme ----
   async function applyTheme() {
     try {
@@ -120,9 +133,9 @@ ${roleHint}
     const resp = await askLLM(systemPrompt, userMsg);
     if (resp) {
       const voted = aliveNames.find(n => resp.includes(n));
-      return voted || aliveNames[Math.floor(Math.random() * aliveNames.length)];
+      return voted || aliveNames[Math.floor(gameRng() * aliveNames.length)];
     }
-    return aliveNames[Math.floor(Math.random() * aliveNames.length)];
+    return aliveNames[Math.floor(gameRng() * aliveNames.length)];
   }
 
   // ---- Rendering ----
@@ -399,6 +412,18 @@ ${roleHint}
   async function start() {
     await applyTheme();
 
+    // Initialize entropy source
+    try {
+      const trng = await window.gameAPI.trngGetSeed();
+      if (trng && trng.ok) {
+        gameRng = mulberry32(trng.seed);
+        if (trng.entropySource === 'TRNG') {
+          const badge = document.getElementById('game-trng-badge');
+          if (badge) badge.style.display = 'inline-flex';
+        }
+      }
+    } catch { /* use default Math.random */ }
+
     let aiCount = 4;
     let userIsUndercover = false;
     try {
@@ -409,10 +434,10 @@ ${roleHint}
     } catch { /* defaults */ }
 
     // Pick words
-    wordPair = WORD_PAIRS[Math.floor(Math.random() * WORD_PAIRS.length)];
+    wordPair = WORD_PAIRS[Math.floor(gameRng() * WORD_PAIRS.length)];
     const totalPlayers = aiCount + 1;
     // At least 1 undercover among AI
-    const undercoverIdx = Math.floor(Math.random() * totalPlayers);
+    const undercoverIdx = Math.floor(gameRng() * totalPlayers);
     userIsUndercover = undercoverIdx === 0;
 
     // Build players

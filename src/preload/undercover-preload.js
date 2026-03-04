@@ -7,4 +7,5 @@ contextBridge.exposeInMainWorld('gameAPI', {
   chatLLM: (messages, options) => ipcRenderer.invoke('llm:chat', messages, options),
   closeWindow: () => ipcRenderer.invoke('undercover:close'),
   reportResult: (result) => ipcRenderer.send('game:result', { game: 'undercover', result }),
+  trngGetSeed: () => ipcRenderer.invoke('game:trngGetSeed'),
 });

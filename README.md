@@ -486,7 +486,7 @@ A: 进入设置面板 → AI 人设，修改名称、性格、个人简介、代
 | KaTeX | - | 数学公式渲染 |
 | GeoGebra | - | 数学引擎 |
 | Tesseract | - | OCR 文字识别 |
-| Playwright(概念) / Fetch | - | 基于无头环境和fetch的高级网页渲染抓取 |
+| Fetch | - | 基于无头环境和fetch的高级网页渲染抓取 |
 | x-spreadsheet | - | 精简内嵌的可视化电子表格面板驱动 |
 | electron-builder | ^24.x / 25.x | 应用打包工具 |
 

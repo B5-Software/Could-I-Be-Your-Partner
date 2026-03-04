@@ -164,7 +164,6 @@ contextBridge.exposeInMainWorld('api', {
   httpFormPost: (opts) => ipcRenderer.invoke('net:httpFormPost', opts),
   dnsLookup: (hostname, rrtype) => ipcRenderer.invoke('net:dnsLookup', hostname, rrtype),
   ping: (host, count) => ipcRenderer.invoke('net:ping', host, count),
-  whois: (domain) => ipcRenderer.invoke('net:whois', domain),
   urlShorten: (url) => ipcRenderer.invoke('net:urlShorten', url),
   urlEncodeDecode: (input, operation) => ipcRenderer.invoke('net:urlEncodeDecode', input, operation),
   checkSSLCert: (hostname, port) => ipcRenderer.invoke('net:checkSSLCert', hostname, port),

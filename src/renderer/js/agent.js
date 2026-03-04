@@ -252,7 +252,7 @@ class Agent {
 【网络工具使用规范】：
 - httpRequest：发送任意HTTP请求（GET/POST/PUT/DELETE等），可自定义请求头、请求体、超时、跟随重定向等
 - httpFormPost：发送表单或multipart文件上传请求
-- dnsLookup/ping/whois/checkSSLCert/traceroute/portScan：网络诊断与信息收集
+- dnsLookup/ping/checkSSLCert/traceroute/portScan：网络诊断与信息收集
 - urlEncodeDecode：编码解码工具（URL编码、Base64）
 - urlShorten：展开短链接
 
@@ -364,7 +364,7 @@ ${customPrompt ? '\n用户自定义提示词:\n' + customPrompt : ''}${toolListS
       { test: /表格|excel|csv|数据|统计|图表|spreadsheet/i, categories: ['文件', '数据表格'] },
       { test: /游戏|飞花令|三国杀|卧底/i, categories: ['娱乐'] },
       { test: /请求|api|接口|post|get|put|delete|rest|json|header|cookie|token|oauth/i, categories: ['网络工具'] },
-      { test: /dns|ping|whois|ssl|证书|端口|扫描|traceroute|路由|域名/i, categories: ['网络工具'] },
+      { test: /dns|ping|ssl|证书|端口|扫描|traceroute|路由|域名/i, categories: ['网络工具'] },
       { test: /下载|download|上传|upload|表单|multipart/i, categories: ['网络工具'] },
       { test: /mcp|MCP|服务端|protocol/i, categories: ['MCP'] },
     ];
@@ -1144,8 +1144,6 @@ ${customPrompt ? '\n用户自定义提示词:\n' + customPrompt : ''}${toolListS
           return await window.api.dnsLookup(args.hostname, args.rrtype);
         case 'ping':
           return await window.api.ping(args.host, args.count);
-        case 'whois':
-          return await window.api.whois(args.domain);
         case 'urlShorten':
           return await window.api.urlShorten(args.url);
         case 'urlEncodeDecode':

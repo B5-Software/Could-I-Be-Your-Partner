@@ -9,4 +9,5 @@ contextBridge.exposeInMainWorld('sanguoshaAPI', {
   onClose: (cb) => ipcRenderer.on('sanguosha:close', cb),
   closeWindow: () => ipcRenderer.invoke('sanguosha:close'),
   reportResult: (result) => ipcRenderer.send('game:result', { game: 'sanguosha', result }),
+  trngGetSeed: () => ipcRenderer.invoke('game:trngGetSeed'),
 });

@@ -440,3 +440,19 @@ body {
 /* Scrollbar */
 .ff-players-bar::-webkit-scrollbar { height: 4px; }
 .ff-players-bar::-webkit-scrollbar-thumb { background: var(--ff-border); border-radius: 2px; }
+
+/* TRNG Badge */
+.game-trng-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 6px;
+  padding: 2px 7px;
+  background: linear-gradient(135deg, #c9a227, #f5d570);
+  color: #5a3800;
+  border-radius: 10px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+}

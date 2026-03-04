@@ -394,6 +394,7 @@
       agentStatus.className = 'agent-status';
       if (btnStop) btnStop.classList.add('hidden');
       btnSend.classList.remove('hidden');
+      removeThinkingIndicator(); // 防御：确保待命时思考提示已清除
     }
     window.api.webControlPushStatus(status);
   };
@@ -524,6 +525,7 @@
 
   window.api.onWebControlStopAgent(() => {
     agent.stopped = true;
+    removeThinkingIndicator();
     agent.running = false;
   });
 
@@ -1312,8 +1314,11 @@
       }
     }
 
-    await agent.sendMessage(text, attachments);
-    removeThinkingIndicator();
+    try {
+      await agent.sendMessage(text, attachments);
+    } finally {
+      removeThinkingIndicator();
+    }
   }
 
   // ---- Stop Button ----
@@ -1551,6 +1556,7 @@
   // New chat
   btnNewChat.addEventListener('click', () => {
     agent.newConversation();
+    updateReoptimizeButtonVisibility();
     setTitlebarTitle('未命名对话');
     chatMessages.innerHTML = `
       <div class="welcome-message">
@@ -1572,6 +1578,7 @@
 
   btnClearChat.addEventListener('click', () => {
     agent.newConversation();
+    updateReoptimizeButtonVisibility();
     setTitlebarTitle('未命名对话');
     chatMessages.innerHTML = '';
   });

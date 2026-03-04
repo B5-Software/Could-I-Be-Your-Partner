@@ -565,3 +565,19 @@ body {
 @media (max-width: 600px) {
   .uc-players-panel { width: 150px; min-width: 150px; }
 }
+
+/* TRNG Badge */
+.game-trng-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 6px;
+  padding: 2px 7px;
+  background: linear-gradient(135deg, #c9a227, #f5d570);
+  color: #5a3800;
+  border-radius: 10px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+}

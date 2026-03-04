@@ -2087,6 +2087,39 @@ ipcMain.handle('trng:test', async () => {
   }
 });
 
+// ---- IPC: Game TRNG Seed ----
+// Games (sanguosha / flyingflower / undercover) call this at game-start to get
+// a hardware-quality uint32 seed for their seeded PRNG.
+// Returns { ok, seed, entropySource } with automatic CSPRNG fallback.
+ipcMain.handle('game:trngGetSeed', async () => {
+  const source = settings.entropy?.source || 'csprng';
+  const crypto = require('crypto');
+  if (source === 'trng') {
+    try {
+      const entropy = settings.entropy || {};
+      const mode = entropy.trngMode || 'network';
+      let raw;
+      if (mode === 'serial') {
+        raw = await getTRNGFromSerial(entropy.trngSerialPort, entropy.trngSerialBaud || 115200);
+      } else {
+        raw = await getTRNGFromNetwork(entropy.trngNetworkHost || '192.168.4.1', entropy.trngNetworkPort || 80);
+      }
+      // Combine TRNG bits (8 bits: 7 from cardIndex + 1 from isReversed)
+      // with 24 bits of CSPRNG to produce a full 32-bit seed.
+      const cspNoise = crypto.randomBytes(3);
+      const trngByte = ((raw.cardIndex & 0x7F) | ((raw.isReversed ? 1 : 0) << 7)) & 0xFF;
+      const seed = ((trngByte << 24) | (cspNoise[0] << 16) | (cspNoise[1] << 8) | cspNoise[2]) >>> 0;
+      return { ok: true, seed, entropySource: 'TRNG' };
+    } catch (e) {
+      console.warn('[TRNG] game:trngGetSeed fallback to CSPRNG:', e.message);
+      const seed = crypto.randomBytes(4).readUInt32BE(0);
+      return { ok: true, seed, entropySource: 'CSPRNG (TRNG fallback: ' + e.message + ')' };
+    }
+  }
+  const seed = crypto.randomBytes(4).readUInt32BE(0);
+  return { ok: true, seed, entropySource: 'CSPRNG' };
+});
+
 // ---- IPC: Skills ----
 ipcMain.handle('skills:list', () => {
   try {
@@ -2858,30 +2891,6 @@ ipcMain.handle('net:ping', async (_, host, count) => {
   } catch (e) {
     return { ok: true, host, output: (e.stdout || e.stderr || e.message || '').substring(0, 10000), timedOut: e.killed };
   }
-});
-
-ipcMain.handle('net:whois', async (_, domain) => {
-  try {
-    const { execFile } = require('child_process');
-    const { promisify } = require('util');
-    const execFileAsync = promisify(execFile);
-    // Windows 没有内置 whois，尝试通过 PowerShell 的 Invoke-WebRequest 查询
-    const isWin = process.platform === 'win32';
-    if (isWin) {
-      // 使用 WHOIS API 查询
-      const resp = await fetch(`https://whois.freeaiapi.xyz/?name=${encodeURIComponent(domain)}&lang=cn`);
-      if (!resp.ok) {
-        // fallback: 通过系统 whois 命令
-        const { stdout } = await execFileAsync('powershell', ['-NoProfile', '-Command', `Invoke-RestMethod -Uri "https://who-dat.as93.net/${encodeURIComponent(domain)}"`], { timeout: 15000 });
-        return { ok: true, domain, whoisText: String(stdout).substring(0, 50000) };
-      }
-      const text = await resp.text();
-      return { ok: true, domain, whoisText: text.substring(0, 50000) };
-    } else {
-      const { stdout } = await execFileAsync('whois', [domain], { timeout: 15000 });
-      return { ok: true, domain, whoisText: String(stdout).substring(0, 50000) };
-    }
-  } catch (e) { return { ok: false, error: e.message }; }
 });
 
 ipcMain.handle('net:urlShorten', async (_, url) => {
