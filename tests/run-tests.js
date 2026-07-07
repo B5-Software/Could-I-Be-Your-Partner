@@ -294,6 +294,84 @@ test('preload should expose all required APIs', () => {
   }
 });
 
+// ---- Test GeoGebra Integration ----
+console.log('\nGeoGebra Integration:');
+
+const appContent = fs.readFileSync(require('path').join(__dirname, '../src/renderer/js/app.js'), 'utf-8');
+
+test('initGeoGebra should be async (return Promise)', () => {
+  // 必须返回 Promise（或 ggbInitPromise）—— 修复同步返回导致后续工具调用的 race condition
+  assert.ok(/window\.initGeoGebra\s*=\s*function\s*\([^)]*\)\s*{[\s\S]*?return\s+(Promise\.resolve|ggbInitPromise)/.test(appContent),
+    'initGeoGebra 应返回 Promise/ggbInitPromise');
+});
+
+test('initGeoGebra should register error listener on applet load', () => {
+  // 必须注册 setErrorListener / setClientListener —— 否则命令失败会静默返回 { ok: true, label: null }
+  assert.ok(appContent.includes('setErrorListener'), '未注册 setErrorListener');
+  assert.ok(appContent.includes('setClientListener'), '未注册 setClientListener');
+});
+
+test('initGeoGebra should use local ggbLastError state (not window.__ggbLastError)', () => {
+  // 旧代码读取 window.__ggbLastError 但从未赋值；新代码使用本地 ggbLastError
+  assert.ok(appContent.includes('ggbLastError'), '未使用本地 ggbLastError 状态');
+  assert.ok(!/window\.__ggbLastError\s*=\s*null/.test(appContent), '仍使用旧的 window.__ggbLastError 清空逻辑');
+});
+
+test('initGeoGebra should have a load timeout', () => {
+  // 必须有超时保护（远程加载 web3d 模块可能失败）
+  assert.ok(/timeoutMs\s*=\s*\d+/.test(appContent), '未设置 initGeoGebra 超时');
+  assert.ok(appContent.includes('GeoGebra 加载超时'), '缺少超时错误提示');
+});
+
+test('evalGeoGebraCommand should retry on lazy-module errors with broader pattern', () => {
+  // 新的懒加载正则应覆盖 "正在加载" / "未加载" 等多语言措辞
+  assert.ok(appContent.includes('正在加载'), '懒加载正则未覆盖中文 "正在加载"');
+  assert.ok(appContent.includes('not loaded yet'), '懒加载正则未覆盖英文 "not loaded yet"');
+});
+
+test('evalGeoGebraCommand should detect failed label-producing commands', () => {
+  // 应该对预期产生 label 的命令（赋值/Solve/Roots 等）做非空检查
+  assert.ok(appContent.includes('producesLabel'), '未实现 producesLabel 检查');
+  assert.ok(/producesLabel\s*&&\s*labels\.length\s*===\s*0/.test(appContent), '未对 label 命令做空值检查');
+});
+
+test('evalGeoGebraCommand should await init if applet not ready', () => {
+  // 应该在 ggbApplet 未就绪时 await ggbInitPromise
+  assert.ok(/if\s*\(\s*ggbInitPromise\s*\)\s*{[\s\S]*?await\s+ggbInitPromise/.test(appContent),
+    '未在 applet 未就绪时等待初始化完成');
+});
+
+test('main.js geogebra:evalCommand should use JSON.stringify (not regex replace)', () => {
+  // 修复 IPC 注入漏洞：使用 JSON.stringify 而非 cmd.replace(/"/g, '\\"')
+  const mainGgbSection = mainContent.split('// ---- IPC: GeoGebra')[1] || '';
+  assert.ok(mainGgbSection.includes('JSON.stringify'), 'geogebra IPC 未使用 JSON.stringify 转义');
+  // 不应再使用易受注入的 replace 模式
+  assert.ok(!/geogebra.*?\\.replace\(\s*\/"\/g\\\s*,\s*'\\\\\\"'\s*\)/s.test(mainGgbSection) ||
+            !mainGgbSection.includes('cmd.replace(/"/g'), '仍在使用 cmd.replace 转义双引号');
+});
+
+test('agent.js updateFunctionInGeogebra should validate expression parameter', () => {
+  // 修复 updateFunctionInGeogebra 不再静默忽略 expression 缺失
+  const agentContent = fs.readFileSync(require('path').join(__dirname, '../src/renderer/js/agent.js'), 'utf-8');
+  assert.ok(agentContent.includes("updateFunctionInGeogebra 需要 expression 参数"),
+    'updateFunctionInGeogebra 未对缺失 expression 报错');
+});
+
+test('geogebra-panel HTML should exist with ggb-element div', () => {
+  const htmlContent = fs.readFileSync(require('path').join(__dirname, '../src/renderer/pages/index.html'), 'utf-8');
+  assert.ok(htmlContent.includes('id="geogebra-panel"'), '缺少 geogebra-panel');
+  assert.ok(htmlContent.includes('id="ggb-element"'), '缺少 ggb-element 容器');
+});
+
+test('CSP should allow https://www.geogebra.org for script/style/img', () => {
+  const htmlContent = fs.readFileSync(require('path').join(__dirname, '../src/renderer/pages/index.html'), 'utf-8');
+  const cspMatch = htmlContent.match(/Content-Security-P[^>]*content="([^"]+)"/);
+  assert.ok(cspMatch, '未找到 CSP meta 标签');
+  const csp = cspMatch[1];
+  assert.ok(csp.includes('https://www.geogebra.org'), 'CSP 未允许 https://www.geogebra.org');
+  assert.ok(/script-src[^;]*geogebra/.test(csp), 'CSP script-src 未允许 geogebra');
+});
+
 // ---- Summary ----
 console.log(`\n${'='.repeat(40)}`);
 console.log(`Results: ${passed} passed, ${failed} failed, ${passed + failed} total`);

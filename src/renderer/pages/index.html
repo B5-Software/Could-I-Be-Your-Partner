@@ -8,7 +8,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' file: data: blob:; font-src 'self' data:; media-src 'self' blob:; connect-src 'self' https://www.geogebra.org data:;">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://www.geogebra.org; worker-src 'self' blob:; style-src 'self' 'unsafe-inline' https://www.geogebra.org; img-src 'self' file: data: blob: https://www.geogebra.org; font-src 'self' data:; media-src 'self' blob:; connect-src 'self' https://www.geogebra.org data:;">
   <title>Could I Be Your Partner</title>
   <link rel="icon" href="../../../assets/icons/icon.png">
   <link rel="stylesheet" href="../../../node_modules/katex/dist/katex.min.css">
@@ -19,6 +19,7 @@
   <link rel="stylesheet" href="../css/components.css">
   <link rel="stylesheet" href="../../../assets/fonts/fontawesome.min.css">
   <script src="../../../assets/geogebra/deployggb.js"></script>
+  <script src="../../../node_modules/monaco-editor/min/vs/loader.js"></script>
 </head>
 <body>
   <!-- Custom Titlebar -->
@@ -26,6 +27,20 @@
     <div class="titlebar-drag">
       <div class="titlebar-icon"><img src="../../../assets/icons/icon.png" alt="App"></div>
       <span class="titlebar-text">Could I Be Your Partner</span>
+      <div class="mode-switcher">
+        <button class="mode-btn active" id="mode-btn-chat" data-mode="chat" title="Chat 模式">
+          <i class="fa-solid fa-comments"></i>
+          <span>Chat</span>
+        </button>
+        <button class="mode-btn" id="mode-btn-code" data-mode="code" title="Code 模式">
+          <i class="fa-solid fa-code"></i>
+          <span>Code</span>
+        </button>
+        <button class="mode-btn" id="mode-btn-babe" data-mode="babe" title="Babe 模式（恋爱模式）">
+          <i class="fa-solid fa-heart"></i>
+          <span>Babe</span>
+        </button>
+      </div>
     </div>
     <div class="titlebar-center">
       <input type="text" class="titlebar-title-edit hidden" id="titlebar-title-edit" maxlength="50">
@@ -52,9 +67,25 @@
           <i class="fa-solid fa-comments"></i>
           <span>对话</span>
         </button>
+        <button class="nav-item" data-page="code" title="Code" id="nav-code">
+          <i class="fa-solid fa-code"></i>
+          <span>Code</span>
+        </button>
+        <button class="nav-item" data-page="babe" title="Babe" id="nav-babe">
+          <i class="fa-solid fa-heart"></i>
+          <span>Babe</span>
+        </button>
         <button class="nav-item" data-page="history" title="历史">
           <i class="fa-solid fa-clock-rotate-left"></i>
           <span>历史</span>
+        </button>
+        <button class="nav-item" data-page="code-history" title="Code历史" id="nav-code-history">
+          <i class="fa-solid fa-folder-tree"></i>
+          <span>Code历史</span>
+        </button>
+        <button class="nav-item" data-page="babe-history" title="Babe历史" id="nav-babe-history">
+          <i class="fa-solid fa-clock-rotate-left"></i>
+          <span>Babe历史</span>
         </button>
         <button class="nav-item" data-page="tools" title="工具">
           <i class="fa-solid fa-toolbox"></i>
@@ -239,6 +270,37 @@
         </div>
       </div>
 
+      <!-- Playwright Browser Side Panel -->
+      <div id="browser-panel" class="geogebra-panel hidden">
+        <div class="geogebra-header">
+          <h3><i class="fa-solid fa-globe"></i> 内置浏览器</h3>
+          <div class="browser-nav-controls">
+            <button class="btn-icon" id="btn-browser-back" title="后退">
+              <i class="fa-solid fa-arrow-left"></i>
+            </button>
+            <input type="text" id="browser-url-input" placeholder="输入网址或搜索..." class="browser-url-input">
+            <button class="btn-icon" id="btn-browser-go" title="前往">
+              <i class="fa-solid fa-arrow-right"></i>
+            </button>
+            <button class="btn-icon" id="btn-browser-screenshot" title="截图">
+              <i class="fa-solid fa-camera"></i>
+            </button>
+          </div>
+          <button class="btn-icon" id="btn-close-browser" title="关闭">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+        </div>
+        <div class="geogebra-body browser-body">
+          <div id="browser-screenshot-view" class="browser-screenshot-view">
+            <div class="empty-state">
+              <i class="fa-solid fa-globe"></i>
+              <p>AI 可以操作内置浏览器，你也可以干预</p>
+              <p class="setting-hint">在对话中让 AI "打开网页 xxx" 即可启动</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- Spreadsheet Side Panel -->
       <div id="spreadsheet-panel" class="geogebra-panel hidden">
         <div class="geogebra-header">
@@ -271,6 +333,161 @@
         </div>
       </section>
 
+      <!-- Code Mode Page -->
+      <section id="page-code" class="page">
+        <div class="page-header">
+          <h2><i class="fa-solid fa-code"></i> Code 模式</h2>
+          <p class="page-desc">打开工作区文件夹，AI 专注编程任务</p>
+          <div class="page-header-actions">
+            <button class="btn-secondary" id="btn-code-open-workspace">
+              <i class="fa-solid fa-folder-open"></i> 打开工作区
+            </button>
+            <button class="btn-primary" id="btn-code-new-chat">
+              <i class="fa-solid fa-plus"></i> 新对话
+            </button>
+          </div>
+        </div>
+        <div class="code-workspace-info" id="code-workspace-info">
+          <i class="fa-solid fa-folder"></i>
+          <span id="code-workspace-path">未选择工作区</span>
+        </div>
+        <div class="code-container">
+          <!-- 面板恢复按钮栏（面板折叠后显示对应恢复按钮） -->
+          <div class="code-panel-restore-bar" id="code-panel-restore-bar">
+            <button class="code-restore-btn hidden" id="btn-restore-file-tree" title="显示文件树"><i class="fa-solid fa-folder-tree"></i></button>
+            <button class="code-restore-btn hidden" id="btn-restore-editor" title="显示编辑器"><i class="fa-solid fa-file-code"></i></button>
+            <button class="code-restore-btn hidden" id="btn-restore-chat" title="显示聊天"><i class="fa-solid fa-robot"></i></button>
+          </div>
+          <div class="code-panel code-file-tree-panel" id="code-file-tree-panel">
+            <div class="code-panel-header">
+              <span class="code-panel-title"><i class="fa-solid fa-folder-tree"></i> 文件</span>
+              <button class="code-panel-close" id="btn-close-file-tree" title="隐藏文件树"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <div class="code-file-tree" id="code-file-tree">
+              <div class="empty-state">
+                <i class="fa-solid fa-folder-tree"></i>
+                <p>打开工作区后显示文件树</p>
+              </div>
+            </div>
+          </div>
+          <div class="code-panel code-editor-panel" id="code-editor-panel">
+            <div class="code-panel-header">
+              <span class="code-panel-title"><i class="fa-solid fa-file-code"></i> 编辑器</span>
+              <div class="editor-tabs" id="code-editor-tabs"></div>
+              <button class="code-panel-close" id="btn-close-editor" title="隐藏编辑器"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <div class="editor-host" id="code-editor-host">
+              <div class="empty-state">
+                <i class="fa-solid fa-file-code"></i>
+                <p>点击文件树中的文件以打开</p>
+              </div>
+            </div>
+          </div>
+          <div class="code-panel code-chat" id="code-chat">
+            <div class="code-panel-header">
+              <span class="code-panel-title"><i class="fa-solid fa-robot"></i> AI 助手</span>
+              <div class="context-progress header-context-progress">
+                <div class="progress-bar">
+                  <div class="progress-fill" id="code-context-progress-fill" style="width: 0%"></div>
+                </div>
+                <span class="progress-text" id="code-context-progress-text">0/8192</span>
+              </div>
+              <button class="code-panel-close" id="btn-close-chat" title="隐藏聊天"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <div class="code-chat-messages" id="code-chat-messages">
+              <div class="welcome-message">
+                <div class="welcome-icon"><i class="fa-solid fa-code"></i></div>
+                <h2>Code 模式</h2>
+                <p>打开一个文件夹作为工作区，AI 将专注编程任务。历史记录按工作区隔离。</p>
+              </div>
+            </div>
+            <div class="code-chat-input">
+              <textarea id="code-chat-input" placeholder="输入编程任务..." rows="1"></textarea>
+              <button class="btn-primary btn-send" id="btn-code-send">
+                <i class="fa-solid fa-paper-plane"></i>
+              </button>
+              <button class="btn-danger btn-send hidden" id="btn-code-stop">
+                <i class="fa-solid fa-stop"></i>
+              </button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Code History Page -->
+      <section id="page-code-history" class="page">
+        <div class="page-header">
+          <h2><i class="fa-solid fa-clock-rotate-left"></i> Code 历史记录</h2>
+          <p class="page-desc" id="code-history-desc">按工作区隔离的编程对话历史</p>
+        </div>
+        <div class="history-list" id="code-history-list">
+          <div class="empty-state">
+            <i class="fa-solid fa-clock-rotate-left"></i>
+            <p>暂无 Code 历史（需先打开工作区）</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Babe Mode Page -->
+      <section id="page-babe" class="page babe-mode">
+        <div class="babe-header">
+          <div class="babe-avatar" id="babe-avatar"><i class="fa-solid fa-heart"></i></div>
+          <div class="babe-info">
+            <h2 id="babe-name-display">Babe</h2>
+            <div class="babe-affection-bar">
+              <div class="babe-affection-label">
+                <span><i class="fa-solid fa-heart"></i> 好感度</span>
+                <span id="babe-affection-value">0</span>
+              </div>
+              <div class="babe-affection-track">
+                <div class="babe-affection-fill" id="babe-affection-fill" style="width: 0%"></div>
+              </div>
+            </div>
+          </div>
+          <div class="babe-actions">
+            <div class="context-progress header-context-progress">
+              <div class="progress-bar">
+                <div class="progress-fill" id="babe-context-progress-fill" style="width: 0%"></div>
+              </div>
+              <span class="progress-text" id="babe-context-progress-text">0/8192</span>
+            </div>
+            <button class="btn-secondary" id="btn-babe-new" title="新对话"><i class="fa-solid fa-plus"></i></button>
+            <button class="btn-secondary" id="btn-babe-proactive" title="让TA主动发消息"><i class="fa-solid fa-paper-plane"></i></button>
+          </div>
+        </div>
+        <div class="babe-chat-messages" id="babe-chat-messages">
+          <div class="babe-welcome">
+            <div class="babe-welcome-icon"><i class="fa-solid fa-heart"></i></div>
+            <h2>欢迎来到 Babe 模式</h2>
+            <p>请在设置中配置 TA 的形象，然后开始你们的对话。</p>
+            <p class="babe-hint">TA 会有自己的记忆、好感度，甚至会主动找你聊天。</p>
+          </div>
+        </div>
+        <div class="babe-chat-input">
+          <textarea id="babe-chat-input" placeholder="对TA说点什么..." rows="1"></textarea>
+          <button class="btn-primary btn-send" id="btn-babe-send">
+            <i class="fa-solid fa-paper-plane"></i>
+          </button>
+          <button class="btn-danger btn-send hidden" id="btn-babe-stop">
+            <i class="fa-solid fa-stop"></i>
+          </button>
+        </div>
+      </section>
+
+      <!-- Babe History Page -->
+      <section id="page-babe-history" class="page">
+        <div class="page-header">
+          <h2><i class="fa-solid fa-heart"></i> Babe 历史记录</h2>
+          <p class="page-desc">与 TA 的对话记忆（独立持久化）</p>
+        </div>
+        <div class="history-list" id="babe-history-list">
+          <div class="empty-state">
+            <i class="fa-solid fa-heart"></i>
+            <p>暂无 Babe 历史</p>
+          </div>
+        </div>
+      </section>
+
       <!-- Tools Page -->
       <section id="page-tools" class="page">
         <div class="page-header">
@@ -285,6 +502,12 @@
               </div>
             </label>
           </div>
+        </div>
+        <div class="tools-mode-switcher" id="tools-mode-switcher" style="display:flex;gap:8px;margin-bottom:12px;align-items:center;">
+          <span style="font-size:0.85em;opacity:0.7;">显示模式：</span>
+          <button class="btn-secondary tools-mode-btn active" data-tool-mode="chat" style="padding:4px 12px;font-size:0.85em;">Chat 模式工具</button>
+          <button class="btn-secondary tools-mode-btn" data-tool-mode="code" style="padding:4px 12px;font-size:0.85em;">Code 模式工具</button>
+          <button class="btn-secondary tools-mode-btn" data-tool-mode="babe" style="padding:4px 12px;font-size:0.85em;">Babe 模式工具</button>
         </div>
         <div class="tools-stats" id="tools-stats"></div>
         <div class="tools-groups" id="tools-groups"></div>
@@ -360,9 +583,11 @@
         </div>
         <div class="settings-shell">
           <div class="settings-tabs">
-            <button class="settings-tab active" data-tab="ai"><i class="fa-solid fa-user-astronaut"></i> AI 形象</button>
+            <button class="settings-tab" data-tab="ai"><i class="fa-solid fa-user-astronaut"></i> AI 形象</button>
+            <button class="settings-tab" data-tab="babe"><i class="fa-solid fa-heart"></i> Babe 模式</button>
             <button class="settings-tab" data-tab="user"><i class="fa-solid fa-user"></i> 个人资料</button>
             <button class="settings-tab" data-tab="llm"><i class="fa-solid fa-microchip"></i> LLM</button>
+            <button class="settings-tab" data-tab="usage"><i class="fa-solid fa-chart-bar"></i> 用量统计</button>
             <button class="settings-tab" data-tab="image"><i class="fa-solid fa-image"></i> 生图</button>
             <button class="settings-tab" data-tab="theme"><i class="fa-solid fa-palette"></i> 主题</button>
             <button class="settings-tab" data-tab="network"><i class="fa-solid fa-network-wired"></i> 网络</button>
@@ -412,6 +637,60 @@
               </div>
             </div>
 
+            <!-- Babe Mode Settings -->
+            <div class="settings-panel" data-tab="babe">
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-heart"></i> Babe 模式形象</h3>
+                <p class="setting-hint" style="margin-bottom:12px">配置恋爱模式的 AI 形象。TA 会有独立的历史记录、好感度和记忆。</p>
+                <div class="setting-item">
+                  <label>姓名</label>
+                  <input type="text" id="setting-babe-name" placeholder="给TA起个名字...">
+                </div>
+                <div class="setting-item">
+                  <label>性别</label>
+                  <select id="setting-babe-gender">
+                    <option value="female">女</option>
+                    <option value="male">男</option>
+                    <option value="other">其他</option>
+                  </select>
+                </div>
+                <div class="setting-item">
+                  <label>年龄</label>
+                  <input type="text" id="setting-babe-age" placeholder="如：22岁">
+                </div>
+                <div class="setting-item">
+                  <label>性格特征</label>
+                  <input type="text" id="setting-babe-personality" placeholder="如：温柔、活泼、有点小傲娇">
+                </div>
+                <div class="setting-item">
+                  <label>Persona / 背景</label>
+                  <textarea id="setting-babe-persona" rows="4" placeholder="描述TA的背景故事、说话风格、喜好等..."></textarea>
+                </div>
+                <div class="setting-item">
+                  <label>称呼用户的方式</label>
+                  <input type="text" id="setting-babe-user-nickname" placeholder="TA怎么称呼你？如：亲爱的、宝宝">
+                </div>
+                <div class="setting-item">
+                  <label>主动消息频率</label>
+                  <select id="setting-babe-proactive-interval">
+                    <option value="0">关闭主动消息</option>
+                    <option value="30">30 分钟</option>
+                    <option value="60">1 小时</option>
+                    <option value="180">3 小时</option>
+                    <option value="360">6 小时</option>
+                    <option value="720">12 小时</option>
+                    <option value="1440">24 小时</option>
+                  </select>
+                  <div class="setting-hint">TA 会定时主动找你聊天（仅在 Babe 模式且应用打开时生效）</div>
+                </div>
+                <div class="setting-item">
+                  <label>初始好感度</label>
+                  <input type="number" id="setting-babe-initial-affection" min="0" max="100" value="30" placeholder="0-100">
+                  <div class="setting-hint">每个新对话的起始好感度（0-100）</div>
+                </div>
+              </div>
+            </div>
+
             <!-- User Profile -->
             <div class="settings-panel" data-tab="user">
               <div class="settings-group">
@@ -444,21 +723,70 @@
               <div class="settings-group">
                 <h3><i class="fa-solid fa-microchip"></i> LLM 配置</h3>
                 <div class="setting-item">
-                  <label>API URL</label>
-                  <input type="text" id="setting-llm-url" placeholder="https://api.openai.com/v1/chat/completions">
+                  <label>接入方式</label>
+                  <select id="setting-llm-provider">
+                    <option value="openai-compat">OpenAI 兼容</option>
+                    <option value="anthropic-compat">Anthropic 兼容</option>
+                    <option value="opencode-zen">OpenCode Zen (免费模型可用)</option>
+                  </select>
+                  <div class="setting-hint">OpenAI兼容：标准 chat/completions；Anthropic兼容：messages API；OpenCode Zen：自动路由</div>
                 </div>
-                <div class="setting-item">
-                  <label>API Key</label>
-                  <div class="input-with-toggle">
-                    <input type="password" id="setting-llm-key" placeholder="sk-...">
-                    <button class="btn-icon btn-toggle-pwd" data-target="setting-llm-key">
-                      <i class="fa-solid fa-eye"></i>
-                    </button>
+                <div id="llm-openai-fields">
+                  <div class="setting-item">
+                    <label>API URL</label>
+                    <input type="text" id="setting-llm-url" placeholder="https://api.openai.com/v1/chat/completions">
+                  </div>
+                  <div class="setting-item">
+                    <label>API Key</label>
+                    <div class="input-with-toggle">
+                      <input type="password" id="setting-llm-key" placeholder="sk-...">
+                      <button class="btn-icon btn-toggle-pwd" data-target="setting-llm-key">
+                        <i class="fa-solid fa-eye"></i>
+                      </button>
+                    </div>
+                  </div>
+                  <div class="setting-item">
+                    <label>模型</label>
+                    <div style="display:flex;gap:8px;align-items:center;">
+                      <input type="text" id="setting-llm-model" placeholder="gpt-4o" list="llm-model-list" style="flex:1">
+                      <datalist id="llm-model-list"></datalist>
+                      <button class="btn-secondary" id="btn-llm-refresh-models" title="获取模型列表"><i class="fa-solid fa-rotate"></i></button>
+                    </div>
+                    <div class="setting-hint" id="llm-model-hint">点击右侧按钮自动获取模型列表，也可手动输入</div>
+                  </div>
+                </div>
+                <div id="llm-zen-fields" class="hidden">
+                  <div class="setting-item">
+                    <label>Zen API Key</label>
+                    <div class="input-with-toggle">
+                      <input type="password" id="setting-llm-zen-key" placeholder="opencode-...">
+                      <button class="btn-icon btn-toggle-pwd" data-target="setting-llm-zen-key">
+                        <i class="fa-solid fa-eye"></i>
+                      </button>
+                      <button class="btn-secondary btn-sm" id="btn-zen-generate-key" title="使用免登录公共 Key 调用 6 个免费模型">
+                        <i class="fa-solid fa-wand-magic-sparkles"></i> 生成新 Key
+                      </button>
+                    </div>
+                    <div class="setting-hint">从 <a href="#" id="link-zen-auth">opencode.ai/auth</a> 获取，按量付费，含免费模型。点击「生成新 Key」可免登录使用 6 个限时免费模型（key=public）</div>
+                  </div>
+                  <div class="setting-item">
+                    <label>模型</label>
+                    <div style="display:flex;gap:8px;align-items:center;">
+                      <select id="setting-llm-zen-model" style="flex:1"></select>
+                      <button class="btn-secondary" id="btn-zen-refresh"><i class="fa-solid fa-rotate"></i> 刷新</button>
+                    </div>
+                    <div class="setting-hint" id="zen-model-hint">点击刷新获取可用模型列表</div>
                   </div>
                 </div>
                 <div class="setting-item">
-                  <label>模型</label>
-                  <input type="text" id="setting-llm-model" placeholder="gpt-4o">
+                  <label>推理强度 (仅支持的模型生效)</label>
+                  <select id="setting-llm-reasoning">
+                    <option value="off">关闭</option>
+                    <option value="low">低</option>
+                    <option value="medium">中</option>
+                    <option value="high">高</option>
+                  </select>
+                  <div class="setting-hint">OpenAI o系列/GPT-5 用 reasoning_effort，Anthropic Claude 用 thinking budget_tokens</div>
                 </div>
                 <div class="setting-item">
                   <label>温度 <span class="setting-value" id="setting-temp-val">0.7</span></label>
@@ -477,6 +805,46 @@
                   <input type="number" id="setting-llm-daily-limit" min="0" step="1000" placeholder="例如 200000">
                   <div class="setting-hint" id="setting-llm-usage">今日已用: 0</div>
                 </div>
+                <div class="setting-item">
+                  <label>流式响应 (实时渲染Token)</label>
+                  <div class="toggle-switch">
+                    <input type="checkbox" id="setting-llm-stream">
+                    <span class="toggle-slider"></span>
+                  </div>
+                  <div class="setting-hint">开启后助手回复将逐字显示，关闭则等待完整回复再显示</div>
+                </div>
+                <div class="setting-item">
+                  <label>请求失败自动重试次数</label>
+                  <input type="number" id="setting-llm-retries" min="0" max="50" value="10">
+                  <div class="setting-hint">指数退避重试，应对 429/529/网络错误</div>
+                </div>
+                <div class="setting-item">
+                  <label>请求超时 (秒, 0为不限制)</label>
+                  <input type="number" id="setting-llm-timeout" min="0" max="3600" value="300">
+                </div>
+                <div class="setting-item">
+                  <label>529 过载时回退模型 (可选)</label>
+                  <input type="text" id="setting-llm-fallback-model" placeholder="例如 gpt-4o-mini">
+                  <div class="setting-hint">连续 529 过载后自动切换到此模型</div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Usage Stats Tab -->
+            <div class="settings-panel" data-tab="usage">
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-chart-bar"></i> 用量统计</h3>
+                <p class="setting-hint" style="margin-bottom:12px">从API返回的真实 usage 数据汇总（prompt + completion tokens）。</p>
+                <div style="display:flex;gap:8px;margin-bottom:16px;">
+                  <button class="btn-secondary usage-period-btn active" data-period="daily">今日</button>
+                  <button class="btn-secondary usage-period-btn" data-period="weekly">本周(7天)</button>
+                  <button class="btn-secondary usage-period-btn" data-period="monthly">本月(30天)</button>
+                </div>
+                <div id="usage-summary" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:20px;"></div>
+                <h4 style="margin:16px 0 8px;" id="usage-chart-title">趋势</h4>
+                <div id="usage-chart" style="height:160px;display:flex;align-items:flex-end;gap:2px;border-bottom:1px solid var(--border);padding-bottom:4px;"></div>
+                <h4 style="margin:16px 0 8px;">按模型</h4>
+                <div id="usage-models"></div>
               </div>
             </div>
 
@@ -1430,8 +1798,15 @@
   <!-- KaTeX Initialization -->
   <script>
     // 从本地 node_modules 加载 KaTeX
+    // 注意：katex.min.js 用 UMD，会检测 AMD define。Monaco loader 已注册 define，
+    // 导致 katex 走 AMD 路径引发 "Can only have one anonymous define" 错误。
+    // 临时移除 define，让 katex 走 global 模式，加载完恢复。
+    const __savedDefine = window.define;
+    window.define = undefined;
     const script = document.createElement('script');
     script.src = '../../../node_modules/katex/dist/katex.min.js';
+    script.onload = () => { window.define = __savedDefine; };
+    script.onerror = () => { window.define = __savedDefine; };
     document.head.appendChild(script);
     const scriptAuto = document.createElement('script');
     scriptAuto.src = '../../../node_modules/katex/dist/contrib/auto-render.min.js';
@@ -1441,6 +1816,8 @@
   <script src="../js/theme.js"></script>
   <script src="../js/tools-def.js"></script>
   <script src="../js/context-manager.js"></script>
+  <script src="../js/goal-state.js"></script>
+  <script src="../../data/bundled-skills.js"></script>
   <script src="../js/agent.js"></script>
   <script src="../js/spreadsheet.js"></script>
   <script src="../js/app.js"></script>

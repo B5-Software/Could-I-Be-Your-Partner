@@ -3,13 +3,27 @@
  * Copyright (c) 2026 B5-Software
  *
  * This file is part of Could I Be Your Partner.
+ *
+ * Context Window Intelligent Manager
+ * Three-layer compaction strategy inspired by claude-code-ref:
+ *   1. MicroCompact — clear stale tool results (no API call)
+ *   2. Session摘要   — LLM-based semantic summary (one API call)
+ *   3. Hard truncate — emergency fallback (drop oldest)
+ * Token estimation ratios (heuristic; tuned for mixed CJK + code).
  */
 
-// Context Window Intelligent Manager
-// Token estimation ratios (based on typical tokenizer behavior)
 const TOKENS_PER_CJK_CHAR = 1.5;
 const TOKENS_PER_OTHER_CHAR = 0.4;
 const MESSAGE_OVERHEAD_TOKENS = 4;
+
+// MicroCompact config
+const MICROCOMPACT_KEEP_LAST = 4; // keep the last N tool results intact
+const MICROCOMPACT_TRUNCATE_TO = 120; // truncate old tool results to this length
+
+// Summary config
+const SUMMARY_KEEP_LAST_DEFAULT = 6;
+const SUMMARY_MAX_TRANSCRIPT_CHARS = 12000; // cap transcript fed to summarizer
+const SUMMARY_MAX_TOOL_RESULT_CHARS = 600; // each tool result in transcript
 
 class ContextManager {
   constructor(maxTokens = 8192) {
@@ -18,6 +32,7 @@ class ContextManager {
     this.pinnedMessages = []; // Important messages that should not be removed
     this.systemPrompt = null;
     this.summaries = []; // Compressed history summaries
+    this.compactBoundaries = []; // CompactBoundary tracking
   }
 
   setMaxTokens(max) {
@@ -56,19 +71,21 @@ class ContextManager {
     return total;
   }
 
-
   addMessage(msg) {
     this.messages.push(msg);
-    this.checkAndTrim();
+    // Sync lightweight trim — only runs strategy 1 (truncate long tool results).
+    // Heavy LLM-based summarization is invoked explicitly via summarizeWithLLM().
+    this.lightTrim();
   }
 
   addUserMessage(content) {
     this.addMessage({ role: 'user', content });
   }
 
-  addAssistantMessage(content, toolCalls) {
+  addAssistantMessage(content, toolCalls, reasoning) {
     const msg = { role: 'assistant', content: content || '' };
     if (toolCalls && toolCalls.length > 0) msg.tool_calls = toolCalls;
+    if (reasoning) msg.reasoning = reasoning;
     this.addMessage(msg);
   }
 
@@ -82,11 +99,13 @@ class ContextManager {
     }
   }
 
-  checkAndTrim() {
-    const threshold = this.maxTokens * 0.85; // Start trimming at 85% capacity
+  /**
+   * Lightweight synchronous trim: truncate long tool results.
+   * Called on every addMessage. Does NOT call LLM.
+   */
+  lightTrim() {
+    const threshold = this.maxTokens * 0.85;
     if (this.getTotalTokens() <= threshold) return;
-
-    // Strategy 1: Truncate long tool results
     for (let i = 0; i < this.messages.length; i++) {
       if (this.pinnedMessages.includes(i)) continue;
       const msg = this.messages[i];
@@ -94,46 +113,79 @@ class ContextManager {
         msg.content = msg.content.substring(0, 300) + '\n...[内容已截断]';
       }
     }
-
-    if (this.getTotalTokens() <= threshold) return;
-
-    // Strategy 2: Remove old tool call pairs (keep last 5 rounds)
-    const rounds = [];
-    let currentRound = [];
-    for (let i = 0; i < this.messages.length; i++) {
-      const msg = this.messages[i];
-      if (msg.role === 'user') {
-        if (currentRound.length > 0) rounds.push([...currentRound]);
-        currentRound = [i];
-      } else {
-        currentRound.push(i);
-      }
-    }
-    if (currentRound.length > 0) rounds.push(currentRound);
-
-    if (rounds.length > 6) {
-      // Summarize old rounds
-      const oldRounds = rounds.slice(0, rounds.length - 5);
-      const oldIndices = new Set(oldRounds.flat());
-      const summary = this.generateSummary(oldRounds);
-      if (summary) this.summaries.push(summary);
-
-      this.messages = this.messages.filter((_, i) => !oldIndices.has(i) || this.pinnedMessages.includes(i));
-      // Reset pinned indices
-      this.pinnedMessages = [];
-    }
-
-    if (this.getTotalTokens() <= threshold) return;
-
-    // Strategy 3: Remove intermediate tool results
-    for (let i = this.messages.length - 1; i >= 0; i--) {
-      if (this.getTotalTokens() <= threshold) break;
-      if (this.messages[i].role === 'tool' && i < this.messages.length - 4) {
-        this.messages[i].content = '[结果已清理]';
-      }
-    }
   }
 
+  /**
+   * MicroCompact — clear stale tool results beyond a sliding window.
+   * No API call. Replaces the old >70% "clear_tool_results" strategy.
+   * Returns the count of cleared tool results.
+   */
+  microCompact(keepLast = MICROCOMPACT_KEEP_LAST) {
+    let cleared = 0;
+    const toolIndices = [];
+    for (let i = 0; i < this.messages.length; i++) {
+      if (this.messages[i].role === 'tool') toolIndices.push(i);
+    }
+    const cutoff = toolIndices.length - keepLast;
+    for (let i = 0; i < toolIndices.length; i++) {
+      if (i < cutoff) {
+        const idx = toolIndices[i];
+        if (this.pinnedMessages.includes(idx)) continue;
+        const msg = this.messages[idx];
+        if (msg.content && msg.content.length > MICROCOMPACT_TRUNCATE_TO) {
+          msg.content = '[旧工具结果已清理，详见对话历史]';
+          cleared++;
+        }
+      }
+    }
+    if (cleared > 0) {
+      this.compactBoundaries.push({
+        timestamp: Date.now(),
+        type: 'micro',
+        clearedToolResults: cleared
+      });
+    }
+    return cleared;
+  }
+
+  /**
+   * Build a transcript string from a list of messages for the summarizer.
+   */
+  _buildTranscript(messages) {
+    let totalChars = 0;
+    const parts = [];
+    for (const m of messages) {
+      let line = '';
+      if (m.role === 'user') {
+        const c = typeof m.content === 'string' ? m.content : JSON.stringify(m.content || '');
+        line = `用户: ${c}`;
+      } else if (m.role === 'assistant') {
+        const tools = m.tool_calls?.length
+          ? ` [调用工具: ${m.tool_calls.map(t => t.function?.name).join(', ')}]`
+          : '';
+        line = `助手: ${m.content || ''}${tools}`;
+      } else if (m.role === 'tool') {
+        const c = typeof m.content === 'string' ? m.content : '';
+        const trimmed = c.length > SUMMARY_MAX_TOOL_RESULT_CHARS
+          ? c.substring(0, SUMMARY_MAX_TOOL_RESULT_CHARS) + '...[截断]'
+          : c;
+        line = `工具${m.name ? '(' + m.name + ')' : ''}结果: ${trimmed}`;
+      }
+      if (line) {
+        totalChars += line.length;
+        if (totalChars > SUMMARY_MAX_TRANSCRIPT_CHARS) {
+          parts.push('...[transcript truncated for summarizer]');
+          break;
+        }
+        parts.push(line);
+      }
+    }
+    return parts.join('\n\n');
+  }
+
+  /**
+   * Mechanical fallback summary (no LLM). Used when LLM summary fails or is unavailable.
+   */
   generateSummary(rounds) {
     let summary = '';
     for (const round of rounds) {
@@ -150,17 +202,95 @@ class ContextManager {
     return summary ? `[历史摘要]\n${summary}` : null;
   }
 
-  // manageContext tool handler
+  /**
+   * LLM-based semantic summarization.
+   * Replaces the old mechanical generateSummary for compaction.
+   * Falls back to generateSummary on LLM failure.
+   *
+   * @returns {Promise<{ok: boolean, message: string, summary?: string, fallback?: boolean, skipped?: boolean}>}
+   */
+  async summarizeWithLLM(options = {}) {
+    const keepLast = options.keepLast ?? SUMMARY_KEEP_LAST_DEFAULT;
+    if (this.messages.length <= keepLast) {
+      return { ok: true, message: '消息数量不足，无需摘要', skipped: true };
+    }
+
+    const messagesToSummarize = this.messages.slice(0, this.messages.length - keepLast);
+    const transcript = this._buildTranscript(messagesToSummarize);
+    if (!transcript.trim()) {
+      return { ok: true, message: '无内容可摘要', skipped: true };
+    }
+
+    const summaryMessages = [
+      {
+        role: 'system',
+        content: '你是一个对话摘要助手。请将以下对话历史压缩为简洁的语义摘要，保留：\n1) 用户的核心需求和约束\n2) 已完成的关键决策和结果\n3) 未解决的问题与待办\n4) 重要上下文（文件路径、配置值、关键参数等）\n\n要求：\n- 不要逐条罗列消息，要提炼成连贯的摘要\n- 控制在 500 字以内\n- 用中文输出'
+      },
+      { role: 'user', content: transcript }
+    ];
+
+    let result;
+    try {
+      result = await window.api.summarizeLLM(summaryMessages, {
+        max_tokens: 1024,
+        temperature: 0.3
+      });
+    } catch (e) {
+      // LLM call threw — fall back to mechanical summary
+      const fb = this.generateSummary([messagesToSummarize.map((_, i) => i)]);
+      if (fb) {
+        this.summaries.push(fb);
+        this.messages = this.messages.slice(-keepLast);
+        this.compactBoundaries.push({
+          timestamp: Date.now(), type: 'fallback_summary',
+          summarizedCount: messagesToSummarize.length, error: e.message
+        });
+      }
+      return { ok: false, message: 'LLM 摘要调用异常，已降级为机械摘要', fallback: true, error: e.message };
+    }
+
+    if (!result.ok) {
+      // LLM call failed — fall back to mechanical summary
+      const fb = this.generateSummary([messagesToSummarize.map((_, i) => i)]);
+      if (fb) {
+        this.summaries.push(fb);
+        this.messages = this.messages.slice(-keepLast);
+        this.compactBoundaries.push({
+          timestamp: Date.now(), type: 'fallback_summary',
+          summarizedCount: messagesToSummarize.length, error: result.error
+        });
+      }
+      return { ok: false, message: 'LLM 摘要失败：' + (result.error || '未知错误') + '，已降级为机械摘要', fallback: true, error: result.error };
+    }
+
+    const summary = (result.content || '').trim();
+    if (!summary) {
+      return { ok: false, message: '摘要内容为空', skipped: true };
+    }
+
+    const timestamp = new Date().toLocaleString('zh-CN');
+    this.summaries.push(`[语义摘要 ${timestamp}]\n${summary}`);
+    this.messages = this.messages.slice(-keepLast);
+    this.compactBoundaries.push({
+      timestamp: Date.now(), type: 'llm_summary',
+      summarizedCount: messagesToSummarize.length
+    });
+    return { ok: true, message: '已通过 LLM 生成语义摘要', summary };
+  }
+
+  // manageContext tool handler — synchronous actions only.
+  // For LLM-based summarization, use summarizeWithLLM() instead.
   manage(action, options = {}) {
     switch (action) {
       case 'summarize': {
+        // Sync mechanical fallback (caller should prefer summarizeWithLLM)
         const summary = this.generateSummary([this.messages.map((_, i) => i).slice(0, -3)]);
         if (summary) {
           this.summaries.push(summary);
           const keepCount = options.keepLast || 4;
           this.messages = this.messages.slice(-keepCount);
         }
-        return { ok: true, message: '上下文已摘要压缩' };
+        return { ok: true, message: '上下文已机械摘要压缩（建议使用 LLM 语义摘要）' };
       }
       case 'clear_old': {
         const keepCount = options.keepLast || 6;
@@ -172,14 +302,13 @@ class ContextManager {
         return { ok: true, message: '无需清理' };
       }
       case 'clear_tool_results': {
-        let cleared = 0;
-        for (const msg of this.messages) {
-          if (msg.role === 'tool' && msg.content && msg.content.length > 100) {
-            msg.content = msg.content.substring(0, 100) + '...[已截断]';
-            cleared++;
-          }
-        }
-        return { ok: true, message: `已清理${cleared}条工具结果` };
+        // Delegate to microCompact for consistent behavior
+        const cleared = this.microCompact();
+        return { ok: true, message: `已清理${cleared}条旧工具结果` };
+      }
+      case 'micro_compact': {
+        const cleared = this.microCompact(options.keepLast);
+        return { ok: true, message: `MicroCompact: 清理${cleared}条旧工具结果` };
       }
       case 'keep_essential': {
         this.messages = this.messages.filter((msg, i) =>
@@ -211,6 +340,12 @@ class ContextManager {
     return result;
   }
 
+  // Get the timestamp of the last compact boundary (or 0 if none)
+  getLastCompactTime() {
+    if (this.compactBoundaries.length === 0) return 0;
+    return this.compactBoundaries[this.compactBoundaries.length - 1].timestamp;
+  }
+
   // Get current stats
   getStats() {
     const tokens = this.getTotalTokens();
@@ -221,7 +356,8 @@ class ContextManager {
       maxTokens,
       usage,
       totalMessages: this.messages.length,
-      summaries: this.summaries.length
+      summaries: this.summaries.length,
+      compactions: this.compactBoundaries.length
     };
   }
 
@@ -229,5 +365,11 @@ class ContextManager {
     this.messages = [];
     this.pinnedMessages = [];
     this.summaries = [];
+    this.compactBoundaries = [];
   }
+}
+
+// Expose for node tests; in renderer the class is consumed via globalThis
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = { ContextManager, TOKENS_PER_CJK_CHAR, TOKENS_PER_OTHER_CHAR };
 }

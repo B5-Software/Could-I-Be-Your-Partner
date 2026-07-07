@@ -441,8 +441,18 @@
 
       try {
         const result = await window.sanguoshaAPI.chatLLM(messages, { temperature: 0.7, max_tokens: 300 });
-        if (result.ok && result.data?.choices?.[0]?.message?.content) {
-          const content = result.data.choices[0].message.content.trim();
+        if (!result.ok) {
+          console.error('[Sanguosha] LLM error:', result.error);
+          return null;
+        }
+        const msg = result.data?.choices?.[0]?.message;
+        if (!msg) return null;
+        // 游戏Agent只吃Final：忽略 reasoning_content，只用 final answer。
+        // 若 content 为空（如纯思考模型未输出 final），视为无回答，避免把推理过程当成动作。
+        let content = (msg.content || '').trim();
+        if (!content) return null;
+        // 清理 markdown 代码块包裹
+        content = content.replace(/^```[\w]*\n?/gm, '').replace(/```$/gm, '').trim();
 
           // Persist exchange into rolling context for this player
           if (contextKey !== null) {
@@ -452,8 +462,7 @@
           }
 
           return content;
-        }
-      } catch (e) { console.error('LLM error:', e); }
+      } catch (e) { console.error('[Sanguosha] LLM error:', e); }
       return null;
     }
 
@@ -1455,7 +1464,20 @@ ${player.hero.skillFn === 'paoxiao' ? '(咆哮技能：可无限出杀)' : ''}
     }
   }
 
+  let gameOverReported = false;
   function showGameOver() {
+    // showGameOver 会被多个游戏结束路径触发（出牌后、AI回合后等），需去重，
+    // 否则 reportResult 多次发送 → 主窗口叠多层"游戏结束"系统消息。
+    if (gameOverReported) {
+      // 已报告过，只确保 overlay 存在
+      if (!document.querySelector('.sg-game-over')) {
+        const ov = document.createElement('div');
+        ov.className = 'sg-game-over';
+        document.body.appendChild(ov);
+      }
+      return;
+    }
+    gameOverReported = true;
     if (window.sanguoshaAPI?.reportResult) {
       window.sanguoshaAPI.reportResult(`三国杀结束：${game.winner} 获胜！共进行了 ${game.turn} 回合`);
     }

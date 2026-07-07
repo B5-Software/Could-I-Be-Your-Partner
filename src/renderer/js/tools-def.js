@@ -49,9 +49,68 @@ function registerMcpTools(toolsList) {
   }
 }
 
-function getAllToolDefinitions() {
-  return [...TOOL_DEFINITIONS, ...MCP_DYNAMIC_TOOLS];
+function getAllToolDefinitions(mode) {
+  return [...TOOL_DEFINITIONS, ...MCP_DYNAMIC_TOOLS].filter(t => isToolAvailableForMode(t.name, mode));
 }
+
+// Tools exclusive to Chat mode (UI-heavy: entertainment, drawing, office, serial, browser).
+// Code mode only exposes file/code/terminal/network/system utilities.
+const CHAT_ONLY_TOOLS = new Set([
+  'getTarot', 'generateImage', 'inviteGame',
+  // Geogebra
+  'initGeogebra', 'runGeogebraCommand', 'getFunctionsFromGeogebra',
+  'addFunctionToGeogebra', 'updateFunctionInGeogebra', 'deleteFunctionFromGeogebra',
+  'getCurrentGraphFromGeogebra', 'getCurrentGraphDataFromGeogebra',
+  // Canvas
+  'initCanvas', 'clearCanvas', 'addCanvasObject', 'updateCanvasObject',
+  'deleteCanvasObject', 'exportCanvasSVG',
+  // Spreadsheet
+  'initSpreadsheet', 'spreadsheetSetCells', 'spreadsheetGetCells',
+  'spreadsheetSetCellFormat', 'spreadsheetSetRangeFormat', 'spreadsheetClearCells',
+  'spreadsheetInsertRows', 'spreadsheetDeleteRows', 'spreadsheetInsertCols',
+  'spreadsheetDeleteCols', 'spreadsheetSortRange', 'spreadsheetGetData',
+  'spreadsheetExportCSV', 'spreadsheetImportCSV', 'spreadsheetImportFile', 'spreadsheetExportFile',
+  // Office
+  'officeUnpack', 'officeListContents', 'officeReadInnerFile', 'officeWriteInnerFile',
+  'officeRepack', 'officeGetSlideTexts', 'officeSetSlideTexts', 'officeWordExtract',
+  'officeWordApplyTexts', 'officeWordGetStyles', 'officeWordFillTemplate',
+  // Serial
+  'serialListPorts', 'serialOpenPort', 'serialWritePort', 'serialReadPort',
+  'serialClosePort', 'serialSetSignals',
+  // Built-in browser (Playwright)
+  'browserNavigate', 'browserScreenshot', 'browserClick', 'browserType',
+  'browserGetContent', 'browserScroll', 'browserBack', 'browserClose'
+]);
+
+function isToolAvailableForMode(toolName, mode) {
+  if (!mode) return true;
+  // Babe 模式优先使用自己的白名单（允许包含 CHAT_ONLY_TOOLS 中的塔罗牌等）
+  if (mode === 'babe') {
+    return BABE_ALLOWED_TOOLS.has(toolName);
+  }
+  if (CHAT_ONLY_TOOLS.has(toolName)) return mode === 'chat';
+  return true;
+}
+
+// Babe 模式允许的工具白名单（仅应用内核心工具，无 MCP、无娱乐/创作/游戏，不含 Skills）
+const BABE_ALLOWED_TOOLS = new Set([
+  // 记忆
+  'saveMemory', 'readMemory', 'listMemories', 'deleteMemory',
+  // 网络
+  'webSearch', 'webFetch',
+  // 知识
+  'searchKnowledge', 'addKnowledge',
+  // 文件（基础）
+  'readFile', 'writeFile', 'listFiles',
+  // 画布（简单绘图）
+  'initCanvas', 'clearCanvas', 'addCanvasObject', 'updateCanvasObject', 'deleteCanvasObject', 'exportCanvasSVG',
+  // 图片生成（可选，让 Babe 能发图）
+  'generateImage',
+  // 塔罗牌（Babe 模式特有，允许 LLM 主动抽牌）
+  'getTarot',
+  // 上下文管理（与 Chat/Code 对齐：三层自动压缩 + 手动 LLM 摘要）
+  'manageContext', 'autoSummarizeContext'
+]);
 
 // Tool definitions for the AI Agent
 const TOOL_DEFINITIONS = [
@@ -112,12 +171,14 @@ const TOOL_DEFINITIONS = [
   { name: 'getNetworkStatus', desc: '获取网络状态', icon: 'fa-wifi', category: '系统', sensitive: false },
   { name: 'openBrowser', desc: '打开浏览器', icon: 'fa-globe', category: '系统', sensitive: false },
   { name: 'openFileExplorer', desc: '打开文件管理器', icon: 'fa-folder-open', category: '系统', sensitive: false },
-  { name: 'manageContext', desc: '管理上下文', icon: 'fa-window-maximize', category: '代理', sensitive: false },
-  { name: 'autoSummarizeContext', desc: '自动总结上下文', icon: 'fa-highlighter', category: '代理', sensitive: false },
+  { name: 'manageContext', desc: '上下文管理：clear_old/clear_tool_results/micro_compact/keep_essential（同步操作）', icon: 'fa-broom', category: '代理', sensitive: false },
+  { name: 'autoSummarizeContext', desc: 'LLM 语义摘要当前对话上下文（异步，会消耗Token）', icon: 'fa-compress', category: '代理', sensitive: false },
   { name: 'listSkills', desc: '列出技能', icon: 'fa-lightbulb', category: '技能', sensitive: false },
   { name: 'makeSkill', desc: '创建技能', icon: 'fa-wand-magic-sparkles', category: '技能', sensitive: false },
   { name: 'updateSkill', desc: '更新技能', icon: 'fa-pen-to-square', category: '技能', sensitive: false },
-  { name: 'runSkillScript', desc: '运行技能脚本（仅JS）', icon: 'fa-file-code', category: '技能', sensitive: false },
+  { name: 'runSkillScript', desc: '运行技能脚本（自动选择Node.js或浏览器沙箱运行时）', icon: 'fa-file-code', category: '技能', sensitive: false },
+  { name: 'activateSkill', desc: '激活技能：将其prompt注入系统上下文，后续对话都遵循该技能的指令', icon: 'fa-toggle-on', category: '技能', sensitive: false },
+  { name: 'deactivateSkill', desc: '停用已激活的技能', icon: 'fa-toggle-off', category: '技能', sensitive: false },
   { name: 'initGeogebra', desc: '初始化Geogebra', icon: 'fa-chart-line', category: 'Geogebra', sensitive: false },
   { name: 'runGeogebraCommand', desc: '执行Geogebra命令（Classic仅1参数）', icon: 'fa-play', category: 'Geogebra', sensitive: false },
   { name: 'getFunctionsFromGeogebra', desc: '获取Geogebra对象列表', icon: 'fa-list', category: 'Geogebra', sensitive: false },
@@ -182,6 +243,20 @@ const TOOL_DEFINITIONS = [
   { name: 'spreadsheetImportCSV', desc: '从CSV导入数据', icon: 'fa-file-import', category: '数据表格', sensitive: false },
   { name: 'spreadsheetImportFile', desc: '从文件导入表格(xlsx/ods/csv)', icon: 'fa-file-arrow-up', category: '数据表格', sensitive: false },
   { name: 'spreadsheetExportFile', desc: '导出表格到文件(xlsx/ods/csv)', icon: 'fa-file-arrow-down', category: '数据表格', sensitive: false },
+  // ---- 内置浏览器 (Playwright) ----
+  { name: 'browserNavigate', desc: '在内置浏览器中打开网址（侧边栏实时显示，用户可干预）', icon: 'fa-globe', category: '浏览器', sensitive: false },
+  { name: 'browserScreenshot', desc: '截取内置浏览器当前页面截图', icon: 'fa-camera', category: '浏览器', sensitive: false },
+  { name: 'browserClick', desc: '点击内置浏览器页面元素', icon: 'fa-hand-pointer', category: '浏览器', sensitive: false },
+  { name: 'browserType', desc: '在内置浏览器页面元素中输入文字', icon: 'fa-keyboard', category: '浏览器', sensitive: false },
+  { name: 'browserGetContent', desc: '获取内置浏览器页面文本内容', icon: 'fa-file-lines', category: '浏览器', sensitive: false },
+  { name: 'browserScroll', desc: '滚动内置浏览器页面', icon: 'fa-arrows-up-down', category: '浏览器', sensitive: false },
+  { name: 'browserBack', desc: '内置浏览器后退', icon: 'fa-arrow-left', category: '浏览器', sensitive: false },
+  { name: 'browserClose', desc: '关闭内置浏览器', icon: 'fa-xmark', category: '浏览器', sensitive: false },
+  // ---- Goal / 长任务跟踪 ----
+  { name: 'goalSet', desc: '设置/更新长期目标(让agent自动多轮推进)', icon: 'fa-bullseye', category: '代理', sensitive: false },
+  { name: 'goalStatus', desc: '查看当前目标状态', icon: 'fa-circle-info', category: '代理', sensitive: false },
+  { name: 'goalComplete', desc: '标记目标完成', icon: 'fa-flag-checkered', category: '代理', sensitive: false },
+  { name: 'sleep', desc: '休眠等待指定毫秒', icon: 'fa-moon', category: '效率', sensitive: false },
 ];
 
 // Dangerous command keywords for different platforms/shells
@@ -193,11 +268,11 @@ const DANGEROUS_COMMANDS = {
 };
 
 // OpenAI-format tool schemas for LLM
-function getToolSchemas(enabledTools) {
+function getToolSchemas(enabledTools, mode) {
   const schemas = {
     getTarot: { type: 'function', function: { name: 'getTarot', description: '抽取一张塔罗牌（使用设置中配置的随机数源：CSPRNG软件随机或TRNG硬件真随机，调用后返回结果中entropySource字段会标明使用的随机数类型，在向用户解析塔罗牌时请标明随机数类型以增强可信度）', parameters: { type: 'object', properties: {}, required: [] } } },
     todoList: { type: 'function', function: { name: 'todoList', description: '管理待办事项列表', parameters: { type: 'object', properties: { action: { type: 'string', enum: ['add', 'remove', 'toggle', 'list'], description: '操作类型' }, text: { type: 'string', description: '待办事项内容' }, id: { type: 'number', description: '待办事项ID' } }, required: ['action'] } } },
-    runSubAgent: { type: 'function', function: { name: 'runSubAgent', description: '运行子代理完成特定任务', parameters: { type: 'object', properties: { task: { type: 'string', description: '子代理要完成的任务' }, context: { type: 'string', description: '给子代理的上下文信息' } }, required: ['task'] } } },
+    runSubAgent: { type: 'function', function: { name: 'runSubAgent', description: '运行一个独立子代理完成特定任务。子代理拥有自己的 agent loop（可多轮调用工具）、隔离上下文和工具白名单，完成后返回结果报告。适用于并行/分解任务、独立调查、批处理等场景。', parameters: { type: 'object', properties: { task: { type: 'string', description: '子代理要完成的任务（含目标、约束、验收标准）' }, context: { type: 'string', description: '给子代理的额外上下文信息（如相关文件路径、已有发现）' }, tools: { type: 'array', items: { type: 'string' }, description: '允许子代理使用的工具名称白名单。省略则使用默认安全集：readFile/listDirectory/localSearch/createFile/editFile/copyFile/makeDirectory/getSystemInfo/calculator/webSearch/webFetch/runJavaScriptCode。危险工具（deleteFile/runTerminalCommand 等）默认禁用，必须显式列出才会授予。' }, maxIterations: { type: 'number', description: '子代理最大循环轮数，默认 10，上限 30' } }, required: ['task'] } } },
     generateImage: { type: 'function', function: { name: 'generateImage', description: '根据文本提示生成图片', parameters: { type: 'object', properties: { prompt: { type: 'string', description: '图片描述(英文)' } }, required: ['prompt'] } } },
     calculator: { type: 'function', function: { name: 'calculator', description: '精确计算数学表达式（本地执行，支持常见中英文/全角符号与百分号写法）。任何涉及算式求值都应优先使用此工具，避免模型口算误差。', parameters: { type: 'object', properties: { expression: { type: 'string', description: '表达式，例如：(1+2.5)×3^2、50%+1、10 mod 3' } }, required: ['expression'] } } },
     factorInteger: { type: 'function', function: { name: 'factorInteger', description: '对整数做质因数分解，返回每个质因子的指数。适合约分、数论、分解验证等。', parameters: { type: 'object', properties: { value: { type: 'string', description: '要分解的整数，可为字符串/数字，如 "360" 或 "-84"' } }, required: ['value'] } } },
@@ -259,7 +334,7 @@ function getToolSchemas(enabledTools) {
     updateSkill: { type: 'function', function: { name: 'updateSkill', description: '更新已有技能，返回结果中ok字段表示是否成功', parameters: { type: 'object', properties: { id: { type: 'string', description: '技能ID' }, name: { type: 'string', description: '技能名称' }, description: { type: 'string', description: '技能描述' }, prompt: { type: 'string', description: '系统提示词' } }, required: ['id', 'name', 'description', 'prompt'] } } },
     runSkillScript: { type: 'function', function: { name: 'runSkillScript', description: '运行已导入标准技能中的JS脚本（仅支持.js）。在调用前先用listSkills查看技能及scripts列表。', parameters: { type: 'object', properties: { skillId: { type: 'string', description: '技能ID（listSkills返回的id）' }, scriptName: { type: 'string', description: '脚本文件名（例如 main.js）' } }, required: ['skillId', 'scriptName'] } } },
     initGeogebra: { type: 'function', function: { name: 'initGeogebra', description: '初始化Geogebra应用', parameters: { type: 'object', properties: { appName: { type: 'string', enum: ['classic'], description: '应用类型，默认classic' } }, required: [] } } },
-    runGeogebraCommand: { type: 'function', function: { name: 'runGeogebraCommand', description: '执行Geogebra命令（Classic）。求解方程例：先f(x)=x^2-1，再Solve[f(x)=0]只需一个参数（方程）。求根例：Roots[f]得到点A,B,C，用x(A)提取值。', parameters: { type: 'object', properties: { command: { type: 'string', description: 'Geogebra Classic命令（注意Solve只取1参数，Roots返回点标签）' } }, required: ['command'] } } },
+    runGeogebraCommand: { type: 'function', function: { name: 'runGeogebraCommand', description: '执行GeoGebra命令（Classic）。求解方程例：先f(x)=x^2-1，再Solve[f(x)=0]只需一个参数（方程）。求根例：Roots[f]得到点A,B,C，用x(A)提取值。⚠️必须严格使用GeoGebra官方命令语法：设置线粗用 SetLineThickness[A,5]（不是SetThickness）；设置颜色用 SetColor[A,255,0,0]；设置点样式用 SetPointStyle[A,0]；设置标签用 SetCaption[A,"P"]。命令区分大小写，参数用方括号[]包裹。', parameters: { type: 'object', properties: { command: { type: 'string', description: 'GeoGebra Classic命令（严格遵循GGB语法：SetLineThickness/SetColor/SetPointStyle等，注意Solve只取1参数，Roots返回点标签）' } }, required: ['command'] } } },
     getFunctionsFromGeogebra: { type: 'function', function: { name: 'getFunctionsFromGeogebra', description: '获取Geogebra函数列表', parameters: { type: 'object', properties: {}, required: [] } } },
     addFunctionToGeogebra: { type: 'function', function: { name: 'addFunctionToGeogebra', description: '添加函数/对象（Classic），例：f(x)=x^2-1 或 g: y=2x+1', parameters: { type: 'object', properties: { expression: { type: 'string', description: '函数表达式（Classic）' } }, required: ['expression'] } } },
     updateFunctionInGeogebra: { type: 'function', function: { name: 'updateFunctionInGeogebra', description: '更新函数（Classic），例：f(x)=x^3-1（直接重定义）', parameters: { type: 'object', properties: { name: { type: 'string', description: '函数名' }, expression: { type: 'string', description: '新表达式' } }, required: ['name', 'expression'] } } },
@@ -322,14 +397,28 @@ function getToolSchemas(enabledTools) {
     spreadsheetImportCSV: { type: 'function', function: { name: 'spreadsheetImportCSV', description: '从CSV文本导入数据到表格', parameters: { type: 'object', properties: { csv: { type: 'string', description: 'CSV格式文本' }, startAddr: { type: 'string', description: '起始单元格(默认A1)' } }, required: ['csv'] } } },
     spreadsheetImportFile: { type: 'function', function: { name: 'spreadsheetImportFile', description: '从磁盘文件导入表格数据，支持.xlsx(Excel)、.ods(LibreOffice)、.csv格式。导入后自动打开表格面板并显示数据。', parameters: { type: 'object', properties: { filePath: { type: 'string', description: '要导入的表格文件路径(.xlsx/.ods/.csv)' } }, required: ['filePath'] } } },
     spreadsheetExportFile: { type: 'function', function: { name: 'spreadsheetExportFile', description: '将当前表格数据导出到磁盘文件，支持.xlsx(Excel)、.ods(LibreOffice)、.csv格式。根据文件扩展名自动选择格式。', parameters: { type: 'object', properties: { filePath: { type: 'string', description: '导出文件路径(扩展名决定格式: .xlsx/.ods/.csv)' } }, required: ['filePath'] } } },
+    // ---- 内置浏览器 (Playwright) ----
+    browserNavigate: { type: 'function', function: { name: 'browserNavigate', description: '在内置浏览器中打开指定网址。会在应用右侧栏显示浏览器窗口，用户可实时观看并干预。适合需要浏览网页、查看动态内容、与页面交互的场景。', parameters: { type: 'object', properties: { url: { type: 'string', description: '要打开的网址(需含http://或https://)' } }, required: ['url'] } } },
+    browserScreenshot: { type: 'function', function: { name: 'browserScreenshot', description: '截取内置浏览器当前页面截图并返回base64图像，可用于AI查看页面当前状态。', parameters: { type: 'object', properties: {}, required: [] } } },
+    browserClick: { type: 'function', function: { name: 'browserClick', description: '点击内置浏览器页面中的元素。', parameters: { type: 'object', properties: { selector: { type: 'string', description: 'CSS选择器(如 "button.submit"、"#login-link"、"a[href*=github]")' } }, required: ['selector'] } } },
+    browserType: { type: 'function', function: { name: 'browserType', description: '在内置浏览器页面的指定输入框中输入文字。', parameters: { type: 'object', properties: { selector: { type: 'string', description: 'CSS选择器定位输入框' }, text: { type: 'string', description: '要输入的文字' }, submit: { type: 'boolean', description: '输入后是否按回车提交(默认false)' } }, required: ['selector', 'text'] } } },
+    browserGetContent: { type: 'function', function: { name: 'browserGetContent', description: '获取内置浏览器当前页面的文本内容(去除HTML标签)。', parameters: { type: 'object', properties: { selector: { type: 'string', description: '可选CSS选择器，仅获取匹配元素的文本(不传则获取整页)' } }, required: [] } } },
+    browserScroll: { type: 'function', function: { name: 'browserScroll', description: '滚动内置浏览器页面。', parameters: { type: 'object', properties: { direction: { type: 'string', enum: ['up', 'down'], description: '滚动方向' }, amount: { type: 'number', description: '滚动像素数(默认500)' } }, required: ['direction'] } } },
+    browserBack: { type: 'function', function: { name: 'browserBack', description: '内置浏览器后退到上一页。', parameters: { type: 'object', properties: {}, required: [] } } },
+    browserClose: { type: 'function', function: { name: 'browserClose', description: '关闭内置浏览器并隐藏侧边栏面板。', parameters: { type: 'object', properties: {}, required: [] } } },
+    // ---- Goal / 长任务跟踪 ----
+    goalSet: { type: 'function', function: { name: 'goalSet', description: '设置或更新当前长期目标。设置后agent会自动多轮推进直到完成或达到限制。适用于需要多步骤、长时间才能完成的复杂任务。', parameters: { type: 'object', properties: { objective: { type: 'string', description: '清晰、可验证的目标描述，包含验收标准' }, tokenBudget: { type: 'number', description: '可选token预算上限，超过后agent会停止并总结进度' } }, required: ['objective'] } } },
+    goalStatus: { type: 'function', function: { name: 'goalStatus', description: '查询当前目标的执行状态、已执行轮数、token使用量等。', parameters: { type: 'object', properties: {}, required: [] } } },
+    goalComplete: { type: 'function', function: { name: 'goalComplete', description: '标记当前目标为已完成。仅在目标的所有验收标准都满足时调用。', parameters: { type: 'object', properties: { summary: { type: 'string', description: '完成总结：做了什么、结果如何' } }, required: ['summary'] } } },
+    sleep: { type: 'function', function: { name: 'sleep', description: '让agent休眠等待指定的毫秒数。用于等待异步操作完成、轮询间隔等场景。最大60秒。', parameters: { type: 'object', properties: { ms: { type: 'number', description: '等待毫秒数(1-60000)' } }, required: ['ms'] } } },
   };
 
   const result = Object.keys(schemas)
-    .filter(name => !enabledTools || enabledTools[name] !== false)
+    .filter(name => (!enabledTools || enabledTools[name] !== false) && isToolAvailableForMode(name, mode))
     .map(name => schemas[name]);
-  // Append dynamic MCP tool schemas
+  // Append dynamic MCP tool schemas (filtered by mode — MCP tools default to both modes)
   for (const [mcpName, mcpSchema] of Object.entries(MCP_DYNAMIC_SCHEMAS)) {
-    if (!enabledTools || enabledTools[mcpName] !== false) {
+    if ((!enabledTools || enabledTools[mcpName] !== false) && isToolAvailableForMode(mcpName, mode)) {
       result.push(mcpSchema);
     }
   }

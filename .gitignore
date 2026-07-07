@@ -1,10 +1,44 @@
-node_modules/
+# Build output
 dist/
 out/
+
+# Logs & env
 .env
 *.log
+
+# OS
 .DS_Store
 Thumbs.db
+
+# App runtime data
 userData/
 temp/
+
+# IoT firmware build
 IoT-Firmware/build/
+
+# ---- 第三方依赖（不纳入版本控制，运行时由打包流程或用户自取）----
+# npm
+node_modules/
+
+# Font Awesome (assets/fonts, assets/webfonts)
+assets/fonts/
+assets/webfonts/
+
+# GeoGebra
+assets/geogebra/          # deployggb.js 注入脚本
+assets/geogebra-src/      # GeoGebra 完整源码（仅参考，不打包）
+
+# Tesseract OCR 训练数据
+assets/ocr/
+chi_sim.traineddata       # 根目录重复文件
+
+# 参考仓库（学习用，不属于本项目）
+claude-code-ref/
+chi_sim.traineddata
+eng.traineddata
+package-lock.json
+package-lock.json
+package-lock.json
+package-lock.json
+assets/geogebra/deployggb.js

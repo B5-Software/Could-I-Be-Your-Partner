@@ -122,8 +122,12 @@ class WebControlService {
     const wsInstance = expressWs(app);
 
     // Serve FontAwesome from local assets
+    // CSS 内部 url(../webfonts/...) 在 /static/fa/ 下解析为 /static/webfonts/...
+    // 所以必须同时挂载 webfonts 目录，否则字体文件 404。
     const faDir = path.join(__dirname, '../../assets/fonts');
+    const webfontsDir = path.join(__dirname, '../../assets/webfonts');
     app.use('/static/fa', express.static(faDir));
+    app.use('/static/webfonts', express.static(webfontsDir));
 
     // Auth middleware
     const requireAuth = (req, res, next) => {
@@ -642,6 +646,119 @@ header{background:var(--bg-secondary);border-bottom:1px solid var(--border);padd
   .msg-col{max-width:min(88%,calc(100vw - 70px))}
   .header-tarot{display:none}
 }
+
+/* ---- Markdown content rendering ---- */
+.msg-bubble.md-content{line-height:1.65}
+.msg-bubble.md-content p{margin:0 0 8px}
+.msg-bubble.md-content p:last-child{margin-bottom:0}
+.msg-bubble.md-content h1,.msg-bubble.md-content h2,.msg-bubble.md-content h3,
+.msg-bubble.md-content h4,.msg-bubble.md-content h5,.msg-bubble.md-content h6{
+  margin:12px 0 6px;font-weight:700;line-height:1.3
+}
+.msg-bubble.md-content h1{font-size:1.4em}
+.msg-bubble.md-content h2{font-size:1.3em}
+.msg-bubble.md-content h3{font-size:1.2em}
+.msg-bubble.md-content h4{font-size:1.1em}
+.msg-bubble.md-content h5,.msg-bubble.md-content h6{font-size:1em}
+.msg-bubble.md-content ul,.msg-bubble.md-content ol{margin:4px 0 8px;padding-left:22px}
+.msg-bubble.md-content li{margin:2px 0}
+.msg-bubble.md-content a{color:var(--accent);text-decoration:underline;word-break:break-all}
+.msg-bubble.md-content img{max-width:100%;border-radius:6px;margin:4px 0;display:block}
+.msg-bubble.md-content hr{border:none;border-top:1px solid var(--border);margin:10px 0}
+.msg-bubble.md-content blockquote{
+  border-left:3px solid var(--accent);padding:2px 12px;margin:6px 0;
+  color:var(--text2);background:var(--accent-bg);border-radius:0 6px 6px 0
+}
+.msg-bubble.md-content table{border-collapse:collapse;width:100%;margin:6px 0;font-size:13px}
+.msg-bubble.md-content th,.msg-bubble.md-content td{border:1px solid var(--border);padding:5px 8px;text-align:left}
+.msg-bubble.md-content th{background:var(--bg-tertiary);font-weight:600}
+
+/* Inline code */
+.msg-bubble.md-content code:not(.hljs){
+  background:var(--bg-tertiary);padding:1px 5px;border-radius:4px;
+  font-family:'SFMono-Regular',Consolas,'Liberation Mono',Menlo,monospace;
+  font-size:.88em;color:var(--accent-dark,#1d7068)
+}
+[data-theme="dark"] .msg-bubble.md-content code:not(.hljs){color:var(--accent-light,#4db8ab)}
+
+/* Code blocks */
+.code-block-wrapper{position:relative;margin:8px 0;border-radius:6px;overflow:hidden;border:1px solid var(--border)}
+.code-block-wrapper .code-lang{
+  position:absolute;top:0;right:0;padding:3px 10px;font-size:11px;
+  background:var(--bg-tertiary);color:var(--text2);
+  border-left:1px solid var(--border);border-bottom:1px solid var(--border);
+  border-radius:0 6px 0 6px;text-transform:uppercase;font-weight:600;letter-spacing:.5px
+}
+.code-block-wrapper .code-copy{
+  position:absolute;top:30px;right:6px;padding:2px 8px;font-size:11px;
+  background:var(--bg-tertiary);color:var(--text2);border:1px solid var(--border);
+  border-radius:4px;cursor:pointer;opacity:0;transition:opacity .15s
+}
+.code-block-wrapper:hover .code-copy{opacity:.9}
+.code-block-wrapper .code-copy:hover{color:var(--accent);border-color:var(--accent)}
+.code-block-wrapper pre{
+  margin:0;padding:12px 14px;overflow-x:auto;
+  background:var(--bg-tertiary);font-size:12.5px;line-height:1.5
+}
+.code-block-wrapper pre code{
+  font-family:'SFMono-Regular',Consolas,'Liberation Mono',Menlo,monospace;
+  color:var(--text);background:none;padding:0
+}
+
+/* ---- Reasoning / thinking ---- */
+.reasoning-block{
+  margin-bottom:6px;border:1px dashed var(--border);border-radius:8px;
+  background:var(--bg-tertiary);overflow:hidden;font-size:13px
+}
+.reasoning-header{
+  padding:6px 12px;cursor:pointer;user-select:none;display:flex;align-items:center;gap:8px;
+  color:var(--text2);transition:background .15s
+}
+.reasoning-header:hover{background:var(--bg-hover)}
+.reasoning-header .rh-icon{color:#a855f7;width:14px;text-align:center}
+.reasoning-header .rh-title{font-weight:600;flex:1;font-size:12px}
+.reasoning-header .rh-chevron{font-size:11px;transition:transform .2s;color:var(--text2)}
+.reasoning-block.open .rh-chevron{transform:rotate(180deg)}
+.reasoning-body{
+  display:none;padding:8px 12px;border-top:1px dashed var(--border);
+  color:var(--text2);white-space:pre-wrap;line-height:1.55;font-size:12.5px;
+  max-height:300px;overflow-y:auto
+}
+.reasoning-block.open .reasoning-body{display:block}
+
+/* ---- Typing indicator ---- */
+.typing-indicator{
+  display:flex;gap:4px;padding:8px 14px;align-items:center;
+  background:var(--bg-secondary);border:1px solid var(--border);
+  border-bottom-left-radius:4px;border-radius:12px;width:fit-content;margin-left:38px
+}
+.typing-indicator .dot{
+  width:7px;height:7px;border-radius:50%;background:var(--text2);
+  animation:typingBounce 1.3s infinite ease-in-out
+}
+.typing-indicator .dot:nth-child(2){animation-delay:.2s}
+.typing-indicator .dot:nth-child(3){animation-delay:.4s}
+@keyframes typingBounce{
+  0%,60%,100%{transform:translateY(0);opacity:.4}
+  30%{transform:translateY(-5px);opacity:1}
+}
+
+/* ---- Streaming cursor ---- */
+.streaming-cursor{
+  display:inline-block;width:8px;height:14px;background:var(--accent);
+  margin-left:2px;vertical-align:text-bottom;animation:cursorBlink 1s infinite
+}
+@keyframes cursorBlink{0%,49%{opacity:1}50%,100%{opacity:0}}
+
+/* ---- Empty state ---- */
+.empty-state{
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
+  height:100%;color:var(--text2);text-align:center;padding:20px
+}
+.empty-state .es-icon{font-size:48px;margin-bottom:12px;opacity:.4}
+.empty-state .es-title{font-size:16px;font-weight:600;margin-bottom:4px;color:var(--text)}
+.empty-state .es-hint{font-size:13px;opacity:.7}
+
 </style>
 </head>
 <body>
@@ -881,6 +998,20 @@ function updateStatus(s) {
   txt.textContent = working ? '工作中' : '空闲';
   btnSend.style.display = working ? 'none' : '';
   btnStop.style.display = working ? '' : 'none';
+  // Show typing indicator when working, hide when idle.
+  // (appendMessage for assistant also hides it once content arrives.)
+  if (working) {
+    const messagesEl = document.getElementById('messages');
+    // Only show if there isn't already a real assistant message in flight
+    // (i.e. no .typing-indicator yet and last child isn't an assistant bubble)
+    if (messagesEl && !document.getElementById('typingIndicator')) {
+      const lastChild = messagesEl.lastElementChild;
+      const isLastAssistantBubble = lastChild && lastChild.classList.contains('msg-row') && lastChild.classList.contains('assistant');
+      if (!isLastAssistantBubble) showTyping();
+    }
+  } else {
+    hideTyping();
+  }
 }
 
 // ----- Tarot -----
@@ -910,6 +1041,10 @@ function setTitle(title) {
 function renderMessages(messages) {
   const el = document.getElementById('messages');
   el.innerHTML = '';
+  if (!messages || messages.length === 0) {
+    el.innerHTML = '<div class="empty-state"><div class="es-icon"><i class="fa-solid fa-comments"></i></div><div class="es-title">开始一段新对话</div><div class="es-hint">在下方输入消息，或从左侧选择历史对话</div></div>';
+    return;
+  }
   for (const m of messages) appendMessage(m, false);
   el.scrollTop = el.scrollHeight;
 }
@@ -917,6 +1052,210 @@ function renderMessages(messages) {
 function escHtml(s) {
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
+
+// ---- Minimal but safe Markdown renderer ----
+// Supports: fenced code blocks (triple-backtick + lang), inline code, headers,
+// bold/italic/strike, links [text](url), images ![alt](url),
+// unordered/ordered lists, blockquote, hr, tables (GFM pipe), line breaks.
+// All non-code text is HTML-escaped; URLs in links/images are validated.
+// NOTE: this code lives inside a JS template literal, so backticks are
+// constructed via String.fromCharCode and regex backslashes are doubled.
+function renderMarkdown(src) {
+  if (!src) return '';
+  const text = String(src);
+  const FENCE = String.fromCharCode(96, 96, 96); // triple backtick
+  // Split out fenced code blocks first so their content is not processed.
+  const segments = [];
+  const codeBlockRe = new RegExp(FENCE + '([a-zA-Z0-9_+-]*)\\\\n?([\\\\s\\\\S]*?)' + FENCE, 'g');
+  let lastIdx = 0, m;
+  while ((m = codeBlockRe.exec(text)) !== null) {
+    if (m.index > lastIdx) segments.push({ type: 'text', value: text.slice(lastIdx, m.index) });
+    segments.push({ type: 'code', lang: (m[1] || '').toLowerCase(), value: m[2] || '' });
+    lastIdx = m.index + m[0].length;
+  }
+  if (lastIdx < text.length) segments.push({ type: 'text', value: text.slice(lastIdx) });
+  let html = '';
+  for (const seg of segments) {
+    if (seg.type === 'code') {
+      const lang = seg.lang ? escHtml(seg.lang) : '';
+      const codeHtml = escHtml(seg.value.replace(/\\n$/, ''));
+      const wrapperId = 'cb-' + Math.random().toString(36).slice(2, 9);
+      html += '<div class="code-block-wrapper" id="' + wrapperId + '">';
+      if (lang) html += '<span class="code-lang">' + lang + '</span>';
+      html += '<button class="code-copy" onclick="copyCode(\\'' + wrapperId + '\\')"><i class="fa-solid fa-copy"></i> 复制</button>';
+      html += '<pre><code>' + codeHtml + '</code></pre>';
+      html += '</div>';
+    } else {
+      html += renderInlineMd(seg.value);
+    }
+  }
+  return html;
+}
+
+function renderInlineMd(src) {
+  let s = String(src || '');
+  // Escape HTML first
+  s = s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  // Tables (GFM) — needs to be processed line by line
+  const lines = s.split('\\n');
+  const out = [];
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    // Detect table: current line has | and next line is |---|
+    if (i + 1 < lines.length && line.includes('|') && /^\\s*\\|?[\\s\\-:|]+\\|?\\s*$/.test(lines[i+1]) && lines[i+1].includes('-')) {
+      const header = parseTableRow(line);
+      const aligns = parseTableAligns(lines[i+1]);
+      const rows = [];
+      let j = i + 2;
+      while (j < lines.length && lines[j].includes('|')) {
+        rows.push(parseTableRow(lines[j]));
+        j++;
+      }
+      out.push(renderTable(header, aligns, rows));
+      i = j;
+      continue;
+    }
+    out.push(line);
+    i++;
+  }
+  s = out.join('\\n');
+  // Process block-level markdown
+  // Headers
+  s = s.replace(/^######\\s+(.+)$/gm, '<h6>$1</h6>');
+  s = s.replace(/^#####\\s+(.+)$/gm, '<h5>$1</h5>');
+  s = s.replace(/^####\\s+(.+)$/gm, '<h4>$1</h4>');
+  s = s.replace(/^###\\s+(.+)$/gm, '<h3>$1</h3>');
+  s = s.replace(/^##\\s+(.+)$/gm, '<h2>$1</h2>');
+  s = s.replace(/^#\\s+(.+)$/gm, '<h1>$1</h1>');
+  // Horizontal rule
+  s = s.replace(/^---+$|^\\*\\*\\*+$|^___+$/gm, '<hr>');
+  // Blockquote
+  s = s.replace(/^&gt;\\s?(.+)$/gm, '<blockquote>$1</blockquote>');
+  // Lists: process line-by-line, group consecutive items into <ul>/<ol>
+  // (handles both unordered: "- ", "* ", "+ " and ordered: "1. ", "2. ")
+  const listLines = s.split('\\n');
+  const listOut = [];
+  let li = 0;
+  while (li < listLines.length) {
+    const line = listLines[li];
+    const ulMatch = /^\\s*(-|\\*|\\+)\\s+(.+)$/.exec(line);
+    const olMatch = /^\\s*(\\d+)\\.\\s+(.+)$/.exec(line);
+    if (ulMatch || olMatch) {
+      const isOl = !!olMatch;
+      const items = [];
+      while (li < listLines.length) {
+        const ul = /^\\s*(-|\\*|\\+)\\s+(.+)$/.exec(listLines[li]);
+        const ol = /^\\s*(\\d+)\\.\\s+(.+)$/.exec(listLines[li]);
+        if (isOl && ol) { items.push(ol[2]); li++; }
+        else if (!isOl && ul) { items.push(ul[2]); li++; }
+        else break;
+      }
+      const tag = isOl ? 'ol' : 'ul';
+      const itemsHtml = items.map(it => '<li>' + it + '</li>').join('');
+      listOut.push('<' + tag + '>' + itemsHtml + '</' + tag + '>');
+    } else {
+      listOut.push(line);
+      li++;
+    }
+  }
+  s = listOut.join('\\n');
+  // Images: ![alt](url)
+  s = s.replace(/!\\[([^\\]]*)\\]\\(([^\\s)]+)[^)]*\\)/g, '<img alt="$1" src="$2">');
+  // Links: [text](url)
+  s = s.replace(/\\[([^\\]]+)\\]\\(([^\\s)]+)[^)]*\\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+  // Bold + italic
+  s = s.replace(/\\*\\*\\*([^*]+)\\*\\*\\*/g, '<strong><em>$1</em></strong>');
+  s = s.replace(/\\*\\*([^*]+)\\*\\*/g, '<strong>$1</strong>');
+  s = s.replace(/(?<!\\w)\\*([^*]+)\\*(?!\\w)/g, '<em>$1</em>');
+  s = s.replace(/__([^_]+)__/g, '<strong>$1</strong>');
+  // Strikethrough
+  s = s.replace(/~~([^~]+)~~/g, '<del>$1</del>');
+  // Inline code
+  s = s.replace(/\`([^\`]+)\`/g, '<code>$1</code>');
+  // Paragraph + line breaks: split into blocks by blank line, within block convert single \\n to <br>
+  const paragraphs = s.split(/\\n{2,}/);
+  s = paragraphs.map(p => {
+    p = p.trim();
+    if (!p) return '';
+    // Don't wrap block-level elements that are already wrapped
+    if (/^<(h[1-6]|ul|ol|li|blockquote|hr|table|div|pre|img|p)/.test(p)) return p;
+    if (p.includes('<li>')) return p;
+    // Convert remaining single newlines to <br>
+    return '<p>' + p.replace(/\\n/g, '<br>') + '</p>';
+  }).join('\\n');
+  return s;
+}
+
+function parseTableRow(line) {
+  return line.replace(/^\\s*\\|?/, '').replace(/\\|?\\s*$/, '').split('|').map(c => c.trim());
+}
+function parseTableAligns(line) {
+  return line.replace(/^\\s*\\|?/, '').replace(/\\|?\\s*$/, '').split('|').map(c => {
+    c = c.trim();
+    if (c.startsWith(':') && c.endsWith(':')) return 'center';
+    if (c.endsWith(':')) return 'right';
+    return 'left';
+  });
+}
+function renderTable(header, aligns, rows) {
+  let html = '<table>';
+  html += '<thead><tr>';
+  header.forEach((h, i) => {
+    const a = aligns[i] || 'left';
+    html += '<th style="text-align:' + a + '">' + renderInlineMd(h) + '</th>';
+  });
+  html += '</tr></thead><tbody>';
+  rows.forEach(r => {
+    html += '<tr>';
+    header.forEach((_, i) => {
+      const a = aligns[i] || 'left';
+      html += '<td style="text-align:' + a + '">' + renderInlineMd(r[i] || '') + '</td>';
+    });
+    html += '</tr>';
+  });
+  html += '</tbody></table>';
+  return html;
+}
+
+function copyCode(wrapperId) {
+  const el = document.getElementById(wrapperId);
+  if (!el) return;
+  const code = el.querySelector('pre code');
+  if (!code) return;
+  const text = code.textContent;
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(() => {
+      const btn = el.querySelector('.code-copy');
+      const orig = btn.innerHTML;
+      btn.innerHTML = '<i class="fa-solid fa-check"></i> 已复制';
+      setTimeout(() => { btn.innerHTML = orig; }, 1500);
+    });
+  } else {
+    const ta = document.createElement('textarea');
+    ta.value = text; document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); } catch {}
+    document.body.removeChild(ta);
+  }
+}
+
+// ---- Typing indicator ----
+function showTyping() {
+  hideTyping();
+  const el = document.getElementById('messages');
+  if (!el) return;
+  const t = document.createElement('div');
+  t.className = 'typing-indicator';
+  t.id = 'typingIndicator';
+  t.innerHTML = '<span class="dot"></span><span class="dot"></span><span class="dot"></span>';
+  el.appendChild(t);
+  el.scrollTop = el.scrollHeight;
+}
+function hideTyping() {
+  const t = document.getElementById('typingIndicator');
+  if (t) t.remove();
+}
+
 
 function formatTime(ts) {
   if (!ts) return '';
@@ -949,6 +1288,10 @@ async function deleteTurn(timestamp) {
 
 function appendMessage(msg, scroll = true) {
   const el = document.getElementById('messages');
+  // Remove typing indicator when a real message arrives
+  if (msg.role === 'assistant' && (msg.content || msg.reasoning || (msg.tool_calls && msg.tool_calls.length))) {
+    hideTyping();
+  }
   if (msg.role === 'user') {
     const div = document.createElement('div');
     div.className = 'msg-row user';
@@ -960,8 +1303,19 @@ function appendMessage(msg, scroll = true) {
     const div = document.createElement('div');
     div.className = 'msg-row assistant';
     let colInner = '';
-    // Text content
-    if (msg.content) colInner += '<div class="msg-bubble">' + escHtml(msg.content) + '</div>';
+    // Reasoning / thinking (collapsible)
+    if (msg.reasoning) {
+      colInner += '<div class="reasoning-block">' +
+        '<div class="reasoning-header" onclick="this.parentElement.classList.toggle(\\'open\\')">' +
+        '<i class="fa-solid fa-lightbulb rh-icon"></i>' +
+        '<span class="rh-title">推理过程</span>' +
+        '<i class="fa-solid fa-chevron-down rh-chevron"></i>' +
+        '</div>' +
+        '<div class="reasoning-body">' + escHtml(msg.reasoning) + '</div>' +
+        '</div>';
+    }
+    // Text content (rendered as markdown)
+    if (msg.content) colInner += '<div class="msg-bubble md-content">' + renderMarkdown(msg.content) + '</div>';
     // Tool calls (from history)
     if (msg.tool_calls && msg.tool_calls.length) {
       for (const tc of msg.tool_calls) {
@@ -971,10 +1325,10 @@ function appendMessage(msg, scroll = true) {
         const tcid = tc.id || '';
         colInner += '<div class="tool-call" data-tcid="' + escHtml(tcid) + '">' +
           '<div class="tool-call-header" onclick="toggleTc(this.parentElement)">' +
-          '<span class="tc-icon">⚙</span>' +
+          '<i class="fa-solid fa-gear tc-icon" style="color:var(--accent)"></i>' +
           '<span class="tc-name">' + escHtml(tname) + '</span>' +
           '<span class="tc-status done">完成</span>' +
-          '<span class="tc-chevron">▾</span>' +
+          '<i class="fa-solid fa-chevron-down tc-chevron"></i>' +
           '</div>' +
           '<div class="tool-call-body">' +
           (argsStr ? '<div class="tool-call-args">' + escHtml(argsStr) + '</div>' : '') +
@@ -982,7 +1336,7 @@ function appendMessage(msg, scroll = true) {
           '</div></div>';
       }
     }
-    if (msg.content || (msg.tool_calls && msg.tool_calls.length)) {
+    if (msg.content || msg.reasoning || (msg.tool_calls && msg.tool_calls.length)) {
       const delTs = msg.timestamp || 0;
       colInner += '<div class="msg-time">' + formatTime(msg.timestamp) + '</div>';
       colInner += '<button class="msg-del-btn" onclick="deleteTurn(' + delTs + ')" title="删除这轮对话">✕ 删除</button>';

@@ -597,6 +597,7 @@ body {
   align-items: center;
   justify-content: space-between;
   background: var(--bg-secondary);
+  flex-shrink: 0;
 }
 
 .geogebra-header h3 {
@@ -609,20 +610,54 @@ body {
 }
 
 .geogebra-body {
-  flex: 1;
-  overflow: hidden;
+  flex: 1 1 auto;
   min-height: 0; /* Allow flex item to shrink so child overflow:auto actually works */
+  position: relative;
+  display: flex;
+  flex-direction: column;
 }
 
 #ggb-element {
+  position: relative;
   width: 100%;
   height: 100%;
+  flex: 1 1 auto;
+  overflow: hidden;
+  display: block;
 }
 
-#geogebra-webview {
-  width: 100%;
-  height: 100%;
-  border: none;
+/* GGB CSS 独立隔离：中和全局 * 盒模型重置对 GGB 注入 DOM 的影响，
+   并强制 GGB 容器填满 host（GGB 在 inject 时会写入固定 px 内联样式） */
+#ggb-element *,
+#ggb-element *::before,
+#ggb-element *::after {
+  box-sizing: content-box;
+}
+/* 用高优先级覆盖 GGB 在 inject 时写入的固定 px 内联样式，
+   否则面板内容会被压缩成一个小方块。
+   覆盖范围：applet 容器、content panel、canvas、iframe 全链路 */
+#ggb-element > .ggbApplet,
+#ggb-element > .ggb_container,
+#ggb-element .ggbApplet,
+#ggb-element .ggb_container,
+#ggb-element .ggbApplet > div,
+#ggb-element .ggb_container > div,
+#ggb-element .ggbApplet > div > div,
+#ggb-element .ggb_container > div > div,
+#ggb-element canvas,
+#ggb-element iframe,
+#ggb-element .ggbApplet canvas,
+#ggb-element .ggb_container canvas,
+#ggb-element .ggbApplet iframe,
+#ggb-element .ggb_container iframe {
+  width: 100% !important;
+  height: 100% !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  max-width: none !important;
+  max-height: none !important;
+  display: block !important;
+  position: relative !important;
 }
 
 /* Adjust main content when GeoGebra is open */

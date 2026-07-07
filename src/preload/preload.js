@@ -50,7 +50,7 @@ contextBridge.exposeInMainWorld('api', {
   saveUploadedFile: (name, data) => ipcRenderer.invoke('fs:saveUploadedFile', name, data),
 
   // Terminal
-  makeTerminal: () => ipcRenderer.invoke('terminal:make'),
+  makeTerminal: (cwd) => ipcRenderer.invoke('terminal:make', cwd),
   runTerminalCommand: (id, cmd) => ipcRenderer.invoke('terminal:run', id, cmd),
   awaitTerminalCommand: (id, cmd) => ipcRenderer.invoke('terminal:await', id, cmd),
   killTerminal: (id) => ipcRenderer.invoke('terminal:kill', id),
@@ -114,11 +114,58 @@ contextBridge.exposeInMainWorld('api', {
   deleteSkill: (id) => ipcRenderer.invoke('skills:delete', id),
   updateSkill: (id, data) => ipcRenderer.invoke('skills:update', id, data),
 
+  // Dream (memory consolidation)
+  dreamGetState: () => ipcRenderer.invoke('dream:getState'),
+  dreamCheckGate: () => ipcRenderer.invoke('dream:checkGate'),
+  dreamAcquireLock: () => ipcRenderer.invoke('dream:acquireLock'),
+  dreamReleaseLock: () => ipcRenderer.invoke('dream:releaseLock'),
+  dreamRecordConsolidation: () => ipcRenderer.invoke('dream:recordConsolidation'),
+  dreamIncrementSession: () => ipcRenderer.invoke('dream:incrementSession'),
+  dreamGetMemoryDir: () => ipcRenderer.invoke('dream:getMemoryDir'),
+  dreamAppendSession: (record) => ipcRenderer.invoke('dream:appendSession', record),
+
+  // ---- Code Mode ----
+  codeOpenWorkspace: () => ipcRenderer.invoke('code:openWorkspace'),
+  codeGetLastWorkspace: () => ipcRenderer.invoke('code:getLastWorkspace'),
+  codeListHistory: (ws) => ipcRenderer.invoke('code:listHistory', ws),
+  codeLoadHistory: (ws, id) => ipcRenderer.invoke('code:loadHistory', ws, id),
+  codeSaveHistory: (ws, id, data) => ipcRenderer.invoke('code:saveHistory', ws, id, data),
+  codeDeleteHistory: (ws, id) => ipcRenderer.invoke('code:deleteHistory', ws, id),
+  codeGetFileTree: (dir) => ipcRenderer.invoke('code:getFileTree', dir),
+
+  // ---- Playwright Browser ----
+  browserNavigate: (url) => ipcRenderer.invoke('browser:navigate', url),
+  browserScreenshot: () => ipcRenderer.invoke('browser:screenshot'),
+  browserClick: (selector) => ipcRenderer.invoke('browser:click', selector),
+  browserType: (selector, text, submit) => ipcRenderer.invoke('browser:type', selector, text, submit),
+  browserGetContent: (selector) => ipcRenderer.invoke('browser:getContent', selector),
+  browserEvaluate: (script) => ipcRenderer.invoke('browser:evaluate', script),
+  browserScroll: (dir, amount) => ipcRenderer.invoke('browser:scroll', dir, amount),
+  browserBack: () => ipcRenderer.invoke('browser:back'),
+  browserClose: () => ipcRenderer.invoke('browser:close'),
+
   // LLM
   chatLLM: (messages, options) => ipcRenderer.invoke('llm:chat', messages, options),
   chatLLMStream: (messages, options) => ipcRenderer.invoke('llm:chatStream', messages, options),
-  onStreamChunk: (cb) => ipcRenderer.on('llm:stream-chunk', (_, data) => cb(data)),
-  onStreamEnd: (cb) => ipcRenderer.on('llm:stream-end', (_, data) => cb(data)),
+  summarizeLLM: (messages, options) => ipcRenderer.invoke('llm:summarize', messages, options),
+  zenFetchModels: () => ipcRenderer.invoke('zen:fetchModels'),
+  llmFetchModels: (provider, apiUrl, apiKey) => ipcRenderer.invoke('llm:fetchModels', provider, apiUrl, apiKey),
+  usageGetRange: (period) => ipcRenderer.invoke('usage:getRange', period),
+  onStreamChunk: (cb) => {
+    const listener = (_, data) => cb(data);
+    ipcRenderer.on('llm:stream-chunk', listener);
+    return () => ipcRenderer.removeListener('llm:stream-chunk', listener);
+  },
+  onStreamEnd: (cb) => {
+    const listener = (_, data) => cb(data);
+    ipcRenderer.on('llm:stream-end', listener);
+    return () => ipcRenderer.removeListener('llm:stream-end', listener);
+  },
+  onLLMRetry: (cb) => {
+    const listener = (_, data) => cb(data);
+    ipcRenderer.on('llm:retry', listener);
+    return () => ipcRenderer.removeListener('llm:retry', listener);
+  },
 
   // Paths
   getPath: (name) => ipcRenderer.invoke('app:getPath', name),
@@ -135,6 +182,13 @@ contextBridge.exposeInMainWorld('api', {
   historySave: (conv) => ipcRenderer.invoke('history:save', conv),
   historyDelete: (id) => ipcRenderer.invoke('history:delete', id),
   historyRename: (id, title) => ipcRenderer.invoke('history:rename', id, title),
+
+  // Babe History (独立持久化，含好感度等会话属性)
+  babeHistoryList: () => ipcRenderer.invoke('babeHistory:list'),
+  babeHistoryGet: (id) => ipcRenderer.invoke('babeHistory:get', id),
+  babeHistorySave: (conv) => ipcRenderer.invoke('babeHistory:save', conv),
+  babeHistoryDelete: (id) => ipcRenderer.invoke('babeHistory:delete', id),
+  babeHistoryRename: (id, title) => ipcRenderer.invoke('babeHistory:rename', id, title),
 
   // Workspace
   workspaceCreate: () => ipcRenderer.invoke('workspace:create'),

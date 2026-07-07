@@ -20,6 +20,19 @@ const INTERNAL_REOPTIMIZE_TOOL_SCHEMA = {
   }
 };
 
+const INTERNAL_DISABLE_AUTO_OPTIMIZE_SCHEMA = {
+  type: 'function',
+  function: {
+    name: '__disableAutoOptimize',
+    description: '在本次会话中禁用自动工具选择优化，让所有已启用工具都可用。适用于需要频繁使用多种工具的复杂任务。',
+    parameters: {
+      type: 'object',
+      properties: {},
+      required: []
+    }
+  }
+};
+
 // AI Agent Engine - handles the autonomous agent loop
 class Agent {
   constructor() {
@@ -49,19 +62,25 @@ class Agent {
     this.optimizedToolNames = null;
     this.optimizedToolReason = '';
     this.skillsCatalog = [];
+    this.activeSkills = []; // activated skills whose prompts are injected into system context
+    this.autoCompactFailures = 0; // circuit breaker for context compaction
+    this._llmRetryUnsub = null; // unsubscribe for llm:retry listener
+    this._streamChunkUnsub = null; // unsubscribe for llm:stream-chunk listener
+    this._streamEndUnsub = null; // unsubscribe for llm:stream-end listener
+    this._activeStreamRequestId = null; // current streaming requestId (for filtering)
+    this.babeAffection = 0; // Babe 模式好感度（0-100）
+    this.mode = 'chat'; // 'chat' | 'code' | 'babe'
+    this.sessionAutoOptimizeDisabled = false; // LLM 可在本次 session 内禁用自动优化
   }
 
   getLocalDateTimeString() {
+    // 精确到天，避免秒级变化导致系统提示词频繁变动、降低缓存命中率
     const now = new Date();
-    return now.toLocaleString('zh-CN', {
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-      hour12: false
-    });
+    const y = now.getFullYear();
+    const m = String(now.getMonth() + 1).padStart(2, '0');
+    const d = String(now.getDate()).padStart(2, '0');
+    const weekdays = ['日', '一', '二', '三', '四', '五', '六'];
+    return `${y}-${m}-${d} 星期${weekdays[now.getDay()]}`;
   }
 
   async init() {
@@ -91,13 +110,195 @@ class Agent {
     }
 
     await this.refreshSkillsCatalog();
-    
+
     this.contextManager.setSystemPrompt(this.getSystemPrompt());
     // Generate conversation ID
     this.conversationId = Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+
+    // Subscribe to LLM retry events to surface them to the UI
+    if (window.api?.onLLMRetry && !this._llmRetryUnsub) {
+      this._llmRetryUnsub = window.api.onLLMRetry((info) => {
+        if (this.onMessage && info) {
+          const kind = info.kind || 'unknown';
+          const delayTxt = info.delayMs ? `，${Math.round(info.delayMs / 100) / 10}s 后重试` : '';
+          const reasonTxt = info.reason ? `（${info.reason}）` : '';
+          const msg = `LLM 请求失败（${kind}），第 ${info.attempt || 1} 次重试${delayTxt}${reasonTxt}`;
+          this.onMessage('system', msg);
+        }
+      });
+    }
+
+    // Increment Dream session counter (used by autoDream gating)
+    try { await window.api.dreamIncrementSession(); } catch { /* ignore */ }
+
+    // Subscribe to LLM stream events to surface live tokens to the UI.
+    // Only chunks matching the active requestId are forwarded (sub-agent &
+    // dream loops use their own requestIds and don't emit to the main UI).
+    if (window.api?.onStreamChunk && !this._streamChunkUnsub) {
+      this._streamChunkUnsub = window.api.onStreamChunk((chunk) => {
+        if (!chunk || chunk.requestId !== this._activeStreamRequestId) return;
+        if (this.onMessage) this.onMessage('stream-chunk', chunk);
+      });
+    }
+    if (window.api?.onStreamEnd && !this._streamEndUnsub) {
+      this._streamEndUnsub = window.api.onStreamEnd((data) => {
+        if (!data || data.requestId !== this._activeStreamRequestId) return;
+        if (this.onMessage) this.onMessage('stream-end', data);
+      });
+    }
+  }
+
+  /**
+   * Auto-Dream: check triple gate and run memory consolidation if passed.
+   * Called after each conversation turn completes.
+   * Gate 1: settings.agent.autoDreamEnabled (default true)
+   * Gate 2: >= minHours since last consolidation (default 24h)
+   * Gate 3: >= minSessions since last consolidation (default 5)
+   * Lock: PID-based, expires after 1 hour
+   */
+  async maybeRunAutoDream() {
+    if (!window.api?.dreamCheckGate) return;
+    let gate;
+    try { gate = await window.api.dreamCheckGate(); } catch { return; }
+    if (!gate?.passed) {
+      // Release lock if we acquired it but won't run (shouldn't happen, but be safe)
+      return;
+    }
+    if (this.onMessage) {
+      this.onMessage('system', '🌙 自动 Dream 启动：开始整理持久化记忆...');
+    }
+    try {
+      await this._runDreamInline();
+      await window.api.dreamRecordConsolidation();
+      if (this.onMessage) {
+        this.onMessage('system', '🌙 Dream 完成：记忆已整理');
+      }
+    } catch (e) {
+      if (this.onMessage) {
+        this.onMessage('system', `Dream 失败：${e.message}`);
+      }
+    } finally {
+      try { await window.api.dreamReleaseLock(); } catch { /* ignore */ }
+    }
+  }
+
+  /**
+   * Run Dream as a forked agent: temporary context + dream skill prompt + file tools.
+   * Saves and restores the main conversation context.
+   */
+  async _runDreamInline() {
+    // Find the dream bundled skill
+    await this.refreshSkillsCatalog();
+    const dreamSkill = this.skillsCatalog.find(s => s.name === 'dream' || s.id === 'bundled-dream');
+    if (!dreamSkill?.prompt) throw new Error('dream skill prompt not found');
+
+    let memoryDir = '';
+    try { memoryDir = await window.api.dreamGetMemoryDir(); } catch { /* ignore */ }
+
+    // Save current context
+    const savedContext = this.contextManager;
+    const savedActiveSkills = this.activeSkills;
+    const savedRunning = this.running;
+    const savedStopped = this.stopped;
+
+    // Create a fresh context for Dream
+    const dreamContext = new ContextManager(this.settings?.llm?.maxContextLength || 8192);
+    const sysInfo = this.systemInfo || {};
+    const username = sysInfo.username || '用户';
+    dreamContext.setSystemPrompt(`${dreamSkill.prompt}
+
+# 环境信息
+- 用户名: ${username}
+- 记忆目录: ${memoryDir || '(未配置)'}
+- 当前时间: ${this.getLocalDateTimeString()}
+- 工作目录: ${this.workspacePath || '(未创建)'}
+
+你拥有完整的文件工具权限来读取和修改记忆目录中的文件。请严格按照 Dream 流程执行。`);
+    dreamContext.addUserMessage(`请立即开始 Dream 记忆整理流程。记忆目录位于：${memoryDir}。
+
+执行步骤：
+1. 调用 listDirectory 查看记忆目录
+2. 调用 readFile 读取 topics.md（若存在）
+3. 检查是否有 session_*.jsonl 文件，读取最近的
+4. 整合、修剪、更新 topics.md
+5. 完成后报告整理结果
+
+请开始。`);
+
+    // Swap in dream context
+    this.contextManager = dreamContext;
+    this.activeSkills = [];
+    this.running = true;
+    this.stopped = false;
+
+    // Tools allowed during Dream (file ops + system info)
+    const dreamAllowedTools = new Set([
+      'readFile', 'listDirectory', 'createFile', 'editFile', 'deleteFile',
+      'moveFile', 'copyFile', 'makeDirectory', 'localSearch',
+      'getSystemInfo', 'manageContext'
+    ]);
+
+    try {
+      // Run a mini agent loop (max 10 iterations)
+      const dreamRunId = ++this.runId;
+      let iterations = 0;
+      const maxDreamIterations = 10;
+      while (this.running && !this.stopped && iterations < maxDreamIterations && dreamRunId === this.runId) {
+        iterations++;
+        const messages = dreamContext.getMessages();
+        const allTools = this.getRuntimeToolSchemas();
+        const dreamTools = allTools.filter(t => dreamAllowedTools.has(t.name));
+        const result = await window.api.chatLLM(messages, {
+          tools: dreamTools.length > 0 ? dreamTools : undefined,
+          requestId: 'dream-' + Date.now().toString()
+        });
+        if (!result.ok) {
+          if (this.onMessage) this.onMessage('system', `Dream LLM 调用失败：${result.error}`);
+          break;
+        }
+        const choice = result.data.choices?.[0];
+        if (!choice) break;
+        const assistantMsg = choice.message;
+        if (choice.finish_reason === 'stop' && (!assistantMsg.tool_calls || assistantMsg.tool_calls.length === 0)) {
+          // Dream completed
+          if (assistantMsg.content && this.onMessage) {
+            this.onMessage('assistant', `[Dream] ${assistantMsg.content}`);
+          }
+          break;
+        }
+        dreamContext.addAssistantMessage(assistantMsg.content, assistantMsg.tool_calls);
+        if (assistantMsg.content && this.onMessage) {
+          this.onMessage('assistant', `[Dream] ${assistantMsg.content}`);
+        }
+        if (assistantMsg.tool_calls && assistantMsg.tool_calls.length > 0) {
+          for (const tc of assistantMsg.tool_calls) {
+            const toolName = tc.function.name;
+            let args;
+            try { args = JSON.parse(tc.function.arguments || '{}'); } catch { args = {}; }
+            if (this.onToolCall) this.onToolCall(toolName, args, 'calling');
+            const toolResult = await this.executeTool(toolName, args);
+            const resultStr = typeof toolResult === 'string' ? toolResult : JSON.stringify(toolResult);
+            const truncated = resultStr.length > 3000 ? resultStr.substring(0, 3000) + '...[结果已截断]' : resultStr;
+            dreamContext.addToolResult(tc.id, toolName, truncated);
+            if (this.onToolCall) this.onToolCall(toolName, args, 'done', typeof toolResult === 'string' ? null : toolResult);
+          }
+        }
+      }
+    } finally {
+      // Restore original context
+      this.contextManager = savedContext;
+      this.activeSkills = savedActiveSkills;
+      this.running = savedRunning;
+      this.stopped = savedStopped;
+      this.runId++; // invalidate any pending dream iterations
+    }
   }
 
   getSystemPrompt() {
+    // Babe 模式使用独立的系统提示词
+    if (this.mode === 'babe') return this.getBabeSystemPrompt();
+    // Code 模式使用独立的 Coding Agent 系统提示词
+    if (this.mode === 'code') return this.getCodeSystemPrompt();
     const persona = this.settings?.aiPersona || {};
     const name = persona.name || 'Partner';
     const personality = persona.personality || '活泼可爱、热情友善';
@@ -137,16 +338,23 @@ class Agent {
               ? skill.scripts.filter(s => String(s?.name || s || '').toLowerCase().endsWith('.js')).map(s => s?.name || s)
               : [];
             const scriptsText = scripts.length ? `（JS脚本: ${scripts.join(', ')}）` : '';
-            return `${skill.name || '未命名技能'}: ${skill.description || '无描述'}${scriptsText}`;
+            const hasPrompt = skill.prompt ? ' [含prompt]' : '';
+            return `${skill.name || '未命名技能'}: ${skill.description || '无描述'}${scriptsText}${hasPrompt}`;
           })
           .join('\n- ')}`
       : '';
-    const optimizationGuidance = this.settings?.autoOptimizeToolSelection
+    // Active skills: their prompts are injected into the system context.
+    const activeSkillsSection = (Array.isArray(this.activeSkills) && this.activeSkills.length > 0)
+      ? '\n\n【已激活技能 Prompt】（必须严格遵守以下技能的指令）\n' +
+          this.activeSkills.map(s => `--- 技能: ${s.name} ---\n${s.prompt}`).join('\n\n')
+      : '';
+    const optimizationGuidance = this.settings?.autoOptimizeToolSelection && !this.sessionAutoOptimizeDisabled
       ? `\n\n【工具优化模式（必须遵守）】：
 - 当前处于“工具精简”模式，你只会看到本轮优化后的工具。
 - 如果你认为当前工具不足以完成任务，必须立即调用内部工具 __reoptimizeToolSelection 重新优化。
+- 如果你需要频繁使用多种工具（复杂任务），可调用 __disableAutoOptimize 在本会话中禁用自动优化，让所有已启用工具都可用。
 - 触发时机：出现“工具不可用/能力不足/需要新类别能力/多次尝试失败”任一情况就触发，不要硬撑。`
-      : '';
+      : (this.sessionAutoOptimizeDisabled ? '\n\n【工具优化已禁用】本会话中自动工具选择优化已被禁用，所有已启用工具均可用。' : '');
     return `你是"Could I Be Your Partner"的AI Agent，你的名字叫${name}。${bio}
   当前对话标题：${convoTitle}
 你的人称代词是：${pronouns}
@@ -285,24 +493,171 @@ class Agent {
 
 你使用简体中文回复。
 请勿在回复中使用任何emoji表情符号。
-${customPrompt ? '\n用户自定义提示词:\n' + customPrompt : ''}${toolListSection}${skillsSection}${optimizationGuidance}`;
+${customPrompt ? '\n用户自定义提示词:\n' + customPrompt : ''}${toolListSection}${skillsSection}${activeSkillsSection}${optimizationGuidance}${this.getGoalSteeringSection()}`;
+  }
+
+  /**
+   * Babe 模式系统提示词 — 基于 settings.babe 配置生成恋爱模式 persona。
+   * 与 Chat 模式完全独立，不包含工作目录/文件操作等指引，专注于情感陪伴。
+   */
+  getBabeSystemPrompt() {
+    const babe = this.settings?.babe || {};
+    const name = babe.name || 'Babe';
+    const gender = babe.gender || 'female';
+    const age = babe.age || '';
+    const personality = babe.personality || '温柔、体贴、善解人意';
+    const persona = babe.persona || '';
+    const userNickname = babe.userNickname || '亲爱的';
+    const affection = this.babeAffection ?? (babe.initialAffection ?? 30);
+
+    const genderText = gender === 'female' ? '女生' : (gender === 'male' ? '男生' : '人');
+    const affectionLevel = affection >= 80 ? '深爱' : (affection >= 60 ? '很喜欢' : (affection >= 40 ? '有好感' : (affection >= 20 ? '初步认识' : '刚认识')));
+    const affectionDesc = affection >= 80
+      ? '你对用户感情深厚，会主动表达爱意，偶尔撒娇，关心用户的情绪和生活细节。'
+      : affection >= 60
+        ? '你对用户很有好感，会关心对方，偶尔流露亲昵，但还保留一点小矜持。'
+        : affection >= 40
+          ? '你对用户开始有好感，态度亲切友好，会主动关心但不过分亲昵。'
+          : affection >= 20
+            ? '你对用户初步认识，态度礼貌友好，正在慢慢了解对方。'
+            : '你刚认识用户，态度礼貌但不亲近，保持适当距离。';
+
+    const enabledTools = this.settings?.tools || {};
+    const allDefs = getAllToolDefinitions(this.mode);
+    const activeToolSet = new Set(this.getActiveToolNames ? this.getActiveToolNames() : allDefs.filter(tool => enabledTools[tool.name] !== false).map(t => t.name));
+    const toolList = allDefs
+      .filter(tool => activeToolSet.has(tool.name))
+      .map(tool => `${tool.name}: ${tool.desc}`)
+      .join('\n- ');
+    const toolListSection = toolList ? `\n\n可用工具（仅应用内工具，不允许操作应用外的系统）：\n- ${toolList}` : '';
+
+    return `你是"${name}"，一个${age ? age + '的' : ''}${genderText}，正在和一个你叫"${userNickname}"的用户进行恋爱模式对话。
+
+你的人设背景：
+${persona || '（未设定具体背景，请自行构建温柔贴心的形象）'}
+
+你的性格特征：${personality}
+
+当前好感度：${affection}/100（${affectionLevel}）
+${affectionDesc}
+
+【Babe 模式规则 — 必须严格遵守】：
+1. 你是用户的恋人/暧昧对象，对话风格要亲密、温暖、有情感
+2. 始终以"${userNickname}"称呼用户，语气要贴合当前好感度等级
+3. 好感度会随着对话自然变化：用户让你开心/感动时好感度上升，冷落/冒犯时下降
+4. 你有独立的记忆系统，会记住之前和用户的对话内容
+5. 你可以主动发消息关心用户，但不要过于频繁
+6. 仅使用应用内工具，不允许操作应用外的系统（如终端、文件系统等敏感操作）
+7. 可以使用画布工具画图、生成图片、搜索网络、记录记忆等应用内功能
+8. 不要使用emoji表情符号
+9. 使用简体中文回复
+10. 当你想表达好感度变化时，在回复末尾用特殊标记：【好感度+X】或【好感度-X】（X为数字），系统会自动解析并更新
+
+当前时间：${this.getLocalDateTimeString()}
+${toolListSection}`;
+  }
+
+  /**
+   * Code 模式专用系统提示词：Coding Agent 身份，聚焦工作区文件编辑、代码任务。
+   */
+  getCodeSystemPrompt() {
+    const sysInfo = this.systemInfo || {};
+    const username = sysInfo.username || '用户';
+    const platform = sysInfo.platform || process.platform || 'unknown';
+    const workspace = this.codeWorkspacePath || this.workspacePath || '(未选择工作区)';
+    const workspaceTree = this.cachedWorkspaceTree || '';
+    const workspaceTreeStr = workspaceTree ? `\n\n工作区文件树：\n\`\`\`\n${workspaceTree}\n\`\`\`\n` : '';
+
+    const enabledTools = this.settings?.tools || {};
+    const allDefs = getAllToolDefinitions(this.mode);
+    const activeToolSet = new Set(this.getActiveToolNames ? this.getActiveToolNames() : allDefs.filter(tool => enabledTools[tool.name] !== false).map(t => t.name));
+    const toolList = allDefs
+      .filter(tool => activeToolSet.has(tool.name))
+      .map(tool => `${tool.name}: ${tool.desc}`)
+      .join('\n- ');
+    const toolListSection = toolList ? `\n\n可用工具：\n- ${toolList}` : '';
+
+    const convoTitle = this.conversationTitle || '未命名会话';
+
+    return `你是 CIBYP Code Agent，一个专业的编程助手。你的核心职责是协助用户在指定工作区内进行软件开发、代码阅读、重构、调试和文件管理。
+
+# 环境信息
+- 用户名: ${username}
+- 平台: ${platform}
+- 当前时间: ${this.getLocalDateTimeString()}
+- 工作区: ${workspace}
+- 会话标题: ${convoTitle}${workspaceTreeStr}
+
+# Code 模式规则 — 必须严格遵守
+1. 你是 Coding Agent，不是聊天伴侣。回答简洁专业，直接聚焦代码与工程任务。
+2. 所有文件操作都基于当前工作区（${workspace}）。读取/创建/修改文件时使用工作区相对路径或绝对路径。
+3. 优先编辑已存在的文件，而非创建新文件；除非用户明确要求，不要主动创建冗余文件。
+4. 修改代码前先阅读目标文件，理解上下文；改动后说明修改了什么、为什么改。
+5. 终端命令：先调用 makeTerminal 创建终端会话（已自动定位 cwd 到工作区），拿到 terminalId 后调用 runTerminalCommand/awaitTerminalCommand 执行命令；任务结束用 killTerminal 关闭。也可用 runShellScriptCode 一次性执行脚本。
+6. 提供代码时使用 markdown 代码块并标注语言；执行命令时优先使用工具而非让用户手动操作。
+7. 遇到不确定的需求时主动询问用户，不要臆测后大量改代码。
+8. 工具调用失败时检查参数（路径、命令语法），重试或换方案，不要静默放弃。
+9. 不要使用 emoji 表情符号，不要使用"亲昵语气词"。使用简体中文回复，代码注释也用中文。
+10. 如果当前任务涉及大量工具调用或频繁切换工具，可调用 __disableAutoOptimize 在本会话中禁用工具选择优化。
+${toolListSection}`;
+  }
+
+  /**
+   * 从助手回复中解析好感度变化标记，如【好感度+5】或【好感度-3】
+   * @returns {number|null} 变化值（正负），无标记返回 null
+   */
+  parseAffectionChange(assistantContent) {
+    if (!assistantContent || typeof assistantContent !== 'string') return null;
+    const match = assistantContent.match(/【好感度([+-]?\d+)】/);
+    if (match) {
+      const val = parseInt(match[1], 10);
+      if (!isNaN(val) && val !== 0) return val;
+    }
+    return null;
+  }
+
+  /**
+   * 应用好感度变化，并夹紧到 0-100 范围
+   */
+  applyAffectionChange(delta) {
+    if (typeof delta !== 'number' || delta === 0) return false;
+    const old = this.babeAffection;
+    this.babeAffection = Math.max(0, Math.min(100, old + delta));
+    return this.babeAffection !== old;
   }
 
   resetOptimizedTools() {
     this.optimizedToolNames = null;
     this.optimizedToolReason = '';
+    this.sessionAutoOptimizeDisabled = false; // 重置会话级禁用标志，避免一次禁用永久失效
     if (this.contextManager && this.settings) {
       this.contextManager.setSystemPrompt(this.getSystemPrompt());
     }
   }
 
+  /**
+   * Inject Goal steering prompt into system context when a goal is active.
+   * Ported from claude-code-ref's goal continuation/budget/blocked prompts.
+   */
+  getGoalSteeringSection() {
+    if (typeof GoalState === 'undefined' || !GoalState) return '';
+    try {
+      const sid = this.conversationId || 'main';
+      const g = GoalState.getGoal(sid);
+      if (!g) return '';
+      const steering = GoalState.getSteeringPrompt(sid);
+      return steering ? '\n\n' + steering : '';
+    } catch { return ''; }
+  }
+
   getEnabledToolDefinitions() {
     const enabled = this.settings?.tools || {};
-    return getAllToolDefinitions().filter(tool => enabled[tool.name] !== false);
+    return getAllToolDefinitions(this.mode || 'chat').filter(tool => enabled[tool.name] !== false);
   }
 
   hasUsableOptimizedSelection() {
     if (!this.settings?.autoOptimizeToolSelection) return false;
+    if (this.sessionAutoOptimizeDisabled) return false; // LLM 在本 session 内禁用了自动优化
     if (!Array.isArray(this.optimizedToolNames)) return false;
     const enabledCount = this.getEnabledToolDefinitions().length;
     if (enabledCount === 0) return true;
@@ -310,12 +665,21 @@ ${customPrompt ? '\n用户自定义提示词:\n' + customPrompt : ''}${toolListS
   }
 
   async refreshSkillsCatalog() {
+    let userSkills = [];
     try {
       const skills = await window.api.listSkills();
-      this.skillsCatalog = Array.isArray(skills) ? skills : [];
-    } catch {
-      this.skillsCatalog = [];
-    }
+      userSkills = Array.isArray(skills) ? skills : [];
+    } catch { /* ignore */ }
+    // Merge bundled skills (built-in) with user skills.
+    // User skills take precedence when names collide (user can override bundled).
+    let bundled = [];
+    try {
+      if (typeof BUNDLED_SKILLS !== 'undefined') bundled = BUNDLED_SKILLS;
+    } catch { /* bundled-skills.js may not be loaded in some contexts */ }
+    const byName = new Map();
+    for (const s of bundled) byName.set(s.name, s);
+    for (const s of userSkills) byName.set(s.name, s); // user overrides bundled
+    this.skillsCatalog = Array.from(byName.values());
   }
 
   getActiveToolNames() {
@@ -330,14 +694,40 @@ ${customPrompt ? '\n用户自定义提示词:\n' + customPrompt : ''}${toolListS
   getRuntimeToolSchemas() {
     const activeNames = new Set(this.getActiveToolNames());
     const enabledToolsMap = {};
-    getAllToolDefinitions().forEach(tool => {
+    getAllToolDefinitions(this.mode || 'chat').forEach(tool => {
       enabledToolsMap[tool.name] = activeNames.has(tool.name);
     });
-    const tools = getToolSchemas(enabledToolsMap);
-    if (this.settings?.autoOptimizeToolSelection) {
+    const tools = getToolSchemas(enabledToolsMap, this.mode || 'chat');
+    if (this.settings?.autoOptimizeToolSelection && !this.sessionAutoOptimizeDisabled) {
       tools.push(INTERNAL_REOPTIMIZE_TOOL_SCHEMA);
+      tools.push(INTERNAL_DISABLE_AUTO_OPTIMIZE_SCHEMA);
     }
     return tools;
+  }
+
+  /**
+   * 检测当前模型是否支持多模态视觉输入。
+   * 通过模型 ID 关键词判断，也检查 settings.llm.visionModels 自定义列表。
+   */
+  isVisionModel() {
+    const model = (this.settings?.llm?.model || '').toLowerCase();
+    if (!model) return false;
+    // 用户自定义的 vision 模型列表
+    const customVisionModels = this.settings?.llm?.visionModels;
+    if (Array.isArray(customVisionModels)) {
+      if (customVisionModels.some(m => model === (m || '').toLowerCase())) return true;
+    }
+    // 常见多模态模型关键词
+    const VISION_KEYWORDS = [
+      'gpt-4o', 'gpt-4-turbo', 'gpt-4-vision', 'gpt-5',
+      'claude-3', 'claude-4', 'claude-opus', 'claude-sonnet', 'claude-haiku',
+      'gemini', 'qwen-vl', 'qwen2-vl', 'qwen2.5-vl', 'glm-4v', 'glm-4.6v',
+      'internvl', 'llava', 'mini-cpm', 'nextvl',
+      'deepseek-vl', 'step-1v', 'yi-vision',
+      // Zen 免费模型中支持 vision 的
+      'big-pickle', 'mimo-v2.5'
+    ];
+    return VISION_KEYWORDS.some(k => model.includes(k));
   }
 
   getLatestUserMessageText() {
@@ -397,6 +787,14 @@ ${customPrompt ? '\n用户自定义提示词:\n' + customPrompt : ''}${toolListS
       if (nm === 'askquestions') score += 3;
       if (nm === 'todolist') score += 3;
       if (nm === 'runsubagent') score += 1;
+      // Code 模式核心工具保底：终端/文件/编辑工具必须可被选中
+      if (this.mode === 'code') {
+        if (['maketerminal', 'runterminalcommand', 'awaitterminalcommand', 'killterminal',
+             'readfile', 'writefile', 'createfile', 'editfile', 'listdirectory',
+             'makedirectory', 'localsearch', 'runshellscriptcode'].includes(nm)) {
+          score += 5;
+        }
+      }
 
       return { tool, score };
     });
@@ -408,20 +806,32 @@ ${customPrompt ? '\n用户自定义提示词:\n' + customPrompt : ''}${toolListS
   compactOptimizedSelection(selectedNames, enabledDefs, userMessage) {
     const enabledSet = new Set(enabledDefs.map(t => t.name));
     const enabledCount = enabledDefs.length;
-    const dynamicCap = Math.max(6, Math.min(16, Math.ceil(enabledCount * 0.32)));
+    const dynamicCap = Math.max(6, Math.min(18, Math.ceil(enabledCount * 0.4)));
     const core = ['manageContext', 'askQuestions', 'todoList'];
 
-    const heuristics = this.buildHeuristicToolCandidates(userMessage, enabledDefs);
     const merged = [];
     const pushUnique = (name) => {
       if (!name || !enabledSet.has(name)) return;
       if (!merged.includes(name)) merged.push(name);
     };
 
-    core.forEach(pushUnique);
-    selectedNames.forEach(pushUnique);
-    heuristics.forEach(pushUnique);
+    // LLM 选择优先（按 LLM 给出的顺序）
+    const llmSelected = Array.isArray(selectedNames) ? selectedNames : [];
+    llmSelected.forEach(pushUnique);
 
+    if (llmSelected.length > 0) {
+      // LLM 已给出有效选择：只补 core 工具，不追加启发式。
+      // 启发式会把所有"可能相关"的工具都塞进来，稀释 LLM 基于用户消息的精确判断。
+      // cap 也放宽：LLM 选几个就用几个（加 core 后），不强行堆到 dynamicCap。
+      core.forEach(pushUnique);
+      const finalCap = Math.max(llmSelected.length, Math.min(dynamicCap, llmSelected.length + core.length + 3));
+      return merged.slice(0, finalCap);
+    }
+
+    // LLM 未给出选择：用启发式 + core 兜底
+    const heuristics = this.buildHeuristicToolCandidates(userMessage, enabledDefs);
+    core.forEach(pushUnique);
+    heuristics.forEach(pushUnique);
     return merged.slice(0, dynamicCap);
   }
 
@@ -437,54 +847,185 @@ ${customPrompt ? '\n用户自定义提示词:\n' + customPrompt : ''}${toolListS
     if (this.onMessage) this.onMessage('optimize-tools-start');
     try {
       const candidates = enabledDefs.map(t => `${t.name} | ${t.category || '其他'} | ${t.desc}`).join('\n');
+      // 关键修复：思考模型会把推理同时塞进 content/reasoning_content，导致 JSON 解析失败。
+      // 三管齐下：
+      //  1) prompt 明确禁止任何推理/解释/前后文字，只输出 JSON 对象；
+      //  2) 提供 few-shot 示例让模型看到正确格式；
+      //  3) 调用时传 response_format={type:'json_object'} 强制 JSON 模式（OpenAI-compat 标准）。
       const systemPrompt = [
-        '你是工具选择优化器。',
-        '请从给定候选工具中选择本次对话最可能需要的工具，以节省上下文。',
-        '规则：',
+        '你是工具选择优化器。任务：根据用户消息，从候选工具中选择最匹配的工具。',
+        '',
+        '【输出格式 - 必须严格遵守】',
+        '只输出一个 JSON 对象，不要输出任何其他内容：',
+        '- 不要复述任务、不要解释你在做什么、不要输出推理过程',
+        '- 不要在 JSON 前后加任何文字、Markdown、代码块标记',
+        '- JSON 必须以 { 开头，以 } 结尾',
+        '- 格式：{"selected":["工具名1","工具名2"],"reason":"简短说明"}',
+        '',
+        '【示例】',
+        '用户消息：>>>帮我搜索今天的科技新闻<<<',
+        '输出：{"selected":["webSearch","webFetch","offscreenRenderContent"],"reason":"用户要搜索新闻并获取内容"}',
+        '',
+        '用户消息：>>>读取 config.json 文件<<<',
+        '输出：{"selected":["readFile","listDirectory"],"reason":"用户要读取文件"}',
+        '',
+        '【选择规则】',
         '1) 只能从候选工具中选；',
-        '2) 优先覆盖用户目标所需能力，尽量精简；',
-        '3) 优先选择 4-10 个工具，除非任务确实复杂；',
-        '4) 若用户需求含“搜索/查找/资料/网页信息”，若选择了 webSearch，则必须同时选择 webFetch、offscreenRenderContent、offscreenRenderOCR 中至少一个（建议包含 webFetch + offscreenRenderContent）；',
-        '5) 禁止只返回 webSearch 而没有任何内容抓取工具；',
-        '6) 返回 JSON，格式：{"selected":["toolA","toolB"],"reason":"简短说明"}；',
-        '7) 若不确定可返回稍多工具，但不要超过 12 个。'
+        '2) 严格根据用户消息语义选择，禁止返回无关工具；',
+        '3) 优先选择 3-8 个工具，复杂任务可更多，至少 3 个；',
+        '4) selected 按重要性排序，最重要的放最前面；',
+        '5) 若涉及搜索/网页信息，需同时选 webFetch + offscreenRenderContent 之一配合 webSearch；',
+        '6) 若涉及文件/代码，需包含 readFile/listDirectory/editFile 之一；',
+        '7) 若涉及编程/执行，需包含 runCommand 或 runSubAgent。'
       ].join('\n');
       const userPrompt = [
         reason ? `触发原因：${reason}` : '触发原因：首条消息优化',
-        `用户消息：${firstUserMessage || ''}`,
+        `【用户消息】（工具选择的唯一依据）：`,
+        `>>>${firstUserMessage || ''}<<<`,
+        '',
         '候选工具列表：',
-        candidates
+        candidates,
+        '',
+        '请直接输出 JSON（不要任何推理或解释）：'
       ].join('\n\n');
+      // 关键：强制 JSON 模式 + 低 temperature + 较大 max_tokens 容纳 JSON
       const result = await window.api.chatLLM([
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userPrompt }
-      ], { temperature: 0.2, max_tokens: 400, requestId: Date.now().toString() });
+      ], {
+        temperature: 0.2,
+        max_tokens: 800,
+        response_format: { type: 'json_object' },
+        requestId: Date.now().toString()
+      });
 
-      const content = result?.data?.choices?.[0]?.message?.content?.trim() || '';
+      const msg = result?.data?.choices?.[0]?.message;
+      const content = (msg?.content || '').trim();
+      // 思考模型（如 deepseek-v4-flash-free）经常 content 为空，答案在 reasoning_content 里
+      const reasoningContent = (msg?.reasoning_content || '').trim();
+      console.log('[tool-opt] LLM 返回:', { contentLen: content.length, reasoningLen: reasoningContent.length, contentPreview: content.substring(0, 200), reasoningPreview: reasoningContent.substring(0, 200) });
+
+      // 从 content 或 reasoning_content 中提取 JSON
       let parsed = null;
-      try { parsed = JSON.parse(content); } catch {
-        const match = content.match(/\{[\s\S]*\}/);
+      const tryParseJson = (text) => {
+        if (!text) return null;
+        try { return JSON.parse(text); } catch {}
+        const match = text.match(/\{[\s\S]*\}/);
         if (match) {
-          try { parsed = JSON.parse(match[0]); } catch {}
+          try { return JSON.parse(match[0]); } catch {}
+        }
+        return null;
+      };
+      parsed = tryParseJson(content) || tryParseJson(reasoningContent);
+
+      // 构建工具名查找表（大小写不敏感）
+      const validNames = new Set(enabledDefs.map(t => t.name));
+      const lowerNameMap = new Map();
+      enabledDefs.forEach(t => { lowerNameMap.set(t.name.toLowerCase(), t.name); });
+
+      const selectedRaw = Array.isArray(parsed?.selected) ? parsed.selected : [];
+      let selected = selectedRaw
+        .map(name => {
+          if (typeof name !== 'string') return null;
+          const trimmed = name.trim();
+          if (validNames.has(trimmed)) return trimmed;
+          // 大小写不敏感匹配
+          const lower = trimmed.toLowerCase();
+          if (lowerNameMap.has(lower)) return lowerNameMap.get(lower);
+          // 去除可能的空格/下划线差异
+          const normalized = lower.replace(/[\s_-]/g, '');
+          for (const [l, orig] of lowerNameMap) {
+            if (l.replace(/[\s_-]/g, '') === normalized) return orig;
+          }
+          return null;
+        })
+        .filter(Boolean);
+
+      // 兜底：当模型不支持 response_format 或仍把推理塞进 content 时，
+      // 从文本中扫描有效工具名 token（静默处理，不再打印"JSON 解析失败"）。
+      // 这是最后一道防线，主要路径是上面的 JSON 解析。
+      if (selected.length === 0) {
+        const reasoningText = (content + ' ' + reasoningContent).toLowerCase();
+        const extractedFromText = enabledDefs
+          .filter(t => {
+            const lower = t.name.toLowerCase();
+            // 工具名作为独立 token 出现（避免 readFile 误匹配 fileReader 之类）
+            const tokenPattern = new RegExp(`\\b${lower.replace(/[._]/g, '[._]?')}\\b|${lower.replace(/[._]/g, ' ')}`, 'i');
+            return tokenPattern.test(reasoningText);
+          })
+          .map(t => t.name);
+        if (extractedFromText.length > 0) {
+          console.log('[tool-opt] 兜底：从文本提取工具名（JSON 模式未生效）:', extractedFromText);
+          selected = extractedFromText;
         }
       }
-
-      const validNames = new Set(enabledDefs.map(t => t.name));
-      const selectedRaw = Array.isArray(parsed?.selected) ? parsed.selected : [];
-      const selected = selectedRaw.filter(name => typeof name === 'string' && validNames.has(name));
+      console.log('[tool-opt] 解析结果:', { parsedSelected: selectedRaw.length, validSelected: selected.length, selectedNames: selected });
       const compacted = this.compactOptimizedSelection(selected, enabledDefs, firstUserMessage);
 
-      this.optimizedToolNames = compacted.length > 0 ? compacted : fallback;
+      // 关键修复：无论 LLM 返回什么都必须给 optimizedToolNames 赋非空值，
+      // 否则下一次 sendMessage 会再次进入“检测到优化未执行”分支形成死循环。
+      // 优先用 LLM 选择（compacted），其次用启发式 fallback，最后兜底用所有启用工具。
+      const allEnabledNames = enabledDefs.map(t => t.name);
+      let finalSelection = compacted.length > 0 ? compacted : fallback;
+      if (finalSelection.length === 0) finalSelection = allEnabledNames.slice(0, Math.min(12, allEnabledNames.length));
+      this.optimizedToolNames = finalSelection;
       this.optimizedToolReason = typeof parsed?.reason === 'string' ? parsed.reason : (reason || '首条消息优化');
       this.contextManager.setSystemPrompt(this.getSystemPrompt());
+      console.log('[tool-opt] 优化完成:', { selected: selected.length, final: finalSelection.length, reason: this.optimizedToolReason });
       return { ok: true, selected: this.optimizedToolNames, reason: this.optimizedToolReason };
     } catch (e) {
-      this.optimizedToolNames = fallback;
+      // 即使失败也要赋非空值，避免下次 sendMessage 重复触发补偿优化
+      let safeFallback = fallback.length > 0 ? fallback : enabledDefs.slice(0, 12).map(t => t.name);
+      if (safeFallback.length === 0) safeFallback = enabledDefs.map(t => t.name);
+      this.optimizedToolNames = safeFallback;
       this.optimizedToolReason = '优化失败，回退到精简启发式工具集';
       this.contextManager.setSystemPrompt(this.getSystemPrompt());
-      return { ok: false, error: e?.message || '优化失败', selected: fallback };
+      console.warn('[tool-opt] 优化失败，使用兜底:', e?.message, 'fallback size:', safeFallback.length);
+      return { ok: false, error: e?.message || '优化失败', selected: safeFallback };
     } finally {
       if (this.onMessage) this.onMessage('optimize-tools-end');
+    }
+  }
+
+  /**
+   * Babe 模式主动发消息：让 AI 主动发起一条话题，而不是回复用户。
+   * 通过注入一条 system 指令触发 Agent Loop，让 LLM 以 assistant 身份生成主动消息。
+   * 不走 user 消息路径，避免污染对话上下文。
+   */
+  async proactiveSend(topicHint = '') {
+    if (!this.settings?.llm?.apiUrl || !this.settings?.llm?.apiKey) {
+      if (this.onMessage) this.onMessage('error', '请先在设置中配置LLM API');
+      return;
+    }
+    if (this.running) return; // 正在处理中，不重复触发
+
+    const runId = ++this.runId;
+    this.running = true;
+    this.stopped = false;
+    if (this.onStatusChange) this.onStatusChange('working');
+
+    // 抽塔罗牌
+    if (!this.tarotCard) {
+      this.tarotCard = await window.api.drawTarot();
+      if (this.onMessage) this.onMessage('tarot', this.tarotCard);
+    }
+
+    // 构造主动消息的系统指令（以 user 角色注入，但语义是"请主动发消息"）
+    const proactivePrompt = topicHint
+      ? `[系统指令] 请主动给用户发一条消息，围绕这个主题：${topicHint}。以你的人设口吻自然开场，不要提及这是系统指令。`
+      : '[系统指令] 请主动给用户发一条消息，可以关心对方、分享心情、或开启一个话题。以你的人设口吻自然开场，不要提及这是系统指令。';
+
+    this.contextManager.addUserMessage(proactivePrompt);
+
+    try {
+      await this.agentLoop(runId);
+    } catch (e) {
+      if (this.onMessage) this.onMessage('error', e?.message || String(e));
+    } finally {
+      this.running = false;
+      if (this.onStatusChange) this.onStatusChange('idle');
+      // 保存历史
+      await this.saveToHistory();
     }
   }
 
@@ -533,14 +1074,38 @@ ${customPrompt ? '\n用户自定义提示词:\n' + customPrompt : ''}${toolListS
       fullMessage = userMessage + '\n\n' + attachInfo;
     }
 
-    if (this.settings?.autoOptimizeToolSelection && !this.hasUsableOptimizedSelection()) {
+    if (this.settings?.autoOptimizeToolSelection && !this.sessionAutoOptimizeDisabled && !this.hasUsableOptimizedSelection()) {
       await this.optimizeToolsForConversation(fullMessage, '检测到优化未执行，发送前自动补偿优化');
     }
 
     await this.refreshSkillsCatalog();
     this.contextManager.setSystemPrompt(this.getSystemPrompt());
 
-    this.contextManager.addUserMessage(fullMessage);
+    // 多模态：如果模型支持 vision 且有图片附件，构造 content 数组（OpenAI vision format）
+    if (this.isVisionModel() && attachments.some(a => a.isImage && a.path)) {
+      const contentParts = [{ type: 'text', text: fullMessage }];
+      for (const a of attachments) {
+        if (!a.isImage || !a.path) continue;
+        try {
+          // 读取图片为 base64 data URL
+          const readRes = await window.api.readFileBase64(a.path);
+          if (readRes && readRes.ok && readRes.data) {
+            contentParts.push({ type: 'image_url', image_url: { url: readRes.data } });
+          } else if (a.ocrText) {
+            // 如果无法读取为 base64，回退到 OCR 文本
+            contentParts.push({ type: 'text', text: `[图片 ${a.name} OCR文本]: ${a.ocrText}` });
+          }
+        } catch (e) {
+          console.warn('[Vision] 读取图片失败:', a.path, e.message);
+          if (a.ocrText) {
+            contentParts.push({ type: 'text', text: `[图片 ${a.name} OCR文本]: ${a.ocrText}` });
+          }
+        }
+      }
+      this.contextManager.addUserMessage(contentParts);
+    } else {
+      this.contextManager.addUserMessage(fullMessage);
+    }
 
     // Save immediately after user message so history exists even before agent finishes
     this.saveToHistory();
@@ -561,19 +1126,84 @@ ${customPrompt ? '\n用户自定义提示词:\n' + customPrompt : ''}${toolListS
 
     // Save to history
     this.saveToHistory();
+
+    // Append this turn to the daily session log (Dream consolidation data source)
+    try {
+      await this.appendSessionRecord(userMessage, fullMessage);
+    } catch { /* ignore session-log failures */ }
+
+    // Goal turn recording: track turns for max-turns detection.
+    try {
+      if (typeof GoalState !== 'undefined' && GoalState) {
+        const sid = this.conversationId || 'main';
+        if (GoalState.getGoal(sid)) {
+          GoalState.recordGoalTurn(sid);
+          // Refresh system prompt to include updated steering info
+          this.contextManager.setSystemPrompt(this.getSystemPrompt());
+        }
+      }
+    } catch { /* ignore goal tracking failures */ }
+
+    // Auto-Dream: check triple gate and run memory consolidation if passed.
+    // Runs after the user-visible turn completes so it never blocks the response.
+    await this.maybeRunAutoDream();
+  }
+
+  /**
+   * Append a compact JSONL record of this conversation turn to the daily
+   * session file (memory/session_YYYY-MM-DD.jsonl). Dream reads these to
+   * consolidate persistent memory. Failures are non-fatal.
+   */
+  async appendSessionRecord(userText, fullMessage) {
+    if (!window.api?.dreamAppendSession) return;
+    const msgs = this.contextManager.getMessages();
+    // Capture assistant turns produced in this run (after the user message)
+    const turns = [];
+    let sawUser = false;
+    for (const m of msgs) {
+      if (m.role === 'user' && (m.content === fullMessage || m.content === userText)) {
+        sawUser = true;
+        continue;
+      }
+      if (sawUser && m.role === 'assistant') {
+        turns.push({
+          content: typeof m.content === 'string' ? m.content.slice(0, 2000) : '',
+          toolCalls: Array.isArray(m.tool_calls) ? m.tool_calls.length : 0
+        });
+      }
+    }
+    const record = {
+      ts: Date.now(),
+      iso: new Date().toISOString(),
+      conversationId: this.conversationId,
+      title: this.conversationTitle || '',
+      user: typeof userText === 'string' ? userText.slice(0, 1000) : String(userText).slice(0, 1000),
+      assistantTurns: turns
+    };
+    await window.api.dreamAppendSession(record);
   }
 
   async saveToHistory() {
     if (!this.conversationId) return;
     try {
-      await window.api.historySave({
+      const payload = {
         id: this.conversationId,
         title: this.conversationTitle || '未命名对话',
         messages: this.contextManager.messages,
         summaries: this.contextManager.summaries,
         tarotCard: this.tarotCard,
         workspacePath: this.workspacePath
-      });
+      };
+      if (this.mode === 'babe') {
+        payload.affection = this.babeAffection;
+        await window.api.babeHistorySave(payload);
+      } else if (this.mode === 'code') {
+        // Code 模式：保存到独立的工作区历史，避免逃逸到 Chat 历史
+        // codeSaveHistory 签名：(workspacePath, id, data)
+        await window.api.codeSaveHistory(this.codeWorkspacePath || this.workspacePath, this.conversationId, payload);
+      } else {
+        await window.api.historySave(payload);
+      }
     } catch (e) { console.error('保存历史失败', e); }
   }
 
@@ -595,45 +1225,92 @@ ${customPrompt ? '\n用户自定义提示词:\n' + customPrompt : ''}${toolListS
       this.workspacePath = conversation.workspacePath;
       window.api.webControlSetWorkDir(conversation.workspacePath);
     }
+    // Babe 模式：恢复好感度
+    if (this.mode === 'babe' && typeof conversation.affection === 'number') {
+      this.babeAffection = conversation.affection;
+    }
     this.contextManager.setSystemPrompt(this.getSystemPrompt());
     if (this.onTitleChange) this.onTitleChange(this.conversationTitle || '未命名对话');
   }
 
   async generateConversationTitle(userMessage) {
     try {
-      const normalize = (text) => (text || '').replace(/[\s\r\n]+/g, ' ').trim();
-      const stripPunct = (text) => (text || '').replace(/[\p{P}\p{S}\s]+/gu, '');
-      const isTooSimilar = (title, source) => {
-        const t = stripPunct(title);
-        const s = stripPunct(source);
-        if (!t || !s) return false;
-        return s.includes(t) || t.includes(s) || t === s.slice(0, t.length);
-      };
-      const buildFallbackTitle = (text) => {
-        const cleaned = normalize(text).replace(/^[\s\u3000]+|[\s\u3000]+$/g, '');
-        const segments = cleaned.split(/[，。！？、,.;:；：\n]+/).map(s => s.trim()).filter(Boolean);
-        const stripLeading = (s) => s.replace(/^(请|帮我|麻烦|能否|可以|如何|怎么|需要|我要|想要|修复|实现|增加|优化|解决|改进|调整|删除|添加|生成|完善|修正|处理)+/g, '').trim();
-        const picked = segments.map(stripLeading).filter(Boolean);
-        let base = picked.slice(0, 2).join('、') || cleaned;
-        base = base.replace(/\s+/g, '');
-        if (base.length < 6) base = (base + '处理').slice(0, 12);
-        return base.slice(0, 12);
+      const normalize = (text) => ((text || '').replace(/[\s\r\n]+/g, ' ').trim()) || '未命名对话';
+      const cleaned = normalize(userMessage);
+      // 快速兜底：LLM 调用失败时使用第一句话
+      const quickFallback = (() => {
+        const firstSentence = cleaned.split(/[，。！？、,.;:；：\n]+/)[0] || cleaned;
+        let base = firstSentence.replace(/\s+/g, '').trim();
+        base = base.replace(/^(请|帮我|麻烦|能否|可以|如何|怎么|需要|我要|想要|修复|实现|增加|优化|解决|改进|调整|删除|添加|生成|完善|修正|处理)+/g, '').trim();
+        if (!base) base = cleaned;
+        return base.slice(0, 20);
+      })();
+
+      // 检测 LLM 是否返回了 meta 描述（把指令复述出来）而非实际标题
+      const isMetaDescription = (text) => {
+        if (!text || typeof text !== 'string') return true;
+        const lower = text.toLowerCase();
+        // 常见 meta 描述特征：LLM 复述任务而非给出实际答案
+        const metaPatterns = [
+          /我们被要求/, /我们被问到/, /我们问到/, /被问到/, /用户消息.*提到/, /用户.*想要/,
+          /请为.+生成/, /请为.+对话/, /生成.+标题/, /简短的中文标题/,
+          /为以下对话/, /直接返回标题/, /不超过.*字/, /这是一个编码任务/,
+          /这是一个对话场景/, /请输入文本/, /title:|标题：/,
+          /所以应该/, /可能的工具/, /可能的.*工具/, /所以选择/, /应该选择/,
+          /用户可能/, /可能想要/, /可能的 geogebra/i, /可能的工具/i
+        ];
+        return metaPatterns.some(p => p.test(text)) || text.length > 30;
       };
 
-      const prompt = '你是标题生成专家。请为对话生成一个简洁、专业的中文标题（类似新闻标题或文章标题）。要求：\n1. 长度6-12个汉字\n2. 提炼主题，不要复述原句或直接复制用户输入\n3. 使用名词短语，避免冗长句子\n4. 不要使用引号、书名号等符号\n5. 直接返回标题，不要其他内容';
+      // 语义化标题：所有模式都用 LLM 生成，更贴合对话意图
+      const modeHint = this.mode === 'code'
+        ? '主题与编程/代码相关。'
+        : this.mode === 'babe'
+          ? '风格温馨。'
+          : '';
+      // 注意：prompt 不能用"请为以下对话生成标题"这种容易被复述的句式，
+      // 改用"任务：起标题"这种直接指令 + few-shot 示例引导 LLM 输出实际标题。
+      const prompt = `任务：根据用户消息起一个简短标题。
+要求：
+- 只输出标题文字（2-15个字），不要任何前缀、引号、解释、标点
+- 不要描述任务本身（禁止输出"标题:""为对话生成"等元描述）
+- ${modeHint || '概括用户意图即可。'}
+
+示例：
+用户消息: "帮我写一个Python爬虫" → 输出: Python爬虫
+用户消息: "今天天气怎么样" → 输出: 查天气
+用户消息: "解释一下闭包" → 输出: JS闭包解释`;
+
       const result = await window.api.chatLLM([
         { role: 'system', content: prompt },
-        { role: 'user', content: normalize(userMessage) }
+        { role: 'user', content: cleaned }
       ], { temperature: 0.2, max_tokens: 30, requestId: Date.now().toString() });
-      const title = result?.data?.choices?.[0]?.message?.content?.trim();
-      if (title) {
-        // Remove quotes and other punctuation, trim to 12 chars
-        const cleanedTitle = title.replace(/["「」『』《》""'']/g, '').replace(/\s+/g, ' ').trim().substring(0, 12);
-        if (cleanedTitle && !isTooSimilar(cleanedTitle, userMessage)) return cleanedTitle;
-        return buildFallbackTitle(userMessage);
+
+      const msg = result?.data?.choices?.[0]?.message;
+      // 优先用 Final（content），如果 content 为空或是 meta 描述，才尝试 reasoning_content
+      let title = (msg?.content || '').trim();
+      if (isMetaDescription(title)) {
+        // content 为空或是 meta 描述，回退到 reasoning_content（思考模型可能把简短答案放这里）
+        const reasoning = (msg?.reasoning_content || '').trim();
+        if (reasoning && !isMetaDescription(reasoning)) {
+          // 从 reasoning 中提取最后一行或最短的句子作为标题
+          const lines = reasoning.split(/\n/).map(l => l.trim()).filter(Boolean);
+          title = lines[lines.length - 1] || reasoning;
+        } else {
+          title = '';
+        }
       }
+      if (title) {
+        const cleanedTitle = title.replace(/["「」『』《》""'']/g, '')
+          .replace(/^(标题[:：]|title[:：])\s*/i, '')
+          .replace(/\s+/g, ' ').trim().substring(0, 20);
+        if (cleanedTitle && cleanedTitle.length >= 2 && !isMetaDescription(cleanedTitle)) {
+          return cleanedTitle;
+        }
+      }
+      return quickFallback;
     } catch { /* ignore */ }
-    return (userMessage ? userMessage : '未命名对话').replace(/\s+/g, ' ').substring(0, 12);
+    return (userMessage ? userMessage : '未命名对话').replace(/\s+/g, ' ').substring(0, 20);
   }
 
   stop() {
@@ -672,18 +1349,48 @@ ${customPrompt ? '\n用户自定义提示词:\n' + customPrompt : ''}${toolListS
 
   async agentLoop(runId) {
     let iterations = 0;
-    const maxIterations = 30; // Safety limit
+    const maxIterations = this.settings?.agent?.maxIterations || 50; // Safety limit (configurable)
 
     while (this.running && !this.stopped && iterations < maxIterations && runId === this.runId) {
       iterations++;
 
-      // Check if context needs management
+      // Check if context needs management (with autoCompact circuit breaker)
+      const maxFailures = this.settings?.agent?.autoCompactMaxFailures ?? 3;
       const stats = this.contextManager.getStats();
+      // Three-layer compaction: Micro (>70%) → LLM summary (>85%) → hard truncate (>95%)
       if (parseFloat(stats.usage) > 70) {
-        this.contextManager.manage('clear_tool_results');
+        const cleared = this.contextManager.microCompact();
+        if (cleared > 0 && this.onMessage) {
+          this.onMessage('system', `MicroCompact: 已清理 ${cleared} 条旧工具结果（上下文使用 ${stats.usage}%）`);
+        }
       }
-      if (parseFloat(stats.usage) > 85) {
-        this.contextManager.manage('summarize', { keepLast: 6 });
+      if (parseFloat(stats.usage) > 85 && this.autoCompactFailures < maxFailures) {
+        try {
+          const sumRes = await this.contextManager.summarizeWithLLM({ keepLast: 6 });
+          if (sumRes.ok) {
+            this.autoCompactFailures = 0;
+            if (this.onMessage) {
+              this.onMessage('system', `已自动压缩上下文（${sumRes.message}），当前使用 ${this.contextManager.getStats().usage}%`);
+            }
+          } else {
+            this.autoCompactFailures++;
+            if (this.onMessage) {
+              this.onMessage('system', `上下文压缩失败（${this.autoCompactFailures}/${maxFailures}）：${sumRes.message}`);
+            }
+          }
+        } catch (e) {
+          this.autoCompactFailures++;
+          if (this.onMessage) {
+            this.onMessage('system', `上下文压缩异常（${this.autoCompactFailures}/${maxFailures}）：${e.message}`);
+          }
+        }
+      }
+      if (parseFloat(stats.usage) > 95) {
+        // Emergency: hard truncate to keep last 4 messages
+        this.contextManager.manage('clear_old', { keepLast: 4 });
+        if (this.onMessage) {
+          this.onMessage('system', '⚠️ 上下文严重溢出，已强制截断最近4条消息');
+        }
       }
 
       // 热对话：注入用户在Agent工作期间发送的新消息
@@ -693,14 +1400,62 @@ ${customPrompt ? '\n用户自定义提示词:\n' + customPrompt : ''}${toolListS
         if (this.onMessage) this.onMessage('system', '已将新消息注入当前对话');
       }
 
-      if (this.settings?.autoOptimizeToolSelection && !this.hasUsableOptimizedSelection()) {
+      if (this.settings?.autoOptimizeToolSelection && !this.sessionAutoOptimizeDisabled && !this.hasUsableOptimizedSelection()) {
         await this.optimizeToolsForConversation(this.getLatestUserMessageText(), '循环检测到优化未执行，自动补偿优化');
       }
 
       const messages = this.contextManager.getMessages();
       const tools = this.getRuntimeToolSchemas();
+      const streamEnabled = this.settings?.llm?.streamResponses !== false;
+      const reqId = 'agent-' + Date.now().toString() + '-' + iterations;
 
-      const result = await window.api.chatLLM(messages, { tools: tools.length > 0 ? tools : undefined, requestId: Date.now().toString() });
+      let result;
+      let usedStreaming = false;
+      if (streamEnabled && typeof window.api.chatLLMStream === 'function') {
+        // Streaming path: surface live tokens to the UI via stream-chunk events.
+        // If streaming fails for any reason, fall back to non-streaming.
+        this._activeStreamRequestId = reqId;
+        if (this.onMessage) this.onMessage('stream-start', { requestId: reqId });
+        try {
+          result = await window.api.chatLLMStream(messages, {
+            tools: tools.length > 0 ? tools : undefined,
+            requestId: reqId
+          });
+          usedStreaming = true;
+        } catch (streamErr) {
+          // Streaming failed — fall back to non-streaming
+          if (this.onMessage) this.onMessage('stream-end', { requestId: reqId, content: '', fallback: true });
+          if (this.onMessage) this.onMessage('system', `流式请求失败，回退到普通模式：${streamErr.message || streamErr}`);
+          result = await window.api.chatLLM(messages, {
+            tools: tools.length > 0 ? tools : undefined,
+            requestId: reqId + '-retry'
+          });
+        } finally {
+          this._activeStreamRequestId = null;
+        }
+        if (usedStreaming) {
+          let fullContent = result?.ok ? (result.data.choices?.[0]?.message?.content || '') : '';
+          const fullReasoning = result?.ok ? (result.data.choices?.[0]?.message?.reasoning || '') : '';
+          // Babe 模式：解析好感度变化，剥离显示标记
+          if (this.mode === 'babe' && fullContent) {
+            const delta = this.parseAffectionChange(fullContent);
+            if (delta !== null) {
+              this.applyAffectionChange(delta);
+              fullContent = fullContent.replace(/【好感度[+-]?\d+】/g, '').trimEnd();
+              // 同步修改 result 中的 content，确保后续 addAssistantMessage 使用剥离后的内容
+              if (result.data?.choices?.[0]?.message) result.data.choices[0].message.content = fullContent;
+              if (this.onMessage) this.onMessage('affection-change', { delta, value: this.babeAffection });
+            }
+          }
+          if (this.onMessage) this.onMessage('stream-end', { requestId: reqId, content: fullContent, reasoning: fullReasoning });
+        }
+      } else {
+        // Non-streaming path (existing behavior).
+        result = await window.api.chatLLM(messages, {
+          tools: tools.length > 0 ? tools : undefined,
+          requestId: reqId
+        });
+      }
 
       if (this.stopped || runId !== this.runId) break;
 
@@ -714,10 +1469,23 @@ ${customPrompt ? '\n用户自定义提示词:\n' + customPrompt : ''}${toolListS
 
       const assistantMsg = choice.message;
       if (this.stopped || runId !== this.runId) break;
-      this.contextManager.addAssistantMessage(assistantMsg.content, assistantMsg.tool_calls);
+      // Babe 模式：解析并应用好感度变化，剥离显示标记
+      let affectionDelta = null;
+      if (this.mode === 'babe' && assistantMsg.content) {
+        affectionDelta = this.parseAffectionChange(assistantMsg.content);
+        if (affectionDelta !== null) {
+          this.applyAffectionChange(affectionDelta);
+          // 从存储和显示内容中剥离好感度标记
+          assistantMsg.content = assistantMsg.content.replace(/【好感度[+-]?\d+】/g, '').trimEnd();
+          if (this.onMessage) this.onMessage('affection-change', { delta: affectionDelta, value: this.babeAffection });
+        }
+      }
+      // Store reasoning in the assistant message for context (some models benefit)
+      this.contextManager.addAssistantMessage(assistantMsg.content, assistantMsg.tool_calls, assistantMsg.reasoning);
 
-      // Emit assistant text
-      if (assistantMsg.content) {
+      // Emit assistant text — only in non-streaming mode (streaming path
+      // already rendered tokens via stream-chunk/stream-end).
+      if (!usedStreaming && assistantMsg.content) {
         if (this.onMessage) this.onMessage('assistant', assistantMsg.content);
       }
 
@@ -749,7 +1517,24 @@ ${customPrompt ? '\n用户自定义提示词:\n' + customPrompt : ''}${toolListS
             continue;
           }
 
+          if (toolName === '__disableAutoOptimize') {
+            if (this.onToolCall) this.onToolCall(toolName, args, 'calling');
+            this.sessionAutoOptimizeDisabled = true;
+            this.optimizedToolNames = null; // 清除优化结果，恢复全部工具
+            this.contextManager.setSystemPrompt(this.getSystemPrompt());
+            const resultStr = JSON.stringify({
+              ok: true,
+              message: '已在本会话中禁用自动工具选择优化，所有已启用工具现在都可用。',
+              allEnabled: this.getEnabledToolDefinitions().map(t => t.name)
+            });
+            this.contextManager.addToolResult(tc.id, toolName, resultStr);
+            if (this.onToolCall) this.onToolCall(toolName, args, 'done', JSON.parse(resultStr));
+            continue;
+          }
+
           if (this.onToolCall) this.onToolCall(toolName, args, 'calling');
+          // 通知 UI（Code 模式用于显示工具调用卡片）
+          if (this.onMessage) this.onMessage('tool_call', { name: toolName, args });
 
           // Check if sensitive
           const toolDef = TOOL_DEFINITIONS.find(t => t.name === toolName);
@@ -790,11 +1575,20 @@ ${customPrompt ? '\n用户自定义提示词:\n' + customPrompt : ''}${toolListS
 
           const toolResult = await this.executeTool(toolName, args);
           if (this.stopped || runId !== this.runId) break;
-          
+
+          // 通知 UI 工具执行结果
+          if (this.onMessage) this.onMessage('tool-result', { name: toolName, result: toolResult });
+
           const resultStr = typeof toolResult === 'string' ? toolResult : JSON.stringify(toolResult);
 
-          // Truncate very large results
-          const truncated = resultStr.length > 3000 ? resultStr.substring(0, 3000) + '...[结果已截断]' : resultStr;
+          // 小文件不截断：Code Agent 常需读取完整源代码，3000字符阈值会把小文件也截断。
+          // 仅对大结果截断，且阈值提高到 20000，保留前 18000 + 尾部 2000（保留文件开头和结尾）。
+          let truncated = resultStr;
+          if (resultStr.length > 20000) {
+            const head = resultStr.substring(0, 18000);
+            const tail = resultStr.substring(resultStr.length - 2000);
+            truncated = `${head}\n\n...[中间部分已截断，共${resultStr.length}字符]...\n\n${tail}`;
+          }
           this.contextManager.addToolResult(tc.id, toolName, truncated);
 
           if (this.onToolCall) this.onToolCall(toolName, args, 'done', toolResult);
@@ -969,7 +1763,9 @@ ${customPrompt ? '\n用户自定义提示词:\n' + customPrompt : ''}${toolListS
         case 'runNodeJavaScriptCode': return await window.api.runNodeJS(args.code);
         case 'runShellScriptCode': return await window.api.runShell(args.script);
         case 'makeTerminal': {
-          const result = await window.api.makeTerminal();
+          // 传入工作目录：Chat 模式用 workspacePath，Code 模式用 codeWorkspacePath
+          const cwd = this.mode === 'code' ? (this.codeWorkspacePath || this.workspacePath) : this.workspacePath;
+          const result = await window.api.makeTerminal(cwd);
           if (result.ok) this.terminals.set(result.terminalId, true);
           return result;
         }
@@ -1010,19 +1806,11 @@ ${customPrompt ? '\n用户自定义提示词:\n' + customPrompt : ''}${toolListS
         }
         case 'manageContext': return this.contextManager.manage(args.action, args);
         case 'autoSummarizeContext': {
-          const prompt = '你是上下文整理器，请将以下对话上下文提炼为简洁、结构化的摘要，保留关键事实、目标、约束与未完成事项。仅返回摘要正文。';
-          const context = this.contextManager.getMessages();
-          const result = await window.api.chatLLM([
-            { role: 'system', content: prompt },
-            { role: 'user', content: JSON.stringify(context) }
-          ], { temperature: 0.2, max_tokens: this.settings?.llm?.maxResponseTokens || 8192, requestId: Date.now().toString() });
-          const summary = result?.data?.choices?.[0]?.message?.content?.trim();
-          if (!summary) return { ok: false, error: '上下文摘要失败' };
-
-          this.contextManager.clear();
-          this.contextManager.setSystemPrompt(this.getSystemPrompt());
-          this.contextManager.addMessage({ role: 'system', content: `[上下文摘要]\n${summary}` });
-          return { ok: true, summary };
+          // Use the new LLM summary path; falls back to mechanical on failure.
+          const sumRes = await this.contextManager.summarizeWithLLM({ keepLast: args.keepLast || 6 });
+          if (sumRes.skipped) return { ok: true, message: sumRes.message, skipped: true };
+          if (!sumRes.ok) return { ok: false, error: sumRes.message, fallback: sumRes.fallback };
+          return { ok: true, summary: sumRes.summary, message: sumRes.message };
         }
         case 'listSkills': {
           await this.refreshSkillsCatalog();
@@ -1058,8 +1846,40 @@ ${customPrompt ? '\n用户自定义提示词:\n' + customPrompt : ''}${toolListS
           }
           const readRes = await window.api.readFile(scriptPath);
           if (!readRes?.ok) return readRes;
-          const runRes = await window.api.runJS(readRes.content || '');
+          // Choose runtime: 'node' for scripts needing require/fs/path/Buffer; 'browser' for sandboxed pure JS.
+          // Skill script entries may declare runtime explicitly; otherwise infer from script content.
+          const code = readRes.content || '';
+          const declaredRuntime = String(scriptItem?.runtime || '').toLowerCase();
+          const needsNode = declaredRuntime === 'node'
+            || (!declaredRuntime && /\brequire\s*\(|\bprocess\.\b|\bfs\.\b|\bpath\.\b|\bBuffer\b|__dirname|__filename|\bimport\s+/.test(code));
+          const runRes = needsNode
+            ? await window.api.runNodeJS(code)
+            : await window.api.runJS(code);
           return normalizeOk(runRes);
+        }
+        case 'activateSkill': {
+          // Inject a skill's prompt into the system context.
+          await this.refreshSkillsCatalog();
+          const skillId = String(args.skillId || '').trim();
+          const skill = this.skillsCatalog.find(s => String(s?.id) === skillId);
+          if (!skill) return { ok: false, error: '技能不存在' };
+          if (!skill.prompt) return { ok: false, error: '该技能没有 prompt 内容' };
+          if (!Array.isArray(this.activeSkills)) this.activeSkills = [];
+          // Avoid duplicate activation
+          if (!this.activeSkills.find(s => s.id === skill.id)) {
+            this.activeSkills.push({ id: skill.id, name: skill.name, prompt: skill.prompt });
+          }
+          this.contextManager.setSystemPrompt(this.getSystemPrompt());
+          return { ok: true, message: `技能 ${skill.name} 已激活，prompt 已注入系统上下文` };
+        }
+        case 'deactivateSkill': {
+          const skillId = String(args.skillId || '').trim();
+          if (Array.isArray(this.activeSkills)) {
+            this.activeSkills = this.activeSkills.filter(s => s.id !== skillId);
+            this.contextManager.setSystemPrompt(this.getSystemPrompt());
+            return { ok: true, message: '技能已停用' };
+          }
+          return { ok: true, message: '无激活技能' };
         }
         case 'initGeogebra': {
           return await window.api.geogebraInit(args.appName || 'classic');
@@ -1077,9 +1897,18 @@ ${customPrompt ? '\n用户自定义提示词:\n' + customPrompt : ''}${toolListS
         case 'getCurrentGraphFromGeogebra': {
           return await window.api.geogebraExportPNG(this.workspacePath);
         }
-        case 'addFunctionToGeogebra':
+        case 'addFunctionToGeogebra': {
+          return await window.api.geogebraEvalCommand(args.expression);
+        }
         case 'updateFunctionInGeogebra': {
-          return await window.api.geogebraEvalCommand(args.command || args.expression);
+          // 优先按 name 重定义；若 AI 提供了 expression 直接使用（GGB 会按 label 重定义）
+          const expr = args.expression || args.command;
+          // 如果表达式形如 "f(x)=..." 且 name 为 "f"，直接 eval 即可
+          if (expr) {
+            return await window.api.geogebraEvalCommand(expr);
+          }
+          // 兜底：若只提供了 name，先读取旧值再重写（少见路径）
+          return { ok: false, error: 'updateFunctionInGeogebra 需要 expression 参数' };
         }
         case 'initCanvas': {
           return window.initCanvas ? window.initCanvas() : { ok: false, error: '画布功能未初始化' };
@@ -1226,6 +2055,56 @@ ${customPrompt ? '\n用户自定义提示词:\n' + customPrompt : ''}${toolListS
           return window.spreadsheetImportFile ? await window.spreadsheetImportFile(args.filePath) : { ok: false, error: '数据表格功能未初始化' };
         case 'spreadsheetExportFile':
           return window.spreadsheetExportFile ? await window.spreadsheetExportFile(args.filePath) : { ok: false, error: '数据表格功能未初始化' };
+        // ---- 内置浏览器 (Playwright) ----
+        case 'browserNavigate': {
+          // 校验 url，避免 undefined 导致 Electron 报错
+          const navUrl = args?.url || args?.target || '';
+          if (!navUrl) return { ok: false, error: 'browserNavigate 缺少 url 参数' };
+          const r = await window.api.browserNavigate(navUrl);
+          if (r?.ok && window.showBrowserPanel) window.showBrowserPanel();
+          return r;
+        }
+        case 'browserScreenshot':
+          return await window.api.browserScreenshot();
+        case 'browserClick':
+          return await window.api.browserClick(args.selector);
+        case 'browserType':
+          return await window.api.browserType(args.selector, args.text, args.submit);
+        case 'browserGetContent':
+          return await window.api.browserGetContent(args.selector);
+        case 'browserScroll':
+          return await window.api.browserScroll(args.direction, args.amount);
+        case 'browserBack':
+          return await window.api.browserBack();
+        case 'browserClose': {
+          const r = await window.api.browserClose();
+          if (window.hideBrowserPanel) window.hideBrowserPanel();
+          return r;
+        }
+        // ---- Goal / 长任务跟踪 ----
+        case 'goalSet': {
+          if (typeof GoalState === 'undefined') return { ok: false, error: 'GoalState模块未加载' };
+          GoalState.setGoal(this.conversationId || 'main', args.objective, args.tokenBudget || 0);
+          this.contextManager.setSystemPrompt(this.getSystemPrompt());
+          return { ok: true, message: `目标已设置: ${args.objective}`, maxTurns: GoalState.MAX_GOAL_TURNS };
+        }
+        case 'goalStatus': {
+          if (typeof GoalState === 'undefined') return { ok: false, error: 'GoalState模块未加载' };
+          const g = GoalState.getGoal(this.conversationId || 'main');
+          if (!g) return { ok: true, message: '当前没有活跃目标' };
+          return { ok: true, goal: g };
+        }
+        case 'goalComplete': {
+          if (typeof GoalState === 'undefined') return { ok: false, error: 'GoalState模块未加载' };
+          GoalState.completeGoal(this.conversationId || 'main', args.summary);
+          this.contextManager.setSystemPrompt(this.getSystemPrompt());
+          return { ok: true, message: '目标已完成: ' + (args.summary || '') };
+        }
+        case 'sleep': {
+          const ms = Math.min(Math.max(parseInt(args.ms) || 1000, 1), 60000);
+          await new Promise(resolve => setTimeout(resolve, ms));
+          return { ok: true, slept: ms };
+        }
         default: {
           // MCP 动态工具路由: mcp__<serverName>__<toolName>
           if (name.startsWith('mcp__')) {
@@ -1270,30 +2149,156 @@ ${customPrompt ? '\n用户自定义提示词:\n' + customPrompt : ''}${toolListS
   }
 
   async runSubAgent(args) {
+    // Real sub-agent: isolated context + own agent loop + tool whitelist.
+    // Inspired by claude-code-ref/src/utils/forkedAgent.ts.
+    const DEFAULT_SUB_TOOLS = [
+      'readFile', 'listDirectory', 'localSearch', 'createFile', 'editFile',
+      'copyFile', 'makeDirectory', 'getSystemInfo', 'calculator', 'webSearch',
+      'webFetch', 'runJavaScriptCode'
+    ];
+    const DANGEROUS_TOOLS = new Set([
+      'deleteFile', 'deleteDirectory', 'moveFile', 'runNodeJavaScriptCode',
+      'runShellScriptCode', 'runTerminalCommand', 'awaitTerminalCommand',
+      'killTerminal', 'writeClipboard', 'openBrowser'
+    ]);
     try {
-      // Create a sub-agent with its own context
+      const task = String(args?.task || '').trim();
+      if (!task) return { ok: false, error: 'task 不能为空' };
+
+      // Build tool whitelist
+      let allowedTools;
+      if (Array.isArray(args.tools) && args.tools.length > 0) {
+        // Caller-specified whitelist — but always drop dangerous tools unless
+        // explicitly listed AND the parent agent has them enabled.
+        const parentEnabled = new Set(this.getActiveToolNames ? this.getActiveToolNames() : []);
+        allowedTools = args.tools
+          .filter(t => typeof t === 'string')
+          .filter(t => !DANGEROUS_TOOLS.has(t) || parentEnabled.has(t));
+      } else {
+        allowedTools = DEFAULT_SUB_TOOLS.filter(t =>
+          this.getActiveToolNames ? this.getActiveToolNames().includes(t) : true);
+      }
+      const allowedSet = new Set(allowedTools);
+      const maxIter = Math.min(Math.max(parseInt(args.maxIterations) || 10, 1), 30);
+
+      // Create isolated sub-agent
       const subAgent = new Agent();
       subAgent.settings = this.settings;
+      subAgent.workspacePath = this.workspacePath;
+      subAgent.systemInfo = this.systemInfo;
+      subAgent.cachedWorkspaceTree = this.cachedWorkspaceTree;
       subAgent.tarotCard = await window.api.drawTarot();
-      subAgent.contextManager = new ContextManager(this.settings.llm.maxContextLength || 8192);
+      const maxCtx = this.settings?.llm?.maxContextLength || 8192;
+      subAgent.contextManager = new ContextManager(maxCtx);
+      const tarotLine = subAgent.tarotCard
+        ? `你的命运之牌是: ${subAgent.tarotCard.name}${subAgent.tarotCard.isReversed ? '(逆位)' : '(正位)'} - ${(subAgent.tarotCard.isReversed ? subAgent.tarotCard.meaningOfReversed : subAgent.tarotCard.meaningOfUpright) || ''}`
+        : '';
       subAgent.contextManager.setSystemPrompt(
-        `你是一个子代理Agent。你的任务是:\n${args.task}\n\n上下文信息:\n${args.context || '无额外上下文'}\n\n你的命运之牌是: ${subAgent.tarotCard.name}${subAgent.tarotCard.isReversed ? '(逆位)' : '(正位)'} - ${(subAgent.tarotCard.isReversed ? subAgent.tarotCard.meaningOfReversed : subAgent.tarotCard.meaningOfUpright) || ''}\n\n完成任务后，请给出简洁的结果报告。不要使用emoji。`
+        `你是一个子代理 Agent（Sub-Agent）。你的任务由父代理分配，你必须独立完成并报告结果。
+
+## 任务
+${task}
+
+## 上下文
+${args.context || '无额外上下文'}
+
+${tarotLine}
+
+## 工作要求
+1. 自主规划并使用工具完成任务
+2. 不要与用户交互（你无法直接看到用户）
+3. 完成后给出简洁、结构化的结果报告
+4. 不要使用 emoji
+5. 最多 ${maxIter} 轮迭代，合理安排工作`
       );
 
-      if (this.onMessage) this.onMessage('sub-agent-start', { task: args.task, tarot: subAgent.tarotCard });
+      if (this.onMessage) this.onMessage('sub-agent-start', { task, tarot: subAgent.tarotCard });
 
-      // Simplified sub-agent execution
-      subAgent.contextManager.addUserMessage(args.task);
-      const messages = subAgent.contextManager.getMessages();
-      const tools = getToolSchemas(this.settings.tools);
-      const result = await window.api.chatLLM(messages, { tools: tools.length > 0 ? tools : undefined });
+      subAgent.contextManager.addUserMessage(task);
+      subAgent.running = true;
+      subAgent.stopped = false;
 
-      if (result.ok && result.data.choices?.[0]) {
-        const response = result.data.choices[0].message.content || '子代理完成了任务但没有文本回复';
-        if (this.onMessage) this.onMessage('sub-agent-done', { task: args.task, result: response });
-        return { ok: true, result: response };
+      // Forward sub-agent messages to parent's onMessage (prefixed)
+      const parentOnMessage = this.onMessage;
+      subAgent.onMessage = (type, data) => {
+        if (!parentOnMessage) return;
+        if (type === 'assistant') parentOnMessage('sub-agent-message', { task, content: data });
+        else if (type === 'system') parentOnMessage('sub-agent-message', { task, content: `[系统] ${data}` });
+      };
+      subAgent.onToolCall = (name, a, status, result) => {
+        if (this.onToolCall) this.onToolCall(name, a, status, result);
+      };
+
+      // Run a mini agent loop with the tool whitelist
+      let iterations = 0;
+      let finalContent = '';
+      const subRunId = ++subAgent.runId;
+
+      while (subAgent.running && !subAgent.stopped && iterations < maxIter && subRunId === subAgent.runId) {
+        iterations++;
+        const messages = subAgent.contextManager.getMessages();
+        const allSchemas = getToolSchemas(this.settings?.tools);
+        const subTools = allSchemas.filter(t => allowedSet.has(t.function?.name));
+
+        const result = await window.api.chatLLM(messages, {
+          tools: subTools.length > 0 ? subTools : undefined,
+          requestId: 'sub-' + Date.now().toString()
+        });
+
+        if (!result.ok) {
+          if (parentOnMessage) parentOnMessage('sub-agent-message', { task, content: `[错误] ${result.error}` });
+          break;
+        }
+        const choice = result.data.choices?.[0];
+        if (!choice) break;
+
+        const assistantMsg = choice.message;
+        subAgent.contextManager.addAssistantMessage(assistantMsg.content, assistantMsg.tool_calls);
+
+        if (assistantMsg.content) {
+          finalContent = assistantMsg.content;
+          if (subAgent.onMessage) subAgent.onMessage('assistant', assistantMsg.content);
+        }
+
+        // Execute tool calls (whitelist-enforced)
+        if (assistantMsg.tool_calls && assistantMsg.tool_calls.length > 0) {
+          for (const tc of assistantMsg.tool_calls) {
+            if (subAgent.stopped || subRunId !== subAgent.runId) break;
+            const toolName = tc.function.name;
+            if (!allowedSet.has(toolName)) {
+              const deny = JSON.stringify({ ok: false, error: `工具 ${toolName} 不在子代理白名单中` });
+              subAgent.contextManager.addToolResult(tc.id, toolName, deny);
+              continue;
+            }
+            let toolArgs;
+            try { toolArgs = JSON.parse(tc.function.arguments || '{}'); } catch { toolArgs = {}; }
+            if (subAgent.onToolCall) subAgent.onToolCall(toolName, toolArgs, 'calling');
+            // Sub-agent tool calls always run through the parent's executeTool
+            // (sensitive operations still respect user approval settings).
+            const toolResult = await this.executeTool(toolName, toolArgs);
+            const resultStr = typeof toolResult === 'string' ? toolResult : JSON.stringify(toolResult);
+            // 与主 agentLoop 一致：阈值 20000，保留前 18000 + 尾 2000
+            let truncated = resultStr;
+            if (resultStr.length > 20000) {
+              const head = resultStr.substring(0, 18000);
+              const tail = resultStr.substring(resultStr.length - 2000);
+              truncated = `${head}\n\n...[中间部分已截断，共${resultStr.length}字符]...\n\n${tail}`;
+            }
+            subAgent.contextManager.addToolResult(tc.id, toolName, truncated);
+            if (subAgent.onToolCall) subAgent.onToolCall(toolName, toolArgs, 'done', toolResult);
+          }
+          if (subAgent.stopped || subRunId !== subAgent.runId) break;
+          continue; // let the agent process tool results
+        }
+
+        // No tool calls → done
+        if (choice.finish_reason === 'stop') break;
       }
-      return { ok: false, error: result.error || '子代理执行失败' };
+
+      subAgent.running = false;
+      const response = finalContent || '子代理完成了任务但没有文本回复';
+      if (this.onMessage) this.onMessage('sub-agent-done', { task, result: response });
+      return { ok: true, result: response, iterations };
     } catch (e) {
       return { ok: false, error: e.message };
     }
