@@ -170,6 +170,7 @@ contextBridge.exposeInMainWorld('api', {
   // Paths
   getPath: (name) => ipcRenderer.invoke('app:getPath', name),
   getAppVersion: () => ipcRenderer.invoke('app:getVersion'),
+  platform: process.platform,
 
   // Dialog
   confirmSensitive: (msg) => ipcRenderer.invoke('dialog:confirm', msg),

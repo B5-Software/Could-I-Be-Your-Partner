@@ -129,9 +129,19 @@
   let currentAttachments = [];
 
   // ---- Window Controls ----
-  document.getElementById('btn-minimize')?.addEventListener('click', () => window.api.windowMinimize());
-  document.getElementById('btn-maximize')?.addEventListener('click', () => window.api.windowMaximize());
-  document.getElementById('btn-close')?.addEventListener('click', () => window.api.windowClose());
+  // macOS 使用系统红绿灯按钮，隐藏自定义窗口控制按钮
+  const isMac = window.api.platform === 'darwin';
+  const titlebarEl = document.getElementById('titlebar');
+  if (isMac) {
+    titlebarEl?.classList.add('platform-darwin');
+    document.getElementById('btn-minimize')?.classList.add('hidden');
+    document.getElementById('btn-maximize')?.classList.add('hidden');
+    document.getElementById('btn-close')?.classList.add('hidden');
+  } else {
+    document.getElementById('btn-minimize')?.addEventListener('click', () => window.api.windowMinimize());
+    document.getElementById('btn-maximize')?.addEventListener('click', () => window.api.windowMaximize());
+    document.getElementById('btn-close')?.addEventListener('click', () => window.api.windowClose());
+  }
 
   // ---- Title Editing ----
   const titlebarTitle = document.getElementById('titlebar-title');
@@ -690,11 +700,11 @@
     document.getElementById('ob-llm-url').value = s.llm?.apiUrl || '';
     document.getElementById('ob-llm-key').value = s.llm?.apiKey || '';
     updateObProviderFields(provider);
+    // 先显示第一步，避免模型加载慢时向导空白（按钮点击无反馈的假象）
+    showOnboardingStep(1);
     await refreshObModels();
     // 默认选 DeepSeek 模型
     autoSelectDeepSeek();
-    // 启动步骤向导，从第一步开始
-    showOnboardingStep(1);
   }
   // ---- 步骤向导导航 ----
   const ONBOARDING_TOTAL_STEPS = 3;
@@ -1462,7 +1472,7 @@
   function updateContextProgress() {
     updateAgentContextProgress(agent, 'context-progress-fill', 'context-progress-text');
     // Code / Babe 圆扇形：agent 已初始化时用其 contextManager，否则回退到已加载的 settings 值
-    const sharedMaxCtx = agent?.settings?.llm?.maxContextLength || 8192;
+    const sharedMaxCtx = agent?.settings?.llm?.maxContextLength || 131072;
     try {
       if (codeAgent) {
         updateAgentContextProgress(codeAgent, 'code-context-progress-fill', 'code-context-progress-text');
@@ -6491,8 +6501,8 @@
       codeAgent.settings.tools = {};
     }
     codeAgent.systemInfo = await window.api.getFullSystemInfo();
-    codeAgent.contextManager = new ContextManager(codeAgent.settings.llm?.maxContextLength || 8192);
-    codeAgent.contextManager.setMaxTokens(codeAgent.settings.llm?.maxContextLength || 8192);
+    codeAgent.contextManager = new ContextManager(codeAgent.settings.llm?.maxContextLength || 131072);
+    codeAgent.contextManager.setMaxTokens(codeAgent.settings.llm?.maxContextLength || 131072);
     codeAgent.conversationId = Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
     await codeAgent.refreshSkillsCatalog();
     codeAgent.contextManager.setSystemPrompt(codeAgent.getSystemPrompt());
@@ -7057,7 +7067,7 @@
         babeAgent.settings.tools = {};
       }
       babeAgent.systemInfo = await window.api.getFullSystemInfo();
-      const maxCtx = babeAgent.settings.llm?.maxContextLength || 8192;
+      const maxCtx = babeAgent.settings.llm?.maxContextLength || 131072;
       babeAgent.contextManager = new ContextManager(maxCtx);
       babeAgent.contextManager.setMaxTokens(maxCtx);
       babeAgent.conversationId = Date.now().toString(36) + Math.random().toString(36).slice(2, 7);

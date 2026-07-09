@@ -153,7 +153,7 @@ class WebControlService {
     // Auth middleware
     const requireAuth = (req, res, next) => {
       if (req.session?.authenticated) return next();
-      if (req.path === '/api/login' || req.path === '/login' || req.path === '/' ||
+      if (req.path === '/api/login' || req.path === '/login' || req.path === '/' || req.path === '/ws' ||
           req.path.startsWith('/static') || req.path.startsWith('/css') ||
           req.path.startsWith('/assets') || req.path.startsWith('/node_modules/katex/dist')) return next();
       res.status(401).json({ ok: false, error: '未登录' });
@@ -538,18 +538,20 @@ class WebControlService {
       case 'auth': {
         if (ws._authenticated) return;
         const { password, totpCode } = msg;
-        if (!password) { try { ws.close(4003, '缺少密码'); } catch {} return; }
+        // 认证失败：先发 auth_fail 让客户端清旧凭据/显示错误，再关闭连接
+        const fail = (err) => { try { ws.send(JSON.stringify({ type: 'auth_fail', error: err })); } catch {} try { ws.close(4003, err); } catch {} };
+        if (!password) { fail('缺少密码'); return; }
         bcrypt.compare(password, this.config.passwordHash).then((ok) => {
-          if (!ok) { try { ws.close(4003, '密码错误'); } catch {} return; }
+          if (!ok) { fail('密码错误'); return; }
           if (this.config.enable2FA) {
             if (!totpCode || !this.verifyTOTP(totpCode)) {
-              try { ws.close(4003, '2FA验证码错误'); } catch {} return;
+              fail('2FA验证码错误'); return;
             }
           }
           ws._authenticated = true;
           if (ws._authTimer) { clearTimeout(ws._authTimer); ws._authTimer = null; }
           this._attachWsClient(ws);
-        }).catch(() => { try { ws.close(4003, '认证失败'); } catch {} });
+        }).catch(() => { fail('认证失败'); });
         return;
       }
       case 'sendMessage':
@@ -668,26 +670,32 @@ html,body{height:100%;overflow:hidden;font-family:-apple-system,BlinkMacSystemFo
 
   function connect(){
     var proto=location.protocol==='https:'?'wss:':'ws:';
-    ws=new WebSocket(proto+'//'+location.host+'/ws');
-    ws.onopen=function(){
+    var sock=new WebSocket(proto+'//'+location.host+'/ws');
+    ws=sock;
+    sock.onopen=function(){
       var c=getStoredCreds();
       if(c&&c.password){
-        ws.send(JSON.stringify({type:'auth',password:c.password,totpCode:c.totpCode||''}));
+        sock.send(JSON.stringify({type:'auth',password:c.password,totpCode:c.totpCode||''}));
       }else{
         showLogin();
       }
     };
-    ws.onmessage=function(ev){
+    sock.onmessage=function(ev){
       var msg;try{msg=JSON.parse(ev.data);}catch(e){return;}
       handle(msg);
     };
-    ws.onclose=function(){
+    sock.onclose=function(){
+      if(ws!==sock)return; // 旧连接关闭，不覆盖新连接
       ws=null;
-      if(!authenticated)showLogin();
+      if(!authenticated){
+        // 清除旧凭据，防止 onopen 用错误凭据自动重连形成死循环
+        sessionStorage.removeItem('cibyp_creds');
+        showLogin();
+      }
       if(reconnectTimer)clearTimeout(reconnectTimer);
       reconnectTimer=setTimeout(connect,2000);
     };
-    ws.onerror=function(){};
+    sock.onerror=function(){};
   }
 
   function showLogin(){
@@ -701,6 +709,8 @@ html,body{height:100%;overflow:hidden;font-family:-apple-system,BlinkMacSystemFo
     var totp=document.getElementById('login-totp').value;
     if(!pw){loginErr.textContent='请输入密码';loginErr.style.display='block';return;}
     loginErr.style.display='none';
+    // 清除旧凭据，防止 onopen 用错误凭据自动重连与手动登录竞态
+    sessionStorage.removeItem('cibyp_creds');
     if(!ws||ws.readyState!==1)connect();
     function tryAuth(){
       if(ws&&ws.readyState===1){

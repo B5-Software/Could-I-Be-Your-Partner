@@ -22,6 +22,9 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
+}
+
+.titlebar {
   height: 32px;
   background: var(--bg-secondary);
   border-bottom: 1px solid var(--border);
@@ -30,6 +33,15 @@ body {
   flex-shrink: 0;
   z-index: 100;
   position: relative;
+}
+
+/* macOS 红绿灯按钮留出左侧空间（#titlebar 元素无 .titlebar 类，用 ID 选择器） */
+#titlebar.platform-darwin .titlebar-drag {
+  padding-left: 80px;
+}
+/* macOS 使用系统红绿灯，隐藏自定义窗口控制按钮（兜底 JS 隐藏） */
+#titlebar.platform-darwin .titlebar-btn {
+  display: none !important;
 }
 
 .titlebar-drag {

@@ -1260,7 +1260,7 @@ let settings = loadJSON(settingsPath, {
     apiKey: '',
     model: '',
     temperature: 0.7,
-    maxContextLength: 8192,
+    maxContextLength: 131072,
     maxResponseTokens: 8192,
     dailyMaxTokens: 0,
     dailyTokensUsed: 0,
@@ -1322,7 +1322,7 @@ function createWindow() {
     width: 1200, height: 800, minWidth: 800, minHeight: 600,
     title: 'Could I Be Your Partner',
     frame: false,
-    titleBarStyle: 'hidden',
+    titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'hidden',
     icon: path.join(__dirname, '../../assets/icons/icon.png'),
     webPreferences: {
       preload: path.join(__dirname, '../preload/preload.js'),
