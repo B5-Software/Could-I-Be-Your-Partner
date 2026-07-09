@@ -120,6 +120,118 @@
   // Streaming message bubbles: requestId → { el, contentEl, rawContent, renderTimer, shown }
   const streamingBubbles = new Map();
 
+  // ---- WebUI 事件驱动镜像控制器 ----
+  // 不再使用 MutationObserver 全量推送（导致死循环刷新 + 输入框被打断）。
+  // 改为：WS 连接时推送完整 mirror_head + mirror_body 快照（界面与 Local 一致），
+  // 之后由渲染器关键 UI 函数主动推送增量事件（dom_append/dom_clear/dom_replace/dom_remove/dom_update/dom_text）。
+  // WebUI 端按事件更新对应 DOM 部分，输入框等用户交互元素不受影响。
+  // 主题/头像/标题/模式等仍走原有 push 通道。
+  const WebUIMirror = {
+    _applyingRemote: false,
+
+    init() {
+      // WS 客户端连接时，推送完整 mirror_head + mirror_body 快照
+      window.api.webControlMirrorInit(() => {
+        this.sendMirrorHead();
+        this.sendMirrorBody();
+      });
+
+      // 接收 WebUI 转发的 UI 事件
+      window.api.onWebControlUiEvent((data) => {
+        this.handleUiEvent(data);
+      });
+
+      console.log('[WebUIMirror] Event-driven controller initialized');
+    },
+
+    buildMirrorHead() {
+      let headHtml = document.head.innerHTML;
+      headHtml = headHtml.replace(/<script[\s\S]*?<\/script>/gi, '');
+      const themeMode = document.documentElement.getAttribute('data-theme') || 'light';
+      return { type: 'mirror_head', html: headHtml, theme_mode: themeMode };
+    },
+
+    buildMirrorBody() {
+      const app = document.getElementById('app');
+      return { type: 'mirror_body', html: app ? app.innerHTML : '' };
+    },
+
+    sendMirrorHead() {
+      try { window.api.webControlMirrorUpdate(this.buildMirrorHead()); } catch (e) {}
+    },
+
+    sendMirrorBody() {
+      try { window.api.webControlMirrorUpdate(this.buildMirrorBody()); } catch (e) {}
+    },
+
+    // ---- 增量事件推送 ----
+    // 推送 DOM 增量事件到 WebUI。event 形如：
+    //   { type:'dom_append', container:'#chat-messages', html:'<div>...</div>' }
+    //   { type:'dom_clear',   container:'#chat-messages' }
+    //   { type:'dom_replace', container:'#history-list', html:'...' }
+    //   { type:'dom_remove',  selector:'#thinking-indicator' }
+    //   { type:'dom_update',  selector:'#tool-xxx', html:'...' }（替换元素 outerHTML）
+    //   { type:'dom_text',    selector:'#titlebar-title', text:'...' }
+    pushDomEvent(event) {
+      try { window.api.webControlMirrorUpdate(event); } catch (e) {}
+    },
+
+    handleUiEvent(data) {
+      if (!data || !data.target) return;
+      try {
+        const el = document.querySelector(data.target);
+        if (!el) {
+          console.warn('[WebUIMirror] Element not found for path:', data.target);
+          return;
+        }
+        this._applyingRemote = true;
+        switch (data.event) {
+          case 'click':
+            el.click();
+            break;
+          case 'input':
+            if (data.value !== undefined && el.value !== undefined) {
+              el.value = data.value;
+            }
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            break;
+          case 'change':
+            if (data.value !== undefined && el.value !== undefined) {
+              el.value = data.value;
+            }
+            if (data.checked !== undefined && 'checked' in el) {
+              el.checked = data.checked;
+            }
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+            break;
+          case 'submit':
+            el.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+            break;
+        }
+      } catch (e) {
+        console.error('[WebUIMirror] UI event dispatch error:', e);
+      } finally {
+        setTimeout(() => { this._applyingRemote = false; }, 100);
+      }
+    },
+  };
+  WebUIMirror.init();
+
+  // 推送容器选择器：根据 currentMode 返回对应消息容器的选择器
+  function getChatContainerSelector() {
+    if (currentMode === 'code') return '#code-chat-messages';
+    if (currentMode === 'babe') return '#babe-chat-messages';
+    return '#chat-messages';
+  }
+
+  // 统一的聊天容器清空 + 增量推送
+  function clearChatMessagesUI() {
+    chatMessages.innerHTML = '';
+    WebUIMirror.pushDomEvent({ type: 'dom_clear', container: getChatContainerSelector() });
+    // 同步移除思考指示器（若存在）
+    WebUIMirror.pushDomEvent({ type: 'dom_remove', selector: '#thinking-indicator' });
+  }
+
   function setTitlebarTitle(title) {
     const titleEl = document.getElementById('titlebar-title');
     if (titleEl) titleEl.textContent = title || '未命名对话';
@@ -548,131 +660,6 @@
   setTitlebarTitle(agent.conversationTitle || '未命名对话');
   updateReoptimizeButtonVisibility();
   updateContextProgress();
-
-  // ---- WebUI 事件驱动镜像控制器 ----
-  // 不再使用 MutationObserver 全量推送（导致死循环刷新 + 输入框被打断）。
-  // 改为：WS 连接时推送完整 mirror_head + mirror_body 快照（界面与 Local 一致），
-  // 之后由渲染器关键 UI 函数主动推送增量事件（dom_append/dom_clear/dom_replace/dom_remove/dom_update/dom_text）。
-  // WebUI 端按事件更新对应 DOM 部分，输入框等用户交互元素不受影响。
-  // 主题/头像/标题/模式等仍走原有 push 通道。
-  const WebUIMirror = {
-    _applyingRemote: false,
-
-    init() {
-      // WS 客户端连接时，推送完整 mirror_head + mirror_body 快照
-      window.api.webControlMirrorInit(() => {
-        this.sendMirrorHead();
-        this.sendMirrorBody();
-      });
-
-      // 接收 WebUI 转发的 UI 事件
-      window.api.onWebControlUiEvent((data) => {
-        this.handleUiEvent(data);
-      });
-
-      console.log('[WebUIMirror] Event-driven controller initialized');
-    },
-
-    buildMirrorHead() {
-      let headHtml = document.head.innerHTML;
-      headHtml = headHtml.replace(/<script[\s\S]*?<\/script>/gi, '');
-      const themeMode = document.documentElement.getAttribute('data-theme') || 'light';
-      return { type: 'mirror_head', html: headHtml, theme_mode: themeMode };
-    },
-
-    buildMirrorBody() {
-      const app = document.getElementById('app');
-      return { type: 'mirror_body', html: app ? app.innerHTML : '' };
-    },
-
-    sendMirrorHead() {
-      try { window.api.webControlMirrorUpdate(this.buildMirrorHead()); } catch (e) {}
-    },
-
-    sendMirrorBody() {
-      try { window.api.webControlMirrorUpdate(this.buildMirrorBody()); } catch (e) {}
-    },
-
-    // ---- 增量事件推送 ----
-    // 推送 DOM 增量事件到 WebUI。event 形如：
-    //   { type:'dom_append', container:'#chat-messages', html:'<div>...</div>' }
-    //   { type:'dom_clear',   container:'#chat-messages' }
-    //   { type:'dom_replace', container:'#history-list', html:'...' }
-    //   { type:'dom_remove',  selector:'#thinking-indicator' }
-    //   { type:'dom_update',  selector:'#tool-xxx', html:'...' }（替换元素 innerHTML）
-    //   { type:'dom_text',    selector:'#titlebar-title', text:'...' }
-    pushDomEvent(event) {
-      try { window.api.webControlMirrorUpdate(event); } catch (e) {}
-    },
-
-    // 生成元素的 CSS 选择器（用于 dom_update / dom_remove）
-    selectorFor(el) {
-      if (!el || el.nodeType !== 1) return '';
-      if (el.id) return '#' + el.id;
-      // 回退：用 data-tool-name 等属性
-      if (el.dataset && el.dataset.toolName) {
-        const siblings = document.querySelectorAll(`[data-tool-name="${el.dataset.toolName}"]`);
-        const idx = Array.from(siblings).indexOf(el);
-        return `[data-tool-name="${el.dataset.toolName}"]:nth-of-type(${idx + 1})`;
-      }
-      return '';
-    },
-
-    handleUiEvent(data) {
-      if (!data || !data.target) return;
-      try {
-        const el = document.querySelector(data.target);
-        if (!el) {
-          console.warn('[WebUIMirror] Element not found for path:', data.target);
-          return;
-        }
-        this._applyingRemote = true;
-        switch (data.event) {
-          case 'click':
-            el.click();
-            break;
-          case 'input':
-            if (data.value !== undefined && el.value !== undefined) {
-              el.value = data.value;
-            }
-            el.dispatchEvent(new Event('input', { bubbles: true }));
-            break;
-          case 'change':
-            if (data.value !== undefined && el.value !== undefined) {
-              el.value = data.value;
-            }
-            if (data.checked !== undefined && 'checked' in el) {
-              el.checked = data.checked;
-            }
-            el.dispatchEvent(new Event('change', { bubbles: true }));
-            break;
-          case 'submit':
-            el.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
-            break;
-        }
-      } catch (e) {
-        console.error('[WebUIMirror] UI event dispatch error:', e);
-      } finally {
-        setTimeout(() => { this._applyingRemote = false; }, 100);
-      }
-    },
-  };
-  WebUIMirror.init();
-
-  // 推送容器选择器：根据 currentMode 返回对应消息容器的选择器
-  function getChatContainerSelector() {
-    if (currentMode === 'code') return '#code-chat-messages';
-    if (currentMode === 'babe') return '#babe-chat-messages';
-    return '#chat-messages';
-  }
-
-  // 统一的聊天容器清空 + 增量推送
-  function clearChatMessagesUI() {
-    chatMessages.innerHTML = '';
-    WebUIMirror.pushDomEvent({ type: 'dom_clear', container: getChatContainerSelector() });
-    // 同步移除思考指示器（若存在）
-    WebUIMirror.pushDomEvent({ type: 'dom_remove', selector: '#thinking-indicator' });
-  }
 
   // ---- 初次使用引导 ----
   // 仅检测 onboardingCompleted 标志：完成过一次就不再弹（用户可随时从设置主动改）
