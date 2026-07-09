@@ -92,6 +92,18 @@ function isToolAvailableForMode(toolName, mode) {
   return true;
 }
 
+// 未配置生图模型时隐藏 generateImage 工具，避免 LLM 调用后失败
+function isImageGenConfigured(settings) {
+  const img = settings?.imageGen;
+  return !!(img && img.apiUrl && img.apiKey && img.model);
+}
+
+// 供 agent.js 在 getRuntimeToolSchemas 时调用，过滤掉未配置的生图工具
+function filterToolsByConfig(tools, settings) {
+  if (isImageGenConfigured(settings)) return tools;
+  return tools.filter(t => t.function?.name !== 'generateImage');
+}
+
 // Babe 模式允许的工具白名单（仅应用内核心工具，无 MCP、无娱乐/创作/游戏，不含 Skills）
 const BABE_ALLOWED_TOOLS = new Set([
   // 记忆
@@ -109,7 +121,9 @@ const BABE_ALLOWED_TOOLS = new Set([
   // 塔罗牌（Babe 模式特有，允许 LLM 主动抽牌）
   'getTarot',
   // 上下文管理（与 Chat/Code 对齐：三层自动压缩 + 手动 LLM 摘要）
-  'manageContext', 'autoSummarizeContext'
+  'manageContext', 'autoSummarizeContext',
+  // 主题外观（Chat/Babe 共用，LLM 可主动调节深浅色/强调色/配色）
+  'adjustAppearance'
 ]);
 
 // Tool definitions for the AI Agent
@@ -257,6 +271,8 @@ const TOOL_DEFINITIONS = [
   { name: 'goalStatus', desc: '查看当前目标状态', icon: 'fa-circle-info', category: '代理', sensitive: false },
   { name: 'goalComplete', desc: '标记目标完成', icon: 'fa-flag-checkered', category: '代理', sensitive: false },
   { name: 'sleep', desc: '休眠等待指定毫秒', icon: 'fa-moon', category: '效率', sensitive: false },
+  // ---- 外观主题 ----
+  { name: 'adjustAppearance', desc: '调整应用外观：深浅色模式、强调色、配色方案', icon: 'fa-palette', category: '系统', sensitive: false },
 ];
 
 // Dangerous command keywords for different platforms/shells
@@ -411,6 +427,7 @@ function getToolSchemas(enabledTools, mode) {
     goalStatus: { type: 'function', function: { name: 'goalStatus', description: '查询当前目标的执行状态、已执行轮数、token使用量等。', parameters: { type: 'object', properties: {}, required: [] } } },
     goalComplete: { type: 'function', function: { name: 'goalComplete', description: '标记当前目标为已完成。仅在目标的所有验收标准都满足时调用。', parameters: { type: 'object', properties: { summary: { type: 'string', description: '完成总结：做了什么、结果如何' } }, required: ['summary'] } } },
     sleep: { type: 'function', function: { name: 'sleep', description: '让agent休眠等待指定的毫秒数。用于等待异步操作完成、轮询间隔等场景。最大60秒。', parameters: { type: 'object', properties: { ms: { type: 'number', description: '等待毫秒数(1-60000)' } }, required: ['ms'] } } },
+    adjustAppearance: { type: 'function', function: { name: 'adjustAppearance', description: '调整应用外观主题。可切换深浅色模式、设置强调色（HEX）、或应用预设配色方案。省略的字段保持当前值不变。调用后立即生效并持久化保存。', parameters: { type: 'object', properties: { mode: { type: 'string', enum: ['light', 'dark', 'system'], description: '深浅色模式：light=浅色，dark=深色，system=跟随系统' }, accentColor: { type: 'string', description: '强调色HEX值，如 #4f8cff。仅在需要更改强调色时传入。' }, schemeName: { type: 'string', description: '预设配色方案名（优先级高于accentColor）。可取值：清新蓝/自然绿/海洋/珊瑚/青碧/紫雾/粉黛/玫瑰/浅海/薄荷/柔金/石榴/湖光/蔚蓝/薰衣/暖橙/清绿/晴空/淡紫/薄荷冰/柠檬/杏橙/清澈蓝/樱红/嫩绿/紫晶/青松/焦糖/赤霞/海风/冷灰/暗夜玫瑰/深湖/深紫/莓夜/深海蓝/松夜/暗金/赤夜/夜航/深林/暖夜/夜紫/夜绯/深蓝/墨青/深柠/炉火/午夜蓝/暗樱/深绿松/翠夜/夜晶/深松/暗橙/暗红/夜石/深灰/琥珀夜/绯红夜/极夜蓝/深绿/夜紫罗。' } }, required: [] } } },
   };
 
   const result = Object.keys(schemas)

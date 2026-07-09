@@ -348,6 +348,14 @@
     btn.addEventListener('click', () => {
       const mode = btn.dataset.mode;
       if (mode === currentMode) return;
+      // Remote 模式：仅切换远端模式，不在本地导航/启动 Agent，也不回推到本地 WebUI
+      if (isRemoteMode && remoteWs && remoteWs.readyState === WebSocket.OPEN) {
+        document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        currentMode = mode;
+        remoteWs.send(JSON.stringify({ type: 'switchMode', mode }));
+        return;
+      }
       document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
       currentMode = mode;
@@ -384,7 +392,21 @@
         // 启动 Babe Agent（如果尚未启动）
         initBabeAgent();
       }
+      // 同步模式切换到 WebUI
+      try { window.api.webControlPushModeSwitch(mode); } catch (_) {}
     });
+  });
+  // WebUI → 渲染器：模式切换
+  window.api?.onWebControlSwitchMode?.((mode) => {
+    if (mode === currentMode) return;
+    const btn = document.querySelector(`.mode-btn[data-mode="${mode}"]`);
+    if (btn) btn.click();
+  });
+  // WebUI → 渲染器：重新优化工具
+  window.api?.onWebControlReoptimizeTools?.(() => {
+    if (btnReoptimizeTools && !btnReoptimizeTools.classList.contains('hidden')) {
+      btnReoptimizeTools.click();
+    }
   });
   // Initialize: hide code/babe-mode nav items
   document.querySelector('.nav-item[data-page="code"]')?.classList.add('hidden');
@@ -515,16 +537,845 @@
   updateReoptimizeButtonVisibility();
   updateContextProgress();
 
+  // ---- WebUI DOM 镜像控制器 ----
+  // 通过 MutationObserver 观察渲染器 DOM 变化，经 WS 推送到 WebUI
+  // 接收 WebUI 转发的 UI 事件（click/input/change/submit），在渲染器上触发对应操作
+  const WebUIMirror = {
+    _bodyObserver: null,
+    _headObserver: null,
+    _htmlObserver: null,
+    _bodyDebounce: null,
+    _headDebounce: null,
+    _applyingRemote: false,
+
+    init() {
+      // WS 客户端连接时，推送完整 mirror_head + mirror_body 快照
+      window.api.webControlMirrorInit(() => {
+        this.sendMirrorHead();
+        this.sendMirrorBody();
+      });
+
+      // 接收 WebUI 转发的 UI 事件
+      window.api.onWebControlUiEvent((data) => {
+        this.handleUiEvent(data);
+      });
+
+      // 观察 #app DOM 变化（debounce 50ms）
+      const app = document.getElementById('app');
+      if (app) {
+        this._bodyObserver = new MutationObserver(() => {
+          if (this._applyingRemote) return;
+          if (this._bodyDebounce) clearTimeout(this._bodyDebounce);
+          this._bodyDebounce = setTimeout(() => this.sendMirrorBody(), 50);
+        });
+        this._bodyObserver.observe(app, {
+          childList: true, subtree: true,
+          characterData: true, attributes: true,
+        });
+      }
+
+      // 观察 <head> 中 <style>/<link> 变化
+      this._headObserver = new MutationObserver(() => {
+        if (this._headDebounce) clearTimeout(this._headDebounce);
+        this._headDebounce = setTimeout(() => this.sendMirrorHead(), 50);
+      });
+      this._headObserver.observe(document.head, {
+        childList: true, subtree: true, characterData: true,
+      });
+
+      // 观察 <html> 的 data-theme 属性变化（主题切换）
+      this._htmlObserver = new MutationObserver(() => {
+        if (this._headDebounce) clearTimeout(this._headDebounce);
+        this._headDebounce = setTimeout(() => this.sendMirrorHead(), 50);
+      });
+      this._htmlObserver.observe(document.documentElement, {
+        attributes: true, attributeFilter: ['data-theme'],
+      });
+
+      console.log('[WebUIMirror] Controller initialized');
+    },
+
+    buildMirrorHead() {
+      // 收集 <head> 内容，去除 <script> 标签
+      let headHtml = document.head.innerHTML;
+      headHtml = headHtml.replace(/<script[\s\S]*?<\/script>/gi, '');
+      const themeMode = document.documentElement.getAttribute('data-theme') || 'light';
+      return { type: 'mirror_head', html: headHtml, theme_mode: themeMode };
+    },
+
+    buildMirrorBody() {
+      const app = document.getElementById('app');
+      return { type: 'mirror_body', html: app ? app.innerHTML : '' };
+    },
+
+    sendMirrorHead() {
+      try { window.api.webControlMirrorUpdate(this.buildMirrorHead()); } catch (e) {}
+    },
+
+    sendMirrorBody() {
+      try { window.api.webControlMirrorUpdate(this.buildMirrorBody()); } catch (e) {}
+    },
+
+    handleUiEvent(data) {
+      if (!data || !data.target) return;
+      try {
+        const el = document.querySelector(data.target);
+        if (!el) {
+          console.warn('[WebUIMirror] Element not found for path:', data.target);
+          return;
+        }
+        this._applyingRemote = true;
+        switch (data.event) {
+          case 'click':
+            el.click();
+            break;
+          case 'input':
+            if (data.value !== undefined && el.value !== undefined) {
+              el.value = data.value;
+            }
+            el.dispatchEvent(new Event('input', { bubbles: true }));
+            break;
+          case 'change':
+            if (data.value !== undefined && el.value !== undefined) {
+              el.value = data.value;
+            }
+            if (data.checked !== undefined && 'checked' in el) {
+              el.checked = data.checked;
+            }
+            el.dispatchEvent(new Event('change', { bubbles: true }));
+            break;
+          case 'submit':
+            el.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+            break;
+        }
+      } catch (e) {
+        console.error('[WebUIMirror] UI event dispatch error:', e);
+      } finally {
+        // 延迟清除标志，等待同步 DOM 变化完成
+        setTimeout(() => { this._applyingRemote = false; }, 100);
+      }
+    },
+  };
+  WebUIMirror.init();
+
+  // ---- 初次使用引导 ----
+  // 仅检测 onboardingCompleted 标志：完成过一次就不再弹（用户可随时从设置主动改）
+  async function checkOnboarding() {
+    const s = agent.settings || {};
+    return !s.onboardingCompleted;
+  }
+  async function showOnboardingIfNeeded() {
+    if (!(await checkOnboarding())) return;
+    const obModal = document.getElementById('onboarding-modal');
+    if (!obModal) return;
+    obModal.classList.remove('hidden');
+    // 预填现有值
+    const s = agent.settings || {};
+    document.getElementById('ob-ai-name').value = s.aiPersona?.name || '';
+    document.getElementById('ob-ai-pronouns').value = s.aiPersona?.pronouns || '';
+    document.getElementById('ob-ai-personality').value = s.aiPersona?.personality || '';
+    document.getElementById('ob-ai-persona').value = s.aiPersona?.customPrompt || '';
+    document.getElementById('ob-user-name').value = s.userProfile?.name || '';
+    // 头像预览
+    if (s.aiPersona?.avatar) {
+      document.getElementById('ob-ai-avatar-preview').innerHTML = `<img src="${s.aiPersona.avatar}" alt="">`;
+    }
+    if (s.userProfile?.avatar) {
+      document.getElementById('ob-user-avatar-preview').innerHTML = `<img src="${s.userProfile.avatar}" alt="">`;
+    }
+    // LLM 字段
+    const provider = s.llm?.provider || 'opencode-zen';
+    document.getElementById('ob-llm-provider').value = provider;
+    document.getElementById('ob-llm-zen-key').value = s.llm?.zenApiKey || 'public';
+    document.getElementById('ob-llm-url').value = s.llm?.apiUrl || '';
+    document.getElementById('ob-llm-key').value = s.llm?.apiKey || '';
+    updateObProviderFields(provider);
+    await refreshObModels();
+    // 默认选 DeepSeek 模型
+    autoSelectDeepSeek();
+    // 启动步骤向导，从第一步开始
+    showOnboardingStep(1);
+  }
+  // ---- 步骤向导导航 ----
+  const ONBOARDING_TOTAL_STEPS = 3;
+  let currentOnboardingStep = 1;
+  function showOnboardingStep(n) {
+    if (n < 1) n = 1;
+    if (n > ONBOARDING_TOTAL_STEPS) n = ONBOARDING_TOTAL_STEPS;
+    currentOnboardingStep = n;
+    // 切换步骤显示
+    document.querySelectorAll('.onboarding-step').forEach(s => {
+      if (parseInt(s.dataset.step) === n) s.classList.add('active');
+      else s.classList.remove('active');
+    });
+    // 更新指示器圆点
+    document.querySelectorAll('.ob-dot').forEach(d => {
+      if (parseInt(d.dataset.step) === n) d.classList.add('active');
+      else d.classList.remove('active');
+    });
+    // 更新进度条
+    const bar = document.getElementById('ob-progress-bar');
+    if (bar) bar.style.width = `${(n / ONBOARDING_TOTAL_STEPS) * 100}%`;
+    // 更新步骤文本
+    const text = document.getElementById('ob-step-text');
+    if (text) text.textContent = `步骤 ${n}/${ONBOARDING_TOTAL_STEPS}`;
+    // 上一步按钮：第一步隐藏
+    const prevBtn = document.getElementById('ob-btn-prev');
+    if (prevBtn) prevBtn.classList.toggle('hidden', n === 1);
+    // 下一步按钮：最后一步变为"完成配置"
+    const nextBtn = document.getElementById('ob-btn-next');
+    if (nextBtn) {
+      nextBtn.innerHTML = (n === ONBOARDING_TOTAL_STEPS)
+        ? '<i class="fa-solid fa-check"></i> 完成配置'
+        : '下一步 <i class="fa-solid fa-arrow-right"></i>';
+    }
+  }
+  // 下一步：推进到下一步，最后一步触发完成
+  document.getElementById('ob-btn-next')?.addEventListener('click', () => {
+    if (currentOnboardingStep >= ONBOARDING_TOTAL_STEPS) {
+      document.getElementById('ob-btn-finish').click();
+      return;
+    }
+    showOnboardingStep(currentOnboardingStep + 1);
+  });
+  // 上一步：回退一步
+  document.getElementById('ob-btn-prev')?.addEventListener('click', () => {
+    if (currentOnboardingStep > 1) showOnboardingStep(currentOnboardingStep - 1);
+  });
+  // 跳过：不保存当前步直接进入下一步，最后一步完成向导
+  document.getElementById('ob-btn-skip')?.addEventListener('click', () => {
+    if (currentOnboardingStep >= ONBOARDING_TOTAL_STEPS) {
+      document.getElementById('ob-btn-finish').click();
+      return;
+    }
+    showOnboardingStep(currentOnboardingStep + 1);
+  });
+  function updateObProviderFields(provider) {
+    const zenFields = document.getElementById('ob-zen-key-field');
+    const openaiFields = document.getElementById('ob-openai-fields');
+    const openaiKeyField = document.getElementById('ob-openai-key-field');
+    if (provider === 'opencode-zen') {
+      zenFields?.classList.remove('hidden');
+      openaiFields?.classList.add('hidden');
+      openaiKeyField?.classList.add('hidden');
+    } else {
+      zenFields?.classList.add('hidden');
+      openaiFields?.classList.remove('hidden');
+      openaiKeyField?.classList.remove('hidden');
+    }
+  }
+  async function refreshObModels() {
+    const provider = document.getElementById('ob-llm-provider')?.value || 'opencode-zen';
+    const sel = document.getElementById('ob-llm-model');
+    const hint = document.getElementById('ob-model-hint');
+    if (!sel) return;
+    sel.innerHTML = '<option value="">加载中...</option>';
+    if (hint) hint.textContent = '正在获取模型列表...';
+    try {
+      if (provider === 'opencode-zen') {
+        const res = await window.api.zenFetchModels();
+        if (!res?.ok || !Array.isArray(res.models)) {
+          sel.innerHTML = '<option value="">(获取失败)</option>';
+          if (hint) hint.textContent = res?.error || '获取失败';
+          return;
+        }
+        const FREE = /free|big-pickle|mimo|north-mini|nemotron|hy3/;
+        const isPub = (document.getElementById('ob-llm-zen-key')?.value || '').trim() === 'public';
+        let models = res.models.slice();
+        if (isPub) models = models.filter(m => FREE.test(m.id));
+        models.sort((a,b) => (a.id||'').localeCompare(b.id||''));
+        sel.innerHTML = '';
+        for (const m of models) {
+          const opt = document.createElement('option');
+          opt.value = m.id;
+          opt.textContent = (FREE.test(m.id) ? '[免费] ' : '') + (m.name || m.id);
+          sel.appendChild(opt);
+        }
+        if (hint) hint.textContent = `共 ${models.length} 个可用模型`;
+      } else {
+        const url = document.getElementById('ob-llm-url')?.value || '';
+        const key = document.getElementById('ob-llm-key')?.value || '';
+        if (!url || !key) {
+          sel.innerHTML = '<option value="">请先填写 URL 和 Key</option>';
+          if (hint) hint.textContent = '请先填写 API URL 和 Key';
+          return;
+        }
+        const res = await window.api.llmFetchModels(provider, url, key);
+        if (!res?.ok || !Array.isArray(res.models)) {
+          sel.innerHTML = '<option value="">(获取失败)</option>';
+          if (hint) hint.textContent = res?.error || '获取失败';
+          return;
+        }
+        sel.innerHTML = '';
+        for (const m of res.models) {
+          const opt = document.createElement('option');
+          opt.value = m.id || m.name || '';
+          opt.textContent = m.id || m.name || '';
+          sel.appendChild(opt);
+        }
+        if (hint) hint.textContent = `共 ${res.models.length} 个可用模型`;
+      }
+    } catch (e) {
+      sel.innerHTML = '<option value="">(获取失败)</option>';
+      if (hint) hint.textContent = '错误: ' + (e?.message || e);
+    }
+  }
+  function autoSelectDeepSeek() {
+    const sel = document.getElementById('ob-llm-model');
+    if (!sel) return;
+    // 优先选含 deepseek 的模型
+    for (const opt of sel.options) {
+      if (/deepseek/i.test(opt.value)) { opt.selected = true; return; }
+    }
+    // 次选 free 模型
+    for (const opt of sel.options) {
+      if (/free|big-pickle/i.test(opt.value)) { opt.selected = true; return; }
+    }
+  }
+  // provider 切换
+  document.getElementById('ob-llm-provider')?.addEventListener('change', (e) => {
+    updateObProviderFields(e.target.value);
+    refreshObModels().then(autoSelectDeepSeek);
+  });
+  document.getElementById('ob-llm-zen-key')?.addEventListener('change', refreshObModels);
+  document.getElementById('ob-llm-url')?.addEventListener('change', refreshObModels);
+  document.getElementById('ob-llm-key')?.addEventListener('change', refreshObModels);
+  document.getElementById('ob-btn-zen-genkey')?.addEventListener('click', () => {
+    document.getElementById('ob-llm-zen-key').value = 'public';
+    refreshObModels().then(autoSelectDeepSeek);
+  });
+  // 头像选择（复用 avatarEncodeFile）
+  async function obPickAvatar(target) {
+    try {
+      const { filePaths } = await window.api.selectFile();
+      if (!filePaths?.[0]) return;
+      const dataUrl = await window.api.avatarEncodeFile(filePaths[0]);
+      if (!dataUrl) return;
+      const preview = document.getElementById(target === 'ai' ? 'ob-ai-avatar-preview' : 'ob-user-avatar-preview');
+      if (preview) preview.innerHTML = `<img src="${dataUrl}" alt="">`;
+      preview.dataset.avatar = dataUrl;
+    } catch (_) {}
+  }
+  function obClearAvatar(target) {
+    const preview = document.getElementById(target === 'ai' ? 'ob-ai-avatar-preview' : 'ob-user-avatar-preview');
+    if (preview) {
+      preview.innerHTML = `<i class="fa-solid fa-${target === 'ai' ? 'user-astronaut' : 'user'}"></i>`;
+      delete preview.dataset.avatar;
+    }
+  }
+  document.getElementById('ob-btn-ai-avatar')?.addEventListener('click', () => obPickAvatar('ai'));
+  document.getElementById('ob-btn-ai-avatar-clear')?.addEventListener('click', () => obClearAvatar('ai'));
+  document.getElementById('ob-btn-user-avatar')?.addEventListener('click', () => obPickAvatar('user'));
+  document.getElementById('ob-btn-user-avatar-clear')?.addEventListener('click', () => obClearAvatar('user'));
+  // 完成配置
+  document.getElementById('ob-btn-finish')?.addEventListener('click', async () => {
+    const s = await window.api.getSettings();
+    // AI 形象
+    const aiPreview = document.getElementById('ob-ai-avatar-preview');
+    s.aiPersona = s.aiPersona || {};
+    s.aiPersona.name = document.getElementById('ob-ai-name').value.trim() || 'Partner';
+    s.aiPersona.pronouns = document.getElementById('ob-ai-pronouns').value.trim() || 'Ta';
+    s.aiPersona.personality = document.getElementById('ob-ai-personality').value.trim() || '活泼可爱、热情友善';
+    s.aiPersona.customPrompt = document.getElementById('ob-ai-persona').value.trim();
+    if (aiPreview?.dataset.avatar) s.aiPersona.avatar = aiPreview.dataset.avatar;
+    // 用户形象
+    const userPreview = document.getElementById('ob-user-avatar-preview');
+    s.userProfile = s.userProfile || {};
+    s.userProfile.name = document.getElementById('ob-user-name').value.trim() || (agent.systemInfo?.username || '用户');
+    if (userPreview?.dataset.avatar) s.userProfile.avatar = userPreview.dataset.avatar;
+    // LLM 配置
+    const provider = document.getElementById('ob-llm-provider').value;
+    s.llm = s.llm || {};
+    s.llm.provider = provider;
+    if (provider === 'opencode-zen') {
+      s.llm.zenApiKey = document.getElementById('ob-llm-zen-key').value.trim() || 'public';
+      s.llm.apiUrl = 'https://opencode.ai/zen/v1/chat/completions';
+      s.llm.apiKey = s.llm.zenApiKey;
+    } else {
+      s.llm.apiUrl = document.getElementById('ob-llm-url').value.trim();
+      s.llm.apiKey = document.getElementById('ob-llm-key').value.trim();
+    }
+    s.llm.model = document.getElementById('ob-llm-model').value || s.llm.model || '';
+    s.onboardingCompleted = true;
+    await window.api.setSettings(s);
+    // 即时生效
+    if (typeof agent.applySettings === 'function') agent.applySettings(s);
+    else agent.settings = s;
+    // 更新 UI 显示
+    if (typeof updatePersonaDisplay === 'function') updatePersonaDisplay(s.aiPersona);
+    document.getElementById('onboarding-modal').classList.add('hidden');
+    // 通知 WebUI 同步头像
+    try { await window.api.webControlSetAvatars(s.aiPersona?.avatar, s.userProfile?.avatar); } catch (_) {}
+  });
+  showOnboardingIfNeeded();
+
+  // ---- Local/Remote 选择器 ----
+  // Remote 模式：把本渲染器当作远程主机的“瘦客户端 / 镜像”，所有 Agent 执行发生在远端。
+  let remoteWs = null;             // Remote 模式的 WS 连接
+  let isRemoteMode = false;         // 当前是否为 Remote 模式
+  let remoteBaseUrl = '';           // 远程 HTTP 基址（用于显示）
+  let remotePassword = '';          // 远程密码（保存以便重连）
+  let remoteTotp = '';              // 远程 TOTP（保存以便重连）
+  let remoteIntentionalClose = false; // 主动断开标志（避免触发自动重连）
+  let remoteReconnectTimer = null; // 自动重连定时器
+  let remoteAvatars = null;         // { ai, user } 远端头像
+  const _remoteWsPendingByType = new Map(); // WS 请求/响应映射（按期望响应类型）
+
+  function setConnectionMode(mode) {
+    const localBtn = document.getElementById('conn-btn-local');
+    const remoteBtn = document.getElementById('conn-btn-remote');
+    if (mode === 'remote') {
+      localBtn?.classList.remove('active');
+      remoteBtn?.classList.add('active');
+      document.getElementById('remote-connect-modal').classList.remove('hidden');
+    } else {
+      localBtn?.classList.add('active');
+      remoteBtn?.classList.remove('active');
+      // 主动断开远程连接
+      remoteIntentionalClose = true;
+      if (remoteReconnectTimer) { clearTimeout(remoteReconnectTimer); remoteReconnectTimer = null; }
+      if (remoteWs) { try { remoteWs.close(); } catch (_) {} remoteWs = null; }
+      isRemoteMode = false;
+      remoteAvatars = null;
+      // Local 模式不显示远程连接横幅
+      const banner = document.getElementById('remote-conn-banner');
+      if (banner) banner.classList.add('hidden');
+      setRemoteBadge('');
+      // 恢复本地 UI 状态
+      if (btnReoptimizeTools) btnReoptimizeTools.classList.add('hidden');
+      hideApprovalPanelRemote();
+    }
+  }
+  document.getElementById('conn-btn-local')?.addEventListener('click', () => setConnectionMode('local'));
+  document.getElementById('conn-btn-remote')?.addEventListener('click', () => setConnectionMode('remote'));
+  document.getElementById('btn-remote-cancel')?.addEventListener('click', () => {
+    document.getElementById('remote-connect-modal').classList.add('hidden');
+    setConnectionMode('local');
+  });
+
+  // 远程连接横幅状态
+  function setRemoteBanner(state, message) {
+    const banner = document.getElementById('remote-conn-banner');
+    if (!banner) return;
+    banner.dataset.state = state;
+    banner.classList.remove('hidden');
+    const txt = banner.querySelector('.remote-conn-text');
+    const reconnectBtn = banner.querySelector('.remote-conn-reconnect');
+    if (txt) {
+      const addr = remoteBaseUrl ? ` (${remoteBaseUrl})` : '';
+      if (state === 'connecting') txt.textContent = '正在连接远程主机…' + addr;
+      else if (state === 'connected') txt.textContent = '已连接远程主机' + addr;
+      else if (state === 'disconnected') txt.textContent = message || ('未连接远程主机' + addr);
+      else if (state === 'reconnecting') txt.textContent = '远程连接断开，正在重连…' + addr;
+      else if (state === 'error') txt.textContent = (message || '远程连接错误') + addr;
+    }
+    if (reconnectBtn) reconnectBtn.style.display = (state === 'disconnected' || state === 'error') ? '' : 'none';
+  }
+
+  // 标题栏远程地址徽标
+  function setRemoteBadge(addr) {
+    const badge = document.getElementById('remote-addr-badge');
+    if (!badge) return;
+    if (addr) { badge.textContent = '🌐 ' + addr.replace(/^https?:\/\//, ''); badge.classList.remove('hidden'); }
+    else badge.classList.add('hidden');
+  }
+
+  // 横幅“重连”按钮
+  document.querySelector('#remote-conn-banner .remote-conn-reconnect')?.addEventListener('click', () => {
+    if (remoteBaseUrl && remotePassword) connectRemote(remoteBaseUrl, remotePassword, remoteTotp, true);
+  });
+  // 横幅“关闭”按钮：仅隐藏，不影响连接状态
+  document.querySelector('#remote-conn-banner .remote-conn-dismiss')?.addEventListener('click', () => {
+    const banner = document.getElementById('remote-conn-banner');
+    if (banner) banner.classList.add('hidden');
+  });
+
+  // 发起一次远程连接。reconnect=true 表示自动重连调用。
+  async function connectRemote(url, pwd, totp, reconnect = false) {
+    const statusEl = document.getElementById('remote-status');
+    if (!reconnect && statusEl) statusEl.textContent = '连接中...';
+    setRemoteBanner('connecting');
+    // 先关掉旧连接
+    remoteIntentionalClose = true;
+    if (remoteWs) { try { remoteWs.close(); } catch (_) {} remoteWs = null; }
+    remoteIntentionalClose = false;
+    try {
+      // 1. 预校验凭据（HTTP 登录）。跨源时 CORS 已在服务端放行；cookie 不需要。
+      const loginRes = await fetch(`${url}/api/login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password: pwd, totpCode: totp })
+      });
+      const loginData = await loginRes.json();
+      if (!loginData.ok) {
+        if (!reconnect && statusEl) statusEl.textContent = loginData.error || '登录失败';
+        setRemoteBanner('error', loginData.error || '登录失败');
+        return;
+      }
+      // 2. 建立 WS（http→ws, https→wss）
+      const wsUrl = url.replace(/^http/, 'ws') + '/ws';
+      remoteWs = new WebSocket(wsUrl);
+      remoteWs.onopen = () => {
+        // 跨源 WS 无法携带 cookie，用首条 auth 消息完成认证
+        remoteWs.send(JSON.stringify({ type: 'auth', password: pwd, totpCode: totp }));
+      };
+      remoteWs.onmessage = (ev) => {
+        try { handleRemoteMessage(JSON.parse(ev.data)); } catch (_) {}
+      };
+      remoteWs.onerror = () => {
+        if (!reconnect && statusEl) statusEl.textContent = '连接失败，请检查地址或网络';
+        setRemoteBanner('error', 'WebSocket 连接失败');
+      };
+      remoteWs.onclose = () => {
+        const wasRemote = isRemoteMode;
+        isRemoteMode = false;
+        // 清理挂起的请求
+        for (const [, p] of _remoteWsPendingByType) { clearTimeout(p.timer); try { p.reject(new Error('连接已断开')); } catch {} }
+        _remoteWsPendingByType.clear();
+        if (remoteIntentionalClose) {
+          setRemoteBanner('disconnected');
+          return;
+        }
+        // 意外断开：自动重连
+        if (wasRemote || reconnect) {
+          setRemoteBanner('reconnecting');
+          if (remoteReconnectTimer) clearTimeout(remoteReconnectTimer);
+          remoteReconnectTimer = setTimeout(() => {
+            connectRemote(url, pwd, totp, true);
+          }, 3000);
+        } else {
+          setRemoteBanner('disconnected');
+        }
+      };
+    } catch (e) {
+      if (!reconnect && statusEl) statusEl.textContent = '错误: ' + (e?.message || e);
+      setRemoteBanner('error', String(e?.message || e));
+      // 网络错误也尝试重连
+      if (remoteReconnectTimer) clearTimeout(remoteReconnectTimer);
+      remoteReconnectTimer = setTimeout(() => connectRemote(url, pwd, totp, true), 5000);
+    }
+  }
+
+  document.getElementById('btn-remote-connect')?.addEventListener('click', async () => {
+    const url = document.getElementById('remote-url').value.trim().replace(/\/$/, '');
+    const pwd = document.getElementById('remote-password').value;
+    const totp = document.getElementById('remote-totp').value.trim();
+    const statusEl = document.getElementById('remote-status');
+    if (!url || !pwd) { statusEl.textContent = '请填写地址和密码'; return; }
+    remoteBaseUrl = url;
+    remotePassword = pwd;
+    remoteTotp = totp;
+    setRemoteBadge(url);
+    await connectRemote(url, pwd, totp, false);
+  });
+
+  // WS 请求/响应：发送 msg 并等待 expectedType 响应
+  function remoteWsRequest(msg, expectedType, timeout = 8000) {
+    return new Promise((resolve, reject) => {
+      if (!remoteWs || remoteWs.readyState !== WebSocket.OPEN) { reject(new Error('未连接到远程主机')); return; }
+      if (_remoteWsPendingByType.has(expectedType)) { reject(new Error('已有相同请求进行中')); return; }
+      const timer = setTimeout(() => { _remoteWsPendingByType.delete(expectedType); reject(new Error('请求超时')); }, timeout);
+      _remoteWsPendingByType.set(expectedType, { resolve, reject, timer });
+      remoteWs.send(JSON.stringify(msg));
+    });
+  }
+
+  function remoteWsSend(msg) {
+    if (remoteWs && remoteWs.readyState === WebSocket.OPEN) {
+      remoteWs.send(JSON.stringify(msg));
+      return true;
+    }
+    return false;
+  }
+
+  // 上传附件到远程（通过 WS，跨源无法用 HTTP+cookie）
+  async function uploadAttachmentRemote(att) {
+    try {
+      let dataUrl;
+      if (att.file && att.file.arrayBuffer) {
+        const buf = await att.file.arrayBuffer();
+        const bytes = new Uint8Array(buf);
+        let bin = '';
+        for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+        dataUrl = `data:${att.type || 'application/octet-stream'};base64,${btoa(bin)}`;
+      } else if (att.path) {
+        // 本地路径文件：通过 preload 读取
+        const r = await window.api.readFileBase64?.(att.path);
+        if (r?.ok && r.data) dataUrl = r.data;
+      }
+      if (!dataUrl) return null;
+      const resp = await remoteWsRequest({ type: 'uploadAttachment', name: att.name, type: att.type, data: dataUrl }, 'uploadResult');
+      if (resp.ok) return { name: resp.name, path: resp.path, type: resp.type };
+      return null;
+    } catch (e) { console.error('[Remote] 附件上传失败:', e); return null; }
+  }
+
+  // 处理远程推送的消息（服务端 WS 协议）
+  function handleRemoteMessage(data) {
+    if (!data?.type) return;
+    // 1. 响应类消息分发到挂起的请求
+    const pending = _remoteWsPendingByType.get(data.type);
+    if (pending) {
+      _remoteWsPendingByType.delete(data.type);
+      clearTimeout(pending.timer);
+      pending.resolve(data);
+      return;
+    }
+
+    switch (data.type) {
+      case 'init':
+        // 完整初始化：同步全部状态
+        isRemoteMode = true;
+        remoteIntentionalClose = false;
+        document.getElementById('remote-connect-modal').classList.add('hidden');
+        const statusEl0 = document.getElementById('remote-status');
+        if (statusEl0) statusEl0.textContent = '已连接，可远程操作';
+        setRemoteBanner('connected');
+        if (data.avatars) applyRemoteAvatars(data.avatars);   // 先应用头像，再渲染消息气泡
+        if (data.theme) applyRemoteTheme(data.theme);
+        if (data.tarot) showRemoteTarot(data.tarot);
+        if (data.title != null) setTitlebarTitle(data.title);
+        if (data.agentStatus != null) updateRemoteStatus(data.agentStatus);
+        if (Array.isArray(data.messages)) renderRemoteMessages(data.messages);
+        if (data.pendingApproval && data.pendingApproval.toolName) showApprovalPanel(data.pendingApproval.toolName, data.pendingApproval.args);
+        else hideApprovalPanelRemote();
+        // 请求模式 / 上下文 / 重新优化按钮的快照
+        remoteWsSend({ type: 'requestState' });
+        break;
+      case 'message':
+        // 服务端推送的单条消息：{role, content, timestamp, ...}
+        if (data.message) {
+          if (data.message.role === 'assistant') removeThinkingIndicator();
+          addMessageToChat(data.message.role, data.message.content);
+        }
+        break;
+      case 'messagesSync':
+        renderRemoteMessages(data.messages || []);
+        break;
+      case 'status':
+        updateRemoteStatus(data.agentStatus);
+        break;
+      case 'title':
+        setTitlebarTitle(data.title || '');
+        break;
+      case 'tarot':
+        showRemoteTarot(data.card);
+        break;
+      case 'theme':
+        applyRemoteTheme(data.theme);
+        break;
+      case 'avatars':
+        applyRemoteAvatars(data.avatars);
+        break;
+      case 'modeSwitch':
+        handleRemoteModeSwitch(data.mode);
+        break;
+      case 'contextProgress':
+        updateRemoteContextProgress(data.data);
+        break;
+      case 'reoptimizeState':
+        if (btnReoptimizeTools) btnReoptimizeTools.classList.toggle('hidden', !data.visible);
+        break;
+      case 'approval':
+        if (data.toolName) showApprovalPanel(data.toolName, data.args);
+        break;
+      case 'approvalCleared':
+        hideApprovalPanelRemote();
+        break;
+      case 'toolCall':
+        handleRemoteToolCall(data);
+        break;
+      case 'conversationSwitch':
+        // 远端切换了对话：清空本地镜像，等待 messagesSync/init 到达
+        chatMessages.innerHTML = '';
+        renderChatWelcome();
+        setTitlebarTitle('未命名对话');
+        break;
+      case 'stateSnapshot':
+        if (data.mode) handleRemoteModeSwitch(data.mode);
+        if (data.contextProgress) updateRemoteContextProgress(data.contextProgress);
+        if (btnReoptimizeTools) btnReoptimizeTools.classList.toggle('hidden', !data.reoptimizeVisible);
+        break;
+      case 'history':
+      case 'conversationDeleted':
+        // 已被 remoteWsRequest 消费；此处仅为兜底
+        break;
+      default:
+        // 兼容直接以 assistant/user/system 为 type 的旧消息
+        if (data.type === 'assistant' || data.type === 'user' || data.type === 'system') {
+          if (data.type === 'assistant') removeThinkingIndicator();
+          addMessageToChat(data.type, data.content || data.message || '');
+        }
+        break;
+    }
+  }
+
+  // ---- 远程消息渲染辅助 ----
+  function renderRemoteMessages(msgs) {
+    chatMessages.innerHTML = '';
+    if (!msgs || msgs.length === 0) { renderChatWelcome(); return; }
+    const toolCallMap = {};
+    for (const m of msgs) {
+      if (m.role === 'user') {
+        addMessageToChat('user', m.content);
+      } else if (m.role === 'assistant') {
+        if (m.content) addMessageToChat('assistant', m.content);
+        if (m.tool_calls && m.tool_calls.length > 0) {
+          for (const tc of m.tool_calls) {
+            const toolName = tc.function?.name || 'tool';
+            let args = {};
+            try { args = JSON.parse(tc.function?.arguments || '{}'); } catch {}
+            const toolDef = TOOL_DEFINITIONS.find(t => t.name === toolName);
+            const displayName = toolDef?.desc || toolName;
+            addToolCallToChat(displayName, toolName, args);
+            if (tc.id) toolCallMap[tc.id] = toolName;
+          }
+        }
+      } else if (m.role === 'tool') {
+        const toolName = m.name || toolCallMap[m.tool_call_id] || 'tool';
+        let result = m.content;
+        try { result = JSON.parse(m.content); } catch {}
+        updateToolCallResult(toolName, result);
+      } else if (m.role === 'system') {
+        addSystemMessage(m.content || '');
+      }
+    }
+    scrollChatToBottom();
+  }
+
+  function updateRemoteStatus(s) {
+    const working = s && s !== 'idle';
+    if (agentStatus) {
+      agentStatus.innerHTML = working
+        ? '<i class="fa-solid fa-circle"></i> 工作中...'
+        : '<i class="fa-solid fa-circle"></i> 待命中';
+      agentStatus.className = 'agent-status' + (working ? ' working' : '');
+    }
+    if (btnStop) btnStop.classList.toggle('hidden', !working);
+    if (btnSend) btnSend.classList.remove('hidden');
+    if (working) {
+      const last = chatMessages.lastElementChild;
+      const isLastAssistant = last && last.classList.contains('message') && last.classList.contains('assistant');
+      if (!isLastAssistant) addThinkingIndicator();
+    } else {
+      removeThinkingIndicator();
+    }
+  }
+
+  function showRemoteTarot(card) {
+    if (!card || !agentTarot) return;
+    const iconHtml = card.icon ? `<i class="fa-solid ${card.icon}"></i>` : '<i class="fa-solid fa-star"></i>';
+    const position = card.isReversed ? '逆位' : '正位';
+    const meaning = card.isReversed ? card.meaningOfReversed : card.meaningOfUpright;
+    const eSource = card.entropySource || 'CSPRNG';
+    const isTRNG = eSource.startsWith('TRNG');
+    const trngBadge = isTRNG ? '<span class="trng-badge" style="margin-left:6px;font-size:9px;padding:1px 6px"><i class="fa-solid fa-satellite-dish"></i> TRNG</span>' : '';
+    agentTarot.innerHTML = `${iconHtml}<span>命运之牌：${card.name || ''}(${position})</span>${trngBadge}`;
+    agentTarot.title = `${card.name || ''}(${position}) - ${meaning || ''} [${eSource}]`;
+  }
+
+  function applyRemoteTheme(t) {
+    if (!t) return;
+    const root = document.documentElement;
+    if (t.accent) root.style.setProperty('--accent', t.accent);
+    if (t.accentLight) root.style.setProperty('--accent-light', t.accentLight);
+    if (t.accentDark) root.style.setProperty('--accent-dark', t.accentDark);
+    if (t.accentBg) {
+      root.style.setProperty('--accent-bg', t.accentBg);
+      root.style.setProperty('--accent-bg-hover', t.accentBg.replace('0.08', '0.14'));
+    }
+    if (t.bgPrimary) root.style.setProperty('--bg-primary', t.bgPrimary);
+    if (t.bgSecondary) root.style.setProperty('--bg-secondary', t.bgSecondary);
+    if (t.bgTertiary) root.style.setProperty('--bg-tertiary', t.bgTertiary);
+    if (t.bgHover) root.style.setProperty('--bg-hover', t.bgHover);
+    if (typeof t.isDark === 'boolean') {
+      root.setAttribute('data-theme', t.isDark ? 'dark' : 'light');
+    }
+  }
+
+  function applyRemoteAvatars(av) {
+    if (!av) return;
+    remoteAvatars = av;
+    const aiAvatarEl = document.getElementById('agent-avatar-display');
+    if (aiAvatarEl && av.ai) {
+      const src = av.ai.startsWith('data:') ? av.ai : 'file://' + av.ai.replace(/\\/g, '/');
+      aiAvatarEl.innerHTML = `<img src="${src}" style="width:100%;height:100%;border-radius:50%;object-fit:cover" alt="">`;
+    } else if (aiAvatarEl && !av.ai) {
+      aiAvatarEl.innerHTML = '<i class="fa-solid fa-robot"></i>';
+    }
+  }
+
+  // 远端模式切换：仅同步按钮高亮，不导航、不回推，避免循环
+  function handleRemoteModeSwitch(mode) {
+    if (!mode || mode === currentMode) return;
+    currentMode = mode;
+    document.querySelectorAll('.mode-btn').forEach(b => {
+      b.classList.toggle('active', b.dataset.mode === mode);
+    });
+    const nameEl = document.getElementById('agent-name-display');
+    if (nameEl) {
+      if (mode === 'code') nameEl.textContent = 'Coding Agent';
+      else if (mode === 'babe') nameEl.textContent = 'Babe';
+      else nameEl.textContent = 'AI Agent';
+    }
+  }
+
+  function updateRemoteContextProgress(d) {
+    if (!d) return;
+    const fill = document.getElementById('context-progress-fill');
+    const text = document.getElementById('context-progress-text');
+    const ind = document.getElementById('chat-context-indicator');
+    const pct = Math.min(100, Math.max(0, d.percentage || 0));
+    const circumference = 100;
+    const dashLen = (pct / 100) * circumference;
+    if (fill) fill.setAttribute('stroke-dasharray', `${dashLen} ${circumference}`);
+    if (text) {
+      const used = d.used || 0, max = d.max || 8192;
+      const fmt = (n) => n >= 1000 ? `${(n / 1000).toFixed(1)}K` : `${n}`;
+      text.textContent = `${fmt(used)}/${fmt(max)}`;
+    }
+    if (ind) {
+      if (d.used != null) ind.dataset.used = d.used;
+      if (d.max != null) ind.dataset.max = d.max;
+      if (pct >= 85) ind.dataset.level = 'danger';
+      else if (pct >= 65) ind.dataset.level = 'warn';
+      else ind.dataset.level = 'normal';
+      ind.title = `上下文使用量: ${d.used || 0}/${d.max || 8192} (${Math.round(pct)}%)`;
+    }
+  }
+
+  function handleRemoteToolCall(data) {
+    if (!data || !data.toolName) return;
+    if (data.status === 'calling') {
+      let args = data.args || {};
+      if (typeof args === 'string') { try { args = JSON.parse(args); } catch {} args = { _raw: args }; }
+      const toolDef = TOOL_DEFINITIONS.find(t => t.name === data.toolName);
+      const displayName = toolDef?.desc || data.toolName;
+      addToolCallToChat(displayName, data.toolName, args);
+    } else {
+      // done / denied / error：更新最近一次同名工具结果
+      let result = data.result;
+      try { result = JSON.parse(result); } catch {}
+      updateToolCallResult(data.toolName, result, data.status === 'error' || data.status === 'denied');
+    }
+  }
+
+  function hideApprovalPanelRemote() {
+    if (approvalPanel) approvalPanel.classList.add('hidden');
+  }
+
   function updateReoptimizeButtonVisibility() {
     if (!btnReoptimizeTools) return;
     // 按钮在自动优化开启时即显示（不要求已优化过），允许用户随时手动触发
     const visible = !!agent.settings?.autoOptimizeToolSelection
       && !(agent.sessionAutoOptimizeDisabled);
     btnReoptimizeTools.classList.toggle('hidden', !visible);
+    // 同步重新优化按钮可见性到 WebUI
+    try { window.api.webControlPushReoptimizeState(visible); } catch (_) {}
   }
 
   // 更新上下文进度条函数
-  // 通用：更新指定 agent 的上下文进度条
+  // 通用：更新指定 agent 的上下文圆扇形指示器
   function updateAgentContextProgress(agentInstance, fillId, textId) {
     if (!agentInstance || !agentInstance.contextManager) return;
     const cm = agentInstance.contextManager;
@@ -532,6 +1383,7 @@
     const progressFill = document.getElementById(fillId);
     const progressText = document.getElementById(textId);
     if (!progressFill || !progressText) return;
+    const indicator = progressFill.closest('.context-indicator');
     const estimateMsg = (msg) => (cm.estimateMessageTokens ? cm.estimateMessageTokens(msg) : 0);
     const estimateText = (text) => (cm.estimateTokens ? cm.estimateTokens(text) : 0);
     const systemGuidanceTokens = cm.systemPrompt ? estimateMsg(cm.systemPrompt) : 0;
@@ -557,24 +1409,59 @@
     const tokens = systemGuidanceTokens + toolDefsTokens + chatTokens + toolResultTokens + otherTokens;
     const maxTokens = stats?.maxTokens ?? (agentInstance.settings?.llm?.maxContextLength || 0);
     const percentage = maxTokens ? Math.min(100, (tokens / maxTokens) * 100) : 0;
-    progressFill.style.width = percentage + '%';
-    progressText.textContent = `${tokens}/${maxTokens}`;
 
-    const detail = [
-      `上下文使用: ${tokens}/${maxTokens} (${percentage.toFixed(1)}%)`,
-      `系统指导: ${systemGuidanceTokens} tokens`,
-      `工具定义: ${toolDefsTokens} tokens`,
-      `聊天记录: ${chatTokens} tokens`,
-      `工具结果: ${toolResultTokens} tokens`,
-      `其他: ${otherTokens} tokens`
-    ].join('\n');
-    progressFill.title = detail;
-    progressText.title = detail;
+    // 更新 SVG 圆扇形：stroke-dasharray="percentage, 100-percentage"
+    // 圆周长 = 2 * PI * r = 2 * PI * 15.915 ≈ 100，所以直接用百分比
+    progressFill.setAttribute('stroke-dasharray', `${percentage} ${100 - percentage}`);
+    // 文本：精简显示（>1000 显示为 K）
+    const fmt = (n) => n >= 1000 ? `${(n/1000).toFixed(1)}K` : `${n}`;
+    progressText.textContent = `${fmt(tokens)}/${fmt(maxTokens)}`;
+
+    // 颜色级别
+    if (indicator) {
+      indicator.dataset.used = tokens;
+      indicator.dataset.max = maxTokens;
+      if (percentage >= 95) indicator.dataset.level = 'danger';
+      else if (percentage >= 80) indicator.dataset.level = 'warn';
+      else indicator.dataset.level = 'normal';
+      // 更新/创建 tooltip
+      let tooltip = indicator.querySelector('.context-tooltip');
+      if (!tooltip) {
+        tooltip = document.createElement('div');
+        tooltip.className = 'context-tooltip';
+        indicator.appendChild(tooltip);
+      }
+      // 绘制迷你扇形图 + 细化占比
+      const segPct = (v, total) => total > 0 ? (v/total*100).toFixed(1) : '0';
+      const miniR = 12, miniCx = 15, miniCy = 15, miniCircum = 2 * Math.PI * miniR;
+      const sysPct = (systemGuidanceTokens / Math.max(1, tokens)) * 100;
+      const toolPct = (toolDefsTokens / Math.max(1, tokens)) * 100;
+      const chatPct = (chatTokens / Math.max(1, tokens)) * 100;
+      const toolResPct = (toolResultTokens / Math.max(1, tokens)) * 100;
+      tooltip.innerHTML = `
+        <div class="context-tooltip-title">上下文使用详情</div>
+        <svg class="context-tooltip-mini-ring" viewBox="0 0 30 30" width="60" height="60">
+          <circle cx="${miniCx}" cy="${miniCy}" r="${miniR}" fill="none" stroke="var(--bg-tertiary)" stroke-width="4"/>
+          <circle cx="${miniCx}" cy="${miniCy}" r="${miniR}" fill="none" stroke="var(--accent)" stroke-width="4"
+            stroke-dasharray="${(percentage/100*miniCircum).toFixed(1)} ${miniCircum}"
+            stroke-dashoffset="${(miniCircum/4).toFixed(1)}" transform="rotate(-90 ${miniCx} ${miniCy})"/>
+          <text x="${miniCx}" y="${miniCy+3}" text-anchor="middle" font-size="9" fill="var(--text-primary)">${percentage.toFixed(0)}%</text>
+        </svg>
+        <div class="context-tooltip-row"><span>系统指导</span><span>${systemGuidanceTokens} (${segPct(systemGuidanceTokens, tokens)}%)</span></div>
+        <div class="context-tooltip-row"><span>工具定义</span><span>${toolDefsTokens} (${segPct(toolDefsTokens, tokens)}%)</span></div>
+        <div class="context-tooltip-row"><span>聊天记录</span><span>${chatTokens} (${segPct(chatTokens, tokens)}%)</span></div>
+        <div class="context-tooltip-row"><span>工具结果</span><span>${toolResultTokens} (${segPct(toolResultTokens, tokens)}%)</span></div>
+        <div class="context-tooltip-row"><span>其他</span><span>${otherTokens} (${segPct(otherTokens, tokens)}%)</span></div>
+        <div class="context-tooltip-row" style="margin-top:4px;border-top:1px solid var(--border);padding-top:4px;font-weight:600">
+          <span>总计</span><span>${tokens} / ${maxTokens}</span>
+        </div>
+      `;
+    }
   }
 
   function updateContextProgress() {
     updateAgentContextProgress(agent, 'context-progress-fill', 'context-progress-text');
-    // Code / Babe 进度条：agent 已初始化时用其 contextManager，否则回退到已加载的 settings 值（与 Chat 共享配置）
+    // Code / Babe 圆扇形：agent 已初始化时用其 contextManager，否则回退到已加载的 settings 值
     const sharedMaxCtx = agent?.settings?.llm?.maxContextLength || 8192;
     try {
       if (codeAgent) {
@@ -582,8 +1469,10 @@
       } else {
         const t = document.getElementById('code-context-progress-text');
         const f = document.getElementById('code-context-progress-fill');
-        if (t) t.textContent = `0/${sharedMaxCtx}`;
-        if (f) { f.style.width = '0%'; f.title = `上下文使用: 0/${sharedMaxCtx} (0%)`; }
+        const ind = document.getElementById('code-context-indicator');
+        if (t) t.textContent = `0/${sharedMaxCtx >= 1000 ? (sharedMaxCtx/1000).toFixed(1)+'K' : sharedMaxCtx}`;
+        if (f) f.setAttribute('stroke-dasharray', '0 100');
+        if (ind) { ind.dataset.used = 0; ind.dataset.max = sharedMaxCtx; ind.dataset.level = 'normal'; }
       }
     } catch (_) { /* codeAgent TDZ */ }
     try {
@@ -592,10 +1481,48 @@
       } else {
         const t = document.getElementById('babe-context-progress-text');
         const f = document.getElementById('babe-context-progress-fill');
-        if (t) t.textContent = `0/${sharedMaxCtx}`;
-        if (f) { f.style.width = '0%'; f.title = `上下文使用: 0/${sharedMaxCtx} (0%)`; }
+        const ind = document.getElementById('babe-context-indicator');
+        if (t) t.textContent = `0/${sharedMaxCtx >= 1000 ? (sharedMaxCtx/1000).toFixed(1)+'K' : sharedMaxCtx}`;
+        if (f) f.setAttribute('stroke-dasharray', '0 100');
+        if (ind) { ind.dataset.used = 0; ind.dataset.max = sharedMaxCtx; ind.dataset.level = 'normal'; }
       }
     } catch (_) { /* babeAgent TDZ */ }
+    // 同步主对话的上下文进度到 WebUI（按当前模式推送对应 agent 的数据）
+    try {
+      const targetAgent = (currentMode === 'code' && codeAgent) ? codeAgent
+        : (currentMode === 'babe' && babeAgent) ? babeAgent
+        : agent;
+      if (targetAgent && targetAgent.contextManager) {
+        const cm = targetAgent.contextManager;
+        const stats = cm.getStats ? cm.getStats() : null;
+        const estimateMsg = (msg) => (cm.estimateMessageTokens ? cm.estimateMessageTokens(msg) : 0);
+        const estimateText = (text) => (cm.estimateTokens ? cm.estimateTokens(text) : 0);
+        const systemGuidanceTokens = cm.systemPrompt ? estimateMsg(cm.systemPrompt) : 0;
+        const toolDefsTokens = Math.ceil(JSON.stringify(
+          (typeof targetAgent.getRuntimeToolSchemas === 'function')
+            ? targetAgent.getRuntimeToolSchemas()
+            : []
+        ).length / 4);
+        let chatTokens = 0, toolResultTokens = 0;
+        (cm.messages || []).forEach(msg => {
+          if (!msg) return;
+          if (msg.role === 'tool') toolResultTokens += estimateMsg(msg);
+          else if (msg.role === 'user' || msg.role === 'assistant') chatTokens += estimateMsg(msg);
+        });
+        const summaryTokens = (cm.summaries || []).reduce((acc, s) => acc + estimateText(String(s || '')) + 4, 0);
+        const otherTokens = Math.max(0, summaryTokens);
+        const tokens = systemGuidanceTokens + toolDefsTokens + chatTokens + toolResultTokens + otherTokens;
+        const maxTokens = stats?.maxTokens ?? (targetAgent.settings?.llm?.maxContextLength || 0);
+        const percentage = maxTokens ? Math.min(100, (tokens / maxTokens) * 100) : 0;
+        window.api.webControlPushContextProgress({
+          mode: currentMode,
+          used: tokens,
+          max: maxTokens,
+          percentage,
+          details: { systemGuidanceTokens, toolDefsTokens, chatTokens, toolResultTokens, otherTokens }
+        });
+      }
+    } catch (_) {}
   }
 
   // 定时更新进度条
@@ -782,12 +1709,12 @@
     msg.className = `message ${role}`;
     const time = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
     
-    // Avatar handling
+    // Avatar handling（Remote 模式优先使用远端头像）
     let avatarHTML = '';
     if (role === 'user') {
-      avatarHTML = makeAvatarHTML(agent.settings?.userProfile?.avatar, false);
+      avatarHTML = makeAvatarHTML(isRemoteMode ? (remoteAvatars?.user || '') : agent.settings?.userProfile?.avatar, false);
     } else {
-      avatarHTML = makeAvatarHTML(agent.settings?.aiPersona?.avatar, true);
+      avatarHTML = makeAvatarHTML(isRemoteMode ? (remoteAvatars?.ai || '') : agent.settings?.aiPersona?.avatar, true);
     }
     
     const rendered = role === 'assistant' ? renderMarkdown(content) : escapeHtml(content);
@@ -1447,7 +2374,34 @@
   // ---- Send Message ----
   async function sendMessage() {
     const text = chatInput.value.trim();
-    if (!text) return;
+    if (!text && currentAttachments.length === 0) return;
+
+    // Remote 模式：转发到远程 WS，不在本地执行 Agent
+    if (isRemoteMode && remoteWs && remoteWs.readyState === WebSocket.OPEN) {
+      const attachments = [...currentAttachments];
+      clearAttachments();
+      chatInput.value = '';
+      chatInput.style.height = 'auto';
+
+      // 上传附件到远端，构建带附件路径的消息（与 WebUI 协议一致）
+      let fullMsg = text;
+      if (attachments.length > 0) {
+        const uploadedPaths = [];
+        for (const att of attachments) {
+          const up = await uploadAttachmentRemote(att);
+          if (up) uploadedPaths.push(`附件: ${up.path} (${up.name})`);
+          else fullMsg += `\n[附件上传失败: ${att.name}]`;
+        }
+        if (uploadedPaths.length > 0) {
+          fullMsg = (text ? text + '\n' : '') + uploadedPaths.join('\n');
+        }
+      }
+
+      if (fullMsg) addMessageToChat('user', fullMsg);
+      addThinkingIndicator();
+      remoteWs.send(JSON.stringify({ type: 'sendMessage', message: fullMsg }));
+      return;
+    }
 
     // 热对话：Agent工作中时注入新消息
     if (agent.running) {
@@ -1599,6 +2553,11 @@
   // ---- Stop Button ----
   if (btnStop) {
     btnStop.addEventListener('click', () => {
+      if (isRemoteMode && remoteWs && remoteWs.readyState === WebSocket.OPEN) {
+        remoteWs.send(JSON.stringify({ type: 'stopAgent' }));
+        removeThinkingIndicator();
+        return;
+      }
       agent.stop();
       removeThinkingIndicator();
     });
@@ -1828,30 +2787,51 @@
     });
   }
 
-  // New chat
-  btnNewChat.addEventListener('click', () => {
-    agent.newConversation();
-    updateReoptimizeButtonVisibility();
-    setTitlebarTitle('未命名对话');
+  // 统一的 Chat 欢迎消息渲染：根据生图模型配置决定是否显示"生成图片"按钮
+  function renderChatWelcome() {
+    const imgConfigured = !!(agent.settings?.imageGen?.apiKey && agent.settings?.imageGen?.model);
+    const imgBtn = imgConfigured
+      ? `<button class="quick-action-btn" data-prompt="帮我生成一张风景图片"><i class="fa-solid fa-image"></i> 生成图片</button>`
+      : '';
     chatMessages.innerHTML = `
       <div class="welcome-message">
         <div class="welcome-icon"><i class="fa-solid fa-wand-magic-sparkles"></i></div>
         <h2>你好，我是你的AI伙伴</h2>
-        <p>我可以帮你完成各种任务，包括文件操作、代码编写、信息搜索、图像生成等。告诉我你需要什么帮助吧！</p>
+        <p>我可以帮你完成各种任务，包括文件操作、代码编写、信息搜索${imgConfigured ? '、图像生成' : ''}等。告诉我你需要什么帮助吧！</p>
         <div class="quick-actions">
           <button class="quick-action-btn" data-prompt="帮我搜索一下最新的科技新闻"><i class="fa-solid fa-magnifying-glass"></i> 搜索新闻</button>
-          <button class="quick-action-btn" data-prompt="帮我生成一张风景图片"><i class="fa-solid fa-image"></i> 生成图片</button>
+          ${imgBtn}
           <button class="quick-action-btn" data-prompt="帮我创建一个待办事项列表"><i class="fa-solid fa-list-check"></i> 待办事项</button>
           <button class="quick-action-btn" data-prompt="帮我写一段JavaScript代码"><i class="fa-solid fa-code"></i> 编写代码</button>
         </div>
       </div>`;
-    // Re-attach quick action handlers
     document.querySelectorAll('.quick-action-btn').forEach(btn => {
       btn.addEventListener('click', () => { chatInput.value = btn.dataset.prompt; sendMessage(); });
     });
+  }
+
+  // New chat
+  btnNewChat.addEventListener('click', () => {
+    if (isRemoteMode && remoteWs && remoteWs.readyState === WebSocket.OPEN) {
+      remoteWs.send(JSON.stringify({ type: 'newChat' }));
+      setTitlebarTitle('未命名对话');
+      chatMessages.innerHTML = '';
+      renderChatWelcome();
+      return;
+    }
+    agent.newConversation();
+    updateReoptimizeButtonVisibility();
+    setTitlebarTitle('未命名对话');
+    renderChatWelcome();
   });
 
   btnClearChat.addEventListener('click', () => {
+    if (isRemoteMode && remoteWs && remoteWs.readyState === WebSocket.OPEN) {
+      remoteWs.send(JSON.stringify({ type: 'newChat' }));
+      setTitlebarTitle('未命名对话');
+      chatMessages.innerHTML = '';
+      return;
+    }
     agent.newConversation();
     updateReoptimizeButtonVisibility();
     setTitlebarTitle('未命名对话');
@@ -1911,11 +2891,19 @@
 
   document.getElementById('btn-approve').addEventListener('click', () => {
     approvalPanel.classList.add('hidden');
+    if (isRemoteMode && remoteWs && remoteWs.readyState === WebSocket.OPEN) {
+      remoteWs.send(JSON.stringify({ type: 'approvalResponse', approved: true }));
+      return;
+    }
     agent.resolveApproval(true);
   });
 
   document.getElementById('btn-deny').addEventListener('click', () => {
     approvalPanel.classList.add('hidden');
+    if (isRemoteMode && remoteWs && remoteWs.readyState === WebSocket.OPEN) {
+      remoteWs.send(JSON.stringify({ type: 'approvalResponse', approved: false }));
+      return;
+    }
     agent.resolveApproval(false);
   });
 
@@ -3327,7 +4315,12 @@
     const current = await window.api.getSettings();
     const merged = { ...current, ...updates };
     await window.api.setSettings(merged);
-    agent.settings = merged;
+    // 即时生效：更新 maxTokens + 重算 systemPrompt（persona/llm 变更后立即生效，无需重启）
+    if (typeof agent.applySettings === 'function') {
+      agent.applySettings(merged);
+    } else {
+      agent.settings = merged;
+    }
   }
 
   // LLM settings
@@ -3922,6 +4915,64 @@
   async function loadHistoryPage() {
     const list = document.getElementById('history-list');
     if (!list) return;
+
+    // Remote 模式：通过 WS 拉取远端历史，继续/删除均转发到远端
+    if (isRemoteMode && remoteWs && remoteWs.readyState === WebSocket.OPEN) {
+      list.innerHTML = '<div class="empty-state"><i class="fa-solid fa-spinner fa-spin"></i><p>加载远程历史…</p></div>';
+      try {
+        const resp = await remoteWsRequest({ type: 'getHistory' }, 'history', 8000);
+        const histories = resp.history || [];
+        if (!histories || histories.length === 0) {
+          list.innerHTML = '<div class="empty-state"><i class="fa-solid fa-clock-rotate-left"></i><p>远端暂无对话历史</p></div>';
+          return;
+        }
+        list.innerHTML = histories.map(h => {
+          let timeStr = '未知时间';
+          const ts = h.timestamp ? (typeof h.timestamp === 'number' ? h.timestamp : Date.parse(h.timestamp))
+            : (h.createdAt ? (typeof h.createdAt === 'number' ? h.createdAt : Date.parse(h.createdAt)) : null);
+          if (ts && !isNaN(ts)) timeStr = new Date(ts).toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+          return `
+          <div class="history-item" data-id="${escapeHtml(h.id)}">
+            <div class="history-info">
+              <div class="history-title">${escapeHtml(h.title || '未命名对话')}</div>
+              <div class="history-time">${timeStr}</div>
+            </div>
+            <div class="history-actions">
+              <button class="btn-icon history-continue" data-id="${escapeHtml(h.id)}" title="继续对话"><i class="fa-solid fa-play"></i></button>
+              <button class="btn-icon history-delete" data-id="${escapeHtml(h.id)}" title="删除"><i class="fa-solid fa-trash-can"></i></button>
+            </div>
+          </div>`;
+        }).join('');
+        list.querySelectorAll('.history-continue').forEach(btn => {
+          btn.addEventListener('click', () => {
+            if (!remoteWs || remoteWs.readyState !== WebSocket.OPEN) return;
+            remoteWs.send(JSON.stringify({ type: 'loadConversation', id: btn.dataset.id }));
+            // 高亮当前项；远端加载后会推送 messagesSync
+            list.querySelectorAll('.history-item').forEach(el => el.classList.toggle('active', el.dataset.id === btn.dataset.id));
+            // 切换到对话页
+            document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
+            document.querySelector('.nav-item[data-page="chat"]')?.classList.add('active');
+            document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+            document.getElementById('page-chat')?.classList.add('active');
+            chatMessages.innerHTML = '';
+            addThinkingIndicator();
+          });
+        });
+        list.querySelectorAll('.history-delete').forEach(btn => {
+          btn.addEventListener('click', async () => {
+            if (!confirm('确认删除此远端对话？')) return;
+            try {
+              await remoteWsRequest({ type: 'deleteConversation', id: btn.dataset.id }, 'conversationDeleted', 8000);
+            } catch (e) { /* 忽略，仍刷新列表 */ }
+            loadHistoryPage();
+          });
+        });
+      } catch (e) {
+        list.innerHTML = `<div class="empty-state"><i class="fa-solid fa-triangle-exclamation"></i><p>加载远程历史失败: ${escapeHtml(e.message || '')}</p></div>`;
+      }
+      return;
+    }
+
     const histories = await window.api.historyList();
     if (!histories || histories.length === 0) {
       list.innerHTML = '<div class="empty-state"><i class="fa-solid fa-clock-rotate-left"></i><p>暂无对话历史</p></div>';
@@ -5919,6 +6970,68 @@
   document.getElementById('btn-close-browser')?.addEventListener('click', async () => {
     await window.api.browserClose();
     window.hideBrowserPanel();
+  });
+
+  // ==================== 面板最小化/恢复（索引贴） ====================
+  // 追踪当前被最小化的面板 id，避免重复创建索引贴
+  const minimizedPanels = new Set();
+
+  // 最小化面板：隐藏面板并在右侧边缘生成一个可点击的纵向索引贴
+  window.minimizePanel = function(panelId) {
+    const panel = document.getElementById(panelId);
+    if (!panel || minimizedPanels.has(panelId)) return;
+
+    // 从面板头部提取图标与标题文本
+    const header = panel.querySelector('.geogebra-header h3');
+    const iconEl = header ? header.querySelector('i') : null;
+    const iconClass = iconEl ? iconEl.className : '';
+    const title = header ? header.textContent.trim() : panelId;
+
+    // 隐藏面板并释放主内容区空间（与关闭行为一致）
+    panel.classList.add('hidden');
+    document.body.classList.remove('geogebra-open');
+    minimizedPanels.add(panelId);
+
+    // 在索引贴容器中创建对应 tab
+    const container = document.getElementById('panel-tabs-container');
+    if (!container) return;
+    if (container.querySelector(`[data-panel-id="${panelId}"]`)) return;
+
+    const tab = document.createElement('div');
+    tab.className = 'panel-tab';
+    tab.dataset.panelId = panelId;
+    tab.title = `恢复 ${title}`;
+    tab.innerHTML = (iconClass ? `<i class="${iconClass}"></i>` : '') + `<span>${title}</span>`;
+    tab.addEventListener('click', () => {
+      window.restorePanel(panelId);
+    });
+    container.appendChild(tab);
+  };
+
+  // 恢复面板：移除隐藏状态并删除对应索引贴
+  window.restorePanel = function(panelId) {
+    const panel = document.getElementById(panelId);
+    if (panel) {
+      panel.classList.remove('hidden');
+      document.body.classList.add('geogebra-open');
+    }
+    minimizedPanels.delete(panelId);
+
+    const container = document.getElementById('panel-tabs-container');
+    if (container) {
+      const tab = container.querySelector(`[data-panel-id="${panelId}"]`);
+      if (tab) tab.remove();
+    }
+  };
+
+  // 绑定所有最小化按钮：点击时找到所属面板并最小化
+  document.querySelectorAll('.btn-minimize-panel').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const panel = btn.closest('.geogebra-panel');
+      if (panel && panel.id) {
+        window.minimizePanel(panel.id);
+      }
+    });
   });
 
   // ==================== Babe Mode (恋爱模式) ====================

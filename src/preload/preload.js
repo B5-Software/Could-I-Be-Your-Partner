@@ -308,6 +308,11 @@ contextBridge.exposeInMainWorld('api', {
   webControlPushTitle: (title) => ipcRenderer.send('webControl:pushTitle', title),
   webControlSetWorkDir: (dir) => ipcRenderer.send('webControl:setWorkDir', dir),
   webControlSetAvatars: (avatars) => ipcRenderer.send('webControl:setAvatars', avatars),
+  webControlPushModeSwitch: (mode) => ipcRenderer.send('webControl:pushModeSwitch', mode),
+  webControlPushContextProgress: (data) => ipcRenderer.send('webControl:pushContextProgress', data),
+  webControlPushReoptimizeState: (visible) => ipcRenderer.send('webControl:pushReoptimizeState', visible),
+  onWebControlSwitchMode: (cb) => ipcRenderer.on('webControl:switchMode', (_, mode) => cb(mode)),
+  onWebControlReoptimizeTools: (cb) => ipcRenderer.on('webControl:reoptimizeTools', () => cb()),
   avatarPickAndEncode: () => ipcRenderer.invoke('avatar:pickAndEncode'),
   avatarEncodeFile: (filePath) => ipcRenderer.invoke('avatar:encodeFile', filePath),
   onWebControlNewChat: (cb) => ipcRenderer.on('webControl:newChat', () => cb()),
@@ -315,5 +320,10 @@ contextBridge.exposeInMainWorld('api', {
   onWebControlStopAgent: (cb) => ipcRenderer.on('webControl:stopAgent', () => cb()),
   onWebControlApprovalResponse: (cb) => ipcRenderer.on('webControl:approvalResponse', (_, approved) => cb(approved)),
   onWebControlLoadConversation: (cb) => ipcRenderer.on('webControl:loadConversation', (_, id) => cb(id)),
+  // DOM Mirror: renderer listens for mirror-init trigger, sends mirror updates, receives UI events from WebUI
+  webControlMirrorInit: (cb) => ipcRenderer.on('webControl:mirrorInit', () => cb()),
+  webControlUiEvent: (data) => ipcRenderer.send('webControl:uiEvent', data),
+  webControlMirrorUpdate: (data) => ipcRenderer.send('webControl:mirrorUpdate', data),
+  onWebControlUiEvent: (cb) => ipcRenderer.on('webControl:uiEvent', (_, data) => cb(data)),
   onGameFinished: (cb) => ipcRenderer.on('game:finished', (_, data) => cb(data)),
 });

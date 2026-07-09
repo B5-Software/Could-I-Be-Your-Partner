@@ -94,40 +94,321 @@
 .agent-status i { font-size: 6px; color: var(--success); }
 .agent-status.working i { color: var(--warning); animation: pulse 1.5s infinite; }
 
-.context-progress {
+/* 圆扇形上下文指示器 */
+.context-indicator {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-top: 4px;
-}
-
-.header-context-progress {
-  margin-top: 0;
+  gap: 6px;
+  cursor: help;
   margin-left: auto;
 }
 
-.progress-bar {
-  width: 100px;
-  height: 4px;
-  background: var(--bg-tertiary);
-  border-radius: 2px;
-  overflow: hidden;
+.context-ring {
+  flex-shrink: 0;
 }
 
-.progress-fill {
-  height: 100%;
-  background: linear-gradient(90deg, var(--accent), var(--accent-dark));
-  transition: width 0.3s ease;
+.context-ring-bg {
+  stroke: var(--bg-tertiary);
 }
 
-.progress-fill[style*="100%"] {
-  background: linear-gradient(90deg, var(--warning), var(--danger));
+.context-ring-fg {
+  stroke: var(--accent);
+  transition: stroke-dasharray 0.3s ease, stroke 0.3s ease;
+  stroke-linecap: round;
 }
+
+/* 超过 80% 变黄，超过 95% 变红 */
+.context-indicator[data-level="warn"] .context-ring-fg { stroke: var(--warning); }
+.context-indicator[data-level="danger"] .context-ring-fg { stroke: var(--danger); }
 
 .progress-text {
   font-size: 11px;
   color: var(--text-tertiary);
-  min-width: 60px;
+  white-space: nowrap;
+}
+
+/* 悬停 tooltip */
+.context-tooltip {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 100;
+  background: var(--bg-elevated, var(--bg-secondary));
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.15);
+  font-size: 12px;
+  min-width: 180px;
+  display: none;
+}
+
+.context-indicator:hover .context-tooltip {
+  display: block;
+}
+
+.context-tooltip-title {
+  font-weight: 600;
+  margin-bottom: 6px;
+  color: var(--text-primary);
+}
+
+.context-tooltip-row {
+  display: flex;
+  justify-content: space-between;
+  margin: 2px 0;
+  color: var(--text-secondary);
+}
+
+.context-tooltip-mini-ring {
+  display: block;
+  margin: 8px auto 4px;
+}
+
+/* 初次使用引导模态框（步骤向导） */
+.onboarding-modal {
+  max-width: 560px;
+  height: 600px;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* 步骤指示器 */
+.onboarding-indicator {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 20px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-tertiary);
+  flex-shrink: 0;
+}
+.onboarding-indicator-dots {
+  display: flex;
+  gap: 6px;
+}
+.ob-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--border);
+  transition: all var(--transition);
+}
+.ob-dot.active {
+  background: var(--accent);
+  transform: scale(1.25);
+  box-shadow: 0 0 0 3px var(--accent-bg);
+}
+.onboarding-indicator-bar {
+  flex: 1;
+  height: 6px;
+  background: var(--border);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.onboarding-progress {
+  height: 100%;
+  width: 33.33%;
+  background: linear-gradient(90deg, var(--accent), var(--accent-light));
+  border-radius: 3px;
+  transition: width var(--transition-slow);
+}
+.onboarding-indicator-text {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.onboarding-body {
+  padding: 16px 20px;
+  flex: 1;
+  overflow-y: auto;
+}
+.onboarding-steps { display: flex; flex-direction: column; gap: 16px; }
+
+/* 步骤：默认隐藏，仅 .active 显示 */
+.onboarding-step {
+  display: none;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.onboarding-step.active {
+  display: block;
+  animation: obStepFadeIn 0.25s ease;
+}
+@keyframes obStepFadeIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.onboarding-step-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--bg-tertiary);
+  font-weight: 600;
+}
+.onboarding-step-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  font-size: 12px;
+}
+.onboarding-step-body { padding: 12px; }
+.onboarding-row { display: flex; gap: 12px; margin-bottom: 8px; flex-wrap: wrap; }
+.onboarding-field { flex: 1; min-width: 180px; display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
+.onboarding-field label { font-size: 12px; color: var(--text-secondary); }
+.onboarding-field input, .onboarding-field select, .onboarding-field textarea {
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 13px;
+}
+.onboarding-hint { font-size: 11px; color: var(--text-tertiary); margin: 4px 0; }
+.onboarding-key-row { display: flex; gap: 4px; }
+.avatar-picker { display: flex; align-items: center; gap: 6px; }
+.avatar-preview {
+  width: 40px; height: 40px;
+  border-radius: 50%;
+  background: var(--bg-tertiary);
+  display: flex; align-items: center; justify-content: center;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+.avatar-preview img { width: 100%; height: 100%; object-fit: cover; }
+.avatar-preview i { font-size: 18px; color: var(--text-tertiary); }
+
+/* 向导底部导航 */
+.onboarding-footer {
+  justify-content: space-between;
+}
+.ob-footer-right {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.ob-btn-skip {
+  margin-right: auto;
+}
+.ob-btn-prev.hidden {
+  display: none;
+}
+
+/* Local/Remote 选择器 */
+.connection-switcher {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px;
+  background: var(--bg-tertiary);
+  border-radius: 6px;
+  -webkit-app-region: no-drag;
+}
+.conn-btn {
+  padding: 4px 10px;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  transition: all 0.15s;
+}
+.conn-btn.active {
+  background: var(--accent);
+  color: #fff;
+}
+.conn-btn:not(.active):hover {
+  background: var(--bg-hover);
+}
+
+/* 远程地址徽标（标题栏） */
+.remote-addr-badge {
+  font-size: 11px;
+  color: var(--accent);
+  background: var(--accent-bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 2px 8px;
+  white-space: nowrap;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  -webkit-app-region: no-drag;
+}
+
+/* 远程连接状态横幅 */
+.remote-conn-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  font-size: 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+.remote-conn-banner[data-state="connecting"],
+.remote-conn-banner[data-state="reconnecting"] {
+  background: rgba(42, 157, 143, 0.1);
+  color: var(--accent);
+}
+.remote-conn-banner[data-state="connected"] {
+  background: rgba(39, 174, 96, 0.1);
+  color: var(--success, #27ae60);
+}
+.remote-conn-banner[data-state="error"] {
+  background: rgba(231, 76, 60, 0.1);
+  color: var(--danger, #e74c3c);
+}
+.remote-conn-banner[data-state="disconnected"] {
+  background: rgba(243, 156, 18, 0.1);
+  color: var(--warning, #f39c12);
+}
+.remote-conn-banner .remote-conn-text {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.remote-conn-banner .remote-conn-icon {
+  flex-shrink: 0;
+}
+.remote-conn-banner[data-state="connecting"] .remote-conn-icon,
+.remote-conn-banner[data-state="reconnecting"] .remote-conn-icon {
+  animation: remoteSpin 1s linear infinite;
+}
+@keyframes remoteSpin {
+  to { transform: rotate(360deg); }
+}
+.remote-conn-banner .remote-conn-reconnect,
+.remote-conn-banner .remote-conn-dismiss {
+  padding: 2px 8px;
+  font-size: 11px;
+  border: 1px solid var(--border);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.remote-conn-banner .remote-conn-reconnect:hover,
+.remote-conn-banner .remote-conn-dismiss:hover {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .chat-actions {

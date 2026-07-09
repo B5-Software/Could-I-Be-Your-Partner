@@ -37,6 +37,9 @@ class WebControlService {
     this.onGetSettings = null;    // () => settings
     this.onStopAgent = null;      // () => void
     this.onLoadConversation = null; // (id) => void  — triggers host to load this conversation
+    // DOM Mirror callbacks
+    this.onMirrorInit = null;  // () => void — WS client connected, request renderer to push mirror snapshot
+    this.onUiEvent = null;     // (data) => void — WebUI UI event forwarded to renderer
 
     // Upload directory — set by main.js to workspace base dir
     this.workDir = null;
@@ -121,6 +124,17 @@ class WebControlService {
     // Enable WebSocket
     const wsInstance = expressWs(app);
 
+    // CORS: allow the Electron renderer (cross-origin) to call HTTP endpoints.
+    // We do NOT use cookies for cross-origin auth — WS uses an auth message —
+    // so 'Access-Control-Allow-Origin: *' without credentials is sufficient.
+    app.use((req, res, next) => {
+      res.header('Access-Control-Allow-Origin', '*');
+      res.header('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+      res.header('Access-Control-Allow-Headers', 'Content-Type');
+      if (req.method === 'OPTIONS') return res.status(204).end();
+      next();
+    });
+
     // Serve FontAwesome from local assets
     // CSS 内部 url(../webfonts/...) 在 /static/fa/ 下解析为 /static/webfonts/...
     // 所以必须同时挂载 webfonts 目录，否则字体文件 404。
@@ -128,11 +142,20 @@ class WebControlService {
     const webfontsDir = path.join(__dirname, '../../assets/webfonts');
     app.use('/static/fa', express.static(faDir));
     app.use('/static/webfonts', express.static(webfontsDir));
+    // 镜像模式：渲染器 CSS / 资源 / KaTeX 通过相对路径请求，需静态挂载
+    const rendererCssDir = path.join(__dirname, '..', 'renderer', 'css');
+    const assetsDir = path.join(__dirname, '..', '..', 'assets');
+    const katexDir = path.join(__dirname, '..', '..', 'node_modules', 'katex', 'dist');
+    app.use('/css', express.static(rendererCssDir));
+    app.use('/assets', express.static(assetsDir));
+    app.use('/node_modules/katex/dist', express.static(katexDir));
 
     // Auth middleware
     const requireAuth = (req, res, next) => {
       if (req.session?.authenticated) return next();
-      if (req.path === '/api/login' || req.path === '/login' || req.path === '/' || req.path.startsWith('/static')) return next();
+      if (req.path === '/api/login' || req.path === '/login' || req.path === '/' ||
+          req.path.startsWith('/static') || req.path.startsWith('/css') ||
+          req.path.startsWith('/assets') || req.path.startsWith('/node_modules/katex/dist')) return next();
       res.status(401).json({ ok: false, error: '未登录' });
     };
 
@@ -252,20 +275,9 @@ class WebControlService {
     app.post('/api/upload-attachment', async (req, res) => {
       try {
         const { name, type, data } = req.body;
-        if (!name || !data) return res.json({ ok: false, error: '缺少文件信息' });
-
-        const base64Data = data.replace(/^data:[^;]+;base64,/, '');
-        const buf = Buffer.from(base64Data, 'base64');
-        const safeName = name.replace(/[^a-zA-Z0-9._\-]/g, '_').substring(0, 100);
-        // Save to workspace base dir (instead of system temp)
-        const saveDir = this.workDir || os.tmpdir();
-        if (this.workDir && !fs.existsSync(this.workDir)) {
-          fs.mkdirSync(this.workDir, { recursive: true });
-        }
-        const savePath = path.join(saveDir, safeName);
-        fs.writeFileSync(savePath, buf);
-        console.log('[WebControl] File uploaded to workspace:', savePath, 'size:', buf.length);
-        res.json({ ok: true, path: savePath, name, type });
+        const result = this._saveUpload(name, type, data);
+        if (result.ok) res.json(result);
+        else res.json({ ok: false, error: result.error });
       } catch (e) {
         console.error('[WebControl] Upload error:', e.message);
         res.json({ ok: false, error: e.message });
@@ -315,28 +327,21 @@ class WebControlService {
     });
 
     // ---- WebSocket for real-time updates ----
+    // 同源 WebUI 通过 session cookie 认证；跨源客户端（Electron Remote 模式）
+    // 无法携带 cookie，因此允许先建立连接，再通过首条 'auth' 消息完成认证。
     app.ws('/ws', (ws, req) => {
-      if (!req.session?.authenticated) {
-        ws.close(4001, '未登录');
-        return;
+      ws._authenticated = !!req.session?.authenticated;
+      if (ws._authenticated) {
+        this._attachWsClient(ws);
+      } else {
+        // 未认证：等待 auth 消息，10 秒超时自动关闭
+        ws._authTimer = setTimeout(() => {
+          if (!ws._authenticated) { try { ws.close(4001, '认证超时'); } catch {} }
+        }, 10000);
       }
-      this.wsClients.add(ws);
-      console.log('[WebControl] WS client connected, total:', this.wsClients.size);
-
-      // Send initial state
-      ws.send(JSON.stringify({
-        type: 'init',
-        agentStatus: this._agentStatus,
-        conversationId: this._currentConversationId,
-        messages: this._currentMessages,
-        pendingApproval: this._pendingApproval,
-        theme: this._currentTheme,
-        tarot: this._currentTarot,
-        title: this._currentTitle,
-        avatars: this._currentAvatars,
-      }));
 
       ws.on('close', () => {
+        if (ws._authTimer) { clearTimeout(ws._authTimer); ws._authTimer = null; }
         this.wsClients.delete(ws);
         console.log('[WebControl] WS client disconnected, total:', this.wsClients.size);
       });
@@ -465,8 +470,88 @@ class WebControlService {
     this.broadcast({ type: 'avatars', avatars });
   }
 
+  // 模式切换同步：渲染器 → 主进程 → WS 广播 → WebUI
+  pushModeSwitch(mode) {
+    this._currentMode = mode;
+    this.broadcast({ type: 'modeSwitch', mode });
+  }
+
+  // 上下文进度更新（圆扇形指示器）：{used, max, percentage, details}
+  pushContextProgress(data) {
+    this._currentContextProgress = data;
+    this.broadcast({ type: 'contextProgress', data });
+  }
+
+  // 重新优化按钮可见性同步
+  pushReoptimizeState(visible) {
+    this._reoptimizeVisible = !!visible;
+    this.broadcast({ type: 'reoptimizeState', visible: !!visible });
+  }
+
+  // DOM 镜像更新：渲染器 → WS 广播（mirror_head / mirror_body）
+  pushMirrorUpdate(data) {
+    this.broadcast(data);
+  }
+
+  // 将已认证的 ws 加入客户端集合并发送 init 快照
+  _attachWsClient(ws) {
+    this.wsClients.add(ws);
+    console.log('[WebControl] WS client connected, total:', this.wsClients.size);
+    try {
+      ws.send(JSON.stringify({
+        type: 'init',
+        agentStatus: this._agentStatus,
+        conversationId: this._currentConversationId,
+        messages: this._currentMessages,
+        pendingApproval: this._pendingApproval,
+        theme: this._currentTheme,
+        tarot: this._currentTarot,
+        title: this._currentTitle,
+        avatars: this._currentAvatars,
+      }));
+    } catch {}
+    // 通知渲染器推送 DOM 镜像快照（mirror_head + mirror_body）
+    try { if (this.onMirrorInit) this.onMirrorInit(); } catch {}
+  }
+
+  // 保存上传文件到工作目录（HTTP 与 WS 上传共用）
+  _saveUpload(name, type, data) {
+    if (!name || !data) return { ok: false, error: '缺少文件信息' };
+    const base64Data = data.replace(/^data:[^;]+;base64,/, '');
+    const buf = Buffer.from(base64Data, 'base64');
+    const safeName = name.replace(/[^a-zA-Z0-9._\-]/g, '_').substring(0, 100);
+    const saveDir = this.workDir || os.tmpdir();
+    if (this.workDir && !fs.existsSync(this.workDir)) {
+      fs.mkdirSync(this.workDir, { recursive: true });
+    }
+    const savePath = path.join(saveDir, safeName);
+    fs.writeFileSync(savePath, buf);
+    console.log('[WebControl] File uploaded to workspace:', savePath, 'size:', buf.length);
+    return { ok: true, path: savePath, name, type };
+  }
+
   _handleWsMessage(ws, msg) {
+    // 未认证连接只允许 auth 消息
+    if (!ws._authenticated && msg.type !== 'auth') return;
     switch (msg.type) {
+      // 跨源认证：用密码 + 可选 TOTP 完成握手
+      case 'auth': {
+        if (ws._authenticated) return;
+        const { password, totpCode } = msg;
+        if (!password) { try { ws.close(4003, '缺少密码'); } catch {} return; }
+        bcrypt.compare(password, this.config.passwordHash).then((ok) => {
+          if (!ok) { try { ws.close(4003, '密码错误'); } catch {} return; }
+          if (this.config.enable2FA) {
+            if (!totpCode || !this.verifyTOTP(totpCode)) {
+              try { ws.close(4003, '2FA验证码错误'); } catch {} return;
+            }
+          }
+          ws._authenticated = true;
+          if (ws._authTimer) { clearTimeout(ws._authTimer); ws._authTimer = null; }
+          this._attachWsClient(ws);
+        }).catch(() => { try { ws.close(4003, '认证失败'); } catch {} });
+        return;
+      }
       case 'sendMessage':
         if (msg.message && this.onSendMessage) this.onSendMessage(msg.message);
         break;
@@ -485,10 +570,58 @@ class WebControlService {
       case 'loadConversation':
         if (msg.id && this.onLoadConversation) this.onLoadConversation(msg.id);
         break;
+      // 切换模式：WebUI → 主进程 → IPC → 渲染器
+      case 'switchMode':
+        if (msg.mode && this.onSwitchMode) this.onSwitchMode(msg.mode);
+        break;
+      // 重新优化工具选择
+      case 'reoptimizeTools':
+        if (this.onReoptimizeTools) this.onReoptimizeTools();
+        break;
+      // DOM 镜像：WebUI UI 事件转发到渲染器
+      case 'ui_event':
+        if (this.onUiEvent) this.onUiEvent(msg);
+        break;
+      // WebUI 请求当前状态快照（模式、上下文进度、重新优化按钮可见性）
+      case 'requestState':
+        try {
+          ws.send(JSON.stringify({
+            type: 'stateSnapshot',
+            mode: this._currentMode || 'chat',
+            contextProgress: this._currentContextProgress || null,
+            reoptimizeVisible: !!this._reoptimizeVisible,
+          }));
+        } catch {}
+        break;
+      // 远程客户端请求历史对话列表
+      case 'getHistory':
+        Promise.resolve(this.onGetHistory ? this.onGetHistory() : [])
+          .then((history) => { try { ws.send(JSON.stringify({ type: 'history', history: history || [] })); } catch {} })
+          .catch((e) => { try { ws.send(JSON.stringify({ type: 'history', history: [], error: e.message })); } catch {} });
+        break;
+      // 远程客户端删除对话
+      case 'deleteConversation':
+        if (msg.id) {
+          Promise.resolve(this.onDeleteConversation ? this.onDeleteConversation(msg.id) : null)
+            .then(() => { try { ws.send(JSON.stringify({ type: 'conversationDeleted', id: msg.id, ok: true })); } catch {} })
+            .catch((e) => { try { ws.send(JSON.stringify({ type: 'conversationDeleted', id: msg.id, ok: false, error: e.message })); } catch {} });
+        }
+        break;
+      // 远程客户端上传附件（跨源无法用 HTTP + cookie，故走 WS）
+      case 'uploadAttachment':
+        try {
+          const r = this._saveUpload(msg.name, msg.type, msg.data);
+          ws.send(JSON.stringify({ type: 'uploadResult', ...r }));
+        } catch (e) {
+          try { ws.send(JSON.stringify({ type: 'uploadResult', ok: false, error: e.message })); } catch {}
+        }
+        break;
     }
   }
 
-  // ---- Inline HTML for Web UI ----
+  // ---- Inline HTML for Web UI (DOM Mirror) ----
+  // 最小化壳页面：CSS/HTML 由渲染器通过 mirror_head / mirror_body 消息推送
+  // 事件委托捕获 click/input/change/submit，生成 CSS path 转发到渲染器执行
   _getHtml() {
     return `<!DOCTYPE html>
 <html lang="zh-CN">
@@ -499,1071 +632,247 @@ class WebControlService {
 <link rel="stylesheet" href="/static/fa/fontawesome.min.css">
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-:root{
-  --accent:#2a9d8f;--accent-light:#4db8ab;--accent-dark:#1d7068;
-  --accent-bg:rgba(42,157,143,.08);--accent-bg-hover:rgba(42,157,143,.14);
-  --bg-primary:#f5f7fa;--bg-secondary:#ebebeb;--bg-tertiary:#e5e5e5;--bg-hover:#f0f0f0;
-  --text:#1a1a2a;--text2:#666;--border:#d8d8d8;
-  --danger:#e74c3c;--success:#27ae60;--radius:8px;
-}
-[data-theme="dark"]{
-  --text:#e0e0e0;--text2:#888;--border:#333;
-}
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:var(--bg-primary);color:var(--text);height:100vh;display:flex;flex-direction:column;overflow:hidden;transition:background .2s,color .2s}
-a{color:var(--accent);text-decoration:none}
-
-/* Login */
-.login-overlay{position:fixed;inset:0;background:var(--bg-primary);display:flex;align-items:center;justify-content:center;z-index:9999}
-.login-box{background:var(--bg-secondary);border:1px solid var(--border);border-radius:12px;padding:32px;width:360px;max-width:90vw}
-.login-box h2{text-align:center;margin-bottom:20px;color:var(--accent);font-size:20px}
-.login-box input{width:100%;padding:10px 12px;margin-bottom:12px;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg-tertiary);color:var(--text);font-size:14px;outline:none;transition:border-color .15s}
-.login-box input:focus{border-color:var(--accent)}
-.login-box button{width:100%;padding:10px;border:none;border-radius:var(--radius);background:var(--accent);color:#fff;font-size:14px;cursor:pointer;font-weight:600;transition:opacity .15s}
-.login-box button:hover{opacity:.88}
-.login-box .error{color:var(--danger);font-size:13px;margin-bottom:8px;text-align:center;min-height:18px}
-.login-box .totp-row{display:none}
-
-/* Header */
-header{background:var(--bg-secondary);border-bottom:1px solid var(--border);padding:0 20px;display:flex;align-items:center;gap:12px;flex-shrink:0;height:52px}
-.header-brand{font-size:16px;font-weight:700;color:var(--accent);white-space:nowrap}
-.header-title{font-size:14px;font-weight:600;color:var(--text);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.header-tarot{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text2);background:var(--accent-bg);border:1px solid var(--border);border-radius:20px;padding:4px 10px;white-space:nowrap;flex-shrink:0}
-.header-tarot.hidden{display:none}
-.header-tarot .tarot-icon{color:var(--accent)}
-.tarot-trng{display:inline-flex;align-items:center;gap:3px;background:rgba(255,165,0,.15);border:1px solid rgba(255,165,0,.3);color:#e67e22;border-radius:10px;padding:1px 6px;font-size:10px;margin-left:4px}
-.header-status{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text2);flex-shrink:0}
-.header-status .dot{width:8px;height:8px;border-radius:50%;background:var(--text2)}
-.header-status .dot.idle{background:var(--success)}
-.header-status .dot.working{background:var(--accent);animation:pulse 1s infinite}
-@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
-.btn-icon-sm{padding:6px 10px;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg-tertiary);color:var(--text2);font-size:12px;cursor:pointer;transition:all .15s;white-space:nowrap}
-.btn-icon-sm:hover{border-color:var(--accent);color:var(--accent)}
-
-/* Layout */
-.main-layout{display:flex;flex:1;overflow:hidden}
-
-/* Sidebar */
-.sidebar{width:240px;border-right:1px solid var(--border);background:var(--bg-secondary);display:flex;flex-direction:column;flex-shrink:0;transition:background .2s}
-.sidebar-header{padding:10px 14px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center}
-.sidebar-header h3{font-size:13px;font-weight:600;color:var(--text2)}
-.btn-new{padding:4px 10px;border:1px solid var(--accent);border-radius:var(--radius);background:transparent;color:var(--accent);font-size:12px;cursor:pointer;transition:background .15s}
-.btn-new:hover{background:var(--accent-bg)}
-.history-list{flex:1;overflow-y:auto;padding:6px}
-.history-item{padding:9px 10px;border-radius:var(--radius);cursor:pointer;font-size:13px;color:var(--text2);margin-bottom:2px;display:flex;justify-content:space-between;align-items:center;transition:background .15s}
-.history-item:hover{background:var(--bg-hover);color:var(--text)}
-.history-item.active{background:var(--accent-bg);color:var(--accent)}
-.history-item .h-title{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}
-.history-item .h-del{opacity:0;color:var(--danger);cursor:pointer;font-size:11px;padding:2px 5px;flex-shrink:0}
-.history-item:hover .h-del{opacity:.7}
-.history-item .h-del:hover{opacity:1}
-
-/* Chat */
-.chat-area{flex:1;display:flex;flex-direction:column;overflow:hidden;min-width:0}
-.messages{flex:1;overflow-y:auto;padding:16px 20px;display:flex;flex-direction:column;gap:10px}
-
-/* Message bubbles */
-.msg-row{display:flex;gap:8px;align-items:flex-start}
-.msg-row.user{justify-content:flex-end}
-.msg-row.assistant{justify-content:flex-start}
-.msg-avatar{width:30px;height:30px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex-shrink:0;letter-spacing:-.5px;user-select:none}
-.msg-row.assistant .msg-avatar{background:var(--accent-bg);color:var(--accent)}
-.msg-row.user .msg-avatar{background:var(--accent);color:#fff}
-.msg-bubble{max-width:100%;width:fit-content;padding:10px 14px;border-radius:12px;font-size:14px;line-height:1.6;overflow-wrap:break-word;word-break:break-word;white-space:pre-wrap}
-.msg-row.user .msg-bubble{background:var(--accent);color:#fff;border-bottom-right-radius:4px}
-.msg-row.assistant .msg-bubble{background:var(--bg-secondary);border:1px solid var(--border);border-bottom-left-radius:4px;color:var(--text)}
-.msg-system{align-self:center;color:var(--text2);font-size:12px;background:var(--bg-secondary);border:1px solid var(--border);padding:5px 12px;border-radius:16px;text-align:center;max-width:80%}
-.msg-time{font-size:10px;opacity:.5;margin-top:4px;text-align:right}
-.msg-row.user .msg-time{text-align:right}
-.msg-row.assistant .msg-time{text-align:left}
-.msg-col{display:flex;flex-direction:column;max-width:min(80%,calc(100vw - 90px));min-width:0}
-.msg-del-btn{display:none;font-size:11px;background:none;border:none;cursor:pointer;padding:0 2px;color:var(--danger,#e74c3c);opacity:.6;align-self:flex-end;line-height:1.4;margin-top:1px}
-.msg-row:hover .msg-del-btn{display:block}
-.msg-del-btn:hover{opacity:1}
-/* Floating sidebar toggle button */
-.btn-sidebar-float{position:fixed;left:8px;top:50%;transform:translateY(-50%);z-index:200;background:var(--accent);color:#fff;border:none;border-radius:50%;width:34px;height:34px;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:14px;box-shadow:0 2px 8px rgba(0,0,0,.25);transition:opacity .15s,transform .15s}
-.btn-sidebar-float:hover{opacity:.88}
-.sidebar-overlay{position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:150;display:none}
-
-/* Tool calls */
-.tool-call{background:var(--bg-secondary);border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:var(--radius);overflow:hidden;font-size:13px;max-width:90%}
-.tool-call-header{padding:8px 12px;display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none;transition:background .15s}
-.tool-call-header:hover{background:var(--bg-hover)}
-.tool-call-header .tc-icon{color:var(--accent);font-size:14px;width:18px;text-align:center}
-.tool-call-header .tc-name{font-weight:600;color:var(--text);flex:1}
-.tool-call-header .tc-status{font-size:11px;padding:2px 8px;border-radius:10px;font-weight:600}
-.tc-status.calling{background:rgba(42,157,143,.15);color:var(--accent)}
-.tc-status.done{background:rgba(39,174,96,.15);color:var(--success)}
-.tc-status.denied,.tc-status.error{background:rgba(231,76,60,.15);color:var(--danger)}
-.tool-call-header .tc-chevron{color:var(--text2);font-size:11px;transition:transform .2s}
-.tool-call.open .tc-chevron{transform:rotate(180deg)}
-.tool-call-body{display:none;border-top:1px solid var(--border)}
-.tool-call.open .tool-call-body{display:block}
-.tool-call-args{padding:8px 12px;font-family:monospace;font-size:12px;color:var(--text2);white-space:pre-wrap;background:var(--bg-tertiary);border-bottom:1px solid var(--border);max-height:150px;overflow-y:auto}
-.tool-call-result{padding:8px 12px;font-family:monospace;font-size:12px;color:var(--text);white-space:pre-wrap;max-height:200px;overflow-y:auto}
-.tool-call-result.error{color:var(--danger)}
-.trng-badge{display:inline-flex;align-items:center;gap:3px;background:rgba(255,165,0,.15);border:1px solid rgba(255,165,0,.3);color:#e67e22;border-radius:10px;padding:1px 6px;font-size:10px;margin-left:4px}
-
-/* Input */
-.input-area{padding:12px 16px;border-top:1px solid var(--border);background:var(--bg-secondary);display:flex;flex-direction:column;gap:8px;transition:background .2s}
-.input-attachments{display:flex;gap:6px;flex-wrap:wrap}
-.attachment-chip{display:flex;align-items:center;gap:4px;padding:3px 8px;background:var(--accent-bg);border:1px solid var(--border);border-radius:12px;font-size:12px;color:var(--text)}
-.attachment-chip .rm{cursor:pointer;color:var(--danger);opacity:.7}
-.attachment-chip .rm:hover{opacity:1}
-.input-row{display:flex;gap:8px;align-items:flex-end}
-.input-row textarea{flex:1;resize:none;padding:9px 12px;border:1px solid var(--border);border-radius:var(--radius);background:var(--bg-tertiary);color:var(--text);font-size:14px;font-family:inherit;outline:none;min-height:40px;max-height:120px;transition:border-color .15s}
-.input-row textarea:focus{border-color:var(--accent)}
-.btn-send{padding:9px 16px;border:none;border-radius:var(--radius);background:var(--accent);color:#fff;font-size:14px;cursor:pointer;font-weight:600;flex-shrink:0;transition:opacity .15s}
-.btn-send:hover{opacity:.88}
-.btn-send:disabled{opacity:.45;cursor:not-allowed}
-.btn-stop{background:var(--danger)}
-.btn-attach{padding:9px 12px;border:1px solid var(--border);border-radius:var(--radius);background:transparent;color:var(--text2);font-size:14px;cursor:pointer;flex-shrink:0;transition:all .15s}
-.btn-attach:hover{border-color:var(--accent);color:var(--accent)}
-
-/* Approval Banner */
-.approval-banner{padding:12px 16px;background:rgba(231,111,81,.12);border-bottom:1px solid rgba(231,111,81,.25);display:none;align-items:center;gap:10px;flex-shrink:0}
-.approval-banner.visible{display:flex}
-.approval-banner .info{flex:1;font-size:13px;color:var(--text)}
-.approval-banner .info b{color:#e76f51}
-.approval-banner .ap-args{font-size:11px;color:var(--text2);margin-top:3px;font-family:monospace;word-break:break-all}
-.btn-approve{padding:6px 14px;border:none;border-radius:var(--radius);cursor:pointer;font-size:13px;font-weight:600;background:var(--success);color:#fff}
-.btn-reject{padding:6px 14px;border:none;border-radius:var(--radius);cursor:pointer;font-size:13px;font-weight:600;background:var(--danger);color:#fff}
-
-/* Sub-agent messages */
-.msg-subagent{align-self:flex-start;background:var(--accent-bg);border:1px solid var(--border);border-left:3px solid var(--accent);border-radius:var(--radius);padding:8px 12px;font-size:12px;color:var(--text2);max-width:85%}
-.msg-subagent b{color:var(--accent);font-size:13px}
-
-/* Scrollbar */
-::-webkit-scrollbar{width:5px}
-::-webkit-scrollbar-track{background:transparent}
-::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
-::-webkit-scrollbar-thumb:hover{background:var(--text2)}
-
-/* Responsive */
-@media(max-width:720px){
-  .sidebar{display:none}
-  .sidebar.sidebar-open{display:flex;position:fixed;top:0;left:0;height:100%;z-index:160}
-  .sidebar-overlay.active{display:block}
-  .msg-col{max-width:min(88%,calc(100vw - 70px))}
-  .header-tarot{display:none}
-}
-
-/* ---- Markdown content rendering ---- */
-.msg-bubble.md-content{line-height:1.65}
-.msg-bubble.md-content p{margin:0 0 8px}
-.msg-bubble.md-content p:last-child{margin-bottom:0}
-.msg-bubble.md-content h1,.msg-bubble.md-content h2,.msg-bubble.md-content h3,
-.msg-bubble.md-content h4,.msg-bubble.md-content h5,.msg-bubble.md-content h6{
-  margin:12px 0 6px;font-weight:700;line-height:1.3
-}
-.msg-bubble.md-content h1{font-size:1.4em}
-.msg-bubble.md-content h2{font-size:1.3em}
-.msg-bubble.md-content h3{font-size:1.2em}
-.msg-bubble.md-content h4{font-size:1.1em}
-.msg-bubble.md-content h5,.msg-bubble.md-content h6{font-size:1em}
-.msg-bubble.md-content ul,.msg-bubble.md-content ol{margin:4px 0 8px;padding-left:22px}
-.msg-bubble.md-content li{margin:2px 0}
-.msg-bubble.md-content a{color:var(--accent);text-decoration:underline;word-break:break-all}
-.msg-bubble.md-content img{max-width:100%;border-radius:6px;margin:4px 0;display:block}
-.msg-bubble.md-content hr{border:none;border-top:1px solid var(--border);margin:10px 0}
-.msg-bubble.md-content blockquote{
-  border-left:3px solid var(--accent);padding:2px 12px;margin:6px 0;
-  color:var(--text2);background:var(--accent-bg);border-radius:0 6px 6px 0
-}
-.msg-bubble.md-content table{border-collapse:collapse;width:100%;margin:6px 0;font-size:13px}
-.msg-bubble.md-content th,.msg-bubble.md-content td{border:1px solid var(--border);padding:5px 8px;text-align:left}
-.msg-bubble.md-content th{background:var(--bg-tertiary);font-weight:600}
-
-/* Inline code */
-.msg-bubble.md-content code:not(.hljs){
-  background:var(--bg-tertiary);padding:1px 5px;border-radius:4px;
-  font-family:'SFMono-Regular',Consolas,'Liberation Mono',Menlo,monospace;
-  font-size:.88em;color:var(--accent-dark,#1d7068)
-}
-[data-theme="dark"] .msg-bubble.md-content code:not(.hljs){color:var(--accent-light,#4db8ab)}
-
-/* Code blocks */
-.code-block-wrapper{position:relative;margin:8px 0;border-radius:6px;overflow:hidden;border:1px solid var(--border)}
-.code-block-wrapper .code-lang{
-  position:absolute;top:0;right:0;padding:3px 10px;font-size:11px;
-  background:var(--bg-tertiary);color:var(--text2);
-  border-left:1px solid var(--border);border-bottom:1px solid var(--border);
-  border-radius:0 6px 0 6px;text-transform:uppercase;font-weight:600;letter-spacing:.5px
-}
-.code-block-wrapper .code-copy{
-  position:absolute;top:30px;right:6px;padding:2px 8px;font-size:11px;
-  background:var(--bg-tertiary);color:var(--text2);border:1px solid var(--border);
-  border-radius:4px;cursor:pointer;opacity:0;transition:opacity .15s
-}
-.code-block-wrapper:hover .code-copy{opacity:.9}
-.code-block-wrapper .code-copy:hover{color:var(--accent);border-color:var(--accent)}
-.code-block-wrapper pre{
-  margin:0;padding:12px 14px;overflow-x:auto;
-  background:var(--bg-tertiary);font-size:12.5px;line-height:1.5
-}
-.code-block-wrapper pre code{
-  font-family:'SFMono-Regular',Consolas,'Liberation Mono',Menlo,monospace;
-  color:var(--text);background:none;padding:0
-}
-
-/* ---- Reasoning / thinking ---- */
-.reasoning-block{
-  margin-bottom:6px;border:1px dashed var(--border);border-radius:8px;
-  background:var(--bg-tertiary);overflow:hidden;font-size:13px
-}
-.reasoning-header{
-  padding:6px 12px;cursor:pointer;user-select:none;display:flex;align-items:center;gap:8px;
-  color:var(--text2);transition:background .15s
-}
-.reasoning-header:hover{background:var(--bg-hover)}
-.reasoning-header .rh-icon{color:#a855f7;width:14px;text-align:center}
-.reasoning-header .rh-title{font-weight:600;flex:1;font-size:12px}
-.reasoning-header .rh-chevron{font-size:11px;transition:transform .2s;color:var(--text2)}
-.reasoning-block.open .rh-chevron{transform:rotate(180deg)}
-.reasoning-body{
-  display:none;padding:8px 12px;border-top:1px dashed var(--border);
-  color:var(--text2);white-space:pre-wrap;line-height:1.55;font-size:12.5px;
-  max-height:300px;overflow-y:auto
-}
-.reasoning-block.open .reasoning-body{display:block}
-
-/* ---- Typing indicator ---- */
-.typing-indicator{
-  display:flex;gap:4px;padding:8px 14px;align-items:center;
-  background:var(--bg-secondary);border:1px solid var(--border);
-  border-bottom-left-radius:4px;border-radius:12px;width:fit-content;margin-left:38px
-}
-.typing-indicator .dot{
-  width:7px;height:7px;border-radius:50%;background:var(--text2);
-  animation:typingBounce 1.3s infinite ease-in-out
-}
-.typing-indicator .dot:nth-child(2){animation-delay:.2s}
-.typing-indicator .dot:nth-child(3){animation-delay:.4s}
-@keyframes typingBounce{
-  0%,60%,100%{transform:translateY(0);opacity:.4}
-  30%{transform:translateY(-5px);opacity:1}
-}
-
-/* ---- Streaming cursor ---- */
-.streaming-cursor{
-  display:inline-block;width:8px;height:14px;background:var(--accent);
-  margin-left:2px;vertical-align:text-bottom;animation:cursorBlink 1s infinite
-}
-@keyframes cursorBlink{0%,49%{opacity:1}50%,100%{opacity:0}}
-
-/* ---- Empty state ---- */
-.empty-state{
-  display:flex;flex-direction:column;align-items:center;justify-content:center;
-  height:100%;color:var(--text2);text-align:center;padding:20px
-}
-.empty-state .es-icon{font-size:48px;margin-bottom:12px;opacity:.4}
-.empty-state .es-title{font-size:16px;font-weight:600;margin-bottom:4px;color:var(--text)}
-.empty-state .es-hint{font-size:13px;opacity:.7}
-
+html,body{height:100%;overflow:hidden;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
+#app{height:100vh;display:flex}
+#mirror-loading{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:var(--bg-primary,#f5f7fa);color:var(--text-secondary,#666);font-size:14px;z-index:99999;flex-direction:column;gap:12px}
+#mirror-loading.hidden{display:none}
+#mirror-loading .spinner{width:32px;height:32px;border:3px solid var(--border,#ddd);border-top-color:var(--accent,#4f8cff);border-radius:50%;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+#login-overlay{position:fixed;inset:0;display:none;align-items:center;justify-content:center;background:rgba(0,0,0,.5);z-index:99998}
+#login-overlay.show{display:flex}
+#login-box{background:var(--bg-primary,#fff);padding:24px 32px;border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,.2);width:320px}
+#login-box h2{font-size:16px;margin-bottom:16px;color:var(--text-primary,#333);text-align:center}
+#login-box input{width:100%;padding:10px 12px;border:1px solid var(--border,#ddd);border-radius:6px;font-size:14px;margin-bottom:10px;outline:none;background:var(--bg-secondary,#fff);color:var(--text-primary,#333)}
+#login-box input:focus{border-color:var(--accent,#4f8cff)}
+#login-box button{width:100%;padding:10px;border:none;border-radius:6px;background:var(--accent,#4f8cff);color:#fff;font-size:14px;cursor:pointer}
+#login-box button:hover{opacity:.9}
+#login-box .err{color:#e74c3c;font-size:12px;margin-bottom:8px;display:none}
 </style>
 </head>
 <body>
-
-<!-- Login Overlay -->
-<div class="login-overlay" id="loginOverlay">
-  <div class="login-box">
-    <h2><i class="fa-solid fa-satellite-dish"></i> CIBYP Web Control</h2>
-    <div class="error" id="loginError"></div>
-    <input type="password" id="loginPassword" placeholder="访问密码" autofocus>
-    <div class="totp-row" id="totpRow">
-      <input type="text" id="loginTotp" placeholder="2FA 验证码 (6位)" maxlength="6" inputmode="numeric">
-    </div>
-    <button onclick="doLogin()"><i class="fa-solid fa-right-to-bracket"></i> 登录</button>
-  </div>
-</div>
-
-<!-- Main UI -->
-<div id="mainUI" style="display:none;flex-direction:column;height:100vh">
-  <header>
-    <span class="header-brand"><i class="fa-solid fa-satellite-dish"></i> CIBYP</span>
-    <span class="header-title" id="headerTitle">未命名对话</span>
-    <div class="header-tarot hidden" id="headerTarot" title="">
-      <i class="fa-solid fa-star tarot-icon" id="tarotIcon"></i>
-      <span id="tarotText">命运之牌</span>
-    </div>
-    <div class="header-status">
-      <span class="dot idle" id="statusDot"></span>
-      <span id="statusText">空闲</span>
-    </div>
-    <button class="btn-icon-sm" onclick="doLogout()"><i class="fa-solid fa-right-from-bracket"></i> 退出</button>
-  </header>
-
-  <div class="approval-banner" id="approvalBanner">
-    <div class="info">
-      <div><b><i class="fa-solid fa-triangle-exclamation"></i> 审批请求</b>: 工具 <code id="approvalTool"></code></div>
-      <div class="ap-args" id="approvalArgs"></div>
-    </div>
-    <button class="btn-approve" onclick="respondApproval(true)"><i class="fa-solid fa-check"></i> 批准</button>
-    <button class="btn-reject" onclick="respondApproval(false)"><i class="fa-solid fa-xmark"></i> 拒绝</button>
-  </div>
-
-  <!-- Sidebar overlay (mobile) -->
-  <div class="sidebar-overlay" id="sidebarOverlay" onclick="toggleSidebar()"></div>
-  <!-- Floating sidebar toggle button -->
-  <button class="btn-sidebar-float" id="btnSidebarFloat" onclick="toggleSidebar()" title="对话历史">
-    <i class="fa-solid fa-clock-rotate-left"></i>
-  </button>
-
-  <div class="main-layout">
-    <div class="sidebar" id="sidebar">
-      <div class="sidebar-header">
-        <h3><i class="fa-solid fa-clock-rotate-left"></i> 对话历史</h3>
-        <button class="btn-new" onclick="newChat()"><i class="fa-solid fa-plus"></i> 新建</button>
-      </div>
-      <div class="history-list" id="historyList"></div>
-    </div>
-    <div class="chat-area">
-      <div class="messages" id="messages"></div>
-      <div class="input-area">
-        <div class="input-attachments" id="inputAttachments"></div>
-        <div class="input-row">
-          <input type="file" id="fileInput" style="display:none" multiple onchange="handleFiles(this.files)">
-          <button class="btn-attach" onclick="document.getElementById('fileInput').click()" title="附件"><i class="fa-solid fa-paperclip"></i></button>
-          <textarea id="msgInput" placeholder="输入消息 (Enter发送, Shift+Enter换行)..." rows="1"
-            onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMsg()}"></textarea>
-          <button class="btn-send" id="btnSend" onclick="sendMsg()"><i class="fa-solid fa-paper-plane"></i></button>
-          <button class="btn-send btn-stop" id="btnStop" onclick="stopAgent()" style="display:none"><i class="fa-solid fa-stop"></i></button>
-        </div>
-      </div>
-    </div>
-  </div>
-</div>
-
+<div id="mirror-loading"><div class="spinner"></div><div>正在同步界面...</div></div>
+<div id="login-overlay"><div id="login-box"><h2>WebUI 登录</h2><div class="err" id="login-err"></div><input type="password" id="login-pw" placeholder="访问密码"><input type="text" id="login-totp" placeholder="2FA 验证码（可选）"><button id="login-btn">登录</button></div></div>
+<div id="app"></div>
 <script>
-let ws = null;
-let agentStatus = 'idle';
-let pendingAttachments = []; // {name, path, type}
+(function(){
+  var ws=null,authenticated=false,applyingRemote=false,reconnectTimer=null;
+  var loginOverlay=document.getElementById('login-overlay');
+  var loginErr=document.getElementById('login-err');
+  var loadingEl=document.getElementById('mirror-loading');
 
-// ----- Theme Application -----
-let _aiAvatar = '';
-let _userAvatar = '';
-function applyAvatars(av) {
-  if (av && av.ai !== undefined) _aiAvatar = av.ai;
-  if (av && av.user !== undefined) _userAvatar = av.user;
-}
-
-async function loadAndApplyTheme() {
-  try {
-    const r = await fetch('/api/theme');
-    const d = await r.json();
-    if (d.ok && d.theme) applyTheme(d.theme);
-  } catch {}
-  try {
-    const r = await fetch('/api/avatars');
-    const d = await r.json();
-    if (d.ok && d.avatars) applyAvatars(d.avatars);
-  } catch {}
-}
-
-function applyTheme(t) {
-  if (!t) return;
-  const root = document.documentElement;
-  if (t.accent) root.style.setProperty('--accent', t.accent);
-  if (t.accentLight) root.style.setProperty('--accent-light', t.accentLight);
-  if (t.accentDark) root.style.setProperty('--accent-dark', t.accentDark);
-  if (t.accentBg) {
-    root.style.setProperty('--accent-bg', t.accentBg);
-    root.style.setProperty('--accent-bg-hover', t.accentBg.replace('0.08', '0.14'));
+  function getStoredCreds(){
+    try{var s=sessionStorage.getItem('cibyp_creds');if(s)return JSON.parse(s);}catch(e){}
+    return null;
   }
-  if (t.bgPrimary) root.style.setProperty('--bg-primary', t.bgPrimary);
-  if (t.bgSecondary) root.style.setProperty('--bg-secondary', t.bgSecondary);
-  if (t.bgTertiary) root.style.setProperty('--bg-tertiary', t.bgTertiary);
-  if (t.bgHover) root.style.setProperty('--bg-hover', t.bgHover);
-  if (typeof t.isDark === 'boolean') {
-    root.setAttribute('data-theme', t.isDark ? 'dark' : 'light');
-  }
-}
+  function storeCreds(c){try{sessionStorage.setItem('cibyp_creds',JSON.stringify(c));}catch(e){}}
 
-// ----- Auth -----
-async function checkAuth() {
-  try {
-    const r = await fetch('/api/auth-check');
-    const d = await r.json();
-    if (d.authenticated) {
-      showMain();
-    } else {
-      document.getElementById('loginOverlay').style.display = 'flex';
-      if (d.need2FA) document.getElementById('totpRow').style.display = 'block';
-    }
-  } catch { document.getElementById('loginOverlay').style.display = 'flex'; }
-}
-
-async function doLogin() {
-  const pw = document.getElementById('loginPassword').value;
-  const totp = document.getElementById('loginTotp').value;
-  const errEl = document.getElementById('loginError');
-  errEl.textContent = '';
-  try {
-    const r = await fetch('/api/login', {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ password: pw, totpCode: totp }),
-    });
-    const d = await r.json();
-    if (d.ok) {
-      showMain();
-    } else {
-      if (d.need2FA) document.getElementById('totpRow').style.display = 'block';
-      errEl.textContent = d.error || '登录失败';
-    }
-  } catch (e) { errEl.textContent = '网络错误'; }
-}
-
-async function doLogout() {
-  await fetch('/api/logout', { method: 'POST' });
-  location.reload();
-}
-
-function showMain() {
-  document.getElementById('loginOverlay').style.display = 'none';
-  const mainUI = document.getElementById('mainUI');
-  mainUI.style.display = 'flex';
-  loadAndApplyTheme();
-  connectWS();
-  loadHistory();
-}
-
-// ----- WebSocket -----
-function connectWS() {
-  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
-  ws = new WebSocket(proto + '//' + location.host + '/ws');
-  ws.onmessage = (e) => {
-    try { handleWsMessage(JSON.parse(e.data)); } catch {}
-  };
-  ws.onclose = () => { setTimeout(connectWS, 3000); };
-  ws.onerror = () => {};
-}
-
-function handleWsMessage(data) {
-  switch (data.type) {
-    case 'init':
-      updateStatus(data.agentStatus);
-      if (data.messages) renderMessages(data.messages);
-      if (data.pendingApproval) showApproval(data.pendingApproval.toolName, data.pendingApproval.args);
-      if (data.theme) applyTheme(data.theme);
-      if (data.tarot) showTarot(data.tarot);
-      if (data.title) setTitle(data.title);
-      if (data.avatars) applyAvatars(data.avatars);
-      break;
-    case 'message':
-      appendMessage(data.message);
-      break;
-    case 'status':
-      updateStatus(data.agentStatus);
-      break;
-    case 'approval':
-      showApproval(data.toolName, data.args);
-      break;
-    case 'approvalCleared':
-      hideApproval();
-      break;
-    case 'toolCall':
-      handleToolCall(data);
-      break;
-    case 'conversationSwitch':
-      document.getElementById('messages').innerHTML = '';
-      loadHistory();
-      break;
-    case 'messagesSync':
-      renderMessages(data.messages);
-      break;
-    case 'theme':
-      applyTheme(data.theme);
-      break;
-    case 'tarot':
-      showTarot(data.card);
-      break;
-    case 'title':
-      setTitle(data.title);
-      break;
-    case 'avatars':
-      applyAvatars(data.avatars);
-      break;
-  }
-}
-
-// ----- Status -----
-function updateStatus(s) {
-  agentStatus = s;
-  const dot = document.getElementById('statusDot');
-  const txt = document.getElementById('statusText');
-  const btnSend = document.getElementById('btnSend');
-  const btnStop = document.getElementById('btnStop');
-  const working = s !== 'idle';
-  dot.className = 'dot ' + (working ? 'working' : 'idle');
-  txt.textContent = working ? '工作中' : '空闲';
-  btnSend.style.display = working ? 'none' : '';
-  btnStop.style.display = working ? '' : 'none';
-  // Show typing indicator when working, hide when idle.
-  // (appendMessage for assistant also hides it once content arrives.)
-  if (working) {
-    const messagesEl = document.getElementById('messages');
-    // Only show if there isn't already a real assistant message in flight
-    // (i.e. no .typing-indicator yet and last child isn't an assistant bubble)
-    if (messagesEl && !document.getElementById('typingIndicator')) {
-      const lastChild = messagesEl.lastElementChild;
-      const isLastAssistantBubble = lastChild && lastChild.classList.contains('msg-row') && lastChild.classList.contains('assistant');
-      if (!isLastAssistantBubble) showTyping();
-    }
-  } else {
-    hideTyping();
-  }
-}
-
-// ----- Tarot -----
-function showTarot(card) {
-  if (!card) return;
-  const el = document.getElementById('headerTarot');
-  const icon = document.getElementById('tarotIcon');
-  const text = document.getElementById('tarotText');
-  el.classList.remove('hidden');
-  if (card.icon) icon.className = 'fa-solid ' + card.icon + ' tarot-icon';
-  const pos = card.isReversed ? '逆位' : '正位';
-  const meaning = card.isReversed ? card.meaningOfReversed : card.meaningOfUpright;
-  const isTRNG = (card.entropySource || '').startsWith('TRNG');
-  text.textContent = card.name + '(' + pos + ')';
-  el.title = card.name + '(' + pos + ') - ' + (meaning || '') + ' [' + (card.entropySource || 'CSPRNG') + ']';
-  if (isTRNG && !el.querySelector('.tarot-trng')) {
-    el.insertAdjacentHTML('beforeend', '<span class="tarot-trng"><i class="fa-solid fa-satellite-dish"></i> TRNG</span>');
-  }
-}
-
-// ----- Title -----
-function setTitle(title) {
-  document.getElementById('headerTitle').textContent = title || '未命名对话';
-}
-
-// ----- Messages -----
-function renderMessages(messages) {
-  const el = document.getElementById('messages');
-  el.innerHTML = '';
-  if (!messages || messages.length === 0) {
-    el.innerHTML = '<div class="empty-state"><div class="es-icon"><i class="fa-solid fa-comments"></i></div><div class="es-title">开始一段新对话</div><div class="es-hint">在下方输入消息，或从左侧选择历史对话</div></div>';
-    return;
-  }
-  for (const m of messages) appendMessage(m, false);
-  el.scrollTop = el.scrollHeight;
-}
-
-function escHtml(s) {
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-}
-
-// ---- Minimal but safe Markdown renderer ----
-// Supports: fenced code blocks (triple-backtick + lang), inline code, headers,
-// bold/italic/strike, links [text](url), images ![alt](url),
-// unordered/ordered lists, blockquote, hr, tables (GFM pipe), line breaks.
-// All non-code text is HTML-escaped; URLs in links/images are validated.
-// NOTE: this code lives inside a JS template literal, so backticks are
-// constructed via String.fromCharCode and regex backslashes are doubled.
-function renderMarkdown(src) {
-  if (!src) return '';
-  const text = String(src);
-  const FENCE = String.fromCharCode(96, 96, 96); // triple backtick
-  // Split out fenced code blocks first so their content is not processed.
-  const segments = [];
-  const codeBlockRe = new RegExp(FENCE + '([a-zA-Z0-9_+-]*)\\\\n?([\\\\s\\\\S]*?)' + FENCE, 'g');
-  let lastIdx = 0, m;
-  while ((m = codeBlockRe.exec(text)) !== null) {
-    if (m.index > lastIdx) segments.push({ type: 'text', value: text.slice(lastIdx, m.index) });
-    segments.push({ type: 'code', lang: (m[1] || '').toLowerCase(), value: m[2] || '' });
-    lastIdx = m.index + m[0].length;
-  }
-  if (lastIdx < text.length) segments.push({ type: 'text', value: text.slice(lastIdx) });
-  let html = '';
-  for (const seg of segments) {
-    if (seg.type === 'code') {
-      const lang = seg.lang ? escHtml(seg.lang) : '';
-      const codeHtml = escHtml(seg.value.replace(/\\n$/, ''));
-      const wrapperId = 'cb-' + Math.random().toString(36).slice(2, 9);
-      html += '<div class="code-block-wrapper" id="' + wrapperId + '">';
-      if (lang) html += '<span class="code-lang">' + lang + '</span>';
-      html += '<button class="code-copy" onclick="copyCode(\\'' + wrapperId + '\\')"><i class="fa-solid fa-copy"></i> 复制</button>';
-      html += '<pre><code>' + codeHtml + '</code></pre>';
-      html += '</div>';
-    } else {
-      html += renderInlineMd(seg.value);
-    }
-  }
-  return html;
-}
-
-function renderInlineMd(src) {
-  let s = String(src || '');
-  // Escape HTML first
-  s = s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-  // Tables (GFM) — needs to be processed line by line
-  const lines = s.split('\\n');
-  const out = [];
-  let i = 0;
-  while (i < lines.length) {
-    const line = lines[i];
-    // Detect table: current line has | and next line is |---|
-    if (i + 1 < lines.length && line.includes('|') && /^\\s*\\|?[\\s\\-:|]+\\|?\\s*$/.test(lines[i+1]) && lines[i+1].includes('-')) {
-      const header = parseTableRow(line);
-      const aligns = parseTableAligns(lines[i+1]);
-      const rows = [];
-      let j = i + 2;
-      while (j < lines.length && lines[j].includes('|')) {
-        rows.push(parseTableRow(lines[j]));
-        j++;
-      }
-      out.push(renderTable(header, aligns, rows));
-      i = j;
-      continue;
-    }
-    out.push(line);
-    i++;
-  }
-  s = out.join('\\n');
-  // Process block-level markdown
-  // Headers
-  s = s.replace(/^######\\s+(.+)$/gm, '<h6>$1</h6>');
-  s = s.replace(/^#####\\s+(.+)$/gm, '<h5>$1</h5>');
-  s = s.replace(/^####\\s+(.+)$/gm, '<h4>$1</h4>');
-  s = s.replace(/^###\\s+(.+)$/gm, '<h3>$1</h3>');
-  s = s.replace(/^##\\s+(.+)$/gm, '<h2>$1</h2>');
-  s = s.replace(/^#\\s+(.+)$/gm, '<h1>$1</h1>');
-  // Horizontal rule
-  s = s.replace(/^---+$|^\\*\\*\\*+$|^___+$/gm, '<hr>');
-  // Blockquote
-  s = s.replace(/^&gt;\\s?(.+)$/gm, '<blockquote>$1</blockquote>');
-  // Lists: process line-by-line, group consecutive items into <ul>/<ol>
-  // (handles both unordered: "- ", "* ", "+ " and ordered: "1. ", "2. ")
-  const listLines = s.split('\\n');
-  const listOut = [];
-  let li = 0;
-  while (li < listLines.length) {
-    const line = listLines[li];
-    const ulMatch = /^\\s*(-|\\*|\\+)\\s+(.+)$/.exec(line);
-    const olMatch = /^\\s*(\\d+)\\.\\s+(.+)$/.exec(line);
-    if (ulMatch || olMatch) {
-      const isOl = !!olMatch;
-      const items = [];
-      while (li < listLines.length) {
-        const ul = /^\\s*(-|\\*|\\+)\\s+(.+)$/.exec(listLines[li]);
-        const ol = /^\\s*(\\d+)\\.\\s+(.+)$/.exec(listLines[li]);
-        if (isOl && ol) { items.push(ol[2]); li++; }
-        else if (!isOl && ul) { items.push(ul[2]); li++; }
-        else break;
-      }
-      const tag = isOl ? 'ol' : 'ul';
-      const itemsHtml = items.map(it => '<li>' + it + '</li>').join('');
-      listOut.push('<' + tag + '>' + itemsHtml + '</' + tag + '>');
-    } else {
-      listOut.push(line);
-      li++;
-    }
-  }
-  s = listOut.join('\\n');
-  // Images: ![alt](url)
-  s = s.replace(/!\\[([^\\]]*)\\]\\(([^\\s)]+)[^)]*\\)/g, '<img alt="$1" src="$2">');
-  // Links: [text](url)
-  s = s.replace(/\\[([^\\]]+)\\]\\(([^\\s)]+)[^)]*\\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
-  // Bold + italic
-  s = s.replace(/\\*\\*\\*([^*]+)\\*\\*\\*/g, '<strong><em>$1</em></strong>');
-  s = s.replace(/\\*\\*([^*]+)\\*\\*/g, '<strong>$1</strong>');
-  s = s.replace(/(?<!\\w)\\*([^*]+)\\*(?!\\w)/g, '<em>$1</em>');
-  s = s.replace(/__([^_]+)__/g, '<strong>$1</strong>');
-  // Strikethrough
-  s = s.replace(/~~([^~]+)~~/g, '<del>$1</del>');
-  // Inline code
-  s = s.replace(/\`([^\`]+)\`/g, '<code>$1</code>');
-  // Paragraph + line breaks: split into blocks by blank line, within block convert single \\n to <br>
-  const paragraphs = s.split(/\\n{2,}/);
-  s = paragraphs.map(p => {
-    p = p.trim();
-    if (!p) return '';
-    // Don't wrap block-level elements that are already wrapped
-    if (/^<(h[1-6]|ul|ol|li|blockquote|hr|table|div|pre|img|p)/.test(p)) return p;
-    if (p.includes('<li>')) return p;
-    // Convert remaining single newlines to <br>
-    return '<p>' + p.replace(/\\n/g, '<br>') + '</p>';
-  }).join('\\n');
-  return s;
-}
-
-function parseTableRow(line) {
-  return line.replace(/^\\s*\\|?/, '').replace(/\\|?\\s*$/, '').split('|').map(c => c.trim());
-}
-function parseTableAligns(line) {
-  return line.replace(/^\\s*\\|?/, '').replace(/\\|?\\s*$/, '').split('|').map(c => {
-    c = c.trim();
-    if (c.startsWith(':') && c.endsWith(':')) return 'center';
-    if (c.endsWith(':')) return 'right';
-    return 'left';
-  });
-}
-function renderTable(header, aligns, rows) {
-  let html = '<table>';
-  html += '<thead><tr>';
-  header.forEach((h, i) => {
-    const a = aligns[i] || 'left';
-    html += '<th style="text-align:' + a + '">' + renderInlineMd(h) + '</th>';
-  });
-  html += '</tr></thead><tbody>';
-  rows.forEach(r => {
-    html += '<tr>';
-    header.forEach((_, i) => {
-      const a = aligns[i] || 'left';
-      html += '<td style="text-align:' + a + '">' + renderInlineMd(r[i] || '') + '</td>';
-    });
-    html += '</tr>';
-  });
-  html += '</tbody></table>';
-  return html;
-}
-
-function copyCode(wrapperId) {
-  const el = document.getElementById(wrapperId);
-  if (!el) return;
-  const code = el.querySelector('pre code');
-  if (!code) return;
-  const text = code.textContent;
-  if (navigator.clipboard && navigator.clipboard.writeText) {
-    navigator.clipboard.writeText(text).then(() => {
-      const btn = el.querySelector('.code-copy');
-      const orig = btn.innerHTML;
-      btn.innerHTML = '<i class="fa-solid fa-check"></i> 已复制';
-      setTimeout(() => { btn.innerHTML = orig; }, 1500);
-    });
-  } else {
-    const ta = document.createElement('textarea');
-    ta.value = text; document.body.appendChild(ta); ta.select();
-    try { document.execCommand('copy'); } catch {}
-    document.body.removeChild(ta);
-  }
-}
-
-// ---- Typing indicator ----
-function showTyping() {
-  hideTyping();
-  const el = document.getElementById('messages');
-  if (!el) return;
-  const t = document.createElement('div');
-  t.className = 'typing-indicator';
-  t.id = 'typingIndicator';
-  t.innerHTML = '<span class="dot"></span><span class="dot"></span><span class="dot"></span>';
-  el.appendChild(t);
-  el.scrollTop = el.scrollHeight;
-}
-function hideTyping() {
-  const t = document.getElementById('typingIndicator');
-  if (t) t.remove();
-}
-
-
-function formatTime(ts) {
-  if (!ts) return '';
-  const d = new Date(ts);
-  return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
-}
-
-// ----- Sidebar Toggle -----
-function toggleSidebar() {
-  const sb = document.getElementById('sidebar');
-  const overlay = document.getElementById('sidebarOverlay');
-  if (!sb) return;
-  const isOpen = sb.classList.toggle('sidebar-open');
-  if (overlay) overlay.classList.toggle('active', isOpen);
-}
-
-// ----- Delete Turn -----
-async function deleteTurn(timestamp) {
-  if (!confirm('确定要删除这轮对话吗？')) return;
-  try {
-    const r = await fetch('/api/chat/delete-turn', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ timestamp }),
-    });
-    const d = await r.json();
-    if (!d.ok) alert('删除失败: ' + (d.error || '未知错误'));
-  } catch (e) { alert('删除失败: ' + e.message); }
-}
-
-function appendMessage(msg, scroll = true) {
-  const el = document.getElementById('messages');
-  // Remove typing indicator when a real message arrives
-  if (msg.role === 'assistant' && (msg.content || msg.reasoning || (msg.tool_calls && msg.tool_calls.length))) {
-    hideTyping();
-  }
-  if (msg.role === 'user') {
-    const div = document.createElement('div');
-    div.className = 'msg-row user';
-    const delBtn = '<button class="msg-del-btn" onclick="deleteTurn(' + (msg.timestamp || 0) + ')" title="删除这轮对话">✕ 删除</button>';
-    const userAvatarHtml = _userAvatar ? '<img src="' + _userAvatar + '" style="width:100%;height:100%;border-radius:50%;object-fit:cover">' : '你';
-    div.innerHTML = '<div class="msg-col"><div class="msg-bubble">' + escHtml(msg.content || '') + '</div><div class="msg-time">' + formatTime(msg.timestamp) + '</div>' + delBtn + '</div><div class="msg-avatar">' + userAvatarHtml + '</div>';
-    el.appendChild(div);
-  } else if (msg.role === 'assistant') {
-    const div = document.createElement('div');
-    div.className = 'msg-row assistant';
-    let colInner = '';
-    // Reasoning / thinking (collapsible)
-    if (msg.reasoning) {
-      colInner += '<div class="reasoning-block">' +
-        '<div class="reasoning-header" onclick="this.parentElement.classList.toggle(\\'open\\')">' +
-        '<i class="fa-solid fa-lightbulb rh-icon"></i>' +
-        '<span class="rh-title">推理过程</span>' +
-        '<i class="fa-solid fa-chevron-down rh-chevron"></i>' +
-        '</div>' +
-        '<div class="reasoning-body">' + escHtml(msg.reasoning) + '</div>' +
-        '</div>';
-    }
-    // Text content (rendered as markdown)
-    if (msg.content) colInner += '<div class="msg-bubble md-content">' + renderMarkdown(msg.content) + '</div>';
-    // Tool calls (from history)
-    if (msg.tool_calls && msg.tool_calls.length) {
-      for (const tc of msg.tool_calls) {
-        const tname = (tc.function && tc.function.name) || 'tool';
-        let argsStr = '';
-        try { argsStr = JSON.stringify(JSON.parse((tc.function && tc.function.arguments) || '{}'), null, 2); } catch(e) { argsStr = (tc.function && tc.function.arguments) || ''; }
-        const tcid = tc.id || '';
-        colInner += '<div class="tool-call" data-tcid="' + escHtml(tcid) + '">' +
-          '<div class="tool-call-header" onclick="toggleTc(this.parentElement)">' +
-          '<i class="fa-solid fa-gear tc-icon" style="color:var(--accent)"></i>' +
-          '<span class="tc-name">' + escHtml(tname) + '</span>' +
-          '<span class="tc-status done">完成</span>' +
-          '<i class="fa-solid fa-chevron-down tc-chevron"></i>' +
-          '</div>' +
-          '<div class="tool-call-body">' +
-          (argsStr ? '<div class="tool-call-args">' + escHtml(argsStr) + '</div>' : '') +
-          '<div class="tool-call-result"></div>' +
-          '</div></div>';
-      }
-    }
-    if (msg.content || msg.reasoning || (msg.tool_calls && msg.tool_calls.length)) {
-      const delTs = msg.timestamp || 0;
-      colInner += '<div class="msg-time">' + formatTime(msg.timestamp) + '</div>';
-      colInner += '<button class="msg-del-btn" onclick="deleteTurn(' + delTs + ')" title="删除这轮对话">✕ 删除</button>';
-    }
-    if (colInner) {
-      const aiAvatarHtml = _aiAvatar ? '<img src="' + _aiAvatar + '" style="width:100%;height:100%;border-radius:50%;object-fit:cover">' : 'AI';
-      div.innerHTML = '<div class="msg-avatar">' + aiAvatarHtml + '</div><div class="msg-col">' + colInner + '</div>';
-      el.appendChild(div);
-    }
-  } else if (msg.role === 'tool') {
-    // Fill result into matching tool-call block already rendered
-    const tcid = msg.tool_call_id || '';
-    const resultEl = tcid ? el.querySelector('[data-tcid="' + tcid + '"] .tool-call-result') : null;
-    if (resultEl) {
-      const text = (typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content || '')).substring(0, 800);
-      resultEl.textContent = text;
-      resultEl.closest('.tool-call').classList.add('open');
-    } else {
-      // Fallback: show as system
-      const d = document.createElement('div');
-      d.className = 'msg-system';
-      d.textContent = '[' + (msg.name || 'tool') + '] ' + (typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content || '')).substring(0, 300);
-      el.appendChild(d);
-    }
-  } else {
-    const div = document.createElement('div');
-    div.className = 'msg-system';
-    div.textContent = msg.content || '';
-    el.appendChild(div);
-  }
-  if (scroll) el.scrollTop = el.scrollHeight;
-}
-
-// ----- Tool Calls -----
-const toolCallMap = {}; // display storage for active calls
-
-function handleToolCall(data) {
-  const el = document.getElementById('messages');
-  const id = 'tc-' + data.toolName.replace(/[^a-z0-9]/gi, '') + '-' + Date.now();
-
-  if (data.status === 'calling') {
-    const div = document.createElement('div');
-    div.className = 'tool-call';
-    div.id = id;
-    div.dataset.tool = data.toolName;
-    const argsStr = typeof data.args === 'object' ? JSON.stringify(data.args, null, 2) : String(data.args || '');
-    div.innerHTML =
-      '<div class="tool-call-header" onclick="toggleTc(this.parentElement)">' +
-        '<i class="fa-solid fa-gear fa-spin tc-icon" id="' + id + '-icon"></i>' +
-        '<span class="tc-name">' + escHtml(data.toolName) + '</span>' +
-        '<span class="tc-status calling">调用中</span>' +
-        '<i class="fa-solid fa-chevron-down tc-chevron"></i>' +
-      '</div>' +
-      '<div class="tool-call-body">' +
-        (argsStr ? '<div class="tool-call-args">' + escHtml(argsStr) + '</div>' : '') +
-        '<div class="tool-call-result" id="' + id + '-result"></div>' +
-      '</div>';
-    el.appendChild(div);
-    toolCallMap[data.toolName] = id;
-    el.scrollTop = el.scrollHeight;
-  } else if (data.status === 'done' || data.status === 'denied' || data.status === 'error') {
-    const tcId = toolCallMap[data.toolName];
-    const div = tcId ? document.getElementById(tcId) : null;
-    if (div) {
-      const icon = div.querySelector('.tc-icon');
-      const badge = div.querySelector('.tc-status');
-      const resultEl = div.querySelector('.tool-call-result');
-      const isOk = data.status === 'done';
-      if (icon) icon.className = 'fa-solid ' + (isOk ? 'fa-check' : 'fa-xmark') + ' tc-icon';
-      if (badge) {
-        badge.className = 'tc-status ' + (isOk ? 'done' : 'denied');
-        badge.textContent = isOk ? '完成' : data.status === 'denied' ? '已拒绝' : '错误';
-      }
-      if (resultEl) {
-        const text = data.result ? data.result.substring(0, 800) : '';
-        if (text) {
-          resultEl.textContent = text;
-          if (!isOk) resultEl.classList.add('error');
-          // Auto-open on result
-          div.classList.add('open');
-        }
-      }
-    }
-  }
-}
-
-function toggleTc(el) {
-  el.classList.toggle('open');
-}
-
-// ----- Approval -----
-function showApproval(toolName, args) {
-  document.getElementById('approvalTool').textContent = toolName;
-  const argsStr = typeof args === 'object' ? JSON.stringify(args, null, 2) : String(args || '');
-  document.getElementById('approvalArgs').textContent = argsStr.substring(0, 300);
-  document.getElementById('approvalBanner').classList.add('visible');
-}
-function hideApproval() {
-  document.getElementById('approvalBanner').classList.remove('visible');
-}
-function respondApproval(approved) {
-  if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'approvalResponse', approved }));
-  hideApproval();
-}
-
-// ----- Chat -----
-async function sendMsg() {
-  const input = document.getElementById('msgInput');
-  const msg = input.value.trim();
-  if (!msg && pendingAttachments.length === 0) return;
-  input.value = '';
-  input.style.height = 'auto';
-
-  // Build message with attachment paths if any
-  let fullMsg = msg;
-  if (pendingAttachments.length > 0) {
-    const paths = pendingAttachments.map(a => '附件: ' + a.path + ' (' + a.name + ')').join('\\n');
-    fullMsg = (msg ? msg + '\\n' : '') + paths;
-    pendingAttachments = [];
-    document.getElementById('inputAttachments').innerHTML = '';
-  }
-
-  if (ws && ws.readyState === 1) {
-    ws.send(JSON.stringify({ type: 'sendMessage', message: fullMsg }));
-  }
-}
-
-function newChat() {
-  if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'newChat' }));
-}
-
-function stopAgent() {
-  if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'stopAgent' }));
-}
-
-// ----- File Attachments -----
-async function handleFiles(files) {
-  for (const file of files) {
-    const reader = new FileReader();
-    reader.onload = async (e) => {
-      try {
-        const r = await fetch('/api/upload-attachment', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: file.name, type: file.type, data: e.target.result }),
-        });
-        const d = await r.json();
-        if (d.ok) {
-          pendingAttachments.push({ name: d.name, path: d.path, type: d.type });
-          renderAttachmentChips();
-        } else {
-          alert('上传失败: ' + d.error);
-        }
-      } catch (err) {
-        alert('上传出错: ' + err.message);
+  function connect(){
+    var proto=location.protocol==='https:'?'wss:':'ws:';
+    ws=new WebSocket(proto+'//'+location.host+'/ws');
+    ws.onopen=function(){
+      var c=getStoredCreds();
+      if(c&&c.password){
+        ws.send(JSON.stringify({type:'auth',password:c.password,totpCode:c.totpCode||''}));
+      }else{
+        showLogin();
       }
     };
-    reader.readAsDataURL(file);
+    ws.onmessage=function(ev){
+      var msg;try{msg=JSON.parse(ev.data);}catch(e){return;}
+      handle(msg);
+    };
+    ws.onclose=function(){
+      ws=null;
+      if(!authenticated)showLogin();
+      if(reconnectTimer)clearTimeout(reconnectTimer);
+      reconnectTimer=setTimeout(connect,2000);
+    };
+    ws.onerror=function(){};
   }
-  document.getElementById('fileInput').value = '';
-}
 
-function renderAttachmentChips() {
-  const container = document.getElementById('inputAttachments');
-  container.innerHTML = pendingAttachments.map((a, i) =>
-    '<div class="attachment-chip"><i class="fa-solid fa-paperclip"></i>&nbsp;' + escHtml(a.name) +
-    '<span class="rm" onclick="removeAttachment(' + i + ')"><i class="fa-solid fa-xmark"></i></span></div>'
-  ).join('');
-}
+  function showLogin(){
+    loadingEl.classList.add('hidden');
+    loginOverlay.classList.add('show');
+    loginErr.style.display='none';
+  }
 
-function removeAttachment(i) {
-  pendingAttachments.splice(i, 1);
-  renderAttachmentChips();
-}
-
-// ----- History -----
-async function loadHistory() {
-  try {
-    const r = await fetch('/api/history');
-    const d = await r.json();
-    if (!d.ok) return;
-    const list = document.getElementById('historyList');
-    list.innerHTML = '';
-    if (!d.history || d.history.length === 0) {
-      list.innerHTML = '<div style="padding:16px;text-align:center;color:var(--text2);font-size:12px"><i class="fa-solid fa-inbox"></i><br>暂无历史</div>';
-      return;
+  document.getElementById('login-btn').onclick=function(){
+    var pw=document.getElementById('login-pw').value;
+    var totp=document.getElementById('login-totp').value;
+    if(!pw){loginErr.textContent='请输入密码';loginErr.style.display='block';return;}
+    loginErr.style.display='none';
+    if(!ws||ws.readyState!==1)connect();
+    function tryAuth(){
+      if(ws&&ws.readyState===1){
+        ws.send(JSON.stringify({type:'auth',password:pw,totpCode:totp||''}));
+        storeCreds({password:pw,totpCode:totp||''});
+      }else{setTimeout(tryAuth,200);}
     }
-    for (const h of d.history) {
-      const div = document.createElement('div');
-      div.className = 'history-item';
-      div.dataset.id = h.id;
-      div.innerHTML =
-        '<span class="h-title">' + escHtml(h.title || '未命名') + '</span>' +
-        '<span class="h-del" onclick="event.stopPropagation();deleteConv(\\''+h.id+'\\')" title="删除"><i class="fa-solid fa-trash-can"></i></span>';
-      div.onclick = () => hostLoadConversation(h.id);
-      list.appendChild(div);
+    setTimeout(tryAuth,300);
+  };
+  document.getElementById('login-pw').addEventListener('keydown',function(e){if(e.key==='Enter')document.getElementById('login-btn').click();});
+  document.getElementById('login-totp').addEventListener('keydown',function(e){if(e.key==='Enter')document.getElementById('login-btn').click();});
+
+  function handle(msg){
+    switch(msg.type){
+      case 'init':
+        authenticated=true;
+        loginOverlay.classList.remove('show');
+        if(msg.theme)applyThemeVars(msg.theme);
+        break;
+      case 'mirror_head':
+        applyHead(msg);
+        loadingEl.classList.add('hidden');
+        break;
+      case 'mirror_body':
+        applyBody(msg.html);
+        break;
+      case 'theme':
+        applyThemeVars(msg.theme);
+        break;
+      case 'auth_fail':
+        authenticated=false;
+        loginErr.textContent=msg.error||'认证失败';
+        loginErr.style.display='block';
+        loginOverlay.classList.add('show');
+        loadingEl.classList.add('hidden');
+        sessionStorage.removeItem('cibyp_creds');
+        break;
+      // 其他消息类型（status/message/toolCall/approval 等）由镜像 DOM 自动体现
     }
-  } catch {}
-}
-
-function hostLoadConversation(id) {
-  // Send to server which forwards to Electron host to switch conversation
-  if (ws && ws.readyState === 1) {
-    ws.send(JSON.stringify({ type: 'loadConversation', id }));
-    // Highlight active item
-    document.querySelectorAll('.history-item').forEach(el => el.classList.toggle('active', el.dataset.id === id));
   }
-}
 
-async function deleteConv(id) {
-  if (!confirm('确认删除此对话？')) return;
-  await fetch('/api/conversation/' + id, { method: 'DELETE' });
-  loadHistory();
-}
-
-// Auto-resize textarea
-document.addEventListener('DOMContentLoaded', () => {
-  const ta = document.getElementById('msgInput');
-  if (ta) {
-    ta.addEventListener('input', () => {
-      ta.style.height = 'auto';
-      ta.style.height = Math.min(ta.scrollHeight, 120) + 'px';
-    });
+  function applyThemeVars(t){
+    if(!t)return;
+    var root=document.documentElement;
+    var map={
+      accent:'--accent',accentLight:'--accent-light',accentDark:'--accent-dark',
+      accentBg:'--accent-bg',accentBgHover:'--accent-bg-hover',
+      bgPrimary:'--bg-primary',bgSecondary:'--bg-secondary',bgTertiary:'--bg-tertiary',bgHover:'--bg-hover'
+    };
+    for(var k in map){if(t[k])root.style.setProperty(map[k],t[k]);}
   }
-});
 
-checkAuth();
+  function applyHead(msg){
+    var html=msg.html||'';
+    // 去除 <script> 标签
+    html=html.replace(/<script[\\s\\S]*?<\\/script>/gi,'');
+    // 同步 data-theme
+    if(msg.theme_mode)document.documentElement.setAttribute('data-theme',msg.theme_mode);
+    var head=document.head;
+    // 移除已有的渲染器 CSS（保留 FA 链接和壳样式）
+    var toRemove=head.querySelectorAll('link:not([href*="fontawesome"]),style:not([data-shell])');
+    for(var i=0;i<toRemove.length;i++)toRemove[i].remove();
+    // 插入渲染器 head 内容
+    var tmp=document.createElement('div');
+    tmp.innerHTML=html;
+    var nodes=tmp.querySelectorAll('link,style');
+    for(var j=0;j<nodes.length;j++)head.appendChild(nodes[j].cloneNode(true));
+    loadingEl.classList.add('hidden');
+  }
+
+  function applyBody(bodyHtml){
+    applyingRemote=true;
+    var app=document.getElementById('app');
+    // 捕获滚动位置
+    var scrolls=[];
+    if(app){
+      var all=app.querySelectorAll('*');
+      for(var i=0;i<all.length;i++){
+        var el=all[i];
+        if(el.scrollTop>0||el.scrollLeft>0){
+          var p=cssPath(el);
+          if(p)scrolls.push({path:p,top:el.scrollTop,left:el.scrollLeft});
+        }
+      }
+    }
+    app.innerHTML=bodyHtml;
+    // 恢复滚动位置
+    for(var k=0;k<scrolls.length;k++){
+      var s=scrolls[k];
+      var el=document.querySelector(s.path);
+      if(el){el.scrollTop=s.top;el.scrollLeft=s.left;}
+    }
+    // canvas 替换为占位符
+    var canvases=app.querySelectorAll('canvas');
+    for(var c=0;c<canvases.length;c++){
+      var cv=canvases[c];
+      var div=document.createElement('div');
+      div.style.cssText='width:'+(cv.style.width||'100%')+';height:'+(cv.style.height||'200px')+';min-height:100px;display:flex;align-items:center;justify-content:center;background:var(--bg-secondary,#ebebeb);color:var(--text-tertiary,#999);font-size:12px;border-radius:4px;';
+      div.textContent='[Canvas 内容不可镜像]';
+      if(cv.parentNode)cv.parentNode.replaceChild(div,cv);
+    }
+    setTimeout(function(){applyingRemote=false;},50);
+  }
+
+  // CSS path 生成
+  function cssPath(el){
+    if(!el||el.nodeType!==1)return'';
+    if(el.id)return'#'+el.id;
+    var parts=[];
+    var cur=el;
+    while(cur&&cur.nodeType===1&&cur!==document.documentElement){
+      var selector=cur.nodeName.toLowerCase();
+      if(cur.id){parts.unshift('#'+cur.id);break;}
+      var parent=cur.parentNode;
+      if(parent&&parent.children){
+        var typeIdx=1;
+        var sib=cur.previousElementSibling;
+        while(sib){
+          if(sib.nodeName.toLowerCase()===selector)typeIdx++;
+          sib=sib.previousElementSibling;
+        }
+        var sameType=0;
+        for(var si=0;si<parent.children.length;si++){
+          if(parent.children[si].nodeName.toLowerCase()===selector)sameType++;
+        }
+        if(sameType>1)selector+=':nth-of-type('+typeIdx+')';
+      }
+      if(cur.className&&typeof cur.className==='string'){
+        var cls=cur.className.trim().split(/\\s+/).slice(0,2).join('.');
+        if(cls)selector+='.'+cls;
+      }
+      parts.unshift(selector);
+      cur=cur.parentNode;
+    }
+    return parts.join(' > ');
+  }
+
+  // 事件委托：捕获 click/input/change/submit
+  function sendEvent(evtType,target,extra){
+    if(applyingRemote||!ws||ws.readyState!==1)return;
+    if(target.closest('#mirror-loading')||target.closest('#login-overlay'))return;
+    var path=cssPath(target);
+    if(!path)return;
+    var data={type:'ui_event',event:evtType,target:path};
+    if(extra)for(var k in extra)data[k]=extra[k];
+    ws.send(JSON.stringify(data));
+  }
+
+  document.addEventListener('click',function(e){
+    if(applyingRemote)return;
+    if(e.target.closest('a'))e.preventDefault();
+    sendEvent('click',e.target);
+  },true);
+
+  document.addEventListener('input',function(e){
+    if(applyingRemote)return;
+    sendEvent('input',e.target,{value:e.target.value});
+  },true);
+
+  document.addEventListener('change',function(e){
+    if(applyingRemote)return;
+    sendEvent('change',e.target,{value:e.target.value,checked:e.target.checked});
+  },true);
+
+  document.addEventListener('submit',function(e){
+    if(applyingRemote)return;
+    e.preventDefault();
+    sendEvent('submit',e.target);
+  },true);
+
+  connect();
+})();
 </script>
 </body>
 </html>`;

@@ -4957,6 +4957,53 @@ app.whenReady().then(async () => {
     webControlService._currentAvatars = avatars;
     if (webControlService.running) webControlService.pushAvatars(avatars);
   });
+  // 渲染器模式切换 → 广播到 WebUI
+  ipcMain.on('webControl:pushModeSwitch', (_, mode) => {
+    if (webControlService.running && typeof webControlService.pushModeSwitch === 'function') {
+      webControlService.pushModeSwitch(mode);
+    }
+  });
+  // 渲染器上下文进度 → 广播到 WebUI（圆扇形指示器）
+  ipcMain.on('webControl:pushContextProgress', (_, data) => {
+    if (webControlService.running && typeof webControlService.pushContextProgress === 'function') {
+      webControlService.pushContextProgress(data);
+    }
+  });
+  // 渲染器重新优化按钮可见性 → 广播到 WebUI
+  ipcMain.on('webControl:pushReoptimizeState', (_, visible) => {
+    if (webControlService.running && typeof webControlService.pushReoptimizeState === 'function') {
+      webControlService.pushReoptimizeState(visible);
+    }
+  });
+  // WebUI → 渲染器：模式切换
+  if (typeof webControlService.onSwitchMode !== 'undefined') {
+    webControlService.onSwitchMode = (mode) => {
+      mainWindow?.webContents?.send('webControl:switchMode', mode);
+    };
+  }
+  // WebUI → 渲染器：重新优化工具
+  if (typeof webControlService.onReoptimizeTools !== 'undefined') {
+    webControlService.onReoptimizeTools = () => {
+      mainWindow?.webContents?.send('webControl:reoptimizeTools');
+    };
+  }
+  // ---- DOM Mirror bridge ----
+  // WS 客户端连接后：通知渲染器推送完整 mirror_head + mirror_body 快照
+  webControlService.onMirrorInit = () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('webControl:mirrorInit');
+    }
+  };
+  // WebUI UI 事件 → 渲染器：转发到渲染器以触发对应元素操作
+  webControlService.onUiEvent = (data) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('webControl:uiEvent', data);
+    }
+  };
+  // 渲染器 → WS 广播：DOM 镜像更新（mirror_head / mirror_body）
+  ipcMain.on('webControl:mirrorUpdate', (_, data) => {
+    if (webControlService.running) webControlService.pushMirrorUpdate(data);
+  });
 
   // Auto-start email if configured
   if (settings.email.enabled && settings.email.emailUser && settings.email.totpSecret) {

@@ -71,6 +71,7 @@ class Agent {
     this.babeAffection = 0; // Babe 模式好感度（0-100）
     this.mode = 'chat'; // 'chat' | 'code' | 'babe'
     this.sessionAutoOptimizeDisabled = false; // LLM 可在本次 session 内禁用自动优化
+    this.dreamRunning = false; // Dream 运行中标志，用户发消息时打断
   }
 
   getLocalDateTimeString() {
@@ -81,6 +82,18 @@ class Agent {
     const d = String(now.getDate()).padStart(2, '0');
     const weekdays = ['日', '一', '二', '三', '四', '五', '六'];
     return `${y}-${m}-${d} 星期${weekdays[now.getDay()]}`;
+  }
+
+  /**
+   * 设置变更后即时生效：更新 maxTokens、重算 systemPrompt。
+   * 解决"配置完显示未配置还得重启App"的问题。
+   */
+  applySettings(merged) {
+    this.settings = merged;
+    if (this.contextManager) {
+      this.contextManager.setMaxTokens(merged?.llm?.maxContextLength || 8192);
+      this.contextManager.setSystemPrompt(this.getSystemPrompt());
+    }
   }
 
   async init() {
@@ -164,20 +177,17 @@ class Agent {
       // Release lock if we acquired it but won't run (shouldn't happen, but be safe)
       return;
     }
-    if (this.onMessage) {
-      this.onMessage('system', '🌙 自动 Dream 启动：开始整理持久化记忆...');
-    }
+    // Dream 完全静默：不向 UI 推送任何消息，仅 console 日志
+    console.log('[Dream] 自动 Dream 启动：开始整理持久化记忆...');
+    this.dreamRunning = true;
     try {
       await this._runDreamInline();
       await window.api.dreamRecordConsolidation();
-      if (this.onMessage) {
-        this.onMessage('system', '🌙 Dream 完成：记忆已整理');
-      }
+      console.log('[Dream] Dream 完成：记忆已整理');
     } catch (e) {
-      if (this.onMessage) {
-        this.onMessage('system', `Dream 失败：${e.message}`);
-      }
+      console.warn('[Dream] Dream 失败：', e.message);
     } finally {
+      this.dreamRunning = false;
       try { await window.api.dreamReleaseLock(); } catch { /* ignore */ }
     }
   }
@@ -253,34 +263,29 @@ class Agent {
           requestId: 'dream-' + Date.now().toString()
         });
         if (!result.ok) {
-          if (this.onMessage) this.onMessage('system', `Dream LLM 调用失败：${result.error}`);
+          console.warn('[Dream] LLM 调用失败：', result.error);
           break;
         }
         const choice = result.data.choices?.[0];
         if (!choice) break;
         const assistantMsg = choice.message;
         if (choice.finish_reason === 'stop' && (!assistantMsg.tool_calls || assistantMsg.tool_calls.length === 0)) {
-          // Dream completed
-          if (assistantMsg.content && this.onMessage) {
-            this.onMessage('assistant', `[Dream] ${assistantMsg.content}`);
-          }
+          // Dream completed — 静默，仅 console
+          if (assistantMsg.content) console.log('[Dream] 整理完成：', assistantMsg.content.substring(0, 200));
           break;
         }
         dreamContext.addAssistantMessage(assistantMsg.content, assistantMsg.tool_calls);
-        if (assistantMsg.content && this.onMessage) {
-          this.onMessage('assistant', `[Dream] ${assistantMsg.content}`);
-        }
+        if (assistantMsg.content) console.log('[Dream] 思考：', assistantMsg.content.substring(0, 200));
         if (assistantMsg.tool_calls && assistantMsg.tool_calls.length > 0) {
           for (const tc of assistantMsg.tool_calls) {
             const toolName = tc.function.name;
             let args;
             try { args = JSON.parse(tc.function.arguments || '{}'); } catch { args = {}; }
-            if (this.onToolCall) this.onToolCall(toolName, args, 'calling');
+            // Dream 期间不向 UI 推送工具调用
             const toolResult = await this.executeTool(toolName, args);
             const resultStr = typeof toolResult === 'string' ? toolResult : JSON.stringify(toolResult);
             const truncated = resultStr.length > 3000 ? resultStr.substring(0, 3000) + '...[结果已截断]' : resultStr;
             dreamContext.addToolResult(tc.id, toolName, truncated);
-            if (this.onToolCall) this.onToolCall(toolName, args, 'done', typeof toolResult === 'string' ? null : toolResult);
           }
         }
       }
@@ -697,7 +702,11 @@ ${toolListSection}`;
     getAllToolDefinitions(this.mode || 'chat').forEach(tool => {
       enabledToolsMap[tool.name] = activeNames.has(tool.name);
     });
-    const tools = getToolSchemas(enabledToolsMap, this.mode || 'chat');
+    let tools = getToolSchemas(enabledToolsMap, this.mode || 'chat');
+    // 未配置生图模型时隐藏 generateImage 工具
+    if (typeof filterToolsByConfig === 'function') {
+      tools = filterToolsByConfig(tools, this.settings);
+    }
     if (this.settings?.autoOptimizeToolSelection && !this.sessionAutoOptimizeDisabled) {
       tools.push(INTERNAL_REOPTIMIZE_TOOL_SCHEMA);
       tools.push(INTERNAL_DISABLE_AUTO_OPTIMIZE_SCHEMA);
@@ -900,12 +909,27 @@ ${toolListSection}`;
       });
 
       const msg = result?.data?.choices?.[0]?.message;
-      const content = (msg?.content || '').trim();
+      const rawContent = (msg?.content || '').trim();
       // 思考模型（如 deepseek-v4-flash-free）经常 content 为空，答案在 reasoning_content 里
-      const reasoningContent = (msg?.reasoning_content || '').trim();
-      console.log('[tool-opt] LLM 返回:', { contentLen: content.length, reasoningLen: reasoningContent.length, contentPreview: content.substring(0, 200), reasoningPreview: reasoningContent.substring(0, 200) });
+      const rawReasoning = (msg?.reasoning_content || '').trim();
+      console.log('[tool-opt] LLM 返回:', { contentLen: rawContent.length, reasoningLen: rawReasoning.length, contentPreview: rawContent.substring(0, 200), reasoningPreview: rawReasoning.substring(0, 200) });
 
-      // 从 content 或 reasoning_content 中提取 JSON
+      // Preprocess: strip think tags and code fences for reliable JSON parsing
+      const cleanText = (text) => {
+        if (!text) return "";
+        let t = text;
+        // Remove complete think blocks
+        t = t.replace(/\u003Cthink\u003E[\s\S]*?\u003C\/think\u003E/gi, "");
+        // Remove unclosed think tag to end
+        t = t.replace(/\u003Cthink\u003E[\s\S]*$/gi, "");
+        // Remove markdown code fence markers
+        t = t.split(tick3 + "json").join("").split(tick3).join("");
+        return t.trim();
+      };
+      const content = cleanText(rawContent);
+      const reasoningContent = cleanText(rawReasoning);
+
+      // Extract JSON from content or reasoning_content
       let parsed = null;
       const tryParseJson = (text) => {
         if (!text) return null;
@@ -913,12 +937,25 @@ ${toolListSection}`;
         const match = text.match(/\{[\s\S]*\}/);
         if (match) {
           try { return JSON.parse(match[0]); } catch {}
+          // Fix trailing commas then retry
+          try { return JSON.parse(match[0].replace(/,(\s*[}\]])/g, "$1")); } catch {}
         }
         return null;
       };
       parsed = tryParseJson(content) || tryParseJson(reasoningContent);
 
-      // 构建工具名查找表（大小写不敏感）
+      // Fallback: if JSON failed or reason missing, extract reason from raw text
+      if (!parsed || typeof parsed.reason !== "string") {
+        const fullText = rawContent + " " + rawReasoning;
+        const reasonMatch = fullText.match(/"reason"\s*:\s"([^"]*)"/i)
+          || fullText.match(/reason\s*[:\uFF1A]\s*"([^"]*)"/i)
+          || fullText.match(/(?:\u539F\u56E0|\u7406\u7531)\s*[:\uFF1A]\s*([^\n"{}]+)/i);
+        if (reasonMatch && reasonMatch[1]) {
+          parsed = parsed || {};
+          if (typeof parsed.reason !== "string") parsed.reason = reasonMatch[1].trim();
+        }
+      }
+
       const validNames = new Set(enabledDefs.map(t => t.name));
       const lowerNameMap = new Map();
       enabledDefs.forEach(t => { lowerNameMap.set(t.name.toLowerCase(), t.name); });
@@ -1033,6 +1070,14 @@ ${toolListSection}`;
     if (!this.settings?.llm?.apiUrl || !this.settings?.llm?.apiKey) {
       if (this.onMessage) this.onMessage('error', '请先在设置中配置LLM API');
       return;
+    }
+
+    // 如果 Dream 正在运行，打断并舍弃（不阻止用户发消息）
+    if (this.dreamRunning) {
+      console.log('[Dream] 用户发消息，打断并舍弃 Dream');
+      this.runId++; // 让 Dream 循环条件 dreamRunId === this.runId 失效，下次迭代退出
+      this.dreamRunning = false;
+      try { await window.api.dreamReleaseLock(); } catch { /* ignore */ }
     }
 
     const runId = ++this.runId;
@@ -2104,6 +2149,44 @@ ${toolListSection}`;
           const ms = Math.min(Math.max(parseInt(args.ms) || 1000, 1), 60000);
           await new Promise(resolve => setTimeout(resolve, ms));
           return { ok: true, slept: ms };
+        }
+        case 'adjustAppearance': {
+          // 允许 LLM 主动调节深浅色模式 / 强调色 / 配色方案
+          const current = await window.api.getSettings();
+          const theme = { ...(current.theme || {}) };
+          const changes = [];
+          if (args.mode && ['light', 'dark', 'system'].includes(args.mode)) {
+            theme.mode = args.mode;
+            changes.push(`模式→${args.mode}`);
+          }
+          // 配色方案优先于单独的 accentColor
+          if (args.schemeName) {
+            const isDark = theme.mode === 'dark' ||
+              (theme.mode === 'system' && document.documentElement.getAttribute('data-theme') === 'dark');
+            const schemes = isDark
+              ? (typeof ThemeManager !== 'undefined' ? ThemeManager.darkSchemes : [])
+              : (typeof ThemeManager !== 'undefined' ? ThemeManager.lightSchemes : []);
+            const found = schemes.find(s => s.name === args.schemeName);
+            if (found) {
+              theme.accentColor = found.accent;
+              theme.backgroundColor = found.bg;
+              changes.push(`配色→${args.schemeName}`);
+            } else {
+              return { ok: false, error: `未找到配色方案: ${args.schemeName}` };
+            }
+          } else if (args.accentColor && /^#[0-9a-fA-F]{6}$/.test(args.accentColor)) {
+            theme.accentColor = args.accentColor;
+            changes.push(`强调色→${args.accentColor}`);
+          }
+          if (changes.length === 0) {
+            return { ok: false, error: '未提供任何可应用的更改（mode/accentColor/schemeName 至少一个）' };
+          }
+          const merged = { ...current, theme };
+          await window.api.setSettings(merged);
+          if (typeof ThemeManager !== 'undefined') {
+            ThemeManager.apply(theme);
+          }
+          return { ok: true, applied: changes.join('，'), theme };
         }
         default: {
           // MCP 动态工具路由: mcp__<serverName>__<toolName>
