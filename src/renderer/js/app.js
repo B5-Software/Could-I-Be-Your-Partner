@@ -137,6 +137,15 @@
         this.sendMirrorBody();
       }, 500);
 
+      // 监听主进程的 mirrorInit 请求：新 WS 客户端连接时主进程会触发此信号，
+      // 要求渲染器推送最新快照（确保新客户端拿到当前界面而非过期缓存）
+      if (typeof window.api?.webControlMirrorInit === 'function') {
+        window.api.webControlMirrorInit(() => {
+          this.sendMirrorHead();
+          this.sendMirrorBody();
+        });
+      }
+
       // 接收 WebUI 转发的 UI 事件
       if (typeof window.api?.onWebControlUiEvent === 'function') {
         window.api.onWebControlUiEvent((data) => {

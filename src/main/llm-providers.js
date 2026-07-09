@@ -74,15 +74,16 @@ function buildOpenAIRequest(llm, opts, reasoningEffort) {
   if (opts.response_format) body.response_format = opts.response_format;
   // Reasoning effort: OpenAI o-series + GPT-5 use reasoning_effort field.
   // Some OpenAI-compat providers (DeepSeek R1) use a top-level "reasoning_effort" or
-  // "reasoning" object. We apply reasoning_effort for known model patterns.
+  // "reasoning" object. We apply reasoning_effort ONLY for known model patterns —
+  // injecting it for unsupported models causes 400 errors.
   if (reasoningEffort && reasoningEffort !== 'off') {
     const m = (llm.model || '').toLowerCase();
     // OpenAI reasoning models: o1, o3, o4, gpt-5*
-    if (/^o[134]-|^gpt-5/.test(m) || REASONING_EFFORT_LEVELS.includes(reasoningEffort)) {
+    if (/^o[134]-|^gpt-5/.test(m)) {
       body.reasoning_effort = reasoningEffort;
     }
     // DeepSeek R1 / Qwen3 reasoning models via OpenAI-compat
-    if (/deepseek|qwen3|r1/.test(m) && REASONING_EFFORT_LEVELS.includes(reasoningEffort)) {
+    if (/deepseek-r1|qwen3.*think/.test(m)) {
       body.reasoning_effort = reasoningEffort;
     }
   }

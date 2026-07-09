@@ -526,6 +526,8 @@ class WebControlService {
       // 重放缓存的 DOM 镜像快照（mirror_head + mirror_body）
       if (this._cachedHead) ws.send(JSON.stringify(this._cachedHead));
       if (this._cachedBody) ws.send(JSON.stringify(this._cachedBody));
+      // 请求渲染器推送最新快照（确保新客户端始终拿到当前界面，而非过期缓存）
+      if (typeof this.onMirrorInit === 'function') this.onMirrorInit();
     } catch {}
   }
 
@@ -751,6 +753,7 @@ html,body{height:100%;overflow:hidden;font-family:-apple-system,BlinkMacSystemFo
         break;
       case 'mirror_body':
         applyBody(msg.html);
+        loadingEl.classList.add('hidden');
         break;
       case 'theme':
         applyThemeVars(msg.theme);

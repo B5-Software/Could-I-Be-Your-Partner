@@ -406,10 +406,19 @@ body {
   padding: 6px;
   border-radius: var(--radius-sm);
   font-size: 16px;
+  line-height: 1;
   transition: all var(--transition);
   display: inline-flex;
   align-items: center;
   justify-content: center;
+}
+
+/* 确保按钮内的图标垂直居中（Font Awesome 图标受 line-height 影响会偏移） */
+.btn-icon i {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
 }
 
 .btn-icon:hover {

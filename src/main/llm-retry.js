@@ -151,8 +151,12 @@ async function fetchLLMWithRetry(cfg) {
         // Non-retryable client/auth error — read body for message.
         let errBody = null;
         try { errBody = await resp.json(); } catch { /* ignore */ }
+        // 兼容多种 OpenAI-compat 错误格式，避免只显示 "HTTP 400"
         const errMsg = errBody?.error?.message || errBody?.message ||
           (typeof errBody?.error === 'string' ? errBody.error : null) ||
+          (typeof errBody?.detail === 'string' ? errBody.detail : null) ||
+          (Array.isArray(errBody?.detail) && errBody.detail[0]?.msg) ||
+          errBody?.error?.code ||
           `HTTP ${resp.status}`;
         return {
           ok: false,
