@@ -153,7 +153,9 @@ class WebControlService {
     // Auth middleware
     const requireAuth = (req, res, next) => {
       if (req.session?.authenticated) return next();
-      if (req.path === '/api/login' || req.path === '/login' || req.path === '/' || req.path === '/ws' ||
+      // express-ws 将 WS 升级请求路径改写为 /ws/.websocket，需放行 /ws 及其子路径
+      if (req.path === '/api/login' || req.path === '/login' || req.path === '/' ||
+          req.path.startsWith('/ws') ||
           req.path.startsWith('/static') || req.path.startsWith('/css') ||
           req.path.startsWith('/assets') || req.path.startsWith('/node_modules/katex/dist')) return next();
       res.status(401).json({ ok: false, error: '未登录' });

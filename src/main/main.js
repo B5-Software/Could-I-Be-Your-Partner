@@ -2539,14 +2539,25 @@ ipcMain.handle('zen:fetchModels', async () => {
     // Zen /v1/models 端点无需认证即可访问
     const headers = { 'Content-Type': 'application/json' };
     if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
-    const resp = await fetch('https://opencode.ai/zen/v1/models', { headers });
+    // 10 秒超时，避免网络挂起导致向导永远卡在"正在获取模型列表..."
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000);
+    let resp;
+    try {
+      resp = await fetch('https://opencode.ai/zen/v1/models', { headers, signal: controller.signal });
+    } finally {
+      clearTimeout(timeoutId);
+    }
     if (!resp.ok) {
       const txt = await resp.text().catch(() => '');
       return { ok: false, error: `HTTP ${resp.status}: ${txt.slice(0, 200)}` };
     }
     const data = await resp.json();
     return { ok: true, models: data.data || data.models || data };
-  } catch (e) { return { ok: false, error: e.message }; }
+  } catch (e) {
+    if (e.name === 'AbortError') return { ok: false, error: '请求超时（10s），请检查网络连接' };
+    return { ok: false, error: e.message };
+  }
 });
 
 // ---- IPC: Generic LLM models list (OpenAI/Anthropic compatible) ----
@@ -2572,14 +2583,17 @@ ipcMain.handle('llm:fetchModels', async (_, provider, apiUrl, apiKey) => {
       modelsUrl = base.replace(/\/$/, '') + '/models';
       if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
     }
-    const resp = await fetch(modelsUrl, { headers });
+    const resp = await fetch(modelsUrl, { headers, signal: AbortSignal.timeout(10000) });
     if (!resp.ok) {
       const txt = await resp.text().catch(() => '');
       return { ok: false, error: `HTTP ${resp.status}: ${txt.slice(0, 200)}` };
     }
     const data = await resp.json();
     return { ok: true, models: data.data || data.models || data };
-  } catch (e) { return { ok: false, error: e.message }; }
+  } catch (e) {
+    if (e.name === 'TimeoutError' || e.name === 'AbortError') return { ok: false, error: '请求超时（10s），请检查网络或 API URL' };
+    return { ok: false, error: e.message };
+  }
 });
 
 // ---- IPC: Token usage stats ----

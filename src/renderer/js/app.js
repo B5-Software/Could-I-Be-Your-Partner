@@ -670,9 +670,15 @@
 
   // ---- 初次使用引导 ----
   // 仅检测 onboardingCompleted 标志：完成过一次就不再弹（用户可随时从设置主动改）
+  // 直接从磁盘读取，避免 agent.settings 尚未加载时误判
   async function checkOnboarding() {
-    const s = agent.settings || {};
-    return !s.onboardingCompleted;
+    try {
+      const s = await window.api.getSettings();
+      return !s.onboardingCompleted;
+    } catch {
+      const s = agent.settings || {};
+      return !s.onboardingCompleted;
+    }
   }
   async function showOnboardingIfNeeded() {
     if (!(await checkOnboarding())) return;
