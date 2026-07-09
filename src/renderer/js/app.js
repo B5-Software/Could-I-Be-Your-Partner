@@ -131,15 +131,23 @@
 
     init() {
       // WS 客户端连接时，推送完整 mirror_head + mirror_body 快照
+      // 防御性检查：window.api 可能在某些时序下未就绪
+      if (typeof window.api?.webControlMirrorInit !== 'function') {
+        console.warn('[WebUIMirror] window.api.webControlMirrorInit not available, deferring init');
+        setTimeout(() => this.init(), 200);
+        return;
+      }
       window.api.webControlMirrorInit(() => {
         this.sendMirrorHead();
         this.sendMirrorBody();
       });
 
       // 接收 WebUI 转发的 UI 事件
-      window.api.onWebControlUiEvent((data) => {
-        this.handleUiEvent(data);
-      });
+      if (typeof window.api.onWebControlUiEvent === 'function') {
+        window.api.onWebControlUiEvent((data) => {
+          this.handleUiEvent(data);
+        });
+      }
 
       console.log('[WebUIMirror] Event-driven controller initialized');
     },
@@ -157,11 +165,11 @@
     },
 
     sendMirrorHead() {
-      try { window.api.webControlMirrorUpdate(this.buildMirrorHead()); } catch (e) {}
+      try { if (typeof window.api?.webControlMirrorUpdate === 'function') window.api.webControlMirrorUpdate(this.buildMirrorHead()); } catch (e) {}
     },
 
     sendMirrorBody() {
-      try { window.api.webControlMirrorUpdate(this.buildMirrorBody()); } catch (e) {}
+      try { if (typeof window.api?.webControlMirrorUpdate === 'function') window.api.webControlMirrorUpdate(this.buildMirrorBody()); } catch (e) {}
     },
 
     // ---- 增量事件推送 ----
@@ -173,7 +181,7 @@
     //   { type:'dom_update',  selector:'#tool-xxx', html:'...' }（替换元素 outerHTML）
     //   { type:'dom_text',    selector:'#titlebar-title', text:'...' }
     pushDomEvent(event) {
-      try { window.api.webControlMirrorUpdate(event); } catch (e) {}
+      try { if (typeof window.api?.webControlMirrorUpdate === 'function') window.api.webControlMirrorUpdate(event); } catch (e) {}
     },
 
     handleUiEvent(data) {
