@@ -4887,6 +4887,19 @@ app.whenReady().then(async () => {
     }
   });
 
+  // 运行中热更新配置（改密码后无需 stop/start，bcrypt.compare 每次读 this.config）
+  ipcMain.handle('webControl:reconfigure', async () => {
+    try {
+      if (webControlService.running) {
+        webControlService.configure(settings.webControl);
+        return { ok: true };
+      }
+      return { ok: true, message: '服务未运行' };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  });
+
   ipcMain.handle('webControl:getStatus', () => {
     return { ok: true, running: webControlService.running, port: webControlService.port };
   });

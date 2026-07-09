@@ -713,52 +713,56 @@
     if (n < 1) n = 1;
     if (n > ONBOARDING_TOTAL_STEPS) n = ONBOARDING_TOTAL_STEPS;
     currentOnboardingStep = n;
-    // 切换步骤显示
-    document.querySelectorAll('.onboarding-step').forEach(s => {
+    // 切换步骤页面显示
+    document.querySelectorAll('.ob-page').forEach(s => {
       if (parseInt(s.dataset.step) === n) s.classList.add('active');
       else s.classList.remove('active');
     });
-    // 更新指示器圆点
-    document.querySelectorAll('.ob-dot').forEach(d => {
-      if (parseInt(d.dataset.step) === n) d.classList.add('active');
-      else d.classList.remove('active');
+    // 更新步骤指示器（active + done 状态）
+    document.querySelectorAll('.ob-step-item').forEach(d => {
+      const step = parseInt(d.dataset.step);
+      d.classList.toggle('active', step === n);
+      d.classList.toggle('done', step < n);
     });
     // 更新进度条
     const bar = document.getElementById('ob-progress-bar');
-    if (bar) bar.style.width = `${(n / ONBOARDING_TOTAL_STEPS) * 100}%`;
+    if (bar) bar.style.width = `${((n - 1) / (ONBOARDING_TOTAL_STEPS - 1)) * 100}%`;
     // 更新步骤文本
     const text = document.getElementById('ob-step-text');
-    if (text) text.textContent = `步骤 ${n}/${ONBOARDING_TOTAL_STEPS}`;
+    if (text) text.textContent = `${n} / ${ONBOARDING_TOTAL_STEPS}`;
     // 上一步按钮：第一步隐藏
     const prevBtn = document.getElementById('ob-btn-prev');
     if (prevBtn) prevBtn.classList.toggle('hidden', n === 1);
-    // 下一步按钮：最后一步变为"完成配置"
+    // 下一步 / 完成按钮：最后一步切换为"完成"
     const nextBtn = document.getElementById('ob-btn-next');
-    if (nextBtn) {
-      nextBtn.innerHTML = (n === ONBOARDING_TOTAL_STEPS)
-        ? '<i class="fa-solid fa-check"></i> 完成配置'
-        : '下一步 <i class="fa-solid fa-arrow-right"></i>';
+    const finishBtn = document.getElementById('ob-btn-finish');
+    if (n === ONBOARDING_TOTAL_STEPS) {
+      if (nextBtn) nextBtn.style.display = 'none';
+      if (finishBtn) finishBtn.style.display = '';
+    } else {
+      if (nextBtn) {
+        nextBtn.style.display = '';
+        nextBtn.innerHTML = '下一步 <i class="fa-solid fa-arrow-right"></i>';
+      }
+      if (finishBtn) finishBtn.style.display = 'none';
     }
   }
-  // 下一步：推进到下一步，最后一步触发完成
+  // 下一步
   document.getElementById('ob-btn-next')?.addEventListener('click', () => {
-    if (currentOnboardingStep >= ONBOARDING_TOTAL_STEPS) {
-      document.getElementById('ob-btn-finish').click();
-      return;
-    }
-    showOnboardingStep(currentOnboardingStep + 1);
+    if (currentOnboardingStep < ONBOARDING_TOTAL_STEPS) showOnboardingStep(currentOnboardingStep + 1);
   });
-  // 上一步：回退一步
+  // 上一步
   document.getElementById('ob-btn-prev')?.addEventListener('click', () => {
     if (currentOnboardingStep > 1) showOnboardingStep(currentOnboardingStep - 1);
   });
-  // 跳过：不保存当前步直接进入下一步，最后一步完成向导
-  document.getElementById('ob-btn-skip')?.addEventListener('click', () => {
-    if (currentOnboardingStep >= ONBOARDING_TOTAL_STEPS) {
-      document.getElementById('ob-btn-finish').click();
-      return;
-    }
-    showOnboardingStep(currentOnboardingStep + 1);
+  // 跳过引导：直接完成，标记 onboardingCompleted 并关闭
+  document.getElementById('ob-btn-skip')?.addEventListener('click', async () => {
+    const s = await window.api.getSettings();
+    s.onboardingCompleted = true;
+    await window.api.setSettings(s);
+    if (typeof agent.applySettings === 'function') agent.applySettings(s);
+    else agent.settings = s;
+    document.getElementById('onboarding-modal').classList.add('hidden');
   });
   function updateObProviderFields(provider) {
     const zenFields = document.getElementById('ob-zen-key-field');
@@ -854,17 +858,19 @@
     document.getElementById('ob-llm-zen-key').value = 'public';
     refreshObModels().then(autoSelectDeepSeek);
   });
-  // 头像选择（复用 avatarEncodeFile）
+  // 头像选择（复用 avatarPickAndEncode，与设置页一致，macOS/Windows 均可用）
   async function obPickAvatar(target) {
     try {
-      const { filePaths } = await window.api.selectFile();
-      if (!filePaths?.[0]) return;
-      const dataUrl = await window.api.avatarEncodeFile(filePaths[0]);
-      if (!dataUrl) return;
+      const result = await window.api.avatarPickAndEncode();
+      if (!result?.ok || !result.dataUrl) return;
       const preview = document.getElementById(target === 'ai' ? 'ob-ai-avatar-preview' : 'ob-user-avatar-preview');
-      if (preview) preview.innerHTML = `<img src="${dataUrl}" alt="">`;
-      preview.dataset.avatar = dataUrl;
-    } catch (_) {}
+      if (preview) {
+        preview.innerHTML = `<img src="${result.dataUrl}" alt="">`;
+        preview.dataset.avatar = result.dataUrl;
+      }
+    } catch (e) {
+      console.error('[Onboarding] avatar pick failed:', e);
+    }
   }
   function obClearAvatar(target) {
     const preview = document.getElementById(target === 'ai' ? 'ob-ai-avatar-preview' : 'ob-user-avatar-preview');
@@ -4085,6 +4091,8 @@
     // Clear password field after save
     const pwEl = document.getElementById('setting-wc-password');
     if (pwEl) pwEl.value = '';
+    // 热更新运行中服务的配置（修复改密码后 WebUI 登录仍用旧 hash 的问题）
+    try { await window.api.webControlReconfigure(); } catch (_) {}
   }
 
   function setupWebControlEvents() {

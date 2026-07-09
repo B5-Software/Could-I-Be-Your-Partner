@@ -293,6 +293,7 @@ contextBridge.exposeInMainWorld('api', {
   // Web Control
   webControlStart: () => ipcRenderer.invoke('webControl:start'),
   webControlStop: () => ipcRenderer.invoke('webControl:stop'),
+  webControlReconfigure: () => ipcRenderer.invoke('webControl:reconfigure'),
   webControlGetStatus: () => ipcRenderer.invoke('webControl:getStatus'),
   webControlHashPassword: (password) => ipcRenderer.invoke('webControl:hashPassword', password),
   webControlGenerateTOTP: () => ipcRenderer.invoke('webControl:generateTOTP'),
