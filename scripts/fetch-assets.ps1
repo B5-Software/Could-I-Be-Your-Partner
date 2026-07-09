@@ -150,6 +150,37 @@ if (-not $SkipGeoGebra) {
     $url = "https://www.geogebra.org/apps/deployggb.js"
     Download-File $url $ggbFile | Out-Null
   }
+
+  # ---- GeoGebra 完整源码（参考用，不打包）----
+  Write-Step "GeoGebra 源码 (geogebra/geogebra)"
+  $ggbSrcDir = Join-Path $repoRoot "assets\geogebra-src"
+  if (Test-Path (Join-Path $ggbSrcDir ".git")) {
+    Write-Ok "geogebra-src already cloned, skipping"
+  } else {
+    # 优先尝试 GitHub 镜像加速 clone（支持 -Mirror 前缀）
+    $cloneUrl = "https://github.com/geogebra/geogebra.git"
+    Write-Host "    Cloning: $cloneUrl"
+    if ($Mirror) {
+      $mirroredUrl = "$Mirror/$cloneUrl"
+      Write-Host "    Try mirror: $mirroredUrl"
+      git clone --depth 1 $mirroredUrl $ggbSrcDir 2>&1 | Out-Null
+      if ($LASTEXITCODE -ne 0) {
+        Write-Warn "Mirror clone failed, retrying direct..."
+        Remove-Item -Recurse -Force $ggbSrcDir -ErrorAction SilentlyContinue
+        git clone --depth 1 $cloneUrl $ggbSrcDir 2>&1 | Out-Null
+      }
+    } else {
+      git clone --depth 1 $cloneUrl $ggbSrcDir 2>&1 | Out-Null
+    }
+    if (Test-Path (Join-Path $ggbSrcDir ".git")) {
+      $size = [math]::Round((Get-ChildItem $ggbSrcDir -Recurse -File | Measure-Object Length -Sum).Sum / 1MB, 1)
+      Write-Ok "geogebra-src cloned ($size MB)"
+    } else {
+      Write-Err "Failed to clone geogebra/geogebra (network issue?), source code is optional, continuing..."
+    }
+  }
+  # 说明：geogebra/geogebra 是 Gradle 源码工程，仅作参考，不参与运行。
+  # deployggb.js 运行时仍从 www.geogebra.org CDN 加载 web3d/webSimple 编译产物（源码仓库不含）。
 }
 
 Write-Host "`n========================================" -ForegroundColor Cyan

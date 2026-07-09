@@ -149,6 +149,35 @@ if [[ "$SKIP_GGB" == "false" ]]; then
     url="https://www.geogebra.org/apps/deployggb.js"
     download "$url" "$ggb_file" || true
   fi
+
+  # ---- GeoGebra 完整源码（参考用，不打包）----
+  info "GeoGebra 源码 (geogebra/geogebra)"
+  ggb_src_dir="$REPO_ROOT/assets/geogebra-src"
+  if [[ -d "$ggb_src_dir/.git" ]]; then
+    ok "geogebra-src already cloned, skipping"
+  else
+    clone_url="https://github.com/geogebra/geogebra.git"
+    if [[ -n "$MIRROR" ]]; then
+      mirrored_url="$MIRROR/$clone_url"
+      echo "    Try mirror: $mirrored_url"
+      git clone --depth 1 "$mirrored_url" "$ggb_src_dir" 2>/dev/null
+      if [[ $? -ne 0 ]]; then
+        warn "Mirror clone failed, retrying direct..."
+        rm -rf "$ggb_src_dir"
+        git clone --depth 1 "$clone_url" "$ggb_src_dir" 2>/dev/null
+      fi
+    else
+      git clone --depth 1 "$clone_url" "$ggb_src_dir" 2>/dev/null
+    fi
+    if [[ -d "$ggb_src_dir/.git" ]]; then
+      size=$(du -sm "$ggb_src_dir" 2>/dev/null | cut -f1)
+      ok "geogebra-src cloned (${size} MB)"
+    else
+      err "Failed to clone geogebra/geogebra (network issue?), source code is optional, continuing..."
+    fi
+  fi
+  # 说明：geogebra/geogebra 是 Gradle 源码工程，仅作参考，不参与运行。
+  # deployggb.js 运行时仍从 www.geogebra.org CDN 加载 web3d/webSimple 编译产物（源码仓库不含）。
 fi
 
 echo -e "\n\033[36m========================================"

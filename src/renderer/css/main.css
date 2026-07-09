@@ -618,6 +618,12 @@ body {
   justify-content: space-between;
   background: var(--bg-secondary);
   flex-shrink: 0;
+  gap: 4px;
+}
+
+/* 最小化按钮靠右紧贴关闭按钮（space-between 会把三个子项均匀分开导致按钮离太远） */
+.geogebra-header .btn-minimize-panel {
+  margin-left: auto;
 }
 
 .geogebra-header h3 {
@@ -720,14 +726,14 @@ body {
   position: relative !important;
 }
 
-/* Adjust main content when GeoGebra is open */
-.geogebra-open #app {
-  margin-right: 500px;
+/* 面板打开时：让 main-content 内容区右侧留出空间避让浮层面板
+   不再用 #app margin-right（会导致 #app 整体右移 + 面板覆盖 = 双重空白）*/
+.geogebra-open #main-content {
+  padding-right: 500px;
 }
 
-/* Adjust main content when Bing split panel is open */
-.websearch-open #app {
-  margin-right: 500px;
+.websearch-open #main-content {
+  padding-right: 500px;
 }
 
 /* TRNG Badge */
