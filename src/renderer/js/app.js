@@ -130,20 +130,15 @@
     _applyingRemote: false,
 
     init() {
-      // WS 客户端连接时，推送完整 mirror_head + mirror_body 快照
-      // 防御性检查：window.api 可能在某些时序下未就绪
-      if (typeof window.api?.webControlMirrorInit !== 'function') {
-        console.warn('[WebUIMirror] window.api.webControlMirrorInit not available, deferring init');
-        setTimeout(() => this.init(), 200);
-        return;
-      }
-      window.api.webControlMirrorInit(() => {
+      // 主动推送初始快照：不依赖 webControl:mirrorInit 信号（避免 preload 缓存导致回调不可用）
+      // 主进程会缓存最近一次的 mirror_head + mirror_body，新 WS 客户端连接时自动重放
+      setTimeout(() => {
         this.sendMirrorHead();
         this.sendMirrorBody();
-      });
+      }, 500);
 
       // 接收 WebUI 转发的 UI 事件
-      if (typeof window.api.onWebControlUiEvent === 'function') {
+      if (typeof window.api?.onWebControlUiEvent === 'function') {
         window.api.onWebControlUiEvent((data) => {
           this.handleUiEvent(data);
         });

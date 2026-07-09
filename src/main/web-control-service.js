@@ -53,6 +53,11 @@ class WebControlService {
     this._currentTarot = null;   // tarot card object
     this._currentTitle = '';     // conversation title
     this._currentAvatars = null;  // { ai, user } base64 data URLs
+    this._currentMode = 'chat';
+    this._currentContextProgress = null;
+    this._reoptimizeVisible = false;
+    this._cachedHead = null;    // 缓存的 mirror_head 快照
+    this._cachedBody = null;    // 缓存的 mirror_body 快照
   }
 
   configure(webSettings) {
@@ -490,12 +495,16 @@ class WebControlService {
     this.broadcast({ type: 'reoptimizeState', visible: !!visible });
   }
 
-  // DOM 镜像更新：渲染器 → WS 广播（mirror_head / mirror_body）
+  // DOM 镜像更新：渲染器 → WS 广播（mirror_head / mirror_body / dom_* 增量事件）
+  // 同时缓存 mirror_head / mirror_body 快照，新 WS 客户端连接时重放
   pushMirrorUpdate(data) {
+    // 缓存快照（增量事件不缓存，只缓存全量快照）
+    if (data.type === 'mirror_head') this._cachedHead = data;
+    else if (data.type === 'mirror_body') this._cachedBody = data;
     this.broadcast(data);
   }
 
-  // 将已认证的 ws 加入客户端集合并发送 init 快照
+  // 将已认证的 ws 加入客户端集合并发送 init 快照 + 缓存的 DOM 镜像
   _attachWsClient(ws) {
     this.wsClients.add(ws);
     console.log('[WebControl] WS client connected, total:', this.wsClients.size);
@@ -510,10 +519,14 @@ class WebControlService {
         tarot: this._currentTarot,
         title: this._currentTitle,
         avatars: this._currentAvatars,
+        mode: this._currentMode,
+        contextProgress: this._currentContextProgress,
+        reoptimizeVisible: this._reoptimizeVisible,
       }));
+      // 重放缓存的 DOM 镜像快照（mirror_head + mirror_body）
+      if (this._cachedHead) ws.send(JSON.stringify(this._cachedHead));
+      if (this._cachedBody) ws.send(JSON.stringify(this._cachedBody));
     } catch {}
-    // 通知渲染器推送 DOM 镜像快照（mirror_head + mirror_body）
-    try { if (this.onMirrorInit) this.onMirrorInit(); } catch {}
   }
 
   // 保存上传文件到工作目录（HTTP 与 WS 上传共用）
