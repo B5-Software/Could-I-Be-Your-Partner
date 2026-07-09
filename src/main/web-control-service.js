@@ -742,6 +742,28 @@ html,body{height:100%;overflow:hidden;font-family:-apple-system,BlinkMacSystemFo
       case 'theme':
         applyThemeVars(msg.theme);
         break;
+      // ---- 增量 DOM 事件 ----
+      case 'dom_append':
+        applyDomAppend(msg);
+        break;
+      case 'dom_clear':
+        applyDomClear(msg);
+        break;
+      case 'dom_replace':
+        applyDomReplace(msg);
+        break;
+      case 'dom_remove':
+        applyDomRemove(msg);
+        break;
+      case 'dom_update':
+        applyDomUpdate(msg);
+        break;
+      case 'dom_text':
+        applyDomText(msg);
+        break;
+      case 'modeSwitch':
+        applyModeSwitch(msg.mode);
+        break;
       case 'auth_fail':
         authenticated=false;
         loginErr.textContent=msg.error||'认证失败';
@@ -750,8 +772,106 @@ html,body{height:100%;overflow:hidden;font-family:-apple-system,BlinkMacSystemFo
         loadingEl.classList.add('hidden');
         sessionStorage.removeItem('cibyp_creds');
         break;
-      // 其他消息类型（status/message/toolCall/approval 等）由镜像 DOM 自动体现
     }
+  }
+
+  // ---- 增量 DOM 应用函数 ----
+  // 所有增量操作都设置 applyingRemote=true，防止事件委托回传形成死循环。
+  // 输入框（#msg-input / textarea / input[type=text]）的 value 不受这些操作影响，
+  // 因为增量更新只动 #chat-messages / #history-list 等容器。
+
+  function applyDomAppend(msg){
+    applyingRemote=true;
+    try{
+      var container=document.querySelector(msg.container);
+      if(!container)return;
+      if(msg.before){
+        var ref=container.querySelector(msg.before);
+        if(ref){
+          ref.insertAdjacentHTML('beforebegin',msg.html);
+        }else{
+          container.insertAdjacentHTML('beforeend',msg.html);
+        }
+      }else{
+        container.insertAdjacentHTML('beforeend',msg.html);
+      }
+      // 滚动到底部
+      container.scrollTop=container.scrollHeight;
+    }catch(e){console.error('[WebUI] dom_append error:',e);}
+    finally{setTimeout(function(){applyingRemote=false;},50);}
+  }
+
+  function applyDomClear(msg){
+    applyingRemote=true;
+    try{
+      var container=document.querySelector(msg.container);
+      if(container)container.innerHTML='';
+    }catch(e){console.error('[WebUI] dom_clear error:',e);}
+    finally{setTimeout(function(){applyingRemote=false;},50);}
+  }
+
+  function applyDomReplace(msg){
+    applyingRemote=true;
+    try{
+      var container=document.querySelector(msg.container);
+      if(container)container.innerHTML=msg.html||'';
+    }catch(e){console.error('[WebUI] dom_replace error:',e);}
+    finally{setTimeout(function(){applyingRemote=false;},50);}
+  }
+
+  function applyDomRemove(msg){
+    applyingRemote=true;
+    try{
+      var el=document.querySelector(msg.selector);
+      if(el)el.remove();
+    }catch(e){console.error('[WebUI] dom_remove error:',e);}
+    finally{setTimeout(function(){applyingRemote=false;},50);}
+  }
+
+  function applyDomUpdate(msg){
+    applyingRemote=true;
+    try{
+      var el=document.querySelector(msg.selector);
+      if(!el)return;
+      if(msg.attr!==undefined){
+        // 更新属性
+        el.setAttribute(msg.attr,msg.value!=null?msg.value:'');
+      }else{
+        // 替换整个元素的 outerHTML
+        if(msg.html!==undefined&&el.outerHTML){
+          el.outerHTML=msg.html;
+        }
+      }
+    }catch(e){console.error('[WebUI] dom_update error:',e);}
+    finally{setTimeout(function(){applyingRemote=false;},50);}
+  }
+
+  function applyDomText(msg){
+    applyingRemote=true;
+    try{
+      var el=document.querySelector(msg.selector);
+      if(el)el.textContent=msg.text!=null?msg.text:'';
+    }catch(e){console.error('[WebUI] dom_text error:',e);}
+    finally{setTimeout(function(){applyingRemote=false;},50);}
+  }
+
+  function applyModeSwitch(mode){
+    applyingRemote=true;
+    try{
+      // 切换模式按钮 active 状态
+      document.querySelectorAll('.mode-btn').forEach(function(b){
+        b.classList.toggle('active',b.dataset.mode===mode);
+      });
+      // 切换页面 active 状态
+      document.querySelectorAll('.page').forEach(function(p){p.classList.remove('active');});
+      var pageMap={chat:'page-chat',code:'page-code',babe:'page-babe'};
+      var pageId=pageMap[mode];
+      if(pageId){
+        var pg=document.getElementById(pageId);
+        if(pg)pg.classList.add('active');
+      }
+    }catch(e){console.error('[WebUI] modeSwitch error:',e);}
+    finally{setTimeout(function(){applyingRemote=false;},50);}
   }
 
   function applyThemeVars(t){

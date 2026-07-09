@@ -123,6 +123,8 @@
   function setTitlebarTitle(title) {
     const titleEl = document.getElementById('titlebar-title');
     if (titleEl) titleEl.textContent = title || '未命名对话';
+    // 增量推送：更新标题文本
+    WebUIMirror.pushDomEvent({ type: 'dom_text', selector: '#titlebar-title', text: title || '未命名对话' });
   }
 
   // Attachment state
@@ -547,15 +549,13 @@
   updateReoptimizeButtonVisibility();
   updateContextProgress();
 
-  // ---- WebUI DOM 镜像控制器 ----
-  // 通过 MutationObserver 观察渲染器 DOM 变化，经 WS 推送到 WebUI
-  // 接收 WebUI 转发的 UI 事件（click/input/change/submit），在渲染器上触发对应操作
+  // ---- WebUI 事件驱动镜像控制器 ----
+  // 不再使用 MutationObserver 全量推送（导致死循环刷新 + 输入框被打断）。
+  // 改为：WS 连接时推送完整 mirror_head + mirror_body 快照（界面与 Local 一致），
+  // 之后由渲染器关键 UI 函数主动推送增量事件（dom_append/dom_clear/dom_replace/dom_remove/dom_update/dom_text）。
+  // WebUI 端按事件更新对应 DOM 部分，输入框等用户交互元素不受影响。
+  // 主题/头像/标题/模式等仍走原有 push 通道。
   const WebUIMirror = {
-    _bodyObserver: null,
-    _headObserver: null,
-    _htmlObserver: null,
-    _bodyDebounce: null,
-    _headDebounce: null,
     _applyingRemote: false,
 
     init() {
@@ -570,43 +570,10 @@
         this.handleUiEvent(data);
       });
 
-      // 观察 #app DOM 变化（debounce 50ms）
-      const app = document.getElementById('app');
-      if (app) {
-        this._bodyObserver = new MutationObserver(() => {
-          if (this._applyingRemote) return;
-          if (this._bodyDebounce) clearTimeout(this._bodyDebounce);
-          this._bodyDebounce = setTimeout(() => this.sendMirrorBody(), 50);
-        });
-        this._bodyObserver.observe(app, {
-          childList: true, subtree: true,
-          characterData: true, attributes: true,
-        });
-      }
-
-      // 观察 <head> 中 <style>/<link> 变化
-      this._headObserver = new MutationObserver(() => {
-        if (this._headDebounce) clearTimeout(this._headDebounce);
-        this._headDebounce = setTimeout(() => this.sendMirrorHead(), 50);
-      });
-      this._headObserver.observe(document.head, {
-        childList: true, subtree: true, characterData: true,
-      });
-
-      // 观察 <html> 的 data-theme 属性变化（主题切换）
-      this._htmlObserver = new MutationObserver(() => {
-        if (this._headDebounce) clearTimeout(this._headDebounce);
-        this._headDebounce = setTimeout(() => this.sendMirrorHead(), 50);
-      });
-      this._htmlObserver.observe(document.documentElement, {
-        attributes: true, attributeFilter: ['data-theme'],
-      });
-
-      console.log('[WebUIMirror] Controller initialized');
+      console.log('[WebUIMirror] Event-driven controller initialized');
     },
 
     buildMirrorHead() {
-      // 收集 <head> 内容，去除 <script> 标签
       let headHtml = document.head.innerHTML;
       headHtml = headHtml.replace(/<script[\s\S]*?<\/script>/gi, '');
       const themeMode = document.documentElement.getAttribute('data-theme') || 'light';
@@ -624,6 +591,31 @@
 
     sendMirrorBody() {
       try { window.api.webControlMirrorUpdate(this.buildMirrorBody()); } catch (e) {}
+    },
+
+    // ---- 增量事件推送 ----
+    // 推送 DOM 增量事件到 WebUI。event 形如：
+    //   { type:'dom_append', container:'#chat-messages', html:'<div>...</div>' }
+    //   { type:'dom_clear',   container:'#chat-messages' }
+    //   { type:'dom_replace', container:'#history-list', html:'...' }
+    //   { type:'dom_remove',  selector:'#thinking-indicator' }
+    //   { type:'dom_update',  selector:'#tool-xxx', html:'...' }（替换元素 innerHTML）
+    //   { type:'dom_text',    selector:'#titlebar-title', text:'...' }
+    pushDomEvent(event) {
+      try { window.api.webControlMirrorUpdate(event); } catch (e) {}
+    },
+
+    // 生成元素的 CSS 选择器（用于 dom_update / dom_remove）
+    selectorFor(el) {
+      if (!el || el.nodeType !== 1) return '';
+      if (el.id) return '#' + el.id;
+      // 回退：用 data-tool-name 等属性
+      if (el.dataset && el.dataset.toolName) {
+        const siblings = document.querySelectorAll(`[data-tool-name="${el.dataset.toolName}"]`);
+        const idx = Array.from(siblings).indexOf(el);
+        return `[data-tool-name="${el.dataset.toolName}"]:nth-of-type(${idx + 1})`;
+      }
+      return '';
     },
 
     handleUiEvent(data) {
@@ -661,12 +653,26 @@
       } catch (e) {
         console.error('[WebUIMirror] UI event dispatch error:', e);
       } finally {
-        // 延迟清除标志，等待同步 DOM 变化完成
         setTimeout(() => { this._applyingRemote = false; }, 100);
       }
     },
   };
   WebUIMirror.init();
+
+  // 推送容器选择器：根据 currentMode 返回对应消息容器的选择器
+  function getChatContainerSelector() {
+    if (currentMode === 'code') return '#code-chat-messages';
+    if (currentMode === 'babe') return '#babe-chat-messages';
+    return '#chat-messages';
+  }
+
+  // 统一的聊天容器清空 + 增量推送
+  function clearChatMessagesUI() {
+    chatMessages.innerHTML = '';
+    WebUIMirror.pushDomEvent({ type: 'dom_clear', container: getChatContainerSelector() });
+    // 同步移除思考指示器（若存在）
+    WebUIMirror.pushDomEvent({ type: 'dom_remove', selector: '#thinking-indicator' });
+  }
 
   // ---- 初次使用引导 ----
   // 仅检测 onboardingCompleted 标志：完成过一次就不再弹（用户可随时从设置主动改）
@@ -1210,6 +1216,8 @@
       case 'conversationSwitch':
         // 远端切换了对话：清空本地镜像，等待 messagesSync/init 到达
         chatMessages.innerHTML = '';
+        WebUIMirror.pushDomEvent({ type: 'dom_clear', container: '#chat-messages' });
+        WebUIMirror.pushDomEvent({ type: 'dom_remove', selector: '#thinking-indicator' });
         renderChatWelcome();
         setTitlebarTitle('未命名对话');
         break;
@@ -1235,6 +1243,8 @@
   // ---- 远程消息渲染辅助 ----
   function renderRemoteMessages(msgs) {
     chatMessages.innerHTML = '';
+    WebUIMirror.pushDomEvent({ type: 'dom_clear', container: '#chat-messages' });
+    WebUIMirror.pushDomEvent({ type: 'dom_remove', selector: '#thinking-indicator' });
     if (!msgs || msgs.length === 0) { renderChatWelcome(); return; }
     const toolCallMap = {};
     for (const m of msgs) {
@@ -1564,7 +1574,7 @@
   window.api.onWebControlNewChat(() => {
     agent.newConversation();
     setTitlebarTitle('未命名对话');
-    chatMessages.innerHTML = '';
+    clearChatMessagesUI();
     updateReoptimizeButtonVisibility();
     window.api.webControlPushConversationSwitch(null);
   });
@@ -1608,7 +1618,7 @@
       document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
       document.getElementById('page-chat')?.classList.add('active');
       // Replay messages in local UI
-      chatMessages.innerHTML = '';
+      clearChatMessagesUI();
       const toolCallMap = {};
       for (const msg of (conv.messages || [])) {
         if (msg.role === 'user') {
@@ -1683,12 +1693,20 @@
       targetMessagesEl = document.getElementById('babe-chat-messages') || chatMessages;
     }
     const thinking = document.getElementById('thinking-indicator');
-    if (thinking && targetMessagesEl === chatMessages) {
+    const insertedBeforeThinking = thinking && targetMessagesEl === chatMessages;
+    if (insertedBeforeThinking) {
       targetMessagesEl.insertBefore(el, thinking);
     } else {
       targetMessagesEl.appendChild(el);
     }
     scrollChatToBottom();
+    // 增量推送：把新元素的 outerHTML 追加到对应容器
+    WebUIMirror.pushDomEvent({
+      type: 'dom_append',
+      container: getChatContainerSelector(),
+      html: el.outerHTML,
+      before: insertedBeforeThinking ? '#thinking-indicator' : null,
+    });
   }
 
   async function normalizeToolSettings() {
@@ -1767,6 +1785,7 @@
 
     const msg = document.createElement('div');
     msg.className = 'message assistant streaming';
+    msg.id = 'stream-' + requestId;
     const time = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
     const avatarHTML = makeAvatarHTML(agent.settings?.aiPersona?.avatar, true);
     msg.innerHTML = `
@@ -1844,6 +1863,10 @@
           try { bubble.reasoningContentEl.scrollTop = bubble.reasoningContentEl.scrollHeight; } catch (_) {}
         }
         scrollChatToBottom();
+        // 增量推送：更新流式气泡的完整 outerHTML
+        if (bubble.el.id) {
+          WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#' + bubble.el.id, html: bubble.el.outerHTML });
+        }
       }, 120);
     }
   }
@@ -1866,6 +1889,10 @@
       if (!reasoning || !reasoning.trim()) {
         // Empty response (e.g. only tool calls) — remove the placeholder bubble.
         bubble.el.remove();
+        // 增量推送：移除空响应的流式气泡
+        if (bubble.el.id) {
+          WebUIMirror.pushDomEvent({ type: 'dom_remove', selector: '#' + bubble.el.id });
+        }
         return;
       }
       // 仅 reasoning 无 final content：隐藏空的内容气泡和时间戳，只保留 reasoning 容器
@@ -1882,6 +1909,10 @@
         showMessageContextMenu(e, bubble.el, 'assistant');
       });
       scrollChatToBottom();
+      // 增量推送：更新流式气泡为最终状态
+      if (bubble.el.id) {
+        WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#' + bubble.el.id, html: bubble.el.outerHTML });
+      }
       return;
     }
     bubble.rawContent = content;
@@ -1903,6 +1934,10 @@
       showMessageContextMenu(e, bubble.el, 'assistant');
     });
     scrollChatToBottom();
+    // 增量推送：更新流式气泡为最终状态
+    if (bubble.el.id) {
+      WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#' + bubble.el.id, html: bubble.el.outerHTML });
+    }
   }
 
   function addImageMessage(imageUrl) {
@@ -2237,6 +2272,10 @@
       resultEl.textContent = text.substring(0, 500);
       if (isFailure) resultEl.classList.add('error');
     }
+    // 增量推送：更新工具调用卡片的完整 outerHTML
+    if (el.id) {
+      WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#' + el.id, html: el.outerHTML });
+    }
   }
 
   function addSubAgentMessage(title, content) {
@@ -2369,12 +2408,20 @@
     el.innerHTML = `<div class="thinking-dots"><span></span><span></span><span></span></div><span>${escapeHtml(text || 'AI 正在思考...')}</span>`;
     chatMessages.appendChild(el);
     scrollChatToBottom();
+    // 增量推送：思考指示器追加到 chat 容器
+    WebUIMirror.pushDomEvent({
+      type: 'dom_append',
+      container: '#chat-messages',
+      html: el.outerHTML,
+    });
   }
 
   function removeThinkingIndicator() {
     const el = document.getElementById('thinking-indicator');
     if (el) el.remove();
     scrollChatToBottom();
+    // 增量推送：移除思考指示器
+    WebUIMirror.pushDomEvent({ type: 'dom_remove', selector: '#thinking-indicator' });
   }
 
   function escapeHtml(text) {
@@ -2830,6 +2877,8 @@
     document.querySelectorAll('.quick-action-btn').forEach(btn => {
       btn.addEventListener('click', () => { chatInput.value = btn.dataset.prompt; sendMessage(); });
     });
+    // 增量推送：替换聊天容器内容为欢迎页
+    WebUIMirror.pushDomEvent({ type: 'dom_replace', container: '#chat-messages', html: chatMessages.innerHTML });
   }
 
   // New chat
@@ -2837,7 +2886,7 @@
     if (isRemoteMode && remoteWs && remoteWs.readyState === WebSocket.OPEN) {
       remoteWs.send(JSON.stringify({ type: 'newChat' }));
       setTitlebarTitle('未命名对话');
-      chatMessages.innerHTML = '';
+      clearChatMessagesUI();
       renderChatWelcome();
       return;
     }
@@ -2851,13 +2900,13 @@
     if (isRemoteMode && remoteWs && remoteWs.readyState === WebSocket.OPEN) {
       remoteWs.send(JSON.stringify({ type: 'newChat' }));
       setTitlebarTitle('未命名对话');
-      chatMessages.innerHTML = '';
+      clearChatMessagesUI();
       return;
     }
     agent.newConversation();
     updateReoptimizeButtonVisibility();
     setTitlebarTitle('未命名对话');
-    chatMessages.innerHTML = '';
+    clearChatMessagesUI();
   });
 
   // ---- Todo Panel ----
@@ -2888,20 +2937,16 @@
   function renderTodoList(items) {
     if (items.length === 0) {
       todoList.innerHTML = '<div class="empty-state" style="padding:30px"><i class="fa-solid fa-list-check"></i><p>暂无待办事项</p></div>';
-      return;
+    } else {
+      todoList.innerHTML = items.map(item => `
+        <div class="todo-item ${item.done ? 'done' : ''}" data-id="${item.id}">
+          <div class="todo-checkbox"><i class="fa-solid fa-check"></i></div>
+          <span class="todo-text">${escapeHtml(item.text)}</span>
+          <button class="btn-icon todo-delete" title="删除"><i class="fa-solid fa-xmark"></i></button>
+        </div>`).join('');
     }
-    todoList.innerHTML = items.map(item => `
-      <div class="todo-item ${item.done ? 'done' : ''}" data-id="${item.id}">
-        <div class="todo-checkbox"><i class="fa-solid fa-check"></i></div>
-        <span class="todo-text">${escapeHtml(item.text)}</span>
-        <button class="btn-icon todo-delete" title="删除"><i class="fa-solid fa-xmark"></i></button>
-      </div>`).join('');
-
-    todoList.querySelectorAll('.todo-item').forEach(el => {
-      const id = parseInt(el.dataset.id);
-      el.querySelector('.todo-checkbox').addEventListener('click', () => agent.handleTodo({ action: 'toggle', id }));
-      el.querySelector('.todo-delete').addEventListener('click', (e) => { e.stopPropagation(); agent.handleTodo({ action: 'remove', id }); });
-    });
+    // 增量推送：替换待办列表内容
+    WebUIMirror.pushDomEvent({ type: 'dom_replace', container: '#todo-list', html: todoList.innerHTML });
   }
 
   // ---- Approval Panel ----
@@ -2909,10 +2954,14 @@
     approvalPanel.classList.remove('hidden');
     const toolDef = TOOL_DEFINITIONS.find(t => t.name === toolName);
     approvalContent.textContent = `操作: ${toolDef?.desc || toolName}\n\n参数:\n${JSON.stringify(args, null, 2)}`;
+    // 增量推送：显示审批面板并更新内容
+    WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#approval-panel', attr: 'class', value: approvalPanel.className });
+    WebUIMirror.pushDomEvent({ type: 'dom_text', selector: '#approval-content', text: approvalContent.textContent });
   }
 
   document.getElementById('btn-approve').addEventListener('click', () => {
     approvalPanel.classList.add('hidden');
+    WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#approval-panel', attr: 'class', value: approvalPanel.className });
     if (isRemoteMode && remoteWs && remoteWs.readyState === WebSocket.OPEN) {
       remoteWs.send(JSON.stringify({ type: 'approvalResponse', approved: true }));
       return;
@@ -2922,6 +2971,7 @@
 
   document.getElementById('btn-deny').addEventListener('click', () => {
     approvalPanel.classList.add('hidden');
+    WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#approval-panel', attr: 'class', value: approvalPanel.className });
     if (isRemoteMode && remoteWs && remoteWs.readyState === WebSocket.OPEN) {
       remoteWs.send(JSON.stringify({ type: 'approvalResponse', approved: false }));
       return;
@@ -4979,6 +5029,8 @@
             document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
             document.getElementById('page-chat')?.classList.add('active');
             chatMessages.innerHTML = '';
+            WebUIMirror.pushDomEvent({ type: 'dom_clear', container: '#chat-messages' });
+            WebUIMirror.pushDomEvent({ type: 'dom_remove', selector: '#thinking-indicator' });
             addThinkingIndicator();
           });
         });
@@ -5077,6 +5129,8 @@
           document.getElementById('page-chat')?.classList.add('active');
           // Replay messages
           chatMessages.innerHTML = '';
+          WebUIMirror.pushDomEvent({ type: 'dom_clear', container: '#chat-messages' });
+          WebUIMirror.pushDomEvent({ type: 'dom_remove', selector: '#thinking-indicator' });
           const toolCallMap = {};
           for (const msg of (conv.messages || [])) {
             if (msg.role === 'user') {
@@ -5169,11 +5223,15 @@
         if (agent.conversationId === btn.dataset.id) {
           agent.newConversation();
           chatMessages.innerHTML = '';
+          WebUIMirror.pushDomEvent({ type: 'dom_clear', container: '#chat-messages' });
+          WebUIMirror.pushDomEvent({ type: 'dom_remove', selector: '#thinking-indicator' });
           setTitlebarTitle('未命名对话');
         }
         loadHistoryPage();
       });
     });
+    // 增量推送：替换历史列表内容
+    WebUIMirror.pushDomEvent({ type: 'dom_replace', container: '#history-list', html: list.innerHTML });
   }
 
   // ---- Init AI Persona Display ----
