@@ -666,13 +666,17 @@ html,body{height:100%;overflow:hidden;font-family:-apple-system,BlinkMacSystemFo
 #login-box button{width:100%;padding:10px;border:none;border-radius:6px;background:var(--accent,#4f8cff);color:#fff;font-size:14px;cursor:pointer}
 #login-box button:hover{opacity:.9}
 #login-box .err{color:#e74c3c;font-size:12px;margin-bottom:8px;display:none}
-/* WebUI 下隐藏 Local/Remote 切换器（本地渲染器才有此控件） */
+/* WebUI 下隐藏 Local/Remote 切换器和窗口控制按钮（本地渲染器才有此控件） */
 #connection-switcher{display:none!important}
+.titlebar-controls{display:none!important}
+.titlebar-drag{-webkit-app-region:none!important}
+#titlebar{display:flex}
 </style>
 </head>
 <body>
 <div id="mirror-loading"><div class="spinner"></div><div>正在同步界面...</div></div>
 <div id="login-overlay"><div id="login-box"><h2>WebUI 登录</h2><div class="err" id="login-err"></div><input type="password" id="login-pw" placeholder="访问密码"><input type="text" id="login-totp" placeholder="2FA 验证码（可选）"><button id="login-btn">登录</button></div></div>
+<div id="titlebar"></div>
 <div id="app"></div>
 <script>
 (function(){
@@ -754,7 +758,7 @@ html,body{height:100%;overflow:hidden;font-family:-apple-system,BlinkMacSystemFo
         loadingEl.classList.add('hidden');
         break;
       case 'mirror_body':
-        applyBody(msg.html);
+        applyBody(msg);
         loadingEl.classList.add('hidden');
         break;
       case 'theme':
@@ -816,7 +820,7 @@ html,body{height:100%;overflow:hidden;font-family:-apple-system,BlinkMacSystemFo
       // 滚动到底部
       container.scrollTop=container.scrollHeight;
     }catch(e){console.error('[WebUI] dom_append error:',e);}
-    finally{setTimeout(function(){applyingRemote=false;},50);}
+    finally{setTimeout(function(){applyingRemote=false;},20);}
   }
 
   function applyDomClear(msg){
@@ -825,7 +829,7 @@ html,body{height:100%;overflow:hidden;font-family:-apple-system,BlinkMacSystemFo
       var container=document.querySelector(msg.container);
       if(container)container.innerHTML='';
     }catch(e){console.error('[WebUI] dom_clear error:',e);}
-    finally{setTimeout(function(){applyingRemote=false;},50);}
+    finally{setTimeout(function(){applyingRemote=false;},20);}
   }
 
   function applyDomReplace(msg){
@@ -834,7 +838,7 @@ html,body{height:100%;overflow:hidden;font-family:-apple-system,BlinkMacSystemFo
       var container=document.querySelector(msg.container);
       if(container)container.innerHTML=msg.html||'';
     }catch(e){console.error('[WebUI] dom_replace error:',e);}
-    finally{setTimeout(function(){applyingRemote=false;},50);}
+    finally{setTimeout(function(){applyingRemote=false;},20);}
   }
 
   function applyDomRemove(msg){
@@ -843,7 +847,7 @@ html,body{height:100%;overflow:hidden;font-family:-apple-system,BlinkMacSystemFo
       var el=document.querySelector(msg.selector);
       if(el)el.remove();
     }catch(e){console.error('[WebUI] dom_remove error:',e);}
-    finally{setTimeout(function(){applyingRemote=false;},50);}
+    finally{setTimeout(function(){applyingRemote=false;},20);}
   }
 
   function applyDomUpdate(msg){
@@ -861,7 +865,7 @@ html,body{height:100%;overflow:hidden;font-family:-apple-system,BlinkMacSystemFo
         }
       }
     }catch(e){console.error('[WebUI] dom_update error:',e);}
-    finally{setTimeout(function(){applyingRemote=false;},50);}
+    finally{setTimeout(function(){applyingRemote=false;},20);}
   }
 
   function applyDomText(msg){
@@ -870,7 +874,7 @@ html,body{height:100%;overflow:hidden;font-family:-apple-system,BlinkMacSystemFo
       var el=document.querySelector(msg.selector);
       if(el)el.textContent=msg.text!=null?msg.text:'';
     }catch(e){console.error('[WebUI] dom_text error:',e);}
-    finally{setTimeout(function(){applyingRemote=false;},50);}
+    finally{setTimeout(function(){applyingRemote=false;},20);}
   }
 
   function applyModeSwitch(mode){
@@ -889,7 +893,7 @@ html,body{height:100%;overflow:hidden;font-family:-apple-system,BlinkMacSystemFo
         if(pg)pg.classList.add('active');
       }
     }catch(e){console.error('[WebUI] modeSwitch error:',e);}
-    finally{setTimeout(function(){applyingRemote=false;},50);}
+    finally{setTimeout(function(){applyingRemote=false;},20);}
   }
 
   function applyThemeVars(t){
@@ -921,8 +925,23 @@ html,body{height:100%;overflow:hidden;font-family:-apple-system,BlinkMacSystemFo
     loadingEl.classList.add('hidden');
   }
 
-  function applyBody(bodyHtml){
+  function applyBody(msg){
     applyingRemote=true;
+    // 更新标题栏（如果有）
+    if(msg.titlebar){
+      var tb=document.getElementById('titlebar');
+      if(tb)tb.outerHTML=msg.titlebar;
+      // 隐藏窗口控制按钮和 Local/Remote 切换器（WebUI 不需要这些）
+      var newTb=document.getElementById('titlebar');
+      if(newTb){
+        var ctrls=newTb.querySelector('.titlebar-controls');
+        if(ctrls)ctrls.style.display='none';
+        var cs=newTb.querySelector('#connection-switcher');
+        if(cs)cs.style.display='none';
+        // 移除拖拽区域属性（WebUI 不是 Electron 窗口）
+        newTb.querySelectorAll('.titlebar-drag').forEach(function(el){el.style.webkitAppRegion='none';});
+      }
+    }
     var app=document.getElementById('app');
     // 捕获滚动位置
     var scrolls=[];
@@ -936,7 +955,7 @@ html,body{height:100%;overflow:hidden;font-family:-apple-system,BlinkMacSystemFo
         }
       }
     }
-    app.innerHTML=bodyHtml;
+    app.innerHTML=msg.html||'';
     // 恢复滚动位置
     for(var k=0;k<scrolls.length;k++){
       var s=scrolls[k];
@@ -952,7 +971,7 @@ html,body{height:100%;overflow:hidden;font-family:-apple-system,BlinkMacSystemFo
       div.textContent='[Canvas 内容不可镜像]';
       if(cv.parentNode)cv.parentNode.replaceChild(div,cv);
     }
-    setTimeout(function(){applyingRemote=false;},50);
+    setTimeout(function(){applyingRemote=false;},20);
   }
 
   // CSS path 生成

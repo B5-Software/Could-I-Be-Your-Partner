@@ -142,7 +142,7 @@
       setTimeout(() => {
         this.sendMirrorHead();
         this.sendMirrorBody();
-      }, 500);
+      }, 50);
 
       // 监听主进程的 mirrorInit 请求：新 WS 客户端连接时主进程会触发此信号，
       // 要求渲染器推送最新快照（确保新客户端拿到当前界面而非过期缓存）
@@ -172,7 +172,8 @@
 
     buildMirrorBody() {
       const app = document.getElementById('app');
-      return { type: 'mirror_body', html: app ? app.innerHTML : '' };
+      const titlebar = document.getElementById('titlebar');
+      return { type: 'mirror_body', html: app ? app.innerHTML : '', titlebar: titlebar ? titlebar.outerHTML : '' };
     },
 
     sendMirrorHead() {
@@ -235,16 +236,16 @@
         }
         // UI 事件处理后延迟推送完整 body 快照，确保 WebUI 获取最新界面状态
         // （增量 pushDomEvent 可能因选择器不匹配而失败，全量快照兜底）
-        this._scheduleResync(1000);
+        this._scheduleResync(300);
       } catch (e) {
         console.error('[WebUIMirror] UI event dispatch error:', e);
       } finally {
-        setTimeout(() => { this._applyingRemote = false; }, 100);
+        setTimeout(() => { this._applyingRemote = false; }, 20);
       }
     },
 
     _resyncTimer: null,
-    _scheduleResync(delay = 500) {
+    _scheduleResync(delay = 200) {
       if (this._resyncTimer) clearTimeout(this._resyncTimer);
       this._resyncTimer = setTimeout(() => {
         this._resyncTimer = null;
@@ -1238,15 +1239,28 @@
       var nodes = tmp.querySelectorAll('link,style');
       for (var j = 0; j < nodes.length; j++) head.appendChild(nodes[j].cloneNode(true));
     } catch (e) { console.error('[Remote] applyHead error:', e); }
-    finally { setTimeout(function() { _remoteApplying = false; }, 50); }
+    finally { setTimeout(function() { _remoteApplying = false; }, 20); }
   }
 
-  function applyRemoteBody(bodyHtml) {
+  function applyRemoteBody(msg) {
     _remoteApplying = true;
     try {
+      // 更新标题栏
+      if (msg.titlebar) {
+        var tb = document.getElementById('titlebar');
+        if (tb) tb.outerHTML = msg.titlebar;
+        // 恢复本地控制元素状态
+        var newTb = document.getElementById('titlebar');
+        if (newTb) {
+          var cs = newTb.querySelector('#connection-switcher');
+          if (cs) cs.style.display = 'none';
+          var ctrls = newTb.querySelector('.titlebar-controls');
+          if (ctrls) ctrls.style.display = 'none';
+        }
+      }
       var app = document.getElementById('app');
       if (!app) return;
-      app.innerHTML = bodyHtml;
+      app.innerHTML = msg.html || '';
       // canvas 替换为占位符（canvas 内容无法镜像）
       var canvases = app.querySelectorAll('canvas');
       for (var c = 0; c < canvases.length; c++) {
@@ -1260,26 +1274,26 @@
       var banner = app.querySelector('#remote-conn-banner');
       if (banner) { banner.classList.add('hidden'); banner.setAttribute('data-state', 'connected'); }
     } catch (e) { console.error('[Remote] applyBody error:', e); }
-    finally { setTimeout(function() { _remoteApplying = false; }, 50); }
+    finally { setTimeout(function() { _remoteApplying = false; }, 20); }
   }
 
   function applyRemoteDomClear(msg) {
     _remoteApplying = true;
     try { var c = document.querySelector(msg.container); if (c && !_isLocalControlEl(c)) c.innerHTML = ''; }
     catch (e) { console.error('[Remote] dom_clear error:', e); }
-    finally { setTimeout(function() { _remoteApplying = false; }, 50); }
+    finally { setTimeout(function() { _remoteApplying = false; }, 20); }
   }
   function applyRemoteDomReplace(msg) {
     _remoteApplying = true;
     try { var c = document.querySelector(msg.container); if (c && !_isLocalControlEl(c)) c.innerHTML = msg.html || ''; }
     catch (e) { console.error('[Remote] dom_replace error:', e); }
-    finally { setTimeout(function() { _remoteApplying = false; }, 50); }
+    finally { setTimeout(function() { _remoteApplying = false; }, 20); }
   }
   function applyRemoteDomRemove(msg) {
     _remoteApplying = true;
     try { var el = document.querySelector(msg.selector); if (el && !_isLocalControlEl(el)) el.remove(); }
     catch (e) { console.error('[Remote] dom_remove error:', e); }
-    finally { setTimeout(function() { _remoteApplying = false; }, 50); }
+    finally { setTimeout(function() { _remoteApplying = false; }, 20); }
   }
   function applyRemoteDomUpdate(msg) {
     _remoteApplying = true;
@@ -1292,13 +1306,13 @@
         el.outerHTML = msg.html;
       }
     } catch (e) { console.error('[Remote] dom_update error:', e); }
-    finally { setTimeout(function() { _remoteApplying = false; }, 50); }
+    finally { setTimeout(function() { _remoteApplying = false; }, 20); }
   }
   function applyRemoteDomText(msg) {
     _remoteApplying = true;
     try { var el = document.querySelector(msg.selector); if (el && !_isLocalControlEl(el)) el.textContent = msg.text != null ? msg.text : ''; }
     catch (e) { console.error('[Remote] dom_text error:', e); }
-    finally { setTimeout(function() { _remoteApplying = false; }, 50); }
+    finally { setTimeout(function() { _remoteApplying = false; }, 20); }
   }
 
   // ---- 事件委托：Remote 模式下所有交互通过 ui_event 转发到远端 ----
@@ -1397,7 +1411,7 @@
         applyRemoteHead(data);
         break;
       case 'mirror_body':
-        applyRemoteBody(data.html);
+        applyRemoteBody(data);
         break;
       case 'dom_clear':
         applyRemoteDomClear(data);
