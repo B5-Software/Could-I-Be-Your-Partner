@@ -972,7 +972,7 @@
   // ---- Local/Remote 选择器 ----
   // Remote 模式：把本渲染器当作远程主机的“瘦客户端 / 镜像”，所有 Agent 执行发生在远端。
   let remoteWs = null;             // Remote 模式的 WS 连接
-  let isRemoteMode = false;         // 当前是否为 Remote 模式
+  var isRemoteMode = false;         // 当前是否为 Remote 模式（用 var 提升，避免 WebUIMirror 早期引用触发 TDZ）
   let remoteBaseUrl = '';           // 远程 HTTP 基址（用于显示）
   let remotePassword = '';          // 远程密码（保存以便重连）
   let remoteTotp = '';              // 远程 TOTP（保存以便重连）
