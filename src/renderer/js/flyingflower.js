@@ -85,7 +85,14 @@
         { role: 'user', content: userMsg }
       ], { temperature: 0.9, max_tokens: 200 });
       if (result.ok && result.data?.choices?.[0]?.message?.content) {
-        return result.data.choices[0].message.content.trim();
+        let content = result.data.choices[0].message.content.trim();
+        // 清理可能混入的 reasoning 内容
+        var thinkTag = /\u003Cthink\u003E[\s\S]*?\u003C\/think\u003E/gi;
+        content = content.replace(thinkTag, '');
+        content = content.replace(/\u003Cthink\u003E[\s\S]*$/gi, '');
+        // 清理 markdown 代码块包裹
+        content = content.replace(/^```[\w]*\n?/gm, '').replace(/```$/gm, '').trim();
+        return content || null;
       }
     } catch (e) { console.error('LLM error:', e); }
     return null;

@@ -55,6 +55,13 @@
     _origApply(theme);
     // Defer slightly to allow applyThemeMode (which sets data-theme) to settle
     setTimeout(pushThemeToWebControl, 50);
+    // Monaco 主题跟随
+    setTimeout(() => {
+      if (monacoEditor) {
+        const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+        monaco.editor.setTheme(isDark ? 'vs-dark' : 'vs');
+      }
+    }, 50);
   };
   // Push initial theme (ThemeManager.init already ran with the original apply)
   setTimeout(pushThemeToWebControl, 200);
@@ -202,11 +209,23 @@
     handleUiEvent(data) {
       if (!data || !data.target) return;
       try {
-        const el = document.querySelector(data.target);
+        let el = document.querySelector(data.target);
         if (!el) {
-          console.warn('[WebUIMirror] Element not found for path:', data.target);
-          // 元素不存在：可能是 WebUI 的 CSS path 与渲染器 DOM 不匹配，
-          // 推送完整 body 快照让 WebUI 重新同步
+          // 降级查找：去掉 class 部分（class 可能因动态状态如 active 而不匹配）
+          // 保留 id、标签名、nth-of-type，重新查找
+          const degraded = data.target.replace(/\.[^ .>#]+/g, '');
+          if (degraded !== data.target) {
+            el = document.querySelector(degraded);
+          }
+        }
+        if (!el) {
+          // 再降级：去掉 nth-of-type 和 class，只用标签名和 id
+          const simple = data.target.replace(/\.[^ .>#]+/g, '').replace(/:nth-of-type\(\d+\)/g, '');
+          if (simple !== data.target) {
+            el = document.querySelector(simple);
+          }
+        }
+        if (!el) {
           this._scheduleResync();
           return;
         }
@@ -6436,12 +6455,72 @@
     modal?.classList.add('hidden');
   });
 
+  // ---- 自定义输入/确认模态框（替代 prompt/confirm） ----
+  function showInputModal(title, label, defaultValue) {
+    return new Promise((resolve) => {
+      const overlay = document.createElement('div');
+      overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:99999;display:flex;align-items:center;justify-content:center;';
+      const box = document.createElement('div');
+      box.style.cssText = 'background:var(--bg-secondary,#fff);border-radius:12px;padding:24px;min-width:360px;max-width:500px;box-shadow:0 8px 32px rgba(0,0,0,0.3);';
+      box.innerHTML = `
+        <h3 style="margin:0 0 12px;font-size:16px;color:var(--text-primary,#333);">${escapeHtml(title)}</h3>
+        <label style="display:block;font-size:13px;color:var(--text-secondary,#666);margin-bottom:6px;">${escapeHtml(label)}</label>
+        <input type="text" style="width:100%;box-sizing:border-box;padding:8px 12px;border:1px solid var(--border-color,#ddd);border-radius:6px;font-size:14px;background:var(--bg-primary,#fff);color:var(--text-primary,#333);outline:none;" value="${escapeHtml(defaultValue || '')}">
+        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px;">
+          <button class="btn-cancel" style="padding:6px 16px;border:1px solid var(--border-color,#ddd);border-radius:6px;background:transparent;color:var(--text-secondary,#666);cursor:pointer;font-size:14px;">取消</button>
+          <button class="btn-ok" style="padding:6px 16px;border:none;border-radius:6px;background:var(--accent-color,#007bff);color:#fff;cursor:pointer;font-size:14px;">确定</button>
+        </div>`;
+      overlay.appendChild(box);
+      document.body.appendChild(overlay);
+      const input = box.querySelector('input');
+      input.focus();
+      input.select();
+      function close(val) {
+        overlay.remove();
+        resolve(val);
+      }
+      box.querySelector('.btn-cancel').addEventListener('click', () => close(null));
+      box.querySelector('.btn-ok').addEventListener('click', () => close(input.value));
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') close(input.value);
+        if (e.key === 'Escape') close(null);
+      });
+      overlay.addEventListener('click', (e) => { if (e.target === overlay) close(null); });
+    });
+  }
+
+  function showConfirmModal(title, message) {
+    return new Promise((resolve) => {
+      const overlay = document.createElement('div');
+      overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);z-index:99999;display:flex;align-items:center;justify-content:center;';
+      const box = document.createElement('div');
+      box.style.cssText = 'background:var(--bg-secondary,#fff);border-radius:12px;padding:24px;min-width:360px;max-width:500px;box-shadow:0 8px 32px rgba(0,0,0,0.3);';
+      box.innerHTML = `
+        <h3 style="margin:0 0 12px;font-size:16px;color:var(--text-primary,#333);">${escapeHtml(title)}</h3>
+        <p style="margin:0 0 16px;font-size:14px;color:var(--text-secondary,#666);line-height:1.5;">${escapeHtml(message)}</p>
+        <div style="display:flex;gap:8px;justify-content:flex-end;">
+          <button class="btn-cancel" style="padding:6px 16px;border:1px solid var(--border-color,#ddd);border-radius:6px;background:transparent;color:var(--text-secondary,#666);cursor:pointer;font-size:14px;">取消</button>
+          <button class="btn-ok" style="padding:6px 16px;border:none;border-radius:6px;background:var(--danger,#dc3545);color:#fff;cursor:pointer;font-size:14px;">确认删除</button>
+        </div>`;
+      overlay.appendChild(box);
+      document.body.appendChild(overlay);
+      function close(val) {
+        overlay.remove();
+        resolve(val);
+      }
+      box.querySelector('.btn-cancel').addEventListener('click', () => close(false));
+      box.querySelector('.btn-ok').addEventListener('click', () => close(true));
+      overlay.addEventListener('click', (e) => { if (e.target === overlay) close(false); });
+    });
+  }
+
   // ---- Code Mode ----
   // Separate agent instance for Code mode, with workspace-scoped history.
   let codeAgent = null;
   let codeWorkspacePath = null;
   let codeCurrentHistoryId = null;
   let codeMessages = []; // [{role, content}]
+  let codeCurrentAttachments = []; // Code mode context attachments [{name, path, isImage, content, ext}]
 
   // Monaco Editor state
   let monacoEditor = null;
@@ -6518,10 +6597,12 @@
     if (!host) return null;
     await ensureMonaco();
     host.innerHTML = '';
+    // 跟随当前主题
+    const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
     monacoEditor = monaco.editor.create(host, {
       value: '',
       language: 'plaintext',
-      theme: 'vs',
+      theme: isDark ? 'vs-dark' : 'vs',
       automaticLayout: true,
       minimap: { enabled: true },
       scrollBeyondLastLine: false,
@@ -6819,29 +6900,68 @@
   }
 
   async function addFileToCodeContext(node) {
+    // 避免重复添加
+    if (codeCurrentAttachments.some(a => a.path === node.path)) {
+      window.showMessageModal?.('该文件已在上下文中', '提示', 'info');
+      return;
+    }
     const readRes = await window.api.readFile(node.path);
     if (!readRes.ok) {
       window.showMessageModal?.('无法读取文件: ' + (readRes.error || '未知错误'), '错误', 'error');
       return;
     }
-    const codeInput = document.getElementById('code-chat-input');
-    if (!codeInput) return;
     const ext = (node.name.split('.').pop() || '').toLowerCase();
-    const snippet = '请查看文件 ' + node.name + '：\n```' + ext + '\n' + (readRes.content || '').slice(0, 8000) + '\n```\n\n';
-    codeInput.value = (codeInput.value ? codeInput.value + '\n' : '') + snippet;
-    codeInput.focus();
-    codeInput.scrollTop = codeInput.scrollHeight;
+    const isImage = /\.(png|jpg|jpeg|gif|bmp|webp|svg)$/i.test(node.name);
+    codeCurrentAttachments.push({
+      name: node.name,
+      path: node.path,
+      isImage,
+      content: readRes.content || '',
+      ext
+    });
+    renderCodeAttachments();
+  }
+
+  function removeCodeAttachment(index) {
+    codeCurrentAttachments.splice(index, 1);
+    renderCodeAttachments();
+  }
+
+  function clearCodeAttachments() {
+    codeCurrentAttachments = [];
+    renderCodeAttachments();
+  }
+
+  function renderCodeAttachments() {
+    const container = document.getElementById('code-attachments-preview');
+    if (!container) return;
+    if (codeCurrentAttachments.length === 0) {
+      container.classList.add('hidden');
+      container.innerHTML = '';
+      return;
+    }
+    container.classList.remove('hidden');
+    container.innerHTML = codeCurrentAttachments.map((att, i) =>
+      '<div class="attachment-item">' +
+        '<i class="fa-solid ' + (att.isImage ? 'fa-image' : 'fa-file') + '"></i>' +
+        '<span class="attachment-name">' + escapeHtml(att.name) + '</span>' +
+        '<button class="btn-icon attachment-remove" data-index="' + i + '" title="从上下文移除"><i class="fa-solid fa-xmark"></i></button>' +
+      '</div>'
+    ).join('');
+    container.querySelectorAll('.attachment-remove').forEach(btn => {
+      btn.addEventListener('click', () => removeCodeAttachment(parseInt(btn.dataset.index)));
+    });
   }
 
   async function renameTreeNode(node) {
-    const newName = prompt('输入新名称:', node.name);
+    // 使用自定义输入模态框替代 prompt()（prompt 在 Electron 中不受支持）
+    const newName = await showInputModal('重命名', '输入新名称:', node.name);
     if (!newName || newName === node.name) return;
     const dir = node.path.substring(0, node.path.lastIndexOf(node.path.includes('\\') ? '\\' : '/'));
     const sep = node.path.includes('\\') ? '\\' : '/';
     const newPath = dir + sep + newName;
     const result = await window.api.moveFile(node.path, newPath);
     if (result && result.ok) {
-      // Update tab if open
       const tab = codeOpenTabs.find(t => t.path === node.path);
       if (tab) {
         tab.path = newPath;
@@ -6855,7 +6975,8 @@
   }
 
   async function deleteTreeNode(node) {
-    if (!confirm('确定删除 ' + node.name + ' 吗？此操作不可恢复。')) return;
+    const confirmed = await showConfirmModal('确认删除', '确定删除 ' + node.name + ' 吗？此操作不可恢复。');
+    if (!confirmed) return;
     const result = node.type === 'directory'
       ? await window.api.deleteDirectory(node.path)
       : await window.api.deleteFile(node.path);
@@ -7126,17 +7247,28 @@
     const input = document.getElementById('code-chat-input');
     if (!input) return;
     const text = input.value.trim();
-    if (!text) return;
+    if (!text && codeCurrentAttachments.length === 0) return;
     if (!codeAgent) {
       const ok = await initCodeAgent();
       if (!ok) return;
     }
     if (codeAgent.running) return;
 
-    addCodeMessage('user', text);
-    codeMessages.push({ role: 'user', content: text });
+    // 将附件内容拼入消息文本（截断到8000字符避免过长）
+    let fullText = text;
+    if (codeCurrentAttachments.length > 0) {
+      const snippets = codeCurrentAttachments.map(att => {
+        const truncated = (att.content || '').slice(0, 8000);
+        return '请查看文件 ' + att.name + '：\n```' + att.ext + '\n' + truncated + '\n```';
+      });
+      fullText = (fullText ? fullText + '\n\n' : '') + snippets.join('\n\n');
+    }
+
+    addCodeMessage('user', fullText);
+    codeMessages.push({ role: 'user', content: fullText });
     input.value = '';
     input.style.height = 'auto';
+    clearCodeAttachments();
 
     // Toggle stop button
     const btnSend = document.getElementById('btn-code-send');
@@ -7146,7 +7278,7 @@
 
     try {
       // Agent 类只有 sendMessage 方法（无 run 方法），与主聊天 agent 调用方式一致
-      await codeAgent.sendMessage(text);
+      await codeAgent.sendMessage(fullText);
     } catch (e) {
       addCodeMessage('system', `错误: ${e.message}`);
     } finally {
