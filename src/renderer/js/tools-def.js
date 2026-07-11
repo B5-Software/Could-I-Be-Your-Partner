@@ -115,7 +115,7 @@ function filterToolsByConfig(tools, settings) {
 // MCP 动态工具由 getAllToolDefinitions 自动追加（不受此白名单限制，按 mode 过滤时 dynamic=true 跳过检查）。
 const CODE_TOOLS = new Set([
   // 文件操作（Read/Write/Edit/Delete/Move/Copy — 对标 Claude Code 的 Read/Write/Edit）
-  'readFile', 'createFile', 'editFile', 'deleteFile', 'moveFile', 'copyFile',
+  'readFile', 'createFile', 'editFile', 'multiEditFile', 'presentFile', 'deleteFile', 'moveFile', 'copyFile',
   'listDirectory', 'makeDirectory', 'deleteDirectory',
   'localSearch',  // 文件内容搜索（对标 Grep）
   // 代码执行
@@ -201,6 +201,8 @@ const TOOL_DEFINITIONS = [
   { name: 'localSearch', desc: '搜索本地文件', icon: 'fa-folder-open', category: '文件', sensitive: false },
   { name: 'readFile', desc: '读取文件', icon: 'fa-file', category: '文件', sensitive: false },
   { name: 'editFile', desc: '编辑文件', icon: 'fa-file-pen', category: '文件', sensitive: true },
+  { name: 'multiEditFile', desc: '批量编辑文件', icon: 'fa-file-pen', category: '文件', sensitive: true },
+  { name: 'presentFile', desc: '文件呈递器', icon: 'fa-file-export', category: '文件', sensitive: false },
   { name: 'createFile', desc: '创建文件', icon: 'fa-file-circle-plus', category: '文件', sensitive: false },
   { name: 'deleteFile', desc: '删除文件', icon: 'fa-file-circle-minus', category: '文件', sensitive: true },
   { name: 'moveFile', desc: '移动/重命名文件', icon: 'fa-file-export', category: '文件', sensitive: true },
@@ -357,8 +359,10 @@ function getToolSchemas(enabledTools, mode) {
     memoryDelete: { type: 'function', function: { name: 'memoryDelete', description: '删除长期记忆', parameters: { type: 'object', properties: { id: { type: 'string', description: '记忆ID' } }, required: ['id'] } } },
     memoryUpdate: { type: 'function', function: { name: 'memoryUpdate', description: '更新长期记忆', parameters: { type: 'object', properties: { id: { type: 'string', description: '记忆ID' }, content: { type: 'string' }, tags: { type: 'array', items: { type: 'string' } } }, required: ['id'] } } },
     localSearch: { type: 'function', function: { name: 'localSearch', description: '搜索本地文件和目录', parameters: { type: 'object', properties: { directory: { type: 'string', description: '搜索目录' }, pattern: { type: 'string', description: '搜索模式（支持通配符或正则表达式）' }, options: { type: 'object', properties: { ignoreCase: { type: 'boolean', description: '是否忽略大小写（默认true）' }, maxResults: { type: 'number', description: '最大结果数（默认200）' }, fileOnly: { type: 'boolean', description: '仅搜索文件' }, dirOnly: { type: 'boolean', description: '仅搜索目录' }, regex: { type: 'boolean', description: '使用正则表达式匹配' }, depth: { type: 'number', description: '搜索深度限制（-1表示无限制）' } }, description: '搜索选项' } }, required: ['directory', 'pattern'] } } },
-    readFile: { type: 'function', function: { name: 'readFile', description: '读取文件内容', parameters: { type: 'object', properties: { path: { type: 'string', description: '文件路径' } }, required: ['path'] } } },
-    editFile: { type: 'function', function: { name: 'editFile', description: '编辑文件', parameters: { type: 'object', properties: { path: { type: 'string', description: '文件路径' }, content: { type: 'string', description: '新内容' } }, required: ['path', 'content'] } } },
+    readFile: { type: 'function', function: { name: 'readFile', description: '读取文件内容（返回带行号的内容，便于后续编辑定位）', parameters: { type: 'object', properties: { path: { type: 'string', description: '文件路径（工作目录相对路径或绝对路径）' } }, required: ['path'] } } },
+    editFile: { type: 'function', function: { name: 'editFile', description: '编辑文件（支持字符串替换和全量覆写两种模式）。字符串替换模式：指定 old_string（要查找的原文）和 new_string（替换文本），支持 replace_all 全局替换。全量覆写模式：仅指定 content 参数。', parameters: { type: 'object', properties: { path: { type: 'string', description: '文件路径（工作目录相对路径或绝对路径）' }, old_string: { type: 'string', description: '要查找并替换的原文（必须与文件内容精确匹配，包括缩进和换行）' }, new_string: { type: 'string', description: '替换后的文本' }, replace_all: { type: 'boolean', description: '是否替换所有匹配项（默认false，仅替换第一个）。当old_string出现多次且未设此选项时将报错。' }, content: { type: 'string', description: '全量覆写模式：直接写入完整新内容（与old_string/new_string互斥）' } }, required: ['path'] } } },
+    multiEditFile: { type: 'function', function: { name: 'multiEditFile', description: '批量编辑文件：对同一文件执行多处字符串替换。按顺序依次应用每个编辑。', parameters: { type: 'object', properties: { path: { type: 'string', description: '文件路径' }, edits: { type: 'array', items: { type: 'object', properties: { old_string: { type: 'string', description: '要查找的原文' }, new_string: { type: 'string', description: '替换后的文本' }, replace_all: { type: 'boolean', description: '是否替换所有匹配项' } }, required: ['old_string', 'new_string'] }, description: '编辑列表（按顺序依次应用）' } }, required: ['path', 'edits'] } } },
+    presentFile: { type: 'function', function: { name: 'presentFile', description: '文件呈递器：将工作目录中的文件以卡片形式呈递给用户，包含下载按钮。工具调用后立即返回，不阻塞Agent循环。', parameters: { type: 'object', properties: { path: { type: 'string', description: '工作目录中的文件相对路径' }, title: { type: 'string', description: '卡片标题（可选，默认为文件名）' }, description: { type: 'string', description: '文件描述（可选）' } }, required: ['path'] } } },
     createFile: { type: 'function', function: { name: 'createFile', description: '创建新文件', parameters: { type: 'object', properties: { path: { type: 'string', description: '文件路径' }, content: { type: 'string', description: '文件内容' } }, required: ['path'] } } },
     deleteFile: { type: 'function', function: { name: 'deleteFile', description: '删除文件', parameters: { type: 'object', properties: { path: { type: 'string', description: '文件路径' } }, required: ['path'] } } },
     moveFile: { type: 'function', function: { name: 'moveFile', description: '移动/重命名文件', parameters: { type: 'object', properties: { source: { type: 'string', description: '源路径' }, destination: { type: 'string', description: '目标路径' } }, required: ['source', 'destination'] } } },

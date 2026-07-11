@@ -783,6 +783,23 @@ html,body{height:100%;overflow:hidden;font-family:-apple-system,BlinkMacSystemFo
       case 'dom_text':
         applyDomText(msg);
         break;
+      case 'file_download':
+        // 从渲染器回传的文件数据，在 WebUI 端触发 blob 下载
+        if(msg.data){
+          var binary=atob(msg.data);
+          var bytes=new Uint8Array(binary.length);
+          for(var i=0;i<binary.length;i++)bytes[i]=binary.charCodeAt(i);
+          var blob=new Blob([bytes],{type:msg.mimeType||'application/octet-stream'});
+          var url=URL.createObjectURL(blob);
+          var a=document.createElement('a');
+          a.href=url;
+          a.download=msg.filename||'download';
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          URL.revokeObjectURL(url);
+        }
+        break;
       case 'modeSwitch':
         applyModeSwitch(msg.mode);
         break;

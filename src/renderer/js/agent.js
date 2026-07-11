@@ -95,6 +95,51 @@ class Agent {
     }
   }
 
+  // 为文件内容添加行号前缀（格式：N→内容）
+  _addLineNumbers(content) {
+    if (!content) return '';
+    const lines = content.split(/\r?\n/);
+    const maxLen = String(lines.length).length;
+    return lines.map((line, i) => {
+      const num = String(i + 1).padStart(maxLen, ' ');
+      return `${num}→${line}`;
+    }).join('\n');
+  }
+
+  // 字符串替换编辑（Claude Code 风格 Edit 工具）
+  async _applyStringReplace(filePath, oldString, newString, replaceAll) {
+    const readRes = await window.api.readFile(filePath);
+    if (!readRes.ok) return readRes;
+    const content = readRes.content;
+    // 统计匹配次数
+    const count = content.split(oldString).length - 1;
+    if (count === 0) {
+      return { ok: false, error: 'old_string 未在文件中找到匹配（请检查缩进、空格、换行符是否完全一致）' };
+    }
+    if (!replaceAll && count > 1) {
+      return { ok: false, error: `old_string 在文件中出现 ${count} 次。请提供更长的上下文使其唯一匹配，或设置 replace_all=true` };
+    }
+    // 执行替换
+    let newContent;
+    if (replaceAll) {
+      newContent = content.split(oldString).join(newString);
+    } else {
+      newContent = content.replace(oldString, newString);
+    }
+    const writeRes = await window.api.writeFile(filePath, newContent);
+    if (!writeRes.ok) return writeRes;
+    // 生成简单 diff 摘要
+    const oldLines = content.split('\n');
+    const newLines = newContent.split('\n');
+    return {
+      ok: true,
+      message: `已替换 ${replaceAll ? count : 1} 处匹配`,
+      replacedCount: replaceAll ? count : 1,
+      oldLineCount: oldLines.length,
+      newLineCount: newLines.length
+    };
+  }
+
   async init() {
     this.settings = await window.api.getSettings();
     if (!this.settings.tools || typeof this.settings.tools !== 'object') {
@@ -455,7 +500,11 @@ ${toolListSection}`;
 1. 你是 Coding Agent，不是聊天伴侣。回答简洁专业，直接聚焦代码与工程任务。
 2. 所有文件操作都基于当前工作区（${workspace}）。读取/创建/修改文件时使用工作区相对路径或绝对路径。
 3. 优先编辑已存在的文件，而非创建新文件；除非用户明确要求，不要主动创建冗余文件。
-4. 修改代码前先阅读目标文件，理解上下文；改动后说明修改了什么、为什么改。
+4. 修改代码前先调用 readFile 阅读目标文件（返回带行号内容），理解上下文。
+   - editFile 支持字符串替换模式（old_string/new_string/replace_all），精确匹配原文进行替换。
+   - 多处修改用 multiEditFile 批量编辑（edits 数组按顺序依次应用）。
+   - old_string 必须与文件内容完全匹配（包括缩进和换行），出现多次时需提供更长上下文或设 replace_all=true。
+   - 修改后说明修改了什么、为什么改。
 5. 终端命令：先调用 makeTerminal 创建终端会话（已自动定位 cwd 到工作区），拿到 terminalId 后调用 runTerminalCommand/awaitTerminalCommand 执行命令；任务结束用 killTerminal 关闭。也可用 runShellScriptCode 一次性执行脚本。
 6. 提供代码时使用 markdown 代码块并标注语言；执行命令时优先使用工具而非让用户手动操作。
 7. 遇到不确定的需求时主动询问用户，不要臆测后大量改代码。
@@ -1604,11 +1653,90 @@ ${toolListSection}`;
               convertedPath = `${this.workspacePath}\\${fileName}`;
               await window.api.writeFile(convertedPath, imported.content);
             }
-            return { ok: true, content: imported.content, images: imported.images, convertedPath };
+            // 为 Office 转换后的文本也添加行号
+            const contentWithLines = this._addLineNumbers(imported.content || '');
+            return { ok: true, content: contentWithLines, images: imported.images, convertedPath };
           }
-          return await window.api.readFile(pathStr);
+          const result = await window.api.readFile(pathStr);
+          if (result.ok && result.content) {
+            result.content = this._addLineNumbers(result.content);
+          }
+          return result;
         }
-        case 'editFile': return await window.api.writeFile(args.path, args.content);
+        case 'editFile': {
+          // 全量覆写模式（向后兼容）
+          if (args.content !== undefined && args.old_string === undefined) {
+            const r = await window.api.writeFile(args.path, args.content);
+            if (r.ok) r.message = '文件已全量覆写';
+            return r;
+          }
+          // 字符串替换模式
+          if (args.old_string !== undefined && args.new_string !== undefined) {
+            return await this._applyStringReplace(args.path, args.old_string, args.new_string, args.replace_all || false);
+          }
+          return { ok: false, error: '需要提供 content（全量覆写）或 old_string+new_string（字符串替换）' };
+        }
+        case 'multiEditFile': {
+          if (!Array.isArray(args.edits) || args.edits.length === 0) {
+            return { ok: false, error: 'edits 必须是非空数组' };
+          }
+          // 读取当前文件内容
+          const readRes = await window.api.readFile(args.path);
+          if (!readRes.ok) return readRes;
+          let content = readRes.content;
+          const appliedEdits = [];
+          // 依次应用每个编辑
+          for (let i = 0; i < args.edits.length; i++) {
+            const edit = args.edits[i];
+            if (edit.old_string === undefined || edit.new_string === undefined) {
+              return { ok: false, error: `第 ${i + 1} 个编辑缺少 old_string 或 new_string` };
+            }
+            const count = edit.replace_all
+              ? content.split(edit.old_string).length - 1
+              : content.includes(edit.old_string) ? 1 : 0;
+            if (count === 0) {
+              return { ok: false, error: `第 ${i + 1} 个编辑的 old_string 未在文件中找到` };
+            }
+            if (!edit.replace_all && count > 1) {
+              return { ok: false, error: `第 ${i + 1} 个编辑的 old_string 在文件中出现 ${count} 次，请提供更长的上下文或设置 replace_all` };
+            }
+            if (edit.replace_all) {
+              content = content.split(edit.old_string).join(edit.new_string);
+            } else {
+              content = content.replace(edit.old_string, edit.new_string);
+            }
+            appliedEdits.push({ index: i + 1, replacements: edit.replace_all ? count : 1 });
+          }
+          const writeRes = await window.api.writeFile(args.path, content);
+          if (!writeRes.ok) return writeRes;
+          return { ok: true, message: `已应用 ${appliedEdits.length} 处编辑`, edits: appliedEdits };
+        }
+        case 'presentFile': {
+          // 解析工作目录相对路径
+          const relPath = args.path || '';
+          const fullPath = this.workspacePath
+            ? (typeof require !== 'undefined' ? require('path').resolve(this.workspacePath, relPath) : `${this.workspacePath}\\${relPath}`)
+            : relPath;
+          // 读取文件验证存在性
+          const readRes = await window.api.readFile(fullPath);
+          if (!readRes.ok) {
+            return { ok: false, error: `文件不存在: ${relPath}` };
+          }
+          const filename = relPath.split(/[\\/]/).pop();
+          const fileSize = readRes.content ? readRes.content.length : 0;
+          // 通知 UI 创建呈递卡片（不阻塞 Agent 循环）
+          if (this.onMessage) {
+            this.onMessage('present-file', {
+              path: relPath,
+              fullPath: fullPath,
+              filename: filename,
+              title: args.title || filename,
+              description: args.description || '',
+              size: fileSize
+            });
+          }
+          return { ok: true, message: `文件 ${filename} 已呈递给用户` };
+        }
         case 'createFile': return await window.api.createFile(args.path, args.content || '');
         case 'deleteFile': return await window.api.deleteFile(args.path);
         case 'moveFile': return await window.api.moveFile(args.source, args.destination);
