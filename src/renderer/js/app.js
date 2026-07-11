@@ -103,6 +103,13 @@
   const btnClearChat = document.getElementById('btn-clear-chat');
   const agentStatus = document.getElementById('agent-status');
   const agentTarot = document.getElementById('agent-tarot');
+
+  // 命运之牌 UI 可见性：关闭时隐藏所有相关 UI，后端抽牌逻辑不变
+  let tarotVisible = true;
+  function applyTarotVisibility(visible) {
+    tarotVisible = visible !== false;
+    if (agentTarot) agentTarot.classList.toggle('hidden', !tarotVisible);
+  }
   const todoPanel = document.getElementById('todo-panel');
   const todoList = document.getElementById('todo-list');
   const todoInput = document.getElementById('todo-input');
@@ -194,6 +201,9 @@
         const el = document.querySelector(data.target);
         if (!el) {
           console.warn('[WebUIMirror] Element not found for path:', data.target);
+          // 元素不存在：可能是 WebUI 的 CSS path 与渲染器 DOM 不匹配，
+          // 推送完整 body 快照让 WebUI 重新同步
+          this._scheduleResync();
           return;
         }
         this._applyingRemote = true;
@@ -220,11 +230,23 @@
             el.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
             break;
         }
+        // UI 事件处理后延迟推送完整 body 快照，确保 WebUI 获取最新界面状态
+        // （增量 pushDomEvent 可能因选择器不匹配而失败，全量快照兜底）
+        this._scheduleResync(1000);
       } catch (e) {
         console.error('[WebUIMirror] UI event dispatch error:', e);
       } finally {
         setTimeout(() => { this._applyingRemote = false; }, 100);
       }
+    },
+
+    _resyncTimer: null,
+    _scheduleResync(delay = 500) {
+      if (this._resyncTimer) clearTimeout(this._resyncTimer);
+      this._resyncTimer = setTimeout(() => {
+        this._resyncTimer = null;
+        this.sendMirrorBody();
+      }, delay);
     },
   };
   WebUIMirror.init();
@@ -453,7 +475,11 @@
       if (page) page.classList.add('active');
 
       // Load page data
-      if (btn.dataset.page === 'tools') loadToolsPage();
+      if (btn.dataset.page === 'tools') {
+        // 进入工具页时按当前模式自动定位到对应选项卡
+        codeEditorModeFilter = currentMode || 'chat';
+        loadToolsPage();
+      }
       if (btn.dataset.page === 'tools') {
         // Wire up mode switcher buttons (Chat/Code) — only once
         if (!document.getElementById('tools-mode-switcher').dataset.wired) {
@@ -554,7 +580,11 @@
   agent.onMessage = (type, data) => {
     switch (type) {
       case 'tarot':
-        if (data && agentTarot) {
+        if (data) {
+          // 后端逻辑：始终推送 tarot 到 WebUI（保持子代理/对话上下文一致）
+          window.api.webControlPushTarot(data);
+          // UI 可见性：关闭时跳过所有前端渲染（agent-tarot 已被 hidden 隐藏）
+          if (!tarotVisible || !agentTarot) break;
           const iconHtml = data.icon ? `<i class="fa-solid ${data.icon}"></i>` : '<i class="fa-solid fa-star"></i>';
           const position = data.isReversed ? '逆位' : '正位';
           const meaning = data.isReversed ? data.meaningOfReversed : data.meaningOfUpright;
@@ -566,8 +596,6 @@
           // Add system message for tarot card
           const entropyNote = isTRNG ? ' [TRNG 硬件真随机]' : '';
           addSystemMessage(`抽取了命运之牌：${data.name}${data.isReversed ? '(逆位)' : '(正位)'}（${data.nameEn}）${entropyNote}\n${meaning || ''}`);
-          // Push tarot to web control
-          window.api.webControlPushTarot(data);
         }
         break;
       case 'assistant':
@@ -607,8 +635,10 @@
         window.api.webControlPushApproval(data.toolName, data.args);
         break;
       case 'sub-agent-start': {
-        const eTag = data.tarot?.entropySource?.startsWith('TRNG') ? ' [TRNG]' : '';
-        addSubAgentMessage(`子代理启动 - 命运之牌: ${data.tarot.name}${data.tarot.isReversed ? '(逆位)' : '(正位)'}${eTag}`, `任务: ${data.task}`);
+        const tarotPart = tarotVisible && data.tarot
+          ? ` - 命运之牌: ${data.tarot.name}${data.tarot.isReversed ? '(逆位)' : '(正位)'}${data.tarot?.entropySource?.startsWith('TRNG') ? ' [TRNG]' : ''}`
+          : '';
+        addSubAgentMessage(`子代理启动${tarotPart}`, `任务: ${data.task}`);
         break;
       }
       case 'sub-agent-done':
@@ -1294,7 +1324,7 @@
   }
 
   function showRemoteTarot(card) {
-    if (!card || !agentTarot) return;
+    if (!card || !agentTarot || !tarotVisible) return;
     const iconHtml = card.icon ? `<i class="fa-solid ${card.icon}"></i>` : '<i class="fa-solid fa-star"></i>';
     const position = card.isReversed ? '逆位' : '正位';
     const meaning = card.isReversed ? card.meaningOfReversed : card.meaningOfUpright;
@@ -1397,8 +1427,11 @@
 
   function updateReoptimizeButtonVisibility() {
     if (!btnReoptimizeTools) return;
-    // 按钮在自动优化开启时即显示（不要求已优化过），允许用户随时手动触发
-    const visible = !!agent.settings?.autoOptimizeToolSelection
+    // Code 模式不使用自动优化，隐藏按钮
+    // Babe 模式同理（Babe 有独立的 context-indicator）
+    const currentAgent = currentMode === 'code' ? codeAgent : (currentMode === 'babe' ? babeAgent : agent);
+    const visible = currentMode === 'chat'
+      && !!agent.settings?.autoOptimizeToolSelection
       && !(agent.sessionAutoOptimizeDisabled);
     btnReoptimizeTools.classList.toggle('hidden', !visible);
     // 同步重新优化按钮可见性到 WebUI
@@ -1588,6 +1621,7 @@
     }
     addMessageToChat('user', message);
     window.api.webControlPushMessage('user', message, { source: 'web' });
+    addThinkingIndicator();
     agent._fromWeb = true;
     await agent.sendMessage(message);
     agent._fromWeb = false;
@@ -2979,12 +3013,13 @@
   });
 
   // ---- Tools Page ----
-  function renderToolsStats() {
+  function renderToolsStats(mode) {
+    mode = mode || codeEditorModeFilter || 'chat';
     const enabledSettings = agent.settings.tools || {};
-    const allDefs = getAllToolDefinitions();
+    const allDefs = getAllToolDefinitions(mode);
     const total = allDefs.length;
     const enabledCount = allDefs.filter(t => enabledSettings[t.name] !== false).length;
-    const enabledSchemas = getToolSchemas(enabledSettings);
+    const enabledSchemas = getToolSchemas(enabledSettings, mode);
     const schemaChars = JSON.stringify(enabledSchemas).length;
     const estTokens = Math.ceil(schemaChars / 4);
     const hasOptimized = (typeof agent.hasUsableOptimizedSelection === 'function')
@@ -2994,7 +3029,7 @@
     const activeMap = {};
     allDefs.forEach(t => { activeMap[t.name] = false; });
     activeTools.forEach(n => { activeMap[n] = true; });
-    const activeSchemas = getToolSchemas(activeMap);
+    const activeSchemas = getToolSchemas(activeMap, mode);
     const activeTokens = Math.ceil(JSON.stringify(activeSchemas).length / 4);
     const savedTokens = Math.max(0, estTokens - activeTokens);
     const mcpCount = MCP_DYNAMIC_TOOLS.length;
@@ -3020,7 +3055,7 @@
       ? agent.hasUsableOptimizedSelection()
       : Array.isArray(agent.optimizedToolNames);
     const activeToolSet = new Set((typeof agent.getActiveToolNames === 'function') ? agent.getActiveToolNames() : allDefs.filter(t => enabledSettings[t.name] !== false).map(t => t.name));
-    renderToolsStats();
+    renderToolsStats(mode);
 
     // Sync mode switcher buttons
     document.querySelectorAll('.tools-mode-btn').forEach(btn => {
@@ -3038,8 +3073,11 @@
     });
 
     const autoOptimizeEl = document.getElementById('toggle-auto-optimize-tools');
+    const autoOptimizeLabel = document.querySelector('.tools-auto-optimize');
     if (autoOptimizeEl) {
       autoOptimizeEl.checked = !!agent.settings.autoOptimizeToolSelection;
+      // Code 模式不使用自动优化（始终用全部启用工具），隐藏开关
+      if (autoOptimizeLabel) autoOptimizeLabel.style.display = (mode === 'code') ? 'none' : '';
       autoOptimizeEl.onchange = async () => {
         if (autoOptimizeEl.checked) {
           const confirmed = await window.confirmDialog(
@@ -3170,7 +3208,7 @@
     if (!agent.settings.tools || typeof agent.settings.tools !== 'object') {
       agent.settings.tools = {};
     }
-    const toolsInCategory = getAllToolDefinitions().filter(t => (t.category || '其他') === category);
+    const toolsInCategory = getAllToolDefinitions(codeEditorModeFilter || 'chat').filter(t => (t.category || '其他') === category);
     toolsInCategory.forEach(t => {
       agent.settings.tools[t.name] = enabled;
     });
@@ -3873,6 +3911,10 @@
     if (pronounsEl) pronounsEl.value = persona.pronouns || '';
     if (personalityEl) personalityEl.value = persona.personality || '';
     if (customPromptEl) customPromptEl.value = persona.customPrompt || '';
+    // 命运之牌 UI 可见性开关（默认 true）
+    const tarotVisibleEl = document.getElementById('setting-tarot-visible');
+    if (tarotVisibleEl) tarotVisibleEl.checked = s.tarotVisible !== false;
+    applyTarotVisibility(s.tarotVisible !== false);
     // Avatar migration: if stored as file path, convert to base64
     let aiAvatarData = persona.avatar || '';
     if (aiAvatarData && !aiAvatarData.startsWith('data:') && !aiAvatarData.startsWith('http')) {
@@ -4747,6 +4789,17 @@
       });
     }
   });
+
+  // 命运之牌可见性开关
+  const tarotVisibleToggle = document.getElementById('setting-tarot-visible');
+  if (tarotVisibleToggle) {
+    tarotVisibleToggle.addEventListener('change', async () => {
+      const s = await window.api.getSettings();
+      s.tarotVisible = tarotVisibleToggle.checked;
+      await saveSettings(s);
+      applyTarotVisibility(s.tarotVisible);
+    });
+  }
 
   // ---- Babe Mode Settings ----
   ['setting-babe-name', 'setting-babe-gender', 'setting-babe-age', 'setting-babe-personality', 'setting-babe-persona', 'setting-babe-user-nickname', 'setting-babe-proactive-interval', 'setting-babe-initial-affection'].forEach(id => {

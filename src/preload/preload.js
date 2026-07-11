@@ -114,16 +114,6 @@ contextBridge.exposeInMainWorld('api', {
   deleteSkill: (id) => ipcRenderer.invoke('skills:delete', id),
   updateSkill: (id, data) => ipcRenderer.invoke('skills:update', id, data),
 
-  // Dream (memory consolidation)
-  dreamGetState: () => ipcRenderer.invoke('dream:getState'),
-  dreamCheckGate: () => ipcRenderer.invoke('dream:checkGate'),
-  dreamAcquireLock: () => ipcRenderer.invoke('dream:acquireLock'),
-  dreamReleaseLock: () => ipcRenderer.invoke('dream:releaseLock'),
-  dreamRecordConsolidation: () => ipcRenderer.invoke('dream:recordConsolidation'),
-  dreamIncrementSession: () => ipcRenderer.invoke('dream:incrementSession'),
-  dreamGetMemoryDir: () => ipcRenderer.invoke('dream:getMemoryDir'),
-  dreamAppendSession: (record) => ipcRenderer.invoke('dream:appendSession', record),
-
   // ---- Code Mode ----
   codeOpenWorkspace: () => ipcRenderer.invoke('code:openWorkspace'),
   codeGetLastWorkspace: () => ipcRenderer.invoke('code:getLastWorkspace'),

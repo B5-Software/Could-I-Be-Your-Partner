@@ -649,7 +649,7 @@ class WebControlService {
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>CIBYP Web Control</title>
 <link rel="stylesheet" href="/static/fa/fontawesome.min.css">
-<style>
+<style data-shell>
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{height:100%;overflow:hidden;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif}
 #app{height:100vh;display:flex}

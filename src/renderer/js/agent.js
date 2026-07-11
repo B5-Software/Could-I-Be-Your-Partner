@@ -71,7 +71,6 @@ class Agent {
     this.babeAffection = 0; // Babe 模式好感度（0-100）
     this.mode = 'chat'; // 'chat' | 'code' | 'babe'
     this.sessionAutoOptimizeDisabled = false; // LLM 可在本次 session 内禁用自动优化
-    this.dreamRunning = false; // Dream 运行中标志，用户发消息时打断
   }
 
   getLocalDateTimeString() {
@@ -141,12 +140,9 @@ class Agent {
       });
     }
 
-    // Increment Dream session counter (used by autoDream gating)
-    try { await window.api.dreamIncrementSession(); } catch { /* ignore */ }
-
     // Subscribe to LLM stream events to surface live tokens to the UI.
-    // Only chunks matching the active requestId are forwarded (sub-agent &
-    // dream loops use their own requestIds and don't emit to the main UI).
+    // Only chunks matching the active requestId are forwarded (sub-agent
+    // loops use their own requestIds and don't emit to the main UI).
     if (window.api?.onStreamChunk && !this._streamChunkUnsub) {
       this._streamChunkUnsub = window.api.onStreamChunk((chunk) => {
         if (!chunk || chunk.requestId !== this._activeStreamRequestId) return;
@@ -158,144 +154,6 @@ class Agent {
         if (!data || data.requestId !== this._activeStreamRequestId) return;
         if (this.onMessage) this.onMessage('stream-end', data);
       });
-    }
-  }
-
-  /**
-   * Auto-Dream: check triple gate and run memory consolidation if passed.
-   * Called after each conversation turn completes.
-   * Gate 1: settings.agent.autoDreamEnabled (default true)
-   * Gate 2: >= minHours since last consolidation (default 24h)
-   * Gate 3: >= minSessions since last consolidation (default 5)
-   * Lock: PID-based, expires after 1 hour
-   */
-  async maybeRunAutoDream() {
-    if (!window.api?.dreamCheckGate) return;
-    let gate;
-    try { gate = await window.api.dreamCheckGate(); } catch { return; }
-    if (!gate?.passed) {
-      // Release lock if we acquired it but won't run (shouldn't happen, but be safe)
-      return;
-    }
-    // Dream 完全静默：不向 UI 推送任何消息，仅 console 日志
-    console.log('[Dream] 自动 Dream 启动：开始整理持久化记忆...');
-    this.dreamRunning = true;
-    try {
-      await this._runDreamInline();
-      await window.api.dreamRecordConsolidation();
-      console.log('[Dream] Dream 完成：记忆已整理');
-    } catch (e) {
-      console.warn('[Dream] Dream 失败：', e.message);
-    } finally {
-      this.dreamRunning = false;
-      try { await window.api.dreamReleaseLock(); } catch { /* ignore */ }
-    }
-  }
-
-  /**
-   * Run Dream as a forked agent: temporary context + dream skill prompt + file tools.
-   * Saves and restores the main conversation context.
-   */
-  async _runDreamInline() {
-    // Find the dream bundled skill
-    await this.refreshSkillsCatalog();
-    const dreamSkill = this.skillsCatalog.find(s => s.name === 'dream' || s.id === 'bundled-dream');
-    if (!dreamSkill?.prompt) throw new Error('dream skill prompt not found');
-
-    let memoryDir = '';
-    try { memoryDir = await window.api.dreamGetMemoryDir(); } catch { /* ignore */ }
-
-    // Save current context
-    const savedContext = this.contextManager;
-    const savedActiveSkills = this.activeSkills;
-    const savedRunning = this.running;
-    const savedStopped = this.stopped;
-
-    // Create a fresh context for Dream
-    const dreamContext = new ContextManager(this.settings?.llm?.maxContextLength || 8192);
-    const sysInfo = this.systemInfo || {};
-    const username = sysInfo.username || '用户';
-    dreamContext.setSystemPrompt(`${dreamSkill.prompt}
-
-# 环境信息
-- 用户名: ${username}
-- 记忆目录: ${memoryDir || '(未配置)'}
-- 当前时间: ${this.getLocalDateTimeString()}
-- 工作目录: ${this.workspacePath || '(未创建)'}
-
-你拥有完整的文件工具权限来读取和修改记忆目录中的文件。请严格按照 Dream 流程执行。`);
-    dreamContext.addUserMessage(`请立即开始 Dream 记忆整理流程。记忆目录位于：${memoryDir}。
-
-执行步骤：
-1. 调用 listDirectory 查看记忆目录
-2. 调用 readFile 读取 topics.md（若存在）
-3. 检查是否有 session_*.jsonl 文件，读取最近的
-4. 整合、修剪、更新 topics.md
-5. 完成后报告整理结果
-
-请开始。`);
-
-    // Swap in dream context
-    this.contextManager = dreamContext;
-    this.activeSkills = [];
-    this.running = true;
-    this.stopped = false;
-
-    // Tools allowed during Dream (file ops + system info)
-    const dreamAllowedTools = new Set([
-      'readFile', 'listDirectory', 'createFile', 'editFile', 'deleteFile',
-      'moveFile', 'copyFile', 'makeDirectory', 'localSearch',
-      'getSystemInfo', 'manageContext'
-    ]);
-
-    try {
-      // Run a mini agent loop (max 10 iterations)
-      const dreamRunId = ++this.runId;
-      let iterations = 0;
-      const maxDreamIterations = 10;
-      while (this.running && !this.stopped && iterations < maxDreamIterations && dreamRunId === this.runId) {
-        iterations++;
-        const messages = dreamContext.getMessages();
-        const allTools = this.getRuntimeToolSchemas();
-        const dreamTools = allTools.filter(t => dreamAllowedTools.has(t.name));
-        const result = await window.api.chatLLM(messages, {
-          tools: dreamTools.length > 0 ? dreamTools : undefined,
-          requestId: 'dream-' + Date.now().toString()
-        });
-        if (!result.ok) {
-          console.warn('[Dream] LLM 调用失败：', result.error);
-          break;
-        }
-        const choice = result.data.choices?.[0];
-        if (!choice) break;
-        const assistantMsg = choice.message;
-        if (choice.finish_reason === 'stop' && (!assistantMsg.tool_calls || assistantMsg.tool_calls.length === 0)) {
-          // Dream completed — 静默，仅 console
-          if (assistantMsg.content) console.log('[Dream] 整理完成：', assistantMsg.content.substring(0, 200));
-          break;
-        }
-        dreamContext.addAssistantMessage(assistantMsg.content, assistantMsg.tool_calls);
-        if (assistantMsg.content) console.log('[Dream] 思考：', assistantMsg.content.substring(0, 200));
-        if (assistantMsg.tool_calls && assistantMsg.tool_calls.length > 0) {
-          for (const tc of assistantMsg.tool_calls) {
-            const toolName = tc.function.name;
-            let args;
-            try { args = JSON.parse(tc.function.arguments || '{}'); } catch { args = {}; }
-            // Dream 期间不向 UI 推送工具调用
-            const toolResult = await this.executeTool(toolName, args);
-            const resultStr = typeof toolResult === 'string' ? toolResult : JSON.stringify(toolResult);
-            const truncated = resultStr.length > 3000 ? resultStr.substring(0, 3000) + '...[结果已截断]' : resultStr;
-            dreamContext.addToolResult(tc.id, toolName, truncated);
-          }
-        }
-      }
-    } finally {
-      // Restore original context
-      this.contextManager = savedContext;
-      this.activeSkills = savedActiveSkills;
-      this.running = savedRunning;
-      this.stopped = savedStopped;
-      this.runId++; // invalidate any pending dream iterations
     }
   }
 
@@ -603,7 +461,7 @@ ${toolListSection}`;
 7. 遇到不确定的需求时主动询问用户，不要臆测后大量改代码。
 8. 工具调用失败时检查参数（路径、命令语法），重试或换方案，不要静默放弃。
 9. 不要使用 emoji 表情符号，不要使用"亲昵语气词"。使用简体中文回复，代码注释也用中文。
-10. 如果当前任务涉及大量工具调用或频繁切换工具，可调用 __disableAutoOptimize 在本会话中禁用工具选择优化。
+10. Code 模式下所有已启用的工具始终可用（不进行自动优化），你可以自由使用任何列出的工具。
 ${toolListSection}`;
   }
 
@@ -661,6 +519,8 @@ ${toolListSection}`;
   }
 
   hasUsableOptimizedSelection() {
+    // Code 模式始终使用全部启用工具，不参与自动优化
+    if (this.mode === 'code') return false;
     if (!this.settings?.autoOptimizeToolSelection) return false;
     if (this.sessionAutoOptimizeDisabled) return false; // LLM 在本 session 内禁用了自动优化
     if (!Array.isArray(this.optimizedToolNames)) return false;
@@ -707,7 +567,7 @@ ${toolListSection}`;
     if (typeof filterToolsByConfig === 'function') {
       tools = filterToolsByConfig(tools, this.settings);
     }
-    if (this.settings?.autoOptimizeToolSelection && !this.sessionAutoOptimizeDisabled) {
+    if (this.settings?.autoOptimizeToolSelection && !this.sessionAutoOptimizeDisabled && this.mode !== 'code') {
       tools.push(INTERNAL_REOPTIMIZE_TOOL_SCHEMA);
       tools.push(INTERNAL_DISABLE_AUTO_OPTIMIZE_SCHEMA);
     }
@@ -845,6 +705,8 @@ ${toolListSection}`;
   }
 
   async optimizeToolsForConversation(firstUserMessage, reason = '') {
+    // Code 模式不参与自动优化，始终使用全部启用工具
+    if (this.mode === 'code') return { ok: true, selected: [], skipped: 'code_mode' };
     const enabledDefs = this.getEnabledToolDefinitions();
     const fallback = this.compactOptimizedSelection([], enabledDefs, firstUserMessage);
     if (!enabledDefs.length) {
@@ -903,7 +765,7 @@ ${toolListSection}`;
         { role: 'user', content: userPrompt }
       ], {
         temperature: 0.2,
-        max_tokens: 800,
+        max_tokens: 2000,
         response_format: { type: 'json_object' },
         requestId: Date.now().toString()
       });
@@ -922,7 +784,8 @@ ${toolListSection}`;
         t = t.replace(/\u003Cthink\u003E[\s\S]*?\u003C\/think\u003E/gi, "");
         // Remove unclosed think tag to end
         t = t.replace(/\u003Cthink\u003E[\s\S]*$/gi, "");
-        // Remove markdown code fence markers
+        // Remove markdown code fence markers (```json ... ```)
+        const tick3 = String.fromCharCode(96, 96, 96); // triple backtick
         t = t.split(tick3 + "json").join("").split(tick3).join("");
         return t.trim();
       };
@@ -1072,14 +935,6 @@ ${toolListSection}`;
       return;
     }
 
-    // 如果 Dream 正在运行，打断并舍弃（不阻止用户发消息）
-    if (this.dreamRunning) {
-      console.log('[Dream] 用户发消息，打断并舍弃 Dream');
-      this.runId++; // 让 Dream 循环条件 dreamRunId === this.runId 失效，下次迭代退出
-      this.dreamRunning = false;
-      try { await window.api.dreamReleaseLock(); } catch { /* ignore */ }
-    }
-
     const runId = ++this.runId;
     this.running = true;
     this.stopped = false;
@@ -1172,11 +1027,6 @@ ${toolListSection}`;
     // Save to history
     this.saveToHistory();
 
-    // Append this turn to the daily session log (Dream consolidation data source)
-    try {
-      await this.appendSessionRecord(userMessage, fullMessage);
-    } catch { /* ignore session-log failures */ }
-
     // Goal turn recording: track turns for max-turns detection.
     try {
       if (typeof GoalState !== 'undefined' && GoalState) {
@@ -1188,44 +1038,6 @@ ${toolListSection}`;
         }
       }
     } catch { /* ignore goal tracking failures */ }
-
-    // Auto-Dream: check triple gate and run memory consolidation if passed.
-    // Runs after the user-visible turn completes so it never blocks the response.
-    await this.maybeRunAutoDream();
-  }
-
-  /**
-   * Append a compact JSONL record of this conversation turn to the daily
-   * session file (memory/session_YYYY-MM-DD.jsonl). Dream reads these to
-   * consolidate persistent memory. Failures are non-fatal.
-   */
-  async appendSessionRecord(userText, fullMessage) {
-    if (!window.api?.dreamAppendSession) return;
-    const msgs = this.contextManager.getMessages();
-    // Capture assistant turns produced in this run (after the user message)
-    const turns = [];
-    let sawUser = false;
-    for (const m of msgs) {
-      if (m.role === 'user' && (m.content === fullMessage || m.content === userText)) {
-        sawUser = true;
-        continue;
-      }
-      if (sawUser && m.role === 'assistant') {
-        turns.push({
-          content: typeof m.content === 'string' ? m.content.slice(0, 2000) : '',
-          toolCalls: Array.isArray(m.tool_calls) ? m.tool_calls.length : 0
-        });
-      }
-    }
-    const record = {
-      ts: Date.now(),
-      iso: new Date().toISOString(),
-      conversationId: this.conversationId,
-      title: this.conversationTitle || '',
-      user: typeof userText === 'string' ? userText.slice(0, 1000) : String(userText).slice(0, 1000),
-      assistantTurns: turns
-    };
-    await window.api.dreamAppendSession(record);
   }
 
   async saveToHistory() {

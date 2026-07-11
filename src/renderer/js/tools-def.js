@@ -88,6 +88,12 @@ function isToolAvailableForMode(toolName, mode) {
   if (mode === 'babe') {
     return BABE_ALLOWED_TOOLS.has(toolName);
   }
+  // Code 模式使用独立白名单（参考 Claude Code 工具集，不与 Chat 共用）
+  // MCP 动态工具（mcp__前缀）始终可用，不受白名单限制
+  if (mode === 'code') {
+    if (toolName.startsWith('mcp__')) return true;
+    return CODE_TOOLS.has(toolName);
+  }
   if (CHAT_ONLY_TOOLS.has(toolName)) return mode === 'chat';
   return true;
 }
@@ -103,6 +109,40 @@ function filterToolsByConfig(tools, settings) {
   if (isImageGenConfigured(settings)) return tools;
   return tools.filter(t => t.function?.name !== 'generateImage');
 }
+
+// Code 模式独立工具白名单（参考 Claude Code 工具集，不与 Chat 共用）
+// Code 模式聚焦文件编辑、代码搜索、终端执行和上下文管理，排除娱乐/UI-heavy 工具。
+// MCP 动态工具由 getAllToolDefinitions 自动追加（不受此白名单限制，按 mode 过滤时 dynamic=true 跳过检查）。
+const CODE_TOOLS = new Set([
+  // 文件操作（Read/Write/Edit/Delete/Move/Copy — 对标 Claude Code 的 Read/Write/Edit）
+  'readFile', 'createFile', 'editFile', 'deleteFile', 'moveFile', 'copyFile',
+  'listDirectory', 'makeDirectory', 'deleteDirectory',
+  'localSearch',  // 文件内容搜索（对标 Grep）
+  // 代码执行
+  'runJavaScriptCode', 'runNodeJavaScriptCode', 'runShellScriptCode',
+  // 终端（对标 Claude Code 的 Bash）
+  'makeTerminal', 'runTerminalCommand', 'awaitTerminalCommand', 'killTerminal',
+  // 网络（代码任务常需搜索文档/获取依赖信息）
+  'webSearch', 'webFetch', 'downloadFile', 'httpRequest',
+  // 知识库（代码片段/项目知识）
+  'knowledgeBaseSearch', 'knowledgeBaseAdd',
+  // 记忆（跨会话记住项目约定）
+  'memorySearch', 'memoryAdd', 'memoryUpdate', 'memoryDelete',
+  // 上下文管理 + 子代理 + 待办（对标 Claude Code 的 Task/TodoWrite）
+  'manageContext', 'autoSummarizeContext', 'runSubAgent', 'todoList',
+  // 目标跟踪（长任务拆解）
+  'goalSet', 'goalStatus', 'goalComplete',
+  // 技能（Code 模式可用技能脚本）
+  'listSkills', 'runSkillScript', 'activateSkill', 'deactivateSkill',
+  // 系统信息
+  'getSystemInfo', 'getNetworkStatus', 'openFileExplorer',
+  // MCP 工具列表
+  'mcpListTools',
+  // 效率
+  'sleep',
+  // 询问用户（复杂任务需澄清需求）
+  'askQuestions',
+]);
 
 // Babe 模式允许的工具白名单（仅应用内核心工具，无 MCP、无娱乐/创作/游戏，不含 Skills）
 const BABE_ALLOWED_TOOLS = new Set([
