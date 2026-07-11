@@ -666,6 +666,8 @@ html,body{height:100%;overflow:hidden;font-family:-apple-system,BlinkMacSystemFo
 #login-box button{width:100%;padding:10px;border:none;border-radius:6px;background:var(--accent,#4f8cff);color:#fff;font-size:14px;cursor:pointer}
 #login-box button:hover{opacity:.9}
 #login-box .err{color:#e74c3c;font-size:12px;margin-bottom:8px;display:none}
+/* WebUI 下隐藏命运之牌开关（本地渲染器才有此设置） */
+.setting-item:has(#setting-tarot-visible){display:none!important}
 </style>
 </head>
 <body>

@@ -1182,6 +1182,13 @@
   let _remoteApplying = false; // 防止事件委托反馈循环
   let _remoteEventHandlers = null; // 事件委托处理器引用
 
+  // 本地控制元素：不被远端镜像覆盖（Local/Remote 切换器、远程连接模态框、连接横幅）
+  function _isLocalControlEl(el) {
+    if (!el || el.nodeType !== 1) return false;
+    return !!(el.closest('#connection-switcher') || el.closest('#remote-connect-modal') ||
+              el.closest('#remote-conn-banner') || el.closest('#titlebar'));
+  }
+
   // CSS path 生成（与 WebUI 客户端 cssPath 一致）
   function remoteCssPath(el) {
     if (!el || el.nodeType !== 1) return '';
@@ -1249,25 +1256,28 @@
         div.textContent = '[Canvas 内容不可镜像]';
         if (cv.parentNode) cv.parentNode.replaceChild(div, cv);
       }
+      // 恢复本地连接横幅状态（远端 mirror_body 可能覆盖它）
+      var banner = app.querySelector('#remote-conn-banner');
+      if (banner) { banner.classList.add('hidden'); banner.setAttribute('data-state', 'connected'); }
     } catch (e) { console.error('[Remote] applyBody error:', e); }
     finally { setTimeout(function() { _remoteApplying = false; }, 50); }
   }
 
   function applyRemoteDomClear(msg) {
     _remoteApplying = true;
-    try { var c = document.querySelector(msg.container); if (c) c.innerHTML = ''; }
+    try { var c = document.querySelector(msg.container); if (c && !_isLocalControlEl(c)) c.innerHTML = ''; }
     catch (e) { console.error('[Remote] dom_clear error:', e); }
     finally { setTimeout(function() { _remoteApplying = false; }, 50); }
   }
   function applyRemoteDomReplace(msg) {
     _remoteApplying = true;
-    try { var c = document.querySelector(msg.container); if (c) c.innerHTML = msg.html || ''; }
+    try { var c = document.querySelector(msg.container); if (c && !_isLocalControlEl(c)) c.innerHTML = msg.html || ''; }
     catch (e) { console.error('[Remote] dom_replace error:', e); }
     finally { setTimeout(function() { _remoteApplying = false; }, 50); }
   }
   function applyRemoteDomRemove(msg) {
     _remoteApplying = true;
-    try { var el = document.querySelector(msg.selector); if (el) el.remove(); }
+    try { var el = document.querySelector(msg.selector); if (el && !_isLocalControlEl(el)) el.remove(); }
     catch (e) { console.error('[Remote] dom_remove error:', e); }
     finally { setTimeout(function() { _remoteApplying = false; }, 50); }
   }
@@ -1275,7 +1285,7 @@
     _remoteApplying = true;
     try {
       var el = document.querySelector(msg.selector);
-      if (!el) return;
+      if (!el || _isLocalControlEl(el)) return;
       if (msg.attr !== undefined) {
         el.setAttribute(msg.attr, msg.value != null ? msg.value : '');
       } else if (msg.html !== undefined && el.outerHTML) {
@@ -1286,7 +1296,7 @@
   }
   function applyRemoteDomText(msg) {
     _remoteApplying = true;
-    try { var el = document.querySelector(msg.selector); if (el) el.textContent = msg.text != null ? msg.text : ''; }
+    try { var el = document.querySelector(msg.selector); if (el && !_isLocalControlEl(el)) el.textContent = msg.text != null ? msg.text : ''; }
     catch (e) { console.error('[Remote] dom_text error:', e); }
     finally { setTimeout(function() { _remoteApplying = false; }, 50); }
   }
