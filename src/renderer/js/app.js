@@ -176,10 +176,12 @@
     },
 
     sendMirrorHead() {
+      if (isRemoteMode) return; // Remote 模式不向本地 WebUI 服务器推送（避免双重镜像）
       try { if (typeof window.api?.webControlMirrorUpdate === 'function') window.api.webControlMirrorUpdate(this.buildMirrorHead()); } catch (e) {}
     },
 
     sendMirrorBody() {
+      if (isRemoteMode) return; // Remote 模式不向本地 WebUI 服务器推送
       try { if (typeof window.api?.webControlMirrorUpdate === 'function') window.api.webControlMirrorUpdate(this.buildMirrorBody()); } catch (e) {}
     },
 
@@ -192,6 +194,7 @@
     //   { type:'dom_update',  selector:'#tool-xxx', html:'...' }（替换元素 outerHTML）
     //   { type:'dom_text',    selector:'#titlebar-title', text:'...' }
     pushDomEvent(event) {
+      if (isRemoteMode) return; // Remote 模式不推送 DOM 事件
       try { if (typeof window.api?.webControlMirrorUpdate === 'function') window.api.webControlMirrorUpdate(event); } catch (e) {}
     },
 
@@ -992,8 +995,11 @@
       remoteIntentionalClose = true;
       if (remoteReconnectTimer) { clearTimeout(remoteReconnectTimer); remoteReconnectTimer = null; }
       if (remoteWs) { try { remoteWs.close(); } catch (_) {} remoteWs = null; }
+      const wasRemote = isRemoteMode;
       isRemoteMode = false;
       remoteAvatars = null;
+      // 停用事件委托
+      disableRemoteEventDelegation();
       // Local 模式不显示远程连接横幅
       const banner = document.getElementById('remote-conn-banner');
       if (banner) banner.classList.add('hidden');
@@ -1001,6 +1007,11 @@
       // 恢复本地 UI 状态
       if (btnReoptimizeTools) btnReoptimizeTools.classList.add('hidden');
       hideApprovalPanelRemote();
+      // 如果之前在 Remote 模式，mirror_body 已替换 #app 内容，需要重新加载恢复本地 DOM
+      if (wasRemote) {
+        location.reload();
+        return;
+      }
     }
   }
   document.getElementById('conn-btn-local')?.addEventListener('click', () => setConnectionMode('local'));
@@ -1167,7 +1178,184 @@
     } catch (e) { console.error('[Remote] 附件上传失败:', e); return null; }
   }
 
+  // ---- Remote 镜像应用函数（与 WebUI 客户端逻辑一致）----
+  let _remoteApplying = false; // 防止事件委托反馈循环
+  let _remoteEventHandlers = null; // 事件委托处理器引用
+
+  // CSS path 生成（与 WebUI 客户端 cssPath 一致）
+  function remoteCssPath(el) {
+    if (!el || el.nodeType !== 1) return '';
+    if (el.id) return '#' + el.id;
+    var parts = [];
+    var cur = el;
+    while (cur && cur.nodeType === 1 && cur !== document.documentElement) {
+      var selector = cur.nodeName.toLowerCase();
+      if (cur.id) { parts.unshift('#' + cur.id); break; }
+      var parent = cur.parentNode;
+      if (parent && parent.children) {
+        var typeIdx = 1;
+        var sib = cur.previousElementSibling;
+        while (sib) {
+          if (sib.nodeName.toLowerCase() === selector) typeIdx++;
+          sib = sib.previousElementSibling;
+        }
+        var sameType = 0;
+        for (var si = 0; si < parent.children.length; si++) {
+          if (parent.children[si].nodeName.toLowerCase() === selector) sameType++;
+        }
+        if (sameType > 1) selector += ':nth-of-type(' + typeIdx + ')';
+      }
+      if (cur.className && typeof cur.className === 'string') {
+        var cls = cur.className.trim().split(/\s+/).slice(0, 2).join('.');
+        if (cls) selector += '.' + cls;
+      }
+      parts.unshift(selector);
+      cur = cur.parentNode;
+    }
+    return parts.join(' > ');
+  }
+
+  function applyRemoteHead(msg) {
+    _remoteApplying = true;
+    try {
+      var html = msg.html || '';
+      html = html.replace(/<script[\s\S]*?<\/script>/gi, '');
+      if (msg.theme_mode) document.documentElement.setAttribute('data-theme', msg.theme_mode);
+      var head = document.head;
+      // 移除已有的渲染器 CSS（保留 FA 链接和 shell 样式）
+      var toRemove = head.querySelectorAll('link:not([href*="fontawesome"]),style:not([data-shell])');
+      for (var i = 0; i < toRemove.length; i++) toRemove[i].remove();
+      // 插入远端 head 内容
+      var tmp = document.createElement('div');
+      tmp.innerHTML = html;
+      var nodes = tmp.querySelectorAll('link,style');
+      for (var j = 0; j < nodes.length; j++) head.appendChild(nodes[j].cloneNode(true));
+    } catch (e) { console.error('[Remote] applyHead error:', e); }
+    finally { setTimeout(function() { _remoteApplying = false; }, 50); }
+  }
+
+  function applyRemoteBody(bodyHtml) {
+    _remoteApplying = true;
+    try {
+      var app = document.getElementById('app');
+      if (!app) return;
+      app.innerHTML = bodyHtml;
+      // canvas 替换为占位符（canvas 内容无法镜像）
+      var canvases = app.querySelectorAll('canvas');
+      for (var c = 0; c < canvases.length; c++) {
+        var cv = canvases[c];
+        var div = document.createElement('div');
+        div.style.cssText = 'width:' + (cv.style.width || '100%') + ';height:' + (cv.style.height || '200px') + ';min-height:100px;display:flex;align-items:center;justify-content:center;background:var(--bg-secondary,#ebebeb);color:var(--text-tertiary,#999);font-size:12px;border-radius:4px;';
+        div.textContent = '[Canvas 内容不可镜像]';
+        if (cv.parentNode) cv.parentNode.replaceChild(div, cv);
+      }
+    } catch (e) { console.error('[Remote] applyBody error:', e); }
+    finally { setTimeout(function() { _remoteApplying = false; }, 50); }
+  }
+
+  function applyRemoteDomClear(msg) {
+    _remoteApplying = true;
+    try { var c = document.querySelector(msg.container); if (c) c.innerHTML = ''; }
+    catch (e) { console.error('[Remote] dom_clear error:', e); }
+    finally { setTimeout(function() { _remoteApplying = false; }, 50); }
+  }
+  function applyRemoteDomReplace(msg) {
+    _remoteApplying = true;
+    try { var c = document.querySelector(msg.container); if (c) c.innerHTML = msg.html || ''; }
+    catch (e) { console.error('[Remote] dom_replace error:', e); }
+    finally { setTimeout(function() { _remoteApplying = false; }, 50); }
+  }
+  function applyRemoteDomRemove(msg) {
+    _remoteApplying = true;
+    try { var el = document.querySelector(msg.selector); if (el) el.remove(); }
+    catch (e) { console.error('[Remote] dom_remove error:', e); }
+    finally { setTimeout(function() { _remoteApplying = false; }, 50); }
+  }
+  function applyRemoteDomUpdate(msg) {
+    _remoteApplying = true;
+    try {
+      var el = document.querySelector(msg.selector);
+      if (!el) return;
+      if (msg.attr !== undefined) {
+        el.setAttribute(msg.attr, msg.value != null ? msg.value : '');
+      } else if (msg.html !== undefined && el.outerHTML) {
+        el.outerHTML = msg.html;
+      }
+    } catch (e) { console.error('[Remote] dom_update error:', e); }
+    finally { setTimeout(function() { _remoteApplying = false; }, 50); }
+  }
+  function applyRemoteDomText(msg) {
+    _remoteApplying = true;
+    try { var el = document.querySelector(msg.selector); if (el) el.textContent = msg.text != null ? msg.text : ''; }
+    catch (e) { console.error('[Remote] dom_text error:', e); }
+    finally { setTimeout(function() { _remoteApplying = false; }, 50); }
+  }
+
+  // ---- 事件委托：Remote 模式下所有交互通过 ui_event 转发到远端 ----
+  function enableRemoteEventDelegation() {
+    if (_remoteEventHandlers) return; // 已启用
+    var sendEvent = function(evtType, target, extra) {
+      if (_remoteApplying || !remoteWs || remoteWs.readyState !== 1) return;
+      // 跳过本地控制元素（连接切换器、远程模态框、横幅）
+      if (target.closest('#connection-switcher') || target.closest('#remote-connect-modal') ||
+          target.closest('#remote-conn-banner')) return;
+      var path = remoteCssPath(target);
+      if (!path) return;
+      var data = { type: 'ui_event', event: evtType, target: path };
+      if (extra) for (var k in extra) data[k] = extra[k];
+      remoteWsSend(data);
+    };
+    var clickHandler = function(e) {
+      if (_remoteApplying) return;
+      if (e.target.closest('a')) e.preventDefault();
+      sendEvent('click', e.target);
+    };
+    var inputHandler = function(e) {
+      if (_remoteApplying) return;
+      sendEvent('input', e.target, { value: e.target.value });
+    };
+    var changeHandler = function(e) {
+      if (_remoteApplying) return;
+      // 文件输入：读取为 base64 并上传
+      if (e.target.type === 'file' && e.target.files && e.target.files.length > 0) {
+        var file = e.target.files[0];
+        var reader = new FileReader();
+        reader.onload = function() {
+          var dataUrl = reader.result;
+          var base64 = dataUrl.split(',')[1];
+          remoteWsSend({ type: 'uploadAttachment', name: file.name, type: file.type, data: base64 });
+        };
+        reader.readAsDataURL(file);
+        return;
+      }
+      sendEvent('change', e.target, { value: e.target.value, checked: e.target.checked });
+    };
+    var submitHandler = function(e) {
+      if (_remoteApplying) return;
+      e.preventDefault();
+      sendEvent('submit', e.target);
+    };
+    document.addEventListener('click', clickHandler, true);
+    document.addEventListener('input', inputHandler, true);
+    document.addEventListener('change', changeHandler, true);
+    document.addEventListener('submit', submitHandler, true);
+    _remoteEventHandlers = { clickHandler: clickHandler, inputHandler: inputHandler, changeHandler: changeHandler, submitHandler: submitHandler };
+    console.log('[Remote] 事件委托已启用');
+  }
+
+  function disableRemoteEventDelegation() {
+    if (!_remoteEventHandlers) return;
+    document.removeEventListener('click', _remoteEventHandlers.clickHandler, true);
+    document.removeEventListener('input', _remoteEventHandlers.inputHandler, true);
+    document.removeEventListener('change', _remoteEventHandlers.changeHandler, true);
+    document.removeEventListener('submit', _remoteEventHandlers.submitHandler, true);
+    _remoteEventHandlers = null;
+    console.log('[Remote] 事件委托已停用');
+  }
+
   // 处理远程推送的消息（服务端 WS 协议）
+  // Remote 模式采用镜像机制：直接应用 mirror_head/mirror_body/dom_* 到本地 DOM，
+  // 与 WebUI 浏览器客户端行为一致。语义消息（message/status/tarot 等）由 dom_* 覆盖，不再处理。
   function handleRemoteMessage(data) {
     if (!data?.type) return;
     // 1. 响应类消息分发到挂起的请求
@@ -1181,50 +1369,48 @@
 
     switch (data.type) {
       case 'init':
-        // 完整初始化：同步全部状态
+        // 连接已建立：设置本地状态，等待 mirror_head + mirror_body 到达
         isRemoteMode = true;
         remoteIntentionalClose = false;
         document.getElementById('remote-connect-modal').classList.add('hidden');
         const statusEl0 = document.getElementById('remote-status');
         if (statusEl0) statusEl0.textContent = '已连接，可远程操作';
         setRemoteBanner('connected');
-        if (data.avatars) applyRemoteAvatars(data.avatars);   // 先应用头像，再渲染消息气泡
-        if (data.theme) applyRemoteTheme(data.theme);
-        if (data.tarot) showRemoteTarot(data.tarot);
-        if (data.title != null) setTitlebarTitle(data.title);
-        if (data.agentStatus != null) updateRemoteStatus(data.agentStatus);
-        if (Array.isArray(data.messages)) renderRemoteMessages(data.messages);
-        if (data.pendingApproval && data.pendingApproval.toolName) showApprovalPanel(data.pendingApproval.toolName, data.pendingApproval.args);
-        else hideApprovalPanelRemote();
+        // 启用事件委托：所有交互通过 ui_event 转发到远端
+        enableRemoteEventDelegation();
         // 请求模式 / 上下文 / 重新优化按钮的快照
         remoteWsSend({ type: 'requestState' });
         break;
-      case 'message':
-        // 服务端推送的单条消息：{role, content, timestamp, ...}
-        if (data.message) {
-          if (data.message.role === 'assistant') removeThinkingIndicator();
-          addMessageToChat(data.message.role, data.message.content);
-        }
+
+      // ---- 镜像消息：直接应用到本地 DOM（与 WebUI 客户端一致）----
+      case 'mirror_head':
+        applyRemoteHead(data);
         break;
-      case 'messagesSync':
-        renderRemoteMessages(data.messages || []);
+      case 'mirror_body':
+        applyRemoteBody(data.html);
         break;
-      case 'status':
-        updateRemoteStatus(data.agentStatus);
+      case 'dom_clear':
+        applyRemoteDomClear(data);
         break;
-      case 'title':
-        setTitlebarTitle(data.title || '');
+      case 'dom_replace':
+        applyRemoteDomReplace(data);
         break;
-      case 'tarot':
-        showRemoteTarot(data.card);
+      case 'dom_remove':
+        applyRemoteDomRemove(data);
         break;
+      case 'dom_update':
+        applyRemoteDomUpdate(data);
+        break;
+      case 'dom_text':
+        applyRemoteDomText(data);
+        break;
+
+      // ---- UI 状态消息（镜像不覆盖的特殊状态）----
       case 'theme':
         applyRemoteTheme(data.theme);
         break;
-      case 'avatars':
-        applyRemoteAvatars(data.avatars);
-        break;
       case 'modeSwitch':
+        // 镜像模式下页面切换由 dom_update 处理，这里仅同步按钮高亮
         handleRemoteModeSwitch(data.mode);
         break;
       case 'contextProgress':
@@ -1239,100 +1425,31 @@
       case 'approvalCleared':
         hideApprovalPanelRemote();
         break;
-      case 'toolCall':
-        handleRemoteToolCall(data);
-        break;
-      case 'conversationSwitch':
-        // 远端切换了对话：清空本地镜像，等待 messagesSync/init 到达
-        chatMessages.innerHTML = '';
-        WebUIMirror.pushDomEvent({ type: 'dom_clear', container: '#chat-messages' });
-        WebUIMirror.pushDomEvent({ type: 'dom_remove', selector: '#thinking-indicator' });
-        renderChatWelcome();
-        setTitlebarTitle('未命名对话');
-        break;
       case 'stateSnapshot':
         if (data.mode) handleRemoteModeSwitch(data.mode);
         if (data.contextProgress) updateRemoteContextProgress(data.contextProgress);
         if (btnReoptimizeTools) btnReoptimizeTools.classList.toggle('hidden', !data.reoptimizeVisible);
         break;
+      case 'auth_fail':
+        // 认证失败：显示错误，关闭连接
+        const statusEl = document.getElementById('remote-status');
+        if (statusEl) statusEl.textContent = data.error || '认证失败';
+        setRemoteBanner('error', data.error || '认证失败');
+        remoteIntentionalClose = true;
+        if (remoteWs) { try { remoteWs.close(); } catch (_) {} remoteWs = null; }
+        isRemoteMode = false;
+        disableRemoteEventDelegation();
+        break;
+
+      // ---- 以下语义消息在镜像模式下由 dom_* 覆盖，不再单独处理 ----
+      // message, messagesSync, status, title, tarot, avatars, toolCall, conversationSwitch
       case 'history':
       case 'conversationDeleted':
         // 已被 remoteWsRequest 消费；此处仅为兜底
         break;
       default:
-        // 兼容直接以 assistant/user/system 为 type 的旧消息
-        if (data.type === 'assistant' || data.type === 'user' || data.type === 'system') {
-          if (data.type === 'assistant') removeThinkingIndicator();
-          addMessageToChat(data.type, data.content || data.message || '');
-        }
         break;
     }
-  }
-
-  // ---- 远程消息渲染辅助 ----
-  function renderRemoteMessages(msgs) {
-    chatMessages.innerHTML = '';
-    WebUIMirror.pushDomEvent({ type: 'dom_clear', container: '#chat-messages' });
-    WebUIMirror.pushDomEvent({ type: 'dom_remove', selector: '#thinking-indicator' });
-    if (!msgs || msgs.length === 0) { renderChatWelcome(); return; }
-    const toolCallMap = {};
-    for (const m of msgs) {
-      if (m.role === 'user') {
-        addMessageToChat('user', m.content);
-      } else if (m.role === 'assistant') {
-        if (m.content) addMessageToChat('assistant', m.content);
-        if (m.tool_calls && m.tool_calls.length > 0) {
-          for (const tc of m.tool_calls) {
-            const toolName = tc.function?.name || 'tool';
-            let args = {};
-            try { args = JSON.parse(tc.function?.arguments || '{}'); } catch {}
-            const toolDef = TOOL_DEFINITIONS.find(t => t.name === toolName);
-            const displayName = toolDef?.desc || toolName;
-            addToolCallToChat(displayName, toolName, args);
-            if (tc.id) toolCallMap[tc.id] = toolName;
-          }
-        }
-      } else if (m.role === 'tool') {
-        const toolName = m.name || toolCallMap[m.tool_call_id] || 'tool';
-        let result = m.content;
-        try { result = JSON.parse(m.content); } catch {}
-        updateToolCallResult(toolName, result);
-      } else if (m.role === 'system') {
-        addSystemMessage(m.content || '');
-      }
-    }
-    scrollChatToBottom();
-  }
-
-  function updateRemoteStatus(s) {
-    const working = s && s !== 'idle';
-    if (agentStatus) {
-      agentStatus.innerHTML = working
-        ? '<i class="fa-solid fa-circle"></i> 工作中...'
-        : '<i class="fa-solid fa-circle"></i> 待命中';
-      agentStatus.className = 'agent-status' + (working ? ' working' : '');
-    }
-    if (btnStop) btnStop.classList.toggle('hidden', !working);
-    if (btnSend) btnSend.classList.remove('hidden');
-    if (working) {
-      const last = chatMessages.lastElementChild;
-      const isLastAssistant = last && last.classList.contains('message') && last.classList.contains('assistant');
-      if (!isLastAssistant) addThinkingIndicator();
-    } else {
-      removeThinkingIndicator();
-    }
-  }
-
-  function showRemoteTarot(card) {
-    if (!card || !agentTarot || !tarotVisible) return;
-    const iconHtml = card.icon ? `<i class="fa-solid ${card.icon}"></i>` : '<i class="fa-solid fa-star"></i>';
-    const position = card.isReversed ? '逆位' : '正位';
-    const meaning = card.isReversed ? card.meaningOfReversed : card.meaningOfUpright;
-    const eSource = card.entropySource || 'CSPRNG';
-    const isTRNG = eSource.startsWith('TRNG');
-    const trngBadge = isTRNG ? '<span class="trng-badge" style="margin-left:6px;font-size:9px;padding:1px 6px"><i class="fa-solid fa-satellite-dish"></i> TRNG</span>' : '';
-    agentTarot.innerHTML = `${iconHtml}<span>命运之牌：${card.name || ''}(${position})</span>${trngBadge}`;
-    agentTarot.title = `${card.name || ''}(${position}) - ${meaning || ''} [${eSource}]`;
   }
 
   function applyRemoteTheme(t) {
@@ -1351,18 +1468,6 @@
     if (t.bgHover) root.style.setProperty('--bg-hover', t.bgHover);
     if (typeof t.isDark === 'boolean') {
       root.setAttribute('data-theme', t.isDark ? 'dark' : 'light');
-    }
-  }
-
-  function applyRemoteAvatars(av) {
-    if (!av) return;
-    remoteAvatars = av;
-    const aiAvatarEl = document.getElementById('agent-avatar-display');
-    if (aiAvatarEl && av.ai) {
-      const src = av.ai.startsWith('data:') ? av.ai : 'file://' + av.ai.replace(/\\/g, '/');
-      aiAvatarEl.innerHTML = `<img src="${src}" style="width:100%;height:100%;border-radius:50%;object-fit:cover" alt="">`;
-    } else if (aiAvatarEl && !av.ai) {
-      aiAvatarEl.innerHTML = '<i class="fa-solid fa-robot"></i>';
     }
   }
 
@@ -1402,22 +1507,6 @@
       else if (pct >= 65) ind.dataset.level = 'warn';
       else ind.dataset.level = 'normal';
       ind.title = `上下文使用量: ${d.used || 0}/${d.max || 8192} (${Math.round(pct)}%)`;
-    }
-  }
-
-  function handleRemoteToolCall(data) {
-    if (!data || !data.toolName) return;
-    if (data.status === 'calling') {
-      let args = data.args || {};
-      if (typeof args === 'string') { try { args = JSON.parse(args); } catch {} args = { _raw: args }; }
-      const toolDef = TOOL_DEFINITIONS.find(t => t.name === data.toolName);
-      const displayName = toolDef?.desc || data.toolName;
-      addToolCallToChat(displayName, data.toolName, args);
-    } else {
-      // done / denied / error：更新最近一次同名工具结果
-      let result = data.result;
-      try { result = JSON.parse(result); } catch {}
-      updateToolCallResult(data.toolName, result, data.status === 'error' || data.status === 'denied');
     }
   }
 
@@ -5452,8 +5541,10 @@
       }
     };
 
-    // 判断命令是否预期产生新对象（赋值、Solve、Roots 等）；纯查询命令（如 ZoomIn）不会产生 label
-    const producesLabel = /[=(:]|^(\s*)(Solve|Roots|Factor|Expand|Derivative|Integral|Limit|Sequence|Vertex|Intersect|Midpoint|Centroid|ClosestPoint|Root|Extremum|TurningPoint|Slope|Length|Area|Perimeter|Radius|Angle|Distance|Curvature)\b/i.test(cmd);
+    // 判断命令是否预期产生新对象（赋值、Solve、Roots 等）；
+    // 修改/设置类命令（SetColor/SetLineThickness/ShowLabel/Delete 等）用 () 语法但不产生 label，不应误判
+    const isModifierCmd = /^\s*(Set|Show|Delete|Rename|ZoomIn|ZoomOut|Pan|Center|Select|Update|Freeze|Copy|Repaint|Refresh|SetActiveView|ShowAxes|ShowGrid|SetPerspective|SetBackgroundColor|SetRounding)\b/i.test(cmd);
+    const producesLabel = !isModifierCmd && /[=:]|^(\s*)(Solve|Roots|Factor|Expand|Derivative|Integral|Limit|Sequence|Vertex|Intersect|Midpoint|Centroid|ClosestPoint|Root|Extremum|TurningPoint|Slope|Length|Area|Perimeter|Radius|Angle|Distance|Curvature)\b/i.test(cmd);
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try {
