@@ -102,7 +102,7 @@ contextBridge.exposeInMainWorld('api', {
   webOffscreenRenderedContent: (options) => ipcRenderer.invoke('web:offscreenRenderedContent', options),
 
   // Tarot
-  drawTarot: () => ipcRenderer.invoke('tarot:draw'),
+  drawTarot: (options) => ipcRenderer.invoke('tarot:draw', options),
 
   // TRNG
   trngListPorts: () => ipcRenderer.invoke('trng:listPorts'),
@@ -124,14 +124,20 @@ contextBridge.exposeInMainWorld('api', {
   codeGetFileTree: (dir) => ipcRenderer.invoke('code:getFileTree', dir),
 
   // ---- Playwright Browser ----
-  browserNavigate: (url) => ipcRenderer.invoke('browser:navigate', url),
-  browserScreenshot: () => ipcRenderer.invoke('browser:screenshot'),
-  browserClick: (selector) => ipcRenderer.invoke('browser:click', selector),
-  browserType: (selector, text, submit) => ipcRenderer.invoke('browser:type', selector, text, submit),
+  browserNavigate: (url, waitUntil) => ipcRenderer.invoke('browser:navigate', url, waitUntil),
+  browserScreenshot: (fullPage) => ipcRenderer.invoke('browser:screenshot', fullPage),
+  browserClick: (selector, timeout) => ipcRenderer.invoke('browser:click', selector, timeout),
+  browserType: (selector, text, submit, clear) => ipcRenderer.invoke('browser:type', selector, text, submit, clear),
   browserGetContent: (selector) => ipcRenderer.invoke('browser:getContent', selector),
   browserEvaluate: (script) => ipcRenderer.invoke('browser:evaluate', script),
   browserScroll: (dir, amount) => ipcRenderer.invoke('browser:scroll', dir, amount),
   browserBack: () => ipcRenderer.invoke('browser:back'),
+  browserForward: () => ipcRenderer.invoke('browser:forward'),
+  browserRefresh: () => ipcRenderer.invoke('browser:refresh'),
+  browserWait: (selector, timeout) => ipcRenderer.invoke('browser:wait', selector, timeout),
+  browserHover: (selector) => ipcRenderer.invoke('browser:hover', selector),
+  browserSelect: (selector, value) => ipcRenderer.invoke('browser:select', selector, value),
+  browserGetInfo: () => ipcRenderer.invoke('browser:getInfo'),
   browserClose: () => ipcRenderer.invoke('browser:close'),
 
   // LLM

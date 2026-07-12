@@ -1287,7 +1287,6 @@ function createWindow() {
   });
   mainWindow.loadFile(path.join(__dirname, '../renderer/pages/index.html'));
   // Resize the built-in browser (BrowserView) when the main window resizes.
-  mainWindow.on('resize', () => { if (playwrightView) resizePlaywrightView(); });
 }
 
 app.whenReady().then(() => {
@@ -2027,6 +2026,7 @@ ipcMain.handle('web:offscreenRenderedContent', async (_, options = {}) => {
 
 // ---- IPC: Tarot ----
 const tarotCards = require('../data/tarot.js');
+const tarotSpreads = require('../data/tarot-spreads.js');
 
 function drawTarotCSPRNG() {
   const crypto = require('crypto');
@@ -2068,6 +2068,75 @@ async function drawTarotTRNG() {
     meaningOfReversed: card.meaningOfReversed,
     entropySource: 'TRNG'
   };
+}
+
+// Draw N cards using CSPRNG, ensuring no duplicates
+function drawTarotSpreadCSPRNG(count) {
+  const crypto = require('crypto');
+  const range = tarotCards.length;
+  const drawn = new Set();
+  const cards = [];
+  while (cards.length < count && cards.length < range) {
+    const max = Math.floor(0x100000000 / range) * range;
+    let val;
+    do {
+      val = crypto.randomBytes(4).readUInt32BE(0);
+    } while (val >= max);
+    const idx = val % range;
+    if (drawn.has(idx)) continue;
+    drawn.add(idx);
+    const card = tarotCards[idx];
+    const isReversed = crypto.randomBytes(1)[0] < 128;
+    cards.push({
+      ...card,
+      isReversed,
+      orientation: isReversed ? 'reversed' : 'upright',
+      meaningOfUpright: card.meaningOfUpright,
+      meaningOfReversed: card.meaningOfReversed,
+      entropySource: 'CSPRNG'
+    });
+  }
+  return cards;
+}
+
+// Draw N cards using TRNG, ensuring no duplicates
+async function drawTarotSpreadTRNG(count) {
+  const entropy = settings.entropy || {};
+  const mode = entropy.trngMode || 'network';
+  const drawn = new Set();
+  const cards = [];
+  for (let i = 0; i < count; i++) {
+    let raw;
+    if (mode === 'serial') {
+      raw = await getTRNGFromSerial(entropy.trngSerialPort, entropy.trngSerialBaud || 115200);
+    } else {
+      raw = await getTRNGFromNetwork(entropy.trngNetworkHost || '192.168.4.1', entropy.trngNetworkPort || 80);
+    }
+    let idx = raw.cardIndex % tarotCards.length;
+    // Avoid duplicates (try a few times)
+    let attempts = 0;
+    while (drawn.has(idx) && attempts < 5) {
+      if (mode === 'serial') {
+        raw = await getTRNGFromSerial(entropy.trngSerialPort, entropy.trngSerialBaud || 115200);
+      } else {
+        raw = await getTRNGFromNetwork(entropy.trngNetworkHost || '192.168.4.1', entropy.trngNetworkPort || 80);
+      }
+      idx = raw.cardIndex % tarotCards.length;
+      attempts++;
+    }
+    drawn.add(idx);
+    const card = tarotCards[idx];
+    const isReversed = raw.isReversed;
+    cards.push({
+      ...card,
+      isReversed,
+      orientation: isReversed ? 'reversed' : 'upright',
+      meaningOfUpright: card.meaningOfUpright,
+      meaningOfReversed: card.meaningOfReversed,
+      entropySource: 'TRNG'
+    });
+  }
+  return cards;
 }
 
 async function getTRNGFromSerial(portPath, baud) {
@@ -2168,19 +2237,45 @@ async function getTRNGFromNetwork(host, port) {
   });
 }
 
-ipcMain.handle('tarot:draw', async () => {
+ipcMain.handle('tarot:draw', async (_, options) => {
   try {
+    // Support both old single-card (no args) and new spread (options.spread)
+    const spreadId = (options && typeof options === 'object') ? (options.spread || 'single') : 'single';
+    const spread = tarotSpreads.find(s => s.id === spreadId) || tarotSpreads[0];
+    const count = spread.cardCount;
     const source = settings.entropy?.source || 'csprng';
+    let cards;
     if (source === 'trng') {
-      return await drawTarotTRNG();
+      cards = await drawTarotSpreadTRNG(count);
+    } else {
+      cards = drawTarotSpreadCSPRNG(count);
     }
-    return drawTarotCSPRNG();
+    // For backward compatibility: single card returns the card directly (not array)
+    if (count === 1) {
+      return cards[0];
+    }
+    // For multi-card spreads, return array with spread metadata
+    return {
+      spread: { id: spread.id, name: spread.name, nameEn: spread.nameEn, description: spread.description, cardCount: spread.cardCount },
+      cards: cards.map((card, i) => ({
+        ...card,
+        position: spread.positions[i] || { name: `位置${i + 1}`, nameEn: `Position ${i + 1}`, description: '' }
+      }))
+    };
   } catch (e) {
-    // Fallback to CSPRNG on TRNG failure
     console.error('TRNG failed, falling back to CSPRNG:', e.message);
-    const result = drawTarotCSPRNG();
-    result.entropySource = 'CSPRNG (TRNG fallback: ' + e.message + ')';
-    return result;
+    const spreadId = (options && typeof options === 'object') ? (options.spread || 'single') : 'single';
+    const spread = tarotSpreads.find(s => s.id === spreadId) || tarotSpreads[0];
+    const cards = drawTarotSpreadCSPRNG(spread.cardCount);
+    cards.forEach(c => { c.entropySource = 'CSPRNG (TRNG fallback: ' + e.message + ')'; });
+    if (spread.cardCount === 1) return cards[0];
+    return {
+      spread: { id: spread.id, name: spread.name, nameEn: spread.nameEn, description: spread.description, cardCount: spread.cardCount },
+      cards: cards.map((card, i) => ({
+        ...card,
+        position: spread.positions[i] || { name: `位置${i + 1}`, nameEn: `Position ${i + 1}`, description: '' }
+      }))
+    };
   }
 });
 
@@ -2858,105 +2953,57 @@ ipcMain.handle('code:getFileTree', (_, dirPath) => {
 });
 
 // ---- IPC: Playwright (built-in browser for Chat mode) ----
-// Playwright integration: AI controls a browser, shown in sidebar, user can intervene.
-let playwrightBrowser = null;
-let playwrightPage = null;
-let playwrightView = null;
+// Uses the official Playwright npm package for full browser automation.
+let pwBrowser = null;
+let pwPage = null;
 
-async function ensurePlaywright() {
-  if (playwrightView) return playwrightView;
+async function ensureBrowser() {
+  if (pwPage) return pwPage;
   try {
-    // Electron 30+: BrowserView 已废弃，改用 WebContentsView
-    const { WebContentsView, BrowserView } = require('electron');
-    const ViewCtor = WebContentsView || BrowserView;
-    if (!ViewCtor) return null;
-    playwrightView = new ViewCtor({
-      webPreferences: { nodeIntegration: false, contextIsolation: true, sandbox: true }
-    });
-    // Electron 36+: setBrowserView 已移除，改用 contentView.addChildView
-    if (mainWindow.contentView && typeof mainWindow.contentView.addChildView === 'function') {
-      mainWindow.contentView.addChildView(playwrightView);
-    } else if (typeof mainWindow.setBrowserView === 'function') {
-      // 旧版兜底
-      mainWindow.setBrowserView(playwrightView);
-    } else {
-      throw new Error('当前 Electron 版本不支持 contentView.addChildView / setBrowserView');
-    }
-    resizePlaywrightView();
-    return playwrightView;
+    const { chromium } = require('playwright');
+    pwBrowser = await chromium.launch({ headless: true });
+    pwPage = await pwBrowser.newPage({ viewport: { width: 460, height: 720 } });
+    return pwPage;
   } catch (e) {
-    console.error('BrowserView init failed:', e.message);
-    playwrightView = null;
-    return null;
+    console.error('Playwright launch failed:', e.message);
+    throw new Error('无法启动Playwright浏览器: ' + e.message);
   }
 }
 
-ipcMain.handle('browser:navigate', async (_, url) => {
+ipcMain.handle('browser:navigate', async (_, url, waitUntil) => {
   try {
-    if (!url || typeof url !== 'string') {
-      return { ok: false, error: 'URL 参数缺失或无效' };
-    }
-    if (!playwrightView) {
-      const v = await ensurePlaywright();
-      if (!v) return { ok: false, error: '无法初始化内置浏览器' };
-    }
+    if (!url || typeof url !== 'string') return { ok: false, error: 'URL 参数缺失或无效' };
+    if (!pwPage) { await ensureBrowser(); }
     let targetUrl = url;
     if (!/^https?:\/\//.test(targetUrl)) targetUrl = 'https://' + targetUrl;
-    await playwrightView.webContents.loadURL(targetUrl);
-    return { ok: true, url: targetUrl, title: playwrightView.webContents.getTitle() };
+    await pwPage.goto(targetUrl, { waitUntil: waitUntil || 'load', timeout: 30000 });
+    return { ok: true, url: targetUrl, title: await pwPage.title() };
   } catch (e) { return { ok: false, error: e.message }; }
 });
 
-ipcMain.handle('browser:screenshot', async () => {
+ipcMain.handle('browser:screenshot', async (_, fullPage) => {
   try {
-    if (!playwrightView) return { ok: false, error: 'no page' };
-    const image = await playwrightView.webContents.capturePage();
-    return { ok: true, dataUrl: image.toDataURL() };
+    if (!pwPage) return { ok: false, error: 'no page' };
+    const buf = await pwPage.screenshot({ fullPage: !!fullPage, type: 'png' });
+    return { ok: true, dataUrl: 'data:image/png;base64,' + buf.toString('base64') };
   } catch (e) { return { ok: false, error: e.message }; }
 });
 
-ipcMain.handle('browser:click', async (_, selector) => {
+ipcMain.handle('browser:click', async (_, selector, timeout) => {
   try {
-    if (!playwrightView) return { ok: false, error: 'no page' };
-    // Escape selector for use in JS string
-    const safeSelector = JSON.stringify(selector);
-    await playwrightView.webContents.executeJavaScript(`
-      (function(){
-        const el = document.querySelector(${safeSelector});
-        if (!el) return { ok: false, error: 'element not found' };
-        el.click();
-        return { ok: true };
-      })();
-    `);
+    if (!pwPage) return { ok: false, error: 'no page' };
+    await pwPage.click(selector, { timeout: timeout || 5000 });
     return { ok: true };
   } catch (e) { return { ok: false, error: e.message }; }
 });
 
-ipcMain.handle('browser:type', async (_, selector, text, submit) => {
+ipcMain.handle('browser:type', async (_, selector, text, submit, clear) => {
   try {
-    if (!playwrightView) return { ok: false, error: 'no page' };
-    const safeSelector = JSON.stringify(selector);
-    const safeText = JSON.stringify(text);
-    await playwrightView.webContents.executeJavaScript(`
-      (function(){
-        const el = document.querySelector(${safeSelector});
-        if (!el) return { ok: false, error: 'element not found' };
-        el.focus();
-        el.value = ${safeText};
-        el.dispatchEvent(new Event('input', { bubbles: true }));
-        el.dispatchEvent(new Event('change', { bubbles: true }));
-        return { ok: true };
-      })();
-    `);
+    if (!pwPage) return { ok: false, error: 'no page' };
+    if (clear !== false) await pwPage.fill(selector, '');
+    await pwPage.fill(selector, text);
     if (submit) {
-      await playwrightView.webContents.executeJavaScript(`
-        (function(){
-          const el = document.querySelector(${safeSelector});
-          if (el) el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', keyCode: 13, which: 13, bubbles: true }));
-          const form = el ? el.closest('form') : null;
-          if (form) form.submit();
-        })();
-      `);
+      await pwPage.press(selector, 'Enter');
     }
     return { ok: true };
   } catch (e) { return { ok: false, error: e.message }; }
@@ -2964,82 +3011,110 @@ ipcMain.handle('browser:type', async (_, selector, text, submit) => {
 
 ipcMain.handle('browser:getContent', async (_, selector) => {
   try {
-    if (!playwrightView) return { ok: false, error: 'no page' };
-    const wc = playwrightView.webContents;
-    const url = wc.getURL();
-    const title = wc.getTitle();
+    if (!pwPage) return { ok: false, error: 'no page' };
+    const url = pwPage.url();
+    const title = await pwPage.title();
     if (selector) {
-      const safeSelector = JSON.stringify(selector);
-      const result = await wc.executeJavaScript(`
-        (function(){
-          const el = document.querySelector(${safeSelector});
-          if (!el) return { text: '', html: '' };
-          return { text: el.innerText || '', html: el.innerHTML || '' };
-        })();
-      `);
-      return { ok: true, html: (result.html || '').slice(0, 5000), text: (result.text || '').slice(0, 3000), url, title };
+      const text = await pwPage.$eval(selector, el => el.innerText || '').catch(() => '');
+      const html = await pwPage.$eval(selector, el => el.innerHTML || '').catch(() => '');
+      return { ok: true, html: (html || '').slice(0, 5000), text: (text || '').slice(0, 3000), url, title };
     }
-    const result = await wc.executeJavaScript(`
-      (function(){
-        return { html: document.documentElement.outerHTML || '', text: document.body ? document.body.innerText : '' };
-      })();
-    `);
-    return { ok: true, html: (result.html || '').slice(0, 5000), text: (result.text || '').slice(0, 3000), url, title };
+    const text = await pwPage.evaluate(() => document.body ? document.body.innerText : '').catch(() => '');
+    const html = await pwPage.evaluate(() => document.documentElement.outerHTML || '').catch(() => '');
+    return { ok: true, html: (html || '').slice(0, 5000), text: (text || '').slice(0, 3000), url, title };
   } catch (e) { return { ok: false, error: e.message }; }
 });
 
 ipcMain.handle('browser:evaluate', async (_, script) => {
   try {
-    if (!playwrightView) return { ok: false, error: 'no page' };
-    const result = await playwrightView.webContents.executeJavaScript(script);
+    if (!pwPage) return { ok: false, error: 'no page' };
+    const result = await pwPage.evaluate(script);
     return { ok: true, result };
   } catch (e) { return { ok: false, error: e.message }; }
 });
 
 ipcMain.handle('browser:scroll', async (_, direction, amount) => {
   try {
-    if (!playwrightView) return { ok: false, error: 'no page' };
+    if (!pwPage) return { ok: false, error: 'no page' };
     const dy = direction === 'down' ? (amount || 500) : -(amount || 500);
-    await playwrightView.webContents.executeJavaScript(`window.scrollBy(0, ${dy});`);
+    await pwPage.evaluate(d => window.scrollBy(0, d), dy);
     return { ok: true };
   } catch (e) { return { ok: false, error: e.message }; }
 });
 
 ipcMain.handle('browser:back', async () => {
   try {
-    if (!playwrightView) return { ok: false, error: 'no page' };
-    const wc = playwrightView.webContents;
-    if (wc.navigationHistory.canGoBack()) {
-      wc.goBack();
-      return { ok: true };
+    if (!pwPage) return { ok: false, error: 'no page' };
+    await pwPage.goBack({ waitUntil: 'load', timeout: 30000 }).catch(() => {});
+    return { ok: true };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('browser:forward', async () => {
+  try {
+    if (!pwPage) return { ok: false, error: 'no page' };
+    await pwPage.goForward({ waitUntil: 'load', timeout: 30000 }).catch(() => {});
+    return { ok: true };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('browser:refresh', async () => {
+  try {
+    if (!pwPage) return { ok: false, error: 'no page' };
+    await pwPage.reload({ waitUntil: 'load', timeout: 30000 });
+    return { ok: true };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('browser:wait', async (_, selector, timeout) => {
+  try {
+    if (!pwPage) return { ok: false, error: 'no page' };
+    if (selector) {
+      await pwPage.waitForSelector(selector, { timeout: timeout || 5000 });
+      return { ok: true, message: `元素 ${selector} 已出现` };
     }
-    return { ok: false, error: '无法后退' };
+    await pwPage.waitForTimeout(timeout || 1000);
+    return { ok: true, message: `已等待 ${timeout || 1000}ms` };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('browser:hover', async (_, selector) => {
+  try {
+    if (!pwPage) return { ok: false, error: 'no page' };
+    await pwPage.hover(selector, { timeout: 5000 });
+    return { ok: true };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('browser:select', async (_, selector, value) => {
+  try {
+    if (!pwPage) return { ok: false, error: 'no page' };
+    await pwPage.selectOption(selector, value);
+    return { ok: true };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('browser:getInfo', async () => {
+  try {
+    if (!pwPage) return { ok: false, error: 'no page' };
+    return {
+      ok: true,
+      url: pwPage.url(),
+      title: await pwPage.title().catch(() => '')
+    };
   } catch (e) { return { ok: false, error: e.message }; }
 });
 
 ipcMain.handle('browser:close', async () => {
   try {
-    if (playwrightView) {
-      mainWindow.removeBrowserView(playwrightView);
-      playwrightView.webContents.destroy();
-      playwrightView = null;
+    if (pwBrowser) {
+      await pwBrowser.close().catch(() => {});
+      pwBrowser = null;
+      pwPage = null;
     }
     return { ok: true };
   } catch (e) { return { ok: false, error: e.message }; }
 });
-
-function resizePlaywrightView() {
-  if (!playwrightView || !mainWindow) return;
-  const bounds = mainWindow.getBounds();
-  // Browser view occupies right sidebar area
-  const sidebarWidth = 480;
-  playwrightView.setBounds({
-    x: bounds.width - sidebarWidth,
-    y: 40, // below titlebar
-    width: sidebarWidth,
-    height: bounds.height - 40
-  });
-}
 
 // ---- IPC: System Info (Enhanced) ----
 ipcMain.handle('system:fullInfo', () => ({

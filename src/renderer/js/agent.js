@@ -1556,8 +1556,8 @@ ${toolListSection}`;
       }
       switch (name) {
         case 'getTarot': {
-          const card = await window.api.drawTarot();
-          return { ok: true, card };
+          const result = await window.api.drawTarot(args?.spread ? { spread: args.spread } : undefined);
+          return { ok: true, result };
         }
         case 'todoList': return this.handleTodo(args);
         case 'runSubAgent': return await this.runSubAgent(args);
@@ -2045,22 +2045,36 @@ ${toolListSection}`;
           // 校验 url，避免 undefined 导致 Electron 报错
           const navUrl = args?.url || args?.target || '';
           if (!navUrl) return { ok: false, error: 'browserNavigate 缺少 url 参数' };
-          const r = await window.api.browserNavigate(navUrl);
+          const r = await window.api.browserNavigate(navUrl, args?.waitUntil);
           if (r?.ok && window.showBrowserPanel) window.showBrowserPanel();
           return r;
         }
         case 'browserScreenshot':
-          return await window.api.browserScreenshot();
+          return await window.api.browserScreenshot(args?.fullPage);
         case 'browserClick':
-          return await window.api.browserClick(args.selector);
+          return await window.api.browserClick(args.selector, args?.timeout);
         case 'browserType':
-          return await window.api.browserType(args.selector, args.text, args.submit);
+          return await window.api.browserType(args.selector, args.text, args?.submit, args?.clear);
         case 'browserGetContent':
           return await window.api.browserGetContent(args.selector);
         case 'browserScroll':
           return await window.api.browserScroll(args.direction, args.amount);
         case 'browserBack':
           return await window.api.browserBack();
+        case 'browserForward':
+          return await window.api.browserForward();
+        case 'browserRefresh':
+          return await window.api.browserRefresh();
+        case 'browserEvaluate':
+          return await window.api.browserEvaluate(args.script);
+        case 'browserWait':
+          return await window.api.browserWait(args?.selector, args?.timeout);
+        case 'browserHover':
+          return await window.api.browserHover(args.selector);
+        case 'browserSelect':
+          return await window.api.browserSelect(args.selector, args.value);
+        case 'browserGetInfo':
+          return await window.api.browserGetInfo();
         case 'browserClose': {
           const r = await window.api.browserClose();
           if (window.hideBrowserPanel) window.hideBrowserPanel();

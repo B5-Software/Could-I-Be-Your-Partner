@@ -79,7 +79,9 @@ const CHAT_ONLY_TOOLS = new Set([
   'serialClosePort', 'serialSetSignals',
   // Built-in browser (Playwright)
   'browserNavigate', 'browserScreenshot', 'browserClick', 'browserType',
-  'browserGetContent', 'browserScroll', 'browserBack', 'browserClose'
+  'browserGetContent', 'browserScroll', 'browserBack', 'browserForward',
+  'browserRefresh', 'browserEvaluate', 'browserWait', 'browserHover',
+  'browserSelect', 'browserGetInfo', 'browserClose'
 ]);
 
 function isToolAvailableForMode(toolName, mode) {
@@ -300,13 +302,20 @@ const TOOL_DEFINITIONS = [
   { name: 'spreadsheetImportFile', desc: '从文件导入表格(xlsx/ods/csv)', icon: 'fa-file-arrow-up', category: '数据表格', sensitive: false },
   { name: 'spreadsheetExportFile', desc: '导出表格到文件(xlsx/ods/csv)', icon: 'fa-file-arrow-down', category: '数据表格', sensitive: false },
   // ---- 内置浏览器 (Playwright) ----
-  { name: 'browserNavigate', desc: '在内置浏览器中打开网址（侧边栏实时显示，用户可干预）', icon: 'fa-globe', category: '浏览器', sensitive: false },
+  { name: 'browserNavigate', desc: '在内置浏览器中打开网址（基于Playwright，用户可干预）', icon: 'fa-globe', category: '浏览器', sensitive: false },
   { name: 'browserScreenshot', desc: '截取内置浏览器当前页面截图', icon: 'fa-camera', category: '浏览器', sensitive: false },
   { name: 'browserClick', desc: '点击内置浏览器页面元素', icon: 'fa-hand-pointer', category: '浏览器', sensitive: false },
   { name: 'browserType', desc: '在内置浏览器页面元素中输入文字', icon: 'fa-keyboard', category: '浏览器', sensitive: false },
   { name: 'browserGetContent', desc: '获取内置浏览器页面文本内容', icon: 'fa-file-lines', category: '浏览器', sensitive: false },
   { name: 'browserScroll', desc: '滚动内置浏览器页面', icon: 'fa-arrows-up-down', category: '浏览器', sensitive: false },
   { name: 'browserBack', desc: '内置浏览器后退', icon: 'fa-arrow-left', category: '浏览器', sensitive: false },
+  { name: 'browserForward', desc: '内置浏览器前进', icon: 'fa-arrow-right', category: '浏览器', sensitive: false },
+  { name: 'browserRefresh', desc: '刷新内置浏览器页面', icon: 'fa-rotate-right', category: '浏览器', sensitive: false },
+  { name: 'browserEvaluate', desc: '在页面中执行JavaScript代码', icon: 'fa-code', category: '浏览器', sensitive: false },
+  { name: 'browserWait', desc: '等待元素出现或指定时间', icon: 'fa-hourglass-half', category: '浏览器', sensitive: false },
+  { name: 'browserHover', desc: '鼠标悬停在页面元素上', icon: 'fa-arrow-pointer', category: '浏览器', sensitive: false },
+  { name: 'browserSelect', desc: '选择下拉框选项', icon: 'fa-list', category: '浏览器', sensitive: false },
+  { name: 'browserGetInfo', desc: '获取当前页面URL、标题等信息', icon: 'fa-circle-info', category: '浏览器', sensitive: false },
   { name: 'browserClose', desc: '关闭内置浏览器', icon: 'fa-xmark', category: '浏览器', sensitive: false },
   // ---- Goal / 长任务跟踪 ----
   { name: 'goalSet', desc: '设置/更新长期目标(让agent自动多轮推进)', icon: 'fa-bullseye', category: '代理', sensitive: false },
@@ -328,7 +337,7 @@ const DANGEROUS_COMMANDS = {
 // OpenAI-format tool schemas for LLM
 function getToolSchemas(enabledTools, mode) {
   const schemas = {
-    getTarot: { type: 'function', function: { name: 'getTarot', description: '抽取一张塔罗牌（使用设置中配置的随机数源：CSPRNG软件随机或TRNG硬件真随机，调用后返回结果中entropySource字段会标明使用的随机数类型，在向用户解析塔罗牌时请标明随机数类型以增强可信度）', parameters: { type: 'object', properties: {}, required: [] } } },
+    getTarot: { type: 'function', function: { name: 'getTarot', description: '抽取塔罗牌（使用设置中配置的随机数源：CSPRNG软件随机或TRNG硬件真随机，返回结果中entropySource字段标明随机数类型）。支持多种牌阵(spread)：单张牌快速回答、三牌时间线、关系分析、凯尔特十字等。返回的每张牌包含位置含义(position)和正逆位(orientation)。在向用户解析时请标明随机数类型以增强可信度。', parameters: { type: 'object', properties: { spread: { type: 'string', enum: ['single', 'three-card', 'relationship', 'choice', 'body-mind-spirit', 'celtic-cross', 'horseshoe', 'yes-no'], description: '牌阵类型。single=单张牌(1张,快速回答/每日运势), three-card=三牌牌阵(过去/现在/未来), relationship=关系牌阵(你/对方/关系), choice=选择牌阵(选项A/选项B/建议), body-mind-spirit=身心灵牌阵, celtic-cross=凯尔特十字(10牌全面分析), horseshoe=马蹄铁牌阵(7牌), yes-no=是非牌阵(正位=是,逆位=否)。默认single。' } }, required: [] } } },
     todoList: { type: 'function', function: { name: 'todoList', description: '管理待办事项列表', parameters: { type: 'object', properties: { action: { type: 'string', enum: ['add', 'remove', 'toggle', 'list'], description: '操作类型' }, text: { type: 'string', description: '待办事项内容' }, id: { type: 'number', description: '待办事项ID' } }, required: ['action'] } } },
     runSubAgent: { type: 'function', function: { name: 'runSubAgent', description: '运行一个独立子代理完成特定任务。子代理拥有自己的 agent loop（可多轮调用工具）、隔离上下文和工具白名单，完成后返回结果报告。适用于并行/分解任务、独立调查、批处理等场景。', parameters: { type: 'object', properties: { task: { type: 'string', description: '子代理要完成的任务（含目标、约束、验收标准）' }, context: { type: 'string', description: '给子代理的额外上下文信息（如相关文件路径、已有发现）' }, tools: { type: 'array', items: { type: 'string' }, description: '允许子代理使用的工具名称白名单。省略则使用默认安全集：readFile/listDirectory/localSearch/createFile/editFile/copyFile/makeDirectory/getSystemInfo/calculator/webSearch/webFetch/runJavaScriptCode。危险工具（deleteFile/runTerminalCommand 等）默认禁用，必须显式列出才会授予。' }, maxIterations: { type: 'number', description: '子代理最大循环轮数，默认 10，上限 30' } }, required: ['task'] } } },
     generateImage: { type: 'function', function: { name: 'generateImage', description: '根据文本提示生成图片', parameters: { type: 'object', properties: { prompt: { type: 'string', description: '图片描述(英文)' } }, required: ['prompt'] } } },
@@ -458,13 +467,20 @@ function getToolSchemas(enabledTools, mode) {
     spreadsheetImportFile: { type: 'function', function: { name: 'spreadsheetImportFile', description: '从磁盘文件导入表格数据，支持.xlsx(Excel)、.ods(LibreOffice)、.csv格式。导入后自动打开表格面板并显示数据。', parameters: { type: 'object', properties: { filePath: { type: 'string', description: '要导入的表格文件路径(.xlsx/.ods/.csv)' } }, required: ['filePath'] } } },
     spreadsheetExportFile: { type: 'function', function: { name: 'spreadsheetExportFile', description: '将当前表格数据导出到磁盘文件，支持.xlsx(Excel)、.ods(LibreOffice)、.csv格式。根据文件扩展名自动选择格式。', parameters: { type: 'object', properties: { filePath: { type: 'string', description: '导出文件路径(扩展名决定格式: .xlsx/.ods/.csv)' } }, required: ['filePath'] } } },
     // ---- 内置浏览器 (Playwright) ----
-    browserNavigate: { type: 'function', function: { name: 'browserNavigate', description: '在内置浏览器中打开指定网址。会在应用右侧栏显示浏览器窗口，用户可实时观看并干预。适合需要浏览网页、查看动态内容、与页面交互的场景。', parameters: { type: 'object', properties: { url: { type: 'string', description: '要打开的网址(需含http://或https://)' } }, required: ['url'] } } },
-    browserScreenshot: { type: 'function', function: { name: 'browserScreenshot', description: '截取内置浏览器当前页面截图并返回base64图像，可用于AI查看页面当前状态。', parameters: { type: 'object', properties: {}, required: [] } } },
-    browserClick: { type: 'function', function: { name: 'browserClick', description: '点击内置浏览器页面中的元素。', parameters: { type: 'object', properties: { selector: { type: 'string', description: 'CSS选择器(如 "button.submit"、"#login-link"、"a[href*=github]")' } }, required: ['selector'] } } },
-    browserType: { type: 'function', function: { name: 'browserType', description: '在内置浏览器页面的指定输入框中输入文字。', parameters: { type: 'object', properties: { selector: { type: 'string', description: 'CSS选择器定位输入框' }, text: { type: 'string', description: '要输入的文字' }, submit: { type: 'boolean', description: '输入后是否按回车提交(默认false)' } }, required: ['selector', 'text'] } } },
+    browserNavigate: { type: 'function', function: { name: 'browserNavigate', description: '在内置浏览器中打开指定网址（基于Playwright引擎）。浏览器窗口会显示在应用右侧栏，用户可实时观看并干预。适合需要浏览网页、查看动态内容、与页面交互的场景。', parameters: { type: 'object', properties: { url: { type: 'string', description: '要打开的网址(需含http://或https://)' }, waitUntil: { type: 'string', enum: ['load', 'domcontentloaded', 'networkidle'], description: '等待条件(默认load): load=页面完全加载, domcontentloaded=DOM就绪, networkidle=网络空闲' } }, required: ['url'] } } },
+    browserScreenshot: { type: 'function', function: { name: 'browserScreenshot', description: '截取内置浏览器当前页面截图并返回base64图像，可用于AI查看页面当前状态。', parameters: { type: 'object', properties: { fullPage: { type: 'boolean', description: '是否截取整页(默认false,仅截可视区域)' } }, required: [] } } },
+    browserClick: { type: 'function', function: { name: 'browserClick', description: '点击内置浏览器页面中的元素。使用Playwright的click方法，支持自动等待元素可点击。', parameters: { type: 'object', properties: { selector: { type: 'string', description: 'CSS选择器(如 "button.submit"、"#login-link"、"a[href*=github]")' }, timeout: { type: 'number', description: '超时毫秒数(默认5000)' } }, required: ['selector'] } } },
+    browserType: { type: 'function', function: { name: 'browserType', description: '在内置浏览器页面的指定输入框中输入文字。使用Playwright的fill方法模拟真实输入。', parameters: { type: 'object', properties: { selector: { type: 'string', description: 'CSS选择器定位输入框' }, text: { type: 'string', description: '要输入的文字' }, submit: { type: 'boolean', description: '输入后是否按回车提交(默认false)' }, clear: { type: 'boolean', description: '是否先清空输入框(默认true)' } }, required: ['selector', 'text'] } } },
     browserGetContent: { type: 'function', function: { name: 'browserGetContent', description: '获取内置浏览器当前页面的文本内容(去除HTML标签)。', parameters: { type: 'object', properties: { selector: { type: 'string', description: '可选CSS选择器，仅获取匹配元素的文本(不传则获取整页)' } }, required: [] } } },
     browserScroll: { type: 'function', function: { name: 'browserScroll', description: '滚动内置浏览器页面。', parameters: { type: 'object', properties: { direction: { type: 'string', enum: ['up', 'down'], description: '滚动方向' }, amount: { type: 'number', description: '滚动像素数(默认500)' } }, required: ['direction'] } } },
     browserBack: { type: 'function', function: { name: 'browserBack', description: '内置浏览器后退到上一页。', parameters: { type: 'object', properties: {}, required: [] } } },
+    browserForward: { type: 'function', function: { name: 'browserForward', description: '内置浏览器前进到下一页。', parameters: { type: 'object', properties: {}, required: [] } } },
+    browserRefresh: { type: 'function', function: { name: 'browserRefresh', description: '刷新内置浏览器当前页面。', parameters: { type: 'object', properties: {}, required: [] } } },
+    browserEvaluate: { type: 'function', function: { name: 'browserEvaluate', description: '在内置浏览器页面中执行任意JavaScript代码并返回结果。可用于提取复杂数据、操作DOM、调用页面API等。', parameters: { type: 'object', properties: { script: { type: 'string', description: '要执行的JavaScript代码(可以是表达式或函数体)。如 "document.title" 或 "Array.from(document.querySelectorAll(\"a\")).map(a=>a.href)"' } }, required: ['script'] } } },
+    browserWait: { type: 'function', function: { name: 'browserWait', description: '等待页面中某个元素出现，或等待指定时间。适合等待异步加载内容。', parameters: { type: 'object', properties: { selector: { type: 'string', description: '要等待的CSS选择器。传入则等待该元素出现(默认timeout=5000ms)。' }, timeout: { type: 'number', description: '超时毫秒数(默认5000)。若不传selector，则作为固定等待时长。' } }, required: [] } } },
+    browserHover: { type: 'function', function: { name: 'browserHover', description: '将鼠标悬停在页面指定元素上，触发hover效果。', parameters: { type: 'object', properties: { selector: { type: 'string', description: 'CSS选择器定位元素' } }, required: ['selector'] } } },
+    browserSelect: { type: 'function', function: { name: 'browserSelect', description: '选择下拉框(select元素)的选项。', parameters: { type: 'object', properties: { selector: { type: 'string', description: 'select元素的CSS选择器' }, value: { type: 'string', description: '要选择的选项值(value属性)' } }, required: ['selector', 'value'] } } },
+    browserGetInfo: { type: 'function', function: { name: 'browserGetInfo', description: '获取内置浏览器当前页面的基本信息：URL、标题、是否可后退/前进。', parameters: { type: 'object', properties: {}, required: [] } } },
     browserClose: { type: 'function', function: { name: 'browserClose', description: '关闭内置浏览器并隐藏侧边栏面板。', parameters: { type: 'object', properties: {}, required: [] } } },
     // ---- Goal / 长任务跟踪 ----
     goalSet: { type: 'function', function: { name: 'goalSet', description: '设置或更新当前长期目标。设置后agent会自动多轮推进直到完成或达到限制。适用于需要多步骤、长时间才能完成的复杂任务。', parameters: { type: 'object', properties: { objective: { type: 'string', description: '清晰、可验证的目标描述，包含验收标准' }, tokenBudget: { type: 'number', description: '可选token预算上限，超过后agent会停止并总结进度' } }, required: ['objective'] } } },

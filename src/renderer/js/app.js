@@ -712,6 +712,10 @@
       if (name === 'generateImage' && result?.ok && result?.url) {
         addImageMessage(result.url);
       }
+      // If getTarot returned a multi-card spread, display visual cards
+      if (name === 'getTarot' && result?.ok && result?.result?.spread) {
+        addTarotSpreadToChat(result.result);
+      }
     } else if (status === 'denied') {
       updateToolCallResult(name, { ok: false, error: '用户拒绝了操作' }, true);
       updateContextProgress();
@@ -2174,6 +2178,46 @@
     requestAnimationFrame(() => {
       msg.scrollIntoView({ behavior: 'smooth', block: 'end' });
     });
+  }
+
+  // 显示塔罗牌阵卡片
+  function addTarotSpreadToChat(tarotResult) {
+    const spread = tarotResult.spread;
+    const cards = tarotResult.cards || [];
+    if (!spread || cards.length === 0) return;
+    const msg = document.createElement('div');
+    msg.className = 'message assistant';
+    const time = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+    const avatarHTML = makeAvatarHTML(agent.settings?.aiPersona?.avatar, true);
+    const eSource = cards[0]?.entropySource || 'CSPRNG';
+    const isTRNG = eSource.startsWith('TRNG');
+    const trngBadge = isTRNG ? ' <span class="trng-badge" style="font-size:9px;padding:1px 6px"><i class="fa-solid fa-satellite-dish"></i> TRNG</span>' : '';
+
+    const cardsHtml = cards.map(c => {
+      const meaning = c.isReversed ? c.meaningOfReversed : c.meaningOfUpright;
+      const position = c.position?.name || '';
+      const posDesc = c.position?.description || '';
+      return '<div class="tarot-spread-card' + (c.isReversed ? ' reversed' : '') + '">' +
+        '<div class="card-position">' + escapeHtml(position) + '</div>' +
+        '<div class="card-icon"><i class="fa-solid ' + (c.icon || 'fa-star') + '"></i></div>' +
+        '<div class="card-name">' + escapeHtml(c.name) + '</div>' +
+        '<div class="card-orientation">' + (c.isReversed ? '逆位' : '正位') + '</div>' +
+        '<div class="card-meaning">' + escapeHtml(meaning || '') + '</div>' +
+      '</div>';
+    }).join('');
+
+    msg.innerHTML =
+      '<div class="message-avatar">' + avatarHTML + '</div>' +
+      '<div class="message-body">' +
+        '<div class="message-content">' +
+          '<div style="font-weight:600;margin-bottom:4px">' + escapeHtml(spread.name) + trngBadge + '</div>' +
+          '<div style="font-size:0.85em;color:var(--text-secondary);margin-bottom:4px">' + escapeHtml(spread.description || '') + '</div>' +
+          '<div class="tarot-spread-display">' + cardsHtml + '</div>' +
+        '</div>' +
+        '<div class="message-time">' + time + '</div>' +
+      '</div>';
+    appendChatElement(msg);
+    requestAnimationFrame(() => { msg.scrollIntoView({ behavior: 'smooth', block: 'end' }); });
   }
 
   // 显示图片右键菜单
@@ -7457,7 +7501,7 @@
     updateCodePanelRestoreBar();
   });
 
-  // ---- Browser Panel (Playwright/BrowserView) ----
+  // ---- Browser Panel (Playwright) ----
   window.showBrowserPanel = function() {
     const panel = document.getElementById('browser-panel');
     panel?.classList.remove('hidden');
@@ -7467,12 +7511,24 @@
     panel?.classList.add('hidden');
   };
 
+  // 自动截图辅助函数：检查开关状态并截图
+  async function autoScreenshot() {
+    const checkbox = document.getElementById('browser-auto-screenshot');
+    if (!checkbox?.checked) return;
+    const result = await window.api.browserScreenshot();
+    if (result.ok) {
+      const view = document.getElementById('browser-screenshot-view');
+      if (view) view.innerHTML = '<img src="' + result.dataUrl + '" style="width:100%;height:auto;">';
+    }
+  }
+
   document.getElementById('btn-browser-go')?.addEventListener('click', async () => {
     const input = document.getElementById('browser-url-input');
     if (!input || !input.value.trim()) return;
     const result = await window.api.browserNavigate(input.value.trim());
     if (result.ok) {
       input.value = result.url;
+      await autoScreenshot();
     } else {
       window.showMessageModal(result.error || '导航失败', '错误', 'error');
     }
@@ -7484,14 +7540,21 @@
   });
   document.getElementById('btn-browser-back')?.addEventListener('click', async () => {
     await window.api.browserBack();
+    await autoScreenshot();
+  });
+  document.getElementById('btn-browser-forward')?.addEventListener('click', async () => {
+    await window.api.browserForward();
+    await autoScreenshot();
+  });
+  document.getElementById('btn-browser-refresh')?.addEventListener('click', async () => {
+    await window.api.browserRefresh();
+    await autoScreenshot();
   });
   document.getElementById('btn-browser-screenshot')?.addEventListener('click', async () => {
     const result = await window.api.browserScreenshot();
     if (result.ok) {
       const view = document.getElementById('browser-screenshot-view');
-      if (view) {
-        view.innerHTML = `<img src="${result.dataUrl}" style="width:100%;height:auto;">`;
-      }
+      if (view) view.innerHTML = '<img src="' + result.dataUrl + '" style="width:100%;height:auto;">';
     }
   });
   document.getElementById('btn-close-browser')?.addEventListener('click', async () => {

@@ -300,13 +300,23 @@
             <button class="btn-icon" id="btn-browser-back" title="后退">
               <i class="fa-solid fa-arrow-left"></i>
             </button>
+            <button class="btn-icon" id="btn-browser-forward" title="前进">
+              <i class="fa-solid fa-arrow-right"></i>
+            </button>
+            <button class="btn-icon" id="btn-browser-refresh" title="刷新">
+              <i class="fa-solid fa-rotate-right"></i>
+            </button>
             <input type="text" id="browser-url-input" placeholder="输入网址或搜索..." class="browser-url-input">
             <button class="btn-icon" id="btn-browser-go" title="前往">
-              <i class="fa-solid fa-arrow-right"></i>
+              <i class="fa-solid fa-play"></i>
             </button>
             <button class="btn-icon" id="btn-browser-screenshot" title="截图">
               <i class="fa-solid fa-camera"></i>
             </button>
+            <label class="browser-auto-screenshot" title="操作后自动截图">
+              <input type="checkbox" id="browser-auto-screenshot" checked>
+              <span style="font-size:11px;color:var(--text-secondary)">自动截图</span>
+            </label>
           </div>
           <button class="btn-icon btn-minimize-panel" title="最小化">
             <i class="fa-solid fa-window-minimize"></i>
@@ -319,7 +329,7 @@
           <div id="browser-screenshot-view" class="browser-screenshot-view">
             <div class="empty-state">
               <i class="fa-solid fa-globe"></i>
-              <p>AI 可以操作内置浏览器，你也可以干预</p>
+              <p>AI 可以操作内置浏览器（基于 Playwright）</p>
               <p class="setting-hint">在对话中让 AI "打开网页 xxx" 即可启动</p>
             </div>
           </div>
