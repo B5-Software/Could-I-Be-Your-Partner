@@ -1712,10 +1712,10 @@ ${toolListSection}`;
           return { ok: true, message: `已应用 ${appliedEdits.length} 处编辑`, edits: appliedEdits };
         }
         case 'presentFile': {
-          // 解析工作目录相对路径
+          // 解析工作目录相对路径（renderer 中不可用 require('path')，用字符串拼接）
           const relPath = args.path || '';
           const fullPath = this.workspacePath
-            ? (typeof require !== 'undefined' ? require('path').resolve(this.workspacePath, relPath) : `${this.workspacePath}\\${relPath}`)
+            ? (this.workspacePath.replace(/[\\/]+$/, '') + '\\' + relPath.replace(/^[\\/]+/, ''))
             : relPath;
           // 读取文件验证存在性
           const readRes = await window.api.readFile(fullPath);
@@ -2045,40 +2045,37 @@ ${toolListSection}`;
           // 校验 url，避免 undefined 导致 Electron 报错
           const navUrl = args?.url || args?.target || '';
           if (!navUrl) return { ok: false, error: 'browserNavigate 缺少 url 参数' };
-          const r = await window.api.browserNavigate(navUrl, args?.waitUntil);
-          if (r?.ok && window.showBrowserPanel) window.showBrowserPanel();
+          const r = await window.api.browserNavigate(navUrl, args?.waitUntil, this.workspacePath);
           return r;
         }
         case 'browserScreenshot':
-          return await window.api.browserScreenshot(args?.fullPage);
+          return await window.api.browserScreenshot(args?.fullPage, this.workspacePath);
         case 'browserClick':
-          return await window.api.browserClick(args.selector, args?.timeout);
+          return await window.api.browserClick(args.selector, args?.timeout, this.workspacePath);
         case 'browserType':
-          return await window.api.browserType(args.selector, args.text, args?.submit, args?.clear);
+          return await window.api.browserType(args.selector, args.text, args?.submit, args?.clear, this.workspacePath);
         case 'browserGetContent':
-          return await window.api.browserGetContent(args.selector);
+          return await window.api.browserGetContent(args.selector, this.workspacePath);
         case 'browserScroll':
-          return await window.api.browserScroll(args.direction, args.amount);
+          return await window.api.browserScroll(args.direction, args.amount, this.workspacePath);
         case 'browserBack':
-          return await window.api.browserBack();
+          return await window.api.browserBack(this.workspacePath);
         case 'browserForward':
-          return await window.api.browserForward();
+          return await window.api.browserForward(this.workspacePath);
         case 'browserRefresh':
-          return await window.api.browserRefresh();
+          return await window.api.browserRefresh(this.workspacePath);
         case 'browserEvaluate':
-          return await window.api.browserEvaluate(args.script);
+          return await window.api.browserEvaluate(args.script, this.workspacePath);
         case 'browserWait':
-          return await window.api.browserWait(args?.selector, args?.timeout);
+          return await window.api.browserWait(args?.selector, args?.timeout, this.workspacePath);
         case 'browserHover':
-          return await window.api.browserHover(args.selector);
+          return await window.api.browserHover(args.selector, this.workspacePath);
         case 'browserSelect':
-          return await window.api.browserSelect(args.selector, args.value);
+          return await window.api.browserSelect(args.selector, args.value, this.workspacePath);
         case 'browserGetInfo':
-          return await window.api.browserGetInfo();
+          return await window.api.browserGetInfo(this.workspacePath);
         case 'browserClose': {
-          const r = await window.api.browserClose();
-          if (window.hideBrowserPanel) window.hideBrowserPanel();
-          return r;
+          return await window.api.browserClose(this.workspacePath);
         }
         // ---- Goal / 长任务跟踪 ----
         case 'goalSet': {

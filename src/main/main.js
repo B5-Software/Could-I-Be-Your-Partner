@@ -2952,165 +2952,223 @@ ipcMain.handle('code:getFileTree', (_, dirPath) => {
   } catch (e) { return { ok: false, error: e.message }; }
 });
 
-// ---- IPC: Playwright (built-in browser for Chat mode) ----
+// ---- IPC: Playwright (built-in browser) ----
 // Uses the official Playwright npm package for full browser automation.
-let pwBrowser = null;
-let pwPage = null;
+// Workspace isolation: each workspacePath gets its own browser context.
+let _pwBrowser = null; // shared browser instance (chromium.launch)
+const _pwWorkspaces = new Map(); // workspacePath -> { context, page }
 
-async function ensureBrowser() {
-  if (pwPage) return pwPage;
+async function _launchPwBrowser() {
+  if (_pwBrowser) return _pwBrowser;
+  const { chromium } = require('playwright');
+  const channels = ['msedge', 'chrome'];
+  let lastError = null;
+  for (const channel of channels) {
+    try {
+      _pwBrowser = await chromium.launch({ headless: true, channel });
+      console.log('Playwright launched with channel:', channel);
+      return _pwBrowser;
+    } catch (e) {
+      console.warn('Channel', channel, 'launch failed:', e.message);
+      lastError = e;
+    }
+  }
   try {
-    const { chromium } = require('playwright');
-    pwBrowser = await chromium.launch({ headless: true });
-    pwPage = await pwBrowser.newPage({ viewport: { width: 460, height: 720 } });
-    return pwPage;
+    _pwBrowser = await chromium.launch({ headless: true });
+    return _pwBrowser;
   } catch (e) {
-    console.error('Playwright launch failed:', e.message);
-    throw new Error('无法启动Playwright浏览器: ' + e.message);
+    throw new Error('无法启动Playwright浏览器（未找到Edge/Chrome，且Playwright浏览器未安装）。请安装Microsoft Edge或Google Chrome，或运行 npx playwright install chromium。错误: ' + (lastError?.message || e.message));
   }
 }
 
-ipcMain.handle('browser:navigate', async (_, url, waitUntil) => {
+async function ensureBrowser(workspacePath) {
+  const key = workspacePath || '__default__';
+  if (_pwWorkspaces.has(key)) return _pwWorkspaces.get(key).page;
+  const browser = await _launchPwBrowser();
+  const context = await browser.newContext({ viewport: { width: 1280, height: 720 } });
+  const page = await context.newPage();
+  _pwWorkspaces.set(key, { context, page });
+  return page;
+}
+
+function _getPage(workspacePath) {
+  const key = workspacePath || '__default__';
+  const ws = _pwWorkspaces.get(key);
+  return ws ? ws.page : null;
+}
+
+ipcMain.handle('browser:navigate', async (_, url, waitUntil, workspacePath) => {
   try {
     if (!url || typeof url !== 'string') return { ok: false, error: 'URL 参数缺失或无效' };
-    if (!pwPage) { await ensureBrowser(); }
+    let page = _getPage(workspacePath);
+    if (!page) page = await ensureBrowser(workspacePath);
     let targetUrl = url;
     if (!/^https?:\/\//.test(targetUrl)) targetUrl = 'https://' + targetUrl;
-    await pwPage.goto(targetUrl, { waitUntil: waitUntil || 'load', timeout: 30000 });
-    return { ok: true, url: targetUrl, title: await pwPage.title() };
+    await page.goto(targetUrl, { waitUntil: waitUntil || 'load', timeout: 30000 });
+    return { ok: true, url: targetUrl, title: await page.title() };
   } catch (e) { return { ok: false, error: e.message }; }
 });
 
-ipcMain.handle('browser:screenshot', async (_, fullPage) => {
+ipcMain.handle('browser:screenshot', async (_, fullPage, workspacePath) => {
   try {
-    if (!pwPage) return { ok: false, error: 'no page' };
-    const buf = await pwPage.screenshot({ fullPage: !!fullPage, type: 'png' });
-    return { ok: true, dataUrl: 'data:image/png;base64,' + buf.toString('base64') };
+    const page = _getPage(workspacePath);
+    if (!page) return { ok: false, error: 'no page' };
+    const buf = await page.screenshot({ fullPage: !!fullPage, type: 'png' });
+    const dataUrl = 'data:image/png;base64,' + buf.toString('base64');
+    let filePath = null;
+    try {
+      const saveDir = workspacePath && fs.existsSync(workspacePath) ? workspacePath : imagesDir;
+      const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      const fname = 'browser-screenshot-' + ts + '.png';
+      filePath = path.join(saveDir, fname);
+      fs.writeFileSync(filePath, buf);
+    } catch (saveErr) { console.warn('Screenshot save failed:', saveErr.message); }
+    return { ok: true, dataUrl, filePath };
   } catch (e) { return { ok: false, error: e.message }; }
 });
 
-ipcMain.handle('browser:click', async (_, selector, timeout) => {
+ipcMain.handle('browser:click', async (_, selector, timeout, workspacePath) => {
   try {
-    if (!pwPage) return { ok: false, error: 'no page' };
-    await pwPage.click(selector, { timeout: timeout || 5000 });
+    const page = _getPage(workspacePath);
+    if (!page) return { ok: false, error: 'no page' };
+    await page.click(selector, { timeout: timeout || 5000 });
     return { ok: true };
   } catch (e) { return { ok: false, error: e.message }; }
 });
 
-ipcMain.handle('browser:type', async (_, selector, text, submit, clear) => {
+ipcMain.handle('browser:type', async (_, selector, text, submit, clear, workspacePath) => {
   try {
-    if (!pwPage) return { ok: false, error: 'no page' };
-    if (clear !== false) await pwPage.fill(selector, '');
-    await pwPage.fill(selector, text);
+    const page = _getPage(workspacePath);
+    if (!page) return { ok: false, error: 'no page' };
+    if (clear !== false) await page.fill(selector, '');
+    await page.fill(selector, text);
     if (submit) {
-      await pwPage.press(selector, 'Enter');
+      await page.press(selector, 'Enter');
     }
     return { ok: true };
   } catch (e) { return { ok: false, error: e.message }; }
 });
 
-ipcMain.handle('browser:getContent', async (_, selector) => {
+ipcMain.handle('browser:getContent', async (_, selector, workspacePath) => {
   try {
-    if (!pwPage) return { ok: false, error: 'no page' };
-    const url = pwPage.url();
-    const title = await pwPage.title();
+    const page = _getPage(workspacePath);
+    if (!page) return { ok: false, error: 'no page' };
+    const url = page.url();
+    const title = await page.title();
     if (selector) {
-      const text = await pwPage.$eval(selector, el => el.innerText || '').catch(() => '');
-      const html = await pwPage.$eval(selector, el => el.innerHTML || '').catch(() => '');
+      const text = await page.$eval(selector, el => el.innerText || '').catch(() => '');
+      const html = await page.$eval(selector, el => el.innerHTML || '').catch(() => '');
       return { ok: true, html: (html || '').slice(0, 5000), text: (text || '').slice(0, 3000), url, title };
     }
-    const text = await pwPage.evaluate(() => document.body ? document.body.innerText : '').catch(() => '');
-    const html = await pwPage.evaluate(() => document.documentElement.outerHTML || '').catch(() => '');
+    const text = await page.evaluate(() => document.body ? document.body.innerText : '').catch(() => '');
+    const html = await page.evaluate(() => document.documentElement.outerHTML || '').catch(() => '');
     return { ok: true, html: (html || '').slice(0, 5000), text: (text || '').slice(0, 3000), url, title };
   } catch (e) { return { ok: false, error: e.message }; }
 });
 
-ipcMain.handle('browser:evaluate', async (_, script) => {
+ipcMain.handle('browser:evaluate', async (_, script, workspacePath) => {
   try {
-    if (!pwPage) return { ok: false, error: 'no page' };
-    const result = await pwPage.evaluate(script);
+    const page = _getPage(workspacePath);
+    if (!page) return { ok: false, error: 'no page' };
+    const result = await page.evaluate(script);
     return { ok: true, result };
   } catch (e) { return { ok: false, error: e.message }; }
 });
 
-ipcMain.handle('browser:scroll', async (_, direction, amount) => {
+ipcMain.handle('browser:scroll', async (_, direction, amount, workspacePath) => {
   try {
-    if (!pwPage) return { ok: false, error: 'no page' };
+    const page = _getPage(workspacePath);
+    if (!page) return { ok: false, error: 'no page' };
     const dy = direction === 'down' ? (amount || 500) : -(amount || 500);
-    await pwPage.evaluate(d => window.scrollBy(0, d), dy);
+    await page.evaluate(d => window.scrollBy(0, d), dy);
     return { ok: true };
   } catch (e) { return { ok: false, error: e.message }; }
 });
 
-ipcMain.handle('browser:back', async () => {
+ipcMain.handle('browser:back', async (_, workspacePath) => {
   try {
-    if (!pwPage) return { ok: false, error: 'no page' };
-    await pwPage.goBack({ waitUntil: 'load', timeout: 30000 }).catch(() => {});
+    const page = _getPage(workspacePath);
+    if (!page) return { ok: false, error: 'no page' };
+    await page.goBack({ waitUntil: 'load', timeout: 30000 }).catch(() => {});
     return { ok: true };
   } catch (e) { return { ok: false, error: e.message }; }
 });
 
-ipcMain.handle('browser:forward', async () => {
+ipcMain.handle('browser:forward', async (_, workspacePath) => {
   try {
-    if (!pwPage) return { ok: false, error: 'no page' };
-    await pwPage.goForward({ waitUntil: 'load', timeout: 30000 }).catch(() => {});
+    const page = _getPage(workspacePath);
+    if (!page) return { ok: false, error: 'no page' };
+    await page.goForward({ waitUntil: 'load', timeout: 30000 }).catch(() => {});
     return { ok: true };
   } catch (e) { return { ok: false, error: e.message }; }
 });
 
-ipcMain.handle('browser:refresh', async () => {
+ipcMain.handle('browser:refresh', async (_, workspacePath) => {
   try {
-    if (!pwPage) return { ok: false, error: 'no page' };
-    await pwPage.reload({ waitUntil: 'load', timeout: 30000 });
+    const page = _getPage(workspacePath);
+    if (!page) return { ok: false, error: 'no page' };
+    await page.reload({ waitUntil: 'load', timeout: 30000 });
     return { ok: true };
   } catch (e) { return { ok: false, error: e.message }; }
 });
 
-ipcMain.handle('browser:wait', async (_, selector, timeout) => {
+ipcMain.handle('browser:wait', async (_, selector, timeout, workspacePath) => {
   try {
-    if (!pwPage) return { ok: false, error: 'no page' };
+    const page = _getPage(workspacePath);
+    if (!page) return { ok: false, error: 'no page' };
     if (selector) {
-      await pwPage.waitForSelector(selector, { timeout: timeout || 5000 });
+      await page.waitForSelector(selector, { timeout: timeout || 5000 });
       return { ok: true, message: `元素 ${selector} 已出现` };
     }
-    await pwPage.waitForTimeout(timeout || 1000);
+    await page.waitForTimeout(timeout || 1000);
     return { ok: true, message: `已等待 ${timeout || 1000}ms` };
   } catch (e) { return { ok: false, error: e.message }; }
 });
 
-ipcMain.handle('browser:hover', async (_, selector) => {
+ipcMain.handle('browser:hover', async (_, selector, workspacePath) => {
   try {
-    if (!pwPage) return { ok: false, error: 'no page' };
-    await pwPage.hover(selector, { timeout: 5000 });
+    const page = _getPage(workspacePath);
+    if (!page) return { ok: false, error: 'no page' };
+    await page.hover(selector, { timeout: 5000 });
     return { ok: true };
   } catch (e) { return { ok: false, error: e.message }; }
 });
 
-ipcMain.handle('browser:select', async (_, selector, value) => {
+ipcMain.handle('browser:select', async (_, selector, value, workspacePath) => {
   try {
-    if (!pwPage) return { ok: false, error: 'no page' };
-    await pwPage.selectOption(selector, value);
+    const page = _getPage(workspacePath);
+    if (!page) return { ok: false, error: 'no page' };
+    await page.selectOption(selector, value);
     return { ok: true };
   } catch (e) { return { ok: false, error: e.message }; }
 });
 
-ipcMain.handle('browser:getInfo', async () => {
+ipcMain.handle('browser:getInfo', async (_, workspacePath) => {
   try {
-    if (!pwPage) return { ok: false, error: 'no page' };
+    const page = _getPage(workspacePath);
+    if (!page) return { ok: false, error: 'no page' };
     return {
       ok: true,
-      url: pwPage.url(),
-      title: await pwPage.title().catch(() => '')
+      url: page.url(),
+      title: await page.title().catch(() => '')
     };
   } catch (e) { return { ok: false, error: e.message }; }
 });
 
-ipcMain.handle('browser:close', async () => {
+ipcMain.handle('browser:close', async (_, workspacePath) => {
   try {
-    if (pwBrowser) {
-      await pwBrowser.close().catch(() => {});
-      pwBrowser = null;
-      pwPage = null;
+    if (workspacePath) {
+      const ws = _pwWorkspaces.get(workspacePath);
+      if (ws) {
+        await ws.context.close().catch(() => {});
+        _pwWorkspaces.delete(workspacePath);
+      }
+    } else {
+      // close all
+      for (const [key, ws] of _pwWorkspaces) {
+        await ws.context.close().catch(() => {});
+      }
+      _pwWorkspaces.clear();
     }
     return { ok: true };
   } catch (e) { return { ok: false, error: e.message }; }

@@ -3085,7 +3085,7 @@
   // Attach file button
   if (btnAttachFile) {
     btnAttachFile.addEventListener('click', async () => {
-      const result = await window.api.openFileDialog();
+      const result = await window.api.openFileDialog({ multiple: true });
       if (result.ok && result.paths) {
         for (const p of result.paths) {
           const name = p.split(/[\\/]/).pop();
@@ -7474,6 +7474,9 @@
     document.getElementById('btn-restore-file-tree')?.classList.toggle('hidden', !fileTree?.classList.contains('collapsed'));
     document.getElementById('btn-restore-editor')?.classList.toggle('hidden', !editor?.classList.contains('collapsed'));
     document.getElementById('btn-restore-chat')?.classList.toggle('hidden', !chat?.classList.contains('collapsed'));
+    // 隐藏相邻的分割器
+    document.getElementById('code-resizer-1')?.classList.toggle('hidden', fileTree?.classList.contains('collapsed'));
+    document.getElementById('code-resizer-2')?.classList.toggle('hidden', editor?.classList.contains('collapsed'));
   }
   document.getElementById('btn-close-file-tree')?.addEventListener('click', () => {
     document.getElementById('code-file-tree-panel')?.classList.add('collapsed');
@@ -7501,65 +7504,77 @@
     updateCodePanelRestoreBar();
   });
 
-  // ---- Browser Panel (Playwright) ----
-  window.showBrowserPanel = function() {
-    const panel = document.getElementById('browser-panel');
-    panel?.classList.remove('hidden');
-  };
-  window.hideBrowserPanel = function() {
-    const panel = document.getElementById('browser-panel');
-    panel?.classList.add('hidden');
-  };
+  // ---- 可拖动分割器 ----
+  function initCodeResizers() {
+    document.querySelectorAll('.code-resizer').forEach(resizer => {
+      let dragging = false;
+      let startX = 0;
+      let p1, p2, p1Width, p2Width, p2Flex = false;
 
-  // 自动截图辅助函数：检查开关状态并截图
-  async function autoScreenshot() {
-    const checkbox = document.getElementById('browser-auto-screenshot');
-    if (!checkbox?.checked) return;
-    const result = await window.api.browserScreenshot();
-    if (result.ok) {
-      const view = document.getElementById('browser-screenshot-view');
-      if (view) view.innerHTML = '<img src="' + result.dataUrl + '" style="width:100%;height:auto;">';
-    }
+      resizer.addEventListener('mousedown', (e) => {
+        dragging = true;
+        startX = e.clientX;
+        p1 = document.getElementById(resizer.dataset.panel1);
+        p2 = document.getElementById(resizer.dataset.panel2);
+        if (!p1 || !p2) return;
+        p1Width = p1.getBoundingClientRect().width;
+        p2Width = p2.getBoundingClientRect().width;
+        // 如果 p2 是 flex 布局中的弹性项，改为固定宽度
+        if (getComputedStyle(p2).flexGrow !== '0') {
+          p2Flex = true;
+          p2.style.flex = 'none';
+          p2.style.width = p2Width + 'px';
+        } else {
+          p2Flex = false;
+        }
+        if (getComputedStyle(p1).flexGrow !== '0') {
+          p1.style.flex = 'none';
+          p1.style.width = p1Width + 'px';
+        }
+        resizer.classList.add('dragging');
+        document.body.style.cursor = 'col-resize';
+        document.body.style.userSelect = 'none';
+        e.preventDefault();
+      });
+
+      document.addEventListener('mousemove', (e) => {
+        if (!dragging || !p1 || !p2) return;
+        const dx = e.clientX - startX;
+        let newP1Width = p1Width + dx;
+        let newP2Width = p2Width - dx;
+        // 限制最小宽度
+        const p1Min = parseInt(getComputedStyle(p1).minWidth) || 100;
+        const p2Min = parseInt(getComputedStyle(p2).minWidth) || 100;
+        const p1Max = parseInt(getComputedStyle(p1).maxWidth) || 9999;
+        const p2Max = parseInt(getComputedStyle(p2).maxWidth) || 9999;
+        if (newP1Width < p1Min) { newP1Width = p1Min; newP2Width = p1Width + p2Width - p1Min; }
+        if (newP2Width < p2Min) { newP2Width = p2Min; newP1Width = p1Width + p2Width - p2Min; }
+        if (newP1Width > p1Max) { newP1Width = p1Max; newP2Width = p1Width + p2Width - p1Max; }
+        if (newP2Width > p2Max) { newP2Width = p2Max; newP1Width = p1Width + p2Width - p2Max; }
+        p1.style.width = newP1Width + 'px';
+        p2.style.width = newP2Width + 'px';
+      });
+
+      document.addEventListener('mouseup', () => {
+        if (!dragging) return;
+        dragging = false;
+        resizer.classList.remove('dragging');
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+      });
+    });
   }
+  initCodeResizers();
 
-  document.getElementById('btn-browser-go')?.addEventListener('click', async () => {
-    const input = document.getElementById('browser-url-input');
-    if (!input || !input.value.trim()) return;
-    const result = await window.api.browserNavigate(input.value.trim());
-    if (result.ok) {
-      input.value = result.url;
-      await autoScreenshot();
-    } else {
-      window.showMessageModal(result.error || '导航失败', '错误', 'error');
+  // ---- Code 模式文件选择按钮 ----
+  document.getElementById('btn-code-attach-file')?.addEventListener('click', async () => {
+    const result = await window.api.openFileDialog({ multiple: true, title: '添加文件到上下文' });
+    if (result.ok && result.paths) {
+      for (const p of result.paths) {
+        const name = p.split(/[\\/]/).pop();
+        await addFileToCodeContext({ path: p, name: name, type: 'file' });
+      }
     }
-  });
-  document.getElementById('browser-url-input')?.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') {
-      document.getElementById('btn-browser-go')?.click();
-    }
-  });
-  document.getElementById('btn-browser-back')?.addEventListener('click', async () => {
-    await window.api.browserBack();
-    await autoScreenshot();
-  });
-  document.getElementById('btn-browser-forward')?.addEventListener('click', async () => {
-    await window.api.browserForward();
-    await autoScreenshot();
-  });
-  document.getElementById('btn-browser-refresh')?.addEventListener('click', async () => {
-    await window.api.browserRefresh();
-    await autoScreenshot();
-  });
-  document.getElementById('btn-browser-screenshot')?.addEventListener('click', async () => {
-    const result = await window.api.browserScreenshot();
-    if (result.ok) {
-      const view = document.getElementById('browser-screenshot-view');
-      if (view) view.innerHTML = '<img src="' + result.dataUrl + '" style="width:100%;height:auto;">';
-    }
-  });
-  document.getElementById('btn-close-browser')?.addEventListener('click', async () => {
-    await window.api.browserClose();
-    window.hideBrowserPanel();
   });
 
   // ==================== 面板最小化/恢复（索引贴） ====================
