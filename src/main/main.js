@@ -1491,6 +1491,197 @@ ipcMain.handle('fs:localSearch', async (_, dirPath, pattern, options = {}) => {
   });
 });
 
+// ---- IPC: searchInFiles (grep-style content search) ----
+// Searches file CONTENTS (not filenames). Supports multi-file/dir input,
+// filename glob filters, regex/text search, encoding specification,
+// and returns structured results with line/column/context info.
+ipcMain.handle('fs:searchInFiles', async (_, paths, pattern, options = {}) => {
+  return new Promise((resolve) => {
+    try {
+      if (!Array.isArray(paths) || paths.length === 0) {
+        resolve({ ok: false, error: 'paths 参数必须是非空数组' });
+        return;
+      }
+      if (!pattern || typeof pattern !== 'string') {
+        resolve({ ok: false, error: 'pattern 参数必须是非空字符串' });
+        return;
+      }
+
+      const {
+        isRegex = false,
+        ignoreCase = true,
+        include = '',
+        exclude = '',
+        encoding = '',
+        maxResults = 500,
+        contextLines = 0,
+        multiline = false
+      } = options;
+
+      // Build regex
+      let regex;
+      try {
+        const flags = (ignoreCase ? 'i' : '') + (multiline ? 'gm' : 'g');
+        const patternStr = isRegex ? pattern : pattern.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        regex = new RegExp(patternStr, flags);
+      } catch (e) {
+        resolve({ ok: false, error: `Invalid regex pattern: ${e.message}` });
+        return;
+      }
+
+      // Parse include/exclude globs
+      const includeGlobs = include ? include.split(',').map(s => s.trim()).filter(Boolean) : [];
+      const excludeGlobs = exclude ? exclude.split(',').map(s => s.trim()).filter(Boolean) : [];
+
+      // Helper: convert glob to regex (* -> .*, ? -> .)
+      function globToRegex(glob) {
+        const s = glob.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.');
+        return new RegExp('^' + s + '$', 'i');
+      }
+      function matchGlob(name, globs) {
+        if (globs.length === 0) return false;
+        return globs.some(g => globToRegex(g).test(name));
+      }
+
+      // Read file content with encoding (auto-detect via chardet, or specified)
+      function readFileContent(filePath) {
+        try {
+          if (encoding) {
+            const iconv = require('iconv-lite');
+            const buf = fs.readFileSync(filePath);
+            if (iconv.encodingExists(encoding)) return iconv.decode(buf, encoding);
+            return buf.toString('utf-8');
+          }
+          return readTextWithEncoding(filePath);
+        } catch { return null; }
+      }
+
+      // Binary file extensions to skip
+      const binaryExts = new Set([
+        'png','jpg','jpeg','gif','bmp','ico','webp','tiff','tif','heic','avif',
+        'pdf','zip','gz','tar','bz2','7z','rar','xz','cab','iso','dmg','pkg',
+        'exe','dll','so','dylib','bin','obj','lib','class','jar','war','ear','o','a',
+        'mp3','mp4','avi','mov','mkv','flv','wav','flac','ogg','aac','webm','m4a','m4v',
+        'docx','xlsx','pptx','doc','xls','ppt','odt','ods','odp','db','sqlite','sqlite3','mdb','accdb',
+        'ttf','otf','woff','woff2','eot','pfb','psd','ai','eps','indd','sketch','fig',
+        'node','wasm','pyc','pyo','class','swf','pak','dat','npy','npz','pickle','pkl'
+      ]);
+
+      const results = [];
+      let totalMatches = 0;
+      let filesScanned = 0;
+      let filesWithMatches = 0;
+      let truncated = false;
+
+      function searchInFile(filePath) {
+        if (truncated) return;
+        const ext = path.extname(filePath).slice(1).toLowerCase();
+        if (binaryExts.has(ext)) return;
+
+        const baseName = path.basename(filePath);
+        if (includeGlobs.length > 0 && !matchGlob(baseName, includeGlobs)) return;
+        if (excludeGlobs.length > 0 && matchGlob(baseName, excludeGlobs)) return;
+
+        filesScanned++;
+        const content = readFileContent(filePath);
+        if (content === null || content === undefined) return;
+
+        const lines = content.split(/\r?\n/);
+        const fileMatches = [];
+
+        if (multiline) {
+          regex.lastIndex = 0;
+          let m;
+          while ((m = regex.exec(content)) !== null) {
+            if (totalMatches >= maxResults) { truncated = true; break; }
+            const before = content.slice(0, m.index);
+            const lineNum = before.split('\n').length;
+            const lineStart = before.lastIndexOf('\n') + 1;
+            const lineEndIdx = content.indexOf('\n', m.index + m[0].length);
+            const lineText = content.slice(lineStart, lineEndIdx === -1 ? content.length : lineEndIdx);
+            fileMatches.push({
+              line: lineNum,
+              column: m.index - lineStart + 1,
+              text: lineText.length > 500 ? lineText.slice(0, 500) + '…' : lineText,
+              matchStart: m.index - lineStart,
+              matchEnd: m.index - lineStart + m[0].length,
+              contextBefore: contextLines > 0 ? lines.slice(Math.max(0, lineNum - 1 - contextLines), lineNum - 1) : [],
+              contextAfter: contextLines > 0 ? lines.slice(lineNum, lineNum + contextLines) : []
+            });
+            totalMatches++;
+            if (m.index === regex.lastIndex) regex.lastIndex++;
+          }
+        } else {
+          for (let i = 0; i < lines.length; i++) {
+            if (totalMatches >= maxResults) { truncated = true; break; }
+            const line = lines[i];
+            regex.lastIndex = 0;
+            const m = regex.exec(line);
+            if (m) {
+              fileMatches.push({
+                line: i + 1,
+                column: m.index + 1,
+                text: line.length > 500 ? line.slice(0, 500) + '…' : line,
+                matchStart: m.index,
+                matchEnd: m.index + m[0].length,
+                contextBefore: contextLines > 0 ? lines.slice(Math.max(0, i - contextLines), i) : [],
+                contextAfter: contextLines > 0 ? lines.slice(i + 1, i + 1 + contextLines) : []
+              });
+              totalMatches++;
+            }
+          }
+        }
+
+        if (fileMatches.length > 0) {
+          filesWithMatches++;
+          results.push({ file: filePath, matches: fileMatches });
+        }
+      }
+
+      function walk(dir) {
+        if (truncated) return;
+        try {
+          const entries = fs.readdirSync(dir, { withFileTypes: true });
+          for (const e of entries) {
+            if (truncated) break;
+            if (excludeGlobs.length > 0 && matchGlob(e.name, excludeGlobs)) continue;
+            const full = path.join(dir, e.name);
+            if (e.isDirectory()) walk(full);
+            else if (e.isFile()) searchInFile(full);
+          }
+        } catch { /* skip */ }
+      }
+
+      setImmediate(() => {
+        try {
+          for (const p of paths) {
+            if (truncated) break;
+            if (!p || typeof p !== 'string') continue;
+            try {
+              const stat = fs.statSync(p);
+              if (stat.isDirectory()) walk(p);
+              else if (stat.isFile()) searchInFile(p);
+            } catch { /* skip invalid path */ }
+          }
+          resolve({
+            ok: true,
+            matches: results,
+            totalMatches,
+            filesScanned,
+            filesWithMatches,
+            truncated,
+            message: `找到 ${totalMatches} 处匹配（${filesWithMatches} 个文件，扫描 ${filesScanned} 个文件）${truncated ? '（已截断）' : ''}`
+          });
+        } catch (e) {
+          resolve({ ok: false, error: e.message });
+        }
+      });
+    } catch (e) {
+      resolve({ ok: false, error: e.message });
+    }
+  });
+});
+
 // ---- IPC: Terminal Management ----
 const terminals = new Map();
 let terminalIdCounter = 0;

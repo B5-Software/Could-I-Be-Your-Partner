@@ -92,7 +92,7 @@ function _i18nFill(str, params) {
  */
 function i18nApplyToDOM(root) {
   const scope = root || document;
-  // textContent
+  // textContent via data-i18n
   scope.querySelectorAll('[data-i18n]').forEach(el => {
     const key = el.getAttribute('data-i18n');
     const val = t(key, el.textContent);
@@ -110,6 +110,208 @@ function i18nApplyToDOM(root) {
     const val = t(key, el.getAttribute('title'));
     if (val) el.setAttribute('title', val);
   });
+  // Selector-based translation (no data-i18n attributes needed)
+  i18nApplySelectors(scope);
+  i18nApplyTextMap(scope);
+}
+
+/**
+ * Selector → i18n key mapping for static HTML elements.
+ * Each entry: { sel: CSS selector, key: i18n key, attr: 'text'|'placeholder'|'title' }
+ */
+const I18N_SELECTOR_MAP = [
+  // ── Titlebar ──
+  { sel: '#mode-btn-chat span', key: 'ui.titlebar.chatMode' },
+  { sel: '#mode-btn-code span', key: 'ui.titlebar.codeMode' },
+  { sel: '#mode-btn-babe span', key: 'ui.titlebar.babeMode' },
+  { sel: '#mode-btn-chat', key: 'ui.titlebar.chatMode', attr: 'title' },
+  { sel: '#mode-btn-code', key: 'ui.titlebar.codeMode', attr: 'title' },
+  { sel: '#mode-btn-babe', key: 'ui.titlebar.babeMode', attr: 'title' },
+  { sel: '#titlebar-title', key: 'ui.titlebar.untitledConversation' },
+  { sel: '#btn-minimize', key: 'ui.titlebar.minimize', attr: 'title' },
+  { sel: '#btn-maximize', key: 'ui.titlebar.maximize', attr: 'title' },
+  { sel: '#btn-close', key: 'ui.titlebar.close', attr: 'title' },
+  { sel: '#titlebar-title', key: 'ui.titlebar.clickToEdit', attr: 'title' },
+  { sel: '#conn-btn-local', key: 'ui.titlebar.localMode', attr: 'title' },
+  { sel: '#conn-btn-remote', key: 'ui.titlebar.remoteMode', attr: 'title' },
+
+  // ── Sidebar ──
+  { sel: '.nav-item[data-page="chat"] span', key: 'ui.sidebar.chat' },
+  { sel: '.nav-item[data-page="code"] span', key: 'ui.sidebar.code' },
+  { sel: '.nav-item[data-page="babe"] span', key: 'ui.sidebar.babe' },
+  { sel: '.nav-item[data-page="history"] span', key: 'ui.sidebar.history' },
+  { sel: '.nav-item[data-page="code-history"] span', key: 'ui.sidebar.codeHistory' },
+  { sel: '.nav-item[data-page="babe-history"] span', key: 'ui.sidebar.babeHistory' },
+  { sel: '.nav-item[data-page="tools"] span', key: 'ui.sidebar.tools' },
+  { sel: '.nav-item[data-page="skills"] span', key: 'ui.sidebar.skills' },
+  { sel: '.nav-item[data-page="knowledge"] span', key: 'ui.sidebar.knowledge' },
+  { sel: '.nav-item[data-page="memory"] span', key: 'ui.sidebar.memory' },
+  { sel: '.nav-item[data-page="settings"] span', key: 'ui.sidebar.settings' },
+  { sel: '.nav-item[data-page="about"] span', key: 'ui.sidebar.about' },
+  // sidebar tooltips
+  { sel: '.nav-item[data-page="chat"]', key: 'ui.sidebar.chat', attr: 'title' },
+  { sel: '.nav-item[data-page="code"]', key: 'ui.sidebar.code', attr: 'title' },
+  { sel: '.nav-item[data-page="babe"]', key: 'ui.sidebar.babe', attr: 'title' },
+  { sel: '.nav-item[data-page="history"]', key: 'ui.sidebar.history', attr: 'title' },
+  { sel: '.nav-item[data-page="code-history"]', key: 'ui.sidebar.codeHistory', attr: 'title' },
+  { sel: '.nav-item[data-page="babe-history"]', key: 'ui.sidebar.babeHistory', attr: 'title' },
+  { sel: '.nav-item[data-page="tools"]', key: 'ui.sidebar.tools', attr: 'title' },
+  { sel: '.nav-item[data-page="skills"]', key: 'ui.sidebar.skills', attr: 'title' },
+  { sel: '.nav-item[data-page="knowledge"]', key: 'ui.sidebar.knowledge', attr: 'title' },
+  { sel: '.nav-item[data-page="memory"]', key: 'ui.sidebar.memory', attr: 'title' },
+  { sel: '.nav-item[data-page="settings"]', key: 'ui.sidebar.settings', attr: 'title' },
+  { sel: '.nav-item[data-page="about"]', key: 'ui.sidebar.about', attr: 'title' },
+
+  // ── Chat page ──
+  { sel: '#agent-status', key: 'ui.chat.standby' },
+  { sel: '#agent-tarot', key: 'ui.chat.tarotNotDrawn' },
+  { sel: '#btn-reoptimize-tools', key: 'ui.chat.reoptimizeTools', attr: 'title' },
+  { sel: '#btn-open-workspace', key: 'ui.chat.openWorkspace', attr: 'title' },
+  { sel: '#btn-new-chat', key: 'ui.chat.newChat', attr: 'title' },
+  { sel: '#btn-clear-chat', key: 'ui.chat.clearChat', attr: 'title' },
+  { sel: '.welcome-message h2', key: 'ui.chat.greeting' },
+  { sel: '.welcome-message p', key: 'ui.chat.greetingDesc' },
+  { sel: '.quick-action-btn[data-prompt*="新闻"]', key: 'ui.chat.searchNews' },
+  { sel: '.quick-action-btn[data-prompt*="图片"]', key: 'ui.chat.generateImage' },
+  { sel: '.quick-action-btn[data-prompt*="待办"]', key: 'ui.chat.todoList' },
+  { sel: '.quick-action-btn[data-prompt*="代码"]', key: 'ui.chat.writeCode' },
+  { sel: '#chat-input', key: 'ui.chat.inputPlaceholder', attr: 'placeholder' },
+  { sel: '#btn-attach', key: 'ui.chat.attachFile', attr: 'title' },
+  { sel: '#btn-camera', key: 'ui.chat.takePhoto', attr: 'title' },
+  { sel: '#btn-send', key: 'ui.chat.send', attr: 'title' },
+  { sel: '#btn-stop', key: 'ui.chat.stop', attr: 'title' },
+  { sel: '#todo-input', key: 'ui.chat.addTodoPlaceholder', attr: 'placeholder' },
+  { sel: '#approval-title', key: 'ui.chat.sensitiveConfirmTitle' },
+  { sel: '#btn-approve', key: 'ui.chat.approveExecution' },
+  { sel: '#btn-deny', key: 'ui.chat.deny' },
+
+  // ── Code page ──
+  { sel: '#btn-code-open-workspace', key: 'ui.code.openWorkspace', attr: 'title' },
+  { sel: '#code-workspace-path', key: 'ui.code.noWorkspaceSelected' },
+  { sel: '#btn-code-new-chat', key: 'ui.code.newChat', attr: 'title' },
+  { sel: '#btn-code-attach-file', key: 'ui.code.addFileToContext', attr: 'title' },
+  { sel: '#code-chat-input', key: 'ui.code.inputPlaceholder', attr: 'placeholder' },
+
+  // ── Babe page ──
+  { sel: '#babe-welcome h2', key: 'ui.babe.welcome' },
+  { sel: '#babe-welcome p', key: 'ui.babe.featureDesc' },
+  { sel: '#btn-babe-proactive', key: 'ui.babe.proactiveMessage', attr: 'title' },
+  { sel: '#btn-babe-new-chat', key: 'ui.chat.newChat', attr: 'title' },
+  { sel: '#babe-chat-input', key: 'ui.babe.inputPlaceholder', attr: 'placeholder' },
+
+  // ── Settings tabs ──
+  { sel: '.settings-tab[data-tab="ai"]', key: 'ui.settings.aiPersona' },
+  { sel: '.settings-tab[data-tab="babe"]', key: 'ui.settings.babeMode' },
+  { sel: '.settings-tab[data-tab="user"]', key: 'ui.settings.profile' },
+  { sel: '.settings-tab[data-tab="llm"]', key: 'ui.settings.llm' },
+  { sel: '.settings-tab[data-tab="usage"]', key: 'ui.settings.usage' },
+  { sel: '.settings-tab[data-tab="image"]', key: 'ui.settings.imageGen' },
+  { sel: '.settings-tab[data-tab="theme"]', key: 'ui.settings.theme' },
+  { sel: '.settings-tab[data-tab="language"]', key: 'ui.settings.language' },
+  { sel: '.settings-tab[data-tab="network"]', key: 'ui.settings.network' },
+  { sel: '.settings-tab[data-tab="entropy"]', key: 'ui.settings.entropy' },
+  { sel: '.settings-tab[data-tab="firmware"]', key: 'ui.settings.trngFirmware' },
+  { sel: '.settings-tab[data-tab="security"]', key: 'ui.settings.security' },
+  { sel: '.settings-tab[data-tab="mcp"]', key: 'ui.settings.mcp' },
+  { sel: '.settings-tab[data-tab="email"]', key: 'ui.settings.email' },
+  { sel: '.settings-tab[data-tab="webcontrol"]', key: 'ui.settings.webControl' },
+
+  // ── Language settings panel ──
+  { sel: '#setting-language option[value="zh-CN"]', key: 'ui.settings.zhCN' },
+  { sel: '#setting-language option[value="en"]', key: 'ui.settings.en' },
+  { sel: '#setting-language option[value="de"]', key: 'ui.settings.de' },
+  { sel: '#btn-save-language', key: 'ui.settings.saveSettings' },
+
+  // ── Tools page ──
+  { sel: '#page-tools h2, #tools-page h2', key: 'ui.tools.management' },
+  { sel: '#page-tools .page-desc, #tools-page .page-desc', key: 'ui.tools.enableDisableDesc' },
+
+  // ── History pages ──
+  { sel: '#page-history .empty-state', key: 'ui.history.noChatHistory' },
+  { sel: '#page-code-history .empty-state', key: 'ui.history.noCodeHistory' },
+  { sel: '#page-babe-history .empty-state', key: 'ui.history.noBabeHistory' },
+
+  // ── About page ──
+  { sel: '#page-about h2, #about-page h2', key: 'ui.about.title' },
+
+  // ── Modal dialogs ──
+  { sel: '#confirm-modal h3, #confirm-modal .modal-title', key: 'ui.modal.confirmAction' },
+  { sel: '#confirm-modal #btn-confirm, #btn-confirm', key: 'ui.modal.confirm' },
+  { sel: '#confirm-modal #btn-cancel, #btn-cancel', key: 'ui.modal.cancel' },
+  { sel: '#message-modal h3, #message-modal .modal-title', key: 'ui.modal.notice' },
+  { sel: '#message-modal #btn-msg-close, #btn-msg-close', key: 'ui.modal.close' },
+  { sel: '#image-preview-modal h3', key: 'ui.modal.imagePreview' },
+  { sel: '#image-preview-modal #btn-preview-close', key: 'ui.modal.close' },
+  { sel: '#camera-modal h3', key: 'ui.modal.capture' },
+  { sel: '#camera-modal #btn-camera-cancel', key: 'ui.modal.cancel' },
+  { sel: '#camera-modal #btn-camera-capture', key: 'ui.modal.capture' },
+  { sel: '#skill-modal #skill-modal-title', key: 'ui.modal.addSkill' },
+  { sel: '#skill-modal #btn-skill-cancel', key: 'ui.modal.cancel' },
+  { sel: '#skill-modal #btn-skill-save', key: 'ui.modal.save' },
+  { sel: '#memory-edit-modal h3', key: 'ui.modal.editMemory' },
+  { sel: '#memory-edit-modal #btn-memory-cancel', key: 'ui.modal.cancel' },
+  { sel: '#memory-edit-modal #btn-memory-save', key: 'ui.modal.save' },
+
+  // ── Remote banner ──
+  { sel: '#remote-conn-banner .remote-conn-text', key: 'ui.remote.notConnected' },
+  { sel: '.remote-conn-reconnect', key: 'ui.remote.reconnect' },
+];
+
+/**
+ * Apply translations via the selector map.
+ * @param {Element|Document} scope
+ */
+function i18nApplySelectors(scope) {
+  if (!I18N_SELECTOR_MAP || _i18nLang === 'zh-CN') return;
+  for (const entry of I18N_SELECTOR_MAP) {
+    let els;
+    try {
+      els = scope.querySelectorAll(entry.sel);
+    } catch (e) { continue; }
+    if (!els || els.length === 0) continue;
+    els.forEach(el => {
+      // Skip if element is inside a code block or has data-i18n-nooverride
+      if (el.closest('[data-i18n-nooverride]')) return;
+      // Get fallback from current element text/attribute
+      let fallback = '';
+      const attr = entry.attr || 'text';
+      if (attr === 'text') {
+        fallback = el.textContent;
+      } else {
+        fallback = el.getAttribute(attr) || '';
+      }
+      if (!fallback) return;
+      const translated = t(entry.key, fallback);
+      if (!translated || translated === fallback) return;
+      if (attr === 'text') {
+        // Preserve child elements (like <i> icons) — only replace text nodes
+        _i18nReplaceText(el, translated);
+      } else {
+        el.setAttribute(attr, translated);
+      }
+    });
+  }
+}
+
+/**
+ * Replace text content of an element while preserving child elements.
+ */
+function _i18nReplaceText(el, newText) {
+  // If element has no children, just set textContent
+  if (el.children.length === 0) {
+    el.textContent = newText;
+    return;
+  }
+  // If element has children, try to replace only the first text node
+  for (let i = 0; i < el.childNodes.length; i++) {
+    const node = el.childNodes[i];
+    if (node.nodeType === Node.TEXT_NODE && node.textContent.trim()) {
+      node.textContent = ' ' + newText + ' ';
+      return;
+    }
+  }
+  // Fallback: set textContent (may lose child elements)
+  el.textContent = newText;
 }
 
 // ── Translation dictionaries (populated by language files) ──
@@ -206,6 +408,83 @@ function i18nToolReturn(key, fallback, params) {
   return params ? _i18nFill(str, params) : str;
 }
 
+/**
+ * Walk all text nodes under `scope` and replace matching Chinese strings.
+ * Also scans placeholder, title, and value attributes.
+ * @param {Element|Document} scope
+ */
+function i18nApplyTextMap(scope) {
+  if (_i18nLang === 'zh-CN') return;
+  const textMap = _i18nDict._textMap;
+  if (!textMap) return;
+  const root = scope || document;
+
+  // 1. Walk text nodes
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode: function(node) {
+      // Skip script/style/textarea content
+      const parent = node.parentNode;
+      if (!parent) return NodeFilter.FILTER_REJECT;
+      const tag = parent.tagName;
+      if (tag === 'SCRIPT' || tag === 'STYLE') return NodeFilter.FILTER_REJECT;
+      if (!node.textContent || !node.textContent.trim()) return NodeFilter.FILTER_REJECT;
+      return NodeFilter.FILTER_ACCEPT;
+    }
+  });
+
+  const textNodes = [];
+  let current;
+  while (current = walker.nextNode()) {
+    textNodes.push(current);
+  }
+
+  textNodes.forEach(node => {
+    const original = node.textContent;
+    if (!original) return;
+    // Try exact match first
+    const trimmed = original.trim();
+    if (textMap[trimmed]) {
+      node.textContent = node.textContent.replace(trimmed, textMap[trimmed]);
+      return;
+    }
+    // Try partial replacement (for strings embedded in larger text)
+    let replaced = original;
+    let changed = false;
+    for (const [zh, tr] of Object.entries(textMap)) {
+      if (zh.length < 2) continue; // Skip very short strings
+      if (replaced.includes(zh)) {
+        replaced = replaced.split(zh).join(tr);
+        changed = true;
+      }
+    }
+    if (changed) node.textContent = replaced;
+  });
+
+  // 2. Scan attributes (placeholder, title, value)
+  root.querySelectorAll('[placeholder], [title]').forEach(el => {
+    ['placeholder', 'title'].forEach(attr => {
+      const val = el.getAttribute(attr);
+      if (!val) return;
+      const trimmed = val.trim();
+      if (textMap[trimmed]) {
+        el.setAttribute(attr, val.replace(trimmed, textMap[trimmed]));
+        return;
+      }
+      // Partial replacement
+      let replaced = val;
+      let changed = false;
+      for (const [zh, tr] of Object.entries(textMap)) {
+        if (zh.length < 2) continue;
+        if (replaced.includes(zh)) {
+          replaced = replaced.split(zh).join(tr);
+          changed = true;
+        }
+      }
+      if (changed) el.setAttribute(attr, replaced);
+    });
+  });
+}
+
 // Expose globally
 window.i18nInit = i18nInit;
 window.i18nSetLanguage = i18nSetLanguage;
@@ -218,4 +497,5 @@ window.i18nGetToolDesc = i18nGetToolDesc;
 window.i18nGetToolSchemaDesc = i18nGetToolSchemaDesc;
 window.i18nGetCategory = i18nGetCategory;
 window.i18nToolReturn = i18nToolReturn;
+window.i18nApplyTextMap = i18nApplyTextMap;
 window.I18N_SUPPORTED_LANGUAGES = I18N_SUPPORTED_LANGUAGES;

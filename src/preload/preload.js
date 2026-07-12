@@ -46,6 +46,7 @@ contextBridge.exposeInMainWorld('api', {
   makeDirectory: (p) => ipcRenderer.invoke('fs:makeDirectory', p),
   deleteDirectory: (p) => ipcRenderer.invoke('fs:deleteDirectory', p),
   localSearch: (dir, pattern, options) => ipcRenderer.invoke('fs:localSearch', dir, pattern, options),
+  searchInFiles: (paths, pattern, options) => ipcRenderer.invoke('fs:searchInFiles', paths, pattern, options),
   readFileBase64: (p) => ipcRenderer.invoke('fs:readFileBase64', p),
   saveUploadedFile: (name, data) => ipcRenderer.invoke('fs:saveUploadedFile', name, data),
 

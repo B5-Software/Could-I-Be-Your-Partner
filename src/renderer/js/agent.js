@@ -1685,6 +1685,42 @@ ${toolListSection}`;
         case 'memoryDelete': return normalizeOk(await window.api.memoryDelete(args.id));
         case 'memoryUpdate': return normalizeOk(await window.api.memoryUpdate(args.id, { content: args.content, tags: args.tags }), 'item');
         case 'localSearch': return await window.api.localSearch(args.directory, args.pattern, args.options || {});
+        case 'searchInFiles': {
+          // 路径数组归一化：支持单字符串或数组
+          let paths = args.paths;
+          if (!paths) {
+            return { ok: false, error: typeof i18nToolReturn === 'function' ? i18nToolReturn('param_required', 'paths 参数必填', { param: 'paths' }) : 'paths 参数必填' };
+          }
+          if (typeof paths === 'string') paths = [paths];
+          if (!Array.isArray(paths) || paths.length === 0) {
+            return { ok: false, error: typeof i18nToolReturn === 'function' ? i18nToolReturn('param_required', 'paths 参数必须是非空数组', { param: 'paths' }) : 'paths 参数必须是非空数组' };
+          }
+          // 工作目录相对路径 → 绝对路径
+          const ws = this.workspacePath;
+          paths = paths.map(p => {
+            if (!p) return p;
+            if ((p.length >= 2 && p[1] === ':') || p.startsWith('/') || p.startsWith('\\')) return p;
+            return ws ? (ws + (ws.endsWith('\\') ? '' : '\\') + p) : p;
+          });
+          const opts = args.options || {};
+          // 顶层参数也可直接传入（向后兼容：args.isRegex / args.include 等）
+          const mergedOpts = {
+            isRegex: args.isRegex ?? opts.isRegex,
+            ignoreCase: args.ignoreCase ?? opts.ignoreCase,
+            include: args.include ?? opts.include,
+            exclude: args.exclude ?? opts.exclude,
+            encoding: args.encoding ?? opts.encoding,
+            maxResults: args.maxResults ?? opts.maxResults,
+            contextLines: args.contextLines ?? opts.contextLines,
+            multiline: args.multiline ?? opts.multiline
+          };
+          const res = await window.api.searchInFiles(paths, args.pattern, mergedOpts);
+          if (res && res.ok) {
+            // 提供格式化摘要，便于 LLM 快速理解结果规模
+            res.summary = `共找到 ${res.totalMatches} 处匹配，分布在 ${res.filesWithMatches} 个文件中（扫描了 ${res.filesScanned} 个文件）${res.truncated ? '，结果已截断' : ''}`;
+          }
+          return res;
+        }
         case 'readFile': {
           const pathStr = args.path || '';
           const ext = pathStr.split('.').pop().toLowerCase();

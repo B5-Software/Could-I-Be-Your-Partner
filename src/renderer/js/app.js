@@ -502,8 +502,6 @@
         // 进入工具页时按当前模式自动定位到对应选项卡
         codeEditorModeFilter = currentMode || 'chat';
         loadToolsPage();
-      }
-      if (btn.dataset.page === 'tools') {
         // Wire up mode switcher buttons (Chat/Code) — only once
         if (!document.getElementById('tools-mode-switcher').dataset.wired) {
           document.getElementById('tools-mode-switcher').dataset.wired = '1';
@@ -524,6 +522,10 @@
       if (btn.dataset.page === 'code-history') loadCodeHistoryPage();
       if (btn.dataset.page === 'babe') initBabeAgent();
       if (btn.dataset.page === 'babe-history') loadBabeHistoryPage();
+      // i18n: re-apply translations to the newly activated page (after dynamic content loads)
+      if (typeof i18nApplyToDOM === 'function') {
+        setTimeout(() => i18nApplyToDOM(page), 100);
+      }
     });
   });
 
@@ -5646,6 +5648,9 @@
     if (typeof i18nInit === 'function') {
       i18nInit(s.language || 'zh-CN');
       i18nApplyToDOM();
+      // Re-apply after a delay to catch dynamically rendered content
+      setTimeout(() => i18nApplyToDOM(), 500);
+      setTimeout(() => i18nApplyToDOM(), 1500);
     }
     if (s.aiPersona) updatePersonaDisplay(s.aiPersona);
     // 启动时立即读取命运之牌可见性设置项并应用，避免未读设置导致 UI 不一致
@@ -7820,6 +7825,9 @@
             break;
           case 'tool-result':
             addBabeToolResult(data);
+            break;
+          case 'present-file':
+            addFilePresentCard(data);
             break;
           case 'affection-change':
             showBabeAffectionChange(data.delta, data.value);
