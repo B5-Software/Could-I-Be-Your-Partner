@@ -3436,14 +3436,15 @@
           ? (hasOptimized ? (active ? 'optimized-active' : 'optimized-muted') : '')
           : '';
         const mcpBadge = tool.serverName
-          ? `<span class="tool-badge-mcp" title="来自 MCP 服务器: ${escapeHtml(tool.serverName)}"><i class="fa-solid fa-plug-circle-bolt"></i> 动态 · ${escapeHtml(tool.serverName)}</span>`
+          ? `<span class="tool-badge-mcp" title="${typeof t === 'function' ? t('ui.tools.mcp_from', '来自 MCP 服务器: ', {}) : '来自 MCP 服务器: '}${escapeHtml(tool.serverName)}"><i class="fa-solid fa-plug-circle-bolt"></i> ${typeof t === 'function' ? t('ui.tools.mcp_dynamic', '动态', {}) : '动态'} · ${escapeHtml(tool.serverName)}</span>`
           : '';
+        const _desc = typeof i18nGetToolDesc === 'function' ? i18nGetToolDesc(tool.name, tool.desc) : tool.desc;
         return `
           <div class="tool-card ${enabled ? '' : 'disabled'} ${optimizeClass}" data-tool="${tool.name}">
             <div class="tool-icon"><i class="fa-solid ${tool.icon}"></i></div>
             <div class="tool-info">
               <div class="tool-name">${tool.name}${mcpBadge}</div>
-              <div class="tool-desc">${tool.desc}</div>
+              <div class="tool-desc">${_desc}</div>
             </div>
             <div class="tool-toggle">
               <div class="toggle-switch">
@@ -3461,11 +3462,11 @@
         <div class="tool-group ${isMcpCategory ? 'mcp-tool-group' : ''}" data-tool-category="${category}">
           <div class="tool-group-header">
             <div class="tool-group-meta">
-              <div class="tool-group-title">${isMcpCategory ? '<i class="fa-solid fa-plug-circle-bolt"></i> ' : ''}${category}</div>
-              <div class="tool-group-count"><span data-category-enabled>${enabledCount}</span> / ${tools.length} 已启用${mcpRefreshBtn}</div>
+              <div class="tool-group-title">${isMcpCategory ? '<i class="fa-solid fa-plug-circle-bolt"></i> ' : ''}${typeof i18nGetCategory === 'function' ? i18nGetCategory(category, category) : category}</div>
+              <div class="tool-group-count"><span data-category-enabled>${enabledCount}</span> / ${tools.length} ${typeof t === 'function' ? t('ui.tools.enabled', '已启用', {}) : '已启用'}${mcpRefreshBtn}</div>
             </div>
             <label class="tool-group-toggle">
-              <span>整组开关</span>
+              <span>${typeof t === 'function' ? t('ui.tools.group_toggle', '整组开关', {}) : '整组开关'}</span>
               <div class="toggle-switch">
                 <input type="checkbox" ${categoryChecked ? 'checked' : ''} data-tool-category-toggle="${category}">
                 <span class="toggle-slider"></span>
@@ -4234,6 +4235,9 @@
     const tarotVisibleEl = document.getElementById('setting-tarot-visible');
     if (tarotVisibleEl) tarotVisibleEl.checked = s.tarotVisible !== false;
     applyTarotVisibility(s.tarotVisible !== false);
+    // Language setting
+    const langSelect = document.getElementById('setting-language');
+    if (langSelect) langSelect.value = s.language || 'zh-CN';
     // Avatar migration: if stored as file path, convert to base64
     let aiAvatarData = persona.avatar || '';
     if (aiAvatarData && !aiAvatarData.startsWith('data:') && !aiAvatarData.startsWith('http')) {
@@ -5120,6 +5124,36 @@
     });
   }
 
+  // Language settings save button
+  const btnSaveLanguage = document.getElementById('btn-save-language');
+  if (btnSaveLanguage) {
+    btnSaveLanguage.addEventListener('click', async () => {
+      const langSelect = document.getElementById('setting-language');
+      const lang = langSelect ? langSelect.value : 'zh-CN';
+      const s = await window.api.getSettings();
+      s.language = lang;
+      await saveSettings(s);
+      if (typeof i18nSetLanguage === 'function') {
+        i18nSetLanguage(lang);
+        i18nApplyToDOM();
+      }
+      // Update agent instances so system prompts use the new language
+      if (typeof agent !== 'undefined' && agent && agent.settings) {
+        agent.settings.language = lang;
+        agent.contextManager?.setSystemPrompt(agent.getSystemPrompt());
+      }
+      if (typeof codeAgent !== 'undefined' && codeAgent && codeAgent.settings) {
+        codeAgent.settings.language = lang;
+        codeAgent.contextManager?.setSystemPrompt(codeAgent.getSystemPrompt());
+      }
+      if (typeof babeAgent !== 'undefined' && babeAgent && babeAgent.settings) {
+        babeAgent.settings.language = lang;
+        babeAgent.contextManager?.setSystemPrompt(babeAgent.getSystemPrompt());
+      }
+      window.showMessageModal?.(t('ui.language.saved', '语言设置已保存，部分文本将在下次启动后完全生效', {}), t('ui.language.notice', '提示', {}), 'info');
+    });
+  }
+
   // ---- Babe Mode Settings ----
   ['setting-babe-name', 'setting-babe-gender', 'setting-babe-age', 'setting-babe-personality', 'setting-babe-persona', 'setting-babe-user-nickname', 'setting-babe-proactive-interval', 'setting-babe-initial-affection'].forEach(id => {
     const el = document.getElementById(id);
@@ -5608,7 +5642,14 @@
   // ---- Init AI Persona Display ----
   async function initPersonaDisplay() {
     const s = await window.api.getSettings();
+    // i18n: initialize language from saved settings before any UI rendering
+    if (typeof i18nInit === 'function') {
+      i18nInit(s.language || 'zh-CN');
+      i18nApplyToDOM();
+    }
     if (s.aiPersona) updatePersonaDisplay(s.aiPersona);
+    // 启动时立即读取命运之牌可见性设置项并应用，避免未读设置导致 UI 不一致
+    applyTarotVisibility(s.tarotVisible !== false);
   }
   initPersonaDisplay();
 
@@ -7298,18 +7339,22 @@
     }
     if (codeAgent.running) return;
 
-    // 将附件内容拼入消息文本（截断到8000字符避免过长）
-    let fullText = text;
-    if (codeCurrentAttachments.length > 0) {
-      const snippets = codeCurrentAttachments.map(att => {
-        const truncated = (att.content || '').slice(0, 8000);
-        return '请查看文件 ' + att.name + '：\n```' + att.ext + '\n' + truncated + '\n```';
-      });
-      fullText = (fullText ? fullText + '\n\n' : '') + snippets.join('\n\n');
+    // 与 Chat 模式一致：UI 与历史只记录 [附件: 文件名]，文件内容通过 attachments 参数交给 Agent 内部处理
+    const attachments = codeCurrentAttachments.map(att => ({
+      name: att.name,
+      path: att.path,
+      isImage: att.isImage,
+      extractedText: att.content || ''
+    }));
+
+    let displayText = text;
+    if (attachments.length > 0) {
+      const names = attachments.map(a => a.name).join(', ');
+      displayText += (displayText ? '\n' : '') + `[附件: ${names}]`;
     }
 
-    addCodeMessage('user', fullText);
-    codeMessages.push({ role: 'user', content: fullText });
+    addCodeMessage('user', displayText);
+    codeMessages.push({ role: 'user', content: displayText });
     input.value = '';
     input.style.height = 'auto';
     clearCodeAttachments();
@@ -7321,8 +7366,8 @@
     btnStop?.classList.remove('hidden');
 
     try {
-      // Agent 类只有 sendMessage 方法（无 run 方法），与主聊天 agent 调用方式一致
-      await codeAgent.sendMessage(fullText);
+      // 与 Chat 模式一致：附件作为独立参数传入，sendMessage 内部负责构造 [附件: xxx] 摘要
+      await codeAgent.sendMessage(text, attachments);
     } catch (e) {
       addCodeMessage('system', `错误: ${e.message}`);
     } finally {

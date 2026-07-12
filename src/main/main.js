@@ -23,6 +23,7 @@ const APP_VERSION = app.getVersion();
 const gotSingleInstanceLock = app.requestSingleInstanceLock();
 if (!gotSingleInstanceLock) {
   app.quit();
+  process.exit(0);
 }
 app.on('second-instance', () => {
   if (mainWindow) {
@@ -1242,6 +1243,7 @@ let settings = loadJSON(settingsPath, {
     dailyImageDate: ''
   },
   theme: { mode: 'system', accentColor: '#4f8cff', backgroundColor: '#f5f7fa' },
+  language: 'zh-CN',
   tools: {},
   autoApproveSensitive: false,
   autoOptimizeToolSelection: false,

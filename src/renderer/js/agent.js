@@ -114,10 +114,10 @@ class Agent {
     // 统计匹配次数
     const count = content.split(oldString).length - 1;
     if (count === 0) {
-      return { ok: false, error: 'old_string 未在文件中找到匹配（请检查缩进、空格、换行符是否完全一致）' };
+      return { ok: false, error: typeof i18nToolReturn === 'function' ? i18nToolReturn('old_string_not_found', 'old_string 未在文件中找到匹配（请检查缩进、空格、换行符是否完全一致）') : 'old_string 未在文件中找到匹配（请检查缩进、空格、换行符是否完全一致）' };
     }
     if (!replaceAll && count > 1) {
-      return { ok: false, error: `old_string 在文件中出现 ${count} 次。请提供更长的上下文使其唯一匹配，或设置 replace_all=true` };
+      return { ok: false, error: typeof i18nToolReturn === 'function' ? i18nToolReturn('old_string_multiple', `old_string 在文件中出现 ${count} 次。请提供更长的上下文使其唯一匹配，或设置 replace_all=true`, { count }) : `old_string 在文件中出现 ${count} 次。请提供更长的上下文使其唯一匹配，或设置 replace_all=true` };
     }
     // 执行替换
     let newContent;
@@ -236,7 +236,7 @@ class Agent {
     const activeToolSet = new Set(this.getActiveToolNames ? this.getActiveToolNames() : allDefs.filter(tool => enabledTools[tool.name] !== false).map(t => t.name));
     const toolList = allDefs
       .filter(tool => activeToolSet.has(tool.name))
-      .map(tool => `${tool.name}: ${tool.desc}`)
+      .map(tool => `${tool.name}: ${typeof i18nGetToolDesc === 'function' ? i18nGetToolDesc(tool.name, tool.desc) : tool.desc}`)
       .join('\n- ');
     const toolListSection = toolList ? `\n\n当前可用工具：\n- ${toolList}` : '';
     const skillsSection = this.skillsCatalog.length > 0
@@ -263,7 +263,8 @@ class Agent {
 - 如果你需要频繁使用多种工具（复杂任务），可调用 __disableAutoOptimize 在本会话中禁用自动优化，让所有已启用工具都可用。
 - 触发时机：出现“工具不可用/能力不足/需要新类别能力/多次尝试失败”任一情况就触发，不要硬撑。`
       : (this.sessionAutoOptimizeDisabled ? '\n\n【工具优化已禁用】本会话中自动工具选择优化已被禁用，所有已启用工具均可用。' : '');
-    return `你是"Could I Be Your Partner"的AI Agent，你的名字叫${name}。${bio}
+    // Build the original Chinese prompt (unchanged — i18n fallback for zh-CN)
+    const _zhPrompt = `你是"Could I Be Your Partner"的AI Agent，你的名字叫${name}。${bio}
   当前对话标题：${convoTitle}
 你的人称代词是：${pronouns}
 你的性格：${personality}
@@ -402,6 +403,25 @@ class Agent {
 你使用简体中文回复。
 请勿在回复中使用任何emoji表情符号。
 ${customPrompt ? '\n用户自定义提示词:\n' + customPrompt : ''}${toolListSection}${skillsSection}${activeSkillsSection}${optimizationGuidance}${this.getGoalSteeringSection()}`;
+    // i18n: if a non-zh language is active, use the translated system prompt
+    if (typeof i18nGetSystemPrompt === 'function') {
+      const lang = this.settings?.language || 'zh-CN';
+      if (lang !== 'zh-CN') {
+        return i18nGetSystemPrompt('chat', _zhPrompt, {
+          name, bio, pronouns, personality, customPrompt,
+          convoTitle,
+          tarotCardStr: this.tarotCard ? `${this.tarotCard.name}${this.tarotCard.isReversed ? '(逆位)' : '(正位)'}(${this.tarotCard.nameEn}) - ${(this.tarotCard.isReversed ? this.tarotCard.meaningOfReversed : this.tarotCard.meaningOfUpright) || ''}` : '尚未抽取',
+          username, displayName, userBio, platform, osType,
+          currentDate: this.getLocalDateTimeString(),
+          systemDrive, homeDir, documentsDir, desktopDir,
+          workspacePath: this.workspacePath || '未创建',
+          workspaceTreeStr,
+          toolListSection, skillsSection, activeSkillsSection, optimizationGuidance,
+          goalSteeringSection: this.getGoalSteeringSection()
+        });
+      }
+    }
+    return _zhPrompt;
   }
 
   /**
@@ -435,11 +455,11 @@ ${customPrompt ? '\n用户自定义提示词:\n' + customPrompt : ''}${toolListS
     const activeToolSet = new Set(this.getActiveToolNames ? this.getActiveToolNames() : allDefs.filter(tool => enabledTools[tool.name] !== false).map(t => t.name));
     const toolList = allDefs
       .filter(tool => activeToolSet.has(tool.name))
-      .map(tool => `${tool.name}: ${tool.desc}`)
+      .map(tool => `${tool.name}: ${typeof i18nGetToolDesc === 'function' ? i18nGetToolDesc(tool.name, tool.desc) : tool.desc}`)
       .join('\n- ');
     const toolListSection = toolList ? `\n\n可用工具（仅应用内工具，不允许操作应用外的系统）：\n- ${toolList}` : '';
 
-    return `你是"${name}"，一个${age ? age + '的' : ''}${genderText}，正在和一个你叫"${userNickname}"的用户进行恋爱模式对话。
+    const _zhPrompt = `你是"${name}"，一个${age ? age + '的' : ''}${genderText}，正在和一个你叫"${userNickname}"的用户进行恋爱模式对话。
 
 你的人设背景：
 ${persona || '（未设定具体背景，请自行构建温柔贴心的形象）'}
@@ -463,6 +483,19 @@ ${affectionDesc}
 
 当前时间：${this.getLocalDateTimeString()}
 ${toolListSection}`;
+    // i18n: if a non-zh language is active, use the translated babe system prompt
+    if (typeof i18nGetSystemPrompt === 'function') {
+      const lang = this.settings?.language || 'zh-CN';
+      if (lang !== 'zh-CN') {
+        return i18nGetSystemPrompt('babe', _zhPrompt, {
+          name, genderText, age, persona, personality, userNickname,
+          affection, affectionLevel, affectionDesc,
+          currentDate: this.getLocalDateTimeString(),
+          toolListSection
+        });
+      }
+    }
+    return _zhPrompt;
   }
 
   /**
@@ -481,13 +514,13 @@ ${toolListSection}`;
     const activeToolSet = new Set(this.getActiveToolNames ? this.getActiveToolNames() : allDefs.filter(tool => enabledTools[tool.name] !== false).map(t => t.name));
     const toolList = allDefs
       .filter(tool => activeToolSet.has(tool.name))
-      .map(tool => `${tool.name}: ${tool.desc}`)
+      .map(tool => `${tool.name}: ${typeof i18nGetToolDesc === 'function' ? i18nGetToolDesc(tool.name, tool.desc) : tool.desc}`)
       .join('\n- ');
     const toolListSection = toolList ? `\n\n可用工具：\n- ${toolList}` : '';
 
     const convoTitle = this.conversationTitle || '未命名会话';
 
-    return `你是 CIBYP Code Agent，一个专业的编程助手。你的核心职责是协助用户在指定工作区内进行软件开发、代码阅读、重构、调试和文件管理。
+    const _zhPrompt = `你是 CIBYP Code Agent，一个专业的编程助手。你的核心职责是协助用户在指定工作区内进行软件开发、代码阅读、重构、调试和文件管理。
 
 # 环境信息
 - 用户名: ${username}
@@ -512,6 +545,18 @@ ${toolListSection}`;
 9. 不要使用 emoji 表情符号，不要使用"亲昵语气词"。使用简体中文回复，代码注释也用中文。
 10. Code 模式下所有已启用的工具始终可用（不进行自动优化），你可以自由使用任何列出的工具。
 ${toolListSection}`;
+    // i18n: if a non-zh language is active, use the translated code system prompt
+    if (typeof i18nGetSystemPrompt === 'function') {
+      const lang = this.settings?.language || 'zh-CN';
+      if (lang !== 'zh-CN') {
+        return i18nGetSystemPrompt('code', _zhPrompt, {
+          username, platform,
+          currentDate: this.getLocalDateTimeString(),
+          workspace, convoTitle, workspaceTreeStr, toolListSection
+        });
+      }
+    }
+    return _zhPrompt;
   }
 
   /**
@@ -1552,7 +1597,7 @@ ${toolListSection}`;
         if (this.settings?.autoOptimizeToolSelection && !name.startsWith('__')) {
           await this.optimizeToolsForConversation(this.getLatestUserMessageText(), `工具 ${name} 被禁用，需要重优化`);
         }
-        return { ok: false, error: '该工具已禁用' };
+        return { ok: false, error: typeof i18nToolReturn === 'function' ? i18nToolReturn('tool_disabled', '该工具已禁用') : '该工具已禁用' };
       }
       switch (name) {
         case 'getTarot': {
@@ -1563,7 +1608,7 @@ ${toolListSection}`;
         case 'runSubAgent': return await this.runSubAgent(args);
         case 'generateImage': {
           if (!this.workspacePath) {
-            return { ok: false, error: '未设置工作区路径' };
+            return { ok: false, error: typeof i18nToolReturn === 'function' ? i18nToolReturn('no_workspace', '未设置工作区路径') : '未设置工作区路径' };
           }
           return await window.api.generateImage(args.prompt, this.workspacePath);
         }
@@ -1674,7 +1719,7 @@ ${toolListSection}`;
           if (args.old_string !== undefined && args.new_string !== undefined) {
             return await this._applyStringReplace(args.path, args.old_string, args.new_string, args.replace_all || false);
           }
-          return { ok: false, error: '需要提供 content（全量覆写）或 old_string+new_string（字符串替换）' };
+          return { ok: false, error: typeof i18nToolReturn === 'function' ? i18nToolReturn('need_content_or_replace', '需要提供 content（全量覆写）或 old_string+new_string（字符串替换）') : '需要提供 content（全量覆写）或 old_string+new_string（字符串替换）' };
         }
         case 'multiEditFile': {
           if (!Array.isArray(args.edits) || args.edits.length === 0) {
@@ -1689,13 +1734,13 @@ ${toolListSection}`;
           for (let i = 0; i < args.edits.length; i++) {
             const edit = args.edits[i];
             if (edit.old_string === undefined || edit.new_string === undefined) {
-              return { ok: false, error: `第 ${i + 1} 个编辑缺少 old_string 或 new_string` };
+              return { ok: false, error: typeof i18nToolReturn === 'function' ? i18nToolReturn('edit_missing_params', `第 ${i + 1} 个编辑缺少 old_string 或 new_string`, { index: i + 1 }) : `第 ${i + 1} 个编辑缺少 old_string 或 new_string` };
             }
             const count = edit.replace_all
               ? content.split(edit.old_string).length - 1
               : content.includes(edit.old_string) ? 1 : 0;
             if (count === 0) {
-              return { ok: false, error: `第 ${i + 1} 个编辑的 old_string 未在文件中找到` };
+              return { ok: false, error: typeof i18nToolReturn === 'function' ? i18nToolReturn('edit_not_found', `第 ${i + 1} 个编辑的 old_string 未在文件中找到`, { index: i + 1 }) : `第 ${i + 1} 个编辑的 old_string 未在文件中找到` };
             }
             if (!edit.replace_all && count > 1) {
               return { ok: false, error: `第 ${i + 1} 个编辑的 old_string 在文件中出现 ${count} 次，请提供更长的上下文或设置 replace_all` };
@@ -1720,7 +1765,7 @@ ${toolListSection}`;
           // 读取文件验证存在性
           const readRes = await window.api.readFile(fullPath);
           if (!readRes.ok) {
-            return { ok: false, error: `文件不存在: ${relPath}` };
+            return { ok: false, error: typeof i18nToolReturn === 'function' ? i18nToolReturn('file_not_exists', `文件不存在: ${relPath}`, { path: relPath }) : `文件不存在: ${relPath}` };
           }
           const filename = relPath.split(/[\\/]/).pop();
           const fileSize = readRes.content ? readRes.content.length : 0;
@@ -1819,7 +1864,7 @@ ${toolListSection}`;
           const skillId = String(args.skillId || '').trim();
           const scriptName = String(args.scriptName || '').trim();
           const skill = this.skillsCatalog.find(s => String(s?.id) === skillId);
-          if (!skill) return { ok: false, error: '技能不存在，请先调用listSkills确认skillId' };
+          if (!skill) return { ok: false, error: typeof i18nToolReturn === 'function' ? i18nToolReturn('skill_not_exists', '技能不存在，请先调用listSkills确认skillId') : '技能不存在，请先调用listSkills确认skillId' };
           const scriptList = Array.isArray(skill?.scripts) ? skill.scripts : [];
           const scriptItem = scriptList.find(item => {
             const nameText = String(item?.name || item || '');
@@ -1827,7 +1872,7 @@ ${toolListSection}`;
           });
           const scriptPath = String(scriptItem?.path || scriptItem || '');
           if (!scriptPath || !scriptPath.toLowerCase().endsWith('.js')) {
-            return { ok: false, error: '仅支持运行 .js 技能脚本' };
+            return { ok: false, error: typeof i18nToolReturn === 'function' ? i18nToolReturn('js_only_skill', '仅支持运行 .js 技能脚本') : '仅支持运行 .js 技能脚本' };
           }
           const readRes = await window.api.readFile(scriptPath);
           if (!readRes?.ok) return readRes;
@@ -1847,8 +1892,8 @@ ${toolListSection}`;
           await this.refreshSkillsCatalog();
           const skillId = String(args.skillId || '').trim();
           const skill = this.skillsCatalog.find(s => String(s?.id) === skillId);
-          if (!skill) return { ok: false, error: '技能不存在' };
-          if (!skill.prompt) return { ok: false, error: '该技能没有 prompt 内容' };
+          if (!skill) return { ok: false, error: typeof i18nToolReturn === 'function' ? i18nToolReturn('skill_not_exists', '技能不存在') : '技能不存在' };
+          if (!skill.prompt) return { ok: false, error: typeof i18nToolReturn === 'function' ? i18nToolReturn('skill_no_prompt', '该技能没有 prompt 内容') : '该技能没有 prompt 内容' };
           if (!Array.isArray(this.activeSkills)) this.activeSkills = [];
           // Avoid duplicate activation
           if (!this.activeSkills.find(s => s.id === skill.id)) {
@@ -1912,7 +1957,7 @@ ${toolListSection}`;
         }
         case 'exportCanvasSVG': {
           if (!this.workspacePath) {
-            return { ok: false, error: '未设置工作区路径' };
+            return { ok: false, error: typeof i18nToolReturn === 'function' ? i18nToolReturn('no_workspace', '未设置工作区路径') : '未设置工作区路径' };
           }
           return window.exportCanvasSVG ? window.exportCanvasSVG(args.filename || 'canvas.svg', this.workspacePath) : { ok: false, error: '画布功能未初始化' };
         }
@@ -1922,7 +1967,7 @@ ${toolListSection}`;
         }
         case 'downloadFile': {
           if (!this.workspacePath) {
-            return { ok: false, error: '未设置工作区路径' };
+            return { ok: false, error: typeof i18nToolReturn === 'function' ? i18nToolReturn('no_workspace', '未设置工作区路径') : '未设置工作区路径' };
           }
           return await window.api.downloadFile(args.url, args.filename, this.workspacePath);
         }
@@ -1930,7 +1975,7 @@ ${toolListSection}`;
         case 'inviteGame': {
           // Web控制模式下拒绝游戏
           if (this._fromWeb) {
-            return { ok: false, error: '独立窗口小游戏在Web控制模式下不可用，请在主机上操作' };
+            return { ok: false, error: typeof i18nToolReturn === 'function' ? i18nToolReturn('game_window_unavailable', '独立窗口小游戏在Web控制模式下不可用，请在主机上操作') : '独立窗口小游戏在Web控制模式下不可用，请在主机上操作' };
           }
           const invitation = await window.showGameInvitation(args.game, args.message, args.suggestedAgents);
           if (!invitation.accepted) {
@@ -2044,7 +2089,7 @@ ${toolListSection}`;
         case 'browserNavigate': {
           // 校验 url，避免 undefined 导致 Electron 报错
           const navUrl = args?.url || args?.target || '';
-          if (!navUrl) return { ok: false, error: 'browserNavigate 缺少 url 参数' };
+          if (!navUrl) return { ok: false, error: typeof i18nToolReturn === 'function' ? i18nToolReturn('browser_no_url', 'browserNavigate 缺少 url 参数') : 'browserNavigate 缺少 url 参数' };
           const r = await window.api.browserNavigate(navUrl, args?.waitUntil, this.workspacePath);
           return r;
         }
@@ -2123,14 +2168,14 @@ ${toolListSection}`;
               theme.backgroundColor = found.bg;
               changes.push(`配色→${args.schemeName}`);
             } else {
-              return { ok: false, error: `未找到配色方案: ${args.schemeName}` };
+              return { ok: false, error: typeof i18nToolReturn === 'function' ? i18nToolReturn('scheme_not_found', `未找到配色方案: ${args.schemeName}`, { name: args.schemeName }) : `未找到配色方案: ${args.schemeName}` };
             }
           } else if (args.accentColor && /^#[0-9a-fA-F]{6}$/.test(args.accentColor)) {
             theme.accentColor = args.accentColor;
             changes.push(`强调色→${args.accentColor}`);
           }
           if (changes.length === 0) {
-            return { ok: false, error: '未提供任何可应用的更改（mode/accentColor/schemeName 至少一个）' };
+            return { ok: false, error: typeof i18nToolReturn === 'function' ? i18nToolReturn('no_changes_provided', '未提供任何可应用的更改（mode/accentColor/schemeName 至少一个）') : '未提供任何可应用的更改（mode/accentColor/schemeName 至少一个）' };
           }
           const merged = { ...current, theme };
           await window.api.setSettings(merged);
@@ -2152,7 +2197,7 @@ ${toolListSection}`;
           if (this.settings?.autoOptimizeToolSelection && !name.startsWith('__')) {
             await this.optimizeToolsForConversation(this.getLatestUserMessageText(), `工具 ${name} 不在当前集合，触发重优化`);
           }
-          return { ok: false, error: `未知工具: ${name}` };
+          return { ok: false, error: typeof i18nToolReturn === 'function' ? i18nToolReturn('unknown_tool', `未知工具: ${name}`, { name }) : `未知工具: ${name}` };
         }
       }
     } catch (e) {
@@ -2174,11 +2219,11 @@ ${toolListSection}`;
       case 'toggle':
         const item = this.todoItems.find(t => t.id === args.id);
         if (item) { item.done = !item.done; if (this.onTodoUpdate) this.onTodoUpdate(this.todoItems); return { ok: true, done: item.done }; }
-        return { ok: false, error: '未找到该待办事项' };
+        return { ok: false, error: typeof i18nToolReturn === 'function' ? i18nToolReturn('todo_not_found', '未找到该待办事项') : '未找到该待办事项' };
       case 'list':
         return { ok: true, items: this.todoItems };
       default:
-        return { ok: false, error: '未知操作' };
+        return { ok: false, error: typeof i18nToolReturn === 'function' ? i18nToolReturn('unknown_action', '未知操作') : '未知操作' };
     }
   }
 
@@ -2197,7 +2242,7 @@ ${toolListSection}`;
     ]);
     try {
       const task = String(args?.task || '').trim();
-      if (!task) return { ok: false, error: 'task 不能为空' };
+      if (!task) return { ok: false, error: typeof i18nToolReturn === 'function' ? i18nToolReturn('task_empty', 'task 不能为空') : 'task 不能为空' };
 
       // Build tool whitelist
       let allowedTools;
@@ -2344,7 +2389,7 @@ ${tarotLine}
       case 'flyingFlower': return await this.playFlyingFlower(agentCount);
       case 'sanguosha': return await this.playSanguosha(agentCount);
       case 'undercover': return await this.playUndercover(agentCount);
-      default: return { ok: false, error: `未知游戏: ${game}` };
+      default: return { ok: false, error: typeof i18nToolReturn === 'function' ? i18nToolReturn('unknown_game', `未知游戏: ${game}`, { game }) : `未知游戏: ${game}` };
     }
   }
 
