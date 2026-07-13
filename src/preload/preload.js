@@ -147,6 +147,18 @@ contextBridge.exposeInMainWorld('api', {
   pwTestLaunch: (settings) => ipcRenderer.invoke('pw:testLaunch', settings),
   pwCloseBrowser: () => ipcRenderer.invoke('pw:closeBrowser'),
 
+  // Computer Use Protocol (CUP)
+  computerScreenshot: (workspacePath) => ipcRenderer.invoke('computer:screenshot', workspacePath),
+  computerMouseMove: (x, y) => ipcRenderer.invoke('computer:mouseMove', x, y),
+  computerClick: (button, x, y, doubleClick) => ipcRenderer.invoke('computer:click', button, x, y, doubleClick),
+  computerDrag: (startX, startY, endX, endY) => ipcRenderer.invoke('computer:drag', startX, startY, endX, endY),
+  computerType: (text) => ipcRenderer.invoke('computer:type', text),
+  computerKey: (key) => ipcRenderer.invoke('computer:key', key),
+  computerScroll: (x, y, direction, amount) => ipcRenderer.invoke('computer:scroll', x, y, direction, amount),
+  computerCursorPosition: () => ipcRenderer.invoke('computer:cursorPosition'),
+  computerWait: (duration) => ipcRenderer.invoke('computer:wait', duration),
+  computerGetScreenSize: () => ipcRenderer.invoke('computer:getScreenSize'),
+
   // LLM
   chatLLM: (messages, options) => ipcRenderer.invoke('llm:chat', messages, options),
   chatLLMStream: (messages, options) => ipcRenderer.invoke('llm:chatStream', messages, options),

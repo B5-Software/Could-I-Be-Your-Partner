@@ -364,7 +364,9 @@ const EN_DICT = {
     spreadsheetExportCSV: 'Export as CSV',
     spreadsheetImportCSV: 'Import data from CSV',
     spreadsheetImportFile: 'Import from file (xlsx/ods/csv)',
-    spreadsheetExportFile: 'Export to file (xlsx/ods/csv)'
+    spreadsheetExportFile: 'Export to file (xlsx/ods/csv)',
+    // ── Computer Use Protocol ──
+    computer: 'Computer Use Protocol (screenshot/mouse/keyboard/scroll)'
   },
 
   // ── Categories ──
@@ -392,7 +394,8 @@ const EN_DICT = {
     'MCP': 'MCP',
     '交互工具': 'Interactive',
     '网络工具': 'Network',
-    'Office-Word': 'Office-Word'
+    'Office-Word': 'Office-Word',
+    '电脑控制': 'Computer Control'
   },
 
   // ── System Prompts (functions that receive a params object) ──

@@ -2220,6 +2220,57 @@ ${toolListSection}`;
           }
           return { ok: true, applied: changes.join('，'), theme };
         }
+        // ---- Computer Use Protocol ----
+        case 'computer': {
+          const action = args.action;
+          if (!action) return { ok: false, error: 'missing action parameter' };
+          const coord = args.coordinate;
+          switch (action) {
+            case 'screenshot':
+              return await window.api.computerScreenshot(this.workspacePath);
+            case 'mouse_move': {
+              if (!Array.isArray(coord) || coord.length < 2)
+                return { ok: false, error: 'coordinate [x,y] required for mouse_move' };
+              return await window.api.computerMouseMove(coord[0], coord[1]);
+            }
+            case 'left_click':
+            case 'right_click':
+            case 'middle_click':
+            case 'double_click': {
+              const button = action === 'right_click' ? 'right'
+                          : action === 'middle_click' ? 'middle' : 'left';
+              const dc = action === 'double_click';
+              return await window.api.computerClick(button, coord?.[0], coord?.[1], dc);
+            }
+            case 'left_click_drag': {
+              const sc = args.start_coordinate;
+              if (!Array.isArray(sc) || !Array.isArray(coord))
+                return { ok: false, error: 'start_coordinate and coordinate [x,y] required for left_click_drag' };
+              return await window.api.computerDrag(sc[0], sc[1], coord[0], coord[1]);
+            }
+            case 'type': {
+              if (!args.text) return { ok: false, error: 'text parameter required for type' };
+              return await window.api.computerType(args.text);
+            }
+            case 'key': {
+              if (!args.key) return { ok: false, error: 'key parameter required for key action' };
+              return await window.api.computerKey(args.key);
+            }
+            case 'scroll': {
+              if (!args.scroll_direction)
+                return { ok: false, error: 'scroll_direction required for scroll' };
+              return await window.api.computerScroll(coord?.[0], coord?.[1], args.scroll_direction, args.scroll_amount);
+            }
+            case 'wait':
+              return await window.api.computerWait(args.duration || 1);
+            case 'cursor_position':
+              return await window.api.computerCursorPosition();
+            case 'get_screen_size':
+              return await window.api.computerGetScreenSize();
+            default:
+              return { ok: false, error: `Unknown computer action: ${action}` };
+          }
+        }
         default: {
           // MCP 动态工具路由: mcp__<serverName>__<toolName>
           if (name.startsWith('mcp__')) {

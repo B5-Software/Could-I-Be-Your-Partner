@@ -394,8 +394,10 @@ _tools: {
   spreadsheetExportCSV: 'Als CSV exportieren',
   spreadsheetImportCSV: 'Daten aus CSV importieren',
   spreadsheetImportFile: 'Aus Datei importieren (xlsx/ods/csv)',
-  spreadsheetExportFile: 'In Datei exportieren (xlsx/ods/csv)'
-},
+    spreadsheetExportFile: 'In Datei exportieren (xlsx/ods/csv)',
+    // ── Computer Use Protocol ──
+    computer: 'Computer Use Protocol (Screenshot/Maus/Tastatur/Scrollen)'
+  },
 
 // ── Categories ───────────────────────────────────────────────────────────────
 _categories: {
@@ -422,7 +424,8 @@ _categories: {
   'MCP': 'MCP',
   '交互工具': 'Interaktiv',
   '网络工具': 'Netzwerk',
-  'Office-Word': 'Office-Word'
+  'Office-Word': 'Office-Word',
+  '电脑控制': 'Computersteuerung'
 },
 
 // ── System Prompts ──────────────────────────────────────────────────────────

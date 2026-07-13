@@ -326,6 +326,8 @@ const TOOL_DEFINITIONS = [
   { name: 'sleep', desc: '休眠等待指定毫秒', icon: 'fa-moon', category: '效率', sensitive: false },
   // ---- 外观主题 ----
   { name: 'adjustAppearance', desc: '调整应用外观：深浅色模式、强调色、配色方案', icon: 'fa-palette', category: '系统', sensitive: false },
+  // ---- Computer Use Protocol ----
+  { name: 'computer', desc: '电脑控制（截屏/鼠标/键盘/滚动）', icon: 'fa-desktop', category: '电脑控制', sensitive: true },
 ];
 
 // Dangerous command keywords for different platforms/shells
@@ -491,6 +493,8 @@ function getToolSchemas(enabledTools, mode) {
     goalComplete: { type: 'function', function: { name: 'goalComplete', description: '标记当前目标为已完成。仅在目标的所有验收标准都满足时调用。', parameters: { type: 'object', properties: { summary: { type: 'string', description: '完成总结：做了什么、结果如何' } }, required: ['summary'] } } },
     sleep: { type: 'function', function: { name: 'sleep', description: '让agent休眠等待指定的毫秒数。用于等待异步操作完成、轮询间隔等场景。最大60秒。', parameters: { type: 'object', properties: { ms: { type: 'number', description: '等待毫秒数(1-60000)' } }, required: ['ms'] } } },
     adjustAppearance: { type: 'function', function: { name: 'adjustAppearance', description: '调整应用外观主题。可切换深浅色模式、设置强调色（HEX）、或应用预设配色方案。省略的字段保持当前值不变。调用后立即生效并持久化保存。', parameters: { type: 'object', properties: { mode: { type: 'string', enum: ['light', 'dark', 'system'], description: '深浅色模式：light=浅色，dark=深色，system=跟随系统' }, accentColor: { type: 'string', description: '强调色HEX值，如 #4f8cff。仅在需要更改强调色时传入。' }, schemeName: { type: 'string', description: '预设配色方案名（优先级高于accentColor）。可取值：清新蓝/自然绿/海洋/珊瑚/青碧/紫雾/粉黛/玫瑰/浅海/薄荷/柔金/石榴/湖光/蔚蓝/薰衣/暖橙/清绿/晴空/淡紫/薄荷冰/柠檬/杏橙/清澈蓝/樱红/嫩绿/紫晶/青松/焦糖/赤霞/海风/冷灰/暗夜玫瑰/深湖/深紫/莓夜/深海蓝/松夜/暗金/赤夜/夜航/深林/暖夜/夜紫/夜绯/深蓝/墨青/深柠/炉火/午夜蓝/暗樱/深绿松/翠夜/夜晶/深松/暗橙/暗红/夜石/深灰/琥珀夜/绯红夜/极夜蓝/深绿/夜紫罗。' } }, required: [] } } },
+    // ---- Computer Use Protocol ----
+    computer: { type: 'function', function: { name: 'computer', description: 'Computer Use Protocol - 控制电脑桌面：截屏、移动鼠标、点击、输入文本、按键、滚动等。先调用 action=screenshot 截屏查看当前屏幕状态，再根据屏幕内容决定下一步操作。坐标原点在屏幕左上角。', parameters: { type: 'object', properties: { action: { type: 'string', enum: ['screenshot', 'mouse_move', 'left_click', 'right_click', 'double_click', 'middle_click', 'left_click_drag', 'type', 'key', 'scroll', 'wait', 'cursor_position', 'get_screen_size'], description: '要执行的操作：screenshot=截屏, mouse_move=移动鼠标, left_click/right_click/double_click/middle_click=鼠标点击, left_click_drag=拖拽, type=输入文本, key=按键, scroll=滚动, wait=等待, cursor_position=获取鼠标位置, get_screen_size=获取屏幕尺寸' }, coordinate: { type: 'array', items: { type: 'number' }, description: '目标坐标 [x, y]（像素）。mouse_move/left_click/right_click/double_click/middle_click/scroll 需要此参数' }, start_coordinate: { type: 'array', items: { type: 'number' }, description: '拖拽起始坐标 [x, y]（仅 left_click_drag 使用）' }, text: { type: 'string', description: '要输入的文本（仅 type 操作使用）' }, key: { type: 'string', description: '按键名称或组合键，用+连接。如 Return, Tab, Escape, ctrl+c, alt+Tab, shift+End, win+d。支持单字符如 a/b/c 或功能键 F1-F12' }, scroll_direction: { type: 'string', enum: ['up', 'down', 'left', 'right'], description: '滚动方向（仅 scroll 操作使用）' }, scroll_amount: { type: 'number', description: '滚动量，默认3（仅 scroll 操作使用）' }, duration: { type: 'number', description: '等待秒数（仅 wait 操作使用，范围0.1-10）' } }, required: ['action'] } } },
   };
 
   const result = Object.keys(schemas)

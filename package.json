@@ -1,6 +1,6 @@
 {
   "name": "could-i-be-your-partner",
-  "version": "1.4.0-alpha.12",
+  "version": "1.4.0-alpha.13",
   "description": "全自动AI Agent，帮助完成一切任务",
   "license": "GPL-3.0-or-later",
   "main": "src/main/main.js",
@@ -73,6 +73,7 @@
     "node-gyp": "^12.2.0"
   },
   "dependencies": {
+    "@nut-tree-fork/nut-js": "^4.2.6",
     "adm-zip": "^0.5.18",
     "bcryptjs": "^3.0.3",
     "better-sqlite3": "^12.11.1",

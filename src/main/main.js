@@ -1749,6 +1749,191 @@ ipcMain.handle('clipboard:write', (_, text) => {
   }
 });
 
+// ---- Computer Use Protocol (CUP) ----
+// Lazy-loaded nut-js for mouse/keyboard control
+let _nutLoaded = null;
+async function _getNut() {
+  if (_nutLoaded === null) {
+    try {
+      const nut = require('@nut-tree-fork/nut-js');
+      _nutLoaded = nut;
+    } catch (e) {
+      _nutLoaded = false;
+    }
+  }
+  return _nutLoaded;
+}
+
+// Key name mapping: CUP key names → nut-js Key enum
+function _cupKeyToNutKey(keyStr) {
+  const map = {
+    'return': 'Enter', 'enter': 'Enter', 'return': 'Enter',
+    'tab': 'Tab', 'space': 'Space', 'backspace': 'Backspace',
+    'escape': 'Escape', 'esc': 'Escape', 'delete': 'Delete',
+    'up': 'Up', 'down': 'Down', 'left': 'Left', 'right': 'Right',
+    'home': 'Home', 'end': 'End', 'pageup': 'PageUp', 'pagedown': 'PageDown',
+    'capslock': 'CapsLock', 'insert': 'Insert',
+    'f1': 'F1', 'f2': 'F2', 'f3': 'F3', 'f4': 'F4', 'f5': 'F5', 'f6': 'F6',
+    'f7': 'F7', 'f8': 'F8', 'f9': 'F9', 'f10': 'F10', 'f11': 'F11', 'f12': 'F12',
+    'ctrl': 'LeftControl', 'control': 'LeftControl',
+    'alt': 'LeftAlt', 'option': 'LeftAlt',
+    'shift': 'LeftShift', 'cmd': 'LeftSuper', 'meta': 'LeftSuper', 'win': 'LeftSuper',
+    'super': 'LeftSuper'
+  };
+  return map[keyStr.toLowerCase()] || keyStr;
+}
+
+ipcMain.handle('computer:screenshot', async (_, workspacePath) => {
+  try {
+    const sources = await require('electron').desktopCapturer.getSources({
+      types: ['screen'], thumbnailSize: { width: 1920, height: 1080 }
+    });
+    if (sources.length > 0) {
+      const targetDir = workspacePath && fs.existsSync(workspacePath) ? workspacePath : imagesDir;
+      const imgPath = path.join(targetDir, `computer_screenshot_${Date.now()}.png`);
+      fs.writeFileSync(imgPath, sources[0].thumbnail.toPNG());
+      return { ok: true, path: imgPath };
+    }
+    return { ok: false, error: '无法截取屏幕' };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('computer:mouseMove', async (_, x, y) => {
+  const nut = await _getNut();
+  if (!nut) return { ok: false, error: 'nut-js not available' };
+  try {
+    await nut.mouse.setPosition(new nut.Point(Math.round(x), Math.round(y)));
+    return { ok: true, x: Math.round(x), y: Math.round(y) };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('computer:click', async (_, button, x, y, doubleClick) => {
+  const nut = await _getNut();
+  if (!nut) return { ok: false, error: 'nut-js not available' };
+  try {
+    if (x !== undefined && y !== undefined) {
+      await nut.mouse.setPosition(new nut.Point(Math.round(x), Math.round(y)));
+    }
+    const btn = button === 'right' ? nut.Button.RIGHT
+              : button === 'middle' ? nut.Button.MIDDLE
+              : nut.Button.LEFT;
+    await nut.mouse.click(btn);
+    if (doubleClick) await nut.mouse.click(btn);
+    return { ok: true, button: button || 'left', doubleClick: !!doubleClick };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('computer:drag', async (_, startX, startY, endX, endY) => {
+  const nut = await _getNut();
+  if (!nut) return { ok: false, error: 'nut-js not available' };
+  try {
+    await nut.mouse.setPosition(new nut.Point(Math.round(startX), Math.round(startY)));
+    await nut.mouse.pressButton(nut.Button.LEFT);
+    // Move in steps for smooth drag
+    const steps = 10;
+    for (let i = 1; i <= steps; i++) {
+      const x = Math.round(startX + (endX - startX) * i / steps);
+      const y = Math.round(startY + (endY - startY) * i / steps);
+      await nut.mouse.setPosition(new nut.Point(x, y));
+      await nut.sleep(20);
+    }
+    await nut.mouse.releaseButton(nut.Button.LEFT);
+    return { ok: true, startX, startY, endX, endY };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('computer:type', async (_, text) => {
+  const nut = await _getNut();
+  if (!nut) return { ok: false, error: 'nut-js not available' };
+  try {
+    await nut.keyboard.type(text);
+    return { ok: true, length: text.length };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('computer:key', async (_, keyStr) => {
+  const nut = await _getNut();
+  if (!nut) return { ok: false, error: 'nut-js not available' };
+  try {
+    // Parse key combinations like "ctrl+c", "alt+tab", "Return"
+    const parts = keyStr.split('+').map(k => k.trim());
+    const keys = parts.map(_cupKeyToNutKey);
+    // Hold all modifier keys, press the last key, release modifiers
+    const nutKeys = keys.map(k => {
+      const keyVal = nut.Key[k];
+      if (keyVal === undefined) {
+        // Single character keys
+        return k.length === 1 ? k : null;
+      }
+      return keyVal;
+    }).filter(k => k !== null);
+
+    if (nutKeys.length === 0) return { ok: false, error: `Unknown key: ${keyStr}` };
+
+    // Press and release
+    if (nutKeys.length === 1) {
+      await nut.keyboard.pressKey(nutKeys[0]);
+      await nut.keyboard.releaseKey(nutKeys[0]);
+    } else {
+      const modifiers = nutKeys.slice(0, -1);
+      const mainKey = nutKeys[nutKeys.length - 1];
+      await nut.keyboard.pressKey(...modifiers);
+      await nut.keyboard.pressKey(mainKey);
+      await nut.keyboard.releaseKey(mainKey);
+      await nut.keyboard.releaseKey(...modifiers.reverse());
+    }
+    return { ok: true, key: keyStr };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('computer:scroll', async (_, x, y, direction, amount) => {
+  const nut = await _getNut();
+  if (!nut) return { ok: false, error: 'nut-js not available' };
+  try {
+    if (x !== undefined && y !== undefined) {
+      await nut.mouse.setPosition(new nut.Point(Math.round(x), Math.round(y)));
+    }
+    const amt = Math.round(amount || 3);
+    if (direction === 'down') {
+      await nut.mouse.scrollDown(amt);
+    } else if (direction === 'up') {
+      await nut.mouse.scrollUp(amt);
+    } else if (direction === 'right') {
+      await nut.mouse.scrollRight(amt);
+    } else if (direction === 'left') {
+      await nut.mouse.scrollLeft(amt);
+    } else {
+      return { ok: false, error: `Unknown scroll direction: ${direction}` };
+    }
+    return { ok: true, direction, amount: amt };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('computer:cursorPosition', async () => {
+  const nut = await _getNut();
+  if (!nut) return { ok: false, error: 'nut-js not available' };
+  try {
+    const pos = await nut.mouse.getPosition();
+    return { ok: true, x: pos.x, y: pos.y };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('computer:wait', async (_, duration) => {
+  const ms = Math.min(Math.max(Math.round((duration || 1) * 1000), 100), 10000);
+  await new Promise(resolve => setTimeout(resolve, ms));
+  return { ok: true, duration: ms / 1000 };
+});
+
+ipcMain.handle('computer:getScreenSize', async () => {
+  const nut = await _getNut();
+  if (!nut) return { ok: false, error: 'nut-js not available' };
+  try {
+    const w = await nut.screen.width();
+    const h = await nut.screen.height();
+    return { ok: true, width: w, height: h };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
 // ---- IPC: Screenshot ----
 ipcMain.handle('screenshot:take', async (_, workspacePath) => {
   try {
