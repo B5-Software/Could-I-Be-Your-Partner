@@ -93,6 +93,7 @@ const EN_DICT = {
         mcp: 'MCP',
         email: 'Email',
         webControl: 'Web Control',
+        playwright: 'Playwright',
         settings: 'Settings'
       },
       labels: {
@@ -1117,6 +1118,39 @@ ${p.toolListSection}`;
     '启用 Web 控制': 'Enable web control',
     '启动时自动开启 Web 控制': 'Auto-enable on startup',
 
+    // ── Settings: Playwright ──
+    'Playwright 浏览器设置': 'Playwright Browser Settings',
+    '配置内置 Playwright 浏览器的启动方式。可选择使用系统安装的浏览器或指定浏览器二进制文件路径。': 'Configure the built-in Playwright browser launch method. Choose to use a system-installed browser or specify a browser binary path.',
+    '浏览器语言会自动跟随当前 App 语言设置。': 'Browser language will automatically follow the current App language setting.',
+    '浏览器来源': 'Browser Source',
+    '浏览器模式': 'Browser Mode',
+    '自动搜索（优先 Edge → Chrome → 内置 Chromium）': 'Auto search (Edge → Chrome → bundled Chromium)',
+    '使用 Microsoft Edge': 'Use Microsoft Edge',
+    '使用 Google Chrome': 'Use Google Chrome',
+    '使用内置 Chromium': 'Use bundled Chromium',
+    '自定义浏览器路径': 'Custom browser path',
+    '浏览器可执行文件路径': 'Browser executable path',
+    '已检测到的浏览器': 'Detected browsers',
+    '点击下方按钮搜索系统浏览器...': 'Click the button below to search for system browsers...',
+    '搜索浏览器': 'Search browsers',
+    '浏览器语言': 'Browser Language',
+    '浏览器语言跟随 App 语言': 'Browser language follows App language',
+    '启用后，内置浏览器将使用与 App 相同的语言（zh-CN/en/de）': 'When enabled, the built-in browser will use the same language as the App (zh-CN/en/de)',
+    '启动参数': 'Launch Arguments',
+    '额外启动参数（可选，每行一个）': 'Extra launch arguments (optional, one per line)',
+    '测试启动': 'Test Launch',
+    '保存设置': 'Save Settings',
+    '选择浏览器可执行文件': 'Select browser executable',
+    '可执行文件': 'Executable files',
+    '所有文件': 'All files',
+    '搜索中...': 'Searching...',
+    '未检测到已安装的浏览器': 'No installed browsers detected',
+    '测试中...': 'Testing...',
+    '测试成功': 'Test successful',
+    '测试失败': 'Test failed',
+    '浏览器启动成功': 'Browser launched successfully',
+    '设置已保存': 'Settings saved',
+
     // ── About page ──
     '全自动AI Agent，帮助完成一切任务': 'Fully autonomous AI Agent that helps with everything',
     '由': 'Developed by',
@@ -1406,7 +1440,181 @@ ${p.toolListSection}`;
     '个可用模型': ' available models',
     '个可用模型（标 [免费] 的为免费模型）': ' available models ([free] = free models)',
     '[免费]': '[Free]',
-    '已使用免登录公共 Key（public），仅可调用 6 个限时免费模型': 'Using public key (public), limited to 6 time-limited free models'
+    '已使用免登录公共 Key（public），仅可调用 6 个限时免费模型': 'Using public key (public), limited to 6 time-limited free models',
+
+    // ── Tarot UI (half-width colon variant) ──
+    '命运之牌:': 'Tarot:',
+    '尚未抽取': 'Not drawn yet',
+
+    // ── Skills / Code / Misc ──
+    '暂无技能...': 'No skills yet...',
+    '未命名会话': 'Untitled session',
+    '(未选择工作区)': '(No workspace selected)',
+    '加载失败': 'Load failed',
+    '标准 Skill 导入': 'Standard Skill Import',
+    '选择标准 Skill 文件（SKILL.md）': 'Select Standard Skill file (SKILL.md)',
+    '【适用场景】': '[Use Cases]',
+    '【执行说明】': '[Instructions]',
+    '【约束】': '[Constraints]',
+    'JS脚本': 'JS Script',
+    '【用户追加消息】': '[User appended message]',
+    '**用户**:': '**User**:',
+
+    // ── Babe mode defaults ──
+    '温柔、体贴、善解人意': 'Gentle, caring, understanding',
+    '亲爱的': 'Darling',
+    '女生': 'Female',
+    '男生': 'Male',
+    '人': 'Person',
+    '深爱': 'Deeply in love',
+    '很喜欢': 'Really likes',
+    '有好感': 'Has feelings for',
+    '初步认识': 'Just met',
+    '刚认识': 'Newly acquainted',
+
+    // ── Babe proactive messages ──
+    '[系统指令]': '[System Instruction]',
+
+    // ── main.js IPC errors: Math/Calculation ──
+    '除数不能为0': 'Divisor cannot be 0',
+    '数字为空': 'Number is empty',
+    '无法解析数字': 'Cannot parse number',
+    '仅支持整数幂': 'Only integer exponents supported',
+    '指数过大': 'Exponent too large',
+    '取模仅支持整数': 'Modulo supports integers only',
+    '取模除数不能为0': 'Modulo divisor cannot be 0',
+    '为保证精确计算，暂不支持 pi 等无理常数': 'Irrational constants like pi are not supported for exact computation',
+    '无法识别的符号': 'Unrecognized symbol',
+    '括号不匹配': 'Mismatched parentheses',
+    '表达式为空': 'Expression is empty',
+    '表达式不完整': 'Expression is incomplete',
+    '表达式不合法': 'Invalid expression',
+    '不支持的运算符': 'Unsupported operator',
+    'values 至少需要2个整数': 'values requires at least 2 integers',
+    '进制范围必须在2~36': 'Base must be between 2 and 36',
+    'n 必须是非负整数': 'n must be a non-negative integer',
+    'n 过大，当前限制为 2000': 'n is too large, current limit is 2000',
+    '复数除法分母为0': 'Complex division denominator is 0',
+    '复数幂仅支持整数指数': 'Complex power supports integer exponents only',
+    '矩阵加减要求维度一致': 'Matrix add/sub requires matching dimensions',
+    '矩阵乘法维度不匹配': 'Matrix multiplication dimension mismatch',
+    '行列式仅适用于方阵': 'Determinant applies to square matrices only',
+    '逆矩阵仅适用于方阵': 'Inverse applies to square matrices only',
+    '矩阵不可逆（奇异）': 'Matrix is singular (not invertible)',
+    '叉积仅支持3维或7维向量': 'Cross product supports 3D or 7D vectors only',
+    '全体实数': 'All real numbers',
+    '无解': 'No solution',
+    '方程组无解': 'System has no solution',
+    '方程组有无穷多解': 'System has infinitely many solutions',
+    '仅支持1~4次多项式': 'Only polynomials of degree 1-4 are supported',
+    'sigma 必须>0': 'sigma must be > 0',
+    'p 必须在[0,1]': 'p must be in [0,1]',
+    'lambda 必须>0': 'lambda must be > 0',
+    'uniform 要求 b > a': 'uniform requires b > a',
+    'operation 必须是 permutation 或 combination': 'operation must be permutation or combination',
+
+    // ── main.js IPC errors: File search/read/write ──
+    'paths 参数必须是非空数组': 'paths must be a non-empty array',
+    'pattern 参数必须是非空字符串': 'pattern must be a non-empty string',
+    '终端不存在': 'Terminal does not exist',
+    '无法截取屏幕': 'Cannot capture screen',
+
+    // ── main.js IPC errors: Image gen / timeout ──
+    '执行超时': 'Execution timeout',
+    '请先配置生图API Key': 'Please configure image generation API Key first',
+    '已达到今日生图上限': "Today's image generation limit reached",
+    '生图API未返回有效图片': 'Image API returned no valid image',
+    '主窗口未就绪': 'Main window not ready',
+    '缺少URL': 'Missing URL',
+
+    // ── main.js IPC errors: TRNG ──
+    '未配置TRNG串口': 'TRNG serial port not configured',
+    'serialport 模块未安装，请运行 npm install serialport': 'serialport module not installed, run npm install serialport',
+    'TRNG串口超时': 'TRNG serial port timeout',
+    'TRNG串口JSON解析失败': 'TRNG serial port JSON parse failed',
+    'TRNG串口写入失败': 'TRNG serial port write failed',
+    'TRNG网络超时': 'TRNG network timeout',
+    'TRNG网络数据解析失败': 'TRNG network data parse failed',
+    'TRNG网络请求超时': 'TRNG network request timeout',
+
+    // ── main.js IPC errors: LLM/Zen ──
+    '请先在设置中配置OpenCode Zen API Key和模型': 'Please configure OpenCode Zen API Key and model in settings first',
+    '请先配置OpenCode Zen': 'Please configure OpenCode Zen first',
+    '请求超时（10s），请检查网络连接': 'Request timeout (10s), check network connection',
+    '请求超时（10s），请检查网络或 API URL': 'Request timeout (10s), check network or API URL',
+
+    // ── main.js IPC errors: File dialog titles ──
+    '选择头像图片': 'Select avatar image',
+    '选择文件': 'Select file',
+    '保存文件': 'Save file',
+    '选择导出目录': 'Select export directory',
+    '用户取消': 'User cancelled',
+    '选择 Code 模式工作区文件夹': 'Select Code mode workspace folder',
+
+    // ── main.js IPC errors: Playwright ──
+    '无法启动指定的浏览器:': 'Cannot launch the specified browser:',
+    '内置 Chromium 启动失败:': 'Bundled Chromium launch failed:',
+    'URL 参数缺失或无效': 'URL parameter missing or invalid',
+
+    // ── main.js IPC errors: File format / QR code ──
+    '需要安装adm-zip包来处理此文件格式': 'adm-zip package required for this file format',
+    '(PDF文本提取有限，建议使用OCR)': '(PDF text extraction is limited, OCR recommended)',
+    '不支持的文件格式': 'Unsupported file format',
+    '技能不存在': 'Skill does not exist',
+    '无法加载图片': 'Cannot load image',
+    '未识别到二维码': 'No QR code detected',
+
+    // ── main.js IPC errors: Network tools ──
+    '未设置工作区路径': 'Workspace path not set',
+    '请使用重定向后的最终URL': 'Please use the final redirected URL',
+    '缺少url': 'Missing url',
+    '缺少path': 'Missing path',
+    '无法获取证书': 'Cannot fetch certificate',
+    '连接超时': 'Connection timeout',
+    '无效端口范围': 'Invalid port range',
+    '端口范围过大(最大1024个)': 'Port range too large (max 1024)',
+
+    // ── main.js IPC errors: Game ──
+    '你是三国杀AI玩家': 'You are the Three Kingdoms AI player',
+
+    // ── main.js IPC errors: MCP ──
+    '同名服务器已存在': 'Server with the same name already exists',
+    '服务器不存在': 'Server does not exist',
+    '服务器未连接': 'Server is not connected',
+
+    // ── main.js IPC errors: Serial messages ──
+    '已打开': 'opened',
+    '未打开': 'is not open',
+    '已关闭': 'closed',
+
+    // ── main.js IPC errors: Office tools ──
+    '缺少pathOrDir参数': 'Missing pathOrDir parameter',
+    '路径不存在:': 'Path does not exist:',
+    '仅支持 .docx/.odt': 'Only .docx/.odt supported',
+    '不是可识别的Word文档目录': 'Not a recognizable Word document directory',
+    '文件不存在:': 'File does not exist:',
+    '已解压到': 'Extracted to',
+    '目录不存在:': 'Directory does not exist:',
+    '已打包为': 'Packaged as',
+    '处文字': 'text occurrences',
+    '缺少有效updates': 'Missing valid updates',
+
+    // ── main.js IPC errors: Email mode ──
+    '跳过': 'Skipped',
+    '只发模式，无需轮询': 'Send-only mode, no polling needed',
+    '邮件模式为只收，无法发送审批请求，已拒绝': 'Email mode is receive-only, cannot send approval request, rejected',
+    '邮件模式为只发，无法接收审批回复，已拒绝': 'Email mode is send-only, cannot receive approval reply, rejected',
+    '邮件模式为只收，无法发送对话摘要': 'Email mode is receive-only, cannot send conversation summary',
+
+    // ── agent.js tool internal strings ──
+    '未命名技能': 'Untitled skill',
+    '无描述': 'No description',
+
+    // ── app.js dynamic strings ──
+    '请先填写 URL 和 Key': 'Please fill in URL and Key first',
+    '包括用户消息': 'including user message',
+    '工具调用': 'tool calls',
+    'AI回复': 'AI reply'
   }
 };
 

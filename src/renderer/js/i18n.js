@@ -36,6 +36,12 @@ function i18nSetLanguage(lang) {
   _i18nLang = lang;
   _i18nDict = (lang === 'zh-CN') ? {} : (I18N_TRANSLATIONS[lang] || {});
   document.documentElement.lang = lang;
+  // Start MutationObserver for non-zh languages to auto-translate dynamic DOM
+  if (lang !== 'zh-CN') {
+    i18nStartObserver();
+  } else {
+    i18nStopObserver();
+  }
   window.dispatchEvent(new CustomEvent('languagechange', { detail: { lang } }));
 }
 
@@ -215,6 +221,7 @@ const I18N_SELECTOR_MAP = [
   { sel: '.settings-tab[data-tab="mcp"]', key: 'ui.settings.mcp' },
   { sel: '.settings-tab[data-tab="email"]', key: 'ui.settings.email' },
   { sel: '.settings-tab[data-tab="webcontrol"]', key: 'ui.settings.webControl' },
+  { sel: '.settings-tab[data-tab="playwright"]', key: 'ui.settings.playwright' },
 
   // ── Language settings panel ──
   { sel: '#setting-language option[value="zh-CN"]', key: 'ui.settings.zhCN' },
@@ -485,6 +492,49 @@ function i18nApplyTextMap(scope) {
   });
 }
 
+// ── MutationObserver: auto-translate dynamically inserted DOM nodes ──
+// This fixes the "shows Chinese on first display, translates on re-entry" bug.
+// Any new nodes added to the DOM via innerHTML/appendChild/etc. will be
+// automatically translated without needing explicit i18nApplyToDOM() calls.
+let _i18nObserver = null;
+let _i18nObserverTimer = null;
+
+function i18nStartObserver() {
+  if (_i18nObserver) return;
+  if (_i18nLang === 'zh-CN') return; // no need to observe for zh-CN
+  _i18nObserver = new MutationObserver((mutations) => {
+    if (_i18nLang === 'zh-CN') return;
+    // Debounce: collect all added nodes, process once after a short delay
+    if (_i18nObserverTimer) clearTimeout(_i18nObserverTimer);
+    _i18nObserverTimer = setTimeout(() => {
+      if (_i18nLang === 'zh-CN') return;
+      // Re-scan the whole document for untranslated Chinese text.
+      // This is simpler than tracking individual added nodes and
+      // handles text changes, attribute changes, and nested insertions.
+      i18nApplySelectors(document);
+      i18nApplyTextMap(document);
+    }, 50);
+  });
+  _i18nObserver.observe(document.body, {
+    childList: true,
+    subtree: true,
+    characterData: false,
+    attributes: true,
+    attributeFilter: ['placeholder', 'title']
+  });
+}
+
+function i18nStopObserver() {
+  if (_i18nObserver) {
+    _i18nObserver.disconnect();
+    _i18nObserver = null;
+  }
+  if (_i18nObserverTimer) {
+    clearTimeout(_i18nObserverTimer);
+    _i18nObserverTimer = null;
+  }
+}
+
 // Expose globally
 window.i18nInit = i18nInit;
 window.i18nSetLanguage = i18nSetLanguage;
@@ -498,4 +548,6 @@ window.i18nGetToolSchemaDesc = i18nGetToolSchemaDesc;
 window.i18nGetCategory = i18nGetCategory;
 window.i18nToolReturn = i18nToolReturn;
 window.i18nApplyTextMap = i18nApplyTextMap;
+window.i18nStartObserver = i18nStartObserver;
+window.i18nStopObserver = i18nStopObserver;
 window.I18N_SUPPORTED_LANGUAGES = I18N_SUPPORTED_LANGUAGES;

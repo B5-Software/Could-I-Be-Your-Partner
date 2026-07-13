@@ -141,6 +141,12 @@ contextBridge.exposeInMainWorld('api', {
   browserGetInfo: (workspacePath) => ipcRenderer.invoke('browser:getInfo', workspacePath),
   browserClose: (workspacePath) => ipcRenderer.invoke('browser:close', workspacePath),
 
+  // Playwright Settings
+  pwSearchBrowsers: () => ipcRenderer.invoke('pw:searchBrowsers'),
+  pwBrowserDialog: () => ipcRenderer.invoke('pw:browserDialog'),
+  pwTestLaunch: (settings) => ipcRenderer.invoke('pw:testLaunch', settings),
+  pwCloseBrowser: () => ipcRenderer.invoke('pw:closeBrowser'),
+
   // LLM
   chatLLM: (messages, options) => ipcRenderer.invoke('llm:chat', messages, options),
   chatLLMStream: (messages, options) => ipcRenderer.invoke('llm:chatStream', messages, options),

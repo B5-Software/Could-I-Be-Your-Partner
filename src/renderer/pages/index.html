@@ -30,15 +30,15 @@
       <div class="mode-switcher">
         <button class="mode-btn active" id="mode-btn-chat" data-mode="chat" title="Chat 模式">
           <i class="fa-solid fa-comments"></i>
-          <span>Chat</span>
+          <span class="mode-label" data-zh="Chat" data-en="Chat" data-de="Chat">Chat</span>
         </button>
         <button class="mode-btn" id="mode-btn-code" data-mode="code" title="Code 模式">
           <i class="fa-solid fa-code"></i>
-          <span>Code</span>
+          <span class="mode-label" data-zh="Code" data-en="Code" data-de="Code">Code</span>
         </button>
         <button class="mode-btn" id="mode-btn-babe" data-mode="babe" title="Babe 模式（恋爱模式）">
           <i class="fa-solid fa-heart"></i>
-          <span>Babe</span>
+          <span class="mode-label" data-zh="Babe" data-en="Babe" data-de="Babe">Babe</span>
         </button>
       </div>
     </div>
@@ -596,6 +596,7 @@
             <button class="settings-tab" data-tab="mcp"><i class="fa-solid fa-plug"></i> MCP</button>
             <button class="settings-tab" data-tab="email"><i class="fa-solid fa-envelope"></i> 邮箱</button>
             <button class="settings-tab" data-tab="webcontrol"><i class="fa-solid fa-globe"></i> Web控制</button>
+            <button class="settings-tab" data-tab="playwright"><i class="fa-solid fa-window-restore"></i> Playwright</button>
           </div>
           <div class="settings-panels">
             <div class="settings-panel active" data-tab="ai">
@@ -1631,6 +1632,69 @@
                   <button class="btn-secondary" id="btn-wc-save"><i class="fa-solid fa-floppy-disk"></i> 保存设置</button>
                 </div>
                 <p id="wc-status-result" style="font-size:13px;margin-top:8px"></p>
+              </div>
+            </div>
+
+            <!-- Playwright Panel -->
+            <div class="settings-panel" data-tab="playwright">
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-window-restore"></i> Playwright 浏览器设置</h3>
+                <p style="font-size:13px;color:var(--text-secondary);margin-bottom:12px">
+                  配置内置 Playwright 浏览器的启动方式。可选择使用系统安装的浏览器或指定浏览器二进制文件路径。<br>
+                  <strong>注意：</strong>浏览器语言会自动跟随当前 App 语言设置。
+                </p>
+              </div>
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-desktop"></i> 浏览器来源</h3>
+                <div class="setting-item">
+                  <label>浏览器模式</label>
+                  <select id="setting-pw-mode">
+                    <option value="auto">自动搜索（优先 Edge → Chrome → 内置 Chromium）</option>
+                    <option value="edge">使用 Microsoft Edge</option>
+                    <option value="chrome">使用 Google Chrome</option>
+                    <option value="chromium">使用内置 Chromium</option>
+                    <option value="custom">自定义浏览器路径</option>
+                  </select>
+                </div>
+                <div class="setting-item" id="pw-custom-path-row" style="display:none">
+                  <label>浏览器可执行文件路径</label>
+                  <div style="display:flex;gap:8px;align-items:center">
+                    <input type="text" id="setting-pw-path" placeholder="C:\Program Files\Microsoft\Edge\Application\msedge.exe" style="flex:1">
+                    <button class="btn-secondary" id="btn-pw-browse"><i class="fa-solid fa-folder-open"></i> 浏览</button>
+                  </div>
+                </div>
+                <div class="setting-item" id="pw-searched-paths-row">
+                  <label>已检测到的浏览器</label>
+                  <div id="pw-detected-browsers" style="font-size:13px;color:var(--text-secondary);padding:8px;border:1px solid var(--border);border-radius:6px;background:var(--bg-secondary)">
+                    <span style="color:var(--text-tertiary)">点击下方按钮搜索系统浏览器...</span>
+                  </div>
+                  <button class="btn-secondary" id="btn-pw-search" style="margin-top:8px"><i class="fa-solid fa-magnifying-glass"></i> 搜索浏览器</button>
+                </div>
+              </div>
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-language"></i> 浏览器语言</h3>
+                <div class="setting-item">
+                  <label class="toggle-label">
+                    <span>浏览器语言跟随 App 语言</span>
+                    <div class="toggle-switch">
+                      <input type="checkbox" id="setting-pw-follow-lang" checked>
+                      <span class="toggle-slider"></span>
+                    </div>
+                  </label>
+                  <p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">启用后，内置浏览器将使用与 App 相同的语言（zh-CN/en/de）</p>
+                </div>
+              </div>
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-gauge-high"></i> 启动参数</h3>
+                <div class="setting-item">
+                  <label>额外启动参数（可选，每行一个）</label>
+                  <textarea id="setting-pw-args" rows="3" placeholder="--disable-extensions&#10;--no-sandbox" style="width:100%;font-family:monospace;font-size:12px"></textarea>
+                </div>
+                <div style="display:flex;gap:8px;margin-top:12px">
+                  <button class="btn-secondary" id="btn-pw-test"><i class="fa-solid fa-flask"></i> 测试启动</button>
+                  <button class="btn-primary" id="btn-pw-save"><i class="fa-solid fa-floppy-disk"></i> 保存设置</button>
+                </div>
+                <p id="pw-test-result" style="font-size:13px;margin-top:8px"></p>
               </div>
             </div>
           </div>

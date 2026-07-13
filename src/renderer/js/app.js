@@ -4591,6 +4591,114 @@
     });
   }
 
+  // ── Playwright Settings ──
+  async function loadPlaywrightSettings() {
+    const s = await window.api.getSettings();
+    const pw = s.playwright || {};
+    const modeSelect = document.getElementById('setting-pw-mode');
+    const pathInput = document.getElementById('setting-pw-path');
+    const followLangCheckbox = document.getElementById('setting-pw-follow-lang');
+    const argsTextarea = document.getElementById('setting-pw-args');
+    const customRow = document.getElementById('pw-custom-path-row');
+    const testBtn = document.getElementById('btn-pw-test');
+    const saveBtn = document.getElementById('btn-pw-save');
+    const searchBtn = document.getElementById('btn-pw-search');
+    const browseBtn = document.getElementById('btn-pw-browse');
+    const detectedEl = document.getElementById('pw-detected-browsers');
+    const testResultEl = document.getElementById('pw-test-result');
+
+    if (modeSelect) modeSelect.value = pw.mode || 'auto';
+    if (pathInput) pathInput.value = pw.path || '';
+    if (followLangCheckbox) followLangCheckbox.checked = pw.followLang !== false;
+    if (argsTextarea) argsTextarea.value = pw.args || '';
+
+    // Show/hide custom path row
+    function updateCustomRowVisibility() {
+      if (!modeSelect || !customRow) return;
+      if (modeSelect.value === 'custom') {
+        customRow.style.display = '';
+      } else {
+        customRow.style.display = 'none';
+      }
+    }
+    if (modeSelect) {
+      modeSelect.addEventListener('change', updateCustomRowVisibility);
+      updateCustomRowVisibility();
+    }
+
+    // Browse for browser binary
+    if (browseBtn) {
+      browseBtn.addEventListener('click', async () => {
+        const result = await window.api.pwBrowserDialog();
+        if (result.ok && pathInput) {
+          pathInput.value = result.path;
+        }
+      });
+    }
+
+    // Search for browsers
+    if (searchBtn) {
+      searchBtn.addEventListener('click', async () => {
+        if (detectedEl) {
+          detectedEl.innerHTML = '<span style="color:var(--text-tertiary)">搜索中...</span>';
+        }
+        const result = await window.api.pwSearchBrowsers();
+        if (result.ok && result.browsers && result.browsers.length > 0) {
+          detectedEl.innerHTML = result.browsers.map(b =>
+            `<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--border)"><span>${b.name}</span><code style="font-size:11px;color:var(--accent)">${b.path}</code></div>`
+          ).join('');
+        } else {
+          detectedEl.innerHTML = '<span style="color:var(--danger)">未检测到已安装的浏览器</span>';
+        }
+      });
+    }
+
+    // Test launch
+    if (testBtn) {
+      testBtn.addEventListener('click', async () => {
+        if (testResultEl) {
+          testResultEl.textContent = '测试中...';
+          testResultEl.style.color = 'var(--text-secondary)';
+        }
+        const testSettings = {
+          mode: modeSelect ? modeSelect.value : 'auto',
+          path: pathInput ? pathInput.value : '',
+          followLang: followLangCheckbox ? followLangCheckbox.checked : true,
+          args: argsTextarea ? argsTextarea.value : ''
+        };
+        const result = await window.api.pwTestLaunch(testSettings);
+        if (testResultEl) {
+          if (result.ok) {
+            testResultEl.textContent = '✅ ' + (result.message || '测试成功');
+            testResultEl.style.color = 'var(--success, #4caf50)';
+          } else {
+            testResultEl.textContent = '❌ ' + (result.error || '测试失败');
+            testResultEl.style.color = 'var(--danger, #f44336)';
+          }
+        }
+      });
+    }
+
+    // Save
+    if (saveBtn) {
+      saveBtn.addEventListener('click', async () => {
+        const s2 = await window.api.getSettings();
+        s2.playwright = {
+          mode: modeSelect ? modeSelect.value : 'auto',
+          path: pathInput ? pathInput.value : '',
+          followLang: followLangCheckbox ? followLangCheckbox.checked : true,
+          args: argsTextarea ? argsTextarea.value : ''
+        };
+        await saveSettings(s2);
+        if (testResultEl) {
+          testResultEl.textContent = '✅ 设置已保存';
+          testResultEl.style.color = 'var(--success, #4caf50)';
+        }
+      });
+    }
+  }
+  loadPlaywrightSettings();
+
   async function loadMcpServerList() {
     const listEl = document.getElementById('mcp-servers-list');
     const toolsEl = document.getElementById('mcp-connected-tools');
@@ -5652,10 +5760,26 @@
       setTimeout(() => i18nApplyToDOM(), 500);
       setTimeout(() => i18nApplyToDOM(), 1500);
     }
+    // Update mode switcher labels based on language
+    updateModeLabels(s.language || 'zh-CN');
     if (s.aiPersona) updatePersonaDisplay(s.aiPersona);
     // 启动时立即读取命运之牌可见性设置项并应用，避免未读设置导致 UI 不一致
     applyTarotVisibility(s.tarotVisible !== false);
   }
+
+  // Update mode switcher button labels based on language
+  function updateModeLabels(lang) {
+    document.querySelectorAll('.mode-label').forEach(el => {
+      const val = el.getAttribute('data-' + (lang || 'zh-CN')) || el.getAttribute('data-zh') || 'Chat';
+      el.textContent = val;
+    });
+  }
+
+  // Listen for language changes to update mode labels
+  window.addEventListener('languagechange', (e) => {
+    updateModeLabels(e.detail.lang);
+  });
+
   initPersonaDisplay();
 
   // ---- GeoGebra Side Panel ----

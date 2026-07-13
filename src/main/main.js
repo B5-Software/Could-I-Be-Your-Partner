@@ -3151,14 +3151,136 @@ ipcMain.handle('code:getFileTree', (_, dirPath) => {
 let _pwBrowser = null; // shared browser instance (chromium.launch)
 const _pwWorkspaces = new Map(); // workspacePath -> { context, page }
 
+// Get Playwright settings (with defaults)
+function _getPwSettings() {
+  const s = settings || {};
+  return {
+    mode: s.playwright?.mode || 'auto',
+    path: s.playwright?.path || '',
+    followLang: s.playwright?.followLang !== false,
+    args: s.playwright?.args || ''
+  };
+}
+
+// Search for browser binaries on the system
+function _searchBrowserBinaries() {
+  const found = [];
+  const { execSync } = require('child_process');
+  const fs = require('fs');
+  const path = require('path');
+  const candidates = [];
+
+  if (process.platform === 'win32') {
+    // Windows registry-based paths
+    const programFiles = process.env['ProgramFiles'] || 'C:\\Program Files';
+    const programFilesX86 = process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)';
+    const localAppData = process.env['LOCALAPPDATA'] || '';
+    candidates.push(
+      { name: 'Microsoft Edge', path: `${programFiles}\\Microsoft\\Edge\\Application\\msedge.exe`, channel: 'msedge' },
+      { name: 'Microsoft Edge (x86)', path: `${programFilesX86}\\Microsoft\\Edge\\Application\\msedge.exe`, channel: 'msedge' },
+      { name: 'Google Chrome', path: `${programFiles}\\Google\\Chrome\\Application\\chrome.exe`, channel: 'chrome' },
+      { name: 'Google Chrome (x86)', path: `${programFilesX86}\\Google\\Chrome\\Application\\chrome.exe`, channel: 'chrome' },
+      { name: 'Google Chrome (User)', path: `${localAppData}\\Google\\Chrome\\Application\\chrome.exe`, channel: 'chrome' }
+    );
+  } else if (process.platform === 'darwin') {
+    candidates.push(
+      { name: 'Microsoft Edge', path: '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge', channel: 'msedge' },
+      { name: 'Google Chrome', path: '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome', channel: 'chrome' },
+      { name: 'Chromium', path: '/Applications/Chromium.app/Contents/MacOS/Chromium', channel: 'chromium' }
+    );
+  } else {
+    // Linux
+    candidates.push(
+      { name: 'Microsoft Edge', path: '/usr/bin/microsoft-edge', channel: 'msedge' },
+      { name: 'Google Chrome', path: '/usr/bin/google-chrome', channel: 'chrome' },
+      { name: 'Google Chrome (alt)', path: '/usr/bin/google-chrome-stable', channel: 'chrome' },
+      { name: 'Chromium', path: '/usr/bin/chromium', channel: 'chromium' },
+      { name: 'Chromium (alt)', path: '/usr/bin/chromium-browser', channel: 'chromium' }
+    );
+  }
+
+  for (const c of candidates) {
+    try {
+      if (fs.existsSync(c.path)) {
+        found.push({ name: c.name, path: c.path, channel: c.channel });
+      }
+    } catch { /* skip */ }
+  }
+  return found;
+}
+
+// Get Accept-Language header value based on app language
+function _getPwAcceptLanguage(lang) {
+  const map = {
+    'zh-CN': 'zh-CN,zh;q=0.9,en;q=0.8',
+    'en': 'en-US,en;q=0.9',
+    'de': 'de-DE,de;q=0.9,en;q=0.8'
+  };
+  return map[lang] || map['en'];
+}
+
 async function _launchPwBrowser() {
   if (_pwBrowser) return _pwBrowser;
   const { chromium } = require('playwright');
-  const channels = ['msedge', 'chrome'];
+  const pwSettings = _getPwSettings();
+  const appLang = settings?.language || 'zh-CN';
+
+  // Parse extra args
+  let extraArgs = [];
+  if (pwSettings.args) {
+    extraArgs = pwSettings.args.split('\n').map(s => s.trim()).filter(Boolean);
+  }
+
   let lastError = null;
+
+  if (pwSettings.mode === 'custom' && pwSettings.path) {
+    // Custom browser path
+    try {
+      _pwBrowser = await chromium.launch({
+        headless: true,
+        executablePath: pwSettings.path,
+        args: extraArgs
+      });
+      console.log('Playwright launched with custom path:', pwSettings.path);
+      return _pwBrowser;
+    } catch (e) {
+      console.warn('Custom browser launch failed:', e.message);
+      throw new Error('无法启动指定的浏览器: ' + e.message);
+    }
+  }
+
+  if (pwSettings.mode === 'chromium') {
+    try {
+      _pwBrowser = await chromium.launch({ headless: true, args: extraArgs });
+      return _pwBrowser;
+    } catch (e) {
+      throw new Error('内置 Chromium 启动失败: ' + e.message + '。请运行 npx playwright install chromium。');
+    }
+  }
+
+  if (pwSettings.mode === 'edge') {
+    try {
+      _pwBrowser = await chromium.launch({ headless: true, channel: 'msedge', args: extraArgs });
+      return _pwBrowser;
+    } catch (e) {
+      lastError = e;
+    }
+  }
+
+  if (pwSettings.mode === 'chrome') {
+    try {
+      _pwBrowser = await chromium.launch({ headless: true, channel: 'chrome', args: extraArgs });
+      return _pwBrowser;
+    } catch (e) {
+      lastError = e;
+    }
+  }
+
+  // Auto mode: try Edge → Chrome → Chromium
+  const channels = ['msedge', 'chrome'];
   for (const channel of channels) {
     try {
-      _pwBrowser = await chromium.launch({ headless: true, channel });
+      _pwBrowser = await chromium.launch({ headless: true, channel, args: extraArgs });
       console.log('Playwright launched with channel:', channel);
       return _pwBrowser;
     } catch (e) {
@@ -3167,7 +3289,7 @@ async function _launchPwBrowser() {
     }
   }
   try {
-    _pwBrowser = await chromium.launch({ headless: true });
+    _pwBrowser = await chromium.launch({ headless: true, args: extraArgs });
     return _pwBrowser;
   } catch (e) {
     throw new Error('无法启动Playwright浏览器（未找到Edge/Chrome，且Playwright浏览器未安装）。请安装Microsoft Edge或Google Chrome，或运行 npx playwright install chromium。错误: ' + (lastError?.message || e.message));
@@ -3178,7 +3300,16 @@ async function ensureBrowser(workspacePath) {
   const key = workspacePath || '__default__';
   if (_pwWorkspaces.has(key)) return _pwWorkspaces.get(key).page;
   const browser = await _launchPwBrowser();
-  const context = await browser.newContext({ viewport: { width: 1280, height: 720 } });
+  const pwSettings = _getPwSettings();
+  const appLang = settings?.language || 'zh-CN';
+  const contextOptions = { viewport: { width: 1280, height: 720 } };
+  // Apply browser language based on app language setting
+  if (pwSettings.followLang) {
+    const acceptLang = _getPwAcceptLanguage(appLang);
+    contextOptions.locale = appLang;
+    contextOptions.extraHTTPHeaders = { 'Accept-Language': acceptLang };
+  }
+  const context = await browser.newContext(contextOptions);
   const page = await context.newPage();
   _pwWorkspaces.set(key, { context, page });
   return page;
@@ -3362,6 +3493,69 @@ ipcMain.handle('browser:close', async (_, workspacePath) => {
         await ws.context.close().catch(() => {});
       }
       _pwWorkspaces.clear();
+    }
+    return { ok: true };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+// ---- IPC: Playwright Settings ----
+ipcMain.handle('pw:searchBrowsers', async () => {
+  try {
+    const found = _searchBrowserBinaries();
+    return { ok: true, browsers: found };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('pw:browserDialog', async () => {
+  try {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: '选择浏览器可执行文件',
+      filters: [
+        { name: '可执行文件', extensions: ['exe'] },
+        { name: '所有文件', extensions: ['*'] }
+      ],
+      properties: ['openFile']
+    });
+    if (result.canceled) return { ok: false };
+    return { ok: true, path: result.filePaths[0] };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('pw:testLaunch', async (_, testPwSettings) => {
+  try {
+    // Temporarily override settings for testing
+    const oldPw = settings?.playwright;
+    settings = settings || {};
+    settings.playwright = testPwSettings || {};
+    _pwBrowser = null;
+    // Close existing workspaces to force relaunch
+    for (const [key, ws] of _pwWorkspaces) {
+      await ws.context.close().catch(() => {});
+    }
+    _pwWorkspaces.clear();
+    // Try launching
+    const browser = await _launchPwBrowser();
+    const ok = !!browser;
+    // Close the test browser
+    await browser.close().catch(() => {});
+    _pwBrowser = null;
+    // Restore old settings
+    settings.playwright = oldPw;
+    return { ok, message: '浏览器启动成功' };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('pw:closeBrowser', async () => {
+  try {
+    // Close all contexts
+    for (const [key, ws] of _pwWorkspaces) {
+      await ws.context.close().catch(() => {});
+    }
+    _pwWorkspaces.clear();
+    // Close browser
+    if (_pwBrowser) {
+      await _pwBrowser.close().catch(() => {});
+      _pwBrowser = null;
     }
     return { ok: true };
   } catch (e) { return { ok: false, error: e.message }; }
