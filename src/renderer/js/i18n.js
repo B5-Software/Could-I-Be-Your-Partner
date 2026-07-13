@@ -127,9 +127,7 @@ function i18nApplyToDOM(root) {
  */
 const I18N_SELECTOR_MAP = [
   // ── Titlebar ──
-  { sel: '#mode-btn-chat span', key: 'ui.titlebar.chatMode' },
-  { sel: '#mode-btn-code span', key: 'ui.titlebar.codeMode' },
-  { sel: '#mode-btn-babe span', key: 'ui.titlebar.babeMode' },
+  // NOTE: mode button span text is managed by updateModeLabels() for short labels
   { sel: '#mode-btn-chat', key: 'ui.titlebar.chatMode', attr: 'title' },
   { sel: '#mode-btn-code', key: 'ui.titlebar.codeMode', attr: 'title' },
   { sel: '#mode-btn-babe', key: 'ui.titlebar.babeMode', attr: 'title' },

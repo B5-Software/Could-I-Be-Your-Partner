@@ -611,16 +611,19 @@
           // UI 可见性：关闭时跳过所有前端渲染（agent-tarot 已被 hidden 隐藏）
           if (!tarotVisible || !agentTarot) break;
           const iconHtml = data.icon ? `<i class="fa-solid ${data.icon}"></i>` : '<i class="fa-solid fa-star"></i>';
-          const position = data.isReversed ? '逆位' : '正位';
+          const _lang = (typeof i18nGetLanguage === 'function' ? i18nGetLanguage() : 'zh-CN');
+          const _isZh = (_lang === 'zh-CN');
+          const position = data.isReversed ? (_isZh ? '逆位' : 'Reversed') : (_isZh ? '正位' : 'Upright');
+          const _cardName = _isZh ? data.name : (data.nameEn || data.name);
           const meaning = data.isReversed ? data.meaningOfReversed : data.meaningOfUpright;
           const eSource = data.entropySource || 'CSPRNG';
           const isTRNG = eSource.startsWith('TRNG');
           const trngBadge = isTRNG ? '<span class="trng-badge" style="margin-left:6px;font-size:9px;padding:1px 6px"><i class="fa-solid fa-satellite-dish"></i> TRNG</span>' : '';
-          agentTarot.innerHTML = `${iconHtml}<span>命运之牌：${data.name}(${position})</span>${trngBadge}`;
-          agentTarot.title = `${data.name}(${position}) - ${meaning || ''} [${eSource}]`;
+          agentTarot.innerHTML = `${iconHtml}<span>${_isZh ? '命运之牌：' : 'Tarot: '}${_cardName}(${position})</span>${trngBadge}`;
+          agentTarot.title = `${_cardName}(${position}) - ${meaning || ''} [${eSource}]`;
           // Add system message for tarot card
-          const entropyNote = isTRNG ? ' [TRNG 硬件真随机]' : '';
-          addSystemMessage(`抽取了命运之牌：${data.name}${data.isReversed ? '(逆位)' : '(正位)'}（${data.nameEn}）${entropyNote}\n${meaning || ''}`);
+          const entropyNote = isTRNG ? (_isZh ? ' [TRNG 硬件真随机]' : ' [TRNG Hardware Random]') : '';
+          addSystemMessage(`${_isZh ? '抽取了命运之牌：' : 'Drew Tarot: '}${_cardName}(${position})${_isZh ? '（' : ' ('}${data.nameEn}${_isZh ? '）' : ')'}${entropyNote}\n${meaning || ''}`);
         }
         break;
       case 'assistant':
@@ -2199,11 +2202,15 @@
       const meaning = c.isReversed ? c.meaningOfReversed : c.meaningOfUpright;
       const position = c.position?.name || '';
       const posDesc = c.position?.description || '';
+      const _lang2 = (typeof i18nGetLanguage === 'function' ? i18nGetLanguage() : 'zh-CN');
+      const _isZh2 = (_lang2 === 'zh-CN');
+      const _cardName2 = _isZh2 ? c.name : (c.nameEn || c.name);
+      const _orientation2 = c.isReversed ? (_isZh2 ? '逆位' : 'Reversed') : (_isZh2 ? '正位' : 'Upright');
       return '<div class="tarot-spread-card' + (c.isReversed ? ' reversed' : '') + '">' +
         '<div class="card-position">' + escapeHtml(position) + '</div>' +
         '<div class="card-icon"><i class="fa-solid ' + (c.icon || 'fa-star') + '"></i></div>' +
-        '<div class="card-name">' + escapeHtml(c.name) + '</div>' +
-        '<div class="card-orientation">' + (c.isReversed ? '逆位' : '正位') + '</div>' +
+        '<div class="card-name">' + escapeHtml(_cardName2) + '</div>' +
+        '<div class="card-orientation">' + _orientation2 + '</div>' +
         '<div class="card-meaning">' + escapeHtml(meaning || '') + '</div>' +
       '</div>';
     }).join('');
@@ -4690,8 +4697,10 @@
           args: argsTextarea ? argsTextarea.value : ''
         };
         await saveSettings(s2);
+        // Close existing browser so next launch uses new settings
+        await window.api.pwCloseBrowser();
         if (testResultEl) {
-          testResultEl.textContent = '✅ 设置已保存';
+          testResultEl.textContent = '✅ ' + (typeof i18nGetLanguage === 'function' && i18nGetLanguage() !== 'zh-CN' ? 'Settings saved' : '设置已保存');
           testResultEl.style.color = 'var(--success, #4caf50)';
         }
       });
@@ -5467,7 +5476,9 @@
     if (el) {
       if (result.ok) {
         const r = result.result;
-        el.textContent = `连接成功! 抽到: ${r.name}(${r.orientation === 'reversed' ? '逆位' : '正位'}) - 熵源: ${r.entropySource}`;
+        const _lang3 = (typeof i18nGetLanguage === 'function' ? i18nGetLanguage() : 'zh-CN');
+        const _isZh3 = (_lang3 === 'zh-CN');
+        el.textContent = `${_isZh3 ? '连接成功! 抽到: ' : 'Connected! Drew: '}${r.name}${r.orientation === 'reversed' ? ' (Reversed)' : ' (Upright)'} - ${r.entropySource}`;
         el.className = 'setting-hint success';
       } else {
         el.textContent = `连接失败: ${result.error}`;
