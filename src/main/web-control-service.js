@@ -40,6 +40,7 @@ class WebControlService {
     // DOM Mirror callbacks
     this.onMirrorInit = null;  // () => void — WS client connected, request renderer to push mirror snapshot
     this.onUiEvent = null;     // (data) => void — WebUI UI event forwarded to renderer
+    this.onFileUploaded = null; // (filePath, fileName, isImage) => void — WebUI uploaded file, notify renderer to refresh attachments
 
     // Upload directory — set by main.js to workspace base dir
     this.workDir = null;
@@ -413,6 +414,8 @@ class WebControlService {
   // ---- Push updates to all WebSocket clients ----
 
   broadcast(data) {
+    // 短路：无客户端时跳过 JSON.stringify，避免空转序列化巨大对象导致 OOM
+    if (this.wsClients.size === 0) return;
     const json = JSON.stringify(data);
     for (const ws of this.wsClients) {
       try {
@@ -495,16 +498,35 @@ class WebControlService {
     this.broadcast({ type: 'reoptimizeState', visible: !!visible });
   }
 
-  // DOM 镜像更新：渲染器 → WS 广播（mirror_head / mirror_body / dom_* 增量事件）
-  // 同时缓存 mirror_head / mirror_body 快照，新 WS 客户端连接时重放
+  // DOM 镜像更新：渲染器 → WS 广播
+  // mirror_head / 小 mirror_body（<2MB）：缓存供新客户端重放
+  // 分块 mirror_body（start/chunk/end）：主进程不累积合并（35MB+ 会导致 OOM），直接逐块广播
+  //   新客户端连接时由 onMirrorInit 拉取最新 body
   pushMirrorUpdate(data) {
-    // 缓存快照（增量事件不缓存，只缓存全量快照）
-    if (data.type === 'mirror_head') this._cachedHead = data;
-    else if (data.type === 'mirror_body') this._cachedBody = data;
-    this.broadcast(data);
+    if (data.type === 'mirror_head') {
+      try {
+        const size = JSON.stringify(data).length;
+        if (size <= 2 * 1024 * 1024) this._cachedHead = data;
+        else console.warn(`[WebControl] mirror_head too large (${(size/1024/1024).toFixed(2)}MB), skip caching`);
+      } catch {}
+      this.broadcast(data);
+    } else if (data.type === 'mirror_body') {
+      // 小包直接缓存 + 广播
+      try {
+        const size = JSON.stringify(data).length;
+        if (size <= 2 * 1024 * 1024) this._cachedBody = data;
+        else console.warn(`[WebControl] mirror_body too large (${(size/1024/1024).toFixed(2)}MB), skip caching`);
+      } catch {}
+      this.broadcast(data);
+    } else {
+      // 分块消息（mirror_body_start/chunk/end）和其他增量事件：直接广播，不在主进程累积
+      this.broadcast(data);
+    }
   }
 
-  // 将已认证的 ws 加入客户端集合并发送 init 快照 + 缓存的 DOM 镜像
+  // 将已认证的 ws 加入客户端集合并发送 init 快照
+  // head 快照很小（通常 <100KB），直接重放缓存确保样式立即可用
+  // body 快照较大，由 onMirrorInit 触发渲染器推送（或分块传输）
   _attachWsClient(ws) {
     this.wsClients.add(ws);
     console.log('[WebControl] WS client connected, total:', this.wsClients.size);
@@ -523,10 +545,11 @@ class WebControlService {
         contextProgress: this._currentContextProgress,
         reoptimizeVisible: this._reoptimizeVisible,
       }));
-      // 重放缓存的 DOM 镜像快照（mirror_head + mirror_body）
-      if (this._cachedHead) ws.send(JSON.stringify(this._cachedHead));
-      if (this._cachedBody) ws.send(JSON.stringify(this._cachedBody));
-      // 请求渲染器推送最新快照（确保新客户端始终拿到当前界面，而非过期缓存）
+      // 立即重放缓存的 head 快照（样式），确保新客户端不出现无样式闪烁
+      if (this._cachedHead) {
+        ws.send(JSON.stringify(this._cachedHead));
+      }
+      // 请求渲染器推送最新 body 快照（head 也可顺便刷新，但缓存通常已足够）
       if (typeof this.onMirrorInit === 'function') this.onMirrorInit();
     } catch {}
   }
@@ -631,6 +654,11 @@ class WebControlService {
         try {
           const r = this._saveUpload(msg.name, msg.type, msg.data);
           ws.send(JSON.stringify({ type: 'uploadResult', ...r }));
+          // 通知渲染器有文件从 WebUI 上传，刷新附件列表
+          if (r.ok && typeof this.onFileUploaded === 'function') {
+            const isImage = /\.(png|jpg|jpeg|gif|bmp|webp|svg)$/i.test(r.name || '');
+            this.onFileUploaded(r.path, r.name, isImage);
+          }
         } catch (e) {
           try { ws.send(JSON.stringify({ type: 'uploadResult', ok: false, error: e.message })); } catch {}
         }
@@ -746,6 +774,8 @@ html,body{height:100%;overflow:hidden;font-family:-apple-system,BlinkMacSystemFo
   document.getElementById('login-pw').addEventListener('keydown',function(e){if(e.key==='Enter')document.getElementById('login-btn').click();});
   document.getElementById('login-totp').addEventListener('keydown',function(e){if(e.key==='Enter')document.getElementById('login-btn').click();});
 
+  // 分块传输累积缓冲区
+  var _bodyChunks=null;
   function handle(msg){
     switch(msg.type){
       case 'init':
@@ -760,6 +790,29 @@ html,body{height:100%;overflow:hidden;font-family:-apple-system,BlinkMacSystemFo
       case 'mirror_body':
         applyBody(msg);
         loadingEl.classList.add('hidden');
+        break;
+      case 'mirror_body_start':
+        // 开始分块传输：初始化累积缓冲区
+        _bodyChunks={transferId:msg.transferId,chunks:new Array(msg.totalChunks),totalChunks:msg.totalChunks,received:0};
+        break;
+      case 'mirror_body_chunk':
+        // 累积分块
+        if(_bodyChunks&&_bodyChunks.transferId===msg.transferId){
+          _bodyChunks.chunks[msg.index]=msg.chunk;
+          _bodyChunks.received++;
+        }
+        break;
+      case 'mirror_body_end':
+        // 分块传输结束：合并并应用
+        if(_bodyChunks&&_bodyChunks.transferId===msg.transferId){
+          try{
+            var fullJson=_bodyChunks.chunks.join('');
+            var snapshot=JSON.parse(fullJson);
+            applyBody(snapshot);
+            loadingEl.classList.add('hidden');
+          }catch(e){console.error('[WebUI] Failed to reassemble chunked mirror_body:',e);}
+          _bodyChunks=null;
+        }
         break;
       case 'theme':
         applyThemeVars(msg.theme);
@@ -783,6 +836,9 @@ html,body{height:100%;overflow:hidden;font-family:-apple-system,BlinkMacSystemFo
       case 'dom_text':
         applyDomText(msg);
         break;
+      case 'dom_value':
+        applyDomValue(msg);
+        break;
       case 'file_download':
         // 从渲染器回传的文件数据，在 WebUI 端触发 blob 下载
         if(msg.data){
@@ -802,6 +858,9 @@ html,body{height:100%;overflow:hidden;font-family:-apple-system,BlinkMacSystemFo
         break;
       case 'modeSwitch':
         applyModeSwitch(msg.mode);
+        break;
+      case 'contextProgress':
+        applyContextProgress(msg.data);
         break;
       case 'auth_fail':
         authenticated=false;
@@ -872,6 +931,13 @@ html,body{height:100%;overflow:hidden;font-family:-apple-system,BlinkMacSystemFo
     try{
       var el=document.querySelector(msg.selector);
       if(!el)return;
+      // 判断元素是否在聊天消息容器内（用于决定是否自动滚屏）
+      var inChat=false;
+      var chatContainers=['#chat-messages','#code-chat-messages','#babe-chat-messages'];
+      for(var i=0;i<chatContainers.length;i++){
+        var c=document.querySelector(chatContainers[i]);
+        if(c&&c.contains(el)){inChat=true;break;}
+      }
       if(msg.attr!==undefined){
         // 更新属性
         el.setAttribute(msg.attr,msg.value!=null?msg.value:'');
@@ -879,6 +945,13 @@ html,body{height:100%;overflow:hidden;font-family:-apple-system,BlinkMacSystemFo
         // 替换整个元素的 outerHTML
         if(msg.html!==undefined&&el.outerHTML){
           el.outerHTML=msg.html;
+        }
+      }
+      // 流式更新后自动滚屏到底部（与渲染端 scrollChatToBottom 对齐）
+      if(inChat){
+        for(var j=0;j<chatContainers.length;j++){
+          var cc=document.querySelector(chatContainers[j]);
+          if(cc){cc.scrollTop=cc.scrollHeight;}
         }
       }
     }catch(e){console.error('[WebUI] dom_update error:',e);}
@@ -891,6 +964,20 @@ html,body{height:100%;overflow:hidden;font-family:-apple-system,BlinkMacSystemFo
       var el=document.querySelector(msg.selector);
       if(el)el.textContent=msg.text!=null?msg.text:'';
     }catch(e){console.error('[WebUI] dom_text error:',e);}
+    finally{setTimeout(function(){applyingRemote=false;},20);}
+  }
+
+  // 设置表单元素的 value 属性（用于清除输入框等）
+  function applyDomValue(msg){
+    applyingRemote=true;
+    try{
+      var el=document.querySelector(msg.selector);
+      if(el&&'value'in el){
+        el.value=msg.value!=null?msg.value:'';
+        // 同步触发 input 事件以联动自动调整高度等逻辑
+        el.dispatchEvent(new Event('input',{bubbles:true}));
+      }
+    }catch(e){console.error('[WebUI] dom_value error:',e);}
     finally{setTimeout(function(){applyingRemote=false;},20);}
   }
 
@@ -909,8 +996,54 @@ html,body{height:100%;overflow:hidden;font-family:-apple-system,BlinkMacSystemFo
         var pg=document.getElementById(pageId);
         if(pg)pg.classList.add('active');
       }
+      // 增量同步：切换 nav-item 显隐（与渲染器端模式切换逻辑对齐）
+      var chatModeNavs=['chat','history'];
+      var codeModeNavs=['code','code-history'];
+      var babeModeNavs=['babe','babe-history'];
+      var showNavs,hideNavs;
+      if(mode==='chat'){showNavs=chatModeNavs;hideNavs=codeModeNavs.concat(babeModeNavs);}
+      else if(mode==='code'){showNavs=codeModeNavs;hideNavs=chatModeNavs.concat(babeModeNavs);}
+      else if(mode==='babe'){showNavs=babeModeNavs;hideNavs=chatModeNavs.concat(codeModeNavs);}
+      if(showNavs&&hideNavs){
+        showNavs.forEach(function(p){
+          var el=document.querySelector('.nav-item[data-page="'+p+'"]');
+          if(el)el.classList.remove('hidden');
+        });
+        hideNavs.forEach(function(p){
+          var el=document.querySelector('.nav-item[data-page="'+p+'"]');
+          if(el)el.classList.add('hidden');
+        });
+      }
     }catch(e){console.error('[WebUI] modeSwitch error:',e);}
     finally{setTimeout(function(){applyingRemote=false;},20);}
+  }
+
+  // 更新上下文窗口进度环（根据 mode 选择对应元素）
+  function applyContextProgress(d){
+    if(!d)return;
+    var mode=d.mode||'chat';
+    var fillId,textId,indId;
+    if(mode==='code'){fillId='code-context-progress-fill';textId='code-context-progress-text';indId='code-context-indicator';}
+    else if(mode==='babe'){fillId='babe-context-progress-fill';textId='babe-context-progress-text';indId='babe-context-indicator';}
+    else{fillId='context-progress-fill';textId='context-progress-text';indId='chat-context-indicator';}
+    var fill=document.getElementById(fillId);
+    var text=document.getElementById(textId);
+    var ind=document.getElementById(indId);
+    var pct=d.percentage||0;
+    var used=d.used||0;
+    var max=d.max||0;
+    if(fill)fill.setAttribute('stroke-dasharray',pct+' '+(100-pct));
+    if(text){
+      var fmt=function(n){return n>=1000?(n/1000).toFixed(1)+'K':''+n;};
+      text.textContent=fmt(used)+'/'+fmt(max);
+    }
+    if(ind){
+      ind.dataset.used=used;
+      ind.dataset.max=max;
+      if(pct>=95)ind.dataset.level='danger';
+      else if(pct>=80)ind.dataset.level='warn';
+      else ind.dataset.level='normal';
+    }
   }
 
   function applyThemeVars(t){
@@ -935,15 +1068,43 @@ html,body{height:100%;overflow:hidden;font-family:-apple-system,BlinkMacSystemFo
     var toRemove=head.querySelectorAll('link:not([href*="fontawesome"]),style:not([data-shell])');
     for(var i=0;i<toRemove.length;i++)toRemove[i].remove();
     // 插入渲染器 head 内容
-    var tmp=document.createElement('div');
-    tmp.innerHTML=html;
-    var nodes=tmp.querySelectorAll('link,style');
-    for(var j=0;j<nodes.length;j++)head.appendChild(nodes[j].cloneNode(true));
+    // 使用 DOMParser 解析（比 innerHTML 在 div 中解析更可靠，兼容 iPad Safari）
+    var parser=new DOMParser();
+    var doc=parser.parseFromString('<html><head>'+html+'</head><body></body></html>','text/html');
+    var nodes=doc.querySelectorAll('link,style');
+    for(var j=0;j<nodes.length;j++){
+      var node=nodes[j].cloneNode(true);
+      // 重写 CSS link 的 href 为绝对路径，避免 iPad Safari 相对路径解析问题
+      if(node.tagName==='LINK'&&node.rel==='stylesheet'){
+        var href=node.getAttribute('href');
+        if(href&&!href.startsWith('http')&&!href.startsWith('//')&&!href.startsWith('/')){
+          // 相对路径：基于 WebUI 基址解析
+          // ../css/theme.css -> /css/theme.css
+          // ../../../node_modules/katex/dist/katex.min.css -> /node_modules/katex/dist/katex.min.css
+          // ../../../assets/fonts/fontawesome.min.css -> /assets/fonts/fontawesome.min.css
+          var cleaned=href;
+          while(cleaned.indexOf('../')===0) cleaned=cleaned.substring(3);
+          node.setAttribute('href','/'+cleaned);
+        }
+      }
+      head.appendChild(node);
+    }
     loadingEl.classList.add('hidden');
   }
 
   function applyBody(msg){
     applyingRemote=true;
+    // 保护用户正在输入的文本框：保存焦点元素的 value 和选区
+    var focusInfo=null;
+    var activeEl=document.activeElement;
+    if(activeEl&&(activeEl.tagName==='INPUT'||activeEl.tagName==='TEXTAREA')&&activeEl.id){
+      focusInfo={
+        id:activeEl.id,
+        value:activeEl.value,
+        selectionStart:activeEl.selectionStart,
+        selectionEnd:activeEl.selectionEnd
+      };
+    }
     // 更新标题栏（如果有）
     if(msg.titlebar){
       var tb=document.getElementById('titlebar');
@@ -979,6 +1140,22 @@ html,body{height:100%;overflow:hidden;font-family:-apple-system,BlinkMacSystemFo
       var el=document.querySelector(s.path);
       if(el){el.scrollTop=s.top;el.scrollLeft=s.left;}
     }
+    // 恢复用户输入框的 value 和焦点（防止输入被打断）
+    if(focusInfo){
+      var restored=document.getElementById(focusInfo.id);
+      if(restored&&(restored.tagName==='INPUT'||restored.tagName==='TEXTAREA')){
+        // 仅当新元素的 value 与用户输入不一致时才恢复（避免覆盖渲染器端的最新状态）
+        // 注意：如果渲染器已经更新了输入框 value（如清空），这里会恢复用户输入
+        // 这是期望行为——用户正在输入的内容优先于渲染器端的程序化更新
+        try{
+          restored.value=focusInfo.value;
+          restored.focus();
+          if(focusInfo.selectionStart!==null){
+            restored.setSelectionRange(focusInfo.selectionStart,focusInfo.selectionEnd);
+          }
+        }catch(e){}
+      }
+    }
     // canvas 替换为占位符
     var canvases=app.querySelectorAll('canvas');
     for(var c=0;c<canvases.length;c++){
@@ -987,6 +1164,16 @@ html,body{height:100%;overflow:hidden;font-family:-apple-system,BlinkMacSystemFo
       div.style.cssText='width:'+(cv.style.width||'100%')+';height:'+(cv.style.height||'200px')+';min-height:100px;display:flex;align-items:center;justify-content:center;background:var(--bg-secondary,#ebebeb);color:var(--text-tertiary,#999);font-size:12px;border-radius:4px;';
       div.textContent='[Canvas 内容不可镜像]';
       if(cv.parentNode)cv.parentNode.replaceChild(div,cv);
+    }
+    // 同步 #app 外的模态框（onboarding/confirm/message 等）
+    if(msg.modals){
+      // 移除旧的模态框容器（#webui-modals），重新注入
+      var oldModals=document.getElementById('webui-modals');
+      if(oldModals)oldModals.remove();
+      var modalsContainer=document.createElement('div');
+      modalsContainer.id='webui-modals';
+      modalsContainer.innerHTML=msg.modals;
+      document.body.appendChild(modalsContainer);
     }
     setTimeout(function(){applyingRemote=false;},20);
   }
@@ -1035,10 +1222,104 @@ html,body{height:100%;overflow:hidden;font-family:-apple-system,BlinkMacSystemFo
     ws.send(JSON.stringify(data));
   }
 
+  // WebUI 本地处理：附件上传和拍照按钮（不转发到渲染器，使用 WebUI 端资源）
+  function handleLocalFileUpload(){
+    var input=document.createElement('input');
+    input.type='file';
+    input.multiple=true;
+    input.onchange=function(){
+      if(!input.files||!input.files.length)return;
+      var pending=input.files.length;
+      var results=[];
+      for(var i=0;i<input.files.length;i++){
+        (function(file){
+          var reader=new FileReader();
+          reader.onload=function(){
+            var dataUrl=reader.result;
+            var base64=dataUrl.split(',')[1];
+            // 通过 WS 上传到主进程保存到工作目录
+            if(ws&&ws.readyState===1){
+              ws.send(JSON.stringify({type:'uploadAttachment',name:file.name,type:file.type,data:dataUrl}));
+            }
+            pending--;
+            if(pending===0){
+              // 文件已通过 uploadAttachment 上传到主进程，onFileUploaded 回调会通知渲染器刷新附件列表
+              // 不再 sendEvent click：那会触发渲染器端再次打开 filepicker
+            }
+          };
+          reader.readAsDataURL(file);
+        })(input.files[i]);
+      }
+    };
+    input.click();
+  }
+
+  function handleLocalCamera(){
+    // 创建摄像头模态框（WebUI 本地）
+    var modal=document.createElement('div');
+    modal.className='modal-overlay';
+    modal.style.cssText='position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.7);z-index:99999;display:flex;align-items:center;justify-content:center;';
+    var box=document.createElement('div');
+    box.style.cssText='background:#fff;border-radius:12px;padding:20px;max-width:90vw;max-height:90vh;display:flex;flex-direction:column;gap:12px;';
+    var video=document.createElement('video');
+    video.style.cssText='max-width:80vw;max-height:70vh;border-radius:8px;';
+    video.autoplay=true;video.playsinline=true;
+    var btnRow=document.createElement('div');
+    btnRow.style.cssText='display:flex;gap:8px;justify-content:center;';
+    var btnCancel=document.createElement('button');
+    btnCancel.textContent='取消';btnCancel.style.cssText='padding:8px 16px;border-radius:6px;border:1px solid #ccc;cursor:pointer;background:#f5f5f5;';
+    var btnCapture=document.createElement('button');
+    btnCapture.textContent='拍照';btnCapture.style.cssText='padding:8px 16px;border-radius:6px;border:none;cursor:pointer;background:#007bff;color:#fff;';
+    btnRow.appendChild(btnCancel);btnRow.appendChild(btnCapture);
+    box.appendChild(video);box.appendChild(btnRow);
+    modal.appendChild(box);document.body.appendChild(modal);
+    var stream=null;
+    navigator.mediaDevices.getUserMedia({video:true}).then(function(s){stream=s;video.srcObject=s;}).catch(function(err){alert('无法访问摄像头: '+err.message);modal.remove();});
+    function close(){if(stream){stream.getTracks().forEach(function(t){t.stop();});}modal.remove();}
+    btnCancel.onclick=close;
+    btnCapture.onclick=function(){
+      var canvas=document.createElement('canvas');
+      canvas.width=video.videoWidth;canvas.height=video.videoHeight;
+      canvas.getContext('2d').drawImage(video,0,0);
+      var dataUrl=canvas.toDataURL('image/png');
+      var name='camera-'+Date.now()+'.png';
+      if(ws&&ws.readyState===1){
+        ws.send(JSON.stringify({type:'uploadAttachment',name:name,type:'image/png',data:dataUrl}));
+      }
+      // 拍照已通过 uploadAttachment 上传到主进程，onFileUploaded 回调会通知渲染器刷新附件列表
+      close();
+    };
+  }
+
   document.addEventListener('click',function(e){
     if(applyingRemote)return;
-    if(e.target.closest('a'))e.preventDefault();
-    sendEvent('click',e.target);
+    var target=e.target;
+    // 拦截附件上传和拍照按钮：使用 WebUI 本地资源
+    var btnAttach=target.closest('#btn-attach-file');
+    var btnCodeAttach=target.closest('#btn-code-attach-file');
+    var btnCamera=target.closest('#btn-camera');
+    if(btnAttach||btnCodeAttach){
+      e.preventDefault();e.stopPropagation();
+      handleLocalFileUpload();
+      return;
+    }
+    if(btnCamera){
+      e.preventDefault();e.stopPropagation();
+      handleLocalCamera();
+      return;
+    }
+    // 拦截 Markdown 链接：http/https 链接在 WebUI 侧新标签页打开，不转发到主机
+    var link=target.closest('a');
+    if(link){
+      var href=link.getAttribute('href');
+      if(href&&(href.indexOf('http://')===0||href.indexOf('https://')===0)){
+        e.preventDefault();e.stopPropagation();
+        window.open(href,'_blank');
+        return;
+      }
+      e.preventDefault();
+    }
+    sendEvent('click',target);
   },true);
 
   document.addEventListener('input',function(e){

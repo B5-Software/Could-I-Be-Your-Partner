@@ -389,6 +389,45 @@ class Agent {
 - 示例：需要读取3个文件时，一次性调用3个readFile，而不是分3轮分别调用
 - 只有当后续工具的参数依赖前一个工具的返回结果时，才需要分多轮调用
 
+【Computer Use 工具使用规范 - 必须遵守】：
+- computer工具的get_ui_tree动作可以获取当前屏幕的UI组件树（含元素类型/名称/值/坐标/可执行动作），这是读取屏幕内容的首选方式
+- 读取屏幕内容时优先级：1) get_ui_tree获取UI树 → 2) 仅当get_ui_tree失败/返回不完整/需要识别图像内容时，才用screenshot截屏+OCR
+- 截屏后不要尝试用readFile读取截图文件（PNG是二进制文件），应直接用OCR工具识别截图中的文字
+- 工作流程示例：get_ui_tree → 找到目标元素的坐标 → left_click/type/key操作
+- 对于"看一下屏幕上有什么""找到某个按钮""读取窗口内容"等需求，直接用get_ui_tree而非screenshot+OCR
+
+【输入法(IME)处理规范 - 必须遵守】：
+- 目标系统可能启用中文/日文/韩文输入法(IME)，但并非一定启用——需根据现象判断
+- IME存在的典型迹象：type英文后，输入框value显示中文/拼音/预编辑文本，或第一个字符后才出现候选框
+- IME在候选状态时按Enter会确认中文候选词而非提交——这是"第一次Enter无效"的常见原因
+
+⚠️ 重要：不要无脑按Escape！
+- Escape会取消IME候选状态，但**同时会清空输入框内容**，导致已输入的文本全部丢失
+- 仅当确认IME处于候选状态且需要重置时才使用Escape
+
+正确判断与处理流程（在搜索框/输入框输入文本时）：
+1) type文本后，用get_ui_tree读取输入框value
+2) 若value与输入文本完全一致（如"PowerPoint"）：IME未启用或已提交，正常进行下一步（按Enter或点击提交按钮）
+3) 若value显示中文/拼音/预编辑文本/为null：IME处于候选状态
+   - 首选方案：用left_click直接点击UI树中出现的搜索结果/候选项（如开始菜单的搜索结果列表），而不是尝试用Enter提交
+   - 次选方案：按Space或数字键选择第一个候选词确认输入，然后再Delete删除多余字符重新输入
+   - 最后方案：若上述均不可行，先记录当前输入框内容，再Escape清空，按Shift切换IME到英文模式，重新type
+
+关于按Enter还是点击：
+- 有可见的搜索结果列表/下拉建议时：直接left_click目标结果，不要按Enter（避免IME拦截）
+- 无搜索结果列表、只有提交按钮时：若get_ui_tree确认value为预期文本，可按Enter
+- Windows开始菜单搜索：输入后通常会有结果列表出现，直接left_click目标应用，不要按Enter
+
+打开应用的首选方式：
+- 优先用localSearch搜索应用快捷方式（.lnk文件，搜索目录如 C:\ProgramData\Microsoft\Windows\Start Menu\Programs\ 或 %APPDATA%\Microsoft\Windows\Start Menu\Programs\），找到后用openFileExplorer或直接left_click打开
+- 这比通过开始菜单搜索更可靠，避免IME干扰
+
+【文件读取规范 - 防止二进制文件污染上下文】：
+- readFile工具仅适用于文本文件（.txt/.js/.py/.json/.xml/.csv/.md等）
+- 严禁用readFile读取二进制文件（.png/.jpg/.img/.iso/.exe/.dll/.zip/.7z/.mp4等），会返回乱码并浪费上下文
+- 需要识别图片内容时，使用OCR工具或computer工具的screenshot+OCR
+- 需要分析二进制文件时，使用专门的工具（如officeUnpack处理Office文件）或computer use
+
 【热对话机制】：
 - 用户可能在你工作期间发送新消息（标记为【用户追加消息】），这些消息包含用户的新需求、补充信息或修改指令
 - 收到追加消息后，请立即调整当前工作方向以响应用户最新意图，优先处理最新消息中的要求

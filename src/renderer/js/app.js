@@ -180,7 +180,19 @@
     buildMirrorBody() {
       const app = document.getElementById('app');
       const titlebar = document.getElementById('titlebar');
-      return { type: 'mirror_body', html: app ? app.innerHTML : '', titlebar: titlebar ? titlebar.outerHTML : '' };
+      // 完整保留所有内容，不截断历史
+      // 包含 #app 外的模态框（onboarding/confirm/message 等）
+      const modals = [];
+      document.querySelectorAll('.modal-overlay').forEach(m => {
+        if (m.id === 'remote-connect-modal' || m.id === 'remote-conn-banner') return;
+        modals.push(m.outerHTML);
+      });
+      return {
+        type: 'mirror_body',
+        html: app ? app.innerHTML : '',
+        titlebar: titlebar ? titlebar.outerHTML : '',
+        modals: modals.join('')
+      };
     },
 
     sendMirrorHead() {
@@ -188,9 +200,36 @@
       try { if (typeof window.api?.webControlMirrorUpdate === 'function') window.api.webControlMirrorUpdate(this.buildMirrorHead()); } catch (e) {}
     },
 
+    _bodySendTimer: null,
+    // 分块传输阈值：超过此大小则拆分为多个 chunk 发送（保证完整性，避免单条 WS 消息过大）
+    _chunkSize: 256 * 1024, // 256KB per chunk
     sendMirrorBody() {
       if (isRemoteMode) return; // Remote 模式不向本地 WebUI 服务器推送
-      try { if (typeof window.api?.webControlMirrorUpdate === 'function') window.api.webControlMirrorUpdate(this.buildMirrorBody()); } catch (e) {}
+      // 防抖 500ms：避免短时间多次全量 body 推送
+      if (this._bodySendTimer) clearTimeout(this._bodySendTimer);
+      this._bodySendTimer = setTimeout(() => {
+        this._bodySendTimer = null;
+        try {
+          if (typeof window.api?.webControlMirrorUpdate !== 'function') return;
+          const snapshot = this.buildMirrorBody();
+          // 将快照序列化为 JSON 字符串后分块传输
+          const json = JSON.stringify(snapshot);
+          if (json.length <= this._chunkSize) {
+            // 小包直接发送
+            window.api.webControlMirrorUpdate(snapshot);
+          } else {
+            // 大包分块传输：mirror_body_start → mirror_body_chunk * N → mirror_body_end
+            const totalChunks = Math.ceil(json.length / this._chunkSize);
+            const transferId = Date.now() + '-' + Math.random().toString(36).slice(2, 8);
+            window.api.webControlMirrorUpdate({ type: 'mirror_body_start', transferId, totalChunks, size: json.length });
+            for (let i = 0; i < totalChunks; i++) {
+              const chunk = json.slice(i * this._chunkSize, (i + 1) * this._chunkSize);
+              window.api.webControlMirrorUpdate({ type: 'mirror_body_chunk', transferId, index: i, chunk });
+            }
+            window.api.webControlMirrorUpdate({ type: 'mirror_body_end', transferId });
+          }
+        } catch (e) { console.error('[WebUIMirror] sendMirrorBody error:', e); }
+      }, 500);
     },
 
     // ---- 增量事件推送 ----
@@ -201,8 +240,20 @@
     //   { type:'dom_remove',  selector:'#thinking-indicator' }
     //   { type:'dom_update',  selector:'#tool-xxx', html:'...' }（替换元素 outerHTML）
     //   { type:'dom_text',    selector:'#titlebar-title', text:'...' }
+    // dom_replace 节流：同 container 在 200ms 内合并为最后一次（避免大 innerHTML 反复推送）
+    _replaceTimers: {},
     pushDomEvent(event) {
       if (isRemoteMode) return; // Remote 模式不推送 DOM 事件
+      // dom_replace 节流：同 container 合并
+      if (event.type === 'dom_replace' && event.container) {
+        const key = event.container;
+        if (this._replaceTimers[key]) clearTimeout(this._replaceTimers[key]);
+        this._replaceTimers[key] = setTimeout(() => {
+          this._replaceTimers[key] = null;
+          try { if (typeof window.api?.webControlMirrorUpdate === 'function') window.api.webControlMirrorUpdate(event); } catch (e) {}
+        }, 200);
+        return;
+      }
       try { if (typeof window.api?.webControlMirrorUpdate === 'function') window.api.webControlMirrorUpdate(event); } catch (e) {}
     },
 
@@ -226,7 +277,9 @@
           }
         }
         if (!el) {
-          this._scheduleResync();
+          // 找不到元素：不再全量 resync（会销毁 WebUI 正在输入的文本框）
+          // 增量事件已在各 UI 变更点推送，无需全量兜底
+          console.warn('[WebUIMirror] Element not found, skip:', data.target);
           return;
         }
         this._applyingRemote = true;
@@ -253,9 +306,8 @@
             el.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
             break;
         }
-        // UI 事件处理后延迟推送完整 body 快照，确保 WebUI 获取最新界面状态
-        // （增量 pushDomEvent 可能因选择器不匹配而失败，全量快照兜底）
-        this._scheduleResync(300);
+        // 不再推送全量 body 兜底：增量 pushDomEvent 已在各 UI 变更点推送，
+        // 全量 body 会销毁 WebUI 用户正在输入的文本框
       } catch (e) {
         console.error('[WebUIMirror] UI event dispatch error:', e);
       } finally {
@@ -265,6 +317,7 @@
 
     _resyncTimer: null,
     _scheduleResync(delay = 200) {
+      // 保留方法供显式调用（如 mode 切换等重大状态变更），但 handleUiEvent 不再自动触发
       if (this._resyncTimer) clearTimeout(this._resyncTimer);
       this._resyncTimer = setTimeout(() => {
         this._resyncTimer = null;
@@ -497,6 +550,15 @@
       const page = document.getElementById(`page-${btn.dataset.page}`);
       if (page) page.classList.add('active');
 
+      // 推送 nav-item active 状态变化到 WebUI（用 data-page 属性选择器，兼容无 id 的 nav-item）
+      document.querySelectorAll('.nav-item[data-page]').forEach(b => {
+        WebUIMirror.pushDomEvent({ type: 'dom_update', selector: `.nav-item[data-page="${b.dataset.page}"]`, attr: 'class', value: b.className });
+      });
+      // 推送所有 page 的 active 状态变化到 WebUI（必须推送全部，否则旧页面 active 不会被移除）
+      document.querySelectorAll('.page').forEach(p => {
+        if (p.id) WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#' + p.id, attr: 'class', value: p.className });
+      });
+
       // Load page data
       if (btn.dataset.page === 'tools') {
         // 进入工具页时按当前模式自动定位到对应选项卡
@@ -579,8 +641,10 @@
         // 启动 Babe Agent（如果尚未启动）
         initBabeAgent();
       }
-      // 同步模式切换到 WebUI
+      // 同步模式切换到 WebUI（增量更新：modeSwitch 消息包含模式信息，WebUI 端 applyModeSwitch 处理 nav-item 显隐）
       try { window.api.webControlPushModeSwitch(mode); } catch (_) {}
+      // 不再推送全量 body：nav-item 显隐由 WebUI 端 applyModeSwitch 处理
+      // 各模式的消息变更已有 pushDomEvent 增量推送
     });
   });
   // WebUI → 渲染器：模式切换
@@ -701,6 +765,10 @@
       btnSend.classList.remove('hidden');
       removeThinkingIndicator(); // 防御：确保待命时思考提示已清除
     }
+    // 推送状态变化到 WebUI
+    WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#agent-status', html: agentStatus.outerHTML });
+    if (btnStop) WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#btn-stop', attr: 'class', value: btnStop.className });
+    if (btnSend) WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#btn-send', attr: 'class', value: btnSend.className });
     window.api.webControlPushStatus(status);
   };
 
@@ -821,6 +889,11 @@
         nextBtn.innerHTML = '下一步 <i class="fa-solid fa-arrow-right"></i>';
       }
       if (finishBtn) finishBtn.style.display = 'none';
+    }
+    // 推送 onboarding 步骤切换到 WebUI（整个模态框内容替换，确保所有子元素状态同步）
+    const obModal = document.getElementById('onboarding-modal');
+    if (obModal) {
+      WebUIMirror.pushDomEvent({ type: 'dom_replace', container: '#onboarding-modal', html: obModal.innerHTML });
     }
   }
   // 下一步
@@ -2837,6 +2910,7 @@
     if (agent.running) {
       chatInput.value = '';
       chatInput.style.height = 'auto';
+      WebUIMirror.pushDomEvent({ type: 'dom_value', selector: '#chat-input', value: '' });
 
       // Process attachments
       const attachments = [...currentAttachments];
@@ -2913,6 +2987,8 @@
     
     chatInput.value = '';
     chatInput.style.height = 'auto';
+    // 推送输入框清空到 WebUI
+    WebUIMirror.pushDomEvent({ type: 'dom_value', selector: '#chat-input', value: '' });
 
     // Process attachments
     const attachments = [...currentAttachments];
@@ -3101,6 +3177,16 @@
           const isImage = /\.(png|jpg|jpeg|gif|bmp|webp|svg)$/i.test(name);
           currentAttachments.push({ name, path: p, isImage });
         }
+        renderAttachments();
+      }
+    });
+  }
+
+  // WebUI 上传文件后通知渲染器刷新附件列表
+  if (typeof window.api?.onWebControlFileUploaded === 'function') {
+    window.api.onWebControlFileUploaded((data) => {
+      if (data && data.path) {
+        currentAttachments.push({ name: data.name, path: data.path, isImage: data.isImage });
         renderAttachments();
       }
     });
@@ -6781,9 +6867,11 @@
         renderCodeFileTree(treeEl, result.tree, dirPath);
       } else {
         treeEl.innerHTML = '<div class="empty-state"><i class="fa-solid fa-folder-open"></i><p>无法读取文件树</p></div>';
+        WebUIMirror.pushDomEvent({ type: 'dom_replace', container: '#code-file-tree', html: treeEl.innerHTML });
       }
     } catch (e) {
       treeEl.innerHTML = `<div class="empty-state"><i class="fa-solid fa-triangle-exclamation"></i><p>${e.message}</p></div>`;
+      WebUIMirror.pushDomEvent({ type: 'dom_replace', container: '#code-file-tree', html: treeEl.innerHTML });
     }
   }
 
@@ -6919,6 +7007,8 @@
       if (closeBtn) closeBtn.addEventListener('click', (e) => { e.stopPropagation(); closeTab(tab.path); });
       tabsEl.appendChild(el);
     }
+    // 增量推送：编辑器 tab 栏更新后同步到 WebUI
+    WebUIMirror.pushDomEvent({ type: 'dom_replace', container: '#code-editor-tabs', html: tabsEl.innerHTML });
   }
 
   function showEditorEmptyState() {
@@ -7071,6 +7161,8 @@
     if (Array.isArray(tree)) {
       for (const node of tree) buildNode(node, 0, container);
     }
+    // 增量推送：文件树渲染后同步到 WebUI
+    WebUIMirror.pushDomEvent({ type: 'dom_replace', container: '#code-file-tree', html: container.innerHTML });
   }
 
   // ---- File tree context menu (Add to context / Rename / Delete) ----
@@ -7163,6 +7255,8 @@
     if (codeCurrentAttachments.length === 0) {
       container.classList.add('hidden');
       container.innerHTML = '';
+      WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#code-attachments-preview', attr: 'class', value: container.className });
+      WebUIMirror.pushDomEvent({ type: 'dom_replace', container: '#code-attachments-preview', html: container.innerHTML });
       return;
     }
     container.classList.remove('hidden');
@@ -7176,6 +7270,9 @@
     container.querySelectorAll('.attachment-remove').forEach(btn => {
       btn.addEventListener('click', () => removeCodeAttachment(parseInt(btn.dataset.index)));
     });
+    // 增量推送：附件列表更新后同步到 WebUI
+    WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#code-attachments-preview', attr: 'class', value: container.className });
+    WebUIMirror.pushDomEvent({ type: 'dom_replace', container: '#code-attachments-preview', html: container.innerHTML });
   }
 
   async function renameTreeNode(node) {
@@ -7295,11 +7392,21 @@
             try { bubble.reasoningEl.scrollTop = bubble.reasoningEl.scrollHeight; } catch (_) {}
           }
           msgsEl.scrollTop = msgsEl.scrollHeight;
+          // 增量推送：节流推送流式气泡更新到 WebUI（120ms 节流）
+          if (!bubble.renderTimer) {
+            bubble.renderTimer = setTimeout(() => {
+              bubble.renderTimer = null;
+              if (bubble.el.id) {
+                WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#' + bubble.el.id, html: bubble.el.outerHTML });
+              }
+            }, 120);
+          }
           break;
         }
         case 'stream-end': {
           const bubble = codeStreamBubble;
           if (!bubble) { codeStreamBubble = null; return; }
+          if (bubble.renderTimer) { clearTimeout(bubble.renderTimer); bubble.renderTimer = null; }
           const hasReasoning = !!(data.reasoning || bubble.rawReasoning);
           const hasContent = !!(bubble.rawContent && bubble.rawContent.trim());
           if (hasReasoning) {
@@ -7320,10 +7427,15 @@
           } else {
             // 完全空（既无 reasoning 也无 content）：移除整个气泡
             bubble.el.remove();
+            if (bubble.el.id) WebUIMirror.pushDomEvent({ type: 'dom_remove', selector: '#' + bubble.el.id });
             codeStreamBubble = null;
             break;
           }
           bubble.el.classList.remove('streaming');
+          // 增量推送：流式结束，更新气泡为最终状态到 WebUI
+          if (bubble.el.id) {
+            WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#' + bubble.el.id, html: bubble.el.outerHTML });
+          }
           codeStreamBubble = null;
           break;
         }
@@ -7361,6 +7473,7 @@
 
     const msg = document.createElement('div');
     msg.className = 'message assistant streaming';
+    msg.id = 'code-stream-' + Date.now();
     msg.innerHTML = `
       <div class="message-avatar"><i class="fa-solid fa-robot"></i></div>
       <div class="message-body">
@@ -7375,6 +7488,8 @@
         <div class="message-time">${new Date().toLocaleTimeString('zh-CN', {hour12: false})}</div>
       </div>`;
     msgsEl.appendChild(msg);
+    // 增量推送：流式气泡创建后追加到 WebUI
+    WebUIMirror.pushDomEvent({ type: 'dom_append', container: '#code-chat-messages', html: msg.outerHTML });
     msgsEl.scrollTop = msgsEl.scrollHeight;
     return {
       el: msg,
@@ -7383,7 +7498,8 @@
       reasoningSection: msg.querySelector('.reasoning-section'),
       rawContent: '',
       rawReasoning: '',
-      contentStarted: false
+      contentStarted: false,
+      renderTimer: null // 用于流式 chunk 推送节流
     };
   }
 
@@ -7404,6 +7520,8 @@
         <div class="message-time">${new Date().toLocaleTimeString('zh-CN', {hour12: false})}</div>
       </div>`;
     msgsEl.appendChild(msg);
+    // 增量推送：Code 消息追加到 WebUI
+    WebUIMirror.pushDomEvent({ type: 'dom_append', container: '#code-chat-messages', html: msg.outerHTML });
     msgsEl.scrollTop = msgsEl.scrollHeight;
 
     // Track for history
@@ -7416,11 +7534,14 @@
     if (!msgsEl) return;
     const div = document.createElement('div');
     div.className = 'tool-call-card';
+    div.id = 'code-tool-' + Date.now();
     const argsStr = data.args ? JSON.stringify(data.args, null, 2).slice(0, 500) : '';
     div.innerHTML = `<div class="tool-call-header"><i class="fa-solid fa-wrench"></i> <span>${escapeHtml(data.name || 'tool')}</span></div>` +
       (argsStr ? `<pre class="tool-call-args">${escapeHtml(argsStr)}</pre>` : '') +
       `<div class="tool-call-status"><i class="fa-solid fa-spinner fa-spin"></i> 执行中...</div>`;
     msgsEl.appendChild(div);
+    // 增量推送：工具调用卡片追加到 WebUI
+    WebUIMirror.pushDomEvent({ type: 'dom_append', container: '#code-chat-messages', html: div.outerHTML });
     msgsEl.scrollTop = msgsEl.scrollHeight;
     return div;
   }
@@ -7438,6 +7559,10 @@
     const ok = data.result?.ok !== false;
     statusEl.innerHTML = (ok ? '<i class="fa-solid fa-check"></i> 完成' : '<i class="fa-solid fa-xmark"></i> 失败') +
       (resultStr ? `<pre class="tool-call-result">${escapeHtml(resultStr.slice(0, 800))}</pre>` : '');
+    // 增量推送：更新工具调用卡片结果到 WebUI
+    if (lastCard.id) {
+      WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#' + lastCard.id, html: lastCard.outerHTML });
+    }
   }
 
   function showCodeApprovalPanel(toolName, args) {
@@ -7446,9 +7571,13 @@
     if (!msgsEl) return;
     // 移除已存在的 approval 面板
     const existing = msgsEl.querySelector('.code-approval-panel');
-    if (existing) existing.remove();
+    if (existing) {
+      if (existing.id) WebUIMirror.pushDomEvent({ type: 'dom_remove', selector: '#' + existing.id });
+      existing.remove();
+    }
     const div = document.createElement('div');
     div.className = 'code-approval-panel';
+    div.id = 'code-approval-' + Date.now();
     const argsStr = args ? JSON.stringify(args, null, 2) : '';
     div.innerHTML = `<div class="approval-header"><i class="fa-solid fa-shield-halved"></i> 工具审批：${escapeHtml(toolName)}</div>` +
       (argsStr ? `<pre class="approval-args">${escapeHtml(argsStr)}</pre>` : '') +
@@ -7457,14 +7586,18 @@
         <button class="btn-primary btn-approval-approve"><i class="fa-solid fa-check"></i> 批准</button>
       </div>`;
     msgsEl.appendChild(div);
+    // 增量推送：审批面板追加到 WebUI
+    WebUIMirror.pushDomEvent({ type: 'dom_append', container: '#code-chat-messages', html: div.outerHTML });
     msgsEl.scrollTop = msgsEl.scrollHeight;
     div.querySelector('.btn-approval-approve').addEventListener('click', () => {
       if (codeAgent) codeAgent.resolveApproval(true);
       div.remove();
+      if (div.id) WebUIMirror.pushDomEvent({ type: 'dom_remove', selector: '#' + div.id });
     });
     div.querySelector('.btn-approval-deny').addEventListener('click', () => {
       if (codeAgent) codeAgent.resolveApproval(false);
       div.remove();
+      if (div.id) WebUIMirror.pushDomEvent({ type: 'dom_remove', selector: '#' + div.id });
     });
   }
 
@@ -7498,12 +7631,17 @@
     input.value = '';
     input.style.height = 'auto';
     clearCodeAttachments();
+    // 推送输入框清空到 WebUI
+    WebUIMirror.pushDomEvent({ type: 'dom_value', selector: '#code-chat-input', value: '' });
 
     // Toggle stop button
     const btnSend = document.getElementById('btn-code-send');
     const btnStop = document.getElementById('btn-code-stop');
     btnSend?.classList.add('hidden');
     btnStop?.classList.remove('hidden');
+    // 推送按钮状态变化到 WebUI
+    if (btnSend) WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#btn-code-send', attr: 'class', value: btnSend.className });
+    if (btnStop) WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#btn-code-stop', attr: 'class', value: btnStop.className });
 
     try {
       // 与 Chat 模式一致：附件作为独立参数传入，sendMessage 内部负责构造 [附件: xxx] 摘要
@@ -7513,6 +7651,9 @@
     } finally {
       btnSend?.classList.remove('hidden');
       btnStop?.classList.add('hidden');
+      // 推送按钮状态恢复到 WebUI
+      if (btnSend) WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#btn-code-send', attr: 'class', value: btnSend.className });
+      if (btnStop) WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#btn-code-stop', attr: 'class', value: btnStop.className });
       // Auto-save history
       await saveCodeHistory();
     }
@@ -7656,12 +7797,26 @@
     const fileTree = document.getElementById('code-file-tree-panel');
     const editor = document.getElementById('code-editor-panel');
     const chat = document.getElementById('code-chat');
-    document.getElementById('btn-restore-file-tree')?.classList.toggle('hidden', !fileTree?.classList.contains('collapsed'));
-    document.getElementById('btn-restore-editor')?.classList.toggle('hidden', !editor?.classList.contains('collapsed'));
-    document.getElementById('btn-restore-chat')?.classList.toggle('hidden', !chat?.classList.contains('collapsed'));
+    const r1 = document.getElementById('btn-restore-file-tree');
+    const r2 = document.getElementById('btn-restore-editor');
+    const r3 = document.getElementById('btn-restore-chat');
+    const s1 = document.getElementById('code-resizer-1');
+    const s2 = document.getElementById('code-resizer-2');
+    r1?.classList.toggle('hidden', !fileTree?.classList.contains('collapsed'));
+    r2?.classList.toggle('hidden', !editor?.classList.contains('collapsed'));
+    r3?.classList.toggle('hidden', !chat?.classList.contains('collapsed'));
     // 隐藏相邻的分割器
-    document.getElementById('code-resizer-1')?.classList.toggle('hidden', fileTree?.classList.contains('collapsed'));
-    document.getElementById('code-resizer-2')?.classList.toggle('hidden', editor?.classList.contains('collapsed'));
+    s1?.classList.toggle('hidden', fileTree?.classList.contains('collapsed'));
+    s2?.classList.toggle('hidden', editor?.classList.contains('collapsed'));
+    // 增量推送：面板折叠状态变更同步到 WebUI（推送相关元素的 class 属性）
+    if (fileTree) WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#code-file-tree-panel', attr: 'class', value: fileTree.className });
+    if (editor) WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#code-editor-panel', attr: 'class', value: editor.className });
+    if (chat) WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#code-chat', attr: 'class', value: chat.className });
+    if (r1) WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#btn-restore-file-tree', attr: 'class', value: r1.className });
+    if (r2) WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#btn-restore-editor', attr: 'class', value: r2.className });
+    if (r3) WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#btn-restore-chat', attr: 'class', value: r3.className });
+    if (s1) WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#code-resizer-1', attr: 'class', value: s1.className });
+    if (s2) WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#code-resizer-2', attr: 'class', value: s2.className });
   }
   document.getElementById('btn-close-file-tree')?.addEventListener('click', () => {
     document.getElementById('code-file-tree-panel')?.classList.add('collapsed');
@@ -7761,6 +7916,15 @@
       }
     }
   });
+
+  // WebUI 上传文件后通知 Code 模式刷新附件（与 Chat 模式的 onWebControlFileUploaded 对齐）
+  if (typeof window.api?.onWebControlFileUploaded === 'function') {
+    window.api.onWebControlFileUploaded(async (data) => {
+      if (data && data.path && document.getElementById('page-code')?.classList.contains('active')) {
+        await addFileToCodeContext({ path: data.path, name: data.name, type: 'file' });
+      }
+    });
+  }
 
   // ==================== 面板最小化/恢复（索引贴） ====================
   // 追踪当前被最小化的面板 id，避免重复创建索引贴
@@ -7917,11 +8081,21 @@
               try { bubble.reasoningEl.scrollTop = bubble.reasoningEl.scrollHeight; } catch (_) {}
             }
             msgsEl.scrollTop = msgsEl.scrollHeight;
+            // 增量推送：节流推送 Babe 流式气泡更新到 WebUI（120ms 节流）
+            if (!bubble.renderTimer) {
+              bubble.renderTimer = setTimeout(() => {
+                bubble.renderTimer = null;
+                if (bubble.el.id) {
+                  WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#' + bubble.el.id, html: bubble.el.outerHTML });
+                }
+              }, 120);
+            }
             break;
           }
           case 'stream-end': {
             const bubble = babeStreamBubble;
             if (!bubble) { babeStreamBubble = null; return; }
+            if (bubble.renderTimer) { clearTimeout(bubble.renderTimer); bubble.renderTimer = null; }
             const hasReasoning = !!(data.reasoning || bubble.rawReasoning);
             // 使用剥离标记后的 content（agent.js 已处理）
             const finalContent = (data.content || bubble.rawContent).replace(/【好感度[+-]?\d+】/g, '').trimEnd();
@@ -7945,10 +8119,15 @@
             } else {
               // 完全空：移除整个气泡
               bubble.el.remove();
+              if (bubble.el.id) WebUIMirror.pushDomEvent({ type: 'dom_remove', selector: '#' + bubble.el.id });
               babeStreamBubble = null;
               break;
             }
             bubble.el.classList.remove('streaming');
+            // 增量推送：Babe 流式结束，更新气泡为最终状态到 WebUI
+            if (bubble.el.id) {
+              WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#' + bubble.el.id, html: bubble.el.outerHTML });
+            }
             babeStreamBubble = null;
             break;
           }
@@ -7983,6 +8162,9 @@
           sendBtn?.classList.remove('hidden');
           stopBtn?.classList.add('hidden');
         }
+        // 推送按钮状态变化到 WebUI
+        if (sendBtn) WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#btn-babe-send', attr: 'class', value: sendBtn.className });
+        if (stopBtn) WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#btn-babe-stop', attr: 'class', value: stopBtn.className });
       };
       updateBabeAffection(babeAgent.babeAffection);
       updateBabePersonaDisplay();
@@ -8004,6 +8186,7 @@
 
     const msg = document.createElement('div');
     msg.className = 'babe-message assistant streaming';
+    msg.id = 'babe-stream-' + Date.now();
     msg.innerHTML = `
       <div class="babe-msg-avatar"><i class="fa-solid fa-heart"></i></div>
       <div class="babe-msg-body">
@@ -8018,6 +8201,8 @@
         <div class="babe-msg-time">${new Date().toLocaleTimeString('zh-CN', {hour12: false})}</div>
       </div>`;
     msgsEl.appendChild(msg);
+    // 增量推送：Babe 流式气泡创建后追加到 WebUI
+    WebUIMirror.pushDomEvent({ type: 'dom_append', container: '#babe-chat-messages', html: msg.outerHTML });
     msgsEl.scrollTop = msgsEl.scrollHeight;
     return {
       el: msg,
@@ -8026,7 +8211,8 @@
       reasoningSection: msg.querySelector('.reasoning-section'),
       rawContent: '',
       rawReasoning: '',
-      contentStarted: false
+      contentStarted: false,
+      renderTimer: null // 用于流式 chunk 推送节流
     };
   }
 
@@ -8047,6 +8233,8 @@
         <div class="babe-msg-time">${new Date().toLocaleTimeString('zh-CN', {hour12: false})}</div>
       </div>`;
     msgsEl.appendChild(msg);
+    // 增量推送：Babe 消息追加到 WebUI
+    WebUIMirror.pushDomEvent({ type: 'dom_append', container: '#babe-chat-messages', html: msg.outerHTML });
     msgsEl.scrollTop = msgsEl.scrollHeight;
     babeMessages.push({ role, content });
   }
@@ -8056,11 +8244,14 @@
     if (!msgsEl) return;
     const div = document.createElement('div');
     div.className = 'tool-call-card';
+    div.id = 'babe-tool-' + Date.now();
     const argsStr = data.args ? JSON.stringify(data.args, null, 2).slice(0, 500) : '';
     div.innerHTML = `<div class="tool-call-header"><i class="fa-solid fa-wrench"></i> <span>${escapeHtml(data.name || 'tool')}</span></div>` +
       (argsStr ? `<pre class="tool-call-args">${escapeHtml(argsStr)}</pre>` : '') +
       `<div class="tool-call-status"><i class="fa-solid fa-spinner fa-spin"></i> 执行中...</div>`;
     msgsEl.appendChild(div);
+    // 增量推送：Babe 工具调用卡片追加到 WebUI
+    WebUIMirror.pushDomEvent({ type: 'dom_append', container: '#babe-chat-messages', html: div.outerHTML });
     msgsEl.scrollTop = msgsEl.scrollHeight;
     return div;
   }
@@ -8077,6 +8268,10 @@
     const ok = data.result?.ok !== false;
     statusEl.innerHTML = (ok ? '<i class="fa-solid fa-check"></i> 完成' : '<i class="fa-solid fa-xmark"></i> 失败') +
       (resultStr ? `<pre class="tool-call-result">${escapeHtml(resultStr.slice(0, 800))}</pre>` : '');
+    // 增量推送：更新 Babe 工具调用卡片结果到 WebUI
+    if (lastCard.id) {
+      WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#' + lastCard.id, html: lastCard.outerHTML });
+    }
   }
 
   // 更新好感度显示
@@ -8086,6 +8281,9 @@
     const fillEl = document.getElementById('babe-affection-fill');
     if (valueEl) valueEl.textContent = v;
     if (fillEl) fillEl.style.width = v + '%';
+    // 增量推送：好感度数值与进度条更新同步到 WebUI
+    WebUIMirror.pushDomEvent({ type: 'dom_text', selector: '#babe-affection-value', text: String(v) });
+    WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#babe-affection-fill', attr: 'style', value: 'width: ' + v + '%' });
   }
 
   // 显示好感度变化提示
@@ -8094,14 +8292,17 @@
     if (!msgsEl) return;
     const div = document.createElement('div');
     div.className = 'babe-affection-change ' + (delta > 0 ? 'up' : 'down');
+    div.id = 'babe-aff-change-' + Date.now();
     const icon = delta > 0 ? 'fa-heart' : 'fa-heart-crack';
     const sign = delta > 0 ? '+' : '';
     div.innerHTML = `<i class="fa-solid ${icon}"></i> 好感度 ${sign}${delta} → ${newValue}`;
     msgsEl.appendChild(div);
+    // 增量推送：好感度变化提示追加到 WebUI
+    WebUIMirror.pushDomEvent({ type: 'dom_append', container: '#babe-chat-messages', html: div.outerHTML });
     msgsEl.scrollTop = msgsEl.scrollHeight;
     // 2秒后淡出
-    setTimeout(() => { div.style.opacity = '0'; }, 2000);
-    setTimeout(() => { div.remove(); }, 3000);
+    setTimeout(() => { div.style.opacity = '0'; if (div.id) WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#' + div.id, attr: 'style', value: div.getAttribute('style') || '' }); }, 2000);
+    setTimeout(() => { div.remove(); if (div.id) WebUIMirror.pushDomEvent({ type: 'dom_remove', selector: '#' + div.id }); }, 3000);
   }
 
   // 更新 Babe persona 显示（姓名、头像）
@@ -8110,6 +8311,8 @@
     const babe = babeAgent.settings.babe;
     const nameEl = document.getElementById('babe-name-display');
     if (nameEl) nameEl.textContent = babe.name || 'Babe';
+    // 增量推送：Babe 名称更新同步到 WebUI
+    if (nameEl) WebUIMirror.pushDomEvent({ type: 'dom_text', selector: '#babe-name-display', text: babe.name || 'Babe' });
   }
 
   // 发送 Babe 消息
@@ -8134,6 +8337,8 @@
     addBabeMessage('user', text);
     input.value = '';
     input.style.height = 'auto';
+    // 推送输入框清空到 WebUI
+    WebUIMirror.pushDomEvent({ type: 'dom_value', selector: '#babe-chat-input', value: '' });
     // 发送给 Agent
     try {
       await babeAgent.sendMessage(text);

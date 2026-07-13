@@ -1429,48 +1429,52 @@ ipcMain.handle('fs:localSearch', async (_, dirPath, pattern, options = {}) => {
       regex = false,
       depth = -1 // -1 means unlimited
     } = options;
-    
-    let searchPattern = pattern;
+
+    let searchRegex;
     if (regex) {
       try {
-        searchPattern = new RegExp(pattern, ignoreCase ? 'i' : '');
+        searchRegex = new RegExp(pattern, ignoreCase ? 'i' : '');
       } catch (e) {
         resolve({ ok: false, error: `Invalid regex pattern: ${e.message}` });
         return;
       }
-    }
-    
-    function matches(name) {
-      if (regex) {
-        return searchPattern.test(name);
-      } else {
-        const haystack = ignoreCase ? name.toLowerCase() : name;
-        const needle = ignoreCase ? pattern.toLowerCase() : pattern;
-        return haystack.includes(needle);
+    } else {
+      // Convert glob pattern (*.img, *.*, test?.txt) to regex
+      // Escape regex special chars except * and ?
+      const globToRegex = (glob) => glob.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.');
+      try {
+        searchRegex = new RegExp('^' + globToRegex(pattern) + '$', ignoreCase ? 'i' : '');
+      } catch (e) {
+        resolve({ ok: false, error: `Invalid pattern: ${e.message}` });
+        return;
       }
     }
-    
+
+    function matches(name) {
+      return searchRegex.test(name);
+    }
+
     function walk(dir, currentDepth = 0) {
       if (results.length >= maxResults) return;
       if (depth >= 0 && currentDepth > depth) return;
-      
+
       try {
         const entries = fs.readdirSync(dir, { withFileTypes: true });
         for (const e of entries) {
           if (results.length >= maxResults) break;
-          
+
           const full = path.join(dir, e.name);
           const isDir = e.isDirectory();
-          
+
           // Apply file/dir filters
           if (fileOnly && isDir) continue;
           if (dirOnly && !isDir) continue;
-          
+
           // Check if matches pattern
           if (matches(e.name)) {
             results.push(full);
           }
-          
+
           // Recurse into directories
           if (isDir) {
             walk(full, currentDepth + 1);
@@ -1478,7 +1482,7 @@ ipcMain.handle('fs:localSearch', async (_, dirPath, pattern, options = {}) => {
         }
       } catch { /* skip inaccessible */ }
     }
-    
+
     // Run search asynchronously
     setImmediate(() => {
       try {
@@ -1858,14 +1862,21 @@ ipcMain.handle('computer:key', async (_, keyStr) => {
     // Parse key combinations like "ctrl+c", "alt+tab", "Return"
     const parts = keyStr.split('+').map(k => k.trim());
     const keys = parts.map(_cupKeyToNutKey);
-    // Hold all modifier keys, press the last key, release modifiers
+    // Resolve each key to nut.Key enum value
     const nutKeys = keys.map(k => {
+      // 1) Try direct lookup (handles LeftControl, Enter, F1, etc.)
       const keyVal = nut.Key[k];
-      if (keyVal === undefined) {
-        // Single character keys
-        return k.length === 1 ? k : null;
+      if (keyVal !== undefined) return keyVal;
+      // 2) Try uppercase single char (a -> Key.A, d -> Key.D)
+      if (k.length === 1) {
+        const upper = k.toUpperCase();
+        const upperVal = nut.Key[upper];
+        if (upperVal !== undefined) return upperVal;
       }
-      return keyVal;
+      // 3) Try uppercase multi-char (Tab -> Key.Tab already handled by map)
+      const upVal = nut.Key[k.toUpperCase()];
+      if (upVal !== undefined) return upVal;
+      return null;
     }).filter(k => k !== null);
 
     if (nutKeys.length === 0) return { ok: false, error: `Unknown key: ${keyStr}` };
@@ -1934,40 +1945,274 @@ ipcMain.handle('computer:getScreenSize', async () => {
   } catch (e) { return { ok: false, error: e.message }; }
 });
 
-ipcMain.handle('computer:getUITree', async () => {
-  // Windows: use PowerShell UI Automation; other platforms: fallback
-  if (process.platform !== 'win32') {
-    return { ok: false, error: 'UI tree extraction only supported on Windows' };
-  }
-  try {
-    // Resolve script path (works both in dev and asar-packed)
-    const { app } = require('electron');
-    let scriptPath;
-    const candidatePaths = [
-      path.join(__dirname, 'scripts', 'get-ui-tree.ps1'),
-      path.join(app.getAppPath(), 'src', 'main', 'scripts', 'get-ui-tree.ps1'),
-      path.join(process.resourcesPath, 'app.asar.unpacked', 'src', 'main', 'scripts', 'get-ui-tree.ps1')
-    ];
-    scriptPath = candidatePaths.find(p => fs.existsSync(p));
-    if (!scriptPath) throw new Error('get-ui-tree.ps1 not found');
-
-    const { execFile } = require('child_process');
-    const result = await new Promise((resolve, reject) => {
-      execFile('powershell.exe', [
-        '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
-        '-File', scriptPath,
-        '-MaxDepth', '15',
-        '-MaxElements', '300'
-      ], {
-        timeout: 15000,
-        maxBuffer: 10 * 1024 * 1024,
-        windowsHide: true
-      }, (err, stdout, stderr) => {
-        if (err) { reject(new Error(stderr || err.message)); return; }
-        resolve(stdout);
-      });
+// Cross-platform UI tree extraction helpers
+function _execCmd(cmd, args, opts = {}) {
+  const { execFile } = require('child_process');
+  return new Promise((resolve, reject) => {
+    execFile(cmd, args, {
+      timeout: 15000,
+      maxBuffer: 10 * 1024 * 1024,
+      windowsHide: true,
+      ...opts
+    }, (err, stdout, stderr) => {
+      if (err) { reject(new Error((stderr || '').trim() || err.message)); return; }
+      resolve(stdout);
     });
-    const tree = JSON.parse(result);
+  });
+}
+
+// Windows: inline PowerShell using UIAutomation COM via .NET
+async function _getWindowsUITree() {
+  // PowerShell script as inline string (no external .ps1 file needed)
+  const psScript = `
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+$ErrorActionPreference = 'Stop'
+$root = [System.Windows.Automation.AutomationElement]::FocusedElement
+if (-not $root) { $root = [System.Windows.Automation.AutomationElement]::RootElement }
+$i = 0; $els = @(); $trunc = $false
+function Walk($el, $d) {
+  if ($script:i -ge 300 -or $script:trunc) { $script:trunc = $true; return }
+  if ($d -gt 15) { return }
+  try {
+    $cr = New-Object System.Windows.Automation.CacheRequest
+    $cr.Add([System.Windows.Automation.AutomationElement]::NameProperty)
+    $cr.Add([System.Windows.Automation.AutomationElement]::ControlTypeProperty)
+    $cr.Add([System.Windows.Automation.AutomationElement]::AutomationIdProperty)
+    $cr.Add([System.Windows.Automation.AutomationElement]::BoundingRectangleProperty)
+    $cr.Add([System.Windows.Automation.AutomationElement]::IsEnabledProperty)
+    $cr.Add([System.Windows.Automation.AutomationElement]::IsOffscreenProperty)
+    $cr.TreeScope = [System.Windows.Automation.TreeScope]::Element
+    $cr.TreeFilter = [System.Windows.Automation.Condition]::TrueCondition
+    $ce = $el.GetUpdatedCache($cr)
+    $nm = $ce.Cached.Name
+    $ct = $ce.Cached.ControlType
+    $ctn = if ($ct) { $ct.ProgrammaticName -replace '^ControlType\\.','' } else { 'Unknown' }
+    $aid = $ce.Cached.AutomationId
+    $br = $ce.Cached.BoundingRectangle
+    $en = $ce.Cached.IsEnabled
+    $os = $ce.Cached.IsOffscreen
+    if ($os -and $d -gt 0) { return }
+    $val = $null
+    try { $vp = $ce.GetCachedPattern([System.Windows.Automation.ValuePattern]::Pattern); if ($vp) { $val = $vp.Cached.Value } } catch {}
+    $acts = @()
+    try { $sp = $ce.GetSupportedPatterns(); foreach ($p in $sp) { $pn = $p.ProgrammaticName; if ($pn -match 'Invoke') { $acts += 'invoke' } elseif ($pn -match 'Toggle') { $acts += 'toggle' } elseif ($pn -match 'SelectionItem') { $acts += 'select' } elseif ($pn -match 'ExpandCollapse') { $acts += 'expand' } elseif ($pn -match 'Value') { $acts += 'set_value' } elseif ($pn -match 'Scroll') { $acts += 'scroll' } } } catch {}
+    $bb = $null
+    if ($br.Width -gt 0 -and $br.Height -gt 0) { $bb = @{ x=[math]::Round($br.X); y=[math]::Round($br.Y); w=[math]::Round($br.Width); h=[math]::Round($br.Height); cx=[math]::Round($br.X+$br.Width/2); cy=[math]::Round($br.Y+$br.Height/2) } }
+    $script:els += @{ index=$script:i; depth=$d; type=$ctn; name=$nm; value=$val; automationId=$aid; bbox=$bb; actions=$acts }
+    $script:i++
+    try { $w = [System.Windows.Automation.TreeWalker]::ControlViewWalker; $ch = $w.GetFirstChild($ce); while ($ch -and -not $script:trunc) { Walk $ch ($d+1); $ch = $w.GetNextSibling($ch) } } catch {}
+  } catch {}
+}
+Walk $root 0
+@{ truncated=$trunc; count=$els.Count; elements=$els } | ConvertTo-Json -Depth 10 -Compress
+`;
+  const out = await _execCmd('powershell.exe', [
+    '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', psScript
+  ]);
+  return JSON.parse(out.trim());
+}
+
+// macOS: use osascript (AppleScript) via System Events to enumerate UI elements
+async function _getMacUITree() {
+  const scpt = `
+on walk(el, d, maxD, maxN)
+  set output to ""
+  set cnt to 0
+  if d > maxD then return ""
+  try
+    set kids to UI elements of el
+  on error
+    set kids to {}
+  end try
+  repeat with k in kids
+    if cnt >= maxN then
+      set output to output & "TRUNCATED"
+      return output
+    end if
+    try
+      set kClass to class of k as text
+      set kName to ""
+      set kDesc to ""
+      set kVal to ""
+      set kRole to ""
+      try
+        set kRole to role of k
+      end try
+      try
+        set kName to name of k
+      end try
+      try
+        set kDesc to description of k
+      end try
+      try
+        set kVal to value of k
+      end try
+      set kPos to ""
+      try
+        set kPos to position of k
+      end try
+      set kSize to ""
+      try
+        set kSize to size of k
+      end try
+      set posStr to ""
+      if kPos is not "" and kSize is not "" then
+        set px to item 1 of kPos
+        set py to item 2 of kPos
+        set sw to item 1 of kSize
+        set sh to item 2 of kSize
+        set cx to px + sw / 2
+        set cy to py + sh / 2
+        set posStr to "BBOX:" & (px as integer) & "," & (py as integer) & "," & (sw as integer) & "," & (sh as integer) & "," & (cx as integer) & "," & (cy as integer)
+      end if
+      set indent to ""
+      repeat d times
+        set indent to indent & "  "
+      end repeat
+      set output to output & indent & "- [" & kRole & "] " & kName & " | " & kClass & " | " & kVal & " | " & kDesc & " | " & posStr & linefeed
+      set output to output & my walk(k, d + 1, maxD, maxN)
+      set cnt to cnt + 1
+    end try
+  end repeat
+  return output
+end walk
+
+tell application "System Events"
+  set frontApp to first application process whose frontmost is true
+  set winList to windows of frontApp
+  set output to ""
+  if (count of winList) > 0 then
+    set w to item 1 of winList
+    set winName to name of w
+    set output to "- [AXWindow] " & winName & linefeed
+    set output to output & my walk(w, 1, 15, 300)
+  end if
+  return output
+end tell
+`;
+  // osascript doesn't easily produce JSON; we get text and parse minimally
+  let out;
+  try {
+    out = await _execCmd('osascript', ['-e', scpt]);
+  } catch (e) {
+    // Accessibility permission not granted or osascript failed
+    throw new Error('macOS accessibility permission required or osascript failed: ' + e.message);
+  }
+  // Parse the text output into a structured form
+  const lines = out.split('\n').filter(l => l.trim() && !l.startsWith('TRUNCATED'));
+  const truncated = out.includes('TRUNCATED');
+  const elements = [];
+  let idx = 0;
+  for (const line of lines) {
+    const m = line.match(/^(\s*)- \[(\w+)\]\s*(.*?) \| (.+?) \| (.+?) \| (.+?) \| (.*)$/);
+    if (!m) continue;
+    const depth = Math.floor((m[1] || '').length / 2);
+    const role = m[2];
+    const name = m[3] || '';
+    const cls = m[4] || '';
+    const val = m[5] || '';
+    const desc = m[6] || '';
+    const bboxStr = m[7] || '';
+    let bbox = null;
+    if (bboxStr.startsWith('BBOX:')) {
+      const parts = bboxStr.slice(5).split(',').map(Number);
+      if (parts.length === 6) {
+        bbox = { x: parts[0], y: parts[1], w: parts[2], h: parts[3], cx: parts[4], cy: parts[5] };
+      }
+    }
+    const actions = [];
+    if (cls === 'button' || cls === 'Button') actions.push('invoke');
+    if (cls === 'checkbox' || cls === 'CheckBox') actions.push('toggle');
+    elements.push({ index: idx++, depth, type: role, name, value: val || null, automationId: null, bbox, actions });
+  }
+  return { truncated, count: elements.length, elements };
+}
+
+// Linux: use Python pyatspi (AT-SPI) if available
+async function _getLinuxUITree() {
+  const pyScript = `
+import json, sys
+try:
+    import pyatspi
+except ImportError:
+    print(json.dumps({"ok": False, "error": "pyatspi not installed. Install with: pip install pyatspi"}))
+    sys.exit(0)
+
+desktop = pyatspi.Registry.getDesktop(0)
+elements = []
+idx = [0]
+trunc = [False]
+
+def walk(el, d):
+    if idx[0] >= 300 or d > 15:
+        trunc[0] = True
+        return
+    try:
+        role = el.getRoleName()
+        name = el.name or ""
+        desc = el.description or ""
+        bb = el.getExtents()
+        bbox = None
+        if bb.width > 0 and bb.height > 0:
+            bbox = {"x": bb.x, "y": bb.y, "w": bb.width, "h": bb.height, "cx": bb.x + bb.width // 2, "cy": bb.y + bb.height // 2}
+        actions = []
+        try:
+            for i in range(el.nActions):
+                an = el.getActionName(i)
+                if an: actions.append(an.lower().replace(" ", "_"))
+        except: pass
+        val = None
+        try:
+            val = el.queryValue().currentValue
+        except: pass
+        elements.append({"index": idx[0], "depth": d, "type": role, "name": name, "value": val, "automationId": None, "bbox": bbox, "actions": actions})
+        idx[0] += 1
+        for i in range(el.childCount):
+            if trunc[0]: break
+            try:
+                child = el[i]
+                if child: walk(child, d + 1)
+            except: pass
+    except Exception:
+        pass
+
+# Start from focused application or desktop
+try:
+    focused = pyatspi.Registry.getFocus()
+    if focused:
+        walk(focused, 0)
+    else:
+        walk(desktop, 0)
+except Exception:
+    walk(desktop, 0)
+
+print(json.dumps({"truncated": trunc[0], "count": len(elements), "elements": elements}))
+`;
+  // Try python3 first, then python
+  let out;
+  try {
+    out = await _execCmd('python3', ['-c', pyScript]);
+  } catch (e) {
+    try {
+      out = await _execCmd('python', ['-c', pyScript]);
+    } catch (e2) {
+      throw new Error('Python/pyatspi not available. Install with: pip install pyatspi (' + e2.message + ')');
+    }
+  }
+  return JSON.parse(out.trim());
+}
+
+ipcMain.handle('computer:getUITree', async () => {
+  try {
+    let tree;
+    if (process.platform === 'win32') {
+      tree = await _getWindowsUITree();
+    } else if (process.platform === 'darwin') {
+      tree = await _getMacUITree();
+    } else {
+      tree = await _getLinuxUITree();
+    }
     return { ok: true, ...tree };
   } catch (e) { return { ok: false, error: e.message }; }
 });
@@ -5670,6 +5915,12 @@ app.whenReady().then(async () => {
   webControlService.onUiEvent = (data) => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('webControl:uiEvent', data);
+    }
+  };
+  // WebUI 上传文件后通知渲染器刷新附件列表
+  webControlService.onFileUploaded = (filePath, fileName, isImage) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('webControl:fileUploaded', { path: filePath, name: fileName, isImage });
     }
   };
   // 渲染器 → WS 广播：DOM 镜像更新（mirror_head / mirror_body）

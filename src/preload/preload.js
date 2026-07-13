@@ -343,5 +343,6 @@ contextBridge.exposeInMainWorld('api', {
   webControlUiEvent: (data) => ipcRenderer.send('webControl:uiEvent', data),
   webControlMirrorUpdate: (data) => ipcRenderer.send('webControl:mirrorUpdate', data),
   onWebControlUiEvent: (cb) => ipcRenderer.on('webControl:uiEvent', (_, data) => cb(data)),
+  onWebControlFileUploaded: (cb) => ipcRenderer.on('webControl:fileUploaded', (_, data) => cb(data)),
   onGameFinished: (cb) => ipcRenderer.on('game:finished', (_, data) => cb(data)),
 });
