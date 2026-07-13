@@ -1934,6 +1934,44 @@ ipcMain.handle('computer:getScreenSize', async () => {
   } catch (e) { return { ok: false, error: e.message }; }
 });
 
+ipcMain.handle('computer:getUITree', async () => {
+  // Windows: use PowerShell UI Automation; other platforms: fallback
+  if (process.platform !== 'win32') {
+    return { ok: false, error: 'UI tree extraction only supported on Windows' };
+  }
+  try {
+    // Resolve script path (works both in dev and asar-packed)
+    const { app } = require('electron');
+    let scriptPath;
+    const candidatePaths = [
+      path.join(__dirname, 'scripts', 'get-ui-tree.ps1'),
+      path.join(app.getAppPath(), 'src', 'main', 'scripts', 'get-ui-tree.ps1'),
+      path.join(process.resourcesPath, 'app.asar.unpacked', 'src', 'main', 'scripts', 'get-ui-tree.ps1')
+    ];
+    scriptPath = candidatePaths.find(p => fs.existsSync(p));
+    if (!scriptPath) throw new Error('get-ui-tree.ps1 not found');
+
+    const { execFile } = require('child_process');
+    const result = await new Promise((resolve, reject) => {
+      execFile('powershell.exe', [
+        '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+        '-File', scriptPath,
+        '-MaxDepth', '15',
+        '-MaxElements', '300'
+      ], {
+        timeout: 15000,
+        maxBuffer: 10 * 1024 * 1024,
+        windowsHide: true
+      }, (err, stdout, stderr) => {
+        if (err) { reject(new Error(stderr || err.message)); return; }
+        resolve(stdout);
+      });
+    });
+    const tree = JSON.parse(result);
+    return { ok: true, ...tree };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
 // ---- IPC: Screenshot ----
 ipcMain.handle('screenshot:take', async (_, workspacePath) => {
   try {

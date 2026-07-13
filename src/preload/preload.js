@@ -158,6 +158,7 @@ contextBridge.exposeInMainWorld('api', {
   computerCursorPosition: () => ipcRenderer.invoke('computer:cursorPosition'),
   computerWait: (duration) => ipcRenderer.invoke('computer:wait', duration),
   computerGetScreenSize: () => ipcRenderer.invoke('computer:getScreenSize'),
+  computerGetUITree: () => ipcRenderer.invoke('computer:getUITree'),
 
   // LLM
   chatLLM: (messages, options) => ipcRenderer.invoke('llm:chat', messages, options),

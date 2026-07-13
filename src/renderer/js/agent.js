@@ -2228,6 +2228,8 @@ ${toolListSection}`;
           switch (action) {
             case 'screenshot':
               return await window.api.computerScreenshot(this.workspacePath);
+            case 'get_ui_tree':
+              return await window.api.computerGetUITree();
             case 'mouse_move': {
               if (!Array.isArray(coord) || coord.length < 2)
                 return { ok: false, error: 'coordinate [x,y] required for mouse_move' };
