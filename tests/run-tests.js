@@ -47,7 +47,7 @@ test('each card should have required fields', () => {
     assert.ok(card.id !== undefined, `card missing id`);
     assert.ok(card.name, `card ${card.id} missing name`);
     assert.ok(card.nameEn, `card ${card.id} missing nameEn`);
-    assert.ok(card.meaning, `card ${card.id} missing meaning`);
+    assert.ok(card.meaningOfUpright, `card ${card.id} missing meaningOfUpright`);
     assert.ok(card.icon, `card ${card.id} missing icon`);
   }
 });

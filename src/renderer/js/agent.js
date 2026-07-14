@@ -907,7 +907,6 @@ ${toolListSection}`;
       const rawContent = (msg?.content || '').trim();
       // 思考模型（如 deepseek-v4-flash-free）经常 content 为空，答案在 reasoning_content 里
       const rawReasoning = (msg?.reasoning_content || '').trim();
-      console.log('[tool-opt] LLM 返回:', { contentLen: rawContent.length, reasoningLen: rawReasoning.length, contentPreview: rawContent.substring(0, 200), reasoningPreview: rawReasoning.substring(0, 200) });
 
       // Preprocess: strip think tags and code fences for reliable JSON parsing
       const cleanText = (text) => {
@@ -988,11 +987,9 @@ ${toolListSection}`;
           })
           .map(t => t.name);
         if (extractedFromText.length > 0) {
-          console.log('[tool-opt] 兜底：从文本提取工具名（JSON 模式未生效）:', extractedFromText);
           selected = extractedFromText;
         }
       }
-      console.log('[tool-opt] 解析结果:', { parsedSelected: selectedRaw.length, validSelected: selected.length, selectedNames: selected });
       const compacted = this.compactOptimizedSelection(selected, enabledDefs, firstUserMessage);
 
       // 关键修复：无论 LLM 返回什么都必须给 optimizedToolNames 赋非空值，
@@ -1004,7 +1001,6 @@ ${toolListSection}`;
       this.optimizedToolNames = finalSelection;
       this.optimizedToolReason = typeof parsed?.reason === 'string' ? parsed.reason : (reason || '首条消息优化');
       this.contextManager.setSystemPrompt(this.getSystemPrompt());
-      console.log('[tool-opt] 优化完成:', { selected: selected.length, final: finalSelection.length, reason: this.optimizedToolReason });
       return { ok: true, selected: this.optimizedToolNames, reason: this.optimizedToolReason };
     } catch (e) {
       // 即使失败也要赋非空值，避免下次 sendMessage 重复触发补偿优化

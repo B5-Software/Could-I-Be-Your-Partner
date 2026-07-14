@@ -182,7 +182,7 @@ class EmailService {
         const parsed = await simpleParser(all.body);
         console.log('[Email] Parsed message UID:', msg.attributes?.uid, 'from:', parsed.from?.text, 'subject:', parsed.subject);
         results.push({
-          uid: msg.attributes.uid,
+          uid: msg.attributes?.uid,
           from: parsed.from?.text || '',
           subject: parsed.subject || '',
           text: parsed.text || '',
