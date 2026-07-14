@@ -500,6 +500,8 @@
   overflow: hidden;
   text-overflow: ellipsis;
   -webkit-app-region: no-drag;
+  align-self: center;
+  margin-right: 4px;
 }
 
 /* 远程连接状态横幅 */

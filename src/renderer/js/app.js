@@ -1085,6 +1085,7 @@
   let remoteReconnectTimer = null; // 自动重连定时器
   let remoteAvatars = null;         // { ai, user } 远端头像
   const _remoteWsPendingByType = new Map(); // WS 请求/响应映射（按期望响应类型）
+  let remoteConnectionId = 0;        // 连接生成计数器，invalidate 旧的连接尝试
 
   function setConnectionMode(mode) {
     const localBtn = document.getElementById('conn-btn-local');
@@ -1098,6 +1099,7 @@
       remoteBtn?.classList.remove('active');
       // 主动断开远程连接
       remoteIntentionalClose = true;
+      remoteConnectionId++; // invalidate 所有进行中的连接尝试
       if (remoteReconnectTimer) { clearTimeout(remoteReconnectTimer); remoteReconnectTimer = null; }
       if (remoteWs) { try { remoteWs.close(); } catch (_) {} remoteWs = null; }
       const wasRemote = isRemoteMode;
@@ -1165,6 +1167,7 @@
 
   // 发起一次远程连接。reconnect=true 表示自动重连调用。
   async function connectRemote(url, pwd, totp, reconnect = false) {
+    const myId = ++remoteConnectionId;
     const statusEl = document.getElementById('remote-status');
     if (!reconnect && statusEl) statusEl.textContent = '连接中...';
     setRemoteBanner('connecting');
@@ -1179,7 +1182,9 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ password: pwd, totpCode: totp })
       });
+      if (myId !== remoteConnectionId) return; // 已被 setConnectionMode('local') 取消
       const loginData = await loginRes.json();
+      if (myId !== remoteConnectionId) return; // 已被取消
       if (!loginData.ok) {
         if (!reconnect && statusEl) statusEl.textContent = loginData.error || '登录失败';
         setRemoteBanner('error', loginData.error || '登录失败');
@@ -1189,6 +1194,7 @@
       const wsUrl = url.replace(/^http/, 'ws') + '/ws';
       remoteWs = new WebSocket(wsUrl);
       remoteWs.onopen = () => {
+        if (myId !== remoteConnectionId) { try { remoteWs.close(); } catch (_) {} return; }
         // 跨源 WS 无法携带 cookie，用首条 auth 消息完成认证
         remoteWs.send(JSON.stringify({ type: 'auth', password: pwd, totpCode: totp }));
       };
@@ -1196,10 +1202,12 @@
         try { handleRemoteMessage(JSON.parse(ev.data)); } catch (_) {}
       };
       remoteWs.onerror = () => {
+        if (myId !== remoteConnectionId) return;
         if (!reconnect && statusEl) statusEl.textContent = '连接失败，请检查地址或网络';
         setRemoteBanner('error', 'WebSocket 连接失败');
       };
       remoteWs.onclose = () => {
+        if (myId !== remoteConnectionId) return; // 旧连接，不重连
         const wasRemote = isRemoteMode;
         isRemoteMode = false;
         // 清理挂起的请求
@@ -1221,6 +1229,7 @@
         }
       };
     } catch (e) {
+      if (myId !== remoteConnectionId) return; // 已被取消
       if (!reconnect && statusEl) statusEl.textContent = '错误: ' + (e?.message || e);
       setRemoteBanner('error', String(e?.message || e));
       // 网络错误也尝试重连
@@ -1286,6 +1295,7 @@
   // ---- Remote 镜像应用函数（与 WebUI 客户端逻辑一致）----
   let _remoteApplying = false; // 防止事件委托反馈循环
   let _remoteEventHandlers = null; // 事件委托处理器引用
+  let _remoteBodyChunks = null; // 分块 mirror_body 重组缓冲区
 
   // 本地控制元素：不被远端镜像覆盖（Local/Remote 切换器、远程连接模态框、连接横幅）
   function _isLocalControlEl(el) {
@@ -1418,6 +1428,34 @@
     catch (e) { console.error('[Remote] dom_text error:', e); }
     finally { setTimeout(function() { _remoteApplying = false; }, 20); }
   }
+  function applyRemoteDomAppend(msg) {
+    _remoteApplying = true;
+    try {
+      var c = document.querySelector(msg.container);
+      if (c && !_isLocalControlEl(c)) {
+        var tmp = document.createElement('div');
+        tmp.innerHTML = msg.html || '';
+        while (tmp.firstChild) c.appendChild(tmp.firstChild);
+        // 自动滚屏（聊天容器）
+        var chatContainers = ['#chat-messages', '#code-chat-messages', '#babe-chat-messages'];
+        for (var i = 0; i < chatContainers.length; i++) {
+          if (c.closest(chatContainers[i])) { c.scrollTop = c.scrollHeight; break; }
+        }
+      }
+    } catch (e) { console.error('[Remote] dom_append error:', e); }
+    finally { setTimeout(function() { _remoteApplying = false; }, 20); }
+  }
+  function applyRemoteDomValue(msg) {
+    _remoteApplying = true;
+    try {
+      var el = document.querySelector(msg.selector);
+      if (el && !_isLocalControlEl(el) && 'value' in el) {
+        el.value = msg.value != null ? msg.value : '';
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+    } catch (e) { console.error('[Remote] dom_value error:', e); }
+    finally { setTimeout(function() { _remoteApplying = false; }, 20); }
+  }
 
   // ---- 事件委托：Remote 模式下所有交互通过 ui_event 转发到远端 ----
   function enableRemoteEventDelegation() {
@@ -1435,7 +1473,17 @@
     };
     var clickHandler = function(e) {
       if (_remoteApplying) return;
-      if (e.target.closest('a')) e.preventDefault();
+      // 拦截 Markdown 链接：http/https 链接在本地新标签页打开，不转发到远端
+      var link = e.target.closest('a');
+      if (link) {
+        var href = link.getAttribute('href');
+        if (href && (href.indexOf('http://') === 0 || href.indexOf('https://') === 0)) {
+          e.preventDefault(); e.stopPropagation();
+          window.open(href, '_blank');
+          return;
+        }
+        e.preventDefault();
+      }
       sendEvent('click', e.target);
     };
     var inputHandler = function(e) {
@@ -1517,6 +1565,25 @@
       case 'mirror_body':
         applyRemoteBody(data);
         break;
+      case 'mirror_body_start':
+        _remoteBodyChunks = { transferId: data.transferId, chunks: new Array(data.totalChunks), totalChunks: data.totalChunks, received: 0 };
+        break;
+      case 'mirror_body_chunk':
+        if (_remoteBodyChunks && _remoteBodyChunks.transferId === data.transferId) {
+          _remoteBodyChunks.chunks[data.index] = data.chunk;
+          _remoteBodyChunks.received++;
+        }
+        break;
+      case 'mirror_body_end':
+        if (_remoteBodyChunks && _remoteBodyChunks.transferId === data.transferId) {
+          try {
+            var fullJson = _remoteBodyChunks.chunks.join('');
+            var snapshot = JSON.parse(fullJson);
+            applyRemoteBody(snapshot);
+          } catch (e) { console.error('[Remote] Failed to reassemble chunked mirror_body:', e); }
+          _remoteBodyChunks = null;
+        }
+        break;
       case 'dom_clear':
         applyRemoteDomClear(data);
         break;
@@ -1529,8 +1596,14 @@
       case 'dom_update':
         applyRemoteDomUpdate(data);
         break;
+      case 'dom_append':
+        applyRemoteDomAppend(data);
+        break;
       case 'dom_text':
         applyRemoteDomText(data);
+        break;
+      case 'dom_value':
+        applyRemoteDomValue(data);
         break;
 
       // ---- UI 状态消息（镜像不覆盖的特殊状态）----
