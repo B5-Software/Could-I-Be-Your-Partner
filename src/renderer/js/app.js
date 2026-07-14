@@ -1239,11 +1239,14 @@
   }
 
   document.getElementById('btn-remote-connect')?.addEventListener('click', async () => {
-    const url = document.getElementById('remote-url').value.trim().replace(/\/$/, '');
+    let url = document.getElementById('remote-url').value.trim().replace(/\/$/, '');
     const pwd = document.getElementById('remote-password').value;
     const totp = document.getElementById('remote-totp').value.trim();
     const statusEl = document.getElementById('remote-status');
     if (!url || !pwd) { statusEl.textContent = '请填写地址和密码'; return; }
+    // 自动补全协议前缀：用户可能输入 "172.168.7.48:3456" 而未带 http://
+    // 不补全的话 fetch 会把它当作相对路径，解析为 file:// 协议下的路径
+    if (!/^https?:\/\//i.test(url)) url = 'http://' + url;
     remoteBaseUrl = url;
     remotePassword = pwd;
     remoteTotp = totp;
@@ -1359,19 +1362,9 @@
   function applyRemoteBody(msg) {
     _remoteApplying = true;
     try {
-      // 更新标题栏
-      if (msg.titlebar) {
-        var tb = document.getElementById('titlebar');
-        if (tb) tb.outerHTML = msg.titlebar;
-        // 恢复本地控制元素状态
-        var newTb = document.getElementById('titlebar');
-        if (newTb) {
-          var cs = newTb.querySelector('#connection-switcher');
-          if (cs) cs.style.display = 'none';
-          var ctrls = newTb.querySelector('.titlebar-controls');
-          if (ctrls) ctrls.style.display = 'none';
-        }
-      }
+      // Remote 端保留本地标题栏（含 Local/Remote 切换器、窗口控制按钮），
+      // 不用主机的 titlebar 覆盖 —— 否则远端将无法切换回 Local 模式。
+      // 对话标题通过单独的 dom_text 事件同步到 #titlebar-title。
       var app = document.getElementById('app');
       if (!app) return;
       app.innerHTML = msg.html || '';

@@ -1833,9 +1833,10 @@ ${toolListSection}`;
         }
         case 'presentFile': {
           // 解析工作目录相对路径（renderer 中不可用 require('path')，用字符串拼接）
+          // 使用 '/' 作为分隔符：Node.js fs 在 Windows/macOS/Linux 上都接受 '/'
           const relPath = args.path || '';
           const fullPath = this.workspacePath
-            ? (this.workspacePath.replace(/[\\/]+$/, '') + '\\' + relPath.replace(/^[\\/]+/, ''))
+            ? (this.workspacePath.replace(/[\\/]+$/, '') + '/' + relPath.replace(/^[\\/]+/, ''))
             : relPath;
           // 读取文件验证存在性
           const readRes = await window.api.readFile(fullPath);
