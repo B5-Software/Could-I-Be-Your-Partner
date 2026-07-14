@@ -1569,6 +1569,13 @@ ${toolListSection}`;
           // 通知 UI 工具执行结果
           if (this.onMessage) this.onMessage('tool-result', { name: toolName, result: toolResult });
 
+          // 多模态工具结果：图片以 image_url 格式注入上下文，而非 base64 字符串
+          if (toolResult && toolResult._multimodal && toolResult.imageUrl) {
+            this.contextManager.addMultimodalToolResult(tc.id, toolName, toolResult.text, toolResult.imageUrl);
+            if (this.onToolCall) this.onToolCall(toolName, args, 'done', toolResult);
+            continue;
+          }
+
           const resultStr = typeof toolResult === 'string' ? toolResult : JSON.stringify(toolResult);
 
           // 小文件不截断：Code Agent 常需读取完整源代码，3000字符阈值会把小文件也截断。
@@ -1857,6 +1864,25 @@ ${toolListSection}`;
             });
           }
           return { ok: true, message: `文件 ${filename} 已呈递给用户` };
+        }
+        case 'readImageFile': {
+          // 多模态图片读取：读取图片为 base64 data URL，以多模态格式注入上下文
+          const imgRelPath = args.path || '';
+          if (!imgRelPath) return { ok: false, error: '缺少 path 参数' };
+          const imgFullPath = this.workspacePath
+            ? (this.workspacePath.replace(/[\\/]+$/, '') + '/' + imgRelPath.replace(/^[\\/]+/, ''))
+            : imgRelPath;
+          // 非多模态模型：不支持图片注入，返回提示
+          if (!this.isVisionModel()) {
+            return { ok: false, error: '当前模型不支持多模态视觉输入，无法读取图片。请使用 OCR 工具（extractTextFromImage）或切换到支持视觉的模型。' };
+          }
+          const readRes = await window.api.readFileBase64(imgFullPath);
+          if (!readRes || !readRes.ok || !readRes.data) {
+            return { ok: false, error: readRes?.error || '读取图片文件失败（文件不存在或不是图片）' };
+          }
+          // 标记为多模态结果，由 agent loop 特殊处理（注入为 image_url content array）
+          const imgDesc = args.description ? `：${args.description}` : '';
+          return { ok: true, _multimodal: true, imageUrl: readRes.data, text: `已读取图片文件 ${imgRelPath}${imgDesc}（图片已注入上下文，可直接查看）` };
         }
         case 'createFile': return await window.api.createFile(args.path, args.content || '');
         case 'deleteFile': return await window.api.deleteFile(args.path);
@@ -2169,8 +2195,14 @@ ${toolListSection}`;
           const r = await window.api.browserNavigate(navUrl, args?.waitUntil, this.workspacePath);
           return r;
         }
-        case 'browserScreenshot':
-          return await window.api.browserScreenshot(args?.fullPage, this.workspacePath);
+        case 'browserScreenshot': {
+          const ssRes = await window.api.browserScreenshot(args?.fullPage, this.workspacePath);
+          // 不向 LLM 返回 base64 dataUrl（过长且无用），仅返回文件路径信息
+          if (ssRes && ssRes.ok) {
+            return { ok: true, filePath: ssRes.filePath, message: '截图已保存。如需查看图片内容，请调用 readImageFile 工具读取该截图。' };
+          }
+          return ssRes;
+        }
         case 'browserClick':
           return await window.api.browserClick(args.selector, args?.timeout, this.workspacePath);
         case 'browserType':

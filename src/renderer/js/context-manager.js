@@ -55,6 +55,12 @@ class ContextManager {
     tokens += this.estimateTokens(msg.role);
     if (typeof msg.content === 'string') {
       tokens += this.estimateTokens(msg.content);
+    } else if (Array.isArray(msg.content)) {
+      // 多模态 content 数组：文本部分正常估算，图片部分按固定 token 计（与 OpenAI vision 估算一致）
+      for (const part of msg.content) {
+        if (part.type === 'text') tokens += this.estimateTokens(part.text || '');
+        else if (part.type === 'image_url') tokens += 765; // 图片 token 估算（detail:auto ≈ 765 tokens）
+      }
     }
     if (msg.tool_calls) {
       tokens += this.estimateTokens(JSON.stringify(msg.tool_calls));
@@ -93,6 +99,18 @@ class ContextManager {
     this.addMessage({ role: 'tool', tool_call_id: toolCallId, name, content: typeof result === 'string' ? result : JSON.stringify(result) });
   }
 
+  /**
+   * 添加多模态工具结果：文本 + 图片（OpenAI vision format content array）
+   * 用于 readImageFile 等工具，将图片直接注入上下文而非返回 base64 字符串。
+   */
+  addMultimodalToolResult(toolCallId, name, textContent, imageUrl) {
+    const content = [
+      { type: 'text', text: textContent },
+      { type: 'image_url', image_url: { url: imageUrl } }
+    ];
+    this.addMessage({ role: 'tool', tool_call_id: toolCallId, name, content });
+  }
+
   pinMessage(index) {
     if (index >= 0 && index < this.messages.length) {
       this.pinnedMessages.push(index);
@@ -109,7 +127,7 @@ class ContextManager {
     for (let i = 0; i < this.messages.length; i++) {
       if (this.pinnedMessages.includes(i)) continue;
       const msg = this.messages[i];
-      if (msg.role === 'tool' && msg.content && msg.content.length > 500) {
+      if (msg.role === 'tool' && typeof msg.content === 'string' && msg.content.length > 500) {
         msg.content = msg.content.substring(0, 300) + '\n...[内容已截断]';
       }
     }
@@ -132,8 +150,12 @@ class ContextManager {
         const idx = toolIndices[i];
         if (this.pinnedMessages.includes(idx)) continue;
         const msg = this.messages[idx];
-        if (msg.content && msg.content.length > MICROCOMPACT_TRUNCATE_TO) {
+        if (typeof msg.content === 'string' && msg.content.length > MICROCOMPACT_TRUNCATE_TO) {
           msg.content = '[旧工具结果已清理，详见对话历史]';
+          cleared++;
+        } else if (Array.isArray(msg.content)) {
+          // 多模态工具结果：清理为文本提示
+          msg.content = '[旧工具结果已清理（含图片），详见对话历史]';
           cleared++;
         }
       }
@@ -165,7 +187,13 @@ class ContextManager {
           : '';
         line = `助手: ${m.content || ''}${tools}`;
       } else if (m.role === 'tool') {
-        const c = typeof m.content === 'string' ? m.content : '';
+        let c = '';
+        if (typeof m.content === 'string') c = m.content;
+        else if (Array.isArray(m.content)) {
+          // 多模态工具结果：提取文本部分，忽略图片部分
+          c = m.content.filter(p => p.type === 'text').map(p => p.text || '').join(' ');
+          c = c + ' [含图片内容]';
+        }
         const trimmed = c.length > SUMMARY_MAX_TOOL_RESULT_CHARS
           ? c.substring(0, SUMMARY_MAX_TOOL_RESULT_CHARS) + '...[截断]'
           : c;
@@ -193,9 +221,11 @@ class ContextManager {
         const msg = this.messages[idx];
         if (!msg) continue;
         if (msg.role === 'user') {
-          summary += `用户: ${(msg.content || '').substring(0, 100)}\n`;
+          const c = typeof msg.content === 'string' ? msg.content : (Array.isArray(msg.content) ? '[多模态内容]' : '');
+          summary += `用户: ${c.substring(0, 100)}\n`;
         } else if (msg.role === 'assistant' && msg.content) {
-          summary += `助手: ${msg.content.substring(0, 100)}\n`;
+          const c = typeof msg.content === 'string' ? msg.content : '';
+          summary += `助手: ${c.substring(0, 100)}\n`;
         }
       }
     }

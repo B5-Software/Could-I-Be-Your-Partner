@@ -117,7 +117,7 @@ function filterToolsByConfig(tools, settings) {
 // MCP 动态工具由 getAllToolDefinitions 自动追加（不受此白名单限制，按 mode 过滤时 dynamic=true 跳过检查）。
 const CODE_TOOLS = new Set([
   // 文件操作（Read/Write/Edit/Delete/Move/Copy — 对标 Claude Code 的 Read/Write/Edit）
-  'readFile', 'createFile', 'editFile', 'multiEditFile', 'presentFile', 'deleteFile', 'moveFile', 'copyFile',
+  'readFile', 'createFile', 'editFile', 'multiEditFile', 'presentFile', 'readImageFile', 'deleteFile', 'moveFile', 'copyFile',
   'listDirectory', 'makeDirectory', 'deleteDirectory',
   'localSearch',  // 文件名搜索（对标 Claude Code 的 LS）
   'searchInFiles',  // 文件内容搜索（对标 Claude Code 的 Grep）
@@ -207,6 +207,7 @@ const TOOL_DEFINITIONS = [
   { name: 'editFile', desc: '编辑文件', icon: 'fa-file-pen', category: '文件', sensitive: true },
   { name: 'multiEditFile', desc: '批量编辑文件', icon: 'fa-file-pen', category: '文件', sensitive: true },
   { name: 'presentFile', desc: '文件呈递器', icon: 'fa-file-export', category: '文件', sensitive: false },
+  { name: 'readImageFile', desc: '读取图片文件（多模态：图片直接注入上下文）', icon: 'fa-file-image', category: '文件', sensitive: false },
   { name: 'createFile', desc: '创建文件', icon: 'fa-file-circle-plus', category: '文件', sensitive: false },
   { name: 'deleteFile', desc: '删除文件', icon: 'fa-file-circle-minus', category: '文件', sensitive: true },
   { name: 'moveFile', desc: '移动/重命名文件', icon: 'fa-file-export', category: '文件', sensitive: true },
@@ -377,6 +378,7 @@ function getToolSchemas(enabledTools, mode) {
     editFile: { type: 'function', function: { name: 'editFile', description: '编辑文件（支持字符串替换和全量覆写两种模式）。字符串替换模式：指定 old_string（要查找的原文）和 new_string（替换文本），支持 replace_all 全局替换。全量覆写模式：仅指定 content 参数。', parameters: { type: 'object', properties: { path: { type: 'string', description: '文件路径（工作目录相对路径或绝对路径）' }, old_string: { type: 'string', description: '要查找并替换的原文（必须与文件内容精确匹配，包括缩进和换行）' }, new_string: { type: 'string', description: '替换后的文本' }, replace_all: { type: 'boolean', description: '是否替换所有匹配项（默认false，仅替换第一个）。当old_string出现多次且未设此选项时将报错。' }, content: { type: 'string', description: '全量覆写模式：直接写入完整新内容（与old_string/new_string互斥）' } }, required: ['path'] } } },
     multiEditFile: { type: 'function', function: { name: 'multiEditFile', description: '批量编辑文件：对同一文件执行多处字符串替换。按顺序依次应用每个编辑。', parameters: { type: 'object', properties: { path: { type: 'string', description: '文件路径' }, edits: { type: 'array', items: { type: 'object', properties: { old_string: { type: 'string', description: '要查找的原文' }, new_string: { type: 'string', description: '替换后的文本' }, replace_all: { type: 'boolean', description: '是否替换所有匹配项' } }, required: ['old_string', 'new_string'] }, description: '编辑列表（按顺序依次应用）' } }, required: ['path', 'edits'] } } },
     presentFile: { type: 'function', function: { name: 'presentFile', description: '文件呈递器：将工作目录中的文件以卡片形式呈递给用户，包含下载按钮。工具调用后立即返回，不阻塞Agent循环。', parameters: { type: 'object', properties: { path: { type: 'string', description: '工作目录中的文件相对路径（必须使用相对路径，禁止使用绝对路径或盘符开头的路径如C:\\或/开头）。正确示例：output/report.pdf、data/result.json；错误示例：C:\\Users\\report.pdf、/home/user/report.pdf' }, title: { type: 'string', description: '卡片标题（可选，默认为文件名）' }, description: { type: 'string', description: '文件描述（可选）' } }, required: ['path'] } } },
+    readImageFile: { type: 'function', function: { name: 'readImageFile', description: '读取图片文件并将其作为图片内容直接注入上下文（仅多模态模型可用）。当模型支持视觉输入时，优先使用此工具读取图片而非OCR。图片以标准多模态格式注入，LLM可直接"看到"图片内容。', parameters: { type: 'object', properties: { path: { type: 'string', description: '图片文件的相对路径（支持 png/jpg/jpeg/gif/webp/bmp 格式）' }, description: { type: 'string', description: '对图片的描述或备注（可选，帮助模型理解图片用途）' } }, required: ['path'] } } },
     createFile: { type: 'function', function: { name: 'createFile', description: '创建新文件', parameters: { type: 'object', properties: { path: { type: 'string', description: '文件路径' }, content: { type: 'string', description: '文件内容' } }, required: ['path'] } } },
     deleteFile: { type: 'function', function: { name: 'deleteFile', description: '删除文件', parameters: { type: 'object', properties: { path: { type: 'string', description: '文件路径' } }, required: ['path'] } } },
     moveFile: { type: 'function', function: { name: 'moveFile', description: '移动/重命名文件', parameters: { type: 'object', properties: { source: { type: 'string', description: '源路径' }, destination: { type: 'string', description: '目标路径' } }, required: ['source', 'destination'] } } },

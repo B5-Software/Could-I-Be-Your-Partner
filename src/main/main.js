@@ -1694,10 +1694,33 @@ ipcMain.handle('terminal:make', (_, cwd) => {
   try {
     const pty = require('node-pty');
     const id = ++terminalIdCounter;
-    const shellName = process.platform === 'win32' ? 'powershell.exe' : process.platform === 'darwin' ? '/bin/zsh' : '/bin/bash';
+    // 检测可用的 shell：macOS 优先用户默认 shell（$SHELL），其次 zsh、bash、sh
+    // Windows 用 powershell.exe，Linux 用 bash
+    let shellName, shellArgs = [];
+    if (process.platform === 'win32') {
+      shellName = 'powershell.exe';
+    } else {
+      // macOS / Linux: 按优先级检测 shell 路径是否存在
+      const candidates = [];
+      // 优先用户默认 shell
+      if (process.env.SHELL && fs.existsSync(process.env.SHELL)) candidates.push(process.env.SHELL);
+      if (process.platform === 'darwin') {
+        candidates.push('/bin/zsh', '/bin/bash', '/bin/sh');
+      } else {
+        candidates.push('/bin/bash', '/bin/sh');
+      }
+      shellName = candidates.find(s => fs.existsSync(s)) || '/bin/sh';
+    }
     // 优先使用传入的工作目录（Chat 模式工作目录 / Code 模式工作区），回退到家目录
     const effectiveCwd = (cwd && typeof cwd === 'string' && fs.existsSync(cwd)) ? cwd : os.homedir();
-    const term = pty.spawn(shellName, [], { name: 'xterm', cols: 120, rows: 30, cwd: effectiveCwd });
+    // 传入 env：macOS 打包后 process.env 可能被精简，显式传入 PATH 确保 posix_spawnp 可用
+    const term = pty.spawn(shellName, shellArgs, {
+      name: 'xterm',
+      cols: 120,
+      rows: 30,
+      cwd: effectiveCwd,
+      env: { ...process.env, TERM: 'xterm-256color' }
+    });
     let buffer = '';
     term.onData(data => { buffer += data; });
     terminals.set(id, { term, buffer: () => { const b = buffer; buffer = ''; return b; } });
