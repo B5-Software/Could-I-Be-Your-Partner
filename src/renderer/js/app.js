@@ -2961,6 +2961,30 @@
     return div.innerHTML;
   }
 
+  /**
+   * 从消息 content 提取纯文本。
+   * content 可能是字符串或 OpenAI 多模态数组（[{type:'text',...},{type:'image_url',...}]）。
+   * 用于历史记录渲染时统一为字符串。
+   */
+  function extractTextContent(content) {
+    if (typeof content === 'string') return content;
+    if (Array.isArray(content)) {
+      return content
+        .filter(p => p && p.type === 'text' && p.text)
+        .map(p => p.text)
+        .join('\n');
+    }
+    if (content == null) return '';
+    return String(content);
+  }
+
+  /** 转义 CSS 选择器中的特殊字符（用于属性选择器值） */
+  function cssEscape(str) {
+    if (typeof str !== 'string') return '';
+    if (typeof CSS !== 'undefined' && CSS.escape) return CSS.escape(str);
+    return str.replace(/["\\]/g, '\\$&');
+  }
+
   function setSendButtons(isWorking) {
     if (isWorking) {
       if (btnStop) btnStop.classList.remove('hidden');
@@ -6936,6 +6960,8 @@
   let codeCurrentHistoryId = null;
   let codeMessages = []; // [{role, content}]
   let codeCurrentAttachments = []; // Code mode context attachments [{name, path, isImage, content, ext}]
+  // 触发文件树刷新的工具集合（执行后可能增删/移动文件）
+  const _fileSystemTools = new Set(['createFile', 'deleteFile', 'moveFile', 'copyFile', 'editFile', 'multiEditFile', 'writeFile', 'renameFile', 'mkdir', 'rmdir']);
 
   // Monaco Editor state
   let monacoEditor = null;
@@ -7556,6 +7582,10 @@
           break;
         case 'tool-result':
           addCodeToolResult(data);
+          // 文件操作工具执行后刷新文件树（实时更新）
+          if (data && _fileSystemTools.has(data.name)) {
+            if (codeWorkspacePath) loadCodeFileTree(codeWorkspacePath);
+          }
           break;
         case 'present-file':
           addFilePresentCard(data);
@@ -7638,7 +7668,8 @@
     if (!msgsEl) return;
     const div = document.createElement('div');
     div.className = 'tool-call-card';
-    div.id = 'code-tool-' + Date.now();
+    div.id = 'code-tool-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6);
+    if (data.callId) div.dataset.callId = data.callId;
     const argsStr = data.args ? JSON.stringify(data.args, null, 2).slice(0, 500) : '';
     div.innerHTML = `<div class="tool-call-header"><i class="fa-solid fa-wrench"></i> <span>${escapeHtml(data.name || 'tool')}</span></div>` +
       (argsStr ? `<pre class="tool-call-args">${escapeHtml(argsStr)}</pre>` : '') +
@@ -7651,21 +7682,34 @@
   }
 
   function addCodeToolResult(data) {
-    // 在最近的 tool-call-card 中填充结果
+    // 在 tool-call-card 中填充结果
+    // 优先通过 callId 精确匹配（历史加载时多个工具调用可能连续出现）
     const msgsEl = document.getElementById('code-chat-messages');
     if (!msgsEl) return;
-    const cards = msgsEl.querySelectorAll('.tool-call-card');
-    const lastCard = cards[cards.length - 1];
-    if (!lastCard) return;
-    const statusEl = lastCard.querySelector('.tool-call-status');
+    let targetCard = null;
+    if (data.callId) {
+      targetCard = msgsEl.querySelector(`.tool-call-card[data-call-id="${cssEscape(data.callId)}"]`);
+    }
+    if (!targetCard) {
+      // 回退：取最后一个未完成的 card（状态为"执行中"的）
+      const cards = msgsEl.querySelectorAll('.tool-call-card');
+      for (let i = cards.length - 1; i >= 0; i--) {
+        const statusEl = cards[i].querySelector('.tool-call-status');
+        if (statusEl && statusEl.innerHTML.includes('fa-spin')) { targetCard = cards[i]; break; }
+      }
+      // 最终回退：取最后一个 card
+      if (!targetCard) targetCard = cards[cards.length - 1];
+    }
+    if (!targetCard) return;
+    const statusEl = targetCard.querySelector('.tool-call-status');
     if (!statusEl) return;
     const resultStr = typeof data.result === 'string' ? data.result : JSON.stringify(data.result);
     const ok = data.result?.ok !== false;
     statusEl.innerHTML = (ok ? '<i class="fa-solid fa-check"></i> 完成' : '<i class="fa-solid fa-xmark"></i> 失败') +
       (resultStr ? `<pre class="tool-call-result">${escapeHtml(resultStr.slice(0, 800))}</pre>` : '');
     // 增量推送：更新工具调用卡片结果到 WebUI
-    if (lastCard.id) {
-      WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#' + lastCard.id, html: lastCard.outerHTML });
+    if (targetCard.id) {
+      WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#' + targetCard.id, html: targetCard.outerHTML });
     }
   }
 
@@ -7731,7 +7775,6 @@
     }
 
     addCodeMessage('user', displayText);
-    codeMessages.push({ role: 'user', content: displayText });
     input.value = '';
     input.style.height = 'auto';
     clearCodeAttachments();
@@ -7765,6 +7808,13 @@
 
   async function saveCodeHistory() {
     if (!codeWorkspacePath || codeMessages.length === 0) return;
+    // 同步 codeCurrentHistoryId 与 codeAgent.conversationId，避免双重保存产生重复历史条目。
+    // 真正的历史持久化由 codeAgent.saveToHistory()（agent.js）负责，它保存完整的 contextManager.messages。
+    if (codeAgent && codeAgent.conversationId) {
+      codeCurrentHistoryId = codeAgent.conversationId;
+      return;
+    }
+    // Agent 未初始化时的兜底：直接保存 codeMessages
     if (!codeCurrentHistoryId) {
       codeCurrentHistoryId = Date.now().toString(36);
     }
@@ -7813,24 +7863,72 @@
             const loadRes = await window.api.codeLoadHistory(codeWorkspacePath, id);
             if (loadRes.ok && loadRes.data) {
               codeCurrentHistoryId = id;
-              codeMessages = loadRes.data.messages || [];
+              const conv = loadRes.data;
+              const historyMessages = conv.messages || [];
+              // 同步到 codeAgent 的 contextManager（通过 loadFromHistory 恢复完整状态）
+              if (codeAgent) {
+                await codeAgent.loadFromHistory(conv);
+              } else {
+                // Agent 未初始化：先初始化再加载历史
+                const ok = await initCodeAgent();
+                if (ok && codeAgent) await codeAgent.loadFromHistory(conv);
+              }
+              // 同步 codeMessages（轻量镜像，用于 saveCodeHistory 重复保存检测）
+              codeMessages = historyMessages.slice();
+              // 渲染消息列表（对齐 Chat 模式：处理 user/assistant/tool 三种 role 及 tool_calls）
               const msgsEl = document.getElementById('code-chat-messages');
               if (msgsEl) {
                 msgsEl.innerHTML = '';
-                for (const m of codeMessages) {
-                  const msgEl = document.createElement('div');
-                  msgEl.className = 'message ' + m.role;
-                  const avatarIcon = m.role === 'assistant' ? 'fa-robot' : (m.role === 'system' ? 'fa-info-circle' : 'fa-user');
-                  const rendered = (m.role === 'assistant') ? renderMarkdown(m.content) : escapeHtml(m.content);
-                  msgEl.innerHTML = `<div class="message-avatar"><i class="fa-solid ${avatarIcon}"></i></div><div class="message-body"><div class="message-content markdown-body">${rendered}</div></div>`;
-                  msgsEl.appendChild(msgEl);
+                WebUIMirror.pushDomEvent({ type: 'dom_clear', container: '#code-chat-messages' });
+                const toolCallMap = {};
+                for (const msg of historyMessages) {
+                  if (msg.role === 'user') {
+                    const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
+                    addCodeMessage('user', content);
+                  } else if (msg.role === 'assistant') {
+                    // assistant content 可能是字符串或数组（多模态）
+                    const textContent = extractTextContent(msg.content);
+                    if (textContent) addCodeMessage('assistant', textContent);
+                    // 渲染 tool_calls
+                    if (msg.tool_calls && msg.tool_calls.length > 0) {
+                      for (const tc of msg.tool_calls) {
+                        const toolName = tc.function?.name || 'tool';
+                        let args = {};
+                        try { args = JSON.parse(tc.function?.arguments || '{}'); } catch {}
+                        const toolDef = (typeof TOOL_DEFINITIONS !== 'undefined') ? TOOL_DEFINITIONS.find(t => t.name === toolName) : null;
+                        const displayName = toolDef?.desc || toolName;
+                        const card = addCodeToolCall({ name: displayName, args, callId: tc.id });
+                        if (tc.id && card) {
+                          toolCallMap[tc.id] = { card, name: toolName };
+                        }
+                      }
+                    }
+                  } else if (msg.role === 'tool') {
+                    // 工具结果：更新到对应的工具调用卡片
+                    const key = msg.tool_call_id;
+                    const entry = key ? toolCallMap[key] : null;
+                    let result = msg.content;
+                    if (typeof result === 'string') {
+                      try { result = JSON.parse(result); } catch {}
+                    }
+                    if (entry) {
+                      addCodeToolResult({ result, name: entry.name, callId: key });
+                    } else {
+                      // 没有对应的 tool_call（可能是旧历史）：直接渲染为系统消息
+                      const resultStr = typeof result === 'string' ? result : JSON.stringify(result);
+                      addCodeMessage('system', `[工具结果] ${msg.name || 'tool'}: ${resultStr.slice(0, 200)}`);
+                    }
+                  } else if (msg.role === 'system') {
+                    const content = typeof msg.content === 'string' ? msg.content : String(msg.content || '');
+                    addCodeMessage('system', content);
+                  }
                 }
-                msgsEl.scrollTop = msgsEl.scrollHeight;
+                requestAnimationFrame(() => {
+                  msgsEl.scrollTop = msgsEl.scrollHeight;
+                  WebUIMirror.pushDomEvent({ type: 'dom_replace', container: '#code-chat-messages', html: msgsEl.innerHTML });
+                });
               }
               document.querySelector('.nav-item[data-page="code"]')?.click();
-              if (codeAgent) {
-                codeAgent.contextManager.messages = codeMessages.map(m => ({ role: m.role, content: m.content }));
-              }
             }
           });
         });
