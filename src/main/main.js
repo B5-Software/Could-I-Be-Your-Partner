@@ -1357,38 +1357,33 @@ app.whenReady().then(() => {
     try {
       const trusted = systemPreferences.isTrustedAccessibilityClient(true);
       if (!trusted) {
-        console.warn('[Accessibility] Not trusted. Prompt shown; user must grant in System Settings.');
+        // isTrustedAccessibilityClient(true) 只弹一次窗；若用户之前拒绝过则不会再弹，
+        // 需主动打开系统设置引导用户手动授权
+        console.warn('[Accessibility] Not trusted. Opening System Settings to guide user...');
+        try {
+          require('child_process').exec('open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"');
+        } catch (_) {}
       }
     } catch (e) {
       console.warn('[Accessibility] Check failed:', e.message);
     }
     // macOS Sequoia 15+: 主动触发本地网络权限请求
-    // 仅声明 NSLocalNetworkUsageDescription 不会自动弹窗，必须发起一次本地网络访问才会触发。
-    // 这里发起一次到默认网关高位端口的 TCP 连接尝试（必然被拒），目的就是触发系统权限弹窗。
-    // 连接失败/超时都被忽略，只关心是否触发了权限请求。
+    // 仅声明 NSLocalNetworkUsageDescription + NSBonjourServices 不会自动弹窗，
+    // 必须发起一次 Bonjour/mDNS 浏览才会触发系统权限弹窗。
+    // 普通局域网 TCP 连接不会触发本地网络权限（实测），必须用 Bonjour 浏览。
+    // 通过 dns-sd -B 命令浏览 Bonjour 服务，触发权限请求后立即终止。
     try {
-      const nets = os.networkInterfaces();
-      let gatewayIp = null;
-      for (const name of Object.keys(nets)) {
-        for (const ni of nets[name]) {
-          if (ni.family === 'IPv4' && !ni.internal) {
-            // 取本机所在网段的 .1 作为网关候选（即使是真实网关或局域网内任意设备，都能触发本地网络权限）
-            const parts = ni.address.split('.');
-            if (parts.length === 4) { gatewayIp = `${parts[0]}.${parts[1]}.${parts[2]}.1`; break; }
-          }
-        }
-        if (gatewayIp) break;
-      }
-      if (gatewayIp) {
-        const net = require('net');
-        const probe = net.connect({ host: gatewayIp, port: 54321, timeout: 1500 });
-        probe.on('error', () => {});
-        probe.on('timeout', () => probe.destroy());
-        setTimeout(() => { try { probe.destroy(); } catch {} }, 2000);
-        console.log('[LocalNetwork] Probed gateway', gatewayIp, 'to trigger permission prompt');
-      }
+      const { spawn } = require('child_process');
+      const bonjourProbe = spawn('dns-sd', ['-B', '_http._tcp', 'local.'], {
+        stdio: 'ignore',
+        detached: true
+      });
+      // 浏览 3 秒后终止，足够触发权限请求
+      setTimeout(() => { try { bonjourProbe.kill(); } catch {} }, 3000);
+      bonjourProbe.on('error', () => {});
+      console.log('[LocalNetwork] Triggered Bonjour browse to request permission');
     } catch (e) {
-      console.warn('[LocalNetwork] Trigger probe failed:', e.message);
+      console.warn('[LocalNetwork] Bonjour trigger failed:', e.message);
     }
   }
   createWindow();
