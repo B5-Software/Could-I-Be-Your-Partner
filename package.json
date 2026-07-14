@@ -1,6 +1,6 @@
 {
   "name": "could-i-be-your-partner",
-  "version": "1.4.0-alpha.39",
+  "version": "1.4.0-alpha.40",
   "description": "全自动AI Agent，帮助完成一切任务",
   "license": "GPL-3.0-or-later",
   "main": "src/main/main.js",
@@ -26,7 +26,8 @@
     ],
     "asarUnpack": [
       "assets/ocr/**/*",
-      "node_modules/monaco-editor/min/**/*"
+      "node_modules/monaco-editor/min/**/*",
+      "node_modules/node-pty/**/*"
     ],
     "win": {
       "icon": "assets/icons/icons/icon.ico",

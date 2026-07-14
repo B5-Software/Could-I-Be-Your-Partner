@@ -1751,19 +1751,37 @@ ipcMain.handle('terminal:make', (_, cwd) => {
     }
     // 优先使用传入的工作目录（Chat 模式工作目录 / Code 模式工作区），回退到家目录
     const effectiveCwd = (cwd && typeof cwd === 'string' && fs.existsSync(cwd)) ? cwd : os.homedir();
-    // 传入 env：macOS 打包后 process.env 可能被精简，显式传入 PATH 确保 posix_spawnp 可用
+    // macOS 打包后 process.env 可能被精简（从 Finder 启动时 PATH 只有 /usr/bin:/bin），
+    // 显式补充关键环境变量，确保 shell 内命令（如 git、node）可正常工作。
+    // 注意：posix_spawnp 失败的根因是 spawn-helper 二进制被困在 app.asar 内，
+    // 已通过 package.json 的 asarUnpack 配置 node_modules/node-pty/**/* 解决。
+    const userInfo = os.userInfo();
+    const env = {
+      ...process.env,
+      TERM: 'xterm-256color',
+      HOME: process.env.HOME || userInfo.homedir || os.homedir(),
+      USER: process.env.USER || userInfo.username,
+      LOGNAME: process.env.LOGNAME || process.env.USER || userInfo.username,
+      SHELL: process.env.SHELL || shellName,
+      PATH: process.env.PATH || '/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin',
+    };
     const term = pty.spawn(shellName, shellArgs, {
       name: 'xterm',
       cols: 120,
       rows: 30,
       cwd: effectiveCwd,
-      env: { ...process.env, TERM: 'xterm-256color' }
+      env
     });
     let buffer = '';
     term.onData(data => { buffer += data; });
     terminals.set(id, { term, buffer: () => { const b = buffer; buffer = ''; return b; } });
     return { ok: true, terminalId: id };
-  } catch (e) { return { ok: false, error: e.message }; }
+  } catch (e) {
+    // 捕获详细错误信息，便于诊断
+    const detail = e.stack || e.message;
+    console.error('[terminal:make] failed:', detail);
+    return { ok: false, error: e.message, detail };
+  }
 });
 ipcMain.handle('terminal:run', (_, id, command) => {
   const t = terminals.get(id);
