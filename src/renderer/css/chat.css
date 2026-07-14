@@ -845,10 +845,14 @@
   margin: 12px 0;
   border-radius: 16px;
   overflow: hidden;
-  background: linear-gradient(135deg, var(--bg-secondary), var(--bg-tertiary));
-  border: 1px solid var(--border);
+  background: linear-gradient(135deg, var(--bg-secondary, #2a2a2e), var(--bg-tertiary, #3a3a3e));
+  border: 1px solid var(--border, #555);
   box-shadow: 0 4px 20px rgba(0,0,0,0.15);
   transition: transform 0.2s, box-shadow 0.2s;
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  height: auto;
 }
 .file-present-card:hover {
   transform: translateY(-2px);
@@ -859,7 +863,7 @@
   align-items: center;
   gap: 14px;
   padding: 18px 20px 10px;
-  background: linear-gradient(135deg, var(--accent), var(--accent-light));
+  background: linear-gradient(135deg, var(--accent, #4a90d9), var(--accent-light, #6ab0f3));
   color: #fff;
 }
 .file-present-icon {
@@ -890,7 +894,7 @@
 .file-present-desc {
   padding: 10px 20px 4px;
   font-size: 13px;
-  color: var(--text-secondary);
+  color: var(--text-secondary, #ccc);
   line-height: 1.5;
 }
 .file-present-meta {
@@ -898,7 +902,7 @@
   gap: 16px;
   padding: 4px 20px 12px;
   font-size: 12px;
-  color: var(--text-tertiary);
+  color: var(--text-tertiary, #999);
 }
 .file-present-meta span {
   display: flex;
@@ -913,7 +917,7 @@
   width: 100%;
   padding: 12px;
   border: none;
-  background: var(--accent);
+  background: var(--accent, #4a90d9);
   color: #fff;
   font-size: 15px;
   font-weight: 600;
@@ -921,7 +925,7 @@
   transition: background 0.2s;
 }
 .file-present-download-btn:hover {
-  background: var(--accent-dark);
+  background: var(--accent-dark, #3a7bc0);
 }
 .file-present-download-btn:active {
   filter: brightness(0.9);
