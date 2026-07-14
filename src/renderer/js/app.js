@@ -1508,11 +1508,27 @@
       e.preventDefault();
       sendEvent('submit', e.target);
     };
+    // keydown 委托：处理输入框的 Enter 发送（applyRemoteBody 替换 DOM 后原始监听器会丢失）
+    var keydownHandler = function(e) {
+      if (_remoteApplying) return;
+      // 只处理 Enter 键（发送）和 Shift+Enter（换行，不转发）
+      if (e.key !== 'Enter' || e.shiftKey) return;
+      var target = e.target;
+      // 匹配各模式的输入框
+      var isChatInput = target.id === 'chat-input' || target.id === 'code-chat-input' || target.id === 'babe-chat-input';
+      if (!isChatInput) return;
+      // Remote 模式下直接调用本地 sendMessage（sendMessage 内部会转发到 WS）
+      e.preventDefault();
+      if (target.id === 'chat-input') sendMessage();
+      else if (target.id === 'code-chat-input') sendCodeMessage();
+      else if (target.id === 'babe-chat-input') sendBabeMessage();
+    };
     document.addEventListener('click', clickHandler, true);
     document.addEventListener('input', inputHandler, true);
     document.addEventListener('change', changeHandler, true);
     document.addEventListener('submit', submitHandler, true);
-    _remoteEventHandlers = { clickHandler: clickHandler, inputHandler: inputHandler, changeHandler: changeHandler, submitHandler: submitHandler };
+    document.addEventListener('keydown', keydownHandler, true);
+    _remoteEventHandlers = { clickHandler: clickHandler, inputHandler: inputHandler, changeHandler: changeHandler, submitHandler: submitHandler, keydownHandler: keydownHandler };
     console.log('[Remote] 事件委托已启用');
   }
 
@@ -1522,6 +1538,7 @@
     document.removeEventListener('input', _remoteEventHandlers.inputHandler, true);
     document.removeEventListener('change', _remoteEventHandlers.changeHandler, true);
     document.removeEventListener('submit', _remoteEventHandlers.submitHandler, true);
+    document.removeEventListener('keydown', _remoteEventHandlers.keydownHandler, true);
     _remoteEventHandlers = null;
     console.log('[Remote] 事件委托已停用');
   }

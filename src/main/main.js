@@ -1199,7 +1199,28 @@ function encodeXmlEntities(str) {
 async function recognizeImageWithTesseract(imagePath) {
   const { createWorker, OEM } = require('tesseract.js');
   const { pathToFileURL } = require('url');
-  const langPath = pathToFileURL(process.cwd()).href;
+  // 打包后 process.cwd() 可能不在 app.asar 内（macOS 通常是 /），导致 tesseract worker 找不到 traineddata
+  // 解决方案：将 traineddata 从 app.asar 复制到 userData 目录（真实文件系统），tesseract worker 从此读取
+  const ocrCacheDir = path.join(app.getPath('userData'), 'ocr-data');
+  try {
+    if (!fs.existsSync(ocrCacheDir)) fs.mkdirSync(ocrCacheDir, { recursive: true });
+    const appPath = app.getAppPath();
+    const bundledOcrDir = path.join(appPath, 'assets', 'ocr');
+    if (fs.existsSync(bundledOcrDir)) {
+      const files = fs.readdirSync(bundledOcrDir);
+      for (const file of files) {
+        if (file.endsWith('.traineddata') || file.endsWith('.gz')) {
+          const destPath = path.join(ocrCacheDir, file);
+          if (!fs.existsSync(destPath)) {
+            try { fs.copyFileSync(path.join(bundledOcrDir, file), destPath); } catch (_) {}
+          }
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('OCR lang dir setup failed:', e.message);
+  }
+  const langPath = pathToFileURL(ocrCacheDir).href;
   const languages = 'chi_sim+eng';
   const worker = await createWorker(languages, OEM.LSTM_ONLY, { langPath, gzip: false });
   try {
