@@ -5,7 +5,7 @@
  * This file is part of Could I Be Your Partner.
  */
 
-const { app, BrowserWindow, ipcMain, nativeTheme, dialog, clipboard, screen, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, nativeTheme, dialog, clipboard, screen, shell, systemPreferences } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -1349,19 +1349,46 @@ app.whenReady().then(() => {
       console.error('Failed to copy OCR data:', e);
     }
   }
-  // macOS: 检查无障碍权限（get_ui_tree 工具需要通过 AppleScript 调用 System Events）
-  // 如果未授权，打开系统设置引导用户授权
+  // macOS: 通过 Electron systemPreferences 触发无障碍权限请求
+  // 使用 AXIsProcessTrustedWithOptions（内部 kAXTrustedCheckOptionPrompt=true），
+  // 在未授权时由系统弹出原生授权对话框；已授权则直接返回 true，不会重复弹窗。
+  // 注意：osascript 调用 System Events 不需要无障碍权限，无法用 osascript 检测真实状态。
   if (process.platform === 'darwin') {
     try {
-      const { execSync } = require('child_process');
-      const trusted = execSync('osascript -e \'tell application "System Events" to get name of first process\'', { timeout: 3000 }).toString().trim();
-      if (!trusted) throw new Error('not trusted');
+      const trusted = systemPreferences.isTrustedAccessibilityClient(true);
+      if (!trusted) {
+        console.warn('[Accessibility] Not trusted. Prompt shown; user must grant in System Settings.');
+      }
     } catch (e) {
-      // 无障碍权限未授予，打开系统设置引导用户授权
-      console.warn('[Accessibility] Permission not granted. Opening System Settings...');
-      try {
-        require('child_process').exec('open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"');
-      } catch (_) {}
+      console.warn('[Accessibility] Check failed:', e.message);
+    }
+    // macOS Sequoia 15+: 主动触发本地网络权限请求
+    // 仅声明 NSLocalNetworkUsageDescription 不会自动弹窗，必须发起一次本地网络访问才会触发。
+    // 这里发起一次到默认网关高位端口的 TCP 连接尝试（必然被拒），目的就是触发系统权限弹窗。
+    // 连接失败/超时都被忽略，只关心是否触发了权限请求。
+    try {
+      const nets = os.networkInterfaces();
+      let gatewayIp = null;
+      for (const name of Object.keys(nets)) {
+        for (const ni of nets[name]) {
+          if (ni.family === 'IPv4' && !ni.internal) {
+            // 取本机所在网段的 .1 作为网关候选（即使是真实网关或局域网内任意设备，都能触发本地网络权限）
+            const parts = ni.address.split('.');
+            if (parts.length === 4) { gatewayIp = `${parts[0]}.${parts[1]}.${parts[2]}.1`; break; }
+          }
+        }
+        if (gatewayIp) break;
+      }
+      if (gatewayIp) {
+        const net = require('net');
+        const probe = net.connect({ host: gatewayIp, port: 54321, timeout: 1500 });
+        probe.on('error', () => {});
+        probe.on('timeout', () => probe.destroy());
+        setTimeout(() => { try { probe.destroy(); } catch {} }, 2000);
+        console.log('[LocalNetwork] Probed gateway', gatewayIp, 'to trigger permission prompt');
+      }
+    } catch (e) {
+      console.warn('[LocalNetwork] Trigger probe failed:', e.message);
     }
   }
   createWindow();
@@ -2191,7 +2218,12 @@ end tell
     out = await _execCmd('osascript', ['-e', scpt]);
   } catch (e) {
     // Accessibility permission not granted or osascript failed
-    throw new Error('macOS accessibility permission required or osascript failed: ' + e.message);
+    // 再次触发权限请求（若用户之前拒绝过，系统会再次弹出对话框）
+    if (process.platform === 'darwin') {
+      try { systemPreferences.isTrustedAccessibilityClient(true); } catch {}
+      try { require('child_process').exec('open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"'); } catch {}
+    }
+    throw new Error('macOS 无障碍权限未授权，请在系统设置 > 隐私与安全性 > 辅助功能中启用本应用后重试。原始错误: ' + e.message);
   }
   // Parse the text output into a structured form
   const lines = out.split('\n').filter(l => l.trim() && !l.startsWith('TRUNCATED'));
