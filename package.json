@@ -1,6 +1,6 @@
 {
   "name": "could-i-be-your-partner",
-  "version": "1.4.0-alpha.41",
+  "version": "1.4.0-alpha.42",
   "description": "全自动AI Agent，帮助完成一切任务",
   "license": "GPL-3.0-or-later",
   "main": "src/main/main.js",
@@ -44,7 +44,11 @@
       "oneClick": false
     },
     "mac": {
-      "icon": "assets/icons/icons/icon.icns"
+      "icon": "assets/icons/icons/icon.icns",
+      "extendInfo": {
+        "NSLocalNetworkUsageDescription": "需要访问本地网络以连接 Remote 模式下的远端设备和 WebUI 控制服务。",
+        "NSBonjourServices": []
+      }
     },
     "linux": {
       "icon": "assets/icons/icons"
