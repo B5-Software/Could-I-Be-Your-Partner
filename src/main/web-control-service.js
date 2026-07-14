@@ -372,12 +372,12 @@ class WebControlService {
     // Start server
     return new Promise((resolve, reject) => {
       try {
-        this.server = app.listen(this.config.port, () => {
+        this.server = app.listen(this.config.port, '0.0.0.0', () => {
           this.running = true;
           this.port = this.config.port;
           this.app = app;
-          console.log(`[WebControl] Server started on port ${this.config.port}`);
-          resolve({ ok: true, port: this.config.port, message: `Web控制已启动: http://localhost:${this.config.port}` });
+          console.log(`[WebControl] Server started on port ${this.config.port} (0.0.0.0)`);
+          resolve({ ok: true, port: this.config.port, message: `Web控制已启动: http://0.0.0.0:${this.config.port}` });
         });
         this.server.on('error', (e) => {
           console.error('[WebControl] Server error:', e.message);

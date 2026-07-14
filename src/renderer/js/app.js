@@ -561,7 +561,21 @@
 
       // Load page data
       // 异步加载后推送整个 page 内容到 WebUI/Remote（懒加载页面内容初始 mirror_body 不包含）
-      const pushPageAfterLoad = async (loader) => { try { await loader(); } catch (_) {} WebUIMirror.pushDomEvent({ type: 'dom_replace', container: '#page-' + btn.dataset.page, html: page.innerHTML }); };
+      // 注意：input/textarea 的 .value 是 JS property，innerHTML 序列化只含 attribute，
+      // 故推送前需将表单值同步到 attribute，否则远端设置页等表单值为空。
+      const pushPageAfterLoad = async (loader) => {
+        try { await loader(); } catch (_) {}
+        // 同步表单元素 value/checked 到 attribute，确保 innerHTML 序列化包含当前值
+        page.querySelectorAll('input, textarea, select').forEach(el => {
+          if (el.type === 'checkbox' || el.type === 'radio') {
+            if (el.checked) el.setAttribute('checked', 'checked');
+            else el.removeAttribute('checked');
+          } else {
+            el.setAttribute('value', el.value);
+          }
+        });
+        WebUIMirror.pushDomEvent({ type: 'dom_replace', container: '#page-' + btn.dataset.page, html: page.innerHTML });
+      };
       if (btn.dataset.page === 'tools') {
         // 进入工具页时按当前模式自动定位到对应选项卡
         codeEditorModeFilter = currentMode || 'chat';
@@ -584,10 +598,10 @@
       if (btn.dataset.page === 'memory') pushPageAfterLoad(() => loadMemoryPage());
       if (btn.dataset.page === 'settings') pushPageAfterLoad(loadSettingsPage);
       if (btn.dataset.page === 'history') pushPageAfterLoad(loadHistoryPage);
-      if (btn.dataset.page === 'code') loadCodePage();
-      if (btn.dataset.page === 'code-history') loadCodeHistoryPage();
-      if (btn.dataset.page === 'babe') initBabeAgent();
-      if (btn.dataset.page === 'babe-history') loadBabeHistoryPage();
+      if (btn.dataset.page === 'code') pushPageAfterLoad(loadCodePage);
+      if (btn.dataset.page === 'code-history') pushPageAfterLoad(loadCodeHistoryPage);
+      if (btn.dataset.page === 'babe') pushPageAfterLoad(() => initBabeAgent());
+      if (btn.dataset.page === 'babe-history') pushPageAfterLoad(loadBabeHistoryPage);
       // i18n: re-apply translations to the newly activated page (after dynamic content loads)
       if (typeof i18nApplyToDOM === 'function') {
         setTimeout(() => i18nApplyToDOM(page), 100);
@@ -7941,8 +7955,11 @@
       } else {
         listEl.innerHTML = '<div class="empty-state"><i class="fa-solid fa-clock-rotate-left"></i><p>暂无 Code 历史</p></div>';
       }
+      // 推送历史列表到 WebUI/Remote
+      WebUIMirror.pushDomEvent({ type: 'dom_replace', container: '#page-code-history', html: document.getElementById('page-code-history').innerHTML });
     } catch (e) {
       listEl.innerHTML = `<div class="empty-state"><i class="fa-solid fa-triangle-exclamation"></i><p>${e.message}</p></div>`;
+      WebUIMirror.pushDomEvent({ type: 'dom_replace', container: '#page-code-history', html: document.getElementById('page-code-history').innerHTML });
     }
   }
 
@@ -8604,8 +8621,11 @@
           if (result.ok) loadBabeHistoryPage();
         });
       });
+      // 推送历史列表到 WebUI/Remote
+      WebUIMirror.pushDomEvent({ type: 'dom_replace', container: '#page-babe-history', html: document.getElementById('page-babe-history').innerHTML });
     } catch (e) {
       listEl.innerHTML = `<div class="empty-state"><i class="fa-solid fa-circle-exclamation"></i><p>加载历史失败: ${escapeHtml(e.message)}</p></div>`;
+      WebUIMirror.pushDomEvent({ type: 'dom_replace', container: '#page-babe-history', html: document.getElementById('page-babe-history').innerHTML });
     }
   }
 
