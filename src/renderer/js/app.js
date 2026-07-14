@@ -560,10 +560,12 @@
       });
 
       // Load page data
+      // 异步加载后推送整个 page 内容到 WebUI/Remote（懒加载页面内容初始 mirror_body 不包含）
+      const pushPageAfterLoad = async (loader) => { try { await loader(); } catch (_) {} WebUIMirror.pushDomEvent({ type: 'dom_replace', container: '#page-' + btn.dataset.page, html: page.innerHTML }); };
       if (btn.dataset.page === 'tools') {
         // 进入工具页时按当前模式自动定位到对应选项卡
         codeEditorModeFilter = currentMode || 'chat';
-        loadToolsPage();
+        pushPageAfterLoad(loadToolsPage);
         // Wire up mode switcher buttons (Chat/Code) — only once
         if (!document.getElementById('tools-mode-switcher').dataset.wired) {
           document.getElementById('tools-mode-switcher').dataset.wired = '1';
@@ -571,15 +573,17 @@
             mb.addEventListener('click', () => {
               codeEditorModeFilter = mb.dataset.toolMode;
               loadToolsPage();
+              // 推送工具页内容到 WebUI/Remote
+              WebUIMirror.pushDomEvent({ type: 'dom_replace', container: '#page-tools', html: document.getElementById('page-tools').innerHTML });
             });
           });
         }
       }
-      if (btn.dataset.page === 'skills') loadSkillsPage();
-      if (btn.dataset.page === 'knowledge') loadKnowledgePage();
-      if (btn.dataset.page === 'memory') loadMemoryPage();
-      if (btn.dataset.page === 'settings') loadSettingsPage();
-      if (btn.dataset.page === 'history') loadHistoryPage();
+      if (btn.dataset.page === 'skills') pushPageAfterLoad(loadSkillsPage);
+      if (btn.dataset.page === 'knowledge') pushPageAfterLoad(() => loadKnowledgePage());
+      if (btn.dataset.page === 'memory') pushPageAfterLoad(() => loadMemoryPage());
+      if (btn.dataset.page === 'settings') pushPageAfterLoad(loadSettingsPage);
+      if (btn.dataset.page === 'history') pushPageAfterLoad(loadHistoryPage);
       if (btn.dataset.page === 'code') loadCodePage();
       if (btn.dataset.page === 'code-history') loadCodeHistoryPage();
       if (btn.dataset.page === 'babe') initBabeAgent();
@@ -1891,13 +1895,16 @@
         const tokens = systemGuidanceTokens + toolDefsTokens + chatTokens + toolResultTokens + otherTokens;
         const maxTokens = stats?.maxTokens ?? (targetAgent.settings?.llm?.maxContextLength || 0);
         const percentage = maxTokens ? Math.min(100, (tokens / maxTokens) * 100) : 0;
-        window.api.webControlPushContextProgress({
-          mode: currentMode,
-          used: tokens,
-          max: maxTokens,
-          percentage,
-          details: { systemGuidanceTokens, toolDefsTokens, chatTokens, toolResultTokens, otherTokens }
-        });
+        // Remote 模式下不向本地 WebUI 服务器推送（避免远端/本地循环推送导致上下文进度抽搐）
+        if (!isRemoteMode) {
+          window.api.webControlPushContextProgress({
+            mode: currentMode,
+            used: tokens,
+            max: maxTokens,
+            percentage,
+            details: { systemGuidanceTokens, toolDefsTokens, chatTokens, toolResultTokens, otherTokens }
+          });
+        }
       }
     } catch (_) {}
   }
@@ -1963,6 +1970,13 @@
       document.querySelector('.nav-item[data-page="chat"]')?.classList.add('active');
       document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
       document.getElementById('page-chat')?.classList.add('active');
+      // 推送 nav-item 和 page 切换状态到 WebUI/Remote
+      document.querySelectorAll('.nav-item[data-page]').forEach(b => {
+        WebUIMirror.pushDomEvent({ type: 'dom_update', selector: `.nav-item[data-page="${b.dataset.page}"]`, attr: 'class', value: b.className });
+      });
+      document.querySelectorAll('.page').forEach(p => {
+        if (p.id) WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#' + p.id, attr: 'class', value: p.className });
+      });
       // Replay messages in local UI
       clearChatMessagesUI();
       const toolCallMap = {};
@@ -5016,6 +5030,13 @@
         const activePeriod = document.querySelector('.usage-period-btn.active');
         loadUsageStats(activePeriod ? activePeriod.dataset.period : 'daily');
       }
+      // 推送设置选项卡和面板的 active 状态到 WebUI/Remote
+      document.querySelectorAll('.settings-tab').forEach(b => {
+        WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '.settings-tab[data-tab="' + b.dataset.tab + '"]', attr: 'class', value: b.className });
+      });
+      document.querySelectorAll('.settings-panel').forEach(p => {
+        if (p.dataset.tab) WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '.settings-panel[data-tab="' + p.dataset.tab + '"]', attr: 'class', value: p.className });
+      });
     });
   });
 
