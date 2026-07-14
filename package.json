@@ -1,6 +1,6 @@
 {
   "name": "could-i-be-your-partner",
-  "version": "1.4.0-alpha.42",
+  "version": "1.4.0-alpha.43",
   "description": "全自动AI Agent，帮助完成一切任务",
   "license": "GPL-3.0-or-later",
   "main": "src/main/main.js",
@@ -27,7 +27,8 @@
     "asarUnpack": [
       "assets/ocr/**/*",
       "node_modules/monaco-editor/min/**/*",
-      "node_modules/node-pty/**/*"
+      "node_modules/node-pty/**/*",
+      "node_modules/@nut-tree-fork/**/*"
     ],
     "win": {
       "icon": "assets/icons/icons/icon.ico",
@@ -47,7 +48,9 @@
       "icon": "assets/icons/icons/icon.icns",
       "extendInfo": {
         "NSLocalNetworkUsageDescription": "需要访问本地网络以连接 Remote 模式下的远端设备和 WebUI 控制服务。",
-        "NSBonjourServices": []
+        "NSBonjourServices": [],
+        "NSAppleEventsUsageDescription": "需要发送 AppleEvent 以使用系统无障碍 API 获取 UI 树和自动化操作。",
+        "NSAppleMusicUsageDescription": "应用需要控制媒体播放以执行用户指令。"
       }
     },
     "linux": {

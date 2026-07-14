@@ -1349,6 +1349,21 @@ app.whenReady().then(() => {
       console.error('Failed to copy OCR data:', e);
     }
   }
+  // macOS: 检查无障碍权限（get_ui_tree 工具需要通过 AppleScript 调用 System Events）
+  // 如果未授权，打开系统设置引导用户授权
+  if (process.platform === 'darwin') {
+    try {
+      const { execSync } = require('child_process');
+      const trusted = execSync('osascript -e \'tell application "System Events" to get name of first process\'', { timeout: 3000 }).toString().trim();
+      if (!trusted) throw new Error('not trusted');
+    } catch (e) {
+      // 无障碍权限未授予，打开系统设置引导用户授权
+      console.warn('[Accessibility] Permission not granted. Opening System Settings...');
+      try {
+        require('child_process').exec('open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"');
+      } catch (_) {}
+    }
+  }
   createWindow();
 });
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });

@@ -22,6 +22,7 @@ class WebControlService {
     this.app = null;
     this.server = null;
     this.wsClients = new Set();
+    this._sockets = new Set();
     this.config = null;
     this.running = false;
     this.port = 0;
@@ -379,6 +380,11 @@ class WebControlService {
           console.log(`[WebControl] Server started on port ${this.config.port} (0.0.0.0)`);
           resolve({ ok: true, port: this.config.port, message: `Web控制已启动: http://0.0.0.0:${this.config.port}` });
         });
+        // 跟踪所有底层 socket，stop() 时强制销毁，避免 keep-alive 连接导致 server.close() 回调永不触发
+        this.server.on('connection', (socket) => {
+          this._sockets.add(socket);
+          socket.on('close', () => this._sockets.delete(socket));
+        });
         this.server.on('error', (e) => {
           console.error('[WebControl] Server error:', e.message);
           reject(e);
@@ -392,18 +398,31 @@ class WebControlService {
   async stop() {
     if (!this.running) return { ok: true };
     return new Promise((resolve) => {
+      // 关闭所有 WebSocket 客户端
       for (const ws of this.wsClients) {
         try { ws.close(); } catch {}
       }
       this.wsClients.clear();
+
+      const finish = () => {
+        this.running = false;
+        this.server = null;
+        this.app = null;
+        this._sockets.clear();
+        console.log('[WebControl] Server stopped');
+        resolve({ ok: true });
+      };
+
       if (this.server) {
-        this.server.close(() => {
-          this.running = false;
-          this.server = null;
-          this.app = null;
-          console.log('[WebControl] Server stopped');
-          resolve({ ok: true });
-        });
+        // server.close() 仅停止接受新连接，回调需等所有现存连接关闭才触发。
+        // keep-alive HTTP 连接会一直挂着，导致回调永不执行、IPC 永久挂起。
+        // 因此先 close() 停止监听，再主动销毁所有底层 socket 强制断开。
+        this.server.close(() => finish());
+        for (const socket of this._sockets) {
+          try { socket.destroy(); } catch {}
+        }
+        // 兜底：2 秒后无论 close 回调是否触发都 resolve，避免按钮永久无响应
+        setTimeout(() => finish(), 2000);
       } else {
         this.running = false;
         resolve({ ok: true });
