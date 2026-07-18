@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100">
+  <defs>
+    <linearGradient id="g1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ff6f61"/>
+      <stop offset="50%" stop-color="#d62828"/>
+      <stop offset="100%" stop-color="#6a0572"/>
+    </linearGradient>
+    <radialGradient id="g2" cx="50%" cy="50%">
+      <stop offset="0%" stop-color="#ffb997" stop-opacity="0.5"/>
+      <stop offset="100%" stop-color="#ffb997" stop-opacity="0"/>
+    </radialGradient>
+    <mask id="m1">
+      <rect width="100" height="100" fill="white"/>
+      <circle cx="50" cy="50" r="38" fill="black"/>
+    </mask>
+  </defs>
+  <circle cx="50" cy="50" r="46" fill="url(#g2)"/>
+  <circle cx="50" cy="50" r="44" fill="url(#g1)" mask="url(#m1)"/>
+  <circle cx="50" cy="50" r="46" fill="none" stroke="#ffb997" stroke-width="0.8" opacity="0.7"/>
+  <g fill="#ffd166" opacity="0.95">
+    <path d="M50,2 Q54,6 52,12 Q50,10 48,12 Q46,6 50,2 Z"/>
+    <path d="M50,2 Q54,6 52,12 Q50,10 48,12 Q46,6 50,2 Z" transform="rotate(60 50 50)"/>
+    <path d="M50,2 Q54,6 52,12 Q50,10 48,12 Q46,6 50,2 Z" transform="rotate(120 50 50)"/>
+    <path d="M50,2 Q54,6 52,12 Q50,10 48,12 Q46,6 50,2 Z" transform="rotate(180 50 50)"/>
+    <path d="M50,2 Q54,6 52,12 Q50,10 48,12 Q46,6 50,2 Z" transform="rotate(240 50 50)"/>
+    <path d="M50,2 Q54,6 52,12 Q50,10 48,12 Q46,6 50,2 Z" transform="rotate(300 50 50)"/>
+  </g>
+  <g fill="#ffe066" opacity="0.9">
+    <circle cx="50" cy="3" r="1.3"/>
+    <circle cx="85" cy="22" r="1.2"/>
+    <circle cx="96" cy="50" r="1.3"/>
+    <circle cx="85" cy="78" r="1.2"/>
+    <circle cx="50" cy="97" r="1.3"/>
+    <circle cx="15" cy="78" r="1.2"/>
+    <circle cx="4" cy="50" r="1.3"/>
+    <circle cx="15" cy="22" r="1.2"/>
+  </g>
+  <g fill="#fcbf49" opacity="0.8">
+    <path d="M72,10 L74,13 L72,16 L70,13 Z"/>
+    <path d="M28,84 L30,87 L28,90 L26,87 Z"/>
+    <path d="M10,28 L13,30 L10,32 L7,30 Z"/>
+    <path d="M90,68 L87,70 L90,72 L93,70 Z"/>
+  </g>
+  <circle cx="50" cy="50" r="42" fill="none" stroke="#ffe066" stroke-width="0.3" opacity="0.4"/>
+</svg>

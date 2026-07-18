@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100">
+  <defs>
+    <linearGradient id="g1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#006994"/>
+      <stop offset="50%" stop-color="#00a8cc"/>
+      <stop offset="100%" stop-color="#003459"/>
+    </linearGradient>
+    <radialGradient id="g2" cx="50%" cy="50%">
+      <stop offset="0%" stop-color="#7fdbff" stop-opacity="0.5"/>
+      <stop offset="100%" stop-color="#7fdbff" stop-opacity="0"/>
+    </radialGradient>
+    <mask id="m1">
+      <rect width="100" height="100" fill="white"/>
+      <circle cx="50" cy="50" r="38" fill="black"/>
+    </mask>
+  </defs>
+  <circle cx="50" cy="50" r="46" fill="url(#g2)"/>
+  <circle cx="50" cy="50" r="44" fill="url(#g1)" mask="url(#m1)"/>
+  <circle cx="50" cy="50" r="46" fill="none" stroke="#7fdbff" stroke-width="0.8" opacity="0.7"/>
+  <g fill="none" stroke="#b3ecff" stroke-width="1" opacity="0.85">
+    <path d="M10,50 Q20,46 30,50 T50,50 T70,50 T90,50"/>
+    <path d="M10,40 Q20,36 30,40 T50,40 T70,40 T90,40" opacity="0.6"/>
+    <path d="M10,60 Q20,56 30,60 T50,60 T70,60 T90,60" opacity="0.6"/>
+  </g>
+  <g fill="#ffffff" opacity="0.9">
+    <circle cx="50" cy="6" r="1.3"/>
+    <circle cx="85" cy="22" r="1.1"/>
+    <circle cx="93" cy="55" r="1.2"/>
+    <circle cx="78" cy="88" r="1.1"/>
+    <circle cx="22" cy="88" r="1.2"/>
+    <circle cx="7" cy="55" r="1.1"/>
+    <circle cx="15" cy="22" r="1.2"/>
+  </g>
+  <g fill="#7fdbff" opacity="0.9">
+    <path d="M50,1 L49,4 L50,7 L51,4 Z"/>
+    <path d="M94,50 L91,49 L88,50 L91,51 Z"/>
+    <path d="M50,99 L51,96 L50,93 L49,96 Z"/>
+    <path d="M6,50 L9,51 L12,50 L9,49 Z"/>
+  </g>
+  <circle cx="50" cy="50" r="42" fill="none" stroke="#ffffff" stroke-width="0.3" opacity="0.3"/>
+</svg>

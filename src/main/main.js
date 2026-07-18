@@ -1307,9 +1307,9 @@ let settings = loadJSON(settingsPath, {
   tools: {},
   autoApproveSensitive: false,
   autoOptimizeToolSelection: false,
-  aiPersona: { name: 'Partner', avatar: '', bio: '你的全能AI伙伴~', pronouns: 'Ta', personality: '活泼可爱、热情友善', customPrompt: '' },
+  aiPersona: { name: 'Partner', avatar: '', avatarFrame: '', bio: '你的全能AI伙伴~', pronouns: 'Ta', personality: '活泼可爱、热情友善', customPrompt: '' },
   tarotVisible: true,
-  userProfile: { name: '', avatar: '', bio: '' },
+  userProfile: { name: '', avatar: '', avatarFrame: '', bio: '' },
   entropy: { source: 'csprng', trngMode: 'network', trngSerialPort: '', trngSerialBaud: 115200, trngNetworkHost: '192.168.4.1', trngNetworkPort: 80 },
   proxy: { mode: 'system', http: '', https: '', bypass: 'localhost,127.0.0.1' },
   mcp: { servers: [] },
@@ -3971,10 +3971,11 @@ function _getPwAcceptLanguage(lang) {
   return map[lang] || map['en'];
 }
 
-async function _launchPwBrowser() {
+async function _launchPwBrowser(overrideSettings = null) {
   if (_pwBrowser) return _pwBrowser;
   const { chromium } = require('playwright');
-  const pwSettings = _getPwSettings();
+  // 支持临时覆盖设置（用于测试启动），不修改全局 settings，避免恢复时覆盖已保存的设置
+  const pwSettings = overrideSettings || _getPwSettings();
   console.log('[Playwright] _launchPwBrowser mode=', pwSettings.mode, 'path=', pwSettings.path, 'headless=', pwSettings.headless);
   const appLang = settings?.language || 'zh-CN';
   const headless = !!pwSettings.headless;
@@ -4459,18 +4460,15 @@ ipcMain.handle('pw:browserDialog', async () => {
 
 ipcMain.handle('pw:testLaunch', async (_, testPwSettings) => {
   try {
-    // Temporarily override settings for testing
-    const oldPw = settings?.playwright;
-    settings = settings || {};
-    settings.playwright = testPwSettings || {};
+    // 不修改全局 settings，直接用 overrideSettings 启动测试
     _pwBrowser = null;
     // Close existing workspaces to force relaunch
     for (const [key, ws] of _pwWorkspaces) {
       await ws.context.close().catch(() => {});
     }
     _pwWorkspaces.clear();
-    // Try launching
-    const browser = await _launchPwBrowser();
+    // Try launching with override settings
+    const browser = await _launchPwBrowser(testPwSettings || {});
     const ok = !!browser;
     // 获取浏览器真实 product 信息（用于验证 channel 选择是否生效）
     let productInfo = '';
@@ -4484,8 +4482,6 @@ ipcMain.handle('pw:testLaunch', async (_, testPwSettings) => {
     // Close the test browser
     await browser.close().catch(() => {});
     _pwBrowser = null;
-    // Restore old settings
-    settings.playwright = oldPw;
     return { ok, message: '浏览器启动成功' + (productInfo ? `（${productInfo}）` : '') };
   } catch (e) { return { ok: false, error: e.message }; }
 });
@@ -4504,6 +4500,30 @@ ipcMain.handle('pw:closeBrowser', async () => {
     }
     _hidePwBanner();
     return { ok: true };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+// ---- 头像框系统 ----
+// 列出所有内置 SVG 头像框
+ipcMain.handle('avatar-frames:list', async () => {
+  try {
+    const framesDir = path.join(__dirname, '..', 'renderer', 'assets', 'avatar-frames');
+    const files = await fs.promises.readdir(framesDir);
+    const list = files
+      .filter(f => f.endsWith('.svg'))
+      .sort()
+      .map(f => ({ id: f.replace(/\.svg$/, ''), file: f }));
+    return { ok: true, frames: list };
+  } catch (e) { return { ok: false, frames: [], error: e.message }; }
+});
+
+// 读取单个 SVG 头像框内容
+ipcMain.handle('avatar-frames:get', async (_, id) => {
+  try {
+    const file = id.endsWith('.svg') ? id : `${id}.svg`;
+    const filePath = path.join(__dirname, '..', 'renderer', 'assets', 'avatar-frames', file);
+    const content = await fs.promises.readFile(filePath, 'utf8');
+    return { ok: true, content };
   } catch (e) { return { ok: false, error: e.message }; }
 });
 

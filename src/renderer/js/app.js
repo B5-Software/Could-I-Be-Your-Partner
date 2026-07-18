@@ -44,6 +44,151 @@
     return isAI ? '<i class="fa-solid fa-robot"></i>' : '<i class="fa-solid fa-user"></i>';
   }
 
+  // ---- 头像框系统 ----
+  // 缓存已加载的 SVG 内容，避免重复 IPC 调用
+  const _avatarFrameCache = {}; // id -> svg content
+  // 当前生效的头像框 ID（由 settings 加载时填充）
+  const _avatarFrameState = { ai: null, user: null };
+  // 用于在多实例插入时为 SVG id 添加唯一后缀，避免 ID 冲突
+  let _avatarFrameUid = 0;
+
+  // 异步加载 SVG 头像框内容并缓存
+  async function loadAvatarFrameSVG(id) {
+    if (!id) return '';
+    if (_avatarFrameCache[id]) return _avatarFrameCache[id];
+    try {
+      const res = await window.api.avatarFramesGet(id);
+      if (res?.ok && res.content) {
+        _avatarFrameCache[id] = res.content;
+        return res.content;
+      }
+    } catch (_) {}
+    return '';
+  }
+
+  // 为 SVG 内容中的 id/url(#id) 添加唯一后缀
+  function _uniqueSvgIds(svg) {
+    if (!svg) return '';
+    const suffix = '_f' + (++_avatarFrameUid);
+    return svg
+      .replace(/\bid="([^"]+)"/g, (m, id) => `id="${id}${suffix}"`)
+      .replace(/url\(#([^)]+)\)/g, (m, id) => `url(#${id}${suffix})`);
+  }
+
+  // 生成头像框叠加层 HTML（不含外层 div）
+  function makeFrameOverlayHTML(frameId) {
+    const svg = frameId ? _avatarFrameCache[frameId] : null;
+    if (!svg) return '';
+    return `<div class="avatar-frame-overlay">${_uniqueSvgIds(svg)}</div>`;
+  }
+
+  // 包装聊天消息中的头像 HTML（含头像框叠加层）
+  function makeFramedAvatarHTML(avatarData, isAI, style) {
+    const frameId = isAI ? _avatarFrameState.ai : _avatarFrameState.user;
+    const inner = makeAvatarHTML(avatarData, isAI, style);
+    if (!frameId) return inner;
+    const svg = _avatarFrameCache[frameId];
+    if (!svg) return inner;
+    return `<div class="avatar-framed-wrap">${inner}${makeFrameOverlayHTML(frameId)}</div>`;
+  }
+
+  // 加载头像框列表并渲染设置中的两个 grid
+  async function loadAvatarFrames() {
+    try {
+      const res = await window.api.avatarFramesList();
+      if (!res?.ok || !Array.isArray(res.frames)) return;
+      const aiGrid = document.getElementById('setting-ai-avatar-frame-grid');
+      const userGrid = document.getElementById('setting-user-avatar-frame-grid');
+      if (!aiGrid || !userGrid) return;
+
+      // 构建 "无头像框" 项
+      const buildNoneItem = (isSelected) => {
+        const div = document.createElement('div');
+        div.className = 'avatar-frame-item none-item' + (isSelected ? ' selected' : '');
+        div.dataset.frameId = '';
+        div.title = '无头像框';
+        div.innerHTML = '<div class="frame-inner"><i class="fa-solid fa-ban"></i></div>';
+        return div;
+      };
+
+      // 构建头像框项
+      const buildFrameItem = (frame, isSelected) => {
+        const div = document.createElement('div');
+        div.className = 'avatar-frame-item' + (isSelected ? ' selected' : '');
+        div.dataset.frameId = frame.id;
+        div.title = frame.id;
+        div.innerHTML = '<div class="frame-inner"><i class="fa-solid fa-user"></i></div>';
+        // 异步加载并插入 SVG 缩略图
+        loadAvatarFrameSVG(frame.id).then((svg) => {
+          if (svg && div.isConnected) {
+            div.insertAdjacentHTML('afterbegin', `<div class="frame-thumb">${_uniqueSvgIds(svg)}</div>`);
+          }
+        });
+        return div;
+      };
+
+      // 渲染 AI grid
+      aiGrid.innerHTML = '';
+      aiGrid.appendChild(buildNoneItem(!_avatarFrameState.ai));
+      res.frames.forEach((f) => aiGrid.appendChild(buildFrameItem(f, _avatarFrameState.ai === f.id)));
+
+      // 渲染 User grid
+      userGrid.innerHTML = '';
+      userGrid.appendChild(buildNoneItem(!_avatarFrameState.user));
+      res.frames.forEach((f) => userGrid.appendChild(buildFrameItem(f, _avatarFrameState.user === f.id)));
+
+      // 绑定点击事件（事件委托）
+      aiGrid.onclick = async (e) => {
+        const item = e.target.closest('.avatar-frame-item');
+        if (!item) return;
+        const frameId = item.dataset.frameId || '';
+        _avatarFrameState.ai = frameId || null;
+        if (frameId) await loadAvatarFrameSVG(frameId);
+        // 持久化到设置
+        const s = await window.api.getSettings();
+        if (!s.aiPersona) s.aiPersona = {};
+        s.aiPersona.avatarFrame = frameId;
+        await saveSettings(s);
+        // 更新选中态
+        aiGrid.querySelectorAll('.avatar-frame-item').forEach((i) => i.classList.toggle('selected', i === item));
+        // 更新设置预览叠加
+        updateAvatarPreviewFrame('ai');
+        // 更新 Hero 显示
+        updatePersonaDisplay(s.aiPersona);
+      };
+
+      userGrid.onclick = async (e) => {
+        const item = e.target.closest('.avatar-frame-item');
+        if (!item) return;
+        const frameId = item.dataset.frameId || '';
+        _avatarFrameState.user = frameId || null;
+        if (frameId) await loadAvatarFrameSVG(frameId);
+        const s = await window.api.getSettings();
+        if (!s.userProfile) s.userProfile = {};
+        s.userProfile.avatarFrame = frameId;
+        await saveSettings(s);
+        userGrid.querySelectorAll('.avatar-frame-item').forEach((i) => i.classList.toggle('selected', i === item));
+        updateAvatarPreviewFrame('user');
+      };
+    } catch (e) {
+      console.error('loadAvatarFrames failed:', e);
+    }
+  }
+
+  // 更新设置中的头像预览叠加层
+  function updateAvatarPreviewFrame(role) {
+    const previewId = role === 'ai' ? 'setting-ai-avatar-preview' : 'setting-user-avatar-preview';
+    const preview = document.getElementById(previewId);
+    if (!preview) return;
+    // 移除现有叠加层
+    const existing = preview.querySelector('.avatar-frame-overlay');
+    if (existing) existing.remove();
+    const frameId = role === 'ai' ? _avatarFrameState.ai : _avatarFrameState.user;
+    if (frameId && _avatarFrameCache[frameId]) {
+      preview.insertAdjacentHTML('beforeend', makeFrameOverlayHTML(frameId));
+    }
+  }
+
   async function pushAvatarsToWeb() {
     const s = await window.api.getSettings();
     window.api.webControlSetAvatars({ ai: s.aiPersona?.avatar || '', user: s.userProfile?.avatar || '' });
@@ -2469,9 +2614,9 @@
     // Avatar handling（Remote 模式优先使用远端头像）
     let avatarHTML = '';
     if (role === 'user') {
-      avatarHTML = makeAvatarHTML(isRemoteMode ? (remoteAvatars?.user || '') : agent.settings?.userProfile?.avatar, false);
+      avatarHTML = makeFramedAvatarHTML(isRemoteMode ? (remoteAvatars?.user || '') : agent.settings?.userProfile?.avatar, false);
     } else {
-      avatarHTML = makeAvatarHTML(isRemoteMode ? (remoteAvatars?.ai || '') : agent.settings?.aiPersona?.avatar, true);
+      avatarHTML = makeFramedAvatarHTML(isRemoteMode ? (remoteAvatars?.ai || '') : agent.settings?.aiPersona?.avatar, true);
     }
     
     const rendered = role === 'assistant' ? renderMarkdown(content) : escapeHtml(content);
@@ -2504,7 +2649,7 @@
     msg.className = 'message assistant streaming';
     msg.id = 'stream-' + requestId;
     const time = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
-    const avatarHTML = makeAvatarHTML(agent.settings?.aiPersona?.avatar, true);
+    const avatarHTML = makeFramedAvatarHTML(agent.settings?.aiPersona?.avatar, true);
     msg.innerHTML = `
       <div class="message-avatar">${avatarHTML}</div>
       <div class="message-body">
@@ -2663,7 +2808,7 @@
     const time = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
     
     // AI avatar
-    const avatarHTML = makeAvatarHTML(agent.settings?.aiPersona?.avatar, true);
+    const avatarHTML = makeFramedAvatarHTML(agent.settings?.aiPersona?.avatar, true);
     
     const imgId = 'img-' + Date.now();
     msg.innerHTML = `
@@ -2703,7 +2848,7 @@
     const msg = document.createElement('div');
     msg.className = 'message assistant';
     const time = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
-    const avatarHTML = makeAvatarHTML(agent.settings?.aiPersona?.avatar, true);
+    const avatarHTML = makeFramedAvatarHTML(agent.settings?.aiPersona?.avatar, true);
     const eSource = cards[0]?.entropySource || 'CSPRNG';
     const isTRNG = eSource.startsWith('TRNG');
     const trngBadge = isTRNG ? ' <span class="trng-badge" style="font-size:9px;padding:1px 6px"><i class="fa-solid fa-satellite-dish"></i> TRNG</span>' : '';
@@ -3527,7 +3672,7 @@
       const msg = document.createElement('div');
       msg.className = 'message assistant';
 
-      const avatarHTML = makeAvatarHTML(agent.settings?.aiPersona?.avatar, true);
+      const avatarHTML = makeFramedAvatarHTML(agent.settings?.aiPersona?.avatar, true);
 
       const body = document.createElement('div');
       body.className = 'message-body';
@@ -5155,6 +5300,9 @@
       const enc = await window.api.avatarEncodeFile(aiAvatarData);
       if (enc.ok) { aiAvatarData = enc.dataUrl; s.aiPersona.avatar = aiAvatarData; await window.api.setSettings(s); }
     }
+    // 头像框系统：加载 AI 头像框状态并预加载 SVG
+    _avatarFrameState.ai = persona.avatarFrame || null;
+    if (_avatarFrameState.ai) await loadAvatarFrameSVG(_avatarFrameState.ai);
     updateAvatarPreview(aiAvatarData);
 
     // Babe Mode settings
@@ -5187,8 +5335,16 @@
       const enc = await window.api.avatarEncodeFile(userAvatarData);
       if (enc.ok) { userAvatarData = enc.dataUrl; s.userProfile.avatar = userAvatarData; await window.api.setSettings(s); }
     }
+    // 头像框系统：加载 User 头像框状态并预加载 SVG
+    _avatarFrameState.user = userProfile.avatarFrame || null;
+    if (_avatarFrameState.user) await loadAvatarFrameSVG(_avatarFrameState.user);
     updateUserAvatarPreview(userAvatarData);
     window.api.webControlSetAvatars({ ai: aiAvatarData, user: userAvatarData });
+
+    // 头像框系统：加载并渲染头像框选择器 grid（异步，不阻塞设置面板其他渲染）
+    loadAvatarFrames();
+    // 同步更新 Hero 显示的头像框
+    updatePersonaDisplay(persona);
 
     // Entropy settings
     const entropy = s.entropy || {};
@@ -5579,6 +5735,15 @@
           headless: headlessCheckbox ? !headlessCheckbox.checked : false,
           args: argsTextarea ? argsTextarea.value : ''
         };
+        // 先持久化设置：测试启动即应用，避免用户忘记点"保存"导致 Agent 调用仍用旧浏览器
+        try {
+          const s2 = await window.api.getSettings();
+          s2.playwright = testSettings;
+          await saveSettings(s2);
+          await window.api.pwCloseBrowser();
+        } catch (e) {
+          console.warn('Test launch: persist settings failed:', e);
+        }
         const result = await window.api.pwTestLaunch(testSettings);
         if (testResultEl) {
           if (result.ok) {
@@ -5954,12 +6119,14 @@
     const preview = document.getElementById('setting-ai-avatar-preview');
     if (!preview) return;
     preview.innerHTML = makeAvatarHTML(avatarData, true, 'width:100%;height:100%;border-radius:50%;object-fit:cover');
+    updateAvatarPreviewFrame('ai');
   }
 
   function updateUserAvatarPreview(avatarData) {
     const preview = document.getElementById('setting-user-avatar-preview');
     if (!preview) return;
     preview.innerHTML = makeAvatarHTML(avatarData, false, 'width:100%;height:100%;border-radius:50%;object-fit:cover');
+    updateAvatarPreviewFrame('user');
   }
 
   document.querySelectorAll('.settings-tab').forEach(btn => {
@@ -6490,6 +6657,11 @@
     if (nameEl && persona?.name) nameEl.textContent = persona.name;
     if (avatarEl) {
       avatarEl.innerHTML = makeAvatarHTML(persona?.avatar, true, 'width:28px;height:28px;border-radius:50%;object-fit:cover');
+      // Hero 头像框叠加
+      const frameId = _avatarFrameState.ai;
+      if (frameId && _avatarFrameCache[frameId]) {
+        avatarEl.insertAdjacentHTML('beforeend', makeFrameOverlayHTML(frameId));
+      }
     }
   }
 
@@ -7576,7 +7748,7 @@
 
       let avatarHTML = '';
       const persona = agent.settings?.aiPersona;
-      avatarHTML = makeAvatarHTML(persona?.avatar, true);
+      avatarHTML = makeFramedAvatarHTML(persona?.avatar, true);
 
       const body = document.createElement('div');
       body.className = 'message-body';

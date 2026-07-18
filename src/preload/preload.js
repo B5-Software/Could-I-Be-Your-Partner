@@ -151,6 +151,10 @@ contextBridge.exposeInMainWorld('api', {
   // Agent Abort (停止按钮：瞬间中止所有 LLM 请求 + 杀掉所有终端)
   agentAbortAll: () => ipcRenderer.invoke('agent:abortAll'),
 
+  // 头像框系统：列出/读取内置 SVG 头像框
+  avatarFramesList: () => ipcRenderer.invoke('avatar-frames:list'),
+  avatarFramesGet: (id) => ipcRenderer.invoke('avatar-frames:get', id),
+
   // Computer Use Protocol (CUP)
   computerScreenshot: (workspacePath) => ipcRenderer.invoke('computer:screenshot', workspacePath),
   computerMouseMove: (x, y) => ipcRenderer.invoke('computer:mouseMove', x, y),

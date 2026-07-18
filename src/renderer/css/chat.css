@@ -687,6 +687,8 @@
   justify-content: center;
   font-size: 14px;
   flex-shrink: 0;
+  position: relative;
+  overflow: visible;
 }
 
 .message.assistant .message-avatar {
@@ -697,6 +699,63 @@
 .message.user .message-avatar {
   background: var(--bg-tertiary);
   color: var(--text-secondary);
+}
+
+/* 头像框叠加：聊天消息中的头像框包装层 */
+.avatar-framed-wrap {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.avatar-framed-wrap > img,
+.avatar-framed-wrap > i {
+  position: relative;
+  z-index: 1;
+}
+
+.avatar-framed-wrap .avatar-frame-overlay {
+  position: absolute;
+  inset: -16%;
+  width: 132%;
+  height: 132%;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.avatar-framed-wrap .avatar-frame-overlay svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+/* Hero 头像框叠加 */
+.agent-avatar {
+  overflow: visible;
+}
+
+.agent-avatar > img,
+.agent-avatar > i {
+  position: relative;
+  z-index: 1;
+}
+
+.agent-avatar .avatar-frame-overlay {
+  position: absolute;
+  inset: -20%;
+  width: 140%;
+  height: 140%;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.agent-avatar .avatar-frame-overlay svg {
+  width: 100%;
+  height: 100%;
+  display: block;
 }
 
 .message-body {

@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100">
+  <defs>
+    <linearGradient id="g1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ff6b6b"/>
+      <stop offset="25%" stop-color="#feca57"/>
+      <stop offset="50%" stop-color="#48dbfb"/>
+      <stop offset="75%" stop-color="#1dd1a1"/>
+      <stop offset="100%" stop-color="#a55eea"/>
+    </linearGradient>
+    <radialGradient id="g2" cx="50%" cy="50%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.5"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+    <mask id="m1">
+      <rect width="100" height="100" fill="white"/>
+      <circle cx="50" cy="50" r="38" fill="black"/>
+    </mask>
+  </defs>
+  <circle cx="50" cy="50" r="46" fill="url(#g2)"/>
+  <circle cx="50" cy="50" r="44" fill="url(#g1)" mask="url(#m1)"/>
+  <g fill="none" stroke-width="1.2" opacity="0.85">
+    <circle cx="50" cy="50" r="48" stroke="#ff6b6b"/>
+    <circle cx="50" cy="50" r="47" stroke="#feca57"/>
+    <circle cx="50" cy="50" r="46" stroke="#48dbfb"/>
+  </g>
+  <g opacity="0.9">
+    <path d="M50,0 L52,6 L48,6 Z" fill="#ff6b6b"/>
+    <path d="M50,100 L52,94 L48,94 Z" fill="#a55eea"/>
+    <path d="M0,50 L6,52 L6,48 Z" fill="#1dd1a1"/>
+    <path d="M100,50 L94,52 L94,48 Z" fill="#48dbfb"/>
+  </g>
+  <g fill="#ffffff" opacity="0.8">
+    <circle cx="85" cy="15" r="1"/>
+    <circle cx="15" cy="85" r="1"/>
+    <circle cx="85" cy="85" r="1"/>
+    <circle cx="15" cy="15" r="1"/>
+  </g>
+  <circle cx="50" cy="50" r="42" fill="none" stroke="#ffffff" stroke-width="0.3" opacity="0.4"/>
+</svg>

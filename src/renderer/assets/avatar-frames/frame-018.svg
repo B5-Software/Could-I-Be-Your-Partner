@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" width="100" height="100">
+  <defs>
+    <linearGradient id="g1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#006064"/>
+      <stop offset="50%" stop-color="#00838f"/>
+      <stop offset="100%" stop-color="#1a237e"/>
+    </linearGradient>
+    <radialGradient id="g2" cx="50%" cy="50%">
+      <stop offset="0%" stop-color="#18ffff" stop-opacity="0.4"/>
+      <stop offset="100%" stop-color="#18ffff" stop-opacity="0"/>
+    </radialGradient>
+    <mask id="m1">
+      <rect width="100" height="100" fill="white"/>
+      <circle cx="50" cy="50" r="38" fill="black"/>
+    </mask>
+  </defs>
+  <circle cx="50" cy="50" r="46" fill="url(#g2)"/>
+  <circle cx="50" cy="50" r="44" fill="url(#g1)" mask="url(#m1)"/>
+  <circle cx="50" cy="50" r="46" fill="none" stroke="#18ffff" stroke-width="0.8" opacity="0.7"/>
+  <g fill="none" stroke="#18ffff" stroke-width="0.5" opacity="0.7">
+    <ellipse cx="50" cy="50" rx="48" ry="20" transform="rotate(0 50 50)"/>
+    <ellipse cx="50" cy="50" rx="48" ry="20" transform="rotate(60 50 50)"/>
+    <ellipse cx="50" cy="50" rx="48" ry="20" transform="rotate(120 50 50)"/>
+  </g>
+  <g fill="#e0f7fa" opacity="0.95">
+    <circle cx="50" cy="3" r="1.2"/>
+    <circle cx="85" cy="22" r="1"/>
+    <circle cx="96" cy="50" r="1.2"/>
+    <circle cx="85" cy="78" r="1"/>
+    <circle cx="50" cy="97" r="1.2"/>
+    <circle cx="15" cy="78" r="1"/>
+    <circle cx="4" cy="50" r="1.2"/>
+    <circle cx="15" cy="22" r="1"/>
+  </g>
+  <g fill="#18ffff" opacity="0.9">
+    <circle cx="72" cy="10" r="0.7"/>
+    <circle cx="90" cy="32" r="0.7"/>
+    <circle cx="90" cy="68" r="0.7"/>
+    <circle cx="72" cy="90" r="0.7"/>
+    <circle cx="28" cy="90" r="0.7"/>
+    <circle cx="10" cy="68" r="0.7"/>
+    <circle cx="10" cy="32" r="0.7"/>
+    <circle cx="28" cy="10" r="0.7"/>
+  </g>
+  <g stroke="#b2ebf2" stroke-width="0.3" opacity="0.5" fill="none">
+    <circle cx="50" cy="50" r="42"/>
+    <circle cx="50" cy="50" r="48"/>
+  </g>
+</svg>
