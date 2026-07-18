@@ -19,6 +19,9 @@ const MAX_529_RETRIES = 3;
 const DEFAULT_TIMEOUT_MS = 300000; // 5 min
 const JITTER_RATIO = 0.25;
 
+// 全局活跃请求控制器集合：停止按钮可一次性 abort 所有正在进行的 LLM 请求
+const _activeControllers = new Set();
+
 // Error kinds: 'rate_limit' | 'overloaded' | 'server' | 'timeout' | 'network' | 'auth' | 'client' | 'unknown'
 
 class LLMError extends Error {
@@ -128,6 +131,7 @@ async function fetchLLMWithRetry(cfg) {
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     const controller = new AbortController();
+    _activeControllers.add(controller);
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const reqBody = { ...cfg.body, model: currentModel };
@@ -211,6 +215,8 @@ async function fetchLLMWithRetry(cfg) {
       } catch {
         break; // aborted during sleep
       }
+    } finally {
+      _activeControllers.delete(controller);
     }
   }
 
@@ -382,6 +388,19 @@ async function consumeSSEStream(bodyStream, onChunk, requestId, transport = 'ope
   };
 }
 
+/**
+ * 瞬间中止所有正在进行的 LLM 请求（停止按钮调用）
+ * 返回被中止的请求数量
+ */
+function abortAllRequests() {
+  const count = _activeControllers.size;
+  for (const c of _activeControllers) {
+    try { c.abort(); } catch { /* ignore */ }
+  }
+  _activeControllers.clear();
+  return count;
+}
+
 module.exports = {
   LLMError,
   fetchLLMWithRetry,
@@ -389,6 +408,7 @@ module.exports = {
   getRetryDelay,
   classifyHttpResponse,
   classifyThrownError,
+  abortAllRequests,
   DEFAULT_MAX_RETRIES,
   BASE_DELAY_MS,
   MAX_DELAY_MS,

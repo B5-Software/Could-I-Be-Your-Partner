@@ -12,7 +12,7 @@ const os = require('os');
 const { EmailService } = require('./email-service');
 const { importSpreadsheetFile, exportSpreadsheetFile } = require('./spreadsheet-io');
 const { WebControlService } = require('./web-control-service');
-const { fetchLLMWithRetry, consumeSSEStream, DEFAULT_TIMEOUT_MS } = require('./llm-retry');
+const { fetchLLMWithRetry, consumeSSEStream, abortAllRequests, DEFAULT_TIMEOUT_MS } = require('./llm-retry');
 const LLMProviders = require('./llm-providers');
 
 const emailService = new EmailService();
@@ -1874,6 +1874,18 @@ ipcMain.handle('terminal:kill', (_, id) => {
   return { ok: true };
 });
 
+// ---- 瞬间中止所有 AI 请求 + 杀掉所有正在运行的终端（停止按钮） ----
+ipcMain.handle('agent:abortAll', () => {
+  const reqCount = abortAllRequests();
+  let termCount = 0;
+  for (const [id, t] of terminals) {
+    try { t.term.kill(); termCount++; } catch { /* ignore */ }
+  }
+  terminals.clear();
+  console.log(`[Agent] Aborted ${reqCount} LLM request(s), killed ${termCount} terminal(s)`);
+  return { ok: true, abortedRequests: reqCount, killedTerminals: termCount };
+});
+
 // ---- IPC: Clipboard ----
 ipcMain.handle('clipboard:read', () => {
   try {
@@ -3215,7 +3227,19 @@ ipcMain.handle('llm:chat', async (_, messages, options = {}) => {
     const rawData = await result.response.json();
     if (rawData.error) return { ok: false, error: rawData.error.message || JSON.stringify(rawData.error) };
     const data = LLMProviders.parseLLMResponse(rawData, req.transport);
-    const usage = data.usage || {};
+    let usage = data.usage || {};
+    // API 未返回 usage 时估算并标记（前端用 ~ 前缀显示）
+    if (!usage.total_tokens && !usage.prompt_tokens && !usage.completion_tokens) {
+      const estPrompt = estimateTokens(JSON.stringify(req.body));
+      const estCompletion = estimateTokens(data.choices?.[0]?.message?.content || '');
+      usage = {
+        prompt_tokens: estPrompt,
+        completion_tokens: estCompletion,
+        total_tokens: estPrompt + estCompletion,
+        _estimated: true
+      };
+      data.usage = usage;
+    }
     const usageTokens = usage.total_tokens
       || estimateTokens(JSON.stringify(req.body)) + estimateTokens(data.choices?.[0]?.message?.content || '');
     settings.llm.dailyTokensUsed = (settings.llm.dailyTokensUsed || 0) + usageTokens;
@@ -3281,7 +3305,19 @@ ipcMain.handle('llm:chatStream', async (_, messages, options = {}) => {
     }, options.requestId, req.transport, 120000);
 
     mainWindow?.webContents.send('llm:stream-end', { requestId: options.requestId });
-    const usage = streamResult.usage || {};
+    let usage = streamResult.usage || {};
+    let estimated = false;
+    // API 未返回 usage 时估算并标记
+    if (!usage.total_tokens && !usage.prompt_tokens && !usage.completion_tokens) {
+      const estPrompt = estimateTokens(JSON.stringify(req.body));
+      const estCompletion = estimateTokens(streamResult.content || '');
+      usage = {
+        prompt_tokens: estPrompt,
+        completion_tokens: estCompletion,
+        total_tokens: estPrompt + estCompletion
+      };
+      estimated = true;
+    }
     const usageTokens = usage.total_tokens
       || estimateTokens(JSON.stringify(req.body)) + estimateTokens(streamResult.content || '');
     settings.llm.dailyTokensUsed = (settings.llm.dailyTokensUsed || 0) + usageTokens;
@@ -3298,7 +3334,8 @@ ipcMain.handle('llm:chatStream', async (_, messages, options = {}) => {
             tool_calls: streamResult.toolCalls
           },
           finish_reason: streamResult.finishReason
-        }]
+        }],
+        usage: { ...usage, _estimated: estimated }
       }
     };
   } catch (e) { return { ok: false, error: e.message }; }
@@ -4127,6 +4164,8 @@ function _hidePwBanner() {
 
 async function ensureBrowser(workspacePath) {
   const key = workspacePath || '__default__';
+  // 每次调用 Playwright 工具都重新显示横幅（Agent 第二轮操作浏览器时横幅已被隐藏）
+  _showPwBanner();
   if (_pwWorkspaces.has(key)) return _pwWorkspaces.get(key).page;
   const browser = await _launchPwBrowser();
   const pwSettings = _getPwSettings();

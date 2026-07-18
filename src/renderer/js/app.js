@@ -809,17 +809,9 @@
         }
         break;
       case 'sub-agent-batch-start':
-        addSubAgentBatchBanner(data.count, data.tasks);
-        // 持久化批次摘要到聊天历史
-        try {
-          if (agent?.contextManager && agent.conversationId) {
-            const taskSummary = (data.tasks || []).map((t, i) => `${i + 1}. ${t.slice(0, 80)}`).join('\n');
-            agent.contextManager.addSystemMessage(`[子代理批次] 并行执行 ${data.count} 个子代理:\n${taskSummary}`, { type: 'sub-agent-batch', count: data.count });
-          }
-        } catch {}
+        // 不在主聊天显示批次横幅，也不写入主上下文（子代理有独立卡片，避免污染主聊天历史）
         break;
       case 'sub-agent-batch-done':
-        // 可在此处添加批次完成的视觉反馈（如关闭加载动画）
         break;
       case 'present-file':
         addFilePresentCard(data);
@@ -1967,7 +1959,9 @@
   function renderSessionTokenStats(agentInstance) {
     const su = agentInstance?.sessionUsage;
     if (!su) return '';
-    const fmt = (n) => n >= 1000 ? `${(n/1000).toFixed(2)}K` : `${n}`;
+    // API 未返回 usage 时使用估算值，数字前加 ~ 前缀标识
+    const pfx = su.estimated ? '~' : '';
+    const fmt = (n) => `${pfx}${n >= 1000 ? `${(n/1000).toFixed(2)}K` : `${n}`}`;
     const cachedPct = su.prompt > 0 ? (su.cached / su.prompt * 100).toFixed(1) : '0.0';
     // 计算费用：若该模型在预算控制里配置了价格则显示，否则不显示费用行
     const pricing = getSessionPricing(agentInstance);
@@ -1994,7 +1988,7 @@
     }
     return `
       <div class="context-tooltip-row" style="margin-top:6px;border-top:1px solid var(--border);padding-top:6px;font-weight:600">
-        <span>会话累计 Token</span><span></span>
+        <span>会话累计 Token${su.estimated ? ' <span style="font-size:10px;color:var(--text-tertiary);font-weight:normal">(估算)</span>' : ''}</span><span></span>
       </div>
       <div class="context-tooltip-row"><span>　输入</span><span>${fmt(su.prompt)}</span></div>
       <div class="context-tooltip-row"><span>　输出</span><span>${fmt(su.completion)}</span></div>
@@ -2131,9 +2125,8 @@
   });
 
   window.api.onWebControlStopAgent(() => {
-    agent.stopped = true;
+    agent.stop();
     removeThinkingIndicator();
-    agent.running = false;
   });
 
   window.api.onWebControlApprovalResponse((approved) => {
@@ -3164,19 +3157,6 @@
 
   // 子代理全屏宽度卡片：标题 + 状态 + 用时 + token + 工具调用次数，点击展开完整对话
   const _subAgentCards = new Map(); // id → { el, logEl, startTime, timer }
-
-  function addSubAgentBatchBanner(count, tasks) {
-    const el = document.createElement('div');
-    el.className = 'sub-agent-batch-banner';
-    el.innerHTML = `
-      <div class="sub-agent-batch-icon"><i class="fa-solid fa-layer-group"></i></div>
-      <div class="sub-agent-batch-info">
-        <div class="sub-agent-batch-title">并行执行 ${count} 个子代理</div>
-        <div class="sub-agent-batch-tasks">${tasks.map(t => `<span class="sub-agent-batch-task">${escapeHtml(t).slice(0, 60)}${t.length > 60 ? '…' : ''}</span>`).join('')}</div>
-      </div>`;
-    appendChatElement(el);
-    requestAnimationFrame(() => { el.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); });
-  }
 
   function addSubAgentCard({ id, title, task, startTime, status }) {
     const el = document.createElement('div');

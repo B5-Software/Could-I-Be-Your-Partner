@@ -148,6 +148,9 @@ contextBridge.exposeInMainWorld('api', {
   pwCloseBrowser: () => ipcRenderer.invoke('pw:closeBrowser'),
   pwHideBanner: () => ipcRenderer.invoke('pw:hideBanner'),
 
+  // Agent Abort (停止按钮：瞬间中止所有 LLM 请求 + 杀掉所有终端)
+  agentAbortAll: () => ipcRenderer.invoke('agent:abortAll'),
+
   // Computer Use Protocol (CUP)
   computerScreenshot: (workspacePath) => ipcRenderer.invoke('computer:screenshot', workspacePath),
   computerMouseMove: (x, y) => ipcRenderer.invoke('computer:mouseMove', x, y),

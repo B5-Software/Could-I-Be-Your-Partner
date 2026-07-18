@@ -61,7 +61,8 @@ class Agent {
     // 字段：prompt / completion / total / cached / cacheCreation
     // - cached: OpenAI prompt_tokens_details.cached_tokens 或 Anthropic cache_read_input_tokens
     // - cacheCreation: Anthropic cache_creation_input_tokens（按 1.25x 计费）
-    this.sessionUsage = { prompt: 0, completion: 0, total: 0, cached: 0, cacheCreation: 0 };
+    // - estimated: 是否包含估算值（API 未返回 usage 时前端用 ~ 前缀显示）
+    this.sessionUsage = { prompt: 0, completion: 0, total: 0, cached: 0, cacheCreation: 0, estimated: false };
     // 会话起始时间（用于工作时长显示）
     this.sessionStartTime = Date.now();
     this.hotMessages = []; // 热对话消息队列
@@ -692,6 +693,8 @@ ${toolListSection}`;
       this.sessionUsage.total += tt;
       this.sessionUsage.cached += cached;
       this.sessionUsage.cacheCreation += cacheCreation;
+      // 任意一次 API 响应未返回 usage（使用估算）→ 整个会话统计标记为估算
+      if (usage._estimated) this.sessionUsage.estimated = true;
     } catch (e) {
       // 静默失败：统计错误不应影响对话主流程
     }
@@ -699,7 +702,7 @@ ${toolListSection}`;
 
   /** 新会话开始时重置会话级统计 */
   resetSessionUsage() {
-    this.sessionUsage = { prompt: 0, completion: 0, total: 0, cached: 0, cacheCreation: 0 };
+    this.sessionUsage = { prompt: 0, completion: 0, total: 0, cached: 0, cacheCreation: 0, estimated: false };
     this.sessionStartTime = Date.now();
   }
 
@@ -1378,6 +1381,18 @@ ${toolListSection}`;
     this.runId++;
     this.hotMessages = [];
     if (this.pendingApproval) this.resolveApproval(false);
+    // 瞬间中止所有正在进行的 LLM 请求和终端命令
+    if (window.api?.agentAbortAll) {
+      try { window.api.agentAbortAll(); } catch { /* ignore */ }
+    }
+    // 同步停止所有子代理
+    for (const sub of this.subAgents) {
+      if (sub.subAgent) {
+        sub.subAgent.stopped = true;
+        sub.subAgent.running = false;
+        sub.subAgent.runId++;
+      }
+    }
     if (this.onStatusChange) this.onStatusChange('idle');
   }
 
@@ -1631,13 +1646,10 @@ ${toolListSection}`;
                 await Promise.all(chunk.map(async (batchTc) => {
                   let batchArgs;
                   try { batchArgs = JSON.parse(batchTc.function.arguments || '{}'); } catch { batchArgs = {}; }
-                  if (this.onToolCall) this.onToolCall('runSubAgent', batchArgs, 'calling');
-                  if (this.onMessage) this.onMessage('tool_call', { name: 'runSubAgent', args: batchArgs });
+                  // 不发射 tool_call/tool-result 事件 — 子代理有独立卡片和模态框
                   const r = await this.executeTool('runSubAgent', batchArgs);
-                  if (this.onMessage) this.onMessage('tool-result', { name: 'runSubAgent', result: r });
                   const resultStr = typeof r === 'string' ? r : JSON.stringify(r);
                   this.contextManager.addToolResult(batchTc.id, 'runSubAgent', resultStr);
-                  if (this.onToolCall) this.onToolCall('runSubAgent', batchArgs, 'done', r);
                 }));
               }
 
@@ -2612,8 +2624,9 @@ ${tarotLine}
         else if (type === 'system') parentOnMessage('sub-agent-message', { id: subAgentId, task, content: `[系统] ${data}` });
       };
       subAgent.onToolCall = (name, a, status, result) => {
+        // 仅累计工具使用次数，不转发到父代理 onToolCall
+        // 子代理的工具调用只在子代理详情模态框中显示，不污染主聊天
         if (status === 'done') subAgentRecord.toolUseCount++;
-        if (this.onToolCall) this.onToolCall(name, a, status, result);
       };
 
       // Run a mini agent loop with the tool whitelist
