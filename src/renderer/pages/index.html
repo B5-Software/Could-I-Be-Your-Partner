@@ -586,6 +586,7 @@
             <button class="settings-tab" data-tab="user"><i class="fa-solid fa-user"></i> 个人资料</button>
             <button class="settings-tab" data-tab="llm"><i class="fa-solid fa-microchip"></i> LLM</button>
             <button class="settings-tab" data-tab="usage"><i class="fa-solid fa-chart-bar"></i> 用量统计</button>
+            <button class="settings-tab" data-tab="budget"><i class="fa-solid fa-wallet"></i> 预算控制</button>
             <button class="settings-tab" data-tab="image"><i class="fa-solid fa-image"></i> 生图</button>
             <button class="settings-tab" data-tab="theme"><i class="fa-solid fa-palette"></i> 主题</button>
             <button class="settings-tab" data-tab="language"><i class="fa-solid fa-language"></i> 语言</button>
@@ -853,6 +854,60 @@
                 <div id="usage-chart" style="height:160px;display:flex;align-items:flex-end;gap:2px;border-bottom:1px solid var(--border);padding-bottom:4px;"></div>
                 <h4 style="margin:16px 0 8px;">按模型</h4>
                 <div id="usage-models"></div>
+              </div>
+            </div>
+
+            <!-- Budget Control Tab -->
+            <div class="settings-panel" data-tab="budget">
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-wallet"></i> 月度预算上限</h3>
+                <p class="setting-hint" style="margin-bottom:12px">设定每月消费上限（USD）。当本月在用统计超过此值时按下方策略处理。</p>
+                <div class="setting-item" style="display:flex;align-items:center;gap:8px">
+                  <label style="min-width:120px">月度上限 (USD)</label>
+                  <input type="number" id="setting-budget-monthly-cap" placeholder="10.00" step="0.01" min="0" style="width:120px">
+                  <span style="color:var(--text-tertiary);font-size:12px">0 = 不限制</span>
+                </div>
+                <div class="setting-item" style="display:flex;align-items:center;gap:8px">
+                  <label style="min-width:120px">超额策略</label>
+                  <select id="setting-budget-action" style="width:200px">
+                    <option value="warn">仅警告（继续使用主模型）</option>
+                    <option value="fallback">切换到 fallback 模型</option>
+                    <option value="stop">停止接受新请求</option>
+                  </select>
+                </div>
+                <div class="setting-item" style="display:flex;align-items:center;gap:8px">
+                  <label style="min-width:120px">Fallback 模型</label>
+                  <input type="text" id="setting-budget-fallback-model" placeholder="deepseek-chat / gpt-4o-mini ..." style="flex:1">
+                  <button class="btn-secondary btn-sm" id="btn-budget-pick-fallback" title="从可用模型列表选择"><i class="fa-solid fa-list"></i></button>
+                </div>
+                <p class="setting-hint" style="margin-top:4px">超额时若选择 fallback 策略，将自动切换到该模型；请在下方价格表中也填写该模型的价格。</p>
+              </div>
+
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-coins"></i> 模型价格表</h3>
+                <p class="setting-hint" style="margin-bottom:12px">
+                  为每个模型填写每 1K token 的单价（USD）。缓存命中按 0.1x、缓存创建按 1.25x 自动计算。
+                  上下文模态框的费用显示依赖此价格表，未填写的模型不显示费用。
+                </p>
+                <div style="display:grid;grid-template-columns:1.5fr 1fr 1fr auto;gap:8px;align-items:end;margin-bottom:8px;font-size:12px;color:var(--text-tertiary);font-weight:600">
+                  <span>模型 ID</span>
+                  <span>输入 $/1K</span>
+                  <span>输出 $/1K</span>
+                  <span></span>
+                </div>
+                <div id="budget-pricing-list" style="display:flex;flex-direction:column;gap:8px;"></div>
+                <div style="margin-top:8px;display:flex;gap:8px;flex-wrap:wrap">
+                  <button class="btn-secondary btn-sm" id="btn-budget-add-row"><i class="fa-solid fa-plus"></i> 添加模型价格</button>
+                  <button class="btn-secondary btn-sm" id="btn-budget-import-current"><i class="fa-solid fa-arrow-down-up-across-line"></i> 从当前 LLM 配置导入</button>
+                  <button class="btn-secondary btn-sm" id="btn-budget-import-usage"><i class="fa-solid fa-clock-rotate-left"></i> 从用量记录导入已用模型</button>
+                </div>
+              </div>
+
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-gauge-high"></i> 预算状态</h3>
+                <div id="budget-status" style="background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:12px;font-size:13px">
+                  <span style="color:var(--text-tertiary)">加载中...</span>
+                </div>
               </div>
             </div>
 
@@ -1685,6 +1740,19 @@
                 </div>
               </div>
               <div class="settings-group">
+                <h3><i class="fa-solid fa-eye"></i> 显示模式</h3>
+                <div class="setting-item">
+                  <label class="toggle-label">
+                    <span>有头模式（显示浏览器窗口）</span>
+                    <div class="toggle-switch">
+                      <input type="checkbox" id="setting-pw-headless">
+                      <span class="toggle-slider"></span>
+                    </div>
+                  </label>
+                  <p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">默认开启有头模式以显示浏览器窗口。关闭后将以无头模式在后台运行（无法看到浏览器）</p>
+                </div>
+              </div>
+              <div class="settings-group">
                 <h3><i class="fa-solid fa-gauge-high"></i> 启动参数</h3>
                 <div class="setting-item">
                   <label>额外启动参数（可选，每行一个）</label>
@@ -2082,6 +2150,8 @@
   <script src="../js/agent.js"></script>
   <script src="../js/spreadsheet.js"></script>
   <script src="../js/app.js"></script>
+  <!-- 全局 Toast 容器：用于请求失败重试等自动消失提示 -->
+  <div id="toast-container" style="position:fixed;top:60px;right:20px;z-index:10000;display:flex;flex-direction:column;gap:8px;pointer-events:none"></div>
 </body>
 </html>
 

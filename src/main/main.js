@@ -45,6 +45,10 @@ const workspacesBaseDir = path.join(app.getPath('documents'), 'Could-I-Be-Your-P
 const settingsPath = path.join(dataDir, 'settings.json');
 const memoryPath = path.join(dataDir, 'memory.json');
 const knowledgePath = path.join(dataDir, 'knowledge.json');
+// 异常中断的会话（关闭App时正在工作）保存到此文件，下次启动时弹模态框询问是否继续
+const pendingSessionPath = path.join(dataDir, '.cibyp-pending.json');
+// 标志：渲染器已确认完成 pending 保存（防止 before-quit 在保存未完成时退出）
+let pendingSaveDone = false;
 
 function loadJSON(p, def) { try { return JSON.parse(fs.readFileSync(p, 'utf-8')); } catch { return def; } }
 /**
@@ -88,36 +92,50 @@ function estimateTokens(text) {
 /**
  * Record real token usage from API response into per-day history.
  * Stores: { [dateKey]: { totalTokens, promptTokens, completionTokens, requestCount, models, hours: { [0..23]: {...} } } }
+ * 支持解析缓存命中 token（OpenAI: prompt_tokens_details.cached_tokens；Anthropic: cache_read_input_tokens + cache_creation_input_tokens）
  */
 function recordTokenUsage(usage, model) {
   if (!usage) return;
   const today = getTodayKey();
   if (!settings.llm.usageHistory) settings.llm.usageHistory = {};
   if (!settings.llm.usageHistory[today]) {
-    settings.llm.usageHistory[today] = { totalTokens: 0, promptTokens: 0, completionTokens: 0, requestCount: 0, models: {}, hours: {} };
+    settings.llm.usageHistory[today] = { totalTokens: 0, promptTokens: 0, completionTokens: 0, requestCount: 0, models: {}, hours: {}, cachedTokens: 0, cacheCreationTokens: 0 };
   }
   const day = settings.llm.usageHistory[today];
   const pt = usage.prompt_tokens || 0;
   const ct = usage.completion_tokens || 0;
   const tt = usage.total_tokens || (pt + ct);
+  // 解析缓存命中 token：
+  // - OpenAI: usage.prompt_tokens_details.cached_tokens（已命中的 prompt 缓存）
+  // - Anthropic: usage.cache_read_input_tokens（已命中） + cache_creation_input_tokens（缓存写入，按 1.25x 计费）
+  const cachedTokens = usage.prompt_tokens_details?.cached_tokens
+    || usage.cache_read_input_tokens
+    || 0;
+  const cacheCreationTokens = usage.cache_creation_input_tokens || 0;
   day.totalTokens += tt;
   day.promptTokens += pt;
   day.completionTokens += ct;
+  day.cachedTokens = (day.cachedTokens || 0) + cachedTokens;
+  day.cacheCreationTokens = (day.cacheCreationTokens || 0) + cacheCreationTokens;
   day.requestCount += 1;
   if (model) {
-    if (!day.models[model]) day.models[model] = { total: 0, prompt: 0, completion: 0, count: 0 };
+    if (!day.models[model]) day.models[model] = { total: 0, prompt: 0, completion: 0, count: 0, cached: 0, cacheCreation: 0 };
     day.models[model].total += tt;
     day.models[model].prompt += pt;
     day.models[model].completion += ct;
+    day.models[model].cached = (day.models[model].cached || 0) + cachedTokens;
+    day.models[model].cacheCreation = (day.models[model].cacheCreation || 0) + cacheCreationTokens;
     day.models[model].count += 1;
   }
   // 按小时统计（用于 daily 周期的按小时图表）
   const hour = new Date().getHours();
   if (!day.hours) day.hours = {};
-  if (!day.hours[hour]) day.hours[hour] = { total: 0, prompt: 0, completion: 0, count: 0 };
+  if (!day.hours[hour]) day.hours[hour] = { total: 0, prompt: 0, completion: 0, count: 0, cached: 0, cacheCreation: 0 };
   day.hours[hour].total += tt;
   day.hours[hour].prompt += pt;
   day.hours[hour].completion += ct;
+  day.hours[hour].cached = (day.hours[hour].cached || 0) + cachedTokens;
+  day.hours[hour].cacheCreation = (day.hours[hour].cacheCreation || 0) + cacheCreationTokens;
   day.hours[hour].count += 1;
   // Prune entries older than 90 days to avoid unbounded growth.
   const cutoff = new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 10);
@@ -128,26 +146,30 @@ function recordTokenUsage(usage, model) {
 
 /**
  * Aggregate usage over a date range (inclusive of both ends).
- * Returns { totalTokens, promptTokens, completionTokens, requestCount, days: [{date, total, prompt, completion, count}], models }
+ * Returns { totalTokens, promptTokens, completionTokens, requestCount, days: [{date, total, prompt, completion, count}], models, cachedTokens, cacheCreationTokens }
  */
 function aggregateUsage(startDate, endDate) {
-  const result = { totalTokens: 0, promptTokens: 0, completionTokens: 0, requestCount: 0, days: [], models: {} };
+  const result = { totalTokens: 0, promptTokens: 0, completionTokens: 0, requestCount: 0, days: [], models: {}, cachedTokens: 0, cacheCreationTokens: 0 };
   const hist = settings.llm.usageHistory || {};
   const d = new Date(startDate);
   while (d.toISOString().slice(0, 10) <= endDate) {
     const key = d.toISOString().slice(0, 10);
     const entry = hist[key];
-    result.days.push({ date: key, total: entry?.totalTokens || 0, prompt: entry?.promptTokens || 0, completion: entry?.completionTokens || 0, count: entry?.requestCount || 0 });
+    result.days.push({ date: key, total: entry?.totalTokens || 0, prompt: entry?.promptTokens || 0, completion: entry?.completionTokens || 0, count: entry?.requestCount || 0, cached: entry?.cachedTokens || 0, cacheCreation: entry?.cacheCreationTokens || 0 });
     if (entry) {
       result.totalTokens += entry.totalTokens || 0;
       result.promptTokens += entry.promptTokens || 0;
       result.completionTokens += entry.completionTokens || 0;
       result.requestCount += entry.requestCount || 0;
+      result.cachedTokens += entry.cachedTokens || 0;
+      result.cacheCreationTokens += entry.cacheCreationTokens || 0;
       for (const [model, m] of Object.entries(entry.models || {})) {
-        if (!result.models[model]) result.models[model] = { total: 0, prompt: 0, completion: 0, count: 0 };
+        if (!result.models[model]) result.models[model] = { total: 0, prompt: 0, completion: 0, count: 0, cached: 0, cacheCreation: 0 };
         result.models[model].total += m.total || 0;
         result.models[model].prompt += m.prompt || 0;
         result.models[model].completion += m.completion || 0;
+        result.models[model].cached += m.cached || 0;
+        result.models[model].cacheCreation += m.cacheCreation || 0;
         result.models[model].count += m.count || 0;
       }
     }
@@ -2651,7 +2673,19 @@ ipcMain.handle('web:search', async (_, query, workspacePath) => {
     })()`);
 
     const image = await offscreenWindow.webContents.capturePage();
-    const targetDir = workspacePath && fs.existsSync(workspacePath) ? workspacePath : imagesDir;
+    // Code 模式：检测工作区下 .cibyp-code-history 目录是否存在，是则保存到其 assets/ 子目录
+    // 否则保持原有行为（保存到工作区根目录或 imagesDir）
+    let targetDir = imagesDir;
+    if (workspacePath && fs.existsSync(workspacePath)) {
+      const codeHistDir = path.join(workspacePath, '.cibyp-code-history');
+      if (fs.existsSync(codeHistDir)) {
+        const assetsDir = path.join(codeHistDir, 'assets');
+        try { fs.mkdirSync(assetsDir, { recursive: true }); } catch {}
+        targetDir = assetsDir;
+      } else {
+        targetDir = workspacePath;
+      }
+    }
     const imgPath = path.join(targetDir, `bing_${Date.now()}.png`);
     fs.writeFileSync(imgPath, image.toPNG());
 
@@ -3514,6 +3548,41 @@ ipcMain.handle('history:rename', (_, id, title) => {
   return { ok: false };
 });
 
+// ---- IPC: Pending Session (App 异常中断时保存正在工作的会话) ----
+// 保存：渲染器在收到 agent:save-pending 事件后调用，将当前会话信息写入 pending 文件
+ipcMain.handle('agent:save-pending-session', (_, payload) => {
+  try {
+    const data = {
+      savedAt: new Date().toISOString(),
+      ...payload
+    };
+    saveJSON(pendingSessionPath, data);
+    pendingSaveDone = true;
+    return { ok: true };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+// 标记无需保存（如当前没有正在运行的会话）
+ipcMain.handle('agent:skip-pending', () => {
+  pendingSaveDone = true;
+  return { ok: true };
+});
+
+// 读取 pending 会话（App 启动时调用以决定是否弹模态框）
+ipcMain.handle('agent:get-pending-session', () => {
+  try {
+    if (!fs.existsSync(pendingSessionPath)) return null;
+    const data = loadJSON(pendingSessionPath, null);
+    return data;
+  } catch { return null; }
+});
+
+// 清除 pending 文件（用户选择继续后或忽略后调用）
+ipcMain.handle('agent:clear-pending-session', () => {
+  try { if (fs.existsSync(pendingSessionPath)) fs.unlinkSync(pendingSessionPath); return { ok: true }; }
+  catch (e) { return { ok: false, error: e.message }; }
+});
+
 // ---- IPC: Babe History (独立持久化，含好感度等会话属性) ----
 ipcMain.handle('babeHistory:list', () => {
   try {
@@ -3747,7 +3816,9 @@ function _getPwSettings() {
     mode: s.playwright?.mode || 'auto',
     path: s.playwright?.path || '',
     followLang: s.playwright?.followLang !== false,
-    args: s.playwright?.args || ''
+    args: s.playwright?.args || '',
+    // 默认有头模式（headless=false）。settings.playwright.headless 显式为 true 时才无头
+    headless: s.playwright?.headless === true
   };
 }
 
@@ -3813,6 +3884,7 @@ async function _launchPwBrowser() {
   const { chromium } = require('playwright');
   const pwSettings = _getPwSettings();
   const appLang = settings?.language || 'zh-CN';
+  const headless = !!pwSettings.headless;
 
   // Parse extra args
   let extraArgs = [];
@@ -3826,11 +3898,11 @@ async function _launchPwBrowser() {
     // Custom browser path
     try {
       _pwBrowser = await chromium.launch({
-        headless: true,
+        headless,
         executablePath: pwSettings.path,
         args: extraArgs
       });
-      console.log('Playwright launched with custom path:', pwSettings.path);
+      console.log('Playwright launched with custom path:', pwSettings.path, 'headless:', headless);
       return _pwBrowser;
     } catch (e) {
       console.warn('Custom browser launch failed:', e.message);
@@ -3840,7 +3912,7 @@ async function _launchPwBrowser() {
 
   if (pwSettings.mode === 'chromium') {
     try {
-      _pwBrowser = await chromium.launch({ headless: true, args: extraArgs });
+      _pwBrowser = await chromium.launch({ headless, args: extraArgs });
       return _pwBrowser;
     } catch (e) {
       throw new Error('内置 Chromium 启动失败: ' + e.message + '。请运行 npx playwright install chromium。');
@@ -3849,7 +3921,7 @@ async function _launchPwBrowser() {
 
   if (pwSettings.mode === 'edge') {
     try {
-      _pwBrowser = await chromium.launch({ headless: true, channel: 'msedge', args: extraArgs });
+      _pwBrowser = await chromium.launch({ headless, channel: 'msedge', args: extraArgs });
       return _pwBrowser;
     } catch (e) {
       lastError = e;
@@ -3858,7 +3930,7 @@ async function _launchPwBrowser() {
 
   if (pwSettings.mode === 'chrome') {
     try {
-      _pwBrowser = await chromium.launch({ headless: true, channel: 'chrome', args: extraArgs });
+      _pwBrowser = await chromium.launch({ headless, channel: 'chrome', args: extraArgs });
       return _pwBrowser;
     } catch (e) {
       lastError = e;
@@ -3869,8 +3941,8 @@ async function _launchPwBrowser() {
   const channels = ['msedge', 'chrome'];
   for (const channel of channels) {
     try {
-      _pwBrowser = await chromium.launch({ headless: true, channel, args: extraArgs });
-      console.log('Playwright launched with channel:', channel);
+      _pwBrowser = await chromium.launch({ headless, channel, args: extraArgs });
+      console.log('Playwright launched with channel:', channel, 'headless:', headless);
       return _pwBrowser;
     } catch (e) {
       console.warn('Channel', channel, 'launch failed:', e.message);
@@ -3878,7 +3950,7 @@ async function _launchPwBrowser() {
     }
   }
   try {
-    _pwBrowser = await chromium.launch({ headless: true, args: extraArgs });
+    _pwBrowser = await chromium.launch({ headless, args: extraArgs });
     return _pwBrowser;
   } catch (e) {
     throw new Error('无法启动Playwright浏览器（未找到Edge/Chrome，且Playwright浏览器未安装）。请安装Microsoft Edge或Google Chrome，或运行 npx playwright install chromium。错误: ' + (lastError?.message || e.message));
@@ -3930,7 +4002,18 @@ ipcMain.handle('browser:screenshot', async (_, fullPage, workspacePath) => {
     const dataUrl = 'data:image/png;base64,' + buf.toString('base64');
     let filePath = null;
     try {
-      const saveDir = workspacePath && fs.existsSync(workspacePath) ? workspacePath : imagesDir;
+      // Code 模式：检测 .cibyp-code-history 目录，保存到其 assets/ 子目录
+      let saveDir = imagesDir;
+      if (workspacePath && fs.existsSync(workspacePath)) {
+        const codeHistDir = path.join(workspacePath, '.cibyp-code-history');
+        if (fs.existsSync(codeHistDir)) {
+          const assetsDir = path.join(codeHistDir, 'assets');
+          try { fs.mkdirSync(assetsDir, { recursive: true }); } catch {}
+          saveDir = assetsDir;
+        } else {
+          saveDir = workspacePath;
+        }
+      }
       const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
       const fname = 'browser-screenshot-' + ts + '.png';
       filePath = path.join(saveDir, fname);
@@ -6145,11 +6228,28 @@ app.whenReady().then(async () => {
 });
 
 // Cleanup MCP servers, serial ports, and web control on app quit
-app.on('before-quit', () => {
+// 若渲染器有正在工作的会话，先通知其保存 pending 状态，等待完成后再退出
+app.on('before-quit', async (event) => {
   for (const [name] of mcpServers) {
     stopMcpServer(name);
   }
   if (webControlService.running) {
     webControlService.stop().catch(() => {});
+  }
+  // 如果主窗口还存在且尚未确认 pending 保存完成，先阻止退出，请求渲染器保存
+  if (mainWindow && !mainWindow.isDestroyed() && !pendingSaveDone) {
+    event.preventDefault();
+    try {
+      mainWindow.webContents.send('agent:save-pending');
+    } catch { /* 窗口可能已销毁 */ }
+    // 等待渲染器响应（最多 3 秒），然后强制退出
+    const startWait = Date.now();
+    const checkInterval = 100;
+    while (!pendingSaveDone && Date.now() - startWait < 3000) {
+      await new Promise(r => setTimeout(r, checkInterval));
+    }
+    // 保存完成或超时，触发真正的退出
+    pendingSaveDone = true;
+    app.quit();
   }
 });

@@ -57,6 +57,13 @@ class Agent {
     this.onTodoUpdate = null;
     this.subAgents = [];
     this.runId = 0;
+    // 当前会话累计 token 统计（每次新建会话时重置）
+    // 字段：prompt / completion / total / cached / cacheCreation
+    // - cached: OpenAI prompt_tokens_details.cached_tokens 或 Anthropic cache_read_input_tokens
+    // - cacheCreation: Anthropic cache_creation_input_tokens（按 1.25x 计费）
+    this.sessionUsage = { prompt: 0, completion: 0, total: 0, cached: 0, cacheCreation: 0 };
+    // 会话起始时间（用于工作时长显示）
+    this.sessionStartTime = Date.now();
     this.hotMessages = []; // 热对话消息队列
     this._fromWeb = false; // 标记消息是否来自Web控制
     this.optimizedToolNames = null;
@@ -175,11 +182,17 @@ class Agent {
     // Subscribe to LLM retry events to surface them to the UI
     if (window.api?.onLLMRetry && !this._llmRetryUnsub) {
       this._llmRetryUnsub = window.api.onLLMRetry((info) => {
-        if (this.onMessage && info) {
-          const kind = info.kind || 'unknown';
-          const delayTxt = info.delayMs ? `，${Math.round(info.delayMs / 100) / 10}s 后重试` : '';
-          const reasonTxt = info.reason ? `（${info.reason}）` : '';
-          const msg = `LLM 请求失败（${kind}），第 ${info.attempt || 1} 次重试${delayTxt}${reasonTxt}`;
+        if (!info) return;
+        const kind = info.kind || 'unknown';
+        const statusTxt = info.status ? ` [${info.status}]` : '';
+        const delayTxt = info.delayMs ? `，${Math.round(info.delayMs / 100) / 10}s 后重试` : '';
+        const reasonTxt = info.reason ? `（${info.reason}）` : '';
+        const msg = `LLM 请求失败${statusTxt}（${kind}），第 ${info.attempt || 1} 次重试${delayTxt}${reasonTxt}`;
+        // 优先使用全局 toast 提示（自动消失），不再污染聊天记录
+        if (typeof window.showToast === 'function') {
+          const type = (kind === 'auth' || kind === 'client') ? 'error' : 'warn';
+          window.showToast(msg, type, 6000);
+        } else if (this.onMessage) {
           this.onMessage('system', msg);
         }
       });
@@ -583,6 +596,12 @@ ${toolListSection}`;
 8. 工具调用失败时检查参数（路径、命令语法），重试或换方案，不要静默放弃。
 9. 不要使用 emoji 表情符号，不要使用"亲昵语气词"。使用简体中文回复，代码注释也用中文。
 10. Code 模式下所有已启用的工具始终可用（不进行自动优化），你可以自由使用任何列出的工具。
+11. 【聊天记录目录隔离】工作区下的 \`.cibyp-code-history/\` 目录是 CIBYP 自身使用的聊天记录与截图存储区，不属于用户项目源代码。首次在该工作区工作时，必须：
+    - 若工作区存在 \`.gitignore\` 文件，将 \`.cibyp-code-history/\` 追加到其中（若已存在则跳过）；
+    - 若工作区使用其他打包/构建工具（如 npm 的 package.json#files、tsconfig.json#exclude、webpack/vite/rollup 配置、Docker .dockerignore、ESLint .eslintignore 等），同样将 \`.cibyp-code-history/\` 加入对应排除项；
+    - 若是 Python 项目，将其加入 \`.gitignore\` 和 \`setup.py\`/\`pyproject.toml\` 的 \`exclude\` 或 \`find:\` 配置；
+    - 完成后在回复中简要提示用户已添加排除规则。
+    - 例外：若该工作区本身就是 CIBYP 仓库本身（路径含 Could-I-Be-Your-Partner），无需修改。
 ${toolListSection}`;
     // i18n: if a non-zh language is active, use the translated code system prompt
     if (typeof i18nGetSystemPrompt === 'function') {
@@ -629,6 +648,42 @@ ${toolListSection}`;
     if (this.contextManager && this.settings) {
       this.contextManager.setSystemPrompt(this.getSystemPrompt());
     }
+  }
+
+  /**
+   * 累计单次 LLM 响应的 usage 到当前会话统计。
+   * 兼容 OpenAI / Anthropic / OpenCode Zen 三类字段：
+   *   - prompt_tokens / completion_tokens / total_tokens （OpenAI 兼容）
+   *   - prompt_tokens_details.cached_tokens （OpenAI 缓存命中）
+   *   - cache_read_input_tokens / cache_creation_input_tokens （Anthropic 缓存）
+   * 注：每日/每周/每月统计由主进程 recordTokenUsage 在 chatLLM IPC 内部完成，
+   * 此处只负责会话级累计（用于上下文模态框显示）。
+   */
+  _accumulateUsage(usage) {
+    if (!usage || typeof usage !== 'object') return;
+    try {
+      const pt = usage.prompt_tokens || 0;
+      const ct = usage.completion_tokens || 0;
+      const tt = usage.total_tokens || (pt + ct);
+      // OpenAI: prompt_tokens_details.cached_tokens；Anthropic: cache_read_input_tokens
+      const cached = usage.prompt_tokens_details?.cached_tokens
+        || usage.cache_read_input_tokens
+        || 0;
+      const cacheCreation = usage.cache_creation_input_tokens || 0;
+      this.sessionUsage.prompt += pt;
+      this.sessionUsage.completion += ct;
+      this.sessionUsage.total += tt;
+      this.sessionUsage.cached += cached;
+      this.sessionUsage.cacheCreation += cacheCreation;
+    } catch (e) {
+      // 静默失败：统计错误不应影响对话主流程
+    }
+  }
+
+  /** 新会话开始时重置会话级统计 */
+  resetSessionUsage() {
+    this.sessionUsage = { prompt: 0, completion: 0, total: 0, cached: 0, cacheCreation: 0 };
+    this.sessionStartTime = Date.now();
   }
 
   /**
@@ -1197,6 +1252,7 @@ ${toolListSection}`;
     this.conversationId = conversation.id;
     this.conversationTitle = conversation.title;
     this.resetOptimizedTools();
+    this.resetSessionUsage(); // 加载历史会话视为新一轮，重置统计
     this.contextManager.clear();
     this.contextManager.messages = conversation.messages || [];
     this.contextManager.summaries = conversation.summaries || [];
@@ -1335,9 +1391,9 @@ ${toolListSection}`;
 
   async agentLoop(runId) {
     let iterations = 0;
-    const maxIterations = this.settings?.agent?.maxIterations || 50; // Safety limit (configurable)
-
-    while (this.running && !this.stopped && iterations < maxIterations && runId === this.runId) {
+    // 移除硬性迭代上限：完全由 running/stopped/runId 控制
+    // 原本的 maxIterations=50 会在长任务中被误触顶，导致工作中断
+    while (this.running && !this.stopped && runId === this.runId) {
       iterations++;
 
       // Check if context needs management (with autoCompact circuit breaker)
@@ -1446,8 +1502,19 @@ ${toolListSection}`;
       if (this.stopped || runId !== this.runId) break;
 
       if (!result.ok) {
-        if (this.onMessage) this.onMessage('error', result.error);
+        const errMsg = result.error || 'LLM 请求失败';
+        if (this.onMessage) this.onMessage('error', errMsg);
+        // 持久化错误消息到聊天历史（确保所有可见内容都被保存）
+        try { this.contextManager.addSystemMessage(`[错误] ${errMsg}`, { type: 'error' }); }
+        catch { /* ignore */ }
         break;
+      }
+
+      // 累计会话 token 使用（支持缓存命中/缓存创建解析）
+      // - OpenAI: usage.prompt_tokens_details.cached_tokens
+      // - Anthropic: usage.cache_read_input_tokens + usage.cache_creation_input_tokens
+      if (result.data?.usage) {
+        this._accumulateUsage(result.data.usage);
       }
 
       const choice = result.data.choices?.[0];
@@ -1477,9 +1544,10 @@ ${toolListSection}`;
 
       // Handle tool calls
       if (assistantMsg.tool_calls && assistantMsg.tool_calls.length > 0) {
-        for (const tc of assistantMsg.tool_calls) {
+        for (let i = 0; i < assistantMsg.tool_calls.length; i++) {
           if (this.stopped || runId !== this.runId) break;
 
+          const tc = assistantMsg.tool_calls[i];
           const toolName = tc.function.name;
           let args;
           try {
@@ -1516,6 +1584,51 @@ ${toolListSection}`;
             this.contextManager.addToolResult(tc.id, toolName, resultStr);
             if (this.onToolCall) this.onToolCall(toolName, args, 'done', JSON.parse(resultStr));
             continue;
+          }
+
+          // 并行 Task 批次检测：连续的 runSubAgent 调用合并成一批并行执行
+          // 参考 claude-code-ref 的 partitionToolCalls + runToolsConcurrently 模式
+          if (toolName === 'runSubAgent') {
+            let batchEnd = i + 1;
+            while (batchEnd < assistantMsg.tool_calls.length
+                   && assistantMsg.tool_calls[batchEnd].function.name === 'runSubAgent') {
+              batchEnd++;
+            }
+            const batchSize = batchEnd - i;
+            if (batchSize > 1) {
+              // 并行执行多个 Task 调用（最多 4 个并发，防止资源耗尽）
+              const batch = assistantMsg.tool_calls.slice(i, batchEnd);
+              const MAX_PARALLEL = 4;
+              if (this.onMessage) this.onMessage('sub-agent-batch-start', {
+                count: batchSize,
+                tasks: batch.map(c => {
+                  try { return JSON.parse(c.function.arguments || '{}').task || ''; }
+                  catch { return ''; }
+                })
+              });
+
+              // 分批执行（每批最多 MAX_PARALLEL 个并发）
+              for (let bStart = 0; bStart < batch.length; bStart += MAX_PARALLEL) {
+                if (this.stopped || runId !== this.runId) break;
+                const chunk = batch.slice(bStart, bStart + MAX_PARALLEL);
+                await Promise.all(chunk.map(async (batchTc) => {
+                  let batchArgs;
+                  try { batchArgs = JSON.parse(batchTc.function.arguments || '{}'); } catch { batchArgs = {}; }
+                  if (this.onToolCall) this.onToolCall('runSubAgent', batchArgs, 'calling');
+                  if (this.onMessage) this.onMessage('tool_call', { name: 'runSubAgent', args: batchArgs });
+                  const r = await this.executeTool('runSubAgent', batchArgs);
+                  if (this.onMessage) this.onMessage('tool-result', { name: 'runSubAgent', result: r });
+                  const resultStr = typeof r === 'string' ? r : JSON.stringify(r);
+                  this.contextManager.addToolResult(batchTc.id, 'runSubAgent', resultStr);
+                  if (this.onToolCall) this.onToolCall('runSubAgent', batchArgs, 'done', r);
+                }));
+              }
+
+              if (this.onMessage) this.onMessage('sub-agent-batch-done', { count: batchSize });
+              i = batchEnd - 1; // 跳过已并行执行的批次（for 循环会再 +1）
+              continue;
+            }
+            // 单个 Task 调用：落到下面的常规顺序执行
           }
 
           if (this.onToolCall) this.onToolCall(toolName, args, 'calling');
@@ -2415,7 +2528,9 @@ ${toolListSection}`;
           this.getActiveToolNames ? this.getActiveToolNames().includes(t) : true);
       }
       const allowedSet = new Set(allowedTools);
-      const maxIter = Math.min(Math.max(parseInt(args.maxIterations) || 10, 1), 30);
+      // 移除迭代上限：原默认 10、上限 30 对复杂任务过小
+      // 现在完全由子代理自身的 running/stopped 标志控制
+      const maxIter = parseInt(args.maxIterations) || Infinity;
 
       // Create isolated sub-agent
       const subAgent = new Agent();
@@ -2445,10 +2560,28 @@ ${tarotLine}
 2. 不要与用户交互（你无法直接看到用户）
 3. 完成后给出简洁、结构化的结果报告
 4. 不要使用 emoji
-5. 最多 ${maxIter} 轮迭代，合理安排工作`
+5. 最多 ${maxIter === Infinity ? '无上限' : maxIter + ' 轮迭代'}，合理安排工作`
       );
 
-      if (this.onMessage) this.onMessage('sub-agent-start', { task, tarot: subAgent.tarotCard });
+      // 生成唯一 ID 并注册到 this.subAgents（供 UI 展开查看完整对话）
+      const subAgentId = 'sub-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
+      const startTime = Date.now();
+      const subAgentRecord = {
+        id: subAgentId,
+        task,
+        tarot: subAgent.tarotCard,
+        status: 'running',
+        startTime,
+        endTime: null,
+        iterations: 0,
+        toolUseCount: 0,
+        usage: { prompt: 0, completion: 0, total: 0, cached: 0, cacheCreation: 0 },
+        messages: [], // 完整消息历史快照（含 tool_calls 和 tool_result）
+        subAgent // 引用 subAgent 实例（含 contextManager.messages）
+      };
+      this.subAgents.push(subAgentRecord);
+
+      if (this.onMessage) this.onMessage('sub-agent-start', { id: subAgentId, task, tarot: subAgent.tarotCard, startTime });
 
       subAgent.contextManager.addUserMessage(task);
       subAgent.running = true;
@@ -2458,10 +2591,11 @@ ${tarotLine}
       const parentOnMessage = this.onMessage;
       subAgent.onMessage = (type, data) => {
         if (!parentOnMessage) return;
-        if (type === 'assistant') parentOnMessage('sub-agent-message', { task, content: data });
-        else if (type === 'system') parentOnMessage('sub-agent-message', { task, content: `[系统] ${data}` });
+        if (type === 'assistant') parentOnMessage('sub-agent-message', { id: subAgentId, task, content: data });
+        else if (type === 'system') parentOnMessage('sub-agent-message', { id: subAgentId, task, content: `[系统] ${data}` });
       };
       subAgent.onToolCall = (name, a, status, result) => {
+        if (status === 'done') subAgentRecord.toolUseCount++;
         if (this.onToolCall) this.onToolCall(name, a, status, result);
       };
 
@@ -2472,6 +2606,7 @@ ${tarotLine}
 
       while (subAgent.running && !subAgent.stopped && iterations < maxIter && subRunId === subAgent.runId) {
         iterations++;
+        subAgentRecord.iterations = iterations;
         const messages = subAgent.contextManager.getMessages();
         const allSchemas = getToolSchemas(this.settings?.tools);
         const subTools = allSchemas.filter(t => allowedSet.has(t.function?.name));
@@ -2482,8 +2617,18 @@ ${tarotLine}
         });
 
         if (!result.ok) {
-          if (parentOnMessage) parentOnMessage('sub-agent-message', { task, content: `[错误] ${result.error}` });
+          if (parentOnMessage) parentOnMessage('sub-agent-message', { id: subAgentId, task, content: `[错误] ${result.error}` });
           break;
+        }
+        // 子代理 usage 累计到主会话统计 + 子代理自身记录
+        if (result.data?.usage) {
+          this._accumulateUsage(result.data.usage);
+          const u = result.data.usage;
+          subAgentRecord.usage.prompt += u.prompt_tokens || 0;
+          subAgentRecord.usage.completion += u.completion_tokens || 0;
+          subAgentRecord.usage.total += u.total_tokens || ((u.prompt_tokens || 0) + (u.completion_tokens || 0));
+          subAgentRecord.usage.cached += u.prompt_tokens_details?.cached_tokens || u.cache_read_input_tokens || 0;
+          subAgentRecord.usage.cacheCreation += u.cache_creation_input_tokens || 0;
         }
         const choice = result.data.choices?.[0];
         if (!choice) break;
@@ -2532,12 +2677,27 @@ ${tarotLine}
       }
 
       subAgent.running = false;
+      subAgentRecord.status = 'done';
+      subAgentRecord.endTime = Date.now();
+      subAgentRecord.messages = subAgent.contextManager.getMessages();
       const response = finalContent || '子代理完成了任务但没有文本回复';
-      if (this.onMessage) this.onMessage('sub-agent-done', { task, result: response });
-      return { ok: true, result: response, iterations };
+      if (this.onMessage) this.onMessage('sub-agent-done', {
+        id: subAgentId, task, result: response,
+        messages: subAgentRecord.messages,
+        usage: subAgentRecord.usage,
+        toolUseCount: subAgentRecord.toolUseCount,
+        iterations: subAgentRecord.iterations,
+        duration: subAgentRecord.endTime - subAgentRecord.startTime
+      });
+      return { ok: true, result: response, iterations, subAgentId };
     } catch (e) {
       return { ok: false, error: e.message };
     }
+  }
+
+  /** 根据 ID 获取子代理记录（含完整消息历史和上下文） */
+  getSubAgent(id) {
+    return this.subAgents.find(s => s.id === id);
   }
 
   // ---- Game System ----
@@ -2621,6 +2781,7 @@ ${tarotLine}
     this.conversationTitle = null;
     this.tarotCard = null; // Reset tarot card for new conversation
     this.resetOptimizedTools();
+    this.resetSessionUsage(); // 重置会话级 token 统计
     if (this.onTitleChange) this.onTitleChange('未命名对话');
     if (this.onTodoUpdate) this.onTodoUpdate(this.todoItems);
     if (this.onStatusChange) this.onStatusChange('idle');

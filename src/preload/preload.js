@@ -345,4 +345,11 @@ contextBridge.exposeInMainWorld('api', {
   onWebControlUiEvent: (cb) => ipcRenderer.on('webControl:uiEvent', (_, data) => cb(data)),
   onWebControlFileUploaded: (cb) => ipcRenderer.on('webControl:fileUploaded', (_, data) => cb(data)),
   onGameFinished: (cb) => ipcRenderer.on('game:finished', (_, data) => cb(data)),
+
+  // Pending Session: 异常中断时保存正在工作的会话，启动时弹模态框询问是否继续
+  onSavePending: (cb) => ipcRenderer.on('agent:save-pending', () => cb()),
+  savePendingSession: (payload) => ipcRenderer.invoke('agent:save-pending-session', payload),
+  skipPending: () => ipcRenderer.invoke('agent:skip-pending'),
+  getPendingSession: () => ipcRenderer.invoke('agent:get-pending-session'),
+  clearPendingSession: () => ipcRenderer.invoke('agent:clear-pending-session'),
 });

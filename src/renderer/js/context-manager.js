@@ -95,6 +95,19 @@ class ContextManager {
     this.addMessage(msg);
   }
 
+  /**
+   * 添加系统消息到上下文（用于保存错误提示、子代理摘要、审批决策等可见内容）
+   * 系统消息不会被 LLM 直接读取（取决于 provider 实现），但会保存到历史记录中
+   * 以便用户重新加载历史时能看到完整的对话上下文。
+   */
+  addSystemMessage(content, metadata) {
+    const msg = { role: 'system', content };
+    if (metadata && typeof metadata === 'object') {
+      msg.metadata = metadata;
+    }
+    this.addMessage(msg);
+  }
+
   addToolResult(toolCallId, name, result) {
     this.addMessage({ role: 'tool', tool_call_id: toolCallId, name, content: typeof result === 'string' ? result : JSON.stringify(result) });
   }
