@@ -3975,6 +3975,7 @@ async function _launchPwBrowser() {
   if (_pwBrowser) return _pwBrowser;
   const { chromium } = require('playwright');
   const pwSettings = _getPwSettings();
+  console.log('[Playwright] _launchPwBrowser mode=', pwSettings.mode, 'path=', pwSettings.path, 'headless=', pwSettings.headless);
   const appLang = settings?.language || 'zh-CN';
   const headless = !!pwSettings.headless;
 
@@ -4471,12 +4472,21 @@ ipcMain.handle('pw:testLaunch', async (_, testPwSettings) => {
     // Try launching
     const browser = await _launchPwBrowser();
     const ok = !!browser;
+    // 获取浏览器真实 product 信息（用于验证 channel 选择是否生效）
+    let productInfo = '';
+    try {
+      const ctx = await browser.newContext();
+      const page = await ctx.newPage();
+      const version = await page.context().newCDPSession(page).then(s => s.send('Browser.getVersion')).catch(() => null);
+      if (version) productInfo = version.product || '';
+      await ctx.close().catch(() => {});
+    } catch { /* ignore version probe */ }
     // Close the test browser
     await browser.close().catch(() => {});
     _pwBrowser = null;
     // Restore old settings
     settings.playwright = oldPw;
-    return { ok, message: '浏览器启动成功' };
+    return { ok, message: '浏览器启动成功' + (productInfo ? `（${productInfo}）` : '') };
   } catch (e) { return { ok: false, error: e.message }; }
 });
 
