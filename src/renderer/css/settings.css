@@ -223,6 +223,8 @@
   position: relative;
   border: none !important;
   background: linear-gradient(135deg, rgba(42, 157, 143, 0.15), rgba(231, 111, 81, 0.15));
+  /* 头像框 overlay 需要溢出预览框显示外圈装饰，必须 visible */
+  overflow: visible !important;
 }
 
 .avatar-preview-framed::before {
