@@ -3224,7 +3224,12 @@ ipcMain.handle('llm:chat', async (_, messages, options = {}) => {
     });
     if (!result.ok) return { ok: false, error: result.error, kind: result.kind };
 
-    const rawData = await result.response.json();
+    let rawData;
+    try {
+      rawData = await result.response.json();
+    } finally {
+      if (typeof result.releaseController === 'function') result.releaseController();
+    }
     if (rawData.error) return { ok: false, error: rawData.error.message || JSON.stringify(rawData.error) };
     const data = LLMProviders.parseLLMResponse(rawData, req.transport);
     let usage = data.usage || {};
@@ -3291,18 +3296,24 @@ ipcMain.handle('llm:chatStream', async (_, messages, options = {}) => {
     });
     if (!result.ok) return { ok: false, error: result.error, kind: result.kind };
 
-    const streamResult = await consumeSSEStream(result.response.body, (chunk) => {
-      try {
-        if (chunk.content || chunk.reasoning) {
-          mainWindow?.webContents.send('llm:stream-chunk', {
-            content: chunk.content || '',
-            reasoning: chunk.reasoning || '',
-            streamTimeout: chunk.streamTimeout || false,
-            requestId: options.requestId
-          });
-        }
-      } catch { /* ignore */ }
-    }, options.requestId, req.transport, 120000);
+    let streamResult;
+    try {
+      streamResult = await consumeSSEStream(result.response.body, (chunk) => {
+        try {
+          if (chunk.content || chunk.reasoning) {
+            mainWindow?.webContents.send('llm:stream-chunk', {
+              content: chunk.content || '',
+              reasoning: chunk.reasoning || '',
+              streamTimeout: chunk.streamTimeout || false,
+              requestId: options.requestId
+            });
+          }
+        } catch { /* ignore */ }
+      }, options.requestId, req.transport, 120000);
+    } finally {
+      // 流读取结束（正常完成或被 abort）后释放 controller
+      if (typeof result.releaseController === 'function') result.releaseController();
+    }
 
     mainWindow?.webContents.send('llm:stream-end', { requestId: options.requestId });
     let usage = streamResult.usage || {};
@@ -3368,7 +3379,12 @@ ipcMain.handle('llm:summarize', async (_, messages, options = {}) => {
       body: req.body, options: retryOpts
     });
     if (!result.ok) return { ok: false, error: result.error, kind: result.kind };
-    const rawData = await result.response.json();
+    let rawData;
+    try {
+      rawData = await result.response.json();
+    } finally {
+      if (typeof result.releaseController === 'function') result.releaseController();
+    }
     if (rawData.error) return { ok: false, error: rawData.error.message || JSON.stringify(rawData.error) };
     const data = LLMProviders.parseLLMResponse(rawData, req.transport);
     const content = data.choices?.[0]?.message?.content || '';
@@ -4210,6 +4226,12 @@ function _getPage(workspacePath) {
   return ws ? ws.page : null;
 }
 
+// 每次调用 Playwright 工具时都重新显示横幅（Agent 第二轮操作浏览器时横幅已被 idle 隐藏）
+// 无论浏览器是新启动还是已缓存，都确保横幅可见
+function _ensurePwBannerShown() {
+  try { _showPwBanner(); } catch { /* ignore */ }
+}
+
 ipcMain.handle('browser:navigate', async (_, url, waitUntil, workspacePath) => {
   try {
     if (!url || typeof url !== 'string') return { ok: false, error: 'URL 参数缺失或无效' };
@@ -4224,6 +4246,7 @@ ipcMain.handle('browser:navigate', async (_, url, waitUntil, workspacePath) => {
 
 ipcMain.handle('browser:screenshot', async (_, fullPage, workspacePath) => {
   try {
+    _ensurePwBannerShown();
     const page = _getPage(workspacePath);
     if (!page) return { ok: false, error: 'no page' };
     const buf = await page.screenshot({ fullPage: !!fullPage, type: 'png' });
@@ -4253,6 +4276,7 @@ ipcMain.handle('browser:screenshot', async (_, fullPage, workspacePath) => {
 
 ipcMain.handle('browser:click', async (_, selector, timeout, workspacePath) => {
   try {
+    _ensurePwBannerShown();
     const page = _getPage(workspacePath);
     if (!page) return { ok: false, error: 'no page' };
     await page.click(selector, { timeout: timeout || 5000 });
@@ -4262,6 +4286,7 @@ ipcMain.handle('browser:click', async (_, selector, timeout, workspacePath) => {
 
 ipcMain.handle('browser:type', async (_, selector, text, submit, clear, workspacePath) => {
   try {
+    _ensurePwBannerShown();
     const page = _getPage(workspacePath);
     if (!page) return { ok: false, error: 'no page' };
     if (clear !== false) await page.fill(selector, '');
@@ -4275,6 +4300,7 @@ ipcMain.handle('browser:type', async (_, selector, text, submit, clear, workspac
 
 ipcMain.handle('browser:getContent', async (_, selector, workspacePath) => {
   try {
+    _ensurePwBannerShown();
     const page = _getPage(workspacePath);
     if (!page) return { ok: false, error: 'no page' };
     const url = page.url();
@@ -4292,6 +4318,7 @@ ipcMain.handle('browser:getContent', async (_, selector, workspacePath) => {
 
 ipcMain.handle('browser:evaluate', async (_, script, workspacePath) => {
   try {
+    _ensurePwBannerShown();
     const page = _getPage(workspacePath);
     if (!page) return { ok: false, error: 'no page' };
     const result = await page.evaluate(script);
@@ -4301,6 +4328,7 @@ ipcMain.handle('browser:evaluate', async (_, script, workspacePath) => {
 
 ipcMain.handle('browser:scroll', async (_, direction, amount, workspacePath) => {
   try {
+    _ensurePwBannerShown();
     const page = _getPage(workspacePath);
     if (!page) return { ok: false, error: 'no page' };
     const dy = direction === 'down' ? (amount || 500) : -(amount || 500);
@@ -4311,6 +4339,7 @@ ipcMain.handle('browser:scroll', async (_, direction, amount, workspacePath) => 
 
 ipcMain.handle('browser:back', async (_, workspacePath) => {
   try {
+    _ensurePwBannerShown();
     const page = _getPage(workspacePath);
     if (!page) return { ok: false, error: 'no page' };
     await page.goBack({ waitUntil: 'load', timeout: 30000 }).catch(() => {});
@@ -4320,6 +4349,7 @@ ipcMain.handle('browser:back', async (_, workspacePath) => {
 
 ipcMain.handle('browser:forward', async (_, workspacePath) => {
   try {
+    _ensurePwBannerShown();
     const page = _getPage(workspacePath);
     if (!page) return { ok: false, error: 'no page' };
     await page.goForward({ waitUntil: 'load', timeout: 30000 }).catch(() => {});
@@ -4329,6 +4359,7 @@ ipcMain.handle('browser:forward', async (_, workspacePath) => {
 
 ipcMain.handle('browser:refresh', async (_, workspacePath) => {
   try {
+    _ensurePwBannerShown();
     const page = _getPage(workspacePath);
     if (!page) return { ok: false, error: 'no page' };
     await page.reload({ waitUntil: 'load', timeout: 30000 });
@@ -4338,6 +4369,7 @@ ipcMain.handle('browser:refresh', async (_, workspacePath) => {
 
 ipcMain.handle('browser:wait', async (_, selector, timeout, workspacePath) => {
   try {
+    _ensurePwBannerShown();
     const page = _getPage(workspacePath);
     if (!page) return { ok: false, error: 'no page' };
     if (selector) {
@@ -4351,6 +4383,7 @@ ipcMain.handle('browser:wait', async (_, selector, timeout, workspacePath) => {
 
 ipcMain.handle('browser:hover', async (_, selector, workspacePath) => {
   try {
+    _ensurePwBannerShown();
     const page = _getPage(workspacePath);
     if (!page) return { ok: false, error: 'no page' };
     await page.hover(selector, { timeout: 5000 });
@@ -4360,6 +4393,7 @@ ipcMain.handle('browser:hover', async (_, selector, workspacePath) => {
 
 ipcMain.handle('browser:select', async (_, selector, value, workspacePath) => {
   try {
+    _ensurePwBannerShown();
     const page = _getPage(workspacePath);
     if (!page) return { ok: false, error: 'no page' };
     await page.selectOption(selector, value);
@@ -4369,6 +4403,7 @@ ipcMain.handle('browser:select', async (_, selector, value, workspacePath) => {
 
 ipcMain.handle('browser:getInfo', async (_, workspacePath) => {
   try {
+    _ensurePwBannerShown();
     const page = _getPage(workspacePath);
     if (!page) return { ok: false, error: 'no page' };
     return {

@@ -1497,6 +1497,11 @@ ${toolListSection}`;
           });
           usedStreaming = true;
         } catch (streamErr) {
+          // 用户主动停止时不再回退到非流式（否则会重新发起请求）
+          if (this.stopped || runId !== this.runId) {
+            if (this.onMessage) this.onMessage('stream-end', { requestId: reqId, content: '', aborted: true });
+            throw streamErr;
+          }
           // Streaming failed — fall back to non-streaming
           if (this.onMessage) this.onMessage('stream-end', { requestId: reqId, content: '', fallback: true });
           if (this.onMessage) this.onMessage('system', `流式请求失败，回退到普通模式：${streamErr.message || streamErr}`);

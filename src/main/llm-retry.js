@@ -133,6 +133,7 @@ async function fetchLLMWithRetry(cfg) {
     const controller = new AbortController();
     _activeControllers.add(controller);
     const timer = setTimeout(() => controller.abort(), timeoutMs);
+    let success = false;
     try {
       const reqBody = { ...cfg.body, model: currentModel };
       const headers = customHeaders
@@ -150,7 +151,15 @@ async function fetchLLMWithRetry(cfg) {
 
       if (!cls.retry) {
         if (resp.ok) {
-          return { ok: true, response: resp };
+          // 成功返回：controller 保留在 _activeControllers 中（流式响应仍在读取时需可被 abort）
+          // 调用方读取完流后应调用 releaseController() 释放
+          success = true;
+          return {
+            ok: true,
+            response: resp,
+            controller,
+            releaseController: () => _activeControllers.delete(controller)
+          };
         }
         // Non-retryable client/auth error — read body for message.
         let errBody = null;
@@ -216,7 +225,8 @@ async function fetchLLMWithRetry(cfg) {
         break; // aborted during sleep
       }
     } finally {
-      _activeControllers.delete(controller);
+      // 成功返回路径保留 controller（流仍在读取，需可被 abort）；其他路径立即删除
+      if (!success) _activeControllers.delete(controller);
     }
   }
 

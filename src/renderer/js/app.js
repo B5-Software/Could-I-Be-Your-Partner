@@ -1961,7 +1961,12 @@
     if (!su) return '';
     // API 未返回 usage 时使用估算值，数字前加 ~ 前缀标识
     const pfx = su.estimated ? '~' : '';
-    const fmt = (n) => `${pfx}${n >= 1000 ? `${(n/1000).toFixed(2)}K` : `${n}`}`;
+    const fmt = (n) => {
+      const num = Number(n) || 0;
+      if (num >= 1e7) return `${pfx}${(num/1e6).toFixed(2)}M`;
+      if (num >= 1e3) return `${pfx}${(num/1e3).toFixed(2)}K`;
+      return `${pfx}${num}`;
+    };
     const cachedPct = su.prompt > 0 ? (su.cached / su.prompt * 100).toFixed(1) : '0.0';
     // 计算费用：若该模型在预算控制里配置了价格则显示，否则不显示费用行
     const pricing = getSessionPricing(agentInstance);
@@ -3281,7 +3286,8 @@
     modal.className = 'sub-agent-modal';
     document.body.appendChild(modal);
 
-    // 渲染函数：每次调用都会重新读取实时消息和统计
+    // 渲染函数：首次渲染整个模态框；后续刷新只更新消息列表和统计信息，避免重播动画
+    let _modalInitialized = false;
     const render = () => {
       const liveRec = agent.getSubAgent ? agent.getSubAgent(id) : null;
       const liveCardRec = _subAgentCards.get(id);
@@ -3305,44 +3311,69 @@
       const ctxPct = maxCtx > 0 ? Math.min(100, Math.round((usedTokens / maxCtx) * 100)) : 0;
       const ctxColor = ctxPct >= 95 ? 'var(--danger, #e74c3c)' : (ctxPct >= 80 ? 'var(--warning, #f39c12)' : 'var(--accent)');
       const isRunning = liveRec?.status === 'running' || (!liveRec?.endTime);
+      const bodyHtml = messages.length === 0
+        ? '<div class="sub-agent-modal-empty">暂无消息记录（子代理可能仍在初始化）</div>'
+        : messages.map(m => renderSubAgentMessage(m)).join('');
 
-      modal.innerHTML = `
+      // 首次渲染：构建整个模态框结构
+      if (!_modalInitialized) {
+        modal.innerHTML = `
         <div class="sub-agent-modal-backdrop"></div>
         <div class="sub-agent-modal-dialog">
           <div class="sub-agent-modal-header">
             <div class="sub-agent-modal-title">
               <i class="fa-solid fa-robot"></i>
               <span>子代理详情</span>
-              ${isRunning ? '<span class="sub-agent-modal-running"><i class="fa-solid fa-circle-notch fa-spin"></i> 运行中</span>' : ''}
-              ${liveRec?.tarot ? `<span class="sub-agent-modal-tarot">命运之牌: ${escapeHtml(liveRec.tarot.name)}${liveRec.tarot.isReversed ? '(逆位)' : '(正位)'}</span>` : ''}
+              <span class="sub-agent-modal-running"></span>
+              <span class="sub-agent-modal-tarot"></span>
             </div>
-            <div class="sub-agent-modal-stats">
-              <span><i class="fa-regular fa-clock"></i> ${fmtDur(liveRec ? ((liveRec.endTime || Date.now()) - liveRec.startTime) : 0)}</span>
-              <span><i class="fa-solid fa-rotate"></i> ${liveRec?.iterations || 0} 轮</span>
-              <span><i class="fa-solid fa-wrench"></i> ${liveRec?.toolUseCount || 0} 次工具</span>
-              <span><i class="fa-solid fa-coins"></i> 输入 ${fmtTok(usage.prompt)} / 输出 ${fmtTok(usage.completion)} / 共 ${fmtTok(usage.total)}</span>
-              ${usage.cached > 0 ? `<span><i class="fa-solid fa-bolt"></i> 缓存命中 ${fmtTok(usage.cached)}</span>` : ''}
-            </div>
+            <div class="sub-agent-modal-stats"></div>
             <button class="btn-icon sub-agent-modal-close" title="关闭"><i class="fa-solid fa-xmark"></i></button>
           </div>
-          <div class="sub-agent-modal-task">${escapeHtml(liveRec?.task || liveCardRec?.el?.dataset?.subAgentId || '')}</div>
+          <div class="sub-agent-modal-task"></div>
           <div class="sub-agent-modal-context" style="padding:8px 18px;border-bottom:1px solid var(--border);background:var(--bg-tertiary, var(--bg-secondary));font-size:12px;color:var(--text-secondary);display:flex;align-items:center;gap:10px;flex-shrink:0">
             <span><i class="fa-solid fa-window-maximize" style="color:var(--accent)"></i> 上下文窗口</span>
             <div style="flex:1;height:6px;background:var(--bg-primary);border-radius:3px;overflow:hidden;border:1px solid var(--border)">
-              <div style="height:100%;width:${ctxPct}%;background:${ctxColor};transition:width 0.3s"></div>
+              <div class="ctx-progress-bar" style="height:100%;width:0%;background:var(--accent);transition:width 0.3s"></div>
             </div>
-            <span style="font-variant-numeric:tabular-nums;color:${ctxColor};font-weight:600">${ctxPct}%</span>
-            <span style="color:var(--text-tertiary);font-size:11px">${fmtTok(usedTokens)} / ${fmtTok(maxCtx)}</span>
+            <span class="ctx-pct" style="font-variant-numeric:tabular-nums;font-weight:600">0%</span>
+            <span class="ctx-tokens" style="color:var(--text-tertiary);font-size:11px">0 / 0</span>
           </div>
-          <div class="sub-agent-modal-body">
-            ${messages.length === 0
-              ? '<div class="sub-agent-modal-empty">暂无消息记录（子代理可能仍在初始化）</div>'
-              : messages.map(m => renderSubAgentMessage(m)).join('')}
-          </div>
+          <div class="sub-agent-modal-body">${bodyHtml}</div>
         </div>`;
-      // 重新绑定关闭事件（因为 innerHTML 被替换了）
-      modal.querySelector('.sub-agent-modal-close').onclick = closeModal;
-      modal.querySelector('.sub-agent-modal-backdrop').onclick = closeModal;
+        modal.querySelector('.sub-agent-modal-close').onclick = closeModal;
+        modal.querySelector('.sub-agent-modal-backdrop').onclick = closeModal;
+        _modalInitialized = true;
+      } else {
+        // 后续刷新：只更新 body 内容，避免重播模态框动画
+        const bodyEl = modal.querySelector('.sub-agent-modal-body');
+        if (bodyEl) bodyEl.innerHTML = bodyHtml;
+      }
+
+      // 更新统计区（无论首次还是后续）
+      const runningEl = modal.querySelector('.sub-agent-modal-running');
+      if (runningEl) runningEl.innerHTML = isRunning ? '<i class="fa-solid fa-circle-notch fa-spin"></i> 运行中' : '';
+      const tarotEl = modal.querySelector('.sub-agent-modal-tarot');
+      if (tarotEl) tarotEl.innerHTML = liveRec?.tarot ? `命运之牌: ${escapeHtml(liveRec.tarot.name)}${liveRec.tarot.isReversed ? '(逆位)' : '(正位)'}` : '';
+
+      const statsEl = modal.querySelector('.sub-agent-modal-stats');
+      if (statsEl) statsEl.innerHTML = `
+        <span><i class="fa-regular fa-clock"></i> ${fmtDur(liveRec ? ((liveRec.endTime || Date.now()) - liveRec.startTime) : 0)}</span>
+        <span><i class="fa-solid fa-rotate"></i> ${liveRec?.iterations || 0} 轮</span>
+        <span><i class="fa-solid fa-wrench"></i> ${liveRec?.toolUseCount || 0} 次工具</span>
+        <span><i class="fa-solid fa-coins"></i> 输入 ${fmtTok(usage.prompt)} / 输出 ${fmtTok(usage.completion)} / 共 ${fmtTok(usage.total)}</span>
+        ${usage.cached > 0 ? `<span><i class="fa-solid fa-bolt"></i> 缓存命中 ${fmtTok(usage.cached)}</span>` : ''}`;
+
+      const taskEl = modal.querySelector('.sub-agent-modal-task');
+      if (taskEl) taskEl.textContent = liveRec?.task || liveCardRec?.el?.dataset?.subAgentId || '';
+
+      const barEl = modal.querySelector('.ctx-progress-bar');
+      if (barEl) { barEl.style.width = `${ctxPct}%`; barEl.style.background = ctxColor; }
+      const pctEl = modal.querySelector('.ctx-pct');
+      if (pctEl) { pctEl.textContent = `${ctxPct}%`; pctEl.style.color = ctxColor; }
+      const tokEl = modal.querySelector('.ctx-tokens');
+      if (tokEl) tokEl.textContent = `${fmtTok(usedTokens)} / ${fmtTok(maxCtx)}`;
+
       // 自动滚动到底部（如果有新消息）
       const body = modal.querySelector('.sub-agent-modal-body');
       if (body && isRunning) body.scrollTop = body.scrollHeight;
@@ -5656,13 +5687,24 @@
         // 复用 LLM 设置的模型选择逻辑：列出可用模型
         try {
           const cur = await window.api.getSettings();
-          const list = await window.api.llmFetchModels?.() || [];
-          if (!list || list.length === 0) {
+          // llmFetchModels 返回 {ok, models} 对象，需要从中提取 models 数组
+          const provider = cur?.llm?.provider || 'openai-compat';
+          const apiUrl = cur?.llm?.apiUrl || '';
+          const apiKey = cur?.llm?.apiKey || '';
+          const zenKey = cur?.llm?.zenApiKey || '';
+          let res;
+          if (provider === 'opencode-zen') {
+            res = await window.api.zenFetchModels();
+          } else {
+            res = await window.api.llmFetchModels(provider, apiUrl, apiKey || zenKey);
+          }
+          const list = Array.isArray(res?.models) ? res.models : [];
+          if (list.length === 0) {
             window.showToast('无可选模型，请先在 LLM 标签页获取模型列表', 'warn');
             return;
           }
           // 弹出简单选择框
-          const picked = prompt('选择 fallback 模型（输入序号）:\n' + list.map((m, i) => `${i + 1}. ${m.id || m}`).join('\n'));
+          const picked = prompt('选择 fallback 模型（输入序号）:\n' + list.map((m, i) => `${i + 1}. ${m.id || m.name || m}`).join('\n'));
           const idx = parseInt(picked) - 1;
           if (!isNaN(idx) && list[idx]) {
             const modelId = typeof list[idx] === 'string' ? list[idx] : (list[idx].id || list[idx].name);
