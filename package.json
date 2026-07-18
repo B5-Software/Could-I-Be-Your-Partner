@@ -22,7 +22,17 @@
     "files": [
       "**/*",
       "!claude-code-ref/**/*",
-      "!claude-code-ref"
+      "!claude-code-ref",
+      "!dist/**/*",
+      "!dist",
+      "!dist-*/**/*",
+      "!dist-*",
+      "!out/**/*",
+      "!out",
+      "!tests/**/*",
+      "!tests",
+      "!*.md",
+      "!dist-output.txt"
     ],
     "asarUnpack": [
       "assets/ocr/**/*",
