@@ -1084,6 +1084,11 @@
   margin: 8px 0;
   overflow: hidden;
   transition: border-color 0.2s, box-shadow 0.2s;
+  /* 防止在 flex 容器中被压缩到 0 高度 */
+  flex-shrink: 0;
+  min-height: 56px;
+  width: 100%;
+  box-sizing: border-box;
 }
 .sub-agent-card[data-status="done"] { border-left-color: var(--success, #4caf50); }
 .sub-agent-card:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
@@ -1094,6 +1099,10 @@
   gap: 10px;
   padding: 10px 14px;
   background: var(--bg-tertiary, var(--bg-secondary));
+  /* 确保头部至少 36px 高（即使内容为空也能可见） */
+  min-height: 36px;
+  cursor: pointer;
+  user-select: none;
 }
 .sub-agent-card-icon {
   width: 28px; height: 28px;

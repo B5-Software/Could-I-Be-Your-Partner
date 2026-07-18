@@ -128,6 +128,31 @@
   font-family: inherit;
 }
 
+/* 预算控制-模型价格表中的输入框（不在 .setting-item 内） */
+#budget-pricing-list input[type="text"],
+#budget-pricing-list input[type="number"] {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 6px);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color var(--transition);
+  box-sizing: border-box;
+}
+#budget-pricing-list input[type="text"]:focus,
+#budget-pricing-list input[type="number"]:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-bg, rgba(42,157,143,0.15));
+}
+#budget-pricing-list > div {
+  /* 价格行整体高度统一 */
+  min-height: 36px;
+}
+
 .setting-item input:focus,
 .setting-item textarea:focus,
 .setting-item select:focus {

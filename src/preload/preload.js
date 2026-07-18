@@ -352,4 +352,8 @@ contextBridge.exposeInMainWorld('api', {
   skipPending: () => ipcRenderer.invoke('agent:skip-pending'),
   getPendingSession: () => ipcRenderer.invoke('agent:get-pending-session'),
   clearPendingSession: () => ipcRenderer.invoke('agent:clear-pending-session'),
+
+  // Notifications: 系统桌面通知（敏感操作/会话完成/问卷/文件呈递等需用户干预时）
+  sendNotification: (opts) => ipcRenderer.invoke('notifications:send', opts),
+  onNotificationClick: (cb) => ipcRenderer.on('notifications:click', (_, data) => cb(data)),
 });

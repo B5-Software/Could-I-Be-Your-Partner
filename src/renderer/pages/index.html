@@ -598,6 +598,7 @@
             <button class="settings-tab" data-tab="email"><i class="fa-solid fa-envelope"></i> 邮箱</button>
             <button class="settings-tab" data-tab="webcontrol"><i class="fa-solid fa-globe"></i> Web控制</button>
             <button class="settings-tab" data-tab="playwright"><i class="fa-solid fa-window-restore"></i> Playwright</button>
+            <button class="settings-tab" data-tab="notifications"><i class="fa-solid fa-bell"></i> 通知</button>
           </div>
           <div class="settings-panels">
             <div class="settings-panel active" data-tab="ai">
@@ -886,7 +887,8 @@
               <div class="settings-group">
                 <h3><i class="fa-solid fa-coins"></i> 模型价格表</h3>
                 <p class="setting-hint" style="margin-bottom:12px">
-                  为每个模型填写每 1K token 的单价（USD）。缓存命中按 0.1x、缓存创建按 1.25x 自动计算。
+                  为每个模型填写每 1K token 的单价（USD）。缓存命中（cache read）按 0.1x 自动计费；
+                  仅 Claude 系列模型有缓存创建（cache write）按 1.25x 计费，其他模型不计此项。
                   上下文模态框的费用显示依赖此价格表，未填写的模型不显示费用。
                 </p>
                 <div style="display:grid;grid-template-columns:1.5fr 1fr 1fr auto;gap:8px;align-items:end;margin-bottom:8px;font-size:12px;color:var(--text-tertiary);font-weight:600">
@@ -1763,6 +1765,72 @@
                   <button class="btn-primary" id="btn-pw-save"><i class="fa-solid fa-floppy-disk"></i> 保存设置</button>
                 </div>
                 <p id="pw-test-result" style="font-size:13px;margin-top:8px"></p>
+              </div>
+            </div>
+
+            <!-- Notifications Tab -->
+            <div class="settings-panel" data-tab="notifications">
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-bell"></i> 系统通知</h3>
+                <p class="setting-hint" style="margin-bottom:12px">
+                  在需要您干预时发送系统桌面通知（敏感操作审批、会话完成、问卷、文件呈递等）。
+                  关闭后所有通知都不再弹窗（但 App 内的消息提示仍会显示）。
+                </p>
+                <div class="setting-item">
+                  <label class="toggle-label">
+                    <span>启用系统通知</span>
+                    <div class="toggle-switch">
+                      <input type="checkbox" id="setting-notify-enabled">
+                      <span class="toggle-slider"></span>
+                    </div>
+                  </label>
+                </div>
+              </div>
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-list-check"></i> 通知类型</h3>
+                <div class="setting-item">
+                  <label class="toggle-label">
+                    <span>敏感操作审批请求</span>
+                    <div class="toggle-switch">
+                      <input type="checkbox" id="setting-notify-approval" checked>
+                      <span class="toggle-slider"></span>
+                    </div>
+                  </label>
+                  <p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">如删除文件、执行危险命令等需要您批准时</p>
+                </div>
+                <div class="setting-item">
+                  <label class="toggle-label">
+                    <span>当前会话已完成</span>
+                    <div class="toggle-switch">
+                      <input type="checkbox" id="setting-notify-session-done" checked>
+                      <span class="toggle-slider"></span>
+                    </div>
+                  </label>
+                  <p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">Agent 结束一轮工作并等待下一条指令时</p>
+                </div>
+                <div class="setting-item">
+                  <label class="toggle-label">
+                    <span>问卷（askQuestions）</span>
+                    <div class="toggle-switch">
+                      <input type="checkbox" id="setting-notify-question" checked>
+                      <span class="toggle-slider"></span>
+                    </div>
+                  </label>
+                  <p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">Agent 向您询问选择题/填空题时</p>
+                </div>
+                <div class="setting-item">
+                  <label class="toggle-label">
+                    <span>文件呈递（presentFile）</span>
+                    <div class="toggle-switch">
+                      <input type="checkbox" id="setting-notify-present" checked>
+                      <span class="toggle-slider"></span>
+                    </div>
+                  </label>
+                  <p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">Agent 想给您看一个文件内容时</p>
+                </div>
+                <div style="display:flex;gap:8px;margin-top:12px">
+                  <button class="btn-primary" id="btn-notify-test"><i class="fa-solid fa-flask"></i> 发送测试通知</button>
+                </div>
               </div>
             </div>
           </div>

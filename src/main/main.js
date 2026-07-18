@@ -5,7 +5,7 @@
  * This file is part of Could I Be Your Partner.
  */
 
-const { app, BrowserWindow, ipcMain, nativeTheme, dialog, clipboard, screen, shell, systemPreferences } = require('electron');
+const { app, BrowserWindow, ipcMain, nativeTheme, dialog, clipboard, screen, shell, systemPreferences, Notification } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -3583,6 +3583,45 @@ ipcMain.handle('agent:clear-pending-session', () => {
   catch (e) { return { ok: false, error: e.message }; }
 });
 
+// ---- IPC: 系统桌面通知 ----
+// 渲染器在关键事件点（敏感操作审批、会话完成、askQuestions、presentFile 等）调用此接口
+// opts: { title, body, category?, onClickFocus?: bool }
+// category 用于未来按用户设置过滤；目前仅做日志记录
+ipcMain.handle('notifications:send', (event, opts) => {
+  try {
+    if (!opts || !opts.title) return { ok: false, error: 'missing title' };
+    if (!Notification.isSupported()) return { ok: false, error: 'notifications not supported' };
+
+    const notif = new Notification({
+      title: String(opts.title),
+      body: String(opts.body || ''),
+      silent: false
+    });
+
+    // 用户点击通知 → 通知主窗口并聚焦
+    notif.on('click', () => {
+      try {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          if (mainWindow.isMinimized()) mainWindow.restore();
+          if (!mainWindow.isVisible()) mainWindow.show();
+          mainWindow.focus();
+          mainWindow.webContents.send('notifications:click', {
+            title: opts.title,
+            body: opts.body || '',
+            category: opts.category || null
+          });
+        }
+      } catch {}
+      try { notif.close(); } catch {}
+    });
+
+    notif.show();
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
 // ---- IPC: Babe History (独立持久化，含好感度等会话属性) ----
 ipcMain.handle('babeHistory:list', () => {
   try {
@@ -3886,11 +3925,17 @@ async function _launchPwBrowser() {
   const appLang = settings?.language || 'zh-CN';
   const headless = !!pwSettings.headless;
 
-  // Parse extra args
+  // Parse extra args - filter out args that suppress the automation notice
   let extraArgs = [];
   if (pwSettings.args) {
     extraArgs = pwSettings.args.split('\n').map(s => s.trim()).filter(Boolean);
   }
+  // 移除会抑制"自动化控制"提示的参数，确保 Chrome/Edge 显示"正受到自动测试软件的控制"横幅
+  extraArgs = extraArgs.filter(a =>
+    !/--disable-blink-features.*AutomationControlled/.test(a) &&
+    !/--disable-automation/.test(a) &&
+    !/--excludeSwitches.*enable-automation/.test(a)
+  );
 
   let lastError = null;
 
@@ -3903,6 +3948,7 @@ async function _launchPwBrowser() {
         args: extraArgs
       });
       console.log('Playwright launched with custom path:', pwSettings.path, 'headless:', headless);
+      _onPwBrowserLaunched(!headless);
       return _pwBrowser;
     } catch (e) {
       console.warn('Custom browser launch failed:', e.message);
@@ -3913,6 +3959,8 @@ async function _launchPwBrowser() {
   if (pwSettings.mode === 'chromium') {
     try {
       _pwBrowser = await chromium.launch({ headless, args: extraArgs });
+      console.log('Playwright launched with built-in Chromium, headless:', headless);
+      _onPwBrowserLaunched(!headless);
       return _pwBrowser;
     } catch (e) {
       throw new Error('内置 Chromium 启动失败: ' + e.message + '。请运行 npx playwright install chromium。');
@@ -3922,18 +3970,24 @@ async function _launchPwBrowser() {
   if (pwSettings.mode === 'edge') {
     try {
       _pwBrowser = await chromium.launch({ headless, channel: 'msedge', args: extraArgs });
+      console.log('Playwright launched with Microsoft Edge, headless:', headless);
+      _onPwBrowserLaunched(!headless);
       return _pwBrowser;
     } catch (e) {
-      lastError = e;
+      // 用户显式选择 Edge，失败时不应回退到 Chrome，直接报错
+      throw new Error('无法启动 Microsoft Edge: ' + e.message + '。请确认 Edge 已安装。');
     }
   }
 
   if (pwSettings.mode === 'chrome') {
     try {
       _pwBrowser = await chromium.launch({ headless, channel: 'chrome', args: extraArgs });
+      console.log('Playwright launched with Google Chrome, headless:', headless);
+      _onPwBrowserLaunched(!headless);
       return _pwBrowser;
     } catch (e) {
-      lastError = e;
+      // 用户显式选择 Chrome，失败时不应回退到 Edge，直接报错
+      throw new Error('无法启动 Google Chrome: ' + e.message + '。请确认 Chrome 已安装。');
     }
   }
 
@@ -3943,6 +3997,7 @@ async function _launchPwBrowser() {
     try {
       _pwBrowser = await chromium.launch({ headless, channel, args: extraArgs });
       console.log('Playwright launched with channel:', channel, 'headless:', headless);
+      _onPwBrowserLaunched(!headless);
       return _pwBrowser;
     } catch (e) {
       console.warn('Channel', channel, 'launch failed:', e.message);
@@ -3951,9 +4006,95 @@ async function _launchPwBrowser() {
   }
   try {
     _pwBrowser = await chromium.launch({ headless, args: extraArgs });
+    console.log('Playwright launched with built-in Chromium (auto fallback), headless:', headless);
+    _onPwBrowserLaunched(!headless);
     return _pwBrowser;
   } catch (e) {
     throw new Error('无法启动Playwright浏览器（未找到Edge/Chrome，且Playwright浏览器未安装）。请安装Microsoft Edge或Google Chrome，或运行 npx playwright install chromium。错误: ' + (lastError?.message || e.message));
+  }
+}
+
+// ---- Playwright 有头模式屏幕右上角横幅 ----
+// 在屏幕右上角（不是窗口右上角）显示一个 always-on-top 横幅，提示用户不要关闭浏览器
+let _pwBannerWindow = null;
+function _onPwBrowserLaunched(headed) {
+  if (headed) {
+    _showPwBanner();
+  } else {
+    _hidePwBanner();
+  }
+}
+function _showPwBanner() {
+  if (_pwBannerWindow && !_pwBannerWindow.isDestroyed()) return;
+  try {
+    const { width: sw } = screen.getPrimaryDisplay().workAreaSize;
+    const bannerWidth = 320;
+    const bannerHeight = 56;
+    _pwBannerWindow = new BrowserWindow({
+      width: bannerWidth,
+      height: bannerHeight,
+      x: Math.max(0, sw - bannerWidth - 12),
+      y: 12,
+      frame: false,
+      resizable: false,
+      minimizable: false,
+      maximizable: false,
+      fullscreenable: false,
+      skipTaskbar: true,
+      alwaysOnTop: true,
+      transparent: true,
+      focusable: false,
+      hasShadow: false,
+      type: 'toolbar',
+      webPreferences: {
+        nodeIntegration: false,
+        contextIsolation: true
+      }
+    });
+    _pwBannerWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+    _pwBannerWindow.setAlwaysOnTop(true, 'screen-saver');
+    const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      html, body { height: 100%; background: transparent; }
+      body {
+        display: flex; align-items: center; justify-content: center;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif;
+        -webkit-app-region: no-drag;
+      }
+      .banner {
+        width: 100%; height: 100%;
+        background: linear-gradient(135deg, rgba(231, 111, 81, 0.96), rgba(231, 76, 60, 0.96));
+        color: #fff;
+        border-radius: 12px;
+        box-shadow: 0 8px 24px rgba(0,0,0,0.25), 0 0 0 1px rgba(255,255,255,0.15);
+        display: flex; align-items: center; gap: 10px;
+        padding: 0 16px;
+        font-size: 13px;
+        backdrop-filter: blur(8px);
+      }
+      .banner i { font-size: 18px; }
+      .banner .title { font-weight: 700; font-size: 13px; }
+      .banner .sub { font-size: 11px; opacity: 0.9; }
+    </style></head><body>
+      <div class="banner">
+        <i>⚠</i>
+        <div>
+          <div class="title">请勿关闭浏览器</div>
+          <div class="sub">Agent 正在使用此浏览器执行自动化任务</div>
+        </div>
+      </div>
+    </body></html>`;
+    _pwBannerWindow.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
+    _pwBannerWindow.setIgnoreMouseEvents(true);
+    _pwBannerWindow.showInactive();
+  } catch (e) {
+    console.warn('[Playwright] Failed to show banner:', e.message);
+  }
+}
+function _hidePwBanner() {
+  if (_pwBannerWindow && !_pwBannerWindow.isDestroyed()) {
+    try { _pwBannerWindow.close(); } catch {}
+    _pwBannerWindow = null;
   }
 }
 
@@ -4229,6 +4370,7 @@ ipcMain.handle('pw:closeBrowser', async () => {
       await _pwBrowser.close().catch(() => {});
       _pwBrowser = null;
     }
+    _hidePwBanner();
     return { ok: true };
   } catch (e) { return { ok: false, error: e.message }; }
 });
@@ -6236,6 +6378,8 @@ app.on('before-quit', async (event) => {
   if (webControlService.running) {
     webControlService.stop().catch(() => {});
   }
+  // 清理 Playwright 横幅窗口
+  _hidePwBanner();
   // 如果主窗口还存在且尚未确认 pending 保存完成，先阻止退出，请求渲染器保存
   if (mainWindow && !mainWindow.isDestroyed() && !pendingSaveDone) {
     event.preventDefault();

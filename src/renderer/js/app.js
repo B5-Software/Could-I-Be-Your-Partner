@@ -798,8 +798,9 @@
         });
         break;
       case 'sub-agent-message':
-        // Intermediate messages from a real sub-agent loop (forwarded by runSubAgent)
-        appendSubAgentLog(data.id, data.content);
+        // 子代理中间消息：不再显示在聊天页面，而是保存在子代理记录中
+        // 用户可点击子代理卡片查看完整对话记录（参考 claude-code-ref 的隔离设计）
+        // 消息已通过 agent.subAgents[].messages 自动累积，模态框打开时从 agent.getSubAgent(id) 读取
         break;
       case 'sub-agent-batch-start':
         addSubAgentBatchBanner(data.count, data.tasks);
@@ -816,6 +817,8 @@
         break;
       case 'present-file':
         addFilePresentCard(data);
+        // 系统通知：文件呈递
+        sendAppNotification('present', 'Agent 向您呈递文件', data?.title || data?.filename || '请查看文件内容');
         break;
     }
     updateContextProgress();
@@ -853,7 +856,13 @@
       btnSend.classList.remove('hidden');
       removeThinkingIndicator(); // 防御：确保待命时思考提示已清除
       // 停止计时器
+      const wasWorking = window._workStartTime !== null;
       if (window._workTimer) { clearInterval(window._workTimer); window._workTimer = null; window._workStartTime = null; }
+      // 系统通知：会话已完成（仅在刚结束工作时触发，初次进入 idle 不通知）
+      if (wasWorking) {
+        const title = agent.conversationTitle || '当前会话';
+        sendAppNotification('sessionDone', 'Agent 已完成工作', `${title} - 等待您的下一条指令`);
+      }
     }
     // 推送状态变化到 WebUI
     WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#agent-status', html: agentStatus.outerHTML });
@@ -1954,18 +1963,24 @@
     const pricing = getSessionPricing(agentInstance);
     let costRow = '';
     if (pricing) {
-      // 缓存命中部分按 0.1x 计费（OpenAI/Anthropic 通用规则），缓存创建按 1.25x 计费
-      const promptBilled = (su.prompt - su.cached) * pricing.promptPerK / 1000
-        + su.cached * pricing.promptPerK / 1000 * 0.1
-        + (su.cacheCreation || 0) * pricing.promptPerK / 1000 * 1.25;
+      // 缓存命中（cache read）按 0.1x 计费（适用于所有支持的模型）
+      // 缓存创建（cache write）按 1.25x 计费 — 仅 Claude 系列模型有此计费项
+      const cacheReadCost = su.cached * pricing.promptPerK / 1000 * 0.1;
+      const nonCachedPrompt = Math.max(0, su.prompt - su.cached - (su.cacheCreation || 0));
+      const normalPromptCost = nonCachedPrompt * pricing.promptPerK / 1000;
+      const cacheWriteCost = pricing.hasCacheWrite
+        ? (su.cacheCreation || 0) * pricing.promptPerK / 1000 * 1.25
+        : 0;
+      const promptBilled = normalPromptCost + cacheReadCost + cacheWriteCost;
       const completionBilled = su.completion * pricing.completionPerK / 1000;
       const totalCost = promptBilled + completionBilled;
+      const cacheWriteNote = pricing.hasCacheWrite ? '' : '<div class="context-tooltip-row" style="font-size:10px;color:var(--text-tertiary)"><span>　(此模型不计缓存写入费)</span></div>';
       costRow = `<div class="context-tooltip-row" style="border-top:1px solid var(--border);padding-top:4px">
         <span>费用（${pricing.model}）</span><span>$${totalCost.toFixed(5)}</span>
       </div>
       <div class="context-tooltip-row" style="font-size:10px;color:var(--text-tertiary)">
         <span>　提示 $${(promptBilled).toFixed(5)}</span><span>补全 $${completionBilled.toFixed(5)}</span>
-      </div>`;
+      </div>${cacheWriteNote}`;
     }
     return `
       <div class="context-tooltip-row" style="margin-top:6px;border-top:1px solid var(--border);padding-top:6px;font-weight:600">
@@ -1988,7 +2003,13 @@
       const prices = agentInstance?.settings?.budget?.models || {};
       const p = prices[model];
       if (!p || !p.promptPerK) return null;
-      return { model, promptPerK: p.promptPerK, completionPerK: p.completionPerK || 0 };
+      // 仅 Claude 系列模型有缓存创建（cache write）的额外计费（1.25x）
+      // 其他模型（OpenAI/DeepSeek 等）只有缓存读取（cache read），按 0.1x 计费
+      const isClaude = /claude/i.test(model);
+      return {
+        model, promptPerK: p.promptPerK, completionPerK: p.completionPerK || 0,
+        hasCacheWrite: isClaude
+      };
     } catch { return null; }
   }
 
@@ -3148,7 +3169,7 @@
       return `${mm}:${ss}`;
     };
     el.innerHTML = `
-      <div class="sub-agent-card-header">
+      <div class="sub-agent-card-header" title="点击查看完整记录">
         <div class="sub-agent-card-icon"><i class="fa-solid fa-robot"></i></div>
         <div class="sub-agent-card-meta">
           <div class="sub-agent-card-title">${escapeHtml(title)}</div>
@@ -3172,8 +3193,17 @@
     record.timer = setInterval(() => {
       if (durText) durText.textContent = fmtDur(Date.now() - record.startTime);
     }, 1000);
-    // 展开按钮
-    el.querySelector('.sub-agent-card-expand').onclick = () => showSubAgentDetailModal(id);
+    // 整个卡片头部点击 → 打开详情模态框（参考 claude-code-ref：子代理记录在卡片后台）
+    const openDetail = (e) => {
+      // 避免点击 stats 区域误触发
+      if (e.target.closest('.sub-agent-card-stats')) return;
+      showSubAgentDetailModal(id);
+    };
+    el.querySelector('.sub-agent-card-header').addEventListener('click', openDetail);
+    el.querySelector('.sub-agent-card-expand').addEventListener('click', (e) => {
+      e.stopPropagation();
+      showSubAgentDetailModal(id);
+    });
     requestAnimationFrame(() => { el.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); });
   }
 
@@ -3240,7 +3270,9 @@
     const modal = document.createElement('div');
     modal.id = 'sub-agent-modal';
     modal.className = 'sub-agent-modal';
-    const messages = rec?.messages || [];
+    // 优先使用实时消息（运行中也能看到）；否则回退到完成时的快照
+    const liveMessages = rec?.subAgent?.contextManager?.getMessages?.() || [];
+    const messages = liveMessages.length > 0 ? liveMessages : (rec?.messages || []);
     const usage = rec?.usage || cardRec?.usage || {};
     const fmtTok = (n) => (n || 0).toLocaleString();
     const fmtDur = (ms) => {
@@ -3248,6 +3280,11 @@
       const s = Math.floor(ms / 1000);
       return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
     };
+    // 估算上下文窗口使用
+    const maxCtx = rec?.subAgent?.contextManager?.maxTokens || (agent?.settings?.llm?.maxContextLength || 131072);
+    const usedTokens = (usage.prompt || 0) + (usage.completion || 0);
+    const ctxPct = maxCtx > 0 ? Math.min(100, Math.round((usedTokens / maxCtx) * 100)) : 0;
+    const ctxColor = ctxPct >= 95 ? 'var(--danger, #e74c3c)' : (ctxPct >= 80 ? 'var(--warning, #f39c12)' : 'var(--accent)');
     modal.innerHTML = `
       <div class="sub-agent-modal-backdrop"></div>
       <div class="sub-agent-modal-dialog">
@@ -3258,7 +3295,7 @@
             ${rec?.tarot ? `<span class="sub-agent-modal-tarot">命运之牌: ${escapeHtml(rec.tarot.name)}${rec.tarot.isReversed ? '(逆位)' : '(正位)'}</span>` : ''}
           </div>
           <div class="sub-agent-modal-stats">
-            <span><i class="fa-regular fa-clock"></i> ${fmtDur(rec ? (rec.endTime - rec.startTime) : 0)}</span>
+            <span><i class="fa-regular fa-clock"></i> ${fmtDur(rec ? ((rec.endTime || Date.now()) - rec.startTime) : 0)}</span>
             <span><i class="fa-solid fa-rotate"></i> ${rec?.iterations || 0} 轮</span>
             <span><i class="fa-solid fa-wrench"></i> ${rec?.toolUseCount || 0} 次工具</span>
             <span><i class="fa-solid fa-coins"></i> 输入 ${fmtTok(usage.prompt)} / 输出 ${fmtTok(usage.completion)} / 共 ${fmtTok(usage.total)}</span>
@@ -3267,6 +3304,14 @@
           <button class="btn-icon sub-agent-modal-close" title="关闭"><i class="fa-solid fa-xmark"></i></button>
         </div>
         <div class="sub-agent-modal-task">${escapeHtml(rec?.task || cardRec?.el?.dataset?.subAgentId || '')}</div>
+        <div class="sub-agent-modal-context" style="padding:8px 18px;border-bottom:1px solid var(--border);background:var(--bg-tertiary, var(--bg-secondary));font-size:12px;color:var(--text-secondary);display:flex;align-items:center;gap:10px;flex-shrink:0">
+          <span><i class="fa-solid fa-window-maximize" style="color:var(--accent)"></i> 上下文窗口</span>
+          <div style="flex:1;height:6px;background:var(--bg-primary);border-radius:3px;overflow:hidden;border:1px solid var(--border)">
+            <div style="height:100%;width:${ctxPct}%;background:${ctxColor};transition:width 0.3s"></div>
+          </div>
+          <span style="font-variant-numeric:tabular-nums;color:${ctxColor};font-weight:600">${ctxPct}%</span>
+          <span style="color:var(--text-tertiary);font-size:11px">${fmtTok(usedTokens)} / ${fmtTok(maxCtx)}</span>
+        </div>
         <div class="sub-agent-modal-body">
           ${messages.length === 0
             ? '<div class="sub-agent-modal-empty">暂无消息记录（子代理可能仍在初始化）</div>'
@@ -3276,6 +3321,14 @@
     document.body.appendChild(modal);
     modal.querySelector('.sub-agent-modal-close').onclick = () => modal.remove();
     modal.querySelector('.sub-agent-modal-backdrop').onclick = () => modal.remove();
+    // ESC 关闭
+    const escHandler = (e) => {
+      if (e.key === 'Escape') {
+        modal.remove();
+        document.removeEventListener('keydown', escHandler);
+      }
+    };
+    document.addEventListener('keydown', escHandler);
   }
 
   function renderSubAgentMessage(m) {
@@ -3325,6 +3378,27 @@
     requestAnimationFrame(() => {
       el.scrollIntoView({ behavior: 'smooth', block: 'end' });
     });
+  }
+
+  // ---- 系统通知辅助 ----
+  // 根据设置过滤通知；category: 'approval' | 'sessionDone' | 'question' | 'present'
+  // 仅当窗口失焦或被最小化/隐藏时才发送（避免在用户正盯着界面时打扰）
+  async function sendAppNotification(category, title, body) {
+    try {
+      if (!window.api?.sendNotification) return;
+      const s = await window.api.getSettings();
+      const n = s.notifications || {};
+      // 默认开启：未设置时视为 true
+      if (n.enabled === false) return;
+      if (n[category] === false) return;
+      // 仅在窗口非聚焦或不可见时打扰用户
+      const isFocused = document.hasFocus();
+      const isHidden = document.visibilityState === 'hidden';
+      if (isFocused && !isHidden) return;
+      await window.api.sendNotification({ title, body, category });
+    } catch (e) {
+      console.warn('[App] sendAppNotification failed:', e?.message || e);
+    }
   }
 
   // ---- Game Invitation Card ----
@@ -4012,6 +4086,9 @@
     // 增量推送：显示审批面板并更新内容
     WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#approval-panel', attr: 'class', value: approvalPanel.className });
     WebUIMirror.pushDomEvent({ type: 'dom_text', selector: '#approval-content', text: approvalContent.textContent });
+    // 系统通知：敏感操作需要审批时
+    const dispName = toolDef?.desc || toolName || '未知操作';
+    sendAppNotification('approval', '需要您的批准', `Agent 请求执行: ${dispName}`);
   }
 
   document.getElementById('btn-approve').addEventListener('click', () => {
@@ -4948,6 +5025,18 @@
     const tarotVisibleEl = document.getElementById('setting-tarot-visible');
     if (tarotVisibleEl) tarotVisibleEl.checked = s.tarotVisible !== false;
     applyTarotVisibility(s.tarotVisible !== false);
+    // Notification settings (default: enabled + all categories on)
+    const notif = s.notifications || {};
+    const notifEnabledEl = document.getElementById('setting-notify-enabled');
+    if (notifEnabledEl) notifEnabledEl.checked = notif.enabled !== false;
+    const notifApprovalEl = document.getElementById('setting-notify-approval');
+    if (notifApprovalEl) notifApprovalEl.checked = notif.approval !== false;
+    const notifSessionEl = document.getElementById('setting-notify-session-done');
+    if (notifSessionEl) notifSessionEl.checked = notif.sessionDone !== false;
+    const notifQuestionEl = document.getElementById('setting-notify-question');
+    if (notifQuestionEl) notifQuestionEl.checked = notif.question !== false;
+    const notifPresentEl = document.getElementById('setting-notify-present');
+    if (notifPresentEl) notifPresentEl.checked = notif.present !== false;
     // Language setting
     const langSelect = document.getElementById('setting-language');
     if (langSelect) langSelect.value = s.language || 'zh-CN';
@@ -6151,6 +6240,41 @@
     });
   }
 
+  // 通知开关 - 总开关 + 4 个分类 + 测试按钮
+  const notifyToggles = [
+    { id: 'setting-notify-enabled', key: 'enabled' },
+    { id: 'setting-notify-approval', key: 'approval' },
+    { id: 'setting-notify-session-done', key: 'sessionDone' },
+    { id: 'setting-notify-question', key: 'question' },
+    { id: 'setting-notify-present', key: 'present' }
+  ];
+  notifyToggles.forEach(({ id, key }) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.addEventListener('change', async () => {
+      const s = await window.api.getSettings();
+      if (!s.notifications) s.notifications = {};
+      s.notifications[key] = el.checked;
+      await saveSettings(s);
+    });
+  });
+  const btnNotifyTest = document.getElementById('btn-notify-test');
+  if (btnNotifyTest) {
+    btnNotifyTest.addEventListener('click', async () => {
+      try {
+        const r = await window.api.sendNotification({
+          title: 'CIBYP 测试通知',
+          body: '如果您看到这条通知，说明系统通知工作正常。'
+        });
+        if (!r?.ok) {
+          alert('通知发送失败：' + (r?.error || '未知原因'));
+        }
+      } catch (e) {
+        alert('通知发送异常：' + e.message);
+      }
+    });
+  }
+
   // Language settings save button
   const btnSaveLanguage = document.getElementById('btn-save-language');
   if (btnSaveLanguage) {
@@ -7318,6 +7442,11 @@
         return;
       }
 
+      // 系统通知：问卷需要用户回答
+      const firstQ = questions[0];
+      const qLabel = firstQ?.label || firstQ?.title || firstQ?.question || '请回答问题';
+      sendAppNotification('question', 'Agent 有问题想问您', qLabel);
+
       const answers = new Array(questions.length).fill('');
       let currentIndex = 0;
 
@@ -8334,6 +8463,7 @@
           break;
         case 'present-file':
           addFilePresentCard(data);
+          sendAppNotification('present', 'Agent 向您呈递文件', data?.title || data?.filename || '请查看文件内容');
           break;
       }
     };
@@ -9092,6 +9222,7 @@
             break;
           case 'present-file':
             addFilePresentCard(data);
+            sendAppNotification('present', 'Agent 向您呈递文件', data?.title || data?.filename || '请查看文件内容');
             break;
           case 'affection-change':
             showBabeAffectionChange(data.delta, data.value);
