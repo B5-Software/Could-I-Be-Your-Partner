@@ -6656,11 +6656,19 @@
     const avatarEl = document.getElementById('agent-avatar-display');
     if (nameEl && persona?.name) nameEl.textContent = persona.name;
     if (avatarEl) {
-      avatarEl.innerHTML = makeAvatarHTML(persona?.avatar, true, 'width:28px;height:28px;border-radius:50%;object-fit:cover');
-      // Hero 头像框叠加
       const frameId = _avatarFrameState.ai;
-      if (frameId && _avatarFrameCache[frameId]) {
+      const hasFrame = !!(frameId && _avatarFrameCache[frameId]);
+      // 有头像框时不设置 inline 尺寸，让 CSS .has-frame > img 控制（140% 与 overlay 同尺寸对齐）
+      const avatarSize = hasFrame
+        ? 'border-radius:50%;object-fit:cover'
+        : 'width:28px;height:28px;border-radius:50%;object-fit:cover';
+      avatarEl.innerHTML = makeAvatarHTML(persona?.avatar, true, avatarSize);
+      // Hero 头像框叠加
+      if (hasFrame) {
+        avatarEl.classList.add('has-frame');
         avatarEl.insertAdjacentHTML('beforeend', makeFrameOverlayHTML(frameId));
+      } else {
+        avatarEl.classList.remove('has-frame');
       }
     }
   }
@@ -7100,6 +7108,15 @@
     }
     // Update mode switcher labels based on language
     updateModeLabels(s.language || 'zh-CN');
+    // 头像框系统：启动时加载 avatarFrame 状态并预加载 SVG 缓存
+    if (s.aiPersona?.avatarFrame) {
+      _avatarFrameState.ai = s.aiPersona.avatarFrame;
+      await loadAvatarFrameSVG(s.aiPersona.avatarFrame);
+    }
+    if (s.userProfile?.avatarFrame) {
+      _avatarFrameState.user = s.userProfile.avatarFrame;
+      await loadAvatarFrameSVG(s.userProfile.avatarFrame);
+    }
     if (s.aiPersona) updatePersonaDisplay(s.aiPersona);
     // 启动时立即读取命运之牌可见性设置项并应用，避免未读设置导致 UI 不一致
     applyTarotVisibility(s.tarotVisible !== false);
