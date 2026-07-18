@@ -146,6 +146,7 @@ contextBridge.exposeInMainWorld('api', {
   pwBrowserDialog: () => ipcRenderer.invoke('pw:browserDialog'),
   pwTestLaunch: (settings) => ipcRenderer.invoke('pw:testLaunch', settings),
   pwCloseBrowser: () => ipcRenderer.invoke('pw:closeBrowser'),
+  pwHideBanner: () => ipcRenderer.invoke('pw:hideBanner'),
 
   // Computer Use Protocol (CUP)
   computerScreenshot: (workspacePath) => ipcRenderer.invoke('computer:screenshot', workspacePath),

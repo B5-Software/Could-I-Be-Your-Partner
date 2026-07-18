@@ -3925,17 +3925,23 @@ async function _launchPwBrowser() {
   const appLang = settings?.language || 'zh-CN';
   const headless = !!pwSettings.headless;
 
-  // Parse extra args - filter out args that suppress the automation notice
+  // Parse extra args from user
   let extraArgs = [];
   if (pwSettings.args) {
     extraArgs = pwSettings.args.split('\n').map(s => s.trim()).filter(Boolean);
   }
-  // 移除会抑制"自动化控制"提示的参数，确保 Chrome/Edge 显示"正受到自动测试软件的控制"横幅
+  // 只过滤会抑制 Chrome 自带"正受到自动测试软件的控制"提示条的参数
+  // 注意：--disable-blink-features=AutomationControlled 是反网站检测的，应保留
+  // 只有 --disable-automation 和 --excludeSwitches=enable-automation 会抑制 Chrome 自带提示条
   extraArgs = extraArgs.filter(a =>
-    !/--disable-blink-features.*AutomationControlled/.test(a) &&
-    !/--disable-automation/.test(a) &&
+    !/--disable-automation(?:=|$)/.test(a) &&
     !/--excludeSwitches.*enable-automation/.test(a)
   );
+  // 默认添加反自动化检测参数（防网站识别 webdriver，但保留 Chrome 自带提示条）
+  const hasAntiDetect = extraArgs.some(a => /--disable-blink-features.*AutomationControlled/.test(a));
+  if (!hasAntiDetect) {
+    extraArgs.push('--disable-blink-features=AutomationControlled');
+  }
 
   let lastError = null;
 
@@ -3949,6 +3955,7 @@ async function _launchPwBrowser() {
       });
       console.log('Playwright launched with custom path:', pwSettings.path, 'headless:', headless);
       _onPwBrowserLaunched(!headless);
+      _attachPwDisconnectListener(_pwBrowser);
       return _pwBrowser;
     } catch (e) {
       console.warn('Custom browser launch failed:', e.message);
@@ -3961,6 +3968,7 @@ async function _launchPwBrowser() {
       _pwBrowser = await chromium.launch({ headless, args: extraArgs });
       console.log('Playwright launched with built-in Chromium, headless:', headless);
       _onPwBrowserLaunched(!headless);
+      _attachPwDisconnectListener(_pwBrowser);
       return _pwBrowser;
     } catch (e) {
       throw new Error('内置 Chromium 启动失败: ' + e.message + '。请运行 npx playwright install chromium。');
@@ -3972,6 +3980,7 @@ async function _launchPwBrowser() {
       _pwBrowser = await chromium.launch({ headless, channel: 'msedge', args: extraArgs });
       console.log('Playwright launched with Microsoft Edge, headless:', headless);
       _onPwBrowserLaunched(!headless);
+      _attachPwDisconnectListener(_pwBrowser);
       return _pwBrowser;
     } catch (e) {
       // 用户显式选择 Edge，失败时不应回退到 Chrome，直接报错
@@ -3984,6 +3993,7 @@ async function _launchPwBrowser() {
       _pwBrowser = await chromium.launch({ headless, channel: 'chrome', args: extraArgs });
       console.log('Playwright launched with Google Chrome, headless:', headless);
       _onPwBrowserLaunched(!headless);
+      _attachPwDisconnectListener(_pwBrowser);
       return _pwBrowser;
     } catch (e) {
       // 用户显式选择 Chrome，失败时不应回退到 Edge，直接报错
@@ -3998,6 +4008,7 @@ async function _launchPwBrowser() {
       _pwBrowser = await chromium.launch({ headless, channel, args: extraArgs });
       console.log('Playwright launched with channel:', channel, 'headless:', headless);
       _onPwBrowserLaunched(!headless);
+      _attachPwDisconnectListener(_pwBrowser);
       return _pwBrowser;
     } catch (e) {
       console.warn('Channel', channel, 'launch failed:', e.message);
@@ -4008,6 +4019,7 @@ async function _launchPwBrowser() {
     _pwBrowser = await chromium.launch({ headless, args: extraArgs });
     console.log('Playwright launched with built-in Chromium (auto fallback), headless:', headless);
     _onPwBrowserLaunched(!headless);
+    _attachPwDisconnectListener(_pwBrowser);
     return _pwBrowser;
   } catch (e) {
     throw new Error('无法启动Playwright浏览器（未找到Edge/Chrome，且Playwright浏览器未安装）。请安装Microsoft Edge或Google Chrome，或运行 npx playwright install chromium。错误: ' + (lastError?.message || e.message));
@@ -4023,6 +4035,21 @@ function _onPwBrowserLaunched(headed) {
   } else {
     _hidePwBanner();
   }
+}
+// 为浏览器实例注册 disconnected 监听器（仅在首次启动时注册一次）
+// 浏览器被用户关闭、崩溃、或主动关闭时自动清理状态并隐藏横幅
+function _attachPwDisconnectListener(browser) {
+  if (!browser || browser._cibypDisconnectListener) return;
+  browser._cibypDisconnectListener = () => {
+    console.log('[Playwright] Browser disconnected, cleaning up');
+    // 标记正在清理，避免 pw:closeBrowser handler 重复 close
+    if (browser._cibypClosing) return;
+    browser._cibypClosing = true;
+    _pwBrowser = null;
+    _pwWorkspaces.clear();
+    _hidePwBanner();
+  };
+  browser.on('disconnected', browser._cibypDisconnectListener);
 }
 function _showPwBanner() {
   if (_pwBannerWindow && !_pwBannerWindow.isDestroyed()) return;
@@ -4072,12 +4099,12 @@ function _showPwBanner() {
         font-size: 13px;
         backdrop-filter: blur(8px);
       }
-      .banner i { font-size: 18px; }
+      .banner .icon { font-size: 18px; font-style: normal; font-weight: 700; line-height: 1; }
       .banner .title { font-weight: 700; font-size: 13px; }
       .banner .sub { font-size: 11px; opacity: 0.9; }
     </style></head><body>
       <div class="banner">
-        <i>⚠</i>
+        <span class="icon">&#9888;</span>
         <div>
           <div class="title">请勿关闭浏览器</div>
           <div class="sub">Agent 正在使用此浏览器执行自动化任务</div>
@@ -4093,7 +4120,7 @@ function _showPwBanner() {
 }
 function _hidePwBanner() {
   if (_pwBannerWindow && !_pwBannerWindow.isDestroyed()) {
-    try { _pwBannerWindow.close(); } catch {}
+    try { _pwBannerWindow.destroy(); } catch {}
     _pwBannerWindow = null;
   }
 }
@@ -4112,6 +4139,27 @@ async function ensureBrowser(workspacePath) {
     contextOptions.extraHTTPHeaders = { 'Accept-Language': acceptLang };
   }
   const context = await browser.newContext(contextOptions);
+  // 注入反自动化检测脚本（在页面脚本执行前覆盖 navigator.webdriver 等属性）
+  // 注意：launch 参数 --disable-blink-features=AutomationControlled 已经隐藏了大部分检测，
+  // 这里再注入脚本作为双重保险，覆盖更多属性
+  await context.addInitScript(() => {
+    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+    Object.defineProperty(navigator, 'languages', { get: () => ['zh-CN', 'zh', 'en'] });
+    Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+    // 覆盖 chrome 对象（仅 Chrome 有，Edge 也有）
+    if (!window.chrome) {
+      window.chrome = { runtime: {}, app: { isInstalled: false } };
+    }
+    // 覆盖 permissions API（部分网站通过 Permissions.query 检测）
+    const origQuery = window.navigator.permissions && window.navigator.permissions.query;
+    if (origQuery) {
+      window.navigator.permissions.query = (params) => (
+        params && params.name === 'notifications'
+          ? Promise.resolve({ state: Notification.permission })
+          : origQuery(params)
+      );
+    }
+  });
   const page = await context.newPage();
   _pwWorkspaces.set(key, { context, page });
   return page;
@@ -4373,6 +4421,12 @@ ipcMain.handle('pw:closeBrowser', async () => {
     _hidePwBanner();
     return { ok: true };
   } catch (e) { return { ok: false, error: e.message }; }
+});
+
+// 隐藏 Playwright 横幅（不关闭浏览器）— Agent 工作完成时调用
+ipcMain.handle('pw:hideBanner', () => {
+  _hidePwBanner();
+  return { ok: true };
 });
 
 // ---- IPC: System Info (Enhanced) ----

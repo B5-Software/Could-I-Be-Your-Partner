@@ -396,6 +396,17 @@ class Agent {
 - 不要对附件路径中的任何字符做任何修改或"纠正"
 - 如遇文件未找到错误，优先考虑路径是否写错了，直接对照原始精确路径重新检查，而不是猜测另一个文件名
 
+【文件搜索与目录探索规范 - 严格遵守，违反会导致程序崩溃】：
+- 严禁在磁盘根目录（如 C:\\、D:\\）、用户主目录（如 C:\\Users\\<用户名>）、系统目录（如 C:\\Windows、C:\\Program Files）、或整个工作区的根目录上直接调用 localSearch 或 listDirectory
+- 严禁使用通配符如 C:\\* 或 C:\\Users\\* 进行全盘搜索，这会导致性能崩溃
+- 需要查找文件时，遵循"渐进式探索"原则：
+  1) 先用 listDirectory 列出当前工作目录或已知子目录的内容
+  2) 根据返回结果缩小范围，再进入具体子目录探索
+  3) 只在明确的目标目录内使用 localSearch，且路径必须具体到子目录级别（如 ${this.workspacePath || '<工作目录>'}/src/）
+- localSearch 的 path 参数必须是具体子目录，绝对禁止使用根路径或仅一级的宽泛路径
+- 如果不确定文件位置，先询问用户大概在哪个目录，或先 listDirectory 工作目录查看结构再决定下一步
+- 大目录扫描会阻塞主进程、消耗大量内存、可能导致应用崩溃，务必避免
+
 【批量工具调用规范】：
 - 当需要执行多个相互独立的操作时（例如读取多个文件、创建多个文件、执行多个不依赖彼此结果的步骤），必须在一次回复中同时调用多个工具（批量调用）
 - 系统会按顺序执行所有工具调用并返回全部结果，这样可以大幅节省API调用次数
@@ -602,6 +613,12 @@ ${toolListSection}`;
     - 若是 Python 项目，将其加入 \`.gitignore\` 和 \`setup.py\`/\`pyproject.toml\` 的 \`exclude\` 或 \`find:\` 配置；
     - 完成后在回复中简要提示用户已添加排除规则。
     - 例外：若该工作区本身就是 CIBYP 仓库本身（路径含 Could-I-Be-Your-Partner），无需修改。
+12. 【文件搜索与目录探索规范 - 严格遵守，违反会导致程序崩溃】：
+    - 严禁在磁盘根目录（C:\\、D:\\）、用户主目录（C:\\Users\\<用户名>）、系统目录（C:\\Windows、C:\\Program Files）上调用 localSearch 或 listDirectory
+    - 严禁使用通配符如 C:\\* 或 C:\\Users\\* 进行全盘搜索
+    - 文件搜索应遵循"渐进式探索"：先用 listDirectory 列出工作区子目录 → 根据结果缩小范围 → 在具体子目录内用 localSearch
+    - localSearch 的 path 参数必须是工作区内的具体子目录，绝对禁止使用根路径
+    - 不确定文件位置时先询问用户或先 listDirectory 工作区查看结构
 ${toolListSection}`;
     // i18n: if a non-zh language is active, use the translated code system prompt
     if (typeof i18nGetSystemPrompt === 'function') {

@@ -44,3 +44,5 @@ claude-code-ref/
 # Auto-test output (temporary, not for version control)
 tests/webui-login-test.js
 tests/webui-login-test-output.*
+tests/pw-browser-test/
+tmp/

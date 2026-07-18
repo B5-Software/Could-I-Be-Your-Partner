@@ -798,9 +798,15 @@
         });
         break;
       case 'sub-agent-message':
-        // 子代理中间消息：不再显示在聊天页面，而是保存在子代理记录中
+        // 子代理中间消息：不显示在聊天页面，而是保存在子代理记录中
         // 用户可点击子代理卡片查看完整对话记录（参考 claude-code-ref 的隔离设计）
         // 消息已通过 agent.subAgents[].messages 自动累积，模态框打开时从 agent.getSubAgent(id) 读取
+        // 如果详情模态框正打开且就是该子代理，触发立即刷新
+        if (_openSubAgentModalId === data.id && typeof _subAgentModalRender === 'function') {
+          requestAnimationFrame(() => {
+            if (_openSubAgentModalId === data.id) _subAgentModalRender();
+          });
+        }
         break;
       case 'sub-agent-batch-start':
         addSubAgentBatchBanner(data.count, data.tasks);
@@ -858,6 +864,10 @@
       // 停止计时器
       const wasWorking = window._workStartTime !== null;
       if (window._workTimer) { clearInterval(window._workTimer); window._workTimer = null; window._workStartTime = null; }
+      // Agent 工作完成：隐藏 Playwright 横幅（不关闭浏览器，仅隐藏屏幕右上角提示）
+      if (wasWorking && window.api?.pwHideBanner) {
+        try { window.api.pwHideBanner(); } catch {}
+      }
       // 系统通知：会话已完成（仅在刚结束工作时触发，初次进入 idle 不通知）
       if (wasWorking) {
         const title = agent.conversationTitle || '当前会话';
@@ -2986,11 +2996,22 @@
   }
 
   function addToolCallToChat(displayName, toolName, args) {
+    // runSubAgent 工具调用不在此显示卡片 — 子代理有独立的卡片和详情模态框
+    // 避免 args 中过长的任务描述和 result 撑爆聊天页面
+    if (toolName === 'runSubAgent') return;
+
     const el = document.createElement('div');
     el.className = 'tool-call';
     el.id = `tool-${toolName}-${Date.now()}`;
     el.dataset.toolName = toolName;
-    const argsStr = Object.entries(args).map(([k, v]) => `${k}: ${typeof v === 'string' ? v.substring(0, 100) : JSON.stringify(v)}`).join('\n');
+    // 截断 args：字符串值限制 200 字符，对象 JSON 限制 500 字符
+    const argsStr = Object.entries(args || {})
+      .map(([k, v]) => {
+        if (typeof v === 'string') return `${k}: ${v.substring(0, 200)}${v.length > 200 ? '…(已截断)' : ''}`;
+        const json = JSON.stringify(v);
+        return `${k}: ${json.length > 500 ? json.substring(0, 500) + '…(已截断)' : json}`;
+      })
+      .join('\n');
     el.innerHTML = `
       <div class="tool-call-header">
         <i class="fa-solid fa-gear fa-spin"></i>
@@ -3261,81 +3282,151 @@
   }
 
   // 子代理详情模态框：显示完整对话历史、上下文窗口、token 用量
+  // 当前打开的子代理模态框 ID（用于实时刷新）
+  let _openSubAgentModalId = null;
+  let _subAgentModalRefreshTimer = null;
+  // 当前打开的模态框的 render 函数引用（供 sub-agent-message 事件触发立即刷新）
+  let _subAgentModalRender = null;
+
   function showSubAgentDetailModal(id) {
     let existing = document.getElementById('sub-agent-modal');
     if (existing) existing.remove();
     const rec = agent.getSubAgent ? agent.getSubAgent(id) : null;
     const cardRec = _subAgentCards.get(id);
     if (!rec && !cardRec) return;
+
+    _openSubAgentModalId = id;
     const modal = document.createElement('div');
     modal.id = 'sub-agent-modal';
     modal.className = 'sub-agent-modal';
-    // 优先使用实时消息（运行中也能看到）；否则回退到完成时的快照
-    const liveMessages = rec?.subAgent?.contextManager?.getMessages?.() || [];
-    const messages = liveMessages.length > 0 ? liveMessages : (rec?.messages || []);
-    const usage = rec?.usage || cardRec?.usage || {};
-    const fmtTok = (n) => (n || 0).toLocaleString();
-    const fmtDur = (ms) => {
-      if (!ms) return '-';
-      const s = Math.floor(ms / 1000);
-      return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
-    };
-    // 估算上下文窗口使用
-    const maxCtx = rec?.subAgent?.contextManager?.maxTokens || (agent?.settings?.llm?.maxContextLength || 131072);
-    const usedTokens = (usage.prompt || 0) + (usage.completion || 0);
-    const ctxPct = maxCtx > 0 ? Math.min(100, Math.round((usedTokens / maxCtx) * 100)) : 0;
-    const ctxColor = ctxPct >= 95 ? 'var(--danger, #e74c3c)' : (ctxPct >= 80 ? 'var(--warning, #f39c12)' : 'var(--accent)');
-    modal.innerHTML = `
-      <div class="sub-agent-modal-backdrop"></div>
-      <div class="sub-agent-modal-dialog">
-        <div class="sub-agent-modal-header">
-          <div class="sub-agent-modal-title">
-            <i class="fa-solid fa-robot"></i>
-            <span>子代理详情</span>
-            ${rec?.tarot ? `<span class="sub-agent-modal-tarot">命运之牌: ${escapeHtml(rec.tarot.name)}${rec.tarot.isReversed ? '(逆位)' : '(正位)'}</span>` : ''}
-          </div>
-          <div class="sub-agent-modal-stats">
-            <span><i class="fa-regular fa-clock"></i> ${fmtDur(rec ? ((rec.endTime || Date.now()) - rec.startTime) : 0)}</span>
-            <span><i class="fa-solid fa-rotate"></i> ${rec?.iterations || 0} 轮</span>
-            <span><i class="fa-solid fa-wrench"></i> ${rec?.toolUseCount || 0} 次工具</span>
-            <span><i class="fa-solid fa-coins"></i> 输入 ${fmtTok(usage.prompt)} / 输出 ${fmtTok(usage.completion)} / 共 ${fmtTok(usage.total)}</span>
-            ${usage.cached > 0 ? `<span><i class="fa-solid fa-bolt"></i> 缓存命中 ${fmtTok(usage.cached)}</span>` : ''}
-          </div>
-          <button class="btn-icon sub-agent-modal-close" title="关闭"><i class="fa-solid fa-xmark"></i></button>
-        </div>
-        <div class="sub-agent-modal-task">${escapeHtml(rec?.task || cardRec?.el?.dataset?.subAgentId || '')}</div>
-        <div class="sub-agent-modal-context" style="padding:8px 18px;border-bottom:1px solid var(--border);background:var(--bg-tertiary, var(--bg-secondary));font-size:12px;color:var(--text-secondary);display:flex;align-items:center;gap:10px;flex-shrink:0">
-          <span><i class="fa-solid fa-window-maximize" style="color:var(--accent)"></i> 上下文窗口</span>
-          <div style="flex:1;height:6px;background:var(--bg-primary);border-radius:3px;overflow:hidden;border:1px solid var(--border)">
-            <div style="height:100%;width:${ctxPct}%;background:${ctxColor};transition:width 0.3s"></div>
-          </div>
-          <span style="font-variant-numeric:tabular-nums;color:${ctxColor};font-weight:600">${ctxPct}%</span>
-          <span style="color:var(--text-tertiary);font-size:11px">${fmtTok(usedTokens)} / ${fmtTok(maxCtx)}</span>
-        </div>
-        <div class="sub-agent-modal-body">
-          ${messages.length === 0
-            ? '<div class="sub-agent-modal-empty">暂无消息记录（子代理可能仍在初始化）</div>'
-            : messages.map(m => renderSubAgentMessage(m)).join('')}
-        </div>
-      </div>`;
     document.body.appendChild(modal);
-    modal.querySelector('.sub-agent-modal-close').onclick = () => modal.remove();
-    modal.querySelector('.sub-agent-modal-backdrop').onclick = () => modal.remove();
+
+    // 渲染函数：每次调用都会重新读取实时消息和统计
+    const render = () => {
+      const liveRec = agent.getSubAgent ? agent.getSubAgent(id) : null;
+      const liveCardRec = _subAgentCards.get(id);
+      if (!liveRec && !liveCardRec) {
+        closeModal();
+        return;
+      }
+      // 优先使用实时消息（运行中也能看到）；否则回退到完成时的快照
+      const liveMessages = liveRec?.subAgent?.contextManager?.getMessages?.() || [];
+      const messages = liveMessages.length > 0 ? liveMessages : (liveRec?.messages || []);
+      const usage = liveRec?.usage || liveCardRec?.usage || {};
+      const fmtTok = (n) => (n || 0).toLocaleString();
+      const fmtDur = (ms) => {
+        if (!ms) return '-';
+        const s = Math.floor(ms / 1000);
+        return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+      };
+      // 估算上下文窗口使用
+      const maxCtx = liveRec?.subAgent?.contextManager?.maxTokens || (agent?.settings?.llm?.maxContextLength || 131072);
+      const usedTokens = (usage.prompt || 0) + (usage.completion || 0);
+      const ctxPct = maxCtx > 0 ? Math.min(100, Math.round((usedTokens / maxCtx) * 100)) : 0;
+      const ctxColor = ctxPct >= 95 ? 'var(--danger, #e74c3c)' : (ctxPct >= 80 ? 'var(--warning, #f39c12)' : 'var(--accent)');
+      const isRunning = liveRec?.status === 'running' || (!liveRec?.endTime);
+
+      modal.innerHTML = `
+        <div class="sub-agent-modal-backdrop"></div>
+        <div class="sub-agent-modal-dialog">
+          <div class="sub-agent-modal-header">
+            <div class="sub-agent-modal-title">
+              <i class="fa-solid fa-robot"></i>
+              <span>子代理详情</span>
+              ${isRunning ? '<span class="sub-agent-modal-running"><i class="fa-solid fa-circle-notch fa-spin"></i> 运行中</span>' : ''}
+              ${liveRec?.tarot ? `<span class="sub-agent-modal-tarot">命运之牌: ${escapeHtml(liveRec.tarot.name)}${liveRec.tarot.isReversed ? '(逆位)' : '(正位)'}</span>` : ''}
+            </div>
+            <div class="sub-agent-modal-stats">
+              <span><i class="fa-regular fa-clock"></i> ${fmtDur(liveRec ? ((liveRec.endTime || Date.now()) - liveRec.startTime) : 0)}</span>
+              <span><i class="fa-solid fa-rotate"></i> ${liveRec?.iterations || 0} 轮</span>
+              <span><i class="fa-solid fa-wrench"></i> ${liveRec?.toolUseCount || 0} 次工具</span>
+              <span><i class="fa-solid fa-coins"></i> 输入 ${fmtTok(usage.prompt)} / 输出 ${fmtTok(usage.completion)} / 共 ${fmtTok(usage.total)}</span>
+              ${usage.cached > 0 ? `<span><i class="fa-solid fa-bolt"></i> 缓存命中 ${fmtTok(usage.cached)}</span>` : ''}
+            </div>
+            <button class="btn-icon sub-agent-modal-close" title="关闭"><i class="fa-solid fa-xmark"></i></button>
+          </div>
+          <div class="sub-agent-modal-task">${escapeHtml(liveRec?.task || liveCardRec?.el?.dataset?.subAgentId || '')}</div>
+          <div class="sub-agent-modal-context" style="padding:8px 18px;border-bottom:1px solid var(--border);background:var(--bg-tertiary, var(--bg-secondary));font-size:12px;color:var(--text-secondary);display:flex;align-items:center;gap:10px;flex-shrink:0">
+            <span><i class="fa-solid fa-window-maximize" style="color:var(--accent)"></i> 上下文窗口</span>
+            <div style="flex:1;height:6px;background:var(--bg-primary);border-radius:3px;overflow:hidden;border:1px solid var(--border)">
+              <div style="height:100%;width:${ctxPct}%;background:${ctxColor};transition:width 0.3s"></div>
+            </div>
+            <span style="font-variant-numeric:tabular-nums;color:${ctxColor};font-weight:600">${ctxPct}%</span>
+            <span style="color:var(--text-tertiary);font-size:11px">${fmtTok(usedTokens)} / ${fmtTok(maxCtx)}</span>
+          </div>
+          <div class="sub-agent-modal-body">
+            ${messages.length === 0
+              ? '<div class="sub-agent-modal-empty">暂无消息记录（子代理可能仍在初始化）</div>'
+              : messages.map(m => renderSubAgentMessage(m)).join('')}
+          </div>
+        </div>`;
+      // 重新绑定关闭事件（因为 innerHTML 被替换了）
+      modal.querySelector('.sub-agent-modal-close').onclick = closeModal;
+      modal.querySelector('.sub-agent-modal-backdrop').onclick = closeModal;
+      // 自动滚动到底部（如果有新消息）
+      const body = modal.querySelector('.sub-agent-modal-body');
+      if (body && isRunning) body.scrollTop = body.scrollHeight;
+    };
+
+    const closeModal = () => {
+      if (_subAgentModalRefreshTimer) {
+        clearInterval(_subAgentModalRefreshTimer);
+        _subAgentModalRefreshTimer = null;
+      }
+      _openSubAgentModalId = null;
+      modal.remove();
+      document.removeEventListener('keydown', escHandler);
+    };
+
     // ESC 关闭
     const escHandler = (e) => {
       if (e.key === 'Escape') {
-        modal.remove();
-        document.removeEventListener('keydown', escHandler);
+        closeModal();
       }
     };
     document.addEventListener('keydown', escHandler);
+
+    // 首次渲染
+    render();
+    _subAgentModalRender = render;
+
+    // 如果子代理还在运行，启动定时刷新（每 1.5 秒）
+    const checkRunning = agent.getSubAgent ? agent.getSubAgent(id) : null;
+    if (checkRunning && (checkRunning.status === 'running' || !checkRunning.endTime)) {
+      _subAgentModalRefreshTimer = setInterval(() => {
+        const cur = agent.getSubAgent ? agent.getSubAgent(id) : null;
+        if (!cur || cur.status !== 'running') {
+          // 已完成，最后刷新一次然后停止
+          render();
+          if (_subAgentModalRefreshTimer) {
+            clearInterval(_subAgentModalRefreshTimer);
+            _subAgentModalRefreshTimer = null;
+          }
+        } else if (_openSubAgentModalId === id) {
+          render();
+        } else {
+          // 模态框已关闭
+          if (_subAgentModalRefreshTimer) {
+            clearInterval(_subAgentModalRefreshTimer);
+            _subAgentModalRefreshTimer = null;
+          }
+        }
+      }, 1500);
+    }
   }
 
   function renderSubAgentMessage(m) {
     const role = m.role || 'unknown';
     const roleLabels = { system: '系统', user: '任务', assistant: '子代理', tool: '工具结果' };
     const roleIcon = { system: 'fa-gear', user: 'fa-flag', assistant: 'fa-robot', tool: 'fa-wrench' }[role] || 'fa-message';
-    const content = typeof m.content === 'string' ? m.content : (Array.isArray(m.content) ? m.content.map(c => typeof c === 'string' ? c : (c?.text || '')).join('') : '');
+    // 截断 content：工具结果可能很长，限制显示长度
+    let content = typeof m.content === 'string' ? m.content : (Array.isArray(m.content) ? m.content.map(c => typeof c === 'string' ? c : (c?.text || '')).join('') : '');
+    const MAX_CONTENT = 2000;
+    let truncated = false;
+    if (content.length > MAX_CONTENT) {
+      content = content.substring(0, MAX_CONTENT);
+      truncated = true;
+    }
     let html = `<div class="sub-agent-msg-item role-${role}">
       <div class="sub-agent-msg-role"><i class="fa-solid ${roleIcon}"></i> ${roleLabels[role] || role}</div>`;
     if (m.tool_calls && m.tool_calls.length > 0) {
@@ -3343,12 +3434,19 @@
       for (const tc of m.tool_calls) {
         let argsStr = tc.function?.arguments || '{}';
         try { argsStr = JSON.stringify(JSON.parse(argsStr), null, 2); } catch {}
-        html += `<div class="sub-agent-msg-tc"><span class="tc-name">${escapeHtml(tc.function?.name || '')}</span><pre class="tc-args">${escapeHtml(argsStr)}</pre></div>`;
+        // 截断工具参数
+        const MAX_ARGS = 800;
+        let argsTruncated = false;
+        if (argsStr.length > MAX_ARGS) {
+          argsStr = argsStr.substring(0, MAX_ARGS);
+          argsTruncated = true;
+        }
+        html += `<div class="sub-agent-msg-tc"><span class="tc-name">${escapeHtml(tc.function?.name || '')}</span><pre class="tc-args">${escapeHtml(argsStr)}${argsTruncated ? '\n…(已截断)' : ''}</pre></div>`;
       }
       html += `</div>`;
     }
     if (content) {
-      html += `<div class="sub-agent-msg-content markdown-body">${renderMarkdown(content)}</div>`;
+      html += `<div class="sub-agent-msg-content markdown-body">${renderMarkdown(content)}${truncated ? '<div class="sub-agent-msg-truncated">…(内容已截断，完整内容请查看工具返回)</div>' : ''}</div>`;
     }
     if (m.name) {
       html += `<div class="sub-agent-msg-tool-name">工具: ${escapeHtml(m.name)}</div>`;
