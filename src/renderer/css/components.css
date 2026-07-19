@@ -468,6 +468,155 @@
   border-top: 1px solid var(--border);
 }
 
+/* Tool First-Use Authorization Modal */
+.tool-auth-warning {
+  background: rgba(243, 156, 18, 0.08);
+  border: 1px solid rgba(243, 156, 18, 0.35);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+  margin-bottom: 12px;
+  color: var(--text-primary);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.tool-auth-warning strong {
+  color: var(--warning, #f39c12);
+}
+
+.tool-auth-warning ul {
+  margin: 6px 0 0 18px;
+  padding: 0;
+}
+
+.tool-auth-warning li {
+  margin: 2px 0;
+}
+
+.tool-auth-tool {
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.tool-auth-tool code {
+  background: var(--bg-elevated, var(--bg-primary));
+  padding: 1px 6px;
+  border-radius: 4px;
+  color: var(--accent);
+  font-family: 'Consolas', 'Monaco', monospace;
+}
+
+.tool-auth-hint {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+  font-size: 12px;
+  color: var(--text-tertiary);
+  line-height: 1.5;
+}
+
+.tool-auth-hint i {
+  color: var(--accent);
+  margin-top: 2px;
+}
+
+/* Tools Page — 授权状态管理区 */
+.tool-auth-section {
+  margin-top: 24px;
+  padding: 16px 18px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+
+.tool-auth-section h3 {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 0 0 4px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.tool-auth-section h3 i {
+  color: var(--accent);
+}
+
+.tool-auth-list {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.tool-auth-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  font-size: 13px;
+}
+
+.tool-auth-item .ta-name {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-primary);
+}
+
+.tool-auth-item .ta-name i {
+  color: var(--accent);
+  width: 18px;
+  text-align: center;
+}
+
+.tool-auth-item .ta-status {
+  font-size: 12px;
+  padding: 3px 10px;
+  border-radius: 12px;
+  font-weight: 500;
+}
+
+.tool-auth-item .ta-status.granted {
+  background: rgba(39, 174, 96, 0.12);
+  color: var(--success, #27ae60);
+}
+
+.tool-auth-item .ta-status.pending {
+  background: rgba(243, 156, 18, 0.12);
+  color: var(--warning, #f39c12);
+}
+
+.tool-auth-item .ta-revoke {
+  padding: 5px 12px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-secondary);
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.tool-auth-item .ta-revoke:hover:not(:disabled) {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.tool-auth-item .ta-revoke:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
 /* History List */
 .history-list {
   display: flex;

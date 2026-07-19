@@ -155,6 +155,15 @@
                 <circle class="context-ring-fg" id="context-progress-fill" cx="18" cy="18" r="15.915" fill="none" stroke-width="3" stroke-dasharray="0 100" stroke-dashoffset="25" transform="rotate(-90 18 18)"/>
               </svg>
               <span class="progress-text" id="context-progress-text">0/8K</span>
+              <span class="session-cost-mini" id="chat-session-cost" title="当前会话消费（USD）" style="display:none">
+                <i class="fa-solid fa-receipt" style="font-size:9px"></i>
+                <span class="scm-value">$0.0000</span>
+              </span>
+              <span class="budget-mini-bar" id="chat-budget-mini-bar" title="今日预算使用情况" style="display:none">
+                <i class="fa-solid fa-coins" style="font-size:9px"></i>
+                <span class="bmb-track"><span class="bmb-fill"></span></span>
+                <span class="bmb-cost">$0.00</span>
+              </span>
             </div>
             <div class="chat-actions">
               <button class="btn-icon hidden" id="btn-reoptimize-tools" title="手动重新优化工具选择">
@@ -335,6 +344,9 @@
             <button class="btn-secondary btn-sm" id="btn-code-open-workspace" title="打开工作区">
               <i class="fa-solid fa-folder-open"></i> 工作区
             </button>
+            <button class="btn-icon btn-sm" id="btn-code-open-in-explorer" title="在系统文件管理器中打开工作区">
+              <i class="fa-solid fa-folder-tree"></i>
+            </button>
             <span class="code-workspace-path" id="code-workspace-path">未选择工作区</span>
           </div>
           <div class="code-toolbar-right">
@@ -353,6 +365,27 @@
               <div class="empty-state">
                 <i class="fa-solid fa-folder-tree"></i>
                 <p>打开工作区后显示文件树</p>
+              </div>
+            </div>
+            <!-- ESLint 状态面板（位于文件树下方，可上下拖动调节高度） -->
+            <div class="code-eslint-resizer" id="code-eslint-resizer" title="拖动调节高度"></div>
+            <div class="code-eslint-panel" id="code-eslint-panel">
+              <div class="code-eslint-header">
+                <span class="code-eslint-title"><i class="fa-solid fa-shield-halved"></i> ESLint</span>
+                <div class="code-eslint-summary" id="code-eslint-summary">
+                  <span class="es-null">未运行</span>
+                </div>
+                <div class="code-eslint-actions">
+                  <button class="btn-icon btn-sm" id="btn-eslint-refresh" title="重新运行 ESLint">
+                    <i class="fa-solid fa-rotate-right"></i>
+                  </button>
+                  <button class="btn-icon btn-sm" id="btn-eslint-toggle" title="折叠/展开">
+                    <i class="fa-solid fa-chevron-down"></i>
+                  </button>
+                </div>
+              </div>
+              <div class="code-eslint-body" id="code-eslint-body">
+                <div class="code-eslint-empty">打开支持的项目后自动运行</div>
               </div>
             </div>
           </div>
@@ -379,6 +412,15 @@
                   <circle class="context-ring-fg" id="code-context-progress-fill" cx="18" cy="18" r="15.915" fill="none" stroke-width="3" stroke-dasharray="0 100" stroke-dashoffset="25" transform="rotate(-90 18 18)"/>
                 </svg>
                 <span class="progress-text" id="code-context-progress-text">0/128K</span>
+                <span class="session-cost-mini" id="code-session-cost" title="当前会话消费（USD）" style="display:none">
+                  <i class="fa-solid fa-receipt" style="font-size:9px"></i>
+                  <span class="scm-value">$0.0000</span>
+                </span>
+                <span class="budget-mini-bar" id="code-budget-mini-bar" title="今日预算使用情况" style="display:none">
+                  <i class="fa-solid fa-coins" style="font-size:9px"></i>
+                  <span class="bmb-track"><span class="bmb-fill"></span></span>
+                  <span class="bmb-cost">$0.00</span>
+                </span>
               </div>
               <button class="code-panel-close" id="btn-close-chat" title="隐藏"><i class="fa-solid fa-xmark"></i></button>
             </div>
@@ -448,6 +490,15 @@
                 <circle class="context-ring-fg" id="babe-context-progress-fill" cx="18" cy="18" r="15.915" fill="none" stroke-width="3" stroke-dasharray="0 100" stroke-dashoffset="25" transform="rotate(-90 18 18)"/>
               </svg>
               <span class="progress-text" id="babe-context-progress-text">0/8K</span>
+              <span class="session-cost-mini" id="babe-session-cost" title="当前会话消费（USD）" style="display:none">
+                <i class="fa-solid fa-receipt" style="font-size:9px"></i>
+                <span class="scm-value">$0.0000</span>
+              </span>
+              <span class="budget-mini-bar" id="babe-budget-mini-bar" title="今日预算使用情况" style="display:none">
+                <i class="fa-solid fa-coins" style="font-size:9px"></i>
+                <span class="bmb-track"><span class="bmb-fill"></span></span>
+                <span class="bmb-cost">$0.00</span>
+              </span>
             </div>
             <button class="btn-secondary" id="btn-babe-new" title="新对话"><i class="fa-solid fa-plus"></i></button>
             <button class="btn-secondary" id="btn-babe-proactive" title="让TA主动发消息"><i class="fa-solid fa-paper-plane"></i></button>
@@ -509,6 +560,15 @@
         </div>
         <div class="tools-stats" id="tools-stats"></div>
         <div class="tools-groups" id="tools-groups"></div>
+
+        <!-- 工具首次使用授权状态（Playwright / Computer Use）-->
+        <div class="tool-auth-section" id="tool-auth-section">
+          <h3><i class="fa-solid fa-shield-halved"></i> 工具授权状态</h3>
+          <p class="page-desc">以下工具在 AI 首次调用时会请求授权；授权后可在此撤销。</p>
+          <div class="tool-auth-list" id="tool-auth-list">
+            <!-- 动态填充：每项 = 工具类别 + 当前状态 + 撤销按钮 -->
+          </div>
+        </div>
       </section>
 
       <!-- Skills Page -->
@@ -873,8 +933,13 @@
             <!-- Budget Control Tab -->
             <div class="settings-panel" data-tab="budget">
               <div class="settings-group">
-                <h3><i class="fa-solid fa-wallet"></i> 月度预算上限</h3>
-                <p class="setting-hint" style="margin-bottom:12px">设定每月消费上限（USD）。当本月在用统计超过此值时按下方策略处理。</p>
+                <h3><i class="fa-solid fa-wallet"></i> 预算上限</h3>
+                <p class="setting-hint" style="margin-bottom:12px">设定每日/每月消费上限（USD）。超过时按下方策略处理。</p>
+                <div class="setting-item" style="display:flex;align-items:center;gap:8px">
+                  <label style="min-width:120px">每日上限 (USD)</label>
+                  <input type="number" id="setting-budget-daily-cap" placeholder="0.00" step="0.01" min="0" style="width:120px">
+                  <span style="color:var(--text-tertiary);font-size:12px">0 = 不限制</span>
+                </div>
                 <div class="setting-item" style="display:flex;align-items:center;gap:8px">
                   <label style="min-width:120px">月度上限 (USD)</label>
                   <input type="number" id="setting-budget-monthly-cap" placeholder="10.00" step="0.01" min="0" style="width:120px">
@@ -899,14 +964,17 @@
               <div class="settings-group">
                 <h3><i class="fa-solid fa-coins"></i> 模型价格表</h3>
                 <p class="setting-hint" style="margin-bottom:12px">
-                  为每个模型填写每 1K token 的单价（USD）。缓存命中（cache read）按 0.1x 自动计费；
-                  仅 Claude 系列模型有缓存创建（cache write）按 1.25x 计费，其他模型不计此项。
+                  为每个模型填写每 1M token 的单价（USD）。分别支持输入、缓存读取（cache read）、输出、缓存写入（cache write）。
+                  缓存写入仅勾选 "支持" 的模型才会计费（如 Claude 系列）；其他模型即使有 cacheCreation token 也不计费。
                   上下文模态框的费用显示依赖此价格表，未填写的模型不显示费用。
                 </p>
-                <div style="display:grid;grid-template-columns:1.5fr 1fr 1fr auto;gap:8px;align-items:end;margin-bottom:8px;font-size:12px;color:var(--text-tertiary);font-weight:600">
+                <div style="display:grid;grid-template-columns:1.6fr 0.9fr 0.9fr 0.9fr 0.9fr 0.7fr auto;gap:6px;align-items:end;margin-bottom:8px;font-size:11px;color:var(--text-tertiary);font-weight:600">
                   <span>模型 ID</span>
-                  <span>输入 $/1K</span>
-                  <span>输出 $/1K</span>
+                  <span>输入 $/1M</span>
+                  <span>缓存读 $/1M</span>
+                  <span>输出 $/1M</span>
+                  <span>缓存写 $/1M</span>
+                  <span style="text-align:center">支持 CW</span>
                   <span></span>
                 </div>
                 <div id="budget-pricing-list" style="display:flex;flex-direction:column;gap:8px;"></div>
@@ -914,6 +982,46 @@
                   <button class="btn-secondary btn-sm" id="btn-budget-add-row"><i class="fa-solid fa-plus"></i> 添加模型价格</button>
                   <button class="btn-secondary btn-sm" id="btn-budget-import-current"><i class="fa-solid fa-arrow-down-up-across-line"></i> 从当前 LLM 配置导入</button>
                   <button class="btn-secondary btn-sm" id="btn-budget-import-usage"><i class="fa-solid fa-clock-rotate-left"></i> 从用量记录导入已用模型</button>
+                </div>
+              </div>
+
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-clock"></i> 峰谷时段定价</h3>
+                <p class="setting-hint" style="margin-bottom:12px">
+                  启用后在指定时段内对各类价格应用倍率。例如某些 API 在高峰时段按 1.5x 计费。
+                </p>
+                <div class="setting-item" style="display:flex;align-items:center;gap:8px">
+                  <label style="min-width:120px">启用峰谷价</label>
+                  <input type="checkbox" id="setting-budget-peak-enabled">
+                  <span style="color:var(--text-tertiary);font-size:12px">勾选后在下方时段内应用倍率</span>
+                </div>
+                <div class="setting-item" style="display:flex;align-items:center;gap:8px">
+                  <label style="min-width:120px">峰时段</label>
+                  <span>从</span>
+                  <input type="number" id="setting-budget-peak-start" placeholder="9" min="0" max="23" style="width:70px">
+                  <span>时</span>
+                  <span style="margin-left:8px">到</span>
+                  <input type="number" id="setting-budget-peak-end" placeholder="18" min="0" max="24" style="width:70px">
+                  <span>时</span>
+                  <span style="color:var(--text-tertiary);font-size:12px;margin-left:8px">(起 ≥ 终 时表示跨夜)</span>
+                </div>
+                <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:8px">
+                  <div>
+                    <label style="font-size:11px;color:var(--text-tertiary)">输入倍率</label>
+                    <input type="number" id="setting-budget-peak-input-mul" placeholder="1.5" step="0.1" min="0" style="width:100%">
+                  </div>
+                  <div>
+                    <label style="font-size:11px;color:var(--text-tertiary)">缓存读倍率</label>
+                    <input type="number" id="setting-budget-peak-cacheread-mul" placeholder="1.5" step="0.1" min="0" style="width:100%">
+                  </div>
+                  <div>
+                    <label style="font-size:11px;color:var(--text-tertiary)">输出倍率</label>
+                    <input type="number" id="setting-budget-peak-output-mul" placeholder="1.5" step="0.1" min="0" style="width:100%">
+                  </div>
+                  <div>
+                    <label style="font-size:11px;color:var(--text-tertiary)">缓存写倍率</label>
+                    <input type="number" id="setting-budget-peak-cachewrite-mul" placeholder="1.5" step="0.1" min="0" style="width:100%">
+                  </div>
                 </div>
               </div>
 
@@ -1582,6 +1690,21 @@
                 </div>
               </div>
               <div class="settings-group">
+                <h3><i class="fa-solid fa-list-check"></i> 控制白名单</h3>
+                <p style="font-size:13px;color:var(--text-secondary);margin-bottom:12px">
+                  仅接受来自下方列表中发件人的邮件控制指令（如审批回复、命令）。其他发件人的邮件将被忽略。
+                  留空则只接受"用户邮箱地址"的指令（向后兼容旧行为）。
+                </p>
+                <div id="email-allowed-senders-list" style="display:flex;flex-direction:column;gap:6px;margin-bottom:8px"></div>
+                <div style="display:flex;gap:6px;flex-wrap:wrap">
+                  <input type="text" id="email-allowed-sender-input" placeholder="allowed-sender@example.com" style="flex:1;min-width:200px">
+                  <button class="btn-secondary btn-sm" id="btn-email-add-sender"><i class="fa-solid fa-plus"></i> 添加</button>
+                </div>
+                <p style="font-size:11px;color:var(--text-tertiary);margin-top:6px">
+                  提示：邮箱地址不区分大小写；可添加多个。用户邮箱地址会自动包含在白名单内。
+                </p>
+              </div>
+              <div class="settings-group">
                 <h3><i class="fa-solid fa-shield-halved"></i> TOTP 两步验证</h3>
                 <p style="font-size:13px;color:var(--text-secondary);margin-bottom:12px">
                   用于邮件审批验证。点击生成密钥后，请用手机验证器App（如 Microsoft Authenticator、Google Authenticator）扫描二维码。
@@ -1966,6 +2089,42 @@
         <button class="btn-secondary" id="btn-cancel-confirm">取消</button>
         <button class="btn-danger" id="btn-accept-confirm">
           <i class="fa-solid fa-check"></i> 确认
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tool First-Use Authorization Modal -->
+  <!-- Playwright / Computer Use 工具首次调用时弹出一次，用户授权后持久化至 settings.toolAuthGranted -->
+  <div class="modal-overlay hidden" id="tool-auth-modal">
+    <div class="modal" style="max-width:480px">
+      <div class="modal-header">
+        <h3><i class="fa-solid fa-shield-halved" id="tool-auth-icon"></i> <span id="tool-auth-title">工具授权</span></h3>
+        <button class="btn-icon" id="btn-close-tool-auth" title="关闭">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+      <div class="modal-body">
+        <div class="tool-auth-warning" id="tool-auth-warning">
+          <!-- 动态填充：风险说明 -->
+        </div>
+        <div class="tool-auth-tool" id="tool-auth-tool">
+          <!-- 动态填充：当前工具名称 -->
+        </div>
+        <div class="tool-auth-hint">
+          <i class="fa-solid fa-circle-info"></i>
+          <span>授权后将不再每次询问；可随时在设置 → 工具中撤销。</span>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-secondary" id="btn-tool-auth-deny">
+          <i class="fa-solid fa-xmark"></i> 拒绝
+        </button>
+        <button class="btn-secondary" id="btn-tool-auth-once">
+          <i class="fa-solid fa-clock"></i> 仅本次
+        </button>
+        <button class="btn-primary" id="btn-tool-auth-always">
+          <i class="fa-solid fa-check"></i> 允许并记住
         </button>
       </div>
     </div>

@@ -175,6 +175,12 @@ contextBridge.exposeInMainWorld('api', {
   zenFetchModels: () => ipcRenderer.invoke('zen:fetchModels'),
   llmFetchModels: (provider, apiUrl, apiKey) => ipcRenderer.invoke('llm:fetchModels', provider, apiUrl, apiKey),
   usageGetRange: (period) => ipcRenderer.invoke('usage:getRange', period),
+  budgetGetStatus: () => ipcRenderer.invoke('budget:getStatus'),
+  // ESLint
+  eslintIsLintable: (workspacePath) => ipcRenderer.invoke('eslint:isLintable', workspacePath),
+  eslintLint: (workspacePath, opts) => ipcRenderer.invoke('eslint:lint', workspacePath, opts),
+  eslintLintFile: (filePath) => ipcRenderer.invoke('eslint:lintFile', filePath),
+  eslintClearCache: (workspacePath) => ipcRenderer.invoke('eslint:clearCache', workspacePath),
   onStreamChunk: (cb) => {
     const listener = (_, data) => cb(data);
     ipcRenderer.on('llm:stream-chunk', listener);

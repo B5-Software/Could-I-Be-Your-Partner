@@ -1555,6 +1555,14 @@
   color: white;
   border-color: transparent;
 }
+.usage-card.cost {
+  border-color: var(--accent, #6366f1);
+  background: rgba(99, 102, 241, 0.08);
+}
+.usage-card.cost.accent {
+  background: linear-gradient(135deg, #16a34a, #22c55e);
+  border-color: transparent;
+}
 .usage-card-label {
   font-size: 0.75em;
   opacity: 0.7;
@@ -1564,6 +1572,55 @@
   font-size: 1.4em;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
+}
+
+/* ---- 实时预算进度条（上下文指示器右侧） ---- */
+.budget-mini-bar {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+  margin-left: 4px;
+}
+.budget-mini-bar .bmb-track {
+  width: 48px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--bg-tertiary);
+  overflow: hidden;
+  position: relative;
+}
+.budget-mini-bar .bmb-fill {
+  position: absolute;
+  inset: 0;
+  width: 0%;
+  background: var(--accent);
+  border-radius: 2px;
+  transition: width 0.3s, background 0.3s;
+}
+.budget-mini-bar[data-level="warn"] .bmb-fill { background: var(--warning); }
+.budget-mini-bar[data-level="danger"] .bmb-fill { background: var(--danger); }
+.budget-mini-bar[data-level="warn"] { color: var(--warning); }
+.budget-mini-bar[data-level="danger"] { color: var(--danger); }
+.budget-mini-bar .bmb-cost {
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- 当前会话消费（小数字标签） ---- */
+.session-cost-mini {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  margin-left: 4px;
+}
+.session-cost-mini .scm-value {
+  color: var(--accent);
 }
 .usage-period-btn {
   padding: 4px 12px;
@@ -1719,7 +1776,174 @@
   padding: 4px;
   font-family: 'Consolas', monospace;
   font-size: 0.82em;
+  min-height: 60px;
 }
+
+/* ===== ESLint 状态面板（位于文件树下方，可上下拖动调节高度） ===== */
+.code-eslint-resizer {
+  height: 4px;
+  background: var(--border);
+  cursor: row-resize;
+  flex-shrink: 0;
+  transition: background 0.15s;
+  position: relative;
+}
+.code-eslint-resizer::after {
+  content: '';
+  position: absolute;
+  left: 0; right: 0; top: -3px; bottom: -3px;
+}
+.code-eslint-resizer:hover, .code-eslint-resizer.dragging {
+  background: var(--accent, #6366f1);
+}
+.code-eslint-resizer.hidden { display: none; }
+
+.code-eslint-panel {
+  height: 160px;
+  min-height: 40px;
+  max-height: 60vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-secondary, #fff);
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+  overflow: hidden;
+}
+.code-eslint-panel.collapsed { height: 30px !important; min-height: 30px; }
+.code-eslint-panel.collapsed .code-eslint-body { display: none; }
+.code-eslint-panel.collapsed .code-eslint-resizer { display: none; }
+
+.code-eslint-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  background: var(--bg-tertiary, rgba(0,0,0,0.04));
+  border-bottom: 1px solid var(--border);
+  min-height: 30px;
+  flex-shrink: 0;
+}
+.code-eslint-title {
+  font-size: 0.75em;
+  font-weight: 600;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+.code-eslint-title i { color: var(--accent, #6366f1); }
+.code-eslint-summary {
+  font-size: 0.72em;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.code-eslint-summary .es-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 6px;
+  border-radius: 10px;
+  font-weight: 600;
+  font-size: 0.95em;
+  line-height: 1.4;
+}
+.code-eslint-summary .es-badge.errors { background: rgba(220, 53, 69, 0.15); color: #dc3545; }
+.code-eslint-summary .es-badge.warnings { background: rgba(255, 193, 7, 0.15); color: #b8860b; }
+.code-eslint-summary .es-badge.infos { background: rgba(13, 110, 253, 0.15); color: #0d6efd; }
+.code-eslint-summary .es-badge.ok { background: rgba(25, 135, 84, 0.15); color: #198754; }
+.code-eslint-summary .es-null { color: var(--text-tertiary); font-style: italic; }
+.code-eslint-summary .es-running { color: var(--accent, #6366f1); }
+.code-eslint-summary .es-error { color: var(--danger, #dc3545); }
+.code-eslint-actions {
+  display: flex;
+  gap: 2px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+.code-eslint-actions .btn-icon { padding: 2px 6px; font-size: 0.8em; opacity: 0.7; }
+.code-eslint-actions .btn-icon:hover { opacity: 1; background: var(--bg-hover, rgba(0,0,0,0.08)); }
+.code-eslint-actions .btn-icon.spin i { animation: eslint-spin 0.8s linear infinite; }
+@keyframes eslint-spin { from { transform: rotate(0); } to { transform: rotate(360deg); } }
+
+.code-eslint-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 6px;
+  font-family: 'Consolas', monospace;
+  font-size: 0.78em;
+}
+.code-eslint-empty {
+  color: var(--text-tertiary);
+  font-style: italic;
+  text-align: center;
+  padding: 16px 8px;
+  font-size: 0.95em;
+}
+.code-eslint-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 3px 6px;
+  border-radius: 3px;
+  cursor: pointer;
+  transition: background 0.1s;
+  border-left: 3px solid transparent;
+}
+.code-eslint-item:hover { background: var(--bg-hover, rgba(0,0,0,0.06)); }
+.code-eslint-item.error { border-left-color: #dc3545; }
+.code-eslint-item.warning { border-left-color: #ffc107; }
+.code-eslint-item.info { border-left-color: #0d6efd; }
+.code-eslint-item .esev {
+  font-weight: 700;
+  flex-shrink: 0;
+  font-size: 0.95em;
+  min-width: 36px;
+}
+.code-eslint-item.error .esev { color: #dc3545; }
+.code-eslint-item.warning .esev { color: #b8860b; }
+.code-eslint-item.info .esev { color: #0d6efd; }
+.code-eslint-item .eloc {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+  font-size: 0.92em;
+  min-width: 70px;
+}
+.code-eslint-item .emsg {
+  flex: 1;
+  min-width: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-primary);
+}
+.code-eslint-item .erule {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+  font-size: 0.9em;
+  opacity: 0.7;
+  font-style: italic;
+}
+.code-eslint-add-btn {
+  margin-left: 4px;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  background: transparent;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 0.85em;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+  opacity: 0;
+  transition: opacity 0.15s, background 0.15s;
+}
+.code-eslint-item:hover .code-eslint-add-btn { opacity: 1; }
+.code-eslint-add-btn:hover { background: var(--accent-bg, rgba(99,102,241,0.1)); color: var(--accent, #6366f1); }
 .code-file-tree .tree-node {
   padding: 2px 6px;
   cursor: pointer;

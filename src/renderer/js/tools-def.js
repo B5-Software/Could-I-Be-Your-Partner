@@ -100,6 +100,24 @@ function isToolAvailableForMode(toolName, mode) {
   return true;
 }
 
+/**
+ * 返回工具的"首次使用授权"类别。
+ * - 'playwright'：内置浏览器（Playwright）工具集
+ * - 'computerUse'：电脑控制（Computer Use Protocol）工具
+ * - null：无需首次授权
+ *
+ * 工具在 TOOL_DEFINITIONS 中通过 requiresAuth 字段声明类别。
+ * agent.js 在 executeTool 调用前据此判断是否触发授权模态框。
+ */
+function getToolAuthCategory(toolName) {
+  if (!toolName) return null;
+  const def = TOOL_DEFINITIONS.find(t => t.name === toolName);
+  if (!def) return null;
+  const cat = def.requiresAuth;
+  if (cat === 'playwright' || cat === 'computerUse') return cat;
+  return null;
+}
+
 // 未配置生图模型时隐藏 generateImage 工具，避免 LLM 调用后失败
 function isImageGenConfigured(settings) {
   const img = settings?.imageGen;
@@ -139,6 +157,8 @@ const CODE_TOOLS = new Set([
   'listSkills', 'runSkillScript', 'activateSkill', 'deactivateSkill',
   // 系统信息
   'getSystemInfo', 'getNetworkStatus', 'openFileExplorer',
+  // 内置 ESLint 代码诊断（Code 模式特有）
+  'eslintLint', 'eslintLintFile',
   // MCP 工具列表
   'mcpListTools',
   // 效率
@@ -232,6 +252,8 @@ const TOOL_DEFINITIONS = [
   { name: 'getNetworkStatus', desc: '获取网络状态', icon: 'fa-wifi', category: '系统', sensitive: false },
   { name: 'openBrowser', desc: '打开浏览器', icon: 'fa-globe', category: '系统', sensitive: false },
   { name: 'openFileExplorer', desc: '打开文件管理器', icon: 'fa-folder-open', category: '系统', sensitive: false },
+  { name: 'eslintLint', desc: 'ESLint 代码诊断（全工作区）', icon: 'fa-shield-halved', category: '代码', sensitive: false },
+  { name: 'eslintLintFile', desc: 'ESLint 单文件诊断', icon: 'fa-shield-halved', category: '代码', sensitive: false },
   { name: 'manageContext', desc: '上下文管理：clear_old/clear_tool_results/micro_compact/keep_essential（同步操作）', icon: 'fa-broom', category: '代理', sensitive: false },
   { name: 'autoSummarizeContext', desc: 'LLM 语义摘要当前对话上下文（异步，会消耗Token）', icon: 'fa-compress', category: '代理', sensitive: false },
   { name: 'listSkills', desc: '列出技能', icon: 'fa-lightbulb', category: '技能', sensitive: false },
@@ -305,21 +327,25 @@ const TOOL_DEFINITIONS = [
   { name: 'spreadsheetImportFile', desc: '从文件导入表格(xlsx/ods/csv)', icon: 'fa-file-arrow-up', category: '数据表格', sensitive: false },
   { name: 'spreadsheetExportFile', desc: '导出表格到文件(xlsx/ods/csv)', icon: 'fa-file-arrow-down', category: '数据表格', sensitive: false },
   // ---- 内置浏览器 (Playwright) ----
-  { name: 'browserNavigate', desc: '在内置浏览器中打开网址（基于Playwright，用户可干预）', icon: 'fa-globe', category: '浏览器', sensitive: false },
-  { name: 'browserScreenshot', desc: '截取内置浏览器当前页面截图', icon: 'fa-camera', category: '浏览器', sensitive: false },
-  { name: 'browserClick', desc: '点击内置浏览器页面元素', icon: 'fa-hand-pointer', category: '浏览器', sensitive: false },
-  { name: 'browserType', desc: '在内置浏览器页面元素中输入文字', icon: 'fa-keyboard', category: '浏览器', sensitive: false },
-  { name: 'browserGetContent', desc: '获取内置浏览器页面文本内容', icon: 'fa-file-lines', category: '浏览器', sensitive: false },
-  { name: 'browserScroll', desc: '滚动内置浏览器页面', icon: 'fa-arrows-up-down', category: '浏览器', sensitive: false },
-  { name: 'browserBack', desc: '内置浏览器后退', icon: 'fa-arrow-left', category: '浏览器', sensitive: false },
-  { name: 'browserForward', desc: '内置浏览器前进', icon: 'fa-arrow-right', category: '浏览器', sensitive: false },
-  { name: 'browserRefresh', desc: '刷新内置浏览器页面', icon: 'fa-rotate-right', category: '浏览器', sensitive: false },
-  { name: 'browserEvaluate', desc: '在页面中执行JavaScript代码', icon: 'fa-code', category: '浏览器', sensitive: false },
-  { name: 'browserWait', desc: '等待元素出现或指定时间', icon: 'fa-hourglass-half', category: '浏览器', sensitive: false },
-  { name: 'browserHover', desc: '鼠标悬停在页面元素上', icon: 'fa-arrow-pointer', category: '浏览器', sensitive: false },
-  { name: 'browserSelect', desc: '选择下拉框选项', icon: 'fa-list', category: '浏览器', sensitive: false },
-  { name: 'browserGetInfo', desc: '获取当前页面URL、标题等信息', icon: 'fa-circle-info', category: '浏览器', sensitive: false },
-  { name: 'browserClose', desc: '关闭内置浏览器', icon: 'fa-xmark', category: '浏览器', sensitive: false },
+  // 注意：Playwright 工具集不再标记为 sensitive（不再每次调用都弹敏感操作确认），
+  // 改为"首次使用授权"机制：第一次调用任意 Playwright 工具时弹出授权模态框，
+  // 用户同意后 settings.toolAuthGranted.playwright=true（持久化），之后允许使用；
+  // 不同意则在工具选择器中禁用所有 Playwright 工具。
+  { name: 'browserNavigate', desc: '在内置浏览器中打开网址（基于Playwright，用户可干预）', icon: 'fa-globe', category: '浏览器', sensitive: false, requiresAuth: 'playwright' },
+  { name: 'browserScreenshot', desc: '截取内置浏览器当前页面截图', icon: 'fa-camera', category: '浏览器', sensitive: false, requiresAuth: 'playwright' },
+  { name: 'browserClick', desc: '点击内置浏览器页面元素', icon: 'fa-hand-pointer', category: '浏览器', sensitive: false, requiresAuth: 'playwright' },
+  { name: 'browserType', desc: '在内置浏览器页面元素中输入文字', icon: 'fa-keyboard', category: '浏览器', sensitive: false, requiresAuth: 'playwright' },
+  { name: 'browserGetContent', desc: '获取内置浏览器页面文本内容', icon: 'fa-file-lines', category: '浏览器', sensitive: false, requiresAuth: 'playwright' },
+  { name: 'browserScroll', desc: '滚动内置浏览器页面', icon: 'fa-arrows-up-down', category: '浏览器', sensitive: false, requiresAuth: 'playwright' },
+  { name: 'browserBack', desc: '内置浏览器后退', icon: 'fa-arrow-left', category: '浏览器', sensitive: false, requiresAuth: 'playwright' },
+  { name: 'browserForward', desc: '内置浏览器前进', icon: 'fa-arrow-right', category: '浏览器', sensitive: false, requiresAuth: 'playwright' },
+  { name: 'browserRefresh', desc: '刷新内置浏览器页面', icon: 'fa-rotate-right', category: '浏览器', sensitive: false, requiresAuth: 'playwright' },
+  { name: 'browserEvaluate', desc: '在页面中执行JavaScript代码', icon: 'fa-code', category: '浏览器', sensitive: false, requiresAuth: 'playwright' },
+  { name: 'browserWait', desc: '等待元素出现或指定时间', icon: 'fa-hourglass-half', category: '浏览器', sensitive: false, requiresAuth: 'playwright' },
+  { name: 'browserHover', desc: '鼠标悬停在页面元素上', icon: 'fa-arrow-pointer', category: '浏览器', sensitive: false, requiresAuth: 'playwright' },
+  { name: 'browserSelect', desc: '选择下拉框选项', icon: 'fa-list', category: '浏览器', sensitive: false, requiresAuth: 'playwright' },
+  { name: 'browserGetInfo', desc: '获取当前页面URL、标题等信息', icon: 'fa-circle-info', category: '浏览器', sensitive: false, requiresAuth: 'playwright' },
+  { name: 'browserClose', desc: '关闭内置浏览器', icon: 'fa-xmark', category: '浏览器', sensitive: false, requiresAuth: 'playwright' },
   // ---- Goal / 长任务跟踪 ----
   { name: 'goalSet', desc: '设置/更新长期目标(让agent自动多轮推进)', icon: 'fa-bullseye', category: '代理', sensitive: false },
   { name: 'goalStatus', desc: '查看当前目标状态', icon: 'fa-circle-info', category: '代理', sensitive: false },
@@ -328,7 +354,11 @@ const TOOL_DEFINITIONS = [
   // ---- 外观主题 ----
   { name: 'adjustAppearance', desc: '调整应用外观：深浅色模式、强调色、配色方案', icon: 'fa-palette', category: '系统', sensitive: false },
   // ---- Computer Use Protocol ----
-  { name: 'computer', desc: '电脑控制（截屏/鼠标/键盘/滚动）', icon: 'fa-desktop', category: '电脑控制', sensitive: true },
+  // 注意：Computer Use 工具不再标记为 sensitive（不再每次调用都弹敏感操作确认），
+  // 改为"首次使用授权"机制：第一次调用时弹出授权模态框说明风险，
+  // 用户同意后 settings.toolAuthGranted.computerUse=true（持久化），之后允许使用；
+  // 不同意则禁用工具。
+  { name: 'computer', desc: '电脑控制（截屏/鼠标/键盘/滚动）', icon: 'fa-desktop', category: '电脑控制', sensitive: false, requiresAuth: 'computerUse' },
 ];
 
 // Dangerous command keywords for different platforms/shells
@@ -424,6 +454,8 @@ function getToolSchemas(enabledTools, mode) {
     deleteCanvasObject: { type: 'function', function: { name: 'deleteCanvasObject', description: '删除画布对象', parameters: { type: 'object', properties: { id: { type: 'string', description: '对象ID' } }, required: ['id'] } } },
     exportCanvasSVG: { type: 'function', function: { name: 'exportCanvasSVG', description: '导出画布为SVG文件到工作区', parameters: { type: 'object', properties: { filename: { type: 'string', description: 'SVG文件名（默认canvas.svg）' } }, required: [] } } },
     askQuestions: { type: 'function', function: { name: 'askQuestions', description: '向用户提出问题收集信息，支持单选/多选/自由输入。返回{ok:true,answers:Array}', parameters: { type: 'object', properties: { questions: { type: 'array', items: { type: 'object', properties: { question: { type: 'string', description: '问题文本' }, options: { type: 'array', items: { type: 'string' }, description: '选项列表(可选,留空则为自由输入)' }, multiSelect: { type: 'boolean', description: '是否多选(仅当有options时有效)' } }, required: ['question'] }, description: '问题列表' } }, required: ['questions'] } } },
+    eslintLint: { type: 'function', function: { name: 'eslintLint', description: '对当前 Code 模式工作区执行 ESLint 静态代码诊断。返回所有支持文件（JS/TS/JSX/TSX/Vue/Svelte 等）中的错误、警告与提示信息，包含文件路径、行号、列号、严重性、规则 ID 与消息。当用户报告代码有 bug、询问代码质量、要求重构或修复 lint 报错时优先调用本工具获取全量诊断。返回 {ok, summary:{total,errors,warnings,infos,fileCount,scannedFiles}, results:[{filePath,file,line,column,severity,message,ruleId}], error?}。', parameters: { type: 'object', properties: { files: { type: 'array', items: { type: 'string' }, description: '可选：仅诊断指定的文件列表（绝对路径或相对工作区路径）。不传则扫描整个工作区。' }, maxFiles: { type: 'number', description: '可选：单次扫描文件数上限（默认 500）' } }, required: [] } } },
+    eslintLintFile: { type: 'function', function: { name: 'eslintLintFile', description: '对单个文件执行 ESLint 诊断（用于打开文件后实时检查或聚焦修复某文件的 lint 问题）。返回 {ok, summary, results, error?}。', parameters: { type: 'object', properties: { path: { type: 'string', description: '要诊断的文件路径（绝对路径或工作区相对路径）' } }, required: ['path'] } } },
     downloadFile: { type: 'function', function: { name: 'downloadFile', description: '从互联网下载文件到工作区目录', parameters: { type: 'object', properties: { url: { type: 'string', description: '文件URL' }, filename: { type: 'string', description: '保存的文件名(可选,默认从URL提取)' } }, required: ['url'] } } },
     inviteGame: { type: 'function', function: { name: 'inviteGame', description: '邀请用户玩游戏。游戏类型：flyingFlower(飞花令,诗词接龙)、sanguosha(三国杀,卡牌策略)、undercover(谁是卧底,推理游戏)。会向用户展示一张游戏邀请卡片，用户可以接受或忽略，并指定AI参与人数。', parameters: { type: 'object', properties: { game: { type: 'string', enum: ['flyingFlower', 'sanguosha', 'undercover'], description: '游戏类型' }, message: { type: 'string', description: '邀请语（显示在邀请卡片上）' }, suggestedAgents: { type: 'number', description: '建议的AI Agent参与人数(用户可调整)' } }, required: ['game'] } } },
     mcpListTools: { type: 'function', function: { name: 'mcpListTools', description: '列出并刷新所有已连接MCP服务器的工具。刷新后MCP工具会作为独立工具可直接调用（mcp__serverName__toolName格式）。', parameters: { type: 'object', properties: { serverName: { type: 'string', description: '可选,指定MCP服务器名称,不传则列出所有' } }, required: [] } } },

@@ -28,6 +28,15 @@ class EmailService {
   // ---- Configuration ----
 
   configure(emailSettings) {
+    // 控制白名单：仅接受这些发件人的邮件控制指令
+    // 默认包含 ownerAddress（向后兼容）；用户可在设置中添加更多
+    const allowedSenders = Array.isArray(emailSettings.allowedSenders)
+      ? emailSettings.allowedSenders.map(s => String(s || '').trim().toLowerCase()).filter(Boolean)
+      : [];
+    const ownerAddr = String(emailSettings.ownerAddress || '').trim().toLowerCase();
+    if (ownerAddr && !allowedSenders.includes(ownerAddr)) {
+      allowedSenders.push(ownerAddr);
+    }
     this.config = {
       smtp: {
         host: emailSettings.smtpHost,
@@ -56,7 +65,25 @@ class EmailService {
       approvalTimeout: parseInt(emailSettings.approvalResendMinutes) || 5,     // TOTP validity window in minutes
       maxResends: parseInt(emailSettings.maxResends) || 3,
       resendInterval: (parseInt(emailSettings.resendIntervalMinutes) || 30) * 60 * 1000,
+      allowedSenders,
     };
+  }
+
+  /**
+   * 检查发件人是否在控制白名单内
+   * - 如果白名单为空（即未配置 ownerAddress 也未配置 allowedSenders），返回 false（拒绝所有）
+   * - 如果白名单非空，发件人邮箱地址（小写）匹配任一条目则通过
+   * - fromAddr 可能是 "Name <email@example.com>" 格式，需提取邮箱部分
+   */
+  isSenderAllowed(fromAddr) {
+    if (!this.config?.allowedSenders || this.config.allowedSenders.length === 0) {
+      return false;
+    }
+    const email = String(fromAddr || '').toLowerCase();
+    // 提取 <...> 中的邮箱地址
+    const match = email.match(/<([^>]+)>/);
+    const addr = (match ? match[1] : email).trim();
+    return this.config.allowedSenders.some(s => s === addr || email.includes(`<${s}>`) || email.endsWith(s));
   }
 
   // ---- TOTP ----
@@ -161,16 +188,22 @@ class EmailService {
     }
 
     try {
-      // Search for unseen emails
+      // 构建搜索条件：
+      // - 白名单仅含 ownerAddress（默认场景）→ IMAP 直接按 FROM ownerAddress 过滤，效率高
+      // - 白名单含多个发件人 → 不在 IMAP 层做 FROM 过滤，下载所有未读邮件后客户端二次过滤
+      //   （imap-simple 对 OR 复杂查询支持有限，且需对所有白名单地址都生效）
+      const allowed = this.config?.allowedSenders || [];
+      const ownerAddr = String(this.config?.ownerAddress || '').trim();
+      const multiSender = allowed.length > 1;
       const searchCriteria = ['UNSEEN'];
-      if (this.config.ownerAddress) {
-        searchCriteria.push(['FROM', this.config.ownerAddress]);
+      if (ownerAddr && !multiSender) {
+        searchCriteria.push(['FROM', ownerAddr]);
       }
-      console.log('[Email] Searching IMAP with criteria:', JSON.stringify(searchCriteria));
+      console.log('[Email] Searching IMAP with criteria:', JSON.stringify(searchCriteria), 'whitelist:', JSON.stringify(allowed), 'multiSender:', multiSender);
 
       const fetchOptions = { bodies: [''], markSeen: true };
-      const messages = await this.imapConnection.search(searchCriteria, fetchOptions);
-      console.log('[Email] Found', messages.length, 'new messages');
+      let messages = await this.imapConnection.search(searchCriteria, fetchOptions);
+      console.log('[Email] Found', messages.length, 'new messages (pre-whitelist-filter)');
 
       const results = [];
       for (const msg of messages) {
@@ -180,10 +213,16 @@ class EmailService {
           continue;
         }
         const parsed = await simpleParser(all.body);
-        console.log('[Email] Parsed message UID:', msg.attributes?.uid, 'from:', parsed.from?.text, 'subject:', parsed.subject);
+        const fromAddr = parsed.from?.text || '';
+        console.log('[Email] Parsed message UID:', msg.attributes?.uid, 'from:', fromAddr, 'subject:', parsed.subject);
+        // 白名单二次过滤：仅接受白名单内发件人的邮件
+        if (!this.isSenderAllowed(fromAddr)) {
+          console.warn('[Email] Rejecting email from non-whitelisted sender:', fromAddr);
+          continue;
+        }
         results.push({
           uid: msg.attributes?.uid,
-          from: parsed.from?.text || '',
+          from: fromAddr,
           subject: parsed.subject || '',
           text: parsed.text || '',
           html: parsed.html || '',

@@ -296,6 +296,14 @@
   const todoInput = document.getElementById('todo-input');
   const approvalPanel = document.getElementById('approval-panel');
   const approvalContent = document.getElementById('approval-content');
+  // 工具首次使用授权模态框（Playwright / Computer Use）
+  const toolAuthModal = document.getElementById('tool-auth-modal');
+  const toolAuthTitleEl = document.getElementById('tool-auth-title');
+  const toolAuthIconEl = document.getElementById('tool-auth-icon');
+  const toolAuthWarningEl = document.getElementById('tool-auth-warning');
+  const toolAuthToolEl = document.getElementById('tool-auth-tool');
+  // 当前等待授权回调的 agent 实例（chat / code / babe 三者之一）
+  let _toolAuthAgent = null;
   const btnStop = document.getElementById('btn-stop');
   const btnAttachFile = document.getElementById('btn-attach-file');
   const btnCamera = document.getElementById('btn-camera');
@@ -918,6 +926,9 @@
       case 'approval':
         showApprovalPanel(data.toolName, data.args);
         window.api.webControlPushApproval(data.toolName, data.args);
+        break;
+      case 'tool-auth-required':
+        showToolAuthModal(data.toolName, data.category, agent);
         break;
       case 'sub-agent-start': {
         const tarotPart = tarotVisible && data.tarot
@@ -2117,23 +2128,46 @@
     const pricing = getSessionPricing(agentInstance);
     let costRow = '';
     if (pricing) {
-      // 缓存命中（cache read）按 0.1x 计费（适用于所有支持的模型）
-      // 缓存创建（cache write）按 1.25x 计费 — 仅 Claude 系列模型有此计费项
-      const cacheReadCost = su.cached * pricing.promptPerK / 1000 * 0.1;
-      const nonCachedPrompt = Math.max(0, su.prompt - su.cached - (su.cacheCreation || 0));
-      const normalPromptCost = nonCachedPrompt * pricing.promptPerK / 1000;
-      const cacheWriteCost = pricing.hasCacheWrite
-        ? (su.cacheCreation || 0) * pricing.promptPerK / 1000 * 1.25
+      // 新格式：inputPerM / cacheReadPerM / outputPerM / cacheWritePerM（每 1M tokens 多少美元）
+      // 旧格式回退：promptPerK/completionPerK（每 1K tokens）
+      const toPerM = (v, isPerK) => isPerK ? (Number(v) || 0) * 1000 : (Number(v) || 0);
+      const inputPerM = toPerM(pricing.inputPerM ?? pricing.promptPerK, !pricing.inputPerM && !!pricing.promptPerK);
+      const cacheReadPerM = pricing.cacheReadPerM != null ? Number(pricing.cacheReadPerM) : inputPerM * 0.1;
+      const outputPerM = toPerM(pricing.outputPerM ?? pricing.completionPerK, !pricing.outputPerM && !!pricing.completionPerK);
+      const cacheWritePerM = pricing.hasCacheWrite
+        ? (pricing.cacheWritePerM != null ? Number(pricing.cacheWritePerM) : inputPerM * 1.25)
         : 0;
-      const promptBilled = normalPromptCost + cacheReadCost + cacheWriteCost;
-      const completionBilled = su.completion * pricing.completionPerK / 1000;
-      const totalCost = promptBilled + completionBilled;
+      // 应用峰谷倍率
+      const ph = agentInstance?.settings?.budget?.peakHours || {};
+      let inMul = 1, crMul = 1, outMul = 1, cwMul = 1;
+      if (ph.enabled) {
+        const hour = new Date().getHours();
+        const s = Number(ph.start) ?? 0;
+        const e = Number(ph.end) ?? 24;
+        const isPeak = s <= e ? (hour >= s && hour < e) : (hour >= s || hour < e);
+        if (isPeak) {
+          inMul = Number(ph.inputMul) || 1;
+          crMul = Number(ph.cacheReadMul) || 1;
+          outMul = Number(ph.outputMul) || 1;
+          cwMul = Number(ph.cacheWriteMul) || 1;
+        }
+      }
+      const nonCachedPrompt = Math.max(0, su.prompt - su.cached - (su.cacheCreation || 0));
+      const inputCost = (nonCachedPrompt / 1e6) * inputPerM * inMul;
+      const cacheReadCost = (su.cached / 1e6) * cacheReadPerM * crMul;
+      const outputCost = (su.completion / 1e6) * outputPerM * outMul;
+      const cacheWriteCost = (su.cacheCreation || 0) / 1e6 * cacheWritePerM * cwMul;
+      const promptBilled = inputCost + cacheReadCost + cacheWriteCost;
+      const totalCost = promptBilled + outputCost;
       const cacheWriteNote = pricing.hasCacheWrite ? '' : '<div class="context-tooltip-row" style="font-size:10px;color:var(--text-tertiary)"><span>　(此模型不计缓存写入费)</span></div>';
       costRow = `<div class="context-tooltip-row" style="border-top:1px solid var(--border);padding-top:4px">
         <span>费用（${pricing.model}）</span><span>$${totalCost.toFixed(5)}</span>
       </div>
       <div class="context-tooltip-row" style="font-size:10px;color:var(--text-tertiary)">
-        <span>　提示 $${(promptBilled).toFixed(5)}</span><span>补全 $${completionBilled.toFixed(5)}</span>
+        <span>　输入 $${inputCost.toFixed(5)}</span><span>输出 $${outputCost.toFixed(5)}</span>
+      </div>
+      <div class="context-tooltip-row" style="font-size:10px;color:var(--text-tertiary)">
+        <span>　缓存读 $${cacheReadCost.toFixed(5)}</span><span>缓存写 $${cacheWriteCost.toFixed(5)}</span>
       </div>${cacheWriteNote}`;
     }
     return `
@@ -2150,19 +2184,31 @@
   }
 
   // 获取当前会话所用模型的单价配置（来自 settings.budget.models）
+  // 支持新格式（inputPerM/cacheReadPerM/outputPerM/cacheWritePerM/hasCacheWrite）
+  // 和旧格式（promptPerK/completionPerK）回退
   function getSessionPricing(agentInstance) {
     try {
       const model = agentInstance?.settings?.llm?.model;
       if (!model) return null;
       const prices = agentInstance?.settings?.budget?.models || {};
       const p = prices[model];
-      if (!p || !p.promptPerK) return null;
-      // 仅 Claude 系列模型有缓存创建（cache write）的额外计费（1.25x）
-      // 其他模型（OpenAI/DeepSeek 等）只有缓存读取（cache read），按 0.1x 计费
-      const isClaude = /claude/i.test(model);
+      if (!p) return null;
+      // 优先识别新格式字段
+      const hasNew = p.inputPerM != null || p.outputPerM != null || p.cacheReadPerM != null || p.cacheWritePerM != null;
+      const hasOld = p.promptPerK != null || p.completionPerK != null;
+      if (!hasNew && !hasOld) return null;
+      // hasCacheWrite 显式配置优先，否则按模型名推断（Claude 系默认 true）
+      const hasCacheWrite = p.hasCacheWrite != null ? !!p.hasCacheWrite : /claude/i.test(model);
       return {
-        model, promptPerK: p.promptPerK, completionPerK: p.completionPerK || 0,
-        hasCacheWrite: isClaude
+        model,
+        inputPerM: p.inputPerM,
+        cacheReadPerM: p.cacheReadPerM,
+        outputPerM: p.outputPerM,
+        cacheWritePerM: p.cacheWritePerM,
+        // 旧字段保留以便回退
+        promptPerK: p.promptPerK,
+        completionPerK: p.completionPerK,
+        hasCacheWrite
       };
     } catch { return null; }
   }
@@ -2238,6 +2284,104 @@
 
   // 定时更新进度条
   setInterval(updateContextProgress, 1000);
+
+  // 刷新上下文指示器右侧的实时预算进度条（今日花费/上限）
+  // 在 LLM 响应结束、token 用量更新后调用
+  async function refreshBudgetMiniBars() {
+    try {
+      const st = await window.api.budgetGetStatus();
+      if (!st?.ok) return;
+      const daily = st.daily || {};
+      const monthly = st.monthly || {};
+      // 三种模式的预算小条使用同一份数据（按当日总花费）
+      const targets = ['chat-budget-mini-bar', 'code-budget-mini-bar', 'babe-budget-mini-bar'];
+      for (const id of targets) {
+        const el = document.getElementById(id);
+        if (!el) continue;
+        const cost = daily.costUSD || 0;
+        const limit = daily.limitUSD || 0;
+        // 仅在 (有限额) 或 (已花费 > 0) 时显示
+        if (limit > 0 || cost > 0) {
+          el.style.display = '';
+          el.dataset.level = daily.level || 'normal';
+          const fill = el.querySelector('.bmb-fill');
+          const costEl = el.querySelector('.bmb-cost');
+          if (fill) fill.style.width = `${Math.min(100, daily.pct || 0)}%`;
+          if (costEl) {
+            const fmtCost = cost >= 0.01 ? `$${cost.toFixed(4)}` : `$${cost.toFixed(6)}`;
+            costEl.textContent = limit > 0 ? `${fmtCost} / $${limit.toFixed(2)}` : fmtCost;
+          }
+          // title 包含今日/本月详情
+          const peakTag = (st.peakHours?.enabled) ? ` · 峰时段 ${st.peakHours.start}-${st.peakHours.end}` : '';
+          el.title = `今日 $${cost.toFixed(4)}${limit > 0 ? ` / $${limit.toFixed(2)}` : ''} · 本月 $${(monthly.costUSD || 0).toFixed(4)}${peakTag}`;
+        } else {
+          el.style.display = 'none';
+        }
+      }
+    } catch (_) { /* 静默失败：不影响主流程 */ }
+  }
+  // 启动时和每 5 秒刷新一次（实时性，但又不至于过频）
+  refreshBudgetMiniBars();
+  setInterval(refreshBudgetMiniBars, 5000);
+  // 监听 LLM 流结束事件以即时刷新
+  try {
+    window.api.onStreamEnd?.(() => { setTimeout(refreshBudgetMiniBars, 300); });
+  } catch (_) {}
+
+  // 刷新上下文指示器右侧的"当前会话消费"小数字（按 agent.sessionUsage + 价格表实时计算）
+  function refreshSessionCostMini() {
+    try {
+      const agents = [
+        { id: 'chat-session-cost', agent: typeof agent !== 'undefined' ? agent : null },
+        { id: 'code-session-cost', agent: typeof codeAgent !== 'undefined' ? codeAgent : null },
+        { id: 'babe-session-cost', agent: typeof babeAgent !== 'undefined' ? babeAgent : null }
+      ];
+      for (const { id, agent: a } of agents) {
+        const el = document.getElementById(id);
+        if (!el) continue;
+        const su = a?.sessionUsage;
+        const pricing = a ? getSessionPricing(a) : null;
+        if (!su || !pricing) { el.style.display = 'none'; continue; }
+        // 同 renderSessionTokenStats 的费用计算
+        const toPerM = (v, isPerK) => isPerK ? (Number(v) || 0) * 1000 : (Number(v) || 0);
+        const inputPerM = toPerM(pricing.inputPerM ?? pricing.promptPerK, !pricing.inputPerM && !!pricing.promptPerK);
+        const cacheReadPerM = pricing.cacheReadPerM != null ? Number(pricing.cacheReadPerM) : (inputPerM || 0) * 0.1;
+        const outputPerM = toPerM(pricing.outputPerM ?? pricing.completionPerK, !pricing.outputPerM && !!pricing.completionPerK);
+        const cacheWritePerM = pricing.hasCacheWrite
+          ? (pricing.cacheWritePerM != null ? Number(pricing.cacheWritePerM) : (inputPerM || 0) * 1.25)
+          : 0;
+        const ph = a?.settings?.budget?.peakHours || {};
+        let inMul = 1, crMul = 1, outMul = 1, cwMul = 1;
+        if (ph.enabled) {
+          const hour = new Date().getHours();
+          const s = Number(ph.start) ?? 0;
+          const e = Number(ph.end) ?? 24;
+          const isPeak = s <= e ? (hour >= s && hour < e) : (hour >= s || hour < e);
+          if (isPeak) {
+            inMul = Number(ph.inputMul) || 1;
+            crMul = Number(ph.cacheReadMul) || 1;
+            outMul = Number(ph.outputMul) || 1;
+            cwMul = Number(ph.cacheWriteMul) || 1;
+          }
+        }
+        const nonCachedPrompt = Math.max(0, su.prompt - su.cached - (su.cacheCreation || 0));
+        const totalCost = (nonCachedPrompt / 1e6) * inputPerM * inMul
+          + (su.cached / 1e6) * cacheReadPerM * crMul
+          + (su.completion / 1e6) * outputPerM * outMul
+          + ((su.cacheCreation || 0) / 1e6) * cacheWritePerM * cwMul;
+        if (totalCost > 0) {
+          el.style.display = '';
+          const valEl = el.querySelector('.scm-value');
+          const fmtCost = totalCost >= 0.01 ? `$${totalCost.toFixed(4)}` : `$${totalCost.toFixed(6)}`;
+          if (valEl) valEl.textContent = (su.estimated ? '~' : '') + fmtCost;
+          el.title = `当前会话消费${su.estimated ? ' (估算)' : ''}：${fmtCost}\n模型：${pricing.model}`;
+        } else {
+          el.style.display = 'none';
+        }
+      }
+    } catch (_) { /* 静默失败 */ }
+  }
+  setInterval(refreshSessionCostMini, 1000);
 
   btnReoptimizeTools?.addEventListener('click', async () => {
     if (!agent.settings?.autoOptimizeToolSelection) return;
@@ -4375,6 +4519,80 @@
     agent.resolveApproval(false);
   });
 
+  // ---- 工具首次使用授权模态框（Playwright / Computer Use）----
+  // 不同类别展示不同的风险说明
+  const _TOOL_AUTH_META = {
+    playwright: {
+      title: '内置浏览器授权',
+      icon: 'fa-globe',
+      warning: `<strong>AI 请求使用内置浏览器（Playwright）。</strong><br>该工具可由 AI 自动打开网页、点击元素、输入文字并截图。可能涉及：`
+        + `<ul><li>自动浏览未知网页（可能触发验证码或追踪）</li>`
+        + `<li>自动填写表单（请勿在敏感网站登录时使用）</li>`
+        + `<li>页面截图可能包含隐私内容</li></ul>`
+    },
+    computerUse: {
+      title: '电脑控制授权',
+      icon: 'fa-desktop',
+      warning: `<strong>AI 请求使用电脑控制（Computer Use Protocol）。</strong><br>该工具将截取屏幕、模拟鼠标点击与键盘输入，可控制整个桌面。可能涉及：`
+        + `<ul><li>截取整个屏幕（可能包含敏感信息）</li>`
+        + `<li>自动点击任意位置（包括系统按钮、文件）</li>`
+        + `<li>模拟键盘输入（可能触发快捷键、关闭窗口）</li></ul>`
+        + `<strong>请确保已保存所有工作，关闭敏感窗口后再授权。</strong>`
+    }
+  };
+
+  /**
+   * 显示"工具首次使用授权"模态框。
+   * @param {string} toolName - 当前调用的工具名（用于显示）
+   * @param {'playwright'|'computerUse'} category - 授权类别
+   * @param {object} agentInstance - 当前模式的 agent 实例（用于回调 resolveToolAuth）
+   */
+  function showToolAuthModal(toolName, category, agentInstance) {
+    if (!toolAuthModal) return;
+    _toolAuthAgent = agentInstance || null;
+    const meta = _TOOL_AUTH_META[category] || {
+      title: '工具授权',
+      icon: 'fa-shield-halved',
+      warning: `<strong>AI 请求使用工具 ${toolName}。</strong><br>该工具需要您授权后才能使用。`
+    };
+    if (toolAuthTitleEl) toolAuthTitleEl.textContent = meta.title;
+    if (toolAuthIconEl) toolAuthIconEl.className = `fa-solid ${meta.icon}`;
+    if (toolAuthWarningEl) toolAuthWarningEl.innerHTML = meta.warning;
+    const toolDef = TOOL_DEFINITIONS.find(t => t.name === toolName);
+    const dispName = toolDef?.desc || toolName;
+    if (toolAuthToolEl) {
+      toolAuthToolEl.innerHTML = `当前工具：<code>${escapeHtmlSimple(toolName)}</code> — ${escapeHtmlSimple(dispName)}`;
+    }
+    toolAuthModal.classList.remove('hidden');
+    WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#tool-auth-modal', attr: 'class', value: toolAuthModal.className });
+    // 系统通知
+    sendAppNotification('approval', '工具授权请求', `AI 请求使用: ${dispName}`);
+  }
+
+  function _closeToolAuthModal() {
+    if (!toolAuthModal) return;
+    toolAuthModal.classList.add('hidden');
+    WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#tool-auth-modal', attr: 'class', value: toolAuthModal.className });
+  }
+
+  function _resolveToolAuth(decision) {
+    _closeToolAuthModal();
+    const a = _toolAuthAgent;
+    _toolAuthAgent = null;
+    try {
+      if (a && typeof a.resolveToolAuth === 'function') a.resolveToolAuth(decision);
+    } catch (e) { /* ignore */ }
+  }
+
+  const _btnToolAuthDeny = document.getElementById('btn-tool-auth-deny');
+  const _btnToolAuthOnce = document.getElementById('btn-tool-auth-once');
+  const _btnToolAuthAlways = document.getElementById('btn-tool-auth-always');
+  const _btnCloseToolAuth = document.getElementById('btn-close-tool-auth');
+  if (_btnToolAuthDeny) _btnToolAuthDeny.addEventListener('click', () => _resolveToolAuth('deny'));
+  if (_btnToolAuthOnce) _btnToolAuthOnce.addEventListener('click', () => _resolveToolAuth('allow-once'));
+  if (_btnToolAuthAlways) _btnToolAuthAlways.addEventListener('click', () => _resolveToolAuth('allow-always'));
+  if (_btnCloseToolAuth) _btnCloseToolAuth.addEventListener('click', () => _resolveToolAuth('deny'));
+
   // ---- Tools Page ----
   function renderToolsStats(mode) {
     mode = mode || codeEditorModeFilter || 'chat';
@@ -4565,6 +4783,69 @@
           btn.disabled = false;
         }
       });
+    });
+
+    // 渲染工具首次使用授权状态列表（Playwright / Computer Use）
+    renderToolAuthList();
+  }
+
+  /**
+   * 渲染工具首次使用授权状态列表（在工具管理页底部）。
+   * 显示每个可授权工具的类别、当前状态（已授权/待授权）和撤销按钮。
+   */
+  async function renderToolAuthList() {
+    const listEl = document.getElementById('tool-auth-list');
+    if (!listEl) return;
+    let settings;
+    try { settings = await window.api.getSettings(); }
+    catch (e) { return; }
+    const granted = settings?.toolAuthGranted || { playwright: false, computerUse: false };
+    const items = [
+      {
+        category: 'playwright',
+        icon: 'fa-globe',
+        name: '内置浏览器（Playwright）',
+        granted: !!granted.playwright
+      },
+      {
+        category: 'computerUse',
+        icon: 'fa-desktop',
+        name: '电脑控制（Computer Use）',
+        granted: !!granted.computerUse
+      }
+    ];
+    listEl.innerHTML = items.map(it => `
+      <div class="tool-auth-item" data-category="${it.category}">
+        <div class="ta-name"><i class="fa-solid ${it.icon}"></i> ${escapeHtml(it.name)}</div>
+        <div class="ta-status ${it.granted ? 'granted' : 'pending'}">${it.granted ? '已授权' : '待授权'}</div>
+        <button class="ta-revoke" ${it.granted ? '' : 'disabled'} data-cat="${it.category}">
+          <i class="fa-solid fa-rotate-left"></i> 撤销
+        </button>
+      </div>
+    `).join('');
+    // 绑定撤销按钮
+    listEl.querySelectorAll('.ta-revoke').forEach(btn => {
+      btn.onclick = async () => {
+        const cat = btn.dataset.cat;
+        if (!cat) return;
+        const ok = await window.confirmDialog(
+          `撤销"${cat === 'playwright' ? '内置浏览器' : '电脑控制'}"的授权？\n\n下次 AI 调用该工具时将再次弹出授权询问。`,
+          '撤销工具授权'
+        );
+        if (!ok) return;
+        try {
+          const s = await window.api.getSettings();
+          if (!s.toolAuthGranted) s.toolAuthGranted = { playwright: false, computerUse: false };
+          s.toolAuthGranted[cat] = false;
+          await window.api.saveSettings(s);
+          // 同步刷新当前 agent 实例的 settings 和会话内缓存
+          for (const a of [agent, codeAgent, babeAgent]) {
+            if (a && a.settings) a.settings = s;
+            if (a && a._sessionToolAuth) a._sessionToolAuth[cat] = false;
+          }
+          renderToolAuthList();
+        } catch (e) { /* ignore */ }
+      };
     });
   }
 
@@ -5146,15 +5427,25 @@
         return;
       }
       const fmt = (n) => (n || 0).toLocaleString();
+      const fmtUSD = (v) => `$${(Number(v) || 0).toFixed(4)}`;
       const data = res;
+      const hasCost = (data.costUSD || 0) > 0 || (data.inputCost || 0) > 0 || (data.outputCost || 0) > 0;
       const cards = [
         { label: '总 Token', value: fmt(data.totalTokens), accent: true },
         { label: '提示 Token', value: fmt(data.promptTokens) },
         { label: '生成 Token', value: fmt(data.completionTokens) },
         { label: '请求次数', value: fmt(data.requestCount) }
       ];
+      // 若有费用数据则加入金钱卡片
+      if (hasCost) {
+        cards.push({ label: '总消费 (USD)', value: fmtUSD(data.costUSD), accent: true, kind: 'cost' });
+        cards.push({ label: '输入消费', value: fmtUSD(data.inputCost), kind: 'cost' });
+        cards.push({ label: '输出消费', value: fmtUSD(data.outputCost), kind: 'cost' });
+        if ((data.cacheReadCost || 0) > 0) cards.push({ label: '缓存读消费', value: fmtUSD(data.cacheReadCost), kind: 'cost' });
+        if ((data.cacheWriteCost || 0) > 0) cards.push({ label: '缓存写消费', value: fmtUSD(data.cacheWriteCost), kind: 'cost' });
+      }
       summaryEl.innerHTML = cards.map(c =>
-        `<div class="usage-card${c.accent ? ' accent' : ''}">
+        `<div class="usage-card${c.accent ? ' accent' : ''}${c.kind === 'cost' ? ' cost' : ''}">
           <div class="usage-card-label">${c.label}</div>
           <div class="usage-card-value">${c.value}</div>
         </div>`
@@ -5171,7 +5462,8 @@
         chartEl.innerHTML = chartData.map(d => {
           const h = Math.max(2, Math.round((d.total / max) * 140));
           const label = isHourly ? `${d.hour}h` : d.date.slice(5);
-          const title = isHourly ? `${d.hour}:00 - ${fmt(d.total)} tokens` : `${d.date}: ${fmt(d.total)} tokens`;
+          const costStr = (d.costUSD || 0) > 0 ? ` · $${(d.costUSD || 0).toFixed(4)}` : '';
+          const title = isHourly ? `${d.hour}:00 - ${fmt(d.total)} tokens${costStr}` : `${d.date}: ${fmt(d.total)} tokens${costStr}`;
           return `<div title="${title}" style="flex:1;min-width:4px;height:${h}px;background:var(--accent);border-radius:2px 2px 0 0;position:relative;">
             <div style="position:absolute;bottom:-16px;left:50%;transform:translateX(-50%);font-size:9px;opacity:0.5;white-space:nowrap;">${label}</div>
           </div>`;
@@ -5184,12 +5476,13 @@
       if (modelEntries.length === 0) {
         modelsEl.innerHTML = '<div style="opacity:0.5;font-size:12px;">无数据</div>';
       } else {
-        modelsEl.innerHTML = modelEntries.map(([id, st]) =>
-          `<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border);">
+        modelsEl.innerHTML = modelEntries.map(([id, st]) => {
+          const costStr = (st.costUSD || 0) > 0 ? ` · <span style="color:var(--accent)">$${(st.costUSD || 0).toFixed(4)}</span>` : '';
+          return `<div style="display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border);">
             <span style="font-family:monospace;font-size:12px;">${id}</span>
-            <span><b>${fmt(st.total)}</b> tokens · ${fmt(st.count)} 次</span>
-          </div>`
-        ).join('');
+            <span><b>${fmt(st.total)}</b> tokens · ${fmt(st.count)} 次${costStr}</span>
+          </div>`;
+        }).join('');
       }
     } catch (e) {
       summaryEl.innerHTML = '<div>错误: ' + (e?.message || e) + '</div>';
@@ -5408,6 +5701,8 @@
     eid('setting-email-max-resends', 'maxResends', 3);
     const emailEnabled = document.getElementById('setting-email-enabled');
     if (emailEnabled) emailEnabled.checked = !!email.enabled;
+    // 渲染控制白名单
+    renderEmailAllowedSenders(email.allowedSenders || []);
     setupEmailEvents();
 
     // Web Control settings
@@ -5441,6 +5736,87 @@
     if (imapGroup) imapGroup.style.display = (mode === 'receive-only' || mode === 'send-receive') ? '' : 'none';
   }
 
+  // 渲染邮件控制白名单列表
+  function renderEmailAllowedSenders(senders) {
+    const listEl = document.getElementById('email-allowed-senders-list');
+    if (!listEl) return;
+    listEl.innerHTML = '';
+    const arr = Array.isArray(senders) ? senders : [];
+    if (arr.length === 0) {
+      const empty = document.createElement('div');
+      empty.style.cssText = 'font-size:12px;color:var(--text-tertiary);padding:6px 0';
+      empty.textContent = '白名单为空。将只接受"用户邮箱地址"的指令。';
+      listEl.appendChild(empty);
+      return;
+    }
+    for (const addr of arr) {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 10px;background:var(--bg-tertiary);border-radius:6px;border:1px solid var(--border)';
+      const icon = document.createElement('i');
+      icon.className = 'fa-solid fa-envelope';
+      icon.style.cssText = 'font-size:12px;color:var(--accent)';
+      const text = document.createElement('span');
+      text.style.cssText = 'flex:1;font-size:13px;word-break:break-all';
+      text.textContent = addr;
+      const delBtn = document.createElement('button');
+      delBtn.className = 'btn-icon btn-sm';
+      delBtn.title = '删除';
+      delBtn.innerHTML = '<i class="fa-solid fa-xmark"></i>';
+      delBtn.style.cssText = 'color:var(--danger);padding:2px 6px';
+      delBtn.addEventListener('click', async () => {
+        const s = await window.api.getSettings();
+        const cur = Array.isArray(s.email?.allowedSenders) ? s.email.allowedSenders : [];
+        const next = cur.filter(x => String(x).toLowerCase() !== String(addr).toLowerCase());
+        s.email = { ...(s.email || {}), allowedSenders: next };
+        await saveSettings(s);
+        renderEmailAllowedSenders(next);
+      });
+      row.appendChild(icon);
+      row.appendChild(text);
+      row.appendChild(delBtn);
+      listEl.appendChild(row);
+    }
+  }
+
+  // 绑定白名单输入框添加按钮事件（只绑定一次）
+  let emailAllowedSendersEventsSetup = false;
+  function setupEmailAllowedSendersEvents() {
+    if (emailAllowedSendersEventsSetup) return;
+    emailAllowedSendersEventsSetup = true;
+    const addBtn = document.getElementById('btn-email-add-sender');
+    const input = document.getElementById('email-allowed-sender-input');
+    if (!addBtn || !input) return;
+
+    const doAdd = async () => {
+      const val = (input.value || '').trim().toLowerCase();
+      if (!val) return;
+      // 简单邮箱格式校验
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(val)) {
+        alert('请输入有效的邮箱地址');
+        return;
+      }
+      const s = await window.api.getSettings();
+      const cur = Array.isArray(s.email?.allowedSenders) ? s.email.allowedSenders.map(x => String(x).toLowerCase()) : [];
+      if (cur.includes(val)) {
+        alert('该邮箱已在白名单中');
+        return;
+      }
+      cur.push(val);
+      s.email = { ...(s.email || {}), allowedSenders: cur };
+      await saveSettings(s);
+      input.value = '';
+      renderEmailAllowedSenders(cur);
+    };
+
+    addBtn.addEventListener('click', doAdd);
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        doAdd();
+      }
+    });
+  }
+
   function setupEmailEvents() {
     if (emailEventsSetup) return;
     emailEventsSetup = true;
@@ -5449,6 +5825,9 @@
     document.getElementById('setting-email-mode')?.addEventListener('change', (e) => {
       updateEmailModeVisibility(e.target.value);
     });
+
+    // 白名单按钮事件
+    setupEmailAllowedSendersEvents();
 
     // Generate TOTP
     document.getElementById('btn-email-gen-totp')?.addEventListener('click', async () => {
@@ -5514,6 +5893,8 @@
 
   async function saveEmailSettings() {
     const s = await window.api.getSettings();
+    // 保留已有的 allowedSenders 列表（白名单由专门的添加/删除按钮管理，这里只读不覆盖）
+    const existingAllowed = Array.isArray(s.email?.allowedSenders) ? s.email.allowedSenders : [];
     s.email = {
       enabled: document.getElementById('setting-email-enabled')?.checked || false,
       mode: document.getElementById('setting-email-mode')?.value || 'send-receive',
@@ -5530,6 +5911,7 @@
       pollInterval: parseInt(document.getElementById('setting-email-poll-interval')?.value) || 30,
       resendIntervalMinutes: parseInt(document.getElementById('setting-email-resend-interval')?.value) || 30,
       maxResends: parseInt(document.getElementById('setting-email-max-resends')?.value) || 3,
+      allowedSenders: existingAllowed,
     };
     await saveSettings(s);
   }
@@ -5782,31 +6164,49 @@
 
   // ── Budget Control Settings ──
   // 数据结构：settings.budget = {
-  //   monthlyCapUsd: number (0 = 不限制),
-  //   overAction: 'warn' | 'fallback' | 'stop',
-  //   fallbackModel: string,
-  //   models: { [modelId]: { promptPerK: number, completionPerK: number } }
+  //   monthlyCapUsd, dailyLimitUSD, overAction, fallbackModel, warningThreshold,
+  //   models: { [modelId]: { inputPerM, cacheReadPerM, outputPerM, cacheWritePerM, hasCacheWrite } },
+  //   peakHours: { enabled, start, end, inputMul, cacheReadMul, outputMul, cacheWriteMul }
   // }
   async function loadBudgetSettings() {
     const s = await window.api.getSettings();
     const budget = s.budget || {};
+    const dailyCapInput = document.getElementById('setting-budget-daily-cap');
     const capInput = document.getElementById('setting-budget-monthly-cap');
     const actionSel = document.getElementById('setting-budget-action');
     const fallbackInput = document.getElementById('setting-budget-fallback-model');
-    if (capInput) capInput.value = budget.monthlyCapUsd || 0;
+    if (dailyCapInput) dailyCapInput.value = budget.dailyLimitUSD ?? budget.monthlyCapUsd ?? 0;
+    if (capInput) capInput.value = budget.monthlyLimitUSD ?? budget.monthlyCapUsd ?? 0;
     if (actionSel) actionSel.value = budget.overAction || 'warn';
     if (fallbackInput) fallbackInput.value = budget.fallbackModel || '';
+
+    // 峰谷时段字段
+    const ph = budget.peakHours || {};
+    const phEnabled = document.getElementById('setting-budget-peak-enabled');
+    const phStart = document.getElementById('setting-budget-peak-start');
+    const phEnd = document.getElementById('setting-budget-peak-end');
+    const phInMul = document.getElementById('setting-budget-peak-input-mul');
+    const phCrMul = document.getElementById('setting-budget-peak-cacheread-mul');
+    const phOutMul = document.getElementById('setting-budget-peak-output-mul');
+    const phCwMul = document.getElementById('setting-budget-peak-cachewrite-mul');
+    if (phEnabled) phEnabled.checked = !!ph.enabled;
+    if (phStart) phStart.value = ph.start ?? 9;
+    if (phEnd) phEnd.value = ph.end ?? 18;
+    if (phInMul) phInMul.value = ph.inputMul ?? 1.5;
+    if (phCrMul) phCrMul.value = ph.cacheReadMul ?? 1.5;
+    if (phOutMul) phOutMul.value = ph.outputMul ?? 1.5;
+    if (phCwMul) phCwMul.value = ph.cacheWriteMul ?? 1.5;
 
     const listEl = document.getElementById('budget-pricing-list');
     if (listEl) {
       listEl.innerHTML = '';
       const models = budget.models || {};
       for (const [modelId, price] of Object.entries(models)) {
-        appendBudgetPricingRow(listEl, modelId, price.promptPerK, price.completionPerK);
+        appendBudgetPricingRow(listEl, modelId, price);
       }
       // 默认至少显示一行空行
       if (listEl.children.length === 0) {
-        appendBudgetPricingRow(listEl, '', '', '');
+        appendBudgetPricingRow(listEl, '', {});
       }
     }
 
@@ -5815,7 +6215,7 @@
     if (addRowBtn) {
       addRowBtn.onclick = () => {
         if (!listEl) return;
-        appendBudgetPricingRow(listEl, '', '', '');
+        appendBudgetPricingRow(listEl, '', {});
       };
     }
     const importCurrentBtn = document.getElementById('btn-budget-import-current');
@@ -5828,7 +6228,8 @@
         // 去重添加
         const existing = Array.from(listEl.querySelectorAll('.budget-model-id')).map(i => i.value.trim());
         if (existing.includes(model)) { window.showToast('价格表中已存在该模型', 'info'); return; }
-        appendBudgetPricingRow(listEl, model, '', '');
+        // 默认根据模型名自动推断 hasCacheWrite
+        appendBudgetPricingRow(listEl, model, { hasCacheWrite: /claude/i.test(model) });
       };
     }
     const importUsageBtn = document.getElementById('btn-budget-import-usage');
@@ -5841,7 +6242,7 @@
         const existing = new Set(Array.from(listEl.querySelectorAll('.budget-model-id')).map(i => i.value.trim()));
         let added = 0;
         for (const m of usedModels) {
-          if (!existing.has(m)) { appendBudgetPricingRow(listEl, m, '', ''); added++; }
+          if (!existing.has(m)) { appendBudgetPricingRow(listEl, m, { hasCacheWrite: /claude/i.test(m) }); added++; }
         }
         window.showToast(added > 0 ? `已导入 ${added} 个模型` : '所有已用模型都已在价格表中', 'success');
       };
@@ -5880,7 +6281,7 @@
     }
 
     // 自动保存：绑定输入事件
-    [capInput, actionSel, fallbackInput].forEach(el => {
+    [dailyCapInput, capInput, actionSel, fallbackInput, phEnabled, phStart, phEnd, phInMul, phCrMul, phOutMul, phCwMul].forEach(el => {
       if (!el) return;
       el.addEventListener('change', saveBudgetSettings);
     });
@@ -5890,15 +6291,39 @@
     await refreshBudgetStatus(budget);
   }
 
-  function appendBudgetPricingRow(listEl, modelId, promptPerK, completionPerK) {
+  function appendBudgetPricingRow(listEl, modelId, price) {
+    price = price || {};
+    // 旧字段迁移：promptPerK/completionPerK → inputPerM/outputPerM
+    let inputPerM = price.inputPerM;
+    if (inputPerM == null && price.promptPerK != null) inputPerM = (Number(price.promptPerK) || 0) * 1000;
+    let outputPerM = price.outputPerM;
+    if (outputPerM == null && price.completionPerK != null) outputPerM = (Number(price.completionPerK) || 0) * 1000;
+    let cacheReadPerM = price.cacheReadPerM;
+    if (cacheReadPerM == null && inputPerM != null) cacheReadPerM = (Number(inputPerM) || 0) * 0.1;
+    let cacheWritePerM = price.cacheWritePerM;
+    if (cacheWritePerM == null && inputPerM != null) cacheWritePerM = (Number(inputPerM) || 0) * 1.25;
+    const hasCacheWrite = price.hasCacheWrite != null ? !!price.hasCacheWrite : /claude/i.test(modelId || '');
+    const esc = (v) => String(v ?? '').replace(/[<>&"]/g, s => ({ '<':'&lt;','>':'&gt;','&':'&amp;' }[s]));
     const row = document.createElement('div');
-    row.style.cssText = 'display:grid;grid-template-columns:1.5fr 1fr 1fr auto;gap:8px;align-items:center';
+    row.style.cssText = 'display:grid;grid-template-columns:1.6fr 0.9fr 0.9fr 0.9fr 0.9fr 0.7fr auto;gap:6px;align-items:center';
     row.innerHTML = `
-      <input type="text" class="budget-model-id" value="${String(modelId || '').replace(/[<>&"]/g, s => ({ '<':'&lt;','>':'&gt;','&':'&amp;' }[s]))}" placeholder="model-id">
-      <input type="number" class="budget-prompt-perk" value="${promptPerK ?? ''}" placeholder="0.00" step="0.0001" min="0">
-      <input type="number" class="budget-completion-perk" value="${completionPerK ?? ''}" placeholder="0.00" step="0.0001" min="0">
+      <input type="text" class="budget-model-id" value="${esc(modelId)}" placeholder="model-id">
+      <input type="number" class="budget-input-perm" value="${inputPerM ?? ''}" placeholder="0.00" step="0.0001" min="0" title="每 1M token 输入价格 (USD)">
+      <input type="number" class="budget-cacheread-perm" value="${cacheReadPerM ?? ''}" placeholder="0.00" step="0.0001" min="0" title="每 1M token 缓存读取价格 (USD)">
+      <input type="number" class="budget-output-perm" value="${outputPerM ?? ''}" placeholder="0.00" step="0.0001" min="0" title="每 1M token 输出价格 (USD)">
+      <input type="number" class="budget-cachewrite-perm" value="${cacheWritePerM ?? ''}" placeholder="0.00" step="0.0001" min="0" title="每 1M token 缓存写入价格 (USD)">
+      <input type="checkbox" class="budget-has-cache-write" ${hasCacheWrite ? 'checked' : ''} title="该模型支持缓存写入计费" style="justify-self:center">
       <button class="btn-icon" title="删除"><i class="fa-solid fa-trash-can"></i></button>
     `;
+    // 当模型 ID 改变且未手动勾选过 CW 时，根据模型名自动推断
+    const idEl = row.querySelector('.budget-model-id');
+    const cwEl = row.querySelector('.budget-has-cache-write');
+    idEl?.addEventListener('change', () => {
+      if (/claude/i.test(idEl.value || '')) {
+        cwEl.checked = true;
+        saveBudgetSettings();
+      }
+    });
     row.querySelector('button').onclick = () => {
       row.remove();
       saveBudgetSettings();
@@ -5908,30 +6333,56 @@
   }
 
   async function saveBudgetSettings() {
+    const dailyCapInput = document.getElementById('setting-budget-daily-cap');
     const capInput = document.getElementById('setting-budget-monthly-cap');
     const actionSel = document.getElementById('setting-budget-action');
     const fallbackInput = document.getElementById('setting-budget-fallback-model');
     const listEl = document.getElementById('budget-pricing-list');
+    const phEnabled = document.getElementById('setting-budget-peak-enabled');
+    const phStart = document.getElementById('setting-budget-peak-start');
+    const phEnd = document.getElementById('setting-budget-peak-end');
+    const phInMul = document.getElementById('setting-budget-peak-input-mul');
+    const phCrMul = document.getElementById('setting-budget-peak-cacheread-mul');
+    const phOutMul = document.getElementById('setting-budget-peak-output-mul');
+    const phCwMul = document.getElementById('setting-budget-peak-cachewrite-mul');
     const models = {};
     if (listEl) {
       listEl.querySelectorAll(':scope > div').forEach(row => {
         const idEl = row.querySelector('.budget-model-id');
-        const pEl = row.querySelector('.budget-prompt-perk');
-        const cEl = row.querySelector('.budget-completion-perk');
         if (!idEl) return;
         const mid = (idEl.value || '').trim();
         if (!mid) return;
+        const pEl = row.querySelector('.budget-input-perm');
+        const crEl = row.querySelector('.budget-cacheread-perm');
+        const cEl = row.querySelector('.budget-output-perm');
+        const cwEl = row.querySelector('.budget-cachewrite-perm');
+        const hcwEl = row.querySelector('.budget-has-cache-write');
         models[mid] = {
-          promptPerK: parseFloat(pEl?.value) || 0,
-          completionPerK: parseFloat(cEl?.value) || 0
+          inputPerM: parseFloat(pEl?.value) || 0,
+          cacheReadPerM: parseFloat(crEl?.value) || 0,
+          outputPerM: parseFloat(cEl?.value) || 0,
+          cacheWritePerM: parseFloat(cwEl?.value) || 0,
+          hasCacheWrite: !!hcwEl?.checked
         };
       });
     }
     const budget = {
-      monthlyCapUsd: parseFloat(capInput?.value) || 0,
+      dailyLimitUSD: parseFloat(dailyCapInput?.value) || 0,
+      monthlyLimitUSD: parseFloat(capInput?.value) || 0,
+      monthlyCapUsd: parseFloat(capInput?.value) || 0, // 保留旧字段以兼容旧代码
       overAction: actionSel?.value || 'warn',
       fallbackModel: (fallbackInput?.value || '').trim(),
-      models
+      warningThreshold: 0.8,
+      models,
+      peakHours: {
+        enabled: !!phEnabled?.checked,
+        start: parseInt(phStart?.value) ?? 9,
+        end: parseInt(phEnd?.value) ?? 18,
+        inputMul: parseFloat(phInMul?.value) || 1,
+        cacheReadMul: parseFloat(phCrMul?.value) || 1,
+        outputMul: parseFloat(phOutMul?.value) || 1,
+        cacheWriteMul: parseFloat(phCwMul?.value) || 1
+      }
     };
     await saveSettings({ budget });
     await refreshBudgetStatus(budget);
@@ -5942,40 +6393,34 @@
     const statusEl = document.getElementById('budget-status');
     if (!statusEl) return;
     try {
-      const res = await window.api.usageGetRange('monthly');
-      const totalTokens = res?.totalTokens || 0;
-      const models = res?.models || {};
-      // 用价格表计算本月消费
-      let totalCost = 0;
-      const lines = [];
-      for (const [model, info] of Object.entries(models)) {
-        const price = budget?.models?.[model];
-        if (!price) {
-          lines.push(`<div style="display:flex;justify-content:space-between"><span>${model}</span><span style="color:var(--text-tertiary)">${(info.totalTokens || 0).toLocaleString()} tokens（未设价格）</span></div>`);
-          continue;
-        }
-        const pt = info.promptTokens || 0;
-        const ct = info.completionTokens || 0;
-        const cached = info.cachedTokens || 0;
-        const cacheCreate = info.cacheCreationTokens || 0;
-        const cost = (pt - cached) * (price.promptPerK || 0) / 1000
-          + cached * (price.promptPerK || 0) / 1000 * 0.1
-          + cacheCreate * (price.promptPerK || 0) / 1000 * 1.25
-          + ct * (price.completionPerK || 0) / 1000;
-        totalCost += cost;
-        lines.push(`<div style="display:flex;justify-content:space-between"><span>${model}</span><span>$${cost.toFixed(4)} (${(info.totalTokens || 0).toLocaleString()} tok)</span></div>`);
-      }
-      const cap = budget?.monthlyCapUsd || 0;
-      const pct = cap > 0 ? Math.min(100, totalCost / cap * 100) : 0;
-      const barColor = cap > 0 && totalCost >= cap ? '#f44336' : (cap > 0 && pct >= 80 ? '#ff9800' : 'var(--accent)');
+      // 使用新的 budget:getStatus API（后端已根据价格表+峰谷价计算好）
+      const st = await window.api.budgetGetStatus();
+      const fmt = (v) => `$${(Number(v) || 0).toFixed(4)}`;
+      const fmtLimit = (v) => `$${(Number(v) || 0).toFixed(2)}`;
+      const renderSection = (title, info) => {
+        const limit = info.limitUSD > 0;
+        const pct = info.pct;
+        const barColor = info.level === 'danger' ? '#f44336' : (info.level === 'warn' ? '#ff9800' : 'var(--accent)');
+        return `
+          <div style="margin-bottom:12px">
+            <div style="display:flex;justify-content:space-between;margin-bottom:4px;font-weight:600">
+              <span>${title}</span><span style="color:${barColor}">${fmt(info.costUSD)}${limit ? ` / ${fmtLimit(info.limitUSD)} (${pct.toFixed(1)}%)` : '（未设限）'}</span>
+            </div>
+            ${limit ? `<div style="height:6px;background:var(--border);border-radius:3px;overflow:hidden;margin-bottom:6px"><div style="height:100%;width:${pct}%;background:${barColor};transition:width 0.3s"></div></div>` : ''}
+            <div style="font-size:11px;color:var(--text-secondary);display:grid;grid-template-columns:1fr 1fr;gap:2px 12px">
+              <span>输入 ${fmt(info.inputCost)}</span>
+              <span>输出 ${fmt(info.outputCost)}</span>
+              <span>缓存读 ${fmt(info.cacheReadCost)}</span>
+              <span>缓存写 ${fmt(info.cacheWriteCost)}</span>
+            </div>
+          </div>
+        `;
+      };
+      const peak = st?.peakHours || {};
+      const peakBadge = peak.enabled ? `<span style="font-size:10px;color:var(--text-tertiary);margin-left:6px">峰时段 ${peak.start}-${peak.end}</span>` : '';
       statusEl.innerHTML = `
-        <div style="display:flex;justify-content:space-between;margin-bottom:6px;font-weight:600">
-          <span>本月消费</span><span style="color:${barColor}">$${totalCost.toFixed(4)}${cap > 0 ? ` / $${cap.toFixed(2)} (${pct.toFixed(1)}%)` : ''}</span>
-        </div>
-        ${cap > 0 ? `<div style="height:6px;background:var(--border);border-radius:3px;overflow:hidden;margin-bottom:8px"><div style="height:100%;width:${pct}%;background:${barColor};transition:width 0.3s"></div></div>` : ''}
-        <div style="font-size:12px;color:var(--text-secondary);display:flex;flex-direction:column;gap:4px;max-height:160px;overflow-y:auto">
-          ${lines.length > 0 ? lines.join('') : '<span style="color:var(--text-tertiary)">暂无消费数据</span>'}
-        </div>
+        ${renderSection('今日消费' + peakBadge, st?.daily || {})}
+        ${renderSection('本月消费', st?.monthly || {})}
       `;
     } catch (e) {
       statusEl.innerHTML = `<span style="color:var(--danger)">加载失败: ${e.message}</span>`;
@@ -8165,6 +8610,11 @@
       if (wsPathEl) wsPathEl.textContent = '未选择工作区';
       const treeEl = document.getElementById('code-file-tree');
       if (treeEl) treeEl.innerHTML = '<div class="empty-state"><i class="fa-solid fa-folder-tree"></i><p>打开工作区后显示文件树</p></div>';
+      // 无工作区时隐藏 ESLint 面板
+      const eslintPanel = document.getElementById('code-eslint-panel');
+      const eslintResizer = document.getElementById('code-eslint-resizer');
+      if (eslintPanel) eslintPanel.style.display = 'none';
+      if (eslintResizer) eslintResizer.style.display = 'none';
     }
     // Pre-warm Monaco loader (don't await — start in background)
     ensureMonaco().catch(err => console.warn('[Monaco] preload failed:', err));
@@ -8186,6 +8636,221 @@
       treeEl.innerHTML = `<div class="empty-state"><i class="fa-solid fa-triangle-exclamation"></i><p>${e.message}</p></div>`;
       WebUIMirror.pushDomEvent({ type: 'dom_replace', container: '#code-file-tree', html: treeEl.innerHTML });
     }
+    // 自动运行 ESLint（如果是支持的项目）
+    if (dirPath) autoRunESLint(dirPath).catch(err => console.warn('[ESLint] auto run failed:', err));
+  }
+
+  // ==================== ESLint 状态面板 ====================
+  let eslintRunning = false;
+  let eslintCurrentWorkspace = null;
+  let eslintLastResults = null;
+  let eslintEventsBound = false;
+
+  async function autoRunESLint(workspacePath) {
+    if (!workspacePath) return;
+    eslintCurrentWorkspace = workspacePath;
+    // 检测是否为支持的项目
+    let lintable = false;
+    try {
+      const r = await window.api.eslintIsLintable(workspacePath);
+      lintable = !!(r.ok && r.lintable);
+    } catch (e) {
+      console.warn('[ESLint] isLintable failed:', e);
+    }
+    const panel = document.getElementById('code-eslint-panel');
+    const resizer = document.getElementById('code-eslint-resizer');
+    if (!lintable) {
+      // 不支持：隐藏面板和分割器
+      if (panel) panel.style.display = 'none';
+      if (resizer) resizer.style.display = 'none';
+      const summary = document.getElementById('code-eslint-summary');
+      if (summary) summary.innerHTML = '<span class="es-null">不适用（非 JS/TS 项目）</span>';
+      return;
+    }
+    if (panel) panel.style.display = '';
+    if (resizer) resizer.style.display = '';
+    bindESLintEvents();
+    await runESLint(workspacePath);
+  }
+
+  async function runESLint(workspacePath) {
+    if (!workspacePath) return;
+    if (eslintRunning) return;
+    eslintRunning = true;
+    eslintCurrentWorkspace = workspacePath;
+    const summary = document.getElementById('code-eslint-summary');
+    const body = document.getElementById('code-eslint-body');
+    const refreshBtn = document.getElementById('btn-eslint-refresh');
+    if (refreshBtn) refreshBtn.classList.add('spin');
+    if (summary) summary.innerHTML = '<span class="es-running"><i class="fa-solid fa-spinner fa-spin"></i> 扫描中…</span>';
+    if (body) body.innerHTML = '<div class="code-eslint-empty"><i class="fa-solid fa-spinner fa-spin"></i> 正在扫描工作区…</div>';
+    try {
+      const result = await window.api.eslintLint(workspacePath, { maxFiles: 500 });
+      if (!result.ok) {
+        if (summary) summary.innerHTML = `<span class="es-error"><i class="fa-solid fa-triangle-exclamation"></i> ${escapeHtmlSimple(result.error || '失败')}</span>`;
+        if (body) body.innerHTML = `<div class="code-eslint-empty" style="color:var(--danger)"><i class="fa-solid fa-triangle-exclamation"></i> ${escapeHtmlSimple(result.error || '运行失败')}</div>`;
+        eslintLastResults = null;
+        return;
+      }
+      eslintLastResults = result;
+      renderESLintResults(result);
+    } catch (e) {
+      if (summary) summary.innerHTML = `<span class="es-error"><i class="fa-solid fa-triangle-exclamation"></i> ${escapeHtmlSimple(e.message)}</span>`;
+      if (body) body.innerHTML = `<div class="code-eslint-empty" style="color:var(--danger)">${escapeHtmlSimple(e.message)}</div>`;
+      eslintLastResults = null;
+    } finally {
+      eslintRunning = false;
+      if (refreshBtn) refreshBtn.classList.remove('spin');
+    }
+  }
+
+  function renderESLintResults(result) {
+    const summary = document.getElementById('code-eslint-summary');
+    const body = document.getElementById('code-eslint-body');
+    const sum = result.summary || {};
+    if (summary) {
+      const parts = [];
+      if (sum.errors > 0) parts.push(`<span class="es-badge errors"><i class="fa-solid fa-circle-xmark"></i> ${sum.errors} 错误</span>`);
+      if (sum.warnings > 0) parts.push(`<span class="es-badge warnings"><i class="fa-solid fa-triangle-exclamation"></i> ${sum.warnings} 警告</span>`);
+      if (sum.infos > 0) parts.push(`<span class="es-badge infos"><i class="fa-solid fa-circle-info"></i> ${sum.infos} 提示</span>`);
+      if (parts.length === 0) {
+        summary.innerHTML = '<span class="es-badge ok"><i class="fa-solid fa-circle-check"></i> 无问题</span>';
+      } else {
+        summary.innerHTML = parts.join('') + `<span style="color:var(--text-tertiary);font-size:0.92em;margin-left:4px">扫描 ${sum.scannedFiles || 0} 文件</span>`;
+      }
+    }
+    if (body) {
+      const items = result.results || [];
+      if (items.length === 0) {
+        body.innerHTML = '<div class="code-eslint-empty"><i class="fa-solid fa-circle-check" style="color:#198754"></i> 没有发现问题</div>';
+        return;
+      }
+      body.innerHTML = '';
+      for (const item of items) {
+        const row = document.createElement('div');
+        row.className = `code-eslint-item ${item.severity || 'info'}`;
+        const sevLabel = item.severity === 'error' ? 'Error' : (item.severity === 'warning' ? 'Warn' : 'Info');
+        const shortPath = makeRelPath(item.filePath, eslintCurrentWorkspace);
+        row.innerHTML = `<span class="esev">${sevLabel}</span>` +
+          `<span class="eloc" title="${escapeHtmlSimple(item.filePath)}">${escapeHtmlSimple(shortPath)}:${item.line}:${item.column}</span>` +
+          `<span class="emsg">${escapeHtmlSimple(item.message || '')}</span>` +
+          (item.ruleId ? `<span class="erule">${escapeHtmlSimple(item.ruleId)}</span>` : '') +
+          `<button class="code-eslint-add-btn" title="添加到 AI 上下文"><i class="fa-solid fa-comment-dots"></i></button>`;
+        // 点击行 → 跳转到文件（在 Monaco 编辑器中打开并定位到问题行）
+        row.addEventListener('click', (e) => {
+          if (e.target.closest('.code-eslint-add-btn')) return;
+          const fileName = item.file || (item.filePath || '').split(/[\\/]/).pop() || 'file';
+          openFileInMonaco(item.filePath, fileName).then(() => {
+            // 切换到该文件后，定位到指定行列
+            if (monacoEditor && item.line) {
+              try {
+                monacoEditor.revealLineInCenter(item.line);
+                monacoEditor.setPosition({ lineNumber: item.line, column: item.column || 1 });
+                monacoEditor.focus();
+              } catch { /* ignore */ }
+            }
+          }).catch(err => console.warn('[ESLint] openFileInMonaco failed:', err));
+        });
+        // 点击添加按钮 → 将此条意见作为代码上下文片段注入输入框（用户可编辑后发送）
+        const addBtn = row.querySelector('.code-eslint-add-btn');
+        if (addBtn) {
+          addBtn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            // 同时将文件加入 Code 附件（便于 AI 读取上下文）
+            await addFileToCodeContext({ path: item.filePath, name: item.file || 'lint-issue', type: 'file' });
+            // 把意见本身作为提示文本注入输入框
+            const inputEl = document.getElementById('code-chat-input');
+            if (inputEl) {
+              const note = `请修复以下 ESLint 问题：\n文件：${shortPath}:${item.line}:${item.column}\n严重性：${sevLabel}\n规则：${item.ruleId || '(无)'}\n消息：${item.message}`;
+              const cur = inputEl.value || '';
+              inputEl.value = cur ? (cur + '\n\n' + note) : note;
+              inputEl.focus();
+              inputEl.dispatchEvent(new Event('input', { bubbles: true }));
+            }
+          });
+        }
+        body.appendChild(row);
+      }
+    }
+  }
+
+  function bindESLintEvents() {
+    if (eslintEventsBound) return;
+    eslintEventsBound = true;
+    // 刷新
+    document.getElementById('btn-eslint-refresh')?.addEventListener('click', () => {
+      if (eslintCurrentWorkspace && !eslintRunning) {
+        // 清缓存确保结果新鲜
+        window.api.eslintClearCache(eslintCurrentWorkspace).finally(() => {
+          runESLint(eslintCurrentWorkspace);
+        });
+      }
+    });
+    // 折叠/展开
+    document.getElementById('btn-eslint-toggle')?.addEventListener('click', () => {
+      const panel = document.getElementById('code-eslint-panel');
+      const resizer = document.getElementById('code-eslint-resizer');
+      if (!panel) return;
+      panel.classList.toggle('collapsed');
+      const collapsed = panel.classList.contains('collapsed');
+      const icon = document.querySelector('#btn-eslint-toggle i');
+      if (icon) icon.className = collapsed ? 'fa-solid fa-chevron-up' : 'fa-solid fa-chevron-down';
+      if (resizer) resizer.style.display = collapsed ? 'none' : '';
+    });
+    // 上下拖动调节高度
+    initESLintResizer();
+  }
+
+  function initESLintResizer() {
+    const resizer = document.getElementById('code-eslint-resizer');
+    const panel = document.getElementById('code-eslint-panel');
+    if (!resizer || !panel) return;
+    let dragging = false;
+    let startY = 0;
+    let startPanelHeight = 0;
+    let startTreeHeight = 0;
+    const treeEl = document.getElementById('code-file-tree');
+    resizer.addEventListener('mousedown', (e) => {
+      if (panel.classList.contains('collapsed')) return;
+      dragging = true;
+      startY = e.clientY;
+      startPanelHeight = panel.getBoundingClientRect().height;
+      startTreeHeight = treeEl ? treeEl.getBoundingClientRect().height : 0;
+      resizer.classList.add('dragging');
+      document.body.style.cursor = 'row-resize';
+      document.body.style.userSelect = 'none';
+      e.preventDefault();
+    });
+    document.addEventListener('mousemove', (e) => {
+      if (!dragging) return;
+      // 向上拖动 = panel 高度增加（dy 为负），向下拖动 = panel 高度减少
+      const dy = e.clientY - startY;
+      const maxPanelHeight = startPanelHeight + startTreeHeight - 60; // 留至少 60px 给文件树
+      const newPanelHeight = Math.max(40, Math.min(maxPanelHeight, startPanelHeight - dy));
+      panel.style.height = newPanelHeight + 'px';
+    });
+    document.addEventListener('mouseup', () => {
+      if (!dragging) return;
+      dragging = false;
+      resizer.classList.remove('dragging');
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    });
+  }
+
+  function escapeHtmlSimple(s) {
+    return String(s || '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+  }
+  function makeRelPath(fullPath, base) {
+    if (!fullPath) return '';
+    if (!base) return fullPath;
+    // 规范化路径分隔符
+    const norm = String(fullPath).replace(/\\/g, '/');
+    const baseNorm = String(base).replace(/\\/g, '/').replace(/\/$/, '');
+    if (norm.toLowerCase().startsWith(baseNorm.toLowerCase() + '/')) {
+      return norm.slice(baseNorm.length + 1);
+    }
+    return fullPath;
   }
 
   // ---- Monaco integration ----
@@ -8493,6 +9158,7 @@
     if (isFile) {
       items.push({ icon: 'fa-comment-dots', label: '添加到上下文', action: () => addFileToCodeContext(node) });
       items.push({ icon: 'fa-copy', label: '复制路径', action: () => { navigator.clipboard.writeText(node.path).catch(() => {}); } });
+      items.push({ icon: 'fa-folder-open', label: '在资源管理器中显示', action: () => window.api.openFileExplorer?.(node.path) });
     } else {
       items.push({ icon: 'fa-folder-open', label: '在资源管理器打开', action: () => window.api.openFileExplorer?.(node.path) });
     }
@@ -8762,6 +9428,9 @@
         case 'approval':
           // Code 模式独立的 approval UI（不逃逸到 Chat 模式）
           showCodeApprovalPanel(data.toolName, data.args);
+          break;
+        case 'tool-auth-required':
+          showToolAuthModal(data.toolName, data.category, codeAgent);
           break;
         case 'tool-result':
           addCodeToolResult(data);
@@ -9164,6 +9833,15 @@
     if (msgsEl) {
       msgsEl.innerHTML = '<div class="welcome-message"><div class="welcome-icon"><i class="fa-solid fa-code"></i></div><h2>新对话</h2><p>开始新的编程任务</p></div>';
     }
+  });
+
+  // 在系统文件管理器中打开当前工作区（Windows 资源管理器 / macOS Finder）
+  document.getElementById('btn-code-open-in-explorer')?.addEventListener('click', () => {
+    if (!codeWorkspacePath) {
+      window.showMessageModal('请先打开工作区', '提示', 'warning');
+      return;
+    }
+    window.api.openFileExplorer?.(codeWorkspacePath);
   });
 
   document.getElementById('btn-code-send')?.addEventListener('click', sendCodeMessage);

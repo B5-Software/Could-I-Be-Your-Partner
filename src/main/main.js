@@ -14,6 +14,7 @@ const { importSpreadsheetFile, exportSpreadsheetFile } = require('./spreadsheet-
 const { WebControlService } = require('./web-control-service');
 const { fetchLLMWithRetry, consumeSSEStream, abortAllRequests, DEFAULT_TIMEOUT_MS } = require('./llm-retry');
 const LLMProviders = require('./llm-providers');
+const ESLintService = require('./eslint-service');
 
 const emailService = new EmailService();
 const webControlService = new WebControlService();
@@ -93,13 +94,60 @@ function estimateTokens(text) {
  * Record real token usage from API response into per-day history.
  * Stores: { [dateKey]: { totalTokens, promptTokens, completionTokens, requestCount, models, hours: { [0..23]: {...} } } }
  * 支持解析缓存命中 token（OpenAI: prompt_tokens_details.cached_tokens；Anthropic: cache_read_input_tokens + cache_creation_input_tokens）
+ * 同时按 settings.budget 中的价格表计算金钱消耗（inputPerM/cacheReadPerM/outputPerM/cacheWritePerM），
+ * 并应用峰谷时段倍率（peakHours）。
  */
+function computeUsageCost(usage, model, ts) {
+  // 返回 { inputCost, cacheReadCost, outputCost, cacheWriteCost, totalCost }
+  if (!usage) return { inputCost: 0, cacheReadCost: 0, outputCost: 0, cacheWriteCost: 0, totalCost: 0 };
+  const pt = usage.prompt_tokens || 0;
+  const ct = usage.completion_tokens || 0;
+  const cachedTokens = usage.prompt_tokens_details?.cached_tokens
+    || usage.cache_read_input_tokens
+    || 0;
+  const cacheCreationTokens = usage.cache_creation_input_tokens || 0;
+  const nonCachedPrompt = Math.max(0, pt - cachedTokens - cacheCreationTokens);
+
+  const pricing = (settings.budget?.models || {})[model || ''] || null;
+  if (!pricing) return { inputCost: 0, cacheReadCost: 0, outputCost: 0, cacheWriteCost: 0, totalCost: 0 };
+
+  // 峰谷时段倍率
+  const ph = settings.budget?.peakHours || {};
+  let isPeak = false;
+  if (ph.enabled) {
+    const hour = (ts ? new Date(ts) : new Date()).getHours();
+    const s = Number(ph.start) ?? 0;
+    const e = Number(ph.end) ?? 24;
+    if (s <= e) isPeak = hour >= s && hour < e;
+    else isPeak = hour >= s || hour < e; // 跨夜
+  }
+  const inMul = isPeak ? (Number(ph.inputMul) || 1) : 1;
+  const crMul = isPeak ? (Number(ph.cacheReadMul) || 1) : 1;
+  const outMul = isPeak ? (Number(ph.outputMul) || 1) : 1;
+  const cwMul = isPeak ? (Number(ph.cacheWriteMul) || 1) : 1;
+
+  const inputPerM = Number(pricing.inputPerM) || 0;
+  const cacheReadPerM = Number(pricing.cacheReadPerM) || 0;
+  const outputPerM = Number(pricing.outputPerM) || 0;
+  const cacheWritePerM = pricing.hasCacheWrite ? (Number(pricing.cacheWritePerM) || 0) : 0;
+
+  const inputCost = (nonCachedPrompt / 1e6) * inputPerM * inMul;
+  const cacheReadCost = (cachedTokens / 1e6) * cacheReadPerM * crMul;
+  const outputCost = (ct / 1e6) * outputPerM * outMul;
+  const cacheWriteCost = (cacheCreationTokens / 1e6) * cacheWritePerM * cwMul;
+  return {
+    inputCost, cacheReadCost, outputCost, cacheWriteCost,
+    totalCost: inputCost + cacheReadCost + outputCost + cacheWriteCost,
+    isPeak
+  };
+}
+
 function recordTokenUsage(usage, model) {
   if (!usage) return;
   const today = getTodayKey();
   if (!settings.llm.usageHistory) settings.llm.usageHistory = {};
   if (!settings.llm.usageHistory[today]) {
-    settings.llm.usageHistory[today] = { totalTokens: 0, promptTokens: 0, completionTokens: 0, requestCount: 0, models: {}, hours: {}, cachedTokens: 0, cacheCreationTokens: 0 };
+    settings.llm.usageHistory[today] = { totalTokens: 0, promptTokens: 0, completionTokens: 0, requestCount: 0, models: {}, hours: {}, cachedTokens: 0, cacheCreationTokens: 0, costUSD: 0, inputCost: 0, cacheReadCost: 0, outputCost: 0, cacheWriteCost: 0 };
   }
   const day = settings.llm.usageHistory[today];
   const pt = usage.prompt_tokens || 0;
@@ -112,30 +160,43 @@ function recordTokenUsage(usage, model) {
     || usage.cache_read_input_tokens
     || 0;
   const cacheCreationTokens = usage.cache_creation_input_tokens || 0;
+  // 计算金钱消耗
+  const cost = computeUsageCost(usage, model);
   day.totalTokens += tt;
   day.promptTokens += pt;
   day.completionTokens += ct;
   day.cachedTokens = (day.cachedTokens || 0) + cachedTokens;
   day.cacheCreationTokens = (day.cacheCreationTokens || 0) + cacheCreationTokens;
+  day.inputCost = (day.inputCost || 0) + cost.inputCost;
+  day.cacheReadCost = (day.cacheReadCost || 0) + cost.cacheReadCost;
+  day.outputCost = (day.outputCost || 0) + cost.outputCost;
+  day.cacheWriteCost = (day.cacheWriteCost || 0) + cost.cacheWriteCost;
+  day.costUSD = (day.costUSD || 0) + cost.totalCost;
   day.requestCount += 1;
   if (model) {
-    if (!day.models[model]) day.models[model] = { total: 0, prompt: 0, completion: 0, count: 0, cached: 0, cacheCreation: 0 };
+    if (!day.models[model]) day.models[model] = { total: 0, prompt: 0, completion: 0, count: 0, cached: 0, cacheCreation: 0, costUSD: 0, inputCost: 0, cacheReadCost: 0, outputCost: 0, cacheWriteCost: 0 };
     day.models[model].total += tt;
     day.models[model].prompt += pt;
     day.models[model].completion += ct;
     day.models[model].cached = (day.models[model].cached || 0) + cachedTokens;
     day.models[model].cacheCreation = (day.models[model].cacheCreation || 0) + cacheCreationTokens;
+    day.models[model].inputCost = (day.models[model].inputCost || 0) + cost.inputCost;
+    day.models[model].cacheReadCost = (day.models[model].cacheReadCost || 0) + cost.cacheReadCost;
+    day.models[model].outputCost = (day.models[model].outputCost || 0) + cost.outputCost;
+    day.models[model].cacheWriteCost = (day.models[model].cacheWriteCost || 0) + cost.cacheWriteCost;
+    day.models[model].costUSD = (day.models[model].costUSD || 0) + cost.totalCost;
     day.models[model].count += 1;
   }
   // 按小时统计（用于 daily 周期的按小时图表）
   const hour = new Date().getHours();
   if (!day.hours) day.hours = {};
-  if (!day.hours[hour]) day.hours[hour] = { total: 0, prompt: 0, completion: 0, count: 0, cached: 0, cacheCreation: 0 };
+  if (!day.hours[hour]) day.hours[hour] = { total: 0, prompt: 0, completion: 0, count: 0, cached: 0, cacheCreation: 0, costUSD: 0 };
   day.hours[hour].total += tt;
   day.hours[hour].prompt += pt;
   day.hours[hour].completion += ct;
   day.hours[hour].cached = (day.hours[hour].cached || 0) + cachedTokens;
   day.hours[hour].cacheCreation = (day.hours[hour].cacheCreation || 0) + cacheCreationTokens;
+  day.hours[hour].costUSD = (day.hours[hour].costUSD || 0) + cost.totalCost;
   day.hours[hour].count += 1;
   // Prune entries older than 90 days to avoid unbounded growth.
   const cutoff = new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 10);
@@ -146,16 +207,25 @@ function recordTokenUsage(usage, model) {
 
 /**
  * Aggregate usage over a date range (inclusive of both ends).
- * Returns { totalTokens, promptTokens, completionTokens, requestCount, days: [{date, total, prompt, completion, count}], models, cachedTokens, cacheCreationTokens }
+ * Returns { totalTokens, promptTokens, completionTokens, requestCount, days: [{date, total, prompt, completion, count, costUSD}], models, cachedTokens, cacheCreationTokens, costUSD, inputCost, cacheReadCost, outputCost, cacheWriteCost }
  */
 function aggregateUsage(startDate, endDate) {
-  const result = { totalTokens: 0, promptTokens: 0, completionTokens: 0, requestCount: 0, days: [], models: {}, cachedTokens: 0, cacheCreationTokens: 0 };
+  const result = {
+    totalTokens: 0, promptTokens: 0, completionTokens: 0, requestCount: 0, days: [], models: {},
+    cachedTokens: 0, cacheCreationTokens: 0,
+    costUSD: 0, inputCost: 0, cacheReadCost: 0, outputCost: 0, cacheWriteCost: 0
+  };
   const hist = settings.llm.usageHistory || {};
   const d = new Date(startDate);
   while (d.toISOString().slice(0, 10) <= endDate) {
     const key = d.toISOString().slice(0, 10);
     const entry = hist[key];
-    result.days.push({ date: key, total: entry?.totalTokens || 0, prompt: entry?.promptTokens || 0, completion: entry?.completionTokens || 0, count: entry?.requestCount || 0, cached: entry?.cachedTokens || 0, cacheCreation: entry?.cacheCreationTokens || 0 });
+    result.days.push({
+      date: key, total: entry?.totalTokens || 0, prompt: entry?.promptTokens || 0,
+      completion: entry?.completionTokens || 0, count: entry?.requestCount || 0,
+      cached: entry?.cachedTokens || 0, cacheCreation: entry?.cacheCreationTokens || 0,
+      costUSD: entry?.costUSD || 0
+    });
     if (entry) {
       result.totalTokens += entry.totalTokens || 0;
       result.promptTokens += entry.promptTokens || 0;
@@ -163,13 +233,23 @@ function aggregateUsage(startDate, endDate) {
       result.requestCount += entry.requestCount || 0;
       result.cachedTokens += entry.cachedTokens || 0;
       result.cacheCreationTokens += entry.cacheCreationTokens || 0;
+      result.costUSD += entry.costUSD || 0;
+      result.inputCost += entry.inputCost || 0;
+      result.cacheReadCost += entry.cacheReadCost || 0;
+      result.outputCost += entry.outputCost || 0;
+      result.cacheWriteCost += entry.cacheWriteCost || 0;
       for (const [model, m] of Object.entries(entry.models || {})) {
-        if (!result.models[model]) result.models[model] = { total: 0, prompt: 0, completion: 0, count: 0, cached: 0, cacheCreation: 0 };
+        if (!result.models[model]) result.models[model] = { total: 0, prompt: 0, completion: 0, count: 0, cached: 0, cacheCreation: 0, costUSD: 0, inputCost: 0, cacheReadCost: 0, outputCost: 0, cacheWriteCost: 0 };
         result.models[model].total += m.total || 0;
         result.models[model].prompt += m.prompt || 0;
         result.models[model].completion += m.completion || 0;
         result.models[model].cached += m.cached || 0;
         result.models[model].cacheCreation += m.cacheCreation || 0;
+        result.models[model].costUSD += m.costUSD || 0;
+        result.models[model].inputCost += m.inputCost || 0;
+        result.models[model].cacheReadCost += m.cacheReadCost || 0;
+        result.models[model].outputCost += m.outputCost || 0;
+        result.models[model].cacheWriteCost += m.cacheWriteCost || 0;
         result.models[model].count += m.count || 0;
       }
     }
@@ -1307,18 +1387,35 @@ let settings = loadJSON(settingsPath, {
   tools: {},
   autoApproveSensitive: false,
   autoOptimizeToolSelection: false,
+  // 工具首次使用授权状态（持久化，跨会话生效）
+  // - playwright: 内置浏览器工具集（browserNavigate/browserClick/browserType/...）
+  // - computerUse: Computer Use 工具（computer，控制桌面鼠标键盘）
+  // 用户首次调用相应工具时弹出授权模态框，同意后置为 true，拒绝则禁用工具
+  toolAuthGranted: { playwright: false, computerUse: false },
   aiPersona: { name: 'Partner', avatar: '', avatarFrame: '', bio: '你的全能AI伙伴~', pronouns: 'Ta', personality: '活泼可爱、热情友善', customPrompt: '' },
   tarotVisible: true,
   userProfile: { name: '', avatar: '', avatarFrame: '', bio: '' },
   entropy: { source: 'csprng', trngMode: 'network', trngSerialPort: '', trngSerialBaud: 115200, trngNetworkHost: '192.168.4.1', trngNetworkPort: 80 },
   proxy: { mode: 'system', http: '', https: '', bypass: 'localhost,127.0.0.1' },
   mcp: { servers: [] },
-  email: { enabled: false, mode: 'send-receive', smtpHost: '', smtpPort: 587, smtpSecure: true, imapHost: '', imapPort: 993, imapTls: true, emailUser: '', emailPass: '', ownerAddress: '', totpSecret: '', pollInterval: 30, approvalResendMinutes: 5, maxResends: 3, resendIntervalMinutes: 30 },
-  webControl: { enabled: false, port: 3456, password: '', passwordHash: '', enable2FA: false, totpSecret: '' }
+  email: { enabled: false, mode: 'send-receive', smtpHost: '', smtpPort: 587, smtpSecure: true, imapHost: '', imapPort: 993, imapTls: true, emailUser: '', emailPass: '', ownerAddress: '', totpSecret: '', pollInterval: 30, approvalResendMinutes: 5, maxResends: 3, resendIntervalMinutes: 30, allowedSenders: [] },
+  webControl: { enabled: false, port: 3456, password: '', passwordHash: '', enable2FA: false, totpSecret: '' },
+  // 预算控制：每模型单价表（每 1M tokens 多少美元）+ 峰谷时段 + 限额
+  budget: {
+    models: {},                                  // { [modelId]: { inputPerM, cacheReadPerM, outputPerM, cacheWritePerM, hasCacheWrite } }
+    peakHours: { enabled: false, start: 9, end: 18, inputMul: 1.5, cacheReadMul: 1.5, outputMul: 1.5, cacheWriteMul: 1.5 },
+    dailyLimitUSD: 0,                            // 0 表示不限制
+    monthlyLimitUSD: 0,
+    warningThreshold: 0.8
+  }
 });
 if (fs.existsSync(settingsPath)) {
   const saved = loadJSON(settingsPath, {});
-  settings = { ...settings, ...saved, llm: { ...settings.llm, ...(saved.llm || {}) }, agent: { ...settings.agent, ...(saved.agent || {}) }, imageGen: { ...settings.imageGen, ...(saved.imageGen || {}) }, theme: { ...settings.theme, ...(saved.theme || {}) }, aiPersona: { ...settings.aiPersona, ...(saved.aiPersona || {}) }, userProfile: { ...settings.userProfile, ...(saved.userProfile || {}) }, entropy: { ...settings.entropy, ...(saved.entropy || {}) }, proxy: { ...settings.proxy, ...(saved.proxy || {}) }, mcp: { ...settings.mcp, ...(saved.mcp || {}) }, email: { ...settings.email, ...(saved.email || {}) }, webControl: { ...settings.webControl, ...(saved.webControl || {}) } };
+  settings = { ...settings, ...saved, llm: { ...settings.llm, ...(saved.llm || {}) }, agent: { ...settings.agent, ...(saved.agent || {}) }, imageGen: { ...settings.imageGen, ...(saved.imageGen || {}) }, theme: { ...settings.theme, ...(saved.theme || {}) }, aiPersona: { ...settings.aiPersona, ...(saved.aiPersona || {}) }, userProfile: { ...settings.userProfile, ...(saved.userProfile || {}) }, entropy: { ...settings.entropy, ...(saved.entropy || {}) }, proxy: { ...settings.proxy, ...(saved.proxy || {}) }, mcp: { ...settings.mcp, ...(saved.mcp || {}) }, email: { ...settings.email, ...(saved.email || {}) }, webControl: { ...settings.webControl, ...(saved.webControl || {}) }, budget: { ...settings.budget, ...(saved.budget || {}) } };
+  if (saved.budget) {
+    settings.budget.models = { ...(settings.budget.models || {}), ...(saved.budget.models || {}) };
+    settings.budget.peakHours = { ...(settings.budget.peakHours || {}), ...(saved.budget.peakHours || {}) };
+  }
 }
 // Migrate: if provider field missing, default to openai-compat (preserves existing config).
 if (!settings.llm.provider) settings.llm.provider = 'openai-compat';
@@ -1326,6 +1423,38 @@ if (!settings.llm.reasoningEffort) settings.llm.reasoningEffort = 'off';
 if (settings.llm.zenApiKey === undefined) settings.llm.zenApiKey = '';
 // Migrate: per-day usage tracking (for token stats tab).
 if (!settings.llm.usageHistory) settings.llm.usageHistory = {};
+// Migrate: 旧 budget.models[model].promptPerK/completionPerK（每1K tokens）
+// 转换为新格式 inputPerM/outputPerM（每1M tokens，乘以1000）。
+// 同时根据模型名是否包含 claude 自动设置 hasCacheWrite。
+if (settings.budget && settings.budget.models) {
+  for (const [mid, p] of Object.entries(settings.budget.models)) {
+    if (!p) continue;
+    if (p.promptPerK != null && p.inputPerM == null) {
+      p.inputPerM = (Number(p.promptPerK) || 0) * 1000;
+    }
+    if (p.completionPerK != null && p.outputPerM == null) {
+      p.outputPerM = (Number(p.completionPerK) || 0) * 1000;
+    }
+    if (p.cacheReadPerM == null && p.inputPerM != null) {
+      // 缓存读取默认按输入价格的 0.1 倍计费
+      p.cacheReadPerM = (Number(p.inputPerM) || 0) * 0.1;
+    }
+    if (p.cacheWritePerM == null && p.inputPerM != null) {
+      // 缓存写入默认按输入价格的 1.25 倍计费（仅 Claude 系）
+      p.cacheWritePerM = (Number(p.inputPerM) || 0) * 1.25;
+    }
+    if (p.hasCacheWrite == null) p.hasCacheWrite = /claude/i.test(mid);
+    // 保留旧字段以兼容旧版本回滚（不删除）
+  }
+}
+if (!settings.budget) settings.budget = { models: {}, peakHours: { enabled: false, start: 9, end: 18, inputMul: 1.5, cacheReadMul: 1.5, outputMul: 1.5, cacheWriteMul: 1.5 }, dailyLimitUSD: 0, monthlyLimitUSD: 0, warningThreshold: 0.8 };
+// 工具首次使用授权状态迁移
+if (!settings.toolAuthGranted) settings.toolAuthGranted = { playwright: false, computerUse: false };
+else {
+  if (typeof settings.toolAuthGranted.playwright !== 'boolean') settings.toolAuthGranted.playwright = false;
+  if (typeof settings.toolAuthGranted.computerUse !== 'boolean') settings.toolAuthGranted.computerUse = false;
+}
+if (!settings.budget.peakHours) settings.budget.peakHours = { enabled: false, start: 9, end: 18, inputMul: 1.5, cacheReadMul: 1.5, outputMul: 1.5, cacheWriteMul: 1.5 };
 saveJSON(settingsPath, settings);
 
 let memory = loadJSON(memoryPath, []);
@@ -2418,11 +2547,50 @@ ipcMain.handle('shell:openBrowser', (_, url) => {
 });
 ipcMain.handle('shell:openFileExplorer', (_, p) => {
   try {
-    shell.openPath(p);
+    if (!p) return { ok: false, error: '路径为空' };
+    // 区分文件和目录：文件用 showItemInFolder 在资源管理器中定位并选中，
+    // 目录用 openPath 直接打开。
+    let isFile = false;
+    try {
+      const stat = require('fs').statSync(p);
+      isFile = stat.isFile();
+    } catch (_) { /* 路径不存在时按目录处理 */ }
+    if (isFile) {
+      shell.showItemInFolder(p);
+    } else {
+      shell.openPath(p);
+    }
     return { ok: true };
   } catch (e) {
     return { ok: false, error: e.message };
   }
+});
+
+// ===== ESLint 集成 =====
+// 检测工作区是否为 ESLint 支持的项目（前端用于决定是否显示 ESLint 状态面板）
+ipcMain.handle('eslint:isLintable', (_, workspacePath) => {
+  try {
+    return { ok: true, lintable: ESLintService.isProjectLintable(workspacePath) };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+// 对工作区执行 ESLint 检测（全量扫描或指定文件列表）
+// 参数：(_, workspacePath, opts?)，opts = { files?: string[], maxFiles?: number }
+ipcMain.handle('eslint:lint', async (_, workspacePath, opts) => {
+  return await ESLintService.lintWorkspace(workspacePath, opts || {});
+});
+
+// 检测单个文件（编辑器实时显示）
+ipcMain.handle('eslint:lintFile', async (_, filePath) => {
+  return await ESLintService.lintSingleFile(filePath);
+});
+
+// 清除缓存（工作区切换 / 配置变更时）
+ipcMain.handle('eslint:clearCache', (_, workspacePath) => {
+  ESLintService.clearCache(workspacePath);
+  return { ok: true };
 });
 
 ipcMain.handle('calc:evaluate', async (_, expression) => {
@@ -3473,7 +3641,7 @@ ipcMain.handle('usage:getRange', (_, period) => {
     const hours = [];
     for (let h = 0; h < 24; h++) {
       const hd = dayData?.hours?.[h];
-      hours.push({ hour: h, total: hd?.total || 0, prompt: hd?.prompt || 0, completion: hd?.completion || 0, count: hd?.count || 0 });
+      hours.push({ hour: h, total: hd?.total || 0, prompt: hd?.prompt || 0, completion: hd?.completion || 0, count: hd?.count || 0, costUSD: hd?.costUSD || 0 });
     }
     return { ok: true, ...agg, hours, isHourly: true };
   }
@@ -3486,6 +3654,45 @@ ipcMain.handle('usage:getRange', (_, period) => {
     return { ok: true, ...aggregateUsage(start.toISOString().slice(0, 10), todayKey) };
   }
   return { ok: false, error: 'invalid period' };
+});
+
+// ---- IPC: Budget (预算控制) ----
+// 返回当前预算状态：今日/本月已花费、限额、占比、是否告警
+ipcMain.handle('budget:getStatus', () => {
+  const today = new Date();
+  const todayKey = today.toISOString().slice(0, 10);
+  const monthStart = new Date(today.getFullYear(), today.getMonth(), 1).toISOString().slice(0, 10);
+  const daily = aggregateUsage(todayKey, todayKey);
+  const monthly = aggregateUsage(monthStart, todayKey);
+  const b = settings.budget || {};
+  const dailyLimit = Number(b.dailyLimitUSD) || 0;
+  const monthlyLimit = Number(b.monthlyLimitUSD) || 0;
+  const warn = Number(b.warningThreshold) || 0.8;
+  return {
+    ok: true,
+    daily: {
+      costUSD: daily.costUSD || 0,
+      inputCost: daily.inputCost || 0,
+      cacheReadCost: daily.cacheReadCost || 0,
+      outputCost: daily.outputCost || 0,
+      cacheWriteCost: daily.cacheWriteCost || 0,
+      limitUSD: dailyLimit,
+      pct: dailyLimit > 0 ? Math.min(100, (daily.costUSD / dailyLimit) * 100) : 0,
+      level: dailyLimit > 0 ? (daily.costUSD >= dailyLimit ? 'danger' : (daily.costUSD >= dailyLimit * warn ? 'warn' : 'normal')) : 'normal'
+    },
+    monthly: {
+      costUSD: monthly.costUSD || 0,
+      inputCost: monthly.inputCost || 0,
+      cacheReadCost: monthly.cacheReadCost || 0,
+      outputCost: monthly.outputCost || 0,
+      cacheWriteCost: monthly.cacheWriteCost || 0,
+      limitUSD: monthlyLimit,
+      pct: monthlyLimit > 0 ? Math.min(100, (monthly.costUSD / monthlyLimit) * 100) : 0,
+      level: monthlyLimit > 0 ? (monthly.costUSD >= monthlyLimit ? 'danger' : (monthly.costUSD >= monthlyLimit * warn ? 'warn' : 'normal')) : 'normal'
+    },
+    warningThreshold: warn,
+    peakHours: b.peakHours || { enabled: false, start: 9, end: 18, inputMul: 1.5, cacheReadMul: 1.5, outputMul: 1.5, cacheWriteMul: 1.5 }
+  };
 });
 
 // ---- IPC: Paths ----

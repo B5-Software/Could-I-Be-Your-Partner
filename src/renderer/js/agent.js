@@ -46,6 +46,9 @@ class Agent {
     this.terminals = new Map();
     this.pendingApproval = null;
     this.approvalResolve = null;
+    // 工具首次使用授权（playwright / computerUse）的待处理状态
+    this.pendingToolAuth = null;
+    this.toolAuthResolve = null;
     this.settings = null;
     this.systemInfo = null;
     this.workspacePath = null;
@@ -620,6 +623,10 @@ ${toolListSection}`;
     - 文件搜索应遵循"渐进式探索"：先用 listDirectory 列出工作区子目录 → 根据结果缩小范围 → 在具体子目录内用 localSearch
     - localSearch 的 path 参数必须是工作区内的具体子目录，绝对禁止使用根路径
     - 不确定文件位置时先询问用户或先 listDirectory 工作区查看结构
+13. 【ESLint 代码诊断】当工作区是 JS/TS 项目且需要诊断代码质量时，可调用 eslintLint（全工作区）或 eslintLintFile（单文件）工具获取 ESLint 报告。结果包含文件路径、行号、列号、严重性、规则 ID 和消息。
+    - 用户报告"代码有 bug"、"代码质量"、"重构"、"修复 lint 报错"等需求时，优先调用 eslintLint 获取全量诊断。
+    - 修复完成后建议重新调用 eslintLint 验证问题已解决。
+    - ESLint 工具的左侧状态面板已实时显示工作区诊断结果，无需重复手动调用（除非用户明确要求重新扫描）。
 ${toolListSection}`;
     // i18n: if a non-zh language is active, use the translated code system prompt
     if (typeof i18nGetSystemPrompt === 'function') {
@@ -1381,6 +1388,7 @@ ${toolListSection}`;
     this.runId++;
     this.hotMessages = [];
     if (this.pendingApproval) this.resolveApproval(false);
+    if (this.pendingToolAuth) this.resolveToolAuth('deny');
     // 瞬间中止所有正在进行的 LLM 请求和终端命令
     if (window.api?.agentAbortAll) {
       try { window.api.agentAbortAll(); } catch { /* ignore */ }
@@ -1673,6 +1681,34 @@ ${toolListSection}`;
           const toolDef = TOOL_DEFINITIONS.find(t => t.name === toolName);
           const isSensitive = toolDef?.sensitive && !this.settings.autoApproveSensitive;
 
+          // ===== 工具首次使用授权（Playwright / Computer Use）=====
+          // 这些工具不再标记为 sensitive（不再每次调用都弹敏感确认），
+          // 改为首次使用时弹出一次授权模态框：用户选择"允许并记住"后写入 settings.toolAuthGranted 持久化；
+          // "仅本次"则只允许本次会话内使用；"拒绝"则跳过调用并返回错误。
+          const authCategory = (typeof getToolAuthCategory === 'function') ? getToolAuthCategory(toolName) : null;
+          if (authCategory && !(this.settings?.toolAuthGranted?.[authCategory] === true || this._sessionToolAuth?.[authCategory] === true)) {
+            const decision = await this.requestToolAuth(toolName, authCategory);
+            if (decision === 'deny' || !decision) {
+              const result = JSON.stringify({ ok: false, error: '用户未授权使用此工具' });
+              this.contextManager.addToolResult(tc.id, toolName, result);
+              if (this.onToolCall) this.onToolCall(toolName, args, 'denied');
+              continue;
+            }
+            // 'allow-once' 仅本次会话生效，不写入 settings
+            if (decision === 'allow-always') {
+              try {
+                const s = await window.api.getSettings();
+                if (!s.toolAuthGranted) s.toolAuthGranted = { playwright: false, computerUse: false };
+                s.toolAuthGranted[authCategory] = true;
+                await window.api.saveSettings(s);
+                this.settings = s;
+              } catch (e) { /* 持久化失败时降级为本次会话内允许 */ }
+            }
+            // 'allow-once' / 'allow-always' 都允许本次会话内继续使用
+            if (!this._sessionToolAuth) this._sessionToolAuth = {};
+            this._sessionToolAuth[authCategory] = true;
+          }
+
           // Extra check for terminal commands
           let needsApproval = isSensitive;
           if (toolName === 'runTerminalCommand' || toolName === 'awaitTerminalCommand' || toolName === 'runShellScriptCode') {
@@ -1772,6 +1808,26 @@ ${toolListSection}`;
       this.approvalResolve(approved);
       this.approvalResolve = null;
       this.pendingApproval = null;
+    }
+  }
+
+  /**
+   * 弹出"工具首次使用授权"模态框，等待用户决策。
+   * 返回值：'allow-always'（持久化）| 'allow-once'（仅本次会话）| 'deny'
+   */
+  requestToolAuth(toolName, category) {
+    return new Promise((resolve) => {
+      this.pendingToolAuth = { toolName, category };
+      this.toolAuthResolve = resolve;
+      if (this.onMessage) this.onMessage('tool-auth-required', { toolName, category });
+    });
+  }
+
+  resolveToolAuth(decision) {
+    if (this.toolAuthResolve) {
+      this.toolAuthResolve(decision);
+      this.toolAuthResolve = null;
+      this.pendingToolAuth = null;
     }
   }
 
@@ -2078,6 +2134,25 @@ ${toolListSection}`;
         case 'openFileExplorer': {
           const result = await window.api.openFileExplorer(args.path);
           return result.ok !== undefined ? result : { ok: true };
+        }
+        case 'eslintLint': {
+          // 对工作区执行 ESLint 诊断。Code 模式专用工具，但 Chat 模式也允许调用（需提供 workspacePath）
+          const ws = this.codeWorkspacePath || this.workspacePath;
+          if (!ws) return { ok: false, error: '当前未打开工作区，无法执行 ESLint' };
+          const opts = {};
+          if (Array.isArray(args.files) && args.files.length > 0) opts.files = args.files;
+          if (typeof args.maxFiles === 'number' && args.maxFiles > 0) opts.maxFiles = args.maxFiles;
+          return await window.api.eslintLint(ws, opts);
+        }
+        case 'eslintLintFile': {
+          if (!args.path) return { ok: false, error: '参数 path 必填' };
+          // 支持相对路径：基于工作区解析（renderer 无 require('path')，用字符串拼接）
+          let fp = args.path;
+          const ws = this.codeWorkspacePath || this.workspacePath;
+          if (ws && !/^([a-zA-Z]:[\\/]|[\\/]|[\w-]+:\/\/)/.test(fp)) {
+            fp = ws.replace(/[\\/]+$/, '') + '/' + fp.replace(/^[\\/]+/, '');
+          }
+          return await window.api.eslintLintFile(fp);
         }
         case 'manageContext': return this.contextManager.manage(args.action, args);
         case 'autoSummarizeContext': {

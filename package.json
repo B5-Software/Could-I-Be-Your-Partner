@@ -58,7 +58,12 @@
       "icon": "assets/icons/icons/icon.icns",
       "extendInfo": {
         "NSLocalNetworkUsageDescription": "需要访问本地网络以连接 Remote 模式下的远端设备和 WebUI 控制服务。",
-        "NSBonjourServices": ["_http._tcp", "_airplay._tcp", "_services._dns-sd._udp", "_cibyp._tcp"],
+        "NSBonjourServices": [
+          "_http._tcp",
+          "_airplay._tcp",
+          "_services._dns-sd._udp",
+          "_cibyp._tcp"
+        ],
         "NSAppleEventsUsageDescription": "需要发送 AppleEvent 以使用系统无障碍 API 获取 UI 树和自动化操作。",
         "NSAppleMusicUsageDescription": "应用需要控制媒体播放以执行用户指令。"
       }
@@ -91,11 +96,13 @@
     "node-gyp": "^12.2.0"
   },
   "dependencies": {
+    "@eslint/js": "^10.0.1",
     "@nut-tree-fork/nut-js": "^4.2.6",
     "adm-zip": "^0.5.18",
     "bcryptjs": "^3.0.3",
     "better-sqlite3": "^12.11.1",
     "chardet": "^2.2.0",
+    "eslint": "^10.7.0",
     "express": "^5.2.1",
     "express-session": "^1.19.0",
     "express-ws": "^5.0.2",
