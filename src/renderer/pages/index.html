@@ -21,8 +21,19 @@
   <link rel="stylesheet" href="../../../assets/fonts/fontawesome.min.css">
   <script src="../../../assets/geogebra/deployggb.js"></script>
   <script src="../../../node_modules/monaco-editor/min/vs/loader.js"></script>
+  <script>
+    // 临时屏蔽 Monaco 的 AMD define，让 xterm.js/addon-fit.js 走全局路径
+    // （UMD 检测到 define.amd 时会调用 define([], factory)，但 AMD loader
+    //  只允许一个匿名 define，导致 "Can only have one anonymous define" 错误）
+    var __savedDefine = window.define;
+    window.define = undefined;
+  </script>
   <script src="../../../node_modules/@xterm/xterm/lib/xterm.js"></script>
   <script src="../../../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
+  <script>
+    // 恢复 Monaco 的 define，保证后续 require([...)/define(...) 可用
+    window.define = __savedDefine;
+  </script>
 </head>
 <body>
   <!-- Custom Titlebar -->

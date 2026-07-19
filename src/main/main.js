@@ -1514,8 +1514,11 @@ function createWindow() {
         hideWindowToTray();
       } else if (decision === 'never') {
         // 用户选择"不再后台运行"→ 真正退出
+        // 直接调用 app.quit() 跳过 close 事件循环；并标记 pendingSaveDone
+        // 避免触发 before-quit 中等待渲染器保存 pending 状态的逻辑
         isQuitting = true;
-        try { mainWindow.close(); } catch {}
+        pendingSaveDone = true;
+        try { app.quit(); } catch {}
       } else {
         // 用户取消模态框（cancel / dismiss）→ 保持窗口打开，不关闭也不隐藏
         // （避免误把"取消"当作"总是隐藏到托盘"）
