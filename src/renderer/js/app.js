@@ -5049,7 +5049,10 @@
 
   function getSkillSummaryMeta(skill) {
     const scriptCount = Array.isArray(skill?.scripts) ? skill.scripts.filter(s => /\.js$/i.test(String(s?.name || s || ''))).length : 0;
-    const typeLabel = skill?.type === 'standard' ? '标准 Skill' : '自定义';
+    let typeLabel;
+    if (skill?.bundled) typeLabel = '内置技能';
+    else if (skill?.type === 'standard') typeLabel = '标准 Skill';
+    else typeLabel = '自定义';
     return `${typeLabel}${scriptCount > 0 ? ` · JS脚本 ${scriptCount}` : ''}`;
   }
 
@@ -5075,24 +5078,43 @@
 
   async function loadSkillsPage() {
     const list = document.getElementById('skills-list');
-    const skills = await window.api.listSkills();
-    if (skills.length === 0) {
+    const userSkills = await window.api.listSkills();
+    // Merge bundled (built-in) skills with user skills.
+    // User skills with the same name override bundled skills (matching agent behavior).
+    let bundled = [];
+    try {
+      if (typeof BUNDLED_SKILLS !== 'undefined') bundled = BUNDLED_SKILLS || [];
+    } catch { /* bundled-skills.js not loaded */ }
+    const overriddenNames = new Set(userSkills.map(s => s.name));
+    const visibleBundled = bundled.filter(s => !overriddenNames.has(s.name));
+    const allSkills = [...visibleBundled, ...userSkills];
+
+    if (allSkills.length === 0) {
       list.innerHTML = '<div class="empty-state"><i class="fa-solid fa-lightbulb"></i><p>暂无技能，点击上方按钮添加或导入 SKILL.md</p></div>';
       return;
     }
-    list.innerHTML = skills.map(s => `
-      <div class="skill-card" data-id="${s.id}">
-        <div class="skill-icon"><i class="fa-solid fa-lightbulb"></i></div>
+    list.innerHTML = allSkills.map(s => {
+      const isBundled = !!s.bundled;
+      const isOverriding = !isBundled && bundled.some(b => b.name === s.name);
+      const iconClass = isBundled ? 'fa-shield-halved' : 'fa-lightbulb';
+      const badgeHtml = isBundled
+        ? '<span class="skill-badge skill-badge-builtin">内置</span>'
+        : (isOverriding ? '<span class="skill-badge skill-badge-override">覆盖内置</span>' : '');
+      const actionsHtml = isBundled
+        ? `<button class="btn-icon skill-view" data-id="${s.id}" data-name="${escapeHtml(s.name || '')}" data-desc="${escapeHtml(s.description || '')}" data-prompt="${escapeHtml(s.prompt || '')}" title="查看（只读）"><i class="fa-solid fa-eye"></i></button>`
+        : `<button class="btn-icon skill-edit" data-id="${s.id}" data-name="${escapeHtml(s.name || '')}" data-desc="${escapeHtml(s.description || '')}" data-prompt="${escapeHtml(s.prompt || '')}" title="编辑"><i class="fa-solid fa-pen-to-square"></i></button>
+           <button class="btn-icon skill-delete" data-id="${s.id}" title="删除"><i class="fa-solid fa-trash-can"></i></button>`;
+      return `
+      <div class="skill-card${isBundled ? ' skill-card-builtin' : ''}" data-id="${s.id}">
+        <div class="skill-icon"><i class="fa-solid ${iconClass}"></i></div>
         <div class="skill-info">
-          <div class="skill-name">${escapeHtml(s.name || '')}</div>
+          <div class="skill-name">${escapeHtml(s.name || '')} ${badgeHtml}</div>
           <div class="skill-desc">${escapeHtml(s.description || '')}</div>
           <div class="skill-meta">${escapeHtml(getSkillSummaryMeta(s))}</div>
         </div>
-        <div class="skill-actions">
-          <button class="btn-icon skill-edit" data-id="${s.id}" data-name="${escapeHtml(s.name || '')}" data-desc="${escapeHtml(s.description || '')}" data-prompt="${escapeHtml(s.prompt || '')}" title="编辑"><i class="fa-solid fa-pen-to-square"></i></button>
-          <button class="btn-icon skill-delete" data-id="${s.id}" title="删除"><i class="fa-solid fa-trash-can"></i></button>
-        </div>
-      </div>`).join('');
+        <div class="skill-actions">${actionsHtml}</div>
+      </div>`;
+    }).join('');
 
     list.querySelectorAll('.skill-delete').forEach(btn => {
       btn.addEventListener('click', async () => {
@@ -5105,6 +5127,7 @@
 
     list.querySelectorAll('.skill-edit').forEach(btn => {
       btn.addEventListener('click', () => {
+        _resetSkillModalEditable();
         const modal = document.getElementById('skill-modal');
         document.getElementById('skill-modal-title').textContent = '编辑技能';
         document.getElementById('skill-edit-id').value = btn.dataset.id;
@@ -5114,10 +5137,38 @@
         modal.classList.remove('hidden');
       });
     });
+
+    list.querySelectorAll('.skill-view').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const modal = document.getElementById('skill-modal');
+        document.getElementById('skill-modal-title').textContent = '查看内置技能（只读）';
+        document.getElementById('skill-edit-id').value = '';
+        document.getElementById('skill-name').value = btn.dataset.name || '';
+        document.getElementById('skill-desc').value = btn.dataset.desc || '';
+        document.getElementById('skill-prompt').value = btn.dataset.prompt || '';
+        // Mark fields as read-only for bundled skills
+        ['skill-name', 'skill-desc', 'skill-prompt'].forEach(fid => {
+          const el = document.getElementById(fid);
+          if (el) el.setAttribute('readonly', 'readonly');
+        });
+        const saveBtn = document.getElementById('btn-save-skill');
+        if (saveBtn) saveBtn.style.display = 'none';
+        modal.classList.remove('hidden');
+      });
+    });
   }
 
   // Skill Modal
+  function _resetSkillModalEditable() {
+    ['skill-name', 'skill-desc', 'skill-prompt'].forEach(fid => {
+      const el = document.getElementById(fid);
+      if (el) el.removeAttribute('readonly');
+    });
+    const saveBtn = document.getElementById('btn-save-skill');
+    if (saveBtn) saveBtn.style.display = '';
+  }
   document.getElementById('btn-add-skill').addEventListener('click', () => {
+    _resetSkillModalEditable();
     document.getElementById('skill-modal-title').textContent = '添加技能';
     document.getElementById('skill-edit-id').value = '';
     document.getElementById('skill-name').value = '';
@@ -5127,10 +5178,12 @@
   });
 
   document.getElementById('btn-close-skill-modal').addEventListener('click', () => {
+    _resetSkillModalEditable();
     document.getElementById('skill-modal').classList.add('hidden');
   });
 
   document.getElementById('btn-cancel-skill').addEventListener('click', () => {
+    _resetSkillModalEditable();
     document.getElementById('skill-modal').classList.add('hidden');
   });
 
@@ -5147,6 +5200,7 @@
     }
     if (typeof agent.refreshSkillsCatalog === 'function') await agent.refreshSkillsCatalog();
     agent.contextManager.setSystemPrompt(agent.getSystemPrompt());
+    _resetSkillModalEditable();
     document.getElementById('skill-modal').classList.add('hidden');
     document.getElementById('skill-name').value = '';
     document.getElementById('skill-desc').value = '';

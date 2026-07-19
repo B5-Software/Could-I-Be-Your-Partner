@@ -269,6 +269,39 @@
   margin-top: 16px;
 }
 
+/* Skill Badges (内置 / 覆盖内置) */
+.skill-badge {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 4px;
+  margin-left: 6px;
+  vertical-align: middle;
+  letter-spacing: 0.3px;
+}
+
+.skill-badge-builtin {
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+.skill-badge-override {
+  background: color-mix(in srgb, var(--warning, #f59e0b) 18%, transparent);
+  color: var(--warning, #f59e0b);
+  border: 1px solid color-mix(in srgb, var(--warning, #f59e0b) 35%, transparent);
+}
+
+.skill-card-builtin {
+  border-style: dashed;
+  background: color-mix(in srgb, var(--accent) 4%, var(--bg-secondary));
+}
+
+.skill-card-builtin .skill-icon {
+  color: var(--accent);
+}
+
 /* Knowledge & Memory List Items */
 .knowledge-list, .memory-list {
   display: flex;
