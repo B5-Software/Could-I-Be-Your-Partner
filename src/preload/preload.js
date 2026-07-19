@@ -70,6 +70,19 @@ contextBridge.exposeInMainWorld('api', {
   runTerminalCommand: (id, cmd) => ipcRenderer.invoke('terminal:run', id, cmd),
   awaitTerminalCommand: (id, cmd) => ipcRenderer.invoke('terminal:await', id, cmd),
   killTerminal: (id) => ipcRenderer.invoke('terminal:kill', id),
+  // 终端可见化：列出所有终端、回写用户输入、调整尺寸、获取历史
+  listTerminals: () => ipcRenderer.invoke('terminal:list'),
+  writeTerminal: (id, data) => ipcRenderer.invoke('terminal:write', id, data),
+  resizeTerminal: (id, cols, rows) => ipcRenderer.invoke('terminal:resize', id, cols, rows),
+  getTerminalHistory: (id) => ipcRenderer.invoke('terminal:getHistory', id),
+  onTerminalData: (cb) => {
+    ipcRenderer.removeAllListeners('terminal:data');
+    ipcRenderer.on('terminal:data', (_, payload) => cb(payload));
+  },
+  onTerminalExit: (cb) => {
+    ipcRenderer.removeAllListeners('terminal:exit');
+    ipcRenderer.on('terminal:exit', (_, payload) => cb(payload));
+  },
 
   // Clipboard
   readClipboard: () => ipcRenderer.invoke('clipboard:read'),

@@ -1145,3 +1145,182 @@
 .mcp-add-form .setting-item:last-child {
   margin-bottom: 0;
 }
+
+/* ---- Terminal Modal ---- */
+/* 终端模态框：宽+高较大，无滚动条（xterm 自己滚动） */
+.terminal-modal-dialog {
+  width: min(92vw, 1000px);
+  height: min(80vh, 640px);
+  max-width: 1100px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 0;
+}
+
+.terminal-modal-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.terminal-modal-actions .btn-icon {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm, 6px);
+  color: var(--text-secondary);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: background var(--transition), color var(--transition);
+}
+.terminal-modal-actions .btn-icon:hover {
+  background: var(--bg-tertiary, var(--bg-primary));
+  color: var(--text-primary);
+}
+
+/* 终端标签页：横排，可滚动 */
+.terminal-tabs {
+  display: flex;
+  align-items: stretch;
+  background: var(--bg-tertiary, var(--bg-primary));
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+  min-height: 32px;
+  flex-shrink: 0;
+}
+.terminal-tabs::-webkit-scrollbar {
+  height: 4px;
+}
+.terminal-tabs::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 2px;
+}
+
+/* 单个标签：图标+标签+工作目录 */
+.terminal-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  background: transparent;
+  border-right: 1px solid var(--border);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background var(--transition), color var(--transition);
+  user-select: none;
+  max-width: 240px;
+}
+.terminal-tab:hover {
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+}
+.terminal-tab.active {
+  background: var(--bg-secondary);
+  color: var(--accent, #6366f1);
+  border-bottom: 2px solid var(--accent, #6366f1);
+  font-weight: 500;
+}
+.terminal-tab-exited {
+  opacity: 0.55;
+  text-decoration: line-through;
+}
+.terminal-tab > i {
+  font-size: 11px;
+  opacity: 0.8;
+}
+.terminal-tab-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 130px;
+}
+.terminal-tab-cwd {
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: var(--bg-tertiary, rgba(0,0,0,0.05));
+  color: var(--text-tertiary, var(--text-secondary));
+  opacity: 0.7;
+}
+
+/* 终端面板容器：占满剩余空间 */
+.terminal-container {
+  flex: 1;
+  position: relative;
+  background: #1e1e2e; /* 默认深色，与 xterm 主题一致 */
+  overflow: hidden;
+  min-height: 0;
+}
+
+/* 单个终端面板：绝对定位填满容器，切换时改变 display */
+.terminal-panel {
+  position: absolute;
+  inset: 0;
+  padding: 6px 8px;
+  box-sizing: border-box;
+}
+.terminal-panel .xterm {
+  height: 100%;
+}
+.terminal-panel .xterm-viewport {
+  background-color: transparent !important;
+}
+
+/* 空状态 */
+.terminal-empty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--text-tertiary, #888);
+  background: var(--bg-secondary);
+  text-align: center;
+  padding: 20px;
+}
+.terminal-empty > i {
+  font-size: 48px;
+  opacity: 0.3;
+}
+.terminal-empty-title {
+  font-size: 16px;
+  font-weight: 500;
+  margin: 4px 0;
+  color: var(--text-secondary);
+}
+.terminal-empty-hint {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  max-width: 360px;
+  line-height: 1.5;
+}
+
+/* 浅色主题下容器背景跟随 */
+[data-theme="light"] .terminal-container {
+  background: #ffffff;
+}
+
+/* 强调色光晕：让用户感知当前激活终端 */
+.terminal-tab.active::after {
+  content: '';
+  position: absolute;
+  bottom: -1px;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--accent, #6366f1);
+  pointer-events: none;
+}
+.terminal-tab {
+  position: relative;
+}

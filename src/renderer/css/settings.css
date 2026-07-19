@@ -153,6 +153,44 @@
   min-height: 36px;
 }
 
+/* 峰谷价倍率/时段输入框（不在 .setting-item 内，但需要统一样式） */
+input[id^="setting-budget-peak-"][type="number"],
+input[id^="setting-budget-peak-"][type="text"] {
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 6px);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color var(--transition);
+  box-sizing: border-box;
+}
+input[id^="setting-budget-peak-"][type="number"]:focus,
+input[id^="setting-budget-peak-"][type="text"]:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-bg, rgba(42,157,143,0.15));
+}
+
+/* 邮箱控制白名单输入框（不在 .setting-item 内） */
+#email-allowed-sender-input {
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 14px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color var(--transition);
+  box-sizing: border-box;
+}
+#email-allowed-sender-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-bg, rgba(42,157,143,0.15));
+}
+
 .setting-item input:focus,
 .setting-item textarea:focus,
 .setting-item select:focus {

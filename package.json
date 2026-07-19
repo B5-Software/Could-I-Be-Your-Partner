@@ -38,7 +38,10 @@
       "assets/ocr/**/*",
       "node_modules/monaco-editor/min/**/*",
       "node_modules/node-pty/**/*",
-      "node_modules/@nut-tree-fork/**/*"
+      "node_modules/@nut-tree-fork/**/*",
+      "node_modules/@xterm/xterm/css/**/*",
+      "node_modules/@xterm/xterm/lib/**/*",
+      "node_modules/@xterm/addon-fit/lib/**/*"
     ],
     "win": {
       "icon": "assets/icons/icons/icon.ico",
@@ -98,6 +101,8 @@
   "dependencies": {
     "@eslint/js": "^10.0.1",
     "@nut-tree-fork/nut-js": "^4.2.6",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
     "adm-zip": "^0.5.18",
     "bcryptjs": "^3.0.3",
     "better-sqlite3": "^12.11.1",

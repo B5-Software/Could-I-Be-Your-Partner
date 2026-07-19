@@ -1509,7 +1509,7 @@ function createWindow() {
     event.preventDefault();
     try {
       const decision = await askCloseToTrayDecision();
-      // decision: 'always' | 'once' | 'never'
+      // decision: 'always' | 'once' | 'never' | null(cancel)
       if (decision === 'always' || decision === 'once') {
         hideWindowToTray();
       } else if (decision === 'never') {
@@ -1517,12 +1517,11 @@ function createWindow() {
         isQuitting = true;
         try { mainWindow.close(); } catch {}
       } else {
-        // 用户取消模态框（dismiss）→ 默认最小化到托盘（避免误关）
-        hideWindowToTray();
+        // 用户取消模态框（cancel / dismiss）→ 保持窗口打开，不关闭也不隐藏
+        // （避免误把"取消"当作"总是隐藏到托盘"）
       }
     } catch {
-      // 询问失败时降级为最小化到托盘（避免数据丢失）
-      hideWindowToTray();
+      // 询问失败时降级为保持窗口打开（不强制隐藏到托盘）
     }
   });
 }
@@ -2148,8 +2147,29 @@ ipcMain.handle('fs:searchInFiles', async (_, paths, pattern, options = {}) => {
 });
 
 // ---- IPC: Terminal Management ----
+// 终端架构：
+//   - agentBuffer: 破坏性读取（Agent 通过 buffer() 消费后清空）
+//   - fullHistory: 追加式历史（用于 xterm.js 显示，上限 100KB 防止内存膨胀）
+//   - 实时通过 terminal:data / terminal:exit 事件推送到渲染器，让 xterm 即时显示
+//   - 元数据（cwd、createdAt、lastCommand）用于终端标签页展示
 const terminals = new Map();
 let terminalIdCounter = 0;
+const TERMINAL_HISTORY_MAX = 100000; // 100KB
+
+function _broadcastTerminalEvent(channel, payload) {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  try { mainWindow.webContents.send(channel, payload); } catch { /* ignore */ }
+}
+
+function _appendTerminalData(id, entry, data) {
+  entry.agentBuffer += data;
+  entry.fullHistory += data;
+  if (entry.fullHistory.length > TERMINAL_HISTORY_MAX) {
+    // 保留尾部一半，丢弃头部
+    entry.fullHistory = entry.fullHistory.slice(-TERMINAL_HISTORY_MAX / 2);
+  }
+  _broadcastTerminalEvent('terminal:data', { id, data });
+}
 
 ipcMain.handle('terminal:make', (_, cwd) => {
   try {
@@ -2195,10 +2215,24 @@ ipcMain.handle('terminal:make', (_, cwd) => {
       cwd: effectiveCwd,
       env
     });
-    let buffer = '';
-    term.onData(data => { buffer += data; });
-    terminals.set(id, { term, buffer: () => { const b = buffer; buffer = ''; return b; } });
-    return { ok: true, terminalId: id };
+    // 终端元数据：buffer 兼容 Agent 现有调用；fullHistory 用于 xterm.js 回放与显示
+    const entry = {
+      term,
+      agentBuffer: '',
+      fullHistory: '',
+      cwd: effectiveCwd,
+      createdAt: Date.now(),
+      lastCommand: '',
+      shellName,
+      // 兼容旧接口：Agent 调用 t.buffer() 取走 agentBuffer
+      buffer: () => { const b = entry.agentBuffer; entry.agentBuffer = ''; return b; }
+    };
+    term.onData(data => _appendTerminalData(id, entry, data));
+    term.onExit(({ exitCode }) => {
+      _broadcastTerminalEvent('terminal:exit', { id, exitCode });
+    });
+    terminals.set(id, entry);
+    return { ok: true, terminalId: id, cwd: effectiveCwd, createdAt: entry.createdAt };
   } catch (e) {
     // 捕获详细错误信息，便于诊断
     const detail = e.stack || e.message;
@@ -2206,11 +2240,65 @@ ipcMain.handle('terminal:make', (_, cwd) => {
     return { ok: false, error: e.message, detail };
   }
 });
+
+// 列出所有终端元数据（用于前端标签页展示）
+ipcMain.handle('terminal:list', () => {
+  const list = [];
+  for (const [id, t] of terminals) {
+    list.push({
+      id,
+      cwd: t.cwd,
+      createdAt: t.createdAt,
+      lastCommand: t.lastCommand,
+      shellName: t.shellName,
+      exited: false // onExit 后会从 Map 中删除
+    });
+  }
+  return { ok: true, terminals: list };
+});
+
+// xterm.js 用户输入回写到 pty
+ipcMain.handle('terminal:write', (_, id, data) => {
+  const t = terminals.get(id);
+  if (!t) return { ok: false, error: '终端不存在' };
+  try {
+    t.term.write(data);
+    // 简单识别命令行：以 \r 结尾的输入视为命令（用于标签页标题展示）
+    if (typeof data === 'string' && data.endsWith('\r')) {
+      const cmd = data.replace(/\r$/, '').trim();
+      if (cmd) t.lastCommand = cmd.slice(0, 60);
+    }
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+// xterm.js fit 后调用，调整 pty 尺寸
+ipcMain.handle('terminal:resize', (_, id, cols, rows) => {
+  const t = terminals.get(id);
+  if (!t) return { ok: false, error: '终端不存在' };
+  try {
+    t.term.resize(Math.max(1, Math.floor(cols)), Math.max(1, Math.floor(rows)));
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+// 获取终端完整历史（用于 xterm.js 后加入时回放）
+ipcMain.handle('terminal:getHistory', (_, id) => {
+  const t = terminals.get(id);
+  if (!t) return { ok: false, error: '终端不存在' };
+  return { ok: true, history: t.fullHistory };
+});
+
 ipcMain.handle('terminal:run', (_, id, command) => {
   const t = terminals.get(id);
   if (!t) return { ok: false, error: '终端不存在' };
-  t.buffer();
+  t.agentBuffer = ''; // 清空 Agent 读取缓冲区
   t.term.write(command + '\r');
+  t.lastCommand = String(command).slice(0, 60);
   return new Promise(resolve => {
     setTimeout(() => { resolve({ ok: true, output: t.buffer() }); }, 2000);
   });
@@ -2218,8 +2306,9 @@ ipcMain.handle('terminal:run', (_, id, command) => {
 ipcMain.handle('terminal:await', (_, id, command) => {
   const t = terminals.get(id);
   if (!t) return { ok: false, error: '终端不存在' };
-  t.buffer();
+  t.agentBuffer = ''; // 清空 Agent 读取缓冲区
   t.term.write(command + '\r');
+  t.lastCommand = String(command).slice(0, 60);
   return new Promise(resolve => {
     const timeout = setTimeout(() => { resolve({ ok: true, output: t.buffer(), timedOut: true }); }, 120000);
     let checkInterval = setInterval(() => {
@@ -2234,7 +2323,11 @@ ipcMain.handle('terminal:await', (_, id, command) => {
 });
 ipcMain.handle('terminal:kill', (_, id) => {
   const t = terminals.get(id);
-  if (t) { t.term.kill(); terminals.delete(id); }
+  if (t) {
+    try { t.term.kill(); } catch { /* ignore */ }
+    terminals.delete(id);
+    _broadcastTerminalEvent('terminal:exit', { id, exitCode: 0, killed: true });
+  }
   return { ok: true };
 });
 
@@ -2243,7 +2336,7 @@ ipcMain.handle('agent:abortAll', () => {
   const reqCount = abortAllRequests();
   let termCount = 0;
   for (const [id, t] of terminals) {
-    try { t.term.kill(); termCount++; } catch { /* ignore */ }
+    try { t.term.kill(); termCount++; _broadcastTerminalEvent('terminal:exit', { id, exitCode: 0, killed: true }); } catch { /* ignore */ }
   }
   terminals.clear();
   console.log(`[Agent] Aborted ${reqCount} LLM request(s), killed ${termCount} terminal(s)`);

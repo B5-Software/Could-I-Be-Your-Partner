@@ -12,6 +12,7 @@
   <title>Could I Be Your Partner</title>
   <link rel="icon" href="../../../assets/icons/icon.png">
   <link rel="stylesheet" href="../../../node_modules/katex/dist/katex.min.css">
+  <link rel="stylesheet" href="../../../node_modules/@xterm/xterm/css/xterm.css">
   <link rel="stylesheet" href="../css/theme.css">
   <link rel="stylesheet" href="../css/main.css">
   <link rel="stylesheet" href="../css/chat.css">
@@ -20,6 +21,8 @@
   <link rel="stylesheet" href="../../../assets/fonts/fontawesome.min.css">
   <script src="../../../assets/geogebra/deployggb.js"></script>
   <script src="../../../node_modules/monaco-editor/min/vs/loader.js"></script>
+  <script src="../../../node_modules/@xterm/xterm/lib/xterm.js"></script>
+  <script src="../../../node_modules/@xterm/addon-fit/lib/addon-fit.js"></script>
 </head>
 <body>
   <!-- Custom Titlebar -->
@@ -343,6 +346,9 @@
           <div class="code-toolbar-left">
             <button class="btn-secondary btn-sm" id="btn-code-open-workspace" title="打开工作区">
               <i class="fa-solid fa-folder-open"></i> 工作区
+            </button>
+            <button class="btn-icon btn-sm" id="btn-code-show-terminals" title="显示终端（Ctrl+T）">
+              <i class="fa-solid fa-terminal"></i>
             </button>
             <button class="btn-icon btn-sm" id="btn-code-open-in-explorer" title="在系统文件管理器中打开工作区">
               <i class="fa-solid fa-folder-tree"></i>
@@ -990,9 +996,12 @@
                 <p class="setting-hint" style="margin-bottom:12px">
                   启用后在指定时段内对各类价格应用倍率。例如某些 API 在高峰时段按 1.5x 计费。
                 </p>
-                <div class="setting-item" style="display:flex;align-items:center;gap:8px">
-                  <label style="min-width:120px">启用峰谷价</label>
-                  <input type="checkbox" id="setting-budget-peak-enabled">
+                <div class="setting-item" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+                  <div class="toggle-switch">
+                    <input type="checkbox" id="setting-budget-peak-enabled">
+                    <span class="toggle-slider"></span>
+                  </div>
+                  <label for="setting-budget-peak-enabled" style="cursor:pointer;font-weight:500">启用峰谷价</label>
                   <span style="color:var(--text-tertiary);font-size:12px">勾选后在下方时段内应用倍率</span>
                 </div>
                 <div class="setting-item" style="display:flex;align-items:center;gap:8px">
@@ -2178,6 +2187,9 @@
         </div>
       </div>
       <div class="modal-footer">
+        <button class="btn-secondary" id="btn-tray-cancel" type="button">
+          <i class="fa-solid fa-rotate-left"></i> 取消
+        </button>
         <button class="btn-secondary" id="btn-tray-never">
           <i class="fa-solid fa-xmark"></i> 不再后台运行
         </button>
@@ -2188,6 +2200,28 @@
           <i class="fa-solid fa-check"></i> 始终后台运行
         </button>
       </div>
+    </div>
+  </div>
+
+  <!-- Terminal Modal: 显示所有 node-pty 终端，以标签页形式切换，用户可操作 -->
+  <div class="modal-overlay hidden" id="terminal-modal">
+    <div class="modal terminal-modal-dialog">
+      <div class="modal-header">
+        <h3><i class="fa-solid fa-terminal"></i> 终端</h3>
+        <div class="terminal-modal-actions">
+          <button class="btn-icon btn-sm" id="btn-terminal-new" title="新建终端">
+            <i class="fa-solid fa-plus"></i>
+          </button>
+          <button class="btn-icon btn-sm" id="btn-terminal-close-tab" title="关闭当前标签">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+          <button class="btn-icon" id="btn-close-terminal-modal" title="关闭">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+        </div>
+      </div>
+      <div class="terminal-tabs" id="terminal-tabs"></div>
+      <div class="terminal-container" id="terminal-container"></div>
     </div>
   </div>
 
