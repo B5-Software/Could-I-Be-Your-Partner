@@ -4593,6 +4593,33 @@
   if (_btnToolAuthAlways) _btnToolAuthAlways.addEventListener('click', () => _resolveToolAuth('allow-always'));
   if (_btnCloseToolAuth) _btnCloseToolAuth.addEventListener('click', () => _resolveToolAuth('deny'));
 
+  // ---- 关闭时询问"后台运行"模态框（Tray Mode）----
+  const trayAskModal = document.getElementById('tray-ask-modal');
+  function _showTrayAskModal() {
+    if (!trayAskModal) return;
+    trayAskModal.classList.remove('hidden');
+    WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#tray-ask-modal', attr: 'class', value: trayAskModal.className });
+  }
+  function _closeTrayAskModal() {
+    if (!trayAskModal) return;
+    trayAskModal.classList.add('hidden');
+    WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#tray-ask-modal', attr: 'class', value: trayAskModal.className });
+  }
+  function _respondTrayAsk(decision) {
+    _closeTrayAskModal();
+    try { window.api.trayRespondCloseDecision(decision); } catch {}
+  }
+  const _btnTrayNever = document.getElementById('btn-tray-never');
+  const _btnTrayOnce = document.getElementById('btn-tray-once');
+  const _btnTrayAlways = document.getElementById('btn-tray-always');
+  if (_btnTrayNever) _btnTrayNever.addEventListener('click', () => _respondTrayAsk('never'));
+  if (_btnTrayOnce) _btnTrayOnce.addEventListener('click', () => _respondTrayAsk('once'));
+  if (_btnTrayAlways) _btnTrayAlways.addEventListener('click', () => _respondTrayAsk('always'));
+  // 监听主进程的询问事件
+  try {
+    window.api.onTrayAskCloseDecision(() => _showTrayAskModal());
+  } catch {}
+
   // ---- Tools Page ----
   function renderToolsStats(mode) {
     mode = mode || codeEditorModeFilter || 'chat';
@@ -5550,6 +5577,12 @@
     document.getElementById('setting-accent-color').value = s.theme.accentColor;
     document.getElementById('setting-bg-color').value = s.theme.backgroundColor;
     document.getElementById('setting-auto-approve').checked = s.autoApproveSensitive;
+
+    // 后台托盘模式
+    const trayEnabledEl = document.getElementById('setting-tray-enabled');
+    const closeToTrayEl = document.getElementById('setting-close-to-tray');
+    if (trayEnabledEl) trayEnabledEl.checked = s.trayEnabled !== false;
+    if (closeToTrayEl) closeToTrayEl.value = ['ask', 'always', 'never'].includes(s.closeToTray) ? s.closeToTray : 'ask';
 
     // Theme mode
     document.querySelectorAll('.theme-mode-btn').forEach(btn => {
@@ -6897,6 +6930,44 @@
     const s = await window.api.getSettings();
     s.autoApproveSensitive = e.target.checked;
     await saveSettings(s);
+  });
+
+  // 后台托盘：启用托盘图标
+  document.getElementById('setting-tray-enabled')?.addEventListener('change', async (e) => {
+    const enabled = e.target.checked;
+    try {
+      const r = await window.api.traySetEnabled(enabled);
+      if (r && r.ok) {
+        // 同步本地 settings 缓存
+        try { agent.settings = r.settings; } catch {}
+      } else {
+        e.target.checked = !enabled; // 回滚
+      }
+    } catch (err) {
+      console.error('[Tray] set enabled failed:', err);
+      e.target.checked = !enabled;
+    }
+  });
+
+  // 后台托盘：关闭窗口行为
+  document.getElementById('setting-close-to-tray')?.addEventListener('change', async (e) => {
+    const mode = e.target.value;
+    if (!['ask', 'always', 'never'].includes(mode)) return;
+    try {
+      const r = await window.api.traySetCloseToTray(mode);
+      if (r && r.ok) {
+        try { agent.settings = r.settings; } catch {}
+      }
+    } catch (err) {
+      console.error('[Tray] set closeToTray failed:', err);
+    }
+  });
+
+  // 后台托盘：测试隐藏按钮
+  document.getElementById('btn-tray-test-hide')?.addEventListener('click', () => {
+    try { window.api.trayHideToTray(); } catch (err) {
+      console.error('[Tray] test hide failed:', err);
+    }
   });
 
   // Usage reset button

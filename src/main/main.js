@@ -5,7 +5,7 @@
  * This file is part of Could I Be Your Partner.
  */
 
-const { app, BrowserWindow, ipcMain, nativeTheme, dialog, clipboard, screen, shell, systemPreferences, Notification } = require('electron');
+const { app, BrowserWindow, ipcMain, nativeTheme, dialog, clipboard, screen, shell, systemPreferences, Notification, Tray, Menu, nativeImage } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -1392,6 +1392,13 @@ let settings = loadJSON(settingsPath, {
   // - computerUse: Computer Use 工具（computer，控制桌面鼠标键盘）
   // 用户首次调用相应工具时弹出授权模态框，同意后置为 true，拒绝则禁用工具
   toolAuthGranted: { playwright: false, computerUse: false },
+  // 后台托盘模式：关闭窗口时的行为
+  // - 'ask'     : 首次关闭时弹模态框询问，用户选择后记住
+  // - 'always'  : 始终最小化到托盘（不退出）
+  // - 'never'   : 始终直接退出（不显示托盘）
+  // - 'once'    : 本次会话最小化到托盘，下次启动再次询问
+  closeToTray: 'ask',
+  trayEnabled: true,
   aiPersona: { name: 'Partner', avatar: '', avatarFrame: '', bio: '你的全能AI伙伴~', pronouns: 'Ta', personality: '活泼可爱、热情友善', customPrompt: '' },
   tarotVisible: true,
   userProfile: { name: '', avatar: '', avatarFrame: '', bio: '' },
@@ -1454,6 +1461,11 @@ else {
   if (typeof settings.toolAuthGranted.playwright !== 'boolean') settings.toolAuthGranted.playwright = false;
   if (typeof settings.toolAuthGranted.computerUse !== 'boolean') settings.toolAuthGranted.computerUse = false;
 }
+// 后台托盘模式设置迁移
+if (!settings.closeToTray || !['ask', 'always', 'never', 'once'].includes(settings.closeToTray)) {
+  settings.closeToTray = 'ask';
+}
+if (typeof settings.trayEnabled !== 'boolean') settings.trayEnabled = true;
 if (!settings.budget.peakHours) settings.budget.peakHours = { enabled: false, start: 9, end: 18, inputMul: 1.5, cacheReadMul: 1.5, outputMul: 1.5, cacheWriteMul: 1.5 };
 saveJSON(settingsPath, settings);
 
@@ -1461,6 +1473,10 @@ let memory = loadJSON(memoryPath, []);
 let knowledge = loadJSON(knowledgePath, []);
 
 let mainWindow;
+let appTray = null;
+let isQuitting = false;
+// 用户在"关闭时询问"模态框中的 pending Promise resolver
+let _pendingCloseToTrayResolve = null;
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -1478,6 +1494,152 @@ function createWindow() {
   });
   mainWindow.loadFile(path.join(__dirname, '../renderer/pages/index.html'));
   // Resize the built-in browser (BrowserView) when the main window resizes.
+
+  // 关闭拦截：根据 settings.closeToTray 决定是否最小化到托盘
+  mainWindow.on('close', async (event) => {
+    if (isQuitting) return; // 真正退出时放行
+    const mode = settings.closeToTray || 'ask';
+    if (mode === 'never') return; // 直接退出
+    if (mode === 'always' || mode === 'once') {
+      event.preventDefault();
+      hideWindowToTray();
+      return;
+    }
+    // mode === 'ask'：首次关闭弹模态框询问
+    event.preventDefault();
+    try {
+      const decision = await askCloseToTrayDecision();
+      // decision: 'always' | 'once' | 'never'
+      if (decision === 'always' || decision === 'once') {
+        hideWindowToTray();
+      } else if (decision === 'never') {
+        // 用户选择"不再后台运行"→ 真正退出
+        isQuitting = true;
+        try { mainWindow.close(); } catch {}
+      } else {
+        // 用户取消模态框（dismiss）→ 默认最小化到托盘（避免误关）
+        hideWindowToTray();
+      }
+    } catch {
+      // 询问失败时降级为最小化到托盘（避免数据丢失）
+      hideWindowToTray();
+    }
+  });
+}
+
+/**
+ * 隐藏主窗口到托盘（不退出）。
+ * 在 macOS 上调用 app.dock.hide() 隐藏 dock 图标；
+ * 在 Windows/Linux 上仅 hide()。
+ */
+function hideWindowToTray() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  mainWindow.hide();
+  if (process.platform === 'darwin') {
+    try { app.dock.hide(); } catch {}
+  }
+  // 确保托盘已创建
+  if (!appTray) createAppTray();
+}
+
+/**
+ * 显示主窗口（从托盘恢复）。
+ */
+function showWindowFromTray() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  if (!mainWindow.isVisible()) mainWindow.show();
+  mainWindow.focus();
+  if (process.platform === 'darwin') {
+    try { app.dock.show(); } catch {}
+  }
+}
+
+/**
+ * 创建应用托盘图标（仅在 trayEnabled=true 时）。
+ * 单击托盘图标：显示/隐藏主窗口
+ * 右键菜单：显示主窗口 / 退出
+ */
+function createAppTray() {
+  if (appTray) return;
+  if (!settings.trayEnabled) return;
+  // 托盘图标：使用应用图标，缩放到 16x16（macOS 使用模板图像便于深浅色）
+  let trayIcon;
+  try {
+    const iconPath = path.join(__dirname, '../../assets/icons/icon.png');
+    if (fs.existsSync(iconPath)) {
+      trayIcon = nativeImage.createFromPath(iconPath);
+      // macOS: 标记为模板图像以自适应深浅色
+      if (process.platform === 'darwin' && !trayIcon.isEmpty()) {
+        trayIcon.setTemplateImage(true);
+      }
+      // 缩小到 16x16（Windows/Linux 托盘图标标准尺寸）
+      if (process.platform !== 'darwin' && !trayIcon.isEmpty()) {
+        try { trayIcon = trayIcon.resize({ width: 16, height: 16 }); } catch {}
+      }
+    }
+  } catch (e) { /* 图标加载失败时使用空图标，Tray 仍可创建 */ }
+  if (!trayIcon || trayIcon.isEmpty()) {
+    appTray = new Tray(nativeImage.createEmpty());
+  } else {
+    appTray = new Tray(trayIcon);
+  }
+  appTray.setToolTip('Could I Be Your Partner');
+
+  const buildMenu = () => Menu.buildFromTemplate([
+    { label: '显示主窗口', click: () => showWindowFromTray() },
+    { type: 'separator' },
+    {
+      label: '退出',
+      click: () => {
+        isQuitting = true;
+        app.quit();
+      }
+    }
+  ]);
+  appTray.setContextMenu(buildMenu());
+
+  // 单击托盘图标：切换窗口可见性
+  appTray.on('click', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (mainWindow.isVisible() && mainWindow.isFocused()) {
+      hideWindowToTray();
+    } else {
+      showWindowFromTray();
+    }
+  });
+}
+
+/**
+ * 通过渲染器弹模态框询问"关闭时最小化到托盘"的决策。
+ * 返回 Promise<'always' | 'once' | 'never' | null>
+ * null 表示用户取消（关闭模态框未做选择）
+ */
+function askCloseToTrayDecision() {
+  return new Promise((resolve) => {
+    if (!mainWindow || mainWindow.isDestroyed()) {
+      resolve(null);
+      return;
+    }
+    // 清理上一个 pending resolver（防御性）
+    if (_pendingCloseToTrayResolve) {
+      try { _pendingCloseToTrayResolve(null); } catch {}
+    }
+    _pendingCloseToTrayResolve = resolve;
+    try {
+      mainWindow.webContents.send('tray:ask-close-decision');
+    } catch {
+      _pendingCloseToTrayResolve = null;
+      resolve(null);
+    }
+  });
+}
+
+function resolveCloseToTrayDecision(decision) {
+  if (_pendingCloseToTrayResolve) {
+    _pendingCloseToTrayResolve(decision);
+    _pendingCloseToTrayResolve = null;
+  }
 }
 
 app.whenReady().then(() => {
@@ -1538,15 +1700,88 @@ app.whenReady().then(() => {
     }
   }
   createWindow();
+  // 启动时即创建托盘图标（若启用）
+  if (settings.trayEnabled) createAppTray();
 });
-app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
-app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
+// 关闭所有窗口时：若启用了托盘模式且非真正退出，不退出应用（保留托盘）
+app.on('window-all-closed', (event) => {
+  if (isQuitting) {
+    // 真正退出：放行默认行为
+    return;
+  }
+  // 托盘模式启用时：保持应用运行
+  if (settings.trayEnabled && settings.closeToTray !== 'never') {
+    event.preventDefault();
+    return;
+  }
+  if (process.platform !== 'darwin') app.quit();
+});
+app.on('activate', () => {
+  // macOS dock 点击：如果窗口被隐藏，重新显示
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    createWindow();
+  } else {
+    showWindowFromTray();
+  }
+});
 
 // ---- IPC: Window Controls ----
 ipcMain.handle('window:minimize', () => { if (mainWindow) mainWindow.minimize(); });
 ipcMain.handle('window:maximize', () => { if (mainWindow) { mainWindow.isMaximized() ? mainWindow.unmaximize() : mainWindow.maximize(); return mainWindow.isMaximized(); } });
 ipcMain.handle('window:close', () => { if (mainWindow) mainWindow.close(); });
 ipcMain.handle('window:isMaximized', () => mainWindow ? mainWindow.isMaximized() : false);
+
+// ---- IPC: Tray Mode ----
+// 渲染器响应"关闭时询问"模态框的决策
+ipcMain.on('tray:respond-close-decision', (_, decision) => {
+  // decision: 'always' | 'once' | 'never' | 'cancel'
+  if (decision === 'always' || decision === 'once' || decision === 'never') {
+    // 'always' / 'never' 持久化到设置；'once' 仅本次会话生效
+    if (decision === 'always' || decision === 'never') {
+      settings.closeToTray = decision;
+      try { saveJSON(settingsPath, settings); } catch {}
+    } else if (decision === 'once') {
+      // 'once' 仅修改内存中的设置（不持久化），下次启动会再次询问
+      settings.closeToTray = 'once';
+    }
+  }
+  resolveCloseToTrayDecision(decision === 'cancel' ? null : decision);
+});
+
+// 修改托盘设置（从设置页调用）
+ipcMain.handle('tray:set-close-to-tray', async (_, mode) => {
+  if (!['ask', 'always', 'never', 'once'].includes(mode)) {
+    return { ok: false, error: 'Invalid mode' };
+  }
+  settings.closeToTray = mode;
+  try { saveJSON(settingsPath, settings); } catch (e) { return { ok: false, error: e.message }; }
+  return { ok: true, settings };
+});
+
+ipcMain.handle('tray:set-enabled', async (_, enabled) => {
+  settings.trayEnabled = !!enabled;
+  try { saveJSON(settingsPath, settings); } catch (e) { return { ok: false, error: e.message }; }
+  // 实时创建/销毁托盘
+  if (settings.trayEnabled && !appTray) {
+    createAppTray();
+  } else if (!settings.trayEnabled && appTray) {
+    try { appTray.destroy(); } catch {}
+    appTray = null;
+  }
+  return { ok: true, settings };
+});
+
+// 手动隐藏到托盘（设置页"立即测试"按钮）
+ipcMain.handle('tray:hide-to-tray', () => {
+  hideWindowToTray();
+  return { ok: true };
+});
+
+// 手动从托盘显示窗口
+ipcMain.handle('tray:show-window', () => {
+  showWindowFromTray();
+  return { ok: true };
+});
 
 // ---- IPC: Settings ----
 ipcMain.handle('settings:get', () => settings);
@@ -6737,6 +6972,7 @@ app.whenReady().then(async () => {
 // Cleanup MCP servers, serial ports, and web control on app quit
 // 若渲染器有正在工作的会话，先通知其保存 pending 状态，等待完成后再退出
 app.on('before-quit', async (event) => {
+  isQuitting = true; // 标记真正退出，避免 close 事件再次拦截
   for (const [name] of mcpServers) {
     stopMcpServer(name);
   }
@@ -6745,6 +6981,11 @@ app.on('before-quit', async (event) => {
   }
   // 清理 Playwright 横幅窗口
   _hidePwBanner();
+  // 清理托盘图标
+  if (appTray) {
+    try { appTray.destroy(); } catch {}
+    appTray = null;
+  }
   // 如果主窗口还存在且尚未确认 pending 保存完成，先阻止退出，请求渲染器保存
   if (mainWindow && !mainWindow.isDestroyed() && !pendingSaveDone) {
     event.preventDefault();

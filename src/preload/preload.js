@@ -22,6 +22,21 @@ contextBridge.exposeInMainWorld('api', {
   windowClose: () => ipcRenderer.invoke('window:close'),
   windowIsMaximized: () => ipcRenderer.invoke('window:isMaximized'),
 
+  // Tray Mode (后台托盘模式)
+  // 监听主进程发出的"关闭时询问"事件 → 渲染器弹模态框
+  onTrayAskCloseDecision: (cb) => {
+    ipcRenderer.removeAllListeners('tray:ask-close-decision');
+    ipcRenderer.on('tray:ask-close-decision', () => cb());
+  },
+  // 渲染器回传用户的决策：'always' | 'once' | 'never' | 'cancel'
+  trayRespondCloseDecision: (decision) => ipcRenderer.send('tray:respond-close-decision', decision),
+  // 修改设置项
+  traySetCloseToTray: (mode) => ipcRenderer.invoke('tray:set-close-to-tray', mode),
+  traySetEnabled: (enabled) => ipcRenderer.invoke('tray:set-enabled', enabled),
+  // 手动测试
+  trayHideToTray: () => ipcRenderer.invoke('tray:hide-to-tray'),
+  trayShowWindow: () => ipcRenderer.invoke('tray:show-window'),
+
   // Memory
   memorySearch: (q) => ipcRenderer.invoke('memory:search', q),
   memoryAdd: (item) => ipcRenderer.invoke('memory:add', item),

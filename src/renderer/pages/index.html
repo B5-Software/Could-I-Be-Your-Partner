@@ -1545,6 +1545,36 @@
                   </p>
                 </div>
               </div>
+
+              <!-- 后台托盘模式 -->
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-window-restore"></i> 后台托盘</h3>
+                <div class="setting-item">
+                  <label class="toggle-label">
+                    <span>启用托盘图标</span>
+                    <div class="toggle-switch">
+                      <input type="checkbox" id="setting-tray-enabled">
+                      <span class="toggle-slider"></span>
+                    </div>
+                  </label>
+                  <p class="setting-hint">关闭后应用将不在系统托盘显示图标，关闭窗口即退出。</p>
+                </div>
+                <div class="setting-item">
+                  <label for="setting-close-to-tray">关闭窗口时</label>
+                  <select id="setting-close-to-tray">
+                    <option value="ask">每次询问</option>
+                    <option value="always">始终后台运行</option>
+                    <option value="never">始终直接退出</option>
+                  </select>
+                  <p class="setting-hint">"每次询问"将在关闭窗口时弹窗询问您的偏好。"始终"选项会记住选择。</p>
+                </div>
+                <div class="setting-item">
+                  <button class="btn-secondary" id="btn-tray-test-hide" type="button">
+                    <i class="fa-solid fa-eye-slash"></i> 测试：隐藏到托盘
+                  </button>
+                  <p class="setting-hint">点击后窗口将立即最小化到托盘，可单击托盘图标恢复。</p>
+                </div>
+              </div>
               <div class="settings-group">
                 <h3><i class="fa-solid fa-chart-line"></i> 使用量管理</h3>
                 <div class="setting-item">
@@ -2125,6 +2155,37 @@
         </button>
         <button class="btn-primary" id="btn-tool-auth-always">
           <i class="fa-solid fa-check"></i> 允许并记住
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Close-to-Tray Ask Modal -->
+  <!-- 关闭窗口时询问用户：是否最小化到托盘后台运行 -->
+  <div class="modal-overlay hidden" id="tray-ask-modal">
+    <div class="modal" style="max-width:440px">
+      <div class="modal-header">
+        <h3><i class="fa-solid fa-window-restore"></i> 关闭时后台运行？</h3>
+      </div>
+      <div class="modal-body">
+        <p style="margin:0 0 12px;font-size:14px;line-height:1.6">
+          您可以关闭窗口后让应用在后台托盘继续运行（接收通知、邮件审批等），
+          或直接退出应用。
+        </p>
+        <div class="tool-auth-hint" style="margin-bottom:6px">
+          <i class="fa-solid fa-circle-info"></i>
+          <span>选择"始终"或"不再"后将记住您的偏好，可在设置中修改。</span>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-secondary" id="btn-tray-never">
+          <i class="fa-solid fa-xmark"></i> 不再后台运行
+        </button>
+        <button class="btn-secondary" id="btn-tray-once">
+          <i class="fa-solid fa-clock"></i> 仅本次
+        </button>
+        <button class="btn-primary" id="btn-tray-always">
+          <i class="fa-solid fa-check"></i> 始终后台运行
         </button>
       </div>
     </div>
