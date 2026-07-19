@@ -359,6 +359,9 @@ async function consumeSSEStream(bodyStream, onChunk, requestId, transport = 'ope
       if (msg.usage?.input_tokens) {
         if (!usage) usage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
         usage.prompt_tokens = msg.usage.input_tokens;
+        // 透传 Anthropic 原生缓存字段，供 computeUsageCost 计算缓存费用
+        usage.cache_read_input_tokens = msg.usage.cache_read_input_tokens || 0;
+        usage.cache_creation_input_tokens = msg.usage.cache_creation_input_tokens || 0;
       }
     }
   }

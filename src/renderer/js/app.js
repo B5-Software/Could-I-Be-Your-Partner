@@ -7031,9 +7031,9 @@
     
     const s = await window.api.getSettings();
     s.llm.dailyTokensUsed = 0;
-    s.llm.dailyUsageDate = '';
+    s.llm.dailyTokenDate = '';
     s.imageGen.dailyImagesUsed = 0;
-    s.imageGen.dailyUsageDate = '';
+    s.imageGen.dailyImageDate = '';
     await saveSettings(s);
     
     // Refresh display
@@ -9269,6 +9269,13 @@
   }
 
   // ---- File tree context menu (Add to context / Rename / Delete) ----
+  // 根据平台返回对应文案：macOS → "Finder"，Windows/Linux → "资源管理器"
+  function _fileManagerName() {
+    try {
+      if (window.api?.platform === 'darwin') return 'Finder';
+    } catch { /* ignore */ }
+    return '资源管理器';
+  }
   function showCodeFileTreeContextMenu(e, node) {
     // Remove any existing menu
     const existing = document.querySelector('.file-tree-context-menu');
@@ -9278,14 +9285,15 @@
     menu.className = 'file-tree-context-menu';
     menu.style.cssText = 'position:fixed;z-index:99999;background:var(--bg-secondary,#fff);border:1px solid var(--border);border-radius:6px;box-shadow:0 4px 12px rgba(0,0,0,0.15);padding:4px 0;min-width:180px;font-size:0.85em;left:' + e.clientX + 'px;top:' + e.clientY + 'px;';
 
+    const fmName = _fileManagerName();
     const isFile = node.type === 'file';
     const items = [];
     if (isFile) {
       items.push({ icon: 'fa-comment-dots', label: '添加到上下文', action: () => addFileToCodeContext(node) });
       items.push({ icon: 'fa-copy', label: '复制路径', action: () => { navigator.clipboard.writeText(node.path).catch(() => {}); } });
-      items.push({ icon: 'fa-folder-open', label: '在资源管理器中显示', action: () => window.api.openFileExplorer?.(node.path) });
+      items.push({ icon: 'fa-folder-open', label: `在${fmName}中显示`, action: () => window.api.openFileExplorer?.(node.path) });
     } else {
-      items.push({ icon: 'fa-folder-open', label: '在资源管理器打开', action: () => window.api.openFileExplorer?.(node.path) });
+      items.push({ icon: 'fa-folder-open', label: `在${fmName}中打开`, action: () => window.api.openFileExplorer?.(node.path) });
     }
     items.push({ icon: 'fa-pen', label: '重命名', action: () => renameTreeNode(node) });
     items.push({ icon: 'fa-trash', label: '删除', danger: true, action: () => deleteTreeNode(node) });
@@ -9961,6 +9969,14 @@
   });
 
   // 在系统文件管理器中打开当前工作区（Windows 资源管理器 / macOS Finder）
+  // 启动时根据平台动态设置按钮 title（Finder / 资源管理器）
+  (function _initCodeExplorerBtnTitle() {
+    const btn = document.getElementById('btn-code-open-in-explorer');
+    if (btn) {
+      const fmName = _fileManagerName();
+      btn.title = `在${fmName}中打开工作区`;
+    }
+  })();
   document.getElementById('btn-code-open-in-explorer')?.addEventListener('click', () => {
     if (!codeWorkspacePath) {
       window.showMessageModal('请先打开工作区', '提示', 'warning');

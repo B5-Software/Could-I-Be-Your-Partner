@@ -293,7 +293,10 @@ function parseAnthropicResponse(data) {
     usage: {
       prompt_tokens: data.usage?.input_tokens || 0,
       completion_tokens: data.usage?.output_tokens || 0,
-      total_tokens: (data.usage?.input_tokens || 0) + (data.usage?.output_tokens || 0)
+      total_tokens: (data.usage?.input_tokens || 0) + (data.usage?.output_tokens || 0),
+      // 透传 Anthropic 原生缓存字段，供 computeUsageCost 计算缓存费用
+      cache_read_input_tokens: data.usage?.cache_read_input_tokens || 0,
+      cache_creation_input_tokens: data.usage?.cache_creation_input_tokens || 0
     }
   };
 }
