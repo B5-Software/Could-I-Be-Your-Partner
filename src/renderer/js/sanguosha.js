@@ -451,6 +451,9 @@
         // 若 content 为空（如纯思考模型未输出 final），视为无回答，避免把推理过程当成动作。
         let content = (msg.content || '').trim();
         if (!content) return null;
+        // 清理思考标签： simd/<reasoning>/<reasoning_content>/<thought> 等成对与未闭合形式
+        content = content.replace(/\u003C(?:think|reasoning|reasoning_content|thought|reflection)\b[\s\S]*?\u003C\/\1\u003E/gi, '');
+        content = content.replace(/\u003C(?:think|reasoning|reasoning_content|thought|reflection)\b[\s\S]*$/gi, '');
         // 清理 markdown 代码块包裹
         content = content.replace(/^```[\w]*\n?/gm, '').replace(/```$/gm, '').trim();
 

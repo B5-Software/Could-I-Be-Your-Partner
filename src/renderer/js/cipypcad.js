@@ -1595,27 +1595,27 @@
       // Title bar buttons
       document.getElementById('btn-fit').addEventListener('click', () => { Renderer.fit(); });
       document.getElementById('btn-save').addEventListener('click', async () => {
-        const path = await window.cadAPI.saveProjectDialog();
-        if (!path) return;
-        const res = await window.cadAPI.saveProject(path);
+        const r = await window.cadAPI.saveProjectDialog();
+        if (!r || !r.ok || !r.path) return;
+        const res = await window.cadAPI.saveProject(r.path);
         if (res.ok) {
           Document.modified = false;
-          updateDocTitle(path);
-          this.setStatus('已保存: ' + path, 'success');
+          updateDocTitle(r.path);
+          this.setStatus('已保存: ' + r.path, 'success');
         } else this.setStatus('保存失败: ' + res.error, 'error');
       });
       document.getElementById('btn-export-png').addEventListener('click', async () => {
-        const path = await window.cadAPI.saveImageDialog('export.png', 'PNG');
-        if (!path) return;
-        const res = await window.cadAPI.exportImage(path, 'png');
-        if (res.ok) this.setStatus('已导出 PNG: ' + path, 'success');
+        const r = await window.cadAPI.saveImageDialog('export.png', 'PNG');
+        if (!r || !r.ok || !r.path) return;
+        const res = await window.cadAPI.exportImage(r.path, 'png');
+        if (res.ok) this.setStatus('已导出 PNG: ' + r.path, 'success');
         else this.setStatus('导出失败: ' + res.error, 'error');
       });
       document.getElementById('btn-export-dxf').addEventListener('click', async () => {
-        const path = await window.cadAPI.saveImageDialog('export.dxf', 'DXF');
-        if (!path) return;
-        const res = await window.cadAPI.exportDxf(path);
-        if (res.ok) this.setStatus('已导出 DXF: ' + path, 'success');
+        const r = await window.cadAPI.saveImageDialog('export.dxf', 'DXF');
+        if (!r || !r.ok || !r.path) return;
+        const res = await window.cadAPI.exportDxf(r.path);
+        if (res.ok) this.setStatus('已导出 DXF: ' + r.path, 'success');
         else this.setStatus('导出失败: ' + res.error, 'error');
       });
       document.getElementById('btn-clear-console').addEventListener('click', () => {
@@ -1679,16 +1679,16 @@
       // 三个按钮
       document.getElementById('cad-prompt-save').addEventListener('click', async () => {
         // 保存后关闭
-        const path = await window.cadAPI.saveProjectDialog();
-        if (!path) {
+        const r = await window.cadAPI.saveProjectDialog();
+        if (!r || !r.ok || !r.path) {
           // 用户取消了保存对话框，停留在 CAD 窗口
           hideSavePrompt();
           return;
         }
-        const res = await window.cadAPI.saveProject(path);
+        const res = await window.cadAPI.saveProject(r.path);
         if (res.ok) {
           Document.modified = false;
-          updateDocTitle(path);
+          updateDocTitle(r.path);
           hideSavePrompt();
           window.cadAPI.confirmClose('close');
         } else {
