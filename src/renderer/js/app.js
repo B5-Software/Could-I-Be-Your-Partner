@@ -10213,6 +10213,7 @@
     }
 
     document.getElementById('btn-code-show-terminals')?.addEventListener('click', openTerminalModal);
+    document.getElementById('btn-chat-show-terminals')?.addEventListener('click', openTerminalModal);
     document.getElementById('btn-close-terminal-modal')?.addEventListener('click', closeTerminalModal);
 
     document.getElementById('btn-terminal-new')?.addEventListener('click', async () => {
