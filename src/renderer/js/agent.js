@@ -202,6 +202,14 @@ class Agent {
       });
     }
 
+    // 订阅游戏窗口/子窗口的 LLM usage 推送，累计到当前会话统计
+    // （游戏窗口的 LLM 调用走主进程 IPC，主进程广播给主渲染器，再由 agent 累计）
+    if (window.api?.onLLMExternalUsage && !this._llmExternalUsageUnsub) {
+      this._llmExternalUsageUnsub = window.api.onLLMExternalUsage((data) => {
+        if (data?.usage) this._accumulateUsage(data.usage);
+      });
+    }
+
     // Subscribe to LLM stream events to surface live tokens to the UI.
     // Only chunks matching the active requestId are forwarded (sub-agent
     // loops use their own requestIds and don't emit to the main UI).
@@ -318,7 +326,7 @@ class Agent {
 7. 文件路径请使用正确的系统路径，用户名是${username}，系统盘是${systemDrive}
 8. 工具返回结果中都有ok字段表示是否成功，请注意检查
 9. 用户上传Office/PDF文件时，原始文件和提取的文本(.txt)均已保存到工作目录。读取内容请用.txt；如需**输出/生成/翻译Office文件**，请对工作目录里的原始.docx/.xlsx/.pptx文件使用officeUnpack→修改XML→officeRepack流程
-10. 当用户想玩游戏（飞花令、三国杀、谁是卧底等）时，必须调用inviteGame工具发起邀请，绝不能用普通对话方式模拟游戏
+10. 当用户想玩游戏（飞花令、三国杀、谁是卧底、成语接龙、是否猜人物等）时，必须调用inviteGame工具发起邀请，绝不能用普通对话方式模拟游戏
 
 【代码执行工具选择规范】：
 - runJavaScriptCode：仅适用于纯计算/逻辑，无任何文件系统或模块需求
@@ -365,6 +373,29 @@ class Agent {
 - 支持文件导入导出：spreadsheetImportFile从磁盘加载.xlsx/.ods/.csv文件，spreadsheetExportFile导出到磁盘文件
 - 当用户提供表格文件时，优先使用spreadsheetImportFile直接加载，而非手动解析
 - 格式属性：bold(粗体) italic(斜体) color(文字颜色) bg(背景色) align(left/center/right) fontSize(字号px)
+
+【CIPYP-CAD 使用规范 - 2D 制图子应用】：
+- CIPYP-CAD 是内置的独立窗口 2D 制图 CAD，支持类 AutoCAD 命令行操作
+- 工作流程：initCipypCad 打开窗口 → runCipypCadCommand / runCipypCadCommands 执行命令制图 → saveCipypCadProject 保存工程 / exportCipypCadDxf 导出 DXF / exportCipypCadImage 导出图片 → closeCipypCad 关闭
+- 命令语法（类 AutoCAD 命令行，参数空格分隔，点用 x,y 格式）：
+  • line x1,y1 x2,y2 —— 直线
+  • polyline x1,y1 x2,y2 [x3,y3 ...] [--closed] —— 多段线
+  • rect x1,y1 x2,y2 —— 矩形（对角两点）
+  • circle cx,cy radius —— 圆
+  • arc cx,cy radius startDeg endDeg —— 弧（角度制）
+  • ellipse cx,cy rx ry [rotationDeg] —— 椭圆
+  • text x,y "content" [height] [rotationDeg] —— 文本
+  • dim x1,y1 x2,y2 [offset] —— 标注
+  • hatch x1,y1 x2,y2 x3,y3 ... [--angle deg] [--spacing n] —— 填充
+  • layer new|delete|current|color|on|off|list NAME [...] —— 图层管理
+  • select all|clear|id <id> [--add]|layer <name> —— 选择
+  • move sel|all|id <id> dx,dy / rotate sel|all angleDeg [cx,cy] / scale sel|all factor [cx,cy] / mirror sel|all x1,y1 x2,y2 —— 几何变换
+  • delete sel|id <id> / clear / zoom factor / pan dx,dy / fit / grid on|off / help [command]
+- 命令示例：runCipypCadCommand("layer new Walls #ff5722")、runCipypCadCommands(["line 0,0 100,0","line 100,0 100,50","line 100,50 0,50","line 0,50 0,0"])
+- 查询状态：getCipypCadState 返回图层/对象数/视图；getCadObjectList 返回所有对象详情
+- 工程保存：saveCipypCadProject 可指定 path 或 filename（默认 project.cipyproj，JSON 格式，可重新 loadCipypCadProject 加载）
+- 标准格式导出：exportCipypCadDxf 导出 AutoCAD R12 DXF（可被 AutoCAD/FreeCAD/QCAD 等打开）；exportCipypCadImage 导出 PNG/SVG 图片
+- 用户说"画一个矩形""设计平面图""绘制示意图"等 2D 制图需求时，优先使用 CIPYP-CAD 而非 Canvas（CAD 更适合精确尺寸制图，Canvas 更适合自由绘图）
 
 【邮件控制说明】：
 - 用户可能通过邮件发送指令，这些邮件消息会以“[来自邮件]”前缀注入，应像普通用户消息一样响应
@@ -2281,6 +2312,69 @@ ${toolListSection}`;
           }
           return window.exportCanvasSVG ? window.exportCanvasSVG(args.filename || 'canvas.svg', this.workspacePath) : { ok: false, error: '画布功能未初始化' };
         }
+        // ---- CIPYP-CAD ----
+        case 'initCipypCad': {
+          return await window.api.openCipypCad();
+        }
+        case 'runCipypCadCommand': {
+          return await window.api.cadRunCommand(args.command || '');
+        }
+        case 'runCipypCadCommands': {
+          return await window.api.cadRunCommands(Array.isArray(args.commands) ? args.commands : []);
+        }
+        case 'getCipypCadState': {
+          return await window.api.cadGetState();
+        }
+        case 'getCadObjectList': {
+          return await window.api.cadGetObjectList();
+        }
+        case 'saveCipypCadProject': {
+          // renderer 中不可用 require('path')，用字符串拼接
+          const sep = (this.workspacePath && this.workspacePath.includes('\\')) ? '\\' : '/';
+          const targetPath = args.path || (this.workspacePath ? this.workspacePath.replace(/[\\/]+$/, '') + sep + (args.filename || 'project.cipyproj') : null);
+          if (!targetPath) {
+            return { ok: false, error: typeof i18nToolReturn === 'function' ? i18nToolReturn('no_workspace', '未设置工作区路径，且未提供 path 参数') : '未设置工作区路径，且未提供 path 参数' };
+          }
+          const res = await window.api.cadSaveProject(targetPath);
+          if (res.ok && this.onMessage) {
+            this.onMessage('assistant', `📐 CIPYP-CAD 工程已保存到：\n\`${targetPath}\``);
+          }
+          return res;
+        }
+        case 'loadCipypCadProject': {
+          if (!args.path) {
+            return { ok: false, error: '需要 path 参数指定工程文件路径' };
+          }
+          return await window.api.cadLoadProject(args.path);
+        }
+        case 'exportCipypCadDxf': {
+          const sep = (this.workspacePath && this.workspacePath.includes('\\')) ? '\\' : '/';
+          const dxfPath = args.path || (this.workspacePath ? this.workspacePath.replace(/[\\/]+$/, '') + sep + (args.filename || 'export.dxf') : null);
+          if (!dxfPath) {
+            return { ok: false, error: '未设置工作区路径，且未提供 path 参数' };
+          }
+          const res = await window.api.cadExportDxf(dxfPath);
+          if (res.ok && this.onMessage) {
+            this.onMessage('assistant', `📐 DXF 已导出到：\n\`${dxfPath}\`\n（可用 AutoCAD/FreeCAD/QCAD 等打开）`);
+          }
+          return res;
+        }
+        case 'exportCipypCadImage': {
+          const fmt = (args.format || 'png').toLowerCase();
+          const sep = (this.workspacePath && this.workspacePath.includes('\\')) ? '\\' : '/';
+          const imgPath = args.path || (this.workspacePath ? this.workspacePath.replace(/[\\/]+$/, '') + sep + (args.filename || (`export.${fmt}`)) : null);
+          if (!imgPath) {
+            return { ok: false, error: '未设置工作区路径，且未提供 path 参数' };
+          }
+          const res = await window.api.cadExportImage(imgPath, fmt);
+          if (res.ok && this.onMessage) {
+            this.onMessage('assistant', `📐 ${fmt.toUpperCase()} 已导出到：\n\`${imgPath}\``);
+          }
+          return res;
+        }
+        case 'closeCipypCad': {
+          return await window.api.cadClose();
+        }
         case 'askQuestions': {
           const answers = await window.askQuestions(args.questions);
           return { ok: true, answers };
@@ -2816,6 +2910,8 @@ ${tarotLine}
       case 'flyingFlower': return await this.playFlyingFlower(agentCount);
       case 'sanguosha': return await this.playSanguosha(agentCount);
       case 'undercover': return await this.playUndercover(agentCount);
+      case 'idiom': return await this.playIdiom(agentCount);
+      case 'guessCharacter': return await this.playGuessCharacter(agentCount);
       default: return { ok: false, error: typeof i18nToolReturn === 'function' ? i18nToolReturn('unknown_game', `未知游戏: ${game}`, { game }) : `未知游戏: ${game}` };
     }
   }
@@ -2840,6 +2936,10 @@ ${tarotLine}
       max_tokens: this.settings?.llm?.maxResponseTokens || 2048,
       requestId: Date.now().toString()
     });
+    // 游戏内 LLM 调用 token 累计到当前主会话统计（用于上下文模态框显示）
+    if (result.ok && result.data?.usage) {
+      this._accumulateUsage(result.data.usage);
+    }
     if (result.ok && result.data.choices?.[0]?.message?.content) {
       const resp = result.data.choices[0].message.content.trim();
       ga.contextManager.addMessage({ role: 'assistant', content: resp });
@@ -2877,6 +2977,26 @@ ${tarotLine}
       return { ok: true, game: 'sanguosha', message: '游戏窗口已打开' };
     }
     return { ok: false, error: result?.error || '无法打开三国杀游戏窗口' };
+  }
+
+  // ---- Idiom Chain Game (成语接龙) ----
+  async playIdiom(agentCount) {
+    const result = await window.api.openIdiom(agentCount);
+    if (result && result.ok) {
+      if (this.onMessage) this.onMessage('assistant', `🎮 **成语接龙**游戏窗口已打开！\n\n${agentCount} 位 AI 玩家已就绪，请在游戏窗口中进行操作。`);
+      return { ok: true, game: 'idiom', message: '游戏窗口已打开' };
+    }
+    return { ok: false, error: result?.error || '无法打开成语接龙游戏窗口' };
+  }
+
+  // ---- Guess Character Game (是否猜人物) ----
+  async playGuessCharacter(agentCount) {
+    const result = await window.api.openGuessCharacter(agentCount);
+    if (result && result.ok) {
+      if (this.onMessage) this.onMessage('assistant', `🎮 **是否猜人物**游戏窗口已打开！\n\n请在游戏窗口中向 AI 提问并猜测人物。`);
+      return { ok: true, game: 'guessCharacter', message: '游戏窗口已打开' };
+    }
+    return { ok: false, error: result?.error || '无法打开是否猜人物游戏窗口' };
   }
 
   newConversation() {

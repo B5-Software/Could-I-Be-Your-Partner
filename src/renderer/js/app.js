@@ -3804,6 +3804,8 @@
     flyingFlower: { name: '飞花令', icon: 'fa-feather', desc: '经典诗词接龙游戏，各方轮流说出含有指定字的诗句', defaultAgents: 2 },
     sanguosha: { name: '三国杀', icon: 'fa-khanda', desc: '经典卡牌对战游戏，选择武将、出牌博弈', defaultAgents: 3 },
     undercover: { name: '谁是卧底', icon: 'fa-user-secret', desc: '经典社交推理游戏，通过描述找出卧底', defaultAgents: 4 },
+    idiom: { name: '成语接龙', icon: 'fa-link', desc: '四字成语首尾相接，LLM 生成 + LLM 裁判验证', defaultAgents: 3 },
+    guessCharacter: { name: '是否猜人物', icon: 'fa-user-question', desc: '通过提问只能用是/否回答，猜出 AI 心中的人物', defaultAgents: 1 },
   };
 
   window.showGameInvitation = function(game, message, suggestedAgents) {
@@ -6135,6 +6137,7 @@
     const pathInput = document.getElementById('setting-pw-path');
     const followLangCheckbox = document.getElementById('setting-pw-follow-lang');
     const headlessCheckbox = document.getElementById('setting-pw-headless');
+    const bannerCheckbox = document.getElementById('setting-pw-banner-enabled');
     const argsTextarea = document.getElementById('setting-pw-args');
     const customRow = document.getElementById('pw-custom-path-row');
     const testBtn = document.getElementById('btn-pw-test');
@@ -6149,6 +6152,8 @@
     if (followLangCheckbox) followLangCheckbox.checked = pw.followLang !== false;
     // UI 语义：checked = 有头模式；setting 语义：headless=true 表示无头
     if (headlessCheckbox) headlessCheckbox.checked = pw.headless !== true;
+    // 横幅开关：默认开启，仅 headed 模式下显示
+    if (bannerCheckbox) bannerCheckbox.checked = pw.bannerEnabled !== false;
     if (argsTextarea) argsTextarea.value = pw.args || '';
 
     // Show/hide custom path row
@@ -6204,6 +6209,7 @@
           path: pathInput ? pathInput.value : '',
           followLang: followLangCheckbox ? followLangCheckbox.checked : true,
           headless: headlessCheckbox ? !headlessCheckbox.checked : false,
+          bannerEnabled: bannerCheckbox ? bannerCheckbox.checked : true,
           args: argsTextarea ? argsTextarea.value : ''
         };
         // 先持久化设置：测试启动即应用，避免用户忘记点"保存"导致 Agent 调用仍用旧浏览器
@@ -6237,6 +6243,7 @@
           path: pathInput ? pathInput.value : '',
           followLang: followLangCheckbox ? followLangCheckbox.checked : true,
           headless: headlessCheckbox ? !headlessCheckbox.checked : false,
+          bannerEnabled: bannerCheckbox ? bannerCheckbox.checked : true,
           args: argsTextarea ? argsTextarea.value : ''
         };
         await saveSettings(s2);
@@ -6375,7 +6382,9 @@
       el.addEventListener('change', saveBudgetSettings);
     });
     listEl?.addEventListener('input', () => { /* 输入时仅更新内部状态，保存由 change 触发 */ });
-    listEl?.addEventListener('change', saveBudgetSettings);
+    // 注意：listEl 不再绑定 change 事件，因为 appendBudgetPricingRow 中
+    // 已经为每个 input 单独绑定了 change → saveBudgetSettings，
+    // 若 listEl 也绑定会导致 change 事件冒泡时重复触发保存（弹两次 toast）
 
     await refreshBudgetStatus(budget);
   }

@@ -1009,10 +1009,10 @@
                   启用后在指定时段内对各类价格应用倍率。例如某些 API 在高峰时段按 1.5x 计费。
                 </p>
                 <div class="setting-item" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-                  <div class="toggle-switch">
+                  <label class="toggle-switch" for="setting-budget-peak-enabled" title="启用峰谷价">
                     <input type="checkbox" id="setting-budget-peak-enabled">
                     <span class="toggle-slider"></span>
-                  </div>
+                  </label>
                   <label for="setting-budget-peak-enabled" style="cursor:pointer;font-weight:500">启用峰谷价</label>
                   <span style="color:var(--text-tertiary);font-size:12px">勾选后在下方时段内应用倍率</span>
                 </div>
@@ -1939,6 +1939,16 @@
                   </label>
                   <p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">默认开启有头模式以显示浏览器窗口。关闭后将以无头模式在后台运行（无法看到浏览器）</p>
                 </div>
+                <div class="setting-item">
+                  <label class="toggle-label">
+                    <span>显示右上角工作提示横幅</span>
+                    <div class="toggle-switch">
+                      <input type="checkbox" id="setting-pw-banner-enabled">
+                      <span class="toggle-slider"></span>
+                    </div>
+                  </label>
+                  <p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">有头模式时在屏幕右上角显示"请勿关闭浏览器"横幅。无头模式始终不显示</p>
+                </div>
               </div>
               <div class="settings-group">
                 <h3><i class="fa-solid fa-gauge-high"></i> 启动参数</h3>
@@ -2184,7 +2194,7 @@
   <!-- Close-to-Tray Ask Modal -->
   <!-- 关闭窗口时询问用户：是否最小化到托盘后台运行 -->
   <div class="modal-overlay hidden" id="tray-ask-modal">
-    <div class="modal" style="max-width:440px">
+    <div class="modal" style="max-width:520px">
       <div class="modal-header">
         <h3><i class="fa-solid fa-window-restore"></i> 关闭时后台运行？</h3>
       </div>
@@ -2198,18 +2208,18 @@
           <span>选择"始终"或"不再"后将记住您的偏好，可在设置中修改。</span>
         </div>
       </div>
-      <div class="modal-footer">
-        <button class="btn-secondary" id="btn-tray-cancel" type="button">
+      <div class="modal-footer" style="flex-wrap:wrap;gap:8px;justify-content:flex-end">
+        <button class="btn-secondary" id="btn-tray-cancel" type="button" style="flex:0 0 auto;white-space:nowrap">
           <i class="fa-solid fa-rotate-left"></i> 取消
         </button>
-        <button class="btn-secondary" id="btn-tray-never">
-          <i class="fa-solid fa-xmark"></i> 不再后台运行
+        <button class="btn-secondary" id="btn-tray-never" style="flex:0 0 auto;white-space:nowrap">
+          <i class="fa-solid fa-xmark"></i> 不再后台
         </button>
-        <button class="btn-secondary" id="btn-tray-once">
+        <button class="btn-secondary" id="btn-tray-once" style="flex:0 0 auto;white-space:nowrap">
           <i class="fa-solid fa-clock"></i> 仅本次
         </button>
-        <button class="btn-primary" id="btn-tray-always">
-          <i class="fa-solid fa-check"></i> 始终后台运行
+        <button class="btn-primary" id="btn-tray-always" style="flex:0 0 auto;white-space:nowrap">
+          <i class="fa-solid fa-check"></i> 始终后台
         </button>
       </div>
     </div>

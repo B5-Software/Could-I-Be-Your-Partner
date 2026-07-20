@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>是否猜人物</title>
+  <link rel="stylesheet" href="../css/theme.css">
+  <link rel="stylesheet" href="../css/guesscharacter.css">
+  <link rel="stylesheet" href="../../../assets/fonts/fontawesome.min.css">
+</head>
+<body>
+  <div class="gc-titlebar">
+    <span class="gc-titlebar-title"><i class="fa-solid fa-user-question"></i> 是否猜人物</span>
+    <span id="game-trng-badge" class="game-trng-badge" style="display:none"><i class="fa-solid fa-satellite-dish"></i> TRNG</span>
+    <div class="gc-titlebar-btns">
+      <button class="btn-close" id="btn-close" title="关闭"><i class="fa-solid fa-xmark"></i></button>
+    </div>
+  </div>
+
+  <div class="gc-game" id="game-container">
+    <!-- Info Area -->
+    <div class="gc-info-area">
+      <div class="gc-info-row">
+        <div class="gc-info-item">
+          <span class="gc-info-label">人物类别</span>
+          <span class="gc-info-value" id="category-display">—</span>
+        </div>
+        <div class="gc-info-item">
+          <span class="gc-info-label">已提问</span>
+          <span class="gc-info-value"><span id="question-count">0</span> 次</span>
+        </div>
+        <div class="gc-info-item">
+          <span class="gc-info-label">剩余猜测</span>
+          <span class="gc-info-value"><span id="guess-remaining">3</span> 次</span>
+        </div>
+      </div>
+      <div class="gc-hint" id="hint-text">AI 已想好一位人物，请提出"是/否"问题来缩小范围</div>
+    </div>
+
+    <!-- Q&A History -->
+    <div class="gc-history-area">
+      <div class="gc-history-header">
+        <i class="fa-solid fa-comments"></i> 问答记录
+      </div>
+      <div class="gc-history-list" id="history-list"></div>
+    </div>
+
+    <!-- Input Area -->
+    <div class="gc-input-area" id="input-area">
+      <div class="gc-input-hint" id="input-hint">提出一个可以用"是/否"回答的问题</div>
+      <div class="gc-input-row">
+        <input type="text" class="gc-input" id="question-input" placeholder="例如：这位人物是真实存在的历史人物吗？" autocomplete="off" />
+        <button class="gc-btn-ask" id="btn-ask" type="button"><i class="fa-solid fa-question"></i> 提问</button>
+        <button class="gc-btn-guess" id="btn-guess" type="button"><i class="fa-solid fa-bullseye"></i> 猜测</button>
+        <button class="gc-btn-pass" id="btn-pass" type="button"><i class="fa-solid fa-flag"></i> 认输</button>
+      </div>
+    </div>
+
+    <!-- Guess Mode Overlay (inline, not full overlay) -->
+    <div class="gc-guess-mode hidden" id="guess-mode">
+      <div class="gc-guess-mode-hint">请输入你猜测的人物姓名，确认后将判定胜负</div>
+      <div class="gc-guess-input-row">
+        <input type="text" class="gc-input" id="guess-input" placeholder="输入人物姓名..." autocomplete="off" />
+        <button class="gc-btn-submit" id="btn-guess-confirm" type="button"><i class="fa-solid fa-check"></i> 确认猜测</button>
+        <button class="gc-btn-cancel" id="btn-guess-cancel" type="button"><i class="fa-solid fa-rotate-left"></i> 返回提问</button>
+      </div>
+    </div>
+
+    <!-- Status Overlay -->
+    <div class="gc-status-overlay hidden" id="status-overlay">
+      <div class="gc-status-content" id="status-content"></div>
+    </div>
+  </div>
+
+  <script src="../js/guesscharacter.js"></script>
+</body>
+</html>

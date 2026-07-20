@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>成语接龙</title>
+  <link rel="stylesheet" href="../css/theme.css">
+  <link rel="stylesheet" href="../css/idiom.css">
+  <link rel="stylesheet" href="../../../assets/fonts/fontawesome.min.css">
+</head>
+<body>
+  <div class="idiom-titlebar">
+    <span class="idiom-titlebar-title"><i class="fa-solid fa-link"></i> 成语接龙</span>
+    <span id="game-trng-badge" class="game-trng-badge" style="display:none"><i class="fa-solid fa-satellite-dish"></i> TRNG</span>
+    <div class="idiom-titlebar-btns">
+      <button class="btn-close" id="btn-close" title="关闭"><i class="fa-solid fa-xmark"></i></button>
+    </div>
+  </div>
+
+  <div class="idiom-game" id="game-container">
+    <!-- Current Tail Character Display -->
+    <div class="idiom-keyword-area">
+      <div class="idiom-keyword-label">当前需接字</div>
+      <div class="idiom-keyword" id="keyword-display">—</div>
+      <div class="idiom-round-info">第 <span id="round-num">1</span> 轮 · <span id="alive-count">0</span> 人在场</div>
+    </div>
+
+    <!-- Players Bar -->
+    <div class="idiom-players-bar" id="players-bar"></div>
+
+    <!-- History -->
+    <div class="idiom-history-area">
+      <div class="idiom-history-header">
+        <i class="fa-solid fa-scroll"></i> 成语记录
+      </div>
+      <div class="idiom-history-list" id="history-list"></div>
+    </div>
+
+    <!-- User Input Area -->
+    <div class="idiom-input-area" id="input-area">
+      <div class="idiom-input-hint" id="input-hint">轮到你了，请输入成语</div>
+      <div class="idiom-input-row">
+        <input type="text" class="idiom-input" id="idiom-input" placeholder="输入四字成语..." autocomplete="off" maxlength="8" />
+        <button class="idiom-btn-submit" id="btn-submit"><i class="fa-solid fa-paper-plane"></i> 提交</button>
+        <button class="idiom-btn-pass" id="btn-pass"><i class="fa-solid fa-forward"></i> 认输</button>
+      </div>
+    </div>
+
+    <!-- Status Overlay -->
+    <div class="idiom-status-overlay hidden" id="status-overlay">
+      <div class="idiom-status-content" id="status-content"></div>
+    </div>
+  </div>
+
+  <script src="../js/idiom.js"></script>
+</body>
+</html>

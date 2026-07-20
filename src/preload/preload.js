@@ -224,6 +224,12 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.on('llm:retry', listener);
     return () => ipcRenderer.removeListener('llm:retry', listener);
   },
+  // 监听游戏窗口/子窗口的 LLM usage 推送（累计到当前会话统计）
+  onLLMExternalUsage: (cb) => {
+    const listener = (_, data) => cb(data);
+    ipcRenderer.on('llm:external-usage', listener);
+    return () => ipcRenderer.removeListener('llm:external-usage', listener);
+  },
 
   // Paths
   getPath: (name) => ipcRenderer.invoke('app:getPath', name),
@@ -299,6 +305,26 @@ contextBridge.exposeInMainWorld('api', {
 
   // Undercover Game
   openUndercover: (aiCount) => ipcRenderer.invoke('undercover:open', aiCount),
+
+  // Idiom Chain Game
+  openIdiom: (aiCount) => ipcRenderer.invoke('idiom:open', aiCount),
+
+  // Guess Character Game
+  openGuessCharacter: (aiCount, category) => ipcRenderer.invoke('guesscharacter:open', aiCount, category),
+
+  // CIPYP-CAD - 2D drafting CAD sub-application
+  openCipypCad: () => ipcRenderer.invoke('cipypcad:open'),
+  cadRunCommand: (cmd) => ipcRenderer.invoke('cipypcad:runCommand', cmd),
+  cadRunCommands: (cmds) => ipcRenderer.invoke('cipypcad:runCommands', cmds),
+  cadGetState: () => ipcRenderer.invoke('cipypcad:getState'),
+  cadGetObjectList: () => ipcRenderer.invoke('cipypcad:getObjectList'),
+  cadSaveProject: (path) => ipcRenderer.invoke('cipypcad:saveProject', path),
+  cadSaveProjectDialog: () => ipcRenderer.invoke('cipypcad:saveProjectDialog'),
+  cadLoadProject: (path) => ipcRenderer.invoke('cipypcad:loadProject', path),
+  cadLoadProjectDialog: () => ipcRenderer.invoke('cipypcad:loadProjectDialog'),
+  cadExportDxf: (path) => ipcRenderer.invoke('cipypcad:exportDxf', path),
+  cadExportImage: (path, format) => ipcRenderer.invoke('cipypcad:exportImage', path, format),
+  cadClose: () => ipcRenderer.invoke('cipypcad:close'),
 
   // MCP
   mcpListServers: () => ipcRenderer.invoke('mcp:listServers'),

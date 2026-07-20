@@ -3681,7 +3681,7 @@ ipcMain.handle('skills:delete', (_, id) => {
 });
 
 // ---- IPC: LLM API Call (with retry/backoff/timeout) ----
-ipcMain.handle('llm:chat', async (_, messages, options = {}) => {
+ipcMain.handle('llm:chat', async (event, messages, options = {}) => {
   try {
     const llm = settings.llm;
     if (llm.provider === 'opencode-zen') {
@@ -3749,6 +3749,10 @@ ipcMain.handle('llm:chat', async (_, messages, options = {}) => {
     settings.llm.dailyTokensUsed = (settings.llm.dailyTokensUsed || 0) + usageTokens;
     recordTokenUsage(usage, llm.model);
     persistSettings();
+    // 游戏窗口/子窗口调用 LLM 时，把 usage 推送给主渲染器，让其累计到当前会话统计
+    if (mainWindow && !mainWindow.isDestroyed() && event.sender !== mainWindow.webContents) {
+      try { mainWindow.webContents.send('llm:external-usage', { usage, model: llm.model }); } catch { /* ignore */ }
+    }
     return { ok: true, data };
   } catch (e) { return { ok: false, error: e.message }; }
 });
@@ -4448,7 +4452,9 @@ function _getPwSettings() {
     followLang: s.playwright?.followLang !== false,
     args: s.playwright?.args || '',
     // 默认有头模式（headless=false）。settings.playwright.headless 显式为 true 时才无头
-    headless: s.playwright?.headless === true
+    headless: s.playwright?.headless === true,
+    // 横幅开关：默认开启。仅在 headed 模式下显示，headless 模式始终不显示
+    bannerEnabled: s.playwright?.bannerEnabled !== false
   };
 }
 
@@ -4621,9 +4627,11 @@ async function _launchPwBrowser(overrideSettings = null) {
 
 // ---- Playwright 有头模式屏幕右上角横幅 ----
 // 在屏幕右上角（不是窗口右上角）显示一个 always-on-top 横幅，提示用户不要关闭浏览器
+// 显示条件：headed 模式 + 用户启用 banner（settings.playwright.bannerEnabled）
+// 无头模式始终不显示
 let _pwBannerWindow = null;
 function _onPwBrowserLaunched(headed) {
-  if (headed) {
+  if (headed && _getPwSettings().bannerEnabled) {
     _showPwBanner();
   } else {
     _hidePwBanner();
@@ -5797,6 +5805,270 @@ ipcMain.handle('undercover:open', async (_, aiCount) => {
 ipcMain.handle('undercover:getConfig', () => undercoverConfig);
 ipcMain.handle('undercover:close', () => {
   if (undercoverWindow && !undercoverWindow.isDestroyed()) undercoverWindow.close();
+});
+
+// ---- Idiom Chain Game Window ----
+let idiomWindow = null;
+let idiomConfig = { aiCount: 3 };
+
+ipcMain.handle('idiom:open', async (_, aiCount) => {
+  try {
+    idiomConfig.aiCount = aiCount || 3;
+    if (idiomWindow && !idiomWindow.isDestroyed()) {
+      idiomWindow.focus();
+      return { ok: true };
+    }
+    idiomWindow = new BrowserWindow({
+      width: 900, height: 700, minWidth: 700, minHeight: 550,
+      title: '成语接龙',
+      frame: false,
+      icon: path.join(__dirname, '../../assets/icons/icon.png'),
+      webPreferences: {
+        preload: path.join(__dirname, '../preload/idiom-preload.js'),
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: false
+      }
+    });
+    idiomWindow.loadFile(path.join(__dirname, '../renderer/pages/idiom.html'));
+    idiomWindow.on('closed', () => { idiomWindow = null; });
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('idiom:getConfig', () => idiomConfig);
+ipcMain.handle('idiom:close', () => {
+  if (idiomWindow && !idiomWindow.isDestroyed()) idiomWindow.close();
+});
+
+// ---- Guess Character Game Window ----
+let guessCharacterWindow = null;
+let guessCharacterConfig = { aiCount: 1, category: 'mixed' };
+
+ipcMain.handle('guesscharacter:open', async (_, aiCount, category) => {
+  try {
+    guessCharacterConfig.aiCount = aiCount || 1;
+    guessCharacterConfig.category = category || 'mixed';
+    if (guessCharacterWindow && !guessCharacterWindow.isDestroyed()) {
+      guessCharacterWindow.focus();
+      return { ok: true };
+    }
+    guessCharacterWindow = new BrowserWindow({
+      width: 900, height: 700, minWidth: 700, minHeight: 550,
+      title: '是否猜人物',
+      frame: false,
+      icon: path.join(__dirname, '../../assets/icons/icon.png'),
+      webPreferences: {
+        preload: path.join(__dirname, '../preload/guesscharacter-preload.js'),
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: false
+      }
+    });
+    guessCharacterWindow.loadFile(path.join(__dirname, '../renderer/pages/guesscharacter.html'));
+    guessCharacterWindow.on('closed', () => { guessCharacterWindow = null; });
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('guesscharacter:getConfig', () => guessCharacterConfig);
+ipcMain.handle('guesscharacter:close', () => {
+  if (guessCharacterWindow && !guessCharacterWindow.isDestroyed()) guessCharacterWindow.close();
+});
+
+// ===========================================================================
+// CIPYP-CAD - 2D Drafting CAD sub-application
+// ===========================================================================
+let cipypCadWindow = null;
+
+ipcMain.handle('cipypcad:open', async () => {
+  try {
+    if (cipypCadWindow && !cipypCadWindow.isDestroyed()) {
+      cipypCadWindow.focus();
+      return { ok: true };
+    }
+    cipypCadWindow = new BrowserWindow({
+      width: 1280, height: 800, minWidth: 900, minHeight: 600,
+      title: 'CIPYP-CAD',
+      frame: true,
+      icon: path.join(__dirname, '../../assets/icons/icon.png'),
+      webPreferences: {
+        preload: path.join(__dirname, '../preload/cipypcad-preload.js'),
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: false
+      }
+    });
+    cipypCadWindow.loadFile(path.join(__dirname, '../renderer/pages/cipypcad.html'));
+    cipypCadWindow.on('closed', () => { cipypCadWindow = null; });
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('cipypcad:close', () => {
+  if (cipypCadWindow && !cipypCadWindow.isDestroyed()) cipypCadWindow.close();
+  return { ok: true };
+});
+
+// Helper: safely execute JS in CAD window and return result
+async function _cadExec(script) {
+  if (!cipypCadWindow || cipypCadWindow.isDestroyed()) {
+    return { ok: false, error: 'CIPYP-CAD 窗口未打开，请先调用 initCipypCad' };
+  }
+  try {
+    // Wait for the CAD engine to be ready (window.cadExecuteCommand defined)
+    // Try up to 5 seconds
+    for (let i = 0; i < 50; i++) {
+      const ready = await cipypCadWindow.webContents.executeJavaScript('typeof window.cadExecuteCommand === "function"');
+      if (ready) break;
+      await new Promise(r => setTimeout(r, 100));
+    }
+    const result = await cipypCadWindow.webContents.executeJavaScript(script);
+    return result;
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
+ipcMain.handle('cipypcad:runCommand', async (_, cmd) => {
+  const safe = JSON.stringify(String(cmd || ''));
+  return await _cadExec(`window.cadExecuteCommand(${safe})`);
+});
+
+ipcMain.handle('cipypcad:runCommands', async (_, cmds) => {
+  if (!Array.isArray(cmds)) return { ok: false, error: 'commands must be array' };
+  const safe = JSON.stringify(cmds.map(c => String(c || '')));
+  return await _cadExec(`window.cadExecuteCommands(${safe})`);
+});
+
+ipcMain.handle('cipypcad:getState', async () => {
+  return await _cadExec(`window.cadGetState()`);
+});
+
+ipcMain.handle('cipypcad:getObjectList', async () => {
+  return await _cadExec(`window.cadGetObjectList()`);
+});
+
+ipcMain.handle('cipypcad:saveProjectDialog', async () => {
+  if (!cipypCadWindow || cipypCadWindow.isDestroyed()) return { ok: false, error: 'CAD 窗口未打开' };
+  const result = await dialog.showSaveDialog(cipypCadWindow, {
+    title: '保存 CIPYP-CAD 工程',
+    defaultPath: 'project.cipyproj',
+    filters: [
+      { name: 'CIPYP-CAD Project', extensions: ['cipyproj'] },
+      { name: 'JSON', extensions: ['json'] },
+      { name: 'All Files', extensions: ['*'] }
+    ]
+  });
+  if (result.canceled || !result.filePath) return { ok: false, canceled: true };
+  return { ok: true, path: result.filePath };
+});
+
+ipcMain.handle('cipypcad:loadProjectDialog', async () => {
+  if (!cipypCadWindow || cipypCadWindow.isDestroyed()) return { ok: false, error: 'CAD 窗口未打开' };
+  const result = await dialog.showOpenDialog(cipypCadWindow, {
+    title: '加载 CIPYP-CAD 工程',
+    properties: ['openFile'],
+    filters: [
+      { name: 'CIPYP-CAD Project', extensions: ['cipyproj'] },
+      { name: 'JSON', extensions: ['json'] },
+      { name: 'All Files', extensions: ['*'] }
+    ]
+  });
+  if (result.canceled || result.filePaths.length === 0) return { ok: false, canceled: true };
+  return { ok: true, path: result.filePaths[0] };
+});
+
+ipcMain.handle('cipypcad:saveImageDialog', async (_, defaultName, filter) => {
+  if (!cipypCadWindow || cipypCadWindow.isDestroyed()) return { ok: false, error: 'CAD 窗口未打开' };
+  let filters;
+  if (filter === 'DXF') {
+    filters = [{ name: 'AutoCAD DXF', extensions: ['dxf'] }, { name: 'All Files', extensions: ['*'] }];
+  } else if (filter === 'SVG') {
+    filters = [{ name: 'SVG Image', extensions: ['svg'] }, { name: 'All Files', extensions: ['*'] }];
+  } else {
+    filters = [{ name: 'PNG Image', extensions: ['png'] }, { name: 'All Files', extensions: ['*'] }];
+  }
+  const result = await dialog.showSaveDialog(cipypCadWindow, {
+    title: '导出',
+    defaultPath: defaultName || 'export.png',
+    filters
+  });
+  if (result.canceled || !result.filePath) return { ok: false, canceled: true };
+  return { ok: true, path: result.filePath };
+});
+
+ipcMain.handle('cipypcad:saveProject', async (_, filePath) => {
+  try {
+    const res = await _cadExec(`window.cadGetProjectJSON()`);
+    if (!res.ok) return res;
+    const json = JSON.stringify(res.data, null, 2);
+    fs.writeFileSync(filePath, json, 'utf-8');
+    return { ok: true, path: filePath };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('cipypcad:loadProject', async (_, filePath) => {
+  try {
+    if (!fs.existsSync(filePath)) return { ok: false, error: '文件不存在: ' + filePath };
+    const content = fs.readFileSync(filePath, 'utf-8');
+    const data = JSON.parse(content);
+    const safe = JSON.stringify(data);
+    return await _cadExec(`window.cadLoadProjectJSON(${safe})`);
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('cipypcad:exportDxf', async (_, filePath) => {
+  try {
+    const res = await _cadExec(`window.cadGetDxfString()`);
+    if (!res.ok) return res;
+    fs.writeFileSync(filePath, res.dxf, 'utf-8');
+    return { ok: true, path: filePath };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('cipypcad:exportImage', async (_, filePath, format) => {
+  try {
+    const fmt = (format || 'png').toLowerCase();
+    if (fmt === 'png') {
+      const res = await _cadExec(`window.cadGetPNGDataUrl(1920, 1080)`);
+      if (!res.ok) return res;
+      // Strip "data:image/png;base64," prefix
+      const b64 = res.dataUrl.replace(/^data:image\/\w+;base64,/, '');
+      const buf = Buffer.from(b64, 'base64');
+      fs.writeFileSync(filePath, buf);
+    } else if (fmt === 'svg') {
+      const res = await _cadExec(`window.cadGetSVGString()`);
+      if (!res.ok) return res;
+      fs.writeFileSync(filePath, res.svg, 'utf-8');
+    } else {
+      return { ok: false, error: 'unsupported format: ' + fmt };
+    }
+    return { ok: true, path: filePath };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('cipypcad:writeFile', async (_, filePath, content) => {
+  try {
+    fs.writeFileSync(filePath, content, 'utf-8');
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
 });
 
 // ---- Game Result Reporting ----

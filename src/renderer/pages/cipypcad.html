@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CIPYP-CAD</title>
+  <link rel="stylesheet" href="../css/theme.css">
+  <link rel="stylesheet" href="../css/cipypcad.css">
+  <link rel="stylesheet" href="../../../assets/fonts/fontawesome.min.css">
+</head>
+<body>
+  <!-- Title Bar -->
+  <div class="cad-titlebar">
+    <span class="cad-titlebar-title"><i class="fa-solid fa-compass-drafting"></i> CIPYP-CAD</span>
+    <span class="cad-titlebar-subtitle" id="doc-name">未命名工程</span>
+    <div class="cad-titlebar-btns">
+      <button class="btn-tool" id="btn-fit" title="自适应视图"><i class="fa-solid fa-expand"></i></button>
+      <button class="btn-tool" id="btn-save" title="保存工程"><i class="fa-solid fa-floppy-disk"></i></button>
+      <button class="btn-tool" id="btn-export-png" title="导出PNG"><i class="fa-solid fa-image"></i></button>
+      <button class="btn-tool" id="btn-export-dxf" title="导出DXF"><i class="fa-solid fa-file-code"></i></button>
+      <button class="btn-close" id="btn-close" title="关闭"><i class="fa-solid fa-xmark"></i></button>
+    </div>
+  </div>
+
+  <div class="cad-app">
+    <!-- Left Sidebar: Layers + Objects -->
+    <div class="cad-sidebar" id="cad-sidebar">
+      <div class="cad-tabs">
+        <button class="cad-tab active" data-tab="layers" type="button">图层</button>
+        <button class="cad-tab" data-tab="objects" type="button">对象</button>
+      </div>
+
+      <!-- Layers Panel -->
+      <div class="cad-panel" id="panel-layers">
+        <div class="cad-panel-toolbar">
+          <button class="cad-icon-btn" id="btn-layer-new" title="新建图层" type="button"><i class="fa-solid fa-plus"></i></button>
+          <button class="cad-icon-btn" id="btn-layer-delete" title="删除图层" type="button"><i class="fa-solid fa-minus"></i></button>
+          <button class="cad-icon-btn" id="btn-layer-current" title="置为当前" type="button"><i class="fa-solid fa-check"></i></button>
+        </div>
+        <div class="cad-layer-list" id="layer-list"></div>
+      </div>
+
+      <!-- Objects Panel -->
+      <div class="cad-panel hidden" id="panel-objects">
+        <div class="cad-panel-toolbar">
+          <span class="cad-panel-info" id="obj-count">0 个对象</span>
+          <button class="cad-icon-btn" id="btn-obj-select-all" title="全选" type="button"><i class="fa-solid fa-check-double"></i></button>
+          <button class="cad-icon-btn" id="btn-obj-clear-sel" title="清除选择" type="button"><i class="fa-solid fa-square-xmark"></i></button>
+        </div>
+        <div class="cad-obj-list" id="object-list"></div>
+      </div>
+    </div>
+
+    <!-- Canvas Area -->
+    <div class="cad-canvas-area">
+      <canvas id="cad-canvas"></canvas>
+
+      <!-- Top toolbar overlay -->
+      <div class="cad-toolbar-overlay">
+        <button class="cad-tool-btn" data-cmd="line" title="直线" type="button"><i class="fa-solid fa-minus"></i></button>
+        <button class="cad-tool-btn" data-cmd="polyline" title="多段线" type="button"><i class="fa-solid fa-bezier-curve"></i></button>
+        <button class="cad-tool-btn" data-cmd="rect" title="矩形" type="button"><i class="fa-regular fa-square"></i></button>
+        <button class="cad-tool-btn" data-cmd="circle" title="圆" type="button"><i class="fa-regular fa-circle"></i></button>
+        <button class="cad-tool-btn" data-cmd="arc" title="圆弧" type="button"><i class="fa-solid fa-circle-half-stroke"></i></button>
+        <button class="cad-tool-btn" data-cmd="ellipse" title="椭圆" type="button"><i class="fa-solid fa-egg"></i></button>
+        <button class="cad-tool-btn" data-cmd="text" title="文本" type="button"><i class="fa-solid fa-font"></i></button>
+        <button class="cad-tool-btn" data-cmd="dim" title="标注" type="button"><i class="fa-solid fa-ruler"></i></button>
+        <button class="cad-tool-btn" data-cmd="hatch" title="填充" type="button"><i class="fa-solid fa-fill-drip"></i></button>
+        <span class="cad-tool-divider"></span>
+        <button class="cad-tool-btn" data-cmd="move" title="移动" type="button"><i class="fa-solid fa-arrows-up-down-left-right"></i></button>
+        <button class="cad-tool-btn" data-cmd="rotate" title="旋转" type="button"><i class="fa-solid fa-rotate"></i></button>
+        <button class="cad-tool-btn" data-cmd="scale" title="缩放" type="button"><i class="fa-solid fa-up-right-and-down-left-from-center"></i></button>
+        <button class="cad-tool-btn" data-cmd="mirror" title="镜像" type="button"><i class="fa-solid fa-arrow-right-arrow-left"></i></button>
+        <span class="cad-tool-divider"></span>
+        <button class="cad-tool-btn" data-cmd="delete" title="删除选中" type="button"><i class="fa-solid fa-trash-can"></i></button>
+        <button class="cad-tool-btn" data-cmd="clear" title="清空图纸" type="button"><i class="fa-solid fa-broom"></i></button>
+      </div>
+
+      <!-- Status bar -->
+      <div class="cad-statusbar">
+        <span class="cad-status-item"><i class="fa-solid fa-crosshairs"></i> <span id="status-coord">0.0, 0.0</span></span>
+        <span class="cad-status-item"><i class="fa-solid fa-magnifying-glass"></i> <span id="status-zoom">100%</span></span>
+        <span class="cad-status-item"><i class="fa-solid fa-layer-group"></i> 当前: <span id="status-layer">Layer0</span></span>
+        <span class="cad-status-item"><i class="fa-solid fa-vector-square"></i> 选中 <span id="status-sel">0</span></span>
+        <span class="cad-status-item cad-status-msg" id="status-msg">就绪</span>
+      </div>
+
+      <!-- Command console -->
+      <div class="cad-console" id="cad-console">
+        <div class="cad-console-header">
+          <i class="fa-solid fa-terminal"></i> 命令控制台
+          <button class="cad-icon-btn" id="btn-clear-console" title="清空" type="button"><i class="fa-solid fa-eraser"></i></button>
+        </div>
+        <div class="cad-console-log" id="console-log"></div>
+        <div class="cad-console-input-row">
+          <span class="cad-prompt">命令:</span>
+          <input type="text" id="cmd-input" class="cad-cmd-input" placeholder="输入命令 (如 line 0,0 100,100) 后回车执行" autocomplete="off" />
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="../js/cipypcad.js"></script>
+</body>
+</html>

@@ -293,7 +293,7 @@ _tools: {
   adjustAppearance: 'App-Erscheinung anpassen (Dark/Light, Akzentfarbe, Farbschema)',
   manageContext: 'Kontextverwaltung: clear_old/clear_tool_results/clear_old_except_last/summarize',
   autoSummarizeContext: 'Kontext automatisch zusammenfassen (LLM-Zusammenfassung auslösen)',
-  inviteGame: 'Zum Spielen einladen (Blumenworte/Untercover/Drei-Reiche)',
+  inviteGame: 'Zum Spielen einladen (Blumenworte/Untercover/Drei-Reiche/Idiom-Kette/Figur erraten)',
   initGeogebra: 'GeoGebra-Panel initialisieren',
   runGeogebraCommand: 'GeoGebra-Befehl ausführen',
   getFunctionsFromGeogebra: 'Funktionen aus GeoGebra abrufen',
@@ -340,6 +340,17 @@ _tools: {
   browserSelect: 'Option im Browser auswählen',
   browserGetInfo: 'Browser-Seiteninfo abrufen',
   browserClose: 'Browser schließen',
+  // CIPYP-CAD
+  initCipypCad: 'CIPYP-CAD eigenständiges Fenster öffnen (2D-Zeichnungs-CAD)',
+  runCipypCadCommand: 'Einzelnen CIPYP-CAD-Befehl ausführen',
+  runCipypCadCommands: 'Mehrere CIPYP-CAD-Befehle stapelweise ausführen',
+  getCipypCadState: 'Aktuellen CIPYP-CAD-Status abfragen (Ebenen, Objekte, Ansicht)',
+  getCadObjectList: 'Alle Objekte in der CIPYP-CAD-Zeichnung auflisten',
+  saveCipypCadProject: 'CIPYP-CAD-Projekt als .cipyproj speichern',
+  loadCipypCadProject: 'CIPYP-CAD-Projekt aus .cipyproj-Datei laden',
+  exportCipypCadDxf: 'CIPYP-CAD-Zeichnung als DXF (AutoCAD R12) exportieren',
+  exportCipypCadImage: 'CIPYP-CAD-Zeichnung als PNG/SVG-Bild exportieren',
+  closeCipypCad: 'CIPYP-CAD-Fenster schließen',
   listSkills: 'Verfügbare Fertigkeiten auflisten',
   runSkillScript: 'Fertigkeitsskript ausführen',
   importSkill: 'Fertigkeit aus SKILL.md importieren',
@@ -425,7 +436,8 @@ _categories: {
   '交互工具': 'Interaktiv',
   '网络工具': 'Netzwerk',
   'Office-Word': 'Office-Word',
-  '电脑控制': 'Computersteuerung'
+  '电脑控制': 'Computersteuerung',
+  'CIPYP-CAD': 'CIPYP-CAD'
 },
 
 // ── System Prompts ──────────────────────────────────────────────────────────
@@ -468,7 +480,7 @@ Arbeitsprinzipien:
 7. Korrekte Systempfade verwenden, der Benutzername ist ${p.username}, Systemlaufwerk ist ${p.systemDrive}
 8. Werkzeugergebnisse enthalten ein "ok"-Feld für Erfolg/Misserfolg — immer prüfen
 9. Wenn Benutzer Office/PDF-Dateien hochlädt, werden die Originaldatei und der extrahierte Text (.txt) im Arbeitsverzeichnis gespeichert. Inhalt über die .txt-Datei lesen; für **Ausgabe/Generierung/Übersetzung von Office-Dateien** den officeUnpack → XML ändern → officeRepack-Workflow verwenden
-10. Wenn der Benutzer ein Spiel spielen möchte (Blumenworte, Drei Reiche, Untercover usw.), MUSS das inviteGame-Werkzeug aufgerufen werden — niemals das Spiel durch normale Konversation simulieren
+10. Wenn der Benutzer ein Spiel spielen möchte (Blumenworte, Drei Reiche, Untercover, Idiom-Kette, Figur erraten usw.), MUSS das inviteGame-Werkzeug aufgerufen werden — niemals das Spiel durch normale Konversation simulieren
 
 [Code-Ausführungswerkzeugauswahl]:
 - runJavaScriptCode: Nur für reine Berechnung/Logik, kein Dateisystem oder Modulzugriff
@@ -508,6 +520,21 @@ Arbeitsprinzipien:
 
 [Daten-Tabellen-Seitenleiste]:
 - Für Tabellendaten, Datensatzanalyse, Datenstatistik: initSpreadsheet bevorzugen
+
+[CIPYP-CAD - 2D-Zeichnungs-Subanwendung]:
+- CIPYP-CAD ist ein integriertes eigenständiges 2D-Zeichnungs-CAD-Fenster mit AutoCAD-ähnlicher Kommandozeile
+- Arbeitsablauf: initCipypCad öffnet Fenster → runCipypCadCommand / runCipypCadCommands führen Befehle aus → saveCipypCadProject / exportCipypCadDxf / exportCipypCadImage exportieren → closeCipypCad schließt
+- Befehlssyntax (AutoCAD-ähnlich, leerzeichengetrennte Args, Punkte als x,y):
+  • line x1,y1 x2,y2 — Linie; rect x1,y1 x2,y2 — Rechteck; circle cx,cy radius — Kreis
+  • polyline x1,y1 x2,y2 [...] [--closed]; arc cx,cy radius startDeg endDeg; ellipse cx,cy rx ry [rotDeg]
+  • text x,y "content" [height] [rotDeg]; dim x1,y1 x2,y2 [offset]; hatch p1 p2 p3 [...] [--angle deg] [--spacing n]
+  • layer new|delete|current|color|on|off|list NAME [...]; select all|clear|id <id> [--add]|layer <name>
+  • move sel|all|id <id> dx,dy; rotate sel|all angleDeg [cx,cy]; scale sel|all factor [cx,cy]; mirror sel|all x1,y1 x2,y2
+  • delete sel|id <id>; clear; zoom factor; pan dx,dy; fit; grid on|off; help [command]
+- getCipypCadState gibt Ebenen/Objektanzahl/Ansicht zurück; getCadObjectList gibt alle Objekte zurück
+- saveCipypCadProject speichert als .cipyproj (JSON, über loadCipypCadProject neu ladbar)
+- exportCipypCadDxf exportiert AutoCAD R12 DXF; exportCipypCadImage exportiert PNG/SVG
+- Für 2D-Zeichnungsbedarf (Rechtecke, Grundrisse, Schemata) bevorzugen Sie CIPYP-CAD gegenüber Canvas (CAD für präzise dimensionierte Zeichnungen, Canvas für freies Zeichnen)
 
 Sprechstil:
 - Natürlich und freundlich, wie ein Gespräch unter Freunden
@@ -1695,7 +1722,20 @@ _textMap: {
   '请先填写 URL 和 Key': 'Bitte zuerst URL und Key ausfüllen',
   '包括用户消息': 'einschließlich Benutzernachricht',
   '工具调用': 'Werkzeugaufrufe',
-  'AI回复': 'KI-Antwort'
+  'AI回复': 'KI-Antwort',
+
+  // ── CIPYP-CAD ──
+  'CIPYP-CAD 工程已保存到：': 'CIPYP-CAD-Projekt gespeichert unter:',
+  'DXF 已导出到：': 'DXF exportiert unter:',
+  '可用 AutoCAD/FreeCAD/QCAD 等打开': 'Kann mit AutoCAD/FreeCAD/QCAD usw. geöffnet werden',
+  '已导出到：': 'exportiert unter:',
+  '需要 path 参数指定工程文件路径': 'path-Parameter erforderlich um Projektdatei anzugeben',
+  '未设置工作区路径，且未提供 path 参数': 'Arbeitsbereichspfad nicht gesetzt und kein path-Parameter angegeben',
+  'CIPYP-CAD 窗口已打开': 'CIPYP-CAD-Fenster geöffnet',
+  'CIPYP-CAD 窗口已关闭': 'CIPYP-CAD-Fenster geschlossen',
+  'CIPYP-CAD 命令已执行': 'CIPYP-CAD-Befehl ausgeführt',
+  '工程文件格式无效': 'Ungültiges Projektdateiformat',
+  'CAD 引擎未就绪': 'CAD-Engine nicht bereit'
 }
 
 };

@@ -1,0 +1,493 @@
+/* ========================================
+   是否猜人物 - Guess Character Game Styles
+   Follows main app theme via CSS variables
+   ======================================== */
+
+:root {
+  --gc-bg: var(--bg-primary, #f5f7fa);
+  --gc-bg-secondary: var(--bg-secondary, #ffffff);
+  --gc-bg-tertiary: var(--bg-tertiary, #eef1f6);
+  --gc-border: var(--border, #e2e6ee);
+  --gc-accent: var(--accent, #4f8cff);
+  --gc-accent-light: var(--accent-light, #7aadff);
+  --gc-text: var(--text-primary, #1a1a2e);
+  --gc-text-dim: var(--text-secondary, #5a5a7a);
+  --gc-text-tertiary: var(--text-tertiary, #8a8aaa);
+  --gc-success: var(--success, #27ae60);
+  --gc-danger: var(--danger, #e74c3c);
+  --gc-warning: var(--warning, #f39c12);
+  --gc-radius: var(--radius-md, 10px);
+  --gc-shadow: var(--shadow-md, 0 4px 12px rgba(0,0,0,0.08));
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: 'Microsoft YaHei', 'PingFang SC', sans-serif;
+  background: var(--gc-bg);
+  color: var(--gc-text);
+  overflow: hidden;
+  height: 100vh;
+  width: 100vw;
+  user-select: none;
+}
+
+/* ---- Title Bar ---- */
+.gc-titlebar {
+  height: 36px;
+  background: var(--gc-bg-secondary);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  -webkit-app-region: drag;
+  border-bottom: 1px solid var(--gc-border);
+}
+
+.gc-titlebar-title {
+  font-size: 13px;
+  color: var(--gc-accent);
+  font-weight: 600;
+  flex: 0 0 auto;
+}
+
+.gc-titlebar-btns {
+  display: flex;
+  gap: 4px;
+  margin-left: auto;
+  -webkit-app-region: no-drag;
+}
+
+.gc-titlebar-btns button {
+  width: 28px;
+  height: 28px;
+  border: none;
+  background: transparent;
+  color: var(--gc-text-dim);
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.gc-titlebar-btns button:hover { background: var(--gc-bg-tertiary); color: var(--gc-text); }
+.gc-titlebar-btns .btn-close:hover { background: var(--gc-danger); color: #fff; }
+
+/* ---- Game Container ---- */
+.gc-game {
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - 36px);
+  position: relative;
+}
+
+/* ---- Info Area ---- */
+.gc-info-area {
+  padding: 14px 16px;
+  background: var(--gc-bg-secondary);
+  border-bottom: 1px solid var(--gc-border);
+}
+
+.gc-info-row {
+  display: flex;
+  gap: 24px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.gc-info-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.gc-info-label {
+  font-size: 11px;
+  color: var(--gc-text-dim);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.gc-info-value {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--gc-accent);
+}
+
+.gc-hint {
+  font-size: 13px;
+  color: var(--gc-text-dim);
+  background: var(--gc-bg-tertiary);
+  padding: 8px 12px;
+  border-radius: 8px;
+  border-left: 3px solid var(--gc-accent);
+}
+
+/* ---- History Area ---- */
+.gc-history-area {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.gc-history-header {
+  padding: 10px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--gc-text-dim);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.gc-history-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 16px 12px;
+}
+
+.gc-history-list::-webkit-scrollbar { width: 4px; }
+.gc-history-list::-webkit-scrollbar-thumb { background: var(--gc-border); border-radius: 2px; }
+
+.gc-history-entry {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  margin-bottom: 6px;
+  border-radius: var(--gc-radius);
+  background: var(--gc-bg-secondary);
+  border: 1px solid var(--gc-border);
+  animation: gcEntryIn 0.3s ease;
+}
+
+.gc-history-entry.q-role { border-left: 3px solid var(--gc-accent); }
+.gc-history-entry.a-role { border-left: 3px solid var(--gc-success); }
+.gc-history-entry.guess-correct { border-left: 3px solid var(--gc-success); background: rgba(39,174,96,0.06); }
+.gc-history-entry.guess-wrong { border-left: 3px solid var(--gc-danger); background: rgba(231,76,60,0.06); }
+
+@keyframes gcEntryIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.gc-entry-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 600;
+  background: var(--gc-accent);
+  color: #fff;
+  flex-shrink: 0;
+}
+
+.gc-history-entry.a-role .gc-entry-avatar { background: var(--gc-success); }
+.gc-history-entry.guess-wrong .gc-entry-avatar { background: var(--gc-danger); }
+.gc-history-entry.guess-correct .gc-entry-avatar { background: var(--gc-success); }
+
+.gc-entry-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.gc-entry-role {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--gc-text-dim);
+  margin-bottom: 2px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.gc-entry-text {
+  font-size: 14px;
+  color: var(--gc-text);
+  word-break: break-word;
+}
+
+.gc-entry-answer {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 12px;
+  font-size: 13px;
+  font-weight: 600;
+  margin-top: 4px;
+}
+
+.gc-entry-answer.yes { background: rgba(39,174,96,0.15); color: var(--gc-success); }
+.gc-entry-answer.no { background: rgba(231,76,60,0.15); color: var(--gc-danger); }
+.gc-entry-answer.uncertain { background: rgba(243,156,18,0.15); color: var(--gc-warning); }
+
+/* ---- Input Area ---- */
+.gc-input-area {
+  padding: 12px 16px 16px;
+  border-top: 1px solid var(--gc-border);
+  background: var(--gc-bg-secondary);
+}
+
+.gc-input-hint {
+  font-size: 12px;
+  color: var(--gc-text-dim);
+  margin-bottom: 8px;
+}
+
+.gc-input-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.gc-input {
+  flex: 1;
+  min-width: 200px;
+  padding: 10px 14px;
+  border: 1.5px solid var(--gc-border);
+  border-radius: 8px;
+  background: var(--gc-bg);
+  color: var(--gc-text);
+  font-size: 14px;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.gc-input:focus {
+  border-color: var(--gc-accent);
+}
+
+.gc-input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.gc-btn-ask {
+  padding: 10px 16px;
+  border: none;
+  border-radius: 8px;
+  background: var(--gc-accent);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: all 0.2s;
+}
+
+.gc-btn-ask:hover { filter: brightness(1.1); }
+.gc-btn-ask:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.gc-btn-guess {
+  padding: 10px 16px;
+  border: none;
+  border-radius: 8px;
+  background: var(--gc-warning);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: all 0.2s;
+}
+
+.gc-btn-guess:hover { filter: brightness(1.1); }
+.gc-btn-guess:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.gc-btn-pass {
+  padding: 10px 14px;
+  border: 1.5px solid var(--gc-border);
+  border-radius: 8px;
+  background: var(--gc-bg);
+  color: var(--gc-text-dim);
+  font-size: 14px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: all 0.2s;
+}
+
+.gc-btn-pass:hover { border-color: var(--gc-danger); color: var(--gc-danger); }
+.gc-btn-pass:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* ---- Guess Mode Inline Panel ---- */
+.gc-guess-mode {
+  padding: 12px 16px;
+  background: rgba(243,156,18,0.08);
+  border-top: 1px solid var(--gc-warning);
+}
+
+.gc-guess-mode.hidden { display: none; }
+
+.gc-guess-mode-hint {
+  font-size: 12px;
+  color: var(--gc-warning);
+  margin-bottom: 8px;
+  font-weight: 600;
+}
+
+.gc-guess-input-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.gc-btn-submit {
+  padding: 10px 20px;
+  border: none;
+  border-radius: 8px;
+  background: var(--gc-success);
+  color: #fff;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: all 0.2s;
+}
+
+.gc-btn-submit:hover { filter: brightness(1.1); }
+
+.gc-btn-cancel {
+  padding: 10px 16px;
+  border: 1.5px solid var(--gc-border);
+  border-radius: 8px;
+  background: var(--gc-bg);
+  color: var(--gc-text-dim);
+  font-size: 14px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: all 0.2s;
+}
+
+.gc-btn-cancel:hover { border-color: var(--gc-accent); color: var(--gc-accent); }
+
+/* ---- Status Overlay ---- */
+.gc-status-overlay {
+  position: absolute;
+  top: 36px;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0,0,0,0.75);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+}
+
+.gc-status-overlay.hidden { display: none; }
+
+.gc-status-content {
+  background: var(--gc-bg-secondary);
+  border-radius: 16px;
+  padding: 32px 48px;
+  text-align: center;
+  box-shadow: 0 12px 40px rgba(0,0,0,0.3);
+  max-width: 480px;
+}
+
+.gc-status-content h2 {
+  font-size: 28px;
+  color: var(--gc-accent);
+  margin-bottom: 12px;
+}
+
+.gc-status-content h2.win { color: var(--gc-success); }
+.gc-status-content h2.lose { color: var(--gc-danger); }
+
+.gc-status-content p {
+  font-size: 15px;
+  color: var(--gc-text);
+  margin-bottom: 8px;
+}
+
+.gc-status-content .gc-answer-reveal {
+  margin-top: 12px;
+  padding: 12px 16px;
+  background: var(--gc-bg-tertiary);
+  border-radius: 8px;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--gc-accent);
+}
+
+.gc-status-content button {
+  margin-top: 16px;
+  padding: 10px 32px;
+  border: none;
+  border-radius: 8px;
+  background: var(--gc-accent);
+  color: #fff;
+  font-size: 15px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.gc-status-content button:hover { filter: brightness(1.1); }
+
+.gc-status-content button + button {
+  margin-left: 8px;
+  background: var(--gc-bg-tertiary);
+  color: var(--gc-text);
+}
+
+/* ---- Thinking indicator ---- */
+.gc-thinking {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  font-size: 13px;
+  color: var(--gc-text-dim);
+}
+
+.gc-thinking-dots {
+  display: flex;
+  gap: 3px;
+}
+
+.gc-thinking-dots span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--gc-accent);
+  animation: gcDot 1.2s infinite;
+}
+
+.gc-thinking-dots span:nth-child(2) { animation-delay: 0.2s; }
+.gc-thinking-dots span:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes gcDot {
+  0%, 80%, 100% { opacity: 0.3; transform: scale(0.8); }
+  40% { opacity: 1; transform: scale(1.2); }
+}
+
+/* ---- TRNG Badge (shared) ---- */
+.game-trng-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  background: linear-gradient(135deg, #c9a227, #f5d570);
+  color: #5a3800;
+  border-radius: 10px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+}
