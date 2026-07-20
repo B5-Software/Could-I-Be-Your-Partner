@@ -13,6 +13,17 @@
   padding: 0;
 }
 
+/* ---- .no-tarot 构建版本：隐藏所有塔罗牌相关 UI（CSS 层兜底，JS 也会过滤工具） ---- */
+body.no-tarot .agent-tarot,
+body.no-tarot .tarot-badge,
+body.no-tarot .tarot-spread-display,
+body.no-tarot .sub-agent-modal-tarot,
+body.no-tarot .setting-label-tarot,
+body.no-tarot .setting-label-tarot + .toggle-switch,
+body.no-tarot .setting-label-tarot + .toggle-switch + .setting-hint {
+  display: none !important;
+}
+
 #page-chat { padding: 0; }
 
 .chat-messages.drag-over {

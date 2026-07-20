@@ -1250,6 +1250,31 @@
   color: var(--text-tertiary, var(--text-secondary));
   opacity: 0.7;
 }
+/* 标签页上的关闭按钮：默认隐藏，hover 标签或 active 标签时显示 */
+.terminal-tab-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  margin-left: 2px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-tertiary, var(--text-secondary));
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 10px;
+  opacity: 0;
+  transition: opacity var(--transition), background var(--transition), color var(--transition);
+}
+.terminal-tab:hover .terminal-tab-close,
+.terminal-tab.active .terminal-tab-close { opacity: 0.8; }
+.terminal-tab-close:hover {
+  background: var(--danger, #e74c3c);
+  color: #fff;
+  opacity: 1 !important;
+}
 
 /* 终端面板容器：占满剩余空间 */
 .terminal-container {

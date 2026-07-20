@@ -130,8 +130,13 @@ function isImageGenConfigured(settings) {
 
 // 供 agent.js 在 getRuntimeToolSchemas 时调用，过滤掉未配置的生图工具
 function filterToolsByConfig(tools, settings) {
-  if (isImageGenConfigured(settings)) return tools;
-  return tools.filter(t => t.function?.name !== 'generateImage');
+  let filtered = tools;
+  // .no-tarot 构建版本：过滤掉 getTarot 工具（主进程 tarot:draw 也会拒绝调用作为兜底）
+  if (typeof window !== 'undefined' && window.NO_TAROT_BUILD === true) {
+    filtered = filtered.filter(t => t.function?.name !== 'getTarot');
+  }
+  if (isImageGenConfigured(settings)) return filtered;
+  return filtered.filter(t => t.function?.name !== 'generateImage');
 }
 
 // Code 模式独立工具白名单（参考 Claude Code 工具集，不与 Chat 共用）

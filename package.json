@@ -11,6 +11,10 @@
     "build:win": "electron-builder --win",
     "build:mac": "electron-builder --mac",
     "build:linux": "electron-builder --linux",
+    "build:no-tarot": "node scripts/build-no-tarot.js",
+    "build:no-tarot:win": "node scripts/build-no-tarot.js --win",
+    "build:no-tarot:mac": "node scripts/build-no-tarot.js --mac",
+    "build:no-tarot:linux": "node scripts/build-no-tarot.js --linux",
     "dist": "electron-builder",
     "audit": "npm audit",
     "audit:fix": "npm audit fix"

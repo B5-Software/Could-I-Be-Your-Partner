@@ -16,6 +16,9 @@ contextBridge.exposeInMainWorld('api', {
   getTheme: () => ipcRenderer.invoke('theme:get'),
   onThemeChanged: (cb) => ipcRenderer.on('theme:changed', (_, data) => cb(data)),
 
+  // 构建标志：检测是否为 --no-tarot 打包版本
+  isNoTarotBuild: () => ipcRenderer.invoke('app:is-no-tarot-build'),
+
   // Window Controls
   windowMinimize: () => ipcRenderer.invoke('window:minimize'),
   windowMaximize: () => ipcRenderer.invoke('window:maximize'),

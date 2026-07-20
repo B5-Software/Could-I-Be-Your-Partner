@@ -291,6 +291,19 @@
     tarotVisible = visible !== false;
     if (agentTarot) agentTarot.classList.toggle('hidden', !tarotVisible);
   }
+  // .no-tarot 构建版本：尽早异步检测并设置全局标志，添加 body.no-tarot class
+  // 主进程已强制 settings.tarotVisible=false，所以 applyTarotVisibility(false) 会被自动调用；
+  // 这里额外设置 window.NO_TAROT_BUILD 给 filterToolsByConfig 使用，并添加 CSS class 隐藏设置页塔罗牌开关
+  if (typeof window !== 'undefined') window.NO_TAROT_BUILD = false;
+  if (window.api && typeof window.api.isNoTarotBuild === 'function') {
+    window.api.isNoTarotBuild().then(r => {
+      if (r && r.ok && r.noTarot) {
+        window.NO_TAROT_BUILD = true;
+        document.body.classList.add('no-tarot');
+        applyTarotVisibility(false);
+      }
+    }).catch(() => {});
+  }
   const todoPanel = document.getElementById('todo-panel');
   const todoList = document.getElementById('todo-list');
   const todoInput = document.getElementById('todo-input');
@@ -10107,8 +10120,22 @@
       const cwdName = meta.cwd ? meta.cwd.split(/[/\\]/).pop() : '';
       tab.innerHTML = `<i class="fa-solid fa-terminal"></i>
         <span class="terminal-tab-label">${escapeHtml(label)}</span>
-        ${cwdName ? `<span class="terminal-tab-cwd" title="${escapeHtml(meta.cwd)}">${escapeHtml(cwdName)}</span>` : ''}`;
-      tab.addEventListener('click', () => switchToTerminal(meta.id));
+        ${cwdName ? `<span class="terminal-tab-cwd" title="${escapeHtml(meta.cwd)}">${escapeHtml(cwdName)}</span>` : ''}
+        <button class="terminal-tab-close" title="关闭此终端" type="button"><i class="fa-solid fa-xmark"></i></button>`;
+      // 点击 tab 本身：切换终端
+      tab.addEventListener('click', (e) => {
+        if (e.target.closest('.terminal-tab-close')) return; // 关闭按钮单独处理
+        switchToTerminal(meta.id);
+      });
+      // 关闭按钮：杀掉该终端，并阻止冒泡
+      const closeBtn = tab.querySelector('.terminal-tab-close');
+      if (closeBtn) {
+        closeBtn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          await window.api.killTerminal(meta.id);
+          // onTerminalExit 会触发 refreshTerminalList
+        });
+      }
       return tab;
     }
 
@@ -10231,12 +10258,6 @@
         if (window.showMessageModal) window.showMessageModal(msg, '错误', 'error');
         else console.error('[Terminal]', msg);
       }
-    });
-
-    document.getElementById('btn-terminal-close-tab')?.addEventListener('click', async () => {
-      if (activeId === null) return;
-      await window.api.killTerminal(activeId);
-      // onTerminalExit 会触发 refreshTerminalList
     });
 
     // 实时数据推送：仅当模态框打开时才写入 xterm（数据已在主进程的 fullHistory 中累积）

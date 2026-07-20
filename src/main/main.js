@@ -1647,6 +1647,14 @@ function resolveCloseToTrayDecision(decision) {
 app.whenReady().then(() => {
   // 启动时复制 OCR traineddata 文件到当前执行目录根，避免 GFW blocking
   const appPath = app.getAppPath();
+  // 检测 .no-tarot 标志文件（由 build --no-tarot 脚本写入）：若存在则屏蔽所有塔罗牌元素/工具/UI
+  const NO_TAROT_BUILD = fs.existsSync(path.join(appPath, '.no-tarot'));
+  if (NO_TAROT_BUILD) {
+    console.log('[CIBYP] .no-tarot 标志文件存在，塔罗牌功能已被屏蔽');
+    // 强制覆盖设置中的 tarotVisible 为 false（即使用户之前保存过 true）
+    settings.tarotVisible = false;
+    try { fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2)); } catch {}
+  }
   const srcOcrDir = path.join(appPath, 'assets', 'ocr');
   const destOcrDir = process.cwd();
   if (fs.existsSync(srcOcrDir)) {
@@ -3564,7 +3572,23 @@ async function getTRNGFromNetwork(host, port) {
   });
 }
 
+ipcMain.handle('app:is-no-tarot-build', () => {
+  try {
+    const appPath = app.getAppPath();
+    return { ok: true, noTarot: fs.existsSync(path.join(appPath, '.no-tarot')) };
+  } catch (e) {
+    return { ok: false, noTarot: false, error: e.message };
+  }
+});
+
 ipcMain.handle('tarot:draw', async (_, options) => {
+  // .no-tarot 构建版本：拒绝抽牌调用
+  try {
+    const appPath = app.getAppPath();
+    if (fs.existsSync(path.join(appPath, '.no-tarot'))) {
+      return { ok: false, error: '塔罗牌功能在此版本中已被禁用' };
+    }
+  } catch {}
   try {
     // Support both old single-card (no args) and new spread (options.spread)
     const spreadId = (options && typeof options === 'object') ? (options.spread || 'single') : 'single';
