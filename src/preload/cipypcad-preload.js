@@ -17,8 +17,27 @@ contextBridge.exposeInMainWorld('cadAPI', {
   exportImage: (path, format) => ipcRenderer.invoke('cipypcad:exportImage', path, format),
   writeFile: (path, content) => ipcRenderer.invoke('cipypcad:writeFile', path, content),
 
-  // Close window
+  // Close window (triggers save prompt via close-requested)
   closeWindow: () => ipcRenderer.invoke('cipypcad:close'),
+  // Confirm close after save prompt: action = 'close'
+  confirmClose: (action) => ipcRenderer.invoke('cipypcad:confirmClose', action),
+
+  // Window controls (custom titlebar buttons)
+  minimize: () => ipcRenderer.invoke('cipypcad:minimize'),
+  maximizeToggle: () => ipcRenderer.invoke('cipypcad:maximizeToggle'),
+  isMaximized: () => ipcRenderer.invoke('cipypcad:isMaximized'),
+  onMaximizeChange: (cb) => {
+    const listener = () => cb();
+    ipcRenderer.on('cipypcad:maximizeChanged', listener);
+    return () => ipcRenderer.removeListener('cipypcad:maximizeChanged', listener);
+  },
+
+  // Receive close-requested event from main process (user clicked window X button)
+  onCloseRequested: (cb) => {
+    const listener = () => cb();
+    ipcRenderer.on('cipypcad:close-requested', listener);
+    return () => ipcRenderer.removeListener('cipypcad:close-requested', listener);
+  },
 
   // Receive a single command from main process (push model for interactive tools)
   onCommand: (cb) => {

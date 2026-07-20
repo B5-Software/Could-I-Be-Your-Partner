@@ -5894,7 +5894,8 @@ ipcMain.handle('cipypcad:open', async () => {
     cipypCadWindow = new BrowserWindow({
       width: 1280, height: 800, minWidth: 900, minHeight: 600,
       title: 'CIPYP-CAD',
-      frame: true,
+      frame: false,
+      titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'hidden',
       icon: path.join(__dirname, '../../assets/icons/icon.png'),
       webPreferences: {
         preload: path.join(__dirname, '../preload/cipypcad-preload.js'),
@@ -5904,11 +5905,52 @@ ipcMain.handle('cipypcad:open', async () => {
       }
     });
     cipypCadWindow.loadFile(path.join(__dirname, '../renderer/pages/cipypcad.html'));
+    // 关闭拦截：若工程有未保存改动，由渲染进程通过 cipypcad:requestClose 询问用户
+    cipypCadWindow.on('close', (event) => {
+      if (cipypCadWindow && !cipypCadWindow.isDestroyed()) {
+        event.preventDefault();
+        cipypCadWindow.webContents.send('cipypcad:close-requested');
+      }
+    });
+    // 最大化状态变化时通知渲染进程（更新标题栏按钮图标）
+    cipypCadWindow.on('maximize', () => {
+      try { cipypCadWindow.webContents.send('cipypcad:maximizeChanged'); } catch {}
+    });
+    cipypCadWindow.on('unmaximize', () => {
+      try { cipypCadWindow.webContents.send('cipypcad:maximizeChanged'); } catch {}
+    });
     cipypCadWindow.on('closed', () => { cipypCadWindow = null; });
     return { ok: true };
   } catch (e) {
     return { ok: false, error: e.message };
   }
+});
+
+// 渲染进程在用户确认后（保存/不保存/取消）调用此 handler 真正关闭窗口
+ipcMain.handle('cipypcad:confirmClose', (_, action) => {
+  if (!cipypCadWindow || cipypCadWindow.isDestroyed()) return { ok: false };
+  if (action === 'close') {
+    // 解除 close 拦截：先移除 listener，再 destroy
+    cipypCadWindow.removeAllListeners('close');
+    cipypCadWindow.destroy();
+    cipypCadWindow = null;
+  }
+  return { ok: true };
+});
+
+// 窗口控制器：最小化/最大化/关闭（自实现标题栏按钮调用）
+ipcMain.handle('cipypcad:minimize', () => {
+  if (cipypCadWindow && !cipypCadWindow.isDestroyed()) cipypCadWindow.minimize();
+  return { ok: true };
+});
+ipcMain.handle('cipypcad:maximizeToggle', () => {
+  if (!cipypCadWindow || cipypCadWindow.isDestroyed()) return { ok: false };
+  if (cipypCadWindow.isMaximized()) cipypCadWindow.unmaximize();
+  else cipypCadWindow.maximize();
+  return { ok: true, maximized: cipypCadWindow.isMaximized() };
+});
+ipcMain.handle('cipypcad:isMaximized', () => {
+  return { ok: true, maximized: !!(cipypCadWindow && !cipypCadWindow.isDestroyed() && cipypCadWindow.isMaximized()) };
 });
 
 ipcMain.handle('cipypcad:close', () => {

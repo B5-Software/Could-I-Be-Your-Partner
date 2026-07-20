@@ -1582,14 +1582,27 @@
         }
       });
 
+      // ---- 工程标题更新（保存/加载后更新 #doc-name） ----
+      function updateDocTitle(filePath) {
+        const el = document.getElementById('doc-name');
+        if (!el) return;
+        if (!filePath) { el.textContent = '未命名工程'; return; }
+        // 取文件名（兼容 Windows 反斜杠与 POSIX 正斜杠）
+        const parts = String(filePath).split(/[\\/]/);
+        el.textContent = parts[parts.length - 1] || '未命名工程';
+      }
+
       // Title bar buttons
       document.getElementById('btn-fit').addEventListener('click', () => { Renderer.fit(); });
       document.getElementById('btn-save').addEventListener('click', async () => {
         const path = await window.cadAPI.saveProjectDialog();
         if (!path) return;
         const res = await window.cadAPI.saveProject(path);
-        if (res.ok) { this.setStatus('已保存: ' + path, 'success'); document.getElementById('doc-name').textContent = path.split(/[\\/]/).pop(); }
-        else this.setStatus('保存失败: ' + res.error, 'error');
+        if (res.ok) {
+          Document.modified = false;
+          updateDocTitle(path);
+          this.setStatus('已保存: ' + path, 'success');
+        } else this.setStatus('保存失败: ' + res.error, 'error');
       });
       document.getElementById('btn-export-png').addEventListener('click', async () => {
         const path = await window.cadAPI.saveImageDialog('export.png', 'PNG');
@@ -1608,7 +1621,101 @@
       document.getElementById('btn-clear-console').addEventListener('click', () => {
         document.getElementById('console-log').innerHTML = '';
       });
-      document.getElementById('btn-close').addEventListener('click', () => window.close());
+
+      // ---- 自定义窗口控制器按钮 ----
+      // 平台检测：macOS 隐藏自定义窗口控制器（用红绿灯），并加 padding 防遮挡
+      const isMac = navigator.userAgent.indexOf('Mac') >= 0;
+      if (isMac) {
+        document.getElementById('cad-titlebar').classList.add('platform-darwin');
+      }
+      // 更新最大化按钮图标
+      function updateMaximizeIcon() {
+        const btn = document.getElementById('btn-win-maximize');
+        if (!btn) return;
+        window.cadAPI.isMaximized().then(r => {
+          const icon = btn.querySelector('i');
+          if (icon) {
+            icon.className = (r && r.maximized) ? 'fa-regular fa-window-restore' : 'fa-regular fa-square';
+          }
+        });
+      }
+      document.getElementById('btn-win-minimize').addEventListener('click', () => {
+        window.cadAPI.minimize();
+      });
+      document.getElementById('btn-win-maximize').addEventListener('click', () => {
+        window.cadAPI.maximizeToggle().then(() => updateMaximizeIcon());
+      });
+      // 监听主进程最大化状态变化
+      if (window.cadAPI.onMaximizeChange) {
+        window.cadAPI.onMaximizeChange(() => updateMaximizeIcon());
+      }
+      // 初始化最大化按钮图标
+      setTimeout(updateMaximizeIcon, 200);
+
+      // ---- 关闭逻辑：触发主进程 close 事件，由渲染进程显示保存提示 ----
+      function requestClose() {
+        // 调用 closeWindow（主进程会触发 close-requested 回到渲染进程）
+        window.cadAPI.closeWindow();
+      }
+      document.getElementById('btn-close').addEventListener('click', requestClose);
+
+      // ---- 保存提示模态框 ----
+      const savePrompt = document.getElementById('cad-save-prompt');
+      const promptMsg = document.getElementById('cad-save-prompt-msg');
+      let closeAction = null; // 'save' | 'dontsave' | 'cancel'
+
+      function showSavePrompt(hasUnsaved) {
+        if (promptMsg) {
+          promptMsg.textContent = hasUnsaved
+            ? '当前工程有未保存的修改，是否保存？'
+            : '是否保存当前工程？';
+        }
+        savePrompt.classList.remove('hidden');
+      }
+      function hideSavePrompt() {
+        savePrompt.classList.add('hidden');
+        closeAction = null;
+      }
+      // 三个按钮
+      document.getElementById('cad-prompt-save').addEventListener('click', async () => {
+        // 保存后关闭
+        const path = await window.cadAPI.saveProjectDialog();
+        if (!path) {
+          // 用户取消了保存对话框，停留在 CAD 窗口
+          hideSavePrompt();
+          return;
+        }
+        const res = await window.cadAPI.saveProject(path);
+        if (res.ok) {
+          Document.modified = false;
+          updateDocTitle(path);
+          hideSavePrompt();
+          window.cadAPI.confirmClose('close');
+        } else {
+          // 保存失败，停留在 CAD 窗口
+          this.setStatus('保存失败: ' + (res.error || '未知错误'), 'error');
+          hideSavePrompt();
+        }
+      });
+      document.getElementById('cad-prompt-dontsave').addEventListener('click', () => {
+        hideSavePrompt();
+        window.cadAPI.confirmClose('close');
+      });
+      document.getElementById('cad-prompt-cancel').addEventListener('click', () => {
+        hideSavePrompt();
+        // 取消关闭，不做任何事
+      });
+      // 接收主进程的 close-requested 事件（用户点了窗口 X 按钮 或 Agent 调用 closeCipypCad）
+      if (window.cadAPI.onCloseRequested) {
+        window.cadAPI.onCloseRequested(() => {
+          // 若工程无任何改动（包括从未保存），直接关闭
+          if (!Document.modified) {
+            window.cadAPI.confirmClose('close');
+          } else {
+            showSavePrompt(true);
+          }
+        });
+      }
 
       // Console header collapse
       document.querySelector('.cad-console-header').addEventListener('click', (e) => {

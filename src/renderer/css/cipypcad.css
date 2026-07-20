@@ -45,16 +45,47 @@ body {
   user-select: none;
 }
 
-/* ---- Title Bar ---- */
+/* ---- Title Bar (custom frameless window) ---- */
 .cad-titlebar {
   height: 36px;
   background: var(--cad-bg-secondary);
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 0 12px;
+  justify-content: space-between;
+  padding: 0 0 0 12px;
   -webkit-app-region: drag;
   border-bottom: 1px solid var(--cad-border);
+  flex-shrink: 0;
+}
+
+/* macOS: 留出左侧红绿灯按钮空间 */
+.cad-titlebar.platform-darwin {
+  padding-left: 80px;
+}
+
+.cad-titlebar-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.cad-titlebar-center {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  -webkit-app-region: no-drag;
+}
+
+.cad-titlebar-right {
+  display: flex;
+  align-items: stretch;
+  flex: 0 0 auto;
+  -webkit-app-region: no-drag;
+  height: 36px;
 }
 
 .cad-titlebar-title {
@@ -73,14 +104,8 @@ body {
   white-space: nowrap;
 }
 
-.cad-titlebar-btns {
-  display: flex;
-  gap: 4px;
-  flex: 0 0 auto;
-  -webkit-app-region: no-drag;
-}
-
-.cad-titlebar-btns button {
+/* 工具按钮（中间区域，自适应/保存/导出） */
+.cad-titlebar-center .btn-tool {
   width: 28px;
   height: 28px;
   border: none;
@@ -92,10 +117,101 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
+  transition: background 0.15s, color 0.15s;
+}
+.cad-titlebar-center .btn-tool:hover { background: var(--cad-bg-tertiary); color: var(--cad-text); }
+
+/* 窗口控制器按钮（最小化/最大化/关闭） */
+.cad-titlebar-right .btn-winctrl {
+  width: 46px;
+  height: 100%;
+  border: none;
+  background: transparent;
+  color: var(--cad-text-dim);
+  cursor: pointer;
+  font-size: 11px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s, color 0.15s;
+  border-radius: 0;
+}
+.cad-titlebar-right .btn-winctrl:hover { background: var(--cad-bg-tertiary); color: var(--cad-text); }
+.cad-titlebar-right .btn-winctrl.btn-close:hover { background: var(--cad-danger); color: #fff; }
+.cad-titlebar-right .btn-winctrl.btn-close { font-size: 14px; }
+
+/* macOS: 隐藏自定义窗口控制器（已有红绿灯按钮） */
+.cad-titlebar.platform-darwin .cad-titlebar-right { display: none; }
+
+/* ---- Save Prompt Modal ---- */
+.cad-modal-overlay {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  animation: cadFadeIn 0.2s ease;
+}
+.cad-modal-overlay.hidden { display: none; }
+@keyframes cadFadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+.cad-modal {
+  background: var(--cad-bg-secondary);
+  border-radius: 8px;
+  min-width: 360px;
+  max-width: 480px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.3);
+  overflow: hidden;
+  border: 1px solid var(--cad-border);
 }
 
-.cad-titlebar-btns button:hover { background: var(--cad-bg-tertiary); color: var(--cad-text); }
-.cad-titlebar-btns .btn-close:hover { background: var(--cad-danger); color: #fff; }
+.cad-modal-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 18px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--cad-warning);
+  border-bottom: 1px solid var(--cad-border);
+}
+
+.cad-modal-body {
+  padding: 18px;
+  font-size: 13px;
+  color: var(--cad-text);
+  line-height: 1.5;
+}
+
+.cad-modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 18px 16px;
+  border-top: 1px solid var(--cad-border);
+}
+
+.cad-modal-btn {
+  min-width: 80px;
+  height: 32px;
+  border: 1px solid var(--cad-border);
+  background: var(--cad-bg-tertiary);
+  color: var(--cad-text);
+  font-size: 13px;
+  border-radius: 4px;
+  cursor: pointer;
+  padding: 0 12px;
+  transition: background 0.15s;
+}
+.cad-modal-btn:hover { background: var(--cad-bg); }
+.cad-modal-btn-primary {
+  background: var(--cad-accent);
+  color: #fff;
+  border-color: var(--cad-accent);
+}
+.cad-modal-btn-primary:hover { filter: brightness(1.1); background: var(--cad-accent); }
 
 /* ---- App Layout ---- */
 .cad-app {
