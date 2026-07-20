@@ -4597,6 +4597,13 @@
     try {
       if (a && typeof a.resolveToolAuth === 'function') a.resolveToolAuth(decision);
     } catch (e) { /* ignore */ }
+    // 授权决策完成后，异步刷新工具页"授权状态列表"
+    // agent 在 'allow-always' 时会异步写入 settings.toolAuthGranted，等其完成再刷新
+    if (decision === 'allow-always' || decision === 'allow-once' || decision === 'deny') {
+      setTimeout(() => {
+        try { renderToolAuthList(); } catch {}
+      }, 300);
+    }
   }
 
   const _btnToolAuthDeny = document.getElementById('btn-tool-auth-deny');

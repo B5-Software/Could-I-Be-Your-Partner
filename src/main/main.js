@@ -2187,10 +2187,36 @@ ipcMain.handle('terminal:make', (_, cwd) => {
     const pty = require('node-pty');
     const id = ++terminalIdCounter;
     // 检测可用的 shell：macOS 优先用户默认 shell（$SHELL），其次 zsh、bash、sh
-    // Windows 用 powershell.exe，Linux 用 bash
+    // Windows 优先 PowerShell 7+（pwsh.exe），回退到 Windows PowerShell 5（powershell.exe）
+    // 最后回退到 cmd.exe（COMSPEC）
     let shellName, shellArgs = [];
     if (process.platform === 'win32') {
-      shellName = 'powershell.exe';
+      // 1) 优先 pwsh.exe（PowerShell 7+）：通过 PATH 查找，存在则用
+      // 2) 回退 powershell.exe（Windows PowerShell 5.1，System32 内置）
+      // 3) 最终回退 cmd.exe（COMSPEC，保证可用）
+      const pwshPaths = [
+        'pwsh.exe',
+        path.join(process.env.ProgramFiles || 'C:\\Program Files', 'PowerShell', '7', 'pwsh.exe'),
+        path.join(process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)', 'PowerShell', '7', 'pwsh.exe')
+      ];
+      const foundPwsh = pwshPaths.find(p => {
+        try {
+          // 无路径的 'pwsh.exe' 用 which/where 查；带路径的直接 stat
+          if (p.includes('\\') || p.includes('/')) return fs.existsSync(p);
+          // 通过 process.env.PATH 拆分后查找可执行文件
+          return (process.env.PATH || '').split(/[;]+/).some(d => {
+            if (!d) return false;
+            try { return fs.existsSync(path.join(d, p)); } catch { return false; }
+          });
+        } catch { return false; }
+      });
+      if (foundPwsh) {
+        shellName = foundPwsh;
+      } else if (fs.existsSync(path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'))) {
+        shellName = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+      } else {
+        shellName = process.env.ComSpec || 'cmd.exe';
+      }
     } else {
       // macOS / Linux: 按优先级检测 shell 路径是否存在
       const candidates = [];
