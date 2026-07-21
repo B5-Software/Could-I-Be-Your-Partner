@@ -1764,7 +1764,7 @@ ${toolListSection}`;
                 const s = await window.api.getSettings();
                 if (!s.toolAuthGranted) s.toolAuthGranted = { playwright: false, computerUse: false };
                 s.toolAuthGranted[authCategory] = true;
-                await window.api.saveSettings(s);
+                await window.api.setSettings(s);
                 this.settings = s;
               } catch (e) { /* 持久化失败时降级为本次会话内允许 */ }
             }

@@ -4888,7 +4888,7 @@
           const s = await window.api.getSettings();
           if (!s.toolAuthGranted) s.toolAuthGranted = { playwright: false, computerUse: false };
           s.toolAuthGranted[cat] = false;
-          await window.api.saveSettings(s);
+          await window.api.setSettings(s);
           // 同步刷新当前 agent 实例的 settings 和会话内缓存
           for (const a of [agent, codeAgent, babeAgent]) {
             if (a && a.settings) a.settings = s;
