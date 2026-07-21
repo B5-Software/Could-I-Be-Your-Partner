@@ -375,27 +375,37 @@ class Agent {
 - 格式属性：bold(粗体) italic(斜体) color(文字颜色) bg(背景色) align(left/center/right) fontSize(字号px)
 
 【CIPYP-CAD 使用规范 - 2D 制图子应用】：
-- CIPYP-CAD 是内置的独立窗口 2D 制图 CAD，支持类 AutoCAD 命令行操作
-- 工作流程：initCipypCad 打开窗口 → runCipypCadCommand / runCipypCadCommands 执行命令制图 → saveCipypCadProject 保存工程 / exportCipypCadDxf 导出 DXF / exportCipypCadImage 导出图片 → closeCipypCad 关闭
+- CIPYP-CAD 是内置的独立窗口 2D 制图 CAD，支持类 AutoCAD 命令行操作（80+ 命令，完整 DXF R2000 互导）
+- 工作流程：initCipypCad 打开窗口 → runCipypCadCommand / runCipypCadCommands 执行命令制图 → saveCipypCadProject 保存工程 / exportCipypCadDxf 导出 DXF / exportCipypCadImage 导出图片 / importCipypCadDxf 导入外部 DXF → closeCipypCad 关闭
 - 命令语法（类 AutoCAD 命令行，参数空格分隔，点用 x,y 格式）：
-  • line x1,y1 x2,y2 —— 直线
-  • polyline x1,y1 x2,y2 [x3,y3 ...] [--closed] —— 多段线
-  • rect x1,y1 x2,y2 —— 矩形（对角两点）
-  • circle cx,cy radius —— 圆
-  • arc cx,cy radius startDeg endDeg —— 弧（角度制）
-  • ellipse cx,cy rx ry [rotationDeg] —— 椭圆
-  • text x,y "content" [height] [rotationDeg] —— 文本
-  • dim x1,y1 x2,y2 [offset] —— 标注
-  • hatch x1,y1 x2,y2 x3,y3 ... [--angle deg] [--spacing n] —— 填充
-  • layer new|delete|current|color|on|off|list NAME [...] —— 图层管理
-  • select all|clear|id <id> [--add]|layer <name> —— 选择
-  • move sel|all|id <id> dx,dy / rotate sel|all angleDeg [cx,cy] / scale sel|all factor [cx,cy] / mirror sel|all x1,y1 x2,y2 —— 几何变换
-  • delete sel|id <id> / clear / zoom factor / pan dx,dy / fit / grid on|off / help [command]
-- 命令示例：runCipypCadCommand("layer new Walls #ff5722")、runCipypCadCommands(["line 0,0 100,0","line 100,0 100,50","line 100,50 0,50","line 0,50 0,0"])
-- 查询状态：getCipypCadState 返回图层/对象数/视图；getCadObjectList 返回所有对象详情
+  • 基本绘图：line x1,y1 x2,y2 / polyline x1,y1 x2,y2 [x3,y3 ...] [--closed] / rect x1,y1 x2,y2 / circle cx,cy radius / arc cx,cy radius startDeg endDeg / ellipse cx,cy rx ry [rotationDeg] / text x,y "content" [height] [rotationDeg] / point x,y / spline x1,y1 x2,y2 x3,y3 ... [--closed]
+  • 标注（dim/dimalign/dimlinear/dimradius/dimdiameter/dimangle/dimleader）：
+    - dim x1,y1 x2,y2 [offset] —— 线性标注（综合）
+    - dimalign x1,y1 x2,y2 [offset] —— 对齐标注
+    - dimlinear x1,y1 x2,y2 [offset] —— 水平/垂直线性标注（自动判定方向，含投影虚线）
+    - dimradius cx,cy edgeX,edgeY [leaderEndX,leaderEndY] —— 半径标注（Rxx）
+    - dimdiameter cx,cy p1x,p1y [leaderEndX,leaderEndY] —— 直径标注（Øxx）
+    - dimangle vertexX,vertexY p1x,p1y p2x,p2y [offset] —— 角度标注（xx°，绘制弧）
+    - dimleader startX,startY endX,endY ["text"] —— 引线标注
+  • 填充：hatch x1,y1 x2,y2 x3,y3 ... [--angle deg] [--spacing n] [--pattern NAME]（图案名见 hatchpattern list，如 ansi31/cross/dot/grid/solid/horizontal/vertical）
+  • 图层管理：layer new NAME [color] / layer delete NAME / layer current NAME / layer color NAME COLOR / layer on|off NAME / layer lock|unlock NAME / layer list
+  • 选择：select all | clear | id <id> [--add] | layer <name> | invert
+  • 几何变换：move sel|all|id <id> dx,dy / rotate sel|all angleDeg [cx,cy] / scale sel|all factor [cx,cy] / mirror sel|all x1,y1 x2,y2
+  • 编辑命令：copy sel|all|id <id> dx,dy / offset dist [side]（偏移复制选中或全图）/ array rect <rows>x<cols> <rowGap>,<colGap> / array polar <count> [centerX,centerY] [fillAngle] / fillet r <radius>（圆角连接两线）/ chamfer d <dist1,dist2>（倒角）/ trim x,y（修剪到点击点最近边界）/ extend x,y（延伸到点击点边界）/ break x1,y1 x2,y2（打断）/ join（合并共线段）/ explode（分解多段线/块引用）/ pedit（多段线编辑）
+  • 块定义：block define NAME [baseX,baseY]（基于当前选择创建块）/ block list / block delete NAME / insert NAME x,y [scaleX,scaleY] [rotDeg]（块引用，支持缩放旋转）
+  • 删除/清空：delete sel | delete id <id> / clear
+  • 视图：zoom factor | zoom extents | zoom window x1,y1 x2,y2 | zoom scale <n> / pan dx,dy / fit / grid on|off
+  • 捕捉：snap on|off | snap endpoint|midpoint|center|intersection|nearest|none
+  • 几何查询：dist x1,y1 x2,y2 / length [id <id>]（曲线长度）/ area x1,y1 x2,y2 x3,y3 ... / perim [id <id>] / list [id <id>] / info / bbox [id <id>] / find "text" / count / id x,y
+  • DXF 互导：dxfin（提示用 UI 导入按钮）/ dxfout（提示用 文件→导出 DXF）/ hatchpattern list | current | set <name> [id <id>]
+  • 撤销/重做：undo / redo
+  • 帮助：help [command]（列出所有命令或查某命令详情）
+- 命令示例：runCipypCadCommand("layer new Walls #ff5722")、runCipypCadCommands(["line 0,0 100,0","line 100,0 100,50","line 100,50 0,50","line 0,50 0,0"])、runCipypCadCommand("dimalign 0,0 100,0 0,-20")、runCipypCadCommand("hatch 0,0 100,0 100,50 0,50 --pattern ansi31")、runCipypCadCommand("block define MyBlock 0,0")
+- 查询状态：getCipypCadState 返回图层/对象数/视图/修改标记；getCadObjectList 返回所有对象详情；getCipypCadHatchPatterns 列出所有内置填充图案
 - 工程保存：saveCipypCadProject 可指定 path 或 filename（默认 project.cipyproj，JSON 格式，可重新 loadCipypCadProject 加载）
-- 标准格式导出：exportCipypCadDxf 导出 AutoCAD R12 DXF（可被 AutoCAD/FreeCAD/QCAD 等打开）；exportCipypCadImage 导出 PNG/SVG 图片
-- 用户说"画一个矩形""设计平面图""绘制示意图"等 2D 制图需求时，优先使用 CIPYP-CAD 而非 Canvas（CAD 更适合精确尺寸制图，Canvas 更适合自由绘图）
+- DXF 互导：exportCipypCadDxf 导出 AutoCAD R2000 (AC1015) DXF（含 HEADER/TABLES/BLOCKS/ENTITIES 完整结构、$EXTMIN/$LIMMIN 等变量，可被 AutoCAD/FreeCAD/QCAD/LibreCAD 等打开）；importCipypCadDxf 弹出文件选择对话框导入外部 DXF（支持 LINE/CIRCLE/ARC/ELLIPSE/POINT/TEXT/MTEXT/LWPOLYLINE/POLYLINE/HATCH/DIMENSION/INSERT 块引用展开，自动创建图层与 ACI 颜色映射）
+- 图片导出：exportCipypCadImage 导出 PNG/SVG 图片（SVG 矢量含所有实体类型）
+- 用户说"画一个矩形""设计平面图""绘制示意图""画机械零件图""建筑平面图"等 2D 制图需求时，优先使用 CIPYP-CAD 而非 Canvas（CAD 更适合精确尺寸制图 + 完整标注/填充/块系统，Canvas 更适合自由绘图）
 
 【CIBYP-PCB-EDA 使用规范 - 电路板设计子应用】：
 - CIBYP-PCB-EDA 是内置的独立窗口 PCB 设计工具：完整原理图编辑器 + PCB 布局布线 + 简单自动布线 + 3D 预览 + 生产级 Gerber(RS-274X)/Excellon 钻孔/KiCad 格式导入导出
@@ -2378,9 +2388,25 @@ ${toolListSection}`;
           }
           const res = await window.api.cadExportDxf(dxfPath);
           if (res.ok && this.onMessage) {
-            this.onMessage('assistant', `📐 DXF 已导出到：\n\`${dxfPath}\`\n（可用 AutoCAD/FreeCAD/QCAD 等打开）`);
+            this.onMessage('assistant', `📐 DXF (R2000 AC1015) 已导出到：\n\`${dxfPath}\`\n（可用 AutoCAD/FreeCAD/QCAD/LibreCAD 等打开）`);
           }
           return res;
+        }
+        case 'importCipypCadDxf': {
+          // 弹出系统文件选择对话框导入外部 DXF 文件
+          const res = await window.api.cadImportDxfDialog();
+          if (!res) {
+            return { ok: false, error: '导入 DXF 失败：未收到响应' };
+          }
+          if (res.ok && this.onMessage && res.imported != null) {
+            const newLayers = (res.layers || []).join(', ') || '(无)';
+            this.onMessage('assistant', `📐 DXF 导入完成：${res.imported} 个对象，新建图层：${newLayers}`);
+          }
+          return res;
+        }
+        case 'getCipypCadHatchPatterns': {
+          // 列出所有内置填充图案（供 LLM 在调用 hatch --pattern 前查询可用图案名）
+          return await window.api.cadGetHatchPatterns();
         }
         case 'exportCipypCadImage': {
           const fmt = (args.format || 'png').toLowerCase();

@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 #
-# 一键下载所有被 .gitignore 忽略的第三方资源（Font Awesome / Tesseract OCR / GeoGebra）
+# 一键下载所有被 .gitignore 忽略的第三方资源（Font Awesome / Tesseract OCR / GeoGebra / Three.js）
 #
 # 用法:
 #   ./fetch-assets.sh                              # 直连下载全部
 #   ./fetch-assets.sh --mirror https://mirror.ghproxy.com   # 使用 GitHub 镜像
 #   ./fetch-assets.sh --skip-ocr --tessdata-variant fast     # 跳过OCR，或选 fast/best 版本
+#   ./fetch-assets.sh --skip-three                          # 跳过 Three.js
 #
 set -euo pipefail
 
@@ -13,6 +14,7 @@ MIRROR=""
 SKIP_OCR=false
 SKIP_FA=false
 SKIP_GGB=false
+SKIP_THREE=false
 TESSDATA_VARIANT="standard"
 
 while [[ $# -gt 0 ]]; do
@@ -21,9 +23,10 @@ while [[ $# -gt 0 ]]; do
     --skip-ocr)         SKIP_OCR=true; shift ;;
     --skip-fontawesome) SKIP_FA=true; shift ;;
     --skip-geogebra)    SKIP_GGB=true; shift ;;
+    --skip-three)       SKIP_THREE=true; shift ;;
     --tessdata-variant) TESSDATA_VARIANT="$2"; shift 2 ;;
     -h|--help)
-      echo "Usage: $0 [--mirror URL] [--skip-ocr] [--skip-fontawesome] [--skip-geogebra] [--tessdata-variant standard|fast|best]"
+      echo "Usage: $0 [--mirror URL] [--skip-ocr] [--skip-fontawesome] [--skip-geogebra] [--skip-three] [--tessdata-variant standard|fast|best]"
       exit 0 ;;
     *) echo "Unknown option: $1"; exit 1 ;;
   esac
@@ -178,6 +181,37 @@ if [[ "$SKIP_GGB" == "false" ]]; then
   fi
   # 说明：geogebra/geogebra 是 Gradle 源码工程，仅作参考，不参与运行。
   # deployggb.js 运行时仍从 www.geogebra.org CDN 加载 web3d/webSimple 编译产物（源码仓库不含）。
+fi
+
+# ---- Three.js 0.160.0 (PCB-EDA 3D 预览用) ----
+if [[ "$SKIP_THREE" == "false" ]]; then
+  info "Three.js 0.160.0"
+  three_dir="$REPO_ROOT/assets/lib/three"
+  mkdir -p "$three_dir"
+  three_file="$three_dir/three.min.js"
+
+  need_download=false
+  if [[ ! -f "$three_file" ]]; then
+    need_download=true
+  else
+    existing_size=$(stat -c%s "$three_file" 2>/dev/null || stat -f%z "$three_file" 2>/dev/null || echo 0)
+    if [[ $existing_size -lt 102400 ]]; then need_download=true; fi
+  fi
+  if [[ "$need_download" == "true" ]]; then
+    rm -f "$three_file"
+    # Three.js 不在 GitHub raw（仓库的 build/three.min.js 是构建产物）
+    # 走 jsDelivr CDN（npm 镜像，全球加速）
+    url="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"
+    if ! download "$url" "$three_file"; then
+      warn "jsDelivr failed, trying unpkg..."
+      url2="https://unpkg.com/three@0.160.0/build/three.min.js"
+      download "$url2" "$three_file" || true
+    fi
+  else
+    ok "three.min.js already exists, skipping"
+  fi
+  # 注：Three.js 0.160.0 已移除 UMD 版的 OrbitControls（仅保留 ESM 模块版本）
+  # 因此 pcb-3d.js 内部自带了一个轻量 OrbitControls 实现（旋转/缩放/平移），无需下载额外文件。
 fi
 
 echo -e "\n\033[36m========================================"

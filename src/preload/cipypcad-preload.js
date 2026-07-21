@@ -14,6 +14,8 @@ contextBridge.exposeInMainWorld('cadAPI', {
   saveProject: (path) => ipcRenderer.invoke('cipypcad:saveProject', path),
   loadProject: (path) => ipcRenderer.invoke('cipypcad:loadProject', path),
   exportDxf: (path) => ipcRenderer.invoke('cipypcad:exportDxf', path),
+  importDxfDialog: () => ipcRenderer.invoke('cipypcad:importDxfDialog'),
+  getHatchPatterns: () => ipcRenderer.invoke('cipypcad:getHatchPatterns'),
   exportImage: (path, format) => ipcRenderer.invoke('cipypcad:exportImage', path, format),
   writeFile: (path, content) => ipcRenderer.invoke('cipypcad:writeFile', path, content),
 

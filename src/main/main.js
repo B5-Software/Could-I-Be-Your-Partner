@@ -6162,6 +6162,38 @@ ipcMain.handle('cipypcad:exportDxf', async (_, filePath) => {
   }
 });
 
+ipcMain.handle('cipypcad:importDxfDialog', async () => {
+  if (!cipypCadWindow || cipypCadWindow.isDestroyed()) return { ok: false, error: 'CAD 窗口未打开' };
+  const result = await dialog.showOpenDialog(cipypCadWindow, {
+    title: '导入 DXF 文件',
+    properties: ['openFile'],
+    filters: [
+      { name: 'AutoCAD DXF', extensions: ['dxf'] },
+      { name: 'All Files', extensions: ['*'] }
+    ]
+  });
+  if (result.canceled || result.filePaths.length === 0) return { ok: false, canceled: true };
+  const filePath = result.filePaths[0];
+  try {
+    const content = fs.readFileSync(filePath, 'utf-8');
+    const safeContent = JSON.stringify(content);
+    const safePath = JSON.stringify(filePath);
+    const r = await _cadExec(`window.cadImportDxfString(${safeContent}, ${safePath})`);
+    if (r && r.ok) _cadLastPath = filePath;
+    return r;
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('cipypcad:getHatchPatterns', async () => {
+  try {
+    return await _cadExec(`window.cadGetHatchPatterns()`);
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
 ipcMain.handle('cipypcad:exportImage', async (_, filePath, format) => {
   try {
     const fmt = (format || 'png').toLowerCase();

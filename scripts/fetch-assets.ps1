@@ -1,12 +1,13 @@
 <#
 .SYNOPSIS
-  一键下载所有被 .gitignore 忽略的第三方资源（Font Awesome / Tesseract OCR / GeoGebra）
+  一键下载所有被 .gitignore 忽略的第三方资源（Font Awesome / Tesseract OCR / GeoGebra / Three.js）
 .DESCRIPTION
   脚本会下载以下资源到对应目录：
     - Font Awesome 6.5.1 CSS  -> assets/fonts/
     - Font Awesome 字体      -> assets/webfonts/
     - Tesseract OCR 训练数据  -> assets/ocr/  (chi_sim + eng)
     - GeoGebra deployggb.js  -> assets/geogebra/
+    - Three.js 0.160.0       -> assets/lib/three/  (PCB-EDA 3D 预览用)
   支持通过 -Mirror 参数指定 GitHub 镜像前缀（应对 GFW），默认直连。
 .PARAMETER Mirror
   GitHub 下载镜像前缀，如 "https://mirror.ghproxy.com"（会拼到原始 GitHub URL 前）
@@ -16,6 +17,8 @@
   跳过 Font Awesome 下载
 .PARAMETER SkipGeoGebra
   跳过 GeoGebra deployggb.js 下载
+.PARAMETER SkipThree
+  跳过 Three.js 下载
 .PARAMETER TessdataVariant
   OCR 数据版本：standard(默认) / fast / best
 .EXAMPLE
@@ -28,6 +31,7 @@ param(
   [switch]$SkipOCR,
   [switch]$SkipFontAwesome,
   [switch]$SkipGeoGebra,
+  [switch]$SkipThree,
   [ValidateSet("standard","fast","best")][string]$TessdataVariant = "standard"
 )
 
@@ -181,6 +185,36 @@ if (-not $SkipGeoGebra) {
   }
   # 说明：geogebra/geogebra 是 Gradle 源码工程，仅作参考，不参与运行。
   # deployggb.js 运行时仍从 www.geogebra.org CDN 加载 web3d/webSimple 编译产物（源码仓库不含）。
+}
+
+# ---- Three.js 0.160.0 (PCB-EDA 3D 预览用) ----
+if (-not $SkipThree) {
+  Write-Step "Three.js 0.160.0"
+  $threeDir = Join-Path $repoRoot "assets\lib\three"
+  New-Item -ItemType Directory -Force -Path $threeDir | Out-Null
+  $threeFile = Join-Path $threeDir "three.min.js"
+
+  if (Test-Path $threeFile) {
+    $existingSize = (Get-Item $threeFile).Length
+    if ($existingSize -gt 100KB) {
+      Write-Ok "three.min.js already exists ($([math]::Round($existingSize/1KB,1)) KB), skipping"
+    } else {
+      Remove-Item $threeFile -Force
+    }
+  }
+  if (-not (Test-Path $threeFile)) {
+    # Three.js 不在 GitHub raw（mrdoob/three.js 仓库的 build/three.min.js 是构建产物）
+    # 走 jsDelivr CDN（npm 镜像，全球加速）
+    $url = "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"
+    $ok = Download-File $url $threeFile
+    if (-not $ok -or -not (Test-Path $threeFile)) {
+      Write-Warn "jsDelivr failed, trying unpkg..."
+      $url2 = "https://unpkg.com/three@0.160.0/build/three.min.js"
+      Download-File $url2 $threeFile | Out-Null
+    }
+  }
+  # 注：Three.js 0.160.0 已移除 UMD 版的 OrbitControls（仅保留 ESM 模块版本）
+  # 因此 pcb-3d.js 内部自带了一个轻量 OrbitControls 实现（旋转/缩放/平移），无需下载额外文件。
 }
 
 Write-Host "`n========================================" -ForegroundColor Cyan

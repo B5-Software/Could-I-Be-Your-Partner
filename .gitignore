@@ -34,6 +34,9 @@ assets/geogebra-src/
 # Tesseract OCR 训练数据
 assets/ocr/
 
+# 第三方 JS 库（Three.js 等，由 fetch-assets 脚本下载）
+assets/lib/
+
 # 根目录散落的重复文件
 chi_sim.traineddata
 eng.traineddata
