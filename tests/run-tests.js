@@ -372,6 +372,221 @@ test('CSP should allow https://www.geogebra.org for script/style/img', () => {
   assert.ok(/script-src[^;]*geogebra/.test(csp), 'CSP script-src 未允许 geogebra');
 });
 
+// ---- Test PCB-EDA ----
+console.log('\nPCB-EDA:');
+
+const path_ = require('path');
+const Geo = require('../src/renderer/js/pcbeda/pcb-geometry.js');
+const PCBModelT = require('../src/renderer/js/pcbeda/pcb-model.js');
+const PCBFpT = require('../src/renderer/js/pcbeda/pcb-footprints.js');
+const PCBSymT = require('../src/renderer/js/pcbeda/pcb-symbols.js');
+const PCBGerberT = require('../src/renderer/js/pcbeda/pcb-gerber.js');
+const PCBDrctT = require('../src/renderer/js/pcbeda/pcb-drc.js');
+const PCBRouteT = require('../src/renderer/js/pcbeda/pcb-autorouter.js');
+const PCBIoT = require('../src/renderer/js/pcbeda/pcb-io.js');
+
+test('pcb-geometry: point/segment/polygon basics', () => {
+  assert.strictEqual(Geo.dist(0, 0, 3, 4), 5);
+  assert.ok(Geo.pointInPolygon(1, 1, [{ x: 0, y: 0 }, { x: 4, y: 0 }, { x: 4, y: 4 }, { x: 0, y: 4 }]));
+  assert.ok(!Geo.pointInPolygon(5, 5, [{ x: 0, y: 0 }, { x: 4, y: 0 }, { x: 4, y: 4 }, { x: 0, y: 4 }]));
+  const sp = Geo.snapRoutePoint(0, 0, 10, 3, '45');
+  assert.ok(Math.abs(Math.atan2(sp.y, sp.x) % (Math.PI / 4)) < 1e-6 || Math.abs(sp.y) < 1e-6);
+});
+
+test('pcb-footprints: named + parametric generation', () => {
+  const fp0805 = PCBFpT.generate('R_0805', {});
+  assert.strictEqual(fp0805.pads.length, 2);
+  assert.ok(fp0805.three.w > 0);
+  const soic = PCBFpT.generate('SOIC_CUSTOM', { pins: 16, pitch: 1.27 });
+  assert.strictEqual(soic.pads.length, 16);
+  const dip = PCBFpT.generate('DIP_CUSTOM', { pins: 8, holeD: 0.9 });
+  assert.strictEqual(dip.pads.length, 8);
+  assert.ok(dip.pads[0].drill > 0);
+  assert.ok(PCBFpT.list().length >= 60);
+});
+
+test('pcb-symbols: library + parametric IC/CONN', () => {
+  assert.ok(PCBSymT.get('R').pins.length === 2);
+  const ic = PCBSymT.get('IC', { left: ['VCC', 'D0'], right: ['GND', 'O0'] });
+  assert.strictEqual(ic.pins.length, 4);
+  const conn = PCBSymT.get('CONN', { pins: 6 });
+  assert.strictEqual(conn.pins.length, 6);
+});
+
+function makeTestBoard() {
+  const b = PCBModelT.newBoard('TestBoard', 40, 30, 2);
+  PCBModelT.Board.addComponent(b, { ref: 'R1', value: '10k', footprint: 'R_0805', x: 10, y: 10 });
+  PCBModelT.Board.addComponent(b, { ref: 'R2', value: '10k', footprint: 'R_0805', x: 25, y: 10 });
+  PCBModelT.Board.addComponent(b, { ref: 'J1', value: '', footprint: 'HDR-1x4', x: 10, y: 22 });
+  PCBModelT.Board.setPadNet(b, 'R1', '1', 'NET1');
+  PCBModelT.Board.setPadNet(b, 'R2', '1', 'NET1');
+  PCBModelT.Board.setPadNet(b, 'R1', '2', 'GND');
+  PCBModelT.Board.setPadNet(b, 'J1', '1', 'GND');
+  PCBModelT.Board.addTrace(b, { net: 'GND', layer: 'F.Cu', width: 0.3, pts: [{ x: 9.05, y: 10 }, { x: 5, y: 14 }, { x: 10, y: 20.1 }] });
+  PCBModelT.Board.addVia(b, { net: 'GND', x: 6, y: 16, drill: 0.3, diameter: 0.6 });
+  PCBModelT.Board.addZone(b, { net: 'GND', layer: 'F.Cu', pts: [{ x: 2, y: 2 }, { x: 38, y: 2 }, { x: 38, y: 28 }, { x: 2, y: 28 }] });
+  return b;
+}
+
+test('pcb-model: pads/nets/connectivity/ratsnest', () => {
+  const b = makeTestBoard();
+  const pads = PCBModelT.Board.allPads(b, PCBFpT);
+  assert.strictEqual(pads.length, 2 + 2 + 4);
+  const nets = PCBModelT.Board.netNames(b, PCBFpT);
+  assert.ok(nets.includes('GND') && nets.includes('NET1'));
+  const rats = PCBModelT.Board.ratsnest(b, PCBFpT);
+  // NET1 (R1.1-R2.1) unrouted => at least one ratsnest line
+  assert.ok(rats.some(l => l.net === 'NET1'));
+});
+
+test('pcb-model: single-file + multi-file serialization roundtrip', () => {
+  const doc = PCBModelT.Doc;
+  doc.reset('RoundTrip', 50, 40, 2);
+  doc.board().components.push({ id: 'cmp_1', ref: 'U1', value: 'X', footprint: 'SOIC-8', params: {}, x: 5, y: 5, rot: 90, side: 'F', locked: false, padNets: { '1': 'VCC' } });
+  const single = JSON.parse(JSON.stringify(doc.toSingleFileJSON()));
+  const multi = doc.toMultiFiles('rt');
+  assert.strictEqual(multi.files.length, 2); // 1 sheet + 1 board
+  const doc2 = PCBModelT.Doc;
+  assert.ok(doc2.loadJSON(single).ok);
+  assert.strictEqual(doc2.board().components[0].ref, 'U1');
+  const fileContents = {};
+  for (const f of multi.files) fileContents[f.name] = f.data;
+  assert.ok(doc2.loadMultiFiles(multi.manifest, fileContents).ok);
+  assert.strictEqual(doc2.board().components[0].padNets['1'], 'VCC');
+  doc.reset('TestReset', 100, 80, 2);
+});
+
+test('pcb-gerber: RS-274X structure + zones (LP) + apertures', () => {
+  const b = makeTestBoard();
+  const files = PCBGerberT.exportAll(b, PCBFpT, 'test', { naming: 'jlc' });
+  const names = files.map(f => f.name);
+  for (const need of ['test.gtl', 'test.gbl', 'test.gts', 'test.gbs', 'test.gto', 'test.gko', 'test-PTH.drl']) {
+    assert.ok(names.includes(need), 'missing gerber file: ' + need);
+  }
+  const gtl = files.find(f => f.name === 'test.gtl').content;
+  assert.ok(gtl.includes('%FSLAX46Y46*%'), 'missing format statement');
+  assert.ok(gtl.includes('%MOMM*%'), 'missing mm unit');
+  assert.ok(gtl.includes('%ADD'), 'missing aperture definitions');
+  assert.ok(gtl.includes('G36*'), 'zone region missing');
+  assert.ok(gtl.includes('%LPC*%'), 'zone clearance polarity missing');
+  assert.ok(gtl.includes('%AM'), 'thermal relief macro missing');
+  assert.ok(gtl.trim().endsWith('M02*'), 'missing M02 end');
+});
+
+test('pcb-gerber: Excellon drill with tool table', () => {
+  const b = makeTestBoard();
+  const drl = PCBGerberT.emitDrill(b, true);
+  assert.ok(drl.startsWith('M48'), 'missing M48 header');
+  assert.ok(drl.includes('METRIC,TZ'), 'missing metric declaration');
+  assert.ok(/T\d+C0\.300/.test(drl), 'missing via tool 0.300');
+  assert.ok(/T\d+C1\.000/.test(drl), 'missing header pin tool 1.000');
+  assert.ok(drl.trim().endsWith('M30'), 'missing M30 end');
+});
+
+test('pcb-gerber: stroke font + IPC356 + PnP + BOM', () => {
+  const segs = PCBGerberT.textToSegments('R1', 0, 0, 1.2, 0, 'left');
+  assert.ok(segs.length > 5);
+  const b = makeTestBoard();
+  const ipc = PCBGerberT.emitIPC356(b);
+  assert.ok(ipc.includes('GND'), 'IPC356 missing net');
+  const pnp = PCBGerberT.emitPnP(b);
+  assert.ok(pnp.includes('R1'), 'PnP missing R1');
+  const bom = PCBGerberT.emitBOM(b);
+  assert.ok(bom.includes('2'), 'BOM should group 2x R_0805/10k');
+});
+
+test('pcb-drc: detects clearance + unrouted', () => {
+  const b = makeTestBoard();
+  // add a via of another net right next to R1 pad (clearance violation)
+  PCBModelT.Board.addVia(b, { net: 'NET2', x: 10.95, y: 10, drill: 0.3, diameter: 0.6 });
+  const errs = PCBDrctT.PCBDrc.run(b, PCBFpT);
+  assert.ok(errs.some(e => e.type === 'clearance'), 'should detect clearance error');
+  assert.ok(errs.some(e => e.type === 'unrouted'), 'should detect unrouted net');
+});
+
+test('pcb-autorouter: routes a simple net', () => {
+  const b = PCBModelT.newBoard('AR', 30, 20, 2);
+  PCBModelT.Board.addComponent(b, { ref: 'TP1', footprint: 'TP-TH', x: 5, y: 10 });
+  PCBModelT.Board.addComponent(b, { ref: 'TP2', footprint: 'TP-TH', x: 25, y: 10 });
+  PCBModelT.Board.setPadNet(b, 'TP1', '1', 'N1');
+  PCBModelT.Board.setPadNet(b, 'TP2', '1', 'N1');
+  const res = PCBRouteT.autoroute(b, PCBFpT, {});
+  assert.ok(res.ok, 'autorouter failed: ' + (res.error || ''));
+  assert.ok(res.routed >= 1, 'should route at least 1 connection');
+  assert.ok(res.traces.length >= 1, 'should produce traces');
+});
+
+test('pcb-io: kicad_pcb export/import roundtrip', () => {
+  const b = makeTestBoard();
+  const text = PCBIoT.exportKicadPcb(b, PCBFpT);
+  assert.ok(text.startsWith('(kicad_pcb'), 'not a kicad_pcb');
+  assert.ok(text.includes('(segment'), 'missing segments');
+  assert.ok(text.includes('(footprint'), 'missing footprints');
+  const r = PCBIoT.importKicadPcb(text, PCBFpT, 'RT');
+  assert.ok(r.ok, 're-import failed: ' + (r.error || ''));
+  assert.strictEqual(r.board.components.length, 3);
+  assert.ok(r.board.traces.length >= 1);
+  assert.strictEqual(r.board.components.find(c => c.ref === 'R1').padNets['1'], 'NET1');
+});
+
+test('pcb-io: kicad netlist export/import + csv import', () => {
+  const b = makeTestBoard();
+  const net = PCBIoT.exportKiCadNetlist(b);
+  const parsed = PCBIoT.importKiCadNetlist(net);
+  assert.ok(parsed.nets.some(n => n.name === 'GND'));
+  const csv = PCBIoT.importCSVNetlist('Ref,Pad,Net\nU1,1,VCC\nU1,2,GND\nR1,1,VCC');
+  assert.strictEqual(csv.nets.length, 2);
+  assert.ok(csv.nets.find(n => n.name === 'VCC').pads.includes('U1.1'));
+});
+
+test('pcb-io: detectAndImport dispatches formats', () => {
+  assert.strictEqual(PCBIoT.detectAndImport('a.kicad_pcb', '(kicad_pcb (version 20221018) (generator "x"))').type, 'kicad_pcb');
+  assert.strictEqual(PCBIoT.detectAndImport('a.csv', 'Ref,Pad,Net\nR1,1,GND').type, 'csv_netlist');
+  assert.strictEqual(PCBIoT.detectAndImport('a.cipypcb', '{"kind":"cibyp-pcb-project"}').type, 'json');
+});
+
+test('PCB-EDA: main process registers pcbeda IPC channels', () => {
+  for (const ch of ['pcbeda:open', 'pcbeda:runCommand', 'pcbeda:saveProject', 'pcbeda:loadProject',
+    'pcbeda:exportFiles', 'pcbeda:exportGerber', 'pcbeda:exportTextFile', 'pcbeda:importFile',
+    'pcbeda:confirmClose', 'pcbeda:close-requested']) {
+    assert.ok(mainContent.includes(ch), 'missing IPC channel: ' + ch);
+  }
+});
+
+test('PCB-EDA: preload exposes pcb APIs (main + sub window)', () => {
+  for (const api of ['openPcbEda', 'pcbRunCommand', 'pcbExportGerber', 'pcbExportTextFile', 'pcbImportFile']) {
+    assert.ok(preloadContent.includes(api), 'main preload missing: ' + api);
+  }
+  const subPreload = fs.readFileSync(path_.join(__dirname, '../src/preload/pcbeda-preload.js'), 'utf-8');
+  for (const api of ['saveProject', 'exportFiles', 'writeFileBase64', 'onCloseRequested', 'importFileDialog']) {
+    assert.ok(subPreload.includes(api), 'pcbeda preload missing: ' + api);
+  }
+});
+
+test('PCB-EDA: tools registered in tools-def.js', () => {
+  const toolsContent = fs.readFileSync(path_.join(__dirname, '../src/renderer/js/tools-def.js'), 'utf-8');
+  for (const t of ['initPcbEda', 'pcbExportGerber', 'pcbAutoroute', 'pcbSchSync', 'pcbRunDRC', 'pcbImportFile']) {
+    assert.ok(toolsContent.includes("'" + t + "'"), 'tools-def missing: ' + t);
+  }
+  assert.ok(toolsContent.includes("'PCB-EDA'"), 'missing PCB-EDA category');
+});
+
+test('PCB-EDA: agent.js routes pcb tools + prompt section', () => {
+  const agentContent2 = fs.readFileSync(path_.join(__dirname, '../src/renderer/js/agent.js'), 'utf-8');
+  for (const c of ["case 'initPcbEda'", "case 'pcbExportGerber'", "case 'pcbAutoroute'", "case 'pcbSchSync'"]) {
+    assert.ok(agentContent2.includes(c), 'agent.js missing route: ' + c);
+  }
+  assert.ok(agentContent2.includes('CIBYP-PCB-EDA 使用规范'), 'missing prompt section');
+});
+
+test('PCB-EDA: sub-app page + css exist with CSP', () => {
+  const html = fs.readFileSync(path_.join(__dirname, '../src/renderer/pages/pcbeda.html'), 'utf-8');
+  assert.ok(html.includes('pcbeda/pcb-gerber.js'), 'page missing gerber script');
+  assert.ok(html.includes('Content-Security-Policy'), 'page missing CSP');
+  assert.ok(fs.existsSync(path_.join(__dirname, '../src/renderer/css/pcbeda.css')), 'missing pcbeda.css');
+  assert.ok(fs.existsSync(path_.join(__dirname, '../src/renderer/js/pcbeda.js')), 'missing pcbeda.js bootstrap');
+});
+
 // ---- Summary ----
 console.log(`\n${'='.repeat(40)}`);
 console.log(`Results: ${passed} passed, ${failed} failed, ${passed + failed} total`);

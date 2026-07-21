@@ -397,6 +397,26 @@ class Agent {
 - 标准格式导出：exportCipypCadDxf 导出 AutoCAD R12 DXF（可被 AutoCAD/FreeCAD/QCAD 等打开）；exportCipypCadImage 导出 PNG/SVG 图片
 - 用户说"画一个矩形""设计平面图""绘制示意图"等 2D 制图需求时，优先使用 CIPYP-CAD 而非 Canvas（CAD 更适合精确尺寸制图，Canvas 更适合自由绘图）
 
+【CIBYP-PCB-EDA 使用规范 - 电路板设计子应用】：
+- CIBYP-PCB-EDA 是内置的独立窗口 PCB 设计工具：完整原理图编辑器 + PCB 布局布线 + 简单自动布线 + 3D 预览 + 生产级 Gerber(RS-274X)/Excellon 钻孔/KiCad 格式导入导出
+- 标准工作流程（必须按顺序）：
+  1) initPcbEda 打开窗口 → pcbNewProject 新建工程（指定板名/尺寸/层数）
+  2) 原理图阶段：pcbSchAddSymbol 放置符号 → pcbSchAddWire 连线 → pcbSchAddLabel/pcbSchAddPower 标网络 → pcbSchAnnotate 标注 → pcbRunERC 检查
+  3) pcbSchSync 同步到 PCB（生成元件与网络，必须执行）
+  4) PCB 阶段：pcbMoveComponent/pcbRotateComponent 布局 → pcbSetDesignRules 设规则 → pcbRouteTrace 手动布线 或 pcbAutoroute 自动布线 → pcbAddCopperPour 铺铜(通常GND) → pcbAddSilkscreen 丝印
+  5) pcbRunDRC 检查并修复所有 error → pcbGetBoardInfo 确认统计
+  6) pcbExportGerber 导出生产文件（zip 含 Gerber+钻孔+PnP+BOM）→ pcbExportFile 导出预览图/KiCad 等
+  7) pcbSaveProject 保存工程
+- 也可以跳过原理图直接画 PCB：pcbAddComponent 放元件 → pcbSetPadNet 设网络 → 布线 → DRC → 导出
+- 原理图坐标使用 2.54mm 网格（如 0, 2.54, 5.08, 7.62...）；IC 符号用 left/right 参数定义引脚名，CONN 用 pins 定义针数
+- 常用符号: R C C_Polar L D LED Zener Q_NPN Q_PNP NMOS OPAMP XTAL FUSE SW SW_PUSH SPK ANT BAT TP POT IC CONN
+- 常用封装: R_0805/0603/0402 C_0805/0603 LED_0805 SOT23-3 SOIC-8/16 QFP-48/64 QFN-32 DIP-8/16 HDR-1x4/2x5 TBLOCK-2/3 USB-C-16 XTAL-HC49/3225 CAP-RADIAL-8 BUTTON-6x6 MOUNT-M3；CUSTOM 系列（CHIP_CUSTOM/SOIC_CUSTOM/QFP_CUSTOM/DIP_CUSTOM/HDR_CUSTOM 等）通过 params 传全参数
+- 布线用 45° 折线路径点；电源线建议 0.4-0.6mm，信号线 0.2-0.3mm；换层在路径中插入 pcbAddVia
+- 铺铜通常在顶层和底层各铺一块 GND：pcbAddCopperPour(net:"GND", 覆盖整个板框的多边形)
+- 每个 pcbRunDRC 返回的 error 都必须修复（移动元件/调整走线/改规则），直到 count 为 0 或仅剩可接受的 warning
+- pcbImportFile 可导入用户提供的 KiCad 工程(.kicad_pcb)/网表(.net)/CSV 网表并继续编辑；pcbExportFile(kind:"kicad") 可导出给 KiCad 继续加工
+- 用户说"画一块板子""设计电路""做个PCB""出Gerber"等需求时使用本工具集；2D 机械制图用 CIPYP-CAD
+
 【邮件控制说明】：
 - 用户可能通过邮件发送指令，这些邮件消息会以“[来自邮件]”前缀注入，应像普通用户消息一样响应
 - 当敏感操作需要审批时，如果邮件控制已启用，审批请求会通过邮件发送给用户，用户回复TOTP验证码确认
@@ -2373,7 +2393,188 @@ ${toolListSection}`;
           return res;
         }
         case 'closeCipypCad': {
-          return await window.api.cadClose();
+          return await window.api.cadAgentClose();
+        }
+        // ---- CIBYP-PCB-EDA ----
+        case 'initPcbEda': {
+          return await window.api.openPcbEda();
+        }
+        case 'closePcbEda': {
+          return await window.api.pcbAgentClose();
+        }
+        case 'runPcbEdaCommand': {
+          return await window.api.pcbRunCommand(args.command || '');
+        }
+        case 'runPcbEdaCommands': {
+          return await window.api.pcbRunCommands(Array.isArray(args.commands) ? args.commands : []);
+        }
+        case 'pcbNewProject': {
+          const cmds = ['new ' + (args.name || 'Untitled') + ' ' + (args.width || 100) + ' ' + (args.height || 80) + ' ' + (args.layers || 2)];
+          return await window.api.pcbRunCommands(cmds);
+        }
+        case 'pcbSetDesignRules': {
+          const keys = ['minClearance', 'minTraceWidth', 'minViaDrill', 'minViaDiameter', 'minAnnularRing',
+            'minHoleToHole', 'copperToBoardEdge', 'solderMaskExpansion', 'pasteExpansion',
+            'defaultTraceWidth', 'defaultViaDrill', 'defaultViaDiameter', 'zoneClearance', 'zoneThermalWidth'];
+          const cmds = keys.filter(k => typeof args[k] === 'number').map(k => 'rules set ' + k + ' ' + args[k]);
+          if (!cmds.length) return { ok: false, error: '未提供任何有效规则参数' };
+          return await window.api.pcbRunCommands(cmds);
+        }
+        case 'pcbSetStackup': {
+          const cmds = [];
+          if (args.copperLayers) cmds.push('stackup layers ' + args.copperLayers);
+          if (args.boardThickness) cmds.push('stackup thickness ' + args.boardThickness);
+          if (!cmds.length) return { ok: false, error: '未提供 stackup 参数' };
+          return await window.api.pcbRunCommands(cmds);
+        }
+        case 'pcbSetOutline': {
+          if (!Array.isArray(args.points) || args.points.length < 3) return { ok: false, error: 'points 至少需要3个顶点 ("x,y")' };
+          return await window.api.pcbRunCommand('board outline ' + args.points.join(' '));
+        }
+        case 'pcbSchAddSymbol': {
+          let cmd = 'sch sym ' + args.lib + ' ' + (args.x || 0) + ' ' + (args.y || 0) + ' ' + (args.rot || 0);
+          if (args.ref) cmd += ' --ref ' + args.ref;
+          if (args.value) cmd += ' --value "' + args.value + '"';
+          if (args.footprint) cmd += ' --fp ' + args.footprint;
+          if (args.pins) cmd += ' --pins ' + args.pins;
+          if (Array.isArray(args.left)) cmd += ' --left "' + args.left.join(',') + '"';
+          if (Array.isArray(args.right)) cmd += ' --right "' + args.right.join(',') + '"';
+          return await window.api.pcbRunCommand(cmd);
+        }
+        case 'pcbSchAddWire': {
+          if (!Array.isArray(args.points) || args.points.length < 2) return { ok: false, error: 'points 至少需要2个点' };
+          return await window.api.pcbRunCommand('sch wire ' + args.points.join(' '));
+        }
+        case 'pcbSchAddLabel': {
+          return await window.api.pcbRunCommand('sch label "' + (args.text || 'NET') + '" ' + (args.x || 0) + ',' + (args.y || 0));
+        }
+        case 'pcbSchAddPower': {
+          return await window.api.pcbRunCommand('sch power ' + (args.ptype || 'GND') + ' ' + (args.x || 0) + ',' + (args.y || 0));
+        }
+        case 'pcbSchAnnotate': {
+          return await window.api.pcbRunCommand('sch annotate');
+        }
+        case 'pcbSchSync': {
+          return await window.api.pcbRunCommand('sch sync');
+        }
+        case 'pcbRunERC': {
+          return await window.api.pcbRunCommand('erc');
+        }
+        case 'pcbAddComponent': {
+          let cmd = 'comp add ' + args.footprint + ' ' + args.ref + ' ' + (args.x || 0) + ' ' + (args.y || 0) +
+            ' ' + (args.rot || 0) + ' ' + (args.side || 'F');
+          if (args.params && typeof args.params === 'object') {
+            for (const [k, v] of Object.entries(args.params)) cmd += ' ' + k + '=' + v;
+          }
+          const res = await window.api.pcbRunCommand(cmd);
+          if (res.ok && args.value) await window.api.pcbRunCommand('comp value ' + args.ref + ' "' + args.value + '"');
+          return res;
+        }
+        case 'pcbMoveComponent': {
+          return await window.api.pcbRunCommand('comp move ' + args.ref + ' ' + args.x + ' ' + args.y);
+        }
+        case 'pcbRotateComponent': {
+          return await window.api.pcbRunCommand('comp rot ' + args.ref + ' ' + args.rot);
+        }
+        case 'pcbDeleteComponent': {
+          return await window.api.pcbRunCommand('comp del ' + args.ref);
+        }
+        case 'pcbListComponents': {
+          return await window.api.pcbRunCommand('comp list');
+        }
+        case 'pcbSetPadNet': {
+          return await window.api.pcbRunCommand('comp net ' + args.ref + ' ' + args.pad + ' ' + (args.net || ''));
+        }
+        case 'pcbRouteTrace': {
+          if (!Array.isArray(args.points) || args.points.length < 2) return { ok: false, error: 'points 至少需要2个点' };
+          const cmd = 'trace ' + (args.net || '') + ' ' + (args.layer || 'F.Cu') + ' ' + (args.width || 0) + ' ' + args.points.join(' ');
+          return await window.api.pcbRunCommand(cmd);
+        }
+        case 'pcbAddVia': {
+          const cmd = 'via ' + (args.net || '') + ' ' + args.x + ' ' + args.y +
+            (args.drill ? ' ' + args.drill : '') + (args.diameter ? ' ' + args.diameter : '');
+          return await window.api.pcbRunCommand(cmd);
+        }
+        case 'pcbAddCopperPour': {
+          if (!Array.isArray(args.points) || args.points.length < 3) return { ok: false, error: 'points 至少需要3个顶点' };
+          let cmd = 'zone ' + (args.net || '') + ' ' + (args.layer || 'F.Cu') + ' ' + args.points.join(' ');
+          if (typeof args.clearance === 'number') cmd += ' --clearance ' + args.clearance;
+          if (typeof args.thermalWidth === 'number') cmd += ' --thermal ' + args.thermalWidth;
+          return await window.api.pcbRunCommand(cmd);
+        }
+        case 'pcbAddSilkscreen': {
+          const side = args.side || 'F';
+          let cmd = '';
+          if (args.kind === 'line') cmd = 'silk line ' + args.x1 + ',' + args.y1 + ' ' + args.x2 + ',' + args.y2 + ' ' + side;
+          else if (args.kind === 'rect') cmd = 'silk rect ' + args.x1 + ',' + args.y1 + ' ' + args.x2 + ',' + args.y2 + ' ' + side;
+          else if (args.kind === 'circle') cmd = 'silk circle ' + args.x1 + ',' + args.y1 + ' ' + (args.r || 2) + ' ' + side;
+          else if (args.kind === 'text') cmd = 'silk text "' + (args.text || 'TEXT') + '" ' + args.x1 + ',' + args.y1;
+          else return { ok: false, error: '未知丝印类型: ' + args.kind };
+          return await window.api.pcbRunCommand(cmd);
+        }
+        case 'pcbRunDRC': {
+          return await window.api.pcbRunCommand('drc');
+        }
+        case 'pcbAutoroute': {
+          const cmds = [];
+          if (typeof args.traceWidth === 'number') cmds.push('rules set defaultTraceWidth ' + args.traceWidth);
+          if (typeof args.clearance === 'number') cmds.push('rules set minClearance ' + args.clearance);
+          cmds.push('autoroute' + (Array.isArray(args.nets) && args.nets.length ? ' ' + args.nets.join(',') : ''));
+          const res = await window.api.pcbRunCommands(cmds);
+          if (res && res.results) return res.results[res.results.length - 1];
+          return res;
+        }
+        case 'pcbGetBoardInfo': {
+          return await window.api.pcbGetState();
+        }
+        case 'pcbListLibrary': {
+          return await window.api.pcbRunCommand(args.type === 'symbol' ? 'symbols' : 'footprints');
+        }
+        case 'pcbSaveProject': {
+          const sep = (this.workspacePath && this.workspacePath.includes('\\')) ? '\\' : '/';
+          const multi = !!args.multi;
+          const defName = args.filename || ('project' + (multi ? '.cibypcbproj' : '.cipypcb'));
+          const targetPath = args.path || (this.workspacePath ? this.workspacePath.replace(/[\\/]+$/, '') + sep + defName : null);
+          if (!targetPath) return { ok: false, error: '未设置工作区路径，且未提供 path 参数' };
+          const res = await window.api.pcbSaveProject(targetPath, multi);
+          if (res.ok && this.onMessage) {
+            this.onMessage('assistant', `🔌 PCB 工程已保存到：\n\`${targetPath}\``);
+          }
+          return res;
+        }
+        case 'pcbLoadProject': {
+          if (!args.path) return { ok: false, error: '需要 path 参数指定工程文件路径' };
+          return await window.api.pcbLoadProject(args.path);
+        }
+        case 'pcbImportFile': {
+          if (!args.path) return { ok: false, error: '需要 path 参数指定导入文件路径' };
+          return await window.api.pcbImportFile(args.path);
+        }
+        case 'pcbExportGerber': {
+          const sep = (this.workspacePath && this.workspacePath.includes('\\')) ? '\\' : '/';
+          const ts = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 12);
+          const dir = args.dir || (this.workspacePath ? this.workspacePath.replace(/[\\/]+$/, '') + sep + 'gerber_' + ts : null);
+          if (!dir) return { ok: false, error: '未设置工作区路径，且未提供 dir 参数' };
+          const zip = args.zip !== false;
+          const res = await window.api.pcbExportGerber(dir, 'pcb',
+            { naming: args.naming || 'jlc', tentedVias: !!args.tentedVias },
+            zip ? 'pcb-gerber.zip' : null);
+          if (res.ok && this.onMessage) {
+            this.onMessage('assistant', `🔌 Gerber 生产文件已导出（${res.count} 个文件）：\n\`${res.zipPath || dir}\``);
+          }
+          return res;
+        }
+        case 'pcbExportFile': {
+          const sep = (this.workspacePath && this.workspacePath.includes('\\')) ? '\\' : '/';
+          const extMap = { 'kicad': '.kicad_pcb', 'netlist-kicad': '.net', 'netlist-csv': '.csv', 'svg-pcb': '.svg', 'svg-sch': '.svg', 'png-pcb': '.png', 'png-3d': '.png', 'obj': '.obj', 'pnp': '.csv', 'bom': '.csv' };
+          const ext = extMap[args.kind] || '.txt';
+          const targetPath = args.path || (this.workspacePath ? this.workspacePath.replace(/[\\/]+$/, '') + sep + (args.filename || ('pcb-' + args.kind + ext)) : null);
+          if (!targetPath) return { ok: false, error: '未设置工作区路径，且未提供 path 参数' };
+          const res = await window.api.pcbExportTextFile(args.kind, targetPath, 'pcb');
+          if (res.ok && this.onMessage) {
+            this.onMessage('assistant', `🔌 ${args.kind} 已导出到：\n\`${targetPath}\``);
+          }
+          return res;
         }
         case 'askQuestions': {
           const answers = await window.askQuestions(args.questions);

@@ -328,6 +328,22 @@ contextBridge.exposeInMainWorld('api', {
   cadExportDxf: (path) => ipcRenderer.invoke('cipypcad:exportDxf', path),
   cadExportImage: (path, format) => ipcRenderer.invoke('cipypcad:exportImage', path, format),
   cadClose: () => ipcRenderer.invoke('cipypcad:close'),
+  cadAgentClose: () => ipcRenderer.invoke('cipypcad:agentClose'),
+
+  // CIBYP-PCB-EDA - PCB design sub-application (schematic + layout + Gerber)
+  openPcbEda: () => ipcRenderer.invoke('pcbeda:open'),
+  pcbRunCommand: (cmd) => ipcRenderer.invoke('pcbeda:runCommand', cmd),
+  pcbRunCommands: (cmds) => ipcRenderer.invoke('pcbeda:runCommands', cmds),
+  pcbGetState: () => ipcRenderer.invoke('pcbeda:getState'),
+  pcbSaveProject: (path, multi) => ipcRenderer.invoke('pcbeda:saveProject', path, multi),
+  pcbLoadProject: (path) => ipcRenderer.invoke('pcbeda:loadProject', path),
+  pcbExportFiles: (dir, files, zipName) => ipcRenderer.invoke('pcbeda:exportFiles', dir, files, zipName),
+  pcbWriteFile: (path, content) => ipcRenderer.invoke('pcbeda:writeFile', path, content),
+  pcbExportGerber: (dir, baseName, options, zipName) => ipcRenderer.invoke('pcbeda:exportGerber', dir, baseName, options, zipName),
+  pcbExportTextFile: (kind, path, baseName) => ipcRenderer.invoke('pcbeda:exportTextFile', kind, path, baseName),
+  pcbImportFile: (path) => ipcRenderer.invoke('pcbeda:importFile', path),
+  pcbClose: () => ipcRenderer.invoke('pcbeda:close'),
+  pcbAgentClose: () => ipcRenderer.invoke('pcbeda:agentClose'),
 
   // MCP
   mcpListServers: () => ipcRenderer.invoke('mcp:listServers'),

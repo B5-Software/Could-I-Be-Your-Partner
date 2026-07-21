@@ -83,6 +83,7 @@
     currentLayer: null,
     view: { panX: 0, panY: 0, zoom: 1 },
     modified: false,
+    filePath: null,       // 当前工程的保存路径（用于 Agent 自动保存与标题显示）
 
     init() {
       this.objects.clear();
@@ -90,6 +91,7 @@
       this.currentLayer = 'Layer0';
       this.view = { panX: 0, panY: 0, zoom: 1 };
       this.modified = false;
+      this.filePath = null;
     },
 
     addObject(type, props) {
@@ -1600,6 +1602,7 @@
         const res = await window.cadAPI.saveProject(r.path);
         if (res.ok) {
           Document.modified = false;
+          Document.filePath = r.path;
           updateDocTitle(r.path);
           this.setStatus('已保存: ' + r.path, 'success');
         } else this.setStatus('保存失败: ' + res.error, 'error');
@@ -1688,6 +1691,7 @@
         const res = await window.cadAPI.saveProject(r.path);
         if (res.ok) {
           Document.modified = false;
+          Document.filePath = r.path;
           updateDocTitle(r.path);
           hideSavePrompt();
           window.cadAPI.confirmClose('close');
@@ -1986,7 +1990,8 @@
         layers: Document.layers.map(l => ({ name: l.name, color: l.color, visible: l.visible, locked: l.locked })),
         selectedCount: Document.getSelectedIds().length,
         view: Document.view,
-        modified: Document.modified
+        modified: Document.modified,
+        filePath: Document.filePath
       }
     };
   };
@@ -2009,9 +2014,11 @@
     return { ok: true, data: Document.toJSON() };
   };
 
-  window.cadLoadProjectJSON = function (data) {
+  window.cadLoadProjectJSON = function (data, filePath) {
     try {
       Document.loadJSON(data);
+      Document.filePath = filePath || null;
+      if (filePath) updateDocTitle(filePath);
       Renderer.fit();
       UI.refreshLayers();
       UI.refreshObjects();

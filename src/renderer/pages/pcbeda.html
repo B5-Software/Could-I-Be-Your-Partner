@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<!-- SPDX-License-Identifier: GPL-3.0-or-later -->
+<!-- Copyright (c) 2026 B5-Software -->
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;">
+  <title>CIBYP-PCB-EDA</title>
+  <link rel="stylesheet" href="../css/theme.css">
+  <link rel="stylesheet" href="../css/pcbeda.css">
+  <link rel="stylesheet" href="../../../assets/fonts/fontawesome.min.css">
+</head>
+<body>
+  <!-- 自绘标题栏 -->
+  <div class="pcb-titlebar" id="pcb-titlebar">
+    <div class="pcb-titlebar-left">
+      <i class="fa-solid fa-microchip"></i>
+      <span class="pcb-app-title">CIBYP-PCB-EDA</span>
+      <span id="doc-name" class="pcb-doc-name">未命名</span>
+      <span id="doc-modified" class="pcb-doc-modified"></span>
+    </div>
+    <div class="pcb-titlebar-center">
+      <button class="pcb-tbtn" id="btn-new" title="新建工程"><i class="fa-solid fa-file"></i></button>
+      <button class="pcb-tbtn" id="btn-open" title="打开/导入工程 (cipypcb/kicad_pcb/net/csv)"><i class="fa-solid fa-folder-open"></i></button>
+      <button class="pcb-tbtn" id="btn-save" title="保存工程"><i class="fa-solid fa-floppy-disk"></i></button>
+      <span class="pcb-tsep"></span>
+      <button class="pcb-tbtn" id="btn-undo" title="撤销 (Ctrl+Z)"><i class="fa-solid fa-rotate-left"></i></button>
+      <button class="pcb-tbtn" id="btn-redo" title="重做 (Ctrl+Y)"><i class="fa-solid fa-rotate-right"></i></button>
+      <span class="pcb-tsep"></span>
+      <button class="pcb-tbtn" id="btn-fit" title="适应视图 (F)"><i class="fa-solid fa-expand"></i></button>
+      <button class="pcb-tbtn pcb-btn-accent" id="btn-export" title="导出生产文件"><i class="fa-solid fa-file-export"></i> 导出</button>
+      <button class="pcb-tbtn" id="btn-import-netlist" title="导入网表/其他EDA文件"><i class="fa-solid fa-file-import"></i></button>
+    </div>
+    <div class="pcb-titlebar-right">
+      <button class="pcb-tbtn btn-winctrl" id="btn-win-minimize" title="最小化"><i class="fa-solid fa-minus"></i></button>
+      <button class="pcb-tbtn btn-winctrl" id="btn-win-maximize" title="最大化"><i class="fa-regular fa-square"></i></button>
+      <button class="pcb-tbtn btn-winctrl btn-close" id="btn-win-close" title="关闭"><i class="fa-solid fa-xmark"></i></button>
+    </div>
+  </div>
+
+  <!-- 视图选项卡 -->
+  <div class="pcb-viewtabs">
+    <button class="pcb-viewtab active" data-mode="sch"><i class="fa-solid fa-diagram-project"></i> 原理图</button>
+    <button class="pcb-viewtab" data-mode="pcb"><i class="fa-solid fa-microchip"></i> PCB布局</button>
+    <button class="pcb-viewtab" data-mode="3d"><i class="fa-solid fa-cube"></i> 3D预览</button>
+    <span class="pcb-viewtabs-right" id="view-hint"></span>
+  </div>
+
+  <div class="pcb-app">
+    <!-- 左侧工具条 -->
+    <div class="pcb-toolbar" id="pcb-toolbar"></div>
+
+    <!-- 画布区 -->
+    <div class="pcb-canvas-wrap">
+      <canvas id="sch-canvas"></canvas>
+      <canvas id="pcb-canvas" class="hidden"></canvas>
+      <canvas id="td-canvas" class="hidden"></canvas>
+      <!-- 底部命令行+状态栏 -->
+      <div class="pcb-statusbar">
+        <input id="pcb-cmd" class="pcb-cmd" placeholder="命令行 (输入 help 查看命令) — 例: comp add R_0805 R1 20 20" spellcheck="false">
+        <span id="pcb-status" class="pcb-status">就绪</span>
+      </div>
+    </div>
+
+    <!-- 右侧面板 -->
+    <div class="pcb-panel">
+      <div class="pcb-panel-tabs">
+        <button class="pcb-ptab active" data-ptab="lib">库</button>
+        <button class="pcb-ptab" data-ptab="layers">层</button>
+        <button class="pcb-ptab" data-ptab="nets">网络</button>
+        <button class="pcb-ptab" data-ptab="check">检查</button>
+        <button class="pcb-ptab" data-ptab="props">属性</button>
+      </div>
+      <div class="pcb-panel-body" id="pcb-panel-body"></div>
+      <div class="pcb-panel-foot">
+        <input id="pcb-tool-text" class="pcb-tool-text" placeholder="辅助输入: 标签/丝印文本; IC:left:VCC,D0;right:GND,O0; CONN:针数">
+      </div>
+    </div>
+  </div>
+
+  <!-- 自动保存恢复横幅（非阻塞，默认忽略） -->
+  <div class="pcb-restore-banner hidden" id="pcb-restore-banner">
+    <i class="fa-solid fa-clock-rotate-left"></i>
+    <span>检测到上次未保存的工程</span>
+    <button class="pcb-btn pcb-btn-accent" id="btn-restore-yes">恢复</button>
+    <button class="pcb-btn" id="btn-restore-no">忽略</button>
+  </div>
+
+  <!-- 导出对话框 -->
+  <div class="pcb-modal hidden" id="pcb-export-modal">
+    <div class="pcb-modal-box">
+      <div class="pcb-modal-title">导出生产文件</div>
+      <div class="pcb-export-grid">
+        <button class="pcb-exp-btn" data-exp="gerber"><i class="fa-solid fa-file-zipper"></i><span>Gerber 生产包 (zip)</span><small>RS-274X + Excellon 钻孔</small></button>
+        <button class="pcb-exp-btn" data-exp="gerber-dir"><i class="fa-solid fa-folder-tree"></i><span>Gerber 到目录</span><small>散装文件</small></button>
+        <button class="pcb-exp-btn" data-exp="kicad"><i class="fa-solid fa-share-nodes"></i><span>KiCad PCB (.kicad_pcb)</span><small>可被 KiCad 7+ 打开</small></button>
+        <button class="pcb-exp-btn" data-exp="netlist-kicad"><i class="fa-solid fa-list"></i><span>KiCad 网表 (.net)</span><small>S-表达式</small></button>
+        <button class="pcb-exp-btn" data-exp="netlist-csv"><i class="fa-solid fa-file-csv"></i><span>CSV 网表</span><small>Ref,Pad,Net</small></button>
+        <button class="pcb-exp-btn" data-exp="pnp"><i class="fa-solid fa-robot"></i><span>贴片坐标 (PnP)</span><small>CSV</small></button>
+        <button class="pcb-exp-btn" data-exp="bom"><i class="fa-solid fa-table-list"></i><span>BOM 物料清单</span><small>CSV</small></button>
+        <button class="pcb-exp-btn" data-exp="svg-pcb"><i class="fa-solid fa-image"></i><span>PCB 2D 预览 (SVG)</span><small>矢量图</small></button>
+        <button class="pcb-exp-btn" data-exp="svg-sch"><i class="fa-solid fa-image"></i><span>原理图 (SVG)</span><small>矢量图</small></button>
+        <button class="pcb-exp-btn" data-exp="png-pcb"><i class="fa-solid fa-file-image"></i><span>PCB 2D 预览 (PNG)</span><small>高清位图</small></button>
+        <button class="pcb-exp-btn" data-exp="png-3d"><i class="fa-solid fa-cube"></i><span>3D 渲染图 (PNG)</span><small>当前视角</small></button>
+        <button class="pcb-exp-btn" data-exp="obj"><i class="fa-solid fa-cubes"></i><span>3D 模型 (OBJ+MTL)</span><small>可导入 Blender 等</small></button>
+      </div>
+      <div class="pcb-modal-actions">
+        <button class="pcb-btn" id="btn-export-cancel">取消</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 关闭保存提示 -->
+  <div class="pcb-modal hidden" id="pcb-save-prompt">
+    <div class="pcb-modal-box pcb-modal-small">
+      <div class="pcb-modal-title">工程有未保存的更改</div>
+      <div class="pcb-modal-text">是否在关闭前保存当前工程？</div>
+      <div class="pcb-modal-actions">
+        <button class="pcb-btn pcb-btn-accent" id="btn-prompt-save">保存</button>
+        <button class="pcb-btn" id="btn-prompt-discard">不保存</button>
+        <button class="pcb-btn" id="btn-prompt-cancel">取消</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="../js/pcbeda/pcb-geometry.js"></script>
+  <script src="../js/pcbeda/pcb-model.js"></script>
+  <script src="../js/pcbeda/pcb-footprints.js"></script>
+  <script src="../js/pcbeda/pcb-symbols.js"></script>
+  <script src="../js/pcbeda/pcb-gerber.js"></script>
+  <script src="../js/pcbeda/pcb-render.js"></script>
+  <script src="../js/pcbeda/pcb-sch-render.js"></script>
+  <script src="../js/pcbeda/pcb-drc.js"></script>
+  <script src="../js/pcbeda/pcb-autorouter.js"></script>
+  <script src="../js/pcbeda/pcb-3d.js"></script>
+  <script src="../js/pcbeda/pcb-io.js"></script>
+  <script src="../js/pcbeda/pcb-editor.js"></script>
+  <script src="../js/pcbeda/pcb-commands.js"></script>
+  <script src="../js/pcbeda.js"></script>
+</body>
+</html>
