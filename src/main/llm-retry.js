@@ -209,6 +209,11 @@ async function fetchLLMWithRetry(cfg) {
       await sleep(delay, controller.signal);
     } catch (err) {
       clearTimeout(timer);
+      // 用户主动停止（abortAllRequests 触发）— 不重试、不通知 UI 重试
+      if (controller._userAborted) {
+        lastError = new LLMError(err.message || String(err), { kind: 'aborted' });
+        break;
+      }
       const cls = classifyThrownError(err);
       if (!cls.retry || attempt >= maxRetries) {
         lastError = new LLMError(err.message || String(err), { kind: cls.kind });
@@ -404,11 +409,12 @@ async function consumeSSEStream(bodyStream, onChunk, requestId, transport = 'ope
 /**
  * 瞬间中止所有正在进行的 LLM 请求（停止按钮调用）
  * 返回被中止的请求数量
+ * 标记 _userAborted 让 fetchLLMWithRetry 知道这是用户主动停止而非超时
  */
 function abortAllRequests() {
   const count = _activeControllers.size;
   for (const c of _activeControllers) {
-    try { c.abort(); } catch { /* ignore */ }
+    try { c._userAborted = true; c.abort(); } catch { /* ignore */ }
   }
   _activeControllers.clear();
   return count;

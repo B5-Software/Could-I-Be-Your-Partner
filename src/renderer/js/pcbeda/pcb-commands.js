@@ -275,7 +275,10 @@
         Doc.snapshot();
         const c = Model.Board.addComponent(b, { ref, footprint: fp, params, x, y, rot, side });
         Doc.touch(); this._ui();
-        return ok({ id: c.id, ref });
+        // 返回完整 pad 全局坐标（让 Agent 立即知道每个 pad 的位置，便于布线）
+        const pads = Model.Board.allPads(b, fpLib()).filter(p => p.ref === ref)
+          .map(p => ({ num: p.num, x: p.x, y: p.y, w: p.w, h: p.h, net: p.net || '', side: p.side }));
+        return ok({ id: c.id, ref, x, y, rot, side, pads });
       }
       if (sub === 'move') {
         const c = Model.Board.findComponent(b, args[1]);
@@ -316,9 +319,29 @@
         return ok({});
       }
       if (sub === 'list') {
+        // 返回每个 component 的中心坐标 + 所有 pad 全局坐标（含 rot/side 变换后）
+        // Agent 据此可直接画 trace 而无需查阅封装库定义
+        const allPads = Model.Board.allPads(b, fpLib());
         return ok({
-          components: b.components.map(c => ({ ref: c.ref, value: c.value, footprint: c.footprint, x: c.x, y: c.y, rot: c.rot, side: c.side, nets: c.padNets }))
+          components: b.components.map(c => {
+            const pads = allPads.filter(p => p.ref === c.ref)
+              .map(p => ({ num: p.num, x: p.x, y: p.y, w: p.w, h: p.h, net: p.net || '', side: p.side }));
+            return {
+              ref: c.ref, value: c.value, footprint: c.footprint,
+              x: c.x, y: c.y, rot: c.rot, side: c.side, pads
+            };
+          })
         });
+      }
+      if (sub === 'pads') {
+        // comp pads <ref> — 返回指定 component 的所有 pad 全局坐标
+        const ref = args[1];
+        if (!ref) return fail('用法: comp pads <ref>');
+        const c = Model.Board.findComponent(b, ref);
+        if (!c) return fail('未找到元件 ' + ref);
+        const pads = Model.Board.allPads(b, fpLib()).filter(p => p.ref === ref)
+          .map(p => ({ num: p.num, x: p.x, y: p.y, w: p.w, h: p.h, drill: p.drill, net: p.net || '', side: p.side }));
+        return ok({ ref, x: c.x, y: c.y, rot: c.rot, side: c.side, pads });
       }
       if (sub === 'net') {
         // comp net <ref> <pad> <net>
@@ -326,7 +349,7 @@
         Doc.touch(); this._ui();
         return ok({});
       }
-      return fail('用法: comp add|move|rot|side|value|del|list|net ...');
+      return fail('用法: comp add|move|rot|side|value|del|list|pads|net ...');
     },
 
     _net(args) {
@@ -468,7 +491,10 @@
         };
         s.symbols.push(sym);
         Doc.touch(); this._ui();
-        return ok({ id: sym.id, ref });
+        // 返回完整 pin 全局坐标（让 Agent 立即知道每个 pin 的位置，便于连线）
+        const pins = Model.Sheet.symbolPins(s, symLib()).filter(p => p.ref === ref)
+          .map(p => ({ num: p.num, name: p.name, x: p.x, y: p.y }));
+        return ok({ id: sym.id, ref, x, y, rot, pins });
       }
       if (sub === 'wire') {
         const pts = args.slice(1).map(parsePt).filter(Boolean);
@@ -544,7 +570,29 @@
         return ok({ annotated: n });
       }
       if (sub === 'list') {
-        return ok({ symbols: s.symbols.map(z => ({ ref: z.ref, lib: z.lib, value: z.value, footprint: z.footprint, x: z.x, y: z.y })) });
+        // 返回每个 symbol 的中心坐标 + 所有 pin 全局坐标（含 mirror/rot 变换后）
+        // Agent 据此可直接画 wire 而无需查阅符号库定义
+        const allPins = Model.Sheet.symbolPins(s, symLib());
+        return ok({
+          symbols: s.symbols.map(z => {
+            const pins = allPins.filter(p => p.ref === z.ref)
+              .map(p => ({ num: p.num, name: p.name, x: p.x, y: p.y }));
+            return {
+              ref: z.ref, lib: z.lib, value: z.value, footprint: z.footprint,
+              x: z.x, y: z.y, rot: z.rot || 0, mirror: !!z.mirror, pins
+            };
+          })
+        });
+      }
+      if (sub === 'pins') {
+        // sch pins <ref> — 返回指定 symbol 的所有 pin 全局坐标
+        const ref = args[1];
+        if (!ref) return fail('用法: sch pins <ref>');
+        const sym = s.symbols.find(z => z.ref === ref);
+        if (!sym) return fail('未找到符号 ' + ref);
+        const pins = Model.Sheet.symbolPins(s, symLib()).filter(p => p.ref === ref)
+          .map(p => ({ num: p.num, name: p.name, x: p.x, y: p.y }));
+        return ok({ ref, x: sym.x, y: sym.y, rot: sym.rot || 0, mirror: !!sym.mirror, pins });
       }
       if (sub === 'nets') {
         return ok({ pinNets: Model.Sheet.resolveNets(s, symLib()) });
@@ -555,7 +603,7 @@
         this._ui();
         return ok(r);
       }
-      return fail('用法: sch sym|wire|label|power|junction|noconnect|value|fp|del|annotate|list|nets|sync');
+      return fail('用法: sch sym|wire|label|power|junction|noconnect|value|fp|del|annotate|list|pins|nets|sync');
     },
 
     _state() {
@@ -583,15 +631,15 @@
     'board size <w> <h> | board outline x,y ... | board name <名>',
     'rules list | rules set <key> <value> — 设计规则',
     'stackup layers <n> | stackup thickness <mm> — 层叠',
-    'comp add <封装> <位号> <x> <y> [rot] [F|B] [k=v ...] — 放元件',
-    'comp move|rot|side|value|del|list|net — 元件操作',
+    'comp add <封装> <位号> <x> <y> [rot] [F|B] [k=v ...] — 放元件（返回 pad 全局坐标）',
+    'comp move|rot|side|value|del|list|pads|net — 元件操作（list/pads 返回 pad 坐标）',
     'net list | net rename <旧> <新>',
     'trace <网络> <层> <线宽> x1,y1 x2,y2 ... — 布线',
     'via <网络> <x> <y> [钻孔] [外径] — 过孔',
     'zone <网络> <层> x1,y1 ... [--clearance n] [--thermal n] — 铺铜',
     'silk line|rect|circle|text — 丝印',
-    'sch sym <符号> <x> <y> [rot] [--ref] [--value] [--fp] — 放符号',
-    'sch wire|label|power|junction|noconnect|value|fp|del|annotate|list|nets|sync',
+    'sch sym <符号> <x> <y> [rot] [--ref] [--value] [--fp] — 放符号（返回 pin 全局坐标）',
+    'sch wire|label|power|junction|noconnect|value|fp|del|annotate|list|pins|nets|sync',
     'drc / erc / autoroute [net1,net2] / clear routes [net]',
     'mode sch|pcb|3d / fit / undo / redo / state / help'
   ].join('\n');

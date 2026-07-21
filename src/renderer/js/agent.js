@@ -409,6 +409,9 @@ class Agent {
   7) pcbSaveProject 保存工程
 - 也可以跳过原理图直接画 PCB：pcbAddComponent 放元件 → pcbSetPadNet 设网络 → 布线 → DRC → 导出
 - 原理图坐标使用 2.54mm 网格（如 0, 2.54, 5.08, 7.62...）；IC 符号用 left/right 参数定义引脚名，CONN 用 pins 定义针数
+- **坐标获取（关键）**：pcbSchAddSymbol / pcbAddComponent 调用后返回值中含 pins/pads 数组，每个元素包含全局坐标 {num,name,x,y}（已含 rot/mirror/side 变换）。
+  pcbListComponents 也返回每个元件的 pads 全局坐标。runPcbEdaCommand "sch pins <ref>" / "comp pads <ref>" 可单独查询。
+  画 wire/trace 时直接用这些坐标，不要凭符号库定义自行计算（pin/pad 局部坐标 + 中心 + 旋转/镜像变换的合成很易出错）。
 - 常用符号: R C C_Polar L D LED Zener Q_NPN Q_PNP NMOS OPAMP XTAL FUSE SW SW_PUSH SPK ANT BAT TP POT IC CONN
 - 常用封装: R_0805/0603/0402 C_0805/0603 LED_0805 SOT23-3 SOIC-8/16 QFP-48/64 QFN-32 DIP-8/16 HDR-1x4/2x5 TBLOCK-2/3 USB-C-16 XTAL-HC49/3225 CAP-RADIAL-8 BUTTON-6x6 MOUNT-M3；CUSTOM 系列（CHIP_CUSTOM/SOIC_CUSTOM/QFP_CUSTOM/DIP_CUSTOM/HDR_CUSTOM 等）通过 params 传全参数
 - 布线用 45° 折线路径点；电源线建议 0.4-0.6mm，信号线 0.2-0.3mm；换层在路径中插入 pcbAddVia
