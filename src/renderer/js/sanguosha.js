@@ -440,7 +440,7 @@
       }
 
       try {
-        const result = await window.sanguoshaAPI.chatLLM(messages, { temperature: 0.7, max_tokens: 300, reasoningEffort: 'off' });
+        const result = await window.sanguoshaAPI.chatLLM(messages, { temperature: 0.7, reasoningEffort: 'off' });
         if (!result.ok) {
           console.error('[Sanguosha] LLM error:', result.error);
           return null;
@@ -450,7 +450,10 @@
         // 游戏Agent只吃Final：忽略 reasoning_content，只用 final answer。
         // 若 content 为空（如纯思考模型未输出 final），视为无回答，避免把推理过程当成动作。
         let content = (msg.content || '').trim();
-        if (!content) return null;
+        if (!content) {
+          console.warn('[Sanguosha] LLM content 为空, reasoning:', msg.reasoning?.substring(0, 200) || '(无)');
+          return null;
+        }
         // 清理思考标签： simd/<reasoning>/<reasoning_content>/<thought> 等成对与未闭合形式
         content = stripThinkingTags(content);
         // 清理 markdown 代码块包裹

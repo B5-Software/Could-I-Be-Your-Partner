@@ -38,7 +38,7 @@
       const result = await window.gameAPI.chatLLM([
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userMsg }
-      ], { temperature: 0.9, max_tokens: 200, reasoningEffort: 'off' });
+      ], { temperature: 0.9, reasoningEffort: 'off' });
       if (result.ok && result.data?.choices?.[0]?.message?.content) {
         let content = result.data.choices[0].message.content.trim();
         // 清理思考标签： simd/<reasoning>/<reasoning_content>/<thought> 等成对与未闭合形式
@@ -47,7 +47,13 @@
         content = content.replace(/^```[\w]*\n?/gm, '').replace(/```$/gm, '').trim();
         return content || null;
       }
-    } catch (e) { console.error('LLM error:', e); }
+      if (result.ok) {
+        const msg = result.data?.choices?.[0]?.message;
+        console.warn('[flyingflower] LLM content 为空, reasoning:', msg?.reasoning?.substring(0, 200) || '(无)');
+      } else {
+        console.error('[flyingflower] LLM 请求失败:', result.error);
+      }
+    } catch (e) { console.error('[flyingflower] LLM error:', e); }
     return null;
   }
 

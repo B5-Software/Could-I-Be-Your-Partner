@@ -75,17 +75,18 @@ function buildOpenAIRequest(llm, opts, reasoningEffort) {
   // Helps with thinking models that would otherwise dump reasoning into content.
   if (opts.response_format) body.response_format = opts.response_format;
   // Reasoning effort: OpenAI o-series + GPT-5 use reasoning_effort field.
-  // Some OpenAI-compat providers (DeepSeek R1) use a top-level "reasoning_effort" or
-  // "reasoning" object. We apply reasoning_effort ONLY for known model patterns —
-  // injecting it for unsupported models causes 400 errors.
+  // DeepSeek / Qwen 系列也支持 reasoning_effort 参数。
+  // 注意：'off' 值大多数 provider 不支持，会导致 400 错误。
+  // 因此 reasoningEffort='off' 时不注入字段，让模型用默认行为（不传 reasoning_effort）。
+  // 游戏通过足够大的 max_tokens（用户配置的 maxResponseTokens）确保思考后仍有空间输出答案。
   if (reasoningEffort && reasoningEffort !== 'off') {
     const m = (llm.model || '').toLowerCase();
     // OpenAI reasoning models: o1, o3, o4, gpt-5*
     if (/^o[134]-|^gpt-5/.test(m)) {
       body.reasoning_effort = reasoningEffort;
     }
-    // DeepSeek R1 / Qwen3 reasoning models via OpenAI-compat
-    if (/deepseek-r1|qwen3.*think/.test(m)) {
+    // DeepSeek 全系列 + Qwen 全系列（包括 r1, v4, flash, think 等变体）
+    if (/deepseek|qwen/.test(m)) {
       body.reasoning_effort = reasoningEffort;
     }
   }

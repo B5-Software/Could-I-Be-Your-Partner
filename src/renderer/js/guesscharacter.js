@@ -46,12 +46,13 @@
   let gameRng = () => Math.random();
 
   // ---- LLM ----
-  async function askLLM(systemPrompt, userMsg, temperature = 0.5, maxTokens = 200) {
+  // max_tokens 不传，由 main.js 使用用户配置的 llm.maxResponseTokens
+  async function askLLM(systemPrompt, userMsg, temperature = 0.5) {
     try {
       const result = await window.gameAPI.chatLLM([
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userMsg }
-      ], { temperature, max_tokens: maxTokens, reasoningEffort: 'off' });
+      ], { temperature, reasoningEffort: 'off' });
       if (result.ok && result.data?.choices?.[0]?.message?.content) {
         let content = result.data.choices[0].message.content.trim();
         // 清理思考标签：simd/<reasoning>/<reasoning_content>/<thought> 等成对与未闭合形式
@@ -60,7 +61,14 @@
         content = content.replace(/^```[\w]*\n?/gm, '').replace(/```$/gm, '').trim();
         return content || null;
       }
-    } catch (e) { console.error('LLM error:', e); }
+      // 调试日志：content 为空时打印完整响应，便于定位问题
+      if (result.ok) {
+        const msg = result.data?.choices?.[0]?.message;
+        console.warn('[guesschar] LLM content 为空, reasoning:', msg?.reasoning?.substring(0, 200) || '(无)', 'finish_reason:', result.data?.choices?.[0]?.finish_reason);
+      } else {
+        console.error('[guesschar] LLM 请求失败:', result.error);
+      }
+    } catch (e) { console.error('[guesschar] LLM error:', e); }
     return null;
   }
 
@@ -89,7 +97,7 @@
 姓名
 简介`;
     const userMsg = `请选定一个${categoryName}类别的人物。`;
-    const resp = await askLLM(sys, userMsg, 0.9, 500);
+    const resp = await askLLM(sys, userMsg, 0.9);
     if (!resp) return null;
     const lines = resp.split('\n').map(l => l.trim()).filter(Boolean);
     if (lines.length === 0) return null;
@@ -113,7 +121,7 @@
 3. 如果玩家的问题与人物无关或无法判断，回复"不确定"
 4. 不要透露人物姓名`;
     const userMsg = `问答历史：\n${buildHistoryContext()}\n\n玩家新提问：${question}\n\n请回复"是"、"否"或"不确定"：`;
-    const resp = await askLLM(sys, userMsg, 0.3, 30);
+    const resp = await askLLM(sys, userMsg, 0.3);
     if (!resp) return '不确定';
     // 提取首个有效答案
     const lower = resp.toLowerCase();
@@ -138,7 +146,7 @@
 3. 如果玩家猜测的人物与你选定的是同一人（即使姓名写法略有差异），回复"正确"
 4. 否则回复"错误"`;
     const userMsg = `请判定：玩家猜「${guess}」，正确答案是「${character}」。`;
-    const resp = await askLLM(sys, userMsg, 0.2, 30);
+    const resp = await askLLM(sys, userMsg, 0.2);
     if (!resp) return false;
     return resp.includes('正确') && !resp.includes('不正确');
   }

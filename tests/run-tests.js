@@ -811,14 +811,14 @@ async function runLiveLLMTests() {
     { role: 'user', content: '请回复。' }
   ];
 
-  // 测试1: reasoningEffort='off' 时 content 不为空且不含思考标签
+  // 测试1: 游戏场景（不传 max_tokens，用用户配置的 maxResponseTokens；不传 reasoningEffort 避免被 API 拒绝）
   async function testReasoningOff() {
     const llm = { ...liveLLMConfig };
     const req = LLMProviders.buildLLMRequest(llm, {
       messages: testMessages,
       temperature: 0.0,
-      max_tokens: 200,
-      reasoningEffort: 'off',
+      // 不传 max_tokens，让 main.js 用 llm.maxResponseTokens
+      // 不传 reasoningEffort，让模型用默认行为（reasoningEffort='off' 会被某些 API 拒绝）
       stream: false
     });
 
@@ -846,7 +846,7 @@ async function runLiveLLMTests() {
 
     // content 不应为空
     if (!content) {
-      throw new Error(`content 为空 (reasoning 长度=${reasoning.length})。reasoningEffort='off' 未生效或模型未输出最终答案`);
+      throw new Error(`content 为空 (reasoning 长度=${reasoning.length})。maxResponseTokens=${llm.maxResponseTokens}, model=${llm.model}`);
     }
 
     // content 不应包含思考标签
@@ -862,7 +862,7 @@ async function runLiveLLMTests() {
       throw new Error(`content 过长 (${content.length} 字)，可能包含思考过程。前100字: ${content.substring(0, 100)}`);
     }
 
-    console.log(`  PASS: reasoningEffort='off' → content="${content.substring(0, 50)}" (len=${content.length}), reasoning=${reasoning ? `有(${reasoning.length}字)` : '无'}`);
+    console.log(`  PASS: 游戏场景(无reasoningEffort) → content="${content.substring(0, 50)}" (len=${content.length}), reasoning=${reasoning ? `有(${reasoning.length}字)` : '无'}`);
     passed++;
   }
 
@@ -933,8 +933,8 @@ async function runLiveLLMTests() {
         { role: 'user', content: '请选定一个历史人物。' }
       ],
       temperature: 0.9,
-      max_tokens: 500,
-      reasoningEffort: 'off',
+      // 不传 max_tokens，用用户配置的 maxResponseTokens
+      // 不传 reasoningEffort，避免 'off' 被 API 拒绝
       stream: false
     });
 

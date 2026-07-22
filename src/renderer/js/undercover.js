@@ -43,7 +43,7 @@
       const result = await window.gameAPI.chatLLM([
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userMsg }
-      ], { temperature: 0.8, max_tokens: 200, reasoningEffort: 'off' });
+      ], { temperature: 0.8, reasoningEffort: 'off' });
       if (result.ok && result.data?.choices?.[0]?.message) {
         const msg = result.data.choices[0].message;
         let content = (msg.content || '').trim();
@@ -53,7 +53,13 @@
         content = content.replace(/^```[\w]*\n?/gm, '').replace(/```$/gm, '').trim();
         return content || null;
       }
-    } catch (e) { console.error('LLM error:', e); }
+      if (result.ok) {
+        const msg = result.data?.choices?.[0]?.message;
+        console.warn('[undercover] LLM content 为空, reasoning:', msg?.reasoning?.substring(0, 200) || '(无)');
+      } else {
+        console.error('[undercover] LLM 请求失败:', result.error);
+      }
+    } catch (e) { console.error('[undercover] LLM error:', e); }
     return null;
   }
 
