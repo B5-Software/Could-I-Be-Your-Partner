@@ -94,7 +94,14 @@
     switch (cmd) {
       case 'comp':
         if (args[0] === 'add') return ['comp:' + args[2]];
-        if (['move', 'rot', 'side', 'value', 'net', 'flip'].includes(args[0])) return ['comp:' + args[1]];
+        if (args[0] === 'net') {
+          // 焊盘网络变更：需重算元件自身 + 旧/新网络的 ratsnest
+          const ids = ['comp:' + args[1]];
+          if (result && result.newNet) ids.push('net:' + result.newNet);
+          if (result && result.oldNet && result.oldNet !== result.newNet) ids.push('net:' + result.oldNet);
+          return ids;
+        }
+        if (['move', 'rot', 'side', 'value', 'flip'].includes(args[0])) return ['comp:' + args[1]];
         if (args[0] === 'del') return ['board'];
         if (args[0] === 'list' || args[0] === 'pads') return null;
         return ['board'];
@@ -442,9 +449,12 @@
       }
       if (sub === 'net') {
         // comp net <ref> <pad> <net>
+        const c = Model.Board.findComponent(b, args[1]);
+        const oldNet = (c && c.padNets) ? (c.padNets[String(args[2])] || '') : '';
         if (!Model.Board.setPadNet(b, args[1], args[2], args[3] || '')) return fail(tr('eda.cmd.err.compNotFound', '未找到元件 {ref}', { ref: args[1] }));
         Doc.touch(); this._ui();
-        return ok({});
+        // 返回 oldNet/newNet 供增量 DRC 推导变更网络（ratsnest 需重算新旧网络）
+        return ok({ ref: args[1], pad: args[2], oldNet: oldNet, newNet: args[3] || '' });
       }
       return fail(tr('eda.cmd.usage.comp', '用法: comp add|move|rot|side|flip|value|del|list|pads|net ...'));
     },
@@ -711,6 +721,8 @@
         modified: Doc.modified,
         filePath: Doc.filePath,
         board: Model.Board.stats(b, fpLib()),
+        // Bug 11 修复：增加 bbox 使 Agent 能获取与 comp list 一致的坐标基准
+        bbox: Model.Board.boardBBox(b, fpLib()),
         schematic: { symbols: s.symbols.length, wires: s.wires.length, labels: s.labels.length },
         sheets: Doc.project.schematics.length,
         boards: Doc.project.boards.length,

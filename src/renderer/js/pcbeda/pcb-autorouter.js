@@ -178,8 +178,47 @@
     const DIRS8 = DIRS4.concat([[1, 1], [1, -1], [-1, 1], [-1, -1]]);
     const DIRS = opts.allowDiagonal ? DIRS8 : DIRS4;
     const STEP_COST = DIRS.map(d => (d[0] && d[1]) ? Math.SQRT2 : 1);
-    // 过孔代价：远大于单步代价(1/√2)，避免不必要的层切换产生过多过孔
-    const VIA_COST = 30;
+    // 过孔代价：提高到 50，避免不必要的层切换产生过多过孔（Bug 2 修复）
+    const VIA_COST = 50;
+    // 过孔之间的最小间距（避免过孔放置太密集，Bug 2 修复）
+    const VIA_MIN_SPACING = opts.viaDiameter + opts.clearance;
+
+    // Bug 3 修复：预计算焊盘邻近代价图
+    // padProximity[li] = Float32Array(W*H)：靠近异网焊盘的格子赋予额外 cost
+    // 鼓励 A* 绕开高密度引脚区域（如 SOIC-8 0.635mm 间距），避免在焊盘间穿过导致 DRC 违规
+    const padProximity = layers.map(() => new Float32Array(W * H));
+    const proxRadius = Math.max(opts.traceWidth + opts.clearance, gs * 2);
+    {
+      for (const p of allPads) {
+        const g = toGrid(p.x, p.y);
+        const pr = Math.max(p.w, p.h) / 2 + proxRadius;
+        const gr = Math.ceil(pr / gs);
+        const lids = p.drill ? layers : p.layers;
+        for (const lid of lids) {
+          const li = layerIdx.get(lid);
+          if (li === undefined) continue;
+          const arr = padProximity[li];
+          for (let dy = -gr; dy <= gr; dy++) {
+            for (let dx = -gr; dx <= gr; dx++) {
+              const ngx = g.gx + dx, ngy = g.gy + dy;
+              if (ngx < 0 || ngy < 0 || ngx >= W || ngy >= H) continue;
+              const wx = ox + ngx * gs, wy = oy + ngy * gs;
+              const d = Geo.dist(wx, wy, p.x, p.y);
+              if (d <= pr && d > Math.max(p.w, p.h) / 2) {
+                // 距离越近代价越高（线性衰减），最大 3
+                const norm = 1 - (d - Math.max(p.w, p.h) / 2) / (pr - Math.max(p.w, p.h) / 2);
+                const ci = gIdx(ngx, ngy);
+                arr[ci] = Math.max(arr[ci], norm * 3);
+              }
+            }
+          }
+        }
+      }
+    }
+
+    // 已布通过孔的世界坐标列表（用于过孔间距检查，Bug 2 修复）
+    // 初始化时包含板上已有的过孔
+    const routedByNetVias = board.vias.map(v => ({ x: v.x, y: v.y }));
 
     function routeSegment(sx, sy, sLayerLi, tx, ty, tLayerLi, allowRipup) {
       const s = toGrid(sx, sy), t = toGrid(tx, ty);
@@ -200,6 +239,8 @@
         const dist = (dx + dy) + (Math.SQRT2 - 2) * Math.min(dx, dy);
         return dist + (li === tLayerLi ? 0 : VIA_COST) + layerCost[li];
       }
+      // 已放置过孔的世界坐标列表（用于过孔间距检查，Bug 2 修复）
+      const placedVias = routedByNetVias;
       let pops = 0;
       const maxPops = opts.maxPops;
       while (open.size() > 0) {
@@ -232,8 +273,24 @@
             // 这里 allowRipup 暂不撕除别网络（保守策略），保留给重布迭代处理
             continue;
           }
+          // Bug 1 修复：对角线移动时禁止"切角"——若两侧正交格子都被阻挡，不允许对角穿过
+          // 否则 A* 可能走出满足网格间距但实际走线切过阻挡角的路径，导致 DRC 间距违规
+          if (dir[0] && dir[1]) {
+            const side1 = gIdx(gx + dir[0], gy);
+            const side2 = gIdx(gx, gy + dir[1]);
+            if ((blocked[li][side1] && ni !== tg && ni !== sg) ||
+                (blocked[li][side2] && ni !== tg && ni !== sg)) {
+              continue;
+            }
+          }
           const ns = state(ni, li);
-          const ng = g0 + STEP_COST[d] + layerCost[li] * 0.01;
+          // Bug 3 修复：靠近焊盘的格子增加额外 cost，避免在高密度引脚（如 SOIC-8 0.635mm 间距）间穿过
+          let padPenalty = 0;
+          if (padProximity && padProximity[li]) {
+            const pv = padProximity[li][ni];
+            if (pv > 0) padPenalty = pv;
+          }
+          const ng = g0 + STEP_COST[d] + layerCost[li] * 0.01 + padPenalty;
           const prev = gScore.get(ns);
           if (prev !== undefined && prev <= ng) continue;
           gScore.set(ns, ng);
@@ -245,6 +302,15 @@
           if (nl === li) continue;
           const blk = blocked[nl][gi];
           if (blk && gi !== tg && gi !== sg) continue;
+          // Bug 2 修复：过孔放置时检查与已存在过孔的间距
+          if (gi !== tg && gi !== sg) {
+            const wp = toWorld(gx, gy);
+            let tooClose = false;
+            for (const v of placedVias) {
+              if (Geo.dist(wp.x, wp.y, v.x, v.y) < VIA_MIN_SPACING) { tooClose = true; break; }
+            }
+            if (tooClose) continue;
+          }
           const ns = state(gi, nl);
           const ng = g0 + VIA_COST + layerCost[nl];
           const prev = gScore.get(ns);
@@ -427,6 +493,8 @@
       routedByNet.clear();
       // 清空所有动态阻挡
       for (let li = 0; li < NL; li++) { blocked[li].fill(0); ownedBy[li].fill(0); }
+      // Bug 2 修复：同步清空已布过孔列表，rip-up 后重建
+      routedByNetVias.length = 0;
       // 先布当前网络
       res = routeOneNet(ln);
       if (!res.ok) {
@@ -434,10 +502,13 @@
         for (const [net, info] of backup) routedByNet.set(net, info);
         // 重新布阻挡
         for (const [net, info] of routedByNet) blockRoutedNet(netSeq.get(net), info.traces, info.vias);
+        // 恢复过孔列表
+        for (const [net, info] of routedByNet) for (const v of info.vias) routedByNetVias.push(v);
         return res;
       }
       routedByNet.set(ln.net, { traces: res.traces, vias: res.vias });
       blockRoutedNet(netSeq.get(ln.net), res.traces, res.vias);
+      for (const v of res.vias) routedByNetVias.push(v);
       // 重新布其他网络
       const failedReroute = [];
       for (const [net, info] of backup) {
@@ -447,6 +518,7 @@
           if (r2.ok) {
             routedByNet.set(net, { traces: r2.traces, vias: r2.vias });
             blockRoutedNet(netSeq.get(net), r2.traces, r2.vias);
+            for (const v of r2.vias) routedByNetVias.push(v);
           } else {
             failedReroute.push(net);
           }
@@ -479,6 +551,8 @@
         ex.traces.push(...res.traces);
         ex.vias.push(...res.vias);
       }
+      // Bug 2 修复：记录已布过孔位置（用于后续网络的过孔间距检查）
+      for (const v of res.vias) routedByNetVias.push(v);
       // 写入阻挡
       blockRoutedNet(netSeq.get(ln.net), res.traces, res.vias);
     }

@@ -8328,10 +8328,13 @@
   window.spreadsheetExportFile = async function(filePath) {
     ensureSpreadsheet();
     const data = ssEngine.getData();
-    const cells = [];
-    for (const [addr, cell] of Object.entries(data.cells || {})) {
-      cells.push({ addr, value: cell.formula || cell.value });
-    }
+    // data.cells 是数组 [{addr, raw, value, format}, ...]
+    // 直接传给导出函数，每个元素需要 addr + value/raw
+    const cells = (data.cells || []).map(c => ({
+      addr: c.addr,
+      value: c.value,
+      raw: c.raw  // 保留原始公式/文本，让导出函数优先使用 raw
+    }));
     return await window.api.spreadsheetExportFile(filePath, cells, data.title || 'Sheet1');
   };
 

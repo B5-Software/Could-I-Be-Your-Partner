@@ -22,8 +22,31 @@
   }
 
   // squared distance between two segments (approx via endpoint sampling + perpendicular feet)
+  // Bug 6 修复：增加共线重叠判定，确保平行/斜线段距离计算正确
   function segmentSegmentDist(ax, ay, bx, by, cx, cy, dx, dy) {
     if (segmentsIntersect(ax, ay, bx, by, cx, cy, dx, dy)) return 0;
+    // 共线重叠检查：四个点共线时，segmentsIntersect 返回 false，但线段可能重叠
+    const d1 = _orient(ax, ay, bx, by, cx, cy);
+    const d2 = _orient(ax, ay, bx, by, dx, dy);
+    if (Math.abs(d1) < EPS && Math.abs(d2) < EPS) {
+      // 四点共线：将 CD 端点投影到 AB 参数空间检查是否重叠
+      const abx = bx - ax, aby = by - ay;
+      const len2 = abx * abx + aby * aby;
+      if (len2 < EPS) {
+        // AB 退化为点
+        return Math.min(dist(ax, ay, cx, cy), dist(ax, ay, dx, dy));
+      }
+      const tC = ((cx - ax) * abx + (cy - ay) * aby) / len2;
+      const tD = ((dx - ax) * abx + (dy - ay) * aby) / len2;
+      const tMin = Math.min(tC, tD), tMax = Math.max(tC, tD);
+      // AB 参数范围 [0,1] 与 CD 参数范围 [tMin,tMax] 是否重叠
+      if (tMax >= -EPS && tMin <= 1 + EPS) return 0; // 共线重叠
+      // 不重叠：返回端点间最小距离
+      return Math.min(
+        dist(ax, ay, cx, cy), dist(ax, ay, dx, dy),
+        dist(bx, by, cx, cy), dist(bx, by, dx, dy)
+      );
+    }
     return Math.min(
       pointToSegmentDist(ax, ay, cx, cy, dx, dy),
       pointToSegmentDist(bx, by, cx, cy, dx, dy),

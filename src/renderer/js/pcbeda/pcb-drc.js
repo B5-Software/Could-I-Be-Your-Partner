@@ -14,13 +14,24 @@
   // ---------------------------------------------------------------------------
   // violation 稳定 key（用于增量 diff）
   // 同一对对象+类型+大致位置 → 视为同一条违规
+  // Bug 4/8 修复：clearance 类型用 (net1, net2, layer, type) 去重，避免同一走线对在不同坐标重复报告
+  // 其他类型仍包含坐标以保证唯一性
   // ---------------------------------------------------------------------------
   function vkey(v) {
     const idA = v.idA || '';
     const idB = v.idB || '';
+    const layer = v.layer || '';
+    // Bug 4 修复：clearance 类型按 (net1, net2, layer, type) 去重
+    // 同一对网络在同一层的间距违规只报告一次（取首个违规坐标）
+    if (v.type === 'clearance') {
+      const n1 = v.net1 || '';
+      const n2 = v.net2 || '';
+      // 规范化网络对顺序，确保 (A,B) 和 (B,A) 视为同一对
+      const pair = n1 < n2 ? n1 + '|' + n2 : n2 + '|' + n1;
+      return [v.type, pair, layer].join('|');
+    }
     const x = (v.x || 0).toFixed(2);
     const y = (v.y || 0).toFixed(2);
-    const layer = v.layer || '';
     return [v.type, idA, idB, layer, x, y].join('|');
   }
 
@@ -81,7 +92,7 @@
             if (a.smd && b.smd && a.side !== b.side) continue;
             const d = Geo.dist(a.x, a.y, b.x, b.y) - Math.max(a.w, a.h) / 2 - Math.max(b.w, b.h) / 2;
             if (d < cl - 1e-9) {
-              add('error', 'clearance', t('eda.drc.padClearance', '焊盘间距不足: {a} ↔ {b} ({d}mm < {min}mm)', { a: a.ref + '.' + a.num, b: b.ref + '.' + b.num, d: Math.max(0, d).toFixed(3), min: cl }), (a.x + b.x) / 2, (a.y + b.y) / 2, 1, { idA: a.ref + '.' + a.num, idB: b.ref + '.' + b.num });
+              add('error', 'clearance', t('eda.drc.padClearance', '焊盘间距不足: {a} ↔ {b} ({d}mm < {min}mm)', { a: a.ref + '.' + a.num, b: b.ref + '.' + b.num, d: Math.max(0, d).toFixed(3), min: cl }), (a.x + b.x) / 2, (a.y + b.y) / 2, 1, { idA: a.ref + '.' + a.num, idB: b.ref + '.' + b.num, net1: a.net || '', net2: b.net || '' });
             }
           }
         }
@@ -97,7 +108,7 @@
                 const gap = Geo.capsuleCapsuleDist(A.caps[ci], B.caps[cj]);
                 if (gap < cl - 1e-9) {
                   const mx = (A.caps[ci].ax + B.caps[cj].ax) / 2, my = (A.caps[ci].ay + B.caps[cj].ay) / 2;
-                  add('error', 'clearance', t('eda.drc.traceClearance', '走线间距不足: {a} ↔ {b} @{layer}', { a: (A.t.net || t('eda.drc.noNetName', '无网络')), b: (B.t.net || t('eda.drc.noNetName', '无网络')), layer: A.t.layer }), mx, my, 1, { idA: A.t.id, idB: B.t.id, layer: A.t.layer });
+                  add('error', 'clearance', t('eda.drc.traceClearance', '走线间距不足: {a} ↔ {b} @{layer}', { a: (A.t.net || t('eda.drc.noNetName', '无网络')), b: (B.t.net || t('eda.drc.noNetName', '无网络')), layer: A.t.layer }), mx, my, 1, { idA: A.t.id, idB: B.t.id, layer: A.t.layer, net1: A.t.net || '', net2: B.t.net || '' });
                   ci = A.caps.length; break;
                 }
               }
@@ -113,7 +124,7 @@
             for (const cap of tc.caps) {
               const gap = Geo.capsuleCircleDist(cap, p.x, p.y, pr);
               if (gap < cl - 1e-9) {
-                add('error', 'clearance', t('eda.drc.padTraceClearance', '焊盘 {ref}.{num} 与走线 {net} 间距不足', { ref: p.ref, num: p.num, net: (tc.t.net || t('eda.drc.noNetName', '无网络')) }), p.x, p.y, pr, { idA: p.ref + '.' + p.num, idB: tc.t.id, layer: tc.t.layer });
+                add('error', 'clearance', t('eda.drc.padTraceClearance', '焊盘 {ref}.{num} 与走线 {net} 间距不足', { ref: p.ref, num: p.num, net: (tc.t.net || t('eda.drc.noNetName', '无网络')) }), p.x, p.y, pr, { idA: p.ref + '.' + p.num, idB: tc.t.id, layer: tc.t.layer, net1: p.net || '', net2: tc.t.net || '' });
                 break;
               }
             }
@@ -126,7 +137,7 @@
             const w = board.vias[j];
             if (v.net && w.net && v.net === w.net) continue;
             const d = Geo.dist(v.x, v.y, w.x, w.y) - v.diameter / 2 - w.diameter / 2;
-            if (d < cl - 1e-9) add('error', 'clearance', t('eda.drc.viaClearance', '过孔间距不足'), (v.x + w.x) / 2, (v.y + w.y) / 2, 1, { idA: v.id, idB: w.id });
+            if (d < cl - 1e-9) add('error', 'clearance', t('eda.drc.viaClearance', '过孔间距不足'), (v.x + w.x) / 2, (v.y + w.y) / 2, 1, { idA: v.id, idB: w.id, net1: v.net || '', net2: w.net || '' });
           }
           for (const p of pads) {
             if (v.net && p.net && v.net === p.net) continue;
@@ -135,7 +146,7 @@
             const overlaps = p.layers.some(l => vLayers.includes(l));
             if (!overlaps) continue;
             const d = Geo.dist(v.x, v.y, p.x, p.y) - v.diameter / 2 - Math.max(p.w, p.h) / 2;
-            if (d < cl - 1e-9) add('error', 'clearance', t('eda.drc.viaPadClearance', '过孔与焊盘 {ref}.{num} 间距不足', { ref: p.ref, num: p.num }), v.x, v.y, v.diameter / 2, { idA: v.id, idB: p.ref + '.' + p.num });
+            if (d < cl - 1e-9) add('error', 'clearance', t('eda.drc.viaPadClearance', '过孔与焊盘 {ref}.{num} 间距不足', { ref: p.ref, num: p.num }), v.x, v.y, v.diameter / 2, { idA: v.id, idB: p.ref + '.' + p.num, net1: v.net || '', net2: p.net || '' });
           }
           for (const tc of trCaps) {
             if (v.net && tc.t.net && v.net === tc.t.net) continue;
@@ -143,7 +154,7 @@
             if (!vLayers.includes(tc.t.layer)) continue;
             for (const cap of tc.caps) {
               if (Geo.capsuleCircleDist(cap, v.x, v.y, v.diameter / 2) < cl - 1e-9) {
-                add('error', 'clearance', t('eda.drc.viaTraceClearance', '过孔与走线间距不足'), v.x, v.y, v.diameter / 2, { idA: v.id, idB: tc.t.id, layer: tc.t.layer });
+                add('error', 'clearance', t('eda.drc.viaTraceClearance', '过孔与走线间距不足'), v.x, v.y, v.diameter / 2, { idA: v.id, idB: tc.t.id, layer: tc.t.layer, net1: v.net || '', net2: tc.t.net || '' });
                 break;
               }
             }
@@ -189,7 +200,7 @@
         const lines = Model.Board.ratsnest(board, fpLib);
         for (const l of lines) {
           const detail = l.from && l.to ? (l.from + ' ↔ ' + l.to) : '';
-          add('warning', 'unrouted', t('eda.drc.unrouted', '网络 {net} 未布线: {detail}', { net: l.net, detail }), l.x1, l.y1, 1.5, { idA: 'net:' + l.net, idB: l.from + '|' + l.to });
+          add('error', 'unrouted', t('eda.drc.unrouted', '网络 {net} 未布线: {detail}', { net: l.net, detail }), l.x1, l.y1, 1.5, { idA: 'net:' + l.net, idB: l.from + '|' + l.to });
         }
       }
 
@@ -400,7 +411,7 @@
                 if (!sel.changedPadKeys.has(a.ref + '.' + a.num) && !sel.changedPadKeys.has(b.ref + '.' + b.num)) continue;
                 const d = Geo.dist(a.x, a.y, b.x, b.y) - Math.max(a.w, a.h) / 2 - Math.max(b.w, b.h) / 2;
                 if (d < cl - 1e-9) {
-                  add('error', 'clearance', t('eda.drc.padClearance', '焊盘间距不足: {a} ↔ {b} ({d}mm < {min}mm)', { a: a.ref + '.' + a.num, b: b.ref + '.' + b.num, d: Math.max(0, d).toFixed(3), min: cl }), (a.x + b.x) / 2, (a.y + b.y) / 2, 1, { idA: a.ref + '.' + a.num, idB: b.ref + '.' + b.num });
+                  add('error', 'clearance', t('eda.drc.padClearance', '焊盘间距不足: {a} ↔ {b} ({d}mm < {min}mm)', { a: a.ref + '.' + a.num, b: b.ref + '.' + b.num, d: Math.max(0, d).toFixed(3), min: cl }), (a.x + b.x) / 2, (a.y + b.y) / 2, 1, { idA: a.ref + '.' + a.num, idB: b.ref + '.' + b.num, net1: a.net || '', net2: b.net || '' });
                 }
               }
             }
@@ -417,7 +428,7 @@
                     const gap = Geo.capsuleCapsuleDist(A.caps[ci], B.caps[cj]);
                     if (gap < cl - 1e-9) {
                       const mx = (A.caps[ci].ax + B.caps[cj].ax) / 2, my = (A.caps[ci].ay + B.caps[cj].ay) / 2;
-                      add('error', 'clearance', t('eda.drc.traceClearance', '走线间距不足: {a} ↔ {b} @{layer}', { a: (A.t.net || t('eda.drc.noNetName', '无网络')), b: (B.t.net || t('eda.drc.noNetName', '无网络')), layer: A.t.layer }), mx, my, 1, { idA: A.t.id, idB: B.t.id, layer: A.t.layer });
+                      add('error', 'clearance', t('eda.drc.traceClearance', '走线间距不足: {a} ↔ {b} @{layer}', { a: (A.t.net || t('eda.drc.noNetName', '无网络')), b: (B.t.net || t('eda.drc.noNetName', '无网络')), layer: A.t.layer }), mx, my, 1, { idA: A.t.id, idB: B.t.id, layer: A.t.layer, net1: A.t.net || '', net2: B.t.net || '' });
                       ci = A.caps.length; break;
                     }
                   }
@@ -437,7 +448,7 @@
                 for (const cap of tc.caps) {
                   const gap = Geo.capsuleCircleDist(cap, p.x, p.y, pr);
                   if (gap < cl - 1e-9) {
-                    add('error', 'clearance', t('eda.drc.padTraceClearance', '焊盘 {ref}.{num} 与走线 {net} 间距不足', { ref: p.ref, num: p.num, net: (tc.t.net || t('eda.drc.noNetName', '无网络')) }), p.x, p.y, pr, { idA: p.ref + '.' + p.num, idB: tc.t.id, layer: tc.t.layer });
+                    add('error', 'clearance', t('eda.drc.padTraceClearance', '焊盘 {ref}.{num} 与走线 {net} 间距不足', { ref: p.ref, num: p.num, net: (tc.t.net || t('eda.drc.noNetName', '无网络')) }), p.x, p.y, pr, { idA: p.ref + '.' + p.num, idB: tc.t.id, layer: tc.t.layer, net1: p.net || '', net2: tc.t.net || '' });
                     break;
                   }
                 }
@@ -451,7 +462,7 @@
                 const w = board.vias[j];
                 if (v.net && w.net && v.net === w.net) continue;
                 const d = Geo.dist(v.x, v.y, w.x, w.y) - v.diameter / 2 - w.diameter / 2;
-                if (d < cl - 1e-9) add('error', 'clearance', t('eda.drc.viaClearance', '过孔间距不足'), (v.x + w.x) / 2, (v.y + w.y) / 2, 1, { idA: v.id, idB: w.id });
+                if (d < cl - 1e-9) add('error', 'clearance', t('eda.drc.viaClearance', '过孔间距不足'), (v.x + w.x) / 2, (v.y + w.y) / 2, 1, { idA: v.id, idB: w.id, net1: v.net || '', net2: w.net || '' });
               }
               for (const p of allPads) {
                 if (v.net && p.net && v.net === p.net) continue;
@@ -459,7 +470,7 @@
                 const overlaps = p.layers.some(l => vLayers.includes(l));
                 if (!overlaps) continue;
                 const d = Geo.dist(v.x, v.y, p.x, p.y) - v.diameter / 2 - Math.max(p.w, p.h) / 2;
-                if (d < cl - 1e-9) add('error', 'clearance', t('eda.drc.viaPadClearance', '过孔与焊盘 {ref}.{num} 间距不足', { ref: p.ref, num: p.num }), v.x, v.y, v.diameter / 2, { idA: v.id, idB: p.ref + '.' + p.num });
+                if (d < cl - 1e-9) add('error', 'clearance', t('eda.drc.viaPadClearance', '过孔与焊盘 {ref}.{num} 间距不足', { ref: p.ref, num: p.num }), v.x, v.y, v.diameter / 2, { idA: v.id, idB: p.ref + '.' + p.num, net1: v.net || '', net2: p.net || '' });
               }
               for (const tc of trCaps) {
                 if (v.net && tc.t.net && v.net === tc.t.net) continue;
@@ -467,7 +478,7 @@
                 if (!vLayers.includes(tc.t.layer)) continue;
                 for (const cap of tc.caps) {
                   if (Geo.capsuleCircleDist(cap, v.x, v.y, v.diameter / 2) < cl - 1e-9) {
-                    add('error', 'clearance', t('eda.drc.viaTraceClearance', '过孔与走线间距不足'), v.x, v.y, v.diameter / 2, { idA: v.id, idB: tc.t.id, layer: tc.t.layer });
+                    add('error', 'clearance', t('eda.drc.viaTraceClearance', '过孔与走线间距不足'), v.x, v.y, v.diameter / 2, { idA: v.id, idB: tc.t.id, layer: tc.t.layer, net1: v.net || '', net2: tc.t.net || '' });
                     break;
                   }
                 }
@@ -515,7 +526,7 @@
             const lines = Model.Board.ratsnest(board, fpLib).filter(l => sel.netNames.has(l.net));
             for (const l of lines) {
               const detail = l.from && l.to ? (l.from + ' ↔ ' + l.to) : '';
-              add('warning', 'unrouted', t('eda.drc.unrouted', '网络 {net} 未布线: {detail}', { net: l.net, detail }), l.x1, l.y1, 1.5, { idA: 'net:' + l.net, idB: l.from + '|' + l.to });
+              add('error', 'unrouted', t('eda.drc.unrouted', '网络 {net} 未布线: {detail}', { net: l.net, detail }), l.x1, l.y1, 1.5, { idA: 'net:' + l.net, idB: l.from + '|' + l.to });
             }
           }
 

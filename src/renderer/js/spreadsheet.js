@@ -595,13 +595,62 @@ class SpreadsheetUI {
     this.container = document.getElementById(containerId);
     this.selectedCell = null;
     this.editingCell = null;
+    // 动态计算可见行列数，基于容器尺寸（最小 5 列 10 行）
     this.visibleCols = 10;
     this.visibleRows = 20;
     this.scrollCol = 1; // 1-based
     this.scrollRow = 1;
+    // 支持无限延伸：总行/列数远大于可见数，通过滚动访问
+    this.totalCols = 100;   // A → CV
+    this.totalRows = 10000; // 1 → 10000
+    this._cellW = 90;       // 估算单元格宽度
+    this._cellH = 26;       // 估算单元格高度
+    this._updateVisibleSize();
     this.render();
 
     engine.onChange = () => this.render();
+
+    // 监听容器大小变化，动态调整可见行列数
+    if (typeof ResizeObserver !== 'undefined' && this.container) {
+      const ro = new ResizeObserver(() => {
+        this._updateVisibleSize();
+        this.render();
+      });
+      ro.observe(this.container);
+    }
+
+    // 键盘方向键导航
+    if (this.container) {
+      this.container.addEventListener('keydown', (e) => {
+        if (this.editingCell) return; // 编辑中不处理
+        if (!this.selectedCell) return;
+        const p = SpreadsheetEngine.parseAddr(this.selectedCell);
+        if (!p) return;
+        let newAddr = null;
+        if (e.key === 'ArrowUp' && p.row > 1) newAddr = p.col + (p.row - 1);
+        else if (e.key === 'ArrowDown' && p.row < this.totalRows) newAddr = p.col + (p.row + 1);
+        else if (e.key === 'ArrowLeft' && p.colIndex > 1) newAddr = SpreadsheetEngine.indexToCol(p.colIndex - 1) + p.row;
+        else if (e.key === 'ArrowRight' && p.colIndex < this.totalCols) newAddr = SpreadsheetEngine.indexToCol(p.colIndex + 1) + p.row;
+        if (newAddr) {
+          e.preventDefault();
+          this._selectCell(newAddr);
+        }
+      });
+      this.container.tabIndex = 0; // 允许获取焦点
+    }
+  }
+
+  // 根据容器实际尺寸动态计算可见行列数
+  _updateVisibleSize() {
+    if (!this.container) return;
+    const rect = this.container.getBoundingClientRect();
+    const containerW = rect.width || 800;
+    const containerH = rect.height || 400;
+    // 减去行号列宽度和表头行高度
+    const availW = containerW - 40;  // 减去行号列
+    const availH = containerH - 26;  // 减去表头行
+    this.visibleCols = Math.max(5, Math.floor(availW / this._cellW));
+    this.visibleRows = Math.max(10, Math.floor(availH / this._cellH));
   }
 
   render() {
@@ -673,13 +722,63 @@ class SpreadsheetUI {
       this.container.appendChild(table);
     }
 
+    // 绑定滚动事件（仅绑定一次）
+    if (!this._scrollBound) {
+      this._scrollBound = true;
+      this.container.addEventListener('wheel', (e) => {
+        if (this.editingCell) return; // 编辑中不滚动
+        const rect = this.container.getBoundingClientRect();
+        // 仅当鼠标在表格区域内时处理
+        if (e.clientX < rect.left || e.clientX > rect.right) return;
+        let needRender = false;
+        if (e.deltaY > 0 && this.scrollRow + this.visibleRows < this.totalRows) {
+          this.scrollRow = Math.min(this.totalRows - this.visibleRows + 1, this.scrollRow + Math.max(1, Math.round(e.deltaY / this._cellH)));
+          needRender = true;
+        } else if (e.deltaY < 0 && this.scrollRow > 1) {
+          this.scrollRow = Math.max(1, this.scrollRow + Math.round(e.deltaY / this._cellH));
+          needRender = true;
+        }
+        if (e.deltaX > 0 && this.scrollCol + this.visibleCols < this.totalCols) {
+          this.scrollCol = Math.min(this.totalCols - this.visibleCols + 1, this.scrollCol + Math.max(1, Math.round(e.deltaX / this._cellW)));
+          needRender = true;
+        } else if (e.deltaX < 0 && this.scrollCol > 1) {
+          this.scrollCol = Math.max(1, this.scrollCol + Math.round(e.deltaX / this._cellW));
+          needRender = true;
+        }
+        if (needRender) {
+          e.preventDefault();
+          this.render();
+        }
+      }, { passive: false });
+    }
+
     // Update formula bar
     this._updateFormulaBar();
   }
 
   _selectCell(addr) {
     this.selectedCell = addr;
+    // 自动滚动到可见范围
+    this._scrollToCell(addr);
     this.render();
+  }
+
+  // 确保选中单元格在可见范围内
+  _scrollToCell(addr) {
+    const p = SpreadsheetEngine.parseAddr(addr);
+    if (!p) return;
+    // 列滚动
+    if (p.colIndex < this.scrollCol) {
+      this.scrollCol = p.colIndex;
+    } else if (p.colIndex >= this.scrollCol + this.visibleCols) {
+      this.scrollCol = p.colIndex - this.visibleCols + 1;
+    }
+    // 行滚动
+    if (p.row < this.scrollRow) {
+      this.scrollRow = p.row;
+    } else if (p.row >= this.scrollRow + this.visibleRows) {
+      this.scrollRow = p.row - this.visibleRows + 1;
+    }
   }
 
   _startEdit(addr, cellEl) {

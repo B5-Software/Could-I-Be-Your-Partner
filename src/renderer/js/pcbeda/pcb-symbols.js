@@ -147,7 +147,14 @@
   };
 
   // parametric IC: params {left:['VCC','D0'], right:['GND','O0'], top:[], bottom:[]}
-  // 引脚编号遵循标准 DIP/SOIC 惯例：左侧从上到下 1..N，右侧从上到下 totalPins..(N+1)（逆时针）
+  // 引脚编号严格遵循标准 DIP/SOIC 封装惯例（逆时针）：
+  //   左侧从上到下 1..left.length
+  //   右侧从上到下 totalPins..(left.length+1)
+  // 与 pcb-footprints.js 中 soic()/dip() 的 pad 编号完全一致：
+  //   soic: 左侧 pad 1..half(上→下), 右侧 pad totalPins..half+1(上→下)
+  //   dip : 左侧 pad 1..half(上→下), 右侧 pad totalPins..half+1(上→下)
+  // 注意：使用标准 SOIC/DIP 封装时需保证 left.length === right.length，
+  //       否则 pin 编号可能与 pad 编号不匹配（需用自定义封装）。
   function makeIC(params) {
     const p = params || {};
     const left = p.left || ['P1', 'P2'];
@@ -158,13 +165,13 @@
     const W = Math.max(4 * G, (p.widthGrids || 4) * G);
     const pins = [];
     const draw = [rect(-W / 2, -H / 2, W, H), circle(-W / 2 + 0.35 * G, -H / 2 + 0.35 * G, 0.15 * G)];
-    // 左侧引脚从上到下编号 1..left.length（与 DIP/SOIC 封装一致）
+    // 左侧引脚从上到下编号 1..left.length（与 DIP/SOIC 封装左侧 pad 编号一致）
     left.forEach((nm, i) => {
       const y = -H / 2 + (i + 1) * G;
       pins.push({ num: String(i + 1), name: nm, x: -W / 2 - G, y });
       draw.push(line(-W / 2 - G, y, -W / 2, y));
     });
-    // 右侧引脚从上到下编号 totalPins..(left.length+1)（标准 DIP 逆时针编号，匹配 dip/soic 封装）
+    // 右侧引脚从上到下编号 totalPins..(left.length+1)（与 DIP/SOIC 封装右侧 pad 编号一致，逆时针）
     right.forEach((nm, i) => {
       const y = -H / 2 + (i + 1) * G;
       pins.push({ num: String(totalPins - i), name: nm, x: W / 2 + G, y });

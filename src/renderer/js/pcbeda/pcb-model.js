@@ -381,7 +381,7 @@
       board.vias.forEach((v, vi) => {
         const k = 'via' + vi;
         addKey(k);
-        prim.push({ key: k, net: v.net, kind: 'via', x: v.x, y: v.y, r: v.diameter / 2 });
+        prim.push({ key: k, net: v.net, kind: 'via', x: v.x, y: v.y, r: v.diameter / 2, vLayers: v.layers || null });
       });
 
       // geometric touch => electrical connection (same-net or net-merge by design)
@@ -409,9 +409,23 @@
         }
       });
       // zones: same-net primitive whose point is inside zone polygon joins the zone group
+      // Bug 9 修复：增加层匹配 + 焊盘边缘重叠判定，确保铺铜正确连接同层同网络焊盘
       for (const z of board.zones) {
         if (!z.net || !z.pts || z.pts.length < 3) continue;
-        const members = prim.filter(p => p.net === z.net && Geo.pointInPolygon(p.x, p.y, z.pts));
+        const members = prim.filter(p => {
+          if (p.net !== z.net) return false;
+          // 层匹配：焊盘/走线/过孔必须与铺铜在同一铜层才电气连通
+          if (p.kind === 'pad' && !p.pad.layers.includes(z.layer)) return false;
+          if (p.kind === 'trkpt' && board.traces[p.trk].layer !== z.layer) return false;
+          if (p.kind === 'via') {
+            const vl = p.vLayers || Board.copperLayerIds(board);
+            if (!vl.includes(z.layer)) return false;
+          }
+          // 焊盘中心在铺铜多边形内，或焊盘边缘与铺铜边界距离 ≤ 半径（部分重叠也算连通）
+          if (Geo.pointInPolygon(p.x, p.y, z.pts)) return true;
+          if (p.r > 0 && Geo.polygonEdgeDist(p.x, p.y, z.pts) <= p.r + 0.02) return true;
+          return false;
+        });
         for (let i = 1; i < members.length; i++) union(members[0].key, members[i].key);
       }
 
@@ -512,8 +526,13 @@
     },
 
     // resolve nets: union pins/wires/junctions/labels/power into named nets
-    // CONNECT_TOL: connection tolerance in mm (~half of the 2.54 schematic grid)
-    CONNECT_TOL: 1.0,
+    // CONNECT_TOL: 连接容差 mm，需大于半个 2.54 网格(1.27)以兼容标签/引脚偏移
+    CONNECT_TOL: 1.5,
+    // power 引脚名 → power 网络名 映射（IC 的 VCC/GND 等引脚自动归属对应 power 网络）
+    POWER_PIN_MAP: {
+      'VCC': 'VCC', 'VDD': 'VDD', 'VEE': 'VEE', 'VBAT': 'VBAT',
+      'GND': 'GND', 'VSS': 'VSS', 'AVCC': 'AVCC', 'AGND': 'AGND'
+    },
     resolveNets(sheet, symLib) {
       const TOL = this.CONNECT_TOL;
       const pins = this.symbolPins(sheet, symLib);
@@ -588,9 +607,24 @@
       // "close enough" to a wire still names that wire's net)
       const nearestWireNode = (x, y) => {
         let best = null, bd = TOL;
+        // 1) 检查 wire 顶点（端点）
         for (const p of wirePts) {
           const d = Geo.dist(x, y, p.x, p.y);
           if (d <= bd) { bd = d; best = p; }
+        }
+        // 2) 检查 wire 线段（标签/电源符号可能放在导线中间而非顶点上）
+        //    返回距离最近端点（wire 所有顶点已 union，连到任一端点即可）
+        for (const w of sheet.wires) {
+          for (let i = 0; i < w.pts.length - 1; i++) {
+            const a = w.pts[i], b = w.pts[i + 1];
+            const d = Geo.pointToSegmentDist(x, y, a.x, a.y, b.x, b.y);
+            if (d <= bd) {
+              const da = Geo.dist(x, y, a.x, a.y);
+              const db = Geo.dist(x, y, b.x, b.y);
+              best = da <= db ? a : b;
+              bd = d;
+            }
+          }
         }
         return best;
       };
@@ -628,6 +662,12 @@
       rootNames.clear();
       for (const lb of sheet.labels) claim(nodeFor(lb), lb.text);
       for (const ps of sheet.powerSymbols) claim(nodeFor(ps), ps.ptype);
+      // power 引脚自动归属对应 power 网络（VCC/GND/VDD/VSS/AVCC/AGND 等）
+      // 即使未画导线连接电源符号，IC 的 VCC/GND 引脚也会自动连接到同名 power 网络
+      for (const pn of pinNodes) {
+        const pwrName = Sheet.POWER_PIN_MAP[String(pn.pin.name).toUpperCase()];
+        if (pwrName) claim(pn.key, pwrName);
+      }
 
       // assign net names to every pin
       const rootAutoName = new Map();
