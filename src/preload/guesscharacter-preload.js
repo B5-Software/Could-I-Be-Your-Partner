@@ -11,4 +11,5 @@ contextBridge.exposeInMainWorld('gameAPI', {
   closeWindow: () => ipcRenderer.invoke('guesscharacter:close'),
   reportResult: (result) => ipcRenderer.send('game:result', { game: 'guessCharacter', result }),
   trngGetSeed: () => ipcRenderer.invoke('game:trngGetSeed'),
+  avatarFramesGet: (id) => ipcRenderer.invoke('avatar-frames:get', id),
 });

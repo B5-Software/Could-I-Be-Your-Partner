@@ -88,13 +88,12 @@
         // trace-trace (same layer, different nets)
         const trCaps = board.traces.map(tr => ({ t: tr, caps: Geo.polylineCapsules(tr.pts, tr.width) }));
         for (let i = 0; i < trCaps.length; i++) {
-          for (let j = i; j < trCaps.length; j++) {
+          for (let j = i + 1; j < trCaps.length; j++) {
             const A = trCaps[i], B = trCaps[j];
             if (A.t.layer !== B.t.layer) continue;
             if (A.t.net && B.t.net && A.t.net === B.t.net) continue;
             for (let ci = 0; ci < A.caps.length; ci++) {
               for (let cj = 0; cj < B.caps.length; cj++) {
-                if (A === B && Math.abs(ci - cj) <= 1) continue;
                 const gap = Geo.capsuleCapsuleDist(A.caps[ci], B.caps[cj]);
                 if (gap < cl - 1e-9) {
                   const mx = (A.caps[ci].ax + B.caps[cj].ax) / 2, my = (A.caps[ci].ay + B.caps[cj].ay) / 2;
@@ -408,14 +407,13 @@
             // trace-trace: 变更 trace vs 全量 trace
             const trCaps = board.traces.map(tr => ({ t: tr, caps: Geo.polylineCapsules(tr.pts, tr.width) }));
             for (let i = 0; i < trCaps.length; i++) {
-              for (let j = i; j < trCaps.length; j++) {
+              for (let j = i + 1; j < trCaps.length; j++) {
                 const A = trCaps[i], B = trCaps[j];
                 if (A.t.layer !== B.t.layer) continue;
                 if (A.t.net && B.t.net && A.t.net === B.t.net) continue;
                 if (!sel.traceIds.has(A.t.id) && !sel.traceIds.has(B.t.id)) continue;
                 for (let ci = 0; ci < A.caps.length; ci++) {
                   for (let cj = 0; cj < B.caps.length; cj++) {
-                    if (A === B && Math.abs(ci - cj) <= 1) continue;
                     const gap = Geo.capsuleCapsuleDist(A.caps[ci], B.caps[cj]);
                     if (gap < cl - 1e-9) {
                       const mx = (A.caps[ci].ax + B.caps[cj].ax) / 2, my = (A.caps[ci].ay + B.caps[cj].ay) / 2;
@@ -599,6 +597,24 @@
       for (const [net, pins] of netPins) {
         if (pins.length === 1) {
           add('warning', 'single', t('eda.erc.singlePin', '网络 {net} 只连接了一个引脚', { net }), pins[0].x, pins[0].y);
+        }
+      }
+      // 逻辑门 IC 未使用门电路连接提示
+      // 对于 74xx/CD40xx/CD45xx 系列逻辑门 IC，若有部分引脚未连接，
+      // 建议将未使用门的输入接 GND/VCC 防止悬空干扰
+      for (const s of sheet.symbols) {
+        const val = String(s.value || '').toUpperCase();
+        // 检测逻辑门 IC：74xx 系列（含 74HC/LS/AC/HCT/LVC 等）、CD40xx/CD45xx 系列
+        const isLogicGate = /^74[A-Z]*\d/.test(val) || /^(CD)?4[05]\d{2}/.test(val);
+        if (!isLogicGate) continue;
+        const icPins = pinNets.filter(p => p.ref === s.ref);
+        if (icPins.length === 0) continue;
+        const unconnected = icPins.filter(p => !isWired(p.x, p.y) && !isNoConnect(p.x, p.y));
+        // 仅有部分引脚未连接时（非全部未连接）才提示未使用门电路
+        if (unconnected.length > 0 && unconnected.length < icPins.length) {
+          add('warning', 'unused_gate', t('eda.erc.unusedGateHint',
+            '{ref} 有 {n} 个未连接引脚，建议将未使用门电路输入接 GND/VCC 防止悬空干扰',
+            { ref: s.ref, n: unconnected.length }), s.x, s.y);
         }
       }
       return errs;

@@ -178,6 +178,8 @@
     const DIRS8 = DIRS4.concat([[1, 1], [1, -1], [-1, 1], [-1, -1]]);
     const DIRS = opts.allowDiagonal ? DIRS8 : DIRS4;
     const STEP_COST = DIRS.map(d => (d[0] && d[1]) ? Math.SQRT2 : 1);
+    // 过孔代价：远大于单步代价(1/√2)，避免不必要的层切换产生过多过孔
+    const VIA_COST = 30;
 
     function routeSegment(sx, sy, sLayerLi, tx, ty, tLayerLi, allowRipup) {
       const s = toGrid(sx, sy), t = toGrid(tx, ty);
@@ -196,7 +198,7 @@
         const dx = Math.abs(gx - tx2), dy = Math.abs(gy - ty2);
         // 八方向启发：octile distance
         const dist = (dx + dy) + (Math.SQRT2 - 2) * Math.min(dx, dy);
-        return dist + (li === tLayerLi ? 0 : 6) + layerCost[li];
+        return dist + (li === tLayerLi ? 0 : VIA_COST) + layerCost[li];
       }
       let pops = 0;
       const maxPops = opts.maxPops;
@@ -244,7 +246,7 @@
           const blk = blocked[nl][gi];
           if (blk && gi !== tg && gi !== sg) continue;
           const ns = state(gi, nl);
-          const ng = g0 + 6 + layerCost[nl];
+          const ng = g0 + VIA_COST + layerCost[nl];
           const prev = gScore.get(ns);
           if (prev !== undefined && prev <= ng) continue;
           gScore.set(ns, ng);
@@ -362,6 +364,26 @@
       return layerIdx.get(p.side === 'B' ? 'B.Cu' : 'F.Cu') || 0;
     };
 
+    // 检查 45° 优化后的路径是否穿过阻挡区域
+    // 45° 优化会将 90° 拐角替换为斜线，可能穿过 A* 标记为阻挡的对角单元格，导致 DRC 违规
+    function pathCollidesBlocked(pts, li) {
+      for (let i = 0; i < pts.length - 1; i++) {
+        const a = pts[i], b = pts[i + 1];
+        const len = Geo.dist(a.x, a.y, b.x, b.y);
+        if (len < 1e-9) continue;
+        const steps = Math.max(1, Math.ceil(len / (gs / 4)));
+        for (let k = 0; k <= steps; k++) {
+          const x = a.x + (b.x - a.x) * k / steps;
+          const y = a.y + (b.y - a.y) * k / steps;
+          const gx = Math.round((x - ox) / gs);
+          const gy = Math.round((y - oy) / gs);
+          if (gx < 0 || gy < 0 || gx >= W || gy >= H) continue;
+          if (blocked[li][gIdx(gx, gy)]) return true;
+        }
+      }
+      return false;
+    }
+
     // 布单网络（返回 {ok, traces, vias}）
     function routeOneNet(ln) {
       blockStaticObstacles(ln.net);
@@ -382,8 +404,13 @@
           vias.push({ net: ln.net, x: seg.via.x, y: seg.via.y, drill: opts.viaDrill, diameter: opts.viaDiameter });
         } else {
           const opt = optimize45(seg.pts);
-          if (opt.length >= 2) {
-            traces.push({ net: ln.net, layer: seg.layer, width: opts.traceWidth, pts: opt });
+          let pts = opt;
+          // 验证 45° 优化后的路径不穿过阻挡区域，若违反则回退到原始网格路径（避免 DRC 间距违规）
+          if (opt.length >= 2 && pathCollidesBlocked(opt, seg.li)) {
+            pts = seg.pts;
+          }
+          if (pts.length >= 2) {
+            traces.push({ net: ln.net, layer: seg.layer, width: opts.traceWidth, pts: pts });
           }
         }
       }

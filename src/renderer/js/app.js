@@ -3847,10 +3847,10 @@
           </div>
         </div>
         ${message ? `<div class="game-invite-msg">${escapeHtml(message)}</div>` : ''}
-        <div class="game-invite-agents">
+        ${game === 'guessCharacter' ? '' : `<div class="game-invite-agents">
           <label>参与 Agent 数量：</label>
           <input type="number" min="1" max="8" value="${numAgents}" class="agent-count-input" />
-        </div>
+        </div>`}
         <div class="game-invite-actions">
           <button class="btn-game-ignore">忽略</button>
           <button class="btn-game-accept"><i class="fa-solid fa-play"></i> 开始游戏</button>

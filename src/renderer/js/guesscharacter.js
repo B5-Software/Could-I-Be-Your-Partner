@@ -45,6 +45,32 @@
   }
   let gameRng = () => Math.random();
 
+  // ---- 头像系统 ----
+  let _aiAvatar = '';           // AI 头像数据（data URL 或文件路径）
+  let _userAvatar = '';         // 用户头像数据
+  let _aiFrameSVG = '';         // AI 头像框 SVG 内容
+  let _userFrameSVG = '';       // 用户头像框 SVG 内容
+  let _frameUid = 0;
+
+  function makeAvatarHTML(avatarData, isAI) {
+    if (avatarData) {
+      const src = avatarData.startsWith('data:') ? avatarData : 'file://' + avatarData.replace(/\\/g, '/');
+      return `<img src="${src}" style="width:100%;height:100%;border-radius:50%;object-fit:cover" alt="">`;
+    }
+    return isAI ? '<i class="fa-solid fa-robot"></i>' : '<i class="fa-solid fa-user"></i>';
+  }
+
+  function makeFramedAvatarHTML(avatarData, isAI) {
+    const svg = isAI ? _aiFrameSVG : _userFrameSVG;
+    const inner = makeAvatarHTML(avatarData, isAI);
+    if (!svg) return inner;
+    const suffix = '_g' + (++_frameUid);
+    const uniqueSvg = svg
+      .replace(/\bid="([^"]+)"/g, (m, id) => `id="${id}${suffix}"`)
+      .replace(/url\(#([^)]+)\)/g, (m, id) => `url(#${id}${suffix})`);
+    return `<div class="gc-avatar-framed-wrap">${inner}<div class="gc-avatar-frame-overlay">${uniqueSvg}</div></div>`;
+  }
+
   // ---- LLM ----
   // max_tokens 不传，由 main.js 使用用户配置的 llm.maxResponseTokens
   async function askLLM(systemPrompt, userMsg, temperature = 0.5) {
@@ -157,7 +183,7 @@
     const entry = document.createElement('div');
     entry.className = 'gc-history-entry q-role';
     entry.innerHTML = `
-      <div class="gc-entry-avatar"><i class="fa-solid fa-user"></i></div>
+      <div class="gc-entry-avatar">${makeFramedAvatarHTML(_userAvatar, false)}</div>
       <div class="gc-entry-body">
         <div class="gc-entry-role">${escapeHtml(t('game.guesschar.playerQuestion', '玩家提问'))}</div>
         <div class="gc-entry-text">${escapeHtml(question)}</div>
@@ -168,7 +194,7 @@
     ansEntry.className = 'gc-history-entry a-role';
     const ansClass = answer === '是' ? 'yes' : (answer === '否' ? 'no' : 'uncertain');
     ansEntry.innerHTML = `
-      <div class="gc-entry-avatar"><i class="fa-solid fa-robot"></i></div>
+      <div class="gc-entry-avatar">${makeFramedAvatarHTML(_aiAvatar, true)}</div>
       <div class="gc-entry-body">
         <div class="gc-entry-role">${escapeHtml(t('game.guesschar.aiAnswer', 'AI 回答'))}</div>
         <div class="gc-entry-text"><span class="gc-entry-answer ${ansClass}">${escapeHtml(answer)}</span></div>
@@ -182,7 +208,7 @@
     const entry = document.createElement('div');
     entry.className = `gc-history-entry ${correct ? 'guess-correct' : 'guess-wrong'}`;
     entry.innerHTML = `
-      <div class="gc-entry-avatar"><i class="fa-solid fa-bullseye"></i></div>
+      <div class="gc-entry-avatar">${makeFramedAvatarHTML(_userAvatar, false)}</div>
       <div class="gc-entry-body">
         <div class="gc-entry-role">${escapeHtml(t('game.guesschar.playerGuess', '玩家猜测'))}</div>
         <div class="gc-entry-text">${escapeHtml(guess)} <span class="gc-entry-answer ${correct ? 'yes' : 'no'}">${escapeHtml(correct ? t('game.guesschar.correct', '正确！') : t('game.guesschar.wrong', '错误'))}</span></div>
@@ -339,6 +365,21 @@
       if (config?.category) {
         const found = CATEGORIES.find(c => c.id === config.category);
         if (found) { category = found.id; categoryName = found.name; }
+      }
+    } catch { /* use defaults */ }
+
+    // 加载头像和头像框
+    try {
+      const s = await window.gameAPI.getSettings();
+      if (s?.aiPersona?.avatar) _aiAvatar = s.aiPersona.avatar;
+      if (s?.userProfile?.avatar) _userAvatar = s.userProfile.avatar;
+      if (s?.aiPersona?.avatarFrame) {
+        const res = await window.gameAPI.avatarFramesGet(s.aiPersona.avatarFrame);
+        if (res?.ok && res.content) _aiFrameSVG = res.content;
+      }
+      if (s?.userProfile?.avatarFrame) {
+        const res = await window.gameAPI.avatarFramesGet(s.userProfile.avatarFrame);
+        if (res?.ok && res.content) _userFrameSVG = res.content;
       }
     } catch { /* use defaults */ }
 

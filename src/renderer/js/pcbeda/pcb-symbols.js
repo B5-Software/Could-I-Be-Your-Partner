@@ -147,24 +147,27 @@
   };
 
   // parametric IC: params {left:['VCC','D0'], right:['GND','O0'], top:[], bottom:[]}
+  // 引脚编号遵循标准 DIP/SOIC 惯例：左侧从上到下 1..N，右侧从上到下 totalPins..(N+1)（逆时针）
   function makeIC(params) {
     const p = params || {};
     const left = p.left || ['P1', 'P2'];
     const right = p.right || ['P3', 'P4'];
     const rows = Math.max(left.length, right.length);
+    const totalPins = left.length + right.length;
     const H = (rows + 1) * G;
     const W = Math.max(4 * G, (p.widthGrids || 4) * G);
     const pins = [];
     const draw = [rect(-W / 2, -H / 2, W, H), circle(-W / 2 + 0.35 * G, -H / 2 + 0.35 * G, 0.15 * G)];
-    let num = 1;
+    // 左侧引脚从上到下编号 1..left.length（与 DIP/SOIC 封装一致）
     left.forEach((nm, i) => {
       const y = -H / 2 + (i + 1) * G;
-      pins.push({ num: String(num++), name: nm, x: -W / 2 - G, y });
+      pins.push({ num: String(i + 1), name: nm, x: -W / 2 - G, y });
       draw.push(line(-W / 2 - G, y, -W / 2, y));
     });
+    // 右侧引脚从上到下编号 totalPins..(left.length+1)（标准 DIP 逆时针编号，匹配 dip/soic 封装）
     right.forEach((nm, i) => {
       const y = -H / 2 + (i + 1) * G;
-      pins.push({ num: String(num++), name: nm, x: W / 2 + G, y });
+      pins.push({ num: String(totalPins - i), name: nm, x: W / 2 + G, y });
       draw.push(line(W / 2, y, W / 2 + G, y));
     });
     return { pins, draw, w: W, h: H };
