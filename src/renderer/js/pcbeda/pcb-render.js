@@ -17,6 +17,9 @@
     view: { panX: 0, panY: 0, zoom: 10 }, // zoom: px per mm
     opts: {},
     _zoneCanvas: null,
+    // 视图方向：'top'（默认从顶层看）/ 'bottom'（从底层看，X 轴镜像）
+    // 工业标准：KiCad/Altium 的 "View Board from Bottom Side" (V+B)
+    viewFromBottom: false,
 
     init(canvas) {
       this.canvas = canvas;
@@ -37,13 +40,17 @@
       this.render();
     },
 
+    // world → screen：底层视图时 X 轴镜像
     w2s(p) {
       const cx = this.width / 2, cy = this.height / 2;
-      return { x: cx + (p.x + this.view.panX) * this.view.zoom, y: cy + (p.y + this.view.panY) * this.view.zoom };
+      const wx = this.viewFromBottom ? -p.x : p.x;
+      return { x: cx + (wx + this.view.panX) * this.view.zoom, y: cy + (p.y + this.view.panY) * this.view.zoom };
     },
+    // screen → world：底层视图时 X 轴反镜像
     s2w(p) {
       const cx = this.width / 2, cy = this.height / 2;
-      return { x: (p.x - cx) / this.view.zoom - this.view.panX, y: (p.y - cy) / this.view.zoom - this.view.panY };
+      const wx = (p.x - cx) / this.view.zoom - this.view.panX;
+      return { x: this.viewFromBottom ? -wx : wx, y: (p.y - cy) / this.view.zoom - this.view.panY };
     },
     zoomAt(factor, screenCenter) {
       const before = this.s2w(screenCenter);
@@ -52,6 +59,15 @@
       this.view.panX += after.x - before.x;
       this.view.panY += after.y - before.y;
       this.render();
+    },
+
+    // 设置视图方向 'top'|'bottom'|'toggle'，返回新状态
+    setView(side) {
+      if (side === 'toggle') this.viewFromBottom = !this.viewFromBottom;
+      else if (side === 'bottom') this.viewFromBottom = true;
+      else this.viewFromBottom = false;
+      this.render();
+      return this.viewFromBottom ? 'bottom' : 'top';
     },
     fit(bbox, padding) {
       if (!bbox || !isFinite(bbox.minX)) return;

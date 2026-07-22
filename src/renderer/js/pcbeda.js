@@ -298,22 +298,56 @@
 
   function renderCheckPanel(body) {
     const s = section(body, '设计规则检查');
-    // live DRC toggle
+    // live DRC toggle (与 commands 层 liveDrcEnabled 同步)
+    const getLive = () => (typeof window.pcbGetLiveDrc === 'function') ? window.pcbGetLiveDrc().liveDrc : liveDrc;
+    liveDrc = getLive();
     const tgl = document.createElement('div');
     tgl.className = 'pcb-p-item';
-    tgl.innerHTML = '<i class="fa-solid ' + (liveDrc ? 'fa-square-check' : 'fa-square') + '"></i> 实时 DRC (编辑后自动检查)';
+    tgl.innerHTML = '<i class="fa-solid ' + (liveDrc ? 'fa-square-check' : 'fa-square') + '"></i> 实时 DRC (编辑后自动检查+增量返回)';
     tgl.addEventListener('click', () => {
-      liveDrc = !liveDrc;
+      if (typeof window.pcbSetLiveDrc === 'function') {
+        const r = window.pcbSetLiveDrc(!liveDrc);
+        liveDrc = r.liveDrc;
+      } else {
+        liveDrc = !liveDrc;
+      }
       if (!liveDrc) { Editor.drcMarkers = []; refresh(); }
       else scheduleLiveDrc();
       refreshPanel();
     });
     s.appendChild(tgl);
+    // 翻面视图快捷按钮（双面板设计核心）
+    const btnView = document.createElement('button');
+    btnView.className = 'pcb-p-btn';
+    const vFromBottom = (typeof PCBRender !== 'undefined' && PCBRender.viewFromBottom);
+    btnView.innerHTML = '<i class="fa-solid fa-arrows-rotate"></i> 翻面视图 (' + (vFromBottom ? '从底层看' : '从顶层看') + ')';
+    btnView.addEventListener('click', () => {
+      if (typeof window.pcbSetView === 'function') window.pcbSetView('toggle');
+      else if (Editor.setView) Editor.setView('toggle');
+      refreshPanel(); refresh();
+    });
+    s.appendChild(btnView);
+    // 设计流程指引按钮（IPC-2221 双面板设计 10 阶段）
+    const btnFlow = document.createElement('button');
+    btnFlow.className = 'pcb-p-btn';
+    btnFlow.innerHTML = '<i class="fa-solid fa-list-check"></i> 设计流程指引';
+    btnFlow.addEventListener('click', () => {
+      let flow = null;
+      if (typeof window.pcbGetDesignFlowGuide === 'function') flow = window.pcbGetDesignFlowGuide().flow;
+      else if (window.PCBCommands && window.PCBCommands.DESIGN_FLOW_GUIDE) flow = window.PCBCommands.DESIGN_FLOW_GUIDE;
+      const lines = (flow && flow.stages) ? flow.stages.map((s, i) => (i + 1) + '. [' + s.phase + '] ' + s.title + '\n   ' + s.detail).join('\n') : '流程指引不可用';
+      Editor.status('双面板设计流程（IPC-2221）:\n' + lines);
+      alert('双面板设计流程指引（参考 IPC-2221）:\n\n' + lines);
+    });
+    s.appendChild(btnFlow);
     const btnDrc = document.createElement('button');
     btnDrc.className = 'pcb-p-btn primary';
-    btnDrc.innerHTML = '<i class="fa-solid fa-clipboard-check"></i> 运行 DRC (PCB)';
+    btnDrc.innerHTML = '<i class="fa-solid fa-clipboard-check"></i> 运行 DRC (全量)';
     btnDrc.addEventListener('click', () => {
-      Editor.drcMarkers = PCBDrc.run(Doc.board(), PCBFootprints);
+      let r;
+      if (typeof window.pcbRunDrc === 'function') r = window.pcbRunDrc();
+      else { r = { ok: true, all: PCBDrc.run(Doc.board(), PCBFootprints) }; Editor.drcMarkers = r.all; }
+      if (r.summary) Editor.status('DRC: ' + r.summary.errors + ' 错误, ' + r.summary.warnings + ' 警告 (共 ' + r.totalCount + ')');
       refreshPanel(); refresh();
     });
     s.appendChild(btnDrc);
@@ -321,21 +355,28 @@
     btnErc.className = 'pcb-p-btn';
     btnErc.innerHTML = '<i class="fa-solid fa-clipboard-check"></i> 运行 ERC (原理图)';
     btnErc.addEventListener('click', () => {
-      Editor.ercMarkers = PcbErc.run(Doc.sheet(), PCBSymbols);
+      if (typeof window.pcbRunErc === 'function') {
+        const r = window.pcbRunErc();
+        Editor.status('ERC: ' + r.count + ' 个错误');
+      } else {
+        Editor.ercMarkers = PcbErc.run(Doc.sheet(), PCBSymbols);
+      }
       refreshPanel(); refresh();
     });
     s.appendChild(btnErc);
     const btnAuto = document.createElement('button');
     btnAuto.className = 'pcb-p-btn';
-    btnAuto.innerHTML = '<i class="fa-solid fa-wand-magic-sparkles"></i> 自动布线';
+    btnAuto.innerHTML = '<i class="fa-solid fa-wand-magic-sparkles"></i> 自动布线 (双面板)';
     btnAuto.addEventListener('click', () => {
-      const res = PCBAutorouter.autoroute(Doc.board(), PCBFootprints, {});
+      let res;
+      if (typeof window.pcbAutoroute === 'function') res = window.pcbAutoroute([]);
+      else res = PCBAutorouter.autoroute(Doc.board(), PCBFootprints, {});
       if (res.ok) {
         Doc.snapshot();
-        for (const tr of res.traces) PCBModel.Board.addTrace(Doc.board(), tr);
-        for (const v of res.vias) PCBModel.Board.addVia(Doc.board(), v);
+        for (const tr of (res.traces || [])) PCBModel.Board.addTrace(Doc.board(), tr);
+        for (const v of (res.vias || [])) PCBModel.Board.addVia(Doc.board(), v);
         Doc.touch();
-        Editor.status('自动布线完成: ' + res.routed + ' 成功, ' + res.failed + ' 失败');
+        Editor.status('自动布线完成: ' + res.routed + ' 成功, ' + res.failed + ' 失败' + (res.iter ? ' (' + res.iter + ' 轮 rip-up)' : ''));
       } else {
         Editor.status('自动布线失败: ' + (res.error || ''));
       }
@@ -351,6 +392,30 @@
       refreshPanel(); refresh();
     });
     s.appendChild(btnSync);
+    // 显示最近一次 DRC 增量（实时 DRC 开启时由命令执行自动产生）
+    let lastDelta = null;
+    if (typeof window.pcbGetDrcDelta === 'function') lastDelta = window.pcbGetDrcDelta().delta;
+    if (lastDelta && (lastDelta.added.length || lastDelta.removed.length)) {
+      const ds = section(body, '最近 DRC 增量');
+      const sum = lastDelta.summary || {};
+      const summary = document.createElement('div');
+      summary.className = 'pcb-p-item';
+      summary.innerHTML = '<i class="fa-solid fa-delta"></i> 新增 <b style="color:#ff6b6b">' + (lastDelta.added.length) + '</b> / 消除 <b style="color:#51cf66">' + (lastDelta.removed.length) + '</b>' +
+        (sum.errors !== undefined ? ' (合计: ' + sum.errors + ' 错误, ' + sum.warnings + ' 警告)' : '');
+      ds.appendChild(summary);
+      for (const v of lastDelta.added.slice(0, 8)) {
+        const item = document.createElement('div');
+        item.className = 'pcb-check-item ' + (v.severity || 'warning');
+        item.innerHTML = '<div class="t">+ ' + (v.type || '') + '</div><div class="m">' + (v.message || '') + '</div>';
+        ds.appendChild(item);
+      }
+      for (const v of lastDelta.removed.slice(0, 8)) {
+        const item = document.createElement('div');
+        item.className = 'pcb-check-item resolved';
+        item.innerHTML = '<div class="t">✓ ' + (v.type || '') + '</div><div class="m">' + (v.message || '') + '</div>';
+        ds.appendChild(item);
+      }
+    }
     const list = section(body, '检查结果 (' + Editor.drcMarkers.length + ')');
     for (const m of Editor.drcMarkers.slice(0, 100)) {
       const item = document.createElement('div');
@@ -464,7 +529,7 @@
     s.innerHTML += '<div class="pcb-p-item"><small>该对象类型暂不支持属性编辑</small></div>';
   }
 
-  // ---------------- live DRC (debounced) ----------------
+  // ---------------- live DRC (debounced, uses DrcIndex incremental) ----------------
   let liveDrc = true;
   let drcTimer = null;
   function scheduleLiveDrc() {
@@ -472,11 +537,25 @@
     clearTimeout(drcTimer);
     drcTimer = setTimeout(() => {
       try {
-        Editor.drcMarkers = PCBDrc.run(Doc.board(), PCBFootprints);
-        const errs = Editor.drcMarkers.filter(m => m.severity === 'error').length;
-        const warns = Editor.drcMarkers.length - errs;
+        // 优先使用 commands 层的 DrcIndex 增量检查
+        if (typeof window.pcbGetLiveDrc === 'function') {
+          const st = window.pcbGetLiveDrc();
+          if (!st.liveDrc) { return; }
+        }
+        let markers, summary = null;
+        if (typeof window.PCBDrcIndex !== 'undefined' || typeof window.pcbRunDrc === 'function') {
+          // 走 DrcIndex 全量刷新快照（用户编辑触发，无 changedIds → 全量）
+          const r = window.pcbRunDrc();
+          markers = r.all || [];
+          summary = r.summary;
+        } else {
+          markers = PCBDrc.run(Doc.board(), PCBFootprints);
+        }
+        Editor.drcMarkers = markers;
+        const errs = markers.filter(m => m.severity === 'error').length;
+        const warns = markers.length - errs;
         if (errs || warns) {
-          Editor.status('实时DRC: ' + errs + ' 错误, ' + warns + ' 警告');
+          Editor.status('实时DRC: ' + errs + ' 错误, ' + warns + ' 警告' + (summary ? ' (增量已更新)' : ''));
         }
         refresh();
         if (activePtab === 'check') refreshPanel();
@@ -696,6 +775,24 @@
     document.getElementById('btn-undo').addEventListener('click', () => { Doc.undo(); refreshPanel(); refresh(); });
     document.getElementById('btn-redo').addEventListener('click', () => { Doc.redo(); refreshPanel(); refresh(); });
     document.getElementById('btn-fit').addEventListener('click', () => Editor.fitView());
+    // 翻面视图（双面板看反面，对应 KiCad V+B / Altium B）
+    const btnViewBottom = document.getElementById('btn-view-bottom');
+    if (btnViewBottom) {
+      const updateViewBtn = () => {
+        const vFromBottom = (typeof PCBRender !== 'undefined' && PCBRender.viewFromBottom);
+        btnViewBottom.classList.toggle('active', !!vFromBottom);
+        btnViewBottom.title = vFromBottom ? '当前: 从底层看（点击切回顶层） (B)' : '当前: 从顶层看（点击翻到底层） (B)';
+      };
+      btnViewBottom.addEventListener('click', () => {
+        if (typeof window.pcbSetView === 'function') window.pcbSetView('toggle');
+        else if (Editor.setView) Editor.setView('toggle');
+        updateViewBtn();
+        refresh();
+      });
+      // 监听键盘快捷键 B 由 Editor.handleKeyDown 处理，定期同步按钮状态
+      setInterval(updateViewBtn, 800);
+      updateViewBtn();
+    }
   }
 
   // ---------------- autosave (non-blocking restore banner; default = ignore, never blocks Agent) ----------------

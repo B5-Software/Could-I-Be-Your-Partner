@@ -72,118 +72,204 @@
   // ---------------------------------------------------------------------------
   // executor
   // ---------------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
+  // 实时 DRC 增量索引（模块级状态）
+  // Agent 工具调用 / 命令执行后自动追加 drcDelta
+  // ---------------------------------------------------------------------------
+  let liveDrcEnabled = true;       // 默认开启实时 DRC
+  let drcIndex = null;             // 懒创建
+  let lastDelta = null;            // 最近一次增量结果 {added,removed,summary}
+  let pendingChangedIds = null;    // 命令执行期间累积的变更 ID（用于增量 DRC）
+
+  function ensureDrcIndex() {
+    if (!drcIndex && global.PCBDrcIndex) drcIndex = global.PCBDrcIndex.create();
+    return drcIndex;
+  }
+
+  // 根据命令+参数+返回值推导 changedIds
+  // 返回 null 表示该命令不影响 PCB DRC（如 view/layer/help/sch 等）
+  function deriveChangedIds(cmd, args, result) {
+    switch (cmd) {
+      case 'comp':
+        if (args[0] === 'add') return ['comp:' + args[2]];
+        if (['move', 'rot', 'side', 'value', 'net', 'flip'].includes(args[0])) return ['comp:' + args[1]];
+        if (args[0] === 'del') return ['board'];
+        if (args[0] === 'list' || args[0] === 'pads') return null;
+        return ['board'];
+      case 'trace': return ['trace:' + (result && result.id || 'last')];
+      case 'via': return ['via:' + (result && result.id || 'last')];
+      case 'zone': return ['board']; // 铺铜不参与 DRC 直接检查，保守全量
+      case 'silk': return ['silk:' + (result && result.id || 'last')];
+      case 'clear': return ['board'];
+      case 'del': return ['board'];
+      case 'autoroute': return ['board'];
+      case 'rules': return args[0] === 'set' ? ['rules'] : null;
+      case 'stackup': return ['board'];
+      case 'new': return ['board'];
+      case 'board': return ['board'];
+      case 'undo': case 'redo': return ['board'];
+      case 'view': case 'layer': case 'fit': case 'mode': case 'footprints':
+      case 'symbols': case 'info': case 'state': case 'help': case 'erc':
+      case 'drc': return null;
+      case 'sch': return null; // 原理图阶段不影响 PCB DRC
+      default: return null;
+    }
+  }
+
+  // 执行命令后追加 DRC 增量
+  function attachDrcDelta(cmd, args, result) {
+    if (!result || !result.ok) return result;
+    if (!liveDrcEnabled) return result;
+    if (!Editor() || Editor().mode !== 'pcb') return result;
+    const idx = ensureDrcIndex();
+    if (!idx) return result;
+    const changedIds = deriveChangedIds(cmd, args, result);
+    if (!changedIds) return result;
+    try {
+      const drcRes = idx.runIncremental(Doc.board(), fpLib(), changedIds);
+      Editor().drcMarkers = drcRes.all;
+      Editor().refresh();
+      lastDelta = {
+        added: drcRes.added.slice(0, 50),
+        removed: drcRes.removed.slice(0, 50),
+        summary: drcRes.summary
+      };
+      result.drcDelta = lastDelta;
+    } catch (e) {
+      // 静默失败：不能让 DRC 错误阻塞命令
+      result.drcDeltaError = e.message;
+    }
+    return result;
+  }
+
   const Executor = {
     execute(line) {
       const t = parseCmd(line);
       if (!t.length) return fail('空命令');
       const cmd = t[0].toLowerCase();
       const args = t.slice(1);
+      let result;
       try {
-        switch (cmd) {
-          case 'help': return ok({ help: HELP_TEXT });
-          case 'new': {
-            Doc.reset(args[0] || 'Untitled', parseFloat(args[1]) || 100, parseFloat(args[2]) || 80, parseInt(args[3], 10) || 2);
-            this._ui();
-            return ok({ name: Doc.project.name });
+        result = this._dispatch(cmd, args);
+      } catch (e) {
+        return fail(e.message);
+      }
+      // 实时 DRC：追加 drcDelta
+      if (liveDrcEnabled && result && result.ok) {
+        result = attachDrcDelta(cmd, args, result);
+      }
+      return result;
+    },
+
+    _dispatch(cmd, args) {
+      switch (cmd) {
+        case 'help': return ok({ help: HELP_TEXT });
+        case 'new': {
+          Doc.reset(args[0] || 'Untitled', parseFloat(args[1]) || 100, parseFloat(args[2]) || 80, parseInt(args[3], 10) || 2);
+          this._ui();
+          return ok({ name: Doc.project.name });
+        }
+        case 'board': return this._board(args);
+        case 'rules': return this._rules(args);
+        case 'stackup': return this._stackup(args);
+        case 'comp': return this._comp(args);
+        case 'net': return this._net(args);
+        case 'trace': return this._trace(args);
+        case 'via': return this._via(args);
+        case 'zone': return this._zone(args);
+        case 'silk': return this._silk(args);
+        case 'sch': return this._sch(args);
+        case 'layer': return this._layer(args);
+        case 'view': return this._view(args);
+        case 'flow': return ok({ flow: DESIGN_FLOW_GUIDE });
+        case 'drc': return this._drc(args);
+        case 'erc': {
+          const errs = global.PcbErc.run(Doc.sheet(), symLib());
+          if (Editor()) { Editor().ercMarkers = errs; Editor().refresh(); }
+          return ok({ count: errs.length, errors: errs.slice(0, 200) });
+        }
+        case 'autoroute': return this._autoroute(args);
+        case 'clear': {
+          if (!args.length) {
+            return ok({
+              usage: 'clear 命令用法:',
+              options: [
+                'clear routes [net] — 删除所有走线和过孔（可指定仅某个网络）',
+                'clear traces — 同 clear routes',
+                'clear silk — 删除所有丝印',
+                'clear zones — 删除所有铺铜',
+                'clear all — 删除整块板的全部内容（元件/走线/过孔/铺铜/丝印）',
+                '提示: 误操作可用 undo 命令撤销'
+              ]
+            });
           }
-          case 'board': return this._board(args);
-          case 'rules': return this._rules(args);
-          case 'stackup': return this._stackup(args);
-          case 'comp': return this._comp(args);
-          case 'net': return this._net(args);
-          case 'trace': return this._trace(args);
-          case 'via': return this._via(args);
-          case 'zone': return this._zone(args);
-          case 'silk': return this._silk(args);
-          case 'sch': return this._sch(args);
-          case 'drc': {
-            const errs = global.PCBDrc.run(Doc.board(), fpLib());
-            if (Editor()) { Editor().drcMarkers = errs; Editor().refresh(); }
-            return ok({ count: errs.length, errors: errs.slice(0, 200) });
-          }
-          case 'erc': {
-            const errs = global.PcbErc.run(Doc.sheet(), symLib());
-            if (Editor()) { Editor().ercMarkers = errs; Editor().refresh(); }
-            return ok({ count: errs.length, errors: errs.slice(0, 200) });
-          }
-          case 'autoroute': {
-            const nets = args.length ? args[0].split(',').map(s => s.trim()).filter(Boolean) : null;
-            const res = global.PCBAutorouter.autoroute(Doc.board(), fpLib(), { onlyNets: nets });
-            if (res.ok) {
-              Doc.snapshot();
-              for (const tr of res.traces) Model.Board.addTrace(Doc.board(), tr);
-              for (const v of res.vias) Model.Board.addVia(Doc.board(), v);
-              Doc.touch();
-              this._ui();
-            }
-            return res.ok ? ok({ routed: res.routed, failed: res.failed, failedNets: res.failedNets, traces: res.traces.length, vias: res.vias.length }) : res;
-          }
-          case 'clear': {
-            if (!args.length) {
-              return ok({
-                usage: 'clear 命令用法:',
-                options: [
-                  'clear routes [net] — 删除所有走线和过孔（可指定仅某个网络）',
-                  'clear traces — 同 clear routes',
-                  'clear all — 删除整块板的全部内容（元件/走线/过孔/铺铜/丝印）',
-                  '提示: 误操作可用 undo 命令撤销'
-                ]
-              });
-            }
-            const sub = args[0].toLowerCase();
-            if (sub === 'routes' || sub === 'traces') {
-              Doc.snapshot();
-              const b = Doc.board();
-              const net = args[1];
-              const nT = b.traces.length, nV = b.vias.length;
-              b.traces = net ? b.traces.filter(t => t.net !== net) : [];
-              b.vias = net ? b.vias.filter(v => v.net !== net) : [];
-              Doc.touch(); this._ui();
-              return ok({ removedTraces: net ? nT - b.traces.length : nT, removedVias: net ? nV - b.vias.length : nV });
-            }
-            if (sub === 'all') {
-              Doc.snapshot();
-              const b = Doc.board();
-              b.components = []; b.traces = []; b.vias = []; b.zones = []; b.silkscreen = []; b.keepouts = [];
-              Doc.touch(); this._ui();
-              return ok({});
-            }
-            return fail('未知 clear 目标: ' + args[0] + ' (输入 clear 查看用法)');
-          }
-          case 'del': {
+          const sub = args[0].toLowerCase();
+          if (sub === 'routes' || sub === 'traces') {
             Doc.snapshot();
             const b = Doc.board();
-            const id = args[1];
-            const lists = { trace: b.traces, via: b.vias, zone: b.zones, silk: b.silkscreen };
-            const arr = lists[args[0]];
-            if (!arr) { Doc._undo.pop(); return fail('用法: del trace|via|zone|silk <id|last> (last=删除最近添加的)'); }
-            if (id === 'last') {
-              if (!arr.length) { Doc._undo.pop(); return fail('没有可删除的对象'); }
-              const removed = arr.pop();
-              Doc.touch(); this._ui();
-              return ok({ removed: removed.id });
-            }
-            const i = arr.findIndex(o => o.id === id);
-            if (i < 0) { Doc._undo.pop(); return fail('未找到对象 ' + id); }
-            arr.splice(i, 1);
+            const net = args[1];
+            const nT = b.traces.length, nV = b.vias.length;
+            b.traces = net ? b.traces.filter(t => t.net !== net) : [];
+            b.vias = net ? b.vias.filter(v => v.net !== net) : [];
+            Doc.touch(); this._ui();
+            return ok({ removedTraces: net ? nT - b.traces.length : nT, removedVias: net ? nV - b.vias.length : nV });
+          }
+          if (sub === 'silk') {
+            Doc.snapshot();
+            const b = Doc.board();
+            const n = b.silkscreen.length;
+            b.silkscreen = [];
+            Doc.touch(); this._ui();
+            return ok({ removedSilks: n });
+          }
+          if (sub === 'zones') {
+            Doc.snapshot();
+            const b = Doc.board();
+            const n = b.zones.length;
+            b.zones = [];
+            Doc.touch(); this._ui();
+            return ok({ removedZones: n });
+          }
+          if (sub === 'all') {
+            Doc.snapshot();
+            const b = Doc.board();
+            b.components = []; b.traces = []; b.vias = []; b.zones = []; b.silkscreen = []; b.keepouts = [];
             Doc.touch(); this._ui();
             return ok({});
           }
-          case 'info':
-          case 'state': return this._state();
-          case 'mode': {
-            if (Editor() && ['sch', 'pcb', '3d'].includes(args[0])) Editor().setMode(args[0]);
-            return ok({ mode: args[0] });
-          }
-          case 'footprints': return ok({ footprints: fpLib().list() });
-          case 'symbols': return ok({ symbols: symLib().list() });
-          case 'fit': if (Editor()) Editor().fitView(); return ok({});
-          case 'undo': return ok({ done: Doc.undo() });
-          case 'redo': return ok({ done: Doc.redo() });
-          default: return fail('未知命令: ' + cmd + ' (输入 help 查看)');
+          return fail('未知 clear 目标: ' + args[0] + ' (输入 clear 查看用法)');
         }
-      } catch (e) {
-        return fail(e.message);
+        case 'del': {
+          Doc.snapshot();
+          const b = Doc.board();
+          const id = args[1];
+          const lists = { trace: b.traces, via: b.vias, zone: b.zones, silk: b.silkscreen };
+          const arr = lists[args[0]];
+          if (!arr) { Doc._undo.pop(); return fail('用法: del trace|via|zone|silk <id|last> (last=删除最近添加的)'); }
+          if (id === 'last') {
+            if (!arr.length) { Doc._undo.pop(); return fail('没有可删除的对象'); }
+            const removed = arr.pop();
+            Doc.touch(); this._ui();
+            return ok({ removed: removed.id });
+          }
+          const i = arr.findIndex(o => o.id === id);
+          if (i < 0) { Doc._undo.pop(); return fail('未找到对象 ' + id); }
+          arr.splice(i, 1);
+          Doc.touch(); this._ui();
+          return ok({});
+        }
+        case 'info':
+        case 'state': return this._state();
+        case 'mode': {
+          if (Editor() && ['sch', 'pcb', '3d'].includes(args[0])) Editor().setMode(args[0]);
+          return ok({ mode: args[0] });
+        }
+        case 'footprints': return ok({ footprints: fpLib().list() });
+        case 'symbols': return ok({ symbols: symLib().list() });
+        case 'fit': if (Editor()) Editor().fitView(); return ok({});
+        case 'undo': return ok({ done: Doc.undo() });
+        case 'redo': return ok({ done: Doc.redo() });
+        default: return fail('未知命令: ' + cmd + ' (输入 help 查看)');
       }
     },
 
@@ -302,7 +388,16 @@
         Doc.snapshot();
         c.side = (args[2] || 'F').toUpperCase().startsWith('B') ? 'B' : 'F';
         Doc.touch(); this._ui();
-        return ok({});
+        return ok({ ref: c.ref, side: c.side });
+      }
+      if (sub === 'flip') {
+        // 翻转元件到另一面（F↔B，KiCad/Altium 的 F 快捷键）
+        const c = Model.Board.findComponent(b, args[1]);
+        if (!c) return fail('未找到元件 ' + args[1]);
+        Doc.snapshot();
+        const newSide = Model.Board.flipComponentSide(b, args[1]);
+        Doc.touch(); this._ui();
+        return ok({ ref: c.ref, side: newSide });
       }
       if (sub === 'value') {
         const c = Model.Board.findComponent(b, args[1]);
@@ -349,7 +444,7 @@
         Doc.touch(); this._ui();
         return ok({});
       }
-      return fail('用法: comp add|move|rot|side|value|del|list|pads|net ...');
+      return fail('用法: comp add|move|rot|side|flip|value|del|list|pads|net ...');
     },
 
     _net(args) {
@@ -620,9 +715,184 @@
         layers: Model.Board.copperLayerIds(b),
         designRules: b.designRules,
         stackup: b.stackup,
-        outline: b.outline
+        outline: b.outline,
+        view: (Editor() && global.PCBRender) ? (global.PCBRender.viewFromBottom ? 'bottom' : 'top') : 'top',
+        liveDrc: liveDrcEnabled
       });
+    },
+
+    // 视图方向：top|bottom|toggle（工业标准 KiCad/Altium V+B）
+    _view(args) {
+      const E = Editor();
+      if (!E || !global.PCBRender) return fail('视图不可用');
+      const side = (args[0] || 'toggle').toLowerCase();
+      if (!['top', 'bottom', 'toggle'].includes(side)) return fail('用法: view top|bottom|toggle');
+      const newSide = E.setView(side);
+      return ok({ view: newSide });
+    },
+
+    // 层管理：list / vis <id> on|off / active <id>
+    _layer(args) {
+      const E = Editor();
+      const b = Doc.board();
+      const sub = (args[0] || 'list').toLowerCase();
+      if (sub === 'list') {
+        const layerIds = Model.Board.copperLayerIds(b);
+        return ok({
+          copperLayers: layerIds.map(id => ({ id, visible: (E ? E.layerVisibility[id] : undefined) !== false, color: global.PCBRender ? global.PCBRender.layerColor(id) : '#888' })),
+          silkVisible: E ? E.layerVisibility['silk'] !== false : true,
+          activeLayer: E ? E.activeLayer : 'F.Cu'
+        });
+      }
+      if (sub === 'vis' || sub === 'visible') {
+        const layerId = args[1];
+        if (!layerId) return fail('用法: layer vis <id> on|off');
+        const on = (args[2] || '').toLowerCase() !== 'off';
+        if (E) {
+          E.layerVisibility[layerId] = on;
+          E.refresh(); E.panel();
+        }
+        return ok({ layer: layerId, visible: on });
+      }
+      if (sub === 'active') {
+        const layerId = args[1];
+        if (!layerId) return fail('用法: layer active <id>');
+        if (!Model.Board.copperLayerIds(b).includes(layerId)) return fail('未知铜层: ' + layerId);
+        if (E) { E.activeLayer = layerId; E.refresh(); E.panel(); }
+        return ok({ activeLayer: layerId });
+      }
+      return fail('用法: layer list | layer vis <id> on|off | layer active <id>');
+    },
+
+    // DRC：默认全量；支持 inc [changedIds...] 增量；reset 清空快照
+    _drc(args) {
+      const E = Editor();
+      const sub = (args[0] || 'run').toLowerCase();
+      if (sub === 'reset') {
+        if (drcIndex) drcIndex.clear();
+        lastDelta = null;
+        return ok({ reset: true });
+      }
+      if (sub === 'live') {
+        // drc live on|off|status — 切换实时 DRC 开关
+        const op = (args[1] || 'status').toLowerCase();
+        if (op === 'on') liveDrcEnabled = true;
+        else if (op === 'off') {
+          liveDrcEnabled = false;
+          drcIndex = null; lastDelta = null;
+          if (E) E.drcMarkers = [];
+        }
+        return ok({ liveDrc: liveDrcEnabled });
+      }
+      if (sub === 'inc' || sub === 'incremental') {
+        // drc inc [comp:R1] [trace:tr_abc] ...
+        const changedIds = args.slice(1);
+        const idx = ensureDrcIndex();
+        if (!idx) return fail('DRC 索引不可用');
+        const drcRes = idx.runIncremental(Doc.board(), fpLib(), changedIds);
+        if (E) { E.drcMarkers = drcRes.all; E.refresh(); }
+        lastDelta = { added: drcRes.added.slice(0, 50), removed: drcRes.removed.slice(0, 50), summary: drcRes.summary };
+        return ok({ count: drcRes.all.length, added: drcRes.added.length, removed: drcRes.removed.length, summary: drcRes.summary, errors: drcRes.all.slice(0, 200), drcDelta: lastDelta });
+      }
+      // 默认全量（同时重置快照）
+      const idx = ensureDrcIndex();
+      let drcRes;
+      if (idx) {
+        drcRes = idx.run(Doc.board(), fpLib());
+        if (E) { E.drcMarkers = drcRes.all; E.refresh(); }
+        lastDelta = { added: drcRes.added.slice(0, 50), removed: drcRes.removed.slice(0, 50), summary: drcRes.summary };
+      } else {
+        const errs = global.PCBDrc.run(Doc.board(), fpLib());
+        if (E) { E.drcMarkers = errs; E.refresh(); }
+        drcRes = { all: errs, added: errs, removed: [], summary: { errors: errs.filter(e => e.severity === 'error').length, warnings: errs.filter(e => e.severity !== 'error').length, total: errs.length } };
+      }
+      return ok({ count: drcRes.all.length, summary: drcRes.summary, errors: drcRes.all.slice(0, 200), drcDelta: lastDelta });
+    },
+
+    // autoroute [net1,net2,...] [--preferLayers F.Cu,B.Cu] [--no-diagonal] [--ripup n] [--width w] [--clearance c] [--grid g]
+    // autoroute single <net> <x1,y1> <x2,y2> [options] — 单网络点对点布线
+    _autoroute(args) {
+      const b = Doc.board();
+      // ---- single 子命令：单网络点对点布线 ----
+      if (args[0] === 'single') {
+        const net = args[1];
+        const fromPt = parsePt(args[2]);
+        const toPt = parsePt(args[3]);
+        if (!net || !fromPt || !toPt) return fail('用法: autoroute single <net> <x1,y1> <x2,y2> [--preferLayers F.Cu,B.Cu] [--no-diagonal] [--width w] [--clearance c] [--grid g]');
+        const opts = { preferLayers: null, allowDiagonal: true };
+        for (let i = 4; i < args.length; i++) {
+          const a = args[i];
+          if (a === '--preferLayers') { opts.preferLayers = (args[++i] || '').split(',').map(s => s.trim()).filter(Boolean); continue; }
+          if (a === '--no-diagonal') { opts.allowDiagonal = false; continue; }
+          if (a === '--width') { opts.traceWidth = parseFloat(args[++i]) || 0; continue; }
+          if (a === '--clearance') { opts.clearance = parseFloat(args[++i]) || 0; continue; }
+          if (a === '--grid') { opts.gridSize = parseFloat(args[++i]) || 0; continue; }
+        }
+        if (!global.PCBAutorouter || !global.PCBAutorouter.routeSingle) return fail('自动布线器不可用');
+        Doc.snapshot();
+        const r = global.PCBAutorouter.routeSingle(b, fpLib(), net, fromPt, toPt, opts);
+        if (r.ok) {
+          for (const tr of (r.traces || [])) Model.Board.addTrace(b, tr);
+          for (const v of (r.vias || [])) Model.Board.addVia(b, v);
+          Doc.touch();
+          this._ui();
+        }
+        return r.ok ? ok({ net, traces: (r.traces || []).length, vias: (r.vias || []).length, routed: r.routed || 1, failed: 0 }) : r;
+      }
+      // ---- 默认全板布线 ----
+      const opts = { onlyNets: null, preferLayers: null, allowDiagonal: true, maxRipRerouteIter: 3 };
+      const rest = [];
+      for (let i = 0; i < args.length; i++) {
+        const a = args[i];
+        if (a === '--preferLayers') { opts.preferLayers = (args[++i] || '').split(',').map(s => s.trim()).filter(Boolean); continue; }
+        if (a === '--no-diagonal') { opts.allowDiagonal = false; continue; }
+        if (a === '--ripup') { opts.maxRipRerouteIter = parseInt(args[++i], 10) || 3; continue; }
+        if (a === '--width') { opts.traceWidth = parseFloat(args[++i]) || 0; continue; }
+        if (a === '--clearance') { opts.clearance = parseFloat(args[++i]) || 0; continue; }
+        if (a === '--grid') { opts.gridSize = parseFloat(args[++i]) || 0; continue; }
+        rest.push(a);
+      }
+      if (rest.length && rest[0]) opts.onlyNets = rest[0].split(',').map(s => s.trim()).filter(Boolean);
+      const res = global.PCBAutorouter.autoroute(b, fpLib(), opts);
+      if (res.ok) {
+        Doc.snapshot();
+        for (const tr of res.traces) Model.Board.addTrace(b, tr);
+        for (const v of res.vias) Model.Board.addVia(b, v);
+        Doc.touch();
+        this._ui();
+      }
+      return res.ok ? ok({ routed: res.routed, failed: res.failed, failedNets: res.failedNets, traces: res.traces.length, vias: res.vias.length, gridSize: res.gridSize, layerCount: res.layerCount, iter: res.iter || opts.maxRipRerouteIter }) : res;
     }
+  };
+
+  // 设计流程指引（IPC-2221 标准流程 + 双面板扩展）
+  const DESIGN_FLOW_GUIDE = {
+    title: 'CIBYP-PCB-EDA 双面板设计流程',
+    standard: 'IPC-2221 / IPC-2152',
+    steps: [
+      { phase: 1, name: '工程初始化', cmds: ['new <名称> <宽> <高> <层数=2>', 'board size <w> <h>', 'stackup layers 2', 'rules list'] },
+      { phase: 2, name: '原理图设计（可选）', cmds: ['sch sym <lib> <x> <y> --ref <R1>', 'sch wire x1,y1 x2,y2', 'sch label "NET" x,y', 'sch power GND x,y', 'sch annotate', 'erc'] },
+      { phase: 3, name: '同步到 PCB', cmds: ['sch sync'] },
+      { phase: 4, name: 'PCB 布局', cmds: ['comp list', 'comp move <ref> <x> <y>', 'comp rot <ref> <deg>', 'comp side <ref> F|B', 'comp flip <ref>', 'view toggle'] },
+      { phase: 5, name: '设计规则', cmds: ['rules set minClearance 0.2', 'rules set minTraceWidth 0.2', 'rules set minViaDrill 0.3'] },
+      { phase: 6, name: '布线', cmds: ['trace <net> <layer> <width> x,y ...', 'via <net> <x> <y>', 'autoroute --preferLayers F.Cu,B.Cu --ripup 3'] },
+      { phase: 7, name: '铺铜与丝印', cmds: ['zone GND F.Cu x,y ... --clearance 0.5', 'zone GND B.Cu x,y ... --clearance 0.5', 'silk text "R1" x,y'] },
+      { phase: 8, name: 'DRC 与修复', cmds: ['drc', 'drc inc comp:R1', 'drc reset'] },
+      { phase: 9, name: '导出生产文件', cmds: ['export gerber', 'export pnp', 'export bom'] },
+      { phase: 10, name: '保存工程', cmds: ['save <path>'] }
+    ],
+    tips: [
+      '双面板设计：用 comp side F|B 或 comp flip 切换元件面；用 view toggle 翻面查看（KiCad V+B 等效）',
+      '铺铜通常顶底层各铺一块 GND：zone GND F.Cu ... 和 zone GND B.Cu ...',
+      '自动布线后必跑 DRC：autoroute → drc → 修复 error → 重复',
+      '实时 DRC 开启时每个 pcb* 工具调用返回 drcDelta（added/removed/summary）'
+    ],
+    shortcuts: [
+      'B — PCB 模式切换顶/底视图',
+      'Shift+F — 翻转选中元件到另一面',
+      'F — 适应视图',
+      'V — 切换当前激活铜层（顶 ↔ 底）'
+    ]
   };
 
   const HELP_TEXT = [
@@ -632,7 +902,7 @@
     'rules list | rules set <key> <value> — 设计规则',
     'stackup layers <n> | stackup thickness <mm> — 层叠',
     'comp add <封装> <位号> <x> <y> [rot] [F|B] [k=v ...] — 放元件（返回 pad 全局坐标）',
-    'comp move|rot|side|value|del|list|pads|net — 元件操作（list/pads 返回 pad 坐标）',
+    'comp move|rot|side|flip|value|del|list|pads|net — 元件操作（list/pads 返回 pad 坐标，flip 翻面）',
     'net list | net rename <旧> <新>',
     'trace <网络> <层> <线宽> x1,y1 x2,y2 ... — 布线',
     'via <网络> <x> <y> [钻孔] [外径] — 过孔',
@@ -640,8 +910,12 @@
     'silk line|rect|circle|text — 丝印',
     'sch sym <符号> <x> <y> [rot] [--ref] [--value] [--fp] — 放符号（返回 pin 全局坐标）',
     'sch wire|label|power|junction|noconnect|value|fp|del|annotate|list|pins|nets|sync',
-    'drc / erc / autoroute [net1,net2] / clear routes [net]',
-    'mode sch|pcb|3d / fit / undo / redo / state / help'
+    'view top|bottom|toggle — 切换 PCB 视图方向（双面板看反面，KiCad V+B）',
+    'layer list | layer vis <id> on|off | layer active <id> — 层可见性/激活层',
+    'drc [inc <changedIds...>|reset] — 全量/增量/重置 DRC（开启实时 DRC 时所有 pcb 命令都附 drcDelta）',
+    'autoroute [net1,net2] [--preferLayers F.Cu,B.Cu] [--no-diagonal] [--ripup n] [--width w] [--clearance c]',
+    'clear routes [net] | clear silk | clear zones | clear all',
+    'mode sch|pcb|3d / fit / undo / redo / state / flow / help'
   ].join('\n');
 
   // ---------------------------------------------------------------------------
@@ -759,5 +1033,138 @@
   };
   global.pcbSetModified = function (m) { Doc.modified = !!m; return ok({}); };
 
-  global.PCBCommands = { Executor, syncFromSchematic, HELP_TEXT };
+  // ---- 实时 DRC / 设计流程 双面板支持 ----
+  global.pcbSetLiveDrc = function (on) {
+    liveDrcEnabled = (on === undefined) ? !liveDrcEnabled : !!on;
+    if (!liveDrcEnabled) {
+      // 关闭时清除已有索引（避免下次开启时拿到陈旧快照）
+      drcIndex = null;
+      lastDelta = null;
+      if (Editor()) Editor().drcMarkers = [];
+    }
+    return ok({ liveDrc: liveDrcEnabled });
+  };
+  global.pcbGetLiveDrc = function () { return ok({ liveDrc: liveDrcEnabled }); };
+  global.pcbGetDesignFlowGuide = function () { return ok({ flow: DESIGN_FLOW_GUIDE }); };
+  global.pcbGetDrcDelta = function () { return ok({ delta: lastDelta }); };
+  global.pcbClearDrcIndex = function () {
+    drcIndex = null; lastDelta = null;
+    if (Editor()) Editor().drcMarkers = [];
+    return ok({});
+  };
+  // 翻面视图/翻转元件 - Agent 工具用
+  global.pcbSetView = function (side) {
+    const E = Editor();
+    if (!E || !global.PCBRender) return fail('视图不可用');
+    if (!['top', 'bottom', 'toggle'].includes(side)) return fail('用法: pcbSetView top|bottom|toggle');
+    const newSide = E.setView(side);
+    return ok({ view: newSide });
+  };
+  global.pcbGetView = function () {
+    if (!global.PCBRender) return fail('视图不可用');
+    return ok({ view: global.PCBRender.viewFromBottom ? 'bottom' : 'top' });
+  };
+  global.pcbFlipComponent = function (ref) {
+    const b = Doc.board();
+    const c = Model.Board.findComponent(b, ref);
+    if (!c) return fail('未找到元件 ' + ref);
+    Doc.snapshot();
+    const newSide = Model.Board.flipComponentSide(b, ref);
+    Doc.touch();
+    if (Editor()) { Editor().refresh(); Editor().panel(); }
+    return ok({ ref: c.ref, side: newSide });
+  };
+  global.pcbSetComponentSide = function (ref, side) {
+    if (!['F', 'B'].includes(side)) return fail('side 必须是 F 或 B');
+    const b = Doc.board();
+    const c = Model.Board.findComponent(b, ref);
+    if (!c) return fail('未找到元件 ' + ref);
+    Doc.snapshot();
+    Model.Board.setComponentSide(b, ref, side);
+    Doc.touch();
+    if (Editor()) { Editor().refresh(); Editor().panel(); }
+    return ok({ ref: c.ref, side });
+  };
+  // 自动布线 - Agent 工具直接调用
+  global.pcbAutoroute = function (options) {
+    return Executor._autorouter(Array.isArray(options) ? options : []);
+  };
+  global.pcbRouteSingle = function (netName, fromPt, toPt, options) {
+    if (!global.PCBAutorouter || !global.PCBAutorouter.routeSingle) return fail('自动布线器不可用');
+    Doc.snapshot();
+    const r = global.PCBAutorouter.routeSingle(Doc.board(), fpLib(), netName, fromPt, toPt, options || {});
+    if (r.ok) {
+      for (const tr of (r.traces || [])) Model.Board.addTrace(Doc.board(), tr);
+      for (const v of (r.vias || [])) Model.Board.addVia(Doc.board(), v);
+      Doc.touch();
+      if (Editor()) { Editor().refresh(); Editor().panel(); }
+    }
+    return r;
+  };
+  global.pcbClearRoutes = function (net) {
+    Doc.snapshot();
+    const b = Doc.board();
+    const nT = b.traces.length, nV = b.vias.length;
+    b.traces = net ? b.traces.filter(t => t.net !== net) : [];
+    b.vias = net ? b.vias.filter(v => v.net !== net) : [];
+    Doc.touch();
+    if (Editor()) { Editor().refresh(); Editor().panel(); }
+    return ok({ removedTraces: net ? nT - b.traces.length : nT, removedVias: net ? nV - b.vias.length : nV });
+  };
+  // 层可见性 - Agent 工具用
+  global.pcbSetLayerVisibility = function (layerId, visible) {
+    const E = Editor();
+    if (!E) return fail('编辑器未初始化');
+    if (!E.layerVisibility) E.layerVisibility = {};
+    E.layerVisibility[layerId] = !!visible;
+    E.refresh();
+    return ok({ layer: layerId, visible: E.layerVisibility[layerId] });
+  };
+  global.pcbGetLayerVisibility = function () {
+    const E = Editor();
+    if (!E) return fail('编辑器未初始化');
+    return ok({ visibility: E.layerVisibility || {}, active: E.activeLayer || 'F.Cu' });
+  };
+  global.pcbSetActiveLayer = function (layerId) {
+    const E = Editor();
+    if (!E) return fail('编辑器未初始化');
+    E.activeLayer = layerId;
+    E.refresh();
+    return ok({ active: E.activeLayer });
+  };
+  // Undo/Redo - Agent 工具用
+  global.pcbUndo = function () {
+    const r = Doc.undo();
+    if (Editor()) { Editor().refresh(); Editor().panel(); }
+    return ok({ done: r });
+  };
+  global.pcbRedo = function () {
+    const r = Doc.redo();
+    if (Editor()) { Editor().refresh(); Editor().panel(); }
+    return ok({ done: r });
+  };
+  // 增量 DRC - Agent 工具用
+  global.pcbRunDrcIncremental = function (changedIds) {
+    const idx = ensureDrcIndex();
+    if (!idx) return fail('DrcIndex 不可用');
+    const drcRes = idx.runIncremental(Doc.board(), fpLib(), changedIds, undefined);
+    if (Editor()) { Editor().drcMarkers = drcRes.all; Editor().refresh(); }
+    lastDelta = { added: drcRes.added.slice(0, 50), removed: drcRes.removed.slice(0, 50), summary: drcRes.summary };
+    return ok({ all: drcRes.all.slice(0, 200), added: drcRes.added.slice(0, 50), removed: drcRes.removed.slice(0, 50), summary: drcRes.summary, totalCount: drcRes.all.length });
+  };
+  global.pcbRunDrc = function () {
+    const idx = ensureDrcIndex();
+    if (!idx) return fail('DrcIndex 不可用');
+    const drcRes = idx.run(Doc.board(), fpLib(), undefined);
+    if (Editor()) { Editor().drcMarkers = drcRes.all; Editor().refresh(); }
+    lastDelta = { added: drcRes.added.slice(0, 50), removed: drcRes.removed.slice(0, 50), summary: drcRes.summary };
+    return ok({ all: drcRes.all.slice(0, 200), summary: drcRes.summary, totalCount: drcRes.all.length });
+  };
+  global.pcbRunErc = function () {
+    const errs = global.PcbErc.run(Doc.sheet(), symLib());
+    if (Editor()) { Editor().ercMarkers = errs; Editor().refresh(); }
+    return ok({ count: errs.length, errors: errs.slice(0, 200) });
+  };
+
+  global.PCBCommands = { Executor, syncFromSchematic, HELP_TEXT, DESIGN_FLOW_GUIDE };
 })(typeof window !== 'undefined' ? window : globalThis);

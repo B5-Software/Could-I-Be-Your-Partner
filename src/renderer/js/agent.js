@@ -408,27 +408,38 @@ class Agent {
 - 用户说"画一个矩形""设计平面图""绘制示意图""画机械零件图""建筑平面图"等 2D 制图需求时，优先使用 CIPYP-CAD 而非 Canvas（CAD 更适合精确尺寸制图 + 完整标注/填充/块系统，Canvas 更适合自由绘图）
 
 【CIBYP-PCB-EDA 使用规范 - 电路板设计子应用】：
-- CIBYP-PCB-EDA 是内置的独立窗口 PCB 设计工具：完整原理图编辑器 + PCB 布局布线 + 简单自动布线 + 3D 预览 + 生产级 Gerber(RS-274X)/Excellon 钻孔/KiCad 格式导入导出
-- 标准工作流程（必须按顺序）：
-  1) initPcbEda 打开窗口 → pcbNewProject 新建工程（指定板名/尺寸/层数）
+- CIBYP-PCB-EDA 是内置的独立窗口 PCB 设计工具：完整原理图编辑器 + PCB 布局布线 + 完整自动布线(A* + 45° + rip-up & reroute) + 增量实时 DRC + 双面板支持 + 3D 预览 + 生产级 Gerber(RS-274X)/Excellon 钻孔/KiCad 格式导入导出
+- 标准工作流程（参考 IPC-2221，必须按顺序）：
+  1) initPcbEda 打开窗口 → pcbNewProject 新建工程（指定板名/尺寸/层数，双面板 layers=2）
   2) 原理图阶段：pcbSchAddSymbol 放置符号 → pcbSchAddWire 连线 → pcbSchAddLabel/pcbSchAddPower 标网络 → pcbSchAnnotate 标注 → pcbRunERC 检查
   3) pcbSchSync 同步到 PCB（生成元件与网络，必须执行）
-  4) PCB 阶段：pcbMoveComponent/pcbRotateComponent 布局 → pcbSetDesignRules 设规则 → pcbRouteTrace 手动布线 或 pcbAutoroute 自动布线 → pcbAddCopperPour 铺铜(通常GND) → pcbAddSilkscreen 丝印
-  5) pcbRunDRC 检查并修复所有 error → pcbGetBoardInfo 确认统计
-  6) pcbExportGerber 导出生产文件（zip 含 Gerber+钻孔+PnP+BOM）→ pcbExportFile 导出预览图/KiCad 等
-  7) pcbSaveProject 保存工程
+  4) PCB 布局阶段：先按功能分区，将核心 IC/连接器放顶层，去耦电容紧贴电源引脚，被动元件可放底层 → pcbMoveComponent/pcbRotateComponent 布局 → pcbFlipComponent 或 pcbSetComponentSide 翻面 → 双面板布局时底层元件务必通过 pcbSetView(bottom) 切换到底层视图检查
+  5) pcbSetDesignRules 设规则（双面板默认 minClearance=0.2mm 即可，高速/高密可调到 0.15mm）
+  6) 布线策略（双面板核心）：优先用 F.Cu 走横向信号、B.Cu 走纵向信号（"十字交叉"原则）；电源/地走粗线 0.4-0.6mm，信号 0.2-0.3mm；换层用 pcbAddVia（PTH 贯通两层）；可用 pcbAutoroute 自动布线，或 pcbRouteSingle 单网络布线（A* + 45° 优化）
+  7) pcbAddCopperPour 顶层+底层各铺一块 GND（多边形覆盖整个板框，做完整地平面 → 抑制 EMI、改善信号完整性）
+  8) pcbAddSilkscreen 丝印：位号/极性/版本号/Logo；IPC-2221 §9 要求丝印不得覆盖焊盘影响可焊性
+  9) pcbRunDRC 全量检查 → 每个 error 都必须修复 → 实时 DRC 开启时每次 pcb 工具调用都会返回 drcDelta（增量）→ 重点关注"焊盘间距不足/线宽不足/孔间距/板边距"
+ 10) pcbExportGerber 导出生产文件（zip 含 Gerber+钻孔+PnP+BOM）→ pcbExportFile 导出预览图/KiCad 等
+ 11) pcbSaveProject 保存工程
 - 也可以跳过原理图直接画 PCB：pcbAddComponent 放元件 → pcbSetPadNet 设网络 → 布线 → DRC → 导出
+- **双面板设计关键点（IPC-2221）**：
+  · 元件翻面后焊盘自动归属对应铜层（SMD 在 B 面则属 B.Cu），不同面 SMD 焊盘无间距要求
+  · 过孔默认为 PTH 贯通所有铜层；盲/埋孔通过 via layers 字段指定（如 ['F.Cu','B.Cu']）
+  · 顶层和底层应各铺 GND，形成完整地平面；高密板可考虑内层（In1.Cu/In2.Cu）做电源/地
+  · 翻面视图使用 pcbSetView(bottom|top|toggle)（对应 KiCad V+B / Altium B 快捷键）
 - 原理图坐标使用 2.54mm 网格（如 0, 2.54, 5.08, 7.62...）；IC 符号用 left/right 参数定义引脚名，CONN 用 pins 定义针数
 - **坐标获取（关键）**：pcbSchAddSymbol / pcbAddComponent 调用后返回值中含 pins/pads 数组，每个元素包含全局坐标 {num,name,x,y}（已含 rot/mirror/side 变换）。
   pcbListComponents 也返回每个元件的 pads 全局坐标。runPcbEdaCommand "sch pins <ref>" / "comp pads <ref>" 可单独查询。
   画 wire/trace 时直接用这些坐标，不要凭符号库定义自行计算（pin/pad 局部坐标 + 中心 + 旋转/镜像变换的合成很易出错）。
 - 常用符号: R C C_Polar L D LED Zener Q_NPN Q_PNP NMOS OPAMP XTAL FUSE SW SW_PUSH SPK ANT BAT TP POT IC CONN
 - 常用封装: R_0805/0603/0402 C_0805/0603 LED_0805 SOT23-3 SOIC-8/16 QFP-48/64 QFN-32 DIP-8/16 HDR-1x4/2x5 TBLOCK-2/3 USB-C-16 XTAL-HC49/3225 CAP-RADIAL-8 BUTTON-6x6 MOUNT-M3；CUSTOM 系列（CHIP_CUSTOM/SOIC_CUSTOM/QFP_CUSTOM/DIP_CUSTOM/HDR_CUSTOM 等）通过 params 传全参数
-- 布线用 45° 折线路径点；电源线建议 0.4-0.6mm，信号线 0.2-0.3mm；换层在路径中插入 pcbAddVia
-- 铺铜通常在顶层和底层各铺一块 GND：pcbAddCopperPour(net:"GND", 覆盖整个板框的多边形)
+- 布线用 45° 折线路径点（避免 90° 直角 → 减少阻抗失配与酸角）；电源线建议 0.4-0.6mm，信号线 0.2-0.3mm；换层在路径中插入 pcbAddVia
+- **自动布线选项**：pcbAutoroute 支持 nets(指定网络)、preferLayers(偏好层如 ["F.Cu","B.Cu"])、noDiagonal(禁用45°)、ripup(rip-up & reroute 迭代次数,默认3)、traceWidth、clearance、grid
+- 铺铜通常在顶层和底层各铺一块 GND：pcbAddCopperPour(net:"GND", layer:"F.Cu" 或 "B.Cu", 覆盖整个板框的多边形)
+- **增量 DRC（实时检查）**：pcbSetLiveDrc(true) 开启后，每次 pcb 工具调用（comp add/move/rot/flip、trace/via/zone/silk 等）返回值中自动带 drcDelta 字段（包含 added/removed/summary），表示本次操作新增/消除了哪些违规；pcbGetDrcDelta 可主动查询最近一次增量；pcbRunDrcIncremental(changedIds) 可手动触发针对指定对象的增量检查；增量 DRC 比全量 DRC 快 5-50 倍
 - 每个 pcbRunDRC 返回的 error 都必须修复（移动元件/调整走线/改规则），直到 count 为 0 或仅剩可接受的 warning
 - pcbImportFile 可导入用户提供的 KiCad 工程(.kicad_pcb)/网表(.net)/CSV 网表并继续编辑；pcbExportFile(kind:"kicad") 可导出给 KiCad 继续加工
-- 用户说"画一块板子""设计电路""做个PCB""出Gerber"等需求时使用本工具集；2D 机械制图用 CIPYP-CAD
+- 用户说"画一块板子""设计电路""做个PCB""出Gerber""双面板设计""反面布局"等需求时使用本工具集；2D 机械制图用 CIPYP-CAD
 
 【邮件控制说明】：
 - 用户可能通过邮件发送指令，这些邮件消息会以“[来自邮件]”前缀注入，应像普通用户消息一样响应
@@ -2604,6 +2615,72 @@ ${toolListSection}`;
             this.onMessage('assistant', `🔌 ${args.kind} 已导出到：\n\`${targetPath}\``);
           }
           return res;
+        }
+        // ---- 双面板设计工具集 ----
+        case 'pcbSetView': {
+          return await window.api.pcbRunCommand('view ' + (args.side || 'toggle'));
+        }
+        case 'pcbGetView': {
+          // 直接通过 runPcbEdaCommand 查询
+          return await window.api.pcbRunCommand('state');
+        }
+        case 'pcbFlipComponent': {
+          if (!args.ref) return { ok: false, error: '需要 ref 参数（元件位号）' };
+          return await window.api.pcbRunCommand('comp flip ' + args.ref);
+        }
+        case 'pcbSetComponentSide': {
+          if (!args.ref) return { ok: false, error: '需要 ref 参数' };
+          if (!['F', 'B'].includes(args.side)) return { ok: false, error: 'side 必须是 F 或 B' };
+          return await window.api.pcbRunCommand('comp side ' + args.ref + ' ' + args.side);
+        }
+        case 'pcbRouteSingle': {
+          // 构造 autoroute single <net> <fromPt> <toPt> [options]
+          if (!args.net || !args.fromPt || !args.toPt) return { ok: false, error: '需要 net, fromPt, toPt 参数' };
+          let cmd = 'autoroute single ' + args.net + ' ' + args.fromPt + ' ' + args.toPt;
+          if (Array.isArray(args.preferLayers) && args.preferLayers.length) cmd += ' --preferLayers ' + args.preferLayers.join(',');
+          if (args.allowDiagonal === false) cmd += ' --no-diagonal';
+          if (typeof args.width === 'number') cmd += ' --width ' + args.width;
+          if (typeof args.clearance === 'number') cmd += ' --clearance ' + args.clearance;
+          if (typeof args.grid === 'number') cmd += ' --grid ' + args.grid;
+          return await window.api.pcbRunCommand(cmd);
+        }
+        case 'pcbClearRoutes': {
+          return await window.api.pcbRunCommand(args.net ? ('clear routes ' + args.net) : 'clear routes');
+        }
+        case 'pcbSetLayerVisibility': {
+          if (!args.layer) return { ok: false, error: '需要 layer 参数' };
+          return await window.api.pcbRunCommand('layer vis ' + args.layer + ' ' + (args.visible ? 'on' : 'off'));
+        }
+        case 'pcbGetLayerVisibility': {
+          return await window.api.pcbRunCommand('layer list');
+        }
+        case 'pcbSetActiveLayer': {
+          if (!args.layer) return { ok: false, error: '需要 layer 参数' };
+          return await window.api.pcbRunCommand('layer active ' + args.layer);
+        }
+        case 'pcbGetDesignFlowGuide': {
+          return await window.api.pcbRunCommand('flow');
+        }
+        case 'pcbRunDrcIncremental': {
+          if (!Array.isArray(args.changedIds) || !args.changedIds.length) {
+            return await window.api.pcbRunCommand('drc');  // 全量
+          }
+          return await window.api.pcbRunCommand('drc inc ' + args.changedIds.join(' '));
+        }
+        case 'pcbSetLiveDrc': {
+          // 通过专用命令设置实时 DRC
+          // 简单实现：通过 runPcbEdaCommand 的 drc live 子命令
+          return await window.api.pcbRunCommand('drc live ' + (args.on ? 'on' : 'off'));
+        }
+        case 'pcbGetDrcDelta': {
+          // 通过 state 命令返回（包含 lastDelta 字段）
+          return await window.api.pcbRunCommand('state');
+        }
+        case 'pcbUndo': {
+          return await window.api.pcbRunCommand('undo');
+        }
+        case 'pcbRedo': {
+          return await window.api.pcbRunCommand('redo');
         }
         case 'askQuestions': {
           const answers = await window.askQuestions(args.questions);

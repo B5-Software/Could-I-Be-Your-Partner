@@ -261,13 +261,33 @@
       return true;
     },
 
+    // 翻转元件到另一面（F↔B），自动镜像 X 坐标（保持板上的视觉位置）
+    flipComponentSide(board, ref) {
+      const c = this.findComponent(board, ref);
+      if (!c) return false;
+      c.side = c.side === 'B' ? 'F' : 'B';
+      // 翻面后保持元件在板上的视觉位置不变：X 坐标取镜像（板中心为 X=0）
+      // 但板原点不一定是中心，因此保持 (x,y) 不变；pad 镜像由 allPads 推导
+      return c.side;
+    },
+
+    // 设置元件面（F 或 B）
+    setComponentSide(board, ref, side) {
+      const c = this.findComponent(board, ref);
+      if (!c) return false;
+      const s = String(side || 'F').toUpperCase().startsWith('B') ? 'B' : 'F';
+      c.side = s;
+      return s;
+    },
+
     addTrace(board, t) {
       const tr = Object.assign({ id: nextId('trk'), net: '', layer: 'F.Cu', width: 0.25, pts: [] }, t);
       board.traces.push(tr);
       return tr;
     },
     addVia(board, v) {
-      const via = Object.assign({ id: nextId('via'), net: '', x: 0, y: 0, drill: 0.3, diameter: 0.6 }, v);
+      // via.layers 可选：未指定=null 表示 PTH 贯通所有铜层；['F.Cu','B.Cu'] 表示盲/埋孔
+      const via = Object.assign({ id: nextId('via'), net: '', x: 0, y: 0, drill: 0.3, diameter: 0.6, layers: null }, v);
       board.vias.push(via);
       return via;
     },

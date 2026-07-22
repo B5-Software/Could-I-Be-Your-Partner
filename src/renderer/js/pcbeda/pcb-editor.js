@@ -82,6 +82,39 @@
       this._silkStart = null; this._boxSel = null;
     },
 
+    // 切换 PCB 视图方向（顶层↔底层），类 KiCad V+B 快捷键
+    // side: 'top'|'bottom'|'toggle'（默认 toggle）
+    setView(side) {
+      const r = global.PCBRender;
+      const newSide = r.setView(side || 'toggle');
+      this.status(newSide === 'bottom' ? '视图: 底层（从底向上看，X 已镜像）' : '视图: 顶层（默认）');
+      this.refresh();
+      this.panel();
+      return newSide;
+    },
+
+    // 翻转选中元件到另一面（仅 PCB 模式生效）
+    // 翻面后自动同步：side='B' 时元件焊盘将出现在 B.Cu 层
+    flipSelectionToOtherSide() {
+      if (this.mode !== 'pcb' || !this.selection.size) return false;
+      Doc.snapshot();
+      let flipped = 0;
+      for (const id of this.selection) {
+        const comp = this.board().components.find(c => c.id === id);
+        if (comp) {
+          Model.Board.flipComponentSide(this.board(), comp.ref);
+          flipped++;
+        }
+      }
+      if (flipped > 0) {
+        this.modified();
+        this.status('已翻转 ' + flipped + ' 个元件到另一面');
+        this.refresh();
+        this.panel();
+      }
+      return flipped > 0;
+    },
+
     ghost() {
       if (this.routeState && this.routeState.pts.length) {
         const pts = this.routeState.pts.slice();
@@ -305,14 +338,16 @@
     _placeComponentAt(sp) {
       const board = this.board();
       const ref = this._nextRef('U');
+      // 从底层视图放置时自动放到 B 面（符合 KiCad/Altium 行为）
+      const side = (global.PCBRender.viewFromBottom ? 'B' : 'F');
       Doc.snapshot();
       const comp = Model.Board.addComponent(board, {
         ref, footprint: this.activeFootprint, params: {},
-        x: sp.x, y: sp.y, rot: (this.placing && this.placing.rot) || 0, side: 'F'
+        x: sp.x, y: sp.y, rot: (this.placing && this.placing.rot) || 0, side
       });
       this.modified();
       this.selection = new Set([comp.id]);
-      this.status('已放置 ' + ref + ' (' + this.activeFootprint + ')');
+      this.status('已放置 ' + ref + ' (' + this.activeFootprint + ') @ ' + side + ' 面');
       this.refresh();
       this.panel();
     },
@@ -725,14 +760,19 @@
     },
 
     mirrorSelection() {
-      if (!this.selection.size || this.mode !== 'sch') return;
-      Doc.snapshot();
-      for (const id of this.selection) {
-        const sym = this.sheet().symbols.find(x => x.id === id);
-        if (sym) sym.mirror = !sym.mirror;
+      if (!this.selection.size) return;
+      // sch 模式：翻转 symbol.mirror；pcb 模式：翻转 component.side (F↔B)
+      if (this.mode === 'sch') {
+        Doc.snapshot();
+        for (const id of this.selection) {
+          const sym = this.sheet().symbols.find(x => x.id === id);
+          if (sym) sym.mirror = !sym.mirror;
+        }
+        this.modified();
+        this.refresh();
+      } else if (this.mode === 'pcb') {
+        this.flipSelectionToOtherSide();
       }
-      this.modified();
-      this.refresh();
     },
 
     handleKeyDown(e) {
@@ -765,6 +805,14 @@
       if (key === 'r' || key === 'R') { this.rotateSelection(90); return true; }
       if ((key === 'm' || key === 'M') && this.mode === 'sch') { this.mirrorSelection(); return true; }
       if ((key === 'v' || key === 'V') && this.mode === 'pcb') { this.routeLayerSwitch(); return true; }
+      // B 键：PCB 模式下切换顶/底视图（类 KiCad/Altium V+B）
+      if ((key === 'b' || key === 'B') && this.mode === 'pcb' && !e.ctrlKey && !e.shiftKey) {
+        this.setView('toggle'); return true;
+      }
+      // Shift+F：PCB 模式下翻转选中元件到另一面
+      if ((key === 'f' || key === 'F') && this.mode === 'pcb' && e.shiftKey) {
+        this.flipSelectionToOtherSide(); return true;
+      }
       if (key === 'f' || key === 'F') { this.fitView(); return true; }
       if ((key === 'z' || key === 'Z') && e.ctrlKey) { Doc.undo(); this.refresh(); this.panel(); return true; }
       if ((key === 'y' || key === 'Y') && e.ctrlKey) { Doc.redo(); this.refresh(); this.panel(); return true; }
