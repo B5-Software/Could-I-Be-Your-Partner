@@ -587,6 +587,189 @@ test('PCB-EDA: sub-app page + css exist with CSP', () => {
   assert.ok(fs.existsSync(path_.join(__dirname, '../src/renderer/js/pcbeda.js')), 'missing pcbeda.js bootstrap');
 });
 
+// ---- Test stripThinkingTags (reasoning filter) ----
+console.log('\nstripThinkingTags (reasoning filter):');
+
+// Load the function by evaluating the relevant part of i18n.js
+// We can't require() the browser file directly, so extract stripThinkingTags
+const i18nSrc = fs.readFileSync(path_.join(__dirname, '../src/renderer/js/i18n.js'), 'utf-8');
+const stripMatch = i18nSrc.match(/function stripThinkingTags\(text\)\s*\{[\s\S]*?^}/m);
+assert.ok(stripMatch, 'stripThinkingTags function not found in i18n.js');
+const stripThinkingTags = new Function(stripMatch[0] + '\nreturn stripThinkingTags;')();
+
+test('strips paired <reasoning> tags', () => {
+  const input = '<reasoning>Let me think about this carefully.\nThe answer is yes.</reasoning>是';
+  const result = stripThinkingTags(input);
+  assert.strictEqual(result, '是', `expected "是", got "${result}"`);
+});
+
+test('strips paired <think> tags', () => {
+  const input = '<think>internal monologue</think>否';
+  const result = stripThinkingTags(input);
+  assert.strictEqual(result, '否');
+});
+
+test('strips paired <reasoning_content> tags', () => {
+  const input = '<reasoning_content>deep thoughts here</reasoning_content>这个字是"花"';
+  const result = stripThinkingTags(input);
+  assert.strictEqual(result, '这个字是"花"');
+});
+
+test('strips paired <thought> tags', () => {
+  const input = '<thought>hmm</thought>answer here';
+  const result = stripThinkingTags(input);
+  assert.strictEqual(result, 'answer here');
+});
+
+test('strips paired <reflection> tags', () => {
+  const input = '<reflection>self-check</reflection>final answer';
+  const result = stripThinkingTags(input);
+  assert.strictEqual(result, 'final answer');
+});
+
+test('strips unclosed <reasoning> tag to end of string', () => {
+  const input = '是\n<reasoning>oops I forgot to close this tag';
+  const result = stripThinkingTags(input);
+  assert.strictEqual(result, '是\n');
+});
+
+test('strips unclosed <think> tag to end of string', () => {
+  const input = 'answer<think>still thinking...';
+  const result = stripThinkingTags(input);
+  assert.strictEqual(result, 'answer');
+});
+
+test('preserves content when no thinking tags present', () => {
+  const input = '这是一个正常的回答，没有任何思考标签。';
+  const result = stripThinkingTags(input);
+  assert.strictEqual(result, input);
+});
+
+test('handles multiple paired tags', () => {
+  const input = '<reasoning>first thought</reasoning>middle text<thought>second thought</thought>end';
+  const result = stripThinkingTags(input);
+  assert.strictEqual(result, 'middle textend');
+});
+
+test('handles case-insensitive tags', () => {
+  const input = '<REASONING>uppercase thinking</REASONING>answer';
+  const result = stripThinkingTags(input);
+  assert.strictEqual(result, 'answer');
+});
+
+test('handles tags with attributes', () => {
+  const input = '<reasoning type="deep">thinking with attrs</reasoning>result';
+  const result = stripThinkingTags(input);
+  assert.strictEqual(result, 'result');
+});
+
+test('handles multiline thinking content', () => {
+  const input = '<reasoning>\nLine 1\nLine 2\nLine 3\n</reasoning>\nactual answer';
+  const result = stripThinkingTags(input);
+  assert.strictEqual(result.trim(), 'actual answer');
+});
+
+test('returns input as-is for null/undefined', () => {
+  assert.strictEqual(stripThinkingTags(null), null);
+  assert.strictEqual(stripThinkingTags(undefined), undefined);
+  assert.strictEqual(stripThinkingTags(123), 123);
+});
+
+test('returns empty string for empty string', () => {
+  assert.strictEqual(stripThinkingTags(''), '');
+});
+
+test('does NOT destroy content after tag (bug regression)', () => {
+  // The OLD broken regex used [\s\S]*$ which ate everything after an opening tag
+  // The NEW regex only eats to end of string for UNCLOSED tags
+  const input = '<reasoning>thinking</reasoning>\nThe real answer is here.';
+  const result = stripThinkingTags(input);
+  assert.ok(result.includes('The real answer is here.'), 'content after closed tag was destroyed');
+});
+
+// ---- Test parseLLMResponse does NOT merge reasoning into content ----
+console.log('\nparseLLMResponse (reasoning not leaked into content):');
+
+// Load parseLLMResponse from llm-providers.js
+const llmProvidersSrc = fs.readFileSync(path_.join(__dirname, '../src/main/llm-providers.js'), 'utf-8');
+const parseMatch = llmProvidersSrc.match(/function parseLLMResponse\(data, transport\)\s*\{[\s\S]*?^}/m);
+assert.ok(parseMatch, 'parseLLMResponse function not found');
+// Also need parseAnthropicResponse (it's called inside)
+const anthropicMatch = llmProvidersSrc.match(/function parseAnthropicResponse\(data\)\s*\{[\s\S]*?^}/m);
+const parseLLMResponse = new Function(
+  'parseAnthropicResponse',
+  parseMatch[0] + '\nreturn parseLLMResponse;'
+)(
+  anthropicMatch ? new Function(anthropicMatch[0] + '\nreturn parseAnthropicResponse;')() : () => {}
+);
+
+test('does NOT copy reasoning_content into content when content is empty', () => {
+  const data = {
+    choices: [{
+      message: {
+        content: null,
+        reasoning_content: 'This is my internal thinking process that should NOT appear as the answer.'
+      }
+    }]
+  };
+  const result = parseLLMResponse(data, 'openai');
+  assert.strictEqual(result.choices[0].message.content, null, 'content should remain null, not be filled with reasoning');
+  assert.strictEqual(result.choices[0].message.reasoning, 'This is my internal thinking process that should NOT appear as the answer.', 'reasoning should be populated for UI');
+});
+
+test('preserves content when both content and reasoning_content exist', () => {
+  const data = {
+    choices: [{
+      message: {
+        content: 'The final answer is 42.',
+        reasoning_content: 'Let me think step by step...'
+      }
+    }]
+  };
+  const result = parseLLMResponse(data, 'openai');
+  assert.strictEqual(result.choices[0].message.content, 'The final answer is 42.');
+  assert.strictEqual(result.choices[0].message.reasoning, 'Let me think step by step...');
+});
+
+test('preserves empty content string when reasoning_content exists', () => {
+  const data = {
+    choices: [{
+      message: {
+        content: '',
+        reasoning_content: 'Internal reasoning'
+      }
+    }]
+  };
+  const result = parseLLMResponse(data, 'openai');
+  assert.strictEqual(result.choices[0].message.content, '', 'content should remain empty');
+  assert.strictEqual(result.choices[0].message.reasoning, 'Internal reasoning');
+});
+
+test('handles missing reasoning_content gracefully', () => {
+  const data = {
+    choices: [{
+      message: { content: 'Just an answer.' }
+    }]
+  };
+  const result = parseLLMResponse(data, 'openai');
+  assert.strictEqual(result.choices[0].message.content, 'Just an answer.');
+  assert.strictEqual(result.choices[0].message.reasoning, undefined);
+});
+
+test('handles reasoning field (not reasoning_content)', () => {
+  const data = {
+    choices: [{
+      message: {
+        content: 'Final answer.',
+        reasoning: 'My reasoning process.'
+      }
+    }]
+  };
+  const result = parseLLMResponse(data, 'openai');
+  assert.strictEqual(result.choices[0].message.content, 'Final answer.');
+  assert.strictEqual(result.choices[0].message.reasoning, 'My reasoning process.');
+});
+
 // ---- Summary ----
 console.log(`\n${'='.repeat(40)}`);
 console.log(`Results: ${passed} passed, ${failed} failed, ${passed + failed} total`);

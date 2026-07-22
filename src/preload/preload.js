@@ -54,7 +54,7 @@ contextBridge.exposeInMainWorld('api', {
   knowledgeImportFile: (p, workspacePath) => ipcRenderer.invoke('knowledge:importFile', p, workspacePath),
 
   // File System
-  readFile: (p) => ipcRenderer.invoke('fs:readFile', p),
+  readFile: (p, encoding) => ipcRenderer.invoke('fs:readFile', p, encoding),
   writeFile: (p, c) => ipcRenderer.invoke('fs:writeFile', p, c),
   createFile: (p, c) => ipcRenderer.invoke('fs:createFile', p, c),
   deleteFile: (p) => ipcRenderer.invoke('fs:deleteFile', p),

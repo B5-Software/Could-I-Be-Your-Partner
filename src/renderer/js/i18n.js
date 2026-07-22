@@ -549,3 +549,20 @@ window.i18nApplyTextMap = i18nApplyTextMap;
 window.i18nStartObserver = i18nStartObserver;
 window.i18nStopObserver = i18nStopObserver;
 window.I18N_SUPPORTED_LANGUAGES = I18N_SUPPORTED_LANGUAGES;
+
+/**
+ * 从 LLM 响应文本中剥离思考标签（<think>, <reasoning>, <reasoning_content>,
+ * <thought>, <reflection> 等）的成对和未闭合形式。
+ * 修复原游戏文件中 \1 反向引用 + 非捕获组 (?:...) 导致的正则失效 bug。
+ * @param {string} text  LLM 返回的原始内容
+ * @returns {string}     剥离思考标签后的内容
+ */
+function stripThinkingTags(text) {
+  if (!text || typeof text !== 'string') return text;
+  // 1. 成对标签: <tag>...</tag> (使用捕获组 + \1 反向引用)
+  text = text.replace(/<((?:think|reasoning|reasoning_content|thought|reflection))\b[\s\S]*?<\/\1>/gi, '');
+  // 2. 未闭合标签: <tag>... 到字符串末尾
+  text = text.replace(/<(?:think|reasoning|reasoning_content|thought|reflection)\b[\s\S]*$/gi, '');
+  return text;
+}
+window.stripThinkingTags = stripThinkingTags;

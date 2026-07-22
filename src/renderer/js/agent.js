@@ -118,8 +118,8 @@ class Agent {
   }
 
   // 字符串替换编辑（Claude Code 风格 Edit 工具）
-  async _applyStringReplace(filePath, oldString, newString, replaceAll) {
-    const readRes = await window.api.readFile(filePath);
+  async _applyStringReplace(filePath, oldString, newString, replaceAll, encoding) {
+    const readRes = await window.api.readFile(filePath, encoding || '');
     if (!readRes.ok) return readRes;
     const content = readRes.content;
     // 统计匹配次数
@@ -2058,7 +2058,7 @@ ${toolListSection}`;
             const contentWithLines = this._addLineNumbers(imported.content || '');
             return { ok: true, content: contentWithLines, images: imported.images, convertedPath };
           }
-          const result = await window.api.readFile(pathStr);
+          const result = await window.api.readFile(pathStr, args.encoding || '');
           if (result.ok && result.content) {
             result.content = this._addLineNumbers(result.content);
           }
@@ -2073,7 +2073,7 @@ ${toolListSection}`;
           }
           // 字符串替换模式
           if (args.old_string !== undefined && args.new_string !== undefined) {
-            return await this._applyStringReplace(args.path, args.old_string, args.new_string, args.replace_all || false);
+            return await this._applyStringReplace(args.path, args.old_string, args.new_string, args.replace_all || false, args.encoding);
           }
           return { ok: false, error: typeof i18nToolReturn === 'function' ? i18nToolReturn('need_content_or_replace', '需要提供 content（全量覆写）或 old_string+new_string（字符串替换）') : '需要提供 content（全量覆写）或 old_string+new_string（字符串替换）' };
         }
@@ -2082,7 +2082,7 @@ ${toolListSection}`;
             return { ok: false, error: 'edits 必须是非空数组' };
           }
           // 读取当前文件内容
-          const readRes = await window.api.readFile(args.path);
+          const readRes = await window.api.readFile(args.path, args.encoding || '');
           if (!readRes.ok) return readRes;
           let content = readRes.content;
           const appliedEdits = [];

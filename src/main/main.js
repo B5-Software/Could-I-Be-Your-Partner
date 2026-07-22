@@ -1872,8 +1872,16 @@ ipcMain.handle('knowledge:update', (_, { id, data }) => {
 });
 
 // ---- IPC: File Operations ----
-ipcMain.handle('fs:readFile', (_, filePath) => {
-  try { return { ok: true, content: fs.readFileSync(filePath, 'utf-8') }; } catch (e) { return { ok: false, error: e.message }; }
+ipcMain.handle('fs:readFile', (_, filePath, encoding) => {
+  try {
+    if (encoding) {
+      const iconv = require('iconv-lite');
+      const buf = fs.readFileSync(filePath);
+      if (iconv.encodingExists(encoding)) return { ok: true, content: iconv.decode(buf, encoding) };
+      return { ok: true, content: buf.toString('utf-8') };
+    }
+    return { ok: true, content: readTextWithEncoding(filePath) };
+  } catch (e) { return { ok: false, error: e.message }; }
 });
 ipcMain.handle('fs:writeFile', (_, filePath, content) => {
   try { fs.writeFileSync(filePath, content, 'utf-8'); return { ok: true }; } catch (e) { return { ok: false, error: e.message }; }

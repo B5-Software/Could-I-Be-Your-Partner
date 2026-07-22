@@ -42,8 +42,7 @@
       if (result.ok && result.data?.choices?.[0]?.message?.content) {
         let content = result.data.choices[0].message.content.trim();
         // 清理思考标签： simd/<reasoning>/<reasoning_content>/<thought> 等成对与未闭合形式
-        content = content.replace(/\u003C(?:think|reasoning|reasoning_content|thought|reflection)\b[\s\S]*?\u003C\/\1\u003E/gi, '');
-        content = content.replace(/\u003C(?:think|reasoning|reasoning_content|thought|reflection)\b[\s\S]*$/gi, '');
+        content = stripThinkingTags(content);
         // 清理 markdown 代码块包裹
         content = content.replace(/^```[\w]*\n?/gm, '').replace(/```$/gm, '').trim();
         return content || null;

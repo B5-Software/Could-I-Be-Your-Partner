@@ -245,18 +245,17 @@ function parseLLMResponse(data, transport) {
   if (transport === 'anthropic') {
     return parseAnthropicResponse(data);
   }
-  // OpenAI-compatible: normalize reasoning_content into content as fallback.
-  // Some models (DeepSeek R1, Qwen3 thinking) return answer in reasoning_content
-  // while content is null/empty — merge so downstream consumers see the text.
+  // OpenAI-compatible: expose reasoning_content/reasoning for UI display,
+  // but DO NOT merge into content — that would leak raw thinking text into
+  // downstream consumers (games, agents) that expect only the final answer.
+  // Models like DeepSeek R1 return thinking in reasoning_content and the
+  // final answer in content. When content is empty, the model produced no
+  // final answer — leave content empty so callers can handle the absence.
   if (data?.choices && Array.isArray(data.choices)) {
     for (const choice of data.choices) {
       const msg = choice?.message;
       if (!msg) continue;
-      const hasContent = msg.content && String(msg.content).trim();
       const reasoningContent = msg.reasoning_content || msg.reasoning;
-      if (!hasContent && reasoningContent) {
-        msg.content = reasoningContent;
-      }
       // Expose reasoning for UI (streaming path already does this)
       if (reasoningContent && !msg.reasoning) {
         msg.reasoning = reasoningContent;
