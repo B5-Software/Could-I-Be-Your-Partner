@@ -3818,7 +3818,7 @@
     sanguosha: { name: '三国杀', icon: 'fa-khanda', desc: '经典卡牌对战游戏，选择武将、出牌博弈', defaultAgents: 3 },
     undercover: { name: '谁是卧底', icon: 'fa-user-secret', desc: '经典社交推理游戏，通过描述找出卧底', defaultAgents: 4 },
     idiom: { name: '成语接龙', icon: 'fa-link', desc: '四字成语首尾相接，LLM 生成 + LLM 裁判验证', defaultAgents: 3 },
-    guessCharacter: { name: '是否猜人物', icon: 'fa-user-question', desc: '通过提问只能用是/否回答，猜出 AI 心中的人物', defaultAgents: 1 },
+    guessCharacter: { name: '是否猜人物', icon: 'fa-magnifying-glass', desc: '通过提问只能用是/否回答，猜出 AI 心中的人物', defaultAgents: 1 },
   };
 
   window.showGameInvitation = function(game, message, suggestedAgents) {

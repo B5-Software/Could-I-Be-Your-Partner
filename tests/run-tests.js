@@ -770,7 +770,257 @@ test('handles reasoning field (not reasoning_content)', () => {
   assert.strictEqual(result.choices[0].message.reasoning, 'My reasoning process.');
 });
 
+// ---- Real LLM Integration Test (reads actual AI config from settings.json) ----
+console.log('\nReal LLM Integration (live API call):');
+
+const os = require('os');
+const LLMProviders = require('../src/main/llm-providers.js');
+
+// 定位 settings.json
+const settingsDir = process.env.APPDATA
+  ? require('path').join(process.env.APPDATA, 'could-i-be-your-partner', 'data')
+  : require('path').join(os.homedir(), '.config', 'could-i-be-your-partner', 'data');
+const settingsFile = require('path').join(settingsDir, 'settings.json');
+
+let liveLLMConfig = null;
+try {
+  const rawSettings = JSON.parse(fs.readFileSync(settingsFile, 'utf-8'));
+  liveLLMConfig = rawSettings.llm || null;
+} catch { /* settings not found */ }
+
+// 异步测试辅助：返回 Promise，resolve(true) 表示通过
+async function runLiveLLMTests() {
+  if (!liveLLMConfig) {
+    console.log('  SKIP: 未找到 AI 配置 (settings.json)，跳过真实 LLM 测试');
+    return;
+  }
+  if (liveLLMConfig.provider === 'opencode-zen' && !liveLLMConfig.zenApiKey) {
+    console.log('  SKIP: OpenCode Zen 未配置 API Key，跳过真实 LLM 测试');
+    return;
+  }
+  if (liveLLMConfig.provider !== 'opencode-zen' && (!liveLLMConfig.apiUrl || !liveLLMConfig.apiKey)) {
+    console.log('  SKIP: LLM 未配置 apiUrl/apiKey，跳过真实 LLM 测试');
+    return;
+  }
+
+  console.log(`  使用模型: ${liveLLMConfig.model} (provider: ${liveLLMConfig.provider})`);
+
+  // 构建一个简单 prompt，要求模型只回复一个字
+  const testMessages = [
+    { role: 'system', content: '你只能回复一个汉字"是"，不要加任何其他内容、解释或思考。' },
+    { role: 'user', content: '请回复。' }
+  ];
+
+  // 测试1: reasoningEffort='off' 时 content 不为空且不含思考标签
+  async function testReasoningOff() {
+    const llm = { ...liveLLMConfig };
+    const req = LLMProviders.buildLLMRequest(llm, {
+      messages: testMessages,
+      temperature: 0.0,
+      max_tokens: 200,
+      reasoningEffort: 'off',
+      stream: false
+    });
+
+    const resp = await fetch(req.url, {
+      method: 'POST',
+      headers: req.headers,
+      body: JSON.stringify(req.body)
+    });
+
+    if (!resp.ok) {
+      throw new Error(`HTTP ${resp.status}: ${await resp.text()}`);
+    }
+
+    const rawData = await resp.json();
+    if (rawData.error) {
+      throw new Error(`API error: ${rawData.error.message || JSON.stringify(rawData.error)}`);
+    }
+
+    const data = LLMProviders.parseLLMResponse(rawData, req.transport);
+    const msg = data?.choices?.[0]?.message;
+    if (!msg) throw new Error('响应缺少 message 字段');
+
+    const content = (msg.content || '').trim();
+    const reasoning = (msg.reasoning || msg.reasoning_content || '').trim();
+
+    // content 不应为空
+    if (!content) {
+      throw new Error(`content 为空 (reasoning 长度=${reasoning.length})。reasoningEffort='off' 未生效或模型未输出最终答案`);
+    }
+
+    // content 不应包含思考标签
+    const thinkingPatterns = [/<reasoning[\s>]/i, /<reasoning_content[\s>]/i, /<thought[\s>]/i, /<reflection[\s>]/i, /<think[\s>]/i];
+    for (const p of thinkingPatterns) {
+      if (p.test(content)) {
+        throw new Error(`content 包含思考标签: ${p.source}。content 前100字: ${content.substring(0, 100)}`);
+      }
+    }
+
+    // content 不应该是长篇大论（期望只回复"是"）
+    if (content.length > 200) {
+      throw new Error(`content 过长 (${content.length} 字)，可能包含思考过程。前100字: ${content.substring(0, 100)}`);
+    }
+
+    console.log(`  PASS: reasoningEffort='off' → content="${content.substring(0, 50)}" (len=${content.length}), reasoning=${reasoning ? `有(${reasoning.length}字)` : '无'}`);
+    passed++;
+  }
+
+  // 测试2: 默认 reasoningEffort（用户全局设置）时 content 也不含思考标签
+  async function testDefaultReasoning() {
+    const llm = { ...liveLLMConfig };
+    const req = LLMProviders.buildLLMRequest(llm, {
+      messages: testMessages,
+      temperature: 0.0,
+      max_tokens: 200,
+      stream: false
+      // 不传 reasoningEffort，使用用户全局设置
+    });
+
+    const resp = await fetch(req.url, {
+      method: 'POST',
+      headers: req.headers,
+      body: JSON.stringify(req.body)
+    });
+
+    if (!resp.ok) {
+      throw new Error(`HTTP ${resp.status}: ${await resp.text()}`);
+    }
+
+    const rawData = await resp.json();
+    if (rawData.error) {
+      throw new Error(`API error: ${rawData.error.message || JSON.stringify(rawData.error)}`);
+    }
+
+    const data = LLMProviders.parseLLMResponse(rawData, req.transport);
+    const msg = data?.choices?.[0]?.message;
+    if (!msg) throw new Error('响应缺少 message 字段');
+
+    const content = (msg.content || '').trim();
+    const reasoning = (msg.reasoning || msg.reasoning_content || '').trim();
+
+    // content 不应包含思考标签（即使模型思考了，parseLLMResponse 也不应把 reasoning 合并到 content）
+    const thinkingPatterns = [/<reasoning[\s>]/i, /<reasoning_content[\s>]/i, /<thought[\s>]/i, /<reflection[\s>]/i, /<think[\s>]/i];
+    for (const p of thinkingPatterns) {
+      if (p.test(content)) {
+        throw new Error(`content 包含思考标签: ${p.source}。content 前100字: ${content.substring(0, 100)}`);
+      }
+    }
+
+    // 如果有 reasoning，验证它没有泄漏到 content
+    if (reasoning && content === reasoning) {
+      throw new Error('content 与 reasoning 完全相同 — reasoning 泄漏到了 content');
+    }
+
+    console.log(`  PASS: 默认 reasoningEffort → content="${content.substring(0, 50)}" (len=${content.length}), reasoning=${reasoning ? `有(${reasoning.length}字)` : '无'}`);
+    passed++;
+  }
+
+  // 测试3: 模拟游戏场景 — 让模型选定一个人物
+  async function testGameScenario() {
+    const llm = { ...liveLLMConfig };
+    const sys = `你在玩"是否猜人物"游戏，需要选定一个人物让玩家来猜。
+要求：
+1. 选择一个广为人知的历史人物
+2. 第一行输出人物姓名
+3. 第二行起用一句话简短介绍
+格式：
+姓名
+简介`;
+    const req = LLMProviders.buildLLMRequest(llm, {
+      messages: [
+        { role: 'system', content: sys },
+        { role: 'user', content: '请选定一个历史人物。' }
+      ],
+      temperature: 0.9,
+      max_tokens: 500,
+      reasoningEffort: 'off',
+      stream: false
+    });
+
+    const resp = await fetch(req.url, {
+      method: 'POST',
+      headers: req.headers,
+      body: JSON.stringify(req.body)
+    });
+
+    if (!resp.ok) {
+      throw new Error(`HTTP ${resp.status}: ${await resp.text()}`);
+    }
+
+    const rawData = await resp.json();
+    if (rawData.error) {
+      throw new Error(`API error: ${rawData.error.message || JSON.stringify(rawData.error)}`);
+    }
+
+    const data = LLMProviders.parseLLMResponse(rawData, req.transport);
+    const msg = data?.choices?.[0]?.message;
+    if (!msg) throw new Error('响应缺少 message 字段');
+
+    let content = (msg.content || '').trim();
+    if (!content) {
+      throw new Error('游戏场景 content 为空 — AI 无法选定人物');
+    }
+
+    // 应用 stripThinkingTags（与游戏代码一致）
+    content = stripThinkingTags(content);
+    content = content.replace(/^```[\w]*\n?/gm, '').replace(/```$/gm, '').trim();
+
+    if (!content) {
+      throw new Error('stripThinkingTags 后 content 为空');
+    }
+
+    const lines = content.split('\n').map(l => l.trim()).filter(Boolean);
+    if (lines.length === 0) {
+      throw new Error('解析后无有效行');
+    }
+
+    // 第一行应该是人物姓名（不是思考过程）
+    const name = lines[0];
+    if (name.length > 50) {
+      throw new Error(`姓名过长 (${name.length})，可能包含思考过程: ${name.substring(0, 80)}`);
+    }
+
+    // 不应包含思考标签
+    const thinkingPatterns = [/<reasoning[\s>]/i, /<reasoning_content[\s>]/i, /<thought[\s>]/i, /<reflection[\s>]/i, /<think[\s>]/i];
+    for (const p of thinkingPatterns) {
+      if (p.test(name)) {
+        throw new Error(`姓名包含思考标签: ${p.source}`);
+      }
+    }
+
+    console.log(`  PASS: 游戏场景 → 人物="${name}", 简介="${(lines[1] || '').substring(0, 50)}"`);
+    passed++;
+  }
+
+  try {
+    await testReasoningOff();
+  } catch (e) {
+    console.log(`  FAIL: reasoningEffort='off' 测试 - ${e.message}`);
+    failed++;
+  }
+
+  try {
+    await testDefaultReasoning();
+  } catch (e) {
+    console.log(`  FAIL: 默认 reasoningEffort 测试 - ${e.message}`);
+    failed++;
+  }
+
+  try {
+    await testGameScenario();
+  } catch (e) {
+    console.log(`  FAIL: 游戏场景测试 - ${e.message}`);
+    failed++;
+  }
+}
+
 // ---- Summary ----
-console.log(`\n${'='.repeat(40)}`);
-console.log(`Results: ${passed} passed, ${failed} failed, ${passed + failed} total`);
-process.exit(failed > 0 ? 1 : 0);
+(async () => {
+  // 等待异步 LLM 测试完成
+  await runLiveLLMTests();
+
+  console.log(`\n${'='.repeat(40)}`);
+  console.log(`Results: ${passed} passed, ${failed} failed, ${passed + failed} total`);
+  process.exit(failed > 0 ? 1 : 0);
+})();

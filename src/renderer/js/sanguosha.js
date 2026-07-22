@@ -440,7 +440,7 @@
       }
 
       try {
-        const result = await window.sanguoshaAPI.chatLLM(messages, { temperature: 0.7, max_tokens: 300 });
+        const result = await window.sanguoshaAPI.chatLLM(messages, { temperature: 0.7, max_tokens: 300, reasoningEffort: 'off' });
         if (!result.ok) {
           console.error('[Sanguosha] LLM error:', result.error);
           return null;

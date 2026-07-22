@@ -43,7 +43,9 @@ function zenModelProviderType(modelId) {
 function buildLLMRequest(llm, opts) {
   const provider = llm.provider || 'openai-compat';
   const model = llm.model;
-  const reasoningEffort = llm.reasoningEffort || 'off';
+  // 允许调用方（如游戏）通过 opts.reasoningEffort 覆盖全局设置，
+  // 避免思考模型把所有 token 都花在 reasoning 上导致 content 为空。
+  const reasoningEffort = opts.reasoningEffort || llm.reasoningEffort || 'off';
 
   if (provider === 'opencode-zen') {
     return buildZenRequest(llm, opts, reasoningEffort);

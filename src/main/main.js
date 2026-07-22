@@ -3779,6 +3779,7 @@ ipcMain.handle('llm:chat', async (event, messages, options = {}) => {
       temperature: options.temperature ?? llm.temperature,
       max_tokens: options.max_tokens ?? llm.maxResponseTokens ?? 8192,
       response_format: options.response_format || null,
+      reasoningEffort: options.reasoningEffort || null,
       stream: false
     });
 

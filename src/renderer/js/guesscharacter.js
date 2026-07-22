@@ -51,7 +51,7 @@
       const result = await window.gameAPI.chatLLM([
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userMsg }
-      ], { temperature, max_tokens: maxTokens });
+      ], { temperature, max_tokens: maxTokens, reasoningEffort: 'off' });
       if (result.ok && result.data?.choices?.[0]?.message?.content) {
         let content = result.data.choices[0].message.content.trim();
         // 清理思考标签：simd/<reasoning>/<reasoning_content>/<thought> 等成对与未闭合形式
@@ -89,7 +89,7 @@
 姓名
 简介`;
     const userMsg = `请选定一个${categoryName}类别的人物。`;
-    const resp = await askLLM(sys, userMsg, 0.9, 200);
+    const resp = await askLLM(sys, userMsg, 0.9, 500);
     if (!resp) return null;
     const lines = resp.split('\n').map(l => l.trim()).filter(Boolean);
     if (lines.length === 0) return null;

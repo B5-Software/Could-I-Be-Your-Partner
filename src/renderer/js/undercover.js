@@ -43,7 +43,7 @@
       const result = await window.gameAPI.chatLLM([
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userMsg }
-      ], { temperature: 0.8, max_tokens: 200 });
+      ], { temperature: 0.8, max_tokens: 200, reasoningEffort: 'off' });
       if (result.ok && result.data?.choices?.[0]?.message) {
         const msg = result.data.choices[0].message;
         let content = (msg.content || '').trim();
