@@ -6,7 +6,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;">
-  <title>CIBYP-PCB-EDA</title>
+  <title data-i18n="eda.title">CIBYP-PCB-EDA</title>
   <link rel="stylesheet" href="../css/theme.css">
   <link rel="stylesheet" href="../css/pcbeda.css">
   <link rel="stylesheet" href="../../../assets/fonts/fontawesome.min.css">
@@ -16,35 +16,35 @@
   <div class="pcb-titlebar" id="pcb-titlebar">
     <div class="pcb-titlebar-left">
       <i class="fa-solid fa-microchip"></i>
-      <span class="pcb-app-title">CIBYP-PCB-EDA</span>
-      <span id="doc-name" class="pcb-doc-name">未命名</span>
+      <span class="pcb-app-title" data-i18n="eda.appName">CIBYP-PCB-EDA</span>
+      <span id="doc-name" class="pcb-doc-name" data-i18n="eda.untitled">未命名</span>
       <span id="doc-modified" class="pcb-doc-modified"></span>
     </div>
     <div class="pcb-titlebar-center">
-      <button class="pcb-tbtn" id="btn-new" title="新建工程"><i class="fa-solid fa-file"></i></button>
-      <button class="pcb-tbtn" id="btn-open" title="打开/导入工程 (cipypcb/kicad_pcb/net/csv)"><i class="fa-solid fa-folder-open"></i></button>
-      <button class="pcb-tbtn" id="btn-save" title="保存工程"><i class="fa-solid fa-floppy-disk"></i></button>
+      <button class="pcb-tbtn" id="btn-new" data-i18n-title="eda.btn.new" title="新建工程"><i class="fa-solid fa-file"></i></button>
+      <button class="pcb-tbtn" id="btn-open" data-i18n-title="eda.btn.open" title="打开/导入工程 (cipypcb/kicad_pcb/net/csv)"><i class="fa-solid fa-folder-open"></i></button>
+      <button class="pcb-tbtn" id="btn-save" data-i18n-title="eda.btn.save" title="保存工程"><i class="fa-solid fa-floppy-disk"></i></button>
       <span class="pcb-tsep"></span>
-      <button class="pcb-tbtn" id="btn-undo" title="撤销 (Ctrl+Z)"><i class="fa-solid fa-rotate-left"></i></button>
-      <button class="pcb-tbtn" id="btn-redo" title="重做 (Ctrl+Y)"><i class="fa-solid fa-rotate-right"></i></button>
+      <button class="pcb-tbtn" id="btn-undo" data-i18n-title="eda.btn.undo" title="撤销 (Ctrl+Z)"><i class="fa-solid fa-rotate-left"></i></button>
+      <button class="pcb-tbtn" id="btn-redo" data-i18n-title="eda.btn.redo" title="重做 (Ctrl+Y)"><i class="fa-solid fa-rotate-right"></i></button>
       <span class="pcb-tsep"></span>
-      <button class="pcb-tbtn" id="btn-fit" title="适应视图 (F)"><i class="fa-solid fa-expand"></i></button>
-      <button class="pcb-tbtn" id="btn-view-bottom" title="翻面视图 (从底层看) (B)"><i class="fa-solid fa-arrows-rotate"></i></button>
-      <button class="pcb-tbtn pcb-btn-accent" id="btn-export" title="导出生产文件"><i class="fa-solid fa-file-export"></i> 导出</button>
-      <button class="pcb-tbtn" id="btn-import-netlist" title="导入网表/其他EDA文件"><i class="fa-solid fa-file-import"></i></button>
+      <button class="pcb-tbtn" id="btn-fit" data-i18n-title="eda.btn.fit" title="适应视图 (F)"><i class="fa-solid fa-expand"></i></button>
+      <button class="pcb-tbtn" id="btn-view-bottom" data-i18n-title="eda.btn.viewBottom" title="翻面视图 (从底层看) (B)"><i class="fa-solid fa-arrows-rotate"></i></button>
+      <button class="pcb-tbtn pcb-btn-accent" id="btn-export" data-i18n-title="eda.btn.export" title="导出生产文件"><i class="fa-solid fa-file-export"></i> <span data-i18n="eda.btn.exportLabel">导出</span></button>
+      <button class="pcb-tbtn" id="btn-import-netlist" data-i18n-title="eda.btn.importNetlist" title="导入网表/其他EDA文件"><i class="fa-solid fa-file-import"></i></button>
     </div>
     <div class="pcb-titlebar-right">
-      <button class="pcb-tbtn btn-winctrl" id="btn-win-minimize" title="最小化"><i class="fa-solid fa-minus"></i></button>
-      <button class="pcb-tbtn btn-winctrl" id="btn-win-maximize" title="最大化"><i class="fa-regular fa-square"></i></button>
-      <button class="pcb-tbtn btn-winctrl btn-close" id="btn-win-close" title="关闭"><i class="fa-solid fa-xmark"></i></button>
+      <button class="pcb-tbtn btn-winctrl" id="btn-win-minimize" data-i18n-title="ui.common.minimize" title="最小化"><i class="fa-solid fa-minus"></i></button>
+      <button class="pcb-tbtn btn-winctrl" id="btn-win-maximize" data-i18n-title="ui.common.maximize" title="最大化"><i class="fa-regular fa-square"></i></button>
+      <button class="pcb-tbtn btn-winctrl btn-close" id="btn-win-close" data-i18n-title="ui.common.close" title="关闭"><i class="fa-solid fa-xmark"></i></button>
     </div>
   </div>
 
   <!-- 视图选项卡 -->
   <div class="pcb-viewtabs">
-    <button class="pcb-viewtab active" data-mode="sch"><i class="fa-solid fa-diagram-project"></i> 原理图</button>
-    <button class="pcb-viewtab" data-mode="pcb"><i class="fa-solid fa-microchip"></i> PCB布局</button>
-    <button class="pcb-viewtab" data-mode="3d"><i class="fa-solid fa-cube"></i> 3D预览</button>
+    <button class="pcb-viewtab active" data-mode="sch"><i class="fa-solid fa-diagram-project"></i> <span data-i18n="eda.view.sch">原理图</span></button>
+    <button class="pcb-viewtab" data-mode="pcb"><i class="fa-solid fa-microchip"></i> <span data-i18n="eda.view.pcb">PCB布局</span></button>
+    <button class="pcb-viewtab" data-mode="3d"><i class="fa-solid fa-cube"></i> <span data-i18n="eda.view.3d">3D预览</span></button>
     <span class="pcb-viewtabs-right" id="view-hint"></span>
   </div>
 
@@ -59,23 +59,23 @@
       <canvas id="td-canvas" class="hidden"></canvas>
       <!-- 底部命令行+状态栏 -->
       <div class="pcb-statusbar">
-        <input id="pcb-cmd" class="pcb-cmd" placeholder="命令行 (输入 help 查看命令) — 例: comp add R_0805 R1 20 20" spellcheck="false">
-        <span id="pcb-status" class="pcb-status">就绪</span>
+        <input id="pcb-cmd" class="pcb-cmd" data-i18n-placeholder="eda.cmd.placeholder" placeholder="命令行 (输入 help 查看命令) — 例: comp add R_0805 R1 20 20" spellcheck="false">
+        <span id="pcb-status" class="pcb-status" data-i18n="eda.status.ready">就绪</span>
       </div>
     </div>
 
     <!-- 右侧面板 -->
     <div class="pcb-panel">
       <div class="pcb-panel-tabs">
-        <button class="pcb-ptab active" data-ptab="lib">库</button>
-        <button class="pcb-ptab" data-ptab="layers">层</button>
-        <button class="pcb-ptab" data-ptab="nets">网络</button>
-        <button class="pcb-ptab" data-ptab="check">检查</button>
-        <button class="pcb-ptab" data-ptab="props">属性</button>
+        <button class="pcb-ptab active" data-ptab="lib" data-i18n="eda.panel.lib">库</button>
+        <button class="pcb-ptab" data-ptab="layers" data-i18n="eda.panel.layers">层</button>
+        <button class="pcb-ptab" data-ptab="nets" data-i18n="eda.panel.nets">网络</button>
+        <button class="pcb-ptab" data-ptab="check" data-i18n="eda.panel.check">检查</button>
+        <button class="pcb-ptab" data-ptab="props" data-i18n="eda.panel.props">属性</button>
       </div>
       <div class="pcb-panel-body" id="pcb-panel-body"></div>
       <div class="pcb-panel-foot">
-        <input id="pcb-tool-text" class="pcb-tool-text" placeholder="辅助输入: 标签/丝印文本; IC:left:VCC,D0;right:GND,O0; CONN:针数">
+        <input id="pcb-tool-text" class="pcb-tool-text" data-i18n-placeholder="eda.cmd.auxPlaceholder" placeholder="辅助输入: 标签/丝印文本; IC:left:VCC,D0;right:GND,O0; CONN:针数">
       </div>
     </div>
   </div>
@@ -83,31 +83,31 @@
   <!-- 自动保存恢复横幅（非阻塞，默认忽略） -->
   <div class="pcb-restore-banner hidden" id="pcb-restore-banner">
     <i class="fa-solid fa-clock-rotate-left"></i>
-    <span>检测到上次未保存的工程</span>
-    <button class="pcb-btn pcb-btn-accent" id="btn-restore-yes">恢复</button>
-    <button class="pcb-btn" id="btn-restore-no">忽略</button>
+    <span data-i18n="eda.restore.detected">检测到上次未保存的工程</span>
+    <button class="pcb-btn pcb-btn-accent" id="btn-restore-yes" data-i18n="eda.restore.restore">恢复</button>
+    <button class="pcb-btn" id="btn-restore-no" data-i18n="eda.restore.ignore">忽略</button>
   </div>
 
   <!-- 导出对话框 -->
   <div class="pcb-modal hidden" id="pcb-export-modal">
     <div class="pcb-modal-box">
-      <div class="pcb-modal-title">导出生产文件</div>
+      <div class="pcb-modal-title" data-i18n="eda.export.title">导出生产文件</div>
       <div class="pcb-export-grid">
-        <button class="pcb-exp-btn" data-exp="gerber"><i class="fa-solid fa-file-zipper"></i><span>Gerber 生产包 (zip)</span><small>RS-274X + Excellon 钻孔</small></button>
-        <button class="pcb-exp-btn" data-exp="gerber-dir"><i class="fa-solid fa-folder-tree"></i><span>Gerber 到目录</span><small>散装文件</small></button>
-        <button class="pcb-exp-btn" data-exp="kicad"><i class="fa-solid fa-share-nodes"></i><span>KiCad PCB (.kicad_pcb)</span><small>可被 KiCad 7+ 打开</small></button>
-        <button class="pcb-exp-btn" data-exp="netlist-kicad"><i class="fa-solid fa-list"></i><span>KiCad 网表 (.net)</span><small>S-表达式</small></button>
-        <button class="pcb-exp-btn" data-exp="netlist-csv"><i class="fa-solid fa-file-csv"></i><span>CSV 网表</span><small>Ref,Pad,Net</small></button>
-        <button class="pcb-exp-btn" data-exp="pnp"><i class="fa-solid fa-robot"></i><span>贴片坐标 (PnP)</span><small>CSV</small></button>
-        <button class="pcb-exp-btn" data-exp="bom"><i class="fa-solid fa-table-list"></i><span>BOM 物料清单</span><small>CSV</small></button>
-        <button class="pcb-exp-btn" data-exp="svg-pcb"><i class="fa-solid fa-image"></i><span>PCB 2D 预览 (SVG)</span><small>矢量图</small></button>
-        <button class="pcb-exp-btn" data-exp="svg-sch"><i class="fa-solid fa-image"></i><span>原理图 (SVG)</span><small>矢量图</small></button>
-        <button class="pcb-exp-btn" data-exp="png-pcb"><i class="fa-solid fa-file-image"></i><span>PCB 2D 预览 (PNG)</span><small>高清位图</small></button>
-        <button class="pcb-exp-btn" data-exp="png-3d"><i class="fa-solid fa-cube"></i><span>3D 渲染图 (PNG)</span><small>当前视角</small></button>
-        <button class="pcb-exp-btn" data-exp="obj"><i class="fa-solid fa-cubes"></i><span>3D 模型 (OBJ+MTL)</span><small>可导入 Blender 等</small></button>
+        <button class="pcb-exp-btn" data-exp="gerber"><i class="fa-solid fa-file-zipper"></i><span data-i18n="eda.export.gerber">Gerber 生产包 (zip)</span><small data-i18n="eda.export.gerberDesc">RS-274X + Excellon 钻孔</small></button>
+        <button class="pcb-exp-btn" data-exp="gerber-dir"><i class="fa-solid fa-folder-tree"></i><span data-i18n="eda.export.gerberDir">Gerber 到目录</span><small data-i18n="eda.export.gerberDirDesc">散装文件</small></button>
+        <button class="pcb-exp-btn" data-exp="kicad"><i class="fa-solid fa-share-nodes"></i><span data-i18n="eda.export.kicad">KiCad PCB (.kicad_pcb)</span><small data-i18n="eda.export.kicadDesc">可被 KiCad 7+ 打开</small></button>
+        <button class="pcb-exp-btn" data-exp="netlist-kicad"><i class="fa-solid fa-list"></i><span data-i18n="eda.export.netlistKicad">KiCad 网表 (.net)</span><small data-i18n="eda.export.netlistKicadDesc">S-表达式</small></button>
+        <button class="pcb-exp-btn" data-exp="netlist-csv"><i class="fa-solid fa-file-csv"></i><span data-i18n="eda.export.netlistCsv">CSV 网表</span><small data-i18n="eda.export.netlistCsvDesc">Ref,Pad,Net</small></button>
+        <button class="pcb-exp-btn" data-exp="pnp"><i class="fa-solid fa-robot"></i><span data-i18n="eda.export.pnp">贴片坐标 (PnP)</span><small data-i18n="eda.export.pnpDesc">CSV</small></button>
+        <button class="pcb-exp-btn" data-exp="bom"><i class="fa-solid fa-table-list"></i><span data-i18n="eda.export.bom">BOM 物料清单</span><small data-i18n="eda.export.bomDesc">CSV</small></button>
+        <button class="pcb-exp-btn" data-exp="svg-pcb"><i class="fa-solid fa-image"></i><span data-i18n="eda.export.svgPcb">PCB 2D 预览 (SVG)</span><small data-i18n="eda.export.svgDesc">矢量图</small></button>
+        <button class="pcb-exp-btn" data-exp="svg-sch"><i class="fa-solid fa-image"></i><span data-i18n="eda.export.svgSch">原理图 (SVG)</span><small data-i18n="eda.export.svgDesc">矢量图</small></button>
+        <button class="pcb-exp-btn" data-exp="png-pcb"><i class="fa-solid fa-file-image"></i><span data-i18n="eda.export.pngPcb">PCB 2D 预览 (PNG)</span><small data-i18n="eda.export.pngDesc">高清位图</small></button>
+        <button class="pcb-exp-btn" data-exp="png-3d"><i class="fa-solid fa-cube"></i><span data-i18n="eda.export.png3d">3D 渲染图 (PNG)</span><small data-i18n="eda.export.png3dDesc">当前视角</small></button>
+        <button class="pcb-exp-btn" data-exp="obj"><i class="fa-solid fa-cubes"></i><span data-i18n="eda.export.obj">3D 模型 (OBJ+MTL)</span><small data-i18n="eda.export.objDesc">可导入 Blender 等</small></button>
       </div>
       <div class="pcb-modal-actions">
-        <button class="pcb-btn" id="btn-export-cancel">取消</button>
+        <button class="pcb-btn" id="btn-export-cancel" data-i18n="ui.common.cancel">取消</button>
       </div>
     </div>
   </div>
@@ -115,17 +115,21 @@
   <!-- 关闭保存提示 -->
   <div class="pcb-modal hidden" id="pcb-save-prompt">
     <div class="pcb-modal-box pcb-modal-small">
-      <div class="pcb-modal-title">工程有未保存的更改</div>
-      <div class="pcb-modal-text">是否在关闭前保存当前工程？</div>
+      <div class="pcb-modal-title" data-i18n="eda.savePrompt.title">工程有未保存的更改</div>
+      <div class="pcb-modal-text" data-i18n="eda.savePrompt.text">是否在关闭前保存当前工程？</div>
       <div class="pcb-modal-actions">
-        <button class="pcb-btn pcb-btn-accent" id="btn-prompt-save">保存</button>
-        <button class="pcb-btn" id="btn-prompt-discard">不保存</button>
-        <button class="pcb-btn" id="btn-prompt-cancel">取消</button>
+        <button class="pcb-btn pcb-btn-accent" id="btn-prompt-save" data-i18n="eda.savePrompt.save">保存</button>
+        <button class="pcb-btn" id="btn-prompt-discard" data-i18n="eda.savePrompt.discard">不保存</button>
+        <button class="pcb-btn" id="btn-prompt-cancel" data-i18n="ui.common.cancel">取消</button>
       </div>
     </div>
   </div>
 
   <script src="../../../assets/lib/three/three.min.js"></script>
+  <script src="../js/i18n.js"></script>
+  <script src="../js/i18n/en.js"></script>
+  <script src="../js/i18n/de.js"></script>
+  <script src="../js/subapp-theme.js"></script>
   <script src="../js/pcbeda/pcb-geometry.js"></script>
   <script src="../js/pcbeda/pcb-model.js"></script>
   <script src="../js/pcbeda/pcb-footprints.js"></script>

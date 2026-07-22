@@ -353,7 +353,7 @@ const TOOL_DEFINITIONS = [
   { name: 'pcbGetDesignFlowGuide', desc: '获取双面板设计流程指引（IPC-2221 10 阶段）', icon: 'fa-list-check', category: 'PCB-EDA', sensitive: false },
   { name: 'pcbRunDrcIncremental', desc: '增量 DRC：仅重算受影响对象的违规检查（比全量快 5-50 倍）', icon: 'fa-bolt', category: 'PCB-EDA', sensitive: false },
   { name: 'pcbSetLiveDrc', desc: '开关实时增量 DRC（开启后每次 pcb 工具调用自动返回 drcDelta）', icon: 'fa-square-check', category: 'PCB-EDA', sensitive: false },
-  { name: 'pcbGetDrcDelta', desc: '获取最近一次 DRC 增量结果（added/removed/summary）', icon: 'fa-delta', category: 'PCB-EDA', sensitive: false },
+  { name: 'pcbGetDrcDelta', desc: '获取最近一次 DRC 增量结果（added/removed/summary）', icon: 'fa-arrow-right-arrow-left', category: 'PCB-EDA', sensitive: false },
   { name: 'pcbUndo', desc: '撤销上一步 PCB 操作', icon: 'fa-rotate-left', category: 'PCB-EDA', sensitive: false },
   { name: 'pcbRedo', desc: '重做 PCB 操作', icon: 'fa-rotate-right', category: 'PCB-EDA', sensitive: false },
   { name: 'runPcbEdaCommand', desc: '在 PCB-EDA 中执行单条命令', icon: 'fa-terminal', category: 'PCB-EDA', sensitive: false },

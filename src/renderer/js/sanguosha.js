@@ -286,12 +286,12 @@
     // Damage
     dealDamage(source, target, amount = 1) {
       target.hp -= amount;
-      this.log(`${target.hero.name} 受到 ${amount} 点伤害 (HP: ${target.hp}/${target.maxHp})`, 'damage');
+      this.log(t('game.sanguosha.logDamage', '{name} 受到 {amount} 点伤害 (HP: {hp}/{maxHp})', { name: target.hero.name, amount, hp: target.hp, maxHp: target.maxHp }), 'damage');
 
       // Jianxiong (曹操 skill)
       if (target.hero.skillFn === 'jianxiong' && source && source.lastPlayedCard) {
         target.hand.push({ ...source.lastPlayedCard, id: Date.now() + Math.random() });
-        this.log(`${target.hero.name} 发动【奸雄】获得造成伤害的牌`, 'action');
+        this.log(t('game.sanguosha.logJianxiong', '{name} 发动【奸雄】获得造成伤害的牌', { name: target.hero.name }), 'action');
       }
 
       // Fankui (司马懿 skill)
@@ -299,7 +299,7 @@
         const stolen = source.hand.splice(Math.floor(gameRng() * source.hand.length), 1)[0];
         if (stolen) {
           target.hand.push(stolen);
-          this.log(`${target.hero.name} 发动【反馈】获得 ${source.hero.name} 一张牌`, 'action');
+          this.log(t('game.sanguosha.logFankui', '{name} 发动【反馈】获得 {source} 一张牌', { name: target.hero.name, source: source.hero.name }), 'action');
         }
       }
 
@@ -319,24 +319,24 @@
         this.removeCardFromHand(player, taoCard.id);
         this.discardCard(taoCard);
         player.hp = 1;
-        this.log(`${player.hero.name} 使用桃自救 (HP: 1)`, 'heal');
+        this.log(t('game.sanguosha.logTaoSelf', '{name} 使用桃自救 (HP: 1)', { name: player.hero.name }), 'heal');
       } else if (redCard && jijiu) {
         this.removeCardFromHand(player, redCard.id);
         this.discardCard(redCard);
         player.hp = 1;
-        this.log(`${player.hero.name} 发动【急救】自救 (HP: 1)`, 'heal');
+        this.log(t('game.sanguosha.logJijiuSelf', '{name} 发动【急救】自救 (HP: 1)', { name: player.hero.name }), 'heal');
       } else {
         // Player dies
         player.alive = false;
         player.hp = 0;
-        this.log(`${player.hero.name}(${ROLE_NAMES[player.role]}) 阵亡！`, 'damage');
+        this.log(t('game.sanguosha.logDead', '{name}({role}) 阵亡！', { name: player.hero.name, role: ROLE_NAMES[player.role] }), 'damage');
 
         // Reward/punishment
         if (player.role === 'fanzei' && source) {
           // Killer draws 3 cards
           const reward = this.drawCards(3);
           source.hand.push(...reward);
-          this.log(`${source.hero.name} 击杀反贼，摸3张牌`, 'action');
+          this.log(t('game.sanguosha.logKillFanzei', '{name} 击杀反贼，摸3张牌', { name: source.hero.name }), 'action');
         }
         if (player.role === 'zhongchen' && source && source.role === 'zhugong') {
           // Zhugong kills zhongchen: discard all
@@ -345,7 +345,7 @@
           for (const slot of Object.keys(source.equip)) {
             if (source.equip[slot]) { this.discardCard(source.equip[slot]); source.equip[slot] = null; }
           }
-          this.log(`${source.hero.name} 误杀忠臣，弃置所有牌`, 'damage');
+          this.log(t('game.sanguosha.logKillZhongchen', '{name} 误杀忠臣，弃置所有牌', { name: source.hero.name }), 'damage');
         }
 
         this.checkGameOver();
@@ -360,23 +360,23 @@
         // Check if neijian is the last survivor
         if (alive.length === 1 && alive[0].role === 'neijian') {
           this.gameOver = true;
-          this.winner = '内奸';
-          this.log('游戏结束！内奸获胜！');
+          this.winner = 'neijian';
+          this.log(t('game.sanguosha.neijianWin', '游戏结束！内奸获胜！'));
         } else {
           this.gameOver = true;
-          this.winner = '反贼';
-          this.log('游戏结束！反贼获胜！');
+          this.winner = 'fanzei';
+          this.log(t('game.sanguosha.fanzeiWin', '游戏结束！反贼获胜！'));
         }
       } else if (!alive.some(p => p.role === 'fanzei') && !alive.some(p => p.role === 'neijian')) {
         this.gameOver = true;
-        this.winner = '主公与忠臣';
-        this.log('游戏结束！主公与忠臣获胜！');
+        this.winner = 'zhugong';
+        this.log(t('game.sanguosha.zhugongWin', '游戏结束！主公与忠臣获胜！'));
       }
     }
 
     heal(player, amount = 1) {
       player.hp = Math.min(player.hp + amount, player.maxHp);
-      this.log(`${player.hero.name} 回复 ${amount} 点体力 (HP: ${player.hp}/${player.maxHp})`, 'heal');
+      this.log(t('game.sanguosha.logHeal', '{name} 回复 {amount} 点体力 (HP: {hp}/{maxHp})', { name: player.hero.name, amount, hp: player.hp, maxHp: player.maxHp }), 'heal');
     }
 
     equipCard(player, card) {
@@ -387,7 +387,7 @@
         this.discardCard(player.equip[slot]);
       }
       player.equip[slot] = card;
-      this.log(`${player.hero.name} 装备了 ${card.name}`, 'action');
+      this.log(t('game.sanguosha.logEquip', '{name} 装备了 {card}', { name: player.hero.name, card: card.name }), 'action');
     }
 
     // ===== AI Decision Making (LLM-powered) =====
@@ -696,7 +696,7 @@ ${player.hero.skillFn === 'paoxiao' ? '(咆哮技能：可无限出杀)' : ''}
       switch (card.key) {
         case 'sha': {
           player.shaUsedThisTurn = true;
-          this.log(`${player.hero.name} 对 ${target.hero.name} 使用了【杀】`, 'action');
+          this.log(t('game.sanguosha.logUseSha', '{name} 对 {target} 使用了【杀】', { name: player.hero.name, target: target.hero.name }), 'action');
           renderPlayPile([card]);
 
           const needShan = player.hero.skillFn === 'wushuang' ? 2 : 1;
@@ -705,7 +705,7 @@ ${player.hero.skillFn === 'paoxiao' ? '(咆哮技能：可无限出杀)' : ''}
           for (let i = 0; i < needShan; i++) {
             let shanCard = null;
             if (target.isHuman) {
-              shanCard = await this.waitForHumanResponse('shan', target, `${player.hero.name} 对你使用了【杀】，是否使用闪？`);
+              shanCard = await this.waitForHumanResponse('shan', target, t('game.sanguosha.promptSha', '{name} 对你使用了【杀】，是否使用闪？', { name: player.hero.name }));
             } else {
               shanCard = await this.aiRespondSha(target);
             }
@@ -713,14 +713,14 @@ ${player.hero.skillFn === 'paoxiao' ? '(咆哮技能：可无限出杀)' : ''}
               this.removeCardFromHand(target, shanCard.id);
               this.discardCard(shanCard);
               blocked++;
-              this.log(`${target.hero.name} 使用了闪`, 'action');
+              this.log(t('game.sanguosha.logUseShan', '{name} 使用了闪', { name: target.hero.name }), 'action');
             } else {
               break;
             }
           }
 
           if (blocked >= needShan) {
-            this.log(`${target.hero.name} 成功闪避`, 'action');
+            this.log(t('game.sanguosha.logDodge', '{name} 成功闪避', { name: target.hero.name }), 'action');
           } else {
             let dmg = 1;
             if (player.hero.skillFn === 'luoyi' && player.luoyiActive) dmg += 1;
@@ -730,7 +730,7 @@ ${player.hero.skillFn === 'paoxiao' ? '(咆哮技能：可无限出杀)' : ''}
           break;
         }
         case 'shan':
-          this.log(`${player.hero.name} 使用了闪`, 'action');
+          this.log(t('game.sanguosha.logUseShan', '{name} 使用了闪', { name: player.hero.name }), 'action');
           this.discardCard(card);
           break;
         case 'tao':
@@ -738,21 +738,21 @@ ${player.hero.skillFn === 'paoxiao' ? '(咆哮技能：可无限出杀)' : ''}
           this.discardCard(card);
           break;
         case 'wuzhongshengyou': {
-          this.log(`${player.hero.name} 使用了【无中生有】`, 'action');
+          this.log(t('game.sanguosha.logWuzhong', '{name} 使用了【无中生有】', { name: player.hero.name }), 'action');
           const drawn = this.drawCards(2);
           player.hand.push(...drawn);
           this.discardCard(card);
           break;
         }
         case 'juedou': {
-          this.log(`${player.hero.name} 对 ${target.hero.name} 发起【决斗】`, 'action');
+          this.log(t('game.sanguosha.logJuedou', '{name} 对 {target} 发起【决斗】', { name: player.hero.name, target: target.hero.name }), 'action');
           renderPlayPile([card]);
           let attacker = target, defender = player;
           let resolved = false;
           while (!resolved) {
             let resp;
             if (attacker.isHuman) {
-              resp = await this.waitForHumanResponse('sha_duel', attacker, '决斗中，请出杀或放弃');
+              resp = await this.waitForHumanResponse('sha_duel', attacker, t('game.sanguosha.promptDuel', '决斗中，请出杀或放弃'));
             } else {
               resp = await this.aiRespondShan(attacker);
             }
@@ -770,19 +770,19 @@ ${player.hero.skillFn === 'paoxiao' ? '(咆哮技能：可无限出杀)' : ''}
         }
         case 'guohechaiqiao': {
           if (!target) break;
-          this.log(`${player.hero.name} 对 ${target.hero.name} 使用【过河拆桥】`, 'action');
+          this.log(t('game.sanguosha.logGuohe', '{name} 对 {target} 使用【过河拆桥】', { name: player.hero.name, target: target.hero.name }), 'action');
           // Remove a random card from target
           if (target.hand.length > 0) {
             const removed = target.hand.splice(Math.floor(gameRng() * target.hand.length), 1)[0];
             this.discardCard(removed);
-            this.log(`拆掉了 ${target.hero.name} 的一张手牌`, 'action');
+            this.log(t('game.sanguosha.logGuoheHand', '拆掉了 {name} 的一张手牌', { name: target.hero.name }), 'action');
           } else {
             const equipSlots = Object.entries(target.equip).filter(([k, v]) => v);
             if (equipSlots.length > 0) {
               const [slot, equipCard] = equipSlots[Math.floor(gameRng() * equipSlots.length)];
               target.equip[slot] = null;
               this.discardCard(equipCard);
-              this.log(`拆掉了 ${target.hero.name} 的 ${equipCard.name}`, 'action');
+              this.log(t('game.sanguosha.logGuoheEquip', '拆掉了 {name} 的 {card}', { name: target.hero.name, card: equipCard.name }), 'action');
             }
           }
           this.discardCard(card);
@@ -790,29 +790,29 @@ ${player.hero.skillFn === 'paoxiao' ? '(咆哮技能：可无限出杀)' : ''}
         }
         case 'shunshouqianyang': {
           if (!target) break;
-          this.log(`${player.hero.name} 对 ${target.hero.name} 使用【顺手牵羊】`, 'action');
+          this.log(t('game.sanguosha.logShunshou', '{name} 对 {target} 使用【顺手牵羊】', { name: player.hero.name, target: target.hero.name }), 'action');
           if (target.hand.length > 0) {
             const stolen = target.hand.splice(Math.floor(gameRng() * target.hand.length), 1)[0];
             player.hand.push(stolen);
-            this.log(`偷走了 ${target.hero.name} 的一张手牌`, 'action');
+            this.log(t('game.sanguosha.logStealHand', '偷走了 {name} 的一张手牌', { name: target.hero.name }), 'action');
           }
           this.discardCard(card);
           break;
         }
         case 'nanmanruqin': {
-          this.log(`${player.hero.name} 使用了【南蛮入侵】`, 'action');
+          this.log(t('game.sanguosha.logNanman', '{name} 使用了【南蛮入侵】', { name: player.hero.name }), 'action');
           renderPlayPile([card]);
           for (const p of this.otherAlivePlayers(player.index)) {
             let resp;
             if (p.isHuman) {
-              resp = await this.waitForHumanResponse('sha_defend', p, '南蛮入侵！请出杀或受到伤害');
+              resp = await this.waitForHumanResponse('sha_defend', p, t('game.sanguosha.promptNanman', '南蛮入侵！请出杀或受到伤害'));
             } else {
               resp = p.hand.find(c => c.key === 'sha');
             }
             if (resp) {
               this.removeCardFromHand(p, resp.id);
               this.discardCard(resp);
-              this.log(`${p.hero.name} 出杀闪避`, 'action');
+              this.log(t('game.sanguosha.logDefendSha', '{name} 出杀闪避', { name: p.hero.name }), 'action');
             } else {
               this.dealDamage(player, p);
             }
@@ -821,19 +821,19 @@ ${player.hero.skillFn === 'paoxiao' ? '(咆哮技能：可无限出杀)' : ''}
           break;
         }
         case 'wanjianqifa': {
-          this.log(`${player.hero.name} 使用了【万箭齐发】`, 'action');
+          this.log(t('game.sanguosha.logWanjian', '{name} 使用了【万箭齐发】', { name: player.hero.name }), 'action');
           renderPlayPile([card]);
           for (const p of this.otherAlivePlayers(player.index)) {
             let resp;
             if (p.isHuman) {
-              resp = await this.waitForHumanResponse('shan', p, '万箭齐发！请出闪或受到伤害');
+              resp = await this.waitForHumanResponse('shan', p, t('game.sanguosha.promptWanjian', '万箭齐发！请出闪或受到伤害'));
             } else {
               resp = await this.aiRespondSha(p);
             }
             if (resp) {
               this.removeCardFromHand(p, resp.id);
               this.discardCard(resp);
-              this.log(`${p.hero.name} 使用闪闪避`, 'action');
+              this.log(t('game.sanguosha.logDefendShan', '{name} 使用闪闪避', { name: p.hero.name }), 'action');
             } else {
               this.dealDamage(player, p);
             }
@@ -842,7 +842,7 @@ ${player.hero.skillFn === 'paoxiao' ? '(咆哮技能：可无限出杀)' : ''}
           break;
         }
         case 'taoyuanjieyi': {
-          this.log(`${player.hero.name} 使用了【桃园结义】`, 'action');
+          this.log(t('game.sanguosha.logTaoyuan', '{name} 使用了【桃园结义】', { name: player.hero.name }), 'action');
           for (const p of this.alivePlayers()) {
             if (p.hp < p.maxHp) this.heal(p, 1);
           }
@@ -868,11 +868,11 @@ ${player.hero.skillFn === 'paoxiao' ? '(咆哮技能：可无限出杀)' : ''}
       player.shaUsedThisTurn = false;
       player.luoyiActive = false;
 
-      this.log(`━━━ ${player.hero.name} 的回合 ━━━`);
+      this.log(t('game.sanguosha.logTurnStart', '━━━ {name} 的回合 ━━━', { name: player.hero.name }));
 
       // Phase 0: 准备阶段
       this.phase = 0;
-      showPhaseBanner(PHASE_NAMES[0] + ' - ' + player.hero.name);
+      showPhaseBanner(t('game.sanguosha.phasePrepareStage', '准备阶段') + ' - ' + player.hero.name);
       await delay(600);
 
       // Phase 1: 判定阶段
@@ -900,10 +900,10 @@ ${player.hero.skillFn === 'paoxiao' ? '(咆哮技能：可无限出杀)' : ''}
           for (const c of bottom) this.deck.unshift(c);
           for (const c of [...top].reverse()) this.deck.push(c);
         }
-        this.log(`${player.hero.name} 发动【观星】整理了牌堆`, 'action');
+        this.log(t('game.sanguosha.logGuanxing', '{name} 发动【观星】整理了牌堆', { name: player.hero.name }), 'action');
         const drawn2 = this.drawCards(2);
         player.hand.push(...drawn2);
-        this.log(`${player.hero.name} 摸了 2 张牌`, 'action');
+        this.log(t('game.sanguosha.logDrawCards', '{name} 摸了 2 张牌', { name: player.hero.name }), 'action');
       } else {
         let drawCount = 2;
         if (player.hero.skillFn === 'luoyi') {
@@ -912,12 +912,12 @@ ${player.hero.skillFn === 'paoxiao' ? '(咆哮技能：可无限出杀)' : ''}
           } else if (player.hand.filter(c => c.key === 'sha').length > 0) {
             drawCount = 1;
             player.luoyiActive = true;
-            this.log(`${player.hero.name} 发动【裸衣】少摸一张牌`, 'action');
+            this.log(t('game.sanguosha.logLuoyi', '{name} 发动【裸衣】少摸一张牌', { name: player.hero.name }), 'action');
           }
         }
         const drawn = this.drawCards(drawCount);
         player.hand.push(...drawn);
-        this.log(`${player.hero.name} 摸了 ${drawCount} 张牌`, 'action');
+        this.log(t('game.sanguosha.logDrawN', '{name} 摸了 {count} 张牌', { name: player.hero.name, count: drawCount }), 'action');
       }
       renderAll();
 
@@ -992,7 +992,7 @@ ${player.hero.skillFn === 'paoxiao' ? '(咆哮技能：可无限出杀)' : ''}
             }
             const drawn = this.drawCards(action.cards.length);
             player.hand.push(...drawn);
-            this.log(`${player.hero.name} 发动【制衡】弃 ${action.cards.length} 张摸 ${action.cards.length} 张`, 'action');
+            this.log(t('game.sanguosha.logZhiheng', '{name} 发动【制衡】弃 {discard} 张摸 {draw} 张', { name: player.hero.name, discard: action.cards.length, draw: action.cards.length }), 'action');
             renderAll();
             await delay(400);
           } else if (action.skillName === '急救') {
@@ -1001,7 +1001,7 @@ ${player.hero.skillFn === 'paoxiao' ? '(咆哮技能：可无限出杀)' : ''}
             this.removeCardFromHand(player, action.card.id);
             this.discardCard(action.card);
             this.heal(player, 1);
-            this.log(`${player.hero.name} 发动【急救】回复1血`, 'action');
+            this.log(t('game.sanguosha.logJijiu', '{name} 发动【急救】回复1血', { name: player.hero.name }), 'action');
             renderAll();
             await delay(400);
           } else if (action.skillName === '离间') {
@@ -1017,7 +1017,7 @@ ${player.hero.skillFn === 'paoxiao' ? '(咆哮技能：可无限出杀)' : ''}
           if (!player.hand.find(c => c.id === action.card.id)) continue;
           if (player.shaUsedThisTurn) continue;
           if (!action.target?.alive || !this.isInRange(player, action.target)) continue;
-          this.log(`${player.hero.name} 发动【${action.skillName}】将《${action.card.name}》当杀使用`, 'action');
+          this.log(t('game.sanguosha.logSkillSha', '{name} 发动【{skill}】将《{card}》当杀使用', { name: player.hero.name, skill: action.skillName, card: action.card.name }), 'action');
           this.removeCardFromHand(player, action.card.id);
           this.discardPile.push(action.card);
           const vsha = { ...action.card, id: Date.now() + Math.random(), key: 'sha', name: `杀(${action.skillName})`, cssClass: 'sg-card-type-sha' };
@@ -1038,7 +1038,7 @@ ${player.hero.skillFn === 'paoxiao' ? '(咆哮技能：可无限出杀)' : ''}
     }
 
     async humanDiscardPhase(player, count) {
-      this.log(`请弃 ${count} 张牌`);
+      this.log(t('game.sanguosha.pleaseDiscardN', '请弃 {count} 张牌', { count }));
       return new Promise((resolve) => {
         this.humanDiscardResolve = resolve;
         this.discardCount = count;
@@ -1076,35 +1076,35 @@ ${player.hero.skillFn === 'paoxiao' ? '(咆哮技能：可无限出杀)' : ''}
 
       // Validation — response-only cards
       if (card.key === 'shan') {
-        this.log('【闪】只能在被攻击时使用，不能在出牌阶段主动打出');
+        this.log(t('game.sanguosha.errShanActive', '【闪】只能在被攻击时使用，不能在出牌阶段主动打出'));
         return;
       }
       if (card.key === 'wuxiekeji') {
-        this.log('【无懈可击】只能在锦囊牌结算时使用，不能主动打出');
+        this.log(t('game.sanguosha.errWuxieActive', '【无懈可击】只能在锦囊牌结算时使用，不能主动打出'));
         return;
       }
 
       // Tao can't heal if already at full HP
       if (card.key === 'tao' && player.hp >= player.maxHp) {
-        this.log('HP 已满，无法使用【桃】');
+        this.log(t('game.sanguosha.errTaoFullHp', 'HP 已满，无法使用【桃】'));
         return;
       }
 
       // Cards that require an OTHER player as target
       if (card.key === 'juedou' || card.key === 'guohechaiqiao' || card.key === 'shunshouqianyang') {
-        if (!target) { this.log('请选择目标'); return; }
-        if (target.index === player.index) { this.log('此牌不能对自己使用'); return; }
+        if (!target) { this.log(t('game.sanguosha.errSelectTarget', '请选择目标')); return; }
+        if (target.index === player.index) { this.log(t('game.sanguosha.errNotSelfTarget', '此牌不能对自己使用')); return; }
       }
 
       if (card.key === 'sha') {
         const canMulti = player.hero.skillFn === 'paoxiao' || (player.equip.weapon && player.equip.weapon.key === 'zhugenu');
         if (player.shaUsedThisTurn && !canMulti) {
-          this.log('本回合已使用过杀');
+          this.log(t('game.sanguosha.errShaUsed', '本回合已使用过杀'));
           return;
         }
-        if (!target) { this.log('请选择目标'); return; }
-        if (target.index === player.index) { this.log('不能对自己使用【杀】'); return; }
-        if (!this.isInRange(player, target)) { this.log('目标不在攻击范围内'); return; }
+        if (!target) { this.log(t('game.sanguosha.errSelectTarget', '请选择目标')); return; }
+        if (target.index === player.index) { this.log(t('game.sanguosha.errShaSelf', '不能对自己使用【杀】')); return; }
+        if (!this.isInRange(player, target)) { this.log(t('game.sanguosha.errOutOfRange', '目标不在攻击范围内')); return; }
       }
 
       await this.executeCard(player, card, target || player);
@@ -1137,19 +1137,19 @@ ${player.hero.skillFn === 'paoxiao' ? '(咆哮技能：可无限出杀)' : ''}
 
         const render = () => {
           overlay.innerHTML = `
-            <div class="sg-guanxing-title"><i class="fa-solid fa-star"></i> 观星——整理牌堆</div>
-            <div class="sg-guanxing-subtitle">点击牌可将其移至【置顶】或【置底】，第一张会最先摸到。</div>
+            <div class="sg-guanxing-title"><i class="fa-solid fa-star"></i> ${escapeHtml(t('game.sanguosha.guanxingTitle', '观星——整理牌堆'))}</div>
+            <div class="sg-guanxing-subtitle">${escapeHtml(t('game.sanguosha.guanxingSubtitle', '点击牌可将其移至【置顶】或【置底】，第一张会最先摸到。'))}</div>
             <div class="sg-guanxing-row">
               <div class="sg-guanxing-col">
-                <div class="sg-guanxing-label">房内牌（点击→置顶）</div>
+                <div class="sg-guanxing-label">${escapeHtml(t('game.sanguosha.guanxingRoom', '房内牌（点击→置顶）'))}</div>
                 <div class="sg-guanxing-cards" id="gx-bot">${botCards.map((c, i) => `<div class="sg-card ${c.cssClass||''}" data-z="bot" data-i="${i}"><span class="sg-card-suit ${SUIT_COLORS[c.suit]==='red'?'red':'black'}">${c.suit}</span><span class="sg-card-number">${c.number}</span><span class="sg-card-icon">${c.icon||''}</span><span class="sg-card-name">${c.name}</span></div>`).join('')}</div>
               </div>
               <div class="sg-guanxing-col">
-                <div class="sg-guanxing-label"><i class="fa-solid fa-arrow-up"></i> 置顶（次回先摸，点击取回）</div>
+                <div class="sg-guanxing-label"><i class="fa-solid fa-arrow-up"></i> ${escapeHtml(t('game.sanguosha.guanxingTop', '置顶（次回先摸，点击取回）'))}</div>
                 <div class="sg-guanxing-cards" id="gx-top">${topCards.map((c, i) => `<div class="sg-card ${c.cssClass||''} gx-top-card" data-z="top" data-i="${i}"><span class="sg-card-suit ${SUIT_COLORS[c.suit]==='red'?'red':'black'}">${c.suit}</span><span class="sg-card-number">${c.number}</span><span class="sg-card-icon">${c.icon||''}</span><span class="sg-card-name">${c.name}</span></div>`).join('')}</div>
               </div>
             </div>
-            <button class="sg-hero-select-btn" id="gx-confirm"><i class="fa-solid fa-check"></i> 确认</button>
+            <button class="sg-hero-select-btn" id="gx-confirm"><i class="fa-solid fa-check"></i> ${escapeHtml(t('ui.common.confirm', '确认'))}</button>
           `;
 
           overlay.querySelectorAll('[data-z="bot"]').forEach(el => {
@@ -1175,18 +1175,18 @@ ${player.hero.skillFn === 'paoxiao' ? '(咆哮技能：可无限出杀)' : ''}
         const prompt = document.createElement('div');
         prompt.className = 'sg-response-prompt';
         prompt.innerHTML = `
-          <div class="sg-response-text"><i class="fa-solid fa-paw"></i> 【裸衣】是否发动？</div>
-          <div class="sg-response-hint">发动：摸取1张牌，本回合杀伤害+1</div>
+          <div class="sg-response-text"><i class="fa-solid fa-paw"></i> ${escapeHtml(t('game.sanguosha.luoyiPrompt', '【裸衣】是否发动？'))}</div>
+          <div class="sg-response-hint">${escapeHtml(t('game.sanguosha.luoyiHint', '发动：摸取1张牌，本回合杀伤害+1'))}</div>
           <div style="display:flex;gap:8px;margin-top:8px;justify-content:center">
-            <button class="sg-response-pass-btn" id="luoyi-yes" style="border-color:var(--sg-accent);color:var(--sg-accent)"><i class="fa-solid fa-paw"></i> 发动</button>
-            <button class="sg-response-pass-btn" id="luoyi-no"><i class="fa-solid fa-xmark"></i> 不发动</button>
+            <button class="sg-response-pass-btn" id="luoyi-yes" style="border-color:var(--sg-accent);color:var(--sg-accent)"><i class="fa-solid fa-paw"></i> ${escapeHtml(t('game.sanguosha.useSkill', '发动'))}</button>
+            <button class="sg-response-pass-btn" id="luoyi-no"><i class="fa-solid fa-xmark"></i> ${escapeHtml(t('game.sanguosha.notUseSkill', '不发动'))}</button>
           </div>
         `;
         $('game-container').appendChild(prompt);
         prompt.querySelector('#luoyi-yes').addEventListener('click', () => {
           prompt.remove();
           player.luoyiActive = true;
-          this.log(`${player.hero.name} 发动【裸衣】，本回合杀伤害+1`, 'action');
+          this.log(t('game.sanguosha.logLuoyiActive', '{name} 发动【裸衣】，本回合杀伤害+1', { name: player.hero.name }), 'action');
           resolve(1);
         });
         prompt.querySelector('#luoyi-no').addEventListener('click', () => { prompt.remove(); resolve(2); });
@@ -1195,13 +1195,13 @@ ${player.hero.skillFn === 'paoxiao' ? '(咆哮技能：可无限出杀)' : ''}
 
     // ===== 离间 Execution =====
     async executeLijian(source, t1, t2) {
-      this.log(`${source.hero.name} 发动【离间】，令 ${t1.hero.name} 与 ${t2.hero.name} 决斗`, 'action');
+      this.log(t('game.sanguosha.logLijian', '{name} 发动【离间】，令 {t1} 与 {t2} 决斗', { name: source.hero.name, t1: t1.hero.name, t2: t2.hero.name }), 'action');
       let attacker = t1, defender = t2;
       let resolved = false;
       while (!resolved && !this.gameOver) {
         let resp;
         if (attacker.isHuman) {
-          resp = await this.waitForHumanResponse('sha_duel', attacker, `离间！与 ${defender.hero.name} 决斗，出杀继续`);
+          resp = await this.waitForHumanResponse('sha_duel', attacker, t('game.sanguosha.promptLijian', '离间！与 {name} 决斗，出杀继续', { name: defender.hero.name }));
         } else {
           resp = await this.aiRespondShan(attacker);
         }
@@ -1258,16 +1258,16 @@ ${player.hero.skillFn === 'paoxiao' ? '(咆哮技能：可无限出杀)' : ''}
       if (p.equip.horse_def)equipIcons.push(`<span class="sg-equip-icon" title="${p.equip.horse_def.name}"><i class="fa-solid fa-horse"></i></span>`);
 
       // AI players can't see role (except zhugong)
-      const roleText = p.role === 'zhugong' ? ROLE_NAMES.zhugong : '？';
+      const roleText = p.role === 'zhugong' ? t('game.sanguosha.roleZhugong', '主公') : '？';
 
       slot.innerHTML = `
         <div class="sg-hero-portrait">${p.hero.icon}</div>
         <div class="sg-player-name">${p.hero.name}</div>
         <div class="sg-player-role">${roleText}</div>
         <div class="sg-hp-bar">${hpDots.join('')}</div>
-        <div class="sg-player-cards-count">手牌: ${p.hand.length}</div>
+        <div class="sg-player-cards-count">${escapeHtml(t('game.sanguosha.handCount', '手牌: {count}', { count: p.hand.length }))}</div>
         <div class="sg-equip-icons">${equipIcons.join('')}</div>
-        ${!p.alive ? '<div style="color:var(--sg-red);font-size:11px;margin-top:2px">阵亡</div>' : ''}
+        ${!p.alive ? `<div style="color:var(--sg-red);font-size:11px;margin-top:2px">${escapeHtml(t('game.sanguosha.dead', '阵亡'))}</div>` : ''}
       `;
 
       if (p.alive) {
@@ -1288,7 +1288,7 @@ ${player.hero.skillFn === 'paoxiao' ? '(咆哮技能：可无限出杀)' : ''}
     const player = game.players[game.humanIndex];
     if (!player) return;
 
-    $('my-cards-count').textContent = `手牌: ${player.hand.length}`;
+    $('my-cards-count').textContent = t('game.sanguosha.handCount', '手牌: {count}', { count: player.hand.length });
 
     for (const card of player.hand) {
       const el = document.createElement('div');
@@ -1339,7 +1339,8 @@ ${player.hero.skillFn === 'paoxiao' ? '(咆哮技能：可无限出杀)' : ''}
 
     $('my-hero-name').textContent = player.hero.name;
     const roleEl = $('my-role');
-    roleEl.textContent = ROLE_NAMES[player.role];
+    const roleKey = 'game.sanguosha.role.' + player.role;
+    roleEl.textContent = t(roleKey, ROLE_NAMES[player.role]);
     roleEl.className = `sg-my-role ${ROLE_CSS[player.role]}`;
 
     const hpArea = $('my-hp');
@@ -1355,7 +1356,13 @@ ${player.hero.skillFn === 'paoxiao' ? '(咆哮技能：可无限出杀)' : ''}
     $('info-turn').textContent = game.turn;
     $('info-deck').textContent = game.deck.length;
     $('info-discard').textContent = game.discardPile.length;
-    $('info-phase').textContent = PHASE_NAMES[game.phase] || '—';
+    const phaseKeys = ['game.sanguosha.phasePrepareStage', 'game.sanguosha.phaseJudgeStage', 'game.sanguosha.phaseDrawStage', 'game.sanguosha.phasePlayStage', 'game.sanguosha.phaseDiscardStage', 'game.sanguosha.phaseEndStage'];
+    const phaseName = PHASE_NAMES[game.phase];
+    if (phaseName) {
+      $('info-phase').textContent = t(phaseKeys[game.phase] || 'game.sanguosha.phasePrepareStage', phaseName);
+    } else {
+      $('info-phase').textContent = '—';
+    }
   }
 
   function renderPlayPile(cards) {
@@ -1408,26 +1415,27 @@ ${player.hero.skillFn === 'paoxiao' ? '(咆哮技能：可无限出杀)' : ''}
 
     if (player) {
       const SKILL_LABELS = {
-        jianxiong: { label: '奸雄(被动)', passive: true },
-        rende:     { label: '仁德',    passive: false },
-        zhiheng:   { label: '制衡',    passive: false },
-        wusheng:   { label: '武圣',    passive: false },
-        paoxiao:   { label: '咆哮(被动)', passive: true  },
-        longdan:   { label: '龙胆',    passive: false },
-        guanxing:  { label: '观星(摸牌)', passive: true  }, // auto at draw
-        wushuang:  { label: '无双(被动)', passive: true  },
-        lijian:    { label: '离间',    passive: false },
-        jijiu:     { label: '急救',    passive: false },
-        fankui:    { label: '反馈(被动)', passive: true  },
-        luoyi:     { label: '裸衣(摸牌)', passive: true  }, // auto at draw
+        jianxiong: { label: '奸雄(被动)', passive: true, key: 'game.sanguosha.skillJianxiong' },
+        rende:     { label: '仁德',    passive: false, key: 'game.sanguosha.skillRende'     },
+        zhiheng:   { label: '制衡',    passive: false, key: 'game.sanguosha.skillZhiheng'   },
+        wusheng:   { label: '武圣',    passive: false, key: 'game.sanguosha.skillWusheng'   },
+        paoxiao:   { label: '咆哮(被动)', passive: true,  key: 'game.sanguosha.skillPaoxiao'  },
+        longdan:   { label: '龙胆',    passive: false, key: 'game.sanguosha.skillLongdan'   },
+        guanxing:  { label: '观星(摸牌)', passive: true,  key: 'game.sanguosha.skillGuanxing' },
+        wushuang:  { label: '无双(被动)', passive: true,  key: 'game.sanguosha.skillWushuang' },
+        lijian:    { label: '离间',    passive: false, key: 'game.sanguosha.skillLijian'    },
+        jijiu:     { label: '急救',    passive: false, key: 'game.sanguosha.skillJijiu'     },
+        fankui:    { label: '反馈(被动)', passive: true,  key: 'game.sanguosha.skillFankui'   },
+        luoyi:     { label: '裸衣(摸牌)', passive: true,  key: 'game.sanguosha.skillLuoyi'    },
       };
       const info = SKILL_LABELS[player.hero.skillFn];
       if (info) {
-        btnSkill.innerHTML = `<i class="fa-solid fa-bolt"></i> ${info.label}`;
+        const label = t(info.key, info.label);
+        btnSkill.innerHTML = `<i class="fa-solid fa-bolt"></i> ${escapeHtml(label)}`;
         btnSkill.disabled  = !enabled || info.passive;
-        btnSkill.title     = info.passive ? '被动技能，不需要手动激活' : `发动【${info.label}】`;
+        btnSkill.title     = info.passive ? t('game.sanguosha.passiveSkillHint', '被动技能，不需要手动激活') : t('game.sanguosha.activeSkillHint', '发动【{skill}】', { skill: label });
       } else {
-        btnSkill.innerHTML = `<i class="fa-solid fa-bolt"></i> 技能`;
+        btnSkill.innerHTML = `<i class="fa-solid fa-bolt"></i> ${escapeHtml(t('game.sanguosha.skill', '技能'))}`;
         btnSkill.disabled  = !enabled;
       }
     } else {
@@ -1438,7 +1446,7 @@ ${player.hero.skillFn === 'paoxiao' ? '(咆哮技能：可无限出杀)' : ''}
   function enableDiscardMode(enabled, count) {
     discardMode = enabled;
     if (enabled) {
-      showPhaseBanner(`请弃 ${count} 张牌`);
+      showPhaseBanner(t('game.sanguosha.pleaseDiscardN', '请弃 {count} 张牌', { count }));
     }
   }
 
@@ -1448,9 +1456,9 @@ ${player.hero.skillFn === 'paoxiao' ? '(咆哮技能：可无限出杀)' : ''}
     responsePromptEl = document.createElement('div');
     responsePromptEl.className = 'sg-response-prompt';
     responsePromptEl.innerHTML = `
-      <div class="sg-response-text">${msg}</div>
-      <div class="sg-response-hint">选择一张手牌进行响应</div>
-      <button class="sg-response-pass-btn"><i class="fa-solid fa-xmark"></i> 放弃响应</button>
+      <div class="sg-response-text">${escapeHtml(msg)}</div>
+      <div class="sg-response-hint">${escapeHtml(t('game.sanguosha.selectCardToRespond', '选择一张手牌进行响应'))}</div>
+      <button class="sg-response-pass-btn"><i class="fa-solid fa-xmark"></i> ${escapeHtml(t('game.sanguosha.giveUpResponse', '放弃响应'))}</button>
     `;
     responsePromptEl.querySelector('.sg-response-pass-btn').addEventListener('click', () => {
       game.humanRespond(null);
@@ -1481,17 +1489,21 @@ ${player.hero.skillFn === 'paoxiao' ? '(咆哮技能：可无限出杀)' : ''}
       return;
     }
     gameOverReported = true;
+    const winnerLabel = game.winner === 'neijian' ? t('game.sanguosha.roleNeijian', '内奸')
+      : game.winner === 'fanzei' ? t('game.sanguosha.roleFanzei', '反贼')
+      : game.winner === 'zhugong' ? t('game.sanguosha.roleZhugongAndZhongchen', '主公与忠臣')
+      : game.winner;
     if (window.sanguoshaAPI?.reportResult) {
-      window.sanguoshaAPI.reportResult(`三国杀结束：${game.winner} 获胜！共进行了 ${game.turn} 回合`);
+      window.sanguoshaAPI.reportResult(t('game.sanguosha.gameOverReport', '三国杀结束：{winner} 获胜！共进行了 {turn} 回合', { winner: winnerLabel, turn: game.turn }));
     }
     const overlay = document.createElement('div');
     overlay.className = 'sg-game-over';
     overlay.innerHTML = `
-      <h1><i class="fa-solid fa-trophy" style="color:var(--sg-accent)"></i> 游戏结束</h1>
-      <p>${game.winner} 获胜！</p>
-      <p>共进行了 ${game.turn} 回合</p>
-      <button onclick="location.reload()">重新开始</button>
-      <button onclick="window.close()" style="margin-top:8px;background:#555;color:#fff">关闭</button>
+      <h1><i class="fa-solid fa-trophy" style="color:var(--sg-accent)"></i> ${escapeHtml(t('game.common.gameOver', '游戏结束'))}</h1>
+      <p>${escapeHtml(t('game.sanguosha.winnerWins', '{winner} 获胜！', { winner: winnerLabel }))}</p>
+      <p>${escapeHtml(t('game.sanguosha.totalTurns', '共进行了 {turn} 回合', { turn: game.turn }))}</p>
+      <button onclick="location.reload()">${escapeHtml(t('game.common.restart', '重新开始'))}</button>
+      <button onclick="window.close()" style="margin-top:8px;background:#555;color:#fff">${escapeHtml(t('game.common.close', '关闭'))}</button>
     `;
     document.body.appendChild(overlay);
   }
@@ -1503,11 +1515,12 @@ ${player.hero.skillFn === 'paoxiao' ? '(咆哮技能：可无限出杀)' : ''}
 
     const title = document.createElement('div');
     title.className = 'sg-hero-select-title';
-    title.textContent = '选择你的武将';
+    title.textContent = t('game.sanguosha.selectHero', '选择你的武将');
 
     const subtitle = document.createElement('div');
     subtitle.className = 'sg-hero-select-subtitle';
-    subtitle.textContent = `你的身份：${ROLE_NAMES[humanRole]}`;
+    const humanRoleLabel = t('game.sanguosha.role.' + humanRole, ROLE_NAMES[humanRole]);
+    subtitle.textContent = t('game.sanguosha.yourRole', '你的身份：{role}', { role: humanRoleLabel });
 
     const grid = document.createElement('div');
     grid.className = 'sg-hero-grid';
@@ -1518,10 +1531,10 @@ ${player.hero.skillFn === 'paoxiao' ? '(咆哮技能：可无限出杀)' : ''}
       opt.className = 'sg-hero-option';
       opt.innerHTML = `
         <div class="sg-hero-option-emoji">${hero.icon}</div>
-        <div class="sg-hero-option-name">${hero.name}</div>
-        <div class="sg-hero-option-title">${hero.title}</div>
+        <div class="sg-hero-option-name">${escapeHtml(hero.name)}</div>
+        <div class="sg-hero-option-title">${escapeHtml(hero.title)}</div>
         <div class="sg-hero-option-hp"><i class="fa-solid fa-heart" style="color:var(--sg-red)"></i> ${hero.maxHp}</div>
-        <div class="sg-hero-option-skill">${hero.skill}</div>
+        <div class="sg-hero-option-skill">${escapeHtml(hero.skill)}</div>
       `;
       opt.addEventListener('click', () => {
         grid.querySelectorAll('.sg-hero-option').forEach(o => o.classList.remove('selected'));
@@ -1534,7 +1547,7 @@ ${player.hero.skillFn === 'paoxiao' ? '(咆哮技能：可无限出杀)' : ''}
 
     const confirmBtn = document.createElement('button');
     confirmBtn.className = 'sg-hero-select-btn';
-    confirmBtn.textContent = '确认选择';
+    confirmBtn.textContent = t('game.sanguosha.confirmChoice', '确认选择');
     confirmBtn.disabled = true;
     confirmBtn.addEventListener('click', () => {
       if (selectedHero) {
@@ -1550,59 +1563,11 @@ ${player.hero.skillFn === 'paoxiao' ? '(咆哮技能：可无限出杀)' : ''}
     document.body.appendChild(overlay);
   }
 
-  // ===== Theme Application =====
-  async function applyTheme() {
-    try {
-      const settings = await window.sanguoshaAPI.getSettings();
-      const theme = settings?.theme || {};
-      // Apply theme mode
-      let isDark = true;
-      if (theme.mode === 'light') isDark = false;
-      else if (theme.mode === 'system') {
-        const sysTheme = await window.sanguoshaAPI.getTheme();
-        isDark = sysTheme?.shouldUseDarkColors ?? true;
-      }
-      document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
-
-      // Apply accent color
-      if (theme.accentColor) {
-        const r = parseInt(theme.accentColor.slice(1, 3), 16);
-        const g = parseInt(theme.accentColor.slice(3, 5), 16);
-        const b = parseInt(theme.accentColor.slice(5, 7), 16);
-        document.documentElement.style.setProperty('--accent', theme.accentColor);
-        document.documentElement.style.setProperty('--accent-light', `rgb(${Math.min(255, r + 40)}, ${Math.min(255, g + 40)}, ${Math.min(255, b + 40)})`);
-        document.documentElement.style.setProperty('--accent-dark', `rgb(${Math.max(0, r - 30)}, ${Math.max(0, g - 30)}, ${Math.max(0, b - 30)})`);
-      }
-
-      // Apply background color
-      if (theme.backgroundColor) {
-        const bgR = parseInt(theme.backgroundColor.slice(1, 3), 16);
-        const bgG = parseInt(theme.backgroundColor.slice(3, 5), 16);
-        const bgB = parseInt(theme.backgroundColor.slice(5, 7), 16);
-        const luminance = (0.299 * bgR + 0.587 * bgG + 0.114 * bgB) / 255;
-
-        document.documentElement.style.setProperty('--bg-primary', theme.backgroundColor);
-        if (luminance < 0.5) {
-          document.documentElement.style.setProperty('--bg-secondary', `rgb(${Math.min(255, bgR + 20)}, ${Math.min(255, bgG + 20)}, ${Math.min(255, bgB + 20)})`);
-          document.documentElement.style.setProperty('--bg-tertiary', `rgb(${Math.min(255, bgR + 30)}, ${Math.min(255, bgG + 30)}, ${Math.min(255, bgB + 30)})`);
-          document.documentElement.style.setProperty('--bg-hover', `rgb(${Math.min(255, bgR + 40)}, ${Math.min(255, bgG + 40)}, ${Math.min(255, bgB + 40)})`);
-        } else {
-          document.documentElement.style.setProperty('--bg-secondary', `rgb(${Math.max(0, bgR - 10)}, ${Math.max(0, bgG - 10)}, ${Math.max(0, bgB - 10)})`);
-          document.documentElement.style.setProperty('--bg-tertiary', `rgb(${Math.max(0, bgR - 20)}, ${Math.max(0, bgG - 20)}, ${Math.max(0, bgB - 20)})`);
-          document.documentElement.style.setProperty('--bg-hover', `rgb(${Math.max(0, bgR - 5)}, ${Math.max(0, bgG - 5)}, ${Math.max(0, bgB - 5)})`);
-        }
-      }
-    } catch (e) {
-      console.log('Theme apply error, using defaults:', e.message);
-    }
-  }
-
   // ===== Delay util =====
   function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
 
   // ===== Initialize =====
   async function startGame() {
-    await applyTheme();
 
     // Initialize entropy source
     try {
@@ -1641,7 +1606,7 @@ ${player.hero.skillFn === 'paoxiao' ? '(咆哮技能：可无限出杀)' : ''}
 
       // Bind action buttons
       $('btn-play').addEventListener('click', async () => {
-        if (!selectedCardId) { game.log('请先选择一张牌'); return; }
+        if (!selectedCardId) { game.log(t('game.sanguosha.errSelectCardFirst', '请先选择一张牌')); return; }
         const player = game.players[game.humanIndex];
         const card = player.hand.find(c => c.id === selectedCardId);
         if (!card) return;
@@ -1676,38 +1641,38 @@ ${player.hero.skillFn === 'paoxiao' ? '(咆哮技能：可无限出杀)' : ''}
       $('btn-skill').addEventListener('click', async () => {
         const player = game.players[game.humanIndex];
         if (!player || !player.alive || !game.humanPlayResolve) {
-          game.log('现在不是你的出牌阶段');
+          game.log(t('game.sanguosha.errNotPlayPhase', '现在不是你的出牌阶段'));
           return;
         }
         const skill = player.hero.skillFn;
 
         // ── 制衡 (孙权): discard selected card, draw same count ─────────
         if (skill === 'zhiheng') {
-          if (!selectedCardId) { game.log('请先选一张要弃置的牌（可多次使用）', 'action'); return; }
+          if (!selectedCardId) { game.log(t('game.sanguosha.errSelectCardToDiscard', '请先选一张要弃置的牌（可多次使用）'), 'action'); return; }
           const card = player.hand.find(c => c.id === selectedCardId);
           if (!card) return;
           game.removeCardFromHand(player, card.id);
           game.discardCard(card);
           const drawn = game.drawCards(1);
           player.hand.push(...drawn);
-          game.log(`${player.hero.name} 发动【制衡】弃1摸1`, 'action');
+          game.log(t('game.sanguosha.logZhihengManual', '{name} 发动【制衡】弃1摸1', { name: player.hero.name }), 'action');
           selectedCardId = null;
           renderAll();
 
         // ── 仁德 (刘备): give selected card to selected target ──────────
         } else if (skill === 'rende') {
           if (!selectedCardId || selectedTargetIdx === null) {
-            game.log('仁德：请先选一张牌和一个目标', 'action'); return;
+            game.log(t('game.sanguosha.errRendeNeedCardTarget', '仁德：请先选一张牌和一个目标'), 'action'); return;
           }
           const card = player.hand.find(c => c.id === selectedCardId);
           const target = game.players[selectedTargetIdx];
           if (!card || !target?.alive || target.index === player.index) {
-            game.log('目标无效', 'action'); return;
+            game.log(t('game.sanguosha.errInvalidTarget', '目标无效'), 'action'); return;
           }
           game.removeCardFromHand(player, card.id);
           target.hand.push(card);
           player.rendeParts = (player.rendeParts || 0) + 1;
-          game.log(`${player.hero.name} 发动【仁德】将【${card.name}】给了 ${target.hero.name}（累计${player.rendeParts}张）`, 'action');
+          game.log(t('game.sanguosha.logRende', '{name} 发动【仁德】将【{card}】给了 {target}（累计{count}张）', { name: player.hero.name, card: card.name, target: target.hero.name, count: player.rendeParts }), 'action');
           if (player.rendeParts >= 2 && player.hp < player.maxHp) {
             game.heal(player, 1);
             player.rendeParts = 0;
@@ -1718,30 +1683,30 @@ ${player.hero.skillFn === 'paoxiao' ? '(咆哮技能：可无限出杀)' : ''}
 
         // ── 急救 (华佗): use selected red card as tao to heal self ──────
         } else if (skill === 'jijiu') {
-          if (!selectedCardId) { game.log('急救：请先选一张红色牌', 'action'); return; }
+          if (!selectedCardId) { game.log(t('game.sanguosha.errJijiuNeedRed', '急救：请先选一张红色牌'), 'action'); return; }
           const card = player.hand.find(c => c.id === selectedCardId);
           if (!card) return;
-          if (SUIT_COLORS[card.suit] !== 'red') { game.log('急救：需要选一张红色牌（♥或♦）', 'action'); return; }
-          if (player.hp >= player.maxHp) { game.log('HP已满，无需急救', 'action'); return; }
+          if (SUIT_COLORS[card.suit] !== 'red') { game.log(t('game.sanguosha.errJijiuRedOnly', '急救：需要选一张红色牌（♥或♦）'), 'action'); return; }
+          if (player.hp >= player.maxHp) { game.log(t('game.sanguosha.errHpFullJijiu', 'HP已满，无需急救'), 'action'); return; }
           game.removeCardFromHand(player, card.id);
           game.discardCard(card);
           game.heal(player, 1);
-          game.log(`${player.hero.name} 发动【急救】回复1血`, 'action');
+          game.log(t('game.sanguosha.logJijiu', '{name} 发动【急救】回复1血', { name: player.hero.name }), 'action');
           selectedCardId = null;
           renderAll();
 
         // ── 武圣 (关羽): use selected red card as sha to attack ──────────
         } else if (skill === 'wusheng') {
-          if (!selectedCardId) { game.log('武圣：请先选一张红色牌', 'action'); return; }
+          if (!selectedCardId) { game.log(t('game.sanguosha.errWushengNeedRed', '武圣：请先选一张红色牌'), 'action'); return; }
           const card = player.hand.find(c => c.id === selectedCardId);
           if (!card) return;
-          if (SUIT_COLORS[card.suit] !== 'red') { game.log('武圣：需要红色牌（♥或♦）', 'action'); return; }
-          if (selectedTargetIdx === null) { game.log('武圣：请再选择一个攻击目标', 'action'); return; }
+          if (SUIT_COLORS[card.suit] !== 'red') { game.log(t('game.sanguosha.errWushengRedOnly', '武圣：需要红色牌（♥或♦）'), 'action'); return; }
+          if (selectedTargetIdx === null) { game.log(t('game.sanguosha.errWushengNeedTarget', '武圣：请再选择一个攻击目标'), 'action'); return; }
           const target = game.players[selectedTargetIdx];
           if (!target?.alive) return;
-          if (!game.isInRange(player, target)) { game.log('目标不在攻击范围内', 'action'); return; }
+          if (!game.isInRange(player, target)) { game.log(t('game.sanguosha.errOutOfRange', '目标不在攻击范围内'), 'action'); return; }
           const canMultiW = player.equip.weapon?.key === 'zhugenu';
-          if (player.shaUsedThisTurn && !canMultiW) { game.log('本回合已使用过杀', 'action'); return; }
+          if (player.shaUsedThisTurn && !canMultiW) { game.log(t('game.sanguosha.errShaUsed', '本回合已使用过杀'), 'action'); return; }
           game.removeCardFromHand(player, card.id);
           game.discardPile.push(card);
           const vsha = { ...card, id: Date.now() + Math.random(), key: 'sha', name: `杀(武圣)`, cssClass: 'sg-card-type-sha', icon: CARD_TYPES.sha.icon };
@@ -1753,16 +1718,16 @@ ${player.hero.skillFn === 'paoxiao' ? '(咆哮技能：可无限出杀)' : ''}
 
         // ── 龙胆 (赵云): use selected shan card as sha to attack ─────────
         } else if (skill === 'longdan') {
-          if (!selectedCardId) { game.log('龙胆：请先选一张闪', 'action'); return; }
+          if (!selectedCardId) { game.log(t('game.sanguosha.errLongdanNeedShan', '龙胆：请先选一张闪'), 'action'); return; }
           const card = player.hand.find(c => c.id === selectedCardId);
-          if (!card || card.key !== 'shan') { game.log('龙胆当杀：需要选一张【闪】', 'action'); return; }
-          if (selectedTargetIdx === null) { game.log('龙胆：请再选择一个攻击目标', 'action'); return; }
+          if (!card || card.key !== 'shan') { game.log(t('game.sanguosha.errLongdanShanOnly', '龙胆当杀：需要选一张【闪】'), 'action'); return; }
+          if (selectedTargetIdx === null) { game.log(t('game.sanguosha.errLongdanNeedTarget', '龙胆：请再选择一个攻击目标'), 'action'); return; }
           const target = game.players[selectedTargetIdx];
           if (!target?.alive) return;
-          if (!game.isInRange(player, target)) { game.log('目标不在攻击范围内', 'action'); return; }
+          if (!game.isInRange(player, target)) { game.log(t('game.sanguosha.errOutOfRange', '目标不在攻击范围内'), 'action'); return; }
           const canMultiL = player.equip.weapon?.key === 'zhugenu';
-          if (player.shaUsedThisTurn && !canMultiL) { game.log('本回合已使用过杀', 'action'); return; }
-          game.log(`${player.hero.name} 发动【龙胆】将【闪】当杀使用`, 'action');
+          if (player.shaUsedThisTurn && !canMultiL) { game.log(t('game.sanguosha.errShaUsed', '本回合已使用过杀'), 'action'); return; }
+          game.log(t('game.sanguosha.logLongdan', '{name} 发动【龙胆】将【闪】当杀使用', { name: player.hero.name }), 'action');
           game.removeCardFromHand(player, card.id);
           game.discardPile.push(card);
           const vshaL = { ...card, id: Date.now() + Math.random(), key: 'sha', name: `杀(龙胆)`, cssClass: 'sg-card-type-sha', icon: CARD_TYPES.sha.icon };
@@ -1776,22 +1741,22 @@ ${player.hero.skillFn === 'paoxiao' ? '(咆哮技能：可无限出杀)' : ''}
         } else if (skill === 'lijian') {
           if (!game.skillState) {
             game.skillState = { skill: 'lijian', step: 1, target1: null };
-            game.log('【离间】第一步：点击一名目标角色（第一人）', 'action');
+            game.log(t('game.sanguosha.lijianStep1', '【离间】第一步：点击一名目标角色（第一人）'), 'action');
           } else if (game.skillState.skill === 'lijian' && game.skillState.step === 1) {
-            if (selectedTargetIdx === null) { game.log('离间：请先点选第一个目标', 'action'); return; }
+            if (selectedTargetIdx === null) { game.log(t('game.sanguosha.errLijianNeedFirst', '离间：请先点选第一个目标'), 'action'); return; }
             const t1 = game.players[selectedTargetIdx];
-            if (!t1?.alive || t1.index === player.index) { game.log('请选择其他角色', 'action'); return; }
+            if (!t1?.alive || t1.index === player.index) { game.log(t('game.sanguosha.errSelectOther', '请选择其他角色'), 'action'); return; }
             game.skillState.target1 = t1;
             game.skillState.step = 2;
             selectedTargetIdx = null;
-            game.log(`已锁定 ${t1.hero.name}，再点选第二名目标后再次点【离间】`, 'action');
+            game.log(t('game.sanguosha.lijianLockedFirst', '已锁定 {name}，再点选第二名目标后再次点【离间】', { name: t1.hero.name }), 'action');
             renderAll();
           } else if (game.skillState.skill === 'lijian' && game.skillState.step === 2) {
-            if (selectedTargetIdx === null) { game.log('离间：请先点选第二个目标', 'action'); return; }
+            if (selectedTargetIdx === null) { game.log(t('game.sanguosha.errLijianNeedSecond', '离间：请先点选第二个目标'), 'action'); return; }
             const t2 = game.players[selectedTargetIdx];
             const t1 = game.skillState.target1;
             if (!t2?.alive || t2.index === player.index || t2.index === t1.index) {
-              game.log('请选择不同的角色', 'action'); return;
+              game.log(t('game.sanguosha.errSelectDifferent', '请选择不同的角色'), 'action'); return;
             }
             game.skillState = null;
             selectedTargetIdx = null;
@@ -1801,7 +1766,7 @@ ${player.hero.skillFn === 'paoxiao' ? '(咆哮技能：可无限出杀)' : ''}
           }
 
         } else {
-          game.log(`【${player.hero.skill}】（被动技能，自动生效）`);
+          game.log(t('game.sanguosha.passiveSkillMsg', '【{skill}】（被动技能，自动生效）', { skill: player.hero.skill }));
         }
       });
 
@@ -1816,7 +1781,7 @@ ${player.hero.skillFn === 'paoxiao' ? '(咆哮技能：可无限出杀)' : ''}
       }, 1000);
 
       // Start game
-      game.log('游戏开始！');
+      game.log(t('game.sanguosha.gameStart', '游戏开始！'));
       game.executeTurn();
     });
   }

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>CIPYP-CAD</title>
+  <title data-i18n="cad.title">CIPYP-CAD</title>
   <link rel="stylesheet" href="../css/theme.css">
   <link rel="stylesheet" href="../css/cipypcad.css">
   <link rel="stylesheet" href="../../../assets/fonts/fontawesome.min.css">
@@ -13,20 +13,20 @@
   <div class="cad-titlebar" id="cad-titlebar">
     <!-- macOS 留出左侧红绿灯按钮空间；Windows/Linux 无需 padding -->
     <div class="cad-titlebar-left">
-      <span class="cad-titlebar-title"><i class="fa-solid fa-compass-drafting"></i> CIPYP-CAD</span>
-      <span class="cad-titlebar-subtitle" id="doc-name">未命名工程</span>
+      <span class="cad-titlebar-title"><i class="fa-solid fa-compass-drafting"></i> <span data-i18n="cad.appName">CIPYP-CAD</span></span>
+      <span class="cad-titlebar-subtitle" id="doc-name" data-i18n="cad.untitled">未命名工程</span>
     </div>
     <div class="cad-titlebar-center">
-      <button class="btn-tool" id="btn-fit" title="自适应视图" type="button"><i class="fa-solid fa-expand"></i></button>
-      <button class="btn-tool" id="btn-save" title="保存工程" type="button"><i class="fa-solid fa-floppy-disk"></i></button>
-      <button class="btn-tool" id="btn-import-dxf" title="导入DXF文件" type="button"><i class="fa-solid fa-file-import"></i></button>
-      <button class="btn-tool" id="btn-export-png" title="导出PNG" type="button"><i class="fa-solid fa-image"></i></button>
-      <button class="btn-tool" id="btn-export-dxf" title="导出DXF" type="button"><i class="fa-solid fa-file-code"></i></button>
+      <button class="btn-tool" id="btn-fit" data-i18n-title="cad.btn.fit" title="自适应视图" type="button"><i class="fa-solid fa-expand"></i></button>
+      <button class="btn-tool" id="btn-save" data-i18n-title="cad.btn.save" title="保存工程" type="button"><i class="fa-solid fa-floppy-disk"></i></button>
+      <button class="btn-tool" id="btn-import-dxf" data-i18n-title="cad.btn.importDxf" title="导入DXF文件" type="button"><i class="fa-solid fa-file-import"></i></button>
+      <button class="btn-tool" id="btn-export-png" data-i18n-title="cad.btn.exportPng" title="导出PNG" type="button"><i class="fa-solid fa-image"></i></button>
+      <button class="btn-tool" id="btn-export-dxf" data-i18n-title="cad.btn.exportDxf" title="导出DXF" type="button"><i class="fa-solid fa-file-code"></i></button>
     </div>
     <div class="cad-titlebar-right">
-      <button class="btn-winctrl" id="btn-win-minimize" title="最小化" type="button"><i class="fa-solid fa-window-minimize"></i></button>
-      <button class="btn-winctrl" id="btn-win-maximize" title="最大化/还原" type="button"><i class="fa-regular fa-square"></i></button>
-      <button class="btn-winctrl btn-close" id="btn-close" title="关闭" type="button"><i class="fa-solid fa-xmark"></i></button>
+      <button class="btn-winctrl" id="btn-win-minimize" data-i18n-title="ui.common.minimize" title="最小化" type="button"><i class="fa-solid fa-window-minimize"></i></button>
+      <button class="btn-winctrl" id="btn-win-maximize" data-i18n-title="ui.common.maximize" title="最大化/还原" type="button"><i class="fa-regular fa-square"></i></button>
+      <button class="btn-winctrl btn-close" id="btn-close" data-i18n-title="ui.common.close" title="关闭" type="button"><i class="fa-solid fa-xmark"></i></button>
     </div>
   </div>
 
@@ -35,13 +35,13 @@
     <div class="cad-modal">
       <div class="cad-modal-header">
         <i class="fa-solid fa-triangle-exclamation"></i>
-        <span>保存提示</span>
+        <span data-i18n="cad.modal.saveTitle">保存提示</span>
       </div>
-      <div class="cad-modal-body" id="cad-save-prompt-msg">是否保存对当前工程的修改？</div>
+      <div class="cad-modal-body" id="cad-save-prompt-msg" data-i18n="cad.modal.saveMsg">是否保存对当前工程的修改？</div>
       <div class="cad-modal-footer">
-        <button class="cad-modal-btn cad-modal-btn-primary" id="cad-prompt-save" type="button">保存</button>
-        <button class="cad-modal-btn" id="cad-prompt-dontsave" type="button">不保存</button>
-        <button class="cad-modal-btn" id="cad-prompt-cancel" type="button">取消</button>
+        <button class="cad-modal-btn cad-modal-btn-primary" id="cad-prompt-save" data-i18n="ui.common.save" type="button">保存</button>
+        <button class="cad-modal-btn" id="cad-prompt-dontsave" data-i18n="ui.common.dontSave" type="button">不保存</button>
+        <button class="cad-modal-btn" id="cad-prompt-cancel" data-i18n="ui.common.cancel" type="button">取消</button>
       </div>
     </div>
   </div>
@@ -50,16 +50,16 @@
     <!-- Left Sidebar: Layers + Objects -->
     <div class="cad-sidebar" id="cad-sidebar">
       <div class="cad-tabs">
-        <button class="cad-tab active" data-tab="layers" type="button">图层</button>
-        <button class="cad-tab" data-tab="objects" type="button">对象</button>
+        <button class="cad-tab active" data-tab="layers" data-i18n="cad.tab.layers" type="button">图层</button>
+        <button class="cad-tab" data-tab="objects" data-i18n="cad.tab.objects" type="button">对象</button>
       </div>
 
       <!-- Layers Panel -->
       <div class="cad-panel" id="panel-layers">
         <div class="cad-panel-toolbar">
-          <button class="cad-icon-btn" id="btn-layer-new" title="新建图层" type="button"><i class="fa-solid fa-plus"></i></button>
-          <button class="cad-icon-btn" id="btn-layer-delete" title="删除图层" type="button"><i class="fa-solid fa-minus"></i></button>
-          <button class="cad-icon-btn" id="btn-layer-current" title="置为当前" type="button"><i class="fa-solid fa-check"></i></button>
+          <button class="cad-icon-btn" id="btn-layer-new" data-i18n-title="cad.btn.newLayer" title="新建图层" type="button"><i class="fa-solid fa-plus"></i></button>
+          <button class="cad-icon-btn" id="btn-layer-delete" data-i18n-title="cad.btn.deleteLayer" title="删除图层" type="button"><i class="fa-solid fa-minus"></i></button>
+          <button class="cad-icon-btn" id="btn-layer-current" data-i18n-title="cad.btn.setCurrent" title="置为当前" type="button"><i class="fa-solid fa-check"></i></button>
         </div>
         <div class="cad-layer-list" id="layer-list"></div>
       </div>
@@ -67,9 +67,9 @@
       <!-- Objects Panel -->
       <div class="cad-panel hidden" id="panel-objects">
         <div class="cad-panel-toolbar">
-          <span class="cad-panel-info" id="obj-count">0 个对象</span>
-          <button class="cad-icon-btn" id="btn-obj-select-all" title="全选" type="button"><i class="fa-solid fa-check-double"></i></button>
-          <button class="cad-icon-btn" id="btn-obj-clear-sel" title="清除选择" type="button"><i class="fa-solid fa-square-xmark"></i></button>
+          <span class="cad-panel-info" id="obj-count" data-i18n="cad.obj.count">0 个对象</span>
+          <button class="cad-icon-btn" id="btn-obj-select-all" data-i18n-title="cad.btn.selectAll" title="全选" type="button"><i class="fa-solid fa-check-double"></i></button>
+          <button class="cad-icon-btn" id="btn-obj-clear-sel" data-i18n-title="cad.btn.clearSel" title="清除选择" type="button"><i class="fa-solid fa-square-xmark"></i></button>
         </div>
         <div class="cad-obj-list" id="object-list"></div>
       </div>
@@ -81,49 +81,53 @@
 
       <!-- Top toolbar overlay -->
       <div class="cad-toolbar-overlay">
-        <button class="cad-tool-btn" data-cmd="line" title="直线" type="button"><i class="fa-solid fa-minus"></i></button>
-        <button class="cad-tool-btn" data-cmd="polyline" title="多段线" type="button"><i class="fa-solid fa-bezier-curve"></i></button>
-        <button class="cad-tool-btn" data-cmd="rect" title="矩形" type="button"><i class="fa-regular fa-square"></i></button>
-        <button class="cad-tool-btn" data-cmd="circle" title="圆" type="button"><i class="fa-regular fa-circle"></i></button>
-        <button class="cad-tool-btn" data-cmd="arc" title="圆弧" type="button"><i class="fa-solid fa-circle-half-stroke"></i></button>
-        <button class="cad-tool-btn" data-cmd="ellipse" title="椭圆" type="button"><i class="fa-solid fa-egg"></i></button>
-        <button class="cad-tool-btn" data-cmd="text" title="文本" type="button"><i class="fa-solid fa-font"></i></button>
-        <button class="cad-tool-btn" data-cmd="dim" title="标注" type="button"><i class="fa-solid fa-ruler"></i></button>
-        <button class="cad-tool-btn" data-cmd="hatch" title="填充" type="button"><i class="fa-solid fa-fill-drip"></i></button>
+        <button class="cad-tool-btn" data-cmd="line" data-i18n-title="cad.tool.line" title="直线" type="button"><i class="fa-solid fa-minus"></i></button>
+        <button class="cad-tool-btn" data-cmd="polyline" data-i18n-title="cad.tool.polyline" title="多段线" type="button"><i class="fa-solid fa-bezier-curve"></i></button>
+        <button class="cad-tool-btn" data-cmd="rect" data-i18n-title="cad.tool.rect" title="矩形" type="button"><i class="fa-regular fa-square"></i></button>
+        <button class="cad-tool-btn" data-cmd="circle" data-i18n-title="cad.tool.circle" title="圆" type="button"><i class="fa-regular fa-circle"></i></button>
+        <button class="cad-tool-btn" data-cmd="arc" data-i18n-title="cad.tool.arc" title="圆弧" type="button"><i class="fa-solid fa-circle-half-stroke"></i></button>
+        <button class="cad-tool-btn" data-cmd="ellipse" data-i18n-title="cad.tool.ellipse" title="椭圆" type="button"><i class="fa-solid fa-egg"></i></button>
+        <button class="cad-tool-btn" data-cmd="text" data-i18n-title="cad.tool.text" title="文本" type="button"><i class="fa-solid fa-font"></i></button>
+        <button class="cad-tool-btn" data-cmd="dim" data-i18n-title="cad.tool.dim" title="标注" type="button"><i class="fa-solid fa-ruler"></i></button>
+        <button class="cad-tool-btn" data-cmd="hatch" data-i18n-title="cad.tool.hatch" title="填充" type="button"><i class="fa-solid fa-fill-drip"></i></button>
         <span class="cad-tool-divider"></span>
-        <button class="cad-tool-btn" data-cmd="move" title="移动" type="button"><i class="fa-solid fa-arrows-up-down-left-right"></i></button>
-        <button class="cad-tool-btn" data-cmd="rotate" title="旋转" type="button"><i class="fa-solid fa-rotate"></i></button>
-        <button class="cad-tool-btn" data-cmd="scale" title="缩放" type="button"><i class="fa-solid fa-up-right-and-down-left-from-center"></i></button>
-        <button class="cad-tool-btn" data-cmd="mirror" title="镜像" type="button"><i class="fa-solid fa-arrow-right-arrow-left"></i></button>
+        <button class="cad-tool-btn" data-cmd="move" data-i18n-title="cad.tool.move" title="移动" type="button"><i class="fa-solid fa-arrows-up-down-left-right"></i></button>
+        <button class="cad-tool-btn" data-cmd="rotate" data-i18n-title="cad.tool.rotate" title="旋转" type="button"><i class="fa-solid fa-rotate"></i></button>
+        <button class="cad-tool-btn" data-cmd="scale" data-i18n-title="cad.tool.scale" title="缩放" type="button"><i class="fa-solid fa-up-right-and-down-left-from-center"></i></button>
+        <button class="cad-tool-btn" data-cmd="mirror" data-i18n-title="cad.tool.mirror" title="镜像" type="button"><i class="fa-solid fa-arrow-right-arrow-left"></i></button>
         <span class="cad-tool-divider"></span>
-        <button class="cad-tool-btn" data-cmd="delete" title="删除选中" type="button"><i class="fa-solid fa-trash-can"></i></button>
-        <button class="cad-tool-btn" data-cmd="clear" title="清空图纸" type="button"><i class="fa-solid fa-broom"></i></button>
+        <button class="cad-tool-btn" data-cmd="delete" data-i18n-title="cad.tool.delete" title="删除选中" type="button"><i class="fa-solid fa-trash-can"></i></button>
+        <button class="cad-tool-btn" data-cmd="clear" data-i18n-title="cad.tool.clear" title="清空图纸" type="button"><i class="fa-solid fa-broom"></i></button>
       </div>
 
       <!-- Status bar -->
       <div class="cad-statusbar">
         <span class="cad-status-item"><i class="fa-solid fa-crosshairs"></i> <span id="status-coord">0.0, 0.0</span></span>
         <span class="cad-status-item"><i class="fa-solid fa-magnifying-glass"></i> <span id="status-zoom">100%</span></span>
-        <span class="cad-status-item"><i class="fa-solid fa-layer-group"></i> 当前: <span id="status-layer">Layer0</span></span>
-        <span class="cad-status-item"><i class="fa-solid fa-vector-square"></i> 选中 <span id="status-sel">0</span></span>
-        <span class="cad-status-item cad-status-msg" id="status-msg">就绪</span>
+        <span class="cad-status-item"><i class="fa-solid fa-layer-group"></i> <span data-i18n="cad.statusbar.current">当前:</span> <span id="status-layer">Layer0</span></span>
+        <span class="cad-status-item"><i class="fa-solid fa-vector-square"></i> <span data-i18n="cad.statusbar.selected">选中</span> <span id="status-sel">0</span></span>
+        <span class="cad-status-item cad-status-msg" id="status-msg" data-i18n="cad.status.ready">就绪</span>
       </div>
 
       <!-- Command console -->
       <div class="cad-console" id="cad-console">
         <div class="cad-console-header">
-          <i class="fa-solid fa-terminal"></i> 命令控制台
-          <button class="cad-icon-btn" id="btn-clear-console" title="清空" type="button"><i class="fa-solid fa-eraser"></i></button>
+          <i class="fa-solid fa-terminal"></i> <span data-i18n="cad.console.title">命令控制台</span>
+          <button class="cad-icon-btn" id="btn-clear-console" data-i18n-title="cad.btn.clearConsole" title="清空" type="button"><i class="fa-solid fa-eraser"></i></button>
         </div>
         <div class="cad-console-log" id="console-log"></div>
         <div class="cad-console-input-row">
-          <span class="cad-prompt">命令:</span>
-          <input type="text" id="cmd-input" class="cad-cmd-input" placeholder="输入命令 (如 line 0,0 100,100) 后回车执行" autocomplete="off" />
+          <span class="cad-prompt" data-i18n="cad.console.prompt">命令:</span>
+          <input type="text" id="cmd-input" class="cad-cmd-input" data-i18n-placeholder="cad.console.placeholder" placeholder="输入命令 (如 line 0,0 100,100) 后回车执行" autocomplete="off" />
         </div>
       </div>
     </div>
   </div>
 
+  <script src="../js/i18n.js"></script>
+  <script src="../js/i18n/en.js"></script>
+  <script src="../js/i18n/de.js"></script>
+  <script src="../js/subapp-theme.js"></script>
   <script src="../js/cipypcad.js"></script>
 </body>
 </html>

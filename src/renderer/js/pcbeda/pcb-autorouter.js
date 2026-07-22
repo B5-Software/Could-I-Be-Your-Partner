@@ -13,6 +13,8 @@
 
   const Geo = (typeof PCBGeo !== 'undefined') ? PCBGeo : require('./pcb-geometry.js');
   const Model = (typeof PCBModel !== 'undefined') ? PCBModel : require('./pcb-model.js');
+  // i18n helper
+  const t = (typeof global.t === 'function') ? global.t : (k, fb) => fb;
 
   // options: {traceWidth, clearance, viaDrill, viaDiameter, gridSize, onlyNets,
   //           preferLayers:[...], maxRipRerouteIter:3, allowDiagonal:true,
@@ -52,7 +54,7 @@
     const gs = opts.gridSize || Math.max(0.2, (opts.traceWidth + opts.clearance) / 2);
     const W = Math.ceil((bb.maxX - bb.minX + 2 * margin) / gs) + 1;
     const H = Math.ceil((bb.maxY - bb.minY + 2 * margin) / gs) + 1;
-    if (W * H > 4e6) return { ok: false, error: '板子太大/网格太细，无法自动布线 (' + W + 'x' + H + ')' };
+    if (W * H > 4e6) return { ok: false, error: t('eda.autorouter.err.tooLarge', '板子太大/网格太细，无法自动布线 ({w}x{h})', { w: W, h: H }) };
 
     const inflate = (opts.traceWidth / 2 + opts.clearance);
     const gIdx = (x, y) => y * W + x;

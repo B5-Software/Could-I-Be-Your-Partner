@@ -7,6 +7,8 @@
   const Geo = global.PCBGeo;
   const Model = global.PCBModel;
   const Doc = Model.Doc;
+  // i18n helper
+  const t = (typeof global.t === 'function') ? global.t : (k, fb) => fb;
 
   const Editor = {
     mode: 'sch',            // 'sch' | 'pcb' | '3d'
@@ -49,7 +51,7 @@
     snap(v) { return Geo.snapToGrid(v, this.grid()); },
     snapPt(p) { return { x: this.snap(p.x), y: this.snap(p.y) }; },
 
-    status(t) { if (this.onStatus) this.onStatus(t); },
+    status(msg) { if (this.onStatus) this.onStatus(msg); },
     refresh() { if (this.onRefresh) this.onRefresh(); },
     panel() { if (this.onPanel) this.onPanel(); },
     modified() { Doc.touch(); if (this.onModified) this.onModified(); },
@@ -62,17 +64,28 @@
       this.panel();
     },
 
-    setTool(t) {
+    setTool(toolName) {
       this.cancelTransient();
-      this.tool = t;
+      this.tool = toolName;
       const names = {
-        select: '选择/拖动', trace: '布线 (点击放点,V换层,Enter完成,Esc取消)', via: '放过孔',
-        zone: '铺铜 (点击多边形顶点,Enter闭合)', comp: '放置元件 (R旋转,Esc退出)',
-        silkline: '丝印线 (两点)', silktext: '丝印文字', measure: '测量 (两点)', delete: '删除 (点击对象)',
-        symbol: '放置符号 (R旋转,M镜像,Esc退出)', wire: '导线 (Enter完成)', label: '网络标签',
-        power: '电源符号', junction: '节点', noconnect: '不连接标记', text: '文本'
+        select: t('eda.tool.status.select', '选择/拖动'),
+        trace: t('eda.tool.status.trace', '布线 (点击放点,V换层,Enter完成,Esc取消)'),
+        via: t('eda.tool.status.via', '放过孔'),
+        zone: t('eda.tool.status.zone', '铺铜 (点击多边形顶点,Enter闭合)'),
+        comp: t('eda.tool.status.comp', '放置元件 (R旋转,Esc退出)'),
+        silkline: t('eda.tool.status.silkline', '丝印线 (两点)'),
+        silktext: t('eda.tool.status.silktext', '丝印文字'),
+        measure: t('eda.tool.status.measure', '测量 (两点)'),
+        delete: t('eda.tool.status.delete', '删除 (点击对象)'),
+        symbol: t('eda.tool.status.symbol', '放置符号 (R旋转,M镜像,Esc退出)'),
+        wire: t('eda.tool.status.wire', '导线 (Enter完成)'),
+        label: t('eda.tool.status.label', '网络标签'),
+        power: t('eda.tool.status.power', '电源符号'),
+        junction: t('eda.tool.status.junction', '节点'),
+        noconnect: t('eda.tool.status.noconnect', '不连接标记'),
+        text: t('eda.tool.status.text', '文本')
       };
-      this.status('工具: ' + (names[t] || t));
+      this.status(t('eda.tool.statusPrefix', '工具: {name}', { name: (names[toolName] || toolName) }));
       this.refresh();
     },
 
@@ -87,7 +100,7 @@
     setView(side) {
       const r = global.PCBRender;
       const newSide = r.setView(side || 'toggle');
-      this.status(newSide === 'bottom' ? '视图: 底层（从底向上看，X 已镜像）' : '视图: 顶层（默认）');
+      this.status(newSide === 'bottom' ? t('eda.status.viewBottom', '视图: 底层（从底向上看，X 已镜像）') : t('eda.status.viewTop', '视图: 顶层（默认）'));
       this.refresh();
       this.panel();
       return newSide;
@@ -108,7 +121,7 @@
       }
       if (flipped > 0) {
         this.modified();
-        this.status('已翻转 ' + flipped + ' 个元件到另一面');
+        this.status(t('eda.status.flipped', '已翻转 {count} 个元件到另一面', { count: flipped }));
         this.refresh();
         this.panel();
       }
@@ -161,8 +174,8 @@
       const r = this.renderer();
       const w = r.s2w({ x: sx, y: sy });
       this.cursor = w;
-      this.status('X ' + w.x.toFixed(2) + ' mm, Y ' + w.y.toFixed(2) + ' mm' +
-        (this.activeNet ? '  |  网络: ' + this.activeNet : '') + '  |  ' + this.tool);
+      this.status(t('eda.status.coords', 'X {x} mm, Y {y} mm', { x: w.x.toFixed(2), y: w.y.toFixed(2) }) +
+        (this.activeNet ? t('eda.status.netSuffix', '  |  网络: {net}', { net: this.activeNet }) : '') + '  |  ' + this.tool);
       if (this.dragState && this.dragState.kind === 'pan') {
         r.view.panX += (e.clientX - this.dragState.x) / r.view.zoom;
         r.view.panY += (e.clientY - this.dragState.y) / r.view.zoom;
@@ -315,7 +328,7 @@
           this.measurePts.push(sp);
           if (this.measurePts.length === 2) {
             const d = Geo.dist(this.measurePts[0].x, this.measurePts[0].y, this.measurePts[1].x, this.measurePts[1].y);
-            this.status('距离: ' + d.toFixed(3) + ' mm');
+            this.status(t('eda.status.distance', '距离: {dist} mm', { dist: d.toFixed(3) }));
             setTimeout(() => { this.measurePts = []; this.refresh(); }, 3000);
           }
           this.refresh();
@@ -347,7 +360,7 @@
       });
       this.modified();
       this.selection = new Set([comp.id]);
-      this.status('已放置 ' + ref + ' (' + this.activeFootprint + ') @ ' + side + ' 面');
+      this.status(t('eda.status.placedComp', '已放置 {ref} ({fp}) @ {side} 面', { ref, fp: this.activeFootprint, side }));
       this.refresh();
       this.panel();
     },
@@ -389,7 +402,7 @@
         let i = layers.indexOf(this.activeLayer);
         i = (i + 1) % layers.length;
         this.activeLayer = layers[i];
-        this.status('当前层: ' + this.activeLayer);
+        this.status(t('eda.status.currentLayer', '当前层: {layer}', { layer: this.activeLayer }));
         this.panel();
         return;
       }
@@ -498,7 +511,7 @@
           break;
         }
         case 'text': {
-          const text = (document.getElementById('pcb-tool-text') || {}).value || '文本';
+          const text = (document.getElementById('pcb-tool-text') || {}).value || t('eda.status.defaultText', '文本');
           Doc.snapshot();
           sheet.texts.push({ id: Model.nextId('tx'), x: sp.x, y: sp.y, text, size: 1.8, rot: 0 });
           this.modified();
@@ -549,7 +562,7 @@
       sheet.symbols.push(sym);
       this.modified();
       this.selection = new Set([sym.id]);
-      this.status('已放置 ' + ref + ' (' + lib + ')');
+      this.status(t('eda.status.placedSym', '已放置 {ref} ({lib})', { ref, lib }));
       this.refresh();
       this.panel();
     },

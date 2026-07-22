@@ -11,10 +11,10 @@
 <body>
   <!-- Title Bar -->
   <div class="ff-titlebar">
-    <span class="ff-titlebar-title"><i class="fa-solid fa-feather"></i> 飞花令</span>
+    <span class="ff-titlebar-title" data-i18n="game.flyingflower.title"><i class="fa-solid fa-feather"></i> 飞花令</span>
     <span id="game-trng-badge" class="game-trng-badge" style="display:none"><i class="fa-solid fa-satellite-dish"></i> TRNG</span>
     <div class="ff-titlebar-btns">
-      <button class="btn-close" id="btn-close" title="关闭"><i class="fa-solid fa-xmark"></i></button>
+      <button class="btn-close" id="btn-close" title="关闭" data-i18n-title="ui.common.close"><i class="fa-solid fa-xmark"></i></button>
     </div>
   </div>
 
@@ -22,9 +22,9 @@
   <div class="ff-game" id="game-container">
     <!-- Keyword Display -->
     <div class="ff-keyword-area">
-      <div class="ff-keyword-label">关键字</div>
+      <div class="ff-keyword-label" data-i18n="game.flyingflower.keywordLabel">关键字</div>
       <div class="ff-keyword" id="keyword-display">花</div>
-      <div class="ff-round-info">第 <span id="round-num">1</span> 轮 · <span id="alive-count">0</span> 人在场</div>
+      <div class="ff-round-info" id="round-info">第 <span id="round-num">1</span> 轮 · <span id="alive-count">0</span> 人在场</div>
     </div>
 
     <!-- Players Bar -->
@@ -32,7 +32,7 @@
 
     <!-- Poetry History -->
     <div class="ff-history-area">
-      <div class="ff-history-header">
+      <div class="ff-history-header" data-i18n="game.flyingflower.historyHeader">
         <i class="fa-solid fa-scroll"></i> 诗句记录
       </div>
       <div class="ff-history-list" id="history-list"></div>
@@ -40,11 +40,11 @@
 
     <!-- User Input Area -->
     <div class="ff-input-area" id="input-area">
-      <div class="ff-input-hint" id="input-hint">轮到你了，请输入含有关键字的诗句</div>
+      <div class="ff-input-hint" id="input-hint" data-i18n="game.flyingflower.inputHint">轮到你了，请输入含有关键字的诗句</div>
       <div class="ff-input-row">
-        <input type="text" class="ff-input" id="poetry-input" placeholder="输入诗句..." autocomplete="off" />
-        <button class="ff-btn-submit" id="btn-submit"><i class="fa-solid fa-paper-plane"></i> 提交</button>
-        <button class="ff-btn-pass" id="btn-pass"><i class="fa-solid fa-forward"></i> 认输</button>
+        <input type="text" class="ff-input" id="poetry-input" placeholder="输入诗句..." autocomplete="off" data-i18n-placeholder="game.flyingflower.inputPlaceholder" />
+        <button class="ff-btn-submit" id="btn-submit" data-i18n="game.common.submit"><i class="fa-solid fa-paper-plane"></i> 提交</button>
+        <button class="ff-btn-pass" id="btn-pass" data-i18n="game.common.giveUp"><i class="fa-solid fa-forward"></i> 认输</button>
       </div>
     </div>
 
@@ -54,6 +54,10 @@
     </div>
   </div>
 
+  <script src="../js/i18n.js"></script>
+  <script src="../js/i18n/en.js"></script>
+  <script src="../js/i18n/de.js"></script>
+  <script src="../js/subapp-theme.js"></script>
   <script src="../js/flyingflower.js"></script>
 </body>
 </html>

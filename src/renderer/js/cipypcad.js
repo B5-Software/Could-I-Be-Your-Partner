@@ -1993,52 +1993,52 @@
   const HatchPatterns = {
     _patterns: {
       // ANSI31: 45° 实线
-      ansi31: { description: 'ANSI31 - 45° 实线', lines: [{ angle: Math.PI / 4, spacing: 4 }] },
+      ansi31: { description: t('cad.hatch.ansi31', 'ANSI31 - 45° 实线'), lines: [{ angle: Math.PI / 4, spacing: 4 }] },
       // ANSI32: 45°/135° 双向
-      ansi32: { description: 'ANSI32 - 45°/135° 双向线', lines: [
+      ansi32: { description: t('cad.hatch.ansi32', 'ANSI32 - 45°/135° 双向线'), lines: [
         { angle: Math.PI / 4, spacing: 4 },
         { angle: 3 * Math.PI / 4, spacing: 4 }
       ] },
       // ANSI33: 45° + 间隔 8
-      ansi33: { description: 'ANSI33 - 45° 实线 (大间距)', lines: [{ angle: Math.PI / 4, spacing: 8 }] },
+      ansi33: { description: t('cad.hatch.ansi33', 'ANSI33 - 45° 实线 (大间距)'), lines: [{ angle: Math.PI / 4, spacing: 8 }] },
       // ANSI34: 30°/60°
-      ansi34: { description: 'ANSI34 - 30°/60° 网格', lines: [
+      ansi34: { description: t('cad.hatch.ansi34', 'ANSI34 - 30°/60° 网格'), lines: [
         { angle: Math.PI / 6, spacing: 4 },
         { angle: Math.PI / 3, spacing: 4 }
       ] },
       // ANSI35: 0°/90° 交叉
-      ansi35: { description: 'ANSI35 - 水平+垂直交叉', lines: [
+      ansi35: { description: t('cad.hatch.ansi35', 'ANSI35 - 水平+垂直交叉'), lines: [
         { angle: 0, spacing: 4 },
         { angle: Math.PI / 2, spacing: 4 }
       ] },
       // ANSI36: 0°/45°/90°
-      ansi36: { description: 'ANSI36 - 三向交叉', lines: [
+      ansi36: { description: t('cad.hatch.ansi36', 'ANSI36 - 三向交叉'), lines: [
         { angle: 0, spacing: 6 },
         { angle: Math.PI / 4, spacing: 6 },
         { angle: Math.PI / 2, spacing: 6 }
       ] },
       // ANSI37: 0° 实线
-      ansi37: { description: 'ANSI37 - 水平实线', lines: [{ angle: 0, spacing: 4 }] },
+      ansi37: { description: t('cad.hatch.ansi37', 'ANSI37 - 水平实线'), lines: [{ angle: 0, spacing: 4 }] },
       // ANSI38: 45° 双倍间距
-      ansi38: { description: 'ANSI38 - 45° 稀疏', lines: [{ angle: Math.PI / 4, spacing: 12 }] },
+      ansi38: { description: t('cad.hatch.ansi38', 'ANSI38 - 45° 稀疏'), lines: [{ angle: Math.PI / 4, spacing: 12 }] },
       // 自定义常用图案
-      cross: { description: '十字交叉 (0°/90° 密集)', lines: [
+      cross: { description: t('cad.hatch.cross', '十字交叉 (0°/90° 密集)'), lines: [
         { angle: 0, spacing: 3 },
         { angle: Math.PI / 2, spacing: 3 }
       ] },
-      dot: { description: '点阵 (45°/135°/0°/90°)', lines: [
+      dot: { description: t('cad.hatch.dot', '点阵 (45°/135°/0°/90°)'), lines: [
         { angle: Math.PI / 4, spacing: 5 },
         { angle: 3 * Math.PI / 4, spacing: 5 },
         { angle: 0, spacing: 5 },
         { angle: Math.PI / 2, spacing: 5 }
       ] },
-      grid: { description: '网格 (0°/90° 大间距)', lines: [
+      grid: { description: t('cad.hatch.grid', '网格 (0°/90° 大间距)'), lines: [
         { angle: 0, spacing: 8 },
         { angle: Math.PI / 2, spacing: 8 }
       ] },
-      solid: { description: '实心填充 (无图案)', lines: [] },
-      horizontal: { description: '水平线', lines: [{ angle: 0, spacing: 4 }] },
-      vertical: { description: '垂直线', lines: [{ angle: Math.PI / 2, spacing: 4 }] }
+      solid: { description: t('cad.hatch.solid', '实心填充 (无图案)'), lines: [] },
+      horizontal: { description: t('cad.hatch.horizontal', '水平线'), lines: [{ angle: 0, spacing: 4 }] },
+      vertical: { description: t('cad.hatch.vertical', '垂直线'), lines: [{ angle: Math.PI / 2, spacing: 4 }] }
     },
 
     list() {
@@ -2243,18 +2243,18 @@
         case 'find': return this._find(args);
         case 'count': return this._count(args);
         case 'id': return this._idAt(args);
-        case 'save': return { ok: true, result: { hint: '请使用界面按钮 Ctrl+S 或 文件→保存' } };
+        case 'save': return { ok: true, result: { hint: t('cad.status.saveHint', '请使用界面按钮 Ctrl+S 或 文件→保存') } };
         case 'dxfin': case 'dxfimport': case 'import': return this._dxfin(args);
-        case 'dxfout': case 'dxfexport': return { ok: true, result: { hint: '请使用 文件→导出 DXF 界面按钮' } };
+        case 'dxfout': case 'dxfexport': return { ok: true, result: { hint: t('cad.status.dxfExportHint', '请使用 文件→导出 DXF 界面按钮') } };
         case 'hatchpattern': case 'pattern': return this._hatchpattern(args);
         case 'help': case '?': return this._help(args[0]);
         default:
-          return { ok: false, error: `未知命令: ${cmd}。输入 help 查看可用命令` };
+          return { ok: false, error: t('cad.err.unknownCmd', '未知命令: {cmd}。输入 help 查看可用命令', { cmd }) };
       }
     },
 
     _line(args) {
-      if (args.length < 2) return { ok: false, error: '用法: line x1,y1 x2,y2' };
+      if (args.length < 2) return { ok: false, error: t('cad.cmd.usage.line', '用法: line x1,y1 x2,y2') };
       try {
         const a = parsePt(args[0]), b = parsePt(args[1]);
         Document.pushHistory();
@@ -2265,7 +2265,7 @@
     },
 
     _polyline(args) {
-      if (args.length < 2) return { ok: false, error: '用法: polyline x1,y1 x2,y2 [x3,y3 ...] [--closed]' };
+      if (args.length < 2) return { ok: false, error: t('cad.cmd.usage.polyline', '用法: polyline x1,y1 x2,y2 [x3,y3 ...] [--closed]') };
       try {
         let closed = false;
         const filtered = args.filter(a => {
@@ -2273,7 +2273,7 @@
           return true;
         });
         const pts = filtered.map(parsePt);
-        if (pts.length < 2) return { ok: false, error: '至少需要 2 个点' };
+        if (pts.length < 2) return { ok: false, error: t('cad.err.needTwoPoints', '至少需要 2 个点') };
         Document.pushHistory();
         const o = Document.addObject('polyline', { points: pts, closed });
         Renderer.render();
@@ -2282,7 +2282,7 @@
     },
 
     _rect(args) {
-      if (args.length < 2) return { ok: false, error: '用法: rect x1,y1 x2,y2' };
+      if (args.length < 2) return { ok: false, error: t('cad.cmd.usage.rect', '用法: rect x1,y1 x2,y2') };
       try {
         const a = parsePt(args[0]), b = parsePt(args[1]);
         Document.pushHistory();
@@ -2293,11 +2293,11 @@
     },
 
     _circle(args) {
-      if (args.length < 2) return { ok: false, error: '用法: circle cx,cy radius' };
+      if (args.length < 2) return { ok: false, error: t('cad.cmd.usage.circle', '用法: circle cx,cy radius') };
       try {
         const c = parsePt(args[0]);
         const r = parseNum(args[1]);
-        if (r <= 0) return { ok: false, error: '半径必须为正数' };
+        if (r <= 0) return { ok: false, error: t('cad.err.radiusMustBePositive', '半径必须为正数') };
         Document.pushHistory();
         const o = Document.addObject('circle', { center: c, radius: r });
         Renderer.render();
@@ -2306,13 +2306,13 @@
     },
 
     _arc(args) {
-      if (args.length < 4) return { ok: false, error: '用法: arc cx,cy radius startDeg endDeg' };
+      if (args.length < 4) return { ok: false, error: t('cad.cmd.usage.arc', '用法: arc cx,cy radius startDeg endDeg') };
       try {
         const c = parsePt(args[0]);
         const r = parseNum(args[1]);
         const sa = parseNum(args[2]) * Math.PI / 180;
         const ea = parseNum(args[3]) * Math.PI / 180;
-        if (r <= 0) return { ok: false, error: '半径必须为正数' };
+        if (r <= 0) return { ok: false, error: t('cad.err.radiusMustBePositive', '半径必须为正数') };
         Document.pushHistory();
         const o = Document.addObject('arc', { center: c, radius: r, startAngle: sa, endAngle: ea });
         Renderer.render();
@@ -2321,14 +2321,14 @@
     },
 
     _ellipse(args) {
-      if (args.length < 3) return { ok: false, error: '用法: ellipse cx,cy rx ry [rotationDeg]' };
+      if (args.length < 3) return { ok: false, error: t('cad.cmd.usage.ellipse', '用法: ellipse cx,cy rx ry [rotationDeg]') };
       try {
         const c = parsePt(args[0]);
         const rx = parseNum(args[1]);
         const ry = parseNum(args[2]);
         let rot = 0;
         if (args[3]) rot = parseNum(args[3]) * Math.PI / 180;
-        if (rx <= 0 || ry <= 0) return { ok: false, error: '半径必须为正数' };
+        if (rx <= 0 || ry <= 0) return { ok: false, error: t('cad.err.radiusMustBePositive', '半径必须为正数') };
         Document.pushHistory();
         const o = Document.addObject('ellipse', { center: c, radiusX: rx, radiusY: ry, rotation: rot });
         Renderer.render();
@@ -2337,7 +2337,7 @@
     },
 
     _text(args) {
-      if (args.length < 2) return { ok: false, error: '用法: text x,y "content" [height]' };
+      if (args.length < 2) return { ok: false, error: t('cad.cmd.usage.text', '用法: text x,y "content" [height]') };
       try {
         const pos = parsePt(args[0]);
         const text = CommandParser.parseStr(args[1]);
@@ -2353,7 +2353,7 @@
     },
 
     _dim(args) {
-      if (args.length < 2) return { ok: false, error: '用法: dim x1,y1 x2,y2 [offset]' };
+      if (args.length < 2) return { ok: false, error: t('cad.cmd.usage.dim', '用法: dim x1,y1 x2,y2 [offset]') };
       try {
         const a = parsePt(args[0]), b = parsePt(args[1]);
         let offset = 20;
@@ -2372,11 +2372,11 @@
     // dimlinear h x1,y1 x2,y2 [offset]  - 水平
     // dimlinear v x1,y1 x2,y2 [offset]  - 垂直
     _dimlinear(args) {
-      if (args.length < 3) return { ok: false, error: '用法: dimlinear h|v x1,y1 x2,y2 [offset]' };
+      if (args.length < 3) return { ok: false, error: t('cad.cmd.usage.dimlinear', '用法: dimlinear h|v x1,y1 x2,y2 [offset]') };
       try {
         const dir = args[0].toLowerCase();
         if (dir !== 'h' && dir !== 'v' && dir !== 'horizontal' && dir !== 'vertical') {
-          return { ok: false, error: '方向必须是 h(水平) 或 v(垂直)' };
+          return { ok: false, error: t('cad.err.directionMustBeHV', '方向必须是 h(水平) 或 v(垂直)') };
         }
         const a = parsePt(args[1]), b = parsePt(args[2]);
         let offset = 20;
@@ -2399,12 +2399,12 @@
 
     // 半径标注
     _dimradius(args) {
-      if (args.length < 2) return { ok: false, error: '用法: dimradius id <id> [angleDeg]' };
+      if (args.length < 2) return { ok: false, error: t('cad.cmd.usage.dimradius', '用法: dimradius id <id> [angleDeg]') };
       try {
-        if (args[0].toLowerCase() !== 'id' || !args[1]) return { ok: false, error: '用法: dimradius id <id> [angleDeg]' };
+        if (args[0].toLowerCase() !== 'id' || !args[1]) return { ok: false, error: t('cad.cmd.usage.dimradius', '用法: dimradius id <id> [angleDeg]') };
         const o = Document.getObject(args[1]);
-        if (!o) return { ok: false, error: '对象不存在: ' + args[1] };
-        if (o.type !== 'circle' && o.type !== 'arc') return { ok: false, error: '半径标注仅支持 circle/arc' };
+        if (!o) return { ok: false, error: t('cad.err.objNotExist', '对象不存在: {id}', { id: args[1] }) };
+        if (o.type !== 'circle' && o.type !== 'arc') return { ok: false, error: t('cad.err.dimRadiusOnlyCircleArc', '半径标注仅支持 circle/arc') };
         let angDeg = 45;
         if (args[2]) angDeg = parseNum(args[2]);
         const ang = angDeg * Math.PI / 180;
@@ -2423,12 +2423,12 @@
 
     // 直径标注
     _dimdiameter(args) {
-      if (args.length < 2) return { ok: false, error: '用法: dimdiameter id <id> [angleDeg]' };
+      if (args.length < 2) return { ok: false, error: t('cad.cmd.usage.dimdiameter', '用法: dimdiameter id <id> [angleDeg]') };
       try {
-        if (args[0].toLowerCase() !== 'id' || !args[1]) return { ok: false, error: '用法: dimdiameter id <id> [angleDeg]' };
+        if (args[0].toLowerCase() !== 'id' || !args[1]) return { ok: false, error: t('cad.cmd.usage.dimdiameter', '用法: dimdiameter id <id> [angleDeg]') };
         const o = Document.getObject(args[1]);
-        if (!o) return { ok: false, error: '对象不存在: ' + args[1] };
-        if (o.type !== 'circle' && o.type !== 'arc') return { ok: false, error: '直径标注仅支持 circle/arc' };
+        if (!o) return { ok: false, error: t('cad.err.objNotExist', '对象不存在: {id}', { id: args[1] }) };
+        if (o.type !== 'circle' && o.type !== 'arc') return { ok: false, error: t('cad.err.dimDiameterOnlyCircleArc', '直径标注仅支持 circle/arc') };
         let angDeg = 45;
         if (args[2]) angDeg = parseNum(args[2]);
         const ang = angDeg * Math.PI / 180;
@@ -2449,7 +2449,7 @@
     // 角度标注
     // dimangle vertexX,vertexY x1,y1 x2,y2 [offset]
     _dimangle(args) {
-      if (args.length < 3) return { ok: false, error: '用法: dimangle vx,vy x1,y1 x2,y2 [offset]  (顶点 + 两条边的端点)' };
+      if (args.length < 3) return { ok: false, error: t('cad.cmd.usage.dimangle', '用法: dimangle vx,vy x1,y1 x2,y2 [offset]  (顶点 + 两条边的端点)') };
       try {
         const v = parsePt(args[0]);
         const p1 = parsePt(args[1]);
@@ -2476,7 +2476,7 @@
     // 引线标注
     // dimleader x,y x2,y2 "text"
     _dimleader(args) {
-      if (args.length < 3) return { ok: false, error: '用法: dimleader x,y x2,y2 "text"' };
+      if (args.length < 3) return { ok: false, error: t('cad.cmd.usage.dimleader', '用法: dimleader x,y x2,y2 "text"') };
       try {
         const start = parsePt(args[0]);
         const end = parsePt(args[1]);
@@ -2489,7 +2489,7 @@
     },
 
     _hatch(args) {
-      if (args.length < 3) return { ok: false, error: '用法: hatch x1,y1 x2,y2 x3,y3 ... [--angle deg] [--spacing n] [--pattern NAME] [--closed]' };
+      if (args.length < 3) return { ok: false, error: t('cad.cmd.usage.hatch', '用法: hatch x1,y1 x2,y2 x3,y3 ... [--angle deg] [--spacing n] [--pattern NAME] [--closed]') };
       try {
         let angle = Math.PI / 4;
         let spacing = 5;
@@ -2505,8 +2505,8 @@
           if (a.toLowerCase() === '--pattern') { pattern = (args[++i] || 'ansi31').toLowerCase(); continue; }
           pts.push(parsePt(a));
         }
-        if (pts.length < 3) return { ok: false, error: '填充至少需要 3 个点' };
-        if (!HatchPatterns.get(pattern)) return { ok: false, error: '未知图案: ' + pattern + '。使用 hatchpattern list 查看可用图案' };
+        if (pts.length < 3) return { ok: false, error: t('cad.err.hatchNeedThreePoints', '填充至少需要 3 个点') };
+        if (!HatchPatterns.get(pattern)) return { ok: false, error: t('cad.err.unknownPattern', '未知图案: {pattern}。使用 hatchpattern list 查看可用图案', { pattern }) };
         Document.pushHistory();
         const o = Document.addObject('hatch', { points: pts, angle, spacing, closed, pattern });
         Renderer.render();
@@ -2515,60 +2515,60 @@
     },
 
     _layer(args) {
-      if (args.length === 0) return { ok: false, error: '用法: layer new|delete|current|color|on|off NAME [...]' };
+      if (args.length === 0) return { ok: false, error: t('cad.cmd.usage.layer', '用法: layer new|delete|current|color|on|off NAME [...]') };
       const sub = args[0].toLowerCase();
       switch (sub) {
         case 'new': {
-          if (args.length < 2) return { ok: false, error: '用法: layer new NAME [color]' };
+          if (args.length < 2) return { ok: false, error: t('cad.cmd.usage.layerNew', '用法: layer new NAME [color]') };
           const name = args[1];
           const color = args[2] ? parseColor(args[2]) : '#4f8cff';
           Document.pushHistory();
-          if (!Document.addLayer(name, color)) { Document._history.pop(); return { ok: false, error: '图层已存在: ' + name }; }
+          if (!Document.addLayer(name, color)) { Document._history.pop(); return { ok: false, error: t('cad.err.layerExist', '图层已存在: {name}', { name }) }; }
           UI.refreshLayers();
           return { ok: true, result: { layer: name, color } };
         }
         case 'delete': case 'del': {
-          if (args.length < 2) return { ok: false, error: '用法: layer delete NAME' };
+          if (args.length < 2) return { ok: false, error: t('cad.cmd.usage.layerDelete', '用法: layer delete NAME') };
           Document.pushHistory();
-          if (!Document.deleteLayer(args[1])) { Document._history.pop(); return { ok: false, error: '无法删除图层 (Layer0 不可删除或图层不存在)' }; }
+          if (!Document.deleteLayer(args[1])) { Document._history.pop(); return { ok: false, error: t('cad.err.cannotDeleteLayer', '无法删除图层 (Layer0 不可删除或图层不存在)') }; }
           UI.refreshLayers();
           return { ok: true, result: { deleted: args[1] } };
         }
         case 'current': case 'set': {
-          if (args.length < 2) return { ok: false, error: '用法: layer current NAME' };
-          if (!Document.setCurrentLayer(args[1])) return { ok: false, error: '图层不存在: ' + args[1] };
+          if (args.length < 2) return { ok: false, error: t('cad.cmd.usage.layerCurrent', '用法: layer current NAME') };
+          if (!Document.setCurrentLayer(args[1])) return { ok: false, error: t('cad.err.layerNotExist', '图层不存在: {name}', { name: args[1] }) };
           // 选择当前图层不改数据，不计入撤销
           UI.refreshLayers();
           return { ok: true, result: { current: args[1] } };
         }
         case 'color': {
-          if (args.length < 3) return { ok: false, error: '用法: layer color NAME COLOR' };
+          if (args.length < 3) return { ok: false, error: t('cad.cmd.usage.layerColor', '用法: layer color NAME COLOR') };
           Document.pushHistory();
-          if (!Document.setLayerColor(args[1], parseColor(args[2]))) { Document._history.pop(); return { ok: false, error: '图层不存在: ' + args[1] }; }
+          if (!Document.setLayerColor(args[1], parseColor(args[2]))) { Document._history.pop(); return { ok: false, error: t('cad.err.layerNotExist', '图层不存在: {name}', { name: args[1] }) }; }
           UI.refreshLayers();
           Renderer.render();
           return { ok: true, result: { layer: args[1], color: args[2] } };
         }
         case 'on': {
-          if (args.length < 2) return { ok: false, error: '用法: layer on NAME' };
+          if (args.length < 2) return { ok: false, error: t('cad.cmd.usage.layerOn', '用法: layer on NAME') };
           Document.pushHistory();
-          if (!Document.setLayerVisible(args[1], true)) { Document._history.pop(); return { ok: false, error: '图层不存在: ' + args[1] }; }
+          if (!Document.setLayerVisible(args[1], true)) { Document._history.pop(); return { ok: false, error: t('cad.err.layerNotExist', '图层不存在: {name}', { name: args[1] }) }; }
           UI.refreshLayers();
           Renderer.render();
           return { ok: true, result: { layer: args[1], visible: true } };
         }
         case 'off': {
-          if (args.length < 2) return { ok: false, error: '用法: layer off NAME' };
+          if (args.length < 2) return { ok: false, error: t('cad.cmd.usage.layerOff', '用法: layer off NAME') };
           Document.pushHistory();
-          if (!Document.setLayerVisible(args[1], false)) { Document._history.pop(); return { ok: false, error: '图层不存在: ' + args[1] }; }
+          if (!Document.setLayerVisible(args[1], false)) { Document._history.pop(); return { ok: false, error: t('cad.err.layerNotExist', '图层不存在: {name}', { name: args[1] }) }; }
           UI.refreshLayers();
           Renderer.render();
           return { ok: true, result: { layer: args[1], visible: false } };
         }
         case 'lock': {
-          if (args.length < 3) return { ok: false, error: '用法: layer lock NAME on|off' };
+          if (args.length < 3) return { ok: false, error: t('cad.cmd.usage.layerLock', '用法: layer lock NAME on|off') };
           const l = Document.getLayer(args[1]);
-          if (!l) return { ok: false, error: '图层不存在: ' + args[1] };
+          if (!l) return { ok: false, error: t('cad.err.layerNotExist', '图层不存在: {name}', { name: args[1] }) };
           Document.pushHistory();
           l.locked = (args[2].toLowerCase() === 'on');
           Document.modified = true;
@@ -2579,12 +2579,12 @@
           return { ok: true, result: { layers: Document.layers } };
         }
         default:
-          return { ok: false, error: '未知子命令: ' + sub };
+          return { ok: false, error: t('cad.err.unknownSubcmd', '未知子命令: {sub}', { sub }) };
       }
     },
 
     _select(args) {
-      if (args.length === 0) return { ok: false, error: '用法: select all | id <id> | layer <name> | clear' };
+      if (args.length === 0) return { ok: false, error: t('cad.cmd.usage.select', '用法: select all | id <id> | layer <name> | clear') };
       const sub = args[0].toLowerCase();
       switch (sub) {
         case 'all':
@@ -2598,14 +2598,14 @@
           Renderer.render();
           return { ok: true, result: { cleared: true } };
         case 'id': {
-          if (args.length < 2) return { ok: false, error: '用法: select id <id>' };
-          if (!Document.selectById(args[1], args[2] && args[2].toLowerCase() === '--add')) return { ok: false, error: '对象不存在: ' + args[1] };
+          if (args.length < 2) return { ok: false, error: t('cad.cmd.usage.selectId', '用法: select id <id>') };
+          if (!Document.selectById(args[1], args[2] && args[2].toLowerCase() === '--add')) return { ok: false, error: t('cad.err.objNotExist', '对象不存在: {id}', { id: args[1] }) };
           UI.refreshObjects();
           Renderer.render();
           return { ok: true, result: { selected: args[1] } };
         }
         case 'layer': {
-          if (args.length < 2) return { ok: false, error: '用法: select layer <name>' };
+          if (args.length < 2) return { ok: false, error: t('cad.cmd.usage.selectLayer', '用法: select layer <name>') };
           Document.clearSelection();
           for (const obj of Document.objects.values()) {
             if (obj.layer === args[1]) obj.selected = true;
@@ -2615,12 +2615,12 @@
           return { ok: true, result: { selectedByLayer: args[1] } };
         }
         default:
-          return { ok: false, error: '未知子命令: ' + sub };
+          return { ok: false, error: t('cad.err.unknownSubcmd', '未知子命令: {sub}', { sub }) };
       }
     },
 
     _move(args) {
-      if (args.length < 2) return { ok: false, error: '用法: move sel dx,dy  (或: move id <id> dx,dy)' };
+      if (args.length < 2) return { ok: false, error: t('cad.cmd.usage.move', '用法: move sel dx,dy  (或: move id <id> dx,dy)') };
       const sel = args[0].toLowerCase();
       let dx, dy;
       try { const p = parsePt(args[1]); dx = p.x; dy = p.y; } catch (e) { return { ok: false, error: e.message }; }
@@ -2628,16 +2628,16 @@
       if (sel === 'sel') targets = Document.getSelectedIds().map(id => Document.getObject(id));
       else if (sel === 'id' && args[1]) {
         const o = Document.getObject(args[1]);
-        if (!o) return { ok: false, error: '对象不存在: ' + args[1] };
+        if (!o) return { ok: false, error: t('cad.err.objNotExist', '对象不存在: {id}', { id: args[1] }) };
         targets = [o];
         // shift args
         try { const p = parsePt(args[2]); dx = p.x; dy = p.y; } catch (e) { return { ok: false, error: e.message }; }
       } else if (sel === 'all') {
         targets = Array.from(Document.objects.values());
       } else {
-        return { ok: false, error: '未知选择: ' + sel };
+        return { ok: false, error: t('cad.err.unknownSelection', '未知选择: {sel}', { sel }) };
       }
-      if (targets.length === 0) return { ok: false, error: '没有选中对象' };
+      if (targets.length === 0) return { ok: false, error: t('cad.err.noSelection', '没有选中对象') };
       Document.pushHistory();
       for (const obj of targets) this._translateObj(obj, dx, dy);
       Renderer.render();
@@ -2662,7 +2662,7 @@
     },
 
     _rotate(args) {
-      if (args.length < 2) return { ok: false, error: '用法: rotate sel angleDeg [cx,cy]' };
+      if (args.length < 2) return { ok: false, error: t('cad.cmd.usage.rotate', '用法: rotate sel angleDeg [cx,cy]') };
       const sel = args[0].toLowerCase();
       let angDeg, center = { x: 0, y: 0 };
       try { angDeg = parseNum(args[1]); } catch (e) { return { ok: false, error: e.message }; }
@@ -2670,8 +2670,8 @@
       let targets;
       if (sel === 'sel') targets = Document.getSelectedIds().map(id => Document.getObject(id));
       else if (sel === 'all') targets = Array.from(Document.objects.values());
-      else return { ok: false, error: '未知选择: ' + sel };
-      if (targets.length === 0) return { ok: false, error: '没有选中对象' };
+      else return { ok: false, error: t('cad.err.unknownSelection', '未知选择: {sel}', { sel }) };
+      if (targets.length === 0) return { ok: false, error: t('cad.err.noSelection', '没有选中对象') };
       Document.pushHistory();
       const ang = angDeg * Math.PI / 180;
       for (const obj of targets) this._rotateObj(obj, ang, center);
@@ -2722,17 +2722,17 @@
     },
 
     _scale(args) {
-      if (args.length < 2) return { ok: false, error: '用法: scale sel factor [cx,cy]' };
+      if (args.length < 2) return { ok: false, error: t('cad.cmd.usage.scale', '用法: scale sel factor [cx,cy]') };
       const sel = args[0].toLowerCase();
       let factor, center = { x: 0, y: 0 };
       try { factor = parseNum(args[1]); } catch (e) { return { ok: false, error: e.message }; }
       if (args[2]) { try { center = parsePt(args[2]); } catch (e) { return { ok: false, error: e.message }; } }
-      if (factor <= 0) return { ok: false, error: '缩放比例必须为正数' };
+      if (factor <= 0) return { ok: false, error: t('cad.err.scaleMustBePositive', '缩放比例必须为正数') };
       let targets;
       if (sel === 'sel') targets = Document.getSelectedIds().map(id => Document.getObject(id));
       else if (sel === 'all') targets = Array.from(Document.objects.values());
-      else return { ok: false, error: '未知选择: ' + sel };
-      if (targets.length === 0) return { ok: false, error: '没有选中对象' };
+      else return { ok: false, error: t('cad.err.unknownSelection', '未知选择: {sel}', { sel }) };
+      if (targets.length === 0) return { ok: false, error: t('cad.err.noSelection', '没有选中对象') };
       Document.pushHistory();
       for (const obj of targets) this._scaleObj(obj, factor, center);
       Renderer.render();
@@ -2759,16 +2759,16 @@
     },
 
     _mirror(args) {
-      if (args.length < 3) return { ok: false, error: '用法: mirror sel x1,y1 x2,y2  (镜像轴为通过两点的直线)' };
+      if (args.length < 3) return { ok: false, error: t('cad.cmd.usage.mirror', '用法: mirror sel x1,y1 x2,y2  (镜像轴为通过两点的直线)') };
       const sel = args[0].toLowerCase();
       let p1, p2;
       try { p1 = parsePt(args[1]); p2 = parsePt(args[2]); } catch (e) { return { ok: false, error: e.message }; }
-      if (dist(p1, p2) < 1e-9) return { ok: false, error: '两点重合，无法定义镜像轴' };
+      if (dist(p1, p2) < 1e-9) return { ok: false, error: t('cad.err.twoPointsCoincident', '两点重合，无法定义镜像轴') };
       let targets;
       if (sel === 'sel') targets = Document.getSelectedIds().map(id => Document.getObject(id));
       else if (sel === 'all') targets = Array.from(Document.objects.values());
-      else return { ok: false, error: '未知选择: ' + sel };
-      if (targets.length === 0) return { ok: false, error: '没有选中对象' };
+      else return { ok: false, error: t('cad.err.unknownSelection', '未知选择: {sel}', { sel }) };
+      if (targets.length === 0) return { ok: false, error: t('cad.err.noSelection', '没有选中对象') };
       Document.pushHistory();
       // Mirror line: ax + by + c = 0; normal = (-(p2.y-p1.y), (p2.x-p1.x))
       const dx = p2.x - p1.x, dy = p2.y - p1.y;
@@ -2802,11 +2802,11 @@
     },
 
     _delete(args) {
-      if (args.length === 0) return { ok: false, error: '用法: delete sel | delete id <id>' };
+      if (args.length === 0) return { ok: false, error: t('cad.cmd.usage.delete', '用法: delete sel | delete id <id>') };
       const sel = args[0].toLowerCase();
       if (sel === 'sel') {
         const ids = Document.getSelectedIds();
-        if (ids.length === 0) return { ok: false, error: '没有选中对象' };
+        if (ids.length === 0) return { ok: false, error: t('cad.err.noSelection', '没有选中对象') };
         Document.pushHistory();
         ids.forEach(id => Document.deleteObject(id));
         Renderer.render();
@@ -2815,14 +2815,14 @@
       }
       if (sel === 'id' && args[1]) {
         const o = Document.getObject(args[1]);
-        if (!o) return { ok: false, error: '对象不存在: ' + args[1] };
+        if (!o) return { ok: false, error: t('cad.err.objNotExist', '对象不存在: {id}', { id: args[1] }) };
         Document.pushHistory();
         Document.deleteObject(args[1]);
         Renderer.render();
         UI.refreshObjects();
         return { ok: true, result: { deleted: args[1] } };
       }
-      return { ok: false, error: '未知选择: ' + sel };
+      return { ok: false, error: t('cad.err.unknownSelection', '未知选择: {sel}', { sel }) };
     },
 
     _clear() {
@@ -2836,7 +2836,7 @@
     },
 
     _undo() {
-      if (!Document.undo()) return { ok: false, error: '无可撤销操作' };
+      if (!Document.undo()) return { ok: false, error: t('cad.err.nothingToUndo', '无可撤销操作') };
       Renderer.render();
       UI.refreshLayers();
       UI.refreshObjects();
@@ -2845,7 +2845,7 @@
     },
 
     _redo() {
-      if (!Document.redo()) return { ok: false, error: '无可重做操作' };
+      if (!Document.redo()) return { ok: false, error: t('cad.err.nothingToRedo', '无可重做操作') };
       Renderer.render();
       UI.refreshLayers();
       UI.refreshObjects();
@@ -2855,7 +2855,7 @@
 
     // 复制选中或指定对象，可加偏移
     _copy(args) {
-      if (args.length < 1) return { ok: false, error: '用法: copy sel [dx,dy]  |  copy id <id> [dx,dy]' };
+      if (args.length < 1) return { ok: false, error: t('cad.cmd.usage.copy', '用法: copy sel [dx,dy]  |  copy id <id> [dx,dy]') };
       const sel = args[0].toLowerCase();
       let dx = 0, dy = 0;
       let targets = [];
@@ -2864,16 +2864,16 @@
         targets = Document.getSelectedIds().map(id => Document.getObject(id));
       } else if (sel === 'id' && args[1]) {
         const o = Document.getObject(args[1]);
-        if (!o) return { ok: false, error: '对象不存在: ' + args[1] };
+        if (!o) return { ok: false, error: t('cad.err.objNotExist', '对象不存在: {id}', { id: args[1] }) };
         if (args[2]) { try { const p = parsePt(args[2]); dx = p.x; dy = p.y; } catch (e) { return { ok: false, error: e.message }; } }
         targets = [o];
       } else if (sel === 'all') {
         if (args[1]) { try { const p = parsePt(args[1]); dx = p.x; dy = p.y; } catch (e) { return { ok: false, error: e.message }; } }
         targets = Array.from(Document.objects.values());
       } else {
-        return { ok: false, error: '未知选择: ' + sel };
+        return { ok: false, error: t('cad.err.unknownSelection', '未知选择: {sel}', { sel }) };
       }
-      if (targets.length === 0) return { ok: false, error: '没有可复制的对象' };
+      if (targets.length === 0) return { ok: false, error: t('cad.err.nothingToCopy', '没有可复制的对象') };
       Document.pushHistory();
       const clones = targets.map(o => Document.cloneOffset(o, dx, dy));
       Renderer.render();
@@ -2883,20 +2883,20 @@
 
     // offset: 偏移复制（平行线、等距多边形）
     _offset(args) {
-      if (args.length < 2) return { ok: false, error: '用法: offset distance sel|id <id> [side]' };
+      if (args.length < 2) return { ok: false, error: t('cad.cmd.usage.offset', '用法: offset distance sel|id <id> [side]') };
       try {
         const off = parseNum(args[0]);
         const sel = args[1].toLowerCase();
         let target;
         if (sel === 'sel') {
           const ids = Document.getSelectedIds();
-          if (ids.length === 0) return { ok: false, error: '没有选中对象' };
+          if (ids.length === 0) return { ok: false, error: t('cad.err.noSelection', '没有选中对象') };
           target = Document.getObject(ids[0]);
         } else if (sel === 'id' && args[2]) {
           target = Document.getObject(args[2]);
-          if (!target) return { ok: false, error: '对象不存在: ' + args[2] };
+          if (!target) return { ok: false, error: t('cad.err.objNotExist', '对象不存在: {id}', { id: args[2] }) };
         } else {
-          return { ok: false, error: '用法: offset distance sel|id <id>' };
+          return { ok: false, error: t('cad.cmd.usage.offsetShort', '用法: offset distance sel|id <id>') };
         }
         const p = target.props;
         let clone = null;
@@ -2922,7 +2922,7 @@
           }
           case 'polyline': case 'hatch': {
             // 简化：将每个点沿法线方向偏移
-            if (!p.points || p.points.length < 2) { Document._history.pop(); return { ok: false, error: '折线点数不足' }; }
+            if (!p.points || p.points.length < 2) { Document._history.pop(); return { ok: false, error: t('cad.err.polylinePointsInsufficient', '折线点数不足') }; }
             clone = Document.cloneOffset(target, 0, 0);
             const pts = clone.props.points;
             const newPts = [];
@@ -2956,7 +2956,7 @@
           }
           default:
             Document._history.pop();
-            return { ok: false, error: '不支持 offset 的对象类型: ' + target.type };
+            return { ok: false, error: t('cad.err.offsetNotSupported', '不支持 offset 的对象类型: {type}', { type: target.type }) };
         }
         Renderer.render();
         UI.refreshObjects();
@@ -2968,27 +2968,27 @@
     // array rect sel cols rows dx,dy
     // array polar sel count cx,cy [startAngleDeg] [totalAngleDeg]
     _array(args) {
-      if (args.length < 4) return { ok: false, error: '用法: array rect sel cols rows dx,dy  |  array polar sel count cx,cy [startDeg] [totalDeg]' };
+      if (args.length < 4) return { ok: false, error: t('cad.cmd.usage.array', '用法: array rect sel cols rows dx,dy  |  array polar sel count cx,cy [startDeg] [totalDeg]') };
       const sub = args[0].toLowerCase();
       const sel = args[1].toLowerCase();
       let targets = [];
       if (sel === 'sel') targets = Document.getSelectedIds().map(id => Document.getObject(id));
       else if (sel === 'id' && args[2]) {
         const o = Document.getObject(args[2]);
-        if (!o) return { ok: false, error: '对象不存在: ' + args[2] };
+        if (!o) return { ok: false, error: t('cad.err.objNotExist', '对象不存在: {id}', { id: args[2] }) };
         targets = [o];
         // 移除已使用的 id 参数，统一后续下标
         args.splice(2, 1);
       } else if (sel === 'all') targets = Array.from(Document.objects.values());
-      else return { ok: false, error: '未知选择: ' + sel };
-      if (targets.length === 0) return { ok: false, error: '没有选中对象' };
+      else return { ok: false, error: t('cad.err.unknownSelection', '未知选择: {sel}', { sel }) };
+      if (targets.length === 0) return { ok: false, error: t('cad.err.noSelection', '没有选中对象') };
 
       if (sub === 'rect') {
-        if (args.length < 5) return { ok: false, error: '用法: array rect sel cols rows dx,dy' };
+        if (args.length < 5) return { ok: false, error: t('cad.cmd.usage.arrayRect', '用法: array rect sel cols rows dx,dy') };
         try {
           const cols = parseInt(args[2]), rows = parseInt(args[3]);
           const off = parsePt(args[4]);
-          if (cols < 1 || rows < 1) return { ok: false, error: '列/行数必须 >= 1' };
+          if (cols < 1 || rows < 1) return { ok: false, error: t('cad.err.colsRowsMustBeGE1', '列/行数必须 >= 1') };
           Document.pushHistory();
           const newIds = [];
           for (let r = 0; r < rows; r++) {
@@ -3003,14 +3003,14 @@
           return { ok: true, result: { cols, rows, created: newIds.length, newIds } };
         } catch (e) { return { ok: false, error: e.message }; }
       } else if (sub === 'polar') {
-        if (args.length < 4) return { ok: false, error: '用法: array polar sel count cx,cy [startDeg] [totalDeg]' };
+        if (args.length < 4) return { ok: false, error: t('cad.cmd.usage.arrayPolar', '用法: array polar sel count cx,cy [startDeg] [totalDeg]') };
         try {
           const count = parseInt(args[2]);
           const center = parsePt(args[3]);
           let startDeg = 0, totalDeg = 360;
           if (args[4]) startDeg = parseNum(args[4]);
           if (args[5]) totalDeg = parseNum(args[5]);
-          if (count < 1) return { ok: false, error: '阵列数必须 >= 1' };
+          if (count < 1) return { ok: false, error: t('cad.err.arrayCountMustBeGE1', '阵列数必须 >= 1') };
           Document.pushHistory();
           const newIds = [];
           const startAng = startDeg * Math.PI / 180;
@@ -3046,45 +3046,45 @@
           return { ok: true, result: { count, center, created: newIds.length, newIds } };
         } catch (e) { return { ok: false, error: e.message }; }
       } else {
-        return { ok: false, error: '未知 array 子命令: ' + sub };
+        return { ok: false, error: t('cad.err.unknownArraySubcmd', '未知 array 子命令: {sub}', { sub }) };
       }
     },
 
     // fillet: 圆角化两条线段的交点（或选中折线的所有顶点）
     // fillet radius sel   或   fillet radius id <id1> [id <id2>]
     _fillet(args) {
-      if (args.length < 2) return { ok: false, error: '用法: fillet radius sel|id <id> [id <id2>]' };
+      if (args.length < 2) return { ok: false, error: t('cad.cmd.usage.fillet', '用法: fillet radius sel|id <id> [id <id2>]') };
       try {
         const r = parseNum(args[0]);
-        if (r < 0) return { ok: false, error: '半径必须 >= 0' };
+        if (r < 0) return { ok: false, error: t('cad.err.radiusMustBeGE0', '半径必须 >= 0') };
         const sel = args[1].toLowerCase();
         let lines = [];
         if (sel === 'sel') {
           const ids = Document.getSelectedIds();
-          if (ids.length < 2) return { ok: false, error: '需要选中 2 个 line/polyline 对象' };
+          if (ids.length < 2) return { ok: false, error: t('cad.err.needTwoLinePolyline', '需要选中 2 个 line/polyline 对象') };
           lines = ids.map(id => Document.getObject(id)).filter(o => o && (o.type === 'line' || o.type === 'polyline'));
-          if (lines.length < 2) return { ok: false, error: '选中对象必须为 line/polyline' };
+          if (lines.length < 2) return { ok: false, error: t('cad.err.mustBeLinePolyline', '选中对象必须为 line/polyline') };
         } else if (sel === 'id' && args[2]) {
           const o1 = Document.getObject(args[2]);
-          if (!o1) return { ok: false, error: '对象不存在: ' + args[2] };
+          if (!o1) return { ok: false, error: t('cad.err.objNotExist', '对象不存在: {id}', { id: args[2] }) };
           lines.push(o1);
           if (args[3] === 'id' && args[4]) {
             const o2 = Document.getObject(args[4]);
-            if (!o2) return { ok: false, error: '对象不存在: ' + args[4] };
+            if (!o2) return { ok: false, error: t('cad.err.objNotExist', '对象不存在: {id}', { id: args[4] }) };
             lines.push(o2);
           }
         } else {
-          return { ok: false, error: '用法: fillet radius sel|id <id> [id <id2>]' };
+          return { ok: false, error: t('cad.cmd.usage.fillet', '用法: fillet radius sel|id <id> [id <id2>]') };
         }
-        if (lines.length !== 2) return { ok: false, error: 'fillet 仅支持两条线段' };
+        if (lines.length !== 2) return { ok: false, error: t('cad.err.filletOnlyTwoLines', 'fillet 仅支持两条线段') };
         // 仅支持 line-line fillet
         if (lines[0].type !== 'line' || lines[1].type !== 'line') {
-          return { ok: false, error: 'fillet 当前仅支持 line + line' };
+          return { ok: false, error: t('cad.err.filletOnlyLineLine', 'fillet 当前仅支持 line + line') };
         }
         const l1 = lines[0].props, l2 = lines[1].props;
         // 求交点
         const intersect = segIntersect(l1.start, l1.end, l2.start, l2.end);
-        if (!intersect) return { ok: false, error: '两线段不相交' };
+        if (!intersect) return { ok: false, error: t('cad.err.linesNotIntersect', '两线段不相交') };
         // 缩短每条线到距离交点 r 处，并添加圆弧
         const d1 = dist(intersect, l1.end) < dist(intersect, l1.start) ? 'end' : 'start';
         const d2 = dist(intersect, l2.end) < dist(intersect, l2.start) ? 'end' : 'start';
@@ -3105,7 +3105,7 @@
 
     // chamfer: 倒角两条线段的交点
     _chamfer(args) {
-      if (args.length < 2) return { ok: false, error: '用法: chamfer distance1 sel [distance2]  或 chamfer d1 id <id1> id <id2> [d2]' };
+      if (args.length < 2) return { ok: false, error: t('cad.cmd.usage.chamfer', '用法: chamfer distance1 sel [distance2]  或 chamfer d1 id <id1> id <id2> [d2]') };
       try {
         const d1 = parseNum(args[0]);
         let d2 = d1;
@@ -3114,27 +3114,27 @@
         let argIdx = 2;
         if (sel === 'sel') {
           const ids = Document.getSelectedIds();
-          if (ids.length < 2) return { ok: false, error: '需要选中 2 个 line 对象' };
+          if (ids.length < 2) return { ok: false, error: t('cad.err.needTwoLines', '需要选中 2 个 line 对象') };
           lines = ids.map(id => Document.getObject(id)).filter(o => o && o.type === 'line');
-          if (lines.length < 2) return { ok: false, error: '选中对象必须为 line' };
+          if (lines.length < 2) return { ok: false, error: t('cad.err.mustBeLine', '选中对象必须为 line') };
           if (args[2]) { d2 = parseNum(args[2]); argIdx = 3; }
         } else if (sel === 'id' && args[2]) {
           const o1 = Document.getObject(args[2]);
-          if (!o1) return { ok: false, error: '对象不存在: ' + args[2] };
+          if (!o1) return { ok: false, error: t('cad.err.objNotExist', '对象不存在: {id}', { id: args[2] }) };
           lines.push(o1);
           if (args[3] === 'id' && args[4]) {
             const o2 = Document.getObject(args[4]);
-            if (!o2) return { ok: false, error: '对象不存在: ' + args[4] };
+            if (!o2) return { ok: false, error: t('cad.err.objNotExist', '对象不存在: {id}', { id: args[4] }) };
             lines.push(o2);
             if (args[5]) d2 = parseNum(args[5]);
           }
         } else {
-          return { ok: false, error: '用法: chamfer d1 sel [d2]  或 chamfer d1 id <id1> id <id2> [d2]' };
+          return { ok: false, error: t('cad.cmd.usage.chamferShort', '用法: chamfer d1 sel [d2]  或 chamfer d1 id <id1> id <id2> [d2]') };
         }
-        if (lines.length !== 2) return { ok: false, error: 'chamfer 仅支持两条 line' };
+        if (lines.length !== 2) return { ok: false, error: t('cad.err.chamferOnlyTwoLines', 'chamfer 仅支持两条 line') };
         const l1 = lines[0].props, l2 = lines[1].props;
         const intersect = segIntersect(l1.start, l1.end, l2.start, l2.end);
-        if (!intersect) return { ok: false, error: '两线段不相交' };
+        if (!intersect) return { ok: false, error: t('cad.err.linesNotIntersect', '两线段不相交') };
         const which1 = dist(intersect, l1.end) < dist(intersect, l1.start) ? 'end' : 'start';
         const which2 = dist(intersect, l2.end) < dist(intersect, l2.start) ? 'end' : 'start';
         const cutPt1 = pointOnLineAtDist(intersect, which1 === 'end' ? l1.start : l1.end, d1);
@@ -3153,24 +3153,24 @@
     // trim: 用其他对象裁剪选中对象
     // trim sel [id <cuttingId>]
     _trim(args) {
-      if (args.length < 1) return { ok: false, error: '用法: trim sel [id <cuttingId>]' };
+      if (args.length < 1) return { ok: false, error: t('cad.cmd.usage.trim', '用法: trim sel [id <cuttingId>]') };
       try {
         const sel = args[0].toLowerCase();
         let targets = [], cutters = [];
         if (sel === 'sel') {
           const ids = Document.getSelectedIds();
-          if (ids.length < 2) return { ok: false, error: '至少需选中 2 个对象（1 个被裁剪 + 1 个裁剪边界）' };
+          if (ids.length < 2) return { ok: false, error: t('cad.err.needTwoObjsTrim', '至少需选中 2 个对象（1 个被裁剪 + 1 个裁剪边界）') };
           // 假设最后一个选中对象是裁剪边界，前面的是被裁剪对象
           targets = ids.slice(0, -1).map(id => Document.getObject(id));
           cutters = [Document.getObject(ids[ids.length - 1])];
         } else if (sel === 'id' && args[1] && args[2] === 'id' && args[3]) {
           const o = Document.getObject(args[1]);
-          if (!o) return { ok: false, error: '对象不存在: ' + args[1] };
+          if (!o) return { ok: false, error: t('cad.err.objNotExist', '对象不存在: {id}', { id: args[1] }) };
           const c = Document.getObject(args[3]);
-          if (!c) return { ok: false, error: '对象不存在: ' + args[3] };
+          if (!c) return { ok: false, error: t('cad.err.objNotExist', '对象不存在: {id}', { id: args[3] }) };
           targets = [o]; cutters = [c];
         } else {
-          return { ok: false, error: '用法: trim sel | trim id <id> id <cuttingId>' };
+          return { ok: false, error: t('cad.cmd.usage.trimShort', '用法: trim sel | trim id <id> id <cuttingId>') };
         }
         Document.pushHistory();
         let trimmed = 0;
@@ -3198,23 +3198,23 @@
 
     // extend: 延伸线段到边界对象
     _extend(args) {
-      if (args.length < 1) return { ok: false, error: '用法: extend sel [id <boundaryId>]' };
+      if (args.length < 1) return { ok: false, error: t('cad.cmd.usage.extend', '用法: extend sel [id <boundaryId>]') };
       try {
         const sel = args[0].toLowerCase();
         let targets = [], bounds = [];
         if (sel === 'sel') {
           const ids = Document.getSelectedIds();
-          if (ids.length < 2) return { ok: false, error: '至少需选中 2 个对象' };
+          if (ids.length < 2) return { ok: false, error: t('cad.err.needAtLeastTwoObjs', '至少需选中 2 个对象') };
           targets = ids.slice(0, -1).map(id => Document.getObject(id));
           bounds = [Document.getObject(ids[ids.length - 1])];
         } else if (sel === 'id' && args[1] && args[2] === 'id' && args[3]) {
           const o = Document.getObject(args[1]);
-          if (!o) return { ok: false, error: '对象不存在: ' + args[1] };
+          if (!o) return { ok: false, error: t('cad.err.objNotExist', '对象不存在: {id}', { id: args[1] }) };
           const b = Document.getObject(args[3]);
-          if (!b) return { ok: false, error: '对象不存在: ' + args[3] };
+          if (!b) return { ok: false, error: t('cad.err.objNotExist', '对象不存在: {id}', { id: args[3] }) };
           targets = [o]; bounds = [b];
         } else {
-          return { ok: false, error: '用法: extend sel | extend id <id> id <boundaryId>' };
+          return { ok: false, error: t('cad.cmd.usage.extendShort', '用法: extend sel | extend id <id> id <boundaryId>') };
         }
         Document.pushHistory();
         let extended = 0;
@@ -3240,11 +3240,11 @@
 
     // break: 在指定点打断对象
     _break(args) {
-      if (args.length < 2) return { ok: false, error: '用法: break id <id> x,y  |  break id <id> x1,y1 x2,y2' };
+      if (args.length < 2) return { ok: false, error: t('cad.cmd.usage.break', '用法: break id <id> x,y  |  break id <id> x1,y1 x2,y2') };
       try {
-        if (args[0].toLowerCase() !== 'id' || !args[1]) return { ok: false, error: '用法: break id <id> x,y' };
+        if (args[0].toLowerCase() !== 'id' || !args[1]) return { ok: false, error: t('cad.cmd.usage.breakShort', '用法: break id <id> x,y') };
         const o = Document.getObject(args[1]);
-        if (!o) return { ok: false, error: '对象不存在: ' + args[1] };
+        if (!o) return { ok: false, error: t('cad.err.objNotExist', '对象不存在: {id}', { id: args[1] }) };
         const p1 = parsePt(args[2]);
         const p2 = args[3] ? parsePt(args[3]) : p1;
         Document.pushHistory();
@@ -3264,7 +3264,7 @@
             if (dist(pts[i], p1) < 0.01) i1 = i;
             if (dist(pts[i], p2) < 0.01) i2 = i;
           }
-          if (i1 < 0 || i2 < 0) { Document._history.pop(); return { ok: false, error: '点不在折线顶点上' }; }
+          if (i1 < 0 || i2 < 0) { Document._history.pop(); return { ok: false, error: t('cad.err.pointNotOnPolyline', '点不在折线顶点上') }; }
           const lo = Math.min(i1, i2), hi = Math.max(i1, i2);
           const before = pts.slice(0, lo + 1);
           const after = pts.slice(hi);
@@ -3276,29 +3276,29 @@
           return { ok: true, result: { broken: true } };
         } else {
           Document._history.pop();
-          return { ok: false, error: 'break 仅支持 line / polyline' };
+          return { ok: false, error: t('cad.err.breakOnlyLinePolyline', 'break 仅支持 line / polyline') };
         }
       } catch (e) { return { ok: false, error: e.message }; }
     },
 
     // join: 合并两条共端点的线段为一条 polyline
     _join(args) {
-      if (args.length < 1) return { ok: false, error: '用法: join sel  |  join id <id1> id <id2>' };
+      if (args.length < 1) return { ok: false, error: t('cad.cmd.usage.join', '用法: join sel  |  join id <id1> id <id2>') };
       try {
         const sel = args[0].toLowerCase();
         let objs = [];
         if (sel === 'sel') {
           const ids = Document.getSelectedIds();
-          if (ids.length < 2) return { ok: false, error: '需要选中 2 个或更多 line/polyline' };
+          if (ids.length < 2) return { ok: false, error: t('cad.err.needTwoOrMoreLinePolyline', '需要选中 2 个或更多 line/polyline') };
           objs = ids.map(id => Document.getObject(id)).filter(o => o && (o.type === 'line' || o.type === 'polyline'));
         } else if (sel === 'id' && args[1] && args[2] === 'id' && args[3]) {
           objs.push(Document.getObject(args[1]));
           objs.push(Document.getObject(args[3]));
           if (objs[0] && objs[1] && args[4] === 'id' && args[5]) objs.push(Document.getObject(args[5]));
         } else {
-          return { ok: false, error: '用法: join sel  |  join id <id1> id <id2>' };
+          return { ok: false, error: t('cad.cmd.usage.join', '用法: join sel  |  join id <id1> id <id2>') };
         }
-        if (objs.some(o => !o)) return { ok: false, error: '对象不存在' };
+        if (objs.some(o => !o)) return { ok: false, error: t('cad.err.objNotExistShort', '对象不存在') };
         // 提取所有点序列
         const allPts = [];
         for (const o of objs) {
@@ -3319,15 +3319,15 @@
 
     // explode: 把 polyline / rect / hatch 拆分成多个 line
     _explode(args) {
-      if (args.length < 1) return { ok: false, error: '用法: explode sel  |  explode id <id>' };
+      if (args.length < 1) return { ok: false, error: t('cad.cmd.usage.explode', '用法: explode sel  |  explode id <id>') };
       const sel = args[0].toLowerCase();
       let targets = [];
       if (sel === 'sel') targets = Document.getSelectedIds().map(id => Document.getObject(id));
       else if (sel === 'id' && args[1]) {
         const o = Document.getObject(args[1]);
-        if (!o) return { ok: false, error: '对象不存在: ' + args[1] };
+        if (!o) return { ok: false, error: t('cad.err.objNotExist', '对象不存在: {id}', { id: args[1] }) };
         targets = [o];
-      } else return { ok: false, error: '用法: explode sel | explode id <id>' };
+      } else return { ok: false, error: t('cad.cmd.usage.explode', '用法: explode sel | explode id <id>') };
       const explodeOne = (o) => {
         const lines = [];
         const p = o.props;
@@ -3367,7 +3367,7 @@
 
     // pedit: 折线编辑（简化：只支持 join 子命令）
     _pedit(args) {
-      if (args.length < 1) return { ok: false, error: '用法: pedit join sel|id <id> [id <id2> ...]' };
+      if (args.length < 1) return { ok: false, error: t('cad.cmd.usage.pedit', '用法: pedit join sel|id <id> [id <id2> ...]') };
       const sub = args[0].toLowerCase();
       if (sub === 'join') {
         return this._join(args.slice(1));
@@ -3378,9 +3378,9 @@
         if (sel === 'sel') targets = Document.getSelectedIds().map(id => Document.getObject(id));
         else if (sel === 'id' && args[2]) {
           const o = Document.getObject(args[2]);
-          if (!o) return { ok: false, error: '对象不存在: ' + args[2] };
+          if (!o) return { ok: false, error: t('cad.err.objNotExist', '对象不存在: {id}', { id: args[2] }) };
           targets = [o];
-        } else return { ok: false, error: '用法: pedit close|open sel|id <id>' };
+        } else return { ok: false, error: t('cad.cmd.usage.peditCloseOpen', '用法: pedit close|open sel|id <id>') };
         Document.pushHistory();
         let n = 0;
         for (const o of targets) {
@@ -3394,25 +3394,25 @@
         let target;
         if (sel === 'sel') {
           const ids = Document.getSelectedIds();
-          if (ids.length === 0) return { ok: false, error: '没有选中对象' };
+          if (ids.length === 0) return { ok: false, error: t('cad.err.noSelection', '没有选中对象') };
           target = Document.getObject(ids[0]);
         } else if (sel === 'id' && args[2]) {
           target = Document.getObject(args[2]);
-          if (!target) return { ok: false, error: '对象不存在: ' + args[2] };
-        } else return { ok: false, error: '用法: pedit reverse sel|id <id>' };
-        if (target.type !== 'polyline') return { ok: false, error: 'reverse 仅支持 polyline' };
+          if (!target) return { ok: false, error: t('cad.err.objNotExist', '对象不存在: {id}', { id: args[2] }) };
+        } else return { ok: false, error: t('cad.cmd.usage.peditReverse', '用法: pedit reverse sel|id <id>') };
+        if (target.type !== 'polyline') return { ok: false, error: t('cad.err.reverseOnlyPolyline', 'reverse 仅支持 polyline') };
         Document.pushHistory();
         target.props.points.reverse();
         Renderer.render();
         UI.refreshObjects();
         return { ok: true, result: { reversed: target.id } };
       }
-      return { ok: false, error: '未知 pedit 子命令: ' + sub };
+      return { ok: false, error: t('cad.err.unknownPeditSubcmd', '未知 pedit 子命令: {sub}', { sub }) };
     },
 
     // spline: 通过控制点的样条曲线（Catmull-Rom 近似，导出为 polyline）
     _spline(args) {
-      if (args.length < 3) return { ok: false, error: '用法: spline x1,y1 x2,y2 x3,y3 ... [--closed] [--order N]' };
+      if (args.length < 3) return { ok: false, error: t('cad.cmd.usage.spline', '用法: spline x1,y1 x2,y2 x3,y3 ... [--closed] [--order N]') };
       try {
         let closed = false, order = 16;
         const pts = [];
@@ -3422,7 +3422,7 @@
           if (a.toLowerCase() === '--order') { order = parseInt(args[++i]) || 16; continue; }
           pts.push(parsePt(a));
         }
-        if (pts.length < 3) return { ok: false, error: '至少需要 3 个控制点' };
+        if (pts.length < 3) return { ok: false, error: t('cad.err.needThreePoints', '至少需要 3 个控制点') };
         // Catmull-Rom 样条采样
         const samples = catmullRom(pts, closed, order);
         Document.pushHistory();
@@ -3435,7 +3435,7 @@
 
     // point: 单点对象（用小圆圈表示）
     _point(args) {
-      if (args.length < 1) return { ok: false, error: '用法: point x,y' };
+      if (args.length < 1) return { ok: false, error: t('cad.cmd.usage.point', '用法: point x,y') };
       try {
         const p = parsePt(args[0]);
         Document.pushHistory();
@@ -3449,14 +3449,14 @@
     // block: 块定义（创建命名块）
     // block define NAME sel  |  block define NAME id <id1> [id <id2>...]
     _block(args) {
-      if (args.length < 2) return { ok: false, error: '用法: block define NAME sel|id <id>...  |  block list  |  block delete NAME' };
+      if (args.length < 2) return { ok: false, error: t('cad.cmd.usage.block', '用法: block define NAME sel|id <id>...  |  block list  |  block delete NAME') };
       const sub = args[0].toLowerCase();
       if (sub === 'list') {
         return { ok: true, result: { blocks: Array.from(Document._blocks.entries()).map(([name, b]) => ({ name, base: b.base, objectCount: b.objects.length })) } };
       }
       if (sub === 'delete') {
-        if (!args[1]) return { ok: false, error: '用法: block delete NAME' };
-        if (!Document._blocks.has(args[1])) return { ok: false, error: '块不存在: ' + args[1] };
+        if (!args[1]) return { ok: false, error: t('cad.cmd.usage.blockDelete', '用法: block delete NAME') };
+        if (!Document._blocks.has(args[1])) return { ok: false, error: t('cad.err.blockNotExist', '块不存在: {name}', { name: args[1] }) };
         Document.pushHistory();
         Document._blocks.delete(args[1]);
         return { ok: true, result: { deleted: args[1] } };
@@ -3475,7 +3475,7 @@
             }
           }
         }
-        if (targets.length === 0) return { ok: false, error: '没有可定义为块的对象' };
+        if (targets.length === 0) return { ok: false, error: t('cad.err.noBlockObjs', '没有可定义为块的对象') };
         // 取所有对象的中心作为基点
         let cx = 0, cy = 0, n = 0;
         for (const o of targets) {
@@ -3497,12 +3497,12 @@
         UI.refreshObjects();
         return { ok: true, result: { block: name, base: { x: cx, y: cy }, objectCount: blockObjs.length } };
       }
-      return { ok: false, error: '未知 block 子命令: ' + sub };
+      return { ok: false, error: t('cad.err.unknownBlockSubcmd', '未知 block 子命令: {sub}', { sub }) };
     },
 
     // insert: 插入块引用
     _insert(args) {
-      if (args.length < 2) return { ok: false, error: '用法: insert NAME x,y [scale] [rotationDeg]' };
+      if (args.length < 2) return { ok: false, error: t('cad.cmd.usage.insert', '用法: insert NAME x,y [scale] [rotationDeg]') };
       try {
         const name = args[0];
         const pos = parsePt(args[1]);
@@ -3510,7 +3510,7 @@
         if (args[2]) scaleFactor = parseNum(args[2]);
         if (args[3]) rotDeg = parseNum(args[3]);
         const block = Document._blocks.get(name);
-        if (!block) return { ok: false, error: '块不存在: ' + name };
+        if (!block) return { ok: false, error: t('cad.err.blockNotExist', '块不存在: {name}', { name }) };
         const rot = rotDeg * Math.PI / 180;
         Document.pushHistory();
         const newIds = [];
@@ -3547,13 +3547,13 @@
 
     // dist: 计算两点距离
     _dist(args) {
-      if (args.length < 2) return { ok: false, error: '用法: dist x1,y1 x2,y2  |  dist id <id1> id <id2>' };
+      if (args.length < 2) return { ok: false, error: t('cad.cmd.usage.dist', '用法: dist x1,y1 x2,y2  |  dist id <id1> id <id2>') };
       try {
         if (args[0].toLowerCase() === 'id' && args[1] && args[2] === 'id' && args[3]) {
           const o1 = Document.getObject(args[1]);
           const o2 = Document.getObject(args[3]);
-          if (!o1) return { ok: false, error: '对象不存在: ' + args[1] };
-          if (!o2) return { ok: false, error: '对象不存在: ' + args[3] };
+          if (!o1) return { ok: false, error: t('cad.err.objNotExist', '对象不存在: {id}', { id: args[1] }) };
+          if (!o2) return { ok: false, error: t('cad.err.objNotExist', '对象不存在: {id}', { id: args[3] }) };
           const c1 = this._centerOf(o1), c2 = this._centerOf(o2);
           const d = dist(c1, c2);
           return { ok: true, result: { distance: d, from: c1, to: c2, unit: 'world' } };
@@ -3566,19 +3566,19 @@
 
     // length: 计算对象长度（line / polyline / arc / circle 周长）
     _length(args) {
-      if (args.length < 2) return { ok: false, error: '用法: length id <id>  |  length sel' };
+      if (args.length < 2) return { ok: false, error: t('cad.cmd.usage.length', '用法: length id <id>  |  length sel') };
       const sel = args[0].toLowerCase();
       let targets = [];
       if (sel === 'id' && args[1]) {
         const o = Document.getObject(args[1]);
-        if (!o) return { ok: false, error: '对象不存在: ' + args[1] };
+        if (!o) return { ok: false, error: t('cad.err.objNotExist', '对象不存在: {id}', { id: args[1] }) };
         targets = [o];
       } else if (sel === 'sel') {
         targets = Document.getSelectedIds().map(id => Document.getObject(id));
       } else {
-        return { ok: false, error: '用法: length id <id>  |  length sel' };
+        return { ok: false, error: t('cad.cmd.usage.length', '用法: length id <id>  |  length sel') };
       }
-      if (targets.length === 0) return { ok: false, error: '没有选中对象' };
+      if (targets.length === 0) return { ok: false, error: t('cad.err.noSelection', '没有选中对象') };
       const results = targets.map(o => ({ id: o.id, type: o.type, length: this._objLength(o) }));
       const total = results.reduce((s, r) => s + r.length, 0);
       return { ok: true, result: { items: results, total } };
@@ -3632,12 +3632,12 @@
 
     // area: 计算对象面积
     _area(args) {
-      if (args.length < 1) return { ok: false, error: '用法: area id <id>  |  area sel  |  area x1,y1 x2,y2 x3,y3 ...' };
+      if (args.length < 1) return { ok: false, error: t('cad.cmd.usage.area', '用法: area id <id>  |  area sel  |  area x1,y1 x2,y2 x3,y3 ...') };
       const sel = args[0].toLowerCase();
       let targets = [];
       if (sel === 'id' && args[1]) {
         const o = Document.getObject(args[1]);
-        if (!o) return { ok: false, error: '对象不存在: ' + args[1] };
+        if (!o) return { ok: false, error: t('cad.err.objNotExist', '对象不存在: {id}', { id: args[1] }) };
         targets = [o];
       } else if (sel === 'sel') {
         targets = Document.getSelectedIds().map(id => Document.getObject(id));
@@ -3645,7 +3645,7 @@
         // 当作点序列求多边形面积
         try {
           const pts = args.map(parsePt);
-          if (pts.length < 3) return { ok: false, error: '面积至少需要 3 个点' };
+          if (pts.length < 3) return { ok: false, error: t('cad.err.areaNeedThreePoints', '面积至少需要 3 个点') };
           let s = 0;
           for (let i = 0; i < pts.length; i++) {
             const j = (i + 1) % pts.length;
@@ -3654,7 +3654,7 @@
           return { ok: true, result: { area: Math.abs(s) / 2, points: pts.length, type: 'polygon' } };
         } catch (e) { return { ok: false, error: e.message }; }
       }
-      if (targets.length === 0) return { ok: false, error: '没有选中对象' };
+      if (targets.length === 0) return { ok: false, error: t('cad.err.noSelection', '没有选中对象') };
       const results = targets.map(o => ({ id: o.id, type: o.type, area: this._objArea(o) }));
       const total = results.reduce((s, r) => s + r.area, 0);
       return { ok: true, result: { items: results, total } };
@@ -3702,7 +3702,7 @@
       const sel = args[0].toLowerCase();
       if (sel === 'id' && args[1]) {
         const o = Document.getObject(args[1]);
-        if (!o) return { ok: false, error: '对象不存在: ' + args[1] };
+        if (!o) return { ok: false, error: t('cad.err.objNotExist', '对象不存在: {id}', { id: args[1] }) };
         const bb = Renderer._boundingBox(o);
         return { ok: true, result: {
           id: o.id, type: o.type, layer: o.layer, selected: o.selected,
@@ -3718,7 +3718,7 @@
         }));
         return { ok: true, result: { count: objs.length, objects: objs } };
       }
-      return { ok: false, error: '用法: list  |  list id <id>  |  list sel' };
+      return { ok: false, error: t('cad.cmd.usage.list', '用法: list  |  list id <id>  |  list sel') };
     },
 
     // info: 总览
@@ -3755,16 +3755,16 @@
           if (bb.max.x > maxX) maxX = bb.max.x;
           if (bb.max.y > maxY) maxY = bb.max.y;
         }
-        if (!isFinite(minX)) return { ok: true, result: { bbox: null, hint: '空文档' } };
+        if (!isFinite(minX)) return { ok: true, result: { bbox: null, hint: t('cad.status.emptyDoc', '空文档') } };
         const w = maxX - minX, h = maxY - minY;
         return { ok: true, result: { bbox: { min: { x: minX, y: minY }, max: { x: maxX, y: maxY } }, width: w, height: h, cx: (minX + maxX) / 2, cy: (minY + maxY) / 2 } };
       }
       const sel = args[0].toLowerCase();
       if (sel === 'id' && args[1]) {
         const o = Document.getObject(args[1]);
-        if (!o) return { ok: false, error: '对象不存在: ' + args[1] };
+        if (!o) return { ok: false, error: t('cad.err.objNotExist', '对象不存在: {id}', { id: args[1] }) };
         const bb = Renderer._boundingBox(o);
-        if (!bb) return { ok: false, error: '对象无边界框' };
+        if (!bb) return { ok: false, error: t('cad.err.noBbox', '对象无边界框') };
         const w = bb.max.x - bb.min.x, h = bb.max.y - bb.min.y;
         return { ok: true, result: { id: o.id, type: o.type, bbox: bb, width: w, height: h, cx: (bb.min.x + bb.max.x) / 2, cy: (bb.min.y + bb.max.y) / 2 } };
       }
@@ -3781,16 +3781,16 @@
           if (bb.max.y > maxY) maxY = bb.max.y;
           count++;
         }
-        if (count === 0) return { ok: false, error: '没有选中对象' };
+        if (count === 0) return { ok: false, error: t('cad.err.noSelection', '没有选中对象') };
         const w = maxX - minX, h = maxY - minY;
         return { ok: true, result: { count, bbox: { min: { x: minX, y: minY }, max: { x: maxX, y: maxY } }, width: w, height: h } };
       }
-      return { ok: false, error: '用法: bbox  |  bbox id <id>  |  bbox sel' };
+      return { ok: false, error: t('cad.cmd.usage.bbox', '用法: bbox  |  bbox id <id>  |  bbox sel') };
     },
 
     // find: 查找对象
     _find(args) {
-      if (args.length < 2) return { ok: false, error: '用法: find type <type>  |  find layer <name>  |  find id <id>' };
+      if (args.length < 2) return { ok: false, error: t('cad.cmd.usage.find', '用法: find type <type>  |  find layer <name>  |  find id <id>') };
       const sel = args[0].toLowerCase();
       if (sel === 'type') {
         const t = args[1].toLowerCase();
@@ -3805,7 +3805,7 @@
       }
       if (sel === 'id' && args[1]) {
         const o = Document.getObject(args[1]);
-        if (!o) return { ok: false, error: '对象不存在: ' + args[1] };
+        if (!o) return { ok: false, error: t('cad.err.objNotExist', '对象不存在: {id}', { id: args[1] }) };
         return { ok: true, result: { found: true, object: { id: o.id, type: o.type, layer: o.layer, props: o.props } } };
       }
       if (sel === 'near' && args[1]) {
@@ -3825,7 +3825,7 @@
           return { ok: true, result: { found: true, distance: bestD, object: { id: best.id, type: best.type, layer: best.layer } } };
         } catch (e) { return { ok: false, error: e.message }; }
       }
-      return { ok: false, error: '未知 find 子命令: ' + sel };
+      return { ok: false, error: t('cad.err.unknownFindSubcmd', '未知 find 子命令: {sel}', { sel }) };
     },
 
     // count: 统计
@@ -3845,7 +3845,7 @@
 
     // id: 查询指定坐标下的对象
     _idAt(args) {
-      if (args.length < 1) return { ok: false, error: '用法: id x,y [maxDist]' };
+      if (args.length < 1) return { ok: false, error: t('cad.cmd.usage.id', '用法: id x,y [maxDist]') };
       try {
         const p = parsePt(args[0]);
         const maxD = args[1] ? parseNum(args[1]) : 10;
@@ -3862,7 +3862,7 @@
     },
 
     _snap(args) {
-      if (args.length === 0) return { ok: false, error: '用法: snap on|off|status  |  snap endpoint|midpoint|center|intersection|nearest' };
+      if (args.length === 0) return { ok: false, error: t('cad.cmd.usage.snap', '用法: snap on|off|status  |  snap endpoint|midpoint|center|intersection|nearest') };
       const sub = args[0].toLowerCase();
       if (sub === 'on') { Document._snapEnabled = true; return { ok: true, result: { snap: true } }; }
       if (sub === 'off') { Document._snapEnabled = false; return { ok: true, result: { snap: false } }; }
@@ -3874,11 +3874,11 @@
         else Document._snapModes.add(sub);
         return { ok: true, result: { mode: sub, enabled: Document._snapModes.has(sub), active: Array.from(Document._snapModes) } };
       }
-      return { ok: false, error: '未知 snap 子命令: ' + sub };
+      return { ok: false, error: t('cad.err.unknownSnapSubcmd', '未知 snap 子命令: {sub}', { sub }) };
     },
 
     _zoom(args) {
-      if (args.length < 1) return { ok: false, error: '用法: zoom factor  |  zoom extents  |  zoom window x1,y1 x2,y2  |  zoom in  |  zoom out' };
+      if (args.length < 1) return { ok: false, error: t('cad.cmd.usage.zoom', '用法: zoom factor  |  zoom extents  |  zoom window x1,y1 x2,y2  |  zoom in  |  zoom out') };
       const sub = args[0].toLowerCase();
       if (sub === 'extents' || sub === 'e' || sub === 'all') {
         Renderer.fit();
@@ -3893,7 +3893,7 @@
         return { ok: true, result: { zoom: Document.view.zoom, action: 'out' } };
       }
       if (sub === 'window' || sub === 'w') {
-        if (args.length < 3) return { ok: false, error: '用法: zoom window x1,y1 x2,y2' };
+        if (args.length < 3) return { ok: false, error: t('cad.cmd.usage.zoomWindow', '用法: zoom window x1,y1 x2,y2') };
         try {
           const a = parsePt(args[1]), b = parsePt(args[2]);
           const minX = Math.min(a.x, b.x), maxX = Math.max(a.x, b.x);
@@ -3916,7 +3916,7 @@
     },
 
     _pan(args) {
-      if (args.length < 1) return { ok: false, error: '用法: pan dx,dy' };
+      if (args.length < 1) return { ok: false, error: t('cad.cmd.usage.pan', '用法: pan dx,dy') };
       try {
         const p = parsePt(args[0]);
         Renderer.pan(p.x * Document.view.zoom, -p.y * Document.view.zoom);
@@ -3925,7 +3925,7 @@
     },
 
     _grid(args) {
-      if (args.length === 0) return { ok: false, error: '用法: grid on|off' };
+      if (args.length === 0) return { ok: false, error: t('cad.cmd.usage.grid', '用法: grid on|off') };
       const v = args[0].toLowerCase() === 'on';
       // Store on document.meta
       Document._showGrid = v;
@@ -3938,11 +3938,11 @@
     //       dxfin <filepath>     (从指定路径导入)
     _dxfin(args) {
       if (args.length === 0) {
-        return { ok: false, error: '请在界面点击 文件→导入 DXF 按钮，或通过 IPC 调用 cadAPI.importDxfDialog()' };
+        return { ok: false, error: t('cad.err.dxfUseButton', '请在界面点击 文件→导入 DXF 按钮，或通过 IPC 调用 cadAPI.importDxfDialog()') };
       }
       // 命令行仅支持已读取的 DXF 文本（通过 IPC 已读取并传入）
       // args[0] 形如 "path"; 但本上下文无法访问 fs，所以仅作为提示
-      return { ok: false, error: '命令行不支持直接读取文件，请使用 文件→导入 DXF 按钮' };
+      return { ok: false, error: t('cad.err.cmdLineNotSupportFile', '命令行不支持直接读取文件，请使用 文件→导入 DXF 按钮') };
     },
 
     // 填充图案库管理
@@ -3951,7 +3951,7 @@
     //       hatchpattern set <name>           (为选中对象设置图案)
     //       hatchpattern set <name> id <id>   (为指定对象设置图案)
     _hatchpattern(args) {
-      if (args.length === 0) return { ok: false, error: '用法: hatchpattern list|current|set <name> [id <id>]' };
+      if (args.length === 0) return { ok: false, error: t('cad.cmd.usage.hatchpattern', '用法: hatchpattern list|current|set <name> [id <id>]') };
       const sub = args[0].toLowerCase();
       const patterns = HatchPatterns.list();
       if (sub === 'list') {
@@ -3959,22 +3959,22 @@
       }
       if (sub === 'current') {
         const sel = Document.getSelectedIds().map(id => Document.getObject(id)).filter(o => o && o.type === 'hatch');
-        if (sel.length === 0) return { ok: false, error: '请先选中一个 hatch 对象' };
+        if (sel.length === 0) return { ok: false, error: t('cad.err.selectHatchFirst', '请先选中一个 hatch 对象') };
         return { ok: true, result: sel.map(o => ({ id: o.id, pattern: o.props.pattern || 'ansi31' })) };
       }
       if (sub === 'set') {
-        if (!args[1]) return { ok: false, error: '用法: hatchpattern set <name> [id <id>]' };
+        if (!args[1]) return { ok: false, error: t('cad.cmd.usage.hatchpatternSet', '用法: hatchpattern set <name> [id <id>]') };
         const name = args[1].toLowerCase();
-        if (!HatchPatterns.get(name)) return { ok: false, error: '未知图案: ' + name + '。使用 hatchpattern list 查看可用图案' };
+        if (!HatchPatterns.get(name)) return { ok: false, error: t('cad.err.unknownPattern', '未知图案: {pattern}。使用 hatchpattern list 查看可用图案', { pattern: name }) };
         let targets;
         if (args[2] && args[2].toLowerCase() === 'id' && args[3]) {
           const o = Document.getObject(args[3]);
-          if (!o) return { ok: false, error: '对象不存在' };
-          if (o.type !== 'hatch') return { ok: false, error: '对象不是 hatch 类型' };
+          if (!o) return { ok: false, error: t('cad.err.objNotExistShort', '对象不存在') };
+          if (o.type !== 'hatch') return { ok: false, error: t('cad.err.objNotHatch', '对象不是 hatch 类型') };
           targets = [o];
         } else {
           targets = Document.getSelectedIds().map(id => Document.getObject(id)).filter(o => o && o.type === 'hatch');
-          if (targets.length === 0) return { ok: false, error: '请先选中一个 hatch 对象' };
+          if (targets.length === 0) return { ok: false, error: t('cad.err.selectHatchFirst', '请先选中一个 hatch 对象') };
         }
         Document.pushHistory();
         for (const o of targets) o.props.pattern = name;
@@ -3982,7 +3982,7 @@
         UI.refreshObjects();
         return { ok: true, result: { updated: targets.length, pattern: name } };
       }
-      return { ok: false, error: '未知子命令: ' + sub };
+      return { ok: false, error: t('cad.err.unknownSubcmd', '未知子命令: {sub}', { sub }) };
     },
 
     _help(cmd) {
@@ -3996,18 +3996,18 @@
         ellipse: 'ellipse cx,cy rx ry [rotationDeg]',
         spline: 'spline x1,y1 x2,y2 x3,y3 ... [--closed] [--order N]',
         text: 'text x,y "content" [height] [rotationDeg]',
-        dim: 'dim x1,y1 x2,y2 [offset]  (对齐标注)',
-        dimalign: 'dimalign x1,y1 x2,y2 [offset]  (对齐标注, 同 dim)',
-        dimlinear: 'dimlinear h|v x1,y1 x2,y2 [offset]  (h=水平 v=垂直)',
-        dimradius: 'dimradius id <id> [angleDeg]  (半径标注, 仅 circle/arc)',
-        dimdiameter: 'dimdiameter id <id> [angleDeg]  (直径标注, 仅 circle/arc)',
-        dimangle: 'dimangle vx,vy x1,y1 x2,y2 [offset]  (角度标注, 顶点+两边端点)',
-        dimleader: 'dimleader x,y x2,y2 "text"  (引线标注)',
+        dim: t('cad.cmd.help.dim', 'dim x1,y1 x2,y2 [offset]  (对齐标注)'),
+        dimalign: t('cad.cmd.help.dimalign', 'dimalign x1,y1 x2,y2 [offset]  (对齐标注, 同 dim)'),
+        dimlinear: t('cad.cmd.help.dimlinear', 'dimlinear h|v x1,y1 x2,y2 [offset]  (h=水平 v=垂直)'),
+        dimradius: t('cad.cmd.help.dimradius', 'dimradius id <id> [angleDeg]  (半径标注, 仅 circle/arc)'),
+        dimdiameter: t('cad.cmd.help.dimdiameter', 'dimdiameter id <id> [angleDeg]  (直径标注, 仅 circle/arc)'),
+        dimangle: t('cad.cmd.help.dimangle', 'dimangle vx,vy x1,y1 x2,y2 [offset]  (角度标注, 顶点+两边端点)'),
+        dimleader: t('cad.cmd.help.dimleader', 'dimleader x,y x2,y2 "text"  (引线标注)'),
         hatch: 'hatch x1,y1 x2,y2 x3,y3 ... [--angle deg] [--spacing n] [--pattern NAME] [--closed]',
         point: 'point x,y',
         // === 文件 ===
-        dxfin: 'dxfin (DXF 导入: 通过界面 文件→导入 DXF)',
-        dxfout: 'dxfout (DXF 导出: 通过界面 文件→导出 DXF)',
+        dxfin: t('cad.cmd.help.dxfin', 'dxfin (DXF 导入: 通过界面 文件→导入 DXF)'),
+        dxfout: t('cad.cmd.help.dxfout', 'dxfout (DXF 导出: 通过界面 文件→导出 DXF)'),
         hatchpattern: 'hatchpattern list|current|set <name> [id <id>]',
         // === 编辑 ===
         move: 'move sel|all|id <id> dx,dy',
@@ -4023,7 +4023,7 @@
         extend: 'extend sel  |  extend id <id> id <boundaryId>',
         break: 'break id <id> x,y [x2,y2]',
         join: 'join sel  |  join id <id1> id <id2> [id <id3>...]',
-        explode: 'explode sel  |  explode id <id>  (把 polyline/rect/hatch 拆为 line)',
+        explode: t('cad.cmd.help.explode', 'explode sel  |  explode id <id>  (把 polyline/rect/hatch 拆为 line)'),
         pedit: 'pedit join|close|open|reverse sel|id <id>',
         // === 块 ===
         block: 'block define NAME sel|id <id>...  |  block list  |  block delete NAME',
@@ -4032,16 +4032,16 @@
         select: 'select all|clear|id <id> [--add]|layer <name>',
         // === 删除 ===
         delete: 'delete sel|id <id>',
-        clear: 'clear (清空所有对象)',
+        clear: t('cad.cmd.help.clear', 'clear (清空所有对象)'),
         // === 撤销 ===
-        undo: 'undo (撤销上一步)',
-        redo: 'redo (重做)',
+        undo: t('cad.cmd.help.undo', 'undo (撤销上一步)'),
+        redo: t('cad.cmd.help.redo', 'redo (重做)'),
         // === 图层 ===
         layer: 'layer new|delete|current|color|on|off|lock|list NAME [...]',
         // === 视图 ===
         zoom: 'zoom factor  |  zoom extents  |  zoom window',
         pan: 'pan dx,dy',
-        fit: 'fit (自适应视图)',
+        fit: t('cad.cmd.help.fit', 'fit (自适应视图)'),
         grid: 'grid on|off',
         snap: 'snap on|off|status|endpoint|midpoint|center|intersection|nearest',
         // === 查询 ===
@@ -4050,11 +4050,11 @@
         area: 'area id <id>  |  area sel  |  area x1,y1 x2,y2 x3,y3 ...',
         perim: 'perim id <id>  |  perim sel',
         list: 'list  |  list id <id>  |  list sel',
-        info: 'info (文档总览)',
+        info: t('cad.cmd.help.info', 'info (文档总览)'),
         bbox: 'bbox  |  bbox id <id>  |  bbox sel',
         find: 'find type <type>  |  find layer <name>  |  find id <id>  |  find near x,y [maxDist]',
         count: 'count  |  count type <type>  |  count layer <name>',
-        id: 'id x,y [maxDist] (查询指定坐标下的对象)'
+        id: t('cad.cmd.help.id', 'id x,y [maxDist] (查询指定坐标下的对象)')
       };
       if (cmd && help[cmd.toLowerCase()]) return { ok: true, result: help[cmd.toLowerCase()] };
       return { ok: true, result: help };
@@ -4080,22 +4080,22 @@
 
       // Layer toolbar buttons
       document.getElementById('btn-layer-new').addEventListener('click', () => {
-        const name = prompt('图层名称:');
+        const name = prompt(t('cad.layer.newName', '图层名称:'));
         if (!name) return;
         if (Document.addLayer(name, '#4f8cff')) {
           Document.setCurrentLayer(name);
           this.refreshLayers();
-          this.setStatus(`新建图层: ${name}`, 'success');
+          this.setStatus(t('cad.status.layerCreated', '新建图层: {name}', { name }), 'success');
         } else {
-          this.setStatus('图层已存在', 'error');
+          this.setStatus(t('cad.err.layerExist', '图层已存在'), 'error');
         }
       });
 
       document.getElementById('btn-layer-delete').addEventListener('click', () => {
-        if (Document.layers.length <= 1) { this.setStatus('至少保留一个图层', 'error'); return; }
+        if (Document.layers.length <= 1) { this.setStatus(t('cad.err.keepOneLayer', '至少保留一个图层'), 'error'); return; }
         if (Document.deleteLayer(Document.currentLayer)) {
           this.refreshLayers();
-          this.setStatus(`删除图层: ${Document.currentLayer}`, 'success');
+          this.setStatus(t('cad.status.layerDeleted', '删除图层: {name}', { name: Document.currentLayer }), 'success');
         }
       });
 
@@ -4153,7 +4153,7 @@
           const res = Executor.execute(line);
           if (res.ok) {
             this.logOut(`✓ ${typeof res.result === 'object' ? JSON.stringify(res.result) : res.result}`);
-            this.setStatus('就绪', 'success');
+            this.setStatus(t('cad.status.ready', '就绪'), 'success');
           } else {
             this.logErr(`✗ ${res.error}`);
             this.setStatus(res.error, 'error');
@@ -4169,10 +4169,10 @@
       function updateDocTitle(filePath) {
         const el = document.getElementById('doc-name');
         if (!el) return;
-        if (!filePath) { el.textContent = '未命名工程'; return; }
+        if (!filePath) { el.textContent = t('cad.untitled', '未命名工程'); return; }
         // 取文件名（兼容 Windows 反斜杠与 POSIX 正斜杠）
         const parts = String(filePath).split(/[\\/]/);
-        el.textContent = parts[parts.length - 1] || '未命名工程';
+        el.textContent = parts[parts.length - 1] || t('cad.untitled', '未命名工程');
       }
 
       // Title bar buttons
@@ -4185,22 +4185,22 @@
           Document.modified = false;
           Document.filePath = r.path;
           updateDocTitle(r.path);
-          this.setStatus('已保存: ' + r.path, 'success');
-        } else this.setStatus('保存失败: ' + res.error, 'error');
+          this.setStatus(t('cad.status.saved', '已保存: {path}', { path: r.path }), 'success');
+        } else this.setStatus(t('cad.status.saveFailed', '保存失败: {error}', { error: res.error }), 'error');
       });
       document.getElementById('btn-export-png').addEventListener('click', async () => {
         const r = await window.cadAPI.saveImageDialog('export.png', 'PNG');
         if (!r || !r.ok || !r.path) return;
         const res = await window.cadAPI.exportImage(r.path, 'png');
-        if (res.ok) this.setStatus('已导出 PNG: ' + r.path, 'success');
-        else this.setStatus('导出失败: ' + res.error, 'error');
+        if (res.ok) this.setStatus(t('cad.status.exportedPng', '已导出 PNG: {path}', { path: r.path }), 'success');
+        else this.setStatus(t('cad.status.exportFailed', '导出失败: {error}', { error: res.error }), 'error');
       });
       document.getElementById('btn-export-dxf').addEventListener('click', async () => {
         const r = await window.cadAPI.saveImageDialog('export.dxf', 'DXF');
         if (!r || !r.ok || !r.path) return;
         const res = await window.cadAPI.exportDxf(r.path);
-        if (res.ok) this.setStatus('已导出 DXF: ' + r.path, 'success');
-        else this.setStatus('导出失败: ' + res.error, 'error');
+        if (res.ok) this.setStatus(t('cad.status.exportedDxf', '已导出 DXF: {path}', { path: r.path }), 'success');
+        else this.setStatus(t('cad.status.exportFailed', '导出失败: {error}', { error: res.error }), 'error');
       });
       // DXF 导入按钮
       const btnImportDxf = document.getElementById('btn-import-dxf');
@@ -4209,11 +4209,11 @@
           const r = await window.cadAPI.importDxfDialog();
           if (!r || !r.ok) {
             if (r && r.canceled) return;  // 用户取消
-            this.setStatus('导入失败: ' + (r ? r.error : '未知错误'), 'error');
+            this.setStatus(t('cad.status.importFailed', '导入失败: {error}', { error: r ? r.error : t('cad.status.unknownError', '未知错误') }), 'error');
             return;
           }
-          this.setStatus(`已导入 DXF: ${r.imported} 个对象, ${r.layers.length} 个新图层`, 'success');
-          this.logOut(`✓ DXF 导入完成: ${r.imported} 个对象, 新建图层: ${r.layers.join(', ') || '(无)'}`);
+          this.setStatus(t('cad.status.importedDxf', '已导入 DXF: {count} 个对象, {layers} 个新图层', { count: r.imported, layers: r.layers.length }), 'success');
+          this.logOut(t('cad.console.dxfImported', '✓ DXF 导入完成: {count} 个对象, 新建图层: {layers}', { count: r.imported, layers: r.layers.join(', ') || t('cad.console.none', '(无)') }));
         });
       }
       document.getElementById('btn-clear-console').addEventListener('click', () => {
@@ -4265,8 +4265,8 @@
       function showSavePrompt(hasUnsaved) {
         if (promptMsg) {
           promptMsg.textContent = hasUnsaved
-            ? '当前工程有未保存的修改，是否保存？'
-            : '是否保存当前工程？';
+            ? t('cad.modal.saveMsgModified', '当前工程有未保存的修改，是否保存？')
+            : t('cad.modal.saveMsg', '是否保存当前工程？');
         }
         savePrompt.classList.remove('hidden');
       }
@@ -4292,7 +4292,7 @@
           window.cadAPI.confirmClose('close');
         } else {
           // 保存失败，停留在 CAD 窗口
-          this.setStatus('保存失败: ' + (res.error || '未知错误'), 'error');
+          this.setStatus(t('cad.status.saveFailed', '保存失败: {error}', { error: res.error || t('cad.status.unknownError', '未知错误') }), 'error');
           hideSavePrompt();
         }
       });
@@ -4415,6 +4415,13 @@
       // Theme listener
       window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => Renderer.render());
 
+      // Language change listener — refresh dynamic UI content
+      window.addEventListener('languagechange', () => {
+        this.refreshLayers();
+        this.refreshObjects();
+        this.refreshStatus();
+      });
+
       // IPC listeners (from main process, forwarded by Agent)
       window.cadAPI.onCommand((cmd) => {
         try {
@@ -4460,8 +4467,8 @@
         row.innerHTML = `
           <div class="cad-layer-color" style="background:${l.color}"></div>
           <span class="cad-layer-name">${escapeHtml(l.name)}</span>
-          <span class="cad-layer-toggle ${l.visible ? '' : 'off'}" title="${l.visible ? '可见' : '隐藏'}"><i class="fa-solid ${l.visible ? 'fa-eye' : 'fa-eye-slash'}"></i></span>
-          <span class="cad-layer-toggle ${l.locked ? '' : 'off'}" title="${l.locked ? '锁定' : '未锁'}"><i class="fa-solid ${l.locked ? 'fa-lock' : 'fa-lock-open'}"></i></span>`;
+          <span class="cad-layer-toggle ${l.visible ? '' : 'off'}" title="${l.visible ? t('cad.layer.visible', '可见') : t('cad.layer.hidden', '隐藏')}"><i class="fa-solid ${l.visible ? 'fa-eye' : 'fa-eye-slash'}"></i></span>
+          <span class="cad-layer-toggle ${l.locked ? '' : 'off'}" title="${l.locked ? t('cad.layer.locked', '锁定') : t('cad.layer.unlocked', '未锁')}"><i class="fa-solid ${l.locked ? 'fa-lock' : 'fa-lock-open'}"></i></span>`;
         row.addEventListener('click', (e) => {
           if (e.target.closest('.cad-layer-toggle')) {
             // Toggle visibility
@@ -4482,7 +4489,7 @@
       const list = document.getElementById('object-list');
       list.innerHTML = '';
       const objs = Array.from(Document.objects.values()).reverse();
-      document.getElementById('obj-count').textContent = `${Document.objects.size} 个对象`;
+      document.getElementById('obj-count').textContent = t('cad.obj.count', '{count} 个对象', { count: Document.objects.size });
       const typeIcons = {
         line: 'fa-minus', polyline: 'fa-bezier-curve', rect: 'fa-square',
         circle: 'fa-circle', arc: 'fa-circle-half-stroke', ellipse: 'fa-egg',
@@ -4647,7 +4654,7 @@
     try {
       const result = DXFImporter.import(dxfText);
       if (!result.objects.length && !result.layers.length) {
-        return { ok: false, error: 'DXF 文件中未找到任何实体或图层' };
+        return { ok: false, error: t('cad.err.dxfNoEntities', 'DXF 文件中未找到任何实体或图层') };
       }
       // 先创建文档中尚不存在的图层
       const newLayers = [];
@@ -4702,7 +4709,7 @@
     Renderer.init(document.getElementById('cad-canvas'));
     UI.init();
     Renderer.fit();
-    UI.logOut('CIPYP-CAD 已就绪。输入 help 查看命令列表。');
+    UI.logOut(t('cad.console.ready', 'CIPYP-CAD 已就绪。输入 help 查看命令列表。'));
   }
 
   if (document.readyState === 'loading') {

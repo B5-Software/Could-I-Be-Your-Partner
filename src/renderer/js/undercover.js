@@ -37,48 +37,6 @@
   }
   let gameRng = () => Math.random();
 
-  // ---- Theme ----
-  async function applyTheme() {
-    try {
-      const settings = await window.gameAPI.getSettings();
-      const theme = settings?.theme || {};
-      let isDark = false;
-      if (theme.mode === 'dark') isDark = true;
-      else if (theme.mode === 'system') {
-        const sys = await window.gameAPI.getTheme();
-        isDark = sys?.shouldUseDarkColors ?? false;
-      }
-      document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
-
-      if (theme.accentColor) {
-        const r = parseInt(theme.accentColor.slice(1, 3), 16);
-        const g = parseInt(theme.accentColor.slice(3, 5), 16);
-        const b = parseInt(theme.accentColor.slice(5, 7), 16);
-        document.documentElement.style.setProperty('--accent', theme.accentColor);
-        document.documentElement.style.setProperty('--accent-light', `rgb(${Math.min(255, r + 40)}, ${Math.min(255, g + 40)}, ${Math.min(255, b + 40)})`);
-        document.documentElement.style.setProperty('--accent-dark', `rgb(${Math.max(0, r - 30)}, ${Math.max(0, g - 30)}, ${Math.max(0, b - 30)})`);
-        document.documentElement.style.setProperty('--accent-bg', `rgba(${r}, ${g}, ${b}, 0.08)`);
-      }
-
-      if (theme.backgroundColor) {
-        const bgR = parseInt(theme.backgroundColor.slice(1, 3), 16);
-        const bgG = parseInt(theme.backgroundColor.slice(3, 5), 16);
-        const bgB = parseInt(theme.backgroundColor.slice(5, 7), 16);
-        const luminance = (0.299 * bgR + 0.587 * bgG + 0.114 * bgB) / 255;
-        document.documentElement.style.setProperty('--bg-primary', theme.backgroundColor);
-        if (luminance < 0.5) {
-          document.documentElement.style.setProperty('--bg-secondary', `rgb(${Math.min(255, bgR + 20)}, ${Math.min(255, bgG + 20)}, ${Math.min(255, bgB + 20)})`);
-          document.documentElement.style.setProperty('--bg-tertiary', `rgb(${Math.min(255, bgR + 30)}, ${Math.min(255, bgG + 30)}, ${Math.min(255, bgB + 30)})`);
-          document.documentElement.style.setProperty('--bg-hover', `rgb(${Math.min(255, bgR + 40)}, ${Math.min(255, bgG + 40)}, ${Math.min(255, bgB + 40)})`);
-        } else {
-          document.documentElement.style.setProperty('--bg-secondary', `rgb(${Math.max(0, bgR - 10)}, ${Math.max(0, bgG - 10)}, ${Math.max(0, bgB - 10)})`);
-          document.documentElement.style.setProperty('--bg-tertiary', `rgb(${Math.max(0, bgR - 20)}, ${Math.max(0, bgG - 20)}, ${Math.max(0, bgB - 20)})`);
-          document.documentElement.style.setProperty('--bg-hover', `rgb(${Math.max(0, bgR - 5)}, ${Math.max(0, bgG - 5)}, ${Math.max(0, bgB - 5)})`);
-        }
-      }
-    } catch (e) { console.log('Theme error:', e.message); }
-  }
-
   // ---- LLM ----
   async function askLLM(systemPrompt, userMsg) {
     try {
@@ -152,16 +110,17 @@ ${roleHint}
     players.forEach((p, i) => {
       const item = document.createElement('div');
       item.className = `uc-player-item${!p.alive ? ' eliminated' : ''}`;
-      const initial = p.isUser ? '你' : p.name[0];
+      const youLabel = t('game.common.you', '你');
+      const initial = p.isUser ? youLabel : p.name[0];
       let badge = '';
       if (!p.alive && gameOver) {
-        badge = `<span class="uc-player-badge ${p.isUndercover ? 'undercover' : 'civilian'}">${p.isUndercover ? '卧底' : '平民'}</span>`;
+        badge = `<span class="uc-player-badge ${p.isUndercover ? 'undercover' : 'civilian'}">${p.isUndercover ? t('game.undercover.undercover', '卧底') : t('game.undercover.civilian', '平民')}</span>`;
       } else if (!p.alive) {
-        badge = '<span class="uc-player-badge">已淘汰</span>';
+        badge = `<span class="uc-player-badge">${t('game.undercover.eliminated', '已淘汰')}</span>`;
       }
       item.innerHTML = `
-        <div class="uc-player-avatar">${initial}</div>
-        <span class="uc-player-name">${p.isUser ? '你' : p.name}</span>
+        <div class="uc-player-avatar">${escapeHtml(initial)}</div>
+        <span class="uc-player-name">${p.isUser ? escapeHtml(youLabel) : escapeHtml(p.name)}</span>
         ${badge}`;
       list.appendChild(item);
     });
@@ -172,11 +131,12 @@ ${roleHint}
     const list = $('desc-list');
     const entry = document.createElement('div');
     entry.className = `uc-desc-entry${isNewRound ? ' new-round' : ''}`;
-    const initial = isUser ? '你' : name[0];
+    const youLabel = t('game.common.you', '你');
+    const initial = isUser ? youLabel : name[0];
     entry.innerHTML = `
-      <div class="uc-desc-avatar">${initial}</div>
+      <div class="uc-desc-avatar">${escapeHtml(initial)}</div>
       <div class="uc-desc-body">
-        <div class="uc-desc-name">${isUser ? '你' : name} <span class="uc-desc-round-label">第${round}轮</span></div>
+        <div class="uc-desc-name">${isUser ? escapeHtml(youLabel) : escapeHtml(name)} <span class="uc-desc-round-label">${escapeHtml(t('game.common.roundN', '第 {round} 轮', { round }))}</span></div>
         <div class="uc-desc-text">${escapeHtml(text)}</div>
       </div>`;
     list.appendChild(entry);
@@ -206,7 +166,7 @@ ${roleHint}
     const el = document.createElement('div');
     el.className = 'uc-thinking';
     el.id = 'thinking-indicator';
-    el.innerHTML = `<div class="uc-thinking-dots"><span></span><span></span><span></span></div> ${name} 正在思考...`;
+    el.innerHTML = `<div class="uc-thinking-dots"><span></span><span></span><span></span></div> ${escapeHtml(t('game.common.thinking', '{name} 正在思考...', { name }))}`;
     list.appendChild(el);
     el.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }
@@ -260,7 +220,7 @@ ${roleHint}
   function showGameOverResult(message, isUndercoverWin) {
     gameOver = true;
     if (window.gameAPI?.reportResult) {
-      window.gameAPI.reportResult(`谁是卧底结束：${message}（${isUndercoverWin ? '卧底获胜' : '平民获胜'}）`);
+      window.gameAPI.reportResult(t('game.undercover.reportResult', '谁是卧底结束：{message}（{winner}）', { message, winner: isUndercoverWin ? t('game.undercover.undercoverWin', '卧底获胜') : t('game.undercover.civilianWin', '平民获胜') }));
     }
     setDescInputVisible(false);
     setVoteAreaVisible(false);
@@ -268,15 +228,15 @@ ${roleHint}
     const overlay = $('status-overlay');
     overlay.classList.remove('hidden');
     $('status-content').innerHTML = `
-      <h2>${isUndercoverWin ? '卧底胜利' : '平民胜利'}！</h2>
+      <h2>${escapeHtml(isUndercoverWin ? t('game.undercover.undercoverVictory', '卧底胜利') : t('game.undercover.civilianVictory', '平民胜利'))}！</h2>
       <p>${escapeHtml(message)}</p>
       <div class="uc-word-reveal">
-        平民词：<strong>${wordPair[0]}</strong> &nbsp;|&nbsp; 卧底词：<strong>${wordPair[1]}</strong>
+        ${escapeHtml(t('game.undercover.civilianWord', '平民词'))}：<strong>${escapeHtml(wordPair[0])}</strong> &nbsp;|&nbsp; ${escapeHtml(t('game.undercover.undercoverWord', '卧底词'))}：<strong>${escapeHtml(wordPair[1])}</strong>
       </div>
-      <p>共进行了 ${round} 轮</p>
+      <p>${escapeHtml(t('game.undercover.totalRounds', '共进行了 {round} 轮', { round }))}</p>
       <div>
-        <button onclick="location.reload()">再来一局</button>
-        <button onclick="window.close()">关闭</button>
+        <button onclick="location.reload()">${escapeHtml(t('game.common.playAgain', '再来一局'))}</button>
+        <button onclick="window.close()">${escapeHtml(t('game.common.close', '关闭'))}</button>
       </div>`;
   }
 
@@ -291,7 +251,7 @@ ${roleHint}
     return new Promise((resolve) => {
       userInputResolve = resolve;
       setDescInputVisible(true);
-      $('desc-hint').textContent = `轮到你描述你的词语了（不能直接说出词语）`;
+      $('desc-hint').textContent = t('game.undercover.descHint', '轮到你描述你的词语了（不能直接说出词语）');
     });
   }
 
@@ -305,11 +265,12 @@ ${roleHint}
   // ---- Game Loop ----
   async function gameLoop() {
     const maxRounds = 8;
+    const youLabel = t('game.common.you', '你');
 
     while (!gameOver && round < maxRounds) {
       round++;
       $('round-num').textContent = round;
-      $('phase-info').textContent = '描述阶段';
+      $('phase-info').textContent = t('game.undercover.phaseDescribe', '描述阶段');
 
       const alive = players.filter(p => p.alive);
       if (alive.length <= 2) break;
@@ -327,14 +288,14 @@ ${roleHint}
           showThinking(p.name);
           desc = await aiDescribe(p);
           removeThinking();
-          desc = desc || '(沉默)';
+          desc = desc || t('game.undercover.silent', '(沉默)');
           // Clean up: take first line only
           desc = desc.split('\n')[0].trim();
         }
 
-        allDescriptions.push({ round, name: p.isUser ? '你' : p.name, text: desc });
+        allDescriptions.push({ round, name: p.isUser ? youLabel : p.name, text: desc });
         roundDescs.push({ player: p, text: desc });
-        addDescription(p.isUser ? '你' : p.name, desc, round, p.isUser, isFirst);
+        addDescription(p.isUser ? youLabel : p.name, desc, round, p.isUser, isFirst);
         isFirst = false;
         await delay(200);
       }
@@ -342,7 +303,7 @@ ${roleHint}
       setDescInputVisible(false);
 
       // ---- Voting Phase ----
-      $('phase-info').textContent = '投票阶段';
+      $('phase-info').textContent = t('game.undercover.phaseVote', '投票阶段');
       await delay(500);
 
       const aliveForVote = players.filter(p => p.alive);
@@ -359,7 +320,7 @@ ${roleHint}
           removeThinking();
         }
         votes[votedName] = (votes[votedName] || 0) + 1;
-        addVoteEntry(`<strong>${p.isUser ? '你' : p.name}</strong> 投了 <strong>${votedName}</strong>`);
+        addVoteEntry(`<strong>${escapeHtml(p.isUser ? youLabel : p.name)}</strong> ${escapeHtml(t('game.undercover.voted', '投了'))} <strong>${escapeHtml(votedName)}</strong>`);
         await delay(200);
       }
 
@@ -370,17 +331,17 @@ ${roleHint}
       }
 
       if (eliminated) {
-        const elimPlayer = players.find(p => (p.isUser ? '你' : p.name) === eliminated);
+        const elimPlayer = players.find(p => (p.isUser ? youLabel : p.name) === eliminated);
         if (elimPlayer) {
           elimPlayer.alive = false;
           addVoteResult(
-            `${elimPlayer.isUser ? '你' : elimPlayer.name} 被淘汰！（${elimPlayer.isUndercover ? '卧底' : '平民'}）`,
+            t('game.undercover.eliminatedMsg', '{name} 被淘汰！（{role}）', { name: elimPlayer.isUser ? youLabel : elimPlayer.name, role: elimPlayer.isUndercover ? t('game.undercover.undercover', '卧底') : t('game.undercover.civilian', '平民') }),
             true
           );
           renderPlayers();
 
           if (elimPlayer.isUndercover) {
-            showGameOverResult(`卧底「${elimPlayer.isUser ? '你' : elimPlayer.name}」被成功找出！`, false);
+            showGameOverResult(t('game.undercover.undercoverFound', '卧底「{name}」被成功找出！', { name: elimPlayer.isUser ? youLabel : elimPlayer.name }), false);
             return;
           }
         }
@@ -391,11 +352,11 @@ ${roleHint}
       const undercoverAlive = aliveNow.some(p => p.isUndercover);
       if (aliveNow.length <= 2 && undercoverAlive) {
         const uc = aliveNow.find(p => p.isUndercover);
-        showGameOverResult(`卧底${uc.isUser ? '（你）' : '「' + uc.name + '」'}成功隐藏到最后！`, true);
+        showGameOverResult(t('game.undercover.undercoverHidden', '卧底{name}成功隐藏到最后！', { name: uc.isUser ? t('game.undercover.youParens', '（你）') : '「' + uc.name + '」' }), true);
         return;
       }
       if (!undercoverAlive) {
-        showGameOverResult('所有卧底已被找出！', false);
+        showGameOverResult(t('game.undercover.allUndercoverFound', '所有卧底已被找出！'), false);
         return;
       }
 
@@ -406,9 +367,9 @@ ${roleHint}
     if (!gameOver) {
       const uc = players.find(p => p.isUndercover && p.alive);
       if (uc) {
-        showGameOverResult(`达到最大回合数，卧底${uc.isUser ? '（你）' : '「' + uc.name + '」'}存活到最后！`, true);
+        showGameOverResult(t('game.undercover.maxRoundsUndercoverAlive', '达到最大回合数，卧底{name}存活到最后！', { name: uc.isUser ? t('game.undercover.youParens', '（你）') : '「' + uc.name + '」' }), true);
       } else {
-        showGameOverResult('达到最大回合数，平民获胜！', false);
+        showGameOverResult(t('game.undercover.maxRoundsCivilianWin', '达到最大回合数，平民获胜！'), false);
       }
     }
   }
@@ -417,8 +378,6 @@ ${roleHint}
 
   // ---- Init ----
   async function start() {
-    await applyTheme();
-
     // Initialize entropy source
     try {
       const trng = await window.gameAPI.trngGetSeed();
@@ -450,7 +409,7 @@ ${roleHint}
     // Build players
     players = [];
     players.push({
-      name: '你',
+      name: t('game.common.you', '你'),
       isUser: true,
       alive: true,
       word: userIsUndercover ? wordPair[1] : wordPair[0],

@@ -1798,14 +1798,32 @@ ipcMain.handle('settings:get', () => settings);
 ipcMain.handle('settings:set', (_, newSettings) => {
   settings = { ...settings, ...newSettings };
   saveJSON(settingsPath, settings);
+  // 广播主题/语言变化到所有窗口（主窗口 + 子窗口 CAD/EDA/小游戏）
+  broadcastThemeChanged();
+  broadcastSettingsChanged();
   return settings;
 });
 
 // ---- IPC: Theme ----
 ipcMain.handle('theme:get', () => ({ shouldUseDarkColors: nativeTheme.shouldUseDarkColors, mode: settings.theme.mode }));
-nativeTheme.on('updated', () => {
-  if (mainWindow) mainWindow.webContents.send('theme:changed', { shouldUseDarkColors: nativeTheme.shouldUseDarkColors });
-});
+// 广播主题变化到所有 BrowserWindow（含子窗口 CAD/EDA/小游戏）
+function broadcastThemeChanged() {
+  const payload = { shouldUseDarkColors: nativeTheme.shouldUseDarkColors, mode: settings.theme.mode };
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) {
+      win.webContents.send('theme:changed', payload);
+      // 子窗口还需要完整主题（accent/bg）以应用强调色
+      win.webContents.send('theme:apply', { theme: settings.theme, shouldUseDarkColors: nativeTheme.shouldUseDarkColors });
+    }
+  }
+}
+function broadcastSettingsChanged() {
+  const payload = { language: settings.language, theme: settings.theme };
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) win.webContents.send('settings:changed', payload);
+  }
+}
+nativeTheme.on('updated', () => broadcastThemeChanged());
 
 // ---- IPC: Memory ----
 ipcMain.handle('memory:search', (_, query) => {

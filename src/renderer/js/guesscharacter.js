@@ -45,49 +45,6 @@
   }
   let gameRng = () => Math.random();
 
-  // ---- Theme ----
-  async function applyTheme() {
-    try {
-      const settings = await window.gameAPI.getSettings();
-      const theme = settings?.theme || {};
-      let isDark = false;
-      if (theme.mode === 'dark') isDark = true;
-      else if (theme.mode === 'system') {
-        const sys = await window.gameAPI.getTheme();
-        isDark = sys?.shouldUseDarkColors ?? false;
-      }
-      document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
-
-      if (theme.accentColor) {
-        const r = parseInt(theme.accentColor.slice(1, 3), 16);
-        const g = parseInt(theme.accentColor.slice(3, 5), 16);
-        const b = parseInt(theme.accentColor.slice(5, 7), 16);
-        document.documentElement.style.setProperty('--accent', theme.accentColor);
-        document.documentElement.style.setProperty('--accent-light', `rgb(${Math.min(255, r + 40)}, ${Math.min(255, g + 40)}, ${Math.min(255, b + 40)})`);
-        document.documentElement.style.setProperty('--accent-dark', `rgb(${Math.max(0, r - 30)}, ${Math.max(0, g - 30)}, ${Math.max(0, b - 30)})`);
-        document.documentElement.style.setProperty('--accent-bg', `rgba(${r}, ${g}, ${b}, 0.08)`);
-        document.documentElement.style.setProperty('--accent-bg-hover', `rgba(${r}, ${g}, ${b}, 0.14)`);
-      }
-
-      if (theme.backgroundColor) {
-        const bgR = parseInt(theme.backgroundColor.slice(1, 3), 16);
-        const bgG = parseInt(theme.backgroundColor.slice(3, 5), 16);
-        const bgB = parseInt(theme.backgroundColor.slice(5, 7), 16);
-        const luminance = (0.299 * bgR + 0.587 * bgG + 0.114 * bgB) / 255;
-        document.documentElement.style.setProperty('--bg-primary', theme.backgroundColor);
-        if (luminance < 0.5) {
-          document.documentElement.style.setProperty('--bg-secondary', `rgb(${Math.min(255, bgR + 20)}, ${Math.min(255, bgG + 20)}, ${Math.min(255, bgB + 20)})`);
-          document.documentElement.style.setProperty('--bg-tertiary', `rgb(${Math.min(255, bgR + 30)}, ${Math.min(255, bgG + 30)}, ${Math.min(255, bgB + 30)})`);
-          document.documentElement.style.setProperty('--bg-hover', `rgb(${Math.min(255, bgR + 40)}, ${Math.min(255, bgG + 40)}, ${Math.min(255, bgB + 40)})`);
-        } else {
-          document.documentElement.style.setProperty('--bg-secondary', `rgb(${Math.max(0, bgR - 10)}, ${Math.max(0, bgG - 10)}, ${Math.max(0, bgB - 10)})`);
-          document.documentElement.style.setProperty('--bg-tertiary', `rgb(${Math.max(0, bgR - 20)}, ${Math.max(0, bgG - 20)}, ${Math.max(0, bgB - 20)})`);
-          document.documentElement.style.setProperty('--bg-hover', `rgb(${Math.max(0, bgR - 5)}, ${Math.max(0, bgG - 5)}, ${Math.max(0, bgB - 5)})`);
-        }
-      }
-    } catch (e) { console.log('Theme error:', e.message); }
-  }
-
   // ---- LLM ----
   async function askLLM(systemPrompt, userMsg, temperature = 0.5, maxTokens = 200) {
     try {
@@ -138,7 +95,7 @@
     const lines = resp.split('\n').map(l => l.trim()).filter(Boolean);
     if (lines.length === 0) return null;
     const name = lines[0];
-    const intro = lines.slice(1).join(' / ') || '（无简介）';
+    const intro = lines.slice(1).join(' / ') || t('game.guesschar.noIntro', '（无简介）');
     return { name, intro };
   }
 
@@ -195,7 +152,7 @@
     entry.innerHTML = `
       <div class="gc-entry-avatar"><i class="fa-solid fa-user"></i></div>
       <div class="gc-entry-body">
-        <div class="gc-entry-role">玩家提问</div>
+        <div class="gc-entry-role">${escapeHtml(t('game.guesschar.playerQuestion', '玩家提问'))}</div>
         <div class="gc-entry-text">${escapeHtml(question)}</div>
       </div>`;
     list.appendChild(entry);
@@ -206,7 +163,7 @@
     ansEntry.innerHTML = `
       <div class="gc-entry-avatar"><i class="fa-solid fa-robot"></i></div>
       <div class="gc-entry-body">
-        <div class="gc-entry-role">AI 回答</div>
+        <div class="gc-entry-role">${escapeHtml(t('game.guesschar.aiAnswer', 'AI 回答'))}</div>
         <div class="gc-entry-text"><span class="gc-entry-answer ${ansClass}">${escapeHtml(answer)}</span></div>
       </div>`;
     list.appendChild(ansEntry);
@@ -220,8 +177,8 @@
     entry.innerHTML = `
       <div class="gc-entry-avatar"><i class="fa-solid fa-bullseye"></i></div>
       <div class="gc-entry-body">
-        <div class="gc-entry-role">玩家猜测</div>
-        <div class="gc-entry-text">${escapeHtml(guess)} <span class="gc-entry-answer ${correct ? 'yes' : 'no'}">${correct ? '正确！' : '错误'}</span></div>
+        <div class="gc-entry-role">${escapeHtml(t('game.guesschar.playerGuess', '玩家猜测'))}</div>
+        <div class="gc-entry-text">${escapeHtml(guess)} <span class="gc-entry-answer ${correct ? 'yes' : 'no'}">${escapeHtml(correct ? t('game.guesschar.correct', '正确！') : t('game.guesschar.wrong', '错误'))}</span></div>
       </div>`;
     list.appendChild(entry);
     list.scrollTop = list.scrollHeight;
@@ -234,7 +191,7 @@
     el = document.createElement('div');
     el.className = 'gc-thinking';
     el.id = 'thinking-indicator';
-    el.innerHTML = `<div class="gc-thinking-dots"><span></span><span></span><span></span></div> ${escapeHtml(label)} 正在思考...`;
+    el.innerHTML = `<div class="gc-thinking-dots"><span></span><span></span><span></span></div> ${escapeHtml(t('game.common.thinking', '{name} 正在思考...', { name: label }))}`;
     list.appendChild(el);
     list.scrollTop = list.scrollHeight;
   }
@@ -273,19 +230,19 @@
     gameOver = true;
     setInputEnabled(false);
     if (window.gameAPI?.reportResult) {
-      window.gameAPI.reportResult(`是否猜人物结束：${message}（共提问 ${questionCount} 次）`);
+      window.gameAPI.reportResult(t('game.guesschar.reportResult', '是否猜人物结束：{message}（共提问 {count} 次）', { message, count: questionCount }));
     }
     const overlay = $('status-overlay');
     overlay.classList.remove('hidden');
     $('status-content').innerHTML = `
-      <h2 class="${win ? 'win' : 'lose'}">${win ? '猜对了！' : '游戏结束'}</h2>
+      <h2 class="${win ? 'win' : 'lose'}">${escapeHtml(win ? t('game.guesschar.guessedRight', '猜对了！') : t('game.guesschar.gameOver', '游戏结束'))}</h2>
       <p>${escapeHtml(message)}</p>
-      <div class="gc-answer-reveal"><i class="fa-solid fa-star"></i> 正确答案：${escapeHtml(character)}</div>
+      <div class="gc-answer-reveal"><i class="fa-solid fa-star"></i> ${escapeHtml(t('game.guesschar.correctAnswer', '正确答案：'))}${escapeHtml(character)}</div>
       ${characterHint ? `<p style="margin-top:8px;font-size:13px;color:var(--gc-text-dim)">${escapeHtml(characterHint)}</p>` : ''}
-      <p style="margin-top:8px;font-size:13px;color:var(--gc-text-dim)">共提问 ${questionCount} 次，剩余猜测 ${guessRemaining} 次</p>
+      <p style="margin-top:8px;font-size:13px;color:var(--gc-text-dim)">${escapeHtml(t('game.guesschar.summary', '共提问 {asked} 次，剩余猜测 {remaining} 次', { asked: questionCount, remaining: guessRemaining }))}</p>
       <div>
-        <button type="button" onclick="location.reload()">再来一局</button>
-        <button type="button" onclick="window.close()">关闭</button>
+        <button type="button" onclick="location.reload()">${escapeHtml(t('game.common.playAgain', '再来一局'))}</button>
+        <button type="button" onclick="window.close()">${escapeHtml(t('game.common.close', '关闭'))}</button>
       </div>`;
   }
 
@@ -303,18 +260,18 @@
       if (gameOver) break;
 
       if (action.type === 'pass') {
-        showGameOver(false, '你选择了认输');
+        showGameOver(false, t('game.guesschar.youGaveUp', '你选择了认输'));
         break;
       }
 
       if (action.type === 'question') {
         if (questionCount >= MAX_QUESTIONS) {
-          showGameOver(false, `已达到最大提问次数（${MAX_QUESTIONS} 次）`);
+          showGameOver(false, t('game.guesschar.maxQuestionsReached', '已达到最大提问次数（{max} 次）', { max: MAX_QUESTIONS }));
           break;
         }
         questionCount++;
         $('question-count').textContent = questionCount;
-        showThinking('AI');
+        showThinking(t('game.guesschar.ai', 'AI'));
         const answer = await aiAnswerQuestion(action.text);
         removeThinking();
         history.push({ role: 'q', text: action.text });
@@ -324,7 +281,7 @@
       }
 
       if (action.type === 'guess') {
-        showThinking('裁判');
+        showThinking(t('game.guesschar.judge', '裁判'));
         const correct = await aiJudgeGuess(action.text);
         removeThinking();
         history.push({ role: 'guess', text: action.text, answer: correct ? '正确' : '错误' });
@@ -333,14 +290,14 @@
         $('guess-remaining').textContent = guessRemaining;
 
         if (correct) {
-          showGameOver(true, `恭喜你猜对了！用了 ${questionCount} 次提问`);
+          showGameOver(true, t('game.guesschar.congrats', '恭喜你猜对了！用了 {count} 次提问', { count: questionCount }));
           break;
         } else {
           if (guessRemaining <= 0) {
-            showGameOver(false, `猜测次数已用完（共 ${MAX_GUESSES} 次）`);
+            showGameOver(false, t('game.guesschar.noGuessesLeft', '猜测次数已用完（共 {max} 次）', { max: MAX_GUESSES }));
             break;
           }
-          $('hint-text').textContent = `猜测错误，还剩 ${guessRemaining} 次猜测机会，请继续提问缩小范围`;
+          $('hint-text').textContent = t('game.guesschar.guessWrongHint', '猜测错误，还剩 {remaining} 次猜测机会，请继续提问缩小范围', { remaining: guessRemaining });
         }
       }
     }
@@ -357,8 +314,6 @@
 
   // ---- Init ----
   async function start() {
-    await applyTheme();
-
     // Initialize entropy source
     try {
       const trng = await window.gameAPI.trngGetSeed();
@@ -386,20 +341,20 @@
     setInputEnabled(false);
 
     // AI 选定人物
-    $('hint-text').textContent = 'AI 正在选定人物...';
-    showThinking('AI');
+    $('hint-text').textContent = t('game.guesschar.aiPicking', 'AI 正在选定人物...');
+    showThinking(t('game.guesschar.ai', 'AI'));
     const picked = await aiPickCharacter();
     removeThinking();
 
     if (!picked || !picked.name) {
-      $('hint-text').textContent = 'AI 无法选定人物，请稍后重试';
-      showGameOver(false, 'AI 无法选定人物，游戏终止');
+      $('hint-text').textContent = t('game.guesschar.aiPickFailed', 'AI 无法选定人物，请稍后重试');
+      showGameOver(false, t('game.guesschar.aiPickFailedTerminate', 'AI 无法选定人物，游戏终止'));
       return;
     }
 
     character = picked.name;
     characterHint = picked.intro;
-    $('hint-text').textContent = `AI 已想好一位「${categoryName}」类别的人物，请开始提问`;
+    $('hint-text').textContent = t('game.guesschar.aiReady', 'AI 已想好一位「{category}」类别的人物，请开始提问', { category: categoryName });
     console.log('[Game] AI picked character:', character); // for debug only
 
     // Bind input events

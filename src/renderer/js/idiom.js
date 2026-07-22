@@ -41,49 +41,6 @@
   }
   let gameRng = () => Math.random();
 
-  // ---- Theme ----
-  async function applyTheme() {
-    try {
-      const settings = await window.gameAPI.getSettings();
-      const theme = settings?.theme || {};
-      let isDark = false;
-      if (theme.mode === 'dark') isDark = true;
-      else if (theme.mode === 'system') {
-        const sys = await window.gameAPI.getTheme();
-        isDark = sys?.shouldUseDarkColors ?? false;
-      }
-      document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
-
-      if (theme.accentColor) {
-        const r = parseInt(theme.accentColor.slice(1, 3), 16);
-        const g = parseInt(theme.accentColor.slice(3, 5), 16);
-        const b = parseInt(theme.accentColor.slice(5, 7), 16);
-        document.documentElement.style.setProperty('--accent', theme.accentColor);
-        document.documentElement.style.setProperty('--accent-light', `rgb(${Math.min(255, r + 40)}, ${Math.min(255, g + 40)}, ${Math.min(255, b + 40)})`);
-        document.documentElement.style.setProperty('--accent-dark', `rgb(${Math.max(0, r - 30)}, ${Math.max(0, g - 30)}, ${Math.max(0, b - 30)})`);
-        document.documentElement.style.setProperty('--accent-bg', `rgba(${r}, ${g}, ${b}, 0.08)`);
-        document.documentElement.style.setProperty('--accent-bg-hover', `rgba(${r}, ${g}, ${b}, 0.14)`);
-      }
-
-      if (theme.backgroundColor) {
-        const bgR = parseInt(theme.backgroundColor.slice(1, 3), 16);
-        const bgG = parseInt(theme.backgroundColor.slice(3, 5), 16);
-        const bgB = parseInt(theme.backgroundColor.slice(5, 7), 16);
-        const luminance = (0.299 * bgR + 0.587 * bgG + 0.114 * bgB) / 255;
-        document.documentElement.style.setProperty('--bg-primary', theme.backgroundColor);
-        if (luminance < 0.5) {
-          document.documentElement.style.setProperty('--bg-secondary', `rgb(${Math.min(255, bgR + 20)}, ${Math.min(255, bgG + 20)}, ${Math.min(255, bgB + 20)})`);
-          document.documentElement.style.setProperty('--bg-tertiary', `rgb(${Math.min(255, bgR + 30)}, ${Math.min(255, bgG + 30)}, ${Math.min(255, bgB + 30)})`);
-          document.documentElement.style.setProperty('--bg-hover', `rgb(${Math.min(255, bgR + 40)}, ${Math.min(255, bgG + 40)}, ${Math.min(255, bgB + 40)})`);
-        } else {
-          document.documentElement.style.setProperty('--bg-secondary', `rgb(${Math.max(0, bgR - 10)}, ${Math.max(0, bgG - 10)}, ${Math.max(0, bgB - 10)})`);
-          document.documentElement.style.setProperty('--bg-tertiary', `rgb(${Math.max(0, bgR - 20)}, ${Math.max(0, bgG - 20)}, ${Math.max(0, bgB - 20)})`);
-          document.documentElement.style.setProperty('--bg-hover', `rgb(${Math.max(0, bgR - 5)}, ${Math.max(0, bgG - 5)}, ${Math.max(0, bgB - 5)})`);
-        }
-      }
-    } catch (e) { console.log('Theme error:', e.message); }
-  }
-
   // ---- LLM ----
   async function askLLM(systemPrompt, userMsg) {
     try {
@@ -142,8 +99,8 @@
       );
       if (!result) return { ok: true, reason: '' }; // LLM 失败时不惩罚
       if (result.includes('通过')) return { ok: true, reason: '' };
-      if (result.includes('非成语')) return { ok: false, reason: '非真实成语' };
-      if (result.includes('首字不符')) return { ok: false, reason: '首字不符' };
+      if (result.includes('非成语')) return { ok: false, reason: t('game.idiom.reasonNotIdiom', '非真实成语') };
+      if (result.includes('首字不符')) return { ok: false, reason: t('game.idiom.reasonHeadMismatch', '首字不符') };
       return { ok: true, reason: '' };
     } catch {
       return { ok: true, reason: '' };
@@ -154,11 +111,12 @@
   function renderPlayers() {
     const bar = $('players-bar');
     bar.innerHTML = '';
+    const youLabel = t('game.common.you', '你');
     players.forEach((p, i) => {
       const tag = document.createElement('div');
       tag.className = `idiom-player-tag${!p.alive ? ' eliminated' : ''}${p.isUser ? ' is-user' : ''}${currentPlayerIdx === i && p.alive && !gameOver ? ' active' : ''}`;
-      const initial = p.isUser ? '你' : p.name[0];
-      tag.innerHTML = `<div class="idiom-player-icon">${initial}</div><span>${p.isUser ? '你' : p.name}</span>`;
+      const initial = p.isUser ? youLabel : p.name[0];
+      tag.innerHTML = `<div class="idiom-player-icon">${escapeHtml(initial)}</div><span>${p.isUser ? escapeHtml(youLabel) : escapeHtml(p.name)}</span>`;
       bar.appendChild(tag);
     });
     $('alive-count').textContent = players.filter(p => p.alive).length;
@@ -168,14 +126,15 @@
     const list = $('history-list');
     const entry = document.createElement('div');
     entry.className = `idiom-history-entry ${success ? 'success' : 'fail'}`;
-    const initial = isUser ? '你' : name[0];
+    const youLabel = t('game.common.you', '你');
+    const initial = isUser ? youLabel : name[0];
     const tail = idiom ? idiom[idiom.length - 1] : '';
     entry.innerHTML = `
-      <div class="idiom-entry-avatar">${initial}</div>
+      <div class="idiom-entry-avatar">${escapeHtml(initial)}</div>
       <div class="idiom-entry-body">
-        <div class="idiom-entry-name">${isUser ? '你' : name}</div>
-        <div class="idiom-entry-text">${escapeHtml(idiom || '(无)')}${success ? ` <span style="color:var(--idiom-text-tertiary);font-size:12px">→ 接 <b style="color:var(--idiom-accent)">${escapeHtml(tail)}</b></span>` : (reason ? ` <span style="color:var(--idiom-danger);font-size:12px">（${escapeHtml(reason)}）</span>` : '')}</div>
-        <div class="idiom-entry-round">第 ${round} 轮</div>
+        <div class="idiom-entry-name">${isUser ? escapeHtml(youLabel) : escapeHtml(name)}</div>
+        <div class="idiom-entry-text">${escapeHtml(idiom || t('game.idiom.empty', '(无)'))}${success ? ` <span style="color:var(--idiom-text-tertiary);font-size:12px">${escapeHtml(t('game.idiom.tailIs', '→ 接'))} <b style="color:var(--idiom-accent)">${escapeHtml(tail)}</b></span>` : (reason ? ` <span style="color:var(--idiom-danger);font-size:12px">（${escapeHtml(reason)}）</span>` : '')}</div>
+        <div class="idiom-entry-round">${escapeHtml(t('game.common.roundN', '第 {round} 轮', { round }))}</div>
       </div>
       <div class="idiom-entry-status">${success ? '<i class="fa-solid fa-check" style="color:var(--idiom-success)"></i>' : '<i class="fa-solid fa-xmark" style="color:var(--idiom-danger)"></i>'}</div>`;
     list.appendChild(entry);
@@ -187,7 +146,7 @@
     const el = document.createElement('div');
     el.className = 'idiom-thinking';
     el.id = 'thinking-indicator';
-    el.innerHTML = `<div class="idiom-thinking-dots"><span></span><span></span><span></span></div> ${escapeHtml(name)} 正在思考...`;
+    el.innerHTML = `<div class="idiom-thinking-dots"><span></span><span></span><span></span></div> ${escapeHtml(t('game.common.thinking', '{name} 正在思考...', { name }))}`;
     list.appendChild(el);
     el.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }
@@ -202,10 +161,10 @@
     $('btn-submit').disabled = !enabled;
     $('btn-pass').disabled = !enabled;
     if (enabled) {
-      $('input-hint').textContent = `轮到你了，请输入以「${currentTail}」字开头的四字成语`;
+      $('input-hint').textContent = t('game.idiom.inputHintTail', '轮到你了，请输入以「{tail}」字开头的四字成语', { tail: currentTail });
       $('idiom-input').focus();
     } else {
-      $('input-hint').textContent = '等待其他玩家...';
+      $('input-hint').textContent = t('game.common.waitingOthers', '等待其他玩家...');
     }
   }
 
@@ -213,17 +172,17 @@
     gameOver = true;
     setInputEnabled(false);
     if (window.gameAPI?.reportResult) {
-      window.gameAPI.reportResult(`成语接龙结束：${message}（共 ${round} 轮，收录 ${history.filter(h => h.success).length} 个成语）`);
+      window.gameAPI.reportResult(t('game.idiom.reportResult', '成语接龙结束：{message}（共 {round} 轮，收录 {count} 个成语）', { message, round, count: history.filter(h => h.success).length }));
     }
     const overlay = $('status-overlay');
     overlay.classList.remove('hidden');
     $('status-content').innerHTML = `
-      <h2>成语接龙结束</h2>
+      <h2>${escapeHtml(t('game.idiom.gameOver', '成语接龙结束'))}</h2>
       <p>${escapeHtml(message)}</p>
-      <p>共进行了 ${round} 轮，收录 ${history.filter(h => h.success).length} 个成语</p>
+      <p>${escapeHtml(t('game.idiom.summary', '共进行了 {round} 轮，收录 {count} 个成语', { round, count: history.filter(h => h.success).length }))}</p>
       <div>
-        <button type="button" onclick="location.reload()">再来一局</button>
-        <button type="button" onclick="window.close()">关闭</button>
+        <button type="button" onclick="location.reload()">${escapeHtml(t('game.common.playAgain', '再来一局'))}</button>
+        <button type="button" onclick="window.close()">${escapeHtml(t('game.common.close', '关闭'))}</button>
       </div>`;
   }
 
@@ -244,6 +203,7 @@
   // ---- Game Loop ----
   async function gameLoop() {
     const maxRounds = 30;
+    const youLabel = t('game.common.you', '你');
 
     while (!gameOver && round < maxRounds) {
       round++;
@@ -253,7 +213,7 @@
       const alivePlayers = players.filter(p => p.alive);
       if (alivePlayers.length <= 1) {
         const surv = alivePlayers[0];
-        showGameOver(surv ? `最后的赢家是「${surv.isUser ? '你' : surv.name}」！` : '所有玩家都被淘汰了！', alivePlayers);
+        showGameOver(surv ? t('game.idiom.winnerIs', '最后的赢家是「{name}」！', { name: surv.isUser ? youLabel : surv.name }) : t('game.idiom.allEliminated', '所有玩家都被淘汰了！'), alivePlayers);
         break;
       }
 
@@ -274,8 +234,8 @@
           idiom = await waitForUserInput();
           if (idiom === '__PASS__') {
             p.alive = false;
-            history.push({ name: '你', idiom: '认输', success: false, reason: '主动认输' });
-            addHistoryEntry('你', '认输', false, true, '主动认输');
+            history.push({ name: youLabel, idiom: t('game.common.giveUp', '认输'), success: false, reason: t('game.idiom.activeGiveUp', '主动认输') });
+            addHistoryEntry(youLabel, t('game.common.giveUp', '认输'), false, true, t('game.idiom.activeGiveUp', '主动认输'));
             renderPlayers();
             continue;
           }
@@ -283,44 +243,44 @@
           // Quick local checks first
           if (idiom.length !== 4) {
             p.alive = false;
-            reason = '非四字';
-            history.push({ name: '你', idiom, success: false, reason });
-            addHistoryEntry('你', idiom, false, true, reason);
+            reason = t('game.idiom.reasonNotFour', '非四字');
+            history.push({ name: youLabel, idiom, success: false, reason });
+            addHistoryEntry(youLabel, idiom, false, true, reason);
             renderPlayers();
             continue;
           }
           if (currentTail && idiom[0] !== currentTail) {
             p.alive = false;
-            reason = `首字应为「${currentTail}」`;
-            history.push({ name: '你', idiom, success: false, reason });
-            addHistoryEntry('你', idiom, false, true, reason);
+            reason = t('game.idiom.reasonHeadShouldBe', '首字应为「{tail}」', { tail: currentTail });
+            history.push({ name: youLabel, idiom, success: false, reason });
+            addHistoryEntry(youLabel, idiom, false, true, reason);
             renderPlayers();
             continue;
           }
           if (usedIdioms.has(idiom)) {
             p.alive = false;
-            reason = '重复';
-            history.push({ name: '你', idiom, success: false, reason });
-            addHistoryEntry('你', idiom, false, true, reason);
+            reason = t('game.idiom.reasonDuplicate', '重复');
+            history.push({ name: youLabel, idiom, success: false, reason });
+            addHistoryEntry(youLabel, idiom, false, true, reason);
             renderPlayers();
             continue;
           }
           // LLM 裁判验证：是否为真实成语
-          showThinking('裁判');
+          showThinking(t('game.idiom.judge', '裁判'));
           const verdict = await validateIdiom(idiom, currentTail || idiom[0]);
           removeThinking();
           if (!verdict.ok) {
             p.alive = false;
-            reason = verdict.reason || '非真实成语';
-            history.push({ name: '你', idiom, success: false, reason });
-            addHistoryEntry('你', idiom, false, true, reason);
+            reason = verdict.reason || t('game.idiom.reasonNotIdiom', '非真实成语');
+            history.push({ name: youLabel, idiom, success: false, reason });
+            addHistoryEntry(youLabel, idiom, false, true, reason);
             renderPlayers();
             continue;
           }
           usedIdioms.add(idiom);
           currentTail = idiom[idiom.length - 1];
-          history.push({ name: '你', idiom, success: true, reason: '' });
-          addHistoryEntry('你', idiom, true, true);
+          history.push({ name: youLabel, idiom, success: true, reason: '' });
+          addHistoryEntry(youLabel, idiom, true, true);
           success = true;
         } else {
           // AI's turn
@@ -330,8 +290,8 @@
 
           if (!idiom || idiom.includes('认输')) {
             p.alive = false;
-            history.push({ name: p.name, idiom: idiom || '(无法作答)', success: false, reason: '认输' });
-            addHistoryEntry(p.name, idiom || '(无法作答)', false, false, '认输');
+            history.push({ name: p.name, idiom: idiom || t('game.idiom.noAnswer', '(无法作答)'), success: false, reason: t('game.common.giveUp', '认输') });
+            addHistoryEntry(p.name, idiom || t('game.idiom.noAnswer', '(无法作答)'), false, false, t('game.common.giveUp', '认输'));
             renderPlayers();
             continue;
           }
@@ -345,7 +305,7 @@
           }
           if (idiom.length !== 4) {
             p.alive = false;
-            reason = '非四字';
+            reason = t('game.idiom.reasonNotFour', '非四字');
             history.push({ name: p.name, idiom, success: false, reason });
             addHistoryEntry(p.name, idiom, false, false, reason);
             renderPlayers();
@@ -353,7 +313,7 @@
           }
           if (currentTail && idiom[0] !== currentTail) {
             p.alive = false;
-            reason = `首字应为「${currentTail}」`;
+            reason = t('game.idiom.reasonHeadShouldBe', '首字应为「{tail}」', { tail: currentTail });
             history.push({ name: p.name, idiom, success: false, reason });
             addHistoryEntry(p.name, idiom, false, false, reason);
             renderPlayers();
@@ -361,7 +321,7 @@
           }
           if (usedIdioms.has(idiom)) {
             p.alive = false;
-            reason = '重复';
+            reason = t('game.idiom.reasonDuplicate', '重复');
             history.push({ name: p.name, idiom, success: false, reason });
             addHistoryEntry(p.name, idiom, false, false, reason);
             renderPlayers();
@@ -380,8 +340,8 @@
         if (players.filter(pp => pp.alive).length <= 1) {
           const surv = players.filter(pp => pp.alive);
           const msg = surv.length === 1
-            ? `最后的赢家是「${surv[0].isUser ? '你' : surv[0].name}」！`
-            : '所有玩家都被淘汰了！';
+            ? t('game.idiom.winnerIs', '最后的赢家是「{name}」！', { name: surv[0].isUser ? youLabel : surv[0].name })
+            : t('game.idiom.allEliminated', '所有玩家都被淘汰了！');
           showGameOver(msg, surv);
           break;
         }
@@ -390,7 +350,7 @@
 
     if (!gameOver) {
       const surv = players.filter(p => p.alive);
-      showGameOver(`已达到最大回合数，幸存者：${surv.map(p => p.isUser ? '你' : p.name).join('、')}`, surv);
+      showGameOver(t('game.idiom.maxRoundsSurvivors', '已达到最大回合数，幸存者：{names}', { names: surv.map(p => p.isUser ? youLabel : p.name).join('、') }), surv);
     }
   }
 
@@ -398,8 +358,6 @@
 
   // ---- Init ----
   async function start() {
-    await applyTheme();
-
     // Initialize entropy source
     try {
       const trng = await window.gameAPI.trngGetSeed();
@@ -429,13 +387,13 @@
     // Initial tail = last char of starting idiom (the starting idiom is "round 0")
     usedIdioms.add(startIdiom);
     currentTail = startIdiom[startIdiom.length - 1];
-    history.push({ name: '开场', idiom: startIdiom, success: true, reason: '' });
+    history.push({ name: t('game.idiom.opening', '开场'), idiom: startIdiom, success: true, reason: '' });
 
     $('keyword-display').textContent = currentTail;
-    addHistoryEntry('开场', startIdiom, true, false, '');
+    addHistoryEntry(t('game.idiom.opening', '开场'), startIdiom, true, false, '');
 
     // Build players: user first, then AIs
-    players = [{ name: '你', isUser: true, alive: true }];
+    players = [{ name: t('game.common.you', '你'), isUser: true, alive: true }];
     for (let i = 0; i < aiCount; i++) {
       players.push({ name: AI_NAMES[i % AI_NAMES.length], isUser: false, alive: true });
     }

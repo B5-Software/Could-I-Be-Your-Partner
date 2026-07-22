@@ -11,10 +11,10 @@
 <body>
   <!-- Title Bar -->
   <div class="sg-titlebar">
-    <span class="sg-titlebar-title"><i class="fa-solid fa-khanda"></i> 三国杀</span>
+    <span class="sg-titlebar-title" data-i18n="game.sanguosha.title"><i class="fa-solid fa-khanda"></i> 三国杀</span>
     <span id="game-trng-badge" class="game-trng-badge" style="display:none"><i class="fa-solid fa-satellite-dish"></i> TRNG</span>
     <div class="sg-titlebar-btns">
-      <button class="btn-close" id="btn-close" title="关闭"><i class="fa-solid fa-xmark"></i></button>
+      <button class="btn-close" id="btn-close" title="关闭" data-i18n-title="ui.common.close"><i class="fa-solid fa-xmark"></i></button>
     </div>
   </div>
 
@@ -27,16 +27,16 @@
       <!-- Center Play Area -->
       <div class="sg-play-area">
         <div class="sg-game-info" id="game-info">
-          <div><span class="label">回合:</span> <span id="info-turn">1</span></div>
-          <div><span class="label">牌堆:</span> <span id="info-deck">0</span></div>
-          <div><span class="label">弃牌:</span> <span id="info-discard">0</span></div>
-          <div><span class="label">阶段:</span> <span id="info-phase">准备</span></div>
+          <div><span class="label" data-i18n="game.sanguosha.turn">回合:</span> <span id="info-turn">1</span></div>
+          <div><span class="label" data-i18n="game.sanguosha.deck">牌堆:</span> <span id="info-deck">0</span></div>
+          <div><span class="label" data-i18n="game.sanguosha.discard">弃牌:</span> <span id="info-discard">0</span></div>
+          <div><span class="label" data-i18n="game.sanguosha.phase">阶段:</span> <span id="info-phase" data-i18n="game.sanguosha.phasePrepare">准备</span></div>
         </div>
         <div class="sg-play-pile" id="play-pile"></div>
 
         <!-- Log -->
         <div class="sg-log-panel">
-          <div class="sg-log-header">游戏日志</div>
+          <div class="sg-log-header" data-i18n="game.sanguosha.gameLog">游戏日志</div>
           <div class="sg-log-content" id="game-log"></div>
         </div>
       </div>
@@ -56,12 +56,16 @@
 
     <!-- Action Bar -->
     <div class="sg-action-bar" id="action-bar">
-      <button class="btn-play" id="btn-play" disabled>出牌</button>
-      <button class="btn-skill" id="btn-skill" disabled>技能</button>
-      <button class="btn-end-turn" id="btn-end-turn" disabled>结束出牌</button>
+      <button class="btn-play" id="btn-play" disabled data-i18n="game.sanguosha.playCard">出牌</button>
+      <button class="btn-skill" id="btn-skill" disabled data-i18n="game.sanguosha.skill">技能</button>
+      <button class="btn-end-turn" id="btn-end-turn" disabled data-i18n="game.sanguosha.endTurn">结束出牌</button>
     </div>
   </div>
 
+  <script src="../js/i18n.js"></script>
+  <script src="../js/i18n/en.js"></script>
+  <script src="../js/i18n/de.js"></script>
+  <script src="../js/subapp-theme.js"></script>
   <script src="../js/sanguosha.js"></script>
 </body>
 </html>

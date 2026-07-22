@@ -7,6 +7,21 @@ contextBridge.exposeInMainWorld('pcbAPI', {
   // Settings + theme
   getSettings: () => ipcRenderer.invoke('settings:get'),
   getTheme: () => ipcRenderer.invoke('theme:get'),
+  onThemeChanged: (cb) => {
+    const l = (_, d) => cb(d);
+    ipcRenderer.on('theme:changed', l);
+    return () => ipcRenderer.removeListener('theme:changed', l);
+  },
+  onThemeApply: (cb) => {
+    const l = (_, d) => cb(d);
+    ipcRenderer.on('theme:apply', l);
+    return () => ipcRenderer.removeListener('theme:apply', l);
+  },
+  onSettingsChanged: (cb) => {
+    const l = (_, d) => cb(d);
+    ipcRenderer.on('settings:changed', l);
+    return () => ipcRenderer.removeListener('settings:changed', l);
+  },
 
   // Dialogs
   saveProjectDialog: () => ipcRenderer.invoke('pcbeda:saveProjectDialog'),

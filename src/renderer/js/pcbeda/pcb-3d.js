@@ -8,6 +8,8 @@
   const Geo = (typeof PCBGeo !== 'undefined') ? PCBGeo : require('./pcb-geometry.js');
   const Model = (typeof PCBModel !== 'undefined') ? PCBModel : require('./pcb-model.js');
   const THREE = (typeof global.THREE !== 'undefined') ? global.THREE : null;
+  // i18n helper
+  const t = (typeof global.t === 'function') ? global.t : (k, fb) => fb;
 
   // ---- ear clipping triangulation (simple polygon) ----
   function triangulate(pts) {
@@ -184,7 +186,7 @@
       if (!this._hasThree) {
         // Three.js 未加载（fetch-assets 未执行），降级到 Canvas 2D 占位提示
         console.warn('[PCB3D] Three.js not loaded — fallback to placeholder. Run scripts/fetch-assets.ps1');
-        this._drawPlaceholder(canvas, 'Three.js 未加载\n请运行 scripts/fetch-assets.ps1 下载资源');
+        this._drawPlaceholder(canvas, t('eda.3d.placeholder.threeMissing', 'Three.js 未加载\n请运行 scripts/fetch-assets.ps1 下载资源'));
         return;
       }
 
@@ -198,7 +200,7 @@
       } catch (e) {
         console.error('[PCB3D] WebGL init failed:', e);
         this._hasThree = false;
-        this._drawPlaceholder(canvas, 'WebGL 初始化失败\n' + (e.message || ''));
+        this._drawPlaceholder(canvas, t('eda.3d.placeholder.webglFailed', 'WebGL 初始化失败\n{msg}', { msg: (e.message || '') }));
         return;
       }
 

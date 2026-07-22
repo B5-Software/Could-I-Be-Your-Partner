@@ -8,6 +8,8 @@
 
   const Geo = (typeof PCBGeo !== 'undefined') ? PCBGeo : require('./pcb-geometry.js');
   const Model = (typeof PCBModel !== 'undefined') ? PCBModel : require('./pcb-model.js');
+  // i18n helper
+  const t = (typeof global.t === 'function') ? global.t : (k, fb) => fb;
 
   // ---------------------------------------------------------------------------
   // violation 稳定 key（用于增量 diff）
@@ -46,21 +48,21 @@
 
       // ---- width rules ----
       if (opts.checkWidth) {
-        for (const t of board.traces) {
-          if (t.width < R.minTraceWidth - 1e-9) {
-            add('error', 'width', '线宽 ' + t.width.toFixed(3) + 'mm < 最小 ' + R.minTraceWidth + 'mm (网络 ' + (t.net || '无') + ')', t.pts[0].x, t.pts[0].y, t.width, { idA: t.id, layer: t.layer });
+        for (const tr of board.traces) {
+          if (tr.width < R.minTraceWidth - 1e-9) {
+            add('error', 'width', t('eda.drc.width', '线宽 {w}mm < 最小 {min}mm (网络 {net})', { w: tr.width.toFixed(3), min: R.minTraceWidth, net: (tr.net || t('eda.drc.noNet', '无')) }), tr.pts[0].x, tr.pts[0].y, tr.width, { idA: tr.id, layer: tr.layer });
           }
         }
         for (const v of board.vias) {
-          if (v.drill < R.minViaDrill - 1e-9) add('error', 'drill', '过孔钻孔 ' + v.drill + 'mm < 最小 ' + R.minViaDrill + 'mm', v.x, v.y, v.diameter / 2, { idA: v.id });
-          if (v.diameter < R.minViaDiameter - 1e-9) add('error', 'drill', '过孔外径 ' + v.diameter + 'mm < 最小 ' + R.minViaDiameter + 'mm', v.x, v.y, v.diameter / 2, { idA: v.id });
-          if ((v.diameter - v.drill) / 2 < R.minAnnularRing - 1e-9) add('error', 'annular', '过孔环宽不足 ' + R.minAnnularRing + 'mm', v.x, v.y, v.diameter / 2, { idA: v.id });
+          if (v.drill < R.minViaDrill - 1e-9) add('error', 'drill', t('eda.drc.viaDrill', '过孔钻孔 {d}mm < 最小 {min}mm', { d: v.drill, min: R.minViaDrill }), v.x, v.y, v.diameter / 2, { idA: v.id });
+          if (v.diameter < R.minViaDiameter - 1e-9) add('error', 'drill', t('eda.drc.viaDiameter', '过孔外径 {d}mm < 最小 {min}mm', { d: v.diameter, min: R.minViaDiameter }), v.x, v.y, v.diameter / 2, { idA: v.id });
+          if ((v.diameter - v.drill) / 2 < R.minAnnularRing - 1e-9) add('error', 'annular', t('eda.drc.viaAnnular', '过孔环宽不足 {min}mm', { min: R.minAnnularRing }), v.x, v.y, v.diameter / 2, { idA: v.id });
         }
         for (const p of pads) {
           if (p.drill && p.plated !== false) {
             const ring = (Math.min(p.w, p.h) - p.drill) / 2;
             if (ring < R.minAnnularRing - 1e-9) {
-              add('error', 'annular', p.ref + '.' + p.num + ' 焊盘环宽 ' + ring.toFixed(3) + 'mm < ' + R.minAnnularRing + 'mm', p.x, p.y, p.w / 2, { idA: p.ref + '.' + p.num });
+              add('error', 'annular', t('eda.drc.padAnnular', '{ref}.{num} 焊盘环宽 {ring}mm < {min}mm', { ref: p.ref, num: p.num, ring: ring.toFixed(3), min: R.minAnnularRing }), p.x, p.y, p.w / 2, { idA: p.ref + '.' + p.num });
             }
           }
         }
@@ -79,12 +81,12 @@
             if (a.smd && b.smd && a.side !== b.side) continue;
             const d = Geo.dist(a.x, a.y, b.x, b.y) - Math.max(a.w, a.h) / 2 - Math.max(b.w, b.h) / 2;
             if (d < cl - 1e-9) {
-              add('error', 'clearance', '焊盘间距不足: ' + a.ref + '.' + a.num + ' ↔ ' + b.ref + '.' + b.num + ' (' + Math.max(0, d).toFixed(3) + 'mm < ' + cl + 'mm)', (a.x + b.x) / 2, (a.y + b.y) / 2, 1, { idA: a.ref + '.' + a.num, idB: b.ref + '.' + b.num });
+              add('error', 'clearance', t('eda.drc.padClearance', '焊盘间距不足: {a} ↔ {b} ({d}mm < {min}mm)', { a: a.ref + '.' + a.num, b: b.ref + '.' + b.num, d: Math.max(0, d).toFixed(3), min: cl }), (a.x + b.x) / 2, (a.y + b.y) / 2, 1, { idA: a.ref + '.' + a.num, idB: b.ref + '.' + b.num });
             }
           }
         }
         // trace-trace (same layer, different nets)
-        const trCaps = board.traces.map(t => ({ t, caps: Geo.polylineCapsules(t.pts, t.width) }));
+        const trCaps = board.traces.map(tr => ({ t: tr, caps: Geo.polylineCapsules(tr.pts, tr.width) }));
         for (let i = 0; i < trCaps.length; i++) {
           for (let j = i; j < trCaps.length; j++) {
             const A = trCaps[i], B = trCaps[j];
@@ -96,7 +98,7 @@
                 const gap = Geo.capsuleCapsuleDist(A.caps[ci], B.caps[cj]);
                 if (gap < cl - 1e-9) {
                   const mx = (A.caps[ci].ax + B.caps[cj].ax) / 2, my = (A.caps[ci].ay + B.caps[cj].ay) / 2;
-                  add('error', 'clearance', '走线间距不足: ' + (A.t.net || '无网络') + ' ↔ ' + (B.t.net || '无网络') + ' @' + A.t.layer, mx, my, 1, { idA: A.t.id, idB: B.t.id, layer: A.t.layer });
+                  add('error', 'clearance', t('eda.drc.traceClearance', '走线间距不足: {a} ↔ {b} @{layer}', { a: (A.t.net || t('eda.drc.noNetName', '无网络')), b: (B.t.net || t('eda.drc.noNetName', '无网络')), layer: A.t.layer }), mx, my, 1, { idA: A.t.id, idB: B.t.id, layer: A.t.layer });
                   ci = A.caps.length; break;
                 }
               }
@@ -112,7 +114,7 @@
             for (const cap of tc.caps) {
               const gap = Geo.capsuleCircleDist(cap, p.x, p.y, pr);
               if (gap < cl - 1e-9) {
-                add('error', 'clearance', '焊盘 ' + p.ref + '.' + p.num + ' 与走线 ' + (tc.t.net || '无网络') + ' 间距不足', p.x, p.y, pr, { idA: p.ref + '.' + p.num, idB: tc.t.id, layer: tc.t.layer });
+                add('error', 'clearance', t('eda.drc.padTraceClearance', '焊盘 {ref}.{num} 与走线 {net} 间距不足', { ref: p.ref, num: p.num, net: (tc.t.net || t('eda.drc.noNetName', '无网络')) }), p.x, p.y, pr, { idA: p.ref + '.' + p.num, idB: tc.t.id, layer: tc.t.layer });
                 break;
               }
             }
@@ -125,7 +127,7 @@
             const w = board.vias[j];
             if (v.net && w.net && v.net === w.net) continue;
             const d = Geo.dist(v.x, v.y, w.x, w.y) - v.diameter / 2 - w.diameter / 2;
-            if (d < cl - 1e-9) add('error', 'clearance', '过孔间距不足', (v.x + w.x) / 2, (v.y + w.y) / 2, 1, { idA: v.id, idB: w.id });
+            if (d < cl - 1e-9) add('error', 'clearance', t('eda.drc.viaClearance', '过孔间距不足'), (v.x + w.x) / 2, (v.y + w.y) / 2, 1, { idA: v.id, idB: w.id });
           }
           for (const p of pads) {
             if (v.net && p.net && v.net === p.net) continue;
@@ -134,7 +136,7 @@
             const overlaps = p.layers.some(l => vLayers.includes(l));
             if (!overlaps) continue;
             const d = Geo.dist(v.x, v.y, p.x, p.y) - v.diameter / 2 - Math.max(p.w, p.h) / 2;
-            if (d < cl - 1e-9) add('error', 'clearance', '过孔与焊盘 ' + p.ref + '.' + p.num + ' 间距不足', v.x, v.y, v.diameter / 2, { idA: v.id, idB: p.ref + '.' + p.num });
+            if (d < cl - 1e-9) add('error', 'clearance', t('eda.drc.viaPadClearance', '过孔与焊盘 {ref}.{num} 间距不足', { ref: p.ref, num: p.num }), v.x, v.y, v.diameter / 2, { idA: v.id, idB: p.ref + '.' + p.num });
           }
           for (const tc of trCaps) {
             if (v.net && tc.t.net && v.net === tc.t.net) continue;
@@ -142,7 +144,7 @@
             if (!vLayers.includes(tc.t.layer)) continue;
             for (const cap of tc.caps) {
               if (Geo.capsuleCircleDist(cap, v.x, v.y, v.diameter / 2) < cl - 1e-9) {
-                add('error', 'clearance', '过孔与走线间距不足', v.x, v.y, v.diameter / 2, { idA: v.id, idB: tc.t.id, layer: tc.t.layer });
+                add('error', 'clearance', t('eda.drc.viaTraceClearance', '过孔与走线间距不足'), v.x, v.y, v.diameter / 2, { idA: v.id, idB: tc.t.id, layer: tc.t.layer });
                 break;
               }
             }
@@ -154,12 +156,12 @@
       if (opts.checkHoles) {
         const holes = [];
         for (const p of pads) if (p.drill) holes.push({ x: p.x, y: p.y, d: p.drill, label: p.ref + '.' + p.num, id: p.ref + '.' + p.num });
-        for (const v of board.vias) holes.push({ x: v.x, y: v.y, d: v.drill, label: '过孔', id: v.id });
+        for (const v of board.vias) holes.push({ x: v.x, y: v.y, d: v.drill, label: t('eda.drc.viaLabel', '过孔'), id: v.id });
         for (let i = 0; i < holes.length; i++) {
           for (let j = i + 1; j < holes.length; j++) {
             const gap = Geo.dist(holes[i].x, holes[i].y, holes[j].x, holes[j].y) - holes[i].d / 2 - holes[j].d / 2;
             if (gap < R.minHoleToHole - 1e-9) {
-              add('error', 'hole', '孔间距不足: ' + holes[i].label + ' ↔ ' + holes[j].label, (holes[i].x + holes[j].x) / 2, (holes[i].y + holes[j].y) / 2, 1, { idA: holes[i].id, idB: holes[j].id });
+              add('error', 'hole', t('eda.drc.holeClearance', '孔间距不足: {a} ↔ {b}', { a: holes[i].label, b: holes[j].label }), (holes[i].x + holes[j].x) / 2, (holes[i].y + holes[j].y) / 2, 1, { idA: holes[i].id, idB: holes[j].id });
             }
           }
         }
@@ -170,17 +172,17 @@
         const pts = board.outline.pts;
         const checkPt = (x, y, r, label, idA) => {
           if (!Geo.pointInPolygon(x, y, pts)) {
-            add('error', 'edge', label + ' 在板框之外', x, y, r, { idA });
+            add('error', 'edge', t('eda.drc.outOfBoard', '{label} 在板框之外', { label }), x, y, r, { idA });
             return;
           }
           const d = Geo.polygonEdgeDist(x, y, pts);
           if (d - r < R.copperToBoardEdge - 1e-9) {
-            add('warning', 'edge', label + ' 距板边 ' + (d - r).toFixed(3) + 'mm < ' + R.copperToBoardEdge + 'mm', x, y, r, { idA });
+            add('warning', 'edge', t('eda.drc.edgeClearance', '{label} 距板边 {dist}mm < {min}mm', { label, dist: (d - r).toFixed(3), min: R.copperToBoardEdge }), x, y, r, { idA });
           }
         };
-        for (const p of pads) checkPt(p.x, p.y, Math.max(p.w, p.h) / 2, '焊盘 ' + p.ref + '.' + p.num, p.ref + '.' + p.num);
-        for (const v of board.vias) checkPt(v.x, v.y, v.diameter / 2, '过孔', v.id);
-        for (const t of board.traces) for (const pt of t.pts) checkPt(pt.x, pt.y, t.width / 2, '走线', t.id);
+        for (const p of pads) checkPt(p.x, p.y, Math.max(p.w, p.h) / 2, t('eda.drc.padLabel', '焊盘 {ref}.{num}', { ref: p.ref, num: p.num }), p.ref + '.' + p.num);
+        for (const v of board.vias) checkPt(v.x, v.y, v.diameter / 2, t('eda.drc.viaLabel', '过孔'), v.id);
+        for (const tr of board.traces) for (const pt of tr.pts) checkPt(pt.x, pt.y, tr.width / 2, t('eda.drc.traceLabel', '走线'), tr.id);
       }
 
       // ---- ratsnest ----
@@ -188,7 +190,7 @@
         const lines = Model.Board.ratsnest(board, fpLib);
         for (const l of lines) {
           const detail = l.from && l.to ? (l.from + ' ↔ ' + l.to) : '';
-          add('warning', 'unrouted', '网络 ' + l.net + ' 未布线: ' + detail, l.x1, l.y1, 1.5, { idA: 'net:' + l.net, idB: l.from + '|' + l.to });
+          add('warning', 'unrouted', t('eda.drc.unrouted', '网络 {net} 未布线: {detail}', { net: l.net, detail }), l.x1, l.y1, 1.5, { idA: 'net:' + l.net, idB: l.from + '|' + l.to });
         }
       }
 
@@ -198,7 +200,7 @@
           const silkPads = pads.filter(p => p.side === sk.side);
           for (const p of silkPads) {
             if (silkOverlapsPad(sk, p)) {
-              add('warning', 'silk_over_pad', '丝印覆盖焊盘 ' + p.ref + '.' + p.num + ' (' + sk.kind + ')', p.x, p.y, Math.max(p.w, p.h) / 2, { idA: sk.id, idB: p.ref + '.' + p.num, layer: 'silk' });
+              add('warning', 'silk_over_pad', t('eda.drc.silkOverPad', '丝印覆盖焊盘 {ref}.{num} ({kind})', { ref: p.ref, num: p.num, kind: sk.kind }), p.x, p.y, Math.max(p.w, p.h) / 2, { idA: sk.id, idB: p.ref + '.' + p.num, layer: 'silk' });
             }
           }
         }
@@ -364,23 +366,23 @@
 
           // ---- width / drill / annular (只查变更的 trace/via/pad) ----
           if (opts.checkWidth) {
-            for (const t of board.traces) {
-              if (!sel.traceIds.has(t.id)) continue;
-              if (t.width < R.minTraceWidth - 1e-9) {
-                add('error', 'width', '线宽 ' + t.width.toFixed(3) + 'mm < 最小 ' + R.minTraceWidth + 'mm (网络 ' + (t.net || '无') + ')', t.pts[0].x, t.pts[0].y, t.width, { idA: t.id, layer: t.layer });
+            for (const tr of board.traces) {
+              if (!sel.traceIds.has(tr.id)) continue;
+              if (tr.width < R.minTraceWidth - 1e-9) {
+                add('error', 'width', t('eda.drc.width', '线宽 {w}mm < 最小 {min}mm (网络 {net})', { w: tr.width.toFixed(3), min: R.minTraceWidth, net: (tr.net || t('eda.drc.noNet', '无')) }), tr.pts[0].x, tr.pts[0].y, tr.width, { idA: tr.id, layer: tr.layer });
               }
             }
             for (const v of board.vias) {
               if (!sel.viaIds.has(v.id)) continue;
-              if (v.drill < R.minViaDrill - 1e-9) add('error', 'drill', '过孔钻孔 ' + v.drill + 'mm < 最小 ' + R.minViaDrill + 'mm', v.x, v.y, v.diameter / 2, { idA: v.id });
-              if (v.diameter < R.minViaDiameter - 1e-9) add('error', 'drill', '过孔外径 ' + v.diameter + 'mm < 最小 ' + R.minViaDiameter + 'mm', v.x, v.y, v.diameter / 2, { idA: v.id });
-              if ((v.diameter - v.drill) / 2 < R.minAnnularRing - 1e-9) add('error', 'annular', '过孔环宽不足 ' + R.minAnnularRing + 'mm', v.x, v.y, v.diameter / 2, { idA: v.id });
+              if (v.drill < R.minViaDrill - 1e-9) add('error', 'drill', t('eda.drc.viaDrill', '过孔钻孔 {d}mm < 最小 {min}mm', { d: v.drill, min: R.minViaDrill }), v.x, v.y, v.diameter / 2, { idA: v.id });
+              if (v.diameter < R.minViaDiameter - 1e-9) add('error', 'drill', t('eda.drc.viaDiameter', '过孔外径 {d}mm < 最小 {min}mm', { d: v.diameter, min: R.minViaDiameter }), v.x, v.y, v.diameter / 2, { idA: v.id });
+              if ((v.diameter - v.drill) / 2 < R.minAnnularRing - 1e-9) add('error', 'annular', t('eda.drc.viaAnnular', '过孔环宽不足 {min}mm', { min: R.minAnnularRing }), v.x, v.y, v.diameter / 2, { idA: v.id });
             }
             for (const p of sel.changedPads) {
               if (p.drill && p.plated !== false) {
                 const ring = (Math.min(p.w, p.h) - p.drill) / 2;
                 if (ring < R.minAnnularRing - 1e-9) {
-                  add('error', 'annular', p.ref + '.' + p.num + ' 焊盘环宽 ' + ring.toFixed(3) + 'mm < ' + R.minAnnularRing + 'mm', p.x, p.y, p.w / 2, { idA: p.ref + '.' + p.num });
+                  add('error', 'annular', t('eda.drc.padAnnular', '{ref}.{num} 焊盘环宽 {ring}mm < {min}mm', { ref: p.ref, num: p.num, ring: ring.toFixed(3), min: R.minAnnularRing }), p.x, p.y, p.w / 2, { idA: p.ref + '.' + p.num });
                 }
               }
             }
@@ -399,12 +401,12 @@
                 if (!sel.changedPadKeys.has(a.ref + '.' + a.num) && !sel.changedPadKeys.has(b.ref + '.' + b.num)) continue;
                 const d = Geo.dist(a.x, a.y, b.x, b.y) - Math.max(a.w, a.h) / 2 - Math.max(b.w, b.h) / 2;
                 if (d < cl - 1e-9) {
-                  add('error', 'clearance', '焊盘间距不足: ' + a.ref + '.' + a.num + ' ↔ ' + b.ref + '.' + b.num + ' (' + Math.max(0, d).toFixed(3) + 'mm < ' + cl + 'mm)', (a.x + b.x) / 2, (a.y + b.y) / 2, 1, { idA: a.ref + '.' + a.num, idB: b.ref + '.' + b.num });
+                  add('error', 'clearance', t('eda.drc.padClearance', '焊盘间距不足: {a} ↔ {b} ({d}mm < {min}mm)', { a: a.ref + '.' + a.num, b: b.ref + '.' + b.num, d: Math.max(0, d).toFixed(3), min: cl }), (a.x + b.x) / 2, (a.y + b.y) / 2, 1, { idA: a.ref + '.' + a.num, idB: b.ref + '.' + b.num });
                 }
               }
             }
             // trace-trace: 变更 trace vs 全量 trace
-            const trCaps = board.traces.map(t => ({ t, caps: Geo.polylineCapsules(t.pts, t.width) }));
+            const trCaps = board.traces.map(tr => ({ t: tr, caps: Geo.polylineCapsules(tr.pts, tr.width) }));
             for (let i = 0; i < trCaps.length; i++) {
               for (let j = i; j < trCaps.length; j++) {
                 const A = trCaps[i], B = trCaps[j];
@@ -417,7 +419,7 @@
                     const gap = Geo.capsuleCapsuleDist(A.caps[ci], B.caps[cj]);
                     if (gap < cl - 1e-9) {
                       const mx = (A.caps[ci].ax + B.caps[cj].ax) / 2, my = (A.caps[ci].ay + B.caps[cj].ay) / 2;
-                      add('error', 'clearance', '走线间距不足: ' + (A.t.net || '无网络') + ' ↔ ' + (B.t.net || '无网络') + ' @' + A.t.layer, mx, my, 1, { idA: A.t.id, idB: B.t.id, layer: A.t.layer });
+                      add('error', 'clearance', t('eda.drc.traceClearance', '走线间距不足: {a} ↔ {b} @{layer}', { a: (A.t.net || t('eda.drc.noNetName', '无网络')), b: (B.t.net || t('eda.drc.noNetName', '无网络')), layer: A.t.layer }), mx, my, 1, { idA: A.t.id, idB: B.t.id, layer: A.t.layer });
                       ci = A.caps.length; break;
                     }
                   }
@@ -437,7 +439,7 @@
                 for (const cap of tc.caps) {
                   const gap = Geo.capsuleCircleDist(cap, p.x, p.y, pr);
                   if (gap < cl - 1e-9) {
-                    add('error', 'clearance', '焊盘 ' + p.ref + '.' + p.num + ' 与走线 ' + (tc.t.net || '无网络') + ' 间距不足', p.x, p.y, pr, { idA: p.ref + '.' + p.num, idB: tc.t.id, layer: tc.t.layer });
+                    add('error', 'clearance', t('eda.drc.padTraceClearance', '焊盘 {ref}.{num} 与走线 {net} 间距不足', { ref: p.ref, num: p.num, net: (tc.t.net || t('eda.drc.noNetName', '无网络')) }), p.x, p.y, pr, { idA: p.ref + '.' + p.num, idB: tc.t.id, layer: tc.t.layer });
                     break;
                   }
                 }
@@ -451,7 +453,7 @@
                 const w = board.vias[j];
                 if (v.net && w.net && v.net === w.net) continue;
                 const d = Geo.dist(v.x, v.y, w.x, w.y) - v.diameter / 2 - w.diameter / 2;
-                if (d < cl - 1e-9) add('error', 'clearance', '过孔间距不足', (v.x + w.x) / 2, (v.y + w.y) / 2, 1, { idA: v.id, idB: w.id });
+                if (d < cl - 1e-9) add('error', 'clearance', t('eda.drc.viaClearance', '过孔间距不足'), (v.x + w.x) / 2, (v.y + w.y) / 2, 1, { idA: v.id, idB: w.id });
               }
               for (const p of allPads) {
                 if (v.net && p.net && v.net === p.net) continue;
@@ -459,7 +461,7 @@
                 const overlaps = p.layers.some(l => vLayers.includes(l));
                 if (!overlaps) continue;
                 const d = Geo.dist(v.x, v.y, p.x, p.y) - v.diameter / 2 - Math.max(p.w, p.h) / 2;
-                if (d < cl - 1e-9) add('error', 'clearance', '过孔与焊盘 ' + p.ref + '.' + p.num + ' 间距不足', v.x, v.y, v.diameter / 2, { idA: v.id, idB: p.ref + '.' + p.num });
+                if (d < cl - 1e-9) add('error', 'clearance', t('eda.drc.viaPadClearance', '过孔与焊盘 {ref}.{num} 间距不足', { ref: p.ref, num: p.num }), v.x, v.y, v.diameter / 2, { idA: v.id, idB: p.ref + '.' + p.num });
               }
               for (const tc of trCaps) {
                 if (v.net && tc.t.net && v.net === tc.t.net) continue;
@@ -467,7 +469,7 @@
                 if (!vLayers.includes(tc.t.layer)) continue;
                 for (const cap of tc.caps) {
                   if (Geo.capsuleCircleDist(cap, v.x, v.y, v.diameter / 2) < cl - 1e-9) {
-                    add('error', 'clearance', '过孔与走线间距不足', v.x, v.y, v.diameter / 2, { idA: v.id, idB: tc.t.id, layer: tc.t.layer });
+                    add('error', 'clearance', t('eda.drc.viaTraceClearance', '过孔与走线间距不足'), v.x, v.y, v.diameter / 2, { idA: v.id, idB: tc.t.id, layer: tc.t.layer });
                     break;
                   }
                 }
@@ -485,7 +487,7 @@
                 if (!holes[i].changed && !holes[j].changed) continue;
                 const gap = Geo.dist(holes[i].x, holes[i].y, holes[j].x, holes[j].y) - holes[i].d / 2 - holes[j].d / 2;
                 if (gap < R.minHoleToHole - 1e-9) {
-                  add('error', 'hole', '孔间距不足: ' + holes[i].label + ' ↔ ' + holes[j].label, (holes[i].x + holes[j].x) / 2, (holes[i].y + holes[j].y) / 2, 1, { idA: holes[i].id, idB: holes[j].id });
+                  add('error', 'hole', t('eda.drc.holeClearance', '孔间距不足: {a} ↔ {b}', { a: holes[i].label, b: holes[j].label }), (holes[i].x + holes[j].x) / 2, (holes[i].y + holes[j].y) / 2, 1, { idA: holes[i].id, idB: holes[j].id });
                 }
               }
             }
@@ -497,17 +499,17 @@
             const checkPt = (x, y, r, label, idA, changed) => {
               if (!changed) return;
               if (!Geo.pointInPolygon(x, y, pts)) {
-                add('error', 'edge', label + ' 在板框之外', x, y, r, { idA });
+                add('error', 'edge', t('eda.drc.outOfBoard', '{label} 在板框之外', { label }), x, y, r, { idA });
                 return;
               }
               const d = Geo.polygonEdgeDist(x, y, pts);
               if (d - r < R.copperToBoardEdge - 1e-9) {
-                add('warning', 'edge', label + ' 距板边 ' + (d - r).toFixed(3) + 'mm < ' + R.copperToBoardEdge + 'mm', x, y, r, { idA });
+                add('warning', 'edge', t('eda.drc.edgeClearance', '{label} 距板边 {dist}mm < {min}mm', { label, dist: (d - r).toFixed(3), min: R.copperToBoardEdge }), x, y, r, { idA });
               }
             };
-            for (const p of sel.changedPads) checkPt(p.x, p.y, Math.max(p.w, p.h) / 2, '焊盘 ' + p.ref + '.' + p.num, p.ref + '.' + p.num, true);
-            for (const v of board.vias) if (sel.viaIds.has(v.id)) checkPt(v.x, v.y, v.diameter / 2, '过孔', v.id, true);
-            for (const t of board.traces) if (sel.traceIds.has(t.id)) for (const pt of t.pts) checkPt(pt.x, pt.y, t.width / 2, '走线', t.id, true);
+            for (const p of sel.changedPads) checkPt(p.x, p.y, Math.max(p.w, p.h) / 2, t('eda.drc.padLabel', '焊盘 {ref}.{num}', { ref: p.ref, num: p.num }), p.ref + '.' + p.num, true);
+            for (const v of board.vias) if (sel.viaIds.has(v.id)) checkPt(v.x, v.y, v.diameter / 2, t('eda.drc.viaLabel', '过孔'), v.id, true);
+            for (const tr of board.traces) if (sel.traceIds.has(tr.id)) for (const pt of tr.pts) checkPt(pt.x, pt.y, tr.width / 2, t('eda.drc.traceLabel', '走线'), tr.id, true);
           }
 
           // ---- ratsnest: 仅变更网络 ----
@@ -515,7 +517,7 @@
             const lines = Model.Board.ratsnest(board, fpLib).filter(l => sel.netNames.has(l.net));
             for (const l of lines) {
               const detail = l.from && l.to ? (l.from + ' ↔ ' + l.to) : '';
-              add('warning', 'unrouted', '网络 ' + l.net + ' 未布线: ' + detail, l.x1, l.y1, 1.5, { idA: 'net:' + l.net, idB: l.from + '|' + l.to });
+              add('warning', 'unrouted', t('eda.drc.unrouted', '网络 {net} 未布线: {detail}', { net: l.net, detail }), l.x1, l.y1, 1.5, { idA: 'net:' + l.net, idB: l.from + '|' + l.to });
             }
           }
 
@@ -527,7 +529,7 @@
               for (const p of silkPads) {
                 if (!isChangedSilk && !sel.changedPadKeys.has(p.ref + '.' + p.num)) continue;
                 if (silkOverlapsPad(sk, p)) {
-                  add('warning', 'silk_over_pad', '丝印覆盖焊盘 ' + p.ref + '.' + p.num + ' (' + sk.kind + ')', p.x, p.y, Math.max(p.w, p.h) / 2, { idA: sk.id, idB: p.ref + '.' + p.num, layer: 'silk' });
+                  add('warning', 'silk_over_pad', t('eda.drc.silkOverPad', '丝印覆盖焊盘 {ref}.{num} ({kind})', { ref: p.ref, num: p.num, kind: sk.kind }), p.x, p.y, Math.max(p.w, p.h) / 2, { idA: sk.id, idB: p.ref + '.' + p.num, layer: 'silk' });
                 }
               }
             }
@@ -553,7 +555,7 @@
       const refCount = new Map();
       for (const s of sheet.symbols) {
         if (!s.ref || /\?/.test(s.ref)) {
-          add('warning', 'annotate', '元件未标注位号 (lib=' + s.lib + ')', s.x, s.y);
+          add('warning', 'annotate', t('eda.erc.notAnnotated', '元件未标注位号 (lib={lib})', { lib: s.lib }), s.x, s.y);
           continue;
         }
         refCount.set(s.ref, (refCount.get(s.ref) || 0) + 1);
@@ -561,12 +563,12 @@
       for (const [ref, n] of refCount) {
         if (n > 1) {
           const s = sheet.symbols.find(x => x.ref === ref);
-          add('error', 'duplicate', '位号 ' + ref + ' 重复 ' + n + ' 次', s ? s.x : 0, s ? s.y : 0);
+          add('error', 'duplicate', t('eda.erc.duplicateRef', '位号 {ref} 重复 {n} 次', { ref, n }), s ? s.x : 0, s ? s.y : 0);
         }
       }
       // missing footprint
       for (const s of sheet.symbols) {
-        if (!s.footprint) add('warning', 'footprint', s.ref + ' 未指定封装', s.x, s.y);
+        if (!s.footprint) add('warning', 'footprint', t('eda.erc.noFootprint', '{ref} 未指定封装', { ref: s.ref }), s.x, s.y);
       }
       // unconnected pins — 用点到线段距离判定，避免网格采样漏报
       const TOL = 0.01; // 0.01mm 容差
@@ -585,7 +587,7 @@
       const isNoConnect = (x, y) => sheet.noConnects.some(nc => Math.hypot(nc.x - x, nc.y - y) <= TOL);
       for (const pn of pinNets) {
         if (!isWired(pn.x, pn.y) && !isNoConnect(pn.x, pn.y)) {
-          add('warning', 'unconnected', pn.ref + ' 引脚 ' + pn.num + ' (' + pn.name + ') 未连接', pn.x, pn.y);
+          add('warning', 'unconnected', t('eda.erc.unconnected', '{ref} 引脚 {num} ({name}) 未连接', { ref: pn.ref, num: pn.num, name: pn.name }), pn.x, pn.y);
         }
       }
       // single-pin nets
@@ -596,7 +598,7 @@
       }
       for (const [net, pins] of netPins) {
         if (pins.length === 1) {
-          add('warning', 'single', '网络 ' + net + ' 只连接了一个引脚', pins[0].x, pins[0].y);
+          add('warning', 'single', t('eda.erc.singlePin', '网络 {net} 只连接了一个引脚', { net }), pins[0].x, pins[0].y);
         }
       }
       return errs;

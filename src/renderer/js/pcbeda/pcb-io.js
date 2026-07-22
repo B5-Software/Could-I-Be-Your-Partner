@@ -6,6 +6,8 @@
 
   const Geo = (typeof PCBGeo !== 'undefined') ? PCBGeo : require('./pcb-geometry.js');
   const Model = (typeof PCBModel !== 'undefined') ? PCBModel : require('./pcb-model.js');
+  // i18n helper
+  const t = (typeof global.t === 'function') ? global.t : (k, fb) => fb;
 
   // ---------------------------------------------------------------------------
   // generic S-expression parser -> nested arrays (atoms as strings)
@@ -331,8 +333,8 @@
   // ---------------------------------------------------------------------------
   function importKicadPcb(text, fpLib, boardName) {
     const root = parseSExpr(text);
-    if (!Array.isArray(root) || root[0] !== 'kicad_pcb') return { ok: false, error: '不是有效的 kicad_pcb 文件' };
-    const board = Model.newBoard(boardName || 'KiCad导入', 100, 80, 2);
+    if (!Array.isArray(root) || root[0] !== 'kicad_pcb') return { ok: false, error: t('eda.io.err.notKicadPcb', '不是有效的 kicad_pcb 文件') };
+    const board = Model.newBoard(boardName || t('eda.io.kicadImport', 'KiCad导入'), 100, 80, 2);
     board.components = []; board.traces = []; board.vias = []; board.zones = []; board.outline.pts = [];
 
     // nets
@@ -403,7 +405,7 @@
           }
           if (parsedPads.length) {
             const bb = Geo.ptsBBox(parsedPads);
-            fpLib.register(dynName, 'KiCad导入封装 ' + fpNameRaw, () => ({
+            fpLib.register(dynName, t('eda.io.kicadImportFp', 'KiCad导入封装 {name}', { name: fpNameRaw }), () => ({
               name: dynName, pads: parsedPads,
               silk: [], refPos: { x: 0, y: bb.minY - 1 },
               courtyard: { x: bb.minX - 0.3, y: bb.minY - 0.3, w: bb.maxX - bb.minX + 0.6, h: bb.maxY - bb.minY + 0.6 },
@@ -493,10 +495,10 @@
         const data = JSON.parse(content);
         return { ok: true, type: 'json', data };
       } catch (e) {
-        return { ok: false, error: 'JSON 解析失败: ' + e.message };
+        return { ok: false, error: t('eda.io.err.jsonParse', 'JSON 解析失败: {msg}', { msg: e.message }) };
       }
     }
-    return { ok: false, error: '无法识别的文件格式: ' + fileName };
+    return { ok: false, error: t('eda.io.err.unknownFormat', '无法识别的文件格式: {name}', { name: fileName }) };
   }
 
   const PCBIO = {

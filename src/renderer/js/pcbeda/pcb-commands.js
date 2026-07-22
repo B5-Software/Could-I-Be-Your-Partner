@@ -10,6 +10,8 @@
   const fpLib = () => global.PCBFootprints;
   const symLib = () => global.PCBSymbols;
   const Editor = () => global.PCBEditor;
+  // i18n helper (aliased as tr to avoid collision with local var `t` = parsed tokens)
+  const tr = (typeof global.t === 'function') ? global.t : (k, fb) => fb;
 
   function parseCmd(line) {
     // tokenize honoring "quoted strings"
@@ -145,7 +147,7 @@
   const Executor = {
     execute(line) {
       const t = parseCmd(line);
-      if (!t.length) return fail('空命令');
+      if (!t.length) return fail(tr('eda.cmd.err.empty', '空命令'));
       const cmd = t[0].toLowerCase();
       const args = t.slice(1);
       let result;
@@ -163,7 +165,7 @@
 
     _dispatch(cmd, args) {
       switch (cmd) {
-        case 'help': return ok({ help: HELP_TEXT });
+        case 'help': return ok({ help: getHelpText() });
         case 'new': {
           Doc.reset(args[0] || 'Untitled', parseFloat(args[1]) || 100, parseFloat(args[2]) || 80, parseInt(args[3], 10) || 2);
           this._ui();
@@ -181,7 +183,7 @@
         case 'sch': return this._sch(args);
         case 'layer': return this._layer(args);
         case 'view': return this._view(args);
-        case 'flow': return ok({ flow: DESIGN_FLOW_GUIDE });
+        case 'flow': return ok({ flow: getDesignFlowGuide() });
         case 'drc': return this._drc(args);
         case 'erc': {
           const errs = global.PcbErc.run(Doc.sheet(), symLib());
@@ -192,14 +194,14 @@
         case 'clear': {
           if (!args.length) {
             return ok({
-              usage: 'clear 命令用法:',
+              usage: tr('eda.cmd.clear.usage', 'clear 命令用法:'),
               options: [
-                'clear routes [net] — 删除所有走线和过孔（可指定仅某个网络）',
-                'clear traces — 同 clear routes',
-                'clear silk — 删除所有丝印',
-                'clear zones — 删除所有铺铜',
-                'clear all — 删除整块板的全部内容（元件/走线/过孔/铺铜/丝印）',
-                '提示: 误操作可用 undo 命令撤销'
+                tr('eda.cmd.clear.routes', 'clear routes [net] — 删除所有走线和过孔（可指定仅某个网络）'),
+                tr('eda.cmd.clear.traces', 'clear traces — 同 clear routes'),
+                tr('eda.cmd.clear.silk', 'clear silk — 删除所有丝印'),
+                tr('eda.cmd.clear.zones', 'clear zones — 删除所有铺铜'),
+                tr('eda.cmd.clear.all', 'clear all — 删除整块板的全部内容（元件/走线/过孔/铺铜/丝印）'),
+                tr('eda.cmd.clear.tip', '提示: 误操作可用 undo 命令撤销')
               ]
             });
           }
@@ -237,7 +239,7 @@
             Doc.touch(); this._ui();
             return ok({});
           }
-          return fail('未知 clear 目标: ' + args[0] + ' (输入 clear 查看用法)');
+          return fail(tr('eda.cmd.err.clearUnknown', '未知 clear 目标: {arg} (输入 clear 查看用法)', { arg: args[0] }));
         }
         case 'del': {
           Doc.snapshot();
@@ -245,15 +247,15 @@
           const id = args[1];
           const lists = { trace: b.traces, via: b.vias, zone: b.zones, silk: b.silkscreen };
           const arr = lists[args[0]];
-          if (!arr) { Doc._undo.pop(); return fail('用法: del trace|via|zone|silk <id|last> (last=删除最近添加的)'); }
+          if (!arr) { Doc._undo.pop(); return fail(tr('eda.cmd.usage.del', '用法: del trace|via|zone|silk <id|last> (last=删除最近添加的)')); }
           if (id === 'last') {
-            if (!arr.length) { Doc._undo.pop(); return fail('没有可删除的对象'); }
+            if (!arr.length) { Doc._undo.pop(); return fail(tr('eda.cmd.err.noDelObj', '没有可删除的对象')); }
             const removed = arr.pop();
             Doc.touch(); this._ui();
             return ok({ removed: removed.id });
           }
           const i = arr.findIndex(o => o.id === id);
-          if (i < 0) { Doc._undo.pop(); return fail('未找到对象 ' + id); }
+          if (i < 0) { Doc._undo.pop(); return fail(tr('eda.cmd.err.objNotFound', '未找到对象 {id}', { id })); }
           arr.splice(i, 1);
           Doc.touch(); this._ui();
           return ok({});
@@ -269,7 +271,7 @@
         case 'fit': if (Editor()) Editor().fitView(); return ok({});
         case 'undo': return ok({ done: Doc.undo() });
         case 'redo': return ok({ done: Doc.redo() });
-        default: return fail('未知命令: ' + cmd + ' (输入 help 查看)');
+        default: return fail(tr('eda.cmd.err.unknown', '未知命令: {cmd} (输入 help 查看)', { cmd }));
       }
     },
 
@@ -290,7 +292,7 @@
       }
       if (sub === 'outline') {
         const pts = args.slice(1).map(parsePt).filter(Boolean);
-        if (pts.length < 3) return fail('至少需要3个顶点: board outline x1,y1 x2,y2 x3,y3 ...');
+        if (pts.length < 3) return fail(tr('eda.cmd.err.need3VertsBoard', '至少需要3个顶点: board outline x1,y1 x2,y2 x3,y3 ...'));
         Doc.snapshot();
         b.outline = { pts, closed: true };
         Doc.touch(); this._ui();
@@ -301,7 +303,7 @@
         Doc.touch();
         return ok({ name: b.name });
       }
-      return fail('用法: board size <w> <h> | board outline x,y ... | board name <名称>');
+      return fail(tr('eda.cmd.usage.board', '用法: board size <w> <h> | board outline x,y ... | board name <名称>'));
     },
 
     _rules(args) {
@@ -309,21 +311,21 @@
       if (args[0] === 'list' || !args.length) return ok({ rules: b.designRules });
       if (args[0] === 'set') {
         const key = args[1], val = parseFloat(args[2]);
-        if (!(key in b.designRules)) return fail('未知规则: ' + key + ' (rules list 查看全部)');
-        if (isNaN(val)) return fail('规则值必须是数字');
+        if (!(key in b.designRules)) return fail(tr('eda.cmd.err.unknownRule', '未知规则: {key} (rules list 查看全部)', { key }));
+        if (isNaN(val)) return fail(tr('eda.cmd.err.ruleNotNum', '规则值必须是数字'));
         Doc.snapshot();
         b.designRules[key] = val;
         Doc.touch();
         return ok({ rules: b.designRules });
       }
-      return fail('用法: rules set <key> <value> | rules list');
+      return fail(tr('eda.cmd.usage.rules', '用法: rules set <key> <value> | rules list'));
     },
 
     _stackup(args) {
       const b = Doc.board();
       if (args[0] === 'layers') {
         const n = parseInt(args[1], 10);
-        if (!n || n < 1 || n > 16) return fail('层数范围 1-16');
+        if (!n || n < 1 || n > 16) return fail(tr('eda.cmd.err.layerRange', '层数范围 1-16'));
         Doc.snapshot();
         b.stackup = Model.defaultStackup(n);
         Doc.touch(); this._ui();
@@ -331,7 +333,7 @@
       }
       if (args[0] === 'thickness') {
         const t = parseFloat(args[1]);
-        if (!t) return fail('用法: stackup thickness <mm>');
+        if (!t) return fail(tr('eda.cmd.usage.stackupThickness', '用法: stackup thickness <mm>'));
         Doc.snapshot();
         b.stackup.boardThickness = t;
         Doc.touch();
@@ -346,10 +348,10 @@
       if (sub === 'add') {
         // comp add <footprint> <ref> <x> <y> [rot] [side] [k=v ...]
         const fp = args[1];
-        if (!fpLib().has(fp)) return fail('未知封装: ' + fp + ' (可用 footprints 命令查看列表)');
+        if (!fpLib().has(fp)) return fail(tr('eda.cmd.err.unknownFp', '未知封装: {fp} (可用 footprints 命令查看列表)', { fp }));
         const ref = args[2];
-        if (!ref) return fail('需要位号 (如 R1)');
-        if (b.components.some(c => c.ref === ref)) return fail('位号已存在: ' + ref);
+        if (!ref) return fail(tr('eda.cmd.err.needRef', '需要位号 (如 R1)'));
+        if (b.components.some(c => c.ref === ref)) return fail(tr('eda.cmd.err.refExists', '位号已存在: {ref}', { ref }));
         const x = parseFloat(args[3]) || 0, y = parseFloat(args[4]) || 0;
         const rot = parseFloat(args[5]) || 0;
         const side = (args[6] || 'F').toUpperCase().startsWith('B') ? 'B' : 'F';
@@ -368,7 +370,7 @@
       }
       if (sub === 'move') {
         const c = Model.Board.findComponent(b, args[1]);
-        if (!c) return fail('未找到元件 ' + args[1]);
+        if (!c) return fail(tr('eda.cmd.err.compNotFound', '未找到元件 {ref}', { ref: args[1] }));
         Doc.snapshot();
         c.x = parseFloat(args[2]) || 0; c.y = parseFloat(args[3]) || 0;
         Doc.touch(); this._ui();
@@ -376,7 +378,7 @@
       }
       if (sub === 'rot') {
         const c = Model.Board.findComponent(b, args[1]);
-        if (!c) return fail('未找到元件 ' + args[1]);
+        if (!c) return fail(tr('eda.cmd.err.compNotFound', '未找到元件 {ref}', { ref: args[1] }));
         Doc.snapshot();
         c.rot = ((parseFloat(args[2]) || 0) + 360) % 360;
         Doc.touch(); this._ui();
@@ -384,7 +386,7 @@
       }
       if (sub === 'side') {
         const c = Model.Board.findComponent(b, args[1]);
-        if (!c) return fail('未找到元件 ' + args[1]);
+        if (!c) return fail(tr('eda.cmd.err.compNotFound', '未找到元件 {ref}', { ref: args[1] }));
         Doc.snapshot();
         c.side = (args[2] || 'F').toUpperCase().startsWith('B') ? 'B' : 'F';
         Doc.touch(); this._ui();
@@ -393,7 +395,7 @@
       if (sub === 'flip') {
         // 翻转元件到另一面（F↔B，KiCad/Altium 的 F 快捷键）
         const c = Model.Board.findComponent(b, args[1]);
-        if (!c) return fail('未找到元件 ' + args[1]);
+        if (!c) return fail(tr('eda.cmd.err.compNotFound', '未找到元件 {ref}', { ref: args[1] }));
         Doc.snapshot();
         const newSide = Model.Board.flipComponentSide(b, args[1]);
         Doc.touch(); this._ui();
@@ -401,7 +403,7 @@
       }
       if (sub === 'value') {
         const c = Model.Board.findComponent(b, args[1]);
-        if (!c) return fail('未找到元件 ' + args[1]);
+        if (!c) return fail(tr('eda.cmd.err.compNotFound', '未找到元件 {ref}', { ref: args[1] }));
         Doc.snapshot();
         c.value = args.slice(2).join(' ');
         Doc.touch(); this._ui();
@@ -409,7 +411,7 @@
       }
       if (sub === 'del') {
         Doc.snapshot();
-        if (!Model.Board.deleteComponent(b, args[1])) { Doc._undo.pop(); return fail('未找到元件 ' + args[1]); }
+        if (!Model.Board.deleteComponent(b, args[1])) { Doc._undo.pop(); return fail(tr('eda.cmd.err.compNotFound', '未找到元件 {ref}', { ref: args[1] })); }
         Doc.touch(); this._ui();
         return ok({});
       }
@@ -431,20 +433,20 @@
       if (sub === 'pads') {
         // comp pads <ref> — 返回指定 component 的所有 pad 全局坐标
         const ref = args[1];
-        if (!ref) return fail('用法: comp pads <ref>');
+        if (!ref) return fail(tr('eda.cmd.usage.compPads', '用法: comp pads <ref>'));
         const c = Model.Board.findComponent(b, ref);
-        if (!c) return fail('未找到元件 ' + ref);
+        if (!c) return fail(tr('eda.cmd.err.compNotFound', '未找到元件 {ref}', { ref }));
         const pads = Model.Board.allPads(b, fpLib()).filter(p => p.ref === ref)
           .map(p => ({ num: p.num, x: p.x, y: p.y, w: p.w, h: p.h, drill: p.drill, net: p.net || '', side: p.side }));
         return ok({ ref, x: c.x, y: c.y, rot: c.rot, side: c.side, pads });
       }
       if (sub === 'net') {
         // comp net <ref> <pad> <net>
-        if (!Model.Board.setPadNet(b, args[1], args[2], args[3] || '')) return fail('未找到元件 ' + args[1]);
+        if (!Model.Board.setPadNet(b, args[1], args[2], args[3] || '')) return fail(tr('eda.cmd.err.compNotFound', '未找到元件 {ref}', { ref: args[1] }));
         Doc.touch(); this._ui();
         return ok({});
       }
-      return fail('用法: comp add|move|rot|side|flip|value|del|list|pads|net ...');
+      return fail(tr('eda.cmd.usage.comp', '用法: comp add|move|rot|side|flip|value|del|list|pads|net ...'));
     },
 
     _net(args) {
@@ -452,7 +454,7 @@
       if (args[0] === 'list') return ok({ nets: Model.Board.netNames(b, fpLib()) });
       if (args[0] === 'rename') {
         const oldN = args[1], newN = args[2];
-        if (!oldN || !newN) return fail('用法: net rename <旧名> <新名>');
+        if (!oldN || !newN) return fail(tr('eda.cmd.usage.netRename', '用法: net rename <旧名> <新名>'));
         Doc.snapshot();
         for (const c of b.components) {
           for (const k of Object.keys(c.padNets || {})) if (c.padNets[k] === oldN) c.padNets[k] = newN;
@@ -463,17 +465,17 @@
         Doc.touch(); this._ui();
         return ok({});
       }
-      return fail('用法: net list | net rename <旧> <新>');
+      return fail(tr('eda.cmd.usage.net', '用法: net list | net rename <旧> <新>'));
     },
 
     _trace(args) {
       // trace <net> <layer> <width> x1,y1 x2,y2 ...
       const net = args[0] || '';
       const layer = args[1] || 'F.Cu';
-      if (!Model.Board.copperLayerIds(Doc.board()).includes(layer)) return fail('未知铜层: ' + layer);
+      if (!Model.Board.copperLayerIds(Doc.board()).includes(layer)) return fail(tr('eda.cmd.err.unknownCopper', '未知铜层: {layer}', { layer }));
       const width = parseFloat(args[2]) || Doc.board().designRules.defaultTraceWidth;
       const pts = args.slice(3).map(parsePt).filter(Boolean);
-      if (pts.length < 2) return fail('至少需要2个点: trace <net> <layer> <width> x1,y1 x2,y2 ...');
+      if (pts.length < 2) return fail(tr('eda.cmd.err.need2PtsTrace', '至少需要2个点: trace <net> <layer> <width> x1,y1 x2,y2 ...'));
       Doc.snapshot();
       const t = Model.Board.addTrace(Doc.board(), { net, layer, width, pts });
       Doc.touch(); this._ui();
@@ -484,7 +486,7 @@
       // via <net> <x> <y> [drill] [diameter]
       const net = args[0] || '';
       const x = parseFloat(args[1]), y = parseFloat(args[2]);
-      if (isNaN(x) || isNaN(y)) return fail('用法: via <net> <x> <y> [drill] [diameter]');
+      if (isNaN(x) || isNaN(y)) return fail(tr('eda.cmd.usage.via', '用法: via <net> <x> <y> [drill] [diameter]'));
       const b = Doc.board();
       Doc.snapshot();
       const v = Model.Board.addVia(b, {
@@ -509,7 +511,7 @@
         const p = parsePt(rest[i]);
         if (p) pts.push(p);
       }
-      if (pts.length < 3) return fail('至少需要3个顶点');
+      if (pts.length < 3) return fail(tr('eda.cmd.err.need3Verts', '至少需要3个顶点'));
       const b = Doc.board();
       Doc.snapshot();
       const z = Model.Board.addZone(b, {
@@ -528,24 +530,24 @@
       Doc.snapshot();
       if (sub === 'line') {
         const a = parsePt(args[1]), c = parsePt(args[2]);
-        if (!a || !c) { Doc._undo.pop(); return fail('用法: silk line x1,y1 x2,y2 [F|B]'); }
+        if (!a || !c) { Doc._undo.pop(); return fail(tr('eda.cmd.usage.silkLine', '用法: silk line x1,y1 x2,y2 [F|B]')); }
         Model.Board.addSilk(b, { side: (args[3] || 'F').toUpperCase().startsWith('B') ? 'B' : 'F', kind: 'line', pts: [a, c], width: 0.15 });
       } else if (sub === 'rect') {
         const a = parsePt(args[1]), c = parsePt(args[2]);
-        if (!a || !c) { Doc._undo.pop(); return fail('用法: silk rect x1,y1 x2,y2 [F|B]'); }
+        if (!a || !c) { Doc._undo.pop(); return fail(tr('eda.cmd.usage.silkRect', '用法: silk rect x1,y1 x2,y2 [F|B]')); }
         Model.Board.addSilk(b, { side: (args[3] || 'F').toUpperCase().startsWith('B') ? 'B' : 'F', kind: 'rect', x: a.x, y: a.y, w: c.x - a.x, h: c.y - a.y });
       } else if (sub === 'circle') {
         const a = parsePt(args[1]), r = parseFloat(args[2]);
-        if (!a || !r) { Doc._undo.pop(); return fail('用法: silk circle cx,cy r [F|B]'); }
+        if (!a || !r) { Doc._undo.pop(); return fail(tr('eda.cmd.usage.silkCircle', '用法: silk circle cx,cy r [F|B]')); }
         Model.Board.addSilk(b, { side: (args[3] || 'F').toUpperCase().startsWith('B') ? 'B' : 'F', kind: 'circle', x: a.x, y: a.y, r });
       } else if (sub === 'text') {
         const a = parsePt(args[args.length - 1]);
         const text = args.slice(1, args.length - 1).join(' ');
-        if (!a || !text) { Doc._undo.pop(); return fail('用法: silk text "内容" x,y'); }
+        if (!a || !text) { Doc._undo.pop(); return fail(tr('eda.cmd.usage.silkText', '用法: silk text "内容" x,y')); }
         Model.Board.addSilk(b, { side, kind: 'text', x: a.x, y: a.y, text, size: 1.2, rot: 0 });
       } else {
         Doc._undo.pop();
-        return fail('用法: silk line|rect|circle|text ...');
+        return fail(tr('eda.cmd.usage.silk', '用法: silk line|rect|circle|text ...'));
       }
       Doc.touch(); this._ui();
       return ok({});
@@ -557,7 +559,7 @@
       if (sub === 'sym') {
         // sch sym <lib> <x> <y> [rot] [--ref R1] [--value 10k] [--fp R_0805]
         const lib = args[1];
-        if (!symLib().has(lib)) return fail('未知符号: ' + lib);
+        if (!symLib().has(lib)) return fail(tr('eda.cmd.err.unknownSym', '未知符号: {lib}', { lib }));
         const x = parseFloat(args[2]) || 0, y = parseFloat(args[3]) || 0;
         const rot = parseFloat(args[4]) || 0;
         let ref = null, value = '', fp = null, symParams = null;
@@ -593,7 +595,7 @@
       }
       if (sub === 'wire') {
         const pts = args.slice(1).map(parsePt).filter(Boolean);
-        if (pts.length < 2) return fail('至少需要2个点');
+        if (pts.length < 2) return fail(tr('eda.cmd.err.need2Pts', '至少需要2个点'));
         Doc.snapshot();
         s.wires.push({ id: Model.nextId('w'), pts });
         Doc.touch(); this._ui();
@@ -602,7 +604,7 @@
       if (sub === 'label') {
         const p = parsePt(args[args.length - 1]);
         const text = args.slice(1, args.length - 1).join(' ');
-        if (!p || !text) return fail('用法: sch label "网络名" x,y');
+        if (!p || !text) return fail(tr('eda.cmd.usage.schLabel', '用法: sch label "网络名" x,y'));
         Doc.snapshot();
         s.labels.push({ id: Model.nextId('lb'), x: p.x, y: p.y, text, rot: 0 });
         Doc.touch(); this._ui();
@@ -611,7 +613,7 @@
       if (sub === 'power') {
         const ptype = args[1] || 'GND';
         const p = parsePt(args[2]);
-        if (!p) return fail('用法: sch power <GND|VCC|+5V|+3V3|...> x,y');
+        if (!p) return fail(tr('eda.cmd.usage.schPower', '用法: sch power <GND|VCC|+5V|+3V3|...> x,y'));
         Doc.snapshot();
         s.powerSymbols.push({ id: Model.nextId('pw'), x: p.x, y: p.y, ptype, rot: 0 });
         Doc.touch(); this._ui();
@@ -619,7 +621,7 @@
       }
       if (sub === 'junction') {
         const p = parsePt(args[1]);
-        if (!p) return fail('用法: sch junction x,y');
+        if (!p) return fail(tr('eda.cmd.usage.schJunction', '用法: sch junction x,y'));
         Doc.snapshot();
         s.junctions.push({ id: Model.nextId('jn'), x: p.x, y: p.y });
         Doc.touch(); this._ui();
@@ -627,7 +629,7 @@
       }
       if (sub === 'noconnect') {
         const p = parsePt(args[1]);
-        if (!p) return fail('用法: sch noconnect x,y');
+        if (!p) return fail(tr('eda.cmd.usage.schNoconnect', '用法: sch noconnect x,y'));
         Doc.snapshot();
         s.noConnects.push({ id: Model.nextId('nc'), x: p.x, y: p.y });
         Doc.touch(); this._ui();
@@ -635,7 +637,7 @@
       }
       if (sub === 'value') {
         const sym = s.symbols.find(z => z.ref === args[1]);
-        if (!sym) return fail('未找到符号 ' + args[1]);
+        if (!sym) return fail(tr('eda.cmd.err.symNotFound', '未找到符号 {ref}', { ref: args[1] }));
         Doc.snapshot();
         sym.value = args.slice(2).join(' ');
         Doc.touch(); this._ui();
@@ -643,8 +645,8 @@
       }
       if (sub === 'fp') {
         const sym = s.symbols.find(z => z.ref === args[1]);
-        if (!sym) return fail('未找到符号 ' + args[1]);
-        if (!fpLib().has(args[2])) return fail('未知封装 ' + args[2]);
+        if (!sym) return fail(tr('eda.cmd.err.symNotFound', '未找到符号 {ref}', { ref: args[1] }));
+        if (!fpLib().has(args[2])) return fail(tr('eda.cmd.err.unknownFpShort', '未知封装 {fp}', { fp: args[2] }));
         Doc.snapshot();
         sym.footprint = args[2];
         Doc.touch(); this._ui();
@@ -652,7 +654,7 @@
       }
       if (sub === 'del') {
         const i = s.symbols.findIndex(z => z.ref === args[1]);
-        if (i < 0) return fail('未找到符号 ' + args[1]);
+        if (i < 0) return fail(tr('eda.cmd.err.symNotFound', '未找到符号 {ref}', { ref: args[1] }));
         Doc.snapshot();
         s.symbols.splice(i, 1);
         Doc.touch(); this._ui();
@@ -682,9 +684,9 @@
       if (sub === 'pins') {
         // sch pins <ref> — 返回指定 symbol 的所有 pin 全局坐标
         const ref = args[1];
-        if (!ref) return fail('用法: sch pins <ref>');
+        if (!ref) return fail(tr('eda.cmd.usage.schPins', '用法: sch pins <ref>'));
         const sym = s.symbols.find(z => z.ref === ref);
-        if (!sym) return fail('未找到符号 ' + ref);
+        if (!sym) return fail(tr('eda.cmd.err.symNotFound', '未找到符号 {ref}', { ref }));
         const pins = Model.Sheet.symbolPins(s, symLib()).filter(p => p.ref === ref)
           .map(p => ({ num: p.num, name: p.name, x: p.x, y: p.y }));
         return ok({ ref, x: sym.x, y: sym.y, rot: sym.rot || 0, mirror: !!sym.mirror, pins });
@@ -698,7 +700,7 @@
         this._ui();
         return ok(r);
       }
-      return fail('用法: sch sym|wire|label|power|junction|noconnect|value|fp|del|annotate|list|pins|nets|sync');
+      return fail(tr('eda.cmd.usage.sch', '用法: sch sym|wire|label|power|junction|noconnect|value|fp|del|annotate|list|pins|nets|sync'));
     },
 
     _state() {
@@ -724,9 +726,9 @@
     // 视图方向：top|bottom|toggle（工业标准 KiCad/Altium V+B）
     _view(args) {
       const E = Editor();
-      if (!E || !global.PCBRender) return fail('视图不可用');
+      if (!E || !global.PCBRender) return fail(tr('eda.cmd.err.viewUnavailable', '视图不可用'));
       const side = (args[0] || 'toggle').toLowerCase();
-      if (!['top', 'bottom', 'toggle'].includes(side)) return fail('用法: view top|bottom|toggle');
+      if (!['top', 'bottom', 'toggle'].includes(side)) return fail(tr('eda.cmd.usage.view', '用法: view top|bottom|toggle'));
       const newSide = E.setView(side);
       return ok({ view: newSide });
     },
@@ -746,7 +748,7 @@
       }
       if (sub === 'vis' || sub === 'visible') {
         const layerId = args[1];
-        if (!layerId) return fail('用法: layer vis <id> on|off');
+        if (!layerId) return fail(tr('eda.cmd.usage.layerVis', '用法: layer vis <id> on|off'));
         const on = (args[2] || '').toLowerCase() !== 'off';
         if (E) {
           E.layerVisibility[layerId] = on;
@@ -756,12 +758,12 @@
       }
       if (sub === 'active') {
         const layerId = args[1];
-        if (!layerId) return fail('用法: layer active <id>');
-        if (!Model.Board.copperLayerIds(b).includes(layerId)) return fail('未知铜层: ' + layerId);
+        if (!layerId) return fail(tr('eda.cmd.usage.layerActive', '用法: layer active <id>'));
+        if (!Model.Board.copperLayerIds(b).includes(layerId)) return fail(tr('eda.cmd.err.unknownCopper', '未知铜层: {layer}', { layer: layerId }));
         if (E) { E.activeLayer = layerId; E.refresh(); E.panel(); }
         return ok({ activeLayer: layerId });
       }
-      return fail('用法: layer list | layer vis <id> on|off | layer active <id>');
+      return fail(tr('eda.cmd.usage.layer', '用法: layer list | layer vis <id> on|off | layer active <id>'));
     },
 
     // DRC：默认全量；支持 inc [changedIds...] 增量；reset 清空快照
@@ -788,7 +790,7 @@
         // drc inc [comp:R1] [trace:tr_abc] ...
         const changedIds = args.slice(1);
         const idx = ensureDrcIndex();
-        if (!idx) return fail('DRC 索引不可用');
+        if (!idx) return fail(tr('eda.cmd.err.drcIndexUnavailable', 'DRC 索引不可用'));
         const drcRes = idx.runIncremental(Doc.board(), fpLib(), changedIds);
         if (E) { E.drcMarkers = drcRes.all; E.refresh(); }
         lastDelta = { added: drcRes.added.slice(0, 50), removed: drcRes.removed.slice(0, 50), summary: drcRes.summary };
@@ -818,7 +820,7 @@
         const net = args[1];
         const fromPt = parsePt(args[2]);
         const toPt = parsePt(args[3]);
-        if (!net || !fromPt || !toPt) return fail('用法: autoroute single <net> <x1,y1> <x2,y2> [--preferLayers F.Cu,B.Cu] [--no-diagonal] [--width w] [--clearance c] [--grid g]');
+        if (!net || !fromPt || !toPt) return fail(tr('eda.cmd.usage.autorouteSingle', '用法: autoroute single <net> <x1,y1> <x2,y2> [--preferLayers F.Cu,B.Cu] [--no-diagonal] [--width w] [--clearance c] [--grid g]'));
         const opts = { preferLayers: null, allowDiagonal: true };
         for (let i = 4; i < args.length; i++) {
           const a = args[i];
@@ -828,7 +830,7 @@
           if (a === '--clearance') { opts.clearance = parseFloat(args[++i]) || 0; continue; }
           if (a === '--grid') { opts.gridSize = parseFloat(args[++i]) || 0; continue; }
         }
-        if (!global.PCBAutorouter || !global.PCBAutorouter.routeSingle) return fail('自动布线器不可用');
+        if (!global.PCBAutorouter || !global.PCBAutorouter.routeSingle) return fail(tr('eda.cmd.err.autorouterUnavailable', '自动布线器不可用'));
         Doc.snapshot();
         const r = global.PCBAutorouter.routeSingle(b, fpLib(), net, fromPt, toPt, opts);
         if (r.ok) {
@@ -866,57 +868,61 @@
   };
 
   // 设计流程指引（IPC-2221 标准流程 + 双面板扩展）
-  const DESIGN_FLOW_GUIDE = {
-    title: 'CIBYP-PCB-EDA 双面板设计流程',
-    standard: 'IPC-2221 / IPC-2152',
-    steps: [
-      { phase: 1, name: '工程初始化', cmds: ['new <名称> <宽> <高> <层数=2>', 'board size <w> <h>', 'stackup layers 2', 'rules list'] },
-      { phase: 2, name: '原理图设计（可选）', cmds: ['sch sym <lib> <x> <y> --ref <R1>', 'sch wire x1,y1 x2,y2', 'sch label "NET" x,y', 'sch power GND x,y', 'sch annotate', 'erc'] },
-      { phase: 3, name: '同步到 PCB', cmds: ['sch sync'] },
-      { phase: 4, name: 'PCB 布局', cmds: ['comp list', 'comp move <ref> <x> <y>', 'comp rot <ref> <deg>', 'comp side <ref> F|B', 'comp flip <ref>', 'view toggle'] },
-      { phase: 5, name: '设计规则', cmds: ['rules set minClearance 0.2', 'rules set minTraceWidth 0.2', 'rules set minViaDrill 0.3'] },
-      { phase: 6, name: '布线', cmds: ['trace <net> <layer> <width> x,y ...', 'via <net> <x> <y>', 'autoroute --preferLayers F.Cu,B.Cu --ripup 3'] },
-      { phase: 7, name: '铺铜与丝印', cmds: ['zone GND F.Cu x,y ... --clearance 0.5', 'zone GND B.Cu x,y ... --clearance 0.5', 'silk text "R1" x,y'] },
-      { phase: 8, name: 'DRC 与修复', cmds: ['drc', 'drc inc comp:R1', 'drc reset'] },
-      { phase: 9, name: '导出生产文件', cmds: ['export gerber', 'export pnp', 'export bom'] },
-      { phase: 10, name: '保存工程', cmds: ['save <path>'] }
-    ],
-    tips: [
-      '双面板设计：用 comp side F|B 或 comp flip 切换元件面；用 view toggle 翻面查看（KiCad V+B 等效）',
-      '铺铜通常顶底层各铺一块 GND：zone GND F.Cu ... 和 zone GND B.Cu ...',
-      '自动布线后必跑 DRC：autoroute → drc → 修复 error → 重复',
-      '实时 DRC 开启时每个 pcb* 工具调用返回 drcDelta（added/removed/summary）'
-    ],
-    shortcuts: [
-      'B — PCB 模式切换顶/底视图',
-      'Shift+F — 翻转选中元件到另一面',
-      'F — 适应视图',
-      'V — 切换当前激活铜层（顶 ↔ 底）'
-    ]
-  };
+  function getDesignFlowGuide() {
+    return {
+      title: tr('eda.flow.title', 'CIBYP-PCB-EDA 双面板设计流程'),
+      standard: 'IPC-2221 / IPC-2152',
+      steps: [
+        { phase: 1, name: tr('eda.flow.phase1', '工程初始化'), cmds: ['new <名称> <宽> <高> <层数=2>', 'board size <w> <h>', 'stackup layers 2', 'rules list'] },
+        { phase: 2, name: tr('eda.flow.phase2', '原理图设计（可选）'), cmds: ['sch sym <lib> <x> <y> --ref <R1>', 'sch wire x1,y1 x2,y2', 'sch label "NET" x,y', 'sch power GND x,y', 'sch annotate', 'erc'] },
+        { phase: 3, name: tr('eda.flow.phase3', '同步到 PCB'), cmds: ['sch sync'] },
+        { phase: 4, name: tr('eda.flow.phase4', 'PCB 布局'), cmds: ['comp list', 'comp move <ref> <x> <y>', 'comp rot <ref> <deg>', 'comp side <ref> F|B', 'comp flip <ref>', 'view toggle'] },
+        { phase: 5, name: tr('eda.flow.phase5', '设计规则'), cmds: ['rules set minClearance 0.2', 'rules set minTraceWidth 0.2', 'rules set minViaDrill 0.3'] },
+        { phase: 6, name: tr('eda.flow.phase6', '布线'), cmds: ['trace <net> <layer> <width> x,y ...', 'via <net> <x> <y>', 'autoroute --preferLayers F.Cu,B.Cu --ripup 3'] },
+        { phase: 7, name: tr('eda.flow.phase7', '铺铜与丝印'), cmds: ['zone GND F.Cu x,y ... --clearance 0.5', 'zone GND B.Cu x,y ... --clearance 0.5', 'silk text "R1" x,y'] },
+        { phase: 8, name: tr('eda.flow.phase8', 'DRC 与修复'), cmds: ['drc', 'drc inc comp:R1', 'drc reset'] },
+        { phase: 9, name: tr('eda.flow.phase9', '导出生产文件'), cmds: ['export gerber', 'export pnp', 'export bom'] },
+        { phase: 10, name: tr('eda.flow.phase10', '保存工程'), cmds: ['save <path>'] }
+      ],
+      tips: [
+        tr('eda.flow.tip1', '双面板设计：用 comp side F|B 或 comp flip 切换元件面；用 view toggle 翻面查看（KiCad V+B 等效）'),
+        tr('eda.flow.tip2', '铺铜通常顶底层各铺一块 GND：zone GND F.Cu ... 和 zone GND B.Cu ...'),
+        tr('eda.flow.tip3', '自动布线后必跑 DRC：autoroute → drc → 修复 error → 重复'),
+        tr('eda.flow.tip4', '实时 DRC 开启时每个 pcb* 工具调用返回 drcDelta（added/removed/summary）')
+      ],
+      shortcuts: [
+        tr('eda.flow.shortcut1', 'B — PCB 模式切换顶/底视图'),
+        tr('eda.flow.shortcut2', 'Shift+F — 翻转选中元件到另一面'),
+        tr('eda.flow.shortcut3', 'F — 适应视图'),
+        tr('eda.flow.shortcut4', 'V — 切换当前激活铜层（顶 ↔ 底）')
+      ]
+    };
+  }
 
-  const HELP_TEXT = [
-    'CIBYP-PCB-EDA 命令一览:',
-    'new <名称> [宽] [高] [层数] — 新建工程',
-    'board size <w> <h> | board outline x,y ... | board name <名>',
-    'rules list | rules set <key> <value> — 设计规则',
-    'stackup layers <n> | stackup thickness <mm> — 层叠',
-    'comp add <封装> <位号> <x> <y> [rot] [F|B] [k=v ...] — 放元件（返回 pad 全局坐标）',
-    'comp move|rot|side|flip|value|del|list|pads|net — 元件操作（list/pads 返回 pad 坐标，flip 翻面）',
-    'net list | net rename <旧> <新>',
-    'trace <网络> <层> <线宽> x1,y1 x2,y2 ... — 布线',
-    'via <网络> <x> <y> [钻孔] [外径] — 过孔',
-    'zone <网络> <层> x1,y1 ... [--clearance n] [--thermal n] — 铺铜',
-    'silk line|rect|circle|text — 丝印',
-    'sch sym <符号> <x> <y> [rot] [--ref] [--value] [--fp] — 放符号（返回 pin 全局坐标）',
-    'sch wire|label|power|junction|noconnect|value|fp|del|annotate|list|pins|nets|sync',
-    'view top|bottom|toggle — 切换 PCB 视图方向（双面板看反面，KiCad V+B）',
-    'layer list | layer vis <id> on|off | layer active <id> — 层可见性/激活层',
-    'drc [inc <changedIds...>|reset] — 全量/增量/重置 DRC（开启实时 DRC 时所有 pcb 命令都附 drcDelta）',
-    'autoroute [net1,net2] [--preferLayers F.Cu,B.Cu] [--no-diagonal] [--ripup n] [--width w] [--clearance c]',
-    'clear routes [net] | clear silk | clear zones | clear all',
-    'mode sch|pcb|3d / fit / undo / redo / state / flow / help'
-  ].join('\n');
+  function getHelpText() {
+    return [
+      tr('eda.help.header', 'CIBYP-PCB-EDA 命令一览:'),
+      tr('eda.help.new', 'new <名称> [宽] [高] [层数] — 新建工程'),
+      tr('eda.help.board', 'board size <w> <h> | board outline x,y ... | board name <名>'),
+      tr('eda.help.rules', 'rules list | rules set <key> <value> — 设计规则'),
+      tr('eda.help.stackup', 'stackup layers <n> | stackup thickness <mm> — 层叠'),
+      tr('eda.help.compAdd', 'comp add <封装> <位号> <x> <y> [rot] [F|B] [k=v ...] — 放元件（返回 pad 全局坐标）'),
+      tr('eda.help.compOps', 'comp move|rot|side|flip|value|del|list|pads|net — 元件操作（list/pads 返回 pad 坐标，flip 翻面）'),
+      tr('eda.help.net', 'net list | net rename <旧> <新>'),
+      tr('eda.help.trace', 'trace <网络> <层> <线宽> x1,y1 x2,y2 ... — 布线'),
+      tr('eda.help.via', 'via <网络> <x> <y> [钻孔] [外径] — 过孔'),
+      tr('eda.help.zone', 'zone <网络> <层> x1,y1 ... [--clearance n] [--thermal n] — 铺铜'),
+      tr('eda.help.silk', 'silk line|rect|circle|text — 丝印'),
+      tr('eda.help.schSym', 'sch sym <符号> <x> <y> [rot] [--ref] [--value] [--fp] — 放符号（返回 pin 全局坐标）'),
+      tr('eda.help.schOps', 'sch wire|label|power|junction|noconnect|value|fp|del|annotate|list|pins|nets|sync'),
+      tr('eda.help.view', 'view top|bottom|toggle — 切换 PCB 视图方向（双面板看反面，KiCad V+B）'),
+      tr('eda.help.layer', 'layer list | layer vis <id> on|off | layer active <id> — 层可见性/激活层'),
+      tr('eda.help.drc', 'drc [inc <changedIds...>|reset] — 全量/增量/重置 DRC（开启实时 DRC 时所有 pcb 命令都附 drcDelta）'),
+      tr('eda.help.autoroute', 'autoroute [net1,net2] [--preferLayers F.Cu,B.Cu] [--no-diagonal] [--ripup n] [--width w] [--clearance c]'),
+      tr('eda.help.clear', 'clear routes [net] | clear silk | clear zones | clear all'),
+      tr('eda.help.misc', 'mode sch|pcb|3d / fit / undo / redo / state / flow / help')
+    ].join('\n');
+  }
 
   // ---------------------------------------------------------------------------
   // window.pcb* bridge (called by main process via executeJavaScript)
@@ -983,7 +989,7 @@
       const G = global.PCBGerber;
       if (kind === 'pnp') return { ok: true, content: G.emitPnP(Doc.board()) };
       if (kind === 'bom') return { ok: true, content: G.emitBOM(Doc.board()) };
-      return fail('未知辅助导出类型: ' + kind);
+      return fail(tr('eda.cmd.err.unknownAuxExport', '未知辅助导出类型: {kind}', { kind }));
     } catch (e) { return fail(e.message); }
   };
   global.pcbGetKicadPcb = function () {
@@ -1020,7 +1026,7 @@
       if (r.type === 'json') {
         return global.pcbLoadProjectJSON(r.data);
       }
-      return fail('未支持的导入类型: ' + r.type);
+      return fail(tr('eda.cmd.err.unsupportedImport', '未支持的导入类型: {type}', { type: r.type }));
     } catch (e) { return fail(e.message); }
   };
   global.pcbListFootprints = function () { return ok({ footprints: fpLib().list() }); };
@@ -1045,7 +1051,7 @@
     return ok({ liveDrc: liveDrcEnabled });
   };
   global.pcbGetLiveDrc = function () { return ok({ liveDrc: liveDrcEnabled }); };
-  global.pcbGetDesignFlowGuide = function () { return ok({ flow: DESIGN_FLOW_GUIDE }); };
+  global.pcbGetDesignFlowGuide = function () { return ok({ flow: getDesignFlowGuide() }); };
   global.pcbGetDrcDelta = function () { return ok({ delta: lastDelta }); };
   global.pcbClearDrcIndex = function () {
     drcIndex = null; lastDelta = null;
@@ -1055,19 +1061,19 @@
   // 翻面视图/翻转元件 - Agent 工具用
   global.pcbSetView = function (side) {
     const E = Editor();
-    if (!E || !global.PCBRender) return fail('视图不可用');
-    if (!['top', 'bottom', 'toggle'].includes(side)) return fail('用法: pcbSetView top|bottom|toggle');
+    if (!E || !global.PCBRender) return fail(tr('eda.cmd.err.viewUnavailable', '视图不可用'));
+    if (!['top', 'bottom', 'toggle'].includes(side)) return fail(tr('eda.cmd.usage.pcbSetView', '用法: pcbSetView top|bottom|toggle'));
     const newSide = E.setView(side);
     return ok({ view: newSide });
   };
   global.pcbGetView = function () {
-    if (!global.PCBRender) return fail('视图不可用');
+    if (!global.PCBRender) return fail(tr('eda.cmd.err.viewUnavailable', '视图不可用'));
     return ok({ view: global.PCBRender.viewFromBottom ? 'bottom' : 'top' });
   };
   global.pcbFlipComponent = function (ref) {
     const b = Doc.board();
     const c = Model.Board.findComponent(b, ref);
-    if (!c) return fail('未找到元件 ' + ref);
+    if (!c) return fail(tr('eda.cmd.err.compNotFound', '未找到元件 {ref}', { ref }));
     Doc.snapshot();
     const newSide = Model.Board.flipComponentSide(b, ref);
     Doc.touch();
@@ -1075,10 +1081,10 @@
     return ok({ ref: c.ref, side: newSide });
   };
   global.pcbSetComponentSide = function (ref, side) {
-    if (!['F', 'B'].includes(side)) return fail('side 必须是 F 或 B');
+    if (!['F', 'B'].includes(side)) return fail(tr('eda.cmd.err.sideMustBeFB', 'side 必须是 F 或 B'));
     const b = Doc.board();
     const c = Model.Board.findComponent(b, ref);
-    if (!c) return fail('未找到元件 ' + ref);
+    if (!c) return fail(tr('eda.cmd.err.compNotFound', '未找到元件 {ref}', { ref }));
     Doc.snapshot();
     Model.Board.setComponentSide(b, ref, side);
     Doc.touch();
@@ -1090,7 +1096,7 @@
     return Executor._autorouter(Array.isArray(options) ? options : []);
   };
   global.pcbRouteSingle = function (netName, fromPt, toPt, options) {
-    if (!global.PCBAutorouter || !global.PCBAutorouter.routeSingle) return fail('自动布线器不可用');
+    if (!global.PCBAutorouter || !global.PCBAutorouter.routeSingle) return fail(tr('eda.cmd.err.autorouterUnavailable', '自动布线器不可用'));
     Doc.snapshot();
     const r = global.PCBAutorouter.routeSingle(Doc.board(), fpLib(), netName, fromPt, toPt, options || {});
     if (r.ok) {
@@ -1114,7 +1120,7 @@
   // 层可见性 - Agent 工具用
   global.pcbSetLayerVisibility = function (layerId, visible) {
     const E = Editor();
-    if (!E) return fail('编辑器未初始化');
+    if (!E) return fail(tr('eda.cmd.err.editorNotInit', '编辑器未初始化'));
     if (!E.layerVisibility) E.layerVisibility = {};
     E.layerVisibility[layerId] = !!visible;
     E.refresh();
@@ -1122,12 +1128,12 @@
   };
   global.pcbGetLayerVisibility = function () {
     const E = Editor();
-    if (!E) return fail('编辑器未初始化');
+    if (!E) return fail(tr('eda.cmd.err.editorNotInit', '编辑器未初始化'));
     return ok({ visibility: E.layerVisibility || {}, active: E.activeLayer || 'F.Cu' });
   };
   global.pcbSetActiveLayer = function (layerId) {
     const E = Editor();
-    if (!E) return fail('编辑器未初始化');
+    if (!E) return fail(tr('eda.cmd.err.editorNotInit', '编辑器未初始化'));
     E.activeLayer = layerId;
     E.refresh();
     return ok({ active: E.activeLayer });
@@ -1146,7 +1152,7 @@
   // 增量 DRC - Agent 工具用
   global.pcbRunDrcIncremental = function (changedIds) {
     const idx = ensureDrcIndex();
-    if (!idx) return fail('DrcIndex 不可用');
+    if (!idx) return fail(tr('eda.cmd.err.drcIndexUnavailable', 'DRC 索引不可用'));
     const drcRes = idx.runIncremental(Doc.board(), fpLib(), changedIds, undefined);
     if (Editor()) { Editor().drcMarkers = drcRes.all; Editor().refresh(); }
     lastDelta = { added: drcRes.added.slice(0, 50), removed: drcRes.removed.slice(0, 50), summary: drcRes.summary };
@@ -1154,7 +1160,7 @@
   };
   global.pcbRunDrc = function () {
     const idx = ensureDrcIndex();
-    if (!idx) return fail('DrcIndex 不可用');
+    if (!idx) return fail(tr('eda.cmd.err.drcIndexUnavailable', 'DRC 索引不可用'));
     const drcRes = idx.run(Doc.board(), fpLib(), undefined);
     if (Editor()) { Editor().drcMarkers = drcRes.all; Editor().refresh(); }
     lastDelta = { added: drcRes.added.slice(0, 50), removed: drcRes.removed.slice(0, 50), summary: drcRes.summary };
@@ -1166,5 +1172,5 @@
     return ok({ count: errs.length, errors: errs.slice(0, 200) });
   };
 
-  global.PCBCommands = { Executor, syncFromSchematic, HELP_TEXT, DESIGN_FLOW_GUIDE };
+  global.PCBCommands = { Executor, syncFromSchematic, getHelpText, getDesignFlowGuide };
 })(typeof window !== 'undefined' ? window : globalThis);

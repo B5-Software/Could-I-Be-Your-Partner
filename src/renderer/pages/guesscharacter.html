@@ -10,10 +10,10 @@
 </head>
 <body>
   <div class="gc-titlebar">
-    <span class="gc-titlebar-title"><i class="fa-solid fa-user-question"></i> 是否猜人物</span>
+    <span class="gc-titlebar-title" data-i18n="game.guesschar.title"><i class="fa-solid fa-user-question"></i> 是否猜人物</span>
     <span id="game-trng-badge" class="game-trng-badge" style="display:none"><i class="fa-solid fa-satellite-dish"></i> TRNG</span>
     <div class="gc-titlebar-btns">
-      <button class="btn-close" id="btn-close" title="关闭"><i class="fa-solid fa-xmark"></i></button>
+      <button class="btn-close" id="btn-close" title="关闭" data-i18n-title="ui.common.close"><i class="fa-solid fa-xmark"></i></button>
     </div>
   </div>
 
@@ -22,24 +22,24 @@
     <div class="gc-info-area">
       <div class="gc-info-row">
         <div class="gc-info-item">
-          <span class="gc-info-label">人物类别</span>
+          <span class="gc-info-label" data-i18n="game.guesschar.categoryLabel">人物类别</span>
           <span class="gc-info-value" id="category-display">—</span>
         </div>
         <div class="gc-info-item">
-          <span class="gc-info-label">已提问</span>
-          <span class="gc-info-value"><span id="question-count">0</span> 次</span>
+          <span class="gc-info-label" data-i18n="game.guesschar.askedLabel">已提问</span>
+          <span class="gc-info-value"><span id="question-count">0</span> <span data-i18n="game.guesschar.timesUnit">次</span></span>
         </div>
         <div class="gc-info-item">
-          <span class="gc-info-label">剩余猜测</span>
-          <span class="gc-info-value"><span id="guess-remaining">3</span> 次</span>
+          <span class="gc-info-label" data-i18n="game.guesschar.remainingLabel">剩余猜测</span>
+          <span class="gc-info-value"><span id="guess-remaining">3</span> <span data-i18n="game.guesschar.timesUnit">次</span></span>
         </div>
       </div>
-      <div class="gc-hint" id="hint-text">AI 已想好一位人物，请提出"是/否"问题来缩小范围</div>
+      <div class="gc-hint" id="hint-text" data-i18n="game.guesschar.hint">AI 已想好一位人物，请提出"是/否"问题来缩小范围</div>
     </div>
 
     <!-- Q&A History -->
     <div class="gc-history-area">
-      <div class="gc-history-header">
+      <div class="gc-history-header" data-i18n="game.guesschar.historyHeader">
         <i class="fa-solid fa-comments"></i> 问答记录
       </div>
       <div class="gc-history-list" id="history-list"></div>
@@ -47,22 +47,22 @@
 
     <!-- Input Area -->
     <div class="gc-input-area" id="input-area">
-      <div class="gc-input-hint" id="input-hint">提出一个可以用"是/否"回答的问题</div>
+      <div class="gc-input-hint" id="input-hint" data-i18n="game.guesschar.inputHint">提出一个可以用"是/否"回答的问题</div>
       <div class="gc-input-row">
-        <input type="text" class="gc-input" id="question-input" placeholder="例如：这位人物是真实存在的历史人物吗？" autocomplete="off" />
-        <button class="gc-btn-ask" id="btn-ask" type="button"><i class="fa-solid fa-question"></i> 提问</button>
-        <button class="gc-btn-guess" id="btn-guess" type="button"><i class="fa-solid fa-bullseye"></i> 猜测</button>
-        <button class="gc-btn-pass" id="btn-pass" type="button"><i class="fa-solid fa-flag"></i> 认输</button>
+        <input type="text" class="gc-input" id="question-input" placeholder="例如：这位人物是真实存在的历史人物吗？" autocomplete="off" data-i18n-placeholder="game.guesschar.questionPlaceholder" />
+        <button class="gc-btn-ask" id="btn-ask" type="button"><i class="fa-solid fa-question"></i> <span data-i18n="game.guesschar.ask">提问</span></button>
+        <button class="gc-btn-guess" id="btn-guess" type="button"><i class="fa-solid fa-bullseye"></i> <span data-i18n="game.guesschar.guess">猜测</span></button>
+        <button class="gc-btn-pass" id="btn-pass" type="button"><i class="fa-solid fa-flag"></i> <span data-i18n="game.common.giveUp">认输</span></button>
       </div>
     </div>
 
     <!-- Guess Mode Overlay (inline, not full overlay) -->
     <div class="gc-guess-mode hidden" id="guess-mode">
-      <div class="gc-guess-mode-hint">请输入你猜测的人物姓名，确认后将判定胜负</div>
+      <div class="gc-guess-mode-hint" data-i18n="game.guesschar.guessModeHint">请输入你猜测的人物姓名，确认后将判定胜负</div>
       <div class="gc-guess-input-row">
-        <input type="text" class="gc-input" id="guess-input" placeholder="输入人物姓名..." autocomplete="off" />
-        <button class="gc-btn-submit" id="btn-guess-confirm" type="button"><i class="fa-solid fa-check"></i> 确认猜测</button>
-        <button class="gc-btn-cancel" id="btn-guess-cancel" type="button"><i class="fa-solid fa-rotate-left"></i> 返回提问</button>
+        <input type="text" class="gc-input" id="guess-input" placeholder="输入人物姓名..." autocomplete="off" data-i18n-placeholder="game.guesschar.guessPlaceholder" />
+        <button class="gc-btn-submit" id="btn-guess-confirm" type="button"><i class="fa-solid fa-check"></i> <span data-i18n="game.guesschar.confirmGuess">确认猜测</span></button>
+        <button class="gc-btn-cancel" id="btn-guess-cancel" type="button"><i class="fa-solid fa-rotate-left"></i> <span data-i18n="game.guesschar.backToAsk">返回提问</span></button>
       </div>
     </div>
 
@@ -72,6 +72,10 @@
     </div>
   </div>
 
+  <script src="../js/i18n.js"></script>
+  <script src="../js/i18n/en.js"></script>
+  <script src="../js/i18n/de.js"></script>
+  <script src="../js/subapp-theme.js"></script>
   <script src="../js/guesscharacter.js"></script>
 </body>
 </html>

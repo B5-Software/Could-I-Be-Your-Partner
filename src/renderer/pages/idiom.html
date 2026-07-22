@@ -10,19 +10,19 @@
 </head>
 <body>
   <div class="idiom-titlebar">
-    <span class="idiom-titlebar-title"><i class="fa-solid fa-link"></i> 成语接龙</span>
+    <span class="idiom-titlebar-title" data-i18n="game.idiom.title"><i class="fa-solid fa-link"></i> 成语接龙</span>
     <span id="game-trng-badge" class="game-trng-badge" style="display:none"><i class="fa-solid fa-satellite-dish"></i> TRNG</span>
     <div class="idiom-titlebar-btns">
-      <button class="btn-close" id="btn-close" title="关闭"><i class="fa-solid fa-xmark"></i></button>
+      <button class="btn-close" id="btn-close" title="关闭" data-i18n-title="ui.common.close"><i class="fa-solid fa-xmark"></i></button>
     </div>
   </div>
 
   <div class="idiom-game" id="game-container">
     <!-- Current Tail Character Display -->
     <div class="idiom-keyword-area">
-      <div class="idiom-keyword-label">当前需接字</div>
+      <div class="idiom-keyword-label" data-i18n="game.idiom.keywordLabel">当前需接字</div>
       <div class="idiom-keyword" id="keyword-display">—</div>
-      <div class="idiom-round-info">第 <span id="round-num">1</span> 轮 · <span id="alive-count">0</span> 人在场</div>
+      <div class="idiom-round-info"><span data-i18n="game.undercover.roundPrefix">第</span> <span id="round-num">1</span> <span data-i18n="game.undercover.roundSuffix">轮</span> · <span id="alive-count">0</span> <span data-i18n="game.flyingflower.playersInGame">人在场</span></div>
     </div>
 
     <!-- Players Bar -->
@@ -30,7 +30,7 @@
 
     <!-- History -->
     <div class="idiom-history-area">
-      <div class="idiom-history-header">
+      <div class="idiom-history-header" data-i18n="game.idiom.historyHeader">
         <i class="fa-solid fa-scroll"></i> 成语记录
       </div>
       <div class="idiom-history-list" id="history-list"></div>
@@ -38,11 +38,11 @@
 
     <!-- User Input Area -->
     <div class="idiom-input-area" id="input-area">
-      <div class="idiom-input-hint" id="input-hint">轮到你了，请输入成语</div>
+      <div class="idiom-input-hint" id="input-hint" data-i18n="game.idiom.inputHint">轮到你了，请输入成语</div>
       <div class="idiom-input-row">
-        <input type="text" class="idiom-input" id="idiom-input" placeholder="输入四字成语..." autocomplete="off" maxlength="8" />
-        <button class="idiom-btn-submit" id="btn-submit"><i class="fa-solid fa-paper-plane"></i> 提交</button>
-        <button class="idiom-btn-pass" id="btn-pass"><i class="fa-solid fa-forward"></i> 认输</button>
+        <input type="text" class="idiom-input" id="idiom-input" placeholder="输入四字成语..." autocomplete="off" maxlength="8" data-i18n-placeholder="game.idiom.inputPlaceholder" />
+        <button class="idiom-btn-submit" id="btn-submit"><i class="fa-solid fa-paper-plane"></i> <span data-i18n="game.common.submit">提交</span></button>
+        <button class="idiom-btn-pass" id="btn-pass"><i class="fa-solid fa-forward"></i> <span data-i18n="game.common.giveUp">认输</span></button>
       </div>
     </div>
 
@@ -52,6 +52,10 @@
     </div>
   </div>
 
+  <script src="../js/i18n.js"></script>
+  <script src="../js/i18n/en.js"></script>
+  <script src="../js/i18n/de.js"></script>
+  <script src="../js/subapp-theme.js"></script>
   <script src="../js/idiom.js"></script>
 </body>
 </html>

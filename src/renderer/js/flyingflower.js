@@ -32,51 +32,6 @@
   }
   let gameRng = () => Math.random();
 
-  // ---- Theme ----
-  async function applyTheme() {
-    try {
-      const settings = await window.gameAPI.getSettings();
-      const theme = settings?.theme || {};
-      let isDark = false;
-      if (theme.mode === 'dark') isDark = true;
-      else if (theme.mode === 'system') {
-        const sys = await window.gameAPI.getTheme();
-        isDark = sys?.shouldUseDarkColors ?? false;
-      }
-      document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
-
-      if (theme.accentColor) {
-        const r = parseInt(theme.accentColor.slice(1, 3), 16);
-        const g = parseInt(theme.accentColor.slice(3, 5), 16);
-        const b = parseInt(theme.accentColor.slice(5, 7), 16);
-        document.documentElement.style.setProperty('--accent', theme.accentColor);
-        document.documentElement.style.setProperty('--accent-light', `rgb(${Math.min(255, r + 40)}, ${Math.min(255, g + 40)}, ${Math.min(255, b + 40)})`);
-        document.documentElement.style.setProperty('--accent-dark', `rgb(${Math.max(0, r - 30)}, ${Math.max(0, g - 30)}, ${Math.max(0, b - 30)})`);
-        document.documentElement.style.setProperty('--accent-bg', `rgba(${r}, ${g}, ${b}, 0.08)`);
-        document.documentElement.style.setProperty('--accent-bg-hover', `rgba(${r}, ${g}, ${b}, 0.14)`);
-      }
-
-      if (theme.backgroundColor) {
-        const bgR = parseInt(theme.backgroundColor.slice(1, 3), 16);
-        const bgG = parseInt(theme.backgroundColor.slice(3, 5), 16);
-        const bgB = parseInt(theme.backgroundColor.slice(5, 7), 16);
-        const luminance = (0.299 * bgR + 0.587 * bgG + 0.114 * bgB) / 255;
-        document.documentElement.style.setProperty('--bg-primary', theme.backgroundColor);
-        if (luminance < 0.5) {
-          document.documentElement.style.setProperty('--bg-secondary', `rgb(${Math.min(255, bgR + 20)}, ${Math.min(255, bgG + 20)}, ${Math.min(255, bgB + 20)})`);
-          document.documentElement.style.setProperty('--bg-tertiary', `rgb(${Math.min(255, bgR + 30)}, ${Math.min(255, bgG + 30)}, ${Math.min(255, bgB + 30)})`);
-          document.documentElement.style.setProperty('--bg-hover', `rgb(${Math.min(255, bgR + 40)}, ${Math.min(255, bgG + 40)}, ${Math.min(255, bgB + 40)})`);
-        } else {
-          document.documentElement.style.setProperty('--bg-secondary', `rgb(${Math.max(0, bgR - 10)}, ${Math.max(0, bgG - 10)}, ${Math.max(0, bgB - 10)})`);
-          document.documentElement.style.setProperty('--bg-tertiary', `rgb(${Math.max(0, bgR - 20)}, ${Math.max(0, bgG - 20)}, ${Math.max(0, bgB - 20)})`);
-          document.documentElement.style.setProperty('--bg-hover', `rgb(${Math.max(0, bgR - 5)}, ${Math.max(0, bgG - 5)}, ${Math.max(0, bgB - 5)})`);
-        }
-      }
-    } catch (e) {
-      console.log('Theme error:', e.message);
-    }
-  }
-
   // ---- LLM ----
   async function askLLM(systemPrompt, userMsg) {
     try {
@@ -135,27 +90,30 @@
   function renderPlayers() {
     const bar = $('players-bar');
     bar.innerHTML = '';
+    const youLabel = t('game.common.you', '你');
+    const aliveCount = players.filter(p => p.alive).length;
     players.forEach((p, i) => {
       const tag = document.createElement('div');
       tag.className = `ff-player-tag${!p.alive ? ' eliminated' : ''}${p.isUser ? ' is-user' : ''}${currentPlayerIdx === i && p.alive && !gameOver ? ' active' : ''}`;
-      const initial = p.isUser ? '你' : p.name[0];
-      tag.innerHTML = `<div class="ff-player-icon">${initial}</div><span>${p.isUser ? '你' : p.name}</span>`;
+      const initial = p.isUser ? youLabel : p.name[0];
+      tag.innerHTML = `<div class="ff-player-icon">${escapeHtml(initial)}</div><span>${escapeHtml(p.isUser ? youLabel : p.name)}</span>`;
       bar.appendChild(tag);
     });
-    $('alive-count').textContent = players.filter(p => p.alive).length;
+    $('round-info').textContent = t('game.flyingflower.roundInfo', '第 {round} 轮 · {alive} 人在场', { round, alive: aliveCount });
   }
 
   function addHistoryEntry(name, text, success, isUser) {
     const list = $('history-list');
     const entry = document.createElement('div');
     entry.className = `ff-history-entry ${success ? 'success' : 'fail'}`;
-    const initial = isUser ? '你' : name[0];
+    const youLabel = t('game.common.you', '你');
+    const initial = isUser ? youLabel : name[0];
     entry.innerHTML = `
-      <div class="ff-entry-avatar">${initial}</div>
+      <div class="ff-entry-avatar">${escapeHtml(initial)}</div>
       <div class="ff-entry-body">
-        <div class="ff-entry-name">${isUser ? '你' : name}</div>
+        <div class="ff-entry-name">${escapeHtml(isUser ? youLabel : name)}</div>
         <div class="ff-entry-text">${escapeHtml(text)}</div>
-        <div class="ff-entry-round">第 ${round} 轮</div>
+        <div class="ff-entry-round">${escapeHtml(t('game.common.roundN', '第 {round} 轮', { round }))}</div>
       </div>
       <div class="ff-entry-status">${success ? '<i class="fa-solid fa-check" style="color:var(--ff-success)"></i>' : '<i class="fa-solid fa-xmark" style="color:var(--ff-danger)"></i>'}</div>`;
     list.appendChild(entry);
@@ -167,7 +125,7 @@
     const el = document.createElement('div');
     el.className = 'ff-thinking';
     el.id = 'thinking-indicator';
-    el.innerHTML = `<div class="ff-thinking-dots"><span></span><span></span><span></span></div> ${name} 正在思考...`;
+    el.innerHTML = `<div class="ff-thinking-dots"><span></span><span></span><span></span></div> ${escapeHtml(t('game.common.thinking', '{name} 正在思考...', { name }))}`;
     list.appendChild(el);
     el.scrollIntoView({ behavior: 'smooth', block: 'end' });
   }
@@ -182,10 +140,10 @@
     $('btn-submit').disabled = !enabled;
     $('btn-pass').disabled = !enabled;
     if (enabled) {
-      $('input-hint').textContent = `轮到你了，请输入含有「${keyword}」的诗句`;
+      $('input-hint').textContent = t('game.flyingflower.inputHintKeyword', '轮到你了，请输入含有「{keyword}」的诗句', { keyword });
       $('poetry-input').focus();
     } else {
-      $('input-hint').textContent = '等待其他玩家...';
+      $('input-hint').textContent = t('game.common.waitingOthers', '等待其他玩家...');
     }
   }
 
@@ -193,17 +151,17 @@
     gameOver = true;
     setInputEnabled(false);
     if (window.gameAPI?.reportResult) {
-      window.gameAPI.reportResult(`飞花令结束：${message}（共 ${round} 轮，收录 ${usedLines.size} 句诗）`);
+      window.gameAPI.reportResult(t('game.flyingflower.gameOverReport', '飞花令结束：{message}（共 {round} 轮，收录 {count} 句诗）', { message, round, count: usedLines.size }));
     }
     const overlay = $('status-overlay');
     overlay.classList.remove('hidden');
     $('status-content').innerHTML = `
-      <h2>飞花令结束</h2>
+      <h2>${escapeHtml(t('game.flyingflower.gameOver', '飞花令结束'))}</h2>
       <p>${escapeHtml(message)}</p>
-      <p>共进行了 ${round} 轮，收录 ${usedLines.size} 句诗</p>
+      <p>${escapeHtml(t('game.flyingflower.summary', '共进行了 {round} 轮，收录 {count} 句诗', { round, count: usedLines.size }))}</p>
       <div>
-        <button onclick="location.reload()">再来一局</button>
-        <button onclick="window.close()">关闭</button>
+        <button onclick="location.reload()">${escapeHtml(t('game.common.playAgain', '再来一局'))}</button>
+        <button onclick="window.close()">${escapeHtml(t('game.common.close', '关闭'))}</button>
       </div>`;
   }
 
@@ -224,16 +182,16 @@
   // ---- Game Loop ----
   async function gameLoop() {
     const maxRounds = 20;
+    const youLabel = t('game.common.you', '你');
 
     while (!gameOver && round < maxRounds) {
       round++;
-      $('round-num').textContent = round;
       renderPlayers();
 
       const alivePlayers = players.filter(p => p.alive);
       if (alivePlayers.length <= 1) {
         const surv = alivePlayers[0];
-        showGameOver(surv ? `最后的赢家是「${surv.isUser ? '你' : surv.name}」！` : '所有玩家都被淘汰了！', alivePlayers);
+        showGameOver(surv ? t('game.flyingflower.winnerIs', '最后的赢家是「{name}」！', { name: surv.isUser ? youLabel : surv.name }) : t('game.flyingflower.allEliminated', '所有玩家都被淘汰了！'), alivePlayers);
         break;
       }
 
@@ -253,35 +211,35 @@
           line = await waitForUserInput();
           if (line === '__PASS__') {
             p.alive = false;
-            addHistoryEntry('你', '认输', false, true);
+            addHistoryEntry(youLabel, t('game.common.giveUp', '认输'), false, true);
             renderPlayers();
             continue;
           }
           // Validate
           if (!line.includes(keyword)) {
             p.alive = false;
-            addHistoryEntry('你', line + ' (不含关键字)', false, true);
+            addHistoryEntry(youLabel, t('game.flyingflower.noKeyword', '{text} (不含关键字)', { text: line }), false, true);
             renderPlayers();
             continue;
           }
           if (usedLines.has(line.trim())) {
             p.alive = false;
-            addHistoryEntry('你', line + ' (重复)', false, true);
+            addHistoryEntry(youLabel, t('game.flyingflower.duplicate', '{text} (重复)', { text: line }), false, true);
             renderPlayers();
             continue;
           }
           // LLM validation: check if this is a real ancient Chinese poetry line
-          showThinking('裁判');
+          showThinking(t('game.flyingflower.judge', '裁判'));
           const isReal = await validatePoetryLine(line.trim(), keyword);
           removeThinking();
           if (!isReal) {
             p.alive = false;
-            addHistoryEntry('你', line + ' (非真实诗句)', false, true);
+            addHistoryEntry(youLabel, t('game.flyingflower.notRealPoetry', '{text} (非真实诗句)', { text: line }), false, true);
             renderPlayers();
             continue;
           }
           usedLines.add(line.trim());
-          addHistoryEntry('你', line, true, true);
+          addHistoryEntry(youLabel, line, true, true);
           success = true;
         } else {
           // AI's turn
@@ -291,7 +249,7 @@
 
           if (!line || line.includes('认输') || !line.includes(keyword)) {
             p.alive = false;
-            addHistoryEntry(p.name, line || '(无法作答)', false, false);
+            addHistoryEntry(p.name, line || t('game.common.noAnswer', '(无法作答)'), false, false);
             renderPlayers();
             continue;
           }
@@ -301,7 +259,7 @@
 
           if (usedLines.has(chosen)) {
             p.alive = false;
-            addHistoryEntry(p.name, chosen + ' (重复)', false, false);
+            addHistoryEntry(p.name, t('game.flyingflower.duplicate', '{text} (重复)', { text: chosen }), false, false);
             renderPlayers();
             continue;
           }
@@ -317,8 +275,8 @@
         if (players.filter(pp => pp.alive).length <= 1) {
           const surv = players.filter(pp => pp.alive);
           const msg = surv.length === 1
-            ? `最后的赢家是「${surv[0].isUser ? '你' : surv[0].name}」！`
-            : '所有玩家都被淘汰了！';
+            ? t('game.flyingflower.winnerIs', '最后的赢家是「{name}」！', { name: surv[0].isUser ? youLabel : surv[0].name })
+            : t('game.flyingflower.allEliminated', '所有玩家都被淘汰了！');
           showGameOver(msg, surv);
           break;
         }
@@ -327,7 +285,7 @@
 
     if (!gameOver) {
       const surv = players.filter(p => p.alive);
-      showGameOver(`已达到最大回合数，幸存者：${surv.map(p => p.isUser ? '你' : p.name).join('、')}`, surv);
+      showGameOver(t('game.flyingflower.maxRoundsSurvivors', '已达到最大回合数，幸存者：{names}', { names: surv.map(p => p.isUser ? youLabel : p.name).join('、') }), surv);
     }
   }
 
@@ -335,7 +293,6 @@
 
   // ---- Init ----
   async function start() {
-    await applyTheme();
 
     // Initialize entropy source
     try {
@@ -365,7 +322,8 @@
     $('keyword-display').textContent = keyword;
 
     // Build players: user first, then AIs
-    players = [{ name: '你', isUser: true, alive: true }];
+    const youLabel = t('game.common.you', '你');
+    players = [{ name: youLabel, isUser: true, alive: true }];
     for (let i = 0; i < aiCount; i++) {
       players.push({ name: AI_NAMES[i % AI_NAMES.length], isUser: false, alive: true });
     }
