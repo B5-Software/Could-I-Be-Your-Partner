@@ -83,6 +83,104 @@ function getTodayKey() {
   return new Date().toISOString().slice(0, 10);
 }
 
+// ---- 预算周期：时区感知的日期计算 ----
+// 返回指定时区下当前日期的 YYYY-MM-DD
+function getTodayKeyTZ(timezone) {
+  try {
+    const fmt = new Intl.DateTimeFormat('sv-SE', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit' });
+    return fmt.format(new Date()); // "2026-08-01"
+  } catch {
+    return getTodayKey();
+  }
+}
+
+// 返回指定时区下的 Date 对象（当天 00:00 本地时间）
+function getDateAtMidnightTZ(timezone, date) {
+  const ref = date || new Date();
+  try {
+    const todayKey = getTodayKeyTZ(timezone);
+    // 构造当天 00:00 UTC 的 Date（近似），再用偏移校正到时区
+    const [y, m, d] = todayKey.split('-').map(Number);
+    return new Date(Date.UTC(y, m - 1, d, 0, 0, 0));
+  } catch {
+    return new Date(Date.UTC(ref.getFullYear(), ref.getMonth(), ref.getDate()));
+  }
+}
+
+// 计算预算周期的 [startKey, endKey]
+// period: 'daily' | 'weekly' | 'monthly'
+// 返回 { startKey, endKey } (YYYY-MM-DD)
+function getBudgetPeriodKeys(period, budget) {
+  const tz = budget?.timezone || 'UTC';
+  const weekMode = budget?.weekMode || 'natural';  // 'natural' | 'rolling'
+  const monthMode = budget?.monthMode || 'natural'; // 'natural' | 'rolling'
+  const todayKey = getTodayKeyTZ(tz);
+  const now = new Date();
+
+  if (period === 'daily') {
+    return { startKey: todayKey, endKey: todayKey };
+  }
+
+  if (period === 'weekly') {
+    if (weekMode === 'rolling') {
+      // 滚动 7 天：从今天往前推 6 天
+      const start = new Date(now.getTime() - 6 * 86400000);
+      return { startKey: start.toISOString().slice(0, 10), endKey: todayKey };
+    } else {
+      // 自然周：找到本周一的 00:00（时区感知）
+      // getDay(): 0=周日, 1=周一, ..., 6=周六
+      // 我们要周一起算：offset = (day - 1 + 7) % 7
+      const todayMidnight = getDateAtMidnightTZ(tz, now);
+      const dow = now.getDay();
+      const offset = dow === 0 ? 6 : dow - 1; // 周日=6天前, 周一=0, 周二=1...
+      const monday = new Date(todayMidnight.getTime() - offset * 86400000);
+      return { startKey: monday.toISOString().slice(0, 10), endKey: todayKey };
+    }
+  }
+
+  if (period === 'monthly') {
+    if (monthMode === 'rolling') {
+      // 滚动 30 天
+      const start = new Date(now.getTime() - 29 * 86400000);
+      return { startKey: start.toISOString().slice(0, 10), endKey: todayKey };
+    } else {
+      // 自然月：当月 1 日
+      const [y, m] = todayKey.split('-').map(Number);
+      return { startKey: `${y}-${String(m).padStart(2, '0')}-01`, endKey: todayKey };
+    }
+  }
+
+  return { startKey: todayKey, endKey: todayKey };
+}
+
+// 检查预算是否超限，返回 { exceeded, period, level, action, fallbackModel }
+function checkBudgetExceeded(budget) {
+  if (!budget) return { exceeded: false };
+  const tz = budget.timezone || 'UTC';
+  const todayKey = getTodayKeyTZ(tz);
+  const warn = Number(budget.warningThreshold) || 0.8;
+  const action = budget.overLimitAction || 'warn';
+
+  const periods = [
+    { name: 'daily', limit: Number(budget.dailyLimitUSD) || 0, keys: getBudgetPeriodKeys('daily', budget) },
+    { name: 'weekly', limit: Number(budget.weeklyLimitUSD) || 0, keys: getBudgetPeriodKeys('weekly', budget) },
+    { name: 'monthly', limit: Number(budget.monthlyLimitUSD) || 0, keys: getBudgetPeriodKeys('monthly', budget) },
+  ];
+
+  for (const p of periods) {
+    if (p.limit <= 0) continue;
+    const agg = aggregateUsage(p.keys.startKey, p.keys.endKey);
+    const cost = agg.costUSD || 0;
+    if (cost >= p.limit) {
+      return { exceeded: true, period: p.name, cost, limit: p.limit, level: 'danger', action, fallbackModel: budget.fallbackModel || '' };
+    }
+    if (cost >= p.limit * warn) {
+      return { exceeded: false, period: p.name, cost, limit: p.limit, level: 'warn', action, fallbackModel: budget.fallbackModel || '' };
+    }
+  }
+  return { exceeded: false };
+}
+
 function estimateTokens(text) {
   if (!text) return 0;
   const cjkCount = (text.match(/[\u4e00-\u9fff\u3400-\u4dbf]/g) || []).length;
@@ -144,7 +242,9 @@ function computeUsageCost(usage, model, ts) {
 
 function recordTokenUsage(usage, model) {
   if (!usage) return;
-  const today = getTodayKey();
+  // 使用时区感知的日期键，确保与预算周期计算一致
+  const tz = settings.budget?.timezone || 'UTC';
+  const today = getTodayKeyTZ(tz);
   if (!settings.llm.usageHistory) settings.llm.usageHistory = {};
   if (!settings.llm.usageHistory[today]) {
     settings.llm.usageHistory[today] = { totalTokens: 0, promptTokens: 0, completionTokens: 0, requestCount: 0, models: {}, hours: {}, cachedTokens: 0, cacheCreationTokens: 0, costUSD: 0, inputCost: 0, cacheReadCost: 0, outputCost: 0, cacheWriteCost: 0 };
@@ -259,7 +359,8 @@ function aggregateUsage(startDate, endDate) {
 }
 
 function resetDailyUsageIfNeeded() {
-  const today = getTodayKey();
+  const tz = settings.budget?.timezone || 'UTC';
+  const today = getTodayKeyTZ(tz);
   if (settings.llm.dailyTokenDate !== today) {
     settings.llm.dailyTokenDate = today;
     settings.llm.dailyTokensUsed = 0;
@@ -1412,8 +1513,14 @@ let settings = loadJSON(settingsPath, {
     models: {},                                  // { [modelId]: { inputPerM, cacheReadPerM, outputPerM, cacheWritePerM, hasCacheWrite } }
     peakHours: { enabled: false, start: 9, end: 18, inputMul: 1.5, cacheReadMul: 1.5, outputMul: 1.5, cacheWriteMul: 1.5 },
     dailyLimitUSD: 0,                            // 0 表示不限制
+    weeklyLimitUSD: 0,
     monthlyLimitUSD: 0,
-    warningThreshold: 0.8
+    warningThreshold: 0.8,
+    overLimitAction: 'warn',                     // 'warn' | 'fallback' | 'stop'
+    fallbackModel: '',
+    timezone: 'Asia/Shanghai',
+    weekMode: 'natural',                         // 'natural' (周一起) | 'rolling' (滚动7天)
+    monthMode: 'natural'                         // 'natural' (1日起) | 'rolling' (滚动30天)
   }
 });
 if (fs.existsSync(settingsPath)) {
@@ -1644,6 +1751,62 @@ function resolveCloseToTrayDecision(decision) {
   }
 }
 
+// ===== 代理设置应用到 Electron session =====
+// 让 settings.proxy 真正生效，影响渲染进程的网络请求（fetch/XHR/WebSocket）
+// 主进程的 Node.js fetch（undici）不走 Electron 代理，aria2 通过 --all-proxy 单独配置
+function applyProxySettings(proxy) {
+  if (!proxy) return;
+  const { session } = require('electron');
+
+  let config = { mode: 'direct' };
+
+  if (proxy.mode === 'none') {
+    config = { mode: 'direct' };
+  } else if (proxy.mode === 'system') {
+    config = { mode: 'system' };
+  } else if (proxy.mode === 'manual') {
+    const proxyUrl = proxy.https || proxy.http;
+    if (proxyUrl) {
+      // Electron pacScript 格式：PROXY host:port
+      let pacRules = '';
+      const cleanUrl = proxyUrl.replace(/^https?:\/\//i, '').replace(/^socks5?:\/\//i, '');
+      if (/^socks/i.test(proxyUrl)) {
+        pacRules = `SOCKS5 ${cleanUrl}`;
+      } else {
+        pacRules = `PROXY ${cleanUrl}`;
+      }
+      // bypass 列表（逗号分隔）
+      const bypassList = proxy.bypass || 'localhost,127.0.0.1';
+      config = {
+        mode: 'fixed_servers',
+        proxyRules: pacRules,
+        proxyBypassRules: bypassList.split(/[,;\s]+/).filter(Boolean).join(';')
+      };
+    } else {
+      config = { mode: 'direct' };
+    }
+  }
+
+  session.defaultSession.setProxy(config).catch((e) => {
+    console.warn('[Proxy] 设置代理失败:', e.message);
+  });
+  console.log('[Proxy] 已应用代理设置:', config.mode);
+}
+
+// 代理设置变更时动态更新（由渲染进程 settings 保存后触发）
+ipcMain.handle('proxy:apply', async (_, proxy) => {
+  try {
+    applyProxySettings(proxy);
+    // 同时通知 aria2 重启以应用新代理
+    if (aria2Manager.ready) {
+      await aria2Manager.start(proxy);
+    }
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
 app.whenReady().then(() => {
   // 启动时复制 OCR traineddata 文件到当前执行目录根，避免 GFW blocking
   const appPath = app.getAppPath();
@@ -1709,6 +1872,11 @@ app.whenReady().then(() => {
       console.warn('[LocalNetwork] Bonjour trigger failed:', e.message);
     }
   }
+  // ===== 应用代理设置 =====
+  // 让 settings.proxy 真正生效：配置 Electron session 的网络代理
+  // 影响渲染进程的 fetch/XHR 请求；主进程的 fetch（Node undici）需另行配置
+  applyProxySettings(settings.proxy);
+
   createWindow();
   // 启动时即创建托盘图标（若启用）
   if (settings.trayEnabled) createAppTray();
@@ -3772,7 +3940,23 @@ ipcMain.handle('llm:chat', async (event, messages, options = {}) => {
       return { ok: false, error: '已达到今日LLM Token上限，请明天再试' };
     }
 
-    const req = LLMProviders.buildLLMRequest(llm, {
+    // 预算控制：检查是否超限
+    const budgetCheck = checkBudgetExceeded(settings.budget || {});
+    if (budgetCheck.exceeded) {
+      if (budgetCheck.action === 'stop') {
+        return { ok: false, error: `预算超限（${budgetCheck.period}周期已用 $${budgetCheck.cost.toFixed(4)} / $${budgetCheck.limit.toFixed(2)}），已停止接受新请求` };
+      }
+      if (budgetCheck.action === 'fallback' && budgetCheck.fallbackModel) {
+        // 临时切换到 fallback 模型
+        options._budgetFallbackModel = budgetCheck.fallbackModel;
+      }
+    }
+
+    // 预算 fallback：如果设置了 fallback 模型，使用副本覆盖
+    const llmForRequest = options._budgetFallbackModel
+      ? { ...llm, model: options._budgetFallbackModel }
+      : llm;
+    const req = LLMProviders.buildLLMRequest(llmForRequest, {
       messages,
       tools: options.tools,
       tool_choice: options.tool_choice,
@@ -3850,7 +4034,16 @@ ipcMain.handle('llm:chatStream', async (_, messages, options = {}) => {
       return { ok: false, error: '已达到今日LLM Token上限，请明天再试' };
     }
 
-    const req = LLMProviders.buildLLMRequest(llm, {
+    // 预算控制：检查是否超限
+    const budgetCheck = checkBudgetExceeded(settings.budget || {});
+    if (budgetCheck.exceeded && budgetCheck.action === 'stop') {
+      return { ok: false, error: `预算超限（${budgetCheck.period}周期已用 $${budgetCheck.cost.toFixed(4)} / $${budgetCheck.limit.toFixed(2)}），已停止接受新请求` };
+    }
+    const llmForRequest = (budgetCheck.exceeded && budgetCheck.action === 'fallback' && budgetCheck.fallbackModel)
+      ? { ...llm, model: budgetCheck.fallbackModel }
+      : llm;
+
+    const req = LLMProviders.buildLLMRequest(llmForRequest, {
       messages,
       tools: options.tools,
       tool_choice: options.tool_choice,
@@ -4044,8 +4237,9 @@ ipcMain.handle('llm:fetchModels', async (_, provider, apiUrl, apiKey) => {
 
 // ---- IPC: Token usage stats ----
 ipcMain.handle('usage:getRange', (_, period) => {
-  const today = new Date();
-  const todayKey = today.toISOString().slice(0, 10);
+  const b = settings.budget || {};
+  const tz = b.timezone || 'UTC';
+  const todayKey = getTodayKeyTZ(tz);
   if (period === 'daily') {
     // 按日周期时返回按小时统计，而非单根柱子
     const agg = aggregateUsage(todayKey, todayKey);
@@ -4058,53 +4252,51 @@ ipcMain.handle('usage:getRange', (_, period) => {
     return { ok: true, ...agg, hours, isHourly: true };
   }
   if (period === 'weekly') {
-    const start = new Date(today.getTime() - 6 * 86400000);
-    return { ok: true, ...aggregateUsage(start.toISOString().slice(0, 10), todayKey) };
+    const keys = getBudgetPeriodKeys('weekly', b);
+    return { ok: true, ...aggregateUsage(keys.startKey, keys.endKey) };
   }
   if (period === 'monthly') {
-    const start = new Date(today.getTime() - 29 * 86400000);
-    return { ok: true, ...aggregateUsage(start.toISOString().slice(0, 10), todayKey) };
+    const keys = getBudgetPeriodKeys('monthly', b);
+    return { ok: true, ...aggregateUsage(keys.startKey, keys.endKey) };
   }
   return { ok: false, error: 'invalid period' };
 });
 
 // ---- IPC: Budget (预算控制) ----
-// 返回当前预算状态：今日/本月已花费、限额、占比、是否告警
+// 返回当前预算状态：日/周/月已花费、限额、占比、是否告警
 ipcMain.handle('budget:getStatus', () => {
-  const today = new Date();
-  const todayKey = today.toISOString().slice(0, 10);
-  const monthStart = new Date(today.getFullYear(), today.getMonth(), 1).toISOString().slice(0, 10);
-  const daily = aggregateUsage(todayKey, todayKey);
-  const monthly = aggregateUsage(monthStart, todayKey);
   const b = settings.budget || {};
-  const dailyLimit = Number(b.dailyLimitUSD) || 0;
-  const monthlyLimit = Number(b.monthlyLimitUSD) || 0;
   const warn = Number(b.warningThreshold) || 0.8;
-  return {
-    ok: true,
-    daily: {
-      costUSD: daily.costUSD || 0,
-      inputCost: daily.inputCost || 0,
-      cacheReadCost: daily.cacheReadCost || 0,
-      outputCost: daily.outputCost || 0,
-      cacheWriteCost: daily.cacheWriteCost || 0,
-      limitUSD: dailyLimit,
-      pct: dailyLimit > 0 ? Math.min(100, (daily.costUSD / dailyLimit) * 100) : 0,
-      level: dailyLimit > 0 ? (daily.costUSD >= dailyLimit ? 'danger' : (daily.costUSD >= dailyLimit * warn ? 'warn' : 'normal')) : 'normal'
-    },
-    monthly: {
-      costUSD: monthly.costUSD || 0,
-      inputCost: monthly.inputCost || 0,
-      cacheReadCost: monthly.cacheReadCost || 0,
-      outputCost: monthly.outputCost || 0,
-      cacheWriteCost: monthly.cacheWriteCost || 0,
-      limitUSD: monthlyLimit,
-      pct: monthlyLimit > 0 ? Math.min(100, (monthly.costUSD / monthlyLimit) * 100) : 0,
-      level: monthlyLimit > 0 ? (monthly.costUSD >= monthlyLimit ? 'danger' : (monthly.costUSD >= monthlyLimit * warn ? 'warn' : 'normal')) : 'normal'
-    },
-    warningThreshold: warn,
-    peakHours: b.peakHours || { enabled: false, start: 9, end: 18, inputMul: 1.5, cacheReadMul: 1.5, outputMul: 1.5, cacheWriteMul: 1.5 }
-  };
+
+  const periods = [
+    { name: 'daily', limit: Number(b.dailyLimitUSD) || 0, keys: getBudgetPeriodKeys('daily', b) },
+    { name: 'weekly', limit: Number(b.weeklyLimitUSD) || 0, keys: getBudgetPeriodKeys('weekly', b) },
+    { name: 'monthly', limit: Number(b.monthlyLimitUSD) || 0, keys: getBudgetPeriodKeys('monthly', b) },
+  ];
+
+  const result = { ok: true, warningThreshold: warn, peakHours: b.peakHours || { enabled: false, start: 9, end: 18, inputMul: 1.5, cacheReadMul: 1.5, outputMul: 1.5, cacheWriteMul: 1.5 } };
+  for (const p of periods) {
+    const agg = aggregateUsage(p.keys.startKey, p.keys.endKey);
+    const cost = agg.costUSD || 0;
+    result[p.name] = {
+      costUSD: cost,
+      inputCost: agg.inputCost || 0,
+      cacheReadCost: agg.cacheReadCost || 0,
+      outputCost: agg.outputCost || 0,
+      cacheWriteCost: agg.cacheWriteCost || 0,
+      limitUSD: p.limit,
+      pct: p.limit > 0 ? Math.min(100, (cost / p.limit) * 100) : 0,
+      level: p.limit > 0 ? (cost >= p.limit ? 'danger' : (cost >= p.limit * warn ? 'warn' : 'normal')) : 'normal',
+      startKey: p.keys.startKey,
+      endKey: p.keys.endKey
+    };
+  }
+  return result;
+});
+
+// ---- IPC: Budget check (预算检查，供 LLM 请求前调用) ----
+ipcMain.handle('budget:check', () => {
+  return checkBudgetExceeded(settings.budget || {});
 });
 
 // ---- IPC: Paths ----
@@ -4593,7 +4785,20 @@ function _getPwAcceptLanguage(lang) {
 }
 
 async function _launchPwBrowser(overrideSettings = null) {
-  if (_pwBrowser) return _pwBrowser;
+  // 检查现有实例是否仍然连接；若已断开（用户关闭/崩溃），置空后重新启动
+  if (_pwBrowser) {
+    try {
+      if (typeof _pwBrowser.isConnected === 'function' ? _pwBrowser.isConnected() : false) {
+        return _pwBrowser;
+      }
+      console.log('[Playwright] 现有实例已断开，清理后重新启动');
+    } catch {
+      console.log('[Playwright] 检查连接状态异常，清理后重新启动');
+    }
+    _pwBrowser = null;
+    _pwWorkspaces.clear();
+    _hidePwBanner();
+  }
   const { chromium } = require('playwright');
   // 支持临时覆盖设置（用于测试启动），不修改全局 settings，避免恢复时覆盖已保存的设置
   const pwSettings = overrideSettings || _getPwSettings();
@@ -5446,70 +5651,132 @@ ipcMain.handle('qr:generate', async (_, text, workspacePath, filename) => {
     return { ok: false, error: e.message };
   }
 });
-// ---- IPC: Download File ----
+// ---- IPC: Download Manager (aria2) ----
+// 替换旧的同步 file:download：现在使用 aria2 异步下载，返回 gid 立即继续工作
+const { aria2Manager } = require('./aria2-manager');
+
+// 启动 aria2（首次下载时自动触发，也可在打开下载管理器时预热）
+// 自动同步 settings.proxy 代理设置
+ipcMain.handle('aria2:start', async () => {
+  try {
+    await aria2Manager.start(settings.proxy);
+    return { ok: true, port: aria2Manager.port, proxy: aria2Manager.currentProxy };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+// 获取 aria2 状态（是否就绪、端口）
+ipcMain.handle('aria2:status', async () => {
+  return {
+    ok: true,
+    ready: aria2Manager.ready,
+    port: aria2Manager.port,
+    binPath: aria2Manager.binPath
+  };
+});
+
+// 添加下载任务（异步，立即返回 gid）
+ipcMain.handle('aria2:add-uri', async (_, url, opts = {}) => {
+  try {
+    if (!opts.dir) {
+      return { ok: false, error: '未指定下载目录' };
+    }
+    const gid = await aria2Manager.addUri(url, opts);
+    return { ok: true, gid };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+// 查询单个下载状态
+ipcMain.handle('aria2:tell-status', async (_, gid) => {
+  try {
+    const status = await aria2Manager.tellStatus(gid);
+    return { ok: true, status };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+// 列出所有下载（active + waiting + stopped）
+ipcMain.handle('aria2:list-all', async () => {
+  try {
+    const result = await aria2Manager.listAll();
+    return { ok: true, ...result };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+// 暂停下载
+ipcMain.handle('aria2:pause', async (_, gid, force = false) => {
+  try {
+    await aria2Manager.pause(gid, force);
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+// 恢复下载
+ipcMain.handle('aria2:unpause', async (_, gid) => {
+  try {
+    await aria2Manager.unpause(gid);
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+// 取消下载
+ipcMain.handle('aria2:cancel', async (_, gid, force = false) => {
+  try {
+    await aria2Manager.cancel(gid, force);
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+// 删除下载记录（已停止的任务）
+ipcMain.handle('aria2:remove-result', async (_, gid) => {
+  try {
+    await aria2Manager.removeDownloadResult(gid);
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+// 兼容旧版 downloadFile 调用：用 aria2 异步下载后等待完成再返回
+// （仅用于不关心进度的旧调用方；Agent 新工具走 aria2:add-uri 异步路径）
 ipcMain.handle('file:download', async (_, url, filename, workspacePath) => {
   try {
-    const https = require('https');
-    const http = require('http');
-    const { URL } = require('url');
-    
-    const parsedUrl = new URL(url);
-    const protocol = parsedUrl.protocol === 'https:' ? https : http;
-    
-    // 确定文件名
-    let targetFilename = filename;
-    if (!targetFilename) {
-      const urlPath = parsedUrl.pathname;
-      targetFilename = path.basename(urlPath) || 'download';
-    }
-    
-    // 获取工作区路径
     if (!workspacePath) {
       return { ok: false, error: '未设置工作区路径' };
     }
-    
-    const savePath = path.join(workspacePath, targetFilename);
-    
-    return new Promise((resolve) => {
-      protocol.get(url, (response) => {
-        if (response.statusCode === 301 || response.statusCode === 302) {
-          // 处理重定向
-          resolve({ ok: false, error: '请使用重定向后的最终URL' });
-          return;
-        }
-        
-        if (response.statusCode !== 200) {
-          resolve({ ok: false, error: `HTTP ${response.statusCode}` });
-          return;
-        }
-        
-        const fileStream = fs.createWriteStream(savePath);
-        const totalBytes = parseInt(response.headers['content-length'] || '0', 10);
-        let downloadedBytes = 0;
-        
-        response.on('data', (chunk) => {
-          downloadedBytes += chunk.length;
-          if (totalBytes > 0) {
-            const progress = Math.floor((downloadedBytes / totalBytes) * 100);
-            console.log(`[Download] ${progress}% (${downloadedBytes}/${totalBytes} bytes)`);
-          }
-        });
-        
-        response.pipe(fileStream);
-        
-        fileStream.on('finish', () => {
-          fileStream.close();
-          resolve({ ok: true, path: savePath, size: downloadedBytes });
-        });
-        
-        fileStream.on('error', (err) => {
-          fs.unlink(savePath, () => {});
-          resolve({ ok: false, error: err.message });
-        });
-      }).on('error', (err) => {
-        resolve({ ok: false, error: err.message });
-      });
-    });
+    const { URL } = require('url');
+    const parsedUrl = new URL(url);
+    let targetFilename = filename;
+    if (!targetFilename) {
+      targetFilename = path.basename(parsedUrl.pathname) || 'download';
+    }
+    const gid = await aria2Manager.addUri(url, { dir: workspacePath, out: targetFilename });
+    // 轮询等待完成（最长 10 分钟）
+    const deadline = Date.now() + 600000;
+    while (Date.now() < deadline) {
+      await new Promise(r => setTimeout(r, 500));
+      const st = await aria2Manager.tellStatus(gid);
+      if (st.status === 'complete') {
+        const filePath = st.files?.[0]?.path || path.join(workspacePath, targetFilename);
+        return { ok: true, path: filePath, size: parseInt(st.completedLength || '0', 10), gid };
+      }
+      if (st.status === 'error' || st.status === 'removed') {
+        return { ok: false, error: st.errorMessage || `下载${st.status}`, gid };
+      }
+    }
+    return { ok: false, error: '下载超时（10 分钟）', gid };
   } catch (e) {
     return { ok: false, error: e.message };
   }
@@ -7944,6 +8211,8 @@ app.on('before-quit', async (event) => {
   }
   // 清理 Playwright 横幅窗口
   _hidePwBanner();
+  // 关闭 aria2 子进程（保存会话以便下次恢复未完成下载）
+  try { await aria2Manager.shutdown(); } catch {}
   // 清理托盘图标
   if (appTray) {
     try { appTray.destroy(); } catch {}

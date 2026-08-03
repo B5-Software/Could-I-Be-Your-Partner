@@ -48,7 +48,7 @@
   // 缓存已加载的 SVG 内容，避免重复 IPC 调用
   const _avatarFrameCache = {}; // id -> svg content
   // 当前生效的头像框 ID（由 settings 加载时填充）
-  const _avatarFrameState = { ai: null, user: null };
+  const _avatarFrameState = { ai: null, user: null, babe: null };
   // 用于在多实例插入时为 SVG id 添加唯一后缀，避免 ID 冲突
   let _avatarFrameUid = 0;
 
@@ -92,13 +92,32 @@
     return `<div class="avatar-framed-wrap">${inner}${makeFrameOverlayHTML(frameId)}</div>`;
   }
 
-  // 加载头像框列表并渲染设置中的两个 grid
+  // 生成 Babe 模式头像 HTML（含头像框叠加层）
+  // role: 'babe' (TA) 或 'user' (用户)；Babe 用独立配置的头像/头像框，user 复用个人资料头像/头像框
+  function makeBabeFramedAvatarHTML(avatarData, role, style) {
+    const frameId = role === 'babe' ? _avatarFrameState.babe : _avatarFrameState.user;
+    const sz = style || 'width:100%;height:100%;border-radius:50%;object-fit:cover';
+    let inner;
+    if (avatarData) {
+      const src = avatarData.startsWith('data:') ? avatarData : 'file://' + avatarData.replace(/\\/g, '/');
+      inner = `<img src="${src}" style="${sz}" alt="">`;
+    } else {
+      inner = role === 'babe' ? '<i class="fa-solid fa-heart"></i>' : '<i class="fa-solid fa-user"></i>';
+    }
+    if (!frameId) return inner;
+    const svg = _avatarFrameCache[frameId];
+    if (!svg) return inner;
+    return `<div class="avatar-framed-wrap">${inner}${makeFrameOverlayHTML(frameId)}</div>`;
+  }
+
+  // 加载头像框列表并渲染设置中的三个 grid（AI / User / Babe）
   async function loadAvatarFrames() {
     try {
       const res = await window.api.avatarFramesList();
       if (!res?.ok || !Array.isArray(res.frames)) return;
       const aiGrid = document.getElementById('setting-ai-avatar-frame-grid');
       const userGrid = document.getElementById('setting-user-avatar-frame-grid');
+      const babeGrid = document.getElementById('setting-babe-avatar-frame-grid');
       if (!aiGrid || !userGrid) return;
 
       // 构建 "无头像框" 项
@@ -137,6 +156,13 @@
       userGrid.appendChild(buildNoneItem(!_avatarFrameState.user));
       res.frames.forEach((f) => userGrid.appendChild(buildFrameItem(f, _avatarFrameState.user === f.id)));
 
+      // 渲染 Babe grid（Babe 模式独立头像框）
+      if (babeGrid) {
+        babeGrid.innerHTML = '';
+        babeGrid.appendChild(buildNoneItem(!_avatarFrameState.babe));
+        res.frames.forEach((f) => babeGrid.appendChild(buildFrameItem(f, _avatarFrameState.babe === f.id)));
+      }
+
       // 绑定点击事件（事件委托）
       aiGrid.onclick = async (e) => {
         const item = e.target.closest('.avatar-frame-item');
@@ -170,6 +196,27 @@
         userGrid.querySelectorAll('.avatar-frame-item').forEach((i) => i.classList.toggle('selected', i === item));
         updateAvatarPreviewFrame('user');
       };
+
+      // Babe grid 点击事件（Babe 模式独立头像框，存储到 settings.babe.avatarFrame）
+      if (babeGrid) {
+        babeGrid.onclick = async (e) => {
+          const item = e.target.closest('.avatar-frame-item');
+          if (!item) return;
+          const frameId = item.dataset.frameId || '';
+          _avatarFrameState.babe = frameId || null;
+          if (frameId) await loadAvatarFrameSVG(frameId);
+          const s = await window.api.getSettings();
+          if (!s.babe) s.babe = {};
+          s.babe.avatarFrame = frameId;
+          await saveSettings(s);
+          // 同步到 babeAgent.settings
+          if (babeAgent?.settings) babeAgent.settings.babe = s.babe;
+          babeGrid.querySelectorAll('.avatar-frame-item').forEach((i) => i.classList.toggle('selected', i === item));
+          updateAvatarPreviewFrame('babe');
+          // 更新 Babe Hero 显示
+          updateBabePersonaDisplay(s.babe);
+        };
+      }
     } catch (e) {
       console.error('loadAvatarFrames failed:', e);
     }
@@ -177,13 +224,17 @@
 
   // 更新设置中的头像预览叠加层
   function updateAvatarPreviewFrame(role) {
-    const previewId = role === 'ai' ? 'setting-ai-avatar-preview' : 'setting-user-avatar-preview';
+    const previewId = role === 'ai' ? 'setting-ai-avatar-preview'
+      : role === 'babe' ? 'setting-babe-avatar-preview'
+      : 'setting-user-avatar-preview';
     const preview = document.getElementById(previewId);
     if (!preview) return;
     // 移除现有叠加层
     const existing = preview.querySelector('.avatar-frame-overlay');
     if (existing) existing.remove();
-    const frameId = role === 'ai' ? _avatarFrameState.ai : _avatarFrameState.user;
+    const frameId = role === 'ai' ? _avatarFrameState.ai
+      : role === 'babe' ? _avatarFrameState.babe
+      : _avatarFrameState.user;
     if (frameId && _avatarFrameCache[frameId]) {
       preview.insertAdjacentHTML('beforeend', makeFrameOverlayHTML(frameId));
     }
@@ -521,6 +572,11 @@
     },
   };
   WebUIMirror.init();
+
+  // 初始化虚拟滚动器（聊天记录动态渲染，离屏消息不渲染 markdown）
+  if (typeof VirtualScroller !== 'undefined' && chatMessages) {
+    VirtualScroller.attach(chatMessages);
+  }
 
   // 推送容器选择器：根据 currentMode 返回对应消息容器的选择器
   function getChatContainerSelector() {
@@ -2072,19 +2128,26 @@
     const otherTokens = Math.max(0, summaryTokens);
     const tokens = systemGuidanceTokens + toolDefsTokens + chatTokens + toolResultTokens + otherTokens;
     const maxTokens = stats?.maxTokens ?? (agentInstance.settings?.llm?.maxContextLength || 0);
-    const percentage = maxTokens ? Math.min(100, (tokens / maxTokens) * 100) : 0;
+    // 输出预留：为模型生成回复保留 maxResponseTokens 的空间
+    // 上下文实际可用空间 = maxContextLength - maxResponseTokens
+    const maxResponseTokens = agentInstance.settings?.llm?.maxResponseTokens || 8192;
+    const effectiveMax = Math.max(maxResponseTokens + 1024, maxTokens - maxResponseTokens);
+    // 总占用 = 当前输入 token + 输出预留
+    const totalOccupied = tokens + maxResponseTokens;
+    const percentage = effectiveMax ? Math.min(100, (totalOccupied / effectiveMax) * 100) : 0;
+    const inputOnlyPct = maxTokens ? Math.min(100, (tokens / maxTokens) * 100) : 0;
 
     // 更新 SVG 圆扇形：stroke-dasharray="percentage, 100-percentage"
     // 圆周长 = 2 * PI * r = 2 * PI * 15.915 ≈ 100，所以直接用百分比
     progressFill.setAttribute('stroke-dasharray', `${percentage} ${100 - percentage}`);
     // 文本：精简显示（>1000 显示为 K）
     const fmt = (n) => n >= 1000 ? `${(n/1000).toFixed(1)}K` : `${n}`;
-    progressText.textContent = `${fmt(tokens)}/${fmt(maxTokens)}`;
+    progressText.textContent = `${fmt(totalOccupied)}/${fmt(effectiveMax)}`;
 
     // 颜色级别
     if (indicator) {
-      indicator.dataset.used = tokens;
-      indicator.dataset.max = maxTokens;
+      indicator.dataset.used = totalOccupied;
+      indicator.dataset.max = effectiveMax;
       if (percentage >= 95) indicator.dataset.level = 'danger';
       else if (percentage >= 80) indicator.dataset.level = 'warn';
       else indicator.dataset.level = 'normal';
@@ -2107,8 +2170,8 @@
         <svg class="context-tooltip-mini-ring" viewBox="0 0 30 30" width="60" height="60">
           <circle cx="${miniCx}" cy="${miniCy}" r="${miniR}" fill="none" stroke="var(--bg-tertiary)" stroke-width="4"/>
           <circle cx="${miniCx}" cy="${miniCy}" r="${miniR}" fill="none" stroke="var(--accent)" stroke-width="4"
-            stroke-dasharray="${(percentage/100*miniCircum).toFixed(1)} ${miniCircum}"
-            stroke-dashoffset="${(miniCircum/4).toFixed(1)}" transform="rotate(-90 ${miniCx} ${miniCy})"/>
+          stroke-dasharray="${(percentage/100*miniCircum).toFixed(1)} ${miniCircum.toFixed(1)}"
+          stroke-dashoffset="0" transform="rotate(-90 ${miniCx} ${miniCy})"/>
           <text x="${miniCx}" y="${miniCy+3}" text-anchor="middle" font-size="9" fill="var(--text-primary)">${percentage.toFixed(0)}%</text>
         </svg>
         <div class="context-tooltip-row"><span>系统指导</span><span>${systemGuidanceTokens} (${segPct(systemGuidanceTokens, tokens)}%)</span></div>
@@ -2117,7 +2180,15 @@
         <div class="context-tooltip-row"><span>工具结果</span><span>${toolResultTokens} (${segPct(toolResultTokens, tokens)}%)</span></div>
         <div class="context-tooltip-row"><span>其他</span><span>${otherTokens} (${segPct(otherTokens, tokens)}%)</span></div>
         <div class="context-tooltip-row" style="margin-top:4px;border-top:1px solid var(--border);padding-top:4px;font-weight:600">
-          <span>总计</span><span>${tokens} / ${maxTokens}</span>
+          <span>当前输入</span><span>${tokens} / ${maxTokens}</span>
+        </div>
+        <div class="context-tooltip-row" style="margin-top:4px;border-top:1px solid var(--border);padding-top:4px;font-weight:600;color:var(--accent)">
+          <span>输出预留</span><span>${maxResponseTokens}</span>
+        </div>
+        <div class="context-tooltip-row"><span>　占比（含预留）</span><span>${percentage.toFixed(1)}%</span></div>
+        <div class="context-tooltip-row" style="font-size:10px;color:var(--text-tertiary)"><span>　占比（仅输入）</span><span>${inputOnlyPct.toFixed(1)}%</span></div>
+        <div class="context-tooltip-row" style="font-weight:600">
+          <span>总占用</span><span>${fmt(totalOccupied)} / ${fmt(effectiveMax)}</span>
         </div>
         ${renderSessionTokenStats(agentInstance)}
       `;
@@ -2177,10 +2248,16 @@
         <span>费用（${pricing.model}）</span><span>$${totalCost.toFixed(5)}</span>
       </div>
       <div class="context-tooltip-row" style="font-size:10px;color:var(--text-tertiary)">
-        <span>　输入 $${inputCost.toFixed(5)}</span><span>输出 $${outputCost.toFixed(5)}</span>
+        <span>　输入</span><span>$${inputCost.toFixed(5)}</span>
       </div>
       <div class="context-tooltip-row" style="font-size:10px;color:var(--text-tertiary)">
-        <span>　缓存读 $${cacheReadCost.toFixed(5)}</span><span>缓存写 $${cacheWriteCost.toFixed(5)}</span>
+        <span>　输出</span><span>$${outputCost.toFixed(5)}</span>
+      </div>
+      <div class="context-tooltip-row" style="font-size:10px;color:var(--text-tertiary)">
+        <span>　缓存读</span><span>$${cacheReadCost.toFixed(5)}</span>
+      </div>
+      <div class="context-tooltip-row" style="font-size:10px;color:var(--text-tertiary)">
+        <span>　缓存写</span><span>$${cacheWriteCost.toFixed(5)}</span>
       </div>${cacheWriteNote}`;
     }
     return `
@@ -2690,17 +2767,23 @@
   }
 
   // ---- Chat Functions ----
+  // 滚动节流：合并同一帧内的多次滚动请求，避免密集重排
+  let _scrollRafScheduled = false;
   function scrollChatToBottom() {
-    const target = document.getElementById('thinking-indicator') || chatMessages.lastElementChild;
+    if (_scrollRafScheduled) return;
+    _scrollRafScheduled = true;
     requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        if (target) {
-          target.scrollIntoView({ behavior: 'smooth', block: 'end' });
-        }
-        chatMessages.scrollTop = chatMessages.scrollHeight;
-      });
+      _scrollRafScheduled = false;
+      const target = document.getElementById('thinking-indicator') || chatMessages.lastElementChild;
+      if (target) {
+        target.scrollIntoView({ behavior: 'auto', block: 'end' });
+      }
+      chatMessages.scrollTop = chatMessages.scrollHeight;
     });
   }
+
+  // 暴露 renderMarkdown 供 VirtualScroller 使用
+  window.renderMarkdown = renderMarkdown;
 
   function appendChatElement(el) {
     // 模式感知：根据当前模式把元素追加到对应的消息容器，
@@ -2719,13 +2802,15 @@
       targetMessagesEl.appendChild(el);
     }
     scrollChatToBottom();
-    // 增量推送：把新元素的 outerHTML 追加到对应容器
-    WebUIMirror.pushDomEvent({
-      type: 'dom_append',
-      container: getChatContainerSelector(),
-      html: el.outerHTML,
-      before: insertedBeforeThinking ? '#thinking-indicator' : null,
-    });
+    // 增量推送：非远程模式才序列化 outerHTML 推送（序列化大元素开销大）
+    if (!isRemoteMode) {
+      WebUIMirror.pushDomEvent({
+        type: 'dom_append',
+        container: getChatContainerSelector(),
+        html: el.outerHTML,
+        before: insertedBeforeThinking ? '#thinking-indicator' : null,
+      });
+    }
   }
 
   async function normalizeToolSettings() {
@@ -2767,7 +2852,7 @@
     const msg = document.createElement('div');
     msg.className = `message ${role}`;
     const time = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
-    
+
     // Avatar handling（Remote 模式优先使用远端头像）
     let avatarHTML = '';
     if (role === 'user') {
@@ -2775,16 +2860,32 @@
     } else {
       avatarHTML = makeFramedAvatarHTML(isRemoteMode ? (remoteAvatars?.ai || '') : agent.settings?.aiPersona?.avatar, true);
     }
-    
-    const rendered = role === 'assistant' ? renderMarkdown(content) : escapeHtml(content);
+
     const bodyClass = role === 'assistant' ? 'message-content markdown-body' : 'message-content';
-    msg.innerHTML = `
-      <div class="message-avatar">${avatarHTML}</div>
-      <div class="message-body">
-        <div class="${bodyClass}">${rendered}</div>
-        <div class="message-time">${time}</div>
-      </div>`;
-    appendChatElement(msg);
+    // 虚拟滚动优化：assistant 消息延迟渲染 markdown
+    // - 批量加载模式（历史回放）：先占位，可见时再渲染
+    // - 实时模式（新消息）：立即渲染（保持流式体验）
+    if (role === 'assistant' && typeof VirtualScroller !== 'undefined' && VirtualScroller.observeMessage) {
+      msg.innerHTML = `
+        <div class="message-avatar">${avatarHTML}</div>
+        <div class="message-body">
+          <div class="${bodyClass}"></div>
+          <div class="message-time">${time}</div>
+        </div>`;
+      appendChatElement(msg);
+      // 注册到虚拟滚动器，原始内容存在 dataset 中，可见时才渲染
+      VirtualScroller.observeMessage(msg, content);
+    } else {
+      // user 消息或无虚拟滚动器：直接渲染
+      const rendered = role === 'assistant' ? renderMarkdown(content) : escapeHtml(content);
+      msg.innerHTML = `
+        <div class="message-avatar">${avatarHTML}</div>
+        <div class="message-body">
+          <div class="${bodyClass}">${rendered}</div>
+          <div class="message-time">${time}</div>
+        </div>`;
+      appendChatElement(msg);
+    }
     
     // Add right-click context menu for deletion
     msg.addEventListener('contextmenu', (e) => {
@@ -2882,9 +2983,14 @@
           try { bubble.reasoningContentEl.scrollTop = bubble.reasoningContentEl.scrollHeight; } catch (_) {}
         }
         scrollChatToBottom();
-        // 增量推送：更新流式气泡的完整 outerHTML
-        if (bubble.el.id) {
-          WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#' + bubble.el.id, html: bubble.el.outerHTML });
+        // 远程镜像推送进一步降频：每 ~480ms 推送一次（每 4 次渲染推送 1 次）
+        // outerHTML 序列化大元素开销大，是子代理运行时卡顿的主要来源
+        if (!isRemoteMode && bubble.el.id) {
+          bubble._mirrorCounter = (bubble._mirrorCounter || 0) + 1;
+          if (bubble._mirrorCounter >= 4) {
+            bubble._mirrorCounter = 0;
+            WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#' + bubble.el.id, html: bubble.el.outerHTML });
+          }
         }
       }, 120);
     }
@@ -3547,12 +3653,43 @@
           el.querySelector('.tokens-text').textContent = fmt(updates.usage.total);
         }
       }
-      // 结果摘要
+      // 结果摘要（默认折叠，避免长结果撑高卡片影响阅读）
       if (updates.result) {
         const resultEl = document.createElement('div');
-        resultEl.className = 'sub-agent-card-result';
-        resultEl.innerHTML = `<div class="sub-agent-card-result-label">最终结果</div><div class="markdown-body">${renderMarkdown(updates.result)}</div>`;
+        resultEl.className = 'sub-agent-card-result collapsed';
+        const previewText = updates.result.length > 100
+          ? updates.result.substring(0, 100) + '...'
+          : updates.result;
+        resultEl.innerHTML = `
+          <div class="sub-agent-card-result-header">
+            <span class="sub-agent-card-result-label">最终结果</span>
+            <button class="btn-icon btn-xs sub-agent-result-toggle" title="展开/折叠">
+              <i class="fa-solid fa-chevron-down"></i>
+            </button>
+          </div>
+          <div class="sub-agent-card-result-preview">${escapeHtml(previewText)}</div>
+          <div class="sub-agent-card-result-full markdown-body" style="display:none">${renderMarkdown(updates.result)}</div>`;
+        // 绑定展开/折叠按钮
+        const toggleBtn = resultEl.querySelector('.sub-agent-result-toggle');
+        const fullEl = resultEl.querySelector('.sub-agent-card-result-full');
+        const previewEl = resultEl.querySelector('.sub-agent-card-result-preview');
+        toggleBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const collapsed = resultEl.classList.toggle('collapsed');
+          fullEl.style.display = collapsed ? 'none' : '';
+          previewEl.style.display = collapsed ? '' : 'none';
+          toggleBtn.querySelector('i').className = collapsed
+            ? 'fa-solid fa-chevron-down'
+            : 'fa-solid fa-chevron-up';
+        });
         el.appendChild(resultEl);
+      }
+      // 达到迭代上限提示
+      if (updates.hitMaxIter) {
+        const warnEl = document.createElement('div');
+        warnEl.className = 'sub-agent-card-warn';
+        warnEl.innerHTML = '<i class="fa-solid fa-triangle-exclamation"></i> 已达迭代上限，结果为完整报告';
+        el.appendChild(warnEl);
       }
     }
     requestAnimationFrame(() => { el.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); });
@@ -3607,10 +3744,32 @@
         const s = Math.floor(ms / 1000);
         return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
       };
-      // 估算上下文窗口使用
+      // 上下文窗口使用：基于当前上下文消息的 token 估算（而非累计用量）
+      // 累计 usage.prompt + usage.completion 会持续增长，不能反映当前上下文占用
       const maxCtx = liveRec?.subAgent?.contextManager?.maxTokens || (agent?.settings?.llm?.maxContextLength || 131072);
-      const usedTokens = (usage.prompt || 0) + (usage.completion || 0);
-      const ctxPct = maxCtx > 0 ? Math.min(100, Math.round((usedTokens / maxCtx) * 100)) : 0;
+      let usedTokens = 0;
+      const subCm = liveRec?.subAgent?.contextManager;
+      if (subCm) {
+        // 估算当前上下文中所有消息的 token 数
+        const estimateMsg = (msg) => subCm.estimateMessageTokens ? subCm.estimateMessageTokens(msg) : 0;
+        const estimateText = (text) => subCm.estimateTokens ? subCm.estimateTokens(text) : 0;
+        const sysTok = subCm.systemPrompt ? estimateMsg(subCm.systemPrompt) : 0;
+        const summaryTok = (subCm.summaries || []).reduce((acc, s) => acc + estimateText(String(s || '')) + 4, 0);
+        let chatTok = 0, toolResTok = 0;
+        (subCm.messages || []).forEach(msg => {
+          if (!msg) return;
+          if (msg.role === 'tool') toolResTok += estimateMsg(msg);
+          else if (msg.role === 'user' || msg.role === 'assistant') chatTok += estimateMsg(msg);
+        });
+        usedTokens = sysTok + summaryTok + chatTok + toolResTok;
+      }
+      // 如果无法从 contextManager 获取，回退到最后一次请求的 prompt token
+      if (usedTokens === 0) usedTokens = usage.lastPrompt || 0;
+      // 输出预留：为模型生成回复保留 maxResponseTokens 的空间
+      const maxResp = agent?.settings?.llm?.maxResponseTokens || 8192;
+      const effectiveMaxCtx = Math.max(maxResp + 1024, maxCtx - maxResp);
+      const totalOcc = usedTokens + maxResp;
+      const ctxPct = effectiveMaxCtx > 0 ? Math.min(100, Math.round((totalOcc / effectiveMaxCtx) * 100)) : 0;
       const ctxColor = ctxPct >= 95 ? 'var(--danger, #e74c3c)' : (ctxPct >= 80 ? 'var(--warning, #f39c12)' : 'var(--accent)');
       const isRunning = liveRec?.status === 'running' || (!liveRec?.endTime);
       const bodyHtml = messages.length === 0
@@ -3674,7 +3833,7 @@
       const pctEl = modal.querySelector('.ctx-pct');
       if (pctEl) { pctEl.textContent = `${ctxPct}%`; pctEl.style.color = ctxColor; }
       const tokEl = modal.querySelector('.ctx-tokens');
-      if (tokEl) tokEl.textContent = `${fmtTok(usedTokens)} / ${fmtTok(maxCtx)}`;
+      if (tokEl) tokEl.textContent = `${fmtTok(totalOcc)} / ${fmtTok(effectiveMaxCtx)} (含预留${fmtTok(maxResp)})`;
 
       // 自动滚动到底部（如果有新消息）
       const body = modal.querySelector('.sub-agent-modal-body');
@@ -3707,22 +3866,26 @@
     const checkRunning = agent.getSubAgent ? agent.getSubAgent(id) : null;
     if (checkRunning && (checkRunning.status === 'running' || !checkRunning.endTime)) {
       _subAgentModalRefreshTimer = setInterval(() => {
-        const cur = agent.getSubAgent ? agent.getSubAgent(id) : null;
-        if (!cur || cur.status !== 'running') {
-          // 已完成，最后刷新一次然后停止
-          render();
-          if (_subAgentModalRefreshTimer) {
-            clearInterval(_subAgentModalRefreshTimer);
-            _subAgentModalRefreshTimer = null;
+        try {
+          const cur = agent.getSubAgent ? agent.getSubAgent(id) : null;
+          if (!cur || cur.status !== 'running') {
+            // 已完成，最后刷新一次然后停止
+            render();
+            if (_subAgentModalRefreshTimer) {
+              clearInterval(_subAgentModalRefreshTimer);
+              _subAgentModalRefreshTimer = null;
+            }
+          } else if (_openSubAgentModalId === id) {
+            render();
+          } else {
+            // 模态框已关闭
+            if (_subAgentModalRefreshTimer) {
+              clearInterval(_subAgentModalRefreshTimer);
+              _subAgentModalRefreshTimer = null;
+            }
           }
-        } else if (_openSubAgentModalId === id) {
-          render();
-        } else {
-          // 模态框已关闭
-          if (_subAgentModalRefreshTimer) {
-            clearInterval(_subAgentModalRefreshTimer);
-            _subAgentModalRefreshTimer = null;
-          }
+        } catch (e) {
+          console.error('[SubAgent Modal] refresh error:', e);
         }
       }, 1500);
     }
@@ -5695,6 +5858,8 @@
     if (notifQuestionEl) notifQuestionEl.checked = notif.question !== false;
     const notifPresentEl = document.getElementById('setting-notify-present');
     if (notifPresentEl) notifPresentEl.checked = notif.present !== false;
+    const notifBabeProactiveEl = document.getElementById('setting-notify-babe-proactive');
+    if (notifBabeProactiveEl) notifBabeProactiveEl.checked = notif.babeProactive !== false;
     // Language setting
     const langSelect = document.getElementById('setting-language');
     if (langSelect) langSelect.value = s.language || 'zh-CN';
@@ -5727,6 +5892,16 @@
     if (babeUserNicknameEl) babeUserNicknameEl.value = babe.userNickname || '';
     if (babeProactiveIntervalEl) babeProactiveIntervalEl.value = String(babe.proactiveInterval ?? 0);
     if (babeInitialAffectionEl) babeInitialAffectionEl.value = babe.initialAffection ?? 30;
+    // Babe 头像：迁移文件路径为 base64（与 AI/User 头像一致）
+    let babeAvatarData = babe.avatar || '';
+    if (babeAvatarData && !babeAvatarData.startsWith('data:') && !babeAvatarData.startsWith('http')) {
+      const enc = await window.api.avatarEncodeFile(babeAvatarData);
+      if (enc.ok) { babeAvatarData = enc.dataUrl; s.babe.avatar = babeAvatarData; await window.api.setSettings(s); }
+    }
+    // 头像框系统：加载 Babe 头像框状态并预加载 SVG
+    _avatarFrameState.babe = babe.avatarFrame || null;
+    if (_avatarFrameState.babe) await loadAvatarFrameSVG(_avatarFrameState.babe);
+    updateBabeAvatarPreview(babeAvatarData);
 
     // User Profile settings
     const userProfile = s.userProfile || {};
@@ -6288,13 +6463,21 @@
     const s = await window.api.getSettings();
     const budget = s.budget || {};
     const dailyCapInput = document.getElementById('setting-budget-daily-cap');
+    const weeklyCapInput = document.getElementById('setting-budget-weekly-cap');
     const capInput = document.getElementById('setting-budget-monthly-cap');
     const actionSel = document.getElementById('setting-budget-action');
     const fallbackInput = document.getElementById('setting-budget-fallback-model');
-    if (dailyCapInput) dailyCapInput.value = budget.dailyLimitUSD ?? budget.monthlyCapUsd ?? 0;
-    if (capInput) capInput.value = budget.monthlyLimitUSD ?? budget.monthlyCapUsd ?? 0;
-    if (actionSel) actionSel.value = budget.overAction || 'warn';
+    const tzSel = document.getElementById('setting-budget-timezone');
+    const weekModeSel = document.getElementById('setting-budget-week-mode');
+    const monthModeSel = document.getElementById('setting-budget-month-mode');
+    if (dailyCapInput) dailyCapInput.value = budget.dailyLimitUSD ?? 0;
+    if (weeklyCapInput) weeklyCapInput.value = budget.weeklyLimitUSD ?? 0;
+    if (capInput) capInput.value = budget.monthlyLimitUSD ?? 0;
+    if (actionSel) actionSel.value = budget.overLimitAction || budget.overAction || 'warn';
     if (fallbackInput) fallbackInput.value = budget.fallbackModel || '';
+    if (tzSel) tzSel.value = budget.timezone || 'Asia/Shanghai';
+    if (weekModeSel) weekModeSel.value = budget.weekMode || 'natural';
+    if (monthModeSel) monthModeSel.value = budget.monthMode || 'natural';
 
     // 峰谷时段字段
     const ph = budget.peakHours || {};
@@ -6452,9 +6635,13 @@
 
   async function saveBudgetSettings() {
     const dailyCapInput = document.getElementById('setting-budget-daily-cap');
+    const weeklyCapInput = document.getElementById('setting-budget-weekly-cap');
     const capInput = document.getElementById('setting-budget-monthly-cap');
     const actionSel = document.getElementById('setting-budget-action');
     const fallbackInput = document.getElementById('setting-budget-fallback-model');
+    const tzSel = document.getElementById('setting-budget-timezone');
+    const weekModeSel = document.getElementById('setting-budget-week-mode');
+    const monthModeSel = document.getElementById('setting-budget-month-mode');
     const listEl = document.getElementById('budget-pricing-list');
     const phEnabled = document.getElementById('setting-budget-peak-enabled');
     const phStart = document.getElementById('setting-budget-peak-start');
@@ -6486,11 +6673,16 @@
     }
     const budget = {
       dailyLimitUSD: parseFloat(dailyCapInput?.value) || 0,
+      weeklyLimitUSD: parseFloat(weeklyCapInput?.value) || 0,
       monthlyLimitUSD: parseFloat(capInput?.value) || 0,
       monthlyCapUsd: parseFloat(capInput?.value) || 0, // 保留旧字段以兼容旧代码
-      overAction: actionSel?.value || 'warn',
+      overLimitAction: actionSel?.value || 'warn',
+      overAction: actionSel?.value || 'warn', // 保留旧字段以兼容旧代码
       fallbackModel: (fallbackInput?.value || '').trim(),
       warningThreshold: 0.8,
+      timezone: tzSel?.value || 'Asia/Shanghai',
+      weekMode: weekModeSel?.value || 'natural',
+      monthMode: monthModeSel?.value || 'natural',
       models,
       peakHours: {
         enabled: !!phEnabled?.checked,
@@ -6538,12 +6730,109 @@
       const peakBadge = peak.enabled ? `<span style="font-size:10px;color:var(--text-tertiary);margin-left:6px">峰时段 ${peak.start}-${peak.end}</span>` : '';
       statusEl.innerHTML = `
         ${renderSection('今日消费' + peakBadge, st?.daily || {})}
+        ${st?.weekly ? renderSection('本周消费', st.weekly) : ''}
         ${renderSection('本月消费', st?.monthly || {})}
       `;
+      // 同步刷新图表区域（若存在）
+      const activePeriod = document.querySelector('.budget-period-btn.active');
+      if (activePeriod) loadBudgetChart(activePeriod.dataset.period);
     } catch (e) {
       statusEl.innerHTML = `<span style="color:var(--danger)">加载失败: ${e.message}</span>`;
     }
   }
+
+  // 预算统计图表：渲染卡片 + 柱状图 + 圆环占比
+  async function loadBudgetChart(period) {
+    const summaryEl = document.getElementById('budget-chart-summary');
+    const chartEl = document.getElementById('budget-chart');
+    const ringsEl = document.getElementById('budget-rings');
+    if (!summaryEl || !chartEl || !ringsEl) return;
+    try {
+      const [status, usage] = await Promise.all([
+        window.api.budgetGetStatus(),
+        window.api.usageGetRange(period || 'daily')
+      ]);
+      if (!status?.ok) {
+        summaryEl.innerHTML = '<div style="opacity:0.6">加载失败</div>';
+        return;
+      }
+      const periodInfo = status[period || 'daily'] || {};
+      const periodLabels = { daily: '今日', weekly: '本周', monthly: '本月' };
+      const fmt = (v) => `$${(Number(v) || 0).toFixed(4)}`;
+      const fmtLimit = (v) => `$${(Number(v) || 0).toFixed(2)}`;
+      const hasLimit = periodInfo.limitUSD > 0;
+      const pct = periodInfo.pct || 0;
+      const barColor = periodInfo.level === 'danger' ? '#f44336' : (periodInfo.level === 'warn' ? '#ff9800' : 'var(--accent)');
+
+      // 卡片
+      const cards = [
+        { label: `${periodLabels[period]}消费`, value: fmt(periodInfo.costUSD), accent: true },
+        { label: '输入消费', value: fmt(periodInfo.inputCost) },
+        { label: '输出消费', value: fmt(periodInfo.outputCost) }
+      ];
+      if ((periodInfo.cacheReadCost || 0) > 0) cards.push({ label: '缓存读消费', value: fmt(periodInfo.cacheReadCost) });
+      if ((periodInfo.cacheWriteCost || 0) > 0) cards.push({ label: '缓存写消费', value: fmt(periodInfo.cacheWriteCost) });
+      summaryEl.innerHTML = cards.map(c =>
+        `<div class="usage-card${c.accent ? ' accent' : ''} cost">
+          <div class="usage-card-label">${c.label}</div>
+          <div class="usage-card-value">${c.value}</div>
+        </div>`
+      ).join('');
+
+      // 柱状图（按小时或按日）
+      const isHourly = usage.isHourly;
+      const chartData = isHourly ? (usage.hours || []) : (usage.days || []);
+      const max = Math.max(0.0001, ...chartData.map(d => d.costUSD || 0));
+      if (chartData.length === 0) {
+        chartEl.innerHTML = '<div style="opacity:0.5;font-size:12px;width:100%;text-align:center;">无数据</div>';
+      } else {
+        chartEl.innerHTML = chartData.map(d => {
+          const h = Math.max(2, Math.round(((d.costUSD || 0) / max) * 100));
+          const label = isHourly ? `${d.hour}h` : (d.date || '').slice(5);
+          const title = isHourly ? `${d.hour}:00 - ${fmt(d.costUSD)}` : `${d.date}: ${fmt(d.costUSD)}`;
+          return `<div title="${title}" style="flex:1;min-width:4px;height:${h}px;background:var(--accent);border-radius:2px 2px 0 0;position:relative;">
+            <div style="position:absolute;bottom:-16px;left:50%;transform:translateX(-50%);font-size:9px;opacity:0.5;white-space:nowrap;">${label}</div>
+          </div>`;
+        }).join('');
+      }
+
+      // 圆环占比（日/周/月三个）
+      const periods = ['daily', 'weekly', 'monthly'];
+      const labels = { daily: '日', weekly: '周', monthly: '月' };
+      ringsEl.innerHTML = periods.map(p => {
+        const info = status[p] || {};
+        const pPct = info.pct || 0;
+        const pColor = info.level === 'danger' ? '#f44336' : (info.level === 'warn' ? '#ff9800' : 'var(--accent)');
+        const r = 15.915;
+        const dashArray = `${(pPct/100 * 100).toFixed(1)} ${(100 - pPct/100 * 100).toFixed(1)}`;
+        return `<div style="text-align:center">
+          <svg viewBox="0 0 36 36" width="64" height="64">
+            <circle cx="18" cy="18" r="${r}" fill="none" stroke="var(--border)" stroke-width="3"/>
+            <circle cx="18" cy="18" r="${r}" fill="none" stroke="${pColor}" stroke-width="3"
+              stroke-dasharray="${dashArray}" stroke-dashoffset="0" transform="rotate(-90 18 18)" stroke-linecap="round"/>
+            <text x="18" y="20" text-anchor="middle" font-size="9" fill="var(--text-primary)" font-weight="600">${pPct.toFixed(0)}%</text>
+          </svg>
+          <div style="font-size:11px;color:var(--text-secondary);margin-top:4px">${labels[p]}预算</div>
+          <div style="font-size:10px;color:var(--text-tertiary)">${fmt(info.costUSD)}${info.limitUSD > 0 ? ' / ' + fmtLimit(info.limitUSD) : ''}</div>
+        </div>`;
+      }).join('');
+    } catch (e) {
+      console.error('loadBudgetChart failed:', e);
+    }
+  }
+
+  // 预算周期按钮切换
+  document.querySelectorAll('.budget-period-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.budget-period-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      loadBudgetChart(btn.dataset.period);
+    });
+  });
+  // 周期设置变化时刷新图表
+  document.getElementById('setting-budget-timezone')?.addEventListener('change', () => loadBudgetChart('daily'));
+  document.getElementById('setting-budget-week-mode')?.addEventListener('change', () => loadBudgetChart('weekly'));
+  document.getElementById('setting-budget-month-mode')?.addEventListener('change', () => loadBudgetChart('monthly'));
   loadBudgetSettings();
 
   async function loadMcpServerList() {
@@ -6690,6 +6979,18 @@
     if (!preview) return;
     preview.innerHTML = makeAvatarHTML(avatarData, false, 'width:100%;height:100%;border-radius:50%;object-fit:cover');
     updateAvatarPreviewFrame('user');
+  }
+
+  function updateBabeAvatarPreview(avatarData) {
+    const preview = document.getElementById('setting-babe-avatar-preview');
+    if (!preview) return;
+    // Babe 默认头像：无图时使用心形图标
+    if (avatarData) {
+      preview.innerHTML = makeAvatarHTML(avatarData, true, 'width:100%;height:100%;border-radius:50%;object-fit:cover');
+    } else {
+      preview.innerHTML = '<i class="fa-solid fa-heart"></i>';
+    }
+    updateAvatarPreviewFrame('babe');
   }
 
   document.querySelectorAll('.settings-tab').forEach(btn => {
@@ -7128,13 +7429,14 @@
     });
   }
 
-  // 通知开关 - 总开关 + 4 个分类 + 测试按钮
+  // 通知开关 - 总开关 + 5 个分类 + 测试按钮
   const notifyToggles = [
     { id: 'setting-notify-enabled', key: 'enabled' },
     { id: 'setting-notify-approval', key: 'approval' },
     { id: 'setting-notify-session-done', key: 'sessionDone' },
     { id: 'setting-notify-question', key: 'question' },
-    { id: 'setting-notify-present', key: 'present' }
+    { id: 'setting-notify-present', key: 'present' },
+    { id: 'setting-notify-babe-proactive', key: 'babeProactive' }
   ];
   notifyToggles.forEach(({ id, key }) => {
     const el = document.getElementById(id);
@@ -7222,7 +7524,7 @@
         }
         // 主动消息频率变更时重启定时器
         if (key === 'proactiveInterval') {
-          restartBabeProactiveTimer();
+          restartBabeProactiveTimer(val);
         }
       });
     }
@@ -7309,6 +7611,31 @@
     await saveSettings(s);
     updateUserAvatarPreview('');
     window.api.webControlSetAvatars({ ai: s.aiPersona?.avatar || '', user: '' });
+  });
+
+  // ---- Babe Avatar Settings ----
+  document.getElementById('btn-babe-avatar-pick')?.addEventListener('click', async () => {
+    const result = await window.api.avatarPickAndEncode();
+    if (result.ok && result.dataUrl) {
+      const s = await window.api.getSettings();
+      if (!s.babe) s.babe = {};
+      s.babe.avatar = result.dataUrl;
+      await saveSettings(s);
+      // 同步到 babeAgent.settings
+      if (babeAgent?.settings) babeAgent.settings.babe = s.babe;
+      updateBabeAvatarPreview(result.dataUrl);
+      updateBabePersonaDisplay(s.babe);
+    }
+  });
+
+  document.getElementById('btn-babe-avatar-clear')?.addEventListener('click', async () => {
+    const s = await window.api.getSettings();
+    if (!s.babe) s.babe = {};
+    s.babe.avatar = '';
+    await saveSettings(s);
+    if (babeAgent?.settings) babeAgent.settings.babe = s.babe;
+    updateBabeAvatarPreview('');
+    updateBabePersonaDisplay(s.babe);
   });
 
   // ---- Entropy Source Settings ----
@@ -7431,6 +7758,8 @@
       s.proxy.mode = mode;
       await saveSettings(s);
       document.getElementById('manual-proxy-settings').style.display = mode === 'manual' ? '' : 'none';
+      // 动态应用代理到 Electron session + aria2（无需重启）
+      window.api.applyProxy(s.proxy).catch(() => {});
     });
   });
 
@@ -7441,6 +7770,8 @@
       if (!s.proxy) s.proxy = {};
       s.proxy[key] = e.target.value;
       await saveSettings(s);
+      // 动态应用代理到 Electron session + aria2（无需重启）
+      window.api.applyProxy(s.proxy).catch(() => {});
     });
   });
 
@@ -7586,8 +7917,10 @@
           document.querySelector('.nav-item[data-page="chat"]')?.classList.add('active');
           document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
           document.getElementById('page-chat')?.classList.add('active');
-          // Replay messages
+          // Replay messages（虚拟滚动分批渲染，避免长历史卡顿）
           chatMessages.innerHTML = '';
+          if (typeof VirtualScroller !== 'undefined') VirtualScroller.reset();
+          if (typeof VirtualScroller !== 'undefined') VirtualScroller.markBatchStart();
           WebUIMirror.pushDomEvent({ type: 'dom_clear', container: '#chat-messages' });
           WebUIMirror.pushDomEvent({ type: 'dom_remove', selector: '#thinking-indicator' });
           const toolCallMap = {};
@@ -7617,6 +7950,8 @@
               addSystemMessage(msg.content, { persist: false });
             }
           }
+          // 批量加载结束：触发首屏渲染（仅渲染可视区域内的消息）
+          if (typeof VirtualScroller !== 'undefined') VirtualScroller.markBatchEnd();
 
           requestAnimationFrame(() => {
             const last = chatMessages.lastElementChild;
@@ -7718,9 +8053,15 @@
       _avatarFrameState.user = s.userProfile.avatarFrame;
       await loadAvatarFrameSVG(s.userProfile.avatarFrame);
     }
+    if (s.babe?.avatarFrame) {
+      _avatarFrameState.babe = s.babe.avatarFrame;
+      await loadAvatarFrameSVG(s.babe.avatarFrame);
+    }
     if (s.aiPersona) updatePersonaDisplay(s.aiPersona);
     // 启动时立即读取命运之牌可见性设置项并应用，避免未读设置导致 UI 不一致
     applyTarotVisibility(s.tarotVisible !== false);
+    // 启动 Babe 主动消息定时器（即使用户未进入 Babe 模式，主动消息也应按时触发）
+    restartBabeProactiveTimer(s.babe?.proactiveInterval);
   }
 
   // Update mode switcher button labels based on language
@@ -7741,8 +8082,10 @@
     document.querySelector('.nav-item[data-page="chat"]')?.classList.add('active');
     document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
     document.getElementById('page-chat')?.classList.add('active');
-    // 清空并回放消息
+    // 清空并回放消息（虚拟滚动分批渲染，避免长历史卡顿）
     chatMessages.innerHTML = '';
+    if (typeof VirtualScroller !== 'undefined') VirtualScroller.reset();
+    if (typeof VirtualScroller !== 'undefined') VirtualScroller.markBatchStart();
     if (typeof WebUIMirror !== 'undefined' && WebUIMirror.pushDomEvent) {
       WebUIMirror.pushDomEvent({ type: 'dom_clear', container: '#chat-messages' });
       WebUIMirror.pushDomEvent({ type: 'dom_remove', selector: '#thinking-indicator' });
@@ -7773,6 +8116,8 @@
         addSystemMessage(msg.content, { persist: false });
       }
     }
+    // 批量加载结束：触发首屏渲染
+    if (typeof VirtualScroller !== 'undefined') VirtualScroller.markBatchEnd();
     requestAnimationFrame(() => {
       const last = chatMessages.lastElementChild;
       if (last) last.scrollIntoView({ behavior: 'smooth', block: 'end' });
@@ -8893,8 +9238,7 @@
         row.innerHTML = `<span class="esev">${sevLabel}</span>` +
           `<span class="eloc" title="${escapeHtmlSimple(item.filePath)}">${escapeHtmlSimple(shortPath)}:${item.line}:${item.column}</span>` +
           `<span class="emsg">${escapeHtmlSimple(item.message || '')}</span>` +
-          (item.ruleId ? `<span class="erule">${escapeHtmlSimple(item.ruleId)}</span>` : '') +
-          `<button class="code-eslint-add-btn" title="添加到 AI 上下文"><i class="fa-solid fa-comment-dots"></i></button>`;
+          `<span class="erule">${item.ruleId ? escapeHtmlSimple(item.ruleId) : ''}<button class="code-eslint-add-btn" title="添加到 AI 上下文"><i class="fa-solid fa-comment-dots"></i></button></span>`;
         // 点击行 → 跳转到文件（在 Monaco 编辑器中打开并定位到问题行）
         row.addEventListener('click', (e) => {
           if (e.target.closest('.code-eslint-add-btn')) return;
@@ -10547,6 +10891,9 @@
   let babeCurrentHistoryId = null;
   let babeStreamBubble = null;
   let babeProactiveTimer = null;
+  // 主动消息追踪：标记当前是否为主动消息回合，以及是否已产生内容
+  let babeProactiveActive = false;
+  let babeProactiveProduced = false;
 
   // 初始化 Babe Agent
   async function initBabeAgent() {
@@ -10606,6 +10953,8 @@
         switch (type) {
           case 'assistant':
             addBabeMessage('assistant', data);
+            // 主动消息追踪：收到 assistant 内容时标记已产出
+            if (babeProactiveActive) babeProactiveProduced = true;
             break;
           case 'system':
             addBabeMessage('system', data);
@@ -10654,6 +11003,8 @@
             const finalContent = (data.content || bubble.rawContent).replace(/【好感度[+-]?\d+】/g, '').trimEnd();
             bubble.rawContent = finalContent;
             const hasContent = !!(finalContent && finalContent.trim());
+            // 主动消息追踪：流式结束且有内容时标记已产出
+            if (babeProactiveActive && hasContent) babeProactiveProduced = true;
             if (hasReasoning) {
               // 输出结束后自动折叠 Reasoning（与 Chat 模式一致），用户可点击展开
               bubble.reasoningSection.classList.add('collapsed');
@@ -10741,8 +11092,11 @@
     const msg = document.createElement('div');
     msg.className = 'babe-message assistant streaming';
     msg.id = 'babe-stream-' + Date.now();
+    // Babe 流式气泡头像：使用 Babe 头像（含头像框）
+    const babeAvatar = babeAgent?.settings?.babe?.avatar || '';
+    const avatarHTML = makeBabeFramedAvatarHTML(babeAvatar, 'babe');
     msg.innerHTML = `
-      <div class="babe-msg-avatar"><i class="fa-solid fa-heart"></i></div>
+      <div class="babe-msg-avatar">${avatarHTML}</div>
       <div class="babe-msg-body">
         <div class="reasoning-section" style="display:none;">
           <div class="reasoning-header" onclick="this.parentElement.classList.toggle('collapsed')">
@@ -10778,10 +11132,20 @@
 
     const msg = document.createElement('div');
     msg.className = 'babe-message ' + role;
-    const avatarIcon = role === 'assistant' ? 'fa-heart' : (role === 'system' ? 'fa-info-circle' : 'fa-user');
     const rendered = (role === 'assistant' || role === 'system') ? renderMarkdown(content) : escapeHtml(content);
+    // 头像：assistant 用 Babe 头像（含头像框），user 用用户头像（含头像框），system 用图标
+    let avatarHTML;
+    if (role === 'assistant') {
+      const babeAvatar = babeAgent?.settings?.babe?.avatar || '';
+      avatarHTML = makeBabeFramedAvatarHTML(babeAvatar, 'babe');
+    } else if (role === 'user') {
+      const userAvatar = babeAgent?.settings?.userProfile?.avatar || '';
+      avatarHTML = makeBabeFramedAvatarHTML(userAvatar, 'user');
+    } else {
+      avatarHTML = '<i class="fa-solid fa-info-circle"></i>';
+    }
     msg.innerHTML = `
-      <div class="babe-msg-avatar"><i class="fa-solid ${avatarIcon}"></i></div>
+      <div class="babe-msg-avatar">${avatarHTML}</div>
       <div class="babe-msg-body">
         <div class="babe-msg-bubble markdown-body">${rendered}</div>
         <div class="babe-msg-time">${new Date().toLocaleTimeString('zh-CN', {hour12: false})}</div>
@@ -10870,14 +11234,42 @@
     setTimeout(() => { div.remove(); if (div.id) WebUIMirror.pushDomEvent({ type: 'dom_remove', selector: '#' + div.id }); }, 3000);
   }
 
-  // 更新 Babe persona 显示（姓名、头像）
-  function updateBabePersonaDisplay() {
-    if (!babeAgent?.settings?.babe) return;
-    const babe = babeAgent.settings.babe;
+  // 更新 Babe persona 显示（姓名、头像、头像框）
+  // babeOverride: 可选，传入最新的 babe 设置对象（用于尚未初始化 babeAgent 时）
+  function updateBabePersonaDisplay(babeOverride) {
+    const babe = babeOverride || babeAgent?.settings?.babe;
+    if (!babe) return;
     const nameEl = document.getElementById('babe-name-display');
     if (nameEl) nameEl.textContent = babe.name || 'Babe';
     // 增量推送：Babe 名称更新同步到 WebUI
     if (nameEl) WebUIMirror.pushDomEvent({ type: 'dom_text', selector: '#babe-name-display', text: babe.name || 'Babe' });
+    // Hero 头像（含头像框叠加层）
+    const avatarEl = document.getElementById('babe-avatar');
+    if (avatarEl) {
+      const frameId = _avatarFrameState.babe;
+      const hasFrame = !!(frameId && _avatarFrameCache[frameId]);
+      // 有头像框时不设置 inline 尺寸，让 CSS .has-frame > img 控制
+      const avatarSize = hasFrame
+        ? 'border-radius:50%;object-fit:cover'
+        : 'width:100%;height:100%;border-radius:50%;object-fit:cover';
+      // 使用 makeAvatarHTML（直接子元素 img/i），与 AI Hero 头像结构一致
+      // Babe 无头像时使用心形图标作为默认
+      let inner;
+      if (babe.avatar) {
+        inner = makeAvatarHTML(babe.avatar, true, avatarSize);
+      } else {
+        inner = '<i class="fa-solid fa-heart" style="' + avatarSize + '"></i>';
+      }
+      avatarEl.innerHTML = inner;
+      if (hasFrame) {
+        avatarEl.classList.add('has-frame');
+        avatarEl.insertAdjacentHTML('beforeend', makeFrameOverlayHTML(frameId));
+      } else {
+        avatarEl.classList.remove('has-frame');
+      }
+      // 增量推送：Babe Hero 头像更新同步到 WebUI
+      WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#babe-avatar', html: avatarEl.innerHTML, attr: 'class', value: avatarEl.className });
+    }
   }
 
   // 发送 Babe 消息
@@ -10986,12 +11378,17 @@
         // 用 DocumentFragment 批量构建 DOM，最后一次插入
         const frag = document.createDocumentFragment();
         const toolCallMap = {};
+        // 预取头像数据，避免每条消息都读取
+        const babeAvatar = babeAgent?.settings?.babe?.avatar || '';
+        const userAvatar = babeAgent?.settings?.userProfile?.avatar || '';
+        const babeAvatarHTML = makeBabeFramedAvatarHTML(babeAvatar, 'babe');
+        const userAvatarHTML = makeBabeFramedAvatarHTML(userAvatar, 'user');
         for (const m of babeMessages) {
           if (m.role === 'user') {
             const content = typeof m.content === 'string' ? m.content : '[多模态内容]';
             const msg = document.createElement('div');
             msg.className = 'babe-message user';
-            msg.innerHTML = `<div class="babe-msg-avatar"><i class="fa-solid fa-user"></i></div><div class="babe-msg-body"><div class="babe-msg-bubble markdown-body">${escapeHtml(content)}</div></div>`;
+            msg.innerHTML = `<div class="babe-msg-avatar">${userAvatarHTML}</div><div class="babe-msg-body"><div class="babe-msg-bubble markdown-body">${escapeHtml(content)}</div></div>`;
             frag.appendChild(msg);
           } else if (m.role === 'assistant') {
             // assistant content 可能是字符串或数组（多模态）
@@ -10999,7 +11396,7 @@
             if (textContent) {
               const msg = document.createElement('div');
               msg.className = 'babe-message assistant';
-              msg.innerHTML = `<div class="babe-msg-avatar"><i class="fa-solid fa-heart"></i></div><div class="babe-msg-body"><div class="babe-msg-bubble markdown-body">${renderMarkdown(textContent)}</div></div>`;
+              msg.innerHTML = `<div class="babe-msg-avatar">${babeAvatarHTML}</div><div class="babe-msg-body"><div class="babe-msg-bubble markdown-body">${renderMarkdown(textContent)}</div></div>`;
               frag.appendChild(msg);
             }
             // 渲染 tool_calls
@@ -11065,12 +11462,13 @@
   }
 
   // 主动消息定时器
-  function restartBabeProactiveTimer() {
+  function restartBabeProactiveTimer(intervalOverride) {
     if (babeProactiveTimer) {
       clearInterval(babeProactiveTimer);
       babeProactiveTimer = null;
     }
-    const interval = babeAgent?.settings?.babe?.proactiveInterval;
+    // 支持在 babeAgent 尚未初始化时由启动流程传入 interval
+    const interval = intervalOverride ?? babeAgent?.settings?.babe?.proactiveInterval;
     if (!interval || interval <= 0) return;
     // 转换为毫秒（设置中以分钟为单位）
     const ms = interval * 60 * 1000;
@@ -11080,12 +11478,19 @@
   }
 
   // 主动发消息：让 Babe 主动发起一条话题
+  // 无论当前是否在 Babe 模式都会触发；消息只追加到 Babe Session（不会泄露到其他模式）
+  // 如果当前没有 Babe 会话，则自动新建一个
   async function babeProactiveMessage() {
-    if (!babeAgent) return;
+    // 若 babeAgent 尚未初始化，则自动新建 Babe 会话
+    if (!babeAgent) {
+      const ok = await initBabeAgent();
+      if (!ok) return;
+    }
     if (babeAgent.running) return; // 正在回复中，跳过
-    // 只在 Babe 模式页面可见时主动发消息
-    const babePage = document.getElementById('page-babe');
-    if (!babePage || !babePage.classList.contains('active')) return;
+    // 注意：不再检查是否在 Babe 模式页面 —— 主动消息在任何模式下都应触发
+    // 聊天内容只写入 #babe-chat-messages 和 babeMessages，天然与其他模式隔离
+    babeProactiveActive = true;
+    babeProactiveProduced = false;
     try {
       // 随机选一个话题提示，交给 LLM 以 Babe 口吻生成主动消息
       const topicHints = [
@@ -11101,6 +11506,32 @@
       await babeAgent.proactiveSend(hint);
     } catch (e) {
       console.error('[Babe] proactive message failed:', e);
+    } finally {
+      // 主动消息接收完成时发送系统通知（仅当确实产生了内容）
+      const produced = babeProactiveProduced;
+      babeProactiveActive = false;
+      babeProactiveProduced = false;
+      if (produced) {
+        const babeName = babeAgent?.settings?.babe?.name || 'Babe';
+        // 用户正在 Babe 模式页面时无需通知（直接可见）；否则绕过 sendAppNotification 的焦点检查
+        const babePage = document.getElementById('page-babe');
+        const onBabePage = !!(babePage && babePage.classList.contains('active'));
+        if (!onBabePage) {
+          try {
+            const s = await window.api.getSettings();
+            const n = s.notifications || {};
+            if (n.enabled !== false && n.babeProactive !== false) {
+              await window.api.sendNotification({
+                title: `${babeName} 主动发来一条消息`,
+                body: '快去看看 TA 说了什么吧',
+                category: 'babeProactive'
+              });
+            }
+          } catch (e) {
+            console.warn('[Babe] proactive notification failed:', e?.message || e);
+          }
+        }
+      }
     }
   }
 

@@ -162,7 +162,7 @@ const CODE_TOOLS = new Set([
   // 终端（对标 Claude Code 的 Bash）
   'makeTerminal', 'runTerminalCommand', 'awaitTerminalCommand', 'killTerminal',
   // 网络（代码任务常需搜索文档/获取依赖信息）
-  'webSearch', 'webFetch', 'downloadFile', 'httpRequest',
+  'webSearch', 'webFetch', 'downloadFile', 'getDownloadStatus', 'pauseDownload', 'resumeDownload', 'cancelDownload', 'httpRequest',
   // 知识库（代码片段/项目知识）
   'knowledgeBaseSearch', 'knowledgeBaseAdd',
   // 记忆（跨会话记住项目约定）
@@ -359,7 +359,11 @@ const TOOL_DEFINITIONS = [
   { name: 'runPcbEdaCommand', desc: '在 PCB-EDA 中执行单条命令', icon: 'fa-terminal', category: 'PCB-EDA', sensitive: false },
   { name: 'runPcbEdaCommands', desc: '批量执行多条 PCB-EDA 命令', icon: 'fa-list-ol', category: 'PCB-EDA', sensitive: false },
   { name: 'askQuestions', desc: '询问用户问题收集信息', icon: 'fa-clipboard-question', category: '交互工具', sensitive: false },
-  { name: 'downloadFile', desc: '从互联网下载文件到工作区', icon: 'fa-download', category: '网络工具', sensitive: true },
+  { name: 'downloadFile', desc: '异步下载文件到工作区（基于aria2，立即返回gid）', icon: 'fa-download', category: '网络工具', sensitive: true },
+  { name: 'getDownloadStatus', desc: '查询下载任务状态（进度/速度/完成情况）', icon: 'fa-chart-line', category: '网络工具', sensitive: false },
+  { name: 'pauseDownload', desc: '暂停下载任务', icon: 'fa-pause', category: '网络工具', sensitive: false },
+  { name: 'resumeDownload', desc: '恢复暂停的下载任务', icon: 'fa-play', category: '网络工具', sensitive: false },
+  { name: 'cancelDownload', desc: '取消下载任务', icon: 'fa-stop', category: '网络工具', sensitive: false },
   { name: 'inviteGame', desc: '邀请用户玩游戏（飞花令/三国杀/谁是卧底/成语接龙/是否猜人物）', icon: 'fa-gamepad', category: '游戏', sensitive: false },
   { name: 'mcpListTools', desc: '列出MCP服务端可用工具（刷新动态MCP工具）', icon: 'fa-list', category: 'MCP', sensitive: false },
   // ---- 扩充网络工具 ----
@@ -602,7 +606,11 @@ function getToolSchemas(enabledTools, mode) {
     askQuestions: { type: 'function', function: { name: 'askQuestions', description: '向用户提出问题收集信息，支持单选/多选/自由输入。返回{ok:true,answers:Array}', parameters: { type: 'object', properties: { questions: { type: 'array', items: { type: 'object', properties: { question: { type: 'string', description: '问题文本' }, options: { type: 'array', items: { type: 'string' }, description: '选项列表(可选,留空则为自由输入)' }, multiSelect: { type: 'boolean', description: '是否多选(仅当有options时有效)' } }, required: ['question'] }, description: '问题列表' } }, required: ['questions'] } } },
     eslintLint: { type: 'function', function: { name: 'eslintLint', description: '对当前 Code 模式工作区执行 ESLint 静态代码诊断。返回所有支持文件（JS/TS/JSX/TSX/Vue/Svelte 等）中的错误、警告与提示信息，包含文件路径、行号、列号、严重性、规则 ID 与消息。当用户报告代码有 bug、询问代码质量、要求重构或修复 lint 报错时优先调用本工具获取全量诊断。返回 {ok, summary:{total,errors,warnings,infos,fileCount,scannedFiles}, results:[{filePath,file,line,column,severity,message,ruleId}], error?}。', parameters: { type: 'object', properties: { files: { type: 'array', items: { type: 'string' }, description: '可选：仅诊断指定的文件列表（绝对路径或相对工作区路径）。不传则扫描整个工作区。' }, maxFiles: { type: 'number', description: '可选：单次扫描文件数上限（默认 500）' } }, required: [] } } },
     eslintLintFile: { type: 'function', function: { name: 'eslintLintFile', description: '对单个文件执行 ESLint 诊断（用于打开文件后实时检查或聚焦修复某文件的 lint 问题）。返回 {ok, summary, results, error?}。', parameters: { type: 'object', properties: { path: { type: 'string', description: '要诊断的文件路径（绝对路径或工作区相对路径）' } }, required: ['path'] } } },
-    downloadFile: { type: 'function', function: { name: 'downloadFile', description: '从互联网下载文件到工作区目录', parameters: { type: 'object', properties: { url: { type: 'string', description: '文件URL' }, filename: { type: 'string', description: '保存的文件名(可选,默认从URL提取)' } }, required: ['url'] } } },
+    downloadFile: { type: 'function', function: { name: 'downloadFile', description: '异步下载文件到工作区目录（基于 aria2，多线程+断点续传）。立即返回 gid（下载任务 ID），不阻塞后续操作。可用 getDownloadStatus 查询进度。支持 HTTP/HTTPS/FTP/BT/磁力链接。返回 {ok:true,gid,dir} 或 {ok:false,error}', parameters: { type: 'object', properties: { url: { type: 'string', description: '下载链接（支持 HTTP/HTTPS/FTP/磁力/magnet）' }, filename: { type: 'string', description: '保存的文件名(可选,默认从URL提取)' }, headers: { type: 'object', description: '自定义请求头键值对(可选)' }, split: { type: 'number', description: '分片数(默认5,大文件建议增大以加速)' }, maxConnections: { type: 'number', description: '每服务器最大连接数(默认5,1-16)' }, minSplitSize: { type: 'string', description: '最小分片大小(默认1M,如"2M","512K")' }, timeout: { type: 'number', description: '下载超时秒数(默认60)' }, connectTimeout: { type: 'number', description: '连接超时秒数(默认60)' }, maxRetries: { type: 'number', description: '最大重试次数(默认5,0表示无限)' }, retryWait: { type: 'number', description: '重试间隔秒数(默认0)' }, userAgent: { type: 'string', description: '自定义User-Agent(可选)' }, referer: { type: 'string', description: '自定义Referer(可选)' } }, required: ['url'] } } },
+    getDownloadStatus: { type: 'function', function: { name: 'getDownloadStatus', description: '查询下载任务状态。可查单个任务(gid)或列出所有任务(不传gid)。返回 {ok, status|items}，状态含 progress/speed/totalLength/completedLength。状态值: active(下载中)/waiting(等待)/paused(已暂停)/complete(已完成)/error(错误)/removed(已取消)', parameters: { type: 'object', properties: { gid: { type: 'string', description: '下载任务ID(可选,不传则列出所有任务)' } }, required: [] } } },
+    pauseDownload: { type: 'function', function: { name: 'pauseDownload', description: '暂停指定下载任务。返回 {ok:true} 或 {ok:false,error}', parameters: { type: 'object', properties: { gid: { type: 'string', description: '下载任务ID' }, force: { type: 'boolean', description: '是否强制暂停(不等待服务器响应,默认false)' } }, required: ['gid'] } } },
+    resumeDownload: { type: 'function', function: { name: 'resumeDownload', description: '恢复暂停的下载任务。返回 {ok:true} 或 {ok:false,error}', parameters: { type: 'object', properties: { gid: { type: 'string', description: '下载任务ID' } }, required: ['gid'] } } },
+    cancelDownload: { type: 'function', function: { name: 'cancelDownload', description: '取消下载任务并删除已下载的部分文件。返回 {ok:true} 或 {ok:false,error}', parameters: { type: 'object', properties: { gid: { type: 'string', description: '下载任务ID' }, force: { type: 'boolean', description: '是否强制取消(默认true)' } }, required: ['gid'] } } },
     inviteGame: { type: 'function', function: { name: 'inviteGame', description: '邀请用户玩游戏。游戏类型：flyingFlower(飞花令,诗词接龙)、sanguosha(三国杀,卡牌策略)、undercover(谁是卧底,推理游戏)、idiom(成语接龙,四字成语首尾相接)、guessCharacter(是否猜人物,通过是/否提问猜出人物)。会向用户展示一张游戏邀请卡片，用户可以接受或忽略，并指定AI参与人数。', parameters: { type: 'object', properties: { game: { type: 'string', enum: ['flyingFlower', 'sanguosha', 'undercover', 'idiom', 'guessCharacter'], description: '游戏类型' }, message: { type: 'string', description: '邀请语（显示在邀请卡片上）' }, suggestedAgents: { type: 'number', description: '建议的AI Agent参与人数(用户可调整)' } }, required: ['game'] } } },
     mcpListTools: { type: 'function', function: { name: 'mcpListTools', description: '列出并刷新所有已连接MCP服务器的工具。刷新后MCP工具会作为独立工具可直接调用（mcp__serverName__toolName格式）。', parameters: { type: 'object', properties: { serverName: { type: 'string', description: '可选,指定MCP服务器名称,不传则列出所有' } }, required: [] } } },
     // ---- 扩充网络工具 schemas ----

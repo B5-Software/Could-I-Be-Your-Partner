@@ -207,6 +207,7 @@ contextBridge.exposeInMainWorld('api', {
   llmFetchModels: (provider, apiUrl, apiKey) => ipcRenderer.invoke('llm:fetchModels', provider, apiUrl, apiKey),
   usageGetRange: (period) => ipcRenderer.invoke('usage:getRange', period),
   budgetGetStatus: () => ipcRenderer.invoke('budget:getStatus'),
+  budgetCheck: () => ipcRenderer.invoke('budget:check'),
   // ESLint
   eslintIsLintable: (workspacePath) => ipcRenderer.invoke('eslint:isLintable', workspacePath),
   eslintLint: (workspacePath, opts) => ipcRenderer.invoke('eslint:lint', workspacePath, opts),
@@ -280,6 +281,22 @@ contextBridge.exposeInMainWorld('api', {
 
   // Download
   downloadFile: (url, filename, workspacePath) => ipcRenderer.invoke('file:download', url, filename, workspacePath),
+
+  // Aria2 Download Manager（异步下载、状态查询、暂停/恢复/取消）
+  aria2: {
+    start: () => ipcRenderer.invoke('aria2:start'),
+    status: () => ipcRenderer.invoke('aria2:status'),
+    addUri: (url, opts) => ipcRenderer.invoke('aria2:add-uri', url, opts),
+    tellStatus: (gid) => ipcRenderer.invoke('aria2:tell-status', gid),
+    listAll: () => ipcRenderer.invoke('aria2:list-all'),
+    pause: (gid, force) => ipcRenderer.invoke('aria2:pause', gid, force),
+    unpause: (gid) => ipcRenderer.invoke('aria2:unpause', gid),
+    cancel: (gid, force) => ipcRenderer.invoke('aria2:cancel', gid, force),
+    removeResult: (gid) => ipcRenderer.invoke('aria2:remove-result', gid),
+  },
+
+  // Proxy（代理设置应用 + aria2 同步）
+  applyProxy: (proxy) => ipcRenderer.invoke('proxy:apply', proxy),
 
   // Network Tools
   httpRequest: (opts) => ipcRenderer.invoke('net:httpRequest', opts),

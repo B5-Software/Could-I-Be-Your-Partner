@@ -152,7 +152,8 @@ body.no-tarot .setting-label-tarot + .toggle-switch + .setting-hint {
   padding: 10px 12px;
   box-shadow: 0 4px 16px rgba(0,0,0,0.15);
   font-size: 12px;
-  min-width: 180px;
+  min-width: 220px;
+  max-width: 320px;
   display: none;
 }
 
@@ -169,8 +170,25 @@ body.no-tarot .setting-label-tarot + .toggle-switch + .setting-hint {
 .context-tooltip-row {
   display: flex;
   justify-content: space-between;
+  gap: 12px;
   margin: 2px 0;
   color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.context-tooltip-row > span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.context-tooltip-row > span:first-child {
+  flex-shrink: 0;
+}
+
+.context-tooltip-row > span:last-child {
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
 }
 
 .context-tooltip-mini-ring {
@@ -683,6 +701,19 @@ body.no-tarot .setting-label-tarot + .toggle-switch + .setting-hint {
 .message-content li,
 .markdown-body li {
   margin-bottom: 2px;
+}
+
+/* ===== Virtual Scroller: 离屏消息占位 ===== */
+.message.vsc-placeholder {
+  min-height: 60px;
+  display: flex;
+  align-items: center;
+}
+.vsc-placeholder-text {
+  color: var(--text-secondary, #888);
+  font-size: 12px;
+  font-style: italic;
+  opacity: 0.6;
 }
 .message-content ul > li::marker,
 .markdown-body ul > li::marker {
@@ -1263,11 +1294,41 @@ body.no-tarot .setting-label-tarot + .toggle-switch + .setting-hint {
   background: var(--bg-secondary);
   font-size: 13px;
 }
+.sub-agent-card-result-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+}
 .sub-agent-card-result-label {
   font-size: 11px;
   color: var(--accent);
   font-weight: 600;
-  margin-bottom: 6px;
+}
+.sub-agent-result-toggle {
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.sub-agent-card-result-preview {
+  color: var(--text-secondary, #888);
+  font-size: 12px;
+  line-height: 1.4;
+  cursor: pointer;
+}
+.sub-agent-card-result-full {
+  margin-top: 8px;
+  max-height: 400px;
+  overflow-y: auto;
+}
+.sub-agent-card-warn {
+  padding: 6px 14px;
+  font-size: 11px;
+  color: #f59e0b;
+  background: rgba(245, 158, 11, 0.1);
+  border-top: 1px solid rgba(245, 158, 11, 0.2);
 }
 
 /* Sub-agent detail modal */
@@ -1901,51 +1962,72 @@ body.no-tarot .setting-label-tarot + .toggle-switch + .setting-hint {
   padding: 16px 8px;
   font-size: 0.95em;
 }
+/* ESLint 错误条目：两行紧凑布局
+   第一行：[图标 严重性] 位置(截断)  [规则] [添加按钮]
+   第二行：消息内容（完整显示，自动换行）
+   避免长消息把单行挤成多行 */
 .code-eslint-item {
-  display: flex;
-  align-items: flex-start;
-  gap: 4px;
-  padding: 3px 6px;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  grid-template-areas:
+    "sev loc actions"
+    "msg msg msg";
+  gap: 1px 6px;
+  padding: 4px 6px;
   border-radius: 3px;
   cursor: pointer;
   transition: background 0.1s;
   border-left: 3px solid transparent;
+  align-items: center;
 }
 .code-eslint-item:hover { background: var(--bg-hover, rgba(0,0,0,0.06)); }
 .code-eslint-item.error { border-left-color: #dc3545; }
 .code-eslint-item.warning { border-left-color: #ffc107; }
 .code-eslint-item.info { border-left-color: #0d6efd; }
 .code-eslint-item .esev {
+  grid-area: sev;
   font-weight: 700;
-  flex-shrink: 0;
-  font-size: 0.95em;
-  min-width: 36px;
+  font-size: 0.9em;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  white-space: nowrap;
 }
 .code-eslint-item.error .esev { color: #dc3545; }
 .code-eslint-item.warning .esev { color: #b8860b; }
 .code-eslint-item.info .esev { color: #0d6efd; }
 .code-eslint-item .eloc {
-  flex-shrink: 0;
+  grid-area: loc;
   color: var(--text-tertiary);
-  font-size: 0.92em;
-  min-width: 70px;
+  font-size: 0.9em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.code-eslint-item .erule {
+  grid-area: actions;
+  color: var(--text-tertiary);
+  font-size: 0.85em;
+  opacity: 0.7;
+  font-style: italic;
+  white-space: nowrap;
+  justify-self: end;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 .code-eslint-item .emsg {
-  flex: 1;
+  grid-area: msg;
   min-width: 0;
   white-space: pre-wrap;
   word-break: break-word;
   color: var(--text-primary);
-}
-.code-eslint-item .erule {
-  flex-shrink: 0;
-  color: var(--text-tertiary);
-  font-size: 0.9em;
-  opacity: 0.7;
-  font-style: italic;
+  font-size: 0.92em;
+  line-height: 1.3;
+  margin-top: 1px;
 }
 .code-eslint-add-btn {
-  margin-left: 4px;
   padding: 1px 6px;
   border: 1px solid var(--border);
   background: transparent;
@@ -2301,6 +2383,37 @@ body.no-tarot .setting-label-tarot + .toggle-switch + .setting-hint {
   font-size: 1.4em;
   box-shadow: 0 2px 8px rgba(233, 30, 99, 0.3);
   flex-shrink: 0;
+  overflow: visible; /* 允许头像框装饰溢出 */
+  position: relative;
+}
+/* Babe Hero 有头像框时：头像与容器同尺寸，头像框装饰外溢显示 */
+.babe-mode .babe-avatar.has-frame {
+  background: transparent;
+  box-shadow: none;
+}
+.babe-mode .babe-avatar.has-frame > img,
+.babe-mode .babe-avatar.has-frame > i {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.babe-mode .babe-avatar .avatar-frame-overlay {
+  position: absolute;
+  inset: -20%;
+  width: 140%;
+  height: 140%;
+  pointer-events: none;
+  z-index: 2;
+}
+.babe-mode .babe-avatar .avatar-frame-overlay svg {
+  width: 100%;
+  height: 100%;
+  display: block;
 }
 .babe-mode .babe-info { flex: 1; min-width: 0; }
 .babe-mode .babe-info h2 {
@@ -2401,6 +2514,28 @@ body.no-tarot .setting-label-tarot + .toggle-switch + .setting-hint {
   justify-content: center;
   font-size: 0.9em;
   flex-shrink: 0;
+  overflow: visible; /* 允许头像框装饰溢出 */
+  position: relative;
+}
+/* Babe 消息头像框叠加层 */
+.babe-mode .babe-message .babe-msg-avatar .avatar-frame-overlay {
+  position: absolute;
+  inset: -16%;
+  width: 132%;
+  height: 132%;
+  pointer-events: none;
+  z-index: 2;
+}
+.babe-mode .babe-message .babe-msg-avatar .avatar-frame-overlay svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+/* 有头像框时，内部 img/i 填满容器 */
+.babe-mode .babe-message .babe-msg-avatar .avatar-framed-wrap > img,
+.babe-mode .babe-message .babe-msg-avatar .avatar-framed-wrap > i {
+  position: relative;
+  z-index: 1;
 }
 .babe-mode .babe-message.assistant .babe-msg-avatar {
   background: linear-gradient(135deg, var(--babe-pink), var(--babe-heart));

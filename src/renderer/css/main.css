@@ -427,6 +427,7 @@ body {
 }
 
 .btn-sm { padding: 5px 12px; font-size: 13px; }
+.btn-xs { padding: 2px 6px; font-size: 11px; min-width: 22px; height: 22px; }
 
 /* Search Bar */
 .search-bar {

@@ -410,6 +410,192 @@ class ContextManager {
     this.summaries = [];
     this.compactBoundaries = [];
   }
+
+  /**
+   * 清理上下文中可能导致 API 400（请求不合法）的损坏消息。
+   * 常见损坏场景（中断 Agent 时产生）：
+   *   1. 末尾是空 assistant 消息（content 为空字符串且无 tool_calls）
+   *   2. assistant 的 tool_calls 缺少对应 tool 结果消息（tool_call_id 未匹配）
+   *   3. tool 消息找不到对应 assistant.tool_calls（孤儿 tool 结果）
+   *   4. 消息 content 为 null/undefined（应为字符串）
+   *   5. 空字符串 content 的 user/assistant 消息
+   *   6. tool_calls 中 arguments 为非字符串（应为 JSON 字符串）
+   *
+   * 本方法保持幂等：多次调用结果一致。不会删除用户消息和摘要。
+   * 返回 { fixed: boolean, removedCount, details } 用于日志展示。
+   */
+  sanitize() {
+    let removedCount = 0;
+    const details = [];
+    const before = this.messages.length;
+
+    // 第一遍：规范化字段类型（不删除，仅修正非法值）
+    for (const msg of this.messages) {
+      // content 必须是字符串或合法数组；null/undefined → ''
+      if (msg.content === null || msg.content === undefined) {
+        msg.content = '';
+        details.push('修正空 content');
+      }
+      // tool_calls.arguments 必须是字符串
+      if (Array.isArray(msg.tool_calls)) {
+        for (const tc of msg.tool_calls) {
+          if (tc && tc.function && typeof tc.function.arguments !== 'string') {
+            try { tc.function.arguments = JSON.stringify(tc.function.arguments ?? {}); }
+            catch { tc.function.arguments = '{}'; }
+            details.push('修正 tool_calls.arguments 类型');
+          }
+          // 缺失 id/type
+          if (!tc.id) tc.id = 'call_' + Math.random().toString(36).slice(2, 10);
+          if (!tc.type) tc.type = 'function';
+        }
+      }
+      // tool 消息必须要有 tool_call_id
+      if (msg.role === 'tool' && !msg.tool_call_id) {
+        msg.tool_call_id = 'orphan_' + Math.random().toString(36).slice(2, 10);
+        details.push('补充 tool.tool_call_id');
+      }
+    }
+
+    // 第二遍：从末尾向前删除「空尾消息」（中断时残留的空 assistant）
+    // 只删除连续的尾部空 assistant（content='' 且无 tool_calls）
+    while (this.messages.length > 0) {
+      const last = this.messages[this.messages.length - 1];
+      if (last.role === 'assistant' && (last.content === '' || last.content == null) &&
+          (!last.tool_calls || last.tool_calls.length === 0)) {
+        this.messages.pop();
+        removedCount++;
+        details.push('删除尾部空 assistant');
+      } else {
+        break;
+      }
+    }
+
+    // 第三遍：循环修复 assistant.tool_calls 与 tool 消息的配对关系
+    // 规则（严格，修复 "Messages with role 'tool' must be a response to a
+    //       preceding message with 'tool_calls'" 错误）：
+    //   1. 每个 tool 消息必须在其之前的某条 assistant.tool_calls 中找到 id（顺序检查！）
+    //   2. 每个 assistant.tool_calls[i].id 必须在其之后有恰好一条 tool 消息对应
+    //   3. 同一 tool_call_id 的 tool 消息只保留第一条（去重）
+    //   4. assistant 的 tool_calls 部分缺失结果时，为缺失项补全占位 tool 结果
+    //      （而不是删除整个 assistant，保留有效内容）
+    const MAX_SANITIZER_PASSES = 10;
+    for (let pass = 0; pass < MAX_SANITIZER_PASSES; pass++) {
+      let changed = false;
+
+      // 3a. 单次遍历：按顺序检查每条消息的合法性
+      //     - tool 消息必须能在其之前的 assistant.tool_calls 中找到 id（顺序！）
+      //     - 同一 tool_call_id 的 tool 消息去重
+      //     - assistant 的 tool_calls 缺失后续 tool 结果时补全占位
+      const seenToolCallIds = new Set();   // 所有 assistant.tool_calls 的 id（全局）
+      const answeredToolCallIds = new Set(); // 已有 tool 消息回复的 id
+      const newMessages = [];
+
+      for (let i = 0; i < this.messages.length; i++) {
+        const msg = this.messages[i];
+
+        if (msg.role === 'assistant' && Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0) {
+          // 记录该 assistant 的 tool_call id
+          for (const tc of msg.tool_calls) {
+            seenToolCallIds.add(tc.id);
+          }
+          newMessages.push(msg);
+          continue;
+        }
+
+        if (msg.role === 'tool') {
+          // 顺序检查：tool 消息的 tool_call_id 必须在之前的 assistant 中出现过
+          if (!seenToolCallIds.has(msg.tool_call_id)) {
+            removedCount++;
+            details.push('删除无前置 tool_calls 的 tool 消息（顺序错误/孤儿）');
+            changed = true;
+            continue;
+          }
+          // 去重：同一 tool_call_id 只保留第一条
+          if (answeredToolCallIds.has(msg.tool_call_id)) {
+            removedCount++;
+            details.push('删除重复 tool 消息');
+            changed = true;
+            continue;
+          }
+          answeredToolCallIds.add(msg.tool_call_id);
+          newMessages.push(msg);
+          continue;
+        }
+
+        newMessages.push(msg);
+      }
+      this.messages = newMessages;
+
+      // 3b. 检查每个 assistant 的 tool_calls 是否都有对应 tool 消息
+      //     如果有缺失，为缺失项补全占位 tool 结果（保留 assistant 的文本内容）
+      //     这比删除整个 assistant 更安全，不会丢失用户可见的 AI 回复
+      for (let i = 0; i < this.messages.length; i++) {
+        const msg = this.messages[i];
+        if (msg.role !== 'assistant' || !Array.isArray(msg.tool_calls) || msg.tool_calls.length === 0) continue;
+
+        const missingTcs = msg.tool_calls.filter(tc => !answeredToolCallIds.has(tc.id));
+        if (missingTcs.length > 0) {
+          // 在该 assistant 之后（下一条 assistant/user 之前）插入占位 tool 结果
+          const placeholders = missingTcs.map(tc => ({
+            role: 'tool',
+            tool_call_id: tc.id,
+            content: '[工具执行被中断，结果不可用]'
+          }));
+          // 找到插入位置：assistant 之后、下一个非 tool 消息之前
+          let insertPos = i + 1;
+          while (insertPos < this.messages.length && this.messages[insertPos].role === 'tool') {
+            insertPos++;
+          }
+          this.messages.splice(insertPos, 0, ...placeholders);
+          for (const tc of missingTcs) answeredToolCallIds.add(tc.id);
+          removedCount += missingTcs.length; // 计入修复数（这里是补全而非删除）
+          details.push(`为 ${missingTcs.length} 个缺失 tool_call 补全占位结果`);
+          changed = true;
+        }
+      }
+
+      // 3c. 删除末尾空 assistant（中断残留，或删除 tool_calls 后变空的 assistant）
+      while (this.messages.length > 0) {
+        const last = this.messages[this.messages.length - 1];
+        if (last.role === 'assistant' && (last.content === '' || last.content == null) &&
+            (!last.tool_calls || last.tool_calls.length === 0)) {
+          this.messages.pop();
+          removedCount++;
+          details.push('删除尾部空 assistant');
+          changed = true;
+        } else {
+          break;
+        }
+      }
+
+      if (!changed) break;
+    }
+
+    // 第四遍：删除空 user/assistant 消息（content='' 且无 tool_calls，且不在末尾）
+    this.messages = this.messages.filter((msg, i) => {
+      if (i === this.messages.length - 1) return true; // 末尾已在前面处理
+      if ((msg.role === 'user' || msg.role === 'assistant') &&
+          (msg.content === '' || msg.content == null) &&
+          (!msg.tool_calls || msg.tool_calls.length === 0)) {
+        removedCount++;
+        details.push(`删除中间空 ${msg.role} 消息`);
+        return false;
+      }
+      return true;
+    });
+
+    // 重新规范化 pinnedMessages 索引（已删除元素，索引需要重算）
+    // 简化处理：清空 pinnedMessages（影响很小，pin 主要用于防压缩）
+    if (removedCount > 0) this.pinnedMessages = [];
+
+    return {
+      fixed: removedCount > 0 || details.length > 0,
+      removedCount,
+      details: details.slice(0, 20), // 限制日志长度
+      beforeLength: before,
+      afterLength: this.messages.length
+    };
+  }
 }
 
 // Expose for node tests; in renderer the class is consumed via globalThis

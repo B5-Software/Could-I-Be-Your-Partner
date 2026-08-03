@@ -167,7 +167,7 @@
             <div class="context-indicator" id="chat-context-indicator" data-used="0" data-max="8192">
               <svg class="context-ring" viewBox="0 0 36 36" width="22" height="22">
                 <circle class="context-ring-bg" cx="18" cy="18" r="15.915" fill="none" stroke-width="3"/>
-                <circle class="context-ring-fg" id="context-progress-fill" cx="18" cy="18" r="15.915" fill="none" stroke-width="3" stroke-dasharray="0 100" stroke-dashoffset="25" transform="rotate(-90 18 18)"/>
+                <circle class="context-ring-fg" id="context-progress-fill" cx="18" cy="18" r="15.915" fill="none" stroke-width="3" stroke-dasharray="0 100" stroke-dashoffset="0" transform="rotate(-90 18 18)"/>
               </svg>
               <span class="progress-text" id="context-progress-text">0/8K</span>
               <span class="session-cost-mini" id="chat-session-cost" title="当前会话消费（USD）" style="display:none">
@@ -183,6 +183,10 @@
             <div class="chat-actions">
               <button class="btn-icon hidden" id="btn-reoptimize-tools" title="手动重新优化工具选择">
                 <i class="fa-solid fa-wand-magic-sparkles"></i>
+              </button>
+              <button class="btn-icon" id="btn-show-downloads" title="下载管理（Ctrl+D）">
+                <i class="fa-solid fa-download"></i>
+                <span class="badge hidden" id="download-badge">0</span>
               </button>
               <button class="btn-icon" id="btn-chat-show-terminals" title="显示终端（Ctrl+T）">
                 <i class="fa-solid fa-terminal"></i>
@@ -359,6 +363,10 @@
       <section id="page-code" class="page">
         <div class="code-toolbar">
           <div class="code-toolbar-left">
+            <button class="btn-icon btn-sm" id="btn-code-show-downloads" title="下载管理（Ctrl+D）">
+              <i class="fa-solid fa-download"></i>
+              <span class="badge hidden" id="download-badge-code">0</span>
+            </button>
             <button class="btn-icon btn-sm" id="btn-code-show-terminals" title="显示终端（Ctrl+T）">
               <i class="fa-solid fa-terminal"></i>
             </button>
@@ -430,7 +438,7 @@
               <div class="context-indicator" id="code-context-indicator" data-used="0" data-max="131072">
                 <svg class="context-ring" viewBox="0 0 36 36" width="22" height="22">
                   <circle class="context-ring-bg" cx="18" cy="18" r="15.915" fill="none" stroke-width="3"/>
-                  <circle class="context-ring-fg" id="code-context-progress-fill" cx="18" cy="18" r="15.915" fill="none" stroke-width="3" stroke-dasharray="0 100" stroke-dashoffset="25" transform="rotate(-90 18 18)"/>
+                  <circle class="context-ring-fg" id="code-context-progress-fill" cx="18" cy="18" r="15.915" fill="none" stroke-width="3" stroke-dasharray="0 100" stroke-dashoffset="0" transform="rotate(-90 18 18)"/>
                 </svg>
                 <span class="progress-text" id="code-context-progress-text">0/128K</span>
                 <span class="session-cost-mini" id="code-session-cost" title="当前会话消费（USD）" style="display:none">
@@ -508,7 +516,7 @@
             <div class="context-indicator" id="babe-context-indicator" data-used="0" data-max="8192">
               <svg class="context-ring" viewBox="0 0 36 36" width="22" height="22">
                 <circle class="context-ring-bg" cx="18" cy="18" r="15.915" fill="none" stroke-width="3"/>
-                <circle class="context-ring-fg" id="babe-context-progress-fill" cx="18" cy="18" r="15.915" fill="none" stroke-width="3" stroke-dasharray="0 100" stroke-dashoffset="25" transform="rotate(-90 18 18)"/>
+                <circle class="context-ring-fg" id="babe-context-progress-fill" cx="18" cy="18" r="15.915" fill="none" stroke-width="3" stroke-dasharray="0 100" stroke-dashoffset="0" transform="rotate(-90 18 18)"/>
               </svg>
               <span class="progress-text" id="babe-context-progress-text">0/8K</span>
               <span class="session-cost-mini" id="babe-session-cost" title="当前会话消费（USD）" style="display:none">
@@ -768,6 +776,24 @@
                   <input type="text" id="setting-babe-user-nickname" placeholder="TA怎么称呼你？如：亲爱的、宝宝">
                 </div>
                 <div class="setting-item">
+                  <label>Babe 头像</label>
+                  <div class="avatar-row">
+                    <div class="avatar-preview avatar-preview-framed" id="setting-babe-avatar-preview">
+                      <i class="fa-solid fa-heart"></i>
+                    </div>
+                    <div class="avatar-actions">
+                      <button class="btn-secondary" id="btn-babe-avatar-pick"><i class="fa-solid fa-image"></i> 选择图片</button>
+                      <button class="btn-secondary" id="btn-babe-avatar-clear">清除头像</button>
+                    </div>
+                  </div>
+                </div>
+                <div class="setting-item">
+                  <label>Babe 头像框</label>
+                  <div class="avatar-frame-picker" id="setting-babe-avatar-frame-picker">
+                    <div class="avatar-frame-grid" id="setting-babe-avatar-frame-grid"></div>
+                  </div>
+                </div>
+                <div class="setting-item">
                   <label>主动消息频率</label>
                   <select id="setting-babe-proactive-interval">
                     <option value="0">关闭主动消息</option>
@@ -778,7 +804,7 @@
                     <option value="720">12 小时</option>
                     <option value="1440">24 小时</option>
                   </select>
-                  <div class="setting-hint">TA 会定时主动找你聊天（仅在 Babe 模式且应用打开时生效）</div>
+                  <div class="setting-hint">TA 会定时主动找你聊天（应用打开时即生效，无需停留在 Babe 模式）</div>
                 </div>
                 <div class="setting-item">
                   <label>初始好感度</label>
@@ -954,11 +980,56 @@
             <!-- Budget Control Tab -->
             <div class="settings-panel" data-tab="budget">
               <div class="settings-group">
+                <h3><i class="fa-solid fa-clock-rotate-left"></i> 预算周期设置</h3>
+                <p class="setting-hint" style="margin-bottom:12px">配置日/周/月预算的统计周期边界与时区。</p>
+                <div class="setting-item" style="display:flex;align-items:center;gap:8px">
+                  <label style="min-width:120px">时区</label>
+                  <select id="setting-budget-timezone" style="width:200px">
+                    <option value="Asia/Shanghai">Asia/Shanghai (UTC+8)</option>
+                    <option value="Asia/Tokyo">Asia/Tokyo (UTC+9)</option>
+                    <option value="Asia/Singapore">Asia/Singapore (UTC+8)</option>
+                    <option value="Asia/Kolkata">Asia/Kolkata (UTC+5:30)</option>
+                    <option value="Asia/Dubai">Asia/Dubai (UTC+4)</option>
+                    <option value="Europe/London">Europe/London (UTC+0/+1)</option>
+                    <option value="Europe/Berlin">Europe/Berlin (UTC+1/+2)</option>
+                    <option value="Europe/Moscow">Europe/Moscow (UTC+3)</option>
+                    <option value="America/New_York">America/New_York (UTC-5/-4)</option>
+                    <option value="America/Chicago">America/Chicago (UTC-6/-5)</option>
+                    <option value="America/Los_Angeles">America/Los_Angeles (UTC-8/-7)</option>
+                    <option value="America/Sao_Paulo">America/Sao_Paulo (UTC-3)</option>
+                    <option value="UTC">UTC</option>
+                  </select>
+                  <span style="color:var(--text-tertiary);font-size:12px">影响日/周/月起止时间</span>
+                </div>
+                <div class="setting-item" style="display:flex;align-items:center;gap:8px">
+                  <label style="min-width:120px">周周期</label>
+                  <select id="setting-budget-week-mode" style="width:200px">
+                    <option value="natural">自然周（周一起）</option>
+                    <option value="rolling">滚动 7 天</option>
+                  </select>
+                  <span style="color:var(--text-tertiary);font-size:12px">自然周从周一 00:00 开始</span>
+                </div>
+                <div class="setting-item" style="display:flex;align-items:center;gap:8px">
+                  <label style="min-width:120px">月周期</label>
+                  <select id="setting-budget-month-mode" style="width:200px">
+                    <option value="natural">自然月（1 日起）</option>
+                    <option value="rolling">滚动 30 天</option>
+                  </select>
+                  <span style="color:var(--text-tertiary);font-size:12px">自然月从每月 1 日 00:00 开始</span>
+                </div>
+              </div>
+
+              <div class="settings-group">
                 <h3><i class="fa-solid fa-wallet"></i> 预算上限</h3>
-                <p class="setting-hint" style="margin-bottom:12px">设定每日/每月消费上限（USD）。超过时按下方策略处理。</p>
+                <p class="setting-hint" style="margin-bottom:12px">设定每日/每周/每月消费上限（USD）。超过时按下方策略处理。</p>
                 <div class="setting-item" style="display:flex;align-items:center;gap:8px">
                   <label style="min-width:120px">每日上限 (USD)</label>
                   <input type="number" id="setting-budget-daily-cap" placeholder="0.00" step="0.01" min="0" style="width:120px">
+                  <span style="color:var(--text-tertiary);font-size:12px">0 = 不限制</span>
+                </div>
+                <div class="setting-item" style="display:flex;align-items:center;gap:8px">
+                  <label style="min-width:120px">每周上限 (USD)</label>
+                  <input type="number" id="setting-budget-weekly-cap" placeholder="0.00" step="0.01" min="0" style="width:120px">
                   <span style="color:var(--text-tertiary);font-size:12px">0 = 不限制</span>
                 </div>
                 <div class="setting-item" style="display:flex;align-items:center;gap:8px">
@@ -980,6 +1051,21 @@
                   <button class="btn-secondary btn-sm" id="btn-budget-pick-fallback" title="从可用模型列表选择"><i class="fa-solid fa-list"></i></button>
                 </div>
                 <p class="setting-hint" style="margin-top:4px">超额时若选择 fallback 策略，将自动切换到该模型；请在下方价格表中也填写该模型的价格。</p>
+              </div>
+
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-chart-line"></i> 预算统计图表</h3>
+                <p class="setting-hint" style="margin-bottom:12px">按当前周期设置展示日/周/月消费趋势与预算占比。</p>
+                <div style="display:flex;gap:8px;margin-bottom:16px;">
+                  <button class="btn-secondary budget-period-btn active" data-period="daily">今日</button>
+                  <button class="btn-secondary budget-period-btn" data-period="weekly">本周</button>
+                  <button class="btn-secondary budget-period-btn" data-period="monthly">本月</button>
+                </div>
+                <div id="budget-chart-summary" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:16px;"></div>
+                <h4 style="margin:8px 0;">消费趋势</h4>
+                <div id="budget-chart" style="height:120px;display:flex;align-items:flex-end;gap:2px;border-bottom:1px solid var(--border);padding-bottom:4px;margin-bottom:16px;"></div>
+                <h4 style="margin:8px 0;">预算占比</h4>
+                <div id="budget-rings" style="display:flex;gap:24px;justify-content:center;flex-wrap:wrap"></div>
               </div>
 
               <div class="settings-group">
@@ -2027,6 +2113,16 @@
                   </label>
                   <p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">Agent 想给您看一个文件内容时</p>
                 </div>
+                <div class="setting-item">
+                  <label class="toggle-label">
+                    <span>Babe 主动消息</span>
+                    <div class="toggle-switch">
+                      <input type="checkbox" id="setting-notify-babe-proactive" checked>
+                      <span class="toggle-slider"></span>
+                    </div>
+                  </label>
+                  <p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">Babe 主动发来消息时通知您（即便您正在其他模式）</p>
+                </div>
                 <div style="display:flex;gap:8px;margin-top:12px">
                   <button class="btn-primary" id="btn-notify-test"><i class="fa-solid fa-flask"></i> 发送测试通知</button>
                 </div>
@@ -2244,6 +2340,69 @@
       </div>
       <div class="terminal-tabs" id="terminal-tabs"></div>
       <div class="terminal-container" id="terminal-container"></div>
+    </div>
+  </div>
+
+  <!-- Download Manager Modal: 基于 aria2 的下载管理 -->
+  <div class="modal-overlay hidden" id="download-manager-modal">
+    <div class="modal download-manager-dialog">
+      <div class="modal-header">
+        <h3><i class="fa-solid fa-download"></i> 下载管理</h3>
+        <div class="download-manager-actions">
+          <button class="btn-icon btn-sm" id="btn-dm-add" title="添加下载任务">
+            <i class="fa-solid fa-plus"></i>
+          </button>
+          <button class="btn-icon btn-sm" id="btn-dm-refresh" title="刷新">
+            <i class="fa-solid fa-rotate"></i>
+          </button>
+          <button class="btn-icon btn-sm" id="btn-dm-clear-completed" title="清除已完成">
+            <i class="fa-solid fa-broom"></i>
+          </button>
+          <button class="btn-icon" id="btn-close-download-manager" title="关闭">
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+        </div>
+      </div>
+      <div class="modal-body download-manager-body">
+        <div class="download-status-bar" id="download-status-bar">
+          <span class="dm-status-text" id="dm-status-text">正在连接 aria2...</span>
+          <span class="dm-global-speed" id="dm-global-speed"></span>
+        </div>
+        <div class="download-list" id="download-list">
+          <div class="download-empty">暂无下载任务</div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <span class="dm-hint">支持 HTTP/HTTPS/FTP/BT/磁力链接，Agent 可异步下载</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Add Download Dialog (内嵌于下载管理) -->
+  <div class="modal-overlay hidden" id="add-download-modal">
+    <div class="modal" style="max-width:520px">
+      <div class="modal-header">
+        <h3><i class="fa-solid fa-plus"></i> 添加下载任务</h3>
+        <button class="btn-icon" id="btn-close-add-download"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label for="add-dl-url">下载链接</label>
+          <input type="text" id="add-dl-url" placeholder="HTTP/HTTPS/FTP/磁力链接 URL">
+        </div>
+        <div class="form-group">
+          <label for="add-dl-filename">文件名（可选）</label>
+          <input type="text" id="add-dl-filename" placeholder="留空则从 URL 提取">
+        </div>
+        <div class="form-group">
+          <label for="add-dl-dir">保存目录</label>
+          <input type="text" id="add-dl-dir" placeholder="下载保存目录">
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-secondary" id="btn-add-dl-cancel">取消</button>
+        <button class="btn-primary" id="btn-add-dl-confirm">添加下载</button>
+      </div>
     </div>
   </div>
 
@@ -2505,6 +2664,8 @@
   <script src="../../data/bundled-skills.js"></script>
   <script src="../js/agent.js"></script>
   <script src="../js/spreadsheet.js"></script>
+  <script src="../js/virtual-scroller.js"></script>
+  <script src="../js/download-manager.js"></script>
   <script src="../js/app.js"></script>
   <!-- 全局 Toast 容器：用于请求失败重试等自动消失提示 -->
   <div id="toast-container" style="position:fixed;top:60px;right:20px;z-index:10000;display:flex;flex-direction:column;gap:8px;pointer-events:none"></div>

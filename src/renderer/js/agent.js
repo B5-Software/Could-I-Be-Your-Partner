@@ -1504,51 +1504,104 @@ ${toolListSection}`;
     this.hotMessages.push(fullMessage);
   }
 
+  /**
+   * 共享上下文管理：三层压缩 + 语义压缩后仍超限的智能硬截断。
+   * 主 Agent 和子代理循环均调用此方法，确保上下文不溢出。
+   * @param {ContextManager} ctx - 要管理的上下文（默认 this.contextManager）
+   * @param {function} [notify] - 可选通知回调 (msg) => void
+   * @param {object} [opts] - { maxFailures, keepLast, isSubAgent }
+   * @returns {Promise<{action: string, usage: number}>} 实际采取的动作
+   */
+  async _manageContext(ctx = this.contextManager, notify, opts = {}) {
+    const maxFailures = opts.maxFailures ?? (this.settings?.agent?.autoCompactMaxFailures ?? 3);
+    const keepLast = opts.keepLast ?? 6;
+    const isSub = !!opts.isSubAgent;
+    const prefix = isSub ? '[子代理] ' : '';
+    const stats = ctx.getStats();
+    const usage = parseFloat(stats.usage);
+    let action = 'none';
+
+    // 第一层：MicroCompact (>70%) — 清理旧工具结果
+    if (usage > 70) {
+      const cleared = ctx.microCompact();
+      if (cleared > 0) {
+        action = 'micro';
+        if (notify) notify(`${prefix}MicroCompact: 已清理 ${cleared} 条旧工具结果（${usage}%）`);
+      }
+    }
+
+    // 第二层：LLM 语义摘要 (>85%) — 压缩历史对话
+    const newUsage1 = parseFloat(ctx.getStats().usage);
+    if (newUsage1 > 85 && this.autoCompactFailures < maxFailures) {
+      try {
+        const sumRes = await ctx.summarizeWithLLM({ keepLast });
+        if (sumRes.ok) {
+          this.autoCompactFailures = 0;
+          action = 'summary';
+          if (notify) notify(`${prefix}已自动压缩上下文（${sumRes.message}），当前 ${ctx.getStats().usage}%`);
+        } else {
+          this.autoCompactFailures++;
+          action = 'summary_failed';
+          if (notify) notify(`${prefix}上下文压缩失败（${this.autoCompactFailures}/${maxFailures}）：${sumRes.message}`);
+        }
+      } catch (e) {
+        this.autoCompactFailures++;
+        action = 'summary_error';
+        if (notify) notify(`${prefix}上下文压缩异常（${this.autoCompactFailures}/${maxFailures}）：${e.message}`);
+      }
+    }
+
+    // 第三层：紧急硬截断 (>95%) — 语义压缩后仍超限的最后防线
+    // 阶梯式降级：keepLast=6 → keepLast=4 → keepLast=2，确保不再溢出
+    let newUsage2 = parseFloat(ctx.getStats().usage);
+    if (newUsage2 > 95) {
+      const steps = [keepLast, Math.max(4, keepLast - 2), Math.max(2, keepLast - 4)];
+      for (const step of steps) {
+        ctx.manage('clear_old', { keepLast: step });
+        newUsage2 = parseFloat(ctx.getStats().usage);
+        action = `hard_truncate_${step}`;
+        if (notify) notify(`${prefix}⚠️ 上下文严重溢出，已强制截断至最近 ${step} 条消息（${newUsage2}%）`);
+        if (newUsage2 <= 85) break;
+      }
+
+      // 终极兜底：截断后仍超限（极端情况，如单条消息超大），
+      // 对所有工具结果执行强制截断 + 清除所有摘要外的历史
+      if (newUsage2 > 90) {
+        // 截断所有工具结果内容
+        for (const m of ctx.messages) {
+          if (m.role === 'tool' && typeof m.content === 'string' && m.content.length > 200) {
+            m.content = m.content.substring(0, 200) + '\n...[紧急截断]';
+          }
+          if (m.role === 'assistant' && typeof m.content === 'string' && m.content.length > 2000) {
+            m.content = m.content.substring(0, 2000) + '\n...[紧急截断]';
+          }
+        }
+        // 保留 system prompt + 最后 2 条消息
+        ctx.messages = ctx.messages.slice(-2);
+        ctx.pinnedMessages = [];
+        newUsage2 = parseFloat(ctx.getStats().usage);
+        action = 'emergency_truncate';
+        if (notify) notify(`${prefix}🚨 紧急上下文救援：已截断所有工具结果并只保留最后 2 条消息（${newUsage2}%）`);
+      }
+    }
+
+    return { action, usage: newUsage2 };
+  }
+
   async agentLoop(runId) {
     let iterations = 0;
+    // 重置修复标记：上次 agentLoop 中断退出时可能残留 true，导致本次无法触发自动修复
+    this._sanitizedThisLoop = false;
     // 移除硬性迭代上限：完全由 running/stopped/runId 控制
     // 原本的 maxIterations=50 会在长任务中被误触顶，导致工作中断
     while (this.running && !this.stopped && runId === this.runId) {
       iterations++;
 
-      // Check if context needs management (with autoCompact circuit breaker)
-      const maxFailures = this.settings?.agent?.autoCompactMaxFailures ?? 3;
-      const stats = this.contextManager.getStats();
-      // Three-layer compaction: Micro (>70%) → LLM summary (>85%) → hard truncate (>95%)
-      if (parseFloat(stats.usage) > 70) {
-        const cleared = this.contextManager.microCompact();
-        if (cleared > 0 && this.onMessage) {
-          this.onMessage('system', `MicroCompact: 已清理 ${cleared} 条旧工具结果（上下文使用 ${stats.usage}%）`);
-        }
-      }
-      if (parseFloat(stats.usage) > 85 && this.autoCompactFailures < maxFailures) {
-        try {
-          const sumRes = await this.contextManager.summarizeWithLLM({ keepLast: 6 });
-          if (sumRes.ok) {
-            this.autoCompactFailures = 0;
-            if (this.onMessage) {
-              this.onMessage('system', `已自动压缩上下文（${sumRes.message}），当前使用 ${this.contextManager.getStats().usage}%`);
-            }
-          } else {
-            this.autoCompactFailures++;
-            if (this.onMessage) {
-              this.onMessage('system', `上下文压缩失败（${this.autoCompactFailures}/${maxFailures}）：${sumRes.message}`);
-            }
-          }
-        } catch (e) {
-          this.autoCompactFailures++;
-          if (this.onMessage) {
-            this.onMessage('system', `上下文压缩异常（${this.autoCompactFailures}/${maxFailures}）：${e.message}`);
-          }
-        }
-      }
-      if (parseFloat(stats.usage) > 95) {
-        // Emergency: hard truncate to keep last 4 messages
-        this.contextManager.manage('clear_old', { keepLast: 4 });
-        if (this.onMessage) {
-          this.onMessage('system', '⚠️ 上下文严重溢出，已强制截断最近4条消息');
-        }
-      }
+      // 上下文管理：三层压缩（Micro >70% → LLM Summary >85% → Hard Truncate >95%）
+      // + 语义压缩后仍超限的智能阶梯截断 + 紧急救援
+      await this._manageContext(this.contextManager, (msg) => {
+        if (this.onMessage) this.onMessage('system', msg);
+      });
 
       // 热对话：注入用户在Agent工作期间发送的新消息
       while (this.hotMessages.length > 0) {
@@ -1622,13 +1675,59 @@ ${toolListSection}`;
       if (this.stopped || runId !== this.runId) break;
 
       if (!result.ok) {
-        const errMsg = result.error || 'LLM 请求失败';
-        if (this.onMessage) this.onMessage('error', errMsg);
-        // 持久化错误消息到聊天历史（确保所有可见内容都被保存）
-        try { this.contextManager.addSystemMessage(`[错误] ${errMsg}`, { type: 'error' }); }
-        catch { /* ignore */ }
-        break;
+        // ===== 自动修复：当 API 返回 400 类（请求不合法）错误时，尝试清理上下文后重试一次 =====
+        // 这通常发生在用户中断 Agent 时，上下文末尾残留了空 assistant 或未配对的 tool_calls
+        // 匹配场景：
+        //   - HTTP 400 / client 错误类型
+        //   - 错误信息含 "tool_calls"/"tool_call_id"/"insufficient tool messages"（DeepSeek/OpenAI 配对错误）
+        //   - 错误信息含 "invalid"/"bad request"/"不合法" 等通用 400 关键词
+        const errText = String(result.error || '');
+        const isClientError = result.kind === 'client' || result.status === 400 ||
+          /tool_calls?|tool_call_id|insufficient tool messages|following tool_calls|400|invalid|bad request|不合法|messages.*context/i.test(errText);
+
+        if (isClientError && !this._sanitizedThisLoop) {
+          // 标记本次循环已尝试过修复，避免无限循环
+          this._sanitizedThisLoop = true;
+          const sanitizationResult = this.contextManager.sanitize();
+          if (sanitizationResult.fixed) {
+            if (this.onMessage) {
+              this.onMessage('system', `🔧 检测到上下文损坏，已自动修复 ${sanitizationResult.removedCount} 条问题消息（${sanitizationResult.beforeLength}→${sanitizationResult.afterLength}）。正在重试请求...`);
+            }
+            // 重新构建消息并用非流式重试（错误恢复场景，避免流式事件错乱）
+            const retryMessages = this.contextManager.getMessages();
+            const retryTools = this.getRuntimeToolSchemas();
+            try {
+              result = await window.api.chatLLM(retryMessages, {
+                tools: retryTools.length > 0 ? retryTools : undefined,
+                requestId: reqId + '-sanitize-retry'
+              });
+              usedStreaming = false; // 重试走非流式路径
+            } catch (retryErr) {
+              if (this.stopped || runId !== this.runId) throw retryErr;
+              result = { ok: false, error: retryErr.message || String(retryErr), kind: 'client' };
+            }
+            if (this.stopped || runId !== this.runId) break;
+          }
+
+          // 修复后仍失败（或修复无改动）：报错并退出
+          if (!result.ok) {
+            const errMsg = result.error || 'LLM 请求失败';
+            if (this.onMessage) this.onMessage('error', errMsg + '（已尝试自动修复上下文）');
+            try { this.contextManager.addSystemMessage(`[错误] ${errMsg}（上下文已自动修复，可重新发送消息继续）`, { type: 'error' }); }
+            catch { /* ignore */ }
+            break;
+          }
+          // 修复后重试成功：继续走正常流程
+        } else {
+          const errMsg = result.error || 'LLM 请求失败';
+          if (this.onMessage) this.onMessage('error', errMsg);
+          try { this.contextManager.addSystemMessage(`[错误] ${errMsg}`, { type: 'error' }); }
+          catch { /* ignore */ }
+          break;
+        }
       }
+      // 重置修复标记：本次请求成功（无论是首次还是修复后重试），下次循环允许再次修复
+      this._sanitizedThisLoop = false;
 
       // 累计会话 token 使用（支持缓存命中/缓存创建解析）
       // - OpenAI: usage.prompt_tokens_details.cached_tokens
@@ -1655,6 +1754,9 @@ ${toolListSection}`;
       }
       // Store reasoning in the assistant message for context (some models benefit)
       this.contextManager.addAssistantMessage(assistantMsg.content, assistantMsg.tool_calls, assistantMsg.reasoning);
+
+      // 实时保存：AI 回复入上下文后立即持久化
+      this.saveToHistory();
 
       // Emit assistant text — only in non-streaming mode (streaming path
       // already rendered tokens via stream-chunk/stream-end).
@@ -1844,6 +1946,9 @@ ${toolListSection}`;
 
           if (this.onToolCall) this.onToolCall(toolName, args, 'done', toolResult);
         }
+
+        // 实时保存：每轮工具调用完成后立即持久化，防止进程异常导致丢失
+        this.saveToHistory();
 
         if (this.stopped || runId !== this.runId) break;
         // Continue the loop to let the agent process tool results
@@ -2690,7 +2795,89 @@ ${toolListSection}`;
           if (!this.workspacePath) {
             return { ok: false, error: typeof i18nToolReturn === 'function' ? i18nToolReturn('no_workspace', '未设置工作区路径') : '未设置工作区路径' };
           }
-          return await window.api.downloadFile(args.url, args.filename, this.workspacePath);
+          // 异步下载：立即返回 gid，不阻塞 Agent 后续操作
+          // 支持配置下载参数：split/maxConnections/minSplitSize/timeout 等
+          const opts = { dir: this.workspacePath };
+          if (args.filename) opts.out = args.filename;
+          if (args.headers) opts.headers = args.headers;
+          if (args.split) opts.split = args.split;
+          if (args.maxConnections) opts.maxConnections = args.maxConnections;
+          if (args.minSplitSize) opts.minSplitSize = args.minSplitSize;
+          if (args.timeout) opts.timeout = args.timeout;
+          if (args.connectTimeout) opts.connectTimeout = args.connectTimeout;
+          if (args.maxRetries !== undefined) opts.maxRetries = args.maxRetries;
+          if (args.retryWait) opts.retryWait = args.retryWait;
+          if (args.userAgent) opts.userAgent = args.userAgent;
+          if (args.referer) opts.referer = args.referer;
+          const res = await window.api.aria2.addUri(args.url, opts);
+          if (res.ok) {
+            // 刷新下载管理器 UI（若已打开）
+            if (window.DownloadManager) window.DownloadManager.refresh();
+            return { ok: true, gid: res.gid, dir: this.workspacePath, message: '下载已添加，可使用 getDownloadStatus 查询进度' };
+          }
+          return { ok: false, error: res.error || '添加下载失败' };
+        }
+        case 'getDownloadStatus': {
+          if (args.gid) {
+            const r = await window.api.aria2.tellStatus(args.gid);
+            if (!r.ok) return { ok: false, error: r.error };
+            const st = r.status;
+            const total = parseInt(st.totalLength || '0', 10);
+            const completed = parseInt(st.completedLength || '0', 10);
+            const progress = total > 0 ? Math.round((completed / total) * 100) : 0;
+            const fileName = st.files?.[0]?.path ? st.files[0].path.split(/[\\/]/).pop() : '未知';
+            return {
+              ok: true,
+              status: {
+                gid: st.gid,
+                status: st.status,
+                progress,
+                fileName,
+                totalLength: total,
+                completedLength: completed,
+                downloadSpeed: parseInt(st.downloadSpeed || '0', 10),
+                filePath: st.files?.[0]?.path || null,
+                errorCode: st.errorCode || null,
+                errorMessage: st.errorMessage || null
+              }
+            };
+          }
+          // 列出所有任务
+          const r = await window.api.aria2.listAll();
+          if (!r.ok) return { ok: false, error: r.error };
+          const summarize = (items) => (items || []).map(it => ({
+            gid: it.gid,
+            status: it.status,
+            fileName: it.files?.[0]?.path ? it.files[0].path.split(/[\\/]/).pop() : '未知',
+            progress: parseInt(it.totalLength || '0', 10) > 0
+              ? Math.round((parseInt(it.completedLength || '0', 10) / parseInt(it.totalLength || '0', 10)) * 100)
+              : 0,
+            totalLength: parseInt(it.totalLength || '0', 10),
+            completedLength: parseInt(it.completedLength || '0', 10)
+          }));
+          return {
+            ok: true,
+            items: {
+              active: summarize(r.active),
+              waiting: summarize(r.waiting),
+              stopped: summarize(r.stopped)
+            }
+          };
+        }
+        case 'pauseDownload': {
+          const r = await window.api.aria2.pause(args.gid, args.force ?? false);
+          if (window.DownloadManager) window.DownloadManager.refresh();
+          return r;
+        }
+        case 'resumeDownload': {
+          const r = await window.api.aria2.unpause(args.gid);
+          if (window.DownloadManager) window.DownloadManager.refresh();
+          return r;
+        }
+        case 'cancelDownload': {
+          const r = await window.api.aria2.cancel(args.gid, args.force ?? true);
+          if (window.DownloadManager) window.DownloadManager.refresh();
+          return r;
         }
         // ---- 游戏工具 ----
         case 'inviteGame': {
@@ -3114,23 +3301,67 @@ ${tarotLine}
       let iterations = 0;
       let finalContent = '';
       const subRunId = ++subAgent.runId;
+      let subSanitizedThisLoop = false; // 子代理独立的修复标记
+      let hitMaxIter = false; // 是否因达到迭代上限而退出
 
       while (subAgent.running && !subAgent.stopped && iterations < maxIter && subRunId === subAgent.runId) {
         iterations++;
         subAgentRecord.iterations = iterations;
+
+        // 子代理上下文管理：与主 Agent 共用 _manageContext，确保不溢出
+        await this._manageContext(subAgent.contextManager, (msg) => {
+          if (parentOnMessage) parentOnMessage('sub-agent-message', { id: subAgentId, task, content: `[系统] ${msg}` });
+        }, { isSubAgent: true });
+
         const messages = subAgent.contextManager.getMessages();
         const allSchemas = getToolSchemas(this.settings?.tools);
         const subTools = allSchemas.filter(t => allowedSet.has(t.function?.name));
 
-        const result = await window.api.chatLLM(messages, {
+        let result = await window.api.chatLLM(messages, {
           tools: subTools.length > 0 ? subTools : undefined,
           requestId: 'sub-' + Date.now().toString()
         });
 
+        // ===== 子代理 400 错误自动修复（与主 Agent 逻辑一致）=====
         if (!result.ok) {
-          if (parentOnMessage) parentOnMessage('sub-agent-message', { id: subAgentId, task, content: `[错误] ${result.error}` });
-          break;
+          const errText = String(result.error || '');
+          const isClientError = result.kind === 'client' || result.status === 400 ||
+            /tool_calls?|tool_call_id|insufficient tool messages|following tool_calls|400|invalid|bad request|不合法|messages.*context|context.*length|too long|maximum context|token limit|exceed/i.test(errText);
+
+          if (isClientError && !subSanitizedThisLoop) {
+            subSanitizedThisLoop = true;
+            // 先尝试 sanitize 修复损坏消息
+            const sanitizeRes = subAgent.contextManager.sanitize();
+            if (sanitizeRes.fixed && parentOnMessage) {
+              parentOnMessage('sub-agent-message', { id: subAgentId, task, content: `[系统] 检测到上下文损坏，已自动修复 ${sanitizeRes.removedCount} 条消息` });
+            }
+            // 再尝试强制上下文压缩（即使未超 70% 也执行，因为可能是上下文超限）
+            const ctxResult = await this._manageContext(subAgent.contextManager, null, { isSubAgent: true });
+            // 重新构建消息并重试（非流式）
+            try {
+              const retryMessages = subAgent.contextManager.getMessages();
+              const retryTools = subTools.length > 0 ? subTools : undefined;
+              result = await window.api.chatLLM(retryMessages, {
+                tools: retryTools,
+                requestId: 'sub-' + Date.now().toString() + '-retry'
+              });
+            } catch (retryErr) {
+              if (parentOnMessage) parentOnMessage('sub-agent-message', { id: subAgentId, task, content: `[错误] 重试失败: ${retryErr.message}` });
+              break;
+            }
+            if (result.ok) {
+              if (parentOnMessage) parentOnMessage('sub-agent-message', { id: subAgentId, task, content: '[系统] 上下文修复后重试成功' });
+            } else {
+              if (parentOnMessage) parentOnMessage('sub-agent-message', { id: subAgentId, task, content: `[错误] ${result.error}（已尝试自动修复上下文）` });
+              break;
+            }
+          } else {
+            if (parentOnMessage) parentOnMessage('sub-agent-message', { id: subAgentId, task, content: `[错误] ${result.error}` });
+            break;
+          }
         }
+        subSanitizedThisLoop = false; // 本次请求成功，重置标记
+
         // 子代理 usage 累计到主会话统计 + 子代理自身记录
         if (result.data?.usage) {
           this._accumulateUsage(result.data.usage);
@@ -3140,7 +3371,11 @@ ${tarotLine}
           subAgentRecord.usage.total += u.total_tokens || ((u.prompt_tokens || 0) + (u.completion_tokens || 0));
           subAgentRecord.usage.cached += u.prompt_tokens_details?.cached_tokens || u.cache_read_input_tokens || 0;
           subAgentRecord.usage.cacheCreation += u.cache_creation_input_tokens || 0;
+          // 记录最近一次请求的 prompt_tokens（用于子代理模态框上下文窗口占比估算的回退值）
+          subAgentRecord.usage.lastPrompt = u.prompt_tokens || 0;
         }
+        // 实时更新 messages 快照（确保模态框即使不调用 getMessages() 也能读到最新消息）
+        subAgentRecord.messages = subAgent.contextManager.getMessages();
         const choice = result.data.choices?.[0];
         if (!choice) break;
 
@@ -3187,6 +3422,30 @@ ${tarotLine}
         if (choice.finish_reason === 'stop') break;
       }
 
+      // 检查是否因达到迭代上限而退出（非正常 stop）
+      if (iterations >= maxIter && maxIter !== Infinity) {
+        hitMaxIter = true;
+        // 要求子代理写出完整结果报告，而非直接停止
+        if (parentOnMessage) parentOnMessage('sub-agent-message', { id: subAgentId, task, content: '[系统] 已达迭代上限，正在生成完整结果报告...' });
+        try {
+          subAgent.contextManager.addUserMessage(
+            '【系统指令】你已达到迭代上限。请立即停止调用工具，写出当前任务的完整结果报告：\n' +
+            '1. 已完成的工作和结果\n2. 未完成的步骤和原因\n3. 遇到的问题和建议\n请简洁但完整地总结。'
+          );
+          const summaryResult = await window.api.chatLLM(subAgent.contextManager.getMessages(), {
+            requestId: 'sub-' + Date.now().toString() + '-final-report'
+          });
+          if (summaryResult.ok && summaryResult.data?.choices?.[0]?.message?.content) {
+            finalContent = summaryResult.data.choices[0].message.content;
+            subAgent.contextManager.addAssistantMessage(finalContent);
+            if (subAgent.onMessage) subAgent.onMessage('assistant', finalContent);
+          }
+        } catch (e) {
+          // 降级：使用已有的 finalContent
+          if (parentOnMessage) parentOnMessage('sub-agent-message', { id: subAgentId, task, content: `[系统] 最终报告生成失败: ${e.message}，使用最后已知结果` });
+        }
+      }
+
       subAgent.running = false;
       subAgentRecord.status = 'done';
       subAgentRecord.endTime = Date.now();
@@ -3198,9 +3457,10 @@ ${tarotLine}
         usage: subAgentRecord.usage,
         toolUseCount: subAgentRecord.toolUseCount,
         iterations: subAgentRecord.iterations,
-        duration: subAgentRecord.endTime - subAgentRecord.startTime
+        duration: subAgentRecord.endTime - subAgentRecord.startTime,
+        hitMaxIter // 是否因达到迭代上限而退出
       });
-      return { ok: true, result: response, iterations, subAgentId };
+      return { ok: true, result: response, iterations, subAgentId, hitMaxIter };
     } catch (e) {
       return { ok: false, error: e.message };
     }

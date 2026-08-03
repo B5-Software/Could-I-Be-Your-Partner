@@ -47,13 +47,21 @@
       "node_modules/@xterm/xterm/lib/**/*",
       "node_modules/@xterm/addon-fit/lib/**/*"
     ],
+    "extraResources": [
+      {
+        "from": "assets/aria2/${os}-${arch}",
+        "to": "aria2",
+        "filter": ["**/*"]
+      }
+    ],
     "win": {
       "icon": "assets/icons/icons/icon.ico",
       "target": [
         {
           "target": "nsis",
           "arch": [
-            "x64"
+            "x64",
+            "arm64"
           ]
         }
       ]
