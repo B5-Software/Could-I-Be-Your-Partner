@@ -2299,6 +2299,63 @@
     } catch { return null; }
   }
 
+  // 模式 agent 未初始化时，用主 agent 的共享系统指导 + 工具定义估算上下文占用，
+  // 并渲染完整的上下文 tooltip（对齐 Chat 模式，避免显示 0）
+  function ensureFallbackContext(ind, fill, textEl, sharedMaxCtx) {
+    if (!ind) return;
+    ind.dataset.used = 0;
+    ind.dataset.max = sharedMaxCtx;
+    ind.dataset.level = 'normal';
+    let sysT = 0, toolT = 0;
+    try {
+      const cm = agent?.contextManager;
+      const sysP = cm?.systemPrompt;
+      if (sysP) {
+        sysT = cm.estimateMessageTokens ? cm.estimateMessageTokens(sysP) : Math.ceil(String(sysP).length / 4);
+      }
+      const schemas = (typeof agent?.getRuntimeToolSchemas === 'function')
+        ? agent.getRuntimeToolSchemas()
+        : (typeof getToolSchemas === 'function' ? getToolSchemas(agent?.settings?.tools || {}) : []);
+      toolT = Math.ceil(JSON.stringify(schemas || []).length / 4);
+    } catch (_) {}
+    const maxResp = agent?.settings?.llm?.maxResponseTokens || 8192;
+    const tokens = sysT + toolT;
+    const total = tokens + maxResp;
+    const pct = sharedMaxCtx ? Math.min(100, (total / sharedMaxCtx) * 100) : 0;
+    const inputPct = sharedMaxCtx ? Math.min(100, (tokens / sharedMaxCtx) * 100) : 0;
+    const seg = (v) => (v > 0 ? (v / tokens * 100).toFixed(1) : '0');
+    if (textEl) textEl.textContent = `${fmtTokenCount(total)}/${fmtTokenCount(sharedMaxCtx)}`;
+    if (fill) fill.setAttribute('stroke-dasharray', `${pct} ${100 - pct}`);
+    // 创建/重建 tooltip
+    let tooltip = ind.querySelector('.context-tooltip');
+    if (!tooltip) { tooltip = document.createElement('div'); tooltip.className = 'context-tooltip'; ind.appendChild(tooltip); }
+    const cc = 2 * Math.PI * 12;
+    tooltip.innerHTML = `
+      <div class="context-tooltip-title">上下文使用详情</div>
+      <svg class="context-tooltip-mini-ring" viewBox="0 0 30 30" width="60" height="60">
+        <circle cx="15" cy="15" r="12" fill="none" stroke="var(--bg-tertiary)" stroke-width="4"/>
+        <circle cx="15" cy="15" r="12" fill="none" stroke="var(--accent)" stroke-width="4"
+          stroke-dasharray="${(inputPct / 100 * cc).toFixed(1)} ${cc.toFixed(1)}"
+          stroke-dashoffset="0" transform="rotate(-90 15 15)"/>
+        <text x="15" y="18" text-anchor="middle" font-size="9" fill="var(--text-primary)">${pct.toFixed(0)}%</text>
+      </svg>
+      <div class="context-tooltip-row"><span>系统指导</span><span>${sysT} (${seg(sysT)}%)</span></div>
+      <div class="context-tooltip-row"><span>工具定义</span><span>${toolT} (${seg(toolT)}%)</span></div>
+      <div class="context-tooltip-row"><span>聊天记录</span><span>0 (0%)</span></div>
+      <div class="context-tooltip-row"><span>工具结果</span><span>0 (0%)</span></div>
+      <div class="context-tooltip-row" style="margin-top:4px;border-top:1px solid var(--border);padding-top:4px;font-weight:600">
+        <span>当前输入</span><span>${fmtTokenCount(tokens)} / ${fmtTokenCount(sharedMaxCtx)}</span>
+      </div>
+      <div class="context-tooltip-row" style="margin-top:4px;border-top:1px solid var(--border);padding-top:4px;font-weight:600;color:var(--accent)">
+        <span>输出预留</span><span>${fmtTokenCount(maxResp)}</span>
+      </div>
+      <div class="context-tooltip-row"><span>　占比（含预留）</span><span>${pct.toFixed(1)}%</span></div>
+      <div class="context-tooltip-row" style="font-size:10px;color:var(--text-tertiary)"><span>　占比（仅输入）</span><span>${inputPct.toFixed(1)}%</span></div>
+      <div class="context-tooltip-row" style="font-weight:600">
+        <span>总占用</span><span>${fmtTokenCount(total)} / ${fmtTokenCount(sharedMaxCtx)}</span>
+      </div>`;
+  }
+
   function updateContextProgress() {
     updateAgentContextProgress(agent, 'context-progress-fill', 'context-progress-text');
     // Code / Babe 圆扇形：agent 已初始化时用其 contextManager，否则回退到已加载的 settings 值
@@ -2307,44 +2364,24 @@
       if (codeAgent) {
         updateAgentContextProgress(codeAgent, 'code-context-progress-fill', 'code-context-progress-text');
       } else {
-        const t = document.getElementById('code-context-progress-text');
-        const f = document.getElementById('code-context-progress-fill');
-        const ind = document.getElementById('code-context-indicator');
-        if (t) t.textContent = `0/${fmtTokenCount(sharedMaxCtx)}`;
-        if (f) f.setAttribute('stroke-dasharray', '0 100');
-        if (ind) {
-          ind.dataset.used = 0; ind.dataset.max = sharedMaxCtx; ind.dataset.level = 'normal';
-          // agent 未初始化时也要创建 tooltip，保证悬停能弹出上下文详情（对齐 Chat/Babe 模式）
-          if (!ind.querySelector('.context-tooltip')) {
-            const tooltip = document.createElement('div');
-            tooltip.className = 'context-tooltip';
-            tooltip.innerHTML = '<div class="context-tooltip-title">上下文使用详情</div>'
-              + '<div class="context-tooltip-row"><span>总占用</span><span>0 / ' + fmtTokenCount(sharedMaxCtx) + '</span></div>';
-            ind.appendChild(tooltip);
-          }
-        }
+        ensureFallbackContext(
+          document.getElementById('code-context-indicator'),
+          document.getElementById('code-context-progress-fill'),
+          document.getElementById('code-context-progress-text'),
+          sharedMaxCtx
+        );
       }
     } catch (_) { /* codeAgent TDZ */ }
     try {
       if (babeAgent) {
         updateAgentContextProgress(babeAgent, 'babe-context-progress-fill', 'babe-context-progress-text');
       } else {
-        const t = document.getElementById('babe-context-progress-text');
-        const f = document.getElementById('babe-context-progress-fill');
-        const ind = document.getElementById('babe-context-indicator');
-        if (t) t.textContent = `0/${fmtTokenCount(sharedMaxCtx)}`;
-        if (f) f.setAttribute('stroke-dasharray', '0 100');
-        if (ind) {
-          ind.dataset.used = 0; ind.dataset.max = sharedMaxCtx; ind.dataset.level = 'normal';
-          // agent 未初始化时也要创建 tooltip，保证悬停能弹出上下文详情（对齐 Chat 模式）
-          if (!ind.querySelector('.context-tooltip')) {
-            const tooltip = document.createElement('div');
-            tooltip.className = 'context-tooltip';
-            tooltip.innerHTML = '<div class="context-tooltip-title">上下文使用详情</div>'
-              + '<div class="context-tooltip-row"><span>总占用</span><span>0 / ' + fmtTokenCount(sharedMaxCtx) + '</span></div>';
-            ind.appendChild(tooltip);
-          }
-        }
+        ensureFallbackContext(
+          document.getElementById('babe-context-indicator'),
+          document.getElementById('babe-context-progress-fill'),
+          document.getElementById('babe-context-progress-text'),
+          sharedMaxCtx
+        );
       }
     } catch (_) { /* babeAgent TDZ */ }
     // 同步主对话的上下文进度到 WebUI（按当前模式推送对应 agent 的数据）
@@ -2861,6 +2898,28 @@
       });
       marks = [];
       activeIdx = -1;
+      restoreAutoExpandedReasoning();
+    }
+
+    // 搜索期间自动展开的 Reasoning 段，切换/关闭时按原状态恢复折叠
+    let lastExpandedReasoning = null;
+    function restoreAutoExpandedReasoning() {
+      if (lastExpandedReasoning) {
+        const rs = lastExpandedReasoning.section;
+        if (rs && rs.isConnected && lastExpandedReasoning.wasCollapsed && !rs.classList.contains('streaming-reasoning')) {
+          rs.classList.add('collapsed');
+        }
+        lastExpandedReasoning = null;
+      }
+    }
+    // 命中点落在折叠的 Reasoning 内时，临时展开对应段（离开后由 restore 恢复）
+    function expandReasoningAround(mark) {
+      restoreAutoExpandedReasoning();
+      if (!mark || !mark.closest) return;
+      const rs = mark.closest('.reasoning-section');
+      if (!rs) return;
+      lastExpandedReasoning = { section: rs, wasCollapsed: rs.classList.contains('collapsed') };
+      rs.classList.remove('collapsed');
     }
 
     // 在文本节点中查找并包裹匹配片段（保留原始 DOM 结构）
@@ -2963,6 +3022,7 @@
       activeIdx = idx;
       marks.forEach((m, i) => m.classList.toggle('active', i === idx));
       const mark = marks[idx];
+      expandReasoningAround(mark);
       scrollContainerToMark(mark);
       // 若 mark 位于嵌套可滚动元素内（如 code 工具调用参数），再滚动该嵌套容器的父链
       let owner = mark.closest('pre.tool-call-args, .message-body, .content');
@@ -2991,15 +3051,21 @@
       const wasOpen = !overlay.classList.contains('hidden');
       overlay.classList.remove('hidden');
       if (wasOpen) {
-        input.focus();
-        input.select();
+        focusInput(true);
         return;
       }
       clearMarks();
       input.value = '';
       query = '';
       countEl.textContent = '0 / 0';
-      setTimeout(() => input.focus(), 50);
+      focusInput(false);
+    }
+
+    // 稳定地把焦点交给输入框（同步执行 + 微任务兜底，确保 Code/Babe 模式下也能稳定获得焦点）
+    function focusInput(selectText) {
+      try { input.focus({ preventScroll: true }); } catch { input.focus(); }
+      if (selectText) input.select();
+      Promise.resolve().then(() => { if (isOpen()) { input.focus({ preventScroll: true }); if (selectText) input.select(); } });
     }
 
     function close() {
@@ -3016,8 +3082,8 @@
       if (e.key === 'Enter') { e.preventDefault(); next(e.shiftKey ? -1 : 1); }
       else if (e.key === 'Escape') { e.preventDefault(); close(); }
     });
-    document.getElementById('chat-search-next')?.addEventListener('click', () => next(1));
-    document.getElementById('chat-search-prev')?.addEventListener('click', () => next(-1));
+    document.getElementById('chat-search-next')?.addEventListener('click', () => { next(1); focusInput(true); });
+    document.getElementById('chat-search-prev')?.addEventListener('click', () => { next(-1); focusInput(true); });
     document.getElementById('chat-search-close')?.addEventListener('click', close);
     // 浮窗内点空白处也关闭（可选，增强交互）
     overlay.addEventListener('click', (e) => {
@@ -3036,7 +3102,7 @@
     document.addEventListener('keydown', (e) => {
       if ((e.ctrlKey || e.metaKey) && (e.key === 'f' || e.key === 'F')) {
         e.preventDefault();
-        if (isOpen()) { input.focus(); input.select(); }
+        if (isOpen()) { focusInput(true); }
         else open();
       }
     }, true);
@@ -3175,16 +3241,17 @@
     });
   }
 
-  // 流式 chunk 去重辅助：防御流式传输双发（连续相同 chunk）与"累积全文"型网关
+  // 流式 chunk 去重辅助：只做绝对安全的去重（防同一份数据被消费两次），
+  // 不做"边界重叠剥离"——Babe 语气存在大量真实叠词，易误伤。
   // 返回 { raw, lastChunk }
   function dedupAppendChunk(raw, lastChunk, chunkContent) {
     if (!chunkContent) return { raw, lastChunk };
-    // 累积模式：chunk 包含此前全部已渲染文本（非标准网关逐段返回全文时替换而非追加）
+    // 连续重复 chunk（同一份数据被传输/消费两次）：丢弃
+    if (chunkContent === lastChunk) return { raw, lastChunk };
+    // 累积模式：chunk 包含此前全部已渲染文本（替换而非追加）
     if (chunkContent.length > raw.length && chunkContent.startsWith(raw)) {
       return { raw: chunkContent, lastChunk };
     }
-    // 连续重复 chunk（同一份数据被传输/消费两次）：丢弃，避免逐字重复
-    if (chunkContent === lastChunk) return { raw, lastChunk };
     return { raw: raw + chunkContent, lastChunk: chunkContent };
   }
 
@@ -3251,6 +3318,12 @@
   function finalizeStreamMessage(requestId, data) {
     const bubble = streamingBubbles.get(requestId);
     if (!bubble) return;
+    // main.js 先广播的无 content 流结束信号：不固化，等待带权威 content 的结束（agent.js commit）。
+    // 只有 data 携带 content（或为字符串内容）时才做最终固化，避免显示停留在流式累积的中间状态。
+    const isAuthoritativeFinal = (typeof data === 'string')
+      || !(data && typeof data === 'object')
+      || data.content !== undefined;
+    if (!isAuthoritativeFinal) return;
     streamingBubbles.delete(requestId);
     if (bubble.renderTimer) {
       clearTimeout(bubble.renderTimer);
@@ -8267,6 +8340,11 @@
 
     list.querySelectorAll('.history-delete').forEach(btn => {
       btn.addEventListener('click', async () => {
+        // 对齐 Babe 模式：删除历史记录前二次确认，防止误删
+        const conv = await window.api.historyGet(btn.dataset.id).catch(() => null);
+        const titleForConfirm = conv?.title || '此对话';
+        const confirmed = await window.confirmDialog(`确定删除"${String(titleForConfirm).slice(0, 40)}"吗？此操作不可恢复。`, '删除确认');
+        if (!confirmed) return;
         await window.api.historyDelete(btn.dataset.id);
         if (agent.conversationId === btn.dataset.id) {
           agent.newConversation();
@@ -10159,8 +10237,26 @@
           break;
         }
         case 'stream-end': {
+          // 权威结束事件带 content；main.js 先广播的无 content 信号不提前固化气泡，
+          // 等待带权威 content 的结束，避免显示停留在流式累积的中间状态。
+          const isAuthoritativeFinal = !!(data && typeof data === 'object' && data.content !== undefined);
           const bubble = codeStreamBubble;
-          if (!bubble) { codeStreamBubble = null; return; }
+          if (!bubble) {
+            // 若气泡已被先到的空信号固化，权威 content 到达时按 requestId 定位并覆盖
+            if (isAuthoritativeFinal && data.requestId) {
+              const msgs = document.getElementById('code-chat-messages');
+              const target = msgs?.querySelector(`[data-stream-request="${cssEscape(data.requestId)}"]`);
+              if (target) {
+                const body = target.querySelector('.message-content, .code-msg-content, .message-body');
+                const clean = String(data.content || '').trimEnd();
+                if (body && clean) body.innerHTML = renderMarkdown(clean);
+              }
+            }
+            codeStreamBubble = null;
+            return;
+          }
+          // 无 content 的信号：仅等待权威，不固化
+          if (!isAuthoritativeFinal) return;
           if (bubble.renderTimer) { clearTimeout(bubble.renderTimer); bubble.renderTimer = null; }
           const hasReasoning = !!(data.reasoning || bubble.rawReasoning);
           // 优先使用 stream-end 携带的完整内容（防止流式期间传输重复导致最终文本含叠词）
@@ -10199,6 +10295,9 @@
         case 'stream-start':
           // Create streaming bubble
           codeStreamBubble = createCodeStreamBubble();
+          if (codeStreamBubble?.el && data?.requestId) {
+            codeStreamBubble.el.setAttribute('data-stream-request', String(data.requestId));
+          }
           break;
         case 'tool_call':
           addCodeToolCall(data);
@@ -10565,6 +10664,10 @@
         });
         listEl.querySelectorAll('.history-delete').forEach(btn => {
           btn.addEventListener('click', async () => {
+            // 对齐 Babe 模式：删除 Code 历史记录前二次确认，防止误删
+            const titleForConfirm = btn.closest('.history-item')?.querySelector('.history-title')?.textContent?.trim() || '此对话';
+            const confirmed = await window.confirmDialog(`确定删除"${String(titleForConfirm).slice(0, 40)}"吗？此操作不可恢复。`, '删除确认');
+            if (!confirmed) return;
             await window.api.codeDeleteHistory(codeWorkspacePath, btn.dataset.id);
             loadCodeHistoryPage();
           });
@@ -11265,8 +11368,26 @@
             break;
           }
           case 'stream-end': {
+            // 权威结束事件带有 content 字段（agent.js 最终 commit）；
+            // main.js 先广播的"无 content"流结束信号不固化气泡，等待带完整/权威 content 的结束，
+            // 避免流式累积与最终完整内容不一致时，显示停留在中间状态。
+            const isAuthoritativeFinal = !!(data && typeof data === 'object' && data.content !== undefined);
             const bubble = babeStreamBubble;
-            if (!bubble) { babeStreamBubble = null; return; }
+            if (!bubble) {
+              // 若气泡已被先到的空信号固化，权威 content 到达时按 requestId 定位并覆盖
+              if (isAuthoritativeFinal && data.requestId) {
+                const target = msgsEl.querySelector(`[data-stream-request="${cssEscape(data.requestId)}"]`);
+                if (target) {
+                  const body = target.querySelector('.babe-msg-content, .babe-msg-body, .message-content');
+                  const clean = String(data.content || '').replace(/【好感度[+-]?\d+】/g, '').trimEnd();
+                  if (body && clean) body.innerHTML = renderMarkdown(clean);
+                }
+              }
+              babeStreamBubble = null;
+              return;
+            }
+            // 无 content 的信号：仅等待权威，不固化
+            if (!isAuthoritativeFinal) return;
             if (bubble.renderTimer) { clearTimeout(bubble.renderTimer); bubble.renderTimer = null; }
             const hasReasoning = !!(data.reasoning || bubble.rawReasoning);
             // 使用剥离标记后的 content（agent.js 已处理）
@@ -11307,6 +11428,9 @@
           }
           case 'stream-start':
             babeStreamBubble = createBabeStreamBubble();
+            if (babeStreamBubble?.el && data?.requestId) {
+              babeStreamBubble.el.setAttribute('data-stream-request', String(data.requestId));
+            }
             break;
           case 'tool_call':
             addBabeToolCall(data);

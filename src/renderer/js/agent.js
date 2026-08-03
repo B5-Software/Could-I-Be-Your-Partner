@@ -3088,6 +3088,56 @@ ${toolListSection}`;
           return { ok: true, message: '目标已完成: ' + (args.summary || '') };
         }
         case 'sleep': {
+          // 支持两种模式：
+          //   until: 等待到指定时刻（13位毫秒时间戳 / ISO 日期时间 / "YYYY-MM-DD HH:mm[:ss]" / 短时刻 "HH:mm"）
+          //   ms:    等待指定毫秒数
+          if (args.until !== undefined && args.until !== null && args.until !== '') {
+            const raw = String(args.until).trim();
+            const isShortTime = /^\d{1,2}:\d{2}$/.test(raw);
+            let targetMs;
+            if (/^\d{13}$/.test(raw)) {
+              targetMs = Number(raw);
+            } else if (isShortTime) {
+              // 短时刻 "HH:mm" → 视为今天该时刻（本地时区）
+              const now = new Date();
+              const [hh, mm] = raw.split(':');
+              const today = new Date(); today.setHours(0, 0, 0, 0);
+              today.setHours(parseInt(hh, 10), parseInt(mm, 10), 0, 0);
+              targetMs = today.getTime();
+            } else {
+              let iso = raw.replace(' ', 'T');
+              // 无时区标记则认为用户想表达本地时间，直接按本地时区构造
+              if (!/Z|[+-]\d{2}:?\d{2}$/.test(iso)) {
+                const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/);
+                if (m) {
+                  const d = new Date(+(m[1]), +(m[2]) - 1, +(m[3]), +(m[4]), +(m[5]), +(m[6] || 0));
+                  targetMs = d.getTime();
+                } else {
+                  targetMs = new Date(iso).getTime();
+                }
+              } else {
+                targetMs = new Date(iso).getTime();
+              }
+              if (isNaN(targetMs)) return { ok: false, error: `无法解析 until 时间：${raw}` };
+            }
+            if (isNaN(targetMs)) return { ok: false, error: `无法解析 until 时间：${raw}` };
+            let waitMs = targetMs - Date.now();
+            // 短时刻落在今天之前（已过）则顺延到明天等价时刻；长日期时刻已过则报错
+            if (waitMs <= 0) {
+              if (isShortTime) {
+                targetMs += 24 * 3600 * 1000;
+                waitMs = targetMs - Date.now();
+              } else if (waitMs < 0) {
+                return { ok: false, error: '目标时刻已过期，等待时长需为未来时间' };
+              }
+            }
+            // 上限保护：最多等待到 24 小时
+            if (waitMs > 24 * 3600 * 1000) {
+              return { ok: false, error: '等待时长超过上限（最长 24 小时），请检查 until 时间' };
+            }
+            await new Promise(resolve => setTimeout(resolve, waitMs));
+            return { ok: true, waitedUntil: new Date(targetMs).toLocaleString('zh-CN', { hour12: false }), waitedMs: waitMs };
+          }
           const ms = Math.min(Math.max(parseInt(args.ms) || 1000, 1), 60000);
           await new Promise(resolve => setTimeout(resolve, ms));
           return { ok: true, slept: ms };

@@ -612,26 +612,26 @@ body.no-tarot .setting-label-tarot + .toggle-switch + .setting-hint {
   left: 0;
   right: 0;
   z-index: 1000;
-  padding: 12px 16px 0;
+  padding: 14px 20px 0;
   pointer-events: none;
 }
 .chat-search-overlay.hidden { display: none; }
 .chat-search-bar {
-  max-width: 560px;
+  max-width: 620px;
   margin: 0 auto;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   background: var(--bg-elevated, var(--bg-secondary));
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 8px 12px;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+  border: 1px solid var(--accent, var(--border));
+  border-radius: 10px;
+  padding: 12px 16px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.28);
   pointer-events: auto;
 }
 .chat-search-bar > i.fa-magnifying-glass {
   color: var(--text-tertiary);
-  font-size: 13px;
+  font-size: 15px;
   flex-shrink: 0;
 }
 .chat-search-bar input {
@@ -641,22 +641,27 @@ body.no-tarot .setting-label-tarot + .toggle-switch + .setting-hint {
   outline: none;
   background: transparent;
   color: var(--text-primary);
-  font-size: 13px;
+  font-size: 15px;
+  line-height: 1.6;
 }
 .chat-search-count {
   flex-shrink: 0;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-tertiary);
   font-variant-numeric: tabular-nums;
-  min-width: 44px;
+  min-width: 52px;
   text-align: right;
 }
 .chat-search-bar .btn-icon {
-  padding: 4px 8px;
-  font-size: 12px;
-  opacity: 0.7;
+  padding: 6px 11px;
+  font-size: 14px;
+  opacity: 0.75;
   flex-shrink: 0;
+  border-radius: 6px;
 }
+.chat-search-bar .btn-icon:focus-visible,
+.chat-search-bar .btn-icon:active,
+.chat-search-bar .btn-icon:focus { opacity: 1; }
 .chat-search-bar .btn-icon:hover { opacity: 1; }
 
 /* 搜索结果高亮 */
