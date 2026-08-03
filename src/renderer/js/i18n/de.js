@@ -287,6 +287,11 @@ _tools: {
   runTerminalCommand: 'Terminalbefehl ausführen',
   awaitTerminalCommand: 'Terminalbefehl abwarten',
   killTerminal: 'Terminal schließen',
+  terminalReadOutput: 'Terminalausgabe lesen',
+  terminalSendInput: 'Text an Terminal senden',
+  terminalPressKey: 'Taste an Terminal senden (TUI/menuconfig)',
+  terminalAnswerPrompt: 'Terminal-Abfrage beantworten',
+  terminalListSessions: 'Terminal-Sitzungen auflisten',
   readClipboard: 'Zwischenablage lesen',
   writeClipboard: 'Zwischenablage schreiben',
   takeScreenshot: 'Bildschirm aufnehmen',
@@ -602,7 +607,7 @@ ${p.customPrompt ? '\nBenutzerdefinierter Prompt:\n' + p.customPrompt : ''}${p.t
    - Für mehrere Änderungen multiEditFile verwenden.
    - old_string muss exakt übereinstimmen (inklusive Einrückung und Zeilenumbrüchen).
    - Nach Änderung erklären, was geändert wurde und warum.
-5. Terminalbefehle: zuerst makeTerminal aufrufen, dann runTerminalCommand/awaitTerminalCommand; am Ende killTerminal.
+5. Terminalbefehle: zuerst makeTerminal aufrufen, dann runTerminalCommand/awaitTerminalCommand. Das Terminal ist ein interaktives pty und kann TUI/menuconfig-Programme vollständig bedienen: terminalReadOutput zum Lesen der Ausgabe (lastLines für letzte N Zeilen), terminalPressKey für Pfeiltasten/Enter/Tab/Esc/CtrlC usw., terminalSendInput zum Eingeben von Text (ohne Enter), terminalAnswerPrompt zum Beantworten von Y/n-Abfragen, terminalListSessions zum Auflisten der Sitzungen. Ablauf: Befehl ausführen → terminalReadOutput → prüfen ob Interaktion nötig → Tasten/Eingabe senden → erneut lesen zur Bestätigung. Am Ende killTerminal.
 6. Markdown-Codeblöcke mit Sprach-Tag verwenden; Werkzeuge gegenüber manuellem Ausführen bevorzugen.
 7. Bei unklaren Anforderungen nachfragen, nicht raten und große Änderungen machen.
 8. Bei Werkzeugfehlern Parameter prüfen, erneut versuchen oder Ansatz wechseln.

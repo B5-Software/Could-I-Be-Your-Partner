@@ -184,6 +184,9 @@
               <button class="btn-icon hidden" id="btn-reoptimize-tools" title="手动重新优化工具选择">
                 <i class="fa-solid fa-wand-magic-sparkles"></i>
               </button>
+              <button class="btn-icon" id="btn-chat-search" title="搜索聊天记录（Ctrl+F）">
+                <i class="fa-solid fa-magnifying-glass"></i>
+              </button>
               <button class="btn-icon" id="btn-show-downloads" title="下载管理（Ctrl+D）">
                 <i class="fa-solid fa-download"></i>
                 <span class="badge hidden" id="download-badge">0</span>
@@ -530,7 +533,7 @@
               </span>
             </div>
             <button class="btn-secondary" id="btn-babe-new" title="新对话"><i class="fa-solid fa-plus"></i></button>
-            <button class="btn-secondary" id="btn-babe-proactive" title="让TA主动发消息"><i class="fa-solid fa-paper-plane"></i></button>
+            <button class="btn-secondary" id="btn-babe-proactive" title="让TA主动发消息"><i class="fa-solid fa-wand-magic-sparkles"></i></button>
           </div>
         </div>
         <div class="babe-chat-messages" id="babe-chat-messages">
@@ -2177,6 +2180,18 @@
 
       <!-- 折叠面板的索引贴（最小化后在右侧边缘显示） -->
       <div class="panel-tabs-container" id="panel-tabs-container"></div>
+
+      <!-- 聊天记录搜索覆盖层（Chat/Code/Babe 共用，Ctrl+F 打开） -->
+      <div class="chat-search-overlay hidden" id="chat-search-overlay">
+        <div class="chat-search-bar">
+          <i class="fa-solid fa-magnifying-glass"></i>
+          <input type="text" id="chat-search-input" placeholder="搜索聊天记录..." autocomplete="off" spellcheck="false">
+          <span class="chat-search-count" id="chat-search-count">0 / 0</span>
+          <button class="btn-icon" id="chat-search-prev" title="上一个（Shift+Enter）"><i class="fa-solid fa-chevron-up"></i></button>
+          <button class="btn-icon" id="chat-search-next" title="下一个（Enter）"><i class="fa-solid fa-chevron-down"></i></button>
+          <button class="btn-icon" id="chat-search-close" title="关闭（Esc）"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+      </div>
     </main>
   </div>
 

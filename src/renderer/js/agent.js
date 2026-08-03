@@ -102,6 +102,7 @@ class Agent {
     this.settings = merged;
     if (this.contextManager) {
       this.contextManager.setMaxTokens(merged?.llm?.maxContextLength || 8192);
+      this.contextManager.setOutputReserve(merged?.llm?.maxResponseTokens || 8192);
       this.contextManager.setSystemPrompt(this.getSystemPrompt());
     }
   }
@@ -158,6 +159,7 @@ class Agent {
     }
     this.systemInfo = await window.api.getFullSystemInfo();
     this.contextManager.setMaxTokens(this.settings.llm.maxContextLength || 8192);
+    this.contextManager.setOutputReserve(this.settings?.llm?.maxResponseTokens || 8192);
     // Don't draw tarot card on init - draw on first message
     // Create workspace
     this.resetOptimizedTools();
@@ -680,7 +682,7 @@ ${toolListSection}`;
    - 多处修改用 multiEditFile 批量编辑（edits 数组按顺序依次应用）。
    - old_string 必须与文件内容完全匹配（包括缩进和换行），出现多次时需提供更长上下文或设 replace_all=true。
    - 修改后说明修改了什么、为什么改。
-5. 终端命令：先调用 makeTerminal 创建终端会话（已自动定位 cwd 到工作区），拿到 terminalId 后调用 runTerminalCommand/awaitTerminalCommand 执行命令；任务结束用 killTerminal 关闭。也可用 runShellScriptCode 一次性执行脚本。
+5. 终端命令：先调用 makeTerminal 创建终端会话（已自动定位 cwd 到工作区），拿到 terminalId 后调用 runTerminalCommand/awaitTerminalCommand 执行命令。终端是交互式 pty，可完整操作 TUI/menuconfig 等程序：用 terminalReadOutput 读取当前输出（lastLines 取末尾N行）、用 terminalPressKey 发送方向键/Enter/Tab/Esc/CtrlC 等按键、用 terminalSendInput 输入文本（不带回车）、用 terminalAnswerPrompt 回答 Y/n 等交互提问、用 terminalListSessions 查看会话。交互流程：执行命令 → terminalReadOutput 查看输出 → 判断是否需要交互 → 按键/输入应答 → 再读取确认。任务结束用 killTerminal 关闭。也可用 runShellScriptCode 一次性执行脚本。
 6. 提供代码时使用 markdown 代码块并标注语言；执行命令时优先使用工具而非让用户手动操作。
 7. 遇到不确定的需求时主动询问用户，不要臆测后大量改代码。
 8. 工具调用失败时检查参数（路径、命令语法），重试或换方案，不要静默放弃。
@@ -949,6 +951,7 @@ ${toolListSection}`;
       // Code 模式核心工具保底：终端/文件/编辑工具必须可被选中
       if (this.mode === 'code') {
         if (['maketerminal', 'runterminalcommand', 'awaitterminalcommand', 'killterminal',
+             'terminalreadoutput', 'terminalsendinput', 'terminalpresskey', 'terminalanswerprompt', 'terminallistsessions',
              'readfile', 'writefile', 'createfile', 'editfile', 'listdirectory',
              'makedirectory', 'localsearch', 'runshellscriptcode'].includes(nm)) {
           score += 5;
@@ -1517,8 +1520,13 @@ ${toolListSection}`;
     const keepLast = opts.keepLast ?? 6;
     const isSub = !!opts.isSubAgent;
     const prefix = isSub ? '[子代理] ' : '';
-    const stats = ctx.getStats();
-    const usage = parseFloat(stats.usage);
+    // 触发阈值基于"含输出预留的占用"（当前输入 + 输出预留，分母为完整上下文窗口），
+    // 与 UI 上下文圆环显示一致，确保始终为模型输出预留空间。
+    // 纯输入占用只是参考（用于提示），判断一律用 usageWithReserve。
+    const readStats = () => ctx.getStats();
+    const usageOf = (st) => parseFloat(st.usageWithReserve ?? st.usage);
+    let stats = readStats();
+    let usage = usageOf(stats);
     let action = 'none';
 
     // 第一层：MicroCompact (>70%) — 清理旧工具结果
@@ -1526,19 +1534,19 @@ ${toolListSection}`;
       const cleared = ctx.microCompact();
       if (cleared > 0) {
         action = 'micro';
-        if (notify) notify(`${prefix}MicroCompact: 已清理 ${cleared} 条旧工具结果（${usage}%）`);
+        if (notify) notify(`${prefix}MicroCompact: 已清理 ${cleared} 条旧工具结果（占用 ${stats.usageWithReserve ?? stats.usage}% 含输出预留）`);
       }
     }
 
     // 第二层：LLM 语义摘要 (>85%) — 压缩历史对话
-    const newUsage1 = parseFloat(ctx.getStats().usage);
+    let newUsage1 = usageOf(readStats());
     if (newUsage1 > 85 && this.autoCompactFailures < maxFailures) {
       try {
         const sumRes = await ctx.summarizeWithLLM({ keepLast });
         if (sumRes.ok) {
           this.autoCompactFailures = 0;
           action = 'summary';
-          if (notify) notify(`${prefix}已自动压缩上下文（${sumRes.message}），当前 ${ctx.getStats().usage}%`);
+          if (notify) notify(`${prefix}已自动压缩上下文（${sumRes.message}），当前 ${usageOf(readStats()).toFixed(1)}%（含输出预留）`);
         } else {
           this.autoCompactFailures++;
           action = 'summary_failed';
@@ -1553,14 +1561,14 @@ ${toolListSection}`;
 
     // 第三层：紧急硬截断 (>95%) — 语义压缩后仍超限的最后防线
     // 阶梯式降级：keepLast=6 → keepLast=4 → keepLast=2，确保不再溢出
-    let newUsage2 = parseFloat(ctx.getStats().usage);
+    let newUsage2 = usageOf(readStats());
     if (newUsage2 > 95) {
       const steps = [keepLast, Math.max(4, keepLast - 2), Math.max(2, keepLast - 4)];
       for (const step of steps) {
         ctx.manage('clear_old', { keepLast: step });
-        newUsage2 = parseFloat(ctx.getStats().usage);
+        newUsage2 = usageOf(readStats());
         action = `hard_truncate_${step}`;
-        if (notify) notify(`${prefix}⚠️ 上下文严重溢出，已强制截断至最近 ${step} 条消息（${newUsage2}%）`);
+        if (notify) notify(`${prefix}⚠️ 上下文严重溢出，已强制截断至最近 ${step} 条消息（${newUsage2.toFixed(1)}% 含输出预留）`);
         if (newUsage2 <= 85) break;
       }
 
@@ -1579,9 +1587,9 @@ ${toolListSection}`;
         // 保留 system prompt + 最后 2 条消息
         ctx.messages = ctx.messages.slice(-2);
         ctx.pinnedMessages = [];
-        newUsage2 = parseFloat(ctx.getStats().usage);
+        newUsage2 = usageOf(readStats());
         action = 'emergency_truncate';
-        if (notify) notify(`${prefix}🚨 紧急上下文救援：已截断所有工具结果并只保留最后 2 条消息（${newUsage2}%）`);
+        if (notify) notify(`${prefix}🚨 紧急上下文救援：已截断所有工具结果并只保留最后 2 条消息（${newUsage2.toFixed(1)}% 含输出预留）`);
       }
     }
 
@@ -1891,6 +1899,11 @@ ${toolListSection}`;
           if (toolName === 'runTerminalCommand' || toolName === 'awaitTerminalCommand' || toolName === 'runShellScriptCode') {
             const cmd = args.command || args.script || '';
             if (this.isDangerousCommand(cmd)) needsApproval = true;
+          }
+          // terminalSendInput / terminalAnswerPrompt 可能提交危险命令（shell 粘贴执行）
+          if (toolName === 'terminalSendInput' || toolName === 'terminalAnswerPrompt') {
+            const text = args.text || args.answer || '';
+            if (this.isDangerousCommand(text)) needsApproval = true;
           }
 
           if (needsApproval && !this.settings.autoApproveSensitive) {
@@ -2281,11 +2294,25 @@ ${toolListSection}`;
           return result;
         }
         case 'runTerminalCommand': return await window.api.runTerminalCommand(args.terminalId, args.command);
-        case 'awaitTerminalCommand': return await window.api.awaitTerminalCommand(args.terminalId, args.command);
+        case 'awaitTerminalCommand': return await window.api.awaitTerminalCommand(args.terminalId, args.command, args.timeoutMs);
         case 'killTerminal': {
           this.terminals.delete(args.terminalId);
           return await window.api.killTerminal(args.terminalId);
         }
+        case 'terminalReadOutput': return await window.api.readTerminalOutput(args.terminalId, args.lastLines || 0);
+        case 'terminalSendInput': return await window.api.sendTerminalText(args.terminalId, args.text);
+        case 'terminalPressKey': return await window.api.pressTerminalKey(args.terminalId, args.key);
+        case 'terminalAnswerPrompt': {
+          // 回答交互式提问：先发送答案文本，再发送回车
+          const sendRes = await window.api.sendTerminalText(args.terminalId, args.answer);
+          if (!sendRes.ok) return sendRes;
+          const enterRes = await window.api.pressTerminalKey(args.terminalId, 'Enter');
+          if (!enterRes.ok) return enterRes;
+          // 短暂等待程序处理输入后返回当前输出
+          await new Promise(r => setTimeout(r, 500));
+          return await window.api.readTerminalOutput(args.terminalId, 20);
+        }
+        case 'terminalListSessions': return await window.api.listTerminals();
         case 'readClipboard': {
           const result = await window.api.readClipboard();
           return result.ok ? result : { ok: true, content: result };
@@ -2797,7 +2824,12 @@ ${toolListSection}`;
           }
           // 异步下载：立即返回 gid，不阻塞 Agent 后续操作
           // 支持配置下载参数：split/maxConnections/minSplitSize/timeout 等
-          const opts = { dir: this.workspacePath };
+          // dir 指定下载目录（可选，默认工作目录；须为已存在的绝对路径）
+          let targetDir = this.workspacePath;
+          if (args.dir) {
+            targetDir = args.dir;
+          }
+          const opts = { dir: targetDir };
           if (args.filename) opts.out = args.filename;
           if (args.headers) opts.headers = args.headers;
           if (args.split) opts.split = args.split;
@@ -2813,7 +2845,7 @@ ${toolListSection}`;
           if (res.ok) {
             // 刷新下载管理器 UI（若已打开）
             if (window.DownloadManager) window.DownloadManager.refresh();
-            return { ok: true, gid: res.gid, dir: this.workspacePath, message: '下载已添加，可使用 getDownloadStatus 查询进度' };
+            return { ok: true, gid: res.gid, dir: targetDir, message: '下载已添加，可使用 getDownloadStatus 查询进度' };
           }
           return { ok: false, error: res.error || '添加下载失败' };
         }
@@ -3238,6 +3270,7 @@ ${toolListSection}`;
       subAgent.tarotCard = await window.api.drawTarot();
       const maxCtx = this.settings?.llm?.maxContextLength || 8192;
       subAgent.contextManager = new ContextManager(maxCtx);
+      subAgent.contextManager.setOutputReserve(this.settings?.llm?.maxResponseTokens || 8192);
       const tarotLine = subAgent.tarotCard
         ? `你的命运之牌是: ${subAgent.tarotCard.name}${subAgent.tarotCard.isReversed ? '(逆位)' : '(正位)'} - ${(subAgent.tarotCard.isReversed ? subAgent.tarotCard.meaningOfReversed : subAgent.tarotCard.meaningOfUpright) || ''}`
         : '';
@@ -3488,6 +3521,7 @@ ${tarotLine}
     ga.settings = this.settings;
     ga.tarotCard = await window.api.drawTarot();
     ga.contextManager = new ContextManager(this.settings.llm.maxContextLength || 8192);
+    ga.contextManager.setOutputReserve(this.settings?.llm?.maxResponseTokens || 8192);
     // buildPrompt receives tarotCard so callers can embed it without referencing ga before init
     const systemPrompt = typeof buildPrompt === 'function' ? buildPrompt(ga.tarotCard) : buildPrompt;
     ga.contextManager.setSystemPrompt(systemPrompt);

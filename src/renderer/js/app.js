@@ -2064,7 +2064,7 @@
     if (fill) fill.setAttribute('stroke-dasharray', `${dashLen} ${circumference}`);
     if (text) {
       const used = d.used || 0, max = d.max || 8192;
-      const fmt = (n) => n >= 1000 ? `${(n / 1000).toFixed(1)}K` : `${n}`;
+      const fmt = (n) => fmtTokenCount(n);
       text.textContent = `${fmt(used)}/${fmt(max)}`;
     }
     if (ind) {
@@ -2129,19 +2129,19 @@
     const tokens = systemGuidanceTokens + toolDefsTokens + chatTokens + toolResultTokens + otherTokens;
     const maxTokens = stats?.maxTokens ?? (agentInstance.settings?.llm?.maxContextLength || 0);
     // 输出预留：为模型生成回复保留 maxResponseTokens 的空间
-    // 上下文实际可用空间 = maxContextLength - maxResponseTokens
+    // 总占用 = 当前输入 token + 输出预留，分母为完整上下文窗口 maxTokens
+    // （不再用 maxTokens - maxResponseTokens 做分母，避免输出预留被计算两次的错觉）
     const maxResponseTokens = agentInstance.settings?.llm?.maxResponseTokens || 8192;
-    const effectiveMax = Math.max(maxResponseTokens + 1024, maxTokens - maxResponseTokens);
-    // 总占用 = 当前输入 token + 输出预留
     const totalOccupied = tokens + maxResponseTokens;
-    const percentage = effectiveMax ? Math.min(100, (totalOccupied / effectiveMax) * 100) : 0;
+    const effectiveMax = maxTokens;
+    const percentage = maxTokens ? Math.min(100, (totalOccupied / maxTokens) * 100) : 0;
     const inputOnlyPct = maxTokens ? Math.min(100, (tokens / maxTokens) * 100) : 0;
 
     // 更新 SVG 圆扇形：stroke-dasharray="percentage, 100-percentage"
     // 圆周长 = 2 * PI * r = 2 * PI * 15.915 ≈ 100，所以直接用百分比
     progressFill.setAttribute('stroke-dasharray', `${percentage} ${100 - percentage}`);
-    // 文本：精简显示（>1000 显示为 K）
-    const fmt = (n) => n >= 1000 ? `${(n/1000).toFixed(1)}K` : `${n}`;
+    // 文本：精简显示（≥1K 用 K，≥1M 用 M，≥1G/T/P 用对应单位），显示当前占用+输出预留 / 完整上下文窗口
+    const fmt = (n) => fmtTokenCount(n);
     progressText.textContent = `${fmt(totalOccupied)}/${fmt(effectiveMax)}`;
 
     // 颜色级别
@@ -2201,12 +2201,8 @@
     if (!su) return '';
     // API 未返回 usage 时使用估算值，数字前加 ~ 前缀标识
     const pfx = su.estimated ? '~' : '';
-    const fmt = (n) => {
-      const num = Number(n) || 0;
-      if (num >= 1e7) return `${pfx}${(num/1e6).toFixed(2)}M`;
-      if (num >= 1e3) return `${pfx}${(num/1e3).toFixed(2)}K`;
-      return `${pfx}${num}`;
-    };
+    // ≥1M 用 M（非 10M），≥1G/T/P 用对应单位（防御性编程）
+    const fmt = (n) => fmtTokenCount(n, pfx);
     const cachedPct = su.prompt > 0 ? (su.cached / su.prompt * 100).toFixed(1) : '0.0';
     // 计算费用：若该模型在预算控制里配置了价格则显示，否则不显示费用行
     const pricing = getSessionPricing(agentInstance);
@@ -2314,7 +2310,7 @@
         const t = document.getElementById('code-context-progress-text');
         const f = document.getElementById('code-context-progress-fill');
         const ind = document.getElementById('code-context-indicator');
-        if (t) t.textContent = `0/${sharedMaxCtx >= 1000 ? (sharedMaxCtx/1000).toFixed(1)+'K' : sharedMaxCtx}`;
+        if (t) t.textContent = `0/${fmtTokenCount(sharedMaxCtx)}`;
         if (f) f.setAttribute('stroke-dasharray', '0 100');
         if (ind) { ind.dataset.used = 0; ind.dataset.max = sharedMaxCtx; ind.dataset.level = 'normal'; }
       }
@@ -2326,7 +2322,7 @@
         const t = document.getElementById('babe-context-progress-text');
         const f = document.getElementById('babe-context-progress-fill');
         const ind = document.getElementById('babe-context-indicator');
-        if (t) t.textContent = `0/${sharedMaxCtx >= 1000 ? (sharedMaxCtx/1000).toFixed(1)+'K' : sharedMaxCtx}`;
+        if (t) t.textContent = `0/${fmtTokenCount(sharedMaxCtx)}`;
         if (f) f.setAttribute('stroke-dasharray', '0 100');
         if (ind) { ind.dataset.used = 0; ind.dataset.max = sharedMaxCtx; ind.dataset.level = 'normal'; }
       }
@@ -2812,6 +2808,188 @@
       });
     }
   }
+
+  // ============ 聊天记录搜索（Chat/Code/Babe 共用，Ctrl+F 打开） ============
+  const chatSearch = (() => {
+    const overlay = document.getElementById('chat-search-overlay');
+    const input = document.getElementById('chat-search-input');
+    const countEl = document.getElementById('chat-search-count');
+    if (!overlay || !input || !countEl) return null;
+
+    let query = '';
+    let marks = [];      // 所有高亮 <mark> 元素
+    let activeIdx = -1;  // 当前激活的 mark 索引
+    let searchableMsgs = []; // 上次搜索的消息元素列表
+
+    // 获取当前模式对应的消息容器选择器
+    function getContainer() {
+      if (currentMode === 'code') return document.getElementById('code-chat-messages');
+      if (currentMode === 'babe') return document.getElementById('babe-chat-messages');
+      return chatMessages;
+    }
+
+    // 清理所有高亮标记
+    function clearMarks() {
+      marks.forEach(m => {
+        try {
+          const parent = m.parentNode;
+          if (parent) {
+            parent.replaceChild(document.createTextNode(m.textContent), m);
+            parent.normalize();
+          }
+        } catch { /* ignore */ }
+      });
+      marks = [];
+      activeIdx = -1;
+    }
+
+    // 在文本节点中查找并包裹匹配片段（保留原始 DOM 结构）
+    function highlightNode(node, q) {
+      const text = node.textContent;
+      const lower = text.toLowerCase();
+      const ql = q.toLowerCase();
+      if (!ql || !lower.includes(ql)) return;
+      const frag = document.createDocumentFragment();
+      let idx = 0;
+      let start = lower.indexOf(ql);
+      while (start !== -1) {
+        if (start > idx) frag.appendChild(document.createTextNode(text.slice(idx, start)));
+        const mark = document.createElement('mark');
+        mark.className = 'chat-search-mark';
+        mark.textContent = text.slice(start, start + q.length);
+        frag.appendChild(mark);
+        marks.push(mark);
+        idx = start + q.length;
+        start = lower.indexOf(ql, idx);
+      }
+      if (idx < text.length) frag.appendChild(document.createTextNode(text.slice(idx)));
+      node.parentNode.replaceChild(frag, node);
+    }
+
+    // 递归遍历消息元素的可搜索文本节点（跳过时间戳、按钮、图标等）
+    function walkTextNodes(el) {
+      if (!el) return;
+      for (const child of Array.from(el.childNodes)) {
+        if (child.nodeType === Node.TEXT_NODE) {
+          highlightNode(child, query);
+        } else if (child.nodeType === Node.ELEMENT_NODE) {
+          const cls = child.className || '';
+          const tag = child.tagName;
+          if (tag === 'SCRIPT' || tag === 'STYLE' || tag === 'BUTTON' ||
+              cls.includes('message-time') || cls.includes('msg-time') || cls.includes('message-avatar')) continue;
+          walkTextNodes(child);
+        }
+      }
+    }
+
+    // 执行搜索
+    function runSearch(q) {
+      clearMarks();
+      query = q.trim();
+      const container = getContainer();
+      if (!container) { countEl.textContent = '0 / 0'; return; }
+
+      // 收集消息元素（message / babe-message）
+      searchableMsgs = Array.from(container.querySelectorAll('.message, .babe-message'));
+      if (!query) {
+        marks = [];
+        countEl.textContent = '0 / 0';
+        return;
+      }
+
+      // 对每个消息元素内的文本节点做高亮
+      for (const msg of searchableMsgs) {
+        walkTextNodes(msg);
+      }
+
+      // 过滤出包含匹配的消息
+      const matchedMsgs = [];
+      for (const msg of searchableMsgs) {
+        if (msg.querySelector('.chat-search-mark')) matchedMsgs.push(msg);
+      }
+
+      // 在匹配消息上打标记（隐藏不匹配消息，但保持布局简单：只滚动定位）
+      // 统计实际 mark 数量
+      countEl.textContent = marks.length > 0 ? `1 / ${marks.length}` : '0 / 0';
+      if (marks.length > 0) {
+        activeIdx = 0;
+        activateMark(0, matchedMsgs);
+      }
+      searchableMsgs = matchedMsgs;
+    }
+
+    // 激活指定 mark，并滚动到可见
+    function activateMark(idx, matchedMsgs) {
+      if (!marks.length) return;
+      idx = ((idx % marks.length) + marks.length) % marks.length;
+      activeIdx = idx;
+      marks.forEach((m, i) => m.classList.toggle('active', i === idx));
+      const mark = marks[idx];
+      const container = getContainer();
+      if (container && mark.scrollIntoView) {
+        try {
+          mark.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        } catch { mark.scrollIntoView(); }
+      }
+      // 更新计数器：当前第几个 / 总数
+      const matchedCount = matchedMsgs ? matchedMsgs.length : searchableMsgs.length;
+      countEl.textContent = `${idx + 1} / ${marks.length}（${matchedCount}条消息）`;
+    }
+
+    function next(step = 1) {
+      if (!marks.length) return;
+      const idx = (activeIdx + step + marks.length) % marks.length;
+      activateMark(idx);
+    }
+
+    function open() {
+      clearMarks();
+      overlay.classList.remove('hidden');
+      input.value = '';
+      query = '';
+      countEl.textContent = '0 / 0';
+      setTimeout(() => input.focus(), 50);
+    }
+
+    function close() {
+      clearMarks();
+      overlay.classList.add('hidden');
+      input.blur();
+    }
+
+    function isOpen() { return !overlay.classList.contains('hidden'); }
+
+    // 事件绑定
+    input.addEventListener('input', () => runSearch(input.value));
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); next(e.shiftKey ? -1 : 1); }
+      else if (e.key === 'Escape') { e.preventDefault(); close(); }
+    });
+    document.getElementById('chat-search-next')?.addEventListener('click', () => next(1));
+    document.getElementById('chat-search-prev')?.addEventListener('click', () => next(-1));
+    document.getElementById('chat-search-close')?.addEventListener('click', close);
+
+    // Ctrl/Cmd+F 全局快捷键
+    document.addEventListener('keydown', (e) => {
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'f' || e.key === 'F')) {
+        e.preventDefault();
+        if (isOpen()) { input.focus(); input.select(); }
+        else open();
+      }
+    }, true);
+
+    // 模式切换时关闭搜索（避免高亮残留到别的容器）
+    document.querySelectorAll('.nav-item[data-page]').forEach(btn => {
+      btn.addEventListener('click', () => { if (isOpen()) close(); });
+    });
+
+    return { open, close, isOpen, runSearch, clearMarks };
+  })();
+
+  // Chat 模式搜索按钮（下载按钮左边）
+  document.getElementById('btn-chat-search')?.addEventListener('click', () => {
+    if (chatSearch) chatSearch.open();
+  });
 
   async function normalizeToolSettings() {
     if (!agent.settings) return;
@@ -3649,8 +3827,7 @@
         const tokEl = el.querySelector('.sub-agent-tokens');
         if (tokEl) {
           tokEl.classList.remove('hidden');
-          const fmt = (n) => n >= 1000 ? `${(n/1000).toFixed(1)}K` : `${n}`;
-          el.querySelector('.tokens-text').textContent = fmt(updates.usage.total);
+          el.querySelector('.tokens-text').textContent = fmtTokenCount(updates.usage.total);
         }
       }
       // 结果摘要（默认折叠，避免长结果撑高卡片影响阅读）
@@ -3738,7 +3915,7 @@
       const liveMessages = liveRec?.subAgent?.contextManager?.getMessages?.() || [];
       const messages = liveMessages.length > 0 ? liveMessages : (liveRec?.messages || []);
       const usage = liveRec?.usage || liveCardRec?.usage || {};
-      const fmtTok = (n) => (n || 0).toLocaleString();
+      const fmtTok = (n) => fmtTokenCount(n);
       const fmtDur = (ms) => {
         if (!ms) return '-';
         const s = Math.floor(ms / 1000);
@@ -3766,10 +3943,11 @@
       // 如果无法从 contextManager 获取，回退到最后一次请求的 prompt token
       if (usedTokens === 0) usedTokens = usage.lastPrompt || 0;
       // 输出预留：为模型生成回复保留 maxResponseTokens 的空间
+      // 总占用 = 当前输入 + 输出预留，分母为完整上下文窗口 maxCtx
       const maxResp = agent?.settings?.llm?.maxResponseTokens || 8192;
-      const effectiveMaxCtx = Math.max(maxResp + 1024, maxCtx - maxResp);
       const totalOcc = usedTokens + maxResp;
-      const ctxPct = effectiveMaxCtx > 0 ? Math.min(100, Math.round((totalOcc / effectiveMaxCtx) * 100)) : 0;
+      const effectiveMaxCtx = maxCtx;
+      const ctxPct = maxCtx > 0 ? Math.min(100, Math.round((totalOcc / maxCtx) * 100)) : 0;
       const ctxColor = ctxPct >= 95 ? 'var(--danger, #e74c3c)' : (ctxPct >= 80 ? 'var(--warning, #f39c12)' : 'var(--accent)');
       const isRunning = liveRec?.status === 'running' || (!liveRec?.endTime);
       const bodyHtml = messages.length === 0
@@ -9341,6 +9519,17 @@
     });
   }
 
+  // 格式化 Token 数量：≥1K 用 K，≥1M 用 M，≥1G 用 G，≥1T 用 T，≥1P 用 P
+  // 防御性编程：覆盖逆天用户可能出现的 G/T/P 数量级，避免溢出或显示过长数字
+  function fmtTokenCount(n, pfx = '') {
+    const num = Number(n) || 0;
+    if (num >= 1e15) return `${pfx}${(num / 1e15).toFixed(2)}P`;
+    if (num >= 1e12) return `${pfx}${(num / 1e12).toFixed(2)}T`;
+    if (num >= 1e9) return `${pfx}${(num / 1e9).toFixed(2)}G`;
+    if (num >= 1e6) return `${pfx}${(num / 1e6).toFixed(2)}M`;
+    if (num >= 1e3) return `${pfx}${(num / 1e3).toFixed(1)}K`;
+    return `${pfx}${num}`;
+  }
   function escapeHtmlSimple(s) {
     return String(s || '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
   }
@@ -9818,6 +10007,7 @@
     codeAgent.systemInfo = await window.api.getFullSystemInfo();
     codeAgent.contextManager = new ContextManager(codeAgent.settings.llm?.maxContextLength || 131072);
     codeAgent.contextManager.setMaxTokens(codeAgent.settings.llm?.maxContextLength || 131072);
+    codeAgent.contextManager.setOutputReserve(codeAgent.settings.llm?.maxResponseTokens || 8192);
     codeAgent.conversationId = Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
     await codeAgent.refreshSkillsCatalog();
     codeAgent.contextManager.setSystemPrompt(codeAgent.getSystemPrompt());
@@ -10914,6 +11104,7 @@
       const maxCtx = babeAgent.settings.llm?.maxContextLength || 131072;
       babeAgent.contextManager = new ContextManager(maxCtx);
       babeAgent.contextManager.setMaxTokens(maxCtx);
+      babeAgent.contextManager.setOutputReserve(babeAgent.settings.llm?.maxResponseTokens || 8192);
       babeAgent.conversationId = Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
       // 初始好感度
       babeAgent.babeAffection = babeAgent.settings.babe?.initialAffection ?? 30;

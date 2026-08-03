@@ -257,6 +257,11 @@ const EN_DICT = {
     runTerminalCommand: 'Execute terminal command',
     awaitTerminalCommand: 'Await terminal command',
     killTerminal: 'Close terminal',
+    terminalReadOutput: 'Read terminal output',
+    terminalSendInput: 'Send text input to terminal',
+    terminalPressKey: 'Send key to terminal (TUI/menuconfig)',
+    terminalAnswerPrompt: 'Answer terminal prompt',
+    terminalListSessions: 'List terminal sessions',
     readClipboard: 'Read clipboard',
     writeClipboard: 'Write clipboard',
     takeScreenshot: 'Take screenshot',
@@ -572,7 +577,7 @@ ${p.customPrompt ? '\nUser custom prompt:\n' + p.customPrompt : ''}${p.toolListS
    - For multiple changes use multiEditFile for batch editing (edits array applied in order).
    - old_string must match file content exactly (including indentation and newlines); when it appears multiple times, provide longer context or set replace_all=true.
    - After modification, explain what was changed and why.
-5. Terminal commands: call makeTerminal first to create a terminal session (cwd is automatically set to workspace), get terminalId, then call runTerminalCommand/awaitTerminalCommand to execute; use killTerminal when done. You can also use runShellScriptCode for one-off script execution.
+5. Terminal commands: call makeTerminal first to create a terminal session (cwd is automatically set to workspace), get terminalId, then call runTerminalCommand/awaitTerminalCommand to execute. The terminal is an interactive pty that can fully operate TUI/menuconfig programs: use terminalReadOutput to read current output (lastLines for last N lines), terminalPressKey to send arrow keys/Enter/Tab/Esc/CtrlC etc., terminalSendInput to type text (no Enter), terminalAnswerPrompt to answer Y/n prompts, terminalListSessions to list sessions. Flow: execute command → terminalReadOutput → judge if interaction needed → send keys/input → read again to confirm. Use killTerminal when done. You can also use runShellScriptCode for one-off script execution.
 6. Use markdown code blocks with language tags when providing code; prefer using tools over asking the user to run things manually.
 7. When requirements are unclear, ask the user — do not guess and make large changes.
 8. When tool calls fail, check parameters (paths, command syntax), retry or switch approach — do not silently give up.

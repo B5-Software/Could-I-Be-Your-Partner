@@ -35,6 +35,8 @@ class Aria2Manager {
     this._aria2Dir = null;
     this._sessionFile = null;
     this.currentProxy = null; // 当前应用的代理 URL
+    // keep-alive Agent：复用 TCP 连接，降低 aria2 繁忙时 RPC 连接建立延迟
+    this._agent = new http.Agent({ keepAlive: true, maxSockets: 16 });
   }
 
   get userDataDir() {
@@ -138,6 +140,22 @@ class Aria2Manager {
   }
 
   /**
+   * 确保 aria2 已启动（不重启、不比较代理）。
+   * 供 tellStatus/listAll 等查询类 API 使用——避免 start(undefined)
+   * 在配置了代理时被误判为"代理变化"而 shutdown 重启，中断正在进行的下载。
+   */
+  async ensureStarted() {
+    if (this.ready) return true;
+    if (this.startingPromise) return this.startingPromise;
+    this.startingPromise = this._startInternal(null);
+    try {
+      return await this.startingPromise;
+    } finally {
+      this.startingPromise = null;
+    }
+  }
+
+  /**
    * 启动 aria2c 子进程（带 RPC 服务）
    * @param {object} proxySettings - 代理设置 { mode, http, https, bypass }
    */
@@ -169,8 +187,9 @@ class Aria2Manager {
       fs.mkdirSync(this.aria2Dir, { recursive: true });
     }
 
-    // 解析代理设置
-    const proxyUrl = this.resolveProxy(proxySettings);
+    // 解析代理设置：仅显式传入时才更新 currentProxy
+    // （ensureStarted(null) 不应覆盖已配置的代理）
+    const proxyUrl = proxySettings ? this.resolveProxy(proxySettings) : this.currentProxy;
     this.currentProxy = proxyUrl;
 
     const args = [
@@ -188,6 +207,9 @@ class Aria2Manager {
       '--max-connection-per-server=5',
       '--min-split-size=1M',
       '--file-allocation=none',
+      // 磁盘缓存：大文件多连接下载时缓解磁盘 I/O 阻塞（aria2 事件循环卡顿 → RPC 慢）
+      '--disk-cache=64M',
+      '--max-download-result=500',
       '--console-log-level=warn',
       '--summary-interval=0',
       '--quiet'
@@ -220,9 +242,15 @@ class Aria2Manager {
         });
 
         this.process.on('exit', (code) => {
-          console.log(`[aria2] 进程退出，code=${code}`);
+          const wasReady = this.ready;
+          console.log(`[aria2] 进程退出，code=${code}${wasReady && code !== 0 ? '（异常退出）' : ''}`);
           this.ready = false;
           this.process = null;
+          // 异常退出告警：可能是 OOM/崩溃。下一次调用会通过 ensureStarted 自动重启，
+          // 且 --save-session 会恢复未完成的任务，无需用户干预。
+          if (wasReady && code !== 0) {
+            console.error(`[aria2] ⚠️ aria2 异常退出（code=${code}），正在下载的任务将由会话文件自动恢复`);
+          }
         });
 
         this._waitForReady(15000)
@@ -251,9 +279,13 @@ class Aria2Manager {
   }
 
   /**
-   * JSON-RPC 2.0 调用
+   * JSON-RPC 2.0 调用（带自动重试 + keep-alive 连接复用）
+   *
+   * 为什么需要重试：aria2 是单线程事件循环。大文件多连接下载时磁盘 I/O 密集，
+   * 事件循环（含 RPC 处理）可能暂时阻塞，导致 RPC 响应超过 socket 超时。
+   * 此时 aria2 并没有崩，只是忙——自动重试即可恢复，不应把瞬时繁忙当失败报给上层。
    */
-  rpc(method, params = []) {
+  rpc(method, params = [], _retry = 0) {
     return new Promise((resolve, reject) => {
       const body = JSON.stringify({
         jsonrpc: '2.0',
@@ -266,11 +298,14 @@ class Aria2Manager {
         port: this.port,
         path: '/jsonrpc',
         method: 'POST',
+        // 复用 TCP 连接：aria2 繁忙时避免每次新建连接再排队
+        agent: this._agent,
         headers: {
           'Content-Type': 'application/json',
           'Content-Length': Buffer.byteLength(body)
         },
-        timeout: 10000
+        // 30 秒 socket 超时：大文件下载时 aria2 事件循环繁忙，10 秒太容易误报
+        timeout: 30000
       }, (res) => {
         let data = '';
         res.on('data', (chunk) => { data += chunk; });
@@ -287,11 +322,27 @@ class Aria2Manager {
           }
         });
       });
-      req.on('error', reject);
-      req.on('timeout', () => { req.destroy(); reject(new Error('RPC 请求超时')); });
+      req.on('error', (err) => {
+        // 连接层失败（ECONNREFUSED/ECONNRESET/超时销毁等）→ 自动重试
+        if (_retry < 2 && this._isTransientRpcError(err)) {
+          setTimeout(() => {
+            this.rpc(method, params, _retry + 1).then(resolve, reject);
+          }, 500 * (_retry + 1));
+        } else {
+          reject(err);
+        }
+      });
+      req.on('timeout', () => {
+        req.destroy(new Error('RPC 请求超时'));
+      });
       req.write(body);
       req.end();
     });
+  }
+
+  _isTransientRpcError(err) {
+    const msg = (err && (err.code || err.message)) || '';
+    return /ECONNREFUSED|ECONNRESET|ETIMEDOUT|EPIPE|socket hang up|请求超时/i.test(String(msg));
   }
 
   // ===== 高层 API =====
@@ -303,7 +354,7 @@ class Aria2Manager {
    * @returns {Promise<string>} gid
    */
   async addUri(url, opts = {}) {
-    await this.start();
+    await this.ensureStarted();
     const uris = [url];
     const options = {};
     if (opts.dir) options.dir = opts.dir;
@@ -323,7 +374,7 @@ class Aria2Manager {
   }
 
   async tellStatus(gid) {
-    await this.start();
+    await this.ensureStarted();
     const fields = [
       'gid', 'status', 'totalLength', 'completedLength', 'uploadLength',
       'downloadSpeed', 'uploadSpeed', 'connections', 'numPieces', 'pieceLength',
@@ -333,41 +384,41 @@ class Aria2Manager {
   }
 
   async pause(gid, force = false) {
-    await this.start();
+    await this.ensureStarted();
     return this.rpc(force ? 'aria2.forcePause' : 'aria2.pause', [gid]);
   }
 
   async unpause(gid) {
-    await this.start();
+    await this.ensureStarted();
     return this.rpc('aria2.unpause', [gid]);
   }
 
   async cancel(gid, force = false) {
-    await this.start();
+    await this.ensureStarted();
     return this.rpc(force ? 'aria2.forceRemove' : 'aria2.remove', [gid]);
   }
 
   async removeDownloadResult(gid) {
-    await this.start();
+    await this.ensureStarted();
     return this.rpc('aria2.removeDownloadResult', [gid]);
   }
 
   async tellActive() {
-    await this.start();
+    await this.ensureStarted();
     return this.rpc('aria2.tellActive', [[
       'gid', 'status', 'totalLength', 'completedLength', 'downloadSpeed', 'files', 'dir'
     ]]);
   }
 
   async tellWaiting(offset = 0, num = 100) {
-    await this.start();
+    await this.ensureStarted();
     return this.rpc('aria2.tellWaiting', [offset, num, [
       'gid', 'status', 'totalLength', 'completedLength', 'files', 'dir'
     ]]);
   }
 
   async tellStopped(offset = 0, num = 100) {
-    await this.start();
+    await this.ensureStarted();
     return this.rpc('aria2.tellStopped', [offset, num, [
       'gid', 'status', 'totalLength', 'completedLength', 'files', 'dir', 'errorCode', 'errorMessage'
     ]]);
@@ -390,6 +441,13 @@ class Aria2Manager {
     try { this.process.kill('SIGTERM'); } catch {}
     this.process = null;
     this.ready = false;
+  }
+
+  /**
+   * 查询 aria2 进程是否存活
+   */
+  isAlive() {
+    return !!(this.process && this.ready);
   }
 }
 

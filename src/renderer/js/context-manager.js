@@ -28,6 +28,7 @@ const SUMMARY_MAX_TOOL_RESULT_CHARS = 600; // each tool result in transcript
 class ContextManager {
   constructor(maxTokens = 8192) {
     this.maxTokens = maxTokens;
+    this.outputReserve = 0; // 输出预留：为模型生成回复保留的 token 空间
     this.messages = [];
     this.pinnedMessages = []; // Important messages that should not be removed
     this.systemPrompt = null;
@@ -37,6 +38,12 @@ class ContextManager {
 
   setMaxTokens(max) {
     this.maxTokens = max;
+  }
+
+  // 设置输出预留（模型生成回复需要保留的空间），
+  // 用于触发器和 lightTrim 判断：占用 = 当前输入 + 输出预留
+  setOutputReserve(reserve) {
+    this.outputReserve = Math.max(0, Number(reserve) || 0);
   }
 
   setSystemPrompt(prompt) {
@@ -133,10 +140,11 @@ class ContextManager {
   /**
    * Lightweight synchronous trim: truncate long tool results.
    * Called on every addMessage. Does NOT call LLM.
+   * 阈值纳入输出预留：占用 = 当前输入 + 输出预留，避免挤压输出空间。
    */
   lightTrim() {
     const threshold = this.maxTokens * 0.85;
-    if (this.getTotalTokens() <= threshold) return;
+    if (this.getTotalTokens() + this.outputReserve <= threshold) return;
     for (let i = 0; i < this.messages.length; i++) {
       if (this.pinnedMessages.includes(i)) continue;
       const msg = this.messages[i];
@@ -394,10 +402,16 @@ class ContextManager {
     const tokens = this.getTotalTokens();
     const maxTokens = this.maxTokens || 1;
     const usage = ((tokens / maxTokens) * 100).toFixed(1);
+    // 含输出预留的占用：当前输入 + 输出预留，分母为完整上下文窗口
+    const occupied = tokens + this.outputReserve;
+    const usageWithReserve = Math.min(100, (occupied / maxTokens) * 100).toFixed(1);
     return {
       tokens,
       maxTokens,
       usage,
+      outputReserve: this.outputReserve,
+      occupied,
+      usageWithReserve,
       totalMessages: this.messages.length,
       summaries: this.summaries.length,
       compactions: this.compactBoundaries.length

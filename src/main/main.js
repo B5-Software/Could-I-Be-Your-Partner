@@ -2361,6 +2361,62 @@ const terminals = new Map();
 let terminalIdCounter = 0;
 const TERMINAL_HISTORY_MAX = 100000; // 100KB
 
+// 特殊按键 → 终端转义序列（用于 TUI/menuconfig 键盘交互）
+// 参考 xterm 与 readline 的标准按键编码
+const TERMINAL_KEY_SEQUENCES = {
+  Enter: '\r',
+  Return: '\r',
+  Tab: '\t',
+  Escape: '\x1b',
+  Esc: '\x1b',
+  Backspace: '\x7f',
+  Delete: '\x1b[3~',
+  Up: '\x1b[A',
+  Down: '\x1b[B',
+  Right: '\x1b[C',
+  Left: '\x1b[D',
+  Home: '\x1b[H',
+  End: '\x1b[F',
+  PageUp: '\x1b[5~',
+  PageDown: '\x1b[6~',
+  F1: '\x1bOP',
+  F2: '\x1bOQ',
+  F3: '\x1bOR',
+  F4: '\x1bOS',
+  F5: '\x1b[15~',
+  F6: '\x1b[17~',
+  F7: '\x1b[18~',
+  F8: '\x1b[19~',
+  F9: '\x1b[20~',
+  F10: '\x1b[21~',
+  F11: '\x1b[23~',
+  F12: '\x1b[24~',
+  Insert: '\x1b[2~',
+  Space: ' ',
+  CtrlC: '\x03',
+  CtrlD: '\x04',
+  CtrlZ: '\x1a',
+  CtrlA: '\x01',
+  CtrlE: '\x05',
+  CtrlW: '\x17',
+  CtrlU: '\x15',
+  CtrlL: '\x0c',
+  CtrlR: '\x12',
+  CtrlT: '\x14',
+  CtrlG: '\x07',
+  CtrlH: '\x08',
+  CtrlJ: '\x0a',
+  CtrlK: '\x0b',
+  CtrlN: '\x0e',
+  CtrlP: '\x10',
+  CtrlX: '\x18',
+  CtrlY: '\x19',
+  AltEnter: '\x1b\r',
+  AltUp: '\x1b\x1b[A',
+  AltDown: '\x1b\x1b[B',
+  ShiftTab: '\x1b[Z'
+};
+
 function _broadcastTerminalEvent(channel, payload) {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   try { mainWindow.webContents.send(channel, payload); } catch { /* ignore */ }
@@ -2493,16 +2549,62 @@ ipcMain.handle('terminal:write', (_, id, data) => {
   const t = terminals.get(id);
   if (!t) return { ok: false, error: '终端不存在' };
   try {
-    t.term.write(data);
+    // \n → \r：pty 终端只认 \r 作为回车，TUI/menuconfig 交互时按 \n 不会提交
+    let payload = String(data);
+    if (payload.includes('\n')) payload = payload.replace(/\n/g, '\r');
+    t.term.write(payload);
     // 简单识别命令行：以 \r 结尾的输入视为命令（用于标签页标题展示）
-    if (typeof data === 'string' && data.endsWith('\r')) {
-      const cmd = data.replace(/\r$/, '').trim();
+    if (payload.endsWith('\r')) {
+      const cmd = payload.replace(/\r$/, '').trim();
       if (cmd) t.lastCommand = cmd.slice(0, 60);
     }
     return { ok: true };
   } catch (e) {
     return { ok: false, error: e.message };
   }
+});
+
+// 发送指定文本（不自动回车，用于 TUI/menuconfig 输入框）
+ipcMain.handle('terminal:sendText', (_, id, text) => {
+  const t = terminals.get(id);
+  if (!t) return { ok: false, error: '终端不存在' };
+  try {
+    let payload = String(text || '');
+    if (payload.includes('\n')) payload = payload.replace(/\n/g, '\r');
+    t.term.write(payload);
+    return { ok: true, sent: payload };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+// 发送特殊按键序列（Enter/Tab/Esc/方向键/功能键/组合键），用于 TUI/menuconfig 键盘导航
+ipcMain.handle('terminal:pressKey', (_, id, keyName) => {
+  const t = terminals.get(id);
+  if (!t) return { ok: false, error: '终端不存在' };
+  const seq = TERMINAL_KEY_SEQUENCES[keyName];
+  if (!seq) return { ok: false, error: `未知按键: ${keyName}` };
+  try {
+    t.term.write(seq);
+    return { ok: true, key: keyName };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+// 读取终端输出：lastLines>0 时只返回末尾 N 行，否则返回全部
+ipcMain.handle('terminal:read', (_, id, lastLines) => {
+  const t = terminals.get(id);
+  if (!t) return { ok: false, error: '终端不存在' };
+  let text = t.fullHistory;
+  if (lastLines && lastLines > 0) {
+    // 去掉尾部残留的半行，再取末尾 N 行（按 \r\n 或 \n 切分）
+    const normalized = text.replace(/\r\n/g, '\n');
+    const lines = normalized.split('\n');
+    const slice = lines.slice(-lastLines);
+    text = slice.join('\n');
+  }
+  return { ok: true, output: text, full: text === t.fullHistory, length: text.length };
 });
 
 // xterm.js fit 后调用，调整 pty 尺寸
@@ -2534,20 +2636,27 @@ ipcMain.handle('terminal:run', (_, id, command) => {
     setTimeout(() => { resolve({ ok: true, output: t.buffer() }); }, 2000);
   });
 });
-ipcMain.handle('terminal:await', (_, id, command) => {
+ipcMain.handle('terminal:await', (_, id, command, timeoutMs) => {
   const t = terminals.get(id);
   if (!t) return { ok: false, error: '终端不存在' };
   t.agentBuffer = ''; // 清空 Agent 读取缓冲区
-  t.term.write(command + '\r');
+  t.term.write(String(command) + '\r');
   t.lastCommand = String(command).slice(0, 60);
+  const effectiveTimeout = (Number(timeoutMs) > 0) ? Number(timeoutMs) : 120000;
   return new Promise(resolve => {
-    const timeout = setTimeout(() => { resolve({ ok: true, output: t.buffer(), timedOut: true }); }, 120000);
+    let resolved = false;
+    const finish = (result) => {
+      if (resolved) return;
+      resolved = true;
+      clearTimeout(timeout);
+      clearInterval(checkInterval);
+      resolve(result);
+    };
+    const timeout = setTimeout(() => finish({ ok: true, output: t.buffer(), timedOut: true }), effectiveTimeout);
     let checkInterval = setInterval(() => {
       const output = t.buffer();
       if (output.includes('$') || output.includes('>') || output.includes('#') || output.includes('%')) {
-        clearTimeout(timeout);
-        clearInterval(checkInterval);
-        resolve({ ok: true, output });
+        finish({ ok: true, output });
       }
     }, 500);
   });
@@ -5677,11 +5786,9 @@ ipcMain.handle('aria2:status', async () => {
 });
 
 // 添加下载任务（异步，立即返回 gid）
+// dir 可选：未指定时使用 aria2 默认目录（userData/aria2），由上层（Agent）传入工作目录
 ipcMain.handle('aria2:add-uri', async (_, url, opts = {}) => {
   try {
-    if (!opts.dir) {
-      return { ok: false, error: '未指定下载目录' };
-    }
     const gid = await aria2Manager.addUri(url, opts);
     return { ok: true, gid };
   } catch (e) {

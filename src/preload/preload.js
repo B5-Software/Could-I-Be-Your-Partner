@@ -71,13 +71,17 @@ contextBridge.exposeInMainWorld('api', {
   // Terminal
   makeTerminal: (cwd) => ipcRenderer.invoke('terminal:make', cwd),
   runTerminalCommand: (id, cmd) => ipcRenderer.invoke('terminal:run', id, cmd),
-  awaitTerminalCommand: (id, cmd) => ipcRenderer.invoke('terminal:await', id, cmd),
+  awaitTerminalCommand: (id, cmd, timeoutMs) => ipcRenderer.invoke('terminal:await', id, cmd, timeoutMs),
   killTerminal: (id) => ipcRenderer.invoke('terminal:kill', id),
   // 终端可见化：列出所有终端、回写用户输入、调整尺寸、获取历史
   listTerminals: () => ipcRenderer.invoke('terminal:list'),
   writeTerminal: (id, data) => ipcRenderer.invoke('terminal:write', id, data),
   resizeTerminal: (id, cols, rows) => ipcRenderer.invoke('terminal:resize', id, cols, rows),
   getTerminalHistory: (id) => ipcRenderer.invoke('terminal:getHistory', id),
+  // 终端交互工具集：读取输出、发送文本（不带回车）、发送按键序列
+  readTerminalOutput: (id, lastLines) => ipcRenderer.invoke('terminal:read', id, lastLines),
+  sendTerminalText: (id, text) => ipcRenderer.invoke('terminal:sendText', id, text),
+  pressTerminalKey: (id, keyName) => ipcRenderer.invoke('terminal:pressKey', id, keyName),
   onTerminalData: (cb) => {
     ipcRenderer.removeAllListeners('terminal:data');
     ipcRenderer.on('terminal:data', (_, payload) => cb(payload));
