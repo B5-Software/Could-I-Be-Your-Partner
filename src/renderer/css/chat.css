@@ -2468,6 +2468,13 @@ body.no-tarot .setting-label-tarot + .toggle-switch + .setting-hint {
   align-items: center;
   justify-content: center;
 }
+/* 爱心占位图标精确居中（无头像时） */
+.babe-mode .babe-avatar > i {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
 .babe-mode .babe-avatar .avatar-frame-overlay {
   position: absolute;
   inset: -20%;

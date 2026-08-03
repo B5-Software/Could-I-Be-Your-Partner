@@ -38,24 +38,98 @@
   // ---------------------------------------------------------------------------
   // schematic -> pcb synchronization
   // ---------------------------------------------------------------------------
+  // 估算封装焊盘包围盒半尺寸（含旋转后范围，用于板内放置校验）
+  function _fpHalfSize(fpLib, fpName, params) {
+    let hx = 3, hy = 3; // 保守默认（R_0805 约 2×1.25mm）
+    try {
+      const fp = fpLib.generate(fpName || 'R_0805', params || {});
+      if (fp && fp.pads && fp.pads.length) {
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        for (const p of fp.pads) {
+          const hw = p.w / 2, hh = p.h / 2;
+          minX = Math.min(minX, p.x - hw); maxX = Math.max(maxX, p.x + hw);
+          minY = Math.min(minY, p.y - hh); maxY = Math.max(maxY, p.y + hh);
+        }
+        if (isFinite(minX)) { hx = Math.max((maxX - minX) / 2, 1); hy = Math.max((maxY - minY) / 2, 1); }
+      }
+    } catch { /* 用保守默认 */ }
+    return { hx, hy };
+  }
+
+  // 板框内接安全矩形：outline 自身 bbox 向内缩 margin，
+  // 而不是 boardBBox（它含焊盘/走线，会扩大边界导致元件出框）
+  function _boardSafeArea(board) {
+    const M = 4; // 板边安全距离（与 autorouter margin 一致）
+    let minX, minY, maxX, maxY;
+    if (board.outline.pts && board.outline.pts.length >= 3) {
+      minX = maxX = board.outline.pts[0].x;
+      minY = maxY = board.outline.pts[0].y;
+      for (const p of board.outline.pts) {
+        if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
+        if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y;
+      }
+    } else {
+      return { minX: 0, minY: 0, maxX: 100, maxY: 80, w: 100, h: 80 };
+    }
+    return { minX: minX + M, minY: minY + M, maxX: maxX - M, maxY: maxY - M, w: maxX - minX, h: maxY - minY };
+  }
+
+  // 校验候选点是否在 outline 多边形内（含 45° 斜边的多边形）
+  function _pointInsideOutline(board, x, y, halfX, halfY) {
+    const pts = board.outline.pts;
+    if (!pts || pts.length < 3) return true;
+    // 四角都需在 outline 内（保守：整个封装包围盒在板内）
+    const corners = [
+      [x - halfX, y - halfY], [x + halfX, y - halfY],
+      [x + halfX, y + halfY], [x - halfX, y + halfY]
+    ];
+    for (const [cx, cy] of corners) {
+      if (!Geo.pointInPolygon(cx, cy, pts)) return false;
+    }
+    return true;
+  }
+
   function syncFromSchematic(sheetIdx, boardIdx) {
     const sheet = Doc.sheet(sheetIdx);
     const board = Doc.board(boardIdx);
     Model.Sheet.annotate(sheet);
     const pinNets = Model.Sheet.resolveNets(sheet, symLib());
     let created = 0, updated = 0;
-    const bb = Model.Board.boardBBox(board, fpLib());
-    let cx = bb.minX + 8, cy = bb.minY + 8;
+    // 用 outline 内接安全区域排布，避免元件放到板框之外
+    const area = _boardSafeArea(board);
+    const stepX = 12, stepY = 12;
+    let cx = area.minX, cy = area.minY;
+    const placed = new Set(); // 已占用的候选点（避免元件重叠）
     for (const sym of sheet.symbols) {
       let comp = board.components.find(c => c.ref === sym.ref);
       const fpName = fpLib().has(sym.footprint) ? sym.footprint : (global.PCBIO ? (global.PCBIO.guessFootprint(sym.footprint, fpLib()) || 'R_0805') : 'R_0805');
       if (!comp) {
+        // 找到 outline 内的放置点：逐列扫描，越界换行，全部越界则退回安全区起点
+        const { hx, hy } = _fpHalfSize(fpLib(), fpName, sym.fpParams);
+        let placedPt = null;
+        let guard = 0;
+        while (!placedPt && guard < 10000) {
+          guard++;
+          const key = cx.toFixed(2) + ',' + cy.toFixed(2);
+          if (!placed.has(key) && _pointInsideOutline(board, cx, cy, hx, hy)) {
+            placed.add(key);
+            placedPt = { x: cx, y: cy };
+          } else {
+            cx += stepX;
+            if (cx > area.maxX - stepX / 2) { cx = area.minX; cy += stepY; }
+            if (cy > area.maxY) {
+              // 整个区域放不下：回退到安全区中心（尽量靠内）
+              placedPt = { x: area.minX + (area.maxX - area.minX) / 2, y: area.minY + (area.maxY - area.minY) / 2 };
+            }
+          }
+        }
+        if (!placedPt) placedPt = { x: area.minX, y: area.minY };
         comp = Model.Board.addComponent(board, {
           ref: sym.ref, value: sym.value || '', footprint: fpName,
-          params: sym.fpParams || {}, x: cx, y: cy, rot: 0, side: 'F'
+          params: sym.fpParams || {}, x: placedPt.x, y: placedPt.y, rot: 0, side: 'F'
         });
-        cx += 12;
-        if (cx > bb.maxX - 8) { cx = bb.minX + 8; cy += 12; }
+        cx += stepX;
+        if (cx > area.maxX - stepX / 2) { cx = area.minX; cy += stepY; }
         created++;
       } else {
         if (sym.value !== undefined) comp.value = sym.value;
@@ -162,6 +236,13 @@
         result = this._dispatch(cmd, args);
       } catch (e) {
         return fail(e.message);
+      }
+      // async 命令（如 autoroute --async）返回 Promise：直接透传，由调用方 await
+      if (result && typeof result.then === 'function') {
+        return result.then((r) => {
+          if (liveDrcEnabled && r && r.ok) return attachDrcDelta(cmd, args, r);
+          return r;
+        }).catch((e) => fail(e.message));
       }
       // 实时 DRC：追加 drcDelta
       if (liveDrcEnabled && result && result.ok) {
@@ -825,7 +906,8 @@
 
     // autoroute [net1,net2,...] [--preferLayers F.Cu,B.Cu] [--no-diagonal] [--ripup n] [--width w] [--clearance c] [--grid g]
     // autoroute single <net> <x1,y1> <x2,y2> [options] — 单网络点对点布线
-    _autoroute(args) {
+    // 异步（async）命令：内部可能 await 分片让出，由 Executor.execute 透传 Promise
+    async _autoroute(args) {
       const b = Doc.board();
       // ---- single 子命令：单网络点对点布线 ----
       if (args[0] === 'single') {
@@ -855,9 +937,11 @@
       }
       // ---- 默认全板布线 ----
       const opts = { onlyNets: null, preferLayers: null, allowDiagonal: true, maxRipRerouteIter: 3 };
+      let useAsync = false;
       const rest = [];
       for (let i = 0; i < args.length; i++) {
         const a = args[i];
+        if (a === '--async') { useAsync = true; continue; }
         if (a === '--preferLayers') { opts.preferLayers = (args[++i] || '').split(',').map(s => s.trim()).filter(Boolean); continue; }
         if (a === '--no-diagonal') { opts.allowDiagonal = false; continue; }
         if (a === '--ripup') { opts.maxRipRerouteIter = parseInt(args[++i], 10) || 3; continue; }
@@ -867,7 +951,16 @@
         rest.push(a);
       }
       if (rest.length && rest[0]) opts.onlyNets = rest[0].split(',').map(s => s.trim()).filter(Boolean);
-      const res = global.PCBAutorouter.autoroute(b, fpLib(), opts);
+      const AR = global.PCBAutorouter;
+      if (!AR) return fail(tr('eda.cmd.err.autorouterUnavailable', '自动布线器不可用'));
+      // 优先异步分片（UI 不冻结）；无异步能力则退回同步
+      const runRoute = async () => {
+        if (useAsync && AR.autorouteAsync) {
+          return AR.autorouteAsync(b, fpLib(), opts);
+        }
+        return AR.autoroute(b, fpLib(), opts);
+      };
+      const res = await runRoute();
       if (res.ok) {
         Doc.snapshot();
         for (const tr of res.traces) Model.Board.addTrace(b, tr);
@@ -875,7 +968,7 @@
         Doc.touch();
         this._ui();
       }
-      return res.ok ? ok({ routed: res.routed, failed: res.failed, failedNets: res.failedNets, traces: res.traces.length, vias: res.vias.length, gridSize: res.gridSize, layerCount: res.layerCount, iter: res.iter || opts.maxRipRerouteIter }) : res;
+      return res.ok ? ok({ routed: res.routed, failed: res.failed, failedNets: res.failedNets, traces: res.traces.length, vias: res.vias.length, gridSize: res.gridSize, layerCount: res.layerCount, iter: res.iter || opts.maxRipRerouteIter, async: !!res.asyncSharded }) : res;
     }
   };
 
@@ -941,14 +1034,15 @@
   // ---------------------------------------------------------------------------
   function ensureReady() { return typeof global.PCBEditor !== 'undefined'; }
 
-  global.pcbExecuteCommand = function (cmd) {
+  global.pcbExecuteCommand = async function (cmd) {
     const r = Executor.execute(cmd);
-    return r;
+    return (r && typeof r.then === 'function') ? r : Promise.resolve(r);
   };
-  global.pcbExecuteCommands = function (cmds) {
+  global.pcbExecuteCommands = async function (cmds) {
     const results = [];
     for (const c of (Array.isArray(cmds) ? cmds : [])) {
-      results.push(Executor.execute(c));
+      const r = Executor.execute(c);
+      results.push((r && typeof r.then === 'function') ? await r : r);
     }
     return { ok: true, results };
   };
@@ -1104,8 +1198,18 @@
     return ok({ ref: c.ref, side });
   };
   // 自动布线 - Agent 工具直接调用
-  global.pcbAutoroute = function (options) {
-    return Executor._autorouter(Array.isArray(options) ? options : []);
+  global.pcbAutoroute = async function (options) {
+    // 默认异步分片布线（不阻塞 UI）；数组参数可显式传 ['--sync'] 要求同步
+    let args = ['--async'];
+    if (Array.isArray(options)) {
+      // 用户显式传了参数：若含 --async/--sync 按其指示，否则默认异步
+      args = options.length ? options.slice() : ['--async'];
+      if (!args.includes('--async') && !args.includes('--sync')) args.push('--async');
+      if (args.includes('--sync')) args = args.filter(a => a !== '--sync');
+    } else if (options && typeof options === 'object') {
+      args = ['--async', '--grid', options.gridSize || 0.225];
+    }
+    return Executor._autoroute(args);
   };
   global.pcbRouteSingle = function (netName, fromPt, toPt, options) {
     if (!global.PCBAutorouter || !global.PCBAutorouter.routeSingle) return fail(tr('eda.cmd.err.autorouterUnavailable', '自动布线器不可用'));

@@ -117,7 +117,23 @@
 
     const allPads = Model.Board.allPads(board, fpLib);
 
+    // 板外阻挡（outline 外 + 板边距）与网络无关，只计算一次，避免每个网络全网格重复扫描
+    {
+      if (board.outline.pts.length >= 3) {
+        for (let gy = 0; gy < H; gy++) {
+          for (let gx = 0; gx < W; gx++) {
+            const w = toWorld(gx, gy);
+            if (!Geo.pointInPolygon(w.x, w.y, board.outline.pts) ||
+                Geo.polygonEdgeDist(w.x, w.y, board.outline.pts) < R.copperToBoardEdge) {
+              for (const arr of blocked) arr[gIdx(gx, gy)] = 1;
+            }
+          }
+        }
+      }
+    }
+
     // 阻挡板外 + 板边距 + 异网铜（外部对象 ownerNetId=0，不会被 rip-up）
+    // 注意：outline 板外阻挡已在上方一次性计算，此处只处理异网铜
     function blockStaticObstacles(skipNet) {
       for (const p of allPads) {
         if (p.net === skipNet) continue;
@@ -134,17 +150,6 @@
         if (t.net === skipNet) continue;
         for (let i = 0; i < t.pts.length - 1; i++) {
           blockSegment(t.pts[i].x, t.pts[i].y, t.pts[i + 1].x, t.pts[i + 1].y, t.width / 2 + inflate, t.layer, 0);
-        }
-      }
-      if (board.outline.pts.length >= 3) {
-        for (let gy = 0; gy < H; gy++) {
-          for (let gx = 0; gx < W; gx++) {
-            const w = toWorld(gx, gy);
-            if (!Geo.pointInPolygon(w.x, w.y, board.outline.pts) ||
-                Geo.polygonEdgeDist(w.x, w.y, board.outline.pts) < R.copperToBoardEdge) {
-              for (const arr of blocked) arr[gIdx(gx, gy)] = 1;
-            }
-          }
         }
       }
     }
@@ -534,6 +539,11 @@
     for (const ln of todo0) {
       progressIdx++;
       report('routing ' + ln.net + ' (' + progressIdx + '/' + totalNets + ')');
+      // 分片让出：autorouteAsync 模式在每条网络之间让出主线程，保持 UI 响应
+      // yieldFn 同步调用（如 setImmediate 同步触发由调用方处理）；此处仅为钩子
+      if (typeof opts.yieldFn === 'function') {
+        opts.yieldFn(progressIdx, totalNets);
+      }
       let res = null;
       for (let iter = 0; iter <= opts.maxRipRerouteIter; iter++) {
         res = routeWithRipup(ln, iter);
@@ -633,7 +643,75 @@
     }
   }
 
-  const PCBAutorouter = { autoroute, routeSingle };
+  // 异步分片版自动布线：逐网络同步布线，每条网络之间用 setImmediate 让出主线程，
+  // 让渲染进程保持响应（不阻塞 EDA 渲染/UI）。用于元件多、网络多的大板。
+  // 逐网分片比整体同步多若干次网格初始化开销，但避免 UI 冻结（元件多时关键）。
+  // 返回与 autoroute 相同的 {ok,routed,failed,failedNets,traces,vias,...}
+  async function autorouteAsync(board, fpLib, options) {
+    const opts = Object.assign({}, options || {});
+    const R = board.designRules;
+    const allLines = Model.Board.ratsnest(board, fpLib);
+    // 收集所有需要布线的网络（保持距离升序，与同步版一致）
+    const lines = opts.onlyNets ? allLines.filter(l => opts.onlyNets.includes(l.net)) : allLines;
+    lines.sort((a, b) => Geo.dist(a.x1, a.y1, a.x2, a.y2) - Geo.dist(b.x1, b.y1, b.x2, b.y2));
+    const nets = [];
+    for (const l of lines) if (!nets.includes(l.net)) nets.push(l.net);
+    const totalNets = nets.length;
+
+    const newTraces = [], newVias = [];
+    const failedNets = new Set();
+    let routed = 0;
+    let progressIdx = 0;
+    const report = (i, n, msg) => {
+      if (typeof opts.onProgress === 'function') {
+        try { opts.onProgress(i, n, msg); } catch {}
+      }
+    };
+
+    for (const net of nets) {
+      progressIdx++;
+      report(progressIdx, totalNets, 'routing ' + net + ' (' + progressIdx + '/' + totalNets + ')');
+      // 逐网络同步布线；只布当前网络（已布的网络作为阻挡自动参与）
+      // 注意：每次只布一个网络，此前网络的走线已在 board.traces/vias 中，
+      // autoroute 的 blockStaticObstacles 会自动把它们作为异网阻挡处理。
+      const r = autoroute(board, fpLib, Object.assign({}, opts, { onlyNets: [net] }));
+      if (r.ok && r.routed > 0) {
+        for (const tr of (r.traces || [])) newTraces.push(tr);
+        for (const v of (r.vias || [])) newVias.push(v);
+        routed++;
+        // 把本次布线写入 board，供下一网络作为阻挡
+        for (const tr of (r.traces || [])) Model.Board.addTrace(board, tr);
+        for (const v of (r.vias || [])) Model.Board.addVia(board, v);
+      } else {
+        failedNets.add(net);
+      }
+      // 每条网络之间让出主线程（关键：保持 UI 响应）
+      await new Promise((res) => {
+        if (typeof setImmediate === 'function') setImmediate(res);
+        else setTimeout(res, 0);
+      });
+    }
+
+    report(totalNets, totalNets, 'done: routed=' + routed + ', failed=' + failedNets.size);
+    return {
+      ok: true,
+      routed,
+      failed: failedNets.size,
+      failedNets: Array.from(failedNets),
+      traces: newTraces,
+      vias: newVias,
+      gridSize: opts.gridSize || 0.225,
+      layerCount: Model.Board.copperLayerIds(board).length,
+      asyncSharded: true
+    };
+  }
+
+  // 同步版：直接调用核心 autoroute（与旧行为一致）
+  function autorouteSync(board, fpLib, options) {
+    return autoroute(board, fpLib, options);
+  }
+
+  const PCBAutorouter = { autoroute, autorouteAsync, autorouteSync, routeSingle };
   if (typeof module !== 'undefined' && module.exports) module.exports = PCBAutorouter;
   else global.PCBAutorouter = PCBAutorouter;
 })(typeof window !== 'undefined' ? window : globalThis);

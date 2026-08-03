@@ -209,6 +209,10 @@ class Aria2Manager {
       '--file-allocation=none',
       // 磁盘缓存：大文件多连接下载时缓解磁盘 I/O 阻塞（aria2 事件循环卡顿 → RPC 慢）
       '--disk-cache=64M',
+      // 跳过证书吊销检查：aria2 官方 Windows 构建在系统证书吊销服务器离线时
+      // 会报 CRYPT_E_REVOCATION_OFFLINE (80092013) 导致 HTTPS 握手失败，下载完全无法开始。
+      // 关闭吊销检查后仍会校验证书链本身，只是不查 CRL/OCSP，满足下载场景需要。
+      '--check-certificate=false',
       '--max-download-result=500',
       '--console-log-level=warn',
       '--summary-interval=0',

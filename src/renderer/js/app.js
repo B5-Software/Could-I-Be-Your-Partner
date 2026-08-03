@@ -2312,7 +2312,17 @@
         const ind = document.getElementById('code-context-indicator');
         if (t) t.textContent = `0/${fmtTokenCount(sharedMaxCtx)}`;
         if (f) f.setAttribute('stroke-dasharray', '0 100');
-        if (ind) { ind.dataset.used = 0; ind.dataset.max = sharedMaxCtx; ind.dataset.level = 'normal'; }
+        if (ind) {
+          ind.dataset.used = 0; ind.dataset.max = sharedMaxCtx; ind.dataset.level = 'normal';
+          // agent 未初始化时也要创建 tooltip，保证悬停能弹出上下文详情（对齐 Chat/Babe 模式）
+          if (!ind.querySelector('.context-tooltip')) {
+            const tooltip = document.createElement('div');
+            tooltip.className = 'context-tooltip';
+            tooltip.innerHTML = '<div class="context-tooltip-title">上下文使用详情</div>'
+              + '<div class="context-tooltip-row"><span>总占用</span><span>0 / ' + fmtTokenCount(sharedMaxCtx) + '</span></div>';
+            ind.appendChild(tooltip);
+          }
+        }
       }
     } catch (_) { /* codeAgent TDZ */ }
     try {
@@ -2324,7 +2334,17 @@
         const ind = document.getElementById('babe-context-indicator');
         if (t) t.textContent = `0/${fmtTokenCount(sharedMaxCtx)}`;
         if (f) f.setAttribute('stroke-dasharray', '0 100');
-        if (ind) { ind.dataset.used = 0; ind.dataset.max = sharedMaxCtx; ind.dataset.level = 'normal'; }
+        if (ind) {
+          ind.dataset.used = 0; ind.dataset.max = sharedMaxCtx; ind.dataset.level = 'normal';
+          // agent 未初始化时也要创建 tooltip，保证悬停能弹出上下文详情（对齐 Chat 模式）
+          if (!ind.querySelector('.context-tooltip')) {
+            const tooltip = document.createElement('div');
+            tooltip.className = 'context-tooltip';
+            tooltip.innerHTML = '<div class="context-tooltip-title">上下文使用详情</div>'
+              + '<div class="context-tooltip-row"><span>总占用</span><span>0 / ' + fmtTokenCount(sharedMaxCtx) + '</span></div>';
+            ind.appendChild(tooltip);
+          }
+        }
       }
     } catch (_) { /* babeAgent TDZ */ }
     // 同步主对话的上下文进度到 WebUI（按当前模式推送对应 agent 的数据）
@@ -2918,6 +2938,24 @@
       searchableMsgs = matchedMsgs;
     }
 
+    // 可靠地将 mark 滚动到滚动容器可视区域居中。
+    // 不使用 scrollIntoView({ behavior:'smooth' })，避免在 Code 模式内容重新渲染 /
+    // 自动滚屏竞争时失效，直接按容器 scrollTop 定位。
+    function scrollContainerToMark(mark) {
+      const container = getContainer();
+      if (!container || !mark || container.clientHeight <= 0) return;
+      try {
+        const cRect = container.getBoundingClientRect();
+        const mRect = mark.getBoundingClientRect();
+        // mark 已在可视区域且未越界时保持不动（避免扰乱用户手动滚动位置）
+        const alreadyVisible =
+          mRect.top >= cRect.top - 8 && mRect.bottom <= cRect.bottom + 8;
+        if (alreadyVisible) return;
+        const rel = mRect.top - cRect.top;
+        container.scrollTop += rel - container.clientHeight / 2;
+      } catch { /* ignore */ }
+    }
+
     // 激活指定 mark，并滚动到可见
     function activateMark(idx, matchedMsgs) {
       if (!marks.length) return;
@@ -2925,11 +2963,17 @@
       activeIdx = idx;
       marks.forEach((m, i) => m.classList.toggle('active', i === idx));
       const mark = marks[idx];
-      const container = getContainer();
-      if (container && mark.scrollIntoView) {
+      scrollContainerToMark(mark);
+      // 若 mark 位于嵌套可滚动元素内（如 code 工具调用参数），再滚动该嵌套容器的父链
+      let owner = mark.closest('pre.tool-call-args, .message-body, .content');
+      if (owner && owner.scrollTo) {
         try {
-          mark.scrollIntoView({ block: 'center', behavior: 'smooth' });
-        } catch { mark.scrollIntoView(); }
+          const oRect = owner.getBoundingClientRect();
+          const mRect = mark.getBoundingClientRect();
+          if (mRect.top < oRect.top || mRect.bottom > oRect.bottom) {
+            owner.scrollIntoView({ block: 'nearest' });
+          }
+        } catch { /* ignore */ }
       }
       // 更新计数器：当前第几个 / 总数
       const matchedCount = matchedMsgs ? matchedMsgs.length : searchableMsgs.length;
@@ -2942,9 +2986,16 @@
       activateMark(idx);
     }
 
+    // open 幂等化：已打开时只聚焦+全选，不清空已输入的内容（避免"点了没反应"）
     function open() {
-      clearMarks();
+      const wasOpen = !overlay.classList.contains('hidden');
       overlay.classList.remove('hidden');
+      if (wasOpen) {
+        input.focus();
+        input.select();
+        return;
+      }
+      clearMarks();
       input.value = '';
       query = '';
       countEl.textContent = '0 / 0';
@@ -2968,6 +3019,18 @@
     document.getElementById('chat-search-next')?.addEventListener('click', () => next(1));
     document.getElementById('chat-search-prev')?.addEventListener('click', () => next(-1));
     document.getElementById('chat-search-close')?.addEventListener('click', close);
+    // 浮窗内点空白处也关闭（可选，增强交互）
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) close();
+    });
+    // Chat 模式搜索按钮（下载按钮左边）——绑定放在 IIFE 内，保证与搜索模块同生命周期
+    document.getElementById('btn-chat-search')?.addEventListener('click', () => {
+      open();
+    });
+    // Code 模式搜索按钮（对齐其他模式的搜索入口）
+    document.getElementById('btn-code-chat-search')?.addEventListener('click', () => {
+      open();
+    });
 
     // Ctrl/Cmd+F 全局快捷键
     document.addEventListener('keydown', (e) => {
@@ -2985,11 +3048,6 @@
 
     return { open, close, isOpen, runSearch, clearMarks };
   })();
-
-  // Chat 模式搜索按钮（下载按钮左边）
-  document.getElementById('btn-chat-search')?.addEventListener('click', () => {
-    if (chatSearch) chatSearch.open();
-  });
 
   async function normalizeToolSettings() {
     if (!agent.settings) return;
@@ -3117,6 +3175,19 @@
     });
   }
 
+  // 流式 chunk 去重辅助：防御流式传输双发（连续相同 chunk）与"累积全文"型网关
+  // 返回 { raw, lastChunk }
+  function dedupAppendChunk(raw, lastChunk, chunkContent) {
+    if (!chunkContent) return { raw, lastChunk };
+    // 累积模式：chunk 包含此前全部已渲染文本（非标准网关逐段返回全文时替换而非追加）
+    if (chunkContent.length > raw.length && chunkContent.startsWith(raw)) {
+      return { raw: chunkContent, lastChunk };
+    }
+    // 连续重复 chunk（同一份数据被传输/消费两次）：丢弃，避免逐字重复
+    if (chunkContent === lastChunk) return { raw, lastChunk };
+    return { raw: raw + chunkContent, lastChunk: chunkContent };
+  }
+
   // Appends a chunk to the streaming bubble (throttled markdown re-render).
   function appendStreamChunk(requestId, chunk) {
     const bubble = streamingBubbles.get(requestId);
@@ -3133,7 +3204,9 @@
       }
     }
     if (chunkContent) {
-      bubble.rawContent += chunkContent;
+      const dedup = dedupAppendChunk(bubble.rawContent, bubble._lastChunk, chunkContent);
+      bubble.rawContent = dedup.raw;
+      bubble._lastChunk = dedup.lastChunk;
       bubble.contentStarted = true; // 标记 final content 开始，停止 reasoning 光标
     }
     if (!bubble.shown) {
@@ -10054,7 +10127,9 @@
           const bubble = codeStreamBubble;
           if (!bubble) return;
           if (data.content) {
-            bubble.rawContent += data.content;
+            const dedup = dedupAppendChunk(bubble.rawContent, bubble._lastChunk, data.content);
+            bubble.rawContent = dedup.raw;
+            bubble._lastChunk = dedup.lastChunk;
             bubble.contentStarted = true; // 标记 final content 开始
             bubble.contentEl.innerHTML = renderMarkdown(bubble.rawContent) + '<span class="streaming-cursor">▋</span>';
             // 一旦 final content 开始，重新渲染 reasoning 但不带光标
@@ -10088,7 +10163,9 @@
           if (!bubble) { codeStreamBubble = null; return; }
           if (bubble.renderTimer) { clearTimeout(bubble.renderTimer); bubble.renderTimer = null; }
           const hasReasoning = !!(data.reasoning || bubble.rawReasoning);
-          const hasContent = !!(bubble.rawContent && bubble.rawContent.trim());
+          // 优先使用 stream-end 携带的完整内容（防止流式期间传输重复导致最终文本含叠词）
+          const finalContent = String(data.content || bubble.rawContent).trimEnd();
+          const hasContent = !!(finalContent && finalContent.trim());
           if (hasReasoning) {
             // 输出结束后自动折叠 Reasoning（与 Chat 模式一致），用户可点击展开
             bubble.reasoningSection.classList.add('collapsed');
@@ -10098,7 +10175,7 @@
             try { bubble.reasoningEl.scrollTop = bubble.reasoningEl.scrollHeight; } catch (_) {}
           }
           if (hasContent) {
-            bubble.contentEl.innerHTML = renderMarkdown(bubble.rawContent);
+            bubble.contentEl.innerHTML = renderMarkdown(finalContent);
           } else if (hasReasoning) {
             // 仅 reasoning 无 content：隐藏空气泡和时间戳，只保留 reasoning 容器
             bubble.contentEl.style.display = 'none';
@@ -11156,7 +11233,9 @@
             if (data.content) {
               // 流式中也要剥离好感度标记，避免半截标记闪烁
               const cleanContent = data.content.replace(/【好感度[+-]?\d+】/g, '');
-              bubble.rawContent += cleanContent;
+              const dedup = dedupAppendChunk(bubble.rawContent, bubble._lastChunk, cleanContent);
+              bubble.rawContent = dedup.raw;
+              bubble._lastChunk = dedup.lastChunk;
               bubble.contentStarted = true; // 标记 final content 开始
               bubble.contentEl.innerHTML = renderMarkdown(bubble.rawContent) + '<span class="streaming-cursor">▋</span>';
               // 一旦 final content 开始，重新渲染 reasoning 但不带光标

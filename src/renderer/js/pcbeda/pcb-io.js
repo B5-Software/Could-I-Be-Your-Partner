@@ -126,22 +126,81 @@
     };
   }
 
+  // 板框内接安全矩形（outline 自身 bbox 向内缩，不含焊盘/走线扩展）
+  function _ioSafeArea(board) {
+    const M = 4;
+    let minX, minY, maxX, maxY;
+    if (board.outline.pts && board.outline.pts.length >= 3) {
+      minX = maxX = board.outline.pts[0].x;
+      minY = maxY = board.outline.pts[0].y;
+      for (const p of board.outline.pts) {
+        if (p.x < minX) minX = p.x; if (p.x > maxX) maxX = p.x;
+        if (p.y < minY) minY = p.y; if (p.y > maxY) maxY = p.y;
+      }
+    } else {
+      return { minX: 0, minY: 0, maxX: 100, maxY: 80 };
+    }
+    return { minX: minX + M, minY: minY + M, maxX: maxX - M, maxY: maxY - M };
+  }
+
+  function _ioPointInsideOutline(board, x, y, halfX, halfY) {
+    const pts = board.outline.pts;
+    if (!pts || pts.length < 3) return true;
+    const corners = [
+      [x - halfX, y - halfY], [x + halfX, y - halfY],
+      [x + halfX, y + halfY], [x - halfX, y + halfY]
+    ];
+    for (const [cx, cy] of corners) {
+      if (!Geo.pointInPolygon(cx, cy, pts)) return false;
+    }
+    return true;
+  }
+
   // apply netlist data to board: create missing components (auto-cascade), assign pad nets
   function applyNetlist(board, data, fpLib) {
     let created = 0, updated = 0;
-    let cascadeX = 10, cascadeY = 10;
-    const bb = Model.Board.boardBBox(board, fpLib);
+    // 用 outline 内接安全区域排布，避免元件放到板框之外
+    const area = _ioSafeArea(board);
+    let cascadeX = area.minX, cascadeY = area.minY;
+    const step = 10;
     for (const c of data.components) {
       let comp = board.components.find(x => x.ref === c.ref);
       const fpName = fpLib.has(c.footprint) ? c.footprint : guessFootprint(c.footprint, fpLib);
       if (!comp) {
+        // 估算封装半尺寸并校验在 outline 内
+        let hx = 3, hy = 3;
+        try {
+          const fp = fpLib.generate(fpName || 'R_0805', {});
+          if (fp && fp.pads && fp.pads.length) {
+            let miX = Infinity, maX = -Infinity, miY = Infinity, maY = -Infinity;
+            for (const p of fp.pads) {
+              miX = Math.min(miX, p.x - p.w / 2); maX = Math.max(maX, p.x + p.w / 2);
+              miY = Math.min(miY, p.y - p.h / 2); maY = Math.max(maY, p.y + p.h / 2);
+            }
+            if (isFinite(miX)) { hx = Math.max((maX - miX) / 2, 1); hy = Math.max((maY - miY) / 2, 1); }
+          }
+        } catch {}
+        let placed = null, guard = 0;
+        while (!placed && guard < 10000) {
+          guard++;
+          if (_ioPointInsideOutline(board, cascadeX, cascadeY, hx, hy)) {
+            placed = { x: cascadeX, y: cascadeY };
+          } else {
+            cascadeX += step;
+            if (cascadeX > area.maxX - step / 2) { cascadeX = area.minX; cascadeY += step; }
+            if (cascadeY > area.maxY) {
+              placed = { x: area.minX + (area.maxX - area.minX) / 2, y: area.minY + (area.maxY - area.minY) / 2 };
+            }
+          }
+        }
+        if (!placed) placed = { x: area.minX, y: area.minY };
         comp = Model.Board.addComponent(board, {
           ref: c.ref, value: c.value || '',
           footprint: fpName || 'R_0805', params: {},
-          x: cascadeX, y: cascadeY
+          x: placed.x, y: placed.y
         });
-        cascadeX += 10;
-        if (cascadeX > bb.maxX - 5) { cascadeX = 10; cascadeY += 10; }
+        cascadeX += step;
+        if (cascadeX > area.maxX - step / 2) { cascadeX = area.minX; cascadeY += step; }
         created++;
       } else {
         if (c.value) comp.value = c.value;

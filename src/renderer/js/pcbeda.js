@@ -353,18 +353,32 @@
     const btnAuto = document.createElement('button');
     btnAuto.className = 'pcb-p-btn';
     btnAuto.innerHTML = '<i class="fa-solid fa-wand-magic-sparkles"></i> ' + t('eda.panel.autoroute', '自动布线 (双面板)');
-    btnAuto.addEventListener('click', () => {
-      let res;
-      if (typeof window.pcbAutoroute === 'function') res = window.pcbAutoroute([]);
-      else res = PCBAutorouter.autoroute(Doc.board(), PCBFootprints, {});
-      if (res.ok) {
-        Doc.snapshot();
-        for (const tr of (res.traces || [])) PCBModel.Board.addTrace(Doc.board(), tr);
-        for (const v of (res.vias || [])) PCBModel.Board.addVia(Doc.board(), v);
-        Doc.touch();
-        Editor.status(t('eda.status.autorouteDone', '自动布线完成: {routed} 成功, {failed} 失败{iter}', { routed: res.routed, failed: res.failed, iter: res.iter ? t('eda.status.ripupIter', ' ({n} 轮 rip-up)', { n: res.iter }) : '' }));
-      } else {
-        Editor.status(t('eda.status.autorouteFail', '自动布线失败: {error}', { error: res.error || '' }));
+    btnAuto.addEventListener('click', async () => {
+      // 异步分片布线：大板/元件多时不阻塞 UI，每布一个网络让出主线程
+      btnAuto.disabled = true;
+      const oldHtml = btnAuto.innerHTML;
+      btnAuto.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> ' + t('eda.panel.autorouteBusy', '自动布线中...');
+      try {
+        let res;
+        if (typeof window.pcbAutoroute === 'function') {
+          res = await window.pcbAutoroute(['--async']);
+        } else if (PCBAutorouter && PCBAutorouter.autorouteAsync) {
+          res = await PCBAutorouter.autorouteAsync(Doc.board(), PCBFootprints, {});
+        } else {
+          res = PCBAutorouter.autoroute(Doc.board(), PCBFootprints, {});
+        }
+        if (res.ok) {
+          Doc.snapshot();
+          for (const tr of (res.traces || [])) PCBModel.Board.addTrace(Doc.board(), tr);
+          for (const v of (res.vias || [])) PCBModel.Board.addVia(Doc.board(), v);
+          Doc.touch();
+          Editor.status(t('eda.status.autorouteDone', '自动布线完成: {routed} 成功, {failed} 失败{iter}', { routed: res.routed, failed: res.failed, iter: res.iter ? t('eda.status.ripupIter', ' ({n} 轮 rip-up)', { n: res.iter }) : '' }));
+        } else {
+          Editor.status(t('eda.status.autorouteFail', '自动布线失败: {error}', { error: res.error || '' }));
+        }
+      } finally {
+        btnAuto.innerHTML = oldHtml;
+        btnAuto.disabled = false;
       }
       refreshPanel(); refresh();
     });

@@ -4179,10 +4179,15 @@ ipcMain.handle('llm:chatStream', async (_, messages, options = {}) => {
     if (!result.ok) return { ok: false, error: result.error, kind: result.kind };
 
     let streamResult;
+    let lastChunkKey = null;
     try {
       streamResult = await consumeSSEStream(result.response.body, (chunk) => {
         try {
           if (chunk.content || chunk.reasoning) {
+            const chunkKey = String(chunk.content || '') + '\u0000' + String(chunk.reasoning || '');
+            // 丢弃与上一 chunk 完全相同的连续重复（防御流式传输双发导致的逐字/逐词重复）
+            if (chunkKey === lastChunkKey) return;
+            lastChunkKey = chunkKey;
             mainWindow?.webContents.send('llm:stream-chunk', {
               content: chunk.content || '',
               reasoning: chunk.reasoning || '',
