@@ -2822,16 +2822,21 @@
   // ---- Chat Functions ----
   // 滚动节流：合并同一帧内的多次滚动请求，避免密集重排
   let _scrollRafScheduled = false;
-  function scrollChatToBottom() {
+  // 滚动到指定聊天容器的底部。目标元素取容器最后一条消息（而非 thinking-indicator），
+  // 这样当 Agent 发送问卷、卡片等带交互的富内容时，滚动定位到内容自身而不是工具调用控件。
+  function scrollChatToBottom(targetEl) {
+    const container = targetEl || document.getElementById('thinking-indicator')?.parentElement || chatMessages;
     if (_scrollRafScheduled) return;
     _scrollRafScheduled = true;
     requestAnimationFrame(() => {
       _scrollRafScheduled = false;
-      const target = document.getElementById('thinking-indicator') || chatMessages.lastElementChild;
-      if (target) {
+      const target = container.lastElementChild;
+      if (target && target.scrollIntoView) {
+        // 直接定位到容器内容底部（内容可能比视口高，用 end 保证底部贴齐）
         target.scrollIntoView({ behavior: 'auto', block: 'end' });
+      } else {
+        container.scrollTop = container.scrollHeight;
       }
-      chatMessages.scrollTop = chatMessages.scrollHeight;
     });
   }
 
@@ -2854,7 +2859,7 @@
     } else {
       targetMessagesEl.appendChild(el);
     }
-    scrollChatToBottom();
+    scrollChatToBottom(targetMessagesEl);
     // 增量推送：非远程模式才序列化 outerHTML 推送（序列化大元素开销大）
     if (!isRemoteMode) {
       WebUIMirror.pushDomEvent({
