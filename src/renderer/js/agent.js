@@ -896,6 +896,25 @@ ${toolListSection}`;
     return VISION_KEYWORDS.some(k => model.includes(k));
   }
 
+  /**
+   * 统一解析工作区相对路径 → 完整路径。
+   * renderer 中不可用 require('path')，用字符串拼接。
+   * 规则：
+   *   - 绝对路径（Windows 盘符 C:\、Unix /、UNC \\）或 URL（http(s)://、file://）→ 原样返回
+   *   - 相对路径 → 基于工作区拼接（默认 workspacePath，Code 模式可用 codeWorkspacePath）
+   * 这是 readImageFile / presentFile / eslintLintFile 等工具共用的路径上下文工程。
+   */
+  _resolveWorkspacePath(p, { useCodeWorkspace = false } = {}) {
+    if (!p) return p;
+    // 绝对路径或 URL：原样返回，避免把 C:\xxx 误当相对路径拼接到 workspace 后
+    if (/^([a-zA-Z]:[\\/]|[\\/]|[\w-]+:\/\/)/.test(p)) return p;
+    const ws = useCodeWorkspace
+      ? (this.codeWorkspacePath || this.workspacePath)
+      : this.workspacePath;
+    if (!ws) return p;
+    return ws.replace(/[\\/]+$/, '') + '/' + p.replace(/^[\\/]+/, '');
+  }
+
   getLatestUserMessageText() {
     const msgs = this.contextManager?.messages || [];
     for (let i = msgs.length - 1; i >= 0; i--) {
@@ -2236,12 +2255,9 @@ ${toolListSection}`;
           return { ok: true, message: `已应用 ${appliedEdits.length} 处编辑`, edits: appliedEdits };
         }
         case 'presentFile': {
-          // 解析工作目录相对路径（renderer 中不可用 require('path')，用字符串拼接）
-          // 使用 '/' 作为分隔符：Node.js fs 在 Windows/macOS/Linux 上都接受 '/'
+          // 解析工作目录相对路径：绝对路径原样使用，相对路径基于工作区拼接
           const relPath = args.path || '';
-          const fullPath = this.workspacePath
-            ? (this.workspacePath.replace(/[\\/]+$/, '') + '/' + relPath.replace(/^[\\/]+/, ''))
-            : relPath;
+          const fullPath = this._resolveWorkspacePath(relPath);
           // 读取文件验证存在性
           const readRes = await window.api.readFile(fullPath);
           if (!readRes.ok) {
@@ -2266,9 +2282,8 @@ ${toolListSection}`;
           // 多模态图片读取：读取图片为 base64 data URL，以多模态格式注入上下文
           const imgRelPath = args.path || '';
           if (!imgRelPath) return { ok: false, error: '缺少 path 参数' };
-          const imgFullPath = this.workspacePath
-            ? (this.workspacePath.replace(/[\\/]+$/, '') + '/' + imgRelPath.replace(/^[\\/]+/, ''))
-            : imgRelPath;
+          // 统一路径解析：绝对路径（C:\...）原样使用，相对路径基于工作区拼接
+          const imgFullPath = this._resolveWorkspacePath(imgRelPath);
           // 非多模态模型：不支持图片注入，返回提示
           if (!this.isVisionModel()) {
             return { ok: false, error: '当前模型不支持多模态视觉输入，无法读取图片。可在「设置 → LLM 配置」中开启「多模态视觉输入」开关强制启用，或使用 OCR 工具（extractTextFromImage）。' };
@@ -2358,12 +2373,8 @@ ${toolListSection}`;
         }
         case 'eslintLintFile': {
           if (!args.path) return { ok: false, error: '参数 path 必填' };
-          // 支持相对路径：基于工作区解析（renderer 无 require('path')，用字符串拼接）
-          let fp = args.path;
-          const ws = this.codeWorkspacePath || this.workspacePath;
-          if (ws && !/^([a-zA-Z]:[\\/]|[\\/]|[\w-]+:\/\/)/.test(fp)) {
-            fp = ws.replace(/[\\/]+$/, '') + '/' + fp.replace(/^[\\/]+/, '');
-          }
+          // Code 模式优先使用 codeWorkspacePath 解析（统一路径上下文工程）
+          const fp = this._resolveWorkspacePath(args.path, { useCodeWorkspace: true });
           return await window.api.eslintLintFile(fp);
         }
         case 'manageContext': return this.contextManager.manage(args.action, args);
