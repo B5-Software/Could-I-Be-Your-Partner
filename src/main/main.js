@@ -371,6 +371,29 @@ function resetDailyUsageIfNeeded() {
   }
 }
 
+/**
+ * 规范化发送给 LLM 的消息，适配 thinking/推理模型。
+ * DeepSeek 等思考模型开启 thinking 模式后，要求历史中的 assistant 消息回传其
+ * reasoning 内容，字段名为 `reasoning_content`。
+ * 本函数在【请求构造】阶段将内部使用的自定义 `reasoning` 字段映射为 API 期望的
+ * `reasoning_content`，并 deep-copy，避免修改调用方（contextManager）里用于
+ * 展示/持久化的原始消息——聊天记录不被破坏。
+ * 若某条 assistant 消息已经带了 reasoning_content 则保留原样。
+ */
+function normalizeMessagesForThinking(messages) {
+  if (!Array.isArray(messages) || messages.length === 0) return messages;
+  let changed = false;
+  const out = messages.map((m) => {
+    if (m && m.role === 'assistant' && (m.reasoning !== undefined && m.reasoning !== null)
+        && m.reasoning_content === undefined) {
+      changed = true;
+      return { ...m, reasoning_content: m.reasoning, reasoning: undefined };
+    }
+    return m;
+  });
+  return changed ? out : messages;
+}
+
 function persistSettings() {
   saveJSON(settingsPath, settings);
 }
@@ -4066,7 +4089,7 @@ ipcMain.handle('llm:chat', async (event, messages, options = {}) => {
       ? { ...llm, model: options._budgetFallbackModel }
       : llm;
     const req = LLMProviders.buildLLMRequest(llmForRequest, {
-      messages,
+      messages: normalizeMessagesForThinking(messages),
       tools: options.tools,
       tool_choice: options.tool_choice,
       temperature: options.temperature ?? llm.temperature,
@@ -4153,7 +4176,7 @@ ipcMain.handle('llm:chatStream', async (_, messages, options = {}) => {
       : llm;
 
     const req = LLMProviders.buildLLMRequest(llmForRequest, {
-      messages,
+      messages: normalizeMessagesForThinking(messages),
       tools: options.tools,
       tool_choice: options.tool_choice,
       temperature: options.temperature ?? llm.temperature,
@@ -4250,7 +4273,7 @@ ipcMain.handle('llm:summarize', async (_, messages, options = {}) => {
     }
 
     const req = LLMProviders.buildLLMRequest(llm, {
-      messages,
+      messages: normalizeMessagesForThinking(messages),
       temperature: options.temperature ?? 0.3,
       max_tokens: options.max_tokens ?? llm.maxResponseTokens ?? 8192,
       stream: false
