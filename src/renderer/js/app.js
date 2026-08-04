@@ -6097,6 +6097,8 @@
     document.getElementById('setting-llm-max-response').value = s.llm.maxResponseTokens || 8192;
     document.getElementById('setting-llm-daily-limit').value = s.llm.dailyMaxTokens || 0;
     document.getElementById('setting-llm-stream').checked = s.llm.streamResponses !== false;
+    const forceVisionEl = document.getElementById('setting-llm-force-vision');
+    if (forceVisionEl) forceVisionEl.checked = s.llm.forceVision === true;
     document.getElementById('setting-llm-retries').value = s.llm.maxRetries ?? 10;
     document.getElementById('setting-llm-timeout').value = Math.round((s.llm.timeoutMs ?? 300000) / 1000);
     document.getElementById('setting-llm-fallback-model').value = s.llm.fallbackModel || '';
@@ -7383,6 +7385,14 @@
     s.llm.streamResponses = e.target.checked;
     await saveSettings(s);
   });
+  const forceVisionSaveEl = document.getElementById('setting-llm-force-vision');
+  if (forceVisionSaveEl) {
+    forceVisionSaveEl.addEventListener('change', async (e) => {
+      const s = await window.api.getSettings();
+      s.llm.forceVision = e.target.checked;
+      await saveSettings(s);
+    });
+  }
   document.getElementById('setting-llm-retries').addEventListener('change', async (e) => {
     const s = await window.api.getSettings();
     s.llm.maxRetries = Math.max(0, parseInt(e.target.value) || 0);

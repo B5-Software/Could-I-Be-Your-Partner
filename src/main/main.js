@@ -1695,19 +1695,24 @@ function showWindowFromTray() {
 function createAppTray() {
   if (appTray) return;
   if (!settings.trayEnabled) return;
-  // 托盘图标：使用应用图标，缩放到 16x16（macOS 使用模板图像便于深浅色）
+  // 托盘图标：按 Electron 官方规范处理尺寸。
+  // 官方文档：macOS 推荐 16x16@1x(72dpi) / 32x32@2x(144dpi) 的 Template Image；
+  // Windows/Linux 推荐 16x16（或 ICO）。原始 icon.png 分辨率过高会导致菜单栏图标溢出。
   let trayIcon;
   try {
     const iconPath = path.join(__dirname, '../../assets/icons/icon.png');
     if (fs.existsSync(iconPath)) {
       trayIcon = nativeImage.createFromPath(iconPath);
-      // macOS: 标记为模板图像以自适应深浅色
-      if (process.platform === 'darwin' && !trayIcon.isEmpty()) {
-        trayIcon.setTemplateImage(true);
-      }
-      // 缩小到 16x16（Windows/Linux 托盘图标标准尺寸）
-      if (process.platform !== 'darwin' && !trayIcon.isEmpty()) {
-        try { trayIcon = trayIcon.resize({ width: 16, height: 16 }); } catch {}
+      if (!trayIcon.isEmpty()) {
+        if (process.platform === 'darwin') {
+          // macOS 菜单栏高度约 24pt，缩放到 22x22 适配并留出边距，
+          // 再标记为模板图像以自适应深浅色（系统按 alpha 通道着色）
+          try { trayIcon = trayIcon.resize({ width: 22, height: 22 }); } catch {}
+          trayIcon.setTemplateImage(true);
+        } else {
+          // Windows/Linux 托盘图标标准尺寸 16x16
+          try { trayIcon = trayIcon.resize({ width: 16, height: 16 }); } catch {}
+        }
       }
     }
   } catch (e) { /* 图标加载失败时使用空图标，Tray 仍可创建 */ }
@@ -4062,7 +4067,7 @@ ipcMain.handle('llm:chat', async (event, messages, options = {}) => {
     const llm = settings.llm;
     if (llm.provider === 'opencode-zen') {
       if (!llm.zenApiKey || !llm.model) return { ok: false, error: '请先在设置中配置OpenCode Zen API Key和模型' };
-    } else if (!llm.apiUrl || !llm.apiKey || !llm.model) {
+    } else if (!llm.apiUrl || !llm.model) {
       return { ok: false, error: '请先在设置中配置LLM API' };
     }
 
@@ -4156,7 +4161,7 @@ ipcMain.handle('llm:chatStream', async (_, messages, options = {}) => {
     const llm = settings.llm;
     if (llm.provider === 'opencode-zen') {
       if (!llm.zenApiKey || !llm.model) return { ok: false, error: '请先在设置中配置OpenCode Zen API Key和模型' };
-    } else if (!llm.apiUrl || !llm.apiKey || !llm.model) {
+    } else if (!llm.apiUrl || !llm.model) {
       return { ok: false, error: '请先在设置中配置LLM API' };
     }
 
@@ -4268,7 +4273,7 @@ ipcMain.handle('llm:summarize', async (_, messages, options = {}) => {
     const llm = settings.llm;
     if (llm.provider === 'opencode-zen') {
       if (!llm.zenApiKey || !llm.model) return { ok: false, error: '请先配置OpenCode Zen' };
-    } else if (!llm.apiUrl || !llm.apiKey || !llm.model) {
+    } else if (!llm.apiUrl || !llm.model) {
       return { ok: false, error: '请先在设置中配置LLM API' };
     }
 
@@ -6171,7 +6176,7 @@ ipcMain.handle('sanguosha:aiDecision', async (_, gameState, playerInfo) => {
     const llm = settings.llm;
     if (llm.provider === 'opencode-zen') {
       if (!llm.zenApiKey || !llm.model) return { ok: true, action: 'auto' };
-    } else if (!llm.apiUrl || !llm.apiKey || !llm.model) {
+    } else if (!llm.apiUrl || !llm.model) {
       return { ok: true, action: 'auto' };
     }
 

@@ -914,6 +914,14 @@
                   </div>
                 </div>
                 <div class="setting-item">
+                  <label>多模态视觉输入 (强制启用)</label>
+                  <div class="toggle-switch">
+                    <input type="checkbox" id="setting-llm-force-vision">
+                    <span class="toggle-slider"></span>
+                  </div>
+                  <div class="setting-hint">无法自动识别模型是否支持多模态时（如 llama.cpp 本地模型），可强制开启以允许读取图片直接注入上下文</div>
+                </div>
+                <div class="setting-item">
                   <label>推理强度 (仅支持的模型生效)</label>
                   <select id="setting-llm-reasoning">
                     <option value="off">关闭</option>

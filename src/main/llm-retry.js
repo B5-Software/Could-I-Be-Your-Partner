@@ -92,6 +92,39 @@ function sleep(ms, signal) {
 }
 
 /**
+ * 当请求返回 404 时，说明用户配置的 API URL 路径可能不完整。
+ * 基于原始 URL 生成候选端点列表（按常见 chat/completions 或 messages 路径补全）。
+ * @param {string} originalUrl
+ * @param {string} transport - 'openai' | 'anthropic'
+ * @returns {string[]} 候选 URL 列表（含原始 URL，已去重）
+ */
+function buildEndpointCandidates(originalUrl, transport) {
+  const seen = new Set();
+  const out = [];
+  const push = (u) => {
+    if (!u) return;
+    let norm;
+    try { norm = new URL(u).href; } catch { norm = u; }
+    if (!seen.has(norm)) { seen.add(norm); out.push(norm); }
+  };
+  push(originalUrl);
+  let url;
+  try { url = new URL(originalUrl); } catch { return out; }
+  const origin = url.origin;
+  const path = url.pathname.replace(/\/+$/, '');
+  const suffixes = transport === 'anthropic'
+    ? ['/v1/messages', '/messages']
+    : ['/v1/chat/completions', '/chat/completions'];
+  // 直接在 origin 后拼接常见路径
+  for (const s of suffixes) push(origin + s);
+  // 用户可能填写了基础路径前缀（如 /api、/proxy），在其后补全；重复项由 seen 去重
+  if (path && !suffixes.includes(path)) {
+    for (const s of suffixes) push(origin + path + s);
+  }
+  return out;
+}
+
+/**
  * Perform a fetch to the LLM API with retry/backoff/timeout/fallback.
  * Returns { ok: true, response } on success — caller consumes response.json() or response.body.
  * Returns { ok: false, error, kind, status } on terminal failure.
@@ -113,6 +146,13 @@ async function fetchLLMWithRetry(cfg) {
   // Optional custom headers from provider config (e.g. Anthropic uses x-api-key + anthropic-version).
   // When provided, these REPLACE the default Authorization header.
   const customHeaders = cfg.headers && typeof cfg.headers === 'object' ? cfg.headers : null;
+  // 推断传输协议（用于 404 端点探索时选择正确的路径后缀）
+  const transport = cfg.transport ||
+    (customHeaders && (customHeaders['x-api-key'] || customHeaders['anthropic-version']) ? 'anthropic' : 'openai');
+  // 404 端点探索：用户可能配置了不完整的 API URL，预生成候选端点
+  const endpointCandidates = buildEndpointCandidates(apiUrl, transport);
+  let endpointIdx = 0;
+  let currentEndpoint = endpointCandidates[0] || apiUrl;
   const opts = cfg.options || {};
   const maxRetries = (opts.maxRetries && opts.maxRetries > 0) ? opts.maxRetries : DEFAULT_MAX_RETRIES;
   // 0 / negative / non-number → fall back to default. Previously `??` accepted 0
@@ -139,7 +179,7 @@ async function fetchLLMWithRetry(cfg) {
       const headers = customHeaders
         ? { ...customHeaders, 'Content-Type': 'application/json' }
         : { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' };
-      const resp = await fetch(apiUrl, {
+      const resp = await fetch(currentEndpoint, {
         method: 'POST',
         headers,
         body: JSON.stringify(reqBody),
@@ -160,6 +200,18 @@ async function fetchLLMWithRetry(cfg) {
             controller,
             releaseController: () => _activeControllers.delete(controller)
           };
+        }
+        // 404 端点探索：用户可能配置了不完整的 API URL，依次尝试候选端点
+        if (resp.status === 404 && endpointIdx + 1 < endpointCandidates.length) {
+          endpointIdx++;
+          currentEndpoint = endpointCandidates[endpointIdx];
+          // 消费响应体避免连接泄漏
+          try { await resp.text(); } catch { /* ignore */ }
+          onRetry({
+            attempt, status: 404, kind: 'client', delayMs: 0, requestId,
+            reason: '探索端点: ' + currentEndpoint
+          });
+          continue; // 尝试下一个候选端点
         }
         // Non-retryable client/auth error — read body for message.
         let errBody = null;

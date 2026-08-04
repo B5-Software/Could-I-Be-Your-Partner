@@ -90,12 +90,12 @@ function buildOpenAIRequest(llm, opts, reasoningEffort) {
       body.reasoning_effort = reasoningEffort;
     }
   }
+  // 当未配置 API Key（如 llama.cpp 等本地无 key 端点）时，不发送 Authorization 头
+  const openaiHeaders = { 'Content-Type': 'application/json' };
+  if (llm.apiKey) openaiHeaders['Authorization'] = `Bearer ${llm.apiKey}`;
   return {
     url,
-    headers: {
-      'Authorization': `Bearer ${llm.apiKey}`,
-      'Content-Type': 'application/json'
-    },
+    headers: openaiHeaders,
     body,
     transport: 'openai'
   };
@@ -134,13 +134,15 @@ function buildAnthropicRequest(llm, opts, reasoningEffort) {
       if (body.max_tokens <= budget) body.max_tokens = budget + 4096;
     }
   }
+  // 当未配置 API Key 时，不发送 x-api-key 头（兼容无 key 的 Anthropic 兼容端点）
+  const anthropicHeaders = {
+    'anthropic-version': '2023-06-01',
+    'Content-Type': 'application/json'
+  };
+  if (llm.apiKey) anthropicHeaders['x-api-key'] = llm.apiKey;
   return {
     url,
-    headers: {
-      'x-api-key': llm.apiKey,
-      'anthropic-version': '2023-06-01',
-      'Content-Type': 'application/json'
-    },
+    headers: anthropicHeaders,
     body,
     transport: 'anthropic'
   };

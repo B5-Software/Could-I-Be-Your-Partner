@@ -869,8 +869,11 @@ ${toolListSection}`;
   /**
    * 检测当前模型是否支持多模态视觉输入。
    * 通过模型 ID 关键词判断，也检查 settings.llm.visionModels 自定义列表。
+   * 当用户在设置中手动开启「多模态」开关时，强制视为支持（绕过自动识别）。
    */
   isVisionModel() {
+    // 用户手动开启多模态开关：无论模型名/API 如何，强制允许图片注入上下文
+    if (this.settings?.llm?.forceVision === true) return true;
     const model = (this.settings?.llm?.model || '').toLowerCase();
     if (!model) return false;
     // 用户自定义的 vision 模型列表
@@ -885,6 +888,8 @@ ${toolListSection}`;
       'gemini', 'qwen-vl', 'qwen2-vl', 'qwen2.5-vl', 'glm-4v', 'glm-4.6v',
       'internvl', 'llava', 'mini-cpm', 'nextvl',
       'deepseek-vl', 'step-1v', 'yi-vision',
+      // Gemma 3/4 具备视觉输入能力（gguf 本地推理亦支持 image_url）
+      'gemma-3', 'gemma-4',
       // Zen 免费模型中支持 vision 的
       'big-pickle', 'mimo-v2.5'
     ];
@@ -2266,7 +2271,7 @@ ${toolListSection}`;
             : imgRelPath;
           // 非多模态模型：不支持图片注入，返回提示
           if (!this.isVisionModel()) {
-            return { ok: false, error: '当前模型不支持多模态视觉输入，无法读取图片。请使用 OCR 工具（extractTextFromImage）或切换到支持视觉的模型。' };
+            return { ok: false, error: '当前模型不支持多模态视觉输入，无法读取图片。可在「设置 → LLM 配置」中开启「多模态视觉输入」开关强制启用，或使用 OCR 工具（extractTextFromImage）。' };
           }
           const readRes = await window.api.readFileBase64(imgFullPath);
           if (!readRes || !readRes.ok || !readRes.data) {
