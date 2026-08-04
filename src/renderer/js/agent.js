@@ -901,14 +901,20 @@ ${toolListSection}`;
    * renderer 中不可用 require('path')，用字符串拼接。
    * 规则：
    *   - 绝对路径（Windows 盘符 C:\、Unix /、UNC \\）或 URL（http(s)://、file://）→ 原样返回
-   *   - 相对路径 → 基于工作区拼接（默认 workspacePath，Code 模式可用 codeWorkspacePath）
-   * 这是 readImageFile / presentFile / eslintLintFile 等工具共用的路径上下文工程。
+   *   - 相对路径 → 基于工作区拼接
+   *     · Code 模式优先 codeWorkspacePath（除非 useCodeWorkspace:false 显式禁用）
+   *     · 其他模式用 workspacePath
+   *   - 无工作区时原样返回（交由主进程 fs 按 CWD 处理，但此时通常也无工作区可用）
+   * 这是所有文件工具（readFile/createFile/editFile/moveFile/...）共用的路径上下文工程，
+   * 避免相对路径落到进程 CWD（打包后即软件安装目录，会污染/覆盖应用文件）。
    */
-  _resolveWorkspacePath(p, { useCodeWorkspace = false } = {}) {
+  _resolveWorkspacePath(p, { useCodeWorkspace } = {}) {
     if (!p) return p;
     // 绝对路径或 URL：原样返回，避免把 C:\xxx 误当相对路径拼接到 workspace 后
     if (/^([a-zA-Z]:[\\/]|[\\/]|[\w-]+:\/\/)/.test(p)) return p;
-    const ws = useCodeWorkspace
+    // Code 模式默认用 codeWorkspacePath（除非显式禁用）
+    const useCode = useCodeWorkspace !== false && this.mode === 'code';
+    const ws = useCode
       ? (this.codeWorkspacePath || this.workspacePath)
       : this.workspacePath;
     if (!ws) return p;
@@ -2146,7 +2152,7 @@ ${toolListSection}`;
         case 'memoryAdd': return normalizeOk(await window.api.memoryAdd({ content: args.content, tags: args.tags || [] }), 'item');
         case 'memoryDelete': return normalizeOk(await window.api.memoryDelete(args.id));
         case 'memoryUpdate': return normalizeOk(await window.api.memoryUpdate(args.id, { content: args.content, tags: args.tags }), 'item');
-        case 'localSearch': return await window.api.localSearch(args.directory, args.pattern, args.options || {});
+        case 'localSearch': return await window.api.localSearch(this._resolveWorkspacePath(args.directory), args.pattern, args.options || {});
         case 'searchInFiles': {
           // 路径数组归一化：支持单字符串或数组
           let paths = args.paths;
@@ -2157,13 +2163,8 @@ ${toolListSection}`;
           if (!Array.isArray(paths) || paths.length === 0) {
             return { ok: false, error: typeof i18nToolReturn === 'function' ? i18nToolReturn('param_required', 'paths 参数必须是非空数组', { param: 'paths' }) : 'paths 参数必须是非空数组' };
           }
-          // 工作目录相对路径 → 绝对路径
-          const ws = this.workspacePath;
-          paths = paths.map(p => {
-            if (!p) return p;
-            if ((p.length >= 2 && p[1] === ':') || p.startsWith('/') || p.startsWith('\\')) return p;
-            return ws ? (ws + (ws.endsWith('\\') ? '' : '\\') + p) : p;
-          });
+          // 工作目录相对路径 → 绝对路径（统一使用 _resolveWorkspacePath，感知 Code 模式）
+          paths = paths.map(p => this._resolveWorkspacePath(p));
           const opts = args.options || {};
           // 顶层参数也可直接传入（向后兼容：args.isRegex / args.include 等）
           const mergedOpts = {
@@ -2184,7 +2185,8 @@ ${toolListSection}`;
           return res;
         }
         case 'readFile': {
-          const pathStr = args.path || '';
+          // 统一路径解析：相对路径基于工作区，绝对路径原样使用
+          const pathStr = this._resolveWorkspacePath(args.path || '');
           const ext = pathStr.split('.').pop().toLowerCase();
           const officeFormats = ['docx', 'xlsx', 'pptx', 'doc', 'xls', 'ppt', 'pdf', 'odt', 'ods', 'odp'];
           if (officeFormats.includes(ext)) {
@@ -2207,15 +2209,17 @@ ${toolListSection}`;
           return result;
         }
         case 'editFile': {
+          // 统一路径解析：相对路径基于工作区，绝对路径原样使用
+          const fp = this._resolveWorkspacePath(args.path || '');
           // 全量覆写模式（向后兼容）
           if (args.content !== undefined && args.old_string === undefined) {
-            const r = await window.api.writeFile(args.path, args.content);
+            const r = await window.api.writeFile(fp, args.content);
             if (r.ok) r.message = '文件已全量覆写';
             return r;
           }
           // 字符串替换模式
           if (args.old_string !== undefined && args.new_string !== undefined) {
-            return await this._applyStringReplace(args.path, args.old_string, args.new_string, args.replace_all || false, args.encoding);
+            return await this._applyStringReplace(fp, args.old_string, args.new_string, args.replace_all || false, args.encoding);
           }
           return { ok: false, error: typeof i18nToolReturn === 'function' ? i18nToolReturn('need_content_or_replace', '需要提供 content（全量覆写）或 old_string+new_string（字符串替换）') : '需要提供 content（全量覆写）或 old_string+new_string（字符串替换）' };
         }
@@ -2223,8 +2227,10 @@ ${toolListSection}`;
           if (!Array.isArray(args.edits) || args.edits.length === 0) {
             return { ok: false, error: 'edits 必须是非空数组' };
           }
+          // 统一路径解析：相对路径基于工作区，绝对路径原样使用
+          const fp = this._resolveWorkspacePath(args.path || '');
           // 读取当前文件内容
-          const readRes = await window.api.readFile(args.path, args.encoding || '');
+          const readRes = await window.api.readFile(fp, args.encoding || '');
           if (!readRes.ok) return readRes;
           let content = readRes.content;
           const appliedEdits = [];
@@ -2250,7 +2256,7 @@ ${toolListSection}`;
             }
             appliedEdits.push({ index: i + 1, replacements: edit.replace_all ? count : 1 });
           }
-          const writeRes = await window.api.writeFile(args.path, content);
+          const writeRes = await window.api.writeFile(fp, content);
           if (!writeRes.ok) return writeRes;
           return { ok: true, message: `已应用 ${appliedEdits.length} 处编辑`, edits: appliedEdits };
         }
@@ -2296,13 +2302,13 @@ ${toolListSection}`;
           const imgDesc = args.description ? `：${args.description}` : '';
           return { ok: true, _multimodal: true, imageUrl: readRes.data, text: `已读取图片文件 ${imgRelPath}${imgDesc}（图片已注入上下文，可直接查看）` };
         }
-        case 'createFile': return await window.api.createFile(args.path, args.content || '');
-        case 'deleteFile': return await window.api.deleteFile(args.path);
-        case 'moveFile': return await window.api.moveFile(args.source, args.destination);
-        case 'copyFile': return await window.api.copyFile(args.source, args.destination);
-        case 'listDirectory': return await window.api.listDirectory(args.path);
-        case 'makeDirectory': return await window.api.makeDirectory(args.path);
-        case 'deleteDirectory': return await window.api.deleteDirectory(args.path);
+        case 'createFile': return await window.api.createFile(this._resolveWorkspacePath(args.path), args.content || '');
+        case 'deleteFile': return await window.api.deleteFile(this._resolveWorkspacePath(args.path));
+        case 'moveFile': return await window.api.moveFile(this._resolveWorkspacePath(args.source), this._resolveWorkspacePath(args.destination));
+        case 'copyFile': return await window.api.copyFile(this._resolveWorkspacePath(args.source), this._resolveWorkspacePath(args.destination));
+        case 'listDirectory': return await window.api.listDirectory(this._resolveWorkspacePath(args.path));
+        case 'makeDirectory': return await window.api.makeDirectory(this._resolveWorkspacePath(args.path));
+        case 'deleteDirectory': return await window.api.deleteDirectory(this._resolveWorkspacePath(args.path));
         case 'runJavaScriptCode': return await window.api.runJS(args.code);
         case 'runNodeJavaScriptCode': return await window.api.runNodeJS(args.code);
         case 'runShellScriptCode': return await window.api.runShell(args.script);
@@ -2359,7 +2365,7 @@ ${toolListSection}`;
           return result.ok !== undefined ? result : { ok: true };
         }
         case 'openFileExplorer': {
-          const result = await window.api.openFileExplorer(args.path);
+          const result = await window.api.openFileExplorer(this._resolveWorkspacePath(args.path));
           return result.ok !== undefined ? result : { ok: true };
         }
         case 'eslintLint': {
@@ -2373,8 +2379,8 @@ ${toolListSection}`;
         }
         case 'eslintLintFile': {
           if (!args.path) return { ok: false, error: '参数 path 必填' };
-          // Code 模式优先使用 codeWorkspacePath 解析（统一路径上下文工程）
-          const fp = this._resolveWorkspacePath(args.path, { useCodeWorkspace: true });
+          // 统一路径解析：Code 模式自动用 codeWorkspacePath
+          const fp = this._resolveWorkspacePath(args.path);
           return await window.api.eslintLintFile(fp);
         }
         case 'manageContext': return this.contextManager.manage(args.action, args);
@@ -2537,7 +2543,7 @@ ${toolListSection}`;
           if (!args.path) {
             return { ok: false, error: '需要 path 参数指定工程文件路径' };
           }
-          return await window.api.cadLoadProject(args.path);
+          return await window.api.cadLoadProject(this._resolveWorkspacePath(args.path));
         }
         case 'exportCipypCadDxf': {
           const sep = (this.workspacePath && this.workspacePath.includes('\\')) ? '\\' : '/';
@@ -2732,11 +2738,11 @@ ${toolListSection}`;
         }
         case 'pcbLoadProject': {
           if (!args.path) return { ok: false, error: '需要 path 参数指定工程文件路径' };
-          return await window.api.pcbLoadProject(args.path);
+          return await window.api.pcbLoadProject(this._resolveWorkspacePath(args.path));
         }
         case 'pcbImportFile': {
           if (!args.path) return { ok: false, error: '需要 path 参数指定导入文件路径' };
-          return await window.api.pcbImportFile(args.path);
+          return await window.api.pcbImportFile(this._resolveWorkspacePath(args.path));
         }
         case 'pcbExportGerber': {
           const sep = (this.workspacePath && this.workspacePath.includes('\\')) ? '\\' : '/';
@@ -2987,27 +2993,27 @@ ${toolListSection}`;
           return await window.api.serialSetSignals(args.path, { dtr: args.dtr, rts: args.rts, brk: args.brk });
         // ---- Office工具 ----
         case 'officeUnpack':
-          return await window.api.officeUnpack(args.path);
+          return await window.api.officeUnpack(this._resolveWorkspacePath(args.path));
         case 'officeListContents':
-          return await window.api.officeListContents(args.dir);
+          return await window.api.officeListContents(this._resolveWorkspacePath(args.dir));
         case 'officeReadInnerFile':
-          return await window.api.readFile(args.path);
+          return await window.api.readFile(this._resolveWorkspacePath(args.path));
         case 'officeWriteInnerFile':
-          return await window.api.writeFile(args.path, args.content);
+          return await window.api.writeFile(this._resolveWorkspacePath(args.path), args.content);
         case 'officeRepack':
-          return await window.api.officeRepack(args.dir, args.outputPath);
+          return await window.api.officeRepack(this._resolveWorkspacePath(args.dir), this._resolveWorkspacePath(args.outputPath));
         case 'officeGetSlideTexts':
-          return await window.api.officeGetSlideTexts(args.dir, args.slideFile);
+          return await window.api.officeGetSlideTexts(this._resolveWorkspacePath(args.dir), args.slideFile);
         case 'officeSetSlideTexts':
-          return await window.api.officeSetSlideTexts(args.dir, args.slideFile, args.translations);
+          return await window.api.officeSetSlideTexts(this._resolveWorkspacePath(args.dir), args.slideFile, args.translations);
         case 'officeWordExtract':
-          return await window.api.officeWordExtract(args.pathOrDir, { includeEmpty: args.includeEmpty });
+          return await window.api.officeWordExtract(this._resolveWorkspacePath(args.pathOrDir), { includeEmpty: args.includeEmpty });
         case 'officeWordApplyTexts':
-          return await window.api.officeWordApplyTexts(args.pathOrDir, args.updates || []);
+          return await window.api.officeWordApplyTexts(this._resolveWorkspacePath(args.pathOrDir), args.updates || []);
         case 'officeWordGetStyles':
-          return await window.api.officeWordGetStyles(args.pathOrDir);
+          return await window.api.officeWordGetStyles(this._resolveWorkspacePath(args.pathOrDir));
         case 'officeWordFillTemplate':
-          return await window.api.officeWordFillTemplate(args.pathOrDir, args.replacements || {});
+          return await window.api.officeWordFillTemplate(this._resolveWorkspacePath(args.pathOrDir), args.replacements || {});
         // ---- 数据表格工具 ----
         case 'initSpreadsheet':
           return window.initSpreadsheet ? window.initSpreadsheet(args.title) : { ok: false, error: '数据表格功能未初始化' };
