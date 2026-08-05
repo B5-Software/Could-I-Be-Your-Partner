@@ -1249,7 +1249,8 @@ ${toolListSection}`;
   }
 
   async sendMessage(userMessage, attachments = []) {
-    if (!this.settings?.llm?.apiUrl || !this.settings?.llm?.apiKey) {
+    // OpenAI/Anthropic 兼容端点允许无 API Key（llama.cpp 等本地推理场景）
+    if (!this.settings?.llm?.apiUrl) {
       if (this.onMessage) this.onMessage('error', '请先在设置中配置LLM API');
       return;
     }

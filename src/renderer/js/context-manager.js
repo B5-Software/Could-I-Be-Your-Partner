@@ -124,11 +124,18 @@ class ContextManager {
    * 用于 readImageFile 等工具，将图片直接注入上下文而非返回 base64 字符串。
    */
   addMultimodalToolResult(toolCallId, name, textContent, imageUrl) {
-    const content = [
-      { type: 'text', text: textContent },
-      { type: 'image_url', image_url: { url: imageUrl } }
-    ];
-    this.addMessage({ role: 'tool', tool_call_id: toolCallId, name, content });
+    // OpenAI/Anthropic 规范：tool 消息 content 必须是字符串，
+    // 多模态 image_url 只能放在 user 消息中。
+    // 因此先添加 tool 消息（文字结果），再追加一条 user 消息（图片）。
+    // 参考: https://platform.openai.com/docs/guides/vision
+    this.addMessage({ role: 'tool', tool_call_id: toolCallId, name, content: textContent });
+    this.addMessage({
+      role: 'user',
+      content: [
+        { type: 'text', text: `[系统注入：${name} 工具返回的图片，请结合上文工具调用查看]` },
+        { type: 'image_url', image_url: { url: imageUrl } }
+      ]
+    });
   }
 
   pinMessage(index) {
