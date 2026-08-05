@@ -2595,9 +2595,9 @@
       const toolCallMap = {};
       for (const msg of (conv.messages || [])) {
         if (msg.role === 'user') {
-          addMessageToChat('user', msg.content);
+          addMessageToChat('user', extractTextContent(msg.content));
         } else if (msg.role === 'assistant') {
-          if (msg.content) addMessageToChat('assistant', msg.content);
+          if (msg.content) addMessageToChat('assistant', extractTextContent(msg.content));
           if (msg.tool_calls) {
             for (const tc of msg.tool_calls) {
               const toolName = tc.function?.name || 'tool';
@@ -2610,8 +2610,10 @@
           }
         } else if (msg.role === 'tool') {
           const toolName = msg.name || toolCallMap[msg.tool_call_id] || 'tool';
+          // 兼容旧版多模态 tool 消息 content 为数组的情况：提取文本，避免显示 [object Object]
           let result = msg.content;
-          try { result = JSON.parse(msg.content); } catch {}
+          if (Array.isArray(result)) result = extractTextContent(result);
+          try { result = JSON.parse(result); } catch {}
           updateToolCallResult(toolName, result);
         } else if (msg.role === 'system') {
           // 回放历史时显示系统消息（不重复持久化）
@@ -8265,9 +8267,9 @@
           const toolCallMap = {};
           for (const msg of (conv.messages || [])) {
             if (msg.role === 'user') {
-              addMessageToChat('user', msg.content);
+              addMessageToChat('user', extractTextContent(msg.content));
             } else if (msg.role === 'assistant') {
-              if (msg.content) addMessageToChat('assistant', msg.content);
+              if (msg.content) addMessageToChat('assistant', extractTextContent(msg.content));
               if (msg.tool_calls && msg.tool_calls.length > 0) {
                 for (const tc of msg.tool_calls) {
                   const toolName = tc.function?.name || 'tool';
@@ -8281,8 +8283,10 @@
               }
             } else if (msg.role === 'tool') {
               const toolName = msg.name || toolCallMap[msg.tool_call_id] || 'tool';
+              // 兼容旧版多模态 tool 消息 content 为数组的情况：提取文本，避免显示 [object Object]
               let result = msg.content;
-              try { result = JSON.parse(msg.content); } catch {}
+              if (Array.isArray(result)) result = extractTextContent(result);
+              try { result = JSON.parse(result); } catch {}
               updateToolCallResult(toolName, result);
             } else if (msg.role === 'system') {
               // 回放历史时显示系统消息（不重复持久化）
@@ -8437,9 +8441,9 @@
     const toolCallMap = {};
     for (const msg of (conv?.messages || [])) {
       if (msg.role === 'user') {
-        addMessageToChat('user', msg.content);
+        addMessageToChat('user', extractTextContent(msg.content));
       } else if (msg.role === 'assistant') {
-        if (msg.content) addMessageToChat('assistant', msg.content);
+        if (msg.content) addMessageToChat('assistant', extractTextContent(msg.content));
         if (msg.tool_calls && msg.tool_calls.length > 0) {
           for (const tc of msg.tool_calls) {
             const toolName = tc.function?.name || 'tool';
@@ -8453,8 +8457,10 @@
         }
       } else if (msg.role === 'tool') {
         const toolName = msg.name || toolCallMap[msg.tool_call_id] || 'tool';
+        // 兼容旧版多模态 tool 消息 content 为数组的情况：提取文本，避免显示 [object Object]
         let result = msg.content;
-        try { result = JSON.parse(msg.content); } catch {}
+        if (Array.isArray(result)) result = extractTextContent(result);
+        try { result = JSON.parse(result); } catch {}
         updateToolCallResult(toolName, result);
       } else if (msg.role === 'system') {
         addSystemMessage(msg.content, { persist: false });
@@ -11901,7 +11907,7 @@
         const userAvatarHTML = makeBabeFramedAvatarHTML(userAvatar, 'user');
         for (const m of babeMessages) {
           if (m.role === 'user') {
-            const content = typeof m.content === 'string' ? m.content : '[多模态内容]';
+            const content = extractTextContent(m.content) || '[多模态内容]';
             const msg = document.createElement('div');
             msg.className = 'babe-message user';
             msg.innerHTML = `<div class="babe-msg-avatar">${userAvatarHTML}</div><div class="babe-msg-body"><div class="babe-msg-bubble markdown-body">${escapeHtml(content)}</div></div>`;
@@ -11941,6 +11947,8 @@
             const key = m.tool_call_id;
             const entry = key ? toolCallMap[key] : null;
             let result = m.content;
+            // 兼容旧版多模态 tool 消息 content 为数组的情况：提取文本，避免显示 [object Object]
+            if (Array.isArray(result)) result = extractTextContent(result);
             if (typeof result === 'string') { try { result = JSON.parse(result); } catch {} }
             const resultStr = typeof result === 'string' ? result : JSON.stringify(result);
             const ok = (result && typeof result === 'object') ? result.ok !== false : true;
