@@ -4845,6 +4845,14 @@ ipcMain.handle('code:getLastWorkspace', () => {
   return settings.codeMode?.lastWorkspace || null;
 });
 
+ipcMain.handle('code:setLastWorkspace', (_, wsPath) => {
+  if (!wsPath || typeof wsPath !== 'string') return { ok: false };
+  settings.codeMode = settings.codeMode || {};
+  settings.codeMode.lastWorkspace = wsPath;
+  persistSettings();
+  return { ok: true };
+});
+
 ipcMain.handle('code:listHistory', (_, workspacePath) => {
   const histDir = getCodeHistoryDir(workspacePath);
   if (!histDir) return { ok: false, error: 'no workspace' };

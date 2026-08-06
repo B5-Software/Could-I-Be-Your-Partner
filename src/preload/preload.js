@@ -153,6 +153,7 @@ contextBridge.exposeInMainWorld('api', {
   // ---- Code Mode ----
   codeOpenWorkspace: () => ipcRenderer.invoke('code:openWorkspace'),
   codeGetLastWorkspace: () => ipcRenderer.invoke('code:getLastWorkspace'),
+  codeSetLastWorkspace: (wsPath) => ipcRenderer.invoke('code:setLastWorkspace', wsPath),
   codeListHistory: (ws) => ipcRenderer.invoke('code:listHistory', ws),
   codeLoadHistory: (ws, id) => ipcRenderer.invoke('code:loadHistory', ws, id),
   codeSaveHistory: (ws, id, data) => ipcRenderer.invoke('code:saveHistory', ws, id, data),

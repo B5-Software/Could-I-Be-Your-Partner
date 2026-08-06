@@ -1634,10 +1634,28 @@ ${toolListSection}`;
     return { action, usage: newUsage2 };
   }
 
+  _repairReasoningContent() {
+    // DeepSeek 等思考模型开启 thinking 模式后，要求历史 assistant 消息回传其
+    // reasoning_content 字段，否则返回 invalid_request_error（400）。
+    // 为缺失该字段的 assistant 消息补全（优先用已保存的 reasoning，否则用空字符串），
+    // 采用 replace-not-mutate：替换为新数组，不破坏 historyMessages 里的完整记录。
+    const ctx = this.contextManager;
+    if (!ctx || !Array.isArray(ctx.messages)) return false;
+    let changed = false;
+    const msgs = ctx.messages.map((m) => {
+      if (m && m.role === 'assistant' && m.reasoning_content === undefined) {
+        changed = true;
+        const reasoning = (m.reasoning !== undefined && m.reasoning !== null) ? m.reasoning : '';
+        return { ...m, reasoning_content: reasoning, reasoning: undefined };
+      }
+      return m;
+    });
+    if (changed) ctx.messages = msgs;
+    return changed;
+  }
+
   async agentLoop(runId) {
     let iterations = 0;
-    // 重置修复标记：上次 agentLoop 中断退出时可能残留 true，导致本次无法触发自动修复
-    this._sanitizedThisLoop = false;
     // 移除硬性迭代上限：完全由 running/stopped/runId 控制
     // 原本的 maxIterations=50 会在长任务中被误触顶，导致工作中断
     while (this.running && !this.stopped && runId === this.runId) {
@@ -1721,59 +1739,70 @@ ${toolListSection}`;
       if (this.stopped || runId !== this.runId) break;
 
       if (!result.ok) {
-        // ===== 自动修复：当 API 返回 400 类（请求不合法）错误时，尝试清理上下文后重试一次 =====
-        // 这通常发生在用户中断 Agent 时，上下文末尾残留了空 assistant 或未配对的 tool_calls
-        // 匹配场景：
-        //   - HTTP 400 / client 错误类型
-        //   - 错误信息含 "tool_calls"/"tool_call_id"/"insufficient tool messages"（DeepSeek/OpenAI 配对错误）
-        //   - 错误信息含 "invalid"/"bad request"/"不合法" 等通用 400 关键词
+        // ===== 自动修复 + 重试循环：所有提供商返回的错误（invalid_request_error、402、
+        // rate_limit、5xx、网络错误等）都先尝试自动修复并重试，重试用尽后才报错停止 =====
         const errText = String(result.error || '');
-        const isClientError = result.kind === 'client' || result.status === 400 ||
-          /tool_calls?|tool_call_id|insufficient tool messages|following tool_calls|400|invalid|bad request|不合法|messages.*context/i.test(errText);
+        const kind = result.kind;
+        const MAX_PROVIDER_RETRIES = 3;
+        // 可修复/可重试的客户端类错误：
+        //   - HTTP 400 / client / payment(402) 类型
+        //   - 上下文配对错误（tool_calls 未配对等，DeepSeek/OpenAI 常见）
+        //   - 思考模型要求回传 reasoning_content（DeepSeek 等）
+        const isFixableClient = kind === 'client' || kind === 'payment' ||
+          result.status === 400 || result.status === 402 ||
+          /tool_calls?|tool_call_id|insufficient tool messages|following tool_calls|400|402|invalid|bad request|不合法|messages.*context|reasoning_content|thinking mode|must be passed back/i.test(errText);
+        // auth 类错误（401/403）属于配置问题，重试无意义，直接报错
+        const isAuthError = kind === 'auth';
 
-        if (isClientError && !this._sanitizedThisLoop) {
-          // 标记本次循环已尝试过修复，避免无限循环
-          this._sanitizedThisLoop = true;
-          const sanitizationResult = this.contextManager.sanitize();
-          if (sanitizationResult.fixed) {
-            if (this.onMessage) {
-              this.onMessage('system', `🔧 检测到上下文损坏，已自动修复 ${sanitizationResult.removedCount} 条问题消息（${sanitizationResult.beforeLength}→${sanitizationResult.afterLength}）。正在重试请求...`);
+        let retryCount = 0;
+        while (!result.ok && !isAuthError && retryCount < MAX_PROVIDER_RETRIES
+               && this.running && !this.stopped && runId === this.runId) {
+          retryCount++;
+          let fixedNote = '';
+          if (isFixableClient) {
+            // 先尝试 sanitize 修复损坏的上下文（未配对的 tool_calls 等）
+            const sanitizationResult = this.contextManager.sanitize();
+            if (sanitizationResult.fixed) {
+              fixedNote = `，已自动修复 ${sanitizationResult.removedCount} 条问题消息（${sanitizationResult.beforeLength}→${sanitizationResult.afterLength}）`;
             }
-            // 重新构建消息并用非流式重试（错误恢复场景，避免流式事件错乱）
-            const retryMessages = this.contextManager.getMessages();
-            const retryTools = this.getRuntimeToolSchemas();
-            try {
-              result = await window.api.chatLLM(retryMessages, {
-                tools: retryTools.length > 0 ? retryTools : undefined,
-                requestId: reqId + '-sanitize-retry'
-              });
-              usedStreaming = false; // 重试走非流式路径
-            } catch (retryErr) {
-              if (this.stopped || runId !== this.runId) throw retryErr;
-              result = { ok: false, error: retryErr.message || String(retryErr), kind: 'client' };
+            // 思考模型要求回传 reasoning_content：为缺失该字段的 assistant 消息补全后重试
+            if (/reasoning_content|thinking mode|must be passed back/i.test(errText)) {
+              const reasoningFixed = this._repairReasoningContent();
+              if (reasoningFixed) fixedNote = '，已自动补全 reasoning_content 字段';
             }
+          }
+          if (this.onMessage) {
+            this.onMessage('system', `⚠️ LLM 请求失败（${kind || 'unknown'}：${errText.slice(0, 120)}），正在自动重试（${retryCount}/${MAX_PROVIDER_RETRIES}）${fixedNote}`);
+          }
+          // 指数退避，避免对不稳定的提供商发起高频请求
+          await new Promise(r => setTimeout(r, 800 * retryCount));
+          if (this.stopped || runId !== this.runId) break;
+          // 重新构建消息（修复可能已改动上下文）并用非流式重试，避免流式事件错乱
+          const retryMessages = this.contextManager.getMessages();
+          const retryTools = this.getRuntimeToolSchemas();
+          try {
+            result = await window.api.chatLLM(retryMessages, {
+              tools: retryTools.length > 0 ? retryTools : undefined,
+              requestId: reqId + '-retry-' + retryCount
+            });
+            usedStreaming = false; // 重试走非流式路径
+          } catch (retryErr) {
             if (this.stopped || runId !== this.runId) break;
+            result = { ok: false, error: retryErr.message || String(retryErr), kind: 'client' };
           }
+        }
+        if (this.stopped || runId !== this.runId) break;
 
-          // 修复后仍失败（或修复无改动）：报错并退出
-          if (!result.ok) {
-            const errMsg = result.error || 'LLM 请求失败';
-            if (this.onMessage) this.onMessage('error', errMsg + '（已尝试自动修复上下文）');
-            try { this.contextManager.addSystemMessage(`[错误] ${errMsg}（上下文已自动修复，可重新发送消息继续）`, { type: 'error' }); }
-            catch { /* ignore */ }
-            break;
-          }
-          // 修复后重试成功：继续走正常流程
-        } else {
+        // 重试仍失败：报错并停止
+        if (!result.ok) {
           const errMsg = result.error || 'LLM 请求失败';
-          if (this.onMessage) this.onMessage('error', errMsg);
-          try { this.contextManager.addSystemMessage(`[错误] ${errMsg}`, { type: 'error' }); }
+          const retryNote = retryCount > 0 ? `（已自动修复并重试 ${retryCount} 次后仍失败）` : '';
+          if (this.onMessage) this.onMessage('error', errMsg + retryNote);
+          try { this.contextManager.addSystemMessage(`[错误] ${errMsg}${retryNote}`, { type: 'error' }); }
           catch { /* ignore */ }
           break;
         }
       }
-      // 重置修复标记：本次请求成功（无论是首次还是修复后重试），下次循环允许再次修复
-      this._sanitizedThisLoop = false;
 
       // 累计会话 token 使用（支持缓存命中/缓存创建解析）
       // - OpenAI: usage.prompt_tokens_details.cached_tokens
@@ -3414,7 +3443,6 @@ ${tarotLine}
       let iterations = 0;
       let finalContent = '';
       const subRunId = ++subAgent.runId;
-      let subSanitizedThisLoop = false; // 子代理独立的修复标记
       let hitMaxIter = false; // 是否因达到迭代上限而退出
 
       while (subAgent.running && !subAgent.stopped && iterations < maxIter && subRunId === subAgent.runId) {
@@ -3435,45 +3463,54 @@ ${tarotLine}
           requestId: 'sub-' + Date.now().toString()
         });
 
-        // ===== 子代理 400 错误自动修复（与主 Agent 逻辑一致）=====
+        // ===== 子代理 400 错误自动修复 + 重试循环（与主 Agent 逻辑一致）=====
         if (!result.ok) {
           const errText = String(result.error || '');
-          const isClientError = result.kind === 'client' || result.status === 400 ||
-            /tool_calls?|tool_call_id|insufficient tool messages|following tool_calls|400|invalid|bad request|不合法|messages.*context|context.*length|too long|maximum context|token limit|exceed/i.test(errText);
+          const kind = result.kind;
+          const isFixableClient = kind === 'client' || kind === 'payment' ||
+            result.status === 400 || result.status === 402 ||
+            /tool_calls?|tool_call_id|insufficient tool messages|following tool_calls|400|402|invalid|bad request|不合法|messages.*context|context.*length|too long|maximum context|token limit|exceed|reasoning_content|thinking mode|must be passed back/i.test(errText);
+          const isAuthError = kind === 'auth';
+          const SUB_MAX_RETRIES = 3;
 
-          if (isClientError && !subSanitizedThisLoop) {
-            subSanitizedThisLoop = true;
-            // 先尝试 sanitize 修复损坏消息
-            const sanitizeRes = subAgent.contextManager.sanitize();
-            if (sanitizeRes.fixed && parentOnMessage) {
-              parentOnMessage('sub-agent-message', { id: subAgentId, task, content: `[系统] 检测到上下文损坏，已自动修复 ${sanitizeRes.removedCount} 条消息` });
+          let subRetryCount = 0;
+          while (!result.ok && !isAuthError && subRetryCount < SUB_MAX_RETRIES
+                 && subAgent.running && !subAgent.stopped) {
+            subRetryCount++;
+            let fixedNote = '';
+            if (isFixableClient) {
+              // 先尝试 sanitize 修复损坏消息
+              const sanitizeRes = subAgent.contextManager.sanitize();
+              if (sanitizeRes.fixed) fixedNote = `，已自动修复 ${sanitizeRes.removedCount} 条消息`;
+              // 再尝试强制上下文压缩（即使未超 70% 也执行，因为可能是上下文超限）
+              await this._manageContext(subAgent.contextManager, null, { isSubAgent: true });
+              if (subAgent.stopped) break;
             }
-            // 再尝试强制上下文压缩（即使未超 70% 也执行，因为可能是上下文超限）
-            const ctxResult = await this._manageContext(subAgent.contextManager, null, { isSubAgent: true });
-            // 重新构建消息并重试（非流式）
+            if (parentOnMessage) {
+              parentOnMessage('sub-agent-message', { id: subAgentId, task, content: `[系统] LLM 请求失败（${kind || 'unknown'}），正在自动重试（${subRetryCount}/${SUB_MAX_RETRIES}）${fixedNote}` });
+            }
+            await new Promise(r => setTimeout(r, 800 * subRetryCount));
+            if (subAgent.stopped) break;
             try {
               const retryMessages = subAgent.contextManager.getMessages();
               const retryTools = subTools.length > 0 ? subTools : undefined;
               result = await window.api.chatLLM(retryMessages, {
                 tools: retryTools,
-                requestId: 'sub-' + Date.now().toString() + '-retry'
+                requestId: 'sub-' + Date.now().toString() + '-retry-' + subRetryCount
               });
             } catch (retryErr) {
-              if (parentOnMessage) parentOnMessage('sub-agent-message', { id: subAgentId, task, content: `[错误] 重试失败: ${retryErr.message}` });
-              break;
+              if (subAgent.stopped) break;
+              result = { ok: false, error: retryErr.message || String(retryErr), kind: 'client' };
             }
-            if (result.ok) {
-              if (parentOnMessage) parentOnMessage('sub-agent-message', { id: subAgentId, task, content: '[系统] 上下文修复后重试成功' });
-            } else {
-              if (parentOnMessage) parentOnMessage('sub-agent-message', { id: subAgentId, task, content: `[错误] ${result.error}（已尝试自动修复上下文）` });
-              break;
-            }
-          } else {
-            if (parentOnMessage) parentOnMessage('sub-agent-message', { id: subAgentId, task, content: `[错误] ${result.error}` });
+          }
+          if (!result.ok) {
+            if (parentOnMessage) parentOnMessage('sub-agent-message', { id: subAgentId, task, content: `[错误] ${result.error}（已自动修复并重试 ${subRetryCount} 次后仍失败）` });
             break;
           }
+          if (subRetryCount > 0 && parentOnMessage) {
+            parentOnMessage('sub-agent-message', { id: subAgentId, task, content: '[系统] 上下文修复后重试成功' });
+          }
         }
-        subSanitizedThisLoop = false; // 本次请求成功，重置标记
 
         // 子代理 usage 累计到主会话统计 + 子代理自身记录
         if (result.data?.usage) {

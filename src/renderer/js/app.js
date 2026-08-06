@@ -2776,6 +2776,8 @@
             // Code 模式：设置工作区路径并加载历史列表，提示用户点击继续
             if (pending.codeWorkspacePath) {
               codeWorkspacePath = pending.codeWorkspacePath;
+              // 持久化工作区：否则切换模式后 loadCodePage 会回退到上次持久化的工作区
+              try { await window.api.codeSetLastWorkspace?.(pending.codeWorkspacePath); } catch { /* ignore */ }
               const wsPathEl = document.getElementById('code-workspace-path');
               if (wsPathEl) wsPathEl.textContent = pending.codeWorkspacePath;
               if (typeof loadCodeFileTree === 'function') {
@@ -9537,7 +9539,11 @@
   let codeEditorModeFilter = 'chat';   // 'chat' | 'code' — tools page mode filter
 
   async function loadCodePage() {
-    const wsPath = await window.api.codeGetLastWorkspace();
+    // 已有进行中的会话时保留内存中的工作区，避免切到 Chat 再切回时回退到上次持久化的工作区
+    let wsPath = codeWorkspacePath;
+    if (!wsPath) {
+      wsPath = await window.api.codeGetLastWorkspace();
+    }
     if (wsPath) {
       codeWorkspacePath = wsPath;
       const wsPathEl = document.getElementById('code-workspace-path');

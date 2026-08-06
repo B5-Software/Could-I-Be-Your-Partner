@@ -16,13 +16,14 @@ const DEFAULT_MAX_RETRIES = 10;
 const BASE_DELAY_MS = 500;
 const MAX_DELAY_MS = 32000;
 const MAX_529_RETRIES = 3;
+const MAX_PAYMENT_RETRIES = 3;
 const DEFAULT_TIMEOUT_MS = 300000; // 5 min
 const JITTER_RATIO = 0.25;
 
 // 全局活跃请求控制器集合：停止按钮可一次性 abort 所有正在进行的 LLM 请求
 const _activeControllers = new Set();
 
-// Error kinds: 'rate_limit' | 'overloaded' | 'server' | 'timeout' | 'network' | 'auth' | 'client' | 'unknown'
+// Error kinds: 'rate_limit' | 'overloaded' | 'server' | 'payment' | 'timeout' | 'network' | 'auth' | 'client' | 'unknown'
 
 class LLMError extends Error {
   constructor(message, { status, retryAfter, kind, headers } = {}) {
@@ -57,6 +58,7 @@ function classifyHttpResponse(resp) {
   const retryAfter = resp.headers.get('retry-after') || resp.headers.get('Retry-After');
   if (status === 429) return { kind: 'rate_limit', retryAfter, retry: true };
   if (status === 529) return { kind: 'overloaded', retryAfter, retry: true };
+  if (status === 402) return { kind: 'payment', retryAfter, retry: true };
   if (status >= 500) return { kind: 'server', retryAfter, retry: true };
   if (status === 408 || status === 409 || status === 425) return { kind: 'timeout', retryAfter, retry: true };
   if (status === 401 || status === 403) return { kind: 'auth', retryAfter, retry: false };
@@ -166,6 +168,7 @@ async function fetchLLMWithRetry(cfg) {
 
   let lastError = null;
   let consecutive529 = 0;
+  let consecutivePayment = 0;
   let currentModel = cfg.body.model;
   let usingFallback = false;
 
@@ -244,8 +247,20 @@ async function fetchLLMWithRetry(cfg) {
           });
           continue; // skip sleep on first fallback switch
         }
+      } else if (cls.kind === 'payment') {
+        // 402 计费不足：仅重试有限次数（用户可能中途充值/切换模型），超过上限则终止
+        consecutivePayment++;
+        if (consecutivePayment >= MAX_PAYMENT_RETRIES) {
+          const errText = await resp.text().catch(() => '');
+          lastError = new LLMError(
+            `HTTP ${resp.status}: ${errText.slice(0, 200)}`,
+            { status: resp.status, retryAfter: cls.retryAfter, kind: cls.kind }
+          );
+          break;
+        }
       } else {
         consecutive529 = 0;
+        consecutivePayment = 0;
       }
 
       const errText = await resp.text().catch(() => '');
@@ -484,5 +499,6 @@ module.exports = {
   BASE_DELAY_MS,
   MAX_DELAY_MS,
   MAX_529_RETRIES,
+  MAX_PAYMENT_RETRIES,
   DEFAULT_TIMEOUT_MS
 };
