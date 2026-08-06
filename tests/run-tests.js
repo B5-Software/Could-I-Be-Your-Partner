@@ -261,6 +261,66 @@ test('privacy filter masks Tor .onion addresses', () => {
   assert.ok(!PrivacyFilter.filterPrivacyInfo('visit abcdefghijklmnop.onion now').includes('abcdefghijklmnop.onion'));
 });
 
+test('privacy filter masks Tor ED25519-V3 secret key', () => {
+  const key = 'ED25519-V3:zfn6hqkp3k5p3f5sq2qplz5vk3p4d3k5p3f5sq2qplz5vk3p4d3k5p3f';
+  const out = PrivacyFilter.filterPrivacyInfo(`private_key=${key}`);
+  assert.ok(!out.includes('ED25519-V3'), 'Tor v3 private key should be masked');
+  assert.ok(out.includes('[已过滤'), 'should show filtered placeholder');
+});
+
+test('privacy filter masks CN social security card numbers', () => {
+  assert.ok(!PrivacyFilter.filterPrivacyInfo('社保110123456789012345').includes('110123456789012345'), '18-digit CN social number should be masked');
+  assert.ok(!PrivacyFilter.filterPrivacyInfo('社保卡A12345678号').includes('A12345678'), 'A+8digit social card should be masked');
+  // 合法身份证不能被社保号模式误伤
+  assert.strictEqual(
+    PrivacyFilter.filterPrivacyInfo('11010519900307123X', { phone: false, idCard: false, ssn: true, apiKey: false, sshKey: false, env: false, tor: false, gitKey: false, configPassword: false }),
+    '11010519900307123X',
+    'legal ID must NOT be masked by ssn category'
+  );
+});
+
+test('privacy filter masks Google and Django keys', () => {
+  assert.ok(!PrivacyFilter.filterPrivacyInfo('key AIzaSyD1234567890abcdefghijklmnopqrstuvwx').includes('AIzaSyD1234567890abcdefghijklmnopqrstuvwx'));
+  const onlyApi = { phone: false, idCard: false, ssn: false, apiKey: true, sshKey: false, env: false, tor: false, gitKey: false, configPassword: false };
+  assert.ok(!PrivacyFilter.filterPrivacyInfo('SECRET_KEY=django-insecure-abc123def456ghi789jkl012', onlyApi).includes('django-insecure'));
+});
+
+test('privacy filter categories can be toggled independently', () => {
+  const noPhone = PrivacyFilter.filterPrivacyInfo('手机13812345678 身份证11010519900307123X', { phone: false });
+  assert.ok(noPhone.includes('13812345678'), 'phone category off should keep phone');
+  assert.ok(!noPhone.includes('11010519900307123X'), 'idCard still on should mask ID');
+  const allOff = PrivacyFilter.filterPrivacyInfo('手机13812345678', {
+    phone: false, idCard: false, ssn: false, apiKey: false, sshKey: false, env: false, tor: false, gitKey: false, configPassword: false
+  });
+  assert.strictEqual(allOff, '手机13812345678', 'all categories off should keep text');
+});
+
+test('filterToolResult masks strings but preserves structure and imageUrl', () => {
+  const r = {
+    ok: true,
+    content: '手机13812345678\nkey=sk-abc1234567890',
+    imageUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA',
+    nested: { phone: '13812345678', url: 'https://example.com' }
+  };
+  const out = PrivacyFilter.filterToolResult(r);
+  assert.ok(!out.content.includes('13812345678'));
+  assert.ok(!out.content.includes('sk-abc1234567890'));
+  assert.strictEqual(out.imageUrl, r.imageUrl, 'base64 imageUrl must be preserved');
+  assert.strictEqual(out.nested.phone, '[已过滤:手机号]');
+  assert.strictEqual(out.nested.url, 'https://example.com');
+  assert.strictEqual(out.ok, true);
+  // 原始对象不被修改
+  assert.ok(r.content.includes('13812345678'));
+});
+
+test('sub-agent records are persisted in history and restored', () => {
+  const agentContent = fs.readFileSync(require('path').join(__dirname, '../src/renderer/js/agent.js'), 'utf-8');
+  assert.ok(agentContent.includes('payload.subAgents'), 'saveToHistory should persist subAgents');
+  assert.ok(agentContent.includes('this.subAgents = conversation.subAgents.map'), 'loadFromHistory should restore subAgents');
+  assert.ok(agentContent.includes('subAgent: null'), 'restored records should have subAgent null');
+  assert.ok(agentContent.includes('MAX_SUB_AGENT_RECORDS = 100'), 'sub-agent record cap should be 100');
+});
+
 test('privacy filter should not corrupt normal text', () => {
   assert.strictEqual(PrivacyFilter.filterPrivacyInfo('const x = 42; return x * 2;'), 'const x = 42; return x * 2;');
   const s = '{"enabled":true,"timeout":30,"name":"server","note":"authorization is tricky"}';

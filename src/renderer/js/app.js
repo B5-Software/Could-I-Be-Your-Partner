@@ -598,6 +598,14 @@
   // 统一的聊天容器清空 + 增量推送
   function clearChatMessagesUI() {
     chatMessages.innerHTML = '';
+    // 清理子代理卡片记录：DOM 已随 innerHTML 清空，同步释放 Map 引用与计时器
+    // （否则下次"新对话"后旧子代理卡片引用仍驻留在 _subAgentCards 中）
+    if (typeof _subAgentCards !== 'undefined' && _subAgentCards) {
+      for (const rec of _subAgentCards.values()) {
+        if (rec.timer) clearInterval(rec.timer);
+      }
+      _subAgentCards.clear();
+    }
     // 清空虚拟滚动观察状态：彻底释放旧会话的消息节点、占位 div 与
     // dataset 中缓存的原始内容引用，避免每次"新对话"线性累积内存
     if (typeof VirtualScroller !== 'undefined' && VirtualScroller.reset) VirtualScroller.reset();
@@ -6180,6 +6188,14 @@
     if (privArgsEl) privArgsEl.checked = priv.filterArgs !== false;
     const privTermEl = document.getElementById('setting-privacy-filter-terminal');
     if (privTermEl) privTermEl.checked = priv.filterTerminal !== false;
+    const privAttachEl = document.getElementById('setting-privacy-filter-attachments');
+    if (privAttachEl) privAttachEl.checked = priv.filterAttachments !== false;
+    // 过滤类别勾选
+    const catEls = document.querySelectorAll('#privacy-categories-item input[data-cat]');
+    if (catEls.length > 0) {
+      const cats = (priv.categories && typeof priv.categories === 'object') ? priv.categories : {};
+      catEls.forEach(inp => { inp.checked = cats[inp.dataset.cat] !== false; });
+    }
     updatePrivacyTriggerState(priv.enabled === true);
 
     // 后台托盘模式
@@ -7736,18 +7752,30 @@
   // 隐私信息保护：总开关与过滤触发器
   function updatePrivacyTriggerState(enabled) {
     const item = document.getElementById('privacy-trigger-item');
-    if (!item) return;
-    item.querySelectorAll('input').forEach(inp => { inp.disabled = !enabled; });
-    item.style.opacity = enabled ? '' : '0.5';
+    if (item) {
+      item.querySelectorAll('input').forEach(inp => { inp.disabled = !enabled; });
+      item.style.opacity = enabled ? '' : '0.5';
+    }
+    const catItem = document.getElementById('privacy-categories-item');
+    if (catItem) {
+      catItem.querySelectorAll('input').forEach(inp => { inp.disabled = !enabled; });
+      catItem.style.opacity = enabled ? '' : '0.5';
+    }
   }
 
   async function savePrivacySettings() {
     const s = await window.api.getSettings();
+    const categories = {};
+    document.querySelectorAll('#privacy-categories-item input[data-cat]').forEach(inp => {
+      categories[inp.dataset.cat] = inp.checked;
+    });
     s.privacyProtection = {
       enabled: document.getElementById('setting-privacy-enabled').checked,
       filterResults: document.getElementById('setting-privacy-filter-results').checked,
       filterArgs: document.getElementById('setting-privacy-filter-args').checked,
-      filterTerminal: document.getElementById('setting-privacy-filter-terminal').checked
+      filterTerminal: document.getElementById('setting-privacy-filter-terminal').checked,
+      filterAttachments: document.getElementById('setting-privacy-filter-attachments').checked,
+      categories
     };
     await saveSettings(s);
   }
@@ -8610,6 +8638,27 @@
     }).then(finished => {
       if (typeof VirtualScroller !== 'undefined') VirtualScroller.markBatchEnd();
       if (!finished) return;
+      // 重建子代理卡片：子代理聊天记录已持久化到历史，
+      // 恢复会话后仍可打开详情模态框查看完整对话。
+      if (conv?.subAgents && Array.isArray(conv.subAgents) && conv.subAgents.length > 0) {
+        for (const rec of conv.subAgents) {
+          if (!rec || !rec.id) continue;
+          addSubAgentCard({
+            id: rec.id,
+            title: rec.task ? `子代理：${String(rec.task).slice(0, 20)}` : '子代理',
+            task: rec.task || '',
+            startTime: rec.startTime || Date.now(),
+            status: rec.status || 'done'
+          });
+          updateSubAgentCard(rec.id, {
+            status: rec.status || 'done',
+            duration: (rec.endTime && rec.startTime) ? (rec.endTime - rec.startTime) : 0,
+            toolUseCount: rec.toolUseCount || 0,
+            usage: rec.usage || {},
+            result: rec.result || ''
+          });
+        }
+      }
       requestAnimationFrame(() => {
         const last = chatMessages.lastElementChild;
         if (last) last.scrollIntoView({ behavior: 'smooth', block: 'end' });

@@ -118,6 +118,33 @@ class Agent {
     }).join('\n');
   }
 
+  // 隐私信息保护：当前启用的过滤类别（null 表示全部开启）
+  _getPrivacyCategories() {
+    const p = this.settings?.privacyProtection;
+    if (!p || !p.enabled) return null;
+    return (p.categories && typeof p.categories === 'object') ? p.categories : null;
+  }
+
+  // 隐私信息保护：附件文本（OCR/提取文本）过滤，随总开关与 filterAttachments 触发器控制
+  _sanitizeAttachmentText(text) {
+    const p = this.settings?.privacyProtection;
+    if (!p || !p.enabled || p.filterAttachments === false) return text;
+    if (typeof PrivacyFilter?.filterPrivacyInfo === 'function') {
+      return PrivacyFilter.filterPrivacyInfo(text, this._getPrivacyCategories());
+    }
+    return text;
+  }
+
+  // 隐私信息保护：工具结果展示副本（UI 卡片显示过滤后的内容，真实结果仍注入原始结构）
+  _sanitizeToolResultForDisplay(result) {
+    const p = this.settings?.privacyProtection;
+    if (!p || !p.enabled) return result;
+    if (typeof PrivacyFilter?.filterToolResult === 'function') {
+      return PrivacyFilter.filterToolResult(result, this._getPrivacyCategories());
+    }
+    return result;
+  }
+
   // 字符串替换编辑（Claude Code 风格 Edit 工具）
   async _applyStringReplace(filePath, oldString, newString, replaceAll, encoding, eol) {
     const readRes = await window.api.readFile(filePath, encoding || '');
@@ -1284,9 +1311,11 @@ ${toolListSection}`;
       const attachInfo = attachments.map(a => {
         // 路径必须精确显示，禁止AI猜测或重拼文件名
         const exactPath = a.path ? `\n⚠️ 精确文件路径（必须逐字使用，禁止修改任何字符）: ${a.path}` : '';
-        if (a.ocrText) return `[附件: ${a.name}]${exactPath}\nOCR识别文本:\n${a.ocrText}`;
+        // 隐私信息保护：附件 OCR/提取文本过滤隐私信息后注入 AI 上下文
+        if (a.ocrText) return `[附件: ${a.name}]${exactPath}\nOCR识别文本:\n${this._sanitizeAttachmentText(a.ocrText)}`;
         if (a.extractedText) {
-          const text = a.extractedText.length > 2000 ? a.extractedText.substring(0, 2000) + '\n...[已截断]' : a.extractedText;
+          let text = a.extractedText.length > 2000 ? a.extractedText.substring(0, 2000) + '\n...[已截断]' : a.extractedText;
+          text = this._sanitizeAttachmentText(text);
           const converted = a.convertedPath ? `\n已转换文本路径: ${a.convertedPath}` : '';
           const original = a.path && a.convertedPath && a.path !== a.convertedPath ? `\n⚠️ 原始文件精确路径（用于officeUnpack，必须原样使用）: ${a.path}` : exactPath;
           return `[文件附件: ${a.name}]${converted}${original}\n提取文本:\n${text}`;
@@ -1379,6 +1408,22 @@ ${toolListSection}`;
         tarotCard: this.tarotCard,
         workspacePath: this.workspacePath
       };
+      // 子代理聊天记录持久化：序列化完整消息快照（去掉 subAgent 实例引用），
+      // 重新打开该会话后可继续查看子代理详情模态框中的完整对话。
+      if (Array.isArray(this.subAgents) && this.subAgents.length > 0) {
+        payload.subAgents = this.subAgents.map(r => ({
+          id: r.id,
+          task: r.task,
+          tarot: r.tarot,
+          status: r.status,
+          startTime: r.startTime,
+          endTime: r.endTime,
+          iterations: r.iterations,
+          toolUseCount: r.toolUseCount,
+          usage: r.usage || {},
+          messages: Array.isArray(r.messages) ? r.messages : []
+        }));
+      }
       if (this.mode === 'babe') {
         payload.affection = this.babeAffection;
         await window.api.babeHistorySave(payload);
@@ -1425,6 +1470,25 @@ ${toolListSection}`;
     // Babe 模式：恢复好感度
     if (this.mode === 'babe' && typeof conversation.affection === 'number') {
       this.babeAffection = conversation.affection;
+    }
+    // 恢复子代理聊天记录：从历史快照重建 subAgents（subAgent 实例不可恢复，置 null；
+    // 模态框会回退读取 record.messages 快照渲染完整对话）。
+    if (Array.isArray(conversation.subAgents)) {
+      this.subAgents = conversation.subAgents.map(r => ({
+        id: r.id,
+        task: r.task,
+        tarot: r.tarot,
+        status: r.status || 'done',
+        startTime: r.startTime,
+        endTime: r.endTime,
+        iterations: r.iterations,
+        toolUseCount: r.toolUseCount,
+        usage: r.usage || {},
+        messages: Array.isArray(r.messages) ? r.messages : [],
+        subAgent: null
+      }));
+    } else {
+      this.subAgents = [];
     }
     this.contextManager.setSystemPrompt(this.getSystemPrompt());
     if (this.onTitleChange) this.onTitleChange(this.conversationTitle || '未命名对话');
@@ -1559,9 +1623,11 @@ ${toolListSection}`;
     if (attachments.length > 0) {
       const attachInfo = attachments.map(a => {
         const exactPath = a.path ? `\n⚠️ 精确文件路径（必须逐字使用，禁止修改任何字符）: ${a.path}` : '';
-        if (a.ocrText) return `[附件: ${a.name}]${exactPath}\nOCR识别文本:\n${a.ocrText}`;
+        // 隐私信息保护：热对话附件的 OCR/提取文本同样过滤隐私信息
+        if (a.ocrText) return `[附件: ${a.name}]${exactPath}\nOCR识别文本:\n${this._sanitizeAttachmentText(a.ocrText)}`;
         if (a.extractedText) {
-          const text = a.extractedText.length > 2000 ? a.extractedText.substring(0, 2000) + '\n...[已截断]' : a.extractedText;
+          let text = a.extractedText.length > 2000 ? a.extractedText.substring(0, 2000) + '\n...[已截断]' : a.extractedText;
+          text = this._sanitizeAttachmentText(text);
           const converted = a.convertedPath ? `\n已转换文本路径: ${a.convertedPath}` : '';
           const original = a.path && a.convertedPath && a.path !== a.convertedPath ? `\n⚠️ 原始文件精确路径（用于officeUnpack，必须原样使用）: ${a.path}` : exactPath;
           return `[文件附件: ${a.name}]${converted}${original}\n提取文本:\n${text}`;
@@ -1866,7 +1932,8 @@ ${toolListSection}`;
           && typeof PrivacyFilter?.sanitizeToolCallsForContext === 'function') {
         assistantToolCallsForCtx = PrivacyFilter.sanitizeToolCallsForContext(assistantMsg.tool_calls, {
           maskArgs: this.settings.privacyProtection.filterArgs !== false,
-          scanTerminal: this.settings.privacyProtection.filterTerminal !== false
+          scanTerminal: this.settings.privacyProtection.filterTerminal !== false,
+          categories: this._getPrivacyCategories()
         });
       }
       this.contextManager.addAssistantMessage(assistantMsg.content, assistantToolCallsForCtx, assistantMsg.reasoning);
@@ -1959,7 +2026,7 @@ ${toolListSection}`;
                   if (this.settings?.privacyProtection?.enabled
                       && this.settings.privacyProtection.filterResults !== false
                       && typeof PrivacyFilter?.filterPrivacyInfo === 'function') {
-                    resultStr = PrivacyFilter.filterPrivacyInfo(resultStr);
+                    resultStr = PrivacyFilter.filterPrivacyInfo(resultStr, this._getPrivacyCategories());
                   }
                   this.contextManager.addToolResult(batchTc.id, 'runSubAgent', resultStr);
                 }));
@@ -2049,13 +2116,16 @@ ${toolListSection}`;
           const toolResult = await this.executeTool(toolName, args);
           if (this.stopped || runId !== this.runId) break;
 
+          // 隐私信息保护：UI 展示副本过滤隐私信息（真实 toolResult 仍保留完整结构）
+          const displayResult = this._sanitizeToolResultForDisplay(toolResult);
+
           // 通知 UI 工具执行结果
-          if (this.onMessage) this.onMessage('tool-result', { name: toolName, result: toolResult });
+          if (this.onMessage) this.onMessage('tool-result', { name: toolName, result: displayResult });
 
           // 多模态工具结果：图片以 image_url 格式注入上下文，而非 base64 字符串
           if (toolResult && toolResult._multimodal && toolResult.imageUrl) {
             this.contextManager.addMultimodalToolResult(tc.id, toolName, toolResult.text, toolResult.imageUrl);
-            if (this.onToolCall) this.onToolCall(toolName, args, 'done', toolResult);
+            if (this.onToolCall) this.onToolCall(toolName, args, 'done', displayResult);
             continue;
           }
 
@@ -2073,11 +2143,11 @@ ${toolListSection}`;
           if (this.settings?.privacyProtection?.enabled
               && this.settings.privacyProtection.filterResults !== false
               && typeof PrivacyFilter?.filterPrivacyInfo === 'function') {
-            truncated = PrivacyFilter.filterPrivacyInfo(truncated);
+            truncated = PrivacyFilter.filterPrivacyInfo(truncated, this._getPrivacyCategories());
           }
           this.contextManager.addToolResult(tc.id, toolName, truncated);
 
-          if (this.onToolCall) this.onToolCall(toolName, args, 'done', toolResult);
+          if (this.onToolCall) this.onToolCall(toolName, args, 'done', displayResult);
         }
 
         // 实时保存：每轮工具调用完成后立即持久化，防止进程异常导致丢失
@@ -3623,7 +3693,8 @@ ${tarotLine}
             && typeof PrivacyFilter?.sanitizeToolCallsForContext === 'function') {
           subToolCallsForCtx = PrivacyFilter.sanitizeToolCallsForContext(assistantMsg.tool_calls, {
             maskArgs: this.settings.privacyProtection.filterArgs !== false,
-            scanTerminal: this.settings.privacyProtection.filterTerminal !== false
+            scanTerminal: this.settings.privacyProtection.filterTerminal !== false,
+            categories: this._getPrivacyCategories()
           });
         }
         subAgent.contextManager.addAssistantMessage(assistantMsg.content, subToolCallsForCtx);
@@ -3661,10 +3732,12 @@ ${tarotLine}
             if (this.settings?.privacyProtection?.enabled
                 && this.settings.privacyProtection.filterResults !== false
                 && typeof PrivacyFilter?.filterPrivacyInfo === 'function') {
-              truncated = PrivacyFilter.filterPrivacyInfo(truncated);
+              truncated = PrivacyFilter.filterPrivacyInfo(truncated, this._getPrivacyCategories());
             }
             subAgent.contextManager.addToolResult(tc.id, toolName, truncated);
-            if (subAgent.onToolCall) subAgent.onToolCall(toolName, toolArgs, 'done', toolResult);
+            // 隐私信息保护：子代理 UI 展示副本过滤隐私信息
+            const subDisplayResult = this._sanitizeToolResultForDisplay(toolResult);
+            if (subAgent.onToolCall) subAgent.onToolCall(toolName, toolArgs, 'done', subDisplayResult);
           }
           if (subAgent.stopped || subRunId !== subAgent.runId) break;
           continue; // let the agent process tool results

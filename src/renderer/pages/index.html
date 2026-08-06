@@ -1709,6 +1709,25 @@
                       <span>终端内容过滤</span>
                       <span class="privacy-trigger-desc">终端命令与脚本中的密钥、Token 脱敏</span>
                     </label>
+                    <label class="checkbox-label">
+                      <input type="checkbox" id="setting-privacy-filter-attachments" checked>
+                      <span>附件文本过滤</span>
+                      <span class="privacy-trigger-desc">上传附件的 OCR/提取文本过滤</span>
+                    </label>
+                  </div>
+                </div>
+                <div class="setting-item" id="privacy-categories-item">
+                  <label>过滤内容类别（可单独关闭）</label>
+                  <div class="privacy-category-grid">
+                    <label class="checkbox-label"><input type="checkbox" data-cat="phone" checked><span>手机号</span></label>
+                    <label class="checkbox-label"><input type="checkbox" data-cat="idCard" checked><span>身份证号</span></label>
+                    <label class="checkbox-label"><input type="checkbox" data-cat="ssn" checked><span>社保号/SSN</span></label>
+                    <label class="checkbox-label"><input type="checkbox" data-cat="apiKey" checked><span>API Key</span></label>
+                    <label class="checkbox-label"><input type="checkbox" data-cat="sshKey" checked><span>SSH 私钥</span></label>
+                    <label class="checkbox-label"><input type="checkbox" data-cat="env" checked><span>.env 密钥</span></label>
+                    <label class="checkbox-label"><input type="checkbox" data-cat="tor" checked><span>Tor 地址/密钥</span></label>
+                    <label class="checkbox-label"><input type="checkbox" data-cat="gitKey" checked><span>Git Key</span></label>
+                    <label class="checkbox-label"><input type="checkbox" data-cat="configPassword" checked><span>配置密码</span></label>
                   </div>
                 </div>
               </div>

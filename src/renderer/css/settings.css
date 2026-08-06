@@ -590,6 +590,39 @@ input[id^="setting-budget-peak-"][type="text"]:focus {
   text-align: right;
 }
 
+/* 隐私信息保护：过滤类别勾选网格 */
+.privacy-category-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px 16px;
+  margin-top: 8px;
+}
+
+.privacy-category-grid .checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  cursor: pointer;
+  color: var(--text-primary);
+  padding: 6px 10px;
+  border: 1px solid var(--border-color, rgba(128, 128, 128, 0.25));
+  border-radius: 6px;
+  transition: background 0.2s;
+}
+
+.privacy-category-grid .checkbox-label:hover {
+  background: var(--hover-bg, rgba(128, 128, 128, 0.08));
+}
+
+.privacy-category-grid .checkbox-label input {
+  width: 14px;
+  height: 14px;
+  cursor: pointer;
+  flex-shrink: 0;
+  accent-color: var(--accent);
+}
+
 .setting-warning {
   margin-top: 8px;
   padding: 10px 12px;
