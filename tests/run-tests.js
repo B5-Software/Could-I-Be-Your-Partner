@@ -328,6 +328,62 @@ test('privacy filter should not corrupt normal text', () => {
   assert.strictEqual(PrivacyFilter.filterPrivacyInfo('the author wrote the book'), 'the author wrote the book');
 });
 
+test('privacy filter evasion category is off by default', () => {
+  assert.strictEqual(PrivacyFilter.filterPrivacyInfo('138_1234_5678'), '138_1234_5678', 'underscore phone should stay without evasion');
+  assert.strictEqual(PrivacyFilter.filterPrivacyInfo('１３８１２３４５６７８'), '１３８１２３４５６７８', 'full-width phone should stay without evasion');
+  assert.strictEqual(PrivacyFilter.filterPrivacyInfo('MTM4MTIzNDU2Nzg='), 'MTM4MTIzNDU2Nzg=', 'base64 phone should stay without evasion');
+  // categories 对象缺 evasion 键时也按默认关闭处理
+  const catsMissingEvasion = { phone: true, idCard: true, ssn: true, apiKey: true, sshKey: true, env: true, tor: true, gitKey: true, configPassword: true };
+  assert.strictEqual(PrivacyFilter.filterPrivacyInfo('138_1234_5678', catsMissingEvasion), '138_1234_5678', 'missing evasion key should default to off');
+});
+
+test('privacy filter evasion detects transformation tricks when enabled', () => {
+  const cases = [
+    ['138_1234_5678', '手机号'],
+    ['１３８１２３４５６７８', '手机号'],
+    ['138\u200B1234\u200B5678', '手机号'],
+    ['138%2D1234%2D5678', '手机号'],
+    ['MTM4MTIzNDU2Nzg=', '手机号'],
+    ['１１０１０１１９９００１０１１２３４', '身份证号'],
+    ['110101\u200B19900101\u200B1234', '身份证号'],
+    ['110101%2D19900101%2D1234', '身份证号'],
+    ['MTEwMTAxMTk5MDAxMDExMjM0', '身份证号'],
+    ['社保号 １１０１２３４５６７８９０１２３４５', '社保号']
+  ];
+  for (const [input, label] of cases) {
+    const out = PrivacyFilter.filterPrivacyInfo(input, { evasion: true });
+    assert.ok(out.includes(`[已过滤:${label}]`), `"${input}" should be masked as ${label}, got: ${out}`);
+  }
+});
+
+test('privacy filter evasion respects category toggles', () => {
+  const noPhone = { evasion: true, phone: false };
+  assert.strictEqual(PrivacyFilter.filterPrivacyInfo('１３８１２３４５６７８', noPhone), '１３８１２３４５６７８', 'evasion should respect phone off');
+  assert.ok(PrivacyFilter.filterPrivacyInfo('１３８１２３４５６７８', { evasion: true }).includes('[已过滤:手机号]'));
+  const noEvasion = PrivacyFilter.filterPrivacyInfo('138_1234_5678', { evasion: false });
+  assert.ok(noEvasion.includes('138_1234_5678'), 'evasion off should keep evasive phone');
+});
+
+test('privacy filter evasion skips base64 data URLs', () => {
+  const url = 'data:image/png;base64,MTM4MTIzNDU2Nzg=';
+  const out = PrivacyFilter.filterPrivacyInfo(url, { evasion: true });
+  assert.ok(out.includes('MTM4MTIzNDU2Nzg='), 'base64 inside data URL must be preserved');
+});
+
+test('privacy filter evasion does not corrupt normal text', () => {
+  const ev = { evasion: true };
+  assert.strictEqual(PrivacyFilter.filterPrivacyInfo('const x = 42; return x * 2;', ev), 'const x = 42; return x * 2;');
+  assert.strictEqual(PrivacyFilter.filterPrivacyInfo('config.host = "localhost"; port = 5432', ev), 'config.host = "localhost"; port = 5432');
+});
+
+test('evasion category defaults wired in main.js and settings UI', () => {
+  const path = require('path');
+  const mainContent = fs.readFileSync(path.join(__dirname, '../src/main/main.js'), 'utf-8');
+  assert.ok(mainContent.includes('evasion: false'), 'main.js default categories should have evasion off');
+  const htmlContent = fs.readFileSync(path.join(__dirname, '../src/renderer/pages/index.html'), 'utf-8');
+  assert.ok(htmlContent.includes('data-cat="evasion"'), 'settings UI should have evasion checkbox');
+});
+
 test('filterSensitiveArgs masks sensitive keys and keeps others', () => {
   const out = PrivacyFilter.filterSensitiveArgs({ apiKey: 'sk-xxx', DB_PASSWORD: 'pwd1', path: '/home/user', nested: { password: 'pwd', port: 3000 } });
   assert.strictEqual(out.apiKey, '[已过滤]');

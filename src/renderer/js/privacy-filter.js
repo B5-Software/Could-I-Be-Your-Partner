@@ -6,7 +6,9 @@
  * 在工具调用流程中过滤手机号、证件号、社保号、API Key、SSH 私钥、
  * .env 密钥行、Tor Hidden Service（地址 + ED25519-V3 私钥）、git key
  * 以及配置文件中的密码 K:V，防止隐私信息进入 AI 上下文与历史记录。
- * 所有类别均可独立开关（categories 配置）。
+ * 所有类别均可独立开关（categories 配置），并支持可选的“变换逃逸检测”
+ *（evasion，默认关闭）：先归一化全角/零宽字符/URL 编码/分隔符变化/Base64
+ * 编码等绕过手段，再在归一化文本上重跑基础模式并映射回原文替换。
  *
  * 依赖：无（纯逻辑，可独立加载与测试）。
  */
@@ -24,7 +26,22 @@
   const TERMINAL_TEXT_KEYS = ['command', 'script', 'text', 'answer', 'prompt'];
 
   // 可配置的过滤类别（设置页勾选开关，与 CATEGORY_PATTERNS 的 key 一一对应）
-  const CATEGORY_KEYS = ['phone', 'idCard', 'ssn', 'apiKey', 'sshKey', 'env', 'tor', 'gitKey', 'configPassword'];
+  const CATEGORY_KEYS = ['phone', 'idCard', 'ssn', 'apiKey', 'sshKey', 'env', 'tor', 'gitKey', 'configPassword', 'evasion'];
+
+  // 类别默认开关：categories 中缺失的键按此默认值处理。
+  // evasion（变换逃逸检测）默认关闭，其余类别默认全开。
+  const DEFAULT_CATEGORIES = {
+    phone: true,
+    idCard: true,
+    ssn: true,
+    apiKey: true,
+    sshKey: true,
+    env: true,
+    tor: true,
+    gitKey: true,
+    configPassword: true,
+    evasion: false
+  };
 
   // 各类别过滤模式（按优先级排列：先替换大块内容，再替换小块，避免局部替换破坏后续匹配）
   const CATEGORY_PATTERNS = {
@@ -108,15 +125,33 @@
         label: '手机号',
         re: /(?<!\d)(?:\+?86[- ]?)?1[3-9]\d{9}(?!\d)|(?<!\d)(?:\+?1[- ]?)?\(?[2-9]\d{2}\)?[- ]\d{3}[- ]\d{4}(?!\d)|(?<!\d)\+\d{8,15}(?!\d)|(?<!\d)\d{3}[- .]\d{3,4}[- .]\d{4}(?!\d)/g
       }
+    ],
+    // 变换逃逸检测（可选，默认关闭）：归一化后重跑基础模式并映射回原文
+    evasion: [
+      {
+        label: '变换逃逸',
+        type: 'evasion'
+      }
     ]
   };
 
-  // 展平后的全量模式列表（默认全开时使用，保持类别内顺序）
+  // 补齐 categories 缺失键：显式 false 关闭，显式 true 开启，缺失按默认值
+  function normalizeCategories(categories) {
+    if (!categories || typeof categories !== 'object') return { ...DEFAULT_CATEGORIES };
+    const out = {};
+    for (const key of CATEGORY_KEYS) {
+      out[key] = categories[key] === false ? false : (categories[key] === true ? true : DEFAULT_CATEGORIES[key]);
+    }
+    return out;
+  }
+
+  // 展平后的全量模式列表（默认开启的类别）
   let ALL_PATTERNS = null;
   function getAllPatterns() {
     if (!ALL_PATTERNS) {
       ALL_PATTERNS = [];
       for (const key of CATEGORY_KEYS) {
+        if (DEFAULT_CATEGORIES[key] === false) continue;
         for (const pat of CATEGORY_PATTERNS[key] || []) ALL_PATTERNS.push(pat);
       }
     }
@@ -125,16 +160,16 @@
 
   /**
    * 根据启用的类别返回模式列表。
-   * categories 为 null/undefined 时返回全部（默认全开）。
+   * categories 为 null/undefined 或缺失键时按 DEFAULT_CATEGORIES 处理。
    * 类别对象中显式 false 的类别被关闭，其余默认开启。
    * @param {Object|null} categories 类别开关 { phone: true, ... }
    * @returns {Array} 模式列表
    */
   function getActivePatterns(categories) {
-    if (!categories || typeof categories !== 'object') return getAllPatterns();
+    const cats = normalizeCategories(categories);
     const out = [];
     for (const key of CATEGORY_KEYS) {
-      if (categories[key] === false) continue;
+      if (!cats[key]) continue;
       for (const pat of CATEGORY_PATTERNS[key] || []) out.push(pat);
     }
     return out;
@@ -143,7 +178,7 @@
   /**
    * 过滤文本中的隐私信息，替换为占位符。
    * @param {string} text 原始文本
-   * @param {Object|null} [categories] 启用的类别（默认全开）
+   * @param {Object|null} [categories] 启用的类别（默认全开；evasion 默认关）
    * @returns {string} 过滤后的文本（非字符串原样返回）
    */
   function filterPrivacyInfo(text, categories) {
@@ -151,6 +186,10 @@
     const patterns = getActivePatterns(categories);
     let result = text;
     for (const pat of patterns) {
+      if (pat.type === 'evasion') {
+        result = applyEvasionPass(result, categories);
+        continue;
+      }
       result = result.replace(pat.re, (...m) => {
         const key = m[pat.keyIndex || 0];
         if (pat.keyTest && !pat.keyTest(key)) return m[0];
@@ -158,6 +197,173 @@
       });
     }
     return result;
+  }
+
+  // ============ 变换逃逸检测（可选，默认关闭） ============
+  // 针对全角字符、零宽字符插入、URL 编码、数字间分隔符变化、Base64 编码等
+  // 绕过手段：先把文本归一化（全角→半角、去除零宽字符、URL 解码、去除数字间
+  // 分隔符），在归一化文本上重跑基础模式，再把匹配区间映射回原文替换；
+  // Base64 串则单独解码后按手机号/证件号/社保号校验。
+
+  const EVASION_SEPARATOR_SET = new Set(['-', '_', '.', ' ', '/', '\\', '(', ')', ',', ';', '|']);
+  // 至少 12 位 base64 字符（约 9 字节解码内容），可带 0-2 个填充 =；
+  // 更短的串由 decoded.length 守卫兜底跳过
+  const BASE64_TOKEN_RE = /(?<![A-Za-z0-9+/])([A-Za-z0-9+/]{12,}={0,2})(?![A-Za-z0-9+/=])/g;
+
+  function isZeroWidthChar(ch) {
+    return ch === '\u200B' || ch === '\u200C' || ch === '\u200D' || ch === '\u2060' || ch === '\uFEFF' || ch === '\u00AD';
+  }
+
+  // 构建归一化文本与“归一化索引 → 原文索引”映射
+  function buildNormalizedMap(text) {
+    const t1 = [];
+    const m1 = [];
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      const code = ch.charCodeAt(0);
+      if (isZeroWidthChar(ch)) continue;
+      if (ch === '%' && i + 2 < text.length && /^[0-9A-Fa-f]{2}$/.test(text.slice(i + 1, i + 3))) {
+        t1.push(String.fromCharCode(parseInt(text.slice(i + 1, i + 3), 16)));
+        m1.push(i);
+        i += 2;
+        continue;
+      }
+      if (code >= 0xFF01 && code <= 0xFF5E) {
+        t1.push(String.fromCharCode(code - 0xFEE0));
+        m1.push(i);
+        continue;
+      }
+      if (code === 0x3000) {
+        t1.push(' ');
+        m1.push(i);
+        continue;
+      }
+      t1.push(ch);
+      m1.push(i);
+    }
+    const s1 = t1.join('');
+    const t2 = [];
+    const m2 = [];
+    for (let i = 0; i < s1.length; i++) {
+      const ch = s1[i];
+      if (EVASION_SEPARATOR_SET.has(ch)) {
+        const prev = i > 0 ? s1[i - 1] : '';
+        const next = i + 1 < s1.length ? s1[i + 1] : '';
+        if (/\d/.test(prev) || /\d/.test(next)) continue;
+      }
+      t2.push(ch);
+      m2.push(m1[i]);
+    }
+    return { normalized: t2.join(''), map: m2 };
+  }
+
+  function decodeBase64Strict(token) {
+    try {
+      if (typeof atob === 'function') return atob(token);
+      const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+      let out = '';
+      let buffer = 0;
+      let bits = 0;
+      for (let i = 0; i < token.length; i++) {
+        const c = token[i];
+        if (c === '=') break;
+        const idx = chars.indexOf(c);
+        if (idx < 0) return null;
+        buffer = (buffer << 6) | idx;
+        bits += 6;
+        if (bits >= 8) {
+          bits -= 8;
+          out += String.fromCharCode((buffer >> bits) & 0xff);
+        }
+      }
+      return out;
+    } catch {
+      return null;
+    }
+  }
+
+  function isPrintableAscii(s) {
+    for (let i = 0; i < s.length; i++) {
+      const c = s.charCodeAt(i);
+      if (!(c === 9 || c === 10 || c === 13 || (c >= 32 && c <= 126))) return false;
+    }
+    return true;
+  }
+
+  // Base64 编码的敏感数字串（手机号/证件号/社保号）整段替换
+  function maskBase64Tokens(text, categories) {
+    const cats = normalizeCategories(categories);
+    return text.replace(BASE64_TOKEN_RE, (...m) => {
+      const token = m[0];
+      const offset = m[2];
+      const prefix = text.slice(Math.max(0, offset - 16), offset);
+      if (/base64,\s*$/i.test(prefix)) return token;
+      if (token.length % 4 !== 0) return token;
+      const decoded = decodeBase64Strict(token);
+      if (!decoded || !isPrintableAscii(decoded) || decoded.length < 6) return token;
+      for (const key of ['phone', 'idCard', 'ssn']) {
+        if (cats[key] === false) continue;
+        const only = {
+          phone: false, idCard: false, ssn: false, apiKey: false,
+          sshKey: false, env: false, tor: false, gitKey: false,
+          configPassword: false, [key]: true
+        };
+        if (filterPrivacyInfo(decoded, only) !== decoded) {
+          return `[已过滤:${CATEGORY_PATTERNS[key][0].label}]`;
+        }
+      }
+      return token;
+    });
+  }
+
+  // 在归一化文本上收集所有启用类别匹配的区间（归一化坐标）
+  function collectSensitiveSpans(normalized, categories) {
+    const cats = normalizeCategories(categories);
+    const spans = [];
+    for (const key of CATEGORY_KEYS) {
+      if (key === 'evasion' || cats[key] === false) continue;
+      for (const pat of CATEGORY_PATTERNS[key] || []) {
+        if (pat.type === 'evasion' || !pat.re) continue;
+        const re = pat.re;
+        re.lastIndex = 0;
+        let m;
+        while ((m = re.exec(normalized)) !== null) {
+          if (m[0].length === 0) {
+            re.lastIndex++;
+            continue;
+          }
+          const k = m[pat.keyIndex || 0];
+          if (pat.keyTest && !pat.keyTest(k)) continue;
+          spans.push({ start: m.index, end: m.index + m[0].length, label: pat.label || '敏感信息' });
+        }
+      }
+    }
+    return spans;
+  }
+
+  // 逃逸检测主流程：先 Base64 整段替换，再归一化扫描并映射回原文替换
+  function applyEvasionPass(text, categories) {
+    let out = maskBase64Tokens(text, categories);
+    const { normalized, map } = buildNormalizedMap(out);
+    if (normalized === out) return out;
+    const spans = collectSensitiveSpans(normalized, categories);
+    if (!spans.length) return out;
+    spans.sort((a, b) => a.start - b.start);
+    const merged = [];
+    for (const s of spans) {
+      if (merged.length && s.start <= merged[merged.length - 1].end) {
+        merged[merged.length - 1].end = Math.max(merged[merged.length - 1].end, s.end);
+      } else {
+        merged.push({ start: s.start, end: s.end, label: s.label });
+      }
+    }
+    for (let i = merged.length - 1; i >= 0; i--) {
+      const { start, end, label } = merged[i];
+      const oStart = map[start];
+      const oEnd = map[Math.min(end - 1, map.length - 1)] + 1;
+      out = out.slice(0, oStart) + `[已过滤:${label}]` + out.slice(oEnd);
+    }
+    return out;
   }
 
   /**
@@ -244,6 +450,7 @@
 
   const PrivacyFilter = {
     CATEGORY_KEYS,
+    DEFAULT_CATEGORIES,
     filterPrivacyInfo,
     filterSensitiveArgs,
     filterToolResult,

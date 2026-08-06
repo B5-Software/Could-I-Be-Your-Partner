@@ -1533,7 +1533,8 @@ let settings = loadJSON(settingsPath, {
       env: true,
       tor: true,
       gitKey: true,
-      configPassword: true
+      configPassword: true,
+      evasion: false
     }
   },
   // 工具首次使用授权状态（持久化，跨会话生效）

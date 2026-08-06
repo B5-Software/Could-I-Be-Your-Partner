@@ -6190,11 +6190,15 @@
     if (privTermEl) privTermEl.checked = priv.filterTerminal !== false;
     const privAttachEl = document.getElementById('setting-privacy-filter-attachments');
     if (privAttachEl) privAttachEl.checked = priv.filterAttachments !== false;
-    // 过滤类别勾选
+    // 过滤类别勾选（缺失键按 DEFAULT_CATEGORIES 默认值，如 evasion 默认关）
     const catEls = document.querySelectorAll('#privacy-categories-item input[data-cat]');
     if (catEls.length > 0) {
       const cats = (priv.categories && typeof priv.categories === 'object') ? priv.categories : {};
-      catEls.forEach(inp => { inp.checked = cats[inp.dataset.cat] !== false; });
+      const defCats = (window.PrivacyFilter && window.PrivacyFilter.DEFAULT_CATEGORIES) || {};
+      catEls.forEach(inp => {
+        const val = cats[inp.dataset.cat];
+        inp.checked = val === true ? true : (val === false ? false : defCats[inp.dataset.cat] === true);
+      });
     }
     updatePrivacyTriggerState(priv.enabled === true);
 
