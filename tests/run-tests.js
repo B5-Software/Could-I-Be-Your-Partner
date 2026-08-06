@@ -384,6 +384,24 @@ test('evasion category defaults wired in main.js and settings UI', () => {
   assert.ok(htmlContent.includes('data-cat="evasion"'), 'settings UI should have evasion checkbox');
 });
 
+test('i18n settings tab translations are complete for budget/notifications/terminal/language', () => {
+  const path = require('path');
+  const i18nJs = fs.readFileSync(path.join(__dirname, '../src/renderer/js/i18n.js'), 'utf-8');
+  const enJs = fs.readFileSync(path.join(__dirname, '../src/renderer/js/i18n/en.js'), 'utf-8');
+  const deJs = fs.readFileSync(path.join(__dirname, '../src/renderer/js/i18n/de.js'), 'utf-8');
+  for (const tab of ['budget', 'notifications', 'terminal', 'language']) {
+    assert.ok(i18nJs.includes(`data-tab="${tab}"]`), `i18n.js should map .settings-tab[data-tab="${tab}"]`);
+  }
+  for (const key of ['budget', 'notifications', 'terminal', 'language']) {
+    assert.ok(enJs.includes(key + ": '"), `en.js tabs should have ${key}`);
+    assert.ok(deJs.includes(key + ": '"), `de.js tabs should have ${key}`);
+  }
+  for (const zh of ['预算控制', '通知', '终端', '系统通知', '终端策略', '模型价格表']) {
+    assert.ok(enJs.includes(`'${zh}'`), `en.js _textMap should have ${zh}`);
+    assert.ok(deJs.includes(`'${zh}'`), `de.js _textMap should have ${zh}`);
+  }
+});
+
 test('filterSensitiveArgs masks sensitive keys and keeps others', () => {
   const out = PrivacyFilter.filterSensitiveArgs({ apiKey: 'sk-xxx', DB_PASSWORD: 'pwd1', path: '/home/user', nested: { password: 'pwd', port: 3000 } });
   assert.strictEqual(out.apiKey, '[已过滤]');

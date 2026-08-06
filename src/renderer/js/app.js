@@ -11365,7 +11365,7 @@
     document.querySelectorAll('.code-resizer').forEach(resizer => {
       let dragging = false;
       let startX = 0;
-      let p1, p2, p1Width, p2Width, p2Flex = false;
+      let p1, p2, p1Width, p2Width, p2Flex = false, p1Flex = false;
 
       resizer.addEventListener('mousedown', (e) => {
         dragging = true;
@@ -11375,15 +11375,16 @@
         if (!p1 || !p2) return;
         p1Width = p1.getBoundingClientRect().width;
         p2Width = p2.getBoundingClientRect().width;
+        p1Flex = false;
+        p2Flex = false;
         // 如果 p2 是 flex 布局中的弹性项，改为固定宽度
         if (getComputedStyle(p2).flexGrow !== '0') {
           p2Flex = true;
           p2.style.flex = 'none';
           p2.style.width = p2Width + 'px';
-        } else {
-          p2Flex = false;
         }
         if (getComputedStyle(p1).flexGrow !== '0') {
+          p1Flex = true;
           p1.style.flex = 'none';
           p1.style.width = p1Width + 'px';
         }
@@ -11417,6 +11418,20 @@
         resizer.classList.remove('dragging');
         document.body.style.cursor = '';
         document.body.style.userSelect = '';
+        // 还原原本是弹性项的面板：清除拖拽期间钉死的内联 flex/width，
+        // 让布局重新吸收容器剩余宽度，实现窗口拉大/缩小时实时匹配
+        if (p1Flex && p1) {
+          p1.style.removeProperty('flex');
+          p1.style.removeProperty('width');
+        }
+        if (p2Flex && p2) {
+          p2.style.removeProperty('flex');
+          p2.style.removeProperty('width');
+        }
+        p1 = null;
+        p2 = null;
+        p1Flex = false;
+        p2Flex = false;
       });
     });
   }

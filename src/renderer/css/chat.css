@@ -1769,6 +1769,14 @@ body.no-tarot .setting-label-tarot + .toggle-switch + .setting-hint {
 .session-cost-mini .scm-value {
   color: var(--accent);
 }
+/* Font Awesome 图标受 line-height 影响会偏移，与文字居中（同 .btn-icon i 修正） */
+.session-cost-mini i,
+.budget-mini-bar i {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+}
 .usage-period-btn {
   padding: 4px 12px;
   font-size: 0.85em;

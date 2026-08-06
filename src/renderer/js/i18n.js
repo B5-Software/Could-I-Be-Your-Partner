@@ -211,7 +211,7 @@ const I18N_SELECTOR_MAP = [
   { sel: '.settings-tab[data-tab="usage"]', key: 'ui.settings.usage' },
   { sel: '.settings-tab[data-tab="image"]', key: 'ui.settings.imageGen' },
   { sel: '.settings-tab[data-tab="theme"]', key: 'ui.settings.theme' },
-  { sel: '.settings-tab[data-tab="language"]', key: 'ui.settings.language' },
+  { sel: '.settings-tab[data-tab="language"]', key: 'ui.settings.tabs.language' },
   { sel: '.settings-tab[data-tab="network"]', key: 'ui.settings.network' },
   { sel: '.settings-tab[data-tab="entropy"]', key: 'ui.settings.entropy' },
   { sel: '.settings-tab[data-tab="firmware"]', key: 'ui.settings.trngFirmware' },
@@ -219,7 +219,10 @@ const I18N_SELECTOR_MAP = [
   { sel: '.settings-tab[data-tab="mcp"]', key: 'ui.settings.mcp' },
   { sel: '.settings-tab[data-tab="email"]', key: 'ui.settings.email' },
   { sel: '.settings-tab[data-tab="webcontrol"]', key: 'ui.settings.webControl' },
-  { sel: '.settings-tab[data-tab="playwright"]', key: 'ui.settings.playwright' },
+  { sel: '.settings-tab[data-tab="playwright"]', key: 'ui.settings.tabs.playwright' },
+  { sel: '.settings-tab[data-tab="budget"]', key: 'ui.settings.tabs.budget' },
+  { sel: '.settings-tab[data-tab="notifications"]', key: 'ui.settings.tabs.notifications' },
+  { sel: '.settings-tab[data-tab="terminal"]', key: 'ui.settings.tabs.terminal' },
 
   // ── Language settings panel ──
   { sel: '#setting-language option[value="zh-CN"]', key: 'ui.settings.zhCN' },
