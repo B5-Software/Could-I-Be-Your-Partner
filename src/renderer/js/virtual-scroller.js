@@ -34,7 +34,6 @@
   const pendingRender = new Set(); // 待渲染的元素（批量加载时累积）
   const observedEls = new Set();   // 所有已注册消息元素（用于统计数量）
   const spacerMap = new Map();     // 已回收的消息元素 -> 占位 div
-  const templateMap = new WeakMap(); // 消息元素 -> 骨架 HTML（用于重建）
 
   // 离屏消息的占位高度估算（像素）。实际渲染后会被真实高度替代。
   const PLACEHOLDER_MIN_HEIGHT = 60;
@@ -85,7 +84,8 @@
   }
 
   /**
-   * 将消息降级为占位状态（离屏时）
+   * 将消息降级为占位状态（离屏时）。统一处理 user/assistant：
+   * 清空渲染内容释放内存（原始内容保留在 dataset.vscRawContent 中）。
    */
   function unrenderMessageContent(el) {
     if (el.dataset.vscRendered !== '1') return;
@@ -95,11 +95,8 @@
     const height = el.offsetHeight;
     el.style.minHeight = Math.max(height, PLACEHOLDER_MIN_HEIGHT) + 'px';
     el.classList.add('vsc-placeholder');
-    // 清空 markdown 内容释放内存（保留原始 raw content 在 dataset 中）
-    const role = el.classList.contains('assistant') ? 'assistant' : 'user';
-    if (role === 'assistant') {
-      contentEl.innerHTML = '<span class="vsc-placeholder-text">消息内容已折叠（滚动到此处自动展开）</span>';
-    }
+    // 清空渲染内容释放内存
+    contentEl.innerHTML = '<span class="vsc-placeholder-text">消息内容已折叠（滚动到此处自动展开）</span>';
     el.dataset.vscRendered = '0';
   }
 
@@ -129,6 +126,7 @@
 
   /**
    * 将占位 div 恢复为真实消息节点（滚动回可视区时）
+   * 直接复用原消息节点（元素一直存活在 spacerMap 中），无需重建骨架。
    */
   function restoreMessage(el, spacer) {
     if (!spacer || !spacer.isConnected) {
@@ -136,30 +134,6 @@
       return;
     }
     if (observer) observer.unobserve(spacer);
-    const template = templateMap.get(el);
-    if (template && !el.isConnected) {
-      // 用保存的骨架 HTML 重建节点，并把原节点的 dataset/占位状态迁移过去
-      const fragment = document.createElement('template');
-      fragment.innerHTML = template;
-      const fresh = fragment.content.firstElementChild;
-      if (fresh) {
-        // 迁移 dataset（rawContent/rendered/observed）
-        for (const key of Object.keys(el.dataset)) {
-          fresh.dataset[key] = el.dataset[key];
-        }
-        // 迁移占位状态
-        if (el.classList.contains('vsc-placeholder')) fresh.classList.add('vsc-placeholder');
-        if (el.style.minHeight) fresh.style.minHeight = el.style.minHeight;
-        // 已折叠的占位文本
-        if (el.dataset.vscRendered === '0') {
-          fresh.classList.add('vsc-placeholder');
-          if (!fresh.style.minHeight) fresh.style.minHeight = PLACEHOLDER_MIN_HEIGHT + 'px';
-        }
-        // 重新注册模板，保证未来再次回收/重建仍能拿到干净骨架
-        templateMap.set(fresh, template);
-        el = fresh;
-      }
-    }
     spacer.replaceWith(el);
     if (observer) observer.observe(el);
     spacerMap.delete(el);
@@ -213,8 +187,6 @@
     if (!el || !observer) return;
     // 避免重复观察
     if (el.dataset.vscObserved === '1') return;
-    // 保存骨架 HTML 供回收后重建（在修改 dataset 之前捕获，保持干净模板）
-    if (!templateMap.has(el)) templateMap.set(el, el.outerHTML);
     el.dataset.vscObserved = '1';
     if (rawContent) {
       el.dataset.vscRawContent = rawContent;
@@ -308,6 +280,99 @@
     observedEls.clear();
   }
 
+  // ---- Code/Babe 消息容器轻量懒渲染 ----
+  // 与主 VirtualScroller 完全隔离：通过 scroll + rAF 回收离屏消息的
+  // 渲染内容（innerHTML 清空、保留高度占位），原始 markdown 存于
+  // dataset.lazyRaw，滚回可视区时重新渲染。避免长会话下
+  // Code/Babe 容器 DOM 无界增长（这些容器未接入主虚拟滚动）。
+  const lazyStates = new WeakMap();
+
+  /**
+   * 为独立消息容器启用懒渲染（如 #code-chat-messages / #babe-chat-messages）。
+   * @param {HTMLElement} containerEl 消息容器
+   * @param {object} [opts]
+   * @param {number} [opts.threshold=200] 消息数超过该值才启用折叠
+   * @param {number} [opts.farMargin=1200] 离开可视区超过该像素距离才折叠
+   * @param {string} [opts.selector='.message'] 消息元素选择器
+   * @param {string} [opts.contentSel='.message-content'] 内容元素选择器
+   * @param {string} [opts.skipSel] 跳过折叠的元素选择器（如流式气泡）
+   */
+  function attachLazyContainer(containerEl, opts = {}) {
+    if (!containerEl || lazyStates.has(containerEl)) return;
+    const state = {
+      threshold: opts.threshold || 200,
+      farMargin: opts.farMargin || 1200,
+      selector: opts.selector || '.message',
+      contentSel: opts.contentSel || '.message-content',
+      skipSel: opts.skipSel || '',
+      scrollPending: false
+    };
+    const processLazy = () => {
+      state.scrollPending = false;
+      if (!containerEl.isConnected) return;
+      const msgs = containerEl.querySelectorAll(state.selector);
+      if (msgs.length <= state.threshold) return;
+      const cRect = containerEl.getBoundingClientRect();
+      for (const el of msgs) {
+        if (el.dataset.vscObserved === '1') continue;
+        if (state.skipSel && el.matches(state.skipSel)) continue;
+        const contentEl = el.querySelector(state.contentSel);
+        if (!contentEl || !contentEl.childNodes.length) continue;
+        const r = el.getBoundingClientRect();
+        const far = r.bottom < cRect.top - state.farMargin || r.top > cRect.bottom + state.farMargin;
+        if (far && el.dataset.lazy !== '0') {
+          // 折叠：释放渲染内容，保留高度
+          el.dataset.lazy = '0';
+          const h = el.offsetHeight || 60;
+          el.style.minHeight = Math.max(h, 60) + 'px';
+          contentEl.innerHTML = '<span class="vsc-placeholder-text">消息内容已折叠（滚动到此处自动展开）</span>';
+        } else if (!far && el.dataset.lazy === '0') {
+          // 恢复：重新渲染原始内容
+          el.dataset.lazy = '1';
+          el.style.minHeight = '';
+          const raw = el.dataset.lazyRaw;
+          if (raw) {
+            if (el.dataset.lazyRole === 'md' && typeof window.renderMarkdown === 'function') {
+              contentEl.innerHTML = window.renderMarkdown(raw);
+            } else if (typeof window.escapeHtml === 'function') {
+              contentEl.innerHTML = window.escapeHtml(raw);
+            } else {
+              contentEl.innerHTML = raw;
+            }
+          }
+        }
+      }
+    };
+    const onScroll = () => {
+      if (state.scrollPending) return;
+      state.scrollPending = true;
+      requestAnimationFrame(processLazy);
+    };
+    containerEl.addEventListener('scroll', onScroll, { passive: true });
+    lazyStates.set(containerEl, state);
+  }
+
+  function resetLazyContainer(containerEl) {
+    const state = lazyStates.get(containerEl);
+    if (!state) return;
+    // 恢复所有被折叠的消息（切换会话时由调用方清空容器）
+    containerEl.querySelectorAll('[data-lazy="0"]').forEach(el => {
+      el.dataset.lazy = '1';
+      el.style.minHeight = '';
+      const contentEl = el.querySelector(state.contentSel);
+      const raw = el.dataset.lazyRaw;
+      if (contentEl && raw) {
+        if (el.dataset.lazyRole === 'md' && typeof window.renderMarkdown === 'function') {
+          contentEl.innerHTML = window.renderMarkdown(raw);
+        } else if (typeof window.escapeHtml === 'function') {
+          contentEl.innerHTML = window.escapeHtml(raw);
+        } else {
+          contentEl.innerHTML = raw;
+        }
+      }
+    });
+  }
+
   window.VirtualScroller = {
     attach,
     observeMessage,
@@ -315,7 +380,9 @@
     markBatchEnd,
     pause,
     resume,
-    reset
+    reset,
+    attachLazyContainer,
+    resetLazyContainer
   };
 
   console.log('[VirtualScroller] 模块已加载');

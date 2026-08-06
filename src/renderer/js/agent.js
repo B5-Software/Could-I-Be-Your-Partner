@@ -3665,6 +3665,30 @@ ${tarotLine}
       subAgentRecord.status = 'done';
       subAgentRecord.endTime = Date.now();
       subAgentRecord.messages = subAgent.contextManager.getMessages();
+      // 释放子代理内存：消息快照已复制到 record.messages（浅拷贝，共享消息对象），
+      // 清空子代理 contextManager 内容并断开回调闭包，避免每个完成/失败的
+      // 子代理完整上下文永久驻留（长会话多次 runSubAgent 内存线性增长的根源）。
+      const subCm = subAgent.contextManager;
+      if (subCm) {
+        subCm.messages = [];
+        subCm.historyMessages = [];
+        subCm.summaries = [];
+        subCm.compactBoundaries = [];
+        subCm.pinnedMessages = [];
+      }
+      subAgent.onMessage = null;
+      subAgent.onToolCall = null;
+      subAgent.onTitleChange = null;
+      // 限制子代理记录数量：只保留最近 N 条完整消息快照（供 UI 展开查看），
+      // 更早的释放 messages 数组（消息对象随之可被 GC）。
+      const MAX_SUB_AGENT_RECORDS = 20;
+      if (this.subAgents.length > MAX_SUB_AGENT_RECORDS) {
+        const overflow = this.subAgents.splice(0, this.subAgents.length - MAX_SUB_AGENT_RECORDS);
+        for (const rec of overflow) {
+          rec.messages = [];
+          rec.tarot = null;
+        }
+      }
       const response = finalContent || '子代理完成了任务但没有文本回复';
       if (this.onMessage) this.onMessage('sub-agent-done', {
         id: subAgentId, task, result: response,
@@ -3789,6 +3813,8 @@ ${tarotLine}
     this.contextManager.clear();
     this.todoItems = [];
     this.todoIdCounter = 0;
+    // 清空子代理记录，释放其消息快照占用的内存
+    this.subAgents = [];
     this.workspacePath = null;
     this.conversationId = null;
     this.conversationTitle = null;

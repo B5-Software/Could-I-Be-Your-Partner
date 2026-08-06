@@ -57,8 +57,8 @@ function loadJSON(p, def) { try { return JSON.parse(fs.readFileSync(p, 'utf-8'))
  * rename() is atomic on most filesystems — prevents partial writes on crash
  * or disk-full. Falls back to direct write if rename fails (e.g. cross-device).
  */
-function saveJSON(p, data) {
-  const json = JSON.stringify(data, null, 2);
+function saveJSON(p, data, pretty = true) {
+  const json = pretty ? JSON.stringify(data, null, 2) : JSON.stringify(data);
   const dir = path.dirname(p);
   const base = path.basename(p);
   const tmp = path.join(dir, '.' + base + '.tmp');
@@ -4617,30 +4617,71 @@ ipcMain.handle('dialog:saveFile', async (_, options = {}) => {
 });
 
 // ---- IPC: Chat History ----
+// ---- 历史保存防抖队列 ----
+// agentLoop 每轮迭代都会全量保存历史（1~2 次），一次对话可达数十次。
+// 防抖合并：仅保留最后一次数据写盘（紧凑 JSON），大幅降低 JSON 序列化
+// 与磁盘 I/O 的峰值压力；退出前 flush 保证数据不丢失。
+const pendingHistorySaves = new Map(); // key -> { timer, filePath, data }
+const HISTORY_SAVE_DEBOUNCE_MS = 1200;
+
+function queueHistorySave(key, filePath, data) {
+  const existing = pendingHistorySaves.get(key);
+  if (existing) clearTimeout(existing.timer);
+  const timer = setTimeout(() => {
+    pendingHistorySaves.delete(key);
+    try { saveJSON(filePath, data, false); } catch (e) { console.error('queueHistorySave 写盘失败:', e); }
+  }, HISTORY_SAVE_DEBOUNCE_MS);
+  pendingHistorySaves.set(key, { timer, filePath, data });
+}
+
+function flushPendingHistorySaves() {
+  if (pendingHistorySaves.size === 0) return;
+  for (const [key, { timer, filePath, data }] of pendingHistorySaves) {
+    clearTimeout(timer);
+    try { saveJSON(filePath, data, false); } catch (e) { console.error('flushPendingHistorySaves 写盘失败:', e); }
+    pendingHistorySaves.delete(key);
+  }
+}
+
 ipcMain.handle('history:list', () => {
   try {
+    flushPendingHistorySaves();
     const files = fs.readdirSync(historyDir).filter(f => f.endsWith('.json')).sort((a, b) => b.localeCompare(a));
-    return files.map(f => { const data = loadJSON(path.join(historyDir, f), {}); return { id: data.id, title: data.title || '未命名对话', createdAt: data.createdAt, updatedAt: data.updatedAt, messageCount: (data.messages || []).length }; });
+    return files.map(f => {
+      const data = loadJSON(path.join(historyDir, f), {});
+      const meta = { id: data.id, title: data.title || '未命名对话', createdAt: data.createdAt, updatedAt: data.updatedAt, messageCount: Array.isArray(data.messages) ? data.messages.length : 0 };
+      // 列表只需元数据：释放大数组引用，避免历史文件全量驻留内存
+      delete data.messages;
+      delete data.summaries;
+      return meta;
+    });
   } catch { return []; }
 });
 
 ipcMain.handle('history:get', (_, id) => {
+  flushPendingHistorySaves();
   const p = path.join(historyDir, `${id}.json`);
   return loadJSON(p, null);
 });
 
 ipcMain.handle('history:save', (_, conversation) => {
+  if (!conversation || !conversation.id) return { ok: false, error: 'invalid conversation' };
   conversation.updatedAt = new Date().toISOString();
   if (!conversation.createdAt) conversation.createdAt = new Date().toISOString();
-  saveJSON(path.join(historyDir, `${conversation.id}.json`), conversation);
-  return { ok: true };
+  queueHistorySave('history:' + conversation.id, path.join(historyDir, `${conversation.id}.json`), conversation);
+  return { ok: true, queued: true };
 });
 
 ipcMain.handle('history:delete', (_, id) => {
-  try { fs.unlinkSync(path.join(historyDir, `${id}.json`)); return { ok: true }; } catch (e) { return { ok: false, error: e.message }; }
+  try {
+    flushPendingHistorySaves();
+    fs.unlinkSync(path.join(historyDir, `${id}.json`));
+    return { ok: true };
+  } catch (e) { return { ok: false, error: e.message }; }
 });
 
 ipcMain.handle('history:rename', (_, id, title) => {
+  flushPendingHistorySaves();
   const p = path.join(historyDir, `${id}.json`);
   const data = loadJSON(p, null);
   if (data) { data.title = title; data.updatedAt = new Date().toISOString(); saveJSON(p, data); return { ok: true }; }
@@ -4723,11 +4764,12 @@ ipcMain.handle('notifications:send', (event, opts) => {
 
 // ---- IPC: Babe History (独立持久化，含好感度等会话属性) ----
 ipcMain.handle('babeHistory:list', () => {
+  flushPendingHistorySaves();
   try {
     const files = fs.readdirSync(babeHistoryDir).filter(f => f.endsWith('.json')).sort((a, b) => b.localeCompare(a));
     return files.map(f => {
       const data = loadJSON(path.join(babeHistoryDir, f), {});
-      return {
+      const meta = {
         id: data.id,
         title: data.title || '未命名对话',
         createdAt: data.createdAt,
@@ -4735,27 +4777,38 @@ ipcMain.handle('babeHistory:list', () => {
         messageCount: (data.messages || []).length,
         affection: data.affection ?? 0
       };
+      // 列表只需元数据：释放大数组引用
+      delete data.messages;
+      delete data.summaries;
+      return meta;
     });
   } catch { return []; }
 });
 
 ipcMain.handle('babeHistory:get', (_, id) => {
+  flushPendingHistorySaves();
   const p = path.join(babeHistoryDir, `${id}.json`);
   return loadJSON(p, null);
 });
 
 ipcMain.handle('babeHistory:save', (_, conversation) => {
+  if (!conversation || !conversation.id) return { ok: false, error: 'invalid conversation' };
   conversation.updatedAt = new Date().toISOString();
   if (!conversation.createdAt) conversation.createdAt = new Date().toISOString();
-  saveJSON(path.join(babeHistoryDir, `${conversation.id}.json`), conversation);
-  return { ok: true };
+  queueHistorySave('babe:' + conversation.id, path.join(babeHistoryDir, `${conversation.id}.json`), conversation);
+  return { ok: true, queued: true };
 });
 
 ipcMain.handle('babeHistory:delete', (_, id) => {
-  try { fs.unlinkSync(path.join(babeHistoryDir, `${id}.json`)); return { ok: true }; } catch (e) { return { ok: false, error: e.message }; }
+  try {
+    flushPendingHistorySaves();
+    fs.unlinkSync(path.join(babeHistoryDir, `${id}.json`));
+    return { ok: true };
+  } catch (e) { return { ok: false, error: e.message }; }
 });
 
 ipcMain.handle('babeHistory:rename', (_, id, title) => {
+  flushPendingHistorySaves();
   const p = path.join(babeHistoryDir, `${id}.json`);
   const data = loadJSON(p, null);
   if (data) { data.title = title; data.updatedAt = new Date().toISOString(); saveJSON(p, data); return { ok: true }; }
@@ -4901,12 +4954,16 @@ ipcMain.handle('code:listHistory', (_, workspacePath) => {
   const histDir = getCodeHistoryDir(workspacePath);
   if (!histDir) return { ok: false, error: 'no workspace' };
   try {
+    flushPendingHistorySaves();
     const files = fs.readdirSync(histDir)
       .filter(f => f.endsWith('.json'))
       .map(f => {
         try {
           const data = JSON.parse(fs.readFileSync(path.join(histDir, f), 'utf-8'));
-          return { id: f.replace('.json', ''), title: data.title || '未命名', ts: data.ts || 0, messageCount: (data.messages || []).length };
+          const meta = { id: f.replace('.json', ''), title: data.title || '未命名', ts: data.ts || 0, messageCount: (data.messages || []).length };
+          // 列表只需元数据：释放大数组引用
+          delete data.messages;
+          return meta;
         } catch { return null; }
       })
       .filter(Boolean)
@@ -4919,6 +4976,7 @@ ipcMain.handle('code:loadHistory', (_, workspacePath, id) => {
   const histDir = getCodeHistoryDir(workspacePath);
   if (!histDir) return { ok: false, error: 'no workspace' };
   try {
+    flushPendingHistorySaves();
     const data = JSON.parse(fs.readFileSync(path.join(histDir, id + '.json'), 'utf-8'));
     return { ok: true, data };
   } catch (e) { return { ok: false, error: e.message }; }
@@ -4928,8 +4986,8 @@ ipcMain.handle('code:saveHistory', (_, workspacePath, id, data) => {
   const histDir = getCodeHistoryDir(workspacePath);
   if (!histDir) return { ok: false, error: 'no workspace' };
   try {
-    saveJSON(path.join(histDir, id + '.json'), data);
-    return { ok: true };
+    queueHistorySave('code:' + id, path.join(histDir, id + '.json'), data);
+    return { ok: true, queued: true };
   } catch (e) { return { ok: false, error: e.message }; }
 });
 
@@ -4937,6 +4995,7 @@ ipcMain.handle('code:deleteHistory', (_, workspacePath, id) => {
   const histDir = getCodeHistoryDir(workspacePath);
   if (!histDir) return { ok: false, error: 'no workspace' };
   try {
+    flushPendingHistorySaves();
     fs.unlinkSync(path.join(histDir, id + '.json'));
     return { ok: true };
   } catch (e) { return { ok: false, error: e.message }; }
@@ -8595,6 +8654,8 @@ app.whenReady().then(async () => {
 // 若渲染器有正在工作的会话，先通知其保存 pending 状态，等待完成后再退出
 app.on('before-quit', async (event) => {
   isQuitting = true; // 标记真正退出，避免 close 事件再次拦截
+  // 将防抖队列中的历史保存立即落盘，避免退出时丢失
+  flushPendingHistorySaves();
   for (const [name] of mcpServers) {
     stopMcpServer(name);
   }

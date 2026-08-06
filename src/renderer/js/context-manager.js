@@ -41,6 +41,7 @@ class ContextManager {
     this.systemPrompt = null;
     this.summaries = []; // Compressed history summaries
     this.compactBoundaries = []; // CompactBoundary tracking
+    this._msgTokenCache = new WeakMap(); // 消息对象 -> token 估算值（避免重复全量正则扫描）
   }
 
   setMaxTokens(max) {

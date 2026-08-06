@@ -576,6 +576,16 @@
   // 初始化虚拟滚动器（聊天记录动态渲染，离屏消息不渲染 markdown）
   if (typeof VirtualScroller !== 'undefined' && chatMessages) {
     VirtualScroller.attach(chatMessages);
+    // Code/Babe 消息容器未接入主虚拟滚动：挂载轻量懒渲染，
+    // 长会话下自动折叠离屏消息的渲染内容，防止 DOM 无界增长
+    const codeMsgsEl = document.getElementById('code-chat-messages');
+    if (codeMsgsEl) {
+      VirtualScroller.attachLazyContainer(codeMsgsEl, { selector: '.message', contentSel: '.message-content' });
+    }
+    const babeMsgsEl = document.getElementById('babe-chat-messages');
+    if (babeMsgsEl) {
+      VirtualScroller.attachLazyContainer(babeMsgsEl, { selector: '.babe-message', contentSel: '.babe-msg-bubble' });
+    }
   }
 
   // 推送容器选择器：根据 currentMode 返回对应消息容器的选择器
@@ -588,6 +598,9 @@
   // 统一的聊天容器清空 + 增量推送
   function clearChatMessagesUI() {
     chatMessages.innerHTML = '';
+    // 清空虚拟滚动观察状态：彻底释放旧会话的消息节点、占位 div 与
+    // dataset 中缓存的原始内容引用，避免每次"新对话"线性累积内存
+    if (typeof VirtualScroller !== 'undefined' && VirtualScroller.reset) VirtualScroller.reset();
     // 递增回放 generation：取消任何进行中的异步历史回放，
     // 防止新会话消息与旧会话残留交错
     window.__chatReplayGeneration = (window.__chatReplayGeneration || 0) + 1;
@@ -10253,7 +10266,22 @@
     }
   }
 
+  // 退订 agent 注册的 LLM 重试/流式事件监听器。
+  // 旧监听器挂在 agent 实例上，若实例被置 null 后无法退订，
+  // ipcRenderer 监听器会随每次新对话线性累积。
+  function unsubscribeAgentStreams(ag) {
+    if (!ag) return;
+    if (typeof ag._llmRetryUnsub === 'function') { try { ag._llmRetryUnsub(); } catch { /* ignore */ } }
+    if (typeof ag._streamChunkUnsub === 'function') { try { ag._streamChunkUnsub(); } catch { /* ignore */ } }
+    if (typeof ag._streamEndUnsub === 'function') { try { ag._streamEndUnsub(); } catch { /* ignore */ } }
+    ag._llmRetryUnsub = null;
+    ag._streamChunkUnsub = null;
+    ag._streamEndUnsub = null;
+  }
+
   async function initCodeAgent() {
+    // 先退订旧实例的监听器，避免 ipcRenderer 监听器累积
+    unsubscribeAgentStreams(codeAgent);
     if (!codeWorkspacePath) {
       window.showMessageModal('请先打开工作区文件夹', '提示', 'warning');
       return false;
@@ -10488,6 +10516,9 @@
     msg.className = 'message ' + role;
     const avatarIcon = role === 'assistant' ? 'fa-robot' : (role === 'system' ? 'fa-info-circle' : 'fa-user');
     const rendered = (role === 'assistant') ? renderMarkdown(content) : escapeHtml(content);
+    // 懒渲染用：保留原始内容与角色，离屏折叠后滚回时重新渲染
+    msg.dataset.lazyRaw = content;
+    msg.dataset.lazyRole = (role === 'assistant') ? 'md' : 'text';
     msg.innerHTML = `
       <div class="message-avatar"><i class="fa-solid ${avatarIcon}"></i></div>
       <div class="message-body">
@@ -10805,6 +10836,7 @@
       if (wsPathEl) wsPathEl.textContent = result.path;
       await loadCodeFileTree(result.path);
       // Reset current conversation
+      unsubscribeAgentStreams(codeAgent);
       codeAgent = null;
       codeCurrentHistoryId = null;
       codeMessages = [];
@@ -10820,6 +10852,7 @@
       window.showMessageModal('请先打开工作区', '提示', 'warning');
       return;
     }
+    unsubscribeAgentStreams(codeAgent);
     codeAgent = null;
     codeCurrentHistoryId = null;
     codeMessages = [];
@@ -11640,6 +11673,9 @@
     const msg = document.createElement('div');
     msg.className = 'babe-message ' + role;
     const rendered = (role === 'assistant' || role === 'system') ? renderMarkdown(content) : escapeHtml(content);
+    // 懒渲染用：保留原始内容与角色，离屏折叠后滚回时重新渲染
+    msg.dataset.lazyRaw = content;
+    msg.dataset.lazyRole = (role === 'assistant' || role === 'system') ? 'md' : 'text';
     // 头像：assistant 用 Babe 头像（含头像框），user 用用户头像（含头像框），system 用图标
     let avatarHTML;
     if (role === 'assistant') {
@@ -12161,6 +12197,8 @@
     if (babeAgent) {
       babeAgent.stop();
     }
+    // 退订旧实例监听器后置空，避免 ipcRenderer 监听器累积
+    unsubscribeAgentStreams(babeAgent);
     // 重置状态
     babeAgent = null;
     babeMessages = [];
