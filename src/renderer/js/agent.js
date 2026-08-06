@@ -1406,7 +1406,9 @@ ${toolListSection}`;
         messages: this.contextManager.getHistoryMessages(),
         summaries: this.contextManager.summaries,
         tarotCard: this.tarotCard,
-        workspacePath: this.workspacePath
+        workspacePath: this.workspacePath,
+        // 会话累计 Token 统计实时持久化：打开历史会话时恢复，继续对话从该基数累计
+        usage: { ...this.sessionUsage }
       };
       // 子代理聊天记录持久化：序列化完整消息快照（去掉 subAgent 实例引用），
       // 重新打开该会话后可继续查看子代理详情模态框中的完整对话。
@@ -1441,7 +1443,19 @@ ${toolListSection}`;
     this.conversationId = conversation.id;
     this.conversationTitle = conversation.title;
     this.resetOptimizedTools();
-    this.resetSessionUsage(); // 加载历史会话视为新一轮，重置统计
+    this.resetSessionUsage();
+    // 恢复持久化的会话累计 Token 统计：打开历史会话后从该基数继续累计，
+    // 上下文模态框/会话消费显示的是"历史累计 + 本轮新增"。
+    // 旧版会话无 usage 字段时保持重置后的新一轮统计。
+    const savedUsage = conversation && typeof conversation.usage === 'object' ? conversation.usage : null;
+    if (savedUsage) {
+      this.sessionUsage.prompt = Number(savedUsage.prompt) || 0;
+      this.sessionUsage.completion = Number(savedUsage.completion) || 0;
+      this.sessionUsage.total = Number(savedUsage.total) || 0;
+      this.sessionUsage.cached = Number(savedUsage.cached) || 0;
+      this.sessionUsage.cacheCreation = Number(savedUsage.cacheCreation) || 0;
+      this.sessionUsage.estimated = savedUsage.estimated === true;
+    }
     // 上下文管理器与历史记录解耦：
     // - historyMessages: 完整 transcript（永不破坏）
     // - messages: 工作上下文（可被压缩/清理，独立于 historyMessages）

@@ -321,6 +321,15 @@ test('sub-agent records are persisted in history and restored', () => {
   assert.ok(agentContent.includes('MAX_SUB_AGENT_RECORDS = 100'), 'sub-agent record cap should be 100');
 });
 
+test('session cumulative token usage is persisted in history and restored', () => {
+  const agentContent = fs.readFileSync(require('path').join(__dirname, '../src/renderer/js/agent.js'), 'utf-8');
+  assert.ok(agentContent.includes('usage: { ...this.sessionUsage }'), 'saveToHistory should persist sessionUsage snapshot');
+  const loadBlock = agentContent.slice(agentContent.indexOf('async loadFromHistory'));
+  assert.ok(loadBlock.includes('conversation.usage'), 'loadFromHistory should read conversation.usage');
+  assert.ok(loadBlock.includes('savedUsage.prompt'), 'loadFromHistory should restore saved prompt tokens');
+  assert.ok(loadBlock.includes('resetSessionUsage()'), 'loadFromHistory should reset usage first (fallback for legacy conversations)');
+});
+
 test('privacy filter should not corrupt normal text', () => {
   assert.strictEqual(PrivacyFilter.filterPrivacyInfo('const x = 42; return x * 2;'), 'const x = 42; return x * 2;');
   const s = '{"enabled":true,"timeout":30,"name":"server","note":"authorization is tricky"}';
