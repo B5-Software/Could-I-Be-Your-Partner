@@ -119,7 +119,7 @@ class Agent {
   }
 
   // 字符串替换编辑（Claude Code 风格 Edit 工具）
-  async _applyStringReplace(filePath, oldString, newString, replaceAll, encoding) {
+  async _applyStringReplace(filePath, oldString, newString, replaceAll, encoding, eol) {
     const readRes = await window.api.readFile(filePath, encoding || '');
     if (!readRes.ok) return readRes;
     const content = readRes.content;
@@ -138,14 +138,18 @@ class Agent {
     } else {
       newContent = content.replace(oldString, newString);
     }
-    const writeRes = await window.api.writeFile(filePath, newContent);
+    // 未显式指定 encoding/eol 时保持原文件编码与换行模式（readFile 返回检测结果）
+    const writeRes = await window.api.writeFile(filePath, newContent, {
+      encoding: encoding || readRes.encoding || '',
+      eol: eol || readRes.eol || ''
+    });
     if (!writeRes.ok) return writeRes;
     // 生成简单 diff 摘要
     const oldLines = content.split('\n');
     const newLines = newContent.split('\n');
     return {
       ok: true,
-      message: `已替换 ${replaceAll ? count : 1} 处匹配`,
+      message: `已替换 ${replaceAll ? count : 1} 处匹配${readRes.encoding ? `（编码 ${readRes.encoding}，换行 ${(readRes.eol || 'lf').toUpperCase()}）` : ''}`,
       replacedCount: replaceAll ? count : 1,
       oldLineCount: oldLines.length,
       newLineCount: newLines.length
@@ -1369,6 +1373,7 @@ ${toolListSection}`;
       const payload = {
         id: this.conversationId,
         title: this.conversationTitle || '未命名对话',
+        schemaVersion: 2, // 历史格式版本：新版持久化完整 transcript（historyMessages）到 messages
         messages: this.contextManager.getHistoryMessages(),
         summaries: this.contextManager.summaries,
         tarotCard: this.tarotCard,
@@ -1397,7 +1402,15 @@ ${toolListSection}`;
     // - messages: 工作上下文（可被压缩/清理，独立于 historyMessages）
     // 不恢复 summaries：避免完整 transcript + 旧摘要导致上下文溢出。
     // 上下文管理器会在下次 agentLoop 中按需重新压缩。
-    this.contextManager.loadFromHistory(conversation.messages);
+    let historyMsgs = Array.isArray(conversation.messages) ? conversation.messages : [];
+    // 新版上下文模式 → 旧版历史自动迁移：
+    // 旧版历史（无 schemaVersion=2）的 messages 是工作上下文快照，可能已被压缩/截断。
+    // 无法恢复已删除的原始消息，但可将历史中残留的 summaries 以系统消息形式拼接到开头，
+    // 保留早期内容概要；随后 saveToHistory 会以新格式（完整 transcript + schemaVersion=2）自动重写升级。
+    if (conversation.schemaVersion !== 2) {
+      historyMsgs = this._migrateLegacyHistory(conversation, historyMsgs);
+    }
+    this.contextManager.loadFromHistory(historyMsgs);
     if (conversation.tarotCard) {
       this.tarotCard = conversation.tarotCard;
       if (this.onMessage) this.onMessage('tarot', this.tarotCard);
@@ -1415,6 +1428,24 @@ ${toolListSection}`;
     }
     this.contextManager.setSystemPrompt(this.getSystemPrompt());
     if (this.onTitleChange) this.onTitleChange(this.conversationTitle || '未命名对话');
+  }
+
+  _migrateLegacyHistory(conversation, messages) {
+    const arr = Array.isArray(messages) ? messages.slice() : [];
+    const summaries = Array.isArray(conversation.summaries)
+      ? conversation.summaries.filter(s => s && (typeof s === 'string' || s?.content || s?.summary || s?.text))
+      : [];
+    if (summaries.length > 0) {
+      const summaryText = '【以下为早期对话的自动迁移摘要（旧版历史升级生成）】\n' + summaries.map((s) => {
+        if (typeof s === 'string') return s;
+        if (s?.content) return typeof s.content === 'string' ? s.content : JSON.stringify(s.content);
+        if (s?.summary) return String(s.summary);
+        if (s?.text) return String(s.text);
+        return JSON.stringify(s);
+      }).join('\n\n---\n\n');
+      arr.unshift({ role: 'system', content: summaryText });
+    }
+    return arr;
   }
 
   async generateConversationTitle(userMessage) {
@@ -2250,13 +2281,16 @@ ${toolListSection}`;
           const fp = this._resolveWorkspacePath(args.path || '');
           // 全量覆写模式（向后兼容）
           if (args.content !== undefined && args.old_string === undefined) {
-            const r = await window.api.writeFile(fp, args.content);
-            if (r.ok) r.message = '文件已全量覆写';
+            const r = await window.api.writeFile(fp, args.content, {
+              encoding: args.encoding || '',
+              eol: args.eol || ''
+            });
+            if (r.ok) r.message = `文件已全量覆写${r.encoding ? `（编码 ${r.encoding}，换行 ${(r.eol || 'lf').toUpperCase()}）` : ''}`;
             return r;
           }
           // 字符串替换模式
           if (args.old_string !== undefined && args.new_string !== undefined) {
-            return await this._applyStringReplace(fp, args.old_string, args.new_string, args.replace_all || false, args.encoding);
+            return await this._applyStringReplace(fp, args.old_string, args.new_string, args.replace_all || false, args.encoding, args.eol);
           }
           return { ok: false, error: typeof i18nToolReturn === 'function' ? i18nToolReturn('need_content_or_replace', '需要提供 content（全量覆写）或 old_string+new_string（字符串替换）') : '需要提供 content（全量覆写）或 old_string+new_string（字符串替换）' };
         }
@@ -2293,9 +2327,12 @@ ${toolListSection}`;
             }
             appliedEdits.push({ index: i + 1, replacements: edit.replace_all ? count : 1 });
           }
-          const writeRes = await window.api.writeFile(fp, content);
+          const writeRes = await window.api.writeFile(fp, content, {
+            encoding: args.encoding || '',
+            eol: args.eol || ''
+          });
           if (!writeRes.ok) return writeRes;
-          return { ok: true, message: `已应用 ${appliedEdits.length} 处编辑`, edits: appliedEdits };
+          return { ok: true, message: `已应用 ${appliedEdits.length} 处编辑${writeRes.encoding ? `（编码 ${writeRes.encoding}，换行 ${(writeRes.eol || 'lf').toUpperCase()}）` : ''}`, edits: appliedEdits };
         }
         case 'presentFile': {
           // 解析工作目录相对路径：绝对路径原样使用，相对路径基于工作区拼接
@@ -2339,7 +2376,35 @@ ${toolListSection}`;
           const imgDesc = args.description ? `：${args.description}` : '';
           return { ok: true, _multimodal: true, imageUrl: readRes.data, text: `已读取图片文件 ${imgRelPath}${imgDesc}（图片已注入上下文，可直接查看）` };
         }
-        case 'createFile': return await window.api.createFile(this._resolveWorkspacePath(args.path), args.content || '');
+        case 'createFile': {
+          const createRes = await window.api.createFile(this._resolveWorkspacePath(args.path), args.content || '', {
+            encoding: args.encoding || '',
+            eol: args.eol || ''
+          });
+          if (createRes.ok && (createRes.encoding || createRes.eol)) {
+            createRes.message = `文件已创建${createRes.encoding ? `（编码 ${createRes.encoding}，换行 ${(createRes.eol || 'lf').toUpperCase()}）` : ''}`;
+          }
+          return createRes;
+        }
+        case 'getFileEncodingInfo': {
+          const fp = this._resolveWorkspacePath(args.path || '');
+          const info = await window.api.getFileEncodingInfo(fp);
+          if (info && info.ok) {
+            info.message = `编码 ${info.encoding}，换行模式 ${(info.eol || 'lf').toUpperCase()}，大小 ${info.size} 字节`;
+          }
+          return info;
+        }
+        case 'convertFileEncoding': {
+          const fp = this._resolveWorkspacePath(args.path || '');
+          const conv = await window.api.convertFileEncoding(fp, {
+            encoding: args.encoding || '',
+            eol: args.eol || ''
+          });
+          if (conv && conv.ok) {
+            conv.message = `已从 ${conv.from.encoding}/${(conv.from.eol || 'lf').toUpperCase()} 转换为 ${conv.to.encoding}/${(conv.to.eol || 'lf').toUpperCase()}`;
+          }
+          return conv;
+        }
         case 'deleteFile': return await window.api.deleteFile(this._resolveWorkspacePath(args.path));
         case 'moveFile': return await window.api.moveFile(this._resolveWorkspacePath(args.source), this._resolveWorkspacePath(args.destination));
         case 'copyFile': return await window.api.copyFile(this._resolveWorkspacePath(args.source), this._resolveWorkspacePath(args.destination));

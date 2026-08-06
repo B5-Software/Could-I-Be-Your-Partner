@@ -2188,8 +2188,8 @@
         <div class="context-tooltip-row" style="margin-top:4px;border-top:1px solid var(--border);padding-top:4px;font-weight:600;color:var(--accent)">
           <span>输出预留</span><span>${maxResponseTokens}</span>
         </div>
-        <div class="context-tooltip-row"><span>　占比（含预留）</span><span>${percentage.toFixed(1)}%</span></div>
-        <div class="context-tooltip-row" style="font-size:10px;color:var(--text-tertiary)"><span>　占比（仅输入）</span><span>${inputOnlyPct.toFixed(1)}%</span></div>
+        <div class="context-tooltip-row"><span>占比（含预留）</span><span>${percentage.toFixed(1)}%</span></div>
+        <div class="context-tooltip-row" style="color:var(--text-tertiary)"><span>占比（仅输入）</span><span>${inputOnlyPct.toFixed(1)}%</span></div>
         <div class="context-tooltip-row" style="font-weight:600">
           <span>总占用</span><span>${fmt(totalOccupied)} / ${fmt(effectiveMax)}</span>
         </div>
@@ -2352,8 +2352,8 @@
       <div class="context-tooltip-row" style="margin-top:4px;border-top:1px solid var(--border);padding-top:4px;font-weight:600;color:var(--accent)">
         <span>输出预留</span><span>${fmtTokenCount(maxResp)}</span>
       </div>
-      <div class="context-tooltip-row"><span>　占比（含预留）</span><span>${pct.toFixed(1)}%</span></div>
-      <div class="context-tooltip-row" style="font-size:10px;color:var(--text-tertiary)"><span>　占比（仅输入）</span><span>${inputPct.toFixed(1)}%</span></div>
+      <div class="context-tooltip-row"><span>占比（含预留）</span><span>${pct.toFixed(1)}%</span></div>
+      <div class="context-tooltip-row" style="color:var(--text-tertiary)"><span>占比（仅输入）</span><span>${inputPct.toFixed(1)}%</span></div>
       <div class="context-tooltip-row" style="font-weight:600">
         <span>总占用</span><span>${fmtTokenCount(total)} / ${fmtTokenCount(sharedMaxCtx)}</span>
       </div>`;
@@ -10663,6 +10663,7 @@
     await window.api.codeSaveHistory(codeWorkspacePath, codeCurrentHistoryId, {
       title,
       ts: Date.now(),
+      schemaVersion: 2, // 与 agent.saveToHistory 保持统一的历史格式版本
       messages: codeMessages,
       workspace: codeWorkspacePath
     });
@@ -10715,14 +10716,15 @@
                 if (ok && codeAgent) await codeAgent.loadFromHistory(conv);
               }
               // 同步 codeMessages（轻量镜像，用于 saveCodeHistory 重复保存检测）
-              codeMessages = historyMessages.slice();
+              // 使用迁移后的完整消息（旧版历史会被自动补全摘要），而非原始 conv.messages
+              codeMessages = (codeAgent && codeAgent.contextManager) ? codeAgent.contextManager.getHistoryMessages().slice() : (historyMessages || []).slice();
               // 渲染消息列表（对齐 Chat 模式：处理 user/assistant/tool 三种 role 及 tool_calls）
               const msgsEl = document.getElementById('code-chat-messages');
               if (msgsEl) {
                 msgsEl.innerHTML = '';
                 WebUIMirror.pushDomEvent({ type: 'dom_clear', container: '#code-chat-messages' });
                 const toolCallMap = {};
-                for (const msg of historyMessages) {
+                for (const msg of codeMessages) {
                   if (msg.role === 'user') {
                     const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
                     addCodeMessage('user', content);

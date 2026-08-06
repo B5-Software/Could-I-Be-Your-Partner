@@ -55,8 +55,10 @@ contextBridge.exposeInMainWorld('api', {
 
   // File System
   readFile: (p, encoding) => ipcRenderer.invoke('fs:readFile', p, encoding),
-  writeFile: (p, c) => ipcRenderer.invoke('fs:writeFile', p, c),
-  createFile: (p, c) => ipcRenderer.invoke('fs:createFile', p, c),
+  writeFile: (p, c, opts) => ipcRenderer.invoke('fs:writeFile', p, c, opts),
+  createFile: (p, c, opts) => ipcRenderer.invoke('fs:createFile', p, c, opts),
+  getFileEncodingInfo: (p) => ipcRenderer.invoke('fs:getFileInfo', p),
+  convertFileEncoding: (p, opts) => ipcRenderer.invoke('fs:convertFileEncoding', p, opts),
   deleteFile: (p) => ipcRenderer.invoke('fs:deleteFile', p),
   moveFile: (s, d) => ipcRenderer.invoke('fs:moveFile', s, d),
   copyFile: (s, d) => ipcRenderer.invoke('fs:copyFile', s, d),
