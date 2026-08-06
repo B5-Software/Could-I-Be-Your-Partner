@@ -981,6 +981,9 @@
 
             <!-- Usage Stats Tab -->
             <div class="settings-panel" data-tab="usage">
+              <div style="display:flex;justify-content:flex-end;align-items:center;margin-bottom:2px;">
+                <button class="btn-secondary btn-sm" id="btn-usage-refresh" title="刷新用量统计"><i class="fa-solid fa-rotate"></i> 刷新</button>
+              </div>
               <div class="settings-group">
                 <h3><i class="fa-solid fa-chart-bar"></i> 用量统计</h3>
                 <p class="setting-hint" style="margin-bottom:12px">从API返回的真实 usage 数据汇总（prompt + completion tokens）。</p>
@@ -999,6 +1002,9 @@
 
             <!-- Budget Control Tab -->
             <div class="settings-panel" data-tab="budget">
+              <div style="display:flex;justify-content:flex-end;align-items:center;margin-bottom:2px;">
+                <button class="btn-secondary btn-sm" id="btn-budget-refresh" title="刷新预算控制"><i class="fa-solid fa-rotate"></i> 刷新</button>
+              </div>
               <div class="settings-group">
                 <h3><i class="fa-solid fa-clock-rotate-left"></i> 预算周期设置</h3>
                 <p class="setting-hint" style="margin-bottom:12px">配置日/周/月预算的统计周期边界与时区。</p>

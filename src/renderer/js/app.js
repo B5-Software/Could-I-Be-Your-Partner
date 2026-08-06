@@ -6935,6 +6935,11 @@
         window.showToast(added > 0 ? `已导入 ${added} 个模型` : '所有已用模型都已在价格表中', 'success');
       };
     }
+    const budgetRefreshBtn = document.getElementById('btn-budget-refresh');
+    if (budgetRefreshBtn) budgetRefreshBtn.onclick = async () => {
+      await refreshBudgetStatus();
+      window.showToast('预算数据已刷新', 'success');
+    };
     const pickFallbackBtn = document.getElementById('btn-budget-pick-fallback');
     if (pickFallbackBtn) {
       pickFallbackBtn.onclick = async () => {
@@ -7615,6 +7620,14 @@
       btn.classList.add('active');
       loadUsageStats(btn.dataset.period);
     });
+  });
+
+  // Usage stats refresh button
+  const usageRefreshBtn = document.getElementById('btn-usage-refresh');
+  if (usageRefreshBtn) usageRefreshBtn.addEventListener('click', async () => {
+    const activePeriod = document.querySelector('.usage-period-btn.active');
+    await loadUsageStats(activePeriod ? activePeriod.dataset.period : 'daily');
+    window.showToast('用量统计已刷新', 'success');
   });
 
   // Image settings
