@@ -6170,6 +6170,18 @@
     document.getElementById('setting-bg-color').value = s.theme.backgroundColor;
     document.getElementById('setting-auto-approve').checked = s.autoApproveSensitive;
 
+    // 隐私信息保护
+    const priv = s.privacyProtection || {};
+    const privEnabledEl = document.getElementById('setting-privacy-enabled');
+    if (privEnabledEl) privEnabledEl.checked = priv.enabled === true;
+    const privResultsEl = document.getElementById('setting-privacy-filter-results');
+    if (privResultsEl) privResultsEl.checked = priv.filterResults !== false;
+    const privArgsEl = document.getElementById('setting-privacy-filter-args');
+    if (privArgsEl) privArgsEl.checked = priv.filterArgs !== false;
+    const privTermEl = document.getElementById('setting-privacy-filter-terminal');
+    if (privTermEl) privTermEl.checked = priv.filterTerminal !== false;
+    updatePrivacyTriggerState(priv.enabled === true);
+
     // 后台托盘模式
     const trayEnabledEl = document.getElementById('setting-tray-enabled');
     const closeToTrayEl = document.getElementById('setting-close-to-tray');
@@ -7416,6 +7428,11 @@
     } else {
       agent.settings = merged;
     }
+    // 隐私信息保护：同步到 Code / Babe 代理实例（其 settings 为独立快照）
+    if (merged.privacyProtection) {
+      if (typeof codeAgent !== 'undefined' && codeAgent && codeAgent.settings) codeAgent.settings.privacyProtection = merged.privacyProtection;
+      if (typeof babeAgent !== 'undefined' && babeAgent && babeAgent.settings) babeAgent.settings.privacyProtection = merged.privacyProtection;
+    }
   }
 
   // LLM settings
@@ -7714,6 +7731,33 @@
     const s = await window.api.getSettings();
     s.autoApproveSensitive = e.target.checked;
     await saveSettings(s);
+  });
+
+  // 隐私信息保护：总开关与过滤触发器
+  function updatePrivacyTriggerState(enabled) {
+    const item = document.getElementById('privacy-trigger-item');
+    if (!item) return;
+    item.querySelectorAll('input').forEach(inp => { inp.disabled = !enabled; });
+    item.style.opacity = enabled ? '' : '0.5';
+  }
+
+  async function savePrivacySettings() {
+    const s = await window.api.getSettings();
+    s.privacyProtection = {
+      enabled: document.getElementById('setting-privacy-enabled').checked,
+      filterResults: document.getElementById('setting-privacy-filter-results').checked,
+      filterArgs: document.getElementById('setting-privacy-filter-args').checked,
+      filterTerminal: document.getElementById('setting-privacy-filter-terminal').checked
+    };
+    await saveSettings(s);
+  }
+
+  document.getElementById('setting-privacy-enabled').addEventListener('change', (e) => {
+    updatePrivacyTriggerState(e.target.checked);
+    savePrivacySettings();
+  });
+  ['setting-privacy-filter-results', 'setting-privacy-filter-args', 'setting-privacy-filter-terminal'].forEach(id => {
+    document.getElementById(id).addEventListener('change', () => savePrivacySettings());
   });
 
   // 后台托盘：启用托盘图标

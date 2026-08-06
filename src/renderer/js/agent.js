@@ -1859,7 +1859,17 @@ ${toolListSection}`;
         }
       }
       // Store reasoning in the assistant message for context (some models benefit)
-      this.contextManager.addAssistantMessage(assistantMsg.content, assistantMsg.tool_calls, assistantMsg.reasoning);
+      // 隐私信息保护：写入 AI 上下文的 tool_calls 使用脱敏副本（敏感键值 + 终端命令全文扫描），
+      // 真实执行仍用下方循环中的原始 assistantMsg.tool_calls。
+      let assistantToolCallsForCtx = assistantMsg.tool_calls;
+      if (this.settings?.privacyProtection?.enabled
+          && typeof PrivacyFilter?.sanitizeToolCallsForContext === 'function') {
+        assistantToolCallsForCtx = PrivacyFilter.sanitizeToolCallsForContext(assistantMsg.tool_calls, {
+          maskArgs: this.settings.privacyProtection.filterArgs !== false,
+          scanTerminal: this.settings.privacyProtection.filterTerminal !== false
+        });
+      }
+      this.contextManager.addAssistantMessage(assistantMsg.content, assistantToolCallsForCtx, assistantMsg.reasoning);
 
       // 实时保存：AI 回复入上下文后立即持久化
       this.saveToHistory();
@@ -1944,7 +1954,13 @@ ${toolListSection}`;
                   try { batchArgs = JSON.parse(batchTc.function.arguments || '{}'); } catch { batchArgs = {}; }
                   // 不发射 tool_call/tool-result 事件 — 子代理有独立卡片和模态框
                   const r = await this.executeTool('runSubAgent', batchArgs);
-                  const resultStr = typeof r === 'string' ? r : JSON.stringify(r);
+                  let resultStr = typeof r === 'string' ? r : JSON.stringify(r);
+                  // 隐私信息保护：子代理结果报告注入父上下文前过滤隐私信息
+                  if (this.settings?.privacyProtection?.enabled
+                      && this.settings.privacyProtection.filterResults !== false
+                      && typeof PrivacyFilter?.filterPrivacyInfo === 'function') {
+                    resultStr = PrivacyFilter.filterPrivacyInfo(resultStr);
+                  }
                   this.contextManager.addToolResult(batchTc.id, 'runSubAgent', resultStr);
                 }));
               }
@@ -2052,6 +2068,12 @@ ${toolListSection}`;
             const head = resultStr.substring(0, 18000);
             const tail = resultStr.substring(resultStr.length - 2000);
             truncated = `${head}\n\n...[中间部分已截断，共${resultStr.length}字符]...\n\n${tail}`;
+          }
+          // 隐私信息保护：工具结果注入 AI 上下文前过滤手机号/证件号/密钥等隐私信息
+          if (this.settings?.privacyProtection?.enabled
+              && this.settings.privacyProtection.filterResults !== false
+              && typeof PrivacyFilter?.filterPrivacyInfo === 'function') {
+            truncated = PrivacyFilter.filterPrivacyInfo(truncated);
           }
           this.contextManager.addToolResult(tc.id, toolName, truncated);
 
@@ -3595,7 +3617,16 @@ ${tarotLine}
         if (!choice) break;
 
         const assistantMsg = choice.message;
-        subAgent.contextManager.addAssistantMessage(assistantMsg.content, assistantMsg.tool_calls);
+        // 隐私信息保护：子代理上下文的 tool_calls 同样使用脱敏副本（真实执行仍用原始参数）
+        let subToolCallsForCtx = assistantMsg.tool_calls;
+        if (this.settings?.privacyProtection?.enabled
+            && typeof PrivacyFilter?.sanitizeToolCallsForContext === 'function') {
+          subToolCallsForCtx = PrivacyFilter.sanitizeToolCallsForContext(assistantMsg.tool_calls, {
+            maskArgs: this.settings.privacyProtection.filterArgs !== false,
+            scanTerminal: this.settings.privacyProtection.filterTerminal !== false
+          });
+        }
+        subAgent.contextManager.addAssistantMessage(assistantMsg.content, subToolCallsForCtx);
 
         if (assistantMsg.content) {
           finalContent = assistantMsg.content;
@@ -3625,6 +3656,12 @@ ${tarotLine}
               const head = resultStr.substring(0, 18000);
               const tail = resultStr.substring(resultStr.length - 2000);
               truncated = `${head}\n\n...[中间部分已截断，共${resultStr.length}字符]...\n\n${tail}`;
+            }
+            // 隐私信息保护：子代理工具结果注入其上下文前同样过滤隐私信息
+            if (this.settings?.privacyProtection?.enabled
+                && this.settings.privacyProtection.filterResults !== false
+                && typeof PrivacyFilter?.filterPrivacyInfo === 'function') {
+              truncated = PrivacyFilter.filterPrivacyInfo(truncated);
             }
             subAgent.contextManager.addToolResult(tc.id, toolName, truncated);
             if (subAgent.onToolCall) subAgent.onToolCall(toolName, toolArgs, 'done', toolResult);
@@ -3665,26 +3702,28 @@ ${tarotLine}
       subAgentRecord.status = 'done';
       subAgentRecord.endTime = Date.now();
       subAgentRecord.messages = subAgent.contextManager.getMessages();
-      // 释放子代理内存：消息快照已复制到 record.messages（浅拷贝，共享消息对象），
-      // 清空子代理 contextManager 内容并断开回调闭包，避免每个完成/失败的
-      // 子代理完整上下文永久驻留（长会话多次 runSubAgent 内存线性增长的根源）。
-      const subCm = subAgent.contextManager;
-      if (subCm) {
-        subCm.messages = [];
-        subCm.historyMessages = [];
-        subCm.summaries = [];
-        subCm.compactBoundaries = [];
-        subCm.pinnedMessages = [];
-      }
+      // 子代理聊天记录完整保留在 record.messages（含 contextManager 数据），
+      // 点开详情模态框随时可查看完整对话；关闭模态框时仅移除 DOM 渲染，数据不释放。
+      // 仅断开回调闭包（onMessage/onToolCall/onTitleChange），释放对父代理的引用。
       subAgent.onMessage = null;
       subAgent.onToolCall = null;
       subAgent.onTitleChange = null;
-      // 限制子代理记录数量：只保留最近 N 条完整消息快照（供 UI 展开查看），
-      // 更早的释放 messages 数组（消息对象随之可被 GC）。
-      const MAX_SUB_AGENT_RECORDS = 20;
+      // 限制子代理记录数量上限：只保留最近 N 条完整消息快照（供 UI 展开查看），
+      // 超出上限的最早记录释放 subAgent 实例、contextManager 与消息快照
+      // （消息对象随之可被 GC），防止长会话运行大量子代理时记录无限累积。
+      const MAX_SUB_AGENT_RECORDS = 100;
       if (this.subAgents.length > MAX_SUB_AGENT_RECORDS) {
         const overflow = this.subAgents.splice(0, this.subAgents.length - MAX_SUB_AGENT_RECORDS);
         for (const rec of overflow) {
+          if (rec.subAgent?.contextManager) {
+            const cm = rec.subAgent.contextManager;
+            cm.messages = [];
+            cm.historyMessages = [];
+            cm.summaries = [];
+            cm.compactBoundaries = [];
+            cm.pinnedMessages = [];
+          }
+          rec.subAgent = null;
           rec.messages = [];
           rec.tarot = null;
         }

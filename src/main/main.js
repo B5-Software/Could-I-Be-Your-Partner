@@ -1511,6 +1511,12 @@ let settings = loadJSON(settingsPath, {
   tools: {},
   autoApproveSensitive: false,
   autoOptimizeToolSelection: false,
+  // 隐私信息保护：在工具调用过程中过滤隐私信息（手机号/证件号/SSN/API Key/SSH 私钥/.env/Tor/git key/配置密码）
+  // - enabled        : 总开关
+  // - filterResults  : 工具返回内容注入 AI 上下文前过滤（默认开）
+  // - filterArgs     : 工具参数写入上下文时敏感键值脱敏（默认开）
+  // - filterTerminal : 终端命令/脚本文本全文隐私扫描（默认开）
+  privacyProtection: { enabled: false, filterResults: true, filterArgs: true, filterTerminal: true },
   // 工具首次使用授权状态（持久化，跨会话生效）
   // - playwright: 内置浏览器工具集（browserNavigate/browserClick/browserType/...）
   // - computerUse: Computer Use 工具（computer，控制桌面鼠标键盘）
@@ -1561,7 +1567,7 @@ let settings = loadJSON(settingsPath, {
 });
 if (fs.existsSync(settingsPath)) {
   const saved = loadJSON(settingsPath, {});
-  settings = { ...settings, ...saved, llm: { ...settings.llm, ...(saved.llm || {}) }, agent: { ...settings.agent, ...(saved.agent || {}) }, imageGen: { ...settings.imageGen, ...(saved.imageGen || {}) }, theme: { ...settings.theme, ...(saved.theme || {}) }, aiPersona: { ...settings.aiPersona, ...(saved.aiPersona || {}) }, userProfile: { ...settings.userProfile, ...(saved.userProfile || {}) }, entropy: { ...settings.entropy, ...(saved.entropy || {}) }, proxy: { ...settings.proxy, ...(saved.proxy || {}) }, mcp: { ...settings.mcp, ...(saved.mcp || {}) }, email: { ...settings.email, ...(saved.email || {}) }, webControl: { ...settings.webControl, ...(saved.webControl || {}) }, budget: { ...settings.budget, ...(saved.budget || {}) }, terminal: { ...settings.terminal, ...(saved.terminal || {}) } };
+  settings = { ...settings, ...saved, llm: { ...settings.llm, ...(saved.llm || {}) }, agent: { ...settings.agent, ...(saved.agent || {}) }, imageGen: { ...settings.imageGen, ...(saved.imageGen || {}) }, theme: { ...settings.theme, ...(saved.theme || {}) }, aiPersona: { ...settings.aiPersona, ...(saved.aiPersona || {}) }, userProfile: { ...settings.userProfile, ...(saved.userProfile || {}) }, entropy: { ...settings.entropy, ...(saved.entropy || {}) }, proxy: { ...settings.proxy, ...(saved.proxy || {}) }, mcp: { ...settings.mcp, ...(saved.mcp || {}) }, email: { ...settings.email, ...(saved.email || {}) }, webControl: { ...settings.webControl, ...(saved.webControl || {}) }, budget: { ...settings.budget, ...(saved.budget || {}) }, terminal: { ...settings.terminal, ...(saved.terminal || {}) }, privacyProtection: { ...settings.privacyProtection, ...(saved.privacyProtection || {}) } };
   if (saved.budget) {
     settings.budget.models = { ...(settings.budget.models || {}), ...(saved.budget.models || {}) };
     settings.budget.peakHours = { ...(settings.budget.peakHours || {}), ...(saved.budget.peakHours || {}) };

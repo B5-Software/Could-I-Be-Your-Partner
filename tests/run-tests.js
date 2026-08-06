@@ -202,6 +202,105 @@ test('should have tool schemas function', () => {
   assert.ok(toolsContent.includes('getToolSchemas'));
 });
 
+// ---- Test Privacy Filter ----
+console.log('\nPrivacy Filter:');
+
+const vm = require('vm');
+const privacyContent = fs.readFileSync(require('path').join(__dirname, '../src/renderer/js/privacy-filter.js'), 'utf-8');
+const privSandbox = { window: {} };
+vm.createContext(privSandbox);
+vm.runInContext(privacyContent, privSandbox);
+const PrivacyFilter = privSandbox.window.PrivacyFilter;
+
+test('PrivacyFilter module should be exposed', () => {
+  assert.ok(PrivacyFilter, 'window.PrivacyFilter missing');
+  assert.strictEqual(typeof PrivacyFilter.filterPrivacyInfo, 'function');
+  assert.strictEqual(typeof PrivacyFilter.filterSensitiveArgs, 'function');
+  assert.strictEqual(typeof PrivacyFilter.sanitizeToolCallsForContext, 'function');
+});
+
+test('privacy filter masks API keys and git keys', () => {
+  assert.ok(!PrivacyFilter.filterPrivacyInfo('sk-abc1234567890abcdef1234567890abcdef').includes('sk-abc1234567890'));
+  assert.ok(PrivacyFilter.filterPrivacyInfo('sk-abc1234567890abcdef1234567890abcdef').includes('[已过滤'));
+  assert.ok(!PrivacyFilter.filterPrivacyInfo('ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefgh').includes('ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefgh'));
+  assert.ok(!PrivacyFilter.filterPrivacyInfo('github_pat_11ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef').includes('github_pat_11ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef'));
+  assert.ok(!PrivacyFilter.filterPrivacyInfo('glpat-1234567890abcdefghijkl').includes('glpat-1234567890abcdefghijkl'));
+});
+
+test('privacy filter masks ID numbers and SSN', () => {
+  assert.ok(!PrivacyFilter.filterPrivacyInfo('11010519900307123X').includes('11010519900307123X'));
+  assert.ok(!PrivacyFilter.filterPrivacyInfo('110105900307123').includes('110105900307123'));
+  assert.ok(!PrivacyFilter.filterPrivacyInfo('SSN 123-45-6789').includes('123-45-6789'));
+});
+
+test('privacy filter masks phone numbers', () => {
+  assert.ok(!PrivacyFilter.filterPrivacyInfo('手机号13812345678').includes('13812345678'));
+  assert.ok(!PrivacyFilter.filterPrivacyInfo('call (212) 555-0123 now').includes('212) 555-0123'));
+  assert.ok(!PrivacyFilter.filterPrivacyInfo('tel +8613812345678').includes('8613812345678'));
+});
+
+test('privacy filter masks SSH private keys', () => {
+  const key = '-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA1ABC\n-----END RSA PRIVATE KEY-----';
+  assert.ok(!PrivacyFilter.filterPrivacyInfo(key).includes('MIIEowIBAAKCAQEA1ABC'));
+});
+
+test('privacy filter masks .env secret lines and config password KV', () => {
+  const envOut = PrivacyFilter.filterPrivacyInfo('API_KEY=sk-abc1234567890\nDB_PASSWORD=hunter2\nPORT=8080');
+  assert.ok(!envOut.includes('hunter2'), '.env password should be masked');
+  assert.ok(envOut.includes('PORT=8080'), 'non-sensitive .env line should be kept');
+  const yamlOut = PrivacyFilter.filterPrivacyInfo('password: s3cr3t\nusername: alice');
+  assert.ok(!yamlOut.includes('s3cr3t'));
+  assert.ok(yamlOut.includes('username: alice'));
+  const jsonOut = PrivacyFilter.filterPrivacyInfo('{"client_secret":"xyz123","name":"bob"}');
+  assert.ok(!jsonOut.includes('xyz123'));
+  assert.ok(jsonOut.includes('"name":"bob"'));
+});
+
+test('privacy filter masks Tor .onion addresses', () => {
+  assert.ok(!PrivacyFilter.filterPrivacyInfo('http://abcdefghijklmnopqrstuvwxyz234567abcd.onion/path').includes('.onion'));
+  assert.ok(!PrivacyFilter.filterPrivacyInfo('visit abcdefghijklmnop.onion now').includes('abcdefghijklmnop.onion'));
+});
+
+test('privacy filter should not corrupt normal text', () => {
+  assert.strictEqual(PrivacyFilter.filterPrivacyInfo('const x = 42; return x * 2;'), 'const x = 42; return x * 2;');
+  const s = '{"enabled":true,"timeout":30,"name":"server","note":"authorization is tricky"}';
+  assert.strictEqual(PrivacyFilter.filterPrivacyInfo(s), s);
+  assert.strictEqual(PrivacyFilter.filterPrivacyInfo('the author wrote the book'), 'the author wrote the book');
+});
+
+test('filterSensitiveArgs masks sensitive keys and keeps others', () => {
+  const out = PrivacyFilter.filterSensitiveArgs({ apiKey: 'sk-xxx', DB_PASSWORD: 'pwd1', path: '/home/user', nested: { password: 'pwd', port: 3000 } });
+  assert.strictEqual(out.apiKey, '[已过滤]');
+  assert.strictEqual(out.DB_PASSWORD, '[已过滤]');
+  assert.strictEqual(out.path, '/home/user');
+  assert.strictEqual(out.nested.password, '[已过滤]');
+  assert.strictEqual(out.nested.port, 3000);
+});
+
+test('sanitizeToolCallsForContext keeps original tool_calls untouched', () => {
+  const tcs = [{ id: 'call_1', function: { name: 'readFile', arguments: '{"path":"/x","apiKey":"sk-zzz"}' } }];
+  const orig = JSON.stringify(tcs);
+  const clean = PrivacyFilter.sanitizeToolCallsForContext(tcs, { maskArgs: true, scanTerminal: true });
+  assert.strictEqual(orig, JSON.stringify(tcs), 'original must not be mutated');
+  assert.ok(!clean[0].function.arguments.includes('sk-zzz'));
+  assert.ok(clean[0].function.arguments.includes('/x'));
+});
+
+test('sanitizeToolCallsForContext scans terminal commands when enabled', () => {
+  const tcs = [{ id: 'c1', function: { name: 'runTerminalCommand', arguments: '{"command":"curl -H \\"Authorization: Bearer sk-abc1234567890abcdef\\" https://api.example.com"}' } }];
+  const withScan = PrivacyFilter.sanitizeToolCallsForContext(tcs, { maskArgs: false, scanTerminal: true });
+  assert.ok(!withScan[0].function.arguments.includes('sk-abc1234567890abcdef'), 'terminal command should be scanned');
+  const withoutScan = PrivacyFilter.sanitizeToolCallsForContext(tcs, { maskArgs: false, scanTerminal: false });
+  assert.ok(withoutScan[0].function.arguments.includes('sk-abc1234567890abcdef'), 'scanTerminal=false keeps text');
+});
+
+test('sub-agent chat history should be preserved on completion', () => {
+  const agentContent = fs.readFileSync(require('path').join(__dirname, '../src/renderer/js/agent.js'), 'utf-8');
+  const doneBlock = agentContent.slice(agentContent.indexOf('subAgentRecord.status = \'done\''));
+  assert.ok(!doneBlock.includes('subCm.messages = []'), 'sub-agent context messages must NOT be cleared on completion');
+  assert.ok(doneBlock.includes('MAX_SUB_AGENT_RECORDS = 100'), 'sub-agent record cap should be 100');
+});
+
 // ---- Test JS Runner ----
 console.log('\nJS Runner:');
 

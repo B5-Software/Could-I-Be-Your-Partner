@@ -1676,6 +1676,43 @@
                 </div>
               </div>
 
+              <!-- 隐私信息保护 -->
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-user-shield"></i> 隐私信息保护</h3>
+                <div class="setting-item">
+                  <label class="toggle-label">
+                    <span>启用隐私信息保护</span>
+                    <div class="toggle-switch">
+                      <input type="checkbox" id="setting-privacy-enabled">
+                      <span class="toggle-slider"></span>
+                    </div>
+                  </label>
+                  <p class="setting-hint">
+                    启用后，在工具调用过程中自动过滤手机号、证件号、社保号、API Key、SSH 私钥、.env 密钥行、Tor Hidden Service 地址、git key 以及配置文件（json/yaml/config 等）中的密码，防止隐私信息进入 AI 上下文与历史记录。
+                  </p>
+                </div>
+                <div class="setting-item" id="privacy-trigger-item">
+                  <label>过滤触发器（需开启总开关后生效）</label>
+                  <div class="privacy-trigger-options">
+                    <label class="checkbox-label">
+                      <input type="checkbox" id="setting-privacy-filter-results" checked>
+                      <span>工具结果过滤</span>
+                      <span class="privacy-trigger-desc">工具返回内容注入 AI 上下文前过滤</span>
+                    </label>
+                    <label class="checkbox-label">
+                      <input type="checkbox" id="setting-privacy-filter-args" checked>
+                      <span>工具参数脱敏</span>
+                      <span class="privacy-trigger-desc">写入上下文时隐藏参数中的密码、Token、密钥</span>
+                    </label>
+                    <label class="checkbox-label">
+                      <input type="checkbox" id="setting-privacy-filter-terminal" checked>
+                      <span>终端内容过滤</span>
+                      <span class="privacy-trigger-desc">终端命令与脚本中的密钥、Token 脱敏</span>
+                    </label>
+                  </div>
+                </div>
+              </div>
+
               <!-- 后台托盘模式 -->
               <div class="settings-group">
                 <h3><i class="fa-solid fa-window-restore"></i> 后台托盘</h3>
@@ -2754,6 +2791,7 @@
   <script src="../js/i18n/en.js"></script>
   <script src="../js/i18n/de.js"></script>
   <script src="../js/tools-def.js"></script>
+  <script src="../js/privacy-filter.js"></script>
   <script src="../js/context-manager.js"></script>
   <script src="../js/goal-state.js"></script>
   <script src="../../data/bundled-skills.js"></script>
