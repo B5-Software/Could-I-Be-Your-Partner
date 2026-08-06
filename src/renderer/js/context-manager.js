@@ -29,7 +29,14 @@ class ContextManager {
   constructor(maxTokens = 8192) {
     this.maxTokens = maxTokens;
     this.outputReserve = 0; // 输出预留：为模型生成回复保留的 token 空间
+    // 上下文管理器与历史记录解耦（参考 claude-code-ref 的 transcript/context 边界设计）：
+    //   - messages: 工作上下文（可被压缩/截断/清理），仅供 LLM 调用使用
+    //   - historyMessages: 完整历史记录（transcript，append-only，永不破坏）
+    //   两个数组共享消息对象引用，但上下文管理器的所有修改都采用
+    //   "replace-not-mutate" 模式（替换数组元素而非原地修改字段），
+    //   从而保证 historyMessages 中的原始消息对象永远不被破坏。
     this.messages = [];
+    this.historyMessages = [];
     this.pinnedMessages = []; // Important messages that should not be removed
     this.systemPrompt = null;
     this.summaries = []; // Compressed history summaries
@@ -85,10 +92,41 @@ class ContextManager {
   }
 
   addMessage(msg) {
+    // 同时追加到上下文与历史记录（共享引用）。
+    // 历史记录不会被任何压缩/清理操作破坏（参见 lightTrim/microCompact/sanitize
+    // 均采用 replace-not-mutate 模式）。
     this.messages.push(msg);
+    this.historyMessages.push(msg);
     // Sync lightweight trim — only runs strategy 1 (truncate long tool results).
     // Heavy LLM-based summarization is invoked explicitly via summarizeWithLLM().
     this.lightTrim();
+  }
+
+  /**
+   * 从历史会话加载消息（同时初始化上下文与历史记录）。
+   * 两个数组共享 conv.messages 的对象引用——上下文管理器后续的修改
+   * 会用 replace-not-mutate 模式替换 messages[i]，不会影响 historyMessages[i]。
+   *
+   * 注意：不恢复 summaries/compactBoundaries——历史记录是完整 transcript，
+   * 上下文管理器会在下次 agentLoop 中按需重新压缩。这样可以避免
+   * "完整 transcript + 旧摘要" 导致上下文溢出。
+   * @param {Array} messages 历史消息数组
+   */
+  loadFromHistory(messages) {
+    const arr = Array.isArray(messages) ? messages : [];
+    this.messages = arr.slice(); // 浅拷贝：避免上下文 slice() 影响入参
+    this.historyMessages = arr.slice(); // 历史记录独立持有一份引用
+    this.pinnedMessages = [];
+    this.summaries = []; // 清空：上下文管理器会按需重新压缩
+    this.compactBoundaries = [];
+  }
+
+  /**
+   * 获取完整历史记录（transcript），用于持久化保存。
+   * 返回的是 historyMessages 的浅拷贝，调用方可安全序列化。
+   */
+  getHistoryMessages() {
+    return this.historyMessages.slice();
   }
 
   addUserMessage(content) {
@@ -148,6 +186,10 @@ class ContextManager {
    * Lightweight synchronous trim: truncate long tool results.
    * Called on every addMessage. Does NOT call LLM.
    * 阈值纳入输出预留：占用 = 当前输入 + 输出预留，避免挤压输出空间。
+   *
+   * 采用 replace-not-mutate 模式：替换 messages[i] 为克隆对象，
+   * 而非原地修改 msg.content。这样共享同一引用的 historyMessages[i]
+   * 不会被破坏。
    */
   lightTrim() {
     const threshold = this.maxTokens * 0.85;
@@ -156,7 +198,8 @@ class ContextManager {
       if (this.pinnedMessages.includes(i)) continue;
       const msg = this.messages[i];
       if (msg.role === 'tool' && typeof msg.content === 'string' && msg.content.length > 500) {
-        msg.content = msg.content.substring(0, 300) + '\n...[内容已截断]';
+        // 替换数组元素为克隆，不修改原对象
+        this.messages[i] = { ...msg, content: msg.content.substring(0, 300) + '\n...[内容已截断]' };
       }
     }
   }
@@ -165,6 +208,9 @@ class ContextManager {
    * MicroCompact — clear stale tool results beyond a sliding window.
    * No API call. Replaces the old >70% "clear_tool_results" strategy.
    * Returns the count of cleared tool results.
+   *
+   * 采用 replace-not-mutate：替换 messages[idx] 为克隆对象，
+   * 不修改原对象（保护 historyMessages 中的引用）。
    */
   microCompact(keepLast = MICROCOMPACT_KEEP_LAST) {
     let cleared = 0;
@@ -179,11 +225,12 @@ class ContextManager {
         if (this.pinnedMessages.includes(idx)) continue;
         const msg = this.messages[idx];
         if (typeof msg.content === 'string' && msg.content.length > MICROCOMPACT_TRUNCATE_TO) {
-          msg.content = '[旧工具结果已清理，详见对话历史]';
+          // 替换为克隆，不修改原对象
+          this.messages[idx] = { ...msg, content: '[旧工具结果已清理，详见对话历史]' };
           cleared++;
         } else if (Array.isArray(msg.content)) {
           // 多模态工具结果：清理为文本提示
-          msg.content = '[旧工具结果已清理（含图片），详见对话历史]';
+          this.messages[idx] = { ...msg, content: '[旧工具结果已清理（含图片），详见对话历史]' };
           cleared++;
         }
       }
@@ -427,6 +474,7 @@ class ContextManager {
 
   clear() {
     this.messages = [];
+    this.historyMessages = [];
     this.pinnedMessages = [];
     this.summaries = [];
     this.compactBoundaries = [];
@@ -451,30 +499,45 @@ class ContextManager {
     const before = this.messages.length;
 
     // 第一遍：规范化字段类型（不删除，仅修正非法值）
-    for (const msg of this.messages) {
+    // 采用 replace-not-mutate：替换 messages[i] 为克隆对象，
+    // 不修改原对象（保护 historyMessages 中的引用）。
+    for (let i = 0; i < this.messages.length; i++) {
+      const msg = this.messages[i];
+      let clone = null;
       // content 必须是字符串或合法数组；null/undefined → ''
       if (msg.content === null || msg.content === undefined) {
-        msg.content = '';
+        clone = { ...msg, content: '' };
         details.push('修正空 content');
       }
-      // tool_calls.arguments 必须是字符串
+      // tool_calls.arguments 必须是字符串；缺失 id/type 需补全
       if (Array.isArray(msg.tool_calls)) {
-        for (const tc of msg.tool_calls) {
-          if (tc && tc.function && typeof tc.function.arguments !== 'string') {
-            try { tc.function.arguments = JSON.stringify(tc.function.arguments ?? {}); }
-            catch { tc.function.arguments = '{}'; }
+        let tcChanged = false;
+        const newToolCalls = msg.tool_calls.map(tc => {
+          if (!tc || !tc.function) return tc;
+          let newTc = tc;
+          let newFunc = tc.function;
+          if (typeof newFunc.arguments !== 'string') {
+            try { newFunc = { ...newFunc, arguments: JSON.stringify(newFunc.arguments ?? {}) }; }
+            catch { newFunc = { ...newFunc, arguments: '{}' }; }
+            newTc = { ...tc, function: newFunc };
+            tcChanged = true;
             details.push('修正 tool_calls.arguments 类型');
           }
-          // 缺失 id/type
-          if (!tc.id) tc.id = 'call_' + Math.random().toString(36).slice(2, 10);
-          if (!tc.type) tc.type = 'function';
+          if (!tc.id) { newTc = { ...newTc, id: 'call_' + Math.random().toString(36).slice(2, 10) }; tcChanged = true; }
+          if (!tc.type) { newTc = { ...newTc, type: 'function' }; tcChanged = true; }
+          return newTc;
+        });
+        if (tcChanged) {
+          clone = clone ? { ...clone, tool_calls: newToolCalls } : { ...msg, tool_calls: newToolCalls };
         }
       }
       // tool 消息必须要有 tool_call_id
       if (msg.role === 'tool' && !msg.tool_call_id) {
-        msg.tool_call_id = 'orphan_' + Math.random().toString(36).slice(2, 10);
+        clone = clone ? { ...clone, tool_call_id: 'orphan_' + Math.random().toString(36).slice(2, 10) }
+                      : { ...msg, tool_call_id: 'orphan_' + Math.random().toString(36).slice(2, 10) };
         details.push('补充 tool.tool_call_id');
       }
+      if (clone) this.messages[i] = clone;
     }
 
     // 第二遍：从末尾向前删除「空尾消息」（中断时残留的空 assistant）

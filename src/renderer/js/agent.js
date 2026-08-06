@@ -1363,10 +1363,13 @@ ${toolListSection}`;
   async saveToHistory() {
     if (!this.conversationId) return;
     try {
+      // 上下文管理器与历史记录解耦：
+      // 持久化完整 transcript（historyMessages），而非工作上下文（messages）。
+      // 工作上下文可能已被压缩/清理，但历史记录始终保持完整。
       const payload = {
         id: this.conversationId,
         title: this.conversationTitle || '未命名对话',
-        messages: this.contextManager.messages,
+        messages: this.contextManager.getHistoryMessages(),
         summaries: this.contextManager.summaries,
         tarotCard: this.tarotCard,
         workspacePath: this.workspacePath
@@ -1389,9 +1392,12 @@ ${toolListSection}`;
     this.conversationTitle = conversation.title;
     this.resetOptimizedTools();
     this.resetSessionUsage(); // 加载历史会话视为新一轮，重置统计
-    this.contextManager.clear();
-    this.contextManager.messages = conversation.messages || [];
-    this.contextManager.summaries = conversation.summaries || [];
+    // 上下文管理器与历史记录解耦：
+    // - historyMessages: 完整 transcript（永不破坏）
+    // - messages: 工作上下文（可被压缩/清理，独立于 historyMessages）
+    // 不恢复 summaries：避免完整 transcript + 旧摘要导致上下文溢出。
+    // 上下文管理器会在下次 agentLoop 中按需重新压缩。
+    this.contextManager.loadFromHistory(conversation.messages);
     if (conversation.tarotCard) {
       this.tarotCard = conversation.tarotCard;
       if (this.onMessage) this.onMessage('tarot', this.tarotCard);
@@ -1605,14 +1611,15 @@ ${toolListSection}`;
 
       // 终极兜底：截断后仍超限（极端情况，如单条消息超大），
       // 对所有工具结果执行强制截断 + 清除所有摘要外的历史
+      // 采用 replace-not-mutate：替换数组元素为克隆，不修改原对象（保护 historyMessages）
       if (newUsage2 > 90) {
-        // 截断所有工具结果内容
-        for (const m of ctx.messages) {
+        // 截断所有工具结果内容（克隆替换，不破坏历史记录）
+        for (let mi = 0; mi < ctx.messages.length; mi++) {
+          const m = ctx.messages[mi];
           if (m.role === 'tool' && typeof m.content === 'string' && m.content.length > 200) {
-            m.content = m.content.substring(0, 200) + '\n...[紧急截断]';
-          }
-          if (m.role === 'assistant' && typeof m.content === 'string' && m.content.length > 2000) {
-            m.content = m.content.substring(0, 2000) + '\n...[紧急截断]';
+            ctx.messages[mi] = { ...m, content: m.content.substring(0, 200) + '\n...[紧急截断]' };
+          } else if (m.role === 'assistant' && typeof m.content === 'string' && m.content.length > 2000) {
+            ctx.messages[mi] = { ...m, content: m.content.substring(0, 2000) + '\n...[紧急截断]' };
           }
         }
         // 保留 system prompt + 最后 2 条消息

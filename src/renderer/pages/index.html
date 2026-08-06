@@ -699,6 +699,7 @@
             <button class="settings-tab" data-tab="webcontrol"><i class="fa-solid fa-globe"></i> Web控制</button>
             <button class="settings-tab" data-tab="playwright"><i class="fa-solid fa-window-restore"></i> Playwright</button>
             <button class="settings-tab" data-tab="notifications"><i class="fa-solid fa-bell"></i> 通知</button>
+            <button class="settings-tab" data-tab="terminal"><i class="fa-solid fa-terminal"></i> 终端</button>
           </div>
           <div class="settings-panels">
             <div class="settings-panel active" data-tab="ai">
@@ -2147,6 +2148,50 @@
                 </div>
               </div>
             </div>
+            <div class="settings-panel" data-tab="terminal">
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-terminal"></i> 终端策略</h3>
+                <p class="setting-hint" style="margin-bottom:12px">
+                  配置 Abort（停止）聊天时，对正在运行的终端如何处理。
+                </p>
+                <div class="setting-item">
+                  <label class="setting-label">Abort 聊天时的终端策略</label>
+                  <select id="setting-terminal-abortstrategy" style="width:240px">
+                    <option value="kill">直接掐断运行中的终端（默认）</option>
+                    <option value="clearC">传入 Ctrl+C（保留终端会话）</option>
+                    <option value="none">不管，让终端继续运行</option>
+                  </select>
+                  <p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">
+                    「终结断」会同时结束终端内的进程；「Ctrl+C」相当于手动按键中止当前命令；「不管」则完全不动终端。
+                  </p>
+                </div>
+              </div>
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-gears"></i> Shell 选择</h3>
+                <p class="setting-hint" style="margin-bottom:12px">
+                  手动指定终端使用的 Shell。不熟悉时建议保持「自动检测」。
+                </p>
+                <div class="setting-item">
+                  <label class="setting-label">Shell</label>
+                  <select id="setting-terminal-shell" style="width:240px">
+                    <option value="auto" selected>自动检测（推荐）</option>
+                    <option value="pwsh">PowerShell 7+ (pwsh)</option>
+                    <option value="powershell">Windows PowerShell 5</option>
+                    <option value="cmd">CMD (Windows)</option>
+                    <option value="bash">Bash</option>
+                    <option value="zsh">Zsh</option>
+                    <option value="custom">自定义 Shell…</option>
+                  </select>
+                </div>
+                <div class="setting-item" id="terminal-custom-shell-row" style="display:none">
+                  <label class="setting-label">自定义 Shell 路径</label>
+                  <input type="text" id="setting-terminal-custom-path"
+                         placeholder="如 C:\Windows\System32\bash.exe 或 /bin/zsh"
+                         style="flex:1;max-width:360px">
+                  <p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">指定 Shell 不存在 or 无效时自动回退到自动检测。</p>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </section>
@@ -2451,6 +2496,25 @@
       </div>
       <div class="modal-footer">
         <button class="btn-primary" id="btn-ok-message">确定</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- History Loading Progress Modal: 大历史记录加载时显示进度，避免渲染器卡死 -->
+  <div class="modal-overlay hidden" id="history-progress-modal">
+    <div class="modal history-progress-modal">
+      <div class="modal-header">
+        <h3><i class="fa-solid fa-spinner fa-spin"></i> 正在加载历史记录</h3>
+      </div>
+      <div class="modal-body">
+        <div class="history-progress-info">
+          <span id="history-progress-text">准备加载…</span>
+          <span id="history-progress-count">0 / 0</span>
+        </div>
+        <div class="history-progress-bar">
+          <div class="history-progress-fill" id="history-progress-fill" style="width: 0%"></div>
+        </div>
+        <p class="history-progress-hint">正在分批渲染消息，避免界面卡顿。大历史记录可能需要数秒。</p>
       </div>
     </div>
   </div>

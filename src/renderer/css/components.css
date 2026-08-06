@@ -454,6 +454,40 @@
   word-wrap: break-word;
 }
 
+/* History Loading Progress Modal */
+.history-progress-modal {
+  width: min(90vw, 460px);
+}
+
+.history-progress-info {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.history-progress-bar {
+  height: 10px;
+  border-radius: 999px;
+  background: var(--border);
+  overflow: hidden;
+}
+
+.history-progress-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent, #4f8cff), var(--accent-light, #7aa9ff));
+  transition: width 0.15s ease-out;
+}
+
+.history-progress-hint {
+  margin-top: 12px;
+  font-size: 12px;
+  color: var(--text-tertiary, #999);
+}
+
 /* Pending delete highlight */
 .message.pending-delete {
   outline: 2px solid rgba(231, 76, 60, 0.7);

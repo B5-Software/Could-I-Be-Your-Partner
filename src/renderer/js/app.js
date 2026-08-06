@@ -588,6 +588,9 @@
   // 统一的聊天容器清空 + 增量推送
   function clearChatMessagesUI() {
     chatMessages.innerHTML = '';
+    // 递增回放 generation：取消任何进行中的异步历史回放，
+    // 防止新会话消息与旧会话残留交错
+    window.__chatReplayGeneration = (window.__chatReplayGeneration || 0) + 1;
     WebUIMirror.pushDomEvent({ type: 'dom_clear', container: getChatContainerSelector() });
     // 同步移除思考指示器（若存在）
     WebUIMirror.pushDomEvent({ type: 'dom_remove', selector: '#thinking-indicator' });
@@ -7168,6 +7171,45 @@
   document.getElementById('setting-budget-month-mode')?.addEventListener('change', () => loadBudgetChart('monthly'));
   loadBudgetSettings();
 
+  // ── Terminal Settings ──
+  // settings.terminal = { abortStrategy: 'kill'|'clearC'|'none', shell: 'auto'|..., customShellPath }
+  async function loadTerminalSettings() {
+    const s = await window.api.getSettings();
+    const t = s.terminal || {};
+    const abortSel = document.getElementById('setting-terminal-abortstrategy');
+    const shellSel = document.getElementById('setting-terminal-shell');
+    const customRow = document.getElementById('terminal-custom-shell-row');
+    const customInput = document.getElementById('setting-terminal-custom-path');
+    if (abortSel) abortSel.value = t.abortStrategy || 'kill';
+    if (shellSel) shellSel.value = t.shell || 'auto';
+    if (customInput) customInput.value = t.customShellPath || '';
+    if (customRow) customRow.style.display = (shellSel && shellSel.value === 'custom') ? '' : 'none';
+  }
+  document.getElementById('setting-terminal-abortstrategy')?.addEventListener('change', async (e) => {
+    const s = await window.api.getSettings();
+    if (!s.terminal) s.terminal = {};
+    s.terminal.abortStrategy = e.target.value;
+    await saveSettings(s);
+    window.showToast?.('终端策略已保存', 'success', 2000);
+  });
+  document.getElementById('setting-terminal-shell')?.addEventListener('change', async (e) => {
+    const s = await window.api.getSettings();
+    if (!s.terminal) s.terminal = {};
+    s.terminal.shell = e.target.value;
+    await saveSettings(s);
+    // 自定义路径输入框的显隐
+    const customRow = document.getElementById('terminal-custom-shell-row');
+    if (customRow) customRow.style.display = e.target.value === 'custom' ? '' : 'none';
+    window.showToast?.('Shell 设置已保存', 'success', 2000);
+  });
+  document.getElementById('setting-terminal-custom-path')?.addEventListener('change', async (e) => {
+    const s = await window.api.getSettings();
+    if (!s.terminal) s.terminal = {};
+    s.terminal.customShellPath = (e.target.value || '').trim();
+    await saveSettings(s);
+  });
+  loadTerminalSettings();
+
   async function loadMcpServerList() {
     const listEl = document.getElementById('mcp-servers-list');
     const toolsEl = document.getElementById('mcp-connected-tools');
@@ -8159,9 +8201,7 @@
             document.querySelector('.nav-item[data-page="chat"]')?.classList.add('active');
             document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
             document.getElementById('page-chat')?.classList.add('active');
-            chatMessages.innerHTML = '';
-            WebUIMirror.pushDomEvent({ type: 'dom_clear', container: '#chat-messages' });
-            WebUIMirror.pushDomEvent({ type: 'dom_remove', selector: '#thinking-indicator' });
+            clearChatMessagesUI();
             addThinkingIndicator();
           });
         });
@@ -8258,44 +8298,19 @@
           document.querySelector('.nav-item[data-page="chat"]')?.classList.add('active');
           document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
           document.getElementById('page-chat')?.classList.add('active');
-          // Replay messages（虚拟滚动分批渲染，避免长历史卡顿）
+          // Replay messages（异步分块渲染 + 进度模态框，避免长历史阻塞/卡死）
           chatMessages.innerHTML = '';
           if (typeof VirtualScroller !== 'undefined') VirtualScroller.reset();
           if (typeof VirtualScroller !== 'undefined') VirtualScroller.markBatchStart();
           WebUIMirror.pushDomEvent({ type: 'dom_clear', container: '#chat-messages' });
           WebUIMirror.pushDomEvent({ type: 'dom_remove', selector: '#thinking-indicator' });
-          const toolCallMap = {};
-          for (const msg of (conv.messages || [])) {
-            if (msg.role === 'user') {
-              addMessageToChat('user', extractTextContent(msg.content));
-            } else if (msg.role === 'assistant') {
-              if (msg.content) addMessageToChat('assistant', extractTextContent(msg.content));
-              if (msg.tool_calls && msg.tool_calls.length > 0) {
-                for (const tc of msg.tool_calls) {
-                  const toolName = tc.function?.name || 'tool';
-                  let args = {};
-                  try { args = JSON.parse(tc.function?.arguments || '{}'); } catch {}
-                  const toolDef = TOOL_DEFINITIONS.find(t => t.name === toolName);
-                  const displayName = toolDef?.desc || toolName;
-                  addToolCallToChat(displayName, toolName, args);
-                  if (tc.id) toolCallMap[tc.id] = toolName;
-                }
-              }
-            } else if (msg.role === 'tool') {
-              const toolName = msg.name || toolCallMap[msg.tool_call_id] || 'tool';
-              // 兼容旧版多模态 tool 消息 content 为数组的情况：提取文本，避免显示 [object Object]
-              let result = msg.content;
-              if (Array.isArray(result)) result = extractTextContent(result);
-              try { result = JSON.parse(result); } catch {}
-              updateToolCallResult(toolName, result);
-            } else if (msg.role === 'system') {
-              // 回放历史时显示系统消息（不重复持久化）
-              addSystemMessage(msg.content, { persist: false });
-            }
-          }
+          // 递增 generation：取消任何进行中的历史回放，防止新旧会话消息交错
+          const chatGeneration = (window.__chatReplayGeneration = (window.__chatReplayGeneration || 0) + 1);
+          await replayHistoryMessages(conv.messages || [], {
+            cancelCheck: () => window.__chatReplayGeneration !== chatGeneration
+          });
           // 批量加载结束：触发首屏渲染（仅渲染可视区域内的消息）
           if (typeof VirtualScroller !== 'undefined') VirtualScroller.markBatchEnd();
-
           requestAnimationFrame(() => {
             const last = chatMessages.lastElementChild;
             if (last) last.scrollIntoView({ behavior: 'smooth', block: 'end' });
@@ -8367,9 +8382,7 @@
         await window.api.historyDelete(btn.dataset.id);
         if (agent.conversationId === btn.dataset.id) {
           agent.newConversation();
-          chatMessages.innerHTML = '';
-          WebUIMirror.pushDomEvent({ type: 'dom_clear', container: '#chat-messages' });
-          WebUIMirror.pushDomEvent({ type: 'dom_remove', selector: '#thinking-indicator' });
+          clearChatMessagesUI();
           setTitlebarTitle('未命名对话');
         }
         loadHistoryPage();
@@ -8420,6 +8433,98 @@
     });
   }
 
+  // ---- History 加载进度模态框（非阻塞解析大历史记录） ----
+  // 大历史记录回放时逐批渲染，每批之间让出事件循环（yield），
+  // 模态框实时显示进度，避免渲染器长时间阻塞卡死。
+  function showHistoryProgress(total) {
+    const modal = document.getElementById('history-progress-modal');
+    if (!modal) return;
+    const fill = document.getElementById('history-progress-fill');
+    const count = document.getElementById('history-progress-count');
+    const text = document.getElementById('history-progress-text');
+    if (fill) fill.style.width = '0%';
+    if (count) count.textContent = `0 / ${total}`;
+    if (text) text.textContent = '正在解析历史记录…';
+    modal.classList.remove('hidden');
+  }
+
+  function updateHistoryProgress(done, total, label) {
+    const fill = document.getElementById('history-progress-fill');
+    const count = document.getElementById('history-progress-count');
+    const text = document.getElementById('history-progress-text');
+    const pct = total > 0 ? Math.min(100, Math.round((done / total) * 100)) : 100;
+    if (fill) fill.style.width = pct + '%';
+    if (count) count.textContent = `${done} / ${total}`;
+    if (text && label) text.textContent = label;
+  }
+
+  function hideHistoryProgress() {
+    const modal = document.getElementById('history-progress-modal');
+    if (modal) modal.classList.add('hidden');
+  }
+
+  // 让出事件循环一帧（macrotask），使进度模态框能刷新、DOM 能回流
+  function yieldHistoryUI() {
+    return new Promise(resolve => setTimeout(resolve, 0));
+  }
+
+  // 分块异步回放历史消息：每块处理完 yield 一次并刷新进度条。
+  // 返回 true 表示正常完成；返回 false 表示中途被取消（本次会话已切换）。
+  async function replayHistoryMessages(messages, opts = {}) {
+    const list = Array.isArray(messages) ? messages : [];
+    const total = list.length;
+    const chunkSize = opts.chunkSize || 40; // 每批处理 40 条，避免长任务阻塞
+    const cancelCheck = opts.cancelCheck || null; // 可选取消检查函数
+    const toolCallMap = {};
+    if (total > 0) showHistoryProgress(total);
+    let done = 0;
+    try {
+      for (let start = 0; start < total; start += chunkSize) {
+        // 每个 chunk 前检查是否被取消（用户切换会话/清空）
+        if (cancelCheck && cancelCheck()) return false;
+        const end = Math.min(total, start + chunkSize);
+        for (let i = start; i < end; i++) {
+          const msg = list[i];
+          if (!msg) continue;
+          if (msg.role === 'user') {
+            addMessageToChat('user', extractTextContent(msg.content));
+          } else if (msg.role === 'assistant') {
+            if (msg.content) addMessageToChat('assistant', extractTextContent(msg.content));
+            if (msg.tool_calls && msg.tool_calls.length > 0) {
+              for (const tc of msg.tool_calls) {
+                const toolName = tc.function?.name || 'tool';
+                let args = {};
+                try { args = JSON.parse(tc.function?.arguments || '{}'); } catch {}
+                const toolDef = TOOL_DEFINITIONS.find(t => t.name === toolName);
+                const displayName = toolDef?.desc || toolName;
+                addToolCallToChat(displayName, toolName, args);
+                if (tc.id) toolCallMap[tc.id] = toolName;
+              }
+            }
+          } else if (msg.role === 'tool') {
+            const toolName = msg.name || toolCallMap[msg.tool_call_id] || 'tool';
+            // 兼容旧版多模态 tool 消息 content 为数组的情况：提取文本，避免显示 [object Object]
+            let result = msg.content;
+            if (Array.isArray(result)) result = extractTextContent(result);
+            try { result = JSON.parse(result); } catch {}
+            updateToolCallResult(toolName, result);
+          } else if (msg.role === 'system') {
+            // 回放历史时显示系统消息（不重复持久化）
+            addSystemMessage(msg.content, { persist: false });
+          }
+          done++;
+        }
+        // 每个 chunk 处理完都刷新进度，并让出事件循环（使模态框能更新、DOM 能回流）
+        const isLast = end >= total;
+        updateHistoryProgress(done, total, isLast ? '渲染完成，正在收尾…' : `已渲染 ${done}/${total} 条消息`);
+        await yieldHistoryUI();
+      }
+      return true;
+    } finally {
+      hideHistoryProgress();
+    }
+  }
+
   // 从历史会话重建 Chat UI（供 pending-resume 和其他场景使用）
   // 注意：调用方应已调用 agent.loadFromHistory(conv) 同步状态
   function rebuildChatUIFromHistory(conv) {
@@ -8430,7 +8535,7 @@
     document.querySelector('.nav-item[data-page="chat"]')?.classList.add('active');
     document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
     document.getElementById('page-chat')?.classList.add('active');
-    // 清空并回放消息（虚拟滚动分批渲染，避免长历史卡顿）
+    // 清空并回放消息（异步分块渲染，避免长历史阻塞渲染器）
     chatMessages.innerHTML = '';
     if (typeof VirtualScroller !== 'undefined') VirtualScroller.reset();
     if (typeof VirtualScroller !== 'undefined') VirtualScroller.markBatchStart();
@@ -8438,39 +8543,18 @@
       WebUIMirror.pushDomEvent({ type: 'dom_clear', container: '#chat-messages' });
       WebUIMirror.pushDomEvent({ type: 'dom_remove', selector: '#thinking-indicator' });
     }
-    const toolCallMap = {};
-    for (const msg of (conv?.messages || [])) {
-      if (msg.role === 'user') {
-        addMessageToChat('user', extractTextContent(msg.content));
-      } else if (msg.role === 'assistant') {
-        if (msg.content) addMessageToChat('assistant', extractTextContent(msg.content));
-        if (msg.tool_calls && msg.tool_calls.length > 0) {
-          for (const tc of msg.tool_calls) {
-            const toolName = tc.function?.name || 'tool';
-            let args = {};
-            try { args = JSON.parse(tc.function?.arguments || '{}'); } catch {}
-            const toolDef = TOOL_DEFINITIONS.find(t => t.name === toolName);
-            const displayName = toolDef?.desc || toolName;
-            addToolCallToChat(displayName, toolName, args);
-            if (tc.id) toolCallMap[tc.id] = toolName;
-          }
-        }
-      } else if (msg.role === 'tool') {
-        const toolName = msg.name || toolCallMap[msg.tool_call_id] || 'tool';
-        // 兼容旧版多模态 tool 消息 content 为数组的情况：提取文本，避免显示 [object Object]
-        let result = msg.content;
-        if (Array.isArray(result)) result = extractTextContent(result);
-        try { result = JSON.parse(result); } catch {}
-        updateToolCallResult(toolName, result);
-      } else if (msg.role === 'system') {
-        addSystemMessage(msg.content, { persist: false });
-      }
-    }
-    // 批量加载结束：触发首屏渲染
-    if (typeof VirtualScroller !== 'undefined') VirtualScroller.markBatchEnd();
-    requestAnimationFrame(() => {
-      const last = chatMessages.lastElementChild;
-      if (last) last.scrollIntoView({ behavior: 'smooth', block: 'end' });
+    // 分块异步回放，不阻塞渲染器；完成后触发首屏渲染与滚动
+    // 每次启动回放递增 generation；其他入口（新会话/切换）也会递增以取消进行中的回放
+    const chatGeneration = (window.__chatReplayGeneration = (window.__chatReplayGeneration || 0) + 1);
+    replayHistoryMessages(conv?.messages || [], {
+      cancelCheck: () => window.__chatReplayGeneration !== chatGeneration
+    }).then(finished => {
+      if (typeof VirtualScroller !== 'undefined') VirtualScroller.markBatchEnd();
+      if (!finished) return;
+      requestAnimationFrame(() => {
+        const last = chatMessages.lastElementChild;
+        if (last) last.scrollIntoView({ behavior: 'smooth', block: 'end' });
+      });
     });
   }
 
