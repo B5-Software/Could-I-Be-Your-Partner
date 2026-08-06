@@ -934,6 +934,12 @@
         // 启动 Babe Agent（如果尚未启动）
         initBabeAgent();
       }
+      // 切换模式后同步标题栏为目标模式当前对话标题（无则显示"未命名对话"）
+      let modeTitle = '';
+      if (mode === 'chat') modeTitle = agent?.conversationTitle || '';
+      else if (mode === 'code') modeTitle = codeAgent?.conversationTitle || '';
+      else if (mode === 'babe') modeTitle = babeAgent?.conversationTitle || '';
+      setTitlebarTitle(modeTitle);
       // 同步模式切换到 WebUI（增量更新：modeSwitch 消息包含模式信息，WebUI 端 applyModeSwitch 处理 nav-item 显隐）
       try { window.api.webControlPushModeSwitch(mode); } catch (_) {}
       // 不再推送全量 body：nav-item 显隐由 WebUI 端 applyModeSwitch 处理

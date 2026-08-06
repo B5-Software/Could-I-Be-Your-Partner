@@ -44,6 +44,14 @@
   font-size: 13px;
 }
 
+/* 固定图标宽度并居中，保证宽/窄字形图标（如 fa-terminal 576 宽、其余 512 宽）
+   的文字起点与其他标签页一致对齐 */
+.settings-tab i {
+  width: 1.25em;
+  text-align: center;
+  flex-shrink: 0;
+}
+
 .settings-tab:hover {
   border-color: #2a9d8f;
   color: #2a9d8f;
