@@ -42,7 +42,6 @@
   border-bottom: 1px solid var(--border-color, rgba(128, 128, 128, 0.3));
   cursor: move;
   touch-action: none;
-  position: relative;
 }
 .oskey-title {
   font-size: 12px;
@@ -50,15 +49,12 @@
   white-space: nowrap;
   padding: 0 4px;
 }
-/* 功能按钮组（模式/退格/清空/关闭）在标题栏水平居中 */
+/* 功能按钮组（模式/退格/清空/关闭）居右，垂直居中 */
 .oskey-func-group {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  transform: translate(-50%, -50%);
   display: flex;
   align-items: center;
   gap: 4px;
+  margin-left: auto;
 }
 
 /* 通用小按钮（标题栏） */
