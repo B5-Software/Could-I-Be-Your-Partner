@@ -196,7 +196,7 @@ const BABE_ALLOWED_TOOLS = new Set([
   // 知识
   'searchKnowledge', 'addKnowledge',
   // 文件（基础）
-  'readFile', 'writeFile', 'listFiles',
+  'readFile', 'writeFile', 'listFiles', 'readImageFile',
   // 画布（简单绘图）
   'initCanvas', 'clearCanvas', 'addCanvasObject', 'updateCanvasObject', 'deleteCanvasObject', 'exportCanvasSVG',
   // 图片生成（可选，让 Babe 能发图）
