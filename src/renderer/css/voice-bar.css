@@ -1,0 +1,126 @@
+/*
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ * Copyright (c) 2026 B5-Software
+ *
+ * This file is part of Could I Be Your Partner.
+ * 置顶语音条样式（透明窗口 + 毛玻璃胶囊）
+ */
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body {
+  width: 100%;
+  height: 100%;
+  background: transparent;
+  overflow: hidden;
+  font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.voice-bar {
+  display: flex;
+  align-items: stretch;
+  width: calc(100% - 16px);
+  height: calc(100% - 16px);
+  margin: 8px;
+  border-radius: 22px;
+  background: rgba(28, 30, 38, 0.82);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35), 0 0 0 1px rgba(255, 255, 255, 0.08) inset;
+  color: #f2f4f8;
+  overflow: hidden;
+}
+
+.bar-drag {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 6px 0 16px;
+  -webkit-app-region: drag;
+  min-width: 0;
+}
+
+.bar-status-icon { flex-shrink: 0; display: flex; align-items: center; }
+
+.pulse-dot {
+  width: 12px; height: 12px;
+  border-radius: 50%;
+  background: #4f8cff;
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+.voice-bar.state-listening .pulse-dot { background: #4f8cff; }
+.voice-bar.state-thinking .pulse-dot { background: #f5a623; animation-duration: 0.9s; }
+.voice-bar.state-speaking .pulse-dot { background: #34c759; }
+.voice-bar.state-error .pulse-dot { background: #ff3b30; animation: none; }
+
+@keyframes pulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.45); opacity: 0.65; }
+}
+
+.bar-body { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center; gap: 3px; }
+
+.bar-state {
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  opacity: 0.62;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.bar-text {
+  font-size: 14.5px;
+  line-height: 1.35;
+  max-height: 40px;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  word-break: break-all;
+}
+
+.bar-text:empty::before { content: '…'; opacity: 0.3; }
+
+.bar-meter {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  height: 26px;
+  flex-shrink: 0;
+  opacity: 0.9;
+}
+
+.bar-meter span {
+  width: 3px;
+  height: 5px;
+  border-radius: 2px;
+  background: #4f8cff;
+  transition: height 0.08s linear;
+}
+
+.bar-actions {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  padding: 6px 10px 6px 4px;
+}
+
+.bar-btn {
+  width: 26px; height: 26px;
+  display: flex; align-items: center; justify-content: center;
+  border: none;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #d6dae2;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.bar-btn:hover { background: rgba(255, 255, 255, 0.18); }
+.bar-btn-danger:hover { background: rgba(255, 59, 48, 0.75); color: #fff; }

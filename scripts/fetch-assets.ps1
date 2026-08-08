@@ -218,5 +218,25 @@ if (-not $SkipThree) {
 }
 
 Write-Host "`n========================================" -ForegroundColor Cyan
+
+# ---- IME 词库（雾凇拼音 GPL-3.0 + Leipzig CC BY 4.0） ----
+Write-Step "IME 词库（中文拼音 / 英文 / 德文预测）"
+$imeDir = Join-Path $repoRoot "assets\ime"
+$imeZh = Join-Path $imeDir "ime-dict-zh.js"
+if (-not (Test-Path $imeZh)) {
+  try {
+    Push-Location $repoRoot
+    node scripts\build-ime-dicts.js
+    if ($LASTEXITCODE -ne 0) { throw "build-ime-dicts.js exit $LASTEXITCODE" }
+    Pop-Location
+  } catch {
+    Pop-Location
+    Write-Warn "IME 词库生成失败（可稍后手动运行 node scripts/build-ime-dicts.js）：$($_.Exception.Message)"
+  }
+} else {
+  Write-Ok "IME 词库已存在，跳过（如需更新请删除 $imeZh 后重跑）"
+}
+
+Write-Host "`n========================================" -ForegroundColor Cyan
 Write-Host "  Done!" -ForegroundColor Green
 Write-Host "========================================" -ForegroundColor Cyan

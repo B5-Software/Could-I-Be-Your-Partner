@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<!--
+  SPDX-License-Identifier: GPL-3.0-or-later
+  Copyright (c) 2026 B5-Software
+  This file is part of Could I Be Your Partner.
+-->
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline' blob:; media-src 'self' blob:; img-src 'self' data:; connect-src 'self' blob:">
+  <title>Voice Bar</title>
+  <link rel="stylesheet" href="../css/voice-bar.css">
+</head>
+<body>
+  <div class="voice-bar" id="bar">
+    <div class="bar-drag" id="bar-drag">
+      <div class="bar-status-icon" id="status-icon">
+        <span class="pulse-dot"></span>
+      </div>
+      <div class="bar-body">
+        <div class="bar-state" id="bar-state">聆听中…</div>
+        <div class="bar-text" id="bar-text"></div>
+      </div>
+      <div class="bar-meter" id="bar-meter">
+        <span></span><span></span><span></span><span></span><span></span>
+      </div>
+    </div>
+    <div class="bar-actions">
+      <button class="bar-btn" id="btn-main" title="打开主窗口">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M12 3l9 8h-3v9h-4v-6H10v6H6v-9H3z"/></svg>
+      </button>
+      <button class="bar-btn" id="btn-restart" title="重新识别">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M17.65 6.35A8 8 0 1 0 19.73 14h-2.08a6 6 0 1 1-1.41-6.24L13 11h7V4z"/></svg>
+      </button>
+      <button class="bar-btn bar-btn-danger" id="btn-close" title="关闭">
+        <svg viewBox="0 0 24 24" width="14" height="14" fill="currentColor"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+      </button>
+    </div>
+  </div>
+  <script src="../js/voice-capture.js"></script>
+  <script src="../js/voice-bar.js"></script>
+</body>
+</html>

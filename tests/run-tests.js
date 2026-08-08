@@ -1257,6 +1257,209 @@ async function runLiveLLMTests() {
   }
 }
 
+// ---- IME Engine ----
+console.log('\nIME Engine:');
+const ImeEngine = require('../src/renderer/js/oskey/ime-engine.js');
+
+const mockZh = {
+  v: 1,
+  syll: ['ai', 'an', 'hao', 'ni', 'o', 'wo', 'men', 'xin', 'huo', 'zhong', 'guo', 'bei', 'jing', 'lv', 'lve', 'nv'],
+  chars: {
+    ai: [['爱', 1516399], ['艾', 212019]],
+    an: [['安', 867275], ['案', 120000]],
+    hao: [['好', 7259684], ['号', 513737]],
+    ni: [['你', 1422192], ['泥', 120657]],
+    o: [['哦', 3563330], ['噢', 496080]],
+    wo: [['我', 29569261], ['握', 340839]],
+    men: [['们', 509405], ['门', 120000]],
+    xin: [['心', 2000000], ['新', 1500000]],
+    huo: [['火', 1200000], ['货', 1100000]],
+    zhong: [['中', 3000000], ['重', 200000]],
+    guo: [['国', 2500000], ['果', 300000]],
+    lv: [['绿', 3000000], ['律', 1800000], ['旅', 900000]],
+    nv: [['女', 2500000], ['恧', 100]],
+    lve: [['略', 1200000], ['掠', 800000]],
+    bei: [['北', 1000000], ['杯', 900000]],
+    jing: [['京', 800000], ['景', 700000]],
+  },
+  words: {
+    nihao: [['你好', 332885], ['拟好', 3685]],
+    women: [['我们', 509405], ['窝门', 100]],
+    xinhuo: [['新货', 800000], ['心火', 750000]],
+    zhongguo: [['中国', 1200000]],
+    beijing: [['北京', 1000000]],
+  },
+  codes: ['nihao', 'women', 'xinhuo', 'zhongguo', 'beijing'],
+  abbr: {
+    nh: [['你好', 332885], ['女孩', 200000]],
+    wm: [['我们', 509405]],
+  },
+};
+
+const mockEn = ['apple', 'apples', 'applet', 'applaud', 'applause'];
+const mockDe = ['ein', 'eine', 'einem', 'einer', 'einen'];
+
+function makeEngine() {
+  const e = new ImeEngine();
+  assert.ok(e.initZh(JSON.parse(JSON.stringify(mockZh))));
+  e.initEn(mockEn.slice());
+  e.initDe(mockDe.slice());
+  return e;
+}
+
+function wordsOf(engine, input, opts) {
+  return engine.getCandidates(input, Object.assign({ maxLength: 10, limit: 8 }, opts || {}))
+    .map((x) => x.word);
+}
+
+test('exact word match ranked first (nihao -> 你好)', () => {
+  const r = wordsOf(makeEngine(), 'nihao');
+  assert.strictEqual(r[0], '你好');
+  assert.ok(r.includes('拟好'));
+});
+
+test('single syllable char first (wo -> 我)', () => {
+  const r = wordsOf(makeEngine(), 'wo');
+  assert.strictEqual(r[0], '我');
+});
+
+test('multi-syllable exact word (wo men -> 我们)', () => {
+  const r = wordsOf(makeEngine(), 'women');
+  assert.strictEqual(r[0], '我们');
+});
+
+test('combo must not override exact match', () => {
+  // 'zhongguo' 存在完整词 中国，组合候选(中+国)不得压过它
+  const r = wordsOf(makeEngine(), 'zhongguo');
+  assert.strictEqual(r[0], '中国');
+  const zhEntry = makeEngine().getCandidates('zhongguo', { maxLength: 10, limit: 8 })
+    .find((x) => x.word === '中国');
+  assert.strictEqual(zhEntry.type, 'exact');
+});
+
+test('abbr (简拼) works', () => {
+  const r = wordsOf(makeEngine(), 'nh');
+  assert.ok(r.includes('你好'));
+});
+
+test('syllable splitting avoids fake syllables', () => {
+  const e = makeEngine();
+  assert.strictEqual(e._isSyllable('nihao'), false);
+  assert.strictEqual(e._isSyllable('ni'), true);
+  assert.strictEqual(e._isSyllable('hao'), true);
+});
+
+test('single syllable skips sub-segment chars (ai -> 爱 first)', () => {
+  const r = wordsOf(makeEngine(), 'ai');
+  assert.strictEqual(r[0], '爱');
+  assert.ok(!r.includes('哦')); // 不应混入 a/i 拆分后的单字
+});
+
+test('predictEn returns prefix matches', () => {
+  assert.deepStrictEqual(makeEngine().predictEn('appl', 3), ['apple', 'apples', 'applet']);
+});
+
+test('predictDe returns prefix matches (case insensitive)', () => {
+  assert.deepStrictEqual(makeEngine().predictDe('Ein', 3), ['ein', 'eine', 'einem']);
+});
+
+test('empty input returns no candidates', () => {
+  assert.deepStrictEqual(makeEngine().getCandidates(''), []);
+  assert.deepStrictEqual(makeEngine().getCandidates('123!@#'), []);
+});
+
+// ---- OskIme Manager ----
+console.log('\nOskIme Manager:');
+const OskIme = require('../src/renderer/js/oskey/oskey-ime.js');
+
+function makeOsk() {
+  global.ImeEngineInstance = makeEngine();
+  const o = new OskIme();
+  o.setMode('zh');
+  return o;
+}
+
+test('OskIme buffers letters and exposes candidates', () => {
+  const o = makeOsk();
+  o.typeLetter('n');
+  o.typeLetter('i');
+  o.typeLetter('h');
+  o.typeLetter('a');
+  o.typeLetter('o');
+  assert.strictEqual(o.getState().buffer, 'nihao');
+  const cands = o.getState().candidates;
+  assert.strictEqual(cands[0].word, '你好');
+});
+
+test('OskIme commitSelected commits by index', () => {
+  const o = makeOsk();
+  o.typeLetter('w');
+  o.typeLetter('o');
+  assert.strictEqual(o.commitSelected(0), '我');
+  assert.strictEqual(o.getState().buffer, '');
+});
+
+test('OskIme backspace removes last letter', () => {
+  const o = makeOsk();
+  o.typeLetter('w');
+  o.typeLetter('o');
+  o.backspace();
+  assert.strictEqual(o.getState().buffer, 'w');
+});
+
+test('OskIme en mode predicts via engine', () => {
+  const o = makeOsk();
+  o.setMode('en');
+  const preds = o.predict('appl');
+  assert.ok(preds.includes('apple'));
+});
+
+test('OskIme shift controls letter case', () => {
+  const o = makeOsk();
+  o.shift = true;
+  assert.strictEqual(o.letterForInsert('a'), 'A');
+  o.shift = false;
+  assert.strictEqual(o.letterForInsert('a'), 'a');
+});
+
+test('OskIme v acts as ü (lv -> 绿)', () => {
+  const o = makeOsk();
+  o.typeLetter('l');
+  o.typeLetter('v');
+  assert.strictEqual(o.getState().buffer, 'lü'); // 展示 ü
+  assert.strictEqual(o.getState().candidates[0].word, '绿');
+  o.typeLetter('e');
+  assert.strictEqual(o.getState().buffer, 'lüe');
+});
+
+test('OskIme accepts ü key in zh (lü -> 绿)', () => {
+  const o = makeOsk();
+  o.typeLetter('l');
+  o.typeLetter('ü');
+  assert.strictEqual(o.getState().buffer, 'lü');
+  assert.strictEqual(o.getState().candidates[0].word, '绿');
+});
+
+test('OskIme backspace works on ü buffer', () => {
+  const o = makeOsk();
+  o.typeLetter('n');
+  o.typeLetter('v');
+  o.backspace();
+  assert.strictEqual(o.getState().buffer, 'n');
+});
+
+test('OskIme letterForInsert uppercases German umlauts', () => {
+  const o = makeOsk();
+  o.setMode('de');
+  o.shift = true;
+  assert.strictEqual(o.letterForInsert('ä'), 'Ä');
+  assert.strictEqual(o.letterForInsert('ü'), 'Ü');
+  assert.strictEqual(o.letterForInsert('ß'), 'ẞ');
+  o.shift = false;
+  assert.strictEqual(o.letterForInsert('ä'), 'ä');
+  assert.strictEqual(o.letterForInsert('ß'), 'ß');
+});
+
 // ---- Summary ----
 (async () => {
   // 等待异步 LLM 测试完成

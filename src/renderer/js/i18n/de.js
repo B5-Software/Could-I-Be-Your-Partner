@@ -110,6 +110,7 @@ ui: {
       budget: 'Budgetsteuerung',
       notifications: 'Benachrichtigungen',
       terminal: 'Terminal',
+      ime: 'Tastatur / IME',
       language: 'Sprache'
     },
     name: 'Name',
@@ -211,6 +212,17 @@ ui: {
     prev: 'Zurück',
     finish: 'Fertig',
     skip: 'Überspringen'
+  },
+
+  // ── Bildschirmtastatur ──
+  oskey: {
+    title: 'Bildschirmtastatur',
+    space: 'Leertaste',
+    backspace: 'Rücktaste',
+    clear: 'Löschen',
+    close: 'Schließen',
+    enter: 'Neue Zeile / Senden',
+    resize: 'Ziehen zum Verändern der Größe'
   },
 
   // Remote connection
@@ -1051,10 +1063,10 @@ _textMap: {
   '点击右侧按钮自动获取模型列表，也可手动输入': 'Klicke die Schaltfläche zum Abrufen der Modellliste oder manuell eingeben',
   '获取模型列表': 'Modelle abrufen',
   'Zen API Key': 'Zen-API-Key',
-  '使用免登录公共 Key 调用 6 个免费模型': 'Public Key für 6 kostenlose Modelle ohne Anmeldung nutzen',
+  '使用免登录公共 Key 调用限时免费模型': 'Public Key für zeitlich begrenzte kostenlose Modelle ohne Anmeldung nutzen',
   '生成新 Key': 'Neuen Key generieren',
   '从': 'Von',
-  '获取，按量付费，含免费模型。点击「生成新 Key」可免登录使用 6 个限时免费模型（key=public）': '. Pay-as-you-go, inklusive kostenlose Modelle. Klicke "Neuen Key generieren" für 6 zeitlich begrenzte kostenlose Modelle (key=public)',
+  '获取，按量付费，含限时免费模型。点击「生成新 Key」可免登录使用限时免费模型（key=public）': '. Pay-as-you-go, inklusive zeitlich begrenzte kostenlose Modelle. "Neuen Key generieren" für zeitlich begrenzte kostenlose Modelle ohne Login (key=public)',
   '点击刷新获取可用模型列表': 'Klicken zum Aktualisieren der verfügbaren Modelle',
   '推理强度 (仅支持的模型生效)': 'Reasoning-Aufwand (nur unterstützte Modelle)',
   '低': 'Niedrig',

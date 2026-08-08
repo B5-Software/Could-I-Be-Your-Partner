@@ -52,3 +52,9 @@ tests/webui-login-test.js
 tests/webui-login-test-output.*
 tests/pw-browser-test/
 tmp/
+
+# IME 词库数据（由 scripts/build-ime-dicts.js 生成，体积大，运行时下载）。
+# 新建克隆后执行  node scripts/build-ime-dicts.js  重新生成。
+# LICENSES.md（数据来源与许可证说明）保留在版本库。
+assets/ime/ime-dict-*.js
+!assets/ime/LICENSES.md

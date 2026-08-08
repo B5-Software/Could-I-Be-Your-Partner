@@ -1583,11 +1583,16 @@ let settings = loadJSON(settingsPath, {
   //     'cmd'        - CMD
   //     'bash' / 'zsh' - POSIX shell
   //     'custom'     - 使用 customShellPath 指定的自定义 Shell
-  terminal: { abortStrategy: 'kill', shell: 'auto', customShellPath: '' }
+  terminal: { abortStrategy: 'kill', shell: 'auto', customShellPath: '' },
+  // 屏幕软键盘 / 输入法（OSK+IME）：
+  //   enabled:       应用启动时是否自动打开屏幕键盘（可在输入框工具栏手动开关）
+  //   mode:          默认输入模式 'zh' | 'en' | 'de'
+  //   candidateCount:候选词数量
+  ime: { enabled: false, mode: 'zh', candidateCount: 9 }
 });
 if (fs.existsSync(settingsPath)) {
   const saved = loadJSON(settingsPath, {});
-  settings = { ...settings, ...saved, llm: { ...settings.llm, ...(saved.llm || {}) }, agent: { ...settings.agent, ...(saved.agent || {}) }, imageGen: { ...settings.imageGen, ...(saved.imageGen || {}) }, theme: { ...settings.theme, ...(saved.theme || {}) }, aiPersona: { ...settings.aiPersona, ...(saved.aiPersona || {}) }, userProfile: { ...settings.userProfile, ...(saved.userProfile || {}) }, entropy: { ...settings.entropy, ...(saved.entropy || {}) }, proxy: { ...settings.proxy, ...(saved.proxy || {}) }, mcp: { ...settings.mcp, ...(saved.mcp || {}) }, email: { ...settings.email, ...(saved.email || {}) }, webControl: { ...settings.webControl, ...(saved.webControl || {}) }, budget: { ...settings.budget, ...(saved.budget || {}) }, terminal: { ...settings.terminal, ...(saved.terminal || {}) }, privacyProtection: { ...settings.privacyProtection, ...(saved.privacyProtection || {}) } };
+  settings = { ...settings, ...saved, llm: { ...settings.llm, ...(saved.llm || {}) }, agent: { ...settings.agent, ...(saved.agent || {}) }, imageGen: { ...settings.imageGen, ...(saved.imageGen || {}) }, theme: { ...settings.theme, ...(saved.theme || {}) }, aiPersona: { ...settings.aiPersona, ...(saved.aiPersona || {}) }, userProfile: { ...settings.userProfile, ...(saved.userProfile || {}) }, entropy: { ...settings.entropy, ...(saved.entropy || {}) }, proxy: { ...settings.proxy, ...(saved.proxy || {}) }, mcp: { ...settings.mcp, ...(saved.mcp || {}) }, email: { ...settings.email, ...(saved.email || {}) }, webControl: { ...settings.webControl, ...(saved.webControl || {}) }, budget: { ...settings.budget, ...(saved.budget || {}) }, terminal: { ...settings.terminal, ...(saved.terminal || {}) }, privacyProtection: { ...settings.privacyProtection, ...(saved.privacyProtection || {}) }, ime: { ...settings.ime, ...(saved.ime || {}) } };
   if (saved.budget) {
     settings.budget.models = { ...(settings.budget.models || {}), ...(saved.budget.models || {}) };
     settings.budget.peakHours = { ...(settings.budget.peakHours || {}), ...(saved.budget.peakHours || {}) };
@@ -2053,7 +2058,7 @@ function broadcastThemeChanged() {
   }
 }
 function broadcastSettingsChanged() {
-  const payload = { language: settings.language, theme: settings.theme };
+  const payload = { language: settings.language, theme: settings.theme, ime: settings.ime };
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) win.webContents.send('settings:changed', payload);
   }
@@ -8545,6 +8550,12 @@ app.whenReady().then(async () => {
       webControlService.pushReoptimizeState(visible);
     }
   });
+  // 渲染器屏幕软键盘状态 → 广播到 WebUI
+  ipcMain.on('webControl:pushOskState', (_, state) => {
+    if (webControlService.running && typeof webControlService.pushOskState === 'function') {
+      webControlService.pushOskState(state);
+    }
+  });
   // WebUI → 渲染器：模式切换
   if (typeof webControlService.onSwitchMode !== 'undefined') {
     webControlService.onSwitchMode = (mode) => {
@@ -8555,6 +8566,12 @@ app.whenReady().then(async () => {
   if (typeof webControlService.onReoptimizeTools !== 'undefined') {
     webControlService.onReoptimizeTools = () => {
       mainWindow?.webContents?.send('webControl:reoptimizeTools');
+    };
+  }
+  // WebUI → 渲染器：切换屏幕软键盘
+  if (typeof webControlService.onToggleOsk !== 'undefined') {
+    webControlService.onToggleOsk = () => {
+      mainWindow?.webContents?.send('webControl:toggleOsk');
     };
   }
   // ---- DOM Mirror bridge ----

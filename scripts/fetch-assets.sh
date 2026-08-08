@@ -214,6 +214,18 @@ if [[ "$SKIP_THREE" == "false" ]]; then
   # 因此 pcb-3d.js 内部自带了一个轻量 OrbitControls 实现（旋转/缩放/平移），无需下载额外文件。
 fi
 
+# ---- IME 词库（雾凇拼音 GPL-3.0 + Leipzig CC BY 4.0） ----
+info "IME 词库（中文拼音 / 英文 / 德文预测）"
+ime_dir="$REPO_ROOT/assets/ime"
+ime_zh="$ime_dir/ime-dict-zh.js"
+if [[ ! -f "$ime_zh" ]]; then
+  if ! (cd "$REPO_ROOT" && node scripts/build-ime-dicts.js); then
+    warn "IME 词库生成失败（可稍后手动运行 node scripts/build-ime-dicts.js）"
+  fi
+else
+  ok "IME 词库已存在，跳过（如需更新请删除 $ime_zh 后重跑）"
+fi
+
 echo -e "\n\033[36m========================================"
 echo -e "  \033[32mDone!\033[0m"
 echo -e "\033[36m========================================\033[0m"

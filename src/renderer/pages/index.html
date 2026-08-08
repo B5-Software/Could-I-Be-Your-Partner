@@ -71,6 +71,9 @@
           <i class="fa-solid fa-globe"></i> Remote
         </button>
       </div>
+      <button class="titlebar-btn" id="osk-toggle-btn" title="屏幕软键盘 (F8)">
+        <i class="fa-solid fa-keyboard"></i>
+      </button>
       <button class="titlebar-btn" id="btn-minimize" title="最小化"><i class="fa-solid fa-minus"></i></button>
       <button class="titlebar-btn" id="btn-maximize" title="最大化"><i class="fa-regular fa-square"></i></button>
       <button class="titlebar-btn titlebar-close" id="btn-close" title="关闭"><i class="fa-solid fa-xmark"></i></button>
@@ -700,6 +703,7 @@
             <button class="settings-tab" data-tab="playwright"><i class="fa-solid fa-window-restore"></i> Playwright</button>
             <button class="settings-tab" data-tab="notifications"><i class="fa-solid fa-bell"></i> 通知</button>
             <button class="settings-tab" data-tab="terminal"><i class="fa-solid fa-terminal"></i> 终端</button>
+            <button class="settings-tab" data-tab="ime"><i class="fa-solid fa-keyboard"></i> 输入法</button>
           </div>
           <div class="settings-panels">
             <div class="settings-panel active" data-tab="ai">
@@ -904,11 +908,11 @@
                       <button class="btn-icon btn-toggle-pwd" data-target="setting-llm-zen-key">
                         <i class="fa-solid fa-eye"></i>
                       </button>
-                      <button class="btn-secondary btn-sm" id="btn-zen-generate-key" title="使用免登录公共 Key 调用 6 个免费模型">
+                      <button class="btn-secondary btn-sm" id="btn-zen-generate-key" title="使用免登录公共 Key 调用限时免费模型">
                         <i class="fa-solid fa-wand-magic-sparkles"></i> 生成新 Key
                       </button>
                     </div>
-                    <div class="setting-hint">从 <a href="#" id="link-zen-auth">opencode.ai/auth</a> 获取，按量付费，含免费模型。点击「生成新 Key」可免登录使用 6 个限时免费模型（key=public）</div>
+                    <div class="setting-hint">从 <a href="#" id="link-zen-auth">opencode.ai/auth</a> 获取，按量付费，含限时免费模型。点击「生成新 Key」可免登录使用限时免费模型（key=public）</div>
                   </div>
                   <div class="setting-item">
                     <label>模型</label>
@@ -2255,6 +2259,49 @@
                 </div>
               </div>
             </div>
+            <div class="settings-panel" data-tab="ime">
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-keyboard"></i> 屏幕软键盘 / 输入法</h3>
+                <p class="setting-hint" style="margin-bottom:12px">
+                  内置屏幕软键盘，支持中文拼音（雾凇拼音词库）与英文/德文输入。
+                  点击窗口标题栏的键盘图标或按 F8 随时开关。词库由 scripts/build-ime-dicts.js 下载生成。
+                </p>
+                <div class="setting-item">
+                  <label class="setting-label">应用启动时自动打开屏幕软键盘</label>
+                  <div class="toggle-switch">
+                    <input type="checkbox" id="setting-ime-enabled">
+                    <span class="toggle-slider"></span>
+                  </div>
+                  <p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">关闭后键盘图标/F8 仍可临时打开；开启时应用启动即显示。</p>
+                </div>
+                <div class="setting-item">
+                  <label class="setting-label">默认输入模式</label>
+                  <select id="setting-ime-mode" style="width:240px">
+                    <option value="zh" selected>中文（拼音）</option>
+                    <option value="en">英文</option>
+                    <option value="de">德文</option>
+                  </select>
+                </div>
+                <div class="setting-item">
+                  <label class="setting-label">候选词数量</label>
+                  <select id="setting-ime-candidate-count" style="width:240px">
+                    <option value="5">5</option>
+                    <option value="7">7</option>
+                    <option value="9" selected>9</option>
+                    <option value="12">12</option>
+                    <option value="15">15</option>
+                  </select>
+                </div>
+                <div class="setting-item">
+                  <label class="setting-label">键盘不透明度</label>
+                  <div style="display:flex;align-items:center;gap:10px">
+                    <input type="range" id="setting-ime-opacity" min="30" max="100" step="5" value="100" style="width:200px">
+                    <span class="setting-value" id="setting-ime-opacity-val" style="min-width:44px;text-align:right;font-size:13px;color:var(--text-secondary)">100%</span>
+                  </div>
+                  <p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">键盘整体透明度，默认不透明。</p>
+                </div>
+              </div>
+            </div>
           </div>
         </div>
       </section>
@@ -2825,6 +2872,9 @@
   <script src="../js/spreadsheet.js"></script>
   <script src="../js/virtual-scroller.js"></script>
   <script src="../js/download-manager.js"></script>
+  <script src="../js/oskey/ime-engine.js"></script>
+  <script src="../js/oskey/oskey-ime.js"></script>
+  <script src="../js/oskey/oskey.js"></script>
   <script src="../js/app.js"></script>
   <!-- 全局 Toast 容器：用于请求失败重试等自动消失提示 -->
   <div id="toast-container" style="position:fixed;top:60px;right:20px;z-index:10000;display:flex;flex-direction:column;gap:8px;pointer-events:none"></div>

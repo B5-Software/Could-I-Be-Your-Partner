@@ -223,6 +223,7 @@ const I18N_SELECTOR_MAP = [
   { sel: '.settings-tab[data-tab="budget"]', key: 'ui.settings.tabs.budget' },
   { sel: '.settings-tab[data-tab="notifications"]', key: 'ui.settings.tabs.notifications' },
   { sel: '.settings-tab[data-tab="terminal"]', key: 'ui.settings.tabs.terminal' },
+  { sel: '.settings-tab[data-tab="ime"]', key: 'ui.settings.tabs.ime' },
 
   // ── Language settings panel ──
   { sel: '#setting-language option[value="zh-CN"]', key: 'ui.settings.zhCN' },

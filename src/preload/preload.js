@@ -442,6 +442,8 @@ contextBridge.exposeInMainWorld('api', {
   webControlPushModeSwitch: (mode) => ipcRenderer.send('webControl:pushModeSwitch', mode),
   webControlPushContextProgress: (data) => ipcRenderer.send('webControl:pushContextProgress', data),
   webControlPushReoptimizeState: (visible) => ipcRenderer.send('webControl:pushReoptimizeState', visible),
+  webControlPushOskState: (state) => ipcRenderer.send('webControl:pushOskState', state),
+  onWebControlToggleOsk: (cb) => ipcRenderer.on('webControl:toggleOsk', () => cb()),
   onWebControlSwitchMode: (cb) => ipcRenderer.on('webControl:switchMode', (_, mode) => cb(mode)),
   onWebControlReoptimizeTools: (cb) => ipcRenderer.on('webControl:reoptimizeTools', () => cb()),
   avatarPickAndEncode: () => ipcRenderer.invoke('avatar:pickAndEncode'),

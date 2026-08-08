@@ -1,6 +1,6 @@
 {
   "name": "could-i-be-your-partner",
-  "version": "1.6.0-alpha.1",
+  "version": "1.6.0-alpha.2",
   "description": "全自动AI Agent，帮助完成一切任务",
   "license": "GPL-3.0-or-later",
   "main": "src/main/main.js",
@@ -51,7 +51,9 @@
       {
         "from": "assets/aria2/${os}-${arch}",
         "to": "aria2",
-        "filter": ["**/*"]
+        "filter": [
+          "**/*"
+        ]
       }
     ],
     "win": {
@@ -132,9 +134,11 @@
     "node-pty": "^1.1.0",
     "nodemailer": "^9.0.3",
     "otpauth": "^9.5.1",
+    "pinyin-pro": "^3.28.2",
     "playwright": "^1.61.1",
     "qrcode": "^1.5.4",
     "serialport": "^13.0.0",
+    "sherpa-onnx-node": "^1.13.4",
     "tesseract.js": "^6.0.1"
   }
 }

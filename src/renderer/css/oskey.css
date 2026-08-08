@@ -1,0 +1,230 @@
+/*
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ * Copyright (c) 2026 B5-Software
+ * This file is part of Could I Be Your Partner.
+ */
+
+/* ---------- 屏幕软键盘（悬浮可拖拽/可缩放面板） ---------- */
+#oskey {
+  position: fixed;
+  right: 16px;
+  bottom: 16px;
+  width: 560px;
+  height: 300px;
+  min-width: 300px;
+  min-height: 220px;
+  z-index: 2147483000;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-secondary, #1e1e1e);
+  opacity: var(--oskey-opacity, 1);
+  border: 1px solid var(--border-color, rgba(128, 128, 128, 0.45));
+  border-radius: 10px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
+  padding: 0;
+  user-select: none;
+  -webkit-user-select: none;
+  font-family: inherit;
+  overflow: hidden;
+  -webkit-app-region: no-drag;
+}
+#oskey.hidden { display: none !important; }
+
+/* ---------- 标题栏（拖拽手柄） ---------- */
+.oskey-titlebar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 30px;
+  flex: 0 0 30px;
+  padding: 0 6px;
+  background: var(--bg-tertiary, #2a2a2a);
+  border-bottom: 1px solid var(--border-color, rgba(128, 128, 128, 0.3));
+  cursor: move;
+  touch-action: none;
+  position: relative;
+}
+.oskey-title {
+  font-size: 12px;
+  color: var(--text-secondary, #999);
+  white-space: nowrap;
+  padding: 0 4px;
+}
+/* 功能按钮组（模式/退格/清空/关闭）在标题栏水平居中 */
+.oskey-func-group {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* 通用小按钮（标题栏） */
+.oskey-func {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  height: 22px;
+  padding: 0 7px;
+  border: 1px solid var(--border-color, rgba(128, 128, 128, 0.35));
+  border-radius: 6px;
+  background: var(--bg-secondary, #262626);
+  color: var(--text-primary, #ddd);
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  font-family: inherit;
+}
+.oskey-func:hover { filter: brightness(1.2); }
+.oskey-func:active { filter: brightness(0.9); }
+.oskey-titlebar .oskey-func i { pointer-events: none; }
+
+/* ---------- 候选条（固定高度，避免 UI 跳动） ---------- */
+.oskey-candidate-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 30px;
+  flex: 0 0 30px;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--border-color, rgba(128, 128, 128, 0.25));
+  overflow: hidden;
+}
+.oskey-buffer {
+  font-size: 14px;
+  color: var(--accent-color, #4f8cff);
+  white-space: nowrap;
+  min-width: 40px;
+  font-weight: 600;
+  flex: 0 0 auto;
+}
+.oskey-cand-list {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: nowrap;
+  overflow: hidden;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.oskey-cand-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary, #ddd);
+  cursor: pointer;
+  font-size: 14px;
+  white-space: nowrap;
+  flex: 0 0 auto;
+  min-width: 0;
+}
+.oskey-cand-item.selected {
+  background: var(--accent-color, #4f8cff);
+  color: #fff;
+}
+.oskey-cand-item.selected .oskey-cand-idx {
+  color: rgba(255, 255, 255, 0.85);
+}
+.oskey-cand-idx {
+  font-size: 10px;
+  color: var(--text-secondary, #888);
+  flex: 0 0 auto;
+}
+.oskey-cand-word {
+  white-space: nowrap;
+}
+
+/* ---------- 键盘主体（等分行，缩放时整体伸缩） ---------- */
+.oskey-keyboard {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px 8px 8px;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.oskey-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 3 1 0;
+  min-height: 0;
+}
+.oskey-row {
+  display: flex;
+  gap: 6px;
+  flex: 1 1 0;
+  min-height: 0;
+}
+.oskey-key {
+  flex: 1 1 0;
+  height: 100%;
+  min-width: 0;
+  border: 1px solid var(--border-color, rgba(128, 128, 128, 0.35));
+  border-radius: 8px;
+  background: var(--bg-tertiary, #2a2a2a);
+  color: var(--text-primary, #ddd);
+  font-size: 16px;
+  cursor: pointer;
+  text-transform: uppercase;
+  line-height: 1;
+  touch-action: none;
+  font-family: inherit;
+}
+.oskey-key:hover { filter: brightness(1.15); }
+.oskey-key:active { filter: brightness(0.9); }
+
+.oskey-nav-row {
+  display: flex;
+  gap: 6px;
+  flex: 1 1 0;
+  min-height: 0;
+}
+.oskey-key-shift {
+  flex: 0 0 16%;
+}
+.oskey-key-pad {
+  flex: 0 0 16%;
+}
+.oskey-key-space {
+  flex: 1 1 0;
+  font-size: 13px;
+}
+.oskey-key-enter {
+  flex: 0 0 18%;
+}
+.oskey-key-shift.active {
+  background: var(--accent-color, #4f8cff);
+  color: #fff;
+  border-color: var(--accent-color, #4f8cff);
+}
+
+/* ---------- 缩放手柄（圆角） ---------- */
+.oskey-resize-handle {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 18px;
+  height: 18px;
+  cursor: nwse-resize;
+  touch-action: none;
+}
+.oskey-resize-handle::after {
+  content: '';
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 9px;
+  height: 9px;
+  border-radius: 10px 0 0 0;
+  border-top: 2px solid var(--text-secondary, #888);
+  border-left: 2px solid var(--text-secondary, #888);
+  opacity: 0.6;
+}

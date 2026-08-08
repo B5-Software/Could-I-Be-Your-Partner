@@ -4397,12 +4397,12 @@
       const agentInput = card.querySelector('.agent-count-input');
 
       btnAccept.addEventListener('click', () => {
-        const count = parseInt(agentInput.value) || numAgents;
+        const count = agentInput ? (parseInt(agentInput.value) || numAgents) : numAgents;
         card.classList.add('accepted');
         btnAccept.textContent = '已接受';
         btnAccept.disabled = true;
         btnIgnore.disabled = true;
-        agentInput.disabled = true;
+        if (agentInput) agentInput.disabled = true;
         resolve({ accepted: true, game, agentCount: count });
       });
 
@@ -4410,7 +4410,7 @@
         card.classList.add('ignored');
         btnAccept.disabled = true;
         btnIgnore.disabled = true;
-        agentInput.disabled = true;
+        if (agentInput) agentInput.disabled = true;
         resolve({ accepted: false, game, agentCount: 0 });
       });
 
@@ -6396,6 +6396,7 @@
     // Update toggle button state
     updateWcToggleButton();
     setupWebControlEvents();
+    loadImeSettings();
   }
 
   // ---- MCP Settings Helpers ----
@@ -7581,7 +7582,7 @@
   if (zenGenKeyBtn) zenGenKeyBtn.addEventListener('click', async () => {
     const keyInput = document.getElementById('setting-llm-zen-key');
     if (!keyInput) return;
-    // 使用 opencode 内置的免登录公共 key："public"（仅可调用 6 个限时免费模型）
+    // 使用 opencode 内置的免登录公共 key："public"（仅可调用限时免费模型）
     keyInput.value = 'public';
     keyInput.dataset.publicKey = '1';
     const s = await window.api.getSettings();
@@ -7592,7 +7593,7 @@
     // 刷新模型列表，过滤为仅显示免费模型
     await refreshZenModels(s.llm.model);
     const hint = document.getElementById('zen-model-hint');
-    if (hint) hint.textContent = '已使用免登录公共 Key（public），仅可调用 6 个限时免费模型';
+    if (hint) hint.textContent = '已使用免登录公共 Key（public），仅可调用限时免费模型';
   });
 
   // OpenAI/Anthropic compatible models refresh button
@@ -12359,5 +12360,129 @@
     e.target.style.height = 'auto';
     e.target.style.height = Math.min(e.target.scrollHeight, 120) + 'px';
   });
+
+  /* ==================== 屏幕软键盘 (OSK) ==================== */
+  function getOskCore() {
+    return window.OskCoreInstance || null;
+  }
+  function toggleOsk() {
+    const osk = getOskCore();
+    if (!osk) return;
+    if (osk.visible) osk.hide();
+    else { osk._ensureDict().catch(() => {}); osk.show(); }
+    syncOskBtn();
+  }
+
+  function syncOskBtn() {
+    const osk = getOskCore();
+    const btn = document.getElementById('osk-toggle-btn');
+    if (btn && osk) {
+      btn.classList.toggle('active', osk.visible);
+      btn.setAttribute('data-active', osk.visible ? '1' : '0');
+    }
+  }
+
+  // 标题栏按钮
+  const oskToggleBtn = document.getElementById('osk-toggle-btn');
+  if (oskToggleBtn) {
+    oskToggleBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      toggleOsk();
+    });
+  }
+
+  // 快捷键 F8
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'F8') {
+      e.preventDefault();
+      toggleOsk();
+    }
+  });
+
+  // WebUI → 切换屏幕软键盘
+  if (typeof window.api?.onWebControlToggleOsk === 'function') {
+    window.api.onWebControlToggleOsk(() => { toggleOsk(); syncOskBtn(); });
+  }
+
+  // OSK 状态变化 → 同步标题栏按钮 + WebUI
+  function oskStateObserver() {
+    const osk = getOskCore();
+    if (!osk) {
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', () => setTimeout(oskStateObserver, 50));
+      } else {
+        setTimeout(oskStateObserver, 100);
+      }
+      return;
+    }
+    const origPush = osk._pushWebState.bind(osk);
+    osk._pushWebState = () => {
+      syncOskBtn();
+      origPush();
+    };
+  }
+  oskStateObserver();
+
+  // 设置变化 → 同步到 OSK（含子页面 settings:changed 广播）
+  if (typeof window.api?.onSettingsChanged === 'function') {
+    window.api.onSettingsChanged((s) => {
+      if (s && s.ime && getOskCore()) getOskCore().applySettings(s.ime);
+    });
+  }
+
+  /* ==================== 设置页：输入法标签 ==================== */
+  async function loadImeSettings() {
+    const s = await window.api.getSettings();
+    const ime = s.ime || {};
+    const set = (id, val) => { const el = document.getElementById(id); if (el) el.value = val; };
+    const setChk = (id, val) => { const el = document.getElementById(id); if (el) el.checked = !!val; };
+    set('setting-ime-mode', ime.mode || 'zh');
+    set('setting-ime-candidate-count', ime.candidateCount ?? 9);
+    setChk('setting-ime-enabled', ime.enabled);
+    const opEl = document.getElementById('setting-ime-opacity');
+    const opVal = document.getElementById('setting-ime-opacity-val');
+    const opPct = Math.round((ime.opacity ?? 1) * 100);
+    if (opEl) { opEl.value = Math.max(30, Math.min(100, opPct)); if (opVal) opVal.textContent = opEl.value + '%'; }
+  }
+
+  function bindImeSettings() {
+    const els = {
+      'setting-ime-mode': (v) => ({ mode: v }),
+      'setting-ime-candidate-count': (v) => ({ candidateCount: parseInt(v) || 9 }),
+      'setting-ime-enabled': (v) => ({ enabled: !!v }),
+      'setting-ime-opacity': (v) => ({ opacity: (parseInt(v) || 100) / 100 }),
+    };
+    Object.keys(els).forEach((id) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      const build = els[id];
+      const handler = async (e) => {
+        let val = e.target.value;
+        if (e.target.type === 'checkbox') val = e.target.checked;
+        const s = await window.api.getSettings();
+        s.ime = Object.assign({}, s.ime || {}, build(val));
+        await saveSettings(s);
+        if (getOskCore()) getOskCore().applySettings(s.ime);
+        if (id === 'setting-ime-enabled') {
+          const osk = getOskCore();
+          if (val && osk) { osk._ensureDict().catch(() => {}); osk.show(); }
+          if (!val && osk) osk.hide();
+        }
+        window.showToast?.('输入法设置已保存', 'success', 2000);
+      };
+      el.addEventListener('change', handler);
+      if (el.type === 'range') {
+        el.addEventListener('input', () => {
+          const valId = id + '-val';
+          const valEl = document.getElementById(valId);
+          if (valEl) valEl.textContent = (id === 'setting-ime-opacity') ? el.value + '%' : el.value + 'px';
+        });
+      }
+    });
+  }
+
+  // 挂载到 loadSettingsPage：每次打开设置页时刷新输入法设置
+  bindImeSettings();
+  loadImeSettings();
 
 })();

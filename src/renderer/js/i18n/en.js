@@ -98,6 +98,7 @@ const EN_DICT = {
         budget: 'Budget Control',
         notifications: 'Notifications',
         terminal: 'Terminal',
+        ime: 'Keyboard / IME',
         language: 'Language'
       },
       labels: {
@@ -207,6 +208,17 @@ const EN_DICT = {
       workspace: 'Workspace',
       openWorkspaceFirst: 'Please open a workspace folder first'
     }
+  },
+
+  // ── On-Screen Keyboard ──
+  oskey: {
+    title: 'On-screen Keyboard',
+    space: 'Space',
+    backspace: 'Backspace',
+    clear: 'Clear',
+    close: 'Close',
+    enter: 'Newline / Send',
+    resize: 'Drag to resize'
   },
 
   // ── Tool Descriptions ──
@@ -1020,10 +1032,10 @@ ${p.toolListSection}`;
     '点击右侧按钮自动获取模型列表，也可手动输入': 'Click the button to auto-fetch model list, or enter manually',
     '获取模型列表': 'Fetch models',
     'Zen API Key': 'Zen API Key',
-    '使用免登录公共 Key 调用 6 个免费模型': 'Use public key for 6 free models without login',
+    '使用免登录公共 Key 调用限时免费模型': 'Use public key for limited-time free models without login',
     '生成新 Key': 'Generate new key',
     '从': 'From',
-    '获取，按量付费，含免费模型。点击「生成新 Key」可免登录使用 6 个限时免费模型（key=public）': '. Pay-as-you-go, includes free models. Click "Generate new key" to use 6 time-limited free models (key=public)',
+    '获取，按量付费，含限时免费模型。点击「生成新 Key」可免登录使用限时免费模型（key=public）': '. Pay-as-you-go, includes limited-time free models. Click "Generate new key" to use limited-time free models without logging in (key=public)',
     '点击刷新获取可用模型列表': 'Click to refresh available models',
     '推理强度 (仅支持的模型生效)': 'Reasoning effort (supported models only)',
     '低': 'Low',
@@ -1662,7 +1674,7 @@ ${p.toolListSection}`;
     '个可用模型': ' available models',
     '个可用模型（标 [免费] 的为免费模型）': ' available models ([free] = free models)',
     '[免费]': '[Free]',
-    '已使用免登录公共 Key（public），仅可调用 6 个限时免费模型': 'Using public key (public), limited to 6 time-limited free models',
+    '已使用免登录公共 Key（public），仅可调用限时免费模型': 'Using public key (public), limited to limited-time free models',
 
     // ── Tarot UI (half-width colon variant) ──
     '命运之牌:': 'Tarot:',

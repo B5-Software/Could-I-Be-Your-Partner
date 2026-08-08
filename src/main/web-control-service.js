@@ -42,6 +42,7 @@ class WebControlService {
     this.onMirrorInit = null;  // () => void — WS client connected, request renderer to push mirror snapshot
     this.onUiEvent = null;     // (data) => void — WebUI UI event forwarded to renderer
     this.onFileUploaded = null; // (filePath, fileName, isImage) => void — WebUI uploaded file, notify renderer to refresh attachments
+    this.onToggleOsk = null;   // () => void — WebUI 切换屏幕软键盘
 
     // Upload directory — set by main.js to workspace base dir
     this.workDir = null;
@@ -58,6 +59,7 @@ class WebControlService {
     this._currentMode = 'chat';
     this._currentContextProgress = null;
     this._reoptimizeVisible = false;
+    this._oskState = null;      // { visible, mode } 屏幕软键盘状态
     this._cachedHead = null;    // 缓存的 mirror_head 快照
     this._cachedBody = null;    // 缓存的 mirror_body 快照
   }
@@ -517,6 +519,12 @@ class WebControlService {
     this.broadcast({ type: 'reoptimizeState', visible: !!visible });
   }
 
+  // 屏幕软键盘状态同步（WebUI 显示/切换）
+  pushOskState(state) {
+    this._oskState = state || null;
+    this.broadcast({ type: 'oskState', state: this._oskState });
+  }
+
   // DOM 镜像更新：渲染器 → WS 广播
   // mirror_head / 小 mirror_body（<2MB）：缓存供新客户端重放
   // 分块 mirror_body（start/chunk/end）：主进程不累积合并（35MB+ 会导致 OOM），直接逐块广播
@@ -563,6 +571,7 @@ class WebControlService {
         mode: this._currentMode,
         contextProgress: this._currentContextProgress,
         reoptimizeVisible: this._reoptimizeVisible,
+        oskState: this._oskState,
       }));
       // 立即重放缓存的 head 快照（样式），确保新客户端不出现无样式闪烁
       if (this._cachedHead) {
@@ -639,6 +648,10 @@ class WebControlService {
       case 'reoptimizeTools':
         if (this.onReoptimizeTools) this.onReoptimizeTools();
         break;
+      // 远程切换屏幕软键盘
+      case 'toggleOsk':
+        if (this.onToggleOsk) this.onToggleOsk();
+        break;
       // DOM 镜像：WebUI UI 事件转发到渲染器
       case 'ui_event':
         if (this.onUiEvent) this.onUiEvent(msg);
@@ -651,6 +664,7 @@ class WebControlService {
             mode: this._currentMode || 'chat',
             contextProgress: this._currentContextProgress || null,
             reoptimizeVisible: !!this._reoptimizeVisible,
+            oskState: this._oskState,
           }));
         } catch {}
         break;
@@ -881,6 +895,9 @@ html,body{height:100%;overflow:hidden;font-family:-apple-system,BlinkMacSystemFo
       case 'contextProgress':
         applyContextProgress(msg.data);
         break;
+      case 'oskState':
+        applyOskState(msg.state);
+        break;
       case 'auth_fail':
         authenticated=false;
         loginErr.textContent=msg.error||'认证失败';
@@ -1034,6 +1051,25 @@ html,body{height:100%;overflow:hidden;font-family:-apple-system,BlinkMacSystemFo
         });
       }
     }catch(e){console.error('[WebUI] modeSwitch error:',e);}
+    finally{setTimeout(function(){applyingRemote=false;},20);}
+  }
+
+  // 更新屏幕软键盘状态按钮
+  function applyOskState(state){
+    applyingRemote=true;
+    try{
+      var btn=document.getElementById('osk-toggle-btn');
+      if(btn){
+        if(state&&state.visible){
+          btn.classList.add('active');
+          btn.setAttribute('data-active','1');
+        }else{
+          btn.classList.remove('active');
+          btn.setAttribute('data-active','0');
+        }
+        if(state&&state.mode)btn.setAttribute('title','屏幕软键盘 ('+state.mode+')');
+      }
+    }catch(e){console.error('[WebUI] oskState error:',e);}
     finally{setTimeout(function(){applyingRemote=false;},20);}
   }
 

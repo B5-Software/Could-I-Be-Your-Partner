@@ -152,6 +152,10 @@ body {
   background: var(--bg-hover);
 }
 
+.titlebar-btn.active {
+  color: var(--accent-color);
+}
+
 .titlebar-close:hover {
   background: #e74c3c;
   color: white;
