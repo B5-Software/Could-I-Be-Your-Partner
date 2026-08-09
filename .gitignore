@@ -58,3 +58,6 @@ tmp/
 # LICENSES.md（数据来源与许可证说明）保留在版本库。
 assets/ime/ime-dict-*.js
 !assets/ime/LICENSES.md
+
+# Voice models (download-voice-models.js)
+assets/voice-models/

@@ -62,6 +62,7 @@ class WebControlService {
     this._oskState = null;      // { visible, mode } 屏幕软键盘状态
     this._cachedHead = null;    // 缓存的 mirror_head 快照
     this._cachedBody = null;    // 缓存的 mirror_body 快照
+    this._voiceCapabilities = null; // { ready, workerRunning, wakeActive, missing, ... } 语音引擎能力
   }
 
   configure(webSettings) {
@@ -665,7 +666,14 @@ class WebControlService {
             contextProgress: this._currentContextProgress || null,
             reoptimizeVisible: !!this._reoptimizeVisible,
             oskState: this._oskState,
+            voiceCapabilities: this._voiceCapabilities,
           }));
+        } catch {}
+        break;
+      // WebUI 请求语音引擎能力状态（模型是否就绪、唤醒/STT/TTS 可用）
+      case 'voiceGetStatus':
+        try {
+          ws.send(JSON.stringify({ type: 'voiceStatus', capabilities: this._voiceCapabilities }));
         } catch {}
         break;
       // 远程客户端请求历史对话列表
@@ -696,7 +704,76 @@ class WebControlService {
           try { ws.send(JSON.stringify({ type: 'uploadResult', ok: false, error: e.message })); } catch {}
         }
         break;
+      // ---- 语音：WebUI 音频帧（Int16 PCM → base64, 16kHz mono）----
+      case 'voiceAudio':
+        try {
+          if (msg.samples && msg.sessionId && typeof this.onVoiceAudio === 'function') {
+            const buf = Buffer.from(msg.samples, 'base64');
+            this.onVoiceAudio(msg.sessionId, buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength));
+          }
+        } catch {}
+        break;
+      // ---- 语音：STT 会话控制（start/stop/cancel）----
+      case 'voiceSttControl':
+        try {
+          if (typeof this.onVoiceSttControl === 'function') {
+            this.onVoiceSttControl(msg);
+          }
+        } catch {}
+        break;
     }
+  }
+
+  // ===== 语音事件 → WebUI WS 广播 =====
+  // 由 main.js voiceIpc.onVoiceEvent 回调调用
+  /**
+   * 更新语音引擎能力状态（模型就绪、唤醒/STT/TTS 可用）。
+   * @param {object} caps { ready, workerRunning, wakeActive, sttActiveSessions, missing, ... }
+   */
+  setVoiceCapabilities(caps) {
+    this._voiceCapabilities = caps ? { ...caps } : null;
+    if (this.running && this.wsClients.size > 0) {
+      this.broadcast({ type: 'voiceStatus', capabilities: this._voiceCapabilities });
+    }
+  }
+  pushVoiceEvent(channel, payload) {
+    try {
+      if (!this.running || this.wsClients.size === 0) return;
+      switch (channel) {
+        case 'voice:stt-partial':
+          this.broadcast({ type: 'sttPartial', sessionId: payload.sessionId, text: payload.text });
+          break;
+        case 'voice:stt-final':
+          this.broadcast({ type: 'sttFinal', sessionId: payload.sessionId, text: payload.text });
+          break;
+        case 'voice:tts-audio':
+          if (payload && payload.samples) {
+            const buf = Buffer.from(payload.samples);
+            this.broadcast({
+              type: 'ttsAudio',
+              reqId: payload.reqId,
+              samples: buf.toString('base64'),
+              sampleRate: payload.sampleRate || 24000,
+              progress: payload.progress,
+            });
+          }
+          break;
+        case 'voice:tts-done':
+          this.broadcast({ type: 'ttsDone', reqId: payload.reqId });
+          break;
+        case 'voice:tts-error':
+          this.broadcast({ type: 'ttsError', reqId: payload.reqId, error: payload.error });
+          break;
+        case 'voice:wake':
+          this.broadcast({ type: 'wakeHit', keyword: payload.keyword, action: payload.action });
+          break;
+        case 'voice:error':
+          this.broadcast({ type: 'voiceError', error: payload.error, scope: payload.scope });
+          break;
+        default:
+          break;
+      }
+    } catch {}
   }
 
   // ---- Inline HTML for Web UI (DOM Mirror) ----
@@ -1394,6 +1471,145 @@ html,body{height:100%;overflow:hidden;font-family:-apple-system,BlinkMacSystemFo
   },true);
 
   connect();
+})();
+</script>
+<script>
+// ===== WebUI 语音（STT/TTS） =====
+// 使用 Web Worker 内联 Worklet 采集麦克风，经 WS 发送到主机计算，接收 TTS 流播放。
+(function(){
+  if(!('AudioContext' in window || 'webkitAudioContext' in window)) return;
+  if(!ws){ console.warn('[Voice] WS未连接'); return; }
+
+  // 安全上下文检查：麦克风仅在 https 或 loopback（localhost / 127.0.0.1 / ::1）可用。
+  // 局域网 http 访问（如 http://192.168.x.x:3030）会被浏览器拦截 getUserMedia。
+  var loc=window.location;
+  var isSecure=loc.protocol==='https:'||loc.hostname==='localhost'||loc.hostname==='127.0.0.1'||loc.hostname==='::1'||loc.hostname==='[::1]';
+  if(!isSecure){
+    console.warn('[Voice] 非安全上下文(需 https 或 localhost)，麦克风禁用。请用 http://localhost:'+(loc.port||3030)+' 访问。');
+  }
+
+  var VOICE_READY=true;
+  var mic=null,player=null,sttSession=null,listening=false,voiceReady=true;
+  var ttsCtx=null,ttsGain=null,ttsVol=1,activeTts={}; // reqId->{nextTime,sources:Set,done}
+
+  // ---- 麦克风采集（AudioWorklet 内联） ----
+  var WORKLET_BLOB=URL.createObjectURL(new Blob(['class PcmEncoder extends AudioWorkletProcessor{constructor(o){super();this.ratio=sampleRate/'+(16000)+';this.buf=new Float32Array(0);this.pos=0;this.chunkSize='+(1600)+';}process(inputs){var ch=inputs[0]&&inputs[0][0];if(!ch||!ch.length)return true;var m=new Float32Array(this.buf.length+ch.length);m.set(this.buf,0);m.set(ch,this.buf.length);this.buf=m;while((this.buf.length-1-this.pos)/this.ratio>=this.chunkSize){var out=new Int16Array(this.chunkSize);for(var i=0;i<this.chunkSize;i++){var p=this.pos+i*this.ratio,idx=Math.floor(p),f=p-idx,a=this.buf[idx]||0,b=this.buf[idx+1]||0,s=a+(b-a)*f;s=Math.max(-1,Math.min(1,s));out[i]=s<0?s*32768:s*32767;}this.port.postMessage(out.buffer,[out.buffer]);this.pos+=this.chunkSize*this.ratio;}var c=Math.floor(this.pos);if(c>1){this.buf=this.buf.slice(c-1);this.pos-=c-1;}return true}}registerProcessor("pcm-enc",PcmEncoder);'],{type:"application/javascript"}));
+
+  async function startMic(onChunk){
+    if(mic&&mic.stream){ return; }
+    var stream=await navigator.mediaDevices.getUserMedia({audio:{channelCount:1,echoCancellation:true,noiseSuppression:true}});
+    var ctx=new (AudioContext||webkitAudioContext)();
+    await ctx.audioWorklet.addModule(WORKLET_BLOB);
+    var src=ctx.createMediaStreamSource(stream);
+    var node=new AudioWorkletNode(ctx,"pcm-enc");
+    node.port.onmessage=function(e){ if(onChunk) onChunk(e.data); };
+    var gain=ctx.createGain();gain.gain.value=0;
+    src.connect(node);node.connect(gain);gain.connect(ctx.destination);
+    mic={stream:stream,ctx:ctx,node:node};
+  }
+  function stopMic(){
+    if(mic){ try{mic.node.disconnect();}catch(_){} try{mic.stream.getTracks().forEach(function(t){t.stop();});}catch(_){} try{mic.ctx.close();}catch(_){} mic=null; }
+  }
+
+  // ---- Base64 编解码 ----
+  function arrayBufferToBase64(buf){ var s="",b=new Uint8Array(buf);for(var i=0;i<b.length;i++)s+=String.fromCharCode(b[i]);return btoa(s); }
+  function base64ToArrayBuffer(b64){ var s=atob(b64),len=s.length,b=new Uint8Array(len);for(var i=0;i<len;i++)b[i]=s.charCodeAt(i);return b.buffer; }
+
+  // ---- STT ----
+  async function startStt(){
+    if(listening) return;
+    if(!isSecure){ updateSttText('麦克风需 https 或 localhost 访问（当前为 '+(loc.hostname||'非安全上下文')+'）'); setTimeout(updateSttText,3500,''); return; }
+    sttSession='web-'+Date.now();
+    ws.send(JSON.stringify({type:'voiceSttControl',action:'start',sessionId:sttSession}));
+    try{
+      await startMic(function(b){ ws.send(JSON.stringify({type:'voiceAudio',sessionId:sttSession,samples:arrayBufferToBase64(b)})); });
+    }catch(err){
+      ws.send(JSON.stringify({type:'voiceSttControl',action:'cancel',sessionId:sttSession}));
+      updateSttText('麦克风访问失败: '+(err&&err.message?err.message:err));
+      setTimeout(updateSttText,3500,'');
+      return;
+    }
+    listening=true;updateMicBtn();
+  }
+  async function stopStt(cancel){
+    if(!listening) return;
+    listening=false;updateMicBtn();
+    try{ stopMic(); }catch(_){}
+    ws.send(JSON.stringify({type:'voiceSttControl',action:cancel?'cancel':'stop',sessionId:sttSession}));
+  }
+
+  // ---- TTS 播放 ----
+  function ttsSetup(){
+    if(!ttsCtx){ ttsCtx=new (AudioContext||webkitAudioContext)(); ttsGain=ttsCtx.createGain();ttsGain.gain.value=ttsVol;ttsGain.connect(ttsCtx.destination); }
+    if(ttsCtx.state==='suspended') ttsCtx.resume().catch(function(){});
+  }
+  function ttsPush(reqId,b64,sr){
+    ttsSetup();
+    var buf=base64ToArrayBuffer(b64);
+    var i16=new Int16Array(buf),f32=new Float32Array(i16.length);
+    for(var i=0;i<i16.length;i++)f32[i]=i16[i]/32768;
+    if(f32.length===0) return;
+    var ab=ttsCtx.createBuffer(1,f32.length,sr||24000);ab.getChannelData(0).set(f32);
+    var st=activeTts[reqId];
+    if(!st){st={nextTime:0,sources:new Set(),done:false};activeTts[reqId]=st;}
+    var now=ttsCtx.currentTime;
+    if(st.nextTime<now+0.03)st.nextTime=now+0.03;
+    var src=ttsCtx.createBufferSource();src.buffer=ab;src.connect(ttsGain);
+    st.sources.add(src);
+    src.onended=function(){st.sources.delete(src);if(st.done&&st.sources.size===0)delete activeTts[reqId];};
+    src.start(st.nextTime);st.nextTime+=ab.duration;
+  }
+  function ttsDone(reqId){var st=activeTts[reqId];if(st){st.done=true;if(st.sources.size===0)delete activeTts[reqId];}}
+  function ttsStopAll(){ for(var id in activeTts){var s=activeTts[id];s.sources.forEach(function(x){try{x.stop();}catch(_){}});} activeTts={}; }
+
+  // ---- WS 语音事件接收 ----
+  var _origOnMsg=ws.onmessage;
+  ws.onmessage=function(e){
+    if(_origOnMsg) _origOnMsg.call(ws,e);
+    try{
+      var m=JSON.parse(e.data);
+      switch(m.type){
+        case'sttPartial':if(m.sessionId===sttSession&&listening){ updateSttText(m.text); } break;
+        case'sttFinal':if(m.sessionId===sttSession){ updateSttText(m.text);stopStt(false); } break;
+        case'ttsAudio':ttsPush(m.reqId,m.samples,m.sampleRate);break;
+        case'ttsDone':ttsDone(m.reqId);break;
+        case'ttsError':console.warn('[Voice] TTS错误',m.error);break;
+        case'voiceStatus':
+          if(m.capabilities){
+            voiceReady=(m.capabilities.ready!==false)&&!!m.capabilities.workerRunning;
+            if(!voiceReady){ if(micBtn){micBtn.disabled=true;micBtn.style.opacity=.35;micBtn.title='语音引擎未就绪';} }
+            else if(micBtn){ micBtn.disabled=false;micBtn.style.opacity=1;micBtn.title='语音输入'; }
+          }
+          break;
+        case'wakeHit':if(!listening) startStt(); break;
+        case'voiceError':console.warn('[Voice]',m.error);break;
+      }
+    }catch(_){}
+  };
+
+  // ---- UI：浮动麦克风按钮 ----
+  var micBtn=document.createElement('button');
+  micBtn.id='btn-webui-mic';micBtn.title='语音输入';
+  micBtn.style.cssText='position:fixed;bottom:20px;right:20px;z-index:99999;width:48px;height:48px;border-radius:50%;border:none;background:var(--accent,#4f8cff);color:#fff;font-size:20px;cursor:pointer;box-shadow:0 4px 16px rgba(0,0,0,.3);transition:transform .15s';
+  micBtn.innerHTML='<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>';
+  micBtn.onclick=function(){ if(listening) stopStt(false); else startStt(); };
+  document.body.appendChild(micBtn);
+
+  var sttDisplay=document.createElement('div');
+  sttDisplay.id='webui-stt-display';
+  sttDisplay.style.cssText='position:fixed;bottom:76px;left:50%;transform:translateX(-50%);z-index:99999;max-width:80vw;padding:8px 16px;border-radius:12px;background:rgba(0,0,0,.75);color:#fff;font-size:13px;display:none;text-align:center;line-height:1.4';
+  document.body.appendChild(sttDisplay);
+
+  function updateMicBtn(){ micBtn.style.background=listening?'#e74c3c':'var(--accent,#4f8cff)'; }
+  function updateSttText(text){ sttDisplay.textContent=text||'';sttDisplay.style.display=text?'block':'none'; }
+
+  // 请求语音引擎能力状态（模型就绪、worker 运行等），用于启用/禁用麦克风按钮
+  function requestVoiceCaps(){ try{ ws.send(JSON.stringify({type:'voiceGetStatus'})); }catch(_){} }
+  if(ws.readyState===1) requestVoiceCaps(); else ws.addEventListener('open',requestVoiceCaps,{once:true});
+  // 轮询兜底：若引擎仍在加载，等 worker 就绪后能力自动广播（setVoiceCapabilities）
+  setTimeout(requestVoiceCaps,3000);
+
+  window.voiced=true;
 })();
 </script>
 </body>

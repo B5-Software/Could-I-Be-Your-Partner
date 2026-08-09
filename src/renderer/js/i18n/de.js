@@ -111,6 +111,7 @@ ui: {
       notifications: 'Benachrichtigungen',
       terminal: 'Terminal',
       ime: 'Tastatur / IME',
+      voice: 'Sprach-E/A',
       language: 'Sprache'
     },
     name: 'Name',

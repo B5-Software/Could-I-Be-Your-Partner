@@ -99,6 +99,7 @@ const EN_DICT = {
         notifications: 'Notifications',
         terminal: 'Terminal',
         ime: 'Keyboard / IME',
+        voice: 'Voice',
         language: 'Language'
       },
       labels: {

@@ -339,6 +339,7 @@ function initVoice(context) {
   }
   return {
     engine,
+    getStatus() { return engine ? engine.status() : null; },
     openVoiceBar,
     closeVoiceBar,
     setWakeEnabled,

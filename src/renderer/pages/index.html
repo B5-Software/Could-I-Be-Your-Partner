@@ -8,7 +8,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://www.geogebra.org; worker-src 'self' blob:; style-src 'self' 'unsafe-inline' https://www.geogebra.org; img-src 'self' file: data: blob: https://www.geogebra.org http: https:; font-src 'self' data:; media-src 'self' blob:; connect-src 'self' https://www.geogebra.org data: http: https: ws: wss:;">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: https://www.geogebra.org; worker-src 'self' blob:; style-src 'self' 'unsafe-inline' https://www.geogebra.org; img-src 'self' file: data: blob: https://www.geogebra.org http: https:; font-src 'self' data:; media-src 'self' blob:; connect-src 'self' https://www.geogebra.org data: http: https: ws: wss:;">
   <title>Could I Be Your Partner</title>
   <link rel="icon" href="../../../assets/icons/icon.png">
   <link rel="stylesheet" href="../../../node_modules/katex/dist/katex.min.css">
@@ -283,6 +283,9 @@
                 <button class="btn-icon" id="btn-todo-toggle" title="待办事项">
                   <i class="fa-solid fa-list-check"></i>
                 </button>
+                <button class="btn-icon btn-mic" id="btn-mic" title="语音输入">
+                  <i class="fa-solid fa-microphone"></i>
+                </button>
                 <button class="btn-primary btn-send" id="btn-send" title="发送">
                   <i class="fa-solid fa-paper-plane"></i>
                 </button>
@@ -475,6 +478,9 @@
                 <i class="fa-solid fa-paperclip"></i>
               </button>
               <textarea id="code-chat-input" placeholder="输入编程任务..." rows="1"></textarea>
+              <button class="btn-icon btn-mic" id="btn-code-mic" title="语音输入">
+                <i class="fa-solid fa-microphone"></i>
+              </button>
               <button class="btn-primary btn-send" id="btn-code-send">
                 <i class="fa-solid fa-paper-plane"></i>
               </button>
@@ -554,6 +560,9 @@
         <div class="attachments-preview hidden" id="babe-attachments-preview"></div>
         <div class="babe-chat-input">
           <textarea id="babe-chat-input" placeholder="对TA说点什么..." rows="1"></textarea>
+          <button class="btn-icon btn-mic" id="btn-babe-mic" title="语音输入">
+            <i class="fa-solid fa-microphone"></i>
+          </button>
           <button class="btn-icon" id="btn-babe-attach-file" title="附加文件">
             <i class="fa-solid fa-paperclip"></i>
           </button>
@@ -704,6 +713,7 @@
             <button class="settings-tab" data-tab="notifications"><i class="fa-solid fa-bell"></i> 通知</button>
             <button class="settings-tab" data-tab="terminal"><i class="fa-solid fa-terminal"></i> 终端</button>
             <button class="settings-tab" data-tab="ime"><i class="fa-solid fa-keyboard"></i> 输入法</button>
+            <button class="settings-tab" data-tab="voice"><i class="fa-solid fa-microphone-lines"></i> 语音</button>
           </div>
           <div class="settings-panels">
             <div class="settings-panel active" data-tab="ai">
@@ -2299,7 +2309,39 @@
                     <span class="setting-value" id="setting-ime-opacity-val" style="min-width:44px;text-align:right;font-size:13px;color:var(--text-secondary)">100%</span>
                   </div>
                   <p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">键盘整体透明度，默认不透明。</p>
-                </div>
+              </div>
+            </div>
+            </div>
+            <div class="settings-panel" data-tab="voice">
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-microphone-lines"></i> 语音输入（STT）</h3>
+                <div class="setting-item"><label class="setting-label">语音识别</label><div class="toggle-switch"><input type="checkbox" id="setting-voice-stt"><span class="toggle-slider"></span></div></div>
+              </div>
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-volume-high"></i> 语音朗读（TTS）</h3>
+                <div class="setting-item"><label class="setting-label">语音朗读</label><div class="toggle-switch"><input type="checkbox" id="setting-voice-tts"><span class="toggle-slider"></span></div></div>
+                <div class="setting-item"><label class="setting-label">自动朗读 AI 回复</label><div class="toggle-switch"><input type="checkbox" id="setting-voice-tts-auto"><span class="toggle-slider"></span></div><p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">AI 流式输出时实时朗读，无需等待完成</p></div>
+                <div class="setting-item"><label class="setting-label">朗读语言</label><select id="setting-voice-tts-lang" style="width:200px"><option value="auto">自动检测</option><option value="zh">中文</option><option value="en">English</option><option value="de">Deutsch</option></select></div>
+                <div class="setting-item"><label class="setting-label">中文音色</label><select id="setting-voice-zh" style="width:200px"><option value="zf_xiaoxiao">晓晓 (女声)</option><option value="zf_xiaobei">小北</option><option value="zf_xiaoni">小妮</option><option value="zf_xiaoyi">小伊</option><option value="zm_yunjian">云建 (男声)</option><option value="zm_yunxi">云希</option></select></div>
+                <div class="setting-item"><label class="setting-label">英文音色</label><select id="setting-voice-en" style="width:200px"><option value="af_heart">Heart (美·女声)</option><option value="af_bella">Bella (美·女声)</option><option value="af_nicole">Nicole (美·女声)</option><option value="bm_lewis">Lewis (英·男声)</option><option value="bf_emma">Emma (英·女声)</option><option value="am_michael">Michael (美·男声)</option></select></div>
+                <div class="setting-item"><label class="setting-label">语速</label><div style="display:flex;align-items:center;gap:10px"><input type="range" id="setting-voice-speed" min="50" max="200" step="5" value="100" style="width:200px"><span id="setting-voice-speed-val" style="min-width:40px;text-align:right;font-size:13px;color:var(--text-secondary)">1.0x</span></div></div>
+                <div class="setting-item"><label class="setting-label">音量</label><div style="display:flex;align-items:center;gap:10px"><input type="range" id="setting-voice-volume" min="10" max="100" step="5" value="100" style="width:200px"><span id="setting-voice-volume-val" style="min-width:40px;text-align:right;font-size:13px;color:var(--text-secondary)">100%</span></div></div>
+                <div class="setting-item"><button class="btn-secondary" id="btn-voice-test">试听短句</button><span style="font-size:11px;color:var(--text-tertiary);margin-left:8px">使用当前音色朗读测试文本</span></div>
+              </div>
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-bell"></i> 后台唤醒</h3>
+                <div class="setting-item"><label class="setting-label">启用语音唤醒</label><div class="toggle-switch"><input type="checkbox" id="setting-voice-wake"><span class="toggle-slider"></span></div><p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">常驻麦克风监听，约占用 1~3% CPU</p></div>
+                <div class="setting-item" id="voice-wake-words-section"><label class="setting-label">唤醒词列表</label><div id="voice-wake-words-list" style="margin-bottom:8px"></div><div style="display:flex;gap:6px;align-items:center"><input type="text" id="voice-new-wake-phrase" placeholder="输入唤醒词…" style="flex:1;min-width:140px"><select id="voice-new-wake-action" style="width:130px"><option value="voicebar">弹语音条</option><option value="mainwindow">弹出主窗口</option></select><button class="btn-secondary btn-sm" id="btn-voice-add-wake">添加</button></div></div>
+                <div class="setting-item"><label class="setting-label">检测灵敏度</label><select id="setting-voice-kws-threshold" style="width:200px"><option value="0.15">高</option><option value="0.25" selected>中</option><option value="0.40">低</option></select></div>
+              </div>
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-keyboard"></i> 快捷键</h3>
+                <div class="setting-item"><label class="setting-label">全局热键</label><div style="display:flex;align-items:center;gap:8px"><input type="text" id="setting-voice-hotkey" placeholder="Control+Shift+Space" style="width:200px"><button class="btn-secondary btn-sm" id="btn-voice-record-hotkey" style="white-space:nowrap">录制</button></div><p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">按此组合键开关听写</p></div>
+              </div>
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-hard-drive"></i> 模型状态</h3>
+                <p id="voice-model-status" style="font-size:12px;color:var(--text-secondary)">检查中…</p>
+                <div style="margin-top:8px"><button class="btn-secondary btn-sm" id="btn-voice-refresh-status">刷新状态</button></div>
               </div>
             </div>
           </div>
@@ -2875,6 +2917,8 @@
   <script src="../js/oskey/ime-engine.js"></script>
   <script src="../js/oskey/oskey-ime.js"></script>
   <script src="../js/oskey/oskey.js"></script>
+  <script src="../js/voice-capture.js"></script>
+  <script src="../js/voice-ui.js"></script>
   <script src="../js/app.js"></script>
   <!-- 全局 Toast 容器：用于请求失败重试等自动消失提示 -->
   <div id="toast-container" style="position:fixed;top:60px;right:20px;z-index:10000;display:flex;flex-direction:column;gap:8px;pointer-events:none"></div>

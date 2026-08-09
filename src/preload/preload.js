@@ -242,6 +242,53 @@ contextBridge.exposeInMainWorld('api', {
     return () => ipcRenderer.removeListener('llm:external-usage', listener);
   },
 
+  // ---- 语音（STT/TTS/唤醒）----
+  voiceGetStatus: () => ipcRenderer.invoke('voice:getStatus'),
+  voiceSttStart: (opts) => ipcRenderer.invoke('voice:stt:start', opts || {}),
+  voiceSttStop: (sessionId) => ipcRenderer.invoke('voice:stt:stop', sessionId),
+  voiceSttCancel: (sessionId) => ipcRenderer.invoke('voice:stt:cancel', sessionId),
+  voiceSendAudio: (target, sessionId, samples) => ipcRenderer.send('voice:audio', { target, sessionId, samples }),
+  voiceTtsSpeak: (data) => ipcRenderer.invoke('voice:tts:speak', data),
+  voiceTtsStop: () => ipcRenderer.invoke('voice:tts:stop'),
+  voiceWakeSetEnabled: (enabled) => ipcRenderer.invoke('voice:wake:setEnabled', enabled),
+  voiceWakeRestart: () => ipcRenderer.invoke('voice:wake:restart'),
+  voiceBarOpen: () => ipcRenderer.invoke('voice:bar:open'),
+  onVoiceSttPartial: (cb) => {
+    const listener = (_, data) => cb(data);
+    ipcRenderer.on('voice:stt-partial', listener);
+    return () => ipcRenderer.removeListener('voice:stt-partial', listener);
+  },
+  onVoiceSttFinal: (cb) => {
+    const listener = (_, data) => cb(data);
+    ipcRenderer.on('voice:stt-final', listener);
+    return () => ipcRenderer.removeListener('voice:stt-final', listener);
+  },
+  onVoiceTtsAudio: (cb) => {
+    const listener = (_, data) => cb(data);
+    ipcRenderer.on('voice:tts-audio', listener);
+    return () => ipcRenderer.removeListener('voice:tts-audio', listener);
+  },
+  onVoiceTtsDone: (cb) => {
+    const listener = (_, data) => cb(data);
+    ipcRenderer.on('voice:tts-done', listener);
+    return () => ipcRenderer.removeListener('voice:tts-done', listener);
+  },
+  onVoiceWake: (cb) => {
+    const listener = (_, data) => cb(data);
+    ipcRenderer.on('voice:wake', listener);
+    return () => ipcRenderer.removeListener('voice:wake', listener);
+  },
+  onVoiceHotkeyToggle: (cb) => {
+    const listener = (_, data) => cb(data);
+    ipcRenderer.on('voice:hotkey-toggle', listener);
+    return () => ipcRenderer.removeListener('voice:hotkey-toggle', listener);
+  },
+  onVoiceError: (cb) => {
+    const listener = (_, data) => cb(data);
+    ipcRenderer.on('voice:error', listener);
+    return () => ipcRenderer.removeListener('voice:error', listener);
+  },
+
   // Paths
   getPath: (name) => ipcRenderer.invoke('app:getPath', name),
   getAppVersion: () => ipcRenderer.invoke('app:getVersion'),

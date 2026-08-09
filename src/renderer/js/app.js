@@ -886,6 +886,7 @@
 
   // ---- Mode Switcher (Chat / Code / Babe) ----
   let currentMode = 'chat';
+  window.getCurrentMode = () => currentMode;
   document.querySelectorAll('.mode-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       const mode = btn.dataset.mode;
@@ -10433,12 +10434,17 @@
       codeAgent._streamChunkUnsub = window.api.onStreamChunk((chunk) => {
         if (!chunk || chunk.requestId !== codeAgent._activeStreamRequestId) return;
         if (codeAgent.onMessage) codeAgent.onMessage('stream-chunk', chunk);
+        // 流式 TTS：Code 模式同样实时播报（跳过 reasoning，仅助理文本）
+        if (window.VoiceUI && chunk.content) window.VoiceUI.feedStreamChunk(chunk.content);
       });
     }
     if (window.api?.onStreamEnd && !codeAgent._streamEndUnsub) {
       codeAgent._streamEndUnsub = window.api.onStreamEnd((data) => {
         if (!data || data.requestId !== codeAgent._activeStreamRequestId) return;
         if (codeAgent.onMessage) codeAgent.onMessage('stream-end', data);
+        if (window.VoiceUI) {
+          window.VoiceUI.feedStreamEnd((data && data.content) ? data.content : null);
+        }
       });
     }
 
@@ -11583,12 +11589,17 @@
         babeAgent._streamChunkUnsub = window.api.onStreamChunk((chunk) => {
           if (!chunk || chunk.requestId !== babeAgent._activeStreamRequestId) return;
           if (babeAgent.onMessage) babeAgent.onMessage('stream-chunk', chunk);
+          // 流式 TTS：Babe 模式同样实时播报
+          if (window.VoiceUI && chunk.content) window.VoiceUI.feedStreamChunk(chunk.content);
         });
       }
       if (window.api?.onStreamEnd && !babeAgent._streamEndUnsub) {
         babeAgent._streamEndUnsub = window.api.onStreamEnd((data) => {
           if (!data || data.requestId !== babeAgent._activeStreamRequestId) return;
           if (babeAgent.onMessage) babeAgent.onMessage('stream-end', data);
+          if (window.VoiceUI) {
+            window.VoiceUI.feedStreamEnd((data && data.content) ? data.content : null);
+          }
         });
       }
       // 绑定回调
@@ -12484,5 +12495,246 @@
   // 挂载到 loadSettingsPage：每次打开设置页时刷新输入法设置
   bindImeSettings();
   loadImeSettings();
+
+  /* ==================== 设置页：语音标签 ==================== */
+  async function loadVoiceSettings() {
+    const s = await window.api.getSettings();
+    const v = s.voice || {};
+    const set = (id, val) => { const el = document.getElementById(id); if (el) el.value = val; };
+    const setChk = (id, val) => { const el = document.getElementById(id); if (el) el.checked = !!val; };
+    setChk('setting-voice-stt', v.sttEnabled !== false);
+    setChk('setting-voice-tts', v.ttsEnabled === true);
+    setChk('setting-voice-tts-auto', v.ttsAutoSpeak === true);
+    set('setting-voice-tts-lang', v.ttsLang || 'auto');
+    set('setting-voice-zh', (v.ttsVoices && v.ttsVoices.zh) || 'zf_xiaoxiao');
+    set('setting-voice-en', (v.ttsVoices && v.ttsVoices.en) || 'af_heart');
+    const speedEl = document.getElementById('setting-voice-speed');
+    const speedValEl = document.getElementById('setting-voice-speed-val');
+    const speed = Math.round((v.ttsSpeed != null ? v.ttsSpeed : 1.0) * 100);
+    if (speedEl) { speedEl.value = Math.max(50, Math.min(200, speed)); if (speedValEl) speedValEl.textContent = (speed / 100).toFixed(2) + 'x'; }
+    const volEl = document.getElementById('setting-voice-volume');
+    const volValEl = document.getElementById('setting-voice-volume-val');
+    const vol = Math.round((v.ttsVolume != null ? v.ttsVolume : 1.0) * 100);
+    if (volEl) { volEl.value = Math.max(10, Math.min(100, vol)); if (volValEl) volValEl.textContent = vol + '%'; }
+    setChk('setting-voice-wake', v.wakeEnabled === true);
+    set('setting-voice-kws-threshold', (v.kws && v.kws.threshold != null) ? String(v.kws.threshold) : '0.25');
+    set('setting-voice-hotkey', v.hotkey || 'Control+Shift+Space');
+    renderWakeWordsList(s);
+    refreshVoiceModelStatus();
+  }
+
+  async function renderWakeWordsList(s) {
+    const listEl = document.getElementById('voice-wake-words-list');
+    if (!listEl) return;
+    listEl.innerHTML = '';
+    const words = (s && s.voice && s.voice.wakeWords) || [];
+    if (words.length === 0) {
+      listEl.innerHTML = '<span style="font-size:11px;color:var(--text-tertiary)">暂无唤醒词</span>';
+      return;
+    }
+    words.forEach((w, idx) => {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;gap:6px;padding:3px 0;font-size:12px;';
+      const tag = document.createElement('span');
+      tag.textContent = w.phrase;
+      tag.style.cssText = 'flex:1;padding:2px 8px;background:var(--surface-alt);border-radius:4px;';
+      const actLabel = w.action === 'mainwindow' ? '弹主窗' : '语音条';
+      const actEl = document.createElement('span');
+      actEl.textContent = actLabel;
+      actEl.style.cssText = 'font-size:10px;color:var(--text-tertiary);min-width:40px;text-align:right;';
+      const enChk = document.createElement('input');
+      enChk.type = 'checkbox';
+      enChk.checked = w.enabled !== false;
+      enChk.title = '启用';
+      enChk.style.cssText = 'margin:0;cursor:pointer';
+      enChk.addEventListener('change', async () => {
+        const currentS = await window.api.getSettings();
+        const currentW = (currentS.voice && currentS.voice.wakeWords) || [];
+        if (currentW[idx]) currentW[idx].enabled = enChk.checked;
+        if (!currentS.voice) currentS.voice = {};
+        currentS.voice.wakeWords = currentW;
+        await saveVoiceSettings(currentS, '唤醒词已更新');
+      });
+      const delBtn = document.createElement('button');
+      delBtn.className = 'btn-icon';
+      delBtn.innerHTML = '<i class="fa-solid fa-xmark"></i>';
+      delBtn.style.cssText = 'font-size:10px;padding:0;width:18px;height:18px';
+      delBtn.addEventListener('click', async () => {
+        const currentS = await window.api.getSettings();
+        const currentW = (currentS.voice && currentS.voice.wakeWords) || [];
+        currentW.splice(idx, 1);
+        if (!currentS.voice) currentS.voice = {};
+        currentS.voice.wakeWords = currentW;
+        await saveVoiceSettings(currentS, '唤醒词已删除');
+        renderWakeWordsList(currentS);
+      });
+      row.appendChild(tag);
+      row.appendChild(actEl);
+      row.appendChild(enChk);
+      row.appendChild(delBtn);
+      listEl.appendChild(row);
+    });
+  }
+
+  async function saveVoiceSettings(s, toast) {
+    if (typeof s === 'string') { toast = s; s = await window.api.getSettings(); }
+    if (!s) s = await window.api.getSettings();
+    try {
+      await saveSettings(s);
+      if (toast && typeof window.showToast === 'function') window.showToast(toast, 'success', 2000);
+    } catch (e) {
+      if (typeof window.showToast === 'function') window.showToast('保存失败: ' + (e && e.message), 'error', 3000);
+    }
+  }
+
+  async function refreshVoiceModelStatus() {
+    const el = document.getElementById('voice-model-status');
+    if (!el) return;
+    try {
+      const r = await window.api.voiceGetStatus();
+      if (r && r.ok) {
+        if (r.missing && r.missing.length) {
+          el.textContent = '缺失模型: ' + r.missing.join(', ');
+        } else {
+          el.textContent = '内置模型就绪（whisper-base + Kokoro 中英 + Piper 德语）';
+        }
+      } else {
+        el.textContent = '语音引擎未启动或模型缺失';
+      }
+    } catch {
+      el.textContent = '无法查询引擎状态';
+    }
+  }
+
+  function bindVoiceSettings() {
+    const setChkId = (id, key) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.addEventListener('change', async () => {
+        const s = await window.api.getSettings();
+        if (!s.voice) s.voice = {};
+        s.voice[key] = el.checked;
+        await saveVoiceSettings(s);
+        try { if (window.VoiceUI) window.VoiceUI.applySettings(s); } catch (_) {}
+      });
+    };
+    setChkId('setting-voice-stt', 'sttEnabled');
+    setChkId('setting-voice-tts', 'ttsEnabled');
+    setChkId('setting-voice-tts-auto', 'ttsAutoSpeak');
+
+    const bind = (id, key, transform) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.addEventListener('change', async () => {
+        const s = await window.api.getSettings();
+        if (!s.voice) s.voice = {};
+        const val = el.type === 'checkbox' ? el.checked : el.value;
+        if (transform) transform(s.voice, val);
+        else s.voice[key] = val;
+        await saveVoiceSettings(s);
+        try { if (window.VoiceUI) window.VoiceUI.applySettings(s); } catch (_) {}
+      });
+    };
+    bind('setting-voice-tts-lang', 'ttsLang');
+    bind('setting-voice-kws-threshold', 'threshold', (voice, val) => { if (!voice.kws) voice.kws = {}; voice.kws.threshold = parseFloat(val) || 0.25; });
+
+    // 中文音色
+    const zhEl = document.getElementById('setting-voice-zh');
+    if (zhEl) zhEl.addEventListener('change', async () => {
+      const s = await window.api.getSettings();
+      if (!s.voice) s.voice = {};
+      if (!s.voice.ttsVoices) s.voice.ttsVoices = {};
+      s.voice.ttsVoices.zh = zhEl.value;
+      await saveVoiceSettings(s);
+      try { if (window.VoiceUI) window.VoiceUI.applySettings(s); } catch (_) {}
+    });
+    const enEl = document.getElementById('setting-voice-en');
+    if (enEl) enEl.addEventListener('change', async () => {
+      const s = await window.api.getSettings();
+      if (!s.voice) s.voice = {};
+      if (!s.voice.ttsVoices) s.voice.ttsVoices = {};
+      s.voice.ttsVoices.en = enEl.value;
+      await saveVoiceSettings(s);
+      try { if (window.VoiceUI) window.VoiceUI.applySettings(s); } catch (_) {}
+    });
+
+    // 语速/音量 range
+    for (const [id, key, label] of [['setting-voice-speed', 'ttsSpeed', 'x'], ['setting-voice-volume', 'ttsVolume', '%']]) {
+      const el = document.getElementById(id);
+      if (!el) continue;
+      el.addEventListener('input', () => {
+        const valEl = document.getElementById(id + '-val');
+        if (valEl) valEl.textContent = key === 'ttsSpeed' ? (parseInt(el.value) / 100).toFixed(2) + label : el.value + label;
+      });
+      el.addEventListener('change', async () => {
+        const s = await window.api.getSettings();
+        if (!s.voice) s.voice = {};
+        s.voice[key] = parseInt(el.value) / 100;
+        await saveVoiceSettings(s);
+        try { if (window.VoiceUI) window.VoiceUI.applySettings(s); } catch (_) {}
+      });
+    }
+    // 唤醒
+    setChkId('setting-voice-wake', 'wakeEnabled');
+    // 热键
+    const hotkeyEl = document.getElementById('setting-voice-hotkey');
+    if (hotkeyEl) hotkeyEl.addEventListener('change', async () => {
+      const s = await window.api.getSettings();
+      if (!s.voice) s.voice = {};
+      s.voice.hotkey = hotkeyEl.value;
+      await saveVoiceSettings(s);
+    });
+    // 试听按钮
+    const testBtn = document.getElementById('btn-voice-test');
+    if (testBtn) testBtn.addEventListener('click', () => {
+      const lang = document.getElementById('setting-voice-tts-lang')?.value || 'zh';
+      const testTexts = { zh: '你好，我是你的AI伙伴，很高兴能为你服务！', en: 'Hello! I am your AI partner, ready to assist you.', de: 'Hallo! Ich bin dein KI-Partner und helfe dir gerne.' };
+      try { if (window.VoiceUI) window.VoiceUI.speakText(testTexts[lang] || testTexts.zh, lang); } catch (_) {}
+    });
+    // 添加唤醒词
+    const addBtn = document.getElementById('btn-voice-add-wake');
+    if (addBtn) addBtn.addEventListener('click', async () => {
+      const phrase = document.getElementById('voice-new-wake-phrase')?.value?.trim();
+      const action = document.getElementById('voice-new-wake-action')?.value || 'voicebar';
+      if (!phrase) return;
+      const s = await window.api.getSettings();
+      if (!s.voice) s.voice = {};
+      if (!s.voice.wakeWords) s.voice.wakeWords = [];
+      s.voice.wakeWords.push({ phrase, action, enabled: true });
+      document.getElementById('voice-new-wake-phrase').value = '';
+      await saveVoiceSettings(s, '唤醒词已添加');
+      renderWakeWordsList(s);
+    });
+    // 录制热键
+    const recBtn = document.getElementById('btn-voice-record-hotkey');
+    if (recBtn) recBtn.addEventListener('click', () => {
+      const input = document.getElementById('setting-voice-hotkey');
+      if (!input) return;
+      const origText = recBtn.textContent;
+      recBtn.textContent = '按下组合键…';
+      recBtn.disabled = true;
+      const handler = (e) => {
+        e.preventDefault();
+        const parts = [];
+        if (e.ctrlKey) parts.push('Control');
+        if (e.shiftKey) parts.push('Shift');
+        if (e.altKey) parts.push('Alt');
+        if (e.metaKey) parts.push('Command');
+        const key = e.key.replace(/^(Control|Shift|Alt|Meta)$/, '').trim();
+        if (key) parts.push(key.length === 1 ? key.toUpperCase() : key);
+        input.value = parts.join('+');
+        recBtn.textContent = origText;
+        recBtn.disabled = false;
+        document.removeEventListener('keydown', handler, true);
+      };
+      document.addEventListener('keydown', handler, true);
+    });
+    // 刷新模型状态
+    const refreshBtn = document.getElementById('btn-voice-refresh-status');
+    if (refreshBtn) refreshBtn.addEventListener('click', () => refreshVoiceModelStatus());
+  }
+
+  bindVoiceSettings();
+  loadVoiceSettings();
 
 })();

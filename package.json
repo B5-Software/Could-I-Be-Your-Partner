@@ -1,14 +1,15 @@
 {
   "name": "could-i-be-your-partner",
-  "version": "1.6.0-alpha.6",
+  "version": "1.6.0-alpha.7",
   "description": "全自动AI Agent，帮助完成一切任务",
   "license": "GPL-3.0-or-later",
   "main": "src/main/main.js",
   "scripts": {
     "start": "electron .",
     "test": "node tests/run-tests.js",
-    "build": "electron-builder",
-    "build:win": "electron-builder --win",
+    "download-voice-models": "node scripts/download-voice-models.js",
+    "build": "npm run download-voice-models && electron-builder",
+    "build:win": "npm run download-voice-models && electron-builder --win",
     "build:mac": "electron-builder --mac",
     "build:linux": "electron-builder --linux",
     "build:no-tarot": "node scripts/build-no-tarot.js",
@@ -40,12 +41,18 @@
     ],
     "asarUnpack": [
       "assets/ocr/**/*",
+      "assets/voice-models/**/*",
+      "src/main/voice-worker.js",
+      "src/main/voice-kws-encoder.js",
       "node_modules/monaco-editor/min/**/*",
       "node_modules/node-pty/**/*",
       "node_modules/@nut-tree-fork/**/*",
       "node_modules/@xterm/xterm/css/**/*",
       "node_modules/@xterm/xterm/lib/**/*",
-      "node_modules/@xterm/addon-fit/lib/**/*"
+      "node_modules/@xterm/addon-fit/lib/**/*",
+      "node_modules/sherpa-onnx-node/**/*",
+      "node_modules/sherpa-onnx-win-x64/**/*",
+      "node_modules/pinyin-pro/**/*"
     ],
     "extraResources": [
       {
@@ -75,6 +82,7 @@
       "icon": "assets/icons/icons/icon.icns",
       "extendInfo": {
         "NSLocalNetworkUsageDescription": "需要访问本地网络以连接 Remote 模式下的远端设备和 WebUI 控制服务。",
+        "NSMicrophoneUsageDescription": "需要访问麦克风以提供语音输入与后台唤醒功能。音频仅在本机处理，不会上传或存储。",
         "NSBonjourServices": [
           "_http._tcp",
           "_airplay._tcp",

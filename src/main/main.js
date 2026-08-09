@@ -1588,11 +1588,44 @@ let settings = loadJSON(settingsPath, {
   //   enabled:       应用启动时是否自动打开屏幕键盘（可在输入框工具栏手动开关）
   //   mode:          默认输入模式 'zh' | 'en' | 'de'
   //   candidateCount:候选词数量
-  ime: { enabled: false, mode: 'zh', candidateCount: 9 }
+  ime: { enabled: false, mode: 'zh', candidateCount: 9 },
+  // 语音子系统（完全本地化：sherpa-onnx，CPU 推理，无需任何外部配置）
+  // - sttEnabled/ttsEnabled : 语音输入/输出总开关
+  // - ttsAutoSpeak          : AI 流式回复时实时朗读（句级流水线，合成与输出并行）
+  // - ttsLang               : 朗读语言 'auto' | 'zh' | 'en' | 'de'（auto 按句自动检测）
+  // - ttsVoices             : 各语言音色（zh/en 为 Kokoro 音色名，de 为 Piper thorsten）
+  // - wakeEnabled           : 后台语音唤醒（隐藏窗口常驻采集 + KWS 关键词检测）
+  // - wakeWords             : 唤醒词表，action: 'voicebar'（弹置顶语音条）| 'mainwindow'（弹出主窗口）
+  // - kws                   : 检测灵敏度（score 越大越易触发，threshold 越小越易触发）
+  // - hotkey/pushToTalk     : 全局热键切换听写
+  voice: {
+    sttEnabled: true,
+    ttsEnabled: true,
+    ttsAutoSpeak: false,
+    ttsLang: 'auto',
+    ttsVoices: { zh: 'zf_xiaoxiao', en: 'af_heart', de: 'thorsten' },
+    ttsSpeed: 1.0,
+    ttsVolume: 1.0,
+    sttModel: 'base',
+    wakeEnabled: false,
+    wakeWords: [
+      { phrase: '伙伴伙伴', action: 'voicebar', enabled: true },
+      { phrase: 'hey partner', action: 'voicebar', enabled: true },
+      { phrase: '打开主页面', action: 'mainwindow', enabled: true }
+    ],
+    kws: { score: 1.0, threshold: 0.25 },
+    hotkey: 'Control+Shift+Space',
+    pushToTalk: true
+  }
 });
 if (fs.existsSync(settingsPath)) {
   const saved = loadJSON(settingsPath, {});
-  settings = { ...settings, ...saved, llm: { ...settings.llm, ...(saved.llm || {}) }, agent: { ...settings.agent, ...(saved.agent || {}) }, imageGen: { ...settings.imageGen, ...(saved.imageGen || {}) }, theme: { ...settings.theme, ...(saved.theme || {}) }, aiPersona: { ...settings.aiPersona, ...(saved.aiPersona || {}) }, userProfile: { ...settings.userProfile, ...(saved.userProfile || {}) }, entropy: { ...settings.entropy, ...(saved.entropy || {}) }, proxy: { ...settings.proxy, ...(saved.proxy || {}) }, mcp: { ...settings.mcp, ...(saved.mcp || {}) }, email: { ...settings.email, ...(saved.email || {}) }, webControl: { ...settings.webControl, ...(saved.webControl || {}) }, budget: { ...settings.budget, ...(saved.budget || {}) }, terminal: { ...settings.terminal, ...(saved.terminal || {}) }, privacyProtection: { ...settings.privacyProtection, ...(saved.privacyProtection || {}) }, ime: { ...settings.ime, ...(saved.ime || {}) } };
+  settings = { ...settings, ...saved, llm: { ...settings.llm, ...(saved.llm || {}) }, agent: { ...settings.agent, ...(saved.agent || {}) }, imageGen: { ...settings.imageGen, ...(saved.imageGen || {}) }, theme: { ...settings.theme, ...(saved.theme || {}) }, aiPersona: { ...settings.aiPersona, ...(saved.aiPersona || {}) }, userProfile: { ...settings.userProfile, ...(saved.userProfile || {}) }, entropy: { ...settings.entropy, ...(saved.entropy || {}) }, proxy: { ...settings.proxy, ...(saved.proxy || {}) }, mcp: { ...settings.mcp, ...(saved.mcp || {}) }, email: { ...settings.email, ...(saved.email || {}) }, webControl: { ...settings.webControl, ...(saved.webControl || {}) }, budget: { ...settings.budget, ...(saved.budget || {}) }, terminal: { ...settings.terminal, ...(saved.terminal || {}) }, privacyProtection: { ...settings.privacyProtection, ...(saved.privacyProtection || {}) }, ime: { ...settings.ime, ...(saved.ime || {}) }, voice: { ...settings.voice, ...(saved.voice || {}) } };
+  // voice 子对象深合并（ttsVoices / kws）
+  if (saved.voice) {
+    settings.voice.ttsVoices = { zh: 'zf_xiaoxiao', en: 'af_heart', de: 'thorsten', ...(saved.voice.ttsVoices || {}) };
+    settings.voice.kws = { score: 1.0, threshold: 0.25, ...(saved.voice.kws || {}) };
+  }
   if (saved.budget) {
     settings.budget.models = { ...(settings.budget.models || {}), ...(saved.budget.models || {}) };
     settings.budget.peakHours = { ...(settings.budget.peakHours || {}), ...(saved.budget.peakHours || {}) };
@@ -1649,6 +1682,8 @@ let knowledge = loadJSON(knowledgePath, []);
 let mainWindow;
 let appTray = null;
 let isQuitting = false;
+// 语音子系统句柄（voice-ipc.js initVoice 返回值，app ready 后赋值）
+let voiceIpc = null;
 // 用户在"关闭时询问"模态框中的 pending Promise resolver
 let _pendingCloseToTrayResolve = null;
 
@@ -1663,7 +1698,9 @@ function createWindow() {
       preload: path.join(__dirname, '../preload/preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false
+      sandbox: false,
+      // 隐藏到托盘后仍需保持 LLM 流式/语音播报/Agent 后台运行，禁用节流
+      backgroundThrottling: false
     }
   });
   mainWindow.loadFile(path.join(__dirname, '../renderer/pages/index.html'));
@@ -1769,6 +1806,19 @@ function createAppTray() {
 
   const buildMenu = () => Menu.buildFromTemplate([
     { label: '显示主窗口', click: () => showWindowFromTray() },
+    {
+      label: '语音唤醒',
+      type: 'checkbox',
+      checked: !!(settings.voice && settings.voice.wakeEnabled),
+      click: (item) => {
+        if (voiceIpc) {
+          voiceIpc.setWakeEnabled(item.checked).catch(() => {});
+        } else if (settings.voice) {
+          settings.voice.wakeEnabled = item.checked;
+          try { saveJSON(settingsPath, settings); } catch {}
+        }
+      }
+    },
     { type: 'separator' },
     {
       label: '退出',
@@ -1952,6 +2002,49 @@ app.whenReady().then(() => {
   createWindow();
   // 启动时即创建托盘图标（若启用）
   if (settings.trayEnabled) createAppTray();
+
+  // ===== 语音子系统初始化（STT/TTS/唤醒，全本地 sherpa-onnx） =====
+  try {
+    const { initVoice } = require('./voice-ipc');
+    voiceIpc = initVoice({
+      ipcMain,
+      app,
+      getSettings: () => settings,
+      persistSettings: () => { try { saveJSON(settingsPath, settings); } catch {} },
+      getMainWindow: () => mainWindow,
+      showWindowFromTray,
+      onVoiceEvent: (channel, payload) => {
+        // P2：转发到 WebUI（web-control-service 注册回调）
+        try { if (webControlService && typeof webControlService.pushVoiceEvent === 'function') webControlService.pushVoiceEvent(channel, payload); } catch {}
+      },
+    });
+    // P2：worker 就绪后同步语音能力到 WebUI（浏览器麦克风按钮依赖）
+    (async () => {
+      try {
+        if (voiceIpc && voiceIpc.engine && webControlService) {
+          await voiceIpc.engine.ensureWorker().catch(() => {});
+          const st = voiceIpc.getStatus ? voiceIpc.getStatus() : null;
+          if (st) webControlService.setVoiceCapabilities(st);
+        }
+      } catch {}
+    })();
+    // WebUI → 引擎反向桥（Web 端采集的音频 → STT 引擎）
+    if (webControlService) {
+      webControlService.onVoiceAudio = (sessionId, buf) => {
+        try { if (voiceIpc && voiceIpc.engine) voiceIpc.engine.feedStt(sessionId, buf); } catch {}
+      };
+      webControlService.onVoiceSttControl = (msg) => {
+        try {
+          if (!voiceIpc || !voiceIpc.engine) return;
+          if (msg.action === 'start') voiceIpc.engine.startStt(msg.sessionId, {}).catch(() => {});
+          else if (msg.action === 'stop') voiceIpc.engine.stopStt(msg.sessionId);
+          else if (msg.action === 'cancel') voiceIpc.engine.cancelStt(msg.sessionId);
+        } catch {}
+      };
+    }
+  } catch (e) {
+    console.error('[voice] 初始化失败:', e);
+  }
 });
 // 关闭所有窗口时：若启用了托盘模式且非真正退出，不退出应用（保留托盘）
 app.on('window-all-closed', (event) => {
@@ -2036,11 +2129,23 @@ ipcMain.handle('tray:show-window', () => {
 // ---- IPC: Settings ----
 ipcMain.handle('settings:get', () => settings);
 ipcMain.handle('settings:set', (_, newSettings) => {
+  const prevVoice = settings.voice ? JSON.parse(JSON.stringify(settings.voice)) : null;
   settings = { ...settings, ...newSettings };
   saveJSON(settingsPath, settings);
   // 广播主题/语言变化到所有窗口（主窗口 + 子窗口 CAD/EDA/小游戏）
   broadcastThemeChanged();
   broadcastSettingsChanged();
+  // 语音设置热应用（唤醒开关/词表/热键）
+  if (voiceIpc && newSettings && newSettings.voice) {
+    voiceIpc.onSettingsChanged(prevVoice).catch((e) => console.warn('[voice] onSettingsChanged:', e.message));
+  }
+  // P2：语音能力状态同步到 WebUI
+  try {
+    if (voiceIpc && webControlService) {
+      const st = voiceIpc.getStatus ? voiceIpc.getStatus() : null;
+      if (st) webControlService.setVoiceCapabilities(st);
+    }
+  } catch {}
   return settings;
 });
 
@@ -8713,6 +8818,11 @@ app.on('before-quit', async (event) => {
   if (appTray) {
     try { appTray.destroy(); } catch {}
     appTray = null;
+  }
+  // 语音子系统（注销全局热键、关闭隐藏采集窗/语音条、终止推理 worker）
+  if (voiceIpc) {
+    try { await voiceIpc.dispose(); } catch {}
+    voiceIpc = null;
   }
   // 如果主窗口还存在且尚未确认 pending 保存完成，先阻止退出，请求渲染器保存
   if (mainWindow && !mainWindow.isDestroyed() && !pendingSaveDone) {

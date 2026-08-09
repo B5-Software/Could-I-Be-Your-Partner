@@ -250,12 +250,20 @@ class Agent {
       this._streamChunkUnsub = window.api.onStreamChunk((chunk) => {
         if (!chunk || chunk.requestId !== this._activeStreamRequestId) return;
         if (this.onMessage) this.onMessage('stream-chunk', chunk);
+        // 流式 TTS：实时投喂句子切分器（跳过 reasoning，仅播助理文本）
+        if (window.VoiceUI && chunk.content) {
+          window.VoiceUI.feedStreamChunk(chunk.content);
+        }
       });
     }
     if (window.api?.onStreamEnd && !this._streamEndUnsub) {
       this._streamEndUnsub = window.api.onStreamEnd((data) => {
         if (!data || data.requestId !== this._activeStreamRequestId) return;
         if (this.onMessage) this.onMessage('stream-end', data);
+        // 流式 TTS 收尾（兜底非流式回退：若没喂过任何 chunk，播报 data.content 全文）
+        if (window.VoiceUI) {
+          window.VoiceUI.feedStreamEnd((data && data.content) ? data.content : null);
+        }
       });
     }
   }

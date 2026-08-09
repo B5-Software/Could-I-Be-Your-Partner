@@ -131,9 +131,10 @@ class VoiceEngine extends EventEmitter {
           numThreads: 2,
         },
         piperDe: {
-          model: req('tts-piper-de', 'tts/vits-piper-de_DE-thorsten-medium-int8/de_DE-thorsten-medium.int8.onnx'),
-          tokens: req('tts-piper-de', 'tts/vits-piper-de_DE-thorsten-medium-int8/tokens.txt'),
-          dataDir: req('tts-piper-de', 'tts/vits-piper-de_DE-thorsten-medium-int8/espeak-ng-data'),
+          model: req('tts-piper-de', 'tts/vits-piper-de_DE-thorsten-medium/de_DE-thorsten-medium.onnx'),
+          tokens: req('tts-piper-de', 'tts/vits-piper-de_DE-thorsten-medium/tokens.txt'),
+          // Piper 与 Kokoro 共享 espeak-ng-data 目录（phonemization 引擎同一套文件）
+          dataDir: P('tts/kokoro-int8-multi-lang-v1_0/espeak-ng-data'),
           lexicon: '',
         },
       },
