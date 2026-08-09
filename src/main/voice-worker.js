@@ -43,9 +43,9 @@ const sttSessions = new Map(); // sessionId -> { vad, recognizer, text, closed }
 let whisperRecognizer = null;  // 懒加载单例（所有会话共享）
 
 const ttsEngines = new Map();  // 'kokoro' | 'piper-de' -> OfflineTts
-const ttsQueue = [];           // { reqId, text, lang, sid, speed, engine }
+const ttsQueue = [];           // { reqId, text, lang, sid, speed, engine, epoch }
 let ttsBusy = false;
-let ttsCancelFlag = false;
+let ttsEpoch = 0;              // 每 cancel 一次 +1；仅处理 epoch 与当前值一致的合成任务
 
 function post(msg, transfer) {
   try {
@@ -292,7 +292,6 @@ async function pumpTtsQueue() {
   if (ttsBusy) return;
   ttsBusy = true;
   while (ttsQueue.length > 0) {
-    if (ttsCancelFlag) { ttsQueue.length = 0; break; }
     const job = ttsQueue.shift();
     try {
       const tts = getTtsEngine(job.engine);
@@ -306,7 +305,7 @@ async function pumpTtsQueue() {
           silenceScale: 0.2,
         }),
         onProgress: (info) => {
-          if (ttsCancelFlag) return 0; // 中止合成
+          if (ttsEpoch !== job.epoch) return 0; // 中止合成
           if (info && info.samples && info.samples.length > 0) {
             const i16 = float32ToInt16(info.samples);
             post({
@@ -321,7 +320,7 @@ async function pumpTtsQueue() {
           return 1;
         },
       });
-      if (ttsCancelFlag) { /* 被外部取消，不再发 done */ }
+      if (ttsEpoch !== job.epoch) { /* 被外部取消，不再发 done */ }
       else if (!sentAny && audio && audio.samples && audio.samples.length > 0) {
         // 某些版本 onProgress 不回调，一次性返回
         const i16 = float32ToInt16(audio.samples);
@@ -335,7 +334,6 @@ async function pumpTtsQueue() {
     }
   }
   ttsBusy = false;
-  ttsCancelFlag = false;
 }
 
 // ---------- 消息分发 ----------
@@ -359,12 +357,12 @@ parentPort.on('message', (msg) => {
         break;
       }
       case 'tts.speak':
-        ttsQueue.push({ reqId: msg.reqId, text: msg.text, engine: msg.tts, sid: msg.sid, speed: msg.speed });
+        ttsQueue.push({ reqId: msg.reqId, text: msg.text, engine: msg.tts, sid: msg.sid, speed: msg.speed, epoch: ttsEpoch });
         pumpTtsQueue();
         break;
       case 'tts.cancelAll':
+        ttsEpoch++;
         ttsQueue.length = 0;
-        ttsCancelFlag = true;
         break;
       default:
         break;

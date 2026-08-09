@@ -242,6 +242,14 @@
         ensurePlayer().finish(msg.reqId);
       });
     }
+    if (window.api.onVoiceTtsError) {
+      window.api.onVoiceTtsError((msg) => {
+        if (typeof window.showToast === 'function' && msg && msg.error) {
+          window.showToast('语音合成失败：' + msg.error, 'warn', 4000);
+        }
+        if (player && msg && msg.reqId) player.stop(String(msg.reqId));
+      });
+    }
     if (window.api.onVoiceHotkeyToggle) {
       window.api.onVoiceHotkeyToggle(() => toggleDictation());
     }

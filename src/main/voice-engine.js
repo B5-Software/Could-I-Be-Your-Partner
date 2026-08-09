@@ -317,13 +317,14 @@ class VoiceEngine extends EventEmitter {
     const lang = opts.lang || 'zh';
     const s = (this.getSettings && this.getSettings()) || {};
     const voiceCfg = (s.voice && s.voice.tts) || {};
+    const ttsVoices = (s.voice && s.voice.ttsVoices) || {};
     let engine, sid;
     if (lang === 'de') {
       engine = 'piper-de';
       sid = 0;
     } else {
       engine = 'kokoro';
-      const voiceName = opts.voice || voiceCfg.voices?.[lang] || DEFAULT_VOICES[lang] || DEFAULT_VOICES.zh;
+      const voiceName = opts.voice || ttsVoices[lang] || voiceCfg.voices?.[lang] || DEFAULT_VOICES[lang] || DEFAULT_VOICES.zh;
       sid = KOKORO_VOICES[voiceName] != null ? KOKORO_VOICES[voiceName] : KOKORO_VOICES[DEFAULT_VOICES[lang] || 'zf_xiaoxiao'];
     }
     const speed = opts.speed != null ? opts.speed : (voiceCfg.speed != null ? voiceCfg.speed : 1.0);

@@ -12736,5 +12736,11 @@
 
   bindVoiceSettings();
   loadVoiceSettings();
+  // 启动时将语音设置同步给 VoiceUI（试听/自动朗读依赖 settings 判开关）
+  window.api.getSettings().then((s) => {
+    if (window.VoiceUI) {
+      try { window.VoiceUI.applySettings(s); } catch (_) {}
+    }
+  });
 
 })();

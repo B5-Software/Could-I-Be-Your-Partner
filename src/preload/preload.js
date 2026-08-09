@@ -273,6 +273,11 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.on('voice:tts-done', listener);
     return () => ipcRenderer.removeListener('voice:tts-done', listener);
   },
+  onVoiceTtsError: (cb) => {
+    const listener = (_, data) => cb(data);
+    ipcRenderer.on('voice:tts-error', listener);
+    return () => ipcRenderer.removeListener('voice:tts-error', listener);
+  },
   onVoiceWake: (cb) => {
     const listener = (_, data) => cb(data);
     ipcRenderer.on('voice:wake', listener);
