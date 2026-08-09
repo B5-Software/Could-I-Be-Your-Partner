@@ -1778,21 +1778,32 @@ function showWindowFromTray() {
 function createAppTray() {
   if (appTray) return;
   if (!settings.trayEnabled) return;
-  // 托盘图标：按 Electron 官方规范处理尺寸。
-  // 官方文档：macOS 推荐 16x16@1x(72dpi) / 32x32@2x(144dpi) 的 Template Image；
-  // Windows/Linux 推荐 16x16（或 ICO）。原始 icon.png 分辨率过高会导致菜单栏图标溢出。
+  // 托盘图标：按 Electron/macOS 官方规范处理尺寸。
+  // macOS 菜单栏图标必须是 Template Image：纯 alpha 通道（黑+透明），系统按深浅色自动着色。
+  // 直接用全彩 icon.png 缩小再做模板，会得到"白色圆角方块"（颜色被忽略只剩不透明矩形）。
+  // 因此 macOS 使用专用模板资产 trayHeartTemplate.png(16x16@1x/32x32@2x，命名以 Template 结尾，
+  // Electron/macOS 自动匹配 @2x 与模板反色)。
+  // Windows/Linux 托盘图标标准尺寸 16x16，使用彩色 icon.png 缩放。
   let trayIcon;
   try {
-    const iconPath = path.join(__dirname, '../../assets/icons/icon.png');
-    if (fs.existsSync(iconPath)) {
-      trayIcon = nativeImage.createFromPath(iconPath);
-      if (!trayIcon.isEmpty()) {
-        if (process.platform === 'darwin') {
-          // macOS 菜单栏高度约 24pt，缩放到 22x22 适配并留出边距，
-          // 再标记为模板图像以自适应深浅色（系统按 alpha 通道着色）
+    if (process.platform === 'darwin') {
+      const iconPath = path.join(__dirname, '../../assets/icons/icons/trayHeartTemplate.png');
+      trayIcon = fs.existsSync(iconPath) ? nativeImage.createFromPath(iconPath) : nativeImage.createEmpty();
+      if (!trayIcon.isEmpty()) trayIcon.setTemplateImage(true);
+      else {
+        // 模板资产缺失时回退到彩色图标（保持托盘可用），告警日志提示
+        const fallback = path.join(__dirname, '../../assets/icons/icon.png');
+        trayIcon = fs.existsSync(fallback) ? nativeImage.createFromPath(fallback) : nativeImage.createEmpty();
+        if (!trayIcon.isEmpty()) {
           try { trayIcon = trayIcon.resize({ width: 22, height: 22 }); } catch {}
           trayIcon.setTemplateImage(true);
-        } else {
+        }
+      }
+    } else {
+      const iconPath = path.join(__dirname, '../../assets/icons/icon.png');
+      if (fs.existsSync(iconPath)) {
+        trayIcon = nativeImage.createFromPath(iconPath);
+        if (!trayIcon.isEmpty()) {
           // Windows/Linux 托盘图标标准尺寸 16x16
           try { trayIcon = trayIcon.resize({ width: 16, height: 16 }); } catch {}
         }
