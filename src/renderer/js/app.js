@@ -12517,6 +12517,18 @@
     const volValEl = document.getElementById('setting-voice-volume-val');
     const vol = Math.round((v.ttsVolume != null ? v.ttsVolume : 1.0) * 100);
     if (volEl) { volEl.value = Math.max(10, Math.min(100, vol)); if (volValEl) volValEl.textContent = vol + '%'; }
+    const chunkEl = document.getElementById('setting-voice-tts-chunk');
+    const chunkSizeEl = document.getElementById('setting-voice-tts-chunk-size');
+    const chunkSizeValEl = document.getElementById('setting-voice-tts-chunk-size-val');
+    const chunkEnabled = v.ttsAutoChunk !== false;
+    if (chunkEl) chunkEl.checked = chunkEnabled;
+    const chunkChars = v.ttsChunkChars != null ? Math.round(v.ttsChunkChars) : 120;
+    if (chunkSizeEl) {
+      chunkSizeEl.value = Math.max(40, Math.min(300, chunkChars));
+      if (chunkSizeValEl) chunkSizeValEl.textContent = Math.max(40, Math.min(300, chunkChars)) + '字';
+    }
+    const chunkRow = chunkSizeEl && chunkSizeEl.closest('.setting-item');
+    if (chunkRow) chunkRow.style.opacity = chunkEnabled ? '1' : '0.4';
     setChk('setting-voice-wake', v.wakeEnabled === true);
     set('setting-voice-kws-threshold', (v.kws && v.kws.threshold != null) ? String(v.kws.threshold) : '0.25');
     set('setting-voice-hotkey', v.hotkey || 'Control+Shift+Space');
@@ -12662,6 +12674,34 @@
       try { if (window.VoiceUI) window.VoiceUI.applySettings(s); } catch (_) {}
     });
 
+    // 长文本自动分块开关
+    const chunkToggleEl = document.getElementById('setting-voice-tts-chunk');
+    if (chunkToggleEl) {
+      chunkToggleEl.addEventListener('change', async () => {
+        const s = await window.api.getSettings();
+        if (!s.voice) s.voice = {};
+        s.voice.ttsAutoChunk = chunkToggleEl.checked;
+        await saveVoiceSettings(s);
+        try { if (window.VoiceUI) window.VoiceUI.applySettings(s); } catch (_) {}
+        const sizeEl = document.getElementById('setting-voice-tts-chunk-size');
+        const row = sizeEl && sizeEl.closest('.setting-item');
+        if (row) row.style.opacity = chunkToggleEl.checked ? '1' : '0.4';
+      });
+    }
+    const chunkSizeEl = document.getElementById('setting-voice-tts-chunk-size');
+    if (chunkSizeEl) {
+      chunkSizeEl.addEventListener('input', () => {
+        const valEl = document.getElementById('setting-voice-tts-chunk-size-val');
+        if (valEl) valEl.textContent = chunkSizeEl.value + '字';
+      });
+      chunkSizeEl.addEventListener('change', async () => {
+        const s = await window.api.getSettings();
+        if (!s.voice) s.voice = {};
+        s.voice.ttsChunkChars = parseInt(chunkSizeEl.value) || 80;
+        await saveVoiceSettings(s);
+        try { if (window.VoiceUI) window.VoiceUI.applySettings(s); } catch (_) {}
+      });
+    }
     // 语速/音量 range
     for (const [id, key, label] of [['setting-voice-speed', 'ttsSpeed', 'x'], ['setting-voice-volume', 'ttsVolume', '%']]) {
       const el = document.getElementById(id);

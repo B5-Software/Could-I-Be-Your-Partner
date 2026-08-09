@@ -804,9 +804,10 @@ html,body{height:100%;overflow:hidden;font-family:-apple-system,BlinkMacSystemFo
 #login-box button{width:100%;padding:10px;border:none;border-radius:6px;background:var(--accent,#4f8cff);color:#fff;font-size:14px;cursor:pointer}
 #login-box button:hover{opacity:.9}
 #login-box .err{color:#e74c3c;font-size:12px;margin-bottom:8px;display:none}
-/* WebUI 下隐藏 Local/Remote 切换器和窗口控制按钮（本地渲染器才有此控件） */
+/* WebUI 下隐藏 Local/Remote 切换器和窗口控制按钮（本地渲染器才有此控件）；
+   保留屏幕软键盘按钮 #osk-toggle-btn */
 #connection-switcher{display:none!important}
-.titlebar-controls{display:none!important}
+#btn-minimize,#btn-maximize,#btn-close{display:none!important}
 .titlebar-drag{-webkit-app-region:none!important}
 #titlebar{display:flex}
 </style>
@@ -1241,11 +1242,13 @@ html,body{height:100%;overflow:hidden;font-family:-apple-system,BlinkMacSystemFo
     if(msg.titlebar){
       var tb=document.getElementById('titlebar');
       if(tb)tb.outerHTML=msg.titlebar;
-      // 隐藏窗口控制按钮和 Local/Remote 切换器（WebUI 不需要这些）
+      // 隐藏窗口控制按钮和 Local/Remote 切换器（WebUI 不需要这些）但不隐藏屏幕软键盘按钮
       var newTb=document.getElementById('titlebar');
       if(newTb){
-        var ctrls=newTb.querySelector('.titlebar-controls');
-        if(ctrls)ctrls.style.display='none';
+        ['btn-minimize','btn-maximize','btn-close'].forEach(function(btnId){
+          var b=newTb.querySelector('#'+btnId);
+          if(b)b.style.display='none';
+        });
         var cs=newTb.querySelector('#connection-switcher');
         if(cs)cs.style.display='none';
         // 移除拖拽区域属性（WebUI 不是 Electron 窗口）

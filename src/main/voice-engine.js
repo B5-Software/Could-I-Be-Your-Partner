@@ -328,7 +328,13 @@ class VoiceEngine extends EventEmitter {
       sid = KOKORO_VOICES[voiceName] != null ? KOKORO_VOICES[voiceName] : KOKORO_VOICES[DEFAULT_VOICES[lang] || 'zf_xiaoxiao'];
     }
     const speed = opts.speed != null ? opts.speed : (voiceCfg.speed != null ? voiceCfg.speed : 1.0);
-    this.worker.postMessage({ type: 'tts.speak', reqId, text, tts: engine, sid, speed });
+    // 自动分块：长文本在 worker 侧按 voice.ttsChunkChars 拆分合成（默认 120 字/块），
+    // 防止单次 generate() 一次性申请巨量音频内存导致 OOM。voice.ttsAutoChunk 关闭则不切分。
+    let chunkChars = 0;
+    if (!s.voice || s.voice.ttsAutoChunk !== false) {
+      chunkChars = s.voice && s.voice.ttsChunkChars != null ? s.voice.ttsChunkChars : 120;
+    }
+    this.worker.postMessage({ type: 'tts.speak', reqId, text, tts: engine, sid, speed, chunkChars });
   }
 
   cancelAllTts() {

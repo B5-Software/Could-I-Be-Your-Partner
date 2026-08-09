@@ -47,8 +47,11 @@ body {
 #titlebar.platform-darwin .titlebar-drag {
   padding-left: 80px;
 }
-/* macOS 使用系统红绿灯，隐藏自定义窗口控制按钮（兜底 JS 隐藏） */
-#titlebar.platform-darwin .titlebar-btn {
+/* macOS 使用系统红绿灯，隐藏自定义窗口控制按钮（兜底 JS 隐藏）。
+   注意：只隐藏窗口控制按钮，不得隐藏其它 titlebar-btn（如屏幕软键盘 #osk-toggle-btn） */
+#titlebar.platform-darwin #btn-minimize,
+#titlebar.platform-darwin #btn-maximize,
+#titlebar.platform-darwin #btn-close {
   display: none !important;
 }
 

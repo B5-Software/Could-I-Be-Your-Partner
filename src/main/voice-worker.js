@@ -288,38 +288,107 @@ function getTtsEngine(name) {
   return tts;
 }
 
+/**
+ * 将待合成文本切成不超过 maxChars 的分块。
+ * 中文以标点（。！？；，、）为边界，英文以 .!?; 句子结束，避免截断单词；
+ * 无标点时按硬上限切分。空/无上限时原样返回。
+ */
+function splitTtsText(text, maxChars) {
+  if (!text) return [];
+  const limit = maxChars && maxChars > 0 ? Math.max(20, Math.floor(maxChars)) : 0;
+  if (!limit || text.length <= limit) return [text];
+  const parts = [];
+  let rest = text;
+  const hard = limit;
+  const boundaryRe = /[。！？；…!?;；】〕》」』…\n\s]|\.(?=\s)|[,，]|\s(?=\S)/g;
+  while (rest.length > 0) {
+    if (rest.length <= hard) { parts.push(rest); break; }
+    const sub = rest.slice(0, hard);
+    // 在 ~40%~95% 区间内找最后一个边界符，避免全部在开头
+    const candidates = [];
+    boundaryRe.lastIndex = 0;
+    let m;
+    while ((m = boundaryRe.exec(sub)) !== null) {
+      const idx = m.index;
+      if (idx >= 30) candidates.push(idx);
+    }
+    const cutAt = candidates.length ? candidates[candidates.length - 1] : hard;
+    // 避免 single char 遗留
+    const cut = cutAt >= hard - 1 || cutAt <= 0 ? hard : cutAt + 1;
+    parts.push(rest.slice(0, cut));
+    rest = rest.slice(cut);
+  }
+  // 合并过碎的小块（例如标点密集导致的大量几字残留），但不得重新拼成超长块
+  const MIN_FRAGMENT = Math.max(10, Math.floor(limit / 6));
+  const merged = [];
+  for (const p of parts) {
+    if (merged.length && p.length <= MIN_FRAGMENT && merged[merged.length - 1].length + p.length <= limit * 1.15) {
+      merged[merged.length - 1] += p;
+    } else {
+      merged.push(p);
+    }
+  }
+  return merged;
+}
+
 async function pumpTtsQueue() {
   if (ttsBusy) return;
   ttsBusy = true;
   while (ttsQueue.length > 0) {
     const job = ttsQueue.shift();
-    try {
-      const tts = getTtsEngine(job.engine);
-      // 使用同步 generate()（一次返回整段音频）：
-      // sherpa-onnx-node 的异步 generateAsync+onProgress 在 macOS 上存在
-      // use-after-free（TypedThreadSafeFunction 读取已释放内存），导致
-      // 吐字不清 / 随机卡顿，甚至 napi_create_arraybuffer OOM 崩溃。
-      // worker 线程本来就在后台，同步阻塞完全可接受。
-      const audio = tts.generate({
-        text: job.text,
-        enableExternalBuffer: false,
-        generationConfig: new sherpa.GenerationConfig({
-          sid: job.sid != null ? job.sid : 0,
-          speed: job.speed != null ? job.speed : 1.0,
-          silenceScale: 0.2,
-        }),
-      });
-      if (ttsEpoch !== job.epoch) { /* 被外部取消，不再发 done */ }
-      else if (audio && audio.samples && audio.samples.length > 0) {
-        const sr = audio.sampleRate || tts.sampleRate;
-        const i16 = float32ToInt16(audio.samples);
-        post({ type: 'tts.audio', reqId: job.reqId, samples: i16.buffer, sampleRate: sr, progress: 1 }, [i16.buffer]);
-        post({ type: 'tts.done', reqId: job.reqId, durationSec: i16.length / sr });
-      } else {
-        post({ type: 'tts.error', reqId: job.reqId, error: 'empty audio' });
+    // 自动分块：无论流式/非流式，超长文本一律拆块合成，防止长文本单次
+    // generate() 一次性申请巨量内存导致 OOM（worker 已无 onProgress 流式保护）。
+    // 块大小来自设置 voice.ttsChunkChars（默认 120 字/块）。
+    const chunks = splitTtsText(job.text, job.chunkChars);
+    if (ttsEpoch !== job.epoch) continue; // 已取消
+    if (!chunks.length) {
+      post({ type: 'tts.error', reqId: job.reqId, error: 'empty text' });
+      continue;
+    }
+    let totalFrames = 0;
+    let sr = 24000;
+    let failed = false;
+    for (const [i, textChunk] of chunks.entries()) {
+      if (ttsEpoch !== job.epoch) break; // 中间被取消：丢弃未发出部分
+      try {
+        const tts = getTtsEngine(job.engine);
+        // 使用同步 generate()（一次返回整段音频）：
+        // sherpa 的异步 generateAsync+onProgress 在 macOS 上存在
+        // use-after-free（TypedThreadSafeFunction 读取已释放内存），导致
+        // 吐字不清 / 随机卡顿，甚至 napi_create_arraybuffer OOM 崩溃。
+        // worker 线程本来就在后台，同步阻塞完全可接受。
+        const audio = tts.generate({
+          text: textChunk,
+          enableExternalBuffer: false,
+          generationConfig: new sherpa.GenerationConfig({
+            sid: job.sid != null ? job.sid : 0,
+            speed: job.speed != null ? job.speed : 1.0,
+            silenceScale: 0.2,
+          }),
+        });
+        if (ttsEpoch !== job.epoch) break;
+        if (audio && audio.samples && audio.samples.length > 0) {
+          sr = audio.sampleRate || tts.sampleRate;
+          const i16 = float32ToInt16(audio.samples);
+          totalFrames += i16.length;
+          post({
+            type: 'tts.audio',
+            reqId: job.reqId,
+            samples: i16.buffer,
+            sampleRate: sr,
+            progress: (i + 1) / chunks.length,
+          }, [i16.buffer]);
+        }
+      } catch (e) {
+        failed = true;
+        post({ type: 'tts.error', reqId: job.reqId, error: `chunk ${i + 1}/${chunks.length}: ${e.message}` });
+        break;
       }
-    } catch (e) {
-      post({ type: 'tts.error', reqId: job.reqId, error: e.message });
+    }
+    if (ttsEpoch === job.epoch && !failed && totalFrames > 0) {
+      post({ type: 'tts.done', reqId: job.reqId, durationSec: totalFrames / sr });
+    } else if (ttsEpoch === job.epoch && !failed && totalFrames === 0) {
+      post({ type: 'tts.error', reqId: job.reqId, error: 'empty audio' });
     }
   }
   ttsBusy = false;
@@ -346,7 +415,7 @@ parentPort.on('message', (msg) => {
         break;
       }
       case 'tts.speak':
-        ttsQueue.push({ reqId: msg.reqId, text: msg.text, engine: msg.tts, sid: msg.sid, speed: msg.speed, epoch: ttsEpoch });
+        ttsQueue.push({ reqId: msg.reqId, text: msg.text, engine: msg.tts, sid: msg.sid, speed: msg.speed, chunkChars: msg.chunkChars, epoch: ttsEpoch });
         pumpTtsQueue();
         break;
       case 'tts.cancelAll':

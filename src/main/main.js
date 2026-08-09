@@ -1606,6 +1606,9 @@ let settings = loadJSON(settingsPath, {
     ttsVoices: { zh: 'zf_xiaoxiao', en: 'af_heart', de: 'thorsten' },
     ttsSpeed: 1.0,
     ttsVolume: 1.0,
+    // 长文本自动分块合成（防 OOM）：ttsAutoChunk 控制开关，ttsChunkChars=每块最大字数
+    ttsAutoChunk: true,
+    ttsChunkChars: 120,
     sttModel: 'base',
     // 听写结尾说这些词任一个 → 自动发送该条消息（默认关闭，空数组关闭该功能）
     sttSendKeywords: [],
