@@ -747,8 +747,10 @@ if (this.ime.buffer) {
     this._buildLayout();
     this._renderIme();
     this._applyStyleSettings();
-    if (this.settings.enabled && !this.visible) this.show();
-    if (!this.settings.enabled && this.visible) this.hide();
+    // 注意：这里不根据 enabled 隐式 show/hide。
+    // 拖动结束保存几何会触发 settings 广播 → applySettings，若在此 hide，
+    // "启动时自动打开"关闭时已手动打开的键盘会在拖动后消失。
+    // enabled 的显式显隐由设置页开关（app.js setting-ime-enabled）与 toggle 按钮处理。
   };
 
   global.OskCore = OskCore;
