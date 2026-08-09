@@ -14,68 +14,15 @@
 'use strict';
 
 (function (global) {
-  // ---------- AudioWorklet 处理器（内联，经 Blob URL 加载） ----------
-  const WORKLET_CODE = `
-class Pcm16Encoder extends AudioWorkletProcessor {
-  constructor(options) {
-    super();
-    this.targetRate = (options.processorOptions && options.processorOptions.targetRate) || 16000;
-    this.ratio = sampleRate / this.targetRate;
-    this.inBuf = new Float32Array(0);
-    this.outPos = 0;
-    this.chunkSize = 1600; // 100ms @16k
-    this.levelAcc = 0;
-    this.levelCount = 0;
-    this.levelSamples = 0;
-  }
-  process(inputs) {
-    const ch = inputs[0] && inputs[0][0];
-    if (!ch || ch.length === 0) return true;
-    // 电平统计（~200ms 上报一次）
-    for (let i = 0; i < ch.length; i += 4) { this.levelAcc += ch[i] * ch[i]; this.levelCount++; }
-    this.levelSamples += ch.length;
-    if (this.levelSamples >= sampleRate * 0.2) {
-      const rms = Math.sqrt(this.levelAcc / Math.max(1, this.levelCount));
-      this.port.postMessage({ type: 'level', level: Math.min(1, rms * 4) });
-      this.levelAcc = 0; this.levelCount = 0; this.levelSamples = 0;
-    }
-    // 拼接输入缓冲
-    const merged = new Float32Array(this.inBuf.length + ch.length);
-    merged.set(this.inBuf, 0);
-    merged.set(ch, this.inBuf.length);
-    this.inBuf = merged;
-    // 线性插值重采样 → Int16 chunk
-    while ((this.inBuf.length - 1 - this.outPos) / this.ratio >= this.chunkSize) {
-      const out = new Int16Array(this.chunkSize);
-      for (let i = 0; i < this.chunkSize; i++) {
-        const srcPos = this.outPos + i * this.ratio;
-        const idx = Math.floor(srcPos);
-        const frac = srcPos - idx;
-        const a = this.inBuf[idx] || 0;
-        const b = this.inBuf[idx + 1] || 0;
-        let s = a + (b - a) * frac;
-        s = Math.max(-1, Math.min(1, s));
-        out[i] = s < 0 ? s * 32768 : s * 32767;
-      }
-      this.port.postMessage({ type: 'pcm', samples: out.buffer }, [out.buffer]);
-      this.outPos += this.chunkSize * this.ratio;
-    }
-    // 丢弃已消费输入（保留 1 样本保证插值连续）
-    const consumed = Math.floor(this.outPos);
-    if (consumed > 1) {
-      this.inBuf = this.inBuf.slice(consumed - 1);
-      this.outPos -= (consumed - 1);
-    }
-    return true;
-  }
-}
-registerProcessor('pcm16-encoder', Pcm16Encoder);
-`;
+  // ---------- AudioWorklet 处理器（独立文件，规避 blob: 因 CSP/Electron 版本无法加载） ----------
+  // worklet 路径：与 voice-capture.js 同目录（页面经 ../js/ 引用，此处相对页面 URL 计算）
 
   let _workletUrl = null;
   function getWorkletUrl() {
     if (!_workletUrl) {
-      _workletUrl = URL.createObjectURL(new Blob([WORKLET_CODE], { type: 'application/javascript' }));
+      const base = location.href;
+      const pageDir = base.slice(0, base.lastIndexOf('/') + 1);
+      _workletUrl = pageDir + '../js/pcm16-encoder.worklet.js';
     }
     return _workletUrl;
   }
@@ -102,33 +49,104 @@ registerProcessor('pcm16-encoder', Pcm16Encoder);
         },
       });
       this.ctx = new (window.AudioContext || window.webkitAudioContext)();
-      await this.ctx.audioWorklet.addModule(getWorkletUrl());
+      // AudioWorklet 为优先路径；若加载失败（Electron/CSP 环境差异）回退 ScriptProcessor
+      let workletOk = false;
+      try {
+        await this.ctx.audioWorklet.addModule(getWorkletUrl());
+        this.node = new AudioWorkletNode(this.ctx, 'pcm16-encoder', {
+          processorOptions: { targetRate: 16000 },
+        });
+        this.node.port.onmessage = (e) => {
+          const d = e.data;
+          if (d.type === 'pcm' && this.onChunk) this.onChunk(d.samples);
+          else if (d.type === 'level' && this.onLevel) this.onLevel(d.level);
+        };
+        workletOk = true;
+      } catch (e) {
+        if (global.console) console.warn('[VoiceMic] AudioWorklet 不可用，回退 ScriptProcessor:', e && e.message);
+      }
       const source = this.ctx.createMediaStreamSource(this.stream);
-      this.node = new AudioWorkletNode(this.ctx, 'pcm16-encoder', {
-        processorOptions: { targetRate: 16000 },
-      });
-      this.node.port.onmessage = (e) => {
-        const d = e.data;
-        if (d.type === 'pcm' && this.onChunk) this.onChunk(d.samples);
-        else if (d.type === 'level' && this.onLevel) this.onLevel(d.level);
-      };
-      // 静音增益挂到 destination，保证 worklet 被持续拉流且不产生回授
+      // 静音增益挂到 destination，保证处理器被持续拉流且不产生回授
       const gain = this.ctx.createGain();
       gain.gain.value = 0;
-      source.connect(this.node);
-      this.node.connect(gain);
+      source.connect(gain);
       gain.connect(this.ctx.destination);
+      if (workletOk) {
+        source.connect(this.node);
+        this.node.connect(gain);
+      } else {
+        this._bindScriptProcessorFallback(gain);
+      }
       this._gain = gain;
       this.running = true;
+    }
+
+    // ScriptProcessor 降级：做与 worklet 等价的重采样 + Int16 分帧 + 电平
+    _bindScriptProcessorFallback(destNode) {
+      const ctx = this.ctx;
+      const targetRate = 16000;
+      const ratio = ctx.sampleRate / targetRate;
+      let inBuf = new Float32Array(0);
+      let outPos = 0;
+      const CHUNK = 1600;
+      let levelAcc = 0;
+      let levelCount = 0;
+      let levelSamples = 0;
+      const proc = ctx.createScriptProcessor(4096, 1, 1);
+      const push = () => {
+        while ((inBuf.length - 1 - outPos) / ratio >= CHUNK) {
+          const out = new Int16Array(CHUNK);
+          for (let i = 0; i < CHUNK; i++) {
+            const srcPos = outPos + i * ratio;
+            const idx = Math.floor(srcPos);
+            const frac = srcPos - idx;
+            const a = inBuf[idx] || 0;
+            const b = inBuf[idx + 1] || 0;
+            let s = a + (b - a) * frac;
+            s = Math.max(-1, Math.min(1, s));
+            out[i] = s < 0 ? s * 32768 : s * 32767;
+          }
+          if (this.onChunk) {
+            try { this.onChunk(out.buffer); } catch (_) {}
+          }
+          outPos += CHUNK * ratio;
+        }
+        const consumed = Math.floor(outPos);
+        if (consumed > 1) {
+          inBuf = inBuf.slice(consumed - 1);
+          outPos -= (consumed - 1);
+        }
+      };
+      proc.onaudioprocess = (e) => {
+        const ch = e.inputBuffer.getChannelData(0);
+        const merged = new Float32Array(inBuf.length + ch.length);
+        merged.set(inBuf, 0);
+        merged.set(ch, inBuf.length);
+        inBuf = merged;
+        for (let i = 0; i < ch.length; i += 4) { levelAcc += ch[i] * ch[i]; levelCount++; }
+        levelSamples += ch.length;
+        if (levelSamples >= ctx.sampleRate * 0.2) {
+          const rms = Math.sqrt(levelAcc / Math.max(1, levelCount));
+          if (this.onLevel) {
+            try { this.onLevel(Math.min(1, rms * 4)); } catch (_) {}
+          }
+          levelAcc = 0; levelCount = 0; levelSamples = 0;
+        }
+        push();
+      };
+      proc.connect(dest);
+      this._proc = proc;
     }
 
     async stop() {
       this.running = false;
       try { if (this.node) this.node.disconnect(); } catch (_) {}
+      try { if (this._proc) this._proc.disconnect(); } catch (_) {}
       try { if (this._gain) this._gain.disconnect(); } catch (_) {}
       try { if (this.stream) this.stream.getTracks().forEach((t) => t.stop()); } catch (_) {}
       try { if (this.ctx) await this.ctx.close(); } catch (_) {}
       this.node = null;
+      this._proc = null;
       this._gain = null;
       this.stream = null;
       this.ctx = null;

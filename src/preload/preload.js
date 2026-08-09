@@ -519,6 +519,13 @@ contextBridge.exposeInMainWorld('api', {
   onWebControlFileUploaded: (cb) => ipcRenderer.on('webControl:fileUploaded', (_, data) => cb(data)),
   onGameFinished: (cb) => ipcRenderer.on('game:finished', (_, data) => cb(data)),
 
+  // 语音条：把识别文本填入当前模式输入框 / 自动发送
+  onVoiceBarFill: (cb) => {
+    const listener = (_, data) => cb(data);
+    ipcRenderer.on('voice:bar:fill', listener);
+    return () => ipcRenderer.removeListener('voice:bar:fill', listener);
+  },
+
   // Pending Session: 异常中断时保存正在工作的会话，启动时弹模态框询问是否继续
   onSavePending: (cb) => ipcRenderer.on('agent:save-pending', () => cb()),
   savePendingSession: (payload) => ipcRenderer.invoke('agent:save-pending-session', payload),

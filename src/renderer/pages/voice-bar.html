@@ -9,9 +9,19 @@
   <meta charset="UTF-8">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline' blob:; media-src 'self' blob:; img-src 'self' data:; connect-src 'self' blob:">
   <title>Voice Bar</title>
+  <link rel="stylesheet" href="../css/theme.css">
   <link rel="stylesheet" href="../css/voice-bar.css">
+  <script>
+    // 立即按系统偏好设置主题（异步 getSettings 返回后再校正 accentColor/强制模式）
+    (function () {
+      try {
+        document.documentElement.dataset.theme =
+          (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) ? 'dark' : 'light';
+      } catch (_) {}
+    })();
+  </script>
 </head>
-<body>
+<body data-bg="default">
   <div class="voice-bar" id="bar">
     <div class="bar-drag" id="bar-drag">
       <div class="bar-status-icon" id="status-icon">

@@ -12,6 +12,9 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('voiceApi', {
+  // 设置（语音条读取 sttSendKeywords 等）
+  getSettings: () => ipcRenderer.invoke('settings:get'),
+
   // 音频帧上行（Int16 ArrayBuffer, 16kHz mono）
   sendAudio: (target, sessionId, samples) =>
     ipcRenderer.send('voice:audio', { target, sessionId, samples }),
@@ -24,8 +27,10 @@ contextBridge.exposeInMainWorld('voiceApi', {
   ttsStop: () => ipcRenderer.invoke('voice:tts:stop'),
 
   // 语音条 → 主窗口
-  barSendCommand: (text) => ipcRenderer.send('voice:bar:command', text),
-  barShowMain: () => ipcRenderer.send('voice:bar:show-main'),
+  barSendCommand: (text, autoSend) =>
+    ipcRenderer.send('voice:bar:command', { text, autoSend: autoSend !== false }),
+  // 打开主窗口并把识别文本填入当前模式输入框（默认不发送，仅填入）
+  barShowMain: (text) => ipcRenderer.send('voice:bar:show-main', { text }),
   barClose: () => ipcRenderer.invoke('voice:bar:close'),
   reportState: (state) => ipcRenderer.send('voice:client-state', state),
 

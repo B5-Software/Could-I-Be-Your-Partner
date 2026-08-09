@@ -57,6 +57,7 @@ function openVoiceBar() {
     height: 170,
     frame: false,
     transparent: true,
+    backgroundColor: '#00000000',
     resizable: false,
     alwaysOnTop: true,
     skipTaskbar: true,
@@ -279,19 +280,27 @@ function registerIpc(ipcMain) {
   ipcMain.handle('voice:bar:open', () => { openVoiceBar(); return { ok: true }; });
   ipcMain.handle('voice:bar:close', () => { closeVoiceBar(); return { ok: true }; });
 
-  // 语音条识别完成 → 指令注入主窗口 Agent（复用 webControl:sendMessage 通道）
-  ipcMain.on('voice:bar:command', (_, text) => {
+  // 语音条识别完成 → 打开主窗口并把文字填入当前模式输入框（autoSend=true 时自动发送）
+  ipcMain.on('voice:bar:command', (_, data) => {
     try {
       const win = ctx.getMainWindow();
-      if (win && !win.isDestroyed() && text && text.trim()) {
-        win.webContents.send('webControl:sendMessage', text.trim());
-      }
+      if (!win || win.isDestroyed()) return;
+      const text = (data && data.text ? data.text : (typeof data === 'string' ? data : '')).trim();
+      if (!text) return;
+      ctx.showWindowFromTray();
+      win.webContents.send('voice:bar:fill', { text, autoSend: true });
     } catch (_) {}
   });
 
-  // 语音条请求打开主窗口
-  ipcMain.on('voice:bar:show-main', () => {
-    try { ctx.showWindowFromTray(); } catch (_) {}
+  // 语音条请求打开主窗口（可携带识别文本：填入输入框不发送）
+  ipcMain.on('voice:bar:show-main', (_, data) => {
+    try {
+      ctx.showWindowFromTray();
+      const win = ctx.getMainWindow();
+      if (!win || win.isDestroyed()) return;
+      const text = (data && data.text ? data.text : '').trim();
+      if (text) win.webContents.send('voice:bar:fill', { text, autoSend: false });
+    } catch (_) {}
   });
 
   // 语音条 / 采集窗口主动报告状态（用于主界面显示麦克风状态等）

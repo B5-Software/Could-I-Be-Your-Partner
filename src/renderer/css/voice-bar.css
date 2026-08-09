@@ -3,7 +3,7 @@
  * Copyright (c) 2026 B5-Software
  *
  * This file is part of Could I Be Your Partner.
- * 置顶语音条样式（透明窗口 + 毛玻璃胶囊）
+ * 置顶语音条样式：贴合主程序主题变量（accent/背景/深浅色），透明窗口
  */
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -11,25 +11,31 @@
 html, body {
   width: 100%;
   height: 100%;
-  background: transparent;
+  background: transparent !important;
   overflow: hidden;
   font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
   user-select: none;
   -webkit-user-select: none;
 }
 
+/* 使用主题变量：亮/暗色自动跟随 theme.css 的 :root / [data-theme="dark"] */
 .voice-bar {
+  --bar-bg: color-mix(in srgb, var(--bg-secondary, #ffffff) 88%, transparent);
+  --bar-fg: var(--text-primary, #1a1a2e);
+  --bar-fg-muted: var(--text-secondary, #5a5a7a);
+  --bar-border: color-mix(in srgb, var(--border, #e2e6ee) 75%, transparent);
   display: flex;
   align-items: stretch;
-  width: calc(100% - 16px);
-  height: calc(100% - 16px);
-  margin: 8px;
+  width: calc(100% - 8px);
+  height: calc(100% - 8px);
+  margin: 4px;
   border-radius: 22px;
-  background: rgba(28, 30, 38, 0.82);
+  background: var(--bar-bg);
   backdrop-filter: blur(18px);
   -webkit-backdrop-filter: blur(18px);
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35), 0 0 0 1px rgba(255, 255, 255, 0.08) inset;
-  color: #f2f4f8;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.18);
+  border: 1px solid var(--bar-border);
+  color: var(--bar-fg);
   overflow: hidden;
 }
 
@@ -48,14 +54,14 @@ html, body {
 .pulse-dot {
   width: 12px; height: 12px;
   border-radius: 50%;
-  background: #4f8cff;
+  background: var(--accent, #4f8cff);
   animation: pulse 1.6s ease-in-out infinite;
 }
 
-.voice-bar.state-listening .pulse-dot { background: #4f8cff; }
-.voice-bar.state-thinking .pulse-dot { background: #f5a623; animation-duration: 0.9s; }
-.voice-bar.state-speaking .pulse-dot { background: #34c759; }
-.voice-bar.state-error .pulse-dot { background: #ff3b30; animation: none; }
+.voice-bar.state-listening .pulse-dot { background: var(--accent, #4f8cff); }
+.voice-bar.state-thinking .pulse-dot { background: var(--warning, #f39c12); animation-duration: 0.9s; }
+.voice-bar.state-speaking .pulse-dot { background: var(--success, #27ae60); }
+.voice-bar.state-error .pulse-dot { background: var(--danger, #e74c3c); animation: none; }
 
 @keyframes pulse {
   0%, 100% { transform: scale(1); opacity: 1; }
@@ -68,6 +74,7 @@ html, body {
   font-size: 11px;
   letter-spacing: 0.06em;
   opacity: 0.62;
+  color: var(--bar-fg-muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -99,7 +106,7 @@ html, body {
   width: 3px;
   height: 5px;
   border-radius: 2px;
-  background: #4f8cff;
+  background: var(--accent, #4f8cff);
   transition: height 0.08s linear;
 }
 
@@ -116,11 +123,11 @@ html, body {
   display: flex; align-items: center; justify-content: center;
   border: none;
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.08);
-  color: #d6dae2;
+  background: var(--accent-bg, rgba(79, 140, 255, 0.08));
+  color: var(--text-secondary, #5a5a7a);
   cursor: pointer;
-  transition: background 0.15s;
+  transition: background 0.15s, color 0.15s;
 }
 
-.bar-btn:hover { background: rgba(255, 255, 255, 0.18); }
-.bar-btn-danger:hover { background: rgba(255, 59, 48, 0.75); color: #fff; }
+.bar-btn:hover { background: var(--accent-bg-hover, rgba(79, 140, 255, 0.14)); color: var(--accent, #4f8cff); }
+.bar-btn-danger:hover { background: color-mix(in srgb, var(--danger, #e74c3c) 75%, transparent); color: #fff; }

@@ -2585,7 +2585,7 @@
     window.api.webControlPushConversationSwitch(null);
   });
 
-  window.api.onWebControlSendMessage(async (message) => {
+window.api.onWebControlSendMessage(async (message) => {
     if (agent.running && !agent.stopped) {
       // Use hot message queue if agent is working
       agent.hotMessages.push(message);
@@ -2600,6 +2600,28 @@
     await agent.sendMessage(message);
     agent._fromWeb = false;
   });
+
+  // 语音条识别文本 → 填入当前模式当前会话的输入框（autoSend 时自动发送）
+  if (typeof window.api?.onVoiceBarFill === 'function') {
+    window.api.onVoiceBarFill(async (d) => {
+      if (!d || !d.text) return;
+      const mode = typeof window.getCurrentMode === 'function' ? window.getCurrentMode() : 'chat';
+      const inputId = mode === 'code' ? 'code-chat-input' : (mode === 'babe' ? 'babe-chat-input' : 'chat-input');
+      const input = document.getElementById(inputId);
+      if (input) {
+        input.value = d.text.trim();
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.focus();
+      }
+      if (!d.autoSend) return;
+      // 延后一拍等输入框就绪，复用对应模式的发送逻辑
+      setTimeout(() => {
+        if (mode === 'code') { try { sendCodeMessage(); } catch (e) { console.warn('[voice] sendCodeMessage:', e); } }
+        else if (mode === 'babe') { try { sendBabeMessage(); } catch (e) { console.warn('[voice] sendBabeMessage:', e); } }
+        else { try { sendMessage(); } catch (e) { console.warn('[voice] sendMessage:', e); } }
+      }, 60);
+    });
+  }
 
   window.api.onWebControlStopAgent(() => {
     stopVoicePlayback();
