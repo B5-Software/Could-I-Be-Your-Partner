@@ -1607,6 +1607,8 @@ let settings = loadJSON(settingsPath, {
     ttsSpeed: 1.0,
     ttsVolume: 1.0,
     sttModel: 'base',
+    // 听写结尾说这些词任一个 → 自动发送该条消息（默认关闭，空数组关闭该功能）
+    sttSendKeywords: [],
     wakeEnabled: false,
     wakeWords: [
       { phrase: '伙伴伙伴', action: 'voicebar', enabled: true },

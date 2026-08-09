@@ -12503,6 +12503,7 @@
     const set = (id, val) => { const el = document.getElementById(id); if (el) el.value = val; };
     const setChk = (id, val) => { const el = document.getElementById(id); if (el) el.checked = !!val; };
     setChk('setting-voice-stt', v.sttEnabled !== false);
+    set('setting-voice-stt-send-keywords', (v.sttSendKeywords || []).join('、'));
     setChk('setting-voice-tts', v.ttsEnabled === true);
     setChk('setting-voice-tts-auto', v.ttsAutoSpeak === true);
     set('setting-voice-tts-lang', v.ttsLang || 'auto');
@@ -12637,6 +12638,9 @@
     };
     bind('setting-voice-tts-lang', 'ttsLang');
     bind('setting-voice-kws-threshold', 'threshold', (voice, val) => { if (!voice.kws) voice.kws = {}; voice.kws.threshold = parseFloat(val) || 0.25; });
+    bind('setting-voice-stt-send-keywords', 'sttSendKeywords', (voice, val) => {
+      voice.sttSendKeywords = String(val || '').split(/[,，、\s]+/).map(s => s.trim()).filter(Boolean);
+    });
 
     // 中文音色
     const zhEl = document.getElementById('setting-voice-zh');

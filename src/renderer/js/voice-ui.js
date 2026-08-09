@@ -216,18 +216,32 @@
         input.scrollTop = input.scrollHeight;
       });
     }
+
     if (window.api.onVoiceSttFinal) {
       window.api.onVoiceSttFinal((msg) => {
         if (!msg || msg.sessionId !== DICTATION_SESSION) return;
-        // 优先用本次听写固定目标框；停止后可能已置空，回退到当前激活输入框
+        // 优先用本次听写固定的目标框；停止后可能已置空，回退到当前激活输入框
         const input = dictationInput || getChatInput();
-        if (input) {
-          const sep = dictationBaseText && !/\s$/.test(dictationBaseText) ? ' ' : '';
-          const finalText = (msg.text || '').trim();
-          input.value = finalText ? dictationBaseText + sep + finalText : dictationBaseText;
+        if (!input) return;
+        let finalText = (msg.text || '').trim();
+        const sep = dictationBaseText && !/\s$/.test(dictationBaseText) ? ' ' : '';
+        // 结尾说指定关键词 → 去掉关键词并自动发送本条消息
+        const kws = (voiceCfg().sttSendKeywords || []).filter(Boolean);
+        const hit = kws.find(k => finalText.endsWith(k));
+        if (hit) {
+          finalText = finalText.slice(0, finalText.length - hit.length).trim();
+          const sendText = finalText ? dictationBaseText + sep + finalText : dictationBaseText;
+          input.value = sendText;
           input.dispatchEvent(new Event('input', { bubbles: true }));
-          input.focus();
+          dictationInput = null;
+          setTimeout(() => {
+            input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+          }, 30);
+          return;
         }
+        input.value = finalText ? dictationBaseText + sep + finalText : dictationBaseText;
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.focus();
       });
     }
     if (window.api.onVoiceTtsAudio) {

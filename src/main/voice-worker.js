@@ -295,8 +295,12 @@ async function pumpTtsQueue() {
     const job = ttsQueue.shift();
     try {
       const tts = getTtsEngine(job.engine);
-      let sentAny = false;
-      const audio = await tts.generateAsync({
+      // 使用同步 generate()（一次返回整段音频）：
+      // sherpa-onnx-node 的异步 generateAsync+onProgress 在 macOS 上存在
+      // use-after-free（TypedThreadSafeFunction 读取已释放内存），导致
+      // 吐字不清 / 随机卡顿，甚至 napi_create_arraybuffer OOM 崩溃。
+      // worker 线程本来就在后台，同步阻塞完全可接受。
+      const audio = tts.generate({
         text: job.text,
         enableExternalBuffer: false,
         generationConfig: new sherpa.GenerationConfig({
@@ -304,30 +308,15 @@ async function pumpTtsQueue() {
           speed: job.speed != null ? job.speed : 1.0,
           silenceScale: 0.2,
         }),
-        onProgress: (info) => {
-          if (ttsEpoch !== job.epoch) return 0; // 中止合成
-          if (info && info.samples && info.samples.length > 0) {
-            const i16 = float32ToInt16(info.samples);
-            post({
-              type: 'tts.audio',
-              reqId: job.reqId,
-              samples: i16.buffer,
-              sampleRate: tts.sampleRate,
-              progress: info.progress != null ? info.progress : -1,
-            }, [i16.buffer]);
-            sentAny = true;
-          }
-          return 1;
-        },
       });
       if (ttsEpoch !== job.epoch) { /* 被外部取消，不再发 done */ }
-      else if (!sentAny && audio && audio.samples && audio.samples.length > 0) {
-        // 某些版本 onProgress 不回调，一次性返回
+      else if (audio && audio.samples && audio.samples.length > 0) {
+        const sr = audio.sampleRate || tts.sampleRate;
         const i16 = float32ToInt16(audio.samples);
-        post({ type: 'tts.audio', reqId: job.reqId, samples: i16.buffer, sampleRate: audio.sampleRate, progress: 1 }, [i16.buffer]);
-        post({ type: 'tts.done', reqId: job.reqId, durationSec: audio.samples.length / audio.sampleRate });
+        post({ type: 'tts.audio', reqId: job.reqId, samples: i16.buffer, sampleRate: sr, progress: 1 }, [i16.buffer]);
+        post({ type: 'tts.done', reqId: job.reqId, durationSec: i16.length / sr });
       } else {
-        post({ type: 'tts.done', reqId: job.reqId, durationSec: -1 });
+        post({ type: 'tts.error', reqId: job.reqId, error: 'empty audio' });
       }
     } catch (e) {
       post({ type: 'tts.error', reqId: job.reqId, error: e.message });
