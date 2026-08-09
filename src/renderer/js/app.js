@@ -10700,7 +10700,7 @@
     };
   }
 
-  function addCodeMessage(role, content) {
+  function addCodeMessage(role, content, track = true) {
     const msgsEl = document.getElementById('code-chat-messages');
     if (!msgsEl) return;
     const welcome = msgsEl.querySelector('.welcome-message');
@@ -10725,7 +10725,7 @@
     msgsEl.scrollTop = msgsEl.scrollHeight;
 
     // Track for history
-    codeMessages.push({ role, content });
+    if (track) codeMessages.push({ role, content });
   }
 
   function addCodeToolCall(data) {
@@ -10962,11 +10962,11 @@
                       const msg = codeMessages[i];
                       if (msg.role === 'user') {
                         const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
-                        addCodeMessage('user', content);
+                        addCodeMessage('user', content, false);
                       } else if (msg.role === 'assistant') {
                         // assistant content 可能是字符串或数组（多模态）
                         const textContent = extractTextContent(msg.content);
-                        if (textContent) addCodeMessage('assistant', textContent);
+                        if (textContent) addCodeMessage('assistant', textContent, false);
                         // 渲染 tool_calls
                         if (msg.tool_calls && msg.tool_calls.length > 0) {
                           for (const tc of msg.tool_calls) {
@@ -10994,11 +10994,11 @@
                         } else {
                           // 没有对应的 tool_call（可能是旧历史）：直接渲染为系统消息
                           const resultStr = typeof result === 'string' ? result : JSON.stringify(result);
-                          addCodeMessage('system', `[工具结果] ${msg.name || 'tool'}: ${resultStr.slice(0, 200)}`);
+                          addCodeMessage('system', `[工具结果] ${msg.name || 'tool'}: ${resultStr.slice(0, 200)}`, false);
                         }
                       } else if (msg.role === 'system') {
                         const content = typeof msg.content === 'string' ? msg.content : String(msg.content || '');
-                        addCodeMessage('system', content);
+                        addCodeMessage('system', content, false);
                       }
                     }
                     // 每批处理完让出事件循环，进度模态框刷新、DOM 回流
@@ -12255,90 +12255,105 @@
     babeMessages = conversation.messages || [];
     babeAgent.babeAffection = conversation.affection ?? babeAgent.settings?.babe?.initialAffection ?? 30;
     await babeAgent.loadFromHistory(conversation);
-    // 渲染消息（批量渲染，避免逐条 addBabeMessage 卡死 UI）
+    // 渲染消息：分批渲染 + 进度模态框，避免长历史全量构建 DOM 卡死 UI
     const msgsEl = document.getElementById('babe-chat-messages');
     if (msgsEl) {
       msgsEl.innerHTML = '';
+      WebUIMirror.pushDomEvent({ type: 'dom_clear', container: '#babe-chat-messages' });
       if (babeMessages.length === 0) {
         msgsEl.innerHTML = `<div class="babe-welcome"><div class="babe-welcome-icon"><i class="fa-solid fa-heart"></i></div><h2>欢迎回来</h2><p>继续你们的对话吧~</p></div>`;
       } else {
-        // 用 DocumentFragment 批量构建 DOM，最后一次插入
-        const frag = document.createDocumentFragment();
+        const total = babeMessages.length;
+        const chunkSize = 30;
         const toolCallMap = {};
         // 预取头像数据，避免每条消息都读取
         const babeAvatar = babeAgent?.settings?.babe?.avatar || '';
         const userAvatar = babeAgent?.settings?.userProfile?.avatar || '';
         const babeAvatarHTML = makeBabeFramedAvatarHTML(babeAvatar, 'babe');
         const userAvatarHTML = makeBabeFramedAvatarHTML(userAvatar, 'user');
-        for (const m of babeMessages) {
-          if (m.role === 'user') {
-            const content = extractTextContent(m.content) || '[多模态内容]';
-            const msg = document.createElement('div');
-            msg.className = 'babe-message user';
-            msg.innerHTML = `<div class="babe-msg-avatar">${userAvatarHTML}</div><div class="babe-msg-body"><div class="babe-msg-bubble markdown-body">${escapeHtml(content)}</div></div>`;
-            frag.appendChild(msg);
-          } else if (m.role === 'assistant') {
-            // assistant content 可能是字符串或数组（多模态）
-            const textContent = extractTextContent(m.content);
-            if (textContent) {
-              const msg = document.createElement('div');
-              msg.className = 'babe-message assistant';
-              msg.innerHTML = `<div class="babe-msg-avatar">${babeAvatarHTML}</div><div class="babe-msg-body"><div class="babe-msg-bubble markdown-body">${renderMarkdown(textContent)}</div></div>`;
-              frag.appendChild(msg);
-            }
-            // 渲染 tool_calls
-            if (m.tool_calls && m.tool_calls.length > 0) {
-              for (const tc of m.tool_calls) {
-                const toolName = tc.function?.name || 'tool';
-                let args = {};
-                try { args = JSON.parse(tc.function?.arguments || '{}'); } catch {}
-                const toolDef = (typeof TOOL_DEFINITIONS !== 'undefined') ? TOOL_DEFINITIONS.find(t => t.name === toolName) : null;
-                const displayName = toolDef?.desc || toolName;
-                // 创建工具调用卡片并添加到 fragment
-                const card = document.createElement('div');
-                card.className = 'tool-call-card';
-                card.id = 'babe-tool-hist-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6);
-                if (tc.id) card.dataset.callId = tc.id;
-                const argsStr = Object.keys(args).length ? JSON.stringify(args, null, 2).slice(0, 500) : '';
-                card.innerHTML = `<div class="tool-call-header"><i class="fa-solid fa-wrench"></i> <span>${escapeHtml(displayName)}</span></div>` +
-                  (argsStr ? `<pre class="tool-call-args">${escapeHtml(argsStr)}</pre>` : '') +
-                  `<div class="tool-call-status"><i class="fa-solid fa-spinner fa-spin"></i> 执行中...</div>`;
-                frag.appendChild(card);
-                if (tc.id) toolCallMap[tc.id] = { card, name: toolName };
+        showHistoryProgress(total);
+        try {
+          for (let start = 0; start < total; start += chunkSize) {
+            const end = Math.min(total, start + chunkSize);
+            // 每批用 DocumentFragment 构建后一次性插入
+            const frag = document.createDocumentFragment();
+            for (let i = start; i < end; i++) {
+              const m = babeMessages[i];
+              if (m.role === 'user') {
+                const content = extractTextContent(m.content) || '[多模态内容]';
+                const msg = document.createElement('div');
+                msg.className = 'babe-message user';
+                msg.innerHTML = `<div class="babe-msg-avatar">${userAvatarHTML}</div><div class="babe-msg-body"><div class="babe-msg-bubble markdown-body">${escapeHtml(content)}</div></div>`;
+                frag.appendChild(msg);
+              } else if (m.role === 'assistant') {
+                // assistant content 可能是字符串或数组（多模态）
+                const textContent = extractTextContent(m.content);
+                if (textContent) {
+                  const msg = document.createElement('div');
+                  msg.className = 'babe-message assistant';
+                  msg.innerHTML = `<div class="babe-msg-avatar">${babeAvatarHTML}</div><div class="babe-msg-body"><div class="babe-msg-bubble markdown-body">${renderMarkdown(textContent)}</div></div>`;
+                  frag.appendChild(msg);
+                }
+                // 渲染 tool_calls
+                if (m.tool_calls && m.tool_calls.length > 0) {
+                  for (const tc of m.tool_calls) {
+                    const toolName = tc.function?.name || 'tool';
+                    let args = {};
+                    try { args = JSON.parse(tc.function?.arguments || '{}'); } catch {}
+                    const toolDef = (typeof TOOL_DEFINITIONS !== 'undefined') ? TOOL_DEFINITIONS.find(t => t.name === toolName) : null;
+                    const displayName = toolDef?.desc || toolName;
+                    // 创建工具调用卡片并添加到 fragment
+                    const card = document.createElement('div');
+                    card.className = 'tool-call-card';
+                    card.id = 'babe-tool-hist-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6);
+                    if (tc.id) card.dataset.callId = tc.id;
+                    const argsStr = Object.keys(args).length ? JSON.stringify(args, null, 2).slice(0, 500) : '';
+                    card.innerHTML = `<div class="tool-call-header"><i class="fa-solid fa-wrench"></i> <span>${escapeHtml(displayName)}</span></div>` +
+                      (argsStr ? `<pre class="tool-call-args">${escapeHtml(argsStr)}</pre>` : '') +
+                      `<div class="tool-call-status"><i class="fa-solid fa-spinner fa-spin"></i> 执行中...</div>`;
+                    frag.appendChild(card);
+                    if (tc.id) toolCallMap[tc.id] = { card, name: toolName };
+                  }
+                }
+              } else if (m.role === 'tool') {
+                // 工具结果：创建临时卡片并填充（因为 fragment 中的元素还没插入 DOM，无法用 querySelector）
+                const key = m.tool_call_id;
+                const entry = key ? toolCallMap[key] : null;
+                let result = m.content;
+                // 兼容旧版多模态 tool 消息 content 为数组的情况：提取字符串，避免显示 [object Object]
+                if (Array.isArray(result)) result = extractTextContent(result);
+                if (typeof result === 'string') { try { result = JSON.parse(result); } catch {} }
+                const resultStr = typeof result === 'string' ? result : JSON.stringify(result);
+                const ok = (result && typeof result === 'object') ? result.ok !== false : true;
+                if (entry) {
+                  const statusEl = entry.card.querySelector('.tool-call-status');
+                  if (statusEl) {
+                    statusEl.innerHTML = (ok ? '<i class="fa-solid fa-check"></i> 完成' : '<i class="fa-solid fa-xmark"></i> 失败') +
+                      (resultStr ? `<pre class="tool-call-result">${escapeHtml(resultStr.slice(0, 800))}</pre>` : '');
+                  }
+                } else {
+                  // 无对应 tool_call：渲染为系统消息
+                  const msg = document.createElement('div');
+                  msg.className = 'babe-message system';
+                  msg.innerHTML = `<div class="babe-msg-body"><div class="babe-msg-bubble markdown-body">${escapeHtml('[工具结果] ' + (m.name || 'tool') + ': ' + resultStr.slice(0, 200))}</div></div>`;
+                  frag.appendChild(msg);
+                }
+              } else if (m.role === 'system') {
+                const content = typeof m.content === 'string' ? m.content : String(m.content || '');
+                const msg = document.createElement('div');
+                msg.className = 'babe-message system';
+                msg.innerHTML = `<div class="babe-msg-body"><div class="babe-msg-bubble markdown-body">${escapeHtml(content)}</div></div>`;
+                frag.appendChild(msg);
               }
             }
-          } else if (m.role === 'tool') {
-            // 工具结果：创建临时卡片并填充（因为 fragment 中的元素还没插入 DOM，无法用 querySelector）
-            const key = m.tool_call_id;
-            const entry = key ? toolCallMap[key] : null;
-            let result = m.content;
-            // 兼容旧版多模态 tool 消息 content 为数组的情况：提取文本，避免显示 [object Object]
-            if (Array.isArray(result)) result = extractTextContent(result);
-            if (typeof result === 'string') { try { result = JSON.parse(result); } catch {} }
-            const resultStr = typeof result === 'string' ? result : JSON.stringify(result);
-            const ok = (result && typeof result === 'object') ? result.ok !== false : true;
-            if (entry) {
-              const statusEl = entry.card.querySelector('.tool-call-status');
-              if (statusEl) {
-                statusEl.innerHTML = (ok ? '<i class="fa-solid fa-check"></i> 完成' : '<i class="fa-solid fa-xmark"></i> 失败') +
-                  (resultStr ? `<pre class="tool-call-result">${escapeHtml(resultStr.slice(0, 800))}</pre>` : '');
-              }
-            } else {
-              // 无对应 tool_call：渲染为系统消息
-              const msg = document.createElement('div');
-              msg.className = 'babe-message system';
-              msg.innerHTML = `<div class="babe-msg-body"><div class="babe-msg-bubble markdown-body">${escapeHtml('[工具结果] ' + (m.name || 'tool') + ': ' + resultStr.slice(0, 200))}</div></div>`;
-              frag.appendChild(msg);
-            }
-          } else if (m.role === 'system') {
-            const content = typeof m.content === 'string' ? m.content : String(m.content || '');
-            const msg = document.createElement('div');
-            msg.className = 'babe-message system';
-            msg.innerHTML = `<div class="babe-msg-body"><div class="babe-msg-bubble markdown-body">${escapeHtml(content)}</div></div>`;
-            frag.appendChild(msg);
+            msgsEl.appendChild(frag);
+            // 每批处理完让出事件循环，进度模态框刷新、DOM 回流
+            updateHistoryProgress(end, total, end >= total ? '渲染完成，正在收尾…' : `已渲染 ${end}/${total} 条消息`);
+            await yieldHistoryUI();
           }
+        } finally {
+          hideHistoryProgress();
         }
-        msgsEl.appendChild(frag);
         // 所有消息渲染完毕后再滚动一次
         requestAnimationFrame(() => { msgsEl.scrollTop = msgsEl.scrollHeight; });
         // 推送完整内容到 WebUI
