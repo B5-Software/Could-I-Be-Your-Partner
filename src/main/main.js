@@ -1820,7 +1820,20 @@ function createAppTray() {
   }
   appTray.setToolTip('Could I Be Your Partner');
 
-  function buildTrayMenu() {
+  appTray.setContextMenu(buildTrayMenu());
+
+  // 单击托盘图标：切换窗口可见性
+  appTray.on('click', () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (mainWindow.isVisible() && mainWindow.isFocused()) {
+      hideWindowToTray();
+    } else {
+      showWindowFromTray();
+    }
+  });
+}
+
+function buildTrayMenu() {
   return Menu.buildFromTemplate([
     { label: '显示主窗口', click: () => showWindowFromTray() },
     {
@@ -1853,18 +1866,6 @@ function rebuildTrayMenu() {
   if (appTray) {
     try { appTray.setContextMenu(buildTrayMenu()); } catch (_) {}
   }
-}
-  appTray.setContextMenu(buildTrayMenu());
-
-  // 单击托盘图标：切换窗口可见性
-  appTray.on('click', () => {
-    if (!mainWindow || mainWindow.isDestroyed()) return;
-    if (mainWindow.isVisible() && mainWindow.isFocused()) {
-      hideWindowToTray();
-    } else {
-      showWindowFromTray();
-    }
-  });
 }
 
 /**

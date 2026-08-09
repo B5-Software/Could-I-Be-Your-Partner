@@ -11,6 +11,12 @@ contextBridge.exposeInMainWorld('api', {
   // Settings
   getSettings: () => ipcRenderer.invoke('settings:get'),
   setSettings: (s) => ipcRenderer.invoke('settings:set', s),
+  // 监听设置广播（语言/主题/输入法/语音等），返回取消订阅函数
+  onSettingsChanged: (cb) => {
+    const listener = (_, data) => cb(data);
+    ipcRenderer.on('settings:changed', listener);
+    return () => ipcRenderer.removeListener('settings:changed', listener);
+  },
 
   // Theme
   getTheme: () => ipcRenderer.invoke('theme:get'),
