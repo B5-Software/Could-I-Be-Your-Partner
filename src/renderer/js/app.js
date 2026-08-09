@@ -12549,6 +12549,11 @@
   if (typeof window.api?.onSettingsChanged === 'function') {
     window.api.onSettingsChanged((s) => {
       if (s && s.ime && getOskCore()) getOskCore().applySettings(s.ime);
+      // 托盘语音唤醒开关 → 设置页勾选状态联动回显
+      if (s && s.voice && typeof s.voice.wakeEnabled === 'boolean') {
+        const wakeEl = document.getElementById('setting-voice-wake');
+        if (wakeEl && wakeEl.checked !== s.voice.wakeEnabled) wakeEl.checked = s.voice.wakeEnabled;
+      }
     });
   }
 

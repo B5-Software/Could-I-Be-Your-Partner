@@ -1820,7 +1820,8 @@ function createAppTray() {
   }
   appTray.setToolTip('Could I Be Your Partner');
 
-  const buildMenu = () => Menu.buildFromTemplate([
+  function buildTrayMenu() {
+  return Menu.buildFromTemplate([
     { label: '显示主窗口', click: () => showWindowFromTray() },
     {
       label: '语音唤醒',
@@ -1833,6 +1834,8 @@ function createAppTray() {
           settings.voice.wakeEnabled = item.checked;
           try { saveJSON(settingsPath, settings); } catch {}
         }
+        // 联动：广播设置变化到渲染器（设置页语音唤醒开关回显）
+        broadcastSettingsChanged();
       }
     },
     { type: 'separator' },
@@ -1844,7 +1847,14 @@ function createAppTray() {
       }
     }
   ]);
-  appTray.setContextMenu(buildMenu());
+}
+
+function rebuildTrayMenu() {
+  if (appTray) {
+    try { appTray.setContextMenu(buildTrayMenu()); } catch (_) {}
+  }
+}
+  appTray.setContextMenu(buildTrayMenu());
 
   // 单击托盘图标：切换窗口可见性
   appTray.on('click', () => {
@@ -2155,6 +2165,8 @@ ipcMain.handle('settings:set', (_, newSettings) => {
   if (voiceIpc && newSettings && newSettings.voice) {
     voiceIpc.onSettingsChanged(prevVoice).catch((e) => console.warn('[voice] onSettingsChanged:', e.message));
   }
+  // 托盘菜单勾选状态与设置保持联动（语音唤醒开关）
+  rebuildTrayMenu();
   // P2：语音能力状态同步到 WebUI
   try {
     if (voiceIpc && webControlService) {
@@ -2179,7 +2191,7 @@ function broadcastThemeChanged() {
   }
 }
 function broadcastSettingsChanged() {
-  const payload = { language: settings.language, theme: settings.theme, ime: settings.ime };
+  const payload = { language: settings.language, theme: settings.theme, ime: settings.ime, voice: settings.voice };
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) win.webContents.send('settings:changed', payload);
   }
