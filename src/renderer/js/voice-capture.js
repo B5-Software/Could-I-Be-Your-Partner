@@ -141,7 +141,9 @@ registerProcessor('pcm16-encoder', Pcm16Encoder);
     constructor() {
       this.ctx = null;
       this.gainNode = null;
-      this.streams = new Map(); // reqId -> { nextTime, sources:Set, done, onDrain }
+      this.streams = new Map(); // reqId -> { sources:Set, done, onDrain, tailEnd }
+      this.nextTime = 0; // 全局播放队尾（Queue）：跨 reqId 统一续排，保证不重叠
+      this.onAllDrained = null; // 所有流都播完/被停后触发（用于刷新"停止"按钮）
       this.volume = 1.0;
     }
 
@@ -161,7 +163,7 @@ registerProcessor('pcm16-encoder', Pcm16Encoder);
       if (this.gainNode) this.gainNode.gain.value = v;
     }
 
-    /** 喂入一个音频 chunk（int16 ArrayBuffer） */
+    /** 喂入一个音频 chunk（int16 ArrayBuffer）。所有请求共用播放队列，避免重叠。 */
     push(reqId, samplesBuf, sampleRate) {
       if (!reqId || !samplesBuf) return;
       const i16 = new Int16Array(samplesBuf);
@@ -174,11 +176,12 @@ registerProcessor('pcm16-encoder', Pcm16Encoder);
 
       let st = this.streams.get(reqId);
       if (!st) {
-        st = { nextTime: 0, sources: new Set(), done: false, onDrain: null };
+        st = { sources: new Set(), done: false, onEnd: null, tailEnd: 0 };
         this.streams.set(reqId, st);
       }
       const now = ctx.currentTime;
-      if (st.nextTime < now + 0.03) st.nextTime = now + 0.03; // 落后即立即播放
+      // 全局队尾排期：所有请求（无论 reqId）都排在上一个尾部之后 → 播放不重叠。
+      const startAt = Math.max(now + 0.03, this.nextTime);
       const src = ctx.createBufferSource();
       src.buffer = audioBuf;
       src.connect(this.gainNode);
@@ -187,41 +190,59 @@ registerProcessor('pcm16-encoder', Pcm16Encoder);
         st.sources.delete(src);
         this._maybeDrained(reqId);
       };
-      src.start(st.nextTime);
-      st.nextTime += audioBuf.duration;
+      src.start(startAt);
+      st.tailEnd = startAt + audioBuf.duration;
+      this.nextTime = st.tailEnd;
     }
 
-    /** 标记该流不再有新 chunk；全部播完后触发 onDrain */
-    finish(reqId, onDrain) {
+    /** 标记该流不再有新 chunk；全部播完后触发 onEnd */
+    finish(reqId, onEnd) {
       const st = this.streams.get(reqId);
-      if (!st) { if (onDrain) onDrain(); return; }
+      if (!st) { if (onEnd) onEnd(); this._checkGlobalIdle(); return; }
       st.done = true;
-      st.onDrain = onDrain || null;
+      st.onEnd = onEnd || null;
       this._maybeDrained(reqId);
     }
 
     _maybeDrained(reqId) {
       const st = this.streams.get(reqId);
       if (st && st.done && st.sources.size === 0) {
+        // 该请求全部播完，把队尾回退到剩余请求的最晚尾部
         this.streams.delete(reqId);
-        if (st.onDrain) { try { st.onDrain(); } catch (_) {} }
+        this._recomputeTail();
+        if (st.onEnd) { try { st.onEnd(); } catch (_) {} }
+        this._checkGlobalIdle();
       }
     }
 
-    /** 立即停止（可指定单个流；不传则全部） */
+    _recomputeTail() {
+      let tail = 0;
+      for (const [, s] of this.streams) if (s.tailEnd > tail) tail = s.tailEnd;
+      this.nextTime = tail;
+    }
+
+    _checkGlobalIdle() {
+      if (this.streams.size === 0 && typeof this.onAllDrained === 'function') {
+        try { this.onAllDrained(); } catch (_) {}
+      }
+    }
+
+    /** 立即停止（可指定单个流；不传则全部清空队列） */
     stop(reqId) {
       const stopOne = (id, st) => {
         for (const s of st.sources) { try { s.stop(); } catch (_) {} }
         st.sources.clear();
         this.streams.delete(id);
-        if (st.onDrain) { try { st.onDrain(); } catch (_) {} }
+        if (st.onEnd) { try { st.onEnd(); } catch (_) {} }
       };
       if (reqId) {
         const st = this.streams.get(reqId);
-        if (st) stopOne(reqId, st);
+        if (st) { stopOne(reqId, st); this._recomputeTail(); }
       } else {
         for (const [id, st] of [...this.streams.entries()]) stopOne(id, st);
+        this.nextTime = 0; // 队列清空，下一条消息立即播放
       }
+      this._checkGlobalIdle();
     }
 
     get playing() { return this.streams.size > 0; }

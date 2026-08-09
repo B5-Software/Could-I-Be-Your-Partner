@@ -62,6 +62,12 @@
     if (!player) {
       player = new VoicePlayer();
       player.setVolume(voiceCfg().ttsVolume != null ? voiceCfg().ttsVolume : 1.0);
+      // 所有流播完/被清空后，主窗口可刷新"停止"按钮可见性
+      player.onAllDrained = () => {
+        if (typeof window.onVoicePlaybackIdle === 'function') {
+          try { window.onVoicePlaybackIdle(); } catch (_) {}
+        }
+      };
     }
     return player;
   }
@@ -162,6 +168,14 @@
     ttsReqCounter++;
   }
 
+  // 仅接受当前一代（counter）的 TTS 音频/完成消息，丢弃被掐掉后的陈腐包
+  function isTtsCurrent(msg) {
+    if (!msg || !msg.reqId || String(msg.reqId).indexOf(TTS_REQ_PREFIX) !== 0) return false;
+    const parts = String(msg.reqId).split('-');
+    const gen = parseInt(parts[parts.length - 1], 10);
+    return Number.isFinite(gen) && gen === ttsReqCounter;
+  }
+
   /** agent.js 流式钩子：token 增量 */
   function feedStreamChunk(content) {
     if (!autoSpeakOn()) return;
@@ -246,13 +260,17 @@
     }
     if (window.api.onVoiceTtsAudio) {
       window.api.onVoiceTtsAudio((msg) => {
-        if (!msg || !msg.reqId || String(msg.reqId).indexOf(TTS_REQ_PREFIX) !== 0) return;
+        if (!isTtsCurrent(msg)) return;
         ensurePlayer().push(msg.reqId, msg.samples, msg.sampleRate);
+        // 语音开始/继续播放：主窗口据此刷新"停止"按钮可见性
+        if (typeof window.onVoicePlaybackActive === 'function') {
+          try { window.onVoicePlaybackActive(); } catch (_) {}
+        }
       });
     }
     if (window.api.onVoiceTtsDone) {
       window.api.onVoiceTtsDone((msg) => {
-        if (!msg || !msg.reqId || String(msg.reqId).indexOf(TTS_REQ_PREFIX) !== 0) return;
+        if (!isTtsCurrent(msg)) return;
         ensurePlayer().finish(msg.reqId);
       });
     }
@@ -316,6 +334,7 @@
     toggleDictation,
     startDictation,
     stopDictation,
+    isSpeaking: () => player ? (player.playing || false) : false,
     get dictating() { return dictating; },
   };
 })();

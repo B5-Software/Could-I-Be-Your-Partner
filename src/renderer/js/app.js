@@ -899,6 +899,12 @@
         remoteWs.send(JSON.stringify({ type: 'switchMode', mode }));
         return;
       }
+      // 切换 Chat/Code/Babe 会话：停止上一个模式的语音播报（清空播放队列）与后续推理
+      stopVoicePlayback();
+      if (currentMode === 'code' && codeAgent) { try { codeAgent.stop(); } catch (_) {} }
+      else if (currentMode === 'babe' && babeAgent) { try { babeAgent.stop(); } catch (_) {} }
+      else if (currentMode === 'chat' && agent && agent.running) { try { agent.stop(); } catch (_) {} }
+
       document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
       currentMode = mode;
@@ -1106,7 +1112,8 @@
     } else {
       agentStatus.innerHTML = '<i class="fa-solid fa-circle"></i> 待命中';
       agentStatus.className = 'agent-status';
-      if (btnStop) btnStop.classList.add('hidden');
+      // 仅当 Agent 完成 且 语音播报也完成时才隐藏停止按钮
+      refreshChatStopButton();
       btnSend.classList.remove('hidden');
       removeThinkingIndicator(); // 防御：确保待命时思考提示已清除
       // 停止计时器
@@ -2569,6 +2576,8 @@
 
   // ---- Web Control Incoming Events ----
   window.api.onWebControlNewChat(() => {
+    stopVoicePlayback(); // 清空语音播放队列
+    if (agent.running) { try { agent.stop(); } catch (_) {} } // 掐掉后续推理
     agent.newConversation();
     setTitlebarTitle('未命名对话');
     clearChatMessagesUI();
@@ -2593,6 +2602,7 @@
   });
 
   window.api.onWebControlStopAgent(() => {
+    stopVoicePlayback();
     agent.stop();
     removeThinkingIndicator();
   });
@@ -2604,6 +2614,8 @@
 
   window.api.onWebControlLoadConversation(async (id) => {
     try {
+      stopVoicePlayback(); // 清空语音播放队列
+      if (agent.running) { try { agent.stop(); } catch (_) {} } // 掐掉后续推理
       const conv = await window.api.historyGet(id);
       if (!conv) return;
       await agent.loadFromHistory(conv);
@@ -4490,7 +4502,9 @@
       if (btnStop) btnStop.classList.remove('hidden');
       // 热对话：发送按钮始终可见
     } else {
-      if (btnStop) btnStop.classList.add('hidden');
+      // 仅在未播放语音时才隐藏停止按钮
+      const speaking = (window.VoiceUI && window.VoiceUI.isSpeaking) ? window.VoiceUI.isSpeaking() : false;
+      if (btnStop) btnStop.classList.toggle('hidden', !speaking);
       btnSend.classList.remove('hidden');
     }
   }
@@ -4678,6 +4692,56 @@
   }
 
   // ---- Stop Button ----
+  // 停止所有语音播报 + 清空播放队列（含后续推理的 TTS）
+  function stopVoicePlayback() {
+    try { if (window.VoiceUI && window.VoiceUI.stopSpeaking) window.VoiceUI.stopSpeaking(); } catch (_) {}
+  }
+
+  // 语音播报全部排空后：若 Agent 也已停止，隐藏"停止"按钮（仅在两者都完成时才隐藏）
+  function refreshChatStopButton() {
+    if (!btnStop) return;
+    const speaking = (window.VoiceUI && window.VoiceUI.isSpeaking) ? window.VoiceUI.isSpeaking() : false;
+    if (speaking) {
+      btnStop.classList.remove('hidden');
+    } else {
+      btnStop.classList.add('hidden');
+    }
+    WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#btn-stop', attr: 'class', value: btnStop.className });
+  }
+  // 语音队列全部播完（清空）后回调：重新判断是否隐藏停止按钮
+  window.onVoicePlaybackIdle = () => {
+    // 仅在非工作状态下评估（工作中按钮早已显示）
+    if (agent && !agent.running) {
+      try { refreshChatStopButton(); } catch (_) {}
+      try { refreshCodeStopButton(); } catch (_) {}
+      try { refreshBabeStopButton(); } catch (_) {}
+    }
+  };
+  // 语音开始/继续播放时回调：确保 TTS 先于 Agent 结束的补播也能显示停止按钮
+  window.onVoicePlaybackActive = () => {
+    if (agent && !agent.running) {
+      try { refreshChatStopButton(); } catch (_) {}
+      try { refreshCodeStopButton(); } catch (_) {}
+      try { refreshBabeStopButton(); } catch (_) {}
+    }
+  };
+
+  function voiceSpeakingNow() {
+    return (window.VoiceUI && window.VoiceUI.isSpeaking) ? window.VoiceUI.isSpeaking() : false;
+  }
+  function refreshCodeStopButton() {
+    const stopBtn = document.getElementById('btn-code-stop');
+    if (!stopBtn) return;
+    stopBtn.classList.toggle('hidden', !(codeAgent && codeAgent.running) && !voiceSpeakingNow());
+    WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#btn-code-stop', attr: 'class', value: stopBtn.className });
+  }
+  function refreshBabeStopButton() {
+    const stopBtn = document.getElementById('btn-babe-stop');
+    if (!stopBtn) return;
+    stopBtn.classList.toggle('hidden', !(babeAgent && babeAgent.running) && !voiceSpeakingNow());
+    WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#btn-babe-stop', attr: 'class', value: stopBtn.className });
+  }
+
   if (btnStop) {
     btnStop.addEventListener('click', () => {
       if (isRemoteMode && remoteWs && remoteWs.readyState === WebSocket.OPEN) {
@@ -4685,6 +4749,7 @@
         removeThinkingIndicator();
         return;
       }
+      stopVoicePlayback();
       agent.stop();
       removeThinkingIndicator();
     });
@@ -4951,6 +5016,7 @@
 
   // New chat
   btnNewChat.addEventListener('click', () => {
+    stopVoicePlayback(); // 清空语音播放队列
     if (isRemoteMode && remoteWs && remoteWs.readyState === WebSocket.OPEN) {
       remoteWs.send(JSON.stringify({ type: 'newChat' }));
       setTitlebarTitle('未命名对话');
@@ -4958,6 +5024,7 @@
       renderChatWelcome();
       return;
     }
+    if (agent.running) { try { agent.stop(); } catch (_) {} } // 掐掉后续推理
     agent.newConversation();
     updateReoptimizeButtonVisibility();
     setTitlebarTitle('未命名对话');
@@ -4965,12 +5032,14 @@
   });
 
   btnClearChat.addEventListener('click', () => {
+    stopVoicePlayback(); // 清空语音播放队列
     if (isRemoteMode && remoteWs && remoteWs.readyState === WebSocket.OPEN) {
       remoteWs.send(JSON.stringify({ type: 'newChat' }));
       setTitlebarTitle('未命名对话');
       clearChatMessagesUI();
       return;
     }
+    if (agent.running) { try { agent.stop(); } catch (_) {} } // 掐掉后续推理
     agent.newConversation();
     updateReoptimizeButtonVisibility();
     setTitlebarTitle('未命名对话');
@@ -8400,6 +8469,8 @@
 
     list.querySelectorAll('.history-continue').forEach(btn => {
       btn.addEventListener('click', async () => {
+        stopVoicePlayback(); // 切换会话前清空语音播放队列
+        if (agent && agent.running) { try { agent.stop(); } catch (_) {} }
         const conv = await window.api.historyGet(btn.dataset.id);
         if (conv) {
           await agent.loadFromHistory(conv);
@@ -10792,7 +10863,8 @@
       addCodeMessage('system', `错误: ${e.message}`);
     } finally {
       btnSend?.classList.remove('hidden');
-      btnStop?.classList.add('hidden');
+      // 仅当 Code Agent 完成 且 语音播报也完成时才隐藏停止按钮
+      try { refreshCodeStopButton(); } catch (_) {}
       // 推送按钮状态恢复到 WebUI
       if (btnSend) WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#btn-code-send', attr: 'class', value: btnSend.className });
       if (btnStop) WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#btn-code-stop', attr: 'class', value: btnStop.className });
@@ -10855,6 +10927,8 @@
         }).join('');
         listEl.querySelectorAll('.history-continue').forEach(btn => {
           btn.addEventListener('click', async () => {
+            stopVoicePlayback(); // 切换会话前清空语音播放队列
+            if (codeAgent && codeAgent.running) { try { codeAgent.stop(); } catch (_) {} }
             const id = btn.dataset.id;
             const loadRes = await window.api.codeLoadHistory(codeWorkspacePath, id);
             if (loadRes.ok && loadRes.data) {
@@ -10971,10 +11045,12 @@
   });
 
   document.getElementById('btn-code-new-chat')?.addEventListener('click', () => {
+    stopVoicePlayback(); // 清空语音播放队列
     if (!codeWorkspacePath) {
       window.showMessageModal('请先打开工作区', '提示', 'warning');
       return;
     }
+    if (codeAgent && codeAgent.running) { try { codeAgent.stop(); } catch (_) {} } // 掐掉后续推理
     unsubscribeAgentStreams(codeAgent);
     codeAgent = null;
     codeCurrentHistoryId = null;
@@ -11315,6 +11391,7 @@
 
   document.getElementById('btn-code-send')?.addEventListener('click', sendCodeMessage);
   document.getElementById('btn-code-stop')?.addEventListener('click', () => {
+    stopVoicePlayback();
     if (codeAgent) codeAgent.stop();
   });
   document.getElementById('code-chat-input')?.addEventListener('keydown', (e) => {
@@ -11747,8 +11824,9 @@
           sendBtn?.classList.add('hidden');
           stopBtn?.classList.remove('hidden');
         } else {
+          // 仅当 Babe 完成 且 语音播报也完成时才隐藏停止按钮
           sendBtn?.classList.remove('hidden');
-          stopBtn?.classList.add('hidden');
+          if (stopBtn) stopBtn.classList.toggle('hidden', !voiceSpeakingNow());
         }
         // 推送按钮状态变化到 WebUI
         if (sendBtn) WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#btn-babe-send', attr: 'class', value: sendBtn.className });
@@ -12128,6 +12206,8 @@
       listEl.querySelectorAll('.history-continue').forEach(btn => {
         btn.addEventListener('click', async (e) => {
           e.stopPropagation();
+          stopVoicePlayback(); // 切换会话前清空语音播放队列
+          if (babeAgent && babeAgent.running) { try { babeAgent.stop(); } catch (_) {} }
           const id = btn.dataset.id;
           await loadBabeConversation(id);
         });
@@ -12333,9 +12413,11 @@
   // ---- Babe Mode 事件绑定 ----
   document.getElementById('btn-babe-send')?.addEventListener('click', sendBabeMessage);
   document.getElementById('btn-babe-stop')?.addEventListener('click', () => {
+    stopVoicePlayback();
     if (babeAgent) babeAgent.stop();
   });
   document.getElementById('btn-babe-new')?.addEventListener('click', async () => {
+    stopVoicePlayback(); // 清空语音播放队列
     // 停止旧的 agent
     if (babeAgent) {
       babeAgent.stop();
@@ -12751,28 +12833,85 @@
     });
     // 录制热键
     const recBtn = document.getElementById('btn-voice-record-hotkey');
-    if (recBtn) recBtn.addEventListener('click', () => {
-      const input = document.getElementById('setting-voice-hotkey');
-      if (!input) return;
-      const origText = recBtn.textContent;
-      recBtn.textContent = '按下组合键…';
-      recBtn.disabled = true;
-      const handler = (e) => {
-        e.preventDefault();
-        const parts = [];
-        if (e.ctrlKey) parts.push('Control');
-        if (e.shiftKey) parts.push('Shift');
-        if (e.altKey) parts.push('Alt');
-        if (e.metaKey) parts.push('Command');
-        const key = e.key.replace(/^(Control|Shift|Alt|Meta)$/, '').trim();
-        if (key) parts.push(key.length === 1 ? key.toUpperCase() : key);
-        input.value = parts.join('+');
-        recBtn.textContent = origText;
-        recBtn.disabled = false;
-        document.removeEventListener('keydown', handler, true);
-      };
-      document.addEventListener('keydown', handler, true);
-    });
+    if (recBtn) {
+      recBtn.addEventListener('click', () => {
+        const input = document.getElementById('setting-voice-hotkey');
+        if (!input) return;
+        const origText = recBtn.textContent;
+        const origDisabled = recBtn.disabled;
+        recBtn.textContent = '按下组合键（松开结束）…';
+        recBtn.disabled = true;
+
+        // 归一化按键名（修饰键统一命名，字母大写，空格映射为 Space）
+        const norm = (e) => {
+          const k = e.key || '';
+          if (k === 'Control' || k === 'Ctrl') return 'Control';
+          if (k === 'Shift') return 'Shift';
+          if (k === 'Alt') return 'Alt';
+          if (k === 'Meta') return 'Command';
+          if (k === ' ') return 'Space';
+          if (/^[a-zA-Z]$/.test(k)) return k.toUpperCase();
+          return k;
+        };
+
+        const pressed = new Set();   // 当前按住的键（归一化）
+        const recorded = new Set();  // 本次录制出现过的键（用于最终组合）
+        const isModifier = (n) => ['Control', 'Shift', 'Alt', 'Command'].includes(n);
+
+        const render = () => {
+          // 修饰键按固定顺序排列在前，主键在后
+          const mods = ['Control', 'Command', 'Shift', 'Alt'].filter((m) => recorded.has(m));
+          const main = [...recorded].find((n) => !isModifier(n));
+          const parts = main ? [...mods, main] : mods;
+          input.value = parts.join('+');
+        };
+
+        const cleanup = (commit) => {
+          document.removeEventListener('keydown', onKeyDown, true);
+          document.removeEventListener('keyup', onKeyUp, true);
+          window.removeEventListener('blur', onBlur, true);
+          recBtn.textContent = origText;
+          recBtn.disabled = origDisabled;
+          // 提交录制结果：触发 change 事件以持久化到设置
+          if (commit && recorded.size > 0) {
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+          }
+        };
+
+        const onKeyDown = (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          if (e.key === 'Escape') { cleanup(false); return; }
+          const n = norm(e);
+          if (!n) return;
+          pressed.add(n);
+          recorded.add(n);
+          render();
+        };
+
+        const onKeyUp = (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const n = norm(e);
+          if (!n) return;
+          pressed.delete(n);
+          // 全部松开且本次已录入至少一个键 → 完成
+          if (pressed.size === 0 && recorded.size > 0) {
+            cleanup(true);
+          }
+        };
+
+        const onBlur = () => {
+          if (recorded.size > 0 && pressed.size === 0) {
+            cleanup(true);
+          }
+        };
+
+        document.addEventListener('keydown', onKeyDown, true);
+        document.addEventListener('keyup', onKeyUp, true);
+        window.addEventListener('blur', onBlur, true);
+      });
+    }
     // 刷新模型状态
     const refreshBtn = document.getElementById('btn-voice-refresh-status');
     if (refreshBtn) refreshBtn.addEventListener('click', () => refreshVoiceModelStatus());
