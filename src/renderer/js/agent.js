@@ -1410,6 +1410,8 @@ ${toolListSection}`;
       const payload = {
         id: this.conversationId,
         title: this.conversationTitle || '未命名对话',
+        ts: Date.now(), // 历史保存时间戳：Code 模式列表排序/展示用
+        updatedAt: new Date().toISOString(),
         schemaVersion: 2, // 历史格式版本：新版持久化完整 transcript（historyMessages）到 messages
         messages: this.contextManager.getHistoryMessages(),
         summaries: this.contextManager.summaries,

@@ -10951,48 +10951,62 @@
               if (msgsEl) {
                 msgsEl.innerHTML = '';
                 WebUIMirror.pushDomEvent({ type: 'dom_clear', container: '#code-chat-messages' });
+                const total = codeMessages.length;
+                const chunkSize = 40;
                 const toolCallMap = {};
-                for (const msg of codeMessages) {
-                  if (msg.role === 'user') {
-                    const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
-                    addCodeMessage('user', content);
-                  } else if (msg.role === 'assistant') {
-                    // assistant content 可能是字符串或数组（多模态）
-                    const textContent = extractTextContent(msg.content);
-                    if (textContent) addCodeMessage('assistant', textContent);
-                    // 渲染 tool_calls
-                    if (msg.tool_calls && msg.tool_calls.length > 0) {
-                      for (const tc of msg.tool_calls) {
-                        const toolName = tc.function?.name || 'tool';
-                        let args = {};
-                        try { args = JSON.parse(tc.function?.arguments || '{}'); } catch {}
-                        const toolDef = (typeof TOOL_DEFINITIONS !== 'undefined') ? TOOL_DEFINITIONS.find(t => t.name === toolName) : null;
-                        const displayName = toolDef?.desc || toolName;
-                        const card = addCodeToolCall({ name: displayName, args, callId: tc.id });
-                        if (tc.id && card) {
-                          toolCallMap[tc.id] = { card, name: toolName };
+                if (total > 0) showHistoryProgress(total);
+                try {
+                  for (let start = 0; start < total; start += chunkSize) {
+                    const end = Math.min(total, start + chunkSize);
+                    for (let i = start; i < end; i++) {
+                      const msg = codeMessages[i];
+                      if (msg.role === 'user') {
+                        const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
+                        addCodeMessage('user', content);
+                      } else if (msg.role === 'assistant') {
+                        // assistant content 可能是字符串或数组（多模态）
+                        const textContent = extractTextContent(msg.content);
+                        if (textContent) addCodeMessage('assistant', textContent);
+                        // 渲染 tool_calls
+                        if (msg.tool_calls && msg.tool_calls.length > 0) {
+                          for (const tc of msg.tool_calls) {
+                            const toolName = tc.function?.name || 'tool';
+                            let args = {};
+                            try { args = JSON.parse(tc.function?.arguments || '{}'); } catch {}
+                            const toolDef = (typeof TOOL_DEFINITIONS !== 'undefined') ? TOOL_DEFINITIONS.find(t => t.name === toolName) : null;
+                            const displayName = toolDef?.desc || toolName;
+                            const card = addCodeToolCall({ name: displayName, args, callId: tc.id });
+                            if (tc.id && card) {
+                              toolCallMap[tc.id] = { card, name: toolName };
+                            }
+                          }
                         }
+                      } else if (msg.role === 'tool') {
+                        // 工具结果：更新到对应的工具调用卡片
+                        const key = msg.tool_call_id;
+                        const entry = key ? toolCallMap[key] : null;
+                        let result = msg.content;
+                        if (typeof result === 'string') {
+                          try { result = JSON.parse(result); } catch {}
+                        }
+                        if (entry) {
+                          addCodeToolResult({ result, name: entry.name, callId: key });
+                        } else {
+                          // 没有对应的 tool_call（可能是旧历史）：直接渲染为系统消息
+                          const resultStr = typeof result === 'string' ? result : JSON.stringify(result);
+                          addCodeMessage('system', `[工具结果] ${msg.name || 'tool'}: ${resultStr.slice(0, 200)}`);
+                        }
+                      } else if (msg.role === 'system') {
+                        const content = typeof msg.content === 'string' ? msg.content : String(msg.content || '');
+                        addCodeMessage('system', content);
                       }
                     }
-                  } else if (msg.role === 'tool') {
-                    // 工具结果：更新到对应的工具调用卡片
-                    const key = msg.tool_call_id;
-                    const entry = key ? toolCallMap[key] : null;
-                    let result = msg.content;
-                    if (typeof result === 'string') {
-                      try { result = JSON.parse(result); } catch {}
-                    }
-                    if (entry) {
-                      addCodeToolResult({ result, name: entry.name, callId: key });
-                    } else {
-                      // 没有对应的 tool_call（可能是旧历史）：直接渲染为系统消息
-                      const resultStr = typeof result === 'string' ? result : JSON.stringify(result);
-                      addCodeMessage('system', `[工具结果] ${msg.name || 'tool'}: ${resultStr.slice(0, 200)}`);
-                    }
-                  } else if (msg.role === 'system') {
-                    const content = typeof msg.content === 'string' ? msg.content : String(msg.content || '');
-                    addCodeMessage('system', content);
+                    // 每批处理完让出事件循环，进度模态框刷新、DOM 回流
+                    updateHistoryProgress(end, total, end >= total ? '渲染完成，正在收尾…' : `已渲染 ${end}/${total} 条消息`);
+                    await yieldHistoryUI();
                   }
+                } finally {
+                  hideHistoryProgress();
                 }
                 requestAnimationFrame(() => {
                   msgsEl.scrollTop = msgsEl.scrollHeight;

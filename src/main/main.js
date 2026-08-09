@@ -5111,8 +5111,14 @@ ipcMain.handle('code:listHistory', (_, workspacePath) => {
       .filter(f => f.endsWith('.json'))
       .map(f => {
         try {
-          const data = JSON.parse(fs.readFileSync(path.join(histDir, f), 'utf-8'));
-          const meta = { id: f.replace('.json', ''), title: data.title || '未命名', ts: data.ts || 0, messageCount: (data.messages || []).length };
+          const filePath = path.join(histDir, f);
+          const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+          // ts 缺失或非法时回退到文件修改时间，避免旧历史显示 1970 年
+          let ts = Number(data.ts);
+          if (!isFinite(ts) || ts <= 0) {
+            try { ts = fs.statSync(filePath).mtimeMs; } catch { ts = 0; }
+          }
+          const meta = { id: f.replace('.json', ''), title: data.title || '未命名', ts, messageCount: (data.messages || []).length };
           // 列表只需元数据：释放大数组引用
           delete data.messages;
           return meta;
