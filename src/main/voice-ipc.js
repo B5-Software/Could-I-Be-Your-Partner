@@ -19,6 +19,7 @@ let engine = null;
 let voiceBarWindow = null;
 let captureWindow = null;
 let ctx = null; // { app, getSettings, persistSettings, getMainWindow, showWindowFromTray, onWakeAction }
+let barAudioShared = false; // 唤醒命中后：采集窗音频同时分流到语音条 STT 会话（避免丢句首）
 
 // 会话归属前缀：stt.final / tts 事件按 sessionId/reqId 前缀路由到对应窗口
 const SESSION_MAIN_PREFIX = 'main';
@@ -84,6 +85,11 @@ function openVoiceBar() {
 }
 
 function closeVoiceBar() {
+  // 清理语音条残留的听写会话（窗口可能被定时关闭，未走正常 finishDictation）
+  if (engine) {
+    try { engine.cancelStt(`${SESSION_BAR_PREFIX}-stt`); } catch (_) {}
+  }
+  barAudioShared = false;
   if (voiceBarWindow && !voiceBarWindow.isDestroyed()) {
     try { voiceBarWindow.close(); } catch (_) {}
   }
@@ -150,6 +156,7 @@ async function stopWake() {
     try { captureWindow.webContents.send('voice-capture:control', { command: 'stop' }); } catch (_) {}
   }
   destroyCaptureWindow();
+  barAudioShared = false;
   await engine.stopWake();
   log('后台唤醒已停用');
   return { ok: true };
@@ -164,20 +171,35 @@ async function setWakeEnabled(enabled) {
 }
 
 /** 唤醒命中路由 */
-async function onWake({ keyword, action }) {
+async function onWake({ keyword, phrase, action }) {
   log('唤醒命中:', keyword, '→', action);
   // 命中即停止正在播放的 TTS（barge-in）
   try { engine.cancelAllTts(); } catch (_) {}
-  broadcast('voice:wake', { keyword, action });
+  broadcast('voice:wake', { keyword, phrase, action });
   if (action === 'mainwindow') {
     ctx.showWindowFromTray();
     return;
   }
   // 默认动作：弹出置顶语音条并进入听写
+  // 立即开启 STT 会话并让采集窗音频分流（用户往往唤醒词刚说完继续说指令，
+  // 若等语音条窗口重新 getUserMedia 会丢句首 → whisper 识别严重失真）
+  if (voiceSettings().sttEnabled === false) {
+    log('STT 已禁用，跳过直通识别');
+    openVoiceBar();
+    return;
+  }
+  barAudioShared = true;
+  try {
+    // VAD 用默认参数，与主窗口听写完全一致（自定义参数曾导致识别风格漂移）
+    await engine.startStt('bar-stt');
+  } catch (e) {
+    barAudioShared = false;
+    log('唤醒直通 STT 启动失败:', e.message);
+  }
   const bar = openVoiceBar();
   const notify = () => {
     if (voiceBarWindow && !voiceBarWindow.isDestroyed()) {
-      voiceBarWindow.webContents.send('voicebar:wake-hit', { keyword });
+      voiceBarWindow.webContents.send('voicebar:wake-hit', { keyword, phrase, shared: true });
     }
   };
   if (bar.webContents.isLoading()) bar.webContents.once('did-finish-load', notify);
@@ -226,6 +248,8 @@ function registerIpc(ipcMain) {
       if (!data || !data.samples) return;
       if (data.target === 'wake') {
         engine.feedWakeAudio(data.samples);
+        // 唤醒命中后 → 采集窗音频同时喂给语音条 STT 会话（防丢句首）
+        if (barAudioShared) engine.feedStt('bar-stt', data.samples);
       } else if (data.target === 'stt' && data.sessionId) {
         engine.feedStt(data.sessionId, data.samples);
       }
@@ -242,12 +266,15 @@ function registerIpc(ipcMain) {
     }
   });
 
-  ipcMain.handle('voice:stt:stop', (_, sessionId) => {
-    try { engine.stopStt(sessionId); return { ok: true }; } catch (e) { return { ok: false, error: e.message }; }
+  ipcMain.handle('voice:stt:cancel', (_, sessionId) => {
+    try {
+      engine.cancelStt(sessionId);
+      return { ok: true };
+    } catch (e) { return { ok: false, error: e.message }; }
   });
 
-  ipcMain.handle('voice:stt:cancel', (_, sessionId) => {
-    try { engine.cancelStt(sessionId); return { ok: true }; } catch (e) { return { ok: false, error: e.message }; }
+  ipcMain.handle('voice:stt:stop', (_, sessionId) => {
+    try { engine.stopStt(sessionId); return { ok: true }; } catch (e) { return { ok: false, error: e.message }; }
   });
 
   ipcMain.handle('voice:tts:speak', async (_, data) => {
@@ -289,7 +316,9 @@ function registerIpc(ipcMain) {
       if (!text) return;
       ctx.showWindowFromTray();
       win.webContents.send('voice:bar:fill', { text, autoSend: true });
-    } catch (_) {}
+    } catch (e) {
+      log('voice:bar:command 处理失败:', e && e.message);
+    }
   });
 
   // 语音条请求打开主窗口（可携带识别文本：填入输入框不发送）
@@ -300,7 +329,9 @@ function registerIpc(ipcMain) {
       if (!win || win.isDestroyed()) return;
       const text = (data && data.text ? data.text : '').trim();
       if (text) win.webContents.send('voice:bar:fill', { text, autoSend: false });
-    } catch (_) {}
+    } catch (e) {
+      log('voice:bar:show-main 处理失败:', e && e.message);
+    }
   });
 
   // 语音条 / 采集窗口主动报告状态（用于主界面显示麦克风状态等）
@@ -359,6 +390,13 @@ function initVoice(context) {
     async onSettingsChanged(prevVoice) {
       const v = voiceSettings();
       const prev = prevVoice || {};
+      // STT 模型变更 → 重载模型并重建 worker（识别器路径锁定在 init 时）
+      if (v.sttModel !== prev.sttModel) {
+        const wasWake = await engine.reloadModels();
+        if (wasWake && v.wakeEnabled) {
+          try { await startWake(); } catch (e) { log('模型重载后重建唤醒失败:', e.message); }
+        }
+      }
       if (!!v.wakeEnabled !== !!prev.wakeEnabled) {
         await setWakeEnabled(!!v.wakeEnabled);
       } else if (v.wakeEnabled && JSON.stringify(v.wakeWords) !== JSON.stringify(prev.wakeWords)) {

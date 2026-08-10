@@ -1764,7 +1764,12 @@ function hideWindowToTray() {
  * 显示主窗口（从托盘恢复）。
  */
 function showWindowFromTray() {
-  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    // 窗口可能被销毁（异常退出到托盘后）→ 重建，避免三入口全部静默失效
+    if (isQuitting) return;
+    createWindow();
+    return;
+  }
   if (mainWindow.isMinimized()) mainWindow.restore();
   if (!mainWindow.isVisible()) mainWindow.show();
   mainWindow.focus();

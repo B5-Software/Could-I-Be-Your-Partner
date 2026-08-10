@@ -75,14 +75,14 @@
         source.connect(this.node);
         this.node.connect(gain);
       } else {
-        this._bindScriptProcessorFallback(gain);
+        this._bindScriptProcessorFallback(source, gain);
       }
       this._gain = gain;
       this.running = true;
     }
 
     // ScriptProcessor 降级：做与 worklet 等价的重采样 + Int16 分帧 + 电平
-    _bindScriptProcessorFallback(destNode) {
+    _bindScriptProcessorFallback(sourceNode, destNode) {
       const ctx = this.ctx;
       const targetRate = 16000;
       const ratio = ctx.sampleRate / targetRate;
@@ -134,7 +134,9 @@
         }
         push();
       };
-      proc.connect(dest);
+      // ScriptProcessor 必须挂在 source 之后才能收到输入音频
+      sourceNode.connect(proc);
+      proc.connect(destNode);
       this._proc = proc;
     }
 

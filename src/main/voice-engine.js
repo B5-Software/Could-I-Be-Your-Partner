@@ -71,6 +71,7 @@ class VoiceEngine extends EventEmitter {
     this.wakeActive = false;
     this.wakeWordMap = new Map(); // encoded phrase (@原文) -> { phrase, action }
     this.sttSessions = new Set();
+    this._sttSuspendWake = false; // 因 STT 会话活跃而暂停唤醒中
   }
 
   log(...args) { console.log('[voice]', ...args); }
@@ -96,6 +97,24 @@ class VoiceEngine extends EventEmitter {
     };
 
     const kwsDir = 'kws/sherpa-onnx-kws-zipformer-zh-en-3M-2025-12-20';
+
+    // 识别模型：按设置 voice.sttModel 选择 whisper-base / whisper-tiny（渲染进程已做白名单校验，这里兜底）
+    const pickSttWhisper = () => {
+      let size = 'base';
+      try {
+        const s = (this.getSettings && this.getSettings()) || {};
+        const v = (s.voice && s.voice.sttModel) || 'base';
+        if (v === 'tiny') size = 'tiny';
+      } catch (_) {}
+      const rel = (f) => `stt/whisper-${size}/${f}`;
+      return {
+        encoder: req('stt', rel(`${size}-encoder.int8.onnx`)),
+        decoder: req('stt', rel(`${size}-decoder.int8.onnx`)),
+        tokens: req('stt', rel(`${size}-tokens.txt`)),
+        numThreads: 2,
+      };
+    };
+
     const models = {
       kws: {
         encoder: req('kws', `${kwsDir}/encoder-epoch-13-avg-2-chunk-8-left-64.int8.onnx`),
@@ -106,12 +125,7 @@ class VoiceEngine extends EventEmitter {
       },
       vad: req('vad', 'vad/silero_vad.onnx'),
       stt: {
-        whisper: {
-          encoder: req('stt', 'stt/whisper-base/base-encoder.int8.onnx'),
-          decoder: req('stt', 'stt/whisper-base/base-decoder.int8.onnx'),
-          tokens: req('stt', 'stt/whisper-base/base-tokens.txt'),
-          numThreads: 2,
-        },
+        whisper: pickSttWhisper(),
       },
       tts: {
         kokoro: {
@@ -185,6 +199,7 @@ class VoiceEngine extends EventEmitter {
         this.workerReady = false;
         this.wakeActive = false;
         this.sttSessions.clear();
+        this._sttSuspendWake = false;
       });
       const onReady = (msg) => {
         if (msg.type === 'ready') {
@@ -205,7 +220,11 @@ class VoiceEngine extends EventEmitter {
     switch (msg.type) {
       case 'wake.hit': {
         const entry = this.wakeWordMap.get(msg.keyword) || null;
-        this.emit('wake', { keyword: msg.keyword, action: entry ? entry.action : 'voicebar' });
+        this.emit('wake', {
+          keyword: msg.keyword,
+          phrase: entry ? entry.phrase : '',
+          action: entry ? entry.action : 'voicebar',
+        });
         break;
       }
       case 'stt.partial':
@@ -213,6 +232,8 @@ class VoiceEngine extends EventEmitter {
         break;
       case 'stt.final':
         this.sttSessions.delete(msg.sessionId);
+        // 会话结束 → 若全部结束则恢复唤醒
+        this._maybeResumeWakeAfterStt();
         this.emit('stt.final', msg);
         break;
       case 'tts.audio':
@@ -269,10 +290,17 @@ class VoiceEngine extends EventEmitter {
     });
     this.wakeActive = true;
     this.log('唤醒监听已启动，词表:', enabled.map((w) => w.phrase).join(' / '));
+    // 若此刻已有活跃听写会话（打开唤醒时正在听写）→ 保持互斥立即暂停
+    if (this.sttSessions.size > 0 && !this._sttSuspendWake) {
+      this._sttSuspendWake = true;
+      this.suspendWake();
+      this.log('已有听写会话，唤醒监听保持暂停');
+    }
   }
 
   async stopWake() {
     this.wakeActive = false;
+    this._sttSuspendWake = false;
     if (this.worker) this.worker.postMessage({ type: 'wake.stop' });
   }
 
@@ -282,11 +310,39 @@ class VoiceEngine extends EventEmitter {
     }
   }
 
+  /** 暂停唤醒监听（前台听写/语音条听写期间防止误触发），不清除已建模的 KWS */
+  suspendWake() {
+    this.wakeActive = false;
+    if (this.worker) {
+      try { this.worker.postMessage({ type: 'wake.reset' }); } catch (_) {}
+    }
+  }
+
+  /** 恢复唤醒监听（若 KWS 已建模则直接续用） */
+  resumeWake() {
+    this.wakeActive = true;
+  }
+
+  /** STT 会话结束后若全部结束 → 恢复被互斥机制暂停的唤醒 */
+  _maybeResumeWakeAfterStt() {
+    if (this._sttSuspendWake && this.sttSessions.size === 0) {
+      this._sttSuspendWake = false;
+      this.resumeWake();
+      this.log('听写会话全部结束，恢复唤醒监听');
+    }
+  }
+
   // ---------- STT ----------
   async startStt(sessionId, opts = {}) {
     await this.ensureWorker();
     if (!this._models.stt.whisper.encoder) throw new Error('STT 模型缺失');
     this.sttSessions.add(sessionId);
+    // 听写会话活跃 → 暂停后台唤醒（任何入口：主窗口听写 / 语音条 / WebUI）
+    if (this.wakeActive && !this._sttSuspendWake) {
+      this._sttSuspendWake = true;
+      this.suspendWake();
+      this.log('听写开始，暂停唤醒监听');
+    }
     this.worker.postMessage({ type: 'stt.start', sessionId, vad: opts.vad });
   }
 
@@ -303,6 +359,8 @@ class VoiceEngine extends EventEmitter {
   cancelStt(sessionId) {
     this.sttSessions.delete(sessionId);
     if (this.worker) this.worker.postMessage({ type: 'stt.cancel', sessionId });
+    // 会话取消 → 若全部结束则恢复唤醒
+    this._maybeResumeWakeAfterStt();
   }
 
   // ---------- TTS ----------
@@ -346,6 +404,22 @@ class VoiceEngine extends EventEmitter {
     try { if (this.worker) await this.worker.terminate(); } catch (_) {}
     this.worker = null;
     this.workerReady = false;
+  }
+
+  /**
+   * 重载模型并重启 worker（模型设置变更后调用）。
+   * worker 内 whisper 识别器为懒加载单例，模型路径在 init 时锁定，必须重建 worker。
+   * @returns {boolean} 重载前唤醒是否处于激活状态（需上层按需重建 KWS）
+   */
+  async reloadModels() {
+    const wasWake = this.wakeActive;
+    await this.dispose();
+    this.sttSessions.clear();
+    this._sttSuspendWake = false;
+    this.resolveModels();
+    this.wakeActive = false;
+    this.log('语音模型已重载（sttModel 变更）');
+    return wasWake;
   }
 }
 

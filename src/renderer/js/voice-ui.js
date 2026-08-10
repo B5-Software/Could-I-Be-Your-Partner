@@ -228,6 +228,12 @@
         input.value = dictationBaseText + (msg.text ? sep + msg.text : '');
         input.dispatchEvent(new Event('input', { bubbles: true })); // 触发自动增高
         input.scrollTop = input.scrollHeight;
+        // 说出发送关键词 → 自动停止听写，final 事件里剥离关键词并自动发送
+        const text = (msg.text || '').trim();
+        const kws = (voiceCfg().sttSendKeywords || []).filter(Boolean);
+        if (text && kws.length && kws.some((k) => k && text.endsWith(k))) {
+          stopDictation(false);
+        }
       });
     }
 

@@ -116,6 +116,13 @@ function stopWake() {
   kws = null;
 }
 
+/** 重置 KWS 流（暂停唤醒后恢复前调用，避免残留音频误触发） */
+function resetWake() {
+  if (kws && kwsStream) {
+    try { kws.reset(kwsStream); } catch (_) {}
+  }
+}
+
 // ---------- STT ----------
 function getWhisperRecognizer() {
   if (whisperRecognizer) return whisperRecognizer;
@@ -406,6 +413,7 @@ parentPort.on('message', (msg) => {
       case 'wake.start': startWake(msg); break;
       case 'wake.audio': feedWakeAudio(msg.samples); break;
       case 'wake.stop': stopWake(); break;
+      case 'wake.reset': resetWake(); break;
       case 'stt.start': sttStart(msg); break;
       case 'stt.audio': sttAudio(msg); break;
       case 'stt.stop': sttStop(msg); break;

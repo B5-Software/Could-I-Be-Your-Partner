@@ -10,7 +10,7 @@
  * 模型清单：
  *   - KWS 唤醒词: zipformer zh-en 3M (2025-12-20, GitHub Release tar.bz2)
  *   - VAD: silero_vad.onnx (GitHub Release)
- *   - STT: whisper-base int8 (HuggingFace csukuangfj/sherpa-onnx-whisper-base)
+ *   - STT: whisper-base int8 + whisper-tiny int8 (HuggingFace csukuangfj/sherpa-onnx-whisper-*)
  *   - TTS kokoro: int8 multi-lang v1_0 (HuggingFace csukuangfj/kokoro-int8-multi-lang-v1_0)
  *   - TTS piper de: thorsten medium fp32 (HuggingFace csukuangfj/vits-piper-de_DE-thorsten-medium)
  *   - espeak-ng-data: 由 kokoro 包的 espeak-ng-data 目录提供，piper 共享
@@ -62,6 +62,14 @@ const MODELS = [
     repo: 'csukuangfj/sherpa-onnx-whisper-base',
     files: ['base-encoder.int8.onnx', 'base-decoder.int8.onnx', 'base-tokens.txt'],
     dest: 'stt/whisper-base',
+  },
+  // --- STT: whisper-tiny int8（可选小模型，更快、更省内存，准确率略低）---
+  {
+    name: 'stt-tiny',
+    type: 'hf',
+    repo: 'csukuangfj/sherpa-onnx-whisper-tiny',
+    files: ['tiny-encoder.int8.onnx', 'tiny-decoder.int8.onnx', 'tiny-tokens.txt'],
+    dest: 'stt/whisper-tiny',
   },
   // --- TTS: kokoro int8 multi-lang v1_0 ---
   {

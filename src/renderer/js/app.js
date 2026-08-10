@@ -2605,6 +2605,12 @@ window.api.onWebControlSendMessage(async (message) => {
   if (typeof window.api?.onVoiceBarFill === 'function') {
     window.api.onVoiceBarFill(async (d) => {
       if (!d || !d.text) return;
+      // 问卷等待填写 → 语音答案填入当前题并自动下一题/提交（不走聊天发送）
+      const activeQ = window.__activeQuestion;
+      if (activeQ && typeof activeQ.submitAnswer === 'function') {
+        activeQ.submitAnswer(d.text);
+        return;
+      }
       const mode = typeof window.getCurrentMode === 'function' ? window.getCurrentMode() : 'chat';
       const inputId = mode === 'code' ? 'code-chat-input' : (mode === 'babe' ? 'babe-chat-input' : 'chat-input');
       const input = document.getElementById(inputId);
@@ -9410,6 +9416,9 @@ window.api.onWebControlSendMessage(async (message) => {
       const btnNext = document.createElement('button');
       btnNext.className = 'btn-primary';
 
+      let customRadio = null;
+      let customInput = null;
+
       nav.appendChild(btnPrev);
       nav.appendChild(btnNext);
 
@@ -9475,7 +9484,7 @@ window.api.onWebControlSendMessage(async (message) => {
         customLabel.style.alignItems = 'center';
         customLabel.style.gap = '8px';
 
-        const customRadio = document.createElement('input');
+        customRadio = document.createElement('input');
         customRadio.type = 'radio';
         customRadio.name = radioName;
         customRadio.value = '__custom__';
@@ -9484,7 +9493,7 @@ window.api.onWebControlSendMessage(async (message) => {
         const customPrefix = document.createElement('span');
         customPrefix.textContent = 'D.';
 
-        const customInput = document.createElement('input');
+        customInput = document.createElement('input');
         customInput.type = 'text';
         customInput.placeholder = '自定义选项';
         customInput.style.cssText = `
@@ -9535,9 +9544,22 @@ window.api.onWebControlSendMessage(async (message) => {
 
         btnPrev.disabled = currentIndex === 0;
         btnNext.textContent = currentIndex === questions.length - 1 ? '提交' : '下一题';
+
+        // 语音输入钩子：唤醒/听写结果填入本题自定义选项并自动下一题/提交
+        window.__activeQuestion = {
+          submitAnswer(text) {
+            const v = String(text || '').trim();
+            if (!v) return;
+            customRadio.checked = true;
+            customInput.value = v;
+            answers[currentIndex] = v;
+            btnNext.click();
+          },
+        };
       }
 
       function finish() {
+        window.__activeQuestion = null;
         // Disable all inputs
         const allInputs = optionsWrap.querySelectorAll('input');
         allInputs.forEach(inp => inp.disabled = true);
@@ -12641,6 +12663,7 @@ window.api.onWebControlSendMessage(async (message) => {
     const set = (id, val) => { const el = document.getElementById(id); if (el) el.value = val; };
     const setChk = (id, val) => { const el = document.getElementById(id); if (el) el.checked = !!val; };
     setChk('setting-voice-stt', v.sttEnabled !== false);
+    set('setting-voice-stt-model', (v.sttModel === 'tiny' ? 'tiny' : 'base'));
     set('setting-voice-stt-send-keywords', (v.sttSendKeywords || []).join('、'));
     setChk('setting-voice-tts', v.ttsEnabled === true);
     setChk('setting-voice-tts-auto', v.ttsAutoSpeak === true);
@@ -12787,6 +12810,7 @@ window.api.onWebControlSendMessage(async (message) => {
       });
     };
     bind('setting-voice-tts-lang', 'ttsLang');
+    bind('setting-voice-stt-model', 'sttModel');
     bind('setting-voice-kws-threshold', 'threshold', (voice, val) => { if (!voice.kws) voice.kws = {}; voice.kws.threshold = parseFloat(val) || 0.25; });
     bind('setting-voice-stt-send-keywords', 'sttSendKeywords', (voice, val) => {
       voice.sttSendKeywords = String(val || '').split(/[,，、\s]+/).map(s => s.trim()).filter(Boolean);
