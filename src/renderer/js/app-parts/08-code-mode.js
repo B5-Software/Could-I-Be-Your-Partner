@@ -1280,6 +1280,10 @@
       return;
     }
     if (descEl) descEl.textContent = `工作区: ${codeWorkspacePath}`;
+    if (typeof HistoryList !== 'undefined') {
+      await loadCodeHistoryPageVirtual();
+      return;
+    }
     listEl.innerHTML = '<div class="empty-state"><i class="fa-solid fa-spinner fa-spin"></i><p>加载中...</p></div>';
     try {
       const result = await window.api.codeListHistory(codeWorkspacePath);
@@ -1345,6 +1349,108 @@
     } catch (e) {
       listEl.innerHTML = `<div class="empty-state"><i class="fa-solid fa-triangle-exclamation"></i><p>${e.message}</p></div>`;
       WebUIMirror.pushDomEvent({ type: 'dom_replace', container: '#page-code-history', html: document.getElementById('page-code-history').innerHTML });
+    }
+  }
+
+  // ============ Code 历史虚拟滚动 + Ctrl/Cmd+F 搜索 ============
+  let codeHistoryRawItems = [];
+  let codeHistorySearch = null;
+
+  function ensureCodeHistoryListAttached() {
+    const listEl = document.getElementById('code-history-list');
+    if (!listEl || typeof HistoryList === 'undefined') return false;
+    if (!listEl.dataset.hlAttached) {
+      listEl.dataset.hlAttached = '1';
+      HistoryList.attach(listEl, {
+        renderItem: renderCodeHistoryItem,
+        onAction: handleCodeHistoryAction,
+        renderEmpty: () => '<div class="empty-state"><i class="fa-solid fa-clock-rotate-left"></i><p>暂无 Code 历史</p></div>',
+        stride: 78,
+        overscan: 8
+      });
+      codeHistorySearch = (typeof window.makeHistorySearch === 'function') ? window.makeHistorySearch({
+        key: 'code-history',
+        inputId: 'code-history-search-input',
+        countId: 'code-history-search-count',
+        getRawItems: () => codeHistoryRawItems,
+        getSearchText: (item) => `${item.title || ''} ${item.messageCount || ''}`,
+        onFilterChange: (filtered) => HistoryList.setItems(listEl, filtered)
+      }) : null;
+    }
+    return true;
+  }
+
+  function renderCodeHistoryItem(item) {
+    const date = new Date(item.ts);
+    const timeStr = date.toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+    return `
+      <div class="history-item" data-id="${item.id}">
+        <div class="history-info">
+          <div class="history-title">${escapeHtml(item.title || '未命名')} ${sessionStatusBadge(item.status, item.lastError)}</div>
+          <div class="history-time">${timeStr} · ${item.messageCount || 0} 条消息</div>
+        </div>
+        <div class="history-actions">
+          <button class="btn-icon" data-action="continue" title="继续对话"><i class="fa-solid fa-play"></i></button>
+          <button class="btn-icon" data-action="delete" title="删除"><i class="fa-solid fa-trash-can"></i></button>
+        </div>
+      </div>`;
+  }
+
+  async function handleCodeHistoryAction(action, item) {
+    if (!item || !item.id) return;
+    const id = item.id;
+    if (action === 'continue') {
+      stopVoicePlayback();
+      const loadRes = await window.api.codeLoadHistory(codeWorkspacePath, id);
+      if (loadRes.ok && loadRes.data) {
+        codeCurrentHistoryId = id;
+        const conv = loadRes.data;
+        let session = sessionManager ? sessionManager.list('code').find(s => String(s.id) === String(id)) : null;
+        if (session) {
+          codeAgent = session.agent;
+          await codeAgent.loadFromHistory(conv);
+          sessionManager.retag(session, id);
+          activateSession('code', session.key);
+        } else {
+          session = await createCodeSession();
+          if (!session) return;
+          codeAgent = session.agent;
+          await codeAgent.loadFromHistory(conv);
+          sessionManager.retag(session, id);
+        }
+        codeMessages = codeAgent.contextManager.getHistoryMessages().slice();
+        await replayCodeSession(session);
+        document.querySelector('.nav-item[data-page="code"]')?.click();
+      }
+    } else if (action === 'delete') {
+      const titleForConfirm = item.title || '此对话';
+      const confirmed = await window.confirmDialog(`确定删除"${String(titleForConfirm).slice(0, 40)}"吗？此操作不可恢复。`, '删除确认');
+      if (!confirmed) return;
+      await window.api.codeDeleteHistory(codeWorkspacePath, id);
+      loadCodeHistoryPage();
+    }
+  }
+
+  async function loadCodeHistoryPageVirtual() {
+    const listEl = document.getElementById('code-history-list');
+    if (!listEl) return;
+    ensureCodeHistoryListAttached();
+    HistoryList.showMessage(listEl, '<div class="empty-state"><i class="fa-solid fa-spinner fa-spin"></i><p>加载中...</p></div>');
+    try {
+      const result = await window.api.codeListHistory(codeWorkspacePath);
+      if (result.ok && Array.isArray(result.history)) {
+        codeHistoryRawItems = result.history;
+      } else {
+        codeHistoryRawItems = [];
+      }
+      if (codeHistorySearch) codeHistorySearch.refresh();
+      else HistoryList.setItems(listEl, codeHistoryRawItems);
+      HistoryList.materializeAll();
+      const pageHtml = document.getElementById('page-code-history')?.innerHTML || '';
+      HistoryList.restoreAll();
+      WebUIMirror.pushDomEvent({ type: 'dom_replace', container: '#page-code-history', html: pageHtml });
+    } catch (e) {
+      HistoryList.showMessage(listEl, `<div class="empty-state"><i class="fa-solid fa-triangle-exclamation"></i><p>${escapeHtml(e.message)}</p></div>`);
     }
   }
 

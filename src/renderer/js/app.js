@@ -3,10 +3,22 @@
  * Copyright (c) 2026 B5-Software
  *
  * This file is part of Could I Be Your Partner.
+ *
+ * 生成文件：由 scripts/build-app-bundle.js 从 src/renderer/js/app-parts/*.js 拼接生成。
+ * 请勿直接编辑本文件，修改 app-parts 后运行 npm run build-app-bundle。
+ */
+
+export default (async function appEntry() {
+/*
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ * Copyright (c) 2026 B5-Software
+ *
+ * This file is part of Could I Be Your Partner.
  */
 
 // Main Application Controller
-(async function () {
+// 注：本 part 已不包含 IIFE 包装，由 build-app-bundle.js 生成 ESM app.js 时
+// 统一包在 `export default (async function appEntry() { ... })();` 中。
   // Wait for KaTeX to load
   let waitCount = 0;
   while (!window.katex && waitCount < 50) {
@@ -416,6 +428,10 @@
     buildMirrorBody() {
       const app = document.getElementById('app');
       const titlebar = document.getElementById('titlebar');
+      // 虚拟滚动列表只保留可视窗口，镜像快照前临时展开为完整列表
+      if (typeof window.HistoryList === 'object' && typeof window.HistoryList.materializeAll === 'function') {
+        window.HistoryList.materializeAll();
+      }
       // 完整保留所有内容，不截断历史
       // 包含 #app 外的模态框（onboarding/confirm/message 等）
       const modals = [];
@@ -423,12 +439,16 @@
         if (m.id === 'remote-connect-modal' || m.id === 'remote-conn-banner') return;
         modals.push(m.outerHTML);
       });
-      return {
+      const snapshot = {
         type: 'mirror_body',
         html: app ? app.innerHTML : '',
         titlebar: titlebar ? titlebar.outerHTML : '',
         modals: modals.join('')
       };
+      if (typeof window.HistoryList === 'object' && typeof window.HistoryList.restoreAll === 'function') {
+        window.HistoryList.restoreAll();
+      }
+      return snapshot;
     },
 
     sendMirrorHead() {
@@ -3321,15 +3341,6 @@ window.api.onWebControlSendMessage(async (message) => {
       open();
     });
 
-    // Ctrl/Cmd+F 全局快捷键
-    document.addEventListener('keydown', (e) => {
-      if ((e.ctrlKey || e.metaKey) && (e.key === 'f' || e.key === 'F')) {
-        e.preventDefault();
-        if (isOpen()) { focusInput(true); }
-        else open();
-      }
-    }, true);
-
     // 模式切换时关闭搜索（避免高亮残留到别的容器）
     document.querySelectorAll('.nav-item[data-page]').forEach(btn => {
       btn.addEventListener('click', () => { if (isOpen()) close(); });
@@ -3337,6 +3348,41 @@ window.api.onWebControlSendMessage(async (message) => {
 
     return { open, close, isOpen, runSearch, clearMarks };
   })();
+
+  // ============ Ctrl/Cmd+F 页面级搜索路由 ============
+  // 聊天搜索只作用于 Chat/Code/Babe 聊天界面；历史页/设置页各有自己的搜索，
+  // 其余标签页不拦截 Ctrl+F，避免聊天搜索泄露到无关页面。
+  window.__pageSearchHandlers = window.__pageSearchHandlers || {};
+  window.registerPageSearch = function (pageId, handler) {
+    if (pageId && handler) window.__pageSearchHandlers[pageId] = handler;
+  };
+
+  document.addEventListener('keydown', (e) => {
+    if (!(e.ctrlKey || e.metaKey) || (e.key !== 'f' && e.key !== 'F')) return;
+    const active = document.querySelector('.page.active');
+    const pageId = active ? String(active.id || '').replace(/^page-/, '') : '';
+    if (pageId === 'chat' || pageId === 'code' || pageId === 'babe') {
+      e.preventDefault();
+      if (chatSearch) chatSearch.open();
+      return;
+    }
+    const handler = window.__pageSearchHandlers[pageId];
+    if (handler && typeof handler.open === 'function') {
+      e.preventDefault();
+      handler.open();
+    }
+  }, true);
+
+  // 离开历史/设置等页面时关闭其搜索，恢复完整列表
+  document.addEventListener('click', (e) => {
+    const nav = e.target.closest('.nav-item[data-page]');
+    if (!nav) return;
+    const target = nav.dataset.page;
+    if (target === 'chat' || target === 'code' || target === 'babe') return;
+    Object.values(window.__pageSearchHandlers || {}).forEach(h => {
+      try { if (h && typeof h.close === 'function') h.close(); } catch { /* ignore */ }
+    });
+  }, true);
 
   async function normalizeToolSettings() {
     if (!agent.settings) return;
@@ -7534,6 +7580,98 @@ window.api.onWebControlSendMessage(async (message) => {
     });
   });
 
+  // ============ 设置页搜索（Ctrl/Cmd+F 打开，仅设置页生效） ============
+  const settingsSearch = (() => {
+    const input = document.getElementById('settings-search-input');
+    const countEl = document.getElementById('settings-search-count');
+    if (!input || !countEl) return null;
+
+    let query = '';
+    let lastActiveTab = 'ai';
+
+    function activateTab(tabId) {
+      document.querySelectorAll('.settings-tab').forEach(b => b.classList.toggle('active', b.dataset.tab === tabId));
+      document.querySelectorAll('.settings-panel').forEach(p => p.classList.toggle('active', p.dataset.tab === tabId));
+    }
+
+    function settingItemText(item) {
+      let text = item.textContent || '';
+      item.querySelectorAll('input, textarea, select').forEach(el => {
+        text += ' ' + (el.value || '') + ' ' + (el.placeholder || '');
+      });
+      return text.toLowerCase();
+    }
+
+    function applyQuery() {
+      const q = query;
+      const panels = Array.from(document.querySelectorAll('#page-settings .settings-panel'));
+      let matchCount = 0;
+      let firstPanelTab = null;
+      panels.forEach(panel => {
+        const items = Array.from(panel.querySelectorAll(':scope > .settings-group > .setting-item, :scope > .setting-item'));
+        let panelMatches = 0;
+        items.forEach(item => {
+          const ok = !q || settingItemText(item).includes(q);
+          item.classList.toggle('settings-search-match', !!q && ok);
+          item.style.display = q ? (ok ? '' : 'none') : '';
+          if (q && ok) panelMatches++;
+        });
+        panel.querySelectorAll(':scope > .settings-group').forEach(group => {
+          const hasVisibleItem = group.querySelector('.setting-item:not([style*="display: none"])');
+          const titleMatch = q && group.querySelector('h3') && (group.querySelector('h3').textContent || '').toLowerCase().includes(q);
+          group.style.display = q ? ((hasVisibleItem || titleMatch) ? '' : 'none') : '';
+        });
+        const panelVisible = !q || panelMatches > 0;
+        panel.style.display = q ? (panelVisible ? '' : 'none') : '';
+        if (panelVisible && q) {
+          matchCount += panelMatches;
+          if (!firstPanelTab) firstPanelTab = panel.dataset.tab;
+        }
+        const tab = document.querySelector(`.settings-tab[data-tab="${panel.dataset.tab}"]`);
+        if (tab) tab.style.display = q ? (panelVisible ? '' : 'none') : '';
+      });
+      countEl.textContent = q ? `${matchCount} 项` : '';
+      input.classList.toggle('has-results', !!q);
+      if (q && firstPanelTab) activateTab(firstPanelTab);
+      else if (!q) activateTab(lastActiveTab);
+    }
+
+    function open() {
+      lastActiveTab = document.querySelector('.settings-tab.active')?.dataset.tab || 'ai';
+      input.focus({ preventScroll: true });
+      try { input.scrollIntoView({ block: 'nearest' }); } catch { /* ignore */ }
+      Promise.resolve().then(() => input.focus({ preventScroll: true }));
+    }
+
+    function close() {
+      if (query || input.value) {
+        query = '';
+        input.value = '';
+        applyQuery();
+      }
+      input.blur();
+    }
+
+    input.addEventListener('input', () => {
+      query = input.value.trim().toLowerCase();
+      applyQuery();
+    });
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        close();
+      }
+    });
+    document.querySelectorAll('.settings-tab').forEach(b => {
+      b.addEventListener('click', () => { if (!query) lastActiveTab = b.dataset.tab; });
+    });
+
+    if (typeof window.registerPageSearch === 'function') {
+      window.registerPageSearch('settings', { open, close });
+    }
+    return { open, close };
+  })();
+
   // Settings change handlers
   async function saveSettings(updates) {
     const current = await window.api.getSettings();
@@ -8416,6 +8554,12 @@ window.api.onWebControlSendMessage(async (message) => {
       return;
     }
 
+    // 本地模式：优先走虚拟滚动 + 搜索 + 事件委托；下方旧的全量渲染保留为回退
+    if (typeof HistoryList !== 'undefined') {
+      await loadHistoryPageVirtual();
+      return;
+    }
+
     const histories = await window.api.historyList();
     if (!histories || histories.length === 0) {
       list.innerHTML = '<div class="empty-state"><i class="fa-solid fa-clock-rotate-left"></i><p>暂无对话历史</p></div>';
@@ -8600,6 +8744,198 @@ window.api.onWebControlSendMessage(async (message) => {
     });
     // 增量推送：替换历史列表内容
     WebUIMirror.pushDomEvent({ type: 'dom_replace', container: '#history-list', html: list.innerHTML });
+  }
+
+  // ============ 历史虚拟滚动 + Ctrl/Cmd+F 搜索 ============
+  let historyRawItems = [];
+  let historySearch = null;
+
+  function formatHistoryTime(h) {
+    let timeStr = '未知时间';
+    const ts = h.timestamp ? (typeof h.timestamp === 'number' ? h.timestamp : Date.parse(h.timestamp))
+      : (h.createdAt ? (typeof h.createdAt === 'number' ? h.createdAt : Date.parse(h.createdAt)) : null);
+    if (ts && !isNaN(ts)) {
+      timeStr = new Date(ts).toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+    }
+    return timeStr;
+  }
+
+  function ensureHistoryListAttached() {
+    const list = document.getElementById('history-list');
+    if (!list || typeof HistoryList === 'undefined') return false;
+    if (!list.dataset.hlAttached) {
+      list.dataset.hlAttached = '1';
+      HistoryList.attach(list, {
+        renderItem: renderHistoryItem,
+        onAction: handleHistoryAction,
+        renderEmpty: () => '<div class="empty-state"><i class="fa-solid fa-clock-rotate-left"></i><p>暂无对话历史</p></div>',
+        stride: 78,
+        overscan: 8
+      });
+      historySearch = (typeof window.makeHistorySearch === 'function') ? window.makeHistorySearch({
+        key: 'history',
+        inputId: 'history-search-input',
+        countId: 'history-search-count',
+        getRawItems: () => historyRawItems,
+        getSearchText: (item) => `${item.title || ''} ${formatHistoryTime(item)} ${item.messageCount || ''}`,
+        onFilterChange: (filtered) => HistoryList.setItems(list, filtered)
+      }) : null;
+    }
+    return true;
+  }
+
+  function renderHistoryItem(h) {
+    const timeStr = formatHistoryTime(h);
+    const countText = h.messageCount ? ` · ${h.messageCount} 条消息` : '';
+    return `
+      <div class="history-item" data-id="${escapeHtml(h.id)}">
+        <div class="history-info">
+          <div class="history-title">${escapeHtml(h.title || '未命名对话')} ${sessionStatusBadge(h.status, h.lastError)}</div>
+          <div class="history-time">${timeStr}${countText}</div>
+        </div>
+        <div class="history-actions">
+          <button class="btn-icon" data-action="continue" title="继续对话"><i class="fa-solid fa-play"></i></button>
+          <button class="btn-icon" data-action="open-workspace" title="打开工作目录"><i class="fa-solid fa-folder-open"></i></button>
+          <button class="btn-icon" data-action="export-json" title="导出为JSON"><i class="fa-solid fa-file-code"></i></button>
+          <button class="btn-icon" data-action="export-md" title="导出为Markdown"><i class="fa-solid fa-file-lines"></i></button>
+          <button class="btn-icon" data-action="delete" title="删除"><i class="fa-solid fa-trash-can"></i></button>
+        </div>
+      </div>`;
+  }
+
+  function sanitizeHistoryFileName(name) {
+    return (name || '对话记录').replace(/[\\/:*?"<>|]/g, '_');
+  }
+
+  function buildHistoryMarkdown(conv) {
+    const title = conv.title || '未命名对话';
+    const createdAt = conv.createdAt ? new Date(conv.createdAt).toLocaleString('zh-CN') : '';
+    const updatedAt = conv.updatedAt ? new Date(conv.updatedAt).toLocaleString('zh-CN') : '';
+    const lines = [];
+    lines.push(`# ${title}`);
+    lines.push('');
+    if (createdAt) lines.push(`- 创建时间：${createdAt}`);
+    if (updatedAt) lines.push(`- 更新时间：${updatedAt}`);
+    if (conv.workspacePath) lines.push(`- 工作目录：${conv.workspacePath}`);
+    lines.push('');
+    (conv.messages || []).forEach(msg => {
+      const role = msg.role || 'assistant';
+      const roleName = role === 'user' ? '用户' : role === 'assistant' ? 'AI' : role === 'system' ? '系统' : '工具';
+      lines.push(`## ${roleName}`);
+      if (role === 'tool') {
+        let toolContent = msg.content;
+        try { toolContent = JSON.stringify(JSON.parse(msg.content), null, 2); } catch {}
+        lines.push('```json');
+        lines.push(toolContent || '');
+        lines.push('```');
+      } else {
+        lines.push(msg.content || '');
+      }
+      lines.push('');
+    });
+    return lines.join('\n');
+  }
+
+  async function handleHistoryAction(action, item) {
+    if (!item || !item.id) return;
+    const id = item.id;
+
+    if (action === 'continue') {
+      stopVoicePlayback();
+      const conv = await window.api.historyGet(id);
+      if (!conv) return;
+      const existing = sessionManager ? sessionManager.list('chat').find(s => String(s.id) === String(conv.id)) : null;
+      if (existing) {
+        agent = existing.agent;
+        activateSession('chat', existing.key);
+      } else {
+        const ag = new Agent();
+        ag.mode = 'chat';
+        await ag.init();
+        await ag.loadFromHistory(conv);
+        wireChatAgent(ag);
+        const target = sessionManager.registerAgent('chat', ag, { id: conv.id, title: conv.title || '未命名对话' });
+        agent = ag;
+        activateSession('chat', target.key);
+      }
+      setTitlebarTitle(agent.conversationTitle || '未命名对话');
+      updateContextProgress();
+      document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
+      document.querySelector('.nav-item[data-page="chat"]')?.classList.add('active');
+      document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+      document.getElementById('page-chat')?.classList.add('active');
+      chatMessages.innerHTML = '';
+      if (typeof VirtualScroller !== 'undefined') VirtualScroller.reset();
+      if (typeof VirtualScroller !== 'undefined') VirtualScroller.markBatchStart();
+      WebUIMirror.pushDomEvent({ type: 'dom_clear', container: '#chat-messages' });
+      WebUIMirror.pushDomEvent({ type: 'dom_remove', selector: '#thinking-indicator' });
+      const chatGeneration = (window.__chatReplayGeneration = (window.__chatReplayGeneration || 0) + 1);
+      await replayHistoryMessages(conv.messages || [], {
+        cancelCheck: () => window.__chatReplayGeneration !== chatGeneration
+      });
+      if (typeof VirtualScroller !== 'undefined') VirtualScroller.markBatchEnd();
+      requestAnimationFrame(() => {
+        const last = chatMessages.lastElementChild;
+        if (last) last.scrollIntoView({ behavior: 'smooth', block: 'end' });
+      });
+    } else if (action === 'open-workspace') {
+      const conv = await window.api.historyGet(id);
+      if (conv?.workspacePath) {
+        window.api.openFileExplorer(conv.workspacePath);
+      } else {
+        alert('该对话没有记录工作目录');
+      }
+    } else if (action === 'export-json' || action === 'export-md') {
+      const conv = await window.api.historyGet(id);
+      if (!conv) return;
+      const isJson = action === 'export-json';
+      const filename = `${sanitizeHistoryFileName(conv.title || '对话记录')}.${isJson ? 'json' : 'md'}`;
+      const result = await window.api.saveFileDialog({
+        title: isJson ? '导出对话记录(JSON)' : '导出对话记录(Markdown)',
+        defaultPath: filename,
+        filters: isJson ? [{ name: 'JSON', extensions: ['json'] }] : [{ name: 'Markdown', extensions: ['md'] }]
+      });
+      if (!result.ok || !result.path) return;
+      const content = isJson ? JSON.stringify(conv, null, 2) : buildHistoryMarkdown(conv);
+      const saveResult = await window.api.writeFile(result.path, content);
+      if (saveResult.ok) {
+        showMessageModal(`已导出：${result.path}`, '导出成功', 'success');
+      } else {
+        showMessageModal(`导出失败：${saveResult.error || '未知错误'}`, '导出失败', 'error');
+      }
+    } else if (action === 'delete') {
+      const conv = await window.api.historyGet(id).catch(() => null);
+      const titleForConfirm = conv?.title || '此对话';
+      const confirmed = await window.confirmDialog(`确定删除"${String(titleForConfirm).slice(0, 40)}"吗？此操作不可恢复。`, '删除确认');
+      if (!confirmed) return;
+      await window.api.historyDelete(id);
+      if (agent.conversationId === id) {
+        agent.newConversation();
+        clearChatMessagesUI();
+        setTitlebarTitle('未命名对话');
+      }
+      loadHistoryPage();
+    }
+  }
+
+  async function loadHistoryPageVirtual() {
+    const list = document.getElementById('history-list');
+    if (!list) return;
+    ensureHistoryListAttached();
+    HistoryList.showMessage(list, '<div class="empty-state"><i class="fa-solid fa-spinner fa-spin"></i><p>加载历史…</p></div>');
+    try {
+      const histories = await window.api.historyList();
+      historyRawItems = Array.isArray(histories) ? histories : [];
+      if (historySearch) historySearch.refresh();
+      else HistoryList.setItems(list, historyRawItems);
+      // 推送完整页面快照前展开虚拟列表，避免 WebUI 只看到当前窗口
+      HistoryList.materializeAll();
+      const pageHtml = document.getElementById('page-history')?.innerHTML || '';
+      HistoryList.restoreAll();
+      WebUIMirror.pushDomEvent({ type: 'dom_replace', container: '#page-history', html: pageHtml });
+    } catch (e) {
+      HistoryList.showMessage(list, `<div class="empty-state"><i class="fa-solid fa-triangle-exclamation"></i><p>加载历史失败: ${escapeHtml(e.message || '')}</p></div>`);
+    }
   }
 
   // ---- Init AI Persona Display ----
@@ -11048,6 +11384,10 @@ window.api.onWebControlSendMessage(async (message) => {
       return;
     }
     if (descEl) descEl.textContent = `工作区: ${codeWorkspacePath}`;
+    if (typeof HistoryList !== 'undefined') {
+      await loadCodeHistoryPageVirtual();
+      return;
+    }
     listEl.innerHTML = '<div class="empty-state"><i class="fa-solid fa-spinner fa-spin"></i><p>加载中...</p></div>';
     try {
       const result = await window.api.codeListHistory(codeWorkspacePath);
@@ -11113,6 +11453,108 @@ window.api.onWebControlSendMessage(async (message) => {
     } catch (e) {
       listEl.innerHTML = `<div class="empty-state"><i class="fa-solid fa-triangle-exclamation"></i><p>${e.message}</p></div>`;
       WebUIMirror.pushDomEvent({ type: 'dom_replace', container: '#page-code-history', html: document.getElementById('page-code-history').innerHTML });
+    }
+  }
+
+  // ============ Code 历史虚拟滚动 + Ctrl/Cmd+F 搜索 ============
+  let codeHistoryRawItems = [];
+  let codeHistorySearch = null;
+
+  function ensureCodeHistoryListAttached() {
+    const listEl = document.getElementById('code-history-list');
+    if (!listEl || typeof HistoryList === 'undefined') return false;
+    if (!listEl.dataset.hlAttached) {
+      listEl.dataset.hlAttached = '1';
+      HistoryList.attach(listEl, {
+        renderItem: renderCodeHistoryItem,
+        onAction: handleCodeHistoryAction,
+        renderEmpty: () => '<div class="empty-state"><i class="fa-solid fa-clock-rotate-left"></i><p>暂无 Code 历史</p></div>',
+        stride: 78,
+        overscan: 8
+      });
+      codeHistorySearch = (typeof window.makeHistorySearch === 'function') ? window.makeHistorySearch({
+        key: 'code-history',
+        inputId: 'code-history-search-input',
+        countId: 'code-history-search-count',
+        getRawItems: () => codeHistoryRawItems,
+        getSearchText: (item) => `${item.title || ''} ${item.messageCount || ''}`,
+        onFilterChange: (filtered) => HistoryList.setItems(listEl, filtered)
+      }) : null;
+    }
+    return true;
+  }
+
+  function renderCodeHistoryItem(item) {
+    const date = new Date(item.ts);
+    const timeStr = date.toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+    return `
+      <div class="history-item" data-id="${item.id}">
+        <div class="history-info">
+          <div class="history-title">${escapeHtml(item.title || '未命名')} ${sessionStatusBadge(item.status, item.lastError)}</div>
+          <div class="history-time">${timeStr} · ${item.messageCount || 0} 条消息</div>
+        </div>
+        <div class="history-actions">
+          <button class="btn-icon" data-action="continue" title="继续对话"><i class="fa-solid fa-play"></i></button>
+          <button class="btn-icon" data-action="delete" title="删除"><i class="fa-solid fa-trash-can"></i></button>
+        </div>
+      </div>`;
+  }
+
+  async function handleCodeHistoryAction(action, item) {
+    if (!item || !item.id) return;
+    const id = item.id;
+    if (action === 'continue') {
+      stopVoicePlayback();
+      const loadRes = await window.api.codeLoadHistory(codeWorkspacePath, id);
+      if (loadRes.ok && loadRes.data) {
+        codeCurrentHistoryId = id;
+        const conv = loadRes.data;
+        let session = sessionManager ? sessionManager.list('code').find(s => String(s.id) === String(id)) : null;
+        if (session) {
+          codeAgent = session.agent;
+          await codeAgent.loadFromHistory(conv);
+          sessionManager.retag(session, id);
+          activateSession('code', session.key);
+        } else {
+          session = await createCodeSession();
+          if (!session) return;
+          codeAgent = session.agent;
+          await codeAgent.loadFromHistory(conv);
+          sessionManager.retag(session, id);
+        }
+        codeMessages = codeAgent.contextManager.getHistoryMessages().slice();
+        await replayCodeSession(session);
+        document.querySelector('.nav-item[data-page="code"]')?.click();
+      }
+    } else if (action === 'delete') {
+      const titleForConfirm = item.title || '此对话';
+      const confirmed = await window.confirmDialog(`确定删除"${String(titleForConfirm).slice(0, 40)}"吗？此操作不可恢复。`, '删除确认');
+      if (!confirmed) return;
+      await window.api.codeDeleteHistory(codeWorkspacePath, id);
+      loadCodeHistoryPage();
+    }
+  }
+
+  async function loadCodeHistoryPageVirtual() {
+    const listEl = document.getElementById('code-history-list');
+    if (!listEl) return;
+    ensureCodeHistoryListAttached();
+    HistoryList.showMessage(listEl, '<div class="empty-state"><i class="fa-solid fa-spinner fa-spin"></i><p>加载中...</p></div>');
+    try {
+      const result = await window.api.codeListHistory(codeWorkspacePath);
+      if (result.ok && Array.isArray(result.history)) {
+        codeHistoryRawItems = result.history;
+      } else {
+        codeHistoryRawItems = [];
+      }
+      if (codeHistorySearch) codeHistorySearch.refresh();
+      else HistoryList.setItems(listEl, codeHistoryRawItems);
+      HistoryList.materializeAll();
+      const pageHtml = document.getElementById('page-code-history')?.innerHTML || '';
+      HistoryList.restoreAll();
+      WebUIMirror.pushDomEvent({ type: 'dom_replace', container: '#page-code-history', html: pageHtml });
+    } catch (e) {
+      HistoryList.showMessage(listEl, `<div class="empty-state"><i class="fa-solid fa-triangle-exclamation"></i><p>${escapeHtml(e.message)}</p></div>`);
     }
   }
 
@@ -12344,6 +12786,10 @@ window.api.onWebControlSendMessage(async (message) => {
   async function loadBabeHistoryPage() {
     const listEl = document.getElementById('babe-history-list');
     if (!listEl) return;
+    if (typeof HistoryList !== 'undefined') {
+      await loadBabeHistoryPageVirtual();
+      return;
+    }
     try {
       const items = await window.api.babeHistoryList();
       if (!items || items.length === 0) {
@@ -12402,6 +12848,95 @@ window.api.onWebControlSendMessage(async (message) => {
     } catch (e) {
       listEl.innerHTML = `<div class="empty-state"><i class="fa-solid fa-circle-exclamation"></i><p>加载历史失败: ${escapeHtml(e.message)}</p></div>`;
       WebUIMirror.pushDomEvent({ type: 'dom_replace', container: '#page-babe-history', html: document.getElementById('page-babe-history').innerHTML });
+    }
+  }
+
+  // ============ Babe 历史虚拟滚动 + Ctrl/Cmd+F 搜索 ============
+  let babeHistoryRawItems = [];
+  let babeHistorySearch = null;
+
+  function ensureBabeHistoryListAttached() {
+    const listEl = document.getElementById('babe-history-list');
+    if (!listEl || typeof HistoryList === 'undefined') return false;
+    if (!listEl.dataset.hlAttached) {
+      listEl.dataset.hlAttached = '1';
+      HistoryList.attach(listEl, {
+        renderItem: renderBabeHistoryItem,
+        onAction: handleBabeHistoryAction,
+        renderEmpty: () => '<div class="empty-state"><i class="fa-solid fa-heart"></i><p>暂无 Babe 历史</p><p class="setting-hint">在 Babe 模式中开始对话后会自动保存</p></div>',
+        stride: 78,
+        overscan: 8
+      });
+      babeHistorySearch = (typeof window.makeHistorySearch === 'function') ? window.makeHistorySearch({
+        key: 'babe-history',
+        inputId: 'babe-history-search-input',
+        countId: 'babe-history-search-count',
+        getRawItems: () => babeHistoryRawItems,
+        getSearchText: (item) => `${item.title || ''} ${item.messageCount || ''}`,
+        onFilterChange: (filtered) => HistoryList.setItems(listEl, filtered)
+      }) : null;
+    }
+    return true;
+  }
+
+  function renderBabeHistoryItem(item) {
+    const ts = item.updatedAt ? (typeof item.updatedAt === 'number' ? item.updatedAt : Date.parse(item.updatedAt)) : NaN;
+    const timeStr = !isNaN(ts) ? new Date(ts).toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '未知时间';
+    const affectionBadge = `<span class="babe-history-affection" title="好感度"><i class="fa-solid fa-heart"></i> ${item.affection ?? 0}</span>`;
+    return `
+      <div class="history-item" data-id="${item.id}">
+        <div class="history-info">
+          <div class="history-title">${escapeHtml(item.title || '未命名对话')} ${affectionBadge} ${sessionStatusBadge(item.status, item.lastError)}</div>
+          <div class="history-time">${timeStr} · ${item.messageCount || 0} 条消息</div>
+        </div>
+        <div class="history-actions">
+          <button class="btn-icon" data-action="continue" title="继续对话"><i class="fa-solid fa-play"></i></button>
+          <button class="btn-icon" data-action="delete" title="删除"><i class="fa-solid fa-trash-can"></i></button>
+        </div>
+      </div>`;
+  }
+
+  async function handleBabeHistoryAction(action, item) {
+    if (!item || !item.id) return;
+    const id = item.id;
+    if (action === 'continue') {
+      stopVoicePlayback();
+      const existing = sessionManager ? sessionManager.list('babe').find(s => String(s.id) === String(id)) : null;
+      if (existing) {
+        babeAgent = existing.agent;
+        const conversation = await window.api.babeHistoryGet(id);
+        if (conversation) {
+          babeAgent.babeAffection = conversation.affection ?? babeAgent.settings?.babe?.initialAffection ?? 30;
+          await babeAgent.loadFromHistory(conversation);
+          sessionManager.retag(existing, id);
+        }
+        activateSession('babe', existing.key);
+      } else {
+        await loadBabeConversation(id);
+      }
+    } else if (action === 'delete') {
+      if (!await window.confirmDialog('确定删除这段和 TA 的回忆吗？', '删除确认')) return;
+      const result = await window.api.babeHistoryDelete(id);
+      if (result.ok) loadBabeHistoryPage();
+    }
+  }
+
+  async function loadBabeHistoryPageVirtual() {
+    const listEl = document.getElementById('babe-history-list');
+    if (!listEl) return;
+    ensureBabeHistoryListAttached();
+    HistoryList.showMessage(listEl, '<div class="empty-state"><i class="fa-solid fa-spinner fa-spin"></i><p>加载中...</p></div>');
+    try {
+      const items = await window.api.babeHistoryList();
+      babeHistoryRawItems = Array.isArray(items) ? items : [];
+      if (babeHistorySearch) babeHistorySearch.refresh();
+      else HistoryList.setItems(listEl, babeHistoryRawItems);
+      HistoryList.materializeAll();
+      const pageHtml = document.getElementById('page-babe-history')?.innerHTML || '';
+      HistoryList.restoreAll();
+      WebUIMirror.pushDomEvent({ type: 'dom_replace', container: '#page-babe-history', html: pageHtml });
+    } catch (e) {
+      HistoryList.showMessage(listEl, `<div class="empty-state"><i class="fa-solid fa-circle-exclamation"></i><p>加载历史失败: ${escapeHtml(e.message)}</p></div>`);
     }
   }
 

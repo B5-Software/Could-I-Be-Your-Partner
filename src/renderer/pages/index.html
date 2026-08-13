@@ -360,6 +360,13 @@
         <div class="page-header">
           <h2><i class="fa-solid fa-clock-rotate-left"></i> 对话历史</h2>
           <p class="page-desc">查看和继续以前的对话</p>
+          <div class="page-header-actions">
+            <div class="search-bar page-search-bar">
+              <i class="fa-solid fa-magnifying-glass"></i>
+              <input type="text" id="history-search-input" class="history-search-input" placeholder="搜索历史（Ctrl+F）..." autocomplete="off" spellcheck="false">
+              <span class="search-count" id="history-search-count"></span>
+            </div>
+          </div>
         </div>
         <div class="history-list" id="history-list">
           <div class="empty-state">
@@ -504,6 +511,13 @@
         <div class="page-header">
           <h2><i class="fa-solid fa-clock-rotate-left"></i> Code 历史记录</h2>
           <p class="page-desc" id="code-history-desc">按工作区隔离的编程对话历史</p>
+          <div class="page-header-actions">
+            <div class="search-bar page-search-bar">
+              <i class="fa-solid fa-magnifying-glass"></i>
+              <input type="text" id="code-history-search-input" class="history-search-input" placeholder="搜索 Code 历史（Ctrl+F）..." autocomplete="off" spellcheck="false">
+              <span class="search-count" id="code-history-search-count"></span>
+            </div>
+          </div>
         </div>
         <div class="history-list" id="code-history-list">
           <div class="empty-state">
@@ -583,6 +597,13 @@
         <div class="page-header">
           <h2><i class="fa-solid fa-heart"></i> Babe 历史记录</h2>
           <p class="page-desc">与 TA 的对话记忆（独立持久化）</p>
+          <div class="page-header-actions">
+            <div class="search-bar page-search-bar">
+              <i class="fa-solid fa-magnifying-glass"></i>
+              <input type="text" id="babe-history-search-input" class="history-search-input" placeholder="搜索 Babe 历史（Ctrl+F）..." autocomplete="off" spellcheck="false">
+              <span class="search-count" id="babe-history-search-count"></span>
+            </div>
+          </div>
         </div>
         <div class="history-list" id="babe-history-list">
           <div class="empty-state">
@@ -693,6 +714,13 @@
       <section id="page-settings" class="page">
         <div class="page-header">
           <h2><i class="fa-solid fa-gear"></i> 设置</h2>
+          <div class="page-header-actions">
+            <div class="search-bar page-search-bar">
+              <i class="fa-solid fa-magnifying-glass"></i>
+              <input type="text" id="settings-search-input" placeholder="搜索设置项（Ctrl+F）..." autocomplete="off" spellcheck="false">
+              <span class="search-count" id="settings-search-count"></span>
+            </div>
+          </div>
         </div>
         <div class="settings-shell">
           <div class="settings-tabs">
@@ -2933,13 +2961,14 @@
   <script src="../js/session-manager.js"></script>
   <script src="../js/spreadsheet.js"></script>
   <script src="../js/virtual-scroller.js"></script>
+  <script src="../js/history-list.js"></script>
   <script src="../js/download-manager.js"></script>
   <script src="../js/oskey/ime-engine.js"></script>
   <script src="../js/oskey/oskey-ime.js"></script>
   <script src="../js/oskey/oskey.js"></script>
   <script src="../js/voice-capture.js"></script>
   <script src="../js/voice-ui.js"></script>
-  <script src="../js/app.js"></script>
+  <script type="module" src="../js/app.js"></script>
   <!-- 全局 Toast 容器：用于请求失败重试等自动消失提示 -->
   <div id="toast-container" style="position:fixed;top:60px;right:20px;z-index:10000;display:flex;flex-direction:column;gap:8px;pointer-events:none"></div>
 </body>

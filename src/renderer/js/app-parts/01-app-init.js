@@ -6,7 +6,8 @@
  */
 
 // Main Application Controller
-(async function () {
+// 注：本 part 已不包含 IIFE 包装，由 build-app-bundle.js 生成 ESM app.js 时
+// 统一包在 `export default (async function appEntry() { ... })();` 中。
   // Wait for KaTeX to load
   let waitCount = 0;
   while (!window.katex && waitCount < 50) {
@@ -416,6 +417,10 @@
     buildMirrorBody() {
       const app = document.getElementById('app');
       const titlebar = document.getElementById('titlebar');
+      // 虚拟滚动列表只保留可视窗口，镜像快照前临时展开为完整列表
+      if (typeof window.HistoryList === 'object' && typeof window.HistoryList.materializeAll === 'function') {
+        window.HistoryList.materializeAll();
+      }
       // 完整保留所有内容，不截断历史
       // 包含 #app 外的模态框（onboarding/confirm/message 等）
       const modals = [];
@@ -423,12 +428,16 @@
         if (m.id === 'remote-connect-modal' || m.id === 'remote-conn-banner') return;
         modals.push(m.outerHTML);
       });
-      return {
+      const snapshot = {
         type: 'mirror_body',
         html: app ? app.innerHTML : '',
         titlebar: titlebar ? titlebar.outerHTML : '',
         modals: modals.join('')
       };
+      if (typeof window.HistoryList === 'object' && typeof window.HistoryList.restoreAll === 'function') {
+        window.HistoryList.restoreAll();
+      }
+      return snapshot;
     },
 
     sendMirrorHead() {

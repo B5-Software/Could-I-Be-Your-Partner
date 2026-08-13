@@ -1534,6 +1534,51 @@ test('Office 硬解工具改名并新增正规 Word/PPT 工具', () => {
   assert.ok(!toolsDef.includes("name: 'officeUnpack'"), '旧 officeUnpack 名称不应再作为工具定义出现');
 });
 
+test('app.js 以 ESM 形式生成并作为 module 加载', () => {
+  const fsLocal = require('fs');
+  const pathLocal = require('path');
+  const appContent = fsLocal.readFileSync(pathLocal.join(__dirname, '../src/renderer/js/app.js'), 'utf-8');
+  const indexHtml = fsLocal.readFileSync(pathLocal.join(__dirname, '../src/renderer/pages/index.html'), 'utf-8');
+  assert.ok(appContent.trimStart().startsWith('/*'), 'app.js 应保留生成头注释');
+  assert.ok(appContent.includes('export default (async function appEntry()'), 'app.js 应为 ESM（默认导出初始化 Promise）');
+  assert.ok(appContent.trimEnd().endsWith('})();'), 'app.js 应闭合 appEntry');
+  assert.ok(indexHtml.includes('<script type="module" src="../js/app.js"></script>'), 'index.html 应以 module 方式加载 app.js');
+});
+
+test('Ctrl/Cmd+F 按页面路由：聊天搜索不泄露到其他标签页', () => {
+  const fsLocal = require('fs');
+  const pathLocal = require('path');
+  const chatUi = fsLocal.readFileSync(pathLocal.join(__dirname, '../src/renderer/js/app-parts/05-chat-ui.js'), 'utf-8');
+  assert.ok(chatUi.includes("document.querySelector('.page.active')"), 'Ctrl+F 路由应基于当前激活页面');
+  assert.ok(chatUi.includes("window.__pageSearchHandlers[pageId]"), 'Ctrl+F 路由应查页面级搜索注册表');
+  assert.ok(!chatUi.includes('if ((e.ctrlKey || e.metaKey) && (e.key === \'f\' || e.key === \'F\')) {\n        e.preventDefault();\n        if (isOpen())'), '不应保留旧的无条件全局 Ctrl+F 处理');
+});
+
+test('各模式历史接入虚拟滚动与搜索', () => {
+  const fsLocal = require('fs');
+  const pathLocal = require('path');
+  const parts = ['07-history-panels.js', '08-code-mode.js', '09-babe-input.js'];
+  for (const part of parts) {
+    const content = fsLocal.readFileSync(pathLocal.join(__dirname, '../src/renderer/js/app-parts', part), 'utf-8');
+    assert.ok(content.includes('HistoryList.attach'), `${part} 应接入 HistoryList 虚拟滚动`);
+    assert.ok(content.includes('makeHistorySearch'), `${part} 应接入历史搜索`);
+    assert.ok(content.includes('materializeAll'), `${part} 镜像快照前应展开虚拟列表`);
+  }
+  const historyList = fsLocal.readFileSync(pathLocal.join(__dirname, '../src/renderer/js/history-list.js'), 'utf-8');
+  assert.ok(historyList.includes('window.HistoryList'), 'history-list.js 应暴露 HistoryList');
+  assert.ok(historyList.includes('window.makeHistorySearch'), 'history-list.js 应暴露历史搜索工厂');
+});
+
+test('设置页支持搜索', () => {
+  const fsLocal = require('fs');
+  const pathLocal = require('path');
+  const settingsPart = fsLocal.readFileSync(pathLocal.join(__dirname, '../src/renderer/js/app-parts/06-tools-skills-settings.js'), 'utf-8');
+  const indexHtml = fsLocal.readFileSync(pathLocal.join(__dirname, '../src/renderer/pages/index.html'), 'utf-8');
+  assert.ok(settingsPart.includes("getElementById('settings-search-input')"), '设置搜索应绑定输入框');
+  assert.ok(settingsPart.includes("registerPageSearch('settings'"), '设置搜索应注册到页面级路由');
+  assert.ok(indexHtml.includes('id="settings-search-input"'), '设置页应包含搜索输入框');
+});
+
 async function runDocumentToolTests() {
   const fsLocal = require('fs');
   const osLocal = require('os');

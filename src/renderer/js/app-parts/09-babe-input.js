@@ -641,6 +641,10 @@
   async function loadBabeHistoryPage() {
     const listEl = document.getElementById('babe-history-list');
     if (!listEl) return;
+    if (typeof HistoryList !== 'undefined') {
+      await loadBabeHistoryPageVirtual();
+      return;
+    }
     try {
       const items = await window.api.babeHistoryList();
       if (!items || items.length === 0) {
@@ -699,6 +703,95 @@
     } catch (e) {
       listEl.innerHTML = `<div class="empty-state"><i class="fa-solid fa-circle-exclamation"></i><p>加载历史失败: ${escapeHtml(e.message)}</p></div>`;
       WebUIMirror.pushDomEvent({ type: 'dom_replace', container: '#page-babe-history', html: document.getElementById('page-babe-history').innerHTML });
+    }
+  }
+
+  // ============ Babe 历史虚拟滚动 + Ctrl/Cmd+F 搜索 ============
+  let babeHistoryRawItems = [];
+  let babeHistorySearch = null;
+
+  function ensureBabeHistoryListAttached() {
+    const listEl = document.getElementById('babe-history-list');
+    if (!listEl || typeof HistoryList === 'undefined') return false;
+    if (!listEl.dataset.hlAttached) {
+      listEl.dataset.hlAttached = '1';
+      HistoryList.attach(listEl, {
+        renderItem: renderBabeHistoryItem,
+        onAction: handleBabeHistoryAction,
+        renderEmpty: () => '<div class="empty-state"><i class="fa-solid fa-heart"></i><p>暂无 Babe 历史</p><p class="setting-hint">在 Babe 模式中开始对话后会自动保存</p></div>',
+        stride: 78,
+        overscan: 8
+      });
+      babeHistorySearch = (typeof window.makeHistorySearch === 'function') ? window.makeHistorySearch({
+        key: 'babe-history',
+        inputId: 'babe-history-search-input',
+        countId: 'babe-history-search-count',
+        getRawItems: () => babeHistoryRawItems,
+        getSearchText: (item) => `${item.title || ''} ${item.messageCount || ''}`,
+        onFilterChange: (filtered) => HistoryList.setItems(listEl, filtered)
+      }) : null;
+    }
+    return true;
+  }
+
+  function renderBabeHistoryItem(item) {
+    const ts = item.updatedAt ? (typeof item.updatedAt === 'number' ? item.updatedAt : Date.parse(item.updatedAt)) : NaN;
+    const timeStr = !isNaN(ts) ? new Date(ts).toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '未知时间';
+    const affectionBadge = `<span class="babe-history-affection" title="好感度"><i class="fa-solid fa-heart"></i> ${item.affection ?? 0}</span>`;
+    return `
+      <div class="history-item" data-id="${item.id}">
+        <div class="history-info">
+          <div class="history-title">${escapeHtml(item.title || '未命名对话')} ${affectionBadge} ${sessionStatusBadge(item.status, item.lastError)}</div>
+          <div class="history-time">${timeStr} · ${item.messageCount || 0} 条消息</div>
+        </div>
+        <div class="history-actions">
+          <button class="btn-icon" data-action="continue" title="继续对话"><i class="fa-solid fa-play"></i></button>
+          <button class="btn-icon" data-action="delete" title="删除"><i class="fa-solid fa-trash-can"></i></button>
+        </div>
+      </div>`;
+  }
+
+  async function handleBabeHistoryAction(action, item) {
+    if (!item || !item.id) return;
+    const id = item.id;
+    if (action === 'continue') {
+      stopVoicePlayback();
+      const existing = sessionManager ? sessionManager.list('babe').find(s => String(s.id) === String(id)) : null;
+      if (existing) {
+        babeAgent = existing.agent;
+        const conversation = await window.api.babeHistoryGet(id);
+        if (conversation) {
+          babeAgent.babeAffection = conversation.affection ?? babeAgent.settings?.babe?.initialAffection ?? 30;
+          await babeAgent.loadFromHistory(conversation);
+          sessionManager.retag(existing, id);
+        }
+        activateSession('babe', existing.key);
+      } else {
+        await loadBabeConversation(id);
+      }
+    } else if (action === 'delete') {
+      if (!await window.confirmDialog('确定删除这段和 TA 的回忆吗？', '删除确认')) return;
+      const result = await window.api.babeHistoryDelete(id);
+      if (result.ok) loadBabeHistoryPage();
+    }
+  }
+
+  async function loadBabeHistoryPageVirtual() {
+    const listEl = document.getElementById('babe-history-list');
+    if (!listEl) return;
+    ensureBabeHistoryListAttached();
+    HistoryList.showMessage(listEl, '<div class="empty-state"><i class="fa-solid fa-spinner fa-spin"></i><p>加载中...</p></div>');
+    try {
+      const items = await window.api.babeHistoryList();
+      babeHistoryRawItems = Array.isArray(items) ? items : [];
+      if (babeHistorySearch) babeHistorySearch.refresh();
+      else HistoryList.setItems(listEl, babeHistoryRawItems);
+      HistoryList.materializeAll();
+      const pageHtml = document.getElementById('page-babe-history')?.innerHTML || '';
+      HistoryList.restoreAll();
+      WebUIMirror.pushDomEvent({ type: 'dom_replace', container: '#page-babe-history', html: pageHtml });
+    } catch (e) {
+      HistoryList.showMessage(listEl, `<div class="empty-state"><i class="fa-solid fa-circle-exclamation"></i><p>加载历史失败: ${escapeHtml(e.message)}</p></div>`);
     }
   }
 
@@ -1308,5 +1401,3 @@
       try { window.VoiceUI.applySettings(s); } catch (_) {}
     }
   });
-
-})();
