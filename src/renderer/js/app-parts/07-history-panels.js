@@ -260,7 +260,8 @@
   function formatHistoryTime(h) {
     let timeStr = '未知时间';
     const ts = h.timestamp ? (typeof h.timestamp === 'number' ? h.timestamp : Date.parse(h.timestamp))
-      : (h.createdAt ? (typeof h.createdAt === 'number' ? h.createdAt : Date.parse(h.createdAt)) : null);
+      : (h.updatedAt ? (typeof h.updatedAt === 'number' ? h.updatedAt : Date.parse(h.updatedAt)) : null)
+      || (h.createdAt ? (typeof h.createdAt === 'number' ? h.createdAt : Date.parse(h.createdAt)) : null);
     if (ts && !isNaN(ts)) {
       timeStr = new Date(ts).toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
     }
