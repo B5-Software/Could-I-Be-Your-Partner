@@ -995,6 +995,18 @@ ${toolListSection}`;
     return ws.replace(/[\\/]+$/, '') + '/' + p.replace(/^[\\/]+/, '');
   }
 
+  /**
+   * 脚本执行器的工作目录：与终端一致，Code 模式用 codeWorkspacePath，
+   * 其他模式用 workspacePath；无工作区时返回 null（主进程回退到默认 CWD）。
+   * 每个 Agent 实例独立计算，避免并发会话的脚本在同一个进程 CWD 里互相踩踏。
+   */
+  _scriptCwd() {
+    const ws = this.mode === 'code'
+      ? (this.codeWorkspacePath || this.workspacePath)
+      : this.workspacePath;
+    return (ws && typeof ws === 'string' && ws.length > 0) ? ws : null;
+  }
+
   getLatestUserMessageText() {
     const msgs = this.contextManager?.messages || [];
     for (let i = msgs.length - 1; i >= 0; i--) {
@@ -1845,7 +1857,9 @@ ${toolListSection}`;
       const messages = this.contextManager.getMessages();
       const tools = this.getRuntimeToolSchemas();
       const streamEnabled = this.settings?.llm?.streamResponses !== false;
-      const reqId = 'agent-' + Date.now().toString() + '-' + iterations;
+      // requestId 必须全局唯一：并发会话可能在同一毫秒启动同一轮循环，
+      // 若只靠时间戳+轮次会撞车，导致流式 chunk 串到别的会话。
+      const reqId = 'agent-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8) + '-' + iterations;
 
       let result;
       let usedStreaming = false;
@@ -2586,9 +2600,9 @@ ${toolListSection}`;
         case 'listDirectory': return await window.api.listDirectory(this._resolveWorkspacePath(args.path));
         case 'makeDirectory': return await window.api.makeDirectory(this._resolveWorkspacePath(args.path));
         case 'deleteDirectory': return await window.api.deleteDirectory(this._resolveWorkspacePath(args.path));
-        case 'runJavaScriptCode': return await window.api.runJS(args.code);
-        case 'runNodeJavaScriptCode': return await window.api.runNodeJS(args.code);
-        case 'runShellScriptCode': return await window.api.runShell(args.script);
+        case 'runJavaScriptCode': return await window.api.runJS(args.code, this._scriptCwd());
+        case 'runNodeJavaScriptCode': return await window.api.runNodeJS(args.code, this._scriptCwd());
+        case 'runShellScriptCode': return await window.api.runShell(args.script, this._scriptCwd());
         case 'makeTerminal': {
           // 传入工作目录：Chat 模式用 workspacePath，Code 模式用 codeWorkspacePath
           const cwd = this.mode === 'code' ? (this.codeWorkspacePath || this.workspacePath) : this.workspacePath;
@@ -2626,11 +2640,11 @@ ${toolListSection}`;
         }
         case 'takeScreenshot': return await window.api.takeScreenshot(this.workspacePath);
         case 'extractTextFromImage': {
-          const ocrResult = await window.api.ocrRecognize(args.imagePath || args.path);
+          const ocrResult = await window.api.ocrRecognize(this._resolveWorkspacePath(args.imagePath || args.path));
           return ocrResult;
         }
         case 'scanQRCode': {
-          return await window.api.qrScan(args.imagePath || args.path);
+          return await window.api.qrScan(this._resolveWorkspacePath(args.imagePath || args.path));
         }
         case 'generateQRCode': {
           return await window.api.qrGenerate(args.text, this.workspacePath, args.filename);
@@ -2736,17 +2750,17 @@ ${toolListSection}`;
             if (typeof window.api.runPython !== 'function') {
               return { ok: false, error: '当前版本不支持 Python 脚本，请升级应用' };
             }
-            runRes = await window.api.runPython(code);
+            runRes = await window.api.runPython(code, this._scriptCwd());
           } else if (ext === 'sh' || ext === 'bash' || ext === 'zsh' || ext === 'ps1' || ext === 'bat' || ext === 'cmd' || declaredRuntime === 'shell') {
-            runRes = await window.api.runShell(code);
+            runRes = await window.api.runShell(code, this._scriptCwd());
           } else if (ext === 'js' || ext === 'mjs' || ext === 'cjs' || declaredRuntime === 'javascript' || declaredRuntime === 'node') {
             const needsNode = declaredRuntime === 'node'
               || ext === 'mjs'
               || ext === 'cjs'
               || (!declaredRuntime && /\brequire\s*\(|\bprocess\.\b|\bfs\.\b|\bpath\.\b|\bBuffer\b|__dirname|__filename|\bimport\s+/.test(code));
             runRes = needsNode
-              ? await window.api.runNodeJS(code)
-              : await window.api.runJS(code);
+              ? await window.api.runNodeJS(code, this._scriptCwd())
+              : await window.api.runJS(code, this._scriptCwd());
           } else {
             return { ok: false, error: '仅支持运行 .js、.py、.sh、.ps1、.bat 等 Skill 脚本' };
           }

@@ -159,10 +159,10 @@ contextBridge.exposeInMainWorld('api', {
   calcFractionBaseConvert: (value, fromBase, toBase, precision) => ipcRenderer.invoke('calc:fractionBaseConvert', value, fromBase, toBase, precision),
 
   // Code Execution
-  runJS: (code) => ipcRenderer.invoke('code:runJS', code),
-  runNodeJS: (code) => ipcRenderer.invoke('code:runNodeJS', code),
-  runShell: (script) => ipcRenderer.invoke('code:runShell', script),
-  runPython: (code) => ipcRenderer.invoke('code:runPython', code),
+  runJS: (code, cwd) => ipcRenderer.invoke('code:runJS', code, cwd),
+  runNodeJS: (code, cwd) => ipcRenderer.invoke('code:runNodeJS', code, cwd),
+  runShell: (script, cwd) => ipcRenderer.invoke('code:runShell', script, cwd),
+  runPython: (code, cwd) => ipcRenderer.invoke('code:runPython', code, cwd),
 
   // Image Generation
   generateImage: (prompt, workspacePath) => ipcRenderer.invoke('image:generate', prompt, workspacePath),

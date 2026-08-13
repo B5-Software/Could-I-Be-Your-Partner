@@ -1753,10 +1753,12 @@ ipcMain.handle('calc:fractionBaseConvert', async (_, value, fromBase, toBase, pr
 });
 
 // ---- IPC: Run JS Code (sandboxed) ----
-ipcMain.handle('code:runJS', (_, code) => {
+ipcMain.handle('code:runJS', (_, code, cwd) => {
   return new Promise((resolve) => {
     const { fork } = require('child_process');
-    const runner = fork(path.join(__dirname, '../tools/js-runner.js'), [], { silent: true, timeout: 30000 });
+    const forkOpts = { silent: true, timeout: 30000 };
+    if (cwd && typeof cwd === 'string' && fs.existsSync(cwd)) forkOpts.cwd = cwd;
+    const runner = fork(path.join(__dirname, '../tools/js-runner.js'), [], forkOpts);
     let output = '';
     let error = '';
     runner.stdout.on('data', d => { output += d.toString(); });
@@ -1772,10 +1774,12 @@ ipcMain.handle('code:runJS', (_, code) => {
 });
 
 // ---- IPC: Run JS Code (Node.js enabled) ----
-ipcMain.handle('code:runNodeJS', (_, code) => {
+ipcMain.handle('code:runNodeJS', (_, code, cwd) => {
   return new Promise((resolve) => {
     const { fork } = require('child_process');
-    const runner = fork(path.join(__dirname, '../tools/js-runner-node.js'), [], { silent: true, timeout: 30000 });
+    const forkOpts = { silent: true, timeout: 30000 };
+    if (cwd && typeof cwd === 'string' && fs.existsSync(cwd)) forkOpts.cwd = cwd;
+    const runner = fork(path.join(__dirname, '../tools/js-runner-node.js'), [], forkOpts);
     let output = '';
     let error = '';
     runner.stdout.on('data', d => { output += d.toString(); });
@@ -1791,14 +1795,16 @@ ipcMain.handle('code:runNodeJS', (_, code) => {
 });
 
 // ---- IPC: Run Shell Script ----
-ipcMain.handle('code:runShell', (_, script) => {
+ipcMain.handle('code:runShell', (_, script, cwd) => {
   return new Promise((resolve) => {
     const { execFile } = require('child_process');
     const tmpFile = path.join(os.tmpdir(), `script_${Date.now()}${process.platform === 'win32' ? '.ps1' : '.sh'}`);
     fs.writeFileSync(tmpFile, script, 'utf-8');
     const shell = process.platform === 'win32' ? 'powershell.exe' : '/bin/bash';
     const args = process.platform === 'win32' ? ['-File', tmpFile] : [tmpFile];
-    execFile(shell, args, { timeout: 120000 }, (err, stdout, stderr) => {
+    const execOpts = { timeout: 120000, maxBuffer: 8 * 1024 * 1024 };
+    if (cwd && typeof cwd === 'string' && fs.existsSync(cwd)) execOpts.cwd = cwd;
+    execFile(shell, args, execOpts, (err, stdout, stderr) => {
       try { fs.unlinkSync(tmpFile); } catch {}
       if (err) resolve({ ok: false, error: err.message, stderr });
       else resolve({ ok: true, output: stdout, stderr });
@@ -1807,7 +1813,7 @@ ipcMain.handle('code:runShell', (_, script) => {
 });
 
 // ---- IPC: Run Python Script ----
-ipcMain.handle('code:runPython', (_, script) => {
+ipcMain.handle('code:runPython', (_, script, cwd) => {
   return new Promise((resolve) => {
     const { execFile } = require('child_process');
     const tmpFile = path.join(os.tmpdir(), `skill_py_${Date.now()}.py`);
@@ -1833,7 +1839,9 @@ ipcMain.handle('code:runPython', (_, script) => {
         return;
       }
       const bin = candidates[idx++];
-      execFile(bin, ['-u', tmpFile], { timeout: 120000, maxBuffer: 8 * 1024 * 1024, windowsHide: true }, (err, stdout, stderr) => {
+      const execOpts = { timeout: 120000, maxBuffer: 8 * 1024 * 1024, windowsHide: true };
+      if (cwd && typeof cwd === 'string' && fs.existsSync(cwd)) execOpts.cwd = cwd;
+      execFile(bin, ['-u', tmpFile], execOpts, (err, stdout, stderr) => {
         if (err && idx < candidates.length && (err.code === 'ENOENT' || /not found|找不到|No such file/i.test(err.message))) {
           attempt();
           return;
