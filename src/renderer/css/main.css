@@ -467,7 +467,17 @@ body {
 .search-bar {
   position: relative;
   margin-top: 12px;
-  max-width: 400px;
+  max-width: 520px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.search-field {
+  position: relative;
+  flex: 1 1 220px;
+  min-width: 0;
 }
 
 .search-bar i {
