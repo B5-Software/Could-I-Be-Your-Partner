@@ -1325,6 +1325,12 @@ export default (async function appEntry() {
     add.innerHTML = '<i class="fa-solid fa-plus"></i>';
     add.addEventListener('click', () => createNewSession(mode));
     tabsEl.appendChild(add);
+    // 多会话镜像：标签栏内容变更增量推送到 WebUI，保持远端标签栏实时一致
+    if (!isRemoteMode) {
+      try {
+        WebUIMirror.pushDomEvent({ type: 'dom_replace', container: '#' + tabsEl.id, html: tabsEl.innerHTML });
+      } catch { /* ignore */ }
+    }
   }
 
   function renderAllSessionTabs() {
@@ -1478,7 +1484,15 @@ export default (async function appEntry() {
       const el = document.getElementById(`${m}-session-tabs`);
       if (!el) continue;
       el.classList.remove('hidden');
-      el.style.setProperty('display', m === mode ? 'flex' : 'none', 'important');
+      const want = m === mode ? 'flex' : 'none';
+      if (el.style.getPropertyValue('display') !== want) {
+        el.style.setProperty('display', want, 'important');
+        if (!isRemoteMode) {
+          try {
+            WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#' + el.id, attr: 'style', value: el.style.cssText });
+          } catch { /* ignore */ }
+        }
+      }
     }
   }
 
@@ -1576,6 +1590,14 @@ export default (async function appEntry() {
       if (att && agentStatus) {
         agentStatus.innerHTML = `<i class="fa-solid fa-circle"></i> ${escapeHtml(att.label || '等待处理')}`;
         agentStatus.className = 'agent-status working';
+      }
+      // 多会话镜像：同步状态栏与发送/停止按钮到 WebUI
+      if (!isRemoteMode) {
+        try {
+          WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#agent-status', html: agentStatus.outerHTML });
+          if (btnStop) WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#btn-stop', attr: 'class', value: btnStop.className });
+          if (btnSend) WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#btn-send', attr: 'class', value: btnSend.className });
+        } catch { /* ignore */ }
       }
     } else if (mode === 'code') {
       if (typeof refreshCodeStopButton === 'function') refreshCodeStopButton();
@@ -1779,6 +1801,11 @@ export default (async function appEntry() {
       }
       if (session.status === SessionStatus.WAITING_TOOL_AUTH && session.pendingToolAuth) {
         showToolAuthModal(session.pendingToolAuth.toolName, session.pendingToolAuth.category, session.agent);
+      }
+      // WebUI 上传目录跟随当前激活会话的工作目录，避免多会话时落到错误工作区
+      const activeWs = session.agent && (session.agent.codeWorkspacePath || session.agent.workspacePath);
+      if (activeWs && !isRemoteMode) {
+        try { window.api.webControlSetWorkDir(activeWs); } catch { /* ignore */ }
       }
       // 恢复本会话的输入草稿
       const draftInput = mode === 'code'

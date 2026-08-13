@@ -1128,6 +1128,12 @@ html,body{height:100%;overflow:hidden;font-family:-apple-system,BlinkMacSystemFo
           if(el)el.classList.add('hidden');
         });
       }
+      // 多会话：同步三个模式的标签栏显隐（宿主里 showSessionTabsForMode 只改本地 inline display）
+      var bars={chat:'chat-session-tabs',code:'code-session-tabs',babe:'babe-session-tabs'};
+      Object.keys(bars).forEach(function(m){
+        var bar=document.getElementById(bars[m]);
+        if(bar)bar.style.display=(m===mode)?'flex':'none';
+      });
     }catch(e){console.error('[WebUI] modeSwitch error:',e);}
     finally{setTimeout(function(){applyingRemote=false;},20);}
   }
