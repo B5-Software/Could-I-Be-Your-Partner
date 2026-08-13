@@ -269,6 +269,9 @@ contextBridge.exposeInMainWorld('api', {
   eslintLint: (workspacePath, opts) => ipcRenderer.invoke('eslint:lint', workspacePath, opts),
   eslintLintFile: (filePath) => ipcRenderer.invoke('eslint:lintFile', filePath),
   eslintClearCache: (workspacePath) => ipcRenderer.invoke('eslint:clearCache', workspacePath),
+  // ---- FFmpeg 媒体工具集 ----
+  ffmpegInvoke: (tool, params) => ipcRenderer.invoke('ffmpeg:invoke', tool, params),
+  ffmpegAvailable: () => ipcRenderer.invoke('ffmpeg:available'),
   onStreamChunk: (cb) => onChannel('llm:stream-chunk', cb),
   onStreamEnd: (cb) => onChannel('llm:stream-end', cb),
   onLLMRetry: (cb) => onChannel('llm:retry', cb),

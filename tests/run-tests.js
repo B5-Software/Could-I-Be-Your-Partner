@@ -1738,6 +1738,65 @@ async function runDocumentToolTests() {
     assert.ok(r.error.includes('工作区'), '应拒绝工作区外的图片');
   });
 
+  await asyncTest('PPT Maker 支持图片/视频/音频媒体插入', async () => {
+    const AdmZip = require('adm-zip');
+    const { createPresentation } = require('../src/main/ppt-maker');
+    const img = pathLocal.join(tmp, 'frame-test.png');
+    fsLocal.writeFileSync(img, Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64'));
+    const video = pathLocal.join(tmp, 'sample.mp4');
+    const audio = pathLocal.join(tmp, 'sample.mp3');
+    let ff = null;
+    try { ff = require('../src/main/ffmpeg-tools'); } catch { /* ignore */ }
+    if (ff && ff.getFfmpegPath()) {
+      const gen = await ff.runFfmpeg(['-y', '-f', 'lavfi', '-i', 'color=c=blue:size=64x64:rate=10', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=1', '-t', '1', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', video]);
+      if (!gen.ok) fsLocal.writeFileSync(video, Buffer.from('dummy-mp4'));
+      const genAudio = await ff.runFfmpeg(['-y', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=1', audio]);
+      if (!genAudio.ok) fsLocal.writeFileSync(audio, Buffer.from('dummy-mp3'));
+    } else {
+      fsLocal.writeFileSync(video, Buffer.from('dummy-mp4'));
+      fsLocal.writeFileSync(audio, Buffer.from('dummy-mp3'));
+    }
+    const r = await createPresentation({
+      title: '媒体测试', filename: 'media.pptx',
+      slides: [
+        { type: 'media', title: '视频', media: { kind: 'video', path: 'sample.mp4' } },
+        { type: 'media', title: '音频', media: { kind: 'audio', path: 'sample.mp3' } },
+        { type: 'gallery', title: '画廊', images: [{ path: 'frame-test.png', caption: '图1' }] }
+      ]
+    }, { workspacePath: tmp });
+    assert.strictEqual(r.ok, true, r.error || '');
+    assert.strictEqual(r.slideCount, 3);
+    const zip = new AdmZip(r.path);
+    const mediaNames = zip.getEntries().map(e => e.entryName).filter(n => n.startsWith('ppt/media/'));
+    assert.ok(mediaNames.some(n => /\.mp4$/.test(n)), '应包含视频媒体');
+    assert.ok(mediaNames.some(n => /\.mp3$/.test(n)), '应包含音频媒体');
+    assert.ok(mediaNames.some(n => /\.png$/.test(n)), '应包含图片媒体');
+    const rels1 = zip.readAsText('ppt/slides/_rels/slide1.xml.rels');
+    const rels2 = zip.readAsText('ppt/slides/_rels/slide2.xml.rels');
+    assert.ok(/video/.test(rels1), '视频应有关系定义');
+    assert.ok(/audio/.test(rels2), '音频应有关系定义');
+  });
+
+  await asyncTest('FFmpeg 工具集可离线处理媒体', async () => {
+    const ff = require('../src/main/ffmpeg-tools');
+    if (!ff.getFfmpegPath() || !ff.getFfprobePath()) {
+      console.log('  SKIP: 未找到 ffmpeg/ffprobe 二进制');
+      return;
+    }
+    const src = pathLocal.join(tmp, 'ff-src.mp4');
+    const gen = await ff.runFfmpeg(['-y', '-f', 'lavfi', '-i', 'testsrc=duration=1:size=64x64:rate=10', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', src]);
+    assert.strictEqual(gen.ok, true, gen.error || '');
+    const info = await ff.TOOLS.info({ input: src });
+    assert.strictEqual(info.ok, true, info.error || '');
+    assert.ok(info.info.video.length > 0, '应解析出视频流');
+    const frame = await ff.TOOLS.extractFrame({ input: src, time: 0, output: pathLocal.join(tmp, 'ff-frame.jpg') });
+    assert.strictEqual(frame.ok, true, frame.error || '');
+    assert.ok(fsLocal.existsSync(frame.outputPath), '应生成截图');
+    let rejected = false;
+    try { await ff.TOOLS.transcode({ input: src, videoCodec: 'h999' }); } catch { rejected = true; }
+    assert.ok(rejected, '非法 codec 应被拒绝');
+  });
+
   await asyncTest('表格导出保留单元格格式（xlsx/ods）', async () => {
     const AdmZip = require('adm-zip');
     const { exportSpreadsheetFile } = require('../src/main/spreadsheet-io');

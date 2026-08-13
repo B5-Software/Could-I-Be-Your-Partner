@@ -54,7 +54,9 @@
       "node_modules/sherpa-onnx-node/**/*",
       "node_modules/sherpa-onnx-darwin-arm64/**/*",
       "node_modules/sherpa-onnx-win-x64/**/*",
-      "node_modules/pinyin-pro/**/*"
+      "node_modules/pinyin-pro/**/*",
+      "node_modules/@ffmpeg-installer/**/*",
+      "node_modules/@ffprobe-installer/**/*"
     ],
     "extraResources": [
       {
@@ -168,5 +170,11 @@
     "fsevents@2.3.2": true,
     "tesseract.js@6.0.1": true,
     "electron-winstaller@5.4.0": true
+  },
+  "optionalDependencies": {
+    "@ffmpeg-installer/ffmpeg": "^1.1.0",
+    "@ffmpeg-installer/win32-x64": "^4.1.0",
+    "@ffprobe-installer/ffprobe": "^2.1.2",
+    "@ffprobe-installer/win32-x64": "^5.1.0"
   }
 }

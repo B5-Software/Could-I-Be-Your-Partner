@@ -23,6 +23,11 @@ const MAX_CHART_POINTS = 24;
 const MAX_CHART_SERIES = 6;
 const MAX_BULLETS = 12;
 const MAX_IMAGE_BYTES = 30 * 1024 * 1024;
+const MAX_MEDIA_BYTES = 300 * 1024 * 1024;
+const MAX_MEDIA_ITEMS = 6;
+const MAX_GALLERY_IMAGES = 12;
+const VIDEO_EXTS = ['.mp4', '.m4v', '.mov', '.webm', '.wmv', '.avi'];
+const AUDIO_EXTS = ['.mp3', '.m4a', '.wav', '.wma', '.aac', '.oga'];
 
 // 风格模板只决定装饰与辅助色，主配色（强调色、深浅背景）由主窗口主题注入。
 // 注意：所有颜色必须是不带 "#" 的 6 位十六进制。pptxgenjs 在生成图表
@@ -168,6 +173,41 @@ function resolveImagePath(imagePath, workspaceRoot) {
 }
 
 /**
+ * 媒体文件（视频/音频）路径解析与安全校验。
+ * 规则与图片一致：相对路径基于工作区、限制在工作区内、校验扩展名与大小。
+ */
+function resolveMediaPath(mediaPath, workspaceRoot, kind) {
+  const raw = cleanText(mediaPath, 2000);
+  if (!raw) return { ok: false, error: '媒体路径为空' };
+  let abs;
+  try {
+    abs = path.isAbsolute(raw) ? path.normalize(raw) : path.resolve(workspaceRoot || '', raw);
+    if (fs.existsSync(abs)) abs = fs.realpathSync(abs);
+  } catch (e) {
+    return { ok: false, error: `媒体路径无效：${e.message}` };
+  }
+  if (workspaceRoot) {
+    const rootReal = fs.realpathSync(workspaceRoot);
+    const rel = path.relative(rootReal, abs);
+    if (rel.startsWith('..') || path.isAbsolute(rel)) {
+      return { ok: false, error: '媒体必须位于工作区目录内' };
+    }
+  }
+  if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) {
+    return { ok: false, error: `媒体文件不存在：${raw}` };
+  }
+  const ext = path.extname(abs).toLowerCase();
+  const allowed = kind === 'video' ? VIDEO_EXTS : AUDIO_EXTS;
+  if (!allowed.includes(ext)) {
+    return { ok: false, error: `${kind === 'video' ? '视频' : '音频'}格式不支持：${ext}（建议先用 ffmpeg 转成兼容格式）` };
+  }
+  if (fs.statSync(abs).size > MAX_MEDIA_BYTES) {
+    return { ok: false, error: `媒体文件过大（上限 300MB）：${raw}` };
+  }
+  return { ok: true, abs };
+}
+
+/**
  * 校验并规范化一张幻灯片定义，返回 null 表示该页应跳过。
  */
 function validateSlide(slide, index, workspaceRoot) {
@@ -188,6 +228,7 @@ function validateSlide(slide, index, workspaceRoot) {
     case 'end':
       base.subtitle = cleanText(slide.subtitle, 240);
       if (slide.imagePath) addImage(slide.imagePath);
+      if (Array.isArray(slide.imagePaths)) slide.imagePaths.slice(0, 4).forEach(p => addImage(p));
       break;
     case 'agenda': {
       const items = Array.isArray(slide.items) ? slide.items : (Array.isArray(slide.bullets) ? slide.bullets : []);
@@ -202,6 +243,10 @@ function validateSlide(slide, index, workspaceRoot) {
       base.bullets = bullets.slice(0, MAX_BULLETS).map(t => cleanText(t, 300)).filter(Boolean);
       base.layout = cleanText(slide.layout, 32) || (slide.imagePath ? 'split' : 'bullets');
       if (slide.imagePath) addImage(slide.imagePath);
+      if (Array.isArray(slide.imagePaths)) {
+        slide.imagePaths.slice(0, 3).forEach(p => addImage(p));
+        if (!images.length) base.layout = 'bullets';
+      }
       if (base.layout === 'split' && !images.length) base.layout = 'bullets';
       break;
     }
@@ -279,6 +324,44 @@ function validateSlide(slide, index, workspaceRoot) {
         desc: cleanText(e && e.desc, 200)
       })).filter(e => e.title);
       if (!base.events.length) throw new Error(`第 ${index + 1} 张时间线幻灯片缺少事件`);
+      break;
+    }
+    case 'media': {
+      const items = [];
+      const push = (m) => {
+        if (!m || typeof m !== 'object') return;
+        const kind = cleanText(m.kind, 10).toLowerCase();
+        if (kind !== 'video' && kind !== 'audio') throw new Error(`第 ${index + 1} 张媒体幻灯片 kind 无效：${m.kind || '(空)'}`);
+        const r = resolveMediaPath(m.path, workspaceRoot, kind);
+        if (!r.ok) throw new Error(`第 ${index + 1} 张媒体幻灯片错误：${r.error}`);
+        const item = { kind, abs: r.abs };
+        if (kind === 'video' && m.cover) {
+          const c = resolveImagePath(m.cover, workspaceRoot);
+          if (!c.ok) throw new Error(`第 ${index + 1} 张媒体封面错误：${c.error}`);
+          item.cover = c.abs;
+        }
+        if (m.autoplay !== undefined) item.autoplay = !!m.autoplay;
+        items.push(item);
+      };
+      if (slide.media && typeof slide.media === 'object') push(slide.media);
+      if (Array.isArray(slide.mediaItems)) slide.mediaItems.slice(0, MAX_MEDIA_ITEMS).forEach(push);
+      if (!items.length) throw new Error(`第 ${index + 1} 张媒体幻灯片缺少 media/mediaItems`);
+      base.mediaItems = items;
+      break;
+    }
+    case 'gallery': {
+      const list = [];
+      const src = Array.isArray(slide.images)
+        ? slide.images
+        : (Array.isArray(slide.imagePaths) ? slide.imagePaths.map(p => ({ path: p })) : []);
+      for (const g of src.slice(0, MAX_GALLERY_IMAGES)) {
+        const p = typeof g === 'string' ? g : (g && g.path);
+        const r = resolveImagePath(p, workspaceRoot);
+        if (!r.ok) throw new Error(`第 ${index + 1} 张画廊图片错误：${r.error}`);
+        list.push({ abs: r.abs, caption: cleanText(typeof g === 'object' ? g.caption : '', 120) });
+      }
+      if (!list.length) throw new Error(`第 ${index + 1} 张画廊幻灯片缺少 images`);
+      base.gallery = list;
       break;
     }
     default:
@@ -410,6 +493,57 @@ function addContent(s, d, P, palette, theme, pageNum, total) {
   } else {
     bulletCards(s, P, palette, bullets, 0.78, 1.95, 11.75, 4.55);
   }
+  addChrome(s, P, palette, theme, pageNum, total, d.title);
+}
+
+function addMediaSlide(s, d, P, palette, theme, pageNum, total) {
+  s.addText(d.title || '媒体展示', { x: 0.75, y: 0.72, w: 11.8, h: 0.72, fontSize: 30, bold: true, color: palette.text, fontFace: FONT_FAMILY });
+  s.addShape(P.ShapeType.rect, { x: 0.77, y: 1.5, w: 0.62, h: 0.07, fill: { color: palette.accent }, line: { type: 'none' } });
+  const items = d.mediaItems || [];
+  const n = items.length;
+  const cols = Math.min(n, 3);
+  const gap = 0.35;
+  const areaW = 11.75;
+  const areaH = 4.7;
+  const cellW = (areaW - gap * (cols - 1)) / cols;
+  const rows = Math.ceil(n / cols);
+  const cellH = Math.min(2.4, (areaH - gap * (rows - 1)) / rows);
+  items.forEach((m, i) => {
+    const col = i % cols;
+    const row = Math.floor(i / cols);
+    const x = 0.78 + col * (cellW + gap);
+    const y = 1.82 + row * (cellH + gap);
+    s.addMedia({ type: m.kind, path: m.abs, x, y, w: cellW, h: cellH, ...(m.cover ? { cover: m.cover } : {}) });
+    s.addText(m.kind === 'video' ? '▶ 视频' : '♪ 音频', {
+      x, y: y + cellH - 0.36, w: cellW, h: 0.3,
+      fontSize: 10, color: palette.muted, align: 'center', fontFace: FONT_FAMILY, breakLine: false
+    });
+  });
+  addChrome(s, P, palette, theme, pageNum, total, d.title);
+}
+
+function addGallerySlide(s, d, P, palette, theme, pageNum, total) {
+  s.addText(d.title || '图片集', { x: 0.75, y: 0.72, w: 11.8, h: 0.72, fontSize: 30, bold: true, color: palette.text, fontFace: FONT_FAMILY });
+  s.addShape(P.ShapeType.rect, { x: 0.77, y: 1.5, w: 0.62, h: 0.07, fill: { color: palette.accent }, line: { type: 'none' } });
+  const items = d.gallery || [];
+  const n = items.length;
+  const cols = n === 1 ? 1 : n === 2 ? 2 : 3;
+  const gap = 0.3;
+  const areaW = 11.75;
+  const areaH = 4.95;
+  const cellW = (areaW - gap * (cols - 1)) / cols;
+  const rows = Math.ceil(n / cols);
+  const cellH = Math.min(2.25, (areaH - gap * (rows - 1)) / rows);
+  items.forEach((g, i) => {
+    const col = i % cols;
+    const row = Math.floor(i / cols);
+    const x = 0.78 + col * (cellW + gap);
+    const y = 1.72 + row * (cellH + gap);
+    s.addImage({ path: g.abs, x, y, w: cellW, h: cellH, sizing: { type: 'contain', w: cellW, h: cellH } });
+    if (g.caption) {
+      s.addText(g.caption, { x, y: y + cellH - 0.32, w: cellW, h: 0.3, fontSize: 10, color: palette.muted, align: 'center', fontFace: FONT_FAMILY, breakLine: false });
+    }
+  });
   addChrome(s, P, palette, theme, pageNum, total, d.title);
 }
 
@@ -670,6 +804,8 @@ async function createPresentation(spec = {}, options = {}) {
         case 'quote': addQuote(s, slide, pptx, palette, theme, pageNum, total); break;
         case 'comparison': addComparison(s, slide, pptx, palette, theme, pageNum, total); break;
         case 'timeline': addTimeline(s, slide, pptx, palette, theme, pageNum, total); break;
+        case 'media': addMediaSlide(s, slide, pptx, palette, theme, pageNum, total); break;
+        case 'gallery': addGallerySlide(s, slide, pptx, palette, theme, pageNum, total); break;
         case 'end': addEnd(s, slide, pptx, palette, theme, pageNum, total); break;
       }
       if (slide.notes) s.addNotes(slide.notes);

@@ -159,6 +159,31 @@ function ensureAria2Binary(arch) {
   }
 }
 
+// 确保 FFmpeg/FFprobe 的 win32-x64 二进制存在。
+// Windows 主机上会随 optionalDependencies 自动安装；macOS 交叉打包时
+// 用 --os/--cpu 强制拉取（注意：会暂时移除 darwin 二进制，打包后可重新 npm install 恢复）。
+function ensureFfmpegBinaries() {
+  const packages = [
+    { name: '@ffmpeg-installer/win32-x64', dir: '@ffmpeg-installer/win32-x64' },
+    { name: '@ffprobe-installer/win32-x64', dir: '@ffprobe-installer/win32-x64' }
+  ];
+  const missing = packages.filter(p => !fs.existsSync(path.join(projectRoot, 'node_modules', p.dir)));
+  if (!missing.length) {
+    console.log('[build-all] FFmpeg 二进制已存在');
+    return;
+  }
+  console.log('[build-all] 正在拉取 FFmpeg/FFprobe win32-x64 二进制...');
+  try {
+    execSync(`npm install --no-save --os=win32 --cpu=x64 --force ${missing.map(p => p.name).join(' ')}`, {
+      cwd: projectRoot,
+      stdio: 'inherit'
+    });
+  } catch (e) {
+    console.warn('[build-all] FFmpeg 二进制拉取失败:', e.message);
+    console.warn('[build-all] 打包将继续，但 Windows 包内媒体工具将不可用');
+  }
+}
+
 // 执行单个打包任务
 function runBuild(arch, withTarot) {
   return new Promise((resolve, reject) => {
@@ -274,6 +299,8 @@ async function main() {
   // 确保 aria2 二进制存在（按架构下载对应的二进制到 assets/aria2/）
   ensureAria2Binary('x64');
   ensureAria2Binary('arm64');
+  // 确保 FFmpeg/FFprobe win32-x64 二进制存在（随包分发、离线可用）
+  ensureFfmpegBinaries();
   cleanBuildOut();
 
   const tasks = [

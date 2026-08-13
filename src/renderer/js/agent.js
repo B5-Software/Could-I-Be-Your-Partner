@@ -1007,6 +1007,29 @@ ${toolListSection}`;
     return (ws && typeof ws === 'string' && ws.length > 0) ? ws : null;
   }
 
+  /**
+   * FFmpeg 工具参数的工作区路径解析：
+   * - 单文件参数（input/video/audio/subtitle/image/fontFile）→ 相对工作区解析
+   * - 多文件参数（inputs/images）→ 逐个解析（对应"文件多选"）
+   * - 输出参数（output/outputDir）→ 相对工作区解析
+   */
+  _resolveFfmpegArgs(args) {
+    const clone = { ...(args && typeof args === 'object' ? args : {}) };
+    const single = ['input', 'video', 'audio', 'subtitle', 'image', 'fontFile'];
+    for (const key of single) {
+      if (typeof clone[key] === 'string' && clone[key]) clone[key] = this._resolveWorkspacePath(clone[key]);
+    }
+    for (const key of ['inputs', 'images']) {
+      if (Array.isArray(clone[key])) {
+        clone[key] = clone[key].map(p => this._resolveWorkspacePath(String(p)));
+      }
+    }
+    for (const key of ['output', 'outputDir']) {
+      if (typeof clone[key] === 'string' && clone[key]) clone[key] = this._resolveWorkspacePath(clone[key]);
+    }
+    return clone;
+  }
+
   getLatestUserMessageText() {
     const msgs = this.contextManager?.messages || [];
     for (let i = msgs.length - 1; i >= 0; i--) {
@@ -2673,6 +2696,23 @@ ${toolListSection}`;
           // 统一路径解析：Code 模式自动用 codeWorkspacePath
           const fp = this._resolveWorkspacePath(args.path);
           return await window.api.eslintLintFile(fp);
+        }
+        // ---- FFmpeg 媒体工具集 ----
+        case 'ffmpegInfo': case 'ffmpegTranscode': case 'ffmpegCompress': case 'ffmpegTrim':
+        case 'ffmpegCrop': case 'ffmpegResize': case 'ffmpegRotate': case 'ffmpegExtractAudio':
+        case 'ffmpegRemoveAudio': case 'ffmpegExtractFrame': case 'ffmpegExtractFrames': case 'ffmpegToGif':
+        case 'ffmpegConcat': case 'ffmpegMux': case 'ffmpegVolume': case 'ffmpegSpeed':
+        case 'ffmpegWatermark': case 'ffmpegAddSubtitle': case 'ffmpegSlideshow': case 'ffmpegAudioMerge':
+        case 'ffmpegRunCommand': {
+          const OP_MAP = {
+            ffmpegInfo: 'info', ffmpegTranscode: 'transcode', ffmpegCompress: 'compress', ffmpegTrim: 'trim',
+            ffmpegCrop: 'crop', ffmpegResize: 'resize', ffmpegRotate: 'rotate', ffmpegExtractAudio: 'extractAudio',
+            ffmpegRemoveAudio: 'removeAudio', ffmpegExtractFrame: 'extractFrame', ffmpegExtractFrames: 'extractFrames',
+            ffmpegToGif: 'toGif', ffmpegConcat: 'concat', ffmpegMux: 'mux', ffmpegVolume: 'volume',
+            ffmpegSpeed: 'speed', ffmpegWatermark: 'watermark', ffmpegAddSubtitle: 'addSubtitle',
+            ffmpegSlideshow: 'slideshow', ffmpegAudioMerge: 'audioMerge', ffmpegRunCommand: 'runCommand'
+          };
+          return await window.api.ffmpegInvoke(OP_MAP[name], this._resolveFfmpegArgs(args));
         }
         case 'manageContext': return this.contextManager.manage(args.action, args);
         case 'autoSummarizeContext': {

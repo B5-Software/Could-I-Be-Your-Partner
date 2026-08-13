@@ -32,6 +32,7 @@ const registerTerminalIpc = require('./terminal-service');
 const registerComputerUseIpc = require('./computer-use-service');
 const registerMcpIpc = require('./mcp-service');
 const registerPlaywrightIpc = require('./browser-service');
+const { registerFfmpegIpc } = require('./ffmpeg-tools');
 
 const emailService = new EmailService();
 const webControlService = new WebControlService();
@@ -1588,6 +1589,9 @@ registerTerminalIpc({
   getMainWindow: () => mainWindow,
   getSettings: () => settings
 });
+
+// ---- FFmpeg / FFprobe 媒体工具集 ----
+registerFfmpegIpc({ ipcMain });
 
 // ---- IPC: Clipboard ----
 ipcMain.handle('clipboard:read', () => {
