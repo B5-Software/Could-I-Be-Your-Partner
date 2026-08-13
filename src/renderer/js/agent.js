@@ -331,14 +331,6 @@ class Agent {
     const workspaceTreeStr = workspaceTree ? `\n\n工作目录文件树：\n\`\`\`\n${workspaceTree}\n\`\`\`\n` : '';
     
     const convoTitle = this.conversationTitle || '未命名对话';
-    const enabledTools = this.settings?.tools || {};
-    const allDefs = getAllToolDefinitions();
-    const activeToolSet = new Set(this.getActiveToolNames ? this.getActiveToolNames() : allDefs.filter(tool => enabledTools[tool.name] !== false).map(t => t.name));
-    const toolList = allDefs
-      .filter(tool => activeToolSet.has(tool.name))
-      .map(tool => `${tool.name}: ${typeof i18nGetToolDesc === 'function' ? i18nGetToolDesc(tool.name, tool.desc) : tool.desc}`)
-      .join('\n- ');
-    const toolListSection = toolList ? `\n\n当前可用工具：\n- ${toolList}` : '';
     const skillsSection = this.skillsCatalog.length > 0
       ? `\n\n已加载技能目录：\n- ${this.skillsCatalog
           .map(skill => {
@@ -405,145 +397,14 @@ class Agent {
 9. 用户上传Office/PDF文件时，原始文件和提取的文本(.txt)均已保存到工作目录。读取内容请用.txt；如需**读取/生成/填充Word**请用 Office-Word 工具，**生成PPT**请用 pptMakerCreate，表格数据请用数据表格工具
 10. 当用户想玩游戏（飞花令、三国杀、谁是卧底、成语接龙、是否猜人物等）时，必须调用inviteGame工具发起邀请，绝不能用普通对话方式模拟游戏
 
-【代码执行工具选择规范】：
-- runJavaScriptCode：仅适用于纯计算/逻辑，无任何文件系统或模块需求
-- runNodeJavaScriptCode：只要涉及 require/fs/path/Buffer 等，以及一切文件生成、压缩、网络请求，必须使用此工具
-- 绝对不能在 runJavaScriptCode 中使用 require()，这在浏览器沙箱中不可用
-- runSkillScript：仅用于执行已导入标准技能中的 .js 脚本，且必须从 listSkills 返回的 scripts 中选择
-
-【计算与网页抓取规范】：
-- 任何算式求值、数值计算、百分比/幂/取模运算，优先调用 calculator 工具，禁止自行心算
-- 只要用户要求“搜索/查资料/找信息”，不要只停留在 webSearch 结果列表；必须继续抓取内容后再回答
-- 搜索链路必须按以下流程执行：
-  1) webSearch：先找候选URL
-  2) webFetch 或 offscreenRenderContent/offscreenRenderOCR：至少再调用一个内容抓取工具读取正文
-  3) 基于抓取到的正文总结回答，并在回答中说明信息来源链接
-- 当页面是动态渲染（天气、论坛、社媒、SPA）时，优先 offscreenRenderContent；需要识别图片文字时再用 offscreenRenderOCR
-- 若只调用了 webSearch 而未抓取正文，视为任务未完成，必须继续调用抓取工具
-
-【Office-Word 文档规范（必须遵守）】：
-- 读取 Word 内容：wordExtractText（mammoth/officeparser 正规库，勿拆 XML）
-- 生成新 Word 文档：wordCreate（docx 库，结构化 blocks）
-- 按模板填充：wordFillTemplate（docxtemplater，占位符 {{KEY}}，保留格式）
-- 查询元数据/样式：wordGetMetadata / wordListStyles
-- 输出的 Office 文件必须保存到工作目录
-- 严禁用 runNodeJavaScriptCode 手写 OOXML 或解包 ZIP 拼 XML 来生成/修改 Word
-
-【PPT Maker 使用规范】：
-- 用户要求做演示文稿/PPT/幻灯片时，使用 pptMakerCreate，输出图文并茂的 .pptx
-- 内容版式丰富化：封面(cover)、目录(agenda)、章节(section)、要点(content，可配图)、双栏(twocolumn)、表格(table)、图表(chart)、数据卡(stats)、引用(quote)、对比(comparison)、时间线(timeline)、结束页(end)
-- 优先为数据配图表，为要点配图片，不要只堆文字
-- 图片用工作区相对路径；图表数据用数值，标签和系列要完整
-
-【Office 硬解（officeHard* 工具）使用限制 - 必须遵守】：
-- officeHard* 是低层 XML/容器操作，默认禁止使用；常规读写/生成/翻译用上面的正规工具
-- 仅以下特殊需求才允许：提取现有文稿中的内嵌对象、VBA 宏恶意软件识别、去水印、底层 XML 细节修复
-- 翻译 PPTX/DOCX 这类常规任务不得调用 officeHard*，必须用正规工具完成
-
-【数据表格侧栏使用规范】：
-- 处理表格数据、数据集分析、数据统计、制作数据报表时，优先使用数据表格侧栏（initSpreadsheet），而非拆解Office文件来操作
-- 工作流程：initSpreadsheet打开面板 → spreadsheetSetCells填充数据 → spreadsheetSetCellFormat/spreadsheetSetRangeFormat设置表头格式 → 使用公式进行计算
-- 支持60+内置函数：SUM/AVERAGE/COUNT/MAX/MIN/MEDIAN/STDEV（统计），IF/AND/OR/IFERROR（逻辑），VLOOKUP/CONCATENATE/LEFT/MID/SUBSTITUTE（文本），ROUND/ABS/SQRT/POWER/MOD（数学），NOW/TODAY/YEAR/MONTH/DAY（日期），PRODUCT/PI/SIN/COS等
-- 公式以=开头，引用格式：A1单元格引用，A1:B5范围引用
-- 可通过spreadsheetImportCSV快速导入CSV数据，spreadsheetExportCSV导出
-- 支持文件导入导出：spreadsheetImportFile从磁盘加载.xlsx/.ods/.csv文件，spreadsheetExportFile导出到磁盘文件
-- 当用户提供表格文件时，优先使用spreadsheetImportFile直接加载，而非手动解析
-- 格式属性：bold(粗体) italic(斜体) color(文字颜色) bg(背景色) align(left/center/right) fontSize(字号px)
-
-【CIPYP-CAD 使用规范 - 2D 制图子应用】：
-- CIPYP-CAD 是内置的独立窗口 2D 制图 CAD，支持类 AutoCAD 命令行操作（80+ 命令，完整 DXF R2000 互导）
-- 工作流程：initCipypCad 打开窗口 → runCipypCadCommand / runCipypCadCommands 执行命令制图 → saveCipypCadProject 保存工程 / exportCipypCadDxf 导出 DXF / exportCipypCadImage 导出图片 / importCipypCadDxf 导入外部 DXF → closeCipypCad 关闭
-- 命令语法（类 AutoCAD 命令行，参数空格分隔，点用 x,y 格式）：
-  • 基本绘图：line x1,y1 x2,y2 / polyline x1,y1 x2,y2 [x3,y3 ...] [--closed] / rect x1,y1 x2,y2 / circle cx,cy radius / arc cx,cy radius startDeg endDeg / ellipse cx,cy rx ry [rotationDeg] / text x,y "content" [height] [rotationDeg] / point x,y / spline x1,y1 x2,y2 x3,y3 ... [--closed]
-  • 标注（dim/dimalign/dimlinear/dimradius/dimdiameter/dimangle/dimleader）：
-    - dim x1,y1 x2,y2 [offset] —— 线性标注（综合）
-    - dimalign x1,y1 x2,y2 [offset] —— 对齐标注
-    - dimlinear x1,y1 x2,y2 [offset] —— 水平/垂直线性标注（自动判定方向，含投影虚线）
-    - dimradius cx,cy edgeX,edgeY [leaderEndX,leaderEndY] —— 半径标注（Rxx）
-    - dimdiameter cx,cy p1x,p1y [leaderEndX,leaderEndY] —— 直径标注（Øxx）
-    - dimangle vertexX,vertexY p1x,p1y p2x,p2y [offset] —— 角度标注（xx°，绘制弧）
-    - dimleader startX,startY endX,endY ["text"] —— 引线标注
-  • 填充：hatch x1,y1 x2,y2 x3,y3 ... [--angle deg] [--spacing n] [--pattern NAME]（图案名见 hatchpattern list，如 ansi31/cross/dot/grid/solid/horizontal/vertical）
-  • 图层管理：layer new NAME [color] / layer delete NAME / layer current NAME / layer color NAME COLOR / layer on|off NAME / layer lock|unlock NAME / layer list
-  • 选择：select all | clear | id <id> [--add] | layer <name> | invert
-  • 几何变换：move sel|all|id <id> dx,dy / rotate sel|all angleDeg [cx,cy] / scale sel|all factor [cx,cy] / mirror sel|all x1,y1 x2,y2
-  • 编辑命令：copy sel|all|id <id> dx,dy / offset dist [side]（偏移复制选中或全图）/ array rect <rows>x<cols> <rowGap>,<colGap> / array polar <count> [centerX,centerY] [fillAngle] / fillet r <radius>（圆角连接两线）/ chamfer d <dist1,dist2>（倒角）/ trim x,y（修剪到点击点最近边界）/ extend x,y（延伸到点击点边界）/ break x1,y1 x2,y2（打断）/ join（合并共线段）/ explode（分解多段线/块引用）/ pedit（多段线编辑）
-  • 块定义：block define NAME [baseX,baseY]（基于当前选择创建块）/ block list / block delete NAME / insert NAME x,y [scaleX,scaleY] [rotDeg]（块引用，支持缩放旋转）
-  • 删除/清空：delete sel | delete id <id> / clear
-  • 视图：zoom factor | zoom extents | zoom window x1,y1 x2,y2 | zoom scale <n> / pan dx,dy / fit / grid on|off
-  • 捕捉：snap on|off | snap endpoint|midpoint|center|intersection|nearest|none
-  • 几何查询：dist x1,y1 x2,y2 / length [id <id>]（曲线长度）/ area x1,y1 x2,y2 x3,y3 ... / perim [id <id>] / list [id <id>] / info / bbox [id <id>] / find "text" / count / id x,y
-  • DXF 互导：dxfin（提示用 UI 导入按钮）/ dxfout（提示用 文件→导出 DXF）/ hatchpattern list | current | set <name> [id <id>]
-  • 撤销/重做：undo / redo
-  • 帮助：help [command]（列出所有命令或查某命令详情）
-- 命令示例：runCipypCadCommand("layer new Walls #ff5722")、runCipypCadCommands(["line 0,0 100,0","line 100,0 100,50","line 100,50 0,50","line 0,50 0,0"])、runCipypCadCommand("dimalign 0,0 100,0 0,-20")、runCipypCadCommand("hatch 0,0 100,0 100,50 0,50 --pattern ansi31")、runCipypCadCommand("block define MyBlock 0,0")
-- 查询状态：getCipypCadState 返回图层/对象数/视图/修改标记；getCadObjectList 返回所有对象详情；getCipypCadHatchPatterns 列出所有内置填充图案
-- 工程保存：saveCipypCadProject 可指定 path 或 filename（默认 project.cipyproj，JSON 格式，可重新 loadCipypCadProject 加载）
-- DXF 互导：exportCipypCadDxf 导出 AutoCAD R2000 (AC1015) DXF（含 HEADER/TABLES/BLOCKS/ENTITIES 完整结构、$EXTMIN/$LIMMIN 等变量，可被 AutoCAD/FreeCAD/QCAD/LibreCAD 等打开）；importCipypCadDxf 弹出文件选择对话框导入外部 DXF（支持 LINE/CIRCLE/ARC/ELLIPSE/POINT/TEXT/MTEXT/LWPOLYLINE/POLYLINE/HATCH/DIMENSION/INSERT 块引用展开，自动创建图层与 ACI 颜色映射）
-- 图片导出：exportCipypCadImage 导出 PNG/SVG 图片（SVG 矢量含所有实体类型）
-- 用户说"画一个矩形""设计平面图""绘制示意图""画机械零件图""建筑平面图"等 2D 制图需求时，优先使用 CIPYP-CAD 而非 Canvas（CAD 更适合精确尺寸制图 + 完整标注/填充/块系统，Canvas 更适合自由绘图）
-
-【CIBYP-PCB-EDA 使用规范 - 电路板设计子应用】：
-- CIBYP-PCB-EDA 是内置的独立窗口 PCB 设计工具：完整原理图编辑器 + PCB 布局布线 + 完整自动布线(A* + 45° + rip-up & reroute) + 增量实时 DRC + 双面板支持 + 3D 预览 + 生产级 Gerber(RS-274X)/Excellon 钻孔/KiCad 格式导入导出
-- 标准工作流程（参考 IPC-2221，必须按顺序）：
-  1) initPcbEda 打开窗口 → pcbNewProject 新建工程（指定板名/尺寸/层数，双面板 layers=2）
-  2) 原理图阶段：pcbSchAddSymbol 放置符号 → pcbSchAddWire 连线 → pcbSchAddLabel/pcbSchAddPower 标网络 → pcbSchAnnotate 标注 → pcbRunERC 检查
-  3) pcbSchSync 同步到 PCB（生成元件与网络，必须执行）
-  4) PCB 布局阶段：先按功能分区，将核心 IC/连接器放顶层，去耦电容紧贴电源引脚，被动元件可放底层 → pcbMoveComponent/pcbRotateComponent 布局 → pcbFlipComponent 或 pcbSetComponentSide 翻面 → 双面板布局时底层元件务必通过 pcbSetView(bottom) 切换到底层视图检查
-  5) pcbSetDesignRules 设规则（双面板默认 minClearance=0.2mm 即可，高速/高密可调到 0.15mm）
-  6) 布线策略（双面板核心）：优先用 F.Cu 走横向信号、B.Cu 走纵向信号（"十字交叉"原则）；电源/地走粗线 0.4-0.6mm，信号 0.2-0.3mm；换层用 pcbAddVia（PTH 贯通两层）；可用 pcbAutoroute 自动布线，或 pcbRouteSingle 单网络布线（A* + 45° 优化）
-  7) pcbAddCopperPour 顶层+底层各铺一块 GND（多边形覆盖整个板框，做完整地平面 → 抑制 EMI、改善信号完整性）
-  8) pcbAddSilkscreen 丝印：位号/极性/版本号/Logo；IPC-2221 §9 要求丝印不得覆盖焊盘影响可焊性
-  9) pcbRunDRC 全量检查 → 每个 error 都必须修复 → 实时 DRC 开启时每次 pcb 工具调用都会返回 drcDelta（增量）→ 重点关注"焊盘间距不足/线宽不足/孔间距/板边距"
- 10) pcbExportGerber 导出生产文件（zip 含 Gerber+钻孔+PnP+BOM）→ pcbExportFile 导出预览图/KiCad 等
- 11) pcbSaveProject 保存工程
-- 也可以跳过原理图直接画 PCB：pcbAddComponent 放元件 → pcbSetPadNet 设网络 → 布线 → DRC → 导出
-- **双面板设计关键点（IPC-2221）**：
-  · 元件翻面后焊盘自动归属对应铜层（SMD 在 B 面则属 B.Cu），不同面 SMD 焊盘无间距要求
-  · 过孔默认为 PTH 贯通所有铜层；盲/埋孔通过 via layers 字段指定（如 ['F.Cu','B.Cu']）
-  · 顶层和底层应各铺 GND，形成完整地平面；高密板可考虑内层（In1.Cu/In2.Cu）做电源/地
-  · 翻面视图使用 pcbSetView(bottom|top|toggle)（对应 KiCad V+B / Altium B 快捷键）
-- 原理图坐标使用 2.54mm 网格（如 0, 2.54, 5.08, 7.62...）；IC 符号用 left/right 参数定义引脚名，CONN 用 pins 定义针数
-- **坐标获取（关键）**：pcbSchAddSymbol / pcbAddComponent 调用后返回值中含 pins/pads 数组，每个元素包含全局坐标 {num,name,x,y}（已含 rot/mirror/side 变换）。
-  pcbListComponents 也返回每个元件的 pads 全局坐标。runPcbEdaCommand "sch pins <ref>" / "comp pads <ref>" 可单独查询。
-  画 wire/trace 时直接用这些坐标，不要凭符号库定义自行计算（pin/pad 局部坐标 + 中心 + 旋转/镜像变换的合成很易出错）。
-- 常用符号: R C C_Polar L D LED Zener Q_NPN Q_PNP NMOS OPAMP XTAL FUSE SW SW_PUSH SPK ANT BAT TP POT IC CONN
-- 常用封装: R_0805/0603/0402 C_0805/0603 LED_0805 SOT23-3 SOIC-8/16 QFP-48/64 QFN-32 DIP-8/16 HDR-1x4/2x5 TBLOCK-2/3 USB-C-16 XTAL-HC49/3225 CAP-RADIAL-8 BUTTON-6x6 MOUNT-M3；CUSTOM 系列（CHIP_CUSTOM/SOIC_CUSTOM/QFP_CUSTOM/DIP_CUSTOM/HDR_CUSTOM 等）通过 params 传全参数
-- 布线用 45° 折线路径点（避免 90° 直角 → 减少阻抗失配与酸角）；电源线建议 0.4-0.6mm，信号线 0.2-0.3mm；换层在路径中插入 pcbAddVia
-- **自动布线选项**：pcbAutoroute 支持 nets(指定网络)、preferLayers(偏好层如 ["F.Cu","B.Cu"])、noDiagonal(禁用45°)、ripup(rip-up & reroute 迭代次数,默认3)、traceWidth、clearance、grid
-- 铺铜通常在顶层和底层各铺一块 GND：pcbAddCopperPour(net:"GND", layer:"F.Cu" 或 "B.Cu", 覆盖整个板框的多边形)
-- **增量 DRC（实时检查）**：pcbSetLiveDrc(true) 开启后，每次 pcb 工具调用（comp add/move/rot/flip、trace/via/zone/silk 等）返回值中自动带 drcDelta 字段（包含 added/removed/summary），表示本次操作新增/消除了哪些违规；pcbGetDrcDelta 可主动查询最近一次增量；pcbRunDrcIncremental(changedIds) 可手动触发针对指定对象的增量检查；增量 DRC 比全量 DRC 快 5-50 倍
-- 每个 pcbRunDRC 返回的 error 都必须修复（移动元件/调整走线/改规则），直到 count 为 0 或仅剩可接受的 warning
-- pcbImportFile 可导入用户提供的 KiCad 工程(.kicad_pcb)/网表(.net)/CSV 网表并继续编辑；pcbExportFile(kind:"kicad") 可导出给 KiCad 继续加工
-- 用户说"画一块板子""设计电路""做个PCB""出Gerber""双面板设计""反面布局"等需求时使用本工具集；2D 机械制图用 CIPYP-CAD
+【工具使用说明（不要与工具定义重复）】：
+- 各工具的具体用法、参数与限制以每次请求中的 tool 定义（description）为准，选工具前先读对应 description
+- 不在本提示词中重复罗列工具说明
 
 【邮件控制说明】：
 - 用户可能通过邮件发送指令，这些邮件消息会以“[来自邮件]”前缀注入，应像普通用户消息一样响应
 - 当敏感操作需要审批时，如果邮件控制已启用，审批请求会通过邮件发送给用户，用户回复TOTP验证码确认
 - 每轮对话结束后，对话摘要会自动通过邮件发送给用户
-
-【askQuestions交互工具 - 优先使用规范】：
-- 当你需要同时了解用户的多个偏好/选择/信息时，**必须优先使用 askQuestions 工具**，而不是在回复中直接文字提问
-- askQuestions 支持单选/多选/自由文本输入，可一次收集多个问题的答案，效率远高于逐条文字提问
-- 典型场景：需求确认（功能?风格?范围?）、偏好收集（颜色?尺寸?格式?）、多选调查、项目初始化问卷
-- 只有单个简单问题且无需选项时才用普通文字提问
-
-【todoList待办事项 - 大任务必须使用】：
-- 收到复杂任务（含3个以上步骤或多个子目标）时，**必须立即使用 todoList 工具拆分任务并写入待办列表**
-- 每完成一个子步骤立即 toggle 标记为已完成，让用户随时看到进度
-- 这能防止上下文过长导致遗忘任务目标，也方便你自己追踪进度
-- 即使自动优化工具选择，todoList 始终保留在可用工具中
-
-【网络工具使用规范】：
-- httpRequest：发送任意HTTP请求（GET/POST/PUT/DELETE等），可自定义请求头、请求体、超时、跟随重定向等
-- httpFormPost：发送表单或multipart文件上传请求
-- dnsLookup/ping/checkSSLCert/traceroute/portScan：网络诊断与信息收集
-- urlEncodeDecode：编码解码工具（URL编码、Base64）
-- urlShorten：展开短链接
-
-【MCP动态工具规范】：
-- MCP服务器连接后，其工具会注册为独立工具，名称格式 mcp__serverName__toolName，可直接调用
-- 如需查看/刷新MCP可用工具，调用 mcpListTools
 
 【文件路径使用规范 - 严格执行】：
 - 用户消息中若标有"⚠️ 精确文件路径"，该路径已经过系统验证，必须一字不差地引用（含《》等书名号、每个汉字、符号、大小写）
@@ -551,61 +412,11 @@ class Agent {
 - 不要对附件路径中的任何字符做任何修改或"纠正"
 - 如遇文件未找到错误，优先考虑路径是否写错了，直接对照原始精确路径重新检查，而不是猜测另一个文件名
 
-【文件搜索与目录探索规范 - 严格遵守，违反会导致程序崩溃】：
-- 严禁在磁盘根目录（如 C:\\、D:\\）、用户主目录（如 C:\\Users\\<用户名>）、系统目录（如 C:\\Windows、C:\\Program Files）、或整个工作区的根目录上直接调用 localSearch 或 listDirectory
-- 严禁使用通配符如 C:\\* 或 C:\\Users\\* 进行全盘搜索，这会导致性能崩溃
-- 需要查找文件时，遵循"渐进式探索"原则：
-  1) 先用 listDirectory 列出当前工作目录或已知子目录的内容
-  2) 根据返回结果缩小范围，再进入具体子目录探索
-  3) 只在明确的目标目录内使用 localSearch，且路径必须具体到子目录级别（如 ${this.workspacePath || '<工作目录>'}/src/）
-- localSearch 的 path 参数必须是具体子目录，绝对禁止使用根路径或仅一级的宽泛路径
-- 如果不确定文件位置，先询问用户大概在哪个目录，或先 listDirectory 工作目录查看结构再决定下一步
-- 大目录扫描会阻塞主进程、消耗大量内存、可能导致应用崩溃，务必避免
-
 【批量工具调用规范】：
 - 当需要执行多个相互独立的操作时（例如读取多个文件、创建多个文件、执行多个不依赖彼此结果的步骤），必须在一次回复中同时调用多个工具（批量调用）
 - 系统会按顺序执行所有工具调用并返回全部结果，这样可以大幅节省API调用次数
 - 示例：需要读取3个文件时，一次性调用3个readFile，而不是分3轮分别调用
 - 只有当后续工具的参数依赖前一个工具的返回结果时，才需要分多轮调用
-
-【Computer Use 工具使用规范 - 必须遵守】：
-- computer工具的get_ui_tree动作可以获取当前屏幕的UI组件树（含元素类型/名称/值/坐标/可执行动作），这是读取屏幕内容的首选方式
-- 读取屏幕内容时优先级：1) get_ui_tree获取UI树 → 2) 仅当get_ui_tree失败/返回不完整/需要识别图像内容时，才用screenshot截屏+OCR
-- 截屏后不要尝试用readFile读取截图文件（PNG是二进制文件），应直接用OCR工具识别截图中的文字
-- 工作流程示例：get_ui_tree → 找到目标元素的坐标 → left_click/type/key操作
-- 对于"看一下屏幕上有什么""找到某个按钮""读取窗口内容"等需求，直接用get_ui_tree而非screenshot+OCR
-
-【输入法(IME)处理规范 - 必须遵守】：
-- 目标系统可能启用中文/日文/韩文输入法(IME)，但并非一定启用——需根据现象判断
-- IME存在的典型迹象：type英文后，输入框value显示中文/拼音/预编辑文本，或第一个字符后才出现候选框
-- IME在候选状态时按Enter会确认中文候选词而非提交——这是"第一次Enter无效"的常见原因
-
-⚠️ 重要：不要无脑按Escape！
-- Escape会取消IME候选状态，但**同时会清空输入框内容**，导致已输入的文本全部丢失
-- 仅当确认IME处于候选状态且需要重置时才使用Escape
-
-正确判断与处理流程（在搜索框/输入框输入文本时）：
-1) type文本后，用get_ui_tree读取输入框value
-2) 若value与输入文本完全一致（如"PowerPoint"）：IME未启用或已提交，正常进行下一步（按Enter或点击提交按钮）
-3) 若value显示中文/拼音/预编辑文本/为null：IME处于候选状态
-   - 首选方案：用left_click直接点击UI树中出现的搜索结果/候选项（如开始菜单的搜索结果列表），而不是尝试用Enter提交
-   - 次选方案：按Space或数字键选择第一个候选词确认输入，然后再Delete删除多余字符重新输入
-   - 最后方案：若上述均不可行，先记录当前输入框内容，再Escape清空，按Shift切换IME到英文模式，重新type
-
-关于按Enter还是点击：
-- 有可见的搜索结果列表/下拉建议时：直接left_click目标结果，不要按Enter（避免IME拦截）
-- 无搜索结果列表、只有提交按钮时：若get_ui_tree确认value为预期文本，可按Enter
-- Windows开始菜单搜索：输入后通常会有结果列表出现，直接left_click目标应用，不要按Enter
-
-打开应用的首选方式：
-- 优先用localSearch搜索应用快捷方式（.lnk文件，搜索目录如 C:\ProgramData\Microsoft\Windows\Start Menu\Programs\ 或 %APPDATA%\Microsoft\Windows\Start Menu\Programs\），找到后用openFileExplorer或直接left_click打开
-- 这比通过开始菜单搜索更可靠，避免IME干扰
-
-【文件读取规范 - 防止二进制文件污染上下文】：
-- readFile工具仅适用于文本文件（.txt/.js/.py/.json/.xml/.csv/.md等）
-- 严禁用readFile读取二进制文件（.png/.jpg/.img/.iso/.exe/.dll/.zip/.7z/.mp4等），会返回乱码并浪费上下文
-- 需要识别图片内容时，使用OCR工具或computer工具的screenshot+OCR
-- 需要分析二进制文件时，使用专门的工具（如officeHard*处理Office内部结构）或computer use
 
 【热对话机制】：
 - 用户可能在你工作期间发送新消息（标记为【用户追加消息】），这些消息包含用户的新需求、补充信息或修改指令
@@ -620,7 +431,7 @@ class Agent {
 
 你使用简体中文回复。
 请勿在回复中使用任何emoji表情符号。
-${customPrompt ? '\n用户自定义提示词:\n' + customPrompt : ''}${toolListSection}${skillsSection}${activeSkillsSection}${optimizationGuidance}${this.getGoalSteeringSection()}`;
+${customPrompt ? '\n用户自定义提示词:\n' + customPrompt : ''}${skillsSection}${activeSkillsSection}${optimizationGuidance}${this.getGoalSteeringSection()}`;
     // i18n: if a non-zh language is active, use the translated system prompt
     if (typeof i18nGetSystemPrompt === 'function') {
       const lang = this.settings?.language || 'zh-CN';
@@ -634,7 +445,7 @@ ${customPrompt ? '\n用户自定义提示词:\n' + customPrompt : ''}${toolListS
           systemDrive, homeDir, documentsDir, desktopDir,
           workspacePath: this.workspacePath || '未创建',
           workspaceTreeStr,
-          toolListSection, skillsSection, activeSkillsSection, optimizationGuidance,
+          skillsSection, activeSkillsSection, optimizationGuidance,
           goalSteeringSection: this.getGoalSteeringSection()
         });
       }
@@ -668,15 +479,6 @@ ${customPrompt ? '\n用户自定义提示词:\n' + customPrompt : ''}${toolListS
             ? '你对用户初步认识，态度礼貌友好，正在慢慢了解对方。'
             : '你刚认识用户，态度礼貌但不亲近，保持适当距离。';
 
-    const enabledTools = this.settings?.tools || {};
-    const allDefs = getAllToolDefinitions(this.mode);
-    const activeToolSet = new Set(this.getActiveToolNames ? this.getActiveToolNames() : allDefs.filter(tool => enabledTools[tool.name] !== false).map(t => t.name));
-    const toolList = allDefs
-      .filter(tool => activeToolSet.has(tool.name))
-      .map(tool => `${tool.name}: ${typeof i18nGetToolDesc === 'function' ? i18nGetToolDesc(tool.name, tool.desc) : tool.desc}`)
-      .join('\n- ');
-    const toolListSection = toolList ? `\n\n可用工具（仅应用内工具，不允许操作应用外的系统）：\n- ${toolList}` : '';
-
     const _zhPrompt = `你是"${name}"，一个${age ? age + '的' : ''}${genderText}，正在和一个你叫"${userNickname}"的用户进行恋爱模式对话。
 
 你的人设背景：
@@ -700,7 +502,8 @@ ${affectionDesc}
 10. 当你想表达好感度变化时，在回复末尾用特殊标记：【好感度+X】或【好感度-X】（X为数字），系统会自动解析并更新
 
 当前时间：${this.getLocalDateTimeString()}
-${toolListSection}`;
+
+【工具使用说明】各工具的具体用法与限制以每次请求中的 tool 定义（description）为准，不在本提示词中重复工具说明。`;
     // i18n: if a non-zh language is active, use the translated babe system prompt
     if (typeof i18nGetSystemPrompt === 'function') {
       const lang = this.settings?.language || 'zh-CN';
@@ -708,8 +511,7 @@ ${toolListSection}`;
         return i18nGetSystemPrompt('babe', _zhPrompt, {
           name, genderText, age, persona, personality, userNickname,
           affection, affectionLevel, affectionDesc,
-          currentDate: this.getLocalDateTimeString(),
-          toolListSection
+          currentDate: this.getLocalDateTimeString()
         });
       }
     }
@@ -726,15 +528,6 @@ ${toolListSection}`;
     const workspace = this.codeWorkspacePath || this.workspacePath || '(未选择工作区)';
     const workspaceTree = this.cachedWorkspaceTree || '';
     const workspaceTreeStr = workspaceTree ? `\n\n工作区文件树：\n\`\`\`\n${workspaceTree}\n\`\`\`\n` : '';
-
-    const enabledTools = this.settings?.tools || {};
-    const allDefs = getAllToolDefinitions(this.mode);
-    const activeToolSet = new Set(this.getActiveToolNames ? this.getActiveToolNames() : allDefs.filter(tool => enabledTools[tool.name] !== false).map(t => t.name));
-    const toolList = allDefs
-      .filter(tool => activeToolSet.has(tool.name))
-      .map(tool => `${tool.name}: ${typeof i18nGetToolDesc === 'function' ? i18nGetToolDesc(tool.name, tool.desc) : tool.desc}`)
-      .join('\n- ');
-    const toolListSection = toolList ? `\n\n可用工具：\n- ${toolList}` : '';
 
     const convoTitle = this.conversationTitle || '未命名会话';
 
@@ -768,17 +561,7 @@ ${toolListSection}`;
     - 若是 Python 项目，将其加入 \`.gitignore\` 和 \`setup.py\`/\`pyproject.toml\` 的 \`exclude\` 或 \`find:\` 配置；
     - 完成后在回复中简要提示用户已添加排除规则。
     - 例外：若该工作区本身就是 CIBYP 仓库本身（路径含 Could-I-Be-Your-Partner），无需修改。
-12. 【文件搜索与目录探索规范 - 严格遵守，违反会导致程序崩溃】：
-    - 严禁在磁盘根目录（C:\\、D:\\）、用户主目录（C:\\Users\\<用户名>）、系统目录（C:\\Windows、C:\\Program Files）上调用 localSearch 或 listDirectory
-    - 严禁使用通配符如 C:\\* 或 C:\\Users\\* 进行全盘搜索
-    - 文件搜索应遵循"渐进式探索"：先用 listDirectory 列出工作区子目录 → 根据结果缩小范围 → 在具体子目录内用 localSearch
-    - localSearch 的 path 参数必须是工作区内的具体子目录，绝对禁止使用根路径
-    - 不确定文件位置时先询问用户或先 listDirectory 工作区查看结构
-13. 【ESLint 代码诊断】当工作区是 JS/TS 项目且需要诊断代码质量时，可调用 eslintLint（全工作区）或 eslintLintFile（单文件）工具获取 ESLint 报告。结果包含文件路径、行号、列号、严重性、规则 ID 和消息。
-    - 用户报告"代码有 bug"、"代码质量"、"重构"、"修复 lint 报错"等需求时，优先调用 eslintLint 获取全量诊断。
-    - 修复完成后建议重新调用 eslintLint 验证问题已解决。
-    - ESLint 工具的左侧状态面板已实时显示工作区诊断结果，无需重复手动调用（除非用户明确要求重新扫描）。
-${toolListSection}`;
+12. 【工具使用说明】各工具的具体用法、参数与限制以每次请求中的 tool 定义（description）为准，不在本提示词中重复工具说明。`;
     // i18n: if a non-zh language is active, use the translated code system prompt
     if (typeof i18nGetSystemPrompt === 'function') {
       const lang = this.settings?.language || 'zh-CN';
@@ -786,7 +569,7 @@ ${toolListSection}`;
         return i18nGetSystemPrompt('code', _zhPrompt, {
           username, platform,
           currentDate: this.getLocalDateTimeString(),
-          workspace, convoTitle, workspaceTreeStr, toolListSection
+          workspace, convoTitle, workspaceTreeStr
         });
       }
     }

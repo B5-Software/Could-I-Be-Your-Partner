@@ -896,7 +896,9 @@ test('PCB-EDA: agent.js routes pcb tools + prompt section', () => {
   for (const c of ["case 'initPcbEda'", "case 'pcbExportGerber'", "case 'pcbAutoroute'", "case 'pcbSchSync'"]) {
     assert.ok(agentContent2.includes(c), 'agent.js missing route: ' + c);
   }
-  assert.ok(agentContent2.includes('CIBYP-PCB-EDA 使用规范'), 'missing prompt section');
+  // 工具说明已从系统提示词解耦，PCB 工作流移到 initPcbEda 的 tool description
+  const toolsDef = fs.readFileSync(path_.join(__dirname, '../src/renderer/js/tools-def.js'), 'utf-8');
+  assert.ok(toolsDef.includes('initPcbEda') && /pcbNewProject[\s\S]*pcbSaveProject/.test(toolsDef), 'initPcbEda description missing workflow');
 });
 
 test('PCB-EDA: sub-app page + css exist with CSP', () => {
