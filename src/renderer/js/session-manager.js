@@ -80,8 +80,22 @@
         lastWasWorking: false,
         active: false,
         uiGeneration: 0,
+        // 会话独立的输入草稿（切标签页时保存/恢复）
+        draft: '',
+        // 后台期间的瞬时 UI 事件缓冲（文件呈递/牌阵/命运牌等），切回时重放
+        uiEvents: [],
+        // 需要跨切换保留的交互卡片（问卷/游戏邀请）挂载的离屏容器
+        uiRoot: null,
         meta: { ...(meta || {}) }
       };
+      // 离屏挂载点：问卷/游戏邀请卡片先挂在 session 自己的根节点上，
+      // 会话激活时移到可见容器，切走时再收回来，保证后台会话的交互卡片不丢。
+      // Node 测试环境没有 document，此时保持 null。
+      session.uiRoot = (typeof document !== 'undefined') ? document.createElement('div') : null;
+      if (session.uiRoot) {
+        session.uiRoot.className = 'session-ui-root';
+        session.uiRoot.dataset.sessionKey = key;
+      }
 
       this.sessions.set(key, session);
       this._bindAgent(session);
@@ -166,6 +180,16 @@
       session.attention = next;
       session.updatedAt = Date.now();
       this.bus.emit('session-attention', { session, attention: next, previous: prev });
+    }
+
+    /**
+     * 后台会话的瞬时 UI 事件缓冲（不重复渲染、切回时按需重放）。
+     * 只用于不在上下文 transcript 中、但需要展示的卡片类事件。
+     */
+    bufferUiEvent(session, event) {
+      if (!session || !event || !event.type) return;
+      if (session.uiEvents.length >= 400) session.uiEvents.splice(0, session.uiEvents.length - 399);
+      session.uiEvents.push({ t: Date.now(), ...event });
     }
 
     retag(session, id) {

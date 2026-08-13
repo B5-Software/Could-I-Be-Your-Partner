@@ -26,6 +26,11 @@
       if (!msgsEl) return;
       if (!isActive()) {
         if (type === 'approval' && typeof renderAllSessionTabs === 'function') renderAllSessionTabs();
+        else if (type === 'present-file' && sessionManager) {
+          const session = sessionManager.getByAgent(ag);
+          if (session) sessionManager.bufferUiEvent(session, { type: 'present-file', data });
+          sendAppNotification('present', 'Agent 向您呈递文件', data?.title || data?.filename || '请查看文件内容');
+        }
         return;
       }
       switch (type) {
@@ -723,13 +728,18 @@
         stride: 78,
         overscan: 8
       });
-      babeHistorySearch = (typeof window.makeHistorySearch === 'function') ? window.makeHistorySearch({
+      babeHistorySearch = (typeof window.makeHistorySearchV2 === 'function') ? window.makeHistorySearchV2({
         key: 'babe-history',
         inputId: 'babe-history-search-input',
         countId: 'babe-history-search-count',
+        listId: 'babe-history-list',
+        searchMode: 'babe',
         getRawItems: () => babeHistoryRawItems,
-        getSearchText: (item) => `${item.title || ''} ${item.messageCount || ''}`,
-        onFilterChange: (filtered) => HistoryList.setItems(listEl, filtered)
+        getTitleText: (item) => item.title || '',
+        renderItem: renderBabeHistoryItem,
+        renderContentItem: renderBabeHistoryContentItem,
+        onAction: handleBabeHistoryAction,
+        restoreItems: () => HistoryList.setItems(listEl, babeHistoryRawItems)
       }) : null;
     }
     return true;
@@ -745,6 +755,30 @@
         <div class="history-info">
           <div class="history-title">${escapeHtml(item.title || '未命名对话')} ${affectionBadge} ${sessionStatusBadge(live ? live.status : item.status, live ? live.lastError : item.lastError, live ? live.attention : null)}</div>
           <div class="history-time">${timeStr} · ${item.messageCount || 0} 条消息</div>
+        </div>
+        <div class="history-actions">
+          <button class="btn-icon" data-action="continue" title="继续对话"><i class="fa-solid fa-play"></i></button>
+          <button class="btn-icon" data-action="delete" title="删除"><i class="fa-solid fa-trash-can"></i></button>
+        </div>
+      </div>`;
+  }
+
+  function renderBabeHistoryContentItem(item) {
+    const ts = item.updatedAt ? (typeof item.updatedAt === 'number' ? item.updatedAt : Date.parse(item.updatedAt)) : NaN;
+    const timeStr = !isNaN(ts) ? new Date(ts).toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '未知时间';
+    const affectionBadge = `<span class="babe-history-affection" title="好感度"><i class="fa-solid fa-heart"></i> ${item.affection ?? 0}</span>`;
+    const live = (typeof getSessionLiveState === 'function') ? getSessionLiveState('babe', item) : null;
+    const snippets = Array.isArray(item.snippets) ? item.snippets.slice(0, 10) : [];
+    const snippetsHtml = snippets.map(s => `<div class="history-snippet">${(typeof buildSearchSnippetHtml === 'function') ? buildSearchSnippetHtml(s) : escapeHtml(s.hit || '')}</div>`).join('');
+    const moreHtml = (item.snippetTotal && item.snippetTotal > 10)
+      ? `<div class="history-snippet-more">还有 ${item.snippetTotal - 10} 处命中</div>`
+      : '';
+    return `
+      <div class="history-item history-item-content" data-id="${item.id}">
+        <div class="history-info">
+          <div class="history-title">${escapeHtml(item.title || '未命名对话')} ${affectionBadge} ${sessionStatusBadge(live ? live.status : item.status, live ? live.lastError : item.lastError, live ? live.attention : null)}</div>
+          <div class="history-time">${timeStr} · ${item.messageCount || 0} 条消息</div>
+          <div class="history-snippets">${snippetsHtml}${moreHtml}</div>
         </div>
         <div class="history-actions">
           <button class="btn-icon" data-action="continue" title="继续对话"><i class="fa-solid fa-play"></i></button>

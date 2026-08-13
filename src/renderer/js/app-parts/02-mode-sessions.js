@@ -36,6 +36,10 @@
         // Switch to chat page
         document.querySelector('.nav-item[data-page="chat"]')?.click();
         if (typeof renderSessionTabs === 'function') renderSessionTabs('chat');
+        if (sessionManager) {
+          const target = sessionManager.getActive('chat') || sessionManager.list('chat')[0];
+          if (target) activateSession('chat', target.key);
+        }
       } else if (mode === 'code') {
         // Code mode: show code sidebar items, hide chat/babe ones
         document.querySelector('.nav-item[data-page="chat"]')?.classList.add('hidden');
@@ -47,6 +51,10 @@
         // Switch to code page
         document.querySelector('.nav-item[data-page="code"]')?.click();
         if (typeof renderSessionTabs === 'function') renderSessionTabs('code');
+        if (sessionManager) {
+          const target = sessionManager.getActive('code') || sessionManager.list('code')[0];
+          if (target) activateSession('code', target.key);
+        }
       } else if (mode === 'babe') {
         // Babe mode: show babe sidebar items, hide chat/code ones
         document.querySelector('.nav-item[data-page="chat"]')?.classList.add('hidden');
@@ -60,6 +68,10 @@
         // 启动 Babe Agent（如果尚未启动）
         initBabeAgent();
         if (typeof renderSessionTabs === 'function') renderSessionTabs('babe');
+        if (sessionManager) {
+          const target = sessionManager.getActive('babe') || sessionManager.list('babe')[0];
+          if (target) activateSession('babe', target.key);
+        }
       }
       // 切换模式后同步标题栏为目标模式当前对话标题（无则显示"未命名对话"）
       let modeTitle = '';
@@ -105,7 +117,12 @@
           // 后端逻辑：始终推送 tarot 到 WebUI（保持子代理/对话上下文一致）
           window.api.webControlPushTarot(data);
           // UI 可见性：关闭时跳过所有前端渲染（agent-tarot 已被 hidden 隐藏）
-          if (!isActive() || !tarotVisible || !agentTarot) break;
+          if (!isActive()) {
+            const session = sessionManager?.getByAgent(ag);
+            if (sessionManager && session) sessionManager.bufferUiEvent(session, { type: 'tarot', data });
+            break;
+          }
+          if (!tarotVisible || !agentTarot) break;
           const iconHtml = data.icon ? `<i class="fa-solid ${data.icon}"></i>` : '<i class="fa-solid fa-star"></i>';
           const _lang = (typeof i18nGetLanguage === 'function' ? i18nGetLanguage() : 'zh-CN');
           const _isZh = (_lang === 'zh-CN');
@@ -214,7 +231,13 @@
       case 'sub-agent-batch-done':
         break;
       case 'present-file':
-        if (!isActive()) break;
+        if (!isActive()) {
+          const session = sessionManager?.getByAgent(ag);
+          if (sessionManager && session) sessionManager.bufferUiEvent(session, { type: 'present-file', data });
+          // 系统通知：文件呈递（后台会话也要提醒）
+          sendAppNotification('present', 'Agent 向您呈递文件', data?.title || data?.filename || '请查看文件内容');
+          break;
+        }
         addFilePresentCard(data);
         // 系统通知：文件呈递
         sendAppNotification('present', 'Agent 向您呈递文件', data?.title || data?.filename || '请查看文件内容');
@@ -275,15 +298,21 @@
     window.api.webControlPushStatus(status);
   };
 
-  ag.onToolCall = (name, args, status, result) => {
-    if (!isActive()) return;
+  ag.onToolCall = (name, args, status, result, callId) => {
+    if (!isActive()) {
+      const session = sessionManager?.getByAgent(ag);
+      if (sessionManager && session && status === 'done' && name === 'getTarot' && result?.ok && result?.result?.spread) {
+        sessionManager.bufferUiEvent(session, { type: 'tarot-spread', result: result.result });
+      }
+      return;
+    }
     const toolDef = TOOL_DEFINITIONS.find(t => t.name === name);
     const displayName = toolDef?.desc || name;
 
     if (status === 'calling') {
-      addToolCallToChat(displayName, name, args);
+      addToolCallToChat(displayName, name, args, callId);
     } else if (status === 'done') {
-      updateToolCallResult(name, result);
+      updateToolCallResult(name, result, false, callId);
       updateContextProgress();
       // If generateImage returned a URL/base64, display image directly
       if (name === 'generateImage' && result?.ok && result?.url) {
@@ -294,7 +323,7 @@
         addTarotSpreadToChat(result.result);
       }
     } else if (status === 'denied') {
-      updateToolCallResult(name, { ok: false, error: '用户拒绝了操作' }, true);
+      updateToolCallResult(name, { ok: false, error: '用户拒绝了操作' }, true, callId);
       updateContextProgress();
     }
     window.api.webControlPushToolCall(name, args, status, typeof result === 'string' ? result : JSON.stringify(result || ''));
@@ -356,6 +385,20 @@
     if (typeof renderAllSessionTabs === 'function') renderAllSessionTabs();
   });
   AppBus.on('session-created', () => {
+    if (typeof renderAllSessionTabs === 'function') renderAllSessionTabs();
+  });
+  AppBus.on('session-deactivated', (event) => {
+    const { session } = event.detail || {};
+    if (session) {
+      try { retractSessionUiRoot(session); } catch { /* ignore */ }
+      // 保存当前输入框草稿到被切走的会话
+      const input = session.mode === 'code'
+        ? document.getElementById('code-chat-input')
+        : session.mode === 'babe'
+          ? document.getElementById('babe-chat-input')
+          : chatInput;
+      if (input) session.draft = input.value || '';
+    }
     if (typeof renderAllSessionTabs === 'function') renderAllSessionTabs();
   });
   AppBus.on('session-closed', () => {
@@ -462,6 +505,108 @@
     renderSessionTabs('chat');
     renderSessionTabs('code');
     renderSessionTabs('babe');
+  }
+
+  // ---- 会话交互卡片（问卷/游戏邀请等）跨切换保留 ----
+  function sessionContainerEl(session) {
+    if (!session) return null;
+    if (session.mode === 'code') return document.getElementById('code-chat-messages');
+    if (session.mode === 'babe') return document.getElementById('babe-chat-messages');
+    return chatMessages;
+  }
+
+  // 会话激活后：把挂在离屏根节点上的交互卡片移回可见容器
+  function flushSessionUiRoot(session) {
+    if (!session || !session.uiRoot) return;
+    const container = sessionContainerEl(session);
+    if (!container) return;
+    while (session.uiRoot.firstChild) {
+      container.appendChild(session.uiRoot.firstChild);
+    }
+    requestAnimationFrame(() => {
+      const last = container.lastElementChild;
+      if (last && last.scrollIntoView) last.scrollIntoView({ block: 'end' });
+    });
+  }
+
+  // 会话切走前：把属于该会话的交互卡片从可见容器收回离屏根节点
+  function retractSessionUiRoot(session) {
+    if (!session || !session.uiRoot) return;
+    const container = sessionContainerEl(session);
+    if (!container) return;
+    const nodes = container.querySelectorAll(`[data-session-key="${cssEscape(session.key)}"]`);
+    for (const node of nodes) session.uiRoot.appendChild(node);
+  }
+
+  // 创建交互卡片时使用：卡片挂到所属会话的离屏根节点，
+  // 会话激活时立即冲入可见容器，保证后台会话的卡片不丢、不串到别的会话。
+  function appendSessionCard(session, node) {
+    if (!session || !node) return;
+    node.dataset.sessionKey = session.key;
+    session.uiRoot.appendChild(node);
+    if (session.active) flushSessionUiRoot(session);
+  }
+
+  // 切回会话时重放后台期间缓冲的瞬时 UI 事件（文件呈递/命运牌/牌阵）
+  function applyBufferedUiEvents(session) {
+    if (!session || !Array.isArray(session.uiEvents) || !session.uiEvents.length) return;
+    for (const ev of session.uiEvents) {
+      try {
+        if (ev.type === 'present-file' && typeof addFilePresentCard === 'function') {
+          addFilePresentCard(ev.data);
+        } else if (ev.type === 'tarot-spread' && typeof addTarotSpreadToChat === 'function') {
+          addTarotSpreadToChat(ev.result);
+        } else if (ev.type === 'tarot' && ev.data && agentTarot) {
+          // 后台期间命运牌文本未写入聊天记录，这里以 UI-only 方式补渲染
+          const data = ev.data;
+          const iconHtml = data.icon ? `<i class="fa-solid ${data.icon}"></i>` : '<i class="fa-solid fa-star"></i>';
+          const _lang = (typeof i18nGetLanguage === 'function' ? i18nGetLanguage() : 'zh-CN');
+          const _isZh = (_lang === 'zh-CN');
+          const position = data.isReversed ? (_isZh ? '逆位' : 'Reversed') : (_isZh ? '正位' : 'Upright');
+          const _cardName = _isZh ? data.name : (data.nameEn || data.name);
+          const meaning = data.isReversed ? data.meaningOfReversed : data.meaningOfUpright;
+          const eSource = data.entropySource || 'CSPRNG';
+          const isTRNG = eSource.startsWith('TRNG');
+          const trngBadge = isTRNG ? '<span class="trng-badge" style="margin-left:6px;font-size:9px;padding:1px 6px"><i class="fa-solid fa-satellite-dish"></i> TRNG</span>' : '';
+          agentTarot.innerHTML = `${iconHtml}<span>${_isZh ? '命运之牌：' : 'Tarot: '}${_cardName}(${position})</span>${trngBadge}`;
+          agentTarot.title = `${_cardName}(${position}) - ${meaning || ''} [${eSource}]`;
+          const entropyNote = isTRNG ? (_isZh ? ' [TRNG 硬件真随机]' : ' [TRNG Hardware Random]') : '';
+          addSystemMessage(`${_isZh ? '抽取了命运之牌：' : 'Drew Tarot: '}${_cardName}(${position})${_isZh ? '（' : ' ('}${data.nameEn}${_isZh ? '）' : ')'}${entropyNote}\n${meaning || ''}`, { persist: false });
+        }
+      } catch { /* ignore */ }
+    }
+  }
+
+  // 切回会话时同步发送/停止按钮与状态显示
+  function syncSessionControls(mode, session) {
+    const ag = session?.agent;
+    if (mode === 'chat') {
+      if (ag && ag.running) {
+        if (typeof setSendButtons === 'function') setSendButtons(true);
+        if (agentStatus) {
+          agentStatus.innerHTML = '<i class="fa-solid fa-circle"></i> 工作中...';
+          agentStatus.className = 'agent-status working';
+        }
+        if (typeof addThinkingIndicator === 'function' && !document.getElementById('thinking-indicator')) {
+          addThinkingIndicator();
+        }
+      } else {
+        if (typeof setSendButtons === 'function') setSendButtons(false);
+        if (agentStatus) {
+          agentStatus.innerHTML = '<i class="fa-solid fa-circle"></i> 待命中';
+          agentStatus.className = 'agent-status';
+        }
+      }
+      const att = session?.attention;
+      if (att && agentStatus) {
+        agentStatus.innerHTML = `<i class="fa-solid fa-circle"></i> ${escapeHtml(att.label || '等待处理')}`;
+        agentStatus.className = 'agent-status working';
+      }
+    } else if (mode === 'code') {
+      if (typeof refreshCodeStopButton === 'function') refreshCodeStopButton();
+    } else if (mode === 'babe') {
+      if (typeof refreshBabeStopButton === 'function') refreshBabeStopButton();
+    }
   }
 
   /**
@@ -660,6 +805,22 @@
       if (session.status === SessionStatus.WAITING_TOOL_AUTH && session.pendingToolAuth) {
         showToolAuthModal(session.pendingToolAuth.toolName, session.pendingToolAuth.category, session.agent);
       }
+      // 恢复本会话的输入草稿
+      const draftInput = mode === 'code'
+        ? document.getElementById('code-chat-input')
+        : mode === 'babe'
+          ? document.getElementById('babe-chat-input')
+          : chatInput;
+      if (draftInput) {
+        draftInput.value = session.draft || '';
+        draftInput.style.height = 'auto';
+      }
+      // 重放后台期间缓冲的瞬时卡片（文件呈递/命运牌/牌阵）
+      applyBufferedUiEvents(session);
+      // 把问卷/游戏邀请等交互卡片移回可见容器
+      flushSessionUiRoot(session);
+      // 同步发送/停止按钮与状态显示
+      syncSessionControls(mode, session);
       updateContextProgress();
     } catch (e) {
       // 会话内容回放失败不应阻断激活流程，保证标签栏与页面状态仍能刷新

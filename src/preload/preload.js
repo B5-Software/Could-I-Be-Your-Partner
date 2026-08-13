@@ -79,6 +79,9 @@ contextBridge.exposeInMainWorld('api', {
   memoryDelete: (id) => ipcRenderer.invoke('memory:delete', id),
   memoryUpdate: (id, data) => ipcRenderer.invoke('memory:update', { id, data }),
 
+  // 历史搜索（标题/内容，主进程分页扫描）
+  historySearch: (opts) => ipcRenderer.invoke('history:search', opts),
+
   // Knowledge Base
   knowledgeSearch: (q) => ipcRenderer.invoke('knowledge:search', q),
   knowledgeAdd: (item) => ipcRenderer.invoke('knowledge:add', item),

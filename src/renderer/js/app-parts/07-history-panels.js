@@ -279,13 +279,18 @@
         stride: 78,
         overscan: 8
       });
-      historySearch = (typeof window.makeHistorySearch === 'function') ? window.makeHistorySearch({
+      historySearch = (typeof window.makeHistorySearchV2 === 'function') ? window.makeHistorySearchV2({
         key: 'history',
         inputId: 'history-search-input',
         countId: 'history-search-count',
+        listId: 'history-list',
+        searchMode: 'chat',
         getRawItems: () => historyRawItems,
-        getSearchText: (item) => `${item.title || ''} ${formatHistoryTime(item)} ${item.messageCount || ''}`,
-        onFilterChange: (filtered) => HistoryList.setItems(list, filtered)
+        getTitleText: (item) => item.title || '',
+        renderItem: renderHistoryItem,
+        renderContentItem: renderHistoryContentItem,
+        onAction: handleHistoryAction,
+        restoreItems: () => HistoryList.setItems(list, historyRawItems)
       }) : null;
     }
     return true;
@@ -303,6 +308,32 @@
         <div class="history-info">
           <div class="history-title">${escapeHtml(h.title || '未命名对话')} ${sessionStatusBadge(status, lastError, attention)}</div>
           <div class="history-time">${timeStr}${countText}</div>
+        </div>
+        <div class="history-actions">
+          <button class="btn-icon" data-action="continue" title="继续对话"><i class="fa-solid fa-play"></i></button>
+          <button class="btn-icon" data-action="open-workspace" title="打开工作目录"><i class="fa-solid fa-folder-open"></i></button>
+          <button class="btn-icon" data-action="export-json" title="导出为JSON"><i class="fa-solid fa-file-code"></i></button>
+          <button class="btn-icon" data-action="export-md" title="导出为Markdown"><i class="fa-solid fa-file-lines"></i></button>
+          <button class="btn-icon" data-action="delete" title="删除"><i class="fa-solid fa-trash-can"></i></button>
+        </div>
+      </div>`;
+  }
+
+  function renderHistoryContentItem(h) {
+    const timeStr = formatHistoryTime(h);
+    const countText = h.messageCount ? ` · ${h.messageCount} 条消息` : '';
+    const live = (typeof getSessionLiveState === 'function') ? getSessionLiveState('chat', h) : null;
+    const snippets = Array.isArray(h.snippets) ? h.snippets.slice(0, 10) : [];
+    const snippetsHtml = snippets.map(s => `<div class="history-snippet">${(typeof buildSearchSnippetHtml === 'function') ? buildSearchSnippetHtml(s) : escapeHtml(s.hit || '')}</div>`).join('');
+    const moreHtml = (h.snippetTotal && h.snippetTotal > 10)
+      ? `<div class="history-snippet-more">还有 ${h.snippetTotal - 10} 处命中</div>`
+      : '';
+    return `
+      <div class="history-item history-item-content" data-id="${escapeHtml(h.id)}">
+        <div class="history-info">
+          <div class="history-title">${escapeHtml(h.title || '未命名对话')} ${sessionStatusBadge(live ? live.status : h.status, live ? live.lastError : h.lastError, live ? live.attention : null)}</div>
+          <div class="history-time">${timeStr}${countText}</div>
+          <div class="history-snippets">${snippetsHtml}${moreHtml}</div>
         </div>
         <div class="history-actions">
           <button class="btn-icon" data-action="continue" title="继续对话"><i class="fa-solid fa-play"></i></button>
@@ -554,7 +585,7 @@
                 try { args = JSON.parse(tc.function?.arguments || '{}'); } catch {}
                 const toolDef = TOOL_DEFINITIONS.find(t => t.name === toolName);
                 const displayName = toolDef?.desc || toolName;
-                addToolCallToChat(displayName, toolName, args);
+                addToolCallToChat(displayName, toolName, args, tc.id);
                 if (tc.id) toolCallMap[tc.id] = toolName;
               }
             }
@@ -564,7 +595,7 @@
             let result = msg.content;
             if (Array.isArray(result)) result = extractTextContent(result);
             try { result = JSON.parse(result); } catch {}
-            updateToolCallResult(toolName, result);
+            updateToolCallResult(toolName, result, false, msg.tool_call_id);
           } else if (msg.role === 'system') {
             // 回放历史时显示系统消息（不重复持久化）
             addSystemMessage(msg.content, { persist: false });
@@ -1290,7 +1321,11 @@
 
       msg.innerHTML = `<div class="message-avatar">${avatarHTML}</div>`;
       msg.appendChild(body);
-      appendChatElement(msg);
+      if (ownerSession && typeof appendSessionCard === 'function') {
+        appendSessionCard(ownerSession, msg);
+      } else {
+        appendChatElement(msg);
+      }
 
       const baseOptions = ['选项A', '选项B', '选项C'];
 

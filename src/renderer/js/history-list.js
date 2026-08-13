@@ -269,4 +269,230 @@
     }
     return api;
   };
+
+  // 高亮片段：主进程返回 {pre, hit, post}，这里拼出带 <mark> 的 HTML
+  window.buildSearchSnippetHtml = function (snippet) {
+    if (!snippet) return '';
+    return escapeHtml(String(snippet.pre || ''))
+      + '<mark>' + escapeHtml(String(snippet.hit || '')) + '</mark>'
+      + escapeHtml(String(snippet.post || ''));
+  };
+
+  /**
+   * 历史搜索 V2：标题/内容两种模式 + 每组 10 条分页。
+   * - 标题模式：客户端过滤（瞬间完成）
+   * - 内容模式：主进程异步扫描历史文件，按时间新→旧、每次 10 条返回，
+   *   渲染器分批渲染，绝不把全部内容一次性灌进 DOM。
+   */
+  window.makeHistorySearchV2 = function (config) {
+    if (!config || !config.inputId || !config.listId) return null;
+    const input = document.getElementById(config.inputId);
+    const listEl = document.getElementById(config.listId);
+    if (!input || !listEl) return null;
+    const countEl = document.getElementById(config.countId);
+    const PAGE_SIZE = 10;
+    let query = '';
+    let field = 'title'; // 'title' | 'content'
+    let page = 0;
+    let total = 0;
+    let items = [];
+    let requestSeq = 0;
+
+    // ---- 注入 标题/内容 切换 + 分页控件 ----
+    const bar = input.closest('.search-bar') || input.parentElement;
+    const modeWrap = document.createElement('span');
+    modeWrap.className = 'history-search-mode';
+    const btnTitle = document.createElement('button');
+    btnTitle.type = 'button';
+    btnTitle.dataset.f = 'title';
+    btnTitle.textContent = '标题';
+    const btnContent = document.createElement('button');
+    btnContent.type = 'button';
+    btnContent.dataset.f = 'content';
+    btnContent.textContent = '内容';
+    modeWrap.append(btnTitle, btnContent);
+
+    const pagerWrap = document.createElement('span');
+    pagerWrap.className = 'history-search-pager hidden';
+    const btnPrev = document.createElement('button');
+    btnPrev.type = 'button';
+    btnPrev.dataset.p = 'prev';
+    btnPrev.title = '上一组';
+    btnPrev.textContent = '‹';
+    const pageInfo = document.createElement('span');
+    pageInfo.className = 'hs-page-info';
+    const btnNext = document.createElement('button');
+    btnNext.type = 'button';
+    btnNext.dataset.p = 'next';
+    btnNext.title = '下一组';
+    btnNext.textContent = '›';
+    pagerWrap.append(btnPrev, pageInfo, btnNext);
+    bar.appendChild(modeWrap);
+    bar.appendChild(pagerWrap);
+
+    function setField(f) {
+      field = f;
+      btnTitle.classList.toggle('active', f === 'title');
+      btnContent.classList.toggle('active', f === 'content');
+    }
+
+    function updatePager() {
+      if (!query) {
+        pagerWrap.classList.add('hidden');
+        return;
+      }
+      pagerWrap.classList.remove('hidden');
+      const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+      pageInfo.textContent = `${page + 1}/${pages}`;
+      btnPrev.disabled = page <= 0;
+      btnNext.disabled = page + 1 >= pages;
+    }
+
+    function updateCount() {
+      if (!countEl) return;
+      countEl.textContent = query ? `${total} 条` : '';
+    }
+
+    function delegate() {
+      listEl.onclick = (e) => {
+        const btn = e.target.closest('[data-action]');
+        if (!btn) return;
+        const itemEl = btn.closest('[data-id]');
+        const id = itemEl ? itemEl.dataset.id : btn.dataset.id;
+        const item = items.find(it => String(it.id) === String(id));
+        if (typeof config.onAction === 'function') config.onAction(btn.dataset.action, item, e);
+      };
+    }
+
+    function renderEmpty(message) {
+      listEl.innerHTML = `<div class="empty-state"><i class="fa-solid fa-magnifying-glass"></i><p>${escapeHtml(message || '没有匹配的历史记录')}</p></div>`;
+    }
+
+    function renderBusy() {
+      listEl.innerHTML = '<div class="empty-state"><i class="fa-solid fa-spinner fa-spin"></i><p>正在搜索内容…</p></div>';
+    }
+
+    function render() {
+      if (!query) {
+        if (typeof config.restoreItems === 'function') config.restoreItems();
+        updateCount();
+        updatePager();
+        return;
+      }
+      if (!items.length) {
+        renderEmpty(field === 'content' ? '没有匹配的内容' : '没有匹配的标题');
+      } else {
+        const html = items.map(it => (field === 'content' && typeof config.renderContentItem === 'function')
+          ? config.renderContentItem(it)
+          : config.renderItem(it)).join('');
+        if (typeof HistoryList !== 'undefined' && typeof HistoryList.showMessage === 'function') {
+          HistoryList.showMessage(listEl, html);
+        } else {
+          listEl.innerHTML = html;
+        }
+        delegate();
+      }
+      updateCount();
+      updatePager();
+    }
+
+    async function run() {
+      if (!query) { render(); return; }
+      const seq = ++requestSeq;
+      if (field === 'title') {
+        const raw = (typeof config.getRawItems === 'function') ? config.getRawItems() : [];
+        const getTitle = typeof config.getTitleText === 'function'
+          ? config.getTitleText
+          : (it => (it && it.title) || '');
+        const filtered = raw.filter(it => String(getTitle(it) || '').toLowerCase().includes(query));
+        total = filtered.length;
+        items = filtered.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE);
+        render();
+        return;
+      }
+      if (!window.api || typeof window.api.historySearch !== 'function') {
+        renderEmpty('当前版本不支持内容搜索');
+        return;
+      }
+      renderBusy();
+      try {
+        const res = await window.api.historySearch({
+          mode: config.searchMode || 'chat',
+          query,
+          field: 'content',
+          offset: page * PAGE_SIZE,
+          limit: PAGE_SIZE,
+          workspacePath: (typeof config.getWorkspacePath === 'function') ? config.getWorkspacePath() : null
+        });
+        if (seq !== requestSeq) return;
+        if (!res || !res.ok) {
+          renderEmpty((res && res.error) || '搜索失败');
+          return;
+        }
+        total = Number(res.total) || 0;
+        items = Array.isArray(res.results) ? res.results : [];
+      } catch (e) {
+        if (seq !== requestSeq) return;
+        renderEmpty('搜索失败：' + (e && e.message ? e.message : e));
+        return;
+      }
+      render();
+    }
+
+    input.addEventListener('input', () => {
+      query = input.value.trim().toLowerCase();
+      page = 0;
+      run();
+    });
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        close();
+      }
+    });
+    btnTitle.addEventListener('click', () => {
+      if (field === 'title') return;
+      setField('title');
+      page = 0;
+      run();
+    });
+    btnContent.addEventListener('click', () => {
+      if (field === 'content') return;
+      setField('content');
+      page = 0;
+      run();
+    });
+    btnPrev.addEventListener('click', () => {
+      if (page > 0) { page--; run(); }
+    });
+    btnNext.addEventListener('click', () => {
+      if ((page + 1) * PAGE_SIZE < total) { page++; run(); }
+    });
+
+    function open() {
+      input.focus({ preventScroll: true });
+      try { input.scrollIntoView({ block: 'nearest' }); } catch { /* ignore */ }
+      Promise.resolve().then(() => input.focus({ preventScroll: true }));
+    }
+    function close() {
+      query = '';
+      input.value = '';
+      page = 0;
+      setField('title');
+      input.blur();
+      run();
+    }
+    const api = {
+      open,
+      close,
+      clear: close,
+      refresh: () => { page = 0; run(); },
+      getQuery: () => query
+    };
+    if (config.key && typeof window.registerPageSearch === 'function') {
+      window.registerPageSearch(config.key, api);
+    }
+    setField('title');
+    return api;
+  };
 })();

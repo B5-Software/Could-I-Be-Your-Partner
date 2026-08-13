@@ -1018,6 +1018,101 @@
   padding-right: 110px;
 }
 
+/* 历史搜索：标题/内容 切换 + 分页控件 */
+.history-search-mode {
+  display: inline-flex;
+  gap: 2px;
+  margin-top: 6px;
+  background: var(--bg-tertiary);
+  border-radius: 6px;
+  padding: 2px;
+}
+.history-search-mode button {
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 12px;
+  padding: 4px 10px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+.history-search-mode button.active {
+  background: var(--accent);
+  color: #fff;
+}
+.history-search-pager {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  margin-left: 8px;
+  vertical-align: top;
+}
+.history-search-pager button {
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+}
+.history-search-pager button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.history-search-pager .hs-page-info {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  min-width: 40px;
+  text-align: center;
+}
+
+/* 内容搜索：命中片段展开显示 */
+.history-list-virtual .history-item.history-item-content {
+  height: auto;
+  min-height: 70px;
+  overflow: visible;
+  align-items: flex-start;
+}
+.history-item.history-item-content .history-info {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+}
+.history-snippets {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 6px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+.history-snippet {
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+  background: var(--bg-tertiary);
+  border-radius: 6px;
+  padding: 5px 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.history-snippet mark {
+  background: var(--accent-bg);
+  color: var(--accent);
+  border-radius: 2px;
+  padding: 0 1px;
+}
+.history-snippet-more {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  margin-top: 2px;
+}
+
 /* 设置搜索：命中的设置项 */
 .setting-item.settings-search-match {
   outline: 1px solid var(--accent);

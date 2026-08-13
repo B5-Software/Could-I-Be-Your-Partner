@@ -2047,7 +2047,7 @@ ${toolListSection}`;
           }
 
           if (toolName === '__reoptimizeToolSelection') {
-            if (this.onToolCall) this.onToolCall(toolName, args, 'calling');
+            if (this.onToolCall) this.onToolCall(toolName, args, 'calling', undefined, tc.id);
             const reasonText = typeof args?.reason === 'string' ? args.reason : '';
             const optimizeRes = await this.optimizeToolsForConversation(this.getLatestUserMessageText(), reasonText || '运行中重优化');
             const resultStr = JSON.stringify({
@@ -2057,12 +2057,12 @@ ${toolListSection}`;
               allEnabled: this.getEnabledToolDefinitions().map(t => t.name)
             });
             this.contextManager.addToolResult(tc.id, toolName, resultStr);
-            if (this.onToolCall) this.onToolCall(toolName, args, 'done', JSON.parse(resultStr));
+            if (this.onToolCall) this.onToolCall(toolName, args, 'done', JSON.parse(resultStr), tc.id);
             continue;
           }
 
           if (toolName === '__disableAutoOptimize') {
-            if (this.onToolCall) this.onToolCall(toolName, args, 'calling');
+            if (this.onToolCall) this.onToolCall(toolName, args, 'calling', undefined, tc.id);
             this.sessionAutoOptimizeDisabled = true;
             this.optimizedToolNames = null; // 清除优化结果，恢复全部工具
             this.contextManager.setSystemPrompt(this.getSystemPrompt());
@@ -2072,7 +2072,7 @@ ${toolListSection}`;
               allEnabled: this.getEnabledToolDefinitions().map(t => t.name)
             });
             this.contextManager.addToolResult(tc.id, toolName, resultStr);
-            if (this.onToolCall) this.onToolCall(toolName, args, 'done', JSON.parse(resultStr));
+            if (this.onToolCall) this.onToolCall(toolName, args, 'done', JSON.parse(resultStr), tc.id);
             continue;
           }
 
@@ -2124,9 +2124,9 @@ ${toolListSection}`;
             // 单个 Task 调用：落到下面的常规顺序执行
           }
 
-          if (this.onToolCall) this.onToolCall(toolName, args, 'calling');
+          if (this.onToolCall) this.onToolCall(toolName, args, 'calling', undefined, tc.id);
           // 通知 UI（Code 模式用于显示工具调用卡片）
-          if (this.onMessage) this.onMessage('tool_call', { name: toolName, args });
+          if (this.onMessage) this.onMessage('tool_call', { name: toolName, args, callId: tc.id });
 
           // Check if sensitive
           const toolDef = TOOL_DEFINITIONS.find(t => t.name === toolName);
@@ -2142,7 +2142,7 @@ ${toolListSection}`;
             if (decision === 'deny' || !decision) {
               const result = JSON.stringify({ ok: false, error: '用户未授权使用此工具' });
               this.contextManager.addToolResult(tc.id, toolName, result);
-              if (this.onToolCall) this.onToolCall(toolName, args, 'denied');
+              if (this.onToolCall) this.onToolCall(toolName, args, 'denied', undefined, tc.id);
               continue;
             }
             // 'allow-once' 仅本次会话生效，不写入 settings
@@ -2193,7 +2193,7 @@ ${toolListSection}`;
             if (!approved) {
               const result = JSON.stringify({ ok: false, error: '用户拒绝了此操作' });
               this.contextManager.addToolResult(tc.id, toolName, result);
-              if (this.onToolCall) this.onToolCall(toolName, args, 'denied');
+              if (this.onToolCall) this.onToolCall(toolName, args, 'denied', undefined, tc.id);
               continue;
             }
           }
@@ -2205,12 +2205,12 @@ ${toolListSection}`;
           const displayResult = this._sanitizeToolResultForDisplay(toolResult);
 
           // 通知 UI 工具执行结果
-          if (this.onMessage) this.onMessage('tool-result', { name: toolName, result: displayResult });
+          if (this.onMessage) this.onMessage('tool-result', { name: toolName, result: displayResult, callId: tc.id });
 
           // 多模态工具结果：图片以 image_url 格式注入上下文，而非 base64 字符串
           if (toolResult && toolResult._multimodal && toolResult.imageUrl) {
             this.contextManager.addMultimodalToolResult(tc.id, toolName, toolResult.text, toolResult.imageUrl);
-            if (this.onToolCall) this.onToolCall(toolName, args, 'done', displayResult);
+            if (this.onToolCall) this.onToolCall(toolName, args, 'done', displayResult, tc.id);
             continue;
           }
 
@@ -2232,7 +2232,7 @@ ${toolListSection}`;
           }
           this.contextManager.addToolResult(tc.id, toolName, truncated);
 
-          if (this.onToolCall) this.onToolCall(toolName, args, 'done', displayResult);
+          if (this.onToolCall) this.onToolCall(toolName, args, 'done', displayResult, tc.id);
         }
 
         // 实时保存：每轮工具调用完成后立即持久化，防止进程异常导致丢失

@@ -2822,6 +2822,108 @@ ipcMain.handle('history:list', () => {
   } catch { return []; }
 });
 
+// ---- 历史搜索（标题/内容）----
+// field='title' 只匹配标题；field='content' 扫描各会话消息内容并生成关键词上下文片段。
+// 按时间新→旧排序，offset/limit 分页返回，避免把全部历史内容一次灌给渲染器。
+function _extractHistorySearchText(msg) {
+  if (!msg) return '';
+  if (msg.role === 'tool') return `${msg.name || ''} ${msg.content || ''}`;
+  if (typeof msg.content === 'string') return msg.content;
+  if (Array.isArray(msg.content)) {
+    return msg.content.map(p => (p && p.text) ? p.text : '').join(' ');
+  }
+  return '';
+}
+
+function _makeSearchSnippet(text, idx, len, radius = 40) {
+  const start = Math.max(0, idx - radius);
+  const end = Math.min(text.length, idx + len + radius);
+  return {
+    pre: (start > 0 ? '…' : '') + text.slice(start, idx),
+    hit: text.slice(idx, idx + len),
+    post: text.slice(idx + len, end) + (end < text.length ? '…' : '')
+  };
+}
+
+ipcMain.handle('history:search', async (_, opts = {}) => {
+  const mode = opts.mode || 'chat';
+  const field = opts.field === 'content' ? 'content' : 'title';
+  const query = String(opts.query || '').trim().toLowerCase();
+  const offset = Math.max(0, Number(opts.offset) || 0);
+  const limit = Math.min(50, Math.max(1, Number(opts.limit) || 10));
+  if (!query) return { ok: true, total: 0, results: [], hasMore: false };
+
+  let dir;
+  if (mode === 'code') {
+    dir = getCodeHistoryDir(opts.workspacePath || settings.codeMode?.lastWorkspace || null);
+    if (!dir) return { ok: false, error: '未打开 Code 工作区' };
+  } else if (mode === 'babe') {
+    dir = babeHistoryDir;
+  } else {
+    dir = historyDir;
+  }
+
+  try {
+    flushPendingHistorySaves();
+    const files = fs.readdirSync(dir).filter(f => f.endsWith('.json'));
+    const matches = [];
+    const SNIPPET_CAP = 30;
+    const MSG_SCAN_CAP = 800;
+    const MSG_LEN_CAP = 30000;
+    for (let fi = 0; fi < files.length; fi++) {
+      // 定期让出事件循环，避免扫描大量历史时阻塞主进程
+      if (fi % 8 === 0) await new Promise(r => setImmediate(r));
+      try {
+        const filePath = path.join(dir, files[fi]);
+        const data = JSON.parse(await fs.promises.readFile(filePath, 'utf-8'));
+        const id = files[fi].replace(/\.json$/, '');
+        const title = data.title || '未命名';
+        const updatedAt = data.updatedAt || data.ts || null;
+        const messages = Array.isArray(data.messages) ? data.messages : [];
+        if (field === 'title') {
+          if (!String(title).toLowerCase().includes(query)) continue;
+          matches.push({
+            id, title, updatedAt, messageCount: messages.length,
+            workspacePath: data.workspacePath || null, affection: data.affection ?? 0,
+            snippets: [], snippetTotal: 0
+          });
+        } else {
+          const snippets = [];
+          const scanLimit = Math.min(messages.length, MSG_SCAN_CAP);
+          for (let mi = 0; mi < scanLimit && snippets.length < SNIPPET_CAP; mi++) {
+            const text = _extractHistorySearchText(messages[mi]).slice(0, MSG_LEN_CAP);
+            if (!text) continue;
+            const lower = text.toLowerCase();
+            let idx = 0;
+            while (snippets.length < SNIPPET_CAP) {
+              idx = lower.indexOf(query, idx);
+              if (idx === -1) break;
+              snippets.push(_makeSearchSnippet(text, idx, query.length));
+              idx += Math.max(1, query.length);
+            }
+          }
+          if (!snippets.length) continue;
+          matches.push({
+            id, title, updatedAt, messageCount: messages.length,
+            workspacePath: data.workspacePath || null, affection: data.affection ?? 0,
+            snippets, snippetTotal: snippets.length
+          });
+        }
+      } catch { /* 单个历史文件损坏时跳过 */ }
+    }
+    matches.sort((a, b) => {
+      const ta = typeof a.updatedAt === 'number' ? a.updatedAt : (Date.parse(a.updatedAt) || 0);
+      const tb = typeof b.updatedAt === 'number' ? b.updatedAt : (Date.parse(b.updatedAt) || 0);
+      return tb - ta;
+    });
+    const total = matches.length;
+    const results = matches.slice(offset, offset + limit);
+    return { ok: true, total, hasMore: offset + limit < total, results };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
 ipcMain.handle('history:get', (_, id) => {
   flushPendingHistorySaves();
   const p = path.join(historyDir, `${id}.json`);

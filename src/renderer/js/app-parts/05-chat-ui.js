@@ -935,7 +935,7 @@
     imagePreviewModal.classList.remove('hidden');
   }
 
-  function addToolCallToChat(displayName, toolName, args) {
+  function addToolCallToChat(displayName, toolName, args, callId) {
     // runSubAgent 工具调用不在此显示卡片 — 子代理有独立的卡片和详情模态框
     // 避免 args 中过长的任务描述和 result 撑爆聊天页面
     if (toolName === 'runSubAgent') return;
@@ -944,6 +944,7 @@
     el.className = 'tool-call';
     el.id = `tool-${toolName}-${Date.now()}`;
     el.dataset.toolName = toolName;
+    if (callId) el.dataset.toolCallId = callId;
     // 截断 args：字符串值限制 200 字符，对象 JSON 限制 500 字符
     const argsStr = Object.entries(args || {})
       .map(([k, v]) => {
@@ -967,9 +968,17 @@
     });
   }
 
-  function updateToolCallResult(toolName, result, isError = false) {
-    const els = chatMessages.querySelectorAll(`[data-tool-name="${toolName}"]`);
-    const el = els[els.length - 1];
+  function updateToolCallResult(toolName, result, isError = false, callId = null) {
+    let el = null;
+    if (callId) {
+      // 同一轮多个同名工具调用时，必须按 callId 精确匹配，
+      // 否则多个结果会全部覆盖到最后一个卡片上。
+      el = chatMessages.querySelector(`[data-tool-call-id="${cssEscape(callId)}"]`);
+    }
+    if (!el) {
+      const els = chatMessages.querySelectorAll(`[data-tool-name="${toolName}"]`);
+      el = els[els.length - 1];
+    }
     if (!el) return;
     const header = el.querySelector('.tool-call-header i');
     const isFailure = isError || result?.ok === false;
@@ -1594,7 +1603,11 @@
         resolve({ accepted: false, game, agentCount: 0 });
       });
 
-      appendChatElement(msg);
+      if (ownerSession && typeof appendSessionCard === 'function') {
+        appendSessionCard(ownerSession, msg);
+      } else {
+        appendChatElement(msg);
+      }
 
       // Add right-click deletion support (counts as that turn's AI message)
       msg.addEventListener('contextmenu', (e) => {
