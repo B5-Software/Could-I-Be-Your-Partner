@@ -309,11 +309,13 @@ class Agent {
       ? `\n\n已加载技能目录：\n- ${this.skillsCatalog
           .map(skill => {
             const scripts = Array.isArray(skill?.scripts)
-              ? skill.scripts.filter(s => String(s?.name || s || '').toLowerCase().endsWith('.js')).map(s => s?.name || s)
+              ? skill.scripts.filter(s => /\.(js|mjs|cjs|py|sh|bash|zsh|ps1|bat|cmd)$/i.test(String(s?.name || s || ''))).map(s => s?.name || s)
               : [];
-            const scriptsText = scripts.length ? `（JS脚本: ${scripts.join(', ')}）` : '';
+            const scriptsText = scripts.length ? `（脚本: ${scripts.join(', ')}）` : '';
+            const allowedText = Array.isArray(skill?.allowedTools) && skill.allowedTools.length ? `（allowed-tools: ${skill.allowedTools.join(' ')}）` : '';
+            const compatibilityText = skill?.compatibility ? `（兼容: ${skill.compatibility}）` : '';
             const hasPrompt = skill.prompt ? ' [含prompt]' : '';
-            return `${skill.name || '未命名技能'}: ${skill.description || '无描述'}${scriptsText}${hasPrompt}`;
+            return `${skill.name || '未命名技能'}: ${skill.description || '无描述'}${scriptsText}${allowedText}${compatibilityText}${hasPrompt}`;
           })
           .join('\n- ')}`
       : '';
@@ -2615,13 +2617,35 @@ ${toolListSection}`;
           return normalizeOk(this.skillsCatalog, 'skills');
         }
         case 'makeSkill': {
-          const res = await window.api.createSkill({ name: args.name, description: args.description, prompt: args.prompt });
+          const payload = { name: args.name, description: args.description, prompt: args.prompt };
+          if (args.license !== undefined) payload.license = args.license;
+          if (args.compatibility !== undefined) payload.compatibility = args.compatibility;
+          if (args.allowedTools !== undefined) {
+            payload.allowedTools = Array.isArray(args.allowedTools)
+              ? args.allowedTools
+              : String(args.allowedTools || '').split(/[\s,]+/).map(s => s.trim()).filter(Boolean);
+          }
+          if (args.metadata !== undefined) payload.metadata = args.metadata && typeof args.metadata === 'object' ? args.metadata : {};
+          if (args.runtime !== undefined) payload.runtime = args.runtime;
+          if (Array.isArray(args.scripts)) payload.scripts = args.scripts;
+          const res = await window.api.createSkill(payload);
           await this.refreshSkillsCatalog();
           this.contextManager.setSystemPrompt(this.getSystemPrompt());
           return normalizeOk(res, 'skill');
         }
         case 'updateSkill': {
-          const res = await window.api.updateSkill(args.id, { name: args.name, description: args.description, prompt: args.prompt });
+          const payload = { name: args.name, description: args.description, prompt: args.prompt };
+          if (args.license !== undefined) payload.license = args.license;
+          if (args.compatibility !== undefined) payload.compatibility = args.compatibility;
+          if (args.allowedTools !== undefined) {
+            payload.allowedTools = Array.isArray(args.allowedTools)
+              ? args.allowedTools
+              : String(args.allowedTools || '').split(/[\s,]+/).map(s => s.trim()).filter(Boolean);
+          }
+          if (args.metadata !== undefined) payload.metadata = args.metadata && typeof args.metadata === 'object' ? args.metadata : {};
+          if (args.runtime !== undefined) payload.runtime = args.runtime;
+          if (Array.isArray(args.scripts)) payload.scripts = args.scripts;
+          const res = await window.api.updateSkill(args.id, payload);
           await this.refreshSkillsCatalog();
           this.contextManager.setSystemPrompt(this.getSystemPrompt());
           return normalizeOk(res, 'skill');
@@ -2637,21 +2661,38 @@ ${toolListSection}`;
             const nameText = String(item?.name || item || '');
             return nameText === scriptName;
           });
-          const scriptPath = String(scriptItem?.path || scriptItem || '');
-          if (!scriptPath || !scriptPath.toLowerCase().endsWith('.js')) {
-            return { ok: false, error: typeof i18nToolReturn === 'function' ? i18nToolReturn('js_only_skill', '仅支持运行 .js 技能脚本') : '仅支持运行 .js 技能脚本' };
+          if (!scriptItem) {
+            return { ok: false, error: `技能 ${skill.name} 中不存在脚本 ${scriptName}` };
           }
-          const readRes = await window.api.readFile(scriptPath);
-          if (!readRes?.ok) return readRes;
-          // Choose runtime: 'node' for scripts needing require/fs/path/Buffer; 'browser' for sandboxed pure JS.
-          // Skill script entries may declare runtime explicitly; otherwise infer from script content.
-          const code = readRes.content || '';
+          const scriptPath = String(scriptItem?.path || '').trim();
+          let code = String(scriptItem?.code || '');
+          if (!code && scriptPath) {
+            const readRes = await window.api.readFile(scriptPath);
+            if (!readRes?.ok) return readRes;
+            code = readRes.content || '';
+          }
+          const nameForType = String(scriptItem?.name || scriptPath || '');
+          const ext = (nameForType.split('.').pop() || '').toLowerCase();
           const declaredRuntime = String(scriptItem?.runtime || '').toLowerCase();
-          const needsNode = declaredRuntime === 'node'
-            || (!declaredRuntime && /\brequire\s*\(|\bprocess\.\b|\bfs\.\b|\bpath\.\b|\bBuffer\b|__dirname|__filename|\bimport\s+/.test(code));
-          const runRes = needsNode
-            ? await window.api.runNodeJS(code)
-            : await window.api.runJS(code);
+          let runRes;
+          if (ext === 'py' || ext === 'pyw' || declaredRuntime === 'python') {
+            if (typeof window.api.runPython !== 'function') {
+              return { ok: false, error: '当前版本不支持 Python 脚本，请升级应用' };
+            }
+            runRes = await window.api.runPython(code);
+          } else if (ext === 'sh' || ext === 'bash' || ext === 'zsh' || ext === 'ps1' || ext === 'bat' || ext === 'cmd' || declaredRuntime === 'shell') {
+            runRes = await window.api.runShell(code);
+          } else if (ext === 'js' || ext === 'mjs' || ext === 'cjs' || declaredRuntime === 'javascript' || declaredRuntime === 'node') {
+            const needsNode = declaredRuntime === 'node'
+              || ext === 'mjs'
+              || ext === 'cjs'
+              || (!declaredRuntime && /\brequire\s*\(|\bprocess\.\b|\bfs\.\b|\bpath\.\b|\bBuffer\b|__dirname|__filename|\bimport\s+/.test(code));
+            runRes = needsNode
+              ? await window.api.runNodeJS(code)
+              : await window.api.runJS(code);
+          } else {
+            return { ok: false, error: '仅支持运行 .js、.py、.sh、.ps1、.bat 等 Skill 脚本' };
+          }
           return normalizeOk(runRes);
         }
         case 'activateSkill': {

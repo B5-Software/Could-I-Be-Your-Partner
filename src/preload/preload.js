@@ -135,6 +135,7 @@ contextBridge.exposeInMainWorld('api', {
   runJS: (code) => ipcRenderer.invoke('code:runJS', code),
   runNodeJS: (code) => ipcRenderer.invoke('code:runNodeJS', code),
   runShell: (script) => ipcRenderer.invoke('code:runShell', script),
+  runPython: (code) => ipcRenderer.invoke('code:runPython', code),
 
   // Image Generation
   generateImage: (prompt, workspacePath) => ipcRenderer.invoke('image:generate', prompt, workspacePath),
@@ -157,6 +158,12 @@ contextBridge.exposeInMainWorld('api', {
   createSkill: (s) => ipcRenderer.invoke('skills:create', s),
   deleteSkill: (id) => ipcRenderer.invoke('skills:delete', id),
   updateSkill: (id, data) => ipcRenderer.invoke('skills:update', id, data),
+  openSkillEditor: (payload) => ipcRenderer.invoke('skill-editor:open', payload),
+  onSkillsChanged: (cb) => {
+    const listener = () => cb();
+    ipcRenderer.on('skills:changed', listener);
+    return () => ipcRenderer.removeListener('skills:changed', listener);
+  },
 
   // ---- Code Mode ----
   codeOpenWorkspace: () => ipcRenderer.invoke('code:openWorkspace'),

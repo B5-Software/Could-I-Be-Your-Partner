@@ -1,6 +1,6 @@
 {
   "name": "could-i-be-your-partner",
-  "version": "1.6.0-alpha.11",
+  "version": "1.6.0-alpha.13",
   "description": "全自动AI Agent，帮助完成一切任务",
   "license": "GPL-3.0-or-later",
   "main": "src/main/main.js",
@@ -51,6 +51,7 @@
       "node_modules/@xterm/xterm/lib/**/*",
       "node_modules/@xterm/addon-fit/lib/**/*",
       "node_modules/sherpa-onnx-node/**/*",
+      "node_modules/sherpa-onnx-darwin-arm64/**/*",
       "node_modules/sherpa-onnx-win-x64/**/*",
       "node_modules/pinyin-pro/**/*"
     ],
@@ -148,5 +149,14 @@
     "serialport": "^13.0.0",
     "sherpa-onnx-node": "^1.13.4",
     "tesseract.js": "^6.0.1"
+  },
+  "allowScripts": {
+    "better-sqlite3@12.11.1": true,
+    "node-pty@1.1.0": true,
+    "@serialport/bindings-cpp@13.0.1": true,
+    "@serialport/bindings-cpp@13.0.0": true,
+    "fsevents@2.3.2": true,
+    "tesseract.js@6.0.1": true,
+    "electron-winstaller@5.4.0": true
   }
 }

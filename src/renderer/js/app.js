@@ -287,6 +287,22 @@
   // Init agent
   const agent = new Agent();
 
+  // Skill 编辑器保存/创建/删除后，主窗口自动刷新目录和当前技能页。
+  if (typeof window.api.onSkillsChanged === 'function') {
+    window.api.onSkillsChanged(async () => {
+      if (typeof agent.refreshSkillsCatalog === 'function') {
+        try { await agent.refreshSkillsCatalog(); } catch { /* ignore */ }
+      }
+      if (agent.contextManager && typeof agent.getSystemPrompt === 'function') {
+        agent.contextManager.setSystemPrompt(agent.getSystemPrompt());
+      }
+      const activePage = document.querySelector('.page.active');
+      if (activePage && activePage.id === 'page-skills' && typeof loadSkillsPage === 'function') {
+        loadSkillsPage();
+      }
+    });
+  }
+
   // ---- IPC Dialog Listeners ----
   // 监听main进程的确认对话框请求
   window.api.onShowConfirmDialog(async (message) => {
@@ -5595,6 +5611,13 @@ window.api.onWebControlSendMessage(async (message) => {
     if (end < 0) return { data, body: text };
     const fm = text.slice(4, end).split(/\r?\n/);
     let currentArrayKey = '';
+    const parseScalar = value => {
+      const trimmed = value.trim();
+      if ((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
+        return trimmed.slice(1, -1);
+      }
+      return trimmed;
+    };
     fm.forEach(line => {
       const kv = line.match(/^([A-Za-z0-9_-]+)\s*:\s*(.*)$/);
       if (kv) {
@@ -5604,15 +5627,22 @@ window.api.onWebControlSendMessage(async (message) => {
           data[key] = [];
           currentArrayKey = key;
         } else {
-          data[key] = value.replace(/^['"]|['"]$/g, '');
+          data[key] = parseScalar(value);
           currentArrayKey = '';
         }
+        return;
+      }
+      const nested = line.match(/^(\s+)([A-Za-z0-9_-]+)\s*:\s*(.*)$/);
+      if (nested && currentArrayKey) {
+        const parent = data[currentArrayKey];
+        if (!parent || Array.isArray(parent)) data[currentArrayKey] = {};
+        data[currentArrayKey][nested[2].trim()] = parseScalar(nested[3]);
         return;
       }
       const arr = line.match(/^\s*-\s*(.+)$/);
       if (arr && currentArrayKey) {
         if (!Array.isArray(data[currentArrayKey])) data[currentArrayKey] = [];
-        data[currentArrayKey].push(arr[1].trim().replace(/^['"]|['"]$/g, ''));
+        data[currentArrayKey].push(parseScalar(arr[1]));
       }
     });
     const body = text.slice(end + 4).replace(/^\r?\n/, '');
@@ -5671,10 +5701,14 @@ window.api.onWebControlSendMessage(async (message) => {
       name,
       description,
       prompt,
+      license: String(meta.license || ''),
+      compatibility: String(meta.compatibility || ''),
+      allowedTools: String(meta['allowed-tools'] || meta.allowedTools || '').split(/[\s,]+/).map(s => s.trim()).filter(Boolean),
+      metadata: meta.metadata && typeof meta.metadata === 'object' && !Array.isArray(meta.metadata) ? meta.metadata : {},
       type: 'standard',
       sourceType: 'imported-skill-md',
       sourcePath: skillMdPath,
-      runtime: 'javascript',
+      runtime: String(meta.runtime || 'javascript'),
       scripts,
       standard: {
         whenToUse,
@@ -5690,18 +5724,26 @@ window.api.onWebControlSendMessage(async (message) => {
     const scriptsDir = joinPath(skillRootDir, 'scripts');
     const listResult = await window.api.listDirectory(scriptsDir);
     if (!listResult?.ok || !Array.isArray(listResult.entries)) return [];
+    const shellExts = new Set(['sh', 'bash', 'zsh', 'ps1', 'bat', 'cmd']);
     return listResult.entries
-      .filter(entry => entry?.isFile && /\.js$/i.test(entry.name || ''))
-      .map(entry => ({ name: entry.name, path: joinPath(scriptsDir, entry.name) }));
+      .filter(entry => entry?.isFile && /\.(js|mjs|cjs|py|sh|bash|zsh|ps1|bat|cmd)$/i.test(entry.name || ''))
+      .map(entry => {
+        const ext = (entry.name.split('.').pop() || '').toLowerCase();
+        const runtime = ext === 'py' ? 'python'
+          : shellExts.has(ext) ? 'shell'
+            : (ext === 'mjs' || ext === 'cjs') ? 'node'
+              : 'javascript';
+        return { name: entry.name, path: joinPath(scriptsDir, entry.name), runtime };
+      });
   }
 
   function getSkillSummaryMeta(skill) {
-    const scriptCount = Array.isArray(skill?.scripts) ? skill.scripts.filter(s => /\.js$/i.test(String(s?.name || s || ''))).length : 0;
+    const scriptCount = Array.isArray(skill?.scripts) ? skill.scripts.filter(s => /\.(js|mjs|cjs|py|sh|bash|zsh|ps1|bat|cmd)$/i.test(String(s?.name || s || ''))).length : 0;
     let typeLabel;
     if (skill?.bundled) typeLabel = '内置技能';
     else if (skill?.type === 'standard') typeLabel = '标准 Skill';
     else typeLabel = '自定义';
-    return `${typeLabel}${scriptCount > 0 ? ` · JS脚本 ${scriptCount}` : ''}`;
+    return `${typeLabel}${scriptCount > 0 ? ` · 脚本 ${scriptCount}` : ''}`;
   }
 
   async function importStandardSkillFile(skillMdPath) {
@@ -5749,8 +5791,8 @@ window.api.onWebControlSendMessage(async (message) => {
         ? '<span class="skill-badge skill-badge-builtin">内置</span>'
         : (isOverriding ? '<span class="skill-badge skill-badge-override">覆盖内置</span>' : '');
       const actionsHtml = isBundled
-        ? `<button class="btn-icon skill-view" data-id="${s.id}" data-name="${escapeHtml(s.name || '')}" data-desc="${escapeHtml(s.description || '')}" data-prompt="${escapeHtml(s.prompt || '')}" title="查看（只读）"><i class="fa-solid fa-eye"></i></button>`
-        : `<button class="btn-icon skill-edit" data-id="${s.id}" data-name="${escapeHtml(s.name || '')}" data-desc="${escapeHtml(s.description || '')}" data-prompt="${escapeHtml(s.prompt || '')}" title="编辑"><i class="fa-solid fa-pen-to-square"></i></button>
+        ? `<button class="btn-icon skill-view" data-id="${escapeHtml(s.id || '')}" title="查看（只读）"><i class="fa-solid fa-eye"></i></button>`
+        : `<button class="btn-icon skill-edit" data-id="${escapeHtml(s.id || '')}" title="编辑"><i class="fa-solid fa-pen-to-square"></i></button>
            <button class="btn-icon skill-delete" data-id="${s.id}" title="删除"><i class="fa-solid fa-trash-can"></i></button>`;
       return `
       <div class="skill-card${isBundled ? ' skill-card-builtin' : ''}" data-id="${s.id}">
@@ -5775,33 +5817,13 @@ window.api.onWebControlSendMessage(async (message) => {
 
     list.querySelectorAll('.skill-edit').forEach(btn => {
       btn.addEventListener('click', () => {
-        _resetSkillModalEditable();
-        const modal = document.getElementById('skill-modal');
-        document.getElementById('skill-modal-title').textContent = '编辑技能';
-        document.getElementById('skill-edit-id').value = btn.dataset.id;
-        document.getElementById('skill-name').value = btn.dataset.name || '';
-        document.getElementById('skill-desc').value = btn.dataset.desc || '';
-        document.getElementById('skill-prompt').value = btn.dataset.prompt || '';
-        modal.classList.remove('hidden');
+        window.api.openSkillEditor({ id: btn.dataset.id });
       });
     });
 
     list.querySelectorAll('.skill-view').forEach(btn => {
       btn.addEventListener('click', () => {
-        const modal = document.getElementById('skill-modal');
-        document.getElementById('skill-modal-title').textContent = '查看内置技能（只读）';
-        document.getElementById('skill-edit-id').value = '';
-        document.getElementById('skill-name').value = btn.dataset.name || '';
-        document.getElementById('skill-desc').value = btn.dataset.desc || '';
-        document.getElementById('skill-prompt').value = btn.dataset.prompt || '';
-        // Mark fields as read-only for bundled skills
-        ['skill-name', 'skill-desc', 'skill-prompt'].forEach(fid => {
-          const el = document.getElementById(fid);
-          if (el) el.setAttribute('readonly', 'readonly');
-        });
-        const saveBtn = document.getElementById('btn-save-skill');
-        if (saveBtn) saveBtn.style.display = 'none';
-        modal.classList.remove('hidden');
+        window.api.openSkillEditor({ id: btn.dataset.id, readonly: true });
       });
     });
   }
@@ -5816,13 +5838,7 @@ window.api.onWebControlSendMessage(async (message) => {
     if (saveBtn) saveBtn.style.display = '';
   }
   document.getElementById('btn-add-skill').addEventListener('click', () => {
-    _resetSkillModalEditable();
-    document.getElementById('skill-modal-title').textContent = '添加技能';
-    document.getElementById('skill-edit-id').value = '';
-    document.getElementById('skill-name').value = '';
-    document.getElementById('skill-desc').value = '';
-    document.getElementById('skill-prompt').value = '';
-    document.getElementById('skill-modal').classList.remove('hidden');
+    window.api.openSkillEditor({});
   });
 
   document.getElementById('btn-close-skill-modal').addEventListener('click', () => {

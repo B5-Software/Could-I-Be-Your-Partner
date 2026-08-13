@@ -8,7 +8,7 @@
 
   // 检测当前子应用的 API
   function detectAPI() {
-    return window.pcbAPI || window.cadAPI || window.gameAPI || window.sanguoshaAPI || null;
+    return window.pcbAPI || window.cadAPI || window.gameAPI || window.sanguoshaAPI || window.skillEditorAPI || null;
   }
 
   // 计算亮度

@@ -1,0 +1,532 @@
+/*
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ * Copyright (c) 2026 B5-Software
+ *
+ * This file is part of Could I Be Your Partner.
+ */
+
+:root {
+  --se-bg: var(--bg-primary, #f5f7fa);
+  --se-bg-secondary: var(--bg-secondary, #ffffff);
+  --se-bg-tertiary: var(--bg-tertiary, #eef1f6);
+  --se-bg-hover: var(--bg-hover, #e8ecf2);
+  --se-border: var(--border, #e2e6ee);
+  --se-accent: var(--accent, #4f8cff);
+  --se-accent-bg: var(--accent-bg, rgba(79, 140, 255, 0.08));
+  --se-accent-bg-hover: var(--accent-bg-hover, rgba(79, 140, 255, 0.14));
+  --se-text: var(--text-primary, #1a1a2e);
+  --se-text-dim: var(--text-secondary, #5a5a7a);
+  --se-text-tertiary: var(--text-tertiary, #8a8aaa);
+  --se-danger: var(--danger, #e74c3c);
+  --se-success: var(--success, #27ae60);
+  --se-warning: var(--warning, #f39c12);
+  --se-radius: var(--radius-md, 10px);
+  --se-shadow: var(--shadow-md, 0 4px 12px rgba(0, 0, 0, 0.08));
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+  background: var(--se-bg);
+  color: var(--se-text);
+  font-family: 'PingFang SC', 'Microsoft YaHei', 'Segoe UI', sans-serif;
+  font-size: 13px;
+  user-select: none;
+}
+
+button, input, textarea, select {
+  font-family: inherit;
+}
+
+.se-titlebar {
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 12px 0 14px;
+  background: var(--se-bg-secondary);
+  border-bottom: 1px solid var(--se-border);
+  -webkit-app-region: drag;
+}
+
+.se-titlebar-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  color: var(--se-accent);
+}
+
+.se-titlebar-title i {
+  font-size: 14px;
+}
+
+.se-titlebar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  -webkit-app-region: no-drag;
+}
+
+.se-readonly-badge,
+.se-dirty-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 11px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+}
+
+.se-readonly-badge {
+  color: var(--se-warning);
+  background: color-mix(in srgb, var(--se-warning) 14%, transparent);
+  border: 1px solid color-mix(in srgb, var(--se-warning) 32%, transparent);
+}
+
+.se-dirty-badge {
+  color: var(--se-accent);
+  background: var(--se-accent-bg);
+  border: 1px solid color-mix(in srgb, var(--se-accent) 32%, transparent);
+}
+
+.se-icon-btn,
+.se-mini-btn,
+.se-btn {
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background var(--transition, 0.2s ease), color var(--transition, 0.2s ease), border-color var(--transition, 0.2s ease);
+}
+
+.se-icon-btn {
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--se-text-dim);
+}
+
+.se-icon-btn:hover {
+  background: var(--se-bg-hover);
+  color: var(--se-text);
+}
+
+.se-icon-btn.danger:hover {
+  background: color-mix(in srgb, var(--se-danger) 14%, transparent);
+  color: var(--se-danger);
+}
+
+.se-body {
+  display: flex;
+  height: calc(100vh - 40px);
+  min-height: 0;
+}
+
+.se-sidebar {
+  width: 340px;
+  min-width: 300px;
+  height: 100%;
+  overflow-y: auto;
+  background: var(--se-bg-secondary);
+  border-right: 1px solid var(--se-border);
+  padding: 14px;
+}
+
+.se-section {
+  margin-bottom: 14px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--se-border);
+}
+
+.se-section:last-child {
+  margin-bottom: 0;
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.se-section-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 28px;
+  margin-bottom: 10px;
+  color: var(--se-text);
+  font-weight: 600;
+}
+
+.se-section-title i {
+  color: var(--se-accent);
+  margin-right: 6px;
+}
+
+.se-section-actions {
+  display: flex;
+  gap: 5px;
+}
+
+.se-field {
+  display: block;
+  margin-bottom: 10px;
+}
+
+.se-field-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.se-label {
+  display: block;
+  margin-bottom: 5px;
+  color: var(--se-text-dim);
+  font-size: 12px;
+}
+
+.se-label em {
+  color: var(--se-danger);
+  font-style: normal;
+}
+
+.se-field input,
+.se-field textarea,
+.se-field select {
+  width: 100%;
+  border: 1px solid var(--se-border);
+  border-radius: 8px;
+  background: var(--se-bg);
+  color: var(--se-text);
+  padding: 8px 9px;
+  outline: none;
+  transition: border-color var(--transition, 0.2s ease), box-shadow var(--transition, 0.2s ease);
+  resize: vertical;
+}
+
+.se-field input:focus,
+.se-field textarea:focus,
+.se-field select:focus {
+  border-color: var(--se-accent);
+  box-shadow: 0 0 0 3px var(--se-accent-bg);
+}
+
+.se-field input:disabled,
+.se-field textarea:disabled,
+.se-field select:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.se-mini-btn {
+  width: 27px;
+  height: 27px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 7px;
+  background: var(--se-bg-tertiary);
+  color: var(--se-text-dim);
+}
+
+.se-mini-btn:hover {
+  background: var(--se-accent-bg);
+  color: var(--se-accent);
+}
+
+.se-scripts-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.se-script-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 9px;
+  border: 1px solid var(--se-border);
+  border-radius: 8px;
+  background: var(--se-bg);
+  cursor: pointer;
+  transition: border-color var(--transition, 0.2s ease), background var(--transition, 0.2s ease);
+}
+
+.se-script-item:hover {
+  border-color: var(--se-accent);
+}
+
+.se-script-item.active {
+  border-color: var(--se-accent);
+  background: var(--se-accent-bg);
+}
+
+.se-script-item i {
+  color: var(--se-accent);
+  width: 16px;
+  text-align: center;
+}
+
+.se-script-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.se-script-name {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  color: var(--se-text);
+}
+
+.se-script-runtime {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--se-text-tertiary);
+}
+
+.se-script-delete {
+  border: 0;
+  background: transparent;
+  color: var(--se-text-tertiary);
+  cursor: pointer;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+}
+
+.se-script-delete:hover {
+  background: color-mix(in srgb, var(--se-danger) 14%, transparent);
+  color: var(--se-danger);
+}
+
+.se-scripts-empty {
+  padding: 16px 10px;
+  text-align: center;
+  color: var(--se-text-tertiary);
+  border: 1px dashed var(--se-border);
+  border-radius: 8px;
+}
+
+.se-scripts-empty i {
+  font-size: 22px;
+  color: var(--se-accent);
+  opacity: 0.65;
+}
+
+.se-scripts-empty p {
+  margin: 6px 0 0;
+  line-height: 1.5;
+}
+
+.se-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--se-bg);
+}
+
+.se-toolbar {
+  height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 10px;
+  background: var(--se-bg-secondary);
+  border-bottom: 1px solid var(--se-border);
+}
+
+.se-tabs {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  overflow-x: auto;
+  height: 100%;
+  min-width: 0;
+}
+
+.se-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 11px;
+  height: 100%;
+  border-right: 1px solid var(--se-border);
+  border-bottom: 2px solid transparent;
+  color: var(--se-text-dim);
+  cursor: pointer;
+  white-space: nowrap;
+  font-size: 12px;
+  transition: color var(--transition, 0.2s ease), border-color var(--transition, 0.2s ease), background var(--transition, 0.2s ease);
+}
+
+.se-tab:hover {
+  color: var(--se-text);
+  background: var(--se-bg-hover);
+}
+
+.se-tab.active {
+  color: var(--se-accent);
+  background: var(--se-accent-bg);
+  border-bottom-color: var(--se-accent);
+}
+
+.se-tab .se-tab-close {
+  opacity: 0.45;
+  font-size: 10px;
+}
+
+.se-tab .se-tab-close:hover {
+  opacity: 1;
+}
+
+.se-toolbar-actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.se-btn {
+  height: 30px;
+  padding: 0 12px;
+  border-radius: 7px;
+  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.se-btn.primary {
+  background: var(--se-accent);
+  color: #fff;
+  border-color: var(--se-accent);
+}
+
+.se-btn.primary:hover {
+  filter: brightness(1.06);
+}
+
+.se-btn.secondary {
+  background: var(--se-bg-tertiary);
+  color: var(--se-text);
+  border-color: var(--se-border);
+}
+
+.se-btn.secondary:hover:not(:disabled) {
+  background: var(--se-accent-bg);
+  color: var(--se-accent);
+}
+
+.se-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.se-editor-host {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  background: var(--se-bg-secondary);
+}
+
+.se-editor-placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: var(--se-text-tertiary);
+}
+
+.se-editor-placeholder i {
+  font-size: 24px;
+  margin-bottom: 8px;
+  color: var(--se-accent);
+}
+
+.se-output {
+  height: 180px;
+  flex-shrink: 0;
+  border-top: 1px solid var(--se-border);
+  background: var(--se-bg-secondary);
+  display: flex;
+  flex-direction: column;
+}
+
+.se-output.hidden {
+  display: none;
+}
+
+.se-output-header {
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--se-border);
+  color: var(--se-text-dim);
+  font-weight: 600;
+  font-size: 12px;
+}
+
+.se-output-header i {
+  color: var(--se-accent);
+  margin-right: 5px;
+}
+
+.se-output-content {
+  flex: 1;
+  margin: 0;
+  padding: 10px 12px;
+  overflow: auto;
+  color: var(--se-text);
+  font-family: 'SFMono-Regular', 'Cascadia Code', Consolas, 'Liberation Mono', monospace;
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+  user-select: text;
+}
+
+.se-output-content.error {
+  color: var(--se-danger);
+}
+
+.se-statusbar {
+  height: 26px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 0 10px;
+  border-top: 1px solid var(--se-border);
+  background: var(--se-bg-secondary);
+  color: var(--se-text-tertiary);
+  font-size: 11px;
+}
+
+.se-statusbar span:first-child {
+  flex: 1;
+}
+
+.hidden {
+  display: none !important;
+}
+
+@media (max-width: 980px) {
+  .se-sidebar {
+    width: 300px;
+    min-width: 280px;
+  }
+}

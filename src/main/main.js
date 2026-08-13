@@ -15,6 +15,7 @@ const { WebControlService } = require('./web-control-service');
 const { fetchLLMWithRetry, consumeSSEStream, abortAllRequests, DEFAULT_TIMEOUT_MS } = require('./llm-retry');
 const LLMProviders = require('./llm-providers');
 const ESLintService = require('./eslint-service');
+const { BUNDLED_SKILLS } = require('../data/bundled-skills');
 
 const emailService = new EmailService();
 const webControlService = new WebControlService();
@@ -1686,6 +1687,7 @@ let knowledge = loadJSON(knowledgePath, []);
 
 let mainWindow;
 let appTray = null;
+let skillEditorWindow = null;
 let isQuitting = false;
 // 语音子系统句柄（voice-ipc.js initVoice 返回值，app ready 后赋值）
 let voiceIpc = null;
@@ -3719,6 +3721,46 @@ ipcMain.handle('code:runShell', (_, script) => {
   });
 });
 
+// ---- IPC: Run Python Script ----
+ipcMain.handle('code:runPython', (_, script) => {
+  return new Promise((resolve) => {
+    const { execFile } = require('child_process');
+    const tmpFile = path.join(os.tmpdir(), `skill_py_${Date.now()}.py`);
+    let settled = false;
+    const cleanup = () => { try { fs.unlinkSync(tmpFile); } catch { /* ignore */ } };
+    const finish = (payload) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(payload);
+    };
+    try {
+      fs.writeFileSync(tmpFile, script, 'utf-8');
+    } catch (e) {
+      return finish({ ok: false, error: e.message });
+    }
+
+    const candidates = process.platform === 'win32' ? ['python', 'py'] : ['python3', 'python'];
+    let idx = 0;
+    const attempt = () => {
+      if (idx >= candidates.length) {
+        finish({ ok: false, error: '未找到 Python，请安装 python3 后重试' });
+        return;
+      }
+      const bin = candidates[idx++];
+      execFile(bin, ['-u', tmpFile], { timeout: 120000, maxBuffer: 8 * 1024 * 1024, windowsHide: true }, (err, stdout, stderr) => {
+        if (err && idx < candidates.length && (err.code === 'ENOENT' || /not found|找不到|No such file/i.test(err.message))) {
+          attempt();
+          return;
+        }
+        if (err) finish({ ok: false, error: err.message, stderr: stderr || '' });
+        else finish({ ok: true, output: stdout || '', stderr: stderr || '' });
+      });
+    };
+    attempt();
+  });
+});
+
 // ---- IPC: Image Generation ----
 ipcMain.handle('image:generate', async (_, prompt, workspacePath) => {
   try {
@@ -4308,6 +4350,12 @@ ipcMain.handle('game:trngGetSeed', async () => {
 });
 
 // ---- IPC: Skills ----
+function broadcastSkillsChanged() {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) win.webContents.send('skills:changed');
+  }
+}
+
 ipcMain.handle('skills:list', () => {
   try {
     const files = fs.readdirSync(skillsDir).filter(f => f.endsWith('.json'));
@@ -4318,10 +4366,62 @@ ipcMain.handle('skills:create', (_, skill) => {
   skill.id = Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
   skill.createdAt = new Date().toISOString();
   saveJSON(path.join(skillsDir, `${skill.id}.json`), skill);
+  broadcastSkillsChanged();
   return skill;
 });
 ipcMain.handle('skills:delete', (_, id) => {
-  try { fs.unlinkSync(path.join(skillsDir, `${id}.json`)); return true; } catch { return false; }
+  try {
+    fs.unlinkSync(path.join(skillsDir, `${id}.json`));
+    broadcastSkillsChanged();
+    return true;
+  } catch {
+    return false;
+  }
+});
+
+ipcMain.handle('skill-editor:open', (_, payload = {}) => {
+  if (skillEditorWindow && !skillEditorWindow.isDestroyed()) {
+    skillEditorWindow.webContents.send('skill-editor:open-request', payload);
+    skillEditorWindow.focus();
+    return { ok: true };
+  }
+  skillEditorWindow = new BrowserWindow({
+    width: 1180, height: 820, minWidth: 880, minHeight: 620,
+    title: 'Skill 编辑器',
+    frame: false,
+    titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'hidden',
+    backgroundColor: settings.theme?.backgroundColor || '#f5f7fa',
+    icon: path.join(__dirname, '../../assets/icons/icon.png'),
+    webPreferences: {
+      preload: path.join(__dirname, '../preload/skill-editor-preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false
+    }
+  });
+  const query = {};
+  if (payload?.id) query.id = String(payload.id);
+  if (payload?.readonly) query.readonly = '1';
+  skillEditorWindow.loadFile(path.join(__dirname, '../renderer/pages/skill-editor.html'), { query });
+  skillEditorWindow.on('closed', () => { skillEditorWindow = null; });
+  return { ok: true };
+});
+
+ipcMain.handle('skill-editor:close', () => {
+  if (skillEditorWindow && !skillEditorWindow.isDestroyed()) skillEditorWindow.close();
+  return { ok: true };
+});
+
+ipcMain.handle('skill-editor:getSkill', (_, id) => {
+  const safeId = String(id || '');
+  if (!safeId || !/^[A-Za-z0-9_-]+$/.test(safeId)) {
+    return { ok: false, error: '非法技能ID' };
+  }
+  const userSkill = loadJSON(path.join(skillsDir, `${safeId}.json`), null);
+  if (userSkill) return { ok: true, skill: userSkill, readonly: false };
+  const bundled = BUNDLED_SKILLS.find(s => String(s?.id) === safeId);
+  if (bundled) return { ok: true, skill: bundled, readonly: true };
+  return { ok: false, error: '技能不存在' };
 });
 
 // ---- IPC: LLM API Call (with retry/backoff/timeout) ----
@@ -6230,6 +6330,7 @@ ipcMain.handle('skills:update', (_, id, data) => {
   if (skill) {
     const updated = { ...skill, ...data, updatedAt: new Date().toISOString() };
     saveJSON(p, updated);
+    broadcastSkillsChanged();
     return { ok: true, skill: updated };
   }
   return { ok: false, error: '技能不存在' };

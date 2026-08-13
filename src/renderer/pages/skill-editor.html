@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<!--
+  SPDX-License-Identifier: GPL-3.0-or-later
+  Copyright (c) 2026 B5-Software
+  This file is part of Could I Be Your Partner.
+-->
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: file:; font-src 'self' data:; connect-src 'self' data: http: https: ws: wss:;">
+  <title>Skill 编辑器</title>
+  <link rel="stylesheet" href="../css/theme.css">
+  <link rel="stylesheet" href="../css/skill-editor.css">
+  <link rel="stylesheet" href="../../../assets/fonts/fontawesome.min.css">
+  <script src="../../../node_modules/monaco-editor/min/vs/loader.js"></script>
+</head>
+<body>
+  <div class="se-titlebar">
+    <div class="se-titlebar-title">
+      <i class="fa-solid fa-wand-magic-sparkles"></i>
+      <span id="se-title">Skill 编辑器</span>
+      <span class="se-readonly-badge hidden" id="se-readonly-badge">只读</span>
+    </div>
+    <div class="se-titlebar-actions">
+      <span class="se-dirty-badge hidden" id="se-dirty-badge"><i class="fa-solid fa-circle"></i> 未保存</span>
+      <button class="se-icon-btn" id="btn-close" title="关闭">
+        <i class="fa-solid fa-xmark"></i>
+      </button>
+    </div>
+  </div>
+
+  <div class="se-body">
+    <aside class="se-sidebar">
+      <section class="se-section">
+        <div class="se-section-title">
+          <span><i class="fa-solid fa-circle-info"></i> 基础信息</span>
+        </div>
+
+        <label class="se-field">
+          <span class="se-label">名称 <em>*</em></span>
+          <input type="text" id="skill-name" placeholder="例如：pdf-processing">
+        </label>
+
+        <label class="se-field">
+          <span class="se-label">描述 <em>*</em></span>
+          <textarea id="skill-description" rows="4" placeholder="描述这个技能做什么，以及什么时候使用"></textarea>
+        </label>
+
+        <div class="se-field-grid">
+          <label class="se-field">
+            <span class="se-label">License</span>
+            <input type="text" id="skill-license" placeholder="MIT / Apache-2.0">
+          </label>
+          <label class="se-field">
+            <span class="se-label">运行时</span>
+            <select id="skill-runtime">
+              <option value="javascript">JavaScript</option>
+              <option value="node">Node.js</option>
+              <option value="python">Python</option>
+              <option value="shell">Shell</option>
+            </select>
+          </label>
+        </div>
+
+        <label class="se-field">
+          <span class="se-label">兼容性</span>
+          <textarea id="skill-compatibility" rows="2" placeholder="例如：Requires Python 3.10+ and git"></textarea>
+        </label>
+
+        <label class="se-field">
+          <span class="se-label">Allowed Tools</span>
+          <input type="text" id="skill-allowed-tools" placeholder="空格分隔，例如：Bash(git:*) Read">
+        </label>
+
+        <label class="se-field">
+          <span class="se-label">自定义元数据</span>
+          <textarea id="skill-metadata" rows="5" placeholder="author: me&#10;version: 1.0"></textarea>
+        </label>
+      </section>
+
+      <section class="se-section">
+        <div class="se-section-title">
+          <span><i class="fa-solid fa-file-code"></i> 脚本</span>
+          <div class="se-section-actions">
+            <button class="se-mini-btn" id="btn-import-script" title="导入脚本文件">
+              <i class="fa-solid fa-file-import"></i>
+            </button>
+            <button class="se-mini-btn" id="btn-add-script" title="新建脚本">
+              <i class="fa-solid fa-plus"></i>
+            </button>
+          </div>
+        </div>
+        <div class="se-scripts-list" id="scripts-list"></div>
+        <div class="se-scripts-empty hidden" id="scripts-empty">
+          <i class="fa-solid fa-code"></i>
+          <p>暂无脚本。添加后可在右侧编辑并运行。</p>
+        </div>
+      </section>
+    </aside>
+
+    <main class="se-main">
+      <div class="se-toolbar">
+        <div class="se-tabs" id="editor-tabs"></div>
+        <div class="se-toolbar-actions">
+          <button class="se-btn secondary" id="btn-run-script" disabled>
+            <i class="fa-solid fa-play"></i> 运行
+          </button>
+          <button class="se-btn primary" id="btn-save">
+            <i class="fa-solid fa-floppy-disk"></i> 保存
+          </button>
+        </div>
+      </div>
+
+      <div class="se-editor-host" id="editor-host">
+        <div class="se-editor-placeholder">
+          <i class="fa-solid fa-spinner fa-spin"></i>
+          <p>正在加载编辑器...</p>
+        </div>
+      </div>
+
+      <div class="se-output hidden" id="output-panel">
+        <div class="se-output-header">
+          <span><i class="fa-solid fa-terminal"></i> 运行输出</span>
+          <div>
+            <button class="se-mini-btn" id="btn-clear-output" title="清空"><i class="fa-solid fa-eraser"></i></button>
+            <button class="se-mini-btn" id="btn-close-output" title="关闭"><i class="fa-solid fa-chevron-down"></i></button>
+          </div>
+        </div>
+        <pre class="se-output-content" id="output-content"></pre>
+      </div>
+
+      <div class="se-statusbar">
+        <span id="status-message">就绪</span>
+        <span id="status-cursor">行 1，列 1</span>
+        <span id="status-language">Markdown</span>
+      </div>
+    </main>
+  </div>
+
+  <script src="../js/subapp-theme.js"></script>
+  <script src="../js/skill-editor.js"></script>
+</body>
+</html>
