@@ -469,7 +469,8 @@ const sessionIndexContent = fs.readFileSync(require('path').join(__dirname, '../
 
 test('scoped abort helpers should be exported and wired', () => {
   assert.strictEqual(typeof llmRetry.abortRequests, 'function');
-  assert.ok(mainContent.includes("ipcMain.handle('agent:abort'"), 'main should register agent:abort');
+  const terminalContent = fs.readFileSync(require('path').join(__dirname, '../src/main/terminal-service.js'), 'utf-8');
+  assert.ok(terminalContent.includes("ipcMain.handle('agent:abort'"), 'terminal service should register agent:abort');
   assert.ok(sessionPreloadContent.includes('agentAbort'), 'preload should expose agentAbort');
 });
 
@@ -538,9 +539,10 @@ test('main process should handle file operations', () => {
 });
 
 test('main process should handle terminal operations', () => {
-  assert.ok(mainContent.includes("terminal:make"));
-  assert.ok(mainContent.includes("terminal:run"));
-  assert.ok(mainContent.includes("terminal:kill"));
+  const terminalContent = fs.readFileSync(require('path').join(__dirname, '../src/main/terminal-service.js'), 'utf-8');
+  assert.ok(terminalContent.includes("terminal:make"));
+  assert.ok(terminalContent.includes("terminal:run"));
+  assert.ok(terminalContent.includes("terminal:kill"));
 });
 
 test('main process should handle LLM calls', () => {
@@ -557,16 +559,19 @@ test('main process should handle image generation', () => {
 });
 
 test('ocr handler should define languages as string', () => {
-  assert.ok(mainContent.includes("const languages = 'chi_sim+eng'"));
+  const ocrContent = fs.readFileSync(require('path').join(__dirname, '../src/main/ocr.js'), 'utf-8');
+  assert.ok(ocrContent.includes("const languages = 'chi_sim+eng'"));
 });
 
 test('ocr handler should create worker with languages and langPath', () => {
-  assert.ok(mainContent.includes('createWorker(languages, OEM.LSTM_ONLY'));
-  assert.ok(mainContent.includes('langPath'));
+  const ocrContent = fs.readFileSync(require('path').join(__dirname, '../src/main/ocr.js'), 'utf-8');
+  assert.ok(ocrContent.includes('createWorker(languages, OEM.LSTM_ONLY'));
+  assert.ok(ocrContent.includes('langPath'));
 });
 
 test('ocr handler should disable gzip for local traineddata files', () => {
-  assert.ok(mainContent.includes('gzip: false'));
+  const ocrContent = fs.readFileSync(require('path').join(__dirname, '../src/main/ocr.js'), 'utf-8');
+  assert.ok(ocrContent.includes('gzip: false'));
 });
 
 // ---- Test Preload ----
@@ -1675,6 +1680,27 @@ async function runDocumentToolTests() {
     assert.strictEqual(r.ok, true, r.error || '');
     assert.ok(fsLocal.existsSync(r.path), '应生成 .pptx 文件');
     assert.strictEqual(r.slideCount, 2);
+  });
+
+  await asyncTest('PPT Maker 图表 XML 不含带 "#" 的非法颜色', async () => {
+    const AdmZip = require('adm-zip');
+    const { createPresentation } = require('../src/main/ppt-maker');
+    const r = await createPresentation({
+      title: '颜色校验', filename: 'colors.pptx',
+      slides: [
+        { type: 'chart', title: '柱状图', chart: { type: 'column', labels: ['一', '二'], series: [{ name: '系列', values: [3, 7] }] } },
+        { type: 'chart', title: '环形图', chart: { type: 'doughnut', labels: ['甲', '乙'], series: [{ name: '占比', values: [60, 40] }] } }
+      ]
+    }, { workspacePath: tmp, appTheme: { mode: 'light', accentColor: '#4f8cff' }, nativeDark: false });
+    assert.strictEqual(r.ok, true, r.error || '');
+    assert.strictEqual(r.accentColor, '#4F8CFF', '返回的强调色应只有一个 "#"');
+    const zip = new AdmZip(r.path);
+    for (const entry of zip.getEntries()) {
+      if (/^ppt\/charts\/chart\d+\.xml$/.test(entry.entryName)) {
+        const xml = entry.getData().toString('utf8');
+        assert.ok(!/val="#[0-9A-Fa-f]{6}"/.test(xml), `${entry.entryName} 中存在带 "#" 的颜色，会被 PowerPoint 判定为损坏`);
+      }
+    }
   });
 
   await asyncTest('PPT Maker 拒绝工作区外的图片', async () => {

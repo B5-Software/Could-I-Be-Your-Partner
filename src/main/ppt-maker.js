@@ -24,14 +24,17 @@ const MAX_CHART_SERIES = 6;
 const MAX_BULLETS = 12;
 const MAX_IMAGE_BYTES = 30 * 1024 * 1024;
 
-// 风格模板只决定装饰与辅助色，主配色（强调色、深浅背景）由主窗口主题注入
+// 风格模板只决定装饰与辅助色，主配色（强调色、深浅背景）由主窗口主题注入。
+// 注意：所有颜色必须是不带 "#" 的 6 位十六进制。pptxgenjs 在生成图表
+// 数据点 / 网格线时会把这些值直接写入 <a:srgbClr val="..."/>，带 "#"
+// 会产生非法的 OOXML，导致 PowerPoint 打开时提示文件损坏。
 const THEMES = {
-  modern: { secondary: '#23C9A6', deco: 'blocks' },
-  corporate: { secondary: '#12294D', deco: 'lines' },
-  gradient: { secondary: '#8C6BFF', deco: 'layers' },
-  minimal: { secondary: '#7A8CA0', deco: 'plain' },
-  tech: { secondary: '#22D3EE', deco: 'grid' },
-  warm: { secondary: '#FF8A5C', deco: 'circles' }
+  modern: { secondary: '23C9A6', deco: 'blocks' },
+  corporate: { secondary: '12294D', deco: 'lines' },
+  gradient: { secondary: '8C6BFF', deco: 'layers' },
+  minimal: { secondary: '7A8CA0', deco: 'plain' },
+  tech: { secondary: '22D3EE', deco: 'grid' },
+  warm: { secondary: 'FF8A5C', deco: 'circles' }
 };
 
 const FONT_FAMILY = process.platform === 'darwin'
@@ -50,9 +53,15 @@ function hexToRgb(hex) {
   return { r: (num >> 16) & 255, g: (num >> 8) & 255, b: num & 255 };
 }
 
+function normalizeHex(hex) {
+  const h = String(hex || '').replace(/^#/, '').trim();
+  if (!/^[0-9a-fA-F]{6}$/.test(h)) return null;
+  return h.toUpperCase();
+}
+
 function rgbToHex({ r, g, b }) {
   const c = n => Math.max(0, Math.min(255, Math.round(n))).toString(16).padStart(2, '0');
-  return `${c(r)}${c(g)}${c(b)}`;
+  return `${c(r)}${c(g)}${c(b)}`.toUpperCase();
 }
 
 function mixHex(a, b, t) {
@@ -76,7 +85,7 @@ function darken(hex, t) { return mixHex(hex, '#000000', t); }
 function buildPalette(appTheme = {}, nativeDark = false) {
   const mode = appTheme.mode || 'system';
   const dark = mode === 'dark' || (mode === 'system' && nativeDark);
-  const accentRaw = appTheme.accentColor || '#4f8cff';
+  const accentRaw = normalizeHex(appTheme.accentColor) || '4F8CFF';
   const accent = (() => {
     const { r, g, b } = hexToRgb(accentRaw);
     const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
@@ -88,18 +97,18 @@ function buildPalette(appTheme = {}, nativeDark = false) {
 
   return {
     dark,
-    bg: dark ? '#12151E' : '#F7F9FC',
-    bgDeep: dark ? '#0D1017' : '#EDF1F7',
-    surface: dark ? '#1C222E' : '#FFFFFF',
-    surfaceAlt: dark ? '#232B3A' : '#EEF3F9',
-    text: dark ? '#F3F6FB' : '#1B2431',
-    muted: dark ? '#A6B2C4' : '#5B6B7D',
+    bg: dark ? '12151E' : 'F7F9FC',
+    bgDeep: dark ? '0D1017' : 'EDF1F7',
+    surface: dark ? '1C222E' : 'FFFFFF',
+    surfaceAlt: dark ? '232B3A' : 'EEF3F9',
+    text: dark ? 'F3F6FB' : '1B2431',
+    muted: dark ? 'A6B2C4' : '5B6B7D',
     accent,
-    accentContrast: dark ? '#0E1520' : '#FFFFFF',
-    accentSoft: mixHex(accent, dark ? '#12151E' : '#F7F9FC', 0.82),
-    line: dark ? '#303A4B' : '#DCE4EE',
-    ok: dark ? '#4BD9A5' : '#1FA97B',
-    bad: dark ? '#FF8A80' : '#D64545'
+    accentContrast: dark ? '0E1520' : 'FFFFFF',
+    accentSoft: mixHex(accent, dark ? '12151E' : 'F7F9FC', 0.82),
+    line: dark ? '303A4B' : 'DCE4EE',
+    ok: dark ? '4BD9A5' : '1FA97B',
+    bad: dark ? 'FF8A80' : 'D64545'
   };
 }
 
@@ -473,7 +482,9 @@ function addChartSlide(s, d, P, palette, theme, pageNum, total) {
   const isPie = c.type === 'pie' || c.type === 'doughnut';
   const data = c.series.map(s => {
     const item = { name: s.name || '系列', values: s.values };
-    if (!isPie && c.labels.length) item.labels = c.labels;
+    // pie/doughnut 也必须在 series 上携带 labels，否则 pptxgenjs 生成
+    // 图表内嵌 Excel 时 data[0].labels 为 undefined 会直接抛错。
+    if (c.labels.length) item.labels = c.labels;
     return item;
   });
   const opts = {
@@ -677,7 +688,7 @@ async function createPresentation(spec = {}, options = {}) {
       accentColor: '#' + palette.accent
     };
   } catch (e) {
-    return { ok: false, error: e && e.message ? e.message : String(e) };
+    return { ok: false, error: e && e.message ? e.message : String(e), debugStack: e && e.stack ? String(e.stack) : '' };
   }
 }
 
