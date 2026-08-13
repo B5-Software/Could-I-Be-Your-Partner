@@ -7,6 +7,33 @@
 
 const { contextBridge, ipcRenderer } = require('electron');
 
+// 多会话复用型事件通道：每个通道只往 ipcRenderer 挂一个监听器，
+// 订阅者以 Set 维护，退订时按引用移除。这样无论同时存在多少个会话，
+// 每个通道的 ipcRenderer 监听器数量恒为 1，彻底避免
+// MaxListenersExceededWarning（默认上限 10，多会话并发时极易触发）。
+const _channelSubscribers = new Map();
+function onChannel(channel, cb) {
+  if (!_channelSubscribers.has(channel)) {
+    const subs = new Set();
+    const listener = (_event, data) => {
+      for (const fn of subs) {
+        try { fn(data); } catch { /* 单个订阅者异常不应影响其他订阅者 */ }
+      }
+    };
+    ipcRenderer.on(channel, listener);
+    _channelSubscribers.set(channel, { subs, listener });
+  }
+  const entry = _channelSubscribers.get(channel);
+  entry.subs.add(cb);
+  return () => {
+    entry.subs.delete(cb);
+    if (entry.subs.size === 0) {
+      ipcRenderer.removeListener(channel, entry.listener);
+      _channelSubscribers.delete(channel);
+    }
+  };
+}
+
 contextBridge.exposeInMainWorld('api', {
   // Settings
   getSettings: () => ipcRenderer.invoke('settings:get'),
@@ -239,27 +266,11 @@ contextBridge.exposeInMainWorld('api', {
   eslintLint: (workspacePath, opts) => ipcRenderer.invoke('eslint:lint', workspacePath, opts),
   eslintLintFile: (filePath) => ipcRenderer.invoke('eslint:lintFile', filePath),
   eslintClearCache: (workspacePath) => ipcRenderer.invoke('eslint:clearCache', workspacePath),
-  onStreamChunk: (cb) => {
-    const listener = (_, data) => cb(data);
-    ipcRenderer.on('llm:stream-chunk', listener);
-    return () => ipcRenderer.removeListener('llm:stream-chunk', listener);
-  },
-  onStreamEnd: (cb) => {
-    const listener = (_, data) => cb(data);
-    ipcRenderer.on('llm:stream-end', listener);
-    return () => ipcRenderer.removeListener('llm:stream-end', listener);
-  },
-  onLLMRetry: (cb) => {
-    const listener = (_, data) => cb(data);
-    ipcRenderer.on('llm:retry', listener);
-    return () => ipcRenderer.removeListener('llm:retry', listener);
-  },
+  onStreamChunk: (cb) => onChannel('llm:stream-chunk', cb),
+  onStreamEnd: (cb) => onChannel('llm:stream-end', cb),
+  onLLMRetry: (cb) => onChannel('llm:retry', cb),
   // 监听游戏窗口/子窗口的 LLM usage 推送（累计到当前会话统计）
-  onLLMExternalUsage: (cb) => {
-    const listener = (_, data) => cb(data);
-    ipcRenderer.on('llm:external-usage', listener);
-    return () => ipcRenderer.removeListener('llm:external-usage', listener);
-  },
+  onLLMExternalUsage: (cb) => onChannel('llm:external-usage', cb),
 
   // ---- 语音（STT/TTS/唤醒）----
   voiceGetStatus: () => ipcRenderer.invoke('voice:getStatus'),

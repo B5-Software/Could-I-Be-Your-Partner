@@ -744,7 +744,16 @@
       if (btn.dataset.page === 'memory') pushPageAfterLoad(() => loadMemoryPage());
       if (btn.dataset.page === 'settings') pushPageAfterLoad(loadSettingsPage);
       if (btn.dataset.page === 'history') pushPageAfterLoad(loadHistoryPage);
-      if (btn.dataset.page === 'code') pushPageAfterLoad(loadCodePage);
+      if (btn.dataset.page === 'code') {
+        // 对齐 Babe（进入页面即 initBabeAgent）：首次进入 Code 页面时
+        // 自动创建第一个会话标签，避免标签栏长时间只剩"+"按钮。
+        pushPageAfterLoad(async () => {
+          await loadCodePage();
+          if (typeof ensureCodeFirstSession === 'function') {
+            await ensureCodeFirstSession();
+          }
+        });
+      }
       if (btn.dataset.page === 'code-history') pushPageAfterLoad(loadCodeHistoryPage);
       if (btn.dataset.page === 'babe') pushPageAfterLoad(() => initBabeAgent());
       if (btn.dataset.page === 'babe-history') pushPageAfterLoad(loadBabeHistoryPage);

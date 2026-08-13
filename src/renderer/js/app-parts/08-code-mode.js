@@ -722,12 +722,9 @@
   // ipcRenderer 监听器会随每次新对话线性累积。
   function unsubscribeAgentStreams(ag) {
     if (!ag) return;
-    if (typeof ag._llmRetryUnsub === 'function') { try { ag._llmRetryUnsub(); } catch { /* ignore */ } }
-    if (typeof ag._streamChunkUnsub === 'function') { try { ag._streamChunkUnsub(); } catch { /* ignore */ } }
-    if (typeof ag._streamEndUnsub === 'function') { try { ag._streamEndUnsub(); } catch { /* ignore */ } }
-    ag._llmRetryUnsub = null;
-    ag._streamChunkUnsub = null;
-    ag._streamEndUnsub = null;
+    if (typeof ag.unsubscribeStreams === 'function') {
+      try { ag.unsubscribeStreams(); } catch { /* ignore */ }
+    }
   }
 
   function setupAgentStreamSubscriptions(ag, mode) {
@@ -930,14 +927,10 @@
   }
 
   async function createCodeSession() {
-    if (!codeWorkspacePath) {
-      window.showMessageModal('请先打开工作区文件夹', '提示', 'warning');
-      return null;
-    }
     const ag = new Agent();
     ag.mode = 'code';
-    ag.workspacePath = codeWorkspacePath;
-    ag.codeWorkspacePath = codeWorkspacePath;
+    ag.workspacePath = codeWorkspacePath || '';
+    ag.codeWorkspacePath = codeWorkspacePath || '';
     ag.settings = await window.api.getSettings();
     if (!ag.settings.tools || typeof ag.settings.tools !== 'object') ag.settings.tools = {};
     ag.systemInfo = await window.api.getFullSystemInfo();
@@ -953,6 +946,24 @@
     const session = sessionManager.registerAgent('code', ag, { title: '未命名 Code 会话' });
     activateSession('code', session.key);
     return session;
+  }
+
+  /**
+   * 对齐 Chat/Babe：首次进入 Code 模式时自动创建第一个会话标签。
+   * 不强制要求工作区（工作区缺失只在发送消息时提示），
+   * 因此没有工作区也能看到会话标签，交互与其它模式一致。
+   */
+  async function ensureCodeFirstSession() {
+    if (codeAgent) return codeAgent;
+    if (sessionManager && sessionManager.list('code').length > 0) return null;
+    if (!codeWorkspacePath) {
+      try { codeWorkspacePath = await window.api.codeGetLastWorkspace(); } catch { /* ignore */ }
+      if (codeWorkspacePath) {
+        const wsPathEl = document.getElementById('code-workspace-path');
+        if (wsPathEl) wsPathEl.textContent = codeWorkspacePath;
+      }
+    }
+    return createCodeSession();
   }
 
   async function replayCodeSession(session) {
@@ -1183,6 +1194,16 @@
     if (!codeAgent) {
       const ok = await initCodeAgent();
       if (!ok) return;
+    }
+    // 会话可在尚未选择工作区时先行创建（与其他模式对齐），
+    // 真正发送时再要求工作区，避免"空工作区"直接进入 Agent。
+    if (!codeWorkspacePath) {
+      window.showMessageModal('请先打开工作区文件夹', '提示', 'warning');
+      return;
+    }
+    if (codeAgent.workspacePath !== codeWorkspacePath || codeAgent.codeWorkspacePath !== codeWorkspacePath) {
+      codeAgent.workspacePath = codeWorkspacePath;
+      codeAgent.codeWorkspacePath = codeWorkspacePath;
     }
     if (codeAgent.running) return;
     const codeSession = sessionManager?.getByAgent(codeAgent);
@@ -1462,6 +1483,14 @@
       const wsPathEl = document.getElementById('code-workspace-path');
       if (wsPathEl) wsPathEl.textContent = result.path;
       await loadCodeFileTree(result.path);
+      // 工作区切换：Code 历史按工作区隔离保存，旧工作区的会话一律停止并关闭，
+      // 随后立即创建新工作区的第一个会话标签（与其他模式行为对齐）。
+      if (sessionManager) {
+        const oldSessions = sessionManager.list('code');
+        for (const session of oldSessions) {
+          try { sessionManager.close(session); } catch { /* ignore */ }
+        }
+      }
       // Reset current conversation
       unsubscribeAgentStreams(codeAgent);
       codeAgent = null;
@@ -1471,16 +1500,13 @@
       if (msgsEl) {
         msgsEl.innerHTML = '<div class="welcome-message"><div class="welcome-icon"><i class="fa-solid fa-code"></i></div><h2>Code 模式</h2><p>工作区已打开，开始编程任务吧。历史记录按工作区隔离保存。</p></div>';
       }
+      await createCodeSession();
     }
   });
 
   document.getElementById('btn-code-new-chat')?.addEventListener('click', () => {
     stopVoicePlayback(); // 清空语音播放队列
-    if (!codeWorkspacePath) {
-      window.showMessageModal('请先打开工作区', '提示', 'warning');
-      return;
-    }
-    createCodeSession();
+    createCodeSession().catch(err => console.error('[code] 新建会话失败:', err));
   });
 
   // 在系统文件管理器中打开当前工作区（Windows 资源管理器 / macOS Finder）

@@ -81,6 +81,7 @@ class Agent {
     this._llmRetryUnsub = null; // unsubscribe for llm:retry listener
     this._streamChunkUnsub = null; // unsubscribe for llm:stream-chunk listener
     this._streamEndUnsub = null; // unsubscribe for llm:stream-end listener
+    this._llmExternalUsageUnsub = null; // unsubscribe for llm:external-usage listener
     this._activeStreamRequestId = null; // current streaming requestId (for filtering)
     this.babeAffection = 0; // Babe 模式好感度（0-100）
     this.mode = 'chat'; // 'chat' | 'code' | 'babe'
@@ -112,6 +113,23 @@ class Agent {
 
   setSessionKey(sessionKey) {
     this.sessionKey = sessionKey || null;
+  }
+
+  /**
+   * 退订本 Agent 在 ipcRenderer 上注册的全部 LLM 事件监听器
+   * （llm:retry / llm:stream-chunk / llm:stream-end / llm:external-usage）。
+   * 会话关闭、工作区重置或替换 Agent 实例时必须调用，
+   * 否则监听器会随会话增删线性累积，触发 MaxListenersExceededWarning。
+   */
+  unsubscribeStreams() {
+    const keys = ['_llmRetryUnsub', '_streamChunkUnsub', '_streamEndUnsub', '_llmExternalUsageUnsub'];
+    for (const key of keys) {
+      const unsub = this[key];
+      if (typeof unsub === 'function') {
+        try { unsub(); } catch { /* ignore */ }
+      }
+      this[key] = null;
+    }
   }
 
   // 为文件内容添加行号前缀（格式：N→内容）

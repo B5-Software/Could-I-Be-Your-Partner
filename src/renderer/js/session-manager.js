@@ -254,6 +254,10 @@
     close(session, options = {}) {
       if (!session) return;
       this.stop(session);
+      // 退订该会话 Agent 的 LLM IPC 监听器，避免会话关闭后监听器累积
+      if (session.agent && typeof session.agent.unsubscribeStreams === 'function') {
+        try { session.agent.unsubscribeStreams(); } catch { /* ignore */ }
+      }
       const unsub = this._unsubscribers.get(session.key);
       if (typeof unsub === 'function') { try { unsub(); } catch { /* ignore */ } }
       this._unsubscribers.delete(session.key);
