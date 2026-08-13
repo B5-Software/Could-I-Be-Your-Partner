@@ -1313,10 +1313,11 @@
         listEl.innerHTML = result.history.map(item => {
           const date = new Date(item.ts);
           const timeStr = date.toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+          const live = (typeof getSessionLiveState === 'function') ? getSessionLiveState('code', item) : null;
           return `
           <div class="history-item" data-id="${item.id}">
             <div class="history-info">
-              <div class="history-title">${escapeHtml(item.title || '未命名')} ${sessionStatusBadge(item.status, item.lastError)}</div>
+              <div class="history-title">${escapeHtml(item.title || '未命名')} ${sessionStatusBadge(live ? live.status : item.status, live ? live.lastError : item.lastError, live ? live.attention : null)}</div>
               <div class="history-time">${timeStr} · ${item.messageCount || 0} 条消息</div>
             </div>
             <div class="history-actions">
@@ -1404,10 +1405,11 @@
   function renderCodeHistoryItem(item) {
     const date = new Date(item.ts);
     const timeStr = date.toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+    const live = (typeof getSessionLiveState === 'function') ? getSessionLiveState('code', item) : null;
     return `
       <div class="history-item" data-id="${item.id}">
         <div class="history-info">
-          <div class="history-title">${escapeHtml(item.title || '未命名')} ${sessionStatusBadge(item.status, item.lastError)}</div>
+          <div class="history-title">${escapeHtml(item.title || '未命名')} ${sessionStatusBadge(live ? live.status : item.status, live ? live.lastError : item.lastError, live ? live.attention : null)}</div>
           <div class="history-time">${timeStr} · ${item.messageCount || 0} 条消息</div>
         </div>
         <div class="history-actions">

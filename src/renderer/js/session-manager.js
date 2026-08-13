@@ -73,6 +73,10 @@
         pendingApproval: null,
         pendingToolAuth: null,
         queuedMessage: null,
+        // 需要用户操作的即时状态：{ kind: 'approval'|'tool-auth'|'questionnaire'|'game', label }
+        // 用于标签页/历史列表显示"等待审批/等待授权/等待问卷/等待游戏回应"等指示器，
+        // 而不是一律显示"运行中"。
+        attention: null,
         lastWasWorking: false,
         active: false,
         uiGeneration: 0,
@@ -146,6 +150,22 @@
       session.title = title || session.title || '未命名对话';
       session.updatedAt = Date.now();
       this.bus.emit('session-title', { session });
+    }
+
+    /**
+     * 设置/清除会话的"需要用户操作"指示状态。
+     * attention: null 清除；否则 { kind, label }。
+     */
+    setAttention(session, attention) {
+      if (!session) return;
+      const next = attention || null;
+      const prev = session.attention || null;
+      const prevStr = prev ? prev.kind + ':' + prev.label : '';
+      const nextStr = next ? next.kind + ':' + next.label : '';
+      if (prevStr === nextStr) return;
+      session.attention = next;
+      session.updatedAt = Date.now();
+      this.bus.emit('session-attention', { session, attention: next, previous: prev });
     }
 
     retag(session, id) {
@@ -307,8 +327,10 @@
           this.setStatus(session, SessionStatus.ERROR, { error: typeof data === 'string' ? data : data?.error || data?.message || '未知错误' });
         } else if (type === 'approval') {
           this.setStatus(session, SessionStatus.WAITING_APPROVAL, { approval: data });
+          this.setAttention(session, { kind: 'approval', label: '等待审批' });
         } else if (type === 'tool-auth-required') {
           this.setStatus(session, SessionStatus.WAITING_TOOL_AUTH, { toolAuth: data });
+          this.setAttention(session, { kind: 'tool-auth', label: '等待授权' });
         }
         if (typeof originalMessage === 'function') originalMessage(type, data);
       };

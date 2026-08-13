@@ -341,6 +341,35 @@
   background: var(--success);
 }
 
+/* 需要用户操作的指示状态：审批/授权/问卷/游戏邀请 */
+.session-tab .session-status-dot.attention {
+  animation: session-pulse 1.2s ease-in-out infinite;
+}
+.session-tab .session-status-dot.attention-approval { background: var(--warning); }
+.session-tab .session-status-dot.attention-tool-auth { background: #8b5cf6; }
+.session-tab .session-status-dot.attention-questionnaire { background: #0ea5e9; }
+.session-tab .session-status-dot.attention-game { background: #f472b6; }
+.session-tab .session-status-dot.attention-other { background: var(--text-tertiary); }
+
+.session-tab .session-attention-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 3px 5px;
+  border-radius: 8px;
+  color: #fff;
+}
+.session-tab .session-attention-badge i { font-size: 8px; }
+.session-tab .session-attention-badge.attention-approval { background: var(--warning); }
+.session-tab .session-attention-badge.attention-tool-auth { background: #8b5cf6; }
+.session-tab .session-attention-badge.attention-questionnaire { background: #0ea5e9; }
+.session-tab .session-attention-badge.attention-game { background: #f472b6; }
+.session-tab .session-attention-badge.attention-other { background: var(--text-tertiary); }
+
 .session-tab .session-tab-close {
   width: 15px;
   height: 15px;
@@ -1073,6 +1102,12 @@
 .history-status.status-queued { color: var(--warning); background: var(--warning-light); }
 .history-status.status-done { color: var(--success); background: var(--success-light); }
 .history-status.status-error { color: var(--danger); background: var(--danger-light); }
+.history-status.attention { color: #fff; }
+.history-status.attention-approval { background: var(--warning); }
+.history-status.attention-tool-auth { background: #8b5cf6; }
+.history-status.attention-questionnaire { background: #0ea5e9; }
+.history-status.attention-game { background: #f472b6; }
+.history-status.attention-other { background: var(--text-tertiary); }
 
 .history-actions {
   display: flex;

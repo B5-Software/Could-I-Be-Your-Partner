@@ -35,6 +35,7 @@
         document.querySelector('.nav-item[data-page="babe-history"]')?.classList.add('hidden');
         // Switch to chat page
         document.querySelector('.nav-item[data-page="chat"]')?.click();
+        if (typeof renderSessionTabs === 'function') renderSessionTabs('chat');
       } else if (mode === 'code') {
         // Code mode: show code sidebar items, hide chat/babe ones
         document.querySelector('.nav-item[data-page="chat"]')?.classList.add('hidden');
@@ -45,6 +46,7 @@
         document.querySelector('.nav-item[data-page="babe-history"]')?.classList.add('hidden');
         // Switch to code page
         document.querySelector('.nav-item[data-page="code"]')?.click();
+        if (typeof renderSessionTabs === 'function') renderSessionTabs('code');
       } else if (mode === 'babe') {
         // Babe mode: show babe sidebar items, hide chat/code ones
         document.querySelector('.nav-item[data-page="chat"]')?.classList.add('hidden');
@@ -57,6 +59,7 @@
         document.querySelector('.nav-item[data-page="babe"]')?.click();
         // 启动 Babe Agent（如果尚未启动）
         initBabeAgent();
+        if (typeof renderSessionTabs === 'function') renderSessionTabs('babe');
       }
       // 切换模式后同步标题栏为目标模式当前对话标题（无则显示"未命名对话"）
       let modeTitle = '';
@@ -358,6 +361,10 @@
   AppBus.on('session-closed', () => {
     if (typeof renderAllSessionTabs === 'function') renderAllSessionTabs();
   });
+  AppBus.on('session-attention', () => {
+    if (typeof renderAllSessionTabs === 'function') renderAllSessionTabs();
+    refreshActiveHistoryPage();
+  });
   let historyRefreshTimer = null;
   const refreshActiveHistoryPage = () => {
     if (historyRefreshTimer) return;
@@ -405,18 +412,28 @@
     if (!tabsEl) return;
     const sessions = sessionManager.list(mode).sort((a, b) => a.createdAt - b.createdAt);
     // 标签栏常驻：即使没有会话也只显示“新建会话”按钮，不再整栏隐藏。
-    // 关闭最后一个标签页会立即新建会话，避免任何中间态导致标签栏闪烁或消失。
+    // 用 inline !important 强制 display，防止任何后续代码/远端镜像重新加回 hidden。
     tabsEl.classList.remove('hidden');
+    tabsEl.style.setProperty('display', 'flex', 'important');
     tabsEl.innerHTML = '';
     const active = sessionManager.getActive(mode);
     for (const session of sessions) {
+      const attentionMeta = (typeof sessionAttentionMeta === 'function') ? sessionAttentionMeta(session.attention) : null;
+      const dotClass = attentionMeta
+        ? `attention ${attentionMeta.cls}`
+        : escapeHtml(session.status);
+      const dotTitle = attentionMeta ? attentionMeta.label : '';
+      const attentionBadge = attentionMeta
+        ? `<span class="session-attention-badge ${attentionMeta.cls}"><i class="fa-solid ${attentionMeta.icon}"></i>${escapeHtml(attentionMeta.label.replace('等待', ''))}</span>`
+        : '';
       const tab = document.createElement('div');
       tab.className = 'session-tab' + (active?.key === session.key ? ' active' : '');
       tab.dataset.sessionKey = session.key;
       tab.title = session.title || '未命名会话';
       tab.innerHTML = `
-        <span class="session-status-dot ${escapeHtml(session.status)}"></span>
+        <span class="session-status-dot ${dotClass}" ${dotTitle ? `title="${escapeHtml(dotTitle)}"` : ''}></span>
         <span class="session-tab-title">${escapeHtml(session.title || '未命名会话')}</span>
+        ${attentionBadge}
         <span class="session-tab-close" title="关闭会话"><i class="fa-solid fa-xmark"></i></span>
       `;
       tab.addEventListener('click', (e) => {
@@ -659,3 +676,37 @@
   updateContextProgress();
   // 初始化完成后渲染一次标签栏：单个会话也保持可见，避免启动后栏状态与后续行为不一致
   renderAllSessionTabs();
+
+  // ---- 标签栏常驻兜底 ----
+  // 无论是什么原因把标签栏隐藏/清空（远端镜像替换、页面切换竞态等），
+  // 都自动恢复为可见并渲染当前会话。Remote 模式跳过（DOM 由远端驱动）。
+  let _sessionTabsRepairPending = false;
+  function repairSessionTabs() {
+    if (_sessionTabsRepairPending) return;
+    _sessionTabsRepairPending = true;
+    requestAnimationFrame(() => {
+      _sessionTabsRepairPending = false;
+      if (typeof isRemoteMode !== 'undefined' && isRemoteMode) return;
+      for (const mode of ['chat', 'code', 'babe']) {
+        const el = document.getElementById(`${mode}-session-tabs`);
+        if (!el) continue;
+        if (el.classList.contains('hidden')) el.classList.remove('hidden');
+        el.style.setProperty('display', 'flex', 'important');
+        const want = sessionManager ? sessionManager.list(mode).length : 0;
+        const have = el.querySelectorAll('.session-tab').length;
+        const hasAdd = !!el.querySelector('.session-tab-add');
+        if (want !== have || !hasAdd) {
+          try { renderSessionTabs(mode); } catch { /* ignore */ }
+        }
+      }
+    });
+  }
+  if (typeof MutationObserver === 'function') {
+    const _sessionTabsObserver = new MutationObserver(repairSessionTabs);
+    _sessionTabsObserver.observe(document.getElementById('main-content') || document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['class', 'style']
+    });
+  }

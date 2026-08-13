@@ -2267,6 +2267,7 @@ ${toolListSection}`;
     if (session) {
       session.pendingApproval = null;
       window.__sessionManager.setStatus(session, this.running ? window.SessionStatus.RUNNING : window.SessionStatus.IDLE);
+      window.__sessionManager.setAttention(session, null);
     }
   }
 
@@ -2292,6 +2293,7 @@ ${toolListSection}`;
     if (session) {
       session.pendingToolAuth = null;
       window.__sessionManager.setStatus(session, this.running ? window.SessionStatus.RUNNING : window.SessionStatus.IDLE);
+      window.__sessionManager.setAttention(session, null);
     }
   }
 
@@ -3151,7 +3153,7 @@ ${toolListSection}`;
           return await window.api.pcbRunCommand('redo');
         }
         case 'askQuestions': {
-          const answers = await window.askQuestions(args.questions);
+          const answers = await window.askQuestions(args.questions, this);
           return { ok: true, answers };
         }
         case 'downloadFile': {
@@ -3253,7 +3255,7 @@ ${toolListSection}`;
           if (this._fromWeb) {
             return { ok: false, error: typeof i18nToolReturn === 'function' ? i18nToolReturn('game_window_unavailable', '独立窗口小游戏在Web控制模式下不可用，请在主机上操作') : '独立窗口小游戏在Web控制模式下不可用，请在主机上操作' };
           }
-          const invitation = await window.showGameInvitation(args.game, args.message, args.suggestedAgents);
+          const invitation = await window.showGameInvitation(args.game, args.message, args.suggestedAgents, this);
           if (!invitation.accepted) {
             return { ok: true, accepted: false, message: '用户忽略了游戏邀请' };
           }

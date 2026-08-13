@@ -656,10 +656,11 @@
         const ts = item.updatedAt ? (typeof item.updatedAt === 'number' ? item.updatedAt : Date.parse(item.updatedAt)) : NaN;
         const timeStr = !isNaN(ts) ? new Date(ts).toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '未知时间';
         const affectionBadge = `<span class="babe-history-affection" title="好感度"><i class="fa-solid fa-heart"></i> ${item.affection ?? 0}</span>`;
+        const live = (typeof getSessionLiveState === 'function') ? getSessionLiveState('babe', item) : null;
         return `
         <div class="history-item" data-id="${item.id}">
           <div class="history-info">
-            <div class="history-title">${escapeHtml(item.title || '未命名对话')} ${affectionBadge} ${sessionStatusBadge(item.status, item.lastError)}</div>
+            <div class="history-title">${escapeHtml(item.title || '未命名对话')} ${affectionBadge} ${sessionStatusBadge(live ? live.status : item.status, live ? live.lastError : item.lastError, live ? live.attention : null)}</div>
             <div class="history-time">${timeStr} · ${item.messageCount || 0} 条消息</div>
           </div>
           <div class="history-actions">
@@ -738,10 +739,11 @@
     const ts = item.updatedAt ? (typeof item.updatedAt === 'number' ? item.updatedAt : Date.parse(item.updatedAt)) : NaN;
     const timeStr = !isNaN(ts) ? new Date(ts).toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '未知时间';
     const affectionBadge = `<span class="babe-history-affection" title="好感度"><i class="fa-solid fa-heart"></i> ${item.affection ?? 0}</span>`;
+    const live = (typeof getSessionLiveState === 'function') ? getSessionLiveState('babe', item) : null;
     return `
       <div class="history-item" data-id="${item.id}">
         <div class="history-info">
-          <div class="history-title">${escapeHtml(item.title || '未命名对话')} ${affectionBadge} ${sessionStatusBadge(item.status, item.lastError)}</div>
+          <div class="history-title">${escapeHtml(item.title || '未命名对话')} ${affectionBadge} ${sessionStatusBadge(live ? live.status : item.status, live ? live.lastError : item.lastError, live ? live.attention : null)}</div>
           <div class="history-time">${timeStr} · ${item.messageCount || 0} 条消息</div>
         </div>
         <div class="history-actions">

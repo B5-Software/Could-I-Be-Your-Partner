@@ -812,6 +812,7 @@ export default (async function appEntry() {
         document.querySelector('.nav-item[data-page="babe-history"]')?.classList.add('hidden');
         // Switch to chat page
         document.querySelector('.nav-item[data-page="chat"]')?.click();
+        if (typeof renderSessionTabs === 'function') renderSessionTabs('chat');
       } else if (mode === 'code') {
         // Code mode: show code sidebar items, hide chat/babe ones
         document.querySelector('.nav-item[data-page="chat"]')?.classList.add('hidden');
@@ -822,6 +823,7 @@ export default (async function appEntry() {
         document.querySelector('.nav-item[data-page="babe-history"]')?.classList.add('hidden');
         // Switch to code page
         document.querySelector('.nav-item[data-page="code"]')?.click();
+        if (typeof renderSessionTabs === 'function') renderSessionTabs('code');
       } else if (mode === 'babe') {
         // Babe mode: show babe sidebar items, hide chat/code ones
         document.querySelector('.nav-item[data-page="chat"]')?.classList.add('hidden');
@@ -834,6 +836,7 @@ export default (async function appEntry() {
         document.querySelector('.nav-item[data-page="babe"]')?.click();
         // 启动 Babe Agent（如果尚未启动）
         initBabeAgent();
+        if (typeof renderSessionTabs === 'function') renderSessionTabs('babe');
       }
       // 切换模式后同步标题栏为目标模式当前对话标题（无则显示"未命名对话"）
       let modeTitle = '';
@@ -1135,6 +1138,10 @@ export default (async function appEntry() {
   AppBus.on('session-closed', () => {
     if (typeof renderAllSessionTabs === 'function') renderAllSessionTabs();
   });
+  AppBus.on('session-attention', () => {
+    if (typeof renderAllSessionTabs === 'function') renderAllSessionTabs();
+    refreshActiveHistoryPage();
+  });
   let historyRefreshTimer = null;
   const refreshActiveHistoryPage = () => {
     if (historyRefreshTimer) return;
@@ -1182,18 +1189,28 @@ export default (async function appEntry() {
     if (!tabsEl) return;
     const sessions = sessionManager.list(mode).sort((a, b) => a.createdAt - b.createdAt);
     // 标签栏常驻：即使没有会话也只显示“新建会话”按钮，不再整栏隐藏。
-    // 关闭最后一个标签页会立即新建会话，避免任何中间态导致标签栏闪烁或消失。
+    // 用 inline !important 强制 display，防止任何后续代码/远端镜像重新加回 hidden。
     tabsEl.classList.remove('hidden');
+    tabsEl.style.setProperty('display', 'flex', 'important');
     tabsEl.innerHTML = '';
     const active = sessionManager.getActive(mode);
     for (const session of sessions) {
+      const attentionMeta = (typeof sessionAttentionMeta === 'function') ? sessionAttentionMeta(session.attention) : null;
+      const dotClass = attentionMeta
+        ? `attention ${attentionMeta.cls}`
+        : escapeHtml(session.status);
+      const dotTitle = attentionMeta ? attentionMeta.label : '';
+      const attentionBadge = attentionMeta
+        ? `<span class="session-attention-badge ${attentionMeta.cls}"><i class="fa-solid ${attentionMeta.icon}"></i>${escapeHtml(attentionMeta.label.replace('等待', ''))}</span>`
+        : '';
       const tab = document.createElement('div');
       tab.className = 'session-tab' + (active?.key === session.key ? ' active' : '');
       tab.dataset.sessionKey = session.key;
       tab.title = session.title || '未命名会话';
       tab.innerHTML = `
-        <span class="session-status-dot ${escapeHtml(session.status)}"></span>
+        <span class="session-status-dot ${dotClass}" ${dotTitle ? `title="${escapeHtml(dotTitle)}"` : ''}></span>
         <span class="session-tab-title">${escapeHtml(session.title || '未命名会话')}</span>
+        ${attentionBadge}
         <span class="session-tab-close" title="关闭会话"><i class="fa-solid fa-xmark"></i></span>
       `;
       tab.addEventListener('click', (e) => {
@@ -1436,6 +1453,40 @@ export default (async function appEntry() {
   updateContextProgress();
   // 初始化完成后渲染一次标签栏：单个会话也保持可见，避免启动后栏状态与后续行为不一致
   renderAllSessionTabs();
+
+  // ---- 标签栏常驻兜底 ----
+  // 无论是什么原因把标签栏隐藏/清空（远端镜像替换、页面切换竞态等），
+  // 都自动恢复为可见并渲染当前会话。Remote 模式跳过（DOM 由远端驱动）。
+  let _sessionTabsRepairPending = false;
+  function repairSessionTabs() {
+    if (_sessionTabsRepairPending) return;
+    _sessionTabsRepairPending = true;
+    requestAnimationFrame(() => {
+      _sessionTabsRepairPending = false;
+      if (typeof isRemoteMode !== 'undefined' && isRemoteMode) return;
+      for (const mode of ['chat', 'code', 'babe']) {
+        const el = document.getElementById(`${mode}-session-tabs`);
+        if (!el) continue;
+        if (el.classList.contains('hidden')) el.classList.remove('hidden');
+        el.style.setProperty('display', 'flex', 'important');
+        const want = sessionManager ? sessionManager.list(mode).length : 0;
+        const have = el.querySelectorAll('.session-tab').length;
+        const hasAdd = !!el.querySelector('.session-tab-add');
+        if (want !== have || !hasAdd) {
+          try { renderSessionTabs(mode); } catch { /* ignore */ }
+        }
+      }
+    });
+  }
+  if (typeof MutationObserver === 'function') {
+    const _sessionTabsObserver = new MutationObserver(repairSessionTabs);
+    _sessionTabsObserver.observe(document.getElementById('main-content') || document.body, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ['class', 'style']
+    });
+  }
 
   // ---- 初次使用引导 ----
   // 仅检测 onboardingCompleted 标志：完成过一次就不再弹（用户可随时从设置主动改）
@@ -4709,11 +4760,18 @@ window.api.onWebControlSendMessage(async (message) => {
     guessCharacter: { name: '是否猜人物', icon: 'fa-magnifying-glass', desc: '通过提问只能用是/否回答，猜出 AI 心中的人物', defaultAgents: 1 },
   };
 
-  window.showGameInvitation = function(game, message, suggestedAgents) {
+  window.showGameInvitation = function(game, message, suggestedAgents, callingAgent) {
     return new Promise((resolve) => {
       const meta = GAME_META[game] || { name: game, icon: 'fa-gamepad', desc: '', defaultAgents: 2 };
       const numAgents = suggestedAgents || meta.defaultAgents;
       const time = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+
+      // 会话进入"等待游戏邀请回应"状态：标签页/历史列表显示指示器，而不是"运行中"
+      const ownerAgent = callingAgent || agent;
+      const ownerSession = window.__sessionManager?.getByAgent(ownerAgent);
+      if (window.__sessionManager && ownerSession) {
+        window.__sessionManager.setAttention(ownerSession, { kind: 'game', label: '等待游戏回应' });
+      }
 
       // Wrap inside AI message bubble (like askQuestions)
       const msg = document.createElement('div');
@@ -4759,6 +4817,7 @@ window.api.onWebControlSendMessage(async (message) => {
       const agentInput = card.querySelector('.agent-count-input');
 
       btnAccept.addEventListener('click', () => {
+        if (window.__sessionManager && ownerSession) window.__sessionManager.setAttention(ownerSession, null);
         const count = agentInput ? (parseInt(agentInput.value) || numAgents) : numAgents;
         card.classList.add('accepted');
         btnAccept.textContent = '已接受';
@@ -4769,6 +4828,7 @@ window.api.onWebControlSendMessage(async (message) => {
       });
 
       btnIgnore.addEventListener('click', () => {
+        if (window.__sessionManager && ownerSession) window.__sessionManager.setAttention(ownerSession, null);
         card.classList.add('ignored');
         btnAccept.disabled = true;
         btnIgnore.disabled = true;
@@ -8710,10 +8770,11 @@ window.api.onWebControlSendMessage(async (message) => {
           timeStr = new Date(ts).toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
         }
       }
+      const live = (typeof getSessionLiveState === 'function') ? getSessionLiveState('chat', h) : null;
       return `
       <div class="history-item" data-id="${h.id}">
         <div class="history-info">
-          <div class="history-title">${escapeHtml(h.title || '未命名对话')} ${sessionStatusBadge(h.status, h.lastError)}</div>
+          <div class="history-title">${escapeHtml(h.title || '未命名对话')} ${sessionStatusBadge(live ? live.status : h.status, live ? live.lastError : h.lastError, live ? live.attention : null)}</div>
           <div class="history-time">${timeStr}</div>
         </div>
         <div class="history-actions">
@@ -8919,10 +8980,14 @@ window.api.onWebControlSendMessage(async (message) => {
   function renderHistoryItem(h) {
     const timeStr = formatHistoryTime(h);
     const countText = h.messageCount ? ` · ${h.messageCount} 条消息` : '';
+    const live = (typeof getSessionLiveState === 'function') ? getSessionLiveState('chat', h) : null;
+    const status = live ? live.status : h.status;
+    const attention = live ? live.attention : null;
+    const lastError = live ? live.lastError : h.lastError;
     return `
       <div class="history-item" data-id="${escapeHtml(h.id)}">
         <div class="history-info">
-          <div class="history-title">${escapeHtml(h.title || '未命名对话')} ${sessionStatusBadge(h.status, h.lastError)}</div>
+          <div class="history-title">${escapeHtml(h.title || '未命名对话')} ${sessionStatusBadge(status, lastError, attention)}</div>
           <div class="history-time">${timeStr}${countText}</div>
         </div>
         <div class="history-actions">
@@ -9827,11 +9892,18 @@ window.api.onWebControlSendMessage(async (message) => {
   });
 
   // ---- Ask Questions (Chat Bubble) ----
-  window.askQuestions = function(questions) {
+  window.askQuestions = function(questions, callingAgent) {
     return new Promise((resolve) => {
       if (!Array.isArray(questions) || questions.length === 0) {
         resolve([]);
         return;
+      }
+
+      // 会话进入"等待问卷回答"状态：标签页/历史列表显示指示器，而不是"运行中"
+      const ownerAgent = callingAgent || agent;
+      const ownerSession = window.__sessionManager?.getByAgent(ownerAgent);
+      if (window.__sessionManager && ownerSession) {
+        window.__sessionManager.setAttention(ownerSession, { kind: 'questionnaire', label: '等待问卷回答' });
       }
 
       // 系统通知：问卷需要用户回答
@@ -10027,6 +10099,7 @@ window.api.onWebControlSendMessage(async (message) => {
       }
 
       function finish() {
+        if (window.__sessionManager && ownerSession) window.__sessionManager.setAttention(ownerSession, null);
         window.__activeQuestion = null;
         // Disable all inputs
         const allInputs = optionsWrap.querySelectorAll('input');
@@ -11550,10 +11623,11 @@ window.api.onWebControlSendMessage(async (message) => {
         listEl.innerHTML = result.history.map(item => {
           const date = new Date(item.ts);
           const timeStr = date.toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+          const live = (typeof getSessionLiveState === 'function') ? getSessionLiveState('code', item) : null;
           return `
           <div class="history-item" data-id="${item.id}">
             <div class="history-info">
-              <div class="history-title">${escapeHtml(item.title || '未命名')} ${sessionStatusBadge(item.status, item.lastError)}</div>
+              <div class="history-title">${escapeHtml(item.title || '未命名')} ${sessionStatusBadge(live ? live.status : item.status, live ? live.lastError : item.lastError, live ? live.attention : null)}</div>
               <div class="history-time">${timeStr} · ${item.messageCount || 0} 条消息</div>
             </div>
             <div class="history-actions">
@@ -11641,10 +11715,11 @@ window.api.onWebControlSendMessage(async (message) => {
   function renderCodeHistoryItem(item) {
     const date = new Date(item.ts);
     const timeStr = date.toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+    const live = (typeof getSessionLiveState === 'function') ? getSessionLiveState('code', item) : null;
     return `
       <div class="history-item" data-id="${item.id}">
         <div class="history-info">
-          <div class="history-title">${escapeHtml(item.title || '未命名')} ${sessionStatusBadge(item.status, item.lastError)}</div>
+          <div class="history-title">${escapeHtml(item.title || '未命名')} ${sessionStatusBadge(live ? live.status : item.status, live ? live.lastError : item.lastError, live ? live.attention : null)}</div>
           <div class="history-time">${timeStr} · ${item.messageCount || 0} 条消息</div>
         </div>
         <div class="history-actions">
@@ -12960,10 +13035,11 @@ window.api.onWebControlSendMessage(async (message) => {
         const ts = item.updatedAt ? (typeof item.updatedAt === 'number' ? item.updatedAt : Date.parse(item.updatedAt)) : NaN;
         const timeStr = !isNaN(ts) ? new Date(ts).toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '未知时间';
         const affectionBadge = `<span class="babe-history-affection" title="好感度"><i class="fa-solid fa-heart"></i> ${item.affection ?? 0}</span>`;
+        const live = (typeof getSessionLiveState === 'function') ? getSessionLiveState('babe', item) : null;
         return `
         <div class="history-item" data-id="${item.id}">
           <div class="history-info">
-            <div class="history-title">${escapeHtml(item.title || '未命名对话')} ${affectionBadge} ${sessionStatusBadge(item.status, item.lastError)}</div>
+            <div class="history-title">${escapeHtml(item.title || '未命名对话')} ${affectionBadge} ${sessionStatusBadge(live ? live.status : item.status, live ? live.lastError : item.lastError, live ? live.attention : null)}</div>
             <div class="history-time">${timeStr} · ${item.messageCount || 0} 条消息</div>
           </div>
           <div class="history-actions">
@@ -13042,10 +13118,11 @@ window.api.onWebControlSendMessage(async (message) => {
     const ts = item.updatedAt ? (typeof item.updatedAt === 'number' ? item.updatedAt : Date.parse(item.updatedAt)) : NaN;
     const timeStr = !isNaN(ts) ? new Date(ts).toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '未知时间';
     const affectionBadge = `<span class="babe-history-affection" title="好感度"><i class="fa-solid fa-heart"></i> ${item.affection ?? 0}</span>`;
+    const live = (typeof getSessionLiveState === 'function') ? getSessionLiveState('babe', item) : null;
     return `
       <div class="history-item" data-id="${item.id}">
         <div class="history-info">
-          <div class="history-title">${escapeHtml(item.title || '未命名对话')} ${affectionBadge} ${sessionStatusBadge(item.status, item.lastError)}</div>
+          <div class="history-title">${escapeHtml(item.title || '未命名对话')} ${affectionBadge} ${sessionStatusBadge(live ? live.status : item.status, live ? live.lastError : item.lastError, live ? live.attention : null)}</div>
           <div class="history-time">${timeStr} · ${item.messageCount || 0} 条消息</div>
         </div>
         <div class="history-actions">

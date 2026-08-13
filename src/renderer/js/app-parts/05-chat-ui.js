@@ -1518,11 +1518,18 @@
     guessCharacter: { name: '是否猜人物', icon: 'fa-magnifying-glass', desc: '通过提问只能用是/否回答，猜出 AI 心中的人物', defaultAgents: 1 },
   };
 
-  window.showGameInvitation = function(game, message, suggestedAgents) {
+  window.showGameInvitation = function(game, message, suggestedAgents, callingAgent) {
     return new Promise((resolve) => {
       const meta = GAME_META[game] || { name: game, icon: 'fa-gamepad', desc: '', defaultAgents: 2 };
       const numAgents = suggestedAgents || meta.defaultAgents;
       const time = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+
+      // 会话进入"等待游戏邀请回应"状态：标签页/历史列表显示指示器，而不是"运行中"
+      const ownerAgent = callingAgent || agent;
+      const ownerSession = window.__sessionManager?.getByAgent(ownerAgent);
+      if (window.__sessionManager && ownerSession) {
+        window.__sessionManager.setAttention(ownerSession, { kind: 'game', label: '等待游戏回应' });
+      }
 
       // Wrap inside AI message bubble (like askQuestions)
       const msg = document.createElement('div');
@@ -1568,6 +1575,7 @@
       const agentInput = card.querySelector('.agent-count-input');
 
       btnAccept.addEventListener('click', () => {
+        if (window.__sessionManager && ownerSession) window.__sessionManager.setAttention(ownerSession, null);
         const count = agentInput ? (parseInt(agentInput.value) || numAgents) : numAgents;
         card.classList.add('accepted');
         btnAccept.textContent = '已接受';
@@ -1578,6 +1586,7 @@
       });
 
       btnIgnore.addEventListener('click', () => {
+        if (window.__sessionManager && ownerSession) window.__sessionManager.setAttention(ownerSession, null);
         card.classList.add('ignored');
         btnAccept.disabled = true;
         btnIgnore.disabled = true;

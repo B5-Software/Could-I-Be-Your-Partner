@@ -174,10 +174,47 @@ function sessionStatusLabel(status) {
   return map[status] || status || '空闲';
 }
 
-function sessionStatusBadge(status, lastError) {
+function sessionAttentionMeta(attention) {
+  if (!attention || !attention.kind) return null;
+  const map = {
+    approval: { label: '等待审批', cls: 'attention-approval', icon: 'fa-hand' },
+    'tool-auth': { label: '等待授权', cls: 'attention-tool-auth', icon: 'fa-shield-halved' },
+    questionnaire: { label: '等待问卷回答', cls: 'attention-questionnaire', icon: 'fa-clipboard-question' },
+    game: { label: '等待游戏回应', cls: 'attention-game', icon: 'fa-gamepad' }
+  };
+  return map[attention.kind] || {
+    label: attention.label || '等待处理',
+    cls: 'attention-other',
+    icon: 'fa-hourglass-half'
+  };
+}
+
+function sessionStatusBadge(status, lastError, attention) {
+  const meta = sessionAttentionMeta(attention);
+  if (meta) {
+    const title = lastError ? ` title="${escapeHtml(lastError)}"` : '';
+    return `<span class="history-status attention ${meta.cls}"${title}><i class="fa-solid ${meta.icon}"></i> ${escapeHtml(meta.label)}</span>`;
+  }
   const label = sessionStatusLabel(status);
   const title = lastError ? ` title="${escapeHtml(lastError)}"` : '';
   return `<span class="history-status status-${escapeHtml(status || 'idle')}"${title}><i class="fa-solid fa-circle"></i> ${escapeHtml(label)}</span>`;
+}
+
+/**
+ * 取历史条目的实时展示状态：若该会话当前仍在 SessionManager 中（后台运行/等待交互），
+ * 用实时 status/attention 覆盖磁盘快照，使历史列表能显示"等待审批/问卷/游戏邀请"等，
+ * 而不是停留在"运行中"。
+ */
+function getSessionLiveState(mode, item) {
+  const fallback = { status: (item && item.status) || 'idle', attention: null, lastError: (item && item.lastError) || null };
+  const sm = window.__sessionManager;
+  if (!sm || !item || !item.id) return fallback;
+  const live = sm.list(mode).find(s => String(s.id) === String(item.id));
+  if (!live) return fallback;
+  let attention = live.attention || null;
+  if (!attention && live.status === 'waiting_approval') attention = { kind: 'approval', label: '等待审批' };
+  if (!attention && live.status === 'waiting_tool_auth') attention = { kind: 'tool-auth', label: '等待授权' };
+  return { status: live.status, attention, lastError: live.lastError || fallback.lastError };
 }
 
 function showToast(message, type = 'info', duration = 5000) {

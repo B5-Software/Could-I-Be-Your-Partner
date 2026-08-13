@@ -84,10 +84,11 @@
           timeStr = new Date(ts).toLocaleString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
         }
       }
+      const live = (typeof getSessionLiveState === 'function') ? getSessionLiveState('chat', h) : null;
       return `
       <div class="history-item" data-id="${h.id}">
         <div class="history-info">
-          <div class="history-title">${escapeHtml(h.title || '未命名对话')} ${sessionStatusBadge(h.status, h.lastError)}</div>
+          <div class="history-title">${escapeHtml(h.title || '未命名对话')} ${sessionStatusBadge(live ? live.status : h.status, live ? live.lastError : h.lastError, live ? live.attention : null)}</div>
           <div class="history-time">${timeStr}</div>
         </div>
         <div class="history-actions">
@@ -293,10 +294,14 @@
   function renderHistoryItem(h) {
     const timeStr = formatHistoryTime(h);
     const countText = h.messageCount ? ` · ${h.messageCount} 条消息` : '';
+    const live = (typeof getSessionLiveState === 'function') ? getSessionLiveState('chat', h) : null;
+    const status = live ? live.status : h.status;
+    const attention = live ? live.attention : null;
+    const lastError = live ? live.lastError : h.lastError;
     return `
       <div class="history-item" data-id="${escapeHtml(h.id)}">
         <div class="history-info">
-          <div class="history-title">${escapeHtml(h.title || '未命名对话')} ${sessionStatusBadge(h.status, h.lastError)}</div>
+          <div class="history-title">${escapeHtml(h.title || '未命名对话')} ${sessionStatusBadge(status, lastError, attention)}</div>
           <div class="history-time">${timeStr}${countText}</div>
         </div>
         <div class="history-actions">
@@ -1201,11 +1206,18 @@
   });
 
   // ---- Ask Questions (Chat Bubble) ----
-  window.askQuestions = function(questions) {
+  window.askQuestions = function(questions, callingAgent) {
     return new Promise((resolve) => {
       if (!Array.isArray(questions) || questions.length === 0) {
         resolve([]);
         return;
+      }
+
+      // 会话进入"等待问卷回答"状态：标签页/历史列表显示指示器，而不是"运行中"
+      const ownerAgent = callingAgent || agent;
+      const ownerSession = window.__sessionManager?.getByAgent(ownerAgent);
+      if (window.__sessionManager && ownerSession) {
+        window.__sessionManager.setAttention(ownerSession, { kind: 'questionnaire', label: '等待问卷回答' });
       }
 
       // 系统通知：问卷需要用户回答
@@ -1401,6 +1413,7 @@
       }
 
       function finish() {
+        if (window.__sessionManager && ownerSession) window.__sessionManager.setAttention(ownerSession, null);
         window.__activeQuestion = null;
         // Disable all inputs
         const allInputs = optionsWrap.querySelectorAll('input');
