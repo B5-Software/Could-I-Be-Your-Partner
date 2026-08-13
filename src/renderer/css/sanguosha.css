@@ -638,7 +638,6 @@ body {
 
 .sg-hero-select-btn:hover {
   filter: brightness(1.1);
-  transform: translateY(-2px);
 }
 
 .sg-hero-select-btn:disabled {

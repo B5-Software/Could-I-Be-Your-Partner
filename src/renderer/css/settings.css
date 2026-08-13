@@ -355,8 +355,8 @@ input[id^="setting-budget-peak-"][type="text"]:focus {
 }
 
 .avatar-frame-item:hover {
-  transform: scale(1.08);
   border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-bg);
 }
 
 .avatar-frame-item.selected {
@@ -475,8 +475,8 @@ input[id^="setting-budget-peak-"][type="text"]:focus {
 }
 
 .color-dot:hover {
-  transform: scale(1.15);
   border-color: var(--text-primary);
+  box-shadow: 0 0 0 2px var(--accent-bg);
 }
 
 /* Color Schemes */
@@ -499,7 +499,7 @@ input[id^="setting-budget-peak-"][type="text"]:focus {
 
 .scheme-btn:hover {
   border-color: var(--accent);
-  transform: scale(1.05);
+  box-shadow: 0 0 0 2px var(--accent-bg);
 }
 
 .scheme-btn span {

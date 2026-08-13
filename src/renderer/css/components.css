@@ -168,7 +168,7 @@
 
 .mcp-refresh-btn:hover {
   background: var(--accent-bg-hover, var(--accent-bg));
-  transform: scale(1.1);
+  color: var(--accent);
 }
 
 .mcp-refresh-btn.spinning i {
@@ -1172,47 +1172,64 @@
 
 .attachment-remove:hover { color: var(--danger); }
 
-/* Markdown Rendered Content */
+/* Markdown Rendered Content（正文与推理过程容器共用，防止长代码/表格撑破聊天容器） */
 .message-content.markdown-body h1,
 .message-content.markdown-body h2,
-.message-content.markdown-body h3 { margin: 8px 0 4px; font-weight: 700; }
-.message-content.markdown-body h1 { font-size: 1.3em; }
-.message-content.markdown-body h2 { font-size: 1.15em; }
-.message-content.markdown-body h3 { font-size: 1.05em; }
-.message-content.markdown-body p { margin: 4px 0; }
-.message-content.markdown-body ul, .message-content.markdown-body ol { padding-left: 20px; margin: 4px 0; }
-.message-content.markdown-body li { margin: 2px 0; }
-.message-content.markdown-body code {
+.message-content.markdown-body h3,
+.reasoning-content.markdown-body h1,
+.reasoning-content.markdown-body h2,
+.reasoning-content.markdown-body h3 { margin: 8px 0 4px; font-weight: 700; }
+.message-content.markdown-body h1, .reasoning-content.markdown-body h1 { font-size: 1.3em; }
+.message-content.markdown-body h2, .reasoning-content.markdown-body h2 { font-size: 1.15em; }
+.message-content.markdown-body h3, .reasoning-content.markdown-body h3 { font-size: 1.05em; }
+.message-content.markdown-body p, .reasoning-content.markdown-body p { margin: 4px 0; }
+.message-content.markdown-body ul, .message-content.markdown-body ol,
+.reasoning-content.markdown-body ul, .reasoning-content.markdown-body ol { padding-left: 20px; margin: 4px 0; }
+.message-content.markdown-body li, .reasoning-content.markdown-body li { margin: 2px 0; }
+.message-content.markdown-body code,
+.reasoning-content.markdown-body code {
   background: var(--bg-tertiary);
   padding: 1px 5px;
   border-radius: 3px;
   font-family: "SF Mono", "Fira Code", Consolas, monospace;
   font-size: 0.9em;
 }
-.message-content.markdown-body pre {
+.message-content.markdown-body pre,
+.reasoning-content.markdown-body pre {
   background: var(--bg-tertiary);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   padding: 10px 12px;
   overflow-x: auto;
   margin: 6px 0;
+  max-width: 100%;
+  overflow-wrap: normal;
+  word-break: normal;
+  white-space: pre;
 }
-.message-content.markdown-body pre code {
+.message-content.markdown-body pre code,
+.reasoning-content.markdown-body pre code {
   background: transparent;
   padding: 0;
 }
-.message-content.markdown-body blockquote {
+.message-content.markdown-body blockquote,
+.reasoning-content.markdown-body blockquote {
   border-left: 3px solid var(--accent);
   padding-left: 10px;
   color: var(--text-secondary);
   margin: 6px 0;
 }
-.message-content.markdown-body table {
+.message-content.markdown-body table,
+.reasoning-content.markdown-body table {
   border-collapse: collapse;
   width: 100%;
   margin: 6px 0;
+  max-width: 100%;
+  display: block;
+  overflow-x: auto;
 }
-.message-content.markdown-body th, .message-content.markdown-body td {
+.message-content.markdown-body th, .message-content.markdown-body td,
+.reasoning-content.markdown-body th, .reasoning-content.markdown-body td {
   border: 1px solid var(--border);
   padding: 6px 10px;
   text-align: left;
@@ -1384,7 +1401,6 @@
 
 .game-invite-actions .btn-game-accept:hover {
   filter: brightness(1.1);
-  transform: translateY(-1px);
 }
 
 .game-invite-actions .btn-game-ignore {

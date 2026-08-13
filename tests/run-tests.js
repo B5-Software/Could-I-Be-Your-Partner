@@ -515,6 +515,29 @@ test('session manager should track background sessions and queue overflow', () =
   assert.strictEqual(a.status, SessionStatus.DONE);
 });
 
+test('多会话标签栏常驻并支持右键批量关闭', () => {
+  const sessionsContent = fs.readFileSync(require('path').join(__dirname, '../src/renderer/js/app-parts/02-mode-sessions.js'), 'utf-8');
+  assert.ok(sessionsContent.includes('标签栏常驻'), '标签栏应常驻，不随会话数量隐藏');
+  assert.ok(sessionsContent.includes('打开工作目录'), '右键菜单应含打开工作目录');
+  assert.ok(sessionsContent.includes('关闭左侧所有标签页'), '右键菜单应含关闭左侧');
+  assert.ok(sessionsContent.includes('关闭右侧所有标签页'), '右键菜单应含关闭右侧');
+  assert.ok(sessionsContent.includes('关闭其他标签页'), '右键菜单应含关闭其他');
+  assert.ok(sessionsContent.includes('关闭所有标签页'), '右键菜单应含关闭所有');
+  assert.ok(sessionsContent.includes('关闭此标签页'), '右键菜单应含关闭此标签页');
+  assert.ok(sessionsContent.includes('createNewSession(mode)'), '关闭最后一个标签页应新建会话');
+});
+
+test('思考容器宽度约束与 Babe 标签栏圆角、光标一致性', () => {
+  const chatCss = fs.readFileSync(require('path').join(__dirname, '../src/renderer/css/chat.css'), 'utf-8');
+  const componentsCss = fs.readFileSync(require('path').join(__dirname, '../src/renderer/css/components.css'), 'utf-8');
+  const mainCss = fs.readFileSync(require('path').join(__dirname, '../src/renderer/css/main.css'), 'utf-8');
+  assert.ok(chatCss.includes('.message-body') && /\.message-body\s*\{[\s\S]*min-width:\s*0/.test(chatCss), '消息体应允许收缩');
+  assert.ok(/\.reasoning-content\s*\{[\s\S]*max-width:\s*100%/.test(chatCss), '推理内容应有最大宽度');
+  assert.ok(chatCss.includes('.babe-mode #babe-session-tabs'), 'Babe 标签栏应有圆角规则');
+  assert.ok(componentsCss.includes('.reasoning-content.markdown-body pre'), '推理代码块应可横向滚动');
+  assert.ok(mainCss.includes('cursor: inherit'), '交互元素后代应继承光标');
+});
+
 test('main process should handle settings IPC', () => {
   assert.ok(mainContent.includes("settings:get"));
   assert.ok(mainContent.includes("settings:set"));
@@ -1713,6 +1736,34 @@ async function runDocumentToolTests() {
     }, { workspacePath: tmp, appTheme: { mode: 'light', accentColor: '#4f8cff' }, nativeDark: false });
     assert.strictEqual(r.ok, false);
     assert.ok(r.error.includes('工作区'), '应拒绝工作区外的图片');
+  });
+
+  await asyncTest('表格导出保留单元格格式（xlsx/ods）', async () => {
+    const AdmZip = require('adm-zip');
+    const { exportSpreadsheetFile } = require('../src/main/spreadsheet-io');
+    const cells = [
+      { addr: 'A1', value: '指标', raw: '指标', format: { bold: true, bg: '#4f8cff', color: '#ffffff', align: 'center' } },
+      { addr: 'B1', value: 1234.5, raw: '1234.5', format: { align: 'right', italic: true, fontSize: 14, color: 'red' } }
+    ];
+    const xlsxPath = pathLocal.join(tmp, 'fmt.xlsx');
+    const xlsxRes = exportSpreadsheetFile(xlsxPath, cells, '格式');
+    assert.strictEqual(xlsxRes.ok, true, xlsxRes.error || '');
+    const zip = new AdmZip(xlsxPath);
+    const styles = zip.getEntry('xl/styles.xml').getData().toString('utf8');
+    const sheet = zip.getEntry('xl/worksheets/sheet1.xml').getData().toString('utf8');
+    assert.ok(styles.includes('<b/>'), 'styles.xml 应包含粗体');
+    assert.ok(styles.includes('patternType="solid"'), 'styles.xml 应包含实心背景');
+    assert.ok(styles.includes('horizontal="center"'), 'styles.xml 应包含居中对齐');
+    assert.ok(sheet.includes('s="1"') || sheet.includes('s="2"'), '单元格应引用样式');
+
+    const odsPath = pathLocal.join(tmp, 'fmt.ods');
+    const odsRes = exportSpreadsheetFile(odsPath, cells, '格式');
+    assert.strictEqual(odsRes.ok, true, odsRes.error || '');
+    const odsZip = new AdmZip(odsPath);
+    const odsXml = odsZip.getEntry('content.xml').getData().toString('utf8');
+    assert.ok(odsXml.includes('office:automatic-styles'), 'ODS 应包含自动样式');
+    assert.ok(odsXml.includes('fo:font-weight="bold"'), 'ODS 应包含粗体样式');
+    assert.ok(odsXml.includes('fo:background-color="#4F8CFF"'), 'ODS 应包含背景色');
   });
 
   try { fsLocal.rmSync(tmp, { recursive: true, force: true }); } catch { /* ignore */ }

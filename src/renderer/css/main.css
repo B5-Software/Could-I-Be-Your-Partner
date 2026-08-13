@@ -8,6 +8,23 @@
 /* Main Layout & Global Styles */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
+/* 交互元素统一 pointer 光标，且让按钮/链接的后代继承同一光标，
+   避免 macOS 上光标在“默认箭头”与“手型”之间反复闪烁。 */
+button:not(:disabled),
+[role="button"]:not([aria-disabled="true"]),
+a[href],
+label[for],
+select:not(:disabled),
+input[type="button"]:not(:disabled),
+input[type="submit"]:not(:disabled),
+input[type="file"]:not(:disabled),
+summary {
+  cursor: pointer;
+}
+button *, [role="button"] *, a[href] * {
+  cursor: inherit;
+}
+
 body {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
   background: var(--bg-primary);
@@ -356,12 +373,12 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  transition: all var(--transition);
+  transition: box-shadow var(--transition), filter var(--transition), background var(--transition);
   box-shadow: var(--shadow-sm);
 }
 
 .btn-primary:hover {
-  transform: translateY(-1px);
+  filter: brightness(1.06);
   box-shadow: var(--shadow-md);
 }
 
@@ -580,7 +597,6 @@ body {
 
 .feature-item:hover {
   border-color: var(--accent);
-  transform: translateY(-2px);
   box-shadow: var(--shadow-sm);
 }
 

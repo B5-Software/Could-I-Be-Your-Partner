@@ -120,8 +120,152 @@ function importXLSX(filePath) {
 }
 
 /**
+ * 将 CSS 颜色（#rgb/#rrggbb/rgb()/rgba()/常见命名色）转为 ARGB 十六进制。
+ * 无法解析时返回 null（保持默认颜色）。
+ */
+function cssColorToArgb(color) {
+  const raw = String(color || '').trim().toLowerCase();
+  if (!raw) return null;
+  let hex = null;
+  let m = raw.match(/^#([0-9a-f]{3})$/);
+  if (m) hex = m[1].split('').map(c => c + c).join('');
+  m = raw.match(/^#([0-9a-f]{6})$/);
+  if (m) hex = m[1];
+  if (!hex) {
+    m = raw.match(/^rgba?\(\s*(\d+)[,\s]+(\d+)[,\s]+(\d+)/);
+    if (m) {
+      hex = [Number(m[1]), Number(m[2]), Number(m[3])]
+        .map(n => Math.max(0, Math.min(255, n)).toString(16).padStart(2, '0')).join('');
+    }
+  }
+  const NAMED = {
+    black: '000000', white: 'ffffff', red: 'ff0000', green: '008000', blue: '0000ff',
+    yellow: 'ffff00', orange: 'ffa500', gray: '808080', grey: '808080', purple: '800080',
+    cyan: '00ffff', magenta: 'ff00ff', pink: 'ffc0cb', brown: 'a52a2a', silver: 'c0c0c0',
+    gold: 'ffd700', teal: '008080', navy: '000080', lime: '00ff00', maroon: '800000'
+  };
+  if (!hex && NAMED[raw]) hex = NAMED[raw];
+  if (!hex || !/^[0-9a-f]{6}$/.test(hex)) return null;
+  return 'FF' + hex.toUpperCase();
+}
+
+/**
+ * 根据单元格格式生成 styles.xml，并返回 { stylesXml, styleIndexByCell }。
+ * 支持的格式字段：bold / italic / color / bg / align(left|center|right) / fontSize(px)。
+ */
+function buildXlsxStyles(cells) {
+  const fonts = [
+    // fontId 0：默认
+    {}
+  ];
+  const fills = [
+    // fillId 0: none, 1: gray125（OOXML 要求前两个为保留项）
+    { patternType: 'none' },
+    { patternType: 'gray125' }
+  ];
+  // xf 0：默认样式
+  const xfs = [{
+    numFmtId: 0, fontId: 0, fillId: 0, borderId: 0,
+    applyFont: 0, applyFill: 0, applyAlignment: 0
+  }];
+  const styleMap = new Map(); // format JSON key -> xf index
+  const styleIndexByCell = new Map(); // cell.addr -> xf index
+
+  for (const cell of cells) {
+    const f = cell && cell.format;
+    if (!f || typeof f !== 'object' || !Object.keys(f).length) continue;
+    const key = JSON.stringify({
+      bold: !!f.bold, italic: !!f.italic,
+      color: f.color || '', bg: f.bg || '',
+      align: f.align || '', fontSize: f.fontSize || 0
+    });
+    let xfIndex = styleMap.get(key);
+    if (xfIndex === undefined) {
+      let fontId = 0;
+      if (f.bold || f.italic || f.color || f.fontSize) {
+        const font = {};
+        if (f.bold) font.b = 1;
+        if (f.italic) font.i = 1;
+        if (f.color) {
+          const argb = cssColorToArgb(f.color);
+          if (argb) font.color = { rgb: argb };
+        }
+        if (f.fontSize) font.sz = Math.max(1, Math.round(Number(f.fontSize) * 0.75 * 10) / 10);
+        fontId = fonts.length;
+        fonts.push(font);
+      }
+      let fillId = 0;
+      if (f.bg) {
+        const argb = cssColorToArgb(f.bg);
+        if (argb) {
+          fillId = fills.length;
+          fills.push({ patternType: 'solid', fgColor: { rgb: argb } });
+        }
+      }
+      const xf = {
+        numFmtId: 0, fontId, fillId, borderId: 0,
+        applyFont: fontId > 0 ? 1 : 0,
+        applyFill: fillId > 0 ? 1 : 0,
+        applyAlignment: 0
+      };
+      if (f.align && ['left', 'center', 'right'].includes(f.align)) {
+        xf.applyAlignment = 1;
+        xf.alignment = { horizontal: f.align };
+      }
+      xfIndex = xfs.length;
+      xfs.push(xf);
+      styleMap.set(key, xfIndex);
+    }
+    styleIndexByCell.set(cell.addr, xfIndex);
+  }
+
+  let stylesXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n';
+  stylesXml += '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">';
+  stylesXml += `<fonts count="${fonts.length}">`;
+  for (const f of fonts) {
+    stylesXml += '<font>';
+    if (f.b) stylesXml += '<b/>';
+    if (f.i) stylesXml += '<i/>';
+    if (f.color) stylesXml += `<color rgb="${f.color.rgb}"/>`;
+    if (f.sz) stylesXml += `<sz val="${f.sz}"/>`;
+    stylesXml += '<name val="Calibri"/><family val="2"/></font>';
+  }
+  stylesXml += '</fonts>';
+  stylesXml += `<fills count="${fills.length}">`;
+  for (const f of fills) {
+    if (f.patternType === 'solid') {
+      stylesXml += `<fill><patternFill patternType="solid"><fgColor rgb="${f.fgColor.rgb}"/><bgColor indexed="64"/></patternFill></fill>`;
+    } else {
+      stylesXml += `<fill><patternFill patternType="${f.patternType}"/></fill>`;
+    }
+  }
+  stylesXml += '</fills>';
+  stylesXml += '<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>';
+  stylesXml += `<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>`;
+  stylesXml += `<cellXfs count="${xfs.length}">`;
+  for (const x of xfs) {
+    let attr = `numFmtId="${x.numFmtId}" fontId="${x.fontId}" fillId="${x.fillId}" borderId="${x.borderId}" xfId="0"`;
+    if (x.applyAlignment) attr += ' applyAlignment="1"';
+    if (x.applyFont) attr += ' applyFont="1"';
+    if (x.applyFill) attr += ' applyFill="1"';
+    if (x.alignment) {
+      stylesXml += `<xf ${attr}><alignment horizontal="${x.alignment.horizontal}"/></xf>`;
+    } else {
+      stylesXml += `<xf ${attr}/>`;
+    }
+  }
+  stylesXml += '</cellXfs>';
+  stylesXml += '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>';
+  stylesXml += '<dxfs count="0"/>';
+  stylesXml += `<tableStyles count="0" defaultTableStyle="TableStyleMedium2" defaultPivotStyle="PivotStyleLight16"/>`;
+  stylesXml += '</styleSheet>';
+
+  return { stylesXml, styleIndexByCell };
+}
+
+/**
  * Export cells to XLSX file
- * cells: [{addr, value, raw}]
+ * cells: [{addr, value, raw, format}]
  */
 function exportXLSX(filePath, cells, sheetName = 'Sheet1') {
   const sharedStrings = [];
@@ -145,6 +289,8 @@ function exportXLSX(filePath, cells, sheetName = 'Sheet1') {
   }
 
   // Build sheet XML
+  const { stylesXml, styleIndexByCell } = buildXlsxStyles(cells);
+
   let sheetXml = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n';
   sheetXml += '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">';
   sheetXml += '<sheetData>';
@@ -159,20 +305,22 @@ function exportXLSX(filePath, cells, sheetName = 'Sheet1') {
     for (const cell of rowCells) {
       const raw = cell.raw !== undefined ? cell.raw : cell.value;
       const rawStr = String(raw);
+      const styleIdx = styleIndexByCell.get(cell.addr);
+      const styleAttr = styleIdx !== undefined ? ` s="${styleIdx}"` : '';
 
       if (rawStr.startsWith('=')) {
         // Formula
         const val = cell.value !== undefined ? cell.value : '';
-        sheetXml += `<c r="${cell.addr}"><f>${escapeXml(rawStr.substring(1))}</f><v>${escapeXml(String(val))}</v></c>`;
+        sheetXml += `<c r="${cell.addr}"${styleAttr}><f>${escapeXml(rawStr.substring(1))}</f><v>${escapeXml(String(val))}</v></c>`;
       } else {
         const num = Number(rawStr);
         if (rawStr !== '' && !isNaN(num)) {
           // Number
-          sheetXml += `<c r="${cell.addr}"><v>${num}</v></c>`;
+          sheetXml += `<c r="${cell.addr}"${styleAttr}><v>${num}</v></c>`;
         } else {
           // String via shared strings
           const idx = getSSIndex(rawStr);
-          sheetXml += `<c r="${cell.addr}" t="s"><v>${idx}</v></c>`;
+          sheetXml += `<c r="${cell.addr}" t="s"${styleAttr}><v>${idx}</v></c>`;
         }
       }
     }
@@ -205,6 +353,7 @@ function exportXLSX(filePath, cells, sheetName = 'Sheet1') {
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
 <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
 <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/>
+<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
 </Relationships>`;
 
   const contentTypesXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -214,6 +363,7 @@ function exportXLSX(filePath, cells, sheetName = 'Sheet1') {
 <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
 <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
 <Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>
+<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
 </Types>`;
 
   const zip = new AdmZip();
@@ -223,6 +373,7 @@ function exportXLSX(filePath, cells, sheetName = 'Sheet1') {
   zip.addFile('xl/_rels/workbook.xml.rels', Buffer.from(wbRelsXml, 'utf8'));
   zip.addFile('xl/worksheets/sheet1.xml', Buffer.from(sheetXml, 'utf8'));
   zip.addFile('xl/sharedStrings.xml', Buffer.from(ssXml, 'utf8'));
+  zip.addFile('xl/styles.xml', Buffer.from(stylesXml, 'utf8'));
   zip.writeZip(filePath);
 
   return { ok: true, path: filePath };
@@ -293,6 +444,64 @@ function importODS(filePath) {
   return { ok: true, cells, sheetName };
 }
 
+/**
+ * 根据单元格格式生成 ODS automatic-styles XML。
+ * 返回 { stylesXml, styleNameByCell }，单元格通过 table:style-name 引用。
+ */
+function buildOdsCellStyles(cells) {
+  const styleMap = new Map(); // format JSON key -> style name
+  const styleNameByCell = new Map();
+  let parts = '';
+  let counter = 0;
+
+  for (const cell of cells) {
+    const f = cell && cell.format;
+    if (!f || typeof f !== 'object' || !Object.keys(f).length) continue;
+    const key = JSON.stringify({
+      bold: !!f.bold, italic: !!f.italic,
+      color: f.color || '', bg: f.bg || '',
+      align: f.align || '', fontSize: f.fontSize || 0
+    });
+    let name = styleMap.get(key);
+    if (!name) {
+      name = 'ce' + (++counter);
+      styleMap.set(key, name);
+      const textProps = [];
+      if (f.bold) textProps.push('fo:font-weight="bold"');
+      if (f.italic) textProps.push('fo:font-style="italic"');
+      if (f.color) {
+        const argb = cssColorToArgb(f.color);
+        if (argb) textProps.push(`fo:color="#${argb.slice(2)}"`);
+      }
+      if (f.fontSize) {
+        const pt = Math.max(1, Math.round(Number(f.fontSize) * 0.75 * 10) / 10);
+        textProps.push(`fo:font-size="${pt}pt"`);
+      }
+      const cellProps = [];
+      if (f.bg) {
+        const argb = cssColorToArgb(f.bg);
+        if (argb) cellProps.push(`fo:background-color="#${argb.slice(2)}"`);
+      }
+      const paraProps = [];
+      if (f.align && ['left', 'center', 'right'].includes(f.align)) {
+        const map = { left: 'start', center: 'center', right: 'end' };
+        paraProps.push(`fo:text-align="${map[f.align]}"`);
+      }
+      parts += `<style:style style:name="${name}" style:family="table-cell">`;
+      if (textProps.length) parts += `<style:text-properties ${textProps.join(' ')}/>`;
+      if (cellProps.length) parts += `<style:table-cell-properties ${cellProps.join(' ')}/>`;
+      if (paraProps.length) parts += `<style:paragraph-properties ${paraProps.join(' ')}/>`;
+      parts += '</style:style>';
+    }
+    styleNameByCell.set(cell.addr, name);
+  }
+
+  const stylesXml = parts
+    ? `<office:automatic-styles>${parts}</office:automatic-styles>`
+    : '';
+  return { stylesXml, styleNameByCell };
+}
+
 function exportODS(filePath, cells, sheetName = 'Sheet1') {
   // Build rows map
   const rowsMap = {};
@@ -307,6 +516,7 @@ function exportODS(filePath, cells, sheetName = 'Sheet1') {
   }
 
   let tableRows = '';
+  const { stylesXml, styleNameByCell } = buildOdsCellStyles(cells);
   for (let r = 0; r <= maxRow; r++) {
     tableRows += '<table:table-row>';
     for (let c = 0; c <= maxCol; c++) {
@@ -318,15 +528,17 @@ function exportODS(filePath, cells, sheetName = 'Sheet1') {
       const raw = cell.raw !== undefined ? cell.raw : cell.value;
       const rawStr = String(raw);
       const val = cell.value !== undefined ? cell.value : raw;
+      const styleName = styleNameByCell.get(cell.addr);
+      const styleAttr = styleName ? ` table:style-name="${styleName}"` : '';
 
       if (rawStr.startsWith('=')) {
-        tableRows += `<table:table-cell table:formula="of:=${escapeXml(rawStr.substring(1))}" office:value-type="float" office:value="${escapeXml(String(val))}"><text:p>${escapeXml(String(val))}</text:p></table:table-cell>`;
+        tableRows += `<table:table-cell${styleAttr} table:formula="of:=${escapeXml(rawStr.substring(1))}" office:value-type="float" office:value="${escapeXml(String(val))}"><text:p>${escapeXml(String(val))}</text:p></table:table-cell>`;
       } else {
         const num = Number(rawStr);
         if (rawStr !== '' && !isNaN(num)) {
-          tableRows += `<table:table-cell office:value-type="float" office:value="${num}"><text:p>${num}</text:p></table:table-cell>`;
+          tableRows += `<table:table-cell${styleAttr} office:value-type="float" office:value="${num}"><text:p>${num}</text:p></table:table-cell>`;
         } else {
-          tableRows += `<table:table-cell office:value-type="string"><text:p>${escapeXml(rawStr)}</text:p></table:table-cell>`;
+          tableRows += `<table:table-cell${styleAttr} office:value-type="string"><text:p>${escapeXml(rawStr)}</text:p></table:table-cell>`;
         }
       }
     }
@@ -337,9 +549,11 @@ function exportODS(filePath, cells, sheetName = 'Sheet1') {
 <office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0"
   xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0"
   xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0"
+  xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0"
   xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0"
   office:version="1.2">
 <office:body><office:spreadsheet>
+${stylesXml}
 <table:table table:name="${escapeXml(sheetName)}">
 ${tableRows}
 </table:table>

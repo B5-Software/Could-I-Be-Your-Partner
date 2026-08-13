@@ -480,14 +480,14 @@ body.no-tarot .setting-label-tarot + .toggle-switch + .setting-hint {
   color: #fff;
   box-shadow: 0 2px 8px var(--accent-bg);
 }
-.ob-nav-next:hover { transform: translateY(-1px); box-shadow: 0 4px 14px var(--accent-bg); }
+.ob-nav-next:hover { filter: brightness(1.06); box-shadow: 0 4px 14px var(--accent-bg); }
 .ob-nav-finish {
   border: none;
   background: linear-gradient(135deg, #22c55e, #16a34a);
   color: #fff;
   box-shadow: 0 2px 8px rgba(34,197,94,0.3);
 }
-.ob-nav-finish:hover { transform: translateY(-1px); box-shadow: 0 4px 14px rgba(34,197,94,0.4); }
+.ob-nav-finish:hover { filter: brightness(1.06); box-shadow: 0 4px 14px rgba(34,197,94,0.4); }
 
 /* Local/Remote 选择器 */
 .connection-switcher {
@@ -894,6 +894,8 @@ body.no-tarot .setting-label-tarot + .toggle-switch + .setting-hint {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .message-content {
@@ -934,6 +936,7 @@ body.no-tarot .setting-label-tarot + .toggle-switch + .setting-hint {
   border-radius: 8px;
   overflow: hidden;
   background: var(--bg-tertiary, rgba(0,0,0,0.03));
+  max-width: 100%;
 }
 .reasoning-header {
   display: flex;
@@ -961,6 +964,9 @@ body.no-tarot .setting-label-tarot + .toggle-switch + .setting-hint {
   border-top: 1px solid var(--border);
   max-height: 400px;
   overflow-y: auto;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 /* While streaming: reasoning is expanded (no collapse) */
 .message.assistant.streaming .reasoning-section:not(.collapsed) .reasoning-content { display: block; }
@@ -1039,14 +1045,13 @@ body.no-tarot .setting-label-tarot + .toggle-switch + .setting-hint {
   background: linear-gradient(135deg, var(--bg-secondary, #2a2a2e), var(--bg-tertiary, #3a3a3e));
   border: 1px solid var(--border, #555);
   box-shadow: 0 4px 20px rgba(0,0,0,0.15);
-  transition: transform 0.2s, box-shadow 0.2s;
+  transition: box-shadow 0.2s;
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
   height: auto;
 }
 .file-present-card:hover {
-  transform: translateY(-2px);
   box-shadow: 0 8px 30px rgba(0,0,0,0.25);
 }
 .file-present-header {
@@ -2439,6 +2444,11 @@ body.no-tarot .setting-label-tarot + .toggle-switch + .setting-hint {
   --babe-pink-light: #ffc6d9;
   --babe-pink-bg: #fff0f5;
   --babe-heart: #e91e63;
+}
+/* Babe 模式标签页栏：四周圆角 + 完整描边（页面有内边距，圆角可完整显示） */
+.babe-mode #babe-session-tabs {
+  border: 1px solid var(--border);
+  border-radius: 10px;
 }
 .babe-mode .babe-header {
   display: flex;

@@ -1185,7 +1185,8 @@
     const cells = (data.cells || []).map(c => ({
       addr: c.addr,
       value: c.value,
-      raw: c.raw  // 保留原始公式/文本，让导出函数优先使用 raw
+      raw: c.raw,  // 保留原始公式/文本，让导出函数优先使用 raw
+      format: c.format || {}  // 保留单元格格式（粗体/斜体/颜色/背景/对齐/字号）
     }));
     return await window.api.spreadsheetExportFile(filePath, cells, data.title || 'Sheet1');
   };
