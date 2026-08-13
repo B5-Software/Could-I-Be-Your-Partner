@@ -25,6 +25,7 @@
       document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
       currentMode = mode;
+      if (typeof showSessionTabsForMode === 'function') showSessionTabsForMode(mode);
       if (mode === 'chat') {
         // Show chat sidebar items, hide code/babe ones
         document.querySelector('.nav-item[data-page="chat"]')?.classList.remove('hidden');
@@ -454,10 +455,8 @@
     const tabsEl = document.getElementById(`${mode}-session-tabs`);
     if (!tabsEl) return;
     const sessions = sessionManager.list(mode).sort((a, b) => a.createdAt - b.createdAt);
-    // 标签栏常驻：即使没有会话也只显示“新建会话”按钮，不再整栏隐藏。
-    // 用 inline !important 强制 display，防止任何后续代码/远端镜像重新加回 hidden。
-    tabsEl.classList.remove('hidden');
-    tabsEl.style.setProperty('display', 'flex', 'important');
+    // 标签栏常驻：即使没有会话也只显示“新建会话”按钮；
+    // 可见性统一由 showSessionTabsForMode 控制（宿主在 page section 之外）。
     tabsEl.innerHTML = '';
     const active = sessionManager.getActive(mode);
     for (const session of sessions) {
@@ -505,6 +504,18 @@
     renderSessionTabs('chat');
     renderSessionTabs('code');
     renderSessionTabs('babe');
+  }
+
+  // 只显示当前模式对应的标签栏（宿主常驻，其余模式隐藏）
+  function showSessionTabsForMode(mode) {
+    const host = document.getElementById('session-tabs-host');
+    if (host) host.classList.remove('hidden');
+    for (const m of ['chat', 'code', 'babe']) {
+      const el = document.getElementById(`${m}-session-tabs`);
+      if (!el) continue;
+      el.classList.remove('hidden');
+      el.style.setProperty('display', m === mode ? 'flex' : 'none', 'important');
+    }
   }
 
   // ---- 会话交互卡片（问卷/游戏邀请等）跨切换保留 ----
@@ -837,6 +848,7 @@
   updateContextProgress();
   // 初始化完成后渲染一次标签栏：单个会话也保持可见，避免启动后栏状态与后续行为不一致
   renderAllSessionTabs();
+  showSessionTabsForMode(currentMode);
 
   // ---- 标签栏常驻兜底 ----
   // 无论是什么原因把标签栏隐藏/清空（远端镜像替换、页面切换竞态等），
@@ -848,11 +860,29 @@
     requestAnimationFrame(() => {
       _sessionTabsRepairPending = false;
       if (typeof isRemoteMode !== 'undefined' && isRemoteMode) return;
+      let host = document.getElementById('session-tabs-host');
+      if (!host) {
+        // 极端情况：宿主节点被整块移除 → 原地重建（含三根栏）
+        const mc = document.getElementById('main-content');
+        if (mc) {
+          host = document.createElement('div');
+          host.id = 'session-tabs-host';
+          for (const m of ['chat', 'code', 'babe']) {
+            const el = document.createElement('div');
+            el.className = 'session-tabs';
+            el.id = `${m}-session-tabs`;
+            el.dataset.mode = m;
+            host.appendChild(el);
+          }
+          mc.insertBefore(host, mc.firstChild);
+        }
+      }
+      if (!host) return;
+      showSessionTabsForMode(currentMode);
+      if (host.classList.contains('hidden')) host.classList.remove('hidden');
       for (const mode of ['chat', 'code', 'babe']) {
         const el = document.getElementById(`${mode}-session-tabs`);
         if (!el) continue;
-        if (el.classList.contains('hidden')) el.classList.remove('hidden');
-        el.style.setProperty('display', 'flex', 'important');
         const want = sessionManager ? sessionManager.list(mode).length : 0;
         const have = el.querySelectorAll('.session-tab').length;
         const hasAdd = !!el.querySelector('.session-tab-add');
@@ -871,3 +901,7 @@
       attributeFilter: ['class', 'style']
     });
   }
+  // 周期看门狗：无论什么原因（异常清空、替换、竞态）都每 1.5s 自愈一次
+  setInterval(() => {
+    try { repairSessionTabs(); } catch { /* ignore */ }
+  }, 1500);

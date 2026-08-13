@@ -145,9 +145,14 @@
 
     <!-- Main Content -->
     <main id="main-content">
+      <!-- 会话标签栏宿主：常驻在页面 section 之外，任何页面级 DOM 重建都不会带走它 -->
+      <div id="session-tabs-host" class="hidden">
+        <div class="session-tabs" id="chat-session-tabs" data-mode="chat"></div>
+        <div class="session-tabs" id="code-session-tabs" data-mode="code"></div>
+        <div class="session-tabs" id="babe-session-tabs" data-mode="babe"></div>
+      </div>
       <!-- Chat Page -->
       <section id="page-chat" class="page active">
-        <div class="session-tabs hidden" id="chat-session-tabs" data-mode="chat"></div>
         <div class="chat-container">
           <div class="remote-conn-banner hidden" id="remote-conn-banner" data-state="disconnected">
             <i class="fa-solid fa-satellite-dish remote-conn-icon"></i>
@@ -380,7 +385,6 @@
 
       <!-- Code Mode Page -->
       <section id="page-code" class="page">
-        <div class="session-tabs hidden" id="code-session-tabs" data-mode="code"></div>
         <div class="code-toolbar">
           <div class="code-toolbar-left">
             <button class="btn-icon btn-sm" id="btn-code-show-downloads" title="下载管理（Ctrl+D）">
@@ -533,7 +537,6 @@
 
       <!-- Babe Mode Page -->
       <section id="page-babe" class="page babe-mode">
-        <div class="session-tabs hidden" id="babe-session-tabs" data-mode="babe"></div>
         <div class="babe-header">
           <div class="babe-avatar" id="babe-avatar"><i class="fa-solid fa-heart"></i></div>
           <div class="babe-info">
