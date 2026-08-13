@@ -339,7 +339,8 @@ class ContextManager {
     try {
       result = await window.api.summarizeLLM(summaryMessages, {
         max_tokens: 1024,
-        temperature: 0.3
+        temperature: 0.3,
+        sessionKey: options.sessionKey || null
       });
     } catch (e) {
       // LLM call threw — fall back to mechanical summary

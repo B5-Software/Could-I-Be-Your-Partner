@@ -40,6 +40,8 @@ class Agent {
     this.running = false;
     this.stopped = false;
     this.paused = false;
+    this.sessionStatus = 'idle';
+    this.sessionLastError = null;
     this.tarotCard = null;
     this.todoItems = [];
     this.todoIdCounter = 0;
@@ -54,6 +56,7 @@ class Agent {
     this.workspacePath = null;
     this.conversationId = null;
     this.conversationTitle = null;
+    this.sessionKey = null; // 会话级中止/流式路由 key（由 SessionManager 注入）
     this.onMessage = null; // callback(type, data)
     this.onStatusChange = null;
     this.onToolCall = null;
@@ -105,6 +108,10 @@ class Agent {
       this.contextManager.setOutputReserve(merged?.llm?.maxResponseTokens || 8192);
       this.contextManager.setSystemPrompt(this.getSystemPrompt());
     }
+  }
+
+  setSessionKey(sessionKey) {
+    this.sessionKey = sessionKey || null;
   }
 
   // 为文件内容添加行号前缀（格式：N→内容）
@@ -226,7 +233,8 @@ class Agent {
         const reasonTxt = info.reason ? `（${info.reason}）` : '';
         const msg = `LLM 请求失败${statusTxt}（${kind}），第 ${info.attempt || 1} 次重试${delayTxt}${reasonTxt}`;
         // 优先使用全局 toast 提示（自动消失），不再污染聊天记录
-        if (typeof window.showToast === 'function') {
+        const activeSession = window.__sessionManager?.getByAgent(this);
+        if (typeof window.showToast === 'function' && (!activeSession || activeSession.active)) {
           const type = (kind === 'auth' || kind === 'client') ? 'error' : 'warn';
           window.showToast(msg, type, 6000);
         } else if (this.onMessage) {
@@ -239,7 +247,11 @@ class Agent {
     // （游戏窗口的 LLM 调用走主进程 IPC，主进程广播给主渲染器，再由 agent 累计）
     if (window.api?.onLLMExternalUsage && !this._llmExternalUsageUnsub) {
       this._llmExternalUsageUnsub = window.api.onLLMExternalUsage((data) => {
-        if (data?.usage) this._accumulateUsage(data.usage);
+        if (!data?.usage) return;
+        if (data.sessionKey && data.sessionKey !== this.sessionKey) return;
+        const activeChat = window.__sessionManager?.getActive('chat');
+        if (!data.sessionKey && activeChat && activeChat.agent !== this) return;
+        this._accumulateUsage(data.usage);
       });
     }
 
@@ -251,7 +263,8 @@ class Agent {
         if (!chunk || chunk.requestId !== this._activeStreamRequestId) return;
         if (this.onMessage) this.onMessage('stream-chunk', chunk);
         // 流式 TTS：实时投喂句子切分器（跳过 reasoning，仅播助理文本）
-        if (window.VoiceUI && chunk.content) {
+        const activeSession = window.__sessionManager?.getByAgent(this);
+        if (window.VoiceUI && chunk.content && (!activeSession || activeSession.active)) {
           window.VoiceUI.feedStreamChunk(chunk.content);
         }
       });
@@ -261,7 +274,8 @@ class Agent {
         if (!data || data.requestId !== this._activeStreamRequestId) return;
         if (this.onMessage) this.onMessage('stream-end', data);
         // 流式 TTS 收尾（兜底非流式回退：若没喂过任何 chunk，播报 data.content 全文）
-        if (window.VoiceUI) {
+        const activeSession = window.__sessionManager?.getByAgent(this);
+        if (window.VoiceUI && (!activeSession || activeSession.active)) {
           window.VoiceUI.feedStreamEnd((data && data.content) ? data.content : null);
         }
       });
@@ -1131,7 +1145,8 @@ ${toolListSection}`;
         temperature: 0.2,
         max_tokens: 2000,
         response_format: { type: 'json_object' },
-        requestId: Date.now().toString()
+        requestId: Date.now().toString(),
+        sessionKey: this.sessionKey || null
       });
 
       const msg = result?.data?.choices?.[0]?.message;
@@ -1419,6 +1434,9 @@ ${toolListSection}`;
         summaries: this.contextManager.summaries,
         tarotCard: this.tarotCard,
         workspacePath: this.workspacePath,
+        mode: this.mode || 'chat',
+        status: this.sessionStatus || (this.running ? 'running' : 'idle'),
+        lastError: this.sessionLastError || null,
         // 会话累计 Token 统计实时持久化：打开历史会话时恢复，继续对话从该基数累计
         usage: { ...this.sessionUsage }
       };
@@ -1589,7 +1607,7 @@ ${toolListSection}`;
       const result = await window.api.chatLLM([
         { role: 'system', content: prompt },
         { role: 'user', content: cleaned }
-      ], { temperature: 0.2, max_tokens: 30, requestId: Date.now().toString() });
+      ], { temperature: 0.2, max_tokens: 30, requestId: Date.now().toString(), sessionKey: this.sessionKey || null });
 
       const msg = result?.data?.choices?.[0]?.message;
       // 优先用 Final（content），如果 content 为空或是 meta 描述，才尝试 reasoning_content
@@ -1625,8 +1643,11 @@ ${toolListSection}`;
     this.hotMessages = [];
     if (this.pendingApproval) this.resolveApproval(false);
     if (this.pendingToolAuth) this.resolveToolAuth('deny');
-    // 瞬间中止所有正在进行的 LLM 请求和终端命令
-    if (window.api?.agentAbortAll) {
+    // 按会话定向中止：只中止当前 Agent 的 LLM 请求和终端命令。
+    // 没有 sessionKey 时回退到全局 abort（兼容旧调用/系统级停止）。
+    if (window.api?.agentAbort && this.sessionKey) {
+      try { window.api.agentAbort(this.sessionKey); } catch { /* ignore */ }
+    } else if (window.api?.agentAbortAll) {
       try { window.api.agentAbortAll(); } catch { /* ignore */ }
     }
     // 同步停止所有子代理
@@ -1702,7 +1723,7 @@ ${toolListSection}`;
     let newUsage1 = usageOf(readStats());
     if (newUsage1 > 85 && this.autoCompactFailures < maxFailures) {
       try {
-        const sumRes = await ctx.summarizeWithLLM({ keepLast });
+        const sumRes = await ctx.summarizeWithLLM({ keepLast, sessionKey: this.sessionKey || null });
         if (sumRes.ok) {
           this.autoCompactFailures = 0;
           action = 'summary';
@@ -1816,7 +1837,8 @@ ${toolListSection}`;
         try {
           result = await window.api.chatLLMStream(messages, {
             tools: tools.length > 0 ? tools : undefined,
-            requestId: reqId
+            requestId: reqId,
+            sessionKey: this.sessionKey || null
           });
           usedStreaming = true;
         } catch (streamErr) {
@@ -1830,7 +1852,8 @@ ${toolListSection}`;
           if (this.onMessage) this.onMessage('system', `流式请求失败，回退到普通模式：${streamErr.message || streamErr}`);
           result = await window.api.chatLLM(messages, {
             tools: tools.length > 0 ? tools : undefined,
-            requestId: reqId + '-retry'
+            requestId: reqId + '-retry',
+            sessionKey: this.sessionKey || null
           });
         } finally {
           this._activeStreamRequestId = null;
@@ -1855,7 +1878,8 @@ ${toolListSection}`;
         // Non-streaming path (existing behavior).
         result = await window.api.chatLLM(messages, {
           tools: tools.length > 0 ? tools : undefined,
-          requestId: reqId
+          requestId: reqId,
+          sessionKey: this.sessionKey || null
         });
       }
 
@@ -1906,7 +1930,8 @@ ${toolListSection}`;
           try {
             result = await window.api.chatLLM(retryMessages, {
               tools: retryTools.length > 0 ? retryTools : undefined,
-              requestId: reqId + '-retry-' + retryCount
+              requestId: reqId + '-retry-' + retryCount,
+              sessionKey: this.sessionKey || null
             });
             usedStreaming = false; // 重试走非流式路径
           } catch (retryErr) {
@@ -2218,6 +2243,11 @@ ${toolListSection}`;
       this.approvalResolve = null;
       this.pendingApproval = null;
     }
+    const session = window.__sessionManager?.getByAgent(this);
+    if (session) {
+      session.pendingApproval = null;
+      window.__sessionManager.setStatus(session, this.running ? window.SessionStatus.RUNNING : window.SessionStatus.IDLE);
+    }
   }
 
   /**
@@ -2237,6 +2267,11 @@ ${toolListSection}`;
       this.toolAuthResolve(decision);
       this.toolAuthResolve = null;
       this.pendingToolAuth = null;
+    }
+    const session = window.__sessionManager?.getByAgent(this);
+    if (session) {
+      session.pendingToolAuth = null;
+      window.__sessionManager.setStatus(session, this.running ? window.SessionStatus.RUNNING : window.SessionStatus.IDLE);
     }
   }
 
@@ -2535,7 +2570,7 @@ ${toolListSection}`;
         case 'makeTerminal': {
           // 传入工作目录：Chat 模式用 workspacePath，Code 模式用 codeWorkspacePath
           const cwd = this.mode === 'code' ? (this.codeWorkspacePath || this.workspacePath) : this.workspacePath;
-          const result = await window.api.makeTerminal(cwd);
+          const result = await window.api.makeTerminal(cwd, this.sessionKey);
           if (result.ok) this.terminals.set(result.terminalId, true);
           return result;
         }
@@ -2606,7 +2641,7 @@ ${toolListSection}`;
         case 'manageContext': return this.contextManager.manage(args.action, args);
         case 'autoSummarizeContext': {
           // Use the new LLM summary path; falls back to mechanical on failure.
-          const sumRes = await this.contextManager.summarizeWithLLM({ keepLast: args.keepLast || 6 });
+          const sumRes = await this.contextManager.summarizeWithLLM({ keepLast: args.keepLast || 6, sessionKey: this.sessionKey || null });
           if (sumRes.skipped) return { ok: true, message: sumRes.message, skipped: true };
           if (!sumRes.ok) return { ok: false, error: sumRes.message, fallback: sumRes.fallback };
           return { ok: true, summary: sumRes.summary, message: sumRes.message };
@@ -3682,7 +3717,8 @@ ${tarotLine}
 
         let result = await window.api.chatLLM(messages, {
           tools: subTools.length > 0 ? subTools : undefined,
-          requestId: 'sub-' + Date.now().toString()
+          requestId: 'sub-' + Date.now().toString(),
+          sessionKey: this.sessionKey || null
         });
 
         // ===== 子代理 400 错误自动修复 + 重试循环（与主 Agent 逻辑一致）=====
@@ -3718,7 +3754,8 @@ ${tarotLine}
               const retryTools = subTools.length > 0 ? subTools : undefined;
               result = await window.api.chatLLM(retryMessages, {
                 tools: retryTools,
-                requestId: 'sub-' + Date.now().toString() + '-retry-' + subRetryCount
+                requestId: 'sub-' + Date.now().toString() + '-retry-' + subRetryCount,
+                sessionKey: this.sessionKey || null
               });
             } catch (retryErr) {
               if (subAgent.stopped) break;
@@ -3823,7 +3860,8 @@ ${tarotLine}
             '1. 已完成的工作和结果\n2. 未完成的步骤和原因\n3. 遇到的问题和建议\n请简洁但完整地总结。'
           );
           const summaryResult = await window.api.chatLLM(subAgent.contextManager.getMessages(), {
-            requestId: 'sub-' + Date.now().toString() + '-final-report'
+            requestId: 'sub-' + Date.now().toString() + '-final-report',
+            sessionKey: this.sessionKey || null
           });
           if (summaryResult.ok && summaryResult.data?.choices?.[0]?.message?.content) {
             finalContent = summaryResult.data.choices[0].message.content;
@@ -3918,7 +3956,8 @@ ${tarotLine}
     const result = await window.api.chatLLM(messages, {
       temperature: 0.9,
       max_tokens: this.settings?.llm?.maxResponseTokens || 2048,
-      requestId: Date.now().toString()
+      requestId: Date.now().toString(),
+      sessionKey: this.sessionKey || null
     });
     // 游戏内 LLM 调用 token 累计到当前主会话统计（用于上下文模态框显示）
     if (result.ok && result.data?.usage) {

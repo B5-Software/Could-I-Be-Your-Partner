@@ -174,6 +174,8 @@ async function fetchLLMWithRetry(cfg) {
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     const controller = new AbortController();
+    controller._requestId = requestId || null;
+    controller._sessionKey = opts.sessionKey || null;
     _activeControllers.add(controller);
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     let success = false;
@@ -487,6 +489,25 @@ function abortAllRequests() {
   return count;
 }
 
+/**
+ * 定向中止一个会话的 LLM 请求。
+ * @param {{sessionKey?: string, requestId?: string}} filter
+ * @returns {number}
+ */
+function abortRequests(filter = {}) {
+  const sessionKey = filter.sessionKey || null;
+  const requestId = filter.requestId || null;
+  let count = 0;
+  for (const c of _activeControllers) {
+    if (sessionKey && c._sessionKey !== sessionKey) continue;
+    if (requestId && c._requestId !== requestId) continue;
+    try { c._userAborted = true; c.abort(); } catch { /* ignore */ }
+    _activeControllers.delete(c);
+    count++;
+  }
+  return count;
+}
+
 module.exports = {
   LLMError,
   fetchLLMWithRetry,
@@ -495,6 +516,7 @@ module.exports = {
   classifyHttpResponse,
   classifyThrownError,
   abortAllRequests,
+  abortRequests,
   DEFAULT_MAX_RETRIES,
   BASE_DELAY_MS,
   MAX_DELAY_MS,

@@ -77,7 +77,7 @@ contextBridge.exposeInMainWorld('api', {
   saveUploadedFile: (name, data) => ipcRenderer.invoke('fs:saveUploadedFile', name, data),
 
   // Terminal
-  makeTerminal: (cwd) => ipcRenderer.invoke('terminal:make', cwd),
+  makeTerminal: (cwd, sessionKey) => ipcRenderer.invoke('terminal:make', cwd, { sessionKey }),
   runTerminalCommand: (id, cmd) => ipcRenderer.invoke('terminal:run', id, cmd),
   awaitTerminalCommand: (id, cmd, timeoutMs) => ipcRenderer.invoke('terminal:await', id, cmd, timeoutMs),
   killTerminal: (id) => ipcRenderer.invoke('terminal:kill', id),
@@ -201,6 +201,7 @@ contextBridge.exposeInMainWorld('api', {
 
   // Agent Abort (停止按钮：瞬间中止所有 LLM 请求 + 杀掉所有终端)
   agentAbortAll: () => ipcRenderer.invoke('agent:abortAll'),
+  agentAbort: (sessionKey) => ipcRenderer.invoke('agent:abort', { sessionKey }),
 
   // 头像框系统：列出/读取内置 SVG 头像框
   avatarFramesList: () => ipcRenderer.invoke('avatar-frames:list'),
@@ -226,6 +227,11 @@ contextBridge.exposeInMainWorld('api', {
   zenFetchModels: () => ipcRenderer.invoke('zen:fetchModels'),
   llmFetchModels: (provider, apiUrl, apiKey) => ipcRenderer.invoke('llm:fetchModels', provider, apiUrl, apiKey),
   usageGetRange: (period) => ipcRenderer.invoke('usage:getRange', period),
+  onUsageChanged: (cb) => {
+    const listener = (_, data) => cb(data);
+    ipcRenderer.on('usage:changed', listener);
+    return () => ipcRenderer.removeListener('usage:changed', listener);
+  },
   budgetGetStatus: () => ipcRenderer.invoke('budget:getStatus'),
   budgetCheck: () => ipcRenderer.invoke('budget:check'),
   // ESLint

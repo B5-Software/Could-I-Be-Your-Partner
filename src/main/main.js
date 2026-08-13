@@ -12,7 +12,7 @@ const os = require('os');
 const { EmailService } = require('./email-service');
 const { importSpreadsheetFile, exportSpreadsheetFile } = require('./spreadsheet-io');
 const { WebControlService } = require('./web-control-service');
-const { fetchLLMWithRetry, consumeSSEStream, abortAllRequests, DEFAULT_TIMEOUT_MS } = require('./llm-retry');
+const { fetchLLMWithRetry, consumeSSEStream, abortAllRequests, abortRequests, DEFAULT_TIMEOUT_MS } = require('./llm-retry');
 const LLMProviders = require('./llm-providers');
 const ESLintService = require('./eslint-service');
 const { BUNDLED_SKILLS } = require('../data/bundled-skills');
@@ -1498,6 +1498,9 @@ let settings = loadJSON(settingsPath, {
     maxIterations: 50,
     autoCompactMaxFailures: 3
   },
+  sessions: {
+    maxConcurrent: 10
+  },
   imageGen: {
     apiUrl: 'https://api.siliconflow.cn/v1/images/generations',
     apiKey: '',
@@ -1626,7 +1629,7 @@ let settings = loadJSON(settingsPath, {
 });
 if (fs.existsSync(settingsPath)) {
   const saved = loadJSON(settingsPath, {});
-  settings = { ...settings, ...saved, llm: { ...settings.llm, ...(saved.llm || {}) }, agent: { ...settings.agent, ...(saved.agent || {}) }, imageGen: { ...settings.imageGen, ...(saved.imageGen || {}) }, theme: { ...settings.theme, ...(saved.theme || {}) }, aiPersona: { ...settings.aiPersona, ...(saved.aiPersona || {}) }, userProfile: { ...settings.userProfile, ...(saved.userProfile || {}) }, entropy: { ...settings.entropy, ...(saved.entropy || {}) }, proxy: { ...settings.proxy, ...(saved.proxy || {}) }, mcp: { ...settings.mcp, ...(saved.mcp || {}) }, email: { ...settings.email, ...(saved.email || {}) }, webControl: { ...settings.webControl, ...(saved.webControl || {}) }, budget: { ...settings.budget, ...(saved.budget || {}) }, terminal: { ...settings.terminal, ...(saved.terminal || {}) }, privacyProtection: { ...settings.privacyProtection, ...(saved.privacyProtection || {}) }, ime: { ...settings.ime, ...(saved.ime || {}) }, voice: { ...settings.voice, ...(saved.voice || {}) } };
+  settings = { ...settings, ...saved, llm: { ...settings.llm, ...(saved.llm || {}) }, agent: { ...settings.agent, ...(saved.agent || {}) }, sessions: { ...settings.sessions, ...(saved.sessions || {}) }, imageGen: { ...settings.imageGen, ...(saved.imageGen || {}) }, theme: { ...settings.theme, ...(saved.theme || {}) }, aiPersona: { ...settings.aiPersona, ...(saved.aiPersona || {}) }, userProfile: { ...settings.userProfile, ...(saved.userProfile || {}) }, entropy: { ...settings.entropy, ...(saved.entropy || {}) }, proxy: { ...settings.proxy, ...(saved.proxy || {}) }, mcp: { ...settings.mcp, ...(saved.mcp || {}) }, email: { ...settings.email, ...(saved.email || {}) }, webControl: { ...settings.webControl, ...(saved.webControl || {}) }, budget: { ...settings.budget, ...(saved.budget || {}) }, terminal: { ...settings.terminal, ...(saved.terminal || {}) }, privacyProtection: { ...settings.privacyProtection, ...(saved.privacyProtection || {}) }, ime: { ...settings.ime, ...(saved.ime || {}) }, voice: { ...settings.voice, ...(saved.voice || {}) } };
   // voice 子对象深合并（ttsVoices / kws）
   if (saved.voice) {
     settings.voice.ttsVoices = { zh: 'zf_xiaoxiao', en: 'af_heart', de: 'thorsten', ...(saved.voice.ttsVoices || {}) };
@@ -2204,6 +2207,28 @@ function broadcastSettingsChanged() {
     if (!win.isDestroyed()) win.webContents.send('settings:changed', payload);
   }
 }
+let _usageBroadcastTimer = null;
+function broadcastUsageChanged() {
+  if (_usageBroadcastTimer) clearTimeout(_usageBroadcastTimer);
+  _usageBroadcastTimer = setTimeout(() => {
+    _usageBroadcastTimer = null;
+    const todayKey = getTodayKeyTZ(settings.budget?.timezone || 'UTC');
+    const dayData = (settings.llm.usageHistory || {})[todayKey] || null;
+    const payload = {
+      dailyTokensUsed: settings.llm.dailyTokensUsed || 0,
+      today: dayData ? {
+        totalTokens: dayData.totalTokens || 0,
+        promptTokens: dayData.promptTokens || 0,
+        completionTokens: dayData.completionTokens || 0,
+        requestCount: dayData.requestCount || 0,
+        costUSD: dayData.costUSD || 0
+      } : null
+    };
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed()) win.webContents.send('usage:changed', payload);
+    }
+  }, 250);
+}
 nativeTheme.on('updated', () => broadcastThemeChanged());
 
 // ---- IPC: Memory ----
@@ -2742,7 +2767,7 @@ function _resolveTerminalShell(shellSetting, customShellPath) {
   return shellCandidates.find(s => fs.existsSync(s)) || '/bin/sh';
 }
 
-ipcMain.handle('terminal:make', (_, cwd) => {
+ipcMain.handle('terminal:make', (_, cwd, opts = {}) => {
   try {
     const pty = require('node-pty');
     const id = ++terminalIdCounter;
@@ -2783,6 +2808,7 @@ ipcMain.handle('terminal:make', (_, cwd) => {
       createdAt: Date.now(),
       lastCommand: '',
       shellName,
+      ownerSessionKey: typeof opts.sessionKey === 'string' ? opts.sessionKey : null,
       // 兼容旧接口：Agent 调用 t.buffer() 取走 agentBuffer
       buffer: () => { const b = entry.agentBuffer; entry.agentBuffer = ''; return b; }
     };
@@ -2943,9 +2969,8 @@ ipcMain.handle('terminal:kill', (_, id) => {
   return { ok: true };
 });
 
-// ---- 瞬间中止所有 AI 请求 + 杀掉所有正在运行的终端（停止按钮） ----
-ipcMain.handle('agent:abortAll', () => {
-  const reqCount = abortAllRequests();
+// ---- 中止 AI 请求与终端 ----
+function abortTerminalsForSession(sessionKey, scopeAll = false) {
   // Abort 聊天时的终端策略（设置-终端）：
   //   'kill'   - 直接掐断整个运行中的终端（默认）
   //   'clearC' - 传入 Ctrl+C（保留终端，仅中止当前进程）
@@ -2956,6 +2981,7 @@ ipcMain.handle('agent:abortAll', () => {
   for (const id of termIds) {
     const t = terminals.get(id);
     if (!t || !t.term) continue;
+    if (!scopeAll && sessionKey && t.ownerSessionKey !== sessionKey) continue;
     try {
       if (strategy === 'clearC') {
         // 向运行中的进程发送 Ctrl+C（SIGINT 等效），保留终端会话
@@ -2972,8 +2998,24 @@ ipcMain.handle('agent:abortAll', () => {
       }
     } catch { /* ignore */ }
   }
-  console.log(`[Agent] Aborted ${reqCount} LLM request(s); terminal strategy='${strategy}', affected ${termCount} terminal(s)`);
-  return { ok: true, abortedRequests: reqCount, killedTerminals: termCount, abortStrategy: strategy };
+  return { killedTerminals: termCount, abortStrategy: strategy };
+}
+
+// ---- 瞬间中止所有 AI 请求 + 杀掉所有正在运行的终端（停止按钮） ----
+ipcMain.handle('agent:abortAll', () => {
+  const reqCount = abortAllRequests();
+  const terminalResult = abortTerminalsForSession(null, true);
+  console.log(`[Agent] Aborted ${reqCount} LLM request(s); terminal strategy='${terminalResult.abortStrategy}', affected ${terminalResult.killedTerminals} terminal(s)`);
+  return { ok: true, abortedRequests: reqCount, killedTerminals: terminalResult.killedTerminals, abortStrategy: terminalResult.abortStrategy };
+});
+
+// ---- 按会话定向中止：只停止指定会话的 LLM 请求和终端 ----
+ipcMain.handle('agent:abort', (_, opts = {}) => {
+  const sessionKey = String(opts.sessionKey || '');
+  if (!sessionKey) return { ok: false, error: 'missing sessionKey' };
+  const reqCount = abortRequests({ sessionKey });
+  const terminalResult = abortTerminalsForSession(sessionKey, false);
+  return { ok: true, abortedRequests: reqCount, killedTerminals: terminalResult.killedTerminals, abortStrategy: terminalResult.abortStrategy };
 });
 
 // ---- IPC: Clipboard ----
@@ -4471,7 +4513,8 @@ ipcMain.handle('llm:chat', async (event, messages, options = {}) => {
       maxRetries: options.maxRetries ?? llm.maxRetries ?? undefined,
       timeoutMs: options.timeoutMs ?? llm.timeoutMs ?? undefined,
       fallbackModel: llm.fallbackModel || null,
-      requestId: options.requestId || null
+      requestId: options.requestId || null,
+      sessionKey: options.sessionKey || null
     };
     const onRetry = (info) => {
       try { mainWindow?.webContents.send('llm:retry', info); } catch { /* ignore */ }
@@ -4510,9 +4553,10 @@ ipcMain.handle('llm:chat', async (event, messages, options = {}) => {
     settings.llm.dailyTokensUsed = (settings.llm.dailyTokensUsed || 0) + usageTokens;
     recordTokenUsage(usage, llm.model);
     persistSettings();
+    broadcastUsageChanged();
     // 游戏窗口/子窗口调用 LLM 时，把 usage 推送给主渲染器，让其累计到当前会话统计
     if (mainWindow && !mainWindow.isDestroyed() && event.sender !== mainWindow.webContents) {
-      try { mainWindow.webContents.send('llm:external-usage', { usage, model: llm.model }); } catch { /* ignore */ }
+      try { mainWindow.webContents.send('llm:external-usage', { usage, model: llm.model, sessionKey: options.sessionKey || null }); } catch { /* ignore */ }
     }
     return { ok: true, data };
   } catch (e) { return { ok: false, error: e.message }; }
@@ -4556,7 +4600,8 @@ ipcMain.handle('llm:chatStream', async (_, messages, options = {}) => {
       maxRetries: options.maxRetries ?? llm.maxRetries ?? undefined,
       timeoutMs: options.timeoutMs ?? llm.timeoutMs ?? undefined,
       fallbackModel: llm.fallbackModel || null,
-      requestId: options.requestId || null
+      requestId: options.requestId || null,
+      sessionKey: options.sessionKey || null
     };
     const onRetry = (info) => {
       try { mainWindow?.webContents.send('llm:retry', info); } catch { /* ignore */ }
@@ -4612,6 +4657,7 @@ ipcMain.handle('llm:chatStream', async (_, messages, options = {}) => {
     settings.llm.dailyTokensUsed = (settings.llm.dailyTokensUsed || 0) + usageTokens;
     recordTokenUsage(usage, llm.model);
     persistSettings();
+    broadcastUsageChanged();
     return {
       ok: true,
       data: {
@@ -4649,7 +4695,8 @@ ipcMain.handle('llm:summarize', async (_, messages, options = {}) => {
     const retryOpts = {
       maxRetries: options.maxRetries ?? llm.maxRetries ?? undefined,
       timeoutMs: options.timeoutMs ?? llm.timeoutMs ?? undefined,
-      fallbackModel: llm.fallbackModel || null
+      fallbackModel: llm.fallbackModel || null,
+      sessionKey: options.sessionKey || null
     };
     const result = await fetchLLMWithRetry({
       apiUrl: req.url, apiKey: req.headers['x-api-key'] || llm.apiKey || llm.zenApiKey,
@@ -4672,6 +4719,7 @@ ipcMain.handle('llm:summarize', async (_, messages, options = {}) => {
     settings.llm.dailyTokensUsed = (settings.llm.dailyTokensUsed || 0) + usageTokens;
     recordTokenUsage(usage, llm.model);
     persistSettings();
+    broadcastUsageChanged();
     return { ok: true, content, data };
   } catch (e) { return { ok: false, error: e.message }; }
 });
@@ -4919,7 +4967,18 @@ ipcMain.handle('history:list', () => {
     const files = fs.readdirSync(historyDir).filter(f => f.endsWith('.json')).sort((a, b) => b.localeCompare(a));
     return files.map(f => {
       const data = loadJSON(path.join(historyDir, f), {});
-      const meta = { id: data.id, title: data.title || '未命名对话', createdAt: data.createdAt, updatedAt: data.updatedAt, messageCount: Array.isArray(data.messages) ? data.messages.length : 0 };
+      const meta = {
+        id: data.id,
+        title: data.title || '未命名对话',
+        createdAt: data.createdAt,
+        updatedAt: data.updatedAt,
+        messageCount: Array.isArray(data.messages) ? data.messages.length : 0,
+        mode: data.mode || 'chat',
+        status: data.status || 'idle',
+        lastError: data.lastError || null,
+        usage: data.usage || null,
+        finishedAt: data.finishedAt || null
+      };
       // 列表只需元数据：释放大数组引用，避免历史文件全量驻留内存
       delete data.messages;
       delete data.summaries;
@@ -4962,9 +5021,11 @@ ipcMain.handle('history:rename', (_, id, title) => {
 // 保存：渲染器在收到 agent:save-pending 事件后调用，将当前会话信息写入 pending 文件
 ipcMain.handle('agent:save-pending-session', (_, payload) => {
   try {
+    const sessions = Array.isArray(payload?.sessions) ? payload.sessions : [payload];
     const data = {
       savedAt: new Date().toISOString(),
-      ...payload
+      sessions,
+      count: sessions.length
     };
     saveJSON(pendingSessionPath, data);
     pendingSaveDone = true;
@@ -5018,7 +5079,9 @@ ipcMain.handle('notifications:send', (event, opts) => {
           mainWindow.webContents.send('notifications:click', {
             title: opts.title,
             body: opts.body || '',
-            category: opts.category || null
+            category: opts.category || null,
+            sessionKey: opts.sessionKey || null,
+            mode: opts.mode || null
           });
         }
       } catch {}
@@ -5045,7 +5108,11 @@ ipcMain.handle('babeHistory:list', () => {
         createdAt: data.createdAt,
         updatedAt: data.updatedAt,
         messageCount: (data.messages || []).length,
-        affection: data.affection ?? 0
+        affection: data.affection ?? 0,
+        mode: data.mode || 'babe',
+        status: data.status || 'idle',
+        lastError: data.lastError || null,
+        usage: data.usage || null
       };
       // 列表只需元数据：释放大数组引用
       delete data.messages;
@@ -5236,7 +5303,16 @@ ipcMain.handle('code:listHistory', (_, workspacePath) => {
           if (!isFinite(ts) || ts <= 0) {
             try { ts = fs.statSync(filePath).mtimeMs; } catch { ts = 0; }
           }
-          const meta = { id: f.replace('.json', ''), title: data.title || '未命名', ts, messageCount: (data.messages || []).length };
+          const meta = {
+            id: f.replace('.json', ''),
+            title: data.title || '未命名',
+            ts,
+            messageCount: (data.messages || []).length,
+            mode: data.mode || 'code',
+            status: data.status || 'idle',
+            lastError: data.lastError || null,
+            usage: data.usage || null
+          };
           // 列表只需元数据：释放大数组引用
           delete data.messages;
           return meta;
@@ -6800,6 +6876,7 @@ ipcMain.handle('sanguosha:aiDecision', async (_, gameState, playerInfo) => {
     settings.llm.dailyTokensUsed = (settings.llm.dailyTokensUsed || 0) + usageTokens;
     recordTokenUsage(usage, llm.model);
     persistSettings();
+    broadcastUsageChanged();
 
     return { ok: true, action: 'llm', content };
   } catch (e) {

@@ -463,6 +463,56 @@ test('JS runner should use strict mode', () => {
 console.log('\nMain Process:');
 
 const mainContent = fs.readFileSync(require('path').join(__dirname, '../src/main/main.js'), 'utf-8');
+const llmRetry = require('../src/main/llm-retry');
+const sessionPreloadContent = fs.readFileSync(require('path').join(__dirname, '../src/preload/preload.js'), 'utf-8');
+const sessionIndexContent = fs.readFileSync(require('path').join(__dirname, '../src/renderer/pages/index.html'), 'utf-8');
+
+test('scoped abort helpers should be exported and wired', () => {
+  assert.strictEqual(typeof llmRetry.abortRequests, 'function');
+  assert.ok(mainContent.includes("ipcMain.handle('agent:abort'"), 'main should register agent:abort');
+  assert.ok(sessionPreloadContent.includes('agentAbort'), 'preload should expose agentAbort');
+});
+
+test('multi-session infrastructure should be loaded', () => {
+  assert.ok(sessionIndexContent.includes('session-manager.js'), 'session-manager.js should be loaded');
+  assert.ok(sessionIndexContent.includes('app-utils.js'), 'app-utils.js should be loaded');
+  assert.ok(sessionIndexContent.includes('skill-parsers.js'), 'skill-parsers.js should be loaded');
+  assert.ok(mainContent.includes('sessions: { maxConcurrent: 10 }') || mainContent.includes('maxConcurrent: 10'), 'default maxConcurrent should be 10');
+});
+
+test('session manager should track background sessions and queue overflow', () => {
+  const vm = require('vm');
+  const code = fs.readFileSync(require('path').join(__dirname, '../src/renderer/js/session-manager.js'), 'utf-8');
+  const sandbox = { window: {}, console, EventTarget, CustomEvent, Map, Set, Date, Promise };
+  sandbox.window = sandbox;
+  vm.createContext(sandbox);
+  vm.runInContext(code, sandbox);
+  const SessionManager = sandbox.SessionManager;
+  const SessionStatus = sandbox.SessionStatus;
+  const makeAgent = (id) => ({
+    conversationId: id,
+    running: false,
+    onStatusChange: null,
+    onMessage: null,
+    onTitleChange: null,
+    sessionStatus: 'idle',
+    sessionLastError: null,
+    sessionUsage: { prompt: 0, completion: 0, total: 0, cached: 0, cacheCreation: 0, estimated: false },
+    setSessionKey() {},
+    stop() { this.running = false; }
+  });
+  const manager = new SessionManager({ maxConcurrent: 1 });
+  const a = manager.registerAgent('chat', makeAgent('a'));
+  const b = manager.registerAgent('chat', makeAgent('b'));
+  assert.ok(a && b);
+  manager.activate('chat', a.key);
+  a.agent.onStatusChange('working');
+  assert.strictEqual(a.status, SessionStatus.RUNNING);
+  assert.strictEqual(manager.requestStart(b), false);
+  assert.strictEqual(b.status, SessionStatus.QUEUED);
+  a.agent.onStatusChange('idle');
+  assert.strictEqual(a.status, SessionStatus.DONE);
+});
 
 test('main process should handle settings IPC', () => {
   assert.ok(mainContent.includes("settings:get"));

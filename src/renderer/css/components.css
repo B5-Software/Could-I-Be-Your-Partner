@@ -269,6 +269,118 @@
   margin-top: 16px;
 }
 
+/* Multi-session background tabs */
+.session-tabs {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 34px;
+  padding: 0 10px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-secondary);
+}
+
+.session-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  max-width: 220px;
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background var(--transition), color var(--transition), border-color var(--transition);
+}
+
+.session-tab:hover {
+  background: var(--bg-hover);
+}
+
+.session-tab.active {
+  background: var(--accent-bg);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  color: var(--accent);
+}
+
+.session-tab .session-tab-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 140px;
+}
+
+.session-tab .session-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--text-tertiary);
+}
+
+.session-tab .session-status-dot.running,
+.session-tab .session-status-dot.waiting_approval,
+.session-tab .session-status-dot.waiting_tool_auth {
+  background: var(--accent);
+  animation: session-pulse 1.2s ease-in-out infinite;
+}
+
+.session-tab .session-status-dot.queued {
+  background: var(--warning);
+}
+
+.session-tab .session-status-dot.error {
+  background: var(--danger);
+}
+
+.session-tab .session-status-dot.done {
+  background: var(--success);
+}
+
+.session-tab .session-tab-close {
+  width: 15px;
+  height: 15px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  color: var(--text-tertiary);
+}
+
+.session-tab .session-tab-close:hover {
+  background: color-mix(in srgb, var(--danger) 16%, transparent);
+  color: var(--danger);
+}
+
+.session-tab-add {
+  width: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed var(--border);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-tertiary);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.session-tab-add:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-bg);
+}
+
+@keyframes session-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
 /* Skill Badges (内置 / 覆盖内置) */
 .skill-badge {
   display: inline-block;
@@ -879,6 +991,31 @@
   display: flex;
   gap: 12px;
 }
+
+.history-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 6px;
+  padding: 1px 7px;
+  border-radius: 9px;
+  font-size: 10px;
+  font-weight: 600;
+  vertical-align: middle;
+  color: var(--text-tertiary);
+  background: var(--bg-tertiary);
+}
+
+.history-status i { font-size: 6px; }
+.history-status.status-running,
+.history-status.status-waiting_approval,
+.history-status.status-waiting_tool_auth {
+  color: var(--accent);
+  background: var(--accent-bg);
+}
+.history-status.status-queued { color: var(--warning); background: var(--warning-light); }
+.history-status.status-done { color: var(--success); background: var(--success-light); }
+.history-status.status-error { color: var(--danger); background: var(--danger-light); }
 
 .history-actions {
   display: flex;

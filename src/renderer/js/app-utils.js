@@ -1,0 +1,209 @@
+/*
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ * Copyright (c) 2026 B5-Software
+ *
+ * This file is part of Could I Be Your Partner.
+ */
+
+'use strict';
+
+function escapeHtml(text) {
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
+}
+
+function extractTextContent(content) {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) {
+    return content
+      .filter(p => p && p.type === 'text' && p.text)
+      .map(p => p.text)
+      .join('\n');
+  }
+  if (content == null) return '';
+  return String(content);
+}
+
+function cssEscape(str) {
+  if (typeof str !== 'string') return '';
+  if (typeof CSS !== 'undefined' && CSS.escape) return CSS.escape(str);
+  return str.replace(/["\\]/g, '\\$&');
+}
+
+function fmtTokenCount(n, pfx = '') {
+  const num = Number(n) || 0;
+  if (num >= 1e15) return `${pfx}${(num / 1e15).toFixed(2)}P`;
+  if (num >= 1e12) return `${pfx}${(num / 1e12).toFixed(2)}T`;
+  if (num >= 1e9) return `${pfx}${(num / 1e9).toFixed(2)}G`;
+  if (num >= 1e6) return `${pfx}${(num / 1e6).toFixed(2)}M`;
+  if (num >= 1e3) return `${pfx}${(num / 1e3).toFixed(1)}K`;
+  return `${pfx}${num}`;
+}
+
+function escapeHtmlSimple(s) {
+  return String(s || '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function getPathDirname(filePath) {
+  const p = String(filePath || '');
+  const idxSlash = p.lastIndexOf('/');
+  const idxBackslash = p.lastIndexOf('\\');
+  const idx = Math.max(idxSlash, idxBackslash);
+  return idx >= 0 ? p.slice(0, idx) : '';
+}
+
+function joinPath(base, name) {
+  if (!base) return name;
+  const sep = base.includes('\\') ? '\\' : '/';
+  return `${base}${base.endsWith(sep) ? '' : sep}${name}`;
+}
+
+function getPathBasename(filePath) {
+  const p = String(filePath || '').replace(/[\\/]+$/, '');
+  const idxSlash = p.lastIndexOf('/');
+  const idxBackslash = p.lastIndexOf('\\');
+  const idx = Math.max(idxSlash, idxBackslash);
+  return idx >= 0 ? p.slice(idx + 1) : p;
+}
+
+function renderMarkdown(text) {
+  if (!text) return '';
+  let html = text;
+  const codeBlocks = [];
+  const mathBlocks = [];
+  const inlineMath = [];
+  const tables = [];
+
+  html = html.replace(/(\n|^)(\|.+\|)\n(\|[-:\s|]+\|)\n((?:\|.+\|\n?)*)/gm, (match, prefix, header, separator, rows) => {
+    const tableData = {
+      header: header.trim().split('|').filter(c => c.trim()).map(c => c.trim()),
+      rows: rows.trim().split('\n').map(row => row.split('|').filter(c => c.trim()).map(c => c.trim()))
+    };
+    tables.push(tableData);
+    return `${prefix}__TABLE${tables.length - 1}__`;
+  });
+
+  html = html.replace(/\$\$([\s\S]*?)\$\$/g, (m, math) => {
+    mathBlocks.push(math);
+    return `__MATHBLOCK${mathBlocks.length - 1}__`;
+  });
+  html = html.replace(/\$([^$\n]+?)\$/g, (m, math) => {
+    inlineMath.push(math);
+    return `__INLINEMATH${inlineMath.length - 1}__`;
+  });
+  html = html.replace(/```([^\n]*)\n([\s\S]*?)```/g, (m, lang, code) => {
+    codeBlocks.push({ lang: (lang || '').trim(), code });
+    return `__CODEBLOCK${codeBlocks.length - 1}__`;
+  });
+
+  html = escapeHtml(html);
+  html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
+  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
+  html = html.replace(/~~(.+?)~~/g, '<del>$1</del>');
+  html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
+  html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
+  html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
+  html = html.replace(/^---$/gm, '<hr>');
+  html = html.replace(/^> (.+)$/gm, '<blockquote>$1</blockquote>');
+  html = html.replace(/^[\-\*] (.+)$/gm, '<UL_ITEM>$1</UL_ITEM>');
+  html = html.replace(/(<UL_ITEM>.*<\/UL_ITEM>\n?)+/g, '<ul>$&</ul>');
+  html = html.replace(/<UL_ITEM>/g, '<li>').replace(/<\/UL_ITEM>/g, '</li>');
+  html = html.replace(/^\d+\. (.+)$/gm, '<OL_ITEM>$1</OL_ITEM>');
+  html = html.replace(/(<OL_ITEM>.*<\/OL_ITEM>\n?)+/g, '<ol>$&</ol>');
+  html = html.replace(/<OL_ITEM>/g, '<li>').replace(/<\/OL_ITEM>/g, '</li>');
+  html = html.replace(/\[([^\]]+)\]\(([^\)]+)\)/g, '<a href="$2" data-external="true">$1</a>');
+  html = html.replace(/\n\n/g, '</p><p>');
+  html = html.replace(/\n/g, '<br>');
+
+  html = html.replace(/__TABLE(\d+)__/g, (m, i) => {
+    const table = tables[parseInt(i)];
+    let tableHtml = '<div class="table-wrapper" style="overflow-x:auto;margin:12px 0;"><table class="markdown-table" style="border-collapse:collapse;width:100%;max-width:100%;">';
+    tableHtml += '<thead><tr>';
+    table.header.forEach(cell => {
+      tableHtml += `<th style="border:1px solid var(--border-color);padding:8px;background:var(--bg-secondary);text-align:left;font-weight:600;">${escapeHtml(cell)}</th>`;
+    });
+    tableHtml += '</tr></thead><tbody>';
+    table.rows.forEach(row => {
+      if (row.length > 0) {
+        tableHtml += '<tr>';
+        row.forEach(cell => {
+          tableHtml += `<td style="border:1px solid var(--border-color);padding:8px;">${escapeHtml(cell)}</td>`;
+        });
+        tableHtml += '</tr>';
+      }
+    });
+    tableHtml += '</tbody></table></div>';
+    return tableHtml;
+  });
+
+  html = html.replace(/__CODEBLOCK(\d+)__/g, (m, i) => {
+    const { lang, code } = codeBlocks[parseInt(i)];
+    return `<pre><code class="language-${lang}">${escapeHtml(code.trim())}</code></pre>`;
+  });
+  html = html.replace(/__MATHBLOCK(\d+)__/g, (m, i) => {
+    const math = mathBlocks[parseInt(i)];
+    try {
+      if (window.katex) return `<div class="math-block">${window.katex.renderToString(math, { displayMode: true, throwOnError: false })}</div>`;
+    } catch {}
+    return `<div class="math-block">$$${escapeHtml(math)}$$</div>`;
+  });
+  html = html.replace(/__INLINEMATH(\d+)__/g, (m, i) => {
+    const math = inlineMath[parseInt(i)];
+    try {
+      if (window.katex) return `<span class="math-inline">${window.katex.renderToString(math, { displayMode: false, throwOnError: false })}</span>`;
+    } catch {}
+    return `<span class="math-inline">$${escapeHtml(math)}$</span>`;
+  });
+  if (!html.startsWith('<')) html = '<p>' + html + '</p>';
+  return html;
+}
+
+function sessionStatusLabel(status) {
+  const map = {
+    running: '运行中',
+    waiting_approval: '等待审批',
+    waiting_tool_auth: '等待授权',
+    queued: '排队中',
+    done: '已完成',
+    error: '失败',
+    interrupted: '已中断',
+    idle: '空闲'
+  };
+  return map[status] || status || '空闲';
+}
+
+function sessionStatusBadge(status, lastError) {
+  const label = sessionStatusLabel(status);
+  const title = lastError ? ` title="${escapeHtml(lastError)}"` : '';
+  return `<span class="history-status status-${escapeHtml(status || 'idle')}"${title}><i class="fa-solid fa-circle"></i> ${escapeHtml(label)}</span>`;
+}
+
+function showToast(message, type = 'info', duration = 5000) {
+  const container = document.getElementById('toast-container');
+  if (!container) return;
+  const colors = {
+    error: { bg: '#f44336', icon: 'fa-circle-xmark' },
+    warn: { bg: '#ff9800', icon: 'fa-triangle-exclamation' },
+    info: { bg: '#2196f3', icon: 'fa-circle-info' },
+    success: { bg: '#4caf50', icon: 'fa-circle-check' }
+  };
+  const c = colors[type] || colors.info;
+  const el = document.createElement('div');
+  el.style.cssText = `pointer-events:auto;background:${c.bg};color:#fff;padding:10px 14px;border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,0.15);font-size:13px;display:flex;align-items:center;gap:8px;max-width:360px;animation:toast-slide-in 0.25s ease`;
+  el.innerHTML = `<i class="fa-solid ${c.icon}" style="font-size:14px"></i><span style="flex:1">${String(message).replace(/[<>&]/g, s => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[s]))}</span>`;
+  container.appendChild(el);
+  const removeTimer = setTimeout(() => {
+    el.style.transition = 'opacity 0.3s, transform 0.3s';
+    el.style.opacity = '0';
+    el.style.transform = 'translateX(20px)';
+    setTimeout(() => el.remove(), 300);
+  }, duration);
+  el.addEventListener('click', () => {
+    clearTimeout(removeTimer);
+    el.remove();
+  });
+}
+
+window.showToast = showToast;

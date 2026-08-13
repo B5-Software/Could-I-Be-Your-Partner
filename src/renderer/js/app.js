@@ -285,7 +285,7 @@
   syncBuiltinToolCount();
 
   // Init agent
-  const agent = new Agent();
+  let agent = new Agent();
 
   // Skill 编辑器保存/创建/删除后，主窗口自动刷新目录和当前技能页。
   if (typeof window.api.onSkillsChanged === 'function') {
@@ -322,32 +322,6 @@
 
   // ── 全局 Toast 提示（用于请求失败重试等自动消失提示） ──
   // 类型: 'error' | 'warn' | 'info' | 'success'
-  function showToast(message, type = 'info', duration = 5000) {
-    const container = document.getElementById('toast-container');
-    if (!container) return;
-    const colors = {
-      error: { bg: '#f44336', icon: 'fa-circle-xmark' },
-      warn: { bg: '#ff9800', icon: 'fa-triangle-exclamation' },
-      info: { bg: '#2196f3', icon: 'fa-circle-info' },
-      success: { bg: '#4caf50', icon: 'fa-circle-check' }
-    };
-    const c = colors[type] || colors.info;
-    const el = document.createElement('div');
-    el.style.cssText = `pointer-events:auto;background:${c.bg};color:#fff;padding:10px 14px;border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,0.15);font-size:13px;display:flex;align-items:center;gap:8px;max-width:360px;animation:toast-slide-in 0.25s ease`;
-    el.innerHTML = `<i class="fa-solid ${c.icon}" style="font-size:14px"></i><span style="flex:1">${String(message).replace(/[<>&]/g, s => ({ '<':'&lt;','>':'&gt;','&':'&amp;' }[s]))}</span>`;
-    container.appendChild(el);
-    const removeTimer = setTimeout(() => {
-      el.style.transition = 'opacity 0.3s, transform 0.3s';
-      el.style.opacity = '0';
-      el.style.transform = 'translateX(20px)';
-      setTimeout(() => el.remove(), 300);
-    }, duration);
-    el.addEventListener('click', () => {
-      clearTimeout(removeTimer);
-      el.remove();
-    });
-  }
-  window.showToast = showToast;
   const btnClearChat = document.getElementById('btn-clear-chat');
   const agentStatus = document.getElementById('agent-status');
   const agentTarot = document.getElementById('agent-tarot');
@@ -661,7 +635,7 @@
   // ---- Title Editing ----
   const titlebarTitle = document.getElementById('titlebar-title');
   const titlebarEdit = document.getElementById('titlebar-title-edit');
-  
+
   titlebarTitle?.addEventListener('click', () => {
     titlebarTitle.classList.add('hidden');
     titlebarEdit.classList.remove('hidden');
@@ -692,134 +666,6 @@
   });
 
   // ---- Markdown Renderer with Math Support ----
-  function renderMarkdown(text) {
-    if (!text) return '';
-    let html = text;
-    
-    // Protect code blocks and math first
-    const codeBlocks = [];
-    const mathBlocks = [];
-    const inlineMath = [];
-    const tables = [];
-    
-    // Extract tables (before other processing)
-    html = html.replace(/(\n|^)(\|.+\|)\n(\|[-:\s|]+\|)\n((?:\|.+\|\n?)*)/gm, (match, prefix, header, separator, rows) => {
-      const tableData = {
-        header: header.trim().split('|').filter(c => c.trim()).map(c => c.trim()),
-        rows: rows.trim().split('\n').map(row => 
-          row.split('|').filter(c => c.trim()).map(c => c.trim())
-        )
-      };
-      tables.push(tableData);
-      return `${prefix}__TABLE${tables.length - 1}__`;
-    });
-    
-    // Extract display math ($$...$$)
-    html = html.replace(/\$\$([\s\S]*?)\$\$/g, (m, math) => {
-      mathBlocks.push(math);
-      return `__MATHBLOCK${mathBlocks.length - 1}__`;
-    });
-    
-    // Extract inline math ($...$)
-    html = html.replace(/\$([^$\n]+?)\$/g, (m, math) => {
-      inlineMath.push(math);
-      return `__INLINEMATH${inlineMath.length - 1}__`;
-    });
-    
-    // Extract code blocks
-    html = html.replace(/```([^\n]*)\n([\s\S]*?)```/g, (m, lang, code) => {
-      codeBlocks.push({ lang: (lang || '').trim(), code });
-      return `__CODEBLOCK${codeBlocks.length - 1}__`;
-    });
-
-    // Escape HTML before inline formatting
-    html = escapeHtml(html);
-    
-    // Inline code
-    html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
-    // Bold
-    html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-    // Italic
-    html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
-    // Strikethrough
-    html = html.replace(/~~(.+?)~~/g, '<del>$1</del>');
-    // Headers
-    html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
-    html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
-    html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
-    // Horizontal rule
-    html = html.replace(/^---$/gm, '<hr>');
-    // Blockquote
-    html = html.replace(/^> (.+)$/gm, '<blockquote>$1</blockquote>');
-    // Unordered list
-    html = html.replace(/^[\-\*] (.+)$/gm, '<UL_ITEM>$1</UL_ITEM>');
-    html = html.replace(/(<UL_ITEM>.*<\/UL_ITEM>\n?)+/g, '<ul>$&</ul>');
-    html = html.replace(/<UL_ITEM>/g, '<li>').replace(/<\/UL_ITEM>/g, '</li>');
-    // Ordered list
-    html = html.replace(/^\d+\. (.+)$/gm, '<OL_ITEM>$1</OL_ITEM>');
-    html = html.replace(/(<OL_ITEM>.*<\/OL_ITEM>\n?)+/g, '<ol>$&</ol>');
-    html = html.replace(/<OL_ITEM>/g, '<li>').replace(/<\/OL_ITEM>/g, '</li>');
-    // Links
-    html = html.replace(/\[([^\]]+)\]\(([^\)]+)\)/g, '<a href="$2" data-external="true">$1</a>');
-
-    // Line breaks before restoring blocks to avoid corrupting KaTeX markup
-    html = html.replace(/\n\n/g, '</p><p>');
-    html = html.replace(/\n/g, '<br>');
-    
-    // Restore tables
-    html = html.replace(/__TABLE(\d+)__/g, (m, i) => {
-      const table = tables[parseInt(i)];
-      let tableHtml = '<div class="table-wrapper" style="overflow-x:auto;margin:12px 0;"><table class="markdown-table" style="border-collapse:collapse;width:100%;max-width:100%;">';
-      tableHtml += '<thead><tr>';
-      table.header.forEach(cell => {
-        tableHtml += `<th style="border:1px solid var(--border-color);padding:8px;background:var(--bg-secondary);text-align:left;font-weight:600;">${escapeHtml(cell)}</th>`;
-      });
-      tableHtml += '</tr></thead><tbody>';
-      table.rows.forEach(row => {
-        if (row.length > 0) {
-          tableHtml += '<tr>';
-          row.forEach(cell => {
-            tableHtml += `<td style="border:1px solid var(--border-color);padding:8px;">${escapeHtml(cell)}</td>`;
-          });
-          tableHtml += '</tr>';
-        }
-      });
-      tableHtml += '</tbody></table></div>';
-      return tableHtml;
-    });
-    
-    // Restore code blocks
-    html = html.replace(/__CODEBLOCK(\d+)__/g, (m, i) => {
-      const { lang, code } = codeBlocks[parseInt(i)];
-      return `<pre><code class="language-${lang}">${escapeHtml(code.trim())}</code></pre>`;
-    });
-    
-    // Restore math blocks
-    html = html.replace(/__MATHBLOCK(\d+)__/g, (m, i) => {
-      const math = mathBlocks[parseInt(i)];
-      try {
-        if (window.katex) {
-          return `<div class="math-block">${window.katex.renderToString(math, { displayMode: true, throwOnError: false })}</div>`;
-        }
-      } catch {}
-      return `<div class="math-block">$$${escapeHtml(math)}$$</div>`;
-    });
-    
-    // Restore inline math
-    html = html.replace(/__INLINEMATH(\d+)__/g, (m, i) => {
-      const math = inlineMath[parseInt(i)];
-      try {
-        if (window.katex) {
-          return `<span class="math-inline">${window.katex.renderToString(math, { displayMode: false, throwOnError: false })}</span>`;
-        }
-      } catch {}
-      return `<span class="math-inline">$${escapeHtml(math)}$</span>`;
-    });
-    // Wrap in paragraph if not already structured
-    if (!html.startsWith('<')) html = '<p>' + html + '</p>';
-    return html;
-  }
-
   // Handle external links - open in system browser
   document.addEventListener('click', (e) => {
     const link = e.target.closest('a[data-external]');
@@ -902,6 +748,7 @@
 
   // ---- Mode Switcher (Chat / Code / Babe) ----
   let currentMode = 'chat';
+  let sessionManager = null;
   window.getCurrentMode = () => currentMode;
   document.querySelectorAll('.mode-btn').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -915,11 +762,13 @@
         remoteWs.send(JSON.stringify({ type: 'switchMode', mode }));
         return;
       }
-      // 切换 Chat/Code/Babe 会话：停止上一个模式的语音播报（清空播放队列）与后续推理
+      // 切换 Chat/Code/Babe 会话：只停止语音播放，不再掐掉上一个模式的推理。
+      // 上一个模式继续在后台运行，sessionManager 负责状态和历史刷新。
       stopVoicePlayback();
-      if (currentMode === 'code' && codeAgent) { try { codeAgent.stop(); } catch (_) {} }
-      else if (currentMode === 'babe' && babeAgent) { try { babeAgent.stop(); } catch (_) {} }
-      else if (currentMode === 'chat' && agent && agent.running) { try { agent.stop(); } catch (_) {} }
+      if (sessionManager) {
+        const prevSession = sessionManager.getActive(currentMode);
+        if (prevSession) sessionManager.deactivate(prevSession);
+      }
 
       document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
@@ -988,14 +837,20 @@
   document.querySelector('.nav-item[data-page="babe-history"]')?.classList.add('hidden');
 
   // ---- Agent Callbacks ----
-  agent.onMessage = (type, data) => {
+  function wireChatAgent(ag) {
+    const isActive = () => {
+      const session = sessionManager?.getByAgent(ag);
+      return !session || session.active;
+    };
+
+    ag.onMessage = (type, data) => {
     switch (type) {
       case 'tarot':
         if (data) {
           // 后端逻辑：始终推送 tarot 到 WebUI（保持子代理/对话上下文一致）
           window.api.webControlPushTarot(data);
           // UI 可见性：关闭时跳过所有前端渲染（agent-tarot 已被 hidden 隐藏）
-          if (!tarotVisible || !agentTarot) break;
+          if (!isActive() || !tarotVisible || !agentTarot) break;
           const iconHtml = data.icon ? `<i class="fa-solid ${data.icon}"></i>` : '<i class="fa-solid fa-star"></i>';
           const _lang = (typeof i18nGetLanguage === 'function' ? i18nGetLanguage() : 'zh-CN');
           const _isZh = (_lang === 'zh-CN');
@@ -1013,29 +868,36 @@
         }
         break;
       case 'assistant':
+        if (!isActive()) break;
         addMessageToChat('assistant', data);
         window.api.webControlPushMessage('assistant', data);
         break;
       case 'stream-start':
+        if (!isActive()) break;
         // Create a placeholder bubble for streaming tokens
         startStreamingMessage(data?.requestId);
         break;
       case 'stream-chunk':
+        if (!isActive()) break;
         appendStreamChunk(data?.requestId, data);
         break;
       case 'stream-end':
+        if (!isActive()) break;
         finalizeStreamMessage(data?.requestId, data);
         break;
       case 'error':
+        if (!isActive()) break;
         // 错误消息已被 agent.js 持久化到 contextManager，这里只负责 UI 显示
         addSystemMessage(`[错误] ${data}`, { persist: false });
         window.api.webControlPushMessage('system', `[错误] ${data}`);
         break;
       case 'optimize-tools-start':
+        if (!isActive()) break;
         addThinkingIndicatorWithText('正在优化工具选择...');
         break;
       case 'optimize-tools-end':
-        if (agent.running) {
+        if (!isActive()) break;
+        if (ag.running) {
           addThinkingIndicator();
         } else {
           removeThinkingIndicator();
@@ -1046,13 +908,16 @@
         }
         break;
       case 'approval':
+        if (!isActive()) break;
         showApprovalPanel(data.toolName, data.args);
         window.api.webControlPushApproval(data.toolName, data.args);
         break;
       case 'tool-auth-required':
-        showToolAuthModal(data.toolName, data.category, agent);
+        if (!isActive()) break;
+        showToolAuthModal(data.toolName, data.category, ag);
         break;
       case 'sub-agent-start': {
+        if (!isActive()) break;
         const tarotPart = tarotVisible && data.tarot
           ? ` - 命运之牌: ${data.tarot.name}${data.tarot.isReversed ? '(逆位)' : '(正位)'}${data.tarot?.entropySource?.startsWith('TRNG') ? ' [TRNG]' : ''}`
           : '';
@@ -1066,6 +931,7 @@
         break;
       }
       case 'sub-agent-done':
+        if (!isActive()) break;
         updateSubAgentCard(data.id, {
           status: 'done',
           result: data.result,
@@ -1076,6 +942,7 @@
         });
         break;
       case 'sub-agent-message':
+        if (!isActive()) break;
         // 子代理中间消息：不显示在聊天页面，而是保存在子代理记录中
         // 用户可点击子代理卡片查看完整对话记录（参考 claude-code-ref 的隔离设计）
         // 消息已通过 agent.subAgents[].messages 自动累积，模态框打开时从 agent.getSubAgent(id) 读取
@@ -1092,20 +959,26 @@
       case 'sub-agent-batch-done':
         break;
       case 'present-file':
+        if (!isActive()) break;
         addFilePresentCard(data);
         // 系统通知：文件呈递
         sendAppNotification('present', 'Agent 向您呈递文件', data?.title || data?.filename || '请查看文件内容');
         break;
     }
-    updateContextProgress();
+    if (isActive()) updateContextProgress();
   };
 
-  agent.onTitleChange = (title) => {
-    setTitlebarTitle(title);
-    window.api.webControlPushTitle(title);
+  ag.onTitleChange = (title) => {
+    if (isActive()) setTitlebarTitle(title);
+    if (isActive()) window.api.webControlPushTitle(title);
   };
 
-  agent.onStatusChange = (status) => {
+  ag.onStatusChange = (status) => {
+    if (!isActive()) {
+      // 后台会话状态由 SessionManager 负责；只刷新全局会话 tab。
+      if (typeof renderAllSessionTabs === 'function') renderAllSessionTabs();
+      return;
+    }
     if (status === 'working') {
       agentStatus.innerHTML = '<i class="fa-solid fa-circle"></i> 工作中... <span id="work-duration" style="margin-left:6px;font-variant-numeric:tabular-nums">00:00</span>';
       agentStatus.className = 'agent-status working';
@@ -1139,11 +1012,6 @@
       if (wasWorking && window.api?.pwHideBanner) {
         try { window.api.pwHideBanner(); } catch {}
       }
-      // 系统通知：会话已完成（仅在刚结束工作时触发，初次进入 idle 不通知）
-      if (wasWorking) {
-        const title = agent.conversationTitle || '当前会话';
-        sendAppNotification('sessionDone', 'Agent 已完成工作', `${title} - 等待您的下一条指令`);
-      }
     }
     // 推送状态变化到 WebUI
     WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#agent-status', html: agentStatus.outerHTML });
@@ -1152,7 +1020,8 @@
     window.api.webControlPushStatus(status);
   };
 
-  agent.onToolCall = (name, args, status, result) => {
+  ag.onToolCall = (name, args, status, result) => {
+    if (!isActive()) return;
     const toolDef = TOOL_DEFINITIONS.find(t => t.name === name);
     const displayName = toolDef?.desc || name;
 
@@ -1176,11 +1045,241 @@
     window.api.webControlPushToolCall(name, args, status, typeof result === 'string' ? result : JSON.stringify(result || ''));
   };
 
-  agent.onTodoUpdate = (items) => {
+  ag.onTodoUpdate = (items) => {
+    if (!isActive()) return;
     renderTodoList(items);
   };
+  }
+
+  wireChatAgent(agent);
 
   await agent.init();
+  sessionManager = new SessionManager({
+    maxConcurrent: Math.max(1, Number(agent.settings?.sessions?.maxConcurrent) || 10)
+  });
+  window.__sessionManager = sessionManager;
+  const primaryChatSession = sessionManager.registerAgent('chat', agent, {
+    title: agent.conversationTitle || '未命名对话'
+  });
+  sessionManager.activate('chat', primaryChatSession.key);
+  AppBus.on('session-status', (event) => {
+    const { session, status, previous } = event.detail || {};
+    if (!session) return;
+    if (status === SessionStatus.DONE && previous === SessionStatus.RUNNING) {
+      const title = session.title || '当前会话';
+      sendAppNotification('sessionDone', '会话已完成', `${session.modeLabel || title} - 工作已完成`, !session.active, { sessionKey: session.key, mode: session.mode });
+    } else if (status === SessionStatus.ERROR && previous === SessionStatus.RUNNING) {
+      sendAppNotification('sessionError', '会话执行失败', `${session.title || '会话'} - ${session.lastError || '未知错误'}`, !session.active, { sessionKey: session.key, mode: session.mode });
+    } else if (status === SessionStatus.WAITING_APPROVAL) {
+      sendAppNotification('approval', '会话等待审批', `${session.title || '会话'} - 需要您的批准`, !session.active, { sessionKey: session.key, mode: session.mode });
+    }
+    if (typeof renderAllSessionTabs === 'function') renderAllSessionTabs();
+    if (status === SessionStatus.DONE || status === SessionStatus.ERROR || status === SessionStatus.IDLE) {
+      sessionManager.processQueue();
+    }
+  });
+  AppBus.on('session-dequeued', (event) => {
+    const { session, message } = event.detail || {};
+    if (!session || !message) return;
+    const ag = session.agent;
+    if (!ag) return;
+    if (session.mode === 'chat') {
+      ag.sendMessage(message.text, message.attachments || []).catch(err => {
+        if (ag.onMessage) ag.onMessage('error', err?.message || String(err));
+      });
+    } else if (session.mode === 'code') {
+      ag.sendMessage(message.text, message.attachments || []).catch(() => {});
+    } else if (session.mode === 'babe') {
+      ag.sendMessage(message.text, message.attachments || []).catch(() => {});
+    }
+  });
+  AppBus.on('session-title', () => {
+    if (typeof renderAllSessionTabs === 'function') renderAllSessionTabs();
+  });
+  AppBus.on('session-created', () => {
+    if (typeof renderAllSessionTabs === 'function') renderAllSessionTabs();
+  });
+  AppBus.on('session-closed', () => {
+    if (typeof renderAllSessionTabs === 'function') renderAllSessionTabs();
+  });
+  let historyRefreshTimer = null;
+  const refreshActiveHistoryPage = () => {
+    if (historyRefreshTimer) return;
+    historyRefreshTimer = setTimeout(() => {
+      historyRefreshTimer = null;
+      const active = document.querySelector('.page.active');
+      if (!active) return;
+      if (active.id === 'page-history') loadHistoryPage();
+      else if (active.id === 'page-code-history') loadCodeHistoryPage();
+      else if (active.id === 'page-babe-history') loadBabeHistoryPage();
+    }, 400);
+  };
+  ['session-status', 'session-title', 'session-usage', 'session-created', 'session-closed'].forEach(eventName => {
+    AppBus.on(eventName, refreshActiveHistoryPage);
+  });
+  if (typeof window.api.onUsageChanged === 'function') {
+    window.api.onUsageChanged((data) => {
+      if (!data) return;
+      const usageEl = document.getElementById('setting-llm-usage');
+      if (usageEl) usageEl.textContent = fmtTokenCount(data.dailyTokensUsed || 0);
+      try { refreshBudgetMiniBars(); } catch { /* ignore */ }
+      try { refreshSessionCostMini(); } catch { /* ignore */ }
+      const activeTab = document.querySelector('.settings-tab-btn.active');
+      if (activeTab && activeTab.dataset.tab === 'usage') {
+        try { loadUsageStats(document.querySelector('.usage-period-btn.active')?.dataset.period || 'daily'); } catch { /* ignore */ }
+      }
+    });
+  }
+  if (typeof window.api.onNotificationClick === 'function') {
+    window.api.onNotificationClick((data) => {
+      if (!data || !data.sessionKey || !sessionManager) return;
+      const session = sessionManager.get(data.sessionKey);
+      if (!session) return;
+      if (data.mode && data.mode !== currentMode) {
+        const modeBtn = document.querySelector(`.mode-btn[data-mode="${data.mode}"]`);
+        if (modeBtn) modeBtn.click();
+      }
+      activateSession(session.mode, session.key);
+    });
+  }
+
+  function renderSessionTabs(mode) {
+    if (!sessionManager) return;
+    const tabsEl = document.getElementById(`${mode}-session-tabs`);
+    if (!tabsEl) return;
+    const sessions = sessionManager.list(mode).sort((a, b) => a.createdAt - b.createdAt);
+    if (sessions.length <= 1) {
+      tabsEl.classList.add('hidden');
+      tabsEl.innerHTML = '';
+      return;
+    }
+    tabsEl.classList.remove('hidden');
+    tabsEl.innerHTML = '';
+    const active = sessionManager.getActive(mode);
+    for (const session of sessions) {
+      const tab = document.createElement('div');
+      tab.className = 'session-tab' + (active?.key === session.key ? ' active' : '');
+      tab.dataset.sessionKey = session.key;
+      tab.title = session.title || '未命名会话';
+      tab.innerHTML = `
+        <span class="session-status-dot ${escapeHtml(session.status)}"></span>
+        <span class="session-tab-title">${escapeHtml(session.title || '未命名会话')}</span>
+        <span class="session-tab-close" title="关闭会话"><i class="fa-solid fa-xmark"></i></span>
+      `;
+      tab.addEventListener('click', (e) => {
+        if (e.target.closest('.session-tab-close')) return;
+        activateSession(mode, session.key);
+      });
+      const closeBtn = tab.querySelector('.session-tab-close');
+      closeBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        closeSession(session);
+      });
+      tabsEl.appendChild(tab);
+    }
+    const add = document.createElement('button');
+    add.className = 'session-tab-add';
+    add.title = '新建会话';
+    add.innerHTML = '<i class="fa-solid fa-plus"></i>';
+    add.addEventListener('click', () => createNewSession(mode));
+    tabsEl.appendChild(add);
+  }
+
+  function renderAllSessionTabs() {
+    renderSessionTabs('chat');
+    renderSessionTabs('code');
+    renderSessionTabs('babe');
+  }
+
+  function closeSession(session) {
+    if (!session || !sessionManager) return;
+    const isActive = sessionManager.getActive(session.mode)?.key === session.key;
+    const nextSessions = sessionManager.list(session.mode).filter(s => s.key !== session.key);
+    const nextSession = nextSessions.length ? nextSessions[0] : null;
+    const running = session.status === SessionStatus.RUNNING
+      || session.status === SessionStatus.WAITING_APPROVAL
+      || session.status === SessionStatus.WAITING_TOOL_AUTH;
+    if (running && !window.confirm(`会话“${session.title || '未命名'}”仍在运行，确定停止并关闭吗？`)) return;
+    if (session.mode === 'chat' && session.agent === agent) {
+      const others = sessionManager.list('chat').filter(s => s.key !== session.key);
+      if (others.length) {
+        agent = others[0].agent;
+      } else {
+        agent = new Agent();
+      }
+    } else if (session.mode === 'code' && session.agent === codeAgent) {
+      const others = sessionManager.list('code').filter(s => s.key !== session.key);
+      codeAgent = others.length ? others[0].agent : null;
+    } else if (session.mode === 'babe' && session.agent === babeAgent) {
+      const others = sessionManager.list('babe').filter(s => s.key !== session.key);
+      babeAgent = others.length ? others[0].agent : null;
+    }
+    sessionManager.close(session);
+    if (isActive && nextSession) activateSession(session.mode, nextSession.key);
+    renderAllSessionTabs();
+  }
+
+  async function createNewSession(mode) {
+    if (!sessionManager) return;
+    if (mode === 'chat') {
+      const ag = new Agent();
+      ag.mode = 'chat';
+      await ag.init();
+      wireChatAgent(ag);
+      const session = sessionManager.registerAgent('chat', ag, { title: ag.conversationTitle || '未命名会话' });
+      activateSession('chat', session.key);
+    } else if (mode === 'code') {
+      await createCodeSession();
+    } else if (mode === 'babe') {
+      await createBabeSession();
+    }
+  }
+
+  async function activateSession(mode, key) {
+    if (!sessionManager) return;
+    const session = sessionManager.get(key);
+    if (!session || session.mode !== mode) return;
+    if (currentMode !== mode) {
+      const modeBtn = document.querySelector(`.mode-btn[data-mode="${mode}"]`);
+      if (modeBtn) modeBtn.click();
+      // 等待模式切换完成后再激活目标会话
+      setTimeout(() => activateSession(mode, key), 0);
+      return;
+    }
+    sessionManager.activate(mode, key);
+    if (mode === 'chat') {
+      agent = session.agent;
+      const conv = {
+        id: agent.conversationId,
+        title: agent.conversationTitle || session.title,
+        messages: agent.contextManager?.getHistoryMessages() || [],
+        subAgents: agent.subAgents || [],
+        workspacePath: agent.workspacePath,
+        usage: agent.sessionUsage
+      };
+      rebuildChatUIFromHistory(conv);
+    } else if (mode === 'code') {
+      codeAgent = session.agent;
+      codeWorkspacePath = codeAgent.codeWorkspacePath || codeAgent.workspacePath || codeWorkspacePath;
+      codeMessages = codeAgent.contextManager?.getHistoryMessages().slice() || [];
+      await replayCodeSession(session);
+    } else if (mode === 'babe') {
+      babeAgent = session.agent;
+      babeMessages = babeAgent.contextManager?.getHistoryMessages().slice() || [];
+      await replayBabeSession(session);
+    }
+    if (session.status === SessionStatus.WAITING_APPROVAL && session.pendingApproval) {
+      const approval = session.pendingApproval;
+      if (mode === 'code') showCodeApprovalPanel(approval.toolName, approval.args);
+      else if (mode === 'chat') showApprovalPanel(approval.toolName, approval.args);
+    }
+    if (session.status === SessionStatus.WAITING_TOOL_AUTH && session.pendingToolAuth) {
+      showToolAuthModal(session.pendingToolAuth.toolName, session.pendingToolAuth.category, session.agent);
+    }
+    updateContextProgress();
+    renderAllSessionTabs();
+  }
+
   await normalizeToolSettings();
   setTitlebarTitle(agent.conversationTitle || '未命名对话');
   updateReoptimizeButtonVisibility();
@@ -2593,11 +2692,7 @@
   // ---- Web Control Incoming Events ----
   window.api.onWebControlNewChat(() => {
     stopVoicePlayback(); // 清空语音播放队列
-    if (agent.running) { try { agent.stop(); } catch (_) {} } // 掐掉后续推理
-    agent.newConversation();
-    setTitlebarTitle('未命名对话');
-    clearChatMessagesUI();
-    updateReoptimizeButtonVisibility();
+    createNewSession('chat');
     window.api.webControlPushConversationSwitch(null);
   });
 
@@ -2659,10 +2754,24 @@ window.api.onWebControlSendMessage(async (message) => {
   window.api.onWebControlLoadConversation(async (id) => {
     try {
       stopVoicePlayback(); // 清空语音播放队列
-      if (agent.running) { try { agent.stop(); } catch (_) {} } // 掐掉后续推理
       const conv = await window.api.historyGet(id);
       if (!conv) return;
-      await agent.loadFromHistory(conv);
+      // 先查找已存在的会话；没有则创建新会话并加载历史。
+      const existing = sessionManager ? sessionManager.list('chat').find(s => String(s.id) === String(conv.id)) : null;
+      let targetSession = existing;
+      if (targetSession) {
+        agent = targetSession.agent;
+        activateSession('chat', targetSession.key);
+      } else {
+        const ag = new Agent();
+        ag.mode = 'chat';
+        await ag.init();
+        await ag.loadFromHistory(conv);
+        wireChatAgent(ag);
+        targetSession = sessionManager.registerAgent('chat', ag, { id: conv.id, title: conv.title || '未命名对话' });
+        agent = ag;
+        activateSession('chat', targetSession.key);
+      }
       setTitlebarTitle(agent.conversationTitle || '未命名对话');
       updateContextProgress();
       // Switch to chat page
@@ -2741,30 +2850,40 @@ window.api.onWebControlSendMessage(async (message) => {
   //   - 否则调用 skipPending 标记无需保存
   window.api.onSavePending(async () => {
     try {
-      if (!agent || !agent.running || !agent.conversationId) {
+      const runningSessions = sessionManager
+        ? sessionManager.list().filter(s => s.status === SessionStatus.RUNNING
+            || s.status === SessionStatus.WAITING_APPROVAL
+            || s.status === SessionStatus.WAITING_TOOL_AUTH
+            || s.status === SessionStatus.QUEUED)
+        : [];
+      if (runningSessions.length === 0) {
         await window.api.skipPending();
         return;
       }
-      // 构造 pending 载荷：含会话 ID、模式、工作区、最后用户消息等
-      const lastUserMsg = (agent.contextManager.messages || [])
-        .filter(m => m.role === 'user')
-        .slice(-1)[0];
-      const lastUserText = typeof lastUserMsg?.content === 'string'
-        ? lastUserMsg.content.slice(0, 200)
-        : '[多模态内容]';
-      const payload = {
-        conversationId: agent.conversationId,
-        conversationTitle: agent.conversationTitle || '未命名对话',
-        mode: agent.mode || 'chat',
-        workspacePath: agent.workspacePath || null,
-        codeWorkspacePath: agent.codeWorkspacePath || null,
-        babeAffection: agent.babeAffection ?? 0,
-        tarotCard: agent.tarotCard || null,
-        messageCount: agent.contextManager.messages?.length || 0,
-        lastUserMessage: lastUserText,
-        sessionUsage: agent.sessionUsage || null
-      };
-      await window.api.savePendingSession(payload);
+      const sessions = runningSessions.map(session => {
+        const ag = session.agent;
+        const lastUserMsg = (ag?.contextManager?.messages || [])
+          .filter(m => m.role === 'user')
+          .slice(-1)[0];
+        const lastUserText = typeof lastUserMsg?.content === 'string'
+          ? lastUserMsg.content.slice(0, 200)
+          : '[多模态内容]';
+        return {
+          conversationId: ag?.conversationId || session.id,
+          conversationTitle: session.title || ag?.conversationTitle || '未命名对话',
+          mode: session.mode,
+          sessionKey: session.key,
+          status: session.status,
+          workspacePath: ag?.workspacePath || null,
+          codeWorkspacePath: ag?.codeWorkspacePath || null,
+          babeAffection: ag?.babeAffection ?? 0,
+          tarotCard: ag?.tarotCard || null,
+          messageCount: ag?.contextManager?.messages?.length || 0,
+          lastUserMessage: lastUserText,
+          sessionUsage: ag?.sessionUsage || null
+        };
+      });
+      await window.api.savePendingSession({ sessions });
     } catch (e) {
       console.error('[App] savePendingSession failed:', e.message);
       try { await window.api.skipPending(); } catch {}
@@ -2775,7 +2894,13 @@ window.api.onWebControlSendMessage(async (message) => {
   async function checkPendingSessionOnStartup() {
     try {
       const pending = await window.api.getPendingSession();
-      if (!pending || !pending.conversationId) {
+      const sessions = pending?.sessions;
+      const hasLegacy = pending && pending.conversationId;
+      if (!pending || (!Array.isArray(sessions) && !hasLegacy)) {
+        return;
+      }
+      if (Array.isArray(sessions) && sessions.length === 0) {
+        await window.api.clearPendingSession();
         return;
       }
       // 距离上次保存超过 7 天则忽略
@@ -2794,13 +2919,58 @@ window.api.onWebControlSendMessage(async (message) => {
   // 延迟调用以确保 UI 已就绪
   setTimeout(checkPendingSessionOnStartup, 1500);
 
+  async function resumePendingItem(item) {
+    if (!item?.conversationId) return;
+    if (item.mode && item.mode !== currentMode) {
+      const modeBtn = document.querySelector(`.mode-btn[data-mode="${item.mode}"]`);
+      if (modeBtn) modeBtn.click();
+      await new Promise(resolve => setTimeout(resolve, 300));
+    }
+    if (item.mode === 'code') {
+      if (item.codeWorkspacePath) {
+        codeWorkspacePath = item.codeWorkspacePath;
+        try { await window.api.codeSetLastWorkspace?.(item.codeWorkspacePath); } catch { /* ignore */ }
+        const wsPathEl = document.getElementById('code-workspace-path');
+        if (wsPathEl) wsPathEl.textContent = item.codeWorkspacePath;
+        await loadCodeFileTree(item.codeWorkspacePath);
+        await loadCodeHistoryPage();
+        await new Promise(resolve => setTimeout(resolve, 250));
+        const continueBtn = document.querySelector(`#code-history-list .history-continue[data-id="${item.conversationId}"]`);
+        if (continueBtn) continueBtn.click();
+      }
+      return;
+    }
+    if (item.mode === 'babe') {
+      await loadBabeConversation(item.conversationId);
+      return;
+    }
+    const conv = await window.api.historyGet(item.conversationId);
+    if (!conv) return;
+    const existing = sessionManager?.list('chat').find(s => String(s.id) === String(conv.id));
+    if (existing) {
+      agent = existing.agent;
+      activateSession('chat', existing.key);
+    } else {
+      const ag = new Agent();
+      ag.mode = 'chat';
+      await ag.init();
+      await ag.loadFromHistory(conv);
+      wireChatAgent(ag);
+      const target = sessionManager.registerAgent('chat', ag, { id: conv.id, title: conv.title || '未命名对话' });
+      agent = ag;
+      activateSession('chat', target.key);
+    }
+  }
+
   // 显示"上次会话中断"模态框，提供继续/忽略/查看历史等选项
   function showPendingResumeModal(pending) {
     const overlay = document.createElement('div');
     overlay.className = 'modal-overlay';
     overlay.style.cssText = 'display:flex;align-items:center;justify-content:center;z-index:9999;background:rgba(0,0,0,0.5);';
     const modeNames = { chat: 'Chat', code: 'Code', babe: 'Babe' };
-    const modeLabel = modeNames[pending.mode] || pending.mode || 'Chat';
+    const sessions = Array.isArray(pending.sessions) && pending.sessions.length > 0 ? pending.sessions : [pending];
+    const primary = sessions[0] || pending;
+    const modeLabel = modeNames[primary.mode] || primary.mode || 'Chat';
     const savedAtStr = (() => {
       try { return new Date(pending.savedAt).toLocaleString('zh-CN'); } catch { return ''; }
     })();
@@ -2812,7 +2982,7 @@ window.api.onWebControlSendMessage(async (message) => {
           </div>
           <div>
             <div style="font-size:16px;font-weight:700;color:var(--text-primary);">上次会话未结束</div>
-            <div style="font-size:12px;color:var(--text-tertiary);margin-top:2px;">中断于 ${savedAtStr}</div>
+            <div style="font-size:12px;color:var(--text-tertiary);margin-top:2px;">中断于 ${savedAtStr}${sessions.length > 1 ? ` · ${sessions.length} 个会话` : ''}</div>
           </div>
         </div>
         <div style="padding:20px 24px;">
@@ -2824,13 +2994,13 @@ window.api.onWebControlSendMessage(async (message) => {
             </div>
             <div style="display:flex;justify-content:space-between;margin-bottom:6px;">
               <span style="color:var(--text-tertiary);">会话标题</span>
-              <span style="font-weight:600;color:var(--text-primary);max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${(pending.conversationTitle || '').replace(/"/g, '&quot;')}">${pending.conversationTitle || '未命名对话'}</span>
+              <span style="font-weight:600;color:var(--text-primary);max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${(primary.conversationTitle || '').replace(/"/g, '&quot;')}">${primary.conversationTitle || '未命名对话'}</span>
             </div>
             <div style="display:flex;justify-content:space-between;margin-bottom:6px;">
               <span style="color:var(--text-tertiary);">消息数</span>
-              <span style="font-weight:600;color:var(--text-primary);">${pending.messageCount || 0}</span>
+              <span style="font-weight:600;color:var(--text-primary);">${primary.messageCount || 0}</span>
             </div>
-            ${pending.lastUserMessage ? `<div style="margin-top:8px;padding-top:8px;border-top:1px dashed var(--border);"><div style="color:var(--text-tertiary);margin-bottom:4px;">最后用户消息：</div><div style="color:var(--text-primary);white-space:pre-wrap;word-break:break-word;max-height:80px;overflow:auto;">${(pending.lastUserMessage || '').replace(/</g, '&lt;')}</div></div>` : ''}
+            ${primary.lastUserMessage ? `<div style="margin-top:8px;padding-top:8px;border-top:1px dashed var(--border);"><div style="color:var(--text-tertiary);margin-bottom:4px;">最后用户消息：</div><div style="color:var(--text-primary);white-space:pre-wrap;word-break:break-word;max-height:80px;overflow:auto;">${(primary.lastUserMessage || '').replace(/</g, '&lt;')}</div></div>` : ''}
           </div>
         </div>
         <div style="padding:14px 24px;border-top:1px solid var(--border);background:var(--bg-secondary);display:flex;justify-content:flex-end;gap:10px;">
@@ -2847,55 +3017,12 @@ window.api.onWebControlSendMessage(async (message) => {
 
     overlay.querySelector('#pending-continue-btn').addEventListener('click', async () => {
       try {
-        // 根据模式切换后加载会话
-        const currentMode = agent?.mode || (typeof getMode === 'function' ? getMode() : 'chat');
-        if (pending.mode && pending.mode !== currentMode) {
-          const switchBtn = document.querySelector(`.mode-switcher[data-mode="${pending.mode}"]`);
-          if (switchBtn) switchBtn.click();
-        }
-        // 等待模式切换完成
-        await new Promise(r => setTimeout(r, 500));
-        try {
-          if (pending.mode === 'code') {
-            // Code 模式：设置工作区路径并加载历史列表，提示用户点击继续
-            if (pending.codeWorkspacePath) {
-              codeWorkspacePath = pending.codeWorkspacePath;
-              // 持久化工作区：否则切换模式后 loadCodePage 会回退到上次持久化的工作区
-              try { await window.api.codeSetLastWorkspace?.(pending.codeWorkspacePath); } catch { /* ignore */ }
-              const wsPathEl = document.getElementById('code-workspace-path');
-              if (wsPathEl) wsPathEl.textContent = pending.codeWorkspacePath;
-              if (typeof loadCodeFileTree === 'function') {
-                await loadCodeFileTree(pending.codeWorkspacePath);
-              }
-              // 自动触发历史记录项的"继续"按钮（如果存在）
-              await new Promise(r => setTimeout(r, 300));
-              if (typeof loadCodeHistoryPage === 'function') {
-                await loadCodeHistoryPage();
-                // 短暂等待列表渲染完成后尝试自动点击对应 ID
-                await new Promise(r => setTimeout(r, 300));
-                const continueBtn = document.querySelector(`#code-history-list .history-continue[data-id="${pending.conversationId}"]`);
-                if (continueBtn) {
-                  continueBtn.click();
-                } else {
-                  addSystemMessage(`[系统] 上次中断的 Code 会话 "${pending.conversationTitle || ''}" 已加载到历史列表，请手动点击继续对话按钮恢复。`, { persist: false });
-                }
-              }
-            }
-          } else if (agent && typeof agent.loadFromHistory === 'function') {
-            const data = pending.mode === 'babe'
-              ? await window.api.babeHistoryGet(pending.conversationId)
-              : await window.api.historyGet(pending.conversationId);
-            if (data) {
-              await agent.loadFromHistory(data);
-              // 重建 UI
-              if (typeof rebuildChatUIFromHistory === 'function') {
-                rebuildChatUIFromHistory(data);
-              }
-              addSystemMessage('[系统] 已从上次中断的会话继续。', { persist: false });
-            }
+        for (const item of sessions) {
+          try {
+            await resumePendingItem(item);
+          } catch (e) {
+            console.error('[App] resume pending session failed:', e.message);
           }
-        } catch (e) {
-          console.error('[App] resume pending session failed:', e.message);
         }
         await window.api.clearPendingSession();
       } catch (e) {
@@ -3284,7 +3411,7 @@ window.api.onWebControlSendMessage(async (message) => {
         </div>`;
       appendChatElement(msg);
     }
-    
+
     // Add right-click context menu for deletion
     msg.addEventListener('contextmenu', (e) => {
       e.preventDefault();
@@ -3489,10 +3616,10 @@ window.api.onWebControlSendMessage(async (message) => {
     const msg = document.createElement('div');
     msg.className = 'message assistant';
     const time = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
-    
+
     // AI avatar
     const avatarHTML = makeFramedAvatarHTML(agent.settings?.aiPersona?.avatar, true);
-    
+
     const imgId = 'img-' + Date.now();
     msg.innerHTML = `
       <div class="message-avatar">${avatarHTML}</div>
@@ -3502,21 +3629,21 @@ window.api.onWebControlSendMessage(async (message) => {
         </div>
         <div class="message-time">${time}</div>
       </div>`;
-    
+
     appendChatElement(msg);
-    
+
     // 添加点击放大功能
     const imgEl = document.getElementById(imgId);
     if (imgEl) {
       imgEl.addEventListener('click', () => openImageModal(imageUrl));
-      
+
       // 添加右键菜单
       imgEl.addEventListener('contextmenu', (e) => {
         e.preventDefault();
         showImageContextMenu(e, imageUrl);
       });
     }
-    
+
     // Ensure complete scroll to bottom
     requestAnimationFrame(() => {
       msg.scrollIntoView({ behavior: 'smooth', block: 'end' });
@@ -3640,7 +3767,7 @@ window.api.onWebControlSendMessage(async (message) => {
         transition: background 0.2s;
       `;
       menuItem.innerHTML = `<i class="fa-solid ${item.icon}" style="width:16px"></i><span>${item.label}</span>`;
-      
+
       menuItem.addEventListener('mouseenter', () => {
         menuItem.style.background = 'var(--bg-hover)';
       });
@@ -3651,7 +3778,7 @@ window.api.onWebControlSendMessage(async (message) => {
         item.action();
         menu.remove();
       });
-      
+
       menu.appendChild(menuItem);
     });
 
@@ -3666,7 +3793,7 @@ window.api.onWebControlSendMessage(async (message) => {
     };
     setTimeout(() => document.addEventListener('click', closeMenu), 100);
   }
-  
+
   // 显示消息右键菜单
   function showMessageContextMenu(e, messageElement, role) {
     // 移除已存在的菜单
@@ -3698,27 +3825,27 @@ window.api.onWebControlSendMessage(async (message) => {
       color: #e74c3c;
     `;
     menuItem.innerHTML = `<i class="fa-solid fa-trash"></i><span>删除对话</span>`;
-    
+
     menuItem.addEventListener('mouseenter', () => {
       menuItem.style.backgroundColor = 'var(--bg-hover)';
     });
     menuItem.addEventListener('mouseleave', () => {
       menuItem.style.backgroundColor = 'transparent';
     });
-    
+
     menuItem.addEventListener('click', async () => {
       menu.remove();
-      
+
       // 查找完整的对话轮次：user -> (system/tool-call)* -> assistant
       const allElements = Array.from(chatMessages.children);
       const currentIndex = allElements.indexOf(messageElement);
-      
+
       if (currentIndex === -1) return;
-      
+
       let userMsg = null;
       let assistantMsg = null;
       const middleElements = []; // system messages and tool calls
-      
+
       if (role === 'user') {
         // 从 user 开始，向后找 assistant
         userMsg = messageElement;
@@ -4377,7 +4504,7 @@ window.api.onWebControlSendMessage(async (message) => {
   // ---- 系统通知辅助 ----
   // 根据设置过滤通知；category: 'approval' | 'sessionDone' | 'question' | 'present'
   // 仅当窗口失焦或被最小化/隐藏时才发送（避免在用户正盯着界面时打扰）
-  async function sendAppNotification(category, title, body) {
+  async function sendAppNotification(category, title, body, force = false, extra = {}) {
     try {
       if (!window.api?.sendNotification) return;
       const s = await window.api.getSettings();
@@ -4388,8 +4515,8 @@ window.api.onWebControlSendMessage(async (message) => {
       // 仅在窗口非聚焦或不可见时打扰用户
       const isFocused = document.hasFocus();
       const isHidden = document.visibilityState === 'hidden';
-      if (isFocused && !isHidden) return;
-      await window.api.sendNotification({ title, body, category });
+      if (!force && isFocused && !isHidden) return;
+      await window.api.sendNotification({ title, body, category, ...(extra || {}) });
     } catch (e) {
       console.warn('[App] sendAppNotification failed:', e?.message || e);
     }
@@ -4511,36 +4638,6 @@ window.api.onWebControlSendMessage(async (message) => {
     WebUIMirror.pushDomEvent({ type: 'dom_remove', selector: '#thinking-indicator' });
   }
 
-  function escapeHtml(text) {
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
-  }
-
-  /**
-   * 从消息 content 提取纯文本。
-   * content 可能是字符串或 OpenAI 多模态数组（[{type:'text',...},{type:'image_url',...}]）。
-   * 用于历史记录渲染时统一为字符串。
-   */
-  function extractTextContent(content) {
-    if (typeof content === 'string') return content;
-    if (Array.isArray(content)) {
-      return content
-        .filter(p => p && p.type === 'text' && p.text)
-        .map(p => p.text)
-        .join('\n');
-    }
-    if (content == null) return '';
-    return String(content);
-  }
-
-  /** 转义 CSS 选择器中的特殊字符（用于属性选择器值） */
-  function cssEscape(str) {
-    if (typeof str !== 'string') return '';
-    if (typeof CSS !== 'undefined' && CSS.escape) return CSS.escape(str);
-    return str.replace(/["\\]/g, '\\$&');
-  }
-
   function setSendButtons(isWorking) {
     if (isWorking) {
       if (btnStop) btnStop.classList.remove('hidden');
@@ -4645,11 +4742,26 @@ window.api.onWebControlSendMessage(async (message) => {
       return;
     }
 
+    const chatSession = sessionManager?.getByAgent(agent);
+    if (chatSession && !agent.running && !sessionManager.requestStart(chatSession)) {
+      const queuedAttachments = [...currentAttachments];
+      clearAttachments();
+      let queuedText = text;
+      if (queuedAttachments.length > 0) {
+        const names = queuedAttachments.map(a => a.name).join(', ');
+        queuedText += `\n[附件: ${names}]`;
+      }
+      addMessageToChat('user', queuedText);
+      sessionManager.queue(chatSession, { text, attachments: queuedAttachments });
+      addSystemMessage('当前并发会话较多，本消息已排队，有空闲槽位后会自动开始。', { persist: false });
+      return;
+    }
+
     // 正常发送（Agent空闲时）
 
     // Show stop button immediately
     setSendButtons(true);
-    
+
     // Check daily limits before sending
     const settings = await window.api.getSettings();
     const llmLimit = settings.llm.dailyMaxTokens || 0;
@@ -4663,7 +4775,7 @@ window.api.onWebControlSendMessage(async (message) => {
         addSystemMessage(`⚠️ 警告：今日Token已使用${llmUsed}，接近限制${llmLimit}(${((llmUsed/llmLimit)*100).toFixed(1)}%)`);
       }
     }
-    
+
     chatInput.value = '';
     chatInput.style.height = 'auto';
     // 推送输入框清空到 WebUI
@@ -5068,11 +5180,7 @@ window.api.onWebControlSendMessage(async (message) => {
       renderChatWelcome();
       return;
     }
-    if (agent.running) { try { agent.stop(); } catch (_) {} } // 掐掉后续推理
-    agent.newConversation();
-    updateReoptimizeButtonVisibility();
-    setTitlebarTitle('未命名对话');
-    renderChatWelcome();
+    createNewSession('chat');
   });
 
   btnClearChat.addEventListener('click', () => {
@@ -5083,11 +5191,19 @@ window.api.onWebControlSendMessage(async (message) => {
       clearChatMessagesUI();
       return;
     }
-    if (agent.running) { try { agent.stop(); } catch (_) {} } // 掐掉后续推理
-    agent.newConversation();
-    updateReoptimizeButtonVisibility();
-    setTitlebarTitle('未命名对话');
-    clearChatMessagesUI();
+    const session = sessionManager?.getActive('chat');
+    if (session) {
+      const running = session.status === SessionStatus.RUNNING
+        || session.status === SessionStatus.WAITING_APPROVAL
+        || session.status === SessionStatus.WAITING_TOOL_AUTH;
+      if (running && !window.confirm('当前会话仍在运行，确定停止并清空吗？')) return;
+      sessionManager.close(session);
+      if (session.agent === agent) {
+        const next = sessionManager.list('chat')[0];
+        agent = next ? next.agent : new Agent();
+      }
+    }
+    createNewSession('chat');
   });
 
   // ---- Todo Panel ----
@@ -5582,170 +5698,6 @@ window.api.onWebControlSendMessage(async (message) => {
   }
 
   // ---- Skills Page ----
-  function getPathDirname(filePath) {
-    const p = String(filePath || '');
-    const idxSlash = p.lastIndexOf('/');
-    const idxBackslash = p.lastIndexOf('\\');
-    const idx = Math.max(idxSlash, idxBackslash);
-    return idx >= 0 ? p.slice(0, idx) : '';
-  }
-
-  function joinPath(base, name) {
-    if (!base) return name;
-    const sep = base.includes('\\') ? '\\' : '/';
-    return `${base}${base.endsWith(sep) ? '' : sep}${name}`;
-  }
-
-  function getPathBasename(filePath) {
-    const p = String(filePath || '').replace(/[\\/]+$/, '');
-    const idxSlash = p.lastIndexOf('/');
-    const idxBackslash = p.lastIndexOf('\\');
-    const idx = Math.max(idxSlash, idxBackslash);
-    return idx >= 0 ? p.slice(idx + 1) : p;
-  }
-
-  function parseFrontmatter(text) {
-    const data = {};
-    if (!text || !text.startsWith('---\n')) return { data, body: text || '' };
-    const end = text.indexOf('\n---', 4);
-    if (end < 0) return { data, body: text };
-    const fm = text.slice(4, end).split(/\r?\n/);
-    let currentArrayKey = '';
-    const parseScalar = value => {
-      const trimmed = value.trim();
-      if ((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
-        return trimmed.slice(1, -1);
-      }
-      return trimmed;
-    };
-    fm.forEach(line => {
-      const kv = line.match(/^([A-Za-z0-9_-]+)\s*:\s*(.*)$/);
-      if (kv) {
-        const key = kv[1].trim();
-        const value = kv[2].trim();
-        if (!value) {
-          data[key] = [];
-          currentArrayKey = key;
-        } else {
-          data[key] = parseScalar(value);
-          currentArrayKey = '';
-        }
-        return;
-      }
-      const nested = line.match(/^(\s+)([A-Za-z0-9_-]+)\s*:\s*(.*)$/);
-      if (nested && currentArrayKey) {
-        const parent = data[currentArrayKey];
-        if (!parent || Array.isArray(parent)) data[currentArrayKey] = {};
-        data[currentArrayKey][nested[2].trim()] = parseScalar(nested[3]);
-        return;
-      }
-      const arr = line.match(/^\s*-\s*(.+)$/);
-      if (arr && currentArrayKey) {
-        if (!Array.isArray(data[currentArrayKey])) data[currentArrayKey] = [];
-        data[currentArrayKey].push(parseScalar(arr[1]));
-      }
-    });
-    const body = text.slice(end + 4).replace(/^\r?\n/, '');
-    return { data, body };
-  }
-
-  function parseMarkdownSections(markdownBody) {
-    const sections = {};
-    let current = '__intro';
-    sections[current] = [];
-    String(markdownBody || '').split(/\r?\n/).forEach(line => {
-      const h = line.match(/^#{2,6}\s+(.+)$/);
-      if (h) {
-        current = h[1].trim().toLowerCase();
-        if (!sections[current]) sections[current] = [];
-      } else {
-        sections[current].push(line);
-      }
-    });
-    Object.keys(sections).forEach(key => {
-      sections[key] = sections[key].join('\n').trim();
-    });
-    return sections;
-  }
-
-  function pickSection(sections, aliases) {
-    for (const alias of aliases) {
-      const k = alias.toLowerCase();
-      if (sections[k]) return sections[k];
-    }
-    return '';
-  }
-
-  function buildStandardSkillFromMarkdown(skillMdPath, markdownContent, scripts = []) {
-    const { data: meta, body } = parseFrontmatter(markdownContent);
-    const sections = parseMarkdownSections(body);
-    const titleFromHeading = (body.match(/^#\s+(.+)$/m) || [])[1] || '';
-    const fallbackName = getPathBasename(getPathDirname(skillMdPath)) || 'Imported Skill';
-    const name = String(meta.name || meta.title || titleFromHeading || fallbackName).trim();
-    const description = String(
-      meta.description
-      || pickSection(sections, ['description', '简介', '概述'])
-      || sections.__intro
-      || '标准 Skill 导入'
-    ).trim();
-    const whenToUse = pickSection(sections, ['when to use', 'when-to-use', '使用场景']);
-    const instructions = pickSection(sections, ['instructions', '步骤', 'usage', '使用方法']);
-    const guidelines = pickSection(sections, ['guidelines', '规则', '注意事项']);
-    const prompt = [
-      whenToUse ? `【适用场景】\n${whenToUse}` : '',
-      instructions ? `【执行说明】\n${instructions}` : '',
-      guidelines ? `【约束】\n${guidelines}` : ''
-    ].filter(Boolean).join('\n\n').trim() || description;
-
-    return {
-      name,
-      description,
-      prompt,
-      license: String(meta.license || ''),
-      compatibility: String(meta.compatibility || ''),
-      allowedTools: String(meta['allowed-tools'] || meta.allowedTools || '').split(/[\s,]+/).map(s => s.trim()).filter(Boolean),
-      metadata: meta.metadata && typeof meta.metadata === 'object' && !Array.isArray(meta.metadata) ? meta.metadata : {},
-      type: 'standard',
-      sourceType: 'imported-skill-md',
-      sourcePath: skillMdPath,
-      runtime: String(meta.runtime || 'javascript'),
-      scripts,
-      standard: {
-        whenToUse,
-        instructions,
-        guidelines,
-        metadata: meta
-      }
-    };
-  }
-
-  async function collectSkillScripts(skillRootDir) {
-    if (!skillRootDir) return [];
-    const scriptsDir = joinPath(skillRootDir, 'scripts');
-    const listResult = await window.api.listDirectory(scriptsDir);
-    if (!listResult?.ok || !Array.isArray(listResult.entries)) return [];
-    const shellExts = new Set(['sh', 'bash', 'zsh', 'ps1', 'bat', 'cmd']);
-    return listResult.entries
-      .filter(entry => entry?.isFile && /\.(js|mjs|cjs|py|sh|bash|zsh|ps1|bat|cmd)$/i.test(entry.name || ''))
-      .map(entry => {
-        const ext = (entry.name.split('.').pop() || '').toLowerCase();
-        const runtime = ext === 'py' ? 'python'
-          : shellExts.has(ext) ? 'shell'
-            : (ext === 'mjs' || ext === 'cjs') ? 'node'
-              : 'javascript';
-        return { name: entry.name, path: joinPath(scriptsDir, entry.name), runtime };
-      });
-  }
-
-  function getSkillSummaryMeta(skill) {
-    const scriptCount = Array.isArray(skill?.scripts) ? skill.scripts.filter(s => /\.(js|mjs|cjs|py|sh|bash|zsh|ps1|bat|cmd)$/i.test(String(s?.name || s || ''))).length : 0;
-    let typeLabel;
-    if (skill?.bundled) typeLabel = '内置技能';
-    else if (skill?.type === 'standard') typeLabel = '标准 Skill';
-    else typeLabel = '自定义';
-    return `${typeLabel}${scriptCount > 0 ? ` · 脚本 ${scriptCount}` : ''}`;
-  }
-
   async function importStandardSkillFile(skillMdPath) {
     const readResult = await window.api.readFile(skillMdPath);
     if (!readResult?.ok) return { ok: false, error: readResult?.error || '读取 SKILL.md 失败' };
@@ -5947,19 +5899,19 @@ window.api.onWebControlSendMessage(async (message) => {
         // 先选择文件
         const selectResult = await window.api.openFileDialog();
         if (!selectResult.ok || !selectResult.paths || selectResult.paths.length === 0) return;
-        
+
         // 对每个文件进行导入
         for (const filePath of selectResult.paths) {
           const result = await window.api.knowledgeImportFile(filePath, agent.workspacePath);
           if (result.ok) {
             const title = result.fileName || '导入文件';
             await window.api.knowledgeAdd({ title, content: result.content });
-            
+
             // 如果有提取的图片，也添加到消息中作为引用
             if (result.images && result.images.length > 0) {
-              await window.api.knowledgeAdd({ 
-                title: `${title} - 图片`, 
-                content: `图片文件：${result.images.join(', ')}` 
+              await window.api.knowledgeAdd({
+                title: `${title} - 图片`,
+                content: `图片文件：${result.images.join(', ')}`
               });
             }
           }
@@ -6279,7 +6231,7 @@ window.api.onWebControlSendMessage(async (message) => {
       const zenModelSel = document.getElementById('setting-llm-zen-model');
       if (zenModelSel) refreshZenModels(s.llm.model);
     }
-    
+
     document.getElementById('setting-img-url').value = s.imageGen.apiUrl || '';
     document.getElementById('setting-img-key').value = s.imageGen.apiKey || '';
     document.getElementById('setting-img-model').value = s.imageGen.model || '';
@@ -6293,7 +6245,7 @@ window.api.onWebControlSendMessage(async (message) => {
       imgUsageEl.classList.add('warning');
       imgUsageEl.textContent = `今日已用: ${imgUsage} (接近限制 ${imgLimit})`;
     }
-    
+
     document.getElementById('setting-accent-color').value = s.theme.accentColor;
     document.getElementById('setting-bg-color').value = s.theme.backgroundColor;
     document.getElementById('setting-auto-approve').checked = s.autoApproveSensitive;
@@ -6446,10 +6398,10 @@ window.api.onWebControlSendMessage(async (message) => {
     if (entropy.trngMode === 'serial') {
       refreshTrngPorts(false);
     }
-    
+
     // 更新配色方案可见性
     updateColorSchemeVisibility();
-    
+
     // Proxy settings
     const proxy = s.proxy || {};
     document.querySelectorAll('.proxy-mode-btn').forEach(btn => {
@@ -7353,10 +7305,12 @@ window.api.onWebControlSendMessage(async (message) => {
     const shellSel = document.getElementById('setting-terminal-shell');
     const customRow = document.getElementById('terminal-custom-shell-row');
     const customInput = document.getElementById('setting-terminal-custom-path');
+    const sessionsMax = document.getElementById('setting-sessions-max');
     if (abortSel) abortSel.value = t.abortStrategy || 'kill';
     if (shellSel) shellSel.value = t.shell || 'auto';
     if (customInput) customInput.value = t.customShellPath || '';
     if (customRow) customRow.style.display = (shellSel && shellSel.value === 'custom') ? '' : 'none';
+    if (sessionsMax) sessionsMax.value = String(Math.max(1, Number(s.sessions?.maxConcurrent) || 10));
   }
   document.getElementById('setting-terminal-abortstrategy')?.addEventListener('change', async (e) => {
     const s = await window.api.getSettings();
@@ -7380,6 +7334,16 @@ window.api.onWebControlSendMessage(async (message) => {
     if (!s.terminal) s.terminal = {};
     s.terminal.customShellPath = (e.target.value || '').trim();
     await saveSettings(s);
+  });
+  document.getElementById('setting-sessions-max')?.addEventListener('change', async (e) => {
+    const value = Math.max(1, Math.min(50, Number(e.target.value) || 10));
+    const s = await window.api.getSettings();
+    if (!s.sessions) s.sessions = {};
+    s.sessions.maxConcurrent = value;
+    await saveSettings(s);
+    if (sessionManager) sessionManager.maxConcurrent = value;
+    e.target.value = String(value);
+    window.showToast?.('最大并发会话数已保存', 'success', 2000);
   });
   loadTerminalSettings();
 
@@ -7770,12 +7734,12 @@ window.api.onWebControlSendMessage(async (message) => {
       const s = await window.api.getSettings();
       const oldMode = s.theme.mode;
       s.theme.mode = btn.dataset.mode;
-      
+
       // 检测是否切换了深浅色模式
       const oldDark = await ThemeManager.getCurrentDarkMode(oldMode);
       const newDark = await ThemeManager.getCurrentDarkMode(s.theme.mode);
       const currentBgDark = ThemeManager.isBackgroundDark(s.theme.backgroundColor);
-      
+
       // 如果深浅色模式改变，或者当前配色与目标模式不符，随机应用目标色系的配色
       if (oldDark !== newDark || currentBgDark !== newDark) {
         const scheme = ThemeManager.getRandomScheme(newDark);
@@ -7784,7 +7748,7 @@ window.api.onWebControlSendMessage(async (message) => {
         document.getElementById('setting-accent-color').value = scheme.accent;
         document.getElementById('setting-bg-color').value = scheme.bg;
       }
-      
+
       await saveSettings(s);
       ThemeManager.apply(s.theme);
       updateColorSchemeVisibility();
@@ -7844,7 +7808,7 @@ window.api.onWebControlSendMessage(async (message) => {
       }
     });
   }
-  
+
   document.querySelectorAll('.scheme-btn').forEach(btn => {
     btn.addEventListener('click', async () => {
       const accent = btn.dataset.accent;
@@ -7968,14 +7932,14 @@ window.api.onWebControlSendMessage(async (message) => {
   document.getElementById('btn-reset-usage')?.addEventListener('click', async () => {
     const confirmed = await window.api.confirmSensitive('确定要重置每日使用量统计吗？\n\n这将清零今日的Token用量和图片生成数。');
     if (!confirmed) return;
-    
+
     const s = await window.api.getSettings();
     s.llm.dailyTokensUsed = 0;
     s.llm.dailyTokenDate = '';
     s.imageGen.dailyImagesUsed = 0;
     s.imageGen.dailyImageDate = '';
     await saveSettings(s);
-    
+
     // Refresh display
     document.getElementById('setting-llm-usage').textContent = '今日已用: 0';
     document.getElementById('setting-img-usage').textContent = '今日已用: 0';
@@ -8406,7 +8370,7 @@ window.api.onWebControlSendMessage(async (message) => {
           return `
           <div class="history-item" data-id="${escapeHtml(h.id)}">
             <div class="history-info">
-              <div class="history-title">${escapeHtml(h.title || '未命名对话')}</div>
+            <div class="history-title">${escapeHtml(h.title || '未命名对话')} ${sessionStatusBadge(h.status || 'idle', null)}</div>
               <div class="history-time">${timeStr}</div>
             </div>
             <div class="history-actions">
@@ -8466,7 +8430,7 @@ window.api.onWebControlSendMessage(async (message) => {
       return `
       <div class="history-item" data-id="${h.id}">
         <div class="history-info">
-          <div class="history-title">${escapeHtml(h.title || '未命名对话')}</div>
+          <div class="history-title">${escapeHtml(h.title || '未命名对话')} ${sessionStatusBadge(h.status, h.lastError)}</div>
           <div class="history-time">${timeStr}</div>
         </div>
         <div class="history-actions">
@@ -8514,10 +8478,22 @@ window.api.onWebControlSendMessage(async (message) => {
     list.querySelectorAll('.history-continue').forEach(btn => {
       btn.addEventListener('click', async () => {
         stopVoicePlayback(); // 切换会话前清空语音播放队列
-        if (agent && agent.running) { try { agent.stop(); } catch (_) {} }
         const conv = await window.api.historyGet(btn.dataset.id);
         if (conv) {
-          await agent.loadFromHistory(conv);
+          const existing = sessionManager ? sessionManager.list('chat').find(s => String(s.id) === String(conv.id)) : null;
+          if (existing) {
+            agent = existing.agent;
+            activateSession('chat', existing.key);
+          } else {
+            const ag = new Agent();
+            ag.mode = 'chat';
+            await ag.init();
+            await ag.loadFromHistory(conv);
+            wireChatAgent(ag);
+            const target = sessionManager.registerAgent('chat', ag, { id: conv.id, title: conv.title || '未命名对话' });
+            agent = ag;
+            activateSession('chat', target.key);
+          }
           setTitlebarTitle(agent.conversationTitle || '未命名对话');
           updateContextProgress();
           // Switch to chat page
@@ -9029,7 +9005,7 @@ window.api.onWebControlSendMessage(async (message) => {
       for (const n of names) {
         const type = ggbApplet.getObjectType(n);
         let value = ggbApplet.getValueString(n);
-        
+
         // 对数值类型尝试获取数值
         if (type === 'numeric') {
           try {
@@ -9049,7 +9025,7 @@ window.api.onWebControlSendMessage(async (message) => {
             }
           } catch { /* 保持原 value */ }
         }
-        
+
         objs.push({
           name: n,
           type: type,
@@ -9100,19 +9076,19 @@ window.api.onWebControlSendMessage(async (message) => {
     if (!canvasPanel || !canvasSvg) {
       return { ok: false, error: '画布元素未找到' };
     }
-    
+
     // Close GeoGebra if open (only one split-screen at a time)
     if (ggbPanel && !ggbPanel.classList.contains('hidden')) {
       ggbPanel.classList.add('hidden');
       document.body.classList.remove('geogebra-open');
     }
-    
+
     canvasPanel.classList.remove('hidden');
     document.body.classList.add('geogebra-open'); // Reuse same CSS class for split-screen
-    
+
     // Auto-clear canvas when initializing
     window.clearCanvas();
-    
+
     return { ok: true, message: '画布已初始化并清空' };
   };
 
@@ -9120,13 +9096,13 @@ window.api.onWebControlSendMessage(async (message) => {
     if (!canvasSvg) {
       return { ok: false, error: '画布未初始化' };
     }
-    
+
     // Remove all child elements
     while (canvasSvg.firstChild) {
       canvasSvg.removeChild(canvasSvg.firstChild);
     }
     canvasObjects.clear();
-    
+
     return { ok: true, message: '画布已清空' };
   };
 
@@ -9134,23 +9110,23 @@ window.api.onWebControlSendMessage(async (message) => {
     if (!canvasSvg) {
       return { ok: false, error: '画布未初始化' };
     }
-    
+
     if (canvasObjects.has(id)) {
       return { ok: false, error: `对象ID ${id} 已存在` };
     }
-    
+
     try {
       const element = document.createElementNS('http://www.w3.org/2000/svg', type);
       element.setAttribute('id', id);
-      
+
       // Set attributes
       for (const [key, value] of Object.entries(attributes || {})) {
         element.setAttribute(key, value);
       }
-      
+
       canvasSvg.appendChild(element);
       canvasObjects.set(id, element);
-      
+
       return { ok: true, message: `对象 ${id} 已添加` };
     } catch (e) {
       return { ok: false, error: e.message };
@@ -9161,13 +9137,13 @@ window.api.onWebControlSendMessage(async (message) => {
     if (!canvasObjects.has(id)) {
       return { ok: false, error: `对象ID ${id} 不存在` };
     }
-    
+
     try {
       const element = canvasObjects.get(id);
       for (const [key, value] of Object.entries(attributes || {})) {
         element.setAttribute(key, value);
       }
-      
+
       return { ok: true, message: `对象 ${id} 已更新` };
     } catch (e) {
       return { ok: false, error: e.message };
@@ -9178,12 +9154,12 @@ window.api.onWebControlSendMessage(async (message) => {
     if (!canvasObjects.has(id)) {
       return { ok: false, error: `对象ID ${id} 不存在` };
     }
-    
+
     try {
       const element = canvasObjects.get(id);
       element.remove();
       canvasObjects.delete(id);
-      
+
       return { ok: true, message: `对象 ${id} 已删除` };
     } catch (e) {
       return { ok: false, error: e.message };
@@ -9194,18 +9170,18 @@ window.api.onWebControlSendMessage(async (message) => {
     if (!canvasSvg || !workspacePath) {
       return { ok: false, error: '画布或工作区路径未设置' };
     }
-    
+
     try {
       // Get SVG content
       const svgContent = new XMLSerializer().serializeToString(canvasSvg);
       const fullSvg = `<?xml version="1.0" encoding="UTF-8"?>\n${svgContent}`;
-      
+
       // Save to workspace
       const result = await window.api.writeFile(
         `${workspacePath}/${filename}`,
         fullSvg
       );
-      
+
       if (result.ok) {
         return { ok: true, path: `${workspacePath}/${filename}`, message: 'SVG已导出' };
       } else {
@@ -9522,7 +9498,7 @@ window.api.onWebControlSendMessage(async (message) => {
           font-size: 14px;
           transition: border-color 0.2s, box-shadow 0.2s;
         `;
-        
+
         // Add focus/blur styling
         customInput.addEventListener('focus', () => {
           customInput.style.borderColor = 'var(--accent-color, #4f8cff)';
@@ -9532,12 +9508,12 @@ window.api.onWebControlSendMessage(async (message) => {
             answers[currentIndex] = customInput.value.trim();
           }
         });
-        
+
         customInput.addEventListener('blur', () => {
           customInput.style.borderColor = 'var(--border-color)';
           customInput.style.boxShadow = 'none';
         });
-        
+
         if (currentAnswer && !options.includes(currentAnswer)) {
           customRadio.checked = true;
           customInput.value = currentAnswer;
@@ -9579,13 +9555,13 @@ window.api.onWebControlSendMessage(async (message) => {
         // Disable all inputs
         const allInputs = optionsWrap.querySelectorAll('input');
         allInputs.forEach(inp => inp.disabled = true);
-        
+
         // Update buttons to show submitted state
         btnPrev.style.display = 'none';
         btnNext.textContent = '已提交';
         btnNext.disabled = true;
         btnNext.className = 'btn-secondary';
-        
+
         // Add submitted indicator
         const submittedMsg = document.createElement('div');
         submittedMsg.style.cssText = `
@@ -9599,7 +9575,7 @@ window.api.onWebControlSendMessage(async (message) => {
         `;
         submittedMsg.innerHTML = '<i class="fa-solid fa-check-circle"></i> 问卷已提交';
         content.appendChild(submittedMsg);
-        
+
         const result = questions.map((q, i) => ({
           question: q.question,
           answer: answers[i]
@@ -9644,7 +9620,7 @@ window.api.onWebControlSendMessage(async (message) => {
       const modal = document.getElementById('confirm-modal');
       const modalBody = document.querySelector('.confirm-modal-body');
       const modalHeader = modal?.querySelector('.modal-header h3');
-      
+
       if (!modal || !modalBody) {
         reject(new Error('确认对话框未找到'));
         return;
@@ -9696,7 +9672,7 @@ window.api.onWebControlSendMessage(async (message) => {
     const modal = document.getElementById('message-modal');
     const modalBody = document.querySelector('.message-modal-body');
     const modalHeader = modal?.querySelector('.modal-header h3');
-    
+
     if (!modal || !modalBody) {
       console.error('消息对话框未找到');
       return;
@@ -10044,19 +10020,6 @@ window.api.onWebControlSendMessage(async (message) => {
   }
 
   // 格式化 Token 数量：≥1K 用 K，≥1M 用 M，≥1G 用 G，≥1T 用 T，≥1P 用 P
-  // 防御性编程：覆盖逆天用户可能出现的 G/T/P 数量级，避免溢出或显示过长数字
-  function fmtTokenCount(n, pfx = '') {
-    const num = Number(n) || 0;
-    if (num >= 1e15) return `${pfx}${(num / 1e15).toFixed(2)}P`;
-    if (num >= 1e12) return `${pfx}${(num / 1e12).toFixed(2)}T`;
-    if (num >= 1e9) return `${pfx}${(num / 1e9).toFixed(2)}G`;
-    if (num >= 1e6) return `${pfx}${(num / 1e6).toFixed(2)}M`;
-    if (num >= 1e3) return `${pfx}${(num / 1e3).toFixed(1)}K`;
-    return `${pfx}${num}`;
-  }
-  function escapeHtmlSimple(s) {
-    return String(s || '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
-  }
   function makeRelPath(fullPath, base) {
     if (!fullPath) return '';
     if (!base) return fullPath;
@@ -10528,9 +10491,172 @@ window.api.onWebControlSendMessage(async (message) => {
     ag._streamEndUnsub = null;
   }
 
+  function setupAgentStreamSubscriptions(ag, mode) {
+    if (!ag || !window.api) return;
+    if (window.api.onLLMRetry && !ag._llmRetryUnsub) {
+      ag._llmRetryUnsub = window.api.onLLMRetry((info) => {
+        if (!info || !ag.onMessage) return;
+        const kind = info.kind || 'unknown';
+        const delayTxt = info.delayMs ? `，${Math.round(info.delayMs / 100) / 10}s 后重试` : '';
+        const reasonTxt = info.reason ? `（${info.reason}）` : '';
+        ag.onMessage('system', `LLM 请求失败（${kind}），第 ${info.attempt || 1} 次重试${delayTxt}${reasonTxt}`);
+      });
+    }
+    if (window.api.onStreamChunk && !ag._streamChunkUnsub) {
+      ag._streamChunkUnsub = window.api.onStreamChunk((chunk) => {
+        if (!chunk || chunk.requestId !== ag._activeStreamRequestId) return;
+        if (ag.onMessage) ag.onMessage('stream-chunk', chunk);
+        const session = sessionManager?.getByAgent(ag);
+        if (window.VoiceUI && chunk.content && (!session || session.active)) {
+          window.VoiceUI.feedStreamChunk(chunk.content);
+        }
+      });
+    }
+    if (window.api.onStreamEnd && !ag._streamEndUnsub) {
+      ag._streamEndUnsub = window.api.onStreamEnd((data) => {
+        if (!data || data.requestId !== ag._activeStreamRequestId) return;
+        if (ag.onMessage) ag.onMessage('stream-end', data);
+        const session = sessionManager?.getByAgent(ag);
+        if (window.VoiceUI && (!session || session.active)) {
+          window.VoiceUI.feedStreamEnd(data && data.content ? data.content : null);
+        }
+      });
+    }
+  }
+
+  function wireCodeAgent(ag) {
+    if (!ag) return;
+    const isActive = () => {
+      const session = sessionManager?.getByAgent(ag);
+      return !session || session.active;
+    };
+
+    ag.onTitleChange = (title) => {
+      if (isActive()) setTitlebarTitle(title);
+      if (isActive()) window.api.webControlPushTitle(title);
+    };
+
+    ag.onMessage = (type, data) => {
+      const msgsEl = document.getElementById('code-chat-messages');
+      if (!msgsEl) return;
+      if (!isActive()) {
+        if (type === 'approval') {
+          // SessionManager 已记录等待审批状态，这里只刷新 tab。
+          if (typeof renderAllSessionTabs === 'function') renderAllSessionTabs();
+        }
+        return;
+      }
+      switch (type) {
+        case 'assistant':
+          addCodeMessage('assistant', data);
+          break;
+        case 'system':
+          addCodeMessage('system', data);
+          break;
+        case 'stream-chunk': {
+          const bubble = codeStreamBubble;
+          if (!bubble) return;
+          if (data.content) {
+            const dedup = dedupAppendChunk(bubble.rawContent, bubble._lastChunk, data.content);
+            bubble.rawContent = dedup.raw;
+            bubble._lastChunk = dedup.lastChunk;
+            bubble.contentStarted = true;
+            bubble.contentEl.innerHTML = renderMarkdown(bubble.rawContent) + '<span class="streaming-cursor">▋</span>';
+            if (bubble.rawReasoning) bubble.reasoningEl.innerHTML = renderMarkdown(bubble.rawReasoning);
+          }
+          if (data.reasoning) {
+            bubble.rawReasoning += data.reasoning;
+            bubble.reasoningSection.style.display = 'block';
+            const rCursor = bubble.contentStarted ? '' : '<span class="streaming-cursor">▋</span>';
+            bubble.reasoningEl.innerHTML = renderMarkdown(bubble.rawReasoning) + rCursor;
+            try { bubble.reasoningEl.scrollTop = bubble.reasoningEl.scrollHeight; } catch (_) {}
+          }
+          msgsEl.scrollTop = msgsEl.scrollHeight;
+          if (!bubble.renderTimer) {
+            bubble.renderTimer = setTimeout(() => {
+              bubble.renderTimer = null;
+              if (bubble.el.id) WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#' + bubble.el.id, html: bubble.el.outerHTML });
+            }, 120);
+          }
+          break;
+        }
+        case 'stream-end': {
+          const isAuthoritativeFinal = !!(data && typeof data === 'object' && data.content !== undefined);
+          const bubble = codeStreamBubble;
+          if (!bubble) {
+            if (isAuthoritativeFinal && data.requestId) {
+              const target = msgsEl.querySelector(`[data-stream-request="${cssEscape(data.requestId)}"]`);
+              if (target) {
+                const body = target.querySelector('.message-content, .code-msg-content, .message-body');
+                const clean = String(data.content || '').trimEnd();
+                if (body && clean) body.innerHTML = renderMarkdown(clean);
+              }
+            }
+            codeStreamBubble = null;
+            return;
+          }
+          if (!isAuthoritativeFinal) return;
+          if (bubble.renderTimer) { clearTimeout(bubble.renderTimer); bubble.renderTimer = null; }
+          const hasReasoning = !!(data.reasoning || bubble.rawReasoning);
+          const finalContent = String(data.content || bubble.rawContent).trimEnd();
+          const hasContent = !!(finalContent && finalContent.trim());
+          if (hasReasoning) {
+            bubble.reasoningSection.classList.add('collapsed');
+            bubble.reasoningSection.style.display = 'block';
+            bubble.reasoningEl.innerHTML = renderMarkdown(data.reasoning || bubble.rawReasoning);
+            try { bubble.reasoningEl.scrollTop = bubble.reasoningEl.scrollHeight; } catch (_) {}
+          }
+          if (hasContent) {
+            bubble.contentEl.innerHTML = renderMarkdown(finalContent);
+          } else if (hasReasoning) {
+            bubble.contentEl.style.display = 'none';
+            const timeEl = bubble.el.querySelector('.message-time');
+            if (timeEl) timeEl.style.display = 'none';
+          } else {
+            bubble.el.remove();
+            if (bubble.el.id) WebUIMirror.pushDomEvent({ type: 'dom_remove', selector: '#' + bubble.el.id });
+            codeStreamBubble = null;
+            break;
+          }
+          bubble.el.classList.remove('streaming');
+          if (bubble.el.id) WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#' + bubble.el.id, html: bubble.el.outerHTML });
+          codeStreamBubble = null;
+          break;
+        }
+        case 'stream-start':
+          codeStreamBubble = createCodeStreamBubble();
+          if (codeStreamBubble?.el && data?.requestId) {
+            codeStreamBubble.el.setAttribute('data-stream-request', String(data.requestId));
+          }
+          break;
+        case 'tool_call':
+          addCodeToolCall(data);
+          break;
+        case 'approval':
+          showCodeApprovalPanel(data.toolName, data.args);
+          break;
+        case 'tool-auth-required':
+          showToolAuthModal(data.toolName, data.category, ag);
+          break;
+        case 'tool-result':
+          addCodeToolResult(data);
+          if (data && _fileSystemTools.has(data.name) && codeWorkspacePath) loadCodeFileTree(codeWorkspacePath);
+          break;
+        case 'present-file':
+          addFilePresentCard(data);
+          sendAppNotification('present', 'Agent 向您呈递文件', data?.title || data?.filename || '请查看文件内容');
+          break;
+      }
+    };
+  }
+
   async function initCodeAgent() {
     // 先退订旧实例的监听器，避免 ipcRenderer 监听器累积
     unsubscribeAgentStreams(codeAgent);
+    if (codeAgent && sessionManager) {
+      const oldSession = sessionManager.getByAgent(codeAgent);
+      if (oldSession) sessionManager.close(oldSession);
+    }
     if (!codeWorkspacePath) {
       window.showMessageModal('请先打开工作区文件夹', '提示', 'warning');
       return false;
@@ -10550,173 +10676,106 @@ window.api.onWebControlSendMessage(async (message) => {
     codeAgent.conversationId = Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
     await codeAgent.refreshSkillsCatalog();
     codeAgent.contextManager.setSystemPrompt(codeAgent.getSystemPrompt());
-    // 订阅 LLM 重试/流式事件（与 Agent.init() 保持一致，避免 Code 模式下重试提示和流式 token 不上报）
-    if (window.api?.onLLMRetry && !codeAgent._llmRetryUnsub) {
-      codeAgent._llmRetryUnsub = window.api.onLLMRetry((info) => {
-        if (codeAgent.onMessage && info) {
-          const kind = info.kind || 'unknown';
-          const delayTxt = info.delayMs ? `，${Math.round(info.delayMs / 100) / 10}s 后重试` : '';
-          const reasonTxt = info.reason ? `（${info.reason}）` : '';
-          codeAgent.onMessage('system', `LLM 请求失败（${kind}），第 ${info.attempt || 1} 次重试${delayTxt}${reasonTxt}`);
-        }
-      });
-    }
-    if (window.api?.onStreamChunk && !codeAgent._streamChunkUnsub) {
-      codeAgent._streamChunkUnsub = window.api.onStreamChunk((chunk) => {
-        if (!chunk || chunk.requestId !== codeAgent._activeStreamRequestId) return;
-        if (codeAgent.onMessage) codeAgent.onMessage('stream-chunk', chunk);
-        // 流式 TTS：Code 模式同样实时播报（跳过 reasoning，仅助理文本）
-        if (window.VoiceUI && chunk.content) window.VoiceUI.feedStreamChunk(chunk.content);
-      });
-    }
-    if (window.api?.onStreamEnd && !codeAgent._streamEndUnsub) {
-      codeAgent._streamEndUnsub = window.api.onStreamEnd((data) => {
-        if (!data || data.requestId !== codeAgent._activeStreamRequestId) return;
-        if (codeAgent.onMessage) codeAgent.onMessage('stream-end', data);
-        if (window.VoiceUI) {
-          window.VoiceUI.feedStreamEnd((data && data.content) ? data.content : null);
-        }
-      });
-    }
+    setupAgentStreamSubscriptions(codeAgent, 'code');
+    wireCodeAgent(codeAgent);
 
-    // Wire callbacks to code-chat-messages area
-    codeAgent.onTitleChange = (title) => {
-      setTitlebarTitle(title);
-      window.api.webControlPushTitle(title);
-    };
-    codeAgent.onMessage = (type, data) => {
-      const msgsEl = document.getElementById('code-chat-messages');
-      if (!msgsEl) return;
-      switch (type) {
-        case 'assistant':
-          addCodeMessage('assistant', data);
-          break;
-        case 'system':
-          addCodeMessage('system', data);
-          break;
-        case 'stream-chunk': {
-          const bubble = codeStreamBubble;
-          if (!bubble) return;
-          if (data.content) {
-            const dedup = dedupAppendChunk(bubble.rawContent, bubble._lastChunk, data.content);
-            bubble.rawContent = dedup.raw;
-            bubble._lastChunk = dedup.lastChunk;
-            bubble.contentStarted = true; // 标记 final content 开始
-            bubble.contentEl.innerHTML = renderMarkdown(bubble.rawContent) + '<span class="streaming-cursor">▋</span>';
-            // 一旦 final content 开始，重新渲染 reasoning 但不带光标
-            if (bubble.rawReasoning) {
-              bubble.reasoningEl.innerHTML = renderMarkdown(bubble.rawReasoning);
-            }
-          }
-          if (data.reasoning) {
-            bubble.rawReasoning += data.reasoning;
-            bubble.reasoningSection.style.display = 'block';
-            // 仅当 final content 尚未开始时才显示 reasoning 光标
-            const rCursor = bubble.contentStarted ? '' : '<span class="streaming-cursor">▋</span>';
-            bubble.reasoningEl.innerHTML = renderMarkdown(bubble.rawReasoning) + rCursor;
-            // 自动滚屏：让最新 reasoning 文本可见
-            try { bubble.reasoningEl.scrollTop = bubble.reasoningEl.scrollHeight; } catch (_) {}
-          }
-          msgsEl.scrollTop = msgsEl.scrollHeight;
-          // 增量推送：节流推送流式气泡更新到 WebUI（120ms 节流）
-          if (!bubble.renderTimer) {
-            bubble.renderTimer = setTimeout(() => {
-              bubble.renderTimer = null;
-              if (bubble.el.id) {
-                WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#' + bubble.el.id, html: bubble.el.outerHTML });
-              }
-            }, 120);
-          }
-          break;
-        }
-        case 'stream-end': {
-          // 权威结束事件带 content；main.js 先广播的无 content 信号不提前固化气泡，
-          // 等待带权威 content 的结束，避免显示停留在流式累积的中间状态。
-          const isAuthoritativeFinal = !!(data && typeof data === 'object' && data.content !== undefined);
-          const bubble = codeStreamBubble;
-          if (!bubble) {
-            // 若气泡已被先到的空信号固化，权威 content 到达时按 requestId 定位并覆盖
-            if (isAuthoritativeFinal && data.requestId) {
-              const msgs = document.getElementById('code-chat-messages');
-              const target = msgs?.querySelector(`[data-stream-request="${cssEscape(data.requestId)}"]`);
-              if (target) {
-                const body = target.querySelector('.message-content, .code-msg-content, .message-body');
-                const clean = String(data.content || '').trimEnd();
-                if (body && clean) body.innerHTML = renderMarkdown(clean);
-              }
-            }
-            codeStreamBubble = null;
-            return;
-          }
-          // 无 content 的信号：仅等待权威，不固化
-          if (!isAuthoritativeFinal) return;
-          if (bubble.renderTimer) { clearTimeout(bubble.renderTimer); bubble.renderTimer = null; }
-          const hasReasoning = !!(data.reasoning || bubble.rawReasoning);
-          // 优先使用 stream-end 携带的完整内容（防止流式期间传输重复导致最终文本含叠词）
-          const finalContent = String(data.content || bubble.rawContent).trimEnd();
-          const hasContent = !!(finalContent && finalContent.trim());
-          if (hasReasoning) {
-            // 输出结束后自动折叠 Reasoning（与 Chat 模式一致），用户可点击展开
-            bubble.reasoningSection.classList.add('collapsed');
-            bubble.reasoningSection.style.display = 'block';
-            bubble.reasoningEl.innerHTML = renderMarkdown(data.reasoning || bubble.rawReasoning);
-            // 滚动 reasoning 内容到底部，避免最新内容不可见
-            try { bubble.reasoningEl.scrollTop = bubble.reasoningEl.scrollHeight; } catch (_) {}
-          }
-          if (hasContent) {
-            bubble.contentEl.innerHTML = renderMarkdown(finalContent);
-          } else if (hasReasoning) {
-            // 仅 reasoning 无 content：隐藏空气泡和时间戳，只保留 reasoning 容器
-            bubble.contentEl.style.display = 'none';
-            const timeEl = bubble.el.querySelector('.message-time');
-            if (timeEl) timeEl.style.display = 'none';
-          } else {
-            // 完全空（既无 reasoning 也无 content）：移除整个气泡
-            bubble.el.remove();
-            if (bubble.el.id) WebUIMirror.pushDomEvent({ type: 'dom_remove', selector: '#' + bubble.el.id });
-            codeStreamBubble = null;
-            break;
-          }
-          bubble.el.classList.remove('streaming');
-          // 增量推送：流式结束，更新气泡为最终状态到 WebUI
-          if (bubble.el.id) {
-            WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#' + bubble.el.id, html: bubble.el.outerHTML });
-          }
-          codeStreamBubble = null;
-          break;
-        }
-        case 'stream-start':
-          // Create streaming bubble
-          codeStreamBubble = createCodeStreamBubble();
-          if (codeStreamBubble?.el && data?.requestId) {
-            codeStreamBubble.el.setAttribute('data-stream-request', String(data.requestId));
-          }
-          break;
-        case 'tool_call':
-          addCodeToolCall(data);
-          break;
-        case 'approval':
-          // Code 模式独立的 approval UI（不逃逸到 Chat 模式）
-          showCodeApprovalPanel(data.toolName, data.args);
-          break;
-        case 'tool-auth-required':
-          showToolAuthModal(data.toolName, data.category, codeAgent);
-          break;
-        case 'tool-result':
-          addCodeToolResult(data);
-          // 文件操作工具执行后刷新文件树（实时更新）
-          if (data && _fileSystemTools.has(data.name)) {
-            if (codeWorkspacePath) loadCodeFileTree(codeWorkspacePath);
-          }
-          break;
-        case 'present-file':
-          addFilePresentCard(data);
-          sendAppNotification('present', 'Agent 向您呈递文件', data?.title || data?.filename || '请查看文件内容');
-          break;
-      }
-    };
-
+    if (sessionManager) {
+      const codeSession = sessionManager.registerAgent('code', codeAgent, {
+        title: codeAgent.conversationTitle || '未命名 Code 会话'
+      });
+      sessionManager.activate('code', codeSession.key);
+    }
     return true;
+  }
+
+  async function createCodeSession() {
+    if (!codeWorkspacePath) {
+      window.showMessageModal('请先打开工作区文件夹', '提示', 'warning');
+      return null;
+    }
+    const ag = new Agent();
+    ag.mode = 'code';
+    ag.workspacePath = codeWorkspacePath;
+    ag.codeWorkspacePath = codeWorkspacePath;
+    ag.settings = await window.api.getSettings();
+    if (!ag.settings.tools || typeof ag.settings.tools !== 'object') ag.settings.tools = {};
+    ag.systemInfo = await window.api.getFullSystemInfo();
+    ag.contextManager = new ContextManager(ag.settings.llm?.maxContextLength || 131072);
+    ag.contextManager.setMaxTokens(ag.settings.llm?.maxContextLength || 131072);
+    ag.contextManager.setOutputReserve(ag.settings.llm?.maxResponseTokens || 8192);
+    ag.conversationId = Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+    await ag.refreshSkillsCatalog();
+    ag.contextManager.setSystemPrompt(ag.getSystemPrompt());
+    wireCodeAgent(ag);
+    setupAgentStreamSubscriptions(ag, 'code');
+    if (!sessionManager) return null;
+    const session = sessionManager.registerAgent('code', ag, { title: '未命名 Code 会话' });
+    activateSession('code', session.key);
+    return session;
+  }
+
+  async function replayCodeSession(session) {
+    const msgsEl = document.getElementById('code-chat-messages');
+    if (!msgsEl || !session?.agent) return;
+    codeStreamBubble = null;
+    msgsEl.innerHTML = '';
+    WebUIMirror.pushDomEvent({ type: 'dom_clear', container: '#code-chat-messages' });
+    const messages = session.agent.contextManager?.getHistoryMessages() || [];
+    const total = messages.length;
+    const chunkSize = 40;
+    const toolCallMap = {};
+    if (total === 0) {
+      msgsEl.innerHTML = `<div class="welcome-message"><div class="welcome-icon"><i class="fa-solid fa-code"></i></div><h2>Code 模式</h2><p>继续编程任务</p></div>`;
+      return;
+    }
+    showHistoryProgress(total);
+    try {
+      for (let start = 0; start < total; start += chunkSize) {
+        const end = Math.min(total, start + chunkSize);
+        for (let i = start; i < end; i++) {
+          const msg = messages[i];
+          if (msg.role === 'user') {
+            addCodeMessage('user', extractTextContent(msg.content), false);
+          } else if (msg.role === 'assistant') {
+            const textContent = extractTextContent(msg.content);
+            if (textContent) addCodeMessage('assistant', textContent, false);
+            if (msg.tool_calls && msg.tool_calls.length > 0) {
+              for (const tc of msg.tool_calls) {
+                const toolName = tc.function?.name || 'tool';
+                let args = {};
+                try { args = JSON.parse(tc.function?.arguments || '{}'); } catch {}
+                const toolDef = TOOL_DEFINITIONS.find(t => t.name === toolName);
+                const displayName = toolDef?.desc || toolName;
+                const card = addCodeToolCall({ name: displayName, args, callId: tc.id });
+                if (tc.id && card) toolCallMap[tc.id] = { card, name: toolName };
+              }
+            }
+          } else if (msg.role === 'tool') {
+            const key = msg.tool_call_id;
+            const entry = key ? toolCallMap[key] : null;
+            let result = msg.content;
+            if (Array.isArray(result)) result = extractTextContent(result);
+            if (typeof result === 'string') { try { result = JSON.parse(result); } catch {} }
+            if (entry) {
+              addCodeToolResult({ result, name: entry.name, callId: key });
+            } else {
+              const resultStr = typeof result === 'string' ? result : JSON.stringify(result);
+              addCodeMessage('system', `[工具结果] ${msg.name || 'tool'}: ${resultStr.slice(0, 200)}`, false);
+            }
+          } else if (msg.role === 'system') {
+            addCodeMessage('system', typeof msg.content === 'string' ? msg.content : String(msg.content || ''), false);
+          }
+        }
+        updateHistoryProgress(end, total, end >= total ? '渲染完成，正在收尾…' : `已渲染 ${end}/${total} 条消息`);
+        await yieldHistoryUI();
+      }
+    } finally {
+      hideHistoryProgress();
+    }
+    requestAnimationFrame(() => {
+      msgsEl.scrollTop = msgsEl.scrollHeight;
+      WebUIMirror.pushDomEvent({ type: 'dom_replace', container: '#code-chat-messages', html: msgsEl.innerHTML });
+    });
   }
 
   let codeStreamBubble = null;
@@ -10885,6 +10944,21 @@ window.api.onWebControlSendMessage(async (message) => {
       if (!ok) return;
     }
     if (codeAgent.running) return;
+    const codeSession = sessionManager?.getByAgent(codeAgent);
+    if (codeSession && !sessionManager.requestStart(codeSession)) {
+      const queued = codeCurrentAttachments.map(att => ({
+        name: att.name,
+        path: att.path,
+        isImage: att.isImage,
+        extractedText: att.content || ''
+      }));
+      addCodeMessage('user', text);
+      input.value = '';
+      clearCodeAttachments();
+      sessionManager.queue(codeSession, { text, attachments: queued });
+      addCodeMessage('system', '当前并发会话较多，本消息已排队，有空闲槽位后会自动开始。', false);
+      return;
+    }
 
     // 与 Chat 模式一致：UI 与历史只记录 [附件: 文件名]，文件内容通过 attachments 参数交给 Agent 内部处理
     const attachments = codeCurrentAttachments.map(att => ({
@@ -10976,7 +11050,7 @@ window.api.onWebControlSendMessage(async (message) => {
           return `
           <div class="history-item" data-id="${item.id}">
             <div class="history-info">
-              <div class="history-title">${escapeHtml(item.title || '未命名')}</div>
+              <div class="history-title">${escapeHtml(item.title || '未命名')} ${sessionStatusBadge(item.status, item.lastError)}</div>
               <div class="history-time">${timeStr} · ${item.messageCount || 0} 条消息</div>
             </div>
             <div class="history-actions">
@@ -10988,91 +11062,26 @@ window.api.onWebControlSendMessage(async (message) => {
         listEl.querySelectorAll('.history-continue').forEach(btn => {
           btn.addEventListener('click', async () => {
             stopVoicePlayback(); // 切换会话前清空语音播放队列
-            if (codeAgent && codeAgent.running) { try { codeAgent.stop(); } catch (_) {} }
             const id = btn.dataset.id;
             const loadRes = await window.api.codeLoadHistory(codeWorkspacePath, id);
             if (loadRes.ok && loadRes.data) {
               codeCurrentHistoryId = id;
               const conv = loadRes.data;
-              const historyMessages = conv.messages || [];
-              // 同步到 codeAgent 的 contextManager（通过 loadFromHistory 恢复完整状态）
-              if (codeAgent) {
+              let session = sessionManager ? sessionManager.list('code').find(s => String(s.id) === String(id)) : null;
+              if (session) {
+                codeAgent = session.agent;
                 await codeAgent.loadFromHistory(conv);
+                sessionManager.retag(session, id);
+                activateSession('code', session.key);
               } else {
-                // Agent 未初始化：先初始化再加载历史
-                const ok = await initCodeAgent();
-                if (ok && codeAgent) await codeAgent.loadFromHistory(conv);
+                session = await createCodeSession();
+                if (!session) return;
+                codeAgent = session.agent;
+                await codeAgent.loadFromHistory(conv);
+                sessionManager.retag(session, id);
               }
-              // 同步 codeMessages（轻量镜像，用于 saveCodeHistory 重复保存检测）
-              // 使用迁移后的完整消息（旧版历史会被自动补全摘要），而非原始 conv.messages
-              codeMessages = (codeAgent && codeAgent.contextManager) ? codeAgent.contextManager.getHistoryMessages().slice() : (historyMessages || []).slice();
-              // 渲染消息列表（对齐 Chat 模式：处理 user/assistant/tool 三种 role 及 tool_calls）
-              const msgsEl = document.getElementById('code-chat-messages');
-              if (msgsEl) {
-                msgsEl.innerHTML = '';
-                WebUIMirror.pushDomEvent({ type: 'dom_clear', container: '#code-chat-messages' });
-                const total = codeMessages.length;
-                const chunkSize = 40;
-                const toolCallMap = {};
-                if (total > 0) showHistoryProgress(total);
-                try {
-                  for (let start = 0; start < total; start += chunkSize) {
-                    const end = Math.min(total, start + chunkSize);
-                    for (let i = start; i < end; i++) {
-                      const msg = codeMessages[i];
-                      if (msg.role === 'user') {
-                        const content = typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content);
-                        addCodeMessage('user', content, false);
-                      } else if (msg.role === 'assistant') {
-                        // assistant content 可能是字符串或数组（多模态）
-                        const textContent = extractTextContent(msg.content);
-                        if (textContent) addCodeMessage('assistant', textContent, false);
-                        // 渲染 tool_calls
-                        if (msg.tool_calls && msg.tool_calls.length > 0) {
-                          for (const tc of msg.tool_calls) {
-                            const toolName = tc.function?.name || 'tool';
-                            let args = {};
-                            try { args = JSON.parse(tc.function?.arguments || '{}'); } catch {}
-                            const toolDef = (typeof TOOL_DEFINITIONS !== 'undefined') ? TOOL_DEFINITIONS.find(t => t.name === toolName) : null;
-                            const displayName = toolDef?.desc || toolName;
-                            const card = addCodeToolCall({ name: displayName, args, callId: tc.id });
-                            if (tc.id && card) {
-                              toolCallMap[tc.id] = { card, name: toolName };
-                            }
-                          }
-                        }
-                      } else if (msg.role === 'tool') {
-                        // 工具结果：更新到对应的工具调用卡片
-                        const key = msg.tool_call_id;
-                        const entry = key ? toolCallMap[key] : null;
-                        let result = msg.content;
-                        if (typeof result === 'string') {
-                          try { result = JSON.parse(result); } catch {}
-                        }
-                        if (entry) {
-                          addCodeToolResult({ result, name: entry.name, callId: key });
-                        } else {
-                          // 没有对应的 tool_call（可能是旧历史）：直接渲染为系统消息
-                          const resultStr = typeof result === 'string' ? result : JSON.stringify(result);
-                          addCodeMessage('system', `[工具结果] ${msg.name || 'tool'}: ${resultStr.slice(0, 200)}`, false);
-                        }
-                      } else if (msg.role === 'system') {
-                        const content = typeof msg.content === 'string' ? msg.content : String(msg.content || '');
-                        addCodeMessage('system', content, false);
-                      }
-                    }
-                    // 每批处理完让出事件循环，进度模态框刷新、DOM 回流
-                    updateHistoryProgress(end, total, end >= total ? '渲染完成，正在收尾…' : `已渲染 ${end}/${total} 条消息`);
-                    await yieldHistoryUI();
-                  }
-                } finally {
-                  hideHistoryProgress();
-                }
-                requestAnimationFrame(() => {
-                  msgsEl.scrollTop = msgsEl.scrollHeight;
-                  WebUIMirror.pushDomEvent({ type: 'dom_replace', container: '#code-chat-messages', html: msgsEl.innerHTML });
-                });
-              }
+              codeMessages = codeAgent.contextManager.getHistoryMessages().slice();
+              await replayCodeSession(session);
               document.querySelector('.nav-item[data-page="code"]')?.click();
             }
           });
@@ -11124,15 +11133,7 @@ window.api.onWebControlSendMessage(async (message) => {
       window.showMessageModal('请先打开工作区', '提示', 'warning');
       return;
     }
-    if (codeAgent && codeAgent.running) { try { codeAgent.stop(); } catch (_) {} } // 掐掉后续推理
-    unsubscribeAgentStreams(codeAgent);
-    codeAgent = null;
-    codeCurrentHistoryId = null;
-    codeMessages = [];
-    const msgsEl = document.getElementById('code-chat-messages');
-    if (msgsEl) {
-      msgsEl.innerHTML = '<div class="welcome-message"><div class="welcome-icon"><i class="fa-solid fa-code"></i></div><h2>新对话</h2><p>开始新的编程任务</p></div>';
-    }
+    createCodeSession();
   });
 
   // 在系统文件管理器中打开当前工作区（Windows 资源管理器 / macOS Finder）
@@ -11466,7 +11467,8 @@ window.api.onWebControlSendMessage(async (message) => {
   document.getElementById('btn-code-send')?.addEventListener('click', sendCodeMessage);
   document.getElementById('btn-code-stop')?.addEventListener('click', () => {
     stopVoicePlayback();
-    if (codeAgent) codeAgent.stop();
+    const session = sessionManager?.getActive('code');
+    if (session) sessionManager.stop(session);
   });
   document.getElementById('code-chat-input')?.addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -11701,6 +11703,151 @@ window.api.onWebControlSendMessage(async (message) => {
   let babeProactiveProduced = false;
 
   // 初始化 Babe Agent
+  function wireBabeAgent(ag) {
+    if (!ag) return;
+    const isActive = () => {
+      const session = sessionManager?.getByAgent(ag);
+      return !session || session.active;
+    };
+
+    ag.onTitleChange = (title) => {
+      if (isActive()) setTitlebarTitle(title);
+      if (isActive()) window.api.webControlPushTitle(title);
+    };
+
+    ag.onMessage = (type, data) => {
+      const msgsEl = document.getElementById('babe-chat-messages');
+      if (!msgsEl) return;
+      if (!isActive()) {
+        if (type === 'approval' && typeof renderAllSessionTabs === 'function') renderAllSessionTabs();
+        return;
+      }
+      switch (type) {
+        case 'assistant':
+          addBabeMessage('assistant', data);
+          if (babeProactiveActive) babeProactiveProduced = true;
+          break;
+        case 'system':
+          addBabeMessage('system', data);
+          break;
+        case 'stream-chunk': {
+          const bubble = babeStreamBubble;
+          if (!bubble) return;
+          if (data.content) {
+            const cleanContent = data.content.replace(/【好感度[+-]?\d+】/g, '');
+            const dedup = dedupAppendChunk(bubble.rawContent, bubble._lastChunk, cleanContent);
+            bubble.rawContent = dedup.raw;
+            bubble._lastChunk = dedup.lastChunk;
+            bubble.contentStarted = true;
+            bubble.contentEl.innerHTML = renderMarkdown(bubble.rawContent) + '<span class="streaming-cursor">▋</span>';
+            if (bubble.rawReasoning) bubble.reasoningEl.innerHTML = renderMarkdown(bubble.rawReasoning);
+          }
+          if (data.reasoning) {
+            bubble.rawReasoning += data.reasoning;
+            bubble.reasoningSection.style.display = 'block';
+            const rCursor = bubble.contentStarted ? '' : '<span class="streaming-cursor">▋</span>';
+            bubble.reasoningEl.innerHTML = renderMarkdown(bubble.rawReasoning) + rCursor;
+            try { bubble.reasoningEl.scrollTop = bubble.reasoningEl.scrollHeight; } catch (_) {}
+          }
+          msgsEl.scrollTop = msgsEl.scrollHeight;
+          if (!bubble.renderTimer) {
+            bubble.renderTimer = setTimeout(() => {
+              bubble.renderTimer = null;
+              if (bubble.el.id) WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#' + bubble.el.id, html: bubble.el.outerHTML });
+            }, 120);
+          }
+          break;
+        }
+        case 'stream-end': {
+          const isAuthoritativeFinal = !!(data && typeof data === 'object' && data.content !== undefined);
+          const bubble = babeStreamBubble;
+          if (!bubble) {
+            if (isAuthoritativeFinal && data.requestId) {
+              const target = msgsEl.querySelector(`[data-stream-request="${cssEscape(data.requestId)}"]`);
+              if (target) {
+                const body = target.querySelector('.babe-msg-content, .babe-msg-body, .message-content');
+                const clean = String(data.content || '').replace(/【好感度[+-]?\d+】/g, '').trimEnd();
+                if (body && clean) body.innerHTML = renderMarkdown(clean);
+              }
+            }
+            babeStreamBubble = null;
+            return;
+          }
+          if (!isAuthoritativeFinal) return;
+          if (bubble.renderTimer) { clearTimeout(bubble.renderTimer); bubble.renderTimer = null; }
+          const hasReasoning = !!(data.reasoning || bubble.rawReasoning);
+          const finalContent = (data.content || bubble.rawContent).replace(/【好感度[+-]?\d+】/g, '').trimEnd();
+          bubble.rawContent = finalContent;
+          const hasContent = !!(finalContent && finalContent.trim());
+          if (babeProactiveActive && hasContent) babeProactiveProduced = true;
+          if (hasReasoning) {
+            bubble.reasoningSection.classList.add('collapsed');
+            bubble.reasoningSection.style.display = 'block';
+            bubble.reasoningEl.innerHTML = renderMarkdown(data.reasoning || bubble.rawReasoning);
+            try { bubble.reasoningEl.scrollTop = bubble.reasoningEl.scrollHeight; } catch (_) {}
+          }
+          if (hasContent) {
+            bubble.contentEl.innerHTML = renderMarkdown(finalContent);
+          } else if (hasReasoning) {
+            bubble.contentEl.style.display = 'none';
+            const timeEl = bubble.el.querySelector('.babe-msg-time');
+            if (timeEl) timeEl.style.display = 'none';
+          } else {
+            bubble.el.remove();
+            if (bubble.el.id) WebUIMirror.pushDomEvent({ type: 'dom_remove', selector: '#' + bubble.el.id });
+            babeStreamBubble = null;
+            break;
+          }
+          bubble.el.classList.remove('streaming');
+          if (bubble.el.id) WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#' + bubble.el.id, html: bubble.el.outerHTML });
+          babeStreamBubble = null;
+          break;
+        }
+        case 'stream-start':
+          babeStreamBubble = createBabeStreamBubble();
+          if (babeStreamBubble?.el && data?.requestId) {
+            babeStreamBubble.el.setAttribute('data-stream-request', String(data.requestId));
+          }
+          break;
+        case 'tool_call':
+          addBabeToolCall(data);
+          break;
+        case 'tool-result':
+          addBabeToolResult(data);
+          break;
+        case 'present-file':
+          addFilePresentCard(data);
+          sendAppNotification('present', 'Agent 向您呈递文件', data?.title || data?.filename || '请查看文件内容');
+          break;
+        case 'affection-change':
+          showBabeAffectionChange(data.delta, data.value);
+          updateBabeAffection(data.value);
+          break;
+        case 'error':
+          addBabeMessage('system', '错误: ' + (typeof data === 'string' ? data : (data?.error || JSON.stringify(data))));
+          break;
+      }
+    };
+
+    ag.onStatusChange = (status) => {
+      if (!isActive()) {
+        if (typeof renderAllSessionTabs === 'function') renderAllSessionTabs();
+        return;
+      }
+      const sendBtn = document.getElementById('btn-babe-send');
+      const stopBtn = document.getElementById('btn-babe-stop');
+      if (status === 'working') {
+        sendBtn?.classList.add('hidden');
+        stopBtn?.classList.remove('hidden');
+      } else {
+        sendBtn?.classList.remove('hidden');
+        if (stopBtn) stopBtn.classList.toggle('hidden', !voiceSpeakingNow());
+      }
+      if (sendBtn) WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#btn-babe-send', attr: 'class', value: sendBtn.className });
+      if (stopBtn) WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#btn-babe-stop', attr: 'class', value: stopBtn.className });
+    };
+  }
+
   async function initBabeAgent() {
     if (babeAgent) {
       // 已初始化，仅更新显示
@@ -11725,197 +11872,117 @@ window.api.onWebControlSendMessage(async (message) => {
       babeAgent.babeAffection = babeAgent.settings.babe?.initialAffection ?? 30;
       await babeAgent.refreshSkillsCatalog();
       babeAgent.contextManager.setSystemPrompt(babeAgent.getSystemPrompt());
-      // 订阅 LLM 重试/流式事件
-      if (window.api?.onLLMRetry && !babeAgent._llmRetryUnsub) {
-        babeAgent._llmRetryUnsub = window.api.onLLMRetry((info) => {
-          if (babeAgent.onMessage && info) {
-            const kind = info.kind || 'unknown';
-            const delayTxt = info.delayMs ? `，${Math.round(info.delayMs / 100) / 10}s 后重试` : '';
-            const reasonTxt = info.reason ? `（${info.reason}）` : '';
-            babeAgent.onMessage('system', `LLM 请求失败（${kind}），第 ${info.attempt || 1} 次重试${delayTxt}${reasonTxt}`);
-          }
-        });
-      }
-      if (window.api?.onStreamChunk && !babeAgent._streamChunkUnsub) {
-        babeAgent._streamChunkUnsub = window.api.onStreamChunk((chunk) => {
-          if (!chunk || chunk.requestId !== babeAgent._activeStreamRequestId) return;
-          if (babeAgent.onMessage) babeAgent.onMessage('stream-chunk', chunk);
-          // 流式 TTS：Babe 模式同样实时播报
-          if (window.VoiceUI && chunk.content) window.VoiceUI.feedStreamChunk(chunk.content);
-        });
-      }
-      if (window.api?.onStreamEnd && !babeAgent._streamEndUnsub) {
-        babeAgent._streamEndUnsub = window.api.onStreamEnd((data) => {
-          if (!data || data.requestId !== babeAgent._activeStreamRequestId) return;
-          if (babeAgent.onMessage) babeAgent.onMessage('stream-end', data);
-          if (window.VoiceUI) {
-            window.VoiceUI.feedStreamEnd((data && data.content) ? data.content : null);
-          }
-        });
-      }
-      // 绑定回调
-      babeAgent.onTitleChange = (title) => {
-        setTitlebarTitle(title);
-        window.api.webControlPushTitle(title);
-      };
-      babeAgent.onMessage = (type, data) => {
-        const msgsEl = document.getElementById('babe-chat-messages');
-        if (!msgsEl) return;
-        switch (type) {
-          case 'assistant':
-            addBabeMessage('assistant', data);
-            // 主动消息追踪：收到 assistant 内容时标记已产出
-            if (babeProactiveActive) babeProactiveProduced = true;
-            break;
-          case 'system':
-            addBabeMessage('system', data);
-            break;
-          case 'stream-chunk': {
-            const bubble = babeStreamBubble;
-            if (!bubble) return;
-            if (data.content) {
-              // 流式中也要剥离好感度标记，避免半截标记闪烁
-              const cleanContent = data.content.replace(/【好感度[+-]?\d+】/g, '');
-              const dedup = dedupAppendChunk(bubble.rawContent, bubble._lastChunk, cleanContent);
-              bubble.rawContent = dedup.raw;
-              bubble._lastChunk = dedup.lastChunk;
-              bubble.contentStarted = true; // 标记 final content 开始
-              bubble.contentEl.innerHTML = renderMarkdown(bubble.rawContent) + '<span class="streaming-cursor">▋</span>';
-              // 一旦 final content 开始，重新渲染 reasoning 但不带光标
-              if (bubble.rawReasoning) {
-                bubble.reasoningEl.innerHTML = renderMarkdown(bubble.rawReasoning);
-              }
-            }
-            if (data.reasoning) {
-              bubble.rawReasoning += data.reasoning;
-              bubble.reasoningSection.style.display = 'block';
-              // 仅当 final content 尚未开始时才显示 reasoning 光标
-              const rCursor = bubble.contentStarted ? '' : '<span class="streaming-cursor">▋</span>';
-              bubble.reasoningEl.innerHTML = renderMarkdown(bubble.rawReasoning) + rCursor;
-              // 自动滚屏：让最新 reasoning 文本可见
-              try { bubble.reasoningEl.scrollTop = bubble.reasoningEl.scrollHeight; } catch (_) {}
-            }
-            msgsEl.scrollTop = msgsEl.scrollHeight;
-            // 增量推送：节流推送 Babe 流式气泡更新到 WebUI（120ms 节流）
-            if (!bubble.renderTimer) {
-              bubble.renderTimer = setTimeout(() => {
-                bubble.renderTimer = null;
-                if (bubble.el.id) {
-                  WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#' + bubble.el.id, html: bubble.el.outerHTML });
-                }
-              }, 120);
-            }
-            break;
-          }
-          case 'stream-end': {
-            // 权威结束事件带有 content 字段（agent.js 最终 commit）；
-            // main.js 先广播的"无 content"流结束信号不固化气泡，等待带完整/权威 content 的结束，
-            // 避免流式累积与最终完整内容不一致时，显示停留在中间状态。
-            const isAuthoritativeFinal = !!(data && typeof data === 'object' && data.content !== undefined);
-            const bubble = babeStreamBubble;
-            if (!bubble) {
-              // 若气泡已被先到的空信号固化，权威 content 到达时按 requestId 定位并覆盖
-              if (isAuthoritativeFinal && data.requestId) {
-                const target = msgsEl.querySelector(`[data-stream-request="${cssEscape(data.requestId)}"]`);
-                if (target) {
-                  const body = target.querySelector('.babe-msg-content, .babe-msg-body, .message-content');
-                  const clean = String(data.content || '').replace(/【好感度[+-]?\d+】/g, '').trimEnd();
-                  if (body && clean) body.innerHTML = renderMarkdown(clean);
-                }
-              }
-              babeStreamBubble = null;
-              return;
-            }
-            // 无 content 的信号：仅等待权威，不固化
-            if (!isAuthoritativeFinal) return;
-            if (bubble.renderTimer) { clearTimeout(bubble.renderTimer); bubble.renderTimer = null; }
-            const hasReasoning = !!(data.reasoning || bubble.rawReasoning);
-            // 使用剥离标记后的 content（agent.js 已处理）
-            const finalContent = (data.content || bubble.rawContent).replace(/【好感度[+-]?\d+】/g, '').trimEnd();
-            bubble.rawContent = finalContent;
-            const hasContent = !!(finalContent && finalContent.trim());
-            // 主动消息追踪：流式结束且有内容时标记已产出
-            if (babeProactiveActive && hasContent) babeProactiveProduced = true;
-            if (hasReasoning) {
-              // 输出结束后自动折叠 Reasoning（与 Chat 模式一致），用户可点击展开
-              bubble.reasoningSection.classList.add('collapsed');
-              bubble.reasoningSection.style.display = 'block';
-              bubble.reasoningEl.innerHTML = renderMarkdown(data.reasoning || bubble.rawReasoning);
-              // 滚动 reasoning 内容到底部
-              try { bubble.reasoningEl.scrollTop = bubble.reasoningEl.scrollHeight; } catch (_) {}
-            }
-            if (hasContent) {
-              bubble.contentEl.innerHTML = renderMarkdown(finalContent);
-            } else if (hasReasoning) {
-              // 仅 reasoning 无 content：隐藏空气泡和时间戳
-              bubble.contentEl.style.display = 'none';
-              const timeEl = bubble.el.querySelector('.babe-msg-time');
-              if (timeEl) timeEl.style.display = 'none';
-            } else {
-              // 完全空：移除整个气泡
-              bubble.el.remove();
-              if (bubble.el.id) WebUIMirror.pushDomEvent({ type: 'dom_remove', selector: '#' + bubble.el.id });
-              babeStreamBubble = null;
-              break;
-            }
-            bubble.el.classList.remove('streaming');
-            // 增量推送：Babe 流式结束，更新气泡为最终状态到 WebUI
-            if (bubble.el.id) {
-              WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#' + bubble.el.id, html: bubble.el.outerHTML });
-            }
-            babeStreamBubble = null;
-            break;
-          }
-          case 'stream-start':
-            babeStreamBubble = createBabeStreamBubble();
-            if (babeStreamBubble?.el && data?.requestId) {
-              babeStreamBubble.el.setAttribute('data-stream-request', String(data.requestId));
-            }
-            break;
-          case 'tool_call':
-            addBabeToolCall(data);
-            break;
-          case 'tool-result':
-            addBabeToolResult(data);
-            break;
-          case 'present-file':
-            addFilePresentCard(data);
-            sendAppNotification('present', 'Agent 向您呈递文件', data?.title || data?.filename || '请查看文件内容');
-            break;
-          case 'affection-change':
-            showBabeAffectionChange(data.delta, data.value);
-            updateBabeAffection(data.value);
-            break;
-          case 'error':
-            addBabeMessage('system', '错误: ' + (typeof data === 'string' ? data : (data?.error || JSON.stringify(data))));
-            break;
-        }
-      };
-      babeAgent.onStatusChange = (status) => {
-        const sendBtn = document.getElementById('btn-babe-send');
-        const stopBtn = document.getElementById('btn-babe-stop');
-        if (status === 'working') {
-          sendBtn?.classList.add('hidden');
-          stopBtn?.classList.remove('hidden');
-        } else {
-          // 仅当 Babe 完成 且 语音播报也完成时才隐藏停止按钮
-          sendBtn?.classList.remove('hidden');
-          if (stopBtn) stopBtn.classList.toggle('hidden', !voiceSpeakingNow());
-        }
-        // 推送按钮状态变化到 WebUI
-        if (sendBtn) WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#btn-babe-send', attr: 'class', value: sendBtn.className });
-        if (stopBtn) WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#btn-babe-stop', attr: 'class', value: stopBtn.className });
-      };
+      setupAgentStreamSubscriptions(babeAgent, 'babe');
+      wireBabeAgent(babeAgent);
       updateBabeAffection(babeAgent.babeAffection);
       updateBabePersonaDisplay();
       // 启动主动消息定时器
       restartBabeProactiveTimer();
+      if (sessionManager) {
+        const babeSession = sessionManager.registerAgent('babe', babeAgent, {
+          title: babeAgent.conversationTitle || '未命名 Babe 会话'
+        });
+        sessionManager.activate('babe', babeSession.key);
+      }
       return true;
     } catch (e) {
       console.error('[Babe] initBabeAgent failed:', e);
       addBabeMessage('system', '初始化 Babe 模式失败: ' + e.message);
       return false;
     }
+  }
+
+  async function createBabeSession() {
+    const ag = new Agent();
+    ag.mode = 'babe';
+    ag.settings = await window.api.getSettings();
+    if (!ag.settings.tools || typeof ag.settings.tools !== 'object') ag.settings.tools = {};
+    ag.systemInfo = await window.api.getFullSystemInfo();
+    const maxCtx = ag.settings.llm?.maxContextLength || 131072;
+    ag.contextManager = new ContextManager(maxCtx);
+    ag.contextManager.setMaxTokens(maxCtx);
+    ag.contextManager.setOutputReserve(ag.settings.llm?.maxResponseTokens || 8192);
+    ag.conversationId = Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+    ag.babeAffection = ag.settings.babe?.initialAffection ?? 30;
+    await ag.refreshSkillsCatalog();
+    ag.contextManager.setSystemPrompt(ag.getSystemPrompt());
+    wireBabeAgent(ag);
+    setupAgentStreamSubscriptions(ag, 'babe');
+    if (!sessionManager) return null;
+    const session = sessionManager.registerAgent('babe', ag, { title: '未命名 Babe 会话' });
+    activateSession('babe', session.key);
+    return session;
+  }
+
+  async function replayBabeSession(session) {
+    const msgsEl = document.getElementById('babe-chat-messages');
+    if (!msgsEl || !session?.agent) return;
+    babeStreamBubble = null;
+    msgsEl.innerHTML = '';
+    WebUIMirror.pushDomEvent({ type: 'dom_clear', container: '#babe-chat-messages' });
+    const messages = session.agent.contextManager?.getHistoryMessages() || [];
+    if (messages.length === 0) {
+      msgsEl.innerHTML = `<div class="babe-welcome"><div class="babe-welcome-icon"><i class="fa-solid fa-heart"></i></div><h2>新的开始</h2><p>开始一段新的对话吧~</p></div>`;
+      updateBabeAffection(session.agent.babeAffection);
+      return;
+    }
+    const total = messages.length;
+    const chunkSize = 30;
+    const toolCallMap = {};
+    showHistoryProgress(total);
+    try {
+      for (let start = 0; start < total; start += chunkSize) {
+        const end = Math.min(total, start + chunkSize);
+        for (let i = start; i < end; i++) {
+          const m = messages[i];
+          if (m.role === 'user') {
+            addBabeMessage('user', extractTextContent(m.content) || '[多模态内容]');
+          } else if (m.role === 'assistant') {
+            const textContent = extractTextContent(m.content);
+            if (textContent) addBabeMessage('assistant', textContent);
+            if (m.tool_calls && m.tool_calls.length > 0) {
+              for (const tc of m.tool_calls) {
+                const toolName = tc.function?.name || 'tool';
+                let args = {};
+                try { args = JSON.parse(tc.function?.arguments || '{}'); } catch {}
+                const toolDef = TOOL_DEFINITIONS.find(t => t.name === toolName);
+                const displayName = toolDef?.desc || toolName;
+                const card = addBabeToolCall({ name: displayName, args, callId: tc.id });
+                if (tc.id && card) toolCallMap[tc.id] = { card, name: toolName };
+              }
+            }
+          } else if (m.role === 'tool') {
+            const key = m.tool_call_id;
+            const entry = key ? toolCallMap[key] : null;
+            let result = m.content;
+            if (Array.isArray(result)) result = extractTextContent(result);
+            if (typeof result === 'string') { try { result = JSON.parse(result); } catch {} }
+            if (entry) {
+              const statusEl = entry.card.querySelector('.tool-call-status');
+              const resultStr = typeof result === 'string' ? result : JSON.stringify(result);
+              const ok = (result && typeof result === 'object') ? result.ok !== false : true;
+              if (statusEl) {
+                statusEl.innerHTML = (ok ? '<i class="fa-solid fa-check"></i> 完成' : '<i class="fa-solid fa-xmark"></i> 失败')
+                  (resultStr ? `<pre class="tool-call-result">${escapeHtml(resultStr.slice(0, 800))}</pre>` : '');
+              }
+            } else {
+              addBabeMessage('system', `[工具结果] ${m.name || 'tool'}: ${String(result).slice(0, 200)}`);
+            }
+          } else if (m.role === 'system') {
+            addBabeMessage('system', typeof m.content === 'string' ? m.content : String(m.content || ''));
+          }
+        }
+        updateHistoryProgress(end, total, end >= total ? '渲染完成，正在收尾…' : `已渲染 ${end}/${total} 条消息`);
+        await yieldHistoryUI();
+      }
+    } finally {
+      hideHistoryProgress();
+    }
+    requestAnimationFrame(() => {
+      msgsEl.scrollTop = msgsEl.scrollHeight;
+      WebUIMirror.pushDomEvent({ type: 'dom_replace', container: '#babe-chat-messages', html: msgsEl.innerHTML });
+    });
+    updateBabeAffection(session.agent.babeAffection);
   }
 
   function createBabeStreamBubble() {
@@ -12208,6 +12275,21 @@ window.api.onWebControlSendMessage(async (message) => {
       window.showMessageModal('请先在设置中配置 LLM API', '提示', 'warning');
       return;
     }
+    const babeSession = sessionManager?.getByAgent(babeAgent);
+    if (babeSession && !babeAgent.running && !sessionManager.requestStart(babeSession)) {
+      const queued = babeAttachments.map(att => ({
+        name: att.name,
+        path: att.path,
+        isImage: att.isImage
+      }));
+      addBabeMessage('user', text);
+      input.value = '';
+      babeAttachments = [];
+      renderBabeAttachments();
+      sessionManager.queue(babeSession, { text, attachments: queued });
+      addBabeMessage('system', '当前并发会话较多，本消息已排队，有空闲槽位后会自动开始。');
+      return;
+    }
     // 复制附件到工作区并处理（OCR/文本提取）
     const attachments = [...babeAttachments];
     babeAttachments = [];
@@ -12267,7 +12349,7 @@ window.api.onWebControlSendMessage(async (message) => {
         return `
         <div class="history-item" data-id="${item.id}">
           <div class="history-info">
-            <div class="history-title">${escapeHtml(item.title || '未命名对话')} ${affectionBadge}</div>
+            <div class="history-title">${escapeHtml(item.title || '未命名对话')} ${affectionBadge} ${sessionStatusBadge(item.status, item.lastError)}</div>
             <div class="history-time">${timeStr} · ${item.messageCount || 0} 条消息</div>
           </div>
           <div class="history-actions">
@@ -12281,9 +12363,20 @@ window.api.onWebControlSendMessage(async (message) => {
         btn.addEventListener('click', async (e) => {
           e.stopPropagation();
           stopVoicePlayback(); // 切换会话前清空语音播放队列
-          if (babeAgent && babeAgent.running) { try { babeAgent.stop(); } catch (_) {} }
           const id = btn.dataset.id;
-          await loadBabeConversation(id);
+          const existing = sessionManager ? sessionManager.list('babe').find(s => String(s.id) === String(id)) : null;
+          if (existing) {
+            babeAgent = existing.agent;
+            const conversation = await window.api.babeHistoryGet(id);
+            if (conversation) {
+              babeAgent.babeAffection = conversation.affection ?? babeAgent.settings?.babe?.initialAffection ?? 30;
+              await babeAgent.loadFromHistory(conversation);
+              sessionManager.retag(existing, id);
+            }
+            activateSession('babe', existing.key);
+          } else {
+            await loadBabeConversation(id);
+          }
         });
       });
       listEl.querySelectorAll('.history-delete').forEach(btn => {
@@ -12305,121 +12398,24 @@ window.api.onWebControlSendMessage(async (message) => {
 
   // 加载 Babe 历史
   async function loadBabeConversation(id) {
-    if (!babeAgent) await initBabeAgent();
     const conversation = await window.api.babeHistoryGet(id);
     if (!conversation) {
       window.showMessageModal('找不到该对话', '错误', 'error');
       return;
     }
+    let session = sessionManager ? sessionManager.list('babe').find(s => String(s.id) === String(id)) : null;
+    if (!session) {
+      session = await createBabeSession();
+      if (!session) return;
+    }
+    babeAgent = session.agent;
     babeCurrentHistoryId = id;
     babeMessages = conversation.messages || [];
     babeAgent.babeAffection = conversation.affection ?? babeAgent.settings?.babe?.initialAffection ?? 30;
     await babeAgent.loadFromHistory(conversation);
-    // 渲染消息：分批渲染 + 进度模态框，避免长历史全量构建 DOM 卡死 UI
-    const msgsEl = document.getElementById('babe-chat-messages');
-    if (msgsEl) {
-      msgsEl.innerHTML = '';
-      WebUIMirror.pushDomEvent({ type: 'dom_clear', container: '#babe-chat-messages' });
-      if (babeMessages.length === 0) {
-        msgsEl.innerHTML = `<div class="babe-welcome"><div class="babe-welcome-icon"><i class="fa-solid fa-heart"></i></div><h2>欢迎回来</h2><p>继续你们的对话吧~</p></div>`;
-      } else {
-        const total = babeMessages.length;
-        const chunkSize = 30;
-        const toolCallMap = {};
-        // 预取头像数据，避免每条消息都读取
-        const babeAvatar = babeAgent?.settings?.babe?.avatar || '';
-        const userAvatar = babeAgent?.settings?.userProfile?.avatar || '';
-        const babeAvatarHTML = makeBabeFramedAvatarHTML(babeAvatar, 'babe');
-        const userAvatarHTML = makeBabeFramedAvatarHTML(userAvatar, 'user');
-        showHistoryProgress(total);
-        try {
-          for (let start = 0; start < total; start += chunkSize) {
-            const end = Math.min(total, start + chunkSize);
-            // 每批用 DocumentFragment 构建后一次性插入
-            const frag = document.createDocumentFragment();
-            for (let i = start; i < end; i++) {
-              const m = babeMessages[i];
-              if (m.role === 'user') {
-                const content = extractTextContent(m.content) || '[多模态内容]';
-                const msg = document.createElement('div');
-                msg.className = 'babe-message user';
-                msg.innerHTML = `<div class="babe-msg-avatar">${userAvatarHTML}</div><div class="babe-msg-body"><div class="babe-msg-bubble markdown-body">${escapeHtml(content)}</div></div>`;
-                frag.appendChild(msg);
-              } else if (m.role === 'assistant') {
-                // assistant content 可能是字符串或数组（多模态）
-                const textContent = extractTextContent(m.content);
-                if (textContent) {
-                  const msg = document.createElement('div');
-                  msg.className = 'babe-message assistant';
-                  msg.innerHTML = `<div class="babe-msg-avatar">${babeAvatarHTML}</div><div class="babe-msg-body"><div class="babe-msg-bubble markdown-body">${renderMarkdown(textContent)}</div></div>`;
-                  frag.appendChild(msg);
-                }
-                // 渲染 tool_calls
-                if (m.tool_calls && m.tool_calls.length > 0) {
-                  for (const tc of m.tool_calls) {
-                    const toolName = tc.function?.name || 'tool';
-                    let args = {};
-                    try { args = JSON.parse(tc.function?.arguments || '{}'); } catch {}
-                    const toolDef = (typeof TOOL_DEFINITIONS !== 'undefined') ? TOOL_DEFINITIONS.find(t => t.name === toolName) : null;
-                    const displayName = toolDef?.desc || toolName;
-                    // 创建工具调用卡片并添加到 fragment
-                    const card = document.createElement('div');
-                    card.className = 'tool-call-card';
-                    card.id = 'babe-tool-hist-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6);
-                    if (tc.id) card.dataset.callId = tc.id;
-                    const argsStr = Object.keys(args).length ? JSON.stringify(args, null, 2).slice(0, 500) : '';
-                    card.innerHTML = `<div class="tool-call-header"><i class="fa-solid fa-wrench"></i> <span>${escapeHtml(displayName)}</span></div>` +
-                      (argsStr ? `<pre class="tool-call-args">${escapeHtml(argsStr)}</pre>` : '') +
-                      `<div class="tool-call-status"><i class="fa-solid fa-spinner fa-spin"></i> 执行中...</div>`;
-                    frag.appendChild(card);
-                    if (tc.id) toolCallMap[tc.id] = { card, name: toolName };
-                  }
-                }
-              } else if (m.role === 'tool') {
-                // 工具结果：创建临时卡片并填充（因为 fragment 中的元素还没插入 DOM，无法用 querySelector）
-                const key = m.tool_call_id;
-                const entry = key ? toolCallMap[key] : null;
-                let result = m.content;
-                // 兼容旧版多模态 tool 消息 content 为数组的情况：提取字符串，避免显示 [object Object]
-                if (Array.isArray(result)) result = extractTextContent(result);
-                if (typeof result === 'string') { try { result = JSON.parse(result); } catch {} }
-                const resultStr = typeof result === 'string' ? result : JSON.stringify(result);
-                const ok = (result && typeof result === 'object') ? result.ok !== false : true;
-                if (entry) {
-                  const statusEl = entry.card.querySelector('.tool-call-status');
-                  if (statusEl) {
-                    statusEl.innerHTML = (ok ? '<i class="fa-solid fa-check"></i> 完成' : '<i class="fa-solid fa-xmark"></i> 失败') +
-                      (resultStr ? `<pre class="tool-call-result">${escapeHtml(resultStr.slice(0, 800))}</pre>` : '');
-                  }
-                } else {
-                  // 无对应 tool_call：渲染为系统消息
-                  const msg = document.createElement('div');
-                  msg.className = 'babe-message system';
-                  msg.innerHTML = `<div class="babe-msg-body"><div class="babe-msg-bubble markdown-body">${escapeHtml('[工具结果] ' + (m.name || 'tool') + ': ' + resultStr.slice(0, 200))}</div></div>`;
-                  frag.appendChild(msg);
-                }
-              } else if (m.role === 'system') {
-                const content = typeof m.content === 'string' ? m.content : String(m.content || '');
-                const msg = document.createElement('div');
-                msg.className = 'babe-message system';
-                msg.innerHTML = `<div class="babe-msg-body"><div class="babe-msg-bubble markdown-body">${escapeHtml(content)}</div></div>`;
-                frag.appendChild(msg);
-              }
-            }
-            msgsEl.appendChild(frag);
-            // 每批处理完让出事件循环，进度模态框刷新、DOM 回流
-            updateHistoryProgress(end, total, end >= total ? '渲染完成，正在收尾…' : `已渲染 ${end}/${total} 条消息`);
-            await yieldHistoryUI();
-          }
-        } finally {
-          hideHistoryProgress();
-        }
-        // 所有消息渲染完毕后再滚动一次
-        requestAnimationFrame(() => { msgsEl.scrollTop = msgsEl.scrollHeight; });
-        // 推送完整内容到 WebUI
-        WebUIMirror.pushDomEvent({ type: 'dom_replace', container: '#babe-chat-messages', html: msgsEl.innerHTML });
-      }
-    }
+    sessionManager.retag(session, id);
+    activateSession('babe', session.key);
+    await replayBabeSession(session);
     updateBabeAffection(babeAgent.babeAffection);
     // 切换到 Babe 页面
     document.querySelector('.nav-item[data-page="babe"]')?.click();
@@ -12503,27 +12499,12 @@ window.api.onWebControlSendMessage(async (message) => {
   document.getElementById('btn-babe-send')?.addEventListener('click', sendBabeMessage);
   document.getElementById('btn-babe-stop')?.addEventListener('click', () => {
     stopVoicePlayback();
-    if (babeAgent) babeAgent.stop();
+    const session = sessionManager?.getActive('babe');
+    if (session) sessionManager.stop(session);
   });
   document.getElementById('btn-babe-new')?.addEventListener('click', async () => {
     stopVoicePlayback(); // 清空语音播放队列
-    // 停止旧的 agent
-    if (babeAgent) {
-      babeAgent.stop();
-    }
-    // 退订旧实例监听器后置空，避免 ipcRenderer 监听器累积
-    unsubscribeAgentStreams(babeAgent);
-    // 重置状态
-    babeAgent = null;
-    babeMessages = [];
-    babeCurrentHistoryId = null;
-    babeStreamBubble = null;
-    const msgsEl = document.getElementById('babe-chat-messages');
-    if (msgsEl) {
-      msgsEl.innerHTML = `<div class="babe-welcome"><div class="babe-welcome-icon"><i class="fa-solid fa-heart"></i></div><h2>新的开始</h2><p>开始一段新的对话吧~</p></div>`;
-    }
-    // 重新初始化
-    await initBabeAgent();
+    await createBabeSession();
   });
   document.getElementById('btn-babe-proactive')?.addEventListener('click', () => {
     if (!babeAgent) {
