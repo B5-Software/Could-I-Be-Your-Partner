@@ -5914,6 +5914,13 @@ window.api.onWebControlSendMessage(async (message) => {
                 content: `图片文件：${result.images.join(', ')}`
               });
             }
+          } else {
+            const errMsg = result.error || '导入失败';
+            if (typeof window.showToast === 'function') {
+              window.showToast(`${result.fileName || '文件'}: ${errMsg}`, 'error', 6000);
+            } else {
+              console.error('Knowledge import failed:', errMsg);
+            }
           }
         }
         loadKnowledgePage();
@@ -10496,6 +10503,8 @@ window.api.onWebControlSendMessage(async (message) => {
     if (window.api.onLLMRetry && !ag._llmRetryUnsub) {
       ag._llmRetryUnsub = window.api.onLLMRetry((info) => {
         if (!info || !ag.onMessage) return;
+        // 仅处理属于当前会话的重试事件，避免其他模式会话的重试气泡串进来
+        if (info.sessionKey && info.sessionKey !== ag.sessionKey) return;
         const kind = info.kind || 'unknown';
         const delayTxt = info.delayMs ? `，${Math.round(info.delayMs / 100) / 10}s 后重试` : '';
         const reasonTxt = info.reason ? `（${info.reason}）` : '';

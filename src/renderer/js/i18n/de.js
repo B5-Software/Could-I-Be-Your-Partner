@@ -336,17 +336,20 @@ _tools: {
   spreadsheetSetCellFormat: 'Tabellenzellenformat setzen',
   spreadsheetSetRangeFormat: 'Tabellenbereichsformat setzen',
   spreadsheetClearCells: 'Tabellenzellen leeren',
-  officeUnpack: 'Office-Datei entpacken (docx/xlsx/pptx)',
-  officeRepack: 'Office-Datei neu packen',
-  officeListContents: 'Office-Dateiinhalte auflisten',
-  officeReadInnerFile: 'Innere Datei aus Office-Paket lesen',
-  officeWriteInnerFile: 'Innere Datei in Office-Paket schreiben',
-  officeGetSlideTexts: 'Folientexte aus PPTX abrufen',
-  officeSetSlideTexts: 'Folientexte in PPTX setzen',
-  officeWordExtract: 'Text aus Word-Dokument extrahieren',
-  officeWordApplyTexts: 'Texte auf Word-Dokument anwenden',
-  officeWordGetStyles: 'Word-Dokumentstile abrufen',
-  officeWordFillTemplate: 'Word-Vorlage ausfüllen',
+  officeHardUnpack: 'Office-Datei für Low-Level-XML-Bearbeitung entpacken',
+  officeHardRepack: 'Office-Datei aus Verzeichnis neu packen',
+  officeHardList: 'Interne Office-Dateien auflisten',
+  officeHardReadFile: 'Innere Datei aus Office-Paket lesen',
+  officeHardWriteFile: 'Innere Datei in Office-Paket schreiben',
+  officeHardGetSlideTexts: 'Folien-Textknoten aus PPTX-XML abrufen',
+  officeHardSetSlideTexts: 'Folien-Textknoten in PPTX-XML setzen',
+  officeHardWordApplyTexts: 'Word-Läufe formatgetreu umschreiben',
+  wordExtractText: 'Text aus Word-Dokument extrahieren',
+  wordCreate: 'Neues Word-Dokument aus JSON erstellen',
+  wordFillTemplate: 'Word-Vorlage per Platzhalter füllen',
+  wordGetMetadata: 'Word-Dokumentmetadaten lesen',
+  wordListStyles: 'Word-Dokumentstile auflisten',
+  pptMakerCreate: 'Visuelle PPT-Präsentation erstellen',
   browserNavigate: 'Browser zu URL navigieren',
   browserScreenshot: 'Browser-Bildschirmfoto aufnehmen',
   browserClick: 'Element im Browser anklicken',
@@ -451,8 +454,8 @@ _tools: {
   serialReadPort: 'Seriellen Anschluss-Puffer lesen',
   serialClosePort: 'Serielle Verbindung schließen',
   serialSetSignals: 'Serielle Steuersignale setzen (DTR/RTS)',
-  officeGetSlideTexts: 'Alle Folientexte extrahieren (für Übersetzung)',
-  officeSetSlideTexts: 'Übersetzungsergebnisse in Folien zurückschreiben',
+  officeHardGetSlideTexts: 'Alle Folien-Textknoten extrahieren (Low-Level)',
+  officeHardSetSlideTexts: 'Umgeschriebene Textknoten in Folien zurückschreiben',
   spreadsheetInsertRows: 'Zeilen einfügen',
   spreadsheetDeleteRows: 'Zeilen löschen',
   spreadsheetInsertCols: 'Spalten einfügen',
@@ -537,7 +540,7 @@ Arbeitsprinzipien:
 6. Nach Abschluss eine Zusammenfassung geben
 7. Korrekte Systempfade verwenden, der Benutzername ist ${p.username}, Systemlaufwerk ist ${p.systemDrive}
 8. Werkzeugergebnisse enthalten ein "ok"-Feld für Erfolg/Misserfolg — immer prüfen
-9. Wenn Benutzer Office/PDF-Dateien hochlädt, werden die Originaldatei und der extrahierte Text (.txt) im Arbeitsverzeichnis gespeichert. Inhalt über die .txt-Datei lesen; für **Ausgabe/Generierung/Übersetzung von Office-Dateien** den officeUnpack → XML ändern → officeRepack-Workflow verwenden
+9. Wenn Benutzer Office/PDF-Dateien hochlädt, werden die Originaldatei und der extrahierte Text (.txt) im Arbeitsverzeichnis gespeichert. Inhalt über die .txt-Datei lesen; zum **Lesen/Erstellen/Füllen von Word** die Office-Word-Werkzeuge verwenden, zum **Erstellen von PPT** pptMakerCreate und für Tabellendaten die Tabellenwerkzeuge
 10. Wenn der Benutzer ein Spiel spielen möchte (Blumenworte, Drei Reiche, Untercover, Idiom-Kette, Figur erraten usw.), MUSS das inviteGame-Werkzeug aufgerufen werden — niemals das Spiel durch normale Konversation simulieren
 
 [Code-Ausführungswerkzeugauswahl]:
@@ -556,25 +559,24 @@ Arbeitsprinzipien:
 - Bei dynamisch gerenderten Seiten (Wetter, Foren, Social Media, SPA) offscreenRenderContent bevorzugen; offscreenRenderOCR nur bei Bildtexterkennung
 - Wenn nur webSearch ohne Inhaltsabruf aufgerufen wurde, gilt die Aufgabe als unvollständig — ein Abrufwerkzeug muss aufgerufen werden
 
-[Office-Word-Dokument]:
-- Für .docx/.odt-Vorlagen und formatierten Text officeWordExtract / officeWordApplyTexts / officeWordGetStyles / officeWordFillTemplate bevorzugen
-- Bei endgültiger Dateiausgabe den officeUnpack/officeRepack-Workflow verwenden
-
-[PPTX/DOCX-Übersetzung — MUSS eingehalten werden]:
-- Beim Übersetzen von PPTX/DOCX zwingend die Übersetzungswerkzeuge verwenden, nicht rohes XML:
-  1. officeUnpack zum Entpacken der Originaldatei
-  2. officeListContents für alle Foliendateinamen
-  3. 1-3 Folien gleichzeitig: officeGetSlideTexts → Text übersetzen → officeSetSlideTexts
-  4. Nach allen Folien: officeRepack
-- officeGetSlideTexts gibt ein Array von {index, text} zurück
-- officeSetSlideTexts empfängt das Übersetzungsergebnis-Array
-- NIEMALS officeReadInnerFile für rohes XML verwenden
-- NIEMALS runNodeJavaScriptCode oder Skripte für die Übersetzung verwenden
-- Maximal 3 Folien gleichzeitig
-
-[Office-Datei-Generierung/Änderung (nicht Übersetzung)]:
-- Für .docx/.xlsx/.pptx-Generierung: officeUnpack → officeReadInnerFile → officeWriteInnerFile → officeRepack
+[Office-Word-Dokumente — MUSS eingehalten werden]:
+- Word-Inhalt lesen: wordExtractText (mammoth/officeparser — niemals XML entpacken)
+- Neue Word-Dokumente erstellen: wordCreate (docx-Bibliothek, strukturierte Blöcke)
+- Vorlagen füllen: wordFillTemplate (docxtemplater, {{KEY}}-Platzhalter, Formatierung bleibt erhalten)
+- Metadaten/Stile abfragen: wordGetMetadata / wordListStyles
 - Office-Ausgabedateien im Arbeitsverzeichnis speichern
+- NIEMALS OOXML von Hand schreiben oder per runNodeJavaScriptCode ZIP+XML zusammensetzen
+
+[PPT Maker]:
+- Bei Präsentation/PPT/Folien pptMakerCreate verwenden, um eine visuell ansprechende .pptx zu erzeugen
+- Reichhaltige Layouts nutzen: cover/agenda/section/content (mit Bildern)/twocolumn/table/chart/stats/quote/comparison/timeline/end
+- Daten als Diagramme, Kernpunkte mit Bildern darstellen — nicht nur Text stapeln
+- Bilder als werkstattrelative Pfade; Diagramme mit numerischen Werten und vollständigen Beschriftungen
+
+[Office 硬解 (officeHard*-Werkzeuge) Einschränkungen — MUSS eingehalten werden]:
+- officeHard* sind Low-Level-XML/Container-Operationen und standardmäßig verboten; normale Lese-/Schreib-/Generierungs-/Übersetzungsaufgaben mit den obigen Werkzeugen erledigen
+- Nur für diese Sonderfälle erlaubt: eingebettete Objekte aus bestehenden Dokumenten extrahieren, VBA-Makro-Schadsoftwareanalyse, Wasserzeichen entfernen, Low-Level-XML-Reparatur
+- Routineaufgaben wie PPTX/DOCX-Übersetzung dürfen officeHard* NICHT verwenden — immer die regulären Werkzeuge
 
 [Daten-Tabellen-Seitenleiste]:
 - Für Tabellendaten, Datensatzanalyse, Datenstatistik: initSpreadsheet bevorzugen

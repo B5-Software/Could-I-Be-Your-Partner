@@ -306,17 +306,20 @@ const EN_DICT = {
     spreadsheetSetCellFormat: 'Set spreadsheet cell format',
     spreadsheetSetRangeFormat: 'Set spreadsheet range format',
     spreadsheetClearCells: 'Clear spreadsheet cells',
-    officeUnpack: 'Unpack Office file (docx/xlsx/pptx)',
-    officeRepack: 'Repack Office file',
-    officeListContents: 'List Office file contents',
-    officeReadInnerFile: 'Read inner file from Office package',
-    officeWriteInnerFile: 'Write inner file in Office package',
-    officeGetSlideTexts: 'Get slide texts from PPTX',
-    officeSetSlideTexts: 'Set slide texts in PPTX',
-    officeWordExtract: 'Extract text from Word document',
-    officeWordApplyTexts: 'Apply texts to Word document',
-    officeWordGetStyles: 'Get Word document styles',
-    officeWordFillTemplate: 'Fill Word template',
+    officeHardUnpack: 'Unpack Office file for low-level XML editing',
+    officeHardRepack: 'Repack Office file from directory',
+    officeHardList: 'List Office internal files',
+    officeHardReadFile: 'Read inner file from Office package',
+    officeHardWriteFile: 'Write inner file in Office package',
+    officeHardGetSlideTexts: 'Get slide text nodes from PPTX XML',
+    officeHardSetSlideTexts: 'Set slide text nodes in PPTX XML',
+    officeHardWordApplyTexts: 'Rewrite Word runs in place (keep formatting)',
+    wordExtractText: 'Extract text from Word document',
+    wordCreate: 'Create a new Word document from JSON',
+    wordFillTemplate: 'Fill a Word template by placeholders',
+    wordGetMetadata: 'Read Word document metadata',
+    wordListStyles: 'List Word document styles',
+    pptMakerCreate: 'Create a visual PPT presentation',
     browserNavigate: 'Navigate browser to URL',
     browserScreenshot: 'Take browser screenshot',
     browserClick: 'Click element in browser',
@@ -421,8 +424,8 @@ const EN_DICT = {
     serialReadPort: 'Read serial port buffer',
     serialClosePort: 'Close serial port connection',
     serialSetSignals: 'Set serial control signals (DTR/RTS)',
-    officeGetSlideTexts: 'Extract all slide texts (for translation)',
-    officeSetSlideTexts: 'Write translation results back to slides',
+    officeHardGetSlideTexts: 'Extract all slide text nodes (low-level)',
+    officeHardSetSlideTexts: 'Write rewritten text nodes back to slides',
     spreadsheetInsertRows: 'Insert rows',
     spreadsheetDeleteRows: 'Delete rows',
     spreadsheetInsertCols: 'Insert columns',
@@ -507,7 +510,7 @@ Working principles:
 6. Provide a summary after completing the task
 7. Use correct system paths for file paths, the username is ${p.username}, system drive is ${p.systemDrive}
 8. Tool results contain an "ok" field indicating success/failure — always check it
-9. When users upload Office/PDF files, the original file and extracted text (.txt) are saved to the workspace. Read content using the .txt file; for **outputting/generating/translating Office files**, use the officeUnpack → modify XML → officeRepack workflow on the original .docx/.xlsx/.pptx file in the workspace
+9. When users upload Office/PDF files, the original file and extracted text (.txt) are saved to the workspace. Read content using the .txt file; to **read/generate/fill Word** use Office-Word tools, to **generate PPT** use pptMakerCreate, and use the spreadsheet tools for tabular data
 10. When the user wants to play a game (flying flower, three kingdoms, undercover, idiom chain, guess character, etc.), you MUST call the inviteGame tool to initiate the game — never simulate the game through plain conversation
 
 [Code execution tool selection]:
@@ -526,25 +529,24 @@ Working principles:
 - For dynamically rendered pages (weather, forums, social media, SPA), prefer offscreenRenderContent; use offscreenRenderOCR only when you need to recognize text in images
 - If you only called webSearch without fetching content, the task is considered incomplete — you must continue calling a fetching tool
 
-[Office-Word document]:
-- For .docx/.odt templates and formatted text, prefer officeWordExtract / officeWordApplyTexts / officeWordGetStyles / officeWordFillTemplate
-- When final file output is needed, use the officeUnpack/officeRepack workflow
-
-[PPTX/DOCX translation — MUST follow]:
-- When translating PPTX/DOCX, you must use the dedicated translation tools, not reading raw XML:
-  1. officeUnpack to decompress the original file
-  2. officeListContents to get all slide file names (e.g. ppt/slides/slide1.xml ... slide24.xml)
-  3. Process 1-3 slides at a time: officeGetSlideTexts to get text list → translate each text → officeSetSlideTexts to write back
-  4. After all slides are done: officeRepack to package
-- officeGetSlideTexts returns an array of {index, text}, each being a text node in a slide
-- officeSetSlideTexts receives the translation result array, index corresponds to the index returned by officeGetSlideTexts, text is the translated text
-- NEVER use officeReadInnerFile to read raw XML for translation — that will overflow the output window
-- NEVER call runNodeJavaScriptCode or any script for translation — you must do the translation yourself
-- Process at most 3 slides at a time, then proceed to the next batch
-
-[Office file generation/modification (non-translation scenarios)]:
-- For generating or structurally modifying .docx/.xlsx/.pptx, use officeUnpack → officeReadInnerFile → officeWriteInnerFile → officeRepack
+[Office-Word documents — MUST follow]:
+- Read Word content: wordExtractText (mammoth/officeparser — never unpack XML)
+- Create new Word documents: wordCreate (docx library, structured blocks)
+- Fill templates: wordFillTemplate (docxtemplater, {{KEY}} placeholders, formatting preserved)
+- Query metadata/styles: wordGetMetadata / wordListStyles
 - Output Office files must be saved to the workspace
+- NEVER hand-write OOXML or unzip-and-stitch XML via runNodeJavaScriptCode to create/modify Word files
+
+[PPT Maker]:
+- When the user asks for a presentation/PPT/slides, use pptMakerCreate to produce a visually rich .pptx
+- Use rich layouts: cover/agenda/section/content (with images)/twocolumn/table/chart/stats/quote/comparison/timeline/end
+- Prefer charts for data and images for key points — do not just stack text
+- Images use workspace-relative paths; charts need numeric values with complete labels and series
+
+[Office 硬解 (officeHard* tools) restrictions — MUST follow]:
+- officeHard* tools are low-level XML/container operations and are forbidden by default; use the proper tools above for normal read/write/generate/translate tasks
+- Allowed only for these special needs: extracting embedded objects from existing documents, VBA macro malware analysis, watermark removal, low-level XML repair
+- Routine tasks such as translating PPTX/DOCX must NOT use officeHard* — always use the proper tools
 
 [Data table sidebar]:
 - For table data, dataset analysis, data statistics, data reports, prefer the data table sidebar (initSpreadsheet) rather than unpacking Office files

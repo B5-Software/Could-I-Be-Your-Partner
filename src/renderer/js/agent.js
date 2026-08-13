@@ -227,6 +227,8 @@ class Agent {
     if (window.api?.onLLMRetry && !this._llmRetryUnsub) {
       this._llmRetryUnsub = window.api.onLLMRetry((info) => {
         if (!info) return;
+        // 仅处理属于当前会话的重试事件（没有 sessionKey 的旧事件保持全局兜底）
+        if (info.sessionKey && info.sessionKey !== this.sessionKey) return;
         const kind = info.kind || 'unknown';
         const statusTxt = info.status ? ` [${info.status}]` : '';
         const delayTxt = info.delayMs ? `，${Math.round(info.delayMs / 100) / 10}s 后重试` : '';
@@ -382,7 +384,7 @@ class Agent {
 6. 完成任务后给出总结
 7. 文件路径请使用正确的系统路径，用户名是${username}，系统盘是${systemDrive}
 8. 工具返回结果中都有ok字段表示是否成功，请注意检查
-9. 用户上传Office/PDF文件时，原始文件和提取的文本(.txt)均已保存到工作目录。读取内容请用.txt；如需**输出/生成/翻译Office文件**，请对工作目录里的原始.docx/.xlsx/.pptx文件使用officeUnpack→修改XML→officeRepack流程
+9. 用户上传Office/PDF文件时，原始文件和提取的文本(.txt)均已保存到工作目录。读取内容请用.txt；如需**读取/生成/填充Word**请用 Office-Word 工具，**生成PPT**请用 pptMakerCreate，表格数据请用数据表格工具
 10. 当用户想玩游戏（飞花令、三国杀、谁是卧底、成语接龙、是否猜人物等）时，必须调用inviteGame工具发起邀请，绝不能用普通对话方式模拟游戏
 
 【代码执行工具选择规范】：
@@ -401,25 +403,24 @@ class Agent {
 - 当页面是动态渲染（天气、论坛、社媒、SPA）时，优先 offscreenRenderContent；需要识别图片文字时再用 offscreenRenderOCR
 - 若只调用了 webSearch 而未抓取正文，视为任务未完成，必须继续调用抓取工具
 
-【Office-Word文档规范】：
-- 处理 .docx/.odt 模板与格式化文本时，优先使用 officeWordExtract / officeWordApplyTexts / officeWordGetStyles / officeWordFillTemplate
-- 需要最终文件输出时，按 officeUnpack/officeRepack 流程完成打包
-
-【PPTX/DOCX翻译规范 - 必须遵守】：
-- 翻译PPTX/DOCX时，必须使用专用翻译工具，而不是读取原始XML：
-  1. officeUnpack 解压原始文件
-  2. officeListContents 获取所有slide文件名（如 ppt/slides/slide1.xml ... slide24.xml）
-  3. 每次处理 1-3 张：officeGetSlideTexts 获取文字列表（只返回短文字，不含XML）→ 你直接翻译每条文字 → officeSetSlideTexts 写回
-  4. 所有幻灯片处理完后：officeRepack 打包
-- officeGetSlideTexts 返回 {index, text} 数组，每条都是幻灯片中的一个文字节点
-- officeSetSlideTexts 接收翻译结果数组，index 对应 officeGetSlideTexts 返回的 index，text 为翻译后文字
-- 严禁使用 officeReadInnerFile 读取原始 XML 来做翻译——那会导致输出窗口撑爆
-- 严禁调用 runNodeJavaScriptCode 或任何脚本做翻译——翻译工作必须由你自己完成
-- 每次最多同时处理 3 张幻灯片，完成后再处理下一批
-
-【Office文件生成/修改规范（非翻译场景）】：
-- 如需生成或结构性修改 .docx/.xlsx/.pptx，使用 officeUnpack → officeReadInnerFile → officeWriteInnerFile → officeRepack 流程
+【Office-Word 文档规范（必须遵守）】：
+- 读取 Word 内容：wordExtractText（mammoth/officeparser 正规库，勿拆 XML）
+- 生成新 Word 文档：wordCreate（docx 库，结构化 blocks）
+- 按模板填充：wordFillTemplate（docxtemplater，占位符 {{KEY}}，保留格式）
+- 查询元数据/样式：wordGetMetadata / wordListStyles
 - 输出的 Office 文件必须保存到工作目录
+- 严禁用 runNodeJavaScriptCode 手写 OOXML 或解包 ZIP 拼 XML 来生成/修改 Word
+
+【PPT Maker 使用规范】：
+- 用户要求做演示文稿/PPT/幻灯片时，使用 pptMakerCreate，输出图文并茂的 .pptx
+- 内容版式丰富化：封面(cover)、目录(agenda)、章节(section)、要点(content，可配图)、双栏(twocolumn)、表格(table)、图表(chart)、数据卡(stats)、引用(quote)、对比(comparison)、时间线(timeline)、结束页(end)
+- 优先为数据配图表，为要点配图片，不要只堆文字
+- 图片用工作区相对路径；图表数据用数值，标签和系列要完整
+
+【Office 硬解（officeHard* 工具）使用限制 - 必须遵守】：
+- officeHard* 是低层 XML/容器操作，默认禁止使用；常规读写/生成/翻译用上面的正规工具
+- 仅以下特殊需求才允许：提取现有文稿中的内嵌对象、VBA 宏恶意软件识别、去水印、底层 XML 细节修复
+- 翻译 PPTX/DOCX 这类常规任务不得调用 officeHard*，必须用正规工具完成
 
 【数据表格侧栏使用规范】：
 - 处理表格数据、数据集分析、数据统计、制作数据报表时，优先使用数据表格侧栏（initSpreadsheet），而非拆解Office文件来操作
@@ -586,7 +587,7 @@ class Agent {
 - readFile工具仅适用于文本文件（.txt/.js/.py/.json/.xml/.csv/.md等）
 - 严禁用readFile读取二进制文件（.png/.jpg/.img/.iso/.exe/.dll/.zip/.7z/.mp4等），会返回乱码并浪费上下文
 - 需要识别图片内容时，使用OCR工具或computer工具的screenshot+OCR
-- 需要分析二进制文件时，使用专门的工具（如officeUnpack处理Office文件）或computer use
+- 需要分析二进制文件时，使用专门的工具（如officeHard*处理Office内部结构）或computer use
 
 【热对话机制】：
 - 用户可能在你工作期间发送新消息（标记为【用户追加消息】），这些消息包含用户的新需求、补充信息或修改指令
@@ -996,7 +997,8 @@ ${toolListSection}`;
       { test: /知识|知识库|记忆|memory|knowledge/i, categories: ['知识', '记忆'] },
       { test: /终端|命令|shell|powershell|cmd|bash|脚本/i, categories: ['终端', '代码'] },
       { test: /图片|图像|海报|绘图|ocr|二维码|截图|camera/i, categories: ['创作', '系统'] },
-      { test: /word|docx|odt|文档模板|公文|格式化|套模板|占位符|正文|段落|样式/i, categories: ['Office-Word', 'Office'] },
+      { test: /word|docx|odt|文档模板|公文|格式化|套模板|占位符|正文|段落|样式/i, categories: ['Office-Word'] },
+      { test: /ppt|演示|幻灯片|slides|汇报|讲稿/i, categories: ['PPT Maker'] },
       { test: /表格|excel|csv|数据|统计|图表|spreadsheet/i, categories: ['文件', '数据表格'] },
       { test: /游戏|飞花令|三国杀|卧底/i, categories: ['娱乐'] },
       { test: /请求|api|接口|post|get|put|delete|rest|json|header|cookie|token|oauth/i, categories: ['网络工具'] },
@@ -1342,7 +1344,7 @@ ${toolListSection}`;
           let text = a.extractedText.length > 2000 ? a.extractedText.substring(0, 2000) + '\n...[已截断]' : a.extractedText;
           text = this._sanitizeAttachmentText(text);
           const converted = a.convertedPath ? `\n已转换文本路径: ${a.convertedPath}` : '';
-          const original = a.path && a.convertedPath && a.path !== a.convertedPath ? `\n⚠️ 原始文件精确路径（用于officeUnpack，必须原样使用）: ${a.path}` : exactPath;
+          const original = a.path && a.convertedPath && a.path !== a.convertedPath ? `\n⚠️ 原始文件精确路径（用于officeHardUnpack，必须原样使用）: ${a.path}` : exactPath;
           return `[文件附件: ${a.name}]${converted}${original}\n提取文本:\n${text}`;
         }
         if (a.convertedPath) return `[文件附件: ${a.name}]\n已转换文本路径: ${a.convertedPath}${exactPath}`;
@@ -1676,7 +1678,7 @@ ${toolListSection}`;
           let text = a.extractedText.length > 2000 ? a.extractedText.substring(0, 2000) + '\n...[已截断]' : a.extractedText;
           text = this._sanitizeAttachmentText(text);
           const converted = a.convertedPath ? `\n已转换文本路径: ${a.convertedPath}` : '';
-          const original = a.path && a.convertedPath && a.path !== a.convertedPath ? `\n⚠️ 原始文件精确路径（用于officeUnpack，必须原样使用）: ${a.path}` : exactPath;
+          const original = a.path && a.convertedPath && a.path !== a.convertedPath ? `\n⚠️ 原始文件精确路径（用于officeHardUnpack，必须原样使用）: ${a.path}` : exactPath;
           return `[文件附件: ${a.name}]${converted}${original}\n提取文本:\n${text}`;
         }
         if (a.convertedPath) return `[文件附件: ${a.name}]\n已转换文本路径: ${a.convertedPath}${exactPath}`;
@@ -3285,29 +3287,48 @@ ${toolListSection}`;
           return await window.api.serialClosePort(args.path);
         case 'serialSetSignals':
           return await window.api.serialSetSignals(args.path, { dtr: args.dtr, rts: args.rts, brk: args.brk });
-        // ---- Office工具 ----
-        case 'officeUnpack':
+        // ---- Office 硬解工具（低层 XML/容器操作）----
+        case 'officeHardUnpack':
+        case 'officeUnpack': // 旧名兼容
           return await window.api.officeUnpack(this._resolveWorkspacePath(args.path));
+        case 'officeHardList':
         case 'officeListContents':
           return await window.api.officeListContents(this._resolveWorkspacePath(args.dir));
+        case 'officeHardReadFile':
         case 'officeReadInnerFile':
           return await window.api.readFile(this._resolveWorkspacePath(args.path));
+        case 'officeHardWriteFile':
         case 'officeWriteInnerFile':
           return await window.api.writeFile(this._resolveWorkspacePath(args.path), args.content);
+        case 'officeHardRepack':
         case 'officeRepack':
           return await window.api.officeRepack(this._resolveWorkspacePath(args.dir), this._resolveWorkspacePath(args.outputPath));
+        case 'officeHardGetSlideTexts':
         case 'officeGetSlideTexts':
           return await window.api.officeGetSlideTexts(this._resolveWorkspacePath(args.dir), args.slideFile);
+        case 'officeHardSetSlideTexts':
         case 'officeSetSlideTexts':
           return await window.api.officeSetSlideTexts(this._resolveWorkspacePath(args.dir), args.slideFile, args.translations);
-        case 'officeWordExtract':
-          return await window.api.officeWordExtract(this._resolveWorkspacePath(args.pathOrDir), { includeEmpty: args.includeEmpty });
+        case 'officeHardWordApplyTexts':
         case 'officeWordApplyTexts':
           return await window.api.officeWordApplyTexts(this._resolveWorkspacePath(args.pathOrDir), args.updates || []);
-        case 'officeWordGetStyles':
-          return await window.api.officeWordGetStyles(this._resolveWorkspacePath(args.pathOrDir));
-        case 'officeWordFillTemplate':
-          return await window.api.officeWordFillTemplate(this._resolveWorkspacePath(args.pathOrDir), args.replacements || {});
+        // ---- Office-Word 工具（正规库）----
+        case 'wordExtractText':
+        case 'officeWordExtract': // 旧名兼容（语义升级为 mammoth 提取）
+          return await window.api.wordExtractText(this._resolveWorkspacePath(args.path || args.pathOrDir), args.format);
+        case 'wordCreate':
+          return await window.api.wordCreate(args, this.workspacePath);
+        case 'wordFillTemplate':
+        case 'officeWordFillTemplate': // 旧名兼容（语义升级为 docxtemplater）
+          return await window.api.wordFillTemplate(args.templatePath || args.pathOrDir, args.outputPath, args.data || args.replacements || {}, this.workspacePath);
+        case 'wordGetMetadata':
+          return await window.api.wordGetMetadata(this._resolveWorkspacePath(args.path));
+        case 'wordListStyles':
+        case 'officeWordGetStyles': // 旧名兼容
+          return await window.api.wordListStyles(this._resolveWorkspacePath(args.path || args.pathOrDir));
+        // ---- PPT Maker ----
+        case 'pptMakerCreate':
+          return await window.api.pptMakerCreate(args, this.workspacePath);
         // ---- 数据表格工具 ----
         case 'initSpreadsheet':
           return window.initSpreadsheet ? window.initSpreadsheet(args.title) : { ok: false, error: '数据表格功能未初始化' };

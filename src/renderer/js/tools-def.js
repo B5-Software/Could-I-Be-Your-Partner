@@ -70,10 +70,13 @@ const CHAT_ONLY_TOOLS = new Set([
   'spreadsheetInsertRows', 'spreadsheetDeleteRows', 'spreadsheetInsertCols',
   'spreadsheetDeleteCols', 'spreadsheetSortRange', 'spreadsheetGetData',
   'spreadsheetExportCSV', 'spreadsheetImportCSV', 'spreadsheetImportFile', 'spreadsheetExportFile',
-  // Office
-  'officeUnpack', 'officeListContents', 'officeReadInnerFile', 'officeWriteInnerFile',
-  'officeRepack', 'officeGetSlideTexts', 'officeSetSlideTexts', 'officeWordExtract',
-  'officeWordApplyTexts', 'officeWordGetStyles', 'officeWordFillTemplate',
+  // Office 硬解（低层 XML 操作，仅特殊需求使用）
+  'officeHardUnpack', 'officeHardList', 'officeHardReadFile', 'officeHardWriteFile',
+  'officeHardRepack', 'officeHardGetSlideTexts', 'officeHardSetSlideTexts', 'officeHardWordApplyTexts',
+  // Office-Word（正规库：mammoth/docx/docxtemplater）
+  'wordExtractText', 'wordCreate', 'wordFillTemplate', 'wordGetMetadata', 'wordListStyles',
+  // PPT Maker
+  'pptMakerCreate',
   // Serial
   'serialListPorts', 'serialOpenPort', 'serialWritePort', 'serialReadPort',
   'serialClosePort', 'serialSetSignals',
@@ -392,18 +395,23 @@ const TOOL_DEFINITIONS = [
   { name: 'serialReadPort', desc: '读取串口缓冲区', icon: 'fa-eye', category: '串口', sensitive: true },
   { name: 'serialClosePort', desc: '关闭串口连接', icon: 'fa-plug-circle-xmark', category: '串口', sensitive: true },
   { name: 'serialSetSignals', desc: '设置串口控制信号(DTR/RTS)', icon: 'fa-signal', category: '串口', sensitive: true },
-  // Office
-  { name: 'officeUnpack', desc: '解压Office文件为目录', icon: 'fa-box-open', category: 'Office', sensitive: true },
-  { name: 'officeListContents', desc: '列出Office内部文件', icon: 'fa-folder-tree', category: 'Office', sensitive: false },
-  { name: 'officeReadInnerFile', desc: '读取Office内部文件', icon: 'fa-file-code', category: 'Office', sensitive: false },
-  { name: 'officeWriteInnerFile', desc: '写入Office内部文件', icon: 'fa-file-pen', category: 'Office', sensitive: true },
-  { name: 'officeRepack', desc: '打包目录为Office文件', icon: 'fa-file-zipper', category: 'Office', sensitive: true },
-  { name: 'officeGetSlideTexts', desc: '提取幻灯片所有文字（用于翻译等文字操作）', icon: 'fa-font', category: 'Office', sensitive: false },
-  { name: 'officeSetSlideTexts', desc: '将翻译结果写回幻灯片', icon: 'fa-language', category: 'Office', sensitive: true },
-  { name: 'officeWordExtract', desc: '提取Word文档文字与样式', icon: 'fa-file-word', category: 'Office-Word', sensitive: false },
-  { name: 'officeWordApplyTexts', desc: '按索引覆写Word文字（保留格式）', icon: 'fa-file-pen', category: 'Office-Word', sensitive: true },
-  { name: 'officeWordGetStyles', desc: '读取Word样式列表', icon: 'fa-list', category: 'Office-Word', sensitive: false },
-  { name: 'officeWordFillTemplate', desc: '按占位符填充Word模板', icon: 'fa-file-signature', category: 'Office-Word', sensitive: true },
+  // Office 硬解（低层 XML/容器操作，仅特殊需求如提取对象、VBA恶意分析、去水印时使用）
+  { name: 'officeHardUnpack', desc: '解压Office文件为目录，直接操作内部XML', icon: 'fa-box-open', category: 'Office 硬解', sensitive: true },
+  { name: 'officeHardList', desc: '列出Office内部文件结构', icon: 'fa-folder-tree', category: 'Office 硬解', sensitive: false },
+  { name: 'officeHardReadFile', desc: '读取Office内部文件（XML/rels等）', icon: 'fa-file-code', category: 'Office 硬解', sensitive: false },
+  { name: 'officeHardWriteFile', desc: '写入Office内部文件', icon: 'fa-file-pen', category: 'Office 硬解', sensitive: true },
+  { name: 'officeHardRepack', desc: '打包目录为Office文件', icon: 'fa-file-zipper', category: 'Office 硬解', sensitive: true },
+  { name: 'officeHardGetSlideTexts', desc: '提取幻灯片XML文字节点（翻译等底层改写）', icon: 'fa-font', category: 'Office 硬解', sensitive: false },
+  { name: 'officeHardSetSlideTexts', desc: '将改写结果写回幻灯片XML', icon: 'fa-language', category: 'Office 硬解', sensitive: true },
+  { name: 'officeHardWordApplyTexts', desc: '按run索引覆写Word文字（保留原格式）', icon: 'fa-file-pen', category: 'Office 硬解', sensitive: true },
+  // Office-Word（正规库驱动）
+  { name: 'wordExtractText', desc: '用mammoth提取Word(.docx/.odt)纯文本', icon: 'fa-file-word', category: 'Office-Word', sensitive: false },
+  { name: 'wordCreate', desc: '用docx库按结构化JSON生成新Word文档', icon: 'fa-file-circle-plus', category: 'Office-Word', sensitive: false },
+  { name: 'wordFillTemplate', desc: '用docxtemplater按占位符填充Word模板', icon: 'fa-file-signature', category: 'Office-Word', sensitive: true },
+  { name: 'wordGetMetadata', desc: '读取Word文档元数据（作者/标题/修改时间等）', icon: 'fa-circle-info', category: 'Office-Word', sensitive: false },
+  { name: 'wordListStyles', desc: '读取Word文档样式列表（段落/字符样式）', icon: 'fa-list', category: 'Office-Word', sensitive: false },
+  // PPT Maker
+  { name: 'pptMakerCreate', desc: '生成图文并茂、带图表表格的PPT演示文稿', icon: 'fa-file-powerpoint', category: 'PPT Maker', sensitive: false },
   // Spreadsheet
   { name: 'initSpreadsheet', desc: '打开数据表格侧栏', icon: 'fa-table-cells', category: '数据表格', sensitive: false },
   { name: 'spreadsheetSetCells', desc: '批量设置单元格值/公式', icon: 'fa-pen', category: '数据表格', sensitive: false },
@@ -646,18 +654,23 @@ function getToolSchemas(enabledTools, mode) {
     serialReadPort: { type: 'function', function: { name: 'serialReadPort', description: '读取已打开串口缓冲区中的数据。返回自上次读取以来接收到的所有数据。', parameters: { type: 'object', properties: { path: { type: 'string', description: '串口路径' }, timeout: { type: 'number', description: '等待数据的超时毫秒数(默认1000)' }, encoding: { type: 'string', enum: ['utf8', 'ascii', 'hex', 'base64'], description: '返回数据的编码(默认utf8)' } }, required: ['path'] } } },
     serialClosePort: { type: 'function', function: { name: 'serialClosePort', description: '关闭已打开的串口连接', parameters: { type: 'object', properties: { path: { type: 'string', description: '串口路径' } }, required: ['path'] } } },
     serialSetSignals: { type: 'function', function: { name: 'serialSetSignals', description: '设置串口控制信号(DTR/RTS)，可用于复位开发板等', parameters: { type: 'object', properties: { path: { type: 'string', description: '串口路径' }, dtr: { type: 'boolean', description: '设置DTR信号' }, rts: { type: 'boolean', description: '设置RTS信号' }, brk: { type: 'boolean', description: '设置BREAK信号' } }, required: ['path'] } } },
-    // Office
-    officeUnpack: { type: 'function', function: { name: 'officeUnpack', description: '将Office文件(.docx/.xlsx/.pptx)解压到工作区目录，以便直接操作内部XML。解压目录名为原文件名加_unpacked后缀。', parameters: { type: 'object', properties: { path: { type: 'string', description: 'Office文件路径' } }, required: ['path'] } } },
-    officeListContents: { type: 'function', function: { name: 'officeListContents', description: '列出Office解压目录的全部内部文件结构', parameters: { type: 'object', properties: { dir: { type: 'string', description: '解压后的目录路径' } }, required: ['dir'] } } },
-    officeReadInnerFile: { type: 'function', function: { name: 'officeReadInnerFile', description: '读取Office解压目录中的内部文件(XML/rels等)', parameters: { type: 'object', properties: { path: { type: 'string', description: '内部文件的完整路径' } }, required: ['path'] } } },
-    officeWriteInnerFile: { type: 'function', function: { name: 'officeWriteInnerFile', description: '写入/覆盖Office解压目录中的内部文件', parameters: { type: 'object', properties: { path: { type: 'string', description: '内部文件的完整路径' }, content: { type: 'string', description: '新的文件内容' } }, required: ['path', 'content'] } } },
-    officeRepack: { type: 'function', function: { name: 'officeRepack', description: '将解压目录重新打包为Office文件(.docx/.xlsx/.pptx)。输出路径默认覆盖原文件，也可指定新路径。', parameters: { type: 'object', properties: { dir: { type: 'string', description: '解压后的目录路径' }, outputPath: { type: 'string', description: '输出文件路径(可选,默认覆盖原文件)' } }, required: ['dir'] } } },
-    officeGetSlideTexts: { type: 'function', function: { name: 'officeGetSlideTexts', description: '从已解压的PPTX/DOCX中提取指定幻灯片XML里的所有文字节点，返回{index, text}数组（完全去除XML结构，token极少）。对于PPTX进行翻译等操作时必须优先使用此工具代替officeReadInnerFile。', parameters: { type: 'object', properties: { dir: { type: 'string', description: '解压后的目录路径' }, slideFile: { type: 'string', description: '幻灯片文件相对路径，如 ppt/slides/slide1.xml' } }, required: ['dir', 'slideFile'] } } },
-    officeSetSlideTexts: { type: 'function', function: { name: 'officeSetSlideTexts', description: '将翻译后的文字写回指定幻灯片XML（与officeGetSlideTexts配套）。translations为{index, text}数组，index对应officeGetSlideTexts返回的index字段。直接修改文件，无需手动写XML。', parameters: { type: 'object', properties: { dir: { type: 'string', description: '解压后的目录路径' }, slideFile: { type: 'string', description: '幻灯片文件相对路径' }, translations: { type: 'array', items: { type: 'object', properties: { index: { type: 'number', description: '文字节点索引（来自officeGetSlideTexts）' }, text: { type: 'string', description: '处理后的文字' } }, required: ['index', 'text'] }, description: '处理结果列表' } }, required: ['dir', 'slideFile', 'translations'] } } },
-    officeWordExtract: { type: 'function', function: { name: 'officeWordExtract', description: '提取Word文档（.docx/.odt）的文字与样式信息。可传文档文件路径或已解压目录，文件会自动解压。', parameters: { type: 'object', properties: { pathOrDir: { type: 'string', description: '文档路径或解压目录' }, includeEmpty: { type: 'boolean', description: '是否包含空文本节点，默认false' } }, required: ['pathOrDir'] } } },
-    officeWordApplyTexts: { type: 'function', function: { name: 'officeWordApplyTexts', description: '按officeWordExtract返回的index覆写文字，尽可能保持原有格式（字体、段落样式等）。', parameters: { type: 'object', properties: { pathOrDir: { type: 'string', description: '文档路径或解压目录' }, updates: { type: 'array', items: { type: 'object', properties: { index: { type: 'number' }, text: { type: 'string' } }, required: ['index', 'text'] }, description: '要覆写的文本索引与新文本' } }, required: ['pathOrDir', 'updates'] } } },
-    officeWordGetStyles: { type: 'function', function: { name: 'officeWordGetStyles', description: '读取Word文档样式列表（段落/字符样式等），用于按模板保持格式。', parameters: { type: 'object', properties: { pathOrDir: { type: 'string', description: '文档路径或解压目录' } }, required: ['pathOrDir'] } } },
-    officeWordFillTemplate: { type: 'function', function: { name: 'officeWordFillTemplate', description: '按占位符批量填充Word模板，支持 {{KEY}} / ${KEY} / <<KEY>> 三种占位符。', parameters: { type: 'object', properties: { pathOrDir: { type: 'string', description: '文档路径或解压目录' }, replacements: { type: 'object', description: '键值映射，如 {"NAME":"张三"}' } }, required: ['pathOrDir', 'replacements'] } } },
+    // Office 硬解（低层 XML/容器操作，仅特殊需求使用：提取文稿对象、VBA恶意软件识别、去水印、底层XML修复）
+    officeHardUnpack: { type: 'function', function: { name: 'officeHardUnpack', description: '【Office 硬解】将Office文件(.docx/.xlsx/.pptx/.odt/.ods/.odp)解压到工作区目录，以便直接操作内部XML。仅用于提取文稿内嵌对象、VBA恶意软件识别、去水印等特殊需求；常规读写/生成请用 Office-Word、数据表格、PPT Maker 工具。', parameters: { type: 'object', properties: { path: { type: 'string', description: 'Office文件路径' } }, required: ['path'] } } },
+    officeHardList: { type: 'function', function: { name: 'officeHardList', description: '【Office 硬解】列出Office解压目录的全部内部文件结构', parameters: { type: 'object', properties: { dir: { type: 'string', description: '解压后的目录路径' } }, required: ['dir'] } } },
+    officeHardReadFile: { type: 'function', function: { name: 'officeHardReadFile', description: '【Office 硬解】读取Office解压目录中的内部文件(XML/rels/vba等)', parameters: { type: 'object', properties: { path: { type: 'string', description: '内部文件的完整路径' } }, required: ['path'] } } },
+    officeHardWriteFile: { type: 'function', function: { name: 'officeHardWriteFile', description: '【Office 硬解】写入/覆盖Office解压目录中的内部文件', parameters: { type: 'object', properties: { path: { type: 'string', description: '内部文件的完整路径' }, content: { type: 'string', description: '新的文件内容' } }, required: ['path', 'content'] } } },
+    officeHardRepack: { type: 'function', function: { name: 'officeHardRepack', description: '【Office 硬解】将解压目录重新打包为Office文件。输出路径默认覆盖原文件，也可指定新路径。', parameters: { type: 'object', properties: { dir: { type: 'string', description: '解压后的目录路径' }, outputPath: { type: 'string', description: '输出文件路径(可选,默认覆盖原文件)' } }, required: ['dir'] } } },
+    officeHardGetSlideTexts: { type: 'function', function: { name: 'officeHardGetSlideTexts', description: '【Office 硬解】从已解压的PPTX中提取指定幻灯片XML里的所有文字节点，返回{index,text}数组。仅用于必须保持原格式的底层改写。', parameters: { type: 'object', properties: { dir: { type: 'string', description: '解压后的目录路径' }, slideFile: { type: 'string', description: '幻灯片文件相对路径，如 ppt/slides/slide1.xml' } }, required: ['dir', 'slideFile'] } } },
+    officeHardSetSlideTexts: { type: 'function', function: { name: 'officeHardSetSlideTexts', description: '【Office 硬解】将改写后的文字写回指定幻灯片XML（与officeHardGetSlideTexts配套）。translations为{index,text}数组。', parameters: { type: 'object', properties: { dir: { type: 'string', description: '解压后的目录路径' }, slideFile: { type: 'string', description: '幻灯片文件相对路径' }, translations: { type: 'array', items: { type: 'object', properties: { index: { type: 'number' }, text: { type: 'string' } }, required: ['index', 'text'] }, description: '处理结果列表' } }, required: ['dir', 'slideFile', 'translations'] } } },
+    officeHardWordApplyTexts: { type: 'function', function: { name: 'officeHardWordApplyTexts', description: '【Office 硬解】按run索引覆写Word文档文字，保持原有字体与段落格式。仅用于必须原位保留格式的场景。', parameters: { type: 'object', properties: { pathOrDir: { type: 'string', description: '文档路径或解压目录' }, updates: { type: 'array', items: { type: 'object', properties: { index: { type: 'number' }, text: { type: 'string' } }, required: ['index', 'text'] }, description: '要覆写的文本索引与新文本' } }, required: ['pathOrDir', 'updates'] } } },
+    // Office-Word（正规库）
+    wordExtractText: { type: 'function', function: { name: 'wordExtractText', description: '用mammoth（成熟Word解析库）提取 .docx 纯文本，用officeparser提取 .odt 纯文本。返回带段落的纯文本，不破坏表格顺序。', parameters: { type: 'object', properties: { path: { type: 'string', description: '.docx/.odt 文件路径' }, format: { type: 'string', enum: ['text', 'html'], description: '返回格式：text=纯文本(默认)，html=转换后的HTML' } }, required: ['path'] } } },
+    wordCreate: { type: 'function', function: { name: 'wordCreate', description: '用docx库按结构化JSON生成新的.docx文档：支持标题/段落/表格/列表/图片/页码/页眉。生成结果保存到工作目录。', parameters: { type: 'object', properties: { outputPath: { type: 'string', description: '输出文件名或相对路径（如 report.docx）' }, title: { type: 'string', description: '文档标题（可选，写入元数据）' }, author: { type: 'string', description: '作者（可选）' }, blocks: { type: 'array', items: { type: 'object', description: '内容块：{type:"heading",level:1,text} / {type:"paragraph",text,bold} / {type:"bullets",items:[]} / {type:"table",headers:[],rows:[[]]} / {type:"image",path} / {type:"pageBreak"}' }, description: '按顺序排列的内容块' } }, required: ['outputPath', 'blocks'] } } },
+    wordFillTemplate: { type: 'function', function: { name: 'wordFillTemplate', description: '用docxtemplater按占位符 {{KEY}} 填充.docx模板并另存为新文档。占位符即使被Word拆分到多个run也能正确替换，保留全部格式。', parameters: { type: 'object', properties: { templatePath: { type: 'string', description: '模板.docx路径' }, outputPath: { type: 'string', description: '输出.docx路径' }, data: { type: 'object', description: '键值映射，如 {"NAME":"张三","items":["a","b"]}' } }, required: ['templatePath', 'outputPath', 'data'] } } },
+    wordGetMetadata: { type: 'function', function: { name: 'wordGetMetadata', description: '读取Word文档元数据（标题/作者/创建时间/修改时间/页数等）', parameters: { type: 'object', properties: { path: { type: 'string', description: '.docx/.odt 文件路径' } }, required: ['path'] } } },
+    wordListStyles: { type: 'function', function: { name: 'wordListStyles', description: '读取Word文档的样式列表（样式ID/名称/类型），用于了解模板可用样式。', parameters: { type: 'object', properties: { path: { type: 'string', description: '.docx/.odt 文件路径' } }, required: ['path'] } } },
+    // PPT Maker
+    pptMakerCreate: { type: 'function', function: { name: 'pptMakerCreate', description: '生成图文并茂的专业PPT演示文稿(.pptx)。视觉风格自动跟随应用主题（强调色+深浅色模式）。支持版式：cover封面/agenda目录/section章节/content要点(可配图分栏)/twocolumn双栏/table表格/chart图表(bar/column/line/area/pie/doughnut)/stats数据卡/quote引用/comparison对比/timeline时间线/end结束页。图片path用工作区相对路径。', parameters: { type: 'object', properties: { title: { type: 'string', description: '演示文稿标题（同时作为默认文件名）' }, subtitle: { type: 'string', description: '副标题' }, author: { type: 'string', description: '作者' }, theme: { type: 'string', enum: ['modern', 'corporate', 'gradient', 'minimal', 'tech', 'warm'], description: '风格：modern/corporate/gradient/minimal/tech/warm（默认modern）' }, filename: { type: 'string', description: '输出文件名（默认用标题，自动加.pptx）' }, slides: { type: 'array', description: '幻灯片定义数组，每项含type与对应字段。示例见description', items: { type: 'object', properties: { type: { type: 'string', enum: ['cover', 'agenda', 'section', 'content', 'twocolumn', 'table', 'chart', 'stats', 'quote', 'comparison', 'timeline', 'end'], description: '版式类型' }, title: { type: 'string' }, subtitle: { type: 'string' }, bullets: { type: 'array', items: { type: 'string' } }, items: { type: 'array', items: { type: 'string' } }, imagePath: { type: 'string' }, layout: { type: 'string' }, columns: { type: 'array' }, table: { type: 'object' }, chart: { type: 'object' }, stats: { type: 'array' }, quote: { type: 'string' }, left: { type: 'object' }, right: { type: 'object' }, events: { type: 'array' }, notes: { type: 'string' } } } } }, required: ['title', 'slides'] } } },
     // ---- Spreadsheet ----
     initSpreadsheet: { type: 'function', function: { name: 'initSpreadsheet', description: '打开数据表格侧栏面板。处理表格数据/数据集分析/数据可视化时应优先使用此工具，而非拆解Office文件。支持公式计算（SUM/AVERAGE/COUNT/MAX/MIN/IF/VLOOKUP等60+函数）、单元格格式设置、CSV导入导出、排序等功能。', parameters: { type: 'object', properties: { title: { type: 'string', description: '表格标题(可选)' } }, required: [] } } },
     spreadsheetSetCells: { type: 'function', function: { name: 'spreadsheetSetCells', description: '批量设置单元格的值或公式。值可以是文本、数字或以=开头的公式（如 =SUM(A1:A10)、=IF(A1>0,"正","负")）。', parameters: { type: 'object', properties: { entries: { type: 'array', items: { type: 'object', properties: { addr: { type: 'string', description: '单元格地址(如A1、B3)' }, value: { type: 'string', description: '值或公式(公式以=开头)' } }, required: ['addr', 'value'] }, description: '要设置的单元格列表' } }, required: ['entries'] } } },

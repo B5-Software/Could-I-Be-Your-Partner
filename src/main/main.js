@@ -16,6 +16,9 @@ const { fetchLLMWithRetry, consumeSSEStream, abortAllRequests, abortRequests, DE
 const LLMProviders = require('./llm-providers');
 const ESLintService = require('./eslint-service');
 const { BUNDLED_SKILLS } = require('../data/bundled-skills');
+const { importKnowledgeFile } = require('./document-import');
+const { createPresentation } = require('./ppt-maker');
+const { extractWordText, createWordDocument, fillWordTemplate, getWordMetadata, listWordStyles } = require('./word-tools');
 
 const emailService = new EmailService();
 const webControlService = new WebControlService();
@@ -4517,7 +4520,8 @@ ipcMain.handle('llm:chat', async (event, messages, options = {}) => {
       sessionKey: options.sessionKey || null
     };
     const onRetry = (info) => {
-      try { mainWindow?.webContents.send('llm:retry', info); } catch { /* ignore */ }
+      // 带上 sessionKey，渲染进程各 Agent 据此过滤，避免其他会话的重试气泡串到当前会话
+      try { mainWindow?.webContents.send('llm:retry', { ...info, sessionKey: options.sessionKey || null }); } catch { /* ignore */ }
     };
 
     const result = await fetchLLMWithRetry({
@@ -4604,7 +4608,8 @@ ipcMain.handle('llm:chatStream', async (_, messages, options = {}) => {
       sessionKey: options.sessionKey || null
     };
     const onRetry = (info) => {
-      try { mainWindow?.webContents.send('llm:retry', info); } catch { /* ignore */ }
+      // 带上 sessionKey，渲染进程各 Agent 据此过滤，避免其他会话的重试气泡串到当前会话
+      try { mainWindow?.webContents.send('llm:retry', { ...info, sessionKey: options.sessionKey || null }); } catch { /* ignore */ }
     };
 
     const result = await fetchLLMWithRetry({
@@ -6038,98 +6043,12 @@ ipcMain.handle('system:fullInfo', () => ({
 }));
 
 // ---- IPC: File Import for Knowledge Base ----
+// 统一走 document-import.js 的专用解析器：文本类带编码检测，
+// 办公文档/PDF 使用对应库，二进制与旧版 Office 明确拒绝。
 ipcMain.handle('knowledge:importFile', async (_, filePath, workspacePath) => {
   try {
-    const ext = path.extname(filePath).toLowerCase();
-    const fileName = path.basename(filePath);
-    let textContent = '';
-    let images = [];
     const targetDir = workspacePath && fs.existsSync(workspacePath) ? workspacePath : imagesDir;
-
-    if (['.txt', '.csv', '.md', '.json', '.xml', '.html', '.htm', '.yaml', '.yml', '.ini', '.cfg', '.conf', '.log', '.sh', '.bat', '.ps1', '.py', '.js', '.ts', '.java', '.c', '.cpp', '.h', '.css'].includes(ext)) {
-      textContent = readTextWithEncoding(filePath);
-    } else if (['.docx', '.xlsx', '.pptx', '.odt', '.ods', '.odp'].includes(ext)) {
-      // Use JSZip to extract from Office Open XML / ODF formats
-      const AdmZip = requireAdmZip();
-      if (!AdmZip) return { ok: false, error: '需要安装adm-zip包来处理此文件格式' };
-      const zip = new AdmZip(filePath);
-      const entries = zip.getEntries();
-
-      if (ext === '.docx') {
-        const docEntry = entries.find(e => e.entryName === 'word/document.xml');
-        if (docEntry) {
-          const xml = docEntry.getData().toString('utf-8');
-          textContent = xml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-        }
-        // Extract images
-        entries.filter(e => e.entryName.startsWith('word/media/')).forEach(e => {
-          const imgPath = path.join(targetDir, `import_${Date.now()}_${path.basename(e.entryName)}`);
-          fs.writeFileSync(imgPath, e.getData());
-          images.push(imgPath);
-        });
-      } else if (ext === '.xlsx' || ext === '.ods') {
-        // Parse spreadsheet to CSV
-        const sheetEntries = entries.filter(e => e.entryName.match(/xl\/worksheets\/sheet\d+\.xml|content\.xml/));
-        for (const se of sheetEntries) {
-          const xml = se.getData().toString('utf-8');
-          const rows = [];
-          const rowMatches = xml.match(/<row[^>]*>[\s\S]*?<\/row>/g) || [];
-          for (const rowXml of rowMatches) {
-            const cells = [];
-            const cellMatches = rowXml.match(/<v>([^<]*)<\/v>/g) || [];
-            for (const c of cellMatches) cells.push(c.replace(/<\/?v>/g, ''));
-            if (cells.length > 0) rows.push(cells.join(','));
-          }
-          textContent += rows.join('\n') + '\n';
-        }
-      } else if (ext === '.pptx' || ext === '.odp') {
-        const slideEntries = entries.filter(e => e.entryName.match(/ppt\/slides\/slide\d+\.xml|content\.xml/));
-        for (const se of slideEntries) {
-          const xml = se.getData().toString('utf-8');
-          const txt = xml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-          textContent += txt + '\n---\n';
-        }
-        entries.filter(e => e.entryName.startsWith('ppt/media/')).forEach(e => {
-          const imgPath = path.join(targetDir, `import_${Date.now()}_${path.basename(e.entryName)}`);
-          fs.writeFileSync(imgPath, e.getData());
-          images.push(imgPath);
-        });
-      } else if (ext === '.odt') {
-        const contentEntry = entries.find(e => e.entryName === 'content.xml');
-        if (contentEntry) {
-          const xml = contentEntry.getData().toString('utf-8');
-          textContent = xml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-        }
-      }
-    } else if (['.doc', '.ppt', '.xls'].includes(ext)) {
-      // Legacy binary formats - try to extract raw text
-      const buf = fs.readFileSync(filePath);
-      const rawText = buf.toString('utf-8').replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, ' ').replace(/\s+/g, ' ');
-      // Extract readable portions
-      const readable = rawText.match(/[\u4e00-\u9fff\u3400-\u4dbfa-zA-Z0-9\s,.;:!?(){}\[\]\-_+=@#$%^&*'"\/\\]+/g) || [];
-      textContent = readable.join(' ').substring(0, 50000);
-    } else if (ext === '.pdf') {
-      // Basic PDF text extraction
-      const buf = fs.readFileSync(filePath);
-      const content = buf.toString('latin1');
-      const textBlocks = [];
-      const streamMatches = content.match(/stream[\r\n]+([\s\S]*?)[\r\n]+endstream/g) || [];
-      for (const sm of streamMatches) {
-        const inner = sm.replace(/^stream[\r\n]+/, '').replace(/[\r\n]+endstream$/, '');
-        // Try to extract text operators
-        const tjMatches = inner.match(/\(([^)]*)\)/g) || [];
-        for (const tj of tjMatches) {
-          const text = tj.slice(1, -1).replace(/\\n/g, '\n').replace(/\\r/g, '').replace(/\\\\/g, '\\');
-          if (text.length > 1 && /[a-zA-Z\u4e00-\u9fff]/.test(text)) textBlocks.push(text);
-        }
-      }
-      textContent = textBlocks.join(' ') || '(PDF文本提取有限，建议使用OCR)';
-    } else {
-      // Try reading as text
-      try { textContent = readTextWithEncoding(filePath); } catch { return { ok: false, error: '不支持的文件格式' }; }
-    }
-
-    return { ok: true, content: textContent.substring(0, 100000), images, fileName, ext };
+    return await importKnowledgeFile(filePath, { readText: readTextWithEncoding, targetDir });
   } catch (e) { return { ok: false, error: e.message }; }
 });
 
@@ -8523,6 +8442,46 @@ app.whenReady().then(async () => {
       };
     } catch (e) {
       return { ok: false, error: e.message };
+    }
+  });
+
+  // ---- Office-Word 工具（正规库驱动）----
+  ipcMain.handle('word:extractText', async (_, filePath, format) => {
+    try { return await extractWordText(filePath, format); } catch (e) { return { ok: false, error: e.message }; }
+  });
+
+  ipcMain.handle('word:create', async (_, spec, workspacePath) => {
+    try { return await createWordDocument(spec || {}, workspacePath); } catch (e) { return { ok: false, error: e.message }; }
+  });
+
+  ipcMain.handle('word:fillTemplate', async (_, templatePath, outputPath, data, workspacePath) => {
+    try { return fillWordTemplate(templatePath, outputPath, data || {}, workspacePath); } catch (e) { return { ok: false, error: e.message }; }
+  });
+
+  ipcMain.handle('word:getMetadata', async (_, filePath) => {
+    try { return await getWordMetadata(filePath); } catch (e) { return { ok: false, error: e.message }; }
+  });
+
+  ipcMain.handle('word:listStyles', async (_, filePath) => {
+    try { return listWordStyles(filePath); } catch (e) { return { ok: false, error: e.message }; }
+  });
+
+  // ---- PPT Maker ----
+  // 生成视觉化 .pptx（封面/目录/章节/内容/图文/表格/图表/KPI/引用/对比/时间线/结束页），
+  // 配色与深浅模式跟随主窗口主题。
+  ipcMain.handle('ppt:create', async (_, spec, workspacePath) => {
+    try {
+      if (!spec || typeof spec !== 'object') return { ok: false, error: '缺少演示文稿定义' };
+      if (!workspacePath || !fs.existsSync(workspacePath)) {
+        return { ok: false, error: '工作区不存在，无法保存演示文稿' };
+      }
+      return await createPresentation(spec, {
+        workspacePath,
+        appTheme: settings.theme || {},
+        nativeDark: nativeTheme.shouldUseDarkColors
+      });
+    } catch (e) {
+      return { ok: false, error: e && e.message ? e.message : String(e) };
     }
   });
 

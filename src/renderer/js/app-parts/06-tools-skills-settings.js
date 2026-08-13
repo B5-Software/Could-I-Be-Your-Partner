@@ -512,6 +512,13 @@
                 content: `图片文件：${result.images.join(', ')}`
               });
             }
+          } else {
+            const errMsg = result.error || '导入失败';
+            if (typeof window.showToast === 'function') {
+              window.showToast(`${result.fileName || '文件'}: ${errMsg}`, 'error', 6000);
+            } else {
+              console.error('Knowledge import failed:', errMsg);
+            }
           }
         }
         loadKnowledgePage();

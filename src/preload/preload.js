@@ -472,6 +472,16 @@ contextBridge.exposeInMainWorld('api', {
   officeWordGetStyles: (pathOrDir) => ipcRenderer.invoke('office:wordGetStyles', pathOrDir),
   officeWordFillTemplate: (pathOrDir, replacements) => ipcRenderer.invoke('office:wordFillTemplate', pathOrDir, replacements),
 
+  // Office-Word（正规库）
+  wordExtractText: (path, format) => ipcRenderer.invoke('word:extractText', path, format),
+  wordCreate: (spec, workspacePath) => ipcRenderer.invoke('word:create', spec, workspacePath),
+  wordFillTemplate: (templatePath, outputPath, data, workspacePath) => ipcRenderer.invoke('word:fillTemplate', templatePath, outputPath, data, workspacePath),
+  wordGetMetadata: (path) => ipcRenderer.invoke('word:getMetadata', path),
+  wordListStyles: (path) => ipcRenderer.invoke('word:listStyles', path),
+
+  // PPT Maker
+  pptMakerCreate: (spec, workspacePath) => ipcRenderer.invoke('ppt:create', spec, workspacePath),
+
   // Spreadsheet File I/O
   spreadsheetImportFile: (filePath) => ipcRenderer.invoke('spreadsheet:importFile', filePath),
   spreadsheetExportFile: (filePath, cells, sheetName) => ipcRenderer.invoke('spreadsheet:exportFile', filePath, cells, sheetName),

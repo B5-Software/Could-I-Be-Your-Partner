@@ -1510,10 +1510,148 @@ test('OskIme letterForInsert uppercases German umlauts', () => {
   assert.strictEqual(o.letterForInsert('ß'), 'ß');
 });
 
+// ---- 文档导入 / Office 工具 / PPT Maker 回归 ----
+
+test('LLM 重试事件按 sessionKey 过滤，避免串到其他会话', () => {
+  const fsLocal = require('fs');
+  const pathLocal = require('path');
+  const agentContent = fsLocal.readFileSync(pathLocal.join(__dirname, '../src/renderer/js/agent.js'), 'utf-8');
+  const mainContent = fsLocal.readFileSync(pathLocal.join(__dirname, '../src/main/main.js'), 'utf-8');
+  const codeContent = fsLocal.readFileSync(pathLocal.join(__dirname, '../src/renderer/js/app-parts/08-code-mode.js'), 'utf-8');
+  assert.ok(agentContent.includes('info.sessionKey && info.sessionKey !== this.sessionKey'), 'agent.js 应按 sessionKey 过滤重试事件');
+  assert.ok(codeContent.includes('info.sessionKey && info.sessionKey !== ag.sessionKey'), 'code-mode 应按 sessionKey 过滤重试事件');
+  assert.ok(mainContent.includes('sessionKey: options.sessionKey || null'), '主进程广播重试事件应携带 sessionKey');
+});
+
+test('Office 硬解工具改名并新增正规 Word/PPT 工具', () => {
+  const fsLocal = require('fs');
+  const pathLocal = require('path');
+  const toolsDef = fsLocal.readFileSync(pathLocal.join(__dirname, '../src/renderer/js/tools-def.js'), 'utf-8');
+  for (const name of ['officeHardUnpack', 'officeHardRepack', 'wordExtractText', 'wordCreate', 'wordFillTemplate', 'wordGetMetadata', 'wordListStyles', 'pptMakerCreate']) {
+    assert.ok(toolsDef.includes(`name: '${name}'`), `tools-def 应包含 ${name}`);
+  }
+  assert.ok(toolsDef.includes("category: 'Office 硬解'"), '低层工具应归类为 Office 硬解');
+  assert.ok(!toolsDef.includes("name: 'officeUnpack'"), '旧 officeUnpack 名称不应再作为工具定义出现');
+});
+
+async function runDocumentToolTests() {
+  const fsLocal = require('fs');
+  const osLocal = require('os');
+  const pathLocal = require('path');
+  const tmp = fsLocal.mkdtempSync(pathLocal.join(osLocal.tmpdir(), 'cibyp-doc-tests-'));
+  const asyncTest = async (name, fn) => {
+    try {
+      await fn();
+      console.log(`  PASS: ${name}`);
+      passed++;
+    } catch (e) {
+      console.log(`  FAIL: ${name} - ${e.message}`);
+      failed++;
+    }
+  };
+
+  console.log('Document Import & Office Tools:');
+
+  await asyncTest('知识库导入拒绝二进制文件', async () => {
+    const { importKnowledgeFile } = require('../src/main/document-import');
+    const p = pathLocal.join(tmp, 'bin.png');
+    fsLocal.writeFileSync(p, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 1, 2, 3]));
+    const r = await importKnowledgeFile(p, { targetDir: tmp });
+    assert.strictEqual(r.ok, false);
+    assert.ok(r.error.includes('二进制'), '应提示二进制文件不可导入');
+  });
+
+  await asyncTest('知识库导入拒绝超大文件', async () => {
+    const { importKnowledgeFile } = require('../src/main/document-import');
+    const p = pathLocal.join(tmp, 'big.txt');
+    const fd = fsLocal.openSync(p, 'w');
+    fsLocal.closeSync(fd);
+    fsLocal.truncateSync(p, 51 * 1024 * 1024);
+    const r = await importKnowledgeFile(p, { targetDir: tmp });
+    assert.strictEqual(r.ok, false);
+    assert.ok(r.error.includes('过大'), '应提示文件过大');
+  });
+
+  await asyncTest('知识库导入 docx 使用 mammoth 提取文本', async () => {
+    const { importKnowledgeFile } = require('../src/main/document-import');
+    const docx = require('docx');
+    const doc = new docx.Document({
+      sections: [{ children: [new docx.Paragraph({ children: [new docx.TextRun({ text: '知识库内容测试' })] })] }]
+    });
+    const buf = await docx.Packer.toBuffer(doc);
+    const p = pathLocal.join(tmp, 'doc.docx');
+    fsLocal.writeFileSync(p, buf);
+    const r = await importKnowledgeFile(p, { targetDir: tmp });
+    assert.strictEqual(r.ok, true);
+    assert.ok(r.content.includes('知识库内容测试'), '应提取到文档文字');
+  });
+
+  await asyncTest('知识库导入 xlsx 使用 exceljs 读取单元格', async () => {
+    const { importKnowledgeFile } = require('../src/main/document-import');
+    const ExcelJS = require('exceljs');
+    const wb = new ExcelJS.Workbook();
+    const ws = wb.addWorksheet('Sheet1');
+    ws.addRow(['名称', '值']);
+    ws.addRow(['苹果', 42]);
+    const p = pathLocal.join(tmp, 'sheet.xlsx');
+    await wb.xlsx.writeFile(p);
+    const r = await importKnowledgeFile(p, { targetDir: tmp });
+    assert.strictEqual(r.ok, true);
+    assert.ok(r.content.includes('名称'), '应包含表头');
+    assert.ok(r.content.includes('42'), '应包含数值');
+  });
+
+  await asyncTest('Word 模板填充（docxtemplater）保留格式', async () => {
+    const { fillWordTemplate, extractWordText } = require('../src/main/word-tools');
+    const docx = require('docx');
+    const doc = new docx.Document({
+      sections: [{ children: [new docx.Paragraph({ children: [new docx.TextRun({ text: '你好 {{NAME}}' })] })] }]
+    });
+    const buf = await docx.Packer.toBuffer(doc);
+    const tpl = pathLocal.join(tmp, 'tpl.docx');
+    fsLocal.writeFileSync(tpl, buf);
+    const out = pathLocal.join(tmp, 'out.docx');
+    const r = fillWordTemplate(tpl, out, { NAME: '张三' }, tmp);
+    assert.strictEqual(r.ok, true, r.error || '');
+    const txt = await extractWordText(out);
+    assert.ok(txt.content.includes('张三'), '占位符应被替换');
+    assert.ok(!txt.content.includes('{{'), '占位符不应残留');
+  });
+
+  await asyncTest('PPT Maker 生成含图表的演示文稿', async () => {
+    const { createPresentation } = require('../src/main/ppt-maker');
+    const r = await createPresentation({
+      title: '测试演示', filename: 't.pptx',
+      slides: [
+        { type: 'cover', title: '测试演示' },
+        { type: 'chart', title: '数据', chart: { type: 'column', labels: ['A', 'B'], series: [{ name: '系列', values: [1, 2] }] } }
+      ]
+    }, { workspacePath: tmp, appTheme: { mode: 'dark', accentColor: '#4f8cff' }, nativeDark: true });
+    assert.strictEqual(r.ok, true, r.error || '');
+    assert.ok(fsLocal.existsSync(r.path), '应生成 .pptx 文件');
+    assert.strictEqual(r.slideCount, 2);
+  });
+
+  await asyncTest('PPT Maker 拒绝工作区外的图片', async () => {
+    const { createPresentation } = require('../src/main/ppt-maker');
+    const outside = pathLocal.join(osLocal.tmpdir(), 'outside-image-test.png');
+    fsLocal.writeFileSync(outside, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+    const r = await createPresentation({
+      title: '图片测试',
+      slides: [{ type: 'content', title: '图文', bullets: ['点'], layout: 'split', imagePath: outside }]
+    }, { workspacePath: tmp, appTheme: { mode: 'light', accentColor: '#4f8cff' }, nativeDark: false });
+    assert.strictEqual(r.ok, false);
+    assert.ok(r.error.includes('工作区'), '应拒绝工作区外的图片');
+  });
+
+  try { fsLocal.rmSync(tmp, { recursive: true, force: true }); } catch { /* ignore */ }
+}
+
 // ---- Summary ----
 (async () => {
   // 等待异步 LLM 测试完成
   await runLiveLLMTests();
+  await runDocumentToolTests();
 
   console.log(`\n${'='.repeat(40)}`);
   console.log(`Results: ${passed} passed, ${failed} failed, ${passed + failed} total`);
