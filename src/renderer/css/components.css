@@ -308,6 +308,20 @@
   color: var(--accent);
 }
 
+/* 拖动排序 */
+.session-tab[draggable="true"] {
+  cursor: grab;
+}
+.session-tab.dragging {
+  opacity: 0.45;
+}
+.session-tab.drop-target-before {
+  box-shadow: -2px 0 0 var(--accent);
+}
+.session-tab.drop-target-after {
+  box-shadow: 2px 0 0 var(--accent);
+}
+
 .session-tab .session-tab-title {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -369,6 +383,57 @@
 .session-tab .session-attention-badge.attention-questionnaire { background: #0ea5e9; }
 .session-tab .session-attention-badge.attention-game { background: #f472b6; }
 .session-tab .session-attention-badge.attention-other { background: var(--text-tertiary); }
+
+/* 会话标签悬停预览弹层 */
+.session-tab-popover {
+  position: fixed;
+  z-index: 10002;
+  width: 560px;
+  max-width: calc(100vw - 16px);
+  display: flex;
+  gap: 0;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.28);
+  overflow: hidden;
+  pointer-events: none;
+}
+.session-tab-popover.hidden { display: none; }
+.stp-left {
+  width: 230px;
+  flex-shrink: 0;
+  padding: 14px 16px;
+  border-right: 1px solid var(--border);
+  background: var(--bg-secondary);
+}
+.stp-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-primary);
+  word-break: break-all;
+  line-height: 1.4;
+  margin-bottom: 10px;
+}
+.stp-rows { display: flex; flex-direction: column; gap: 8px; }
+.stp-row { display: flex; flex-direction: column; gap: 2px; }
+.stp-label { font-size: 10px; color: var(--text-tertiary); }
+.stp-value { font-size: 12px; color: var(--text-primary); word-break: break-all; }
+.stp-right { flex: 1; min-width: 0; padding: 14px 16px; }
+.stp-right-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+.stp-context { display: flex; flex-direction: column; gap: 5px; font-size: 11px; }
+.stp-ctx-row { display: flex; justify-content: space-between; gap: 8px; color: var(--text-secondary); }
+.stp-ctx-row b { color: var(--text-primary); font-variant-numeric: tabular-nums; }
+.stp-ctx-bar { height: 6px; border-radius: 3px; background: var(--bg-tertiary); overflow: hidden; margin: 3px 0; }
+.stp-ctx-bar-fill { height: 100%; background: var(--accent); border-radius: 3px; }
+.stp-ctx-bar-fill.warn { background: var(--warning); }
+.stp-ctx-bar-fill.danger { background: var(--danger); }
+.stp-ctx-total { display: flex; justify-content: space-between; font-weight: 700; color: var(--text-primary); }
 
 .session-tab .session-tab-close {
   width: 15px;

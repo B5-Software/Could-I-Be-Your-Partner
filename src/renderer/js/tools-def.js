@@ -437,7 +437,7 @@ const TOOL_DEFINITIONS = [
   { name: 'ffmpegWatermark', desc: '添加图片/文字水印', icon: 'fa-stamp', category: 'FFmpeg 媒体', sensitive: false },
   { name: 'ffmpegAddSubtitle', desc: '烧录字幕', icon: 'fa-closed-captioning', category: 'FFmpeg 媒体', sensitive: false },
   { name: 'ffmpegSlideshow', desc: '多张图片+音频生成视频', icon: 'fa-photo-film', category: 'FFmpeg 媒体', sensitive: false },
-  { name: 'ffmpegAudioMerge', desc: '拼接多个音频', icon: 'fa-list-music', category: 'FFmpeg 媒体', sensitive: false },
+  { name: 'ffmpegAudioMerge', desc: '拼接多个音频', icon: 'fa-headphones-simple', category: 'FFmpeg 媒体', sensitive: false },
   { name: 'ffmpegRunCommand', desc: '执行任意 FFmpeg 命令（自由参数）', icon: 'fa-terminal', category: 'FFmpeg 媒体', sensitive: true },
   // Spreadsheet
   { name: 'initSpreadsheet', desc: '打开数据表格侧栏', icon: 'fa-table-cells', category: '数据表格', sensitive: false },

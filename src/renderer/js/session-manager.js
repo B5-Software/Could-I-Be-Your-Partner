@@ -35,6 +35,8 @@
       this.maxConcurrent = Math.max(1, Number(options.maxConcurrent) || 10);
       this.sessions = new Map();
       this.activeByMode = new Map();
+      // 每个模式最后访问的会话（切换模式时优先恢复，而非总是回第一个标签）
+      this.lastActiveByMode = new Map();
       this.bus = options.bus || new AppEventBus();
       this._unsubscribers = new Map();
     }
@@ -59,6 +61,7 @@
         previousStatus: null,
         createdAt: meta.createdAt || Date.now(),
         updatedAt: Date.now(),
+        order: meta.order ?? Date.now(),
         startedAt: null,
         finishedAt: null,
         lastError: null,
@@ -124,6 +127,24 @@
       return mode ? all.filter(s => s.mode === mode) : all;
     }
 
+    // 按用户拖动后的顺序返回（未排序过的按创建时间）
+    ordered(mode) {
+      return this.list(mode).sort((a, b) => (a.order ?? a.createdAt) - (b.order ?? b.createdAt));
+    }
+
+    // 把一个会话移动到指定位置（0 基），其余会话保持相对顺序
+    reorder(mode, key, targetIndex) {
+      const list = this.ordered(mode);
+      const idx = list.findIndex(s => s.key === key);
+      if (idx < 0) return null;
+      const [moved] = list.splice(idx, 1);
+      const insertAt = Math.max(0, Math.min(Number(targetIndex) || 0, list.length));
+      list.splice(insertAt, 0, moved);
+      list.forEach((s, i) => { s.order = i; });
+      this.bus.emit('session-reorder', { mode, session: moved });
+      return moved;
+    }
+
     countRunning() {
       let count = 0;
       for (const s of this.sessions.values()) {
@@ -146,8 +167,13 @@
       }
       session.active = true;
       this.activeByMode.set(mode, key);
+      this.lastActiveByMode.set(mode, key);
       this.bus.emit('session-activated', { session, previous });
       return session;
+    }
+
+    getLastActive(mode) {
+      return this.lastActiveByMode.get(mode) || null;
     }
 
     deactivate(session) {
@@ -307,6 +333,9 @@
       this._unsubscribers.delete(session.key);
       if (this.getActive(session.mode)?.key === session.key) {
         this.activeByMode.delete(session.mode);
+      }
+      if (this.lastActiveByMode.get(session.mode) === session.key) {
+        this.lastActiveByMode.delete(session.mode);
       }
       this.sessions.delete(session.key);
       this.bus.emit('session-closed', { session });

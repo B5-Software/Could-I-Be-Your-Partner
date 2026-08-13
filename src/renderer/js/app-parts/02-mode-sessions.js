@@ -38,7 +38,7 @@
         document.querySelector('.nav-item[data-page="chat"]')?.click();
         if (typeof renderSessionTabs === 'function') renderSessionTabs('chat');
         if (sessionManager) {
-          const target = sessionManager.getActive('chat') || sessionManager.list('chat')[0];
+          const target = resolveModeTarget('chat');
           if (target) activateSession('chat', target.key);
         }
       } else if (mode === 'code') {
@@ -53,7 +53,7 @@
         document.querySelector('.nav-item[data-page="code"]')?.click();
         if (typeof renderSessionTabs === 'function') renderSessionTabs('code');
         if (sessionManager) {
-          const target = sessionManager.getActive('code') || sessionManager.list('code')[0];
+          const target = resolveModeTarget('code');
           if (target) activateSession('code', target.key);
         }
       } else if (mode === 'babe') {
@@ -70,7 +70,7 @@
         initBabeAgent();
         if (typeof renderSessionTabs === 'function') renderSessionTabs('babe');
         if (sessionManager) {
-          const target = sessionManager.getActive('babe') || sessionManager.list('babe')[0];
+          const target = resolveModeTarget('babe');
           if (target) activateSession('babe', target.key);
         }
       }
@@ -454,7 +454,7 @@
     if (!sessionManager) return;
     const tabsEl = document.getElementById(`${mode}-session-tabs`);
     if (!tabsEl) return;
-    const sessions = sessionManager.list(mode).sort((a, b) => a.createdAt - b.createdAt);
+    const sessions = sessionManager.ordered(mode);
     // 标签栏常驻：即使没有会话也只显示“新建会话”按钮；
     // 可见性统一由 showSessionTabsForMode 控制（宿主在 page section 之外）。
     tabsEl.innerHTML = '';
@@ -471,6 +471,7 @@
       const tab = document.createElement('div');
       tab.className = 'session-tab' + (active?.key === session.key ? ' active' : '');
       tab.dataset.sessionKey = session.key;
+      tab.draggable = true;
       tab.title = session.title || '未命名会话';
       tab.innerHTML = `
         <span class="session-status-dot ${dotClass}" ${dotTitle ? `title="${escapeHtml(dotTitle)}"` : ''}></span>
@@ -482,8 +483,27 @@
         if (e.target.closest('.session-tab-close')) return;
         activateSession(mode, session.key);
       });
+      tab.addEventListener('mouseenter', () => {
+        if (tab.classList.contains('dragging')) return;
+        showSessionTabPopover(session, tab);
+      });
+      tab.addEventListener('mouseleave', () => {
+        hideSessionTabPopover();
+      });
       tab.addEventListener('contextmenu', (e) => {
+        hideSessionTabPopover();
         showSessionTabContextMenu(e, mode, session);
+      });
+      // ---- 拖动排序 ----
+      tab.addEventListener('dragstart', (e) => {
+        hideSessionTabPopover();
+        e.dataTransfer.effectAllowed = 'move';
+        try { e.dataTransfer.setData('text/plain', session.key); } catch { /* ignore */ }
+        tab.classList.add('dragging');
+      });
+      tab.addEventListener('dragend', () => {
+        tab.classList.remove('dragging');
+        clearSessionDragIndicators(tabsEl);
       });
       const closeBtn = tab.querySelector('.session-tab-close');
       closeBtn.addEventListener('click', (e) => {
@@ -492,6 +512,36 @@
       });
       tabsEl.appendChild(tab);
     }
+    // ---- 栏级拖放目标 ----
+    tabsEl.addEventListener('dragover', (e) => {
+      if (!e.dataTransfer || !e.dataTransfer.types || !Array.from(e.dataTransfer.types).includes('text/plain')) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'move';
+      const targetTab = e.target && e.target.closest ? e.target.closest('.session-tab') : null;
+      clearSessionDragIndicators(tabsEl);
+      if (targetTab) {
+        const rect = targetTab.getBoundingClientRect();
+        targetTab.classList.add(e.clientX > rect.left + rect.width / 2 ? 'drop-target-after' : 'drop-target-before');
+      }
+    });
+    tabsEl.addEventListener('dragleave', (e) => {
+      if (!tabsEl.contains(e.relatedTarget)) clearSessionDragIndicators(tabsEl);
+    });
+    tabsEl.addEventListener('drop', (e) => {
+      e.preventDefault();
+      const key = e.dataTransfer ? (e.dataTransfer.getData('text/plain') || '') : '';
+      clearSessionDragIndicators(tabsEl);
+      if (!key || !sessionManager.get(key)) return;
+      const tabEls = Array.from(tabsEl.querySelectorAll('.session-tab'));
+      let index = tabEls.length;
+      const targetTab = e.target && e.target.closest ? e.target.closest('.session-tab') : null;
+      if (targetTab) {
+        const rect = targetTab.getBoundingClientRect();
+        index = tabEls.indexOf(targetTab) + (e.clientX > rect.left + rect.width / 2 ? 1 : 0);
+      }
+      try { sessionManager.reorder(mode, key, index); } catch { /* ignore */ }
+      renderAllSessionTabs();
+    });
     const add = document.createElement('button');
     add.className = 'session-tab-add';
     add.title = '新建会话';
@@ -504,6 +554,143 @@
     renderSessionTabs('chat');
     renderSessionTabs('code');
     renderSessionTabs('babe');
+  }
+
+  function clearSessionDragIndicators(tabsEl) {
+    if (!tabsEl) return;
+    tabsEl.querySelectorAll('.drop-target-before, .drop-target-after, .dragging').forEach(el => {
+      el.classList.remove('drop-target-before', 'drop-target-after');
+    });
+  }
+
+  // ---- 会话标签悬停预览 ----
+  let _stpSessionKey = null;
+  let _stpTimer = null;
+
+  function fmtDuration(ms) {
+    if (!Number.isFinite(ms) || ms < 0) return '—';
+    const sec = Math.floor(ms / 1000);
+    const hh = String(Math.floor(sec / 3600)).padStart(2, '0');
+    const mm = String(Math.floor((sec % 3600) / 60)).padStart(2, '0');
+    const ss = String(sec % 60).padStart(2, '0');
+    return `${hh}:${mm}:${ss}`;
+  }
+
+  function workspaceInfo(session) {
+    const ws = (session && session.agent && (session.agent.codeWorkspacePath || session.agent.workspacePath)) || '';
+    if (!ws) return { name: '未选择', full: '' };
+    const parts = String(ws).split(/[\\/]/).filter(Boolean);
+    return { name: parts[parts.length - 1] || ws, full: ws };
+  }
+
+  function computeContextStats(ag) {
+    const cm = ag && ag.contextManager;
+    if (!cm) return null;
+    const stats = (typeof cm.getStats === 'function') ? cm.getStats() : null;
+    const estimateMsg = (m) => (typeof cm.estimateMessageTokens === 'function' ? cm.estimateMessageTokens(m) : 0);
+    const estimateText = (t) => (typeof cm.estimateTokens === 'function' ? cm.estimateTokens(t) : 0);
+    const sys = cm.systemPrompt ? estimateMsg(cm.systemPrompt) : 0;
+    let tools = 0;
+    try {
+      const schemas = (typeof ag.getRuntimeToolSchemas === 'function') ? ag.getRuntimeToolSchemas() : [];
+      tools = Math.ceil(JSON.stringify(schemas).length / 4);
+    } catch { /* ignore */ }
+    let chat = 0;
+    let tool = 0;
+    (cm.messages || []).forEach((m) => {
+      if (!m) return;
+      if (m.role === 'tool') tool += estimateMsg(m);
+      else if (m.role === 'user' || m.role === 'assistant') chat += estimateMsg(m);
+    });
+    const summaries = (cm.summaries || []).reduce((acc, s) => acc + estimateText(String(s || '')) + 4, 0);
+    const used = sys + tools + chat + tool + summaries;
+    const max = (stats && stats.maxTokens) || (ag.settings && ag.settings.llm && ag.settings.llm.maxContextLength) || 0;
+    const reserve = (ag.settings && ag.settings.llm && ag.settings.llm.maxResponseTokens) || 8192;
+    const totalOcc = used + reserve;
+    const pct = max ? Math.min(100, (totalOcc / max) * 100) : 0;
+    return { sys, tools, chat, tool, summaries, used, max, reserve, totalOcc, pct, usage: { ...(ag.sessionUsage || {}) } };
+  }
+
+  function renderPopoverContext(stats) {
+    if (!stats) return '该会话上下文尚未初始化';
+    const fmt = (n) => (typeof fmtTokenCount === 'function' ? fmtTokenCount(n) : String(n));
+    const level = stats.pct >= 85 ? 'danger' : stats.pct >= 65 ? 'warn' : '';
+    const rows = [
+      ['系统指导 + 工具定义', fmt(stats.sys + stats.tools)],
+      ['对话消息', fmt(stats.chat)],
+      ['工具结果', fmt(stats.tool)],
+      ['摘要', fmt(stats.summaries)],
+      ['输入占用', fmt(stats.used)],
+      ['输出预留', fmt(stats.reserve)],
+      ['本会话累计 Token', fmt(stats.usage.total || 0)]
+    ];
+    return rows.map(([label, value]) => `<div class="stp-ctx-row"><span>${escapeHtml(label)}</span><b>${value}</b></div>`).join('')
+      + `<div class="stp-ctx-bar"><div class="stp-ctx-bar-fill ${level}" style="width:${Math.max(0, Math.min(100, stats.pct)).toFixed(1)}%"></div></div>`
+      + `<div class="stp-ctx-total"><span>${escapeHtml('合计 / 窗口')}</span><span>${fmt(stats.totalOcc)} / ${fmt(stats.max)} (${Math.round(stats.pct)}%)</span></div>`;
+  }
+
+  function showSessionTabPopover(session, tab) {
+    const pop = document.getElementById('session-tab-popover');
+    if (!pop || !session || !tab) return;
+    _stpSessionKey = session.key;
+    const stpTitle = document.getElementById('stp-title');
+    const stpStatus = document.getElementById('stp-status');
+    const stpElapsed = document.getElementById('stp-elapsed');
+    const stpWorkspace = document.getElementById('stp-workspace');
+    const stpContext = document.getElementById('stp-context');
+    if (!stpTitle || !stpStatus || !stpElapsed || !stpWorkspace || !stpContext) return;
+
+    const update = () => {
+      if (_stpSessionKey !== session.key) return;
+      const cur = sessionManager.get(session.key);
+      if (!cur) { hideSessionTabPopover(); return; }
+      stpTitle.textContent = cur.title || '未命名会话';
+      const attMeta = (typeof sessionAttentionMeta === 'function') ? sessionAttentionMeta(cur.attention) : null;
+      stpStatus.textContent = attMeta ? attMeta.label : (typeof sessionStatusLabel === 'function' ? sessionStatusLabel(cur.status) : String(cur.status || '空闲'));
+      const running = cur.status === 'running' || cur.status === 'queued' || cur.status === 'waiting_approval' || cur.status === 'waiting_tool_auth' || (cur.agent && cur.agent.running);
+      stpElapsed.textContent = cur.startedAt ? fmtDuration(Date.now() - cur.startedAt) : (running ? '进行中' : '未开始');
+      const ws = workspaceInfo(cur);
+      stpWorkspace.textContent = ws.name;
+      stpWorkspace.title = ws.full || '';
+      stpContext.innerHTML = renderPopoverContext(computeContextStats(cur.agent));
+    };
+    update();
+
+    const rect = tab.getBoundingClientRect();
+    pop.classList.remove('hidden');
+    const popW = pop.offsetWidth;
+    const popH = pop.offsetHeight;
+    let left = Math.max(8, Math.min(rect.left, window.innerWidth - popW - 8));
+    let top = rect.bottom + 6;
+    if (top + popH > window.innerHeight - 8) top = Math.max(8, rect.top - popH - 6);
+    pop.style.left = `${left}px`;
+    pop.style.top = `${top}px`;
+
+    if (_stpTimer) clearInterval(_stpTimer);
+    _stpTimer = setInterval(update, 1000);
+  }
+
+  function hideSessionTabPopover() {
+    _stpSessionKey = null;
+    if (_stpTimer) { clearInterval(_stpTimer); _stpTimer = null; }
+    const pop = document.getElementById('session-tab-popover');
+    if (pop) pop.classList.add('hidden');
+  }
+
+  // 切换模式时优先恢复该模式最后访问的会话；不存在/已关闭时回退到第一个标签
+  function resolveModeTarget(mode) {
+    try {
+      const active = sessionManager.getActive(mode);
+      if (active) return active;
+      const lastKey = sessionManager.getLastActive(mode);
+      if (lastKey) {
+        const last = sessionManager.get(lastKey);
+        if (last) return last;
+      }
+      return sessionManager.ordered(mode)[0] || null;
+    } catch {
+      return (sessionManager && sessionManager.ordered(mode)[0]) || null;
+    }
   }
 
   // 只显示当前模式对应的标签栏（宿主常驻，其余模式隐藏）
@@ -642,7 +829,7 @@
       sessionManager.close(session);
     }
     renderAllSessionTabs();
-    const remaining = sessionManager.list(mode).sort((a, b) => a.createdAt - b.createdAt);
+    const remaining = sessionManager.ordered(mode);
     if (!remaining.length) {
       // 关闭最后一个标签页 → 打开一个新会话标签页
       createNewSession(mode).catch(e => console.error('[sessions] 新建会话失败:', e));
@@ -663,7 +850,7 @@
     e.preventDefault();
     e.stopPropagation();
     document.querySelectorAll('.session-tab-menu').forEach(m => m.remove());
-    const sessions = sessionManager.list(mode).sort((a, b) => a.createdAt - b.createdAt);
+    const sessions = sessionManager.ordered(mode);
     const idx = sessions.findIndex(s => s.key === session.key);
     const workspacePath = session.agent?.codeWorkspacePath || session.agent?.workspacePath || '';
     const menu = document.createElement('div');

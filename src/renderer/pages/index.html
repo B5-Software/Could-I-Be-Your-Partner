@@ -2463,6 +2463,22 @@
   </div>
 
   <!-- Skill Modal -->
+  <!-- 会话标签悬停预览：左侧状态/用时/工作目录，右侧上下文占用实时副本 -->
+  <div class="session-tab-popover hidden" id="session-tab-popover">
+    <div class="stp-left">
+      <div class="stp-title" id="stp-title">会话</div>
+      <div class="stp-rows">
+        <div class="stp-row"><span class="stp-label">状态</span><span class="stp-value" id="stp-status">—</span></div>
+        <div class="stp-row"><span class="stp-label">任务用时</span><span class="stp-value" id="stp-elapsed">—</span></div>
+        <div class="stp-row"><span class="stp-label">工作目录</span><span class="stp-value" id="stp-workspace">—</span></div>
+      </div>
+    </div>
+    <div class="stp-right">
+      <div class="stp-right-title"><i class="fa-solid fa-bolt"></i> 上下文占用（实时）</div>
+      <div class="stp-context" id="stp-context"></div>
+    </div>
+  </div>
+
   <div class="modal-overlay hidden" id="skill-modal">
     <div class="modal">
       <div class="modal-header">
