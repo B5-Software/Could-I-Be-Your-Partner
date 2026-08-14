@@ -24,11 +24,11 @@
 
 ## Phase C：缓存纪律（会话冻结 + 追加式重优化）
 
-- [ ] C1 会话级工具 schema 快照（冻结）
-- [ ] C2 `__reoptimizeToolSelection` 改为追加式（不删不重排）
-- [ ] C3 `__disableAutoOptimize` 改为追加补全
-- [ ] C4 提示词工程：重优化成本说明 + 一次列全缺失工具
-- [ ] C5 缓存字节一致性断言
+- [x] C1 会话级工具 schema 快照（冻结）
+- [x] C2 `__reoptimizeToolSelection` 改为追加式（不删不重排）
+- [x] C3 `__disableAutoOptimize` 改为追加补全
+- [x] C4 提示词工程：重优化成本说明 + 一次列全缺失工具
+- [x] C5 缓存字节一致性断言
 
 ## Phase D：沙箱
 

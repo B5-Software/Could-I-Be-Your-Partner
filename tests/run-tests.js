@@ -1967,6 +1967,51 @@ function runToolsPageRefactorTests() {
   });
 }
 
+// ---- 前缀缓存纪律（会话冻结 + 追加式重优化）----
+function runPromptCacheTests() {
+  console.log('\nPrompt Cache Discipline:');
+  const fsLocal = require('fs');
+  const pathLocal = require('path');
+
+  test('追加式重优化：只追加不重排，前缀字节稳定（功能验证）', () => {
+    const vm = require('vm');
+    const { ContextManager } = require('../src/renderer/js/context-manager.js');
+    const toolsDefCode = fsLocal.readFileSync(pathLocal.join(__dirname, '../src/renderer/js/tools-def.js'), 'utf-8');
+    const agentCode = fsLocal.readFileSync(pathLocal.join(__dirname, '../src/renderer/js/agent.js'), 'utf-8');
+    const sandbox = { window: {}, ContextManager, console };
+    vm.createContext(sandbox);
+    vm.runInContext(toolsDefCode + '\n' + agentCode + '\n;this.__Agent = Agent;', sandbox, { filename: 'agent-bundle.js' });
+    const Agent = sandbox.__Agent;
+    const a = new Agent();
+    a.mode = 'chat';
+    a.settings = { tools: {}, autoOptimizeToolSelection: true, llm: {} };
+    // 首轮优化
+    a.optimizedToolNames = ['readFile', 'editFile'];
+    // 会话中重优化：选中集合包含旧工具 + 新工具
+    const merge = a._mergeOptimizedSelection(['readFile', 'webSearch', 'editFile', 'listDirectory']);
+    assert.strictEqual(merge.added, 2);
+    // vm 跨 realm 数组不能用 deepStrictEqual（原型不同），用 JSON 序列化比较
+    assert.strictEqual(JSON.stringify(a.optimizedToolNames), JSON.stringify(['readFile', 'editFile', 'webSearch', 'listDirectory']), '已有工具保持原序，新工具追加尾部');
+    const order1 = a._orderedActiveToolNames();
+    assert.strictEqual(JSON.stringify(order1), JSON.stringify(['readFile', 'editFile', 'webSearch', 'listDirectory']));
+    // 禁用自动优化：冻结序在前，其余启用工具追加在后
+    a.sessionAutoOptimizeDisabled = true;
+    const order2 = a._orderedActiveToolNames();
+    assert.strictEqual(JSON.stringify(order2.slice(0, 4)), JSON.stringify(['readFile', 'editFile', 'webSearch', 'listDirectory']), '禁用后前缀应保持冻结序');
+    assert.ok(order2.length > order1.length, '禁用后应追加其余启用工具');
+  });
+
+  test('工具 schema 按活动序重排 + 内部工具追加在末尾', () => {
+    const content = fsLocal.readFileSync(pathLocal.join(__dirname, '../src/renderer/js/agent.js'), 'utf-8');
+    assert.ok(content.includes('_orderedActiveToolNames'), '应有有序活动工具名');
+    assert.ok(content.includes('_mergeOptimizedSelection'), '应有追加式合并');
+    // 内部工具必须在所有业务工具之后 push，确保禁用时只截断尾部
+    const pushInternal = content.indexOf('tools.push(INTERNAL_REOPTIMIZE_TOOL_SCHEMA)');
+    const reorder = content.indexOf('tools = ordered');
+    assert.ok(reorder !== -1 && pushInternal !== -1 && reorder < pushInternal, '先重排业务工具，再追加内部工具');
+  });
+}
+
 // ---- Summary ----
 (async () => {
   // 等待异步 LLM 测试完成
@@ -1974,6 +2019,7 @@ function runToolsPageRefactorTests() {
   await runDocumentToolTests();
   runContextCompactionTests();
   runToolsPageRefactorTests();
+  runPromptCacheTests();
 
   console.log(`\n${'='.repeat(40)}`);
   console.log(`Results: ${passed} passed, ${failed} failed, ${passed + failed} total`);

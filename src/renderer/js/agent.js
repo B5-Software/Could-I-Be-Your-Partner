@@ -9,7 +9,7 @@ const INTERNAL_REOPTIMIZE_TOOL_SCHEMA = {
   type: 'function',
   function: {
     name: '__reoptimizeToolSelection',
-    description: '当当前工具集不足以完成任务时，查看全部已启用工具并重新优化本对话工具选择。',
+    description: '当当前工具集不足以完成任务时，查看全部已启用工具并补充本对话工具选择。为避免打断上下文缓存，请一次把本次任务所需的全部缺失工具都列出；新增工具会追加到工具列表末尾，已有工具保持不变。',
     parameters: {
       type: 'object',
       properties: {
@@ -24,7 +24,7 @@ const INTERNAL_DISABLE_AUTO_OPTIMIZE_SCHEMA = {
   type: 'function',
   function: {
     name: '__disableAutoOptimize',
-    description: '在本次会话中禁用自动工具选择优化，让所有已启用工具都可用。适用于需要频繁使用多种工具的复杂任务。',
+    description: '在本次会话中禁用自动工具选择优化，让所有已启用工具都可用（现有工具保持原序，其余工具追加到末尾，避免打断前缀缓存）。适用于需要频繁使用多种工具的复杂任务。',
     parameters: {
       type: 'object',
       properties: {},
@@ -353,7 +353,8 @@ class Agent {
     const optimizationGuidance = this.settings?.autoOptimizeToolSelection && !this.sessionAutoOptimizeDisabled
       ? `\n\n【工具优化模式（必须遵守）】：
 - 当前处于“工具精简”模式，你只会看到本轮优化后的工具。
-- 如果你认为当前工具不足以完成任务，必须立即调用内部工具 __reoptimizeToolSelection 重新优化。
+- 重优化工具选择会打断上下文前缀缓存、增加本轮输入费用，因此请只在“工具确实不足”时触发，且务必一次把本次任务所需的全部缺失工具都列全，不要反复触发。
+- 如果你认为当前工具不足以完成任务，调用内部工具 __reoptimizeToolSelection 补充工具（新增工具会追加到工具列表末尾，已加载工具保持不变）。
 - 如果你需要频繁使用多种工具（复杂任务），可调用 __disableAutoOptimize 在本会话中禁用自动优化，让所有已启用工具都可用。
 - 触发时机：出现“工具不可用/能力不足/需要新类别能力/多次尝试失败”任一情况就触发，不要硬撑。`
       : (this.sessionAutoOptimizeDisabled ? '\n\n【工具优化已禁用】本会话中自动工具选择优化已被禁用，所有已启用工具均可用。' : '');
@@ -697,25 +698,54 @@ ${affectionDesc}
   }
 
   getActiveToolNames() {
-    const enabledNames = this.getEnabledToolDefinitions().map(t => t.name);
-    if (!this.hasUsableOptimizedSelection()) {
-      return enabledNames;
+    return this._orderedActiveToolNames();
+  }
+
+  /**
+   * 有序的活动工具名列表（缓存纪律的核心）。
+   *
+   * 顺序规则：
+   * - 无优化 / Code 模式 → 全部启用工具（TOOL_DEFINITIONS 规范序）。
+   * - 优化中 → 冻结选择序（LLM 首轮选择序）。
+   * - 重优化 → 只追加新工具到尾部，已加载工具保持原序（前缀字节稳定）。
+   * - 禁用优化 → 冻结序 + 其余启用工具追加到尾部（同样只追加）。
+   */
+  _orderedActiveToolNames() {
+    const enabled = this.getEnabledToolDefinitions().map(t => t.name);
+    if (this.mode === 'code') return enabled;
+    if (!this.settings?.autoOptimizeToolSelection) return enabled;
+    const frozen = Array.isArray(this.optimizedToolNames)
+      ? this.optimizedToolNames.filter(n => enabled.includes(n))
+      : [];
+    if (this.sessionAutoOptimizeDisabled) {
+      // 追加式补全：冻结序在前，其余启用工具按规范序追加在后
+      const have = new Set(frozen);
+      return [...frozen, ...enabled.filter(n => !have.has(n))];
     }
-    const selectedSet = new Set(this.optimizedToolNames);
-    return enabledNames.filter(name => selectedSet.has(name));
+    if (!this.hasUsableOptimizedSelection()) return enabled;
+    return frozen;
   }
 
   getRuntimeToolSchemas() {
-    const activeNames = new Set(this.getActiveToolNames());
+    const activeNames = this._orderedActiveToolNames();
+    const activeSet = new Set(activeNames);
     const enabledToolsMap = {};
     getAllToolDefinitions(this.mode || 'chat').forEach(tool => {
-      enabledToolsMap[tool.name] = activeNames.has(tool.name);
+      enabledToolsMap[tool.name] = activeSet.has(tool.name);
     });
     let tools = getToolSchemas(enabledToolsMap, this.mode || 'chat');
     // 未配置生图模型时隐藏 generateImage 工具
     if (typeof filterToolsByConfig === 'function') {
       tools = filterToolsByConfig(tools, this.settings);
     }
+    // 按活动序重排：保证追加式重优化只影响 tools 数组尾部，前缀字节稳定
+    const byName = new Map(tools.map(t => [t.function?.name, t]));
+    const ordered = [];
+    for (const name of activeNames) {
+      const schema = byName.get(name);
+      if (schema) ordered.push(schema);
+    }
+    tools = ordered;
     if (this.settings?.autoOptimizeToolSelection && !this.sessionAutoOptimizeDisabled && this.mode !== 'code') {
       tools.push(INTERNAL_REOPTIMIZE_TOOL_SCHEMA);
       tools.push(INTERNAL_DISABLE_AUTO_OPTIMIZE_SCHEMA);
@@ -925,6 +955,29 @@ ${affectionDesc}
     return merged.slice(0, dynamicCap);
   }
 
+  /**
+   * 合并优化选择（追加式，缓存纪律）：
+   * - 首次优化：整体写入。
+   * - 会话中重优化：只把新选中的工具追加到冻结选择序的末尾，不删、不重排。
+   * @returns {{merged: boolean, added: number}}
+   */
+  _mergeOptimizedSelection(selectedNames) {
+    const next = (Array.isArray(selectedNames) ? selectedNames : []).filter(n => !!n);
+    if (Array.isArray(this.optimizedToolNames) && this.optimizedToolNames.length > 0) {
+      const have = new Set(this.optimizedToolNames);
+      const added = [];
+      for (const n of next) {
+        if (!have.has(n) && !added.includes(n)) added.push(n);
+      }
+      if (added.length > 0) {
+        this.optimizedToolNames = [...this.optimizedToolNames, ...added];
+      }
+      return { merged: true, added: added.length };
+    }
+    this.optimizedToolNames = next.slice();
+    return { merged: false, added: next.length };
+  }
+
   async optimizeToolsForConversation(firstUserMessage, reason = '') {
     // Code 模式不参与自动优化，始终使用全部启用工具
     if (this.mode === 'code') return { ok: true, selected: [], skipped: 'code_mode' };
@@ -1087,7 +1140,7 @@ ${affectionDesc}
       const allEnabledNames = enabledDefs.map(t => t.name);
       let finalSelection = compacted.length > 0 ? compacted : fallback;
       if (finalSelection.length === 0) finalSelection = allEnabledNames.slice(0, Math.min(12, allEnabledNames.length));
-      this.optimizedToolNames = finalSelection;
+      this._mergeOptimizedSelection(finalSelection);
       this.optimizedToolReason = typeof parsed?.reason === 'string' ? parsed.reason : (reason || '首条消息优化');
       this.contextManager.setSystemPrompt(this.getSystemPrompt());
       return { ok: true, selected: this.optimizedToolNames, reason: this.optimizedToolReason };
@@ -1095,8 +1148,10 @@ ${affectionDesc}
       // 即使失败也要赋非空值，避免下次 sendMessage 重复触发补偿优化
       let safeFallback = fallback.length > 0 ? fallback : enabledDefs.slice(0, 12).map(t => t.name);
       if (safeFallback.length === 0) safeFallback = enabledDefs.map(t => t.name);
-      this.optimizedToolNames = safeFallback;
-      this.optimizedToolReason = '优化失败，回退到精简启发式工具集';
+      if (!Array.isArray(this.optimizedToolNames) || this.optimizedToolNames.length === 0) {
+        this.optimizedToolNames = safeFallback;
+        this.optimizedToolReason = '优化失败，回退到精简启发式工具集';
+      }
       this.contextManager.setSystemPrompt(this.getSystemPrompt());
       console.warn('[tool-opt] 优化失败，使用兜底:', e?.message, 'fallback size:', safeFallback.length);
       return { ok: false, error: e?.message || '优化失败', selected: safeFallback };
@@ -1855,11 +1910,18 @@ ${affectionDesc}
           if (toolName === '__reoptimizeToolSelection') {
             if (this.onToolCall) this.onToolCall(toolName, args, 'calling', undefined, tc.id);
             const reasonText = typeof args?.reason === 'string' ? args.reason : '';
+            const beforeCount = Array.isArray(this.optimizedToolNames) ? this.optimizedToolNames.length : 0;
             const optimizeRes = await this.optimizeToolsForConversation(this.getLatestUserMessageText(), reasonText || '运行中重优化');
+            const afterCount = Array.isArray(this.optimizedToolNames) ? this.optimizedToolNames.length : 0;
+            const appended = Math.max(0, afterCount - beforeCount);
             const resultStr = JSON.stringify({
               ok: optimizeRes.ok !== false,
               selected: this.optimizedToolNames || [],
               reason: this.optimizedToolReason || reasonText || '重优化完成',
+              appended,
+              message: appended > 0
+                ? `已追加 ${appended} 个工具（已有工具保持原序，前缀缓存仅尾部受影响）`
+                : '当前工具已足够，未追加新工具',
               allEnabled: this.getEnabledToolDefinitions().map(t => t.name)
             });
             this.contextManager.addToolResult(tc.id, toolName, resultStr);
@@ -1870,7 +1932,8 @@ ${affectionDesc}
           if (toolName === '__disableAutoOptimize') {
             if (this.onToolCall) this.onToolCall(toolName, args, 'calling', undefined, tc.id);
             this.sessionAutoOptimizeDisabled = true;
-            this.optimizedToolNames = null; // 清除优化结果，恢复全部工具
+            // 保留冻结选择序（不清空）：_orderedActiveToolNames 会以"冻结序 + 其余追加"补全，
+            // 保证已加载工具前缀字节不变，避免整体替换 tools 数组打断前缀缓存。
             this.contextManager.setSystemPrompt(this.getSystemPrompt());
             const resultStr = JSON.stringify({
               ok: true,
