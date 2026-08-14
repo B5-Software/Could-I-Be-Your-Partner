@@ -2341,6 +2341,50 @@ async function runDsPluginTests() {
   });
 }
 
+// ---- Environment Detection ----
+console.log('\nEnvironment Detection:');
+
+test('main.js 注册 env:detect 并检测 Python/Node/npm/Bun/Git', () => {
+  const mainContent = fs.readFileSync(require('path').join(__dirname, '../src/main/main.js'), 'utf-8');
+  assert.ok(mainContent.includes("ipcMain.handle('env:detect'"), '应注册 env:detect IPC');
+  assert.ok(mainContent.includes("['py', 'python', 'python3']"), 'Python 检测应覆盖 Windows py 启动器');
+  for (const name of ['node', 'npm', 'bun', 'git']) {
+    assert.ok(mainContent.includes(`${name}: detectEnvTool(`), `应检测 ${name}`);
+  }
+  assert.ok(mainContent.includes('normalizeEnvVersion'), '应有版本号归一化');
+});
+
+test('preload 暴露 detectEnvironment API', () => {
+  const preloadContent = fs.readFileSync(require('path').join(__dirname, '../src/preload/preload.js'), 'utf-8');
+  assert.ok(preloadContent.includes('detectEnvironment'), 'preload 应暴露 detectEnvironment');
+  assert.ok(preloadContent.includes("invoke('env:detect')"), '应调用 env:detect');
+});
+
+test('index.html 含环境检测设置页（tab + 面板 + 刷新按钮）', () => {
+  const htmlContent = fs.readFileSync(require('path').join(__dirname, '../src/renderer/pages/index.html'), 'utf-8');
+  assert.ok(htmlContent.includes('data-tab="environment"'), '应有环境检测 tab');
+  assert.ok(htmlContent.includes('id="env-detect-list"'), '应有检测结果列表容器');
+  assert.ok(htmlContent.includes('id="btn-env-refresh"'), '应有重新检测按钮');
+});
+
+test('app.js 环境检测交互（渲染 / 一键安装 / 新会话发送）', () => {
+  const appContent = fs.readFileSync(require('path').join(__dirname, '../src/renderer/js/app.js'), 'utf-8');
+  assert.ok(appContent.includes('askAgentToInstall'), '应有让 Agent 安装逻辑');
+  assert.ok(appContent.includes('askAgentInstallMissing'), '应有一键安装全部缺失项');
+  assert.ok(appContent.includes('openChatSessionAndSend'), '应创建新 Chat 会话并发送');
+  assert.ok(appContent.includes('env-install-btn'), '应有逐项安装按钮');
+  assert.ok(appContent.includes('detectEnvironment'), '应调用检测 API');
+});
+
+test('i18n 环境检测标签翻译（zh/en/de）', () => {
+  const i18nJs = fs.readFileSync(require('path').join(__dirname, '../src/renderer/js/i18n.js'), 'utf-8');
+  const enJs = fs.readFileSync(require('path').join(__dirname, '../src/renderer/js/i18n/en.js'), 'utf-8');
+  const deJs = fs.readFileSync(require('path').join(__dirname, '../src/renderer/js/i18n/de.js'), 'utf-8');
+  assert.ok(i18nJs.includes('data-tab="environment"]'), 'i18n.js 应映射 environment tab');
+  assert.ok(enJs.includes('environment:'), 'en.js 应有 environment 翻译');
+  assert.ok(deJs.includes('environment:'), 'de.js 应有 environment 翻译');
+});
+
 // ---- Summary ----
 (async () => {
   // 等待异步 LLM 测试完成

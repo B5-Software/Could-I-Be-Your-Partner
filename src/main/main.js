@@ -9,6 +9,7 @@ const { app, BrowserWindow, ipcMain, nativeTheme, dialog, clipboard, screen, she
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
+const { spawnSync } = require('child_process');
 const { EmailService } = require('./email-service');
 const { importSpreadsheetFile, exportSpreadsheetFile } = require('./spreadsheet-io');
 const { WebControlService } = require('./web-control-service');
@@ -1248,6 +1249,56 @@ ipcMain.handle('ds:listTools', () => ({
   ok: true,
   plugins: pluginManager.list().filter(p => p.enabled && p.toolCount > 0)
 }));
+
+// ---- 环境检测（Python / Node+npm / Bun / Git）----
+function normalizeEnvVersion(output) {
+  const text = String(output || '').trim();
+  const m = text.match(/(\d+\.\d+(?:\.\d+)?)/);
+  if (m) return m[1];
+  return text.split(/\r?\n/)[0].slice(0, 80);
+}
+
+function detectEnvTool(candidates) {
+  for (const cmd of candidates) {
+    let r;
+    try {
+      r = spawnSync(cmd, ['--version'], {
+        encoding: 'utf8',
+        timeout: 6000,
+        windowsHide: true,
+        stdio: ['ignore', 'pipe', 'pipe']
+      });
+    } catch { continue; }
+    if (r.error || r.status !== 0 || !r.stdout) continue;
+    let exePath = null;
+    try {
+      const loc = spawnSync(process.platform === 'win32' ? 'where' : 'which', [cmd], {
+        encoding: 'utf8',
+        timeout: 6000,
+        windowsHide: true,
+        stdio: ['ignore', 'pipe', 'pipe']
+      });
+      if (loc.status === 0 && loc.stdout) exePath = loc.stdout.trim().split(/\r?\n/)[0];
+    } catch { /* ignore */ }
+    return { found: true, command: cmd, version: normalizeEnvVersion(r.stdout), path: exePath };
+  }
+  return { found: false, command: candidates[0] || null, version: null, path: null };
+}
+
+ipcMain.handle('env:detect', () => {
+  try {
+    const results = {
+      python: detectEnvTool(process.platform === 'win32' ? ['py', 'python', 'python3'] : ['python3', 'python']),
+      node: detectEnvTool(['node']),
+      npm: detectEnvTool(['npm']),
+      bun: detectEnvTool(['bun']),
+      git: detectEnvTool(['git'])
+    };
+    return { ok: true, results, platform: process.platform };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
 
 // ---- IPC: Theme ----
 ipcMain.handle('theme:get', () => ({ shouldUseDarkColors: nativeTheme.shouldUseDarkColors, mode: settings.theme.mode }));

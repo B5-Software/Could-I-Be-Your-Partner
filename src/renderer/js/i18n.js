@@ -225,6 +225,7 @@ const I18N_SELECTOR_MAP = [
   { sel: '.settings-tab[data-tab="terminal"]', key: 'ui.settings.tabs.terminal' },
   { sel: '.settings-tab[data-tab="ime"]', key: 'ui.settings.tabs.ime' },
   { sel: '.settings-tab[data-tab="voice"]', key: 'ui.settings.tabs.voice' },
+  { sel: '.settings-tab[data-tab="environment"]', key: 'ui.settings.tabs.environment' },
 
   // ── Language settings panel ──
   { sel: '#setting-language option[value="zh-CN"]', key: 'ui.settings.zhCN' },

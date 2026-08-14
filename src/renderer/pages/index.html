@@ -773,6 +773,7 @@
             <button class="settings-tab" data-tab="context"><i class="fa-solid fa-compress"></i> 上下文</button>
             <button class="settings-tab" data-tab="sandbox"><i class="fa-solid fa-shield-halved"></i> 沙箱</button>
             <button class="settings-tab" data-tab="plugins"><i class="fa-solid fa-puzzle-piece"></i> 插件</button>
+            <button class="settings-tab" data-tab="environment"><i class="fa-solid fa-stethoscope"></i> 环境检测</button>
           </div>
           <div class="settings-panels">
             <div class="settings-panel active" data-tab="ai">
@@ -2471,6 +2472,23 @@
               <div class="settings-group">
                 <h3><i class="fa-solid fa-list"></i> 已安装插件</h3>
                 <div id="plugins-list"></div>
+              </div>
+            </div>
+            <div class="settings-panel" data-tab="environment">
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-stethoscope"></i> 开发环境检测</h3>
+                <div class="setting-item">
+                  <p class="setting-hint">检测本机是否已安装 Python、Node.js + npm、Bun、Git 及其版本。检测不到的组件，可以让 Agent 打开一个新 Chat 会话帮你安装。</p>
+                  <button class="btn-secondary btn-sm" id="btn-env-refresh" style="margin-top:8px"><i class="fa-solid fa-rotate"></i> 重新检测</button>
+                </div>
+                <div class="setting-item">
+                  <p id="env-detect-status" style="font-size:12px;color:var(--text-secondary)">点击“重新检测”开始检测</p>
+                </div>
+              </div>
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-list-check"></i> 检测结果</h3>
+                <div id="env-detect-list" style="display:flex;flex-direction:column;gap:10px"></div>
+                <div id="env-detect-actions" style="margin-top:12px"></div>
               </div>
             </div>
           </div>

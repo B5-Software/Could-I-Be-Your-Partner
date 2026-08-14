@@ -2517,6 +2517,144 @@
     updateAvatarPreviewFrame('babe');
   }
 
+  // ---- 环境检测面板（Python / Node+npm / Bun / Git）----
+  const ENV_META = {
+    python: { label: 'Python', icon: 'fa-brands fa-python', verify: 'python3 --version', hint: 'Python 3 解释器（含 pip）' },
+    node: { label: 'Node.js', icon: 'fa-brands fa-node-js', verify: 'node --version', hint: 'Node.js 运行时' },
+    npm: { label: 'npm', icon: 'fa-brands fa-npm', verify: 'npm --version', hint: 'Node 包管理器（通常随 Node 安装）' },
+    bun: { label: 'Bun', icon: 'fa-solid fa-bolt', verify: 'bun --version', hint: '高速 JavaScript 运行时与包管理器' },
+    git: { label: 'Git', icon: 'fa-brands fa-git-alt', verify: 'git --version', hint: '分布式版本控制' }
+  };
+  let envDetectCache = null;
+
+  function renderEnvironmentPanel(result) {
+    const list = document.getElementById('env-detect-list');
+    const actions = document.getElementById('env-detect-actions');
+    const status = document.getElementById('env-detect-status');
+    if (!list) return;
+    if (!result || !result.ok) {
+      if (status) status.textContent = '检测失败：' + ((result && result.error) || '未知错误');
+      list.innerHTML = '';
+      if (actions) actions.innerHTML = '';
+      return;
+    }
+    envDetectCache = result.results || {};
+    const platformLabel = ({ win32: 'Windows', darwin: 'macOS', linux: 'Linux' })[result.platform] || (result.platform || '');
+    if (status) status.textContent = `检测完成${platformLabel ? `（${platformLabel}）` : ''}`;
+    const missing = [];
+    list.innerHTML = Object.entries(ENV_META).map(([key, meta]) => {
+      const item = envDetectCache[key] || { found: false, version: null, path: null };
+      if (!item.found) missing.push(key);
+      const badge = item.found
+        ? `<span class="env-badge ok"><i class="fa-solid fa-circle-check"></i> ${escapeHtml(item.version || '已安装')}</span>`
+        : `<span class="env-badge missing"><i class="fa-solid fa-triangle-exclamation"></i> 未检测到</span>`;
+      const pathLine = (item.found && item.path) ? `<div class="env-path" title="${escapeHtml(item.path)}">${escapeHtml(item.path)}</div>` : '';
+      const installBtn = !item.found
+        ? `<button class="btn-primary btn-sm env-install-btn" data-env="${key}" ${isRemoteMode ? 'disabled title="Remote 模式下不可用"' : ''}>让 Agent 安装</button>`
+        : '';
+      return `
+        <div class="env-detect-row">
+          <div class="env-icon"><i class="${meta.icon}"></i></div>
+          <div class="env-main">
+            <div class="env-name">${meta.label}<span class="env-hint">${escapeHtml(meta.hint)}</span></div>
+            ${pathLine}
+          </div>
+          ${badge}
+          ${installBtn}
+        </div>`;
+    }).join('');
+    if (actions) {
+      actions.innerHTML = (missing.length && !isRemoteMode)
+        ? `<button class="btn-primary btn-sm" id="btn-env-install-all"><i class="fa-solid fa-wrench"></i> 一键让 Agent 安装全部缺失项（${missing.length}）</button>`
+        : '';
+      const allBtn = document.getElementById('btn-env-install-all');
+      if (allBtn) allBtn.addEventListener('click', () => askAgentInstallMissing(missing));
+    }
+    list.querySelectorAll('.env-install-btn').forEach(btn => {
+      btn.addEventListener('click', () => askAgentToInstall(btn.dataset.env));
+    });
+  }
+
+  function buildInstallPrompt(keys) {
+    const lines = keys.map(k => {
+      const meta = ENV_META[k];
+      const item = (envDetectCache && envDetectCache[k]) || {};
+      return `- ${meta.label}（${meta.hint}）：${item.found ? `当前版本 ${item.version}` : '未检测到，或不在 PATH 中'}`;
+    });
+    const names = keys.map(k => ENV_META[k].label).join('、');
+    return [
+      `请帮我在本机安装并验证开发环境组件：${names}。`,
+      '',
+      '当前检测结果：',
+      ...lines,
+      '',
+      '请按以下步骤处理：',
+      '1. 先判断操作系统和已装的包管理器（macOS 可用 Homebrew，Windows 可用 winget，Linux 用对应系统包管理器），选择对用户最稳妥的官方安装方式；',
+      `2. 逐个安装 ${names}，如需把程序加入 PATH 请明确处理；`,
+      `3. 安装完成后分别运行版本命令验证（${keys.map(k => ENV_META[k].verify).join('、')}），并把版本号汇报给我；`,
+      '4. 如果某个组件其实已安装但检测不到，优先排查 PATH 配置，而不是重复安装。'
+    ].join('\n');
+  }
+
+  async function openChatSessionAndSend(prompt) {
+    if (typeof createNewSession !== 'function') throw new Error('会话模块未就绪');
+    await createNewSession('chat');
+    // 等待会话激活完成（跨模式切换是异步的）
+    await new Promise(r => setTimeout(r, 80));
+    // 确保导航到聊天页（用户可能停留在设置页，而当前模式已是 chat）
+    document.querySelector('.nav-item[data-page="chat"]')?.click();
+    const sm = window.__sessionManager;
+    const session = sm ? sm.getActive('chat') : null;
+    const ag = (session && session.agent) || agent;
+    if (!ag) throw new Error('无法获取 Chat Agent');
+    if (typeof addMessageToChat === 'function') addMessageToChat('user', prompt);
+    if (typeof addThinkingIndicator === 'function') addThinkingIndicator();
+    try {
+      await ag.sendMessage(prompt, []);
+    } finally {
+      if (typeof removeThinkingIndicator === 'function') removeThinkingIndicator();
+    }
+  }
+
+  async function askAgentToInstall(envKey) {
+    if (!ENV_META[envKey]) return;
+    const btn = document.querySelector(`.env-install-btn[data-env="${envKey}"]`);
+    if (btn) { btn.disabled = true; btn.textContent = '正在打开会话…'; }
+    try {
+      await openChatSessionAndSend(buildInstallPrompt([envKey]));
+    } catch (e) {
+      console.error('让 Agent 安装失败:', e);
+      if (btn) { btn.disabled = false; btn.textContent = '让 Agent 安装'; }
+    }
+  }
+
+  async function askAgentInstallMissing(keys) {
+    if (!keys || !keys.length) return;
+    const btn = document.getElementById('btn-env-install-all');
+    if (btn) { btn.disabled = true; btn.textContent = '正在打开会话…'; }
+    try {
+      await openChatSessionAndSend(buildInstallPrompt(keys));
+    } catch (e) {
+      console.error('让 Agent 安装失败:', e);
+      if (btn) { btn.disabled = false; btn.textContent = `一键让 Agent 安装全部缺失项（${keys.length}）`; }
+    }
+  }
+
+  async function refreshEnvironmentPanel() {
+    const status = document.getElementById('env-detect-status');
+    if (status) status.textContent = '检测中…';
+    const list = document.getElementById('env-detect-list');
+    if (list) list.innerHTML = '<div class="empty-state"><i class="fa-solid fa-spinner fa-spin"></i><p>正在检测运行环境…</p></div>';
+    try {
+      const result = await window.api.detectEnvironment();
+      renderEnvironmentPanel(result);
+    } catch (e) {
+      renderEnvironmentPanel({ ok: false, error: e && e.message ? e.message : String(e) });
+    }
+  }
+
+  document.getElementById('btn-env-refresh')?.addEventListener('click', refreshEnvironmentPanel);
+
   document.querySelectorAll('.settings-tab').forEach(btn => {
     btn.addEventListener('click', () => {
       document.querySelectorAll('.settings-tab').forEach(b => b.classList.remove('active'));
@@ -2529,6 +2667,7 @@
         const activePeriod = document.querySelector('.usage-period-btn.active');
         loadUsageStats(activePeriod ? activePeriod.dataset.period : 'daily');
       }
+      if (btn.dataset.tab === 'environment') refreshEnvironmentPanel();
       // 推送设置选项卡和面板的 active 状态到 WebUI/Remote
       document.querySelectorAll('.settings-tab').forEach(b => {
         WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '.settings-tab[data-tab="' + b.dataset.tab + '"]', attr: 'class', value: b.className });

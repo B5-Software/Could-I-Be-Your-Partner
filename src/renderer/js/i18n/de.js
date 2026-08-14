@@ -112,7 +112,8 @@ ui: {
       terminal: 'Terminal',
       ime: 'Tastatur / IME',
       voice: 'Sprach-E/A',
-      language: 'Sprache'
+      language: 'Sprache',
+      environment: 'Umgebung'
     },
     name: 'Name',
     avatar: 'Avatar',

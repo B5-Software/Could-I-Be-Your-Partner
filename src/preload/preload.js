@@ -480,6 +480,7 @@ contextBridge.exposeInMainWorld('api', {
   dsSetPluginConfig: (id, patch) => ipcRenderer.invoke('plugins:setConfig', id, patch),
   dsListPluginTools: () => ipcRenderer.invoke('ds:listTools'),
   dsPluginToolCall: (pluginId, toolName, args, cwd, sandboxMode) => ipcRenderer.invoke('ds:toolCall', pluginId, toolName, args, { cwd, sandboxMode }),
+  detectEnvironment: () => ipcRenderer.invoke('env:detect'),
   onPluginsChanged: (cb) => {
     const listener = () => cb();
     ipcRenderer.on('plugins:changed', listener);

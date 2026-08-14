@@ -100,7 +100,8 @@ const EN_DICT = {
         terminal: 'Terminal',
         ime: 'Keyboard / IME',
         voice: 'Voice',
-        language: 'Language'
+        language: 'Language',
+        environment: 'Environment'
       },
       labels: {
         name: 'Name',
