@@ -652,7 +652,13 @@ class PluginManager {
           await this.refreshPlugin(rec.id);
           continue;
         }
-        const res = await this.host.loadPlugin(rec.id, rec.entry, { name: rec.name, config: rec.config || {} });
+        // 禁用插件的重审探测用短超时（交互式 TUI 类插件深探测会挂 30s）
+        const res = await this.host.loadPlugin(rec.id, rec.entry, {
+          name: rec.name,
+          config: rec.config || {},
+          probe: true,
+          applyTimeoutMs: 6000
+        });
         rec.compatIssues = res.issues || [];
         rec.tools = [];
         rec.toolCount = 0;

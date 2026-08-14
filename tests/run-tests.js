@@ -2825,6 +2825,8 @@ test('插件启动全量重审：清除旧版本遗留 compatIssues', () => {
   assert.ok(mainContent.includes('pluginManager.refreshAll()'), '启动时应全量重审插件兼容性');
   assert.ok(mainContent.includes('pluginManager.refreshAll().catch('), '启动重审应后台执行，不阻塞后续 IPC 注册');
   assert.ok(pmContent.includes('repairReactRuntime'), '应有 react 版本漂移自修复');
+  assert.ok(pmContent.includes('applyTimeoutMs: 6000'), '禁用插件探测应短超时（避免交互式插件深探测挂 30s）');
+  assert.ok(pmContent.includes('_serialize') || require('fs').readFileSync(require('path').join(__dirname, '../src/main/ds-compat/plugin-host.js'), 'utf-8').includes('_serialize'), '插件加载应串行化');
 });
 
 test('Agent 自动化工具集：定义/路由/指导按需获取（不注入系统提示）', () => {

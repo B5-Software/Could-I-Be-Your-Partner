@@ -86,6 +86,15 @@ class PluginHost {
     this.toolsService = null;
     this.initialized = false;
     this.issues = new Map(); // pluginId → [string]
+    this._opLock = new Map(); // pluginId → 串行操作链（探测/启用/卸载不并发）
+  }
+
+  /** 按插件串行化加载/卸载，避免“探测与启用并发”造成的服务残留竞态。 */
+  _serialize(pluginId, run) {
+    const prev = this._opLock.get(pluginId) || Promise.resolve();
+    const next = prev.then(run, run);
+    this._opLock.set(pluginId, next.then(() => {}, () => {}));
+    return next;
   }
 
   async init() {
@@ -353,7 +362,11 @@ class PluginHost {
    * 加载插件：import 入口 → 挂载到 Cordis → 捕获其注册的工具。
    * @returns {{tools: Array<{name, description, schema, compatTier}>, issues: string[]}}
    */
-  async loadPlugin(pluginId, entryPath, meta = {}) {
+  loadPlugin(pluginId, entryPath, meta = {}) {
+    return this._serialize(pluginId, () => this._loadPlugin(pluginId, entryPath, meta));
+  }
+
+  async _loadPlugin(pluginId, entryPath, meta = {}) {
     await this.init();
     if (this.fibers.has(pluginId)) {
       throw new Error(`plugin "${pluginId}" is already loaded`);
@@ -385,9 +398,10 @@ class PluginHost {
     try {
       // apply 挂起保护：交互式 TUI 类插件（如 dsh-cc-tui）可能永不返回，
       // 超时后强制卸载纤维，避免阻塞启动/启用流程
+      const applyTimeout = meta.applyTimeoutMs || this.options.applyTimeoutMs || 30000;
       fiber = await Promise.race([
         this.ctx.plugin(plugin, config),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('apply 挂起超时（可能为交互式 TUI 插件）')), this.options.applyTimeoutMs || 30000).unref())
+        new Promise((_, reject) => setTimeout(() => reject(new Error('apply 挂起超时（可能为交互式 TUI 插件）')), applyTimeout).unref())
       ]);
       this.fibers.set(pluginId, fiber);
     } catch (e) {
@@ -456,12 +470,17 @@ class PluginHost {
     return { tools, issues: this.issues.get(pluginId).slice() };
   }
 
-  async unloadPlugin(pluginId) {
-    const fiber = this.fibers.get(pluginId);
-    if (!fiber) return false;
-    await fiber.dispose();
-    this.fibers.delete(pluginId);
-    return true;
+  unloadPlugin(pluginId) {
+    return this._serialize(pluginId, async () => {
+      const fiber = this.fibers.get(pluginId);
+      if (!fiber) return false;
+      await Promise.race([
+        fiber.dispose(),
+        new Promise((r) => setTimeout(r, 1500).unref())
+      ]);
+      this.fibers.delete(pluginId);
+      return true;
+    });
   }
 
   async dispose() {
