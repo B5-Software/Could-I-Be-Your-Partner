@@ -2730,6 +2730,18 @@ test('Agent 自动化工具集：定义/路由/指导按需获取（不注入系
   assert.ok(!rule11.includes('cron（分') && !rule11.includes('str.len') && !rule11.includes('标准库'), '系统提示不应注入 DSL 语法细节');
 });
 
+test('automation/guide 模块真实加载执行（require + 各 topic 渲染）', () => {
+  const { getAutomationGuide } = require('../src/main/automation/guide.js');
+  for (const topic of ['all', 'trigger', 'dsl', 'examples', 'unknown']) {
+    const text = getAutomationGuide(topic);
+    assert.ok(typeof text === 'string' && text.length > 0, `topic=${topic} 应返回非空指导`);
+  }
+  assert.ok(getAutomationGuide('all').includes('标准库'), 'all 应含标准库');
+  assert.ok(getAutomationGuide('dsl').includes('fn name'), 'dsl 应含函数语法');
+  assert.ok(getAutomationGuide('trigger').includes('/trigger/{taskId}'), 'trigger 应含 HTTP 接口');
+  assert.ok(getAutomationGuide('examples').includes('CI 事件'), 'examples 应含示例');
+});
+
 test('技能编辑器修复：Monaco 颜色归一化 / macOS 红绿灯 / 布局溢出', () => {
   const skillJs = fs.readFileSync(require('path').join(__dirname, '../src/renderer/js/skill-editor.js'), 'utf-8');
   const skillCss = fs.readFileSync(require('path').join(__dirname, '../src/renderer/css/skill-editor.css'), 'utf-8');

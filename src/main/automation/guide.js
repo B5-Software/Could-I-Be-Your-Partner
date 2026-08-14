@@ -22,7 +22,7 @@ const GUIDE = {
 ## DSL 语法（图灵完备、沙箱 AST 解释器；最终 return 一个字符串作为提示词）
 - 变量与控制流：let、赋值、+=/-=、if/else、while、for、break/continue、return
 - 函数：fn name(a, b) { ... }（支持递归）
-- 数据：数字、字符串（"${expr}" 插值）、true/false/null、数组 [..]、对象 {k:v}
+- 数据：数字、字符串（"\${expr}" 插值）、true/false/null、数组 [..]、对象 {k:v}
 - 运算符：+ - * / %、== != < <= > >=、&& || ??、?:、!
 - 异步：let r = await fetch(url, {timeout}); // r = { status, ok, text, json() }
 - 全局入参：trigger = { kind, params, time, taskId }；args = 触发器参数
