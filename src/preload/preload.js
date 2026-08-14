@@ -107,7 +107,7 @@ contextBridge.exposeInMainWorld('api', {
   saveUploadedFile: (name, data) => ipcRenderer.invoke('fs:saveUploadedFile', name, data),
 
   // Terminal
-  makeTerminal: (cwd, sessionKey) => ipcRenderer.invoke('terminal:make', cwd, { sessionKey }),
+  makeTerminal: (cwd, sessionKey, sandboxMode) => ipcRenderer.invoke('terminal:make', cwd, { sessionKey, sandboxMode }),
   runTerminalCommand: (id, cmd) => ipcRenderer.invoke('terminal:run', id, cmd),
   awaitTerminalCommand: (id, cmd, timeoutMs) => ipcRenderer.invoke('terminal:await', id, cmd, timeoutMs),
   killTerminal: (id) => ipcRenderer.invoke('terminal:kill', id),
@@ -162,10 +162,12 @@ contextBridge.exposeInMainWorld('api', {
   calcFractionBaseConvert: (value, fromBase, toBase, precision) => ipcRenderer.invoke('calc:fractionBaseConvert', value, fromBase, toBase, precision),
 
   // Code Execution
-  runJS: (code, cwd) => ipcRenderer.invoke('code:runJS', code, cwd),
-  runNodeJS: (code, cwd) => ipcRenderer.invoke('code:runNodeJS', code, cwd),
-  runShell: (script, cwd) => ipcRenderer.invoke('code:runShell', script, cwd),
-  runPython: (code, cwd) => ipcRenderer.invoke('code:runPython', code, cwd),
+  runJS: (code, cwd, sandboxMode) => ipcRenderer.invoke('code:runJS', code, cwd, sandboxMode),
+  runNodeJS: (code, cwd, sandboxMode) => ipcRenderer.invoke('code:runNodeJS', code, cwd, sandboxMode),
+  runShell: (script, cwd, sandboxMode) => ipcRenderer.invoke('code:runShell', script, cwd, sandboxMode),
+  runPython: (code, cwd, sandboxMode) => ipcRenderer.invoke('code:runPython', code, cwd, sandboxMode),
+  sandboxGetStatus: () => ipcRenderer.invoke('sandbox:getStatus'),
+  sandboxProbe: () => ipcRenderer.invoke('sandbox:probe'),
 
   // Image Generation
   generateImage: (prompt, workspacePath) => ipcRenderer.invoke('image:generate', prompt, workspacePath),
@@ -270,7 +272,7 @@ contextBridge.exposeInMainWorld('api', {
   eslintLintFile: (filePath) => ipcRenderer.invoke('eslint:lintFile', filePath),
   eslintClearCache: (workspacePath) => ipcRenderer.invoke('eslint:clearCache', workspacePath),
   // ---- FFmpeg 媒体工具集 ----
-  ffmpegInvoke: (tool, params) => ipcRenderer.invoke('ffmpeg:invoke', tool, params),
+  ffmpegInvoke: (tool, params, workspacePath, sandboxMode) => ipcRenderer.invoke('ffmpeg:invoke', tool, params, workspacePath, sandboxMode),
   ffmpegAvailable: () => ipcRenderer.invoke('ffmpeg:available'),
   onStreamChunk: (cb) => onChannel('llm:stream-chunk', cb),
   onStreamEnd: (cb) => onChannel('llm:stream-end', cb),

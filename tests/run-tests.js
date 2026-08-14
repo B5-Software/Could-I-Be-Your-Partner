@@ -2012,6 +2012,80 @@ function runPromptCacheTests() {
   });
 }
 
+// ---- 沙箱运行器（Seatbelt profile / argv 包装 / fail-closed 语义）----
+function runSandboxTests() {
+  console.log('\nSandbox Runner:');
+  const sb = require('../src/main/sandbox-runner.js');
+  const pathLocal = require('path');
+
+  test('resolvePolicy 规范化 + 透传默认', () => {
+    const p = sb.resolvePolicy({ mode: 'workspace-write', workspaceRoot: './a/../b' });
+    assert.strictEqual(p.mode, 'workspace-write');
+    assert.ok(p.workspaceRoot.endsWith('b'));
+    const passthrough = sb.resolvePolicy({});
+    assert.strictEqual(passthrough.mode, 'danger-full-access');
+  });
+
+  test('Seatbelt profile：只读模式只允许设备写入', () => {
+    const profile = sb.buildSeatbeltProfile('read-only', '/tmp/ws');
+    assert.ok(profile.includes('(allow default)'));
+    assert.ok(profile.includes('(deny file-write*'));
+    assert.ok(profile.includes('(literal "/dev/null")'));
+    assert.ok(!profile.includes('/tmp/ws'), '只读模式不应放行工作区写入');
+  });
+
+  test('Seatbelt profile：工作区可写包含 workspaceRoot', () => {
+    const profile = sb.buildSeatbeltProfile('workspace-write', '/tmp/ws');
+    assert.ok(profile.includes('(subpath "/tmp/ws")'));
+  });
+
+  test('confine：danger-full-access 直接透传（不包装）', () => {
+    const r = sb.confine(['/bin/echo', 'hi'], { mode: 'danger-full-access', workspaceRoot: '/x' });
+    assert.strictEqual(r.confined, false);
+    assert.deepStrictEqual(r.argv, ['/bin/echo', 'hi']);
+    assert.strictEqual(r.enforcement, 'none');
+  });
+
+  test('bwrap argv 包装包含只读根绑定与工作区绑定', () => {
+    const argv = sb.buildBwrapArgv(['/bin/sh', '-c', 'ls'], { mode: 'workspace-write', workspaceRoot: '/home/u/ws' });
+    assert.ok(argv[0] === 'bwrap');
+    assert.ok(argv.includes('--ro-bind'));
+    assert.ok(argv.includes('/home/u/ws'));
+    const sep = argv.lastIndexOf('--');
+    assert.strictEqual(argv[sep + 1], '/bin/sh');
+  });
+
+  test('isSandboxDenial 识别拒绝签名', () => {
+    assert.strictEqual(sb.isSandboxDenial(true, 'bash: cannot create file: Operation not permitted'), true);
+    assert.strictEqual(sb.isSandboxDenial(true, 'all good'), false);
+    assert.strictEqual(sb.isSandboxDenial(false, 'Operation not permitted'), false);
+  });
+
+  test('Seatbelt 实测（后端可用时）：只读拒写 / 区内可写 / 区外拒写', () => {
+    const backend = sb.detectBackend();
+    if (!backend.available || backend.backend !== 'seatbelt') {
+      console.log('  SKIP: 当前平台无可用 Seatbelt 后端');
+      return;
+    }
+    const fsLocal = require('fs');
+    const osLocal = require('os');
+    const cp = require('child_process');
+    const dir = fsLocal.mkdtempSync(pathLocal.join(osLocal.tmpdir(), 'cibyp-sb-test-'));
+    try {
+      const ro = sb.confine(['/bin/sh', '-c', `echo x > ${pathLocal.join(dir, 'ro.txt')}`], { mode: 'read-only', workspaceRoot: dir });
+      const roRes = cp.spawnSync(ro.argv[0], ro.argv.slice(1), { encoding: 'utf8' });
+      assert.ok(!fsLocal.existsSync(pathLocal.join(dir, 'ro.txt')), '只读模式应拒绝写入');
+
+      const ws = sb.confine(['/bin/sh', '-c', `echo ok > ${pathLocal.join(dir, 'ws.txt')}`], { mode: 'workspace-write', workspaceRoot: dir });
+      const wsRes = cp.spawnSync(ws.argv[0], ws.argv.slice(1), { encoding: 'utf8' });
+      assert.strictEqual(wsRes.status, 0, '工作区内写入应成功: ' + (wsRes.stderr || ''));
+      assert.ok(fsLocal.existsSync(pathLocal.join(dir, 'ws.txt')), '工作区内文件应已写入');
+    } finally {
+      try { fsLocal.rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ }
+    }
+  });
+}
+
 // ---- Summary ----
 (async () => {
   // 等待异步 LLM 测试完成
@@ -2020,6 +2094,7 @@ function runPromptCacheTests() {
   runContextCompactionTests();
   runToolsPageRefactorTests();
   runPromptCacheTests();
+  runSandboxTests();
 
   console.log(`\n${'='.repeat(40)}`);
   console.log(`Results: ${passed} passed, ${failed} failed, ${passed + failed} total`);

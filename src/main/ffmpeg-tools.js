@@ -106,19 +106,48 @@ function getFfprobePath() {
   return _ffprobePath;
 }
 
-function runFfmpeg(args, { timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
+// 当前调用的沙箱策略（由 registerFfmpegIpc 在单次调用期间注入，供 runFfmpeg 缺省读取）
+let _currentSandboxOpts = null;
+
+function runFfmpeg(args, opts = {}) {
+  const merged = { ...(_currentSandboxOpts || {}), ...(opts || {}) };
+  const {
+    timeoutMs = DEFAULT_TIMEOUT_MS,
+    sandboxMode = 'danger-full-access',
+    workspacePath = null
+  } = merged;
   const bin = getFfmpegPath();
   if (!bin) return Promise.resolve({ ok: false, error: '未找到 ffmpeg 可执行文件（随应用分发缺失且系统未安装）' });
   return new Promise((resolve) => {
-    execFile(bin, args, {
+    let execBin = bin;
+    let execArgs = args;
+    let confined = null;
+    if (sandboxMode !== 'danger-full-access') {
+      try {
+        const sandboxRunner = require('./sandbox-runner');
+        const wrapped = sandboxRunner.confine([bin, ...args], { mode: sandboxMode, workspaceRoot: workspacePath });
+        execBin = wrapped.argv[0];
+        execArgs = wrapped.argv.slice(1);
+        confined = wrapped;
+      } catch (e) {
+        return resolve({ ok: false, error: e.message, code: e.code, sandboxUnavailable: true });
+      }
+    }
+    execFile(execBin, execArgs, {
       timeout: Math.min(Math.max(Number(timeoutMs) || DEFAULT_TIMEOUT_MS, 1000), MAX_TIMEOUT_MS),
       maxBuffer: 16 * 1024 * 1024,
       windowsHide: true
     }, (err, stdout, stderr) => {
       if (err) {
-        resolve({ ok: false, error: (stderr || err.message || 'ffmpeg 执行失败').toString().slice(-2000), code: err.code });
+        const sandboxRunner2 = require('./sandbox-runner');
+        resolve({
+          ok: false,
+          error: (stderr || err.message || 'ffmpeg 执行失败').toString().slice(-2000),
+          code: err.code,
+          sandboxDenied: sandboxRunner2.isSandboxDenial(confined?.confined, stderr)
+        });
       } else {
-        resolve({ ok: true, output: String(stdout || ''), stderr: String(stderr || '') });
+        resolve({ ok: true, output: String(stdout || ''), stderr: String(stderr || ''), sandboxed: !!confined?.confined });
       }
     });
   });
@@ -655,13 +684,16 @@ const TOOLS = {
 };
 
 function registerFfmpegIpc({ ipcMain }) {
-  ipcMain.handle('ffmpeg:invoke', async (_event, tool, params) => {
+  ipcMain.handle('ffmpeg:invoke', async (_event, tool, params, workspacePath, sandboxMode) => {
     const fn = TOOLS[tool];
     if (!fn) return { ok: false, error: `未知的 ffmpeg 工具：${tool}` };
+    _currentSandboxOpts = { sandboxMode: sandboxMode || 'danger-full-access', workspacePath: workspacePath || null };
     try {
       return await fn(params && typeof params === 'object' ? params : {});
     } catch (e) {
       return { ok: false, error: e && e.message ? e.message : String(e) };
+    } finally {
+      _currentSandboxOpts = null;
     }
   });
   ipcMain.handle('ffmpeg:available', async () => ({

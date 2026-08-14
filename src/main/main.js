@@ -23,6 +23,7 @@ const mathTools = require('./math-tools');
 const tarotTools = require('./tarot-tools');
 const { decodeXmlEntities, encodeXmlEntities } = require('./xml-utils');
 const { recognizeImageWithTesseract } = require('./ocr');
+const sandboxRunner = require('./sandbox-runner');
 const {
   requireAdmZip, readTextWithEncoding, normalizeEncodingName, detectEolFromBuffer,
   detectEncodingName, detectFileEncoding, inferEncodingForNewFile, inferEolForNewFile,
@@ -454,6 +455,15 @@ let settings = loadJSON(settingsPath, {
     retainRatio: 0.16,
     compactionRetries: 1,
     summarizeMaxTokens: 2048
+  },
+  // 沙箱（借鉴 DeepSeek Harness：read-only / workspace-write / danger-full-access）
+  // - defaultMode    : 全局默认；受限模式后端不可用时 fail-closed（拒绝执行，不静默放行）
+  // - modeOverrides  : 按 chat/code/babe 覆盖
+  // - requireApproval: 被拦截/后端不可用时，是否弹窗确认后以完全权限重试
+  sandbox: {
+    defaultMode: 'danger-full-access',
+    modeOverrides: { chat: null, code: null, babe: null },
+    requireApproval: true
   },
   sessions: {
     maxConcurrent: 10
@@ -1769,13 +1779,77 @@ ipcMain.handle('calc:fractionBaseConvert', async (_, value, fromBase, toBase, pr
   }
 });
 
+// ---- IPC: 沙箱状态/自检 ----
+ipcMain.handle('sandbox:getStatus', () => {
+  const backend = sandboxRunner.detectBackend();
+  return {
+    ok: true,
+    config: settings.sandbox || {},
+    backend: backend.backend,
+    backendAvailable: backend.available,
+    enforcement: backend.enforcement,
+    detail: backend.detail,
+    platform: process.platform
+  };
+});
+
+ipcMain.handle('sandbox:probe', () => {
+  const backend = sandboxRunner.detectBackend();
+  if (!backend.available) {
+    return { ok: false, error: backend.detail, backend: backend.backend, available: false };
+  }
+  try {
+    // 只读模式自检：/bin/echo 应能运行（读/执行不受限）
+    const probeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cibyp-sb-probe-'));
+    const tmpFile = path.join(probeDir, 'probe.txt');
+    const wrapped = sandboxRunner.confine(['/bin/sh', '-c', `echo ok > ${tmpFile}`], {
+      mode: 'read-only',
+      workspaceRoot: probeDir
+    });
+    const { spawnSync } = require('child_process');
+    const r = spawnSync(wrapped.argv[0], wrapped.argv.slice(1), { encoding: 'utf8', timeout: 10000 });
+    const denied = fs.existsSync(tmpFile) === false;
+    try { fs.rmSync(probeDir, { recursive: true, force: true }); } catch {}
+    return {
+      ok: true,
+      backend: backend.backend,
+      available: true,
+      enforcement: wrapped.enforcement,
+      readOnlyWriteDenied: denied,
+      exitCode: r.status
+    };
+  } catch (e) {
+    return { ok: false, error: e.message, backend: backend.backend, available: backend.available };
+  }
+});
+
+// ---- 沙箱辅助：把 spawn argv 包装进受限执行；受限模式后端不可用时 fail-closed ----
+function sandboxConfineFor(sandboxMode, workspacePath, argv) {
+  if (!sandboxMode || sandboxMode === 'danger-full-access') return { argv };
+  try {
+    return sandboxRunner.confine(argv, { mode: sandboxMode, workspaceRoot: workspacePath });
+  } catch (e) {
+    return { error: e };
+  }
+}
+
 // ---- IPC: Run JS Code (sandboxed) ----
-ipcMain.handle('code:runJS', (_, code, cwd) => {
+ipcMain.handle('code:runJS', (_, code, cwd, sandboxMode) => {
   return new Promise((resolve) => {
     const { fork } = require('child_process');
     const forkOpts = { silent: true, timeout: 30000 };
     if (cwd && typeof cwd === 'string' && fs.existsSync(cwd)) forkOpts.cwd = cwd;
-    const runner = fork(path.join(__dirname, '../tools/js-runner.js'), [], forkOpts);
+    const runnerPath = path.join(__dirname, '../tools/js-runner.js');
+    const wrapped = sandboxConfineFor(sandboxMode, cwd, [process.execPath, runnerPath]);
+    if (wrapped.error) {
+      return resolve({ ok: false, error: wrapped.error.message, code: wrapped.error.code, sandboxUnavailable: true });
+    }
+    if (wrapped.argv.length > 2) {
+      // 受限模式：execPath=包装器（sandbox-exec/bwrap），execArgv=包装参数，modulePath 由 fork 追加
+      forkOpts.execPath = wrapped.argv[0];
+      forkOpts.execArgv = wrapped.argv.slice(1, -1);
+    }
+    const runner = fork(runnerPath, [], forkOpts);
     let output = '';
     let error = '';
     runner.stdout.on('data', d => { output += d.toString(); });
@@ -1791,12 +1865,21 @@ ipcMain.handle('code:runJS', (_, code, cwd) => {
 });
 
 // ---- IPC: Run JS Code (Node.js enabled) ----
-ipcMain.handle('code:runNodeJS', (_, code, cwd) => {
+ipcMain.handle('code:runNodeJS', (_, code, cwd, sandboxMode) => {
   return new Promise((resolve) => {
     const { fork } = require('child_process');
     const forkOpts = { silent: true, timeout: 30000 };
     if (cwd && typeof cwd === 'string' && fs.existsSync(cwd)) forkOpts.cwd = cwd;
-    const runner = fork(path.join(__dirname, '../tools/js-runner-node.js'), [], forkOpts);
+    const runnerPath = path.join(__dirname, '../tools/js-runner-node.js');
+    const wrapped = sandboxConfineFor(sandboxMode, cwd, [process.execPath, runnerPath]);
+    if (wrapped.error) {
+      return resolve({ ok: false, error: wrapped.error.message, code: wrapped.error.code, sandboxUnavailable: true });
+    }
+    if (wrapped.argv.length > 2) {
+      forkOpts.execPath = wrapped.argv[0];
+      forkOpts.execArgv = wrapped.argv.slice(1, -1);
+    }
+    const runner = fork(runnerPath, [], forkOpts);
     let output = '';
     let error = '';
     runner.stdout.on('data', d => { output += d.toString(); });
@@ -1812,25 +1895,37 @@ ipcMain.handle('code:runNodeJS', (_, code, cwd) => {
 });
 
 // ---- IPC: Run Shell Script ----
-ipcMain.handle('code:runShell', (_, script, cwd) => {
+ipcMain.handle('code:runShell', (_, script, cwd, sandboxMode) => {
   return new Promise((resolve) => {
     const { execFile } = require('child_process');
     const tmpFile = path.join(os.tmpdir(), `script_${Date.now()}${process.platform === 'win32' ? '.ps1' : '.sh'}`);
     fs.writeFileSync(tmpFile, script, 'utf-8');
-    const shell = process.platform === 'win32' ? 'powershell.exe' : '/bin/bash';
-    const args = process.platform === 'win32' ? ['-File', tmpFile] : [tmpFile];
+    let shell = process.platform === 'win32' ? 'powershell.exe' : '/bin/bash';
+    let args = process.platform === 'win32' ? ['-File', tmpFile] : [tmpFile];
+    let confined = null;
+    const wrapped = sandboxConfineFor(sandboxMode, cwd, [shell, ...args]);
+    if (wrapped.error) {
+      try { fs.unlinkSync(tmpFile); } catch {}
+      return resolve({ ok: false, error: wrapped.error.message, code: wrapped.error.code, sandboxUnavailable: true });
+    }
+    shell = wrapped.argv[0];
+    args = wrapped.argv.slice(1);
+    confined = wrapped;
     const execOpts = { timeout: 120000, maxBuffer: 8 * 1024 * 1024 };
     if (cwd && typeof cwd === 'string' && fs.existsSync(cwd)) execOpts.cwd = cwd;
     execFile(shell, args, execOpts, (err, stdout, stderr) => {
       try { fs.unlinkSync(tmpFile); } catch {}
-      if (err) resolve({ ok: false, error: err.message, stderr });
-      else resolve({ ok: true, output: stdout, stderr });
+      if (err) {
+        resolve({ ok: false, error: err.message, stderr, sandboxDenied: sandboxRunner.isSandboxDenial(confined?.confined, stderr) });
+      } else {
+        resolve({ ok: true, output: stdout, stderr, sandboxed: !!confined?.confined });
+      }
     });
   });
 });
 
 // ---- IPC: Run Python Script ----
-ipcMain.handle('code:runPython', (_, script, cwd) => {
+ipcMain.handle('code:runPython', (_, script, cwd, sandboxMode) => {
   return new Promise((resolve) => {
     const { execFile } = require('child_process');
     const tmpFile = path.join(os.tmpdir(), `skill_py_${Date.now()}.py`);
@@ -1858,13 +1953,24 @@ ipcMain.handle('code:runPython', (_, script, cwd) => {
       const bin = candidates[idx++];
       const execOpts = { timeout: 120000, maxBuffer: 8 * 1024 * 1024, windowsHide: true };
       if (cwd && typeof cwd === 'string' && fs.existsSync(cwd)) execOpts.cwd = cwd;
-      execFile(bin, ['-u', tmpFile], execOpts, (err, stdout, stderr) => {
+      let execBin = bin;
+      let execArgs = ['-u', tmpFile];
+      let confined = null;
+      const wrapped = sandboxConfineFor(sandboxMode, cwd, [execBin, ...execArgs]);
+      if (wrapped.error) {
+        finish({ ok: false, error: wrapped.error.message, code: wrapped.error.code, sandboxUnavailable: true });
+        return;
+      }
+      execBin = wrapped.argv[0];
+      execArgs = wrapped.argv.slice(1);
+      confined = wrapped;
+      execFile(execBin, execArgs, execOpts, (err, stdout, stderr) => {
         if (err && idx < candidates.length && (err.code === 'ENOENT' || /not found|找不到|No such file/i.test(err.message))) {
           attempt();
           return;
         }
-        if (err) finish({ ok: false, error: err.message, stderr: stderr || '' });
-        else finish({ ok: true, output: stdout || '', stderr: stderr || '' });
+        if (err) finish({ ok: false, error: err.message, stderr: stderr || '', sandboxDenied: sandboxRunner.isSandboxDenial(confined?.confined, stderr) });
+        else finish({ ok: true, output: stdout || '', stderr: stderr || '', sandboxed: !!confined?.confined });
       });
     };
     attempt();

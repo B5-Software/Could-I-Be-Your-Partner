@@ -32,13 +32,13 @@
 
 ## Phase D：沙箱
 
-- [ ] D1 `sandbox-runner.js` 统一接口 `confine(argv, policy)`
-- [ ] D2 macOS Seatbelt profile 生成 + `sandbox-exec` 包装
-- [ ] D3 Linux bwrap/Landlock、Windows ACL 骨架 + fail-closed
-- [ ] D4 替换 main 进程 spawn 接入点（runShell/runPython/runNodeJS/终端/ffmpeg/aria2）
-- [ ] D5 升级审批流（拒绝签名识别 + 更高权限重试）
-- [ ] D6 设置「沙箱」页（默认模式/按模式覆盖/自检）
-- [ ] D7 沙箱单测（argv 包装、profile 生成、fail-closed）
+- [x] D1 `sandbox-runner.js` 统一接口 `confine(argv, policy)`
+- [x] D2 macOS Seatbelt profile 生成 + `sandbox-exec` 包装（实测三种模式）
+- [x] D3 Linux bwrap/Landlock、Windows ACL 骨架 + fail-closed
+- [x] D4 替换 main 进程 spawn 接入点（runShell/runPython/runNodeJS/终端/ffmpeg）
+- [x] D5 升级审批流（拒绝签名识别 + 更高权限重试）
+- [x] D6 设置「沙箱」页（默认模式/按模式覆盖/自检）
+- [x] D7 沙箱单测（argv 包装、profile 生成、fail-closed、实测）
 
 ## Phase E：插件兼容层 + 插件管理页
 

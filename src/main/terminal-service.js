@@ -170,7 +170,23 @@ ipcMain.handle('terminal:make', (_, cwd, opts = {}) => {
       SHELL: process.env.SHELL || shellName,
       PATH: process.env.PATH || '/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin',
     };
-    const term = pty.spawn(shellName, shellArgs, {
+    // 沙箱：受限模式（read-only / workspace-write）用后端包装 pty shell；
+    // danger-full-access 或缺省时透传。后端不可用则 fail-closed 抛错。
+    let spawnShell = shellName;
+    let spawnArgs = shellArgs;
+    let confined = false;
+    const sandboxMode = (opts && opts.sandboxMode) || 'danger-full-access';
+    if (sandboxMode !== 'danger-full-access') {
+      const sandboxRunner = require('./sandbox-runner');
+      const wrapped = sandboxRunner.confine([shellName, ...shellArgs], {
+        mode: sandboxMode,
+        workspaceRoot: effectiveCwd
+      });
+      spawnShell = wrapped.argv[0];
+      spawnArgs = wrapped.argv.slice(1);
+      confined = wrapped.confined;
+    }
+    const term = pty.spawn(spawnShell, spawnArgs, {
       name: 'xterm',
       cols: 120,
       rows: 30,
@@ -187,6 +203,8 @@ ipcMain.handle('terminal:make', (_, cwd, opts = {}) => {
       lastCommand: '',
       shellName,
       ownerSessionKey: typeof opts.sessionKey === 'string' ? opts.sessionKey : null,
+      sandboxMode,
+      sandboxed: confined,
       // 兼容旧接口：Agent 调用 t.buffer() 取走 agentBuffer
       buffer: () => { const b = entry.agentBuffer; entry.agentBuffer = ''; return b; }
     };

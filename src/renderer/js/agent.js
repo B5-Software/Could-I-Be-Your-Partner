@@ -826,6 +826,45 @@ ${affectionDesc}
   }
 
   /**
+   * 当前会话的沙箱模式：按模式覆盖（settings.sandbox.modeOverrides.chat/code/babe）
+   * 优先，其次全局默认（settings.sandbox.defaultMode），缺省 danger-full-access。
+   */
+  _sandboxMode() {
+    const sb = this.settings?.sandbox || {};
+    const override = sb.modeOverrides?.[this.mode];
+    return override || sb.defaultMode || 'danger-full-access';
+  }
+
+  /**
+   * 沙箱升级审批流：受限执行被拦截（denial）或后端不可用时，
+   * 若设置允许审批，弹一次确认；同意则以 danger-full-access 重试一次。
+   */
+  async _execWithSandboxEscalation(toolName, call, opts = {}) {
+    let result = await call(this._sandboxMode());
+    const blocked = result && (result.sandboxDenied || result.sandboxUnavailable);
+    if (!blocked) return result;
+    if (this.settings?.sandbox?.requireApproval === false) {
+      return result;
+    }
+    const reason = result.sandboxUnavailable
+      ? '沙箱后端不可用'
+      : '命令被沙箱拦截（尝试写入受限区域）';
+    const approved = await this.requestApproval('sandboxEscalation', {
+      tool: toolName,
+      reason,
+      detail: result.error || reason
+    });
+    if (!approved) {
+      return {
+        ...result,
+        error: `${reason}，用户拒绝以完全权限执行。`,
+        sandboxDenied: true
+      };
+    }
+    return await call('danger-full-access');
+  }
+
+  /**
    * FFmpeg 工具参数的工作区路径解析：
    * - 单文件参数（input/video/audio/subtitle/image/fontFile）→ 相对工作区解析
    * - 多文件参数（inputs/images）→ 逐个解析（对应"文件多选"）
@@ -2469,13 +2508,20 @@ ${affectionDesc}
         case 'listDirectory': return await window.api.listDirectory(this._resolveWorkspacePath(args.path));
         case 'makeDirectory': return await window.api.makeDirectory(this._resolveWorkspacePath(args.path));
         case 'deleteDirectory': return await window.api.deleteDirectory(this._resolveWorkspacePath(args.path));
-        case 'runJavaScriptCode': return await window.api.runJS(args.code, this._scriptCwd());
-        case 'runNodeJavaScriptCode': return await window.api.runNodeJS(args.code, this._scriptCwd());
-        case 'runShellScriptCode': return await window.api.runShell(args.script, this._scriptCwd());
+        case 'runJavaScriptCode': return await window.api.runJS(args.code, this._scriptCwd(), this._sandboxMode());
+        case 'runNodeJavaScriptCode': {
+          return await this._execWithSandboxEscalation('runNodeJavaScriptCode', (mode) =>
+            window.api.runNodeJS(args.code, this._scriptCwd(), mode));
+        }
+        case 'runShellScriptCode': {
+          return await this._execWithSandboxEscalation('runShellScriptCode', (mode) =>
+            window.api.runShell(args.script, this._scriptCwd(), mode));
+        }
         case 'makeTerminal': {
           // 传入工作目录：Chat 模式用 workspacePath，Code 模式用 codeWorkspacePath
           const cwd = this.mode === 'code' ? (this.codeWorkspacePath || this.workspacePath) : this.workspacePath;
-          const result = await window.api.makeTerminal(cwd, this.sessionKey);
+          const result = await this._execWithSandboxEscalation('makeTerminal', (mode) =>
+            window.api.makeTerminal(cwd, this.sessionKey, mode), { terminalOnly: true });
           if (result.ok) this.terminals.set(result.terminalId, true);
           return result;
         }
@@ -2558,7 +2604,7 @@ ${affectionDesc}
             ffmpegSpeed: 'speed', ffmpegWatermark: 'watermark', ffmpegAddSubtitle: 'addSubtitle',
             ffmpegSlideshow: 'slideshow', ffmpegAudioMerge: 'audioMerge', ffmpegRunCommand: 'runCommand'
           };
-          return await window.api.ffmpegInvoke(OP_MAP[name], this._resolveFfmpegArgs(args));
+          return await window.api.ffmpegInvoke(OP_MAP[name], this._resolveFfmpegArgs(args), this._scriptCwd(), this._sandboxMode());
         }
         case 'manageContext': return this.contextManager.manage(args.action, args);
         case 'autoSummarizeContext': {
@@ -2640,17 +2686,19 @@ ${affectionDesc}
             if (typeof window.api.runPython !== 'function') {
               return { ok: false, error: '当前版本不支持 Python 脚本，请升级应用' };
             }
-            runRes = await window.api.runPython(code, this._scriptCwd());
+            runRes = await this._execWithSandboxEscalation('runPython', (mode) =>
+              window.api.runPython(code, this._scriptCwd(), mode));
           } else if (ext === 'sh' || ext === 'bash' || ext === 'zsh' || ext === 'ps1' || ext === 'bat' || ext === 'cmd' || declaredRuntime === 'shell') {
-            runRes = await window.api.runShell(code, this._scriptCwd());
+            runRes = await this._execWithSandboxEscalation('runShellScriptCode', (mode) =>
+              window.api.runShell(code, this._scriptCwd(), mode));
           } else if (ext === 'js' || ext === 'mjs' || ext === 'cjs' || declaredRuntime === 'javascript' || declaredRuntime === 'node') {
             const needsNode = declaredRuntime === 'node'
               || ext === 'mjs'
               || ext === 'cjs'
               || (!declaredRuntime && /\brequire\s*\(|\bprocess\.\b|\bfs\.\b|\bpath\.\b|\bBuffer\b|__dirname|__filename|\bimport\s+/.test(code));
             runRes = needsNode
-              ? await window.api.runNodeJS(code, this._scriptCwd())
-              : await window.api.runJS(code, this._scriptCwd());
+              ? await this._execWithSandboxEscalation('runNodeJavaScriptCode', (mode) => window.api.runNodeJS(code, this._scriptCwd(), mode))
+              : await window.api.runJS(code, this._scriptCwd(), this._sandboxMode());
           } else {
             return { ok: false, error: '仅支持运行 .js、.py、.sh、.ps1、.bat 等 Skill 脚本' };
           }

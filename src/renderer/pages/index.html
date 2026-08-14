@@ -771,6 +771,7 @@
             <button class="settings-tab" data-tab="ime"><i class="fa-solid fa-keyboard"></i> 输入法</button>
             <button class="settings-tab" data-tab="voice"><i class="fa-solid fa-microphone-lines"></i> 语音</button>
             <button class="settings-tab" data-tab="context"><i class="fa-solid fa-compress"></i> 上下文</button>
+            <button class="settings-tab" data-tab="sandbox"><i class="fa-solid fa-shield-halved"></i> 沙箱</button>
           </div>
           <div class="settings-panels">
             <div class="settings-panel active" data-tab="ai">
@@ -2425,6 +2426,17 @@
                 <div class="setting-item"><label class="setting-label">摘要最大输出</label><input type="number" id="setting-context-max-tokens" min="512" max="8192" step="256" value="2048" style="width:120px"><p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">单次摘要请求的最大输出 token（八段式结构化检查点）</p></div>
                 <div class="setting-item"><button class="btn-secondary" id="btn-context-compact-now"><i class="fa-solid fa-wand-magic-sparkles"></i> 立即压缩</button><span style="font-size:11px;color:var(--text-tertiary);margin-left:8px">对当前模式会话手动执行一次压缩</span></div>
                 <p id="context-compact-status" style="font-size:12px;color:var(--text-secondary)"></p>
+              </div>
+            </div>
+            <div class="settings-panel" data-tab="sandbox">
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-shield-halved"></i> 进程沙箱</h3>
+                <div class="setting-item"><label class="setting-label">默认模式</label><select id="setting-sandbox-default" style="width:220px"><option value="danger-full-access">完全访问（不限制）</option><option value="workspace-write">工作区可写</option><option value="read-only">只读</option></select><p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">约束 Agent 启动的进程（Shell/Python/Node/终端/FFmpeg）的文件写入范围；网络与进程不受限</p></div>
+                <div class="setting-item"><label class="setting-label">Chat 模式覆盖</label><select id="setting-sandbox-chat" style="width:220px"><option value="">跟随默认</option><option value="danger-full-access">完全访问</option><option value="workspace-write">工作区可写</option><option value="read-only">只读</option></select></div>
+                <div class="setting-item"><label class="setting-label">Code 模式覆盖</label><select id="setting-sandbox-code" style="width:220px"><option value="">跟随默认</option><option value="danger-full-access">完全访问</option><option value="workspace-write">工作区可写</option><option value="read-only">只读</option></select></div>
+                <div class="setting-item"><label class="setting-label">Babe 模式覆盖</label><select id="setting-sandbox-babe" style="width:220px"><option value="">跟随默认</option><option value="danger-full-access">完全访问</option><option value="workspace-write">工作区可写</option><option value="read-only">只读</option></select></div>
+                <div class="setting-item"><label class="setting-label">拦截时确认升级</label><div class="toggle-switch"><input type="checkbox" id="setting-sandbox-approval"><span class="toggle-slider"></span></div><p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">命令被沙箱拦截或后端不可用时，弹窗确认后以完全权限重试（关闭则直接报错）</p></div>
+                <div class="setting-item"><label class="setting-label">后端状态</label><p id="sandbox-backend-status" style="font-size:12px;color:var(--text-secondary)">检查中…</p><button class="btn-secondary btn-sm" id="btn-sandbox-probe" style="margin-top:6px"><i class="fa-solid fa-stethoscope"></i> 运行自检</button></div>
               </div>
             </div>
           </div>
