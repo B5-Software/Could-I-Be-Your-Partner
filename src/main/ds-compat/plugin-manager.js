@@ -130,9 +130,9 @@ class PluginManager {
 
   /**
    * 在 npm 安装产物中定位真正的插件包目录。
-   * npm 12 在 --no-save 下不会写 package.json，因此不能依赖
-   * tmpDir/package.json 的 dependencies；直接扫描 node_modules，
-   * 用包名匹配，名字不符时退化为“唯一候选”。
+   * 优先读取 npm --save 写入 tmpDir/package.json 的根依赖名（GitHub 仓库名
+   * 与包名不一致时也准确）；其次按 spec 名做大小写不敏感匹配；最后退化为
+   * “唯一候选”。
    */
   _findInstalledPkg(tmpDir, spec) {
     const nm = path.join(tmpDir, 'node_modules');
@@ -151,9 +151,25 @@ class PluginManager {
     };
     walk(nm);
     if (!candidates.length) return null;
+    const byName = new Map();
+    for (const c of candidates) {
+      try {
+        const p = JSON.parse(fs.readFileSync(path.join(c, 'package.json'), 'utf8'));
+        if (p && p.name) byName.set(p.name, c);
+      } catch { /* ignore */ }
+    }
+    try {
+      const rootPkg = JSON.parse(fs.readFileSync(path.join(tmpDir, 'package.json'), 'utf8'));
+      const deps = rootPkg.dependencies || {};
+      for (const key of Object.keys(deps)) {
+        if (byName.has(key)) return byName.get(key);
+      }
+    } catch { /* ignore */ }
     const wanted = this._parseSpecName(spec);
     const named = candidates.filter((c) => {
-      try { return JSON.parse(fs.readFileSync(path.join(c, 'package.json'), 'utf8')).name === wanted; } catch { return false; }
+      try {
+        return String(JSON.parse(fs.readFileSync(path.join(c, 'package.json'), 'utf8')).name || '').toLowerCase() === wanted.toLowerCase();
+      } catch { return false; }
     });
     if (named.length) return named[0];
     return candidates.length === 1 ? candidates[0] : null;
@@ -182,14 +198,29 @@ class PluginManager {
       // npm / github / tgz：先装到一个临时定位目录再解析
       const tmpDir = fs.mkdtempSync(path.join(this.pluginsDir, '.tmp-'));
       const spec = type === 'npm' ? ref : (type === 'github' ? `github:${ref.replace(/^github:/, '')}` : ref);
-      const r = spawnSync('npm', ['install', '--prefix', tmpDir, '--no-save', '--ignore-scripts', '--no-audit', '--no-fund', spec], {
-        encoding: 'utf8', timeout: 300000, shell: process.platform === 'win32'
+      // 清洗环境：宿主可能携带 npm_config_allow_scripts（例如从 opencode 启动），
+      // 在项目级（--prefix）安装中会触发 EALLOWSCRIPTS 硬错误。
+      const npmEnv = { ...process.env };
+      delete npmEnv.npm_config_allow_scripts;
+      delete npmEnv.npm_config_allow_scripts_pending;
+      delete npmEnv.npm_config_strict_allow_scripts;
+      // 使用默认 --save：npm 会把根依赖名写入 tmpDir/package.json，
+      // 供 _findInstalledPkg 精确定位（GitHub 仓库名 ≠ 包名时同样可靠）。
+      const baseArgs = ['install', '--prefix', tmpDir, '--ignore-scripts', '--no-audit', '--no-fund'];
+      const runNpm = (extra) => spawnSync('npm', [...baseArgs, ...extra, spec], {
+        encoding: 'utf8', timeout: 300000, shell: process.platform === 'win32', env: npmEnv
       });
+      let r = runNpm([]);
+      // npm ≥12 默认禁用 git 依赖（allow-git=none）。放开“根依赖”的 git 抓取
+      // 后重试；传递性 git 依赖仍被禁止，保持安全默认。
+      if (r.status !== 0 && /EALLOWGIT/.test(String(r.stderr || r.stdout || ''))) {
+        r = runNpm(['--allow-git=root']);
+      }
       if (r.status !== 0) {
         try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
         throw new Error(`npm 安装失败: ${(r.stderr || r.stdout || '').slice(-600)}`);
       }
-      // 找到实际包目录（不再依赖 --no-save 生成的 package.json）
+      // 找到实际包目录
       const found = this._findInstalledPkg(tmpDir, spec);
       if (!found || !fs.existsSync(path.join(found, 'package.json'))) {
         try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }

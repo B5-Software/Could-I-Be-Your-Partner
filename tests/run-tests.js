@@ -2191,9 +2191,27 @@ async function runDsPluginTests() {
       const found = pm._findInstalledPkg(tmp, 'dsh-tool-git');
       assert.strictEqual(found, target);
       assert.strictEqual(pm._findInstalledPkg(tmp, 'nonexistent-pkg'), null);
+
+      // GitHub 仓库名 ≠ 包名：根 package.json 的 dependencies 才是权威来源
+      const tmp2 = pathLocal.join(dataDir, 'tmp2');
+      const target2 = pathLocal.join(tmp2, 'node_modules', 'dsh-cc-tui');
+      fsLocal.mkdirSync(target2, { recursive: true });
+      fsLocal.writeFileSync(pathLocal.join(target2, 'package.json'), JSON.stringify({ name: 'dsh-cc-tui', version: '0.3.3' }));
+      fsLocal.mkdirSync(pathLocal.join(tmp2, 'node_modules', 'some-peer'), { recursive: true });
+      fsLocal.writeFileSync(pathLocal.join(pathLocal.join(tmp2, 'node_modules', 'some-peer'), 'package.json'), JSON.stringify({ name: 'some-peer' }));
+      fsLocal.writeFileSync(pathLocal.join(tmp2, 'package.json'), JSON.stringify({ dependencies: { 'dsh-cc-tui': 'github:ccch1mneyyy/dsh-TUI' } }));
+      assert.strictEqual(pm._findInstalledPkg(tmp2, 'github:ccch1mneyyy/dsh-TUI'), target2);
     } finally {
       try { fsLocal.rmSync(dataDir, { recursive: true, force: true }); } catch { /* ignore */ }
     }
+  });
+
+  test('pluginManager：npm 12 安全限制（EALLOWGIT 重试 + 清洗 allow-scripts 环境）', () => {
+    const content = fsLocal.readFileSync(pathLocal.join(__dirname, '../src/main/ds-compat/plugin-manager.js'), 'utf-8');
+    assert.ok(content.includes('delete npmEnv.npm_config_allow_scripts'), '应清洗 npm_config_allow_scripts 环境变量');
+    assert.ok(content.includes("'--allow-git=root'"), 'EALLOWGIT 后应以 --allow-git=root 重试');
+    assert.ok(content.includes('/EALLOWGIT/.test'), '应检测 EALLOWGIT 错误');
+    assert.ok(content.includes('--allow-git=root') && content.includes('ignore-scripts'), 'git 抓取放开但脚本仍应禁用');
   });
 
   await testAsync('fixture 插件：cordis ESM 命名导入 + class extends Service（单实例）', async () => {
