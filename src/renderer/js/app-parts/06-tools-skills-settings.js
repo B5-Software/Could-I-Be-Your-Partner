@@ -31,6 +31,120 @@
     }
   }
 
+  // ---- 工具组模态框（两级视图的第二级）----
+  let currentToolModalCategory = null;
+
+  function renderToolGroupModal(category) {
+    currentToolModalCategory = category;
+    const enabledSettings = agent.settings.tools || {};
+    const mode = codeEditorModeFilter || 'chat';
+    const tools = getAllToolDefinitions(mode).filter(t => (t.category || '其他') === category);
+    const meta = typeof getCategoryMeta === 'function' ? getCategoryMeta(category) : { icon: 'fa-layer-group', desc: '' };
+    const isMcp = String(category || '').startsWith('MCP:');
+    const titleText = isMcp
+      ? category.replace(/^MCP:/, '')
+      : (tools[0]?.pluginName || (typeof i18nGetCategory === 'function' ? i18nGetCategory(category, category) : category));
+    const titleEl = document.getElementById('tools-modal-title');
+    if (titleEl) {
+      titleEl.innerHTML = `<i class="fa-solid ${meta.icon || 'fa-layer-group'}"></i> <span>${escapeHtml(titleText)}</span>`;
+    }
+    const refreshBtn = document.getElementById('tools-modal-mcp-refresh');
+    if (refreshBtn) refreshBtn.style.display = isMcp ? '' : 'none';
+    const body = document.getElementById('tools-modal-body');
+    if (!body) return;
+    if (tools.length === 0) {
+      body.innerHTML = '<div class="empty-state"><i class="fa-solid fa-inbox"></i><p>该组在当前模式下无可用工具</p></div>';
+      return;
+    }
+    body.innerHTML = tools.map(tool => {
+      const enabled = enabledSettings[tool.name] !== false;
+      const desc = typeof i18nGetToolDesc === 'function' ? i18nGetToolDesc(tool.name, tool.desc) : tool.desc;
+      const dsBadge = tool.pluginId
+        ? `<span class="ds-compat-badge ${tool.compatTier || 'native'}">${tool.compatTier || 'native'}</span>`
+        : '';
+      return `
+        <div class="tools-modal-row ${enabled ? '' : 'disabled'}" data-tool="${escapeHtml(tool.name)}">
+          <div class="tmr-main">
+            <div class="tmr-name"><i class="fa-solid tmr-icon ${escapeHtml(tool.icon)}"></i>${escapeHtml(tool.name)}${dsBadge}</div>
+            <div class="tmr-desc">${escapeHtml(desc)}</div>
+          </div>
+          <div class="tmr-toggle">
+            <div class="toggle-switch">
+              <input type="checkbox" ${enabled ? 'checked' : ''} data-tool-name="${escapeHtml(tool.name)}">
+              <span class="toggle-slider"></span>
+            </div>
+          </div>
+        </div>`;
+    }).join('');
+    body.querySelectorAll('input[data-tool-name]').forEach(cb => {
+      cb.addEventListener('change', async () => {
+        await updateToolSetting(cb.dataset.toolName, cb.checked, cb);
+        renderToolGroupModal(category);
+        loadToolsPage();
+      });
+    });
+  }
+
+  function openToolGroupModal(category) {
+    if (!category) return;
+    renderToolGroupModal(category);
+    const modal = document.getElementById('tools-group-modal');
+    if (!modal) return;
+    modal.classList.add('open');
+    modal.setAttribute('aria-hidden', 'false');
+    try { window.api.webControlPushDomEvent?.({ type: 'dom_update', selector: '#tools-group-modal', attr: 'class', value: modal.className }); } catch (_) {}
+  }
+
+  function closeToolGroupModal() {
+    const modal = document.getElementById('tools-group-modal');
+    if (!modal) return;
+    modal.classList.remove('open');
+    modal.setAttribute('aria-hidden', 'true');
+  }
+
+  document.getElementById('tools-modal-close')?.addEventListener('click', closeToolGroupModal);
+  document.getElementById('tools-group-modal')?.addEventListener('click', (e) => {
+    if (e.target === e.currentTarget) closeToolGroupModal();
+  });
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && document.getElementById('tools-group-modal')?.classList.contains('open')) {
+      closeToolGroupModal();
+    }
+  });
+  document.getElementById('tools-modal-all-on')?.addEventListener('click', async () => {
+    if (currentToolModalCategory) {
+      await setToolCategoryEnabled(currentToolModalCategory, true);
+      renderToolGroupModal(currentToolModalCategory);
+      loadToolsPage();
+    }
+  });
+  document.getElementById('tools-modal-all-off')?.addEventListener('click', async () => {
+    if (currentToolModalCategory) {
+      await setToolCategoryEnabled(currentToolModalCategory, false);
+      renderToolGroupModal(currentToolModalCategory);
+      loadToolsPage();
+    }
+  });
+  document.getElementById('tools-modal-mcp-refresh')?.addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    btn.classList.add('spinning');
+    btn.disabled = true;
+    try {
+      const result = await window.api.mcpListTools();
+      if (result && result.tools) {
+        registerMcpTools(result.tools);
+        agent.contextManager.setSystemPrompt(agent.getSystemPrompt());
+        loadToolsPage();
+        if (currentToolModalCategory) renderToolGroupModal(currentToolModalCategory);
+      }
+    } catch (err) {
+      console.error('[MCP Refresh]', err);
+    } finally {
+      btn.classList.remove('spinning');
+      btn.disabled = false;
+    }
+  });
+
   function loadToolsPage() {
     const groupsEl = document.getElementById('tools-groups');
     const enabledSettings = agent.settings.tools || {};
@@ -92,101 +206,79 @@
       categoryMap.get(cat).push(tool);
     }
 
-    const categoryEntries = Array.from(categoryMap.entries());
-    groupsEl.innerHTML = categoryEntries.map(([category, tools]) => {
-      const enabledCount = tools.filter(t => enabledSettings[t.name] !== false).length;
-      const categoryChecked = enabledCount === tools.length;
-      const toolCards = tools.map(tool => {
-        const enabled = enabledSettings[tool.name] !== false;
-        const active = enabled && activeToolSet.has(tool.name);
-        const optimizeClass = agent.settings.autoOptimizeToolSelection
-          ? (hasOptimized ? (active ? 'optimized-active' : 'optimized-muted') : '')
-          : '';
-        const mcpBadge = tool.serverName
-          ? `<span class="tool-badge-mcp" title="${typeof t === 'function' ? t('ui.tools.mcp_from', '来自 MCP 服务器: ', {}) : '来自 MCP 服务器: '}${escapeHtml(tool.serverName)}"><i class="fa-solid fa-plug-circle-bolt"></i> ${typeof t === 'function' ? t('ui.tools.mcp_dynamic', '动态', {}) : '动态'} · ${escapeHtml(tool.serverName)}</span>`
-          : '';
-        const _desc = typeof i18nGetToolDesc === 'function' ? i18nGetToolDesc(tool.name, tool.desc) : tool.desc;
-        return `
-          <div class="tool-card ${enabled ? '' : 'disabled'} ${optimizeClass}" data-tool="${tool.name}">
-            <div class="tool-icon"><i class="fa-solid ${tool.icon}"></i></div>
-            <div class="tool-info">
-              <div class="tool-name">${tool.name}${mcpBadge}</div>
-              <div class="tool-desc">${_desc}</div>
-            </div>
-            <div class="tool-toggle">
-              <div class="toggle-switch">
-                <input type="checkbox" ${enabled ? 'checked' : ''} data-tool-name="${tool.name}">
-                <span class="toggle-slider"></span>
-              </div>
-            </div>
-          </div>`;
-      }).join('');
-      const isMcpCategory = category.startsWith('MCP:');
-      const mcpRefreshBtn = isMcpCategory
-        ? `<button class="mcp-refresh-btn" data-mcp-refresh="${escapeHtml(category)}" title="刷新MCP工具"><i class="fa-solid fa-arrows-rotate"></i></button>`
-        : '';
-      return `
-        <div class="tool-group ${isMcpCategory ? 'mcp-tool-group' : ''}" data-tool-category="${category}">
-          <div class="tool-group-header">
-            <div class="tool-group-meta">
-              <div class="tool-group-title">${isMcpCategory ? '<i class="fa-solid fa-plug-circle-bolt"></i> ' : ''}${typeof i18nGetCategory === 'function' ? i18nGetCategory(category, category) : category}</div>
-              <div class="tool-group-count"><span data-category-enabled>${enabledCount}</span> / ${tools.length} ${typeof t === 'function' ? t('ui.tools.enabled', '已启用', {}) : '已启用'}${mcpRefreshBtn}</div>
-            </div>
-            <label class="tool-group-toggle">
-              <span>${typeof t === 'function' ? t('ui.tools.group_toggle', '整组开关', {}) : '整组开关'}</span>
-              <div class="toggle-switch">
-                <input type="checkbox" ${categoryChecked ? 'checked' : ''} data-tool-category-toggle="${category}">
-                <span class="toggle-slider"></span>
-              </div>
-            </label>
-          </div>
-          <div class="tools-grid">${toolCards}</div>
-        </div>`;
-    }).join('');
+    const isDsCategory = (cat) => String(cat || '').startsWith('DS:');
+    const isMcpCategory = (cat) => String(cat || '').startsWith('MCP:');
+    const dsEntries = [];
+    const normalEntries = [];
+    for (const [category, tools] of categoryMap.entries()) {
+      (isDsCategory(category) ? dsEntries : normalEntries).push([category, tools]);
+    }
 
-    groupsEl.querySelectorAll('input[data-tool-name]').forEach(cb => {
-      cb.addEventListener('change', async () => {
-        const name = cb.dataset.toolName;
-        await updateToolSetting(name, cb.checked, cb);
+    const renderRow = ([category, tools]) => {
+      const enabledCount = tools.filter(t => enabledSettings[t.name] !== false).length;
+      const allOn = enabledCount === tools.length;
+      const noneOn = enabledCount === 0;
+      const meta = typeof getCategoryMeta === 'function' ? getCategoryMeta(category) : { icon: 'fa-layer-group', desc: '' };
+      const title = isMcpCategory(category)
+        ? category.replace(/^MCP:/, '')
+        : (tools[0]?.pluginName || (typeof i18nGetCategory === 'function' ? i18nGetCategory(category, category) : category));
+      const dsBadge = isDsCategory(category)
+        ? `<span class="ds-compat-badge ${tools[0]?.compatTier || 'native'}">${tools[0]?.compatTier || 'native'}</span>`
+        : '';
+      const stateLabel = allOn ? '开' : (noneOn ? '关' : '半开');
+      const indeterminate = (!allOn && !noneOn) ? ' data-indeterminate="1"' : '';
+      return `
+        <div class="tool-group-row ${isDsCategory(category) ? 'ds-plugin-row' : ''}" data-tool-category="${escapeHtml(category)}" role="button" tabindex="0">
+          <div class="tgr-name"><span class="tgr-icon"><i class="fa-solid ${meta.icon || 'fa-layer-group'}"></i></span>${escapeHtml(title)}${dsBadge}</div>
+          <div class="tgr-desc">${escapeHtml(meta.desc || '')}</div>
+          <div class="tgr-count"><strong>${enabledCount}</strong> / ${tools.length}</div>
+          <div class="tgr-toggle">
+            <span class="tgr-state-label">${stateLabel}</span>
+            <div class="toggle-switch">
+              <input type="checkbox" ${allOn ? 'checked' : ''}${indeterminate} data-tool-category-toggle="${escapeHtml(category)}">
+              <span class="toggle-slider"></span>
+            </div>
+          </div>
+        </div>`;
+    };
+
+    const sections = [];
+    if (normalEntries.length > 0) {
+      sections.push(`<div class="tools-group-section">${normalEntries.map(renderRow).join('')}</div>`);
+    }
+    if (dsEntries.length > 0) {
+      sections.push(`
+        <div class="tools-group-section ds-section">
+          <div class="ds-section-header"><i class="fa-solid fa-puzzle-piece"></i> DeepSeek 插件工具</div>
+          ${dsEntries.map(renderRow).join('')}
+        </div>`);
+    }
+    groupsEl.innerHTML = sections.join('');
+
+    // 三态：indeterminate 是 DOM 属性，无法用模板设置，需在插入后单独赋值
+    groupsEl.querySelectorAll('input[data-tool-category-toggle][data-indeterminate]').forEach(cb => {
+      cb.indeterminate = true;
+      cb.removeAttribute('data-indeterminate');
+    });
+
+    // 组行点击 → 打开模态框
+    groupsEl.querySelectorAll('.tool-group-row').forEach(row => {
+      const open = (e) => {
+        if (e.target.closest('input, .toggle-switch, .toggle-slider')) return;
+        openToolGroupModal(row.dataset.toolCategory);
+      };
+      row.addEventListener('click', open);
+      row.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(e); }
       });
     });
 
+    // 整组三态开关
     groupsEl.querySelectorAll('input[data-tool-category-toggle]').forEach(cb => {
       cb.addEventListener('change', async () => {
         const category = cb.dataset.toolCategoryToggle;
+        // 半开 → 点击时全部开启（组开关语义：非全开则全开）
         await setToolCategoryEnabled(category, cb.checked);
-      });
-    });
-
-    groupsEl.querySelectorAll('.tool-card').forEach(card => {
-      card.addEventListener('click', async (e) => {
-        if (e.target.closest('input')) return;
-        const cb = card.querySelector('input[data-tool-name]');
-        if (!cb) return;
-        cb.checked = !cb.checked;
-        await updateToolSetting(cb.dataset.toolName, cb.checked, cb);
-      });
-    });
-
-    // MCP refresh buttons
-    groupsEl.querySelectorAll('.mcp-refresh-btn').forEach(btn => {
-      btn.addEventListener('click', async (e) => {
-        e.stopPropagation();
-        btn.classList.add('spinning');
-        btn.disabled = true;
-        try {
-          const result = await window.api.mcpListTools();
-          if (result && result.tools) {
-            registerMcpTools(result.tools);
-            agent.contextManager.setSystemPrompt(agent.getSystemPrompt());
-            loadToolsPage();
-          }
-        } catch (err) {
-          console.error('[MCP Refresh]', err);
-        } finally {
-          btn.classList.remove('spinning');
-          btn.disabled = false;
-        }
       });
     });
 

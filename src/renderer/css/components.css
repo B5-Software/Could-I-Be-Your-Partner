@@ -1925,3 +1925,244 @@
 .terminal-tab {
   position: relative;
 }
+
+/* ---- 工具页两级视图：组表格 + 模态下钻 ---- */
+.tools-group-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.tool-group-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.2fr) minmax(220px, 2fr) 90px 130px;
+  gap: 12px;
+  align-items: center;
+  padding: 12px 14px;
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: border-color var(--transition), box-shadow var(--transition);
+}
+
+.tool-group-row:hover {
+  border-color: var(--accent);
+  box-shadow: var(--shadow-sm);
+}
+
+.tool-group-row + .tool-group-row {
+  margin-top: 8px;
+}
+
+.tool-group-row.ds-plugin-row {
+  border-left: 3px solid var(--accent);
+}
+
+.tgr-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-primary);
+  min-width: 0;
+}
+
+.tgr-name .tgr-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  background: var(--accent-bg);
+  color: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  flex-shrink: 0;
+}
+
+.tgr-desc {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  line-height: 1.45;
+  min-width: 0;
+}
+
+.tgr-count {
+  font-size: 12px;
+  color: var(--text-secondary);
+  text-align: center;
+  white-space: nowrap;
+}
+
+.tgr-count strong {
+  color: var(--text-primary);
+}
+
+.tgr-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.tgr-state-label {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  white-space: nowrap;
+}
+
+.ds-compat-badge {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.ds-compat-badge.native { color: #1a9e63; border-color: #1a9e6366; background: #1a9e6311; }
+.ds-compat-badge.translated { color: #b7791f; border-color: #b7791f66; background: #b7791f11; }
+.ds-compat-badge.declared { color: #c05621; border-color: #c0562166; background: #c0562111; }
+
+/* 组模态框 */
+.tools-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.18s ease;
+}
+
+.tools-modal-backdrop.open {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.tools-modal {
+  width: min(760px, calc(100vw - 48px));
+  max-height: min(720px, calc(100vh - 80px));
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg, 14px);
+  box-shadow: var(--shadow-lg, 0 20px 60px rgba(0,0,0,0.3));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.tools-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border);
+}
+
+.tools-modal-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.tools-modal-title span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tools-modal-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.tools-modal-close {
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 16px;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+}
+
+.tools-modal-close:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.tools-modal-body {
+  overflow-y: auto;
+  padding: 8px 18px 18px;
+  overscroll-behavior: contain;
+}
+
+.tools-modal-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 56px;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 4px;
+  border-bottom: 1px solid var(--border);
+}
+
+.tools-modal-row:last-child {
+  border-bottom: none;
+}
+
+.tmr-main {
+  min-width: 0;
+}
+
+.tmr-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.tmr-name .tmr-icon {
+  color: var(--accent);
+  font-size: 12px;
+}
+
+.tmr-desc {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  line-height: 1.45;
+  margin-top: 3px;
+}
+
+.tmr-toggle {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.tools-modal-row.disabled {
+  opacity: 0.5;
+}
+
+.ds-section-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  margin: 14px 0 8px;
+}

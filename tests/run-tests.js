@@ -1920,12 +1920,60 @@ function runContextCompactionTests() {
   });
 }
 
+// ---- 工具页重构（两级视图：组表格三态 + 模态下钻 + DeepSeek 独立分组）----
+function runToolsPageRefactorTests() {
+  console.log('\nTools Page Refactor:');
+  const fsLocal = require('fs');
+  const pathLocal = require('path');
+
+  test('工具页主界面为组表格 + 三态开关 + 模态下钻', () => {
+    const part = fsLocal.readFileSync(pathLocal.join(__dirname, '../src/renderer/js/app-parts/06-tools-skills-settings.js'), 'utf-8');
+    assert.ok(part.includes('tool-group-row'), '应渲染组表格行');
+    assert.ok(part.includes('indeterminate'), '应实现三态开关');
+    assert.ok(part.includes('openToolGroupModal'), '应有点组打开模态框');
+    assert.ok(part.includes('tools-modal-all-on'), '模态框应有全部开');
+    assert.ok(part.includes('ds-section'), 'DeepSeek 插件工具应独立分区');
+  });
+
+  test('index.html 含工具组模态框骨架', () => {
+    const html = fsLocal.readFileSync(pathLocal.join(__dirname, '../src/renderer/pages/index.html'), 'utf-8');
+    assert.ok(html.includes('id="tools-group-modal"'), '应有工具组模态框');
+    assert.ok(html.includes('tools-modal-all-off'), '模态框应有全部关');
+  });
+
+  test('tools-def 提供分组元数据与 DeepSeek 插件注册表', () => {
+    const content = fsLocal.readFileSync(pathLocal.join(__dirname, '../src/renderer/js/tools-def.js'), 'utf-8');
+    assert.ok(content.includes('CATEGORY_META'), '应有分组元数据');
+    assert.ok(content.includes('registerDsPluginTools'), '应有 DeepSeek 插件工具注册');
+    assert.ok(content.includes('getCategoryMeta'), '应有分组元数据查询');
+  });
+
+  test('DeepSeek 插件工具注册后进入定义与 schema（功能验证）', () => {
+    const vm = require('vm');
+    const sandbox = { window: {} };
+    vm.createContext(sandbox);
+    const code = fsLocal.readFileSync(pathLocal.join(__dirname, '../src/renderer/js/tools-def.js'), 'utf-8');
+    vm.runInContext(code, sandbox, { filename: 'tools-def.js' });
+    sandbox.registerDsPluginTools('demo', 'Demo 插件', [
+      { name: 'hello', description: '打招呼' }
+    ], {
+      hello: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] }
+    });
+    const defs = sandbox.getAllToolDefinitions('chat');
+    assert.ok(defs.some(t => t.name === 'ds__demo__hello'), 'DeepSeek 工具应进入定义列表');
+    assert.ok(defs.some(t => t.category === 'DS:demo'), 'DeepSeek 工具应单独分组');
+    const schemas = sandbox.getToolSchemas({}, 'chat');
+    assert.ok(schemas.some(s => s.function && s.function.name === 'ds__demo__hello'), 'DeepSeek 工具应进入 schema');
+  });
+}
+
 // ---- Summary ----
 (async () => {
   // 等待异步 LLM 测试完成
   await runLiveLLMTests();
   await runDocumentToolTests();
   runContextCompactionTests();
+  runToolsPageRefactorTests();
 
   console.log(`\n${'='.repeat(40)}`);
   console.log(`Results: ${passed} passed, ${failed} failed, ${passed + failed} total`);

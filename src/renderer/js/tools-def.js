@@ -9,6 +9,96 @@
 const MCP_DYNAMIC_TOOLS = [];   // { name, desc, icon, category, sensitive, serverName, mcpToolName, inputSchema }
 const MCP_DYNAMIC_SCHEMAS = {};  // name → OpenAI-format schema
 
+// ---- DeepSeek 插件导入工具注册表（Phase E 填充）----
+// { name, desc, icon, category, sensitive, pluginId, pluginName, compatTier, dsToolName, schema }
+const DS_PLUGIN_TOOLS = [];
+const DS_PLUGIN_SCHEMAS = {};
+
+function registerDsPluginTools(pluginId, pluginName, tools, schemas) {
+  // 先移除同插件旧注册，再整体重灌（幂等）
+  for (let i = DS_PLUGIN_TOOLS.length - 1; i >= 0; i--) {
+    if (DS_PLUGIN_TOOLS[i].pluginId === pluginId) DS_PLUGIN_TOOLS.splice(i, 1);
+  }
+  for (const key of Object.keys(DS_PLUGIN_SCHEMAS)) {
+    if (key.startsWith(pluginId + '::')) delete DS_PLUGIN_SCHEMAS[key];
+  }
+  for (const t of (tools || [])) {
+    const safeName = `ds__${pluginId}__${t.name}`;
+    DS_PLUGIN_TOOLS.push({
+      name: safeName,
+      desc: `[DS:${pluginName}] ${t.description || t.name}`,
+      icon: t.icon || 'fa-puzzle-piece',
+      category: `DS:${pluginId}`,
+      categoryName: pluginName,
+      sensitive: false,
+      pluginId,
+      pluginName,
+      compatTier: t.compatTier || 'native',
+      dsToolName: t.name,
+      dynamic: true
+    });
+    const schema = schemas && schemas[t.name] ? schemas[t.name] : t.schema;
+    if (schema) {
+      DS_PLUGIN_SCHEMAS[safeName] = {
+        type: 'function',
+        function: {
+          name: safeName,
+          description: `[DS:${pluginName}] ${t.description || t.name}`,
+          parameters: schema
+        }
+      };
+    }
+  }
+}
+
+function clearDsPluginTools() {
+  DS_PLUGIN_TOOLS.length = 0;
+  Object.keys(DS_PLUGIN_SCHEMAS).forEach(k => delete DS_PLUGIN_SCHEMAS[k]);
+}
+
+// ---- 工具分组元数据（组名/描述/图标）----
+const CATEGORY_META = {
+  '娱乐': { icon: 'fa-star', desc: '塔罗牌等娱乐互动' },
+  '效率': { icon: 'fa-bolt', desc: '待办管理、定时休眠等效率工具' },
+  '代理': { icon: 'fa-users', desc: '子代理与多任务分解' },
+  '创作': { icon: 'fa-image', desc: 'AI 生图等创作能力' },
+  '计算': { icon: 'fa-calculator', desc: '数学计算、方程求解、概率分布、进制转换' },
+  '网络': { icon: 'fa-globe', desc: '网页搜索与抓取、离屏渲染' },
+  '网络工具': { icon: 'fa-wifi', desc: '下载管理、HTTP 请求等网络工具' },
+  '知识': { icon: 'fa-database', desc: '知识库检索与维护' },
+  '记忆': { icon: 'fa-brain', desc: '跨会话长期记忆' },
+  '文件': { icon: 'fa-folder-open', desc: '文件读写、编辑、搜索与编码转换' },
+  '代码': { icon: 'fa-code', desc: 'JavaScript/Node/Python/Shell 代码执行' },
+  '终端': { icon: 'fa-terminal', desc: '持久交互式终端（pty）' },
+  '系统': { icon: 'fa-desktop', desc: '系统信息、网络状态、文件管理器' },
+  '技能': { icon: 'fa-wand-magic-sparkles', desc: '技能（Skill）的列出、创建、激活与脚本运行' },
+  '数据表格': { icon: 'fa-table-cells-large', desc: '内置电子表格：公式、格式、CSV/ODS/XLSX' },
+  'FFmpeg 媒体': { icon: 'fa-clapperboard', desc: '离线音视频处理（转码/剪辑/水印/字幕等）' },
+  'Geogebra': { icon: 'fa-shapes', desc: '动态几何作图' },
+  '画布': { icon: 'fa-palette', desc: '内置绘图画布' },
+  '浏览器': { icon: 'fa-window-restore', desc: '内置浏览器（Playwright）' },
+  'Office 硬解': { icon: 'fa-file-zipper', desc: 'Office 底层 XML 操作（仅特殊需求）' },
+  'Office-Word': { icon: 'fa-file-word', desc: '正规库驱动的 Word 读写与模板填充' },
+  'PPT Maker': { icon: 'fa-file-powerpoint', desc: '专业演示文稿生成（图文图表）' },
+  'CIPYP-CAD': { icon: 'fa-drafting-compass', desc: '二维 CAD 制图' },
+  'PCB-EDA': { icon: 'fa-microchip', desc: '原理图与 PCB 设计' },
+  '串口': { icon: 'fa-plug', desc: '串口设备通信' },
+  '电脑控制': { icon: 'fa-computer-mouse', desc: 'Computer Use 桌面控制' },
+  '游戏': { icon: 'fa-gamepad', desc: '多人互动游戏' },
+  '交互工具': { icon: 'fa-comments', desc: '提问澄清等交互工具' },
+  'MCP': { icon: 'fa-plug-circle-bolt', desc: 'MCP 协议接入的外部工具' }
+};
+
+function getCategoryMeta(category) {
+  if (category && category.startsWith('MCP:')) {
+    return { icon: 'fa-plug-circle-bolt', desc: '来自 MCP 服务器的动态工具' };
+  }
+  if (category && category.startsWith('DS:')) {
+    return { icon: 'fa-puzzle-piece', desc: '来自 DeepSeek 插件的导入工具' };
+  }
+  return CATEGORY_META[category] || { icon: 'fa-layer-group', desc: category || '其他' };
+}
+
 function clearMcpDynamicTools() {
   MCP_DYNAMIC_TOOLS.length = 0;
   Object.keys(MCP_DYNAMIC_SCHEMAS).forEach(k => delete MCP_DYNAMIC_SCHEMAS[k]);
@@ -50,7 +140,7 @@ function registerMcpTools(toolsList) {
 }
 
 function getAllToolDefinitions(mode) {
-  return [...TOOL_DEFINITIONS, ...MCP_DYNAMIC_TOOLS].filter(t => isToolAvailableForMode(t.name, mode));
+  return [...TOOL_DEFINITIONS, ...MCP_DYNAMIC_TOOLS, ...DS_PLUGIN_TOOLS].filter(t => isToolAvailableForMode(t.name, mode));
 }
 
 // Tools exclusive to Chat mode (UI-heavy: entertainment, drawing, office, serial, browser).
@@ -770,6 +860,12 @@ function getToolSchemas(enabledTools, mode) {
   for (const [mcpName, mcpSchema] of Object.entries(MCP_DYNAMIC_SCHEMAS)) {
     if ((!enabledTools || enabledTools[mcpName] !== false) && isToolAvailableForMode(mcpName, mode)) {
       result.push(mcpSchema);
+    }
+  }
+  // Append DeepSeek 插件导入工具的 schemas
+  for (const [dsName, dsSchema] of Object.entries(DS_PLUGIN_SCHEMAS)) {
+    if ((!enabledTools || enabledTools[dsName] !== false) && isToolAvailableForMode(dsName, mode)) {
+      result.push(dsSchema);
     }
   }
   return result;

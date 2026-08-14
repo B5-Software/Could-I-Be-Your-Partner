@@ -654,6 +654,22 @@
             <!-- 动态填充：每项 = 工具类别 + 当前状态 + 撤销按钮 -->
           </div>
         </div>
+
+        <!-- 工具组模态框：点击组行打开，列出组内每个工具的 名称/描述/开关 -->
+        <div class="tools-modal-backdrop" id="tools-group-modal" aria-hidden="true">
+          <div class="tools-modal" role="dialog" aria-modal="true">
+            <div class="tools-modal-header">
+              <div class="tools-modal-title" id="tools-modal-title"><i class="fa-solid fa-layer-group"></i> <span>工具组</span></div>
+              <div class="tools-modal-actions">
+                <button class="btn-secondary btn-sm" id="tools-modal-all-on"><i class="fa-solid fa-toggle-on"></i> 全部开</button>
+                <button class="btn-secondary btn-sm" id="tools-modal-all-off"><i class="fa-solid fa-toggle-off"></i> 全部关</button>
+                <button class="btn-secondary btn-sm" id="tools-modal-mcp-refresh" title="刷新 MCP 工具" style="display:none"><i class="fa-solid fa-arrows-rotate"></i></button>
+                <button class="btn-icon tools-modal-close" id="tools-modal-close" aria-label="关闭"><i class="fa-solid fa-xmark"></i></button>
+              </div>
+            </div>
+            <div class="tools-modal-body" id="tools-modal-body"></div>
+          </div>
+        </div>
       </section>
 
       <!-- Skills Page -->
