@@ -788,6 +788,14 @@ test('geogebra-panel HTML should exist with ggb-element div', () => {
   assert.ok(htmlContent.includes('id="ggb-element"'), '缺少 ggb-element 容器');
 });
 
+test('sanguosha 窗口应自带 escapeHtml（未加载 app-utils.js）', () => {
+  const sgJs = fs.readFileSync(require('path').join(__dirname, '../src/renderer/js/sanguosha.js'), 'utf-8');
+  const sgHtml = fs.readFileSync(require('path').join(__dirname, '../src/renderer/pages/sanguosha.html'), 'utf-8');
+  assert.ok(/function escapeHtml\s*\(/.test(sgJs), 'sanguosha.js 缺少局部 escapeHtml 定义');
+  assert.ok(!sgHtml.includes('app-utils.js'), 'sanguosha.html 不应依赖 app-utils.js');
+  assert.ok(sgJs.includes('escapeHtml(hero.name)'), '武将名渲染应使用 escapeHtml');
+});
+
 test('CSP should allow ggb: offline protocol for script/style/img/connect', () => {
   const htmlContent = fs.readFileSync(require('path').join(__dirname, '../src/renderer/pages/index.html'), 'utf-8');
   const cspMatch = htmlContent.match(/Content-Security-P[^>]*content="([^"]+)"/);

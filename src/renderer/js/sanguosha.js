@@ -6,6 +6,13 @@
 (function () {
   'use strict';
 
+  // 子窗口未加载 app-utils.js，需自带 HTML 转义（与飞花令/猜人物等游戏一致）
+  function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text == null ? '' : String(text);
+    return div.innerHTML;
+  }
+
   // ========== Hero Definitions ==========
   const HEROES = [
     { id: 'caocao',    name: '曹操',  title: '魏武帝', icon: '<i class="fa-solid fa-crown"></i>',            maxHp: 4, kingdom: '魏', skill: '奸雄(被动)：受到伤害时获得造成伤害的牌',              skillFn: 'jianxiong' },
