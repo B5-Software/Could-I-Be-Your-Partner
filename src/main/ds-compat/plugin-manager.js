@@ -522,47 +522,89 @@ class PluginManager {
       // npm / github / tgz：先装到一个临时定位目录再解析
       progress({ stage: 'npm', source: type });
       const tmpDir = fs.mkdtempSync(path.join(this.pluginsDir, '.tmp-'));
-      const spec = type === 'npm' ? ref : (type === 'github' ? `github:${ref.replace(/^github:/, '')}` : ref);
       // 清洗环境：宿主可能携带 npm_config_allow_scripts（例如从 opencode 启动），
       // 在项目级（--prefix）安装中会触发 EALLOWSCRIPTS 硬错误。
       const npmEnv = { ...process.env };
       delete npmEnv.npm_config_allow_scripts;
       delete npmEnv.npm_config_allow_scripts_pending;
       delete npmEnv.npm_config_strict_allow_scripts;
-      // 使用默认 --save：npm 会把根依赖名写入 tmpDir/package.json，
-      // 供 _findInstalledPkg 精确定位（GitHub 仓库名 ≠ 包名时同样可靠）。
-      const baseArgs = ['install', '--prefix', tmpDir, '--ignore-scripts', '--no-audit', '--no-fund'];
-      const runNpm = (extra) => runNpmAsync([...baseArgs, ...extra, spec], {
-        env: npmEnv, timeout: 300000, onOutput: (p) => progress({ stage: 'npm-line', source: type, ...p })
-      });
-      let r = runNpm([]);
-      r = await r;
-      // npm ≥12 默认禁用 git 依赖（allow-git=none）。放开“根依赖”的 git 抓取
-      // 后重试；传递性 git 依赖仍被禁止，保持安全默认。
-      if (r.status !== 0 && /EALLOWGIT/.test(String(r.stderr || r.stdout || ''))) {
-        progress({ stage: 'npm', source: type, line: 'npm ≥12 默认禁用 git 依赖，放开根依赖后重试…' });
-        r = await runNpm(['--allow-git=root']);
-      }
-      if (r.status !== 0) {
-        try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
-        const errText = String(r.stderr || r.stdout || '');
-        if (/ENOENT/.test(errText) && /package\.json/.test(errText)) {
-          const cls = classifyGithubRepo(spec);
+      let found = null;
+      if (type === 'github') {
+        // 不经过 npm 的 git 抓取（用户 git 配置可能把 https 重写成 ssh，
+        // 被代理拦截）：直接下载 codeload tarball，再 npm 装依赖。
+        const repo = ref.replace(/^github:/, '').replace(/\.git$/, '');
+        progress({ stage: 'github', source: type, line: `下载源码 tarball（${repo}）…` });
+        const ghSrc = path.join(tmpDir, 'gh-src');
+        fs.mkdirSync(ghSrc, { recursive: true });
+        const tgz = path.join(tmpDir, 'src.tgz');
+        const dl = spawnSync('curl', ['-fsSL', '--connect-timeout', '20', '--max-time', '300', '-o', tgz, `https://codeload.github.com/${repo}/tar.gz/HEAD`], {
+          encoding: 'utf8', windowsHide: true
+        });
+        if (dl.status !== 0 || !fs.existsSync(tgz) || fs.statSync(tgz).size === 0) {
+          const cls = classifyGithubRepo(`github:${repo}`);
           const e = new Error(cls.kind === 'catalog'
             ? '该 GitHub 仓库是插件目录（awesome 列表），不是可安装的插件包'
-            : '该 GitHub 仓库不是可安装的插件包（缺少 package.json）');
+            : `无法从 GitHub 下载仓库源码（网络/代理问题）：${repo}`);
           e.catalog = cls.repos || [];
           e.catalogKind = cls.kind;
+          try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
           throw e;
         }
-        const detail = r.error
-          ? `${r.error.message}${r.timedOut ? '（超时）' : ''}`
-          : (r.timedOut ? '安装超时' : String(r.stderr || r.stdout || ''));
-        throw new Error(`npm 安装失败: ${detail.slice(-600)}`);
+        const ex = spawnSync('tar', ['-xzf', tgz, '-C', ghSrc, '--strip-components=1'], { encoding: 'utf8', windowsHide: true });
+        if (ex.status !== 0 || !fs.existsSync(path.join(ghSrc, 'package.json'))) {
+          const cls = classifyGithubRepo(`github:${repo}`);
+          const e = new Error(cls.kind === 'catalog'
+            ? '该 GitHub 仓库是插件目录（awesome 列表），不是可安装的插件包'
+            : `该 GitHub 仓库缺少 package.json，不是可安装的插件包：${repo}`);
+          e.catalog = cls.repos || [];
+          e.catalogKind = cls.kind;
+          try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
+          throw e;
+        }
+        progress({ stage: 'npm', source: type, line: '安装依赖…' });
+        const dep = await runNpmAsync(['install', '--prefix', ghSrc, '--ignore-scripts', '--no-audit', '--no-fund'], {
+          env: npmEnv, timeout: 300000, onOutput: (p) => progress({ stage: 'npm-line', source: type, ...p })
+        });
+        if (dep.status !== 0) {
+          const detail = dep.error ? dep.error.message : String(dep.stderr || dep.stdout || '');
+          try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
+          throw new Error(`依赖安装失败: ${detail.slice(-600)}`);
+        }
+        found = ghSrc;
+      } else {
+        const spec = type === 'npm' ? ref : ref;
+        // 使用默认 --save：npm 会把根依赖名写入 tmpDir/package.json，
+        // 供 _findInstalledPkg 精确定位（GitHub 仓库名 ≠ 包名时同样可靠）。
+        const baseArgs = ['install', '--prefix', tmpDir, '--ignore-scripts', '--no-audit', '--no-fund'];
+        const runNpm = (extra) => runNpmAsync([...baseArgs, ...extra, spec], {
+          env: npmEnv, timeout: 300000, onOutput: (p) => progress({ stage: 'npm-line', source: type, ...p })
+        });
+        let r = runNpm([]);
+        r = await r;
+        if (r.status !== 0 && /EALLOWGIT/.test(String(r.stderr || r.stdout || ''))) {
+          progress({ stage: 'npm', source: type, line: 'npm ≥12 默认禁用 git 依赖，放开根依赖后重试…' });
+          r = await runNpm(['--allow-git=root']);
+        }
+        if (r.status !== 0) {
+          try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
+          const errText = String(r.stderr || r.stdout || '');
+          if (/ENOENT/.test(errText) && /package\.json/.test(errText)) {
+            const cls = classifyGithubRepo(spec);
+            const e = new Error(cls.kind === 'catalog'
+              ? '该 GitHub 仓库是插件目录（awesome 列表），不是可安装的插件包'
+              : '该 GitHub 仓库不是可安装的插件包（缺少 package.json）');
+            e.catalog = cls.repos || [];
+            e.catalogKind = cls.kind;
+            throw e;
+          }
+          const detail = r.error
+            ? `${r.error.message}${r.timedOut ? '（超时）' : ''}`
+            : (r.timedOut ? '安装超时' : String(r.stderr || r.stdout || ''));
+          throw new Error(`npm 安装失败: ${detail.slice(-600)}`);
+        }
+        progress({ stage: 'locate', source: type });
+        found = this._findInstalledPkg(tmpDir, spec);
       }
-      // 找到实际包目录
-      progress({ stage: 'locate', source: type });
-      const found = this._findInstalledPkg(tmpDir, spec);
       if (!found || !fs.existsSync(path.join(found, 'package.json'))) {
         try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
         throw new Error('npm 安装后未找到插件包');
