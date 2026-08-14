@@ -2081,6 +2081,18 @@
     await saveSettings(s);
     if (toast) window.showToast?.(toast, 'success', 2000);
   }
+  // 滑动条指示器实时跟随拖动（input 事件），保存仍走 change（释放时落盘）
+  function bindRangeIndicator(rangeId, valId, min, max) {
+    const range = document.getElementById(rangeId);
+    const val = document.getElementById(valId);
+    if (!range || !val) return;
+    range.addEventListener('input', () => {
+      const v = Math.max(min, Math.min(max, Number(range.value) || min));
+      val.textContent = `${v}%`;
+    });
+  }
+  bindRangeIndicator('setting-context-threshold', 'setting-context-threshold-val', 60, 95);
+  bindRangeIndicator('setting-context-retain', 'setting-context-retain-val', 5, 40);
   document.getElementById('setting-context-auto')?.addEventListener('change', async (e) => {
     await updateContextCompactionSettings({ enabled: !!e.target.checked }, '上下文自动压缩已' + (e.target.checked ? '开启' : '关闭'));
   });

@@ -1349,6 +1349,18 @@ ipcMain.on('automation:dispatched', (event, requestId, payload) => {
   dsRequestPending.delete(requestId);
   settle(payload || {});
 });
+ipcMain.on('ds:agentCreateResult', (event, requestId, payload) => {
+  const settle = dsRequestPending.get(requestId);
+  if (!settle) return;
+  dsRequestPending.delete(requestId);
+  settle(payload || {});
+});
+ipcMain.on('ds:agentResumeResult', (event, requestId, payload) => {
+  const settle = dsRequestPending.get(requestId);
+  if (!settle) return;
+  dsRequestPending.delete(requestId);
+  settle(payload || {});
+});
 
 // ---- 自动化编辑器独立窗口 ----
 ipcMain.handle('automation-editor:open', (_, payload = {}) => {

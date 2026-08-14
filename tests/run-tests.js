@@ -547,6 +547,15 @@ test('切换会话标签页应中断语音播报及其队列', () => {
   assert.ok(block.includes('activeBefore.key !== key'), '仅切换到不同会话时才中断语音');
 });
 
+test('上下文滑动条指示器应实时跟随拖动（input 事件，change 落盘）', () => {
+  const settingsJs = fs.readFileSync(require('path').join(__dirname, '../src/renderer/js/app-parts/06-tools-skills-settings.js'), 'utf-8');
+  assert.ok(settingsJs.includes('bindRangeIndicator'), '应有滑动条指示器绑定');
+  assert.ok(settingsJs.includes("bindRangeIndicator('setting-context-threshold'"), '阈值滑动条应绑定 input');
+  assert.ok(settingsJs.includes("bindRangeIndicator('setting-context-retain'"), '保留比例滑动条应绑定 input');
+  assert.ok(settingsJs.includes("addEventListener('input'"), '应监听 input 事件（实时更新）');
+  assert.ok(settingsJs.includes("addEventListener('change'"), '应保留 change 事件（释放后落盘）');
+});
+
 test('思考容器宽度约束与 Babe 标签栏圆角、光标一致性', () => {
   const chatCss = fs.readFileSync(require('path').join(__dirname, '../src/renderer/css/chat.css'), 'utf-8');
   const componentsCss = fs.readFileSync(require('path').join(__dirname, '../src/renderer/css/components.css'), 'utf-8');
@@ -2430,21 +2439,61 @@ async function runDsPluginTests() {
     }
   });
 
-  test('DS 服务翻译层 IPC 接线（preload / main / renderer / 授权模态框）', () => {
+  await testAsync('agents.create/resume/register 桥接（真实插件调用面）', async () => {
+    const dataDir = fsLocal.mkdtempSync(pathLocal.join(osLocal.tmpdir(), 'cibyp-agents-create-'));
+    const requests = [];
+    const transport = {
+      send: (channel, payload) => requests.push({ channel, payload }),
+      request: async (channel, payload) => {
+        requests.push({ channel, payload });
+        if (channel === 'ds:agentCreate') return { sessionKey: 'chat:n1', id: 'n1', title: '新建会话', cwd: '/tmp/n1' };
+        if (channel === 'ds:agentResume') return { sessionKey: 'chat:e1', id: 'e1', title: '旧会话', cwd: '/tmp/e1', status: 'idle' };
+        return { error: 'unknown channel' };
+      }
+    };
+    const { PluginManager } = require('../src/main/ds-compat/plugin-manager.js');
+    const pm = new PluginManager(dataDir, { transport, getSettings: async () => ({}) }).init();
+    try {
+      await pm.host.init();
+      const created = await pm.host.ctx.agents.create({ instructions: '做点事', cwd: '/tmp/n1' });
+      assert.ok(created, 'create 应返回句柄');
+      assert.strictEqual(created.id, 'chat:n1');
+      assert.strictEqual(created.status, 'idle');
+      assert.strictEqual(created.session.header.cwd, '/tmp/n1');
+      assert.ok(requests.some(r => r.channel === 'ds:agentCreate' && r.payload.instructions === '做点事'), 'create 应携带 instructions');
+      const resumed = await pm.host.ctx.agents.resume({ sessionId: 'e1' });
+      assert.strictEqual(resumed.session.header.title, '旧会话');
+      assert.strictEqual(resumed.session.header.cwd, '/tmp/e1');
+      const dispose = pm.host.ctx.agents.register({ status: 'idle', session: { header: { id: 'chat:r1', title: 'R', cwd: '/tmp/r', mode: 'chat' } } });
+      assert.strictEqual(pm.host.ctx.agents.has('chat:r1'), true);
+      dispose();
+      assert.strictEqual(pm.host.ctx.agents.has('chat:r1'), false);
+      const err = await pm.host.ctx.agents.create({}).catch(e => e);
+      // 无 transport request 时应明确报错（本用例 request 存在，走 unknown channel 错误）
+      assert.ok(err, '异常通道应报错');
+    } finally {
+      try { await pm.dispose(); } catch { /* ignore */ }
+      try { fsLocal.rmSync(dataDir, { recursive: true, force: true }); } catch { /* ignore */ }
+    }
+  });
+
+test('DS 服务翻译层 IPC 接线（preload / main / renderer / 授权模态框）', () => {
     const preloadContent = fsLocal.readFileSync(pathLocal.join(__dirname, '../src/preload/preload.js'), 'utf-8');
     const mainContent = fsLocal.readFileSync(pathLocal.join(__dirname, '../src/main/main.js'), 'utf-8');
     const htmlContent = fsLocal.readFileSync(pathLocal.join(__dirname, '../src/renderer/pages/index.html'), 'utf-8');
     const appContent = fsLocal.readFileSync(pathLocal.join(__dirname, '../src/renderer/js/app.js'), 'utf-8');
     const agentContent = fsLocal.readFileSync(pathLocal.join(__dirname, '../src/renderer/js/agent.js'), 'utf-8');
-    for (const api of ['dsAgentSync', 'dsApprovalRespond', 'onDsAgentMessage', 'onDsApprovalRequest']) {
+    for (const api of ['dsAgentSync', 'dsApprovalRespond', 'onDsAgentMessage', 'onDsAgentCreateRequest', 'onDsAgentResumeRequest', 'onDsApprovalRequest']) {
       assert.ok(preloadContent.includes(api), `preload 应暴露 ${api}`);
     }
     assert.ok(mainContent.includes("ipcMain.handle('ds:agentsSync'"), 'main 应注册 ds:agentsSync');
     assert.ok(mainContent.includes("ipcMain.handle('ds:approvalRespond'"), 'main 应注册 ds:approvalRespond');
     assert.ok(mainContent.includes('dsTransportRequest'), 'main 应有 approval 请求传输');
+    assert.ok(mainContent.includes("ipcMain.on('ds:agentCreateResult'") && mainContent.includes("ipcMain.on('ds:agentResumeResult'"), 'main 应接收 agent create/resume 回执');
     assert.ok(htmlContent.includes('id="ds-approval-modal"'), '应有 DS 授权模态框');
     assert.ok(appContent.includes('pushDsAgentSync'), 'renderer 应同步会话元数据');
     assert.ok(appContent.includes('showDsApprovalModal'), 'renderer 应处理授权请求');
+    assert.ok(appContent.includes('onDsAgentCreateRequest'), 'renderer 应处理 agents.create 请求');
     assert.ok(appContent.includes('onDsAgentMessage'), 'renderer 应处理 agent 消息');
     assert.ok(agentContent.includes('this.sessionKey || null'), '插件工具调用应携带 sessionKey');
   });

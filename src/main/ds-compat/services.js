@@ -88,6 +88,84 @@ class CibypAgentsService extends Service {
     return [...this.store.keys()];
   }
 
+  /** DSH AgentRegistry.create：经渲染进程新建一个 Chat 会话并返回代理句柄。 */
+  async create(options = {}) {
+    if (!this.transport || typeof this.transport.request !== 'function') {
+      throw new Error('agents.create: 传输通道未就绪');
+    }
+    const requestId = `agent-create-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+    const res = await this.transport.request('ds:agentCreate', {
+      requestId,
+      cwd: options.cwd || null,
+      instructions: options.instructions || null,
+      sessionId: options.sessionId || null,
+      model: options.model || null
+    }, 30000);
+    if (res && res.error) throw new Error(res.error);
+    if (res && res.sessionKey) {
+      const entry = {
+        key: res.sessionKey,
+        id: res.id || res.sessionKey,
+        mode: 'chat',
+        title: res.title || '新会话',
+        cwd: res.cwd || null,
+        status: 'idle'
+      };
+      this.store.set(entry.key, entry);
+      if (entry.id) this.byId.set(String(entry.id), entry.key);
+      return this._handle(entry);
+    }
+    return undefined;
+  }
+
+  /** DSH AgentRegistry.resume：按会话 id 恢复已有会话的代理句柄。 */
+  async resume(options = {}) {
+    const idOrKey = options.sessionId || options.id;
+    if (idOrKey === undefined || idOrKey === null) throw new Error('agents.resume 需要 sessionId');
+    if (!this.transport || typeof this.transport.request !== 'function') {
+      throw new Error('agents.resume: 传输通道未就绪');
+    }
+    const requestId = `agent-resume-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+    const res = await this.transport.request('ds:agentResume', {
+      requestId,
+      sessionId: String(idOrKey)
+    }, 30000);
+    if (res && res.error) throw new Error(res.error);
+    if (res && res.sessionKey) {
+      const entry = {
+        key: res.sessionKey,
+        id: res.id || res.sessionKey,
+        mode: 'chat',
+        title: res.title || '',
+        cwd: res.cwd || null,
+        status: res.status || 'idle'
+      };
+      this.store.set(entry.key, entry);
+      if (entry.id) this.byId.set(String(entry.id), entry.key);
+      return this._handle(entry);
+    }
+    return undefined;
+  }
+
+  /** 注册外部构造的 agent（需带 session.header），返回注销 disposer。 */
+  register(agent) {
+    const header = agent && agent.session && agent.session.header;
+    if (!header || !header.id) throw new Error('agents.register 需要带 session.header.id 的 agent');
+    const entry = {
+      key: header.id,
+      id: header.id,
+      mode: header.mode || 'chat',
+      title: header.title || '',
+      cwd: header.cwd || null,
+      status: agent.status || 'idle'
+    };
+    this.store.set(entry.key, entry);
+    this.byId.set(String(entry.id), entry.key);
+    return () => {
+      if (this.store.get(entry.key) === entry) this.store.delete(entry.key);
+    };
+  }
+
   _handle(entry) {
     const service = this;
     const transport = this.transport;

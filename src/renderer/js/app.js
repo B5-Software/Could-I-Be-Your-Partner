@@ -1251,6 +1251,50 @@ export default (async function appEntry() {
     });
   }
 
+  // agents.create：新建一个 Chat 会话（可带初始指令）并回传句柄元数据
+  if (typeof window.api.onDsAgentCreateRequest === 'function') {
+    window.api.onDsAgentCreateRequest(async (req) => {
+      if (typeof createNewSession !== 'function') throw new Error('会话模块未就绪');
+      await createNewSession('chat');
+      await new Promise(r => setTimeout(r, 60));
+      const sm = window.__sessionManager;
+      const session = sm ? sm.getActive('chat') : null;
+      const ag = (session && session.agent) || agent;
+      if (!ag) throw new Error('无法创建 Chat Agent');
+      const instructions = req && typeof req.instructions === 'string' ? req.instructions.trim() : '';
+      if (instructions && typeof addMessageToChat === 'function') addMessageToChat('user', instructions);
+      if (instructions) await ag.sendMessage(instructions, []);
+      return {
+        sessionKey: ag.sessionKey || (session && session.key) || null,
+        id: session ? session.id : null,
+        title: session ? session.title : '新会话',
+        cwd: ag.workspacePath || null
+      };
+    });
+  }
+
+  // agents.resume：按会话 id 恢复句柄（切到该会话）
+  if (typeof window.api.onDsAgentResumeRequest === 'function') {
+    window.api.onDsAgentResumeRequest(async (req) => {
+      const sm = window.__sessionManager;
+      if (!sm) throw new Error('会话管理器未就绪');
+      const all = sm.list();
+      const session = all.find(s => s.key === req.sessionId || String(s.id) === String(req.sessionId));
+      if (!session) throw new Error('会话不存在');
+      if (typeof activateSession === 'function') {
+        await activateSession(session.mode, session.key);
+        await new Promise(r => setTimeout(r, 60));
+      }
+      return {
+        sessionKey: session.key,
+        id: session.id,
+        title: session.title,
+        status: session.status,
+        cwd: (session.agent && (session.agent.workspacePath || session.agent.codeWorkspacePath)) || null
+      };
+    });
+  }
+
   if (typeof window.api.onDsApprovalRequest === 'function') {
     window.api.onDsApprovalRequest((req) => {
       if (req && req.id) showDsApprovalModal(req);
@@ -8278,6 +8322,18 @@ window.api.onWebControlSendMessage(async (message) => {
     await saveSettings(s);
     if (toast) window.showToast?.(toast, 'success', 2000);
   }
+  // 滑动条指示器实时跟随拖动（input 事件），保存仍走 change（释放时落盘）
+  function bindRangeIndicator(rangeId, valId, min, max) {
+    const range = document.getElementById(rangeId);
+    const val = document.getElementById(valId);
+    if (!range || !val) return;
+    range.addEventListener('input', () => {
+      const v = Math.max(min, Math.min(max, Number(range.value) || min));
+      val.textContent = `${v}%`;
+    });
+  }
+  bindRangeIndicator('setting-context-threshold', 'setting-context-threshold-val', 60, 95);
+  bindRangeIndicator('setting-context-retain', 'setting-context-retain-val', 5, 40);
   document.getElementById('setting-context-auto')?.addEventListener('change', async (e) => {
     await updateContextCompactionSettings({ enabled: !!e.target.checked }, '上下文自动压缩已' + (e.target.checked ? '开启' : '关闭'));
   });

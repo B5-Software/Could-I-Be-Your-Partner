@@ -506,6 +506,28 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.on('ds:pluginAgentMessage', listener);
     return () => ipcRenderer.removeListener('ds:pluginAgentMessage', listener);
   },
+  onDsAgentCreateRequest: (cb) => {
+    const listener = (_event, payload) => {
+      if (!payload || !payload.requestId) return;
+      Promise.resolve(cb(payload)).then(
+        (result) => ipcRenderer.send('ds:agentCreateResult', payload.requestId, result || {}),
+        (error) => ipcRenderer.send('ds:agentCreateResult', payload.requestId, { error: error && error.message ? error.message : String(error) })
+      );
+    };
+    ipcRenderer.on('ds:agentCreate', listener);
+    return () => ipcRenderer.removeListener('ds:agentCreate', listener);
+  },
+  onDsAgentResumeRequest: (cb) => {
+    const listener = (_event, payload) => {
+      if (!payload || !payload.requestId) return;
+      Promise.resolve(cb(payload)).then(
+        (result) => ipcRenderer.send('ds:agentResumeResult', payload.requestId, result || {}),
+        (error) => ipcRenderer.send('ds:agentResumeResult', payload.requestId, { error: error && error.message ? error.message : String(error) })
+      );
+    };
+    ipcRenderer.on('ds:agentResume', listener);
+    return () => ipcRenderer.removeListener('ds:agentResume', listener);
+  },
   onDsApprovalRequest: (cb) => {
     const listener = (_event, payload) => cb(payload);
     ipcRenderer.on('ds:approvalRequest', listener);
