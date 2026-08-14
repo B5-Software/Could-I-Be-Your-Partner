@@ -13,7 +13,7 @@
 
 'use strict';
 
-const { Context, Service } = require('@deepseek-ai/cordis');
+const { Context, Service, symbols } = require('@deepseek-ai/cordis');
 const { pathToFileURL } = require('url');
 const nodePath = require('path');
 const fsp = require('fs/promises');
@@ -408,6 +408,17 @@ class PluginHost {
             f.dispose(),
             new Promise((r) => setTimeout(r, 1200).unref())
           ]);
+        } catch { /* ignore */ }
+        // 挂起的 apply 会让 fiber.dispose() 永久等待 teardown，
+        // 这里直接清空该纤维注册过的服务，避免下一次加载报
+        // "service ... has been registered"。
+        try {
+          for (const name of Object.keys(f.store || {})) {
+            const impl = f.store[name];
+            if (!impl || impl.fiber !== f) continue; // 只清理该纤维自己提供的服务，不动注入的宿主服务
+            const key = this.ctx.root[symbols.isolate] && this.ctx.root[symbols.isolate][name];
+            if (key) delete this.ctx.reflect.store[key];
+          }
         } catch { /* ignore */ }
       }
       // 失败后彻底移除该插件可能残留的工具注册

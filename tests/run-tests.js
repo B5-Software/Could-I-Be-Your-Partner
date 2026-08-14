@@ -2516,8 +2516,11 @@ async function runDsPluginTests() {
     fsLocal.mkdirSync(srcDir);
     fsLocal.writeFileSync(pathLocal.join(srcDir, 'package.json'), JSON.stringify({ name: 'fixture-apply-hang', version: '1.0.0', type: 'module', main: 'index.js' }));
     fsLocal.writeFileSync(pathLocal.join(srcDir, 'index.js'), [
+      "import { Service } from '@deepseek-ai/cordis';",
       "export const name = 'fixture-apply-hang';",
+      "class HangSvc extends Service { constructor(ctx) { super(ctx, 'hangSvc'); } }",
       "export function apply(ctx) {",
+      "  new HangSvc(ctx);",
       "  return new Promise(() => {});",
       "}",
       ''
@@ -2531,6 +2534,8 @@ async function runDsPluginTests() {
       const elapsed = Date.now() - t0;
       assert.ok(en.plugin.compatIssues.some(i => i.includes('挂起超时')), '应记录 apply 挂起超时');
       assert.ok(elapsed < 3000, `超时卸载应及时返回（实际 ${elapsed}ms）`);
+      assert.strictEqual(pm.host.ctx.get('hangSvc'), undefined, '挂起插件注册的服务应被强制清理');
+      assert.ok(pm.host.ctx.agents, '强制清理不得误伤宿主服务（agents 应仍在）');
       const en2 = await pm.setEnabled(installed.id, true);
       assert.strictEqual(en2.ok, true, '超时卸载后应可再次加载');
     } finally {
@@ -2818,6 +2823,7 @@ test('插件启动全量重审：清除旧版本遗留 compatIssues', () => {
   assert.ok(pmContent.includes('async refreshAll()'), '应有 refreshAll 全量重审');
   assert.ok(pmContent.includes('unloadPlugin'), '禁用插件应探测后立即卸载');
   assert.ok(mainContent.includes('pluginManager.refreshAll()'), '启动时应全量重审插件兼容性');
+  assert.ok(mainContent.includes('pluginManager.refreshAll().catch('), '启动重审应后台执行，不阻塞后续 IPC 注册');
   assert.ok(pmContent.includes('repairReactRuntime'), '应有 react 版本漂移自修复');
 });
 

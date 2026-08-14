@@ -5220,8 +5220,10 @@ const pwService = registerPlaywrightIpc({
 
 // Auto-connect configured MCP servers on startup
 app.whenReady().then(async () => {
-  // 启动时加载已启用的 DeepSeek 插件（失败仅记录，不阻断启动）
-  try { await pluginManager.refreshAll(); } catch (e) { console.warn('[DS Plugins] 启动加载失败:', e.message); }
+  // 启动时全量重审 DeepSeek 插件（后台执行，不阻断启动：
+  // 交互式插件探测可能耗时，await 会导致后续 IPC 注册延迟，
+  // 渲染器早期调用如 webControl:getStatus 找不到 handler）
+  pluginManager.refreshAll().catch(e => console.warn('[DS Plugins] 启动加载失败:', e.message));
   // 启动自动化任务调度循环（cron / 通知 / HTTP 信号服务器）
   try { automationManager.start(); } catch (e) { console.warn('[automation] 启动失败:', e.message); }
 
