@@ -256,7 +256,8 @@ class PluginManager {
     this.host = new PluginHost({
       skills: options.skills || null,
       transport: options.transport || null,
-      getSettings: options.getSettings || null
+      getSettings: options.getSettings || null,
+      applyTimeoutMs: options.applyTimeoutMs || null
     });
     this.plugins = [];
   }

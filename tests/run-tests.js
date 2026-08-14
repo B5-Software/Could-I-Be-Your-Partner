@@ -2157,7 +2157,7 @@ async function runDsPluginTests() {
       ''
     ].join('\n'));
     const { PluginManager } = require('../src/main/ds-compat/plugin-manager.js');
-    const pm = new PluginManager(dataDir).init();
+    const pm = new PluginManager(dataDir, { applyTimeoutMs: 800 }).init();
     try {
       const installed = await pm.install({ type: 'local', ref: srcDir });
       assert.strictEqual(installed.id, 'fixture-add-plugin');
@@ -2247,7 +2247,7 @@ async function runDsPluginTests() {
       ''
     ].join('\n'));
     const { PluginManager } = require('../src/main/ds-compat/plugin-manager.js');
-    const pm = new PluginManager(dataDir).init();
+    const pm = new PluginManager(dataDir, { applyTimeoutMs: 800 }).init();
     try {
       const installed = await pm.install({ type: 'local', ref: srcDir });
       const enabled = await pm.setEnabled(installed.id, true);
@@ -2476,6 +2476,68 @@ async function runDsPluginTests() {
       try { fsLocal.rmSync(dataDir, { recursive: true, force: true }); } catch { /* ignore */ }
     }
   });
+
+  await testAsync('apply 失败的服务注册清理 + 重复启用不残留（无 duplicate）', async () => {
+    const dataDir = fsLocal.mkdtempSync(pathLocal.join(osLocal.tmpdir(), 'cibyp-apply-cleanup-'));
+    const srcDir = pathLocal.join(dataDir, 'src');
+    fsLocal.mkdirSync(srcDir);
+    fsLocal.writeFileSync(pathLocal.join(srcDir, 'package.json'), JSON.stringify({ name: 'fixture-apply-fail', version: '1.0.0', type: 'module', main: 'index.js' }));
+    fsLocal.writeFileSync(pathLocal.join(srcDir, 'index.js'), [
+      "import { Service } from '@deepseek-ai/cordis';",
+      "export const name = 'fixture-apply-fail';",
+      "class ProbeSvc extends Service { constructor(ctx) { super(ctx, 'probeSvc'); } }",
+      "export function apply(ctx) {",
+      "  new ProbeSvc(ctx);",
+      "  throw new Error('boom-after-register');",
+      "}",
+      ''
+    ].join('\n'));
+    const { PluginManager } = require('../src/main/ds-compat/plugin-manager.js');
+    const pm = new PluginManager(dataDir).init();
+    try {
+      const installed = await pm.install({ type: 'local', ref: srcDir });
+      const e1 = await pm.setEnabled(installed.id, true);
+      assert.strictEqual(e1.ok, true);
+      assert.ok((e1.plugin.compatIssues || []).some(i => i.includes('boom-after-register')), '应记录 apply 失败');
+      assert.strictEqual(pm.host.ctx.get('probeSvc'), undefined, '失败后服务注册应被清理');
+      await pm.setEnabled(installed.id, false);
+      const e2 = await pm.setEnabled(installed.id, true);
+      assert.strictEqual(e2.ok, true, '重复启用不应报 service has been registered');
+      assert.ok((e2.plugin.compatIssues || []).some(i => i.includes('boom-after-register')), '第二次仍应记录失败而非 duplicate');
+    } finally {
+      try { await pm.dispose(); } catch { /* ignore */ }
+      try { fsLocal.rmSync(dataDir, { recursive: true, force: true }); } catch { /* ignore */ }
+    }
+  });
+
+  await testAsync('apply 永不返回的插件：超时强制卸载（不挂死宿主）', async () => {
+    const dataDir = fsLocal.mkdtempSync(pathLocal.join(osLocal.tmpdir(), 'cibyp-apply-hang-'));
+    const srcDir = pathLocal.join(dataDir, 'src');
+    fsLocal.mkdirSync(srcDir);
+    fsLocal.writeFileSync(pathLocal.join(srcDir, 'package.json'), JSON.stringify({ name: 'fixture-apply-hang', version: '1.0.0', type: 'module', main: 'index.js' }));
+    fsLocal.writeFileSync(pathLocal.join(srcDir, 'index.js'), [
+      "export const name = 'fixture-apply-hang';",
+      "export function apply(ctx) {",
+      "  return new Promise(() => {});",
+      "}",
+      ''
+    ].join('\n'));
+    const { PluginManager } = require('../src/main/ds-compat/plugin-manager.js');
+    const pm = new PluginManager(dataDir, { applyTimeoutMs: 800 }).init();
+    try {
+      const installed = await pm.install({ type: 'local', ref: srcDir });
+      const t0 = Date.now();
+      const en = await pm.setEnabled(installed.id, true);
+      const elapsed = Date.now() - t0;
+      assert.ok(en.plugin.compatIssues.some(i => i.includes('挂起超时')), '应记录 apply 挂起超时');
+      assert.ok(elapsed < 3000, `超时卸载应及时返回（实际 ${elapsed}ms）`);
+      const en2 = await pm.setEnabled(installed.id, true);
+      assert.strictEqual(en2.ok, true, '超时卸载后应可再次加载');
+    } finally {
+      try { await pm.dispose(); } catch { /* ignore */ }
+      try { fsLocal.rmSync(dataDir, { recursive: true, force: true }); } catch { /* ignore */ }
+    }
+  }, 10000);
 
 test('DS 服务翻译层 IPC 接线（preload / main / renderer / 授权模态框）', () => {
     const preloadContent = fsLocal.readFileSync(pathLocal.join(__dirname, '../src/preload/preload.js'), 'utf-8');

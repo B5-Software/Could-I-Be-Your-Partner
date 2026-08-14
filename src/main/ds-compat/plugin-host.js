@@ -381,10 +381,39 @@ class PluginHost {
     hostContext.pluginId = pluginId;
     hostContext.pluginName = meta.name || pluginId;
     const before = new Set(this.toolsService.tools.keys());
+    let fiber = null;
     try {
-      const fiber = await this.ctx.plugin(plugin, config);
+      // apply 挂起保护：交互式 TUI 类插件（如 dsh-cc-tui）可能永不返回，
+      // 超时后强制卸载纤维，避免阻塞启动/启用流程
+      fiber = await Promise.race([
+        this.ctx.plugin(plugin, config),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('apply 挂起超时（可能为交互式 TUI 插件）')), this.options.applyTimeoutMs || 30000).unref())
+      ]);
       this.fibers.set(pluginId, fiber);
     } catch (e) {
+      // 强制卸载可能已注册的纤维：挂起的 apply 不能被 await，否则会卡死宿主
+      const candidates = [];
+      if (fiber && typeof fiber.dispose === 'function') candidates.push(fiber);
+      try {
+        const runtime = this.ctx.registry && this.ctx.registry.get(plugin);
+        if (runtime && runtime.fibers && runtime.fibers.map) {
+          for (const f of runtime.fibers.map.values()) {
+            if (f && typeof f.dispose === 'function' && !candidates.includes(f)) candidates.push(f);
+          }
+        }
+      } catch { /* ignore */ }
+      for (const f of candidates) {
+        try {
+          await Promise.race([
+            f.dispose(),
+            new Promise((r) => setTimeout(r, 1200).unref())
+          ]);
+        } catch { /* ignore */ }
+      }
+      // 失败后彻底移除该插件可能残留的工具注册
+      for (const [name, def] of [...this.toolsService.tools.entries()]) {
+        if (def.pluginId === pluginId) this.toolsService.tools.delete(name);
+      }
       this.issues.get(pluginId).push(`apply 执行失败: ${e.message}`);
       hostContext.pluginId = null;
       hostContext.pluginName = null;
@@ -426,10 +455,20 @@ class PluginHost {
 
   async dispose() {
     for (const fiber of this.fibers.values()) {
-      try { await fiber.dispose(); } catch { /* ignore */ }
+      try {
+        await Promise.race([
+          fiber.dispose(),
+          new Promise((r) => setTimeout(r, 1500).unref())
+        ]);
+      } catch { /* ignore */ }
     }
     this.fibers.clear();
-    try { await this.ctx.fiber.dispose(); } catch { /* ignore */ }
+    try {
+      await Promise.race([
+        this.ctx.fiber.dispose(),
+        new Promise((r) => setTimeout(r, 1500).unref())
+      ]);
+    } catch { /* ignore */ }
   }
 
   /**
