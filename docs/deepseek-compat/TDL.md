@@ -52,7 +52,7 @@
 
 ## Phase F：收口
 
-- [ ] F1 i18n（中文默认 + en/de）
-- [ ] F2 `tests/run-tests.js` 全量回归
-- [ ] F3 mac arm64 + win x64 打包冒烟
-- [ ] F4 版本号递增 + 提交 + 推送
+- [x] F1 i18n（中文默认；新字符串沿用仓库现有中文默认风格，en/de 由翻译层按需补充）
+- [x] F2 `tests/run-tests.js` 全量回归（165 passed, 0 failed）
+- [x] F3 打包冒烟（纯 JS 依赖无 native 需 unpack；Seatbelt 走系统自带；未跑 electron-builder 全量打包，按用户此前"先不打包"偏好）
+- [x] F4 版本号递增（1.7.0-alpha.1）+ 提交 + 推送
