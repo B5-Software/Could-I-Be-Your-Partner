@@ -96,6 +96,25 @@ app.whenReady().then(async () => {
     check('evalCommandCAS 符号展开成功', typeof result.cas === 'string' && /x\s*\^?\s*2|2\s*x/i.test(result.cas), result.cas);
     check('getXML 返回作图源码', (result.xmlLen || 0) > 100, result.xmlLen);
     check('getBase64 异步导出 .ggb', (result.b64Len || 0) > 100, result.b64Len);
+    console.log('[layout:classic]', JSON.stringify(result.layout));
+    if (result.perspectives) console.log('[perspectives]', JSON.stringify(result.perspectives));
+    if (result.resizeProbe) console.log('[resizeProbe]', JSON.stringify(result.resizeProbe));
+    check('屏幕键盘未占用布局（showKeyboardOnFocus=false）', !(result.parts && result.parts['.KeyBoard']), result.parts && result.parts['.KeyBoard']);
+    check('perspective G：图形视图铺满分割面板', !!(result.perspectives && result.perspectives.G && result.perspectives.G.euclidian === result.perspectives.G.split),
+      result.perspectives && result.perspectives.G);
+    (() => {
+      const p = result.resizeProbe || {};
+      const m1 = /(\d+)x(\d+)/.exec(String(p.frameAfter || ''));
+      const m2 = /(\d+)x(\d+)/.exec(String(p.hostAfter || ''));
+      const fits = m1 && m2 && Math.abs(Number(m1[1]) - Number(m2[1])) <= 6 && Math.abs(Number(m1[2]) - Number(m2[2])) <= 6;
+      check('容器放大后 setSize 仍铺满（无右/下白边）', fits, { frameAfter: p.frameAfter, hostAfter: p.hostAfter });
+    })();
+    if (result.parts) console.log('[parts:classic]', JSON.stringify(result.parts));
+    if (Array.isArray(result.canvases)) console.log('[canvases:classic]', JSON.stringify(result.canvases, null, 1));
+    if (Array.isArray(result.domDump)) console.log(result.domDump.join('\n'));
+    check('classic 阶段二：3d 应用切换加载成功', !!(result.phase2 && !result.phase2.error), result.phase2 && result.phase2.error);
+    check('3d 切换后可正常作图', result.phase2 && result.phase2.eval === 'B', result.phase2 && result.phase2.eval);
+    console.log('[layout:3d]', JSON.stringify(result.phase2 && result.phase2.layout));
 
     console.log('\n==== GeoGebra 离线冒烟测试:', failures === 0 ? '全部通过' : `失败 ${failures} 项`, '====');
     app.exit(failures === 0 ? 0 : 1);

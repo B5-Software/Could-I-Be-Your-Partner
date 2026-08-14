@@ -727,6 +727,18 @@ test('initGeoGebra should accept appName/perspective/enableCAS/enable3D and rebu
   assert.ok(/oldHost\.innerHTML\s*=\s*''/.test(appContent), '切换配置未清空旧 applet 容器');
 });
 
+test('initGeoGebra should avoid init-promise infinite recursion and fill the sidebar', () => {
+  // 成功后清空 ggbInitPromise：否则切换 appName 会沿已 settle 的 promise 无限微任务递归 → 渲染器卡死
+  assert.ok(appContent.includes('ggbInitPromise = null'), '成功后未清空 ggbInitPromise（存在无限递归卡死风险）');
+  // 切换时优雅卸载旧实例（GGB applet 自带 remove()），避免新旧实例并存
+  assert.ok(appContent.includes('ggbApplet.remove()'), '切换配置未调用旧 applet 的 remove()');
+  assert.ok(appContent.includes('ggbResizeObserver.disconnect()'), '切换配置未断开旧 ResizeObserver');
+  // 5.x 真实开关：防屏幕键盘吃掉布局高度（下白边）
+  assert.ok(appContent.includes('showKeyboardOnFocus: false'), '未关闭屏幕键盘焦点弹出');
+  // classic 在窄侧边栏 portrait 竖排导致下白边：默认切纯图形视图铺满（可被 perspective 覆盖）
+  assert.ok(appContent.includes("ggbApplet.setPerspective('G')"), 'classic 默认未切到铺满视角');
+});
+
 test('GeoGebra full-API wrappers should be exposed on window', () => {
   const fns = ['evalGeoGebraCAS', 'getGeoGebraObject', 'getGeoGebraXML', 'setGeoGebraXML',
     'setGeoGebraStyle', 'getGeoGebraError', 'getGeoGebraPNGBase64', 'getGeoGebraBase64',

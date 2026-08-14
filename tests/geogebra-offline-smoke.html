@@ -6,7 +6,8 @@
   <title>GeoGebra Offline Smoke</title>
   <style>
     html, body { margin: 0; padding: 0; }
-    #ggb-element { width: 1150px; height: 820px; }
+    #ggb-element { width: 500px; height: 600px; }
+    * { box-sizing: border-box; }
   </style>
   <script src="../assets/geogebra/deployggb.js"></script>
 </head>
@@ -19,11 +20,13 @@
           const timeout = setTimeout(() => reject(new Error('appletOnLoad 超时（90s）')), 90000);
           const applet = new GGBApplet({
             appName: 'classic',
-            width: 1150,
-            height: 820,
+            width: 500,
+            height: 600,
             showToolBar: true,
             showAlgebraInput: true,
             showMenuBar: false,
+            showKeyboard: false,
+            showKeyboardOnFocus: false,
             enableRightClick: false,
             showResetIcon: true,
             appletOnLoad: function () {
@@ -68,6 +71,114 @@
             setTimeout(() => resolve(-1), 10000);
           } catch (_) { resolve(-2); }
         });
+
+        // 布局测量：canvas/视图是否铺满 host（复现"右/下白边"）
+        try {
+          const host = document.getElementById('ggb-element');
+          const hostRect = host.getBoundingClientRect();
+          const canvas = host.querySelector('canvas');
+          const frame = host.querySelector('.GeoGebraFrame');
+          out.layout = {
+            host: { w: hostRect.width, h: hostRect.height },
+            canvas: canvas ? { w: canvas.getBoundingClientRect().width, h: canvas.getBoundingClientRect().height } : null,
+            frame: frame ? { w: frame.getBoundingClientRect().width, h: frame.getBoundingClientRect().height } : null,
+          };
+          out.domDump = (function () {
+            const seen = [];
+            const walk = (el, depth) => {
+              if (depth > 8) return;
+              const r = el.getBoundingClientRect();
+              seen.push(' '.repeat(depth) + `<${el.tagName.toLowerCase()} class="${el.className || ''}" style="${(el.getAttribute('style') || '').slice(0, 80)}" rect=${Math.round(r.width)}x${Math.round(r.height)}>`);
+              for (const ch of el.children) walk(ch, depth + 1);
+            };
+            walk(host, 0);
+            return seen.slice(0, 60);
+          })();
+          out.canvases = Array.from(host.querySelectorAll('canvas')).map((c) => {
+            const r = c.getBoundingClientRect();
+            const p = c.parentElement;
+            const pr = p ? p.getBoundingClientRect() : null;
+            return {
+              cls: c.className || '',
+              rect: `${Math.round(r.width)}x${Math.round(r.height)}@${Math.round(r.left - hostRect.left)},${Math.round(r.top - hostRect.top)}`,
+              parent: p ? p.className : null,
+              parentRect: pr ? `${Math.round(pr.width)}x${Math.round(pr.height)}` : null,
+              style: (c.getAttribute('style') || '').slice(0, 120),
+            };
+          });
+          out.parts = {};
+          for (const sel of ['.ggbtoolbarpanel', '.gwt-SplitLayoutPanel', '.EuclidianPanel', '.avInputPanel', '.algebraPanel', '.KeyBoard', '.kbButtonSpace']) {
+            const el = host.querySelector(sel);
+            if (el) {
+              const r = el.getBoundingClientRect();
+              out.parts[sel] = `${Math.round(r.width)}x${Math.round(r.height)}@${Math.round(r.top - hostRect.top)}`;
+            }
+          }
+          // perspective 探测：记录各视角下 EuclidianPanel 的高度
+          out.perspectives = {};
+          for (const p of ['G', 'AG', 'AGS', 'GC', 'default']) {
+            try {
+              if (p !== 'default') loaded.setPerspective(p);
+              await new Promise((r) => setTimeout(r, 400));
+              const ep = host.querySelector('.EuclidianPanel');
+              const ap = host.querySelector('.algebraPanel');
+              const sp = host.querySelector('.gwt-SplitLayoutPanel');
+              const kb = host.querySelector('.KeyBoard');
+              const r = (el) => el ? `${Math.round(el.getBoundingClientRect().width)}x${Math.round(el.getBoundingClientRect().height)}` : null;
+              out.perspectives[p] = { euclidian: r(ep), algebra: r(ap), split: r(sp), keyboard: r(kb) };
+            } catch (e) { out.perspectives[p] = 'err:' + e.message; }
+          }
+          // 缩放器向上放大探测：host 从 500x600 扩到 700x800，验证白边成因（无 allowUpscale）
+          out.resizeProbe = {};
+          try {
+            loaded.setPerspective('G');
+            await new Promise((r) => setTimeout(r, 300));
+            const scaler0 = host.querySelector('.applet_scaler');
+            out.resizeProbe.scalerBefore = scaler0 ? `${Math.round(scaler0.getBoundingClientRect().width)}x${Math.round(scaler0.getBoundingClientRect().height)}` : null;
+            host.style.width = '700px';
+            host.style.height = '800px';
+            try { loaded.setSize(700, 800); } catch (_) {}
+            window.dispatchEvent(new Event('resize'));
+            await new Promise((r) => setTimeout(r, 500));
+            const scaler1 = host.querySelector('.applet_scaler');
+            out.resizeProbe.scalerAfter = scaler1 ? `${Math.round(scaler1.getBoundingClientRect().width)}x${Math.round(scaler1.getBoundingClientRect().height)}` : null;
+            out.resizeProbe.hostAfter = `${Math.round(host.getBoundingClientRect().width)}x${Math.round(host.getBoundingClientRect().height)}`;
+            const frame1 = host.querySelector('.GeoGebraFrame');
+            out.resizeProbe.frameAfter = frame1 ? `${Math.round(frame1.getBoundingClientRect().width)}x${Math.round(frame1.getBoundingClientRect().height)}` : null;
+          } catch (e) { out.resizeProbe.error = e.message; }
+        } catch (e) { out.layoutError = e.message; }
+
+        // 阶段二：模拟"classic → 3d"切换（naive teardown：清空容器 + 重建）
+        out.phase2 = {};
+        try {
+          const host2 = document.getElementById('ggb-element');
+          host2.innerHTML = '';
+          try { window.ggbApplet = null; } catch (_) {}
+          const loaded2 = await new Promise((resolve, reject) => {
+            const t2 = setTimeout(() => reject(new Error('3d appletOnLoad 超时（90s）')), 90000);
+            const applet2 = new GGBApplet({
+              appName: '3d', width: 500, height: 600,
+              showToolBar: true, showAlgebraInput: true, showMenuBar: false,
+              showKeyboard: false,
+              showKeyboardOnFocus: false,
+              enableRightClick: false, showResetIcon: true,
+              appletOnLoad: function () { clearTimeout(t2); resolve(window.ggbApplet); },
+            }, true);
+            applet2.setHTML5Codebase('ggb://app/GeoGebra/HTML5/5.0/web3d/', true);
+            applet2.inject('ggb-element');
+          });
+          out.phase2.version = String(loaded2.getVersion());
+          out.phase2.eval = String(loaded2.evalCommandGetLabels('B=(2,3,1)'));
+          out.phase2.objects = Array.from(loaded2.getAllObjectNames());
+          const c2 = host2.querySelector('canvas');
+          out.phase2.layout = {
+            host: { w: host2.getBoundingClientRect().width, h: host2.getBoundingClientRect().height },
+            canvas: c2 ? { w: c2.getBoundingClientRect().width, h: c2.getBoundingClientRect().height } : null,
+          };
+        } catch (e) {
+          out.phase2.error = String((e && e.stack) || e);
+        }
+
         window.__SMOKE__ = out;
       } catch (e) {
         window.__SMOKE__ = { ok: false, error: String((e && e.stack) || e) };

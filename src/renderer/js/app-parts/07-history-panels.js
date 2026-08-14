@@ -681,6 +681,7 @@
   let ggbInitPromise = null;
   let ggbLastError = null; // { message, ts }
   let ggbCurrentConfig = null; // { key, appName, perspective, enableCAS, enable3D }
+  let ggbResizeObserver = null;
   const ggbPanel = document.getElementById('geogebra-panel');
   const btnCloseGgb = document.getElementById('btn-close-geogebra');
 
@@ -723,6 +724,15 @@
     }
     // 配置切换：销毁旧 applet（GGB HTML5 无官方 remove()，清空容器并复位全局单例）
     if (ggbInitialized || ggbApplet) {
+      try {
+        if (ggbResizeObserver && typeof ggbResizeObserver.disconnect === 'function') ggbResizeObserver.disconnect();
+      } catch (_) {}
+      ggbResizeObserver = null;
+      // 官方 applet 对象有 remove()（deployggb 的 removeExistingApplet 即依赖它），
+      // 先优雅卸载旧实例（停止其渲染循环/事件），再清空容器，避免新旧实例并存引发卡死。
+      try {
+        if (ggbApplet && typeof ggbApplet.remove === 'function') ggbApplet.remove();
+      } catch (_) {}
       ggbInitialized = false;
       ggbApplet = null;
       try { window.ggbApplet = null; } catch (_) {}
@@ -764,6 +774,7 @@
             showMenuBar: false,
             showAppsPicker: false,
             showKeyboard: false,
+            showKeyboardOnFocus: false, // 5.x 真实开关：防止屏幕键盘吃掉布局高度造成下白边
             enableRightClick: false,
             enableShiftDragZoom: true,
             showResetIcon: true,
@@ -772,6 +783,9 @@
               ggbApplet = window.ggbApplet;
               ggbInitialized = true;
               ggbCurrentConfig = { key, appName, perspective: opts.perspective || null, enableCAS: !!opts.enableCAS, enable3D: !!opts.enable3D };
+              // 成功后必须清空 ggbInitPromise：否则再次 init（尤其切换 appName）会沿已 settle 的
+              // promise 无限微任务递归，渲染器主线程被饿死（表现为"卡死"）。
+              ggbInitPromise = null;
               // 加载后应用视角/CAS/3D 配置（仅在显式给出布尔值时才调用，避免误关 classic 默认能力）
               try {
                 if (typeof opts.enableCAS === 'boolean' && typeof ggbApplet.enableCAS === 'function') ggbApplet.enableCAS(opts.enableCAS);
@@ -781,6 +795,13 @@
               } catch (_) {}
               try {
                 if (opts.perspective && typeof ggbApplet.setPerspective === 'function') ggbApplet.setPerspective(String(opts.perspective));
+              } catch (_) {}
+              // classic 在窄侧边栏（宽<高）会触发 GGT portrait 竖排（图形/代数上下各半，代数区空白即"下白边"），
+              // 默认切到纯图形视图 'G' 铺满；调用方仍可显式传 perspective 覆盖。
+              try {
+                if (!opts.perspective && appName === 'classic' && typeof ggbApplet.setPerspective === 'function') {
+                  ggbApplet.setPerspective('G');
+                }
               } catch (_) {}
               // 注册错误监听器：GGB 命令失败时会回调
               try {
@@ -802,14 +823,14 @@
               try {
                 const roHost = document.getElementById('ggb-element');
                 if (roHost && typeof ResizeObserver === 'function') {
-                  const ro = new ResizeObserver(() => {
+                  ggbResizeObserver = new ResizeObserver(() => {
                     if (ggbApplet && typeof ggbApplet.setSize === 'function') {
                       const w = Math.max(50, roHost.clientWidth);
                       const h = Math.max(50, roHost.clientHeight);
                       try { ggbApplet.setSize(w, h); } catch (_) { /* 忽略尺寸更新异常 */ }
                     }
                   });
-                  ro.observe(roHost);
+                  ggbResizeObserver.observe(roHost);
                 }
               } catch (_) { /* ResizeObserver 不可用 */ }
               // 梯度延迟 setSize：覆盖 GGB 内部布局完成的各个时间点
