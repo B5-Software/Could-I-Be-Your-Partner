@@ -57,7 +57,9 @@ function parseMarkdownSections(markdownBody) {
   let current = '__intro';
   sections[current] = [];
   String(markdownBody || '').split(/\r?\n/).forEach(line => {
-    const h = line.match(/^#{2,6}\s+(.+)$/);
+    // 仅二级标题(##)作为章节分隔；三级及以下(### 等)属于当前章节的内容，
+    // 否则含子标题的章节(如 Instructions 下的 ### 小节)会被截断。
+    const h = line.match(/^##\s+(.+)$/);
     if (h) {
       current = h[1].trim().toLowerCase();
       if (!sections[current]) sections[current] = [];
