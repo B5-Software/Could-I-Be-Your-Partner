@@ -1060,6 +1060,7 @@ body {
 .env-detect-row .env-main { flex: 1; min-width: 0; }
 .env-detect-row .env-name { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 13px; }
 .env-detect-row .env-hint { font-weight: 400; font-size: 11px; color: var(--text-tertiary); }
+.env-detect-row .env-actions { display: flex; gap: 6px; flex: none; }
 .env-detect-row .env-path {
   margin-top: 2px;
   font-size: 11px;

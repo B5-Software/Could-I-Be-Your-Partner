@@ -2374,6 +2374,8 @@ test('app.js 环境检测交互（渲染 / 一键安装 / 新会话发送）', (
   assert.ok(appContent.includes('openChatSessionAndSend'), '应创建新 Chat 会话并发送');
   assert.ok(appContent.includes('env-install-btn'), '应有逐项安装按钮');
   assert.ok(appContent.includes('detectEnvironment'), '应调用检测 API');
+  assert.ok(appContent.includes('RUNTIME_CHOICES'), '运行时应有 node/bun 两个可选安装方案');
+  assert.ok(appContent.includes('二选一即可'), '安装提示应明确 Node 与 Bun 任选其一');
 });
 
 test('i18n 环境检测标签翻译（zh/en/de）', () => {
