@@ -36,6 +36,7 @@ const registerComputerUseIpc = require('./computer-use-service');
 const registerMcpIpc = require('./mcp-service');
 const registerPlaywrightIpc = require('./browser-service');
 const { registerFfmpegIpc } = require('./ffmpeg-tools');
+const { AutomationManager } = require('./automation/automation-manager');
 
 const emailService = new EmailService();
 const webControlService = new WebControlService();
@@ -99,7 +100,7 @@ const pluginSkillsProvider = () => {
 };
 // DeepSeek 插件管理器（Cordis 内核 lib + CIBYP 自研 Provider）
 // 服务翻译层 transport：agent 消息/授权请求经 IPC 往返渲染进程
-const dsApprovalPending = new Map();
+const dsRequestPending = new Map();
 const dsTransportSend = (channel, payload) => {
   try {
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, payload);
@@ -107,16 +108,16 @@ const dsTransportSend = (channel, payload) => {
 };
 const dsTransportRequest = (channel, payload, timeoutMs, signal) => {
   return new Promise((resolve, reject) => {
-    const id = payload && payload.id;
-    if (!id) { reject(new Error('approval 请求缺少 id')); return; }
+    const id = payload && (payload.id || payload.requestId);
+    if (!id) { reject(new Error('transport 请求缺少 id')); return; }
     const settle = (outcome) => { clearTimeout(timer); if (signal) signal.removeEventListener('abort', onAbort); resolve(outcome); };
-    const onAbort = () => { dsApprovalPending.delete(id); settle('cancelled'); };
-    const timer = setTimeout(() => { dsApprovalPending.delete(id); settle('cancelled'); }, timeoutMs || 300000);
+    const onAbort = () => { dsRequestPending.delete(id); settle('cancelled'); };
+    const timer = setTimeout(() => { dsRequestPending.delete(id); settle('cancelled'); }, timeoutMs || 300000);
     if (signal) {
       if (signal.aborted) { onAbort(); return; }
       signal.addEventListener('abort', onAbort, { once: true });
     }
-    dsApprovalPending.set(id, settle);
+    dsRequestPending.set(id, settle);
     dsTransportSend(channel, payload);
   });
 };
@@ -125,6 +126,12 @@ const pluginManager = new PluginManager(dataDir, {
   transport: { send: dsTransportSend, request: dsTransportRequest },
   getSettings: async () => loadJSON(settingsPath, {})
 }).init();
+// 自动化任务管理器（定时 / 系统通知 / HTTP 信号服务器 → 新 Chat 会话）
+const automationManager = new AutomationManager({
+  dataDir,
+  transport: { send: dsTransportSend, request: dsTransportRequest },
+  getSettings: async () => loadJSON(settingsPath, {})
+});
 const knowledgePath = path.join(dataDir, 'knowledge.json');
 // 异常中断的会话（关闭App时正在工作）保存到此文件，下次启动时弹模态框询问是否继续
 const pendingSessionPath = path.join(dataDir, '.cibyp-pending.json');
@@ -1296,11 +1303,41 @@ ipcMain.handle('ds:agentsSync', async (_, entries) => {
 
 // 渲染进程授权/问卷模态框的裁决回传
 ipcMain.handle('ds:approvalRespond', (_, id, outcome) => {
-  const settle = dsApprovalPending.get(id);
+  const settle = dsRequestPending.get(id);
   if (!settle) return { ok: false, error: 'approval 请求不存在或已超时' };
-  dsApprovalPending.delete(id);
+  dsRequestPending.delete(id);
   settle(outcome);
   return { ok: true };
+});
+
+// ---- 自动化任务 IPC ----
+ipcMain.handle('automation:list', () => ({ ok: true, tasks: automationManager.list(), server: automationManager.serverInfo() }));
+ipcMain.handle('automation:save', (_, task) => {
+  try { return { ok: true, task: automationManager.upsert(task) }; }
+  catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('automation:delete', (_, id) => ({ ok: automationManager.remove(id) }));
+ipcMain.handle('automation:setEnabled', (_, id, enabled) => {
+  const task = automationManager.setEnabled(id, !!enabled);
+  return task ? { ok: true, task } : { ok: false, error: '任务不存在' };
+});
+ipcMain.handle('automation:run', async (_, id, params) => {
+  try {
+    const result = await automationManager.run(id, { kind: 'manual', params: params || {}, time: new Date().toISOString() });
+    return { ok: true, result };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('automation:test', async (_, task, params) => {
+  try {
+    const result = await automationManager.test(task, params || {});
+    return { ok: true, result };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.on('automation:dispatched', (event, requestId, payload) => {
+  const settle = dsRequestPending.get(requestId);
+  if (!settle) return;
+  dsRequestPending.delete(requestId);
+  settle(payload || {});
 });
 
 // ---- 环境检测（Python / Node+npm / Bun / Git）----
@@ -3326,6 +3363,14 @@ ipcMain.handle('notifications:send', (event, opts) => {
   try {
     if (!opts || !opts.title) return { ok: false, error: 'missing title' };
     if (!Notification.isSupported()) return { ok: false, error: 'notifications not supported' };
+    // 自动化触发器：系统通知事件
+    try {
+      automationManager.onSystemNotification({
+        kind: opts.category || 'other',
+        title: opts.title,
+        body: opts.body || ''
+      });
+    } catch { /* ignore */ }
 
     const notif = new Notification({
       title: String(opts.title),
@@ -5123,6 +5168,8 @@ const pwService = registerPlaywrightIpc({
 app.whenReady().then(async () => {
   // 启动时加载已启用的 DeepSeek 插件（失败仅记录，不阻断启动）
   try { await pluginManager.loadEnabled(); } catch (e) { console.warn('[DS Plugins] 启动加载失败:', e.message); }
+  // 启动自动化任务调度循环（cron / 通知 / HTTP 信号服务器）
+  try { automationManager.start(); } catch (e) { console.warn('[automation] 启动失败:', e.message); }
 
   // ---- Serial Port Agent Tools ----
   const agentSerialPorts = new Map(); // path → { port, buffer }

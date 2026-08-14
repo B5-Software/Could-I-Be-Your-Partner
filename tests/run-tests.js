@@ -2545,6 +2545,143 @@ test('字体设置 i18n（zh/en/de）与 app.js 集成', () => {
   assert.ok(appContent.includes('populateFontSelects'), 'app.js 应含字体下拉填充');
 });
 
+// ---- Automation ----
+console.log('\nAutomation:');
+
+async function runAutomationTests() {
+  await testAsync('自动化 DSL：图灵完备子集（递归/循环/插值/??/标准库）', async () => {
+    const { runDsl } = require('../src/main/automation/dsl.js');
+    const src = [
+      'let total = 0;',
+      'fn fib(n) { if (n < 2) { return n; } return fib(n-1) + fib(n-2); }',
+      'for (let i = 1; i <= 8; i = i + 1) { total = total + fib(i); }',
+      'let t = "求和=${total}, 上界=${str.upper(\'a\')}";',
+      'return t + "|n=" + (args.n ?? 10) + "|" + json.stringify({ok: true});'
+    ].join('\n');
+    const out = await runDsl(src, { kind: 'http', params: { n: 42 }, time: Date.now() }, {});
+    assert.ok(out.includes('求和=54'), '应正确执行递归与循环');
+    assert.ok(out.includes('上界=A'), '应正确执行字符串插值与标准库');
+    assert.ok(out.includes('|n=42|'), '?? 与 args 应生效');
+    let guarded = false;
+    try { await runDsl('while (true) {}', {}, {}); } catch (e) { guarded = /最大执行步数/.test(e.message); }
+    assert.ok(guarded, '死循环应被步数保护拦截');
+  });
+
+  await testAsync('AutomationManager：DSL 渲染 → 分发 + HTTP 信号服务器 + 鉴权', async () => {
+    const fsLocal2 = require('fs');
+    const pathLocal2 = require('path');
+    const osLocal2 = require('os');
+    const dataDir = fsLocal2.mkdtempSync(pathLocal2.join(osLocal2.tmpdir(), 'cibyp-auto-test-'));
+    const dispatched = [];
+    const transport = {
+      send: (channel, payload) => { dispatched.push({ channel, payload }); },
+      request: async (channel, payload) => {
+        dispatched.push({ channel, payload });
+        return { sessionKey: 'chat:s1' };
+      }
+    };
+    const { AutomationManager } = require('../src/main/automation/automation-manager.js');
+    const mgr = new AutomationManager({
+      dataDir,
+      transport,
+      getSettings: async () => ({ automation: { serverPort: 0, serverToken: 'secret' } })
+    });
+    try {
+      const httpTask = mgr.upsert({
+        name: '构建通知', enabled: true,
+        trigger: { type: 'http', config: {} },
+        dsl: 'return "构建 " + args.repo + " @ " + args.ref + " 事件=" + str.upper(args.event ?? "push");'
+      });
+      mgr.start();
+      for (let i = 0; i < 100 && !mgr.serverInfo().running; i++) {
+        await new Promise(r => setTimeout(r, 20));
+      }
+      const info = mgr.serverInfo();
+      assert.strictEqual(info.running, true, 'HTTP 任务启用后服务器应启动');
+      const resp = await fetch(`http://127.0.0.1:${info.port}/trigger/${httpTask.id}`, {
+        method: 'POST',
+        headers: { 'Authorization': 'Bearer secret', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ repo: 'owner/app', ref: 'main' })
+      });
+      assert.strictEqual(resp.status, 200);
+      const body = await resp.json();
+      assert.strictEqual(body.accepted, true);
+      const dispatch = dispatched.find(m => m.channel === 'automation:dispatch');
+      assert.ok(dispatch, '应发生分发');
+      assert.ok(dispatch.payload.prompt.includes('构建 owner/app @ main 事件=PUSH'), '提示词应经 DSL 渲染');
+      const unauth = await fetch(`http://127.0.0.1:${info.port}/trigger/${httpTask.id}`, { method: 'POST', body: '{}' });
+      assert.strictEqual(unauth.status, 401);
+      const cronTask = mgr.upsert({
+        name: '定时', enabled: true,
+        trigger: { type: 'schedule', config: { cron: '*/5 * * * *' } },
+        dsl: 'return "tick-" + trigger.kind;'
+      });
+      const runRes = await mgr.run(cronTask.id, { kind: 'schedule', params: {} });
+      assert.strictEqual(runRes.ok, true);
+      const listed = mgr.list().find(t => t.id === cronTask.id);
+      assert.strictEqual(listed.runCount, 1);
+    } finally {
+      mgr.stop();
+      try { fsLocal2.rmSync(dataDir, { recursive: true, force: true }); } catch { /* ignore */ }
+    }
+  });
+}
+
+test('cron 匹配器：5 段表达式', () => {
+  const { matchesCron } = require('../src/main/automation/automation-manager.js');
+  assert.strictEqual(matchesCron('*/5 * * * *', new Date(2026, 0, 1, 12, 10)), true);
+  assert.strictEqual(matchesCron('*/5 * * * *', new Date(2026, 0, 1, 12, 11)), false);
+  assert.strictEqual(matchesCron('0 9 * * 1-5', new Date(2026, 7, 14, 9, 0)), true); // 周五
+  assert.strictEqual(matchesCron('0 9 * * 1-5', new Date(2026, 7, 15, 9, 0)), false); // 周六
+  assert.strictEqual(matchesCron('0 0 1 1 *', new Date(2026, 0, 1, 0, 0)), true);
+  assert.strictEqual(matchesCron('bad cron', new Date()), false);
+});
+
+test('dsh.bundle.patch：解析 rows + 受限 !!js 求值', () => {
+  const fsLocal2 = require('fs');
+  const pathLocal2 = require('path');
+  const osLocal2 = require('os');
+  const dir = fsLocal2.mkdtempSync(pathLocal2.join(osLocal2.tmpdir(), 'cibyp-patch-test-'));
+  try {
+    fsLocal2.writeFileSync(pathLocal2.join(dir, 'package.json'), JSON.stringify({ name: 'x', dsh: { bundle: { patch: './cordis.patch.yml' } } }));
+    fsLocal2.writeFileSync(pathLocal2.join(dir, 'cordis.patch.yml'), [
+      '- insert:',
+      '    - id: a',
+      '      name: "pkg-a"',
+      '      config: { mode: !!js "process.platform === \'win32\' ? \'full\' : \'write\'" }',
+      '- id: b',
+      '  disabled: true',
+      '  config: { root: !!js process.cwd() }'
+    ].join('\n'));
+    const { readBundlePatch } = require('../src/main/ds-compat/plugin-manager.js');
+    const patch = readBundlePatch(dir, { name: 'x', dsh: { bundle: { patch: './cordis.patch.yml' } } });
+    assert.strictEqual(patch.rows.length, 2);
+    assert.strictEqual(patch.rows[0].config.mode, process.platform === 'win32' ? 'full' : 'write');
+    assert.strictEqual(patch.rows[1].disabled, true);
+    assert.strictEqual(patch.rows[1].config.root, process.cwd());
+  } finally {
+    try { fsLocal2.rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ }
+  }
+});
+
+test('自动化 UI/IPC 接线（nav/页面/Monaco 编辑器/分发回执）', () => {
+  const htmlContent = fs.readFileSync(require('path').join(__dirname, '../src/renderer/pages/index.html'), 'utf-8');
+  const preloadContent = fs.readFileSync(require('path').join(__dirname, '../src/preload/preload.js'), 'utf-8');
+  const mainContent = fs.readFileSync(require('path').join(__dirname, '../src/main/main.js'), 'utf-8');
+  const appContent = fs.readFileSync(require('path').join(__dirname, '../src/renderer/js/app.js'), 'utf-8');
+  assert.ok(htmlContent.includes('id="nav-automation"'), '侧栏应有触发入口');
+  assert.ok(htmlContent.includes('id="page-automation"'), '应有触发页');
+  assert.ok(htmlContent.includes('id="automation-dsl-editor"'), '应有 Monaco 编辑器挂载点');
+  for (const api of ['automationList', 'automationSave', 'automationRun', 'automationTest', 'onAutomationDispatch']) {
+    assert.ok(preloadContent.includes(api), `preload 应暴露 ${api}`);
+  }
+  assert.ok(mainContent.includes("ipcMain.handle('automation:list'"), 'main 应注册 automation IPC');
+  assert.ok(mainContent.includes('automationManager.onSystemNotification'), '通知事件应接入自动化触发器');
+  assert.ok(appContent.includes('ensureAutomationMonaco'), '应使用本地 Monaco 编辑 DSL');
+  assert.ok(appContent.includes('onAutomationDispatch'), '应处理自动化分发（新建会话发送）');
+  assert.ok(appContent.includes('automation:dispatched') || preloadContent.includes('automation:dispatched'), '应有分发回执通道');
+});
+
 // ---- Summary ----
 (async () => {
   // 等待异步 LLM 测试完成
@@ -2554,6 +2691,7 @@ test('字体设置 i18n（zh/en/de）与 app.js 集成', () => {
   runToolsPageRefactorTests();
   runPromptCacheTests();
   runSandboxTests();
+  await runAutomationTests();
   await runDsPluginTests();
 
   console.log(`\n${'='.repeat(40)}`);

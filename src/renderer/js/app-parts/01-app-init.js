@@ -801,6 +801,7 @@
       if (btn.dataset.page === 'skills') pushPageAfterLoad(loadSkillsPage);
       if (btn.dataset.page === 'knowledge') pushPageAfterLoad(() => loadKnowledgePage());
       if (btn.dataset.page === 'memory') pushPageAfterLoad(() => loadMemoryPage());
+      if (btn.dataset.page === 'automation') pushPageAfterLoad(loadAutomationPage);
       if (btn.dataset.page === 'settings') pushPageAfterLoad(loadSettingsPage);
       if (btn.dataset.page === 'history') pushPageAfterLoad(loadHistoryPage);
       if (btn.dataset.page === 'code') {

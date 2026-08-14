@@ -130,6 +130,10 @@
           <i class="fa-solid fa-brain"></i>
           <span>记忆</span>
         </button>
+        <button class="nav-item" data-page="automation" title="触发" id="nav-automation">
+          <i class="fa-solid fa-bolt"></i>
+          <span>触发</span>
+        </button>
       </nav>
       <div class="sidebar-footer">
         <button class="nav-item" data-page="settings" title="设置">
@@ -732,6 +736,21 @@
             <i class="fa-solid fa-brain"></i>
             <p>暂无长期记忆，AI Agent会在工作中自动记录</p>
           </div>
+        </div>
+      </section>
+
+      <!-- Automation Page（触发：定时 / 系统通知 / HTTP 信号 → 新 Chat 会话） -->
+      <section id="page-automation" class="page">
+        <div class="page-header">
+          <h2><i class="fa-solid fa-bolt"></i> 触发</h2>
+          <p class="page-desc">自动化任务：定时、系统通知或 HTTP 信号触发后，用 DSL 构造提示词并新建一个 Chat 会话发送。</p>
+          <div class="page-header-actions">
+            <button class="btn-primary btn-sm" id="btn-automation-new"><i class="fa-solid fa-plus"></i> 新建任务</button>
+          </div>
+        </div>
+        <p id="automation-server-status" class="setting-hint" style="margin:0 0 12px"></p>
+        <div id="automation-list" style="display:flex;flex-direction:column;gap:10px">
+          <div class="empty-state"><i class="fa-solid fa-bolt"></i><p>暂无自动化任务</p></div>
         </div>
       </section>
 
@@ -2691,6 +2710,43 @@
         <button class="btn-primary" id="btn-save-plugin-config">
           <i class="fa-solid fa-check"></i> 保存
         </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Automation Editor Modal -->
+  <div class="modal-overlay hidden" id="automation-editor-modal">
+    <div class="modal" style="max-width:760px">
+      <div class="modal-header">
+        <h3><i class="fa-solid fa-bolt"></i> 自动化任务</h3>
+        <button class="btn-icon" id="btn-close-automation-editor" title="关闭">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+      <div class="modal-body">
+        <div style="display:flex;gap:10px;align-items:center;margin-bottom:10px">
+          <input type="text" id="automation-name" placeholder="任务名称" style="flex:1">
+          <div class="toggle-switch" title="启用">
+            <input type="checkbox" id="automation-enabled" checked><span class="toggle-slider"></span>
+          </div>
+        </div>
+        <div style="display:flex;gap:10px;align-items:center;margin-bottom:10px">
+          <label style="font-size:12px;color:var(--text-secondary)">触发类型</label>
+          <select id="automation-trigger-type" style="width:220px">
+            <option value="schedule">定时（cron）</option>
+            <option value="notification">系统通知</option>
+            <option value="http">HTTP 信号服务器</option>
+          </select>
+        </div>
+        <div id="automation-trigger-config" style="margin-bottom:10px"></div>
+        <label style="font-size:12px;color:var(--text-secondary);display:block;margin-bottom:4px">提示词构造 DSL（返回字符串；内置 str/arr/num/math/time/json/text/uuid/env/fetch 标准库，trigger 与 args 为入参）</label>
+        <div id="automation-dsl-editor" style="height:320px;border:1px solid var(--border);border-radius:8px;overflow:hidden"></div>
+        <p id="automation-editor-error" style="font-size:11px;color:var(--danger);display:none;margin:8px 0 0"></p>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-secondary" id="btn-automation-test"><i class="fa-solid fa-flask"></i> 测试渲染</button>
+        <button class="btn-secondary" id="btn-cancel-automation-editor">取消</button>
+        <button class="btn-primary" id="btn-save-automation"><i class="fa-solid fa-check"></i> 保存</button>
       </div>
     </div>
   </div>

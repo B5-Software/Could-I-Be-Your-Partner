@@ -482,6 +482,12 @@ contextBridge.exposeInMainWorld('api', {
   dsPluginToolCall: (pluginId, toolName, args, cwd, sandboxMode, sessionKey) => ipcRenderer.invoke('ds:toolCall', pluginId, toolName, args, { cwd, sandboxMode, sessionKey }),
   dsAgentSync: (entries) => ipcRenderer.invoke('ds:agentsSync', entries),
   dsApprovalRespond: (id, outcome) => ipcRenderer.invoke('ds:approvalRespond', id, outcome),
+  automationList: () => ipcRenderer.invoke('automation:list'),
+  automationSave: (task) => ipcRenderer.invoke('automation:save', task),
+  automationDelete: (id) => ipcRenderer.invoke('automation:delete', id),
+  automationSetEnabled: (id, enabled) => ipcRenderer.invoke('automation:setEnabled', id, enabled),
+  automationRun: (id, params) => ipcRenderer.invoke('automation:run', id, params),
+  automationTest: (task, params) => ipcRenderer.invoke('automation:test', task, params),
   detectEnvironment: () => ipcRenderer.invoke('env:detect'),
   onPluginsChanged: (cb) => {
     const listener = () => cb();
@@ -502,6 +508,17 @@ contextBridge.exposeInMainWorld('api', {
     const listener = (_event, payload) => cb(payload);
     ipcRenderer.on('ds:approvalRequest', listener);
     return () => ipcRenderer.removeListener('ds:approvalRequest', listener);
+  },
+  onAutomationDispatch: (cb) => {
+    const listener = (_event, payload) => {
+      if (!payload || !payload.requestId) return;
+      Promise.resolve(cb(payload)).then(
+        (result) => ipcRenderer.send('automation:dispatched', payload.requestId, result || {}),
+        (error) => ipcRenderer.send('automation:dispatched', payload.requestId, { error: error && error.message ? error.message : String(error) })
+      );
+    };
+    ipcRenderer.on('automation:dispatch', listener);
+    return () => ipcRenderer.removeListener('automation:dispatch', listener);
   },
   mcpCallTool: (serverName, toolName, args) => ipcRenderer.invoke('mcp:callTool', serverName, toolName, args),
   mcpGetStatus: () => ipcRenderer.invoke('mcp:getStatus'),

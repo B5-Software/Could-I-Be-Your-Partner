@@ -15,6 +15,7 @@
 const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
+const yaml = require('js-yaml');
 const { PluginHost } = require('./plugin-host');
 
 const SHIMS = {
@@ -22,6 +23,149 @@ const SHIMS = {
   '@deepseek-ai/cordis': path.join(__dirname, 'shims', 'cordis'),
   '@deepseek-ai/schemastery': path.join(__dirname, '..', '..', '..', 'node_modules', '@deepseek-ai', 'schemastery')
 };
+
+// ---- dsh.bundle.patch 解析 ----
+// 受限 !!js 求值：只支持 process.env.X / process.platform / process.cwd() /
+// 字面量 / ?? / ?: / + 拼接（官方补丁文件里的全部形态）。
+function evalJsPatchExpr(src) {
+  const s = String(src).trim();
+  let i = 0;
+  const skipWs = () => { while (i < s.length && /\s/.test(s[i])) i++; };
+  const parsePrimary = () => {
+    skipWs();
+    if (s.startsWith('process.env.', i)) {
+      i += 'process.env.'.length;
+      let name = '';
+      while (i < s.length && /[A-Za-z0-9_]/.test(s[i])) name += s[i++];
+      return process.env[name];
+    }
+    if (s.startsWith('process.platform', i)) { i += 'process.platform'.length; return process.platform; }
+    if (s.startsWith('process.cwd()', i)) { i += 'process.cwd()'.length; return process.cwd(); }
+    if (s.startsWith('undefined', i)) { i += 9; return undefined; }
+    if (s.startsWith('null', i)) { i += 4; return null; }
+    if (s.startsWith('true', i)) { i += 4; return true; }
+    if (s.startsWith('false', i)) { i += 5; return false; }
+    if (s[i] === '"' || s[i] === "'") {
+      const q = s[i++];
+      let out = '';
+      while (i < s.length && s[i] !== q) {
+        if (s[i] === '\\' && s[i + 1] === q) { out += q; i += 2; } else out += s[i++];
+      }
+      i++;
+      return out;
+    }
+    if (/[-0-9]/.test(s[i] || '')) {
+      let num = '';
+      if (s[i] === '-') num += s[i++];
+      while (i < s.length && /[0-9.]/.test(s[i])) num += s[i++];
+      return parseFloat(num);
+    }
+    if (s[i] === '(') {
+      i++;
+      const v = parseExpr();
+      skipWs();
+      if (s[i] === ')') i++;
+      return v;
+    }
+    throw new Error(`不支持的 !!js 片段: ${src}`);
+  };
+  const parseConcat = () => {
+    let v = parsePrimary();
+    skipWs();
+    while (s[i] === '+') {
+      i++;
+      v = String(v) + String(parsePrimary());
+      skipWs();
+    }
+    return v;
+  };
+  const parseOr = () => {
+    let v = parseConcat();
+    skipWs();
+    while (s.startsWith('??', i)) {
+      i += 2;
+      const r = parseConcat();
+      v = v == null ? r : v;
+      skipWs();
+    }
+    return v;
+  };
+  const parseExpr = () => {
+    let v = parseOr();
+    skipWs();
+    if (s.startsWith('===', i) || s.startsWith('==', i)) {
+      const op = s.startsWith('===', i) ? 3 : 2;
+      i += op;
+      const r = parseOr();
+      v = op === 3 ? v === r : v == r;
+      skipWs();
+    }
+    if (s[i] === '?') {
+      i++;
+      const a = parseExpr();
+      skipWs();
+      if (s[i] === ':') i++;
+      const b = parseExpr();
+      return v ? a : b;
+    }
+    return v;
+  };
+  const out = parseExpr();
+  skipWs();
+  if (i !== s.length) throw new Error(`无法完整解析 !!js: ${src}`);
+  return out;
+}
+
+const JS_EXPR_TYPE = new yaml.Type('tag:yaml.org,2002:js', {
+  kind: 'scalar',
+  resolve: () => true,
+  construct: (data) => ({ __jsExpr: data })
+});
+const BUNDLE_YAML_SCHEMA = yaml.DEFAULT_SCHEMA.extend([JS_EXPR_TYPE]);
+
+function evaluatePatchValue(value) {
+  if (value && typeof value === 'object' && Object.prototype.hasOwnProperty.call(value, '__jsExpr')) {
+    return evalJsPatchExpr(value.__jsExpr);
+  }
+  if (Array.isArray(value)) return value.map(evaluatePatchValue);
+  if (value && typeof value === 'object') {
+    const out = {};
+    for (const [k, v] of Object.entries(value)) out[k] = evaluatePatchValue(v);
+    return out;
+  }
+  return value;
+}
+
+/** 读取并解析插件的 dsh.bundle.patch（YAML 组合补丁）。 */
+function readBundlePatch(installDir, pkg) {
+  const patchRel = pkg && pkg.dsh && pkg.dsh.bundle && pkg.dsh.bundle.patch;
+  if (typeof patchRel !== 'string') return { rows: [] };
+  const patchFile = path.resolve(installDir, patchRel);
+  if (!fs.existsSync(patchFile)) return { file: patchRel, rows: [] };
+  const doc = yaml.load(fs.readFileSync(patchFile, 'utf8'), { schema: BUNDLE_YAML_SCHEMA });
+  const rows = [];
+  for (const item of Array.isArray(doc) ? doc : []) {
+    if (!item || typeof item !== 'object') continue;
+    if (Array.isArray(item.insert)) {
+      for (const row of item.insert) {
+        if (row && row.id) rows.push({
+          id: row.id,
+          name: row.name || row.id,
+          config: evaluatePatchValue(row.config || {}),
+          disabled: false
+        });
+      }
+    } else if (item.id) {
+      rows.push({
+        id: item.id,
+        name: item.name || item.id,
+        config: evaluatePatchValue(item.config || {}),
+        disabled: !!item.disabled
+      });
+    }
+  }
+  return { file: patchRel, rows };
+}
 
 /**
  * 异步执行 npm（不再使用 spawnSync：安装可能耗时数分钟，同步等待会
@@ -306,11 +450,28 @@ class PluginManager {
       // 否则插件移动后 @deepseek-ai/dsh-llm 等运行期依赖会随 tmpDir 一起被删。
       const tmpNm = path.join(tmpDir, 'node_modules');
       if (fs.existsSync(tmpNm)) {
-        try {
-          fs.renameSync(tmpNm, path.join(installDir, 'node_modules'));
-        } catch {
-          // 跨设备回退：复制
-          try { fs.cpSync(tmpNm, path.join(installDir, 'node_modules'), { recursive: true }); } catch { /* ignore */ }
+        // 合并策略：插件目录可能自带嵌套 node_modules（npm 为它嵌套的
+        // 版本敏感依赖，如 react），绝不能被 peer 平铺覆盖，否则会出现
+        // react/compiler-runtime 这类子路径丢失。这里只补充缺失的依赖。
+        const destNm = path.join(installDir, 'node_modules');
+        fs.mkdirSync(destNm, { recursive: true });
+        const moveIn = (src, dest) => {
+          try { fs.renameSync(src, dest); }
+          catch { try { fs.cpSync(src, dest, { recursive: true }); } catch { /* ignore */ } }
+        };
+        for (const name of fs.readdirSync(tmpNm)) {
+          const s = path.join(tmpNm, name);
+          const d = path.join(destNm, name);
+          if (name === '@deepseek-ai') {
+            if (!fs.existsSync(d)) { fs.mkdirSync(d, { recursive: true }); }
+            for (const inner of fs.readdirSync(s)) {
+              const si = path.join(s, inner);
+              const di = path.join(d, inner);
+              if (!fs.existsSync(di)) moveIn(si, di);
+            }
+            continue;
+          }
+          if (!fs.existsSync(d)) moveIn(s, d);
         }
       }
       try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
@@ -318,6 +479,14 @@ class PluginManager {
 
     const entry = this._resolveEntry(installDir, pkg);
     this._ensureShims(installDir);
+    // dsh.bundle.patch 流程：解析官方组合补丁（rows/config/disabled + 受限 !!js
+    // 求值），作为 CIBYP 的组合元数据；依赖解析维持 npm 默认（真实 peer 自动安装，
+    // 实测 react 等嵌套版本在官方仓库中已自洽，无需 legacy-peer-deps）。
+    const bundlePatch = readBundlePatch(installDir, pkg);
+    // 补丁中属于本插件自身的行 → 作为默认配置种子
+    let config = {};
+    const selfRow = bundlePatch.rows.find(r => r.name === pkg.name || r.id === this._slug(pkg.name));
+    if (selfRow && selfRow.config && typeof selfRow.config === 'object') config = selfRow.config;
     const record = {
       id: this._slug(pkg.name),
       name: pkg.name,
@@ -326,7 +495,8 @@ class PluginManager {
       source: { type, ref },
       installDir,
       entry,
-      config: {},
+      config,
+      bundlePatch: { file: bundlePatch.file || null, rows: bundlePatch.rows },
       enabled: false, // 默认禁用，需用户显式启用（安全）
       compatTier: 'native',
       compatIssues: [],
@@ -429,6 +599,7 @@ class PluginManager {
       source: rec.source,
       enabled: !!rec.enabled,
       config: rec.config || {},
+      bundlePatch: rec.bundlePatch || { file: null, rows: [] },
       compatTier: rec.compatTier,
       compatIssues: rec.compatIssues || [],
       toolCount: rec.toolCount || 0,
@@ -441,4 +612,4 @@ class PluginManager {
   }
 }
 
-module.exports = { PluginManager };
+module.exports = { PluginManager, readBundlePatch };
