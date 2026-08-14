@@ -13,7 +13,7 @@ html, body {
   height: 100%;
   background: transparent !important;
   overflow: hidden;
-  font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+  font-family: var(--font-stack, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif);
   user-select: none;
   -webkit-user-select: none;
 }

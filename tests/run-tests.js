@@ -2521,6 +2521,16 @@ test('全局字体栈：内置自由字体 + 默认外观不变', () => {
   assert.ok(initJs.includes('FONT_OPTIONS'), '应有内置字体选项表');
 });
 
+test('全局字体应覆盖表单控件（按钮/输入框/搜索框等默认不继承）', () => {
+  const mainCss = fs.readFileSync(require('path').join(__dirname, '../src/renderer/css/main.css'), 'utf-8');
+  const voiceCss = fs.readFileSync(require('path').join(__dirname, '../src/renderer/css/voice-bar.css'), 'utf-8');
+  assert.ok(/button,\s*input,\s*select,\s*textarea,\s*optgroup,\s*summary\s*\{[\s\S]*?font-family:\s*inherit/m.test(mainCss), '表单控件应显式继承全局字体');
+  assert.ok(mainCss.includes('button,') && mainCss.includes('letter-spacing: inherit'), '按钮应继承字距');
+  assert.ok(voiceCss.includes('var(--font-stack'), '语音条应使用全局字体栈');
+  // 代码/终端等刻意使用等宽字体的规则应保留
+  assert.ok(mainCss.includes("'Consolas', 'Courier New', monospace"), '等宽代码字体应保留');
+});
+
 test('资源下载脚本同步内置字体（OFL 自由字体）', () => {
   const script = fs.readFileSync(require('path').join(__dirname, '../scripts/download-voice-models.js'), 'utf-8');
   for (const family of ['Noto Sans SC', 'Noto Serif SC', 'LXGW WenKai', 'Inter', 'Source Sans 3', 'Noto Sans']) {

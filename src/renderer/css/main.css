@@ -82,6 +82,22 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* 表单控件默认不继承字体：按钮/输入框/搜索框/下拉框必须显式继承全局字体栈 */
+button,
+input,
+select,
+textarea,
+optgroup,
+summary {
+  font-family: inherit;
+  font-size: inherit;
+}
+
+button,
+select {
+  letter-spacing: inherit;
+}
+
 /* Custom Titlebar */
 #titlebar {
   display: flex;
