@@ -22,7 +22,8 @@
   // 高精度元描述特征：只匹配"复述任务/输出指令"这类明确信号，避免误伤正常标题
   const META_PATTERNS = [
     /^我们?被(要求|问到)/,
-    /^(任务|标题|title)[:：\s]/i,
+    /^(任务|标题|title)([:：\s]|$)/i,
+    /^(task|title|topic|subject|heading|answer|final answer|summary|identify task)([\s:：]|$)/i,
     /请(为|给)[^。！？\n]{0,20}(生成|起|拟定|输出|总结)[^。！？\n]{0,8}标题/,
     /(生成|起|拟定|输出|总结)[^。！？\n]{0,8}(标题|一句话)/,
     /只(输出|返回)[^。！？\n]{0,8}(标题|文字)/,
@@ -36,8 +37,11 @@
     if (!text || typeof text !== 'string') return '';
     let t = text
       .replace(/["「」『』《》""''`]/g, '')
+      .replace(/\*\*|__|~~/g, '')
       .replace(/^(标题|title)[:：]\s*/i, '')
-      .replace(/^[-*•\d.)>\s]+/, '')
+      .replace(/^[-*•\d.)>\s#]+/, '')
+      .replace(/[\s:：]+$/, '')
+      .replace(/[。！？!?，,；;.…]+$/, '')
       .trim();
     const firstLine = t.split(/\n/)[0] || '';
     if (firstLine.trim() && firstLine.trim().length <= MAX_TITLE_LEN) t = firstLine;
@@ -46,7 +50,12 @@
 
   function isMetaDescription(text) {
     if (!text || typeof text !== 'string') return true;
-    const t = text.trim();
+    // 与 cleanTitle 同规格做防御性归一化，保证无论调用方是否先清洗都能识别
+    const t = text.trim()
+      .replace(/\*\*|__|~~/g, '')
+      .replace(/[\s:：]+$/, '')
+      .replace(/[。！？!?，,；;.…]+$/, '')
+      .trim();
     if (!t) return true;
     if (t.length > MAX_TITLE_LEN) return true;
     return META_PATTERNS.some((p) => p.test(t));
@@ -107,9 +116,9 @@
 
   function buildTitlePrompt(mode) {
     const modeHint = mode === 'code'
-      ? '5. 标题偏向编程/代码主题，例如"实现登录接口"。'
+      ? '7. 标题偏向编程/代码主题，例如"实现登录接口"。'
       : mode === 'babe'
-        ? '5. 标题温馨简洁，例如"今天的心情"。'
+        ? '7. 标题温馨简洁，例如"今天的心情"。'
         : '';
     return `你是会话标题助手。把用户消息压缩成一个 2-12 字的中文标题。
 规则：
@@ -117,6 +126,8 @@
 2. 必须提炼主题/任务，严禁照抄、截取或复述用户消息（去掉"请/帮我"再照抄也不行）
 3. 名词短语或"动词+名词"，如"Python爬虫"、"查询天气"
 4. 提问型消息输出主题名，如"闭包原理"
+5. 禁止输出思维步骤标签或占位符，如"Identify Task"、"步骤一"、"**标题**"
+6. 标题语言与用户消息一致，中文消息必须输出中文标题
 ${modeHint}
 正确示例：
 用户: 帮我写一个Python爬虫，爬取豆瓣电影Top250 → Python爬虫
@@ -126,7 +137,8 @@ ${modeHint}
 错误示例（严禁）：
 用户: 帮我写一个Python爬虫 → 帮我写一个Python爬虫（照抄）
 用户: 帮我写一个Python爬虫 → 写一个Python爬虫（去掉礼貌词仍是照抄）
-用户: 解释一下JavaScript闭包 → 解释一下JavaScript闭包（复述）`;
+用户: 解释一下JavaScript闭包 → 解释一下JavaScript闭包（复述）
+用户: 帮我写一个Python爬虫 → **Identify Task**: Python爬虫（步骤标签，禁止）`;
   }
 
   return {

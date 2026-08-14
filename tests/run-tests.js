@@ -3058,6 +3058,9 @@ test('标题工具：元描述识别与正常标题不被误伤', () => {
   for (const bad of ['请为以下对话生成标题', '我们被要求生成一个标题', '标题：任务', '只输出标题文字', '不超过10个字']) {
     assert.ok(TU.isMetaDescription(bad), `应识别元描述: ${bad}`);
   }
+  for (const bad of ['Identify Task', '**Identify Task**:', 'Task:', 'Summary', 'Topic']) {
+    assert.ok(TU.isMetaDescription(bad), `应识别思维步骤标签: ${bad}`);
+  }
   for (const good of ['Python爬虫', '查询天气', 'JS闭包解释', '批量生成报表', '相对论入门']) {
     assert.ok(!TU.isMetaDescription(good), `不应误伤正常标题: ${good}`);
   }
@@ -3070,6 +3073,8 @@ test('标题工具：输出清洗（引号/前缀/多行取首行）', () => {
   assert.strictEqual(TU.cleanTitle('标题：Python爬虫'), 'Python爬虫');
   assert.strictEqual(TU.cleanTitle('Python爬虫\n这是我的解释'), 'Python爬虫');
   assert.strictEqual(TU.cleanTitle('1. 查询天气'), '查询天气');
+  assert.strictEqual(TU.cleanTitle('**Identify Task**:'), 'Identify Task');
+  assert.strictEqual(TU.cleanTitle('# 查询天气'), '查询天气');
 });
 
 test('标题工具：思考内容提取结论（倒序+剥引导词）', () => {
@@ -3094,6 +3099,8 @@ test('标题提示词：包含禁止照抄负例与模式风格（提示词工�
   assert.ok(prompt.includes('严禁照抄'), '提示词应明确禁止照抄');
   assert.ok(prompt.includes('去掉"请/帮我"再照抄也不行'), '提示词应含去礼貌词负例');
   assert.ok(prompt.includes('正确示例') && prompt.includes('错误示例'), '提示词应含正/负 few-shot');
+  assert.ok(prompt.includes('Identify Task'), '提示词应含步骤标签负例');
+  assert.ok(prompt.includes('标题语言与用户消息一致'), '提示词应要求语言一致');
   assert.ok(TU.buildTitlePrompt('code').includes('编程/代码'), 'code 模式应有主题提示');
   assert.ok(TU.buildTitlePrompt('babe').includes('温馨'), 'babe 模式应有风格提示');
   // 不能用易被复述的"请为以下对话生成标题"句式
