@@ -24,6 +24,28 @@ const SHIMS = {
   '@deepseek-ai/schemastery': path.join(__dirname, '..', '..', '..', 'node_modules', '@deepseek-ai', 'schemastery')
 };
 
+// ---- workspace:* 协议清理 ----
+// npm 不认识 pnpm/yarn monorepo 的 workspace: 协议（EUNSUPPORTEDPROTOCOL）。
+// 对以仓库源码方式安装的插件（GitHub tarball），在 npm install 前清理：
+//  - devDependencies 里的 workspace:* 直接删除（运行时不需要，且 npm 校验阶段也会解析）
+//  - dependencies/optional/peer 里的 workspace:* 删除并记录告警（此类内部包无法独立解析，
+//    强行改成 registry 版本只会 E404；删除后若插件运行时 import 会在加载阶段给出明确的模块缺失错误）
+function sanitizeWorkspaceSpecs(pkg) {
+  const removed = [];
+  for (const field of ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies']) {
+    const deps = pkg && typeof pkg === 'object' ? pkg[field] : undefined;
+    if (deps && typeof deps === 'object') {
+      for (const key of Object.keys(deps)) {
+        if (typeof deps[key] === 'string' && deps[key].startsWith('workspace:')) {
+          delete deps[key];
+          removed.push(`${field}.${key}`);
+        }
+      }
+    }
+  }
+  return removed;
+}
+
 // ---- dsh.bundle.patch 解析 ----
 // 受限 !!js 求值：只支持 process.env.X / process.platform / process.cwd() /
 // 字面量 / ?? / ?: / + 拼接（官方补丁文件里的全部形态）。
@@ -561,8 +583,25 @@ class PluginManager {
           try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
           throw e;
         }
+        // 清理 monorepo 的 workspace:* 协议（npm EUNSUPPORTEDPROTOCOL），devDependencies 不安装
+        const pkgPath = path.join(ghSrc, 'package.json');
+        try {
+          const rawPkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+          const removed = sanitizeWorkspaceSpecs(rawPkg);
+          if (removed.length > 0) {
+            fs.writeFileSync(pkgPath, JSON.stringify(rawPkg, null, 2) + '\n', 'utf8');
+            const runtime = removed.filter((r) => !r.startsWith('devDependencies.'));
+            progress({
+              stage: 'npm', source: type,
+              line: `清理 ${removed.length} 个 workspace:* 依赖（npm 不支持）`
+                + (runtime.length ? `；其中 ${runtime.length} 个运行时依赖缺失，插件加载时若引用将报模块不存在` : '')
+            });
+          }
+        } catch (e) {
+          progress({ stage: 'npm', source: type, line: `workspace:* 清理跳过: ${e.message}` });
+        }
         progress({ stage: 'npm', source: type, line: '安装依赖…' });
-        const dep = await runNpmAsync(['install', '--prefix', ghSrc, '--ignore-scripts', '--no-audit', '--no-fund'], {
+        const dep = await runNpmAsync(['install', '--prefix', ghSrc, '--ignore-scripts', '--no-audit', '--no-fund', '--omit=dev'], {
           env: npmEnv, timeout: 300000, onOutput: (p) => progress({ stage: 'npm-line', source: type, ...p })
         });
         if (dep.status !== 0) {
@@ -839,4 +878,4 @@ class PluginManager {
   }
 }
 
-module.exports = { PluginManager, readBundlePatch, repairReactRuntime, isInteractiveTuiPlugin, classifyGithubRepo, extractCatalogRepos };
+module.exports = { PluginManager, readBundlePatch, repairReactRuntime, isInteractiveTuiPlugin, classifyGithubRepo, extractCatalogRepos, sanitizeWorkspaceSpecs };

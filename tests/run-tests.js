@@ -3049,6 +3049,30 @@ test('awesome 目录解析：提取可安装插件仓库并过滤噪音', () => 
   assert.strictEqual(repos.filter(r => r === 'AbnerAI/dsh-monitor').length, 1, '应去重');
 });
 
+test('pluginManager：清理 workspace:* 协议（npm EUNSUPPORTEDPROTOCOL）', () => {
+  const { sanitizeWorkspaceSpecs } = require('../src/main/ds-compat/plugin-manager.js');
+  const pkg = {
+    name: 'x',
+    dependencies: { '@org/runtime': 'workspace:*', lodash: '^4.17.0' },
+    devDependencies: { '@org/dev': 'workspace:~', typescript: '5.9.3' },
+    optionalDependencies: { '@org/opt': 'workspace:^1.0.0' },
+    peerDependencies: { '@org/peer': 'workspace:*' },
+  };
+  const removed = sanitizeWorkspaceSpecs(pkg);
+  assert.strictEqual(removed.length, 4, '应清理 4 个 workspace 依赖');
+  assert.ok(!('@org/runtime' in pkg.dependencies) && pkg.dependencies.lodash === '^4.17.0', '运行时 workspace 依赖应删除，普通依赖保留');
+  assert.ok(!('@org/dev' in pkg.devDependencies) && pkg.devDependencies.typescript === '5.9.3', 'dev workspace 依赖应删除');
+  assert.deepStrictEqual(pkg.optionalDependencies, {}, 'optional workspace 依赖应删除');
+  assert.deepStrictEqual(pkg.peerDependencies, {}, 'peer workspace 依赖应删除');
+  // 无 workspace 时原样
+  const plain = { dependencies: { a: '^1.0.0' } };
+  assert.deepStrictEqual(sanitizeWorkspaceSpecs(plain), []);
+  assert.deepStrictEqual(plain, { dependencies: { a: '^1.0.0' } });
+  const pmSrc = fs.readFileSync(require('path').join(__dirname, '../src/main/ds-compat/plugin-manager.js'), 'utf-8');
+  assert.ok(pmSrc.includes('sanitizeWorkspaceSpecs(rawPkg)'), 'GitHub 安装路径未接入 workspace 清理');
+  assert.ok(pmSrc.includes('--omit=dev'), 'GitHub 安装未跳过 devDependencies');
+});
+
 // ---- Conversation Title Generation ----
 console.log('\nConversation Title:');
 
