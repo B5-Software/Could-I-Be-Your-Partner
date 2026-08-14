@@ -2941,6 +2941,26 @@ test('交互式 TUI 插件识别：GUI 宿主跳过加载（不渲染到终端�
   }
 });
 
+test('awesome 目录解析：提取可安装插件仓库并过滤噪音', () => {
+  const { extractCatalogRepos } = require('../src/main/ds-compat/plugin-manager.js');
+  const text = [
+    'https://github.com/0xsline/awesome-deepseek-harness',
+    'https://github.com/dsh-external/browser4-dsh',
+    'https://github.com/deepseek-ai/deepseek-harness',
+    'https://github.com/topics/dsh-plugin',
+    'https://github.com/dsh-external/hub',
+    'https://github.com/AbnerAI/dsh-monitor',
+    'https://github.com/AbnerAI/dsh-monitor'
+  ].join('\n');
+  const repos = extractCatalogRepos(text, '0xsline/awesome-deepseek-harness');
+  assert.ok(repos.includes('dsh-external/browser4-dsh'), '应提取插件仓库');
+  assert.ok(repos.includes('AbnerAI/dsh-monitor'), '应提取插件仓库');
+  assert.ok(!repos.includes('topics/dsh-plugin'), '应过滤 GitHub topic 链接');
+  assert.ok(!repos.includes('dsh-external/hub'), '应过滤目录仓库');
+  assert.ok(!repos.includes('deepseek-ai/deepseek-harness'), '应过滤官方仓库');
+  assert.strictEqual(repos.filter(r => r === 'AbnerAI/dsh-monitor').length, 1, '应去重');
+});
+
 // ---- Summary ----
 (async () => {
   // 等待异步 LLM 测试完成

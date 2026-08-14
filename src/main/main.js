@@ -1255,7 +1255,7 @@ ipcMain.handle('plugins:installGithub', async (event, repo) => {
     });
     broadcastPluginsChanged();
     return { ok: true, plugin };
-  } catch (e) { return { ok: false, error: e.message }; }
+  } catch (e) { return { ok: false, error: e.message, catalog: Array.isArray(e.catalog) ? e.catalog : null, catalogKind: e.catalogKind || null }; }
 });
 ipcMain.handle('plugins:installTgz', async (event, filePath) => {
   try {

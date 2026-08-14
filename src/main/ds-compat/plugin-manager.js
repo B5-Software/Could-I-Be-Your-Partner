@@ -240,6 +240,52 @@ function isInteractiveTuiPlugin(dir) {
   }
 }
 
+/** 抓取文本（curl 遵循系统代理配置）。 */
+function fetchText(url) {
+  const r = spawnSync('curl', ['-fsSL', '--connect-timeout', '15', '--max-time', '30', url], {
+    encoding: 'utf8', windowsHide: true, maxBuffer: 8 * 1024 * 1024
+  });
+  return r.status === 0 ? String(r.stdout || '') : '';
+}
+
+/** 从 awesome 目录文本提取可安装的 GitHub 插件仓库。 */
+function extractCatalogRepos(text, self) {
+  const seen = new Set();
+  const out = [];
+  const blockedOwners = new Set(['topics', 'features', 'orgs', 'github', 'sponsors', 'settings', 'about', 'login', 'signup', 'marketplace', 'explore', 'notifications', 'collections', 'events', 'discussions']);
+  const blockedRepos = new Set(['hub', 'issues', 'discussions', 'topics']);
+  const re = /github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)/g;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    const repo = m[1];
+    const [owner, name] = repo.split('/');
+    if (!name || blockedOwners.has(owner) || blockedRepos.has(name)) continue;
+    if (repo.toLowerCase() === String(self).toLowerCase()) continue;
+    if (repo.startsWith('deepseek-ai/')) continue;
+    const key = repo.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(repo);
+  }
+  return out;
+}
+
+/** 分类无法 npm 安装的 GitHub 仓库：awesome 目录 / 普通非插件仓库。 */
+function classifyGithubRepo(spec) {
+  const repo = String(spec).replace(/^github:/, '').replace(/\.git(#.*)?$/, (_, h) => h || '');
+  for (const file of ['CATALOG.md', 'README.md', 'README.zh-CN.md']) {
+    for (const branch of ['HEAD', 'main', 'master']) {
+      const text = fetchText(`https://raw.githubusercontent.com/${repo}/${branch}/${file}`);
+      if (!text) continue;
+      if (/awesome|dsh-plugin|插件目录|catalog/i.test(text.slice(0, 4000))) {
+        return { kind: 'catalog', repos: extractCatalogRepos(text, repo) };
+      }
+      return { kind: 'not-a-package', repos: [] };
+    }
+  }
+  return { kind: 'not-a-package', repos: [] };
+}
+
 /**
  * 异步执行 npm（不再使用 spawnSync：安装可能耗时数分钟，同步等待会
  * 阻塞主进程事件循环，导致整个窗口无响应）。
@@ -499,6 +545,16 @@ class PluginManager {
       }
       if (r.status !== 0) {
         try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
+        const errText = String(r.stderr || r.stdout || '');
+        if (/ENOENT/.test(errText) && /package\.json/.test(errText)) {
+          const cls = classifyGithubRepo(spec);
+          const e = new Error(cls.kind === 'catalog'
+            ? '该 GitHub 仓库是插件目录（awesome 列表），不是可安装的插件包'
+            : '该 GitHub 仓库不是可安装的插件包（缺少 package.json）');
+          e.catalog = cls.repos || [];
+          e.catalogKind = cls.kind;
+          throw e;
+        }
         const detail = r.error
           ? `${r.error.message}${r.timedOut ? '（超时）' : ''}`
           : (r.timedOut ? '安装超时' : String(r.stderr || r.stdout || ''));
@@ -741,4 +797,4 @@ class PluginManager {
   }
 }
 
-module.exports = { PluginManager, readBundlePatch, repairReactRuntime, isInteractiveTuiPlugin };
+module.exports = { PluginManager, readBundlePatch, repairReactRuntime, isInteractiveTuiPlugin, classifyGithubRepo, extractCatalogRepos };

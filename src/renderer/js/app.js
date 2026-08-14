@@ -8630,9 +8630,23 @@ window.api.onWebControlSendMessage(async (message) => {
       if (typeof offProgress === 'function') { try { offProgress(); } catch { /* ignore */ } }
     }
     if (statusEl) {
-      statusEl.textContent = r && r.ok
-        ? `✅ 已安装 ${r.plugin?.name || ''}（默认禁用，请在下方启用）`
-        : `❌ ${r?.error || '安装失败'}`;
+      if (r && r.ok) {
+        statusEl.textContent = `✅ 已安装 ${r.plugin?.name || ''}（默认禁用，请在下方启用）`;
+      } else if (r && Array.isArray(r.catalog) && r.catalog.length) {
+        statusEl.innerHTML = `<div style="margin-bottom:6px">❌ ${escapeHtml(r.error || '安装失败')}</div>`
+          + `<div style="font-size:12px;color:var(--text-secondary);margin-bottom:4px">目录中的插件（点击直接安装）：</div>`
+          + `<div style="display:flex;flex-wrap:wrap;gap:6px">${r.catalog.slice(0, 60).map(repo =>
+            `<button class="btn-secondary btn-sm" data-catalog-repo="${escapeHtml(repo)}">${escapeHtml(repo)}</button>`).join('')}</div>`;
+        statusEl.querySelectorAll('[data-catalog-repo]').forEach(btn => {
+          btn.addEventListener('click', () => {
+            const input = document.getElementById('plugin-install-github');
+            if (input) input.value = btn.dataset.catalogRepo;
+            installPlugin({ type: 'github' });
+          });
+        });
+      } else {
+        statusEl.textContent = `❌ ${r?.error || '安装失败'}`;
+      }
     }
     await renderPluginsList();
   }
