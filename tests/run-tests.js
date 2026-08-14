@@ -2710,6 +2710,39 @@ test('插件启动全量重审：清除旧版本遗留 compatIssues', () => {
   assert.ok(pmContent.includes('repairReactRuntime'), '应有 react 版本漂移自修复');
 });
 
+test('Agent 自动化工具集：定义/路由/指导按需获取（不注入系统提示）', () => {
+  const toolsDef = fs.readFileSync(require('path').join(__dirname, '../src/renderer/js/tools-def.js'), 'utf-8');
+  const agentJs = fs.readFileSync(require('path').join(__dirname, '../src/renderer/js/agent.js'), 'utf-8');
+  const mainContent = fs.readFileSync(require('path').join(__dirname, '../src/main/main.js'), 'utf-8');
+  const preloadContent = fs.readFileSync(require('path').join(__dirname, '../src/preload/preload.js'), 'utf-8');
+  const guideJs = fs.readFileSync(require('path').join(__dirname, '../src/main/automation/guide.js'), 'utf-8');
+  for (const name of ['automationList', 'automationGetGuide', 'automationCreate', 'automationToggle', 'automationRun', 'automationTest', 'automationDelete']) {
+    assert.ok(toolsDef.includes(`name: '${name}'`), `tools-def 应有 ${name}`);
+    assert.ok(agentJs.includes(`case '${name}'`), `agent.js 应路由 ${name}`);
+  }
+  assert.ok(toolsDef.includes("'自动化'"), '应有自动化工具分组');
+  assert.ok(mainContent.includes("ipcMain.handle('automation:guide'"), 'main 应有指导 IPC');
+  assert.ok(preloadContent.includes('automationGetGuide'), 'preload 应暴露 automationGetGuide');
+  assert.ok(guideJs.includes('触发器') && guideJs.includes('标准库'), '指导模块应含完整 DSL 与触发器文档');
+  // 系统提示只给指针，不注入 DSL/触发器完整文档
+  const rule11 = agentJs.slice(agentJs.indexOf('11. 需要创建/管理自动化触发任务'), agentJs.indexOf('11. 需要创建/管理自动化触发任务') + 400);
+  assert.ok(rule11.includes('automationGetGuide'), '系统提示应有按需获取指导的指针');
+  assert.ok(!rule11.includes('cron（分') && !rule11.includes('str.len') && !rule11.includes('标准库'), '系统提示不应注入 DSL 语法细节');
+});
+
+test('技能编辑器修复：Monaco 颜色归一化 / macOS 红绿灯 / 布局溢出', () => {
+  const skillJs = fs.readFileSync(require('path').join(__dirname, '../src/renderer/js/skill-editor.js'), 'utf-8');
+  const skillCss = fs.readFileSync(require('path').join(__dirname, '../src/renderer/css/skill-editor.css'), 'utf-8');
+  const htmlContent = fs.readFileSync(require('path').join(__dirname, '../src/renderer/pages/index.html'), 'utf-8');
+  assert.ok(skillJs.includes('normalizeMonacoColor'), '应有 Monaco 颜色归一化');
+  assert.ok(skillJs.includes('rgba(${Math.round(r)},${Math.round(g)},${Math.round(b)},${alpha})'), 'rgba 不应带空格（Monaco 不接受）');
+  assert.ok(skillJs.includes("platform-darwin"), '应检测 macOS 并加红绿灯占位类');
+  assert.ok(skillCss.includes('body.platform-darwin .se-titlebar') && skillCss.includes('padding-left: 80px'), 'macOS 标题应避开红绿灯');
+  assert.ok(skillCss.includes('.se-scripts-list') && /max-height:\s*240px/.test(skillCss), '脚本列表应限高');
+  assert.ok(/\.se-mini-btn\s*\{[\s\S]*padding:\s*0/.test(skillCss), '小按钮应去除默认 padding 保证图标居中');
+  assert.ok(htmlContent.includes('id="btn-automation-new"') && !/btn-automation-new[^"]*btn-sm/.test(htmlContent), '新建任务按钮应为标准尺寸（对齐添加技能）');
+});
+
 test('react 漂移自修复：健康/无关状态不动作（离线判定）', () => {
   const fsLocal2 = require('fs');
   const pathLocal2 = require('path');

@@ -285,18 +285,31 @@
       }
     }
     if ([r, g, b].some(v => !Number.isFinite(v))) return `rgba(79,140,255,${alpha})`;
-    return `rgba(${Math.round(r)}, ${Math.round(g)}, ${Math.round(b)}, ${alpha})`;
+    return `rgba(${Math.round(r)},${Math.round(g)},${Math.round(b)},${alpha})`;
+  }
+
+  // subapp-theme.js 会用带空格的 rgb(r, g, b) 设置 CSS 变量，
+  // Monaco 的主题颜色解析不接受该格式，统一归一为 #hex / rgba(无空格)
+  function normalizeMonacoColor(color) {
+    const s = String(color || '').trim();
+    if (!s || s.startsWith('#')) return s;
+    const m = s.match(/^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*(?:,\s*([\d.]+))?\s*\)$/);
+    if (!m) return s;
+    const hex = (v) => Number(v).toString(16).padStart(2, '0');
+    const a = m[4] === undefined ? 1 : Math.min(1, Math.max(0, parseFloat(m[4])));
+    if (a >= 1) return `#${hex(m[1])}${hex(m[2])}${hex(m[3])}`;
+    return `rgba(${m[1]},${m[2]},${m[3]},${a})`;
   }
 
   function defineMonacoTheme() {
     if (!window.monaco) return;
     const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
-    const accent = cssVar('--accent', isDark ? '#6c8cff' : '#4f8cff');
-    const background = cssVar('--bg-secondary', isDark ? '#222240' : '#ffffff');
-    const foreground = cssVar('--text-primary', isDark ? '#e8e8f0' : '#1a1a2e');
-    const secondary = cssVar('--text-secondary', isDark ? '#a0a0c0' : '#5a5a7a');
-    const border = cssVar('--border', isDark ? '#333360' : '#e2e6ee');
-    const hover = cssVar('--bg-hover', isDark ? '#333360' : '#e8ecf2');
+    const accent = normalizeMonacoColor(cssVar('--accent', isDark ? '#6c8cff' : '#4f8cff'));
+    const background = normalizeMonacoColor(cssVar('--bg-secondary', isDark ? '#222240' : '#ffffff'));
+    const foreground = normalizeMonacoColor(cssVar('--text-primary', isDark ? '#e8e8f0' : '#1a1a2e'));
+    const secondary = normalizeMonacoColor(cssVar('--text-secondary', isDark ? '#a0a0c0' : '#5a5a7a'));
+    const border = normalizeMonacoColor(cssVar('--border', isDark ? '#333360' : '#e2e6ee'));
+    const hover = normalizeMonacoColor(cssVar('--bg-hover', isDark ? '#333360' : '#e8ecf2'));
 
     window.monaco.editor.defineTheme('cipyp-skill', {
       base: isDark ? 'vs-dark' : 'vs',
@@ -727,6 +740,10 @@
 
   async function init() {
     bindEvents();
+    // macOS 红绿灯占位：标题左移，避免被系统按钮遮挡
+    if (/Macintosh|Mac OS X/.test(navigator.userAgent)) {
+      document.body.classList.add('platform-darwin');
+    }
     await loadSkill(initialId, initialReadonly);
     await initMonacoEditor();
     await new Promise(resolve => setTimeout(resolve, 60));

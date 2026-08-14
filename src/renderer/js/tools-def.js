@@ -78,6 +78,7 @@ const CATEGORY_META = {
   '画布': { icon: 'fa-palette', desc: '内置绘图画布' },
   '浏览器': { icon: 'fa-window-restore', desc: '内置浏览器（Playwright）' },
   'Office 硬解': { icon: 'fa-file-zipper', desc: 'Office 底层 XML 操作（仅特殊需求）' },
+  '自动化': { icon: 'fa-bolt', desc: '自动化触发任务（定时/通知/HTTP 信号 → 新会话发送）' },
   'Office-Word': { icon: 'fa-file-word', desc: '正规库驱动的 Word 读写与模板填充' },
   'PPT Maker': { icon: 'fa-file-powerpoint', desc: '专业演示文稿生成（图文图表）' },
   'CIPYP-CAD': { icon: 'fa-drafting-compass', desc: '二维 CAD 制图' },
@@ -309,6 +310,13 @@ const BABE_ALLOWED_TOOLS = new Set([
 
 // Tool definitions for the AI Agent
 const TOOL_DEFINITIONS = [
+  { name: 'automationList', desc: '列出自动化触发任务', icon: 'fa-list-ul', category: '自动化', sensitive: false },
+  { name: 'automationGetGuide', desc: '按需获取自动化任务的完整指导（DSL 语法/触发器/HTTP 接口/示例）', icon: 'fa-book-open', category: '自动化', sensitive: false },
+  { name: 'automationCreate', desc: '创建或更新自动化触发任务（定时/系统通知/HTTP 信号）', icon: 'fa-bolt', category: '自动化', sensitive: false },
+  { name: 'automationToggle', desc: '启用或禁用自动化任务', icon: 'fa-toggle-on', category: '自动化', sensitive: false },
+  { name: 'automationRun', desc: '立即触发一次自动化任务', icon: 'fa-play', category: '自动化', sensitive: false },
+  { name: 'automationTest', desc: '渲染测试自动化任务的 DSL（不触发分发）', icon: 'fa-flask', category: '自动化', sensitive: false },
+  { name: 'automationDelete', desc: '删除自动化任务', icon: 'fa-trash-can', category: '自动化', sensitive: false },
   { name: 'getTarot', desc: '抽取塔罗牌', icon: 'fa-star', category: '娱乐', sensitive: false },
   { name: 'todoList', desc: '管理待办事项', icon: 'fa-list-check', category: '效率', sensitive: false },
   { name: 'runSubAgent', desc: '运行子代理', icon: 'fa-users', category: '代理', sensitive: false },
@@ -592,6 +600,13 @@ const DANGEROUS_COMMANDS = {
 // OpenAI-format tool schemas for LLM
 function getToolSchemas(enabledTools, mode) {
   const schemas = {
+    automationList: { type: 'function', function: { name: 'automationList', description: '列出所有自动化触发任务（名称、启用状态、触发器摘要、运行次数、上次运行时间与错误）。', parameters: { type: 'object', properties: {}, required: [] } } },
+    automationGetGuide: { type: 'function', function: { name: 'automationGetGuide', description: '按需获取自动化任务的完整指导文档。编写自动化任务（尤其 DSL 提示词构造）前必须先调用本工具获取完整语法；该文档不注入系统提示，topic 可选 all（全部，默认）/trigger（触发器）/dsl（DSL 语法与标准库）/examples（示例）。', parameters: { type: 'object', properties: { topic: { type: 'string', enum: ['all', 'trigger', 'dsl', 'examples'], description: '获取的指导主题，默认 all' } }, required: [] } } },
+    automationCreate: { type: 'function', function: { name: 'automationCreate', description: '创建或更新自动化触发任务。任务被触发后会用 dsl 构造提示词并新建一个 Chat 会话发送。trigger.type: schedule=定时（config.cron 为 5 段 cron 分/时/日/月/周）、notification=系统通知（config.kind∈any|sessionDone|sessionError|approval|other，可选 titleRegex/bodyRegex）、http=专用信号服务器（POST /trigger/{id} 的 JSON 体进入 args）。dsl 语法请先用 automationGetGuide 获取。', parameters: { type: 'object', properties: { id: { type: 'string', description: '更新时传任务 id；创建时省略' }, name: { type: 'string', description: '任务名称' }, enabled: { type: 'boolean', description: '是否启用，默认 true' }, trigger: { type: 'object', description: '触发器 { type: "schedule"|"notification"|"http", config: {...} }', properties: { type: { type: 'string', enum: ['schedule', 'notification', 'http'] }, config: { type: 'object', description: 'schedule:{cron}; notification:{kind,titleRegex,bodyRegex}; http:{}' } }, required: ['type'] }, dsl: { type: 'string', description: '提示词构造 DSL 源码，return 一个字符串' } }, required: ['name', 'trigger', 'dsl'] } } },
+    automationToggle: { type: 'function', function: { name: 'automationToggle', description: '启用或禁用自动化任务。', parameters: { type: 'object', properties: { id: { type: 'string', description: '任务 id' }, enabled: { type: 'boolean', description: 'true=启用，false=禁用' } }, required: ['id', 'enabled'] } } },
+    automationRun: { type: 'function', function: { name: 'automationRun', description: '立即手动触发一次自动化任务（走 DSL 渲染并新建 Chat 会话发送）。', parameters: { type: 'object', properties: { id: { type: 'string', description: '任务 id' }, params: { type: 'object', description: '注入 DSL args 的 JSON 参数' } }, required: ['id'] } } },
+    automationTest: { type: 'function', function: { name: 'automationTest', description: '渲染测试自动化任务的 DSL（不触发分发、不新建会话），返回构造出的提示词。保存前用于验证语法。', parameters: { type: 'object', properties: { id: { type: 'string', description: '已保存任务 id（与 dsl 二选一）' }, dsl: { type: 'string', description: '直接测试的 DSL 源码（未保存任务用）' }, params: { type: 'object', description: '注入 DSL args 的 JSON 参数' } }, required: [] } } },
+    automationDelete: { type: 'function', function: { name: 'automationDelete', description: '删除自动化任务（不可恢复）。', parameters: { type: 'object', properties: { id: { type: 'string', description: '任务 id' } }, required: ['id'] } } },
     getTarot: { type: 'function', function: { name: 'getTarot', description: '抽取塔罗牌（使用设置中配置的随机数源：CSPRNG软件随机或TRNG硬件真随机，返回结果中entropySource字段标明随机数类型）。支持多种牌阵(spread)：单张牌快速回答、三牌时间线、关系分析、凯尔特十字等。返回的每张牌包含位置含义(position)和正逆位(orientation)。在向用户解析时请标明随机数类型以增强可信度。', parameters: { type: 'object', properties: { spread: { type: 'string', enum: ['single', 'three-card', 'relationship', 'choice', 'body-mind-spirit', 'celtic-cross', 'horseshoe', 'yes-no'], description: '牌阵类型。single=单张牌(1张,快速回答/每日运势), three-card=三牌牌阵(过去/现在/未来), relationship=关系牌阵(你/对方/关系), choice=选择牌阵(选项A/选项B/建议), body-mind-spirit=身心灵牌阵, celtic-cross=凯尔特十字(10牌全面分析), horseshoe=马蹄铁牌阵(7牌), yes-no=是非牌阵(正位=是,逆位=否)。默认single。' } }, required: [] } } },
     todoList: { type: 'function', function: { name: 'todoList', description: '管理待办事项列表。收到含 3 个以上步骤或多个子目标的复杂任务时，必须先调用本工具拆分任务并写入待办列表，每完成一个子步骤立即 toggle 标记完成，防止上下文过长遗忘目标。', parameters: { type: 'object', properties: { action: { type: 'string', enum: ['add', 'remove', 'toggle', 'list'], description: '操作类型' }, text: { type: 'string', description: '待办事项内容' }, id: { type: 'number', description: '待办事项ID' } }, required: ['action'] } } },
     runSubAgent: { type: 'function', function: { name: 'runSubAgent', description: '运行一个独立子代理完成特定任务。子代理拥有自己的 agent loop（可多轮调用工具）、隔离上下文和工具白名单，完成后返回结果报告。适用于并行/分解任务、独立调查、批处理等场景。', parameters: { type: 'object', properties: { task: { type: 'string', description: '子代理要完成的任务（含目标、约束、验收标准）' }, context: { type: 'string', description: '给子代理的额外上下文信息（如相关文件路径、已有发现）' }, tools: { type: 'array', items: { type: 'string' }, description: '允许子代理使用的工具名称白名单。省略则使用默认安全集：readFile/listDirectory/localSearch/createFile/editFile/copyFile/makeDirectory/getSystemInfo/calculator/webSearch/webFetch/runJavaScriptCode。危险工具（deleteFile/runTerminalCommand 等）默认禁用，必须显式列出才会授予。' }, maxIterations: { type: 'number', description: '子代理最大循环轮数，默认 10，上限 30' } }, required: ['task'] } } },

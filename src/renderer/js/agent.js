@@ -397,6 +397,7 @@ class Agent {
 8. 工具返回结果中都有ok字段表示是否成功，请注意检查
 9. 用户上传Office/PDF文件时，原始文件和提取的文本(.txt)均已保存到工作目录。读取内容请用.txt；如需**读取/生成/填充Word**请用 Office-Word 工具，**生成PPT**请用 pptMakerCreate，表格数据请用数据表格工具
 10. 当用户想玩游戏（飞花令、三国杀、谁是卧底、成语接龙、是否猜人物等）时，必须调用inviteGame工具发起邀请，绝不能用普通对话方式模拟游戏
+11. 需要创建/管理自动化触发任务（定时、系统通知或 HTTP 信号触发后新建会话发送内容）时，使用 automationCreate/automationList/automationToggle/automationRun/automationDelete；编写任务的 DSL 前必须先调用 automationGetGuide 获取完整语法与触发器说明（该文档不注入系统提示）
 
 【工具使用说明（不要与工具定义重复）】：
 - 各工具的具体用法、参数与限制以每次请求中的 tool 定义（description）为准，选工具前先读对应 description
@@ -2336,6 +2337,30 @@ ${affectionDesc}
         case 'memoryAdd': return normalizeOk(await window.api.memoryAdd({ content: args.content, tags: args.tags || [] }), 'item');
         case 'memoryDelete': return normalizeOk(await window.api.memoryDelete(args.id));
         case 'memoryUpdate': return normalizeOk(await window.api.memoryUpdate(args.id, { content: args.content, tags: args.tags }), 'item');
+        case 'automationList': return await window.api.automationList();
+        case 'automationGetGuide': return normalizeOk(await window.api.automationGetGuide(args.topic || 'all'), 'guide');
+        case 'automationCreate': return await window.api.automationSave({
+          id: args.id || undefined,
+          name: args.name,
+          enabled: args.enabled !== false,
+          trigger: args.trigger || { type: 'schedule', config: {} },
+          dsl: args.dsl || ''
+        });
+        case 'automationToggle': return await window.api.automationSetEnabled(args.id, !!args.enabled);
+        case 'automationRun': return await window.api.automationRun(args.id, args.params || {});
+        case 'automationTest': {
+          let task;
+          if (args.id) {
+            const listRes = await window.api.automationList();
+            task = (listRes && listRes.tasks || []).find(t => t.id === args.id);
+            if (!task) return { ok: false, error: '任务不存在' };
+            if (typeof args.dsl === 'string') task = { ...task, dsl: args.dsl };
+          } else {
+            task = { name: 'test', enabled: false, trigger: { type: 'schedule', config: {} }, dsl: args.dsl || '' };
+          }
+          return await window.api.automationTest(task, args.params || {});
+        }
+        case 'automationDelete': return await window.api.automationDelete(args.id);
         case 'localSearch': return await window.api.localSearch(this._resolveWorkspacePath(args.directory), args.pattern, args.options || {});
         case 'searchInFiles': {
           // 路径数组归一化：支持单字符串或数组

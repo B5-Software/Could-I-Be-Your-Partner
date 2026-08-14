@@ -53,6 +53,11 @@ button, input, textarea, select {
   -webkit-app-region: drag;
 }
 
+/* macOS 红绿灯留白：标题避免被系统按钮遮挡 */
+body.platform-darwin .se-titlebar {
+  padding-left: 80px;
+}
+
 .se-titlebar-title {
   display: flex;
   align-items: center;
@@ -231,9 +236,18 @@ button, input, textarea, select {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  padding: 0;
   border-radius: 7px;
   background: var(--se-bg-tertiary);
   color: var(--se-text-dim);
+}
+
+.se-mini-btn i {
+  font-size: 13px;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .se-mini-btn:hover {
@@ -245,6 +259,9 @@ button, input, textarea, select {
   display: flex;
   flex-direction: column;
   gap: 6px;
+  max-height: 240px;
+  overflow-y: auto;
+  padding-right: 2px;
 }
 
 .se-script-item {

@@ -37,6 +37,7 @@ const registerMcpIpc = require('./mcp-service');
 const registerPlaywrightIpc = require('./browser-service');
 const { registerFfmpegIpc } = require('./ffmpeg-tools');
 const { AutomationManager } = require('./automation/automation-manager');
+const { getAutomationGuide } = require('./automation/guide');
 
 const emailService = new EmailService();
 const webControlService = new WebControlService();
@@ -1316,6 +1317,10 @@ ipcMain.handle('automation:list', () => ({ ok: true, tasks: automationManager.li
 ipcMain.handle('automation:get', (_, id) => {
   const task = automationManager.list().find(t => t.id === id);
   return task ? { ok: true, task } : { ok: false, error: '任务不存在' };
+});
+ipcMain.handle('automation:guide', (_, topic) => {
+  try { return { ok: true, guide: getAutomationGuide(topic) }; }
+  catch (e) { return { ok: false, error: e.message }; }
 });
 ipcMain.handle('automation:save', (_, task) => {
   try { return { ok: true, task: automationManager.upsert(task) }; }
