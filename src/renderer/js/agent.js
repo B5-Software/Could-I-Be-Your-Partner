@@ -2719,7 +2719,7 @@ ${affectionDesc}
           // Inject a skill's prompt into the system context.
           await this.refreshSkillsCatalog();
           const skillId = String(args.skillId || '').trim();
-          const skill = this.skillsCatalog.find(s => String(s?.id) === skillId);
+          const skill = this.skillsCatalog.find(s => String(s?.id) === skillId || String(s?.name) === skillId);
           if (!skill) return { ok: false, error: typeof i18nToolReturn === 'function' ? i18nToolReturn('skill_not_exists', '技能不存在') : '技能不存在' };
           if (!skill.prompt) return { ok: false, error: typeof i18nToolReturn === 'function' ? i18nToolReturn('skill_no_prompt', '该技能没有 prompt 内容') : '该技能没有 prompt 内容' };
           if (!Array.isArray(this.activeSkills)) this.activeSkills = [];
@@ -2733,7 +2733,7 @@ ${affectionDesc}
         case 'deactivateSkill': {
           const skillId = String(args.skillId || '').trim();
           if (Array.isArray(this.activeSkills)) {
-            this.activeSkills = this.activeSkills.filter(s => s.id !== skillId);
+            this.activeSkills = this.activeSkills.filter(s => s.id !== skillId && s.name !== skillId);
             this.contextManager.setSystemPrompt(this.getSystemPrompt());
             return { ok: true, message: '技能已停用' };
           }
