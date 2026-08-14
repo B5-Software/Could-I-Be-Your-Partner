@@ -47,6 +47,7 @@
         </div>
         <div style="display:flex;align-items:center;gap:8px">
           <div class="toggle-switch"><input type="checkbox" ${t.enabled ? 'checked' : ''} data-auto-toggle="${escapeHtml(t.id)}"><span class="toggle-slider"></span></div>
+          <button class="btn-secondary btn-sm" data-auto-copy="${escapeHtml(t.id)}" title="复制任务ID"><i class="fa-regular fa-copy"></i></button>
           <button class="btn-secondary btn-sm" data-auto-run="${escapeHtml(t.id)}"><i class="fa-solid fa-play"></i></button>
           <button class="btn-secondary btn-sm" data-auto-edit="${escapeHtml(t.id)}"><i class="fa-solid fa-pen"></i></button>
           <button class="btn-secondary btn-sm" data-auto-delete="${escapeHtml(t.id)}"><i class="fa-solid fa-trash-can"></i></button>
@@ -57,6 +58,18 @@
         const r = await window.api.automationSetEnabled(cb.dataset.autoToggle, cb.checked);
         if (!r.ok) { cb.checked = !cb.checked; window.showToast?.(r.error, 'error', 3000); }
         loadAutomationPage();
+      });
+    });
+    listEl.querySelectorAll('[data-auto-copy]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const id = btn.dataset.autoCopy || '';
+        if (!id) return;
+        try {
+          await navigator.clipboard.writeText(id);
+          window.showToast?.(`已复制任务ID：${id}`, 'success', 2500);
+        } catch {
+          window.showToast?.('复制失败，请在任务编辑器中复制', 'error', 3000);
+        }
       });
     });
     listEl.querySelectorAll('[data-auto-run]').forEach(btn => {

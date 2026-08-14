@@ -355,6 +355,16 @@ Content-Type: application/json
     $('btn-save')?.addEventListener('click', save);
     $('btn-test')?.addEventListener('click', testRender);
     $('btn-run')?.addEventListener('click', runNow);
+    $('btn-copy-task-id')?.addEventListener('click', async () => {
+      const id = currentTask?.id;
+      if (!id) { showOutput('任务尚未保存，暂无 ID', 'error'); return; }
+      try {
+        await navigator.clipboard.writeText(String(id));
+        showOutput('已复制任务 ID：' + id, 'ok');
+      } catch {
+        showOutput('复制失败，请手动选中复制', 'error');
+      }
+    });
     $('btn-close-output')?.addEventListener('click', () => $('ae-output')?.classList.add('hidden'));
     $('btn-close')?.addEventListener('click', async () => {
       if (dirty && !window.confirm('当前修改尚未保存，确定关闭吗？')) return;
