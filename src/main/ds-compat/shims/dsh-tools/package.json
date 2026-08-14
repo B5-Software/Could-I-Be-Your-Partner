@@ -1,0 +1,8 @@
+{
+  "name": "@deepseek-ai/dsh-tools",
+  "version": "1.0.0-cibyp",
+  "description": "CIBYP-owned compatibility shim for @deepseek-ai/dsh-tools (defineTool / register)",
+  "license": "GPL-3.0-or-later",
+  "main": "index.js",
+  "type": "commonjs"
+}

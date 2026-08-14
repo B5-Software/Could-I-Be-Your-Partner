@@ -148,6 +148,11 @@
   function loadToolsPage() {
     const groupsEl = document.getElementById('tools-groups');
     const enabledSettings = agent.settings.tools || {};
+    // DeepSeek 插件工具：首次进入工具页时异步拉取一次（幂等，防漏显 DS 分组）
+    if (typeof refreshDsPluginTools === 'function' && !window.__dsToolsRefreshed) {
+      window.__dsToolsRefreshed = true;
+      refreshDsPluginTools().catch(() => {});
+    }
     // Filter tools by current mode (Chat vs Code)
     const mode = codeEditorModeFilter || 'chat';
     const allDefs = getAllToolDefinitions(mode);
@@ -2209,6 +2214,150 @@
     }
   });
   loadSandboxSettings();
+
+  // ---- DeepSeek 插件：工具注册 + 管理页 ----
+  async function refreshDsPluginTools() {
+    if (typeof window.api.dsListPluginTools !== 'function') return;
+    try {
+      const res = await window.api.dsListPluginTools();
+      if (!res || !res.ok) return;
+      clearDsPluginTools();
+      for (const p of res.plugins || []) {
+        const tools = (p.tools || []).map(t => ({
+          name: t.name,
+          description: t.description,
+          icon: 'fa-puzzle-piece',
+          compatTier: t.compatTier || 'native'
+        }));
+        const schemas = {};
+        for (const t of p.tools || []) schemas[t.name] = t.schema || { type: 'object', properties: {} };
+        registerDsPluginTools(p.id, p.name, tools, schemas);
+      }
+      // 工具集变化：同步提示词（会话冻结纪律——下个会话生效；这里只更新定义与页面）
+      agent.contextManager?.setSystemPrompt(agent.getSystemPrompt());
+      if (document.getElementById('page-tools')?.classList.contains('active')) loadToolsPage();
+    } catch (e) {
+      console.error('[DS Plugins] 刷新工具失败', e);
+    }
+  }
+  async function renderPluginsList() {
+    const listEl = document.getElementById('plugins-list');
+    if (!listEl || typeof window.api.dsListPlugins !== 'function') return;
+    const res = await window.api.dsListPlugins();
+    const plugins = (res && res.ok && Array.isArray(res.plugins)) ? res.plugins : [];
+    if (plugins.length === 0) {
+      listEl.innerHTML = '<p style="font-size:12px;color:var(--text-tertiary)">尚未安装任何 DeepSeek 插件</p>';
+      return;
+    }
+    listEl.innerHTML = plugins.map(p => {
+      const tier = p.compatTier || 'native';
+      const issues = (p.compatIssues || []).slice(0, 2).map(i => `<div style="color:var(--error-color,#d04848);font-size:11px">⚠ ${escapeHtml(i)}</div>`).join('');
+      const srcLabel = p.source?.type === 'local' ? '本地' : p.source?.type === 'npm' ? 'npm' : p.source?.type === 'github' ? 'GitHub' : 'tgz';
+      return `
+        <div class="plugin-card" data-plugin-id="${escapeHtml(p.id)}">
+          <div class="plugin-card-main">
+            <div class="plugin-card-name">
+              <i class="fa-solid fa-puzzle-piece" style="color:var(--accent)"></i>
+              ${escapeHtml(p.name)} <span style="font-size:11px;color:var(--text-tertiary)">v${escapeHtml(p.version)}</span>
+              <span class="ds-compat-badge ${tier}">${tier}</span>
+            </div>
+            <div class="plugin-card-desc">${escapeHtml(p.description || '')}</div>
+            <div style="font-size:11px;color:var(--text-tertiary);margin-top:3px">${srcLabel} · ${p.toolCount} 个工具</div>
+            ${issues}
+          </div>
+          <div class="plugin-card-actions">
+            <div class="toggle-switch"><input type="checkbox" ${p.enabled ? 'checked' : ''} data-plugin-toggle="${escapeHtml(p.id)}"><span class="toggle-slider"></span></div>
+            <button class="btn-secondary btn-sm" data-plugin-config="${escapeHtml(p.id)}">配置</button>
+            <button class="btn-secondary btn-sm" data-plugin-uninstall="${escapeHtml(p.id)}"><i class="fa-solid fa-trash-can"></i></button>
+          </div>
+        </div>`;
+    }).join('');
+    listEl.querySelectorAll('input[data-plugin-toggle]').forEach(cb => {
+      cb.addEventListener('change', async () => {
+        const r = await window.api.dsSetPluginEnabled(cb.dataset.pluginToggle, cb.checked);
+        if (!r.ok) { cb.checked = !cb.checked; window.showToast?.(r.error, 'error', 3000); return; }
+        window.showToast?.(`插件已${cb.checked ? '启用' : '禁用'}（工具集下个会话生效）`, 'success', 2500);
+        await renderPluginsList();
+        await refreshDsPluginTools();
+      });
+    });
+    listEl.querySelectorAll('[data-plugin-uninstall]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const ok = await window.confirmDialog(`卸载插件并删除其文件？此操作不可恢复。`, '卸载插件');
+        if (!ok) return;
+        const r = await window.api.dsUninstallPlugin(btn.dataset.pluginUninstall);
+        if (!r.ok) { window.showToast?.(r.error, 'error', 3000); return; }
+        await renderPluginsList();
+        await refreshDsPluginTools();
+      });
+    });
+    listEl.querySelectorAll('[data-plugin-config]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const plugin = plugins.find(p => p.id === btn.dataset.pluginConfig);
+        if (!plugin) return;
+        const current = JSON.stringify(plugin.config || {}, null, 2);
+        const input = await window.promptDialog
+          ? await window.promptDialog('插件配置（JSON）', current)
+          : window.prompt('插件配置（JSON）', current);
+        if (input === null || input === undefined) return;
+        try {
+          const patch = JSON.parse(input || '{}');
+          const r = await window.api.dsSetPluginConfig(plugin.id, patch);
+          if (!r.ok) { window.showToast?.(r.error, 'error', 3000); return; }
+          await renderPluginsList();
+          await refreshDsPluginTools();
+        } catch (e) {
+          window.showToast?.('配置 JSON 无效：' + e.message, 'error', 3000);
+        }
+      });
+    });
+  }
+  async function installPlugin(source) {
+    const statusEl = document.getElementById('plugin-install-status');
+    if (statusEl) statusEl.textContent = '安装中…';
+    let r;
+    try {
+      if (source.type === 'local') {
+        const dir = (document.getElementById('plugin-install-dir')?.value || '').trim();
+        if (!dir) { if (statusEl) statusEl.textContent = '请输入插件目录'; return; }
+        r = await window.api.dsInstallLocal(dir);
+      } else if (source.type === 'npm') {
+        const name = (document.getElementById('plugin-install-npm')?.value || '').trim();
+        if (!name) { if (statusEl) statusEl.textContent = '请输入 npm 包名'; return; }
+        r = await window.api.dsInstallNpm(name);
+      } else if (source.type === 'github') {
+        const repo = (document.getElementById('plugin-install-github')?.value || '').trim();
+        if (!repo) { if (statusEl) statusEl.textContent = '请输入 owner/repo'; return; }
+        r = await window.api.dsInstallGithub(repo);
+      }
+    } catch (e) {
+      r = { ok: false, error: e.message };
+    }
+    if (statusEl) {
+      statusEl.textContent = r && r.ok
+        ? `✅ 已安装 ${r.plugin?.name || ''}（默认禁用，请在下方启用）`
+        : `❌ ${r?.error || '安装失败'}`;
+    }
+    await renderPluginsList();
+  }
+  document.getElementById('btn-plugin-pick-dir')?.addEventListener('click', async () => {
+    const r = await window.api.openFileDialog({ directory: true, title: '选择插件目录' });
+    if (r && r.ok && Array.isArray(r.paths) && r.paths.length > 0) {
+      const input = document.getElementById('plugin-install-dir');
+      if (input) input.value = r.paths[0];
+    }
+  });
+  document.getElementById('btn-plugin-install-dir')?.addEventListener('click', () => installPlugin({ type: 'local' }));
+  document.getElementById('btn-plugin-install-npm')?.addEventListener('click', () => installPlugin({ type: 'npm' }));
+  document.getElementById('btn-plugin-install-github')?.addEventListener('click', () => installPlugin({ type: 'github' }));
+  if (typeof window.api.onPluginsChanged === 'function') {
+    window.api.onPluginsChanged(() => {
+      renderPluginsList().catch(() => {});
+      refreshDsPluginTools().catch(() => {});
+    });
+  }
+  renderPluginsList().catch(() => {});
+  refreshDsPluginTools().catch(() => {});
 
   async function loadMcpServerList() {
     const listEl = document.getElementById('mcp-servers-list');

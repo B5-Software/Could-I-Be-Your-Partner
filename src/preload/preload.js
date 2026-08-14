@@ -469,6 +469,22 @@ contextBridge.exposeInMainWorld('api', {
   mcpConnect: (name) => ipcRenderer.invoke('mcp:connect', name),
   mcpDisconnect: (name) => ipcRenderer.invoke('mcp:disconnect', name),
   mcpListTools: (serverName) => ipcRenderer.invoke('mcp:listTools', serverName),
+  // ---- DeepSeek 插件 ----
+  dsListPlugins: () => ipcRenderer.invoke('plugins:list'),
+  dsInstallLocal: (dirPath) => ipcRenderer.invoke('plugins:installLocal', dirPath),
+  dsInstallNpm: (name) => ipcRenderer.invoke('plugins:installNpm', name),
+  dsInstallGithub: (repo) => ipcRenderer.invoke('plugins:installGithub', repo),
+  dsInstallTgz: (filePath) => ipcRenderer.invoke('plugins:installTgz', filePath),
+  dsSetPluginEnabled: (id, enabled) => ipcRenderer.invoke('plugins:setEnabled', id, enabled),
+  dsUninstallPlugin: (id) => ipcRenderer.invoke('plugins:uninstall', id),
+  dsSetPluginConfig: (id, patch) => ipcRenderer.invoke('plugins:setConfig', id, patch),
+  dsListPluginTools: () => ipcRenderer.invoke('ds:listTools'),
+  dsPluginToolCall: (pluginId, toolName, args, cwd, sandboxMode) => ipcRenderer.invoke('ds:toolCall', pluginId, toolName, args, { cwd, sandboxMode }),
+  onPluginsChanged: (cb) => {
+    const listener = () => cb();
+    ipcRenderer.on('plugins:changed', listener);
+    return () => ipcRenderer.removeListener('plugins:changed', listener);
+  },
   mcpCallTool: (serverName, toolName, args) => ipcRenderer.invoke('mcp:callTool', serverName, toolName, args),
   mcpGetStatus: () => ipcRenderer.invoke('mcp:getStatus'),
 

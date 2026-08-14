@@ -1,0 +1,8 @@
+{
+  "name": "@deepseek-ai/cordis",
+  "version": "4.0.1-cibyp",
+  "description": "CIBYP compatibility shim re-exporting the vendored Cordis kernel",
+  "license": "MIT",
+  "main": "index.js",
+  "type": "commonjs"
+}

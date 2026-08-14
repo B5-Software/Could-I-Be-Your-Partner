@@ -772,6 +772,7 @@
             <button class="settings-tab" data-tab="voice"><i class="fa-solid fa-microphone-lines"></i> 语音</button>
             <button class="settings-tab" data-tab="context"><i class="fa-solid fa-compress"></i> 上下文</button>
             <button class="settings-tab" data-tab="sandbox"><i class="fa-solid fa-shield-halved"></i> 沙箱</button>
+            <button class="settings-tab" data-tab="plugins"><i class="fa-solid fa-puzzle-piece"></i> 插件</button>
           </div>
           <div class="settings-panels">
             <div class="settings-panel active" data-tab="ai">
@@ -2439,6 +2440,39 @@
                 <div class="setting-item"><label class="setting-label">后端状态</label><p id="sandbox-backend-status" style="font-size:12px;color:var(--text-secondary)">检查中…</p><button class="btn-secondary btn-sm" id="btn-sandbox-probe" style="margin-top:6px"><i class="fa-solid fa-stethoscope"></i> 运行自检</button></div>
               </div>
             </div>
+            <div class="settings-panel" data-tab="plugins">
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-puzzle-piece"></i> DeepSeek 插件</h3>
+                <p class="page-desc">完全兼容 DeepSeek Harness 插件生态：插件通过 Cordis 内核加载，工具经名称/实现翻译层接入 CIBYP。插件为受信代码，安装后默认禁用，请手动启用。</p>
+                <div class="setting-item">
+                  <label class="setting-label">从本地目录安装</label>
+                  <div style="display:flex;gap:8px;align-items:center">
+                    <input type="text" id="plugin-install-dir" placeholder="插件目录路径" style="flex:1;min-width:200px">
+                    <button class="btn-secondary btn-sm" id="btn-plugin-pick-dir">选择</button>
+                    <button class="btn-primary btn-sm" id="btn-plugin-install-dir">安装</button>
+                  </div>
+                </div>
+                <div class="setting-item">
+                  <label class="setting-label">从 npm 安装</label>
+                  <div style="display:flex;gap:8px;align-items:center">
+                    <input type="text" id="plugin-install-npm" placeholder="npm 包名" style="flex:1;min-width:200px">
+                    <button class="btn-primary btn-sm" id="btn-plugin-install-npm">安装</button>
+                  </div>
+                </div>
+                <div class="setting-item">
+                  <label class="setting-label">从 GitHub 安装</label>
+                  <div style="display:flex;gap:8px;align-items:center">
+                    <input type="text" id="plugin-install-github" placeholder="owner/repo" style="flex:1;min-width:200px">
+                    <button class="btn-primary btn-sm" id="btn-plugin-install-github">安装</button>
+                  </div>
+                </div>
+                <div class="setting-item"><p id="plugin-install-status" style="font-size:12px;color:var(--text-secondary)"></p></div>
+              </div>
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-list"></i> 已安装插件</h3>
+                <div id="plugins-list"></div>
+              </div>
+            </div>
           </div>
         </div>
       </section>
@@ -3016,6 +3050,7 @@
   <script src="../js/i18n.js"></script>
   <script src="../js/i18n/en.js"></script>
   <script src="../js/i18n/de.js"></script>
+  <script src="../js/ds-compat/translator.js"></script>
   <script src="../js/tools-def.js"></script>
   <script src="../js/privacy-filter.js"></script>
   <script src="../js/context-manager.js"></script>

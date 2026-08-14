@@ -22,6 +22,17 @@ function test(name, fn) {
   }
 }
 
+async function testAsync(name, fn) {
+  try {
+    await fn();
+    console.log(`  PASS: ${name}`);
+    passed++;
+  } catch (e) {
+    console.log(`  FAIL: ${name} - ${e.message}`);
+    failed++;
+  }
+}
+
 console.log('Running tests...\n');
 
 // ---- Test Tarot Data ----
@@ -2086,6 +2097,70 @@ function runSandboxTests() {
   });
 }
 
+// ---- DeepSeek 插件兼容层（fixture 插件端到端）----
+async function runDsPluginTests() {
+  console.log('\nDeepSeek Plugin Compatibility:');
+  const fsLocal = require('fs');
+  const pathLocal = require('path');
+  const osLocal = require('os');
+
+  test('translator：dsh 工具名 → CIBYP 实现名 + 参数适配', () => {
+    const t = require('../src/renderer/js/ds-compat/translator.js');
+    assert.strictEqual(t.resolveDsToolName('read_file'), 'readFile');
+    assert.strictEqual(t.resolveDsToolName('bash'), 'runShellScriptCode');
+    assert.strictEqual(t.resolveDsToolName('unknown_tool'), 'unknown_tool');
+    const adapted = t.adaptDsArgs('bash', { command: 'ls -la' });
+    assert.strictEqual(adapted.script, 'ls -la');
+    assert.strictEqual(t.getDsCompatTier('read_file'), 'translated');
+    assert.strictEqual(t.getDsCompatTier('todo_write'), 'declared');
+    assert.strictEqual(t.getDsCompatTier('custom_tool'), 'native');
+  });
+
+  await testAsync('fixture 插件：安装 → 启用 → 工具注册 → 执行 → 卸载（端到端）', async () => {
+    const dataDir = fsLocal.mkdtempSync(pathLocal.join(osLocal.tmpdir(), 'cibyp-ds-test-'));
+    const srcDir = pathLocal.join(dataDir, 'fixture-src');
+    fsLocal.mkdirSync(srcDir);
+    fsLocal.writeFileSync(pathLocal.join(srcDir, 'package.json'), JSON.stringify({
+      name: 'fixture-add-plugin', version: '1.0.0', type: 'module', main: 'index.js'
+    }));
+    fsLocal.writeFileSync(pathLocal.join(srcDir, 'index.js'), [
+      "import { defineTool } from '@deepseek-ai/dsh-tools';",
+      "export const name = 'fixture-add-plugin';",
+      "export const inject = ['tools'];",
+      "export function apply(ctx) {",
+      "  ctx.tools.register(defineTool({",
+      "    name: 'add_numbers',",
+      "    description: 'Add two numbers',",
+      "    parameters: { a: { type: 'number', required: true, description: 'a' }, b: { type: 'number', required: true, description: 'b' } },",
+      "    output: { schema: { type: 'number' }, render: (_a, v) => [{ type: 'text', text: String(v) }] },",
+      "    async execute(args) { return args.a + args.b; }",
+      "  }));",
+      "}",
+      ''
+    ].join('\n'));
+    const { PluginManager } = require('../src/main/ds-compat/plugin-manager.js');
+    const pm = new PluginManager(dataDir).init();
+    try {
+      const installed = await pm.install({ type: 'local', ref: srcDir });
+      assert.strictEqual(installed.id, 'fixture-add-plugin');
+      const enabled = await pm.setEnabled(installed.id, true);
+      assert.strictEqual(enabled.ok, true, enabled.error || '');
+      assert.strictEqual(enabled.plugin.toolCount, 1);
+      assert.deepStrictEqual(enabled.plugin.tools.map(t => t.name), ['add_numbers']);
+      const call = await pm.callTool('fixture-add-plugin', 'add_numbers', { a: 2, b: 3 });
+      assert.strictEqual(call.ok, true, call.error || '');
+      assert.strictEqual(call.content, '5');
+      assert.strictEqual(call.value, 5);
+      const uninstalled = await pm.uninstall(installed.id);
+      assert.strictEqual(uninstalled.ok, true);
+      assert.strictEqual(pm.list().length, 0);
+    } finally {
+      try { await pm.dispose(); } catch { /* ignore */ }
+      try { fsLocal.rmSync(dataDir, { recursive: true, force: true }); } catch { /* ignore */ }
+    }
+  });
+}
+
 // ---- Summary ----
 (async () => {
   // 等待异步 LLM 测试完成
@@ -2095,6 +2170,7 @@ function runSandboxTests() {
   runToolsPageRefactorTests();
   runPromptCacheTests();
   runSandboxTests();
+  await runDsPluginTests();
 
   console.log(`\n${'='.repeat(40)}`);
   console.log(`Results: ${passed} passed, ${failed} failed, ${passed + failed} total`);

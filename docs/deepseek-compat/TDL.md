@@ -42,13 +42,13 @@
 
 ## Phase E：插件兼容层 + 插件管理页
 
-- [ ] E1 `translator.js`（名称表 + 参数/结果适配器 + 别名注册表）
-- [ ] E2 Cordis 内核 lib 接入 + `ctx.tools` Provider 桥接（先试 npm 安装，失败回退自研最小 Context）
-- [ ] E3 插件安装器（本地目录 / npm 名 / GitHub / tgz）+ 依赖 alias
-- [ ] E4 插件清单存储 `plugins.json`（安装/启停/卸载/更新/兼容档位）
-- [ ] E5 设置「插件」页 + Schemastery→JSON Schema 表单
-- [ ] E6 DeepSeek 工具注册到冻结工具集 + executeTool 路由
-- [ ] E7 插件单测/集成（fixture 插件端到端）
+- [x] E1 `translator.js`（名称表 + 参数/结果适配器 + 别名注册表）
+- [x] E2 Cordis 内核 lib 接入（npm 官方包）+ `ctx.tools` Provider 桥接 + shim 包
+- [x] E3 插件安装器（本地目录 / npm 名 / GitHub / tgz）+ shim symlink 依赖
+- [x] E4 插件清单存储 `plugins.json`（安装/启停/卸载/兼容档位/启动自动加载）
+- [x] E5 设置「插件」页（安装入口 + 列表 + 启停/卸载/JSON 配置）
+- [x] E6 DeepSeek 工具注册到冻结工具集 + executeTool `ds__` 路由
+- [x] E7 插件单测/集成（translator + fixture 插件端到端）
 
 ## Phase F：收口
 

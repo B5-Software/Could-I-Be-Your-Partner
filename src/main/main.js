@@ -24,6 +24,7 @@ const tarotTools = require('./tarot-tools');
 const { decodeXmlEntities, encodeXmlEntities } = require('./xml-utils');
 const { recognizeImageWithTesseract } = require('./ocr');
 const sandboxRunner = require('./sandbox-runner');
+const { PluginManager } = require('./ds-compat/plugin-manager');
 const {
   requireAdmZip, readTextWithEncoding, normalizeEncodingName, detectEolFromBuffer,
   detectEncodingName, detectFileEncoding, inferEncodingForNewFile, inferEolForNewFile,
@@ -64,6 +65,8 @@ const workspacesBaseDir = path.join(app.getPath('documents'), 'Could-I-Be-Your-P
 
 const settingsPath = path.join(dataDir, 'settings.json');
 const memoryPath = path.join(dataDir, 'memory.json');
+// DeepSeek 插件管理器（Cordis 内核 lib + CIBYP 自研 Provider）
+const pluginManager = new PluginManager(dataDir).init();
 const knowledgePath = path.join(dataDir, 'knowledge.json');
 // 异常中断的会话（关闭App时正在工作）保存到此文件，下次启动时弹模态框询问是否继续
 const pendingSessionPath = path.join(dataDir, '.cibyp-pending.json');
@@ -1154,6 +1157,66 @@ ipcMain.handle('settings:set', (_, newSettings) => {
   } catch {}
   return settings;
 });
+
+// ---- IPC: DeepSeek 插件管理 ----
+const broadcastPluginsChanged = () => {
+  try { mainWindow?.webContents?.send('plugins:changed'); } catch { /* ignore */ }
+};
+ipcMain.handle('plugins:list', () => ({ ok: true, plugins: pluginManager.list() }));
+ipcMain.handle('plugins:installLocal', async (_, dirPath) => {
+  try {
+    const plugin = await pluginManager.install({ type: 'local', ref: dirPath });
+    broadcastPluginsChanged();
+    return { ok: true, plugin };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('plugins:installNpm', async (_, name) => {
+  try {
+    const plugin = await pluginManager.install({ type: 'npm', ref: name });
+    broadcastPluginsChanged();
+    return { ok: true, plugin };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('plugins:installGithub', async (_, repo) => {
+  try {
+    const plugin = await pluginManager.install({ type: 'github', ref: repo });
+    broadcastPluginsChanged();
+    return { ok: true, plugin };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('plugins:installTgz', async (_, filePath) => {
+  try {
+    const plugin = await pluginManager.install({ type: 'tgz', ref: filePath });
+    broadcastPluginsChanged();
+    return { ok: true, plugin };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('plugins:setEnabled', async (_, id, enabled) => {
+  const r = await pluginManager.setEnabled(id, !!enabled);
+  broadcastPluginsChanged();
+  return r;
+});
+ipcMain.handle('plugins:uninstall', async (_, id) => {
+  const r = await pluginManager.uninstall(id);
+  broadcastPluginsChanged();
+  return r;
+});
+ipcMain.handle('plugins:setConfig', async (_, id, patch) => {
+  const r = await pluginManager.setConfig(id, patch);
+  broadcastPluginsChanged();
+  return r;
+});
+ipcMain.handle('ds:toolCall', async (_, pluginId, toolName, args, execCtx = {}) => {
+  try {
+    return await pluginManager.callTool(pluginId, toolName, args, execCtx);
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+ipcMain.handle('ds:listTools', () => ({
+  ok: true,
+  plugins: pluginManager.list().filter(p => p.enabled && p.toolCount > 0)
+}));
 
 // ---- IPC: Theme ----
 ipcMain.handle('theme:get', () => ({ shouldUseDarkColors: nativeTheme.shouldUseDarkColors, mode: settings.theme.mode }));
@@ -4923,6 +4986,9 @@ const pwService = registerPlaywrightIpc({
 
 // Auto-connect configured MCP servers on startup
 app.whenReady().then(async () => {
+  // 启动时加载已启用的 DeepSeek 插件（失败仅记录，不阻断启动）
+  try { await pluginManager.loadEnabled(); } catch (e) { console.warn('[DS Plugins] 启动加载失败:', e.message); }
+
   // ---- Serial Port Agent Tools ----
   const agentSerialPorts = new Map(); // path → { port, buffer }
 

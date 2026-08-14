@@ -125,6 +125,8 @@
     "node-gyp": "^12.2.0"
   },
   "dependencies": {
+    "@deepseek-ai/cordis": "4.0.1",
+    "@deepseek-ai/schemastery": "3.18.1-rc.1",
     "@eslint/js": "^10.0.1",
     "@nut-tree-fork/nut-js": "^4.2.6",
     "@xterm/addon-fit": "^0.11.0",

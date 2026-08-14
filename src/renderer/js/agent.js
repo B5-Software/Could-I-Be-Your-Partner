@@ -2221,6 +2221,25 @@ ${affectionDesc}
 
   async executeTool(name, args) {
     try {
+      // DeepSeek 兼容：dsh 标准工具名 → CIBYP 实现名 + 参数适配（translated 档）。
+      // 模型表面只暴露 CIBYP 规范名；此处仅处理别名入口，不新增 schema。
+      const originalName = name;
+      if (typeof resolveDsToolName === 'function') {
+        const mapped = resolveDsToolName(name);
+        if (mapped !== name) {
+          name = mapped;
+          if (typeof adaptDsArgs === 'function') {
+            args = adaptDsArgs(originalName, args);
+          }
+        }
+      }
+      // DeepSeek 插件导入工具：ds__<pluginId>__<tool> 路由到插件宿主执行
+      if (typeof name === 'string' && name.startsWith('ds__') && typeof window.api.dsPluginToolCall === 'function') {
+        const [pluginId, toolName] = name.slice(4).split('__');
+        const result = await window.api.dsPluginToolCall(pluginId, toolName, args || {}, this._scriptCwd(), this._sandboxMode());
+        if (result && typeof result === 'object' && result.ok !== undefined) return result;
+        return { ok: true, result };
+      }
       const normalizeOk = (result, key = 'result') => {
         if (result && typeof result === 'object' && result.ok !== undefined) return result;
         if (key) return { ok: true, [key]: result };
