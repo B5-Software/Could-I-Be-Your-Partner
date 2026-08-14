@@ -2366,6 +2366,88 @@ async function runDsPluginTests() {
       try { fsLocal.rmSync(dataDir, { recursive: true, force: true }); } catch { /* ignore */ }
     }
   });
+
+  await testAsync('DS 服务翻译层：agents/sessions/sandboxPolicy/approval 对接 CIBYP', async () => {
+    const dataDir = fsLocal.mkdtempSync(pathLocal.join(osLocal.tmpdir(), 'cibyp-seams-test-'));
+    const srcDir = pathLocal.join(dataDir, 'src');
+    fsLocal.mkdirSync(srcDir);
+    fsLocal.writeFileSync(pathLocal.join(srcDir, 'package.json'), JSON.stringify({ name: 'fixture-seams', version: '1.0.0', type: 'module', main: 'index.js' }));
+    fsLocal.writeFileSync(pathLocal.join(srcDir, 'index.js'), [
+      "export const name = 'fixture-seams';",
+      "export const inject = ['agents', 'sessions', 'sandboxPolicy', 'approval', 'tools'];",
+      "export function apply(ctx) {",
+      "  const agents = ctx.get('agents');",
+      "  const sessions = ctx.get('sessions');",
+      "  const sandboxPolicy = ctx.get('sandboxPolicy');",
+      "  const approval = ctx.get('approval');",
+      "  ctx.tools.register({",
+      "    name: 'probe_seams', description: 'probe', parameters: {},",
+      "    async execute() {",
+      "      const agent = agents.get('chat:t1');",
+      "      const session = sessions.get('t1');",
+      "      const policy = await sandboxPolicy.resolve({ session: { mode: 'chat' } });",
+      "      const outcome = await approval.request({ toolName: 'probe', reason: '测试授权', agent });",
+      "      return { status: agent.status, cwd: session.header.cwd, mode: policy.mode, outcome };",
+      "    },",
+      "    output: { schema: { type: 'object' }, render: (_a, v) => [{ type: 'text', text: JSON.stringify(v) }] }",
+      "  });",
+      "}",
+      ''
+    ].join('\n'));
+    const sentMessages = [];
+    const transport = {
+      send: (channel, payload) => sentMessages.push({ channel, payload }),
+      request: async (channel, payload) => {
+        sentMessages.push({ channel, payload });
+        return 'denied';
+      }
+    };
+    const { PluginManager } = require('../src/main/ds-compat/plugin-manager.js');
+    const pm = new PluginManager(dataDir, {
+      transport,
+      getSettings: async () => ({ sandbox: { defaultMode: 'read-only' } })
+    }).init();
+    try {
+      await pm.syncAgents([{ key: 'chat:t1', id: 't1', mode: 'chat', title: 'T1', status: 'idle', cwd: '/tmp/t1-workspace' }]);
+      const installed = await pm.install({ type: 'local', ref: srcDir });
+      const enabled = await pm.setEnabled(installed.id, true);
+      assert.strictEqual(enabled.ok, true, enabled.error || '');
+      const call = await pm.callTool(installed.id, 'probe_seams', {}, { cwd: process.cwd(), sessionKey: 'chat:t1' });
+      assert.strictEqual(call.ok, true, call.error || '');
+      assert.strictEqual(call.value.status, 'idle');
+      assert.strictEqual(call.value.cwd, '/tmp/t1-workspace');
+      assert.strictEqual(call.value.mode, 'read-only');
+      assert.strictEqual(call.value.outcome, 'denied');
+      // followup 经 transport 送回渲染进程
+      pm.host.ctx.agents.get('chat:t1').followup({ content: [{ type: 'text', text: 'wake up' }] });
+      const followup = sentMessages.find(m => m.channel === 'ds:pluginAgentMessage' && m.payload.kind === 'followup');
+      assert.ok(followup, 'followup 应经 transport 送达');
+      assert.strictEqual(followup.payload.text, 'wake up');
+      assert.ok(sentMessages.some(m => m.channel === 'ds:approvalRequest' && m.payload.toolName === 'probe'), 'approval 应经 transport 请求');
+    } finally {
+      try { await pm.dispose(); } catch { /* ignore */ }
+      try { fsLocal.rmSync(dataDir, { recursive: true, force: true }); } catch { /* ignore */ }
+    }
+  });
+
+  test('DS 服务翻译层 IPC 接线（preload / main / renderer / 授权模态框）', () => {
+    const preloadContent = fsLocal.readFileSync(pathLocal.join(__dirname, '../src/preload/preload.js'), 'utf-8');
+    const mainContent = fsLocal.readFileSync(pathLocal.join(__dirname, '../src/main/main.js'), 'utf-8');
+    const htmlContent = fsLocal.readFileSync(pathLocal.join(__dirname, '../src/renderer/pages/index.html'), 'utf-8');
+    const appContent = fsLocal.readFileSync(pathLocal.join(__dirname, '../src/renderer/js/app.js'), 'utf-8');
+    const agentContent = fsLocal.readFileSync(pathLocal.join(__dirname, '../src/renderer/js/agent.js'), 'utf-8');
+    for (const api of ['dsAgentSync', 'dsApprovalRespond', 'onDsAgentMessage', 'onDsApprovalRequest']) {
+      assert.ok(preloadContent.includes(api), `preload 应暴露 ${api}`);
+    }
+    assert.ok(mainContent.includes("ipcMain.handle('ds:agentsSync'"), 'main 应注册 ds:agentsSync');
+    assert.ok(mainContent.includes("ipcMain.handle('ds:approvalRespond'"), 'main 应注册 ds:approvalRespond');
+    assert.ok(mainContent.includes('dsTransportRequest'), 'main 应有 approval 请求传输');
+    assert.ok(htmlContent.includes('id="ds-approval-modal"'), '应有 DS 授权模态框');
+    assert.ok(appContent.includes('pushDsAgentSync'), 'renderer 应同步会话元数据');
+    assert.ok(appContent.includes('showDsApprovalModal'), 'renderer 应处理授权请求');
+    assert.ok(appContent.includes('onDsAgentMessage'), 'renderer 应处理 agent 消息');
+    assert.ok(agentContent.includes('this.sessionKey || null'), '插件工具调用应携带 sessionKey');
+  });
 }
 
 // ---- Environment Detection ----

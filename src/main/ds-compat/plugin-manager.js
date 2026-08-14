@@ -14,7 +14,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { spawnSync } = require('child_process');
+const { spawn } = require('child_process');
 const { PluginHost } = require('./plugin-host');
 
 const SHIMS = {
@@ -23,13 +23,66 @@ const SHIMS = {
   '@deepseek-ai/schemastery': path.join(__dirname, '..', '..', '..', 'node_modules', '@deepseek-ai', 'schemastery')
 };
 
+/**
+ * 异步执行 npm（不再使用 spawnSync：安装可能耗时数分钟，同步等待会
+ * 阻塞主进程事件循环，导致整个窗口无响应）。
+ * @returns {Promise<{status: number|null, error: Error|null, stdout: string, stderr: string, timedOut: boolean}>}
+ */
+function runNpmAsync(args, opts = {}) {
+  return new Promise((resolve) => {
+    const child = spawn(opts.cmd || 'npm', args, {
+      env: opts.env || process.env,
+      shell: process.platform === 'win32',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true
+    });
+    let stdout = '';
+    let stderr = '';
+    let timedOut = false;
+    const emit = (chunk, isErr) => {
+      const text = String(chunk || '');
+      if (isErr) stderr += text; else stdout += text;
+      if (typeof opts.onOutput === 'function') {
+        const line = text.replace(/\r?\n$/, '').trim();
+        if (line) opts.onOutput({ type: 'npm', line });
+      }
+    };
+    child.stdout.on('data', (c) => emit(c, false));
+    child.stderr.on('data', (c) => emit(c, true));
+    const timer = setTimeout(() => {
+      timedOut = true;
+      try { child.kill('SIGKILL'); } catch { /* ignore */ }
+    }, Math.max(5000, opts.timeout || 300000));
+    child.on('error', (e) => {
+      clearTimeout(timer);
+      resolve({ status: null, error: e, stdout, stderr, timedOut });
+    });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      resolve({ status: code, error: null, stdout, stderr, timedOut });
+    });
+  });
+}
+
 class PluginManager {
   constructor(dataDir, options = {}) {
     this.dataDir = dataDir;
     this.pluginsDir = path.join(dataDir, 'plugins');
     this.manifestPath = path.join(dataDir, 'plugins.json');
-    this.host = new PluginHost({ skills: options.skills || null });
+    this.host = new PluginHost({
+      skills: options.skills || null,
+      transport: options.transport || null,
+      getSettings: options.getSettings || null
+    });
     this.plugins = [];
+  }
+
+  /** 渲染进程会话元数据同步到宿主 agents/sessions seam。 */
+  async syncAgents(entries) {
+    await this.host.init();
+    if (this.host.agentsService) {
+      this.host.agentsService.sync(Array.isArray(entries) ? entries : []);
+    }
   }
 
   init() {
@@ -178,14 +231,21 @@ class PluginManager {
   /**
    * 安装插件。source: { type: 'local'|'npm'|'github'|'tgz', ref }
    */
-  async install(source) {
+  async install(source, hooks = {}) {
     const type = source?.type || 'local';
     const ref = String(source?.ref || '').trim();
     if (!ref) throw new Error('缺少安装来源');
+    const progress = (payload) => {
+      if (typeof hooks.onProgress === 'function') {
+        try { hooks.onProgress(payload); } catch { /* ignore */ }
+      }
+    };
+    progress({ stage: 'start', source: type, ref });
     let installDir = null;
     let pkg = null;
 
     if (type === 'local') {
+      progress({ stage: 'copy', source: type });
       const srcDir = path.resolve(ref);
       if (!fs.existsSync(srcDir) || !fs.statSync(srcDir).isDirectory()) throw new Error('本地插件目录不存在');
       pkg = this._readPackage(srcDir);
@@ -196,6 +256,7 @@ class PluginManager {
       this._copyDir(srcDir, installDir);
     } else {
       // npm / github / tgz：先装到一个临时定位目录再解析
+      progress({ stage: 'npm', source: type });
       const tmpDir = fs.mkdtempSync(path.join(this.pluginsDir, '.tmp-'));
       const spec = type === 'npm' ? ref : (type === 'github' ? `github:${ref.replace(/^github:/, '')}` : ref);
       // 清洗环境：宿主可能携带 npm_config_allow_scripts（例如从 opencode 启动），
@@ -207,20 +268,26 @@ class PluginManager {
       // 使用默认 --save：npm 会把根依赖名写入 tmpDir/package.json，
       // 供 _findInstalledPkg 精确定位（GitHub 仓库名 ≠ 包名时同样可靠）。
       const baseArgs = ['install', '--prefix', tmpDir, '--ignore-scripts', '--no-audit', '--no-fund'];
-      const runNpm = (extra) => spawnSync('npm', [...baseArgs, ...extra, spec], {
-        encoding: 'utf8', timeout: 300000, shell: process.platform === 'win32', env: npmEnv
+      const runNpm = (extra) => runNpmAsync([...baseArgs, ...extra, spec], {
+        env: npmEnv, timeout: 300000, onOutput: (p) => progress({ stage: 'npm-line', source: type, ...p })
       });
       let r = runNpm([]);
+      r = await r;
       // npm ≥12 默认禁用 git 依赖（allow-git=none）。放开“根依赖”的 git 抓取
       // 后重试；传递性 git 依赖仍被禁止，保持安全默认。
       if (r.status !== 0 && /EALLOWGIT/.test(String(r.stderr || r.stdout || ''))) {
-        r = runNpm(['--allow-git=root']);
+        progress({ stage: 'npm', source: type, line: 'npm ≥12 默认禁用 git 依赖，放开根依赖后重试…' });
+        r = await runNpm(['--allow-git=root']);
       }
       if (r.status !== 0) {
         try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
-        throw new Error(`npm 安装失败: ${(r.stderr || r.stdout || '').slice(-600)}`);
+        const detail = r.error
+          ? `${r.error.message}${r.timedOut ? '（超时）' : ''}`
+          : (r.timedOut ? '安装超时' : String(r.stderr || r.stdout || ''));
+        throw new Error(`npm 安装失败: ${detail.slice(-600)}`);
       }
       // 找到实际包目录
+      progress({ stage: 'locate', source: type });
       const found = this._findInstalledPkg(tmpDir, spec);
       if (!found || !fs.existsSync(path.join(found, 'package.json'))) {
         try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
@@ -233,6 +300,7 @@ class PluginManager {
         throw new Error(`插件已安装：${id}`);
       }
       installDir = path.join(this.pluginsDir, id);
+      progress({ stage: 'finalize', source: type, line: `安装依赖与 shim（${id}）…` });
       fs.renameSync(found, installDir);
       // 把 npm 装好的依赖（peerDependencies 等）一并搬进插件目录，
       // 否则插件移动后 @deepseek-ai/dsh-llm 等运行期依赖会随 tmpDir 一起被删。

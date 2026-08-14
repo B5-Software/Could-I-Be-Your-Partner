@@ -2669,6 +2669,54 @@
     </div>
   </div>
 
+  <!-- Plugin Config Modal（编辑插件 JSON 配置，替代不支持的 window.prompt） -->
+  <div class="modal-overlay hidden" id="plugin-config-modal">
+    <div class="modal" style="max-width:560px">
+      <div class="modal-header">
+        <h3><i class="fa-solid fa-sliders"></i> <span id="plugin-config-title">插件配置</span></h3>
+        <button class="btn-icon" id="btn-close-plugin-config" title="关闭">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+      <div class="modal-body">
+        <p style="font-size:12px;color:var(--text-secondary);margin-bottom:8px">
+          以 JSON 编辑插件配置；<code>{}</code> 表示使用默认值。保存后重新加载插件并生效。
+        </p>
+        <textarea id="plugin-config-textarea" rows="12" spellcheck="false"
+          style="width:100%;box-sizing:border-box;font-family:'Consolas','Courier New',monospace;font-size:12px;background:var(--bg-primary);color:var(--text-primary);border:1px solid var(--border);border-radius:8px;padding:10px;resize:vertical"></textarea>
+        <p id="plugin-config-error" style="font-size:11px;color:var(--danger);display:none;margin-top:8px"></p>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-secondary" id="btn-cancel-plugin-config">取消</button>
+        <button class="btn-primary" id="btn-save-plugin-config">
+          <i class="fa-solid fa-check"></i> 保存
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- DeepSeek 插件授权 Modal（approval seam → 用户裁决） -->
+  <div class="modal-overlay hidden" id="ds-approval-modal">
+    <div class="modal" style="max-width:520px">
+      <div class="modal-header">
+        <h3><i class="fa-solid fa-clipboard-question"></i> 插件请求授权</h3>
+        <button class="btn-icon" id="btn-close-ds-approval" title="关闭">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+      <div class="modal-body">
+        <p id="ds-approval-tool" style="font-size:13px;color:var(--text-primary);font-weight:600;margin-bottom:8px">工具：plugin</p>
+        <p id="ds-approval-reason" style="font-size:12px;color:var(--text-secondary);white-space:pre-wrap;max-height:220px;overflow:auto;margin:0"></p>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-secondary" id="btn-deny-ds-approval">拒绝</button>
+        <button class="btn-primary" id="btn-allow-ds-approval">
+          <i class="fa-solid fa-check"></i> 允许
+        </button>
+      </div>
+    </div>
+  </div>
+
   <!-- Tool First-Use Authorization Modal -->
   <!-- Playwright / Computer Use 工具首次调用时弹出一次，用户授权后持久化至 settings.toolAuthGranted -->
   <div class="modal-overlay hidden" id="tool-auth-modal">

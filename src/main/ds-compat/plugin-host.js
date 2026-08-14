@@ -20,6 +20,13 @@ const fsp = require('fs/promises');
 const { spawn } = require('child_process');
 const sandboxRunner = require('../sandbox-runner');
 const { validateArgs } = require('./shims/dsh-tools');
+const {
+  CibypAgentsService,
+  CibypSessionsService,
+  CibypLlmService,
+  CibypSandboxPolicyService,
+  CibypApprovalService
+} = require('./services');
 
 /** Schemastery Config（模块级导出）校验：Schema 可调用，失败抛 ValidationError。 */
 function validatePluginConfig(schema, config) {
@@ -259,14 +266,30 @@ class PluginHost {
         if (entry && typeof entry === 'object') this.sections.push(entry);
       }
     });
-    // sessions / webServer：最小桥接，让依赖它们的插件 apply 能完整走完；
-    // 会话查询返回 undefined，插件自带 HTTP 面板暂不接入 CIBYP WebUI。
-    await this.ctx.plugin(class SessionsBridge extends Service {
-      constructor(c) {
-        super(c, 'sessions');
-        this.get = () => undefined;
-      }
+    // agents / sessions / llm / sandboxPolicy / approval：
+    // DeepSeek 服务 API → CIBYP 功能翻译层（见 ./services.js）。
+    const serviceConfig = {
+      transport: this.options.transport || null,
+      getSettings: this.options.getSettings || (async () => ({}))
+    };
+    await this.ctx.plugin(class AgentsBridge extends CibypAgentsService {
+      constructor(c) { super(c, serviceConfig); }
     });
+    this.agentsService = this.ctx.agents;
+    const agentsServiceRef = this.agentsService;
+    await this.ctx.plugin(class SessionsBridge extends CibypSessionsService {
+      constructor(c) { super(c, { agents: agentsServiceRef }); }
+    });
+    await this.ctx.plugin(class LlmBridge extends CibypLlmService {
+      constructor(c) { super(c, serviceConfig); }
+    });
+    await this.ctx.plugin(class SandboxPolicyBridge extends CibypSandboxPolicyService {
+      constructor(c) { super(c, serviceConfig); }
+    });
+    await this.ctx.plugin(class ApprovalBridge extends CibypApprovalService {
+      constructor(c) { super(c, serviceConfig); }
+    });
+    // webServer：插件自带 HTTP 面板暂不接入 CIBYP WebUI。
     await this.ctx.plugin(class WebServerBridge extends Service {
       constructor(c) {
         super(c, 'webServer');
@@ -279,7 +302,7 @@ class PluginHost {
         this.confine = (argv, policy) => sandboxRunner.confine(argv, policy);
       }
     });
-    for (const name of ['llm', 'subprocess', 'jobs', 'subagent', 'session', 'storage', 'compaction']) {
+    for (const name of ['subprocess', 'jobs', 'subagent', 'session', 'storage', 'compaction']) {
       const serviceKey = name;
       await this.ctx.plugin(class Bridge extends Service {
         constructor(c) {
@@ -421,15 +444,20 @@ class PluginHost {
     const controller = new AbortController();
     const timeoutMs = Math.max(1000, Math.min(def.timeoutMs || 120000, 600000));
     const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const sessionKey = execCtx.sessionKey || execCtx.sessionId || null;
+    // 真实 agent 代理：由渲染进程同步会话元数据，followup/inject 经 IPC 送进对应会话
+    const liveAgent = (this.agentsService && sessionKey && this.agentsService.has(sessionKey))
+      ? this.agentsService.get(sessionKey)
+      : null;
     const exec = {
       signal: controller.signal,
       token: `${pluginId}:${toolName}:${Date.now().toString(36)}`,
       callId: execCtx.callId || `${pluginId}:${toolName}:${Math.random().toString(36).slice(2, 10)}`,
-      sessionId: execCtx.sessionId || null,
+      sessionId: sessionKey,
       cwd: execCtx.cwd || null,
       sandboxMode: execCtx.sandboxMode || 'danger-full-access',
-      agent: {
-        inject: async () => { throw new Error('agent.inject 暂未在 CIBYP 桥接'); }
+      agent: liveAgent || {
+        inject: async () => { throw new Error('agent.inject 暂未在 CIBYP 桥接（缺少会话同步）'); }
       }
     };
     try {

@@ -98,7 +98,33 @@ const pluginSkillsProvider = () => {
   };
 };
 // DeepSeek 插件管理器（Cordis 内核 lib + CIBYP 自研 Provider）
-const pluginManager = new PluginManager(dataDir, { skills: pluginSkillsProvider }).init();
+// 服务翻译层 transport：agent 消息/授权请求经 IPC 往返渲染进程
+const dsApprovalPending = new Map();
+const dsTransportSend = (channel, payload) => {
+  try {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, payload);
+  } catch { /* ignore */ }
+};
+const dsTransportRequest = (channel, payload, timeoutMs, signal) => {
+  return new Promise((resolve, reject) => {
+    const id = payload && payload.id;
+    if (!id) { reject(new Error('approval 请求缺少 id')); return; }
+    const settle = (outcome) => { clearTimeout(timer); if (signal) signal.removeEventListener('abort', onAbort); resolve(outcome); };
+    const onAbort = () => { dsApprovalPending.delete(id); settle('cancelled'); };
+    const timer = setTimeout(() => { dsApprovalPending.delete(id); settle('cancelled'); }, timeoutMs || 300000);
+    if (signal) {
+      if (signal.aborted) { onAbort(); return; }
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
+    dsApprovalPending.set(id, settle);
+    dsTransportSend(channel, payload);
+  });
+};
+const pluginManager = new PluginManager(dataDir, {
+  skills: pluginSkillsProvider,
+  transport: { send: dsTransportSend, request: dsTransportRequest },
+  getSettings: async () => loadJSON(settingsPath, {})
+}).init();
 const knowledgePath = path.join(dataDir, 'knowledge.json');
 // 异常中断的会话（关闭App时正在工作）保存到此文件，下次启动时弹模态框询问是否继续
 const pendingSessionPath = path.join(dataDir, '.cibyp-pending.json');
@@ -1195,30 +1221,38 @@ const broadcastPluginsChanged = () => {
   try { mainWindow?.webContents?.send('plugins:changed'); } catch { /* ignore */ }
 };
 ipcMain.handle('plugins:list', () => ({ ok: true, plugins: pluginManager.list() }));
-ipcMain.handle('plugins:installLocal', async (_, dirPath) => {
+ipcMain.handle('plugins:installLocal', async (event, dirPath) => {
   try {
-    const plugin = await pluginManager.install({ type: 'local', ref: dirPath });
+    const plugin = await pluginManager.install({ type: 'local', ref: dirPath }, {
+      onProgress: (p) => { if (!event.sender.isDestroyed()) event.sender.send('plugins:installProgress', p); }
+    });
     broadcastPluginsChanged();
     return { ok: true, plugin };
   } catch (e) { return { ok: false, error: e.message }; }
 });
-ipcMain.handle('plugins:installNpm', async (_, name) => {
+ipcMain.handle('plugins:installNpm', async (event, name) => {
   try {
-    const plugin = await pluginManager.install({ type: 'npm', ref: name });
+    const plugin = await pluginManager.install({ type: 'npm', ref: name }, {
+      onProgress: (p) => { if (!event.sender.isDestroyed()) event.sender.send('plugins:installProgress', p); }
+    });
     broadcastPluginsChanged();
     return { ok: true, plugin };
   } catch (e) { return { ok: false, error: e.message }; }
 });
-ipcMain.handle('plugins:installGithub', async (_, repo) => {
+ipcMain.handle('plugins:installGithub', async (event, repo) => {
   try {
-    const plugin = await pluginManager.install({ type: 'github', ref: repo });
+    const plugin = await pluginManager.install({ type: 'github', ref: repo }, {
+      onProgress: (p) => { if (!event.sender.isDestroyed()) event.sender.send('plugins:installProgress', p); }
+    });
     broadcastPluginsChanged();
     return { ok: true, plugin };
   } catch (e) { return { ok: false, error: e.message }; }
 });
-ipcMain.handle('plugins:installTgz', async (_, filePath) => {
+ipcMain.handle('plugins:installTgz', async (event, filePath) => {
   try {
-    const plugin = await pluginManager.install({ type: 'tgz', ref: filePath });
+    const plugin = await pluginManager.install({ type: 'tgz', ref: filePath }, {
+      onProgress: (p) => { if (!event.sender.isDestroyed()) event.sender.send('plugins:installProgress', p); }
+    });
     broadcastPluginsChanged();
     return { ok: true, plugin };
   } catch (e) { return { ok: false, error: e.message }; }
@@ -1249,6 +1283,25 @@ ipcMain.handle('ds:listTools', () => ({
   ok: true,
   plugins: pluginManager.list().filter(p => p.enabled && p.toolCount > 0)
 }));
+
+// 渲染进程会话注册表同步 → 插件宿主的 agents/sessions seam
+ipcMain.handle('ds:agentsSync', async (_, entries) => {
+  try {
+    await pluginManager.syncAgents(entries);
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+// 渲染进程授权/问卷模态框的裁决回传
+ipcMain.handle('ds:approvalRespond', (_, id, outcome) => {
+  const settle = dsApprovalPending.get(id);
+  if (!settle) return { ok: false, error: 'approval 请求不存在或已超时' };
+  dsApprovalPending.delete(id);
+  settle(outcome);
+  return { ok: true };
+});
 
 // ---- 环境检测（Python / Node+npm / Bun / Git）----
 function normalizeEnvVersion(output) {

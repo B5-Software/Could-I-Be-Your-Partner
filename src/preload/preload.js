@@ -479,12 +479,29 @@ contextBridge.exposeInMainWorld('api', {
   dsUninstallPlugin: (id) => ipcRenderer.invoke('plugins:uninstall', id),
   dsSetPluginConfig: (id, patch) => ipcRenderer.invoke('plugins:setConfig', id, patch),
   dsListPluginTools: () => ipcRenderer.invoke('ds:listTools'),
-  dsPluginToolCall: (pluginId, toolName, args, cwd, sandboxMode) => ipcRenderer.invoke('ds:toolCall', pluginId, toolName, args, { cwd, sandboxMode }),
+  dsPluginToolCall: (pluginId, toolName, args, cwd, sandboxMode, sessionKey) => ipcRenderer.invoke('ds:toolCall', pluginId, toolName, args, { cwd, sandboxMode, sessionKey }),
+  dsAgentSync: (entries) => ipcRenderer.invoke('ds:agentsSync', entries),
+  dsApprovalRespond: (id, outcome) => ipcRenderer.invoke('ds:approvalRespond', id, outcome),
   detectEnvironment: () => ipcRenderer.invoke('env:detect'),
   onPluginsChanged: (cb) => {
     const listener = () => cb();
     ipcRenderer.on('plugins:changed', listener);
     return () => ipcRenderer.removeListener('plugins:changed', listener);
+  },
+  onPluginsInstallProgress: (cb) => {
+    const listener = (_event, payload) => cb(payload);
+    ipcRenderer.on('plugins:installProgress', listener);
+    return () => ipcRenderer.removeListener('plugins:installProgress', listener);
+  },
+  onDsAgentMessage: (cb) => {
+    const listener = (_event, payload) => cb(payload);
+    ipcRenderer.on('ds:pluginAgentMessage', listener);
+    return () => ipcRenderer.removeListener('ds:pluginAgentMessage', listener);
+  },
+  onDsApprovalRequest: (cb) => {
+    const listener = (_event, payload) => cb(payload);
+    ipcRenderer.on('ds:approvalRequest', listener);
+    return () => ipcRenderer.removeListener('ds:approvalRequest', listener);
   },
   mcpCallTool: (serverName, toolName, args) => ipcRenderer.invoke('mcp:callTool', serverName, toolName, args),
   mcpGetStatus: () => ipcRenderer.invoke('mcp:getStatus'),

@@ -2236,7 +2236,7 @@ ${affectionDesc}
       // DeepSeek 插件导入工具：ds__<pluginId>__<tool> 路由到插件宿主执行
       if (typeof name === 'string' && name.startsWith('ds__') && typeof window.api.dsPluginToolCall === 'function') {
         const [pluginId, toolName] = name.slice(4).split('__');
-        const result = await window.api.dsPluginToolCall(pluginId, toolName, args || {}, this._scriptCwd(), this._sandboxMode());
+        const result = await window.api.dsPluginToolCall(pluginId, toolName, args || {}, this._scriptCwd(), this._sandboxMode(), this.sessionKey || null);
         if (result && typeof result === 'object' && result.ok !== undefined) return result;
         return { ok: true, result };
       }

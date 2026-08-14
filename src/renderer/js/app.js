@@ -1187,6 +1187,75 @@ export default (async function appEntry() {
     title: agent.conversationTitle || '未命名对话'
   });
   sessionManager.activate('chat', primaryChatSession.key);
+
+  // ---- DeepSeek 插件服务翻译层：会话同步 / agent 消息 / 授权 ----
+  let dsApprovalCurrent = null;
+  function showDsApprovalModal(req) {
+    dsApprovalCurrent = req;
+    const toolEl = document.getElementById('ds-approval-tool');
+    const reasonEl = document.getElementById('ds-approval-reason');
+    if (toolEl) toolEl.textContent = `工具：${req.toolName || 'plugin'}`;
+    if (reasonEl) reasonEl.textContent = req.reason || '';
+    document.getElementById('ds-approval-modal')?.classList.remove('hidden');
+  }
+  function answerDsApproval(outcome) {
+    const req = dsApprovalCurrent;
+    if (!req) return;
+    document.getElementById('ds-approval-modal')?.classList.add('hidden');
+    dsApprovalCurrent = null;
+    if (typeof window.api.dsApprovalRespond === 'function') {
+      window.api.dsApprovalRespond(req.id, outcome).catch(() => {});
+    }
+  }
+  document.getElementById('btn-allow-ds-approval')?.addEventListener('click', () => answerDsApproval('allowed-once'));
+  document.getElementById('btn-deny-ds-approval')?.addEventListener('click', () => answerDsApproval('denied'));
+  document.getElementById('btn-close-ds-approval')?.addEventListener('click', () => answerDsApproval('cancelled'));
+
+  const pushDsAgentSync = () => {
+    if (typeof window.api.dsAgentSync !== 'function' || !sessionManager) return;
+    try {
+      const entries = sessionManager.list().map(s => ({
+        key: s.key,
+        id: s.id,
+        mode: s.mode,
+        title: s.title,
+        status: s.status,
+        cwd: (s.agent && (s.agent.workspacePath || s.agent.codeWorkspacePath)) || null
+      }));
+      window.api.dsAgentSync(entries).catch(() => {});
+    } catch { /* ignore */ }
+  };
+  pushDsAgentSync();
+  AppBus.on('session-created', () => pushDsAgentSync());
+  AppBus.on('session-status', () => pushDsAgentSync());
+  AppBus.on('session-closed', () => pushDsAgentSync());
+
+  if (typeof window.api.onDsAgentMessage === 'function') {
+    window.api.onDsAgentMessage((msg) => {
+      if (!msg || !msg.sessionKey || !sessionManager) return;
+      const session = sessionManager.get(msg.sessionKey);
+      if (!session || !session.agent) return;
+      const text = String(msg.text || '');
+      if (msg.kind === 'inject') {
+        try { session.agent.injectHotMessage(text, []); } catch { /* ignore */ }
+      } else if (msg.kind === 'followup') {
+        if (session.agent.running || !sessionManager.requestStart(session)) {
+          sessionManager.queue(session, { text, attachments: [] });
+        } else {
+          session.agent.sendMessage(text, []).catch((err) => {
+            if (session.agent.onMessage) session.agent.onMessage('error', err?.message || String(err));
+          });
+        }
+      }
+    });
+  }
+
+  if (typeof window.api.onDsApprovalRequest === 'function') {
+    window.api.onDsApprovalRequest((req) => {
+      if (req && req.id) showDsApprovalModal(req);
+    });
+  }
+
   AppBus.on('session-status', (event) => {
     const { session, status, previous } = event.detail || {};
     if (!session) return;
@@ -8421,29 +8490,66 @@ window.api.onWebControlSendMessage(async (message) => {
       });
     });
     listEl.querySelectorAll('[data-plugin-config]').forEach(btn => {
-      btn.addEventListener('click', async () => {
+      btn.addEventListener('click', () => {
         const plugin = plugins.find(p => p.id === btn.dataset.pluginConfig);
         if (!plugin) return;
-        const current = JSON.stringify(plugin.config || {}, null, 2);
-        const input = await window.promptDialog
-          ? await window.promptDialog('插件配置（JSON）', current)
-          : window.prompt('插件配置（JSON）', current);
-        if (input === null || input === undefined) return;
-        try {
-          const patch = JSON.parse(input || '{}');
-          const r = await window.api.dsSetPluginConfig(plugin.id, patch);
-          if (!r.ok) { window.showToast?.(r.error, 'error', 3000); return; }
-          await renderPluginsList();
-          await refreshDsPluginTools();
-        } catch (e) {
-          window.showToast?.('配置 JSON 无效：' + e.message, 'error', 3000);
-        }
+        openPluginConfigModal(plugin);
       });
     });
   }
+  // ---- 插件配置模态框（替代 renderer 不支持的 window.prompt）----
+  let pluginConfigTarget = null;
+  function openPluginConfigModal(plugin) {
+    pluginConfigTarget = plugin;
+    const title = document.getElementById('plugin-config-title');
+    const ta = document.getElementById('plugin-config-textarea');
+    const err = document.getElementById('plugin-config-error');
+    if (title) title.textContent = `插件配置 · ${plugin.name}`;
+    if (ta) ta.value = JSON.stringify(plugin.config || {}, null, 2);
+    if (err) err.style.display = 'none';
+    document.getElementById('plugin-config-modal')?.classList.remove('hidden');
+  }
+  function closePluginConfigModal() {
+    document.getElementById('plugin-config-modal')?.classList.add('hidden');
+    pluginConfigTarget = null;
+  }
+  document.getElementById('btn-close-plugin-config')?.addEventListener('click', closePluginConfigModal);
+  document.getElementById('btn-cancel-plugin-config')?.addEventListener('click', closePluginConfigModal);
+  document.getElementById('btn-save-plugin-config')?.addEventListener('click', async () => {
+    const plugin = pluginConfigTarget;
+    const ta = document.getElementById('plugin-config-textarea');
+    const err = document.getElementById('plugin-config-error');
+    if (!plugin || !ta) return;
+    let patch;
+    try {
+      patch = JSON.parse(ta.value || '{}');
+      if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw new Error('配置必须是 JSON 对象');
+    } catch (e) {
+      if (err) { err.textContent = '配置 JSON 无效：' + e.message; err.style.display = ''; }
+      return;
+    }
+    const r = await window.api.dsSetPluginConfig(plugin.id, patch);
+    if (!r.ok) {
+      if (err) { err.textContent = r.error || '保存失败'; err.style.display = ''; }
+      return;
+    }
+    closePluginConfigModal();
+    window.showToast?.(`插件 ${plugin.name} 配置已保存`, 'success', 2500);
+    await renderPluginsList();
+    await refreshDsPluginTools();
+  });
   async function installPlugin(source) {
     const statusEl = document.getElementById('plugin-install-status');
     if (statusEl) statusEl.textContent = '安装中…';
+    // 实时显示 npm 输出尾部（安装已是异步执行，不再阻塞渲染器）
+    let offProgress = null;
+    if (typeof window.api.onPluginsInstallProgress === 'function') {
+      offProgress = window.api.onPluginsInstallProgress((p) => {
+        if (!statusEl || !p) return;
+        const line = p.line || p.stage || '';
+        statusEl.textContent = '安装中… ' + String(line).slice(-140);
+      });
+    }
     let r;
     try {
       if (source.type === 'local') {
@@ -8461,6 +8567,8 @@ window.api.onWebControlSendMessage(async (message) => {
       }
     } catch (e) {
       r = { ok: false, error: e.message };
+    } finally {
+      if (typeof offProgress === 'function') { try { offProgress(); } catch { /* ignore */ } }
     }
     if (statusEl) {
       statusEl.textContent = r && r.ok
