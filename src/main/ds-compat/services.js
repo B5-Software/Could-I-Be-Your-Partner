@@ -113,7 +113,10 @@ class CibypAgentsService extends Service {
       };
       this.store.set(entry.key, entry);
       if (entry.id) this.byId.set(String(entry.id), entry.key);
-      return this._handle(entry);
+      // DSH AgentHandle 契约：create/resume 返回 { agent, dispose, ... }，
+      // 其中 agent 才是调用方实际使用的句柄（dsh-cc-tui 走 created.agent）
+      const handle = this._handle(entry);
+      return Object.assign(handle, { agent: handle });
     }
     return undefined;
   }
@@ -142,7 +145,8 @@ class CibypAgentsService extends Service {
       };
       this.store.set(entry.key, entry);
       if (entry.id) this.byId.set(String(entry.id), entry.key);
-      return this._handle(entry);
+      const handle = this._handle(entry);
+      return Object.assign(handle, { agent: handle });
     }
     return undefined;
   }
@@ -166,12 +170,48 @@ class CibypAgentsService extends Service {
     };
   }
 
+  /** 供插件读取宿主服务的 agent.ctx 代理（按需从宿主根上下文解析）。 */
+  hostCtxProxy() {
+    if (!this._proxy) {
+      const root = this.ctx.root;
+      this._proxy = new Proxy({}, {
+        get(_target, prop) {
+          if (prop === 'get') return (name) => { try { return root.get(name); } catch { return undefined; } };
+          if (prop === 'root') return root;
+          try { return root.get(String(prop)); } catch { return undefined; }
+        }
+      });
+    }
+    return this._proxy;
+  }
+
   _handle(entry) {
     const service = this;
     const transport = this.transport;
     const send = (payload) => {
       if (!transport || typeof transport.send !== 'function') return;
       try { transport.send('ds:pluginAgentMessage', payload); } catch { /* ignore */ }
+    };
+    const events = [];
+    let seq = 0;
+    const sessionObj = {
+      header: {
+        id: entry.key,
+        cwd: entry.cwd || null,
+        title: entry.title || '',
+        mode: entry.mode || 'chat'
+      },
+      events,
+      get seq() { return seq; },
+      append(type, data) {
+        seq += 1;
+        events.push({ type, data, seq, timestamp: Date.now() });
+      }
+    };
+    const inbox = {
+      events: [],
+      push(message) { inbox.events.push(message); },
+      remove() { return false; } // CIBYP 无 inbox 撤回语义：返回 false（拒绝撤回）
     };
     return {
       get id() { return service._resolve(entry.key)?.key || entry.key; },
@@ -181,29 +221,45 @@ class CibypAgentsService extends Service {
       },
       get mode() { return entry.mode || 'chat'; },
       get title() { return entry.title || ''; },
-      get session() {
-        const cur = service._resolve(entry.key) || entry;
-        return {
-          header: {
-            id: cur.key || '',
-            cwd: cur.cwd || null,
-            title: cur.title || '',
-            mode: cur.mode || 'chat'
-          }
-        };
-      },
+      get session() { return sessionObj; },
+      inbox,
       followup(message) {
         send({ sessionKey: entry.key, kind: 'followup', text: messageText(message), source: (message && message.source) || null });
       },
       inject(message) {
         send({ sessionKey: entry.key, kind: 'inject', text: messageText(message), source: (message && message.source) || null });
       },
+      steer(message) {
+        send({ sessionKey: entry.key, kind: 'steer', text: messageText(message) });
+      },
+      cancel() {
+        send({ sessionKey: entry.key, kind: 'stop', text: '' });
+      },
       stop() {
         send({ sessionKey: entry.key, kind: 'stop', text: '' });
+      },
+      get whenIdle() {
+        return whenIdle(service, entry.key);
+      },
+      get ctx() {
+        return service.hostCtxProxy();
       },
       dispose() { /* 生命周期由渲染进程会话管理，这里无本地资源 */ }
     };
   }
+}
+
+function whenIdle(service, key, timeoutMs = 60000) {
+  return new Promise((resolve) => {
+    const start = Date.now();
+    const tick = () => {
+      const cur = service._resolve(key);
+      if (!cur || (cur.status !== 'running' && cur.status !== 'queued')) return resolve();
+      if (Date.now() - start > timeoutMs) return resolve();
+      setTimeout(tick, 250);
+    };
+    tick();
+  });
 }
 
 /** sessions seam：与 agents 共用注册表，读取 header（cwd/title/mode）。 */
@@ -217,6 +273,15 @@ class CibypSessionsService extends Service {
     if (!this.agents) return undefined;
     const handle = this.agents.get(idOrKey);
     return handle ? handle.session : undefined;
+  }
+
+  /** DSH sessions.fork：共享事件日志的浅分支（CIBYP 无分叉语义）。 */
+  fork(session) {
+    if (!session) return undefined;
+    return {
+      header: session.header || {},
+      events: Array.isArray(session.events) ? session.events : []
+    };
   }
 }
 

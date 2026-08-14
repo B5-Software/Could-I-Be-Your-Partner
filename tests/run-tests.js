@@ -2460,6 +2460,22 @@ async function runDsPluginTests() {
       assert.strictEqual(created.id, 'chat:n1');
       assert.strictEqual(created.status, 'idle');
       assert.strictEqual(created.session.header.cwd, '/tmp/n1');
+      assert.strictEqual(created.agent, created, 'DSH 契约：create 结果应含 .agent（= 句柄自身）');
+      assert.strictEqual(created.agent.id, 'chat:n1');
+      // 会话事件日志 / seq / fork / 控制面
+      assert.ok(Array.isArray(created.session.events), 'session.events 应为可迭代数组');
+      created.session.append('turn/start', {});
+      assert.strictEqual(created.session.events.length, 1);
+      assert.strictEqual(created.session.seq, 1);
+      assert.strictEqual(pm.host.ctx.sessions.fork(created.session).events.length, 1, 'sessions.fork 应共享事件日志');
+      created.steer('用户消息');
+      assert.ok(requests.some(r => r.channel === 'ds:pluginAgentMessage' && r.payload.kind === 'steer' && r.payload.text === '用户消息'), 'steer 应下发');
+      created.cancel();
+      assert.ok(requests.some(r => r.channel === 'ds:pluginAgentMessage' && r.payload.kind === 'stop'), 'cancel 应下发 stop');
+      assert.ok(created.inbox && typeof created.inbox.remove === 'function', '应有 inbox');
+      assert.strictEqual(created.inbox.remove('x'), false, 'inbox.remove 无撤回语义应返回 false');
+      await created.whenIdle;
+      assert.ok(created.ctx && typeof created.ctx.get === 'function', 'agent.ctx 应可解析宿主服务');
       assert.ok(requests.some(r => r.channel === 'ds:agentCreate' && r.payload.instructions === '做点事'), 'create 应携带 instructions');
       const resumed = await pm.host.ctx.agents.resume({ sessionId: 'e1' });
       assert.strictEqual(resumed.session.header.title, '旧会话');

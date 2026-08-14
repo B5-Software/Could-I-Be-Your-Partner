@@ -1239,7 +1239,9 @@ export default (async function appEntry() {
       const text = String(msg.text || '');
       if (msg.kind === 'inject') {
         try { session.agent.injectHotMessage(text, []); } catch { /* ignore */ }
-      } else if (msg.kind === 'followup') {
+      } else if (msg.kind === 'stop') {
+        try { sessionManager.stop(session); } catch { /* ignore */ }
+      } else if (msg.kind === 'followup' || msg.kind === 'steer') {
         if (session.agent.running || !sessionManager.requestStart(session)) {
           sessionManager.queue(session, { text, attachments: [] });
         } else {
