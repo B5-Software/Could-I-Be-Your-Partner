@@ -1495,83 +1495,38 @@ ${affectionDesc}
   }
 
   async generateConversationTitle(userMessage) {
+    const TU = (typeof window !== 'undefined' && window.CIBYPTitleUtils) ? window.CIBYPTitleUtils : null;
+    const cleaned = ((userMessage || '').replace(/[\s\r\n]+/g, ' ').trim()) || '未命名对话';
+    // LLM 不可用/超限/解析失败时的兜底：剥礼貌前缀取语义片段，而不是照抄整句
+    const fallback = () => (TU ? TU.heuristicFallback(cleaned) : cleaned.substring(0, 20));
     try {
-      const normalize = (text) => ((text || '').replace(/[\s\r\n]+/g, ' ').trim()) || '未命名对话';
-      const cleaned = normalize(userMessage);
-      // 快速兜底：LLM 调用失败时使用第一句话
-      const quickFallback = (() => {
-        const firstSentence = cleaned.split(/[，。！？、,.;:；：\n]+/)[0] || cleaned;
-        let base = firstSentence.replace(/\s+/g, '').trim();
-        base = base.replace(/^(请|帮我|麻烦|能否|可以|如何|怎么|需要|我要|想要|修复|实现|增加|优化|解决|改进|调整|删除|添加|生成|完善|修正|处理)+/g, '').trim();
-        if (!base) base = cleaned;
-        return base.slice(0, 20);
-      })();
-
-      // 检测 LLM 是否返回了 meta 描述（把指令复述出来）而非实际标题
-      const isMetaDescription = (text) => {
-        if (!text || typeof text !== 'string') return true;
-        const lower = text.toLowerCase();
-        // 常见 meta 描述特征：LLM 复述任务而非给出实际答案
-        const metaPatterns = [
-          /我们被要求/, /我们被问到/, /我们问到/, /被问到/, /用户消息.*提到/, /用户.*想要/,
-          /请为.+生成/, /请为.+对话/, /生成.+标题/, /简短的中文标题/,
-          /为以下对话/, /直接返回标题/, /不超过.*字/, /这是一个编码任务/,
-          /这是一个对话场景/, /请输入文本/, /title:|标题：/,
-          /所以应该/, /可能的工具/, /可能的.*工具/, /所以选择/, /应该选择/,
-          /用户可能/, /可能想要/, /可能的 geogebra/i, /可能的工具/i
-        ];
-        return metaPatterns.some(p => p.test(text)) || text.length > 30;
-      };
-
-      // 语义化标题：所有模式都用 LLM 生成，更贴合对话意图
-      const modeHint = this.mode === 'code'
-        ? '主题与编程/代码相关。'
-        : this.mode === 'babe'
-          ? '风格温馨。'
-          : '';
-      // 注意：prompt 不能用"请为以下对话生成标题"这种容易被复述的句式，
-      // 改用"任务：起标题"这种直接指令 + few-shot 示例引导 LLM 输出实际标题。
-      const prompt = `任务：根据用户消息起一个简短标题。
-要求：
-- 只输出标题文字（2-15个字），不要任何前缀、引号、解释、标点
-- 不要描述任务本身（禁止输出"标题:""为对话生成"等元描述）
-- ${modeHint || '概括用户意图即可。'}
-
-示例：
-用户消息: "帮我写一个Python爬虫" → 输出: Python爬虫
-用户消息: "今天天气怎么样" → 输出: 查天气
-用户消息: "解释一下闭包" → 输出: JS闭包解释`;
-
       const result = await window.api.chatLLM([
-        { role: 'system', content: prompt },
+        { role: 'system', content: TU ? TU.buildTitlePrompt(this.mode) : '你是会话标题助手。只输出 2-12 字中文标题，提炼主题，禁止照抄用户原话。' },
         { role: 'user', content: cleaned }
-      ], { temperature: 0.2, max_tokens: 30, requestId: Date.now().toString(), sessionKey: this.sessionKey || null });
+      ], { temperature: 0.1, max_tokens: 32, requestId: Date.now().toString(), sessionKey: this.sessionKey || null });
 
-      const msg = result?.data?.choices?.[0]?.message;
-      // 优先用 Final（content），如果 content 为空或是 meta 描述，才尝试 reasoning_content
-      let title = (msg?.content || '').trim();
-      if (isMetaDescription(title)) {
-        // content 为空或是 meta 描述，回退到 reasoning_content（思考模型可能把简短答案放这里）
-        const reasoning = (msg?.reasoning_content || '').trim();
-        if (reasoning && !isMetaDescription(reasoning)) {
-          // 从 reasoning 中提取最后一行或最短的句子作为标题
-          const lines = reasoning.split(/\n/).map(l => l.trim()).filter(Boolean);
-          title = lines[lines.length - 1] || reasoning;
-        } else {
-          title = '';
-        }
+      // LLM 侧失败（未配置/预算/超限等）直接走启发式兜底
+      if (!result || result.ok !== true || !result.data) return fallback();
+      const msg = result.data?.choices?.[0]?.message || {};
+
+      // 优先 content；思考型模型 content 为空或仍是复述时，从 reasoning 结论提取
+      let title = TU ? TU.cleanTitle(msg.content || '') : String(msg.content || '').trim();
+      if (TU && (TU.isMetaDescription(title) || TU.looksLikeEcho(title, cleaned))) {
+        const fromReasoning = TU.extractTitleFromReasoning(msg.reasoning_content || msg.reasoning || '');
+        if (fromReasoning) title = fromReasoning;
       }
-      if (title) {
-        const cleanedTitle = title.replace(/["「」『』《》""'']/g, '')
-          .replace(/^(标题[:：]|title[:：])\s*/i, '')
-          .replace(/\s+/g, ' ').trim().substring(0, 20);
-        if (cleanedTitle && cleanedTitle.length >= 2 && !isMetaDescription(cleanedTitle)) {
-          return cleanedTitle;
-        }
+      // 终检：非空、非元描述、非照抄原话、长度合理
+      const valid = TU
+        ? title && title.length >= 2 && title.length <= TU.MAX_TITLE_LEN
+          && !TU.isMetaDescription(title) && !TU.looksLikeEcho(title, cleaned)
+        : title && title.length >= 2;
+      if (valid) {
+        return TU ? title.substring(0, TU.MAX_TITLE_LEN) : title.substring(0, 20);
       }
-      return quickFallback;
-    } catch { /* ignore */ }
-    return (userMessage ? userMessage : '未命名对话').replace(/\s+/g, ' ').substring(0, 20);
+      return fallback();
+    } catch {
+      return fallback();
+    }
   }
 
   stop() {
