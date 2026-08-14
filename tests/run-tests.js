@@ -2921,6 +2921,26 @@ test('react 漂移自修复：健康/无关状态不动作（离线判定）', (
   }
 });
 
+test('交互式 TUI 插件识别：GUI 宿主跳过加载（不渲染到终端）', () => {
+  const fsLocal2 = require('fs');
+  const pathLocal2 = require('path');
+  const osLocal2 = require('os');
+  const { isInteractiveTuiPlugin } = require('../src/main/ds-compat/plugin-manager.js');
+  const dir = fsLocal2.mkdtempSync(pathLocal2.join(osLocal2.tmpdir(), 'cibyp-tui-detect-'));
+  try {
+    const tuiDir = pathLocal2.join(dir, 'tui');
+    fsLocal2.mkdirSync(tuiDir);
+    fsLocal2.writeFileSync(pathLocal2.join(tuiDir, 'plugin.js'), "if (!process.stdout.isTTY) throw 0; render(<App/>);");
+    assert.strictEqual(isInteractiveTuiPlugin(tuiDir), true, 'isTTY + render 应识别为 TUI 插件');
+    const normalDir = pathLocal2.join(dir, 'normal');
+    fsLocal2.mkdirSync(normalDir);
+    fsLocal2.writeFileSync(pathLocal2.join(normalDir, 'index.js'), "export function apply(ctx) { ctx.tools.register({ name: 'x' }); }");
+    assert.strictEqual(isInteractiveTuiPlugin(normalDir), false, '普通工具插件不应误判');
+  } finally {
+    try { fsLocal2.rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ }
+  }
+});
+
 // ---- Summary ----
 (async () => {
   // 等待异步 LLM 测试完成

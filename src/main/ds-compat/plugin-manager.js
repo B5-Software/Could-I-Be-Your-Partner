@@ -208,6 +208,39 @@ function repairReactRuntime(installDir, pkg) {
 }
 
 /**
+ * 交互式终端插件（TUI 前端门）检测：入口树中出现
+ * process.stdout.isTTY 守卫 + render/ink 痕迹即判定。
+ * CIBYP 是 GUI 宿主，跳过 apply：既不在用户终端渲染 ANSI，
+ * 也不会因常驻事件循环触发挂起超时。
+ */
+function isInteractiveTuiPlugin(dir) {
+  try {
+    let hasTty = false;
+    let hasRender = false;
+    const walk = (d, depth) => {
+      if (depth > 3 || (hasTty && hasRender)) return;
+      for (const name of fs.readdirSync(d)) {
+        if (hasTty && hasRender) return;
+        if (name === 'node_modules' || name === '.git') continue;
+        const p = path.join(d, name);
+        let st;
+        try { st = fs.statSync(p); } catch { continue; }
+        if (st.isDirectory()) walk(p, depth + 1);
+        else if (/\.(js|mjs|cjs)$/.test(name)) {
+          const s = fs.readFileSync(p, 'utf8');
+          if (s.includes('process.stdout.isTTY')) hasTty = true;
+          if (s.includes('render(') || s.includes('ink')) hasRender = true;
+        }
+      }
+    };
+    walk(dir, 0);
+    return hasTty && hasRender;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * 异步执行 npm（不再使用 spawnSync：安装可能耗时数分钟，同步等待会
  * 阻塞主进程事件循环，导致整个窗口无响应）。
  * @returns {Promise<{status: number|null, error: Error|null, stdout: string, stderr: string, timedOut: boolean}>}
@@ -571,6 +604,14 @@ class PluginManager {
     const rec = this.plugins.find(p => p.id === id);
     if (!rec) return { ok: false, error: `插件不存在：${id}` };
     try {
+      if (isInteractiveTuiPlugin(rec.installDir)) {
+        await this.host.unloadPlugin(id);
+        rec.tools = [];
+        rec.toolCount = 0;
+        rec.compatIssues = ['交互式终端插件（TUI 前端门）：CIBYP GUI 不渲染其终端界面，已跳过加载'];
+        this.save();
+        return { ok: true, plugin: this._public(rec) };
+      }
       if (rec.enabled) {
         const res = await this.host.loadPlugin(id, rec.entry, { name: rec.name, config: rec.config });
         rec.tools = res.tools;
@@ -648,6 +689,13 @@ class PluginManager {
         if (pkg && repairReactRuntime(rec.installDir, pkg)) {
           console.log(`[DS Plugins] 已修复 ${rec.name} 的 react 版本漂移`);
         }
+        if (isInteractiveTuiPlugin(rec.installDir)) {
+          rec.compatIssues = ['交互式终端插件（TUI 前端门）：CIBYP GUI 不渲染其终端界面，已跳过加载'];
+          rec.tools = [];
+          rec.toolCount = 0;
+          await this.host.unloadPlugin(rec.id);
+          continue;
+        }
         if (rec.enabled) {
           await this.refreshPlugin(rec.id);
           continue;
@@ -665,8 +713,8 @@ class PluginManager {
         await this.host.unloadPlugin(rec.id);
       } catch (e) {
         rec.compatIssues = [...(rec.compatIssues || []), `启动重审失败: ${e.message}`];
-      }
     }
+  }
     this.save();
     return this.list();
   }
@@ -693,4 +741,4 @@ class PluginManager {
   }
 }
 
-module.exports = { PluginManager, readBundlePatch, repairReactRuntime };
+module.exports = { PluginManager, readBundlePatch, repairReactRuntime, isInteractiveTuiPlugin };
