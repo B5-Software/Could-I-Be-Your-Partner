@@ -987,6 +987,12 @@
     if (!sessionManager) return;
     const session = sessionManager.get(key);
     if (!session || session.mode !== mode) return;
+    // 切换会话标签页：中断语音播报及其队列（不残留上一个会话的声音；
+    // 点击当前已激活的标签页不触发）
+    const activeBefore = sessionManager.getActive(mode);
+    if ((!activeBefore || activeBefore.key !== key) && typeof stopVoicePlayback === 'function') {
+      stopVoicePlayback();
+    }
     if (currentMode !== mode) {
       const modeBtn = document.querySelector(`.mode-btn[data-mode="${mode}"]`);
       if (modeBtn) modeBtn.click();

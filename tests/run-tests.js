@@ -538,6 +538,15 @@ test('多会话标签栏常驻并支持右键批量关闭', () => {
   assert.ok(sessionsContent.includes('createNewSession(mode)'), '关闭最后一个标签页应新建会话');
 });
 
+test('切换会话标签页应中断语音播报及其队列', () => {
+  const sessionsContent = fs.readFileSync(require('path').join(__dirname, '../src/renderer/js/app-parts/02-mode-sessions.js'), 'utf-8');
+  const idx = sessionsContent.indexOf('async function activateSession');
+  assert.ok(idx !== -1, '应存在 activateSession');
+  const block = sessionsContent.slice(idx, idx + 1400);
+  assert.ok(block.includes('stopVoicePlayback()'), '切换会话应调用 stopVoicePlayback');
+  assert.ok(block.includes('activeBefore.key !== key'), '仅切换到不同会话时才中断语音');
+});
+
 test('思考容器宽度约束与 Babe 标签栏圆角、光标一致性', () => {
   const chatCss = fs.readFileSync(require('path').join(__dirname, '../src/renderer/css/chat.css'), 'utf-8');
   const componentsCss = fs.readFileSync(require('path').join(__dirname, '../src/renderer/css/components.css'), 'utf-8');
