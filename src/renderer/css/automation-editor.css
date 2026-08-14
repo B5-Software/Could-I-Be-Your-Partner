@@ -33,6 +33,7 @@ html, body {
 }
 body { display: flex; flex-direction: column; user-select: none; }
 input, select, textarea { font-family: inherit; font-size: 13px; }
+.hidden { display: none !important; }
 
 /* ---- 标题栏 ---- */
 .ae-titlebar {
