@@ -3085,12 +3085,39 @@ test('标题工具：思考内容提取结论（倒序+剥引导词）', () => {
   assert.strictEqual(TU.extractTitleFromReasoning(''), '');
 });
 
+test('标题工具：识别思考过程输出（isThinkingDump）', () => {
+  const TU = require('../src/renderer/js/title-utils.js');
+  assert.ok(TU.isThinkingDump("Here's a thinking process:\n\n1. **Analyze User Input**"), '应识别英文 CoT 前导');
+  assert.ok(TU.isThinkingDump('1.  **Identify Task**'), '应识别 Identify Task 步骤');
+  assert.ok(TU.isThinkingDump('Apply Rules'), '应识别 Apply Rules');
+  assert.ok(!TU.isThinkingDump('Python爬虫'), '正常标题不应误判');
+});
+
+test('标题工具：从 CoT 只提取强结论标记后的结果，绝不吞示例', () => {
+  const TU = require('../src/renderer/js/title-utils.js');
+  const user = '帮我写一个Python爬虫，爬取豆瓣电影Top250';
+  // 真实案例：模型复述提示词示例（引号对成对出现）
+  const trap = `Here's a thinking process:\n\n4. **Determine Output Title**:\n - The core task is "Python爬虫"\n - Looking at the correct examples:\n   - "帮我写一个Python爬虫，爬取豆瓣电影Top250 → Python爬虫"\n   - "给我讲讲相对论 → 相对论入门"\n - So the correct output is "Python爬虫'`;
+  assert.strictEqual(TU.extractTitleFromCoT(trap, user), '', '无强结论标记不应猜测（避免吞示例）');
+  // 真实案例：强结论标记 + 引号答案
+  const full = `Final decision: Output "Python爬虫". Let's make sure it is 2-12 characters.`;
+  assert.strictEqual(TU.extractTitleFromCoT(full, user), 'Python爬虫');
+  // 真实案例：截断产生散落引号，应优先取标记后第一个有效引号
+  const truncated = `Final decision: Output "Python爬虫". Let's count "Python" as 6 letters + "爬虫" as 2`;
+  assert.strictEqual(TU.extractTitleFromCoT(truncated, user), 'Python爬虫');
+  // 中文标记行无引号
+  assert.strictEqual(TU.extractTitleFromCoT('最终标题：Python爬虫', user), 'Python爬虫');
+  // 回显原话应跳过
+  assert.strictEqual(TU.extractTitleFromCoT('答案是 "查询天气" 不太合适', '查询天气'), '');
+});
+
 test('标题工具：启发式兜底剥礼貌前缀并截断，而非照抄整句', () => {
   const TU = require('../src/renderer/js/title-utils.js');
   const t = TU.heuristicFallback('请帮我写一个Python爬虫，用来爬取豆瓣电影Top250的数据');
   assert.ok(!t.startsWith('请'), '应剥离礼貌前缀');
   assert.ok(t.length <= 19, '应截断到合理长度');
   assert.strictEqual(TU.heuristicFallback(''), '新对话');
+  assert.strictEqual(TU.heuristicFallback('请给我设计一个完整的用户注册登录系统，包含数据库和API'), '设计一个完整的用户注册登录系统');
 });
 
 test('标题提示词：包含禁止照抄负例与模式风格（提示词工程）', () => {
@@ -3113,7 +3140,10 @@ test('agent.js 标题生成：走 title-utils 且 LLM 失败时用启发式兜�
   assert.ok(fn.includes('CIBYPTitleUtils'), '未接入 title-utils');
   assert.ok(fn.includes('buildTitlePrompt(this.mode)'), '未使用模式化标题提示词');
   assert.ok(fn.includes('looksLikeEcho'), '未做照抄识别');
-  assert.ok(fn.includes('extractTitleFromReasoning'), '未做思考内容提取');
+  assert.ok(fn.includes('isThinkingDump'), '未识别思考过程输出');
+  assert.ok(fn.includes('extractTitleFromCoT'), '未做 CoT 结论提取');
+  assert.ok(/temperature:\s*0\s*,/.test(fn), '标题请求应使用 temperature 0（实测思考模型温度>0 会把 CoT 灌进 content）');
+  assert.ok(/max_tokens:\s*512/.test(fn), '标题请求应给结论留出 token 空间');
   assert.ok(/result\.ok !== true[\s\S]*fallback\(\)/.test(fn), 'LLM 失败未走启发式兜底');
   const html = fs.readFileSync(require('path').join(__dirname, '../src/renderer/pages/index.html'), 'utf-8');
   assert.ok(html.includes('title-utils.js'), 'index.html 未加载 title-utils.js');

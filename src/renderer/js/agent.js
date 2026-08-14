@@ -1503,17 +1503,29 @@ ${affectionDesc}
       const result = await window.api.chatLLM([
         { role: 'system', content: TU ? TU.buildTitlePrompt(this.mode) : '你是会话标题助手。只输出 2-12 字中文标题，提炼主题，禁止照抄用户原话。' },
         { role: 'user', content: cleaned }
-      ], { temperature: 0.1, max_tokens: 32, requestId: Date.now().toString(), sessionKey: this.sessionKey || null });
+      ], {
+        temperature: 0, // 温度>0 会让部分思考型模型把 CoT 灌进 content（实测 nemotron lightning）
+        max_tokens: 512, // 给结论留出空间；思考本身不在该预算内
+        requestId: Date.now().toString(),
+        sessionKey: this.sessionKey || null
+      });
 
       // LLM 侧失败（未配置/预算/超限等）直接走启发式兜底
       if (!result || result.ok !== true || !result.data) return fallback();
       const msg = result.data?.choices?.[0]?.message || {};
+      const rawContent = msg.content || '';
+      const rawReasoning = msg.reasoning_content || msg.reasoning || '';
 
-      // 优先 content；思考型模型 content 为空或仍是复述时，从 reasoning 结论提取
-      let title = TU ? TU.cleanTitle(msg.content || '') : String(msg.content || '').trim();
-      if (TU && (TU.isMetaDescription(title) || TU.looksLikeEcho(title, cleaned))) {
-        const fromReasoning = TU.extractTitleFromReasoning(msg.reasoning_content || msg.reasoning || '');
-        if (fromReasoning) title = fromReasoning;
+      let title = '';
+      if (TU && TU.isThinkingDump(rawContent)) {
+        // 思考型模型把 CoT 写进了 content：整体放弃，从 content+reasoning 尾部提炼结论
+        title = TU.extractTitleFromCoT(`${rawContent}\n\n${rawReasoning}`, cleaned);
+      } else {
+        title = TU ? TU.cleanTitle(rawContent) : String(rawContent).trim();
+        if (TU && (TU.isMetaDescription(title) || TU.looksLikeEcho(title, cleaned))) {
+          title = TU.extractTitleFromCoT(`${rawContent}\n\n${rawReasoning}`, cleaned)
+            || TU.extractTitleFromReasoning(rawReasoning);
+        }
       }
       // 终检：非空、非元描述、非照抄原话、长度合理
       const valid = TU

@@ -61,9 +61,15 @@
     return META_PATTERNS.some((p) => p.test(t));
   }
 
+  // 识别"把思考过程写进 content"的模型输出（如 nemotron lightning 系列）
+  function isThinkingDump(text) {
+    if (!text || typeof text !== 'string') return false;
+    return /here'?s a thinking process|thinking process|analyze (user )?input|identify (the )?(core )?task|apply rules|determine output/i.test(text);
+  }
+
   function stripPolitePrefix(s) {
     return String(s || '')
-      .replace(/^(请|麻烦|帮忙|帮我|帮助|能否|可以|如何|怎么|需要|我要|我想|想要|能不能|可不可以|请帮我|请帮忙)+/g, '')
+      .replace(/^(请帮我|请帮忙|请给我|帮我|帮忙|给我|请|麻烦|帮助|能否|可以|如何|怎么|需要|我要|我想|想要|能不能|可不可以)+/g, '')
       .trim();
   }
 
@@ -101,6 +107,63 @@
       if (cand && cand.length >= 2 && cand.length <= MAX_TITLE_LEN && !isMetaDescription(cand)) {
         return cand;
       }
+    }
+    return '';
+  }
+
+  // 从 CoT 全文中提取最终结论。只在"强结论标记"之后提取，避免把模型复述的
+  // 提示词示例（"查询天气/闭包原理/相对论入门"等）误当结论；
+  // 无强结论标记时返回空（由调用方走确定性启发式兜底），绝不猜测。
+  // 结论区内：优先最后一个 2-24 字引号短语，其次尾部"像标题"的短行；可选跳过回显原话。
+  function extractTitleFromCoT(text, userMessage) {
+    if (!text || typeof text !== 'string') return '';
+    const DECISION_MARKERS = [
+      /final decision/ig, /final output/ig, /final answer/ig,
+      /最终输出/g, /最终标题/g, /最终决定/g, /最终答案/g, /答案是/g, /答案为/g,
+      /标题是/g, /标题为/g, /结论是/g, /the title (is|should be)/ig,
+    ];
+    // 取最后一个决策标记之后的内容（结论区）
+    let tailStart = -1;
+    for (const re of DECISION_MARKERS) {
+      re.lastIndex = 0;
+      let m;
+      while ((m = re.exec(text))) tailStart = Math.max(tailStart, m.index);
+    }
+    if (tailStart < 0) return '';
+    const tail = text.slice(tailStart);
+
+    const ok = (c) => c.length >= 2 && c.length <= MAX_TITLE_LEN && !isMetaDescription(c)
+      && !(userMessage && looksLikeEcho(c, userMessage));
+
+    // 1) 结论标记后第一个有效引号短语（决策通常紧跟标记；截断产生的散落引号会被跳过）
+    const quoteRe = /["「『]([^"」』\n]{2,24})["」』]/g;
+    let q;
+    const candidates = [];
+    while ((q = quoteRe.exec(tail))) candidates.push(q[1]);
+    for (const cand of candidates) {
+      const c = cleanTitle(cand);
+      if (ok(c)) return c;
+    }
+
+    // 2) 标记行直接结论：如 "最终标题：Python爬虫" / "Final decision: Output Python爬虫"
+    let direct = tail.split(/\n/)[0] || '';
+    direct = direct
+      .replace(/^(final decision|final output|final answer|最终输出|最终标题|最终决定|最终答案|答案是|答案为|标题是|标题为|结论是|the title is|the title should be)[^:：\n]{0,30}[:：]?\s*/i, '')
+      .replace(/^(output|输出)\s*/i, '')
+      .split(/[。！？!?；;.]/)[0];
+    const dc = cleanTitle(direct);
+    if (ok(dc)) return dc;
+
+    // 3) 尾部向上找第一行"像标题"的短行
+    const lines = tail.split(/\n/).map((s) => s.trim()).filter(Boolean);
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const s = lines[i].replace(/\*\*/g, '').trim();
+      if (/^[-*•\d.)>\s]+/.test(s)) continue;
+      if (/["「『]/.test(s)) continue;
+      if (/[:：]\s*$/.test(s) || s.includes('：') || s.includes(': ')) continue;
+      if (/^(analyze|identify|apply|determine|task|step|rule|user|the|this|here|so|i|final|answer|答案是|答案为|标题|最终|输出|结论|theme|topic)\b/i.test(s)) continue;
+      const c = cleanTitle(s);
+      if (ok(c)) return c;
     }
     return '';
   }
@@ -145,10 +208,12 @@ ${modeHint}
     MAX_TITLE_LEN,
     cleanTitle,
     isMetaDescription,
+    isThinkingDump,
     stripPolitePrefix,
     firstSentenceOf,
     looksLikeEcho,
     extractTitleFromReasoning,
+    extractTitleFromCoT,
     heuristicFallback,
     buildTitlePrompt,
   };
