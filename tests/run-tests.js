@@ -2745,9 +2745,14 @@ test('automation/guide 模块真实加载执行（require + 各 topic 渲染）'
 test('技能编辑器修复：Monaco 颜色归一化 / macOS 红绿灯 / 布局溢出', () => {
   const skillJs = fs.readFileSync(require('path').join(__dirname, '../src/renderer/js/skill-editor.js'), 'utf-8');
   const skillCss = fs.readFileSync(require('path').join(__dirname, '../src/renderer/css/skill-editor.css'), 'utf-8');
+  const automationJs = fs.readFileSync(require('path').join(__dirname, '../src/renderer/js/automation-editor.js'), 'utf-8');
   const htmlContent = fs.readFileSync(require('path').join(__dirname, '../src/renderer/pages/index.html'), 'utf-8');
   assert.ok(skillJs.includes('normalizeMonacoColor'), '应有 Monaco 颜色归一化');
   assert.ok(skillJs.includes('rgba(${Math.round(r)},${Math.round(g)},${Math.round(b)},${alpha})'), 'rgba 不应带空格（Monaco 不接受）');
+  assert.ok(skillJs.includes("typeof monacoEditor.setTheme === 'function'"), 'setTheme 应有能力检测与回退（部分打包版实例无该方法）');
+  assert.ok(/try\s*\{\s*defineMonacoTheme\(\);?\s*\}\s*catch/.test(skillJs), '主题定义失败不应阻断编辑器');
+  assert.ok(automationJs.includes("const lineHighlight = isDark ? 'rgba(255,255,255,0.04)'"), '当前行高亮应为中性色');
+  assert.ok(automationJs.includes("'editor.lineHighlightBackground': lineHighlight"), '行高亮不应使用强调色（避免红色主题下出现红行）');
   assert.ok(skillJs.includes("platform-darwin"), '应检测 macOS 并加红绿灯占位类');
   assert.ok(skillCss.includes('body.platform-darwin .se-titlebar') && skillCss.includes('padding-left: 80px'), 'macOS 标题应避开红绿灯');
   assert.ok(skillCss.includes('.se-scripts-list') && /max-height:\s*240px/.test(skillCss), '脚本列表应限高');

@@ -73,6 +73,8 @@
     const foreground = cssVar('--text-primary', isDark ? '#e8e8f0' : '#1a1a2e');
     const secondary = cssVar('--text-secondary', isDark ? '#a0a0c0' : '#5a5a7a');
     const border = cssVar('--border', isDark ? '#333360' : '#e2e6ee');
+    // 当前行高亮用中性色（若用强调色，用户主题为红/粉系时会出现红色行背景）
+    const lineHighlight = isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.035)';
     window.monaco.editor.defineTheme('cipyp-dsl', {
       base: isDark ? 'vs-dark' : 'vs',
       inherit: true,
@@ -92,7 +94,8 @@
         'editorLineNumber.activeForeground': accent,
         'editorCursor.foreground': accent,
         'editor.selectionBackground': colorWithAlpha(accent, 0.26),
-        'editor.lineHighlightBackground': colorWithAlpha(accent, 0.07),
+        'editor.lineHighlightBackground': lineHighlight,
+        'editorLineNumber.activeBackground': lineHighlight,
         'editorIndentGuide.background1': colorWithAlpha(accent, 0.14),
         'editorIndentGuide.activeBackground1': colorWithAlpha(accent, 0.32),
         'editorWidget.background': background,

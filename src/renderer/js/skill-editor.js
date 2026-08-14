@@ -310,6 +310,7 @@
     const secondary = normalizeMonacoColor(cssVar('--text-secondary', isDark ? '#a0a0c0' : '#5a5a7a'));
     const border = normalizeMonacoColor(cssVar('--border', isDark ? '#333360' : '#e2e6ee'));
     const hover = normalizeMonacoColor(cssVar('--bg-hover', isDark ? '#333360' : '#e8ecf2'));
+    const lineHighlight = isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.035)';
 
     window.monaco.editor.defineTheme('cipyp-skill', {
       base: isDark ? 'vs-dark' : 'vs',
@@ -331,8 +332,8 @@
         'editorCursor.foreground': accent,
         'editor.selectionBackground': colorWithAlpha(accent, 0.26),
         'editor.inactiveSelectionBackground': colorWithAlpha(accent, 0.16),
-        'editor.lineHighlightBackground': colorWithAlpha(accent, 0.08),
-        'editorLineNumber.activeBackground': colorWithAlpha(accent, 0.08),
+        'editor.lineHighlightBackground': lineHighlight,
+        'editorLineNumber.activeBackground': lineHighlight,
         'editorIndentGuide.background1': colorWithAlpha(accent, 0.16),
         'editorIndentGuide.activeBackground1': colorWithAlpha(accent, 0.36),
         'editorWidget.background': background,
@@ -354,15 +355,25 @@
   }
 
   function applyMonacoTheme() {
-    if (!window.monaco || !monacoEditor) return;
-    defineMonacoTheme();
-    monacoEditor.setTheme('cipyp-skill');
+    if (!window.monaco) return;
+    try { defineMonacoTheme(); } catch (e) { console.warn('[SkillEditor] 主题定义失败:', e.message); }
+    try {
+      if (monacoEditor && typeof monacoEditor.setTheme === 'function') {
+        monacoEditor.setTheme('cipyp-skill');
+      } else if (monacoEditor && typeof monacoEditor.updateOptions === 'function') {
+        monacoEditor.updateOptions({ theme: 'cipyp-skill' });
+      } else if (typeof window.monaco.editor.setTheme === 'function') {
+        window.monaco.editor.setTheme('cipyp-skill');
+      }
+    } catch (e) {
+      console.warn('[SkillEditor] 主题应用失败:', e.message);
+    }
   }
 
   async function initMonacoEditor() {
     if (monacoEditor) return monacoEditor;
     await ensureMonaco();
-    defineMonacoTheme();
+    try { defineMonacoTheme(); } catch (e) { console.warn('[SkillEditor] 主题定义失败:', e.message); }
     const host = $('editor-host');
     if (!host) return null;
     host.innerHTML = '';
