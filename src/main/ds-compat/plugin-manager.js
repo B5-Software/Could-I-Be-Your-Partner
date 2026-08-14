@@ -24,11 +24,11 @@ const SHIMS = {
 };
 
 class PluginManager {
-  constructor(dataDir) {
+  constructor(dataDir, options = {}) {
     this.dataDir = dataDir;
     this.pluginsDir = path.join(dataDir, 'plugins');
     this.manifestPath = path.join(dataDir, 'plugins.json');
-    this.host = new PluginHost();
+    this.host = new PluginHost({ skills: options.skills || null });
     this.plugins = [];
   }
 
@@ -91,10 +91,72 @@ class PluginManager {
     for (const [name, target] of Object.entries(SHIMS)) {
       const dest = path.join(scope, name.replace('@deepseek-ai/', ''));
       try {
-        if (fs.existsSync(dest)) continue;
-        fs.symlinkSync(target, dest, 'dir');
-      } catch { /* ignore：已有或权限问题 */ }
+        // cordis 必须强制指向 CIBYP shim：npm 安装会顺带装真实的 cordis peer，
+        // 若任其存在，插件的 Context/Service 会与宿主不同实例，class extends Service
+        // 的 instanceof 判断即失效。其余包（dsh-tools/schemastery）优先用真实实现，
+        // 覆盖范围更广。
+        if (name === '@deepseek-ai/cordis' && fs.existsSync(dest)) {
+          fs.rmSync(dest, { recursive: true, force: true });
+        }
+        if (!fs.existsSync(dest)) this._linkOrCopy(target, dest);
+      } catch { /* ignore：权限或平台限制 */ }
     }
+  }
+
+  _linkOrCopy(target, dest) {
+    try {
+      fs.symlinkSync(target, dest, process.platform === 'win32' ? 'junction' : 'dir');
+      return;
+    } catch { /* Windows 无 symlink 权限时回退复制 */ }
+    try {
+      fs.cpSync(target, dest, { recursive: true, dereference: true });
+    } catch { /* ignore */ }
+  }
+
+  /** 从安装 spec 中提取包名（npm/github/tgz/git URL 均适用）。 */
+  _parseSpecName(spec) {
+    let s = String(spec || '').trim()
+      .replace(/^npm:/, '')
+      .replace(/^github:/, '')
+      .replace(/^git\+?/, '')
+      .replace(/\.git(#.*)?$/, (m, hash) => hash || '');
+    s = s.split(/[?#]/)[0];
+    if (s.startsWith('@')) {
+      const parts = s.split('/');
+      if (parts.length >= 2) return `${parts[0]}/${parts[1].split('@')[0]}`;
+    }
+    return s.split('/').pop().split('@')[0] || s;
+  }
+
+  /**
+   * 在 npm 安装产物中定位真正的插件包目录。
+   * npm 12 在 --no-save 下不会写 package.json，因此不能依赖
+   * tmpDir/package.json 的 dependencies；直接扫描 node_modules，
+   * 用包名匹配，名字不符时退化为“唯一候选”。
+   */
+  _findInstalledPkg(tmpDir, spec) {
+    const nm = path.join(tmpDir, 'node_modules');
+    if (!fs.existsSync(nm)) return null;
+    const candidates = [];
+    const walk = (dir) => {
+      for (const name of fs.readdirSync(dir)) {
+        const full = path.join(dir, name);
+        let st;
+        try { st = fs.statSync(full); } catch { continue; }
+        if (!st.isDirectory()) continue;
+        if (name.startsWith('@')) { walk(full); continue; }
+        if (name === '.bin') continue;
+        if (fs.existsSync(path.join(full, 'package.json'))) candidates.push(full);
+      }
+    };
+    walk(nm);
+    if (!candidates.length) return null;
+    const wanted = this._parseSpecName(spec);
+    const named = candidates.filter((c) => {
+      try { return JSON.parse(fs.readFileSync(path.join(c, 'package.json'), 'utf8')).name === wanted; } catch { return false; }
+    });
+    if (named.length) return named[0];
+    return candidates.length === 1 ? candidates[0] : null;
   }
 
   /**
@@ -127,22 +189,8 @@ class PluginManager {
         try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
         throw new Error(`npm 安装失败: ${(r.stderr || r.stdout || '').slice(-600)}`);
       }
-      // 找到实际包目录
-      let found = null;
-      try {
-        const deps = JSON.parse(fs.readFileSync(path.join(tmpDir, 'package.json'), 'utf-8')).dependencies || {};
-        const keys = Object.keys(deps);
-        if (keys.length === 1) found = path.join(tmpDir, 'node_modules', keys[0]);
-        else {
-          const nm = path.join(tmpDir, 'node_modules');
-          for (const d of fs.readdirSync(nm)) {
-            const d2 = path.join(nm, d);
-            if (d.startsWith('@')) {
-              for (const s of fs.readdirSync(d2)) found = path.join(d2, s);
-            } else if (d !== '.bin' && d !== '.package-lock.json') found = d2;
-          }
-        }
-      } catch { /* ignore */ }
+      // 找到实际包目录（不再依赖 --no-save 生成的 package.json）
+      const found = this._findInstalledPkg(tmpDir, spec);
       if (!found || !fs.existsSync(path.join(found, 'package.json'))) {
         try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
         throw new Error('npm 安装后未找到插件包');
@@ -155,6 +203,17 @@ class PluginManager {
       }
       installDir = path.join(this.pluginsDir, id);
       fs.renameSync(found, installDir);
+      // 把 npm 装好的依赖（peerDependencies 等）一并搬进插件目录，
+      // 否则插件移动后 @deepseek-ai/dsh-llm 等运行期依赖会随 tmpDir 一起被删。
+      const tmpNm = path.join(tmpDir, 'node_modules');
+      if (fs.existsSync(tmpNm)) {
+        try {
+          fs.renameSync(tmpNm, path.join(installDir, 'node_modules'));
+        } catch {
+          // 跨设备回退：复制
+          try { fs.cpSync(tmpNm, path.join(installDir, 'node_modules'), { recursive: true }); } catch { /* ignore */ }
+        }
+      }
       try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
     }
 

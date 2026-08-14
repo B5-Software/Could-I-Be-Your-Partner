@@ -65,8 +65,39 @@ const workspacesBaseDir = path.join(app.getPath('documents'), 'Could-I-Be-Your-P
 
 const settingsPath = path.join(dataDir, 'settings.json');
 const memoryPath = path.join(dataDir, 'memory.json');
+// DeepSeek 插件 skills seam 的惰性 provider：把 CIBYP 内置 + 用户技能清单
+// 桥接给插件（dsh-context-doctor 等运行时读取）。
+const pluginSkillsProvider = () => {
+  const list = [];
+  for (const s of Object.values(BUNDLED_SKILLS || {})) {
+    if (s && s.name) {
+      list.push({ name: s.name, description: s.description || '', source: 'bundled', provider: 'bundled', content: s.prompt || '' });
+    }
+  }
+  try {
+    for (const f of fs.readdirSync(skillsDir).filter((x) => x.endsWith('.json'))) {
+      const s = loadJSON(path.join(skillsDir, f), {});
+      if (s && s.name) {
+        list.push({ name: s.name, description: s.description || '', source: 'user', provider: 'user', content: s.prompt || s.content || '' });
+      }
+    }
+  } catch { /* ignore */ }
+  return {
+    list: async () => list,
+    get: async (name) => {
+      const hit = list.find((s) => s.name === name);
+      if (!hit) return undefined;
+      return {
+        content: hit.content || '',
+        description: hit.description || '',
+        source: hit.source,
+        provider: hit.provider
+      };
+    }
+  };
+};
 // DeepSeek 插件管理器（Cordis 内核 lib + CIBYP 自研 Provider）
-const pluginManager = new PluginManager(dataDir).init();
+const pluginManager = new PluginManager(dataDir, { skills: pluginSkillsProvider }).init();
 const knowledgePath = path.join(dataDir, 'knowledge.json');
 // 异常中断的会话（关闭App时正在工作）保存到此文件，下次启动时弹模态框询问是否继续
 const pendingSessionPath = path.join(dataDir, '.cibyp-pending.json');

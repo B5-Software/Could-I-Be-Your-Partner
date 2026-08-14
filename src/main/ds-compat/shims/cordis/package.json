@@ -1,8 +1,14 @@
 {
   "name": "@deepseek-ai/cordis",
   "version": "4.0.1-cibyp",
-  "description": "CIBYP compatibility shim re-exporting the vendored Cordis kernel",
+  "description": "CIBYP compatibility shim re-exporting the vendored Cordis kernel (ESM-first, single-instance)",
   "license": "MIT",
-  "main": "index.js",
-  "type": "commonjs"
+  "type": "module",
+  "main": "./index.cjs",
+  "exports": {
+    ".": {
+      "import": "./index.mjs",
+      "require": "./index.cjs"
+    }
+  }
 }

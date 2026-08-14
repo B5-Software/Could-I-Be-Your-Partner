@@ -15,8 +15,25 @@
 
 const { Context, Service } = require('@deepseek-ai/cordis');
 const { pathToFileURL } = require('url');
+const nodePath = require('path');
+const fsp = require('fs/promises');
+const { spawn } = require('child_process');
 const sandboxRunner = require('../sandbox-runner');
 const { validateArgs } = require('./shims/dsh-tools');
+
+/** Schemastery Config（模块级导出）校验：Schema 可调用，失败抛 ValidationError。 */
+function validatePluginConfig(schema, config) {
+  if (!schema) return config || {};
+  if (typeof schema === 'function') return schema(config || {});
+  if (schema && typeof schema['~standard']?.validate === 'function') {
+    const res = schema['~standard'].validate(config || {});
+    if (res && Array.isArray(res.issues) && res.issues.length) {
+      throw new Error(res.issues.map((i) => i.message || String(i)).join('; '));
+    }
+    return (res && res.value !== undefined) ? res.value : (config || {});
+  }
+  return config || {};
+}
 
 // 当前正在挂载的插件身份（注册期同步标记，供 CibypToolsService.register 归属工具）
 const hostContext = { pluginId: null, pluginName: null };
@@ -25,6 +42,19 @@ class CibypToolsService extends Service {
   constructor(ctx) {
     super(ctx, 'tools');
     this.tools = new Map(); // name → definition
+  }
+
+  /** DSH 工具面板/审计插件读取工具面的形状（dsh-context-doctor 等会调用）。 */
+  schemas() {
+    const out = [];
+    for (const def of this.tools.values()) {
+      out.push({
+        name: def.name,
+        description: def.description || '',
+        parameters: def.parameters || { type: 'object', properties: {} }
+      });
+    }
+    return out;
   }
 
   register(definition) {
@@ -42,7 +72,8 @@ class CibypToolsService extends Service {
 }
 
 class PluginHost {
-  constructor() {
+  constructor(options = {}) {
+    this.options = options;
     this.ctx = new Context();
     this.fibers = new Map(); // pluginId → fiber
     this.toolsService = null;
@@ -56,12 +87,158 @@ class PluginHost {
     await this.ctx.plugin(CibypToolsService);
     this.toolsService = this.ctx.tools;
     // 桥接 seams：skills / settings / sandbox 提供可用实现，其余 stub
+    // skills 桥：由宿主注入真实技能清单 provider（惰性求值），
+    // 未注入时返回空列表，保证插件可加载。
+    const skillsProvider = this.options.skills || null;
     await this.ctx.plugin(class SkillsBridge extends Service {
       constructor(c) {
         super(c, 'skills');
-        this.list = async () => [];
-        this.get = async () => { throw new Error('skills 能力暂未在 CIBYP 桥接'); };
+        this.provider = skillsProvider;
+        this.list = async (opts = {}) => {
+          if (!this.provider) return [];
+          try {
+            const s = this.provider();
+            return await s.list(opts || {});
+          } catch { return []; }
+        };
+        this.get = async (name, opts = {}) => {
+          if (!this.provider) throw new Error('skills 未在 CIBYP 桥接');
+          return await this.provider().get(name, opts || {});
+        };
         this.register = () => () => {};
+      }
+    });
+    // 只读 fs seam：resolve/stat/readText/listDir/processPath（dsh-context-doctor、
+    // dsh-test-runner 等插件运行时依赖）。插件本就在主进程内运行，可自行 require('fs')，
+    // 这里提供 DSH 形状的便捷 API，行为等价、不额外扩大权限面。
+    await this.ctx.plugin(class FsBridge extends Service {
+      constructor(c) {
+        super(c, 'fs');
+      }
+      assertNotAborted(signal) {
+        if (signal && signal.aborted) throw new Error('aborted');
+      }
+      async resolve(target, opts = {}) {
+        const p = String(target || '.');
+        return nodePath.isAbsolute(p)
+          ? nodePath.normalize(p)
+          : nodePath.resolve(opts && opts.cwd ? opts.cwd : process.cwd(), p);
+      }
+      async stat(target, signal) {
+        this.assertNotAborted(signal);
+        const st = await fsp.stat(target);
+        return {
+          size: st.size,
+          isFile: st.isFile(),
+          isDirectory: st.isDirectory(),
+          mtimeMs: st.mtimeMs
+        };
+      }
+      async readText(target, signal) {
+        this.assertNotAborted(signal);
+        return await fsp.readFile(target, 'utf8');
+      }
+      async listDir(target, signal) {
+        this.assertNotAborted(signal);
+        const entries = await fsp.readdir(target, { withFileTypes: true });
+        return entries.map((e) => ({
+          name: e.name,
+          type: e.isDirectory() ? 'directory' : e.isFile() ? 'file' : 'other'
+        }));
+      }
+      processPath(target) {
+        const rel = nodePath.relative(process.cwd(), target);
+        return rel && !rel.startsWith('..') && !nodePath.isAbsolute(rel) ? rel : target;
+      }
+    });
+    // 一次性 shell seam：resolve(request) → run(spec)，供 dsh-test-runner 等
+    // 结构化命令插件使用（带超时/取消/输出上限）。
+    await this.ctx.plugin(class ShellBridge extends Service {
+      constructor(c) {
+        super(c, 'shell');
+      }
+      resolve(request) {
+        const req = request || {};
+        return {
+          command: String(req.command || ''),
+          cwd: req.workdir || process.cwd(),
+          timeoutMs: Math.max(1000, Math.min(Number(req.timeoutMs) || 120000, 600000)),
+          stdoutMaxBytes: Math.max(1024, Number(req.stdoutMaxBytes) || 1048576),
+          signal: req.signal || null
+        };
+      }
+      async run(spec) {
+        const out = {
+          exitCode: null,
+          stdout: { text: '' },
+          stderr: { text: '' },
+          timedOut: false,
+          aborted: false
+        };
+        const command = String(spec && spec.command ? spec.command : '');
+        if (!command) return out;
+        const cwd = (spec && spec.cwd) || process.cwd();
+        const timeoutMs = Math.max(1000, Math.min(Number(spec && spec.timeoutMs) || 120000, 600000));
+        const maxBytes = Math.max(1024, Number(spec && spec.stdoutMaxBytes) || 1048576);
+        const signal = spec && spec.signal;
+        const child = spawn('/bin/sh', ['-c', command], {
+          cwd,
+          env: process.env,
+          stdio: ['ignore', 'pipe', 'pipe']
+        });
+        let stdout = '';
+        let stderr = '';
+        let killed = false;
+        const kill = () => {
+          if (killed) return;
+          killed = true;
+          try { child.kill('SIGKILL'); } catch { /* ignore */ }
+        };
+        const onAbort = () => {
+          out.aborted = true;
+          kill();
+        };
+        if (signal) {
+          if (signal.aborted) onAbort();
+          else signal.addEventListener('abort', onAbort, { once: true });
+        }
+        const timer = setTimeout(() => {
+          out.timedOut = true;
+          kill();
+        }, timeoutMs);
+        try {
+          await new Promise((resolvePromise) => {
+            let settled = false;
+            const finish = () => {
+              if (settled) return;
+              settled = true;
+              clearTimeout(timer);
+              if (signal) signal.removeEventListener('abort', onAbort);
+              resolvePromise();
+            };
+            child.stdout.on('data', (d) => {
+              if (stdout.length < maxBytes) stdout += d.toString('utf8');
+            });
+            child.stderr.on('data', (d) => {
+              if (stderr.length < maxBytes) stderr += d.toString('utf8');
+            });
+            child.on('error', (e) => {
+              if (stderr.length < maxBytes) stderr += String(e.message || e);
+              out.exitCode = 1;
+              finish();
+            });
+            child.on('close', (code) => {
+              out.exitCode = code;
+              finish();
+            });
+          });
+        } catch (e) {
+          out.exitCode = 1;
+          if (!out.stderr.text) out.stderr.text = String(e.message || e);
+        }
+        out.stdout.text = stdout.slice(0, maxBytes);
+        out.stderr.text = stderr.slice(0, maxBytes);
+        return out;
       }
     });
     await this.ctx.plugin(class SettingsBridge extends Service {
@@ -71,13 +248,38 @@ class PluginHost {
         this.update = async () => { throw new Error('settings 能力暂未在 CIBYP 桥接'); };
       }
     });
+    // systemPrompt：收集插件追加的提示词节（尚未接入渲染层提示词装配，
+    // 提供该 seam 使 dsh-monitor 等插件能正常加载；工具 schema 已含使用说明）。
+    await this.ctx.plugin(class SystemPromptBridge extends Service {
+      constructor(c) {
+        super(c, 'systemPrompt');
+        this.sections = [];
+      }
+      section(entry) {
+        if (entry && typeof entry === 'object') this.sections.push(entry);
+      }
+    });
+    // sessions / webServer：最小桥接，让依赖它们的插件 apply 能完整走完；
+    // 会话查询返回 undefined，插件自带 HTTP 面板暂不接入 CIBYP WebUI。
+    await this.ctx.plugin(class SessionsBridge extends Service {
+      constructor(c) {
+        super(c, 'sessions');
+        this.get = () => undefined;
+      }
+    });
+    await this.ctx.plugin(class WebServerBridge extends Service {
+      constructor(c) {
+        super(c, 'webServer');
+        this.register = () => () => {};
+      }
+    });
     await this.ctx.plugin(class SandboxBridge extends Service {
       constructor(c) {
         super(c, 'sandbox');
         this.confine = (argv, policy) => sandboxRunner.confine(argv, policy);
       }
     });
-    for (const name of ['llm', 'fs', 'shell', 'subprocess', 'jobs', 'subagent', 'session', 'storage', 'compaction']) {
+    for (const name of ['llm', 'subprocess', 'jobs', 'subagent', 'session', 'storage', 'compaction']) {
       const serviceKey = name;
       await this.ctx.plugin(class Bridge extends Service {
         constructor(c) {
@@ -142,11 +344,22 @@ class PluginHost {
       return { tools: [], issues: this.issues.get(pluginId).slice() };
     }
     const plugin = this._toPlugin(mod, pluginId);
+    // 模块级 Config（Schemastery）：真实 DSH 宿主在 apply 前完成校验并合并默认值，
+    // Cordis 只对“插件对象自带 Config”做校验，函数式插件因此必须由我们处理。
+    let config = meta.config || {};
+    if (mod && typeof mod === 'object' && typeof mod.Config === 'function') {
+      try {
+        config = validatePluginConfig(mod.Config, config);
+      } catch (e) {
+        this.issues.get(pluginId).push(`配置校验失败: ${e.message}`);
+        return { tools: [], issues: this.issues.get(pluginId).slice() };
+      }
+    }
     hostContext.pluginId = pluginId;
     hostContext.pluginName = meta.name || pluginId;
     const before = new Set(this.toolsService.tools.keys());
     try {
-      const fiber = await this.ctx.plugin(plugin, meta.config || {});
+      const fiber = await this.ctx.plugin(plugin, config);
       this.fibers.set(pluginId, fiber);
     } catch (e) {
       this.issues.get(pluginId).push(`apply 执行失败: ${e.message}`);
@@ -156,6 +369,16 @@ class PluginHost {
     } finally {
       hostContext.pluginId = null;
       hostContext.pluginName = null;
+    }
+    // 注入依赖缺口诊断：Cordis 对缺失服务不抛错，而是让插件纤维永远休眠
+    // （表现为“零工具、零报错”）。这里把缺口显式记录为兼容问题。
+    const inject = plugin.inject;
+    const injectNames = Array.isArray(inject)
+      ? inject
+      : (inject && typeof inject === 'object' ? Object.keys(inject) : []);
+    const missing = injectNames.filter((name) => !this.ctx.reflect._getImpl(name, true));
+    if (missing.length) {
+      this.issues.get(pluginId).push(`缺少宿主服务注入: ${missing.join(', ')}（插件保持休眠，未注册工具）`);
     }
     const tools = [];
     for (const [name, def] of this.toolsService.tools.entries()) {

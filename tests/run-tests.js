@@ -2159,6 +2159,186 @@ async function runDsPluginTests() {
       try { fsLocal.rmSync(dataDir, { recursive: true, force: true }); } catch { /* ignore */ }
     }
   });
+
+  test('pluginManager：npm 安装产物定位与 spec 名解析（离线）', () => {
+    const { PluginManager } = require('../src/main/ds-compat/plugin-manager.js');
+    const dataDir = fsLocal.mkdtempSync(pathLocal.join(osLocal.tmpdir(), 'cibyp-pkg-find-'));
+    const pm = new PluginManager(dataDir).init();
+    try {
+      assert.strictEqual(pm._parseSpecName('dsh-tool-git'), 'dsh-tool-git');
+      assert.strictEqual(pm._parseSpecName('dsh-monitor@0.1.1'), 'dsh-monitor');
+      assert.strictEqual(pm._parseSpecName('github:AbnerAI/dsh-monitor'), 'dsh-monitor');
+      assert.strictEqual(pm._parseSpecName('git+https://github.com/lxj808624/dsh-tool-git.git#v0.1.2'), 'dsh-tool-git');
+      assert.strictEqual(pm._parseSpecName('@deepseek-ai/dsh-tools@1.0.0'), '@deepseek-ai/dsh-tools');
+
+      // 模拟 npm 12 --no-save 的产物：只有 node_modules，没有根 package.json
+      const tmp = pathLocal.join(dataDir, 'tmp');
+      const target = pathLocal.join(tmp, 'node_modules', 'dsh-tool-git');
+      fsLocal.mkdirSync(target, { recursive: true });
+      fsLocal.writeFileSync(pathLocal.join(target, 'package.json'), JSON.stringify({ name: 'dsh-tool-git', version: '0.1.2' }));
+      fsLocal.mkdirSync(pathLocal.join(tmp, 'node_modules', '@deepseek-ai', 'cordis'), { recursive: true });
+      fsLocal.writeFileSync(pathLocal.join(tmp, 'node_modules', '@deepseek-ai', 'cordis', 'package.json'), JSON.stringify({ name: '@deepseek-ai/cordis' }));
+      fsLocal.writeFileSync(pathLocal.join(tmp, 'node_modules', '.package-lock.json'), '{}');
+      const found = pm._findInstalledPkg(tmp, 'dsh-tool-git');
+      assert.strictEqual(found, target);
+      assert.strictEqual(pm._findInstalledPkg(tmp, 'nonexistent-pkg'), null);
+    } finally {
+      try { fsLocal.rmSync(dataDir, { recursive: true, force: true }); } catch { /* ignore */ }
+    }
+  });
+
+  await testAsync('fixture 插件：cordis ESM 命名导入 + class extends Service（单实例）', async () => {
+    const dataDir = fsLocal.mkdtempSync(pathLocal.join(osLocal.tmpdir(), 'cibyp-esm-test-'));
+    const srcDir = pathLocal.join(dataDir, 'src');
+    fsLocal.mkdirSync(srcDir);
+    fsLocal.writeFileSync(pathLocal.join(srcDir, 'package.json'), JSON.stringify({ name: 'fixture-cordis-esm', version: '1.0.0', type: 'module', main: 'index.js' }));
+    fsLocal.writeFileSync(pathLocal.join(srcDir, 'index.js'), [
+      "import { Context, Service } from '@deepseek-ai/cordis';",
+      "export const name = 'fixture-cordis-esm';",
+      "export class Plugin extends Service {",
+      "  static inject = ['tools'];",
+      "  constructor(ctx) {",
+      "    super(ctx, 'fixture-cordis-esm');",
+      "    const contextRef = ctx;",
+      "    ctx.tools.register({",
+      "      name: 'is_context', description: 'Check ctx', parameters: {},",
+      "      async execute() { return Context.is(contextRef); },",
+      "      output: { schema: { type: 'boolean' }, render: (_a, v) => [{ type: 'text', text: String(v) }] }",
+      "    });",
+      "  }",
+      "}",
+      "export default Plugin;",
+      ''
+    ].join('\n'));
+    const { PluginManager } = require('../src/main/ds-compat/plugin-manager.js');
+    const pm = new PluginManager(dataDir).init();
+    try {
+      const installed = await pm.install({ type: 'local', ref: srcDir });
+      const enabled = await pm.setEnabled(installed.id, true);
+      assert.strictEqual(enabled.ok, true, enabled.error || '');
+      assert.deepStrictEqual(enabled.plugin.compatIssues, []);
+      assert.deepStrictEqual(enabled.plugin.tools.map(t => t.name), ['is_context']);
+      const call = await pm.callTool(installed.id, 'is_context', {}, { cwd: process.cwd() });
+      assert.strictEqual(call.ok, true, call.error || '');
+      assert.strictEqual(call.content, 'true');
+    } finally {
+      try { await pm.dispose(); } catch { /* ignore */ }
+      try { fsLocal.rmSync(dataDir, { recursive: true, force: true }); } catch { /* ignore */ }
+    }
+  });
+
+  await testAsync('fixture 插件：模块级 Schemastery Config 校验（默认值合并）', async () => {
+    const dataDir = fsLocal.mkdtempSync(pathLocal.join(osLocal.tmpdir(), 'cibyp-config-test-'));
+    const srcDir = pathLocal.join(dataDir, 'src');
+    fsLocal.mkdirSync(srcDir);
+    fsLocal.writeFileSync(pathLocal.join(srcDir, 'package.json'), JSON.stringify({ name: 'fixture-config', version: '1.0.0', type: 'module', main: 'index.js' }));
+    fsLocal.writeFileSync(pathLocal.join(srcDir, 'index.js'), [
+      "import z from '@deepseek-ai/schemastery';",
+      "export const name = 'fixture-config';",
+      "export const inject = ['tools'];",
+      "export const Config = z.object({ factor: z.number().default(2) });",
+      "export function apply(ctx, config) {",
+      "  ctx.tools.register({",
+      "    name: 'multiply', description: 'n * factor', parameters: { n: { type: 'number', required: true } },",
+      "    async execute(args) { return args.n * config.factor; },",
+      "    output: { schema: { type: 'number' }, render: (_a, v) => [{ type: 'text', text: String(v) }] }",
+      "  });",
+      "}",
+      ''
+    ].join('\n'));
+    const { PluginManager } = require('../src/main/ds-compat/plugin-manager.js');
+    const pm = new PluginManager(dataDir).init();
+    try {
+      const installed = await pm.install({ type: 'local', ref: srcDir });
+      const enabled = await pm.setEnabled(installed.id, true);
+      assert.strictEqual(enabled.ok, true, enabled.error || '');
+      assert.deepStrictEqual(enabled.plugin.compatIssues, []);
+      const call = await pm.callTool(installed.id, 'multiply', { n: 5 }, { cwd: process.cwd() });
+      assert.strictEqual(call.ok, true, call.error || '');
+      assert.strictEqual(call.value, 10);
+    } finally {
+      try { await pm.dispose(); } catch { /* ignore */ }
+      try { fsLocal.rmSync(dataDir, { recursive: true, force: true }); } catch { /* ignore */ }
+    }
+  });
+
+  await testAsync('fixture 插件：缺失注入依赖诊断（不静默休眠）', async () => {
+    const dataDir = fsLocal.mkdtempSync(pathLocal.join(osLocal.tmpdir(), 'cibyp-inject-test-'));
+    const srcDir = pathLocal.join(dataDir, 'src');
+    fsLocal.mkdirSync(srcDir);
+    fsLocal.writeFileSync(pathLocal.join(srcDir, 'package.json'), JSON.stringify({ name: 'fixture-inject', version: '1.0.0', type: 'module', main: 'index.js' }));
+    fsLocal.writeFileSync(pathLocal.join(srcDir, 'index.js'), [
+      "export const name = 'fixture-inject';",
+      "export const inject = ['tools', 'noSuchService'];",
+      "export function apply(ctx) {",
+      "  ctx.tools.register({ name: 'never_registered', description: 'x', parameters: {}, execute: async () => null });",
+      "}",
+      ''
+    ].join('\n'));
+    const { PluginManager } = require('../src/main/ds-compat/plugin-manager.js');
+    const pm = new PluginManager(dataDir).init();
+    try {
+      const installed = await pm.install({ type: 'local', ref: srcDir });
+      const enabled = await pm.setEnabled(installed.id, true);
+      assert.strictEqual(enabled.ok, true, enabled.error || '');
+      assert.strictEqual(enabled.plugin.toolCount, 0);
+      assert.ok(enabled.plugin.compatIssues.some(i => i.includes('缺少宿主服务注入')), '应报告缺失注入依赖');
+    } finally {
+      try { await pm.dispose(); } catch { /* ignore */ }
+      try { fsLocal.rmSync(dataDir, { recursive: true, force: true }); } catch { /* ignore */ }
+    }
+  });
+
+  await testAsync('fixture 插件：fs/shell 桥接可用（readText + shell run）', async () => {
+    const dataDir = fsLocal.mkdtempSync(pathLocal.join(osLocal.tmpdir(), 'cibyp-bridge-test-'));
+    const srcDir = pathLocal.join(dataDir, 'src');
+    fsLocal.mkdirSync(srcDir);
+    fsLocal.writeFileSync(pathLocal.join(srcDir, 'note.txt'), 'bridge-content');
+    fsLocal.writeFileSync(pathLocal.join(srcDir, 'package.json'), JSON.stringify({ name: 'fixture-bridge', version: '1.0.0', type: 'module', main: 'index.js' }));
+    fsLocal.writeFileSync(pathLocal.join(srcDir, 'index.js'), [
+      "export const name = 'fixture-bridge';",
+      "export const inject = ['tools', 'fs', 'shell'];",
+      "export function apply(ctx) {",
+      "  const fsService = ctx.get('fs');",
+      "  const shellService = ctx.get('shell');",
+      "  ctx.tools.register({",
+      "    name: 'read_note', description: 'read note.txt', parameters: {},",
+      "    async execute(args, exec) {",
+      "      const target = await fsService.resolve(args.rel || 'note.txt', { cwd: exec.cwd || process.cwd() });",
+      "      return await fsService.readText(target);",
+      "    },",
+      "    output: { schema: { type: 'string' }, render: (_a, v) => [{ type: 'text', text: String(v) }] }",
+      "  });",
+      "  ctx.tools.register({",
+      "    name: 'shell_echo', description: 'echo', parameters: { cmd: { type: 'string', required: true } },",
+      "    async execute(args) {",
+      "      const spec = shellService.resolve({ command: args.cmd, workdir: process.cwd(), timeoutMs: 15000 });",
+      "      const res = await shellService.run(spec);",
+      "      return res.stdout.text.trim();",
+      "    },",
+      "    output: { schema: { type: 'string' }, render: (_a, v) => [{ type: 'text', text: String(v) }] }",
+      "  });",
+      "}",
+      ''
+    ].join('\n'));
+    const { PluginManager } = require('../src/main/ds-compat/plugin-manager.js');
+    const pm = new PluginManager(dataDir).init();
+    try {
+      const installed = await pm.install({ type: 'local', ref: srcDir });
+      const enabled = await pm.setEnabled(installed.id, true);
+      assert.strictEqual(enabled.ok, true, enabled.error || '');
+      assert.deepStrictEqual(enabled.plugin.tools.map(t => t.name), ['read_note', 'shell_echo']);
+      const read = await pm.callTool(installed.id, 'read_note', {}, { cwd: srcDir });
+      assert.strictEqual(read.ok, true, read.error || '');
+      assert.strictEqual(read.content, 'bridge-content');
+      const shell = await pm.callTool(installed.id, 'shell_echo', { cmd: 'echo hi-bridge' }, { cwd: process.cwd() });
+      assert.strictEqual(shell.ok, true, shell.error || '');
+      assert.strictEqual(shell.content, 'hi-bridge');
+    } finally {
+      try { await pm.dispose(); } catch { /* ignore */ }
+      try { fsLocal.rmSync(dataDir, { recursive: true, force: true }); } catch { /* ignore */ }
+    }
+  });
 }
 
 // ---- Summary ----
