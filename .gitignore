@@ -31,6 +31,8 @@ assets/ui-fonts/
 # GeoGebra
 # deployggb.js 注入脚本
 assets/geogebra/
+# GeoGebra Math Apps Bundle 离线包（构建期由 scripts/download-voice-models.js 下载，约 120MB 解压后）
+assets/geogebra-app/
 # GeoGebra 完整源码（仅参考，不打包）
 assets/geogebra-src/
 

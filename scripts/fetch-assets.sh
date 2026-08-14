@@ -153,6 +153,33 @@ if [[ "$SKIP_GGB" == "false" ]]; then
     download "$url" "$ggb_file" || true
   fi
 
+  # ---- GeoGebra Math Apps Bundle 离线包（完整 web3d/webSimple/web 编译产物）----
+  info "GeoGebra Math Apps Bundle（离线包，运行时经 ggb:// 本地加载）"
+  ggb_app_dir="$REPO_ROOT/assets/geogebra-app"
+  ggb_nocache="$ggb_app_dir/GeoGebra/HTML5/5.0/web3d/web3d.nocache.js"
+  if [[ -f "$ggb_nocache" && -f "$ggb_app_dir/GeoGebra/deployggb.js" ]]; then
+    ok "geogebra-app already extracted, skipping"
+  else
+    bundle_url="https://download.geogebra.org/package/geogebra-math-apps-bundle"
+    zip_path="/tmp/geogebra-math-apps-bundle-$$.zip"
+    if download "$bundle_url" "$zip_path"; then
+      mkdir -p "$ggb_app_dir"
+      if command -v unzip &>/dev/null; then
+        unzip -q -o "$zip_path" -d "$ggb_app_dir"
+      elif command -v tar &>/dev/null; then
+        tar -xf "$zip_path" -C "$ggb_app_dir"
+      else
+        python3 -c "import zipfile; zipfile.ZipFile('$zip_path').extractall('$ggb_app_dir')"
+      fi
+      # 同步包内 deployggb.js 到 assets/geogebra/（排列哈希与 927 产物一致）
+      cp -f "$ggb_app_dir/GeoGebra/deployggb.js" "$ggb_file"
+      rm -f "$zip_path"
+      ok "geogebra-app extracted"
+    else
+      warn "GeoGebra Math Apps Bundle download failed, GeoGebra 运行时将退化为不可用"
+    fi
+  fi
+
   # ---- GeoGebra 完整源码（参考用，不打包）----
   info "GeoGebra 源码 (geogebra/geogebra)"
   ggb_src_dir="$REPO_ROOT/assets/geogebra-src"
@@ -180,7 +207,7 @@ if [[ "$SKIP_GGB" == "false" ]]; then
     fi
   fi
   # 说明：geogebra/geogebra 是 Gradle 源码工程，仅作参考，不参与运行。
-  # deployggb.js 运行时仍从 www.geogebra.org CDN 加载 web3d/webSimple 编译产物（源码仓库不含）。
+  # 运行时加载的是上方 Math Apps Bundle 的本地编译产物（完整离线，不依赖 www.geogebra.org CDN）。
 fi
 
 # ---- Three.js 0.160.0 (PCB-EDA 3D 预览用) ----

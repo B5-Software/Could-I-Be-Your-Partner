@@ -2773,10 +2773,45 @@ ${affectionDesc}
           return { ok: true, message: '无激活技能' };
         }
         case 'initGeogebra': {
-          return await window.api.geogebraInit(args.appName || 'classic');
+          return await window.api.geogebraInit({
+            appName: args.appName || 'classic',
+            perspective: args.perspective,
+            enableCAS: args.enableCAS,
+            enable3D: args.enable3D,
+          });
         }
         case 'runGeogebraCommand': {
           return await window.api.geogebraEvalCommand(args.command);
+        }
+        case 'geogebraEvalCAS': {
+          return await window.api.geogebraEvalCAS(args.command);
+        }
+        case 'geogebraGetObject': {
+          return await window.api.geogebraGetObject(args.name);
+        }
+        case 'geogebraGetXML': {
+          return await window.api.geogebraGetXML();
+        }
+        case 'geogebraSetXML': {
+          return await window.api.geogebraSetXML(args.xml);
+        }
+        case 'geogebraSetStyle': {
+          return await window.api.geogebraSetStyle(args.name, args.style);
+        }
+        case 'geogebraGetError': {
+          return await window.api.geogebraGetError();
+        }
+        case 'geogebraScreenshot': {
+          return await window.api.geogebraGetPNGBase64();
+        }
+        case 'geogebraSave': {
+          return await window.api.geogebraSave(this.workspacePath, args.fileName);
+        }
+        case 'geogebraLoad': {
+          return await window.api.geogebraLoad(args.filePath);
+        }
+        case 'geogebraGuide': {
+          return await window.api.geogebraGuide(args.category);
         }
         case 'getFunctionsFromGeogebra':
         case 'getCurrentGraphDataFromGeogebra': {

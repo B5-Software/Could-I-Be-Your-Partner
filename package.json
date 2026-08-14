@@ -1,6 +1,6 @@
 {
   "name": "could-i-be-your-partner",
-  "version": "1.7.0-alpha.24",
+  "version": "1.7.0-alpha.25",
   "description": "全自动AI Agent，帮助完成一切任务",
   "license": "GPL-3.0-or-later",
   "main": "src/main/main.js",
@@ -9,6 +9,7 @@
     "test": "node scripts/build-app-bundle.js && node tests/run-tests.js",
     "build-app-bundle": "node scripts/build-app-bundle.js",
     "download-voice-models": "node scripts/download-voice-models.js",
+    "test:geogebra": "electron tests/geogebra-offline-smoke-main.js",
     "build": "npm run build-app-bundle && npm run download-voice-models && electron-builder",
     "build:win": "npm run build-app-bundle && npm run download-voice-models && electron-builder --win",
     "build:mac": "npm run build-app-bundle && electron-builder --mac",
@@ -44,6 +45,7 @@
       "assets/ocr/**/*",
       "assets/voice-models/**/*",
       "assets/ui-fonts/**/*",
+      "assets/geogebra-app/**/*",
       "src/main/voice-worker.js",
       "src/main/voice-kws-encoder.js",
       "node_modules/monaco-editor/min/**/*",

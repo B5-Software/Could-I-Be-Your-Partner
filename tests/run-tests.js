@@ -706,19 +706,84 @@ test('agent.js updateFunctionInGeogebra should validate expression parameter', (
     'updateFunctionInGeogebra 未对缺失 expression 报错');
 });
 
+test('initGeoGebra should load the complete offline bundle via ggb:// (no www.geogebra.org)', () => {
+  // 完整离线：官方 Math Apps Bundle 经 ggb:// 本地协议加载，不再依赖 CDN
+  assert.ok(appContent.includes('setHTML5Codebase(GGB_OFFLINE_CODEBASE, true)'), '未用本地离线 codebase 初始化');
+  assert.ok(appContent.includes("'ggb://app/GeoGebra/HTML5/5.0/web3d/'"), '离线 codebase 未指向本地 web3d');
+  assert.ok(!/www\.geogebra\.org\/apps\/5\.4\.920\.0/.test(appContent), '仍残留已下架的 5.4.920.0 CDN 地址');
+  assert.ok(!appContent.includes('请检查网络是否能访问 www.geogebra.org'), '超时提示仍指向远程 CDN');
+});
+
+test('initGeoGebra should accept appName/perspective/enableCAS/enable3D and rebuild on switch', () => {
+  // 任意计算器：appName 白名单（与官方 GWT initActivity 的 Activity 集合一致）
+  for (const app of ['classic', 'graphing', 'geometry', '3d', 'cas', 'scientific', 'notes', 'evaluator', 'suite', 'probability']) {
+    assert.ok(appContent.includes(`'${app}'`), `appName 白名单缺少 ${app}`);
+  }
+  assert.ok(appContent.includes('enableCAS'), '未支持 enableCAS');
+  assert.ok(appContent.includes('enable3D'), '未支持 enable3D');
+  assert.ok(appContent.includes('setPerspective'), '未支持 perspective 视图切换');
+  // 配置变化时销毁旧 applet（清空容器）并重建
+  assert.ok(appContent.includes('ggbCurrentConfig'), '缺少配置变化检测状态');
+  assert.ok(/oldHost\.innerHTML\s*=\s*''/.test(appContent), '切换配置未清空旧 applet 容器');
+});
+
+test('GeoGebra full-API wrappers should be exposed on window', () => {
+  const fns = ['evalGeoGebraCAS', 'getGeoGebraObject', 'getGeoGebraXML', 'setGeoGebraXML',
+    'setGeoGebraStyle', 'getGeoGebraError', 'getGeoGebraPNGBase64', 'getGeoGebraBase64',
+    'setGeoGebraBase64', 'getGeoGebraGuide'];
+  for (const fn of fns) {
+    assert.ok(new RegExp(`window\\.${fn}\\s*=`).test(appContent), `缺少 window.${fn}`);
+  }
+  // CAS 懒加载（Giac）预热 + "?" 重试
+  assert.ok(appContent.includes('evalCommandCAS'), '缺少 evalCommandCAS 调用');
+  assert.ok(appContent.includes("'1+1'"), '缺少 Giac 引擎预热');
+  // 命令目录按需获取，不注入系统提示
+  assert.ok(appContent.includes('GEOGEBRA_GUIDE'), '缺少按需命令目录');
+  assert.ok(appContent.includes('threed'), '命令目录缺少 3D 分类');
+});
+
+test('GeoGebra new tools are registered with schemas and agent routing', () => {
+  const toolsDef = fs.readFileSync(require('path').join(__dirname, '../src/renderer/js/tools-def.js'), 'utf-8');
+  const agentLocal = fs.readFileSync(require('path').join(__dirname, '../src/renderer/js/agent.js'), 'utf-8');
+  const preloadLocal = fs.readFileSync(require('path').join(__dirname, '../src/preload/preload.js'), 'utf-8');
+  const newTools = ['geogebraEvalCAS', 'geogebraGetObject', 'geogebraGetXML', 'geogebraSetXML',
+    'geogebraSetStyle', 'geogebraGetError', 'geogebraScreenshot', 'geogebraSave', 'geogebraLoad', 'geogebraGuide'];
+  for (const t of newTools) {
+    assert.ok(toolsDef.includes(`name: '${t}'`), `工具 schema 缺少 ${t}`);
+    assert.ok(agentLocal.includes(`case '${t}':`), `agent.js 路由缺少 ${t}`);
+    // geogebraScreenshot 走 geogebraGetPNGBase64（不写文件）；geogebraGuide 走 geogebraGuide
+    const preloadName = t === 'geogebraScreenshot' ? 'geogebraGetPNGBase64' : t;
+    assert.ok(preloadLocal.includes(preloadName), `preload 缺少 ${preloadName}`);
+  }
+});
+
+test('main.js exposes extended GeoGebra IPC and ggb:// protocol module', () => {
+  const ipcs = ['geogebra:evalCAS', 'geogebra:getObject', 'geogebra:getXML', 'geogebra:setXML',
+    'geogebra:setStyle', 'geogebra:getError', 'geogebra:getPNGBase64', 'geogebra:save', 'geogebra:load', 'geogebra:guide'];
+  for (const ipc of ipcs) {
+    assert.ok(mainContent.includes(`ipcMain.handle('${ipc}'`), `main.js 缺少 ${ipc}`);
+  }
+  assert.ok(mainContent.includes("require('./geogebra-protocol')"), 'main.js 未接入 geogebra-protocol 模块');
+  assert.ok(mainContent.includes("scheme: 'ggb'"), '未注册 ggb:// 特权协议');
+});
+
 test('geogebra-panel HTML should exist with ggb-element div', () => {
   const htmlContent = fs.readFileSync(require('path').join(__dirname, '../src/renderer/pages/index.html'), 'utf-8');
   assert.ok(htmlContent.includes('id="geogebra-panel"'), '缺少 geogebra-panel');
   assert.ok(htmlContent.includes('id="ggb-element"'), '缺少 ggb-element 容器');
 });
 
-test('CSP should allow https://www.geogebra.org for script/style/img', () => {
+test('CSP should allow ggb: offline protocol for script/style/img/connect', () => {
   const htmlContent = fs.readFileSync(require('path').join(__dirname, '../src/renderer/pages/index.html'), 'utf-8');
   const cspMatch = htmlContent.match(/Content-Security-P[^>]*content="([^"]+)"/);
   assert.ok(cspMatch, '未找到 CSP meta 标签');
   const csp = cspMatch[1];
-  assert.ok(csp.includes('https://www.geogebra.org'), 'CSP 未允许 https://www.geogebra.org');
-  assert.ok(/script-src[^;]*geogebra/.test(csp), 'CSP script-src 未允许 geogebra');
+  // 完整离线：GeoGebra 编译产物经 ggb:// 本地协议加载，不再依赖 www.geogebra.org
+  assert.ok(!csp.includes('https://www.geogebra.org'), 'CSP 不应再依赖 www.geogebra.org');
+  assert.ok(/script-src[^;]*ggb:/.test(csp), 'CSP script-src 未允许 ggb:');
+  assert.ok(/style-src[^;]*ggb:/.test(csp), 'CSP style-src 未允许 ggb:');
+  assert.ok(/img-src[^;]*ggb:/.test(csp), 'CSP img-src 未允许 ggb:');
+  assert.ok(/connect-src[^;]*ggb:/.test(csp), 'CSP connect-src 未允许 ggb:');
 });
 
 // ---- Test PCB-EDA ----

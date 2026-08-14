@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: ggb:; worker-src 'self' blob:; style-src 'self' 'unsafe-inline' ggb:; img-src 'self' file: data: blob: ggb:; font-src 'self' data: ggb:; media-src 'self' blob:; connect-src 'self' ggb: data: http: https: ws: wss:;">
+  <title>GeoGebra Offline Smoke</title>
+  <style>
+    html, body { margin: 0; padding: 0; }
+    #ggb-element { width: 1150px; height: 820px; }
+  </style>
+  <script src="../assets/geogebra/deployggb.js"></script>
+</head>
+<body>
+  <div id="ggb-element"></div>
+  <script>
+    (async function () {
+      try {
+        const loaded = await new Promise((resolve, reject) => {
+          const timeout = setTimeout(() => reject(new Error('appletOnLoad 超时（90s）')), 90000);
+          const applet = new GGBApplet({
+            appName: 'classic',
+            width: 1150,
+            height: 820,
+            showToolBar: true,
+            showAlgebraInput: true,
+            showMenuBar: false,
+            enableRightClick: false,
+            showResetIcon: true,
+            appletOnLoad: function () {
+              clearTimeout(timeout);
+              resolve(window.ggbApplet);
+            },
+          }, true);
+          applet.setHTML5Codebase('ggb://app/GeoGebra/HTML5/5.0/web3d/', true);
+          applet.inject('ggb-element');
+        });
+
+        const out = { ok: true, appletLoaded: true };
+        try { out.version = String(loaded.getVersion()); } catch (e) { out.version = 'n/a'; }
+        try { out.labels = String(loaded.evalCommandGetLabels('f(x)=x^2-1')); } catch (e) { out.labelsError = e.message; }
+        try {
+          const names = loaded.getAllObjectNames();
+          out.objects = Array.isArray(names) ? names.slice(0, 12) : String(names);
+        } catch (e) { out.objectsError = e.message; }
+        try { out.fType = loaded.getObjectType('f'); } catch (e) { out.fType = 'n/a'; }
+        try { out.fValue = String(loaded.getValueString('f')); } catch (e) { out.fValue = ''; }
+        try {
+          if (typeof loaded.enableCAS === 'function') {
+            loaded.enableCAS(true);
+            await new Promise((r) => setTimeout(r, 120));
+          }
+          // Giac 引擎懒加载：先用简单表达式预热，再对目标表达式做有限次重试
+          out.casWarm = String(loaded.evalCommandCAS('1+1'));
+          let casVal = '?';
+          for (let i = 0; i < 20; i++) {
+            const b = String(loaded.evalCommandCAS('Expand[(x+1)^2]'));
+            const p = String(loaded.evalCommandCAS('Expand((x+1)^2)'));
+            casVal = b !== '?' ? b : p;
+            if (casVal !== '?') break;
+            await new Promise((r) => setTimeout(r, 300));
+          }
+          out.cas = casVal;
+        } catch (e) { out.casError = e.message; }
+        try { out.xmlLen = String(loaded.getXML() || '').length; } catch (e) { out.xmlLen = -1; }
+        out.b64Len = await new Promise((resolve) => {
+          try {
+            loaded.getBase64((b64) => resolve(String(b64 || '').length));
+            setTimeout(() => resolve(-1), 10000);
+          } catch (_) { resolve(-2); }
+        });
+        window.__SMOKE__ = out;
+      } catch (e) {
+        window.__SMOKE__ = { ok: false, error: String((e && e.stack) || e) };
+      }
+    })();
+  </script>
+</body>
+</html>

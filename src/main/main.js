@@ -5,7 +5,7 @@
  * This file is part of Could I Be Your Partner.
  */
 
-const { app, BrowserWindow, ipcMain, nativeTheme, dialog, clipboard, screen, shell, systemPreferences, Notification, Tray, Menu, nativeImage } = require('electron');
+const { app, BrowserWindow, ipcMain, nativeTheme, dialog, clipboard, screen, shell, systemPreferences, Notification, Tray, Menu, nativeImage, protocol, net } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -38,6 +38,7 @@ const registerPlaywrightIpc = require('./browser-service');
 const { registerFfmpegIpc } = require('./ffmpeg-tools');
 const { AutomationManager } = require('./automation/automation-manager');
 const { getAutomationGuide } = require('./automation/guide');
+const { registerGeogebraProtocol } = require('./geogebra-protocol');
 
 const emailService = new EmailService();
 const webControlService = new WebControlService();
@@ -55,6 +56,22 @@ app.on('second-instance', () => {
     mainWindow.focus();
   }
 });
+
+// GeoGebra 离线包经自定义特权协议 ggb:// 提供（必须在 app ready 之前声明）。
+// standard+secure 使 URL 解析/相对路径符合 Web 标准；supportFetchAPI 让 GWT 的
+// deferredjs 分片通过 XHR/fetch 拉取；corsEnabled 允许 file:// 页面跨源读取。
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: 'ggb',
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      corsEnabled: true,
+      stream: true,
+    },
+  },
+]);
 
 const userDataPath = app.getPath('userData');
 const dataDir = path.join(userDataPath, 'data');
@@ -1004,6 +1021,8 @@ ipcMain.handle('proxy:apply', async (_, proxy) => {
 });
 
 app.whenReady().then(() => {
+  // 注册 GeoGebra 离线静态服务（ggb://app/... → assets/geogebra-app/GeoGebra/HTML5/5.0/...）
+  registerGeogebraProtocol();
   // 启动时复制 OCR traineddata 文件到当前执行目录根，避免 GFW blocking
   const appPath = app.getAppPath();
   // 检测 .no-tarot 标志文件（由 build --no-tarot 脚本写入）：若存在则屏蔽所有塔罗牌元素/工具/UI
@@ -3792,11 +3811,20 @@ ipcMain.handle('fs:saveUploadedFile', (_, fileName, data) => {
 });
 
 // ---- IPC: GeoGebra ----
-// GeoGebra now runs in the main window, not a separate window
+// GeoGebra now runs in the main window, not a separate window.
+// 完整离线：web3d/webSimple/web 编译产物由构建期下载的 Math Apps Bundle 提供，
+// 经 ggb:// 协议（src/main/geogebra-protocol.js）从本地文件系统加载，全程不访问 www.geogebra.org。
 
-ipcMain.handle('geogebra:init', async () => {
+function callGeogebraInMainWindow(fnName, ...args) {
+  const safe = args.map(a => JSON.stringify(a));
+  const code = `window.${fnName}(${safe.join(',')})`;
+  return mainWindow.webContents.executeJavaScript(code);
+}
+
+ipcMain.handle('geogebra:init', async (_, options) => {
   try {
-    const result = await mainWindow.webContents.executeJavaScript('window.initGeoGebra()');
+    const opts = options && typeof options === 'object' ? options : {};
+    const result = await callGeogebraInMainWindow('initGeoGebra', opts);
     return result;
   } catch (e) {
     return { ok: false, error: e.message };
@@ -3849,6 +3877,110 @@ ipcMain.handle('geogebra:exportPNG', async (_, workspacePath) => {
       fs.writeFileSync(imgPath, Buffer.from(b64, 'base64'));
       return { ok: true, path: imgPath, url: `file://${imgPath}` };
     }
+    return result;
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('geogebra:evalCAS', async (_, cmd) => {
+  try {
+    const safe = JSON.stringify(String(cmd || ''));
+    const result = await mainWindow.webContents.executeJavaScript(`window.evalGeoGebraCAS(${safe})`);
+    return result;
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('geogebra:getObject', async (_, name) => {
+  try {
+    const safe = JSON.stringify(String(name || ''));
+    const result = await mainWindow.webContents.executeJavaScript(`window.getGeoGebraObject(${safe})`);
+    return result;
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('geogebra:getXML', async () => {
+  try {
+    const result = await mainWindow.webContents.executeJavaScript('window.getGeoGebraXML()');
+    return result;
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('geogebra:setXML', async (_, xml) => {
+  try {
+    const safe = JSON.stringify(String(xml || ''));
+    const result = await mainWindow.webContents.executeJavaScript(`window.setGeoGebraXML(${safe})`);
+    return result;
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('geogebra:setStyle', async (_, name, style) => {
+  try {
+    const safeName = JSON.stringify(String(name || ''));
+    const safeStyle = JSON.stringify(style && typeof style === 'object' ? style : {});
+    const result = await mainWindow.webContents.executeJavaScript(`window.setGeoGebraStyle(${safeName}, ${safeStyle})`);
+    return result;
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('geogebra:getError', async () => {
+  try {
+    const result = await mainWindow.webContents.executeJavaScript('window.getGeoGebraError()');
+    return result;
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('geogebra:getPNGBase64', async () => {
+  try {
+    const result = await mainWindow.webContents.executeJavaScript('window.getGeoGebraPNGBase64()');
+    return result;
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('geogebra:save', async (_, workspacePath, fileName) => {
+  try {
+    const result = await mainWindow.webContents.executeJavaScript('window.getGeoGebraBase64()');
+    if (!result || !result.ok || !result.base64) return result || { ok: false, error: 'GeoGebra 未返回数据' };
+    const dir = workspacePath && fs.existsSync(workspacePath) ? workspacePath : imagesDir;
+    const name = (fileName && String(fileName).trim()) || `geogebra_${Date.now()}.ggb`;
+    const target = path.join(dir, name.endsWith('.ggb') ? name : `${name}.ggb`);
+    fs.writeFileSync(target, Buffer.from(result.base64, 'base64'));
+    return { ok: true, path: target, url: `file://${target}` };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('geogebra:load', async (_, filePath) => {
+  try {
+    if (!filePath || !fs.existsSync(filePath)) return { ok: false, error: '文件不存在' };
+    const b64 = fs.readFileSync(filePath).toString('base64');
+    const safe = JSON.stringify(b64);
+    const result = await mainWindow.webContents.executeJavaScript(`window.setGeoGebraBase64(${safe})`);
+    return { ok: true, ...result };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle('geogebra:guide', async (_, category) => {
+  try {
+    const safe = JSON.stringify(String(category || ''));
+    const result = await mainWindow.webContents.executeJavaScript(`window.getGeoGebraGuide(${safe})`);
     return result;
   } catch (e) {
     return { ok: false, error: e.message };

@@ -680,24 +680,64 @@
   let ggbInitialized = false;
   let ggbInitPromise = null;
   let ggbLastError = null; // { message, ts }
+  let ggbCurrentConfig = null; // { key, appName, perspective, enableCAS, enable3D }
   const ggbPanel = document.getElementById('geogebra-panel');
   const btnCloseGgb = document.getElementById('btn-close-geogebra');
 
-  // 异步初始化：返回 Promise，在 appletOnLoad 触发后 resolve
-  window.initGeoGebra = function() {
-    if (ggbInitialized && ggbApplet) {
+  // 完整离线：官方 Math Apps Bundle 的 web3d 编译产物经主进程 ggb:// 协议从本地加载。
+  // 官方文档推荐形如 applet.setHTML5Codebase('GeoGebra/HTML5/5.0/web3d/')，此处等价替换为
+  // ggb://app/...（协议根即 GeoGebra/HTML5/5.0）。不再访问 www.geogebra.org。
+  const GGB_OFFLINE_CODEBASE = 'ggb://app/GeoGebra/HTML5/5.0/web3d/';
+  const GGB_APPS = ['classic', 'graphing', 'geometry', '3d', 'cas', 'scientific', 'notes', 'evaluator', 'suite', 'probability'];
+  const ggbConfigKey = (o) => {
+    const appName = String((o && o.appName) || 'classic').toLowerCase();
+    return [appName, (o && o.perspective) || '', (o && o.enableCAS) ? 'cas' : '', (o && o.enable3D) ? '3d' : ''].join('|');
+  };
+
+  // 异步初始化：返回 Promise，在 appletOnLoad 触发后 resolve。
+  // options: { appName, perspective, enableCAS, enable3D }。appName 改变时销毁旧 applet 重建。
+  window.initGeoGebra = function(options) {
+    const opts = options && typeof options === 'object' ? options : {};
+    const appName = String(opts.appName || 'classic').toLowerCase();
+    if (!GGB_APPS.includes(appName)) {
+      return Promise.resolve({ ok: false, error: `未知 GeoGebra 应用类型: ${appName}（可选: ${GGB_APPS.join('/')}）`, ready: false });
+    }
+    const key = ggbConfigKey(opts);
+
+    // 已初始化且配置一致 → 直接显示面板
+    if (ggbInitialized && ggbApplet && ggbCurrentConfig && ggbCurrentConfig.key === key) {
       ggbPanel.classList.remove('hidden');
       document.body.classList.add('geogebra-open');
-      return Promise.resolve({ ok: true, message: 'GeoGebra已显示', ready: true });
+      return Promise.resolve({ ok: true, message: 'GeoGebra已显示', ready: true, appName });
     }
-    if (ggbInitPromise) return ggbInitPromise;
+    // 正在进行中的初始化：配置一致则复用其结果；否则等完成后按新配置重建
+    if (ggbInitPromise) {
+      return ggbInitPromise.then((r) => {
+        if (r && r.ok && ggbCurrentConfig && ggbCurrentConfig.key === key) {
+          ggbPanel.classList.remove('hidden');
+          document.body.classList.add('geogebra-open');
+          return { ...r, ready: true, appName };
+        }
+        return window.initGeoGebra(opts);
+      });
+    }
+    // 配置切换：销毁旧 applet（GGB HTML5 无官方 remove()，清空容器并复位全局单例）
+    if (ggbInitialized || ggbApplet) {
+      ggbInitialized = false;
+      ggbApplet = null;
+      try { window.ggbApplet = null; } catch (_) {}
+      ggbLastError = null;
+      ggbCurrentConfig = null;
+      const oldHost = document.getElementById('ggb-element');
+      if (oldHost) oldHost.innerHTML = '';
+    }
 
     ggbInitPromise = new Promise((resolve) => {
-      const timeoutMs = 30000; // 30s 超时（远程加载 web3d 模块）
+      const timeoutMs = 30000; // 30s 超时（本地加载 web3d 全模块 + deferredjs 分片）
       const timer = setTimeout(() => {
         if (!ggbInitialized) {
           ggbInitPromise = null;
-          resolve({ ok: false, error: 'GeoGebra 加载超时（30s），请检查网络是否能访问 www.geogebra.org', ready: false });
+          resolve({ ok: false, error: 'GeoGebra 加载超时（30s），请确认离线包 assets/geogebra-app 已完整下载', ready: false });
         }
       }, timeoutMs);
 
@@ -716,7 +756,7 @@
           const hostHeight = Math.max(100, ggbHost ? ggbHost.clientHeight : 600);
 
           const params = {
-            appName: 'classic',
+            appName: appName,
             width: hostWidth,   // 用具体像素值，不用 '100%'
             height: hostHeight,
             showToolBar: true,
@@ -731,6 +771,17 @@
               clearTimeout(timer);
               ggbApplet = window.ggbApplet;
               ggbInitialized = true;
+              ggbCurrentConfig = { key, appName, perspective: opts.perspective || null, enableCAS: !!opts.enableCAS, enable3D: !!opts.enable3D };
+              // 加载后应用视角/CAS/3D 配置（仅在显式给出布尔值时才调用，避免误关 classic 默认能力）
+              try {
+                if (typeof opts.enableCAS === 'boolean' && typeof ggbApplet.enableCAS === 'function') ggbApplet.enableCAS(opts.enableCAS);
+              } catch (_) {}
+              try {
+                if (typeof opts.enable3D === 'boolean' && typeof ggbApplet.enable3D === 'function') ggbApplet.enable3D(opts.enable3D);
+              } catch (_) {}
+              try {
+                if (opts.perspective && typeof ggbApplet.setPerspective === 'function') ggbApplet.setPerspective(String(opts.perspective));
+              } catch (_) {}
               // 注册错误监听器：GGB 命令失败时会回调
               try {
                 if (ggbApplet && typeof ggbApplet.setErrorListener === 'function') {
@@ -774,7 +825,7 @@
               [0, 100, 300, 600, 1000].forEach(delay => {
                 setTimeout(forceResize, delay);
               });
-              resolve({ ok: true, message: 'GeoGebra已启动', ready: true });
+              resolve({ ok: true, message: 'GeoGebra已启动', ready: true, appName });
             }
           };
 
@@ -782,6 +833,7 @@
           // 直接 inject（GGB 不会用 0×0 固化 canvas）。
           try {
             const ggbApp = new GGBApplet(params, true);
+            ggbApp.setHTML5Codebase(GGB_OFFLINE_CODEBASE, true);
             ggbApp.inject('ggb-element');
           } catch (e) {
             clearTimeout(timer);
@@ -943,6 +995,227 @@
     } catch(e) {
       return { ok: false, error: e.message };
     }
+  };
+
+  // 等待初始化完成（供 CAS/对象/XML 等依赖 applet 的方法复用）
+  async function ensureGgbReady() {
+    if (ggbApplet) return true;
+    if (ggbInitPromise) await ggbInitPromise;
+    return !!(ggbApplet);
+  }
+
+  // 符号计算（CAS）：需要 classic/cas/suite 应用；按需启用 CAS
+  window.evalGeoGebraCAS = async function(cmd) {
+    if (!await ensureGgbReady()) {
+      return { ok: false, error: 'GeoGebra未初始化（applet 尚未加载完成）' };
+    }
+    if (!cmd || typeof cmd !== 'string') return { ok: false, error: '命令为空' };
+    if (typeof ggbApplet.evalCommandCAS !== 'function') {
+      return { ok: false, error: '当前应用不支持 CAS（请使用 classic/cas/suite 应用）' };
+    }
+    ggbLastError = null;
+    try {
+      if (typeof ggbApplet.enableCAS === 'function') {
+        try { ggbApplet.enableCAS(true); } catch (_) {}
+        await new Promise(r => setTimeout(r, 120));
+      }
+      // Giac 符号引擎懒加载：首次调用先预热，并对 "?"（未就绪）做有限重试
+      try { ggbApplet.evalCommandCAS('1+1'); } catch (_) {}
+      let result = '?';
+      for (let attempt = 0; attempt < 20; attempt++) {
+        result = ggbApplet.evalCommandCAS(cmd);
+        if (result !== '?' && result !== undefined && result !== null) break;
+        await new Promise(r => setTimeout(r, 300));
+      }
+      if (ggbLastError && Date.now() - (ggbLastError.ts || 0) < 3000) {
+        return { ok: false, error: ggbLastError.message, cmd };
+      }
+      const text = result == null ? '' : String(result);
+      if (text === '?' || text === '') {
+        return { ok: false, error: 'CAS 未能求值（结果为 ?，可能语法错误或引擎未就绪）', cmd, result: text };
+      }
+      return { ok: true, result: text, cmd };
+    } catch (e) {
+      return { ok: false, error: e.message, cmd };
+    }
+  };
+
+  // 单个对象详情：类型、值、坐标、定义、命令、样式状态
+  window.getGeoGebraObject = function(name) {
+    if (!ggbApplet) return { ok: false, error: 'GeoGebra未初始化' };
+    if (!name) return { ok: false, error: '缺少对象名' };
+    try {
+      const type = ggbApplet.getObjectType(name);
+      const obj = { name: String(name), type };
+      let value = null;
+      try { value = ggbApplet.getValueString(name); } catch (_) {}
+      if (type === 'numeric') {
+        try {
+          const n = ggbApplet.getValue(name);
+          if (isFinite(n)) value = n;
+        } catch (_) {}
+      } else if (type === 'point' || type === 'vector') {
+        try {
+          const x = ggbApplet.getXcoord(name);
+          const y = ggbApplet.getYcoord(name);
+          if (isFinite(x) && isFinite(y)) value = `(${x}, ${y})`;
+        } catch (_) {}
+      }
+      obj.value = value;
+      try { obj.definition = ggbApplet.getDefinitionString(name); } catch (_) {}
+      try { if (typeof ggbApplet.getCommandString === 'function') obj.command = ggbApplet.getCommandString(name, false); } catch (_) {}
+      try { obj.visible = ggbApplet.getVisible(name); } catch (_) {}
+      try { if (typeof ggbApplet.getCaption === 'function') obj.caption = ggbApplet.getCaption(name); } catch (_) {}
+      try { if (typeof ggbApplet.getLayer === 'function') obj.layer = ggbApplet.getLayer(name); } catch (_) {}
+      return { ok: true, object: obj };
+    } catch(e) {
+      return { ok: false, error: e.message };
+    }
+  };
+
+  window.getGeoGebraXML = function() {
+    if (!ggbApplet) return { ok: false, error: 'GeoGebra未初始化' };
+    try {
+      return { ok: true, xml: String(ggbApplet.getXML() || '') };
+    } catch(e) {
+      return { ok: false, error: e.message };
+    }
+  };
+
+  // setXML 会清空当前作图后按 XML 重建（官方文档行为），适合加载整份文件
+  window.setGeoGebraXML = function(xml) {
+    if (!ggbApplet) return { ok: false, error: 'GeoGebra未初始化' };
+    if (!xml || typeof xml !== 'string') return { ok: false, error: 'XML 为空' };
+    try {
+      if (typeof ggbApplet.setXML === 'function') {
+        ggbApplet.setXML(xml);
+      } else if (typeof ggbApplet.evalXML === 'function') {
+        ggbApplet.evalXML(xml);
+      } else {
+        return { ok: false, error: '当前应用不支持 XML 加载' };
+      }
+      return { ok: true };
+    } catch(e) {
+      return { ok: false, error: e.message };
+    }
+  };
+
+  // 颜色支持 '#rrggbb'/'#rgb'/数组/对象 归一化为 [r,g,b]
+  function ggbParseColor(c) {
+    if (Array.isArray(c)) return c.slice(0, 3).map(v => Math.max(0, Math.min(255, Number(v) || 0)));
+    if (c && typeof c === 'object') {
+      return [Math.max(0, Math.min(255, Number(c.r) || 0)), Math.max(0, Math.min(255, Number(c.g) || 0)), Math.max(0, Math.min(255, Number(c.b) || 0))];
+    }
+    const s = String(c || '').replace(/^#/, '');
+    if (/^[0-9a-f]{6}$/i.test(s)) return [parseInt(s.slice(0, 2), 16), parseInt(s.slice(2, 4), 16), parseInt(s.slice(4, 6), 16)];
+    if (/^[0-9a-f]{3}$/i.test(s)) return s.split('').map(x => parseInt(x + x, 16));
+    return null;
+  }
+
+  window.setGeoGebraStyle = function(name, style) {
+    if (!ggbApplet) return { ok: false, error: 'GeoGebra未初始化' };
+    if (!name) return { ok: false, error: '缺少对象名' };
+    const s = style && typeof style === 'object' ? style : {};
+    const applied = [];
+    const call = (fn, args, label) => {
+      if (typeof ggbApplet[fn] !== 'function') return false;
+      try { ggbApplet[fn](...args); applied.push(label); return true; } catch (_) { return false; }
+    };
+    if (s.color !== undefined) {
+      const rgb = ggbParseColor(s.color);
+      if (rgb) call('setColor', [name, rgb[0], rgb[1], rgb[2]], 'color');
+    }
+    if (s.visible !== undefined) call('setVisible', [name, !!s.visible], 'visible');
+    if (s.labelVisible !== undefined || s.label !== undefined) {
+      call('setLabelVisible', [name, !!(s.labelVisible !== undefined ? s.labelVisible : s.label)], 'labelVisible');
+    }
+    if (s.labelStyle !== undefined) call('setLabelStyle', [name, Number(s.labelStyle)], 'labelStyle');
+    if (s.caption !== undefined) call('setCaption', [name, String(s.caption)], 'caption');
+    if (s.fixed !== undefined) call('setFixed', [name, !!s.fixed, s.selectionAllowed !== false], 'fixed');
+    if (s.layer !== undefined) call('setLayer', [name, Number(s.layer)], 'layer');
+    if (s.lineStyle !== undefined) call('setLineStyle', [name, Number(s.lineStyle)], 'lineStyle');
+    if (s.lineThickness !== undefined) call('setLineThickness', [name, Number(s.lineThickness)], 'lineThickness');
+    if (s.pointStyle !== undefined) call('setPointStyle', [name, Number(s.pointStyle)], 'pointStyle');
+    if (s.pointSize !== undefined) call('setPointSize', [name, Number(s.pointSize)], 'pointSize');
+    return { ok: true, applied };
+  };
+
+  // 取最后一次命令错误（读取即清空），形成"执行→读错→修正"闭环
+  window.getGeoGebraError = function() {
+    const last = ggbLastError || null;
+    ggbLastError = null;
+    let appError = null;
+    try {
+      if (ggbApplet && typeof ggbApplet.getErrorString === 'function') appError = ggbApplet.getErrorString();
+    } catch (_) {}
+    return { ok: true, error: (last && last.message) || appError || null, ts: last ? last.ts : null };
+  };
+
+  window.getGeoGebraPNGBase64 = function() {
+    if (!ggbApplet) return { ok: false, error: 'GeoGebra未初始化' };
+    try {
+      return { ok: true, data: ggbApplet.getPNGBase64(1, true, 72) };
+    } catch(e) {
+      return { ok: false, error: e.message };
+    }
+  };
+
+  // getBase64 为异步回调 API，包成 Promise
+  window.getGeoGebraBase64 = function() {
+    return new Promise((resolve) => {
+      if (!ggbApplet || typeof ggbApplet.getBase64 !== 'function') {
+        return resolve({ ok: false, error: 'GeoGebra未初始化或版本不支持 getBase64' });
+      }
+      let settled = false;
+      const done = (r) => { if (!settled) { settled = true; resolve(r); } };
+      try {
+        ggbApplet.getBase64((b64) => done({ ok: true, base64: String(b64 || '') }));
+        setTimeout(() => done({ ok: false, error: 'getBase64 超时（10s）' }), 10000);
+      } catch (e) {
+        done({ ok: false, error: e.message });
+      }
+    });
+  };
+
+  window.setGeoGebraBase64 = function(b64) {
+    if (!ggbApplet || typeof ggbApplet.setBase64 !== 'function') {
+      return { ok: false, error: 'GeoGebra未初始化或版本不支持 setBase64' };
+    }
+    try {
+      ggbApplet.setBase64(String(b64 || ''));
+      return { ok: true };
+    } catch(e) {
+      return { ok: false, error: e.message };
+    }
+  };
+
+  // 命令目录：按需获取（不注入系统提示词，模型需要时经工具显式拉取）
+  const GEOGEBRA_GUIDE = {
+    overview: 'GeoGebra 命令按需目录。严格遵循 GGB 语法：命令区分大小写，参数用方括号 []，列表用花括号 {}。求根返回点标签（如 Roots[f] 得 A,B,C），提取值用 x(A)/y(A)。修改样式用 Set* 系列命令。',
+    basics: { desc: '函数、曲线与基础对象', commands: ['f(x)=x^2-1', 'g: y=2x+1', 'A=(1,2)', 'a=Slider[0,5,1]', 'Curve[cos(t),sin(t),t,0,2π]', 'x^2+y^2=9（隐式曲线）', 'r=2+cos(θ)（极坐标）', 'Sequence[n^2,n,1,10]'] },
+    algebra: { desc: '方程与代数', commands: ['Solve[x^2-1=0]', 'NSolve[x^3=2]', 'Roots[f]', 'Factor[x^2-1]', 'Expand[(x+1)^3]', 'Simplify[(x^2-1)/(x-1)]', 'Substitute[x^2+y^2,{x=1,y=2}]', 'PrimeFactors[360]', 'GCD[12,18]', 'LCM[4,6]'] },
+    calculus: { desc: '微积分', commands: ['Derivative[f]', 'Derivative[f,2]', 'Integral[f]', 'Integral[f,0,1]', 'Limit[f,0]', 'TaylorPolynomial[f,0,4]', 'Extremum[f]', 'InflectionPoint[f]', 'Tangent[1,f]', 'Asymptote[f]', 'Sum[n,n,1,100]', 'Product[k,k,1,5]'] },
+    geometry: { desc: '几何构造', commands: ['Point[{2,3}]', 'Segment[A,B]', 'Line[A,B]', 'Ray[A,B]', 'Circle[A,2]', 'Circle[A,B,C]', 'Polygon[A,B,C]', 'Intersect[f,g]', 'Midpoint[A,B]', 'PerpendicularLine[A,g]', 'ParallelLine[A,g]', 'Angle[A,B,C]', 'Distance[A,B]', 'PerpendicularBisector[A,B]', 'Locus[Q,P]'] },
+    threed: { desc: '3D 图形', commands: ['Plane[A,B,C]', 'Cube[A,B]', 'Tetrahedron[A,B,C,D]', 'Pyramid[poly,H]', 'Surface[u,v,u v]', 'SurfaceOfRevolution[f,xAxis]', 'IntersectPath[a,b]', 'Volume[cube]', 'Sphere[A,2]', 'Cylinder[circle,H]'] },
+    cas: { desc: '符号计算（经 geogebraEvalCAS，注意 CAS 与代数视图对象名不同）', commands: ['Solve[x^2-1=0,x]', 'Expand[(x+1)^3]', 'Factor[x^2-1]', 'Substitute[f,x=2]', 'TaylorSeries[sin(x),x,0,4]', 'Integral[x^2,x]', 'Derivative[x^3,x]', 'NSolve[x^3=2,x]'] },
+    spreadsheet: { desc: '表格（引用 A1 单元格、批量填充与回归）', commands: ['A1=3', 'FillCells[A1:A10,Sequence[n,n,1,10]]', 'CellRange[A1,B2]', 'FitPoly[A1:A10,2]', 'FitLine[A1:A10]', 'FitExp[A1:A10]', 'Sum[A1:A10]', 'Mean[A1:A10]'] },
+    statistics: { desc: '统计与概率', commands: ['Mean[{1,2,3,4,5}]', 'Median[{1,2,3,4,5}]', 'Variance[{1,2,3,4,5}]', 'SD[{1,2,3,4,5}]', 'Histogram[{1,2,2,3,3,3}]', 'BoxPlot[0,1,{1,2,3,4,5}]', 'Normal[0,1,1.96]', 'Binomial[10,0.5,3,false]', 'RandomBetween[1,6]', 'Sample[{1,2,3,4,5},2]'] },
+    transform: { desc: '几何变换', commands: ['Reflect[obj,line]', 'Rotate[obj,90°,A]', 'Translate[obj,{2,1}]', 'Dilate[obj,2,A]', 'Stretch[obj,line,2]', 'Shear[obj,line,k]', 'Homothety[A,2,B]', 'MatrixTransform[{{0,1},{1,0}},obj]'] },
+    style: { desc: '样式与显示（对象修改，返回无新对象）', commands: ['SetColor[A,255,0,0]', 'SetLineThickness[f,5]', 'SetLineStyle[f,2]', 'SetPointStyle[A,0]', 'SetCaption[A,"P"]', 'SetVisibleInView[f,1,true]', 'SetLayer[A,3]', 'ShowLabel[A,true]', 'ShowAxes[true]', 'ShowGrid[false]', 'SetPerspective["G"]'] },
+    scripting: { desc: '脚本与动态（按钮/滑动条交互）', commands: ['Execute[{"SetValue[a,a+1]"}]', 'SetValue[a,2]', 'If[x>0,1,-1]', 'CopyFreeObject[f]', 'SetCoords[A,1,2]', 'StartAnimation[a]', 'SetActiveView[1]', 'Rename[A,"P"]'] }
+  };
+
+  window.getGeoGebraGuide = function(category) {
+    const cats = Object.keys(GEOGEBRA_GUIDE).filter(k => k !== 'overview');
+    if (!category) {
+      return { ok: true, categories: cats, overview: GEOGEBRA_GUIDE.overview };
+    }
+    const key = String(category).toLowerCase();
+    const entry = GEOGEBRA_GUIDE[key];
+    if (!entry) {
+      return { ok: false, error: `未知分类: ${category}`, categories: cats };
+    }
+    return { ok: true, category: key, desc: entry.desc, commands: entry.commands };
   };
 
   if (btnCloseGgb) {

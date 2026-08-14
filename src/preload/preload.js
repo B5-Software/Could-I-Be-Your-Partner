@@ -363,11 +363,21 @@ contextBridge.exposeInMainWorld('api', {
   workspaceGetFileTree: (p) => ipcRenderer.invoke('workspace:getFileTree', p),
 
   // GeoGebra
-  geogebraInit: () => ipcRenderer.invoke('geogebra:init'),
+  geogebraInit: (options) => ipcRenderer.invoke('geogebra:init', options),
   geogebraEvalCommand: (cmd) => ipcRenderer.invoke('geogebra:evalCommand', cmd),
+  geogebraEvalCAS: (cmd) => ipcRenderer.invoke('geogebra:evalCAS', cmd),
   geogebraGetAllObjects: () => ipcRenderer.invoke('geogebra:getAllObjects'),
+  geogebraGetObject: (name) => ipcRenderer.invoke('geogebra:getObject', name),
   geogebraDeleteObject: (name) => ipcRenderer.invoke('geogebra:deleteObject', name),
   geogebraExportPNG: (workspacePath) => ipcRenderer.invoke('geogebra:exportPNG', workspacePath),
+  geogebraGetXML: () => ipcRenderer.invoke('geogebra:getXML'),
+  geogebraSetXML: (xml) => ipcRenderer.invoke('geogebra:setXML', xml),
+  geogebraSetStyle: (name, style) => ipcRenderer.invoke('geogebra:setStyle', name, style),
+  geogebraGetError: () => ipcRenderer.invoke('geogebra:getError'),
+  geogebraGetPNGBase64: () => ipcRenderer.invoke('geogebra:getPNGBase64'),
+  geogebraSave: (workspacePath, fileName) => ipcRenderer.invoke('geogebra:save', workspacePath, fileName),
+  geogebraLoad: (filePath) => ipcRenderer.invoke('geogebra:load', filePath),
+  geogebraGuide: (category) => ipcRenderer.invoke('geogebra:guide', category),
 
   // OCR
   ocrRecognize: (imagePath) => ipcRenderer.invoke('ocr:recognize', imagePath),

@@ -155,6 +155,33 @@ if (-not $SkipGeoGebra) {
     Download-File $url $ggbFile | Out-Null
   }
 
+  # ---- GeoGebra Math Apps Bundle 离线包（完整 web3d/webSimple/web 编译产物）----
+  Write-Step "GeoGebra Math Apps Bundle（离线包，运行时经 ggb:// 本地加载）"
+  $ggbAppDir = Join-Path $repoRoot "assets\geogebra-app"
+  $ggbNocache = Join-Path $ggbAppDir "GeoGebra\HTML5\5.0\web3d\web3d.nocache.js"
+  $ggbBundleDeploy = Join-Path $ggbAppDir "GeoGebra\deployggb.js"
+  if ((Test-Path $ggbNocache) -and (Test-Path $ggbBundleDeploy)) {
+    Write-Ok "geogebra-app already extracted, skipping"
+  } else {
+    $bundleUrl = "https://download.geogebra.org/package/geogebra-math-apps-bundle"
+    $zipPath = Join-Path $env:TEMP "geogebra-math-apps-bundle-$([guid]::NewGuid().ToString('N')).zip"
+    if (Download-File $bundleUrl $zipPath) {
+      New-Item -ItemType Directory -Force -Path $ggbAppDir | Out-Null
+      try {
+        Expand-Archive -Path $zipPath -DestinationPath $ggbAppDir -Force
+        # 同步包内 deployggb.js 到 assets/geogebra/（排列哈希与 927 产物一致）
+        Copy-Item -Force $ggbBundleDeploy $ggbFile
+        Write-Ok "geogebra-app extracted"
+      } catch {
+        Write-Err "Expand-Archive failed: $($_.Exception.Message)"
+      } finally {
+        Remove-Item -Force $zipPath -ErrorAction SilentlyContinue
+      }
+    } else {
+      Write-Warn "GeoGebra Math Apps Bundle download failed, GeoGebra 运行时将退化为不可用"
+    }
+  }
+
   # ---- GeoGebra 完整源码（参考用，不打包）----
   Write-Step "GeoGebra 源码 (geogebra/geogebra)"
   $ggbSrcDir = Join-Path $repoRoot "assets\geogebra-src"
@@ -184,7 +211,7 @@ if (-not $SkipGeoGebra) {
     }
   }
   # 说明：geogebra/geogebra 是 Gradle 源码工程，仅作参考，不参与运行。
-  # deployggb.js 运行时仍从 www.geogebra.org CDN 加载 web3d/webSimple 编译产物（源码仓库不含）。
+  # 运行时加载的是上方 Math Apps Bundle 的本地编译产物（完整离线，不依赖 www.geogebra.org CDN）。
 }
 
 # ---- Three.js 0.160.0 (PCB-EDA 3D 预览用) ----
