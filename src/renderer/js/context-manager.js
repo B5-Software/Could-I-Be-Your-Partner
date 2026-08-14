@@ -25,6 +25,46 @@ const SUMMARY_KEEP_LAST_DEFAULT = 6;
 const SUMMARY_MAX_TRANSCRIPT_CHARS = 12000; // cap transcript fed to summarizer
 const SUMMARY_MAX_TOOL_RESULT_CHARS = 600; // each tool result in transcript
 
+// Compaction watermark policy (借鉴 DeepSeek Harness compaction-basic，自研实现)
+// - thresholdRatio：输入包络（system+tools+messages+输出预留）超过窗口该比例时触发压缩
+// - retainRatio：最近保留尾巴占窗口比例（token 预算制，替代"最近 N 条"）
+// - 实际值可由 settings.contextCompaction 覆盖
+const COMPACT_THRESHOLD_RATIO = 0.80;
+const COMPACT_RETAIN_RATIO = 0.16;
+const COMPACT_RETAIN_MIN_TOKENS = 1024;
+
+// 结构化摘要输出模板（八段式，借鉴 dsh compaction-basic，中文化）
+const STRUCTURED_SUMMARY_TEMPLATE = [
+  '## 主要请求与意图',
+  '- （用户原始与演化的目标；措辞必须精确处请逐字引用）',
+  '',
+  '## 关键技术概念',
+  '- （涉及的技术、框架、约定）',
+  '',
+  '## 文件与代码',
+  '- （精确路径：为什么重要、关键改动或片段）',
+  '',
+  '## 错误与修复',
+  '- （错误：如何解决，以及相关用户反馈）',
+  '',
+  '## 待办事项',
+  '- （明确要求但尚未完成的工作）',
+  '',
+  '## 当前进度',
+  '- （检查点时刻正在做什么）',
+  '',
+  '## 下一步',
+  '- （与最近请求直接衔接的单个下一步动作，没有则写"(无)"）',
+  '',
+  '## 关键上下文',
+  '- （决策与理由、约束、用户偏好、待确认问题、继续所需数据）'
+].join('\n');
+
+// 压缩 checkpooint 前言：让模型把摘要当作已确立背景，直接续作而非复述
+const COMPACT_CHECKPOINT_PREAMBLE =
+  '这是一条自动生成的上下文检查点，浓缩了此前一段对话以释放上下文空间。'
+  + '请将其中内容视为已确立的背景，直接在此基础上继续工作，不要复述，也不要提及"摘要"本身。';
+
 class ContextManager {
   constructor(maxTokens = 8192) {
     this.maxTokens = maxTokens;
@@ -42,6 +82,19 @@ class ContextManager {
     this.summaries = []; // Compressed history summaries
     this.compactBoundaries = []; // CompactBoundary tracking
     this._msgTokenCache = new WeakMap(); // 消息对象 -> token 估算值（避免重复全量正则扫描）
+    // ---- 真实计量（Phase A1）----
+    // 工具 schema 是输入包络的大头（270+ 工具 ≈ 数万 token），必须计入预算，
+    // 否则 UI 圆环与压缩阈值系统性低估，API 先溢出而管理器无感知。
+    this.toolSchemaTokens = 0;
+    // 启发式估算与真实 tokenizer 存在偏差（尤其 CJK）。用 API 返回的
+    // 真实 prompt_tokens 做滑动校准，把估算值往真实值拉齐。
+    this.tokenCalibration = 1.0;
+    // 压缩事务锁：{ id, start, end, inProgress }。内存 + 会话状态持久化，
+    // 崩溃后孤儿锁可检测（借鉴 dsh compaction/start…end 括号）。
+    this.compactionLock = null;
+    this.checkpointCount = 0;
+    this.checkpointIndexes = new Set(); // messages 中 checkpoint 消息的下标（字节冻结）
+    this.prunedIndexes = new Set(); // 已被 Tier0 剪枝的消息下标（不再二次改写，保证字节稳定）
   }
 
   setMaxTokens(max) {
@@ -56,6 +109,26 @@ class ContextManager {
 
   setSystemPrompt(prompt) {
     this.systemPrompt = { role: 'system', content: prompt };
+  }
+
+  // 由 agent 在每次计算工具 schema 后调用：把 tools 计入上下文预算。
+  // 估算口径与工具页一致：JSON 字符串长度 / 4（每 token ≈ 4 字符）。
+  setToolSchemaTokens(tokens) {
+    this.toolSchemaTokens = Math.max(0, Number(tokens) || 0);
+  }
+
+  // 用 API 真实 usage 校准估算器。
+  // actualPromptTokens: provider 返回的 prompt_tokens；estimatedTokens: 我方当次估算。
+  // EWMA 平滑，防止单次异常扰动；clamp 到 [0.5, 2.0] 防失控。
+  calibrateTokens(actualPromptTokens, estimatedTokens) {
+    const actual = Number(actualPromptTokens);
+    const estimated = Number(estimatedTokens);
+    if (!Number.isFinite(actual) || !Number.isFinite(estimated) || actual <= 0 || estimated <= 0) return;
+    const ratio = actual / estimated;
+    if (ratio <= 0 || ratio > 4) return; // 明显异常样本丢弃
+    const alpha = 0.25;
+    const next = this.tokenCalibration * (1 - alpha) + ratio * alpha;
+    this.tokenCalibration = Math.min(2.0, Math.max(0.5, next));
   }
 
   estimateTokens(text) {
@@ -83,13 +156,20 @@ class ContextManager {
     return tokens;
   }
 
-  getTotalTokens() {
+  // 未乘校准因子的原始估算（供校准器使用；校准因子按 raw 与实际值之比更新）
+  getRawTotalTokens() {
     let total = 0;
     if (this.systemPrompt) total += this.estimateMessageTokens(this.systemPrompt);
     for (const msg of this.messages) {
       total += this.estimateMessageTokens(msg);
     }
-    return total;
+    // 工具 schema 计入预算；估算整体乘校准因子
+    return total + this.toolSchemaTokens;
+  }
+
+  getTotalTokens() {
+    const raw = this.getRawTotalTokens();
+    return Math.ceil(raw * this.tokenCalibration);
   }
 
   addMessage(msg) {
@@ -98,9 +178,9 @@ class ContextManager {
     // 均采用 replace-not-mutate 模式）。
     this.messages.push(msg);
     this.historyMessages.push(msg);
-    // Sync lightweight trim — only runs strategy 1 (truncate long tool results).
-    // Heavy LLM-based summarization is invoked explicitly via summarizeWithLLM().
-    this.lightTrim();
+    // 安全阀：仅对刚追加的"病态超大"单条工具结果做兜底截断（防单步溢出），
+    // 常规压缩交给 step 边界的 Tier0 剪枝，不再每轮追加都全量扫描/破坏工作视图。
+    this._emergencyTrimOne(msg);
   }
 
   /**
@@ -120,6 +200,12 @@ class ContextManager {
     this.pinnedMessages = [];
     this.summaries = []; // 清空：上下文管理器会按需重新压缩
     this.compactBoundaries = [];
+    this.checkpointIndexes = new Set();
+    this.prunedIndexes = new Set();
+    this.checkpointCount = 0;
+    this.compactionLock = null;
+    this._compactionInProgress = false;
+    this.toolSchemaTokens = 0;
   }
 
   /**
@@ -184,24 +270,20 @@ class ContextManager {
   }
 
   /**
-   * Lightweight synchronous trim: truncate long tool results.
-   * Called on every addMessage. Does NOT call LLM.
-   * 阈值纳入输出预留：占用 = 当前输入 + 输出预留，避免挤压输出空间。
-   *
-   * 采用 replace-not-mutate 模式：替换 messages[i] 为克隆对象，
-   * 而非原地修改 msg.content。这样共享同一引用的 historyMessages[i]
-   * 不会被破坏。
+   * 安全阀（O(1)）：截断刚追加的病态超大工具结果，防止单条消息撑爆上下文。
+   * 常规压缩（Tier0 剪枝 / Tier1 摘要）在 step 边界由 _manageContext 负责。
+   * replace-not-mutate：替换数组元素为克隆，保护 historyMessages 引用。
    */
-  lightTrim() {
-    const threshold = this.maxTokens * 0.85;
-    if (this.getTotalTokens() + this.outputReserve <= threshold) return;
-    for (let i = 0; i < this.messages.length; i++) {
-      if (this.pinnedMessages.includes(i)) continue;
-      const msg = this.messages[i];
-      if (msg.role === 'tool' && typeof msg.content === 'string' && msg.content.length > 500) {
-        // 替换数组元素为克隆，不修改原对象
-        this.messages[i] = { ...msg, content: msg.content.substring(0, 300) + '\n...[内容已截断]' };
-      }
+  _emergencyTrimOne(msg) {
+    if (!msg || msg.role !== 'tool') return;
+    const CAP = 30000, HEAD = 8000;
+    if (typeof msg.content === 'string' && msg.content.length > CAP) {
+      const idx = this.messages.length - 1;
+      this.messages[idx] = {
+        ...msg,
+        content: `[工具结果过大已兜底截断：原 ${msg.content.length} 字符]\n${msg.content.substring(0, HEAD)}\n...[已截断，详见对话历史]`
+      };
+      this.prunedIndexes.add(idx);
     }
   }
 
@@ -244,6 +326,112 @@ class ContextManager {
       });
     }
     return cleared;
+  }
+
+  /**
+   * 工具调用/结果配对切点分析。
+   * 返回 { safeAt: Set<number>, openerOf: Map<callId, idx> }
+   * safeAt 包含所有"可以在此处切开"的下标（messages[i] 作为尾巴首条）。
+   * 规则：messages[i] 是 tool 消息时不可切（其配对 opener 会被割走）。
+   */
+  _analyzeToolPairing() {
+    const safeAt = new Set();
+    const openers = new Map(); // tool_call_id -> assistant idx
+    for (let i = 0; i < this.messages.length; i++) {
+      const m = this.messages[i];
+      if (m && m.role === 'assistant' && Array.isArray(m.tool_calls)) {
+        for (const tc of m.tool_calls) {
+          if (tc && tc.id) openers.set(tc.id, i);
+        }
+      }
+    }
+    for (let i = 0; i < this.messages.length; i++) {
+      const m = this.messages[i];
+      if (m && m.role === 'tool') {
+        // 切在 tool 消息前会把它的 opener 留在头里被替换 → 不允许
+        continue;
+      }
+      safeAt.add(i);
+    }
+    return { safeAt, openers };
+  }
+
+  /**
+   * 选择要压缩的头部范围 [start, end)（end 为保留尾巴的首条下标）。
+   * - 保留尾巴按 token 预算（retainTokens），而非"最近 N 条"。
+   * - 切点对齐 tool 配对：不允许 assistant.tool_calls 与其 tool 结果被切开。
+   * - 无安全范围（如尾部正在等工具结果、或头为空）返回 null。
+   */
+  findCompactRange(policy) {
+    const p = policy || this.resolvePolicy();
+    const n = this.messages.length;
+    if (n <= 1) return null;
+    const { safeAt, openers } = this._analyzeToolPairing();
+
+    let tailTokens = 0;
+    let cut = n;
+    for (let i = n - 1; i >= 0; i--) {
+      tailTokens += this.estimateMessageTokens(this.messages[i]);
+      cut = i;
+      if (tailTokens >= p.retainTokens) break;
+    }
+    if (cut >= n) cut = n - 1;
+
+    // 把切点调整到安全位置：cut 处若是 tool 消息，回退到其 opener
+    // （opener 是 assistant，一定是安全切点）。循环防多层异常结构。
+    let guard = 0;
+    while (cut > 0 && cut < n && this.messages[cut]?.role === 'tool' && guard++ < 64) {
+      const callId = this.messages[cut].tool_call_id;
+      const opener = callId != null ? openers.get(callId) : undefined;
+      cut = (typeof opener === 'number' && opener >= 0 && opener < cut) ? opener : cut - 1;
+    }
+    if (cut <= 0) return null; // 头部为空，无可压缩范围
+    if (!safeAt.has(cut)) {
+      // 最终兜底：向前找到最近的合法切点
+      let j = cut;
+      while (j > 0 && !safeAt.has(j)) j--;
+      cut = j;
+    }
+    if (cut <= 0 || cut >= n) return null;
+    return { start: 0, end: cut };
+  }
+
+  /**
+   * Tier0 无模型剪枝：确定性截断"旧"的超大工具结果（不调 LLM）。
+   * - 只处理保留尾巴之前的旧消息；已剪枝的（prunedIndexes）不再改写 → 字节稳定。
+   * - 截断后若占用仍超阈值，由调用方决定是否进入 Tier1 摘要。
+   * @returns {number} 剪枝条数
+   */
+  pruneOldToolResults(policy, capChars = 800, keepHeadChars = 400) {
+    const p = policy || this.resolvePolicy();
+    const n = this.messages.length;
+    if (n === 0) return 0;
+
+    // 旧区边界：按 retainTokens 的一半（剪枝比摘要更保守）
+    let tailTokens = 0;
+    let tailStart = n;
+    for (let i = n - 1; i >= 0; i--) {
+      tailTokens += this.estimateMessageTokens(this.messages[i]);
+      tailStart = i;
+      if (tailTokens >= Math.floor(p.retainTokens * 0.5)) break;
+    }
+
+    let pruned = 0;
+    for (let i = 0; i < tailStart; i++) {
+      if (this.prunedIndexes.has(i) || this.pinnedMessages.includes(i)) continue;
+      const msg = this.messages[i];
+      if (!msg || msg.role !== 'tool') continue;
+      if (typeof msg.content !== 'string' || msg.content.length <= capChars) continue;
+      const head = msg.content.substring(0, keepHeadChars);
+      // replace-not-mutate：保护 historyMessages 里的原始引用
+      this.messages[i] = {
+        ...msg,
+        content: `[工具结果已截断：原 ${msg.content.length} 字符]\n${head}\n...[已截断，详见对话历史]`
+      };
+      this.prunedIndexes.add(i);
+      pruned++;
+    }
+    return pruned;
   }
 
   /**
@@ -310,103 +498,191 @@ class ContextManager {
 
   /**
    * LLM-based semantic summarization.
-   * Replaces the old mechanical generateSummary for compaction.
-   * Falls back to generateSummary on LLM failure.
+   * LLM 结构化语义摘要（重构版）。
    *
-   * @returns {Promise<{ok: boolean, message: string, summary?: string, fallback?: boolean, skipped?: boolean}>}
+   * 与旧版的本质区别：
+   * 1. 压缩对象是最老的 head 范围（token 预算 + tool 配对切点），而非"最近 N 条"。
+   * 2. 摘要请求"会话回放"：system + 摘要块 + 被压缩区消息逐字节原样 + 末尾压缩指令，
+   *    并携带当前 tools → 命中暖前缀缓存。
+   * 3. 输出强制八段式 Markdown；只取 content。
+   * 4. 摘要必须短于源（shrink 验证），否则重试；重试耗尽则机械降级且不改坏表面。
+   * 5. 成功后 checkpoint 替换 head 范围并字节冻结。
+   *
+   * @returns {Promise<{ok, message, summary?, fallback?, skipped?, checkpoint?}>}
    */
   async summarizeWithLLM(options = {}) {
-    const keepLast = options.keepLast ?? SUMMARY_KEEP_LAST_DEFAULT;
-    if (this.messages.length <= keepLast) {
-      return { ok: true, message: '消息数量不足，无需摘要', skipped: true };
+    // 事务锁：同一 ContextManager 内串行，防止并发摘要互相踩踏
+    if (this._compactionInProgress) {
+      return { ok: false, message: '已有压缩进行中', skipped: true };
     }
-
-    const messagesToSummarize = this.messages.slice(0, this.messages.length - keepLast);
-    const transcript = this._buildTranscript(messagesToSummarize);
-    if (!transcript.trim()) {
-      return { ok: true, message: '无内容可摘要', skipped: true };
-    }
-
-    const summaryMessages = [
-      {
-        role: 'system',
-        content: '你是一个对话摘要助手。请将以下对话历史压缩为简洁的语义摘要，保留：\n1) 用户的核心需求和约束\n2) 已完成的关键决策和结果\n3) 未解决的问题与待办\n4) 重要上下文（文件路径、配置值、关键参数等）\n\n要求：\n- 不要逐条罗列消息，要提炼成连贯的摘要\n- 控制在 500 字以内\n- 用中文输出'
-      },
-      { role: 'user', content: transcript }
-    ];
-
-    let result;
+    this._compactionInProgress = true;
     try {
-      result = await window.api.summarizeLLM(summaryMessages, {
-        max_tokens: 1024,
-        temperature: 0.3,
-        sessionKey: options.sessionKey || null
+      const policy = this.resolvePolicy(options.policy);
+      const range = this.findCompactRange(policy);
+      if (!range) {
+        return { ok: true, message: '无可安全压缩的范围（消息不足或工具调用未闭合）', skipped: true };
+      }
+      const { start, end } = range;
+      const head = this.messages.slice(start, end);
+      if (!head.some(m => m && (typeof m.content === 'string' ? m.content.trim() : true))) {
+        return { ok: true, message: '头部无实质内容可摘要', skipped: true };
+      }
+
+      // 合并旧 checkpoint：若头部已含此前压缩检查点，提醒摘要器它们是既定背景
+      const priorCheckpoints = [];
+      for (const idx of this.checkpointIndexes) {
+        if (idx >= start && idx < end && this.messages[idx]) {
+          const c = this.messages[idx].content;
+          if (typeof c === 'string') priorCheckpoints.push(c);
+        }
+      }
+      const mergeNote = priorCheckpoints.length
+        ? '\n\n注意：下文可能包含更早的 <compacted-summary> 检查点，它们代表已确立的背景。请将其内容合并进本检查点，不要丢，也不要重复展开细节。'
+        : '';
+
+      const instruction = [
+        '你现在作为本 AI 编码助手的压缩引擎工作。把上面的对话浓缩成一份结构化检查点，'
+        + '让另一个模型能无损接续工作。',
+        '',
+        '严格按下面的 Markdown 结构输出：保留每个小节、按顺序。用精简的要点而非成段散文。'
+        + '某节为空时写"(无)"——绝不省略任何小节。',
+        '',
+        STRUCTURED_SUMMARY_TEMPLATE,
+        mergeNote,
+        '',
+        '只输出检查点本体，不要任何前言、解释或代码围栏。'
+      ].join('\n');
+
+      const headTokens = head.reduce((sum, m) => sum + this.estimateMessageTokens(m), 0);
+      const maxRetries = Math.max(0, Number(options.maxRetries ?? 1));
+      let summary = '';
+      let lastError = null;
+
+      for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        let instructionForAttempt = instruction;
+        if (attempt > 0) {
+          instructionForAttempt += '\n\n（上一版过长。请压缩到原来一半以下，用最精简的要点，只保留接续任务所必需的事实。）';
+        }
+        const replayMessages = this.getReplayMessages(end, instructionForAttempt);
+        let result;
+        try {
+          result = await window.api.summarizeLLM(replayMessages, {
+            max_tokens: options.maxTokens ?? 2048,
+            temperature: 0.3,
+            sessionKey: options.sessionKey || null,
+            tools: options.tools || null,
+            purpose: 'compaction'
+          });
+        } catch (e) {
+          lastError = e;
+          result = null;
+        }
+        const content = (result && result.ok ? (result.content || '') : '').trim();
+        if (!content) {
+          lastError = lastError || new Error(result && result.error ? result.error : '摘要内容为空');
+          continue;
+        }
+        summary = content;
+        // shrink 验证：摘要必须明显短于源（留 15% 余量防估算抖动）
+        const summaryTokens = this.estimateTokens(summary);
+        if (summaryTokens < headTokens * 0.85) break;
+        summary = '';
+      }
+
+      if (!summary) {
+        // 重试耗尽：机械降级，保持消息表面不变（不删不切）
+        const fb = this.generateSummary([head.map((_, i) => start + i)]);
+        if (fb) {
+          this.applyCheckpoint(start, end, fb.replace(/^\[历史摘要\]\n?/, ''), { mechanical: true });
+          this.compactBoundaries.push({
+            timestamp: Date.now(), type: 'fallback_checkpoint',
+            summarizedCount: end - start, error: lastError ? lastError.message : '摘要为空'
+          });
+          return { ok: true, message: 'LLM 摘要未收敛，已用机械检查点替换', fallback: true, summary: fb };
+        }
+        return { ok: false, message: 'LLM 摘要失败：' + (lastError ? lastError.message : '摘要为空'), fallback: false, error: lastError ? lastError.message : '摘要为空' };
+      }
+
+      const applied = this.applyCheckpoint(start, end, summary, { mechanical: false });
+      this.compactBoundaries.push({
+        timestamp: Date.now(), type: 'llm_checkpoint',
+        summarizedCount: end - start,
+        headTokens, summaryTokens: this.estimateTokens(summary)
       });
-    } catch (e) {
-      // LLM call threw — fall back to mechanical summary
-      const fb = this.generateSummary([messagesToSummarize.map((_, i) => i)]);
-      if (fb) {
-        this.summaries.push(fb);
-        this.messages = this.messages.slice(-keepLast);
-        this.compactBoundaries.push({
-          timestamp: Date.now(), type: 'fallback_summary',
-          summarizedCount: messagesToSummarize.length, error: e.message
-        });
-      }
-      return { ok: false, message: 'LLM 摘要调用异常，已降级为机械摘要', fallback: true, error: e.message };
+      return { ok: true, message: `已生成结构化检查点（压缩 ${end - start} 条消息）`, summary, checkpoint: applied };
+    } finally {
+      this._compactionInProgress = false;
     }
+  }
 
-    if (!result.ok) {
-      // LLM call failed — fall back to mechanical summary
-      const fb = this.generateSummary([messagesToSummarize.map((_, i) => i)]);
-      if (fb) {
-        this.summaries.push(fb);
-        this.messages = this.messages.slice(-keepLast);
-        this.compactBoundaries.push({
-          timestamp: Date.now(), type: 'fallback_summary',
-          summarizedCount: messagesToSummarize.length, error: result.error
-        });
-      }
-      return { ok: false, message: 'LLM 摘要失败：' + (result.error || '未知错误') + '，已降级为机械摘要', fallback: true, error: result.error };
+  /**
+   * 会话回放消息：与 getMessages() 前缀逐字节一致（system + 旧摘要块 + 头部消息），
+   * 末尾追加压缩指令。配合 tools 复用暖前缀缓存。
+   */
+  getReplayMessages(end, instruction) {
+    const result = [];
+    if (this.systemPrompt) result.push(this.systemPrompt);
+    if (this.summaries.length > 0) {
+      result.push({
+        role: 'system',
+        content: '以下是之前对话的摘要:\n' + this.summaries.slice(-3).join('\n---\n')
+      });
     }
+    result.push(...this.messages.slice(0, end));
+    result.push({ role: 'user', content: instruction });
+    return result;
+  }
 
-    const summary = (result.content || '').trim();
-    if (!summary) {
-      return { ok: false, message: '摘要内容为空', skipped: true };
-    }
-
-    const timestamp = new Date().toLocaleString('zh-CN');
-    this.summaries.push(`[语义摘要 ${timestamp}]\n${summary}`);
-    this.messages = this.messages.slice(-keepLast);
+  /**
+   * checkpoint 替换：把 [start, end) 替换为一条 user 检查点消息。
+   * 落定后字节冻结（checkpointIndexes 标记，后续压缩不再改写）。
+   */
+  applyCheckpoint(start, end, summaryText, meta = {}) {
+    const text = String(summaryText || '').trim() || '[压缩检查点：早期对话内容]';
+    const checkpointMsg = {
+      role: 'user',
+      content: `${COMPACT_CHECKPOINT_PREAMBLE}\n\n<compacted-summary>\n${text}\n</compacted-summary>`,
+      metadata: { kind: 'compaction-checkpoint', mechanical: !!meta.mechanical, at: Date.now() }
+    };
+    this.messages.splice(start, end - start, checkpointMsg);
+    // 下标重建（数组被 splice，旧下标作废）
+    this.checkpointIndexes = new Set([start]);
+    this.prunedIndexes = new Set();
+    this.checkpointCount++;
     this.compactBoundaries.push({
-      timestamp: Date.now(), type: 'llm_summary',
-      summarizedCount: messagesToSummarize.length
+      timestamp: Date.now(), type: 'checkpoint',
+      start, end, count: end - start
     });
-    return { ok: true, message: '已通过 LLM 生成语义摘要', summary };
+    return { start, end, count: end - start };
   }
 
   // manageContext tool handler — synchronous actions only.
   // For LLM-based summarization, use summarizeWithLLM() instead.
   manage(action, options = {}) {
     switch (action) {
+      case 'prune': {
+        const pruned = this.pruneOldToolResults(options.policy);
+        return { ok: true, message: `已剪枝 ${pruned} 条旧工具结果` };
+      }
       case 'summarize': {
         // Sync mechanical fallback (caller should prefer summarizeWithLLM)
-        const summary = this.generateSummary([this.messages.map((_, i) => i).slice(0, -3)]);
+        const range = this.findCompactRange(options.policy || this.resolvePolicy());
+        if (!range) return { ok: true, message: '无可安全压缩范围' };
+        const head = this.messages.slice(range.start, range.end);
+        const summary = this.generateSummary([head.map((_, i) => range.start + i)]);
         if (summary) {
-          this.summaries.push(summary);
-          const keepCount = options.keepLast || 4;
-          this.messages = this.messages.slice(-keepCount);
+          this.applyCheckpoint(range.start, range.end, summary.replace(/^\[历史摘要\]\n?/, ''), { mechanical: true });
         }
-        return { ok: true, message: '上下文已机械摘要压缩（建议使用 LLM 语义摘要）' };
+        return { ok: true, message: '上下文已机械压缩（建议使用 LLM 结构化摘要）' };
       }
       case 'clear_old': {
-        const keepCount = options.keepLast || 6;
-        if (this.messages.length > keepCount) {
-          const removed = this.messages.length - keepCount;
-          this.messages = this.messages.slice(-keepCount);
-          return { ok: true, message: `已清除${removed}条旧消息` };
-        }
-        return { ok: true, message: '无需清理' };
+        const policy = options.policy || this.resolvePolicy({ retainRatio: 0.08 });
+        const removed = this.hardTruncate(policy);
+        return { ok: true, message: removed > 0 ? `已安全截断 ${removed} 条旧消息` : '无需清理' };
+      }
+      case 'hard_truncate': {
+        const removed = this.hardTruncate(options.policy || this.resolvePolicy());
+        return { ok: true, message: `硬截断 ${removed} 条旧消息` };
       }
       case 'clear_tool_results': {
         // Delegate to microCompact for consistent behavior
@@ -423,11 +699,28 @@ class ContextManager {
           (msg.role === 'assistant' && msg.content) ||
           i >= this.messages.length - 3
         );
+        this.checkpointIndexes = new Set();
+        this.prunedIndexes = new Set();
         return { ok: true, message: '已保留必要消息' };
+      }
+      case 'status': {
+        return { ok: true, stats: this.getStats(), policy: this.resolvePolicy(options.policy) };
       }
       default:
         return { ok: false, message: '未知操作' };
     }
+  }
+
+  /**
+   * 紧急硬截断（Tier2 局部）：把最老 head 替换为占位 checkpoint。
+   * 切点仍对齐 tool 配对，避免孤儿 tool 结果。
+   * @returns {number} 被替换的消息条数
+   */
+  hardTruncate(policy) {
+    const range = this.findCompactRange(policy);
+    if (!range) return 0;
+    this.applyCheckpoint(range.start, range.end, '早期对话内容因上下文溢出被截断，详见对话历史。', { mechanical: true });
+    return range.end - range.start;
   }
 
   // Get messages for API call
@@ -470,8 +763,29 @@ class ContextManager {
       usageWithReserve,
       totalMessages: this.messages.length,
       summaries: this.summaries.length,
-      compactions: this.compactBoundaries.length
+      compactions: this.compactBoundaries.length,
+      toolSchemaTokens: this.toolSchemaTokens,
+      tokenCalibration: Number(this.tokenCalibration.toFixed(3)),
+      checkpoints: this.checkpointCount
     };
+  }
+
+  /**
+   * 解析压缩策略（水位线阈值 + 保留预算）。
+   * @param {object} overrides settings.contextCompaction 覆盖项
+   */
+  resolvePolicy(overrides = {}) {
+    const cfg = overrides && typeof overrides === 'object' ? overrides : {};
+    const thresholdRatio = Number(cfg.thresholdRatio) > 0 && Number(cfg.thresholdRatio) < 1
+      ? Number(cfg.thresholdRatio) : COMPACT_THRESHOLD_RATIO;
+    const retainRatio = Number(cfg.retainRatio) > 0 && Number(cfg.retainRatio) < thresholdRatio
+      ? Number(cfg.retainRatio) : COMPACT_RETAIN_RATIO;
+    const retainTokens = Math.max(
+      COMPACT_RETAIN_MIN_TOKENS,
+      Math.floor((this.maxTokens || 8192) * retainRatio)
+    );
+    const thresholdTokens = Math.floor((this.maxTokens || 8192) * thresholdRatio);
+    return { thresholdRatio, retainRatio, retainTokens, thresholdTokens };
   }
 
   clear() {
@@ -480,6 +794,12 @@ class ContextManager {
     this.pinnedMessages = [];
     this.summaries = [];
     this.compactBoundaries = [];
+    this.checkpointIndexes = new Set();
+    this.prunedIndexes = new Set();
+    this.checkpointCount = 0;
+    this.compactionLock = null;
+    this._compactionInProgress = false;
+    this.toolSchemaTokens = 0;
   }
 
   /**

@@ -754,6 +754,7 @@
             <button class="settings-tab" data-tab="terminal"><i class="fa-solid fa-terminal"></i> 终端</button>
             <button class="settings-tab" data-tab="ime"><i class="fa-solid fa-keyboard"></i> 输入法</button>
             <button class="settings-tab" data-tab="voice"><i class="fa-solid fa-microphone-lines"></i> 语音</button>
+            <button class="settings-tab" data-tab="context"><i class="fa-solid fa-compress"></i> 上下文</button>
           </div>
           <div class="settings-panels">
             <div class="settings-panel active" data-tab="ai">
@@ -2396,6 +2397,18 @@
                 <h3><i class="fa-solid fa-hard-drive"></i> 模型状态</h3>
                 <p id="voice-model-status" style="font-size:12px;color:var(--text-secondary)">检查中…</p>
                 <div style="margin-top:8px"><button class="btn-secondary btn-sm" id="btn-voice-refresh-status">刷新状态</button></div>
+              </div>
+            </div>
+            <div class="settings-panel" data-tab="context">
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-compress"></i> 上下文压缩</h3>
+                <div class="setting-item"><label class="setting-label">自动压缩</label><div class="toggle-switch"><input type="checkbox" id="setting-context-auto"><span class="toggle-slider"></span></div><p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">上下文占用超过阈值时自动压缩（剪枝 + 结构化摘要检查点）</p></div>
+                <div class="setting-item"><label class="setting-label">触发阈值</label><div style="display:flex;align-items:center;gap:10px"><input type="range" id="setting-context-threshold" min="60" max="95" step="1" value="80" style="width:200px"><span id="setting-context-threshold-val" style="min-width:40px;text-align:right;font-size:13px;color:var(--text-secondary)">80%</span></div><p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">输入包络（系统提示词 + 工具定义 + 对话 + 输出预留）占上下文窗口的比例</p></div>
+                <div class="setting-item"><label class="setting-label">保留尾巴比例</label><div style="display:flex;align-items:center;gap:10px"><input type="range" id="setting-context-retain" min="5" max="40" step="1" value="16" style="width:200px"><span id="setting-context-retain-val" style="min-width:40px;text-align:right;font-size:13px;color:var(--text-secondary)">16%</span></div><p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">最近对话原样保留的 token 预算（占窗口比例），压缩只动更早的历史</p></div>
+                <div class="setting-item"><label class="setting-label">摘要重试次数</label><input type="number" id="setting-context-retries" min="0" max="5" step="1" value="1" style="width:120px"><p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">摘要未收敛（没有明显缩短）时的额外重试次数</p></div>
+                <div class="setting-item"><label class="setting-label">摘要最大输出</label><input type="number" id="setting-context-max-tokens" min="512" max="8192" step="256" value="2048" style="width:120px"><p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">单次摘要请求的最大输出 token（八段式结构化检查点）</p></div>
+                <div class="setting-item"><button class="btn-secondary" id="btn-context-compact-now"><i class="fa-solid fa-wand-magic-sparkles"></i> 立即压缩</button><span style="font-size:11px;color:var(--text-tertiary);margin-left:8px">对当前模式会话手动执行一次压缩</span></div>
+                <p id="context-compact-status" style="font-size:12px;color:var(--text-secondary)"></p>
               </div>
             </div>
           </div>

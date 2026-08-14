@@ -720,6 +720,11 @@ ${affectionDesc}
       tools.push(INTERNAL_REOPTIMIZE_TOOL_SCHEMA);
       tools.push(INTERNAL_DISABLE_AUTO_OPTIMIZE_SCHEMA);
     }
+    // 真实计量：工具 schema 是输入包络的大头，必须计入上下文预算。
+    // 口径与工具页一致（JSON 长度 / 4 ≈ token 数），contextManager 再乘校准因子。
+    if (this.contextManager && typeof this.contextManager.setToolSchemaTokens === 'function') {
+      this.contextManager.setToolSchemaTokens(Math.ceil(JSON.stringify(tools).length / 4));
+    }
     return tools;
   }
 
@@ -1536,35 +1541,45 @@ ${affectionDesc}
    */
   async _manageContext(ctx = this.contextManager, notify, opts = {}) {
     const maxFailures = opts.maxFailures ?? (this.settings?.agent?.autoCompactMaxFailures ?? 3);
-    const keepLast = opts.keepLast ?? 6;
     const isSub = !!opts.isSubAgent;
     const prefix = isSub ? '[子代理] ' : '';
-    // 触发阈值基于"含输出预留的占用"（当前输入 + 输出预留，分母为完整上下文窗口），
-    // 与 UI 上下文圆环显示一致，确保始终为模型输出预留空间。
-    // 纯输入占用只是参考（用于提示），判断一律用 usageWithReserve。
+    // 水位线策略（借鉴 DeepSeek Harness compaction-basic）：
+    // 真实计量（system + tools + messages + 输出预留）按模型窗口比例解析阈值。
+    // 判断一律用 usageWithReserve（与 UI 上下文圆环一致）。
+    const policy = (typeof ctx.resolvePolicy === 'function')
+      ? ctx.resolvePolicy(this.settings?.contextCompaction || {})
+      : null;
+    const thresholdPct = policy ? policy.thresholdRatio * 100 : 85;
     const readStats = () => ctx.getStats();
     const usageOf = (st) => parseFloat(st.usageWithReserve ?? st.usage);
     let stats = readStats();
     let usage = usageOf(stats);
     let action = 'none';
 
-    // 第一层：MicroCompact (>70%) — 清理旧工具结果
-    if (usage > 70) {
-      const cleared = ctx.microCompact();
-      if (cleared > 0) {
-        action = 'micro';
-        if (notify) notify(`${prefix}MicroCompact: 已清理 ${cleared} 条旧工具结果（占用 ${stats.usageWithReserve ?? stats.usage}% 含输出预留）`);
+    // Tier0：无模型剪枝（不调 LLM）——确定性截断"旧"的超大工具结果
+    if (usage > thresholdPct && typeof ctx.pruneOldToolResults === 'function') {
+      const pruned = ctx.pruneOldToolResults(policy);
+      if (pruned > 0) {
+        action = 'prune';
+        const nowPct = usageOf(readStats());
+        if (notify) notify(`${prefix}已剪枝 ${pruned} 条旧工具结果（${stats.usageWithReserve ?? stats.usage}% → ${nowPct.toFixed(1)}% 含输出预留）`);
       }
     }
 
-    // 第二层：LLM 语义摘要 (>85%) — 压缩历史对话
+    // Tier1：LLM 结构化摘要 —— 压缩最老的 head（token 预算 + tool 配对切点）
     let newUsage1 = usageOf(readStats());
-    if (newUsage1 > 85 && this.autoCompactFailures < maxFailures) {
+    if (newUsage1 > thresholdPct && this.autoCompactFailures < maxFailures) {
       try {
-        const sumRes = await ctx.summarizeWithLLM({ keepLast, sessionKey: this.sessionKey || null });
-        if (sumRes.ok) {
+        const sumRes = await ctx.summarizeWithLLM({
+          policy,
+          sessionKey: this.sessionKey || null,
+          tools: this.getRuntimeToolSchemas(), // 会话回放：复用暖前缀缓存
+          maxRetries: this.settings?.contextCompaction?.compactionRetries ?? 1,
+          maxTokens: this.settings?.contextCompaction?.summarizeMaxTokens || 2048
+        });
+        if (sumRes.ok && !sumRes.skipped) {
           this.autoCompactFailures = 0;
-          action = 'summary';
+          action = action === 'prune' ? 'prune_summary' : 'summary';
           if (notify) notify(`${prefix}已自动压缩上下文（${sumRes.message}），当前 ${usageOf(readStats()).toFixed(1)}%（含输出预留）`);
         } else {
           this.autoCompactFailures++;
@@ -1578,42 +1593,9 @@ ${affectionDesc}
       }
     }
 
-    // 第三层：紧急硬截断 (>95%) — 语义压缩后仍超限的最后防线
-    // 阶梯式降级：keepLast=6 → keepLast=4 → keepLast=2，确保不再溢出
-    let newUsage2 = usageOf(readStats());
-    if (newUsage2 > 95) {
-      const steps = [keepLast, Math.max(4, keepLast - 2), Math.max(2, keepLast - 4)];
-      for (const step of steps) {
-        ctx.manage('clear_old', { keepLast: step });
-        newUsage2 = usageOf(readStats());
-        action = `hard_truncate_${step}`;
-        if (notify) notify(`${prefix}⚠️ 上下文严重溢出，已强制截断至最近 ${step} 条消息（${newUsage2.toFixed(1)}% 含输出预留）`);
-        if (newUsage2 <= 85) break;
-      }
-
-      // 终极兜底：截断后仍超限（极端情况，如单条消息超大），
-      // 对所有工具结果执行强制截断 + 清除所有摘要外的历史
-      // 采用 replace-not-mutate：替换数组元素为克隆，不修改原对象（保护 historyMessages）
-      if (newUsage2 > 90) {
-        // 截断所有工具结果内容（克隆替换，不破坏历史记录）
-        for (let mi = 0; mi < ctx.messages.length; mi++) {
-          const m = ctx.messages[mi];
-          if (m.role === 'tool' && typeof m.content === 'string' && m.content.length > 200) {
-            ctx.messages[mi] = { ...m, content: m.content.substring(0, 200) + '\n...[紧急截断]' };
-          } else if (m.role === 'assistant' && typeof m.content === 'string' && m.content.length > 2000) {
-            ctx.messages[mi] = { ...m, content: m.content.substring(0, 2000) + '\n...[紧急截断]' };
-          }
-        }
-        // 保留 system prompt + 最后 2 条消息
-        ctx.messages = ctx.messages.slice(-2);
-        ctx.pinnedMessages = [];
-        newUsage2 = usageOf(readStats());
-        action = 'emergency_truncate';
-        if (notify) notify(`${prefix}🚨 紧急上下文救援：已截断所有工具结果并只保留最后 2 条消息（${newUsage2.toFixed(1)}% 含输出预留）`);
-      }
-    }
-
-    return { action, usage: newUsage2 };
+    // Tier2：provider 实际溢出时由 agentLoop 的溢出恢复钩子处理；
+    // 语义压缩仍超限时不在此硬切，避免无谓破坏，等 provider 明确报溢出再降级。
+    return { action, usage: usageOf(readStats()) };
   }
 
   _repairReasoningContent() {
@@ -1643,11 +1625,13 @@ ${affectionDesc}
     while (this.running && !this.stopped && runId === this.runId) {
       iterations++;
 
-      // 上下文管理：三层压缩（Micro >70% → LLM Summary >85% → Hard Truncate >95%）
-      // + 语义压缩后仍超限的智能阶梯截断 + 紧急救援
-      await this._manageContext(this.contextManager, (msg) => {
-        if (this.onMessage) this.onMessage('system', msg);
-      });
+      // 上下文管理：水位线压缩（Tier0 剪枝 → Tier1 结构化摘要 → Tier2 溢出恢复）
+      // 自动压缩总开关在设置「上下文」页，关闭后跳过（手动按钮仍可用）。
+      if (this.settings?.contextCompaction?.enabled !== false) {
+        await this._manageContext(this.contextManager, (msg) => {
+          if (this.onMessage) this.onMessage('system', msg);
+        });
+      }
 
       // 热对话：注入用户在Agent工作期间发送的新消息
       while (this.hotMessages.length > 0) {
@@ -1740,6 +1724,17 @@ ${affectionDesc}
           /tool_calls?|tool_call_id|insufficient tool messages|following tool_calls|400|402|invalid|bad request|不合法|messages.*context|reasoning_content|thinking mode|must be passed back/i.test(errText);
         // auth 类错误（401/403）属于配置问题，重试无意义，直接报错
         const isAuthError = kind === 'auth';
+        // provider 明确报上下文溢出：旁路容量元数据，直接做最大 head 缩减后重试
+        const isOverflow = /context.{0,24}(length|window|overflow|exceed|too (long|large))|maximum context|too many tokens|input.{0,12}too long|prompt.{0,12}too long|400.{0,24}(context|tokens|length)/i.test(errText)
+          || (result.status === 400 && /(context|tokens|length)/i.test(errText));
+        if (isOverflow) {
+          const removed = this.contextManager.hardTruncate(
+            this.contextManager.resolvePolicy({ retainRatio: 0.06 })
+          );
+          if (removed > 0 && this.onMessage) {
+            this.onMessage('system', `⚠️ 检测到上下文溢出，已安全截断 ${removed} 条旧消息后重试`);
+          }
+        }
 
         let retryCount = 0;
         while (!result.ok && !isAuthError && retryCount < MAX_PROVIDER_RETRIES
@@ -1797,6 +1792,11 @@ ${affectionDesc}
       // - Anthropic: usage.cache_read_input_tokens + usage.cache_creation_input_tokens
       if (result.data?.usage) {
         this._accumulateUsage(result.data.usage);
+        // 用真实 prompt_tokens 校准估算器（滑动平滑，修正 CJK 等估算偏差）
+        const promptTokens = result.data.usage.prompt_tokens ?? result.data.usage.input_tokens;
+        if (promptTokens && this.contextManager && typeof this.contextManager.calibrateTokens === 'function') {
+          this.contextManager.calibrateTokens(promptTokens, this.contextManager.getRawTotalTokens());
+        }
       }
 
       const choice = result.data.choices?.[0];
@@ -2500,7 +2500,11 @@ ${affectionDesc}
         case 'manageContext': return this.contextManager.manage(args.action, args);
         case 'autoSummarizeContext': {
           // Use the new LLM summary path; falls back to mechanical on failure.
-          const sumRes = await this.contextManager.summarizeWithLLM({ keepLast: args.keepLast || 6, sessionKey: this.sessionKey || null });
+          const sumRes = await this.contextManager.summarizeWithLLM({
+            keepLast: args.keepLast || 6, // 向后兼容参数，新引擎按 token 预算忽略
+            sessionKey: this.sessionKey || null,
+            tools: this.getRuntimeToolSchemas()
+          });
           if (sumRes.skipped) return { ok: true, message: sumRes.message, skipped: true };
           if (!sumRes.ok) return { ok: false, error: sumRes.message, fallback: sumRes.fallback };
           return { ok: true, summary: sumRes.summary, message: sumRes.message };

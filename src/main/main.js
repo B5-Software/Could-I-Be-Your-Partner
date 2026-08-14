@@ -442,6 +442,19 @@ let settings = loadJSON(settingsPath, {
     maxIterations: 50,
     autoCompactMaxFailures: 3
   },
+  // 上下文压缩（水位线策略，借鉴 DeepSeek Harness compaction-basic）
+  // - enabled           : 自动压缩总开关
+  // - thresholdRatio    : 输入包络（system+tools+messages+输出预留）超过窗口该比例触发
+  // - retainRatio       : 最近保留尾巴占窗口比例（token 预算制）
+  // - compactionRetries : 摘要不收敛时的额外重试次数
+  // - summarizeMaxTokens: 摘要请求最大输出 token
+  contextCompaction: {
+    enabled: true,
+    thresholdRatio: 0.80,
+    retainRatio: 0.16,
+    compactionRetries: 1,
+    summarizeMaxTokens: 2048
+  },
   sessions: {
     maxConcurrent: 10
   },
@@ -2529,7 +2542,13 @@ ipcMain.handle('llm:summarize', async (_, messages, options = {}) => {
       messages: normalizeMessagesForThinking(messages),
       temperature: options.temperature ?? 0.3,
       max_tokens: options.max_tokens ?? llm.maxResponseTokens ?? 8192,
-      stream: false
+      stream: false,
+      // 上下文压缩的"会话回放"：携带与主请求一致的 tools，复用暖前缀缓存
+      // （DeepSeek 按输入前缀逐字节匹配；tools 位于前缀内）。
+      tools: Array.isArray(options.tools) && options.tools.length > 0 ? options.tools : undefined,
+      // purpose 仅作归属标记（对应 dsh 的 x-deepseek-harness-compact 语义），
+      // 不改动模型可见内容，各 provider 忽略即可。
+      purpose: options.purpose || undefined
     });
     const retryOpts = {
       maxRetries: options.maxRetries ?? llm.maxRetries ?? undefined,

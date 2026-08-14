@@ -1830,11 +1830,102 @@ async function runDocumentToolTests() {
   try { fsLocal.rmSync(tmp, { recursive: true, force: true }); } catch { /* ignore */ }
 }
 
+// ---- Context Compaction (重构版：真实计量 + 水位线 + 配对切点 + checkpoint) ----
+function runContextCompactionTests() {
+  console.log('\nContext Compaction:');
+  const { ContextManager } = require('../src/renderer/js/context-manager.js');
+
+  test('tools schema 计入上下文预算', () => {
+    const cm = new ContextManager(131072);
+    cm.setToolSchemaTokens(40000);
+    const raw = cm.getRawTotalTokens();
+    assert.ok(raw >= 40000, `raw tokens 应包含 tools schema，got ${raw}`);
+    const stats = cm.getStats();
+    assert.strictEqual(stats.toolSchemaTokens, 40000);
+  });
+
+  test('usage 校准：滑动更新且被 clamp', () => {
+    const cm = new ContextManager(8192);
+    cm.calibrateTokens(2000, 1000); // 实际是估算的 2 倍
+    assert.ok(cm.tokenCalibration > 1.0 && cm.tokenCalibration <= 2.0);
+    // 离谱样本丢弃
+    const before = cm.tokenCalibration;
+    cm.calibrateTokens(999999, 1000);
+    assert.strictEqual(cm.tokenCalibration, before);
+  });
+
+  test('配对切点：不把 assistant.tool_calls 与 tool 结果拆开', () => {
+    const cm = new ContextManager(131072);
+    cm.addUserMessage('读文件');
+    cm.addMessage({
+      role: 'assistant', content: '好的',
+      tool_calls: [{ id: 'c1', type: 'function', function: { name: 'readFile', arguments: '{}' } }]
+    });
+    cm.addMessage({ role: 'tool', tool_call_id: 'c1', content: 'x'.repeat(5000) });
+    cm.addMessage({ role: 'assistant', content: '完成' });
+    const range = cm.findCompactRange({ retainTokens: 8, thresholdTokens: 8000 });
+    assert.ok(range, '应有可压缩范围');
+    // 切点不能是 tool 消息的下标（2）
+    assert.notStrictEqual(range.end, 2, '切点不能落在 tool 消息上');
+    assert.strictEqual(range.start, 0);
+  });
+
+  test('Tier0 剪枝：只剪旧区且字节冻结（二次调用不重复）', () => {
+    const cm = new ContextManager(131072);
+    cm.addUserMessage('hi');
+    for (let i = 0; i < 4; i++) {
+      cm.addMessage({ role: 'assistant', content: 'a' });
+      cm.addMessage({ role: 'tool', tool_call_id: 'x' + i, content: 'y'.repeat(2000) });
+    }
+    const policy = { retainTokens: 4, thresholdTokens: 8000 };
+    const first = cm.pruneOldToolResults(policy);
+    assert.ok(first > 0, '第一次应剪枝');
+    const second = cm.pruneOldToolResults(policy);
+    assert.strictEqual(second, 0, '已剪枝内容字节冻结，不应重复剪枝');
+  });
+
+  test('checkpoint 替换 + 字节冻结 + 回放前缀一致', () => {
+    const cm = new ContextManager(131072);
+    cm.setSystemPrompt('SYSTEM-PROMPT');
+    cm.addUserMessage('u1');
+    cm.addMessage({ role: 'assistant', content: 'a1' });
+    cm.addUserMessage('u2');
+    cm.addMessage({ role: 'assistant', content: 'a2' });
+    const applied = cm.applyCheckpoint(0, 3, '早期摘要');
+    assert.strictEqual(applied.count, 3);
+    assert.strictEqual(cm.messages.length, 2); // checkpoint + a2
+    assert.strictEqual(cm.messages[0].role, 'user');
+    assert.ok(cm.messages[0].content.includes('<compacted-summary>'));
+    assert.ok(cm.checkpointIndexes.has(0));
+    // 回放前缀与正式请求前缀一致（system 相同、messages 头相同）
+    const replay = cm.getReplayMessages(2, '指令');
+    const formal = cm.getMessages();
+    assert.strictEqual(replay[0].content, formal[0].content);
+    assert.strictEqual(replay[1].content, formal[1].content);
+    assert.strictEqual(replay[replay.length - 1].content, '指令');
+  });
+
+  test('溢出恢复 hardTruncate 保持配对合法', () => {
+    const cm = new ContextManager(8192);
+    cm.addUserMessage('u');
+    cm.addMessage({
+      role: 'assistant', content: '', tool_calls: [{ id: 'c1', type: 'function', function: { name: 'readFile', arguments: '{}' } }]
+    });
+    cm.addMessage({ role: 'tool', tool_call_id: 'c1', content: 'r' });
+    cm.addMessage({ role: 'assistant', content: 'done' });
+    const removed = cm.hardTruncate({ retainTokens: 2, thresholdTokens: 100 });
+    assert.ok(removed > 0);
+    // 尾巴首条不能是 tool 消息
+    assert.notStrictEqual(cm.messages[0]?.role, 'tool');
+  });
+}
+
 // ---- Summary ----
 (async () => {
   // 等待异步 LLM 测试完成
   await runLiveLLMTests();
   await runDocumentToolTests();
+  runContextCompactionTests();
 
   console.log(`\n${'='.repeat(40)}`);
   console.log(`Results: ${passed} passed, ${failed} failed, ${passed + failed} total`);
