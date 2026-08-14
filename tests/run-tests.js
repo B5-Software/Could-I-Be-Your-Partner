@@ -2538,6 +2538,8 @@ async function runDsPluginTests() {
       assert.ok(pm.host.ctx.agents, '强制清理不得误伤宿主服务（agents 应仍在）');
       const en2 = await pm.setEnabled(installed.id, true);
       assert.strictEqual(en2.ok, true, '超时卸载后应可再次加载');
+      assert.ok(!en2.plugin.compatIssues.some(i => i.includes('has been registered')), '重载不得出现服务重复注册');
+      assert.ok(en2.plugin.compatIssues.some(i => i.includes('挂起超时')), '重载应继续记录挂起超时（如实状态）');
     } finally {
       try { await pm.dispose(); } catch { /* ignore */ }
       try { fsLocal.rmSync(dataDir, { recursive: true, force: true }); } catch { /* ignore */ }

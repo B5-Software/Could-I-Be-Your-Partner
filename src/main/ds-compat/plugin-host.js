@@ -396,6 +396,23 @@ class PluginHost {
     const before = new Set(this.toolsService.tools.keys());
     let fiber = null;
     try {
+      // 预清理：移除该插件历史纤维（disposed/error 态）残留的服务注册。
+      // 挂起/失败的 apply 的 teardown 可能永远不会完成，这里按归属强制清除，
+      // 从根上保证重载不会报 "service ... has been registered"。
+      try {
+        const runtime = this.ctx.registry && this.ctx.registry.get(plugin);
+        if (runtime && runtime.fibers && runtime.fibers.map) {
+          for (const f of runtime.fibers.map.values()) {
+            if (!f || f.state === 2) continue; // 仅处理非活跃纤维
+            for (const name of Object.keys(f.store || {})) {
+              const impl = f.store[name];
+              if (!impl || impl.fiber !== f) continue;
+              const key = this.ctx.root[symbols.isolate] && this.ctx.root[symbols.isolate][name];
+              if (key) delete this.ctx.reflect.store[key];
+            }
+          }
+        }
+      } catch { /* ignore */ }
       // apply 挂起保护：交互式 TUI 类插件（如 dsh-cc-tui）可能永不返回，
       // 超时后强制卸载纤维，避免阻塞启动/启用流程
       const applyTimeout = meta.applyTimeoutMs || this.options.applyTimeoutMs || 30000;
