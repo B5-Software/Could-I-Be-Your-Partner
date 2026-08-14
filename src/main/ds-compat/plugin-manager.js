@@ -14,7 +14,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { spawn } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 const yaml = require('js-yaml');
 const { PluginHost } = require('./plugin-host');
 
@@ -165,6 +165,46 @@ function readBundlePatch(installDir, pkg) {
     }
   }
   return { file: patchRel, rows };
+}
+
+/**
+ * 修复旧版安装器造成的 react 覆盖坏状态：
+ * 旧合并逻辑曾把平铺的 react@18 覆盖进插件根目录，导致 Ink 的
+ * `react/compiler-runtime` 子路径丢失。这里用 npm pack 直接解压
+ * react 19.2.x 到插件根，不经过 npm 重解析（避免连带剪掉 peer 依赖）。
+ */
+function repairReactRuntime(installDir, pkg) {
+  const reactDir = path.join(installDir, 'node_modules', 'react');
+  const reactJson = path.join(reactDir, 'package.json');
+  if (!fs.existsSync(reactJson)) return false;
+  let reactPkg;
+  try { reactPkg = JSON.parse(fs.readFileSync(reactJson, 'utf8')); } catch { return false; }
+  const hasCompilerRuntime = reactPkg.exports && reactPkg.exports['./compiler-runtime'];
+  if (hasCompilerRuntime) return false;
+  const want = pkg && pkg.dependencies && pkg.dependencies.react;
+  if (typeof want !== 'string' || !/^[\^~]?19(\.|$)/.test(want)) return false;
+  const packDir = fs.mkdtempSync(path.join(installDir, '.react-repair-'));
+  try {
+    const r = spawnSync('npm', ['pack', 'react@' + want, '--pack-destination', packDir], {
+      encoding: 'utf8', timeout: 120000, shell: process.platform === 'win32', windowsHide: true
+    });
+    const m = String(r.stdout || '').match(/react-\d+\.\d+\.\d+\.tgz/);
+    if (r.status !== 0 || !m) return false;
+    const tgz = path.join(packDir, m[0]);
+    fs.rmSync(reactDir, { recursive: true, force: true });
+    fs.mkdirSync(reactDir, { recursive: true });
+    const x = spawnSync('tar', ['-xzf', tgz, '-C', reactDir, '--strip-components=1'], {
+      encoding: 'utf8', timeout: 60000, windowsHide: true
+    });
+    if (x.status !== 0) return false;
+    const fixed = JSON.parse(fs.readFileSync(reactJson, 'utf8'));
+    return !!(fixed.exports && fixed.exports['./compiler-runtime']);
+  } catch (e) {
+    console.warn('[DS Plugins] react 修复失败:', e.message);
+    return false;
+  } finally {
+    try { fs.rmSync(packDir, { recursive: true, force: true }); } catch { /* ignore */ }
+  }
 }
 
 /**
@@ -483,6 +523,10 @@ class PluginManager {
     // 求值），作为 CIBYP 的组合元数据；依赖解析维持 npm 默认（真实 peer 自动安装，
     // 实测 react 等嵌套版本在官方仓库中已自洽，无需 legacy-peer-deps）。
     const bundlePatch = readBundlePatch(installDir, pkg);
+    // 自修复旧安装器覆盖 react 的坏状态（compiler-runtime 子路径丢失）
+    if (repairReactRuntime(installDir, pkg)) {
+      progress({ stage: 'finalize', source: type, line: '已修复 react 版本漂移（compiler-runtime）' });
+    }
     // 补丁中属于本插件自身的行 → 作为默认配置种子
     let config = {};
     const selfRow = bundlePatch.rows.find(r => r.name === pkg.name || r.id === this._slug(pkg.name));
@@ -598,6 +642,11 @@ class PluginManager {
   async refreshAll() {
     for (const rec of this.plugins) {
       try {
+        let pkg = null;
+        try { pkg = this._readPackage(rec.installDir); } catch { /* ignore */ }
+        if (pkg && repairReactRuntime(rec.installDir, pkg)) {
+          console.log(`[DS Plugins] 已修复 ${rec.name} 的 react 版本漂移`);
+        }
         if (rec.enabled) {
           await this.refreshPlugin(rec.id);
           continue;
@@ -637,4 +686,4 @@ class PluginManager {
   }
 }
 
-module.exports = { PluginManager, readBundlePatch };
+module.exports = { PluginManager, readBundlePatch, repairReactRuntime };

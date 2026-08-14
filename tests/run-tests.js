@@ -2707,6 +2707,31 @@ test('插件启动全量重审：清除旧版本遗留 compatIssues', () => {
   assert.ok(pmContent.includes('async refreshAll()'), '应有 refreshAll 全量重审');
   assert.ok(pmContent.includes('unloadPlugin'), '禁用插件应探测后立即卸载');
   assert.ok(mainContent.includes('pluginManager.refreshAll()'), '启动时应全量重审插件兼容性');
+  assert.ok(pmContent.includes('repairReactRuntime'), '应有 react 版本漂移自修复');
+});
+
+test('react 漂移自修复：健康/无关状态不动作（离线判定）', () => {
+  const fsLocal2 = require('fs');
+  const pathLocal2 = require('path');
+  const osLocal2 = require('os');
+  const { repairReactRuntime } = require('../src/main/ds-compat/plugin-manager.js');
+  const dir = fsLocal2.mkdtempSync(pathLocal2.join(osLocal2.tmpdir(), 'cibyp-react-fix-'));
+  try {
+    const reactDir = pathLocal2.join(dir, 'node_modules', 'react');
+    fsLocal2.mkdirSync(reactDir, { recursive: true });
+    // 健康 react（有 compiler-runtime）→ 不动作
+    fsLocal2.writeFileSync(pathLocal2.join(reactDir, 'package.json'), JSON.stringify({
+      name: 'react', version: '19.2.8', exports: { './compiler-runtime': './compiler-runtime.js' }
+    }));
+    assert.strictEqual(repairReactRuntime(dir, { dependencies: { react: '^19.2.0' } }), false);
+    // 坏 react 但插件不依赖 react19 → 不动作
+    fsLocal2.writeFileSync(pathLocal2.join(reactDir, 'package.json'), JSON.stringify({
+      name: 'react', version: '18.3.1', exports: {}
+    }));
+    assert.strictEqual(repairReactRuntime(dir, { dependencies: { react: '^18.2.0' } }), false);
+  } finally {
+    try { fsLocal2.rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ }
+  }
 });
 
 // ---- Summary ----
