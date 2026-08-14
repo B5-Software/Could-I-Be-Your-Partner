@@ -765,6 +765,10 @@
           const hostWidth = Math.max(100, ggbHost ? ggbHost.clientWidth : 480);
           const hostHeight = Math.max(100, ggbHost ? ggbHost.clientHeight : 600);
 
+          // classic 在窄侧边栏（宽<高）会触发 GGT portrait 竖排（图形/代数上下各半），
+          // 用 perspective 'AG' 在 init 时指定左右并排：铺满无白边、保留代数视图与输入栏、
+          // 屏幕键盘保持挂载式随点击弹出。调用方显式传 perspective 可覆盖。
+          const appPerspective = opts.perspective || (appName === 'classic' ? 'AG' : '');
           const params = {
             appName: appName,
             width: hostWidth,   // 用具体像素值，不用 '100%'
@@ -774,7 +778,6 @@
             showMenuBar: false,
             showAppsPicker: false,
             showKeyboard: false,
-            showKeyboardOnFocus: false, // 5.x 真实开关：防止屏幕键盘吃掉布局高度造成下白边
             enableRightClick: false,
             enableShiftDragZoom: true,
             showResetIcon: true,
@@ -795,13 +798,6 @@
               } catch (_) {}
               try {
                 if (opts.perspective && typeof ggbApplet.setPerspective === 'function') ggbApplet.setPerspective(String(opts.perspective));
-              } catch (_) {}
-              // classic 在窄侧边栏（宽<高）会触发 GGT portrait 竖排（图形/代数上下各半，代数区空白即"下白边"），
-              // 默认切到纯图形视图 'G' 铺满；调用方仍可显式传 perspective 覆盖。
-              try {
-                if (!opts.perspective && appName === 'classic' && typeof ggbApplet.setPerspective === 'function') {
-                  ggbApplet.setPerspective('G');
-                }
               } catch (_) {}
               // 注册错误监听器：GGB 命令失败时会回调
               try {
@@ -849,6 +845,7 @@
               resolve({ ok: true, message: 'GeoGebra已启动', ready: true, appName });
             }
           };
+          if (appPerspective) params.perspective = appPerspective;
 
           // 面板已 remove('hidden')，host 已有真实尺寸，params 已用具体像素值。
           // 直接 inject（GGB 不会用 0×0 固化 canvas）。

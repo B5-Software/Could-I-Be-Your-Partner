@@ -6,7 +6,7 @@
   <title>GeoGebra Offline Smoke</title>
   <style>
     html, body { margin: 0; padding: 0; }
-    #ggb-element { width: 500px; height: 600px; }
+    #ggb-element { position: absolute; right: 0; top: 0; bottom: 0; width: 500px; }
     * { box-sizing: border-box; }
   </style>
   <script src="../assets/geogebra/deployggb.js"></script>
@@ -16,6 +16,7 @@
   <script>
     (async function () {
       try {
+        try { localStorage.clear(); } catch (_) {}
         const loaded = await new Promise((resolve, reject) => {
           const timeout = setTimeout(() => reject(new Error('appletOnLoad 超时（90s）')), 90000);
           const applet = new GGBApplet({
@@ -26,7 +27,7 @@
             showAlgebraInput: true,
             showMenuBar: false,
             showKeyboard: false,
-            showKeyboardOnFocus: false,
+            perspective: 'AG',
             enableRightClick: false,
             showResetIcon: true,
             appletOnLoad: function () {
@@ -111,9 +112,38 @@
             const el = host.querySelector(sel);
             if (el) {
               const r = el.getBoundingClientRect();
-              out.parts[sel] = `${Math.round(r.width)}x${Math.round(r.height)}@${Math.round(r.top - hostRect.top)}`;
+              out.parts[sel] = `${Math.round(r.width)}x${Math.round(r.height)}@t${Math.round(r.top - hostRect.top)},l${Math.round(r.left)}|${getComputedStyle(el).display}|${getComputedStyle(el).position}`;
             }
           }
+          // 键盘探测：聚焦输入框 → 键盘应弹出（挂载式，随焦点显示）
+          out.keyboardProbe = {};
+          try {
+            let input = null;
+            for (let i = 0; i < 30 && !input; i++) {
+              input = host.querySelector('.AutoCompleteTextFieldW input, .AutoCompleteTextFieldW textarea, .gwt-SuggestBox, input[type=text], textarea');
+              if (!input) await new Promise((r) => setTimeout(r, 200));
+            }
+            out.keyboardProbe.inputs = Array.from(host.querySelectorAll('input, textarea')).map((i) => `${i.tagName}|${i.className}|${i.getAttribute('type')}|${Math.round(i.getBoundingClientRect().width)}x${Math.round(i.getBoundingClientRect().height)}|vis=${i.offsetParent !== null}`);
+            out.keyboardProbe.avInput = host.querySelector('.avInputPanel') ? 'found' : null;
+            if (!input) throw new Error('未找到代数输入框');
+            const ir = input.getBoundingClientRect();
+            window.__KB_TARGET__ = { x: Math.round(ir.left + ir.width / 2), y: Math.round(ir.top + ir.height / 2) };
+            // 等待主进程 sendInputEvent 真实点击（可信事件才能触发 GGT 的 mousedown 处理器）
+            const waitClick = new Promise((resolve) => {
+              const t0 = Date.now();
+              const t = setInterval(() => {
+                if (window.__KB_CLICKED__ || Date.now() - t0 > 15000) { clearInterval(t); resolve(); }
+              }, 100);
+            });
+            await waitClick;
+            await new Promise((r) => setTimeout(r, 900));
+            const kb = host.querySelector('.KeyBoard');
+            const kbRect = kb ? kb.getBoundingClientRect() : null;
+            out.keyboardProbe.keyboard = kbRect ? `${Math.round(kbRect.width)}x${Math.round(kbRect.height)}@${Math.round(kbRect.top)},${Math.round(kbRect.left)}` : null;
+            out.keyboardProbe.keyboardClass = kb ? String(kb.className) : null;
+            out.keyboardProbe.keyboardDisplay = kb ? getComputedStyle(kb).display : null;
+            out.keyboardProbe.keyboardVisible = !!(kb && kb.getBoundingClientRect().height > 20 && getComputedStyle(kb).display !== 'none');
+          } catch (e) { out.keyboardProbe.error = e.message; }
           // perspective 探测：记录各视角下 EuclidianPanel 的高度
           out.perspectives = {};
           for (const p of ['G', 'AG', 'AGS', 'GC', 'default']) {
@@ -160,7 +190,6 @@
               appName: '3d', width: 500, height: 600,
               showToolBar: true, showAlgebraInput: true, showMenuBar: false,
               showKeyboard: false,
-              showKeyboardOnFocus: false,
               enableRightClick: false, showResetIcon: true,
               appletOnLoad: function () { clearTimeout(t2); resolve(window.ggbApplet); },
             }, true);

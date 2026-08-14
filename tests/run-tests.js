@@ -733,10 +733,13 @@ test('initGeoGebra should avoid init-promise infinite recursion and fill the sid
   // 切换时优雅卸载旧实例（GGB applet 自带 remove()），避免新旧实例并存
   assert.ok(appContent.includes('ggbApplet.remove()'), '切换配置未调用旧 applet 的 remove()');
   assert.ok(appContent.includes('ggbResizeObserver.disconnect()'), '切换配置未断开旧 ResizeObserver');
-  // 5.x 真实开关：防屏幕键盘吃掉布局高度（下白边）
-  assert.ok(appContent.includes('showKeyboardOnFocus: false'), '未关闭屏幕键盘焦点弹出');
-  // classic 在窄侧边栏 portrait 竖排导致下白边：默认切纯图形视图铺满（可被 perspective 覆盖）
-  assert.ok(appContent.includes("ggbApplet.setPerspective('G')"), 'classic 默认未切到铺满视角');
+  // 键盘保持默认 auto（随输入焦点弹出、记住用户偏好）；上一轮误用 showKeyboardOnFocus:false 关掉了它
+  assert.ok(!appContent.includes('showKeyboardOnFocus: false'), '不应强制关闭屏幕键盘（showKeyboardOnFocus:false）');
+  // classic 在窄侧边栏 portrait 竖排导致白边：默认 perspective 'AG' 左右并排铺满（可被显式 perspective 覆盖）
+  assert.ok(appContent.includes("appName === 'classic' ? 'AG' : ''"), 'classic 默认未使用 AG 视角铺满');
+  assert.ok(appContent.includes('params.perspective = appPerspective'), 'perspective 未作为 init 参数传入');
+  // 不能用 'G'：它会连代数输入栏一起隐藏，导致屏幕键盘无处弹出
+  assert.ok(!appContent.includes("setPerspective('G')"), '不应默认切到 G（会隐藏输入栏与键盘）');
 });
 
 test('GeoGebra full-API wrappers should be exposed on window', () => {

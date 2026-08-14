@@ -71,8 +71,18 @@ app.whenReady().then(async () => {
 
     const result = await new Promise((resolve) => {
       const startedAt = Date.now();
+      let clicked = false;
       const timer = setInterval(async () => {
         try {
+          if (!clicked) {
+            const target = await win.webContents.executeJavaScript('window.__KB_TARGET__ || null');
+            if (target && target.x && target.y) {
+              clicked = true;
+              win.webContents.sendInputEvent({ type: 'mouseDown', x: target.x, y: target.y, button: 'left', clickCount: 1 });
+              win.webContents.sendInputEvent({ type: 'mouseUp', x: target.x, y: target.y, button: 'left', clickCount: 1 });
+              await win.webContents.executeJavaScript('window.__KB_CLICKED__ = true');
+            }
+          }
           const r = await win.webContents.executeJavaScript('window.__SMOKE__ || null');
           if (r) {
             clearInterval(timer);
@@ -99,7 +109,8 @@ app.whenReady().then(async () => {
     console.log('[layout:classic]', JSON.stringify(result.layout));
     if (result.perspectives) console.log('[perspectives]', JSON.stringify(result.perspectives));
     if (result.resizeProbe) console.log('[resizeProbe]', JSON.stringify(result.resizeProbe));
-    check('屏幕键盘未占用布局（showKeyboardOnFocus=false）', !(result.parts && result.parts['.KeyBoard']), result.parts && result.parts['.KeyBoard']);
+    if (result.keyboardProbe) console.log('[keyboardProbe]', JSON.stringify(result.keyboardProbe));
+    check('聚焦输入框后屏幕键盘弹出', !!(result.keyboardProbe && result.keyboardProbe.keyboardVisible), result.keyboardProbe);
     check('perspective G：图形视图铺满分割面板', !!(result.perspectives && result.perspectives.G && result.perspectives.G.euclidian === result.perspectives.G.split),
       result.perspectives && result.perspectives.G);
     (() => {
