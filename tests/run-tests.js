@@ -2666,20 +2666,37 @@ test('dsh.bundle.patch：解析 rows + 受限 !!js 求值', () => {
 
 test('自动化 UI/IPC 接线（nav/页面/Monaco 编辑器/分发回执）', () => {
   const htmlContent = fs.readFileSync(require('path').join(__dirname, '../src/renderer/pages/index.html'), 'utf-8');
+  const editorHtml = fs.readFileSync(require('path').join(__dirname, '../src/renderer/pages/automation-editor.html'), 'utf-8');
+  const editorCss = fs.readFileSync(require('path').join(__dirname, '../src/renderer/css/automation-editor.css'), 'utf-8');
   const preloadContent = fs.readFileSync(require('path').join(__dirname, '../src/preload/preload.js'), 'utf-8');
+  const editorPreload = fs.readFileSync(require('path').join(__dirname, '../src/preload/automation-editor-preload.js'), 'utf-8');
   const mainContent = fs.readFileSync(require('path').join(__dirname, '../src/main/main.js'), 'utf-8');
   const appContent = fs.readFileSync(require('path').join(__dirname, '../src/renderer/js/app.js'), 'utf-8');
   assert.ok(htmlContent.includes('id="nav-automation"'), '侧栏应有触发入口');
   assert.ok(htmlContent.includes('id="page-automation"'), '应有触发页');
-  assert.ok(htmlContent.includes('id="automation-dsl-editor"'), '应有 Monaco 编辑器挂载点');
+  assert.ok(!htmlContent.includes('id="automation-editor-modal"'), '主界面不应再有编辑器模态框');
+  assert.ok(editorHtml.includes('id="ae-editor-host"'), '独立窗口应有 Monaco 挂载点');
+  assert.ok(editorHtml.includes('monaco-editor/min/vs/loader.js'), '独立窗口应加载本地 Monaco');
+  assert.ok(editorCss.includes('.ae-statusbar') && editorCss.includes('--ae-accent'), '应有 IDE 布局样式与主题变量');
   for (const api of ['automationList', 'automationSave', 'automationRun', 'automationTest', 'onAutomationDispatch']) {
     assert.ok(preloadContent.includes(api), `preload 应暴露 ${api}`);
   }
+  assert.ok(preloadContent.includes('openAutomationEditor'), '主窗口 preload 应能打开编辑器窗口');
+  assert.ok(editorPreload.includes('onThemeApply') && editorPreload.includes('getTheme'), '编辑器 preload 应订阅主题实时变化');
   assert.ok(mainContent.includes("ipcMain.handle('automation:list'"), 'main 应注册 automation IPC');
+  assert.ok(mainContent.includes("ipcMain.handle('automation-editor:open'"), 'main 应注册编辑器窗口 IPC');
+  assert.ok(mainContent.includes('automationEditorWindow'), '应有编辑器窗口单例');
   assert.ok(mainContent.includes('automationManager.onSystemNotification'), '通知事件应接入自动化触发器');
-  assert.ok(appContent.includes('ensureAutomationMonaco'), '应使用本地 Monaco 编辑 DSL');
   assert.ok(appContent.includes('onAutomationDispatch'), '应处理自动化分发（新建会话发送）');
   assert.ok(appContent.includes('automation:dispatched') || preloadContent.includes('automation:dispatched'), '应有分发回执通道');
+});
+
+test('插件启动全量重审：清除旧版本遗留 compatIssues', () => {
+  const pmContent = fs.readFileSync(require('path').join(__dirname, '../src/main/ds-compat/plugin-manager.js'), 'utf-8');
+  const mainContent = fs.readFileSync(require('path').join(__dirname, '../src/main/main.js'), 'utf-8');
+  assert.ok(pmContent.includes('async refreshAll()'), '应有 refreshAll 全量重审');
+  assert.ok(pmContent.includes('unloadPlugin'), '禁用插件应探测后立即卸载');
+  assert.ok(mainContent.includes('pluginManager.refreshAll()'), '启动时应全量重审插件兼容性');
 });
 
 // ---- Summary ----

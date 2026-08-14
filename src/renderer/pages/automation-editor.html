@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<!--
+  SPDX-License-Identifier: GPL-3.0-or-later
+  Copyright (c) 2026 B5-Software
+  This file is part of Could I Be Your Partner.
+-->
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: file:; font-src 'self' data:; connect-src 'self' data: http: https: ws: wss:;">
+  <title>自动化任务编辑器</title>
+  <link rel="stylesheet" href="../css/theme.css">
+  <link rel="stylesheet" href="../css/automation-editor.css">
+  <link rel="stylesheet" href="../../../assets/fonts/fontawesome.min.css">
+  <script src="../../../node_modules/monaco-editor/min/vs/loader.js"></script>
+</head>
+<body>
+  <div class="ae-titlebar">
+    <div class="ae-titlebar-drag"></div>
+    <div class="ae-titlebar-title">
+      <i class="fa-solid fa-bolt"></i>
+      <span id="ae-title">自动化任务</span>
+      <span class="ae-dirty hidden" id="ae-dirty"><i class="fa-solid fa-circle"></i> 未保存</span>
+    </div>
+    <div class="ae-titlebar-actions">
+      <button class="ae-btn ghost" id="btn-run" title="立即运行一次"><i class="fa-solid fa-play"></i> 运行</button>
+      <button class="ae-btn ghost" id="btn-test" title="测试渲染提示词"><i class="fa-solid fa-flask"></i> 测试</button>
+      <button class="ae-btn primary" id="btn-save"><i class="fa-solid fa-check"></i> 保存</button>
+      <button class="ae-icon-btn" id="btn-close" title="关闭"><i class="fa-solid fa-xmark"></i></button>
+    </div>
+  </div>
+
+  <div class="ae-body">
+    <aside class="ae-sidebar">
+      <section class="ae-section">
+        <div class="ae-section-title"><i class="fa-solid fa-circle-info"></i> 任务</div>
+        <label class="ae-field">
+          <span class="ae-label">名称 <em>*</em></span>
+          <input type="text" id="ae-name" placeholder="例如：构建通知">
+        </label>
+        <label class="ae-field-row">
+          <span class="ae-label">启用</span>
+          <div class="toggle-switch"><input type="checkbox" id="ae-enabled" checked><span class="toggle-slider"></span></div>
+        </label>
+      </section>
+
+      <section class="ae-section">
+        <div class="ae-section-title"><i class="fa-solid fa-wand-magic-sparkles"></i> 触发器</div>
+        <label class="ae-field">
+          <span class="ae-label">类型</span>
+          <select id="ae-trigger-type">
+            <option value="schedule">定时（cron）</option>
+            <option value="notification">系统通知</option>
+            <option value="http">HTTP 信号服务器</option>
+          </select>
+        </label>
+        <div id="ae-trigger-config"></div>
+      </section>
+
+      <section class="ae-section">
+        <div class="ae-section-title"><i class="fa-solid fa-chart-line"></i> 统计</div>
+        <div class="ae-stats">
+          <div class="ae-stat"><span>运行次数</span><strong id="ae-run-count">0</strong></div>
+          <div class="ae-stat"><span>上次运行</span><strong id="ae-last-run">—</strong></div>
+          <div class="ae-stat"><span>任务 ID</span><code id="ae-task-id">—</code></div>
+        </div>
+        <p id="ae-last-error" class="ae-error hidden"></p>
+      </section>
+
+      <section class="ae-section">
+        <div class="ae-section-title"><i class="fa-solid fa-book"></i> 文档</div>
+        <p class="ae-doc"><a href="#" id="ae-doc-link">自动化与 DSL 文档</a> · <a href="#" id="ae-doc-http">HTTP 信号接口</a></p>
+      </section>
+    </aside>
+
+    <main class="ae-main">
+      <div class="ae-editor-tabs">
+        <div class="ae-tab active">
+          <i class="fa-solid fa-file-code"></i>
+          <span id="ae-tab-name">task.dsl</span>
+          <span class="ae-tab-lang">CIBYP DSL</span>
+        </div>
+        <div class="ae-tab-spacer"></div>
+        <div class="ae-actions-hint">Ctrl/Cmd+S 保存 · Ctrl/Cmd+Enter 测试</div>
+      </div>
+      <div id="ae-editor-host"></div>
+      <div class="ae-statusbar">
+        <span id="ae-status-lang"><i class="fa-solid fa-code"></i> CIBYP DSL</span>
+        <span id="ae-status-pos">Ln 1, Col 1</span>
+        <span class="ae-statusbar-spacer"></span>
+        <span id="ae-status-valid" class="ae-valid"><i class="fa-solid fa-circle-check"></i> 语法有效</span>
+        <span id="ae-status-encoding">UTF-8</span>
+      </div>
+      <div class="ae-output hidden" id="ae-output">
+        <div class="ae-output-header">
+          <span><i class="fa-solid fa-terminal"></i> 输出</span>
+          <button class="ae-icon-btn" id="btn-close-output" title="关闭"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+        <pre id="ae-output-body"></pre>
+      </div>
+    </main>
+  </div>
+</body>
+<script src="../js/automation-editor.js"></script>
+</html>

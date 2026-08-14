@@ -15085,10 +15085,6 @@ window.api.onWebControlSendMessage(async (message) => {
   });
 
   // ============ 自动化任务页（触发：定时/通知/HTTP → 新 Chat 会话） ============
-  let automationEditor = null;
-  let automationEditingId = null;
-  const automationModal = () => document.getElementById('automation-editor-modal');
-
   function triggerSummary(trigger) {
     if (!trigger) return '—';
     if (trigger.type === 'schedule') return `定时 ${trigger.config?.cron || '?'}`;
@@ -15102,105 +15098,11 @@ window.api.onWebControlSendMessage(async (message) => {
     return trigger.type;
   }
 
-  function renderAutomationTriggerConfig(type) {
-    const host = document.getElementById('automation-trigger-config');
-    if (!host) return;
-    if (type === 'schedule') {
-      host.innerHTML = `
-        <label style="font-size:12px;color:var(--text-secondary);display:block;margin-bottom:4px">cron（分 时 日 月 周，5 段）</label>
-        <input type="text" id="auto-cron" placeholder="*/5 * * * *" style="width:280px">
-        <p class="setting-hint">例：<code>*/5 * * * *</code> 每 5 分钟；<code>0 9 * * 1-5</code> 工作日 9 点；<code>0 0 * * *</code> 每天 0 点。</p>`;
-    } else if (type === 'notification') {
-      host.innerHTML = `
-        <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:6px">
-          <div><label style="font-size:12px;color:var(--text-secondary);display:block">通知类别</label>
-          <select id="auto-notif-kind" style="width:180px">
-            <option value="any">任意</option>
-            <option value="sessionDone">会话完成</option>
-            <option value="sessionError">会话失败</option>
-            <option value="approval">等待审批</option>
-            <option value="other">其他</option>
-          </select></div>
-          <div><label style="font-size:12px;color:var(--text-secondary);display:block">标题匹配（正则，可选）</label>
-          <input type="text" id="auto-notif-title" placeholder=".*已完成.*" style="width:180px"></div>
-          <div><label style="font-size:12px;color:var(--text-secondary);display:block">正文匹配（正则，可选）</label>
-          <input type="text" id="auto-notif-body" placeholder=".*失败.*" style="width:180px"></div>
-        </div>`;
-    } else {
-      host.innerHTML = `
-        <p class="setting-hint">启用后启动专用信号服务器（默认端口 8765，可到 设置 → 网络 附近查阅文档调整）。请求方式见 <code>docs/automation.md</code>：</p>
-        <pre style="font-size:11px;background:var(--bg-primary);padding:8px;border-radius:8px;overflow:auto">POST /trigger/{id}
-Authorization: Bearer &lt;token&gt;
-Content-Type: application/json
-{"任意":"JSON 参数，进入 DSL 的 args"}</pre>`;
+  // 编辑/新建在独立 IDE 窗口中进行（实时跟随主窗口主题）
+  function openAutomationEditor(task) {
+    if (typeof window.api.openAutomationEditor === 'function') {
+      window.api.openAutomationEditor(task?.id || null);
     }
-  }
-
-  function fillAutomationEditor(task) {
-    automationEditingId = task?.id || null;
-    document.getElementById('automation-name').value = task?.name || '';
-    document.getElementById('automation-enabled').checked = task ? !!task.enabled : true;
-    document.getElementById('automation-trigger-type').value = task?.trigger?.type || 'schedule';
-    renderAutomationTriggerConfig(task?.trigger?.type || 'schedule');
-    const cfg = task?.trigger?.config || {};
-    if (task?.trigger?.type === 'schedule') document.getElementById('auto-cron').value = cfg.cron || '*/5 * * * *';
-    if (task?.trigger?.type === 'notification') {
-      document.getElementById('auto-notif-kind').value = cfg.kind || 'any';
-      document.getElementById('auto-notif-title').value = cfg.titleRegex || '';
-      document.getElementById('auto-notif-body').value = cfg.bodyRegex || '';
-    }
-    if (automationEditor) automationEditor.setValue(task?.dsl || 'return "你好，我是自动化任务。"');
-  }
-
-  async function ensureAutomationMonaco() {
-    if (automationEditor) return automationEditor;
-    if (typeof ensureMonaco !== 'function') return null;
-    const monaco = await ensureMonaco();
-    const host = document.getElementById('automation-dsl-editor');
-    if (!host || !monaco) return null;
-    automationEditor = monaco.editor.create(host, {
-      value: 'return "你好，我是自动化任务。"',
-      language: 'javascript',
-      theme: document.documentElement.getAttribute('data-theme') === 'dark' ? 'vs-dark' : 'vs',
-      minimap: { enabled: false },
-      fontSize: 13,
-      automaticLayout: true,
-      scrollBeyondLastLine: false
-    });
-    return automationEditor;
-  }
-
-  async function openAutomationEditor(task) {
-    document.getElementById('automation-editor-error').style.display = 'none';
-    automationModal()?.classList.remove('hidden');
-    await ensureAutomationMonaco();
-    fillAutomationEditor(task);
-  }
-
-  function closeAutomationEditor() {
-    automationModal()?.classList.add('hidden');
-    if (automationEditor) { try { automationEditor.dispose(); } catch { /* ignore */ } automationEditor = null; }
-    automationEditingId = null;
-  }
-
-  function collectAutomationTask() {
-    const type = document.getElementById('automation-trigger-type').value;
-    let config = {};
-    if (type === 'schedule') config = { cron: (document.getElementById('auto-cron')?.value || '').trim() };
-    if (type === 'notification') {
-      config = {
-        kind: document.getElementById('auto-notif-kind')?.value || 'any',
-        titleRegex: (document.getElementById('auto-notif-title')?.value || '').trim(),
-        bodyRegex: (document.getElementById('auto-notif-body')?.value || '').trim()
-      };
-    }
-    return {
-      id: automationEditingId || undefined,
-      name: (document.getElementById('automation-name')?.value || '').trim() || '未命名任务',
-      enabled: document.getElementById('automation-enabled')?.checked !== false,
-      trigger: { type, config },
-      dsl: automationEditor ? automationEditor.getValue() : ''
-    };
   }
 
   async function loadAutomationPage() {
@@ -15263,37 +15165,9 @@ Content-Type: application/json
   }
 
   document.getElementById('btn-automation-new')?.addEventListener('click', () => openAutomationEditor(null));
-  document.getElementById('btn-close-automation-editor')?.addEventListener('click', closeAutomationEditor);
-  document.getElementById('btn-cancel-automation-editor')?.addEventListener('click', closeAutomationEditor);
-  document.getElementById('automation-trigger-type')?.addEventListener('change', (e) => renderAutomationTriggerConfig(e.target.value));
-  document.getElementById('btn-save-automation')?.addEventListener('click', async () => {
-    const errEl = document.getElementById('automation-editor-error');
-    const task = collectAutomationTask();
-    if (task.trigger.type === 'schedule' && !/^\S+\s+\S+\s+\S+\s+\S+\s+\S+$/.test(task.trigger.config.cron)) {
-      if (errEl) { errEl.textContent = 'cron 需要 5 段（分 时 日 月 周）'; errEl.style.display = ''; }
-      return;
-    }
-    const r = await window.api.automationSave(task);
-    if (!r.ok) {
-      if (errEl) { errEl.textContent = r.error || '保存失败'; errEl.style.display = ''; }
-      return;
-    }
-    closeAutomationEditor();
-    window.showToast?.('自动化任务已保存', 'success', 2500);
-    loadAutomationPage();
-  });
-  document.getElementById('btn-automation-test')?.addEventListener('click', async () => {
-    const errEl = document.getElementById('automation-editor-error');
-    const r = await window.api.automationTest(collectAutomationTask(), {});
-    if (!r.ok) {
-      if (errEl) { errEl.textContent = r.error || '渲染失败'; errEl.style.display = ''; }
-      return;
-    }
-    if (errEl) {
-      errEl.textContent = '渲染结果：\n' + (r.result?.prompt || '');
-      errEl.style.color = 'var(--text-secondary)';
-      errEl.style.display = '';
-    }
+  // 编辑器窗口保存/删除后，主页面回到前台时刷新列表
+  window.addEventListener('focus', () => {
+    if (document.getElementById('page-automation')?.classList.contains('active')) loadAutomationPage();
   });
 
   // 自动化分发：新建一个 Chat 会话并发送渲染后的提示词

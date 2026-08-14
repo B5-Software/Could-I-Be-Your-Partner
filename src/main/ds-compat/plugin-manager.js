@@ -590,6 +590,31 @@ class PluginManager {
     return this.list();
   }
 
+  /**
+   * 启动时全量兼容性重审：已启用的正常加载；禁用的做一次“加载→记录→立即卸载”
+   * 探测，清除旧版本遗留的 compatIssues（如早期缺少 agents seam 的记录），
+   * 让插件卡显示当前宿主能力的真实结论。
+   */
+  async refreshAll() {
+    for (const rec of this.plugins) {
+      try {
+        if (rec.enabled) {
+          await this.refreshPlugin(rec.id);
+          continue;
+        }
+        const res = await this.host.loadPlugin(rec.id, rec.entry, { name: rec.name, config: rec.config || {} });
+        rec.compatIssues = res.issues || [];
+        rec.tools = [];
+        rec.toolCount = 0;
+        await this.host.unloadPlugin(rec.id);
+      } catch (e) {
+        rec.compatIssues = [...(rec.compatIssues || []), `启动重审失败: ${e.message}`];
+      }
+    }
+    this.save();
+    return this.list();
+  }
+
   _public(rec) {
     return {
       id: rec.id,

@@ -2714,43 +2714,6 @@
     </div>
   </div>
 
-  <!-- Automation Editor Modal -->
-  <div class="modal-overlay hidden" id="automation-editor-modal">
-    <div class="modal" style="max-width:760px">
-      <div class="modal-header">
-        <h3><i class="fa-solid fa-bolt"></i> 自动化任务</h3>
-        <button class="btn-icon" id="btn-close-automation-editor" title="关闭">
-          <i class="fa-solid fa-xmark"></i>
-        </button>
-      </div>
-      <div class="modal-body">
-        <div style="display:flex;gap:10px;align-items:center;margin-bottom:10px">
-          <input type="text" id="automation-name" placeholder="任务名称" style="flex:1">
-          <div class="toggle-switch" title="启用">
-            <input type="checkbox" id="automation-enabled" checked><span class="toggle-slider"></span>
-          </div>
-        </div>
-        <div style="display:flex;gap:10px;align-items:center;margin-bottom:10px">
-          <label style="font-size:12px;color:var(--text-secondary)">触发类型</label>
-          <select id="automation-trigger-type" style="width:220px">
-            <option value="schedule">定时（cron）</option>
-            <option value="notification">系统通知</option>
-            <option value="http">HTTP 信号服务器</option>
-          </select>
-        </div>
-        <div id="automation-trigger-config" style="margin-bottom:10px"></div>
-        <label style="font-size:12px;color:var(--text-secondary);display:block;margin-bottom:4px">提示词构造 DSL（返回字符串；内置 str/arr/num/math/time/json/text/uuid/env/fetch 标准库，trigger 与 args 为入参）</label>
-        <div id="automation-dsl-editor" style="height:320px;border:1px solid var(--border);border-radius:8px;overflow:hidden"></div>
-        <p id="automation-editor-error" style="font-size:11px;color:var(--danger);display:none;margin:8px 0 0"></p>
-      </div>
-      <div class="modal-footer">
-        <button class="btn-secondary" id="btn-automation-test"><i class="fa-solid fa-flask"></i> 测试渲染</button>
-        <button class="btn-secondary" id="btn-cancel-automation-editor">取消</button>
-        <button class="btn-primary" id="btn-save-automation"><i class="fa-solid fa-check"></i> 保存</button>
-      </div>
-    </div>
-  </div>
-
   <!-- DeepSeek 插件授权 Modal（approval seam → 用户裁决） -->
   <div class="modal-overlay hidden" id="ds-approval-modal">
     <div class="modal" style="max-width:520px">

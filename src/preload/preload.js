@@ -488,6 +488,7 @@ contextBridge.exposeInMainWorld('api', {
   automationSetEnabled: (id, enabled) => ipcRenderer.invoke('automation:setEnabled', id, enabled),
   automationRun: (id, params) => ipcRenderer.invoke('automation:run', id, params),
   automationTest: (task, params) => ipcRenderer.invoke('automation:test', task, params),
+  openAutomationEditor: (id) => ipcRenderer.invoke('automation-editor:open', id ? { id } : {}),
   detectEnvironment: () => ipcRenderer.invoke('env:detect'),
   onPluginsChanged: (cb) => {
     const listener = () => cb();

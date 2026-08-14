@@ -726,6 +726,7 @@ let knowledge = loadJSON(knowledgePath, []);
 let mainWindow;
 let appTray = null;
 let skillEditorWindow = null;
+let automationEditorWindow = null;
 let isQuitting = false;
 // 语音子系统句柄（voice-ipc.js initVoice 返回值，app ready 后赋值）
 let voiceIpc = null;
@@ -1312,6 +1313,10 @@ ipcMain.handle('ds:approvalRespond', (_, id, outcome) => {
 
 // ---- 自动化任务 IPC ----
 ipcMain.handle('automation:list', () => ({ ok: true, tasks: automationManager.list(), server: automationManager.serverInfo() }));
+ipcMain.handle('automation:get', (_, id) => {
+  const task = automationManager.list().find(t => t.id === id);
+  return task ? { ok: true, task } : { ok: false, error: '任务不存在' };
+});
 ipcMain.handle('automation:save', (_, task) => {
   try { return { ok: true, task: automationManager.upsert(task) }; }
   catch (e) { return { ok: false, error: e.message }; }
@@ -1338,6 +1343,38 @@ ipcMain.on('automation:dispatched', (event, requestId, payload) => {
   if (!settle) return;
   dsRequestPending.delete(requestId);
   settle(payload || {});
+});
+
+// ---- 自动化编辑器独立窗口 ----
+ipcMain.handle('automation-editor:open', (_, payload = {}) => {
+  if (automationEditorWindow && !automationEditorWindow.isDestroyed()) {
+    automationEditorWindow.webContents.send('automation-editor:open-request', payload);
+    automationEditorWindow.focus();
+    return { ok: true };
+  }
+  automationEditorWindow = new BrowserWindow({
+    width: 1240, height: 860, minWidth: 960, minHeight: 660,
+    title: '自动化任务编辑器',
+    frame: false,
+    titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'hidden',
+    backgroundColor: settings.theme?.backgroundColor || '#f5f7fa',
+    icon: path.join(__dirname, '../../assets/icons/icon.png'),
+    webPreferences: {
+      preload: path.join(__dirname, '../preload/automation-editor-preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false
+    }
+  });
+  const query = {};
+  if (payload?.id) query.id = String(payload.id);
+  automationEditorWindow.loadFile(path.join(__dirname, '../renderer/pages/automation-editor.html'), { query });
+  automationEditorWindow.on('closed', () => { automationEditorWindow = null; });
+  return { ok: true };
+});
+ipcMain.handle('automation-editor:close', () => {
+  if (automationEditorWindow && !automationEditorWindow.isDestroyed()) automationEditorWindow.close();
+  return { ok: true };
 });
 
 // ---- 环境检测（Python / Node+npm / Bun / Git）----
@@ -5167,7 +5204,7 @@ const pwService = registerPlaywrightIpc({
 // Auto-connect configured MCP servers on startup
 app.whenReady().then(async () => {
   // 启动时加载已启用的 DeepSeek 插件（失败仅记录，不阻断启动）
-  try { await pluginManager.loadEnabled(); } catch (e) { console.warn('[DS Plugins] 启动加载失败:', e.message); }
+  try { await pluginManager.refreshAll(); } catch (e) { console.warn('[DS Plugins] 启动加载失败:', e.message); }
   // 启动自动化任务调度循环（cron / 通知 / HTTP 信号服务器）
   try { automationManager.start(); } catch (e) { console.warn('[automation] 启动失败:', e.message); }
 
