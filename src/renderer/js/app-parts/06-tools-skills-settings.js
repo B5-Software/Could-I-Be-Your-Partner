@@ -890,6 +890,8 @@
 
   async function loadSettingsPage() {
     const s = await window.api.getSettings();
+    populateFontSelects(s);
+    applyFontSettings(s);
     document.getElementById('setting-llm-url').value = s.llm.apiUrl || '';
     document.getElementById('setting-llm-key').value = s.llm.apiKey || '';
     document.getElementById('setting-llm-model').value = s.llm.model || '';
@@ -2827,6 +2829,8 @@
     const current = await window.api.getSettings();
     const merged = { ...current, ...updates };
     await window.api.setSettings(merged);
+    // 全局字体即时生效
+    if (typeof applyFontSettings === 'function') applyFontSettings(merged);
     // 即时生效：更新 maxTokens + 重算 systemPrompt（persona/llm 变更后立即生效，无需重启）
     if (typeof agent.applySettings === 'function') {
       agent.applySettings(merged);

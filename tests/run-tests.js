@@ -2414,6 +2414,55 @@ test('i18n 环境检测标签翻译（zh/en/de）', () => {
   assert.ok(deJs.includes('environment:'), 'de.js 应有 environment 翻译');
 });
 
+// ---- Global Fonts ----
+console.log('\nGlobal Fonts:');
+
+test('index.html 含字体设置页（tab + zh/en/de 三选器）', () => {
+  const htmlContent = fs.readFileSync(require('path').join(__dirname, '../src/renderer/pages/index.html'), 'utf-8');
+  assert.ok(htmlContent.includes('data-tab="fonts"'), '应有字体 tab');
+  for (const lang of ['zh', 'en', 'de']) {
+    assert.ok(htmlContent.includes(`id="setting-font-${lang}"`), `应有 ${lang} 字体选择器`);
+  }
+});
+
+test('全局字体栈：内置自由字体 + 默认外观不变', () => {
+  const mainCss = fs.readFileSync(require('path').join(__dirname, '../src/renderer/css/main.css'), 'utf-8');
+  const initJs = fs.readFileSync(require('path').join(__dirname, '../src/renderer/js/app-parts/01-app-init.js'), 'utf-8');
+  for (const family of ['Noto Sans SC', 'LXGW WenKai', 'Noto Serif SC', 'Inter', 'Source Sans 3', 'Noto Sans']) {
+    assert.ok(mainCss.includes(`font-family: '${family}'`), `应有 ${family} @font-face`);
+  }
+  assert.ok(mainCss.includes('font-family: var(--font-stack)'), 'body 应使用字体栈变量');
+  assert.ok(mainCss.includes('-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC"'), '默认栈应等于现有外观');
+  assert.ok(initJs.includes('function applyFontSettings'), '应有 applyFontSettings');
+  assert.ok(initJs.includes('applyFontSettings(s)'), '启动时应应用已保存字体');
+  assert.ok(initJs.includes("['en', 'de', 'zh']"), '字体栈应按 en→de→zh 组装');
+  assert.ok(initJs.includes('FONT_OPTIONS'), '应有内置字体选项表');
+});
+
+test('资源下载脚本同步内置字体（OFL 自由字体）', () => {
+  const script = fs.readFileSync(require('path').join(__dirname, '../scripts/download-voice-models.js'), 'utf-8');
+  for (const family of ['Noto Sans SC', 'Noto Serif SC', 'LXGW WenKai', 'Inter', 'Source Sans 3', 'Noto Sans']) {
+    assert.ok(script.includes(family), `下载脚本应包含 ${family}`);
+  }
+  assert.ok(script.includes('assets/ui-fonts'), '字体应下载到 assets/ui-fonts');
+  assert.ok(script.includes('SIL OFL 1.1'), '应标注 OFL 许可');
+  assert.ok(script.includes('writeFontLicenses'), '应生成许可说明');
+  const pkg = JSON.parse(fs.readFileSync(require('path').join(__dirname, '../package.json'), 'utf8'));
+  assert.ok(pkg.build.asarUnpack.includes('assets/ui-fonts/**/*'), '字体应加入 asarUnpack');
+});
+
+test('字体设置 i18n（zh/en/de）与 app.js 集成', () => {
+  const i18nJs = fs.readFileSync(require('path').join(__dirname, '../src/renderer/js/i18n.js'), 'utf-8');
+  const enJs = fs.readFileSync(require('path').join(__dirname, '../src/renderer/js/i18n/en.js'), 'utf-8');
+  const deJs = fs.readFileSync(require('path').join(__dirname, '../src/renderer/js/i18n/de.js'), 'utf-8');
+  const appContent = fs.readFileSync(require('path').join(__dirname, '../src/renderer/js/app.js'), 'utf-8');
+  assert.ok(i18nJs.includes('data-tab="fonts"]'), 'i18n.js 应映射 fonts tab');
+  assert.ok(enJs.includes('fonts:') && enJs.includes('zhLabel'), 'en.js 应有字体翻译');
+  assert.ok(deJs.includes('fonts:') && deJs.includes('zhLabel'), 'de.js 应有字体翻译');
+  assert.ok(appContent.includes('applyFontSettings'), 'app.js 应含字体应用逻辑');
+  assert.ok(appContent.includes('populateFontSelects'), 'app.js 应含字体下拉填充');
+});
+
 // ---- Summary ----
 (async () => {
   // 等待异步 LLM 测试完成

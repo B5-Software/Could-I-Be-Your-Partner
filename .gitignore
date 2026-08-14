@@ -25,6 +25,9 @@ node_modules/
 assets/fonts/
 assets/webfonts/
 
+# 内置 UI 字体（构建期由 scripts/download-voice-models.js 下载，OFL 自由字体）
+assets/ui-fonts/
+
 # GeoGebra
 # deployggb.js 注入脚本
 assets/geogebra/

@@ -757,6 +757,7 @@
             <button class="settings-tab" data-tab="budget"><i class="fa-solid fa-wallet"></i> 预算控制</button>
             <button class="settings-tab" data-tab="image"><i class="fa-solid fa-image"></i> 生图</button>
             <button class="settings-tab" data-tab="theme"><i class="fa-solid fa-palette"></i> 主题</button>
+            <button class="settings-tab" data-tab="fonts"><i class="fa-solid fa-font"></i> 字体</button>
             <button class="settings-tab" data-tab="language"><i class="fa-solid fa-language"></i> 语言</button>
             <button class="settings-tab" data-tab="network"><i class="fa-solid fa-network-wired"></i> 网络</button>
             <button class="settings-tab" data-tab="entropy"><i class="fa-solid fa-dice"></i> 熵源</button>
@@ -2489,6 +2490,29 @@
                 <h3><i class="fa-solid fa-list-check"></i> 检测结果</h3>
                 <div id="env-detect-list" style="display:flex;flex-direction:column;gap:10px"></div>
                 <div id="env-detect-actions" style="margin-top:12px"></div>
+              </div>
+            </div>
+            <div class="settings-panel" data-tab="fonts">
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-font"></i> 全局字体</h3>
+                <div class="setting-item">
+                  <p class="setting-hint">内置多款自由字体（SIL OFL 开源协议），可按语言分别配置。选择后立即全局生效；保持“系统默认”即维持当前外观。</p>
+                </div>
+                <div class="setting-item">
+                  <label class="setting-label" data-i18n="ui.settings.fonts.zhLabel">中文字体（zh）</label>
+                  <select id="setting-font-zh" style="width:320px;max-width:100%"></select>
+                  <p class="setting-hint">中文字形（含 CJK）使用该字体。</p>
+                </div>
+                <div class="setting-item">
+                  <label class="setting-label" data-i18n="ui.settings.fonts.enLabel">英文字体（en）</label>
+                  <select id="setting-font-en" style="width:320px;max-width:100%"></select>
+                  <p class="setting-hint">拉丁字形优先使用该字体；未选择时回退到德文字体。</p>
+                </div>
+                <div class="setting-item">
+                  <label class="setting-label" data-i18n="ui.settings.fonts.deLabel">德文字体（de）</label>
+                  <select id="setting-font-de" style="width:320px;max-width:100%"></select>
+                  <p class="setting-hint">英文字体未选择时，拉丁字形（含德文变音符号 ä ö ü ß）使用该字体。</p>
+                </div>
               </div>
             </div>
           </div>

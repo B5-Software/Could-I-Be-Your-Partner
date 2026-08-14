@@ -113,7 +113,13 @@ ui: {
       ime: 'Tastatur / IME',
       voice: 'Sprach-E/A',
       language: 'Sprache',
-      environment: 'Umgebung'
+      environment: 'Umgebung',
+      fonts: 'Schriftarten'
+    },
+    fonts: {
+      zhLabel: 'Chinesische Schrift (zh)',
+      enLabel: 'Englische Schrift (en)',
+      deLabel: 'Deutsche Schrift (de)'
     },
     name: 'Name',
     avatar: 'Avatar',

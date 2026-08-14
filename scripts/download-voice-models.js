@@ -4,8 +4,9 @@
  *
  * This file is part of Could I Be Your Partner.
  *
- * 构建期模型下载脚本：从 HuggingFace / GitHub Releases 下载 sherpa-onnx 语音模型
- * 到 assets/voice-models/，打包时随 app.asar.unpacked 一起分发。
+ * 构建期资源下载脚本：从 HuggingFace / GitHub Releases / Google Fonts 下载
+ * sherpa-onnx 语音模型（assets/voice-models/）与内置 UI 字体（assets/ui-fonts/），
+ * 打包时随 app.asar.unpacked 一起分发。
  *
  * 模型清单：
  *   - KWS 唤醒词: zipformer zh-en 3M (2025-12-20, GitHub Release tar.bz2)
@@ -94,6 +95,69 @@ const MODELS = [
   },
 ];
 
+// ========== UI 字体清单（全部为自由字体，SIL OFL 1.1）==========
+const FONT_OUT = path.resolve(__dirname, '..', 'assets', 'ui-fonts');
+const FONTS = [
+  {
+    name: 'noto-sans-sc',
+    family: 'Noto Sans SC',
+    url: 'https://raw.githubusercontent.com/google/fonts/main/ofl/notosanssc/NotoSansSC%5Bwght%5D.ttf',
+    dest: 'NotoSansSC[wght].ttf',
+    upstream: 'google/fonts（思源黑体官方发行）'
+  },
+  {
+    name: 'noto-serif-sc',
+    family: 'Noto Serif SC',
+    url: 'https://raw.githubusercontent.com/google/fonts/main/ofl/notoserifsc/NotoSerifSC%5Bwght%5D.ttf',
+    dest: 'NotoSerifSC[wght].ttf',
+    upstream: 'google/fonts（思源宋体官方发行）'
+  },
+  {
+    name: 'lxgw-wenkai',
+    family: 'LXGW WenKai',
+    url: 'https://github.com/lxgw/LxgwWenKai/releases/download/v1.522/LXGWWenKai-Regular.ttf',
+    dest: 'LXGWWenKai-Regular.ttf',
+    upstream: 'github.com/lxgw/LxgwWenKai v1.522'
+  },
+  {
+    name: 'inter',
+    family: 'Inter',
+    url: 'https://raw.githubusercontent.com/google/fonts/main/ofl/inter/Inter%5Bopsz%2Cwght%5D.ttf',
+    dest: 'Inter[opsz,wght].ttf',
+    upstream: 'google/fonts（rsms/inter）'
+  },
+  {
+    name: 'source-sans-3',
+    family: 'Source Sans 3',
+    url: 'https://raw.githubusercontent.com/google/fonts/main/ofl/sourcesans3/SourceSans3%5Bwght%5D.ttf',
+    dest: 'SourceSans3[wght].ttf',
+    upstream: 'google/fonts（Adobe Source Sans 3）'
+  },
+  {
+    name: 'noto-sans',
+    family: 'Noto Sans',
+    url: 'https://raw.githubusercontent.com/google/fonts/main/ofl/notosans/NotoSans%5Bwdth%2Cwght%5D.ttf',
+    dest: 'NotoSans[wdth,wght].ttf',
+    upstream: 'google/fonts'
+  }
+];
+
+function writeFontLicenses() {
+  const lines = [
+    '# UI 字体许可',
+    '',
+    '本目录字体随应用离线分发，均为自由字体（SIL Open Font License 1.1）。',
+    '',
+    '| 字体 | 上游来源 | 许可 |',
+    '| --- | --- | --- |',
+    ...FONTS.map(f => `| ${f.family} | ${f.upstream} | SIL OFL 1.1 |`),
+    '',
+    '完整许可证文本见各字体上游仓库。',
+    ''
+  ];
+  fs.writeFileSync(path.join(FONT_OUT, 'LICENSES.md'), lines.join('\n'), 'utf8');
+}
+
 // ========== 工具函数 ==========
 function ensureDir(dir) {
   fs.mkdirSync(dir, { recursive: true });
@@ -142,7 +206,10 @@ function downloadFileOnce(url, dest) {
   const aria2 = aria2Available();
   if (aria2) {
     console.log(`[voice-models] 下载(aria2): ${url}`);
-    const r = spawnSync(aria2, ['-x', '8', '-s', '8', '-d', path.dirname(dest), '-o', path.basename(dest), url], {
+    // aria2 不读取 http_proxy/https_proxy 环境变量，需要显式传 --all-proxy
+    const proxy = process.env.https_proxy || process.env.HTTPS_PROXY || process.env.http_proxy || process.env.HTTP_PROXY || '';
+    const proxyArgs = proxy ? ['--all-proxy=' + proxy] : [];
+    const r = spawnSync(aria2, ['-x', '8', '-s', '8', '-d', path.dirname(dest), '-o', path.basename(dest), ...proxyArgs, url], {
       stdio: 'inherit', shell: false,
     });
     if (r.status === 0 && fs.existsSync(dest) && fs.statSync(dest).size > 0) return null;
@@ -185,6 +252,7 @@ function listHfDirFiles(repo, dir) {
     try {
       let mayHaveMore = true;
       let guard = 0;
+      const seenCursors = new Set();
       while (mayHaveMore && guard++ < 500) {
         const dirPath = dir.split('/').map(encodeURIComponent).join('/');
         // limit=128 强制分页，保证即使服务端默认单页很大也按游标逐页取全（确定性枚举）
@@ -193,7 +261,7 @@ function listHfDirFiles(repo, dir) {
           (cursor ? `&cursor=${encodeURIComponent(cursor)}` : '');
         const hdrFile = path.join(tmpDir, `hd-${guard}.txt`);
         const bodyFile = path.join(tmpDir, `bd-${guard}.json`);
-        execSync(`curl -sL -D "${hdrFile}" -o "${bodyFile}" "${apiUrl}"`, {
+        execSync(`curl -sL --connect-timeout 30 --max-time 120 -D "${hdrFile}" -o "${bodyFile}" "${apiUrl}"`, {
           encoding: 'utf8', stdio: 'pipe', maxBuffer: 8 * 1024 * 1024,
         });
         const page = JSON.parse(fs.readFileSync(bodyFile, 'utf8'));
@@ -202,8 +270,18 @@ function listHfDirFiles(repo, dir) {
         }
         const link = fs.existsSync(hdrFile) ? fs.readFileSync(hdrFile, 'utf8') : '';
         const nextCursor = parseNextCursor(link);
-        if (!nextCursor) mayHaveMore = false;
-        else cursor = nextCursor;
+        // 防御镜像源 cursor 死循环（hf-mirror 会在末页回卷到第 0 页的 cursor）
+        if (nextCursor) {
+          if (seenCursors.has(nextCursor)) {
+            console.warn(`[voice-models] 分页游标重复(${dir}，第 ${guard} 页)，判定枚举完成`);
+            mayHaveMore = false;
+          } else {
+            seenCursors.add(nextCursor);
+            cursor = nextCursor;
+          }
+        } else {
+          mayHaveMore = false;
+        }
         try { fs.unlinkSync(hdrFile); fs.unlinkSync(bodyFile); } catch (_) {}
       }
       ok = true;
@@ -319,6 +397,18 @@ function main() {
       console.error(`[voice-models] ${m.name} 下载失败:`, e.message);
     }
   }
+  // UI 字体：复用同一套 aria2c → curl 下载引擎
+  console.log('[ui-fonts] 开始下载 UI 字体（目标:', FONT_OUT, ')');
+  ensureDir(FONT_OUT);
+  for (const f of FONTS) {
+    try {
+      downloadFile(f.url, path.join(FONT_OUT, f.dest), `[ui-fonts] ${f.family}`);
+    } catch (e) {
+      hasError = true;
+      console.error(`[ui-fonts] ${f.name} 下载失败:`, e.message);
+    }
+  }
+  try { writeFontLicenses(); } catch (e) { console.warn('[ui-fonts] 写入许可证说明失败:', e.message); }
   // piper-de espeak-ng-data 符号链接（软链接指向 kokoro 目录，构建时实际文件在同一 volume）
   // 在 Windows 上复制目录作为后备
   const piperDir = path.join(OUT, 'tts/vits-piper-de_DE-thorsten-medium');
@@ -336,7 +426,7 @@ function main() {
     console.error('[voice-models] 存在下载失败，以非零退出码终止构建');
     process.exitCode = 1;
   } else {
-    console.log('[voice-models] 模型下载完成');
+    console.log('[voice-models] 语音模型与 UI 字体下载完成');
   }
 }
 

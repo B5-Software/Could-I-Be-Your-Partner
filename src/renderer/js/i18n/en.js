@@ -101,7 +101,13 @@ const EN_DICT = {
         ime: 'Keyboard / IME',
         voice: 'Voice',
         language: 'Language',
-        environment: 'Environment'
+        environment: 'Environment',
+        fonts: 'Fonts'
+      },
+      fonts: {
+        zhLabel: 'Chinese font (zh)',
+        enLabel: 'English font (en)',
+        deLabel: 'German font (de)'
       },
       labels: {
         name: 'Name',
