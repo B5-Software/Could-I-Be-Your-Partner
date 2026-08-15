@@ -21,10 +21,13 @@
     .splash {
       width: 100%; height: 100%;
       border-radius: 16px;
-      background: linear-gradient(160deg, #23262e 0%, #17181d 100%);
+      background: linear-gradient(160deg,
+        color-mix(in srgb, var(--splash-bg) 100%, white 6%),
+        var(--splash-bg) 100%);
       display: flex; flex-direction: column; align-items: center; justify-content: center;
       gap: 18px;
-      color: #e6e8ef;
+      color: var(--splash-fg);
+      font-family: var(--splash-font, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif);
     }
     .icon {
       width: 88px; height: 88px;
@@ -36,12 +39,62 @@
     }
     .spinner {
       width: 26px; height: 26px;
-      border: 3px solid rgba(230, 232, 239, 0.18);
-      border-top-color: #5aa2ff;
+      border: 3px solid var(--splash-spin-bg);
+      border-top-color: var(--splash-accent);
       border-radius: 50%;
       animation: spin 0.9s linear infinite;
     }
     @keyframes spin { to { transform: rotate(360deg); } }
+    .version {
+      position: absolute;
+      bottom: 14px;
+      font-size: 11px;
+      opacity: 0.45;
+      letter-spacing: 0.3px;
+    }
+    /* 内置自由字体（OFL，与主界面 main.css 同一批 assets/ui-fonts；缺失时回退系统字体） */
+    @font-face {
+      font-family: 'Noto Sans SC';
+      src: url('../../../assets/ui-fonts/NotoSansSC[wght].ttf') format('truetype');
+      font-weight: 100 900;
+      font-style: normal;
+      font-display: swap;
+    }
+    @font-face {
+      font-family: 'LXGW WenKai';
+      src: url('../../../assets/ui-fonts/LXGWWenKai-Regular.ttf') format('truetype');
+      font-weight: 100 900;
+      font-style: normal;
+      font-display: swap;
+    }
+    @font-face {
+      font-family: 'Noto Serif SC';
+      src: url('../../../assets/ui-fonts/NotoSerifSC[wght].ttf') format('truetype');
+      font-weight: 100 900;
+      font-style: normal;
+      font-display: swap;
+    }
+    @font-face {
+      font-family: 'Inter';
+      src: url('../../../assets/ui-fonts/Inter[opsz,wght].ttf') format('truetype');
+      font-weight: 100 900;
+      font-style: normal;
+      font-display: swap;
+    }
+    @font-face {
+      font-family: 'Source Sans 3';
+      src: url('../../../assets/ui-fonts/SourceSans3[wght].ttf') format('truetype');
+      font-weight: 100 900;
+      font-style: normal;
+      font-display: swap;
+    }
+    @font-face {
+      font-family: 'Noto Sans';
+      src: url('../../../assets/ui-fonts/NotoSans[wdth,wght].ttf') format('truetype');
+      font-weight: 100 900;
+      font-style: normal;
+      font-display: swap;
+    }
   </style>
 </head>
 <body>
@@ -49,6 +102,23 @@
     <img class="icon" src="../../../assets/icons/icon.png" alt="">
     <div class="name">Could I Be Your Partner</div>
     <div class="spinner"></div>
+    <div class="version" id="version"></div>
   </div>
+  <script>
+    // 主题参数由主进程经 query 传入（跟随设置中的深浅色/强调色/背景色/自定义字体）
+    const q = new URLSearchParams(location.search);
+    const dark = q.get('dark') !== '0';
+    const accent = q.get('accent') || '4f8cff';
+    const bg = q.get('bg') || (dark ? '17181d' : 'f5f7fa');
+    const version = q.get('version') || '';
+    const font = q.get('font') || '';
+    const root = document.documentElement;
+    root.style.setProperty('--splash-accent', '#' + accent);
+    root.style.setProperty('--splash-bg', '#' + bg);
+    root.style.setProperty('--splash-fg', dark ? '#e6e8ef' : '#2a2d35');
+    root.style.setProperty('--splash-spin-bg', dark ? 'rgba(230,232,239,0.18)' : 'rgba(42,45,53,0.18)');
+    if (font) root.style.setProperty('--splash-font', "'" + font + "', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif");
+    document.getElementById('version').textContent = version ? 'v' + version : '';
+  </script>
 </body>
 </html>
