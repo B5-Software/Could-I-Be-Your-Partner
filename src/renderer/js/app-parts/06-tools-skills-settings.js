@@ -490,12 +490,12 @@
 
   document.getElementById('btn-close-skill-modal').addEventListener('click', () => {
     _resetSkillModalEditable();
-    document.getElementById('skill-modal').classList.add('hidden');
+    fadeOutHide(document.getElementById('skill-modal'));
   });
 
   document.getElementById('btn-cancel-skill').addEventListener('click', () => {
     _resetSkillModalEditable();
-    document.getElementById('skill-modal').classList.add('hidden');
+    fadeOutHide(document.getElementById('skill-modal'));
   });
 
   document.getElementById('btn-save-skill').addEventListener('click', async () => {
@@ -512,7 +512,7 @@
     if (typeof agent.refreshSkillsCatalog === 'function') await agent.refreshSkillsCatalog();
     agent.contextManager.setSystemPrompt(agent.getSystemPrompt());
     _resetSkillModalEditable();
-    document.getElementById('skill-modal').classList.add('hidden');
+    fadeOutHide(document.getElementById('skill-modal'));
     document.getElementById('skill-name').value = '';
     document.getElementById('skill-desc').value = '';
     document.getElementById('skill-prompt').value = '';
@@ -694,7 +694,7 @@
 
   function closeMemoryEditDialog(result) {
     const modal = document.getElementById('memory-edit-modal');
-    modal?.classList.add('hidden');
+    fadeOutHide(modal);
     if (memoryEditResolve) {
       memoryEditResolve(result);
       memoryEditResolve = null;
@@ -1020,6 +1020,15 @@
     if (notifPresentEl) notifPresentEl.checked = notif.present !== false;
     const notifBabeProactiveEl = document.getElementById('setting-notify-babe-proactive');
     if (notifBabeProactiveEl) notifBabeProactiveEl.checked = notif.babeProactive !== false;
+    const notifUpdateEl = document.getElementById('setting-notify-update');
+    if (notifUpdateEl) notifUpdateEl.checked = notif.updateAvailable !== false;
+    // Update-check settings
+    const upd = s.updates || {};
+    const updAutoEl = document.getElementById('setting-updates-auto');
+    if (updAutoEl) updAutoEl.checked = upd.autoCheckEnabled !== false;
+    const updIntervalEl = document.getElementById('setting-updates-interval');
+    if (updIntervalEl) updIntervalEl.value = String([6, 12, 24].includes(Number(upd.intervalHours)) ? Number(upd.intervalHours) : 6);
+    renderUpdateCheckResult(upd);
     // Language setting
     const langSelect = document.getElementById('setting-language');
     if (langSelect) langSelect.value = s.language || 'zh-CN';
@@ -2538,7 +2547,7 @@
     document.getElementById('plugin-config-modal')?.classList.remove('hidden');
   }
   function closePluginConfigModal() {
-    document.getElementById('plugin-config-modal')?.classList.add('hidden');
+    fadeOutHide(document.getElementById('plugin-config-modal'));
     pluginConfigTarget = null;
   }
   document.getElementById('btn-close-plugin-config')?.addEventListener('click', closePluginConfigModal);
@@ -3585,14 +3594,15 @@
     });
   }
 
-  // 通知开关 - 总开关 + 5 个分类 + 测试按钮
+  // 通知开关 - 总开关 + 分类 + 测试按钮
   const notifyToggles = [
     { id: 'setting-notify-enabled', key: 'enabled' },
     { id: 'setting-notify-approval', key: 'approval' },
     { id: 'setting-notify-session-done', key: 'sessionDone' },
     { id: 'setting-notify-question', key: 'question' },
     { id: 'setting-notify-present', key: 'present' },
-    { id: 'setting-notify-babe-proactive', key: 'babeProactive' }
+    { id: 'setting-notify-babe-proactive', key: 'babeProactive' },
+    { id: 'setting-notify-update', key: 'updateAvailable' }
   ];
   notifyToggles.forEach(({ id, key }) => {
     const el = document.getElementById(id);
@@ -3620,6 +3630,80 @@
       }
     });
   }
+
+  // ---- 更新检查（GitHub Releases）----
+  const updAutoEl = document.getElementById('setting-updates-auto');
+  updAutoEl?.addEventListener('change', async () => {
+    const s = await window.api.getSettings();
+    if (!s.updates) s.updates = {};
+    s.updates.autoCheckEnabled = updAutoEl.checked;
+    const r = await window.api.updatesSave({ autoCheckEnabled: updAutoEl.checked });
+    if (r?.ok) s.updates = r.updates;
+    await saveSettings(s);
+  });
+  const updIntervalEl = document.getElementById('setting-updates-interval');
+  updIntervalEl?.addEventListener('change', async () => {
+    const s = await window.api.getSettings();
+    if (!s.updates) s.updates = {};
+    s.updates.intervalHours = Number(updIntervalEl.value);
+    const r = await window.api.updatesSave({ intervalHours: Number(updIntervalEl.value) });
+    if (r?.ok) s.updates = r.updates;
+    await saveSettings(s);
+  });
+
+  // 渲染更新检查结果区（lastResult 快照或本次手动检查结果）
+  function renderUpdateCheckResult(upd, manual) {
+    const wrap = document.getElementById('updates-result-wrap');
+    const statusEl = document.getElementById('updates-check-status');
+    const currentEl = document.getElementById('updates-current-version');
+    const bodyEl = document.getElementById('updates-result-body');
+    const last = upd?.lastResult;
+    if (manual?.error) {
+      if (statusEl) { statusEl.textContent = '检查失败：' + manual.error; statusEl.style.color = 'var(--danger, #e05252)'; }
+      return;
+    }
+    if (!last && !manual) return;
+    const latest = manual?.latest || last;
+    const isNewer = manual ? !!manual.updateAvailable : (last?.updateAvailable === true);
+    const curVersion = (manual?.current || '').replace(/^v/i, '');
+    if (statusEl) {
+      statusEl.textContent = isNewer ? '发现新版本！' : '已是最新版本';
+      statusEl.style.color = 'var(--success, #4caf50)';
+    }
+    if (wrap) wrap.style.display = 'flex';
+    if (currentEl) currentEl.textContent = '当前版本：' + curVersion + ' · 最新版本：' + (latest?.version || '').replace(/^v/i, '');
+    if (bodyEl && latest) {
+      const tag = (latest.tagName || '').replace(/^v/i, '');
+      const body = (latest.body || '(该版本未提供更新说明)').replace(/```/g, '');
+      bodyEl.innerHTML = '';
+      const h = document.createElement('div');
+      h.style.marginBottom = '8px';
+      h.innerHTML = `<strong>${tag}${latest.prerelease ? ' <span style="color:var(--warning,#e6a23c)">(pre-release)</span>' : ''}</strong><span style="color:var(--text-tertiary);font-size:11px"> · 发布于 ${(latest.publishedAt || '').slice(0, 10)}</span>`;
+      const p = document.createElement('div');
+      p.style.whiteSpace = 'pre-wrap';
+      p.textContent = body;
+      bodyEl.appendChild(h);
+      bodyEl.appendChild(p);
+    }
+  }
+
+  const btnUpdatesCheck = document.getElementById('btn-updates-check');
+  btnUpdatesCheck?.addEventListener('click', async () => {
+    const statusEl = document.getElementById('updates-check-status');
+    if (statusEl) { statusEl.textContent = '检查中…'; statusEl.style.color = 'var(--text-secondary)'; }
+    try {
+      const r = await window.api.updatesCheck();
+      renderUpdateCheckResult({ lastResult: r?.ok ? { ...r.latest, updateAvailable: r.updateAvailable } : null }, r);
+    } catch (e) {
+      renderUpdateCheckResult({}, { error: e.message });
+    }
+  });
+  const btnUpdatesOpenRelease = document.getElementById('btn-updates-open-release');
+  btnUpdatesOpenRelease?.addEventListener('click', async () => {
+    const s = await window.api.getSettings();
+    const url = s.updates?.lastResult?.htmlUrl;
+    await window.api.updatesOpenRelease(url);
+  });
 
   // Language settings save button
   const btnSaveLanguage = document.getElementById('btn-save-language');

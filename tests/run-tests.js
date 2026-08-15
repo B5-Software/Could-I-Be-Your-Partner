@@ -1454,6 +1454,325 @@ async function runLiveLLMTests() {
   }
 }
 
+// ---- Update Checker (GitHub Releases) ----
+console.log('\nUpdate Checker (GitHub Releases):');
+const updateChecker = require('../src/main/update-checker');
+
+test('compareVersions: 基本 semver 排序', () => {
+  assert.strictEqual(updateChecker.compareVersions('1.6.0', '1.7.0'), -1);
+  assert.strictEqual(updateChecker.compareVersions('1.7.0', '1.7.0'), 0);
+  assert.strictEqual(updateChecker.compareVersions('1.7.1', '1.7.0'), 1);
+  assert.strictEqual(updateChecker.compareVersions('2.0.0', '1.99.99'), 1);
+});
+
+test('compareVersions: 正式版 > pre-release；pre-release 数值段按数值比较', () => {
+  assert.strictEqual(updateChecker.compareVersions('1.7.0', '1.7.0-alpha.33'), 1);
+  assert.strictEqual(updateChecker.compareVersions('1.7.0-alpha.33', '1.7.0-alpha.32'), 1);
+  assert.strictEqual(updateChecker.compareVersions('1.7.0-alpha.2', '1.7.0-alpha.10'), -1);
+  assert.strictEqual(updateChecker.compareVersions('1.7.0-alpha', '1.7.0-alpha.1'), -1);
+});
+
+test('compareVersions: build metadata（+hash）忽略', () => {
+  assert.strictEqual(updateChecker.compareVersions('1.7.0-alpha.32+9f7f7fb', '1.7.0-alpha.32'), 0);
+  assert.strictEqual(updateChecker.compareVersions('v1.7.0', '1.7.0'), 0);
+});
+
+test('parseVersion: 非法版本返回 null', () => {
+  assert.strictEqual(updateChecker.parseVersion('abc'), null);
+  assert.strictEqual(updateChecker.parseVersion(''), null);
+  assert.strictEqual(updateChecker.parseVersion('1.7'), null);
+});
+
+test('pickLatestRelease: 过滤 draft，取 semver 最大（含 pre-release）', () => {
+  const releases = [
+    { tag_name: 'v1.6.0', draft: false, prerelease: false, html_url: 'u1', body: 'b1', published_at: '2026-01-01T00:00:00Z' },
+    { tag_name: 'v1.7.0-alpha.33', draft: true, prerelease: true, html_url: 'u2', body: 'b2', published_at: '2026-02-01T00:00:00Z' },
+    { tag_name: 'v1.7.0-alpha.32', draft: false, prerelease: true, html_url: 'u3', body: 'b3', published_at: '2026-01-15T00:00:00Z' }
+  ];
+  const latest = updateChecker.pickLatestRelease(releases);
+  assert.ok(latest, '应返回最新 release');
+  assert.strictEqual(latest.tagName, 'v1.7.0-alpha.32');
+  assert.strictEqual(latest.htmlUrl, 'u3');
+  assert.strictEqual(latest.body, 'b3');
+});
+
+test('pickLatestRelease: 空/无效输入返回 null', () => {
+  assert.strictEqual(updateChecker.pickLatestRelease([]), null);
+  assert.strictEqual(updateChecker.pickLatestRelease(null), null);
+  assert.strictEqual(updateChecker.pickLatestRelease([{ tag_name: 'x', draft: true }]), null);
+});
+
+// ---- OpenAI Responses API（llm-providers）----
+console.log('\nOpenAI Responses API（llm-providers）:');
+const llmProvidersMod = require('../src/main/llm-providers');
+
+test('buildResponsesRequest: 结构 / instructions / store:false / tools', () => {
+  const req = llmProvidersMod.buildResponsesRequest({
+    provider: 'openai-responses', apiUrl: 'https://api.openai.com/v1/responses', apiKey: 'sk-test', model: 'gpt-5.2', temperature: 0.7, maxResponseTokens: 4096
+  }, {
+    messages: [
+      { role: 'system', content: '你是助手' },
+      { role: 'user', content: '你好' }
+    ],
+    tools: [{ type: 'function', function: { name: 'get_weather', description: '查天气', parameters: { type: 'object', properties: { city: { type: 'string' } } } } }],
+    tool_choice: 'auto',
+    temperature: 0.3,
+    max_tokens: 2048,
+    stream: true
+  }, 'off');
+  assert.strictEqual(req.transport, 'responses');
+  assert.strictEqual(req.url, 'https://api.openai.com/v1/responses');
+  assert.strictEqual(req.headers['Authorization'], 'Bearer sk-test');
+  assert.strictEqual(req.body.model, 'gpt-5.2');
+  assert.strictEqual(req.body.instructions, '你是助手');
+  assert.strictEqual(req.body.store, false);
+  assert.strictEqual(req.body.stream, true);
+  assert.strictEqual(req.body.max_output_tokens, 2048);
+  assert.strictEqual(req.body.temperature, 0.3);
+  assert.deepStrictEqual(req.body.input, [{ type: 'input_text', text: '你好', role: 'user' }]);
+  assert.deepStrictEqual(req.body.tools, [{ type: 'function', name: 'get_weather', description: '查天气', parameters: { type: 'object', properties: { city: { type: 'string' } } } }]);
+  assert.deepStrictEqual(req.body.tool_choice, { type: 'auto' });
+});
+
+test('buildResponsesRequest: reasoning.effort 仅注入 gpt-5/o 系列且非 off', () => {
+  const mk = (model) => llmProvidersMod.buildResponsesRequest(
+    { provider: 'openai-responses', apiUrl: 'u', apiKey: '', model, temperature: 0.5 },
+    { messages: [{ role: 'user', content: 'hi' }] }, 'high');
+  assert.strictEqual(mk('gpt-5.2').body.reasoning?.effort, 'high');
+  assert.strictEqual(mk('o3').body.reasoning?.effort, 'high');
+  assert.strictEqual(mk('deepseek-chat').body.reasoning, undefined);
+  const off = llmProvidersMod.buildResponsesRequest(
+    { provider: 'openai-responses', apiUrl: 'u', apiKey: '', model: 'gpt-5.2', temperature: 0.5 },
+    { messages: [{ role: 'user', content: 'hi' }] }, 'off');
+  assert.strictEqual(off.body.reasoning, undefined);
+});
+
+test('buildResponsesRequest: response_format → text.format（json_object 与 json_schema）', () => {
+  const j1 = llmProvidersMod.buildResponsesRequest(
+    { provider: 'openai-responses', apiUrl: 'u', apiKey: '', model: 'gpt-5.2', temperature: 0.5 },
+    { messages: [{ role: 'user', content: 'hi' }], response_format: { type: 'json_object' } }, 'off');
+  assert.deepStrictEqual(j1.body.text, { format: { type: 'json_object' } });
+  const j2 = llmProvidersMod.buildResponsesRequest(
+    { provider: 'openai-responses', apiUrl: 'u', apiKey: '', model: 'gpt-5.2', temperature: 0.5 },
+    { messages: [{ role: 'user', content: 'hi' }], response_format: { type: 'json_schema', json_schema: { schema: { type: 'object', properties: { a: { type: 'string' } } } } } }, 'off');
+  assert.deepStrictEqual(j2.body.text, { format: { type: 'json_schema', name: 'output', schema: { type: 'object', properties: { a: { type: 'string' } } }, strict: false } });
+});
+
+test('convertMessagesToResponses: system→instructions / tool→function_call_output / assistant 工具调用→function_call / 图片→input_image', () => {
+  const { instructions, input } = llmProvidersMod.convertMessagesToResponses([
+    { role: 'system', content: 'A' },
+    { role: 'system', content: 'B' },
+    { role: 'user', content: 'hi' },
+    { role: 'assistant', content: '让我查下', tool_calls: [{ id: 'c1', type: 'function', function: { name: 'search', arguments: '{"q":"x"}' } }] },
+    { role: 'tool', tool_call_id: 'c1', content: '结果1' },
+    { role: 'user', content: [{ type: 'text', text: '看图' }, { type: 'image_url', image_url: { url: 'data:image/png;base64,AAA' } }] }
+  ]);
+  assert.strictEqual(instructions, 'A\n\nB');
+  assert.deepStrictEqual(input[0], { type: 'input_text', text: 'hi', role: 'user' });
+  assert.deepStrictEqual(input[1], { type: 'function_call', call_id: 'c1', name: 'search', arguments: '{"q":"x"}' });
+  assert.deepStrictEqual(input[2], { type: 'function_call_output', call_id: 'c1', output: '结果1' });
+  assert.deepStrictEqual(input[3], { type: 'input_text', text: '看图', role: 'user' });
+  assert.deepStrictEqual(input[4], { type: 'input_image', image_url: 'data:image/png;base64,AAA', role: 'user' });
+});
+
+test('parseResponsesResponse: output items → 统一 OpenAI shape + usage 透传', () => {
+  const data = {
+    status: 'completed',
+    output: [
+      { type: 'reasoning', summary: [{ text: '思考过程' }] },
+      { type: 'message', content: [{ type: 'output_text', text: '最终答案' }] },
+      { type: 'function_call', call_id: 'fc1', name: 'tool1', arguments: '{"a":1}' }
+    ],
+    usage: {
+      input_tokens: 100, output_tokens: 30,
+      input_tokens_details: { cached_tokens: 40 },
+      output_tokens_details: { reasoning_tokens: 20 }
+    }
+  };
+  const parsed = llmProvidersMod.parseResponsesResponse(data);
+  assert.strictEqual(parsed.choices[0].message.content, '最终答案');
+  assert.strictEqual(parsed.choices[0].message.reasoning, '思考过程');
+  assert.strictEqual(parsed.choices[0].message.tool_calls.length, 1);
+  assert.strictEqual(parsed.choices[0].message.tool_calls[0].function.name, 'tool1');
+  assert.strictEqual(parsed.choices[0].finish_reason, 'stop');
+  assert.strictEqual(parsed.usage.prompt_tokens, 100);
+  assert.strictEqual(parsed.usage.completion_tokens, 30);
+  assert.strictEqual(parsed.usage.total_tokens, 130);
+  assert.strictEqual(parsed.usage.cache_read_input_tokens, 40);
+  assert.strictEqual(parsed.usage.reasoning_output_tokens, 20);
+});
+
+test('parseLLMResponse: transport=responses 分支走 parseResponsesResponse', () => {
+  const parsed = llmProvidersMod.parseLLMResponse({
+    status: 'incomplete',
+    output: [{ type: 'message', content: [{ type: 'output_text', text: '超长截断' }] }],
+    usage: { input_tokens: 5, output_tokens: 6 }
+  }, 'responses');
+  assert.strictEqual(parsed.choices[0].message.content, '超长截断');
+  assert.strictEqual(parsed.choices[0].finish_reason, 'length');
+  assert.strictEqual(parsed.usage.total_tokens, 11);
+});
+
+test('buildOpenAIRequest: 流式请求带 stream_options.include_usage（Token 统计全链路）', () => {
+  const req = llmProvidersMod.buildLLMRequest(
+    { provider: 'openai-compat', apiUrl: 'https://x/v1/chat/completions', apiKey: 'k', model: 'm', temperature: 0.5 },
+    { messages: [{ role: 'user', content: 'hi' }], stream: true });
+  assert.deepStrictEqual(req.body.stream_options, { include_usage: true });
+  const nonStream = llmProvidersMod.buildLLMRequest(
+    { provider: 'openai-compat', apiUrl: 'https://x/v1/chat/completions', apiKey: 'k', model: 'm', temperature: 0.5 },
+    { messages: [{ role: 'user', content: 'hi' }], stream: false });
+  assert.strictEqual(nonStream.body.stream_options, undefined);
+});
+
+// ---- processResponsesEvent（流式 Responses 事件处理）----
+console.log('\nprocessResponsesEvent（流式 Responses）:');
+const { processResponsesEvent } = require('../src/main/llm-retry');
+
+function mkResponsesState() {
+  return {
+    fullContent: '', fullReasoning: '', toolCalls: [], finishReason: null, usage: null,
+    responsesToolBuffer: {}, finalizedToolIds: new Set()
+  };
+}
+
+test('processResponsesEvent: output_text / reasoning_summary delta 聚合', () => {
+  const s = mkResponsesState();
+  processResponsesEvent(s, { type: 'response.output_text.delta', item_id: 'o1', delta: '你好' });
+  processResponsesEvent(s, { type: 'response.output_text.delta', item_id: 'o1', delta: '世界' });
+  processResponsesEvent(s, { type: 'response.reasoning_summary_text.delta', item_id: 'r1', delta: '思考' });
+  assert.strictEqual(s.fullContent, '你好世界');
+  assert.strictEqual(s.fullReasoning, '思考');
+});
+
+test('processResponsesEvent: function_call_arguments delta + done → toolCalls', () => {
+  const s = mkResponsesState();
+  processResponsesEvent(s, { type: 'response.output_item.done', item: { type: 'function_call', id: 'fc1', call_id: 'call_1', name: 'search' } });
+  processResponsesEvent(s, { type: 'response.function_call_arguments.delta', item_id: 'fc1', delta: '{"q":' });
+  processResponsesEvent(s, { type: 'response.function_call_arguments.delta', item_id: 'fc1', delta: '"x"}' });
+  processResponsesEvent(s, { type: 'response.function_call_arguments.done', item_id: 'fc1' });
+  assert.strictEqual(s.toolCalls.length, 1);
+  assert.strictEqual(s.toolCalls[0].id, 'call_1');
+  assert.strictEqual(s.toolCalls[0].function.name, 'search');
+  assert.strictEqual(s.toolCalls[0].function.arguments, '{"q":"x"}');
+  // 重复 done 不重复入列
+  processResponsesEvent(s, { type: 'response.function_call_arguments.done', item_id: 'fc1' });
+  assert.strictEqual(s.toolCalls.length, 1);
+});
+
+test('processResponsesEvent: output_item.done 直接带完整 arguments 兜底', () => {
+  const s = mkResponsesState();
+  processResponsesEvent(s, { type: 'response.output_item.done', item: { type: 'function_call', id: 'fc9', call_id: 'call_9', name: 'tool', arguments: '{"full":true}' } });
+  assert.strictEqual(s.toolCalls.length, 1);
+  assert.strictEqual(s.toolCalls[0].function.arguments, '{"full":true}');
+});
+
+test('processResponsesEvent: response.completed → usage + finishReason（含缓存/推理透传）', () => {
+  const s = mkResponsesState();
+  processResponsesEvent(s, { type: 'response.completed', response: { status: 'incomplete', usage: { input_tokens: 50, output_tokens: 20, input_tokens_details: { cached_tokens: 10 }, output_tokens_details: { reasoning_tokens: 8 } } } });
+  assert.strictEqual(s.finishReason, 'length');
+  assert.strictEqual(s.usage.prompt_tokens, 50);
+  assert.strictEqual(s.usage.completion_tokens, 20);
+  assert.strictEqual(s.usage.total_tokens, 70);
+  assert.strictEqual(s.usage.cache_read_input_tokens, 10);
+  assert.strictEqual(s.usage.reasoning_output_tokens, 8);
+});
+
+// ---- 更新检查 / 通知 / 模态框 UI 接线 ----
+console.log('\n更新检查 / 通知 / 模态框 UI 接线:');
+const readSrc = (rel) => fs.readFileSync(path_.join(__dirname, '../src/' + rel), 'utf-8');
+const mainJsContent = readSrc('main/main.js');
+const preloadContent2 = readSrc('preload/preload.js');
+const indexHtmlContent = readSrc('renderer/pages/index.html');
+const settingsPartContent = readSrc('renderer/js/app-parts/06-tools-skills-settings.js');
+const appUtilsContent = readSrc('renderer/js/app-utils.js');
+const dlManagerContent = readSrc('renderer/js/download-manager.js');
+const chatUiContent = readSrc('renderer/js/app-parts/05-chat-ui.js');
+const historyContent = readSrc('renderer/js/app-parts/07-history-panels.js');
+const componentsCssContent = readSrc('renderer/css/components.css');
+const chatCssContent = readSrc('renderer/css/chat.css');
+const pcbedaCssContent = readSrc('renderer/css/pcbeda.css');
+const cipypcadCssContent = readSrc('renderer/css/cipypcad.css');
+const pcbedaJsContent = readSrc('renderer/js/pcbeda.js');
+const cipypcadJsContent = readSrc('renderer/js/cipypcad.js');
+
+test('main.js: updates 默认值（autoCheckEnabled/intervalHours/lastResult）+ notifications.updateAvailable', () => {
+  const d = mainJsContent.match(/updates:\s*\{[\s\S]*?autoCheckEnabled:\s*true[\s\S]*?intervalHours:\s*6[\s\S]*?lastCheckedAt:[\s\S]*?lastResult:\s*null[\s\S]*?\}/);
+  assert.ok(d, 'updates 默认值块未找到');
+  assert.ok(/updateAvailable:\s*true/.test(mainJsContent), 'notifications 默认缺少 updateAvailable');
+});
+
+test('main.js: updates:check / updates:save / updates:openRelease IPC + 自动检查调度', () => {
+  assert.ok(mainJsContent.includes("ipcMain.handle('updates:check'"), '缺 updates:check');
+  assert.ok(mainJsContent.includes("ipcMain.handle('updates:save'"), '缺 updates:save');
+  assert.ok(mainJsContent.includes("ipcMain.handle('updates:openRelease'"), '缺 updates:openRelease');
+  assert.ok(mainJsContent.includes('scheduleAutoUpdateCheck()'), '缺自动检查调度');
+  assert.ok(/setTimeout\(\(\) => \{ runAutoUpdateCheck\(\)\.catch/, mainJsContent, '缺启动延迟检查');
+  assert.ok(mainJsContent.includes('updates:check 手动检查不重复弹通知') || mainJsContent.includes('手动检查不重复弹通知'), '缺手动检查注释说明');
+  assert.ok(mainJsContent.includes("'openai-responses'"), 'main.js 缺 responses provider 分支');
+  assert.ok(/provider === 'openai-responses'[\s\S]{0,200}\/responses/.test(mainJsContent), 'llm:fetchModels 缺 responses 分支');
+});
+
+test('preload.js: updatesCheck / updatesSave / updatesOpenRelease 暴露', () => {
+  assert.ok(preloadContent2.includes('updatesCheck: () => ipcRenderer.invoke(\'updates:check\')'), '缺 updatesCheck');
+  assert.ok(preloadContent2.includes('updatesSave: (cfg) => ipcRenderer.invoke(\'updates:save\', cfg)'), '缺 updatesSave');
+  assert.ok(preloadContent2.includes('updatesOpenRelease: (url) => ipcRenderer.invoke(\'updates:openRelease\', url)'), '缺 updatesOpenRelease');
+});
+
+test('index.html: 「更新」tab（侧栏末尾 + 面板 + 手动检查 + 频率）+ 通知新分类 + provider 下拉×2', () => {
+  assert.ok(/settings-tab" data-tab="updates"/.test(indexHtmlContent), '侧栏缺「更新」tab');
+  assert.ok(/settings-panel" data-tab="updates"/.test(indexHtmlContent), '缺「更新」面板');
+  assert.ok(indexHtmlContent.includes('id="setting-updates-auto"'), '缺自动检查开关');
+  assert.ok(indexHtmlContent.includes('id="setting-updates-interval"'), '缺检查间隔下拉');
+  assert.ok(indexHtmlContent.includes('id="btn-updates-check"'), '缺立即检查按钮');
+  assert.ok(indexHtmlContent.includes('id="btn-updates-open-release"'), '缺打开 Releases 按钮');
+  assert.ok(indexHtmlContent.includes('id="setting-notify-update"'), '通知页缺「发现新版本」开关');
+  const providerSelect = (id) => {
+    const m = indexHtmlContent.match(new RegExp('id="' + id + '"[\\s\\S]*?<\\/select>'));
+    return m ? m[0] : '';
+  };
+  assert.ok(providerSelect('setting-llm-provider').includes('value="openai-responses"'), '设置页 provider 缺 Responses 选项');
+  assert.ok(providerSelect('ob-llm-provider').includes('value="openai-responses"'), '引导向导 provider 缺 Responses 选项');
+});
+
+test('06: notifyToggles 含 updateAvailable + loadSettingsPage 恢复更新设置', () => {
+  assert.ok(settingsPartContent.includes("{ id: 'setting-notify-update', key: 'updateAvailable' }"), 'notifyToggles 缺 updateAvailable');
+  assert.ok(settingsPartContent.includes("updAutoEl.checked = upd.autoCheckEnabled !== false"), 'loadSettingsPage 缺更新开关恢复');
+  assert.ok(settingsPartContent.includes('window.api.updatesSave'), '更新设置保存接线缺失');
+  assert.ok(settingsPartContent.includes('btnUpdatesCheck'), '立即检查接线缺失');
+});
+
+test('模态框渐显渐隐：CSS fadeIn 替换 slideUp/scale + fadeOut 机制', () => {
+  assert.ok(/\.modal \{[\s\S]*?animation: fadeIn 0\.25s ease;/.test(componentsCssContent), '.modal 未改为 fadeIn');
+  assert.ok(!/\.modal \{[\s\S]*?slideUp/.test(componentsCssContent), '.modal 仍用 slideUp');
+  assert.ok(componentsCssContent.includes('.modal-fade-out'), 'components.css 缺 .modal-fade-out');
+  assert.ok(componentsCssContent.includes('@keyframes fadeOut'), 'components.css 缺 fadeOut keyframes');
+  assert.ok(/\.tools-modal-backdrop\.open \.tools-modal \{[\s\S]*?fadeIn/.test(componentsCssContent), '工具组内层缺 open 渐显');
+  assert.ok(/\.sub-agent-modal-dialog \{[\s\S]*?animation: fadeIn 0\.2s ease;/.test(chatCssContent), '子代理弹窗未改 fadeIn');
+  assert.ok(!chatCssContent.includes('subAgentModalIn'), 'subAgentModalIn 应已删除');
+  assert.ok(/\.pcb-modal \{[\s\S]*?animation: fadeIn/.test(pcbedaCssContent), 'pcbeda.css 缺 fadeIn');
+  assert.ok(pcbedaCssContent.includes('.pcb-modal.modal-fade-out'), 'pcbeda.css 缺渐隐规则');
+  assert.ok(/\.cad-modal \{[\s\S]*?animation: cadFadeIn/.test(cipypcadCssContent), 'cipypcad 内层缺渐显');
+  assert.ok(cipypcadCssContent.includes('@keyframes cadFadeOut'), 'cipypcad 缺 cadFadeOut');
+});
+
+test('模态框渐隐：app-utils helper + 关闭点接线', () => {
+  assert.ok(/function fadeOutHide\(el, cb\)/.test(appUtilsContent), 'app-utils 缺 fadeOutHide');
+  assert.ok(/function fadeOutRemove\(el, cb\)/.test(appUtilsContent), 'app-utils 缺 fadeOutRemove');
+  assert.ok(appUtilsContent.includes('MODAL_FADE_MS = 200'), '渐隐时长常量缺失');
+  // 主应用关闭点
+  assert.ok(chatUiContent.includes('fadeOutRemove(modal)'), '子代理弹窗关闭未接 fadeOutRemove');
+  assert.ok(chatUiContent.includes('fadeOutHide(imagePreviewModal)'), '图片预览关闭未接');
+  assert.ok(chatUiContent.includes('fadeOutHide(toolAuthModal, () =>'), '工具授权镜像关闭未接');
+  assert.ok(historyContent.includes('fadeOutHide(modal)'), 'confirm/message 关闭未接');
+  assert.ok(historyContent.includes('fadeOutRemove(overlay)'), '动态 input/confirm 关闭未接');
+  assert.ok(dlManagerContent.includes('fadeOutHide($(MODAL_ID))'), '下载管理器关闭未接');
+  assert.ok(dlManagerContent.includes('fadeOutHide($(ADD_MODAL_ID))'), '添加下载关闭未接');
+  assert.ok(mainJsContent.includes('fadeOutHide') === false, 'main.js 不应出现渲染层 helper');
+  // 子应用关闭点
+  assert.ok(pcbedaJsContent.includes('modal-fade-out'), 'pcbeda showModal 缺渐隐');
+  assert.ok(cipypcadJsContent.includes("classList.add('modal-fade-out')"), 'cipypcad hideSavePrompt 缺渐隐');
+});
+
 // ---- IME Engine ----
 console.log('\nIME Engine:');
 const ImeEngine = require('../src/renderer/js/oskey/ime-engine.js');

@@ -53,6 +53,9 @@ function buildLLMRequest(llm, opts) {
   if (provider === 'anthropic-compat') {
     return buildAnthropicRequest(llm, opts, reasoningEffort);
   }
+  if (provider === 'openai-responses') {
+    return buildResponsesRequest(llm, opts, reasoningEffort);
+  }
   // default: openai-compat
   return buildOpenAIRequest(llm, opts, reasoningEffort);
 }
@@ -67,6 +70,9 @@ function buildOpenAIRequest(llm, opts, reasoningEffort) {
     max_tokens: opts.max_tokens ?? llm.maxResponseTokens ?? 8192,
     stream: !!opts.stream
   };
+  // 流式请求附带 usage 统计（include_usage）→ 流式 Token 统计不再依赖估算
+  // 兼容端点不支持时仅回退到估算，不影响请求本身
+  if (opts.stream) body.stream_options = { include_usage: true };
   if (opts.tools && opts.tools.length > 0) {
     body.tools = opts.tools;
     if (opts.tool_choice) body.tool_choice = opts.tool_choice;
@@ -98,6 +104,175 @@ function buildOpenAIRequest(llm, opts, reasoningEffort) {
     headers: openaiHeaders,
     body,
     transport: 'openai'
+  };
+}
+
+// ---- OpenAI Responses API (v1/responses) ----
+// 新版 OpenAI Responses API：input items 替代 messages，instructions 替代 system。
+// 输出为 output items（message/reasoning/function_call），usage 用 input/output_tokens。
+function buildResponsesRequest(llm, opts, reasoningEffort) {
+  const url = llm.apiUrl; // full URL to /v1/responses
+  const converted = convertMessagesToResponses(opts.messages);
+  const body = {
+    model: llm.model,
+    input: converted.input,
+    max_output_tokens: opts.max_tokens ?? llm.maxResponseTokens ?? 8192,
+    stream: !!opts.stream,
+    // 无状态请求：不写入服务端历史，避免会话上下文污染与隐私残留
+    store: false
+  };
+  if (converted.instructions) body.instructions = converted.instructions;
+  if (opts.temperature != null || llm.temperature != null) {
+    body.temperature = opts.temperature ?? llm.temperature;
+  }
+  if (opts.tools && opts.tools.length > 0) {
+    body.tools = opts.tools.map(t => ({
+      type: 'function',
+      name: t.function?.name || t.name,
+      description: t.function?.description || t.description,
+      parameters: t.function?.parameters || t.parameters || { type: 'object', properties: {} }
+    }));
+    if (opts.tool_choice) {
+      // OpenAI 兼容 tool_choice（'auto' | 'none' | 'required' | {type:'function',function:{name}}）
+      // → Responses API 格式（{type} 或 {type:'function', name}）
+      if (typeof opts.tool_choice === 'string') {
+        body.tool_choice = { type: opts.tool_choice };
+      } else if (opts.tool_choice.function?.name) {
+        body.tool_choice = { type: 'function', name: opts.tool_choice.function.name };
+      } else {
+        body.tool_choice = { type: 'auto' };
+      }
+    }
+  }
+  // response_format（如 {type:'json_object'} / {type:'json_schema',...}）→ text.format
+  if (opts.response_format) {
+    if (opts.response_format.type === 'json_schema') {
+      body.text = { format: { type: 'json_schema', name: 'output', schema: opts.response_format.json_schema?.schema || opts.response_format.json_schema, strict: !!opts.response_format.strict } };
+    } else if (opts.response_format.type === 'json_object') {
+      body.text = { format: { type: 'json_object' } };
+    } else {
+      body.text = { format: opts.response_format };
+    }
+  }
+  // Reasoning effort: gpt-5 / o 系列 → reasoning.effort（'off' 不注入）
+  if (reasoningEffort && reasoningEffort !== 'off' && REASONING_EFFORT_LEVELS.includes(reasoningEffort)) {
+    const m = (llm.model || '').toLowerCase();
+    // 兼容 'gpt-5.2' / 'o3' / 'o4-mini'（前缀后允许 -、. 或结束）
+    if (/^(?:gpt-5|o[134])(?:[.-]|$)/.test(m)) {
+      body.reasoning = { effort: reasoningEffort };
+    }
+  }
+  const responsesHeaders = { 'Content-Type': 'application/json' };
+  if (llm.apiKey) responsesHeaders['Authorization'] = `Bearer ${llm.apiKey}`;
+  return {
+    url,
+    headers: responsesHeaders,
+    body,
+    transport: 'responses'
+  };
+}
+
+// OpenAI 风格消息 → Responses API input items（system 单独提取为 instructions）
+// 参考 https://platform.openai.com/docs/guides/conversation-state#examples-for-storing-conversations
+function convertMessagesToResponses(messages) {
+  let instructions = '';
+  const input = [];
+  for (const m of messages || []) {
+    if (m.role === 'system') {
+      const text = typeof m.content === 'string' ? m.content : JSON.stringify(m.content);
+      instructions += (instructions ? '\n\n' : '') + text;
+      continue;
+    }
+    if (m.role === 'tool') {
+      input.push({
+        type: 'function_call_output',
+        call_id: m.tool_call_id || '',
+        output: typeof m.content === 'string' ? m.content : JSON.stringify(m.content)
+      });
+      continue;
+    }
+    if (m.role === 'assistant') {
+      if (m.tool_calls && m.tool_calls.length > 0) {
+        for (const tc of m.tool_calls) {
+          input.push({
+            type: 'function_call',
+            call_id: tc.id || '',
+            name: tc.function?.name || '',
+            arguments: tc.function?.arguments || ''
+          });
+        }
+        // 官方会话存储示例：带工具调用的 assistant 消息只存 function_call item（不含 output_text）
+        continue;
+      }
+      if (m.content) {
+        input.push({ type: 'output_text', text: m.content, role: 'assistant' });
+      }
+      continue;
+    }
+    // user
+    if (Array.isArray(m.content)) {
+      for (const part of m.content) {
+        if (part.type === 'text' && part.text) {
+          input.push({ type: 'input_text', text: part.text, role: 'user' });
+        } else if (part.type === 'image_url' && part.image_url?.url) {
+          input.push({ type: 'input_image', image_url: part.image_url.url, role: 'user' });
+        }
+      }
+    } else if (typeof m.content === 'string' && m.content) {
+      input.push({ type: 'input_text', text: m.content, role: 'user' });
+    } else {
+      input.push({ type: 'input_text', text: JSON.stringify(m.content), role: 'user' });
+    }
+  }
+  return { instructions, input };
+}
+
+// Responses API 非流式响应 → 统一 OpenAI-compatible shape
+function parseResponsesResponse(data) {
+  const output = Array.isArray(data.output) ? data.output : [];
+  const textParts = [];
+  const toolCalls = [];
+  let reasoning = '';
+  for (const item of output) {
+    if (!item) continue;
+    if (item.type === 'message' && Array.isArray(item.content)) {
+      for (const block of item.content) {
+        if (block?.type === 'output_text') textParts.push(block.text || '');
+      }
+    } else if (item.type === 'reasoning') {
+      const summary = item.summary && item.summary.map(s => s?.text || '').join('');
+      if (summary) reasoning += (reasoning ? '\n' : '') + summary;
+      else if (item.text) reasoning += (reasoning ? '\n' : '') + item.text;
+    } else if (item.type === 'function_call') {
+      toolCalls.push({
+        id: item.call_id || '',
+        type: 'function',
+        function: { name: item.name || '', arguments: item.arguments || '{}' }
+      });
+    }
+  }
+  let finishReason = 'stop';
+  if (data.status === 'incomplete') finishReason = 'length';
+  else if (data.status === 'failed') finishReason = 'error';
+  const usage = data.usage || {};
+  return {
+    choices: [{
+      message: {
+        role: 'assistant',
+        content: textParts.join(''),
+        reasoning: reasoning || undefined,
+        tool_calls: toolCalls.length > 0 ? toolCalls : undefined
+      },
+      finish_reason: finishReason
+    }],
+    usage: {
+      prompt_tokens: usage.input_tokens || 0,
+      completion_tokens: usage.output_tokens || 0,
+      total_tokens: (usage.input_tokens || 0) + (usage.output_tokens || 0),
+      // 透传 Responses API 缓存 / 推理明细，供 computeUsageCost 计费
+      cache_read_input_tokens: usage.input_tokens_details?.cached_tokens || 0,
+      reasoning_output_tokens: usage.output_tokens_details?.reasoning_tokens || 0
+    }
   };
 }
 
@@ -250,6 +425,9 @@ function parseLLMResponse(data, transport) {
   if (transport === 'anthropic') {
     return parseAnthropicResponse(data);
   }
+  if (transport === 'responses') {
+    return parseResponsesResponse(data);
+  }
   // OpenAI-compatible: expose reasoning_content/reasoning for UI display,
   // but DO NOT merge into content — that would leak raw thinking text into
   // downstream consumers (games, agents) that expect only the final answer.
@@ -333,5 +511,8 @@ module.exports = {
   buildLLMRequest,
   parseLLMResponse,
   parseAnthropicResponse,
-  convertMessagesToAnthropic
+  parseResponsesResponse,
+  convertMessagesToAnthropic,
+  convertMessagesToResponses,
+  buildResponsesRequest
 };

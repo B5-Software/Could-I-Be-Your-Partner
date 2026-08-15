@@ -41,7 +41,17 @@
   }
 
   function showModal(id, show) {
-    document.getElementById(id).classList.toggle('hidden', !show);
+    const el = document.getElementById(id);
+    if (!el) return;
+    if (show) {
+      el.classList.remove('hidden');
+    } else if (!el.classList.contains('hidden')) {
+      el.classList.add('modal-fade-out');
+      setTimeout(() => {
+        el.classList.add('hidden');
+        el.classList.remove('modal-fade-out');
+      }, 200);
+    }
   }
 
   // ---------------- doc name ----------------

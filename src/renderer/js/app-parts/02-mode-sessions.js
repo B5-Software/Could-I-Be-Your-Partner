@@ -365,7 +365,7 @@
   function answerDsApproval(outcome) {
     const req = dsApprovalCurrent;
     if (!req) return;
-    document.getElementById('ds-approval-modal')?.classList.add('hidden');
+    fadeOutHide(document.getElementById('ds-approval-modal'));
     dsApprovalCurrent = null;
     if (typeof window.api.dsApprovalRespond === 'function') {
       window.api.dsApprovalRespond(req.id, outcome).catch(() => {});

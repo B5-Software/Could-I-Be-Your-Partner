@@ -667,4 +667,9 @@ contextBridge.exposeInMainWorld('api', {
   // Notifications: 系统桌面通知（敏感操作/会话完成/问卷/文件呈递等需用户干预时）
   sendNotification: (opts) => ipcRenderer.invoke('notifications:send', opts),
   onNotificationClick: (cb) => ipcRenderer.on('notifications:click', (_, data) => cb(data)),
+
+  // 更新检查：GitHub Releases 自动更新（设置页「更新」tab）
+  updatesCheck: () => ipcRenderer.invoke('updates:check'),
+  updatesSave: (cfg) => ipcRenderer.invoke('updates:save', cfg),
+  updatesOpenRelease: (url) => ipcRenderer.invoke('updates:openRelease', url),
 });

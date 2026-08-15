@@ -1433,11 +1433,7 @@ body.no-tarot .setting-label-tarot + .toggle-switch + .setting-hint {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  animation: subAgentModalIn 0.2s ease;
-}
-@keyframes subAgentModalIn {
-  from { opacity: 0; transform: scale(0.96) translateY(8px); }
-  to { opacity: 1; transform: scale(1) translateY(0); }
+  animation: fadeIn 0.2s ease;
 }
 .sub-agent-modal-header {
   display: flex;

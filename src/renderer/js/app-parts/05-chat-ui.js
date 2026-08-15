@@ -254,7 +254,7 @@
 
     function close() {
       clearMarks();
-      overlay.classList.add('hidden');
+      fadeOutHide(overlay);
       input.blur();
     }
 
@@ -1389,7 +1389,7 @@
         _subAgentModalRefreshTimer = null;
       }
       _openSubAgentModalId = null;
-      modal.remove();
+      fadeOutRemove(modal);
       document.removeEventListener('keydown', escHandler);
     };
 
@@ -2094,7 +2094,7 @@
         video.play();
       } catch (e) {
         console.error('Camera error:', e);
-        cameraModal.classList.add('hidden');
+        fadeOutHide(cameraModal);
       }
     });
   }
@@ -2131,15 +2131,15 @@
       video.srcObject.getTracks().forEach(t => t.stop());
       video.srcObject = null;
     }
-    cameraModal.classList.add('hidden');
+    fadeOutHide(cameraModal);
   }
 
   // ---- Image Preview Modal ----
   document.getElementById('btn-close-image-modal')?.addEventListener('click', () => {
-    imagePreviewModal.classList.add('hidden');
+    fadeOutHide(imagePreviewModal);
   });
   imagePreviewModal?.addEventListener('click', (e) => {
-    if (e.target === imagePreviewModal) imagePreviewModal.classList.add('hidden');
+    if (e.target === imagePreviewModal) fadeOutHide(imagePreviewModal);
   });
 
   // ---- Open Workspace ----
@@ -2351,8 +2351,9 @@
 
   function _closeToolAuthModal() {
     if (!toolAuthModal) return;
-    toolAuthModal.classList.add('hidden');
-    WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#tool-auth-modal', attr: 'class', value: toolAuthModal.className });
+    fadeOutHide(toolAuthModal, () => {
+      WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#tool-auth-modal', attr: 'class', value: toolAuthModal.className });
+    });
   }
 
   function _resolveToolAuth(decision) {
@@ -2389,8 +2390,9 @@
   }
   function _closeTrayAskModal() {
     if (!trayAskModal) return;
-    trayAskModal.classList.add('hidden');
-    WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#tray-ask-modal', attr: 'class', value: trayAskModal.className });
+    fadeOutHide(trayAskModal, () => {
+      WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#tray-ask-modal', attr: 'class', value: trayAskModal.className });
+    });
   }
   function _respondTrayAsk(decision) {
     _closeTrayAskModal();

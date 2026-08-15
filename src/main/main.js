@@ -21,6 +21,7 @@ const { importSpreadsheetFile, exportSpreadsheetFile } = require('./spreadsheet-
 const { WebControlService } = require('./web-control-service');
 const { fetchLLMWithRetry, consumeSSEStream, abortAllRequests, abortRequests, DEFAULT_TIMEOUT_MS } = require('./llm-retry');
 const LLMProviders = require('./llm-providers');
+const updateChecker = require('./update-checker');
 const ESLintService = require('./eslint-service');
 const { BUNDLED_SKILLS } = require('../data/bundled-skills');
 const { importKnowledgeFile } = require('./document-import');
@@ -633,6 +634,27 @@ let settings = loadJSON(settingsPath, {
   mcp: { servers: [] },
   email: { enabled: false, mode: 'send-receive', smtpHost: '', smtpPort: 587, smtpSecure: true, imapHost: '', imapPort: 993, imapTls: true, emailUser: '', emailPass: '', ownerAddress: '', totpSecret: '', pollInterval: 30, approvalResendMinutes: 5, maxResends: 3, resendIntervalMinutes: 30, allowedSenders: [] },
   webControl: { enabled: false, port: 3456, password: '', passwordHash: '', enable2FA: false, totpSecret: '' },
+  // 系统桌面通知分类开关（渲染器按分类判断是否弹窗；updateAvailable 供更新检查模块消费）
+  notifications: {
+    enabled: true,
+    approval: true,
+    sessionDone: true,
+    question: true,
+    present: true,
+    babeProactive: false,
+    updateAvailable: true
+  },
+  // GitHub Releases 自动更新检查
+  // - autoCheckEnabled : 启动延迟 + 定时自动检查（发现新版本弹系统通知）
+  // - intervalHours    : 自动检查间隔（小时）
+  // - lastCheckedAt    : 上次成功检查时间（ISO）
+  // - lastResult       : 上次检查结果快照（渲染器设置页展示）
+  updates: {
+    autoCheckEnabled: true,
+    intervalHours: 6,
+    lastCheckedAt: '',
+    lastResult: null
+  },
   // 预算控制：每模型单价表（每 1M tokens 多少美元）+ 峰谷时段 + 限额
   budget: {
     models: {},                                  // { [modelId]: { inputPerM, cacheReadPerM, outputPerM, cacheWritePerM, hasCacheWrite } }
@@ -701,7 +723,7 @@ let settings = loadJSON(settingsPath, {
 });
 if (fs.existsSync(settingsPath)) {
   const saved = loadJSON(settingsPath, {});
-  settings = { ...settings, ...saved, llm: { ...settings.llm, ...(saved.llm || {}) }, agent: { ...settings.agent, ...(saved.agent || {}) }, sessions: { ...settings.sessions, ...(saved.sessions || {}) }, imageGen: { ...settings.imageGen, ...(saved.imageGen || {}) }, theme: { ...settings.theme, ...(saved.theme || {}) }, aiPersona: { ...settings.aiPersona, ...(saved.aiPersona || {}) }, userProfile: { ...settings.userProfile, ...(saved.userProfile || {}) }, entropy: { ...settings.entropy, ...(saved.entropy || {}) }, proxy: { ...settings.proxy, ...(saved.proxy || {}) }, mcp: { ...settings.mcp, ...(saved.mcp || {}) }, email: { ...settings.email, ...(saved.email || {}) }, webControl: { ...settings.webControl, ...(saved.webControl || {}) }, budget: { ...settings.budget, ...(saved.budget || {}) }, terminal: { ...settings.terminal, ...(saved.terminal || {}) }, privacyProtection: { ...settings.privacyProtection, ...(saved.privacyProtection || {}) }, ime: { ...settings.ime, ...(saved.ime || {}) }, voice: { ...settings.voice, ...(saved.voice || {}) } };
+  settings = { ...settings, ...saved, llm: { ...settings.llm, ...(saved.llm || {}) }, agent: { ...settings.agent, ...(saved.agent || {}) }, sessions: { ...settings.sessions, ...(saved.sessions || {}) }, imageGen: { ...settings.imageGen, ...(saved.imageGen || {}) }, theme: { ...settings.theme, ...(saved.theme || {}) }, aiPersona: { ...settings.aiPersona, ...(saved.aiPersona || {}) }, userProfile: { ...settings.userProfile, ...(saved.userProfile || {}) }, entropy: { ...settings.entropy, ...(saved.entropy || {}) }, proxy: { ...settings.proxy, ...(saved.proxy || {}) }, mcp: { ...settings.mcp, ...(saved.mcp || {}) }, email: { ...settings.email, ...(saved.email || {}) }, webControl: { ...settings.webControl, ...(saved.webControl || {}) }, budget: { ...settings.budget, ...(saved.budget || {}) }, terminal: { ...settings.terminal, ...(saved.terminal || {}) }, privacyProtection: { ...settings.privacyProtection, ...(saved.privacyProtection || {}) }, ime: { ...settings.ime, ...(saved.ime || {}) }, voice: { ...settings.voice, ...(saved.voice || {}) }, notifications: { ...settings.notifications, ...(saved.notifications || {}) }, updates: { ...settings.updates, ...(saved.updates || {}) } };
   // voice 子对象深合并（ttsVoices / kws）
   if (saved.voice) {
     settings.voice.ttsVoices = { zh: 'zf_xiaoxiao', en: 'af_heart', de: 'thorsten', ...(saved.voice.ttsVoices || {}) };
@@ -3289,6 +3311,13 @@ ipcMain.handle('llm:fetchModels', async (_, provider, apiUrl, apiKey) => {
       modelsUrl = base.replace(/\/$/, '') + '/models';
       headers['x-api-key'] = apiKey || '';
       headers['anthropic-version'] = '2023-06-01';
+    } else if (provider === 'openai-responses') {
+      // OpenAI Responses API: 从 /v1/responses 推导 /v1/models
+      let base = apiUrl;
+      base = base.replace(/\/responses\/?$/, '');
+      if (!/\/v\d+\/?$/.test(base)) base = base.replace(/\/$/, '') + '/v1';
+      modelsUrl = base.replace(/\/$/, '') + '/models';
+      if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
     } else {
       // OpenAI 兼容: 从 /chat/completions 推导 /models
       let base = apiUrl;
@@ -3729,6 +3758,91 @@ ipcMain.handle('notifications:send', (event, opts) => {
     return { ok: false, error: e.message };
   }
 });
+
+// ---- IPC: GitHub Releases 更新检查 ----
+// 返回 { ok, current, latest?, updateAvailable?, error? }
+// 失败时仅 error 字段（自动检查静默，手动检查由渲染器展示内联错误，不弹 toast）
+async function performUpdateCheck() {
+  const current = app.getVersion();
+  const res = await updateChecker.fetchLatestRelease();
+  if (!res.ok || !res.latest) {
+    settings.updates.lastCheckedAt = new Date().toISOString();
+    persistSettings();
+    return { ok: false, current, error: (res && res.error) || '检查失败' };
+  }
+  const updateAvailable = updateChecker.compareVersions(res.latest.version, current) > 0;
+  settings.updates.lastCheckedAt = new Date().toISOString();
+  settings.updates.lastResult = { ...res.latest, updateAvailable };
+  persistSettings();
+  return { ok: true, current, latest: res.latest, updateAvailable };
+}
+
+ipcMain.handle('updates:check', async () => {
+  const result = await performUpdateCheck();
+  // 手动检查不重复弹通知
+  return result;
+});
+
+ipcMain.handle('updates:save', (_, cfg = {}) => {
+  const u = settings.updates || {};
+  if (typeof cfg.autoCheckEnabled === 'boolean') u.autoCheckEnabled = cfg.autoCheckEnabled;
+  if ([6, 12, 24].includes(Number(cfg.intervalHours))) u.intervalHours = Number(cfg.intervalHours);
+  settings.updates = u;
+  persistSettings();
+  scheduleAutoUpdateCheck();
+  return { ok: true, updates: settings.updates };
+});
+
+ipcMain.handle('updates:openRelease', (_, url) => {
+  try {
+    const target = String(url || settings.updates?.lastResult?.htmlUrl || '');
+    if (target) shell.openExternal(target);
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+// 更新通知是否允许弹窗（受「更新」开关 + 「通知」设置双重控制）
+function shouldNotifyUpdate() {
+  const n = settings.notifications || {};
+  const u = settings.updates || {};
+  return u.autoCheckEnabled !== false && n.enabled !== false && n.updateAvailable !== false;
+}
+
+// 自动检查调度：reschedule 语义下先清旧定时器
+let _updateCheckTimer = null;
+function scheduleAutoUpdateCheck() {
+  if (_updateCheckTimer) {
+    clearInterval(_updateCheckTimer);
+    _updateCheckTimer = null;
+  }
+  const u = settings.updates || {};
+  if (u.autoCheckEnabled === false) return;
+  const hours = [6, 12, 24].includes(Number(u.intervalHours)) ? Number(u.intervalHours) : 6;
+  _updateCheckTimer = setInterval(() => runAutoUpdateCheck(), hours * 3600 * 1000);
+}
+
+// 自动检查：失败完全静默；发现新版且允许通知时弹系统通知（点击打开 Releases 页）
+async function runAutoUpdateCheck() {
+  try {
+    const res = await performUpdateCheck();
+    if (!res.ok || !res.updateAvailable) return;
+    if (!shouldNotifyUpdate() || !Notification.isSupported()) return;
+    const latest = res.latest;
+    const notif = new Notification({
+      title: `发现新版本 ${latest.version.replace(/^v/i, '')}`,
+      body: `当前 ${res.current.replace(/^v/i, '')}，点击查看更新内容并下载`
+    });
+    notif.on('click', () => {
+      try {
+        if (latest.htmlUrl) shell.openExternal(latest.htmlUrl);
+      } catch { /* ignore */ }
+      try { notif.close(); } catch { /* ignore */ }
+    });
+    notif.show();
+  } catch { /* 自动检查失败完全静默 */ }
+}
 
 // ---- IPC: Babe History (独立持久化，含好感度等会话属性) ----
 ipcMain.handle('babeHistory:list', () => {
@@ -6626,6 +6740,13 @@ app.whenReady().then(async () => {
       console.error('[WebControl] Auto-start config error:', e.message);
     }
   }
+
+  // ---- GitHub Releases 自动更新检查 ----
+  // 启动延迟 8s 首次检查（给渲染器留出初始化时间），之后按设置间隔定时
+  if ((settings.updates || {}).autoCheckEnabled !== false) {
+    setTimeout(() => { runAutoUpdateCheck().catch(() => {}); }, 8000);
+  }
+  scheduleAutoUpdateCheck();
 });
 
 // Cleanup MCP servers, serial ports, and web control on app quit

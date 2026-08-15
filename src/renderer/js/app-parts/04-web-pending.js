@@ -322,7 +322,7 @@ window.api.onWebControlSendMessage(async (message) => {
     `;
     document.body.appendChild(overlay);
 
-    const closeOverlay = () => { if (overlay.parentNode) overlay.parentNode.removeChild(overlay); };
+    const closeOverlay = () => fadeOutRemove(overlay);
 
     overlay.querySelector('#pending-continue-btn').addEventListener('click', async () => {
       try {

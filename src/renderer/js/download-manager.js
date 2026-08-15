@@ -256,7 +256,7 @@
   }
 
   function closeModal() {
-    $(MODAL_ID).classList.add('hidden');
+    fadeOutHide($(MODAL_ID));
     stopPolling();
   }
 
@@ -271,7 +271,7 @@
   }
 
   function closeAddDialog() {
-    $(ADD_MODAL_ID).classList.add('hidden');
+    fadeOutHide($(ADD_MODAL_ID));
   }
 
   async function confirmAddDownload() {

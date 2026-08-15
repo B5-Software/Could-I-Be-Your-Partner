@@ -313,6 +313,76 @@ async function fetchLLMWithRetry(cfg) {
 }
 
 /**
+ * 处理 OpenAI Responses API 的单个 SSE 事件（纯函数，便于单测）。
+ * state 结构：{ fullContent, fullReasoning, toolCalls, finishReason, usage, responsesToolBuffer, finalizedToolIds, onChunk?, requestId? }
+ * 事件类型：response.output_text.delta / response.reasoning_summary_text.delta /
+ *          response.function_call_arguments.delta(.done) / response.output_item.done / response.completed
+ * @param {object} state - 聚合状态（会被就地修改）
+ * @param {object} parsed - 已解析的 SSE 事件 JSON
+ */
+function processResponsesEvent(state, parsed) {
+  const type = parsed && parsed.type;
+  if (type === 'response.output_text.delta' && parsed.delta) {
+    state.fullContent += parsed.delta;
+    if (state.onChunk) state.onChunk({ content: parsed.delta, parsed, requestId: state.requestId });
+  } else if (type === 'response.reasoning_summary_text.delta' && parsed.delta) {
+    state.fullReasoning += parsed.delta;
+    if (state.onChunk) state.onChunk({ reasoning: parsed.delta, parsed, requestId: state.requestId });
+  } else if (type === 'response.function_call_arguments.delta') {
+    const id = parsed.item_id;
+    if (!state.responsesToolBuffer[id]) state.responsesToolBuffer[id] = { call_id: '', name: '', argsBuffer: '' };
+    state.responsesToolBuffer[id].argsBuffer += parsed.delta || '';
+  } else if (type === 'response.function_call_arguments.done') {
+    const id = parsed.item_id;
+    const entry = state.responsesToolBuffer[id] || (state.responsesToolBuffer[id] = { call_id: '', name: '', argsBuffer: '' });
+    if (!entry.call_id) entry.call_id = parsed.call_id || '';
+    if (!entry.name) entry.name = parsed.name || '';
+    if (parsed.arguments) entry.argsBuffer = parsed.arguments;
+    finalizeResponsesToolCall(state, id);
+  } else if (type === 'response.output_item.done' && parsed.item && parsed.item.type === 'function_call') {
+    const item = parsed.item;
+    const id = item.id;
+    const entry = state.responsesToolBuffer[id] || (state.responsesToolBuffer[id] = { call_id: '', name: '', argsBuffer: '' });
+    if (!entry.call_id) entry.call_id = item.call_id || '';
+    if (!entry.name) entry.name = item.name || '';
+    // 部分实现直接带完整 arguments（无 delta 流），此时补全
+    if (item.arguments && !state.finalizedToolIds.has(id)) {
+      entry.argsBuffer = item.arguments;
+      finalizeResponsesToolCall(state, id);
+    }
+  } else if (type === 'response.completed') {
+    const resp = parsed.response || {};
+    if (resp.status === 'incomplete') state.finishReason = 'length';
+    else if (resp.status === 'failed') state.finishReason = 'error';
+    else if (resp.status) state.finishReason = 'stop';
+    const u = resp.usage || {};
+    if (u.input_tokens !== undefined || u.output_tokens !== undefined) {
+      state.usage = {
+        prompt_tokens: u.input_tokens || 0,
+        completion_tokens: u.output_tokens || 0,
+        total_tokens: (u.input_tokens || 0) + (u.output_tokens || 0),
+        // 透传缓存/推理明细，供 computeUsageCost 计费
+        cache_read_input_tokens: u.input_tokens_details?.cached_tokens || 0,
+        reasoning_output_tokens: u.output_tokens_details?.reasoning_tokens || 0
+      };
+    }
+  }
+}
+
+function finalizeResponsesToolCall(state, id) {
+  if (state.finalizedToolIds.has(id)) return;
+  state.finalizedToolIds.add(id);
+  const entry = state.responsesToolBuffer[id];
+  if (!entry) return;
+  state.toolCalls.push({
+    id: entry.call_id || id,
+    type: 'function',
+    function: { name: entry.name || '', arguments: entry.argsBuffer || '{}' }
+  });
+  if (state.onChunk) state.onChunk({ toolCallDelta: state.toolCalls[state.toolCalls.length - 1], parsed: { type: 'function_call_done' }, requestId: state.requestId });
+}
+
+/**
  * Parse an SSE-streamed LLM response. Returns { content, reasoning, toolCalls, finishReason, usage }.
  * Supports both OpenAI-format (choices/delta) and Anthropic-format (content_block_delta) SSE.
  * @param {ReadableStream} bodyStream
@@ -331,6 +401,8 @@ async function consumeSSEStream(bodyStream, onChunk, requestId, transport = 'ope
   let usage = null;
   let buffer = '';
   let anthropicToolBlocks = {};
+  let responsesToolBuffer = {};
+  let finalizedToolIds = new Set();
 
   async function readWithTimeout() {
     return new Promise((resolve, reject) => {
@@ -350,6 +422,13 @@ async function consumeSSEStream(bodyStream, onChunk, requestId, transport = 'ope
     const parsed = JSON.parse(jsonStr);
     if (transport === 'anthropic') {
       processAnthropicEvent(parsed);
+    } else if (transport === 'responses') {
+      const state = {
+        fullContent, fullReasoning, toolCalls, finishReason, usage,
+        responsesToolBuffer, finalizedToolIds, onChunk, requestId
+      };
+      processResponsesEvent(state, parsed);
+      // 闭包内聚合字段随引用更新，无需回写
     } else {
       processOpenAIEvent(parsed);
     }
@@ -512,6 +591,7 @@ module.exports = {
   LLMError,
   fetchLLMWithRetry,
   consumeSSEStream,
+  processResponsesEvent,
   getRetryDelay,
   classifyHttpResponse,
   classifyThrownError,

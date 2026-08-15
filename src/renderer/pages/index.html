@@ -796,6 +796,7 @@
             <button class="settings-tab" data-tab="automation"><i class="fa-solid fa-bolt"></i> 自动化</button>
             <button class="settings-tab" data-tab="plugins"><i class="fa-solid fa-puzzle-piece"></i> 插件</button>
             <button class="settings-tab" data-tab="environment"><i class="fa-solid fa-stethoscope"></i> 环境检测</button>
+            <button class="settings-tab" data-tab="updates"><i class="fa-solid fa-arrows-rotate"></i> 更新</button>
           </div>
           <div class="settings-panels">
             <div class="settings-panel active" data-tab="ai">
@@ -963,10 +964,11 @@
                   <label>接入方式</label>
                   <select id="setting-llm-provider">
                     <option value="openai-compat">OpenAI 兼容</option>
+                    <option value="openai-responses">OpenAI Responses（新版）</option>
                     <option value="anthropic-compat">Anthropic 兼容</option>
                     <option value="opencode-zen">OpenCode Zen (免费模型可用)</option>
                   </select>
-                  <div class="setting-hint">OpenAI兼容：标准 chat/completions；Anthropic兼容：messages API；OpenCode Zen：自动路由</div>
+                  <div class="setting-hint">OpenAI兼容：标准 chat/completions；OpenAI Responses：新版 /v1/responses；Anthropic兼容：messages API；OpenCode Zen：自动路由</div>
                 </div>
                 <div id="llm-openai-fields">
                   <div class="setting-item">
@@ -2313,6 +2315,16 @@
                   </label>
                   <p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">Babe 主动发来消息时通知您（即便您正在其他模式）</p>
                 </div>
+                <div class="setting-item">
+                  <label class="toggle-label">
+                    <span>发现新版本</span>
+                    <div class="toggle-switch">
+                      <input type="checkbox" id="setting-notify-update" checked>
+                      <span class="toggle-slider"></span>
+                    </div>
+                  </label>
+                  <p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">自动更新检查发现新版本时提醒（「更新」页可查看详情）</p>
+                </div>
                 <div style="display:flex;gap:8px;margin-top:12px">
                   <button class="btn-primary" id="btn-notify-test"><i class="fa-solid fa-flask"></i> 发送测试通知</button>
                 </div>
@@ -2554,6 +2566,36 @@
                 <h3><i class="fa-solid fa-list-check"></i> 检测结果</h3>
                 <div id="env-detect-list" style="display:flex;flex-direction:column;gap:10px"></div>
                 <div id="env-detect-actions" style="margin-top:12px"></div>
+              </div>
+            </div>
+            <div class="settings-panel" data-tab="updates">
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-arrows-rotate"></i> 自动更新检查</h3>
+                <div class="setting-item">
+                  <label class="setting-label">自动检查更新</label>
+                  <input type="checkbox" id="setting-updates-auto" class="checkbox-slider">
+                  <p class="setting-hint">启动后延迟检查一次，之后按下方间隔定时检查 GitHub Releases。发现新版本时通过系统通知提醒（可在「通知」中关闭）。检查失败不会打扰你。</p>
+                </div>
+                <div class="setting-item">
+                  <label class="setting-label">检查间隔</label>
+                  <select id="setting-updates-interval">
+                    <option value="6">每 6 小时</option>
+                    <option value="12">每 12 小时</option>
+                    <option value="24">每 24 小时</option>
+                  </select>
+                </div>
+              </div>
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-magnifying-glass"></i> 检查更新</h3>
+                <div class="setting-item">
+                  <button class="btn-secondary btn-sm" id="btn-updates-check"><i class="fa-solid fa-rotate"></i> 立即检查</button>
+                  <span id="updates-check-status" style="font-size:12px;color:var(--text-secondary)">尚未检查</span>
+                </div>
+                <div class="setting-item" id="updates-result-wrap" style="display:none;flex-direction:column;gap:8px">
+                  <p id="updates-current-version" style="font-size:12px;color:var(--text-secondary)"></p>
+                  <div id="updates-result-body" style="font-size:13px;line-height:1.6;max-height:220px;overflow:auto;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:12px"></div>
+                  <button class="btn-secondary btn-sm" id="btn-updates-open-release"><i class="fa-solid fa-arrow-up-right-from-square"></i> 打开 Releases 页</button>
+                </div>
               </div>
             </div>
             <div class="settings-panel" data-tab="fonts">
@@ -3114,6 +3156,7 @@
               <select id="ob-llm-provider">
                 <option value="opencode-zen" selected>OpenCode Zen（推荐，免费）</option>
                 <option value="openai-compat">OpenAI 兼容</option>
+                <option value="openai-responses">OpenAI Responses（新版）</option>
                 <option value="anthropic-compat">Anthropic 兼容</option>
               </select>
             </div>

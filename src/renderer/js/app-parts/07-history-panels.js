@@ -549,7 +549,7 @@
 
   function hideHistoryProgress() {
     const modal = document.getElementById('history-progress-modal');
-    if (modal) modal.classList.add('hidden');
+    fadeOutHide(modal);
   }
 
   // 让出事件循环一帧（macrotask），使进度模态框能刷新、DOM 能回流
@@ -1829,7 +1829,7 @@
 
   document.getElementById('btn-close-confirm')?.addEventListener('click', () => {
     const modal = document.getElementById('confirm-modal');
-    modal?.classList.add('hidden');
+    fadeOutHide(modal);
     if (confirmResolve) {
       confirmResolve(false);
       confirmResolve = null;
@@ -1839,7 +1839,7 @@
 
   document.getElementById('btn-cancel-confirm')?.addEventListener('click', () => {
     const modal = document.getElementById('confirm-modal');
-    modal?.classList.add('hidden');
+    fadeOutHide(modal);
     if (confirmResolve) {
       confirmResolve(false);
       confirmResolve = null;
@@ -1849,7 +1849,7 @@
 
   document.getElementById('btn-accept-confirm')?.addEventListener('click', () => {
     const modal = document.getElementById('confirm-modal');
-    modal?.classList.add('hidden');
+    fadeOutHide(modal);
     if (confirmResolve) {
       confirmResolve(true);
       confirmResolve = null;
@@ -1882,12 +1882,12 @@
 
   document.getElementById('btn-close-message')?.addEventListener('click', () => {
     const modal = document.getElementById('message-modal');
-    modal?.classList.add('hidden');
+    fadeOutHide(modal);
   });
 
   document.getElementById('btn-ok-message')?.addEventListener('click', () => {
     const modal = document.getElementById('message-modal');
-    modal?.classList.add('hidden');
+    fadeOutHide(modal);
   });
 
   // ---- 自定义输入/确认模态框（替代 prompt/confirm） ----
@@ -1911,7 +1911,7 @@
       input.focus();
       input.select();
       function close(val) {
-        overlay.remove();
+        fadeOutRemove(overlay);
         resolve(val);
       }
       box.querySelector('.btn-cancel').addEventListener('click', () => close(null));
@@ -1940,7 +1940,7 @@
       overlay.appendChild(box);
       document.body.appendChild(overlay);
       function close(val) {
-        overlay.remove();
+        fadeOutRemove(overlay);
         resolve(val);
       }
       box.querySelector('.btn-cancel').addEventListener('click', () => close(false));

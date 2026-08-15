@@ -593,6 +593,16 @@
   animation: fadeIn 0.2s ease;
 }
 
+/* 模态框渐隐：关闭时由 JS 加上 .modal-fade-out，动画结束后再隐藏/移除 DOM */
+.modal-fade-out {
+  animation: fadeOut 0.2s ease forwards !important;
+  pointer-events: none;
+}
+@keyframes fadeOut {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
 /* Image Preview Modal */
 .image-modal {
   width: min(92vw, 980px);
@@ -713,7 +723,7 @@
   max-height: 80vh;
   overflow-y: auto;
   box-shadow: var(--shadow-lg);
-  animation: slideUp 0.3s ease;
+  animation: fadeIn 0.25s ease;
 }
 
 .modal-header {
@@ -2043,6 +2053,10 @@
   opacity: 1;
   pointer-events: auto;
 }
+
+/* 工具组模态框内层面板：打开时随遮罩渐显 */
+.tools-modal-backdrop .tools-modal { animation: none; }
+.tools-modal-backdrop.open .tools-modal { animation: fadeIn 0.25s ease; }
 
 .tools-modal {
   width: min(760px, calc(100vw - 48px));

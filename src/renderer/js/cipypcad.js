@@ -4271,7 +4271,11 @@
         savePrompt.classList.remove('hidden');
       }
       function hideSavePrompt() {
-        savePrompt.classList.add('hidden');
+        savePrompt.classList.add('modal-fade-out');
+        setTimeout(() => {
+          savePrompt.classList.add('hidden');
+          savePrompt.classList.remove('modal-fade-out');
+        }, 200);
         closeAction = null;
       }
       // 三个按钮

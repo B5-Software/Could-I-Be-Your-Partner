@@ -103,7 +103,7 @@
     await window.api.setSettings(s);
     if (typeof agent.applySettings === 'function') agent.applySettings(s);
     else agent.settings = s;
-    document.getElementById('onboarding-modal').classList.add('hidden');
+    fadeOutHide(document.getElementById('onboarding-modal'));
   });
   function updateObProviderFields(provider) {
     const zenFields = document.getElementById('ob-zen-key-field');
@@ -260,7 +260,7 @@
     else agent.settings = s;
     // 更新 UI 显示
     if (typeof updatePersonaDisplay === 'function') updatePersonaDisplay(s.aiPersona);
-    document.getElementById('onboarding-modal').classList.add('hidden');
+    fadeOutHide(document.getElementById('onboarding-modal'));
     // 通知 WebUI 同步头像
     try { await window.api.webControlSetAvatars(s.aiPersona?.avatar, s.userProfile?.avatar); } catch (_) {}
   });
@@ -316,7 +316,7 @@
   document.getElementById('conn-btn-local')?.addEventListener('click', () => setConnectionMode('local'));
   document.getElementById('conn-btn-remote')?.addEventListener('click', () => setConnectionMode('remote'));
   document.getElementById('btn-remote-cancel')?.addEventListener('click', () => {
-    document.getElementById('remote-connect-modal').classList.add('hidden');
+    fadeOutHide(document.getElementById('remote-connect-modal'));
     setConnectionMode('local');
   });
 
@@ -750,7 +750,7 @@
         // 连接已建立：设置本地状态，等待 mirror_head + mirror_body 到达
         isRemoteMode = true;
         remoteIntentionalClose = false;
-        document.getElementById('remote-connect-modal').classList.add('hidden');
+        fadeOutHide(document.getElementById('remote-connect-modal'));
         const statusEl0 = document.getElementById('remote-status');
         if (statusEl0) statusEl0.textContent = '已连接，可远程操作';
         setRemoteBanner('connected');

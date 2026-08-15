@@ -1788,7 +1788,7 @@
       }, 100);
     }
     function closeTerminalModal() {
-      modal.classList.add('hidden');
+      fadeOutHide(modal);
     }
 
     document.getElementById('btn-code-show-terminals')?.addEventListener('click', openTerminalModal);

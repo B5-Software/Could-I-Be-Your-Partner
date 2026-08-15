@@ -244,3 +244,39 @@ function showToast(message, type = 'info', duration = 5000) {
 }
 
 window.showToast = showToast;
+
+// ---- 模态框渐隐（fade-out）辅助 ----
+// 关闭模态框时先播放 fadeOut 动画，动画结束后再真正隐藏/移除 DOM。
+// CSS 侧配合 `.modal-fade-out { animation: fadeOut ... forwards }` 使用。
+const MODAL_FADE_MS = 200;
+
+function _fadeOutPrepare(el) {
+  if (!el || el.classList.contains('modal-fade-out')) return false;
+  el.classList.add('modal-fade-out');
+  return true;
+}
+
+// 渐隐后加 .hidden（适用于 .modal-overlay 等静态模态框）
+function fadeOutHide(el, cb) {
+  if (!el || el.classList.contains('hidden')) { if (cb) cb(); return; }
+  if (!_fadeOutPrepare(el)) { el.classList.add('hidden'); if (cb) cb(); return; }
+  setTimeout(() => {
+    if (!el.parentNode) { if (cb) cb(); return; }
+    el.classList.add('hidden');
+    el.classList.remove('modal-fade-out');
+    if (cb) cb();
+  }, MODAL_FADE_MS);
+}
+
+// 渐隐后从 DOM 移除（适用于动态创建的模态框）
+function fadeOutRemove(el, cb) {
+  if (!el || !el.parentNode) { if (cb) cb(); return; }
+  if (!_fadeOutPrepare(el)) { el.remove(); if (cb) cb(); return; }
+  setTimeout(() => {
+    el.remove();
+    if (cb) cb();
+  }, MODAL_FADE_MS);
+}
+
+window.fadeOutHide = fadeOutHide;
+window.fadeOutRemove = fadeOutRemove;
