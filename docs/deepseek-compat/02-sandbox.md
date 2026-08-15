@@ -16,8 +16,8 @@
 
 ## Windows 后端（受限令牌 + 低完整性 ACL）
 
-实现：`src/main/win/cibyp-sandbox.c`（MinGW-w64 编译，预编译 `cibyp-sandbox.exe` 随仓库提供，
-packaged 时经 `asarUnpack` 展开到 `app.asar.unpacked/src/main/win/`）。
+实现：`assets/sandbox/win/cibyp-sandbox.c`（MinGW-w64 编译，预编译 `cibyp-sandbox.exe` 随仓库提供）。
+打包：`win.extraResources` 仅 Windows 包带出到 `process.resourcesPath/sandbox/`（macOS/Linux 包不含该文件）；开发模式读 `assets/sandbox/win/`。
 
 机制（只约束文件效果）：
 

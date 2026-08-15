@@ -78,7 +78,7 @@ function detectBackend() {
       // 通过 --self-test 真实校验后端可用（自检含受限子进程读写验证）。
       const wrapper = resolveWrapperPath();
       if (!wrapper) {
-        cachedBackend = { backend: 'acl', available: false, enforcement: 'none', detail: 'cibyp-sandbox.exe 未找到（src/main/win 或 app.asar.unpacked）' };
+        cachedBackend = { backend: 'acl', available: false, enforcement: 'none', detail: 'cibyp-sandbox.exe 未找到（assets/sandbox/win 或 resourcesPath/sandbox）' };
       } else {
         const probe = spawnSync(wrapper, ['--self-test'], { encoding: 'utf8', timeout: 20000, windowsHide: true });
         const available = probe.error === undefined && probe.status === 0;
@@ -102,8 +102,9 @@ function resetBackendCache() {
 
 /**
  * 定位 Windows 包装器 cibyp-sandbox.exe。
- * dev：源码目录 src/main/win/；packaged：asar 内文件需 unpack 到
- * process.resourcesPath/app.asar.unpacked（与 assets 同模式）。
+ * dev：仓库 assets/sandbox/win/；
+ * packaged（仅 Windows）：electron-builder win.extraResources 带出到
+ * process.resourcesPath/sandbox/（macOS/Linux 包不包含该文件）。
  * @returns {string|null}
  */
 let cachedWrapperPath = null;
@@ -111,9 +112,9 @@ function resolveWrapperPath() {
   if (cachedWrapperPath) return cachedWrapperPath;
   const candidates = [];
   if (process.resourcesPath) {
-    candidates.push(path.join(process.resourcesPath, 'app.asar.unpacked', 'src', 'main', 'win', 'cibyp-sandbox.exe'));
+    candidates.push(path.join(process.resourcesPath, 'sandbox', 'cibyp-sandbox.exe'));
   }
-  candidates.push(path.join(__dirname, 'win', 'cibyp-sandbox.exe'));
+  candidates.push(path.join(__dirname, '..', '..', 'assets', 'sandbox', 'win', 'cibyp-sandbox.exe'));
   for (const c of candidates) {
     try {
       if (fs.existsSync(c)) {

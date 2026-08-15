@@ -39,7 +39,8 @@
       "!tests/**/*",
       "!tests",
       "!*.md",
-      "!dist-output.txt"
+      "!dist-output.txt",
+      "!assets/sandbox/**/*"
     ],
     "asarUnpack": [
       "assets/ocr/**/*",
@@ -48,7 +49,6 @@
       "assets/geogebra-app/**/*",
       "src/main/voice-worker.js",
       "src/main/voice-kws-encoder.js",
-      "src/main/win/**/*",
       "node_modules/monaco-editor/min/**/*",
       "node_modules/node-pty/**/*",
       "node_modules/@nut-tree-fork/**/*",
@@ -73,6 +73,12 @@
     ],
     "win": {
       "icon": "assets/icons/icons/icon.ico",
+      "extraResources": [
+        {
+          "from": "assets/sandbox/win",
+          "to": "sandbox"
+        }
+      ],
       "target": [
         {
           "target": "nsis",
