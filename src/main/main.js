@@ -6,6 +6,12 @@
  */
 
 const { app, BrowserWindow, ipcMain, nativeTheme, dialog, clipboard, screen, shell, systemPreferences, Notification, Tray, Menu, nativeImage, protocol, net } = require('electron');
+
+// stdout/stderr 被关闭或管道截断（如 `npm start | head`）时，console.log 会抛
+// EPIPE 未捕获异常直接崩溃主进程 —— 吞掉流错误，此后写操作变为无害 no-op。
+process.stdout.on('error', () => {});
+process.stderr.on('error', () => {});
+
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -779,7 +785,26 @@ function createSplashWindow() {
       nodeIntegration: false
     }
   });
-  splashWindow.loadFile(path.join(__dirname, '../renderer/pages/splash.html'));
+  // Splash 跟随主题：深浅色 + 强调色 + 背景色 + 版本号
+  const th = settings.theme || {};
+  const mode = th.mode || 'system';
+  const dark = mode === 'dark' ? true : mode === 'light' ? false : nativeTheme.shouldUseDarkColors;
+  const accent = /^#[0-9a-fA-F]{6}$/.test(th.accentColor || '') ? th.accentColor : '#4f8cff';
+  const bg = /^#[0-9a-fA-F]{6}$/.test(th.backgroundColor || '') ? th.backgroundColor : (dark ? '#17181d' : '#f5f7fa');
+  // Splash 跟随自定义字体：settings.fonts[lang]（与 01-app-init 的 FONT_OPTIONS 同表）
+  const SPLASH_FONT_WHITELIST = ['Noto Sans SC', 'LXGW WenKai', 'Noto Serif SC', 'Inter', 'Source Sans 3', 'Noto Sans'];
+  const lang = String(settings.language || 'zh');
+  const fonts = (settings.fonts || {});
+  const fontFamily = SPLASH_FONT_WHITELIST.includes(fonts[lang]) ? fonts[lang]
+    : SPLASH_FONT_WHITELIST.includes(fonts.zh) ? fonts.zh : '';
+  const params = {
+    dark: dark ? '1' : '0',
+    accent: accent.slice(1),
+    bg: bg.slice(1),
+    version: app.getVersion(),
+    font: fontFamily
+  };
+  splashWindow.loadFile(path.join(__dirname, '../renderer/pages/splash.html'), { query: params });
   splashWindow.once('ready-to-show', () => {
     if (!splashWindow || splashWindow.isDestroyed()) return;
     splashWindow.center();
