@@ -39,6 +39,7 @@
 - [x] D5 升级审批流（拒绝签名识别 + 更高权限重试）
 - [x] D6 设置「沙箱」页（默认模式/按模式覆盖/自检）
 - [x] D7 沙箱单测（argv 包装、profile 生成、fail-closed、实测）
+- [x] D8 Windows ACL 后端落地（`cibyp-sandbox.exe`：受限令牌 + 低完整性 ACL；实测只读拒写/区内可写/区外拒写；Windows 受限模式 runJS 改"代码文件 + stdout JSON"、终端 fail-closed；`asarUnpack` 打包）
 
 ## Phase E：插件兼容层 + 插件管理页
 

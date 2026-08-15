@@ -197,7 +197,8 @@ class PluginHost {
         const timeoutMs = Math.max(1000, Math.min(Number(spec && spec.timeoutMs) || 120000, 600000));
         const maxBytes = Math.max(1024, Number(spec && spec.stdoutMaxBytes) || 1048576);
         const signal = spec && spec.signal;
-        const child = spawn('/bin/sh', ['-c', command], {
+        const isWin = process.platform === 'win32';
+        const child = spawn(isWin ? (process.env.ComSpec || 'cmd.exe') : '/bin/sh', isWin ? ['/d', '/s', '/c', command] : ['-c', command], {
           cwd,
           env: process.env,
           stdio: ['ignore', 'pipe', 'pipe']

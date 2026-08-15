@@ -2107,15 +2107,19 @@ ipcMain.handle('sandbox:probe', () => {
     return { ok: false, error: backend.detail, backend: backend.backend, available: false };
   }
   try {
-    // 只读模式自检：/bin/echo 应能运行（读/执行不受限）
+    // 只读模式自检：受限子进程应能运行（读/执行不受限），但写入被拒绝
     const probeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cibyp-sb-probe-'));
     const tmpFile = path.join(probeDir, 'probe.txt');
-    const wrapped = sandboxRunner.confine(['/bin/sh', '-c', `echo ok > ${tmpFile}`], {
+    const probeArgv = process.platform === 'win32'
+      ? ['powershell.exe', '-NoProfile', '-NonInteractive', '-Command',
+         `Set-Content -LiteralPath '${tmpFile}' -Value 'x'`]
+      : ['/bin/sh', '-c', `echo ok > ${tmpFile}`];
+    const wrapped = sandboxRunner.confine(probeArgv, {
       mode: 'read-only',
       workspaceRoot: probeDir
     });
     const { spawnSync } = require('child_process');
-    const r = spawnSync(wrapped.argv[0], wrapped.argv.slice(1), { encoding: 'utf8', timeout: 10000 });
+    const r = spawnSync(wrapped.argv[0], wrapped.argv.slice(1), { encoding: 'utf8', timeout: 20000, windowsHide: true });
     const denied = fs.existsSync(tmpFile) === false;
     try { fs.rmSync(probeDir, { recursive: true, force: true }); } catch {}
     return {
@@ -2142,7 +2146,47 @@ function sandboxConfineFor(sandboxMode, workspacePath, argv) {
 }
 
 // ---- IPC: Run JS Code (sandboxed) ----
+// Windows 受限执行（ACL 后端）：node 的 IPC 通道无法穿越中间进程（已知限制，
+// 经 cmd.exe / C 启动器实测均不投递消息），改用"代码文件 + stdout JSON"方案。
+function runJSConfinedWin32(runnerPath, code, cwd, sandboxMode, workspacePath) {
+  return new Promise((resolve) => {
+    const { execFile } = require('child_process');
+    const codeFile = path.join(os.tmpdir(), `cibyp-js-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.js`);
+    try {
+      fs.writeFileSync(codeFile, code, 'utf-8');
+    } catch (e) {
+      return resolve({ ok: false, error: e.message });
+    }
+    const wrapped = sandboxConfineFor(sandboxMode, workspacePath, [process.execPath, runnerPath, codeFile]);
+    if (wrapped.error) {
+      try { fs.unlinkSync(codeFile); } catch {}
+      return resolve({ ok: false, error: wrapped.error.message, code: wrapped.error.code, sandboxUnavailable: true });
+    }
+    const execOpts = { timeout: 30000, maxBuffer: 8 * 1024 * 1024, windowsHide: true };
+    if (cwd && typeof cwd === 'string' && fs.existsSync(cwd)) execOpts.cwd = cwd;
+    execFile(wrapped.argv[0], wrapped.argv.slice(1), execOpts, (err, stdout, stderr) => {
+      try { fs.unlinkSync(codeFile); } catch {}
+      if (err) {
+        resolve({ ok: false, error: err.message, stderr: stderr || '', sandboxDenied: sandboxRunner.isSandboxDenial(true, stderr) });
+        return;
+      }
+      try {
+        const parsed = JSON.parse(stdout);
+        resolve(parsed.error
+          ? { ok: false, error: parsed.error, sandboxed: true }
+          : { ok: true, output: parsed.output, result: parsed.result, sandboxed: true });
+      } catch {
+        resolve({ ok: false, error: stderr || stdout || 'runner 输出解析失败' });
+      }
+    });
+  });
+}
+
 ipcMain.handle('code:runJS', (_, code, cwd, sandboxMode) => {
+  const restrictedWin32 = process.platform === 'win32' && sandboxMode && sandboxMode !== 'danger-full-access';
+  if (restrictedWin32) {
+    return runJSConfinedWin32(path.join(__dirname, '../tools/js-runner.js'), code, cwd, sandboxMode, cwd);
+  }
   return new Promise((resolve) => {
     const { fork } = require('child_process');
     const forkOpts = { silent: true, timeout: 30000 };
@@ -2174,6 +2218,10 @@ ipcMain.handle('code:runJS', (_, code, cwd, sandboxMode) => {
 
 // ---- IPC: Run JS Code (Node.js enabled) ----
 ipcMain.handle('code:runNodeJS', (_, code, cwd, sandboxMode) => {
+  const restrictedWin32 = process.platform === 'win32' && sandboxMode && sandboxMode !== 'danger-full-access';
+  if (restrictedWin32) {
+    return runJSConfinedWin32(path.join(__dirname, '../tools/js-runner-node.js'), code, cwd, sandboxMode, cwd);
+  }
   return new Promise((resolve) => {
     const { fork } = require('child_process');
     const forkOpts = { silent: true, timeout: 30000 };
@@ -2209,7 +2257,7 @@ ipcMain.handle('code:runShell', (_, script, cwd, sandboxMode) => {
     const tmpFile = path.join(os.tmpdir(), `script_${Date.now()}${process.platform === 'win32' ? '.ps1' : '.sh'}`);
     fs.writeFileSync(tmpFile, script, 'utf-8');
     let shell = process.platform === 'win32' ? 'powershell.exe' : '/bin/bash';
-    let args = process.platform === 'win32' ? ['-File', tmpFile] : [tmpFile];
+    let args = process.platform === 'win32' ? ['-NoProfile', '-NonInteractive', '-File', tmpFile] : [tmpFile];
     let confined = null;
     const wrapped = sandboxConfineFor(sandboxMode, cwd, [shell, ...args]);
     if (wrapped.error) {

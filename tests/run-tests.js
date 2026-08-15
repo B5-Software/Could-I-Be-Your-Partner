@@ -2176,6 +2176,88 @@ function runSandboxTests() {
     assert.strictEqual(sb.isSandboxDenial(true, 'bash: cannot create file: Operation not permitted'), true);
     assert.strictEqual(sb.isSandboxDenial(true, 'all good'), false);
     assert.strictEqual(sb.isSandboxDenial(false, 'Operation not permitted'), false);
+    assert.strictEqual(sb.isSandboxDenial(true, 'Access to the path is denied.'), true);
+    assert.strictEqual(sb.isSandboxDenial(true, '拒绝访问'), true);
+  });
+
+  test('ACL（win32）包装器定位 + aclScratchPath 唯一性', () => {
+    if (process.platform !== 'win32') {
+      console.log('  SKIP: 非 Windows 平台');
+      return;
+    }
+    const wrapper = sb.resolveWrapperPath();
+    assert.ok(wrapper && /cibyp-sandbox\.exe$/.test(wrapper), '应定位到 cibyp-sandbox.exe: ' + wrapper);
+    const a = sb.aclScratchPath('t1');
+    const b = sb.aclScratchPath('t1');
+    assert.ok(a !== b, '每次调用应生成独立 scratch 路径');
+    assert.ok(a.includes('cibyp-acl-tmp-t1-'), 'scratch 路径应含会话前缀');
+  });
+
+  test('ACL（win32）confine argv 结构 + 签名', () => {
+    const backend = sb.detectBackend();
+    if (process.platform !== 'win32') {
+      console.log('  SKIP: 非 Windows 平台');
+      return;
+    }
+    if (!backend.available || backend.backend !== 'acl') {
+      console.log('  SKIP: ACL 后端不可用: ' + backend.detail);
+      return;
+    }
+    const wrapper = sb.resolveWrapperPath();
+    const ro = sb.confine(['node.exe', '--version'], { mode: 'read-only' });
+    assert.strictEqual(ro.argv[0], wrapper);
+    assert.ok(ro.argv.includes('--mode') && ro.argv.includes('read-only'));
+    assert.ok(!ro.argv.some(a => a === '--workspace' || a === '--temp'), '只读模式不应有 workspace/temp 参数');
+    const sep = ro.argv.indexOf('--');
+    assert.ok(sep !== -1 && ro.argv[sep + 1] === 'node.exe', '-- 之后应为原始 argv');
+    assert.strictEqual(ro.confined, true);
+    assert.strictEqual(ro.enforcement, 'full');
+    assert.ok(ro.denialSignatures.includes('拒绝访问'));
+    assert.deepStrictEqual(ro.runnerFailureRules[0].fatalSignatures, ['cibyp-sandbox: ']);
+
+    const ws = sb.confine(['node.exe', 'x'], { mode: 'workspace-write', workspaceRoot: 'C:\\tmp\\ws', sessionId: 't' });
+    const wi = ws.argv.indexOf('--workspace');
+    assert.ok(wi !== -1 && ws.argv[wi + 1] === 'C:\\tmp\\ws', 'workspace-write 应携带 --workspace');
+    const ti = ws.argv.indexOf('--temp');
+    assert.ok(ti !== -1 && /cibyp-acl-tmp-t-/.test(ws.argv[ti + 1]), 'workspace-write 应携带 --temp scratch');
+  });
+
+  test('ACL（win32）实测：只读拒写 / 工作区可写 / 区外拒写', () => {
+    const backend = sb.detectBackend();
+    if (process.platform !== 'win32' || !backend.available || backend.backend !== 'acl') {
+      console.log('  SKIP: ACL 后端不可用（' + (backend.detail || '') + '）');
+      return;
+    }
+    const fsLocal = require('fs');
+    const osLocal = require('os');
+    const cp = require('child_process');
+    const psCmd = (file) => ['powershell.exe', '-NoProfile', '-NonInteractive', '-Command',
+      `try { Set-Content -LiteralPath '${file}' -Value 'x' -ErrorAction Stop; exit 3 } catch { exit 4 }`];
+    const dir = fsLocal.mkdtempSync(pathLocal.join(osLocal.tmpdir(), 'cibyp-sb-acl-'));
+    try {
+      // 只读：写入被拒绝
+      const roFile = pathLocal.join(dir, 'ro.txt');
+      const ro = sb.confine(psCmd(roFile), { mode: 'read-only', workspaceRoot: dir });
+      const roRes = cp.spawnSync(ro.argv[0], ro.argv.slice(1), { encoding: 'utf8', timeout: 30000, windowsHide: true });
+      assert.ok(roRes.status === 4 && !fsLocal.existsSync(roFile), '只读模式应拒绝写入（status=' + roRes.status + ' stderr=' + (roRes.stderr || '') + '）');
+
+      // workspace-write：区内写入成功
+      const wsFile = pathLocal.join(dir, 'ws.txt');
+      const ws = sb.confine(psCmd(wsFile), { mode: 'workspace-write', workspaceRoot: dir, sessionId: 'test' });
+      const wsRes = cp.spawnSync(ws.argv[0], ws.argv.slice(1), { encoding: 'utf8', timeout: 30000, windowsHide: true });
+      assert.strictEqual(wsRes.status, 3, '工作区内写入应成功（status=' + wsRes.status + ' stderr=' + (wsRes.stderr || '') + '）');
+      assert.ok(fsLocal.existsSync(wsFile), '工作区内文件应已写入');
+
+      // workspace-write：工作区外（未打标签目录）写入被拒绝
+      const outsideDir = fsLocal.mkdtempSync(pathLocal.join(osLocal.tmpdir(), 'cibyp-sb-out-'));
+      const outFile = pathLocal.join(outsideDir, 'out.txt');
+      const out = sb.confine(psCmd(outFile), { mode: 'workspace-write', workspaceRoot: dir, sessionId: 'test' });
+      const outRes = cp.spawnSync(out.argv[0], out.argv.slice(1), { encoding: 'utf8', timeout: 30000, windowsHide: true });
+      assert.ok(!fsLocal.existsSync(outFile), '工作区外写入应被拒绝（status=' + outRes.status + '）');
+      try { fsLocal.rmSync(outsideDir, { recursive: true, force: true }); } catch { /* ignore */ }
+    } finally {
+      try { fsLocal.rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ }
+    }
   });
 
   test('Seatbelt 实测（后端可用时）：只读拒写 / 区内可写 / 区外拒写', () => {

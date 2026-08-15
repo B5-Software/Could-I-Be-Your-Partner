@@ -30,7 +30,7 @@
 
 - `@deepseek-ai/cordis`（npm，MIT）作为插件内核 lib；锁精确版本。
 - `@deepseek-ai/dsh-tools` + `@deepseek-ai/schemastery` 作为工具注册表/配置 schema 契约 lib。
-- 沙箱后端：macOS 用系统自带 `sandbox-exec`（Seatbelt）；Linux 优先 `bwrap`、缺失时 Landlock；Windows 受限令牌 ACL（后两者需要时以 native 预编译提供，先落骨架与 fail-closed）。
+- 沙箱后端：macOS 用系统自带 `sandbox-exec`（Seatbelt）；Linux 优先 `bwrap`、缺失时 Landlock；Windows 用受限令牌 ACL 的 native 预编译后端 `src/main/win/cibyp-sandbox.exe`（MinGW-w64 编译，`asarUnpack` 打包）。
 
 ## 提交纪律
 

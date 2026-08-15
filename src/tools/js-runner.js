@@ -7,8 +7,12 @@
 
 // Sandboxed JS code runner - uses Node.js vm module for proper isolation
 const vm = require('vm');
+const fs = require('fs');
 
-process.on('message', ({ code }) => {
+// 文件模式（Windows 受限执行：IPC 通道无法穿越中间进程，改为代码文件 + stdout JSON）
+const codeFile = process.argv[2];
+
+function execute(code, respond) {
   try {
     const logs = [];
     const safeConsole = {
@@ -29,9 +33,29 @@ process.on('message', ({ code }) => {
     const context = vm.createContext(sandbox);
     const result = vm.runInContext(`"use strict";\n${code}`, context, { timeout: 30000 });
 
-    process.send({ output: logs.join('\n'), result: result !== undefined ? String(result) : undefined });
+    respond({ output: logs.join('\n'), result: result !== undefined ? String(result) : undefined });
   } catch (e) {
-    process.send({ error: e.message });
+    respond({ error: e.message });
   }
-  process.exit(0);
-});
+}
+
+if (codeFile) {
+  let code;
+  try {
+    code = fs.readFileSync(codeFile, 'utf8');
+  } catch (e) {
+    process.stdout.write(JSON.stringify({ error: '无法读取代码文件: ' + e.message }));
+    process.exit(1);
+  }
+  execute(code, (payload) => {
+    process.stdout.write(JSON.stringify(payload));
+    process.exit(0);
+  });
+} else {
+  process.on('message', ({ code }) => {
+    execute(code, (payload) => {
+      process.send(payload);
+      process.exit(0);
+    });
+  });
+}

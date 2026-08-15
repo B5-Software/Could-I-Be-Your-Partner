@@ -178,6 +178,11 @@ ipcMain.handle('terminal:make', (_, cwd, opts = {}) => {
     const sandboxMode = (opts && opts.sandboxMode) || 'danger-full-access';
     if (sandboxMode !== 'danger-full-access') {
       const sandboxRunner = require('./sandbox-runner');
+      // Windows 受限后端（cibyp-sandbox）无法透传 ConPTY 伪终端（进程属性无法
+      // 跨包装器转发，TUI/交互式程序会损坏）—— fail-closed，给出明确提示。
+      if (process.platform === 'win32' && sandboxRunner.detectBackend().backend === 'acl') {
+        throw new Error('Windows 受限沙箱模式暂不支持终端：ConPTY 伪终端无法穿越沙箱包装器，请在设置中关闭该会话的沙箱或改用完整访问模式');
+      }
       const wrapped = sandboxRunner.confine([shellName, ...shellArgs], {
         mode: sandboxMode,
         workspaceRoot: effectiveCwd

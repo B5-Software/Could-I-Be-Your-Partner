@@ -48,6 +48,7 @@
       "assets/geogebra-app/**/*",
       "src/main/voice-worker.js",
       "src/main/voice-kws-encoder.js",
+      "src/main/win/**/*",
       "node_modules/monaco-editor/min/**/*",
       "node_modules/node-pty/**/*",
       "node_modules/@nut-tree-fork/**/*",

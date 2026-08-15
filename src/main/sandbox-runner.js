@@ -74,8 +74,18 @@ function detectBackend() {
         cachedBackend = { backend: 'landlock', available: false, enforcement: 'none', detail: 'bwrap 缺失，Landlock 后端未编译' };
       }
     } else if (process.platform === 'win32') {
-      // Windows 受限令牌 ACL 需要 native addon（骨架预留，当前 fail-closed）
-      cachedBackend = { backend: 'acl', available: false, enforcement: 'none', detail: '受限令牌 ACL 后端未编译' };
+      // Windows：cibyp-sandbox.exe（受限令牌 + 低完整性 ACL）。
+      // 通过 --self-test 真实校验后端可用（自检含受限子进程读写验证）。
+      const wrapper = resolveWrapperPath();
+      if (!wrapper) {
+        cachedBackend = { backend: 'acl', available: false, enforcement: 'none', detail: 'cibyp-sandbox.exe 未找到（src/main/win 或 app.asar.unpacked）' };
+      } else {
+        const probe = spawnSync(wrapper, ['--self-test'], { encoding: 'utf8', timeout: 20000, windowsHide: true });
+        const available = probe.error === undefined && probe.status === 0;
+        cachedBackend = available
+          ? { backend: 'acl', available: true, enforcement: 'full', detail: 'cibyp-sandbox（受限令牌 + 低完整性 ACL）' }
+          : { backend: 'acl', available: false, enforcement: 'none', detail: `cibyp-sandbox 自检失败（code=${probe.status}）` };
+      }
     } else {
       cachedBackend = { backend: null, available: false, enforcement: 'none', detail: '未知平台' };
     }
@@ -88,6 +98,42 @@ function detectBackend() {
 /** 重置后端探测缓存（测试用） */
 function resetBackendCache() {
   cachedBackend = null;
+}
+
+/**
+ * 定位 Windows 包装器 cibyp-sandbox.exe。
+ * dev：源码目录 src/main/win/；packaged：asar 内文件需 unpack 到
+ * process.resourcesPath/app.asar.unpacked（与 assets 同模式）。
+ * @returns {string|null}
+ */
+let cachedWrapperPath = null;
+function resolveWrapperPath() {
+  if (cachedWrapperPath) return cachedWrapperPath;
+  const candidates = [];
+  if (process.resourcesPath) {
+    candidates.push(path.join(process.resourcesPath, 'app.asar.unpacked', 'src', 'main', 'win', 'cibyp-sandbox.exe'));
+  }
+  candidates.push(path.join(__dirname, 'win', 'cibyp-sandbox.exe'));
+  for (const c of candidates) {
+    try {
+      if (fs.existsSync(c)) {
+        cachedWrapperPath = c;
+        return c;
+      }
+    } catch { /* ignore */ }
+  }
+  cachedWrapperPath = null;
+  return null;
+}
+
+/**
+ * ACL 后端低标签临时目录路径（wrapper 负责创建/打标签/清理）。
+ * 每次调用独立目录，避免并发共享；含随机串防碰撞。
+ */
+function aclScratchPath(sessionId) {
+  const suffix = sessionId ? String(sessionId) : String(process.pid);
+  const rnd = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+  return path.join(os.tmpdir(), `cibyp-acl-tmp-${suffix}-${rnd}`);
 }
 
 /**
@@ -214,7 +260,32 @@ function confine(argv, raw) {
       confined: true
     };
   }
-  // landlock / acl：骨架存在但未编译 —— fail-closed（理论不可达，detectBackend 已判定 unavailable）
+  if (backend.backend === 'acl') {
+    const wrapper = resolveWrapperPath();
+    if (!wrapper) {
+      const err = new Error('cibyp-sandbox.exe 未找到，无法执行受限模式');
+      err.code = SANDBOX_UNAVAILABLE;
+      throw err;
+    }
+    const args = [wrapper, '--mode', policy.mode];
+    if (policy.mode === 'workspace-write') {
+      if (policy.workspaceRoot) args.push('--workspace', policy.workspaceRoot);
+      // 低标签临时目录：子进程 TMP/TEMP 指到可写位置（工作区外仍被 MIC 拒绝）
+      args.push('--temp', aclScratchPath(policy.sessionId));
+    }
+    args.push('--', ...argv);
+    return {
+      argv: args,
+      enforcement: backend.enforcement,
+      denialSignatures: ['access is denied', 'permission denied', 'is denied', '拒绝访问'],
+      runnerFailureRules: [
+        { fatalSignatures: ['cibyp-sandbox: '], informationalLines: [] }
+      ],
+      backend: backend.backend,
+      confined: true
+    };
+  }
+  // landlock：骨架存在但未编译 —— fail-closed（理论不可达，detectBackend 已判定 unavailable）
   const err = new Error(`sandbox backend "${backend.backend}" is not implemented on this host`);
   err.code = SANDBOX_UNAVAILABLE;
   throw err;
@@ -236,7 +307,7 @@ function policyForCall(settings = {}, modeName, workspacePath) {
 function isSandboxDenial(confined, stderr = '') {
   if (!confined || typeof stderr !== 'string') return false;
   const text = stderr.toLowerCase();
-  return /operation not permitted|read-only file system|sandbox denied|deny file-write|permission denied/.test(text);
+  return /operation not permitted|read-only file system|sandbox denied|deny file-write|permission denied|access is denied|is denied|拒绝访问/.test(text);
 }
 
 module.exports = {
@@ -244,6 +315,8 @@ module.exports = {
   resolvePolicy,
   detectBackend,
   resetBackendCache,
+  resolveWrapperPath,
+  aclScratchPath,
   buildSeatbeltProfile,
   buildBwrapArgv,
   confine,
