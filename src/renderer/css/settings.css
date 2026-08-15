@@ -122,6 +122,8 @@
 .setting-item input[type="text"],
 .setting-item input[type="password"],
 .setting-item input[type="number"],
+.setting-item input[type="datetime-local"],
+.setting-item input[type="date"],
 .setting-item textarea,
 .setting-item select {
   width: 100%;
@@ -629,6 +631,53 @@ input[id^="setting-budget-peak-"][type="text"]:focus {
   cursor: pointer;
   flex-shrink: 0;
   accent-color: var(--accent);
+}
+
+/* 自动化触发 Token 列表：复选框样式与隐私过滤保持一致 */
+.automation-token-row .checkbox-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  cursor: pointer;
+  color: var(--text-primary);
+  padding: 4px 8px;
+  border: 1px solid var(--border-color, rgba(128, 128, 128, 0.25));
+  border-radius: 6px;
+  transition: background 0.2s;
+  white-space: nowrap;
+  margin: 0;
+}
+
+.automation-token-row .checkbox-label:hover {
+  background: var(--hover-bg, rgba(128, 128, 128, 0.08));
+}
+
+.automation-token-row .checkbox-label input {
+  width: 14px;
+  height: 14px;
+  cursor: pointer;
+  flex-shrink: 0;
+  accent-color: var(--accent);
+}
+
+.automation-token-row .checkbox-label input[type="checkbox"],
+.automation-token-row .setting-item input[type="checkbox"] {
+  accent-color: var(--accent);
+}
+
+.automation-token-row select {
+  padding: 4px 8px;
+  border: 1px solid var(--border-color, rgba(128, 128, 128, 0.25));
+  border-radius: 6px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: 13px;
+  outline: none;
+}
+
+.automation-token-row select:focus {
+  border-color: var(--accent);
 }
 
 .setting-warning {

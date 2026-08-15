@@ -15,9 +15,12 @@ const GUIDE = {
   例：*/5 * * * *（每5分钟）、0 9 * * 1-5（工作日9点）、0 0 * * *（每天0点）。
 - notification（系统通知）：config = { kind, titleRegex?, bodyRegex? }。
   kind ∈ any|sessionDone|sessionError|approval|other；标题/正文用 JS 正则匹配，留空不限制。
-- http（专用信号服务器）：启用后监听 127.0.0.1:8765（settings.automation.serverPort 可改），
-  POST /trigger/{taskId} 的 JSON 请求体进入 DSL 的 args；设置 serverToken 后需
-  Authorization: Bearer <token> 或 ?token=<token>；GET /health 探活。`,
+- http（专用信号服务器）：默认**禁用**，需在 设置 → 自动化 中开启并配置至少一个 Token
+  后才启动（开启「允许无 Token 启动」可免 Token 运行，不安全）；监听 127.0.0.1:8765
+  （settings.automation.serverPort 可改），POST /trigger/{taskId} 的 JSON 请求体进入 DSL
+  的 args；必须携带 Authorization: Bearer <token>（timing-safe 校验，不支持 ?token=）。
+  Token 可配置权限：scope（全部/指定任务，越权返回 403）、allowParams（false 时忽略
+  请求体）、expiresAt（过期后 401）。GET /health 探活。`,
   dsl: `
 ## DSL 语法（图灵完备、沙箱 AST 解释器；最终 return 一个字符串作为提示词）
 - 变量与控制流：let、赋值、+=/-=、if/else、while、for、break/continue、return

@@ -14,9 +14,12 @@
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
+const crypto = require('crypto');
 const { runDsl } = require('./dsl');
 
 const TRIGGER_TYPES = ['schedule', 'notification', 'http'];
+// 防 ReDoS：通知正则长度上限
+const MAX_REGEX_LENGTH = 200;
 
 class AutomationManager {
   constructor(options = {}) {
@@ -27,6 +30,10 @@ class AutomationManager {
     this.tasks = [];
     this.server = null;
     this.serverPort = null;
+    // 'off' | 'disabled'（未启用） | 'missing-token'（启用但无 token 且未开 allowNoToken） | 'running'
+    this.serverState = 'off';
+    this.serverInsecure = false;   // allowNoToken 模式下无 token 运行
+    this.serverTokenCount = 0;
     this._timer = null;
     this._lastFire = new Map(); // taskId → 'YYYY-MM-DD-HH-MM'
     this._disposed = false;
@@ -87,6 +94,7 @@ class AutomationManager {
     else this.tasks.push(norm);
     this.save();
     this._refresh();
+    this.refreshServer().catch(e => console.error('[automation] refreshServer:', e.message));
     return this._public(norm);
   }
 
@@ -96,6 +104,7 @@ class AutomationManager {
     if (this.tasks.length !== before) {
       this.save();
       this._refresh();
+      this.refreshServer().catch(e => console.error('[automation] refreshServer:', e.message));
       return true;
     }
     return false;
@@ -107,12 +116,16 @@ class AutomationManager {
     t.enabled = !!enabled;
     this.save();
     this._refresh();
+    this.refreshServer().catch(e => console.error('[automation] refreshServer:', e.message));
     return this._public(t);
   }
 
-  /** 启动调度循环 + 按需启动 HTTP 信号服务器。 */
+  /** 启动调度循环 + 按需启动 HTTP 信号服务器（fail-closed）。 */
   start() {
     this._refresh();
+    this.refreshServer().catch(e => {
+      console.error(`[automation] HTTP 信号服务器刷新失败:`, e.message);
+    });
   }
 
   stop() {
@@ -123,6 +136,36 @@ class AutomationManager {
       this.server = null;
       this.serverPort = null;
     }
+    this.serverState = 'off';
+  }
+
+  /** 设置变更（automation:updateSettings）后调用：重新评估服务器生命周期。 */
+  async refreshServer() {
+    if (this._disposed) return;
+    const settings = (await this.getSettings()) || {};
+    const cfg = normalizeAutomationSettings(settings.automation);
+    const needHttp = this.tasks.some(t => t.enabled && t.trigger.type === 'http');
+    const enabled = cfg.enabled === true;
+    const canServe = cfg.tokens.length > 0 || cfg.allowNoToken === true;
+    const shouldRun = needHttp && enabled && canServe;
+    if (shouldRun) {
+      // 配置变化（token 列表/端口等）时运行中也要重启，保证快照与权限最新
+      if (this.server) {
+        try { this.server.close(); } catch { /* ignore */ }
+        this.server = null;
+        this.serverPort = null;
+      }
+      await this._startServer(cfg);
+    } else if (this.server) {
+      try { this.server.close(); } catch { /* ignore */ }
+      this.server = null;
+      this.serverPort = null;
+      this.serverInsecure = false;
+      this.serverTokenCount = 0;
+    }
+    this.serverState = this.server
+      ? 'running'
+      : needHttp ? (enabled ? 'missing-token' : 'disabled') : 'off';
   }
 
   _refresh() {
@@ -134,15 +177,6 @@ class AutomationManager {
     } else if (!hasSchedule && this._timer) {
       clearInterval(this._timer);
       this._timer = null;
-    }
-    // HTTP 服务器生命周期
-    const needHttp = this.tasks.some(t => t.enabled && t.trigger.type === 'http');
-    if (needHttp) {
-      if (!this.server) this._startServer();
-    } else if (this.server) {
-      try { this.server.close(); } catch { /* ignore */ }
-      this.server = null;
-      this.serverPort = null;
     }
   }
 
@@ -180,11 +214,20 @@ class AutomationManager {
     }
   }
 
-  async _startServer() {
-    const settings = (await this.getSettings()) || {};
-    const cfg = settings.automation || {};
-    const port = (cfg.serverPort === 0 || cfg.serverPort) ? Number(cfg.serverPort) : 8765;
-    const token = String(cfg.serverToken || '');
+  /** 启动 HTTP 信号服务器（fail-closed：未启用、无 token 且未开 allowNoToken 时不启动）。 */
+  async _startServer(cfg) {
+    if (cfg.enabled !== true) {
+      this.serverState = 'disabled';
+      return;
+    }
+    if (cfg.tokens.length === 0 && cfg.allowNoToken !== true) {
+      this.serverState = 'missing-token';
+      return;
+    }
+    const port = cfg.serverPort;
+    const insecure = cfg.allowNoToken === true; // allowNoToken 模式：无鉴权请求放行（无论是否有 token 列表）
+    const tokens = cfg.tokens; // 设置变更会先关停再重启，快照安全
+    const allowNoToken = cfg.allowNoToken === true;
     const server = http.createServer(async (req, res) => {
       try {
         const url = new URL(req.url || '/', `http://localhost:${port}`);
@@ -197,27 +240,36 @@ class AutomationManager {
           this._json(res, 404, { ok: false, error: 'not-found' });
           return;
         }
-        const auth = req.headers.authorization || '';
-        const queryToken = url.searchParams.get('token') || '';
-        if (token && auth !== `Bearer ${token}` && queryToken !== token) {
+        const taskId = m[1];
+        // 仅接受 Authorization: Bearer <token>（timing-safe 比较）；
+        // 不再支持 ?token= 查询参数（避免 token 泄入 URL 日志）
+        const { token, authed } = resolveAuth(req.headers.authorization || '', tokens, allowNoToken);
+        if (!authed) {
           this._json(res, 401, { ok: false, error: 'unauthorized' });
           return;
         }
-        const taskId = m[1];
         const task = this.tasks.find(t => t.id === taskId);
         if (!task || !task.enabled || task.trigger.type !== 'http') {
           this._json(res, 404, { ok: false, error: 'unknown-task' });
           return;
         }
-        let body = {};
-        try {
-          const raw = await readBody(req, 2 * 1024 * 1024);
-          if (raw) body = JSON.parse(raw);
-        } catch {
-          this._json(res, 400, { ok: false, error: 'invalid-json-body' });
+        // 权限 1：任务范围（token 存在且 scope 为数组且不含该任务 → 403）
+        if (token && Array.isArray(token.scope) && !token.scope.includes(taskId)) {
+          this._json(res, 403, { ok: false, error: 'forbidden: task-out-of-scope' });
           return;
         }
-        const result = await this.run(task.id, { kind: 'http', params: body, time: new Date().toISOString() });
+        // 权限 2：允许传参（allowParams=false 时忽略请求体，args 恒为空）
+        let params = {};
+        if (!token || token.allowParams !== false) {
+          try {
+            const raw = await readBody(req, 2 * 1024 * 1024);
+            if (raw) params = JSON.parse(raw);
+          } catch {
+            this._json(res, 400, { ok: false, error: 'invalid-json-body' });
+            return;
+          }
+        }
+        const result = await this.run(task.id, { kind: 'http', params, time: new Date().toISOString() });
         this._json(res, 200, { ok: true, accepted: true, taskId, sessionKey: result.sessionKey || null });
       } catch (e) {
         this._json(res, 500, { ok: false, error: e.message });
@@ -229,7 +281,10 @@ class AutomationManager {
     });
     this.server = server;
     this.serverPort = server.address() ? server.address().port : port;
-    console.log(`[automation] HTTP 信号服务器已启动: http://127.0.0.1:${this.serverPort}/trigger/:taskId`);
+    this.serverInsecure = insecure;
+    this.serverTokenCount = tokens.length;
+    this.serverState = 'running';
+    console.log(`[automation] HTTP 信号服务器已启动: http://127.0.0.1:${this.serverPort}/trigger/:taskId${insecure ? '（allowNoToken 模式）' : ''}`);
   }
 
   _json(res, code, payload) {
@@ -306,12 +361,86 @@ class AutomationManager {
 
   serverInfo() {
     return this.server
-      ? { running: true, port: this.serverPort, url: `http://127.0.0.1:${this.serverPort}` }
-      : { running: false, port: null, url: null };
+      ? {
+          running: true, state: this.serverState,
+          port: this.serverPort, url: `http://127.0.0.1:${this.serverPort}`,
+          insecure: this.serverInsecure, tokenCount: this.serverTokenCount
+        }
+      : { running: false, state: this.serverState, port: null, url: null, insecure: false, tokenCount: 0 };
   }
 }
 
+/** timing-safe 字符串比较（长度不符直接拒绝，不做恒等比较）。 */
+function safeEqual(a, b) {
+  const g = Buffer.from(String(a));
+  const e = Buffer.from(String(b));
+  if (g.length !== e.length || g.length === 0) return false;
+  return crypto.timingSafeEqual(g, e);
+}
+
+/**
+ * 解析 Bearer 鉴权：返回 { token, authed }。
+ * - 无 Authorization 头：allowNoToken 开启时一律放行（token=null），即使已配置 token 列表
+ * - 有头：timing-safe 匹配非过期 token（无效 token 恒拒绝，不受 allowNoToken 影响）
+ * - 过期 token 不参与匹配（返回 401）
+ */
+function resolveAuth(header, tokens, allowNoToken) {
+  const prefix = 'Bearer ';
+  if (!header.startsWith(prefix)) {
+    return allowNoToken ? { token: null, authed: true } : { token: null, authed: false };
+  }
+  const given = header.slice(prefix.length).trim();
+  const now = Date.now();
+  for (const t of tokens) {
+    if (t.expiresAt && t.expiresAt > 0 && t.expiresAt < now) continue;
+    if (safeEqual(given, t.value)) return { token: t, authed: true };
+  }
+  return { token: null, authed: false };
+}
+
+function genTokenId() {
+  return 't' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+}
+
+/**
+ * 规范化 automation 配置（main 与 manager 共用）：
+ * - 旧格式 serverToken 字符串 → tokens[0]「默认」
+ * - 校验/填充所有字段默认值
+ */
+function normalizeAutomationSettings(cfg) {
+  const out = {
+    enabled: !!(cfg && cfg.enabled === true),
+    allowNoToken: !!(cfg && cfg.allowNoToken === true),
+    serverPort: (cfg && (cfg.serverPort === 0 || (Number.isInteger(cfg.serverPort) && cfg.serverPort >= 1 && cfg.serverPort <= 65535))) ? cfg.serverPort : 8765,
+    tokens: []
+  };
+  if (cfg && typeof cfg.serverToken === 'string' && cfg.serverToken.trim()) {
+    out.tokens.push({
+      id: genTokenId(), name: '默认',
+      value: cfg.serverToken.trim().slice(0, 128),
+      scope: 'all', allowParams: true, expiresAt: 0, createdAt: Date.now()
+    });
+  }
+  if (cfg && Array.isArray(cfg.tokens)) {
+    for (const t of cfg.tokens) {
+      const value = t && typeof t.value === 'string' ? t.value.trim() : '';
+      if (!value) continue;
+      out.tokens.push({
+        id: (t && typeof t.id === 'string' && t.id) ? t.id : genTokenId(),
+        name: (t && String(t.name || '').trim().slice(0, 64)) || '未命名',
+        value: value.slice(0, 128),
+        scope: Array.isArray(t.scope) ? [...new Set(t.scope.map(s => String(s)).filter(Boolean))] : 'all',
+        allowParams: !(t && t.allowParams === false),
+        expiresAt: (t && Number.isFinite(t.expiresAt) && t.expiresAt > 0) ? Math.floor(t.expiresAt) : 0,
+        createdAt: (t && Number.isFinite(t.createdAt) && t.createdAt > 0) ? Math.floor(t.createdAt) : Date.now()
+      });
+    }
+  }
+  return out;
+}
+
 function safeRegex(pattern) {
+  if (typeof pattern !== 'string' || pattern.length > MAX_REGEX_LENGTH) return /(?!)/;
   try { return new RegExp(pattern); } catch { return /(?!)/; }
 }
 
@@ -354,4 +483,4 @@ function matchesCron(expr, date) {
     && cronField(dow.replace(/\b7\b/g, '0'), date.getDay(), 0, 6);
 }
 
-module.exports = { AutomationManager, matchesCron };
+module.exports = { AutomationManager, matchesCron, safeRegex, normalizeAutomationSettings };

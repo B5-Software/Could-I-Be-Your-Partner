@@ -2898,7 +2898,7 @@ async function runAutomationTests() {
     const mgr = new AutomationManager({
       dataDir,
       transport,
-      getSettings: async () => ({ automation: { serverPort: 0, serverToken: 'secret' } })
+      getSettings: async () => ({ automation: { enabled: true, serverPort: 0, serverToken: 'secret' } })
     });
     try {
       const httpTask = mgr.upsert({
@@ -2924,7 +2924,15 @@ async function runAutomationTests() {
       assert.ok(dispatch, '应发生分发');
       assert.ok(dispatch.payload.prompt.includes('构建 owner/app @ main 事件=PUSH'), '提示词应经 DSL 渲染');
       const unauth = await fetch(`http://127.0.0.1:${info.port}/trigger/${httpTask.id}`, { method: 'POST', body: '{}' });
-      assert.strictEqual(unauth.status, 401);
+      assert.strictEqual(unauth.status, 401, '无 token 应 401');
+      const wrongToken = await fetch(`http://127.0.0.1:${info.port}/trigger/${httpTask.id}`, {
+        method: 'POST', headers: { 'Authorization': 'Bearer wrong' }, body: '{}'
+      });
+      assert.strictEqual(wrongToken.status, 401, '错误 token 应 401');
+      const queryToken = await fetch(`http://127.0.0.1:${info.port}/trigger/${httpTask.id}?token=secret`, {
+        method: 'POST', body: '{}'
+      });
+      assert.strictEqual(queryToken.status, 401, '?token= 查询参数不再受支持，应 401');
       const cronTask = mgr.upsert({
         name: '定时', enabled: true,
         trigger: { type: 'schedule', config: { cron: '*/5 * * * *' } },
@@ -2938,6 +2946,205 @@ async function runAutomationTests() {
       mgr.stop();
       try { fsLocal2.rmSync(dataDir, { recursive: true, force: true }); } catch { /* ignore */ }
     }
+  });
+
+  await testAsync('AutomationManager：HTTP 信号服务器 fail-closed（默认禁用/缺 token 不启动，设置热应用）', async () => {
+    const fsLocal3 = require('fs');
+    const pathLocal3 = require('path');
+    const osLocal3 = require('os');
+    const dataDir = fsLocal3.mkdtempSync(pathLocal3.join(osLocal3.tmpdir(), 'cibyp-auto-fc-'));
+    const settingsRef = { automation: { enabled: false, allowNoToken: false, serverPort: 0, tokens: [] } };
+    const transport2 = {
+      send: () => {},
+      request: async () => ({ sessionKey: 'chat:s1' })
+    };
+    const { AutomationManager: AM } = require('../src/main/automation/automation-manager.js');
+    const mgr = new AM({
+      dataDir,
+      transport: transport2,
+      getSettings: async () => settingsRef
+    });
+    try {
+      const httpTask = mgr.upsert({
+        name: 'HTTP 触发', enabled: true,
+        trigger: { type: 'http', config: {} },
+        dsl: 'return "ok-" + args.v;'
+      });
+      mgr.start();
+      await mgr.refreshServer();
+      let info = mgr.serverInfo();
+      assert.strictEqual(info.running, false, '默认禁用：服务器不应启动');
+      assert.strictEqual(info.state, 'disabled', '未启用状态应为 disabled');
+
+      settingsRef.automation.enabled = true;
+      await mgr.refreshServer();
+      info = mgr.serverInfo();
+      assert.strictEqual(info.running, false, '启用但无 token：服务器不应启动');
+      assert.strictEqual(info.state, 'missing-token', '状态应为 missing-token');
+
+      settingsRef.automation.tokens = [{ id: 't1', name: '默认', value: 'new-secret', scope: 'all', allowParams: true, expiresAt: 0 }];
+      await mgr.refreshServer();
+      info = mgr.serverInfo();
+      assert.strictEqual(info.running, true, '启用且配置 token 后应启动');
+      const ok = await fetch(`http://127.0.0.1:${info.port}/trigger/${httpTask.id}`, {
+        method: 'POST', headers: { 'Authorization': 'Bearer new-secret' }, body: '{}'
+      });
+      assert.strictEqual(ok.status, 200, '新 token 应可触发');
+
+      settingsRef.automation.enabled = false;
+      await mgr.refreshServer();
+      info = mgr.serverInfo();
+      assert.strictEqual(info.running, false, '关闭开关后服务器应停止');
+      assert.strictEqual(info.state, 'disabled');
+    } finally {
+      mgr.stop();
+      try { fsLocal3.rmSync(dataDir, { recursive: true, force: true }); } catch { /* ignore */ }
+    }
+  });
+
+  await testAsync('AutomationManager：allowNoToken 无鉴权模式（不安全）+ insecure 标志', async () => {
+    const fsLocal4 = require('fs');
+    const pathLocal4 = require('path');
+    const osLocal4 = require('os');
+    const dataDir = fsLocal4.mkdtempSync(pathLocal4.join(osLocal4.tmpdir(), 'cibyp-auto-notk-'));
+    const settingsRef = { automation: { enabled: true, allowNoToken: true, serverPort: 0, tokens: [] } };
+    const { AutomationManager: AM } = require('../src/main/automation/automation-manager.js');
+    const mgr = new AM({
+      dataDir,
+      transport: { send: () => {}, request: async () => ({ sessionKey: 'chat:s1' }) },
+      getSettings: async () => settingsRef
+    });
+    try {
+      const httpTask = mgr.upsert({
+        name: 'HTTP 触发', enabled: true,
+        trigger: { type: 'http', config: {} },
+        dsl: 'return "ok-" + args.v;'
+      });
+      mgr.start();
+      await mgr.refreshServer();
+      let info = mgr.serverInfo();
+      assert.strictEqual(info.running, true, 'allowNoToken 且无 token 时应启动');
+      assert.strictEqual(info.insecure, true, '应为 insecure 模式');
+      assert.strictEqual(info.tokenCount, 0);
+      const noAuth = await fetch(`http://127.0.0.1:${info.port}/trigger/${httpTask.id}`, { method: 'POST', body: '{}' });
+      assert.strictEqual(noAuth.status, 200, '无鉴权请求应放行');
+      // 配置 token 后：allowNoToken 仍放行无鉴权请求，但无效 Bearer 恒拒绝
+      settingsRef.automation.tokens = [{ id: 't1', name: '默认', value: 'sec', scope: 'all', allowParams: true, expiresAt: 0 }];
+      await mgr.refreshServer();
+      info = mgr.serverInfo();
+      assert.strictEqual(info.insecure, true, 'allowNoToken 开启时始终为 insecure（即使有 token 列表）');
+      const allowed = await fetch(`http://127.0.0.1:${info.port}/trigger/${httpTask.id}`, { method: 'POST', body: '{}' });
+      assert.strictEqual(allowed.status, 200, 'allowNoToken 开启时有 token 列表也放行无鉴权请求');
+      const valid = await fetch(`http://127.0.0.1:${info.port}/trigger/${httpTask.id}`, {
+        method: 'POST', headers: { 'Authorization': 'Bearer sec' }, body: '{}'
+      });
+      assert.strictEqual(valid.status, 200, '有效 token 仍可触发');
+      const bad = await fetch(`http://127.0.0.1:${info.port}/trigger/${httpTask.id}`, {
+        method: 'POST', headers: { 'Authorization': 'Bearer wrong' }, body: '{}'
+      });
+      assert.strictEqual(bad.status, 401, '无效 Bearer 仍应 401');
+    } finally {
+      mgr.stop();
+      try { fsLocal4.rmSync(dataDir, { recursive: true, force: true }); } catch { /* ignore */ }
+    }
+  });
+
+  await testAsync('AutomationManager：Token 权限（scope 越权 403 / allowParams=false 忽略请求体 / 过期 401 / 多 token）', async () => {
+    const fsLocal5 = require('fs');
+    const pathLocal5 = require('path');
+    const osLocal5 = require('os');
+    const dataDir = fsLocal5.mkdtempSync(pathLocal5.join(osLocal5.tmpdir(), 'cibyp-auto-perm-'));
+    const dispatched5 = [];
+    const settingsRef = {
+      automation: {
+        enabled: true, allowNoToken: false, serverPort: 0,
+        tokens: [
+          { id: 'ta', name: '限定', value: 'scope-token', scope: ['task-a'], allowParams: true, expiresAt: 0 },
+          { id: 'tb', name: '无参', value: 'noparam-token', scope: 'all', allowParams: false, expiresAt: 0 },
+          { id: 'tc', name: '过期', value: 'expired-token', scope: 'all', allowParams: true, expiresAt: Date.now() - 60000 }
+        ]
+      }
+    };
+    const { AutomationManager: AM } = require('../src/main/automation/automation-manager.js');
+    const mgr = new AM({
+      dataDir,
+      transport: {
+        send: () => {},
+        request: async (channel, payload) => { dispatched5.push({ channel, payload }); return { sessionKey: 'chat:s1' }; }
+      },
+      getSettings: async () => settingsRef
+    });
+    try {
+      const taskA = mgr.upsert({ name: 'A', enabled: true, trigger: { type: 'http', config: {} }, dsl: 'return "A:" + args.v;' });
+      const taskB = mgr.upsert({ name: 'B', enabled: true, trigger: { type: 'http', config: {} }, dsl: 'return "B:" + args.v;' });
+      settingsRef.automation.tokens[0].scope = [taskA.id];
+      mgr.start();
+      await mgr.refreshServer();
+      const info = mgr.serverInfo();
+      assert.strictEqual(info.running, true);
+      const base = `http://127.0.0.1:${info.port}`;
+      const post = (taskId, token, body = '{}') => fetch(`${base}/trigger/${taskId}`, {
+        method: 'POST', headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' }, body
+      });
+      // scope 内放行
+      let r = await post(taskA.id, 'scope-token', JSON.stringify({ v: 1 }));
+      assert.strictEqual(r.status, 200, 'scope 内任务应放行');
+      // scope 越权 → 403
+      r = await post(taskB.id, 'scope-token', JSON.stringify({ v: 1 }));
+      assert.strictEqual(r.status, 403, '越权任务应 403');
+      // allowParams=false → 请求体被忽略
+      r = await post(taskA.id, 'noparam-token', JSON.stringify({ v: 'INJECT' }));
+      assert.strictEqual(r.status, 200);
+      const d = dispatched5.filter(m => m.channel === 'automation:dispatch').pop();
+      assert.ok(d, '应分发');
+      assert.ok(d.payload.prompt.includes('A:undefined'), 'allowParams=false 时 args 应为空');
+      // 过期 token → 401
+      r = await post(taskA.id, 'expired-token', '{}');
+      assert.strictEqual(r.status, 401, '过期 token 应 401');
+      // 多 token：错误值不匹配
+      r = await post(taskA.id, 'wrong', '{}');
+      assert.strictEqual(r.status, 401);
+    } finally {
+      mgr.stop();
+      try { fsLocal5.rmSync(dataDir, { recursive: true, force: true }); } catch { /* ignore */ }
+    }
+  });
+
+  await testAsync('normalizeAutomationSettings：旧 serverToken 迁移 + 字段规范化', async () => {
+    const { normalizeAutomationSettings } = require('../src/main/automation/automation-manager.js');
+    const legacy = normalizeAutomationSettings({ enabled: true, serverPort: 8765, serverToken: 'legacy-secret' });
+    assert.strictEqual(legacy.tokens.length, 1, '旧 serverToken 应迁移为一条 token');
+    assert.strictEqual(legacy.tokens[0].value, 'legacy-secret');
+    assert.strictEqual(legacy.tokens[0].name, '默认');
+    assert.strictEqual(legacy.tokens[0].scope, 'all');
+    assert.strictEqual(legacy.tokens[0].allowParams, true);
+    assert.strictEqual(legacy.tokens[0].expiresAt, 0);
+    const full = normalizeAutomationSettings({
+      enabled: true, allowNoToken: true, serverPort: 99999,
+      tokens: [
+        { id: 't1', name: '  a  ', value: '  v1  ', scope: ['x', 'x', ''], allowParams: false, expiresAt: 1.9 },
+        { name: '', value: '', scope: 'all' },
+        { id: 't2', name: '超长'.repeat(40), value: 'v2', scope: 'all', allowParams: true, expiresAt: -5 }
+      ]
+    });
+    assert.strictEqual(full.serverPort, 8765, '非法端口应回退默认');
+    assert.strictEqual(full.tokens.length, 2, '空 value 应跳过');
+    assert.strictEqual(full.tokens[0].value, 'v1');
+    assert.strictEqual(full.tokens[0].name, 'a');
+    assert.deepStrictEqual(full.tokens[0].scope, ['x'], 'scope 数组应去重过滤空串');
+    assert.strictEqual(full.tokens[0].allowParams, false);
+    assert.strictEqual(full.tokens[0].expiresAt, 1);
+    assert.ok(full.tokens[1].name.length <= 64, 'name 应截断到 64');
+    assert.strictEqual(full.tokens[1].expiresAt, 0, '非正 expiresAt 应为 0');
+  });
+
+  await testAsync('safeRegex：超长/非法正则防 ReDoS 拦截', async () => {
+    const { safeRegex } = require('../src/main/automation/automation-manager.js');
+    const longPat = '(a|a?)'.repeat(60) + 'a'.repeat(300);
+    assert.ok(longPat.length > 200, '构造的测试正则应超长');
+    assert.ok(!safeRegex(longPat).test('a'), '超长正则应被替换为永不匹配');
+    assert.ok(safeRegex('bad((').test('x') === false, '非法正则应被替换为永不匹配');
+    assert.ok(safeRegex('^hi$').test('hi'), '合法正则应正常工作');
   });
 }
 
@@ -2992,12 +3199,23 @@ test('自动化 UI/IPC 接线（nav/页面/Monaco 编辑器/分发回执）', ()
   assert.ok(editorHtml.includes('id="ae-editor-host"'), '独立窗口应有 Monaco 挂载点');
   assert.ok(editorHtml.includes('monaco-editor/min/vs/loader.js'), '独立窗口应加载本地 Monaco');
   assert.ok(editorCss.includes('.ae-statusbar') && editorCss.includes('--ae-accent'), '应有 IDE 布局样式与主题变量');
-  for (const api of ['automationList', 'automationSave', 'automationRun', 'automationTest', 'onAutomationDispatch']) {
+  for (const api of ['automationList', 'automationUpdateSettings', 'automationGenerateTokenValue', 'automationSave', 'automationRun', 'automationTest', 'onAutomationDispatch']) {
     assert.ok(preloadContent.includes(api), `preload 应暴露 ${api}`);
   }
+  assert.ok(!preloadContent.includes('automationRegenerateToken'), 'preload 不应再暴露旧 regenerateToken API');
   assert.ok(preloadContent.includes('openAutomationEditor'), '主窗口 preload 应能打开编辑器窗口');
   assert.ok(editorPreload.includes('onThemeApply') && editorPreload.includes('getTheme'), '编辑器 preload 应订阅主题实时变化');
   assert.ok(mainContent.includes("ipcMain.handle('automation:list'"), 'main 应注册 automation IPC');
+  assert.ok(mainContent.includes("ipcMain.handle('automation:updateSettings'"), 'main 应注册自动化设置 IPC');
+  assert.ok(mainContent.includes("ipcMain.handle('automation:generateTokenValue'"), 'main 应注册 token 生成 IPC');
+  assert.ok(!mainContent.includes("ipcMain.handle('automation:regenerateToken'"), 'main 不应再注册旧 regenerateToken IPC');
+  assert.ok(mainContent.includes('automation: {'), 'main 默认设置应含 automation 组');
+  assert.ok(mainContent.includes('tokens: []') && mainContent.includes('allowNoToken: false'), 'automation 默认应含 tokens 列表与 allowNoToken 关闭');
+  assert.ok(htmlContent.includes('id="setting-automation-enabled"'), '设置页应有 HTTP 信号服务器开关');
+  assert.ok(htmlContent.includes('id="setting-automation-allow-notoken"'), '设置页应有允许无 Token 开关');
+  assert.ok(htmlContent.includes('id="automation-tokens-list"'), '设置页应有 Token 列表容器');
+  assert.ok(htmlContent.includes('id="automation-settings-server-status"'), '设置页应有唯一的状态行 id');
+  assert.strictEqual((htmlContent.match(/id="automation-server-status"/g) || []).length, 1, 'automation-server-status id 应只出现一次（自动化页）');
   assert.ok(mainContent.includes("ipcMain.handle('automation-editor:open'"), 'main 应注册编辑器窗口 IPC');
   assert.ok(mainContent.includes('automationEditorWindow'), '应有编辑器窗口单例');
   assert.ok(mainContent.includes('automationManager.onSystemNotification'), '通知事件应接入自动化触发器');

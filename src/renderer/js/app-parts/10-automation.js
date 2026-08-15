@@ -27,9 +27,17 @@
     const tasks = (res && res.ok && res.tasks) || [];
     const server = (res && res.server) || { running: false };
     if (serverEl) {
-      serverEl.textContent = server.running
-        ? `信号服务器运行中：${server.url}/trigger/:id（POST，鉴权见 docs/automation.md）`
-        : '信号服务器未启动（启用任一 HTTP 触发任务后自动启动）';
+      if (server.running) {
+        serverEl.textContent = server.insecure
+          ? `⚠️ 信号服务器运行中（无 Token 鉴权）：${server.url}/trigger/:id（任何本机程序可触发）`
+          : `信号服务器运行中：${server.url}/trigger/:id（POST，Authorization: Bearer <任意已配置 Token>）`;
+      } else if (server.state === 'missing-token') {
+        serverEl.textContent = '⚠️ 信号服务器未启动：设置 → 自动化 中没有任何 Token（添加 Token 或开启「允许无 Token 启动」）';
+      } else if (server.state === 'disabled') {
+        serverEl.textContent = '⏸ 信号服务器未启动：设置 → 自动化 中开关未开启';
+      } else {
+        serverEl.textContent = '信号服务器未运行（无启用中的 HTTP 触发任务）';
+      }
     }
     if (!tasks.length) {
       listEl.innerHTML = '<div class="empty-state"><i class="fa-solid fa-bolt"></i><p>暂无自动化任务</p></div>';

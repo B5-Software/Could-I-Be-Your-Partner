@@ -42,7 +42,7 @@ const registerComputerUseIpc = require('./computer-use-service');
 const registerMcpIpc = require('./mcp-service');
 const registerPlaywrightIpc = require('./browser-service');
 const { registerFfmpegIpc } = require('./ffmpeg-tools');
-const { AutomationManager } = require('./automation/automation-manager');
+const { AutomationManager, normalizeAutomationSettings } = require('./automation/automation-manager');
 const { getAutomationGuide } = require('./automation/guide');
 const { registerGeogebraProtocol } = require('./geogebra-protocol');
 
@@ -557,6 +557,17 @@ let settings = loadJSON(settingsPath, {
     modeOverrides: { chat: null, code: null, babe: null },
     requireApproval: true
   },
+  // 自动化触发（HTTP 信号服务器）
+  // - enabled     : 总开关（默认禁用，需用户在设置 → 自动化 中主动开启）
+  // - allowNoToken: 无任何 token 也允许启动（不安全，UI 有警告）
+  // - serverPort  : 监听端口（仅绑定 127.0.0.1）
+  // - tokens      : token 列表，每项 { id, name, value, scope('all'|任务id数组), allowParams, expiresAt }
+  automation: {
+    enabled: false,
+    allowNoToken: false,
+    serverPort: 8765,
+    tokens: []
+  },
   sessions: {
     maxConcurrent: 10
   },
@@ -705,6 +716,15 @@ if (!settings.llm.reasoningEffort) settings.llm.reasoningEffort = 'off';
 if (settings.llm.zenApiKey === undefined) settings.llm.zenApiKey = '';
 // Migrate: per-day usage tracking (for token stats tab).
 if (!settings.llm.usageHistory) settings.llm.usageHistory = {};
+// Migrate: automation 旧版 serverToken 字符串 → tokens 列表；补齐 allowNoToken/tokens 默认结构。
+{
+  const normAuto = normalizeAutomationSettings(settings.automation);
+  const legacy = !!(settings.automation && typeof settings.automation.serverToken === 'string');
+  settings.automation = normAuto;
+  if (legacy) {
+    try { saveJSON(settingsPath, settings); } catch { /* ignore */ }
+  }
+}
 // Migrate: 旧 budget.models[model].promptPerK/completionPerK（每1K tokens）
 // 转换为新格式 inputPerM/outputPerM（每1M tokens，乘以1000）。
 // 同时根据模型名是否包含 claude 自动设置 hasCacheWrite。
@@ -1431,6 +1451,65 @@ ipcMain.handle('ds:approvalRespond', (_, id, outcome) => {
 
 // ---- 自动化任务 IPC ----
 ipcMain.handle('automation:list', () => ({ ok: true, tasks: automationManager.list(), server: automationManager.serverInfo() }));
+// 自动化触发设置（设置 → 自动化）：校验 + 持久化 + 热应用（fail-closed）
+ipcMain.handle('automation:updateSettings', async (_, cfg) => {
+  if (!cfg || typeof cfg !== 'object') return { ok: false, error: '参数无效' };
+  const crypto = require('crypto');
+  try {
+    const cur = normalizeAutomationSettings(settings.automation);
+    if (typeof cfg.enabled === 'boolean') cur.enabled = cfg.enabled;
+    if (typeof cfg.allowNoToken === 'boolean') cur.allowNoToken = cfg.allowNoToken;
+    if (cfg.serverPort !== undefined) {
+      const p = Number(cfg.serverPort);
+      if (!Number.isInteger(p) || p < 1 || p > 65535) return { ok: false, error: '端口需在 1-65535' };
+      cur.serverPort = p;
+    }
+    if (cfg.tokens !== undefined) {
+      if (!Array.isArray(cfg.tokens)) return { ok: false, error: 'tokens 需为数组' };
+      const knownTaskIds = new Set(automationManager.list().map(t => t.id));
+      const next = [];
+      for (const t of cfg.tokens) {
+        if (!t || typeof t !== 'object') continue;
+        let value = String(t.value || '').trim();
+        if (!value) {
+          value = crypto.randomBytes(24).toString('base64url'); // 空值自动生成
+        }
+        if (value.length > 128) return { ok: false, error: 'token 值过长（≤128）' };
+        const name = String(t.name || '').trim().slice(0, 64) || '未命名';
+        const expiresAt = (Number.isFinite(Number(t.expiresAt)) && Number(t.expiresAt) > 0)
+          ? Math.floor(Number(t.expiresAt)) : 0;
+        let scope = 'all';
+        if (Array.isArray(t.scope)) {
+          // 过滤已被删除的任务 id；空数组保持为空（该 token 无法触发任何任务，最安全）
+          scope = [...new Set(t.scope.map(s => String(s)).filter(id => knownTaskIds.has(id)))];
+        }
+        next.push({
+          id: String(t.id || '').trim() || 't' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8),
+          name,
+          value,
+          scope,
+          allowParams: t.allowParams !== false,
+          expiresAt,
+          createdAt: (Number.isFinite(Number(t.createdAt)) && Number(t.createdAt) > 0)
+            ? Math.floor(Number(t.createdAt)) : Date.now()
+        });
+      }
+      cur.tokens = next;
+    }
+    settings = { ...settings, automation: cur };
+    saveJSON(settingsPath, settings);
+    broadcastSettingsChanged();
+    await automationManager.refreshServer();
+    return { ok: true, settings: settings.automation, server: automationManager.serverInfo() };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+// 生成一个新的随机 token 值（不落盘，由 updateSettings 保存）
+ipcMain.handle('automation:generateTokenValue', async () => {
+  const crypto = require('crypto');
+  return { ok: true, value: crypto.randomBytes(24).toString('base64url') };
+});
 ipcMain.handle('automation:get', (_, id) => {
   const task = automationManager.list().find(t => t.id === id);
   return task ? { ok: true, task } : { ok: false, error: '任务不存在' };

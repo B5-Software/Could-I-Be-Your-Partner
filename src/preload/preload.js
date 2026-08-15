@@ -495,6 +495,8 @@ contextBridge.exposeInMainWorld('api', {
   dsAgentSync: (entries) => ipcRenderer.invoke('ds:agentsSync', entries),
   dsApprovalRespond: (id, outcome) => ipcRenderer.invoke('ds:approvalRespond', id, outcome),
   automationList: () => ipcRenderer.invoke('automation:list'),
+  automationUpdateSettings: (cfg) => ipcRenderer.invoke('automation:updateSettings', cfg),
+  automationGenerateTokenValue: () => ipcRenderer.invoke('automation:generateTokenValue'),
   automationSave: (task) => ipcRenderer.invoke('automation:save', task),
   automationDelete: (id) => ipcRenderer.invoke('automation:delete', id),
   automationSetEnabled: (id, enabled) => ipcRenderer.invoke('automation:setEnabled', id, enabled),
