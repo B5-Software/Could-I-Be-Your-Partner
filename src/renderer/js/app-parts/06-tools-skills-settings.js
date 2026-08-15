@@ -953,6 +953,7 @@
     document.getElementById('setting-accent-color').value = s.theme.accentColor;
     document.getElementById('setting-bg-color').value = s.theme.backgroundColor;
     document.getElementById('setting-ui-animations').checked = s.animations !== false;
+    document.getElementById('setting-ui-modal-animations').checked = s.modalAnimations !== false;
     document.getElementById('setting-auto-approve').checked = s.autoApproveSensitive;
 
     // 隐私信息保护
@@ -3383,6 +3384,14 @@
     const s = await window.api.getSettings();
     s.animations = e.target.checked;
     document.documentElement.setAttribute('data-animations', s.animations === false ? 'off' : 'on');
+    await saveSettings(s);
+  });
+
+  // 模态框动效开关（打开/关闭渐显渐隐）
+  document.getElementById('setting-ui-modal-animations').addEventListener('change', async (e) => {
+    const s = await window.api.getSettings();
+    s.modalAnimations = e.target.checked;
+    document.documentElement.setAttribute('data-modal-animations', s.modalAnimations === false ? 'off' : 'on');
     await saveSettings(s);
   });
 

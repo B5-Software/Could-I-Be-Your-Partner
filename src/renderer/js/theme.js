@@ -83,6 +83,8 @@ const ThemeManager = {
     
     // 界面动效开关：关闭时主标签页切换无动画（设置页「动效」）
     document.documentElement.setAttribute('data-animations', settings.animations === false ? 'off' : 'on');
+    // 模态框动效开关：关闭时模态框打开/关闭瞬时切换（设置页「动效」）
+    document.documentElement.setAttribute('data-modal-animations', settings.modalAnimations === false ? 'off' : 'on');
     
     // 首次启动检测：如果配色是默认值，随机应用一套配色
     const isFirstRun = settings.theme.accentColor === '#4f8cff' && settings.theme.backgroundColor === '#f5f7fa';

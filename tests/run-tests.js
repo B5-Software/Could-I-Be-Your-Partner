@@ -1688,6 +1688,7 @@ const appUtilsContent = readSrc('renderer/js/app-utils.js');
 const dlManagerContent = readSrc('renderer/js/download-manager.js');
 const chatUiContent = readSrc('renderer/js/app-parts/05-chat-ui.js');
 const historyContent = readSrc('renderer/js/app-parts/07-history-panels.js');
+const themeJsContent = readSrc('renderer/js/theme.js');
 const componentsCssContent = readSrc('renderer/css/components.css');
 const chatCssContent = readSrc('renderer/css/chat.css');
 const pcbedaCssContent = readSrc('renderer/css/pcbeda.css');
@@ -1771,6 +1772,21 @@ test('模态框渐隐：app-utils helper + 关闭点接线', () => {
   // 子应用关闭点
   assert.ok(pcbedaJsContent.includes('modal-fade-out'), 'pcbeda showModal 缺渐隐');
   assert.ok(cipypcadJsContent.includes("classList.add('modal-fade-out')"), 'cipypcad hideSavePrompt 缺渐隐');
+});
+
+test('模态框动效开关（设置页「动效」）: 默认值 / 开关 / 禁用规则 / 即时关闭', () => {
+  assert.ok(/modalAnimations: true/.test(mainJsContent), 'main.js 缺 modalAnimations 默认值');
+  assert.ok(indexHtmlContent.includes('id="setting-ui-modal-animations"'), '动效页缺模态框动画开关');
+  assert.ok(/setting-ui-modal-animations[^]*模态框/.test(indexHtmlContent), '开关说明文案缺失');
+  assert.ok(themeJsContent.includes("data-modal-animations"), 'theme.js init 缺 data-modal-animations');
+  assert.ok(/data-modal-animations', settings\.modalAnimations === false \? 'off' : 'on'/.test(themeJsContent), 'theme.js 未按设置写属性');
+  assert.ok(settingsPartContent.includes("document.getElementById('setting-ui-modal-animations').checked = s.modalAnimations !== false"), 'loadSettingsPage 缺模态框开关恢复');
+  assert.ok(settingsPartContent.includes("'setting-ui-modal-animations').addEventListener('change'"), '缺模态框开关 change 处理器');
+  assert.ok(/html\[data-modal-animations="off"\] \.modal-overlay[\s\S]*?\.modal,\s*$/.test(componentsCssContent) || componentsCssContent.includes('html[data-modal-animations="off"] .modal-overlay'), 'components.css 缺禁用规则');
+  assert.ok(componentsCssContent.includes('html[data-modal-animations="off"] .modal-fade-out'), 'components.css 缺 .modal-fade-out 禁用');
+  assert.ok(/html\[data-modal-animations="off"\] \.sub-agent-modal-dialog/.test(chatCssContent), 'chat.css 缺子代理弹窗禁用规则');
+  assert.ok(appUtilsContent.includes("function _modalAnimationsEnabled()"), 'app-utils 缺动效开关判断');
+  assert.ok(/data-modal-animations'\) !== 'off'/.test(appUtilsContent), 'helper 未读 data-modal-animations');
 });
 
 // ---- IME Engine ----

@@ -1435,6 +1435,10 @@ body.no-tarot .setting-label-tarot + .toggle-switch + .setting-hint {
   overflow: hidden;
   animation: fadeIn 0.2s ease;
 }
+/* 模态框动效关闭（设置页「动效」）：子代理详情弹窗瞬时切换 */
+html[data-modal-animations="off"] .sub-agent-modal-dialog {
+  animation: none !important;
+}
 .sub-agent-modal-header {
   display: flex;
   align-items: center;

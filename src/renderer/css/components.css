@@ -603,6 +603,17 @@
   to { opacity: 0; }
 }
 
+/* 模态框动效关闭（设置页「动效」）：打开/关闭瞬时切换 */
+html[data-modal-animations="off"] .modal-overlay,
+html[data-modal-animations="off"] .modal,
+html[data-modal-animations="off"] .tools-modal-backdrop,
+html[data-modal-animations="off"] .tools-modal-backdrop.open .tools-modal,
+html[data-modal-animations="off"] .modal-fade-out {
+  animation: none !important;
+  transition: none !important;
+  pointer-events: auto;
+}
+
 /* Image Preview Modal */
 .image-modal {
   width: min(92vw, 980px);

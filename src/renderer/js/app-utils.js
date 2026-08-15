@@ -248,9 +248,15 @@ window.showToast = showToast;
 // ---- 模态框渐隐（fade-out）辅助 ----
 // 关闭模态框时先播放 fadeOut 动画，动画结束后再真正隐藏/移除 DOM。
 // CSS 侧配合 `.modal-fade-out { animation: fadeOut ... forwards }` 使用。
+// 「动效」设置中关闭模态框动画时（html[data-modal-animations="off"]），直接瞬时关闭。
 const MODAL_FADE_MS = 200;
 
+function _modalAnimationsEnabled() {
+  return document.documentElement.getAttribute('data-modal-animations') !== 'off';
+}
+
 function _fadeOutPrepare(el) {
+  if (!_modalAnimationsEnabled()) return false;
   if (!el || el.classList.contains('modal-fade-out')) return false;
   el.classList.add('modal-fade-out');
   return true;

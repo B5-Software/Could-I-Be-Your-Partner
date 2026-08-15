@@ -584,6 +584,8 @@ let settings = loadJSON(settingsPath, {
   theme: { mode: 'system', accentColor: '#4f8cff', backgroundColor: '#f5f7fa' },
   // 界面动效：关闭后主标签页切换无动画（设置页「动效」开关）
   animations: true,
+  // 模态框动效：关闭后模态框打开/关闭为瞬时切换（设置页「动效」开关）
+  modalAnimations: true,
   language: 'zh-CN',
   tools: {},
   autoApproveSensitive: false,
