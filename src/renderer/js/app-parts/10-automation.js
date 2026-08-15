@@ -119,3 +119,12 @@
       return { sessionKey: ag.sessionKey || (session && session.key) || null };
     });
   }
+
+  // 启动 boot 完成（主题/设置/字体/i18n 等已应用）→ 通知主进程显示窗口。
+  // 主窗口在预渲染完成前保持隐藏（show:false + app:renderer-ready），避免白屏/闪烁。
+  // 双 rAF：确保至少一帧已提交绘制后再 show，避免"DOM 就绪但未绘制"的瞬时白屏。
+  if (typeof window.api.rendererReady === 'function') {
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      window.api.rendererReady();
+    }));
+  }

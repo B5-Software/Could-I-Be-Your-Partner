@@ -751,6 +751,11 @@ let voiceIpc = null;
 // 用户在"关闭时询问"模态框中的 pending Promise resolver
 let _pendingCloseToTrayResolve = null;
 
+// 主窗口"预渲染完成后再显示"：渲染器 boot 完成（主题/设置/字体/i18n 等
+// 全部就绪）后经 IPC 通知再 show；超时兜底避免窗口永久隐藏。
+let mainWindowShownOnce = false;
+const MAIN_WINDOW_SHOW_FALLBACK_MS = 6000;
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1200, height: 800, minWidth: 800, minHeight: 600,
@@ -758,6 +763,8 @@ function createWindow() {
     frame: false,
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'hidden',
     icon: path.join(__dirname, '../../assets/icons/icon.png'),
+    show: false,
+    backgroundColor: '#1e1e1e',
     webPreferences: {
       preload: path.join(__dirname, '../preload/preload.js'),
       contextIsolation: true,
@@ -767,6 +774,15 @@ function createWindow() {
       backgroundThrottling: false
     }
   });
+  mainWindowShownOnce = false;
+  // 兜底：渲染器 boot 异常/超时时也必须显示窗口
+  setTimeout(() => {
+    if (!mainWindowShownOnce && mainWindow && !mainWindow.isDestroyed()) {
+      mainWindowShownOnce = true;
+      mainWindow.show();
+    }
+  }, MAIN_WINDOW_SHOW_FALLBACK_MS);
+  registerRendererReadyListener();
   mainWindow.loadFile(path.join(__dirname, '../renderer/pages/index.html'));
   // Resize the built-in browser (BrowserView) when the main window resizes.
 
@@ -800,6 +816,22 @@ function createWindow() {
       }
     } catch {
       // 询问失败时降级为保持窗口打开（不强制隐藏到托盘）
+    }
+  });
+}
+
+// 渲染器预渲染完成 → 显示主窗口（sender 校验防止子窗口误触发；
+// 模块级一次性注册，避免窗口重建时重复累积监听器）
+let _rendererReadyListenerRegistered = false;
+function registerRendererReadyListener() {
+  if (_rendererReadyListenerRegistered) return;
+  _rendererReadyListenerRegistered = true;
+  ipcMain.on('app:renderer-ready', (event) => {
+    if (!mainWindowShownOnce && mainWindow && !mainWindow.isDestroyed()
+        && event.sender === mainWindow.webContents) {
+      mainWindowShownOnce = true;
+      mainWindow.show();
+      mainWindow.focus();
     }
   });
 }
