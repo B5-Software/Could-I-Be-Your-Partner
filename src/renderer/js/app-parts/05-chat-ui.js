@@ -781,6 +781,39 @@
     setTimeout(() => document.addEventListener('click', closeMenu), 100);
   }
 
+  // 提取消息正文纯文本（排除推理过程、工具调用卡片、时间戳等）
+  function getMessagePlainText(messageElement) {
+    const body = messageElement && messageElement.querySelector('.message-body');
+    const root = body || messageElement;
+    if (!root) return '';
+    const clone = root.cloneNode(true);
+    clone.querySelectorAll('.reasoning-section, .tool-call, .message-time, .message-avatar, .msg-actions, .message-actions').forEach((n) => n.remove());
+    let text = clone.innerText || '';
+    text = text.replace(/<reasoning[\s\S]*?<\/reasoning>/gi, '').replace(/<thinking[\s\S]*?<\/thinking>/gi, '');
+    return text.trim();
+  }
+
+  // 右键菜单条目
+  function makeMenuEntry(icon, label, color) {
+    const item = document.createElement('div');
+    item.style.cssText = `
+      padding: 8px 16px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: ${color || 'var(--text-primary)'};
+    `;
+    item.innerHTML = `<i class="fa-solid ${icon}"></i><span>${label}</span>`;
+    item.addEventListener('mouseenter', () => {
+      item.style.backgroundColor = 'var(--bg-hover)';
+    });
+    item.addEventListener('mouseleave', () => {
+      item.style.backgroundColor = 'transparent';
+    });
+    return item;
+  }
+
   // 显示消息右键菜单
   function showMessageContextMenu(e, messageElement, role) {
     // 移除已存在的菜单
@@ -802,23 +835,22 @@
       min-width: 160px;
     `;
 
-    const menuItem = document.createElement('div');
-    menuItem.style.cssText = `
-      padding: 8px 16px;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      color: #e74c3c;
-    `;
-    menuItem.innerHTML = `<i class="fa-solid fa-trash"></i><span>删除对话</span>`;
+    // 朗读：清空当前朗读队列并朗读本条消息
+    const speakItem = makeMenuEntry('fa-volume-high', '朗读');
+    speakItem.addEventListener('click', async () => {
+      menu.remove();
+      const text = getMessagePlainText(messageElement);
+      if (!text) return;
+      if (typeof window.VoiceUI !== 'object' || typeof window.VoiceUI.speakText !== 'function') return;
+      const s = await window.api.getSettings();
+      if (!s || (s.voice && s.voice.ttsEnabled === false)) {
+        if (typeof window.showToast === 'function') window.showToast('TTS 未开启，请到语音设置开启后再朗读', 'error', 4000);
+        return;
+      }
+      window.VoiceUI.speakText(text);
+    });
 
-    menuItem.addEventListener('mouseenter', () => {
-      menuItem.style.backgroundColor = 'var(--bg-hover)';
-    });
-    menuItem.addEventListener('mouseleave', () => {
-      menuItem.style.backgroundColor = 'transparent';
-    });
+    const menuItem = makeMenuEntry('fa-trash', '删除对话', '#e74c3c');
 
     menuItem.addEventListener('click', async () => {
       menu.remove();
@@ -914,7 +946,7 @@
       }
     });
 
-    menu.appendChild(menuItem);
+    menu.append(speakItem, menuItem);
     document.body.appendChild(menu);
 
     const closeMenu = () => {

@@ -1789,6 +1789,16 @@ test('模态框动效开关（设置页「动效」）: 默认值 / 开关 / 禁
   assert.ok(/data-modal-animations'\) !== 'off'/.test(appUtilsContent), 'helper 未读 data-modal-animations');
 });
 
+test('消息右键菜单：朗读（清空当前朗读队列并朗读）', () => {
+  assert.ok(chatUiContent.includes("function getMessagePlainText(messageElement)"), '缺消息正文提取 helper');
+  assert.ok(chatUiContent.includes("function makeMenuEntry(icon, label, color)"), '缺右键菜单条目 helper');
+  assert.ok(chatUiContent.includes("makeMenuEntry('fa-volume-high', '朗读')"), '右键菜单缺「朗读」项');
+  assert.ok(chatUiContent.includes("menu.append(speakItem, menuItem)"), '朗读项未加入菜单');
+  assert.ok(/window\.VoiceUI\.speakText\(text\)/.test(chatUiContent), '朗读未调用 VoiceUI.speakText');
+  assert.ok(/ttsEnabled === false[\s\S]*?showToast/.test(chatUiContent), 'TTS 关闭时缺提示');
+  assert.ok(/reasoning-section, \.tool-call, \.message-time/.test(chatUiContent), '提取文本未排除推理/工具调用/时间戳');
+});
+
 // ---- IME Engine ----
 console.log('\nIME Engine:');
 const ImeEngine = require('../src/renderer/js/oskey/ime-engine.js');
