@@ -368,7 +368,7 @@ select {
   display: none;
   overflow-y: auto;
   padding: 24px;
-  animation: pageIn 0.3s ease;
+  animation: fadeIn 0.3s ease;
 }
 
 .page.active {
@@ -378,9 +378,9 @@ select {
   min-height: 0;
 }
 
-@keyframes pageIn {
-  from { opacity: 0; transform: translateY(8px); }
-  to { opacity: 1; transform: translateY(0); }
+/* 设置页「动效」开关关闭时，禁用主标签页切换动画（对话/历史/设置等） */
+html[data-animations="off"] .page {
+  animation: none !important;
 }
 
 .page-header {

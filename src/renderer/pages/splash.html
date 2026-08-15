@@ -47,10 +47,18 @@
     @keyframes spin { to { transform: rotate(360deg); } }
     .version {
       position: absolute;
-      bottom: 14px;
+      bottom: 20px;
       font-size: 11px;
       opacity: 0.45;
       letter-spacing: 0.3px;
+    }
+    .top-meta {
+      position: absolute;
+      top: 20px;
+      font-size: 11px;
+      opacity: 0.45;
+      letter-spacing: 0.3px;
+      font-family: Consolas, "Courier New", monospace;
     }
     /* 内置自由字体（OFL，与主界面 main.css 同一批 assets/ui-fonts；缺失时回退系统字体） */
     @font-face {
@@ -99,6 +107,7 @@
 </head>
 <body>
   <div class="splash">
+    <div class="top-meta" id="topMeta"></div>
     <img class="icon" src="../../../assets/icons/icon.png" alt="">
     <div class="name">Could I Be Your Partner</div>
     <div class="spinner"></div>
@@ -111,6 +120,7 @@
     const accent = q.get('accent') || '4f8cff';
     const bg = q.get('bg') || (dark ? '17181d' : 'f5f7fa');
     const version = q.get('version') || '';
+    const gitHash = q.get('gitHash') || '';
     const font = q.get('font') || '';
     const root = document.documentElement;
     root.style.setProperty('--splash-accent', '#' + accent);
@@ -118,7 +128,8 @@
     root.style.setProperty('--splash-fg', dark ? '#e6e8ef' : '#2a2d35');
     root.style.setProperty('--splash-spin-bg', dark ? 'rgba(230,232,239,0.18)' : 'rgba(42,45,53,0.18)');
     if (font) root.style.setProperty('--splash-font', "'" + font + "', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif");
-    document.getElementById('version').textContent = version ? 'v' + version : '';
+    document.getElementById('version').textContent = version ? 'v' + version.split('+')[0] : '';
+    document.getElementById('topMeta').textContent = gitHash || '';
   </script>
 </body>
 </html>

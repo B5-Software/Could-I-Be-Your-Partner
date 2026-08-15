@@ -43,3 +43,10 @@ const banner = [
 const bundle = `${banner}\n${body}\n})();\n`;
 fs.writeFileSync(outFile, bundle, 'utf-8');
 console.log(`[build-app-bundle] 已从 ${files.length} 个模块生成 ESM ${path.basename(outFile)}`);
+
+// 同步刷新 build-info.json（Splash 顶部 git 哈希；dev 与打包一致）
+try {
+  require('./build-info')();
+} catch (e) {
+  console.warn('[build-app-bundle] build-info 刷新失败:', e.message);
+}

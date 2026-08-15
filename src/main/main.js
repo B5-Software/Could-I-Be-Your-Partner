@@ -581,6 +581,8 @@ let settings = loadJSON(settingsPath, {
     dailyImageDate: ''
   },
   theme: { mode: 'system', accentColor: '#4f8cff', backgroundColor: '#f5f7fa' },
+  // 界面动效：关闭后主标签页切换无动画（设置页「动效」开关）
+  animations: true,
   language: 'zh-CN',
   tools: {},
   autoApproveSensitive: false,
@@ -788,6 +790,31 @@ const MAIN_WINDOW_SHOW_FALLBACK_MS = 6000;
 let splashWindow = null;
 let splashCreated = false;
 
+// Splash 顶部 git 哈希：优先读 build-info.json（dev=仓库根 / 打包=asar 根，由 build-info.js 生成），
+// 缺失或为空时回退实时 git rev-parse，仍失败返回 ''。
+function getGitShortHash() {
+  try {
+    const candidates = [
+      path.join(__dirname, '..', 'build-info.json'),
+      path.join(app.getAppPath(), 'build-info.json')
+    ];
+    for (const p of candidates) {
+      if (!fs.existsSync(p)) continue;
+      const info = JSON.parse(fs.readFileSync(p, 'utf-8'));
+      if (info && typeof info.gitHash === 'string' && info.gitHash) return info.gitHash;
+    }
+  } catch { /* ignore */ }
+  try {
+    const { execSync } = require('child_process');
+    return String(execSync('git rev-parse --short HEAD', {
+      cwd: path.join(__dirname, '..'),
+      encoding: 'utf8',
+      timeout: 3000,
+      stdio: ['ignore', 'pipe', 'ignore']
+    })).trim();
+  } catch { return ''; }
+}
+
 function createSplashWindow() {
   if (splashCreated || !mainWindow || mainWindow.isDestroyed()) return;
   splashCreated = true;
@@ -822,6 +849,7 @@ function createSplashWindow() {
     accent: accent.slice(1),
     bg: bg.slice(1),
     version: app.getVersion(),
+    gitHash: getGitShortHash(),
     font: fontFamily
   };
   splashWindow.loadFile(path.join(__dirname, '../renderer/pages/splash.html'), { query: params });

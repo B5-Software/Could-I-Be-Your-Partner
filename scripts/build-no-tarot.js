@@ -9,7 +9,7 @@
  *
  * 行为：
  *   1. 在项目根目录写入 `.no-tarot` 标志文件（应用启动时检测此文件存在则屏蔽塔罗牌元素）
- *   2. 调用 electron-builder，并转发所有命令行参数
+ *   2. 调用 scripts/package.js（负责注入 git 哈希版本号），并转发所有命令行参数
  *   3. 无论构建成功失败，都删除 `.no-tarot` 标志文件
  *
  * 注意：`package.json` 的 `build.files` 已包含 `.no-tarot`，会被打包到最终产物中。
@@ -35,28 +35,28 @@ try {
   process.exit(1);
 }
 
-// 2. 调用 electron-builder
-const cmd = process.platform === 'win32' ? 'npx.cmd' : 'npx';
-const args = ['electron-builder', ...ebArgs];
-console.log(`[build-no-tarot] 执行: ${cmd} ${args.join(' ')}`);
+// 2. 调用 package.js（内部刷新 build-info 并注入 git 哈希版本号，再启动 electron-builder）
+const packageJs = path.join(__dirname, 'package.js');
+const args = [packageJs, ...ebArgs];
+console.log(`[build-no-tarot] 执行: ${process.execPath} ${args.join(' ')}`);
 
-const child = spawn(cmd, args, {
+const child = spawn(process.execPath, args, {
   cwd: projectRoot,
   stdio: 'inherit',
   shell: false
 });
 
 child.on('error', (err) => {
-  console.error('[build-no-tarot] 启动 electron-builder 失败:', err.message);
+  console.error('[build-no-tarot] 启动 package.js 失败:', err.message);
   cleanupAndExit(1);
 });
 
 child.on('exit', (code, signal) => {
   if (signal) {
-    console.error(`[build-no-tarot] electron-builder 被信号 ${signal} 终止`);
+    console.error(`[build-no-tarot] package.js 被信号 ${signal} 终止`);
     cleanupAndExit(1);
   } else if (code !== 0) {
-    console.error(`[build-no-tarot] electron-builder 退出码: ${code}`);
+    console.error(`[build-no-tarot] package.js 退出码: ${code}`);
     cleanupAndExit(code);
   } else {
     console.log('[build-no-tarot] 打包完成');

@@ -3223,6 +3223,61 @@ test('自动化 UI/IPC 接线（nav/页面/Monaco 编辑器/分发回执）', ()
   assert.ok(appContent.includes('automation:dispatched') || preloadContent.includes('automation:dispatched'), '应有分发回执通道');
 });
 
+test('Splash：顶部 git 哈希 + 底部版本号（build-info 接线）', () => {
+  const fsL = require('fs');
+  const pathL = require('path');
+  const splashHtml = fsL.readFileSync(pathL.join(__dirname, '../src/renderer/pages/splash.html'), 'utf-8');
+  const mainContent = fsL.readFileSync(pathL.join(__dirname, '../src/main/main.js'), 'utf-8');
+  const pkg = JSON.parse(fsL.readFileSync(pathL.join(__dirname, '../package.json'), 'utf-8'));
+  assert.ok(splashHtml.includes('id="topMeta"'), 'splash 顶部应有 git 哈希元素');
+  assert.ok(splashHtml.includes('.top-meta'), 'splash 应有顶部元信息样式');
+  assert.ok(splashHtml.includes("q.get('gitHash')"), 'splash 应读取 gitHash query 参数');
+  assert.ok(splashHtml.includes("'v' + version.split('+')[0]"), 'splash 底部应显示 v{major.minor.patch-*}（截断 build metadata）');
+  assert.ok(mainContent.includes('function getGitShortHash'), 'main 应有 git 哈希获取函数');
+  assert.ok(mainContent.includes('gitHash: getGitShortHash()'), 'main 应将 gitHash 传入 splash query');
+  assert.ok(mainContent.includes("'build-info.json'"), 'main 应读取 build-info.json');
+  assert.ok(pkg.build && pkg.build.beforePack === 'node scripts/build-info.js', '打包前应生成 build-info.json（hash 打入产物）');
+  const buildInfoScript = fsL.readFileSync(pathL.join(__dirname, '../scripts/build-info.js'), 'utf-8');
+  assert.ok(buildInfoScript.includes('git rev-parse --short HEAD'), 'build-info.js 应执行 git 短哈希');
+  const bundleScript = fsL.readFileSync(pathL.join(__dirname, '../scripts/build-app-bundle.js'), 'utf-8');
+  assert.ok(bundleScript.includes("require('./build-info')"), 'dev 构建也应刷新 build-info');
+});
+
+test('界面动效：主标签页切换动画可选 + 打包版本注入 git 哈希', () => {
+  const fsL = require('fs');
+  const pathL = require('path');
+  const htmlContent = fsL.readFileSync(pathL.join(__dirname, '../src/renderer/pages/index.html'), 'utf-8');
+  const mainContent = fsL.readFileSync(pathL.join(__dirname, '../src/main/main.js'), 'utf-8');
+  const cssContent = fsL.readFileSync(pathL.join(__dirname, '../src/renderer/css/main.css'), 'utf-8');
+  const themeJs = fsL.readFileSync(pathL.join(__dirname, '../src/renderer/js/theme.js'), 'utf-8');
+  const settingsJs = fsL.readFileSync(pathL.join(__dirname, '../src/renderer/js/app-parts/06-tools-skills-settings.js'), 'utf-8');
+  const pkg = JSON.parse(fsL.readFileSync(pathL.join(__dirname, '../package.json'), 'utf-8'));
+
+  // 设置页「动效」tab
+  assert.ok(htmlContent.includes('data-tab="animations"'), '设置侧栏应有独立的「动效」tab');
+  assert.ok(htmlContent.includes('id="setting-ui-animations"'), '设置页应有主标签页动画开关');
+  assert.ok(htmlContent.includes('主标签页切换动画'), '动效开关应有标签文案');
+  assert.ok(mainContent.includes('animations: true'), '默认设置应开启界面动效');
+  assert.ok(themeJs.includes('data-animations'), 'theme.js 应按设置应用 data-animations');
+  assert.ok((settingsJs.match(/setting-ui-animations/g) || []).length >= 2, '设置页脚本应恢复并监听动效开关');
+  assert.ok(settingsJs.includes('s.animations = e.target.checked'), '动效开关应保存到设置');
+
+  // 主标签页切换动画：纯淡入 + 可关闭
+  assert.ok(cssContent.includes('animation: fadeIn 0.3s ease'), '.page 切换动画应为纯淡入');
+  assert.ok(!cssContent.includes('@keyframes pageIn'), '不应再有 pageIn 位移动画');
+  assert.ok(cssContent.includes('html[data-animations="off"] .page'), '应有关闭动画的 CSS 规则');
+
+  // 打包时版本号注入 git 哈希（semver build metadata，extraMetadata）
+  const packageJs = fsL.readFileSync(pathL.join(__dirname, '../scripts/package.js'), 'utf-8');
+  assert.ok(packageJs.includes('extraMetadata.version'), 'package.js 应经 extraMetadata 注入版本号');
+  assert.ok(packageJs.includes('${pkg.version}+${gitHash}'), '版本号应为 semver build metadata（version+hash）');
+  assert.ok(pkg.scripts.build.includes('node scripts/package.js'), 'build 应走 package.js');
+  assert.ok(pkg.scripts['build:win'].includes('node scripts/package.js'), 'build:win 应走 package.js');
+  assert.ok(pkg.scripts.dist.includes('node scripts/package.js'), 'dist 应走 package.js');
+  const noTarot = fsL.readFileSync(pathL.join(__dirname, '../scripts/build-no-tarot.js'), 'utf-8');
+  assert.ok(noTarot.includes('package.js'), 'build-no-tarot 应经 package.js 打包');
+});
+
 test('插件启动全量重审：清除旧版本遗留 compatIssues', () => {
   const pmContent = fs.readFileSync(require('path').join(__dirname, '../src/main/ds-compat/plugin-manager.js'), 'utf-8');
   const mainContent = fs.readFileSync(require('path').join(__dirname, '../src/main/main.js'), 'utf-8');
