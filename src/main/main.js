@@ -756,6 +756,43 @@ let _pendingCloseToTrayResolve = null;
 let mainWindowShownOnce = false;
 const MAIN_WINDOW_SHOW_FALLBACK_MS = 6000;
 
+// ---- Splash 启动画面 ----
+// 主窗口就绪前展示品牌画面（预渲染 ~2s），避免"无窗口"空白等待；
+// 主窗口 show 时自动关闭。独立小窗口，不影响主窗口渲染流程。
+let splashWindow = null;
+let splashCreated = false;
+
+function createSplashWindow() {
+  if (splashCreated || !mainWindow || mainWindow.isDestroyed()) return;
+  splashCreated = true;
+  splashWindow = new BrowserWindow({
+    width: 420, height: 300,
+    frame: false,
+    transparent: true,
+    resizable: false,
+    movable: true,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    show: false,
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false
+    }
+  });
+  splashWindow.loadFile(path.join(__dirname, '../renderer/pages/splash.html'));
+  splashWindow.once('ready-to-show', () => {
+    if (!splashWindow || splashWindow.isDestroyed()) return;
+    splashWindow.center();
+    splashWindow.show();
+  });
+  splashWindow.on('closed', () => { splashWindow = null; });
+}
+
+function closeSplash() {
+  if (splashWindow && !splashWindow.isDestroyed()) splashWindow.close();
+  splashWindow = null;
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1200, height: 800, minWidth: 800, minHeight: 600,
@@ -784,6 +821,8 @@ function createWindow() {
   }, MAIN_WINDOW_SHOW_FALLBACK_MS);
   registerRendererReadyListener();
   mainWindow.loadFile(path.join(__dirname, '../renderer/pages/index.html'));
+  // 主窗口一旦显示（渲染器就绪或超时兜底）即关闭 Splash
+  mainWindow.on('show', () => closeSplash());
   // Resize the built-in browser (BrowserView) when the main window resizes.
 
   // 关闭拦截：根据 settings.closeToTray 决定是否最小化到托盘
@@ -1125,6 +1164,8 @@ app.whenReady().then(() => {
   applyProxySettings(settings.proxy);
 
   createWindow();
+  // Splash 启动画面：主窗口预渲染完成前展示品牌画面（主窗口 show 时自动关闭）
+  createSplashWindow();
   // 启动时即创建托盘图标（若启用）
   if (settings.trayEnabled) createAppTray();
 
@@ -6459,6 +6500,7 @@ app.whenReady().then(async () => {
 // 若渲染器有正在工作的会话，先通知其保存 pending 状态，等待完成后再退出
 app.on('before-quit', async (event) => {
   isQuitting = true; // 标记真正退出，避免 close 事件再次拦截
+  closeSplash();
   // 将防抖队列中的历史保存立即落盘，避免退出时丢失
   flushPendingHistorySaves();
   await mcpService.stopAllMcpServers();
