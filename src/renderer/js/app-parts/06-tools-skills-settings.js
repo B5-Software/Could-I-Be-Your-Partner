@@ -3747,14 +3747,14 @@
     if (currentEl) currentEl.textContent = '当前版本：' + curVersion + ' · 最新版本：' + (latest?.version || '').replace(/^v/i, '');
     if (bodyEl && latest) {
       const tag = (latest.tagName || '').replace(/^v/i, '');
-      const body = (latest.body || '(该版本未提供更新说明)').replace(/```/g, '');
+      const body = latest.body || '(该版本未提供更新说明)';
       bodyEl.innerHTML = '';
       const h = document.createElement('div');
       h.style.marginBottom = '8px';
-      h.innerHTML = `<strong>${tag}${latest.prerelease ? ' <span style="color:var(--warning,#e6a23c)">(pre-release)</span>' : ''}</strong><span style="color:var(--text-tertiary);font-size:11px"> · 发布于 ${(latest.publishedAt || '').slice(0, 10)}</span>`;
+      h.innerHTML = `<strong>${escapeHtml(tag)}${latest.prerelease ? ' <span style="color:var(--warning,#e6a23c)">(pre-release)</span>' : ''}</strong><span style="color:var(--text-tertiary);font-size:11px"> · 发布于 ${escapeHtml((latest.publishedAt || '').slice(0, 10))}</span>`;
       const p = document.createElement('div');
-      p.style.whiteSpace = 'pre-wrap';
-      p.textContent = body;
+      p.style.lineHeight = '1.6';
+      p.innerHTML = renderMarkdown(body);
       bodyEl.appendChild(h);
       bodyEl.appendChild(p);
     }
