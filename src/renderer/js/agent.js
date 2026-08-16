@@ -458,7 +458,10 @@ ${customPrompt ? '\n用户自定义提示词:\n' + customPrompt : ''}${skillsSec
    */
   getActiveSkillsBlock() {
     if (!Array.isArray(this.activeSkills) || this.activeSkills.length === 0) return '';
-    return '【已激活技能 Prompt】（必须严格遵守以下技能的指令）\n' +
+    // 用 user 角色注入（各 API 都允许 user 消息出现在任意位置；system 按官方规范
+    // 必须位于 messages 首位，中间插 system 在严格网关会 400），
+    // 内容上明确标记为系统级指令，避免被模型当成用户发言。
+    return '【系统级技能指令】（以下内容是你必须严格遵守的技能指令，不是用户的发言，也不是需要你回复的对象）\n' +
       this.activeSkills.map(s => `--- 技能: ${s.name} ---\n${s.prompt}`).join('\n\n');
   }
 
@@ -471,7 +474,7 @@ ${customPrompt ? '\n用户自定义提示词:\n' + customPrompt : ''}${skillsSec
       if (messages[i] && messages[i].role === 'user') { insertAt = i; break; }
     }
     const out = messages.slice();
-    out.splice(insertAt >= 0 ? insertAt : out.length, 0, { role: 'system', content: block });
+    out.splice(insertAt >= 0 ? insertAt : out.length, 0, { role: 'user', content: block });
     return out;
   }
 

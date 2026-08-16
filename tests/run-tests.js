@@ -2555,8 +2555,9 @@ function runPromptCacheTests() {
     cm.addUserMessage('第二问');
     const base = cm.getMessages();
     const withSkill = a.injectActiveSkillsSuffix(base);
-    const injectedIdx = withSkill.findIndex(m => m.role === 'system' && String(m.content).includes('技能正文A'));
+    const injectedIdx = withSkill.findIndex(m => m.role === 'user' && String(m.content).includes('技能正文A'));
     assert.ok(injectedIdx >= 0, '应注入技能易变块');
+    assert.strictEqual(withSkill[injectedIdx].role, 'user', '注入块必须用 user 角色（system 仅允许位于首位）');
     assert.strictEqual(injectedIdx, withSkill.length - 2, '技能块应位于最后一条 user 消息之前');
     assert.strictEqual(withSkill[withSkill.length - 1].role, 'user');
     // 除注入块外与 base 完全一致（稳定前缀逐字节不变）
