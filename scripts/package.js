@@ -46,6 +46,13 @@ function main() {
     console.log('[package] git 不可用，保持原版本号:', pkg.version);
   }
 
+  // 发布统一由 CI 的 release job（gh release create）完成，electron-builder 不做自动发布。
+  // electron-builder 26 在 CI 环境未显式指定 --publish 时默认 onTagOrDraft 触发发布，
+  // 而 Actions runner 不会自动导出 GH_TOKEN/GITHUB_TOKEN，会导致构建完成后报错。
+  if (!ebArgs.includes('--publish') && !ebArgs.includes('-p')) {
+    ebArgs.push('--publish', 'never');
+  }
+
   // 直接调用本地 electron-builder CLI（跨平台，避免 Windows 下 spawn .cmd 的 EINVAL 问题）
   const cli = path.join(projectRoot, 'node_modules', 'electron-builder', 'cli.js');
   const args = [cli, ...ebArgs];
