@@ -345,11 +345,6 @@ class Agent {
           })
           .join('\n- ')}`
       : '';
-    // Active skills: their prompts are injected into the system context.
-    const activeSkillsSection = (Array.isArray(this.activeSkills) && this.activeSkills.length > 0)
-      ? '\n\n【已激活技能 Prompt】（必须严格遵守以下技能的指令）\n' +
-          this.activeSkills.map(s => `--- 技能: ${s.name} ---\n${s.prompt}`).join('\n\n')
-      : '';
     const optimizationGuidance = this.settings?.autoOptimizeToolSelection && !this.sessionAutoOptimizeDisabled
       ? `\n\n【工具优化模式（必须遵守）】：
 - 当前处于“工具精简”模式，你只会看到本轮优化后的工具。
@@ -433,7 +428,7 @@ class Agent {
 
 你使用简体中文回复。
 请勿在回复中使用任何emoji表情符号。
-${customPrompt ? '\n用户自定义提示词:\n' + customPrompt : ''}${skillsSection}${activeSkillsSection}${optimizationGuidance}${this.getGoalSteeringSection()}`;
+${customPrompt ? '\n用户自定义提示词:\n' + customPrompt : ''}${skillsSection}${optimizationGuidance}${this.getGoalSteeringSection()}`;
     // i18n: if a non-zh language is active, use the translated system prompt
     if (typeof i18nGetSystemPrompt === 'function') {
       const lang = this.settings?.language || 'zh-CN';
@@ -447,12 +442,37 @@ ${customPrompt ? '\n用户自定义提示词:\n' + customPrompt : ''}${skillsSec
           systemDrive, homeDir, documentsDir, desktopDir,
           workspacePath: this.workspacePath || '未创建',
           workspaceTreeStr,
-          skillsSection, activeSkillsSection, optimizationGuidance,
+          skillsSection, activeSkillsSection: '', optimizationGuidance,
           goalSteeringSection: this.getGoalSteeringSection()
         });
       }
     }
     return _zhPrompt;
+  }
+
+  /**
+   * 已激活技能的完整指令（易变块）。
+   * 不放进 system prompt，而是在请求消息序列的末尾、最后一条 user 消息之前注入：
+   * 激活/停用技能只改变这个尾部块，稳定的 system + 历史前缀保持逐字节不变，
+   * 提示词前缀缓存（DeepSeek/OpenRouter 等 context caching）不会被整段击穿。
+   */
+  getActiveSkillsBlock() {
+    if (!Array.isArray(this.activeSkills) || this.activeSkills.length === 0) return '';
+    return '【已激活技能 Prompt】（必须严格遵守以下技能的指令）\n' +
+      this.activeSkills.map(s => `--- 技能: ${s.name} ---\n${s.prompt}`).join('\n\n');
+  }
+
+  /** 在最后一条 user 消息之前注入技能易变块（无激活技能时原样返回） */
+  injectActiveSkillsSuffix(messages) {
+    const block = this.getActiveSkillsBlock();
+    if (!block || !Array.isArray(messages)) return messages;
+    let insertAt = -1;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i] && messages[i].role === 'user') { insertAt = i; break; }
+    }
+    const out = messages.slice();
+    out.splice(insertAt >= 0 ? insertAt : out.length, 0, { role: 'system', content: block });
+    return out;
   }
 
   /**
@@ -1706,7 +1726,8 @@ ${affectionDesc}
         await this.optimizeToolsForConversation(this.getLatestUserMessageText(), '循环检测到优化未执行，自动补偿优化');
       }
 
-      const messages = this.contextManager.getMessages();
+      // 已激活技能作为易变后缀注入（最后一条 user 消息前），保护前缀缓存
+      const messages = this.injectActiveSkillsSuffix(this.contextManager.getMessages());
       const tools = this.getRuntimeToolSchemas();
       const streamEnabled = this.settings?.llm?.streamResponses !== false;
       // requestId 必须全局唯一：并发会话可能在同一毫秒启动同一轮循环，
@@ -1822,7 +1843,7 @@ ${affectionDesc}
           await new Promise(r => setTimeout(r, 800 * retryCount));
           if (this.stopped || runId !== this.runId) break;
           // 重新构建消息（修复可能已改动上下文）并用非流式重试，避免流式事件错乱
-          const retryMessages = this.contextManager.getMessages();
+          const retryMessages = this.injectActiveSkillsSuffix(this.contextManager.getMessages());
           const retryTools = this.getRuntimeToolSchemas();
           try {
             result = await window.api.chatLLM(retryMessages, {
@@ -3750,7 +3771,7 @@ ${tarotLine}
           if (parentOnMessage) parentOnMessage('sub-agent-message', { id: subAgentId, task, content: `[系统] ${msg}` });
         }, { isSubAgent: true });
 
-        const messages = subAgent.contextManager.getMessages();
+        const messages = subAgent.injectActiveSkillsSuffix(subAgent.contextManager.getMessages());
         const allSchemas = getToolSchemas(this.settings?.tools);
         const subTools = allSchemas.filter(t => allowedSet.has(t.function?.name));
 

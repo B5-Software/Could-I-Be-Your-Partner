@@ -784,13 +784,57 @@
     }
   }
 
+  // OpenAI-compat 模型列表：原生 datalist 在模型过多时无法完整展示，
+  // 改为自绘可搜索可滚动的下拉面板，保证所有模型都能看到。
+  let llmFetchedModels = [];
+
+  function renderLlmModelOptions(filterText) {
+    const box = document.getElementById('llm-model-options');
+    if (!box) return;
+    const f = String(filterText || '').trim().toLowerCase();
+    const models = llmFetchedModels.filter(m => !f || String(m.id || m.name || '').toLowerCase().includes(f));
+    box.innerHTML = '';
+    if (!models.length) {
+      const empty = document.createElement('div');
+      empty.className = 'llm-model-options-empty';
+      empty.textContent = llmFetchedModels.length ? '无匹配模型' : '暂无模型，点击右侧刷新按钮获取';
+      box.appendChild(empty);
+      return;
+    }
+    for (const m of models) {
+      const row = document.createElement('div');
+      row.className = 'llm-model-option';
+      row.textContent = m.id || m.name || '';
+      row.addEventListener('click', () => {
+        const input = document.getElementById('setting-llm-model');
+        if (input) {
+          input.value = m.id || m.name || '';
+          input.dispatchEvent(new Event('change'));
+        }
+        hideLlmModelDropdown();
+      });
+      box.appendChild(row);
+    }
+  }
+
+  function showLlmModelDropdown(resetFilter) {
+    const dd = document.getElementById('llm-model-dropdown');
+    const filter = document.getElementById('llm-model-filter');
+    if (resetFilter && filter) filter.value = '';
+    renderLlmModelOptions(filter ? filter.value : '');
+    if (dd) dd.classList.remove('hidden');
+  }
+
+  function hideLlmModelDropdown() {
+    const dd = document.getElementById('llm-model-dropdown');
+    if (dd) dd.classList.add('hidden');
+  }
+
   async function refreshLLMModels() {
     const provider = document.getElementById('setting-llm-provider')?.value || 'openai-compat';
     const apiUrl = document.getElementById('setting-llm-url')?.value || '';
     const apiKey = document.getElementById('setting-llm-key')?.value || '';
     const hint = document.getElementById('llm-model-hint');
-    const list = document.getElementById('llm-model-list');
-    if (!list) return;
     if (hint) hint.textContent = '正在获取模型列表...';
     try {
       const res = await window.api.llmFetchModels(provider, apiUrl, apiKey);
@@ -798,13 +842,8 @@
         if (hint) hint.textContent = res?.error || '获取失败，请检查 API URL/Key 或网络';
         return;
       }
-      list.innerHTML = '';
-      for (const m of res.models) {
-        const opt = document.createElement('option');
-        opt.value = m.id || m.name || '';
-        opt.textContent = m.id || m.name || '';
-        list.appendChild(opt);
-      }
+      llmFetchedModels = Array.isArray(res.models) ? res.models.slice() : [];
+      showLlmModelDropdown(true);
       if (hint) hint.textContent = `共 ${res.models.length} 个可用模型`;
     } catch (e) {
       if (hint) hint.textContent = '错误: ' + (e?.message || e);
@@ -3263,6 +3302,31 @@
   // OpenAI/Anthropic compatible models refresh button
   const llmRefreshBtn = document.getElementById('btn-llm-refresh-models');
   if (llmRefreshBtn) llmRefreshBtn.addEventListener('click', () => refreshLLMModels());
+
+  // 模型下拉：聚焦/输入时展示并过滤，点击选项回填，点击外部/Esc 关闭
+  const llmModelInput = document.getElementById('setting-llm-model');
+  const llmModelFilter = document.getElementById('llm-model-filter');
+  const llmModelField = document.getElementById('llm-model-field');
+  if (llmModelInput && llmModelField) {
+    llmModelInput.addEventListener('focus', () => {
+      if (llmFetchedModels.length) showLlmModelDropdown(true);
+    });
+    llmModelInput.addEventListener('input', () => {
+      if (llmFetchedModels.length) showLlmModelDropdown(false);
+    });
+    llmModelInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') hideLlmModelDropdown();
+    });
+  }
+  if (llmModelFilter) {
+    llmModelFilter.addEventListener('input', () => renderLlmModelOptions(llmModelFilter.value));
+    llmModelFilter.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') { hideLlmModelDropdown(); llmModelInput?.focus(); }
+    });
+  }
+  document.addEventListener('click', (e) => {
+    if (llmModelField && !llmModelField.contains(e.target)) hideLlmModelDropdown();
+  });
 
   // Zen auth link
   const zenAuthLink = document.getElementById('link-zen-auth');

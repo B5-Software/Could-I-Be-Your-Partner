@@ -727,3 +727,48 @@ input[id^="setting-budget-peak-"][type="text"]:focus {
 .settings-panels::-webkit-scrollbar-thumb:hover {
   background: var(--text-tertiary);
 }
+
+/* LLM 模型下拉面板：原生 datalist 在模型过多时无法完整展示，改为可搜索可滚动的自绘下拉 */
+.llm-model-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 120;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow-lg);
+  padding: 6px;
+}
+.llm-model-dropdown input {
+  width: 100%;
+  margin-bottom: 6px;
+}
+.llm-model-options {
+  max-height: 280px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.llm-model-option {
+  padding: 7px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+  word-break: break-all;
+  color: var(--text-primary);
+}
+.llm-model-option:hover {
+  background: var(--bg-hover);
+}
+.llm-model-option.selected {
+  background: var(--accent-soft, var(--bg-hover));
+}
+.llm-model-options-empty {
+  padding: 10px;
+  font-size: 13px;
+  color: var(--text-tertiary);
+  text-align: center;
+}

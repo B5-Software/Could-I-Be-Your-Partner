@@ -987,8 +987,13 @@
                   <div class="setting-item">
                     <label>模型</label>
                     <div style="display:flex;gap:8px;align-items:center;">
-                      <input type="text" id="setting-llm-model" placeholder="gpt-4o" list="llm-model-list" style="flex:1">
-                      <datalist id="llm-model-list"></datalist>
+                      <div style="position:relative;flex:1" id="llm-model-field">
+                        <input type="text" id="setting-llm-model" placeholder="gpt-4o" autocomplete="off" style="width:100%">
+                        <div id="llm-model-dropdown" class="llm-model-dropdown hidden">
+                          <input type="text" id="llm-model-filter" placeholder="搜索模型…" autocomplete="off">
+                          <div class="llm-model-options" id="llm-model-options"></div>
+                        </div>
+                      </div>
                       <button class="btn-secondary" id="btn-llm-refresh-models" title="获取模型列表"><i class="fa-solid fa-rotate"></i></button>
                     </div>
                     <div class="setting-hint" id="llm-model-hint">点击右侧按钮自动获取模型列表，也可手动输入</div>

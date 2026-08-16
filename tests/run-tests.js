@@ -796,6 +796,22 @@ test('sanguosha 窗口应自带 escapeHtml（未加载 app-utils.js）', () => {
   assert.ok(sgJs.includes('escapeHtml(hero.name)'), '武将名渲染应使用 escapeHtml');
 });
 
+test('LLM 模型自动获取列表：模型过多时也应全部可浏览（可滚动自绘下拉）', () => {
+  const html = fs.readFileSync(require('path').join(__dirname, '../src/renderer/pages/index.html'), 'utf-8');
+  const settingsJs = fs.readFileSync(require('path').join(__dirname, '../src/renderer/js/app-parts/06-tools-skills-settings.js'), 'utf-8');
+  // 原生 datalist 已被可滚动、可搜索的自绘下拉替代
+  assert.ok(html.includes('id="llm-model-dropdown"') && html.includes('id="llm-model-options"'), '缺少模型下拉面板');
+  assert.ok(!html.includes('datalist id="llm-model-list"'), '不应再使用原生 datalist');
+  assert.ok(/llmFetchedModels\s*=.*res\.models\.slice\(\)/.test(settingsJs), '应保存全部模型');
+  assert.ok(settingsJs.includes('renderLlmModelOptions'), '应有模型选项渲染函数');
+  // 渲染必须遍历全部模型（无 slice/limit 截断）
+  const renderFn = settingsJs.split('function renderLlmModelOptions')[1] || '';
+  assert.ok(/for\s*\(const m of models\)/.test(renderFn), '渲染应遍历全部模型');
+  assert.ok(!/models\.slice\(0,\s*\d+\)/.test(settingsJs), '不应截断模型列表');
+  const css = fs.readFileSync(require('path').join(__dirname, '../src/renderer/css/settings.css'), 'utf-8');
+  assert.ok(/\.llm-model-options\s*\{[\s\S]*max-height:\s*280px[\s\S]*overflow-y:\s*auto/.test(css), '下拉列表应限高可滚动');
+});
+
 test('SKILL.md 导入：除元数据外全部正文进 prompt（未知章节不截断）', () => {
   const vm = require('vm');
   const src = fs.readFileSync(require('path').join(__dirname, '../src/renderer/js/skill-parsers.js'), 'utf-8');
@@ -2481,7 +2497,7 @@ function runPromptCacheTests() {
     const { ContextManager } = require('../src/renderer/js/context-manager.js');
     const toolsDefCode = fsLocal.readFileSync(pathLocal.join(__dirname, '../src/renderer/js/tools-def.js'), 'utf-8');
     const agentCode = fsLocal.readFileSync(pathLocal.join(__dirname, '../src/renderer/js/agent.js'), 'utf-8');
-    const sandbox = { window: {}, ContextManager, console };
+    const sandbox = { window: {}, ContextManager, console, process: { platform: 'darwin' } };
     vm.createContext(sandbox);
     vm.runInContext(toolsDefCode + '\n' + agentCode + '\n;this.__Agent = Agent;', sandbox, { filename: 'agent-bundle.js' });
     const Agent = sandbox.__Agent;
@@ -2512,6 +2528,43 @@ function runPromptCacheTests() {
     const pushInternal = content.indexOf('tools.push(INTERNAL_REOPTIMIZE_TOOL_SCHEMA)');
     const reorder = content.indexOf('tools = ordered');
     assert.ok(reorder !== -1 && pushInternal !== -1 && reorder < pushInternal, '先重排业务工具，再追加内部工具');
+  });
+
+  test('技能激活不进 system prompt，而是尾部易变块注入（前缀缓存不被击穿）', () => {
+    const vm = require('vm');
+    const { ContextManager } = require('../src/renderer/js/context-manager.js');
+    const toolsDefCode = fsLocal.readFileSync(pathLocal.join(__dirname, '../src/renderer/js/tools-def.js'), 'utf-8');
+    const agentCode = fsLocal.readFileSync(pathLocal.join(__dirname, '../src/renderer/js/agent.js'), 'utf-8');
+    const sandbox = { window: {}, ContextManager, console, process: { platform: 'darwin' } };
+    vm.createContext(sandbox);
+    vm.runInContext(toolsDefCode + '\n' + agentCode + '\n;this.__Agent = Agent;', sandbox, { filename: 'agent-bundle.js' });
+    const Agent = sandbox.__Agent;
+    const a = new Agent();
+    a.mode = 'chat';
+    a.settings = { tools: {}, autoOptimizeToolSelection: true, llm: {} };
+    a.activeSkills = [{ id: 's1', name: '测试技能', prompt: '技能正文A' }];
+    // 系统提示词必须稳定：不含已激活技能正文
+    const sp = a.getSystemPrompt();
+    assert.ok(!sp.includes('技能正文A'), 'system prompt 不应包含已激活技能正文');
+    assert.ok(!sp.includes('已激活技能'), 'system prompt 不应包含技能注入块');
+    // 构造带历史的消息序列，验证注入位置与前缀字节稳定性
+    const cm = new ContextManager();
+    cm.setSystemPrompt(sp);
+    cm.addUserMessage('第一问');
+    cm.addAssistantMessage('第一答');
+    cm.addUserMessage('第二问');
+    const base = cm.getMessages();
+    const withSkill = a.injectActiveSkillsSuffix(base);
+    const injectedIdx = withSkill.findIndex(m => m.role === 'system' && String(m.content).includes('技能正文A'));
+    assert.ok(injectedIdx >= 0, '应注入技能易变块');
+    assert.strictEqual(injectedIdx, withSkill.length - 2, '技能块应位于最后一条 user 消息之前');
+    assert.strictEqual(withSkill[withSkill.length - 1].role, 'user');
+    // 除注入块外与 base 完全一致（稳定前缀逐字节不变）
+    const without = withSkill.filter((_, i) => i !== injectedIdx);
+    assert.strictEqual(JSON.stringify(without), JSON.stringify(base), '注入技能块不得改动历史前缀');
+    // 停用后（空 activeSkills）应原样返回
+    a.activeSkills = [];
+    assert.strictEqual(JSON.stringify(a.injectActiveSkillsSuffix(base)), JSON.stringify(base), '无激活技能时应原样返回');
   });
 }
 
