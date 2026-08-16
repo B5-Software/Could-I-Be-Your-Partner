@@ -13,9 +13,137 @@
 const ZEN_BASE = 'https://opencode.ai/zen/v1';
 
 // ---- Reasoning intensity → provider-specific params ----
-// off / low / medium / high
+// legacy Anthropic extended thinking 的 token 预算映射（adaptive thinking 直接透传 effort）
 const REASONING_BUDGET_MAP = { off: 0, low: 8000, medium: 16000, high: 32000 };
+// 向后兼容导出：历史上外部只认 low/medium/high 三档
 const REASONING_EFFORT_LEVELS = ['low', 'medium', 'high'];
+
+// ---- Reasoning variant（变体 / 思考强度）引擎 ----
+// 统一档位 ID + 中文显示名。wire 字段即实际发送给 provider 的 effort 值。
+const VARIANT_LABELS = {
+  off: '关闭',
+  auto: '自动（模型默认）',
+  none: '无推理',
+  minimal: '极低',
+  low: '低',
+  medium: '中',
+  high: '高',
+  xhigh: '很高',
+  max: '最高'
+};
+
+function makeVariantTable(ids, defaultId) {
+  const variants = (Array.isArray(ids) ? ids : []).map(id => ({
+    id,
+    label: VARIANT_LABELS[id] || id,
+    wire: id
+  }));
+  let def = defaultId;
+  if (!def || !variants.some(v => v.id === def)) {
+    def = variants.some(v => v.id === 'auto') ? 'auto'
+      : variants.some(v => v.id === 'medium') ? 'medium'
+      : (variants[0]?.id || 'off');
+  }
+  return { variants, defaultId: def };
+}
+
+/**
+ * 判断 Anthropic 模型的思考模式：'none'（不支持）| 'adaptive' | 'legacy'。
+ * 优先使用 /v1/models 返回的 capabilities（若提供），否则按模型名推断。
+ */
+function anthropicThinkingMode(model, capabilities) {
+  const caps = capabilities && typeof capabilities === 'object' ? capabilities : null;
+  if (caps) {
+    const t = caps.thinking || caps.extended_thinking || null;
+    if (t && typeof t === 'object') {
+      if (t.supported === false) return 'none';
+      if (t.adaptive === true || t.type === 'adaptive') return 'adaptive';
+      if (Array.isArray(t.supported_types) && t.supported_types.includes('adaptive')) return 'adaptive';
+      if (t.type === 'legacy' || t.budgetTokens === true || t.budget_tokens === true) return 'legacy';
+      if (t.supported === true) return 'legacy';
+    }
+  }
+  const m = String(model || '').toLowerCase();
+  // Claude 4.6+ / 5 系列使用 adaptive thinking；其余 Claude 为 legacy budget_tokens。
+  if (/(opus-4-[678]|opus-5|sonnet-4-6|sonnet-5|fable-5|mythos-5)/.test(m)) return 'adaptive';
+  if (/claude/.test(m)) return 'legacy';
+  return 'legacy';
+}
+
+/**
+ * 解析给定模型可用的变体档位表。
+ * @param {string} model 模型 ID
+ * @param {string} provider openai-compat | openai-responses | anthropic-compat | opencode-zen
+ * @param {object} [capabilities] Anthropic /v1/models 的 capabilities（可选）
+ * @returns {{ variants: Array<{id,label,wire}>, defaultId: string }}
+ */
+function resolveReasoningVariants(model, provider, capabilities) {
+  const m = String(model || '').toLowerCase();
+  let p = provider || 'openai-compat';
+  if (p === 'opencode-zen') {
+    const pt = zenModelProviderType(m);
+    p = pt === 'anthropic' ? 'anthropic-compat'
+      : pt === 'openai-responses' ? 'openai-responses'
+      : 'openai-compat';
+  }
+
+  // Anthropic：capabilities 优先，模型名推断兜底
+  if (p === 'anthropic-compat') {
+    const mode = anthropicThinkingMode(m, capabilities);
+    if (mode === 'none') return makeVariantTable(['off', 'auto'], 'auto');
+    if (mode === 'adaptive') return makeVariantTable(['off', 'minimal', 'low', 'medium', 'high'], 'medium');
+    return makeVariantTable(['off', 'auto', 'low', 'medium', 'high'], 'auto');
+  }
+
+  // OpenAI Responses API
+  if (p === 'openai-responses') {
+    if (/^gpt-5\.1/.test(m)) return makeVariantTable(['off', 'none', 'low', 'medium', 'high'], 'medium');
+    if (/^(gpt-5|o[134])(?:[.-]|$)/.test(m)) return makeVariantTable(['off', 'none', 'minimal', 'low', 'medium', 'high'], 'medium');
+    return makeVariantTable(['off', 'auto'], 'auto');
+  }
+
+  // OpenAI 兼容 chat/completions
+  if (/^deepseek-v4/.test(m)) {
+    // 官方映射：low→low, medium→high, high→high, xhigh→high(flash)/max(pro), max→max
+    return makeVariantTable(['off', 'auto', 'low', 'medium', 'high', 'xhigh', 'max'], 'auto');
+  }
+  if (/^deepseek/.test(m)) return makeVariantTable(['off', 'auto'], 'auto');
+  if (/^(qwen|grok-|kimi|glm-|minimax|mimo)/.test(m)) {
+    return makeVariantTable(['off', 'auto', 'low', 'medium', 'high'], 'auto');
+  }
+  if (/^(o[134]|gpt-5)(?:[.-]|$)/.test(m)) {
+    if (/^gpt-5\.1/.test(m)) return makeVariantTable(['off', 'none', 'low', 'medium', 'high'], 'medium');
+    return makeVariantTable(['off', 'minimal', 'low', 'medium', 'high'], 'medium');
+  }
+  // 未知 openai-compat 模型：保守五档（off/auto/low/medium/high）
+  return makeVariantTable(['off', 'auto', 'low', 'medium', 'high'], 'auto');
+}
+
+/**
+ * 校验一个 effort 值对给定模型是否合法；不合法时收敛到该模型默认档。
+ * @returns {{ valid: boolean, resolved: string, changed: boolean }}
+ */
+function validateReasoningEffort(effort, model, provider, capabilities) {
+  const table = resolveReasoningVariants(model, provider, capabilities);
+  const ids = table.variants.map(v => v.id);
+  const input = effort == null || effort === '' ? table.defaultId : String(effort);
+  if (ids.includes(input)) return { valid: true, resolved: input, changed: false, variants: table.variants, defaultId: table.defaultId };
+  return { valid: false, resolved: table.defaultId, changed: true, variants: table.variants, defaultId: table.defaultId };
+}
+
+/**
+ * 请求构造前的最后一道防线：把 effort 收敛到该模型合法档位。
+ * @returns {{ effort: string, variants: Array<{id,label,wire}>, defaultId: string }}
+ */
+function resolveVariantForRequest(llm, effort) {
+  const provider = llm.provider || 'openai-compat';
+  const caps = llm.capabilities || null;
+  const table = resolveReasoningVariants(llm.model, provider, caps);
+  const ids = table.variants.map(v => v.id);
+  let eff = effort == null || effort === '' ? table.defaultId : String(effort);
+  if (!ids.includes(eff)) eff = table.defaultId;
+  return { effort: eff, variants: table.variants, defaultId: table.defaultId };
+}
 
 /**
  * Determine the provider type for a given model ID on OpenCode Zen.
@@ -80,20 +208,16 @@ function buildOpenAIRequest(llm, opts, reasoningEffort) {
   // JSON mode: force the model to emit valid JSON (OpenAI-compat standard).
   // Helps with thinking models that would otherwise dump reasoning into content.
   if (opts.response_format) body.response_format = opts.response_format;
-  // Reasoning effort: OpenAI o-series + GPT-5 use reasoning_effort field.
-  // DeepSeek / Qwen 系列也支持 reasoning_effort 参数。
-  // 注意：'off' 值大多数 provider 不支持，会导致 400 错误。
-  // 因此 reasoningEffort='off' 时不注入字段，让模型用默认行为（不传 reasoning_effort）。
-  // 游戏通过足够大的 max_tokens（用户配置的 maxResponseTokens）确保思考后仍有空间输出答案。
-  if (reasoningEffort && reasoningEffort !== 'off') {
+  // Reasoning effort：按模型能力表收敛后注入。
+  // 'off'/'auto' 不注入 effort 字段（模型默认行为）；
+  // DeepSeek V4 的 'off' 显式发 thinking.type=disabled 以真正关闭思考。
+  const resolvedVariant = resolveVariantForRequest(llm, reasoningEffort);
+  if (resolvedVariant.effort && resolvedVariant.effort !== 'auto') {
     const m = (llm.model || '').toLowerCase();
-    // OpenAI reasoning models: o1, o3, o4, gpt-5*
-    if (/^o[134]-|^gpt-5/.test(m)) {
-      body.reasoning_effort = reasoningEffort;
-    }
-    // DeepSeek 全系列 + Qwen 全系列（包括 r1, v4, flash, think 等变体）
-    if (/deepseek|qwen/.test(m)) {
-      body.reasoning_effort = reasoningEffort;
+    if (resolvedVariant.effort === 'off') {
+      if (/^deepseek-v4/.test(m)) body.thinking = { type: 'disabled' };
+    } else {
+      body.reasoning_effort = resolvedVariant.effort;
     }
   }
   // 当未配置 API Key（如 llama.cpp 等本地无 key 端点）时，不发送 Authorization 头
@@ -154,13 +278,10 @@ function buildResponsesRequest(llm, opts, reasoningEffort) {
       body.text = { format: opts.response_format };
     }
   }
-  // Reasoning effort: gpt-5 / o 系列 → reasoning.effort（'off' 不注入）
-  if (reasoningEffort && reasoningEffort !== 'off' && REASONING_EFFORT_LEVELS.includes(reasoningEffort)) {
-    const m = (llm.model || '').toLowerCase();
-    // 兼容 'gpt-5.2' / 'o3' / 'o4-mini'（前缀后允许 -、. 或结束）
-    if (/^(?:gpt-5|o[134])(?:[.-]|$)/.test(m)) {
-      body.reasoning = { effort: reasoningEffort };
-    }
+  // Reasoning effort：按模型能力表收敛后注入（'off'/'auto' 不注入）
+  const resolvedVariant = resolveVariantForRequest(llm, reasoningEffort);
+  if (resolvedVariant.effort && resolvedVariant.effort !== 'off' && resolvedVariant.effort !== 'auto') {
+    body.reasoning = { effort: resolvedVariant.effort };
   }
   const responsesHeaders = { 'Content-Type': 'application/json' };
   if (llm.apiKey) responsesHeaders['Authorization'] = `Bearer ${llm.apiKey}`;
@@ -300,13 +421,22 @@ function buildAnthropicRequest(llm, opts, reasoningEffort) {
       body.tool_choice = { type: 'auto' };
     }
   }
-  // Reasoning: Anthropic uses "thinking" object with budget_tokens.
-  if (reasoningEffort && reasoningEffort !== 'off') {
-    const budget = REASONING_BUDGET_MAP[reasoningEffort] || 0;
-    if (budget > 0) {
-      body.thinking = { type: 'enabled', budget_tokens: budget };
-      // Anthropic requires max_tokens > budget_tokens
-      if (body.max_tokens <= budget) body.max_tokens = budget + 4096;
+  // Reasoning：Anthropic 按模型能力自适应。
+  // - adaptive 模型（Claude 4.6+/5 系）：thinking.type=adaptive + effort(minimal/low/medium/high)
+  // - legacy 模型：thinking.type=enabled + budget_tokens(8k/16k/32k)
+  // - 'off'/'auto'：不注入 thinking（模型默认行为）
+  const resolvedVariant = resolveVariantForRequest(llm, reasoningEffort);
+  if (resolvedVariant.effort && resolvedVariant.effort !== 'off' && resolvedVariant.effort !== 'auto') {
+    const mode = anthropicThinkingMode(llm.model, llm.capabilities);
+    if (mode === 'adaptive') {
+      body.thinking = { type: 'adaptive', effort: resolvedVariant.effort };
+    } else {
+      const budget = REASONING_BUDGET_MAP[resolvedVariant.effort] || 0;
+      if (budget > 0) {
+        body.thinking = { type: 'enabled', budget_tokens: budget };
+        // Anthropic requires max_tokens > budget_tokens
+        if (body.max_tokens <= budget) body.max_tokens = budget + 4096;
+      }
     }
   }
   // 当未配置 API Key 时，不发送 x-api-key 头（兼容无 key 的 Anthropic 兼容端点）
@@ -507,6 +637,12 @@ module.exports = {
   ZEN_BASE,
   REASONING_BUDGET_MAP,
   REASONING_EFFORT_LEVELS,
+  VARIANT_LABELS,
+  makeVariantTable,
+  anthropicThinkingMode,
+  resolveReasoningVariants,
+  validateReasoningEffort,
+  resolveVariantForRequest,
   zenModelProviderType,
   buildLLMRequest,
   parseLLMResponse,

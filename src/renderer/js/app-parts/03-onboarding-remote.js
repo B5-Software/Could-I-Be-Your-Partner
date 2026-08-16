@@ -1070,57 +1070,50 @@
     // ≥1M 用 M（非 10M），≥1G/T/P 用对应单位（防御性编程）
     const fmt = (n) => fmtTokenCount(n, pfx);
     const cachedPct = su.prompt > 0 ? (su.cached / su.prompt * 100).toFixed(1) : '0.0';
-    // 计算费用：若该模型在预算控制里配置了价格则显示，否则不显示费用行
-    const pricing = getSessionPricing(agentInstance);
-    let costRow = '';
-    if (pricing) {
-      // 新格式：inputPerM / cacheReadPerM / outputPerM / cacheWritePerM（每 1M tokens 多少美元）
-      // 旧格式回退：promptPerK/completionPerK（每 1K tokens）
-      const toPerM = (v, isPerK) => isPerK ? (Number(v) || 0) * 1000 : (Number(v) || 0);
-      const inputPerM = toPerM(pricing.inputPerM ?? pricing.promptPerK, !pricing.inputPerM && !!pricing.promptPerK);
-      const cacheReadPerM = pricing.cacheReadPerM != null ? Number(pricing.cacheReadPerM) : inputPerM * 0.1;
-      const outputPerM = toPerM(pricing.outputPerM ?? pricing.completionPerK, !pricing.outputPerM && !!pricing.completionPerK);
-      const cacheWritePerM = pricing.hasCacheWrite
-        ? (pricing.cacheWritePerM != null ? Number(pricing.cacheWritePerM) : inputPerM * 1.25)
-        : 0;
-      // 应用峰谷倍率
-      const ph = agentInstance?.settings?.budget?.peakHours || {};
-      let inMul = 1, crMul = 1, outMul = 1, cwMul = 1;
-      if (ph.enabled) {
-        const hour = new Date().getHours();
-        const s = Number(ph.start) ?? 0;
-        const e = Number(ph.end) ?? 24;
-        const isPeak = s <= e ? (hour >= s && hour < e) : (hour >= s || hour < e);
-        if (isPeak) {
-          inMul = Number(ph.inputMul) || 1;
-          crMul = Number(ph.cacheReadMul) || 1;
-          outMul = Number(ph.outputMul) || 1;
-          cwMul = Number(ph.cacheWriteMul) || 1;
-        }
+    const esc = (s) => String(s ?? '').replace(/[<>&"']/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&#39;' }[c]));
+    // 按模型分桶：混合模型会话按各自单价计价并求和
+    const byModel = agentInstance?.sessionUsageByModel || {};
+    const entries = Object.entries(byModel)
+      .filter(([, u]) => u && (u.total > 0 || u.prompt > 0 || u.completion > 0));
+    let perModelRows = '';
+    let totalCost = 0;
+    let pricedCount = 0;
+    if (entries.length > 0) {
+      const rows = [];
+      for (const [model, mu] of entries) {
+        const cost = computeSessionCostForModel(agentInstance, model, mu);
+        if (cost) { totalCost += cost.totalCost; pricedCount++; }
+        rows.push(`<div class="context-tooltip-row" style="font-size:10px;color:var(--text-tertiary)"><span>　${esc(model)}</span><span>${fmt(mu.total)}${cost ? ` · $${cost.totalCost.toFixed(5)}` : ''}</span></div>`);
       }
-      const nonCachedPrompt = Math.max(0, su.prompt - su.cached - (su.cacheCreation || 0));
-      const inputCost = (nonCachedPrompt / 1e6) * inputPerM * inMul;
-      const cacheReadCost = (su.cached / 1e6) * cacheReadPerM * crMul;
-      const outputCost = (su.completion / 1e6) * outputPerM * outMul;
-      const cacheWriteCost = (su.cacheCreation || 0) / 1e6 * cacheWritePerM * cwMul;
-      const promptBilled = inputCost + cacheReadCost + cacheWriteCost;
-      const totalCost = promptBilled + outputCost;
-      const cacheWriteNote = pricing.hasCacheWrite ? '' : '<div class="context-tooltip-row" style="font-size:10px;color:var(--text-tertiary)"><span>　(此模型不计缓存写入费)</span></div>';
-      costRow = `<div class="context-tooltip-row" style="border-top:1px solid var(--border);padding-top:4px">
-        <span>费用（${pricing.model}）</span><span>$${totalCost.toFixed(5)}</span>
-      </div>
-      <div class="context-tooltip-row" style="font-size:10px;color:var(--text-tertiary)">
-        <span>　输入</span><span>$${inputCost.toFixed(5)}</span>
-      </div>
-      <div class="context-tooltip-row" style="font-size:10px;color:var(--text-tertiary)">
-        <span>　输出</span><span>$${outputCost.toFixed(5)}</span>
-      </div>
-      <div class="context-tooltip-row" style="font-size:10px;color:var(--text-tertiary)">
-        <span>　缓存读</span><span>$${cacheReadCost.toFixed(5)}</span>
-      </div>
-      <div class="context-tooltip-row" style="font-size:10px;color:var(--text-tertiary)">
-        <span>　缓存写</span><span>$${cacheWriteCost.toFixed(5)}</span>
-      </div>${cacheWriteNote}`;
+      perModelRows = `<div class="context-tooltip-row" style="border-top:1px solid var(--border);padding-top:4px;font-weight:600"><span>按模型明细</span><span></span></div>` + rows.join('');
+    }
+    // 总费用：有分桶时按模型求和；旧数据（无分桶）回退到当前模型单价 × 扁平总量
+    let costRow = '';
+    if (entries.length > 0) {
+      if (pricedCount > 0) {
+        costRow = `<div class="context-tooltip-row" style="border-top:1px solid var(--border);padding-top:4px"><span>费用（合计）</span><span>$${totalCost.toFixed(5)}</span></div>`;
+      }
+    } else {
+      const activeModel = (typeof agentInstance?.getActiveModelId === 'function')
+        ? agentInstance.getActiveModelId() : agentInstance?.settings?.llm?.model;
+      const cost = computeSessionCostForModel(agentInstance, activeModel, su);
+      if (cost) {
+        costRow = `<div class="context-tooltip-row" style="border-top:1px solid var(--border);padding-top:4px">
+          <span>费用（${esc(cost.pricing.model)}）</span><span>$${cost.totalCost.toFixed(5)}</span>
+        </div>
+        <div class="context-tooltip-row" style="font-size:10px;color:var(--text-tertiary)">
+          <span>　输入</span><span>$${cost.inputCost.toFixed(5)}</span>
+        </div>
+        <div class="context-tooltip-row" style="font-size:10px;color:var(--text-tertiary)">
+          <span>　输出</span><span>$${cost.outputCost.toFixed(5)}</span>
+        </div>
+        <div class="context-tooltip-row" style="font-size:10px;color:var(--text-tertiary)">
+          <span>　缓存读</span><span>$${cost.cacheReadCost.toFixed(5)}</span>
+        </div>
+        <div class="context-tooltip-row" style="font-size:10px;color:var(--text-tertiary)">
+          <span>　缓存写</span><span>$${cost.cacheWriteCost.toFixed(5)}</span>
+        </div>${cost.pricing.hasCacheWrite ? '' : '<div class="context-tooltip-row" style="font-size:10px;color:var(--text-tertiary)"><span>　(此模型不计缓存写入费)</span></div>'}`;
+      }
     }
     return `
       <div class="context-tooltip-row" style="margin-top:6px;border-top:1px solid var(--border);padding-top:6px;font-weight:600">
@@ -1131,16 +1124,55 @@
       <div class="context-tooltip-row"><span>　总计</span><span>${fmt(su.total)}</span></div>
       ${su.cached > 0 ? `<div class="context-tooltip-row"><span>　缓存命中</span><span>${fmt(su.cached)} (${cachedPct}%)</span></div>` : ''}
       ${su.cacheCreation > 0 ? `<div class="context-tooltip-row"><span>　缓存创建</span><span>${fmt(su.cacheCreation || 0)}</span></div>` : ''}
+      ${perModelRows}
       ${costRow}
     `;
+  }
+
+  // 计算某模型的会话费用（含峰谷倍率）。无价格配置返回 null。
+  function computeSessionCostForModel(agentInstance, model, usage) {
+    const pricing = getSessionPricing(agentInstance, model);
+    if (!pricing) return null;
+    const su = usage || {};
+    const toPerM = (v, isPerK) => isPerK ? (Number(v) || 0) * 1000 : (Number(v) || 0);
+    const inputPerM = toPerM(pricing.inputPerM ?? pricing.promptPerK, !pricing.inputPerM && !!pricing.promptPerK);
+    const cacheReadPerM = pricing.cacheReadPerM != null ? Number(pricing.cacheReadPerM) : inputPerM * 0.1;
+    const outputPerM = toPerM(pricing.outputPerM ?? pricing.completionPerK, !pricing.outputPerM && !!pricing.completionPerK);
+    const cacheWritePerM = pricing.hasCacheWrite
+      ? (pricing.cacheWritePerM != null ? Number(pricing.cacheWritePerM) : inputPerM * 1.25)
+      : 0;
+    const ph = agentInstance?.settings?.budget?.peakHours || {};
+    let inMul = 1, crMul = 1, outMul = 1, cwMul = 1;
+    if (ph.enabled) {
+      const hour = new Date().getHours();
+      const s = Number(ph.start) ?? 0;
+      const e = Number(ph.end) ?? 24;
+      const isPeak = s <= e ? (hour >= s && hour < e) : (hour >= s || hour < e);
+      if (isPeak) {
+        inMul = Number(ph.inputMul) || 1;
+        crMul = Number(ph.cacheReadMul) || 1;
+        outMul = Number(ph.outputMul) || 1;
+        cwMul = Number(ph.cacheWriteMul) || 1;
+      }
+    }
+    const nonCachedPrompt = Math.max(0, (su.prompt || 0) - (su.cached || 0) - (su.cacheCreation || 0));
+    const inputCost = (nonCachedPrompt / 1e6) * inputPerM * inMul;
+    const cacheReadCost = ((su.cached || 0) / 1e6) * cacheReadPerM * crMul;
+    const outputCost = ((su.completion || 0) / 1e6) * outputPerM * outMul;
+    const cacheWriteCost = ((su.cacheCreation || 0) / 1e6) * cacheWritePerM * cwMul;
+    return {
+      inputCost, cacheReadCost, outputCost, cacheWriteCost,
+      totalCost: inputCost + cacheReadCost + outputCost + cacheWriteCost,
+      pricing
+    };
   }
 
   // 获取当前会话所用模型的单价配置（来自 settings.budget.models）
   // 支持新格式（inputPerM/cacheReadPerM/outputPerM/cacheWritePerM/hasCacheWrite）
   // 和旧格式（promptPerK/completionPerK）回退
-  function getSessionPricing(agentInstance) {
+  function getSessionPricing(agentInstance, modelId) {
     try {
-      const model = agentInstance?.settings?.llm?.model;
+      const model = modelId || agentInstance?.settings?.llm?.model;
       if (!model) return null;
       const prices = agentInstance?.settings?.budget?.models || {};
       const p = prices[model];
@@ -1349,41 +1381,41 @@
         const el = document.getElementById(id);
         if (!el) continue;
         const su = a?.sessionUsage;
-        const pricing = a ? getSessionPricing(a) : null;
-        if (!su || !pricing) { el.style.display = 'none'; continue; }
-        // 同 renderSessionTokenStats 的费用计算
-        const toPerM = (v, isPerK) => isPerK ? (Number(v) || 0) * 1000 : (Number(v) || 0);
-        const inputPerM = toPerM(pricing.inputPerM ?? pricing.promptPerK, !pricing.inputPerM && !!pricing.promptPerK);
-        const cacheReadPerM = pricing.cacheReadPerM != null ? Number(pricing.cacheReadPerM) : (inputPerM || 0) * 0.1;
-        const outputPerM = toPerM(pricing.outputPerM ?? pricing.completionPerK, !pricing.outputPerM && !!pricing.completionPerK);
-        const cacheWritePerM = pricing.hasCacheWrite
-          ? (pricing.cacheWritePerM != null ? Number(pricing.cacheWritePerM) : (inputPerM || 0) * 1.25)
-          : 0;
-        const ph = a?.settings?.budget?.peakHours || {};
-        let inMul = 1, crMul = 1, outMul = 1, cwMul = 1;
-        if (ph.enabled) {
-          const hour = new Date().getHours();
-          const s = Number(ph.start) ?? 0;
-          const e = Number(ph.end) ?? 24;
-          const isPeak = s <= e ? (hour >= s && hour < e) : (hour >= s || hour < e);
-          if (isPeak) {
-            inMul = Number(ph.inputMul) || 1;
-            crMul = Number(ph.cacheReadMul) || 1;
-            outMul = Number(ph.outputMul) || 1;
-            cwMul = Number(ph.cacheWriteMul) || 1;
+        if (!su) { el.style.display = 'none'; continue; }
+        // 混合模型：按分桶逐模型计价求和；旧数据回退到当前模型单价
+        const byModel = a?.sessionUsageByModel || {};
+        const entries = Object.entries(byModel)
+          .filter(([, u]) => u && (u.total > 0 || u.prompt > 0 || u.completion > 0));
+        let totalCost = 0;
+        let modelLabel = '';
+        let priced = false;
+        if (entries.length > 0) {
+          const names = [];
+          for (const [model, mu] of entries) {
+            const cost = computeSessionCostForModel(a, model, mu);
+            if (cost) {
+              totalCost += cost.totalCost;
+              priced = true;
+              names.push(model);
+            }
+          }
+          modelLabel = names.join(' + ');
+        } else {
+          const activeModel = (typeof a?.getActiveModelId === 'function') ? a.getActiveModelId() : a?.settings?.llm?.model;
+          const cost = computeSessionCostForModel(a, activeModel, su);
+          if (cost) {
+            totalCost = cost.totalCost;
+            priced = true;
+            modelLabel = activeModel || '';
           }
         }
-        const nonCachedPrompt = Math.max(0, su.prompt - su.cached - (su.cacheCreation || 0));
-        const totalCost = (nonCachedPrompt / 1e6) * inputPerM * inMul
-          + (su.cached / 1e6) * cacheReadPerM * crMul
-          + (su.completion / 1e6) * outputPerM * outMul
-          + ((su.cacheCreation || 0) / 1e6) * cacheWritePerM * cwMul;
+        if (!priced) { el.style.display = 'none'; continue; }
         if (totalCost > 0) {
           el.style.display = '';
           const valEl = el.querySelector('.scm-value');
           const fmtCost = totalCost >= 0.01 ? `$${totalCost.toFixed(4)}` : `$${totalCost.toFixed(6)}`;
           if (valEl) valEl.textContent = (su.estimated ? '~' : '') + fmtCost;
-          el.title = `当前会话消费${su.estimated ? ' (估算)' : ''}：${fmtCost}\n模型：${pricing.model}`;
+          el.title = `当前会话消费${su.estimated ? ' (估算)' : ''}：${fmtCost}\n模型：${modelLabel || '未知'}`;
         } else {
           el.style.display = 'none';
         }

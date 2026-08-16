@@ -1031,14 +1031,14 @@
                   <div class="setting-hint">无法自动识别模型是否支持多模态时（如 llama.cpp 本地模型），可强制开启以允许读取图片直接注入上下文</div>
                 </div>
                 <div class="setting-item">
-                  <label>推理强度 (仅支持的模型生效)</label>
+                  <label>推理强度 / 变体</label>
                   <select id="setting-llm-reasoning">
                     <option value="off">关闭</option>
                     <option value="low">低</option>
                     <option value="medium">中</option>
                     <option value="high">高</option>
                   </select>
-                  <div class="setting-hint">OpenAI o系列/GPT-5 用 reasoning_effort，Anthropic Claude 用 thinking budget_tokens</div>
+                  <div class="setting-hint">档位随当前模型能力动态变化；切换模型后会自动收敛到该模型支持的档位</div>
                 </div>
                 <div class="setting-item">
                   <label>温度 <span class="setting-value" id="setting-temp-val">0.7</span></label>

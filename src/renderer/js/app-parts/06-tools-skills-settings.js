@@ -969,6 +969,8 @@
     }
     const reasoningEl = document.getElementById('setting-llm-reasoning');
     if (reasoningEl) reasoningEl.value = s.llm.reasoningEffort || 'off';
+    // 动态变体档位：按当前模型能力拉取并收敛（异步，不阻塞设置页渲染）
+    refreshReasoningVariants();
     updateLLMProviderFields(provider);
     if (provider === 'opencode-zen') {
       const zenModelSel = document.getElementById('setting-llm-zen-model');
@@ -3179,6 +3181,7 @@
       s.llm[key] = val;
       await saveSettings(s);
       if (key === 'maxContextLength') agent.contextManager.setMaxTokens(val);
+      if (key === 'model' || key === 'apiUrl') refreshReasoningVariants();
     });
   });
 
@@ -3239,6 +3242,7 @@
     }
     await saveSettings(s);
     updateLLMProviderFields(provider);
+    refreshReasoningVariants();
     if (provider === 'opencode-zen') {
       await refreshZenModels(s.llm.model);
       // sync zen-model dropdown with current model
@@ -3271,6 +3275,7 @@
     const s = await window.api.getSettings();
     s.llm.model = e.target.value;
     await saveSettings(s);
+    refreshReasoningVariants();
   });
 
   // Zen refresh button
@@ -3341,6 +3346,54 @@
     s.llm.reasoningEffort = e.target.value;
     await saveSettings(s);
   });
+
+  // 动态变体档位：按当前 provider+model 查询可用档位，重绘下拉框并收敛非法值
+  const VARIANT_LABEL_FALLBACK = {
+    off: '关闭', auto: '自动（模型默认）', none: '无推理', minimal: '极低',
+    low: '低', medium: '中', high: '高', xhigh: '很高', max: '最高'
+  };
+  async function refreshReasoningVariants() {
+    const el = document.getElementById('setting-llm-reasoning');
+    if (!el) return;
+    const s = await window.api.getSettings();
+    const provider = s.llm.provider || 'openai-compat';
+    const model = s.llm.model || '';
+    let variants = null;
+    let defaultId = 'off';
+    try {
+      const apiUrl = provider === 'opencode-zen' ? '' : (s.llm.apiUrl || '');
+      const apiKey = provider === 'opencode-zen' ? (s.llm.zenApiKey || '') : (s.llm.apiKey || '');
+      const res = await window.api.llmCapabilities?.(provider, model, apiUrl, apiKey);
+      if (res && res.ok && Array.isArray(res.variants) && res.variants.length > 0) {
+        variants = res.variants;
+        defaultId = res.defaultId || 'off';
+      }
+    } catch (_) { /* 网络/端点失败：走本地兜底 */ }
+    if (!variants || !variants.length) {
+      // 未知 openai-compat 兜底五档（off/auto/low/medium/high）
+      variants = ['off', 'auto', 'low', 'medium', 'high'].map(id => ({
+        id, label: VARIANT_LABEL_FALLBACK[id] || id, wire: id
+      }));
+      defaultId = 'auto';
+    }
+    const current = s.llm.reasoningEffort || 'off';
+    const ids = variants.map(v => v.id);
+    const next = ids.includes(current) ? current : defaultId;
+    el.innerHTML = variants.map(v => `<option value="${v.id}">${v.label}</option>`).join('');
+    el.value = next;
+    if (current !== next) {
+      s.llm.reasoningEffort = next;
+      try { await saveSettings(s); } catch (_) { /* 忽略保存失败 */ }
+      if (typeof window.showToast === 'function') {
+        const label = (variants.find(v => v.id === next) || {}).label || next;
+        window.showToast(`当前模型不支持变体「${current}」，已自动调整为「${label}」`, 'info', 4500);
+      }
+    }
+    const hint = el.parentElement?.querySelector('.setting-hint');
+    if (hint) hint.textContent = `当前模型支持：${variants.map(v => v.label).join(' / ')}`;
+    return { variants, next };
+  }
+  window.refreshReasoningVariants = refreshReasoningVariants;
 
   // Usage stats period buttons
   document.querySelectorAll('.usage-period-btn').forEach(btn => {

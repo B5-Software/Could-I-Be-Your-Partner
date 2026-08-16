@@ -571,7 +571,10 @@ class ContextManager {
             temperature: 0.3,
             sessionKey: options.sessionKey || null,
             tools: options.tools || null,
-            purpose: 'compaction'
+            purpose: 'compaction',
+            // 会话级模型/变体覆盖：压缩与主请求同模型，复用暖前缀缓存
+            model: options.model || null,
+            reasoningEffort: options.reasoningEffort || null
           });
         } catch (e) {
           lastError = e;

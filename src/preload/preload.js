@@ -260,6 +260,8 @@ contextBridge.exposeInMainWorld('api', {
   summarizeLLM: (messages, options) => ipcRenderer.invoke('llm:summarize', messages, options),
   zenFetchModels: () => ipcRenderer.invoke('zen:fetchModels'),
   llmFetchModels: (provider, apiUrl, apiKey) => ipcRenderer.invoke('llm:fetchModels', provider, apiUrl, apiKey),
+  // 查询模型可用的变体（思考强度）档位 + Anthropic 能力内省
+  llmCapabilities: (provider, model, apiUrl, apiKey) => ipcRenderer.invoke('llm:capabilities', provider, model, apiUrl, apiKey),
   usageGetRange: (period) => ipcRenderer.invoke('usage:getRange', period),
   onUsageChanged: (cb) => {
     const listener = (_, data) => cb(data);

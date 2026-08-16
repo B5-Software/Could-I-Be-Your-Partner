@@ -1659,6 +1659,85 @@ test('parseResponsesResponse: output items → 统一 OpenAI shape + usage 透�
   assert.strictEqual(parsed.usage.reasoning_output_tokens, 20);
 });
 
+// ---- Reasoning Variant（变体 / 思考强度）引擎 ----
+console.log('\nReasoning Variant Engine（llm-providers）:');
+
+test('resolveReasoningVariants: DeepSeek V4 七档 / 未知兼容模型五档 / Anthropic adaptive / gpt-5.1', () => {
+  const ds = llmProvidersMod.resolveReasoningVariants('deepseek-v4-pro', 'openai-compat');
+  assert.deepStrictEqual(ds.variants.map(v => v.id), ['off', 'auto', 'low', 'medium', 'high', 'xhigh', 'max']);
+  assert.strictEqual(ds.defaultId, 'auto');
+
+  const unknown = llmProvidersMod.resolveReasoningVariants('my-custom-model', 'openai-compat');
+  assert.deepStrictEqual(unknown.variants.map(v => v.id), ['off', 'auto', 'low', 'medium', 'high']);
+  assert.strictEqual(unknown.defaultId, 'auto');
+
+  const claude = llmProvidersMod.resolveReasoningVariants('claude-opus-4-6', 'anthropic-compat');
+  assert.deepStrictEqual(claude.variants.map(v => v.id), ['off', 'minimal', 'low', 'medium', 'high']);
+
+  const legacy = llmProvidersMod.resolveReasoningVariants('claude-sonnet-4-5', 'anthropic-compat');
+  assert.deepStrictEqual(legacy.variants.map(v => v.id), ['off', 'auto', 'low', 'medium', 'high']);
+
+  const gpt51 = llmProvidersMod.resolveReasoningVariants('gpt-5.1', 'openai-responses');
+  assert.deepStrictEqual(gpt51.variants.map(v => v.id), ['off', 'none', 'low', 'medium', 'high']);
+
+  // capabilities 内省优先于模型名推断
+  const caps = llmProvidersMod.resolveReasoningVariants('claude-opus-4-6', 'anthropic-compat', { thinking: { supported: true, type: 'adaptive' } });
+  assert.strictEqual(caps.defaultId, 'medium');
+  const noThink = llmProvidersMod.resolveReasoningVariants('claude-opus-4-6', 'anthropic-compat', { thinking: { supported: false } });
+  assert.deepStrictEqual(noThink.variants.map(v => v.id), ['off', 'auto']);
+});
+
+test('validateReasoningEffort: 非法档位收敛到模型默认档', () => {
+  const r1 = llmProvidersMod.validateReasoningEffort('ultra', 'gpt-5.1', 'openai-responses');
+  assert.strictEqual(r1.valid, false);
+  assert.strictEqual(r1.changed, true);
+  assert.strictEqual(r1.resolved, 'medium');
+  const r2 = llmProvidersMod.validateReasoningEffort('medium', 'gpt-5.1', 'openai-responses');
+  assert.strictEqual(r2.valid, true);
+  assert.strictEqual(r2.resolved, 'medium');
+  const r3 = llmProvidersMod.validateReasoningEffort('xhigh', 'my-custom-model', 'openai-compat');
+  assert.strictEqual(r3.resolved, 'auto');
+});
+
+test('buildOpenAIRequest: DeepSeek V4 off→thinking.disabled / 未知模型非法档收敛 / qwen 透传', () => {
+  const off = llmProvidersMod.buildLLMRequest(
+    { provider: 'openai-compat', apiUrl: 'u', apiKey: '', model: 'deepseek-v4-pro' },
+    { messages: [{ role: 'user', content: 'hi' }], stream: false, reasoningEffort: 'off' });
+  assert.deepStrictEqual(off.body.thinking, { type: 'disabled' });
+  assert.strictEqual(off.body.reasoning_effort, undefined);
+
+  // 未知兼容模型不支持的 xhigh 收敛为 auto（不注入字段）
+  const unknown = llmProvidersMod.buildLLMRequest(
+    { provider: 'openai-compat', apiUrl: 'u', apiKey: '', model: 'my-custom-model' },
+    { messages: [{ role: 'user', content: 'hi' }], stream: false, reasoningEffort: 'xhigh' });
+  assert.strictEqual(unknown.body.reasoning_effort, undefined);
+
+  const qwen = llmProvidersMod.buildLLMRequest(
+    { provider: 'openai-compat', apiUrl: 'u', apiKey: '', model: 'qwen3-max' },
+    { messages: [{ role: 'user', content: 'hi' }], stream: false, reasoningEffort: 'medium' });
+  assert.strictEqual(qwen.body.reasoning_effort, 'medium');
+});
+
+test('buildAnthropicRequest: adaptive 用 effort / legacy 用 budget_tokens', () => {
+  const adaptive = llmProvidersMod.buildLLMRequest(
+    { provider: 'anthropic-compat', apiUrl: 'u', apiKey: '', model: 'claude-opus-4-6', maxResponseTokens: 8192 },
+    { messages: [{ role: 'user', content: 'hi' }], stream: false, max_tokens: 8192, reasoningEffort: 'high' });
+  assert.deepStrictEqual(adaptive.body.thinking, { type: 'adaptive', effort: 'high' });
+
+  const legacy = llmProvidersMod.buildLLMRequest(
+    { provider: 'anthropic-compat', apiUrl: 'u', apiKey: '', model: 'claude-sonnet-4-5', maxResponseTokens: 8192 },
+    { messages: [{ role: 'user', content: 'hi' }], stream: false, max_tokens: 8192, reasoningEffort: 'medium' });
+  assert.deepStrictEqual(legacy.body.thinking, { type: 'enabled', budget_tokens: 16000 });
+  assert.strictEqual(legacy.body.max_tokens > 16000, true);
+});
+
+test('opencode-zen 路由：按模型名解析变体表', () => {
+  const zenClaude = llmProvidersMod.resolveReasoningVariants('claude-opus-4-6', 'opencode-zen');
+  assert.deepStrictEqual(zenClaude.variants.map(v => v.id), ['off', 'minimal', 'low', 'medium', 'high']);
+  const zenDs = llmProvidersMod.resolveReasoningVariants('deepseek-v4-pro', 'opencode-zen');
+  assert.strictEqual(zenDs.variants.some(v => v.id === 'max'), true);
+});
+
 test('parseLLMResponse: transport=responses 分支走 parseResponsesResponse', () => {
   const parsed = llmProvidersMod.parseLLMResponse({
     status: 'incomplete',

@@ -33,6 +33,15 @@ const INTERNAL_DISABLE_AUTO_OPTIMIZE_SCHEMA = {
   }
 };
 
+// 极简模式（/minimal）工具白名单：对齐 DSH minimal 预设
+// （persistent bash + str_replace_editor 的 view/create/str_replace/insert）
+const MINIMAL_TOOL_NAMES = [
+  'makeTerminal', 'runTerminalCommand', 'awaitTerminalCommand', 'killTerminal',
+  'terminalReadOutput', 'terminalSendInput', 'terminalPressKey', 'terminalAnswerPrompt',
+  'terminalListSessions',
+  'readFile', 'listDirectory', 'editFile'
+];
+
 // AI Agent Engine - handles the autonomous agent loop
 class Agent {
   constructor() {
@@ -69,6 +78,13 @@ class Agent {
     // - cacheCreation: Anthropic cache_creation_input_tokens（按 1.25x 计费）
     // - estimated: 是否包含估算值（API 未返回 usage 时前端用 ~ 前缀显示）
     this.sessionUsage = { prompt: 0, completion: 0, total: 0, cached: 0, cacheCreation: 0, estimated: false };
+    // 会话级按模型分桶统计（混合模型会话的预算正确归属）
+    // 结构：{ [modelId]: { prompt, completion, total, cached, cacheCreation, estimated } }
+    this.sessionUsageByModel = {};
+    // 会话级模型/变体覆盖（/model /variant 命令设置，新会话继承全局设置）
+    this.llmOverride = { model: null, reasoningEffort: null };
+    // 极简模式（/minimal）：精简系统提示词 + 仅终端/文件编辑工具
+    this.minimalMode = false;
     // 会话起始时间（用于工作时长显示）
     this.sessionStartTime = Date.now();
     this.hotMessages = []; // 热对话消息队列
@@ -113,6 +129,28 @@ class Agent {
 
   setSessionKey(sessionKey) {
     this.sessionKey = sessionKey || null;
+  }
+
+  /** 当前会话实际使用的模型 ID（会话级覆盖优先，否则全局设置） */
+  getActiveModelId() {
+    return (this.llmOverride && this.llmOverride.model) || this.settings?.llm?.model || '';
+  }
+
+  /** 当前会话实际使用的变体（会话级覆盖优先，否则全局设置，默认 off） */
+  getActiveReasoningEffort() {
+    const ov = this.llmOverride && this.llmOverride.reasoningEffort;
+    if (ov !== null && ov !== undefined && ov !== '') return ov;
+    return this.settings?.llm?.reasoningEffort || 'off';
+  }
+
+  /** 构造带会话级模型/变体覆盖的 LLM 请求选项（合并到各 chatLLM 调用） */
+  _llmOptions(extra) {
+    const base = {
+      model: (this.llmOverride && this.llmOverride.model) || undefined,
+      reasoningEffort: this.getActiveReasoningEffort()
+    };
+    if (extra && typeof extra === 'object') return { ...base, ...extra };
+    return base;
   }
 
   /**
@@ -271,7 +309,7 @@ class Agent {
         if (data.sessionKey && data.sessionKey !== this.sessionKey) return;
         const activeChat = window.__sessionManager?.getActive('chat');
         if (!data.sessionKey && activeChat && activeChat.agent !== this) return;
-        this._accumulateUsage(data.usage);
+        this._accumulateUsage(data.usage, data.model);
       });
     }
 
@@ -303,6 +341,8 @@ class Agent {
   }
 
   getSystemPrompt() {
+    // 极简模式：固定精简系统提示词（不随会话细节变化，保护前缀缓存）
+    if (this.minimalMode) return this.getMinimalSystemPrompt();
     // Babe 模式使用独立的系统提示词
     if (this.mode === 'babe') return this.getBabeSystemPrompt();
     // Code 模式使用独立的 Coding Agent 系统提示词
@@ -451,12 +491,30 @@ ${customPrompt ? '\n用户自定义提示词:\n' + customPrompt : ''}${skillsSec
   }
 
   /**
+   * 极简模式系统提示词：借鉴 DSH minimal 预设。
+   * 内容固定且不注入日期/工具定义等易变信息，最大化提示词前缀缓存命中。
+   */
+  getMinimalSystemPrompt() {
+    return [
+      'You are a focused coding assistant running in minimal mode.',
+      '',
+      'Core rules:',
+      '1. Work directly and efficiently. Do exactly what the user asked; do not add unrequested features.',
+      '2. You have a persistent shell and a small file editor. Use the shell for exploration, builds and tests; use the editor for precise file changes.',
+      '3. Read before you edit. Quote the exact text to replace when editing files.',
+      '4. Keep responses concise. Report results and errors factually.',
+      '5. Do not ask unnecessary questions; make reasonable assumptions and proceed.'
+    ].join('\n');
+  }
+
+  /**
    * 已激活技能的完整指令（易变块）。
    * 不放进 system prompt，而是在请求消息序列的末尾、最后一条 user 消息之前注入：
    * 激活/停用技能只改变这个尾部块，稳定的 system + 历史前缀保持逐字节不变，
    * 提示词前缀缓存（DeepSeek/OpenRouter 等 context caching）不会被整段击穿。
    */
   getActiveSkillsBlock() {
+    if (this.minimalMode) return '';
     if (!Array.isArray(this.activeSkills) || this.activeSkills.length === 0) return '';
     // 用 user 角色注入（各 API 都允许 user 消息出现在任意位置；system 按官方规范
     // 必须位于 messages 首位，中间插 system 在严格网关会 400），
@@ -467,6 +525,7 @@ ${customPrompt ? '\n用户自定义提示词:\n' + customPrompt : ''}${skillsSec
 
   /** 在最后一条 user 消息之前注入技能易变块（无激活技能时原样返回） */
   injectActiveSkillsSuffix(messages) {
+    if (this.minimalMode) return messages;
     const block = this.getActiveSkillsBlock();
     if (!block || !Array.isArray(messages)) return messages;
     let insertAt = -1;
@@ -643,7 +702,7 @@ ${affectionDesc}
    * 注：每日/每周/每月统计由主进程 recordTokenUsage 在 chatLLM IPC 内部完成，
    * 此处只负责会话级累计（用于上下文模态框显示）。
    */
-  _accumulateUsage(usage) {
+  _accumulateUsage(usage, model) {
     if (!usage || typeof usage !== 'object') return;
     try {
       const pt = usage.prompt_tokens || 0;
@@ -661,6 +720,19 @@ ${affectionDesc}
       this.sessionUsage.cacheCreation += cacheCreation;
       // 任意一次 API 响应未返回 usage（使用估算）→ 整个会话统计标记为估算
       if (usage._estimated) this.sessionUsage.estimated = true;
+      // 按模型分桶：混合模型会话的费用/用量正确归属
+      if (!this.sessionUsageByModel) this.sessionUsageByModel = {};
+      const key = model || this.getActiveModelId() || 'unknown';
+      if (!this.sessionUsageByModel[key]) {
+        this.sessionUsageByModel[key] = { prompt: 0, completion: 0, total: 0, cached: 0, cacheCreation: 0, estimated: false };
+      }
+      const bm = this.sessionUsageByModel[key];
+      bm.prompt += pt;
+      bm.completion += ct;
+      bm.total += tt;
+      bm.cached += cached;
+      bm.cacheCreation += cacheCreation;
+      if (usage._estimated) bm.estimated = true;
     } catch (e) {
       // 静默失败：统计错误不应影响对话主流程
     }
@@ -669,6 +741,7 @@ ${affectionDesc}
   /** 新会话开始时重置会话级统计 */
   resetSessionUsage() {
     this.sessionUsage = { prompt: 0, completion: 0, total: 0, cached: 0, cacheCreation: 0, estimated: false };
+    this.sessionUsageByModel = {};
     this.sessionStartTime = Date.now();
   }
 
@@ -693,6 +766,8 @@ ${affectionDesc}
   }
 
   hasUsableOptimizedSelection() {
+    // 极简模式不参与自动工具优化
+    if (this.minimalMode) return true;
     // Code 模式始终使用全部启用工具，不参与自动优化
     if (this.mode === 'code') return false;
     if (!this.settings?.autoOptimizeToolSelection) return false;
@@ -751,6 +826,22 @@ ${affectionDesc}
   }
 
   getRuntimeToolSchemas() {
+    // 极简模式：只暴露持久终端（pty）+ 文件读写编辑，对齐 DSH minimal 预设
+    if (this.minimalMode) {
+      const enabledToolsMap = {};
+      getAllToolDefinitions(this.mode || 'chat').forEach(tool => {
+        enabledToolsMap[tool.name] = MINIMAL_TOOL_NAMES.includes(tool.name);
+      });
+      let tools = getToolSchemas(enabledToolsMap, this.mode || 'chat');
+      tools = tools.filter(t => MINIMAL_TOOL_NAMES.includes(t.function?.name));
+      if (typeof filterToolsByConfig === 'function') {
+        tools = filterToolsByConfig(tools, this.settings);
+      }
+      if (this.contextManager && typeof this.contextManager.setToolSchemaTokens === 'function') {
+        this.contextManager.setToolSchemaTokens(Math.ceil(JSON.stringify(tools).length / 4));
+      }
+      return tools;
+    }
     const activeNames = this._orderedActiveToolNames();
     const activeSet = new Set(activeNames);
     const enabledToolsMap = {};
@@ -1399,7 +1490,11 @@ ${affectionDesc}
         status: this.sessionStatus || (this.running ? 'running' : 'idle'),
         lastError: this.sessionLastError || null,
         // 会话累计 Token 统计实时持久化：打开历史会话时恢复，继续对话从该基数累计
-        usage: { ...this.sessionUsage }
+        usage: { ...this.sessionUsage },
+        // 按模型分桶统计 + 会话级模型/变体覆盖 + 极简模式标记
+        usageByModel: { ...(this.sessionUsageByModel || {}) },
+        llmOverride: { ...(this.llmOverride || {}) },
+        minimal: this.minimalMode === true
       };
       // 子代理聊天记录持久化：序列化完整消息快照（去掉 subAgent 实例引用），
       // 重新打开该会话后可继续查看子代理详情模态框中的完整对话。
@@ -1447,6 +1542,32 @@ ${affectionDesc}
       this.sessionUsage.cacheCreation = Number(savedUsage.cacheCreation) || 0;
       this.sessionUsage.estimated = savedUsage.estimated === true;
     }
+    // 恢复按模型分桶统计
+    const savedByModel = conversation && typeof conversation.usageByModel === 'object' ? conversation.usageByModel : null;
+    if (savedByModel) {
+      this.sessionUsageByModel = {};
+      for (const [m, u] of Object.entries(savedByModel)) {
+        if (!u || typeof u !== 'object') continue;
+        this.sessionUsageByModel[m] = {
+          prompt: Number(u.prompt) || 0,
+          completion: Number(u.completion) || 0,
+          total: Number(u.total) || 0,
+          cached: Number(u.cached) || 0,
+          cacheCreation: Number(u.cacheCreation) || 0,
+          estimated: u.estimated === true
+        };
+      }
+    }
+    // 恢复会话级模型/变体覆盖与极简模式
+    if (conversation && typeof conversation.llmOverride === 'object') {
+      this.llmOverride = {
+        model: conversation.llmOverride.model || null,
+        reasoningEffort: conversation.llmOverride.reasoningEffort != null ? conversation.llmOverride.reasoningEffort : null
+      };
+    } else {
+      this.llmOverride = { model: null, reasoningEffort: null };
+    }
+    this.minimalMode = conversation && conversation.minimal === true;
     // 上下文管理器与历史记录解耦：
     // - historyMessages: 完整 transcript（永不破坏）
     // - messages: 工作上下文（可被压缩/清理，独立于 historyMessages）
@@ -1660,7 +1781,9 @@ ${affectionDesc}
           sessionKey: this.sessionKey || null,
           tools: this.getRuntimeToolSchemas(), // 会话回放：复用暖前缀缓存
           maxRetries: this.settings?.contextCompaction?.compactionRetries ?? 1,
-          maxTokens: this.settings?.contextCompaction?.summarizeMaxTokens || 2048
+          maxTokens: this.settings?.contextCompaction?.summarizeMaxTokens || 2048,
+          model: this.llmOverride?.model || null,
+          reasoningEffort: this.getActiveReasoningEffort()
         });
         if (sumRes.ok && !sumRes.skipped) {
           this.autoCompactFailures = 0;
@@ -1712,7 +1835,7 @@ ${affectionDesc}
 
       // 上下文管理：水位线压缩（Tier0 剪枝 → Tier1 结构化摘要 → Tier2 溢出恢复）
       // 自动压缩总开关在设置「上下文」页，关闭后跳过（手动按钮仍可用）。
-      if (this.settings?.contextCompaction?.enabled !== false) {
+      if (!this.minimalMode && this.settings?.contextCompaction?.enabled !== false) {
         await this._manageContext(this.contextManager, (msg) => {
           if (this.onMessage) this.onMessage('system', msg);
         });
@@ -1725,7 +1848,7 @@ ${affectionDesc}
         if (this.onMessage) this.onMessage('system', '已将新消息注入当前对话');
       }
 
-      if (this.settings?.autoOptimizeToolSelection && !this.sessionAutoOptimizeDisabled && !this.hasUsableOptimizedSelection()) {
+      if (!this.minimalMode && this.settings?.autoOptimizeToolSelection && !this.sessionAutoOptimizeDisabled && !this.hasUsableOptimizedSelection()) {
         await this.optimizeToolsForConversation(this.getLatestUserMessageText(), '循环检测到优化未执行，自动补偿优化');
       }
 
@@ -1745,11 +1868,11 @@ ${affectionDesc}
         this._activeStreamRequestId = reqId;
         if (this.onMessage) this.onMessage('stream-start', { requestId: reqId });
         try {
-          result = await window.api.chatLLMStream(messages, {
+          result = await window.api.chatLLMStream(messages, this._llmOptions({
             tools: tools.length > 0 ? tools : undefined,
             requestId: reqId,
             sessionKey: this.sessionKey || null
-          });
+          }));
           usedStreaming = true;
         } catch (streamErr) {
           // 用户主动停止时不再回退到非流式（否则会重新发起请求）
@@ -1760,11 +1883,11 @@ ${affectionDesc}
           // Streaming failed — fall back to non-streaming
           if (this.onMessage) this.onMessage('stream-end', { requestId: reqId, content: '', fallback: true });
           if (this.onMessage) this.onMessage('system', `流式请求失败，回退到普通模式：${streamErr.message || streamErr}`);
-          result = await window.api.chatLLM(messages, {
+          result = await window.api.chatLLM(messages, this._llmOptions({
             tools: tools.length > 0 ? tools : undefined,
             requestId: reqId + '-retry',
             sessionKey: this.sessionKey || null
-          });
+          }));
         } finally {
           this._activeStreamRequestId = null;
         }
@@ -1849,11 +1972,11 @@ ${affectionDesc}
           const retryMessages = this.injectActiveSkillsSuffix(this.contextManager.getMessages());
           const retryTools = this.getRuntimeToolSchemas();
           try {
-            result = await window.api.chatLLM(retryMessages, {
+            result = await window.api.chatLLM(retryMessages, this._llmOptions({
               tools: retryTools.length > 0 ? retryTools : undefined,
               requestId: reqId + '-retry-' + retryCount,
               sessionKey: this.sessionKey || null
-            });
+            }));
             usedStreaming = false; // 重试走非流式路径
           } catch (retryErr) {
             if (this.stopped || runId !== this.runId) break;
@@ -1877,7 +2000,7 @@ ${affectionDesc}
       // - OpenAI: usage.prompt_tokens_details.cached_tokens
       // - Anthropic: usage.cache_read_input_tokens + usage.cache_creation_input_tokens
       if (result.data?.usage) {
-        this._accumulateUsage(result.data.usage);
+        this._accumulateUsage(result.data.usage, result.data?._meta?.model);
         // 用真实 prompt_tokens 校准估算器（滑动平滑，修正 CJK 等估算偏差）
         const promptTokens = result.data.usage.prompt_tokens ?? result.data.usage.input_tokens;
         if (promptTokens && this.contextManager && typeof this.contextManager.calibrateTokens === 'function') {
@@ -3778,11 +3901,11 @@ ${tarotLine}
         const allSchemas = getToolSchemas(this.settings?.tools);
         const subTools = allSchemas.filter(t => allowedSet.has(t.function?.name));
 
-        let result = await window.api.chatLLM(messages, {
+        let result = await window.api.chatLLM(messages, this._llmOptions({
           tools: subTools.length > 0 ? subTools : undefined,
           requestId: 'sub-' + Date.now().toString(),
           sessionKey: this.sessionKey || null
-        });
+        }));
 
         // ===== 子代理 400 错误自动修复 + 重试循环（与主 Agent 逻辑一致）=====
         if (!result.ok) {
@@ -3815,11 +3938,11 @@ ${tarotLine}
             try {
               const retryMessages = subAgent.contextManager.getMessages();
               const retryTools = subTools.length > 0 ? subTools : undefined;
-              result = await window.api.chatLLM(retryMessages, {
+              result = await window.api.chatLLM(retryMessages, this._llmOptions({
                 tools: retryTools,
                 requestId: 'sub-' + Date.now().toString() + '-retry-' + subRetryCount,
                 sessionKey: this.sessionKey || null
-              });
+              }));
             } catch (retryErr) {
               if (subAgent.stopped) break;
               result = { ok: false, error: retryErr.message || String(retryErr), kind: 'client' };
@@ -3836,7 +3959,7 @@ ${tarotLine}
 
         // 子代理 usage 累计到主会话统计 + 子代理自身记录
         if (result.data?.usage) {
-          this._accumulateUsage(result.data.usage);
+          this._accumulateUsage(result.data.usage, result.data?._meta?.model);
           const u = result.data.usage;
           subAgentRecord.usage.prompt += u.prompt_tokens || 0;
           subAgentRecord.usage.completion += u.completion_tokens || 0;
@@ -4016,15 +4139,15 @@ ${tarotLine}
   async gameAgentRespond(ga, userMsg) {
     ga.contextManager.addUserMessage(userMsg);
     const messages = ga.contextManager.getMessages();
-    const result = await window.api.chatLLM(messages, {
+    const result = await window.api.chatLLM(messages, this._llmOptions({
       temperature: 0.9,
       max_tokens: this.settings?.llm?.maxResponseTokens || 2048,
       requestId: Date.now().toString(),
       sessionKey: this.sessionKey || null
-    });
+    }));
     // 游戏内 LLM 调用 token 累计到当前主会话统计（用于上下文模态框显示）
     if (result.ok && result.data?.usage) {
-      this._accumulateUsage(result.data.usage);
+      this._accumulateUsage(result.data.usage, result.data?._meta?.model);
     }
     if (result.ok && result.data.choices?.[0]?.message?.content) {
       const resp = result.data.choices[0].message.content.trim();

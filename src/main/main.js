@@ -3065,6 +3065,86 @@ ipcMain.handle('skill-editor:getSkill', (_, id) => {
   return { ok: false, error: '技能不存在' };
 });
 
+// ---- 模型能力缓存 + 变体解析（Anthropic /v1/models 内省） ----
+const modelCapabilityCache = new Map(); // key -> { capabilities, ts }
+const MODEL_CAPABILITY_TTL = 10 * 60 * 1000;
+
+function normalizeAnthropicThinkingCapability(raw) {
+  if (!raw) return null;
+  const t = raw.thinking || raw.extended_thinking || raw.extendedThinking || null;
+  if (!t) return null;
+  const out = {};
+  if (typeof t.supported === 'boolean') out.supported = t.supported;
+  if (t.adaptive === true || t.type === 'adaptive' || (Array.isArray(t.supported_types) && t.supported_types.includes('adaptive'))) {
+    out.adaptive = true;
+    out.type = 'adaptive';
+  } else if (t.type === 'legacy' || t.budgetTokens === true || t.budget_tokens === true) {
+    out.type = 'legacy';
+  }
+  return out;
+}
+
+async function fetchModelCapabilities(provider, model, apiUrl, apiKey) {
+  // 仅 Anthropic 端点有官方能力内省；其他 provider 返回 null（走模型名内置表）
+  if (provider !== 'anthropic-compat' || !apiUrl) return null;
+  const base = String(apiUrl).replace(/\/messages\/?$/, '').replace(/\/$/, '');
+  const modelsUrl = `${base}/models`;
+  const headers = {
+    'Content-Type': 'application/json',
+    'anthropic-version': '2023-06-01'
+  };
+  if (apiKey) headers['x-api-key'] = apiKey;
+  const resp = await fetch(modelsUrl, { headers, signal: AbortSignal.timeout(8000) });
+  if (!resp.ok) return null;
+  const data = await resp.json();
+  const list = data.data || data.models || data || [];
+  const entry = (Array.isArray(list) ? list : []).find(x => String(x.id) === String(model))
+    || (Array.isArray(list) ? list[0] : null);
+  if (!entry || !entry.capabilities) return null;
+  const thinking = normalizeAnthropicThinkingCapability(entry.capabilities);
+  return thinking ? { thinking } : null;
+}
+
+function getCachedModelCapabilities(model, provider, apiUrl, apiKey) {
+  const key = `${provider}|${model}|${apiUrl}`;
+  const hit = modelCapabilityCache.get(key);
+  if (hit && Date.now() - hit.ts < MODEL_CAPABILITY_TTL) return hit.capabilities;
+  // 不阻塞请求：异步预热缓存；首次请求先用模型名推断兜底
+  fetchModelCapabilities(provider, model, apiUrl, apiKey)
+    .then(caps => { modelCapabilityCache.set(key, { capabilities: caps, ts: Date.now() }); })
+    .catch(() => {});
+  return null;
+}
+
+// ---- IPC: 模型变体能力查询（设置页/命令面板用） ----
+ipcMain.handle('llm:capabilities', async (_, provider, model, apiUrl, apiKey) => {
+  try {
+    const effectiveProvider = provider || settings.llm.provider || 'openai-compat';
+    const effectiveModel = model || settings.llm.model || '';
+    const effectiveUrl = apiUrl || settings.llm.apiUrl || '';
+    const effectiveKey = apiKey !== undefined ? apiKey
+      : (effectiveProvider === 'opencode-zen' ? settings.llm.zenApiKey : settings.llm.apiKey);
+    const key = `${effectiveProvider}|${effectiveModel}|${effectiveUrl}`;
+    let hit = modelCapabilityCache.get(key);
+    if (!hit || Date.now() - hit.ts >= MODEL_CAPABILITY_TTL) {
+      const capabilities = await fetchModelCapabilities(effectiveProvider, effectiveModel, effectiveUrl, effectiveKey);
+      hit = { capabilities, ts: Date.now() };
+      modelCapabilityCache.set(key, hit);
+    }
+    const table = LLMProviders.resolveReasoningVariants(effectiveModel, effectiveProvider, hit.capabilities);
+    return {
+      ok: true,
+      model: effectiveModel,
+      provider: effectiveProvider,
+      capabilities: hit.capabilities || null,
+      variants: table.variants,
+      defaultId: table.defaultId
+    };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
 // ---- IPC: LLM API Call (with retry/backoff/timeout) ----
 ipcMain.handle('llm:chat', async (event, messages, options = {}) => {
   try {
@@ -3093,10 +3173,13 @@ ipcMain.handle('llm:chat', async (event, messages, options = {}) => {
       }
     }
 
-    // 预算 fallback：如果设置了 fallback 模型，使用副本覆盖
-    const llmForRequest = options._budgetFallbackModel
-      ? { ...llm, model: options._budgetFallbackModel }
-      : llm;
+    // 会话级覆盖优先：/model 命令传 options.model，预算 fallback 其次，最后全局设置
+    const requestModel = options.model || options._budgetFallbackModel || llm.model;
+    const requestEffort = options.reasoningEffort !== undefined ? options.reasoningEffort
+      : (llm.reasoningEffort || 'off');
+    const capabilities = getCachedModelCapabilities(requestModel, llm.provider, llm.apiUrl, llm.apiKey);
+    const variantCheck = LLMProviders.validateReasoningEffort(requestEffort, requestModel, llm.provider, capabilities);
+    const llmForRequest = { ...llm, model: requestModel, capabilities };
     const req = LLMProviders.buildLLMRequest(llmForRequest, {
       messages: normalizeMessagesForThinking(messages),
       tools: options.tools,
@@ -3104,7 +3187,7 @@ ipcMain.handle('llm:chat', async (event, messages, options = {}) => {
       temperature: options.temperature ?? llm.temperature,
       max_tokens: options.max_tokens ?? llm.maxResponseTokens ?? 8192,
       response_format: options.response_format || null,
-      reasoningEffort: options.reasoningEffort || null,
+      reasoningEffort: variantCheck.resolved,
       stream: false
     });
 
@@ -3151,13 +3234,20 @@ ipcMain.handle('llm:chat', async (event, messages, options = {}) => {
     const usageTokens = usage.total_tokens
       || estimateTokens(JSON.stringify(req.body)) + estimateTokens(data.choices?.[0]?.message?.content || '');
     settings.llm.dailyTokensUsed = (settings.llm.dailyTokensUsed || 0) + usageTokens;
-    recordTokenUsage(usage, llm.model);
+    // 按实际请求模型归属（含会话级覆盖 / 预算 fallback）
+    recordTokenUsage(usage, llmForRequest.model);
     persistSettings();
     broadcastUsageChanged();
     // 游戏窗口/子窗口调用 LLM 时，把 usage 推送给主渲染器，让其累计到当前会话统计
     if (mainWindow && !mainWindow.isDestroyed() && event.sender !== mainWindow.webContents) {
-      try { mainWindow.webContents.send('llm:external-usage', { usage, model: llm.model, sessionKey: options.sessionKey || null }); } catch { /* ignore */ }
+      try { mainWindow.webContents.send('llm:external-usage', { usage, model: llmForRequest.model, sessionKey: options.sessionKey || null }); } catch { /* ignore */ }
     }
+    // 回填实际模型/变体，供渲染层按模型累计会话统计
+    data._meta = {
+      model: llmForRequest.model,
+      reasoningEffort: variantCheck.resolved,
+      variantChanged: variantCheck.changed
+    };
     return { ok: true, data };
   } catch (e) { return { ok: false, error: e.message }; }
 });
@@ -3183,9 +3273,16 @@ ipcMain.handle('llm:chatStream', async (_, messages, options = {}) => {
     if (budgetCheck.exceeded && budgetCheck.action === 'stop') {
       return { ok: false, error: `预算超限（${budgetCheck.period}周期已用 $${budgetCheck.cost.toFixed(4)} / $${budgetCheck.limit.toFixed(2)}），已停止接受新请求` };
     }
-    const llmForRequest = (budgetCheck.exceeded && budgetCheck.action === 'fallback' && budgetCheck.fallbackModel)
-      ? { ...llm, model: budgetCheck.fallbackModel }
-      : llm;
+    // 会话级覆盖优先：/model 命令传 options.model，预算 fallback 其次，最后全局设置
+    const fallbackModel = (budgetCheck.exceeded && budgetCheck.action === 'fallback' && budgetCheck.fallbackModel)
+      ? budgetCheck.fallbackModel
+      : null;
+    const requestModel = options.model || fallbackModel || llm.model;
+    const requestEffort = options.reasoningEffort !== undefined ? options.reasoningEffort
+      : (llm.reasoningEffort || 'off');
+    const capabilities = getCachedModelCapabilities(requestModel, llm.provider, llm.apiUrl, llm.apiKey);
+    const variantCheck = LLMProviders.validateReasoningEffort(requestEffort, requestModel, llm.provider, capabilities);
+    const llmForRequest = { ...llm, model: requestModel, capabilities };
 
     const req = LLMProviders.buildLLMRequest(llmForRequest, {
       messages: normalizeMessagesForThinking(messages),
@@ -3193,6 +3290,7 @@ ipcMain.handle('llm:chatStream', async (_, messages, options = {}) => {
       tool_choice: options.tool_choice,
       temperature: options.temperature ?? llm.temperature,
       max_tokens: options.max_tokens ?? llm.maxResponseTokens ?? 8192,
+      reasoningEffort: variantCheck.resolved,
       stream: true
     });
 
@@ -3256,7 +3354,7 @@ ipcMain.handle('llm:chatStream', async (_, messages, options = {}) => {
     const usageTokens = usage.total_tokens
       || estimateTokens(JSON.stringify(req.body)) + estimateTokens(streamResult.content || '');
     settings.llm.dailyTokensUsed = (settings.llm.dailyTokensUsed || 0) + usageTokens;
-    recordTokenUsage(usage, llm.model);
+    recordTokenUsage(usage, llmForRequest.model);
     persistSettings();
     broadcastUsageChanged();
     return {
@@ -3271,7 +3369,12 @@ ipcMain.handle('llm:chatStream', async (_, messages, options = {}) => {
           },
           finish_reason: streamResult.finishReason
         }],
-        usage: { ...usage, _estimated: estimated }
+        usage: { ...usage, _estimated: estimated },
+        _meta: {
+          model: llmForRequest.model,
+          reasoningEffort: variantCheck.resolved,
+          variantChanged: variantCheck.changed
+        }
       }
     };
   } catch (e) { return { ok: false, error: e.message }; }
@@ -3287,7 +3390,14 @@ ipcMain.handle('llm:summarize', async (_, messages, options = {}) => {
       return { ok: false, error: '请先在设置中配置LLM API' };
     }
 
-    const req = LLMProviders.buildLLMRequest(llm, {
+    // 会话级覆盖：压缩摘要与主请求同模型/同变体，复用暖前缀缓存
+    const requestModel = options.model || llm.model;
+    const requestEffort = options.reasoningEffort !== undefined ? options.reasoningEffort
+      : (llm.reasoningEffort || 'off');
+    const capabilities = getCachedModelCapabilities(requestModel, llm.provider, llm.apiUrl, llm.apiKey);
+    const variantCheck = LLMProviders.validateReasoningEffort(requestEffort, requestModel, llm.provider, capabilities);
+    const llmForRequest = { ...llm, model: requestModel, capabilities };
+    const req = LLMProviders.buildLLMRequest(llmForRequest, {
       messages: normalizeMessagesForThinking(messages),
       temperature: options.temperature ?? 0.3,
       max_tokens: options.max_tokens ?? llm.maxResponseTokens ?? 8192,
@@ -3297,7 +3407,8 @@ ipcMain.handle('llm:summarize', async (_, messages, options = {}) => {
       tools: Array.isArray(options.tools) && options.tools.length > 0 ? options.tools : undefined,
       // purpose 仅作归属标记（对应 dsh 的 x-deepseek-harness-compact 语义），
       // 不改动模型可见内容，各 provider 忽略即可。
-      purpose: options.purpose || undefined
+      purpose: options.purpose || undefined,
+      reasoningEffort: variantCheck.resolved
     });
     const retryOpts = {
       maxRetries: options.maxRetries ?? llm.maxRetries ?? undefined,
@@ -3324,9 +3435,14 @@ ipcMain.handle('llm:summarize', async (_, messages, options = {}) => {
     const usageTokens = usage.total_tokens
       || estimateTokens(JSON.stringify(req.body)) + estimateTokens(content);
     settings.llm.dailyTokensUsed = (settings.llm.dailyTokensUsed || 0) + usageTokens;
-    recordTokenUsage(usage, llm.model);
+    recordTokenUsage(usage, llmForRequest.model);
     persistSettings();
     broadcastUsageChanged();
+    data._meta = {
+      model: llmForRequest.model,
+      reasoningEffort: variantCheck.resolved,
+      variantChanged: variantCheck.changed
+    };
     return { ok: true, content, data };
   } catch (e) { return { ok: false, error: e.message }; }
 });
