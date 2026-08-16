@@ -66,6 +66,7 @@ class VoiceEngine extends EventEmitter {
     this.worker = null;
     this.workerReady = false;
     this._pendingInit = null;
+    this._pendingInitReject = null;
     this.modelRoot = null;
     this.userModelRoot = null; // userData/voice-models（可选大模型下载目录）
     this.wakeActive = false;
@@ -177,6 +178,7 @@ class VoiceEngine extends EventEmitter {
     if (this.worker && this.workerReady) return;
     if (this._pendingInit) return this._pendingInit;
     this._pendingInit = new Promise((resolve, reject) => {
+      this._pendingInitReject = reject;
       const { missing } = this._models ? { missing: this._missing } : this.resolveModels();
       // 缺失核心模型仍允许启动（各功能在使用时报错），但记录日志
       if (missing && missing.length) this.log('模型缺失:', missing.join(', '));
@@ -186,15 +188,28 @@ class VoiceEngine extends EventEmitter {
         this.worker = new Worker(workerPath);
       } catch (e) {
         this._pendingInit = null;
+        this._pendingInitReject = null;
         return reject(e);
       }
       this.worker.on('message', (msg) => this._onWorkerMessage(msg));
       this.worker.on('error', (e) => {
         this.log('worker 错误:', e.message);
         this.emit('error', { scope: 'worker', error: e.message });
+        if (this._pendingInitReject) {
+          const rej = this._pendingInitReject;
+          this._pendingInitReject = null;
+          this._pendingInit = null;
+          rej(new Error(e.message));
+        }
       });
       this.worker.on('exit', (code) => {
         this.log('worker 退出 code=' + code);
+        if (this._pendingInitReject) {
+          const rej = this._pendingInitReject;
+          this._pendingInitReject = null;
+          this._pendingInit = null;
+          rej(new Error(`语音 worker 提前退出（code=${code}）`));
+        }
         this.worker = null;
         this.workerReady = false;
         this.wakeActive = false;
@@ -205,6 +220,7 @@ class VoiceEngine extends EventEmitter {
         if (msg.type === 'ready') {
           this.worker.off('message', onReadyBarrier);
           this.workerReady = true;
+          this._pendingInitReject = null;
           this._pendingInit = null;
           resolve();
         }
@@ -218,6 +234,15 @@ class VoiceEngine extends EventEmitter {
 
   _onWorkerMessage(msg) {
     switch (msg.type) {
+      case 'error': {
+        if (msg.scope === 'init' && this._pendingInitReject) {
+          const rej = this._pendingInitReject;
+          this._pendingInitReject = null;
+          this._pendingInit = null;
+          rej(new Error(msg.error || '语音引擎初始化失败'));
+        }
+        break;
+      }
       case 'wake.hit': {
         const entry = this.wakeWordMap.get(msg.keyword) || null;
         this.emit('wake', {

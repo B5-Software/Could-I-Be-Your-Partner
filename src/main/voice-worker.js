@@ -30,9 +30,35 @@
 'use strict';
 
 const { parentPort, workerData } = require('worker_threads');
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
 
 let sherpa = null;
 let models = null; // { kws:{...}, vad, stt:{base:{...}}, tts:{kokoro:{...}, piperDe:{...}} }
+
+/**
+ * Windows DLL 搜索顺序加固（sherpa-onnx#3059）：
+ * 把随包分发的平台二进制目录（sherpa-onnx.node / sherpa-onnx-c-api.dll / onnxruntime.dll）
+ * 注册进 DLL 搜索路径，确保优先加载打包内自带的 onnxruntime.dll，
+ * 而不是 PATH / 系统目录里可能残留的旧版同名 DLL（会导致原生模块加载失败）。
+ * 开发态: <project>/node_modules/sherpa-onnx-win-x64
+ * 打包态: <resources>/app.asar.unpacked/node_modules/sherpa-onnx-win-x64
+ */
+function registerSherpaDllDir() {
+  try {
+    if (os.platform() !== 'win32') return;
+    const arch = os.arch();
+    const pkgDir = path.join(__dirname, '..', '..', 'node_modules', `sherpa-onnx-win-${arch}`);
+    if (!fs.existsSync(path.join(pkgDir, 'sherpa-onnx.node'))) return;
+    if (typeof os.add_dll_directory === 'function') {
+      try { os.add_dll_directory(pkgDir); } catch { /* ignore */ }
+    }
+    const sep = path.delimiter;
+    const parts = String(process.env.PATH || '').split(sep);
+    if (!parts.includes(pkgDir)) process.env.PATH = pkgDir + sep + (process.env.PATH || '');
+  } catch { /* ignore */ }
+}
 
 // ---------- 状态 ----------
 let kws = null;          // KeywordSpotter
@@ -407,6 +433,7 @@ parentPort.on('message', (msg) => {
     switch (msg.type) {
       case 'init':
         models = msg.models;
+        registerSherpaDllDir();
         if (!sherpa) sherpa = require('sherpa-onnx-node');
         post({ type: 'ready' });
         break;
