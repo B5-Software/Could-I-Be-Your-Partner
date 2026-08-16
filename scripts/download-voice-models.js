@@ -204,6 +204,8 @@ function downloadGeogebraBundle() {
     }
     // 同步包内 deployggb.js 到 assets/geogebra/（index.html 现有引用路径），
     // 保证 loader 的 web3d/webSimple 排列哈希与 927 离线产物一致。
+    // 注意：fetch-assets 以 --skip-geogebra 调用时该目录不会预先存在，需确保创建
+    ensureDir(path.dirname(GGB_LEGACY_LOADER));
     fs.copyFileSync(GGB_BUNDLE_DEPLOY, GGB_LEGACY_LOADER);
     writeGeogebraLicenseNote();
     console.log('[geogebra] 离线包就绪');
