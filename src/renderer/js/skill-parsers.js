@@ -96,7 +96,11 @@ function buildStandardSkillFromMarkdown(skillMdPath, markdownContent, scripts = 
   const whenToUse = pickSection(sections, ['when to use', 'when-to-use', '使用场景']);
   const instructions = pickSection(sections, ['instructions', '步骤', 'usage', '使用方法']);
   const guidelines = pickSection(sections, ['guidelines', '规则', '注意事项']);
-  const prompt = [
+  // 除 frontmatter 元数据外，整段正文（含所有 ## 章节、### 子标题、intro）全部进 prompt。
+  // 不能按已知章节名过滤：Context/Examples/Output Format/自定义章节等会被静默截断。
+  // 仅在正文为空时回退到已知章节拼接。
+  const fullBodyPrompt = String(body || '').trim();
+  const prompt = fullBodyPrompt || [
     whenToUse ? `【适用场景】\n${whenToUse}` : '',
     instructions ? `【执行说明】\n${instructions}` : '',
     guidelines ? `【约束】\n${guidelines}` : ''

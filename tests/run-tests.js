@@ -796,6 +796,47 @@ test('sanguosha 窗口应自带 escapeHtml（未加载 app-utils.js）', () => {
   assert.ok(sgJs.includes('escapeHtml(hero.name)'), '武将名渲染应使用 escapeHtml');
 });
 
+test('SKILL.md 导入：除元数据外全部正文进 prompt（未知章节不截断）', () => {
+  const vm = require('vm');
+  const src = fs.readFileSync(require('path').join(__dirname, '../src/renderer/js/skill-parsers.js'), 'utf-8');
+  const ctx = {
+    getPathBasename: (p) => String(p).split('/').pop(),
+    getPathDirname: (p) => String(p).split('/').slice(0, -1).join('/'),
+    joinPath: (a, b) => `${a}/${b}`,
+  };
+  vm.createContext(ctx);
+  vm.runInContext(src, ctx);
+  const md = [
+    '---',
+    'name: 示例技能',
+    'description: 元数据里的描述',
+    '---',
+    '# 示例技能',
+    '',
+    '这是一段正文介绍。',
+    '',
+    '## Instructions',
+    '第一步……',
+    '',
+    '## Context',
+    '一些背景知识。',
+    '',
+    '## Output Format',
+    '### JSON',
+    '{ "result": true }',
+  ].join('\n');
+  const skill = ctx.buildStandardSkillFromMarkdown('/skills/example/SKILL.md', md, []);
+  assert.strictEqual(skill.name, '示例技能');
+  assert.strictEqual(skill.description, '元数据里的描述');
+  // 未知章节 Context/Output Format 与 ### 子标题都必须完整保留
+  assert.ok(skill.prompt.includes('## Context'), 'prompt 缺少未知章节');
+  assert.ok(skill.prompt.includes('一些背景知识。'), 'prompt 截断了 Context 内容');
+  assert.ok(skill.prompt.includes('## Output Format'), 'prompt 缺少 Output Format');
+  assert.ok(skill.prompt.includes('### JSON'), 'prompt 截断了 ### 子标题');
+  assert.ok(skill.prompt.includes('{ "result": true }'), 'prompt 截断了示例内容');
+  assert.ok(skill.prompt.includes('这是一段正文介绍。'), 'prompt 截断了 intro');
+});
+
 test('CSP should allow ggb: offline protocol for script/style/img/connect', () => {
   const htmlContent = fs.readFileSync(require('path').join(__dirname, '../src/renderer/pages/index.html'), 'utf-8');
   const cspMatch = htmlContent.match(/Content-Security-P[^>]*content="([^"]+)"/);
@@ -3771,6 +3812,51 @@ test('pluginManager：清理 workspace:* 协议（npm EUNSUPPORTEDPROTOCOL）', 
   const pmSrc = fs.readFileSync(require('path').join(__dirname, '../src/main/ds-compat/plugin-manager.js'), 'utf-8');
   assert.ok(pmSrc.includes('sanitizeWorkspaceSpecs(rawPkg)'), 'GitHub 安装路径未接入 workspace 清理');
   assert.ok(pmSrc.includes('--omit=dev'), 'GitHub 安装未跳过 devDependencies');
+});
+
+test('dsh-tools shim：兼容 rc.6 公开契约（defineTool output 形态 + 新导出 + 逐属性 DSL）', () => {
+  const shim = require('../src/main/ds-compat/shims/dsh-tools/index.js');
+  // rc.6 逐属性参数 DSL：{ a: {...} } → 隐式 object 根 JSON Schema
+  const rc6 = shim.defineTool({
+    name: 'rc6_tool',
+    description: 'd',
+    parameters: { q: { type: 'string', required: true }, n: { type: 'number' } },
+    output: { schema: { type: 'string' }, render: (_a, v) => [{ type: 'text', text: String(v) }], presentationMeta: () => ({ ok: true }) },
+    async execute(args) { return args.q; },
+  });
+  assert.strictEqual(rc6.name, 'rc6_tool');
+  assert.deepStrictEqual(rc6.parameters.type, 'object');
+  assert.deepStrictEqual(rc6.parameters.required, ['q']);
+  assert.deepStrictEqual(rc6.parameters.properties.q.type, 'string');
+  assert.strictEqual(typeof rc6.output.schema, 'object');
+  assert.strictEqual(typeof rc6.presentationMeta, 'function');
+  // 老形态：顶层 presentationMeta + wrapped parameters
+  const legacy = shim.defineTool({
+    name: 'legacy',
+    parameters: { type: 'object', properties: { a: { type: 'number', required: true } } },
+    execute: async () => 1,
+    presentationMeta: () => ({}),
+  });
+  assert.ok(legacy._rawParameters);
+  assert.strictEqual(typeof legacy.presentationMeta, 'function');
+  // validateArgs：逐属性 DSL 也能校验，抛 ToolArgsError
+  try { shim.validateArgs(rc6, {}); assert.fail('缺少必填参数应抛错'); } catch (e) {
+    assert.strictEqual(e.name, 'ToolArgsError');
+    assert.strictEqual(e.code, 'INVALID_ARGS');
+  }
+  assert.deepStrictEqual(shim.validateArgs(rc6, { q: 'x' }), { q: 'x' });
+  // 新导出
+  assert.strictEqual(shim.RUN_CODE_NAME, 'run_code');
+  assert.strictEqual(typeof shim.CodeRunFailedError, 'function');
+  assert.strictEqual(typeof shim.JsonSchemaError, 'function');
+  assert.strictEqual(typeof shim.ToolArgsError, 'function');
+  assert.strictEqual(shim.parameterSchemaSpecToJsonSchema, shim.parameterToJsonSchema);
+  const vjs = shim.valueSchemaSpecToJsonSchema({ type: 'object', properties: { x: { type: 'number', required: true } } });
+  assert.deepStrictEqual(vjs.required, ['x']);
+  // run_code 保留名不可注册
+  try { shim.defineTool({ name: 'run_code' }); assert.fail('run_code 应被拒绝'); } catch (e) {
+    assert.match(String(e.message), /reserved/);
+  }
 });
 
 // ---- Conversation Title Generation ----
