@@ -473,17 +473,31 @@ function main() {
     hasError = true;
     console.error('[geogebra] 离线包下载失败:', e.message);
   }
-  // piper-de espeak-ng-data 符号链接（软链接指向 kokoro 目录，构建时实际文件在同一 volume）
-  // 在 Windows 上复制目录作为后备
+  // piper-de espeak-ng-data 与 kokoro 共享（vits-piper 模型不内置该目录）
+  // 非 Windows 用符号链接节省体积；Windows 复制目录——junction 保存绝对路径，
+  // actions/cache 还原后常成断链（7za 归档时 "The system cannot find the path specified"）。
   const piperDir = path.join(OUT, 'tts/vits-piper-de_DE-thorsten-medium');
   const kokoroDataDir = path.join(OUT, 'tts/kokoro-int8-multi-lang-v1_0/espeak-ng-data');
   const piperDataDir = path.join(piperDir, 'espeak-ng-data');
-  if (fs.existsSync(kokoroDataDir) && !fs.existsSync(piperDataDir)) {
-    try {
-      fs.symlinkSync(kokoroDataDir, piperDataDir, process.platform === 'win32' ? 'junction' : 'dir');
-      console.log('[voice-models] piper-de → kokoro espeak-ng-data 符号链接已创建');
-    } catch (e) {
-      console.warn('[voice-models] espeak-ng-data 符号链接失败:', e.message, '(piper 将在运行时回退到 kokoro 数据目录)');
+  if (fs.existsSync(kokoroDataDir)) {
+    // 清理残留条目：断链时 existsSync 为 false 但路径仍占位（Windows 缓存还原常见）
+    if (!fs.existsSync(piperDataDir)) {
+      try { fs.rmSync(piperDataDir, { force: true, recursive: true }); } catch { /* ignore */ }
+    } else if (fs.lstatSync(piperDataDir).isSymbolicLink()) {
+      try { fs.unlinkSync(piperDataDir); } catch { /* ignore */ }
+    }
+    if (!fs.existsSync(piperDataDir)) {
+      try {
+        if (process.platform === 'win32') {
+          fs.cpSync(kokoroDataDir, piperDataDir, { recursive: true });
+          console.log('[voice-models] piper-de espeak-ng-data 已复制（Windows 用目录复制替代 junction，避免缓存还原后链接失效）');
+        } else {
+          fs.symlinkSync(kokoroDataDir, piperDataDir, 'dir');
+          console.log('[voice-models] piper-de → kokoro espeak-ng-data 符号链接已创建');
+        }
+      } catch (e) {
+        console.warn('[voice-models] espeak-ng-data 创建失败:', e.message, '(piper 将在运行时回退到 kokoro 数据目录)');
+      }
     }
   }
   if (hasError) {
