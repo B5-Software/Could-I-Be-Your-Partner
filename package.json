@@ -26,7 +26,7 @@
   "build": {
     "appId": "org.b5-software.cibyp",
     "productName": "Could I Be Your Partner",
-    "beforePack": "node scripts/build-info.js",
+    "beforePack": "./scripts/eb-before-pack.js",
     "files": [
       "**/*",
       "!claude-code-ref/**/*",

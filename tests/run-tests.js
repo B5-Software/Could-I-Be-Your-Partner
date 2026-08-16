@@ -3676,7 +3676,7 @@ test('Splash：顶部 git 哈希 + 底部版本号（build-info 接线）', () =
   assert.ok(mainContent.includes('function getGitShortHash'), 'main 应有 git 哈希获取函数');
   assert.ok(mainContent.includes('gitHash: getGitShortHash()'), 'main 应将 gitHash 传入 splash query');
   assert.ok(mainContent.includes("'build-info.json'"), 'main 应读取 build-info.json');
-  assert.ok(pkg.build && pkg.build.beforePack === 'node scripts/build-info.js', '打包前应生成 build-info.json（hash 打入产物）');
+  assert.ok(pkg.build && pkg.build.beforePack === './scripts/eb-before-pack.js', '打包前应生成 build-info.json（hash 打入产物）');
   const buildInfoScript = fsL.readFileSync(pathL.join(__dirname, '../scripts/build-info.js'), 'utf-8');
   assert.ok(buildInfoScript.includes('git rev-parse --short HEAD'), 'build-info.js 应执行 git 短哈希');
   const bundleScript = fsL.readFileSync(pathL.join(__dirname, '../scripts/build-app-bundle.js'), 'utf-8');
