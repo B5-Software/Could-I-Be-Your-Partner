@@ -240,6 +240,11 @@ class VoiceEngine extends EventEmitter {
           this._pendingInitReject = null;
           this._pendingInit = null;
           rej(new Error(msg.error || '语音引擎初始化失败'));
+          // 初始化失败的 worker 不再可用：终止并清理，避免重试时叠加多个 worker
+          if (this.worker && !this.workerReady) {
+            try { this.worker.terminate(); } catch { /* ignore */ }
+            this.worker = null;
+          }
         }
         break;
       }
