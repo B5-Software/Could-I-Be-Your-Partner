@@ -12,6 +12,16 @@ const { app, BrowserWindow, ipcMain, nativeTheme, dialog, clipboard, screen, she
 process.stdout.on('error', () => {});
 process.stderr.on('error', () => {});
 
+// 主进程兜底：未捕获异常 / 未处理 rejection 记录日志而不是无声崩溃。
+// 不主动退出——多数是单次任务级错误（某次 IPC / 网络请求 / 子窗口），保留应用可用性；
+// 完整堆栈会写入日志，便于现场定位。
+process.on('uncaughtException', (err) => {
+  try { console.error('[main] Uncaught exception:', err); } catch { /* ignore */ }
+});
+process.on('unhandledRejection', (reason) => {
+  try { console.error('[main] Unhandled rejection:', reason); } catch { /* ignore */ }
+});
+
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -3798,6 +3808,8 @@ ipcMain.handle('updates:save', (_, cfg = {}) => {
 ipcMain.handle('updates:openRelease', (_, url) => {
   try {
     const target = String(url || settings.updates?.lastResult?.htmlUrl || '');
+    // 仅允许 http/https，防止渲染器被注入后借 shell.openExternal 打开 file:/smb: 等本地/危险协议
+    if (!/^https?:\/\//i.test(target)) return { ok: false, error: '仅允许打开 http/https 链接' };
     if (target) shell.openExternal(target);
     return { ok: true };
   } catch (e) {

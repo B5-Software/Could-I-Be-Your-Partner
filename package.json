@@ -1,6 +1,6 @@
 {
   "name": "could-i-be-your-partner",
-  "version": "1.7.0-alpha.37",
+  "version": "1.7.0",
   "description": "全自动AI Agent，帮助完成一切任务",
   "license": "GPL-3.0-or-later",
   "main": "src/main/main.js",
@@ -41,6 +41,8 @@
       "!tests",
       "!*.md",
       "!dist-output.txt",
+      "!assets/geogebra-src/**/*",
+      "!assets/geogebra-src",
       "!assets/sandbox/**/*"
     ],
     "asarUnpack": [
@@ -124,14 +126,15 @@
     "path-to-regexp": "^8.3.0",
     "picomatch": "^4.0.4",
     "ip-address": "^10.1.0",
-    "brace-expansion": "^5.0.6",
+    "brace-expansion": "^5.0.9",
+    "dompurify": "^3.4.13",
     "@xmldom/xmldom": "^0.8.13",
     "linkify-it": "^5.0.0"
   },
   "devDependencies": {
     "@electron/rebuild": "^4.1.0",
     "@serialport/bindings-cpp": "^13.0.1",
-    "electron": "^43.0.0",
+    "electron": "^43.4.0",
     "electron-builder": "^26.15.3",
     "node-gyp": "^12.2.0"
   },
@@ -142,9 +145,8 @@
     "@nut-tree-fork/nut-js": "^4.2.6",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
-    "adm-zip": "^0.5.18",
+    "adm-zip": "^0.6.0",
     "bcryptjs": "^3.0.3",
-    "better-sqlite3": "^12.11.1",
     "chardet": "^2.2.0",
     "docx": "^9.7.1",
     "docxtemplater": "^3.69.3",
@@ -176,10 +178,13 @@
     "tesseract.js": "^6.0.1"
   },
   "allowScripts": {
-    "better-sqlite3@12.11.1": true,
     "node-pty@1.1.0": true,
     "@serialport/bindings-cpp@13.0.1": true,
     "@serialport/bindings-cpp@13.0.0": true,
+    "@ffmpeg-installer/darwin-arm64@4.1.5": true,
+    "@ffmpeg-installer/darwin-x64@4.1.0": true,
+    "@ffprobe-installer/darwin-arm64@5.0.1": true,
+    "@ffprobe-installer/darwin-x64@5.1.0": true,
     "fsevents@2.3.2": true,
     "tesseract.js@6.0.1": true,
     "electron-winstaller@5.4.0": true
