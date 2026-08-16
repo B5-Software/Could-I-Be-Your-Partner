@@ -15,6 +15,13 @@
  *   assets/aria2/mac-x64/aria2c
  *   assets/aria2/mac-arm64/aria2c          (使用 x64 版，Rosetta 兼容)
  *   assets/aria2/linux-x64/aria2c
+ *
+ * 下载源：
+ *   win-x64 / win-arm64 → aria2 官方 GitHub Releases（win-64bit-build1）
+ *   mac-x64 / mac-arm64 → 官方 release-1.35.0 osx-darwin.tar.bz2
+ *                         （1.37.0 起官方不再发布 macOS 二进制）
+ *   linux-x64           → abcfy2/aria2-static-build 1.37.0 musl 静态构建
+ *                         （官方从不提供 Linux 预编译二进制）
  */
 
 const fs = require('fs');
@@ -44,7 +51,9 @@ const ASSETS = {
     dirName: 'win-arm64'
   },
   'darwin-x64': {
-    url: `https://github.com/aria2/aria2/releases/download/release-${ARIA2_VERSION}/aria2-${ARIA2_VERSION}-osx-darwin.tar.bz2`,
+    // 官方 1.37.0 起不再发布 osx-darwin 二进制（仅 win/android/源码），
+    // 1.35.0 为最后一个含 osx-darwin 包的版本（x86_64）
+    url: `https://github.com/aria2/aria2/releases/download/release-1.35.0/aria2-1.35.0-osx-darwin.tar.bz2`,
     type: 'tarbz2',
     exeName: 'aria2c',
     // 目录映射：darwin → mac（与 electron-builder ${os} 变量一致）
@@ -52,20 +61,22 @@ const ASSETS = {
   },
   'darwin-arm64': {
     // macOS arm64 使用 Intel 版（Rosetta 兼容）
-    url: `https://github.com/aria2/aria2/releases/download/release-${ARIA2_VERSION}/aria2-${ARIA2_VERSION}-osx-darwin.tar.bz2`,
+    url: `https://github.com/aria2/aria2/releases/download/release-1.35.0/aria2-1.35.0-osx-darwin.tar.bz2`,
     type: 'tarbz2',
     exeName: 'aria2c',
     dirName: 'mac-arm64'
   },
   'linux-x64': {
-    url: `https://github.com/aria2/aria2/releases/download/release-${ARIA2_VERSION}/aria2-${ARIA2_VERSION}-linux-x86_64.tar.bz2`,
-    type: 'tarbz2',
+    // 官方不提供 Linux 预编译二进制，使用 abcfy2/aria2-static-build 的
+    // 1.37.0 musl 静态构建（x86_64-unknown-linux-musl，OpenSSL + zlib-ng）
+    url: `https://github.com/abcfy2/aria2-static-build/releases/download/1.37.0/aria2-x86_64-linux-musl_static.zip`,
+    type: 'zip',
     exeName: 'aria2c',
     dirName: 'linux-x64'
   }
 };
 
-function downloadFile(url, dest) {
+function downloadFile(url, dest, attempt = 1) {
   return new Promise((resolve) => {
     const follow = (u, redirects = 0) => {
       if (redirects > 5) return resolve(false);
@@ -109,42 +120,77 @@ function downloadFile(url, dest) {
       req.setTimeout(120000, () => { req.destroy(); resolve(false); });
     };
     follow(url);
+  }).then((ok) => {
+    // 网络抖动（socket hang up / ECONNRESET）常见，最多重试 3 次
+    if (!ok && attempt < 3) {
+      console.warn(`  下载失败，${2 * attempt}s 后重试 (${attempt + 1}/3)...`);
+      return new Promise((r) => setTimeout(r, 2000 * attempt))
+        .then(() => downloadFile(url, dest, attempt + 1));
+    }
+    return ok;
   });
 }
 
 function extractZip(archivePath, destDir) {
-  // Windows: 使用 PowerShell Expand-Archive
-  const psCmd = `Expand-Archive -Path "${archivePath}" -DestinationPath "${destDir}" -Force`;
-  execFileSync('powershell', ['-NoProfile', '-Command', psCmd], { stdio: 'inherit', timeout: 30000 });
+  if (process.platform === 'win32') {
+    // Windows: 使用 PowerShell Expand-Archive
+    const psCmd = `Expand-Archive -Path "${archivePath}" -DestinationPath "${destDir}" -Force`;
+    execFileSync('powershell', ['-NoProfile', '-Command', psCmd], { stdio: 'inherit', timeout: 30000 });
+  } else {
+    // macOS / Linux: 系统 unzip（ubuntu/macos runner 均自带）
+    execFileSync('unzip', ['-o', archivePath, '-d', destDir], { stdio: 'inherit', timeout: 30000 });
+  }
 }
 
 function extractTarBz2(archivePath, destDir) {
   execFileSync('tar', ['-xjf', archivePath, '-C', destDir], { stdio: 'inherit', timeout: 30000 });
 }
 
-function flattenBinary(destDir, exeName) {
-  // aria2 压缩包解压后会创建 aria2-<version>-<platform>/ 子目录
-  // 将其中的 aria2c[.exe] 移动到 destDir 根目录
+function findFileRecursive(dir, name) {
   try {
-    const entries = fs.readdirSync(destDir, { withFileTypes: true });
+    const entries = fs.readdirSync(dir, { withFileTypes: true });
     for (const entry of entries) {
+      const p = path.join(dir, entry.name);
       if (entry.isDirectory()) {
-        const subExe = path.join(destDir, entry.name, exeName);
-        if (fs.existsSync(subExe)) {
-          const finalPath = path.join(destDir, exeName);
-          fs.copyFileSync(subExe, finalPath);
-          // 清理子目录
-          try { fs.rmSync(path.join(destDir, entry.name), { recursive: true, force: true }); } catch {}
-          // 设置可执行权限（非 Windows）
-          if (process.platform !== 'win32') {
-            try { fs.chmodSync(finalPath, 0o755); } catch {}
-          }
-          return true;
-        }
+        const found = findFileRecursive(p, name);
+        if (found) return found;
+      } else if (entry.name === name) {
+        return p;
       }
     }
-  } catch (e) {
-    console.error(`  flatten 失败: ${e.message}`);
+  } catch {}
+  return null;
+}
+
+function flattenBinary(destDir, exeName) {
+  // 压缩包可能直接包含 aria2c[.exe]，或带一层/多层子目录（如 aria2-1.35.0/bin/aria2c），
+  // 统一确保二进制位于 destDir 根目录
+  const finalPath = path.join(destDir, exeName);
+  if (fs.existsSync(finalPath)) {
+    // 已位于根目录：直接设置可执行权限
+    if (process.platform !== 'win32') {
+      try { fs.chmodSync(finalPath, 0o755); } catch {}
+    }
+    return true;
+  }
+  const found = findFileRecursive(destDir, exeName);
+  if (found && found !== finalPath) {
+    try {
+      fs.copyFileSync(found, finalPath);
+      if (process.platform !== 'win32') {
+        try { fs.chmodSync(finalPath, 0o755); } catch {}
+      }
+      // 清理解压残留（保留根目录文件本身）
+      const subDirs = fs.readdirSync(destDir, { withFileTypes: true })
+        .filter((e) => e.isDirectory())
+        .map((e) => path.join(destDir, e.name));
+      for (const d of subDirs) {
+        try { fs.rmSync(d, { recursive: true, force: true }); } catch {}
+      }
+      return true;
+    } catch (e) {
+      console.error(`  flatten 失败: ${e.message}`);
+    }
   }
   return false;
 }
@@ -211,13 +257,19 @@ async function main() {
   if (args.includes('--all')) {
     // 下载所有平台
     console.log('[aria2] 下载所有平台的 aria2 二进制...\n');
-    let allOk = true;
+    const failed = [];
     for (const key of Object.keys(ASSETS)) {
       const ok = await downloadForPlatform(key);
-      if (!ok) allOk = false;
+      if (!ok) failed.push(key);
       console.log('');
     }
-    process.exit(allOk ? 0 : 1);
+    if (failed.length > 0) {
+      // 单个平台失败不阻塞整个构建：CI 网络稳定通常全量成功；本地受 GFW 影响时，
+      // 缺少的平台若为当前构建所需，electron-builder 会因 extraResources 缺失而明确报错兜底
+      console.warn(`[aria2] 以下平台下载失败（不影响已就绪平台）: ${failed.join(', ')}`);
+      console.warn('[aria2] 提示：可稍后重试 `node scripts/download-aria2.js --all`，或手动放置二进制到 assets/aria2/<os>-<arch>/');
+    }
+    process.exit(0);
     return;
   }
 

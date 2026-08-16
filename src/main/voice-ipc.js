@@ -21,6 +21,12 @@ let captureWindow = null;
 let ctx = null; // { app, getSettings, persistSettings, getMainWindow, showWindowFromTray, onWakeAction }
 let barAudioShared = false; // 唤醒命中后：采集窗音频同时分流到语音条 STT 会话（避免丢句首）
 
+// 语音可用性：sherpa-onnx-node 官方不提供 Windows ARM64 原生库（addon 加载为 null），
+// 该平台上语音（STT/TTS/唤醒）整体不可用 → 主进程不初始化引擎、不注册热键，
+// 渲染进程通过 voice:getStatus 的 supported 字段隐藏全部语音入口。
+const VOICE_SUPPORTED = !(process.platform === 'win32' && process.arch === 'arm64');
+const UNSUPPORTED_ERROR = 'voice-unsupported';
+
 // 会话归属前缀：stt.final / tts 事件按 sessionId/reqId 前缀路由到对应窗口
 const SESSION_MAIN_PREFIX = 'main';
 const SESSION_BAR_PREFIX = 'bar';
@@ -253,7 +259,7 @@ function registerHotkey() {
 function registerIpc(ipcMain) {
   ipcMain.handle('voice:getStatus', () => {
     try {
-      return { ok: true, ...engine.status(), settings: voiceSettings() };
+      return { ok: true, supported: VOICE_SUPPORTED, ...engine.status(), settings: voiceSettings() };
     } catch (e) {
       return { ok: false, error: e.message };
     }
@@ -372,6 +378,37 @@ function wireEngineEvents() {
 }
 
 /**
+ * 语音不可用平台（Windows ARM64）：注册最小 IPC 集。
+ * 所有功能调用统一返回 { ok:false, error:'voice-unsupported' }，
+ * 避免渲染进程 invoke 触发"未注册"rejection；getStatus 供前端隐藏语音入口。
+ */
+function registerDisabledIpc(ipcMain) {
+  ipcMain.handle('voice:getStatus', () => ({
+    ok: true,
+    supported: false,
+    error: UNSUPPORTED_ERROR,
+    missing: ['sherpa-onnx-win-arm64'],
+    ready: false,
+    settings: voiceSettings(),
+  }));
+  const fail = () => ({ ok: false, error: UNSUPPORTED_ERROR });
+  ipcMain.handle('voice:stt:start', fail);
+  ipcMain.handle('voice:stt:cancel', fail);
+  ipcMain.handle('voice:stt:stop', fail);
+  ipcMain.handle('voice:tts:speak', fail);
+  ipcMain.handle('voice:tts:stop', fail);
+  ipcMain.handle('voice:wake:setEnabled', fail);
+  ipcMain.handle('voice:wake:restart', fail);
+  ipcMain.handle('voice:bar:open', fail);
+  ipcMain.handle('voice:bar:close', fail);
+  // 仅事件类通道：忽略即可（不会触发，防御性注册）
+  ipcMain.on('voice:audio', () => {});
+  ipcMain.on('voice:bar:command', () => {});
+  ipcMain.on('voice:bar:show-main', () => {});
+  ipcMain.on('voice:client-state', () => {});
+}
+
+/**
  * 初始化语音子系统。
  * @param {object} context {
  *   ipcMain, app,
@@ -384,6 +421,24 @@ function wireEngineEvents() {
  */
 function initVoice(context) {
   ctx = context;
+  if (!VOICE_SUPPORTED) {
+    log(`当前平台不支持语音引擎（win32/arm64，sherpa-onnx-node 无官方原生库），语音子系统已禁用`);
+    registerDisabledIpc(ctx.ipcMain);
+    const noop = () => {};
+    return {
+      engine: null,
+      supported: false,
+      getStatus: () => null,
+      openVoiceBar: noop,
+      closeVoiceBar: noop,
+      setWakeEnabled: async () => ({ ok: false, error: UNSUPPORTED_ERROR }),
+      startWake: async () => ({ ok: false, error: UNSUPPORTED_ERROR }),
+      stopWake: async () => ({ ok: false, error: UNSUPPORTED_ERROR }),
+      registerHotkey: noop,
+      onSettingsChanged: async () => {},
+      dispose: async () => {},
+    };
+  }
   engine = new VoiceEngine({ app: ctx.app, getSettings: ctx.getSettings });
   engine.resolveModels();
   wireEngineEvents();

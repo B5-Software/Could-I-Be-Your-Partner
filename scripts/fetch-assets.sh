@@ -136,6 +136,23 @@ if [[ "$SKIP_OCR" == "false" ]]; then
     url="https://github.com/tesseract-ocr/$tess_repo/raw/main/$lang.traineddata"
     download "$url" "$dest_file" || true
   done
+
+  # 根目录保留同款训练数据副本（历史约定：根目录 + assets/ocr 两处，均被 .gitignore 忽略）
+  for lang in chi_sim eng; do
+    src_file="$ocr_dir/$lang.traineddata"
+    root_copy="$REPO_ROOT/$lang.traineddata"
+    if [[ -f "$src_file" ]]; then
+      src_size=$(stat -c%s "$src_file" 2>/dev/null || stat -f%z "$src_file" 2>/dev/null || echo 0)
+      need_copy=true
+      if [[ -f "$root_copy" ]]; then
+        root_size=$(stat -c%s "$root_copy" 2>/dev/null || stat -f%z "$root_copy" 2>/dev/null || echo 0)
+        [[ "$root_size" == "$src_size" ]] && need_copy=false
+      fi
+      if [[ "$need_copy" == "true" ]]; then
+        cp -f "$src_file" "$root_copy" && ok "Copied $lang.traineddata to repo root"
+      fi
+    fi
+  done
 fi
 
 # ---- GeoGebra deployggb.js ----

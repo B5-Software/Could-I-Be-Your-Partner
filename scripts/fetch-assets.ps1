@@ -138,6 +138,23 @@ if (-not $SkipOCR) {
     $url = "https://github.com/tesseract-ocr/$tessRepo/raw/main/$lang.traineddata"
     Download-File $url $destFile | Out-Null
   }
+
+  # 根目录保留同款训练数据副本（历史约定：根目录 + assets/ocr 两处，均被 .gitignore 忽略）
+  foreach ($lang in $langs) {
+    $srcFile = Join-Path $ocrDir "$lang.traineddata"
+    $rootCopy = Join-Path $repoRoot "$lang.traineddata"
+    if (-not (Test-Path $srcFile)) { continue }
+    $srcSize = (Get-Item $srcFile).Length
+    $needCopy = -not (Test-Path $rootCopy)
+    if (-not $needCopy) {
+      $rootSize = (Get-Item $rootCopy).Length
+      $needCopy = $rootSize -ne $srcSize
+    }
+    if ($needCopy) {
+      Copy-Item -Force $srcFile $rootCopy
+      Write-Ok "Copied $lang.traineddata to repo root"
+    }
+  }
 }
 
 # ---- GeoGebra deployggb.js ----

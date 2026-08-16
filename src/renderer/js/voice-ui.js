@@ -323,6 +323,17 @@
   function init() {
     bindMicButton();
     wireEvents();
+    // 麦克风按钮默认隐藏（index.html hidden），仅在语音可用平台上显示。
+    // 语音不可用平台（如 Windows ARM64，sherpa-onnx-node 无官方原生库）保持隐藏。
+    if (window.api && window.api.voiceGetStatus) {
+      window.api.voiceGetStatus()
+        .then((s) => {
+          if (s && s.supported !== false) {
+            getMicButtons().forEach(btn => { btn.hidden = false; });
+          }
+        })
+        .catch(() => {});
+    }
   }
 
   if (document.readyState === 'loading') {

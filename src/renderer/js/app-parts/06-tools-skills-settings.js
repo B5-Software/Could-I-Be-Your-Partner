@@ -3081,6 +3081,21 @@
 
   document.getElementById('btn-env-refresh')?.addEventListener('click', refreshEnvironmentPanel);
 
+  // 语音设置入口默认隐藏（index.html hidden），仅在语音可用平台上显示。
+  // 语音不可用平台（如 Windows ARM64，sherpa-onnx-node 无官方原生库）保持隐藏。
+  if (window.api && window.api.voiceGetStatus) {
+    window.api.voiceGetStatus()
+      .then((s) => {
+        if (s && s.supported !== false) {
+          const vTab = document.querySelector('.settings-tab[data-tab="voice"]');
+          const vPanel = document.querySelector('.settings-panel[data-tab="voice"]');
+          if (vTab) vTab.hidden = false;
+          if (vPanel) vPanel.hidden = false;
+        }
+      })
+      .catch(() => {});
+  }
+
   document.querySelectorAll('.settings-tab').forEach(btn => {
     btn.addEventListener('click', () => {
       document.querySelectorAll('.settings-tab').forEach(b => b.classList.remove('active'));

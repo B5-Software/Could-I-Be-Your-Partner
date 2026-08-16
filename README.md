@@ -27,10 +27,17 @@
 
 包括核心文件操作、安全代码执行、终端命令、高级网络请求（HTTP/DNS/Ping等）、全方位数学求解（几何、代数、矩阵、7维特征向量、微积分、数统等）、数据与文档分析（Office 文件拆解、内嵌 Spreadsheet 表格编辑器处理）、硬件交互（本地串口通信）、图片生成、OCR 识别、GeoGebra 数学引擎、Canvas 图形绘制等。
 
-### 丰富的内置小游戏与扩展
+### 语音交互
 
-- 内置益智类游戏服务：支持「飞花令」、「谁是卧底」等内嵌交互式娱乐。
-- 内联支持：使用应用内的单独页面弹窗直接进行游玩。
+- **语音输入（STT）**：本地语音识别（sherpa-onnx），支持中英文模型，听写尾词即发送
+- **语音朗读（TTS）**：本地语音合成，多音色多语言，长文本自动分块防 OOM
+- **语音唤醒**：常驻麦克风监听，命中唤醒词后弹语音条或主窗口
+- **全局热键**：一键开关听写
+
+> **注意**：语音功能依赖 sherpa-onnx-node 原生库，该库**不提供 Windows ARM64 构建**。
+> 在 Windows ARM64 平台上语音子系统（STT/TTS/唤醒/热键）整体不可用，
+> 所有语音相关界面入口（麦克风按钮、语音设置页）会自动隐藏。
+> 其余功能不受影响。详见 [平台支持](#平台支持)。
 
 ### 硬件与 IoT 支持
 
@@ -47,7 +54,7 @@
 
 - **MCP 协议**：完整支持 Model Context Protocol
 - **多模型支持**：LLM 和扩散式生图模型分别配置 API、密钥、参数
-- **本地 GeoGebra**：内置本地化的 GeoGebra JS 数学引擎
+- **本地 GeoGebra**：内置本地化的 GeoGebra JS 数学引擎（离线可用）
 - **OCR 识别**：集成 Tesseract 进行本地文字识别
 - **技能系统**：创建、管理、更新自定义 AI 技能
 
@@ -60,13 +67,36 @@
 
 ---
 
+## 平台支持
+
+| 平台 | 架构 | 构建 | 语音功能 | 备注 |
+|------|------|------|----------|------|
+| Windows 10/11 | x64 | ✅ | ✅ | 完整功能 |
+| Windows 11 | **arm64** | ✅ | ❌ | 语音不可用（见下） |
+| macOS | x64 | ✅ | ✅ | Intel |
+| macOS | arm64 | ✅ | ✅ | Apple Silicon |
+| Linux | x64 | ✅ | ✅ | 社区静态 aria2 构建 |
+
+### Windows ARM64 局限性
+
+- 语音引擎 sherpa-onnx-node 官方不提供 `win32-arm64` 原生库（npm 无
+  `sherpa-onnx-win-arm64` 包，addon 加载为空），因此语音功能（STT/TTS/
+  语音唤醒/全局热键）在 Windows ARM64 上**整体不可用**。
+- 应用会自动检测并隐藏所有语音相关入口：麦克风按钮、语音设置页
+  （语音输入、语音朗读、语音唤醒、热键设置均不显示），主进程不初始化
+  语音引擎、不注册热键，其余功能完全正常。
+- Windows ARM64 打包产物为 arm64 原生版；aria2 无 Windows ARM64 官方
+  二进制，使用 x64 版（Windows 11 可原生运行 x64 程序）。
+
+---
+
 ## 系统要求
 
 - **Node.js**: >= 18.x
 - **NPM**: >= 9.x
-- **操作系统**: Windows 10+、macOS 10.13+、Linux (x64)
-- **内存**: >= 4GB RAM
-- **存储**: >= 500MB 可用空间
+- **操作系统**: Windows 10+、macOS 10.15+、Linux (x64)
+- **内存**: >= 4GB RAM（语音功能建议 >= 8GB）
+- **存储**: >= 1GB 可用空间（语音模型与 OCR 数据额外占用约 500MB）
 
 ---
 
@@ -75,8 +105,8 @@
 ### 1. 克隆项目
 
 ```bash
-git clone <repository-url>
-cd Could-I-Be-Your-Partner-Dev
+git clone https://github.com/B5-Software/Could-I-Be-Your-Partner.git
+cd Could-I-Be-Your-Partner
 ```
 
 ### 2. 安装依赖
@@ -91,14 +121,23 @@ npm install
 npm start
 ```
 
+> `npm start` 会自动拼接 `app.js`（见下文"app-parts 结构"）后启动 Electron。
+
 ### 4. 构建打包
 
-```bash
-# Windows
-npm run build:win
+所有构建命令都会自动执行 `prepare-build-assets`（下载 aria2、OCR、
+Font Awesome、Three.js、IME 词库等被 `.gitignore` 忽略的资源）。
 
-# macOS
-npm run build:mac
+```bash
+# Windows x64
+npm run build:win:x64
+
+# Windows ARM64（语音不可用，见"平台支持"）
+npm run build:win:arm64
+
+# macOS Intel / Apple Silicon
+npm run build:mac:x64
+npm run build:mac:arm64
 
 # Linux
 npm run build:linux
@@ -106,6 +145,12 @@ npm run build:linux
 # 所有平台
 npm run build
 ```
+
+打包产物输出到 `dist/`：
+
+- Windows: `*.exe`（NSIS 安装包）
+- macOS: `*.dmg` + `*-mac.zip`（自动更新用）
+- Linux: `*.AppImage` / `*.deb`
 
 ### 5. 运行测试
 
@@ -115,172 +160,152 @@ npm test
 
 ---
 
+## 构建资源说明
+
+以下第三方资源被 `.gitignore` 忽略（不在版本库中），**克隆后首次构建
+必须先行准备**。所有 `build*` 脚本已自动调用
+`scripts/prepare-build-assets.js` 完成该步骤：
+
+| 资源 | 目录 | 来源 | 用途 |
+|------|------|------|------|
+| aria2 二进制 | `assets/aria2/{os}-{arch}/` | GitHub Releases（官方 win/mac，musl 静态 linux） | 下载管理器，打包必需（extraResources） |
+| 语音模型 / 音色 / UI 字体 / GeoGebra 离线包 | `assets/voice-models/`、`assets/ui-fonts/`、`assets/geogebra-app/` | `scripts/download-voice-models.js` | STT/TTS、界面字体、GeoGebra 离线运行 |
+| Tesseract OCR 训练数据 | `assets/ocr/` **及根目录**（两处各一份） | `scripts/fetch-assets.sh` / `.ps1` | 本地 OCR 识别 |
+| Font Awesome | `assets/fonts/`、`assets/webfonts/` | `scripts/fetch-assets.sh` / `.ps1` | 本地图标库 |
+| Three.js | `assets/lib/three/` | `scripts/fetch-assets.sh` / `.ps1` | PCB-EDA 3D 预览 |
+| IME 词库 | `assets/ime/` | `scripts/build-ime-dicts.js` | 中文/英文/德文输入预测 |
+
+手动准备（不通过构建命令时）：
+
+```bash
+node scripts/prepare-build-assets.js     # aria2 + OCR + FA + Three + IME
+node scripts/download-voice-models.js    # 语音模型 + UI 字体 + GeoGebra 离线包
+```
+
+`fetch-assets.sh` 支持镜像参数 `--mirror <前缀>`（GitHub 镜像，GFW 环境可用），
+以及 `--skip-geogebra`、`--skip-ocr`、`--skip-three`、`--skip-fontawesome`、
+`--tessdata-variant <standard|fast|best>`；`fetch-assets.ps1` 提供对应
+`-Mirror`、`-Skip*`、`-TessdataVariant` 参数。
+
+---
+
 ## 项目结构
 
 ```text
 .
 ├── src/
 │   ├── main/                    # Electron 主进程
-│   │   ├── main.js             # 主进程文件，IPC 处理器、数据持久化
-│   │   ├── email-service.js    # 邮件底层服务
-│   │   ├── spreadsheet-io.js   # 基于本地的表格处理 IO
-│   │   └── web-control-service.js # Web 自动化控制
-│   ├── preload/                 # 预加载脚本
-│   │   ├── preload.js          # 主 IPC 通道暴露
-│   │   └── *-preload.js        # 多窗口（飞花令/谁是卧底等）专用上下文桥
+│   │   ├── main.js             # 入口：窗口管理、IPC 组装、数据持久化
+│   │   ├── voice-ipc.js        # 语音子系统（IPC/语音条/唤醒/热键；win-arm64 自动禁用）
+│   │   ├── voice-engine.js     # sherpa-onnx 语音引擎（STT/TTS）
+│   │   ├── voice-worker.js     # 语音 worker（按平台加载 sherpa addon）
+│   │   ├── ocr.js              # Tesseract OCR（assets/ocr → userData）
+│   │   ├── update-checker.js   # GitHub Releases 自动更新检查
+│   │   ├── mcp-service.js      # MCP 协议服务
+│   │   ├── terminal-service.js # 终端集成（node-pty）
+│   │   └── ...                 # 邮件、表格、Web 控制、沙箱、数学工具等
+│   ├── preload/                 # 预加载脚本（preload.js 暴露 IPC 桥）
 │   ├── renderer/                # 渲染进程（UI 层）
 │   │   ├── js/
-│   │   │   ├── app.js          # 主应用控制器
-│   │   │   ├── agent.js        # AI Agent 引擎核心包含指令与工具路由
+│   │   │   ├── app.js          # ★ 拼接产物（勿手改！见 app-parts）
+│   │   │   ├── app-parts/      # ★ 主控制器源码，按文件名顺序拼接成 app.js
+│   │   │   │   ├── 01-app-init.js
+│   │   │   │   ├── 05-chat-ui.js
+│   │   │   │   ├── 06-tools-skills-settings.js
+│   │   │   │   └── ...         # 11 个 part（另有 app-parts/README.md 说明）
+│   │   │   ├── voice-ui.js     # 主窗口语音控制器（麦克风按钮/听写）
+│   │   │   ├── agent.js        # AI Agent 引擎核心（指令与工具路由）
 │   │   │   ├── context-manager.js  # 上下文管理系统
-│   │   │   ├── spreadsheet.js  # 数据表格前端逻辑
 │   │   │   ├── tools-def.js    # 工具定义（120+ 工具）
-│   │   │   └── sanguosha.js / undercover.js / flyingflower.js # 子应用小游戏逻辑
+│   │   │   └── ...             # 表格、主题、历史、小游戏、子应用等
 │   │   ├── css/
-│   │   │   └── *.css           # 聊天、主题与各个小游戏特定功能界面样式
 │   │   └── pages/
 │   │       ├── index.html      # 主 HTML 模板
-│   │       └── *.html          # 小游戏子界面等
+│   │       └── ...             # 语音条、采集页、小游戏子界面等
 │   ├── data/
 │   │   └── tarot.js            # 塔罗牌数据（78 张牌）
 │   └── tools/
 │       └── js-runner.js        # 安全与隔离的 JavaScript 代码执行容器
-├── assets/                      # 本地化静态核心资源 (GeoGebra, Tesseract OCR 等)
-├── IoT-Firmware/              
-│   └── CIBYP-TRNG/              # 真随机数或 IoT 硬件对接固件源码
+├── assets/                      # 本地化静态资源（大多被 .gitignore，见"构建资源说明"）
+├── scripts/                     # 构建/资源下载脚本（见"构建资源说明"）
+├── IoT-Firmware/
+│   └── CIBYP-TRNG/              # 真随机数硬件对接固件源码
 ├── tests/
-│   └── run-tests.js            # 测试与 CI 框架
+│   └── run-tests.js            # 测试框架
 ├── package.json                 # NPM 项目配置
-├── instruction                  # 项目需求文档
 └── README.md                    # 本文件
 ```
 
 ---
 
+## app-parts 结构（重要）
+
+`src/renderer/js/app.js` **不是手写源码**，由
+`src/renderer/js/app-parts/*.js` 按文件名顺序拼接生成（ESM 输出），
+页面通过 `<script type="module">` 加载。
+
+- 所有 part 共享同一个作用域，可互相直接引用
+- **修改 UI 控制器请编辑 app-parts 中的对应文件**，不要直接改 `app.js`
+- 改完后运行 `npm run build-app-bundle` 重新拼接
+- `npm start`、`npm test` 和打包脚本会自动执行拼接，通常无需手动运行
+
+---
+
 ## 核心模块说明
 
-### Agent 引擎 (`agent.js`)
+### 语音子系统（`voice-ipc.js` / `voice-engine.js`）
 
-AI Agent 的大脑，负责：
+- `voice-ipc.js`：语音 IPC、语音条窗口、麦克风采集窗、唤醒词、全局热键
+- `voice-engine.js`：sherpa-onnx STT/TTS 引擎封装
+- **平台检测**：`VOICE_SUPPORTED = !(win32 && arm64)`。
+  不支持时注册最小 IPC 集（`voice:getStatus` 返回 `supported: false`），
+  渲染进程据此隐藏全部语音 UI 入口。
 
-- 维护对话上下文和状态
-- 执行工具调用和决策
-- 管理 SubAgent（子代理）
-- 处理终端和长期记忆
-- 执行安全检查
+### Agent 引擎（`agent.js`）
 
-**关键类**: `Agent`
-**关键方法**: `init()`, `run()`, `handleToolCall()`, `addMessage()`
+AI Agent 的大脑，负责：维护对话上下文和状态、执行工具调用和决策、
+管理 SubAgent、处理终端和长期记忆、执行安全检查。
 
-### 上下文管理 (`context-manager.js`)
+### 上下文管理（`context-manager.js`）
 
-智能管理 LLM 上下文窗口，防止溢出：
+智能管理 LLM 上下文窗口：监测令牌使用量、自动摘要和清理旧内容、
+优先级管理、内存和知识库的动态注入。
 
-- 监测令牌使用量
-- 自动摘要和清理旧内容
-- 优先级管理系统
-- 内存和知识库的动态注入
+### 更新检查（`update-checker.js`）
 
-### 应用控制器 (`app.js`)
+启动时检查 GitHub Releases 最新版本（`v<version>` tag），
+支持 semver 预发布版本（含 `-` 的版本号按 prerelease 处理），
+下载 `*-mac.zip` / `*.exe` 增量更新包。
 
-主 UI 控制器，处理：
+### 工具定义（`tools-def.js`）
 
-- 消息发送/接收
-- 文件附件管理（拖拽、粘贴、摄像头）
-- 设置面板
-- 工作区管理
-- IPC 通信
-
-**关键事件**:
-
-- 文件拖拽上传（无 base64 转换，直接 ArrayBuffer）
-- 粘贴导入（自动检测图片/文件）
-- 摄像头捕获（实时预览）
-
-### 工具定义 (`tools-def.js`)
-
-目前包含 120+ 工具的完整列表（由于种类繁多，仅展示核心类）：
+120+ 工具，核心分类：
 
 | 分类 | 工具 | 说明 |
 |------|------|------|
-| **文件** | readFile, editFile, createFile, deleteFile, moveFile, copyFile, listDirectory, 等 | 完整文件系统访问 |
+| **文件** | readFile, editFile, createFile, deleteFile, listDirectory 等 | 完整文件系统访问 |
 | **代码** | runJavaScriptCode, runShellScriptCode, runNodeJavaScriptCode | 安全代码执行 |
 | **终端** | makeTerminal, runTerminalCommand, awaitTerminalCommand, killTerminal | 终端集成 |
-| **网络** | webSearch, webFetch, downloadFile, httpRequest, ping, dnsLookup, portScan 等 | 爬虫抓取与网络运维命令对接 |
-| **知识与记忆** | knowledgeBaseSearch/Add/Update/Delete, memory* | 长期知识与对话记忆管理 |
-| **多模态与格式** | generateImage, extractTextFromImage, officeUnpack, officeWordExtract | 图片生成/文字识别，Office拆解 |
-| **计算与表格** | calculator, matrixMath, vectorMath(含7维), solvePolynomial, sum, 等 | 最全的高等数学计算及基于Spreadsheet的表格查询修改 |
-| **IoT/串口** | serialListPorts, serialOpenPort, serialWritePort, serialReadPort | 对发开发板和内接硬件支持 |
-| **可视化互动** | initGeogebra, addCanvasObject, askQuestions, inviteGame(飞花令等) | 绘画几何、多模态收集与内置小游戏启动 |
-
-### 塔罗数据 (`tarot.js`)
-
-包含 78 张塔罗牌的中英文定义：
-
-- 22 张 Major Arcana
-- 56 张 Minor Arcana（4 种花色 × 14 级）
-- 每张牌含：正位义、逆位义、Font Awesome 图标
+| **网络** | webSearch, webFetch, downloadFile, httpRequest, ping, dnsLookup 等 | 网络运维 |
+| **知识与记忆** | knowledgeBase*, memory* | 知识库与长期记忆 |
+| **多模态** | generateImage, extractTextFromImage, officeUnpack 等 | 图片生成/OCR/Office |
+| **数学** | calculator, matrixMath, vectorMath, solvePolynomial 等 | 高等数学计算 |
+| **IoT/串口** | serialListPorts, serialOpenPort, serialWritePort, serialReadPort | 硬件交互 |
+| **可视化** | initGeogebra, addCanvasObject, askQuestions, inviteGame | 数学引擎/小游戏 |
 
 ---
 
 ## 主要配置
 
-编辑 `src/renderer/js/tools-def.js` 可配置工具启用/禁用。
+用户配置通过设置面板修改（`settings:get` / `settings:set` IPC），
+核心配置项包括：
 
-### 用户可配置项（Settings）
-
-#### LLM 配置
-
-```javascript
-{
-  "llm": {
-    "apiUrl": "xxx",
-    "apiKey": "sk-xxx",
-    "model": "xxx",
-    "temperature": 0.7,
-    "maxContextLength": 8192
-  }
-}
-```
-
-#### 生图配置
-
-```javascript
-{
-  "imageGeneration": {
-    "apiUrl": "xxx",
-    "apiKey": "xxx",
-    "model": "xxx",
-    "imageSize": "1024x1024"
-  }
-}
-```
-
-#### AI 人设
-
-```javascript
-{
-  "aiPersona": {
-    "name": "Partner",
-    "personality": "活泼可爱、热情友善",
-    "bio": "你的全能AI伙伴~",
-    "pronouns": "Ta",
-    "customPrompt": "..." // 自定义前缀 Prompt
-  }
-}
-```
-
-#### 主题
-
-```javascript
-{
-  "theme": {
-    "mode": "auto",  // "auto" | "light" | "dark"
-    "accentColor": "#007AFF",
-    "backgroundColor": "#FFFFFF"
-  }
-}
-```
+- **LLM**：`apiUrl`、`apiKey`、`model`、`temperature`、`maxContextLength`
+- **生图**：`apiUrl`、`apiKey`、`model`、`imageSize`
+- **AI 人设**：`name`、`personality`、`bio`、`pronouns`、`customPrompt`
+- **主题**：`mode`（auto/light/dark）、`accentColor`、`backgroundColor`
+- **语音**（语音可用平台）：STT 模型（base/tiny）、TTS 音色/语速/音量、
+  唤醒词列表、热键
 
 ---
 
@@ -320,96 +345,33 @@ Agent.run() 开始自主工作
 避免了 btoa() 导致的大文件栈溢出
 ```
 
-### 上下文管理流程
+### 语音不可用平台的降级（Windows ARM64）
 
 ```text
-新消息 → 估算令牌数
+应用启动
   ↓
-检查 maxContextLength
+voice-ipc.js 检测 win32 + arm64
   ↓
-如果超出：
-  - 摘要旧消息
-  - 优先保留最近对话
-  - 保留系统提示和知识库
+VOICE_SUPPORTED = false：不初始化引擎/不注册热键
   ↓
-防止 "Maximum call stack exceeded" 错误
+voice:getStatus 返回 { supported: false }
+  ↓
+渲染进程隐藏：麦克风按钮 ×3、语音设置页
 ```
-
----
-
-## IPC 通信接口
-
-主进程 (`src/main/main.js`) 暴露以下 IPC 处理器：
-
-### 文件操作
-
-- `fs:readFile` - 读取文件
-- `fs:writeFile` - 写入文件
-- `fs:saveUploadedFile` - 保存上传文件（二进制）
-- `fs:deleteFile` - 删除文件
-- `fs:listDirectory` - 列出目录
-
-### 设置
-
-- `settings:get` - 获取设置
-- `settings:set` - 保存设置
-
-### 历史记录
-
-- `history:list` - 列出对话历史
-- `history:load` - 加载对话记录
-- `history:delete` - 删除某条历史
-- `history:rename` - 重命名对话
-
-### 工作区
-
-- `workspace:create` - 创建新工作区
-- `workspace:getFileTree` - 获取文件树
-
-### 知识库和记忆
-
-- `knowledge:search` - 搜索知识库
-- `knowledge:add` - 添加知识
-- `knowledge:update` - 更新知识
-- `knowledge:delete` - 删除知识
-
-- `memory:search` - 搜索记忆
-- `memory:add` - 添加记忆
-- `memory:update` - 更新记忆
-- `memory:delete` - 删除记忆
-
-### 系统
-
-- `system:getInfo` - 获取系统信息
-- `system:screenshot` - 截屏
-- `clipboard:read` - 读取剪贴板
-- `clipboard:write` - 写入剪贴板
 
 ---
 
 ## 开发指南
 
+### 修改 UI 控制器
+
+1. 编辑 `src/renderer/js/app-parts/` 下对应的 part 文件
+2. 运行 `npm run build-app-bundle` 重新拼接 `app.js`
+
 ### 添加新工具
 
-1. 在 `tools-def.js` 中添加工具定义：
-
-```javascript
-{
-  name: 'myTool',
-  desc: '我的自定义工具',
-  icon: 'fa-star',
-  category: '自定义',
-  sensitive: false  // true 表示敏感操作需确认
-}
-```
-
-2. 在 `agent.js` 的 `handleToolCall()` 中实现逻辑：
-
-```javascript
-case 'myTool':
-  // 实现工具逻辑
-  return { ok: true, result: data };
-```
+1. 在 `tools-def.js` 中添加工具定义（name/desc/icon/category/sensitive）
+2. 在 `agent.js` 的 `handleToolCall()` 中实现逻辑
 
 ### 添加 IPC 处理器
 
@@ -428,16 +390,7 @@ ipcMain.handle('custom:action', async (event, params) => {
 
 ### 修改 UI 主题
 
-编辑 `src/renderer/css/theme.css` 的 CSS 变量：
-
-```css
-:root[data-theme="light"] {
-  --primary: #007AFF;
-  --surface: #FFFFFF;
-  --text: #000000;
-  /* 更多变量... */
-}
-```
+编辑 `src/renderer/css/theme.css` 的 CSS 变量。
 
 ---
 
@@ -468,6 +421,24 @@ A: 用户数据存储在系统用户目录下：
 
 工作区文件默认存储在 `~/Documents/Could-I-Be-Your-Partner`。
 
+### Q: Windows ARM64 上为什么没有麦克风按钮和语音设置？
+
+A: 语音引擎 sherpa-onnx-node 不提供 Windows ARM64 原生库，该平台上语音
+功能整体不可用。应用会自动检测并隐藏全部语音入口，属于预期行为。
+
+### Q: 克隆后直接打包报 aria2 相关错误？
+
+A: 首次克隆缺少被 `.gitignore` 忽略的构建资源。直接使用
+`npm run build:*` 会自动准备；若自定义打包流程，先执行
+`node scripts/prepare-build-assets.js` 与 `node scripts/download-voice-models.js`。
+
+### Q: GFW 环境下资源下载失败？
+
+A: `fetch-assets.sh` 支持 `--mirror <前缀>`（如
+`https://ghproxy.com`）；aria2 二进制下载失败仅警告不阻塞
+（`--all` 模式），可重试 `node scripts/download-aria2.js --all`
+或手动放置二进制到 `assets/aria2/<os>-<arch>/`。
+
 ### Q: 如何自定义 AI 人设？
 
 A: 进入设置面板 → AI 人设，修改名称、性格、个人简介、代词和自定义 Prompt。
@@ -478,24 +449,25 @@ A: 进入设置面板 → AI 人设，修改名称、性格、个人简介、代
 
 | 技术 | 版本 | 用途 |
 |------|------|------|
-| Electron | ^30.x/40.1.0 | 桌面应用框架 |
+| Electron | 40.x | 桌面应用框架 |
 | Node.js | >= 18.x | 后端运行时 |
-| HTML5/CSS3 | - | UI 标记和样式 |
-| Vanilla JavaScript | ES2020+ | 前端逻辑 |
+| Vanilla JavaScript | ES2020+ | 前端逻辑（ESM） |
 | Font Awesome | 6.x | 本地图标库 |
+| sherpa-onnx-node | 1.13.x | 本地语音识别与合成（无 win-arm64） |
+| node-pty | 1.x | 终端集成（含 win32-arm64 prebuild） |
+| Tesseract.js | - | OCR 文字识别 |
+| GeoGebra | - | 本地数学引擎（离线包） |
+| Three.js | 0.160.x | PCB-EDA 3D 预览 |
 | KaTeX | - | 数学公式渲染 |
-| GeoGebra | - | 数学引擎 |
-| Tesseract | - | OCR 文字识别 |
-| Fetch | - | 基于无头环境和fetch的高级网页渲染抓取 |
-| x-spreadsheet | - | 精简内嵌的可视化电子表格面板驱动 |
-| electron-builder | ^24.x / 25.x | 应用打包工具 |
+| x-spreadsheet | - | 内嵌电子表格面板 |
+| electron-builder | 25.x | 应用打包工具 |
 
 ---
 
 ## 联系方式
 
 - **开发者**: B5-Software
-- **项目开始日期**: 2026 年
+- **项目**: https://github.com/B5-Software/Could-I-Be-Your-Partner
 
 ---
 
