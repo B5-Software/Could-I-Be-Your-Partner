@@ -1,0 +1,119 @@
+name: build-release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  # ---- 检测 package.json 版本是否递增 ----
+  detect:
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.check.outputs.changed }}
+      version: ${{ steps.check.outputs.version }}
+      prerelease: ${{ steps.check.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Compare version with previous commit
+        id: check
+        run: |
+          PREV=$(git show HEAD~1:package.json | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{try{console.log(JSON.parse(s).version)}catch{console.log('')}})")
+          CUR=$(node -e "console.log(require('./package.json').version)")
+          echo "previous=$PREV current=$CUR"
+          CHANGED=false
+          if [ -n "$PREV" ] && [ "$PREV" != "$CUR" ]; then CHANGED=true; fi
+          PRERELEASE=false
+          case "$CUR" in *-*) PRERELEASE=true;; esac
+          echo "changed=$CHANGED" >> "$GITHUB_OUTPUT"
+          echo "version=$CUR" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
+
+  # ---- 四平台打包（版本递增时） ----
+  build:
+    needs: detect
+    if: needs.detect.outputs.changed == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: win-x64
+            os: windows-latest
+            script: build:win:x64
+          - name: win-arm64
+            os: windows-11-arm
+            script: build:win:arm64
+          - name: mac-x64
+            os: macos-latest-intel
+            script: build:mac:x64
+          - name: mac-arm64
+            os: macos-latest
+            script: build:mac:arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Cache downloaded assets
+        uses: actions/cache@v4
+        with:
+          path: |
+            assets/voice-models
+            assets/ui-fonts
+            assets/geogebra-app
+            assets/geogebra
+            assets/ocr
+            assets/fonts
+            assets/webfonts
+            assets/lib
+            assets/ime
+            assets/aria2
+          key: assets-${{ hashFiles('scripts/download-voice-models.js', 'scripts/fetch-assets.sh', 'scripts/fetch-assets.ps1', 'scripts/download-aria2.js', 'scripts/build-ime-dicts.js') }}
+
+      - name: Build (${{ matrix.name }})
+        run: npm run ${{ matrix.script }}
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.name }}
+          path: |
+            dist/*.exe
+            dist/*.dmg
+            dist/*-mac.zip
+            dist/*.AppImage
+            dist/*.deb
+          if-no-files-found: error
+
+  # ---- 发布到 GitHub Releases（tag: v<version>） ----
+  release:
+    needs: [detect, build]
+    if: always() && needs.build.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="${{ needs.detect.outputs.version }}"
+          PRERELEASE="${{ needs.detect.outputs.prerelease }}"
+          ARGS=(--title "v$VERSION" --generate-notes)
+          if [ "$PRERELEASE" = "true" ]; then ARGS+=(--prerelease); fi
+          gh release create "v$VERSION" release-artifacts/* "${ARGS[@]}"
