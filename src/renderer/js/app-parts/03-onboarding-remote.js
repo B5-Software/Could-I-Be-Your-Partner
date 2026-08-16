@@ -1003,9 +1003,18 @@
     const percentage = maxTokens ? Math.min(100, (totalOccupied / maxTokens) * 100) : 0;
     const inputOnlyPct = maxTokens ? Math.min(100, (tokens / maxTokens) * 100) : 0;
 
-    // 更新 SVG 圆扇形：stroke-dasharray="percentage, 100-percentage"
-    // 圆周长 = 2 * PI * r = 2 * PI * 15.915 ≈ 100，所以直接用百分比
-    progressFill.setAttribute('stroke-dasharray', `${percentage} ${100 - percentage}`);
+    // 更新 SVG 圆扇形：已用段实色 + 输出预留段半透明。
+    // 圆周长 = 2 * PI * r = 2 * PI * 15.915 ≈ 100，所以直接用百分比。
+    const usedPct = Math.min(100, inputOnlyPct);
+    const reservePct = Math.max(0, Math.min(100, percentage - usedPct));
+    progressFill.setAttribute('stroke-dasharray', `${usedPct} ${100 - usedPct}`);
+    if (indicator) {
+      const reserveFill = indicator.querySelector('.context-ring-reserve');
+      if (reserveFill) {
+        reserveFill.setAttribute('stroke-dasharray', `${reservePct} 100`);
+        reserveFill.setAttribute('stroke-dashoffset', `${-usedPct}`);
+      }
+    }
     // 文本：精简显示（≥1K 用 K，≥1M 用 M，≥1G/T/P 用对应单位），显示当前占用+输出预留 / 完整上下文窗口
     const fmt = (n) => fmtTokenCount(n);
     progressText.textContent = `${fmt(totalOccupied)}/${fmt(effectiveMax)}`;
@@ -1024,20 +1033,25 @@
         tooltip.className = 'context-tooltip';
         indicator.appendChild(tooltip);
       }
-      // 绘制迷你扇形图 + 细化占比
+      // 绘制迷你扇形图 + 细化占比（已用实色 + 预留半透明）
       const segPct = (v, total) => total > 0 ? (v/total*100).toFixed(1) : '0';
       const miniR = 12, miniCx = 15, miniCy = 15, miniCircum = 2 * Math.PI * miniR;
       const sysPct = (systemGuidanceTokens / Math.max(1, tokens)) * 100;
       const toolPct = (toolDefsTokens / Math.max(1, tokens)) * 100;
       const chatPct = (chatTokens / Math.max(1, tokens)) * 100;
       const toolResPct = (toolResultTokens / Math.max(1, tokens)) * 100;
+      const miniUsedLen = (usedPct / 100 * miniCircum);
+      const miniReserveLen = (reservePct / 100 * miniCircum);
       tooltip.innerHTML = `
         <div class="context-tooltip-title">上下文使用详情</div>
         <svg class="context-tooltip-mini-ring" viewBox="0 0 30 30" width="60" height="60">
           <circle cx="${miniCx}" cy="${miniCy}" r="${miniR}" fill="none" stroke="var(--bg-tertiary)" stroke-width="4"/>
           <circle cx="${miniCx}" cy="${miniCy}" r="${miniR}" fill="none" stroke="var(--accent)" stroke-width="4"
-          stroke-dasharray="${(percentage/100*miniCircum).toFixed(1)} ${miniCircum.toFixed(1)}"
+          stroke-dasharray="${miniUsedLen.toFixed(1)} ${miniCircum.toFixed(1)}"
           stroke-dashoffset="0" transform="rotate(-90 ${miniCx} ${miniCy})"/>
+          <circle cx="${miniCx}" cy="${miniCy}" r="${miniR}" fill="none" stroke="var(--accent)" stroke-width="4" opacity="0.32"
+          stroke-dasharray="${miniReserveLen.toFixed(1)} ${miniCircum.toFixed(1)}"
+          stroke-dashoffset="${(-miniUsedLen).toFixed(1)}" transform="rotate(-90 ${miniCx} ${miniCy})"/>
           <text x="${miniCx}" y="${miniCy+3}" text-anchor="middle" font-size="9" fill="var(--text-primary)">${percentage.toFixed(0)}%</text>
         </svg>
         <div class="context-tooltip-row"><span>系统指导</span><span>${systemGuidanceTokens} (${segPct(systemGuidanceTokens, tokens)}%)</span></div>
@@ -1223,18 +1237,32 @@
     const inputPct = sharedMaxCtx ? Math.min(100, (tokens / sharedMaxCtx) * 100) : 0;
     const seg = (v) => (v > 0 ? (v / tokens * 100).toFixed(1) : '0');
     if (textEl) textEl.textContent = `${fmtTokenCount(total)}/${fmtTokenCount(sharedMaxCtx)}`;
-    if (fill) fill.setAttribute('stroke-dasharray', `${pct} ${100 - pct}`);
+    if (fill) {
+      const usedPct = Math.min(100, inputPct);
+      const reservePct = Math.max(0, Math.min(100, pct - usedPct));
+      fill.setAttribute('stroke-dasharray', `${usedPct} ${100 - usedPct}`);
+      const reserveFill = ind.querySelector('.context-ring-reserve');
+      if (reserveFill) {
+        reserveFill.setAttribute('stroke-dasharray', `${reservePct} 100`);
+        reserveFill.setAttribute('stroke-dashoffset', `${-usedPct}`);
+      }
+    }
     // 创建/重建 tooltip
     let tooltip = ind.querySelector('.context-tooltip');
     if (!tooltip) { tooltip = document.createElement('div'); tooltip.className = 'context-tooltip'; ind.appendChild(tooltip); }
     const cc = 2 * Math.PI * 12;
+    const usedLen = (inputPct / 100 * cc);
+    const reserveLen = (Math.max(0, Math.min(100, pct - inputPct)) / 100 * cc);
     tooltip.innerHTML = `
       <div class="context-tooltip-title">上下文使用详情</div>
       <svg class="context-tooltip-mini-ring" viewBox="0 0 30 30" width="60" height="60">
         <circle cx="15" cy="15" r="12" fill="none" stroke="var(--bg-tertiary)" stroke-width="4"/>
         <circle cx="15" cy="15" r="12" fill="none" stroke="var(--accent)" stroke-width="4"
-          stroke-dasharray="${(inputPct / 100 * cc).toFixed(1)} ${cc.toFixed(1)}"
+          stroke-dasharray="${usedLen.toFixed(1)} ${cc.toFixed(1)}"
           stroke-dashoffset="0" transform="rotate(-90 15 15)"/>
+        <circle cx="15" cy="15" r="12" fill="none" stroke="var(--accent)" stroke-width="4" opacity="0.32"
+          stroke-dasharray="${reserveLen.toFixed(1)} ${cc.toFixed(1)}"
+          stroke-dashoffset="${(-usedLen).toFixed(1)}" transform="rotate(-90 15 15)"/>
         <text x="15" y="18" text-anchor="middle" font-size="9" fill="var(--text-primary)">${pct.toFixed(0)}%</text>
       </svg>
       <div class="context-tooltip-row"><span>系统指导</span><span>${sysT} (${seg(sysT)}%)</span></div>

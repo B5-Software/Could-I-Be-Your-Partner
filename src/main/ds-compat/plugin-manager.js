@@ -783,6 +783,68 @@ class PluginManager {
     return { ok: true };
   }
 
+  /**
+   * 更新插件：从原来源重新安装（github/npm/tgz 用记录的 ref；
+   * local 需显式传入新目录，可为原目录）。
+   * 失败时回滚旧版本（目录备份 + 清单记录），成功则保留用户配置与启用状态。
+   */
+  async update(id, options = {}) {
+    const rec = this.plugins.find(p => p.id === id);
+    if (!rec) return { ok: false, error: `插件不存在：${id}` };
+    const source = rec.source || {};
+    const type = source.type || 'local';
+    let ref = String(options.ref || source.ref || '').trim();
+    if (!ref) {
+      return {
+        ok: false,
+        error: type === 'local' ? '本地插件更新需要选择插件目录' : '缺少更新来源'
+      };
+    }
+    const wasEnabled = !!rec.enabled;
+    const prevConfig = rec.config || {};
+    const oldDir = rec.installDir;
+
+    // 先卸载运行实例
+    try { await this.host.unloadPlugin(id); } catch { /* ignore */ }
+
+    // 旧目录改名备份，安装失败时回滚
+    const backupDir = oldDir ? `${oldDir}.old-${Date.now()}` : null;
+    if (oldDir && fs.existsSync(oldDir)) {
+      try {
+        fs.renameSync(oldDir, backupDir);
+      } catch (e) {
+        return { ok: false, error: `备份旧版本失败: ${e.message}` };
+      }
+    }
+    this.plugins = this.plugins.filter(p => p.id !== id);
+    this.save();
+
+    try {
+      const fresh = await this.install({ type, ref }, { onProgress: options.onProgress });
+      const newRec = this.plugins.find(p => p.id === fresh.id);
+      if (newRec) {
+        // 保留用户配置；新版本新增的默认键并入
+        newRec.config = { ...(newRec.config || {}), ...prevConfig };
+        this.save();
+        if (wasEnabled) await this.setEnabled(newRec.id, true);
+      }
+      if (backupDir) {
+        try { fs.rmSync(backupDir, { recursive: true, force: true }); } catch { /* ignore */ }
+      }
+      return { ok: true, plugin: this._public(newRec) };
+    } catch (e) {
+      // 回滚：恢复旧目录与清单记录
+      if (backupDir && oldDir) {
+        try { fs.renameSync(backupDir, oldDir); } catch { /* ignore */ }
+      }
+      if (rec && !this.plugins.some(p => p.id === rec.id)) {
+        this.plugins.push(rec);
+        try { this.save(); } catch { /* ignore */ }
+      }
+      return { ok: false, error: e.message };
+    }
+  }
+
   async setConfig(id, patch) {
     const rec = this.plugins.find(p => p.id === id);
     if (!rec) return { ok: false, error: `插件不存在：${id}` };

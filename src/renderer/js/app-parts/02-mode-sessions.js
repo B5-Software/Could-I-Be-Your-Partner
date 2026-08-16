@@ -736,6 +736,11 @@
     if (!stats) return '该会话上下文尚未初始化';
     const fmt = (n) => (typeof fmtTokenCount === 'function' ? fmtTokenCount(n) : String(n));
     const level = stats.pct >= 85 ? 'danger' : stats.pct >= 65 ? 'warn' : '';
+    // 已用段实色，输出预留段半透明（同一进度条内区分两种含义）
+    const usedPct = stats.max ? Math.min(100, (stats.used / stats.max) * 100) : 0;
+    const reservePct = stats.max ? Math.max(0, Math.min(100 - usedPct, (stats.reserve / stats.max) * 100)) : 0;
+    // 预留段从最左开始铺满"已用+预留"，实心已用段覆盖其上 → 中间无缝隙、无额外圆角
+    const totalPct = Math.min(100, usedPct + reservePct);
     const rows = [
       ['系统指导 + 工具定义', fmt(stats.sys + stats.tools)],
       ['对话消息', fmt(stats.chat)],
@@ -746,7 +751,10 @@
       ['本会话累计 Token', fmt(stats.usage.total || 0)]
     ];
     return rows.map(([label, value]) => `<div class="stp-ctx-row"><span>${escapeHtml(label)}</span><b>${value}</b></div>`).join('')
-      + `<div class="stp-ctx-bar"><div class="stp-ctx-bar-fill ${level}" style="width:${Math.max(0, Math.min(100, stats.pct)).toFixed(1)}%"></div></div>`
+      + `<div class="stp-ctx-bar">`
+      + `<div class="stp-ctx-bar-reserve ${level}" style="width:${totalPct.toFixed(1)}%"></div>`
+      + `<div class="stp-ctx-bar-fill ${level}" style="width:${usedPct.toFixed(1)}%"></div>`
+      + `</div>`
       + `<div class="stp-ctx-total"><span>${escapeHtml('合计 / 窗口')}</span><span>${fmt(stats.totalOcc)} / ${fmt(stats.max)} (${Math.round(stats.pct)}%)</span></div>`;
   }
 
@@ -759,7 +767,9 @@
     const stpElapsed = document.getElementById('stp-elapsed');
     const stpWorkspace = document.getElementById('stp-workspace');
     const stpContext = document.getElementById('stp-context');
-    if (!stpTitle || !stpStatus || !stpElapsed || !stpWorkspace || !stpContext) return;
+    const stpCostRow = document.getElementById('stp-cost-row');
+    const stpCost = document.getElementById('stp-cost');
+    if (!stpTitle || !stpStatus || !stpElapsed || !stpWorkspace || !stpContext || !stpCostRow || !stpCost) return;
 
     const update = () => {
       if (_stpSessionKey !== session.key) return;
@@ -773,6 +783,7 @@
       const ws = workspaceInfo(cur);
       stpWorkspace.textContent = ws.name;
       stpWorkspace.title = ws.full || '';
+      updatePopoverCost(cur.agent, stpCostRow, stpCost);
       stpContext.innerHTML = renderPopoverContext(computeContextStats(cur.agent));
     };
     update();
@@ -796,6 +807,45 @@
     if (_stpTimer) { clearInterval(_stpTimer); _stpTimer = null; }
     const pop = document.getElementById('session-tab-popover');
     if (pop) pop.classList.add('hidden');
+  }
+
+  // 会话详情左侧：实时金钱消耗（已配置价格且有消费数据才显示，否则隐藏）
+  function updatePopoverCost(ag, rowEl, costEl) {
+    if (!ag || !rowEl || !costEl) return;
+    let cost = null;
+    let estimated = false;
+    const byModel = ag.sessionUsageByModel || {};
+    const entries = Object.entries(byModel)
+      .filter(([, u]) => u && (u.total > 0 || u.prompt > 0 || u.completion > 0));
+    const calc = (typeof computeSessionCostForModel === 'function')
+      ? computeSessionCostForModel : null;
+    if (entries.length > 0) {
+      let total = 0;
+      let priced = false;
+      for (const [model, mu] of entries) {
+        const c = calc ? calc(ag, model, mu) : null;
+        if (c) {
+          total += c.totalCost;
+          priced = true;
+        }
+        if (mu.estimated) estimated = true;
+      }
+      if (priced) cost = total;
+    } else if (ag.sessionUsage && ag.sessionUsage.total > 0) {
+      const activeModel = (typeof ag.getActiveModelId === 'function')
+        ? ag.getActiveModelId() : (ag.settings?.llm?.model || '');
+      const c = calc ? calc(ag, activeModel, ag.sessionUsage) : null;
+      if (c) cost = c.totalCost;
+      estimated = ag.sessionUsage.estimated === true;
+    }
+    // 无价格配置（cost=null）或会话刚开始（cost=0）都不显示
+    if (cost === null || !(cost > 0)) {
+      rowEl.classList.add('hidden');
+      return;
+    }
+    const fmtCost = cost >= 0.01 ? `$${cost.toFixed(4)}` : `$${cost.toFixed(6)}`;
+    costEl.textContent = (estimated ? '~' : '') + fmtCost;
+    rowEl.classList.remove('hidden');
   }
 
   // 切换模式时优先恢复该模式最后访问的会话；不存在/已关闭时回退到第一个标签

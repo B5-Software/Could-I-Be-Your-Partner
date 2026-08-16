@@ -1483,6 +1483,16 @@ ipcMain.handle('plugins:installTgz', async (event, filePath) => {
     return { ok: true, plugin };
   } catch (e) { return { ok: false, error: e.message }; }
 });
+ipcMain.handle('plugins:update', async (event, id, ref) => {
+  try {
+    const res = await pluginManager.update(id, {
+      ref: ref || null,
+      onProgress: (p) => { if (!event.sender.isDestroyed()) event.sender.send('plugins:installProgress', p); }
+    });
+    broadcastPluginsChanged();
+    return res;
+  } catch (e) { return { ok: false, error: e.message }; }
+});
 ipcMain.handle('plugins:setEnabled', async (_, id, enabled) => {
   const r = await pluginManager.setEnabled(id, !!enabled);
   broadcastPluginsChanged();

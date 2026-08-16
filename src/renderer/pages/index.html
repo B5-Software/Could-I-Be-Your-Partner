@@ -181,6 +181,7 @@
               <svg class="context-ring" viewBox="0 0 36 36" width="22" height="22">
                 <circle class="context-ring-bg" cx="18" cy="18" r="15.915" fill="none" stroke-width="3"/>
                 <circle class="context-ring-fg" id="context-progress-fill" cx="18" cy="18" r="15.915" fill="none" stroke-width="3" stroke-dasharray="0 100" stroke-dashoffset="0" transform="rotate(-90 18 18)"/>
+                <circle class="context-ring-fg context-ring-reserve" id="context-progress-reserve" cx="18" cy="18" r="15.915" fill="none" stroke-width="3" stroke-dasharray="0 100" stroke-dashoffset="0" transform="rotate(-90 18 18)"/>
               </svg>
               <span class="progress-text" id="context-progress-text">0/8K</span>
               <span class="session-cost-mini" id="chat-session-cost" title="当前会话消费（USD）" style="display:none">
@@ -470,6 +471,7 @@
                 <svg class="context-ring" viewBox="0 0 36 36" width="22" height="22">
                   <circle class="context-ring-bg" cx="18" cy="18" r="15.915" fill="none" stroke-width="3"/>
                   <circle class="context-ring-fg" id="code-context-progress-fill" cx="18" cy="18" r="15.915" fill="none" stroke-width="3" stroke-dasharray="0 100" stroke-dashoffset="0" transform="rotate(-90 18 18)"/>
+                  <circle class="context-ring-fg context-ring-reserve" id="code-context-progress-reserve" cx="18" cy="18" r="15.915" fill="none" stroke-width="3" stroke-dasharray="0 100" stroke-dashoffset="0" transform="rotate(-90 18 18)"/>
                 </svg>
                 <span class="progress-text" id="code-context-progress-text">0/128K</span>
                 <span class="session-cost-mini" id="code-session-cost" title="当前会话消费（USD）" style="display:none">
@@ -560,6 +562,7 @@
               <svg class="context-ring" viewBox="0 0 36 36" width="22" height="22">
                 <circle class="context-ring-bg" cx="18" cy="18" r="15.915" fill="none" stroke-width="3"/>
                 <circle class="context-ring-fg" id="babe-context-progress-fill" cx="18" cy="18" r="15.915" fill="none" stroke-width="3" stroke-dasharray="0 100" stroke-dashoffset="0" transform="rotate(-90 18 18)"/>
+                <circle class="context-ring-fg context-ring-reserve" id="babe-context-progress-reserve" cx="18" cy="18" r="15.915" fill="none" stroke-width="3" stroke-dasharray="0 100" stroke-dashoffset="0" transform="rotate(-90 18 18)"/>
               </svg>
               <span class="progress-text" id="babe-context-progress-text">0/8K</span>
               <span class="session-cost-mini" id="babe-session-cost" title="当前会话消费（USD）" style="display:none">
@@ -2583,7 +2586,10 @@
                 <h3><i class="fa-solid fa-arrows-rotate"></i> 自动更新检查</h3>
                 <div class="setting-item">
                   <label class="setting-label">自动检查更新</label>
-                  <input type="checkbox" id="setting-updates-auto" class="checkbox-slider">
+                  <div class="toggle-switch">
+                    <input type="checkbox" id="setting-updates-auto">
+                    <span class="toggle-slider"></span>
+                  </div>
                   <p class="setting-hint">启动后延迟检查一次，之后按下方间隔定时检查 GitHub Releases。发现新版本时通过系统通知提醒（可在「通知」中关闭）。检查失败不会打扰你。</p>
                 </div>
                 <div class="setting-item">
@@ -2704,6 +2710,7 @@
         <div class="stp-row"><span class="stp-label">状态</span><span class="stp-value" id="stp-status">—</span></div>
         <div class="stp-row"><span class="stp-label">任务用时</span><span class="stp-value" id="stp-elapsed">—</span></div>
         <div class="stp-row"><span class="stp-label">工作目录</span><span class="stp-value" id="stp-workspace">—</span></div>
+        <div class="stp-row hidden" id="stp-cost-row"><span class="stp-label">会话消费</span><span class="stp-value" id="stp-cost">—</span></div>
       </div>
     </div>
     <div class="stp-right">

@@ -2545,6 +2545,7 @@
           <div class="plugin-card-actions">
             <div class="toggle-switch"><input type="checkbox" ${p.enabled ? 'checked' : ''} data-plugin-toggle="${escapeHtml(p.id)}"><span class="toggle-slider"></span></div>
             <button class="btn-secondary btn-sm" data-plugin-config="${escapeHtml(p.id)}">配置</button>
+            <button class="btn-secondary btn-sm" data-plugin-update="${escapeHtml(p.id)}" title="更新"><i class="fa-solid fa-rotate"></i></button>
             <button class="btn-secondary btn-sm" data-plugin-uninstall="${escapeHtml(p.id)}"><i class="fa-solid fa-trash-can"></i></button>
           </div>
         </div>`;
@@ -2573,6 +2574,49 @@
         const plugin = plugins.find(p => p.id === btn.dataset.pluginConfig);
         if (!plugin) return;
         openPluginConfigModal(plugin);
+      });
+    });
+    listEl.querySelectorAll('[data-plugin-update]').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const plugin = plugins.find(p => p.id === btn.dataset.pluginUpdate);
+        if (!plugin) return;
+        const isLocal = plugin.source?.type === 'local';
+        let ref = null;
+        if (isLocal) {
+          // 本地安装：更新需选择一个新目录（或原来的目录）
+          const pick = await window.api.openFileDialog({ directory: true, title: `选择 ${plugin.name} 的插件目录` });
+          if (!pick || !pick.ok || !Array.isArray(pick.paths) || !pick.paths.length) return;
+          ref = pick.paths[0];
+        }
+        const confirmText = isLocal
+          ? `更新本地插件 ${plugin.name}？将从所选目录重新复制安装。`
+          : `更新插件 ${plugin.name}？将从 ${(plugin.source?.type || '来源').toUpperCase()} 重新安装。`;
+        if (!await window.confirmDialog(confirmText, '更新插件')) return;
+
+        const statusEl = document.getElementById('plugin-install-status');
+        if (statusEl) statusEl.textContent = `正在更新 ${plugin.name}…`;
+        let offProgress = null;
+        if (typeof window.api.onPluginsInstallProgress === 'function') {
+          offProgress = window.api.onPluginsInstallProgress((p) => {
+            if (!statusEl || !p) return;
+            statusEl.textContent = `更新中… ${String(p.line || p.stage || '').slice(-140)}`;
+          });
+        }
+        let r;
+        try {
+          r = await window.api.dsUpdatePlugin(plugin.id, ref);
+        } catch (e) {
+          r = { ok: false, error: e.message };
+        } finally {
+          if (typeof offProgress === 'function') { try { offProgress(); } catch { /* ignore */ } }
+        }
+        if (statusEl) {
+          statusEl.textContent = (r && r.ok)
+            ? `✅ 已更新 ${(r.plugin && r.plugin.name) || plugin.name} 到 v${(r.plugin && r.plugin.version) || ''}`
+            : `❌ ${(r && r.error) || '更新失败'}`;
+        }
+        await renderPluginsList();
+        await refreshDsPluginTools();
       });
     });
   }

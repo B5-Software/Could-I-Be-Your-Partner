@@ -4255,6 +4255,7 @@ ${tarotLine}
         sessionKey: this.sessionKey || null,
         tools: this.getRuntimeToolSchemas(),
         focus: focus || null,
+        force: true, // /compact 语义：无视当前使用率，强制压缩
         maxRetries: this.settings?.contextCompaction?.compactionRetries ?? 1,
         maxTokens: this.settings?.contextCompaction?.summarizeMaxTokens || 2048,
         model: this.llmOverride?.model || null,

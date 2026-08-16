@@ -1060,6 +1060,40 @@
     });
   }
 
+  // 语音唤醒：采集窗状态/引擎错误 → 全局 toast。
+  // macOS 隐藏采集窗口的 getUserMedia 失败（麦克风权限）与 AudioContext 挂起此前完全静默，
+  // 用户勾选唤醒后毫无反应也看不到原因。
+  if (typeof window.api?.onVoiceClientState === 'function') {
+    let lastCaptureError = '';
+    window.api.onVoiceClientState((d) => {
+      if (!d || d.source !== 'capture') return;
+      if (d.error) {
+        if (d.error === lastCaptureError) return;
+        lastCaptureError = d.error;
+        const hint = /(notallowed|permission|denied|拒绝|权限)/i.test(d.error)
+          ? '（请在 系统设置 → 隐私与安全性 → 麦克风 中允许本应用）'
+          : '';
+        if (typeof window.showToast === 'function') {
+          window.showToast(`语音唤醒采集失败：${d.error}${hint}`, 'error', 7000);
+        }
+      } else {
+        lastCaptureError = '';
+      }
+    });
+  }
+  if (typeof window.api?.onVoiceError === 'function') {
+    let lastWakeError = '';
+    window.api.onVoiceError((d) => {
+      if (!d || d.scope !== 'wake') return;
+      const msg = String(d.error || d.message || '');
+      if (!msg || msg === lastWakeError) return;
+      lastWakeError = msg;
+      if (typeof window.showToast === 'function') {
+        window.showToast(`语音唤醒异常：${msg}`, 'error', 7000);
+      }
+    });
+  }
+
   /* ==================== 设置页：输入法标签 ==================== */
   async function loadImeSettings() {
     const s = await window.api.getSettings();

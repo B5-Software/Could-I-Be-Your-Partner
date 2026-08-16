@@ -49,6 +49,9 @@
         },
       });
       this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+      // 隐藏窗口（后台唤醒采集页）在 macOS/Chromium 上可能以 suspended 状态创建：
+      // 立即尝试 resume，失败不阻断（调用方有保活轮询）
+      try { await this.ctx.resume(); } catch (_) { /* 由调用方保活重试 */ }
       // AudioWorklet 为优先路径；若加载失败（Electron/CSP 环境差异）回退 ScriptProcessor
       let workletOk = false;
       try {
@@ -79,6 +82,13 @@
       }
       this._gain = gain;
       this.running = true;
+    }
+
+    /** 显式恢复 AudioContext（隐藏窗口挂起时调用） */
+    async resume() {
+      if (this.ctx && this.ctx.state !== 'running') {
+        try { await this.ctx.resume(); } catch (_) { /* ignore */ }
+      }
     }
 
     // ScriptProcessor 降级：做与 worklet 等价的重采样 + Int16 分帧 + 电平

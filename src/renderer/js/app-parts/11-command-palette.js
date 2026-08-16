@@ -251,7 +251,7 @@
       renderItems([{
         label: query ? `压缩上下文（聚焦：${query.slice(0, 30)}）` : '立即压缩上下文',
         icon: 'fa-compress',
-        desc: '水位线未到时将提示无需压缩',
+        desc: '无视当前使用率，直接压缩早期对话',
         action: 'compact',
         focus: query || null
       }]);

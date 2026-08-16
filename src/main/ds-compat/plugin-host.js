@@ -323,11 +323,17 @@ class PluginHost {
   }
 
   async _importEntry(entryPath) {
+    const resolved = nodePath.resolve(entryPath);
     try {
-      return await import(pathToFileURL(entryPath).href);
+      // ESM 模块缓存按 URL 缓存：插件更新后同一路径会命中旧模块。
+      // 追加文件 mtime 作为 query，强制重新加载最新代码。
+      let mtime = Date.now();
+      try { mtime = (await fsp.stat(resolved)).mtimeMs; } catch { /* ignore */ }
+      return await import(`${pathToFileURL(resolved).href}?t=${Math.floor(mtime)}`);
     } catch (e) {
       // 回退 CJS require（部分插件发布为 commonjs）
-      return require(entryPath);
+      try { delete require.cache[require.resolve(resolved)]; } catch { /* ignore */ }
+      return require(resolved);
     }
   }
 
@@ -491,12 +497,19 @@ class PluginHost {
   unloadPlugin(pluginId) {
     return this._serialize(pluginId, async () => {
       const fiber = this.fibers.get(pluginId);
-      if (!fiber) return false;
-      await Promise.race([
-        fiber.dispose(),
-        new Promise((r) => setTimeout(r, 1500).unref())
-      ]);
-      this.fibers.delete(pluginId);
+      if (fiber) {
+        await Promise.race([
+          fiber.dispose(),
+          new Promise((r) => setTimeout(r, 1500).unref())
+        ]);
+        this.fibers.delete(pluginId);
+      }
+      // 清除该插件注册的工具：更新/重装后旧工具定义不得残留在工具注册表
+      if (this.toolsService) {
+        for (const [name, def] of [...this.toolsService.tools.entries()]) {
+          if (def.pluginId === pluginId) this.toolsService.tools.delete(name);
+        }
+      }
       return true;
     });
   }

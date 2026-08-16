@@ -397,6 +397,26 @@ class ContextManager {
   }
 
   /**
+   * /compact 强制压缩的切点：无视水位线，直接压掉最后一条用户消息之前的所有内容。
+   * 保留尾巴 = 最后一条用户消息及其之后的消息（含其工具调用闭环），
+   * 切点永远落在 user 消息上（天然安全切点，不会拆开 tool 配对）。
+   */
+  findForcedCompactRange() {
+    const n = this.messages.length;
+    if (n <= 2) return null;
+    let lastUser = -1;
+    for (let i = n - 1; i >= 0; i--) {
+      if (this.messages[i] && this.messages[i].role === 'user') { lastUser = i; break; }
+    }
+    if (lastUser <= 0) return null; // 没有更早的用户消息，无可压缩内容
+    const head = this.messages.slice(0, lastUser);
+    if (!head.some(m => m && (typeof m.content === 'string' ? m.content.trim() : true))) {
+      return null;
+    }
+    return { start: 0, end: lastUser };
+  }
+
+  /**
    * Tier0 无模型剪枝：确定性截断"旧"的超大工具结果（不调 LLM）。
    * - 只处理保留尾巴之前的旧消息；已剪枝的（prunedIndexes）不再改写 → 字节稳定。
    * - 截断后若占用仍超阈值，由调用方决定是否进入 Tier1 摘要。
@@ -518,7 +538,12 @@ class ContextManager {
     this._compactionInProgress = true;
     try {
       const policy = this.resolvePolicy(options.policy);
-      const range = this.findCompactRange(policy);
+      let range = this.findCompactRange(policy);
+      // /compact 强制模式：普通范围不可用（例如总 token 低于保留预算）时，
+      // 退化为"压掉最后一条用户消息之前的全部内容"
+      if (!range && options.force) {
+        range = this.findForcedCompactRange();
+      }
       if (!range) {
         return { ok: true, message: '无可安全压缩的范围（消息不足或工具调用未闭合）', skipped: true };
       }

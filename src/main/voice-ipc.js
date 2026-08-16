@@ -134,18 +134,25 @@ async function startWake() {
     log('无有效唤醒词，跳过启动');
     return { ok: false, error: 'no-wake-words' };
   }
-  await engine.startWake(words);
-  ensureCaptureWindow();
-  // 采集窗口加载完成后通知其开始推流
-  const startPushing = () => {
-    if (captureWindow && !captureWindow.isDestroyed()) {
-      captureWindow.webContents.send('voice-capture:control', { command: 'start' });
+  try {
+    await engine.startWake(words);
+    ensureCaptureWindow();
+    // 采集窗口加载完成后通知其开始推流
+    const startPushing = () => {
+      if (captureWindow && !captureWindow.isDestroyed()) {
+        captureWindow.webContents.send('voice-capture:control', { command: 'start' });
+      }
+    };
+    if (captureWindow.webContents.isLoading()) {
+      captureWindow.webContents.once('did-finish-load', startPushing);
+    } else {
+      startPushing();
     }
-  };
-  if (captureWindow.webContents.isLoading()) {
-    captureWindow.webContents.once('did-finish-load', startPushing);
-  } else {
-    startPushing();
+  } catch (e) {
+    const msg = String((e && e.message) || e);
+    log('启动唤醒失败:', msg);
+    broadcast('voice:error', { scope: 'wake', error: msg });
+    throw e;
   }
   log('后台唤醒已启用');
   return { ok: true };
@@ -166,7 +173,17 @@ async function setWakeEnabled(enabled) {
   const s = ctx.getSettings();
   if (s.voice) s.voice.wakeEnabled = !!enabled;
   try { ctx.persistSettings && ctx.persistSettings(); } catch (_) {}
-  if (enabled) return startWake();
+  if (enabled) {
+    try {
+      return await startWake();
+    } catch (e) {
+      // 启动失败回滚开关，避免"已开启但实际未运行"的假状态
+      const s2 = ctx.getSettings();
+      if (s2.voice) s2.voice.wakeEnabled = false;
+      try { ctx.persistSettings && ctx.persistSettings(); } catch (_) {}
+      return { ok: false, error: String((e && e.message) || e) };
+    }
+  }
   return stopWake();
 }
 

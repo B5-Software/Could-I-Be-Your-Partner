@@ -335,6 +335,11 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.on('voice:error', listener);
     return () => ipcRenderer.removeListener('voice:error', listener);
   },
+  onVoiceClientState: (cb) => {
+    const listener = (_, data) => cb(data);
+    ipcRenderer.on('voice:client-state', listener);
+    return () => ipcRenderer.removeListener('voice:client-state', listener);
+  },
 
   // Paths
   getPath: (name) => ipcRenderer.invoke('app:getPath', name),
@@ -489,6 +494,7 @@ contextBridge.exposeInMainWorld('api', {
   dsInstallNpm: (name) => ipcRenderer.invoke('plugins:installNpm', name),
   dsInstallGithub: (repo) => ipcRenderer.invoke('plugins:installGithub', repo),
   dsInstallTgz: (filePath) => ipcRenderer.invoke('plugins:installTgz', filePath),
+  dsUpdatePlugin: (id, ref) => ipcRenderer.invoke('plugins:update', id, ref),
   dsSetPluginEnabled: (id, enabled) => ipcRenderer.invoke('plugins:setEnabled', id, enabled),
   dsUninstallPlugin: (id) => ipcRenderer.invoke('plugins:uninstall', id),
   dsSetPluginConfig: (id, patch) => ipcRenderer.invoke('plugins:setConfig', id, patch),

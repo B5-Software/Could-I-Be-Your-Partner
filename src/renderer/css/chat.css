@@ -129,6 +129,10 @@ body.no-tarot .setting-label-tarot + .toggle-switch + .setting-hint {
   transition: stroke-dasharray 0.3s ease, stroke 0.3s ease;
   stroke-linecap: round;
 }
+/* 输出预留段：与已用段同色但半透明，视觉上明确是"预留"而非"已用" */
+.context-ring-reserve {
+  opacity: 0.32;
+}
 
 /* 超过 80% 变黄，超过 95% 变红 */
 .context-indicator[data-level="warn"] .context-ring-fg { stroke: var(--warning); }

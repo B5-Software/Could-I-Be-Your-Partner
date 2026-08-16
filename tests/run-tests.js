@@ -2474,6 +2474,27 @@ function runContextCompactionTests() {
   console.log('\nContext Compaction:');
   const { ContextManager } = require('../src/renderer/js/context-manager.js');
 
+  test('findForcedCompactRange：无视水位线，压掉最后一条用户消息之前的全部内容', () => {
+    const cm = new ContextManager(131072);
+    cm.addUserMessage('q1');
+    cm.addAssistantMessage('a1');
+    cm.addUserMessage('q2');
+    cm.addAssistantMessage('a2');
+    const range = cm.findForcedCompactRange();
+    assert.ok(range, '应找到强制压缩范围');
+    assert.strictEqual(range.start, 0);
+    // 最后一条用户消息 q2 的下标为 2 → 保留 q2 及其后
+    assert.strictEqual(range.end, 2);
+    // 单条用户消息或过短会话无可压缩内容
+    const cm2 = new ContextManager(131072);
+    cm2.addUserMessage('only');
+    assert.strictEqual(cm2.findForcedCompactRange(), null);
+    const cm3 = new ContextManager(131072);
+    cm3.addUserMessage('q1');
+    cm3.addAssistantMessage('a1');
+    assert.strictEqual(cm3.findForcedCompactRange(), null);
+  });
+
   test('tools schema 计入上下文预算', () => {
     const cm = new ContextManager(131072);
     cm.setToolSchemaTokens(40000);
@@ -2902,6 +2923,53 @@ async function runDsPluginTests() {
       const uninstalled = await pm.uninstall(installed.id);
       assert.strictEqual(uninstalled.ok, true);
       assert.strictEqual(pm.list().length, 0);
+    } finally {
+      try { await pm.dispose(); } catch { /* ignore */ }
+      try { fsLocal.rmSync(dataDir, { recursive: true, force: true }); } catch { /* ignore */ }
+    }
+  });
+
+  await testAsync('fixture 插件：本地更新（换目录升级、保留启用/配置、失败回滚）', async () => {
+    const dataDir = fsLocal.mkdtempSync(pathLocal.join(osLocal.tmpdir(), 'cibyp-ds-upd-'));
+    const mkSrc = (ver, toolName) => {
+      const dir = pathLocal.join(dataDir, `src-${ver}`);
+      fsLocal.mkdirSync(dir, { recursive: true });
+      fsLocal.writeFileSync(pathLocal.join(dir, 'package.json'), JSON.stringify({
+        name: 'fixture-update-plugin', version: ver, type: 'module', main: 'index.js'
+      }));
+      fsLocal.writeFileSync(pathLocal.join(dir, 'index.js'), [
+        "import { defineTool } from '@deepseek-ai/dsh-tools';",
+        "export const name = 'fixture-update-plugin';",
+        "export const inject = ['tools'];",
+        "export function apply(ctx) {",
+        `  ctx.tools.register(defineTool({ name: '${toolName}', description: 't',`,
+        "    parameters: {}, output: { schema: { type: 'number' } },",
+        "    async execute() { return 42; } }));",
+        "}",
+        ''
+      ].join('\n'));
+      return dir;
+    };
+    const { PluginManager } = require('../src/main/ds-compat/plugin-manager.js');
+    const pm = new PluginManager(dataDir, { applyTimeoutMs: 800 }).init();
+    try {
+      const v1 = await pm.install({ type: 'local', ref: mkSrc('1.0.0', 'tool_v1') });
+      await pm.setEnabled(v1.id, true);
+      await pm.setConfig(v1.id, { keep: 'yes' });
+
+      const upd = await pm.update(v1.id, { ref: mkSrc('1.1.0', 'tool_v2') });
+      assert.strictEqual(upd.ok, true, upd.error || '');
+      assert.strictEqual(upd.plugin.version, '1.1.0');
+      assert.strictEqual(upd.plugin.config.keep, 'yes', '更新后应保留用户配置');
+      assert.strictEqual(upd.plugin.enabled, true, '更新后应保留启用状态');
+      assert.deepStrictEqual((upd.plugin.tools || []).map(t => t.name), ['tool_v2']);
+
+      // 指向不存在的目录 → 失败且旧版本回滚保留
+      const bad = await pm.update(v1.id, { ref: pathLocal.join(dataDir, 'no-such-dir') });
+      assert.strictEqual(bad.ok, false);
+      const rec = pm.list().find(p => p.id === v1.id);
+      assert.ok(rec, '失败后旧记录应保留');
+      assert.strictEqual(rec.version, '1.1.0');
     } finally {
       try { await pm.dispose(); } catch { /* ignore */ }
       try { fsLocal.rmSync(dataDir, { recursive: true, force: true }); } catch { /* ignore */ }
