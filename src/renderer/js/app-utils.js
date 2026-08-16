@@ -220,27 +220,29 @@ function getSessionLiveState(mode, item) {
 function showToast(message, type = 'info', duration = 5000) {
   const container = document.getElementById('toast-container');
   if (!container) return;
-  const colors = {
-    error: { bg: '#f44336', icon: 'fa-circle-xmark' },
-    warn: { bg: '#ff9800', icon: 'fa-triangle-exclamation' },
-    info: { bg: '#2196f3', icon: 'fa-circle-info' },
-    success: { bg: '#4caf50', icon: 'fa-circle-check' }
+  const icons = {
+    error: 'fa-circle-xmark',
+    warn: 'fa-triangle-exclamation',
+    info: 'fa-circle-info',
+    success: 'fa-circle-check'
   };
-  const c = colors[type] || colors.info;
+  const kind = icons[type] ? type : 'info';
   const el = document.createElement('div');
-  el.style.cssText = `pointer-events:auto;background:${c.bg};color:#fff;padding:10px 14px;border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,0.15);font-size:13px;display:flex;align-items:center;gap:8px;max-width:360px;animation:toast-slide-in 0.25s ease`;
-  el.innerHTML = `<i class="fa-solid ${c.icon}" style="font-size:14px"></i><span style="flex:1">${String(message).replace(/[<>&]/g, s => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[s]))}</span>`;
+  el.className = `toast-item toast-${kind}`;
+  el.innerHTML = `<i class="fa-solid ${icons[kind]} toast-icon"></i><span class="toast-text">${escapeHtml(String(message))}</span>`;
   container.appendChild(el);
-  const removeTimer = setTimeout(() => {
-    el.style.transition = 'opacity 0.3s, transform 0.3s';
-    el.style.opacity = '0';
-    el.style.transform = 'translateX(20px)';
-    setTimeout(() => el.remove(), 300);
-  }, duration);
-  el.addEventListener('click', () => {
-    clearTimeout(removeTimer);
-    el.remove();
-  });
+  // 渐显：双 rAF 确保初始样式先落地，再触发过渡
+  requestAnimationFrame(() => requestAnimationFrame(() => el.classList.add('toast-visible')));
+  let removed = false;
+  const dismiss = () => {
+    if (removed) return;
+    removed = true;
+    el.classList.remove('toast-visible');
+    el.classList.add('toast-leave');
+    setTimeout(() => el.remove(), 320);
+  };
+  const removeTimer = setTimeout(dismiss, duration);
+  el.addEventListener('click', () => { clearTimeout(removeTimer); dismiss(); });
 }
 
 window.showToast = showToast;

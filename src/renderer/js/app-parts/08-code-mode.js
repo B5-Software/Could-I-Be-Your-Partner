@@ -930,7 +930,7 @@
     return true;
   }
 
-  async function createCodeSession() {
+  async function createCodeSession(forkConv = null) {
     const ag = new Agent();
     ag.mode = 'code';
     ag.workspacePath = codeWorkspacePath || '';
@@ -946,8 +946,13 @@
     ag.contextManager.setSystemPrompt(ag.getSystemPrompt());
     wireCodeAgent(ag);
     setupAgentStreamSubscriptions(ag, 'code');
+    if (forkConv) await ag.loadFromHistory(forkConv);
     if (!sessionManager) return null;
-    const session = sessionManager.registerAgent('code', ag, { title: '未命名 Code 会话' });
+    const session = sessionManager.registerAgent('code', ag, {
+      title: (forkConv && forkConv.title) || '未命名 Code 会话'
+    });
+    // /fork N 语义：分支后把该条用户消息恢复到输入框供编辑重发
+    if (forkConv && forkConv._restorePrompt) session.draft = forkConv._restorePrompt;
     activateSession('code', session.key);
     return session;
   }
@@ -1326,6 +1331,8 @@
             </div>
             <div class="history-actions">
               <button class="btn-icon history-continue" data-id="${item.id}" title="继续对话"><i class="fa-solid fa-play"></i></button>
+              <button class="btn-icon history-export-json" data-id="${item.id}" title="导出为JSON"><i class="fa-solid fa-file-code"></i></button>
+              <button class="btn-icon history-export-md" data-id="${item.id}" title="导出为Markdown"><i class="fa-solid fa-file-lines"></i></button>
               <button class="btn-icon history-delete" data-id="${item.id}" title="删除"><i class="fa-solid fa-trash-can"></i></button>
             </div>
           </div>`;
@@ -1367,6 +1374,18 @@
             loadCodeHistoryPage();
           });
         });
+        const bindCodeExport = (btn, isJson) => {
+          btn.addEventListener('click', async () => {
+            const loadRes = await window.api.codeLoadHistory(codeWorkspacePath, btn.dataset.id);
+            if (!loadRes.ok || !loadRes.data) {
+              if (typeof window.showMessageModal === 'function') window.showMessageModal('导出失败：记录不存在或读取失败', '导出失败', 'error');
+              return;
+            }
+            await exportConversationToFile(loadRes.data, isJson ? 'json' : 'md');
+          });
+        };
+        listEl.querySelectorAll('.history-export-json').forEach(btn => bindCodeExport(btn, true));
+        listEl.querySelectorAll('.history-export-md').forEach(btn => bindCodeExport(btn, false));
       } else {
         listEl.innerHTML = '<div class="empty-state"><i class="fa-solid fa-clock-rotate-left"></i><p>暂无 Code 历史</p></div>';
       }
@@ -1424,6 +1443,8 @@
         </div>
         <div class="history-actions">
           <button class="btn-icon" data-action="continue" title="继续对话"><i class="fa-solid fa-play"></i></button>
+          <button class="btn-icon" data-action="export-json" title="导出为JSON"><i class="fa-solid fa-file-code"></i></button>
+          <button class="btn-icon" data-action="export-md" title="导出为Markdown"><i class="fa-solid fa-file-lines"></i></button>
           <button class="btn-icon" data-action="delete" title="删除"><i class="fa-solid fa-trash-can"></i></button>
         </div>
       </div>`;
@@ -1447,6 +1468,8 @@
         </div>
         <div class="history-actions">
           <button class="btn-icon" data-action="continue" title="继续对话"><i class="fa-solid fa-play"></i></button>
+          <button class="btn-icon" data-action="export-json" title="导出为JSON"><i class="fa-solid fa-file-code"></i></button>
+          <button class="btn-icon" data-action="export-md" title="导出为Markdown"><i class="fa-solid fa-file-lines"></i></button>
           <button class="btn-icon" data-action="delete" title="删除"><i class="fa-solid fa-trash-can"></i></button>
         </div>
       </div>`;
@@ -1478,6 +1501,13 @@
         await replayCodeSession(session);
         document.querySelector('.nav-item[data-page="code"]')?.click();
       }
+    } else if (action === 'export-json' || action === 'export-md') {
+      const loadRes = await window.api.codeLoadHistory(codeWorkspacePath, id);
+      if (!loadRes.ok || !loadRes.data) {
+        if (typeof window.showMessageModal === 'function') window.showMessageModal('导出失败：记录不存在或读取失败', '导出失败', 'error');
+        return;
+      }
+      await exportConversationToFile(loadRes.data, action === 'export-json' ? 'json' : 'md');
     } else if (action === 'delete') {
       const titleForConfirm = item.title || '此对话';
       const confirmed = await window.confirmDialog(`确定删除"${String(titleForConfirm).slice(0, 40)}"吗？此操作不可恢复。`, '删除确认');
@@ -1885,6 +1915,7 @@
     }
   });
   document.getElementById('code-chat-input')?.addEventListener('input', (e) => {
+    if (e.target.offsetParent === null) return; // 隐藏时不调整高度，避免 0px 塌陷
     e.target.style.height = 'auto';
     e.target.style.height = Math.min(e.target.scrollHeight, 120) + 'px';
   });

@@ -1962,6 +1962,8 @@
 
   // Auto-resize textarea
   chatInput.addEventListener('input', () => {
+    // 输入框所在页面隐藏时跳过：scrollHeight 为 0，会把高度写成 0px 导致返回后塌陷
+    if (chatInput.offsetParent === null) return;
     chatInput.style.height = 'auto';
     chatInput.style.height = Math.min(chatInput.scrollHeight, 120) + 'px';
   });

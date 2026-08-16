@@ -4229,4 +4229,39 @@ ${tarotLine}
     // Re-init for new conversation
     this.init();
   }
+
+  /**
+   * /clear：只清工作上下文（含摘要/压缩状态），保留可见聊天记录与历史 transcript。
+   * 下一次请求从全新上下文开始，但聊天界面与历史记录不变。
+   */
+  clearContextOnly() {
+    if (this.contextManager && typeof this.contextManager.clearWorkingContext === 'function') {
+      this.contextManager.clearWorkingContext();
+      this.contextManager.setSystemPrompt(this.getSystemPrompt());
+    }
+    try { this.saveToHistory(); } catch (_) { /* 保存失败不阻断 */ }
+  }
+
+  /**
+   * /compact [focus]：立即压缩当前会话上下文。
+   * 上下文未达水位线时返回 skipped（提示无需压缩）。
+   */
+  async compactNow(focus) {
+    if (this.running) {
+      return { ok: false, skipped: false, message: 'Agent 正在运行，请稍后再压缩' };
+    }
+    try {
+      return await this.contextManager.summarizeWithLLM({
+        sessionKey: this.sessionKey || null,
+        tools: this.getRuntimeToolSchemas(),
+        focus: focus || null,
+        maxRetries: this.settings?.contextCompaction?.compactionRetries ?? 1,
+        maxTokens: this.settings?.contextCompaction?.summarizeMaxTokens || 2048,
+        model: this.llmOverride?.model || null,
+        reasoningEffort: this.getActiveReasoningEffort()
+      });
+    } catch (e) {
+      return { ok: false, skipped: false, message: e && e.message ? e.message : String(e) };
+    }
+  }
 }

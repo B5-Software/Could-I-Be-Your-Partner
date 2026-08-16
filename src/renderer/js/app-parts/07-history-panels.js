@@ -379,6 +379,35 @@
     return lines.join('\n');
   }
 
+  /**
+   * 共享的对话导出实现（Chat / Code / Babe 历史与 /export 命令共用）：
+   * 原生保存对话框 + 与 Chat 历史一致的 JSON / Markdown 格式。
+   * @returns {Promise<string|null>} 成功返回保存路径；用户取消/失败返回 null
+   */
+  async function exportConversationToFile(conv, format) {
+    if (!conv) return null;
+    const isJson = format === 'json';
+    const filename = `${sanitizeHistoryFileName(conv.title || '对话记录')}.${isJson ? 'json' : 'md'}`;
+    const result = await window.api.saveFileDialog({
+      title: isJson ? '导出对话记录(JSON)' : '导出对话记录(Markdown)',
+      defaultPath: filename,
+      filters: isJson ? [{ name: 'JSON', extensions: ['json'] }] : [{ name: 'Markdown', extensions: ['md'] }]
+    });
+    if (!result.ok || !result.path) return null;
+    const content = isJson ? JSON.stringify(conv, null, 2) : buildHistoryMarkdown(conv);
+    const saveResult = await window.api.writeFile(result.path, content);
+    if (saveResult.ok) {
+      if (typeof window.showMessageModal === 'function') {
+        window.showMessageModal(`已导出：${result.path}`, '导出成功', 'success');
+      }
+      return result.path;
+    }
+    if (typeof window.showMessageModal === 'function') {
+      window.showMessageModal(`导出失败：${saveResult.error || '未知错误'}`, '导出失败', 'error');
+    }
+    return null;
+  }
+
   async function handleHistoryAction(action, item) {
     if (!item || !item.id) return;
     const id = item.id;
@@ -431,21 +460,7 @@
     } else if (action === 'export-json' || action === 'export-md') {
       const conv = await window.api.historyGet(id);
       if (!conv) return;
-      const isJson = action === 'export-json';
-      const filename = `${sanitizeHistoryFileName(conv.title || '对话记录')}.${isJson ? 'json' : 'md'}`;
-      const result = await window.api.saveFileDialog({
-        title: isJson ? '导出对话记录(JSON)' : '导出对话记录(Markdown)',
-        defaultPath: filename,
-        filters: isJson ? [{ name: 'JSON', extensions: ['json'] }] : [{ name: 'Markdown', extensions: ['md'] }]
-      });
-      if (!result.ok || !result.path) return;
-      const content = isJson ? JSON.stringify(conv, null, 2) : buildHistoryMarkdown(conv);
-      const saveResult = await window.api.writeFile(result.path, content);
-      if (saveResult.ok) {
-        showMessageModal(`已导出：${result.path}`, '导出成功', 'success');
-      } else {
-        showMessageModal(`导出失败：${saveResult.error || '未知错误'}`, '导出失败', 'error');
-      }
+      await exportConversationToFile(conv, action === 'export-json' ? 'json' : 'md');
     } else if (action === 'delete') {
       const conv = await window.api.historyGet(id).catch(() => null);
       const titleForConfirm = conv?.title || '此对话';

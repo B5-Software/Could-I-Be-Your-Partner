@@ -670,6 +670,8 @@
           </div>
           <div class="history-actions">
             <button class="btn-icon history-continue" data-id="${item.id}" title="继续对话"><i class="fa-solid fa-play"></i></button>
+            <button class="btn-icon history-export-json" data-id="${item.id}" title="导出为JSON"><i class="fa-solid fa-file-code"></i></button>
+            <button class="btn-icon history-export-md" data-id="${item.id}" title="导出为Markdown"><i class="fa-solid fa-file-lines"></i></button>
             <button class="btn-icon history-delete" data-id="${item.id}" title="删除"><i class="fa-solid fa-trash-can"></i></button>
           </div>
         </div>`;
@@ -704,6 +706,19 @@
           if (result.ok) loadBabeHistoryPage();
         });
       });
+      const bindBabeExport = (btn, isJson) => {
+        btn.addEventListener('click', async (e) => {
+          e.stopPropagation();
+          const conv = await window.api.babeHistoryGet(btn.dataset.id);
+          if (!conv) {
+            if (typeof window.showMessageModal === 'function') window.showMessageModal('导出失败：记录不存在', '导出失败', 'error');
+            return;
+          }
+          await exportConversationToFile(conv, isJson ? 'json' : 'md');
+        });
+      };
+      listEl.querySelectorAll('.history-export-json').forEach(btn => bindBabeExport(btn, true));
+      listEl.querySelectorAll('.history-export-md').forEach(btn => bindBabeExport(btn, false));
       // 推送历史列表到 WebUI/Remote
       WebUIMirror.pushDomEvent({ type: 'dom_replace', container: '#page-babe-history', html: document.getElementById('page-babe-history').innerHTML });
     } catch (e) {
@@ -758,6 +773,8 @@
         </div>
         <div class="history-actions">
           <button class="btn-icon" data-action="continue" title="继续对话"><i class="fa-solid fa-play"></i></button>
+          <button class="btn-icon" data-action="export-json" title="导出为JSON"><i class="fa-solid fa-file-code"></i></button>
+          <button class="btn-icon" data-action="export-md" title="导出为Markdown"><i class="fa-solid fa-file-lines"></i></button>
           <button class="btn-icon" data-action="delete" title="删除"><i class="fa-solid fa-trash-can"></i></button>
         </div>
       </div>`;
@@ -782,6 +799,8 @@
         </div>
         <div class="history-actions">
           <button class="btn-icon" data-action="continue" title="继续对话"><i class="fa-solid fa-play"></i></button>
+          <button class="btn-icon" data-action="export-json" title="导出为JSON"><i class="fa-solid fa-file-code"></i></button>
+          <button class="btn-icon" data-action="export-md" title="导出为Markdown"><i class="fa-solid fa-file-lines"></i></button>
           <button class="btn-icon" data-action="delete" title="删除"><i class="fa-solid fa-trash-can"></i></button>
         </div>
       </div>`;
@@ -805,6 +824,13 @@
       } else {
         await loadBabeConversation(id);
       }
+    } else if (action === 'export-json' || action === 'export-md') {
+      const conv = await window.api.babeHistoryGet(id);
+      if (!conv) {
+        if (typeof window.showMessageModal === 'function') window.showMessageModal('导出失败：记录不存在', '导出失败', 'error');
+        return;
+      }
+      await exportConversationToFile(conv, action === 'export-json' ? 'json' : 'md');
     } else if (action === 'delete') {
       if (!await window.confirmDialog('确定删除这段和 TA 的回忆吗？', '删除确认')) return;
       const result = await window.api.babeHistoryDelete(id);
@@ -955,6 +981,7 @@
     }
   });
   document.getElementById('babe-chat-input')?.addEventListener('input', (e) => {
+    if (e.target.offsetParent === null) return; // 隐藏时不调整高度，避免 0px 塌陷
     e.target.style.height = 'auto';
     e.target.style.height = Math.min(e.target.scrollHeight, 120) + 'px';
   });

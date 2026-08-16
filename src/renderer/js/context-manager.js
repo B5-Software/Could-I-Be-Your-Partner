@@ -539,6 +539,10 @@ class ContextManager {
       const mergeNote = priorCheckpoints.length
         ? '\n\n注意：下文可能包含更早的 <compacted-summary> 检查点，它们代表已确立的背景。请将其内容合并进本检查点，不要丢，也不要重复展开细节。'
         : '';
+      // /compact 命令可携带聚焦要求：优先保留相关细节
+      const focusNote = (options.focus && String(options.focus).trim())
+        ? `\n\n【本次压缩的聚焦要求（按此优先级保留细节）】\n${String(options.focus).trim()}`
+        : '';
 
       const instruction = [
         '你现在作为本 AI 编码助手的压缩引擎工作。把上面的对话浓缩成一份结构化检查点，'
@@ -549,6 +553,7 @@ class ContextManager {
         '',
         STRUCTURED_SUMMARY_TEMPLATE,
         mergeNote,
+        focusNote,
         '',
         '只输出检查点本体，不要任何前言、解释或代码围栏。'
       ].join('\n');
@@ -794,6 +799,23 @@ class ContextManager {
   clear() {
     this.messages = [];
     this.historyMessages = [];
+    this.pinnedMessages = [];
+    this.summaries = [];
+    this.compactBoundaries = [];
+    this.checkpointIndexes = new Set();
+    this.prunedIndexes = new Set();
+    this.checkpointCount = 0;
+    this.compactionLock = null;
+    this._compactionInProgress = false;
+    this.toolSchemaTokens = 0;
+  }
+
+  /**
+   * 只清工作上下文，保留历史 transcript（/clear 语义）：
+   * 可见聊天记录与持久化历史不动，下一次请求从全新上下文开始。
+   */
+  clearWorkingContext() {
+    this.messages = [];
     this.pinnedMessages = [];
     this.summaries = [];
     this.compactBoundaries = [];

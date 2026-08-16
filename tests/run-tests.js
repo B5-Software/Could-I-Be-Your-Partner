@@ -1738,6 +1738,47 @@ test('opencode-zen 路由：按模型名解析变体表', () => {
   assert.strictEqual(zenDs.variants.some(v => v.id === 'max'), true);
 });
 
+// ---- fork-utils（/fork N 截断语义）----
+console.log('\nfork-utils（/fork 截断）:');
+const forkUtils = require('../src/renderer/js/fork-utils.js');
+
+test('truncateToUserMessage: 保留到第 N 条用户消息（含），丢弃其后', () => {
+  const msgs = [
+    { role: 'user', content: 'q1' },
+    { role: 'assistant', content: 'a1' },
+    { role: 'user', content: 'q2' },
+    { role: 'assistant', content: 'a2' },
+    { role: 'user', content: 'q3' }
+  ];
+  const r = forkUtils.truncateToUserMessage(msgs, 2);
+  assert.strictEqual(r.truncated.length, 3);
+  assert.strictEqual(r.truncated[2].content, 'q2');
+  assert.strictEqual(r.lastUserText, 'q2');
+  assert.strictEqual(r.userCount, 2);
+});
+
+test('truncateToUserMessage: n=0 与越界均返回完整序列', () => {
+  const msgs = [
+    { role: 'user', content: 'q1' },
+    { role: 'assistant', content: 'a1' },
+    { role: 'user', content: 'q2' }
+  ];
+  const z = forkUtils.truncateToUserMessage(msgs, 0);
+  assert.strictEqual(z.truncated.length, 3);
+  assert.strictEqual(z.lastUserText, 'q2');
+  const big = forkUtils.truncateToUserMessage(msgs, 99);
+  assert.strictEqual(big.truncated.length, 3);
+  assert.strictEqual(big.userCount, 2);
+});
+
+test('extractLastUserText: 兼容字符串 content 与多段数组 content', () => {
+  assert.strictEqual(forkUtils.extractLastUserText([{ role: 'user', content: 'hi' }]), 'hi');
+  assert.strictEqual(forkUtils.extractLastUserText([
+    { role: 'user', content: [{ type: 'text', text: '看图' }, { type: 'image_url', image_url: {} }] }
+  ]), '看图');
+  assert.strictEqual(forkUtils.extractLastUserText([{ role: 'assistant', content: 'x' }]), '');
+});
+
 test('parseLLMResponse: transport=responses 分支走 parseResponsesResponse', () => {
   const parsed = llmProvidersMod.parseLLMResponse({
     status: 'incomplete',

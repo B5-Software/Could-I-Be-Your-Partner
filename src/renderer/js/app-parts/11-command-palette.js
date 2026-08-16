@@ -22,7 +22,26 @@
     { cmd: '/model', icon: 'fa-robot', desc: '切换模型（仅本会话生效）' },
     { cmd: '/variant', icon: 'fa-gauge-high', desc: '切换变体 / 思考强度' },
     { cmd: '/minimal', icon: 'fa-wand-magic-sparkles', desc: '切换极简模式（精简提示词 + 最小工具集）' },
+    { cmd: '/fork', icon: 'fa-code-branch', desc: '分支当前对话为新会话（/fork N 分支到第 N 条用户消息）' },
+    { cmd: '/clear', icon: 'fa-broom', desc: '清空上下文（保留可见聊天记录）' },
+    { cmd: '/compact', icon: 'fa-compress', desc: '立即压缩当前上下文（可附加聚焦说明）' },
+    { cmd: '/new', icon: 'fa-plus', desc: '新建同模式会话' },
+    { cmd: '/config', icon: 'fa-gear', desc: '打开设置（/config llm 直达对应标签页）' },
+    { cmd: '/doctor', icon: 'fa-stethoscope', desc: '检测开发环境（Python / Node / Bun / Git）' },
+    { cmd: '/export', icon: 'fa-file-export', desc: '导出当前会话（/export md 或 /export json）' },
     { cmd: '/help', icon: 'fa-circle-question', desc: '查看可用命令' }
+  ];
+
+  // /config 可直达的设置标签页（id + 中文名）
+  const SETTINGS_TABS = [
+    ['ai', 'AI 形象'], ['babe', 'Babe 模式'], ['user', '个人资料'], ['llm', 'LLM'],
+    ['usage', '用量统计'], ['budget', '预算控制'], ['image', '生图'], ['theme', '主题'],
+    ['animations', '动效'], ['fonts', '字体'], ['language', '语言'], ['network', '网络'],
+    ['entropy', '熵源'], ['firmware', 'TRNG固件'], ['security', '安全'], ['mcp', 'MCP'],
+    ['email', '邮箱'], ['webcontrol', 'Web控制'], ['playwright', 'Playwright'],
+    ['notifications', '通知'], ['terminal', '终端'], ['ime', '输入法'], ['voice', '语音'],
+    ['context', '上下文'], ['sandbox', '沙箱'], ['automation', '自动化'], ['plugins', '插件'],
+    ['environment', '环境检测'], ['updates', '更新']
   ];
 
   let panel = null;
@@ -30,6 +49,7 @@
   let panelItems = [];
   let selectedIndex = 0;
   let loading = false;
+  let outsideMousedownHandler = null;
 
   function getAgentForInput(input) {
     const id = input && input.id;
@@ -200,16 +220,115 @@
       showPanel();
       return;
     }
+    if (cmd === '/fork') {
+      const mode = getModeForInput(input);
+      const n = parseInt(query, 10);
+      if (mode === 'babe') {
+        renderItems([{ label: 'Babe 模式暂不支持分支', icon: 'fa-circle-info', desc: '分支仅适用于 Chat / Code 模式' }]);
+      } else {
+        renderItems([{
+          label: (Number.isFinite(n) && n > 0) ? `分支到第 ${n} 条用户消息` : '创建分支（复制完整对话）',
+          icon: 'fa-code-branch',
+          desc: '新会话继承历史/模型/变体/极简属性，独立计费',
+          action: 'fork',
+          upto: (Number.isFinite(n) && n > 0) ? n : null
+        }]);
+      }
+      showPanel();
+      return;
+    }
+    if (cmd === '/clear') {
+      renderItems([{
+        label: '清空上下文（保留聊天记录）',
+        icon: 'fa-broom',
+        desc: '下一次请求从全新上下文开始，可见聊天与历史记录不变',
+        action: 'clear'
+      }]);
+      showPanel();
+      return;
+    }
+    if (cmd === '/compact') {
+      renderItems([{
+        label: query ? `压缩上下文（聚焦：${query.slice(0, 30)}）` : '立即压缩上下文',
+        icon: 'fa-compress',
+        desc: '水位线未到时将提示无需压缩',
+        action: 'compact',
+        focus: query || null
+      }]);
+      showPanel();
+      return;
+    }
+    if (cmd === '/new') {
+      renderItems([{
+        label: '新建同模式会话',
+        icon: 'fa-plus',
+        desc: `模式：${getModeForInput(input) || 'chat'}`,
+        action: 'new'
+      }]);
+      showPanel();
+      return;
+    }
+    if (cmd === '/config') {
+      const q = query.toLowerCase();
+      renderItems(SETTINGS_TABS
+        .filter(([id, label]) => !q || id.includes(q) || label.includes(q))
+        .map(([id, label]) => ({
+          label,
+          icon: 'fa-gear',
+          desc: `tab: ${id}`,
+          action: 'config',
+          tab: id
+        })));
+      showPanel();
+      return;
+    }
+    if (cmd === '/doctor') {
+      renderItems([{
+        label: '运行环境检测',
+        icon: 'fa-stethoscope',
+        desc: '检测 Python / Node+npm / Bun / Git 并显示版本',
+        action: 'doctor'
+      }]);
+      showPanel();
+      return;
+    }
+    if (cmd === '/export') {
+      const q = query.toLowerCase();
+      const formats = [
+        { id: 'md', label: 'Markdown（.md）', desc: '人类可读的对话记录' },
+        { id: 'json', label: 'JSON（.json）', desc: '完整结构数据（消息+元信息）' }
+      ].filter(f => !q || f.id.includes(q) || f.label.includes(q));
+      renderItems(formats.map(f => ({
+        label: f.label,
+        icon: 'fa-file-export',
+        desc: f.desc,
+        action: 'export',
+        format: f.id
+      })));
+      showPanel();
+      return;
+    }
     closePanel();
   }
 
   function showPanel() {
     const p = ensurePanel();
     p.style.display = 'block';
+    // 只在面板打开期间注册外部点击关闭监听，面板关闭时零全局干扰
+    if (!outsideMousedownHandler) {
+      outsideMousedownHandler = (e) => {
+        if (!panel.contains(e.target)) closePanel();
+      };
+      document.addEventListener('mousedown', outsideMousedownHandler, true);
+    }
   }
 
   function closePanel() {
     if (panel) panel.style.display = 'none';
+    if (outsideMousedownHandler) {
+      document.removeEventListener('mousedown', outsideMousedownHandler, true);
+      outsideMousedownHandler = null;
+    }
     panelInput = null;
     panelItems = [];
     selectedIndex = 0;
@@ -271,6 +390,16 @@
       return;
     }
 
+    if (item && item.action) {
+      try {
+        await runAction(item.action, item, input, ag);
+      } catch (e) {
+        if (typeof window.showToast === 'function') window.showToast('命令执行失败：' + (e && e.message ? e.message : e), 'error', 4000);
+      }
+      clearAndClose(input);
+      return;
+    }
+
     if (cmd === '/model') {
       if (item.label && !item.label.includes('加载')) await applyModel(ag, item.label);
       clearAndClose(input);
@@ -302,10 +431,159 @@
   }
 
   function clearAndClose(input) {
-    input.value = '';
-    input.dispatchEvent(new Event('input'));
+    // 先关闭面板再清空输入框，避免合成 input 事件与面板状态互相干扰
     closePanel();
-    if (typeof input.focus === 'function') input.focus();
+    input.value = '';
+    // 仅在输入框所在页面可见时派发 input 事件并聚焦。
+    // /config、/doctor 会切到设置页：此时 input 已隐藏，若派发合成 input，
+    // 自动调高处理器会按 scrollHeight=0 把高度写成 0px，返回后输入框塌陷无法点击。
+    if (input.offsetParent !== null) {
+      input.dispatchEvent(new Event('input'));
+    }
+    if (typeof input.focus === 'function' && input.offsetParent !== null) {
+      input.focus();
+    }
+  }
+
+  async function runAction(action, item, input, ag) {
+    const mode = getModeForInput(input);
+    switch (action) {
+      case 'fork': await forkConversation(ag, input, item.upto ?? null); break;
+      case 'clear': await clearContext(ag); break;
+      case 'compact': await compactContext(ag, item.focus); break;
+      case 'new': createNewSessionForMode(mode); break;
+      case 'config': openSettingsTab(item.tab); break;
+      case 'doctor': openSettingsTab('environment'); break;
+      case 'export': await exportConversation(ag, item.format || 'md'); break;
+      default: break;
+    }
+  }
+
+  async function forkConversation(ag, input, uptoIndex) {
+    if (!ag) return;
+    const mode = getModeForInput(input);
+    if (mode === 'babe') {
+      if (typeof window.showToast === 'function') window.showToast('Babe 模式暂不支持分支', 'warn', 3000);
+      return;
+    }
+    const full = (ag.contextManager && typeof ag.contextManager.getHistoryMessages === 'function')
+      ? ag.contextManager.getHistoryMessages() : [];
+    const utils = (typeof window !== 'undefined' && window.CIBYPForkUtils) || {};
+    const trunc = (uptoIndex && typeof utils.truncateToUserMessage === 'function')
+      ? utils.truncateToUserMessage(full, uptoIndex)
+      : { truncated: full, lastUserText: '' };
+    const newId = Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+    const forkConv = {
+      id: newId,
+      title: (ag.conversationTitle || '未命名对话') + '（分支）',
+      ts: Date.now(),
+      updatedAt: new Date().toISOString(),
+      schemaVersion: 2,
+      messages: trunc.truncated || [],
+      summaries: Array.isArray(ag.contextManager?.summaries) ? ag.contextManager.summaries.slice() : [],
+      tarotCard: ag.tarotCard || null,
+      workspacePath: ag.workspacePath || null,
+      mode,
+      status: 'idle',
+      lastError: null,
+      usage: { prompt: 0, completion: 0, total: 0, cached: 0, cacheCreation: 0, estimated: false },
+      usageByModel: {},
+      llmOverride: { ...(ag.llmOverride || {}) },
+      minimal: ag.minimalMode === true,
+      parentId: ag.conversationId || null,
+      parentTitle: ag.conversationTitle || '',
+      subAgents: []
+    };
+    if (mode === 'chat') {
+      const ag2 = new Agent();
+      ag2.mode = 'chat';
+      await ag2.init();
+      // 分支共享源会话工作目录（不新建 workspace）
+      if (ag.workspacePath) {
+        ag2.workspacePath = ag.workspacePath;
+        try {
+          const tree = await window.api.workspaceGetFileTree(ag.workspacePath);
+          if (tree && tree.ok) ag2.cachedWorkspaceTree = tree.tree;
+        } catch (_) { /* 文件树失败不影响分支 */ }
+        try { await window.api.webControlSetWorkDir(ag.workspacePath); } catch (_) { /* ignore */ }
+      }
+      await ag2.loadFromHistory(forkConv);
+      wireChatAgent(ag2);
+      const session = sessionManager.registerAgent('chat', ag2, { id: newId, title: forkConv.title });
+      session.draft = trunc.lastUserText || '';
+      activateSession('chat', session.key);
+      try { await ag2.saveToHistory(); } catch (_) { /* ignore */ }
+    } else if (mode === 'code') {
+      forkConv._restorePrompt = trunc.lastUserText || '';
+      await createCodeSession(forkConv);
+      if (typeof codeAgent !== 'undefined' && codeAgent && String(codeAgent.conversationId) === newId) {
+        try { await codeAgent.saveToHistory(); } catch (_) { /* ignore */ }
+      }
+    }
+    if (typeof window.showToast === 'function') window.showToast(`已创建分支：${forkConv.title}`, 'success', 4000);
+  }
+
+  async function clearContext(ag) {
+    if (!ag) return;
+    if (ag.running) {
+      if (typeof window.showToast === 'function') window.showToast('Agent 正在运行，请先停止再清空上下文', 'warn', 3500);
+      return;
+    }
+    if (typeof ag.clearContextOnly === 'function') ag.clearContextOnly();
+    if (typeof updateContextProgress === 'function') { try { updateContextProgress(); } catch (_) {} }
+    if (typeof window.showToast === 'function') window.showToast('已清空上下文（可见聊天记录保留）', 'success', 3000);
+  }
+
+  async function compactContext(ag, focus) {
+    if (!ag || typeof ag.compactNow !== 'function') return;
+    if (typeof window.showToast === 'function') window.showToast('正在压缩上下文…', 'info', 2000);
+    const res = await ag.compactNow(focus);
+    if (typeof updateContextProgress === 'function') { try { updateContextProgress(); } catch (_) {} }
+    const msg = (res && res.message) ? res.message : '压缩完成';
+    if (typeof window.showToast === 'function') {
+      window.showToast(msg, (res && res.ok && !res.skipped) ? 'success' : 'info', 4500);
+    }
+  }
+
+  function createNewSessionForMode(mode) {
+    if (typeof createNewSession === 'function') {
+      createNewSession(mode);
+    } else if (typeof window.showToast === 'function') {
+      window.showToast('无法新建会话', 'error', 3000);
+    }
+  }
+
+  function openSettingsTab(tabId) {
+    const valid = SETTINGS_TABS.some(([id]) => id === tabId);
+    const target = valid ? tabId : null;
+    document.querySelector('.nav-item[data-page="settings"]')?.click();
+    if (!target) return;
+    const started = Date.now();
+    const tryTab = () => {
+      const page = document.getElementById('page-settings');
+      const tab = document.querySelector(`.settings-tab[data-tab="${target}"]`);
+      if (tab && page && page.classList.contains('active')) {
+        tab.click();
+      } else if (Date.now() - started < 4000) {
+        setTimeout(tryTab, 80);
+      }
+    };
+    setTimeout(tryTab, 120);
+  }
+
+  async function exportConversation(ag, format) {
+    if (!ag) return;
+    // 复用 Chat 历史导出实现：原生保存对话框 + 一致 JSON/Markdown 格式
+    const conv = {
+      title: ag.conversationTitle || '未命名对话',
+      createdAt: ag.sessionStartTime || Date.now(),
+      updatedAt: Date.now(),
+      workspacePath: ag.codeWorkspacePath || ag.workspacePath || '',
+      mode: ag.mode || 'chat',
+      messages: (ag.contextManager && typeof ag.contextManager.getHistoryMessages === 'function')
+        ? ag.contextManager.getHistoryMessages() : []
+    };
+    await exportConversationToFile(conv, format === 'json' ? 'json' : 'md');
   }
 
   async function applyModel(ag, modelId) {
@@ -443,17 +721,19 @@
     }
   }, true);
 
-  // 点击面板外关闭
-  document.addEventListener('mousedown', (e) => {
-    if (!panel || panel.style.display === 'none') return;
-    if (!panel.contains(e.target)) closePanel();
-  }, true);
-
   // 窗口尺寸变化 / 滚动时重定位
   window.addEventListener('resize', () => { if (panelInput && panel && panel.style.display !== 'none') positionPanel(panelInput); });
   document.addEventListener('scroll', () => {
     if (panelInput && panel && panel.style.display !== 'none') positionPanel(panelInput);
   }, true);
+
+  // 页面/模式切换时强制关闭面板：彻底避免面板残留在其他标签页上方遮挡点击
+  document.querySelectorAll('.nav-item[data-page]').forEach(btn => {
+    btn.addEventListener('click', () => closePanel());
+  });
+  document.querySelectorAll('.mode-btn').forEach(btn => {
+    btn.addEventListener('click', () => closePanel());
+  });
 
   // 启动时同步各输入框的极简徽标（此时 DOM 已解析，part 01 已初始化主 Agent）
   syncBadges();

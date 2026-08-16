@@ -3261,6 +3261,7 @@
   <script src="../js/tools-def.js"></script>
   <script src="../js/privacy-filter.js"></script>
   <script src="../js/context-manager.js"></script>
+  <script src="../js/fork-utils.js"></script>
   <script src="../js/goal-state.js"></script>
   <script src="../../data/bundled-skills.js"></script>
   <script src="../js/title-utils.js"></script>
@@ -3278,7 +3279,7 @@
   <script src="../js/voice-capture.js"></script>
   <script src="../js/voice-ui.js"></script>
   <script type="module" src="../js/app.js"></script>
-  <!-- 全局 Toast 容器：用于请求失败重试等自动消失提示 -->
-  <div id="toast-container" style="position:fixed;top:60px;right:20px;z-index:10000;display:flex;flex-direction:column;gap:8px;pointer-events:none"></div>
+  <!-- 全局 Toast 容器：主题化、渐显渐隐、位于顶部搜索框位置 -->
+  <div id="toast-container"></div>
 </body>
 </html>
