@@ -49,7 +49,7 @@ jobs:
             os: windows-11-arm
             script: build:win:arm64
           - name: mac-x64
-            os: macos-latest-intel
+            os: macos-26-intel
             script: build:mac:x64
           - name: mac-arm64
             os: macos-latest
