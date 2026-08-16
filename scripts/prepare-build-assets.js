@@ -44,12 +44,23 @@ console.log('[prepare-build-assets] 开始准备打包资源...');
 run(process.execPath, [path.join(__dirname, 'download-aria2.js'), '--all']);
 
 // 2. fetch-assets：Font Awesome / OCR / Three.js / IME 词库（GeoGebra 由 download-voice-models 负责）
+//    必须用 pwsh（PowerShell 7）：ps1 为 UTF-8 无 BOM，Windows PowerShell 5.1
+//    会按 ANSI 解码，中文注释中的 UTF-8 字节可能被误读为引号导致解析失败
 if (process.platform === 'win32') {
-  run('powershell', [
+  const pwsh = 'pwsh';
+  const args = [
     '-NoProfile', '-ExecutionPolicy', 'Bypass',
     '-File', path.join(__dirname, 'fetch-assets.ps1'),
     '-SkipGeoGebra',
-  ]);
+  ];
+  const r = spawnSync(pwsh, args, { stdio: 'inherit', cwd: projectRoot, shell: false });
+  if (r.error) {
+    // 老环境无 pwsh：退回 Windows PowerShell 5.1（脚本已带 UTF-8 BOM，可正确解析）
+    run('powershell', args);
+  } else if (r.status !== 0) {
+    console.error(`[prepare-build-assets] 退出码 ${r.status}（pwsh）`);
+    process.exit(r.status === null ? 1 : r.status);
+  }
 } else {
   run('bash', [path.join(__dirname, 'fetch-assets.sh'), '--skip-geogebra']);
 }

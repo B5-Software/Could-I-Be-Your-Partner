@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   一键下载所有被 .gitignore 忽略的第三方资源（Font Awesome / Tesseract OCR / GeoGebra / Three.js）
 .DESCRIPTION
