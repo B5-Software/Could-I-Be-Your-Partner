@@ -360,9 +360,9 @@ end tell
     out = await _execCmd('osascript', ['-e', scpt]);
   } catch (e) {
     // Accessibility permission not granted or osascript failed
-    // 再次触发权限请求（若用户之前拒绝过，系统会再次弹出对话框）
+    // 只做静默检测，不再触发系统授权弹窗（启动时已按“只弹一次”策略处理）
     if (process.platform === 'darwin') {
-      try { systemPreferences.isTrustedAccessibilityClient(true); } catch {}
+      try { systemPreferences.isTrustedAccessibilityClient(false); } catch {}
       try { require('child_process').exec('open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"'); } catch {}
     }
     throw new Error('macOS 无障碍权限未授权，请在系统设置 > 隐私与安全性 > 辅助功能中启用本应用后重试。原始错误: ' + e.message);

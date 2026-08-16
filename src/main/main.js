@@ -582,6 +582,11 @@ let settings = loadJSON(settingsPath, {
   sessions: {
     maxConcurrent: 10
   },
+  // macOS 系统权限提示的一次性标记（无论允许/拒绝，之后都不再自动弹窗）
+  permissions: {
+    accessibilityPromptShown: false,
+    localNetworkPromptShown: false
+  },
   imageGen: {
     apiUrl: 'https://api.siliconflow.cn/v1/images/generations',
     apiKey: '',
@@ -735,7 +740,7 @@ let settings = loadJSON(settingsPath, {
 });
 if (fs.existsSync(settingsPath)) {
   const saved = loadJSON(settingsPath, {});
-  settings = { ...settings, ...saved, llm: { ...settings.llm, ...(saved.llm || {}) }, agent: { ...settings.agent, ...(saved.agent || {}) }, sessions: { ...settings.sessions, ...(saved.sessions || {}) }, imageGen: { ...settings.imageGen, ...(saved.imageGen || {}) }, theme: { ...settings.theme, ...(saved.theme || {}) }, aiPersona: { ...settings.aiPersona, ...(saved.aiPersona || {}) }, userProfile: { ...settings.userProfile, ...(saved.userProfile || {}) }, entropy: { ...settings.entropy, ...(saved.entropy || {}) }, proxy: { ...settings.proxy, ...(saved.proxy || {}) }, mcp: { ...settings.mcp, ...(saved.mcp || {}) }, email: { ...settings.email, ...(saved.email || {}) }, webControl: { ...settings.webControl, ...(saved.webControl || {}) }, budget: { ...settings.budget, ...(saved.budget || {}) }, terminal: { ...settings.terminal, ...(saved.terminal || {}) }, privacyProtection: { ...settings.privacyProtection, ...(saved.privacyProtection || {}) }, ime: { ...settings.ime, ...(saved.ime || {}) }, voice: { ...settings.voice, ...(saved.voice || {}) }, notifications: { ...settings.notifications, ...(saved.notifications || {}) }, updates: { ...settings.updates, ...(saved.updates || {}) } };
+  settings = { ...settings, ...saved, llm: { ...settings.llm, ...(saved.llm || {}) }, agent: { ...settings.agent, ...(saved.agent || {}) }, sessions: { ...settings.sessions, ...(saved.sessions || {}) }, permissions: { ...settings.permissions, ...(saved.permissions || {}) }, imageGen: { ...settings.imageGen, ...(saved.imageGen || {}) }, theme: { ...settings.theme, ...(saved.theme || {}) }, aiPersona: { ...settings.aiPersona, ...(saved.aiPersona || {}) }, userProfile: { ...settings.userProfile, ...(saved.userProfile || {}) }, entropy: { ...settings.entropy, ...(saved.entropy || {}) }, proxy: { ...settings.proxy, ...(saved.proxy || {}) }, mcp: { ...settings.mcp, ...(saved.mcp || {}) }, email: { ...settings.email, ...(saved.email || {}) }, webControl: { ...settings.webControl, ...(saved.webControl || {}) }, budget: { ...settings.budget, ...(saved.budget || {}) }, terminal: { ...settings.terminal, ...(saved.terminal || {}) }, privacyProtection: { ...settings.privacyProtection, ...(saved.privacyProtection || {}) }, ime: { ...settings.ime, ...(saved.ime || {}) }, voice: { ...settings.voice, ...(saved.voice || {}) }, notifications: { ...settings.notifications, ...(saved.notifications || {}) }, updates: { ...settings.updates, ...(saved.updates || {}) } };
   // voice 子对象深合并（ttsVoices / kws）
   if (saved.voice) {
     settings.voice.ttsVoices = { zh: 'zf_xiaoxiao', en: 'af_heart', de: 'thorsten', ...(saved.voice.ttsVoices || {}) };
@@ -1228,41 +1233,54 @@ app.whenReady().then(() => {
       console.error('Failed to copy OCR data:', e);
     }
   }
-  // macOS: 通过 Electron systemPreferences 触发无障碍权限请求
-  // 使用 AXIsProcessTrustedWithOptions（内部 kAXTrustedCheckOptionPrompt=true），
-  // 在未授权时由系统弹出原生授权对话框；已授权则直接返回 true，不会重复弹窗。
+  // macOS：通过 Electron systemPreferences 触发无障碍权限请求。
+  // 只在「有生以来第一次」弹出系统授权框（settings.permissions.accessibilityPromptShown 持久化标记）：
+  // 无论用户允许还是拒绝，此后每次启动都只做静默检测，绝不再自动弹窗、也不再自动跳转系统设置。
+  // 未授权但功能需要时，由具体功能入口给出提示并引导用户手动开启。
   // 注意：osascript 调用 System Events 不需要无障碍权限，无法用 osascript 检测真实状态。
   if (process.platform === 'darwin') {
     try {
-      const trusted = systemPreferences.isTrustedAccessibilityClient(true);
-      if (!trusted) {
-        // isTrustedAccessibilityClient(true) 只弹一次窗；若用户之前拒绝过则不会再弹，
-        // 需主动打开系统设置引导用户手动授权
-        console.warn('[Accessibility] Not trusted. Opening System Settings to guide user...');
+      if (!settings.permissions) settings.permissions = {};
+      let trusted = false;
+      if (!settings.permissions.accessibilityPromptShown) {
         try {
-          require('child_process').exec('open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"');
-        } catch (_) {}
+          trusted = systemPreferences.isTrustedAccessibilityClient(true);
+        } catch { /* 首次弹窗失败视为未授权，继续打标记 */ }
+        settings.permissions.accessibilityPromptShown = true;
+        try { persistSettings(); } catch { /* ignore */ }
+      } else {
+        // 已弹过：静默检测，绝不再次触发系统弹窗
+        try {
+          trusted = systemPreferences.isTrustedAccessibilityClient(false);
+        } catch { /* ignore */ }
+      }
+      if (!trusted) {
+        console.warn('[Accessibility] Not trusted. 如需使用桌面控制/自动化，请在 系统设置 > 隐私与安全性 > 辅助功能 中手动开启。');
       }
     } catch (e) {
       console.warn('[Accessibility] Check failed:', e.message);
     }
-    // macOS Sequoia 15+: 主动触发本地网络权限请求
+    // macOS Sequoia 15+: 主动触发本地网络权限请求（仅第一次，之后不再自动触发）
     // 仅声明 NSLocalNetworkUsageDescription + NSBonjourServices 不会自动弹窗，
     // 必须发起一次 Bonjour/mDNS 浏览才会触发系统权限弹窗。
     // 普通局域网 TCP 连接不会触发本地网络权限（实测），必须用 Bonjour 浏览。
     // 通过 dns-sd -B 命令浏览 Bonjour 服务，触发权限请求后立即终止。
-    try {
-      const { spawn } = require('child_process');
-      const bonjourProbe = spawn('dns-sd', ['-B', '_http._tcp', 'local.'], {
-        stdio: 'ignore',
-        detached: true
-      });
-      // 浏览 3 秒后终止，足够触发权限请求
-      setTimeout(() => { try { bonjourProbe.kill(); } catch {} }, 3000);
-      bonjourProbe.on('error', () => {});
-      console.log('[LocalNetwork] Triggered Bonjour browse to request permission');
-    } catch (e) {
-      console.warn('[LocalNetwork] Bonjour trigger failed:', e.message);
+    if (!settings.permissions.localNetworkPromptShown) {
+      settings.permissions.localNetworkPromptShown = true;
+      try { persistSettings(); } catch { /* ignore */ }
+      try {
+        const { spawn } = require('child_process');
+        const bonjourProbe = spawn('dns-sd', ['-B', '_http._tcp', 'local.'], {
+          stdio: 'ignore',
+          detached: true
+        });
+        // 浏览 3 秒后终止，足够触发权限请求
+        setTimeout(() => { try { bonjourProbe.kill(); } catch {} }, 3000);
+        bonjourProbe.on('error', () => {});
+        console.log('[LocalNetwork] Triggered Bonjour browse to request permission');
+      } catch (e) {
+        console.warn('[LocalNetwork] Bonjour trigger failed:', e.message);
+      }
     }
   }
   // ===== 应用代理设置 =====
@@ -1660,15 +1678,43 @@ function normalizeEnvVersion(output) {
   return text.split(/\r?\n/)[0].slice(0, 80);
 }
 
-function detectEnvTool(candidates) {
+// macOS 打包后的 GUI 应用继承的是 launchd 的最小 PATH（/usr/bin:/bin:...），
+// 看不到用户 shell 里 Homebrew/nvm 等安装的工具（node/npm/git/python）。
+// 这里用用户的登录 shell 读回真实 PATH（zsh/bash/fish 通用），并附上常见安装位置兜底。
+let _cachedLoginPath = null;
+function getLoginPathEnv() {
+  if (_cachedLoginPath) return _cachedLoginPath;
+  const parts = [];
+  try {
+    const shellPath = process.env.SHELL && fs.existsSync(process.env.SHELL) ? process.env.SHELL : '/bin/zsh';
+    const base = path.basename(shellPath).toLowerCase();
+    const cmd = base === 'fish' ? 'string join : $PATH' : "printf '%s' \"$PATH\"";
+    const r = spawnSync(shellPath, ['-lic', cmd], {
+      encoding: 'utf8',
+      timeout: 8000,
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'ignore'],
+      env: { ...process.env }
+    });
+    if (!r.error && r.status === 0 && r.stdout) parts.push(String(r.stdout).trim());
+  } catch { /* ignore */ }
+  // 兜底：Homebrew 两个前缀 + 系统默认路径 + nvm 通用目录
+  parts.push('/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin');
+  _cachedLoginPath = parts.join(':');
+  return _cachedLoginPath;
+}
+
+function detectEnvTool(candidates, pathEnv) {
   for (const cmd of candidates) {
+    const env = pathEnv ? { ...process.env, PATH: pathEnv } : process.env;
     let r;
     try {
       r = spawnSync(cmd, ['--version'], {
         encoding: 'utf8',
         timeout: 6000,
         windowsHide: true,
-        stdio: ['ignore', 'pipe', 'pipe']
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env
       });
     } catch { continue; }
     if (r.error || r.status !== 0 || !r.stdout) continue;
@@ -1678,7 +1724,8 @@ function detectEnvTool(candidates) {
         encoding: 'utf8',
         timeout: 6000,
         windowsHide: true,
-        stdio: ['ignore', 'pipe', 'pipe']
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env
       });
       if (loc.status === 0 && loc.stdout) exePath = loc.stdout.trim().split(/\r?\n/)[0];
     } catch { /* ignore */ }
@@ -1689,12 +1736,13 @@ function detectEnvTool(candidates) {
 
 ipcMain.handle('env:detect', () => {
   try {
+    const pathEnv = process.platform === 'darwin' ? getLoginPathEnv() : process.env.PATH;
     const results = {
-      python: detectEnvTool(process.platform === 'win32' ? ['py', 'python', 'python3'] : ['python3', 'python']),
-      node: detectEnvTool(['node']),
-      npm: detectEnvTool(['npm']),
-      bun: detectEnvTool(['bun']),
-      git: detectEnvTool(['git'])
+      python: detectEnvTool(process.platform === 'win32' ? ['py', 'python', 'python3'] : ['python3', 'python'], pathEnv),
+      node: detectEnvTool(['node'], pathEnv),
+      npm: detectEnvTool(['npm'], pathEnv),
+      bun: detectEnvTool(['bun'], pathEnv),
+      git: detectEnvTool(['git'], pathEnv)
     };
     return { ok: true, results, platform: process.platform };
   } catch (e) {
