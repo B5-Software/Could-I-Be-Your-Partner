@@ -18,8 +18,11 @@
  *
  * 下载源：
  *   win-x64 / win-arm64 → aria2 官方 GitHub Releases（win-64bit-build1）
- *   mac-x64 / mac-arm64 → 官方 release-1.35.0 osx-darwin.tar.bz2
+ *   mac-x64             → 官方 release-1.35.0 osx-darwin.tar.bz2
  *                         （1.37.0 起官方不再发布 macOS 二进制）
+ *   mac-arm64           → Morton-Li/Aria2-MacOS-Builder 的 arm64 构建
+ *                         （源码编译 1.37.0，静态三方库，可分发），
+ *                         失败回退官方 1.35.0 x64 版（Rosetta）
  *   linux-x64           → abcfy2/aria2-static-build 1.37.0 musl 静态构建
  *                         （官方从不提供 Linux 预编译二进制）
  */
@@ -60,10 +63,14 @@ const ASSETS = {
     dirName: 'mac-x64'
   },
   'darwin-arm64': {
-    // macOS arm64 使用 Intel 版（Rosetta 兼容）
-    url: `https://github.com/aria2/aria2/releases/download/release-1.35.0/aria2-1.35.0-osx-darwin.tar.bz2`,
-    type: 'tarbz2',
+    // 官方无 arm64 macOS 二进制。优先使用 Morton-Li/Aria2-MacOS-Builder 的
+    // arm64 构建（macos-15 arm64 runner 上源码编译 1.37.0，三方库静态链接、
+    // 仅链系统动态库，可分发），下载失败回退官方 1.35.0 x64 版（Rosetta）
+    url: `https://github.com/Morton-Li/Aria2-MacOS-Builder/releases/download/release-1.37.0/aria2c-macos-arm64.tar.gz`,
+    type: 'targz',
     exeName: 'aria2c',
+    fallbackUrl: `https://github.com/aria2/aria2/releases/download/release-1.35.0/aria2-1.35.0-osx-darwin.tar.bz2`,
+    fallbackType: 'tarbz2',
     dirName: 'mac-arm64'
   },
   'linux-x64': {
@@ -146,6 +153,10 @@ function extractTarBz2(archivePath, destDir) {
   execFileSync('tar', ['-xjf', archivePath, '-C', destDir], { stdio: 'inherit', timeout: 30000 });
 }
 
+function extractTarGz(archivePath, destDir) {
+  execFileSync('tar', ['-xzf', archivePath, '-C', destDir], { stdio: 'inherit', timeout: 30000 });
+}
+
 function findFileRecursive(dir, name) {
   try {
     const entries = fs.readdirSync(dir, { withFileTypes: true });
@@ -217,37 +228,53 @@ async function downloadForPlatform(platformKey) {
     fs.mkdirSync(destDir, { recursive: true });
   }
 
-  console.log(`[aria2] 正在下载 ${platformKey}: ${config.url}`);
-  const archiveName = path.basename(new URL(config.url).pathname);
-  const archivePath = path.join(destDir, archiveName);
+  // 主源失败时回退（如 darwin-arm64 的 arm64 构建 -> 官方 x64 版）
+  const sources = config.fallbackUrl
+    ? [
+        { url: config.url, type: config.type },
+        { url: config.fallbackUrl, type: config.fallbackType }
+      ]
+    : [{ url: config.url, type: config.type }];
 
-  const ok = await downloadFile(config.url, archivePath);
-  if (!ok) {
-    console.error(`[aria2] ${platformKey} 下载失败`);
-    return false;
-  }
-
-  console.log(`[aria2] 正在解压 ${platformKey}...`);
-  try {
-    if (config.type === 'zip') {
-      extractZip(archivePath, destDir);
-    } else if (config.type === 'tarbz2') {
-      extractTarBz2(archivePath, destDir);
+  for (let i = 0; i < sources.length; i++) {
+    const src = sources[i];
+    if (i > 0) {
+      console.warn(`[aria2] ${platformKey} 主源失败，回退下载: ${src.url}`);
     }
-  } catch (e) {
-    console.error(`[aria2] 解压失败: ${e.message}`);
+    const archivePath = path.join(destDir, path.basename(new URL(src.url).pathname));
+    const ok = await downloadFile(src.url, archivePath);
+    if (!ok) {
+      console.error(`[aria2] ${platformKey} 下载失败: ${src.url}`);
+      continue;
+    }
+
+    console.log(`[aria2] 正在解压 ${platformKey}...`);
+    let extracted = true;
+    try {
+      if (src.type === 'zip') {
+        extractZip(archivePath, destDir);
+      } else if (src.type === 'tarbz2') {
+        extractTarBz2(archivePath, destDir);
+      } else if (src.type === 'targz') {
+        extractTarGz(archivePath, destDir);
+      }
+    } catch (e) {
+      console.error(`[aria2] 解压失败: ${e.message}`);
+      extracted = false;
+    } finally {
+      try { fs.unlinkSync(archivePath); } catch {}
+    }
+    if (!extracted) continue;
+
+    // 将二进制从子目录提取到根目录
+    if (flattenBinary(destDir, config.exeName)) {
+      console.log(`[aria2] ${platformKey} 二进制就绪: ${exePath}`);
+      return true;
+    }
+    console.error(`[aria2] ${platformKey} 解压后未找到 ${config.exeName}`);
     return false;
-  } finally {
-    try { fs.unlinkSync(archivePath); } catch {}
   }
 
-  // 将二进制从子目录提取到根目录
-  if (flattenBinary(destDir, config.exeName)) {
-    console.log(`[aria2] ${platformKey} 二进制就绪: ${exePath}`);
-    return true;
-  }
-
-  console.error(`[aria2] ${platformKey} 解压后未找到 ${config.exeName}`);
   return false;
 }
 

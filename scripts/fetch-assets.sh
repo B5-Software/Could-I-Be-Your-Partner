@@ -110,6 +110,18 @@ if [[ "$SKIP_FA" == "false" ]]; then
       warn "Font Awesome download failed, you may need to download manually"
     fi
   fi
+
+  # FA6.5.1 官方的 fontawesome.min.css 不含 @font-face（拆在 solid/regular/brands 里），
+  # 不补上的话打包后图标不渲染。放在下载逻辑外、幂等执行：
+  # 即使命中 CI 缓存（旧版缺 @font-face 的 CSS）也能原地修复。
+  if [[ -f "$fonts_dir/fontawesome.min.css" ]] && ! grep -q '@font-face' "$fonts_dir/fontawesome.min.css"; then
+    cat >> "$fonts_dir/fontawesome.min.css" <<'EOF'
+@font-face{font-family:"Font Awesome 6 Free";font-style:normal;font-weight:900;font-display:block;src:url(../webfonts/fa-solid-900.woff2) format("woff2"),url(../webfonts/fa-solid-900.ttf) format("truetype")}
+@font-face{font-family:"Font Awesome 6 Free";font-style:normal;font-weight:400;font-display:block;src:url(../webfonts/fa-regular-400.woff2) format("woff2"),url(../webfonts/fa-regular-400.ttf) format("truetype")}
+@font-face{font-family:"Font Awesome 6 Brands";font-style:normal;font-weight:400;font-display:block;src:url(../webfonts/fa-brands-400.woff2) format("woff2"),url(../webfonts/fa-brands-400.ttf) format("truetype")}
+EOF
+    ok "fontawesome.min.css @font-face 已补全"
+  fi
 fi
 
 # ---- Tesseract OCR ----
