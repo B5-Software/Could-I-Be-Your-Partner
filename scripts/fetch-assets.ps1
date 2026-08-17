@@ -83,6 +83,7 @@ if (-not $SkipFontAwesome) {
   Write-Step "Font Awesome 6.5.1"
   $fontsDir = Join-Path $repoRoot "assets\fonts"
   $webfontsDir = Join-Path $repoRoot "assets\webfonts"
+  $faCss = Join-Path $fontsDir "fontawesome.min.css"
   New-Item -ItemType Directory -Force -Path $fontsDir | Out-Null
   New-Item -ItemType Directory -Force -Path $webfontsDir | Out-Null
 
@@ -104,6 +105,13 @@ if (-not $SkipFontAwesome) {
       Copy-Item (Join-Path $srcDir "css\*") -Destination $fontsDir -Force
       Write-Ok "CSS files -> assets/fonts/"
 
+      # 官方 fontawesome.min.css 缺 @font-face 和 .fa-solid/.fa-regular/.fa-brands 的
+      # font-weight 规则（这些都在 all.min.css 里），不处理的话打包后图标变豆腐块。
+      # 用 all.min.css 覆盖 fontawesome.min.css（应用引用的是 fontawesome.min.css），
+      # 与本地开发渲染一致。
+      Copy-Item (Join-Path $srcDir "css\all.min.css") -Destination $faCss -Force
+      Write-Ok "fontawesome.min.css <- all.min.css（含 @font-face 与 font-weight 规则）"
+
       # Webfonts
       Copy-Item (Join-Path $srcDir "webfonts\*") -Destination $webfontsDir -Force
       Write-Ok "Webfont files -> assets/webfonts/"
@@ -115,17 +123,30 @@ if (-not $SkipFontAwesome) {
     }
   }
 
-  # FA6.5.1 官方的 fontawesome.min.css 不含 @font-face（拆在 solid/regular/brands 里），
-  # 不补上的话打包后图标不渲染。放在下载逻辑外、幂等执行：
-  # 即使命中 CI 缓存（旧版缺 @font-face 的 CSS）也能原地修复。
-  $faCss = Join-Path $fontsDir "fontawesome.min.css"
-  if ((Test-Path $faCss) -and ((Get-Content $faCss -Raw) -notmatch '@font-face')) {
-    Add-Content -Path $faCss -Value @'
+  # 幂等补全（放在下载逻辑外：即使命中 CI 缓存的旧版 CSS 也能原地修复）：
+  # 1. @font-face（solid/regular/brands 三个字面）
+  # 2. .fa-solid/.fa-regular/.fa-brands 的 font-weight 规则与 --fa-style-family-* 变量
+  #    （缺这些时 .fa-solid 图标按 400 匹配 regular 字面，solid 专属图标变豆腐块）
+  if (Test-Path $faCss) {
+    $faContent = Get-Content $faCss -Raw
+    $faPatched = $false
+    if ($faContent -notmatch '@font-face') {
+      Add-Content -Path $faCss -Value @'
 @font-face{font-family:"Font Awesome 6 Free";font-style:normal;font-weight:900;font-display:block;src:url(../webfonts/fa-solid-900.woff2) format("woff2"),url(../webfonts/fa-solid-900.ttf) format("truetype")}
 @font-face{font-family:"Font Awesome 6 Free";font-style:normal;font-weight:400;font-display:block;src:url(../webfonts/fa-regular-400.woff2) format("woff2"),url(../webfonts/fa-regular-400.ttf) format("truetype")}
 @font-face{font-family:"Font Awesome 6 Brands";font-style:normal;font-weight:400;font-display:block;src:url(../webfonts/fa-brands-400.woff2) format("woff2"),url(../webfonts/fa-brands-400.ttf) format("truetype")}
 '@
-    Write-Ok "fontawesome.min.css @font-face 已补全"
+      $faPatched = $true
+    }
+    if ($faContent -notmatch '\.fa-solid,\.fas\{font-weight:900\}') {
+      Add-Content -Path $faCss -Value @'
+:host,:root{--fa-style-family-classic:"Font Awesome 6 Free";--fa-font-solid:normal 900 1em/1 "Font Awesome 6 Free"}.fa-solid,.fas{font-weight:900}:host,:root{--fa-style-family-classic:"Font Awesome 6 Free";--fa-font-regular:normal 400 1em/1 "Font Awesome 6 Free"}.fa-regular,.far{font-weight:400}:host,:root{--fa-style-family-brands:"Font Awesome 6 Brands";--fa-font-brands:normal 400 1em/1 "Font Awesome 6 Brands"}.fa-brands,.fab{font-weight:400}
+'@
+      $faPatched = $true
+    }
+    if ($faPatched) {
+      Write-Ok "fontawesome.min.css 已幂等补全（@font-face + font-weight 规则）"
+    }
   }
 }
 
