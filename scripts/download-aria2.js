@@ -69,6 +69,8 @@ const ASSETS = {
     url: `https://github.com/Morton-Li/Aria2-MacOS-Builder/releases/download/release-1.37.0/aria2c-macos-arm64.tar.gz`,
     type: 'targz',
     exeName: 'aria2c',
+    // 该仓库 tarball 内二进制名为 aria2c-macos-arm64（非 aria2c）
+    altExeNames: ['aria2c-macos-arm64'],
     fallbackUrl: `https://github.com/aria2/aria2/releases/download/release-1.35.0/aria2-1.35.0-osx-darwin.tar.bz2`,
     fallbackType: 'tarbz2',
     dirName: 'mac-arm64'
@@ -173,9 +175,9 @@ function findFileRecursive(dir, name) {
   return null;
 }
 
-function flattenBinary(destDir, exeName) {
+function flattenBinary(destDir, exeName, altNames = []) {
   // 压缩包可能直接包含 aria2c[.exe]，或带一层/多层子目录（如 aria2-1.35.0/bin/aria2c），
-  // 统一确保二进制位于 destDir 根目录
+  // 或使用第三方命名的二进制（如 aria2c-macos-arm64），统一确保二进制位于 destDir 根目录
   const finalPath = path.join(destDir, exeName);
   if (fs.existsSync(finalPath)) {
     // 已位于根目录：直接设置可执行权限
@@ -184,23 +186,26 @@ function flattenBinary(destDir, exeName) {
     }
     return true;
   }
-  const found = findFileRecursive(destDir, exeName);
-  if (found && found !== finalPath) {
-    try {
-      fs.copyFileSync(found, finalPath);
-      if (process.platform !== 'win32') {
-        try { fs.chmodSync(finalPath, 0o755); } catch {}
+  for (const name of [exeName, ...altNames]) {
+    const found = findFileRecursive(destDir, name);
+    if (found && found !== finalPath) {
+      try {
+        fs.copyFileSync(found, finalPath);
+        if (process.platform !== 'win32') {
+          try { fs.chmodSync(finalPath, 0o755); } catch {}
+        }
+        // 清理源文件与解压残留（保留根目录文件本身）
+        try { fs.unlinkSync(found); } catch {}
+        const subDirs = fs.readdirSync(destDir, { withFileTypes: true })
+          .filter((e) => e.isDirectory())
+          .map((e) => path.join(destDir, e.name));
+        for (const d of subDirs) {
+          try { fs.rmSync(d, { recursive: true, force: true }); } catch {}
+        }
+        return true;
+      } catch (e) {
+        console.error(`  flatten 失败: ${e.message}`);
       }
-      // 清理解压残留（保留根目录文件本身）
-      const subDirs = fs.readdirSync(destDir, { withFileTypes: true })
-        .filter((e) => e.isDirectory())
-        .map((e) => path.join(destDir, e.name));
-      for (const d of subDirs) {
-        try { fs.rmSync(d, { recursive: true, force: true }); } catch {}
-      }
-      return true;
-    } catch (e) {
-      console.error(`  flatten 失败: ${e.message}`);
     }
   }
   return false;
@@ -266,8 +271,8 @@ async function downloadForPlatform(platformKey) {
     }
     if (!extracted) continue;
 
-    // 将二进制从子目录提取到根目录
-    if (flattenBinary(destDir, config.exeName)) {
+    // 将二进制从子目录提取到根目录（支持第三方命名，如 aria2c-macos-arm64）
+    if (flattenBinary(destDir, config.exeName, config.altExeNames || [])) {
       console.log(`[aria2] ${platformKey} 二进制就绪: ${exePath}`);
       return true;
     }
