@@ -26,6 +26,10 @@
   let streamFeedActive = false; // 当前是否有 LLM 流在投喂
   let fedAnyChunk = false;
   let ttsReqCounter = 0;
+  // 已派发 TTS 合成请求（含排队/合成中/播放中）标记：
+  // 让"停止"按钮在点击朗读的瞬间立即出现，不必等首块音频返回。
+  let ttsPending = false;
+  let ttsPendingTimer = null; // 合成迟迟无回调的兜底，防止按钮永久悬挂
 
   function voiceCfg() {
     return (settings && settings.voice) || {};
@@ -64,6 +68,8 @@
       player.setVolume(voiceCfg().ttsVolume != null ? voiceCfg().ttsVolume : 1.0);
       // 所有流播完/被清空后，主窗口可刷新"停止"按钮可见性
       player.onAllDrained = () => {
+        ttsPending = false;
+        clearTtsPendingTimer();
         if (typeof window.onVoicePlaybackIdle === 'function') {
           try { window.onVoicePlaybackIdle(); } catch (_) {}
         }
@@ -80,12 +86,18 @@
         speak: (sentence, lang) => {
           if (!window.api || !window.api.voiceTtsSpeak) return;
           const reqId = `${TTS_REQ_PREFIX}-${ttsReqCounter}`;
+          ttsPending = true;
+          armTtsPendingTimer();
           window.api.voiceTtsSpeak({
             reqId,
             text: sentence,
             lang,
             speed: voiceCfg().ttsSpeed != null ? voiceCfg().ttsSpeed : 1.0,
           }).catch(() => {});
+          // 合成请求派发后立即让 UI 显示"停止"按钮（不必等首块音频返回）
+          if (typeof window.onVoicePlaybackActive === 'function') {
+            try { window.onVoicePlaybackActive(); } catch (_) {}
+          }
         },
       });
     }
@@ -160,12 +172,31 @@
 
   // ---------- TTS 播报 ----------
   function stopSpeaking() {
+    ttsPending = false;
+    clearTtsPendingTimer();
     try { if (window.api && window.api.voiceTtsStop) window.api.voiceTtsStop(); } catch (_) {}
     try { if (player) player.stop(); } catch (_) {}
     try { if (feeder) feeder.cancel(); } catch (_) {}
     streamFeedActive = false;
     fedAnyChunk = false;
     ttsReqCounter++;
+  }
+
+  // 合成任务兜底：派发后长时间既无音频也无完成/错误回调时，解除 pending 标记并通知 UI 隐藏停止按钮
+  function armTtsPendingTimer() {
+    clearTtsPendingTimer();
+    ttsPendingTimer = setTimeout(() => {
+      ttsPendingTimer = null;
+      if (ttsPending) {
+        ttsPending = false;
+        if (typeof window.onVoicePlaybackIdle === 'function') {
+          try { window.onVoicePlaybackIdle(); } catch (_) {}
+        }
+      }
+    }, 45000);
+  }
+  function clearTtsPendingTimer() {
+    if (ttsPendingTimer) { clearTimeout(ttsPendingTimer); ttsPendingTimer = null; }
   }
 
   // 仅接受当前一代（counter）的 TTS 音频/完成消息，丢弃被掐掉后的陈腐包
@@ -267,6 +298,7 @@
     if (window.api.onVoiceTtsAudio) {
       window.api.onVoiceTtsAudio((msg) => {
         if (!isTtsCurrent(msg)) return;
+        armTtsPendingTimer();
         ensurePlayer().push(msg.reqId, msg.samples, msg.sampleRate);
         // 语音开始/继续播放：主窗口据此刷新"停止"按钮可见性
         if (typeof window.onVoicePlaybackActive === 'function') {
@@ -282,6 +314,10 @@
     }
     if (window.api.onVoiceTtsError) {
       window.api.onVoiceTtsError((msg) => {
+        if (isTtsCurrent(msg)) {
+          ttsPending = false;
+          clearTtsPendingTimer();
+        }
         if (typeof window.showToast === 'function' && msg && msg.error) {
           window.showToast('语音合成失败：' + msg.error, 'warn', 4000);
         }
@@ -351,7 +387,10 @@
     toggleDictation,
     startDictation,
     stopDictation,
-    isSpeaking: () => player ? (player.playing || false) : false,
+    isSpeaking: () => {
+      const p = player ? (player.playing || false) : false;
+      return p || ttsPending;
+    },
     get dictating() { return dictating; },
   };
 })();

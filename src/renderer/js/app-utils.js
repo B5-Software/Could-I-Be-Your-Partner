@@ -41,6 +41,16 @@ function fmtTokenCount(n, pfx = '') {
   return `${pfx}${num}`;
 }
 
+// 工作累计用时格式化：不足 1 小时显示 mm:ss，否则 hh:mm:ss
+function formatWorkDuration(ms) {
+  const s = Math.floor((Number(ms) || 0) / 1000);
+  if (s < 0) return '00:00';
+  const h = Math.floor(s / 3600);
+  const m = String(Math.floor((s % 3600) / 60)).padStart(2, '0');
+  const ss = String(s % 60).padStart(2, '0');
+  return h > 0 ? `${String(h).padStart(2, '0')}:${m}:${ss}` : `${m}:${ss}`;
+}
+
 function escapeHtmlSimple(s) {
   return String(s || '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }

@@ -802,9 +802,16 @@
       display: flex;
       align-items: center;
       gap: 10px;
+      white-space: nowrap;
       color: ${color || 'var(--text-primary)'};
     `;
-    item.innerHTML = `<i class="fa-solid ${icon}"></i><span>${label}</span>`;
+    // 图标固定宽度并居中，保证不同图标下文字始终左对齐
+    const iconEl = document.createElement('i');
+    iconEl.className = `fa-solid ${icon}`;
+    iconEl.style.cssText = 'width: 20px; flex-shrink: 0; text-align: center; font-size: 13px;';
+    const labelEl = document.createElement('span');
+    labelEl.textContent = label;
+    item.append(iconEl, labelEl);
     item.addEventListener('mouseenter', () => {
       item.style.backgroundColor = 'var(--bg-hover)';
     });
@@ -934,8 +941,15 @@
       pending.forEach(el => el.classList.add('pending-delete'));
 
       // Confirm deletion
+      const delParts = [];
+      if (userMsg) delParts.push('用户消息');
+      if (middleElements.length > 0) delParts.push('工具调用');
+      if (assistantMsg) delParts.push('AI回复');
+      let delDetail = '';
+      if (delParts.length === 1) delDetail = '包括' + delParts[0];
+      else if (delParts.length > 1) delDetail = '包括' + delParts.slice(0, -1).join('、') + '和' + delParts[delParts.length - 1];
       const confirmed = await window.confirmDialog(
-        `确定要删除这轮对话吗？\n${userMsg ? '包括用户消息' : ''}${middleElements.length > 0 ? '、工具调用' : ''}${userMsg && assistantMsg ? '和' : ''}${assistantMsg ? 'AI回复' : ''}`,
+        `确定要删除这轮对话吗？\n${delDetail}`,
         '删除对话'
       );
 

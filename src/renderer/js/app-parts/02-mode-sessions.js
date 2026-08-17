@@ -779,7 +779,12 @@
       const attMeta = (typeof sessionAttentionMeta === 'function') ? sessionAttentionMeta(cur.attention) : null;
       stpStatus.textContent = attMeta ? attMeta.label : (typeof sessionStatusLabel === 'function' ? sessionStatusLabel(cur.status) : String(cur.status || '空闲'));
       const running = cur.status === 'running' || cur.status === 'queued' || cur.status === 'waiting_approval' || cur.status === 'waiting_tool_auth' || (cur.agent && cur.agent.running);
-      stpElapsed.textContent = cur.startedAt ? fmtDuration(Date.now() - cur.startedAt) : (running ? '进行中' : '未开始');
+      // 任务用时 = Agent 工作累计用时（跨轮次累计，持久化）；工作中实时跳动，空闲定格
+      const ag = cur.agent;
+      const agWorkMs = (ag && ag.workingMs) || 0;
+      const agLiveMs = (ag && ag._workStartAt != null) ? Date.now() - ag._workStartAt : 0;
+      const hasWork = agWorkMs > 0 || agLiveMs > 0;
+      stpElapsed.textContent = hasWork ? fmtDuration(agWorkMs + agLiveMs) : (running ? '进行中' : '未开始');
       const ws = workspaceInfo(cur);
       stpWorkspace.textContent = ws.name;
       stpWorkspace.title = ws.full || '';

@@ -300,6 +300,7 @@
   function renderHistoryItem(h) {
     const timeStr = formatHistoryTime(h);
     const countText = h.messageCount ? ` · ${h.messageCount} 条消息` : '';
+    const workText = h.workingMs > 0 ? ` · 用时 ${formatWorkDuration(h.workingMs)}` : '';
     const live = (typeof getSessionLiveState === 'function') ? getSessionLiveState('chat', h) : null;
     const status = live ? live.status : h.status;
     const attention = live ? live.attention : null;
@@ -308,7 +309,7 @@
       <div class="history-item" data-id="${escapeHtml(h.id)}">
         <div class="history-info">
           <div class="history-title">${escapeHtml(h.title || '未命名对话')} ${sessionStatusBadge(status, lastError, attention)}</div>
-          <div class="history-time">${timeStr}${countText}</div>
+          <div class="history-time">${timeStr}${countText}${workText}</div>
         </div>
         <div class="history-actions">
           <button class="btn-icon" data-action="continue" title="继续对话"><i class="fa-solid fa-play"></i></button>
@@ -323,6 +324,7 @@
   function renderHistoryContentItem(h) {
     const timeStr = formatHistoryTime(h);
     const countText = h.messageCount ? ` · ${h.messageCount} 条消息` : '';
+    const workText = h.workingMs > 0 ? ` · 用时 ${formatWorkDuration(h.workingMs)}` : '';
     const live = (typeof getSessionLiveState === 'function') ? getSessionLiveState('chat', h) : null;
     const snippets = Array.isArray(h.snippets) ? h.snippets.slice(0, 10) : [];
     const snippetsHtml = snippets.map(s => `<div class="history-snippet">${(typeof buildSearchSnippetHtml === 'function') ? buildSearchSnippetHtml(s) : escapeHtml(s.hit || '')}</div>`).join('');
@@ -333,7 +335,7 @@
       <div class="history-item history-item-content" data-id="${escapeHtml(h.id)}">
         <div class="history-info">
           <div class="history-title">${escapeHtml(h.title || '未命名对话')} ${sessionStatusBadge(live ? live.status : h.status, live ? live.lastError : h.lastError, live ? live.attention : null)}</div>
-          <div class="history-time">${timeStr}${countText}</div>
+          <div class="history-time">${timeStr}${countText}${workText}</div>
           <div class="history-snippets">${snippetsHtml}${moreHtml}</div>
         </div>
         <div class="history-actions">

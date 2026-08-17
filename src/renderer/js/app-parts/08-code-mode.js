@@ -1327,7 +1327,7 @@
           <div class="history-item" data-id="${item.id}">
             <div class="history-info">
               <div class="history-title">${escapeHtml(item.title || '未命名')} ${sessionStatusBadge(live ? live.status : item.status, live ? live.lastError : item.lastError, live ? live.attention : null)}</div>
-              <div class="history-time">${timeStr} · ${item.messageCount || 0} 条消息</div>
+              <div class="history-time">${timeStr} · ${item.messageCount || 0} 条消息${item.workingMs > 0 ? ` · 用时 ${formatWorkDuration(item.workingMs)}` : ''}</div>
             </div>
             <div class="history-actions">
               <button class="btn-icon history-continue" data-id="${item.id}" title="继续对话"><i class="fa-solid fa-play"></i></button>
@@ -1439,7 +1439,7 @@
       <div class="history-item" data-id="${item.id}">
         <div class="history-info">
           <div class="history-title">${escapeHtml(item.title || '未命名')} ${sessionStatusBadge(live ? live.status : item.status, live ? live.lastError : item.lastError, live ? live.attention : null)}</div>
-          <div class="history-time">${timeStr} · ${item.messageCount || 0} 条消息</div>
+          <div class="history-time">${timeStr} · ${item.messageCount || 0} 条消息${item.workingMs > 0 ? ` · 用时 ${formatWorkDuration(item.workingMs)}` : ''}</div>
         </div>
         <div class="history-actions">
           <button class="btn-icon" data-action="continue" title="继续对话"><i class="fa-solid fa-play"></i></button>
@@ -1463,7 +1463,7 @@
       <div class="history-item history-item-content" data-id="${item.id}">
         <div class="history-info">
           <div class="history-title">${escapeHtml(item.title || '未命名')} ${sessionStatusBadge(live ? live.status : item.status, live ? live.lastError : item.lastError, live ? live.attention : null)}</div>
-          <div class="history-time">${timeStr} · ${item.messageCount || 0} 条消息</div>
+          <div class="history-time">${timeStr} · ${item.messageCount || 0} 条消息${item.workingMs > 0 ? ` · 用时 ${formatWorkDuration(item.workingMs)}` : ''}</div>
           <div class="history-snippets">${snippetsHtml}${moreHtml}</div>
         </div>
         <div class="history-actions">

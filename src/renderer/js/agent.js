@@ -72,6 +72,10 @@ class Agent {
     this.onTodoUpdate = null;
     this.subAgents = [];
     this.runId = 0;
+    // 会话累计工作时长：Agent 每次 working→idle 区间的累计（与状态指示器口径一致，
+    // 含审批/授权等待）。持久化到历史，重启后恢复。
+    this.workingMs = 0;
+    this._workStartAt = null; // 当前工作区间起点（仅运行态，不持久化）
     // 当前会话累计 token 统计（每次新建会话时重置）
     // 字段：prompt / completion / total / cached / cacheCreation
     // - cached: OpenAI prompt_tokens_details.cached_tokens 或 Anthropic cache_read_input_tokens
@@ -102,6 +106,24 @@ class Agent {
     this.babeAffection = 0; // Babe 模式好感度（0-100）
     this.mode = 'chat'; // 'chat' | 'code' | 'babe'
     this.sessionAutoOptimizeDisabled = false; // LLM 可在本次 session 内禁用自动优化
+  }
+
+  /**
+   * 统一派发工作状态并累计工作时长：
+   * - working：记录当前工作区间起点
+   * - 其他（idle 等）：把上一工作区间并入 workingMs
+   * 口径与状态指示器"工作中…"一致：含审批/授权等待。
+   */
+  _emitWorkingStatus(status) {
+    if (status === 'working') {
+      if (this._workStartAt == null) this._workStartAt = Date.now();
+    } else {
+      if (this._workStartAt != null) {
+        this.workingMs += Date.now() - this._workStartAt;
+        this._workStartAt = null;
+      }
+    }
+    if (this.onStatusChange) this.onStatusChange(status);
   }
 
   getLocalDateTimeString() {
@@ -1329,7 +1351,7 @@ ${affectionDesc}
     const runId = ++this.runId;
     this.running = true;
     this.stopped = false;
-    if (this.onStatusChange) this.onStatusChange('working');
+    this._emitWorkingStatus('working');
 
     // 抽塔罗牌
     if (!this.tarotCard) {
@@ -1350,7 +1372,7 @@ ${affectionDesc}
       if (this.onMessage) this.onMessage('error', e?.message || String(e));
     } finally {
       this.running = false;
-      if (this.onStatusChange) this.onStatusChange('idle');
+      this._emitWorkingStatus('idle');
       // 保存历史
       await this.saveToHistory();
     }
@@ -1366,7 +1388,7 @@ ${affectionDesc}
     const runId = ++this.runId;
     this.running = true;
     this.stopped = false;
-    if (this.onStatusChange) this.onStatusChange('working');
+    this._emitWorkingStatus('working');
 
     // Draw tarot card on first message
     if (!this.tarotCard) {
@@ -1494,7 +1516,9 @@ ${affectionDesc}
         // 按模型分桶统计 + 会话级模型/变体覆盖 + 极简模式标记
         usageByModel: { ...(this.sessionUsageByModel || {}) },
         llmOverride: { ...(this.llmOverride || {}) },
-        minimal: this.minimalMode === true
+        minimal: this.minimalMode === true,
+        // 会话累计工作时长（Agent 实际工作区间的累计），历史列表/悬停弹窗展示
+        workingMs: this.workingMs || 0
       };
       // 子代理聊天记录持久化：序列化完整消息快照（去掉 subAgent 实例引用），
       // 重新打开该会话后可继续查看子代理详情模态框中的完整对话。
@@ -1542,6 +1566,9 @@ ${affectionDesc}
       this.sessionUsage.cacheCreation = Number(savedUsage.cacheCreation) || 0;
       this.sessionUsage.estimated = savedUsage.estimated === true;
     }
+    // 恢复持久化的会话累计工作时长（旧版会话无该字段时从 0 开始）
+    this.workingMs = Math.max(0, Number(conversation && conversation.workingMs) || 0);
+    this._workStartAt = null;
     // 恢复按模型分桶统计
     const savedByModel = conversation && typeof conversation.usageByModel === 'object' ? conversation.usageByModel : null;
     if (savedByModel) {
@@ -1707,7 +1734,7 @@ ${affectionDesc}
         sub.subAgent.runId++;
       }
     }
-    if (this.onStatusChange) this.onStatusChange('idle');
+    this._emitWorkingStatus('idle');
   }
 
   /**
@@ -2277,7 +2304,7 @@ ${affectionDesc}
     }
 
     this.running = false;
-    if (this.onStatusChange) this.onStatusChange('idle');
+    this._emitWorkingStatus('idle');
   }
 
   isDangerousCommand(cmd) {
@@ -4225,7 +4252,7 @@ ${tarotLine}
     this.resetSessionUsage(); // 重置会话级 token 统计
     if (this.onTitleChange) this.onTitleChange('未命名对话');
     if (this.onTodoUpdate) this.onTodoUpdate(this.todoItems);
-    if (this.onStatusChange) this.onStatusChange('idle');
+    this._emitWorkingStatus('idle');
     // Re-init for new conversation
     this.init();
   }

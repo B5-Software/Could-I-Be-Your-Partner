@@ -3717,7 +3717,8 @@ ipcMain.handle('history:list', () => {
         status: data.status || 'idle',
         lastError: data.lastError || null,
         usage: data.usage || null,
-        finishedAt: data.finishedAt || null
+        finishedAt: data.finishedAt || null,
+        workingMs: Number(data.workingMs) || 0
       };
       // 列表只需元数据：释放大数组引用，避免历史文件全量驻留内存
       delete data.messages;
@@ -4049,7 +4050,8 @@ ipcMain.handle('babeHistory:list', () => {
         mode: data.mode || 'babe',
         status: data.status || 'idle',
         lastError: data.lastError || null,
-        usage: data.usage || null
+        usage: data.usage || null,
+        workingMs: Number(data.workingMs) || 0
       };
       // 列表只需元数据：释放大数组引用
       delete data.messages;
@@ -4248,7 +4250,8 @@ ipcMain.handle('code:listHistory', (_, workspacePath) => {
             mode: data.mode || 'code',
             status: data.status || 'idle',
             lastError: data.lastError || null,
-            usage: data.usage || null
+            usage: data.usage || null,
+            workingMs: Number(data.workingMs) || 0
           };
           // 列表只需元数据：释放大数组引用
           delete data.messages;
