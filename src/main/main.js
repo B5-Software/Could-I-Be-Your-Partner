@@ -664,11 +664,13 @@ let settings = loadJSON(settingsPath, {
   // GitHub Releases 自动更新检查
   // - autoCheckEnabled : 启动延迟 + 定时自动检查（发现新版本弹系统通知）
   // - intervalHours    : 自动检查间隔（小时）
+  // - channel          : 更新通道 'stable'（仅正式版）| 'all'（含预发布版），默认仅稳定版
   // - lastCheckedAt    : 上次成功检查时间（ISO）
   // - lastResult       : 上次检查结果快照（渲染器设置页展示）
   updates: {
     autoCheckEnabled: true,
     intervalHours: 6,
+    channel: 'stable',
     lastCheckedAt: '',
     lastResult: null
   },
@@ -3951,7 +3953,8 @@ ipcMain.handle('notifications:send', (event, opts) => {
 // 失败时仅 error 字段（自动检查静默，手动检查由渲染器展示内联错误，不弹 toast）
 async function performUpdateCheck() {
   const current = app.getVersion();
-  const res = await updateChecker.fetchLatestRelease();
+  const channel = ((settings.updates || {}).channel === 'all') ? 'all' : 'stable';
+  const res = await updateChecker.fetchLatestRelease(channel);
   if (!res.ok || !res.latest) {
     settings.updates.lastCheckedAt = new Date().toISOString();
     persistSettings();
@@ -3974,6 +3977,7 @@ ipcMain.handle('updates:save', (_, cfg = {}) => {
   const u = settings.updates || {};
   if (typeof cfg.autoCheckEnabled === 'boolean') u.autoCheckEnabled = cfg.autoCheckEnabled;
   if ([6, 12, 24].includes(Number(cfg.intervalHours))) u.intervalHours = Number(cfg.intervalHours);
+  if (cfg.channel === 'stable' || cfg.channel === 'all') u.channel = cfg.channel;
   settings.updates = u;
   persistSettings();
   scheduleAutoUpdateCheck();

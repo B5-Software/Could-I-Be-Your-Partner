@@ -1553,6 +1553,29 @@ test('pickLatestRelease: 过滤 draft，取 semver 最大（含 pre-release）',
   assert.strictEqual(latest.body, 'b3');
 });
 
+test('pickLatestRelease: 更新通道 stable 跳过 pre-release，all 包含', () => {
+  const releases = [
+    { tag_name: 'v1.7.0', draft: false, prerelease: false, html_url: 's1', body: 's1', published_at: '2026-03-01T00:00:00Z' },
+    { tag_name: 'v1.8.0-alpha.20', draft: false, prerelease: true, html_url: 'a1', body: 'a1', published_at: '2026-04-01T00:00:00Z' }
+  ];
+  const stable = updateChecker.pickLatestRelease(releases, 'stable');
+  assert.ok(stable, 'stable 通道应返回最新正式版');
+  assert.strictEqual(stable.tagName, 'v1.7.0');
+  assert.strictEqual(stable.prerelease, false);
+  const all = updateChecker.pickLatestRelease(releases, 'all');
+  assert.ok(all, 'all 通道应返回含 pre-release 的最新版');
+  assert.strictEqual(all.tagName, 'v1.8.0-alpha.20');
+  assert.strictEqual(all.prerelease, true);
+});
+
+test('pickLatestRelease: stable 通道下全为 pre-release 时返回 null', () => {
+  const releases = [
+    { tag_name: 'v1.8.0-alpha.20', draft: false, prerelease: true, html_url: 'a1', body: 'a1', published_at: '2026-04-01T00:00:00Z' }
+  ];
+  assert.strictEqual(updateChecker.pickLatestRelease(releases, 'stable'), null);
+  assert.ok(updateChecker.pickLatestRelease(releases, 'all'), 'all 通道仍应返回');
+});
+
 test('pickLatestRelease: 空/无效输入返回 null', () => {
   assert.strictEqual(updateChecker.pickLatestRelease([]), null);
   assert.strictEqual(updateChecker.pickLatestRelease(null), null);
@@ -3900,7 +3923,8 @@ test('界面动效：主标签页切换动画可选 + 打包版本注入 git 哈
   assert.ok(packageJs.includes('extraMetadata.version'), 'package.js 应经 extraMetadata 注入版本号');
   assert.ok(packageJs.includes('${pkg.version}+${gitHash}'), '版本号应为 semver build metadata（version+hash）');
   assert.ok(pkg.scripts.build.includes('node scripts/package.js'), 'build 应走 package.js');
-  assert.ok(pkg.scripts['build:win'].includes('node scripts/package.js'), 'build:win 应走 package.js');
+  assert.ok(pkg.scripts['build:win:x64'].includes('node scripts/package.js'), 'build:win:x64 应走 package.js');
+  assert.ok(pkg.scripts['build:win:arm64'].includes('node scripts/package.js'), 'build:win:arm64 应走 package.js');
   assert.ok(pkg.scripts.dist.includes('node scripts/package.js'), 'dist 应走 package.js');
   const noTarot = fsL.readFileSync(pathL.join(__dirname, '../scripts/build-no-tarot.js'), 'utf-8');
   assert.ok(noTarot.includes('package.js'), 'build-no-tarot 应经 package.js 打包');

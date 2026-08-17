@@ -1070,6 +1070,8 @@
     if (updAutoEl) updAutoEl.checked = upd.autoCheckEnabled !== false;
     const updIntervalEl = document.getElementById('setting-updates-interval');
     if (updIntervalEl) updIntervalEl.value = String([6, 12, 24].includes(Number(upd.intervalHours)) ? Number(upd.intervalHours) : 6);
+    const updChannelEl = document.getElementById('setting-updates-channel');
+    if (updChannelEl) updChannelEl.value = (upd.channel === 'all') ? 'all' : 'stable';
     renderUpdateCheckResult(upd);
     // Language setting
     const langSelect = document.getElementById('setting-language');
@@ -3832,6 +3834,16 @@
     if (!s.updates) s.updates = {};
     s.updates.intervalHours = Number(updIntervalEl.value);
     const r = await window.api.updatesSave({ intervalHours: Number(updIntervalEl.value) });
+    if (r?.ok) s.updates = r.updates;
+    await saveSettings(s);
+  });
+  const updChannelEl = document.getElementById('setting-updates-channel');
+  updChannelEl?.addEventListener('change', async () => {
+    const channel = updChannelEl.value === 'all' ? 'all' : 'stable';
+    const s = await window.api.getSettings();
+    if (!s.updates) s.updates = {};
+    s.updates.channel = channel;
+    const r = await window.api.updatesSave({ channel });
     if (r?.ok) s.updates = r.updates;
     await saveSettings(s);
   });

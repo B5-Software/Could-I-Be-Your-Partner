@@ -6,6 +6,7 @@
  *
  * GitHub Releases 更新检查：
  * - compareVersions / pickLatestRelease 为纯函数，可独立单测
+ * - 更新通道：'stable' 仅正式发布版（跳过 pre-release）；'all' 包含预发布版（由 main.js 按 settings.updates.channel 决定）
  * - fetchLatestRelease 用 Electron net（跟随系统代理），失败返回 { ok:false }（调用方静默处理）
  * - 自动检查调度由 main.js 驱动（updates:check IPC 与定时器）
  */
@@ -73,15 +74,17 @@ function compareVersions(a, b) {
 
 /**
  * 从 GitHub releases 列表挑选最新版本（纯函数）。
- * 过滤 draft；pre-release 也参与比较（应用自身就是 alpha 版本号）。
+ * 过滤 draft。
  * @param {Array} releases - GitHub API 返回的 releases 数组
+ * @param {string} [channel='all'] - 'stable' 仅正式发布版（跳过 pre-release）；'all' 包含预发布版
  * @returns {null|{tagName, version, htmlUrl, body, publishedAt, prerelease}}
  */
-function pickLatestRelease(releases) {
+function pickLatestRelease(releases, channel = 'all') {
   if (!Array.isArray(releases) || releases.length === 0) return null;
   let best = null;
   for (const r of releases) {
     if (r && r.draft) continue;
+    if (channel === 'stable' && r.prerelease) continue;
     const tag = r.tag_name || '';
     const entry = {
       tagName: tag,
@@ -98,9 +101,10 @@ function pickLatestRelease(releases) {
 
 /**
  * 查询 GitHub Releases 最新版本。
+ * @param {string} [channel='all'] - 'stable' 仅正式发布版；'all' 包含预发布版
  * @returns {Promise<{ok:boolean, latest?:object, error?:string}>}
  */
-async function fetchLatestRelease() {
+async function fetchLatestRelease(channel = 'all') {
   try {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), CHECK_TIMEOUT_MS);
@@ -117,7 +121,7 @@ async function fetchLatestRelease() {
       return { ok: false, error: `HTTP ${resp.status}` };
     }
     const data = await resp.json();
-    const latest = pickLatestRelease(data);
+    const latest = pickLatestRelease(data, channel);
     if (!latest) return { ok: false, error: 'no releases found' };
     if (latest.body && latest.body.length > RELEASE_BODY_PREVIEW_CHARS) {
       latest.body = latest.body.slice(0, RELEASE_BODY_PREVIEW_CHARS) + '\n…（完整内容见 Release 页面）';
