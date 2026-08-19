@@ -788,6 +788,7 @@
             <button class="settings-tab" data-tab="security"><i class="fa-solid fa-shield-halved"></i> 安全</button>
             <button class="settings-tab" data-tab="mcp"><i class="fa-solid fa-plug"></i> MCP</button>
             <button class="settings-tab" data-tab="email"><i class="fa-solid fa-envelope"></i> 邮箱</button>
+            <button class="settings-tab" data-tab="fedikitten"><i class="fa-solid fa-cat"></i> FediKitten</button>
             <button class="settings-tab" data-tab="webcontrol"><i class="fa-solid fa-globe"></i> Web控制</button>
             <button class="settings-tab" data-tab="playwright"><i class="fa-solid fa-window-restore"></i> Playwright</button>
             <button class="settings-tab" data-tab="notifications"><i class="fa-solid fa-bell"></i> 通知</button>
@@ -1957,6 +1958,39 @@
                 <div id="mcp-connected-tools" style="font-size:13px;color:var(--text-secondary)">
                   暂无已连接的 MCP 服务器
                 </div>
+              </div>
+            </div>
+            <!-- FediKitten Settings -->
+            <div class="settings-panel" data-tab="fedikitten">
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-cat"></i> FediKitten 连接</h3>
+                <p class="setting-hint" style="margin-bottom:12px">
+                  连接任意 FediKitten（Mastodon 兼容）实例，让 AI 伙伴可以刷社媒、发帖、私信。登录后 token 会保存在本机，重启后保持登录状态。
+                </p>
+                <div id="fedikitten-status-card" class="fedikitten-status-card">
+                  <div class="fedikitten-status-icon"><i class="fa-solid fa-cat"></i></div>
+                  <div class="fedikitten-status-body">
+                    <div class="fedikitten-status-title" id="fedikitten-status-title">未连接</div>
+                    <div class="fedikitten-status-sub" id="fedikitten-status-sub">登录后即可让 AI 伙伴使用 FediKitten 能力</div>
+                  </div>
+                </div>
+                <div class="setting-item">
+                  <label>实例地址</label>
+                  <input type="text" id="setting-fedikitten-url" placeholder="https://fedikitten.pages.dev 或 http://localhost:8787">
+                </div>
+                <div class="setting-item">
+                  <label>用户名</label>
+                  <input type="text" id="setting-fedikitten-username" placeholder="你的用户名">
+                </div>
+                <div class="setting-item">
+                  <label>密码</label>
+                  <input type="password" id="setting-fedikitten-password" placeholder="登录密码（仅用于登录，不会保存）">
+                </div>
+                <div style="display:flex;gap:8px;margin-top:8px">
+                  <button class="btn-primary" id="btn-fedikitten-login"><i class="fa-solid fa-right-to-bracket"></i> 登录</button>
+                  <button class="btn-secondary" id="btn-fedikitten-logout" style="display:none"><i class="fa-solid fa-right-from-bracket"></i> 退出</button>
+                </div>
+                <div id="fedikitten-status" style="margin-top:12px;font-size:13px;color:var(--text-secondary)"></div>
               </div>
             </div>
             <!-- Email Settings -->

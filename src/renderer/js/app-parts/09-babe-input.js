@@ -518,17 +518,17 @@
   async function copyBabeAttachmentsToWorkspace(attachments) {
     const workspacePath = babeAgent?.workspacePath;
     if (!workspacePath || !attachments || attachments.length === 0) return;
-    const normalizePath = (p) => (p || '').replace(/\//g, '\\');
-    const normalizedWorkspace = normalizePath(workspacePath);
-    await window.api.makeDirectory(normalizedWorkspace);
+    // 仅用于路径比较的规范化（平台无关），写入文件系统时仍用原始路径
+    const norm = (p) => String(p || '').replace(/\\/g, '/');
+    const normalizedWorkspace = norm(workspacePath).replace(/\/+$/, '');
+    await window.api.makeDirectory(workspacePath);
     const pending = attachments.map(att => att.pendingSave).filter(Boolean);
     if (pending.length > 0) await Promise.all(pending);
     for (const att of attachments) {
       if (!att.path) continue;
-      const normalizedPath = normalizePath(att.path);
-      if (normalizedPath.startsWith(normalizedWorkspace + '\\')) continue;
+      if (norm(att.path).startsWith(normalizedWorkspace + '/')) continue;
       const safeName = (att.name || 'attachment').replace(/[\\/:*?"<>|]/g, '_');
-      const destPath = `${normalizedWorkspace}\\${safeName}`;
+      const destPath = `${workspacePath}/${safeName}`;
       const copyResult = await window.api.copyFile(att.path, destPath);
       if (copyResult.ok) { att.originalPath = att.path; att.path = destPath; }
     }

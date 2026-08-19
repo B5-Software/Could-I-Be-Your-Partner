@@ -27,6 +27,7 @@ const fs = require('fs');
 const os = require('os');
 const { spawnSync } = require('child_process');
 const { EmailService } = require('./email-service');
+const { FediKittenService } = require('./fedikitten-service');
 const { importSpreadsheetFile, exportSpreadsheetFile } = require('./spreadsheet-io');
 const { WebControlService } = require('./web-control-service');
 const { fetchLLMWithRetry, consumeSSEStream, abortAllRequests, abortRequests, DEFAULT_TIMEOUT_MS } = require('./llm-retry');
@@ -58,6 +59,7 @@ const { getAutomationGuide } = require('./automation/guide');
 const { registerGeogebraProtocol } = require('./geogebra-protocol');
 
 const emailService = new EmailService();
+const fedikittenService = new FediKittenService();
 const webControlService = new WebControlService();
 const APP_VERSION = app.getVersion();
 
@@ -650,6 +652,7 @@ let settings = loadJSON(settingsPath, {
   proxy: { mode: 'system', http: '', https: '', bypass: 'localhost,127.0.0.1' },
   mcp: { servers: [] },
   email: { enabled: false, mode: 'send-receive', smtpHost: '', smtpPort: 587, smtpSecure: true, imapHost: '', imapPort: 993, imapTls: true, emailUser: '', emailPass: '', ownerAddress: '', totpSecret: '', pollInterval: 30, approvalResendMinutes: 5, maxResends: 3, resendIntervalMinutes: 30, allowedSenders: [] },
+  fedikitten: { active: { url: '', username: '', accessToken: '' }, clients: {} },
   webControl: { enabled: false, port: 3456, password: '', passwordHash: '', enable2FA: false, totpSecret: '' },
   // 系统桌面通知分类开关（渲染器按分类判断是否弹窗；updateAvailable 供更新检查模块消费）
   notifications: {
@@ -742,7 +745,7 @@ let settings = loadJSON(settingsPath, {
 });
 if (fs.existsSync(settingsPath)) {
   const saved = loadJSON(settingsPath, {});
-  settings = { ...settings, ...saved, llm: { ...settings.llm, ...(saved.llm || {}) }, agent: { ...settings.agent, ...(saved.agent || {}) }, sessions: { ...settings.sessions, ...(saved.sessions || {}) }, permissions: { ...settings.permissions, ...(saved.permissions || {}) }, imageGen: { ...settings.imageGen, ...(saved.imageGen || {}) }, theme: { ...settings.theme, ...(saved.theme || {}) }, aiPersona: { ...settings.aiPersona, ...(saved.aiPersona || {}) }, userProfile: { ...settings.userProfile, ...(saved.userProfile || {}) }, entropy: { ...settings.entropy, ...(saved.entropy || {}) }, proxy: { ...settings.proxy, ...(saved.proxy || {}) }, mcp: { ...settings.mcp, ...(saved.mcp || {}) }, email: { ...settings.email, ...(saved.email || {}) }, webControl: { ...settings.webControl, ...(saved.webControl || {}) }, budget: { ...settings.budget, ...(saved.budget || {}) }, terminal: { ...settings.terminal, ...(saved.terminal || {}) }, privacyProtection: { ...settings.privacyProtection, ...(saved.privacyProtection || {}) }, ime: { ...settings.ime, ...(saved.ime || {}) }, voice: { ...settings.voice, ...(saved.voice || {}) }, notifications: { ...settings.notifications, ...(saved.notifications || {}) }, updates: { ...settings.updates, ...(saved.updates || {}) } };
+  settings = { ...settings, ...saved, llm: { ...settings.llm, ...(saved.llm || {}) }, agent: { ...settings.agent, ...(saved.agent || {}) }, sessions: { ...settings.sessions, ...(saved.sessions || {}) }, permissions: { ...settings.permissions, ...(saved.permissions || {}) }, imageGen: { ...settings.imageGen, ...(saved.imageGen || {}) }, theme: { ...settings.theme, ...(saved.theme || {}) }, aiPersona: { ...settings.aiPersona, ...(saved.aiPersona || {}) }, userProfile: { ...settings.userProfile, ...(saved.userProfile || {}) }, entropy: { ...settings.entropy, ...(saved.entropy || {}) }, proxy: { ...settings.proxy, ...(saved.proxy || {}) }, mcp: { ...settings.mcp, ...(saved.mcp || {}) }, email: { ...settings.email, ...(saved.email || {}) }, fedikitten: { ...settings.fedikitten, ...(saved.fedikitten || {}) }, webControl: { ...settings.webControl, ...(saved.webControl || {}) }, budget: { ...settings.budget, ...(saved.budget || {}) }, terminal: { ...settings.terminal, ...(saved.terminal || {}) }, privacyProtection: { ...settings.privacyProtection, ...(saved.privacyProtection || {}) }, ime: { ...settings.ime, ...(saved.ime || {}) }, voice: { ...settings.voice, ...(saved.voice || {}) }, notifications: { ...settings.notifications, ...(saved.notifications || {}) }, updates: { ...settings.updates, ...(saved.updates || {}) } };
   // voice 子对象深合并（ttsVoices / kws）
   if (saved.voice) {
     settings.voice.ttsVoices = { zh: 'zf_xiaoxiao', en: 'af_heart', de: 'thorsten', ...(saved.voice.ttsVoices || {}) };
@@ -1199,6 +1202,8 @@ ipcMain.handle('proxy:apply', async (_, proxy) => {
     if (aria2Manager.ready) {
       await aria2Manager.start(proxy);
     }
+    // 同步 FediKitten 服务代理（主进程 fetch 需要独立 dispatcher）
+    try { await fedikittenService.refreshProxy(proxy); } catch (e) { console.warn('[Proxy] 刷新 FediKitten 代理失败:', e.message); }
     return { ok: true };
   } catch (e) {
     return { ok: false, error: e.message };
@@ -1289,6 +1294,8 @@ app.whenReady().then(() => {
   // 让 settings.proxy 真正生效：配置 Electron session 的网络代理
   // 影响渲染进程的 fetch/XHR 请求；主进程的 fetch（Node undici）需另行配置
   applyProxySettings(settings.proxy);
+  // 同步 FediKitten 服务代理（主进程 fetch 使用 undici dispatcher）
+  try { fedikittenService.refreshProxy(settings.proxy); } catch (e) { /* 直连回退 */ }
 
   createWindow();
   // Splash 启动画面：主窗口预渲染完成前展示品牌画面（主窗口 show 时自动关闭）
@@ -6624,6 +6631,67 @@ app.whenReady().then(async () => {
       return await emailService.sendConversationSummary(messages, title);
     } catch (e) {
       console.error('[Email] Send conversation error:', e);
+      return { ok: false, error: e.message };
+    }
+  });
+
+  // ---- FediKitten Service IPC ----
+  ipcMain.handle('fedikitten:getState', async () => {
+    try {
+      await fedikittenService.refreshProxy(settings.proxy);
+      fedikittenService.configure(settings.fedikitten, settings.proxy);
+      return fedikittenService.getState();
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('fedikitten:login', async (_, url, username, password) => {
+    try {
+      await fedikittenService.refreshProxy(settings.proxy);
+      fedikittenService.configure(settings.fedikitten, settings.proxy);
+      const result = await fedikittenService.login({ url, username, password });
+      settings.fedikitten = {
+        ...(settings.fedikitten || {}),
+        clients: fedikittenService.clients,
+        active: fedikittenService.active,
+      };
+      persistSettings();
+      return result;
+    } catch (e) {
+      console.error('[FediKitten] Login error:', e);
+      return { ok: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('fedikitten:logout', async () => {
+    try {
+      await fedikittenService.refreshProxy(settings.proxy);
+      fedikittenService.configure(settings.fedikitten, settings.proxy);
+      const result = await fedikittenService.logout();
+      settings.fedikitten = {
+        ...(settings.fedikitten || {}),
+        clients: fedikittenService.clients,
+        active: { url: '', username: '', accessToken: '' },
+      };
+      persistSettings();
+      return result;
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('fedikitten:call', async (_, toolName, args) => {
+    try {
+      await fedikittenService.refreshProxy(settings.proxy);
+      fedikittenService.configure(settings.fedikitten, settings.proxy);
+      const result = await fedikittenService.call(toolName, args || {});
+      if (result && result.ok === false && typeof result.error === 'string' && result.error.includes('登录已失效')) {
+        settings.fedikitten = { ...(settings.fedikitten || {}), active: { url: '', username: '', accessToken: '' } };
+        persistSettings();
+      }
+      return result;
+    } catch (e) {
       return { ok: false, error: e.message };
     }
   });

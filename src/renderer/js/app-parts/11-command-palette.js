@@ -38,7 +38,7 @@
     ['usage', '用量统计'], ['budget', '预算控制'], ['image', '生图'], ['theme', '主题'],
     ['animations', '动效'], ['fonts', '字体'], ['language', '语言'], ['network', '网络'],
     ['entropy', '熵源'], ['firmware', 'TRNG固件'], ['security', '安全'], ['mcp', 'MCP'],
-    ['email', '邮箱'], ['webcontrol', 'Web控制'], ['playwright', 'Playwright'],
+    ['email', '邮箱'], ['fedikitten', 'FediKitten'], ['webcontrol', 'Web控制'], ['playwright', 'Playwright'],
     ['notifications', '通知'], ['terminal', '终端'], ['ime', '输入法'], ['voice', '语音'],
     ['context', '上下文'], ['sandbox', '沙箱'], ['automation', '自动化'], ['plugins', '插件'],
     ['environment', '环境检测'], ['updates', '更新']

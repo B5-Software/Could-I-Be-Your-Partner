@@ -616,6 +616,12 @@ contextBridge.exposeInMainWorld('api', {
   emailSendConversation: (messages, title) => ipcRenderer.invoke('email:sendConversation', messages, title),
   onEmailReceived: (cb) => ipcRenderer.on('email:received', (_, email) => cb(email)),
 
+  // FediKitten
+  fedikittenGetState: () => ipcRenderer.invoke('fedikitten:getState'),
+  fedikittenLogin: (url, username, password) => ipcRenderer.invoke('fedikitten:login', url, username, password),
+  fedikittenLogout: () => ipcRenderer.invoke('fedikitten:logout'),
+  fedikittenCall: (toolName, args) => ipcRenderer.invoke('fedikitten:call', toolName, args),
+
   // Web Control
   webControlStart: () => ipcRenderer.invoke('webControl:start'),
   webControlStop: () => ipcRenderer.invoke('webControl:stop'),

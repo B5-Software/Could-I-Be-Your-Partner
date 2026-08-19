@@ -3763,6 +3763,25 @@ ${affectionDesc}
           }
         }
         default: {
+          // FediKitten 社媒工具路由
+          if (name.startsWith('fedikitten')) {
+            const fkArgs = args || {};
+            // 媒体工具的文件参数统一按工作区相对路径解析
+            if (name === 'fedikittenUploadMedia' && fkArgs.filePath) {
+              fkArgs.filePath = this._resolveWorkspacePath(fkArgs.filePath);
+            }
+            if (name === 'fedikittenPostStatus' && Array.isArray(fkArgs.media_files)) {
+              fkArgs.media_files = fkArgs.media_files.map(mf => {
+                const clone = { ...(mf || {}) };
+                if (clone.path) clone.path = this._resolveWorkspacePath(clone.path);
+                return clone;
+              });
+            }
+            if (name === 'fedikittenDownloadMedia' && fkArgs.savePath) {
+              fkArgs.savePath = this._resolveWorkspacePath(fkArgs.savePath);
+            }
+            return await window.api.fedikittenCall(name, fkArgs);
+          }
           // MCP 动态工具路由: mcp__<serverName>__<toolName>
           if (name.startsWith('mcp__')) {
             const parts = name.split('__');

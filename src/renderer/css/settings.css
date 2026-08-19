@@ -18,7 +18,7 @@
   min-height: 0;
   flex: 1;
   overflow: hidden;
-  font-family: "Georgia", "Times New Roman", "Songti SC", "SimSun", serif;
+  font-family: var(--font-stack, "Georgia", "Times New Roman", "Songti SC", "SimSun", serif);
 }
 
 .settings-tabs {
@@ -694,6 +694,68 @@ input[id^="setting-budget-peak-"][type="text"]:focus {
 }
 
 .setting-warning i { margin-top: 2px; flex-shrink: 0; }
+
+/* FediKitten 登录状态指示卡 */
+.fedikitten-status-card {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 18px 20px;
+  border-radius: var(--radius-md, 12px);
+  border: 2px solid var(--border);
+  background: var(--bg-tertiary);
+  margin-bottom: 14px;
+  transition: all var(--transition);
+}
+.fedikitten-status-card.fedikitten-connected {
+  border-color: var(--success, #4caf50);
+  background: var(--success-light, rgba(76, 175, 80, 0.08));
+}
+.fedikitten-status-card.fedikitten-disconnected {
+  border-color: var(--border);
+}
+.fedikitten-status-icon {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+  color: var(--text-tertiary);
+  flex-shrink: 0;
+}
+.fedikitten-connected .fedikitten-status-icon {
+  color: var(--success, #4caf50);
+  border-color: var(--success, #4caf50);
+  background: var(--success-light, rgba(76, 175, 80, 0.12));
+}
+.fedikitten-status-body {
+  flex: 1;
+  min-width: 0;
+}
+.fedikitten-status-title {
+  font-size: 17px;
+  font-weight: 600;
+  color: var(--text-primary);
+  line-height: 1.3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fedikitten-connected .fedikitten-status-title {
+  color: var(--success, #4caf50);
+}
+.fedikitten-status-sub {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  margin-top: 3px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 /* Inline input (e.g. TOTP verify code) */
 .email-inline-input {
