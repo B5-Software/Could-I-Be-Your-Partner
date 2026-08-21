@@ -2308,6 +2308,32 @@
                 </div>
               </div>
               <div class="settings-group">
+                <h3><i class="fa-solid fa-database"></i> 浏览器数据</h3>
+                <div class="setting-item">
+                  <label>数据模式（决定登录态是否保留）</label>
+                  <select id="setting-pw-data-mode">
+                    <option value="isolated">隔离模式（每次全新，不保留任何数据）</option>
+                    <option value="persistent">持久化配置（登录一次，长期保留）</option>
+                    <option value="profile-copy">系统浏览器副本（导入已有登录态）</option>
+                  </select>
+                  <p id="pw-data-mode-hint" style="font-size:11px;color:var(--text-tertiary);margin-top:4px"></p>
+                </div>
+                <div class="setting-item" id="pw-profile-source-row" style="display:none">
+                  <label>复制来源（需先完全退出该浏览器）</label>
+                  <select id="setting-pw-profile-source">
+                    <option value="chrome">Google Chrome</option>
+                    <option value="edge">Microsoft Edge</option>
+                  </select>
+                  <div style="display:flex;gap:8px;margin-top:8px;align-items:center">
+                    <button class="btn-secondary" id="btn-pw-copy-profile"><i class="fa-solid fa-clone"></i> 复制配置到 Agent 专用目录</button>
+                  </div>
+                  <p id="pw-copy-status" style="font-size:11px;color:var(--text-tertiary);margin-top:6px"></p>
+                </div>
+                <div class="setting-item" id="pw-persistent-reset-row" style="display:none">
+                  <p style="font-size:11px;color:var(--text-tertiary)">数据目录：应用数据目录下的 <code>playwright-profile/</code>。删除该目录即可重置所有登录态。</p>
+                </div>
+              </div>
+              <div class="settings-group">
                 <h3><i class="fa-solid fa-language"></i> 浏览器语言</h3>
                 <div class="setting-item">
                   <label class="toggle-label">

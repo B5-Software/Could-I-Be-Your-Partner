@@ -15,13 +15,15 @@ const fs = require('fs');
 const path = require('path');
 const { BrowserWindow, dialog, screen } = require('electron');
 
-module.exports = function registerPlaywrightIpc({ ipcMain, getSettings, getMainWindow, getImagesDir }) {
-let _pwBrowser = null; // shared browser instance (chromium.launch)
+module.exports = function registerPlaywrightIpc({ ipcMain, getSettings, getMainWindow, getImagesDir, getUserDataPath }) {
+let _pwBrowser = null; // shared browser instance (chromium.launch 或 launchPersistentContext)
+let _pwDataMode = 'isolated'; // 当前浏览器实例的数据模式（isolated/persistent/profile-copy）
 const _pwWorkspaces = new Map(); // workspacePath -> { context, page }
 
 // Get Playwright settings (with defaults)
 function _getPwSettings() {
   const s = getSettings() || {};
+  const dm = s.playwright?.dataMode;
   return {
     mode: s.playwright?.mode || 'auto',
     path: s.playwright?.path || '',
@@ -30,8 +32,94 @@ function _getPwSettings() {
     // 默认有头模式（headless=false）。settings.playwright.headless 显式为 true 时才无头
     headless: s.playwright?.headless === true,
     // 横幅开关：默认开启。仅在 headed 模式下显示，headless 模式始终不显示
-    bannerEnabled: s.playwright?.bannerEnabled !== false
+    bannerEnabled: s.playwright?.bannerEnabled !== false,
+    // 浏览器数据模式：isolated(每次全新) / persistent(持久化配置) / profile-copy(系统浏览器副本)
+    dataMode: (dm === 'persistent' || dm === 'profile-copy') ? dm : 'isolated',
+    // profile-copy 的来源浏览器（chrome/edge），用于定位系统 User Data 目录
+    profileSource: s.playwright?.profileSource === 'edge' ? 'edge' : (s.playwright?.profileSource === 'chrome' ? 'chrome' : '')
   };
+}
+
+// ---- 浏览器数据目录（持久化 / 系统浏览器副本）----
+
+function _getPersistentProfileDir() {
+  const base = typeof getUserDataPath === 'function' ? getUserDataPath() : path.join(process.cwd(), 'userdata');
+  return path.join(base, 'playwright-profile');
+}
+
+function _getCloneProfileDir() {
+  const base = typeof getUserDataPath === 'function' ? getUserDataPath() : path.join(process.cwd(), 'userdata');
+  return path.join(base, 'playwright-profile-clone');
+}
+
+// 各平台 Chrome/Edge 默认 User Data 目录（profile-copy 来源）
+function _defaultUserDataDir(browserKey) {
+  const home = require('os').homedir();
+  if (process.platform === 'win32') {
+    const local = process.env['LOCALAPPDATA'] || path.join(home, 'AppData', 'Local');
+    return browserKey === 'edge'
+      ? path.join(local, 'Microsoft', 'Edge', 'User Data')
+      : path.join(local, 'Google', 'Chrome', 'User Data');
+  }
+  if (process.platform === 'darwin') {
+    const appSupport = path.join(home, 'Library', 'Application Support');
+    return browserKey === 'edge'
+      ? path.join(appSupport, 'Microsoft Edge')
+      : path.join(appSupport, 'Google', 'Chrome');
+  }
+  return browserKey === 'edge'
+    ? path.join(home, '.config', 'microsoft-edge')
+    : path.join(home, '.config', 'google-chrome');
+}
+
+// 异步统计目录大小与文件数（大目录可能耗时，调用方自行决定是否展示进度）
+async function dirStats(dir) {
+  let files = 0;
+  let bytes = 0;
+  async function walk(d) {
+    let entries = [];
+    try { entries = await fs.promises.readdir(d, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      const full = path.join(d, e.name);
+      if (e.isDirectory()) await walk(full);
+      else {
+        try { const st = await fs.promises.stat(full); files++; bytes += st.size; } catch { /* race */ }
+      }
+    }
+  }
+  await walk(dir);
+  return { files, bytes };
+}
+
+// 带进度的递归复制（先删目标再复制；onProgress(0..1)）
+async function copyDirWithProgress(src, dst, onProgress) {
+  const stat = await dirStats(src);
+  const totalBytes = Math.max(1, stat.bytes);
+  let copied = 0;
+  let lastCb = 0;
+  async function walk(s, d) {
+    await fs.promises.mkdir(d, { recursive: true });
+    let entries = [];
+    try { entries = await fs.promises.readdir(s, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      const from = path.join(s, e.name);
+      const to = path.join(d, e.name);
+      if (e.isDirectory()) await walk(from, to);
+      else {
+        try {
+          await fs.promises.copyFile(from, to);
+          try { const st = await fs.promises.stat(from); copied += st.size; } catch { /* race */ }
+          if (typeof onProgress === 'function') {
+            const now = Date.now();
+            if (now - lastCb > 120) { lastCb = now; onProgress(Math.min(1, copied / totalBytes)); }
+          }
+        } catch { /* 单文件失败不阻断（如被占用的锁文件） */ }
+      }
+    }
+  }
+  await walk(src, dst);
+  if (typeof onProgress === 'function') onProgress(1);
+  return { files: stat.files, bytes: totalBytes };
 }
 
 // Search for browser binaries on the system
@@ -93,15 +181,20 @@ function _getPwAcceptLanguage(lang) {
 
 async function _launchPwBrowser(overrideSettings = null) {
   // 检查现有实例是否仍然连接；若已断开（用户关闭/崩溃），置空后重新启动
+  // 注意：持久化模式下 _pwBrowser 是 BrowserContext（无 isConnected 方法），
+  // 其死亡由 disconnected 监听器清理，这里默认存活。
   if (_pwBrowser) {
+    let alive = true;
     try {
-      if (typeof _pwBrowser.isConnected === 'function' ? _pwBrowser.isConnected() : false) {
-        return _pwBrowser;
-      }
-      console.log('[Playwright] 现有实例已断开，清理后重新启动');
+      if (typeof _pwBrowser.isConnected === 'function') alive = _pwBrowser.isConnected();
     } catch {
       console.log('[Playwright] 检查连接状态异常，清理后重新启动');
+      alive = false;
     }
+    if (alive) {
+      return _pwBrowser;
+    }
+    console.log('[Playwright] 现有实例已断开，清理后重新启动');
     _pwBrowser = null;
     _pwWorkspaces.clear();
     _hidePwBanner();
@@ -132,6 +225,67 @@ async function _launchPwBrowser(overrideSettings = null) {
   }
 
   let lastError = null;
+
+  // ---- 浏览器数据模式：persistent / profile-copy → launchPersistentContext ----
+  // （登录态/cookies/localStorage 落盘到专用目录，跨会话保留；与系统浏览器完全隔离）
+  const dataMode = pwSettings.dataMode === 'persistent' || pwSettings.dataMode === 'profile-copy'
+    ? pwSettings.dataMode : 'isolated';
+  if (dataMode !== 'isolated') {
+    const userDataDir = dataMode === 'profile-copy' ? _getCloneProfileDir() : _getPersistentProfileDir();
+    try { fs.mkdirSync(userDataDir, { recursive: true }); } catch { /* ignore */ }
+    // 复用与隔离模式相同的浏览器来源链（custom → chromium → edge → chrome → auto → 内置回退），
+    // 唯一区别是 launch → launchPersistentContext
+    const tryPersistent = async (launchOpts) => {
+      const launchConfig = {
+        headless,
+        viewport: { width: 1280, height: 720 },
+        args: extraArgs,
+        ...launchOpts
+      };
+      if (dataMode === 'profile-copy') {
+        // 副本里的 Cookie 是源浏览器用"真实钥匙串密钥"加密的；
+        // Playwright 默认注入 --use-mock-keychain（macOS）会用 mock 密钥解密失败，
+        // Chromium 会把解不开的 Cookie 静默删除。改用真实钥匙串以保留登录态
+        // （首次启动 macOS 可能弹一次钥匙串授权，选"始终允许"）。
+        if (process.platform === 'darwin') {
+          launchConfig.ignoreDefaultArgs = ['--use-mock-keychain'];
+        }
+      }
+      const ctx = await chromium.launchPersistentContext(userDataDir, launchConfig);
+      _pwBrowser = ctx;
+      _pwDataMode = dataMode;
+      console.log(`[Playwright] launched persistent context (${dataMode}) dir=${userDataDir} headless=${headless}`);
+      _onPwBrowserLaunched(!headless);
+      _attachPwDisconnectListener(ctx);
+      return ctx;
+    };
+    if (pwSettings.mode === 'custom' && pwSettings.path) {
+      return await tryPersistent({ executablePath: pwSettings.path });
+    }
+    if (pwSettings.mode === 'chromium') {
+      return await tryPersistent({});
+    }
+    if (pwSettings.mode === 'edge') {
+      return await tryPersistent({ channel: 'msedge' });
+    }
+    if (pwSettings.mode === 'chrome') {
+      return await tryPersistent({ channel: 'chrome' });
+    }
+    for (const channel of ['msedge', 'chrome']) {
+      try {
+        return await tryPersistent({ channel });
+      } catch (e) {
+        console.warn('Channel', channel, 'persistent launch failed:', e.message);
+        lastError = e;
+      }
+    }
+    try {
+      return await tryPersistent({});
+    } catch (e) {
+      throw new Error('无法启动持久化 Playwright 浏览器: ' + (lastError?.message || e.message));
+    }
+  }
+  _pwDataMode = 'isolated';
 
   if (pwSettings.mode === 'custom' && pwSettings.path) {
     // Custom browser path
@@ -315,12 +469,27 @@ function _hidePwBanner() {
   }
 }
 
+async function _closePwBrowserInternal() {
+  for (const [, ws] of _pwWorkspaces) {
+    await ws.context.close().catch(() => {});
+  }
+  _pwWorkspaces.clear();
+  if (_pwBrowser) {
+    await _pwBrowser.close().catch(() => {});
+    _pwBrowser = null;
+  }
+  _pwDataMode = 'isolated';
+}
+
 async function ensureBrowser(workspacePath) {
   const key = workspacePath || '__default__';
   // 每次调用 Playwright 工具都重新显示横幅（Agent 第二轮操作浏览器时横幅已被隐藏）
   _showPwBanner();
-  if (_pwWorkspaces.has(key)) return _pwWorkspaces.get(key).page;
-  const browser = await _launchPwBrowser();
+  const existing = _pwWorkspaces.get(key);
+  if (existing) {
+    try { if (!existing.page.isClosed()) return existing.page; } catch { /* ignore */ }
+    _pwWorkspaces.delete(key);
+  }
   const pwSettings = _getPwSettings();
   const appLang = getSettings()?.language || 'zh-CN';
   const contextOptions = { viewport: { width: 1280, height: 720 } };
@@ -330,28 +499,50 @@ async function ensureBrowser(workspacePath) {
     contextOptions.locale = appLang;
     contextOptions.extraHTTPHeaders = { 'Accept-Language': acceptLang };
   }
-  const context = await browser.newContext(contextOptions);
+  let context;
+  const wantPersistent = pwSettings.dataMode === 'persistent' || pwSettings.dataMode === 'profile-copy';
+  if (wantPersistent) {
+    // 持久化模式：浏览器实例即上下文（launchPersistentContext），
+    // 多工作区共享同一 cookies 集（与真实用户行为一致），各自独立页面
+    if (!_pwBrowser || _pwDataMode === 'isolated') {
+      if (_pwBrowser) await _closePwBrowserInternal();
+      await _launchPwBrowser();
+    }
+    context = (_pwBrowser.contexts && _pwBrowser.contexts()[0]) || _pwBrowser;
+    if (!context) throw new Error('持久化浏览器上下文未就绪');
+    // 持久化模式下 locale/viewport 在启动参数中不可动态改，语言头按需补注
+    if (pwSettings.followLang) {
+      try { await context.setExtraHTTPHeaders({ 'Accept-Language': _getPwAcceptLanguage(appLang) }); } catch { /* ignore */ }
+    }
+  } else {
+    if (_pwDataMode !== 'isolated' && _pwBrowser) await _closePwBrowserInternal();
+    const browser = await _launchPwBrowser();
+    context = await browser.newContext(contextOptions);
+  }
   // 注入反自动化检测脚本（在页面脚本执行前覆盖 navigator.webdriver 等属性）
   // 注意：launch 参数 --disable-blink-features=AutomationControlled 已经隐藏了大部分检测，
-  // 这里再注入脚本作为双重保险，覆盖更多属性
-  await context.addInitScript(() => {
-    Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-    Object.defineProperty(navigator, 'languages', { get: () => ['zh-CN', 'zh', 'en'] });
-    Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
-    // 覆盖 chrome 对象（仅 Chrome 有，Edge 也有）
-    if (!window.chrome) {
-      window.chrome = { runtime: {}, app: { isInstalled: false } };
-    }
-    // 覆盖 permissions API（部分网站通过 Permissions.query 检测）
-    const origQuery = window.navigator.permissions && window.navigator.permissions.query;
-    if (origQuery) {
-      window.navigator.permissions.query = (params) => (
-        params && params.name === 'notifications'
-          ? Promise.resolve({ state: Notification.permission })
-          : origQuery(params)
-      );
-    }
-  });
+  // 这里再注入脚本作为双重保险，覆盖更多属性。持久化上下文只注入一次。
+  if (!context._cibypInitApplied) {
+    await context.addInitScript(() => {
+      Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+      Object.defineProperty(navigator, 'languages', { get: () => ['zh-CN', 'zh', 'en'] });
+      Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+      // 覆盖 chrome 对象（仅 Chrome 有，Edge 也有）
+      if (!window.chrome) {
+        window.chrome = { runtime: {}, app: { isInstalled: false } };
+      }
+      // 覆盖 permissions API（部分网站通过 Permissions.query 检测）
+      const origQuery = window.navigator.permissions && window.navigator.permissions.query;
+      if (origQuery) {
+        window.navigator.permissions.query = (params) => (
+          params && params.name === 'notifications'
+            ? Promise.resolve({ state: Notification.permission })
+            : origQuery(params)
+        );
+      }
+    });
+    context._cibypInitApplied = true;
+  }
   const page = await context.newPage();
   _pwWorkspaces.set(key, { context, page });
   return page;
@@ -597,6 +788,7 @@ ipcMain.handle('pw:testLaunch', async (_, testPwSettings) => {
   try {
     // 不修改全局 settings，直接用 overrideSettings 启动测试
     _pwBrowser = null;
+    _pwDataMode = 'isolated';
     // Close existing workspaces to force relaunch
     for (const [key, ws] of _pwWorkspaces) {
       await ws.context.close().catch(() => {});
@@ -608,11 +800,15 @@ ipcMain.handle('pw:testLaunch', async (_, testPwSettings) => {
     // 获取浏览器真实 product 信息（用于验证 channel 选择是否生效）
     let productInfo = '';
     try {
-      const ctx = await browser.newContext();
+      // 持久化模式下 browser 即 BrowserContext（无 newContext）
+      const ctx = (typeof browser.newContext === 'function')
+        ? await browser.newContext()
+        : (browser.contexts && browser.contexts()[0]) || browser;
       const page = await ctx.newPage();
       const version = await page.context().newCDPSession(page).then(s => s.send('Browser.getVersion')).catch(() => null);
       if (version) productInfo = version.product || '';
-      await ctx.close().catch(() => {});
+      if (ctx !== browser) await ctx.close().catch(() => {});
+      else await page.close().catch(() => {});
     } catch { /* ignore version probe */ }
     // Close the test browser
     await browser.close().catch(() => {});
@@ -621,18 +817,114 @@ ipcMain.handle('pw:testLaunch', async (_, testPwSettings) => {
   } catch (e) { return { ok: false, error: e.message }; }
 });
 
+// ---- 浏览器数据模式：系统浏览器配置副本（profile-copy）----
+
+// 枚举可复制的系统浏览器 User Data 来源（含存在性校验）
+ipcMain.handle('pw:getProfileSources', async () => {
+  try {
+    const candidates = [
+      { id: 'chrome', name: 'Google Chrome' },
+      { id: 'edge', name: 'Microsoft Edge' }
+    ];
+    const sources = [];
+    for (const c of candidates) {
+      const dir = _defaultUserDataDir(c.id);
+      const exists = fs.existsSync(dir);
+      let size = null;
+      if (exists) {
+        try { size = await dirStats(dir); } catch { /* ignore */ }
+      }
+      sources.push({ id: c.id, name: c.name, userDataDir: dir, exists, files: size ? size.files : 0, bytes: size ? size.bytes : 0 });
+    }
+    return { ok: true, sources };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+let _pwCopyProgressWin = null;
+function _showCopyProgress() {
+  if (_pwCopyProgressWin && !_pwCopyProgressWin.isDestroyed()) return _pwCopyProgressWin;
+  try {
+    _pwCopyProgressWin = new BrowserWindow({
+      width: 380, height: 110, frame: false, resizable: false,
+      minimizable: false, maximizable: false, fullscreenable: false,
+      show: false, transparent: true, hasShadow: false,
+      webPreferences: { nodeIntegration: false, contextIsolation: true }
+    });
+    const html = `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      html, body { height: 100%; background: transparent; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif; }
+      .card { background: rgba(28,28,34,.96); color:#fff; border-radius: 12px; padding: 14px 16px;
+              box-shadow: 0 10px 30px rgba(0,0,0,.35); }
+      .t { font-size: 12.5px; font-weight: 600; margin-bottom: 8px; }
+      .bar { height: 6px; background: rgba(255,255,255,.15); border-radius: 99px; overflow: hidden; }
+      .fill { height: 100%; width: 0%; background: linear-gradient(90deg,#4f8cff,#38c6d9); border-radius: 99px; transition: width .15s ease; }
+      .pct { font-size: 11px; opacity: .75; margin-top: 6px; text-align: right; font-variant-numeric: tabular-nums; }
+    </style></head><body><div class="card">
+      <div class="t">正在复制浏览器配置…</div>
+      <div class="bar"><div class="fill" id="f"></div></div>
+      <div class="pct" id="p">0%</div>
+    </div></body></html>`;
+    _pwCopyProgressWin.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
+    _pwCopyProgressWin.showInactive();
+  } catch (e) {
+    console.warn('[Playwright] copy progress window failed:', e.message);
+    _pwCopyProgressWin = null;
+  }
+  return _pwCopyProgressWin;
+}
+function _updateCopyProgress(pct) {
+  const win = _pwCopyProgressWin;
+  if (!win || win.isDestroyed()) return;
+  const v = Math.max(0, Math.min(100, Math.round(pct * 100)));
+  try {
+    win.webContents.executeJavaScript(`(function(){var f=document.getElementById('f');var p=document.getElementById('p');if(f)f.style.width='${v}%';if(p)p.textContent='${v}%';})();`);
+  } catch { /* ignore */ }
+}
+function _hideCopyProgress() {
+  if (_pwCopyProgressWin && !_pwCopyProgressWin.isDestroyed()) {
+    try { _pwCopyProgressWin.destroy(); } catch {}
+  }
+  _pwCopyProgressWin = null;
+}
+
+// 复制系统浏览器 User Data → 独立副本目录（首次确认 + 进度窗）
+ipcMain.handle('pw:copyProfile', async (_, sourceId) => {
+  const src = _defaultUserDataDir(sourceId === 'edge' ? 'edge' : 'chrome');
+  if (!fs.existsSync(src)) return { ok: false, error: `未找到 ${sourceId === 'edge' ? 'Edge' : 'Chrome'} 的用户数据目录` };
+  const dst = _getCloneProfileDir();
+  // 预估大小
+  let stat = { files: 0, bytes: 0 };
+  try { stat = await dirStats(src); } catch { /* ignore */ }
+  const mb = (stat.bytes / 1048576).toFixed(1);
+  // 确认对话框：必须先关闭源浏览器；提示体积
+  try {
+    const { response } = await dialog.showMessageBox({
+      type: 'question',
+      buttons: ['开始复制', '取消'],
+      defaultId: 0,
+      cancelId: 1,
+      title: '复制浏览器配置',
+      message: `将复制 ${sourceId === 'edge' ? 'Microsoft Edge' : 'Google Chrome'} 的用户数据到 Agent 专用目录`,
+      detail: `来源：${src}\n大小约 ${mb} MB（${stat.files} 个文件）\n\n注意：\n· 请先完全退出该浏览器，否则部分文件可能复制失败\n· 副本与原配置相互独立，之后在 Agent 浏览器中的操作不影响原浏览器\n· 部分站点可能因 Cookie 加密机制需要重新登录一次\n\n目标目录：${dst}`
+    });
+    if (response !== 0) return { ok: false, canceled: true };
+  } catch (e) { return { ok: false, error: e.message }; }
+  // 清空旧副本
+  try { fs.rmSync(dst, { recursive: true, force: true }); } catch { /* ignore */ }
+  _showCopyProgress();
+  try {
+    await copyDirWithProgress(src, dst, (p) => _updateCopyProgress(p));
+    _hideCopyProgress();
+    return { ok: true, dest: dst, files: stat.files, bytes: stat.bytes };
+  } catch (e) {
+    _hideCopyProgress();
+    return { ok: false, error: e.message };
+  }
+});
+
 ipcMain.handle('pw:closeBrowser', async () => {
   try {
-    // Close all contexts
-    for (const [key, ws] of _pwWorkspaces) {
-      await ws.context.close().catch(() => {});
-    }
-    _pwWorkspaces.clear();
-    // Close browser
-    if (_pwBrowser) {
-      await _pwBrowser.close().catch(() => {});
-      _pwBrowser = null;
-    }
+    await _closePwBrowserInternal();
     _hidePwBanner();
     return { ok: true };
   } catch (e) { return { ok: false, error: e.message }; }
@@ -668,5 +960,5 @@ ipcMain.handle('pw:hideBanner', () => {
   return { ok: true };
 });
 
-  return { _hidePwBanner, ensureBrowser, _getPwSettings };
+  return { _hidePwBanner, ensureBrowser, _getPwSettings, _defaultUserDataDir, dirStats, copyDirWithProgress, _getPersistentProfileDir, _getCloneProfileDir };
 };

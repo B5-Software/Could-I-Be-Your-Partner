@@ -488,6 +488,8 @@ contextBridge.exposeInMainWorld('api', {
   mcpConnect: (name) => ipcRenderer.invoke('mcp:connect', name),
   mcpDisconnect: (name) => ipcRenderer.invoke('mcp:disconnect', name),
   mcpListTools: (serverName) => ipcRenderer.invoke('mcp:listTools', serverName),
+  pwGetProfileSources: () => ipcRenderer.invoke('pw:getProfileSources'),
+  pwCopyProfile: (sourceId) => ipcRenderer.invoke('pw:copyProfile', sourceId),
   onMcpChanged: (cb) => {
     const listener = (_event, payload) => cb(payload);
     ipcRenderer.on('mcp:servers-changed', listener);

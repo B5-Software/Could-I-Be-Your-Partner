@@ -3923,6 +3923,102 @@ async function runMcpSpecTests() {
   });
 }
 
+// ---- Playwright 浏览器数据模式测试（纯 Node 可测部分：设置默认值/目录推导/复制与统计）----
+async function runPlaywrightDataModeTests() {
+  console.log('\nPlaywright 浏览器数据模式:');
+
+  // browser-service 顶层 require('electron') 在纯 Node 下返回路径字符串，
+  // 解构得到 undefined 但不报错 —— 注入 stub ipcMain 即可实例化
+  function createPwHarness(userDataDir, pwSettings) {
+    const handlers = new Map();
+    const registerPlaywrightIpc = require('../src/main/browser-service.js');
+    const exported = registerPlaywrightIpc({
+      ipcMain: { handle: (ch, fn) => handlers.set(ch, fn) },
+      getSettings: () => ({ playwright: pwSettings || {} }),
+      getMainWindow: () => null,
+      getImagesDir: () => userDataDir,
+      getUserDataPath: () => userDataDir
+    });
+    return { handlers, exported };
+  }
+
+  await testAsync('dataMode 默认 isolated；非法值回退 isolated', async () => {
+    const os = require('os'); const path = require('path'); const fs = require('fs');
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-dm-'));
+    const h = createPwHarness(tmp);
+    const s1 = h.exported._getPwSettings();
+    assert.strictEqual(s1.dataMode, 'isolated', '未配置时应为 isolated');
+    h.restore && h.restore();
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  await testAsync('持久化/副本目录位于 userData 下且命名正确', async () => {
+    const os = require('os'); const path = require('path'); const fs = require('fs');
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-dir-'));
+    const h = createPwHarness(tmp);
+    const pdir = h.exported._getPersistentProfileDir();
+    const cdir = h.exported._getCloneProfileDir();
+    assert.strictEqual(pdir, path.join(tmp, 'playwright-profile'));
+    assert.strictEqual(cdir, path.join(tmp, 'playwright-profile-clone'));
+    assert.ok(!pdir.includes('undefined'), '目录不得包含 undefined（getUserDataPath 注入失败）');
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  await testAsync('_defaultUserDataDir：按平台返回 Chrome/Edge 用户数据目录', async () => {
+    const os = require('os'); const path = require('path'); const fs = require('fs');
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-src-'));
+    const h = createPwHarness(tmp);
+    const chrome = h.exported._defaultUserDataDir('chrome');
+    const edge = h.exported._defaultUserDataDir('edge');
+    assert.ok(chrome && chrome.includes('Chrome'), 'chrome 目录应含 Chrome: ' + chrome);
+    assert.ok(edge && (edge.includes('Edge') || edge.includes('edge')), 'edge 目录应含 Edge: ' + edge);
+    assert.notStrictEqual(chrome, edge, '两者不得相同');
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  await testAsync('dirStats + copyDirWithProgress：字节数一致、进度回调触发、嵌套目录完整', async () => {
+    const os = require('os'); const path = require('path'); const fs = require('fs');
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-copy-'));
+    try {
+      const src = path.join(tmp, 'src');
+      fs.mkdirSync(path.join(src, 'sub', 'deep'), { recursive: true });
+      fs.writeFileSync(path.join(src, 'a.txt'), 'A'.repeat(1024));
+      fs.writeFileSync(path.join(src, 'sub', 'b.bin'), 'B'.repeat(4096));
+      fs.writeFileSync(path.join(src, 'sub', 'deep', 'c.dat'), 'C'.repeat(512));
+      const dst = path.join(tmp, 'dst');
+      let progressCalls = 0;
+      const h = createPwHarness(tmp);
+      const stat = await h.exported.dirStats(src);
+      assert.strictEqual(stat.files, 3);
+      assert.strictEqual(stat.bytes, 1024 + 4096 + 512);
+      await h.exported.copyDirWithProgress(src, dst, () => progressCalls++);
+      assert.ok(progressCalls > 0, '进度回调应被触发');
+      // 完整性校验
+      assert.strictEqual(fs.readFileSync(path.join(dst, 'a.txt'), 'utf8').length, 1024);
+      assert.strictEqual(fs.readFileSync(path.join(dst, 'sub', 'deep', 'c.dat'), 'utf8').length, 512);
+      const dstStat = await h.exported.dirStats(dst);
+      assert.strictEqual(dstStat.files, 3);
+      assert.strictEqual(dstStat.bytes, stat.bytes);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  await testAsync('pw:getProfileSources：不存在的来源 exists=false 且不抛错', async () => {
+    const os = require('os'); const path = require('path'); const fs = require('fs');
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-src2-'));
+    const h = createPwHarness(tmp);
+    const r = await h.handlers.get('pw:getProfileSources')(null);
+    assert.strictEqual(r.ok, true);
+    assert.ok(Array.isArray(r.sources) && r.sources.length === 2, '应枚举 chrome+edge 两个来源');
+    for (const s of r.sources) {
+      assert.ok(typeof s.exists === 'boolean');
+      if (!s.exists) assert.strictEqual(s.bytes, 0);
+    }
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+}
+
 async function runAutomationTests() {
   await testAsync('自动化 DSL：图灵完备子集（递归/循环/插值/??/标准库）', async () => {
     const { runDsl } = require('../src/main/automation/dsl.js');
@@ -4668,6 +4764,7 @@ test('agent.js 标题生成：走 title-utils 且 LLM 失败时用启发式兜�
   runSandboxTests();
   await runAutomationTests();
   await runMcpSpecTests();
+  await runPlaywrightDataModeTests();
   await runDsPluginTests();
 
   console.log(`\n${'='.repeat(40)}`);

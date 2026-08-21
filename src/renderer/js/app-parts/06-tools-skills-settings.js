@@ -1787,6 +1787,7 @@
     const headlessCheckbox = document.getElementById('setting-pw-headless');
     const bannerCheckbox = document.getElementById('setting-pw-banner-enabled');
     const argsTextarea = document.getElementById('setting-pw-args');
+    const dataModeSelect = document.getElementById('setting-pw-data-mode');
     const customRow = document.getElementById('pw-custom-path-row');
     const testBtn = document.getElementById('btn-pw-test');
     const saveBtn = document.getElementById('btn-pw-save');
@@ -1803,6 +1804,57 @@
     // 横幅开关：默认开启，仅 headed 模式下显示
     if (bannerCheckbox) bannerCheckbox.checked = pw.bannerEnabled !== false;
     if (argsTextarea) argsTextarea.value = pw.args || '';
+    if (dataModeSelect) dataModeSelect.value = pw.dataMode || 'isolated';
+
+    // 浏览器数据模式：提示文案 + 行显隐
+    const dataModeHint = document.getElementById('pw-data-mode-hint');
+    const sourceRow = document.getElementById('pw-profile-source-row');
+    const persistentResetRow = document.getElementById('pw-persistent-reset-row');
+    function updateDataModeUi() {
+      if (!dataModeSelect) return;
+      const v = dataModeSelect.value;
+      const hints = {
+        isolated: '每次启动都是全新的浏览器，不保留 cookies/登录态。适合隐私优先或一次性任务。',
+        persistent: '登录一次长期保留：cookies/localStorage 存入 Agent 专用目录（与系统浏览器完全隔离），跨会话生效。',
+        'profile-copy': '首次使用时把系统浏览器的用户数据复制为独立副本，自带已有登录态。需先完全退出源浏览器；部分站点可能需要重新登录一次。'
+      };
+      if (dataModeHint) dataModeHint.textContent = hints[v] || '';
+      if (sourceRow) sourceRow.style.display = v === 'profile-copy' ? '' : 'none';
+      if (persistentResetRow) persistentResetRow.style.display = v === 'persistent' ? '' : 'none';
+    }
+    if (dataModeSelect) {
+      dataModeSelect.addEventListener('change', updateDataModeUi);
+      updateDataModeUi();
+    }
+
+    // 复制系统浏览器配置
+    const copyBtn = document.getElementById('btn-pw-copy-profile');
+    const copyStatus = document.getElementById('pw-copy-status');
+    if (copyBtn) {
+      copyBtn.addEventListener('click', async () => {
+        const sourceSel = document.getElementById('setting-pw-profile-source');
+        const src = sourceSel ? sourceSel.value : 'chrome';
+        if (copyStatus) { copyStatus.textContent = '复制中…（可在弹窗查看进度）'; copyStatus.style.color = 'var(--text-secondary)'; }
+        copyBtn.disabled = true;
+        try {
+          const r = await window.api.pwCopyProfile(src);
+          if (r && r.ok) {
+            if (copyStatus) {
+              copyStatus.textContent = `✅ 已复制 ${r.files} 个文件（${(r.bytes / 1048576).toFixed(1)} MB）到专用目录`;
+              copyStatus.style.color = 'var(--success, #4caf50)';
+            }
+          } else if (r && r.canceled) {
+            if (copyStatus) copyStatus.textContent = '已取消';
+          } else {
+            if (copyStatus) { copyStatus.textContent = '❌ ' + ((r && r.error) || '复制失败'); copyStatus.style.color = 'var(--danger, #f44336)'; }
+          }
+        } catch (e) {
+          if (copyStatus) { copyStatus.textContent = '❌ ' + e.message; copyStatus.style.color = 'var(--danger, #f44336)'; }
+        } finally {
+          copyBtn.disabled = false;
+        }
+      });
+    }
 
     // Show/hide custom path row
     function updateCustomRowVisibility() {
@@ -1858,7 +1910,8 @@
           followLang: followLangCheckbox ? followLangCheckbox.checked : true,
           headless: headlessCheckbox ? !headlessCheckbox.checked : false,
           bannerEnabled: bannerCheckbox ? bannerCheckbox.checked : true,
-          args: argsTextarea ? argsTextarea.value : ''
+          args: argsTextarea ? argsTextarea.value : '',
+          dataMode: dataModeSelect ? dataModeSelect.value : 'isolated'
         };
         // 先持久化设置：测试启动即应用，避免用户忘记点"保存"导致 Agent 调用仍用旧浏览器
         try {
@@ -1892,7 +1945,8 @@
           followLang: followLangCheckbox ? followLangCheckbox.checked : true,
           headless: headlessCheckbox ? !headlessCheckbox.checked : false,
           bannerEnabled: bannerCheckbox ? bannerCheckbox.checked : true,
-          args: argsTextarea ? argsTextarea.value : ''
+          args: argsTextarea ? argsTextarea.value : '',
+          dataMode: dataModeSelect ? dataModeSelect.value : 'isolated'
         };
         await saveSettings(s2);
         // Close existing browser so next launch uses new settings

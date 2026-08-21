@@ -6077,7 +6077,8 @@ const pwService = registerPlaywrightIpc({
   ipcMain,
   getSettings: () => settings,
   getMainWindow: () => mainWindow,
-  getImagesDir: () => imagesDir
+  getImagesDir: () => imagesDir,
+  getUserDataPath: () => app.getPath('userData')
 });
 
 // Auto-connect configured MCP servers on startup
