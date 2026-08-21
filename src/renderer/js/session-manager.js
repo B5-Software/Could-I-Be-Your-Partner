@@ -27,7 +27,9 @@
     WAITING_TOOL_AUTH: 'waiting_tool_auth',
     DONE: 'done',
     ERROR: 'error',
-    INTERRUPTED: 'interrupted'
+    INTERRUPTED: 'interrupted',
+    STOPPED: 'stopped',   // 用户主动停止
+    CRASHED: 'crashed'    // 应用异常退出/进程被杀
   });
 
   class SessionManager {
@@ -266,7 +268,8 @@
       if (status === SessionStatus.RUNNING && !session.startedAt) {
         session.startedAt = Date.now();
       }
-      if (status === SessionStatus.DONE || status === SessionStatus.ERROR || status === SessionStatus.INTERRUPTED) {
+      if (status === SessionStatus.DONE || status === SessionStatus.ERROR || status === SessionStatus.INTERRUPTED ||
+          status === SessionStatus.STOPPED || status === SessionStatus.CRASHED) {
         session.finishedAt = Date.now();
       }
       if (extra.error !== undefined) session.lastError = extra.error;
@@ -313,11 +316,21 @@
 
     stop(session) {
       if (!session) return;
+      const wasActive = session.status === SessionStatus.RUNNING ||
+        session.status === SessionStatus.WAITING_APPROVAL ||
+        session.status === SessionStatus.WAITING_TOOL_AUTH ||
+        session.status === SessionStatus.QUEUED;
       if (session.agent && (session.agent.running || session.status === SessionStatus.WAITING_APPROVAL || session.status === SessionStatus.WAITING_TOOL_AUTH)) {
         try { session.agent.stop(); } catch { /* ignore */ }
       }
       if (session.status === SessionStatus.QUEUED) {
         this.setStatus(session, SessionStatus.IDLE);
+      } else if (wasActive && session.status !== SessionStatus.STOPPED) {
+        // 用户主动停止：标记"已停止"并让 Agent 落盘该状态，历史不再残留"运行中"
+        this.setStatus(session, SessionStatus.STOPPED);
+        if (session.agent && typeof session.agent.markStopped === 'function') {
+          try { session.agent.markStopped(); } catch { /* ignore */ }
+        }
       }
     }
 

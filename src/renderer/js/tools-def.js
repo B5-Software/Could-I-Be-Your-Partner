@@ -518,6 +518,25 @@ const TOOL_DEFINITIONS = [
   { name: 'fedikittenDownloadMedia', desc: '下载媒体文件到本地（公开媒体均可，含他人帖子的）', icon: 'fa-download', category: 'FediKitten', sensitive: false },
   { name: 'fedikittenConversations', desc: '获取私信会话列表', icon: 'fa-comments', category: 'FediKitten', sensitive: false },
   { name: 'fedikittenNotifications', desc: '获取通知列表', icon: 'fa-bell', category: 'FediKitten', sensitive: false },
+  // CIBYP-IM
+  { name: 'cibypimListConversations', desc: '获取 CIBYP-IM 会话列表', icon: 'fa-comments', category: 'CIBYP-IM', sensitive: false },
+  { name: 'cibypimReadMessages', desc: '读取会话消息（自动解密）', icon: 'fa-book-open', category: 'CIBYP-IM', sensitive: false },
+  { name: 'cibypimSendMessage', desc: '发送 CIBYP-IM 加密消息', icon: 'fa-paper-plane', category: 'CIBYP-IM', sensitive: true },
+  { name: 'cibypimSearchUsers', desc: '搜索 CIBYP-IM 用户', icon: 'fa-magnifying-glass', category: 'CIBYP-IM', sensitive: false },
+  { name: 'cibypimStartDirect', desc: '发起私聊会话', icon: 'fa-user-plus', category: 'CIBYP-IM', sensitive: true },
+  { name: 'cibypimCreateGroup', desc: '创建群聊（自动分发群密钥）', icon: 'fa-users', category: 'CIBYP-IM', sensitive: true },
+  { name: 'cibypimListMembers', desc: '查看群成员列表', icon: 'fa-user-group', category: 'CIBYP-IM', sensitive: false },
+  { name: 'cibypimAddMember', desc: '添加群成员', icon: 'fa-user-plus', category: 'CIBYP-IM', sensitive: true },
+  { name: 'cibypimRemoveMember', desc: '移除群成员（自动轮换群密钥）', icon: 'fa-user-minus', category: 'CIBYP-IM', sensitive: true },
+  { name: 'cibypimLeaveGroup', desc: '退出群聊', icon: 'fa-right-from-bracket', category: 'CIBYP-IM', sensitive: true },
+  { name: 'cibypimMarkRead', desc: '标记会话已读', icon: 'fa-check-double', category: 'CIBYP-IM', sensitive: false },
+  { name: 'cibypimGetOnline', desc: '查询用户在线状态', icon: 'fa-circle', category: 'CIBYP-IM', sensitive: false },
+  { name: 'cibypimSendFile', desc: '发送加密文件', icon: 'fa-file-arrow-up', category: 'CIBYP-IM', sensitive: true },
+  { name: 'cibypimDownloadMedia', desc: '下载解密消息中的媒体文件', icon: 'fa-download', category: 'CIBYP-IM', sensitive: false },
+  { name: 'cibypimSendVoiceMessage', desc: '发送语音消息', icon: 'fa-microphone', category: 'CIBYP-IM', sensitive: true },
+  { name: 'cibypimSearchMessages', desc: '在会话内搜索消息', icon: 'fa-magnifying-glass', category: 'CIBYP-IM', sensitive: false },
+  { name: 'cibypimGetProfile', desc: '查看用户资料', icon: 'fa-user', category: 'CIBYP-IM', sensitive: false },
+  { name: 'cibypimUpdateProfile', desc: '更新自己的资料', icon: 'fa-pen', category: 'CIBYP-IM', sensitive: true },
   { name: 'httpFormPost', desc: '发送表单/multipart请求', icon: 'fa-file-arrow-up', category: '网络工具', sensitive: true },
   { name: 'dnsLookup', desc: 'DNS域名解析', icon: 'fa-sitemap', category: '网络工具', sensitive: false },
   { name: 'ping', desc: 'Ping主机(ICMP)', icon: 'fa-satellite-dish', category: '网络工具', sensitive: false },
@@ -633,7 +652,8 @@ const DANGEROUS_COMMANDS = {
 };
 
 // OpenAI-format tool schemas for LLM
-function getToolSchemas(enabledTools, mode) {
+// imOwner: 可选，CIBYP-IM 主人用户名，非空时注入到 cibypim* 工具描述中
+function getToolSchemas(enabledTools, mode, imOwner) {
   const schemas = {
     automationList: { type: 'function', function: { name: 'automationList', description: '列出所有自动化触发任务（名称、启用状态、触发器摘要、运行次数、上次运行时间与错误）。', parameters: { type: 'object', properties: {}, required: [] } } },
     automationGetGuide: { type: 'function', function: { name: 'automationGetGuide', description: '按需获取自动化任务的完整指导文档。编写自动化任务（尤其 DSL 提示词构造）前必须先调用本工具获取完整语法；该文档不注入系统提示，topic 可选 all（全部，默认）/trigger（触发器）/dsl（DSL 语法与标准库）/examples（示例）。', parameters: { type: 'object', properties: { topic: { type: 'string', enum: ['all', 'trigger', 'dsl', 'examples'], description: '获取的指导主题，默认 all' } }, required: [] } } },
@@ -681,6 +701,24 @@ function getToolSchemas(enabledTools, mode) {
     fedikittenDownloadMedia: { type: 'function', function: { name: 'fedikittenDownloadMedia', description: '下载媒体文件到本地。任何公开媒体的 url 均可下载（含时间线/帖子/搜索里别人发布的媒体）。下载后可用 readImageFile 查看图片内容（多模态模型）或用 extractTextFromImage 做 OCR。', parameters: { type: 'object', properties: { url: { type: 'string', description: '媒体 url（来自帖子 media 数组的 url/preview_url）' }, savePath: { type: 'string', description: '保存路径（工作区相对路径或绝对路径，文件名可自定义）' } }, required: ['url', 'savePath'] } } },
     fedikittenConversations: { type: 'function', function: { name: 'fedikittenConversations', description: '获取 FediKitten 私信会话列表。', parameters: { type: 'object', properties: { limit: { type: 'number', description: '返回条数，默认20，最多40' } }, required: [] } } },
     fedikittenNotifications: { type: 'function', function: { name: 'fedikittenNotifications', description: '获取 FediKitten 通知列表（关注/点赞/转发/回复/私信等）。', parameters: { type: 'object', properties: { limit: { type: 'number', description: '返回条数，默认20，最多40' } }, required: [] } } },
+    cibypimListConversations: { type: 'function', function: { name: 'cibypimListConversations', description: '获取 CIBYP-IM 会话列表（私聊和群聊，含未读数）。', parameters: { type: 'object', properties: {}, required: [] } } },
+    cibypimReadMessages: { type: 'function', function: { name: 'cibypimReadMessages', description: '读取 CIBYP-IM 会话的加密消息并自动解密（含媒体文件ID与密钥，密钥在返回的 media.key/media.iv 中）。', parameters: { type: 'object', properties: { conversationId: { type: 'string', description: '会话ID' }, limit: { type: 'number', description: '返回条数，默认30，最多100' }, markRead: { type: 'boolean', description: '是否标记已读，默认true' } }, required: ['conversationId'] } } },
+    cibypimSendMessage: { type: 'function', function: { name: 'cibypimSendMessage', description: '发送 CIBYP-IM 端到端加密消息（文本或图片/文件媒体）。', parameters: { type: 'object', properties: { conversationId: { type: 'string', description: '会话ID' }, text: { type: 'string', description: '消息文本' }, msgType: { type: 'string', description: '消息类型，text/file/voice，默认text' }, media: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' }, name: { type: 'string' }, size: { type: 'number' }, kind: { type: 'string' }, key: { type: 'string' }, iv: { type: 'string' } } }, description: '媒体数组（用 cibypimSendFile 时无需传）' } }, required: ['conversationId'] } } },
+    cibypimSearchUsers: { type: 'function', function: { name: 'cibypimSearchUsers', description: '在 CIBYP-IM 搜索用户（用户名/昵称模糊匹配）。', parameters: { type: 'object', properties: { query: { type: 'string', description: '搜索关键词' }, limit: { type: 'number', description: '返回条数，默认10，最多50' } }, required: ['query'] } } },
+    cibypimStartDirect: { type: 'function', function: { name: 'cibypimStartDirect', description: '与指定用户发起 CIBYP-IM 私聊会话（返回会话ID）。', parameters: { type: 'object', properties: { userId: { type: 'string', description: '对方用户ID（来自 cibypimSearchUsers 的 id）' } }, required: ['userId'] } } },
+    cibypimCreateGroup: { type: 'function', function: { name: 'cibypimCreateGroup', description: '创建 CIBYP-IM 群聊并自动为成员分发群密钥（群消息端到端加密）。', parameters: { type: 'object', properties: { name: { type: 'string', description: '群名称' }, userIds: { type: 'array', items: { type: 'string' }, description: '初始成员用户ID列表' } }, required: ['name'] } } },
+    cibypimListMembers: { type: 'function', function: { name: 'cibypimListMembers', description: '查看 CIBYP-IM 群/私聊的成员列表。', parameters: { type: 'object', properties: { conversationId: { type: 'string', description: '会话ID' } }, required: ['conversationId'] } } },
+    cibypimAddMember: { type: 'function', function: { name: 'cibypimAddMember', description: '向 CIBYP-IM 群聊添加成员（自动为其封装群密钥）。', parameters: { type: 'object', properties: { conversationId: { type: 'string' }, userId: { type: 'string' } }, required: ['conversationId', 'userId'] } } },
+    cibypimRemoveMember: { type: 'function', function: { name: 'cibypimRemoveMember', description: '从 CIBYP-IM 群聊移除成员（自动轮换群密钥，被移除者无法再解密新消息）。', parameters: { type: 'object', properties: { conversationId: { type: 'string' }, userId: { type: 'string' } }, required: ['conversationId', 'userId'] } } },
+    cibypimLeaveGroup: { type: 'function', function: { name: 'cibypimLeaveGroup', description: '退出 CIBYP-IM 群聊。', parameters: { type: 'object', properties: { conversationId: { type: 'string' } }, required: ['conversationId'] } } },
+    cibypimMarkRead: { type: 'function', function: { name: 'cibypimMarkRead', description: '标记 CIBYP-IM 会话为已读。', parameters: { type: 'object', properties: { conversationId: { type: 'string' }, lastMessageId: { type: 'string', description: '已读到的消息ID（可选，默认最新）' } }, required: ['conversationId'] } } },
+    cibypimGetOnline: { type: 'function', function: { name: 'cibypimGetOnline', description: '查询多个用户的 CIBYP-IM 在线状态。', parameters: { type: 'object', properties: { userIds: { type: 'array', items: { type: 'string' }, description: '用户ID数组' } }, required: ['userIds'] } } },
+    cibypimSendFile: { type: 'function', function: { name: 'cibypimSendFile', description: '发送本地文件（自动客户端加密后上传并加密发送消息）。', parameters: { type: 'object', properties: { conversationId: { type: 'string' }, filePath: { type: 'string', description: '本地文件路径（工作区相对或绝对路径），≤48MB' }, text: { type: 'string', description: '附带的说明文字（可选）' } }, required: ['conversationId', 'filePath'] } } },
+    cibypimDownloadMedia: { type: 'function', function: { name: 'cibypimDownloadMedia', description: '下载并解密 CIBYP-IM 消息中的媒体文件（key/iv 来自 cibypimReadMessages 返回的 media 字段）。', parameters: { type: 'object', properties: { mediaId: { type: 'string', description: '媒体ID' }, savePath: { type: 'string', description: '保存路径' }, key: { type: 'string', description: '解密密钥（来自消息media.key）' }, iv: { type: 'string', description: '解密IV（来自消息media.iv）' } }, required: ['mediaId', 'savePath'] } } },
+    cibypimSendVoiceMessage: { type: 'function', function: { name: 'cibypimSendVoiceMessage', description: '发送 CIBYP-IM 语音消息（mp3/ogg/webm 音频文件）。', parameters: { type: 'object', properties: { conversationId: { type: 'string' }, filePath: { type: 'string', description: '音频文件路径' } }, required: ['conversationId', 'filePath'] } } },
+    cibypimSearchMessages: { type: 'function', function: { name: 'cibypimSearchMessages', description: '在 CIBYP-IM 会话内搜索消息文本（会解密匹配）。', parameters: { type: 'object', properties: { conversationId: { type: 'string' }, keyword: { type: 'string' }, limit: { type: 'number', description: '最多100' } }, required: ['conversationId', 'keyword'] } } },
+    cibypimGetProfile: { type: 'function', function: { name: 'cibypimGetProfile', description: '查看 CIBYP-IM 用户资料。', parameters: { type: 'object', properties: { userId: { type: 'string' } }, required: ['userId'] } } },
+    cibypimUpdateProfile: { type: 'function', function: { name: 'cibypimUpdateProfile', description: '更新自己的 CIBYP-IM 资料（昵称/简介）。', parameters: { type: 'object', properties: { displayName: { type: 'string', description: '昵称（≤64字符）' }, bio: { type: 'string', description: '简介（≤500字符）' } }, required: [] } } },
     webSearch: { type: 'function', function: { name: 'webSearch', description: '通过Bing搜索信息，返回候选结果列表。注意：只调用本工具不算完成搜索任务，必须继续调用 webFetch 或 offscreenRenderContent/offscreenRenderOCR 抓取正文后再总结回答，并说明信息来源链接。', parameters: { type: 'object', properties: { query: { type: 'string', description: '搜索关键词' } }, required: ['query'] } } },
     webFetch: { type: 'function', function: { name: 'webFetch', description: '获取网页内容', parameters: { type: 'object', properties: { url: { type: 'string', description: '网页URL' } }, required: ['url'] } } },
     offscreenRenderOCR: { type: 'function', function: { name: 'offscreenRenderOCR', description: '离屏打开指定URL（不调用外部浏览器），等待渲染后截屏并OCR提取页面文本。用于动态网页内容抓取前，必须先使用webSearch拿到准确URL。', parameters: { type: 'object', properties: { url: { type: 'string', description: '目标URL（建议来自webSearch结果）' }, waitMs: { type: 'number', description: '渲染等待毫秒数，默认10000' }, width: { type: 'number', description: '截图宽度，默认1366' }, height: { type: 'number', description: '截图高度，默认900' } }, required: ['url'] } } },
@@ -939,6 +977,17 @@ function getToolSchemas(enabledTools, mode) {
   const result = Object.keys(schemas)
     .filter(name => (!enabledTools || enabledTools[name] !== false) && isToolAvailableForMode(name, mode))
     .map(name => schemas[name]);
+  // 主人来信功能：把主人的 IM 用户名注入 cibypim* 工具描述（用副本，不污染共享 schema）
+  if (imOwner) {
+    const prefix = `你的主人（CIBYP-IM 用户名）：@${imOwner}。`;
+    for (let i = 0; i < result.length; i++) {
+      const schema = result[i];
+      const fn = schema && schema.function;
+      if (fn && typeof fn.name === 'string' && fn.name.startsWith('cibypim') && typeof fn.description === 'string' && !fn.description.startsWith(prefix)) {
+        result[i] = { ...schema, function: { ...fn, description: prefix + fn.description } };
+      }
+    }
+  }
   // Append dynamic MCP tool schemas (filtered by mode — MCP tools default to both modes)
   for (const [mcpName, mcpSchema] of Object.entries(MCP_DYNAMIC_SCHEMAS)) {
     if ((!enabledTools || enabledTools[mcpName] !== false) && isToolAvailableForMode(mcpName, mode)) {

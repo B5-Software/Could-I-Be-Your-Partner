@@ -82,6 +82,13 @@ const ASSETS = {
     type: 'zip',
     exeName: 'aria2c',
     dirName: 'linux-x64'
+  },
+  'linux-arm64': {
+    // 同上：aarch64-unknown-linux-musl 静态构建（树莓派 64 位 / ARM 服务器 / CI arm64 runner）
+    url: `https://github.com/abcfy2/aria2-static-build/releases/download/1.37.0/aria2-aarch64-linux-musl_static.zip`,
+    type: 'zip',
+    exeName: 'aria2c',
+    dirName: 'linux-arm64'
   }
 };
 

@@ -854,7 +854,7 @@ ${affectionDesc}
       getAllToolDefinitions(this.mode || 'chat').forEach(tool => {
         enabledToolsMap[tool.name] = MINIMAL_TOOL_NAMES.includes(tool.name);
       });
-      let tools = getToolSchemas(enabledToolsMap, this.mode || 'chat');
+      let tools = getToolSchemas(enabledToolsMap, this.mode || 'chat', (this.settings && this.settings.cibypIm && this.settings.cibypIm.ownerUsername) || undefined);
       tools = tools.filter(t => MINIMAL_TOOL_NAMES.includes(t.function?.name));
       if (typeof filterToolsByConfig === 'function') {
         tools = filterToolsByConfig(tools, this.settings);
@@ -870,7 +870,7 @@ ${affectionDesc}
     getAllToolDefinitions(this.mode || 'chat').forEach(tool => {
       enabledToolsMap[tool.name] = activeSet.has(tool.name);
     });
-    let tools = getToolSchemas(enabledToolsMap, this.mode || 'chat');
+    let tools = getToolSchemas(enabledToolsMap, this.mode || 'chat', (this.settings && this.settings.cibypIm && this.settings.cibypIm.ownerUsername) || undefined);
     // 未配置生图模型时隐藏 generateImage 工具
     if (typeof filterToolsByConfig === 'function') {
       tools = filterToolsByConfig(tools, this.settings);
@@ -1737,6 +1737,12 @@ ${affectionDesc}
     this._emitWorkingStatus('idle');
   }
 
+  // 用户主动停止：把"已停止"状态立即持久化到历史，避免磁盘快照停留在"运行中"
+  markStopped() {
+    this.sessionStatus = 'stopped';
+    try { this.saveToHistory(); } catch (_) { /* 保存失败不阻断 */ }
+  }
+
   /**
    * 热对话：在Agent工作期间注入新消息
    * 消息会在下一次LLM调用前加入上下文
@@ -2330,7 +2336,8 @@ ${affectionDesc}
     const session = window.__sessionManager?.getByAgent(this);
     if (session) {
       session.pendingApproval = null;
-      window.__sessionManager.setStatus(session, this.running ? window.SessionStatus.RUNNING : window.SessionStatus.IDLE);
+      window.__sessionManager.setStatus(session, this.running ? window.SessionStatus.RUNNING
+        : (session.status === window.SessionStatus.STOPPED ? window.SessionStatus.STOPPED : window.SessionStatus.IDLE));
       window.__sessionManager.setAttention(session, null);
     }
   }
@@ -2356,7 +2363,8 @@ ${affectionDesc}
     const session = window.__sessionManager?.getByAgent(this);
     if (session) {
       session.pendingToolAuth = null;
-      window.__sessionManager.setStatus(session, this.running ? window.SessionStatus.RUNNING : window.SessionStatus.IDLE);
+      window.__sessionManager.setStatus(session, this.running ? window.SessionStatus.RUNNING
+        : (session.status === window.SessionStatus.STOPPED ? window.SessionStatus.STOPPED : window.SessionStatus.IDLE));
       window.__sessionManager.setAttention(session, null);
     }
   }
@@ -3782,6 +3790,17 @@ ${affectionDesc}
             }
             return await window.api.fedikittenCall(name, fkArgs);
           }
+          // CIBYP-IM 加密通讯工具路由
+          if (name.startsWith('cibypim')) {
+            const ciArgs = args || {};
+            for (const k of ['filePath', 'savePath']) {
+              if (ciArgs[k]) ciArgs[k] = this._resolveWorkspacePath(ciArgs[k]);
+            }
+            if (name === 'cibypimSendVoiceMessage' && ciArgs.filePath) {
+              ciArgs.filePath = this._resolveWorkspacePath(ciArgs.filePath);
+            }
+            return await window.api.cibypImCall(name, ciArgs);
+          }
           // MCP 动态工具路由: mcp__<serverName>__<toolName>
           if (name.startsWith('mcp__')) {
             const parts = name.split('__');
@@ -4311,4 +4330,30 @@ ${tarotLine}
       return { ok: false, skipped: false, message: e && e.message ? e.message : String(e) };
     }
   }
+}
+
+// ---- MCP 状态变化 → 自动刷新动态工具注册 ----
+// （服务器连接/断开/工具列表变更时主进程广播 mcp:servers-changed）
+if (typeof window !== 'undefined' && typeof window.api !== 'undefined' &&
+    typeof window.api.onMcpChanged === 'function' && typeof registerMcpTools === 'function') {
+  let _mcpRefreshTimer = null;
+  window.api.onMcpChanged(() => {
+    // 防抖：连接建立/工具变更可能连续触发
+    if (_mcpRefreshTimer) clearTimeout(_mcpRefreshTimer);
+    _mcpRefreshTimer = setTimeout(async () => {
+      _mcpRefreshTimer = null;
+      try {
+        const r = await window.api.mcpListTools(null);
+        if (r && r.ok && Array.isArray(r.tools)) {
+          registerMcpTools(r.tools);
+          // 已有 Agent 实例的 system prompt 含 MCP 工具清单，标记刷新
+          try {
+            if (typeof agent !== 'undefined' && agent && agent.contextManager && typeof agent.contextManager.setSystemPrompt === 'function') {
+              agent.contextManager.setSystemPrompt(agent.getSystemPrompt());
+            }
+          } catch { /* ignore */ }
+        }
+      } catch { /* 主进程未就绪等场景忽略 */ }
+    }, 300);
+  });
 }

@@ -21,5 +21,6 @@ contextBridge.exposeInMainWorld('automationEditorAPI', {
   getTask: (id) => ipcRenderer.invoke('automation:get', id),
   saveTask: (task) => ipcRenderer.invoke('automation:save', task),
   runTask: (id, params) => ipcRenderer.invoke('automation:run', id, params),
-  testTask: (task, params) => ipcRenderer.invoke('automation:test', task, params)
+  testTask: (task, params) => ipcRenderer.invoke('automation:test', task, params),
+  getGuide: (topic) => ipcRenderer.invoke('automation:guide', topic)
 });

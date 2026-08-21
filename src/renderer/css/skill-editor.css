@@ -44,9 +44,11 @@ button, input, textarea, select {
 
 .se-titlebar {
   height: 40px;
+  min-height: 40px;
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 10px;
   padding: 0 12px 0 14px;
   background: var(--se-bg-secondary);
   border-bottom: 1px solid var(--se-border);
@@ -64,6 +66,14 @@ body.platform-darwin .se-titlebar {
   gap: 8px;
   font-weight: 600;
   color: var(--se-accent);
+  flex: 1;
+  min-width: 0; /* 长技能名省略号，不把右侧按钮挤出屏幕 */
+}
+
+.se-titlebar-title #se-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .se-titlebar-title i {
@@ -75,6 +85,7 @@ body.platform-darwin .se-titlebar {
   align-items: center;
   gap: 8px;
   -webkit-app-region: no-drag;
+  flex-shrink: 0;
 }
 
 .se-readonly-badge,
@@ -135,6 +146,7 @@ body.platform-darwin .se-titlebar {
   display: flex;
   height: calc(100vh - 40px);
   min-height: 0;
+  overflow: hidden; /* 任何内部超界都裁切在窗口内，不溢出屏幕 */
 }
 
 .se-sidebar {
@@ -356,6 +368,7 @@ body.platform-darwin .se-titlebar {
 
 .se-toolbar {
   height: 42px;
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -475,6 +488,7 @@ body.platform-darwin .se-titlebar {
 
 .se-output {
   height: 180px;
+  max-height: 45vh; /* 矮窗口下不挤压编辑区到不可用 */
   flex-shrink: 0;
   border-top: 1px solid var(--se-border);
   background: var(--se-bg-secondary);
@@ -523,6 +537,7 @@ body.platform-darwin .se-titlebar {
 
 .se-statusbar {
   height: 26px;
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: 14px;
@@ -546,4 +561,10 @@ body.platform-darwin .se-titlebar {
     width: 300px;
     min-width: 280px;
   }
+}
+
+/* 矮窗口：压缩输出面板与工具栏，保住编辑区可用高度 */
+@media (max-height: 620px) {
+  .se-output { height: 120px; }
+  .se-toolbar { height: 36px; }
 }

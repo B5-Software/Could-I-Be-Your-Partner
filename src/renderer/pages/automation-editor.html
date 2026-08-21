@@ -59,6 +59,18 @@
       </section>
 
       <section class="ae-section">
+        <div class="ae-section-title"><i class="fa-solid fa-paper-plane"></i> 投递</div>
+        <label class="ae-field">
+          <span class="ae-label">提示词送到哪里</span>
+          <select id="ae-delivery-mode">
+            <option value="new">新建 Chat 会话</option>
+            <option value="continue">继续当前 Chat（无则新建）</option>
+          </select>
+        </label>
+        <p class="ae-hint">继续模式：优先当前激活的 Chat，其次最近一个空闲且有内容的会话；对方正在运行时自动排队。</p>
+      </section>
+
+      <section class="ae-section">
         <div class="ae-section-title"><i class="fa-solid fa-chart-line"></i> 统计</div>
         <div class="ae-stats">
           <div class="ae-stat"><span>运行次数</span><strong id="ae-run-count">0</strong></div>
@@ -100,6 +112,17 @@
         <pre id="ae-output-body"></pre>
       </div>
     </main>
+  </div>
+
+  <!-- 文档浮层 -->
+  <div class="ae-doc-overlay hidden" id="ae-doc-overlay">
+    <div class="ae-doc-panel">
+      <div class="ae-doc-header">
+        <span id="ae-doc-title"><i class="fa-solid fa-book"></i> 文档</span>
+        <button class="ae-icon-btn" id="btn-close-doc" title="关闭"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <pre class="ae-doc-body" id="ae-doc-body"></pre>
+    </div>
   </div>
 </body>
 <script src="../js/automation-editor.js"></script>

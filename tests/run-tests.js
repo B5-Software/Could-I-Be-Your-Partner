@@ -3513,6 +3513,416 @@ test('字体设置 i18n（zh/en/de）与 app.js 集成', () => {
 // ---- Automation ----
 console.log('\nAutomation:');
 
+// ---- MCP 客户端规范符合性测试（stdio NDJSON / 兼容帧 / 生命周期 / Streamable HTTP）----
+async function runMcpSpecTests() {
+  console.log('\nMCP 客户端规范符合性:');
+
+  // 测试用 harness：拦截 child_process.spawn，捕获客户端写出的原始字节，
+  // 并允许测试向 stdout 回灌（模拟服务器响应/通知/请求）
+  function createMcpHarness(opts = {}) {
+    const cp = require('child_process');
+    const origSpawn = cp.spawn;
+    const state = { written: [], spawnCalls: [], stdinEnded: false, lastSignal: null };
+    cp.spawn = (cmd, args, o) => {
+      state.spawnCalls.push({ cmd, args, opts: o });
+      const proc = {
+        killed: false, exitCode: null,
+        stdin: {
+          write(s) { state.written.push(String(s)); return true; },
+          on() {},
+          end() { state.stdinEnded = true; }
+        },
+        stdout: { on(ev, fn) { if (ev === 'data') state.feedStdout = fn; } },
+        stderr: { on() {} },
+        on(ev, fn) { if (ev === 'close') state.closeCb = fn; },
+        once(ev, fn) { if (ev === 'close') state.onceCloseCb = fn; },
+        kill(sig) {
+          this.killed = true; this.lastSignal = sig || 'SIGTERM'; state.lastSignal = this.lastSignal;
+          if (state.closeCb) state.closeCb(0);
+          else if (state.onceCloseCb) { const f = state.onceCloseCb; state.onceCloseCb = null; f(0); }
+        }
+      };
+      state.proc = proc;
+      return proc;
+    };
+    const store = { mcp: { servers: [] } };
+    const changedEvents = [];
+    const handlers = new Map();
+    const registerMcpIpc = require('../src/main/mcp-service.js');
+    registerMcpIpc({
+      ipcMain: { handle: (ch, fn) => handlers.set(ch, fn) },
+      getSettings: () => store,
+      persist: () => {},
+      appVersion: 'test',
+      notifyRenderer: (p) => changedEvents.push(p),
+      defaultTimeoutMs: opts.timeoutMs,
+      shutdownTermGraceMs: opts.shutdownGraceMs || 3000,
+      shutdownKillGraceMs: opts.shutdownGraceMs || 2000
+    });
+    const call = (ch, ...args) => handlers.get(ch)(null, ...args);
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    return {
+      store, changedEvents, state, call, sleep,
+      feed(text) { if (state.feedStdout) state.feedStdout(Buffer.from(text, 'utf8')); },
+      async addAndConnect(config) {
+        await call('mcp:addServer', config);
+        return await call('mcp:connect', config.name);
+      },
+      restore() { cp.spawn = origSpawn; }
+    };
+  }
+
+  const ndjson = (obj) => JSON.stringify(obj) + '\n';
+
+  await testAsync('stdio 出站帧：NDJSON 单行 JSON + \\n（非 LSP Content-Length 帧）', async () => {
+    const h = createMcpHarness();
+    try {
+      await h.addAndConnect({ name: 't1', command: 'fake' });
+      await h.sleep(80);
+      assert.ok(h.state.written.length >= 1, '应已写出 initialize');
+      const first = h.state.written[0];
+      assert.ok(!first.startsWith('Content-Length:'), '不得使用 Content-Length 帧');
+      assert.ok(first.endsWith('\n'), '必须以换行结尾');
+      assert.ok(first.trim().startsWith('{'), '必须是单行 JSON');
+      const parsed = JSON.parse(first);
+      assert.strictEqual(parsed.method, 'initialize');
+      assert.strictEqual(parsed.params.protocolVersion, '2025-06-18', '应协商最新支持版本');
+    } finally { h.restore(); }
+  });
+
+  await testAsync('stdio 入站：规范 NDJSON 响应可解析，initialize→tools/list 全链路成功', async () => {
+    const h = createMcpHarness();
+    try {
+      const p = h.addAndConnect({ name: 't2', command: 'fake' });
+      await h.sleep(60);
+      h.feed(ndjson({ jsonrpc: '2.0', id: 1, result: { protocolVersion: '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 's', version: '1' } } }));
+      await h.sleep(40);
+      h.feed(ndjson({ jsonrpc: '2.0', id: 2, result: { tools: [{ name: 'echo', description: 'd', inputSchema: { type: 'object', properties: {} } }] } }));
+      const r = await Promise.race([p, h.sleep(2000).then(() => ({ ok: false, error: 'timeout' }))]);
+      assert.strictEqual(r.ok, true, 'connect 应成功: ' + (r.error || ''));
+      assert.deepStrictEqual(r.tools.map(t => t.name), ['echo']);
+    } finally { h.restore(); }
+  });
+
+  await testAsync('stdio 入站兼容：旧式 Content-Length 帧仍可解析', async () => {
+    const h = createMcpHarness();
+    try {
+      const p = h.addAndConnect({ name: 't3', command: 'fake' });
+      await h.sleep(60);
+      const body = JSON.stringify({ jsonrpc: '2.0', id: 1, result: { protocolVersion: '2024-11-05', capabilities: {}, serverInfo: { name: 'legacy', version: '1' } } });
+      h.feed(`Content-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`);
+      await h.sleep(40);
+      const body2 = JSON.stringify({ jsonrpc: '2.0', id: 2, result: { tools: [] } });
+      h.feed(`Content-Length: ${Buffer.byteLength(body2)}\r\n\r\n${body2}`);
+      const r = await Promise.race([p, h.sleep(2000).then(() => ({ ok: false, error: 'timeout' }))]);
+      assert.strictEqual(r.ok, true, 'LSP 帧兼容解析应生效: ' + (r.error || ''));
+      assert.strictEqual(r.protocolVersion, '2024-11-05', '应记录服务器协商的版本');
+    } finally { h.restore(); }
+  });
+
+  await testAsync('生命周期：服务器 ping 请求必须回应（同 id result {}）', async () => {
+    const h = createMcpHarness();
+    try {
+      const p = h.addAndConnect({ name: 't4', command: 'fake' });
+      await h.sleep(60);
+      h.feed(ndjson({ jsonrpc: '2.0', id: 1, result: { protocolVersion: '2025-06-18', capabilities: {}, serverInfo: { name: 's', version: '1' } } }));
+      await h.sleep(40);
+      h.feed(ndjson({ jsonrpc: '2.0', id: 2, result: { tools: [] } }));
+      await p;
+      h.state.written.length = 0;
+      h.feed(ndjson({ jsonrpc: '2.0', id: 100, method: 'ping' }));
+      await h.sleep(120);
+      assert.ok(h.state.written.length > 0, '必须回写 ping 响应');
+      const resp = JSON.parse(h.state.written[0]);
+      assert.strictEqual(resp.id, 100);
+      assert.deepStrictEqual(resp.result, {});
+    } finally { h.restore(); }
+  });
+
+  await testAsync('生命周期：未实现的服务器请求回 -32601 Method not supported', async () => {
+    const h = createMcpHarness();
+    try {
+      const p = h.addAndConnect({ name: 't5', command: 'fake' });
+      await h.sleep(60);
+      h.feed(ndjson({ jsonrpc: '2.0', id: 1, result: { protocolVersion: '2025-06-18', capabilities: {}, serverInfo: { name: 's', version: '1' } } }));
+      await h.sleep(40);
+      h.feed(ndjson({ jsonrpc: '2.0', id: 2, result: { tools: [] } }));
+      await p;
+      h.state.written.length = 0;
+      h.feed(ndjson({ jsonrpc: '2.0', id: 101, method: 'sampling/createMessage', params: {} }));
+      await h.sleep(120);
+      assert.ok(h.state.written.length > 0, '应回错误响应而非静默丢弃');
+      const resp = JSON.parse(h.state.written[0]);
+      assert.strictEqual(resp.id, 101);
+      assert.strictEqual(resp.error.code, -32601);
+    } finally { h.restore(); }
+  });
+
+  await testAsync('tools/list 分页：nextCursor 循环拉全所有页', async () => {
+    const h = createMcpHarness();
+    try {
+      let phase = 0;
+      const p = h.addAndConnect({ name: 't6', command: 'fake' });
+      await h.sleep(60);
+      h.feed(ndjson({ jsonrpc: '2.0', id: 1, result: { protocolVersion: '2025-06-18', capabilities: {}, serverInfo: { name: 's', version: '1' } } }));
+      await h.sleep(30);
+      // 第 1 页：带 nextCursor；第 2 页：无 cursor
+      h.feed(ndjson({ jsonrpc: '2.0', id: 2, result: { tools: [{ name: 'a', description: '', inputSchema: { type: 'object', properties: {} } }], nextCursor: 'page2' } }));
+      const watcher = setInterval(() => {
+        for (const w of h.state.written) {
+          try {
+            const m = JSON.parse(w);
+            if (m.method === 'tools/list' && m.params && m.params.cursor === 'page2' && phase === 0) {
+              phase = 1;
+              h.feed(ndjson({ jsonrpc: '2.0', id: m.id, result: { tools: [{ name: 'b', description: '', inputSchema: { type: 'object', properties: {} } }] } }));
+            }
+          } catch { /* ignore */ }
+        }
+      }, 20);
+      const r = await Promise.race([p, h.sleep(2500).then(() => ({ ok: false, error: 'timeout' }))]);
+      clearInterval(watcher);
+      assert.strictEqual(r.ok, true, r.error || '');
+      assert.deepStrictEqual(r.tools.map(t => t.name).sort(), ['a', 'b'], '两页工具都应取到');
+    } finally { h.restore(); }
+  });
+
+  await testAsync('tools/call 结果规范化：text 提取 / isError 透传 / image → _multimodal', async () => {
+    const h = createMcpHarness();
+    try {
+      const p = h.addAndConnect({ name: 't7', command: 'fake' });
+      await h.sleep(60);
+      h.feed(ndjson({ jsonrpc: '2.0', id: 1, result: { protocolVersion: '2025-06-18', capabilities: {}, serverInfo: { name: 's', version: '1' } } }));
+      await h.sleep(40);
+      h.feed(ndjson({ jsonrpc: '2.0', id: 2, result: { tools: [{ name: 'tool', description: '', inputSchema: { type: 'object', properties: {} } }] } }));
+      await p;
+      // 正常文本
+      let pending = [...h.store.mcp.servers];
+      void pending;
+      let callP = h.call('mcp:callTool', 't7', 'tool', {});
+      await h.sleep(30);
+      h.feed(ndjson({ jsonrpc: '2.0', id: 3, result: { content: [{ type: 'text', text: 'hello world' }], isError: false } }));
+      let r = await callP;
+      assert.strictEqual(r.ok, true);
+      assert.strictEqual(r.text, 'hello world', '应提取 text 内容而非整包 JSON');
+      // isError 业务错误
+      callP = h.call('mcp:callTool', 't7', 'tool', {});
+      await h.sleep(30);
+      h.feed(ndjson({ jsonrpc: '2.0', id: 4, result: { content: [{ type: 'text', text: 'boom: file not found' }], isError: true } }));
+      r = await callP;
+      assert.strictEqual(r.ok, false, 'isError:true 必须按失败处理');
+      assert.ok(r.error.includes('boom'), '错误文本应透传');
+      // 图片内容 → _multimodal data URL
+      callP = h.call('mcp:callTool', 't7', 'tool', {});
+      await h.sleep(30);
+      h.feed(ndjson({ jsonrpc: '2.0', id: 5, result: { content: [{ type: 'image', data: 'QUJD', mimeType: 'image/png' }, { type: 'text', text: 'see image' }] } }));
+      r = await callP;
+      assert.strictEqual(r.ok, true);
+      assert.strictEqual(r._multimodal, true);
+      assert.strictEqual(r.imageUrl, 'data:image/png;base64,QUJD');
+      assert.strictEqual(r.text, 'see image');
+    } finally { h.restore(); }
+  });
+
+  await testAsync('进程退出：pending 请求立即 reject（不挂满超时）', async () => {
+    const h = createMcpHarness({ timeoutMs: 30000 });
+    try {
+      const p = h.addAndConnect({ name: 't8', command: 'fake' });
+      await h.sleep(60);
+      h.feed(ndjson({ jsonrpc: '2.0', id: 1, result: { protocolVersion: '2025-06-18', capabilities: {}, serverInfo: { name: 's', version: '1' } } }));
+      await h.sleep(40);
+      h.feed(ndjson({ jsonrpc: '2.0', id: 2, result: { tools: [{ name: 'slow', description: '', inputSchema: { type: 'object', properties: {} } }] } }));
+      await p;
+      const callP = h.call('mcp:callTool', 't8', 'slow', {});
+      await h.sleep(30);
+      const t0 = Date.now();
+      h.state.closeCb(1); // 模拟进程崩溃
+      const r = await callP;
+      const elapsed = Date.now() - t0;
+      assert.strictEqual(r.ok, false);
+      assert.ok(elapsed < 2000, `应在进程退出后立即拒绝（实际 ${elapsed}ms）`);
+    } finally { h.restore(); }
+  });
+
+  await testAsync('超时取消：请求超时发送 notifications/cancelled 并 reject', async () => {
+    const h = createMcpHarness({ timeoutMs: 400 });
+    try {
+      const p = h.addAndConnect({ name: 't9', command: 'fake' });
+      await h.sleep(60);
+      h.feed(ndjson({ jsonrpc: '2.0', id: 1, result: { protocolVersion: '2025-06-18', capabilities: {}, serverInfo: { name: 's', version: '1' } } }));
+      await h.sleep(40);
+      h.feed(ndjson({ jsonrpc: '2.0', id: 2, result: { tools: [{ name: 'slow', description: '', inputSchema: { type: 'object', properties: {} } }] } }));
+      await p;
+      h.state.written.length = 0;
+      const callP = h.call('mcp:callTool', 't9', 'slow', {});
+      const t0 = Date.now();
+      const r = await callP;
+      const elapsed = Date.now() - t0;
+      assert.strictEqual(r.ok, false);
+      assert.ok(elapsed < 3000, '应在注入的超时上限附近失败');
+      const cancelled = h.state.written.map(w => { try { return JSON.parse(w); } catch { return null; } }).find(m => m && m.method === 'notifications/cancelled');
+      assert.ok(cancelled, '超时后应发送 notifications/cancelled');
+      assert.strictEqual(cancelled.params.reasonId !== undefined || cancelled.params.requestId !== undefined, true);
+    } finally { h.restore(); }
+  });
+
+  await testAsync('notifications/tools/list_changed：自动重拉工具并广播变更', async () => {
+    const h = createMcpHarness();
+    try {
+      const p = h.addAndConnect({ name: 't10', command: 'fake' });
+      await h.sleep(60);
+      h.feed(ndjson({ jsonrpc: '2.0', id: 1, result: { protocolVersion: '2025-06-18', capabilities: { tools: { listChanged: true } }, serverInfo: { name: 's', version: '1' } } }));
+      await h.sleep(40);
+      h.feed(ndjson({ jsonrpc: '2.0', id: 2, result: { tools: [{ name: 'old', description: '', inputSchema: { type: 'object', properties: {} } }] } }));
+      await p;
+      const before = await h.call('mcp:listTools', null);
+      assert.deepStrictEqual(before.tools.map(t => t.name), ['old']);
+      h.state.written.length = 0;
+      // 服务器通知工具列表变化，随后应自动重发 tools/list
+      h.feed(ndjson({ jsonrpc: '2.0', method: 'notifications/tools/list_changed' }));
+      await h.sleep(150);
+      const listReq = h.state.written.map(w => { try { return JSON.parse(w); } catch { return null; } }).find(m => m && m.method === 'tools/list');
+      assert.ok(listReq, '收到 list_changed 后应重拉 tools/list');
+      h.feed(ndjson({ jsonrpc: '2.0', id: listReq.id, result: { tools: [{ name: 'new', description: '', inputSchema: { type: 'object', properties: {} } }] } }));
+      await h.sleep(150);
+      const after = await h.call('mcp:listTools', null);
+      assert.deepStrictEqual(after.tools.map(t => t.name), ['new'], '工具列表应刷新');
+      assert.ok(h.changedEvents.length > 0, '应向渲染器广播变更');
+    } finally { h.restore(); }
+  });
+
+  await testAsync('服务器名净化：特殊字符名生成安全组合键且路由正确', async () => {
+    const h = createMcpHarness();
+    try {
+      const p = h.addAndConnect({ name: '我的.服务器 v1.2', command: 'fake' });
+      await h.sleep(60);
+      h.feed(ndjson({ jsonrpc: '2.0', id: 1, result: { protocolVersion: '2025-06-18', capabilities: {}, serverInfo: { name: 's', version: '1' } } }));
+      await h.sleep(40);
+      h.feed(ndjson({ jsonrpc: '2.0', id: 2, result: { tools: [{ name: 'do__it', description: '', inputSchema: { type: 'object', properties: {} } }] } }));
+      const r = await p;
+      assert.strictEqual(r.ok, true);
+      const listed = await h.call('mcp:listTools', null);
+      assert.strictEqual(listed.tools.length, 1);
+      assert.match(listed.tools[0].serverName, /^[A-Za-z0-9_-]+$/, 'serverName 应净化为安全段');
+      const composite = `mcp__${listed.tools[0].serverName}__do__it`;
+      const callP = h.call('mcp:callTool', listed.tools[0].serverName, 'do__it', {});
+      await h.sleep(30);
+      h.feed(ndjson({ jsonrpc: '2.0', id: 3, result: { content: [{ type: 'text', text: 'ok' }] } }));
+      const cr = await callP;
+      assert.strictEqual(cr.ok, true, '经净化 key 路由应命中会话');
+      void composite;
+    } finally { h.restore(); }
+  });
+
+  await testAsync('Streamable HTTP 传输：initialize 协商/协议头/会话头/tools 全链路', async () => {
+    const http = require('http');
+    const seen = { headers: [], methods: [] };
+    let deleted = false;
+    const srv = http.createServer((req, res) => {
+      let body = '';
+      req.on('data', (c) => { body += c; });
+      req.on('end', () => {
+        seen.methods.push(req.method);
+        seen.headers.push(req.headers);
+        let msg = null;
+        try { msg = JSON.parse(body); } catch { /* ignore */ }
+        const reply = (obj) => {
+          res.writeHead(200, { 'Content-Type': 'application/json', 'Mcp-Session-Id': 'sess-abc123' });
+          res.end(JSON.stringify(obj));
+        };
+        if (req.method === 'DELETE') { deleted = true; res.writeHead(204); res.end(); return; }
+        if (!msg) { res.writeHead(400); res.end(); return; }
+        if (msg.method === 'initialize') {
+          reply({ jsonrpc: '2.0', id: msg.id, result: { protocolVersion: '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'http-srv', version: '1' } } });
+        } else if (msg.method === 'tools/list') {
+          reply({ jsonrpc: '2.0', id: msg.id, result: { tools: [{ name: 'htool', description: 'h', inputSchema: { type: 'object', properties: {} } }] } });
+        } else if (msg.method === 'tools/call') {
+          reply({ jsonrpc: '2.0', id: msg.id, result: { content: [{ type: 'text', text: 'hello-http' }], isError: false } });
+        } else {
+          res.writeHead(202); res.end();
+        }
+      });
+    });
+    await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+    const port = srv.address().port;
+    const h = createMcpHarness();
+    try {
+      const r = await h.addAndConnect({ type: 'http', name: 'httpt', url: `http://127.0.0.1:${port}/mcp` });
+      assert.strictEqual(r.ok, true, 'HTTP connect 应成功: ' + (r.error || ''));
+      assert.deepStrictEqual(r.tools.map(t => t.name), ['htool']);
+      assert.strictEqual(r.protocolVersion, '2025-06-18');
+      const callR = await h.call('mcp:callTool', 'httpt', 'htool', {});
+      assert.strictEqual(callR.ok, true);
+      assert.strictEqual(callR.text, 'hello-http');
+      // 规范：后续请求必须携带 MCP-Protocol-Version 与 Mcp-Session-Id 头
+      const postHeaders = seen.headers.filter((_, i) => seen.methods[i] === 'POST');
+      assert.ok(postHeaders.length >= 3, '应有 initialize/initialized/tools 等多次 POST');
+      const later = postHeaders.slice(1);
+      for (const hd of later) {
+        assert.strictEqual(hd['mcp-protocol-version'], '2025-06-18', '后续请求应带 MCP-Protocol-Version 头');
+        assert.strictEqual(hd['mcp-session-id'], 'sess-abc123', '后续请求应带回 Mcp-Session-Id');
+      }
+      await h.call('mcp:disconnect', 'httpt');
+      assert.strictEqual(deleted, true, '断开时应 DELETE 终止会话');
+    } finally {
+      h.restore();
+      srv.close();
+    }
+  });
+
+  await testAsync('stdio 关闭序列：stdin.end → 等待 → SIGTERM；顽固进程最终 SIGKILL', async () => {
+    // 场景 A：进程收到 SIGTERM 正常退出 —— 不应升级到 SIGKILL
+    {
+      const h = createMcpHarness({ shutdownGraceMs: 120 });
+      try {
+        const p = h.addAndConnect({ name: 't11a', command: 'fake' });
+        await h.sleep(60);
+        h.feed(ndjson({ jsonrpc: '2.0', id: 1, result: { protocolVersion: '2025-06-18', capabilities: {}, serverInfo: { name: 's', version: '1' } } }));
+        await h.sleep(40);
+        h.feed(ndjson({ jsonrpc: '2.0', id: 2, result: { tools: [] } }));
+        await p;
+        h.state.closeCb = null; // 进程不主动退出
+        const discP = h.call('mcp:disconnect', 't11a');
+        await h.sleep(80);
+        assert.strictEqual(h.state.stdinEnded, true, '应先关闭 stdin');
+        await h.sleep(200); // TERM_GRACE 120ms
+        assert.strictEqual(h.state.lastSignal, 'SIGTERM', '等待期后应发 SIGTERM');
+        await discP;
+        assert.notStrictEqual(h.state.lastSignal, 'SIGKILL', 'SIGTERM 已退出则不应升级 SIGKILL');
+      } finally { h.restore(); }
+    }
+    // 场景 B：顽固进程忽略信号 —— 最终必须 SIGKILL
+    {
+      const h = createMcpHarness({ shutdownGraceMs: 120 });
+      try {
+        const p = h.addAndConnect({ name: 't11b', command: 'fake' });
+        await h.sleep(60);
+        h.feed(ndjson({ jsonrpc: '2.0', id: 1, result: { protocolVersion: '2025-06-18', capabilities: {}, serverInfo: { name: 's', version: '1' } } }));
+        await h.sleep(40);
+        h.feed(ndjson({ jsonrpc: '2.0', id: 2, result: { tools: [] } }));
+        await p;
+        // 顽固进程：覆写 kill，仅记录信号、永不触发 close（模拟忽略 SIGTERM/SIGKILL 前的存活期）
+        h.state.proc.kill = (sig) => { h.state.lastSignal = sig || 'SIGTERM'; };
+        const discP = h.call('mcp:disconnect', 't11b');
+        await discP;
+        assert.strictEqual(h.state.stdinEnded, true);
+        assert.strictEqual(h.state.lastSignal, 'SIGKILL', '忽略信号的进程最终应被 SIGKILL');
+      } finally { h.restore(); }
+    }
+  });
+
+  await testAsync('addServer 校验：http 类型必须有合法 URL / stdio 必须有 command', async () => {
+    const h = createMcpHarness();
+    try {
+      const badHttp = await h.call('mcp:addServer', { type: 'http', name: 'h1', url: 'not-a-url' });
+      assert.strictEqual(badHttp.ok, false);
+      const badStdio = await h.call('mcp:addServer', { type: 'stdio', name: 's1' });
+      assert.strictEqual(badStdio.ok, false);
+      const okHttp = await h.call('mcp:addServer', { type: 'http', name: 'h2', url: 'https://example.com/mcp' });
+      assert.strictEqual(okHttp.ok, true);
+    } finally { h.restore(); }
+  });
+}
+
 async function runAutomationTests() {
   await testAsync('自动化 DSL：图灵完备子集（递归/循环/插值/??/标准库）', async () => {
     const { runDsl } = require('../src/main/automation/dsl.js');
@@ -3587,12 +3997,26 @@ async function runAutomationTests() {
       const cronTask = mgr.upsert({
         name: '定时', enabled: true,
         trigger: { type: 'schedule', config: { cron: '*/5 * * * *' } },
+        delivery: { mode: 'continue' },
         dsl: 'return "tick-" + trigger.kind;'
       });
       const runRes = await mgr.run(cronTask.id, { kind: 'schedule', params: {} });
       assert.strictEqual(runRes.ok, true);
       const listed = mgr.list().find(t => t.id === cronTask.id);
       assert.strictEqual(listed.runCount, 1);
+      // 投递模式：默认 new；显式 continue 持久化并透传到 dispatch payload
+      const dispatches = dispatched.filter(m => m.channel === 'automation:dispatch');
+      assert.strictEqual(dispatches[0].payload.delivery.mode, 'new', '未配置投递模式时默认 new');
+      assert.strictEqual(dispatches[1].payload.delivery.mode, 'continue', 'continue 模式应透传到 dispatch');
+      assert.strictEqual(listed.delivery.mode, 'continue', 'continue 模式应持久化');
+      // 非法值回退 new
+      const badTask = mgr.upsert({
+        name: '非法投递', enabled: false,
+        trigger: { type: 'schedule', config: { cron: '*/5 * * * *' } },
+        delivery: { mode: 'bogus' },
+        dsl: 'return "x";'
+      });
+      assert.strictEqual(mgr.list().find(t => t.id === badTask.id).delivery.mode, 'new', '非法投递模式应回退 new');
     } finally {
       mgr.stop();
       try { fsLocal2.rmSync(dataDir, { recursive: true, force: true }); } catch { /* ignore */ }
@@ -4243,6 +4667,7 @@ test('agent.js 标题生成：走 title-utils 且 LLM 失败时用启发式兜�
   runPromptCacheTests();
   runSandboxTests();
   await runAutomationTests();
+  await runMcpSpecTests();
   await runDsPluginTests();
 
   console.log(`\n${'='.repeat(40)}`);

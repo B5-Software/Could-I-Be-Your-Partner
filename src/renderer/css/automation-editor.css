@@ -247,3 +247,35 @@ input, select, textarea { font-family: inherit; font-size: 13px; }
 /* 触发配置行 */
 .ae-config-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .ae-config-grid .full { grid-column: 1 / -1; }
+
+/* ---- 文档浮层 ---- */
+.ae-doc-overlay {
+  position: fixed; inset: 0; z-index: 100;
+  background: rgba(10, 12, 20, .45);
+  display: flex; align-items: center; justify-content: center;
+  padding: 32px;
+}
+.ae-doc-overlay.hidden { display: none !important; }
+.ae-doc-panel {
+  width: 720px; max-width: 92vw; height: 78vh;
+  background: var(--ae-bg2); border: 1px solid var(--ae-border);
+  border-radius: 14px; box-shadow: 0 18px 48px rgba(0,0,0,.28);
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.ae-doc-header {
+  height: 42px; flex: none;
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0 8px 0 14px;
+  border-bottom: 1px solid var(--ae-border);
+  font-weight: 600; color: var(--ae-text);
+}
+.ae-doc-header i { color: var(--ae-accent); margin-right: 6px; }
+.ae-doc-body {
+  flex: 1; margin: 0; overflow: auto;
+  padding: 16px 18px;
+  font-family: ui-monospace, 'SFMono-Regular', Consolas, monospace;
+  font-size: 12px; line-height: 1.65;
+  color: var(--ae-text);
+  white-space: pre-wrap; word-break: break-word;
+  user-select: text;
+}

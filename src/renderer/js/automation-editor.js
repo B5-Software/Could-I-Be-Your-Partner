@@ -48,19 +48,65 @@
   }
 
   function applyCssTheme(theme, shouldUseDarkColors) {
-    document.documentElement.setAttribute('data-theme', shouldUseDarkColors ? 'dark' : 'light');
-    if (theme && typeof theme === 'object') {
-      const map = {
-        '--accent': theme.accentColor || theme.accent,
-        '--accent-light': theme.accentLight || theme.accentColor,
-        '--accent-dark': theme.accentDark || theme.accentColor,
-        '--bg-primary': theme.backgroundColor,
-        '--text-primary': theme.textColor,
-        '--border': theme.borderColor
-      };
-      for (const [k, v] of Object.entries(map)) {
-        if (v) document.documentElement.style.setProperty(k, v);
-      }
+    // 与 subapp-theme.js 的 applyThemeToDoc 对齐：强调色 6 变量 + 背景亮度推导 + 文本派生，
+    // 保证 automation-editor.css 引用的全部变量（含 --bg-secondary/--text-secondary 等）都有值
+    const t = theme && typeof theme === 'object' ? theme : {};
+    const mode = t.mode || 'system';
+    let isDark;
+    if (mode === 'dark') isDark = true;
+    else if (mode === 'light') isDark = false;
+    else isDark = shouldUseDarkColors !== undefined ? !!shouldUseDarkColors : false;
+    document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
+
+    const hex2rgb = (hex) => ({
+      r: parseInt(hex.slice(1, 3), 16),
+      g: parseInt(hex.slice(3, 5), 16),
+      b: parseInt(hex.slice(5, 7), 16)
+    });
+    const clamp = (v) => Math.max(0, Math.min(255, Math.round(v)));
+
+    // 强调色（6 变量）
+    const accent = /^#[0-9a-fA-F]{6}$/.test(t.accentColor || '') ? t.accentColor : (isDark ? '#6c8cff' : '#4f8cff');
+    const { r: ar, g: ag, b: ab } = hex2rgb(accent);
+    const root = document.documentElement.style;
+    root.setProperty('--accent', accent);
+    root.setProperty('--accent-light', `rgb(${clamp(ar + 40)}, ${clamp(ag + 40)}, ${clamp(ab + 40)})`);
+    root.setProperty('--accent-dark', `rgb(${clamp(ar - 30)}, ${clamp(ag - 30)}, ${clamp(ab - 30)})`);
+    root.setProperty('--accent-bg', `rgba(${ar}, ${ag}, ${ab}, 0.08)`);
+    root.setProperty('--accent-bg-hover', `rgba(${ar}, ${ag}, ${ab}, 0.14)`);
+    root.setProperty('--accent-rgb', `${ar},${ag},${ab}`);
+
+    // 背景色（4 变量，按亮度推导层级）
+    const bg = /^#[0-9a-fA-F]{6}$/.test(t.backgroundColor || '') ? t.backgroundColor : (isDark ? '#17181d' : '#f5f7fa');
+    const { r: br, g: bgc, b: bb } = hex2rgb(bg);
+    const lum = (0.299 * br + 0.587 * bgc + 0.114 * bb) / 255;
+    const dark = lum < 0.5;
+    root.setProperty('--bg-primary', bg);
+    if (dark) {
+      root.setProperty('--bg-secondary', `rgb(${clamp(br + 20)}, ${clamp(bgc + 20)}, ${clamp(bb + 20)})`);
+      root.setProperty('--bg-tertiary', `rgb(${clamp(br + 30)}, ${clamp(bgc + 30)}, ${clamp(bb + 30)})`);
+      root.setProperty('--bg-hover', `rgb(${clamp(br + 40)}, ${clamp(bgc + 40)}, ${clamp(bb + 40)})`);
+    } else {
+      root.setProperty('--bg-secondary', `rgb(${clamp(br - 10)}, ${clamp(bgc - 10)}, ${clamp(bb - 10)})`);
+      root.setProperty('--bg-tertiary', `rgb(${clamp(br - 20)}, ${clamp(bgc - 20)}, ${clamp(bb - 20)})`);
+      root.setProperty('--bg-hover', `rgb(${clamp(br - 5)}, ${clamp(bgc - 5)}, ${clamp(bb - 5)})`);
+    }
+
+    // 文本 / 边框 / 状态色（按模式派生）
+    if (dark) {
+      root.setProperty('--text-primary', '#e8eaf2');
+      root.setProperty('--text-secondary', '#a8adbf');
+      root.setProperty('--text-tertiary', '#7d8296');
+      root.setProperty('--border', '#33364a');
+      root.setProperty('--danger', '#ff6b5e');
+      root.setProperty('--success', '#3ddc84');
+    } else {
+      root.setProperty('--text-primary', '#1a1a2e');
+      root.setProperty('--text-secondary', '#5a5a7a');
+      root.setProperty('--text-tertiary', '#8a8aaa');
+      root.setProperty('--border', '#e2e6ee');
+      root.setProperty('--danger', '#e74c3c');
+      root.setProperty('--success', '#27ae60');
     }
     applyMonacoTheme();
   }
@@ -239,6 +285,7 @@ Content-Type: application/json
       name: ($('ae-name')?.value || '').trim() || '未命名任务',
       enabled: $('ae-enabled')?.checked !== false,
       trigger: { type, config },
+      delivery: { mode: $('ae-delivery-mode')?.value === 'continue' ? 'continue' : 'new' },
       dsl: monacoEditor ? monacoEditor.getValue() : '',
       runCount: currentTask?.runCount || 0,
       lastRunAt: currentTask?.lastRunAt || null,
@@ -334,6 +381,7 @@ Content-Type: application/json
       currentTask = {
         name: '', enabled: true,
         trigger: { type: 'schedule', config: { cron: '*/5 * * * *' } },
+        delivery: { mode: 'new' },
         dsl: 'return "你好，我是自动化任务。"'
       };
     }
@@ -341,6 +389,8 @@ Content-Type: application/json
     $('ae-enabled').checked = !!currentTask.enabled;
     $('ae-trigger-type').value = currentTask.trigger?.type || 'schedule';
     renderTriggerConfig(currentTask.trigger?.type || 'schedule');
+    const deliverySel = $('ae-delivery-mode');
+    if (deliverySel) deliverySel.value = (currentTask.delivery && currentTask.delivery.mode === 'continue') ? 'continue' : 'new';
     if (monacoEditor) monacoEditor.setValue(currentTask.dsl || '');
     refreshMeta();
   }
@@ -348,6 +398,7 @@ Content-Type: application/json
   function bindEvents() {
     ['ae-name'].forEach((id) => $(id)?.addEventListener('input', () => setDirty(true)));
     $('ae-enabled')?.addEventListener('change', () => setDirty(true));
+    $('ae-delivery-mode')?.addEventListener('change', () => setDirty(true));
     $('ae-trigger-type')?.addEventListener('change', (e) => {
       setDirty(true);
       renderTriggerConfig(e.target.value);
@@ -366,6 +417,28 @@ Content-Type: application/json
       }
     });
     $('btn-close-output')?.addEventListener('click', () => $('ae-output')?.classList.add('hidden'));
+    // 文档按钮：窗口内浮层展示（自动化与 DSL / HTTP 信号接口）
+    const openDoc = async (topic, title) => {
+      const overlay = $('ae-doc-overlay');
+      const body = $('ae-doc-body');
+      const titleEl = $('ae-doc-title');
+      if (!overlay || !body) return;
+      if (titleEl) titleEl.innerHTML = '<i class="fa-solid fa-book"></i> ' + title;
+      body.textContent = '加载中…';
+      overlay.classList.remove('hidden');
+      try {
+        const r = await api.getGuide(topic);
+        body.textContent = (r && r.ok) ? (r.guide || '（空）') : ((r && r.error) || '文档加载失败');
+      } catch (e) {
+        body.textContent = '文档加载失败: ' + e.message;
+      }
+    };
+    $('ae-doc-link')?.addEventListener('click', (e) => { e.preventDefault(); openDoc('all', '自动化与 DSL 文档'); });
+    $('ae-doc-http')?.addEventListener('click', (e) => { e.preventDefault(); openDoc('http', 'HTTP 信号接口'); });
+    $('btn-close-doc')?.addEventListener('click', () => $('ae-doc-overlay')?.classList.add('hidden'));
+    $('ae-doc-overlay')?.addEventListener('click', (e) => {
+      if (e.target === e.currentTarget) $('ae-doc-overlay').classList.add('hidden');
+    });
     $('btn-close')?.addEventListener('click', async () => {
       if (dirty && !window.confirm('当前修改尚未保存，确定关闭吗？')) return;
       api.closeWindow();
@@ -385,13 +458,11 @@ Content-Type: application/json
     bindEvents();
     await loadTask(initialId);
     await initMonaco();
-    const t = await api.getTheme();
-    applyCssTheme(null, t && t.shouldUseDarkColors);
-    // 初始完整主题（accent/bg）
+    // 初始主题：theme:get 现在返回完整 theme（accent/bg），打开即跟随主程序
     try {
-      const settings = await window.automationEditorAPI.getTheme();
-      applyCssTheme(null, settings?.shouldUseDarkColors);
-    } catch { /* ignore */ }
+      const t = await api.getTheme();
+      applyCssTheme(t && t.theme, t && t.shouldUseDarkColors);
+    } catch { applyCssTheme(null, undefined); }
   }
 
   init().catch((e) => {

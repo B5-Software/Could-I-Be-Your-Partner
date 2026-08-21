@@ -179,6 +179,8 @@ function sessionStatusLabel(status) {
     done: '已完成',
     error: '失败',
     interrupted: '已中断',
+    stopped: '已停止',
+    crashed: '异常退出',
     idle: '空闲'
   };
   return map[status] || status || '空闲';

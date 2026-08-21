@@ -50,6 +50,7 @@
             <i class="fa-solid fa-bolt" style="color:var(--accent)"></i>
             <strong>${escapeHtml(t.name)}</strong>
             <span style="font-size:11px;color:var(--text-tertiary)">${escapeHtml(triggerSummary(t.trigger))}</span>
+            <span style="font-size:10.5px;padding:1px 8px;border-radius:99px;border:1px solid var(--border);color:var(--text-tertiary)" title="投递模式">${(t.delivery && t.delivery.mode === 'continue') ? '↩︎ 继续当前 Chat' : '✦ 新建 Chat'}</span>
           </div>
           <div style="font-size:11px;color:var(--text-tertiary);margin-top:2px">已运行 ${t.runCount || 0} 次${t.lastRunAt ? ` · 上次 ${new Date(t.lastRunAt).toLocaleString()}` : ''}${t.lastError ? ` · <span style="color:var(--danger)">${escapeHtml(t.lastError)}</span>` : ''}</div>
         </div>
@@ -105,14 +106,33 @@
     if (document.getElementById('page-automation')?.classList.contains('active')) loadAutomationPage();
   });
 
-  // 自动化分发：新建一个 Chat 会话并发送渲染后的提示词
+  // 自动化分发：按任务投递模式（delivery.mode）新建或继续 Chat 会话并发送渲染后的提示词
   if (typeof window.api.onAutomationDispatch === 'function') {
     window.api.onAutomationDispatch(async (payload) => {
       if (typeof createNewSession !== 'function') throw new Error('会话模块未就绪');
-      await createNewSession('chat');
-      await new Promise(r => setTimeout(r, 80));
-      document.querySelector('.nav-item[data-page="chat"]')?.click();
+      const mode = payload && payload.delivery && payload.delivery.mode === 'continue' ? 'continue' : 'new';
       const sm = window.__sessionManager;
+      let continued = false;
+      if (mode === 'continue' && sm) {
+        // 兜底链（与"主人来信"一致）：当前激活且有内容的 chat → 最近非运行中有内容的 chat
+        const hasContent = (s) => ((s.agent && s.agent.contextManager && Array.isArray(s.agent.contextManager.messages)) ? s.agent.contextManager.messages.length : 0) > 0;
+        const chats = sm.list().filter(s => s && s.mode === 'chat');
+        let target = chats.find(s => s.active && hasContent(s))
+          || chats.find(s => s.status !== 'running' && s.status !== 'queued' && hasContent(s))
+          || null;
+        if (target) {
+          if (typeof activateSession === 'function') {
+            await activateSession('chat', target.key);
+            await new Promise(r => setTimeout(r, 60));
+          }
+          continued = true;
+        }
+      }
+      if (!continued) {
+        await createNewSession('chat');
+        await new Promise(r => setTimeout(r, 80));
+      }
+      document.querySelector('.nav-item[data-page="chat"]')?.click();
       const session = sm ? sm.getActive('chat') : null;
       const ag = (session && session.agent) || agent;
       if (!ag) throw new Error('无法获取 Chat Agent');
@@ -120,11 +140,17 @@
       if (typeof addMessageToChat === 'function') addMessageToChat('user', prompt);
       if (typeof addThinkingIndicator === 'function') addThinkingIndicator();
       try {
-        await ag.sendMessage(prompt, []);
+        // 运行中 → 排队（followup 语义），空闲 → 直接发送
+        if (ag.running || (sm && typeof sm.requestStart === 'function' && !sm.requestStart(session))) {
+          if (sm && typeof sm.queue === 'function') sm.queue(session, { text: prompt, attachments: [] });
+          else await ag.sendMessage(prompt, []);
+        } else {
+          await ag.sendMessage(prompt, []);
+        }
       } finally {
         if (typeof removeThinkingIndicator === 'function') removeThinkingIndicator();
       }
-      return { sessionKey: ag.sessionKey || (session && session.key) || null };
+      return { sessionKey: ag.sessionKey || (session && session.key) || null, continued };
     });
   }
 

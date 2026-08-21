@@ -5,7 +5,7 @@
  * This file is part of Could I Be Your Partner.
  */
 
-const { app, BrowserWindow, ipcMain, nativeTheme, dialog, clipboard, screen, shell, systemPreferences, Notification, Tray, Menu, nativeImage, protocol, net } = require('electron');
+const { app, BrowserWindow, ipcMain, nativeTheme, dialog, clipboard, screen, shell, systemPreferences, Notification, Tray, Menu, nativeImage, protocol, net, safeStorage } = require('electron');
 
 // stdout/stderr 被关闭或管道截断（如 `npm start | head`）时，console.log 会抛
 // EPIPE 未捕获异常直接崩溃主进程 —— 吞掉流错误，此后写操作变为无害 no-op。
@@ -28,6 +28,7 @@ const os = require('os');
 const { spawnSync } = require('child_process');
 const { EmailService } = require('./email-service');
 const { FediKittenService } = require('./fedikitten-service');
+const { CibypImService } = require('./cibyp-im-service');
 const { importSpreadsheetFile, exportSpreadsheetFile } = require('./spreadsheet-io');
 const { WebControlService } = require('./web-control-service');
 const { fetchLLMWithRetry, consumeSSEStream, abortAllRequests, abortRequests, DEFAULT_TIMEOUT_MS } = require('./llm-retry');
@@ -60,6 +61,7 @@ const { registerGeogebraProtocol } = require('./geogebra-protocol');
 
 const emailService = new EmailService();
 const fedikittenService = new FediKittenService();
+const cibypImService = new CibypImService();
 const webControlService = new WebControlService();
 const APP_VERSION = app.getVersion();
 
@@ -101,6 +103,51 @@ const babeHistoryDir = path.join(dataDir, 'babe-history'); // Babe mode 独立�
 const workspacesBaseDir = path.join(app.getPath('documents'), 'Could-I-Be-Your-Partner');
 
 [dataDir, imagesDir, skillsDir, historyDir, babeHistoryDir, workspacesBaseDir].forEach(d => { if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true }); });
+
+// ---- 崩溃会话清扫：应用异常退出后，把残留"运行中"的历史标记为"异常退出" ----
+// 用"上次优雅退出时间戳"做门闸：只检查该时刻之后修改过的历史文件，启动开销恒定很小。
+const lastCleanExitPath = path.join(dataDir, '.last-clean-exit');
+const ACTIVE_SESSION_STATUSES = new Set(['running', 'queued', 'waiting_approval', 'waiting_tool_auth']);
+let _bootTime = Date.now(); // 本次启动时间（before-quit 清扫用：只查本次运行触碰过的文件）
+
+function readLastCleanExit() {
+  try { return Number(fs.readFileSync(lastCleanExitPath, 'utf8').trim()) || 0; } catch { return 0; }
+}
+
+function writeLastCleanExit(ts) {
+  try { fs.writeFileSync(lastCleanExitPath, String(ts), 'utf8'); } catch { /* ignore */ }
+}
+
+// 把 sinceMs 之后修改过、仍处于活动状态的历史标记为 crashed（sinceMs=0 表示全量）
+function markActiveHistoriesCrashed(sinceMs) {
+  const dirs = [historyDir, babeHistoryDir];
+  // Code 模式历史在各工作区 .cibyp-code-history/ 下
+  try {
+    for (const ws of fs.readdirSync(workspacesBaseDir)) {
+      const d = path.join(workspacesBaseDir, ws, '.cibyp-code-history');
+      if (fs.existsSync(d)) dirs.push(d);
+    }
+  } catch { /* ignore */ }
+  let fixed = 0;
+  for (const dir of dirs) {
+    let files = [];
+    try { files = fs.readdirSync(dir).filter((f) => f.endsWith('.json')); } catch { continue; }
+    for (const f of files) {
+      const full = path.join(dir, f);
+      try {
+        if (sinceMs > 0 && fs.statSync(full).mtimeMs <= sinceMs) continue;
+        const data = loadJSON(full, null);
+        if (!data || typeof data !== 'object') continue;
+        if (!ACTIVE_SESSION_STATUSES.has(data.status)) continue;
+        data.status = 'crashed';
+        data.lastError = data.lastError || '应用异常退出，会话被中断';
+        saveJSON(full, data, false);
+        fixed++;
+      } catch { /* 单个文件损坏不阻断清扫 */ }
+    }
+  }
+  return fixed;
+}
 
 const settingsPath = path.join(dataDir, 'settings.json');
 const memoryPath = path.join(dataDir, 'memory.json');
@@ -158,16 +205,25 @@ const dsTransportRequest = (channel, payload, timeoutMs, signal) => {
     dsTransportSend(channel, payload);
   });
 };
+// 供插件/自动化读取设置：剥离 CIBYP-IM 敏感 vault（token/私钥），防止渲染器侧插件外泄
+function readSanitizedSettingsFile() {
+  const s = loadJSON(settingsPath, {});
+  if (s && s.cibypIm) {
+    const { vault, active, identity, keys, sessions, groups, ...rest } = s.cibypIm;
+    s.cibypIm = { ...rest, loggedIn: !!(active && active.token) };
+  }
+  return s;
+}
 const pluginManager = new PluginManager(dataDir, {
   skills: pluginSkillsProvider,
   transport: { send: dsTransportSend, request: dsTransportRequest },
-  getSettings: async () => loadJSON(settingsPath, {})
+  getSettings: async () => readSanitizedSettingsFile()
 }).init();
 // 自动化任务管理器（定时 / 系统通知 / HTTP 信号服务器 → 新 Chat 会话）
 const automationManager = new AutomationManager({
   dataDir,
   transport: { send: dsTransportSend, request: dsTransportRequest },
-  getSettings: async () => loadJSON(settingsPath, {})
+  getSettings: async () => readSanitizedSettingsFile()
 });
 const knowledgePath = path.join(dataDir, 'knowledge.json');
 // 异常中断的会话（关闭App时正在工作）保存到此文件，下次启动时弹模态框询问是否继续
@@ -522,6 +578,88 @@ function persistSettings() {
   saveJSON(settingsPath, settings);
 }
 
+// ---- CIBYP-IM 安全存储与状态持久化（模块顶层：启动/before-quit/IPC 共用）----
+// 敏感状态（token/私钥/会话）用 safeStorage（OS 钥匙串）加密后存 settings.json；
+// settings.cibypIm 只保留非敏感配置（ownerUsername 等）+ vault 密文。
+const CIBYP_IM_SENSITIVE_KEYS = ['active', 'identity', 'keys', 'sessions', 'groups'];
+let _cibypImSaveTimer = null;
+let _cibypImPlainWarned = false;
+
+function cibypImUnsealConfig(cfg) {
+  const c = { ...(cfg || {}) };
+  // 迁移旧版明文字段到内存（下次保存时会被密封并删除）
+  const legacy = {};
+  for (const k of CIBYP_IM_SENSITIVE_KEYS) {
+    if (c[k] !== undefined) { legacy[k] = c[k]; delete c[k]; }
+  }
+  if (typeof c.vault === 'string' && c.vault) {
+    try {
+      if (safeStorage.isEncryptionAvailable()) {
+        const plain = safeStorage.decryptString(Buffer.from(c.vault, 'base64'));
+        Object.assign(c, JSON.parse(plain));
+      } else {
+        console.error('[CIBYP-IM] safeStorage 不可用，无法解密本机密钥vault');
+      }
+    } catch (e) {
+      console.error('[CIBYP-IM] vault 解密失败:', e.message);
+    }
+  } else if (Object.keys(legacy).length) {
+    Object.assign(c, legacy); // 明文迁移路径
+  }
+  return c;
+}
+
+function cibypImSealState(stateObj) {
+  const sensitive = {};
+  for (const k of CIBYP_IM_SENSITIVE_KEYS) sensitive[k] = stateObj ? stateObj[k] : null;
+  if (safeStorage && safeStorage.isEncryptionAvailable()) {
+    try {
+      return { vault: safeStorage.encryptString(JSON.stringify(sensitive)).toString('base64') };
+    } catch (e) {
+      console.error('[CIBYP-IM] vault 加密失败:', e.message);
+    }
+  } else if (!_cibypImPlainWarned) {
+    _cibypImPlainWarned = true;
+    console.warn('[CIBYP-IM] safeStorage 不可用，密钥将以明文保存在 settings.json（不建议）');
+  }
+  return sensitive; // 兜底：明文（功能优先，已警告）
+}
+
+function saveCibypImState(immediate = false) {
+  if (!cibypImService) return;
+  const apply = () => {
+    _cibypImSaveTimer = null;
+    try {
+      const sealed = cibypImSealState(cibypImService.getExportedConfig());
+      const next = { ...(settings.cibypIm || {}), ...sealed };
+      for (const k of CIBYP_IM_SENSITIVE_KEYS) delete next[k]; // 清除旧明文
+      settings.cibypIm = next;
+      persistSettings();
+    } catch (e) {
+      console.error('[CIBYP-IM] 状态持久化失败:', e.message);
+    }
+  };
+  if (immediate) {
+    if (_cibypImSaveTimer) { clearTimeout(_cibypImSaveTimer); _cibypImSaveTimer = null; }
+    apply();
+    return;
+  }
+  if (_cibypImSaveTimer) return;
+  _cibypImSaveTimer = setTimeout(apply, 2000); // 防抖：高频工具调用不反复写盘
+}
+
+function cibypImConfigureFromSettings() {
+  try {
+    const cfg = settings.cibypIm || {};
+    const hasLegacyPlaintext = CIBYP_IM_SENSITIVE_KEYS.some((k) => cfg[k] !== undefined);
+    cibypImService.configure(cibypImUnsealConfig(cfg));
+    // 旧版明文残留：立即密封落盘，缩短明文暴露窗口
+    if (hasLegacyPlaintext) saveCibypImState(true);
+  } catch (e) {
+    console.error('[CIBYP-IM] 初始化失败:', e.message);
+  }
+}
+
 
 
 
@@ -590,9 +728,9 @@ let settings = loadJSON(settingsPath, {
     localNetworkPromptShown: false
   },
   imageGen: {
-    apiUrl: 'https://api.siliconflow.cn/v1/images/generations',
+    apiUrl: '',
     apiKey: '',
-    model: 'Kwai-Kolors/Kolors',
+    model: '',
     imageSize: '1024x1024',
     dailyMaxImages: 0,
     dailyImagesUsed: 0,
@@ -653,6 +791,7 @@ let settings = loadJSON(settingsPath, {
   mcp: { servers: [] },
   email: { enabled: false, mode: 'send-receive', smtpHost: '', smtpPort: 587, smtpSecure: true, imapHost: '', imapPort: 993, imapTls: true, emailUser: '', emailPass: '', ownerAddress: '', totpSecret: '', pollInterval: 30, approvalResendMinutes: 5, maxResends: 3, resendIntervalMinutes: 30, allowedSenders: [] },
   fedikitten: { active: { url: '', username: '', accessToken: '' }, clients: {} },
+  cibypIm: { active: null, identity: null, keys: [], sessions: [], groups: [] },
   webControl: { enabled: false, port: 3456, password: '', passwordHash: '', enable2FA: false, totpSecret: '' },
   // 系统桌面通知分类开关（渲染器按分类判断是否弹窗；updateAvailable 供更新检查模块消费）
   notifications: {
@@ -745,7 +884,10 @@ let settings = loadJSON(settingsPath, {
 });
 if (fs.existsSync(settingsPath)) {
   const saved = loadJSON(settingsPath, {});
-  settings = { ...settings, ...saved, llm: { ...settings.llm, ...(saved.llm || {}) }, agent: { ...settings.agent, ...(saved.agent || {}) }, sessions: { ...settings.sessions, ...(saved.sessions || {}) }, permissions: { ...settings.permissions, ...(saved.permissions || {}) }, imageGen: { ...settings.imageGen, ...(saved.imageGen || {}) }, theme: { ...settings.theme, ...(saved.theme || {}) }, aiPersona: { ...settings.aiPersona, ...(saved.aiPersona || {}) }, userProfile: { ...settings.userProfile, ...(saved.userProfile || {}) }, entropy: { ...settings.entropy, ...(saved.entropy || {}) }, proxy: { ...settings.proxy, ...(saved.proxy || {}) }, mcp: { ...settings.mcp, ...(saved.mcp || {}) }, email: { ...settings.email, ...(saved.email || {}) }, fedikitten: { ...settings.fedikitten, ...(saved.fedikitten || {}) }, webControl: { ...settings.webControl, ...(saved.webControl || {}) }, budget: { ...settings.budget, ...(saved.budget || {}) }, terminal: { ...settings.terminal, ...(saved.terminal || {}) }, privacyProtection: { ...settings.privacyProtection, ...(saved.privacyProtection || {}) }, ime: { ...settings.ime, ...(saved.ime || {}) }, voice: { ...settings.voice, ...(saved.voice || {}) }, notifications: { ...settings.notifications, ...(saved.notifications || {}) }, updates: { ...settings.updates, ...(saved.updates || {}) } };
+  settings = { ...settings, ...saved, llm: { ...settings.llm, ...(saved.llm || {}) }, agent: { ...settings.agent, ...(saved.agent || {}) }, sessions: { ...settings.sessions, ...(saved.sessions || {}) }, permissions: { ...settings.permissions, ...(saved.permissions || {}) }, imageGen: { ...settings.imageGen, ...(saved.imageGen || {}) }, theme: { ...settings.theme, ...(saved.theme || {}) }, aiPersona: { ...settings.aiPersona, ...(saved.aiPersona || {}) }, userProfile: { ...settings.userProfile, ...(saved.userProfile || {}) }, entropy: { ...settings.entropy, ...(saved.entropy || {}) }, proxy: { ...settings.proxy, ...(saved.proxy || {}) }, mcp: { ...settings.mcp, ...(saved.mcp || {}) }, email: { ...settings.email, ...(saved.email || {}) }, fedikitten: { ...settings.fedikitten, ...(saved.fedikitten || {}) }, cibypIm: { ...settings.cibypIm, ...(saved.cibypIm || {}) }, webControl: { ...settings.webControl, ...(saved.webControl || {}) }, budget: { ...settings.budget, ...(saved.budget || {}) }, terminal: { ...settings.terminal, ...(saved.terminal || {}) }, privacyProtection: { ...settings.privacyProtection, ...(saved.privacyProtection || {}) }, ime: { ...settings.ime, ...(saved.ime || {}) }, voice: { ...settings.voice, ...(saved.voice || {}) }, notifications: { ...settings.notifications, ...(saved.notifications || {}) }, updates: { ...settings.updates, ...(saved.updates || {}) } };
+  // 生图设置去品牌化迁移：旧版本内置的默认端点/模型清空，改为用户显式配置
+  if (settings.imageGen.apiUrl === 'https://api.siliconflow.cn/v1/images/generations') settings.imageGen.apiUrl = '';
+  if (settings.imageGen.model === 'Kwai-Kolors/Kolors') settings.imageGen.model = '';
   // voice 子对象深合并（ttsVoices / kws）
   if (saved.voice) {
     settings.voice.ttsVoices = { zh: 'zf_xiaoxiao', en: 'af_heart', de: 'thorsten', ...(saved.voice.ttsVoices || {}) };
@@ -1211,6 +1353,15 @@ ipcMain.handle('proxy:apply', async (_, proxy) => {
 });
 
 app.whenReady().then(() => {
+  // 崩溃会话清扫：上次运行异常退出时残留的"运行中"历史 → 标记"异常退出"
+  try {
+    const fixed = markActiveHistoriesCrashed(readLastCleanExit());
+    if (fixed > 0) console.log(`[history] 已将 ${fixed} 个异常退出的会话标记为 crashed`);
+  } catch (e) { console.error('[history] 崩溃清扫失败:', e.message); }
+  _bootTime = Date.now();
+  writeLastCleanExit(_bootTime);
+  // CIBYP-IM：ready 后解封 vault（safeStorage 需要 ready），服务状态常驻内存
+  cibypImConfigureFromSettings();
   // 注册 GeoGebra 离线静态服务（ggb://app/... → assets/geogebra-app/GeoGebra/HTML5/5.0/...）
   registerGeogebraProtocol();
   // 启动时复制 OCR traineddata 文件到当前执行目录根，避免 GFW blocking
@@ -1770,7 +1921,7 @@ ipcMain.handle('env:detect', () => {
 });
 
 // ---- IPC: Theme ----
-ipcMain.handle('theme:get', () => ({ shouldUseDarkColors: nativeTheme.shouldUseDarkColors, mode: settings.theme.mode }));
+ipcMain.handle('theme:get', () => ({ shouldUseDarkColors: nativeTheme.shouldUseDarkColors, mode: settings.theme.mode, theme: settings.theme }));
 // 广播主题变化到所有 BrowserWindow（含子窗口 CAD/EDA/小游戏）
 function broadcastThemeChanged() {
   const payload = { shouldUseDarkColors: nativeTheme.shouldUseDarkColors, mode: settings.theme.mode };
@@ -2647,6 +2798,8 @@ ipcMain.handle('image:generate', async (_, prompt, workspacePath) => {
     const apiKey = settings.imageGen.apiKey;
     const model = settings.imageGen.model;
     const imageSize = settings.imageGen.imageSize;
+    if (!apiUrl) return { ok: false, error: '请先在设置中配置生图 API URL' };
+    if (!model) return { ok: false, error: '请先在设置中配置生图模型名称' };
     if (!apiKey) return { ok: false, error: '请先配置生图API Key' };
 
     resetDailyUsageIfNeeded();
@@ -5908,7 +6061,15 @@ const mcpService = registerMcpIpc({
   ipcMain,
   getSettings: () => settings,
   persist: () => persistSettings(),
-  appVersion: APP_VERSION
+  appVersion: APP_VERSION,
+  // MCP 状态/工具变化 → 广播给渲染器刷新动态工具注册
+  notifyRenderer: (payload) => {
+    try {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('mcp:servers-changed', payload || {});
+      }
+    } catch { /* ignore */ }
+  }
 });
 
 // ---- Playwright 浏览器控制（实现已拆分到 ./browser-service.js）----
@@ -6696,6 +6857,218 @@ app.whenReady().then(async () => {
     }
   });
 
+  // ---- CIBYP-IM Service IPC ----
+  // （辅助函数在模块顶层定义，供启动/before-quit/IPC 共用）
+
+  ipcMain.handle('cibypIm:getState', async () => {
+    try {
+      const s = cibypImService.getState();
+      const cfg = settings.cibypIm || {};
+      return { ...s, owner: { ownerUsername: cfg.ownerUsername || '', ownerMode: cfg.ownerMode || 'none', pollIntervalSec: cfg.pollIntervalSec || 300 } };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('cibypIm:login', async (_, url, username, password, forceTakeover) => {
+    try {
+      const result = await cibypImService.login({ url, username, password, forceTakeover: !!forceTakeover });
+      saveCibypImState(true);
+      return result;
+    } catch (e) {
+      saveCibypImState(true); // 登录失败也可能回滚了 active，落盘一次
+      return { ok: false, error: e.message, code: e.code || undefined };
+    }
+  });
+
+  ipcMain.handle('cibypIm:logout', async () => {
+    try {
+      const result = await cibypImService.logout();
+      // 保留身份密钥与会话（重登后可继续解密），仅清除登录态
+      saveCibypImState(true);
+      return result;
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  });
+
+  ipcMain.handle('cibypIm:saveConfig', async (_, patch) => {
+    try {
+      const p = patch && typeof patch === 'object' ? patch : {};
+      const cur = settings.cibypIm || {};
+      const next = { ...cur };
+      if ('ownerUsername' in p) next.ownerUsername = String(p.ownerUsername || '').slice(0, 64);
+      if ('ownerMode' in p) next.ownerMode = ['none', 'create', 'continue'].includes(p.ownerMode) ? p.ownerMode : (cur.ownerMode || 'none');
+      if ('pollIntervalSec' in p) next.pollIntervalSec = Math.max(10, Math.min(Number(p.pollIntervalSec) || 300, 3600));
+      settings.cibypIm = next;
+      persistSettings();
+      return { ok: true, owner: { ownerUsername: next.ownerUsername || '', ownerMode: next.ownerMode || 'none', pollIntervalSec: next.pollIntervalSec || 300 } };
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  });
+
+  // 路径沙箱：downloadMedia 的 savePath 必须位于可信目录下，防渲染器任意写盘
+  function cibypImPathAllowed(p) {
+    if (typeof p !== 'string' || !p.trim()) return false;
+    const candidates = [app.getPath('userData'), os.tmpdir(), app.getPath('home')];
+    const wd = webControlService && webControlService.workDir;
+    if (wd) candidates.push(wd);
+    const resolved = path.resolve(p);
+    return candidates.some((base) => {
+      try {
+        const rel = path.relative(path.resolve(base), resolved);
+        return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
+      } catch { return false; }
+    });
+  }
+
+  // 上传类工具的读取路径沙箱：防止提示注入让 AI 把任意本地文件发出去
+  // （下载的 savePath 沙箱已存在；这里对读路径单独收紧：工作区/下载/临时/用户数据目录）
+  const CIBYP_IM_UPLOAD_TOOLS = new Set(['cibypimUploadMedia', 'cibypimSendFile', 'cibypimSendVoiceMessage']);
+  function cibypImReadAllowed(p) {
+    if (typeof p !== 'string' || !p.trim()) return false;
+    const candidates = [os.tmpdir(), app.getPath('downloads'), app.getPath('userData')];
+    if (workspacesBaseDir) candidates.push(workspacesBaseDir);
+    const wd = webControlService && webControlService.workDir;
+    if (wd) candidates.push(wd);
+    const resolved = path.resolve(p);
+    return candidates.some((base) => {
+      try {
+        const rel = path.relative(path.resolve(base), resolved);
+        return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
+      } catch { return false; }
+    });
+  }
+
+  ipcMain.handle('cibypIm:call', async (_, toolName, args) => {
+    try {
+      const a = { ...(args || {}) };
+      if (a.savePath && !cibypImPathAllowed(a.savePath)) {
+        return { ok: false, error: 'savePath 不在允许的目录内（工作区/用户数据目录）' };
+      }
+      if (CIBYP_IM_UPLOAD_TOOLS.has(toolName) && a.filePath && !cibypImReadAllowed(a.filePath)) {
+        return { ok: false, error: 'filePath 不在允许的读取目录内（工作区/下载/临时目录）' };
+      }
+      const result = await cibypImService.call(toolName, a);
+      if (result && result.ok === false && typeof result.error === 'string' && result.error.includes('登录已失效')) {
+        // service.api 已清除 active；落盘一次即可
+        saveCibypImState(true);
+      }
+      saveCibypImState(); // 防抖持久化（ratchet 状态/OPK 消耗可能已变化）
+      return result;
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  });
+
+  // ---- CIBYP-IM 主人来信轮询（设置中配置 ownerUsername + ownerMode 后启用）----
+  // 心跳每 10s 检查一次，距上次实际轮询 ≥ pollIntervalSec（默认 300）才拉取；
+  // 首轮只建立 seq 基线（不触发），避免应用重启后重放历史消息。
+  let imPollTimer = null;
+  let imLastPollAt = 0;
+  let imBaselineReady = false;
+  const imSeqCursor = new Map(); // convId → 已处理的最后消息 seq
+
+  function buildImIncomingPrompt(owner, convId, msg) {
+    const text = (msg && typeof msg.text === 'string' ? msg.text : '').slice(0, 4000);
+    const mediaNote = msg && Array.isArray(msg.media) && msg.media.length > 0 ? `（含 ${msg.media.length} 个附件）` : '';
+    return [
+      '[IM 来信] 主人通过 CIBYP-IM 私聊发来消息：',
+      `主人（IM 用户名）：@${owner}`,
+      `消息内容：${text}${mediaNote}`,
+      '',
+      '处理要求：',
+      '1. 先用 cibypimSendMessage 向主人回复一条简短的确认消息（如“收到，正在处理”），表示已收到来信。',
+      '2. 然后认真完成主人交代的任务。',
+      '3. 工作完成后，用 cibypimSendMessage 将结果文本交付给主人；如有需要交付的文件，用 cibypimSendFile 发送。',
+      '4. 交付完成后可简单说明处理结果。'
+    ].join('\n');
+  }
+
+  async function imHandleOwnerMessage(mode, owner, convId, msg) {
+    const prompt = buildImIncomingPrompt(owner, convId, msg);
+    if (mode === 'create') {
+      const res = await dsTransportRequest('ds:agentCreate', {
+        requestId: `im-create-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+        instructions: prompt
+      }, 30000);
+      if (res && res.error) console.error('[CIBYP-IM] 主人来信创建会话失败:', res.error);
+      return;
+    }
+    // continue：优先继续当前活跃且非空的 Chat 会话；否则退回新建
+    let target = null;
+    try {
+      const agentsSvc = pluginManager && pluginManager.agentsService;
+      if (agentsSvc && agentsSvc.store) {
+        const chatEntries = [...agentsSvc.store.values()].filter(e => e && e.mode === 'chat');
+        const activeChat = chatEntries.find(e => e.active);
+        if (activeChat && (activeChat.messageCount || 0) > 0) {
+          target = activeChat;
+        } else {
+          target = chatEntries.find(e => e.status !== 'running' && e.status !== 'queued' && (e.messageCount || 0) > 0) || null;
+        }
+      }
+    } catch { /* ignore */ }
+    if (target) {
+      try {
+        await dsTransportRequest('ds:agentResume', {
+          requestId: `im-resume-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+          sessionId: target.key
+        }, 30000);
+      } catch { /* ignore */ }
+      dsTransportSend('ds:pluginAgentMessage', { sessionKey: target.key, kind: 'followup', text: prompt });
+    } else {
+      const res = await dsTransportRequest('ds:agentCreate', {
+        requestId: `im-create-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+        instructions: prompt
+      }, 30000);
+      if (res && res.error) console.error('[CIBYP-IM] 主人来信创建会话失败:', res.error);
+    }
+  }
+
+  async function imPollTick() {
+    const cfg = (settings && settings.cibypIm) || {};
+    const owner = String(cfg.ownerUsername || '').trim();
+    const mode = cfg.ownerMode || 'none';
+    if (!cibypImService || !cibypImService.active || !owner || mode === 'none') return;
+    const intervalMs = (Number(cfg.pollIntervalSec) || 300) * 1000;
+    if (Date.now() - imLastPollAt < intervalMs) return;
+    imLastPollAt = Date.now();
+    try {
+      const r = await cibypImService.getChatLog({ peer: owner, tail: 20, markRead: true });
+      if (!r || !r.ok || !Array.isArray(r.messages)) return;
+      const myId = cibypImService.identity && cibypImService.identity.id;
+      if (!myId) return;
+      let processed = 0;
+      for (const m of r.messages) {
+        if (!m || m.senderId === myId) continue;
+        const seq = Number(m.seq) || 0;
+        if (seq <= (imSeqCursor.get(r.conversationId) || 0)) continue;
+        if (!imBaselineReady) { imSeqCursor.set(r.conversationId, seq); continue; } // 首轮仅建基线，不触发
+        try {
+          await imHandleOwnerMessage(mode, owner, r.conversationId, m);
+          imSeqCursor.set(r.conversationId, seq); // 处理成功才推进游标，失败的下次轮询重试
+          processed++;
+        } catch (e) {
+          console.error('[CIBYP-IM] 主人来信处理失败:', e && e.message ? e.message : e);
+        }
+      }
+      imBaselineReady = true; // 首轮基线建立完成，此后新消息触发处理
+      // 轮询可能创建 responder 会话/消耗 OPK/推进 ratchet —— 持久化（防抖）
+      saveCibypImState();
+    } catch (e) {
+      console.error('[CIBYP-IM] 主人来信轮询错误:', e && e.message ? e.message : e);
+    }
+  }
+
+  function startImOwnerPolling() {
+    if (imPollTimer) return;
+    imPollTimer = setInterval(() => { imPollTick().catch(() => {}); }, 10000);
+    imPollTick().catch(() => {}); // 首轮建基线
+  }
+  startImOwnerPolling();
+
   // ---- Web Control IPC ----
 
   ipcMain.handle('webControl:start', async () => {
@@ -7019,6 +7392,15 @@ app.on('before-quit', async (event) => {
   closeSplash();
   // 将防抖队列中的历史保存立即落盘，避免退出时丢失
   flushPendingHistorySaves();
+  // 优雅退出时仍在运行的会话：Agent 随进程终止，标记"异常退出"（本次运行触碰过的文件）
+  try {
+    const fixed = markActiveHistoriesCrashed(_bootTime);
+    if (fixed > 0) console.log(`[history] ${fixed} 个运行中的会话因退出被标记为 crashed`);
+  } catch { /* ignore */ }
+  // 记录优雅退出时间戳：下次启动只清扫该时刻之后变动的历史
+  writeLastCleanExit(Date.now());
+  // CIBYP-IM：退出前立即落盘加密状态（ratchet/OPK 变更不丢）
+  try { saveCibypImState(true); } catch { /* ignore */ }
   await mcpService.stopAllMcpServers();
   if (webControlService.running) {
     webControlService.stop().catch(() => {});

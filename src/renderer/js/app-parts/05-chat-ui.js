@@ -2203,7 +2203,7 @@
 
   // 统一的 Chat 欢迎消息渲染：根据生图模型配置决定是否显示"生成图片"按钮
   function renderChatWelcome() {
-    const imgConfigured = !!(agent.settings?.imageGen?.apiKey && agent.settings?.imageGen?.model);
+    const imgConfigured = !!(agent.settings?.imageGen?.apiUrl && agent.settings?.imageGen?.apiKey && agent.settings?.imageGen?.model);
     const imgBtn = imgConfigured
       ? `<button class="quick-action-btn" data-prompt="帮我生成一张风景图片"><i class="fa-solid fa-image"></i> 生成图片</button>`
       : '';

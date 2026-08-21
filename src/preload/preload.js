@@ -488,6 +488,11 @@ contextBridge.exposeInMainWorld('api', {
   mcpConnect: (name) => ipcRenderer.invoke('mcp:connect', name),
   mcpDisconnect: (name) => ipcRenderer.invoke('mcp:disconnect', name),
   mcpListTools: (serverName) => ipcRenderer.invoke('mcp:listTools', serverName),
+  onMcpChanged: (cb) => {
+    const listener = (_event, payload) => cb(payload);
+    ipcRenderer.on('mcp:servers-changed', listener);
+    return () => ipcRenderer.removeListener('mcp:servers-changed', listener);
+  },
   // ---- DeepSeek 插件 ----
   dsListPlugins: () => ipcRenderer.invoke('plugins:list'),
   dsInstallLocal: (dirPath) => ipcRenderer.invoke('plugins:installLocal', dirPath),
@@ -621,6 +626,13 @@ contextBridge.exposeInMainWorld('api', {
   fedikittenLogin: (url, username, password) => ipcRenderer.invoke('fedikitten:login', url, username, password),
   fedikittenLogout: () => ipcRenderer.invoke('fedikitten:logout'),
   fedikittenCall: (toolName, args) => ipcRenderer.invoke('fedikitten:call', toolName, args),
+
+  // CIBYP-IM
+  cibypImGetState: () => ipcRenderer.invoke('cibypIm:getState'),
+  cibypImLogin: (url, username, password, forceTakeover) => ipcRenderer.invoke('cibypIm:login', url, username, password, forceTakeover),
+  cibypImLogout: () => ipcRenderer.invoke('cibypIm:logout'),
+  cibypImCall: (toolName, args) => ipcRenderer.invoke('cibypIm:call', toolName, args),
+  cibypImSaveConfig: (patch) => ipcRenderer.invoke('cibypIm:saveConfig', patch),
 
   // Web Control
   webControlStart: () => ipcRenderer.invoke('webControl:start'),

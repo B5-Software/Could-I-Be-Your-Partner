@@ -1285,6 +1285,9 @@ html[data-modal-animations="off"] .modal-fade-out {
 .history-status.status-queued { color: var(--warning); background: var(--warning-light); }
 .history-status.status-done { color: var(--success); background: var(--success-light); }
 .history-status.status-error { color: var(--danger); background: var(--danger-light); }
+.history-status.status-stopped { color: var(--text-secondary); background: var(--bg-hover); }
+.history-status.status-crashed,
+.history-status.status-interrupted { color: var(--danger); background: var(--danger-light); }
 .history-status.attention { color: #fff; }
 .history-status.attention-approval { background: var(--warning); }
 .history-status.attention-tool-auth { background: #8b5cf6; }

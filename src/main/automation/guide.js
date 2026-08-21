@@ -59,10 +59,39 @@ if (trigger.kind == "notification") {
 return "";`
 };
 
+GUIDE.http = `## HTTP 信号接口
+
+启用 http 触发任务后，本机信号服务器提供以下端点：
+
+### 端点
+- GET  /health            → 健康检查（无需鉴权）
+- POST /trigger/{taskId}  → 触发指定任务；请求体为任意 JSON，进入 DSL 的 args
+
+仅监听 127.0.0.1，不对外网暴露。
+
+### 鉴权
+- 请求头：Authorization: Bearer <Token>（?token= 查询参数已废弃，恒 401）
+- Token 在 设置 → 自动化 中配置，可设置 scope（限定可触发的任务列表）与 allowParams（false 时忽略请求体）
+- allowNoToken 开启时无鉴权请求也放行 —— 不安全，仅应急使用
+
+### 状态码
+- 200 触发成功（响应含 accepted 与 sessionKey）
+- 401 未授权 / 403 Token 无该任务权限 / 404 任务不存在或未启用 / 400 请求体非法 JSON
+
+### 示例
+curl -X POST http://127.0.0.1:<端口>/trigger/<taskId> \\
+  -H "Authorization: Bearer <token>" \\
+  -H "Content-Type: application/json" \\
+  -d '{"repo":"owner/app","event":"push"}'
+
+完整文档见仓库 docs/automation.md。`;
+
 const GUIDE_ALL = [
   '# 自动化任务（触发）指导',
   '',
-  '任务被触发后，用 DSL 构造提示词，新建一个 Chat 会话并发送。',
+  '任务被触发后，用 DSL 构造提示词并发送到 Chat 会话。投递模式（编辑器「投递」区）二选一：',
+  '- 新建 Chat 会话（默认）：每次触发开一个新会话。',
+  '- 继续当前 Chat：优先注入当前激活的 Chat，其次最近一个空闲且有内容的会话；都没有则自动新建。会话正在运行时提示词自动排队，不会打断。',
   '',
   GUIDE.trigger,
   '',

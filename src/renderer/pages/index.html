@@ -789,6 +789,7 @@
             <button class="settings-tab" data-tab="mcp"><i class="fa-solid fa-plug"></i> MCP</button>
             <button class="settings-tab" data-tab="email"><i class="fa-solid fa-envelope"></i> 邮箱</button>
             <button class="settings-tab" data-tab="fedikitten"><i class="fa-solid fa-cat"></i> FediKitten</button>
+            <button class="settings-tab" data-tab="cibypim"><i class="fa-solid fa-comments"></i> CIBYP-IM</button>
             <button class="settings-tab" data-tab="webcontrol"><i class="fa-solid fa-globe"></i> Web控制</button>
             <button class="settings-tab" data-tab="playwright"><i class="fa-solid fa-window-restore"></i> Playwright</button>
             <button class="settings-tab" data-tab="notifications"><i class="fa-solid fa-bell"></i> 通知</button>
@@ -1281,7 +1282,7 @@
                 <h3><i class="fa-solid fa-image"></i> 生图模型配置</h3>
                 <div class="setting-item">
                   <label>API URL</label>
-                  <input type="text" id="setting-img-url" placeholder="https://api.siliconflow.cn/v1/images/generations">
+                  <input type="text" id="setting-img-url" placeholder="https://api.example.com/v1/images/generations">
                 </div>
                 <div class="setting-item">
                   <label>API Key</label>
@@ -1294,7 +1295,7 @@
                 </div>
                 <div class="setting-item">
                   <label>模型</label>
-                  <input type="text" id="setting-img-model" placeholder="Kwai-Kolors/Kolors">
+                  <input type="text" id="setting-img-model" placeholder="provider/model-name">
                 </div>
                 <div class="setting-item">
                   <label>图像分辨率</label>
@@ -1991,6 +1992,70 @@
                   <button class="btn-secondary" id="btn-fedikitten-logout" style="display:none"><i class="fa-solid fa-right-from-bracket"></i> 退出</button>
                 </div>
                 <div id="fedikitten-status" style="margin-top:12px;font-size:13px;color:var(--text-secondary)"></div>
+              </div>
+            </div>
+            <!-- CIBYP-IM Settings -->
+            <div class="settings-panel" data-tab="cibypim">
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-comments"></i> CIBYP-IM 连接</h3>
+                <p class="setting-hint" style="margin-bottom:12px">
+                  连接 CIBYP-IM 实例（端到端加密即时通讯），让 AI 伙伴可以收发加密消息、管理群聊。密钥保存在本机，重启后保持登录与解密能力。
+                </p>
+                <div id="cibypim-status-card" class="fedikitten-status-card">
+                  <div class="fedikitten-status-icon"><i class="fa-solid fa-comments"></i></div>
+                  <div class="fedikitten-status-body">
+                    <div class="fedikitten-status-title" id="cibypim-status-title">未连接</div>
+                    <div class="fedikitten-status-sub" id="cibypim-status-sub">登录后即可让 AI 伙伴使用 CIBYP-IM 能力</div>
+                  </div>
+                </div>
+                <div class="setting-item">
+                  <label>服务器地址</label>
+                  <input type="text" id="setting-cibypim-url" placeholder="https://cibyp-im.pages.dev 或 http://localhost:8787">
+                </div>
+                <div class="setting-item">
+                  <label>用户名</label>
+                  <input type="text" id="setting-cibypim-username" placeholder="你的用户名">
+                </div>
+                <div class="setting-item">
+                  <label>密码</label>
+                  <input type="password" id="setting-cibypim-password" placeholder="登录密码（仅用于登录，不会保存）">
+                </div>
+                <div style="display:flex;gap:8px;margin-top:8px">
+                  <button class="btn-primary" id="btn-cibypim-login"><i class="fa-solid fa-right-to-bracket"></i> 登录</button>
+                  <button class="btn-secondary" id="btn-cibypim-logout" style="display:none"><i class="fa-solid fa-right-from-bracket"></i> 退出</button>
+                </div>
+                <div class="setting-item" id="cibypim-takeover-row" style="display:none;margin-top:10px">
+                  <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+                    <input type="checkbox" id="cibypim-takeover" style="width:auto">
+                    <span>接管身份（作废其他设备的加密会话）</span>
+                  </label>
+                </div>
+                <div id="cibypim-status" style="margin-top:12px;font-size:13px;color:var(--text-secondary)"></div>
+              </div>
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-bell"></i> 主人来信</h3>
+                <div class="setting-item">
+                  <label>主人用户名</label>
+                  <input type="text" id="setting-cibypim-owner" placeholder="主人（你）的 IM 用户名，如 admin">
+                </div>
+                <div class="setting-item">
+                  <label>收到主人的消息时</label>
+                  <select id="setting-cibypim-owner-mode">
+                    <option value="none">无反应</option>
+                    <option value="create">创建新 Chat 会话并发送</option>
+                    <option value="continue">继续当前 Chat 会话（不在 Chat 或空会话则新建）</option>
+                  </select>
+                </div>
+                <div class="setting-item">
+                  <label>轮询间隔（秒）</label>
+                  <input type="number" id="setting-cibypim-poll-interval" value="300" min="10" step="5">
+                </div>
+                <div style="display:flex;gap:8px;margin-top:8px">
+                  <button class="btn-secondary" id="btn-cibypim-save-owner"><i class="fa-solid fa-floppy-disk"></i> 保存主人设置</button>
+                </div>
+                <div id="cibypim-owner-status" style="margin-top:12px;font-size:13px;color:var(--text-secondary)">
+                  配置后，Agent 会定期检查主人发来的私聊消息，并按所选模式处理：先回 IM 确认收到，完成后通过 IM 交付结果（文本 / 文件）。
+                </div>
               </div>
             </div>
             <!-- Email Settings -->

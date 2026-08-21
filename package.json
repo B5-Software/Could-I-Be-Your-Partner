@@ -1,6 +1,6 @@
 {
   "name": "could-i-be-your-partner",
-  "version": "1.8.0-alpha.20",
+  "version": "1.8.0-alpha.21",
   "description": "全自动AI Agent，帮助完成一切任务",
   "license": "GPL-3.0-or-later",
   "main": "src/main/main.js",
@@ -17,6 +17,8 @@
     "build:mac:x64": "npm run build-app-bundle && npm run prepare-build-assets && npm run download-voice-models && node scripts/package.js --mac --x64",
     "build:mac:arm64": "npm run build-app-bundle && npm run prepare-build-assets && npm run download-voice-models && node scripts/package.js --mac --arm64",
     "build:linux": "npm run build-app-bundle && npm run prepare-build-assets && npm run download-voice-models && node scripts/package.js --linux",
+    "build:linux:x64": "npm run build-app-bundle && npm run prepare-build-assets && npm run download-voice-models && node scripts/package.js --linux --x64",
+    "build:linux:arm64": "npm run build-app-bundle && npm run prepare-build-assets && npm run download-voice-models && node scripts/package.js --linux --arm64",
     "build:no-tarot": "node scripts/build-no-tarot.js",
     "build:no-tarot:win": "node scripts/build-no-tarot.js --win",
     "build:no-tarot:mac": "node scripts/build-no-tarot.js --mac",
@@ -111,7 +113,13 @@
       }
     },
     "linux": {
-      "icon": "assets/icons/icons"
+      "icon": "assets/icons/icons",
+      "maintainer": "B5-Software <b5-software@users.noreply.github.com>",
+      "category": "Utility",
+      "target": [
+        { "target": "AppImage" },
+        { "target": "deb" }
+      ]
     }
   },
   "overrides": {

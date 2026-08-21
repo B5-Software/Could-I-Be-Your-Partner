@@ -62,6 +62,7 @@ class AutomationManager {
       name: task.name || '未命名任务',
       enabled: !!task.enabled,
       trigger: task.trigger || { type: 'schedule', config: {} },
+      delivery: task.delivery || { mode: 'new' },
       dsl: task.dsl || '',
       runCount: task.runCount || 0,
       lastRunAt: task.lastRunAt || null,
@@ -75,11 +76,13 @@ class AutomationManager {
     if (!task || typeof task !== 'object') throw new Error('任务数据无效');
     const trigger = task.trigger || {};
     if (!TRIGGER_TYPES.includes(trigger.type)) throw new Error(`未知触发类型: ${trigger.type}`);
+    const deliveryMode = task.delivery && task.delivery.mode === 'continue' ? 'continue' : 'new';
     return {
       id: String(task.id || `task-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`),
       name: String(task.name || '未命名任务').slice(0, 80),
       enabled: !!task.enabled,
       trigger: { type: trigger.type, config: trigger.config || {} },
+      delivery: { mode: deliveryMode },
       dsl: String(task.dsl || ''),
       runCount: Number(task.runCount) || 0,
       lastRunAt: task.lastRunAt || null,
@@ -316,6 +319,7 @@ class AutomationManager {
         taskId: task.id,
         taskName: task.name,
         prompt,
+        delivery: task.delivery || { mode: 'new' },
         trigger: { kind: triggerInfo.kind || 'manual', params: triggerInfo.params || {} }
       }, 30000);
       task.runCount = (Number(task.runCount) || 0) + 1;
