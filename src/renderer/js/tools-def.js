@@ -246,6 +246,52 @@ function filterToolsByConfig(tools, settings) {
   return filtered.filter(t => t.function?.name !== 'generateImage');
 }
 
+// readImageFile 工具定义双模式自动切换：
+// 视觉模型 → 现有定义（图片注入上下文）
+// 非视觉模型 + 外置视觉已配 → 替换为 VLM 描述模式（Agent 可传 prompt 指定关注点）
+function adaptReadImageFileSchema(schemas, settings, isVisionModelFn) {
+  const key = 'readImageFile';
+  if (!schemas[key] || typeof isVisionModelFn !== 'function') return;
+  const vision = isVisionModelFn();
+  const ev = settings?.llm?.externalVision;
+  const hasEV = ev && ev.apiUrl && ev.model;
+  if (!vision && hasEV) {
+    schemas[key] = {
+      type: 'function',
+      function: {
+        name: 'readImageFile',
+        description: '读取图片文件并通过外部视觉模型分析其内容。可传 prompt 指定分析重点（如"读取报错信息"、"描述界面布局"、"识别图表数据"）。返回文字描述。',
+        parameters: {
+          type: 'object',
+          properties: {
+            path: { type: 'string', description: '图片文件路径（工作区相对路径或绝对路径）' },
+            prompt: { type: 'string', description: '可选：告诉视觉模型关注什么。如"读取图中所有文字"、"描述界面布局和按钮位置"。默认全面描述。' },
+            description: { type: 'string', description: '可选：图片的简要说明' }
+          },
+          required: ['path']
+        }
+      }
+    };
+  } else {
+    // 视觉模型或无外置视觉：恢复标准 schema
+    schemas[key] = {
+      type: 'function',
+      function: {
+        name: 'readImageFile',
+        description: '读取图片文件，以多模态格式注入上下文供直接查看',
+        parameters: {
+          type: 'object',
+          properties: {
+            path: { type: 'string', description: '图片文件路径' },
+            description: { type: 'string', description: '可选：图片简要说明' }
+          },
+          required: ['path']
+        }
+      }
+    };
+  }
+}
+
 // Code 模式独立工具白名单（参考 Claude Code 工具集，不与 Chat 共用）
 // Code 模式聚焦文件编辑、代码搜索、终端执行和上下文管理，排除娱乐/UI-heavy 工具。
 // MCP 动态工具由 getAllToolDefinitions 自动追加（不受此白名单限制，按 mode 过滤时 dynamic=true 跳过检查）。

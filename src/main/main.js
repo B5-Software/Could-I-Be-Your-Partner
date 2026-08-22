@@ -2809,6 +2809,7 @@ ipcMain.handle('image:generate', async (_, prompt, workspacePath) => {
     }
 
     const body = JSON.stringify({ model, prompt, image_size: imageSize, batch_size: 1, num_inference_steps: 20, guidance_scale: 7.5 });
+    console.log(`[IMG] ${model} ← "${prompt.slice(0, 80)}" | size:${imageSize}`);
     const response = await fetch(apiUrl, {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
@@ -2816,6 +2817,7 @@ ipcMain.handle('image:generate', async (_, prompt, workspacePath) => {
     });
     const data = await response.json();
     if (data.images && data.images[0] && data.images[0].url) {
+      console.log(`[IMG] ${model} → 1 image (${imageSize})`);
       const imgUrl = data.images[0].url;
       const imgResponse = await fetch(imgUrl);
       const buffer = Buffer.from(await imgResponse.arrayBuffer());
@@ -3317,6 +3319,49 @@ ipcMain.handle('llm:capabilities', async (_, provider, model, apiUrl, apiKey) =>
   }
 });
 
+// ---- IPC: 外置视觉（纯文本模型的眼睛）----
+// 当主模型不支持多模态时，通过独立配置的 VLM API 描述图片，结果作为文本返回给 Agent。
+// usage 走 recordTokenUsage → 价格表/预算控制/上下文模态框自动纳入。
+ipcMain.handle('vision:describeImage', async (_, { dataUrl, prompt }) => {
+  try {
+    const ev = settings.llm?.externalVision;
+    if (!ev || !ev.apiUrl || !ev.model) return { ok: false, error: '外置视觉未配置（需要在 LLM 设置中填写 API URL 和模型名）' };
+    if (!dataUrl || typeof dataUrl !== 'string') return { ok: false, error: '缺少图片数据' };
+    const userText = typeof prompt === 'string' && prompt.trim() ? prompt.trim() : '详细描述这张图片的全部内容（界面元素、文字、图表、物体、布局），供无法直接看图的文本模型使用。';
+    const messages = [{
+      role: 'user',
+      content: [
+        { type: 'text', text: userText },
+        { type: 'image_url', image_url: { url: dataUrl } }
+      ]
+    }];
+    const headers = { 'Content-Type': 'application/json', Authorization: `Bearer ${ev.apiKey || ''}` };
+    const body = JSON.stringify({ model: ev.model, messages, max_tokens: 4096 });
+    // 智能拼接：如果 apiUrl 已含 /chat/completions 则直接用，否则追加
+    let url = ev.apiUrl.replace(/\/+$/, '');
+    if (!url.endsWith('/chat/completions')) url += '/chat/completions';
+    console.log(`[VLM] ${ev.model} ← ${url} | prompt:"${userText.slice(0, 80)}" | img:${Math.round(dataUrl.length / 1024)}KB`);
+    const resp = await fetch(url, {
+      method: 'POST', headers, body, signal: AbortSignal.timeout(60000)
+    });
+    if (!resp.ok) {
+      const errText = await resp.text().catch(() => '');
+      const preview = errText.startsWith('<') ? `[HTML ${resp.status}]` : errText.slice(0, 200);
+      console.error(`[VLM] ${ev.model} FAILED ${resp.status}: ${preview}`);
+      return { ok: false, error: `VLM API ${resp.status}: ${preview}` };
+    }
+    const data = await resp.json();
+    const content = data.choices?.[0]?.message?.content || '';
+    const usage = data.usage || null;
+    if (usage) recordTokenUsage(usage, ev.model);
+    console.log(`[VLM] ${ev.model} → ${content.length} 字符 | tokens:${usage?.prompt_tokens || '?'}+${usage?.completion_tokens || '?'}=${usage?.total_tokens || '?'}`);
+    return { ok: true, description: content, usage: usage ? { prompt_tokens: usage.prompt_tokens, completion_tokens: usage.completion_tokens, total_tokens: usage.total_tokens } : null };
+  } catch (e) {
+    console.error(`[VLM] describeImage error:`, e.message);
+    return { ok: false, error: e.message };
+  }
+});
+
 // ---- IPC: LLM API Call (with retry/backoff/timeout) ----
 ipcMain.handle('llm:chat', async (event, messages, options = {}) => {
   try {
@@ -3380,15 +3425,20 @@ ipcMain.handle('llm:chat', async (event, messages, options = {}) => {
       headers: req.headers,
       body: req.body, options: retryOpts, onRetry
     });
-    if (!result.ok) return { ok: false, error: result.error, kind: result.kind };
+    if (!result.ok) {
+      console.error(`[LLM] ${llmForRequest.model} ← ${req.url} FAILED: ${result.error}`);
+      return { ok: false, error: result.error, kind: result.kind };
+    }
 
-    let rawData;
     try {
       rawData = await result.response.json();
     } finally {
       if (typeof result.releaseController === 'function') result.releaseController();
     }
-    if (rawData.error) return { ok: false, error: rawData.error.message || JSON.stringify(rawData.error) };
+    if (rawData.error) {
+      console.error(`[LLM] ${llmForRequest.model} API error:`, JSON.stringify(rawData.error).slice(0, 200));
+      return { ok: false, error: rawData.error.message || JSON.stringify(rawData.error) };
+    }
     const data = LLMProviders.parseLLMResponse(rawData, req.transport);
     let usage = data.usage || {};
     // API 未返回 usage 时估算并标记（前端用 ~ 前缀显示）
@@ -3402,6 +3452,14 @@ ipcMain.handle('llm:chat', async (event, messages, options = {}) => {
         _estimated: true
       };
       data.usage = usage;
+    }
+    // 终端日志：请求摘要 + 结果截断 + token 用量
+    {
+      const content = data.choices?.[0]?.message?.content || '';
+      const toolCalls = data.choices?.[0]?.message?.tool_calls;
+      const preview = typeof content === 'string' ? content.slice(0, 120) : JSON.stringify(content || '').slice(0, 120);
+      const suffix = content.length > 120 ? `…[${content.length} 字符]` : '';
+      console.log(`[LLM] ${llmForRequest.model} | tokens:${usage.prompt_tokens}+${usage.completion_tokens}=${usage.total_tokens}${usage._estimated ? '(est)' : ''} | → "${preview}${suffix}"${toolCalls ? ` | tool_calls:${toolCalls.length}` : ''}`);
     }
     const usageTokens = usage.total_tokens
       || estimateTokens(JSON.stringify(req.body)) + estimateTokens(data.choices?.[0]?.message?.content || '');

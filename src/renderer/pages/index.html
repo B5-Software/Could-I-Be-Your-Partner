@@ -1035,6 +1035,23 @@
                   </div>
                   <div class="setting-hint">无法自动识别模型是否支持多模态时（如 llama.cpp 本地模型），可强制开启以允许读取图片直接注入上下文</div>
                 </div>
+                <div class="setting-item" id="pw-external-vision-group">
+                  <label>外置视觉 API（纯文本模型的眼睛）</label>
+                  <p class="setting-hint" style="margin-bottom:8px">当主模型不支持多模态时，通过独立配置的视觉模型描述图片。需在价格表中添加该 VLM 模型方可计入预算。留空禁用。</p>
+                  <div style="display:flex;gap:8px;margin-bottom:6px;align-items:center">
+                    <button class="btn-secondary btn-sm" id="btn-ev-align-main" title="复制主 Agent 的 API URL / Key / Provider 设置"><i class="fa-solid fa-wand-magic-sparkles"></i> 对齐主 Agent</button>
+                    <button class="btn-secondary btn-sm" id="btn-ev-fetch-models"><i class="fa-solid fa-list"></i> 获取模型列表</button>
+                  </div>
+                  <input type="text" id="setting-llm-external-vision-url" placeholder="https://api.example.com/v1/chat/completions" style="margin-bottom:6px" autocomplete="off">
+                  <input type="password" id="setting-llm-external-vision-key" placeholder="API Key" style="margin-bottom:6px" autocomplete="off">
+                  <div style="display:flex;gap:6px;margin-bottom:6px;align-items:center">
+                    <select id="setting-llm-external-vision-model-select" style="flex:1;display:none">
+                      <option value="">-- 选择模型 --</option>
+                    </select>
+                    <input type="text" id="setting-llm-external-vision-model" placeholder="模型名，如 gpt-4o-mini / qwen-vl-plus" style="flex:1" autocomplete="off">
+                  </div>
+                  <p id="ev-model-status" style="font-size:11px;color:var(--text-tertiary);margin-top:4px"></p>
+                </div>
                 <div class="setting-item">
                   <label>推理强度 / 变体</label>
                   <select id="setting-llm-reasoning">

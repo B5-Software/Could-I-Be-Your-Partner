@@ -859,6 +859,14 @@ ${affectionDesc}
       if (typeof filterToolsByConfig === 'function') {
         tools = filterToolsByConfig(tools, this.settings);
       }
+      if (typeof adaptReadImageFileSchema === 'function') {
+        const schemaMap = Object.fromEntries(tools.map(t => [t.function?.name, t]));
+        adaptReadImageFileSchema(schemaMap, this.settings, () => this.isVisionModel());
+        if (schemaMap['readImageFile']) {
+          const idx = tools.findIndex(t => t.function?.name === 'readImageFile');
+          if (idx >= 0) tools[idx] = schemaMap['readImageFile'];
+        }
+      }
       if (this.contextManager && typeof this.contextManager.setToolSchemaTokens === 'function') {
         this.contextManager.setToolSchemaTokens(Math.ceil(JSON.stringify(tools).length / 4));
       }
@@ -874,6 +882,14 @@ ${affectionDesc}
     // 未配置生图模型时隐藏 generateImage 工具
     if (typeof filterToolsByConfig === 'function') {
       tools = filterToolsByConfig(tools, this.settings);
+    }
+    if (typeof adaptReadImageFileSchema === 'function') {
+      const schemaMap = Object.fromEntries(tools.map(t => [t.function?.name, t]));
+      adaptReadImageFileSchema(schemaMap, this.settings, () => this.isVisionModel());
+      if (schemaMap['readImageFile']) {
+        const idx = tools.findIndex(t => t.function?.name === 'readImageFile');
+        if (idx >= 0) tools[idx] = schemaMap['readImageFile'];
+      }
     }
     // 按活动序重排：保证追加式重优化只影响 tools 数组尾部，前缀字节稳定
     const byName = new Map(tools.map(t => [t.function?.name, t]));
@@ -1455,6 +1471,7 @@ ${affectionDesc}
         }
       }
       this.contextManager.addUserMessage(contentParts);
+    // 非视觉模型：图片附件不处理（外置视觉仅通过 readImageFile 工具按需调用）
     } else {
       this.contextManager.addUserMessage(fullMessage);
     }
@@ -2265,8 +2282,29 @@ ${affectionDesc}
 
           // 多模态工具结果：图片以 image_url 格式注入上下文，而非 base64 字符串
           if (toolResult && toolResult._multimodal && toolResult.imageUrl) {
-            this.contextManager.addMultimodalToolResult(tc.id, toolName, toolResult.text, toolResult.imageUrl);
-            if (this.onToolCall) this.onToolCall(toolName, args, 'done', displayResult, tc.id);
+            if (this.isVisionModel()) {
+              // 视觉模型：直接注入 image_url
+              this.contextManager.addMultimodalToolResult(tc.id, toolName, toolResult.text, toolResult.imageUrl);
+            } else {
+              // 非视觉模型 + 外置视觉已配置 → 用 VLM 描述截图后以文本注入
+              const ev = this.settings?.llm?.externalVision;
+              const hasEV = ev && ev.apiUrl && ev.model;
+              let descText = '';
+              if (hasEV) {
+                try {
+                  const desc = await window.api.visionDescribeImage({ dataUrl: toolResult.imageUrl });
+                  if (desc.ok) {
+                    if (desc.usage) this._accumulateUsage(desc.usage, ev.model);
+                    descText = desc.description;
+                  }
+                } catch { /* ignore */ }
+              }
+              const combined = descText
+                ? `${toolResult.text || ''}\n[图片内容描述]: ${descText}`.trim()
+                : JSON.stringify(toolResult);
+              this.contextManager.addToolResult(tc.id, toolName, combined);
+            }
+            if (this.onMessage) this.onMessage('tool-result', { name: toolName, result: displayResult, callId: tc.id });
             continue;
           }
 
@@ -2654,17 +2692,34 @@ ${affectionDesc}
           if (!imgRelPath) return { ok: false, error: '缺少 path 参数' };
           // 统一路径解析：绝对路径（C:\...）原样使用，相对路径基于工作区拼接
           const imgFullPath = this._resolveWorkspacePath(imgRelPath);
-          // 非多模态模型：不支持图片注入，返回提示
+          const ev = this.settings?.llm?.externalVision;
+          const hasExternalVision = ev && ev.apiUrl && ev.model;
+
           if (!this.isVisionModel()) {
-            return { ok: false, error: '当前模型不支持多模态视觉输入，无法读取图片。可在「设置 → LLM 配置」中开启「多模态视觉输入」开关强制启用，或使用 OCR 工具（extractTextFromImage）。' };
+            // 非视觉模型 + 外置视觉已配置 → 走 VLM 描述
+            if (hasExternalVision) {
+              const readRes = await window.api.readFileBase64(imgFullPath);
+              if (!readRes || !readRes.ok || !readRes.data) {
+                return { ok: false, error: readRes?.error || '读取图片文件失败' };
+              }
+              const vlmPrompt = args.prompt || args.description || '详细描述这张图片的全部内容（界面元素、文字、图表、物体、布局）。';
+              const desc = await window.api.visionDescribeImage({ dataUrl: readRes.data, prompt: vlmPrompt });
+              if (desc.ok) {
+                if (desc.usage) this._accumulateUsage(desc.usage, ev.model);
+                return { ok: true, text: `图片 ${imgRelPath} 的分析结果：\n${desc.description}` };
+              }
+              return { ok: false, error: `外置视觉调用失败: ${desc.error}` };
+            }
+            return { ok: false, error: '当前模型不支持多模态视觉输入且未配置外置视觉。可在「设置 → LLM 配置」中开启「多模态视觉输入」或配置外置视觉 API，或使用 OCR 工具（extractTextFromImage）。' };
           }
-          const readRes = await window.api.readFileBase64(imgFullPath);
-          if (!readRes || !readRes.ok || !readRes.data) {
-            return { ok: false, error: readRes?.error || '读取图片文件失败（文件不存在或不是图片）' };
+
+          const readRes2 = await window.api.readFileBase64(imgFullPath);
+          if (!readRes2 || !readRes2.ok || !readRes2.data) {
+            return { ok: false, error: readRes2?.error || '读取图片文件失败（文件不存在或不是图片）' };
           }
           // 标记为多模态结果，由 agent loop 特殊处理（注入为 image_url content array）
           const imgDesc = args.description ? `：${args.description}` : '';
-          return { ok: true, _multimodal: true, imageUrl: readRes.data, text: `已读取图片文件 ${imgRelPath}${imgDesc}（图片已注入上下文，可直接查看）` };
+          return { ok: true, _multimodal: true, imageUrl: readRes2.data, text: `已读取图片文件 ${imgRelPath}${imgDesc}（图片已注入上下文，可直接查看）` };
         }
         case 'createFile': {
           const createRes = await window.api.createFile(this._resolveWorkspacePath(args.path), args.content || '', {

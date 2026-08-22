@@ -256,6 +256,7 @@ contextBridge.exposeInMainWorld('api', {
 
   // LLM
   chatLLM: (messages, options) => ipcRenderer.invoke('llm:chat', messages, options),
+  visionDescribeImage: ({ dataUrl, prompt }) => ipcRenderer.invoke('vision:describeImage', { dataUrl, prompt }),
   chatLLMStream: (messages, options) => ipcRenderer.invoke('llm:chatStream', messages, options),
   summarizeLLM: (messages, options) => ipcRenderer.invoke('llm:summarize', messages, options),
   zenFetchModels: () => ipcRenderer.invoke('zen:fetchModels'),
