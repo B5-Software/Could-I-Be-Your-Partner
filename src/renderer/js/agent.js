@@ -1878,10 +1878,17 @@ ${affectionDesc}
 
   async agentLoop(runId) {
     let iterations = 0;
-    // 移除硬性迭代上限：完全由 running/stopped/runId 控制
-    // 原本的 maxIterations=50 会在长任务中被误触顶，导致工作中断
+    // 安全上限：正常任务远到不了 50 轮；Responses 流式曾因 finishReason 恒为 null
+    // 导致无限循环（llm-retry.js 已修复 + 兜底），这里再加熔断，绝不再烧 token。
+    const MAX_AGENT_ITERATIONS = 50;
     while (this.running && !this.stopped && runId === this.runId) {
       iterations++;
+      if (iterations > MAX_AGENT_ITERATIONS) {
+        if (this.onMessage) this.onMessage('system', `⚠️ Agent 循环超过 ${MAX_AGENT_ITERATIONS} 轮已自动停止（防无限循环熔断）。如任务未完成请换个问法重试。`);
+        try { this.contextManager.addSystemMessage(`[系统] Agent 循环触发 ${MAX_AGENT_ITERATIONS} 轮熔断，已停止。`, { type: 'error' }); }
+        catch { /* ignore */ }
+        break;
+      }
 
       // 上下文管理：水位线压缩（Tier0 剪枝 → Tier1 结构化摘要 → Tier2 溢出恢复）
       // 自动压缩总开关在设置「上下文」页，关闭后跳过（手动按钮仍可用）。
@@ -2337,10 +2344,15 @@ ${affectionDesc}
         continue;
       }
 
-      // No tool calls, agent is done with this turn
-      if (choice.finish_reason === 'stop') {
+      // No tool calls, agent is done with this turn.
+      // 兼容各 transport：'stop' 正常结束；'length'/'error' 为异常截断也必须停
+      // （不能继续循环，否则截断回复会被再次送回模型造成死循环）。
+      // finish_reason 缺失但已有正文时同样视为结束（防御网关省略字段）。
+      const fr = choice.finish_reason;
+      const hasContent = typeof assistantMsg.content === 'string' && assistantMsg.content.length > 0;
+      if (fr === 'stop' || fr === 'length' || fr === 'error' || (!fr && hasContent)) {
         // 热对话修复：stop后检查是否有待处理的热消息，有则继续循环
-        if (this.hotMessages.length > 0) {
+        if (fr !== 'length' && fr !== 'error' && this.hotMessages.length > 0) {
           continue; // 回到循环顶部，热消息将在下一轮注入
         }
         break;

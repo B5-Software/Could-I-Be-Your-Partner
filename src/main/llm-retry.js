@@ -428,7 +428,14 @@ async function consumeSSEStream(bodyStream, onChunk, requestId, transport = 'ope
         responsesToolBuffer, finalizedToolIds, onChunk, requestId
       };
       processResponsesEvent(state, parsed);
-      // 闭包内聚合字段随引用更新，无需回写
+      // processResponsesEvent 就地修改 state 的字符串字段（fullContent/fullReasoning/
+      // finishReason/usage 均为值语义），必须回写到闭包变量；只有 toolCalls 数组、
+      // responsesToolBuffer 对象与 finalizedToolIds Set 是引用共享。
+      // 不回写会导致 finishReason 恒为 null → agentLoop 永远等不到 'stop' 而无限循环。
+      fullContent = state.fullContent;
+      fullReasoning = state.fullReasoning;
+      finishReason = state.finishReason;
+      usage = state.usage;
     } else {
       processOpenAIEvent(parsed);
     }
@@ -544,6 +551,11 @@ async function consumeSSEStream(bodyStream, onChunk, requestId, transport = 'ope
       const jsonStr = line.slice(6).trim();
       try { processEvent(jsonStr); } catch { /* ignore */ }
     }
+  }
+  // 兜底：某些网关正常关流却不发 response.completed（finishReason 仍为 null），
+  // 此时按"有工具调用→tool_calls，否则→stop"收敛，绝不把 null 抛给 agentLoop。
+  if (!finishReason) {
+    finishReason = toolCalls.length ? 'tool_calls' : 'stop';
   }
   return {
     content: fullContent,
