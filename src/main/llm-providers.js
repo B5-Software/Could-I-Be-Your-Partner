@@ -150,14 +150,17 @@ function resolveVariantForRequest(llm, effort) {
  * Returns one of: 'openai-responses' | 'anthropic' | 'openai-compat' | 'google'
  */
 function zenModelProviderType(modelId) {
-  // Based on the Zen endpoint table.
+  // Based on the Zen endpoint table (verified live 2026-09-04).
   // Claude / Qwen3.x → Anthropic messages API
   // GPT-5.x → OpenAI responses API (we map to chat/completions for compatibility)
+  // muse-spark* → OpenAI Responses API ONLY: Zen's /chat/completions returns
+  //   plain 500 for these models; /responses with `input` works (200).
   // Gemini → Google (we map to chat/completions for compatibility)
-  // DeepSeek / MiniMax / GLM / Kimi / Grok / Big Pickle / *-free → OpenAI-compat chat/completions
+  // DeepSeek / MiniMax / GLM / Kimi / Grok / Big Pickle / other *-free → OpenAI-compat chat/completions
   const m = (modelId || '').toLowerCase();
   if (/^(claude-|qwen3\.)/.test(m)) return 'anthropic';
   if (/^gpt-5/.test(m)) return 'openai-responses';
+  if (/muse-spark/.test(m)) return 'openai-responses';
   if (/^gemini/.test(m)) return 'google';
   return 'openai-compat';
 }
@@ -295,12 +298,19 @@ function buildResponsesRequest(llm, opts, reasoningEffort) {
 
 // OpenAI 风格消息 → Responses API input items（system 单独提取为 instructions）
 // 参考 https://platform.openai.com/docs/guides/conversation-state#examples-for-storing-conversations
+//
+// 规范形状（2026-09-04 实测：Zen Console 系 provider 对形状做严格校验，
+// 错一个即报 `input[N] did not match any supported type`）：
+//   - 文本/图片消息必须是 { type:'message', role, content:[...] } 包裹的 item，
+//     裸 { type:'input_text' } / { type:'output_text' } 不能出现在 input 顶层；
+//   - assistant 文本放在 message.content 里用 output_text 块；user 文本用 input_text 块。
 function convertMessagesToResponses(messages) {
   let instructions = '';
   const input = [];
+  const textOf = (c) => (typeof c === 'string' ? c : JSON.stringify(c ?? ''));
   for (const m of messages || []) {
     if (m.role === 'system') {
-      const text = typeof m.content === 'string' ? m.content : JSON.stringify(m.content);
+      const text = textOf(m.content);
       instructions += (instructions ? '\n\n' : '') + text;
       continue;
     }
@@ -308,7 +318,7 @@ function convertMessagesToResponses(messages) {
       input.push({
         type: 'function_call_output',
         call_id: m.tool_call_id || '',
-        output: typeof m.content === 'string' ? m.content : JSON.stringify(m.content)
+        output: textOf(m.content)
       });
       continue;
     }
@@ -319,30 +329,46 @@ function convertMessagesToResponses(messages) {
             type: 'function_call',
             call_id: tc.id || '',
             name: tc.function?.name || '',
-            arguments: tc.function?.arguments || ''
+            arguments: typeof tc.function?.arguments === 'string'
+              ? tc.function.arguments
+              : JSON.stringify(tc.function?.arguments ?? {})
           });
         }
         // 官方会话存储示例：带工具调用的 assistant 消息只存 function_call item（不含 output_text）
         continue;
       }
-      if (m.content) {
-        input.push({ type: 'output_text', text: m.content, role: 'assistant' });
+      const text = textOf(m.content);
+      if (text) {
+        input.push({
+          type: 'message',
+          role: 'assistant',
+          content: [{ type: 'output_text', text }]
+        });
       }
       continue;
     }
-    // user
+    // user（含 developer 兜底为 user）：content 可能是字符串或多模态数组
+    const role = m.role === 'developer' ? 'developer' : 'user';
+    const blocks = [];
     if (Array.isArray(m.content)) {
       for (const part of m.content) {
         if (part.type === 'text' && part.text) {
-          input.push({ type: 'input_text', text: part.text, role: 'user' });
+          blocks.push({ type: 'input_text', text: part.text });
+        } else if (part.type === 'input_text' && part.text) {
+          blocks.push({ type: 'input_text', text: part.text });
         } else if (part.type === 'image_url' && part.image_url?.url) {
-          input.push({ type: 'input_image', image_url: part.image_url.url, role: 'user' });
+          blocks.push({ type: 'input_image', image_url: part.image_url.url });
+        } else if (part.type === 'input_image' && part.image_url) {
+          blocks.push({ type: 'input_image', image_url: part.image_url });
         }
       }
     } else if (typeof m.content === 'string' && m.content) {
-      input.push({ type: 'input_text', text: m.content, role: 'user' });
-    } else {
-      input.push({ type: 'input_text', text: JSON.stringify(m.content), role: 'user' });
+      blocks.push({ type: 'input_text', text: m.content });
+    } else if (m.content != null) {
+      blocks.push({ type: 'input_text', text: JSON.stringify(m.content) });
+    }
+    if (blocks.length > 0) {
+      input.push({ type: 'message', role, content: blocks });
     }
   }
   return { instructions, input };
@@ -473,7 +499,19 @@ function buildZenRequest(llm, opts, reasoningEffort) {
     };
     return req;
   }
-  // openai-responses, google, openai-compat → all use Zen's chat/completions for compatibility
+  if (ptype === 'openai-responses') {
+    // muse-spark 等仅支持 Responses 的模型：直调 Zen /responses。
+    // 注意：Zen /chat/completions 对这类模型返回无意义的 500，
+    // 而 /responses 要求 input 为规范 item 数组（见 convertMessagesToResponses）。
+    const req = buildResponsesRequest(zenLlm, opts, reasoningEffort);
+    req.url = `${ZEN_BASE}/responses`;
+    req.headers = {
+      'Authorization': `Bearer ${zenLlm.apiKey}`,
+      'Content-Type': 'application/json'
+    };
+    return req;
+  }
+  // google, openai-compat → use Zen's chat/completions for compatibility
   // (Zen exposes /chat/completions that handles routing internally for non-Anthropic models)
   const req = buildOpenAIRequest(zenLlm, opts, reasoningEffort);
   req.url = `${ZEN_BASE}/chat/completions`;
