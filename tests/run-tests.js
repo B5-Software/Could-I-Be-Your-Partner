@@ -1609,7 +1609,7 @@ test('buildResponsesRequest: 结构 / instructions / store:false / tools', () =>
   assert.strictEqual(req.body.stream, true);
   assert.strictEqual(req.body.max_output_tokens, 2048);
   assert.strictEqual(req.body.temperature, 0.3);
-  assert.deepStrictEqual(req.body.input, [{ type: 'input_text', text: '你好', role: 'user' }]);
+  assert.deepStrictEqual(req.body.input, [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: '你好' }] }]);
   assert.deepStrictEqual(req.body.tools, [{ type: 'function', name: 'get_weather', description: '查天气', parameters: { type: 'object', properties: { city: { type: 'string' } } } }]);
   assert.deepStrictEqual(req.body.tool_choice, { type: 'auto' });
 });
@@ -1648,11 +1648,21 @@ test('convertMessagesToResponses: system→instructions / tool→function_call_o
     { role: 'user', content: [{ type: 'text', text: '看图' }, { type: 'image_url', image_url: { url: 'data:image/png;base64,AAA' } }] }
   ]);
   assert.strictEqual(instructions, 'A\n\nB');
-  assert.deepStrictEqual(input[0], { type: 'input_text', text: 'hi', role: 'user' });
+  assert.deepStrictEqual(input[0], { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'hi' }] });
   assert.deepStrictEqual(input[1], { type: 'function_call', call_id: 'c1', name: 'search', arguments: '{"q":"x"}' });
   assert.deepStrictEqual(input[2], { type: 'function_call_output', call_id: 'c1', output: '结果1' });
-  assert.deepStrictEqual(input[3], { type: 'input_text', text: '看图', role: 'user' });
-  assert.deepStrictEqual(input[4], { type: 'input_image', image_url: 'data:image/png;base64,AAA', role: 'user' });
+  assert.deepStrictEqual(input[3], { type: 'message', role: 'user', content: [{ type: 'input_text', text: '看图' }, { type: 'input_image', image_url: 'data:image/png;base64,AAA' }] });
+  assert.strictEqual(input.length, 4);
+});
+
+test('convertMessagesToResponses: assistant 纯文本包 message/output_text（顶层禁裸块）', () => {
+  const { input } = llmProvidersMod.convertMessagesToResponses([
+    { role: 'assistant', content: '好的' },
+  ]);
+  assert.deepStrictEqual(input, [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: '好的' }] }]);
+  for (const item of input) {
+    assert.ok(['message', 'function_call', 'function_call_output'].includes(item.type), 'input 顶层出现非法 item 类型: ' + item.type);
+  }
 });
 
 test('parseResponsesResponse: output items → 统一 OpenAI shape + usage 透传', () => {
