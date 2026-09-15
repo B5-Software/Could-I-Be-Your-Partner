@@ -972,8 +972,9 @@
                     <option value="openai-responses">OpenAI Responses（新版）</option>
                     <option value="anthropic-compat">Anthropic 兼容</option>
                     <option value="opencode-zen">OpenCode Zen (免费模型可用)</option>
+                    <option value="opencode-go">OpenCode Go (订阅)</option>
                   </select>
-                  <div class="setting-hint">OpenAI兼容：标准 chat/completions；OpenAI Responses：新版 /v1/responses；Anthropic兼容：messages API；OpenCode Zen：自动路由</div>
+                  <div class="setting-hint">OpenAI兼容：标准 chat/completions；OpenAI Responses：新版 /v1/responses；Anthropic兼容：messages API；OpenCode Zen：免费/按量；OpenCode Go：$10/月订阅，按模型自动路由端点</div>
                 </div>
                 <div id="llm-openai-fields">
                   <div class="setting-item">
@@ -1006,7 +1007,7 @@
                 </div>
                 <div id="llm-zen-fields" class="hidden">
                   <div class="setting-item">
-                    <label>Zen API Key</label>
+                    <label>OpenCode API Key（Zen / Go 通用）</label>
                     <div class="input-with-toggle">
                       <input type="password" id="setting-llm-zen-key" placeholder="opencode-...">
                       <button class="btn-icon btn-toggle-pwd" data-target="setting-llm-zen-key">
@@ -1016,7 +1017,7 @@
                         <i class="fa-solid fa-wand-magic-sparkles"></i> 生成新 Key
                       </button>
                     </div>
-                    <div class="setting-hint">从 <a href="#" id="link-zen-auth">opencode.ai/auth</a> 获取，按量付费，含限时免费模型。点击「生成新 Key」可免登录使用限时免费模型（key=public）</div>
+                    <div class="setting-hint">从 <a href="#" id="link-zen-auth">opencode.ai/auth</a> 获取。Zen：按量付费，含限时免费模型（可点「生成新 Key」免登录，key=public）；Go：需先在 opencode.ai 订阅后粘贴同一 Key</div>
                   </div>
                   <div class="setting-item">
                     <label>模型</label>
@@ -1025,6 +1026,19 @@
                       <button class="btn-secondary" id="btn-zen-refresh"><i class="fa-solid fa-rotate"></i> 刷新</button>
                     </div>
                     <div class="setting-hint" id="zen-model-hint">点击刷新获取可用模型列表</div>
+                  </div>
+                  <div class="setting-item hidden" id="zen-free-notice" style="border:1px solid #f59e0b;border-radius:8px;padding:10px 12px;background:rgba(245,158,11,0.08);">
+                    <div class="setting-hint" style="margin-bottom:8px;">
+                      <i class="fa-solid fa-triangle-exclamation"></i>
+                      <b>免费模型官方方案说明：</b>OpenCode 官方将限时免费模型的容量保留给官方客户端 —— 官方网关按 <code>User-Agent: opencode/*</code> 校验请求，本应用<b>不会自动替你伪装</b>。若想使用免费模型，需你自行在下方「自定义请求头」中添加一条 <code>User-Agent: opencode/&lt;版本号&gt;</code>（可点击右侧按钮代为填入草稿）。
+                    </div>
+                    <div class="setting-hint" style="margin-bottom:8px;">
+                      <b>风险须知：</b>该门控属于官方反滥用措施，规则随时可能变化；一旦官方收紧策略，免费模型可能失效、你的账号或 IP 可能被限流。是否添加由你自行决定并承担相应后果。不添加也可正常使用 Zen 付费模型 / Go 订阅模型。
+                    </div>
+                    <div style="display:flex;gap:8px;align-items:center;">
+                      <button class="btn-secondary btn-sm" id="btn-zen-add-ua" type="button"><i class="fa-solid fa-plus"></i> 在自定义请求头中添加官方 UA</button>
+                      <span class="setting-hint" id="zen-ua-status"></span>
+                    </div>
                   </div>
                 </div>
                 <div class="setting-item">
@@ -1100,6 +1114,22 @@
                   <label>529 过载时回退模型 (可选)</label>
                   <input type="text" id="setting-llm-fallback-model" placeholder="例如 gpt-4o-mini">
                   <div class="setting-hint">连续 529 过载后自动切换到此模型</div>
+                </div>
+                <div class="setting-item">
+                  <label>自动附加 OpenCode 会话头</label>
+                  <div class="toggle-switch">
+                    <input type="checkbox" id="setting-llm-oc-auto">
+                    <span class="toggle-slider"></span>
+                  </div>
+                  <div class="setting-hint">URL 命中 opencode.ai 时自动发送 x-opencode-session/request/project 等会话与路由头（Go 订阅必需，网关转发上游前会剥离这些头）。免费模型所需的 User-Agent 不会自动注入——见下方免费模型说明，由你决定是否添加</div>
+                </div>
+                <div class="setting-item">
+                  <label>自定义请求头 (对所有文本/VLM 请求生效)</label>
+                  <div id="llm-custom-headers"></div>
+                  <div style="display:flex;gap:8px;align-items:center;margin-top:6px;">
+                    <button class="btn-secondary btn-sm" id="btn-llm-add-header" type="button"><i class="fa-solid fa-plus"></i> 添加请求头</button>
+                  </div>
+                  <div class="setting-hint">自定义头优先级最高，可覆盖自动头（如手动指定 User-Agent）。保存后立即对下次请求生效</div>
                 </div>
               </div>
             </div>
@@ -1328,6 +1358,14 @@
                   <label>每日最大生成图片数 (0为不限制)</label>
                   <input type="number" id="setting-img-daily-limit" min="0" step="1" placeholder="例如 50">
                   <div class="setting-hint" id="setting-img-usage">今日已用: 0</div>
+                </div>
+                <div class="setting-item">
+                  <label>自定义请求头 (生图 API 生效)</label>
+                  <div id="img-custom-headers"></div>
+                  <div style="display:flex;gap:8px;align-items:center;margin-top:6px;">
+                    <button class="btn-secondary btn-sm" id="btn-img-add-header" type="button"><i class="fa-solid fa-plus"></i> 添加请求头</button>
+                  </div>
+                  <div class="setting-hint">URL 命中 opencode.ai 时同样会自动附加 OpenCode 官方请求头；自定义头优先级最高</div>
                 </div>
               </div>
             </div>
@@ -1799,8 +1837,8 @@
                   </div>
                 </div>
                 <p class="setting-hint">
-                  <i class="fa-solid fa-circle-info"></i> 
-                  代理设置将影响所有网络请求（API调用、网页抓取等）。重启应用后生效。
+                  <i class="fa-solid fa-circle-info"></i>
+                  代理即时生效（无需重启），覆盖：AI/VLM/生图请求、模型列表、网页抓取与 net:* 工具、Playwright 浏览器、aria2 下载、npm/curl 等子进程。DNS/ping/traceroute 等底层探测与 IMAP 收信始终直连。
                 </p>
               </div>
             </div>
@@ -3322,13 +3360,14 @@
               <label for="ob-llm-provider">接入方式</label>
               <select id="ob-llm-provider">
                 <option value="opencode-zen" selected>OpenCode Zen（推荐，免费）</option>
+                <option value="opencode-go">OpenCode Go（订阅）</option>
                 <option value="openai-compat">OpenAI 兼容</option>
                 <option value="openai-responses">OpenAI Responses（新版）</option>
                 <option value="anthropic-compat">Anthropic 兼容</option>
               </select>
             </div>
             <div class="ob-form-field" id="ob-zen-key-field">
-              <label for="ob-llm-zen-key">Zen API Key</label>
+              <label for="ob-llm-zen-key">OpenCode API Key（Zen / Go 通用）</label>
               <div class="ob-key-row">
                 <input type="password" id="ob-llm-zen-key" value="public" placeholder="public（免登录）">
                 <button type="button" class="ob-btn-key" id="ob-btn-zen-genkey" title="生成免登录公共 Key"><i class="fa-solid fa-key"></i></button>
@@ -3346,6 +3385,19 @@
               <label for="ob-llm-model">模型</label>
               <select id="ob-llm-model"><option value="">加载中...</option></select>
               <div class="ob-form-hint" id="ob-model-hint">正在获取模型列表...</div>
+            </div>
+            <div class="ob-form-field hidden" id="ob-free-notice" style="border:1px solid #f59e0b;border-radius:8px;padding:10px 12px;background:rgba(245,158,11,0.08);">
+              <div class="ob-form-hint" style="margin-bottom:8px;">
+                <i class="fa-solid fa-triangle-exclamation"></i>
+                <b>免费模型官方方案说明：</b>OpenCode 官方将限时免费模型的容量保留给官方客户端（网关按 <code>User-Agent: opencode/*</code> 校验）。本应用<b>不会自动替你伪装</b>，如需使用免费模型，请自行决定是否添加该请求头。
+              </div>
+              <div class="ob-form-hint" style="margin-bottom:8px;">
+                <b>风险须知：</b>该门控属于官方反滥用措施，规则随时可能变化；一旦官方收紧策略，免费模型可能失效，你的账号或 IP 可能被限流。是否添加由你自行决定并承担相应后果；不添加也可正常使用付费模型。
+              </div>
+              <div style="display:flex;gap:8px;align-items:center;">
+                <button type="button" class="ob-btn-key" id="ob-btn-add-ua" style="height:auto;padding:6px 12px;"><i class="fa-solid fa-plus"></i> 添加官方 User-Agent 请求头</button>
+                <span class="ob-form-hint" id="ob-ua-status"></span>
+              </div>
             </div>
           </div>
         </div>

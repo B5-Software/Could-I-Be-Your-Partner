@@ -224,6 +224,23 @@ async function _launchPwBrowser(overrideSettings = null) {
     extraArgs.push('--disable-blink-features=AutomationControlled');
   }
 
+  // 代理设置：手动模式 → Playwright proxy 参数（支持 socks5://）；不使用代理 → 强制直连；
+  // 系统代理模式 → 浏览器默认使用 OS 代理，无需额外参数
+  let pwProxy = null;
+  try {
+    const proxySettings = getSettings()?.proxy || {};
+    if (proxySettings.mode === 'manual') {
+      let server = proxySettings.https || proxySettings.http;
+      if (server) {
+        if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(server)) server = 'http://' + server;
+        const bypass = String(proxySettings.bypass || '').split(/[,;\s]+/).filter(Boolean).join(',');
+        pwProxy = { server, bypass: bypass || undefined };
+      }
+    } else if (proxySettings.mode === 'none') {
+      extraArgs.push('--no-proxy-server');
+    }
+  } catch { /* ignore */ }
+
   let lastError = null;
 
   // ---- 浏览器数据模式：persistent / profile-copy → launchPersistentContext ----
@@ -240,6 +257,7 @@ async function _launchPwBrowser(overrideSettings = null) {
         headless,
         viewport: { width: 1280, height: 720 },
         args: extraArgs,
+        ...(pwProxy ? { proxy: pwProxy } : {}),
         ...launchOpts
       };
       if (dataMode === 'profile-copy') {
@@ -293,7 +311,8 @@ async function _launchPwBrowser(overrideSettings = null) {
       _pwBrowser = await chromium.launch({
         headless,
         executablePath: pwSettings.path,
-        args: extraArgs
+        args: extraArgs,
+        ...(pwProxy ? { proxy: pwProxy } : {})
       });
       console.log('Playwright launched with custom path:', pwSettings.path, 'headless:', headless);
       _onPwBrowserLaunched(!headless);
@@ -307,7 +326,7 @@ async function _launchPwBrowser(overrideSettings = null) {
 
   if (pwSettings.mode === 'chromium') {
     try {
-      _pwBrowser = await chromium.launch({ headless, args: extraArgs });
+      _pwBrowser = await chromium.launch({ headless, args: extraArgs, ...(pwProxy ? { proxy: pwProxy } : {}) });
       console.log('Playwright launched with built-in Chromium, headless:', headless);
       _onPwBrowserLaunched(!headless);
       _attachPwDisconnectListener(_pwBrowser);
@@ -319,7 +338,7 @@ async function _launchPwBrowser(overrideSettings = null) {
 
   if (pwSettings.mode === 'edge') {
     try {
-      _pwBrowser = await chromium.launch({ headless, channel: 'msedge', args: extraArgs });
+      _pwBrowser = await chromium.launch({ headless, channel: 'msedge', args: extraArgs, ...(pwProxy ? { proxy: pwProxy } : {}) });
       console.log('Playwright launched with Microsoft Edge, headless:', headless);
       _onPwBrowserLaunched(!headless);
       _attachPwDisconnectListener(_pwBrowser);
@@ -332,7 +351,7 @@ async function _launchPwBrowser(overrideSettings = null) {
 
   if (pwSettings.mode === 'chrome') {
     try {
-      _pwBrowser = await chromium.launch({ headless, channel: 'chrome', args: extraArgs });
+      _pwBrowser = await chromium.launch({ headless, channel: 'chrome', args: extraArgs, ...(pwProxy ? { proxy: pwProxy } : {}) });
       console.log('Playwright launched with Google Chrome, headless:', headless);
       _onPwBrowserLaunched(!headless);
       _attachPwDisconnectListener(_pwBrowser);
@@ -347,7 +366,7 @@ async function _launchPwBrowser(overrideSettings = null) {
   const channels = ['msedge', 'chrome'];
   for (const channel of channels) {
     try {
-      _pwBrowser = await chromium.launch({ headless, channel, args: extraArgs });
+      _pwBrowser = await chromium.launch({ headless, channel, args: extraArgs, ...(pwProxy ? { proxy: pwProxy } : {}) });
       console.log('Playwright launched with channel:', channel, 'headless:', headless);
       _onPwBrowserLaunched(!headless);
       _attachPwDisconnectListener(_pwBrowser);
@@ -358,7 +377,7 @@ async function _launchPwBrowser(overrideSettings = null) {
     }
   }
   try {
-    _pwBrowser = await chromium.launch({ headless, args: extraArgs });
+    _pwBrowser = await chromium.launch({ headless, args: extraArgs, ...(pwProxy ? { proxy: pwProxy } : {}) });
     console.log('Playwright launched with built-in Chromium (auto fallback), headless:', headless);
     _onPwBrowserLaunched(!headless);
     _attachPwDisconnectListener(_pwBrowser);

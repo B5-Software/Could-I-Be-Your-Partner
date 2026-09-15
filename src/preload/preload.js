@@ -259,7 +259,7 @@ contextBridge.exposeInMainWorld('api', {
   visionDescribeImage: ({ dataUrl, prompt }) => ipcRenderer.invoke('vision:describeImage', { dataUrl, prompt }),
   chatLLMStream: (messages, options) => ipcRenderer.invoke('llm:chatStream', messages, options),
   summarizeLLM: (messages, options) => ipcRenderer.invoke('llm:summarize', messages, options),
-  zenFetchModels: () => ipcRenderer.invoke('zen:fetchModels'),
+  zenFetchModels: (mode) => ipcRenderer.invoke('zen:fetchModels', mode),
   llmFetchModels: (provider, apiUrl, apiKey) => ipcRenderer.invoke('llm:fetchModels', provider, apiUrl, apiKey),
   // 查询模型可用的变体（思考强度）档位 + Anthropic 能力内省
   llmCapabilities: (provider, model, apiUrl, apiKey) => ipcRenderer.invoke('llm:capabilities', provider, model, apiUrl, apiKey),

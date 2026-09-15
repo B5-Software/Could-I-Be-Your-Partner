@@ -723,7 +723,7 @@
     const openaiFields = document.getElementById('llm-openai-fields');
     const zenFields = document.getElementById('llm-zen-fields');
     if (!openaiFields || !zenFields) return;
-    if (provider === 'opencode-zen') {
+    if (provider === 'opencode-zen' || provider === 'opencode-go') {
       openaiFields.classList.add('hidden');
       zenFields.classList.remove('hidden');
     } else {
@@ -736,19 +736,22 @@
     const sel = document.getElementById('setting-llm-zen-model');
     const hint = document.getElementById('zen-model-hint');
     if (!sel) return;
+    // provider 决定 Zen / Go 端点
+    const provider = document.getElementById('setting-llm-provider')?.value || 'opencode-zen';
+    const isGo = provider === 'opencode-go';
     sel.innerHTML = '<option value="">加载中...</option>';
     if (hint) hint.textContent = '正在获取模型列表...';
     try {
-      const res = await window.api.zenFetchModels();
+      const res = await window.api.zenFetchModels(isGo ? 'go' : 'zen');
       if (!res || !res.ok || !Array.isArray(res.models)) {
         sel.innerHTML = '<option value="">(获取失败)</option>';
-        if (hint) hint.textContent = res?.error || '获取失败，请检查 Zen API Key 或网络';
+        if (hint) hint.textContent = res?.error || '获取失败，请检查 OpenCode API Key 或网络';
         return;
       }
       const FREE_KEYWORDS = /free|big-pickle|mimo|north-mini|nemotron|hy3/;
-      // 检测是否为免登录公共 key：若是，则只展示免费模型
+      // Zen：免登录公共 key 时只展示免费模型；Go：订阅制，展示全部
       const keyInput = document.getElementById('setting-llm-zen-key');
-      const isPublicKey = (keyInput?.value || '').trim() === 'public' || keyInput?.dataset?.publicKey === '1';
+      const isPublicKey = !isGo && ((keyInput?.value || '').trim() === 'public' || keyInput?.dataset?.publicKey === '1');
       let models = res.models.slice();
       if (isPublicKey) {
         models = models.filter(m => FREE_KEYWORDS.test(m.id));
@@ -763,7 +766,7 @@
       for (const m of models) {
         const opt = document.createElement('option');
         opt.value = m.id;
-        const isFree = FREE_KEYWORDS.test(m.id);
+        const isFree = !isGo && FREE_KEYWORDS.test(m.id);
         opt.textContent = (isFree ? '[免费] ' : '') + (m.name || m.id);
         sel.appendChild(opt);
       }
@@ -777,10 +780,14 @@
           sel.options[0].selected = true;
         }
       }
-      if (hint) hint.textContent = `共 ${models.length} 个可用模型（标 [免费] 的为免费模型）`;
+      if (hint) hint.textContent = isGo
+        ? `共 ${models.length} 个 Go 订阅模型`
+        : `共 ${models.length} 个可用模型（标 [免费] 的为免费模型）`;
+      updateZenFreeNotice().catch(() => {});
     } catch (e) {
       sel.innerHTML = '<option value="">(获取失败)</option>';
       if (hint) hint.textContent = '错误: ' + (e?.message || e);
+      updateZenFreeNotice().catch(() => {});
     }
   }
 
@@ -976,13 +983,20 @@
     }
     const reasoningEl = document.getElementById('setting-llm-reasoning');
     if (reasoningEl) reasoningEl.value = s.llm.reasoningEffort || 'off';
+    const ocAutoEl = document.getElementById('setting-llm-oc-auto');
+    if (ocAutoEl) ocAutoEl.checked = s.llm.autoOpencodeHeaders !== false;
     // 动态变体档位：按当前模型能力拉取并收敛（异步，不阻塞设置页渲染）
     refreshReasoningVariants();
     updateLLMProviderFields(provider);
-    if (provider === 'opencode-zen') {
+    if (provider === 'opencode-zen' || provider === 'opencode-go') {
       const zenModelSel = document.getElementById('setting-llm-zen-model');
       if (zenModelSel) refreshZenModels(s.llm.model);
     }
+    // 自定义请求头编辑器
+    if (llmHeaderEditor) llmHeaderEditor.render(s.llm.customHeaders);
+    if (imgHeaderEditor) imgHeaderEditor.render(s.imageGen.customHeaders);
+    // 免费模型官方方案警示（含已添加 UA 状态）
+    updateZenFreeNotice().catch(() => {});
 
     document.getElementById('setting-img-url').value = s.imageGen.apiUrl || '';
     document.getElementById('setting-img-key').value = s.imageGen.apiKey || '';
@@ -3533,6 +3547,141 @@
     }
   }
 
+  // ---- 自定义请求头行编辑器（LLM / 生图共用）----
+  // 存储格式：[{ name, value }]；行内输入 change 即保存，删除按钮即时生效。
+  function initHeaderEditor(listElId, addBtnId, persistFn) {
+    const listEl = document.getElementById(listElId);
+    const addBtn = document.getElementById(addBtnId);
+    if (!listEl || !addBtn) return null;
+    let items = [];
+    const redraw = () => {
+      listEl.innerHTML = '';
+      if (!items.length) {
+        const empty = document.createElement('div');
+        empty.className = 'setting-hint';
+        empty.textContent = '暂无自定义请求头';
+        listEl.appendChild(empty);
+        return;
+      }
+      items.forEach((item, idx) => {
+        const row = document.createElement('div');
+        row.className = 'custom-header-row';
+        row.style.cssText = 'display:flex;gap:6px;margin-bottom:6px;align-items:center;';
+        const nameInput = document.createElement('input');
+        nameInput.type = 'text';
+        nameInput.placeholder = '名称 (如 X-Title)';
+        nameInput.value = item.name || '';
+        nameInput.style.cssText = 'flex:0 0 38%;min-width:0;';
+        const valueInput = document.createElement('input');
+        valueInput.type = 'text';
+        valueInput.placeholder = '值';
+        valueInput.value = item.value || '';
+        valueInput.style.cssText = 'flex:1;min-width:0;';
+        const delBtn = document.createElement('button');
+        delBtn.type = 'button';
+        delBtn.className = 'btn-icon';
+        delBtn.title = '删除此请求头';
+        delBtn.innerHTML = '<i class="fa-solid fa-trash"></i>';
+        nameInput.addEventListener('change', () => { items[idx] = { name: nameInput.value.trim(), value: items[idx]?.value || '' }; persistFn(items.slice()); });
+        valueInput.addEventListener('change', () => { items[idx] = { name: items[idx]?.name || '', value: valueInput.value }; persistFn(items.slice()); });
+        delBtn.addEventListener('click', () => {
+          items.splice(idx, 1);
+          redraw();
+          persistFn(items.slice());
+        });
+        row.append(nameInput, valueInput, delBtn);
+        listEl.appendChild(row);
+      });
+    };
+    addBtn.addEventListener('click', () => {
+      items.push({ name: '', value: '' });
+      redraw();
+      persistFn(items.slice());
+      const inputs = listEl.querySelectorAll('.custom-header-row input');
+      if (inputs.length >= 2) inputs[inputs.length - 2].focus();
+    });
+    return {
+      render(list) {
+        items = Array.isArray(list) ? list.map(x => ({ name: x?.name || '', value: x?.value || '' })) : [];
+        redraw();
+      }
+    };
+  }
+  const llmHeaderEditor = initHeaderEditor('llm-custom-headers', 'btn-llm-add-header', async (list) => {
+    const s = await window.api.getSettings();
+    s.llm.customHeaders = list;
+    await saveSettings(s);
+  });
+  const imgHeaderEditor = initHeaderEditor('img-custom-headers', 'btn-img-add-header', async (list) => {
+    const s = await window.api.getSettings();
+    s.imageGen.customHeaders = list;
+    await saveSettings(s);
+  });
+
+  // ---- 免费模型官方方案警示（不自动伪装 UA，由用户决定并自行承担风险）----
+  // 官方将限时免费模型容量保留给官方客户端（User-Agent: opencode/* 门控）；
+  // 本应用不代填 UA，仅在用户选中免费模型时展示说明，由用户主动添加。
+  const ZEN_FREE_MODEL_RE = /-free$|big-pickle|north-mini|nemotron|hy3/;
+  const OPENCODE_UA_FALLBACK = '1.18.31';
+
+  function isOpenCodeUaHeader(name) {
+    return String(name || '').trim().toLowerCase() === 'user-agent';
+  }
+
+  function findOpenCodeUaHeader(list) {
+    for (const item of (list || [])) {
+      if (isOpenCodeUaHeader(item?.name)) return item;
+    }
+    return null;
+  }
+
+  function opencodeUaVersionFromSettings(s) {
+    const v = s?.llm?.opencodeVersion;
+    return (v && typeof v.version === 'string' && v.version.trim()) ? v.version.trim() : OPENCODE_UA_FALLBACK;
+  }
+
+  async function updateZenFreeNotice() {
+    const notice = document.getElementById('zen-free-notice');
+    if (!notice) return;
+    const provider = document.getElementById('setting-llm-provider')?.value || 'openai-compat';
+    const key = (document.getElementById('setting-llm-zen-key')?.value || '').trim();
+    const modelSel = document.getElementById('setting-llm-zen-model');
+    let model = modelSel?.value || '';
+    if (!model) {
+      const s = await window.api.getSettings();
+      model = s?.llm?.model || '';
+    }
+    const isFree = provider === 'opencode-zen' && (key === 'public' || ZEN_FREE_MODEL_RE.test(model));
+    notice.classList.toggle('hidden', !isFree);
+    if (!isFree) return;
+    // 已添加官方 UA 时给出状态提示
+    const s = await window.api.getSettings();
+    const ua = findOpenCodeUaHeader(s?.llm?.customHeaders);
+    const status = document.getElementById('zen-ua-status');
+    if (status) status.textContent = ua ? `已添加: User-Agent: ${ua.value || '(空)'}` : '';
+  }
+
+  // 按钮把官方 UA 写入自定义请求头（用户主动点击 = 用户自己的决定）
+  const zenAddUaBtn = document.getElementById('btn-zen-add-ua');
+  if (zenAddUaBtn) {
+    zenAddUaBtn.addEventListener('click', async () => {
+      const s = await window.api.getSettings();
+      s.llm.customHeaders = Array.isArray(s.llm.customHeaders) ? s.llm.customHeaders : [];
+      const version = opencodeUaVersionFromSettings(s);
+      const existing = findOpenCodeUaHeader(s.llm.customHeaders);
+      if (existing) {
+        existing.value = `opencode/${version}`;
+        existing.enabled = true;
+      } else {
+        s.llm.customHeaders.push({ name: 'User-Agent', value: `opencode/${version}` });
+      }
+      await saveSettings(s);
+      if (llmHeaderEditor) llmHeaderEditor.render(s.llm.customHeaders);
+      await updateZenFreeNotice();
+      window.showToast(`已添加 User-Agent: opencode/${version}（风险自负，可随时在自定义请求头中删除）`, 'success');
+    });
+  }
+
   // LLM settings
   ['setting-llm-url', 'setting-llm-key', 'setting-llm-model', 'setting-llm-ctx', 'setting-llm-daily-limit', 'setting-llm-max-response'].forEach(id => {
     document.getElementById(id).addEventListener('change', async (e) => {
@@ -3659,13 +3808,22 @@
     s.llm.fallbackModel = e.target.value.trim();
     await saveSettings(s);
   });
+  // OpenCode 自动头开关
+  const ocAutoEl = document.getElementById('setting-llm-oc-auto');
+  if (ocAutoEl) {
+    ocAutoEl.addEventListener('change', async (e) => {
+      const s = await window.api.getSettings();
+      s.llm.autoOpencodeHeaders = e.target.checked;
+      await saveSettings(s);
+    });
+  }
 
-  // Provider selection — switches between OpenAI-compat and Zen fields
+  // Provider selection — switches between OpenAI-compat and Zen/Go fields
   document.getElementById('setting-llm-provider').addEventListener('change', async (e) => {
     const provider = e.target.value;
     const s = await window.api.getSettings();
     s.llm.provider = provider;
-    // When switching to Zen, persist a sensible default apiUrl/model
+    // When switching to Zen/Go, persist a sensible default apiUrl/model
     if (provider === 'opencode-zen') {
       if (!s.llm.model || !s.llm.model.startsWith('gpt-') && !s.llm.model.startsWith('claude-') &&
           !s.llm.model.startsWith('qwen') && !s.llm.model.startsWith('deepseek') &&
@@ -3676,19 +3834,30 @@
           !s.llm.model.startsWith('grok-')) {
         s.llm.model = 'big-pickle';
       }
+    } else if (provider === 'opencode-go') {
+      if (!s.llm.model || !s.llm.model.startsWith('glm-') && !s.llm.model.startsWith('kimi-') &&
+          !s.llm.model.startsWith('deepseek') && !s.llm.model.startsWith('minimax-') &&
+          !s.llm.model.startsWith('qwen') && !s.llm.model.startsWith('mimo-') &&
+          !s.llm.model.startsWith('grok-') && !s.llm.model.startsWith('gpt-5') &&
+          !s.llm.model.startsWith('muse-') && !s.llm.model.startsWith('hy') &&
+          !s.llm.model.startsWith('longcat-') && !s.llm.model.startsWith('omen-')) {
+        s.llm.model = 'glm-5.3-flash';
+      }
     }
     await saveSettings(s);
     updateLLMProviderFields(provider);
     refreshReasoningVariants();
-    if (provider === 'opencode-zen') {
+    if (provider === 'opencode-zen' || provider === 'opencode-go') {
       await refreshZenModels(s.llm.model);
       // sync zen-model dropdown with current model
       const zenSel = document.getElementById('setting-llm-zen-model');
       if (zenSel) zenSel.value = s.llm.model;
+      updateZenFreeNotice().catch(() => {});
     } else {
       // restore model field text
       const modelEl = document.getElementById('setting-llm-model');
       if (modelEl) modelEl.value = s.llm.model || '';
+      updateZenFreeNotice().catch(() => {});
     }
   });
 
@@ -3713,6 +3882,7 @@
     s.llm.model = e.target.value;
     await saveSettings(s);
     refreshReasoningVariants();
+    updateZenFreeNotice().catch(() => {});
   });
 
   // Zen refresh button
@@ -3735,6 +3905,10 @@
     s.llm.provider = 'opencode-zen';
     s.llm.apiUrl = 'https://opencode.ai/zen/v1/chat/completions';
     await saveSettings(s);
+    // 同步接入方式下拉框显示（当前可能停留在其他选项）
+    const providerSel = document.getElementById('setting-llm-provider');
+    if (providerSel) providerSel.value = 'opencode-zen';
+    updateLLMProviderFields('opencode-zen');
     // 刷新模型列表，过滤为仅显示免费模型
     await refreshZenModels(s.llm.model);
     const hint = document.getElementById('zen-model-hint');

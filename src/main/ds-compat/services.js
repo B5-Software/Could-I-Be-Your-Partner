@@ -297,18 +297,25 @@ class CibypLlmService extends Service {
   async chat(request = {}, signal) {
     const settings = await this.getSettings();
     const llm = (settings && settings.llm) || {};
-    if (!llm.apiUrl) throw new Error('CIBYP: 尚未配置 LLM API（设置 → LLM）');
+    const isOcProvider = llm.provider === 'opencode-zen' || llm.provider === 'opencode-go';
+    if (isOcProvider && !llm.zenApiKey) throw new Error('CIBYP: 尚未配置 OpenCode API Key（设置 → LLM）');
+    if (!isOcProvider && !llm.apiUrl) throw new Error('CIBYP: 尚未配置 LLM API（设置 → LLM）');
     const messages = Array.isArray(request.messages) ? request.messages : [];
-    const body = {
-      model: request.model || llm.model || undefined,
+    // 统一走 buildLLMRequest：自定义请求头 + OpenCode 官方头组与各 provider 一起生效
+    // （插件可按请求指定 model，覆盖全局设置）
+    const llmForRequest = (request.model && request.model !== llm.model) ? { ...llm, model: request.model } : llm;
+    const req = LLMProviders.buildLLMRequest(llmForRequest, {
       messages,
-      ...(typeof request.temperature === 'number' ? { temperature: request.temperature } : {}),
-      ...(typeof request.maxTokens === 'number' && request.maxTokens > 0 ? { max_tokens: request.maxTokens } : {})
-    };
+      temperature: typeof request.temperature === 'number' ? request.temperature : undefined,
+      max_tokens: (typeof request.maxTokens === 'number' && request.maxTokens > 0) ? request.maxTokens : undefined,
+      stream: false,
+      sessionKey: request.sessionKey || null
+    });
     const result = await llmRetry.fetchLLMWithRetry({
-      apiUrl: llm.apiUrl,
-      apiKey: llm.apiKey || llm.zenApiKey || '',
-      body,
+      apiUrl: req.url,
+      apiKey: req.headers['x-api-key'] || llm.apiKey || llm.zenApiKey || '',
+      headers: req.headers,
+      body: req.body,
       options: { sessionKey: request.sessionKey || null }
     });
     if (!result.ok) throw new Error(result.error || 'LLM 请求失败');
@@ -318,12 +325,12 @@ class CibypLlmService extends Service {
     } finally {
       if (typeof result.releaseController === 'function') result.releaseController();
     }
-    const parsed = LLMProviders.parseLLMResponse(raw || {}, 'openai');
+    const parsed = LLMProviders.parseLLMResponse(raw || {}, req.transport || 'openai');
     return {
-      content: parsed.content || '',
-      reasoning: parsed.reasoning || null,
+      content: parsed.content || parsed.choices?.[0]?.message?.content || '',
+      reasoning: parsed.reasoning || parsed.choices?.[0]?.message?.reasoning || null,
       usage: parsed.usage || null,
-      model: parsed.model || body.model || null
+      model: parsed.model || req.body.model || null
     };
   }
 }

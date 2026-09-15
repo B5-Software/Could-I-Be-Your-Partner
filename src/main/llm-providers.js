@@ -10,7 +10,10 @@
 
 'use strict';
 
+const ocHeaders = require('./opencode-headers');
+
 const ZEN_BASE = 'https://opencode.ai/zen/v1';
+const OC_GO_BASE = 'https://opencode.ai/zen/go/v1';
 
 // ---- Reasoning intensity → provider-specific params ----
 // legacy Anthropic extended thinking 的 token 预算映射（adaptive thinking 直接透传 effort）
@@ -168,8 +171,9 @@ function zenModelProviderType(modelId) {
 /**
  * Build the full request URL + headers + body for a given provider config.
  * @param {object} llm - settings.llm (with provider, apiUrl, apiKey, model, etc.)
- * @param {object} opts - { messages, tools, tool_choice, temperature, max_tokens, stream, reasoningEffort }
- * @returns {{ url, headers, body, transport }} transport: 'openai' | 'anthropic'
+ * @param {object} opts - { messages, tools, tool_choice, temperature, max_tokens, stream,
+ *                          reasoningEffort, sessionKey, requestId }
+ * @returns {{ url, headers, body, transport }} transport: 'openai' | 'anthropic' | 'responses'
  */
 function buildLLMRequest(llm, opts) {
   const provider = llm.provider || 'openai-compat';
@@ -178,17 +182,32 @@ function buildLLMRequest(llm, opts) {
   // 避免思考模型把所有 token 都花在 reasoning 上导致 content 为空。
   const reasoningEffort = opts.reasoningEffort || llm.reasoningEffort || 'off';
 
+  let req;
   if (provider === 'opencode-zen') {
-    return buildZenRequest(llm, opts, reasoningEffort);
+    req = buildZenRequest(llm, opts, reasoningEffort);
+  } else if (provider === 'opencode-go') {
+    req = buildOpencodeGoRequest(llm, opts, reasoningEffort);
+  } else if (provider === 'anthropic-compat') {
+    req = buildAnthropicRequest(llm, opts, reasoningEffort);
+  } else if (provider === 'openai-responses') {
+    req = buildResponsesRequest(llm, opts, reasoningEffort);
+  } else {
+    // default: openai-compat
+    req = buildOpenAIRequest(llm, opts, reasoningEffort);
   }
-  if (provider === 'anthropic-compat') {
-    return buildAnthropicRequest(llm, opts, reasoningEffort);
-  }
-  if (provider === 'openai-responses') {
-    return buildResponsesRequest(llm, opts, reasoningEffort);
-  }
-  // default: openai-compat
-  return buildOpenAIRequest(llm, opts, reasoningEffort);
+
+  // 统一请求头应用（所有种类 API 生效）：
+  // 1) 自定义请求头（用户配置，可覆盖任何自动头）；
+  // 2) OpenCode 官方头组（URL 命中 opencode.ai 时自动补齐：免费模型 UA 门控、
+  //    Go 订阅 x-opencode-session 门控、无 key 时 Authorization: Bearer public）。
+  req.headers = ocHeaders.applyProviderHeaders({
+    url: req.url,
+    headers: req.headers,
+    llm,
+    sessionKey: opts.sessionKey || null,
+    requestId: opts.requestId || null
+  });
+  return req;
 }
 
 // ---- OpenAI-compatible (chat/completions) ----
@@ -493,10 +512,10 @@ function buildZenRequest(llm, opts, reasoningEffort) {
     req.url = `${ZEN_BASE}/messages`;
     // Zen uses Bearer auth even for Anthropic-style endpoints
     req.headers = {
-      'Authorization': `Bearer ${zenLlm.apiKey}`,
       'anthropic-version': '2023-06-01',
       'Content-Type': 'application/json'
     };
+    if (zenLlm.apiKey) req.headers['Authorization'] = `Bearer ${zenLlm.apiKey}`;
     return req;
   }
   if (ptype === 'openai-responses') {
@@ -515,10 +534,43 @@ function buildZenRequest(llm, opts, reasoningEffort) {
   // (Zen exposes /chat/completions that handles routing internally for non-Anthropic models)
   const req = buildOpenAIRequest(zenLlm, opts, reasoningEffort);
   req.url = `${ZEN_BASE}/chat/completions`;
-  req.headers = {
-    'Authorization': `Bearer ${zenLlm.apiKey}`,
-    'Content-Type': 'application/json'
-  };
+  req.headers = { 'Content-Type': 'application/json' };
+  if (zenLlm.apiKey) req.headers['Authorization'] = `Bearer ${zenLlm.apiKey}`;
+  return req;
+}
+
+// ---- OpenCode Go（订阅版网关，按模型自动路由端点）----
+// 端点表（opencode.ai/docs/go）：
+//   chat/completions：GLM/Kimi/DeepSeek/MiMo/Hy 等（@ai-sdk/openai-compatible）
+//   messages        ：MiniMax M* / Qwen3.x（Anthropic 形状，Bearer 认证）
+//   responses       ：GPT-5.x Luna / Grok / Muse Spark（@ai-sdk/openai）
+function buildOpencodeGoRequest(llm, opts, reasoningEffort) {
+  const apiKey = llm.zenApiKey || llm.apiKey;
+  const goLlm = { ...llm, apiKey };
+  const m = (llm.model || '').toLowerCase();
+
+  if (/^(minimax-|qwen3\.)/.test(m)) {
+    const req = buildAnthropicRequest(goLlm, opts, reasoningEffort);
+    req.url = `${OC_GO_BASE}/messages`;
+    req.headers = {
+      'anthropic-version': '2023-06-01',
+      'Content-Type': 'application/json'
+    };
+    if (apiKey) req.headers['Authorization'] = `Bearer ${apiKey}`;
+    return req;
+  }
+  if (/^(gpt-5|grok-|muse-spark|codex)/.test(m)) {
+    const req = buildResponsesRequest(goLlm, opts, reasoningEffort);
+    req.url = `${OC_GO_BASE}/responses`;
+    req.headers = { 'Content-Type': 'application/json' };
+    if (apiKey) req.headers['Authorization'] = `Bearer ${apiKey}`;
+    return req;
+  }
+  // 默认：chat/completions
+  const req = buildOpenAIRequest(goLlm, opts, reasoningEffort);
+  req.url = `${OC_GO_BASE}/chat/completions`;
+  req.headers = { 'Content-Type': 'application/json' };
+  if (apiKey) req.headers['Authorization'] = `Bearer ${apiKey}`;
   return req;
 }
 
@@ -673,6 +725,7 @@ function parseAnthropicStreamChunk(raw) {
 
 module.exports = {
   ZEN_BASE,
+  OC_GO_BASE,
   REASONING_BUDGET_MAP,
   REASONING_EFFORT_LEVELS,
   VARIANT_LABELS,
@@ -683,6 +736,7 @@ module.exports = {
   resolveVariantForRequest,
   zenModelProviderType,
   buildLLMRequest,
+  buildOpencodeGoRequest,
   parseLLMResponse,
   parseAnthropicResponse,
   parseResponsesResponse,

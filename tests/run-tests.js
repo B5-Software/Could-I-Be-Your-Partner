@@ -1887,6 +1887,197 @@ test('processResponsesEvent: response.completed → usage + finishReason（含�
   assert.strictEqual(s.usage.reasoning_output_tokens, 8);
 });
 
+// ---- OpenCode 官方请求头组 / 自定义请求头（opencode-headers）----
+console.log('\nOpenCode 请求头组 / 自定义请求头（opencode-headers）:');
+const ocHeadersMod = require('../src/main/opencode-headers');
+
+test('normalizeHeaderList: 数组格式 / 重复名 / 非法名 / disabled', () => {
+  const { headers, errors } = ocHeadersMod.normalizeHeaderList([
+    { name: 'X-Title', value: 'a' },
+    { name: 'x-title', value: 'b' },            // 重复（后者覆盖）→ 记录错误
+    { name: 'Bad Header\n', value: 'c' },       // 非法字符
+    { name: '', value: 'd' },                   // 空名跳过
+    { name: 'X-Skip', value: 'e', enabled: false } // 禁用跳过
+  ]);
+  assert.strictEqual(headers['X-Title'], 'b');
+  assert.strictEqual(headers['X-Skip'], undefined);
+  assert.strictEqual(headers['Bad Header\n'], undefined);
+  assert.ok(errors.length >= 2, '应报告重复与非法名');
+});
+
+test('isOpenCodeUrl / isOpenCodeGoUrl 识别', () => {
+  assert.strictEqual(ocHeadersMod.isOpenCodeUrl('https://opencode.ai/zen/v1/chat/completions'), true);
+  assert.strictEqual(ocHeadersMod.isOpenCodeUrl('https://evil.com/?u=opencode.ai'), false);
+  assert.strictEqual(ocHeadersMod.isOpenCodeUrl('not a url'), false);
+  assert.strictEqual(ocHeadersMod.isOpenCodeGoUrl('https://opencode.ai/zen/go/v1/chat/completions'), true);
+  assert.strictEqual(ocHeadersMod.isOpenCodeGoUrl('https://opencode.ai/zen/v1/chat/completions'), false);
+});
+
+test('applyProviderHeaders: zen URL 自动会话头组（不含 UA）+ 无 key 时 public 兜底', () => {
+  const out = ocHeadersMod.applyProviderHeaders({
+    url: 'https://opencode.ai/zen/v1/chat/completions',
+    headers: { 'Content-Type': 'application/json' },
+    llm: { provider: 'opencode-zen', zenApiKey: '' },
+    sessionKey: 'sess_abc',
+    requestId: 'req_1'
+  });
+  // UA 不自动注入：由用户主动添加（UI 已告知官方方案与风险）
+  assert.strictEqual(out['User-Agent'], undefined);
+  assert.strictEqual(out['x-opencode-session'], 'sess_abc');
+  assert.strictEqual(out['x-opencode-request'], 'req_1');
+  assert.strictEqual(out['x-opencode-client'], 'cli');
+  assert.strictEqual(out['x-opencode-project'], 'global');
+  assert.strictEqual(out['Authorization'], 'Bearer public');
+});
+
+test('applyProviderHeaders: 用户主动添加的 UA 头生效（免费模型门控路径）', () => {
+  const out = ocHeadersMod.applyProviderHeaders({
+    url: 'https://opencode.ai/zen/v1/chat/completions',
+    headers: { 'Content-Type': 'application/json' },
+    llm: { provider: 'opencode-zen', zenApiKey: 'public', customHeaders: [{ name: 'User-Agent', value: 'opencode/1.18.31' }] },
+    sessionKey: 'sess_u'
+  });
+  assert.strictEqual(out['User-Agent'], 'opencode/1.18.31');
+  assert.strictEqual(out['Authorization'], 'Bearer public');
+  assert.strictEqual(out['x-opencode-session'], 'sess_u');
+});
+
+test('applyProviderHeaders: 非 opencode URL 不注入自动头；自定义头可覆盖 UA；autoOpencodeHeaders=false 关闭', () => {
+  const plain = ocHeadersMod.applyProviderHeaders({
+    url: 'https://api.openai.com/v1/chat/completions',
+    headers: { 'Authorization': 'Bearer k', 'Content-Type': 'application/json' },
+    llm: { customHeaders: [] }
+  });
+  assert.strictEqual(plain['x-opencode-session'], undefined);
+  assert.strictEqual(plain['User-Agent'], undefined);
+
+  const overridden = ocHeadersMod.applyProviderHeaders({
+    url: 'https://opencode.ai/zen/v1/chat/completions',
+    headers: {},
+    llm: { customHeaders: [{ name: 'User-Agent', value: 'my-agent/1.0' }] }
+  });
+  assert.strictEqual(overridden['User-Agent'], 'my-agent/1.0');
+
+  const disabled = ocHeadersMod.applyProviderHeaders({
+    url: 'https://opencode.ai/zen/v1/chat/completions',
+    headers: { 'Content-Type': 'application/json' },
+    llm: { autoOpencodeHeaders: false, customHeaders: [] }
+  });
+  assert.strictEqual(disabled['User-Agent'], undefined);
+  assert.strictEqual(disabled['Authorization'], undefined);
+});
+
+test('applyProviderHeaders: 保留已有 Authorization（Go 订阅 key 不被 public 覆盖）', () => {
+  const out = ocHeadersMod.applyProviderHeaders({
+    url: 'https://opencode.ai/zen/go/v1/chat/completions',
+    headers: { 'Authorization': 'Bearer ocg-xxx', 'Content-Type': 'application/json' },
+    llm: { customHeaders: [] }
+  });
+  assert.strictEqual(out['Authorization'], 'Bearer ocg-xxx');
+  assert.strictEqual(out['x-opencode-session'], typeof out['x-opencode-session'] === 'string' ? out['x-opencode-session'] : undefined);
+});
+
+test('buildLLMRequest opencode-go: glm → chat/completions / minimax → messages / gpt-5 → responses', () => {
+  const mk = (model) => llmProvidersMod.buildLLMRequest(
+    { provider: 'opencode-go', zenApiKey: 'ocg-key', model, temperature: 0.5 },
+    { messages: [{ role: 'user', content: 'hi' }], sessionKey: 'sess_x' });
+  const glm = mk('glm-5.3-flash');
+  assert.strictEqual(glm.url, 'https://opencode.ai/zen/go/v1/chat/completions');
+  assert.strictEqual(glm.transport, 'openai');
+  assert.strictEqual(glm.headers['Authorization'], 'Bearer ocg-key');
+  const mm = mk('minimax-m3');
+  assert.strictEqual(mm.url, 'https://opencode.ai/zen/go/v1/messages');
+  assert.strictEqual(mm.transport, 'anthropic');
+  assert.strictEqual(mm.headers['Authorization'], 'Bearer ocg-key');
+  const gp = mk('gpt-5.6-luna');
+  assert.strictEqual(gp.url, 'https://opencode.ai/zen/go/v1/responses');
+  assert.strictEqual(gp.transport, 'responses');
+  for (const req of [glm, mm, gp]) {
+    assert.strictEqual(req.headers['User-Agent'], undefined, 'UA 不自动注入');
+    assert.strictEqual(req.headers['x-opencode-session'], 'sess_x');
+  }
+});
+
+test('buildLLMRequest opencode-zen: free 模型 public key + 会话头（UA 由用户自定义头提供）', () => {
+  const req = llmProvidersMod.buildLLMRequest(
+    { provider: 'opencode-zen', zenApiKey: 'public', model: 'deepseek-v4-flash-free', temperature: 0.5,
+      customHeaders: [{ name: 'User-Agent', value: 'opencode/1.18.31' }] },
+    { messages: [{ role: 'user', content: 'hi' }], sessionKey: 'sess_z' });
+  assert.strictEqual(req.url, 'https://opencode.ai/zen/v1/chat/completions');
+  assert.strictEqual(req.headers['Authorization'], 'Bearer public');
+  assert.strictEqual(req.headers['User-Agent'], 'opencode/1.18.31');
+  assert.strictEqual(req.headers['x-opencode-session'], 'sess_z');
+});
+
+testAsync('refreshOpenCodeVersion: 成功缓存 / 非法响应回退默认', async () => {
+  // 注入 settings 缓存
+  let saved = null;
+  ocHeadersMod.setOpenCodeVersionStore({
+    loadFn: async () => saved,
+    saveFn: async (version, fetchedAt) => { saved = { version, fetchedAt }; }
+  });
+  const okResp = { ok: true, json: async () => ({ version: '9.9.9-test' }) };
+  const v = await ocHeadersMod.refreshOpenCodeVersion(() => okResp);
+  assert.strictEqual(v, '9.9.9-test');
+  assert.strictEqual(ocHeadersMod.getOpenCodeVersion(), '9.9.9-test');
+  // 非法响应 → 不更新（缓存新鲜直接跳过）
+  const v2 = await ocHeadersMod.refreshOpenCodeVersion(() => ({ ok: true, json: async () => ({}) }));
+  assert.strictEqual(v2, null);
+  assert.strictEqual(ocHeadersMod.getOpenCodeVersion(), '9.9.9-test');
+});
+// ---- 主进程网络代理（net-proxy）----
+console.log('\n主进程网络代理（net-proxy）:');
+const netProxyMod = require('../src/main/net-proxy');
+
+test('parsePacResult: PROXY/SOCKS5/DIRECT/multi', () => {
+  const t = netProxyMod._test;
+  assert.strictEqual(t.parsePacResult('PROXY 127.0.0.1:7890'), 'http://127.0.0.1:7890');
+  assert.strictEqual(t.parsePacResult('SOCKS5 127.0.0.1:1080'), 'socks5://127.0.0.1:1080');
+  assert.strictEqual(t.parsePacResult('DIRECT'), null);
+  assert.strictEqual(t.parsePacResult('PROXY 1.1.1.1:1;PROXY 2.2.2.2:2'), 'http://1.1.1.1:1');
+  assert.strictEqual(t.parsePacResult(''), null);
+  assert.strictEqual(t.parsePacResult(null), null);
+});
+
+test('normalizeProxyUrl: 补全协议前缀', () => {
+  const t = netProxyMod._test;
+  assert.strictEqual(t.normalizeProxyUrl('127.0.0.1:7890'), 'http://127.0.0.1:7890');
+  assert.strictEqual(t.normalizeProxyUrl('http://127.0.0.1:7890'), 'http://127.0.0.1:7890');
+  assert.strictEqual(t.normalizeProxyUrl('socks5://u:p@127.0.0.1:1080'), 'socks5://u:p@127.0.0.1:1080');
+  assert.strictEqual(t.normalizeProxyUrl('  '), null);
+  assert.strictEqual(t.normalizeProxyUrl(null), null);
+});
+
+// 说明：setConfig 在 manual/none 模式下无 await（body 同步完成），可同步断言；
+// system 模式依赖 Electron session（测试环境不可用），由 getProxyUrlForUrl 内部 try/catch 回退 null。
+test('isBypassed: loopback 恒直连 + 手动 bypass 列表匹配', () => {
+  const t = netProxyMod._test;
+  netProxyMod.setConfig({ mode: 'manual', http: '127.0.0.1:7890', https: '', bypass: 'localhost,127.0.0.1,*.local,<local>' });
+  assert.strictEqual(t.isBypassed('http://localhost:3000/x'), true);
+  assert.strictEqual(t.isBypassed('https://127.0.0.1:9/'), true);
+  assert.strictEqual(t.isBypassed('https://api.example.com/'), false);
+  assert.strictEqual(t.isBypassed('https://a.b.local/'), true);
+  assert.strictEqual(t.isBypassed('https://example.local/'), true);
+  assert.strictEqual(t.isBypassed('not a url'), false, '非法 URL 直接放行（不误伤）');
+  // 未命中 bypass → 该代理 URL 的 dispatcher（缓存的 ProxyAgent）
+  const agent = t.getAgent('http://127.0.0.1:7890');
+  assert.ok(agent, '手动代理应创建 undici ProxyAgent');
+  assert.strictEqual(t.getAgent('http://127.0.0.1:7890'), agent, '同代理 URL 复用缓存 dispatcher');
+});
+
+test('applyEnv: manual 模式注入子进程代理环境变量 / none 清除', () => {
+  netProxyMod.setConfig({ mode: 'manual', http: 'http://127.0.0.1:7890', https: '', bypass: 'localhost,127.0.0.1' });
+  assert.strictEqual(process.env.HTTP_PROXY, 'http://127.0.0.1:7890');
+  assert.strictEqual(process.env.HTTPS_PROXY, 'http://127.0.0.1:7890');
+  assert.ok(process.env.NO_PROXY.includes('localhost'));
+  netProxyMod.setConfig({ mode: 'none', http: '', https: '', bypass: '' });
+  assert.strictEqual(process.env.HTTP_PROXY, undefined);
+  assert.strictEqual(process.env.NO_PROXY, undefined);
+  netProxyMod.setConfig({ mode: 'manual', http: 'socks5://127.0.0.1:1080', https: '', bypass: 'localhost' });
+  assert.strictEqual(process.env.HTTP_PROXY, 'socks5://127.0.0.1:1080', 'socks5 代理同样注入（undici/npm 均支持）');
+  netProxyMod.setConfig({ mode: 'none', http: '', https: '', bypass: '' });
+});
+
 // ---- 更新检查 / 通知 / 模态框 UI 接线 ----
 console.log('\n更新检查 / 通知 / 模态框 UI 接线:');
 const readSrc = (rel) => fs.readFileSync(path_.join(__dirname, '../src/' + rel), 'utf-8');

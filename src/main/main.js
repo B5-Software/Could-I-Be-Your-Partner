@@ -33,6 +33,8 @@ const { importSpreadsheetFile, exportSpreadsheetFile } = require('./spreadsheet-
 const { WebControlService } = require('./web-control-service');
 const { fetchLLMWithRetry, consumeSSEStream, abortAllRequests, abortRequests, DEFAULT_TIMEOUT_MS } = require('./llm-retry');
 const LLMProviders = require('./llm-providers');
+const ocHeaders = require('./opencode-headers');
+const netProxy = require('./net-proxy');
 const updateChecker = require('./update-checker');
 const ESLintService = require('./eslint-service');
 const { BUNDLED_SKILLS } = require('../data/bundled-skills');
@@ -680,7 +682,13 @@ let settings = loadJSON(settingsPath, {
     fallbackModel: '',
     streamResponses: true,
     zenApiKey: '',
-    reasoningEffort: 'off'
+    reasoningEffort: 'off',
+    // 自定义请求头（所有文本/VLM 请求生效）：[{ name, value, enabled }]
+    customHeaders: [],
+    // URL 命中 opencode.ai 时自动附加官方请求头（免费模型 UA 门控 / Go 会话头）
+    autoOpencodeHeaders: true,
+    // OpenCode UA 版本缓存（refreshOpenCodeVersion 写入 { version, fetchedAt }）
+    opencodeVersion: null
   },
   agent: {
     maxIterations: 50,
@@ -734,7 +742,9 @@ let settings = loadJSON(settingsPath, {
     imageSize: '1024x1024',
     dailyMaxImages: 0,
     dailyImagesUsed: 0,
-    dailyImageDate: ''
+    dailyImageDate: '',
+    // 自定义请求头（生图 API 生效）：[{ name, value, enabled }]
+    customHeaders: []
   },
   theme: { mode: 'system', accentColor: '#4f8cff', backgroundColor: '#f5f7fa' },
   // 界面动效：关闭后主标签页切换无动画（设置页「动效」开关）
@@ -902,6 +912,11 @@ if (fs.existsSync(settingsPath)) {
 if (!settings.llm.provider) settings.llm.provider = 'openai-compat';
 if (!settings.llm.reasoningEffort) settings.llm.reasoningEffort = 'off';
 if (settings.llm.zenApiKey === undefined) settings.llm.zenApiKey = '';
+// Migrate: 自定义请求头 / OpenCode 自动头 / UA 版本缓存
+if (!Array.isArray(settings.llm.customHeaders)) settings.llm.customHeaders = [];
+if (settings.llm.autoOpencodeHeaders === undefined) settings.llm.autoOpencodeHeaders = true;
+if (settings.llm.opencodeVersion === undefined) settings.llm.opencodeVersion = null;
+if (!Array.isArray(settings.imageGen.customHeaders)) settings.imageGen.customHeaders = [];
 // Migrate: per-day usage tracking (for token stats tab).
 if (!settings.llm.usageHistory) settings.llm.usageHistory = {};
 // Migrate: automation 旧版 serverToken 字符串 → tokens 列表；补齐 allowNoToken/tokens 默认结构。
@@ -1294,10 +1309,15 @@ function resolveCloseToTrayDecision(decision) {
   }
 }
 
-// ===== 代理设置应用到 Electron session =====
-// 让 settings.proxy 真正生效，影响渲染进程的网络请求（fetch/XHR/WebSocket）
-// 主进程的 Node.js fetch（undici）不走 Electron 代理，aria2 通过 --all-proxy 单独配置
-function applyProxySettings(proxy) {
+// ===== 代理设置应用 =====
+// settings.proxy 真正生效的四个层面：
+// 1) Electron session（渲染进程 fetch/XHR/WebSocket、net.fetch、离线窗口）；
+// 2) 主进程 Node fetch（undici）→ net-proxy.js 注入全局 dispatcher；
+// 3) 子进程环境变量（npm/curl/MCP/终端/插件）；
+// 4) aria2 通过 --all-proxy 单独配置（由调用方触发重启）。
+// 注意：修复旧实现的语法错误 —— Electron proxyRules 语法为 [<scheme>=]<proxyURI>，
+// proxyBypassRules 为逗号分隔（旧代码用 PAC 式 "PROXY host:port" 与 ";" 连接均无效）。
+async function applyProxySettings(proxy) {
   if (!proxy) return;
   const { session } = require('electron');
 
@@ -1308,38 +1328,49 @@ function applyProxySettings(proxy) {
   } else if (proxy.mode === 'system') {
     config = { mode: 'system' };
   } else if (proxy.mode === 'manual') {
-    const proxyUrl = proxy.https || proxy.http;
-    if (proxyUrl) {
-      // Electron pacScript 格式：PROXY host:port
-      let pacRules = '';
-      const cleanUrl = proxyUrl.replace(/^https?:\/\//i, '').replace(/^socks5?:\/\//i, '');
-      if (/^socks/i.test(proxyUrl)) {
-        pacRules = `SOCKS5 ${cleanUrl}`;
+    const httpUrl = netProxy.normalizeProxyUrl(proxy.http);
+    const httpsUrl = netProxy.normalizeProxyUrl(proxy.https);
+    if (httpUrl || httpsUrl) {
+      // 两个地址不同 → 按 scheme 分流；只有一个（或相同）→ 裸值适用于所有协议
+      let proxyRules;
+      if (httpUrl && httpsUrl && httpUrl !== httpsUrl) {
+        proxyRules = `http=${httpUrl};https=${httpsUrl}`;
       } else {
-        pacRules = `PROXY ${cleanUrl}`;
+        proxyRules = (httpUrl || httpsUrl);
       }
-      // bypass 列表（逗号分隔）
-      const bypassList = proxy.bypass || 'localhost,127.0.0.1';
+      // bypass 列表（逗号分隔；显式补充 loopback，Chromium 默认也会绕过）
+      const bypassList = ['localhost', '127.0.0.1', '::1']
+        .concat(String(proxy.bypass || '').split(/[,;\s]+/).filter(Boolean));
       config = {
         mode: 'fixed_servers',
-        proxyRules: pacRules,
-        proxyBypassRules: bypassList.split(/[,;\s]+/).filter(Boolean).join(';')
+        proxyRules,
+        proxyBypassRules: bypassList.join(',')
       };
     } else {
       config = { mode: 'direct' };
     }
   }
 
-  session.defaultSession.setProxy(config).catch((e) => {
-    console.warn('[Proxy] 设置代理失败:', e.message);
-  });
-  console.log('[Proxy] 已应用代理设置:', config.mode);
+  try {
+    await session.defaultSession.setProxy(config);
+    // 关闭基于旧代理配置的连接池 socket，避免动态切换后复用旧连接
+    try { await session.defaultSession.closeAllConnections(); } catch { /* ignore */ }
+  } catch (e) {
+    console.warn('[Proxy] 设置 Electron session 代理失败:', e.message);
+  }
+  // 主进程 fetch dispatcher + 子进程 env
+  try {
+    await netProxy.setConfig(proxy);
+  } catch (e) {
+    console.warn('[Proxy] 应用主进程代理失败:', e.message);
+  }
+  console.log('[Proxy] 已应用代理设置:', config.mode, config.mode === 'fixed_servers' ? config.proxyRules : '');
 }
 
 // 代理设置变更时动态更新（由渲染进程 settings 保存后触发）
 ipcMain.handle('proxy:apply', async (_, proxy) => {
   try {
-    applyProxySettings(proxy);
+    await applyProxySettings(proxy);
     // 同时通知 aria2 重启以应用新代理
     if (aria2Manager.ready) {
       await aria2Manager.start(proxy);
@@ -1442,11 +1473,25 @@ app.whenReady().then(() => {
     }
   }
   // ===== 应用代理设置 =====
-  // 让 settings.proxy 真正生效：配置 Electron session 的网络代理
-  // 影响渲染进程的 fetch/XHR 请求；主进程的 fetch（Node undici）需另行配置
-  applyProxySettings(settings.proxy);
+  // 让 settings.proxy 真正生效：Electron session + 主进程 fetch dispatcher + 子进程 env
+  netProxy.install();
+  applyProxySettings(settings.proxy).catch((e) => {
+    console.warn('[Proxy] 启动应用代理失败:', e.message);
+  });
   // 同步 FediKitten 服务代理（主进程 fetch 使用 undici dispatcher）
   try { fedikittenService.refreshProxy(settings.proxy); } catch (e) { /* 直连回退 */ }
+  // OpenCode UA 版本：注入 settings 缓存读写器并后台刷新（走代理，失败静默）
+  ocHeaders.setOpenCodeVersionStore({
+    loadFn: async () => {
+      const v = settings.llm.opencodeVersion;
+      return (v && v.version) ? { version: v.version, fetchedAt: v.fetchedAt } : null;
+    },
+    saveFn: async (version, fetchedAt) => {
+      settings.llm.opencodeVersion = { version, fetchedAt };
+      persistSettings();
+    }
+  });
+  ocHeaders.refreshOpenCodeVersion().catch(() => {});
 
   createWindow();
   // Splash 启动画面：主窗口预渲染完成前展示品牌画面（主窗口 show 时自动关闭）
@@ -1581,8 +1626,18 @@ ipcMain.handle('tray:show-window', () => {
 ipcMain.handle('settings:get', () => settings);
 ipcMain.handle('settings:set', (_, newSettings) => {
   const prevVoice = settings.voice ? JSON.parse(JSON.stringify(settings.voice)) : null;
+  const prevProxyJson = JSON.stringify(settings.proxy || null);
   settings = { ...settings, ...newSettings };
   saveJSON(settingsPath, settings);
+  // 代理设置变化时自动重应用（含导入/其他页面保存，无需依赖 proxy:apply IPC）
+  const newProxyJson = JSON.stringify(settings.proxy || null);
+  if (newProxyJson !== prevProxyJson) {
+    applyProxySettings(settings.proxy).then(() => {
+      try { fedikittenService.refreshProxy(settings.proxy); } catch { /* ignore */ }
+      if (aria2Manager.ready) return aria2Manager.start(settings.proxy);
+      return null;
+    }).catch((e) => console.warn('[Proxy] 设置变更应用代理失败:', e.message));
+  }
   // 广播主题/语言变化到所有窗口（主窗口 + 子窗口 CAD/EDA/小游戏）
   broadcastThemeChanged();
   broadcastSettingsChanged();
@@ -2793,7 +2848,6 @@ ipcMain.handle('code:runPython', (_, script, cwd, sandboxMode) => {
 // ---- IPC: Image Generation ----
 ipcMain.handle('image:generate', async (_, prompt, workspacePath) => {
   try {
-    const { net } = require('electron');
     const apiUrl = settings.imageGen.apiUrl;
     const apiKey = settings.imageGen.apiKey;
     const model = settings.imageGen.model;
@@ -2810,9 +2864,17 @@ ipcMain.handle('image:generate', async (_, prompt, workspacePath) => {
 
     const body = JSON.stringify({ model, prompt, image_size: imageSize, batch_size: 1, num_inference_steps: 20, guidance_scale: 7.5 });
     console.log(`[IMG] ${model} ← "${prompt.slice(0, 80)}" | size:${imageSize}`);
+    // 请求头：Authorization + 用户自定义头 + URL 命中 opencode.ai 时自动附加官方头组
+    const baseHeaders = { 'Content-Type': 'application/json' };
+    if (apiKey) baseHeaders['Authorization'] = `Bearer ${apiKey}`;
+    const headers = ocHeaders.applyProviderHeaders({
+      url: apiUrl,
+      headers: baseHeaders,
+      llm: settings.imageGen
+    });
     const response = await fetch(apiUrl, {
       method: 'POST',
-      headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+      headers,
       body
     });
     const data = await response.json();
@@ -3366,8 +3428,8 @@ ipcMain.handle('vision:describeImage', async (_, { dataUrl, prompt }) => {
 ipcMain.handle('llm:chat', async (event, messages, options = {}) => {
   try {
     const llm = settings.llm;
-    if (llm.provider === 'opencode-zen') {
-      if (!llm.zenApiKey || !llm.model) return { ok: false, error: '请先在设置中配置OpenCode Zen API Key和模型' };
+    if (llm.provider === 'opencode-zen' || llm.provider === 'opencode-go') {
+      if (!llm.zenApiKey || !llm.model) return { ok: false, error: '请先在设置中配置OpenCode API Key和模型' };
     } else if (!llm.apiUrl || !llm.model) {
       return { ok: false, error: '请先在设置中配置LLM API' };
     }
@@ -3405,7 +3467,10 @@ ipcMain.handle('llm:chat', async (event, messages, options = {}) => {
       max_tokens: options.max_tokens ?? llm.maxResponseTokens ?? 8192,
       response_format: options.response_format || null,
       reasoningEffort: variantCheck.resolved,
-      stream: false
+      stream: false,
+      // OpenCode 官方头组（x-opencode-session/request）所需的会话与请求标识
+      sessionKey: options.sessionKey || null,
+      requestId: options.requestId || null
     });
 
     const retryOpts = {
@@ -3486,8 +3551,8 @@ ipcMain.handle('llm:chat', async (event, messages, options = {}) => {
 ipcMain.handle('llm:chatStream', async (_, messages, options = {}) => {
   try {
     const llm = settings.llm;
-    if (llm.provider === 'opencode-zen') {
-      if (!llm.zenApiKey || !llm.model) return { ok: false, error: '请先在设置中配置OpenCode Zen API Key和模型' };
+    if (llm.provider === 'opencode-zen' || llm.provider === 'opencode-go') {
+      if (!llm.zenApiKey || !llm.model) return { ok: false, error: '请先在设置中配置OpenCode API Key和模型' };
     } else if (!llm.apiUrl || !llm.model) {
       return { ok: false, error: '请先在设置中配置LLM API' };
     }
@@ -3521,7 +3586,10 @@ ipcMain.handle('llm:chatStream', async (_, messages, options = {}) => {
       temperature: options.temperature ?? llm.temperature,
       max_tokens: options.max_tokens ?? llm.maxResponseTokens ?? 8192,
       reasoningEffort: variantCheck.resolved,
-      stream: true
+      stream: true,
+      // OpenCode 官方头组（x-opencode-session/request）所需的会话与请求标识
+      sessionKey: options.sessionKey || null,
+      requestId: options.requestId || null
     });
 
     const retryOpts = {
@@ -3614,8 +3682,8 @@ ipcMain.handle('llm:chatStream', async (_, messages, options = {}) => {
 ipcMain.handle('llm:summarize', async (_, messages, options = {}) => {
   try {
     const llm = settings.llm;
-    if (llm.provider === 'opencode-zen') {
-      if (!llm.zenApiKey || !llm.model) return { ok: false, error: '请先配置OpenCode Zen' };
+    if (llm.provider === 'opencode-zen' || llm.provider === 'opencode-go') {
+      if (!llm.zenApiKey || !llm.model) return { ok: false, error: '请先配置OpenCode' };
     } else if (!llm.apiUrl || !llm.model) {
       return { ok: false, error: '请先在设置中配置LLM API' };
     }
@@ -3638,7 +3706,10 @@ ipcMain.handle('llm:summarize', async (_, messages, options = {}) => {
       // purpose 仅作归属标记（对应 dsh 的 x-deepseek-harness-compact 语义），
       // 不改动模型可见内容，各 provider 忽略即可。
       purpose: options.purpose || undefined,
-      reasoningEffort: variantCheck.resolved
+      reasoningEffort: variantCheck.resolved,
+      // OpenCode 官方头组所需的会话与请求标识
+      sessionKey: options.sessionKey || null,
+      requestId: options.requestId || null
     });
     const retryOpts = {
       maxRetries: options.maxRetries ?? llm.maxRetries ?? undefined,
@@ -3677,19 +3748,27 @@ ipcMain.handle('llm:summarize', async (_, messages, options = {}) => {
   } catch (e) { return { ok: false, error: e.message }; }
 });
 
-// ---- IPC: OpenCode Zen models list ----
-ipcMain.handle('zen:fetchModels', async () => {
+// ---- IPC: OpenCode models list（mode: 'zen'（默认）| 'go'）----
+ipcMain.handle('zen:fetchModels', async (_, mode) => {
   try {
+    const isGo = mode === 'go' || mode === 'opencode-go';
+    const base = isGo ? LLMProviders.OC_GO_BASE : LLMProviders.ZEN_BASE;
+    const modelsUrl = `${base}/models`;
     const apiKey = settings.llm.zenApiKey;
-    // Zen /v1/models 端点无需认证即可访问
-    const headers = { 'Content-Type': 'application/json' };
-    if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+    const baseHeaders = { 'Content-Type': 'application/json' };
+    if (apiKey) baseHeaders['Authorization'] = `Bearer ${apiKey}`;
+    // 自动附加 OpenCode 官方头组 + 用户自定义头
+    const headers = ocHeaders.applyProviderHeaders({
+      url: modelsUrl,
+      headers: baseHeaders,
+      llm: settings.llm
+    });
     // 10 秒超时，避免网络挂起导致向导永远卡在"正在获取模型列表..."
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 10000);
     let resp;
     try {
-      resp = await fetch('https://opencode.ai/zen/v1/models', { headers, signal: controller.signal });
+      resp = await fetch(modelsUrl, { headers, signal: controller.signal });
     } finally {
       clearTimeout(timeoutId);
     }
@@ -3735,7 +3814,13 @@ ipcMain.handle('llm:fetchModels', async (_, provider, apiUrl, apiKey) => {
       modelsUrl = base.replace(/\/$/, '') + '/models';
       if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
     }
-    const resp = await fetch(modelsUrl, { headers, signal: AbortSignal.timeout(10000) });
+    // 统一套用：用户自定义请求头 + URL 命中 opencode.ai 时自动官方头组
+    const finalHeaders = ocHeaders.applyProviderHeaders({
+      url: modelsUrl,
+      headers,
+      llm: settings.llm
+    });
+    const resp = await fetch(modelsUrl, { headers: finalHeaders, signal: AbortSignal.timeout(10000) });
     if (!resp.ok) {
       const txt = await resp.text().catch(() => '');
       return { ok: false, error: `HTTP ${resp.status}: ${txt.slice(0, 200)}` };
@@ -5206,7 +5291,7 @@ ipcMain.handle('sanguosha:aiDecision', async (_, gameState, playerInfo) => {
   // Use LLM for AI decision making — reuses fetchLLMWithRetry for reliability.
   try {
     const llm = settings.llm;
-    if (llm.provider === 'opencode-zen') {
+    if (llm.provider === 'opencode-zen' || llm.provider === 'opencode-go') {
       if (!llm.zenApiKey || !llm.model) return { ok: true, action: 'auto' };
     } else if (!llm.apiUrl || !llm.model) {
       return { ok: true, action: 'auto' };

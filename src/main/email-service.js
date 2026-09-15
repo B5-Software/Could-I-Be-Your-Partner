@@ -12,6 +12,7 @@ const { simpleParser } = require('mailparser');
 const { TOTP, Secret } = require('otpauth');
 const QRCode = require('qrcode');
 const crypto = require('crypto');
+const netProxy = require('./net-proxy');
 
 class EmailService {
   constructor() {
@@ -153,6 +154,13 @@ class EmailService {
 
   async initSMTP() {
     if (!this.config) throw new Error('邮箱未配置');
+    // 按代理设置解析 SMTP 代理（manual → 用户值；system → resolveProxy；none → 直连）
+    // nodemailer 支持 http/https/socks4/socks5 代理 URL
+    try {
+      const proxyUrl = await netProxy.getProxyUrlForUrl('https://' + (this.config.smtp.host || ''));
+      if (proxyUrl) this.config.smtp.proxy = proxyUrl;
+      else delete this.config.smtp.proxy;
+    } catch { /* ignore */ }
     this.transporter = nodemailer.createTransport(this.config.smtp);
     await this.transporter.verify();
     return { ok: true, message: 'SMTP连接成功' };

@@ -20,6 +20,7 @@ const path = require('path');
 const fs = require('fs');
 const { spawn } = require('child_process');
 const http = require('http');
+const netProxy = require('./net-proxy');
 
 const ARIA2_PORT = 16800; // 避开默认 6800 减少冲突
 const RPC_ID_PREFIX = 'ar2';
@@ -111,9 +112,9 @@ class Aria2Manager {
   /**
    * 解析代理设置并返回 aria2 的 --all-proxy 参数值
    * @param {object} proxy settings.proxy 对象
-   * @returns {string|null} 代理 URL 或 null
+   * @returns {Promise<string|null>} 代理 URL 或 null
    */
-  resolveProxy(proxy) {
+  async resolveProxy(proxy) {
     if (!proxy || proxy.mode === 'none') return null;
 
     if (proxy.mode === 'manual') {
@@ -130,10 +131,12 @@ class Aria2Manager {
     }
 
     if (proxy.mode === 'system') {
-      // 系统代理：通过 Electron session 获取系统代理
-      // 这里返回 null，由 Electron 的 session.resolveProxy 异步获取
-      // 简化处理：系统代理模式下，aria2 不走代理（由系统网络层处理）
-      return null;
+      // 系统代理：复用 net-proxy 的 resolveProxy 解析（session.resolveProxy + 缓存）
+      try {
+        return await netProxy.getProxyUrlForUrl('https://opencode.ai/');
+      } catch {
+        return null;
+      }
     }
 
     return null;
@@ -162,7 +165,7 @@ class Aria2Manager {
   async start(proxySettings) {
     if (this.ready) {
       // 如果代理设置变化，重启 aria2
-      const newProxy = this.resolveProxy(proxySettings);
+      const newProxy = await this.resolveProxy(proxySettings);
       if (newProxy !== this.currentProxy) {
         console.log('[aria2] 代理设置变化，重启 aria2...');
         await this.shutdown();
@@ -189,7 +192,7 @@ class Aria2Manager {
 
     // 解析代理设置：仅显式传入时才更新 currentProxy
     // （ensureStarted(null) 不应覆盖已配置的代理）
-    const proxyUrl = proxySettings ? this.resolveProxy(proxySettings) : this.currentProxy;
+    const proxyUrl = proxySettings ? await this.resolveProxy(proxySettings) : this.currentProxy;
     this.currentProxy = proxyUrl;
 
     const args = [
@@ -222,7 +225,12 @@ class Aria2Manager {
     // 代理设置
     if (proxyUrl) {
       args.push(`--all-proxy=${proxyUrl}`);
-      console.log(`[aria2] 使用代理: ${proxyUrl}`);
+      // bypass 列表 → --no-proxy（逗号分隔主机/域名，aria2 支持通配符）
+      const bypassList = (proxySettings?.bypass || '').split(/[,;\s]+/).filter(Boolean);
+      if (bypassList.length > 0) {
+        args.push(`--no-proxy=${bypassList.join(',')}`);
+      }
+      console.log(`[aria2] 使用代理: ${proxyUrl}${bypassList.length ? ' (bypass: ' + bypassList.join(',') + ')' : ''}`);
     } else {
       console.log('[aria2] 不使用代理');
     }
