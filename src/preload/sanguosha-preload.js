@@ -1,6 +1,9 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('sanguoshaAPI', {
+  decisionCall: (payload) => ipcRenderer.invoke('decision:call', payload),
+  decisionNoul: (payload) => ipcRenderer.invoke('decision:noul', payload),
+  decisionChoice: (payload) => ipcRenderer.invoke('decision:choice', payload),
   getGameConfig: () => ipcRenderer.invoke('sanguosha:getConfig'),
   getSettings: () => ipcRenderer.invoke('settings:get'),
   getTheme: () => ipcRenderer.invoke('theme:get'),

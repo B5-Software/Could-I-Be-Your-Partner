@@ -834,3 +834,143 @@ input[id^="setting-budget-peak-"][type="text"]:focus {
   color: var(--text-tertiary);
   text-align: center;
 }
+
+/* ---- 生图高级参数 ---- */
+.settings-advanced {
+  margin: 8px 0 14px;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 8px 12px;
+}
+.settings-advanced > summary {
+  cursor: pointer;
+  font-size: 13px;
+  color: var(--text-secondary);
+  user-select: none;
+}
+.settings-advanced-body { padding-top: 8px; }
+
+/* ---- 资源下载（语音模型）---- */
+.res-model-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  margin-bottom: 8px;
+  background: var(--surface-alt, transparent);
+}
+.res-model-info { flex: 1; min-width: 0; }
+.res-model-name {
+  font-size: 13px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.res-model-meta {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  margin-top: 3px;
+  word-break: break-all;
+}
+.res-req, .res-opt, .res-kind {
+  font-size: 10px;
+  font-weight: 500;
+  padding: 1px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+}
+.res-req { color: var(--danger, #e5484d); border-color: currentColor; }
+.res-opt { color: var(--text-tertiary); }
+.res-kind { color: var(--accent); border-color: currentColor; }
+.res-model-progress { margin-top: 6px; }
+.res-progress-bar {
+  height: 6px;
+  border-radius: 4px;
+  background: var(--border-color);
+  overflow: hidden;
+}
+.res-progress-bar > i {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.25s ease;
+}
+.res-model-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.res-help-list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.9;
+}
+
+/* ---- 语音设置门控（模型未下载）---- */
+.voice-model-gate {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  margin-bottom: 14px;
+  border: 1px solid #f59e0b;
+  border-radius: 10px;
+  background: rgba(245, 158, 11, 0.08);
+}
+.voice-model-gate > i { color: #f59e0b; font-size: 18px; }
+.voice-model-gate-text { flex: 1; }
+.voice-model-gate-text strong { font-size: 13px; }
+.voice-model-gate-text p {
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.settings-group.voice-locked {
+  opacity: 0.55;
+  pointer-events: none;
+  user-select: none;
+}
+
+/* ---- LLM 模型池 ---- */
+.llm-pool-list { display: flex; flex-direction: column; gap: 8px; }
+.llm-pool-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--surface-alt, transparent);
+}
+.llm-pool-card.active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.llm-pool-card.disabled { opacity: 0.55; }
+.llm-pool-main { flex: 1; min-width: 0; }
+.llm-pool-name {
+  font-size: 13px;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.llm-pool-meta {
+  font-size: 11px;
+  color: var(--text-tertiary);
+  margin-top: 3px;
+  word-break: break-all;
+}
+.llm-pool-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.pool-badge {
+  font-size: 10px;
+  font-weight: 500;
+  padding: 1px 6px;
+  border-radius: 6px;
+  border: 1px solid var(--border-color);
+}
+.pool-badge.provider { color: var(--accent); border-color: currentColor; }
+.pool-badge.default { color: #22c55e; border-color: currentColor; }
+.pool-badge.vision { color: #8b5cf6; border-color: currentColor; }
+.pool-badge.off { color: var(--text-tertiary); }
+.llm-pool-editor-modal { width: min(92vw, 580px); max-height: 88vh; overflow: auto; }

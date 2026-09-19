@@ -599,39 +599,110 @@
     }
   }
 
-  function addImageMessage(imageUrl) {
+  // ---- 图片操作公共实现（右键菜单 / 悬浮工具栏 / 预览工具栏共用）----
+  async function copyChatImage(imageUrl) {
+    try {
+      // file:// 无法直接用 fetch；本地路径优先走主进程读取 base64
+      let blob;
+      const localPath = localPathFromUrl(imageUrl);
+      if (localPath && window.api?.readFileBase64) {
+        const r = await window.api.readFileBase64(localPath);
+        if (r?.ok && r.dataUrl) blob = await (await fetch(r.dataUrl)).blob();
+      }
+      if (!blob) blob = await (await fetch(imageUrl)).blob();
+      await navigator.clipboard.write([new ClipboardItem({ [blob.type || 'image/png']: blob })]);
+      addSystemMessage('图片已复制到剪贴板');
+    } catch (err) {
+      addSystemMessage(`复制失败: ${err.message}`);
+    }
+  }
+
+  async function saveChatImage(imageUrl) {
+    try {
+      const sourcePath = localPathFromUrl(imageUrl);
+      if (!sourcePath) throw new Error('无法解析本地图片路径');
+      const fileName = sourcePath.split(/[\\/]/).pop() || 'image.png';
+      const result = await window.api.saveFileDialog({
+        title: '保存图片',
+        defaultPath: fileName,
+        filters: [{ name: 'Image', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'avif'] }]
+      });
+      if (result.ok && result.path) {
+        await window.api.copyFile(sourcePath, result.path);
+        addSystemMessage(`图片已保存到: ${result.path}`);
+      }
+    } catch (err) {
+      addSystemMessage(`保存失败: ${err.message}`);
+    }
+  }
+
+  function openImageInFolder(pathOrUrl) {
+    const p = localPathFromUrl(pathOrUrl);
+    if (!p) return addSystemMessage('无法解析本地图片路径');
+    try { window.api.openFileExplorer(p); } catch (_) {}
+  }
+
+  /** file:// URL 或本地路径 → 本地路径（不是本地文件时返回 null） */
+  function localPathFromUrl(imageUrl) {
+    const s = String(imageUrl || '');
+    if (/^file:\/\//i.test(s)) {
+      try { return decodeURIComponent(s.replace(/^file:\/\/\/?/i, '').replace(/^([a-zA-Z]:)/, '$1')); }
+      catch (_) { return s.replace(/^file:\/\/\/?/i, ''); }
+    }
+    if (/^data:|^https?:/i.test(s)) return null;
+    return s || null;
+  }
+
+  // 生成图片气泡：现代卡片 + 悬浮工具栏（预览/下载/复制/打开位置）
+  function addImageMessage(imageUrl, opts = {}) {
+    if (imageUrl && typeof imageUrl === 'object') { opts = imageUrl; imageUrl = opts.url; }
+    if (!imageUrl) return;
+    const localPath = opts.path || localPathFromUrl(imageUrl) || '';
     const msg = document.createElement('div');
-    msg.className = 'message assistant';
+    msg.className = 'message assistant image-message';
     const time = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
-
-    // AI avatar
     const avatarHTML = makeFramedAvatarHTML(agent.settings?.aiPersona?.avatar, true);
-
-    const imgId = 'img-' + Date.now();
+    const imgId = 'img-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6);
     msg.innerHTML = `
       <div class="message-avatar">${avatarHTML}</div>
       <div class="message-body">
-        <div class="message-content">
-          <img id="${imgId}" src="${imageUrl}" style="max-width:400px;max-height:400px;border-radius:8px;cursor:pointer;display:block"/>
+        <div class="message-content chat-image-bubble">
+          <div class="chat-image-wrap">
+            <img id="${imgId}" class="chat-image" src="${String(imageUrl).replace(/"/g, '&quot;')}" data-previewable="1" data-local-path="${String(localPath).replace(/"/g, '&quot;')}" alt="AI 生成的图片" loading="lazy">
+            <div class="chat-image-toolbar">
+              <button class="chat-image-btn" data-act="preview" title="预览"><i class="fa-solid fa-magnifying-glass-plus"></i></button>
+              <button class="chat-image-btn" data-act="download" title="下载"><i class="fa-solid fa-download"></i></button>
+              <button class="chat-image-btn" data-act="copy" title="复制"><i class="fa-regular fa-copy"></i></button>
+              <button class="chat-image-btn" data-act="folder" title="打开所在文件夹"><i class="fa-solid fa-folder-open"></i></button>
+            </div>
+          </div>
+          <div class="chat-image-caption"><i class="fa-solid fa-wand-magic-sparkles"></i> AI 生成图片</div>
         </div>
         <div class="message-time">${time}</div>
       </div>`;
 
     appendChatElement(msg);
 
-    // 添加点击放大功能
-    const imgEl = document.getElementById(imgId);
+    const imgEl = msg.querySelector('.chat-image');
+    const open = () => openImageModal(imageUrl, { path: localPath });
     if (imgEl) {
-      imgEl.addEventListener('click', () => openImageModal(imageUrl));
-
-      // 添加右键菜单
+      imgEl.addEventListener('click', open);
       imgEl.addEventListener('contextmenu', (e) => {
         e.preventDefault();
         showImageContextMenu(e, imageUrl);
       });
     }
+    msg.querySelectorAll('.chat-image-btn').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const act = btn.dataset.act;
+        if (act === 'preview') open();
+        else if (act === 'download') saveChatImage(imageUrl);
+        else if (act === 'copy') copyChatImage(imageUrl);
+        else if (act === 'folder') openImageInFolder(localPath || imageUrl);
+      });
+    });
 
-    // Ensure complete scroll to bottom
     requestAnimationFrame(() => {
       msg.scrollIntoView({ behavior: 'smooth', block: 'end' });
     });
@@ -704,42 +775,24 @@
 
     const menuItems = [
       {
+        icon: 'fa-magnifying-glass-plus',
+        label: '预览',
+        action: () => openImageModal(imageUrl, { path: localPathFromUrl(imageUrl) })
+      },
+      {
         icon: 'fa-copy',
         label: '复制图片',
-        action: async () => {
-          try {
-            // 读取图片文件为blob
-            const response = await fetch(imageUrl);
-            const blob = await response.blob();
-            await navigator.clipboard.write([
-              new ClipboardItem({ [blob.type]: blob })
-            ]);
-            addSystemMessage('图片已复制到剪贴板');
-          } catch (err) {
-            addSystemMessage(`复制失败: ${err.message}`);
-          }
-        }
+        action: () => copyChatImage(imageUrl)
       },
       {
         icon: 'fa-floppy-disk',
         label: '另存为',
-        action: async () => {
-          try {
-            const sourcePath = imageUrl.replace(/^file:\/\/\/?/, '');
-            const fileName = sourcePath.split(/[\\/]/).pop() || 'image.png';
-            const result = await window.api.saveFileDialog({
-              title: '保存图片',
-              defaultPath: fileName,
-              filters: [{ name: 'Image', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'] }]
-            });
-            if (result.ok && result.path) {
-              await window.api.copyFile(sourcePath, result.path);
-              addSystemMessage(`图片已保存到: ${result.path}`);
-            }
-          } catch (err) {
-            addSystemMessage(`保存失败: ${err.message}`);
-          }
-        }
+        action: () => saveChatImage(imageUrl)
+      },
+      {
+        icon: 'fa-folder-open',
+        label: '打开所在文件夹',
+        action: () => openImageInFolder(imageUrl)
       }
     ];
 
@@ -972,13 +1025,118 @@
     setTimeout(() => document.addEventListener('click', closeMenu), 100);
   }
 
-  function openImageModal(src) {
+  // ---- 图片预览灯箱：缩放 / 拖拽 / 下载 / 复制 / 打开位置 / Esc ----
+  const imagePreviewState = { scale: 1, fitScale: 1, tx: 0, ty: 0, fit: true, src: '', path: '' };
+  let _imagePreviewBound = false;
+
+  function _applyImageTransform() {
+    const frame = document.getElementById('image-modal-frame');
+    const label = document.getElementById('btn-img-zoom-reset');
+    if (frame) frame.style.transform = `translate(${imagePreviewState.tx}px, ${imagePreviewState.ty}px) scale(${imagePreviewState.scale})`;
+    if (label) label.textContent = Math.round(imagePreviewState.scale * 100) + '%';
+  }
+
+  function _fitImage() {
     const img = document.getElementById('image-preview-img');
-    if (img) {
-      img.src = src;
-      img.alt = '预览';
+    const viewport = document.getElementById('image-modal-viewport');
+    if (!img || !viewport || !img.naturalWidth) return;
+    const sx = (viewport.clientWidth - 40) / img.naturalWidth;
+    const sy = (viewport.clientHeight - 40) / img.naturalHeight;
+    imagePreviewState.fitScale = Math.max(0.05, Math.min(1, sx, sy));
+    imagePreviewState.scale = imagePreviewState.fitScale;
+    imagePreviewState.fit = true;
+    imagePreviewState.tx = 0;
+    imagePreviewState.ty = 0;
+    _applyImageTransform();
+  }
+
+  function _actualSize() {
+    imagePreviewState.scale = 1;
+    imagePreviewState.fit = false;
+    imagePreviewState.tx = 0;
+    imagePreviewState.ty = 0;
+    _applyImageTransform();
+  }
+
+  function _zoomTo(next, cx, cy) {
+    const clamped = Math.max(0.05, Math.min(8, next));
+    const viewport = document.getElementById('image-modal-viewport');
+    if (viewport && cx != null && cy != null) {
+      const rect = viewport.getBoundingClientRect();
+      const px = cx - rect.left - rect.width / 2;
+      const py = cy - rect.top - rect.height / 2;
+      const k = clamped / imagePreviewState.scale;
+      imagePreviewState.tx = px - (px - imagePreviewState.tx) * k;
+      imagePreviewState.ty = py - (py - imagePreviewState.ty) * k;
     }
+    imagePreviewState.scale = clamped;
+    imagePreviewState.fit = false;
+    _applyImageTransform();
+  }
+
+  function _bindImagePreviewOnce() {
+    if (_imagePreviewBound) return;
+    _imagePreviewBound = true;
+    const viewport = document.getElementById('image-modal-viewport');
+    document.getElementById('btn-img-zoom-in')?.addEventListener('click', () => _zoomTo(imagePreviewState.scale * 1.25));
+    document.getElementById('btn-img-zoom-out')?.addEventListener('click', () => _zoomTo(imagePreviewState.scale / 1.25));
+    document.getElementById('btn-img-zoom-reset')?.addEventListener('click', () => {
+      if (imagePreviewState.fit) _actualSize(); else _fitImage();
+    });
+    document.getElementById('btn-img-download')?.addEventListener('click', () => { if (imagePreviewState.src) saveChatImage(imagePreviewState.src); });
+    document.getElementById('btn-img-copy')?.addEventListener('click', () => { if (imagePreviewState.src) copyChatImage(imagePreviewState.src); });
+    document.getElementById('btn-img-folder')?.addEventListener('click', () => openImageInFolder(imagePreviewState.path || imagePreviewState.src));
+    // 滚轮缩放（以光标为锚点）
+    viewport?.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      _zoomTo(imagePreviewState.scale * (e.deltaY < 0 ? 1.12 : 0.9), e.clientX, e.clientY);
+    }, { passive: false });
+    // 拖拽平移
+    let dragging = null;
+    viewport?.addEventListener('mousedown', (e) => {
+      if (e.button !== 0) return;
+      dragging = { x: e.clientX, y: e.clientY, tx: imagePreviewState.tx, ty: imagePreviewState.ty };
+      viewport.classList.add('dragging');
+      e.preventDefault();
+    });
+    window.addEventListener('mousemove', (e) => {
+      if (!dragging) return;
+      imagePreviewState.tx = dragging.tx + (e.clientX - dragging.x);
+      imagePreviewState.ty = dragging.ty + (e.clientY - dragging.y);
+      imagePreviewState.fit = false;
+      _applyImageTransform();
+    });
+    window.addEventListener('mouseup', () => { dragging = null; viewport?.classList.remove('dragging'); });
+    // 双击切换 适应窗口 / 100%
+    document.getElementById('image-preview-img')?.addEventListener('dblclick', () => {
+      if (imagePreviewState.fit) _actualSize(); else _fitImage();
+    });
+    // 键盘：Esc 关闭，+/- 缩放，0 适应窗口
+    window.addEventListener('keydown', (e) => {
+      if (imagePreviewModal.classList.contains('hidden')) return;
+      if (e.key === 'Escape') fadeOutHide(imagePreviewModal);
+      else if (e.key === '+' || e.key === '=') _zoomTo(imagePreviewState.scale * 1.25);
+      else if (e.key === '-') _zoomTo(imagePreviewState.scale / 1.25);
+      else if (e.key === '0') _fitImage();
+      else if (e.key === '1') _actualSize();
+    });
+    window.addEventListener('resize', () => { if (!imagePreviewModal.classList.contains('hidden') && imagePreviewState.fit) _fitImage(); });
+  }
+
+  function openImageModal(src, opts = {}) {
+    const img = document.getElementById('image-preview-img');
+    const title = document.getElementById('image-preview-title');
+    imagePreviewState.src = src;
+    imagePreviewState.path = opts.path || localPathFromUrl(src) || '';
+    if (img) { img.src = src; img.alt = '预览'; }
+    if (title) {
+      const name = imagePreviewState.path ? imagePreviewState.path.split(/[\\/]/).pop() : '';
+      title.textContent = name ? `图片预览 · ${name}` : '图片预览';
+    }
+    _bindImagePreviewOnce();
     imagePreviewModal.classList.remove('hidden');
+    const onload = () => _fitImage();
+    if (img) { if (img.complete && img.naturalWidth) onload(); else img.onload = onload; }
   }
 
   function addToolCallToChat(displayName, toolName, args, callId) {
@@ -2203,7 +2361,7 @@
 
   // 统一的 Chat 欢迎消息渲染：根据生图模型配置决定是否显示"生成图片"按钮
   function renderChatWelcome() {
-    const imgConfigured = !!(agent.settings?.imageGen?.apiUrl && agent.settings?.imageGen?.apiKey && agent.settings?.imageGen?.model);
+    const imgConfigured = !!(agent.settings?.imageGen?.apiUrl && agent.settings?.imageGen?.model);
     const imgBtn = imgConfigured
       ? `<button class="quick-action-btn" data-prompt="帮我生成一张风景图片"><i class="fa-solid fa-image"></i> 生成图片</button>`
       : '';

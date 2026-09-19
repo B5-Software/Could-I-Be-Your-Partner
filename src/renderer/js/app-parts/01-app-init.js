@@ -439,6 +439,19 @@
   const WebUIMirror = {
     _applyingRemote: false,
 
+    /**
+     * WebUI/Remote 页面运行在 http(s)://host，无法加载宿主 file:// 图片。
+     * 镜像前把本地图片 src 重写为 /api/local-image?path=...（主进程带目录白名单代理）。
+     */
+    _mirrorHtml(html) {
+      if (!html || typeof html !== 'string') return html;
+      return html.replace(/(src|data-src|href)=("|')(file:\/\/[^"']+)\2/gi, (m, attr, q, url) => {
+        let p = url.replace(/^file:\/\/\/?/i, '');
+        try { p = decodeURIComponent(p); } catch (_) {}
+        return `${attr}=${q}/api/local-image?path=${encodeURIComponent(p)}${q}`;
+      });
+    },
+
     init() {
       // 主动推送初始快照：不依赖 webControl:mirrorInit 信号（避免 preload 缓存导致回调不可用）
       // 主进程会缓存最近一次的 mirror_head + mirror_body，新 WS 客户端连接时自动重放
@@ -485,11 +498,11 @@
       const modals = [];
       document.querySelectorAll('.modal-overlay').forEach(m => {
         if (m.id === 'remote-connect-modal' || m.id === 'remote-conn-banner') return;
-        modals.push(m.outerHTML);
+        modals.push(this._mirrorHtml(m.outerHTML));
       });
       const snapshot = {
         type: 'mirror_body',
-        html: app ? app.innerHTML : '',
+        html: this._mirrorHtml(app ? app.innerHTML : ''),
         titlebar: titlebar ? titlebar.outerHTML : '',
         modals: modals.join('')
       };
@@ -548,6 +561,10 @@
     _replaceTimers: {},
     pushDomEvent(event) {
       if (isRemoteMode) return; // Remote 模式不推送 DOM 事件
+      // 本地图片 src 重写为 WebUI 可访问的 HTTP 代理地址
+      if (event && typeof event.html === 'string') {
+        event = { ...event, html: this._mirrorHtml(event.html) };
+      }
       // dom_replace 节流：同 container 合并
       if (event.type === 'dom_replace' && event.container) {
         const key = event.container;

@@ -388,7 +388,15 @@ function registerDisabledIpc(ipcMain) {
     supported: false,
     error: UNSUPPORTED_ERROR,
     missing: ['sherpa-onnx-win-arm64'],
+    missingRequired: ['sherpa-onnx-win-arm64'],
     ready: false,
+    modelsReady: false,
+    anyReady: false,
+    capabilities: {
+      stt: { ready: false, missing: ['sherpa-onnx-win-arm64'] },
+      tts: { ready: false, missing: ['sherpa-onnx-win-arm64'] },
+      wake: { ready: false, missing: ['sherpa-onnx-win-arm64'] },
+    },
     settings: voiceSettings(),
   }));
   const fail = () => ({ ok: false, error: UNSUPPORTED_ERROR });

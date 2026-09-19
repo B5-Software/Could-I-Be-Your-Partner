@@ -74,6 +74,21 @@
 
   // Validate whether a line is a real ancient Chinese poetry quote
   async function validatePoetryLine(line, kw) {
+    // 决策模型优先（知识判断，使用高阈值；低置信回退 LLM 鉴定）
+    if (typeof window.gameAPI?.decisionNoul === 'function') {
+      try {
+        const r = await window.gameAPI.decisionNoul({
+          state: `诗句：「${line}」（要求包含「${kw}」字）`,
+          instructions: '该句是否为真实存在的中国古诗词原句（唐诗、宋词、元曲、诗经、楚辞等皆可）？',
+          threshold: 0.9,
+          key: 'real',
+          usage: 'gameDecisions'
+        });
+        if (r && r.value === false) return false;
+        if (r && r.value === true) return true;
+        // 低置信 → 回退 LLM
+      } catch (_) { /* 回退 LLM */ }
+    }
     try {
       const result = await askLLM(
         `你是一位中国古典诗词鉴定专家。用户在飞花令游戏中给出了一句声称包含「${kw}」字的古诗词。

@@ -2882,3 +2882,69 @@ html[data-modal-animations="off"] .sub-agent-modal-dialog {
 .toast-item.toast-error .toast-icon { color: var(--danger); }
 .toast-item.toast-info { border-color: var(--accent); }
 .toast-item.toast-info .toast-icon { color: var(--accent); }
+
+/* ---- 生成图片气泡（现代卡片 + 悬浮工具栏）---- */
+.chat-image-bubble {
+  padding: 8px !important;
+  display: inline-flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: min(520px, 68vw);
+}
+.chat-image-wrap {
+  position: relative;
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--surface-alt, rgba(0, 0, 0, 0.04));
+  line-height: 0;
+}
+.chat-image-wrap .chat-image {
+  display: block;
+  max-width: 100%;
+  max-height: 420px;
+  width: auto;
+  height: auto;
+  cursor: zoom-in;
+  transition: transform 0.25s ease;
+}
+.chat-image-wrap:hover .chat-image { transform: scale(1.015); }
+.chat-image-toolbar {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  display: flex;
+  gap: 6px;
+  padding: 5px;
+  border-radius: 10px;
+  background: rgba(20, 22, 28, 0.62);
+  backdrop-filter: blur(6px);
+  opacity: 0;
+  transform: translateY(4px);
+  transition: opacity 0.18s ease, transform 0.18s ease;
+  z-index: 2;
+}
+.chat-image-wrap:hover .chat-image-toolbar,
+.chat-image-toolbar:focus-within { opacity: 1; transform: translateY(0); }
+.chat-image-btn {
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.14);
+  color: #fff;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  transition: background 0.15s ease;
+}
+.chat-image-btn:hover { background: rgba(255, 255, 255, 0.3); }
+.chat-image-caption {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  padding: 0 4px 2px;
+}

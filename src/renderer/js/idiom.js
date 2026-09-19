@@ -89,6 +89,23 @@
 
   // LLM 裁判：判断是否为真实成语 + 是否首尾相接
   async function validateIdiom(idiom, tail) {
+    // 决策模型优先：三分类（通过/非成语/首字不符），低置信/未启用回退 LLM
+    if (typeof window.gameAPI?.decisionChoice === 'function') {
+      try {
+        const r = await window.gameAPI.decisionChoice({
+          state: `玩家给出四字成语「${idiom}」，需要以「${tail}」开头。`,
+          instructions: '判定是否符合：1) 是真实存在的中文成语；2) 首字是「' + tail + '」（同字，不接受同音字）',
+          criteria: { '通过': '两个条件都满足', '非成语': '不是真实存在的中文成语', '首字不符': `首字不是「${tail}」` },
+          key: 'v',
+          usage: 'gameDecisions'
+        });
+        if (r && r.value) {
+          if (r.value === '通过') return { ok: true, reason: '' };
+          if (r.value === '非成语') return { ok: false, reason: t('game.idiom.reasonNotIdiom', '非真实成语') };
+          if (r.value === '首字不符') return { ok: false, reason: t('game.idiom.reasonHeadMismatch', '首字不符') };
+        }
+      } catch (_) { /* 回退 LLM */ }
+    }
     try {
       const result = await askLLM(
         `你是一位中文成语鉴定专家，正在裁定成语接龙游戏。

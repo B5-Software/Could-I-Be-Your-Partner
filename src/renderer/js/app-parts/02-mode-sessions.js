@@ -317,7 +317,7 @@
       updateContextProgress();
       // If generateImage returned a URL/base64, display image directly
       if (name === 'generateImage' && result?.ok && result?.url) {
-        addImageMessage(result.url);
+        addImageMessage(result.url, { path: result.path });
       }
       // If getTarot returned a multi-card spread, display visual cards
       if (name === 'getTarot' && result?.ok && result?.result?.spread) {

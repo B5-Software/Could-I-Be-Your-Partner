@@ -60,11 +60,32 @@ const { registerFfmpegIpc } = require('./ffmpeg-tools');
 const { AutomationManager, normalizeAutomationSettings } = require('./automation/automation-manager');
 const { getAutomationGuide } = require('./automation/guide');
 const { registerGeogebraProtocol } = require('./geogebra-protocol');
+const { VoiceModelManager } = require('./voice-model-manager');
+const { DecisionService, DEFAULT_DECISION_SETTINGS, normalizeDecisionSettings } = require('./decision-service');
+const { ts: logTs, maskUrl: maskLogUrl, snippet: logSnippet } = require('./req-log');
 
 const emailService = new EmailService();
 const fedikittenService = new FediKittenService();
 const cibypImService = new CibypImService();
 const webControlService = new WebControlService();
+// 语音模型运行时下载管理器（不自动下载；aria2 优先，失败回退普通下载）
+const voiceModelManager = new VoiceModelManager({ app, getSettings: () => settings });
+voiceModelManager.on('progress', (p) => {
+  try { mainWindow?.webContents.send('resources:voiceModels:progress', p); } catch (_) {}
+});
+voiceModelManager.on('done', (e) => {
+  // 下载完成后热重载模型清单，语音功能无需重启即可用
+  try { voiceIpc?.engine?.resolveModels?.(); } catch (_) {}
+  try { mainWindow?.webContents.send('resources:voiceModels:progress', { modelId: e?.modelId, phase: 'done', percent: 100 }); } catch (_) {}
+});
+voiceModelManager.on('error', (e) => {
+  try { mainWindow?.webContents.send('resources:voiceModels:progress', { modelId: e?.modelId, phase: 'error', error: e?.error || '下载失败' }); } catch (_) {}
+});
+// 决策模型（System One / Jev）服务
+const decisionService = new DecisionService({
+  getSettings: () => settings,
+  persistSettings: () => { try { saveJSON(settingsPath, settings); } catch (_) {} },
+});
 const APP_VERSION = app.getVersion();
 
 // Single instance lock — quit immediately if another instance is already running
@@ -688,7 +709,15 @@ let settings = loadJSON(settingsPath, {
     // URL 命中 opencode.ai 时自动附加官方请求头（免费模型 UA 门控 / Go 会话头）
     autoOpencodeHeaders: true,
     // OpenCode UA 版本缓存（refreshOpenCodeVersion 写入 { version, fetchedAt }）
-    opencodeVersion: null
+    opencodeVersion: null,
+    // ---- 模型池（单层：每条自带 provider/URL/Key，可自由组合 Zen/Go/OpenAI 兼容等）----
+    // entry: { id,label,provider,apiUrl,apiKey,model,effort,intelligence,priority,vision,contextLength,enabled }
+    pool: [],
+    // 路由策略：模型选择（priority=手动优先级 / intelligence=Jev 智慧分数）；
+    // Reasoning Effort（manual=条目手动值 / jev=会话创建时由 Jev 决策一次）
+    routing: { modelStrategy: 'priority', effortStrategy: 'manual' },
+    // 默认条目（非 Agent 调用如游戏/标题使用的全局投影来源）
+    activeEntryId: ''
   },
   agent: {
     maxIterations: 50,
@@ -736,16 +765,39 @@ let settings = loadJSON(settingsPath, {
     localNetworkPromptShown: false
   },
   imageGen: {
+    // 厂商预设：openai / siliconflow / ark / gemini / imagen / stability / custom
+    provider: 'openai',
     apiUrl: '',
     apiKey: '',
     model: '',
     imageSize: '1024x1024',
+    // 高级参数（按厂商预设生效，留空用厂商默认）
+    n: 1,
+    quality: '',
+    background: '',
+    outputFormat: '',
+    negativePrompt: '',
+    seed: '',
+    steps: '',
+    guidance: '',
+    style: '',
+    watermark: false,
+    bodyTemplate: '',
     dailyMaxImages: 0,
     dailyImagesUsed: 0,
     dailyImageDate: '',
     // 自定义请求头（生图 API 生效）：[{ name, value, enabled }]
     customHeaders: []
   },
+  // 资源下载（语音模型等大文件不随安装包分发，由用户手动下载）：
+  //   mirror        : 'cn'(hf-mirror.com) | 'official'(huggingface.co)
+  //   voiceModelDir : 自定义模型下载目录（空 = userData/voice-models）
+  resources: {
+    mirror: 'cn',
+    voiceModelDir: ''
+  },
+  // 决策模型（System One / Jev）：OpenCode Zen 免费 Jev / TypeSafe 直连
+  decision: { ...DEFAULT_DECISION_SETTINGS },
   theme: { mode: 'system', accentColor: '#4f8cff', backgroundColor: '#f5f7fa' },
   // 界面动效：关闭后主标签页切换无动画（设置页「动效」开关）
   animations: true,
@@ -894,7 +946,7 @@ let settings = loadJSON(settingsPath, {
 });
 if (fs.existsSync(settingsPath)) {
   const saved = loadJSON(settingsPath, {});
-  settings = { ...settings, ...saved, llm: { ...settings.llm, ...(saved.llm || {}) }, agent: { ...settings.agent, ...(saved.agent || {}) }, sessions: { ...settings.sessions, ...(saved.sessions || {}) }, permissions: { ...settings.permissions, ...(saved.permissions || {}) }, imageGen: { ...settings.imageGen, ...(saved.imageGen || {}) }, theme: { ...settings.theme, ...(saved.theme || {}) }, aiPersona: { ...settings.aiPersona, ...(saved.aiPersona || {}) }, userProfile: { ...settings.userProfile, ...(saved.userProfile || {}) }, entropy: { ...settings.entropy, ...(saved.entropy || {}) }, proxy: { ...settings.proxy, ...(saved.proxy || {}) }, mcp: { ...settings.mcp, ...(saved.mcp || {}) }, email: { ...settings.email, ...(saved.email || {}) }, fedikitten: { ...settings.fedikitten, ...(saved.fedikitten || {}) }, cibypIm: { ...settings.cibypIm, ...(saved.cibypIm || {}) }, webControl: { ...settings.webControl, ...(saved.webControl || {}) }, budget: { ...settings.budget, ...(saved.budget || {}) }, terminal: { ...settings.terminal, ...(saved.terminal || {}) }, privacyProtection: { ...settings.privacyProtection, ...(saved.privacyProtection || {}) }, ime: { ...settings.ime, ...(saved.ime || {}) }, voice: { ...settings.voice, ...(saved.voice || {}) }, notifications: { ...settings.notifications, ...(saved.notifications || {}) }, updates: { ...settings.updates, ...(saved.updates || {}) } };
+  settings = { ...settings, ...saved, llm: { ...settings.llm, ...(saved.llm || {}) }, agent: { ...settings.agent, ...(saved.agent || {}) }, sessions: { ...settings.sessions, ...(saved.sessions || {}) }, permissions: { ...settings.permissions, ...(saved.permissions || {}) }, imageGen: { ...settings.imageGen, ...(saved.imageGen || {}) }, resources: { ...settings.resources, ...(saved.resources || {}) }, decision: { ...settings.decision, ...(saved.decision || {}) }, theme: { ...settings.theme, ...(saved.theme || {}) }, aiPersona: { ...settings.aiPersona, ...(saved.aiPersona || {}) }, userProfile: { ...settings.userProfile, ...(saved.userProfile || {}) }, entropy: { ...settings.entropy, ...(saved.entropy || {}) }, proxy: { ...settings.proxy, ...(saved.proxy || {}) }, mcp: { ...settings.mcp, ...(saved.mcp || {}) }, email: { ...settings.email, ...(saved.email || {}) }, fedikitten: { ...settings.fedikitten, ...(saved.fedikitten || {}) }, cibypIm: { ...settings.cibypIm, ...(saved.cibypIm || {}) }, webControl: { ...settings.webControl, ...(saved.webControl || {}) }, budget: { ...settings.budget, ...(saved.budget || {}) }, terminal: { ...settings.terminal, ...(saved.terminal || {}) }, privacyProtection: { ...settings.privacyProtection, ...(saved.privacyProtection || {}) }, ime: { ...settings.ime, ...(saved.ime || {}) }, voice: { ...settings.voice, ...(saved.voice || {}) }, notifications: { ...settings.notifications, ...(saved.notifications || {}) }, updates: { ...settings.updates, ...(saved.updates || {}) } };
   // 生图设置去品牌化迁移：旧版本内置的默认端点/模型清空，改为用户显式配置
   if (settings.imageGen.apiUrl === 'https://api.siliconflow.cn/v1/images/generations') settings.imageGen.apiUrl = '';
   if (settings.imageGen.model === 'Kwai-Kolors/Kolors') settings.imageGen.model = '';
@@ -916,7 +968,84 @@ if (settings.llm.zenApiKey === undefined) settings.llm.zenApiKey = '';
 if (!Array.isArray(settings.llm.customHeaders)) settings.llm.customHeaders = [];
 if (settings.llm.autoOpencodeHeaders === undefined) settings.llm.autoOpencodeHeaders = true;
 if (settings.llm.opencodeVersion === undefined) settings.llm.opencodeVersion = null;
+// Migrate: 模型池 + 决策模型配置
+{
+  settings.decision = normalizeDecisionSettings(settings.decision);
+  if (!settings.llm.routing || typeof settings.llm.routing !== 'object') {
+    settings.llm.routing = { modelStrategy: 'priority', effortStrategy: 'manual' };
+  }
+  if (!Array.isArray(settings.llm.pool)) settings.llm.pool = [];
+  if (settings.llm.pool.length === 0 && (settings.llm.model || settings.llm.apiUrl || settings.llm.zenApiKey)) {
+    const isZenGo = settings.llm.provider === 'opencode-zen' || settings.llm.provider === 'opencode-go';
+    settings.llm.pool.push({
+      id: 'pool-' + Date.now().toString(36),
+      label: settings.llm.model || '默认模型',
+      provider: settings.llm.provider || 'openai-compat',
+      apiUrl: settings.llm.apiUrl || '',
+      apiKey: isZenGo ? (settings.llm.zenApiKey || settings.llm.apiKey || '') : (settings.llm.apiKey || ''),
+      model: settings.llm.model || '',
+      effort: settings.llm.reasoningEffort || 'off',
+      intelligence: 50,
+      priority: 0,
+      vision: settings.llm.forceVision === true,
+      contextLength: settings.llm.maxContextLength || 131072,
+      enabled: true,
+    });
+  }
+  if (!settings.llm.activeEntryId || !settings.llm.pool.some(e => e && e.id === settings.llm.activeEntryId)) {
+    settings.llm.activeEntryId = (settings.llm.pool[0] && settings.llm.pool[0].id) || '';
+  }
+  projectActivePoolEntry();
+}
+
+/**
+ * 把当前默认模型池条目投影到旧的 settings.llm.* 字段：
+ * 旧路径（游戏/标题/生图描述、主进程校验、非 Agent 调用）继续可用。
+ */
+function projectActivePoolEntry() {
+  try {
+    const llm = settings.llm || (settings.llm = {});
+    const pool = Array.isArray(llm.pool) ? llm.pool : (llm.pool = []);
+    // 运行时兜底：通过引导页/设置直接写入单模型配置时，自动补一条池条目
+    if (pool.length === 0 && (llm.model || llm.apiUrl || llm.zenApiKey)) {
+      const isZenGo = llm.provider === 'opencode-zen' || llm.provider === 'opencode-go';
+      pool.push({
+        id: 'pool-' + Date.now().toString(36),
+        label: llm.model || '默认模型',
+        provider: llm.provider || 'openai-compat',
+        apiUrl: llm.apiUrl || '',
+        apiKey: isZenGo ? (llm.zenApiKey || llm.apiKey || '') : (llm.apiKey || ''),
+        model: llm.model || '',
+        effort: llm.reasoningEffort || 'off',
+        intelligence: 50,
+        priority: 0,
+        vision: llm.forceVision === true,
+        contextLength: llm.maxContextLength || 131072,
+        enabled: true,
+      });
+      llm.activeEntryId = pool[0].id;
+    }
+    const entry = pool.find(e => e && e.id === llm.activeEntryId) || pool.find(e => e && e.enabled !== false) || pool[0];
+    if (!entry) return;
+    llm.activeEntryId = entry.id;
+    if (entry.provider) llm.provider = entry.provider;
+    llm.apiUrl = entry.apiUrl || '';
+    llm.model = entry.model || '';
+    if (entry.provider === 'opencode-zen' || entry.provider === 'opencode-go') llm.zenApiKey = entry.apiKey || '';
+    else llm.apiKey = entry.apiKey || '';
+    if (entry.effort) llm.reasoningEffort = entry.effort;
+    if (entry.contextLength) llm.maxContextLength = entry.contextLength;
+  } catch (e) {
+    console.warn('[llm] 模型池投影失败:', e.message);
+  }
+}
 if (!Array.isArray(settings.imageGen.customHeaders)) settings.imageGen.customHeaders = [];
+// Migrate: 生图多厂商配置（旧版无 provider → 有 URL 视为 siliconflow，否则 openai）
+settings.imageGen = require('./image-gen').normalizeImageGenConfig(settings.imageGen);
+// Migrate: 资源下载设置（镜像 / 模型目录）
+if (!settings.resources || typeof settings.resources !== 'object') settings.resources = { mirror: 'cn', voiceModelDir: '' };
+if (settings.resources.mirror !== 'official') settings.resources.mirror = 'cn';
+if (typeof settings.resources.voiceModelDir !== 'string') settings.resources.voiceModelDir = '';
 // Migrate: per-day usage tracking (for token stats tab).
 if (!settings.llm.usageHistory) settings.llm.usageHistory = {};
 // Migrate: automation 旧版 serverToken 字符串 → tokens 列表；补齐 allowNoToken/tokens 默认结构。
@@ -1500,6 +1629,17 @@ app.whenReady().then(() => {
   if (settings.trayEnabled) createAppTray();
 
   // ===== 语音子系统初始化（STT/TTS/唤醒，全本地 sherpa-onnx） =====
+  // 启动审计：对应模型未下载时自动关闭语音开关（模型由用户手动下载，不自动拉取）
+  try {
+    const voiceModels = require('./voice-models');
+    const audit = voiceModels.auditVoiceSettings(settings, voiceModels.searchRoots(app, settings));
+    if (audit.changed) {
+      console.warn('[voice] 模型缺失，已自动关闭语音开关:', audit.disabled.join(', '));
+      persistSettings();
+    }
+  } catch (e) {
+    console.warn('[voice] 模型审计失败:', e.message);
+  }
   try {
     const { initVoice } = require('./voice-ipc');
     voiceIpc = initVoice({
@@ -1628,6 +1768,10 @@ ipcMain.handle('settings:set', (_, newSettings) => {
   const prevVoice = settings.voice ? JSON.parse(JSON.stringify(settings.voice)) : null;
   const prevProxyJson = JSON.stringify(settings.proxy || null);
   settings = { ...settings, ...newSettings };
+  // 模型池 → 旧 llm.* 字段投影（游戏/标题等非 Agent 调用继续可用）
+  try { projectActivePoolEntry(); } catch (_) {}
+  // 决策模型配置变更时清空决策缓存
+  try { if (newSettings && newSettings.decision) decisionService.clearCache(); } catch (_) {}
   saveJSON(settingsPath, settings);
   // 代理设置变化时自动重应用（含导入/其他页面保存，无需依赖 proxy:apply IPC）
   const newProxyJson = JSON.stringify(settings.proxy || null);
@@ -2845,59 +2989,162 @@ ipcMain.handle('code:runPython', (_, script, cwd, sandboxMode) => {
   });
 });
 
-// ---- IPC: Image Generation ----
+// ---- IPC: Image Generation（多厂商适配见 image-gen.js）----
 ipcMain.handle('image:generate', async (_, prompt, workspacePath) => {
   try {
-    const apiUrl = settings.imageGen.apiUrl;
-    const apiKey = settings.imageGen.apiKey;
-    const model = settings.imageGen.model;
-    const imageSize = settings.imageGen.imageSize;
-    if (!apiUrl) return { ok: false, error: '请先在设置中配置生图 API URL' };
-    if (!model) return { ok: false, error: '请先在设置中配置生图模型名称' };
-    if (!apiKey) return { ok: false, error: '请先配置生图API Key' };
+    const imageGen = require('./image-gen');
+    const g = imageGen.normalizeImageGenConfig(settings.imageGen);
+    if (!g.apiUrl) return { ok: false, error: '请先在设置中配置生图 API URL' };
+    if (!g.model) return { ok: false, error: '请先在设置中配置生图模型名称' };
 
     resetDailyUsageIfNeeded();
-    const maxImages = settings.imageGen.dailyMaxImages || 0;
-    if (maxImages > 0 && settings.imageGen.dailyImagesUsed >= maxImages) {
+    const maxImages = g.dailyMaxImages || 0;
+    if (maxImages > 0 && g.dailyImagesUsed >= maxImages) {
       return { ok: false, error: '已达到今日生图上限，请明天再试' };
     }
 
-    const body = JSON.stringify({ model, prompt, image_size: imageSize, batch_size: 1, num_inference_steps: 20, guidance_scale: 7.5 });
-    console.log(`[IMG] ${model} ← "${prompt.slice(0, 80)}" | size:${imageSize}`);
-    // 请求头：Authorization + 用户自定义头 + URL 命中 opencode.ai 时自动附加官方头组
-    const baseHeaders = { 'Content-Type': 'application/json' };
-    if (apiKey) baseHeaders['Authorization'] = `Bearer ${apiKey}`;
-    const headers = ocHeaders.applyProviderHeaders({
-      url: apiUrl,
-      headers: baseHeaders,
+    let req;
+    try {
+      req = imageGen.buildImageRequest(g, prompt);
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+    // 请求头：厂商鉴权 + 用户自定义头 + URL 命中 opencode.ai 时自动附加官方头组
+    req.headers = ocHeaders.applyProviderHeaders({
+      url: req.url,
+      headers: req.headers,
       llm: settings.imageGen
     });
-    const response = await fetch(apiUrl, {
-      method: 'POST',
-      headers,
-      body
+    console.log(`[IMG ${logTs()}] → POST ${maskLogUrl(req.url)} provider=${g.provider} model=${g.model} size=${g.imageSize} n=${g.n} prompt="${logSnippet(prompt, 80)}"`);
+
+    const imgStartedAt = Date.now();
+    const response = await fetch(req.url, {
+      method: req.method,
+      headers: req.headers,
+      body: JSON.stringify(req.body),
+      signal: AbortSignal.timeout(imageGen.DEFAULT_TIMEOUT_MS)
     });
-    const data = await response.json();
-    if (data.images && data.images[0] && data.images[0].url) {
-      console.log(`[IMG] ${model} → 1 image (${imageSize})`);
-      const imgUrl = data.images[0].url;
-      const imgResponse = await fetch(imgUrl);
-      const buffer = Buffer.from(await imgResponse.arrayBuffer());
-      
-      // Save to workspace if provided, otherwise use imagesDir
-      const saveDir = workspacePath || imagesDir;
-      const imgPath = path.join(saveDir, `generated_${Date.now()}.png`);
-      fs.writeFileSync(imgPath, buffer);
-      
-      settings.imageGen.dailyImagesUsed = (settings.imageGen.dailyImagesUsed || 0) + 1;
-      persistSettings();
-      
-      // Return file:// URL for display
-      const fileUrl = 'file://' + imgPath.replace(/\\/g, '/');
-      return { ok: true, path: imgPath, url: fileUrl };
+    const parsed = await imageGen.extractImages(req.kind, response, g);
+    if (!parsed.images || parsed.images.length === 0) {
+      console.error(`[IMG ${logTs()}] ✗ ${response.status} (${Date.now() - imgStartedAt}ms) provider=${g.provider} model=${g.model}: ${parsed.error || '未返回有效图片'}`);
+      return { ok: false, error: parsed.error || '生图API未返回有效图片' };
     }
-    return { ok: false, error: '生图API未返回有效图片' };
+
+    // Save to workspace if provided, otherwise use imagesDir
+    const saveDir = workspacePath || imagesDir;
+    fs.mkdirSync(saveDir, { recursive: true });
+    const stamp = Date.now();
+    const paths = [];
+    parsed.images.forEach((img, i) => {
+      const ext = imageGen.extForMime(img.mime);
+      const name = parsed.images.length > 1 ? `generated_${stamp}_${i + 1}.${ext}` : `generated_${stamp}.${ext}`;
+      const imgPath = path.join(saveDir, name);
+      fs.writeFileSync(imgPath, img.buffer);
+      paths.push(imgPath);
+    });
+    settings.imageGen.dailyImagesUsed = (settings.imageGen.dailyImagesUsed || 0) + paths.length;
+    persistSettings();
+    console.log(`[IMG ${logTs()}] ✓ ${response.status} (${Date.now() - imgStartedAt}ms) model=${g.model} images=${paths.length} → ${paths.map(p => path.basename(p)).join(', ')}`);
+
+    // file:// URL 需转义空格/中文/# 等字符，否则渲染进程/WebUI 无法加载
+    const toFileUrl = (p) => 'file://' + encodeURI(p.replace(/\\/g, '/')).replace(/#/g, '%23');
+    return { ok: true, path: paths[0], url: toFileUrl(paths[0]), paths, urls: paths.map(toFileUrl) };
+  } catch (e) {
+    console.error(`[IMG ${logTs()}] ✗ 请求异常: ${e.message}`);
+    return { ok: false, error: e.message };
+  }
+});
+
+// ---- IPC: Image providers（生图厂商预设，供设置页 UI 展示）----
+ipcMain.handle('image:providers', () => {
+  try {
+    const imageGen = require('./image-gen');
+    return {
+      ok: true,
+      current: settings.imageGen.provider,
+      providers: Object.values(imageGen.PROVIDERS).map(p => ({
+        id: p.id, label: p.label, hint: p.hint, defaultUrl: p.defaultUrl,
+        models: p.models || [], sizes: p.sizes || [], auth: p.auth,
+      })),
+    };
+  } catch (e) { return { ok: false, error: e.message, providers: [] }; }
+});
+
+// ---- IPC: Resources（资源下载：语音模型等）----
+ipcMain.handle('resources:voiceModels:status', () => {
+  try { return { ok: true, ...voiceModelManager.status() }; } catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('resources:voiceModels:download', async (_, id) => {
+  return voiceModelManager.download(String(id || ''));
+});
+ipcMain.handle('resources:voiceModels:cancel', (_, id) => voiceModelManager.cancel(String(id || '')));
+ipcMain.handle('resources:voiceModels:delete', (_, id) => voiceModelManager.deleteModel(String(id || '')));
+ipcMain.handle('resources:voiceModels:chooseDir', async () => {
+  const res = await dialog.showOpenDialog(mainWindow, {
+    title: '选择语音模型下载目录',
+    properties: ['openDirectory', 'createDirectory'],
+    defaultPath: voiceModelManager.dir
+  });
+  if (res.canceled || !res.filePaths?.[0]) return { ok: false, canceled: true };
+  settings.resources.voiceModelDir = res.filePaths[0];
+  persistSettings();
+  try { voiceIpc?.engine?.resolveModels?.(); } catch (_) {}
+  return { ok: true, dir: res.filePaths[0] };
+});
+ipcMain.handle('resources:voiceModels:openDir', async (_, dir) => {
+  const target = String(dir || voiceModelManager.dir);
+  try { fs.mkdirSync(target, { recursive: true }); } catch (_) {}
+  const err = await shell.openPath(target);
+  return err ? { ok: false, error: err } : { ok: true };
+});
+ipcMain.handle('resources:voiceModels:setMirror', (_, mirror) => {
+  settings.resources.mirror = mirror === 'official' ? 'official' : 'cn';
+  persistSettings();
+  return { ok: true, mirror: settings.resources.mirror };
+});
+
+// ---- IPC: 决策模型（Jev / System One）----
+ipcMain.handle('decision:call', async (_, payload = {}) => {
+  try {
+    if (payload.usage && !decisionService.enabledFor(payload.usage)) return { ok: false, error: '该用途未启用' };
+    return await decisionService.call(payload.state, payload.questions, { sessionKey: payload.sessionKey });
   } catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('decision:noul', async (_, payload = {}) => {
+  try {
+    if (payload.usage && !decisionService.enabledFor(payload.usage)) return { value: null, error: '该用途未启用' };
+    return await decisionService.noul(payload.state, payload.instructions, payload);
+  } catch (e) { return { value: null, error: e.message }; }
+});
+ipcMain.handle('decision:choice', async (_, payload = {}) => {
+  try {
+    if (payload.usage && !decisionService.enabledFor(payload.usage)) return { value: null, error: '该用途未启用' };
+    return await decisionService.choice(payload.state, payload.instructions, payload.criteria, payload);
+  } catch (e) { return { value: null, error: e.message }; }
+});
+ipcMain.handle('decision:score', async (_, payload = {}) => {
+  try {
+    if (payload.usage && !decisionService.enabledFor(payload.usage)) return { value: null, error: '该用途未启用' };
+    return await decisionService.score(payload.state, payload.instructions, payload.criteria, payload);
+  } catch (e) { return { value: null, error: e.message }; }
+});
+ipcMain.handle('decision:test', async () => {
+  try { return await decisionService.test(); }
+  catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('decision:status', () => {
+  const cfg = normalizeDecisionSettings(settings.decision);
+  const stamp = new Date().toISOString().slice(0, 10);
+  const usage = cfg.usage || { date: '', calls: 0 };
+  return {
+    ok: true,
+    enabled: cfg.enabled,
+    provider: cfg.provider,
+    model: cfg.model || (cfg.provider === 'typesafe' ? 'jev-latest' : 'jev-1.13-free'),
+    usages: cfg.usages,
+    callsToday: usage.date === stamp ? usage.calls : 0,
+    dailyMaxCalls: cfg.dailyMaxCalls,
+  };
 });
 
 // ---- IPC: Web Search & Fetch ----
@@ -3402,32 +3649,46 @@ ipcMain.handle('vision:describeImage', async (_, { dataUrl, prompt }) => {
     // 智能拼接：如果 apiUrl 已含 /chat/completions 则直接用，否则追加
     let url = ev.apiUrl.replace(/\/+$/, '');
     if (!url.endsWith('/chat/completions')) url += '/chat/completions';
-    console.log(`[VLM] ${ev.model} ← ${url} | prompt:"${userText.slice(0, 80)}" | img:${Math.round(dataUrl.length / 1024)}KB`);
+    console.log(`[VLM ${logTs()}] → POST ${maskLogUrl(url)} model=${ev.model} img:${Math.round(dataUrl.length / 1024)}KB prompt:"${logSnippet(userText, 80)}"`);
+    const vlmStartedAt = Date.now();
     const resp = await fetch(url, {
       method: 'POST', headers, body, signal: AbortSignal.timeout(60000)
     });
     if (!resp.ok) {
       const errText = await resp.text().catch(() => '');
       const preview = errText.startsWith('<') ? `[HTML ${resp.status}]` : errText.slice(0, 200);
-      console.error(`[VLM] ${ev.model} FAILED ${resp.status}: ${preview}`);
+      console.error(`[VLM ${logTs()}] ✗ ${resp.status} (${Date.now() - vlmStartedAt}ms) model=${ev.model}: ${preview}`);
       return { ok: false, error: `VLM API ${resp.status}: ${preview}` };
     }
     const data = await resp.json();
     const content = data.choices?.[0]?.message?.content || '';
     const usage = data.usage || null;
     if (usage) recordTokenUsage(usage, ev.model);
-    console.log(`[VLM] ${ev.model} → ${content.length} 字符 | tokens:${usage?.prompt_tokens || '?'}+${usage?.completion_tokens || '?'}=${usage?.total_tokens || '?'}`);
+    console.log(`[VLM ${logTs()}] ✓ ${resp.status} (${Date.now() - vlmStartedAt}ms) model=${ev.model} → ${content.length}字 tokens:${usage?.prompt_tokens || '?'}+${usage?.completion_tokens || '?'}=${usage?.total_tokens || '?'}`);
     return { ok: true, description: content, usage: usage ? { prompt_tokens: usage.prompt_tokens, completion_tokens: usage.completion_tokens, total_tokens: usage.total_tokens } : null };
   } catch (e) {
-    console.error(`[VLM] describeImage error:`, e.message);
+    console.error(`[VLM ${logTs()}] ✗ 请求异常:`, e.message);
     return { ok: false, error: e.message };
   }
 });
 
 // ---- IPC: LLM API Call (with retry/backoff/timeout) ----
+// 会话级模型覆盖：模型池条目在会话创建时锁定，随每次请求携带 provider/apiUrl/apiKey
+function applySessionModelOverrides(baseLlm, options) {
+  if (!options || typeof options !== 'object') return baseLlm;
+  const out = { ...baseLlm };
+  if (options.provider) out.provider = options.provider;
+  if (options.apiUrl) out.apiUrl = options.apiUrl;
+  if (options.apiKey !== undefined && options.apiKey !== null && options.apiKey !== '') {
+    out.apiKey = options.apiKey;
+    if (out.provider === 'opencode-zen' || out.provider === 'opencode-go') out.zenApiKey = options.apiKey;
+  }
+  return out;
+}
+
 ipcMain.handle('llm:chat', async (event, messages, options = {}) => {
   try {
-    const llm = settings.llm;
+    const llm = applySessionModelOverrides(settings.llm, options);
     if (llm.provider === 'opencode-zen' || llm.provider === 'opencode-go') {
       if (!llm.zenApiKey || !llm.model) return { ok: false, error: '请先在设置中配置OpenCode API Key和模型' };
     } else if (!llm.apiUrl || !llm.model) {
@@ -3440,20 +3701,16 @@ ipcMain.handle('llm:chat', async (event, messages, options = {}) => {
       return { ok: false, error: '已达到今日LLM Token上限，请明天再试' };
     }
 
-    // 预算控制：检查是否超限
+    // 预算控制：检查是否超限（已移除自动降级模型：会话锁定后不自动切换，保护提示词缓存）
     const budgetCheck = checkBudgetExceeded(settings.budget || {});
     if (budgetCheck.exceeded) {
-      if (budgetCheck.action === 'stop') {
+      if (budgetCheck.action === 'stop' || budgetCheck.action === 'fallback') {
         return { ok: false, error: `预算超限（${budgetCheck.period}周期已用 $${budgetCheck.cost.toFixed(4)} / $${budgetCheck.limit.toFixed(2)}），已停止接受新请求` };
-      }
-      if (budgetCheck.action === 'fallback' && budgetCheck.fallbackModel) {
-        // 临时切换到 fallback 模型
-        options._budgetFallbackModel = budgetCheck.fallbackModel;
       }
     }
 
-    // 会话级覆盖优先：/model 命令传 options.model，预算 fallback 其次，最后全局设置
-    const requestModel = options.model || options._budgetFallbackModel || llm.model;
+    // 会话级覆盖优先：/model 或会话锁定的模型池条目（options.model/provider/apiUrl/apiKey）
+    const requestModel = options.model || llm.model;
     const requestEffort = options.reasoningEffort !== undefined ? options.reasoningEffort
       : (llm.reasoningEffort || 'off');
     const capabilities = getCachedModelCapabilities(requestModel, llm.provider, llm.apiUrl, llm.apiKey);
@@ -3475,8 +3732,7 @@ ipcMain.handle('llm:chat', async (event, messages, options = {}) => {
 
     const retryOpts = {
       maxRetries: options.maxRetries ?? llm.maxRetries ?? undefined,
-      timeoutMs: options.timeoutMs ?? llm.timeoutMs ?? undefined,
-      fallbackModel: llm.fallbackModel || null,
+      timeoutMs: options.timeoutMs ?? llm.timeoutMs ?? undefined,
       requestId: options.requestId || null,
       sessionKey: options.sessionKey || null
     };
@@ -3486,12 +3742,13 @@ ipcMain.handle('llm:chat', async (event, messages, options = {}) => {
     };
 
     const result = await fetchLLMWithRetry({
+      label: 'LLM:chat',
       apiUrl: req.url, apiKey: req.headers['x-api-key'] || llm.apiKey || llm.zenApiKey,
       headers: req.headers,
       body: req.body, options: retryOpts, onRetry
     });
     if (!result.ok) {
-      console.error(`[LLM] ${llmForRequest.model} ← ${req.url} FAILED: ${result.error}`);
+      console.error(`[LLM:chat ${logTs()}] ✗ ${llmForRequest.model} ← ${maskLogUrl(req.url)}: ${result.error}`);
       return { ok: false, error: result.error, kind: result.kind };
     }
 
@@ -3522,9 +3779,10 @@ ipcMain.handle('llm:chat', async (event, messages, options = {}) => {
     {
       const content = data.choices?.[0]?.message?.content || '';
       const toolCalls = data.choices?.[0]?.message?.tool_calls;
+      const reasoning = data.choices?.[0]?.message?.reasoning || data.choices?.[0]?.message?.reasoning_content || '';
       const preview = typeof content === 'string' ? content.slice(0, 120) : JSON.stringify(content || '').slice(0, 120);
       const suffix = content.length > 120 ? `…[${content.length} 字符]` : '';
-      console.log(`[LLM] ${llmForRequest.model} | tokens:${usage.prompt_tokens}+${usage.completion_tokens}=${usage.total_tokens}${usage._estimated ? '(est)' : ''} | → "${preview}${suffix}"${toolCalls ? ` | tool_calls:${toolCalls.length}` : ''}`);
+      console.log(`[LLM:chat ${logTs()}] ✓ ${llmForRequest.model} finish=${data.choices?.[0]?.finish_reason || '-'} tokens:${usage.prompt_tokens}+${usage.completion_tokens}=${usage.total_tokens}${usage._estimated ? '(est)' : ''} reasoning=${reasoning.length}字 → "${preview}${suffix}"${toolCalls ? ` | tool_calls:${toolCalls.length}` : ''}`);
     }
     const usageTokens = usage.total_tokens
       || estimateTokens(JSON.stringify(req.body)) + estimateTokens(data.choices?.[0]?.message?.content || '');
@@ -3550,7 +3808,7 @@ ipcMain.handle('llm:chat', async (event, messages, options = {}) => {
 // ---- IPC: LLM Streaming (with retry/backoff/timeout) ----
 ipcMain.handle('llm:chatStream', async (_, messages, options = {}) => {
   try {
-    const llm = settings.llm;
+    const llm = applySessionModelOverrides(settings.llm, options);
     if (llm.provider === 'opencode-zen' || llm.provider === 'opencode-go') {
       if (!llm.zenApiKey || !llm.model) return { ok: false, error: '请先在设置中配置OpenCode API Key和模型' };
     } else if (!llm.apiUrl || !llm.model) {
@@ -3563,16 +3821,13 @@ ipcMain.handle('llm:chatStream', async (_, messages, options = {}) => {
       return { ok: false, error: '已达到今日LLM Token上限，请明天再试' };
     }
 
-    // 预算控制：检查是否超限
+    // 预算控制：检查是否超限（已移除自动降级；会话锁定模型不自动切换）
     const budgetCheck = checkBudgetExceeded(settings.budget || {});
-    if (budgetCheck.exceeded && budgetCheck.action === 'stop') {
+    if (budgetCheck.exceeded && (budgetCheck.action === 'stop' || budgetCheck.action === 'fallback')) {
       return { ok: false, error: `预算超限（${budgetCheck.period}周期已用 $${budgetCheck.cost.toFixed(4)} / $${budgetCheck.limit.toFixed(2)}），已停止接受新请求` };
     }
-    // 会话级覆盖优先：/model 命令传 options.model，预算 fallback 其次，最后全局设置
-    const fallbackModel = (budgetCheck.exceeded && budgetCheck.action === 'fallback' && budgetCheck.fallbackModel)
-      ? budgetCheck.fallbackModel
-      : null;
-    const requestModel = options.model || fallbackModel || llm.model;
+    // 会话级覆盖优先：/model 或会话锁定的模型池条目
+    const requestModel = options.model || llm.model;
     const requestEffort = options.reasoningEffort !== undefined ? options.reasoningEffort
       : (llm.reasoningEffort || 'off');
     const capabilities = getCachedModelCapabilities(requestModel, llm.provider, llm.apiUrl, llm.apiKey);
@@ -3594,8 +3849,7 @@ ipcMain.handle('llm:chatStream', async (_, messages, options = {}) => {
 
     const retryOpts = {
       maxRetries: options.maxRetries ?? llm.maxRetries ?? undefined,
-      timeoutMs: options.timeoutMs ?? llm.timeoutMs ?? undefined,
-      fallbackModel: llm.fallbackModel || null,
+      timeoutMs: options.timeoutMs ?? llm.timeoutMs ?? undefined,
       requestId: options.requestId || null,
       sessionKey: options.sessionKey || null
     };
@@ -3605,6 +3859,7 @@ ipcMain.handle('llm:chatStream', async (_, messages, options = {}) => {
     };
 
     const result = await fetchLLMWithRetry({
+      label: 'LLM:stream',
       apiUrl: req.url, apiKey: req.headers['x-api-key'] || llm.apiKey || llm.zenApiKey,
       headers: req.headers,
       body: req.body, options: retryOpts, onRetry
@@ -3613,6 +3868,7 @@ ipcMain.handle('llm:chatStream', async (_, messages, options = {}) => {
 
     let streamResult;
     let lastChunkKey = null;
+    const streamStartedAt = Date.now();
     try {
       streamResult = await consumeSSEStream(result.response.body, (chunk) => {
         try {
@@ -3629,7 +3885,10 @@ ipcMain.handle('llm:chatStream', async (_, messages, options = {}) => {
             });
           }
         } catch { /* ignore */ }
-      }, options.requestId, req.transport, 120000);
+      }, options.requestId, req.transport, 120000, {
+        label: 'LLM:stream',
+        model: llmForRequest.model
+      });
     } finally {
       // 流读取结束（正常完成或被 abort）后释放 controller
       if (typeof result.releaseController === 'function') result.releaseController();
@@ -3681,7 +3940,7 @@ ipcMain.handle('llm:chatStream', async (_, messages, options = {}) => {
 // ---- IPC: LLM Summary (one-shot, no tools, for context compaction) ----
 ipcMain.handle('llm:summarize', async (_, messages, options = {}) => {
   try {
-    const llm = settings.llm;
+    const llm = applySessionModelOverrides(settings.llm, options);
     if (llm.provider === 'opencode-zen' || llm.provider === 'opencode-go') {
       if (!llm.zenApiKey || !llm.model) return { ok: false, error: '请先配置OpenCode' };
     } else if (!llm.apiUrl || !llm.model) {
@@ -3713,11 +3972,11 @@ ipcMain.handle('llm:summarize', async (_, messages, options = {}) => {
     });
     const retryOpts = {
       maxRetries: options.maxRetries ?? llm.maxRetries ?? undefined,
-      timeoutMs: options.timeoutMs ?? llm.timeoutMs ?? undefined,
-      fallbackModel: llm.fallbackModel || null,
+      timeoutMs: options.timeoutMs ?? llm.timeoutMs ?? undefined,
       sessionKey: options.sessionKey || null
     };
     const result = await fetchLLMWithRetry({
+      label: 'LLM:summarize',
       apiUrl: req.url, apiKey: req.headers['x-api-key'] || llm.apiKey || llm.zenApiKey,
       headers: req.headers,
       body: req.body, options: retryOpts
@@ -3733,6 +3992,7 @@ ipcMain.handle('llm:summarize', async (_, messages, options = {}) => {
     const data = LLMProviders.parseLLMResponse(rawData, req.transport);
     const content = data.choices?.[0]?.message?.content || '';
     const usage = data.usage || {};
+    console.log(`[LLM:summarize ${logTs()}] ✓ ${llmForRequest.model} tokens:${usage.prompt_tokens || 0}+${usage.completion_tokens || 0}=${usage.total_tokens || 0} 摘要=${content.length}字`);
     const usageTokens = usage.total_tokens
       || estimateTokens(JSON.stringify(req.body)) + estimateTokens(content);
     settings.llm.dailyTokensUsed = (settings.llm.dailyTokensUsed || 0) + usageTokens;
@@ -5306,15 +5566,15 @@ ipcMain.handle('sanguosha:aiDecision', async (_, gameState, playerInfo) => {
       max_tokens: 300,
       stream: false
     });
-
     const result = await fetchLLMWithRetry({
+      label: 'LLM:sanguosha',
       apiUrl: req.url, apiKey: req.headers['x-api-key'] || llm.apiKey || llm.zenApiKey,
       headers: req.headers,
       body: req.body,
       options: {
         maxRetries: llm.maxRetries ?? undefined,
         timeoutMs: Math.min(llm.timeoutMs ?? DEFAULT_TIMEOUT_MS, 60000),
-        fallbackModel: llm.fallbackModel || null
+
       }
     });
     if (!result.ok) return { ok: true, action: 'auto' };
@@ -5323,6 +5583,7 @@ ipcMain.handle('sanguosha:aiDecision', async (_, gameState, playerInfo) => {
     const data = LLMProviders.parseLLMResponse(rawData, req.transport);
     const content = data.choices?.[0]?.message?.content?.trim();
     if (!content) return { ok: true, action: 'auto' };
+    console.log(`[LLM:sanguosha ${logTs()}] ✓ ${llm.model} → "${String(content).replace(/\s+/g, ' ').slice(0, 120)}"`);
 
     const usage = data.usage || {};
     const usageTokens = usage.total_tokens || estimateTokens(JSON.stringify(req.body)) + estimateTokens(content);
@@ -7421,6 +7682,23 @@ app.whenReady().then(async () => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('webControl:fileUploaded', { path: filePath, name: fileName, isImage });
     }
+  };
+  // WebUI 本地图片代理：允许用户数据目录 / 工作区基目录 / 当前 Agent 工作区内的图片
+  webControlService.resolveLocalImage = (requested) => {
+    try {
+      const raw = String(requested).replace(/^file:\/\/\/?/i, '');
+      let target = decodeURIComponent(raw);
+      if (process.platform === 'win32') target = target.replace(/\//g, '\\');
+      const real = fs.realpathSync(path.resolve(target));
+      const roots = [userDataPath, imagesDir, workspacesBaseDir, webControlService.workDir]
+        .filter(Boolean)
+        .map((r) => { try { return fs.realpathSync(r); } catch (_) { return path.resolve(r); } });
+      const allowed = roots.some((r) => real === r || real.startsWith(r + path.sep));
+      if (!allowed) return null;
+      const ext = path.extname(real).toLowerCase();
+      if (!Object.prototype.hasOwnProperty.call(WebControlService.MIME_BY_EXT, ext)) return null;
+      return real;
+    } catch (_) { return null; }
   };
   // 渲染器 → WS 广播：DOM 镜像更新（mirror_head / mirror_body）
   ipcMain.on('webControl:mirrorUpdate', (_, data) => {

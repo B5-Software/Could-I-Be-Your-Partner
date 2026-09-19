@@ -173,6 +173,7 @@ contextBridge.exposeInMainWorld('api', {
 
   // Image Generation
   generateImage: (prompt, workspacePath) => ipcRenderer.invoke('image:generate', prompt, workspacePath),
+  imageProviders: () => ipcRenderer.invoke('image:providers'),
 
   // Web
   webSearch: (q, workspacePath) => ipcRenderer.invoke('web:search', q, workspacePath),
@@ -341,6 +342,28 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.on('voice:client-state', listener);
     return () => ipcRenderer.removeListener('voice:client-state', listener);
   },
+
+  // ---- 资源下载（语音模型）----
+  voiceModelsStatus: () => ipcRenderer.invoke('resources:voiceModels:status'),
+  voiceModelsDownload: (id) => ipcRenderer.invoke('resources:voiceModels:download', id),
+  voiceModelsCancel: (id) => ipcRenderer.invoke('resources:voiceModels:cancel', id),
+  voiceModelsDelete: (id) => ipcRenderer.invoke('resources:voiceModels:delete', id),
+  voiceModelsChooseDir: () => ipcRenderer.invoke('resources:voiceModels:chooseDir'),
+  voiceModelsOpenDir: (dir) => ipcRenderer.invoke('resources:voiceModels:openDir', dir),
+  voiceModelsSetMirror: (mirror) => ipcRenderer.invoke('resources:voiceModels:setMirror', mirror),
+  onVoiceModelsProgress: (cb) => {
+    const listener = (_, data) => cb(data);
+    ipcRenderer.on('resources:voiceModels:progress', listener);
+    return () => ipcRenderer.removeListener('resources:voiceModels:progress', listener);
+  },
+
+  // ---- 决策模型（Jev / System One）----
+  decisionCall: (payload) => ipcRenderer.invoke('decision:call', payload),
+  decisionNoul: (payload) => ipcRenderer.invoke('decision:noul', payload),
+  decisionChoice: (payload) => ipcRenderer.invoke('decision:choice', payload),
+  decisionScore: (payload) => ipcRenderer.invoke('decision:score', payload),
+  decisionTest: () => ipcRenderer.invoke('decision:test'),
+  decisionStatus: () => ipcRenderer.invoke('decision:status'),
 
   // Paths
   getPath: (name) => ipcRenderer.invoke('app:getPath', name),

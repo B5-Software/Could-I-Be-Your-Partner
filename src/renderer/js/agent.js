@@ -167,12 +167,111 @@ class Agent {
 
   /** 构造带会话级模型/变体覆盖的 LLM 请求选项（合并到各 chatLLM 调用） */
   _llmOptions(extra) {
+    let ov = this.llmOverride || {};
+    // 旧会话兜底：只有 model 没有 provider 时，从模型池反查连接信息
+    if (ov.model && !ov.provider) {
+      const pool = Array.isArray(this.settings?.llm?.pool) ? this.settings.llm.pool : [];
+      const hit = pool.find(e => e && e.model === ov.model);
+      if (hit) {
+        ov = { ...ov, provider: hit.provider, apiUrl: hit.apiUrl, apiKey: hit.apiKey, vision: hit.vision === true, poolEntryId: hit.id };
+      }
+    }
     const base = {
-      model: (this.llmOverride && this.llmOverride.model) || undefined,
-      reasoningEffort: this.getActiveReasoningEffort()
+      model: ov.model || undefined,
+      reasoningEffort: this.getActiveReasoningEffort(),
+      ...(ov.provider ? { provider: ov.provider } : {}),
+      ...(ov.apiUrl ? { apiUrl: ov.apiUrl } : {}),
+      ...(ov.apiKey !== undefined && ov.apiKey !== null && ov.apiKey !== '' ? { apiKey: ov.apiKey } : {})
     };
     if (extra && typeof extra === 'object') return { ...base, ...extra };
     return base;
+  }
+
+  /**
+   * 会话创建时锁定模型 + Reasoning Effort（模型池策略）。
+   * 必须在会话首条消息发出前调用；一旦锁定，任何自动逻辑都不再切换模型
+   * （保护提示词缓存）。返回是否本次完成锁定。
+   * @param {string} userMessage 首条用户消息（供 Jev 判断任务难度）
+   */
+  async ensureSessionModel(userMessage) {
+    try {
+      if (this.llmOverride && this.llmOverride.model) return false;
+      const s = this.settings || await window.api.getSettings();
+      const pool = (Array.isArray(s?.llm?.pool) ? s.llm.pool : [])
+        .filter(e => e && e.enabled !== false && e.model);
+      if (pool.length === 0) return false;
+
+      const routing = s?.llm?.routing || {};
+      const decisionCfg = s?.decision || {};
+      const decisionOn = decisionCfg.enabled === true;
+      const decisionUsages = decisionCfg.usages || {};
+      const state = String(userMessage || this.getLatestUserMessageText() || '').slice(0, 1500);
+      let entry = null;
+      let decidedBy = 'priority';
+
+      if (routing.modelStrategy === 'intelligence' && decisionOn
+          && decisionUsages.modelRouting !== false && typeof window.api.decisionChoice === 'function') {
+        const criteria = {};
+        for (const e of pool) {
+          criteria[String(e.id)] = `${e.label || e.model}｜接入=${e.provider}｜模型=${e.model}｜智慧分=${Number(e.intelligence) || 0}`;
+        }
+        const r = await window.api.decisionChoice({
+          state: `用户消息：${state}\n\n任务：从候选模型中选择最合适的一个。越复杂/越高要求的任务选智慧分越高的模型；简单任务选智慧分较低（更快更省）的模型。`,
+          instructions: 'Which model should handle this task?',
+          criteria,
+          key: 'model',
+          usage: 'modelRouting'
+        });
+        if (r && r.value) {
+          const hit = pool.find(e => String(e.id) === String(r.value));
+          if (hit) { entry = hit; decidedBy = 'jev'; }
+        }
+      }
+      if (!entry) {
+        entry = pool.slice().sort((a, b) => (Number(a.priority) || 0) - (Number(b.priority) || 0))[0];
+      }
+
+      let effort = entry.effort || 'off';
+      if (routing.effortStrategy === 'jev' && decisionOn
+          && decisionUsages.reasoningRouting !== false && typeof window.api.decisionChoice === 'function') {
+        const r2 = await window.api.decisionChoice({
+          state: `用户消息：${state}\n\n即将使用的模型：${entry.model}。任务：选择该任务的推理强度。简单问答/闲聊选 off；多步工具任务选 low/medium；复杂推理/调试/架构选 high。`,
+          instructions: 'How much reasoning effort is appropriate?',
+          criteria: { off: '不需要推理（最快）', low: '少量推理', medium: '中等推理', high: '深度推理' },
+          key: 'effort',
+          usage: 'reasoningRouting'
+        });
+        if (r2 && r2.value && ['off', 'low', 'medium', 'high', 'auto'].includes(r2.value)) {
+          effort = r2.value;
+          decidedBy += '+jev-effort';
+        }
+      }
+
+      this.llmOverride = {
+        ...(this.llmOverride || {}),
+        model: entry.model,
+        poolEntryId: entry.id,
+        provider: entry.provider || null,
+        apiUrl: entry.apiUrl || null,
+        apiKey: entry.apiKey || null,
+        vision: entry.vision === true,
+        reasoningEffort: effort
+      };
+      try { if (typeof this.saveToHistory === 'function') await this.saveToHistory(); } catch (_) {}
+      if (this.onMessage) {
+        this.onMessage('session-model-locked', {
+          model: entry.model,
+          label: entry.label || entry.model,
+          decidedBy,
+          effort
+        });
+      }
+      console.log(`[agent] 会话模型已锁定: ${entry.model} (${decidedBy}, effort=${effort})`);
+      return true;
+    } catch (e) {
+      console.warn('[agent] 会话模型锁定失败，使用全局配置:', e.message);
+      return false;
+    }
   }
 
   /**
@@ -783,8 +882,11 @@ ${affectionDesc}
   }
 
   getEnabledToolDefinitions() {
-    const enabled = this.settings?.tools || {};
-    return getAllToolDefinitions(this.mode || 'chat').filter(tool => enabled[tool.name] !== false);
+    return getAllToolDefinitions(this.mode || 'chat').filter(tool =>
+      typeof isToolEnabledForSettings === 'function'
+        ? isToolEnabledForSettings(tool.name, this.settings)
+        : (this.settings?.tools || {})[tool.name] !== false
+    );
   }
 
   hasUsableOptimizedSelection() {
@@ -919,7 +1021,9 @@ ${affectionDesc}
   isVisionModel() {
     // 用户手动开启多模态开关：无论模型名/API 如何，强制允许图片注入上下文
     if (this.settings?.llm?.forceVision === true) return true;
-    const model = (this.settings?.llm?.model || '').toLowerCase();
+    // 会话锁定的模型池条目显式声明了视觉能力
+    if (this.llmOverride && this.llmOverride.vision === true) return true;
+    const model = (this.getActiveModelId() || this.settings?.llm?.model || '').toLowerCase();
     if (!model) return false;
     // 用户自定义的 vision 模型列表
     const customVisionModels = this.settings?.llm?.visionModels;
@@ -1184,6 +1288,47 @@ ${affectionDesc}
     if (this.onMessage) this.onMessage('optimize-tools-start');
     try {
       const candidates = enabledDefs.map(t => `${t.name} | ${t.category || '其他'} | ${t.desc}`).join('\n');
+      // 决策模型优先：按工具类别批量 noul 判断相关性（一次调用；低置信/失败回退现有 LLM/启发式）
+      const dcfg = this.settings?.decision || {};
+      if (dcfg.enabled && dcfg.usages?.toolSelection !== false && typeof window.api.decisionCall === 'function') {
+        try {
+          const byCat = new Map();
+          for (const t of enabledDefs) {
+            const cat = t.category || '其他';
+            if (!byCat.has(cat)) byCat.set(cat, []);
+            byCat.get(cat).push(t.name);
+          }
+          const catList = [...byCat.keys()].slice(0, 24);
+          const questions = {};
+          catList.forEach((cat, i) => {
+            questions['c' + i] = { type: 'noul', instructions: `完成任务是否需要「${cat}」类工具？（不需要返回低概率）` };
+          });
+          const res = await window.api.decisionCall({
+            state: `用户消息：${String(firstUserMessage || '').slice(0, 800)}`,
+            questions,
+            sessionKey: this.sessionKey || null,
+            usage: 'toolSelection'
+          });
+          if (res && res.ok && res.answers) {
+            const selected = [];
+            catList.forEach((cat, i) => {
+              const p = Number(res.answers['c' + i]?.noul);
+              if (Number.isFinite(p) && p >= 0.5) selected.push(...byCat.get(cat));
+            });
+            if (selected.length > 0) {
+              const compacted = this.compactOptimizedSelection(selected, enabledDefs, firstUserMessage);
+              let finalSelection = compacted.length > 0 ? compacted : fallback;
+              if (finalSelection.length === 0) finalSelection = enabledDefs.slice(0, 12).map(t => t.name);
+              this._mergeOptimizedSelection(finalSelection);
+              this.optimizedToolReason = '决策模型选择（Jev）';
+              this.contextManager.setSystemPrompt(this.getSystemPrompt());
+              return { ok: true, selected: this.optimizedToolNames, reason: this.optimizedToolReason };
+            }
+          }
+        } catch (e) {
+          console.warn('[tool-opt] 决策模型选择失败，回退 LLM:', e.message);
+        }
+      }
       // 关键修复：思考模型会把推理同时塞进 content/reasoning_content，导致 JSON 解析失败。
       // 三管齐下：
       //  1) prompt 明确禁止任何推理/解释/前后文字，只输出 JSON 对象；
@@ -1230,6 +1375,7 @@ ${affectionDesc}
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userPrompt }
       ], {
+        ...this._llmOptions(),
         temperature: 0.2,
         max_tokens: 2000,
         response_format: { type: 'json_object' },
@@ -1358,11 +1504,15 @@ ${affectionDesc}
    * 不走 user 消息路径，避免污染对话上下文。
    */
   async proactiveSend(topicHint = '') {
-    if (!this.settings?.llm?.apiUrl || !this.settings?.llm?.apiKey) {
+    if (!this.settings?.llm?.apiUrl && !(this.settings?.llm?.provider === 'opencode-zen' || this.settings?.llm?.provider === 'opencode-go')
+        && !(Array.isArray(this.settings?.llm?.pool) && this.settings.llm.pool.some(e => e && e.enabled !== false && e.model))) {
       if (this.onMessage) this.onMessage('error', '请先在设置中配置LLM API');
       return;
     }
     if (this.running) return; // 正在处理中，不重复触发
+
+    // 会话模型锁定（与 sendMessage 一致：创建后不再自动切换）
+    await this.ensureSessionModel(topicHint || '');
 
     const runId = ++this.runId;
     this.running = true;
@@ -1395,11 +1545,18 @@ ${affectionDesc}
   }
 
   async sendMessage(userMessage, attachments = []) {
-    // OpenAI/Anthropic 兼容端点允许无 API Key（llama.cpp 等本地推理场景）
-    if (!this.settings?.llm?.apiUrl) {
+    // OpenAI/Anthropic 兼容端点允许无 API Key（llama.cpp 等本地推理场景）；
+    // OpenCode Zen/Go 使用内置端点，无需 apiUrl；模型池有启用条目也可继续。
+    const llmCfg0 = this.settings?.llm || {};
+    const poolHasEnabled = Array.isArray(llmCfg0.pool) && llmCfg0.pool.some(e => e && e.enabled !== false && e.model);
+    const providerHasEndpoint = llmCfg0.provider === 'opencode-zen' || llmCfg0.provider === 'opencode-go';
+    if (!poolHasEnabled && !llmCfg0.apiUrl && !providerHasEndpoint) {
       if (this.onMessage) this.onMessage('error', '请先在设置中配置LLM API');
       return;
     }
+
+    // 会话创建时锁定模型 + Reasoning Effort（模型池策略；锁定后不再自动切换）
+    await this.ensureSessionModel(userMessage);
 
     const runId = ++this.runId;
     this.running = true;
@@ -1606,7 +1763,12 @@ ${affectionDesc}
     if (conversation && typeof conversation.llmOverride === 'object') {
       this.llmOverride = {
         model: conversation.llmOverride.model || null,
-        reasoningEffort: conversation.llmOverride.reasoningEffort != null ? conversation.llmOverride.reasoningEffort : null
+        reasoningEffort: conversation.llmOverride.reasoningEffort != null ? conversation.llmOverride.reasoningEffort : null,
+        poolEntryId: conversation.llmOverride.poolEntryId || null,
+        provider: conversation.llmOverride.provider || null,
+        apiUrl: conversation.llmOverride.apiUrl || null,
+        apiKey: conversation.llmOverride.apiKey || null,
+        vision: conversation.llmOverride.vision === true
       };
     } else {
       this.llmOverride = { model: null, reasoningEffort: null };
@@ -1692,6 +1854,7 @@ ${affectionDesc}
         { role: 'system', content: TU ? TU.buildTitlePrompt(this.mode) : '你是会话标题助手。只输出 2-12 字中文标题，提炼主题，禁止照抄用户原话。' },
         { role: 'user', content: cleaned }
       ], {
+        ...this._llmOptions(),
         temperature: 0, // 温度>0 会让部分思考型模型把 CoT 灌进 content（实测 nemotron lightning）
         max_tokens: 512, // 给结论留出空间；思考本身不在该预算内
         requestId: Date.now().toString(),
@@ -1795,6 +1958,60 @@ ${affectionDesc}
    * @param {object} [opts] - { maxFailures, keepLast, isSubAgent }
    * @returns {Promise<{action: string, usage: number}>} 实际采取的动作
    */
+  /**
+   * 决策模型逐条评估旧工具结果是否仍需保留（默认关闭）。
+   * 仅当 noul 高置信（概率 <= 0.35）判定"不再需要"时清理，避免误删。
+   * @returns {Promise<number>} 清理条数
+   */
+  async _decisionPruneContext() {
+    try {
+      if (typeof window.api.decisionCall !== 'function') return 0;
+      const msgs = this.contextManager.getMessages();
+      if (!Array.isArray(msgs) || msgs.length <= 10) return 0;
+      const keepTail = 8;
+      const candidates = [];
+      for (let i = 0; i < msgs.length - keepTail; i++) {
+        const m = msgs[i];
+        if (!m || m.role !== 'tool') continue;
+        if (typeof m.content !== 'string' || m.content.length <= 300) continue;
+        if (this.contextManager.prunedIndexes && this.contextManager.prunedIndexes.has(i)) continue;
+        candidates.push(i);
+      }
+      const picks = candidates.slice(-8);
+      if (picks.length === 0) return 0;
+      const questions = {};
+      picks.forEach((idx, n) => {
+        questions['k' + n] = {
+          type: 'noul',
+          instructions: `以下工具结果对完成当前任务是否仍有必要保留？（如已无必要返回低概率）\n${String(msgs[idx].content).slice(0, 280)}`
+        };
+      });
+      const res = await window.api.decisionCall({
+        state: `当前用户任务：${String(this.getLatestUserMessageText ? this.getLatestUserMessageText() : '').slice(0, 400)}`,
+        questions,
+        sessionKey: this.sessionKey || null,
+        usage: 'contextRetention'
+      });
+      if (!res || !res.ok || !res.answers) return 0;
+      let pruned = 0;
+      picks.forEach((idx, n) => {
+        const p = Number(res.answers['k' + n]?.noul);
+        if (Number.isFinite(p) && p <= 0.35) {
+          this.contextManager.messages[idx] = {
+            ...this.contextManager.messages[idx],
+            content: '[工具结果已按决策模型清理：与当前任务无关]'
+          };
+          try { this.contextManager.prunedIndexes?.add?.(idx); } catch (_) {}
+          pruned++;
+        }
+      });
+      return pruned;
+    } catch (e) {
+      console.warn('[context] 决策清理失败:', e.message);
+      return 0;
+    }
+  }
+
   async _manageContext(ctx = this.contextManager, notify, opts = {}) {
     const maxFailures = opts.maxFailures ?? (this.settings?.agent?.autoCompactMaxFailures ?? 3);
     const isSub = !!opts.isSubAgent;
@@ -1811,6 +2028,20 @@ ${affectionDesc}
     let stats = readStats();
     let usage = usageOf(stats);
     let action = 'none';
+
+    // Tier0.5：决策模型逐条评估旧工具结果（默认关；仅高置信"不再需要"才清理，失败/低置信不动）
+    {
+      const dcfg = this.settings?.decision || {};
+      if (dcfg.enabled && dcfg.usages?.contextRetention !== false && usage > thresholdPct) {
+        const dPruned = await this._decisionPruneContext();
+        if (dPruned > 0) {
+          action = 'decision-prune';
+          stats = readStats();
+          usage = usageOf(stats);
+          if (notify) notify(`${prefix}决策模型清理了 ${dPruned} 条旧工具结果（${stats.usageWithReserve ?? stats.usage}% 含输出预留）`);
+        }
+      }
+    }
 
     // Tier0：无模型剪枝（不调 LLM）——确定性截断"旧"的超大工具结果
     if (usage > thresholdPct && typeof ctx.pruneOldToolResults === 'function') {
@@ -1832,8 +2063,7 @@ ${affectionDesc}
           tools: this.getRuntimeToolSchemas(), // 会话回放：复用暖前缀缓存
           maxRetries: this.settings?.contextCompaction?.compactionRetries ?? 1,
           maxTokens: this.settings?.contextCompaction?.summarizeMaxTokens || 2048,
-          model: this.llmOverride?.model || null,
-          reasoningEffort: this.getActiveReasoningEffort()
+          ...this._llmOptions()
         });
         if (sumRes.ok && !sumRes.skipped) {
           this.autoCompactFailures = 0;
@@ -1967,6 +2197,7 @@ ${affectionDesc}
       } else {
         // Non-streaming path (existing behavior).
         result = await window.api.chatLLM(messages, {
+          ...this._llmOptions(),
           tools: tools.length > 0 ? tools : undefined,
           requestId: reqId,
           sessionKey: this.sessionKey || null
@@ -2209,8 +2440,10 @@ ${affectionDesc}
           if (this.onMessage) this.onMessage('tool_call', { name: toolName, args, callId: tc.id });
 
           // Check if sensitive
+          // OpenCode 免费池 agent 工具别名（bash/edit）按敏感工具处理
+          const FREE_TIER_SENSITIVE = toolName === 'bash' || toolName === 'edit';
           const toolDef = TOOL_DEFINITIONS.find(t => t.name === toolName);
-          const isSensitive = toolDef?.sensitive && !this.settings.autoApproveSensitive;
+          const isSensitive = (toolDef?.sensitive || FREE_TIER_SENSITIVE) && !this.settings.autoApproveSensitive;
 
           // ===== 工具首次使用授权（Playwright / Computer Use）=====
           // 这些工具不再标记为 sensitive（不再每次调用都弹敏感确认），
@@ -2242,7 +2475,7 @@ ${affectionDesc}
 
           // Extra check for terminal commands
           let needsApproval = isSensitive;
-          if (toolName === 'runTerminalCommand' || toolName === 'awaitTerminalCommand' || toolName === 'runShellScriptCode') {
+          if (toolName === 'runTerminalCommand' || toolName === 'awaitTerminalCommand' || toolName === 'runShellScriptCode' || toolName === 'bash') {
             const cmd = args.command || args.script || '';
             if (this.isDangerousCommand(cmd)) needsApproval = true;
           }
@@ -2250,6 +2483,28 @@ ${affectionDesc}
           if (toolName === 'terminalSendInput' || toolName === 'terminalAnswerPrompt') {
             const text = args.text || args.answer || '';
             if (this.isDangerousCommand(text)) needsApproval = true;
+          }
+          // 决策模型护栏（Jev noul）：与黑名单 OR；只有高概率判定为危险才拦截，低置信不拦截
+          if (!needsApproval) {
+            const cmdTools = ['runTerminalCommand', 'awaitTerminalCommand', 'runShellScriptCode', 'bash', 'terminalSendInput', 'terminalAnswerPrompt'];
+            if (cmdTools.includes(toolName)) {
+              const dcfg = this.settings?.decision || {};
+              if (dcfg.enabled && dcfg.usages?.commandGuard !== false && typeof window.api.decisionNoul === 'function') {
+                const cmdText = String(args.command || args.script || args.text || args.answer || '').slice(0, 800);
+                if (cmdText) {
+                  try {
+                    const r = await window.api.decisionNoul({
+                      state: `命令：${cmdText}\n工作区：${this.workspacePath || '(未设置)'}`,
+                      instructions: '该命令可能造成不可逆破坏、数据丢失或系统级危险操作，且与当前任务无关或明显有害。',
+                      threshold: dcfg.guardThreshold != null ? dcfg.guardThreshold : 0.85,
+                      key: 'risk',
+                      usage: 'commandGuard'
+                    });
+                    if (r && r.value === true) needsApproval = true;
+                  } catch (_) { /* 护栏失败不拦截 */ }
+                }
+              }
+            }
           }
 
           if (needsApproval && !this.settings.autoApproveSensitive) {
@@ -2421,6 +2676,26 @@ ${affectionDesc}
 
   async executeTool(name, args) {
     try {
+      // OpenCode 免费池 agent 工具别名（bash/read/edit/glob/grep）→ CIBYP 本地实现
+      // 这些工具名由主进程按免费池要求注入请求（见 llm-providers.js mergeFreeTierTools），
+      // 模型调用时需要翻译成 App 现有工具与参数形状。
+      const FT_ALIAS = { bash: 'runShellScriptCode', read: 'readFile', edit: 'editFile', glob: 'localSearch', grep: 'searchInFiles' };
+      if (FT_ALIAS[name]) {
+        const a = args || {};
+        if (name === 'bash') args = { script: String(a.command || a.script || '') };
+        else if (name === 'read') args = { path: a.filePath || a.path, ...(a.encoding ? { encoding: a.encoding } : {}) };
+        else if (name === 'edit') {
+          args = {
+            path: a.filePath || a.path,
+            old_string: a.oldString ?? a.old_string,
+            new_string: a.newString ?? a.new_string,
+            ...((a.replaceAll ?? a.replace_all) != null ? { replace_all: a.replaceAll ?? a.replace_all } : {}),
+            ...(a.content != null ? { content: a.content } : {})
+          };
+        } else if (name === 'glob') args = { directory: a.path || '.', pattern: a.pattern };
+        else if (name === 'grep') args = { paths: [a.path || '.'], pattern: a.pattern, ...(a.include ? { include: a.include } : {}) };
+        name = FT_ALIAS[name];
+      }
       // DeepSeek 兼容：dsh 标准工具名 → CIBYP 实现名 + 参数适配（translated 档）。
       // 模型表面只暴露 CIBYP 规范名；此处仅处理别名入口，不新增 schema。
       const originalName = name;
@@ -2463,6 +2738,63 @@ ${affectionDesc}
             return { ok: false, error: typeof i18nToolReturn === 'function' ? i18nToolReturn('no_workspace', '未设置工作区路径') : '未设置工作区路径' };
           }
           return await window.api.generateImage(args.prompt, this.workspacePath);
+        }
+        case 'decisionModel': {
+          const dcfg = this.settings?.decision || {};
+          if (dcfg.enabled !== true) {
+            return { ok: false, error: '决策模型未启用（请在 设置 → 决策模型 中开启）' };
+          }
+          if (dcfg.usages?.llmTool === false) {
+            return { ok: false, error: 'LLM 主动调用决策模型已在设置中关闭' };
+          }
+          const type = String(args?.type || 'noul').toLowerCase();
+          const instructions = String(args?.instructions || '').trim();
+          if (!instructions) return { ok: false, error: '缺少决策问题 instructions' };
+          const state = String(args?.state || (this.getLatestUserMessageText ? this.getLatestUserMessageText() : '') || '').slice(0, 4000);
+          // 日常决策（选择/打分）默认放宽到 0.25，避免 64/36 这类合理倾向被判"低置信"；
+          // noul 是/否判断默认保守 0.6。调用方可用 threshold 显式覆盖；低于阈值时仍会返回 suggested 供参考。
+          const defaultThreshold = type === 'noul' ? 0.6 : 0.25;
+          const threshold = (typeof args?.threshold === 'number' && args.threshold > 0) ? args.threshold : defaultThreshold;
+          // 兼容模型各种写法：criteria / options / choices，对象、字符串数组、对象数组、JSON 字符串；
+          // 省略时从 instructions 推断（choice 的"A还是B"、score 的"1-5分"），score 最终回退 1-5 量表
+          const rawCriteria = args?.criteria ?? args?.options ?? args?.choices;
+          const norm = (typeof normalizeDecisionCriteria === 'function')
+            ? normalizeDecisionCriteria(type, rawCriteria, { scale: args?.scale, instructions })
+            : null;
+          let r;
+          if (type === 'choice') {
+            if (!norm || !norm.map) return { ok: false, error: (norm && norm.error) || 'choice 缺少有效选项' };
+            r = await window.api.decisionChoice({ state, instructions, criteria: norm.map, threshold, key: 'q', usage: 'llmTool' });
+          } else if (type === 'score') {
+            if (!norm || !norm.list) return { ok: false, error: (norm && norm.error) || 'score 缺少有效档位' };
+            r = await window.api.decisionScore({ state, instructions, criteria: norm.list, threshold, key: 'q', usage: 'llmTool' });
+          } else {
+            r = await window.api.decisionNoul({ state, instructions, threshold, key: 'q', usage: 'llmTool' });
+          }
+          if (!r) return { ok: false, error: '决策模型无响应' };
+          if (r.error && (r.value === null || r.value === undefined)) return { ok: false, error: r.error };
+          if (r.value === null || r.value === undefined) {
+            return {
+              ok: true,
+              result: {
+                type,
+                value: null,
+                confidence: r.confidence ?? null,
+                suggested: r.raw?.choice ?? null,
+                probabilities: r.raw?.probabilities ?? null,
+                ...(norm && norm.derived ? { derived: true } : {}),
+                note: '低置信或不可判定：可参考 suggested/probabilities 自行决策，或补充上下文后重试'
+              }
+            };
+          }
+          const result = { type, value: r.value };
+          if (r.confidence !== undefined && r.confidence !== null) result.confidence = r.confidence;
+          if (r.probabilities) result.probabilities = r.probabilities;
+          if (r.probability !== undefined) result.probability = r.probability;
+          if (r.legend !== undefined) result.legend = r.legend;
+          if (norm && norm.derived) result.derived = true; // criteria 由问题文本推断
+          console.log(`[agent] decisionModel(${type}) →`, JSON.stringify(result).slice(0, 200));
+          return { ok: true, result };
         }
         case 'calculator': {
           return await window.api.calcEvaluate(args.expression);
@@ -4178,6 +4510,7 @@ ${tarotLine}
             '1. 已完成的工作和结果\n2. 未完成的步骤和原因\n3. 遇到的问题和建议\n请简洁但完整地总结。'
           );
           const summaryResult = await window.api.chatLLM(subAgent.contextManager.getMessages(), {
+            ...this._llmOptions(),
             requestId: 'sub-' + Date.now().toString() + '-final-report',
             sessionKey: this.sessionKey || null
           });

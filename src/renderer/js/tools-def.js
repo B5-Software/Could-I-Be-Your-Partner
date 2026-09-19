@@ -87,6 +87,7 @@ const CATEGORY_META = {
   '电脑控制': { icon: 'fa-computer-mouse', desc: 'Computer Use 桌面控制' },
   '游戏': { icon: 'fa-gamepad', desc: '多人互动游戏' },
   '交互工具': { icon: 'fa-comments', desc: '提问澄清等交互工具' },
+  '决策': { icon: 'fa-scale-balanced', desc: '决策模型（Jev）：选择/打分/是否判断' },
   'FediKitten': { icon: 'fa-cat', desc: 'FediKitten 联邦宇宙社交（发帖/时间线/私信/关注）' },
   'MCP': { icon: 'fa-plug-circle-bolt', desc: 'MCP 协议接入的外部工具' }
 };
@@ -230,20 +231,194 @@ function getToolAuthCategory(toolName) {
 }
 
 // 未配置生图模型时隐藏 generateImage 工具，避免 LLM 调用后失败
+// （本地/自建端点可能不需要 API Key，因此只要求 URL + 模型）
 function isImageGenConfigured(settings) {
   const img = settings?.imageGen;
-  return !!(img && img.apiUrl && img.apiKey && img.model);
+  return !!(img && img.apiUrl && img.model);
 }
 
-// 供 agent.js 在 getRuntimeToolSchemas 时调用，过滤掉未配置的生图工具
+// 决策工具仅在「设置 → 决策模型」启用且允许 LLM 主动调用时可用
+function isDecisionToolConfigured(settings) {
+  return settings?.decision?.enabled === true && settings?.decision?.usages?.llmTool !== false;
+}
+
+// 配置门控工具：仅在对应 API 配置完成后对 LLM 可见；配置后自动启用（无需手动打开开关）
+const CONFIG_GATED_TOOLS = {
+  generateImage: isImageGenConfigured,
+  decisionModel: isDecisionToolConfigured
+};
+
+function isConfigGatedTool(name) {
+  return Object.prototype.hasOwnProperty.call(CONFIG_GATED_TOOLS, name);
+}
+
+/** 该工具是否满足配置（非门控工具恒为 true） */
+function isConfigGatedToolAvailable(name, settings) {
+  const check = CONFIG_GATED_TOOLS[name];
+  return !check || check(settings) === true;
+}
+
+/** 过滤工具元数据列表：剔除未配置的门控工具（工具页展示用） */
+function filterToolDefsByConfig(defs, settings) {
+  return (Array.isArray(defs) ? defs : []).filter(t => isConfigGatedToolAvailable(t?.name, settings));
+}
+
+/** 工具是否启用：门控工具配置后自动启用（忽略手动关闭） */
+function isToolEnabledForSettings(name, settings) {
+  if (isConfigGatedTool(name)) return isConfigGatedToolAvailable(name, settings);
+  const enabled = settings?.tools || {};
+  return enabled[name] !== false;
+}
+
+// ---- 决策工具参数规范化 ----
+// 兼容模型常见的多种 criteria 写法：
+//   choice: {"选项":"说明"} | ["选项1","选项2"] | [{"option":"选项1","description":"说明"}] | [{"选项1":"说明"},{"选项2":"说明"}] | JSON 字符串
+//           | 省略时从 instructions 的"A还是B/ A或B"推断
+//   score:  ["低","中","高"] | [{"name":"低","description":"..."}] | {"0":"低","1":"中"}
+//           | scale:"1-5" | 省略时从 instructions 的"1-5分/0到10分"推断 | 最后回退 1-5 标准量表
+// @param {object} [extra] { scale?: string, instructions?: string }
+function normalizeDecisionCriteria(type, raw, extra = {}) {
+  let val = raw;
+  if (typeof val === 'string') {
+    const s = val.trim();
+    if (s.startsWith('{') || s.startsWith('[')) {
+      try { val = JSON.parse(s); } catch (_) { /* 保持原字符串 */ }
+    }
+  }
+  const pickName = (o) => {
+    const cand = [o.option, o.name, o.value, o.label, o.level, o.choice];
+    for (const c of cand) if (c != null && String(c).trim()) return String(c).trim();
+    return '';
+  };
+  const pickDesc = (o) => {
+    const cand = [o.description, o.desc, o.explain, o.reason];
+    for (const c of cand) if (c != null && String(c).trim()) return String(c).trim();
+    return '';
+  };
+  /** 解析量表：'1-5' / '1~5' / '1到5' / '1至5' → 档位数组 */
+  const parseScale = (text) => {
+    if (text == null) return null;
+    const s = String(text).trim();
+    if (!s) return null;
+    const m = /(\d+)\s*(?:-|~|—|–|到|至|to)\s*(\d+)/i.exec(s);
+    if (!m) return null;
+    let lo = parseInt(m[1], 10);
+    let hi = parseInt(m[2], 10);
+    if (!Number.isFinite(lo) || !Number.isFinite(hi)) return null;
+    if (lo > hi) { const t = lo; lo = hi; hi = t; }
+    const span = hi - lo;
+    if (span < 1 || span > 10) return null; // 跨度过大时不适合逐个数字当档位
+    const out = [];
+    for (let i = lo; i <= hi; i++) out.push(String(i));
+    return out;
+  };
+  if (type === 'choice') {
+    const map = {};
+    if (!val) {
+      // 兜底：从问题文本推断二选一（"711还是罗森" / "A或B" / "A vs B"）
+      const text = String(extra.instructions || '');
+      const stripPrefix = (s) => {
+        // 去掉"明天中午吃/去/选/买/用/玩/看…"之类的引导语，取宾语
+        const m = /^.*?(?:吃|喝|去|选|买|用|玩|看|找|做|要|是)(?=[^\s])/.exec(s);
+        return m ? s.slice(m[0].length).trim() : s;
+      };
+      const parts = text.split(/\s*(?:还是|或者|或|,|，|\/|\bvs\.?\b|\bor\b)\s*/i)
+        .map(p => stripPrefix(p.replace(/[?？。！!.：:\s]+$/g, '').trim()))
+        .filter(Boolean);
+      const tail = parts.length > 1 ? parts[parts.length - 2] : null;
+      const last = parts.length > 1 ? parts[parts.length - 1] : null;
+      // 只在两侧都短且不像整句时启用（避免把长句误拆成选项）
+      const clean = (s) => s && s.length <= 24 && !/[，。？！,.?!]/.test(s);
+      if (clean(tail) && clean(last) && tail !== last) {
+        map[tail] = tail;
+        map[last] = last;
+      }
+      if (Object.keys(map).length >= 2) return { map, derived: true };
+      return { error: 'choice 缺少 criteria：请传候选选项，如 ["711","罗森"] 或 {"711":"便利店","罗森":"便利店"}' };
+    }
+    if (typeof val === 'object' && !Array.isArray(val)) {
+      for (const [k, v] of Object.entries(val)) {
+        const key = String(k).trim();
+        if (key) map[key] = String(v == null ? '' : v).trim() || key;
+      }
+    } else if (Array.isArray(val)) {
+      for (const item of val) {
+        if (item == null) continue;
+        if (typeof item === 'string') {
+          const k = item.trim();
+          if (k) map[k] = k;
+          continue;
+        }
+        if (typeof item !== 'object') continue;
+        const name = pickName(item);
+        if (name) {
+          map[name] = pickDesc(item) || name;
+        } else {
+          // 单键对象 {选项: 说明}
+          for (const [k, v] of Object.entries(item)) {
+            const key = String(k).trim();
+            if (key) map[key] = String(v == null ? '' : v).trim() || key;
+          }
+        }
+      }
+    }
+    if (Object.keys(map).length < 2) {
+      return { error: 'choice 需要至少 2 个选项（支持 ["711","罗森"]、{"711":"说明"}、[{"option":"711","description":"说明"}] 等格式）' };
+    }
+    return { map };
+  }
+  if (type === 'score') {
+    const list = [];
+    if (typeof val === 'string') {
+      const parsed = parseScale(val);
+      if (parsed) list.push(...parsed);
+      else if (val.trim()) list.push(val.trim());
+    } else if (typeof val === 'number') {
+      const parsed = parseScale(`1-${val}`);
+      if (parsed) list.push(...parsed);
+    } else if (Array.isArray(val)) {
+      for (const item of val) {
+        if (item == null) continue;
+        if (typeof item === 'string') { if (item.trim()) list.push(item.trim()); continue; }
+        if (typeof item !== 'object') continue;
+        const name = pickName(item);
+        const desc = pickDesc(item);
+        const s = name || desc;
+        if (s) list.push(desc && name && desc !== name ? `${name}（${desc}）` : s);
+      }
+    } else if (val && typeof val === 'object') {
+      for (const [k, v] of Object.entries(val)) {
+        const key = String(k).trim();
+        const desc = String(v == null ? '' : v).trim();
+        if (!key && !desc) continue;
+        // 索引键对象 {"0":"低","1":"高"}：键只是序号，档位取描述本身
+        if (/^\d+$/.test(key) && desc) list.push(desc);
+        else list.push(desc && desc !== key ? `${key}（${desc}）` : key);
+      }
+    }
+    if (list.length < 2) {
+      // 兜底 1：显式 scale 参数 或 instructions 中的量表（"1-5分"、"0到10分"）
+      const fromScale = parseScale(extra.scale) || parseScale(extra.instructions);
+      if (fromScale) return { list: fromScale, derived: true };
+      // 兜底 2：标准 1-5 量表（问题里提到"分/评分/score"时）
+      if (/[分评]|score/i.test(String(extra.instructions || ''))) {
+        return { list: ['1', '2', '3', '4', '5'], derived: true };
+      }
+      return { error: 'score 需要至少 2 个有序档位（支持 ["低","中","高"]、[{"name":"低","description":"..."}]、scale:"1-5" 或 criteria:5）' };
+    }
+    return { list };
+  }
+  return { error: `未知决策类型: ${type}` };
+}
+
+// 供 agent.js 在 getRuntimeToolSchemas 时调用，过滤掉未配置的门控工具
 function filterToolsByConfig(tools, settings) {
   let filtered = tools;
   // .no-tarot 构建版本：过滤掉 getTarot 工具（主进程 tarot:draw 也会拒绝调用作为兜底）
   if (typeof window !== 'undefined' && window.NO_TAROT_BUILD === true) {
     filtered = filtered.filter(t => t.function?.name !== 'getTarot');
   }
-  if (isImageGenConfigured(settings)) return filtered;
-  return filtered.filter(t => t.function?.name !== 'generateImage');
+  return filtered.filter(t => isConfigGatedToolAvailable(t.function?.name, settings));
 }
 
 // readImageFile 工具定义双模式自动切换：
@@ -334,6 +509,8 @@ const CODE_TOOLS = new Set([
   'sleep',
   // 询问用户（复杂任务需澄清需求）
   'askQuestions',
+  // 决策模型（Jev）：分类/路由/是否判断等快速结构化决策
+  'decisionModel',
 ]);
 
 // Babe 模式允许的工具白名单（仅应用内核心工具，无 MCP、无娱乐/创作/游戏，不含 Skills）
@@ -355,7 +532,9 @@ const BABE_ALLOWED_TOOLS = new Set([
   // 上下文管理（与 Chat/Code 对齐：三层自动压缩 + 手动 LLM 摘要）
   'manageContext', 'autoSummarizeContext',
   // 主题外观（Chat/Babe 共用，LLM 可主动调节深浅色/强调色/配色）
-  'adjustAppearance'
+  'adjustAppearance',
+  // 决策模型（Jev）：快速结构化决策
+  'decisionModel'
 ]);
 
 // Tool definitions for the AI Agent
@@ -370,7 +549,8 @@ const TOOL_DEFINITIONS = [
   { name: 'getTarot', desc: '抽取塔罗牌', icon: 'fa-star', category: '娱乐', sensitive: false },
   { name: 'todoList', desc: '管理待办事项', icon: 'fa-list-check', category: '效率', sensitive: false },
   { name: 'runSubAgent', desc: '运行子代理', icon: 'fa-users', category: '代理', sensitive: false },
-  { name: 'generateImage', desc: '生成图片', icon: 'fa-image', category: '创作', sensitive: false },
+  { name: 'generateImage', desc: '生成图片（配置生图 API 后自动启用）', icon: 'fa-image', category: '创作', sensitive: false },
+  { name: 'decisionModel', desc: '调用决策模型（Jev）做选择/打分/是否判断（启用决策模型后自动启用）', icon: 'fa-scale-balanced', category: '决策', sensitive: false },
   { name: 'calculator', desc: '精确计算表达式（本地）', icon: 'fa-calculator', category: '计算', sensitive: false },
   { name: 'factorInteger', desc: '整数质因数分解', icon: 'fa-divide', category: '计算', sensitive: false },
   { name: 'gcdLcm', desc: '计算最大公约数/最小公倍数', icon: 'fa-superscript', category: '计算', sensitive: false },
@@ -712,6 +892,7 @@ function getToolSchemas(enabledTools, mode, imOwner) {
     todoList: { type: 'function', function: { name: 'todoList', description: '管理待办事项列表。收到含 3 个以上步骤或多个子目标的复杂任务时，必须先调用本工具拆分任务并写入待办列表，每完成一个子步骤立即 toggle 标记完成，防止上下文过长遗忘目标。', parameters: { type: 'object', properties: { action: { type: 'string', enum: ['add', 'remove', 'toggle', 'list'], description: '操作类型' }, text: { type: 'string', description: '待办事项内容' }, id: { type: 'number', description: '待办事项ID' } }, required: ['action'] } } },
     runSubAgent: { type: 'function', function: { name: 'runSubAgent', description: '运行一个独立子代理完成特定任务。子代理拥有自己的 agent loop（可多轮调用工具）、隔离上下文和工具白名单，完成后返回结果报告。适用于并行/分解任务、独立调查、批处理等场景。', parameters: { type: 'object', properties: { task: { type: 'string', description: '子代理要完成的任务（含目标、约束、验收标准）' }, context: { type: 'string', description: '给子代理的额外上下文信息（如相关文件路径、已有发现）' }, tools: { type: 'array', items: { type: 'string' }, description: '允许子代理使用的工具名称白名单。省略则使用默认安全集：readFile/listDirectory/localSearch/createFile/editFile/copyFile/makeDirectory/getSystemInfo/calculator/webSearch/webFetch/runJavaScriptCode。危险工具（deleteFile/runTerminalCommand 等）默认禁用，必须显式列出才会授予。' }, maxIterations: { type: 'number', description: '子代理最大循环轮数，默认 10，上限 30' } }, required: ['task'] } } },
     generateImage: { type: 'function', function: { name: 'generateImage', description: '根据文本提示生成图片', parameters: { type: 'object', properties: { prompt: { type: 'string', description: '图片描述(英文)' } }, required: ['prompt'] } } },
+    decisionModel: { type: 'function', function: { name: 'decisionModel', description: '调用外部决策模型（Jev，System One）做一次快速结构化决策。适合：分类/路由（type=choice，从候选里选一个）、按档位打分（type=score）、是/否判断（type=noul，返回成立概率）。返回决策值 + 概率分布 + 置信度；低置信时 value 为 null，需要你自行决策或补充上下文后重试。一次只问一个明确的问题：多维度评估请拆成多次调用（每次一个指标），不要把多个维度塞进一条 instructions。', parameters: { type: 'object', properties: { type: { type: 'string', enum: ['choice', 'score', 'noul'], description: '决策类型：choice=从选项中选择；score=按有序档位打分；noul=是否判断' }, instructions: { type: 'string', description: '决策问题（单一、明确）。choice 写清各选项含义；score 写清量表含义（如"1-5分，5分最支持请假"）。' }, state: { type: 'string', description: '决策依据的上下文/材料；省略时使用最近的用户消息' }, criteria: { type: 'array', items: { type: 'string' }, description: 'choice: 候选选项列表，如 ["711","罗森"]（省略时会从 instructions 的"A还是B"推断）；score: 有序档位，如 ["低","中","高"]（省略时按 scale 或 instructions 的"1-5分"推断，仍无则 1-5）。也兼容 {"选项":"说明"} 对象格式。' }, scale: { type: 'string', description: 'score 专用：量表，如 "1-5"、"0-10"。仅当未传 criteria 时生效。' }, threshold: { type: 'number', description: '可选：判定/置信阈值（0~1，越大越保守；默认 choice/score=0.25，noul=0.6；低于阈值仍会返回 suggested 倾向值）' } }, required: ['type', 'instructions'] } } },
     calculator: { type: 'function', function: { name: 'calculator', description: '精确计算数学表达式（本地执行，支持常见中英文/全角符号与百分号写法）。任何涉及算式求值都应优先使用此工具，避免模型口算误差。', parameters: { type: 'object', properties: { expression: { type: 'string', description: '表达式，例如：(1+2.5)×3^2、50%+1、10 mod 3' } }, required: ['expression'] } } },
     factorInteger: { type: 'function', function: { name: 'factorInteger', description: '对整数做质因数分解，返回每个质因子的指数。适合约分、数论、分解验证等。', parameters: { type: 'object', properties: { value: { type: 'string', description: '要分解的整数，可为字符串/数字，如 "360" 或 "-84"' } }, required: ['value'] } } },
     gcdLcm: { type: 'function', function: { name: 'gcdLcm', description: '计算多个整数的最大公约数(gcd)和最小公倍数(lcm)。', parameters: { type: 'object', properties: { values: { type: 'array', items: { type: 'string' }, description: '整数数组，至少2个元素，如 ["12","18","30"]' } }, required: ['values'] } } },

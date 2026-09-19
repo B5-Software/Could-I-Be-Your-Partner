@@ -40,6 +40,7 @@
     ['entropy', '熵源'], ['firmware', 'TRNG固件'], ['security', '安全'], ['mcp', 'MCP'],
     ['email', '邮箱'], ['fedikitten', 'FediKitten'], ['webcontrol', 'Web控制'], ['playwright', 'Playwright'],
     ['notifications', '通知'], ['terminal', '终端'], ['ime', '输入法'], ['voice', '语音'],
+    ['resources', '资源下载'], ['decision', '决策模型'],
     ['context', '上下文'], ['sandbox', '沙箱'], ['automation', '自动化'], ['plugins', '插件'],
     ['environment', '环境检测'], ['updates', '更新']
   ];
@@ -181,21 +182,31 @@
       return;
     }
     if (cmd === '/model') {
-      loading = true;
-      renderItems([{ label: '正在加载模型列表…', icon: 'fa-spinner fa-spin' }]);
-      showPanel();
-      const models = await fetchModelList(ag);
-      loading = false;
-      if (panelInput !== input) return; // 期间焦点/输入已切换
+      const s = (ag && ag.settings) || {};
+      const pool = (Array.isArray(s.llm?.pool) ? s.llm.pool : [])
+        .filter(e => e && e.enabled !== false && e.model)
+        .sort((a, b) => (Number(a.priority) || 0) - (Number(b.priority) || 0));
+      if (pool.length === 0) {
+        renderItems([{ label: '模型池为空', icon: 'fa-circle-info', desc: '请先在 设置 → LLM → 模型池 中添加模型' }]);
+        showPanel();
+        return;
+      }
       const q = query.toLowerCase();
+      const activeId = ag?.llmOverride?.poolEntryId || '';
       const activeModel = ag ? ag.getActiveModelId() : '';
-      renderItems(models
-        .filter(m => !q || String(m.id || '').toLowerCase().includes(q))
-        .map(m => ({
-          label: m.id,
-          icon: 'fa-robot',
-          desc: m.name && m.name !== m.id ? m.name : '切换后自动收敛变体',
-          badge: m.id === activeModel ? '当前' : ''
+      renderItems(pool
+        .map((e, i) => ({ e, i }))
+        .filter(({ e, i }) => !q
+          || String(e.label || '').toLowerCase().includes(q)
+          || String(e.model || '').toLowerCase().includes(q)
+          || String(i + 1) === q)
+        .map(({ e, i }) => ({
+          label: `${i + 1}. ${e.label || e.model}`,
+          entryId: e.id,
+          model: e.model,
+          icon: 'fa-layer-group',
+          desc: `${e.model} · ${e.provider} · 智慧 ${Number(e.intelligence) || 0} · Effort ${e.effort || 'off'}`,
+          badge: (e.id === activeId || (!activeId && e.model === activeModel)) ? '当前' : (e.id === s.llm?.activeEntryId ? '默认' : '')
         })));
       showPanel();
       return;
@@ -363,11 +374,13 @@
 
   async function fetchVariants(ag) {
     const s = (ag && ag.settings) || {};
-    const provider = s.llm?.provider || 'openai-compat';
+    const ov = (ag && ag.llmOverride) || {};
+    const provider = ov.provider || s.llm?.provider || 'openai-compat';
     const model = ag ? ag.getActiveModelId() : (s.llm?.model || '');
     try {
-      const apiUrl = provider === 'opencode-zen' ? '' : (s.llm?.apiUrl || '');
-      const apiKey = provider === 'opencode-zen' ? (s.llm?.zenApiKey || '') : (s.llm?.apiKey || '');
+      const isZenGo = provider === 'opencode-zen' || provider === 'opencode-go';
+      const apiUrl = isZenGo ? '' : (ov.apiUrl || s.llm?.apiUrl || '');
+      const apiKey = ov.apiKey || (isZenGo ? (s.llm?.zenApiKey || '') : (s.llm?.apiKey || ''));
       const res = await window.api.llmCapabilities?.(provider, model, apiUrl, apiKey);
       if (res && res.ok && Array.isArray(res.variants) && res.variants.length) return res.variants;
     } catch (_) { /* 走兜底 */ }
@@ -401,7 +414,15 @@
     }
 
     if (cmd === '/model') {
-      if (item.label && !item.label.includes('加载')) await applyModel(ag, item.label);
+      if (item.entryId) await applyPoolEntry(ag, item.entryId);
+      else if (item.label && !item.label.includes('模型池')) {
+        // 兜底：按名称/序号在模型池里找
+        const s = (ag && ag.settings) || {};
+        const pool = (Array.isArray(s.llm?.pool) ? s.llm.pool : []).filter(e => e && e.enabled !== false && e.model);
+        const q = String(item.label).toLowerCase();
+        const hit = pool.find(e => e.id === item.label || String(e.label || '').toLowerCase() === q || String(e.model || '').toLowerCase() === q);
+        if (hit) await applyPoolEntry(ag, hit.id);
+      }
       clearAndClose(input);
       return;
     }
@@ -570,6 +591,8 @@
     };
     setTimeout(tryTab, 120);
   }
+  // 暴露给其他模块（本文件外层是 IIFE）：语音设置页等需要跳转到指定设置标签
+  window.openSettingsTab = openSettingsTab;
 
   async function exportConversation(ag, format) {
     if (!ag) return;
@@ -586,21 +609,34 @@
     await exportConversationToFile(conv, format === 'json' ? 'json' : 'md');
   }
 
-  async function applyModel(ag, modelId) {
-    if (!ag || !modelId) return;
+  async function applyPoolEntry(ag, entryId) {
+    if (!ag || !entryId) return;
     const s = ag.settings || {};
-    const provider = s.llm?.provider || 'openai-compat';
-    ag.llmOverride = ag.llmOverride || {};
-    ag.llmOverride.model = modelId;
+    const pool = Array.isArray(s.llm?.pool) ? s.llm.pool : [];
+    const entry = pool.find(e => e && e.id === entryId);
+    if (!entry) {
+      if (typeof window.showToast === 'function') window.showToast('模型条目不存在（可能已被删除）', 'warn', 3000);
+      return;
+    }
+    ag.llmOverride = {
+      ...(ag.llmOverride || {}),
+      model: entry.model,
+      poolEntryId: entry.id,
+      provider: entry.provider || null,
+      apiUrl: entry.apiUrl || null,
+      apiKey: entry.apiKey || null,
+      vision: entry.vision === true,
+      reasoningEffort: entry.effort || 'off'
+    };
     let extra = '';
     try {
-      const apiUrl = provider === 'opencode-zen' ? '' : (s.llm?.apiUrl || '');
-      const apiKey = provider === 'opencode-zen' ? (s.llm?.zenApiKey || '') : (s.llm?.apiKey || '');
-      const res = await window.api.llmCapabilities?.(provider, modelId, apiUrl, apiKey);
+      const provider = entry.provider || 'openai-compat';
+      const apiUrl = provider === 'opencode-zen' || provider === 'opencode-go' ? '' : (entry.apiUrl || '');
+      const apiKey = entry.apiKey || '';
+      const res = await window.api.llmCapabilities?.(provider, entry.model, apiUrl, apiKey);
       if (res && res.ok && Array.isArray(res.variants) && res.variants.length) {
         const ids = res.variants.map(v => v.id);
-        const cur = ag.getActiveReasoningEffort();
-        if (!ids.includes(cur)) {
+        if (!ids.includes(ag.llmOverride.reasoningEffort)) {
           const def = res.defaultId || 'off';
           ag.llmOverride.reasoningEffort = def;
           const label = (res.variants.find(v => v.id === def) || {}).label || def;
@@ -610,7 +646,9 @@
     } catch (_) { /* 收敛失败不阻断切换 */ }
     if (typeof ag.applySettings === 'function') { try { ag.applySettings(ag.settings); } catch (_) {} }
     try { await ag.saveToHistory?.(); } catch (_) {}
-    if (typeof window.showToast === 'function') window.showToast(`已切换模型：${modelId}（仅本会话）${extra}`, 'success', 4000);
+    if (typeof window.showToast === 'function') {
+      window.showToast(`已切换模型：${entry.label || entry.model}（仅本会话；切换会重建提示词缓存，可能短暂变慢）${extra}`, 'success', 4500);
+    }
   }
 
   async function applyVariant(ag, item) {

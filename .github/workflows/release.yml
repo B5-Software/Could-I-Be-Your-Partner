@@ -76,7 +76,6 @@ jobs:
         uses: actions/cache@v6
         with:
           path: |
-            assets/voice-models
             assets/ui-fonts
             assets/geogebra-app
             assets/geogebra

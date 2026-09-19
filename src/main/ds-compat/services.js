@@ -312,6 +312,7 @@ class CibypLlmService extends Service {
       sessionKey: request.sessionKey || null
     });
     const result = await llmRetry.fetchLLMWithRetry({
+      label: 'LLM:ds-plugin',
       apiUrl: req.url,
       apiKey: req.headers['x-api-key'] || llm.apiKey || llm.zenApiKey || '',
       headers: req.headers,
@@ -326,6 +327,10 @@ class CibypLlmService extends Service {
       if (typeof result.releaseController === 'function') result.releaseController();
     }
     const parsed = LLMProviders.parseLLMResponse(raw || {}, req.transport || 'openai');
+    {
+      const u = parsed.usage || {};
+      console.log(`[LLM:ds-plugin ${require('../req-log').ts()}] ✓ ${parsed.model || req.body.model || ''} tokens:${u.prompt_tokens || 0}+${u.completion_tokens || 0}=${u.total_tokens || 0}`);
+    }
     return {
       content: parsed.content || parsed.choices?.[0]?.message?.content || '',
       reasoning: parsed.reasoning || parsed.choices?.[0]?.message?.reasoning || null,

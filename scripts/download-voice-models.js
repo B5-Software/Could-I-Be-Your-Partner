@@ -441,17 +441,25 @@ function downloadModel(m) {
 }
 
 // ========== 主流程 ==========
+// 语音模型默认**不下载**（不随安装包分发，改由应用内「设置 → 资源下载」手动下载）。
+// 仅在显式传入 --voice 时下载到 assets/voice-models（维护者本地/离线打包用）。
+const DOWNLOAD_VOICE = process.argv.includes('--voice');
+
 function main() {
-  console.log('[voice-models] 开始下载语音模型（目标:', OUT, ')');
-  ensureDir(OUT);
   let hasError = false;
-  for (const m of MODELS) {
-    try {
-      downloadModel(m);
-    } catch (e) {
-      hasError = true;
-      console.error(`[voice-models] ${m.name} 下载失败:`, e.message);
+  if (DOWNLOAD_VOICE) {
+    console.log('[voice-models] 开始下载语音模型（--voice，目标:', OUT, ')');
+    ensureDir(OUT);
+    for (const m of MODELS) {
+      try {
+        downloadModel(m);
+      } catch (e) {
+        hasError = true;
+        console.error(`[voice-models] ${m.name} 下载失败:`, e.message);
+      }
     }
+  } else {
+    console.log('[voice-models] 跳过语音模型（不再随包分发；应用内「设置 → 资源下载」手动下载）');
   }
   // UI 字体：复用同一套 aria2c → curl 下载引擎
   console.log('[ui-fonts] 开始下载 UI 字体（目标:', FONT_OUT, ')');
@@ -476,6 +484,7 @@ function main() {
   // piper-de espeak-ng-data 与 kokoro 共享（vits-piper 模型不内置该目录）
   // 非 Windows 用符号链接节省体积；Windows 复制目录——junction 保存绝对路径，
   // actions/cache 还原后常成断链（7za 归档时 "The system cannot find the path specified"）。
+  if (DOWNLOAD_VOICE) {
   const piperDir = path.join(OUT, 'tts/vits-piper-de_DE-thorsten-medium');
   const kokoroDataDir = path.join(OUT, 'tts/kokoro-int8-multi-lang-v1_0/espeak-ng-data');
   const piperDataDir = path.join(piperDir, 'espeak-ng-data');
@@ -500,11 +509,12 @@ function main() {
       }
     }
   }
+  }
   if (hasError) {
     console.error('[voice-models] 存在下载失败，以非零退出码终止构建');
     process.exitCode = 1;
   } else {
-    console.log('[voice-models] 语音模型、UI 字体与 GeoGebra 离线包全部就绪');
+    console.log('[voice-models] UI 字体与 GeoGebra 离线包就绪' + (DOWNLOAD_VOICE ? '；语音模型已就绪' : '（语音模型已跳过）'));
   }
 }
 

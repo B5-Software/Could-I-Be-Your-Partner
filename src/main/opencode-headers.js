@@ -4,15 +4,18 @@
  *
  * OpenCode 官方请求头组（借鉴 opencode 开源实现 packages/opencode/src/session/llm/request.ts）：
  * 对 providerID 以 "opencode" 开头的模型，官方客户端总是发送：
- *   x-opencode-session: <会话 ID>          （Go 网关强制要求，用于会话亲和路由/前缀缓存）
- *   x-opencode-request: <请求 ID>
- *   x-opencode-client: <客户端标识>        （本应用如实标识为 cibyp；网关转发上游前会剥离）
+ *   x-opencode-session: <会话 ID>          （Go 网关强制要求；自 2026-09 起校验官方 ID 形状）
+ *   x-opencode-request: <请求 ID>          （同上，官方形状 msg_<12 hex><14 base62>）
+ *   x-opencode-client: <客户端标识>        （官方 TUI 为 "cli"）
  *   x-opencode-project: <项目 ID>
- *   User-Agent: opencode/<version>         （仅免费模型门控需要 —— 本应用不自动注入，
+ *   User-Agent: opencode/<version>         （免费模型门控需要 —— 本应用不自动注入，
  *                                           由用户在设置中主动添加，并已告知官方方案与风险）
- * 免费模型的上游（Console 推理池）按 User-Agent: opencode/* 门控；官方未登录时
- * Authorization 使用字面量 "public"（provider.ts: options: { apiKey: "public" }）。
- * 网关会在转发上游前剥离 x-opencode-* 头，仅 User-Agent 透传，用于免费池校验。
+ * 免费模型的上游（Console 推理池）当前校验客户端身份（2026-09-17 起收紧，实测）：
+ *   1. User-Agent 必须形如 opencode/<正式发布版本>（>=1.17.0），版本串不能带 git 后缀；
+ *   2. x-opencode-session / x-opencode-request 必须符合官方 ID 形状
+ *      （<prefix>_<12 hex><14 base62>，共 26 字符；UUID/任意串会直接 403 FreeTierError）；
+ *   3. 匿名 Authorization: Bearer public 目前仍被免费池拒绝，需要已登录的 Zen key。
+ * 官方未登录时 Authorization 使用字面量 "public"（provider.ts: options: { apiKey: "public" }）。
  *
  * 同时提供"自定义请求头"通用能力：所有 AI API（文本/VLM/生图等）可配置任意请求头。
  */
@@ -174,17 +177,53 @@ function mergeCustomHeaders(baseHeaders, list) {
 // 使用 kode-ai 兼容实现的默认值 "global"，网关不解析该值）。
 const OPENCODE_PROJECT_ID = 'global';
 // 客户端标识：与官方默认一致（request.ts 使用 flags.client，TUI 为 "cli"；
-// 网关转发上游前会剥离该头，仅用于 OpenCode 侧路由/日志）。
+// 免费池身份校验会读取该头）。
 const OPENCODE_CLIENT_ID = 'cli';
 
-// 每进程稳定的兜底会话 ID（无 sessionKey 时保证同一进程内请求亲和）
-const _processSessionId = crypto.randomUUID();
+// 官方 ID 形状（packages/opencode/src/id/id.ts）：<prefix>_<12 hex><14 base62>，共 26 字符。
+// 免费池网关自 2026-09 起按此形状校验 x-opencode-session / x-opencode-request，
+// 形状不符（UUID / 任意串）会直接 403 FreeTierError。
+const OPENCODE_SESSION_RE = /^ses_[0-9a-f]{12}[0-9A-Za-z]{14}$/;
+const OPENCODE_REQUEST_RE = /^msg_[0-9a-f]{12}[0-9A-Za-z]{14}$/;
+const BASE62_CHARS = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
 
 /**
- * 生成 x-opencode-request 兜底值（官方为升序消息 ID，网关不解析，任意唯一串即可）。
+ * 生成 n 位 base62 随机串（官方 randomBase62 同款字符集）。
+ */
+function randomBase62(length) {
+  const bytes = crypto.randomBytes(length);
+  let out = '';
+  for (let i = 0; i < length; i++) out += BASE62_CHARS[bytes[i] % 62];
+  return out;
+}
+
+/**
+ * 把任意会话标识规范化为官方会话 ID 形状：ses_<12 hex><14 base62>。
+ * 同一 sessionKey 恒定映射同一值（跨请求稳定 → 提示词缓存/路由亲和）；
+ * 已是官方形状的原样保留。
+ * @param {string} [sessionKey]
+ * @returns {string}
+ */
+function canonicalizeSessionId(sessionKey) {
+  const raw = String(sessionKey || '').trim();
+  if (OPENCODE_SESSION_RE.test(raw)) return raw;
+  // sha256 确定性派生：前 12 位 hex + 后 14 位 base62，无需持久化
+  const digest = crypto.createHash('sha256')
+    .update(`opencode\0cibyp\0${raw || 'default'}`)
+    .digest();
+  let tail = digest.subarray(0, 6).toString('hex');
+  for (let i = 6; i < 20; i++) tail += BASE62_CHARS[digest[i] % 62];
+  return `ses_${tail}`;
+}
+
+/**
+ * 生成官方形状的 x-opencode-request：msg_<12 hex 时间戳><14 base62>（每次调用唯一）。
  */
 function makeRequestId() {
-  return `req_${Date.now().toString(36)}_${crypto.randomBytes(4).toString('hex')}`;
+  const now = BigInt(Date.now()) * 0x1000n + BigInt(Math.floor(Math.random() * 0x1000));
+  const tb = Buffer.alloc(6);
+  for (let i = 0; i < 6; i++) tb[i] = Number((now >> BigInt(40 - 8 * i)) & 0xffn);
+  return `msg_${tb.toString('hex')}${randomBase62(14)}`;
 }
 
 /**
@@ -195,9 +234,10 @@ function makeRequestId() {
  * @returns {object} 需要附加的头
  */
 function buildOpenCodeHeaders(opts = {}) {
+  const requestId = String(opts.requestId || '').trim();
   return {
-    'x-opencode-session': opts.sessionKey || _processSessionId,
-    'x-opencode-request': opts.requestId || makeRequestId(),
+    'x-opencode-session': canonicalizeSessionId(opts.sessionKey),
+    'x-opencode-request': OPENCODE_REQUEST_RE.test(requestId) ? requestId : makeRequestId(),
     'x-opencode-client': OPENCODE_CLIENT_ID,
     'x-opencode-project': OPENCODE_PROJECT_ID
   };
@@ -219,7 +259,9 @@ function applyProviderHeaders({ url, headers, llm, sessionKey, requestId }) {
     for (const [k, v] of Object.entries(auto)) {
       if (out[k] === undefined || out[k] === null || out[k] === '') out[k] = v;
     }
-    // Authorization 兜底：官方未登录时使用字面量 "public"（免费模型可用）
+    // Authorization 兜底：官方未登录时使用字面量 "public"（provider.ts）。
+    // 注意：public 目前仅能拉模型列表（GET /zen/v1/models 返回 200），
+    // 推理请求会被免费池拒绝（403 FreeTierError），需已登录的 Zen key。
     const hasAuth = Object.keys(out).some(k => k.toLowerCase() === 'authorization');
     if (!hasAuth) out['Authorization'] = 'Bearer public';
   }
@@ -231,6 +273,8 @@ module.exports = {
   OPENCODE_DEFAULT_VERSION,
   OPENCODE_PROJECT_ID,
   OPENCODE_CLIENT_ID,
+  OPENCODE_SESSION_RE,
+  OPENCODE_REQUEST_RE,
   setOpenCodeVersionStore,
   getOpenCodeVersion,
   getOpenCodeUserAgent,
@@ -239,6 +283,9 @@ module.exports = {
   isOpenCodeGoUrl,
   normalizeHeaderList,
   mergeCustomHeaders,
+  randomBase62,
+  canonicalizeSessionId,
+  makeRequestId,
   buildOpenCodeHeaders,
   applyProviderHeaders
 };

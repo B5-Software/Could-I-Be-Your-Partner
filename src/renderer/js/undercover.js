@@ -90,6 +90,22 @@ ${roleHint}
       ? '你是卧底。你需要把怀疑引向平民，保护自己。'
       : '你是平民。请根据发言找出描述可疑的人。';
 
+    // 决策模型优先：从存活玩家中选一个（choice），低置信/未启用回退 LLM
+    if (typeof window.gameAPI?.decisionChoice === 'function' && aliveNames.length > 0) {
+      try {
+        const criteria = {};
+        for (const n of aliveNames) criteria[n] = `玩家 ${n} 是卧底的可能性`;
+        const r = await window.gameAPI.decisionChoice({
+          state: `你是「${player.name}」，你的词是「${player.word}」。${roleHint}\n发言记录：\n${prevDescs}`,
+          instructions: '谁最可能是卧底？（只能从存活玩家中选择）',
+          criteria,
+          key: 'vote',
+          usage: 'gameDecisions'
+        });
+        if (r && r.value && aliveNames.includes(r.value)) return r.value;
+      } catch (_) { /* 回退 LLM */ }
+    }
+
     const systemPrompt = `你是「${player.name}」，正在玩谁是卧底游戏的投票环节。
 你的词是：「${player.word}」
 ${roleHint}

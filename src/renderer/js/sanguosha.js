@@ -666,6 +666,22 @@ ${player.hero.skillFn === 'paoxiao' ? '(咆哮技能：可无限出杀)' : ''}
       const systemPrompt = `你是三国杀AI玩家「${player.hero.name}」(${ROLE_NAMES[player.role]})。有人对你使用了【杀】，你需要决定是否使用闪来抵消。`;
       const userPrompt = `当前局势:\n${playerSummaries}\n\n你的HP: ${player.hp}/${player.maxHp}\n手牌数: ${player.hand.length}\n${shan ? '你有闪可以使用' : '你可以用龙胆技能将杀当闪使用'}\n\n是否使用闪？回复"是"或"否"，不要解释。`;
 
+      // 决策模型优先（noul）：低置信/未启用回退 LLM
+      if (typeof window.gameAPI?.decisionNoul === 'function') {
+        try {
+          const r = await window.gameAPI.decisionNoul({
+            state: `AI「${player.hero.name}」(${ROLE_NAMES[player.role]})，HP ${player.hp}/${player.maxHp}，手牌 ${player.hand.length}。局势：\n${playerSummaries}\n有人对 AI 使用【杀】${shan ? '，AI 有闪' : '，AI 可用龙胆将杀当闪'}`,
+            instructions: '是否应该使用闪来抵消这次【杀】？',
+            key: 'block',
+            usage: 'gameDecisions'
+          });
+          if (r && (r.value === true || r.value === false)) {
+            if (!r.value && player.hp > 1) return null;
+            return canBlock;
+          }
+        } catch (_) { /* 回退 LLM */ }
+      }
+
       const resp = await this._askLLM(systemPrompt, userPrompt, player.index);
       if (resp && resp.includes('否')) {
         // LLM decided not to block - but if HP critical, override
@@ -684,6 +700,22 @@ ${player.hero.skillFn === 'paoxiao' ? '(咆哮技能：可无限出杀)' : ''}
       const { playerSummaries } = this._buildGameSummary(player);
       const systemPrompt = `你是三国杀AI玩家「${player.hero.name}」(${ROLE_NAMES[player.role]})。你正处于决斗中，需要决定是否出杀来继续决斗。`;
       const userPrompt = `当前局势:\n${playerSummaries}\n\n你的HP: ${player.hp}/${player.maxHp}\n手牌中杀的数量: ${player.hand.filter(c => c.key === 'sha').length}\n\n是否出杀继续决斗？回复"是"或"否"。`;
+
+      // 决策模型优先（noul）：低置信/未启用回退 LLM
+      if (typeof window.gameAPI?.decisionNoul === 'function') {
+        try {
+          const r = await window.gameAPI.decisionNoul({
+            state: `AI「${player.hero.name}」(${ROLE_NAMES[player.role]})，HP ${player.hp}/${player.maxHp}，手牌杀数量 ${player.hand.filter(c => c.key === 'sha').length}。局势：\n${playerSummaries}`,
+            instructions: '是否应该出【杀】继续决斗？',
+            key: 'fight',
+            usage: 'gameDecisions'
+          });
+          if (r && (r.value === true || r.value === false)) {
+            if (!r.value && player.hp > 1) return null;
+            return sha;
+          }
+        } catch (_) { /* 回退 LLM */ }
+      }
 
       const resp = await this._askLLM(systemPrompt, userPrompt, player.index);
       if (resp && resp.includes('否') && player.hp > 1) {

@@ -168,6 +168,48 @@ function zenModelProviderType(modelId) {
   return 'openai-compat';
 }
 
+// ---- OpenCode Zen 匿名免费池适配（2026-09-19 实测）----
+// 匿名请求（Authorization: Bearer public）只接受“agent 形状”：stream:true + 工具名包含
+// bash/edit/glob/grep/read 五个（仅名字参与校验，schema/描述可用最小占位）。缺任一项均返回
+// 403 FreeTierError。带真实 Zen key 的请求不受此限制。
+const FREE_TIER_CORE_TOOLS = ['bash', 'edit', 'glob', 'grep', 'read'];
+
+const FREE_TIER_AGENT_TOOLS = {
+  bash: { type: 'function', function: { name: 'bash', description: '在终端执行 shell 命令并返回输出', parameters: { type: 'object', properties: { command: { type: 'string', description: '要执行的命令' } }, required: ['command'] } } },
+  read: { type: 'function', function: { name: 'read', description: '读取文件内容', parameters: { type: 'object', properties: { filePath: { type: 'string' }, offset: { type: 'number' }, limit: { type: 'number' } }, required: ['filePath'] } } },
+  edit: { type: 'function', function: { name: 'edit', description: '按字符串替换编辑文件', parameters: { type: 'object', properties: { filePath: { type: 'string' }, oldString: { type: 'string' }, newString: { type: 'string' }, replaceAll: { type: 'boolean' } }, required: ['filePath', 'oldString', 'newString'] } } },
+  glob: { type: 'function', function: { name: 'glob', description: '按通配符查找文件', parameters: { type: 'object', properties: { pattern: { type: 'string' }, path: { type: 'string' } }, required: ['pattern'] } } },
+  grep: { type: 'function', function: { name: 'grep', description: '在文件内容中检索', parameters: { type: 'object', properties: { pattern: { type: 'string' }, path: { type: 'string' }, include: { type: 'string' } }, required: ['pattern'] } } },
+};
+
+const FREE_TIER_STUB_TOOLS = (() => {
+  const out = {};
+  for (const name of FREE_TIER_CORE_TOOLS) {
+    out[name] = { type: 'function', function: { name, description: 'Reserved compatibility tool; do not call.', parameters: { type: 'object', properties: {} } } };
+  }
+  return out;
+})();
+
+/** 是否匿名 Zen（public / 未配置 key） */
+function isAnonymousZen(llm) {
+  const key = String((llm && (llm.zenApiKey || llm.apiKey)) || '').trim();
+  return !key || key === 'public';
+}
+
+/**
+ * 合并免费池要求的核心工具：调用方已有工具 → 补全缺失项（真实描述）；
+ * 无工具的辅助调用（标题/游戏/描述等）→ 注入占位定义，避免模型误用。
+ */
+function mergeFreeTierTools(tools) {
+  const list = Array.isArray(tools) ? tools.slice() : [];
+  const present = new Set(list.map(t => t && (t.function?.name || t.name)).filter(Boolean));
+  const source = list.length > 0 ? FREE_TIER_AGENT_TOOLS : FREE_TIER_STUB_TOOLS;
+  for (const name of FREE_TIER_CORE_TOOLS) {
+    if (!present.has(name)) list.push(source[name]);
+  }
+  return list;
+}
+
 /**
  * Build the full request URL + headers + body for a given provider config.
  * @param {object} llm - settings.llm (with provider, apiUrl, apiKey, model, etc.)
@@ -181,25 +223,39 @@ function buildLLMRequest(llm, opts) {
   // 允许调用方（如游戏）通过 opts.reasoningEffort 覆盖全局设置，
   // 避免思考模型把所有 token 都花在 reasoning 上导致 content 为空。
   const reasoningEffort = opts.reasoningEffort || llm.reasoningEffort || 'off';
+  // 匿名 Zen：免费池强制 agent 形状（stream + 核心工具名），带 key 不受限
+  const zenAnonymous = provider === 'opencode-zen' && isAnonymousZen(llm);
+  const buildOpts = zenAnonymous
+    ? { ...opts, stream: true, tools: mergeFreeTierTools(opts.tools) }
+    : opts;
 
   let req;
   if (provider === 'opencode-zen') {
-    req = buildZenRequest(llm, opts, reasoningEffort);
+    req = buildZenRequest(llm, buildOpts, reasoningEffort);
   } else if (provider === 'opencode-go') {
-    req = buildOpencodeGoRequest(llm, opts, reasoningEffort);
+    req = buildOpencodeGoRequest(llm, buildOpts, reasoningEffort);
   } else if (provider === 'anthropic-compat') {
-    req = buildAnthropicRequest(llm, opts, reasoningEffort);
+    req = buildAnthropicRequest(llm, buildOpts, reasoningEffort);
   } else if (provider === 'openai-responses') {
-    req = buildResponsesRequest(llm, opts, reasoningEffort);
+    req = buildResponsesRequest(llm, buildOpts, reasoningEffort);
   } else {
     // default: openai-compat
-    req = buildOpenAIRequest(llm, opts, reasoningEffort);
+    req = buildOpenAIRequest(llm, buildOpts, reasoningEffort);
+  }
+
+  // 匿名 Zen 兜底：强制 stream（部分 builder 只在 opts.stream 时带 stream_options）
+  if (zenAnonymous) {
+    req.body.stream = true;
+    if (req.transport === 'openai' && !req.body.stream_options) {
+      req.body.stream_options = { include_usage: true };
+    }
+    req.zenAnonymous = true;
   }
 
   // 统一请求头应用（所有种类 API 生效）：
   // 1) 自定义请求头（用户配置，可覆盖任何自动头）；
-  // 2) OpenCode 官方头组（URL 命中 opencode.ai 时自动补齐：免费模型 UA 门控、
-  //    Go 订阅 x-opencode-session 门控、无 key 时 Authorization: Bearer public）。
+  // 2) OpenCode 官方头组（URL 命中 opencode.ai 时自动补齐并规范化为官方 ID 形状：
+  //    免费模型 UA 门控、x-opencode-session 格式校验、无 key 时 Authorization: Bearer public）。
   req.headers = ocHeaders.applyProviderHeaders({
     url: req.url,
     headers: req.headers,
@@ -729,6 +785,9 @@ module.exports = {
   REASONING_BUDGET_MAP,
   REASONING_EFFORT_LEVELS,
   VARIANT_LABELS,
+  FREE_TIER_CORE_TOOLS,
+  isAnonymousZen,
+  mergeFreeTierTools,
   makeVariantTable,
   anthropicThinkingMode,
   resolveReasoningVariants,

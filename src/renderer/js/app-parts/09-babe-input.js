@@ -1260,10 +1260,15 @@
     try {
       const r = await window.api.voiceGetStatus();
       if (r && r.ok) {
-        if (r.missing && r.missing.length) {
+        const caps = r.capabilities;
+        if (caps) {
+          const mark = (ok) => (ok ? '就绪' : '缺失');
+          const deNote = caps.ttsDe && caps.ttsDe.ready === false ? '（德语音色可选，未下载）' : '';
+          el.textContent = `语音识别: ${mark(caps.stt?.ready !== false)} · 语音朗读: ${mark(caps.tts?.ready !== false)}${deNote} · 后台唤醒: ${mark(caps.wake?.ready !== false)}`;
+        } else if (r.missing && r.missing.length) {
           el.textContent = '缺失模型: ' + r.missing.join(', ');
         } else {
-          el.textContent = '内置模型就绪（whisper-base + Kokoro 中英 + Piper 德语）';
+          el.textContent = '模型就绪（Whisper 识别 + Kokoro 中英 + Piper 德语）';
         }
       } else {
         el.textContent = '语音引擎未启动或模型缺失';
@@ -1271,6 +1276,245 @@
     } catch {
       el.textContent = '无法查询引擎状态';
     }
+    refreshVoiceGate().catch(() => {});
+  }
+
+  /** 语音模型门控：按能力（STT / TTS / 唤醒）分别锁定，缺一个不影响其余功能 */
+  async function refreshVoiceGate() {
+    const gate = document.getElementById('voice-model-gate');
+    const panel = document.querySelector('.settings-panel[data-tab="voice"]');
+    if (!gate || !panel) return;
+    let st = null;
+    try {
+      st = window.api?.voiceGetStatus ? await window.api.voiceGetStatus() : null;
+    } catch (_) {}
+    if (st && st.supported === false) {
+      gate.classList.add('hidden');
+      panel.querySelectorAll('.settings-group[data-voice-cap]').forEach((g) => {
+        g.classList.remove('voice-locked');
+        try { g.inert = false; } catch (_) {}
+      });
+      return;
+    }
+    const caps = st?.capabilities || null;
+    const missing = st?.missingRequired || [];
+    const sttReady = caps?.stt ? caps.stt.ready !== false : !missing.some(id => String(id).startsWith('stt-'));
+    const ttsReady = caps?.tts ? caps.tts.ready !== false : !missing.includes('tts-kokoro');
+    const wakeReady = caps?.wake ? caps.wake.ready !== false : !(missing.includes('kws') || missing.includes('vad'));
+    const capReady = { stt: sttReady, tts: ttsReady, wake: wakeReady };
+    panel.querySelectorAll('.settings-group[data-voice-cap]').forEach((g) => {
+      const ready = capReady[g.dataset.voiceCap] !== false;
+      g.classList.toggle('voice-locked', !ready);
+      try { g.inert = !ready; } catch (_) { g.style.pointerEvents = ready ? '' : 'none'; }
+    });
+    const allReady = sttReady && ttsReady && wakeReady;
+    gate.classList.toggle('hidden', allReady);
+    const txt = document.getElementById('voice-model-gate-text');
+    if (txt && !allReady) {
+      const labelMap = { vad: 'VAD', kws: '唤醒词 KWS', 'stt-base': 'Whisper base', 'stt-tiny': 'Whisper tiny', 'tts-kokoro': 'Kokoro 语音合成', 'tts-piper-de': 'Piper 德语' };
+      const fmt = (arr) => (arr || []).map(id => labelMap[id] || id).join('、');
+      const parts = [];
+      if (!sttReady) parts.push(`语音识别（缺 ${fmt(caps?.stt?.missing) || 'Whisper'}）`);
+      if (!ttsReady) parts.push(`语音朗读（缺 ${fmt(caps?.tts?.missing) || 'Kokoro'}）`);
+      if (!wakeReady) parts.push(`后台唤醒（缺 ${fmt(caps?.wake?.missing) || 'KWS/VAD'}）`);
+      const usable = [];
+      if (sttReady) usable.push('语音识别');
+      if (ttsReady) usable.push('语音朗读');
+      if (wakeReady) usable.push('后台唤醒');
+      const titleEl = gate.querySelector('.voice-model-gate-text strong');
+      if (titleEl) titleEl.textContent = allReady ? '语音模型未就绪' : '部分语音模型未就绪';
+      txt.textContent = `${parts.join('；')}。${usable.length ? usable.join('、') + ' 仍可正常使用；' : ''}可前往「资源下载」按需下载缺失模型。`;
+    }
+    try { window.VoiceUI?.refreshMicVisibility?.(); } catch (_) {}
+  }
+
+  /* ==================== 设置页：资源下载（语音模型） ==================== */
+  // 注意：这些状态必须用 var（函数作用域提升）。06 在文件顺序上早于 09，
+  // 会在 appEntry 早期就调用 initResourceDownloads()；若用 let/const 会因 TDZ
+  // 抛异常并被调用处的 try/catch 静默吞掉，导致下载按钮事件永远不会绑定。
+  var RES_KIND_LABEL = { vad: 'VAD', kws: '唤醒词', stt: '语音识别', tts: '语音合成' };
+  var _resModels = [];
+  var _resProgress = {}; // modelId -> progress payload
+  var _resActive = new Set(); // 正在下载的 modelId
+  var _resBound = false;
+  var _resDownloadingAll = false;
+
+  function fmtBytes(n) {
+    if (!n || n <= 0) return '0 B';
+    if (n >= 1024 * 1024 * 1024) return (n / 1024 / 1024 / 1024).toFixed(2) + ' GB';
+    if (n >= 1024 * 1024) return (n / 1024 / 1024).toFixed(1) + ' MB';
+    if (n >= 1024) return (n / 1024).toFixed(0) + ' KB';
+    return n + ' B';
+  }
+
+  async function refreshResourcePanel() {
+    const listEl = document.getElementById('res-models-list');
+    if (!listEl || !window.api?.voiceModelsStatus) return;
+    try {
+      const st = await window.api.voiceModelsStatus();
+      if (!st || st.ok === false) throw new Error((st && st.error) || '状态读取失败');
+      _resModels = st.models || [];
+      const mirrorEl = document.getElementById('setting-res-mirror');
+      if (mirrorEl) mirrorEl.value = st.mirror || 'cn';
+      const dirEl = document.getElementById('setting-res-dir');
+      if (dirEl) dirEl.value = st.dir || '';
+      renderResourceModels();
+    } catch (e) {
+      listEl.innerHTML = `<div class="empty-state"><i class="fa-solid fa-triangle-exclamation"></i><p>读取模型状态失败：${e.message}</p></div>`;
+    }
+  }
+
+  function resourceCardHtml(m) {
+    const downloading = _resActive.has(m.id);
+    const p = _resProgress[m.id] || {};
+    const pct = downloading ? Math.max(0, Math.min(99, p.percent || 0)) : (m.installed ? 100 : 0);
+    let status;
+    if (downloading) status = `下载中 ${pct}%${p.file ? ' · ' + p.file.split(/[\\/]/).pop() : ''}`;
+    else if (m.installed) status = `已下载${m.bytes ? ' · ' + fmtBytes(m.bytes) : ''}`;
+    else status = `未下载 · ${m.size || ''}`;
+    const action = downloading
+      ? `<button class="btn-secondary btn-sm" data-res-act="cancel" data-res-id="${m.id}">取消</button>`
+      : m.installed
+        ? `<button class="btn-secondary btn-sm" data-res-act="delete" data-res-id="${m.id}">删除</button>`
+        : `<button class="btn-secondary btn-sm" data-res-act="download" data-res-id="${m.id}"><i class="fa-solid fa-download"></i> 下载</button>`;
+    return `
+      <div class="res-model-card" id="res-model-${m.id}">
+        <div class="res-model-info">
+          <div class="res-model-name">${m.label}
+            <span class="${m.required ? 'res-req' : 'res-opt'}">${m.required ? '必需' : '可选'}</span>
+            <span class="res-kind">${RES_KIND_LABEL[m.kind] || m.kind}</span>
+          </div>
+          <div class="res-model-meta" data-role="status">${status}</div>
+          <div class="res-model-progress" data-role="progress" ${downloading ? '' : 'style="display:none"'}>
+            <div class="res-progress-bar"><i data-role="bar" style="width:${pct}%"></i></div>
+          </div>
+        </div>
+        <div class="res-model-actions">${action}</div>
+      </div>`;
+  }
+
+  function renderResourceModels() {
+    const listEl = document.getElementById('res-models-list');
+    if (!listEl) return;
+    if (!_resModels.length) {
+      listEl.innerHTML = '<div class="empty-state"><p>暂无模型清单</p></div>';
+      return;
+    }
+    listEl.innerHTML = _resModels.map(resourceCardHtml).join('');
+  }
+
+  function updateResourceModelCard(id) {
+    const m = _resModels.find(x => x.id === id);
+    const card = document.getElementById('res-model-' + id);
+    if (!m || !card) return;
+    const downloading = _resActive.has(id);
+    const p = _resProgress[id] || {};
+    const pct = downloading ? Math.max(0, Math.min(99, p.percent || 0)) : (m.installed ? 100 : 0);
+    const statusEl = card.querySelector('[data-role="status"]');
+    const progressEl = card.querySelector('[data-role="progress"]');
+    const barEl = card.querySelector('[data-role="bar"]');
+    if (statusEl) {
+      statusEl.textContent = downloading
+        ? `下载中 ${pct}%${p.file ? ' · ' + p.file.split(/[\\/]/).pop() : ''}`
+        : (m.installed ? `已下载${m.bytes ? ' · ' + fmtBytes(m.bytes) : ''}` : `未下载 · ${m.size || ''}`);
+    }
+    if (progressEl) progressEl.style.display = downloading ? '' : 'none';
+    if (barEl) barEl.style.width = pct + '%';
+  }
+
+  async function startModelDownload(id) {
+    if (!window.api?.voiceModelsDownload || _resActive.has(id)) return;
+    _resActive.add(id);
+    _resProgress[id] = { percent: 0 };
+    updateResourceModelCard(id);
+    try {
+      const r = await window.api.voiceModelsDownload(id);
+      if (r?.ok) window.showToast('模型下载完成', 'success', 2500);
+      else if (r?.error && r.error !== '已取消' && !/取消/.test(r.error)) {
+        window.showToast('下载失败: ' + r.error, 'error', 5000);
+      }
+    } catch (e) {
+      window.showToast('下载失败: ' + e.message, 'error', 5000);
+    } finally {
+      _resActive.delete(id);
+      delete _resProgress[id];
+      await refreshResourcePanel();
+      await refreshVoiceGate();
+      await refreshVoiceModelStatus();
+    }
+  }
+
+  async function downloadAllRequiredModels() {
+    if (_resDownloadingAll) return;
+    _resDownloadingAll = true;
+    const btn = document.getElementById('btn-res-download-all');
+    if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> 下载中…'; }
+    try {
+      const pending = _resModels.filter(m => m.required && !m.installed);
+      for (const m of pending) {
+        await startModelDownload(m.id);
+        await refreshResourcePanel();
+      }
+      if (pending.length === 0) window.showToast('必需模型均已下载', 'info', 2500);
+    } finally {
+      _resDownloadingAll = false;
+      if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fa-solid fa-download"></i> 下载全部必需模型'; }
+      await refreshResourcePanel();
+    }
+  }
+
+  function initResourceDownloads() {
+    if (_resBound) return;
+    _resBound = true;
+    document.getElementById('setting-res-mirror')?.addEventListener('change', async (e) => {
+      await window.api.voiceModelsSetMirror(e.target.value);
+    });
+    document.getElementById('btn-res-choose-dir')?.addEventListener('click', async () => {
+      const r = await window.api.voiceModelsChooseDir();
+      if (r && r.ok) {
+        await refreshResourcePanel();
+        await refreshVoiceGate();
+      }
+    });
+    document.getElementById('btn-res-open-dir')?.addEventListener('click', () => {
+      const dir = document.getElementById('setting-res-dir')?.value;
+      window.api.voiceModelsOpenDir(dir || undefined);
+    });
+    document.getElementById('btn-res-download-all')?.addEventListener('click', () => downloadAllRequiredModels());
+    document.getElementById('res-models-list')?.addEventListener('click', async (e) => {
+      const btn = e.target.closest('button[data-res-act]');
+      if (!btn) return;
+      const id = btn.dataset.resId;
+      const act = btn.dataset.resAct;
+      if (act === 'download') await startModelDownload(id);
+      else if (act === 'cancel') await window.api.voiceModelsCancel(id);
+      else if (act === 'delete') {
+        const confirmed = window.api.confirmSensitive
+          ? await window.api.confirmSensitive('确定删除该语音模型文件吗？')
+          : window.confirm('确定删除该语音模型文件吗？');
+        if (!confirmed) return;
+        const r = await window.api.voiceModelsDelete(id);
+        if (r && r.ok === false) window.showToast(r.error || '删除失败', 'error');
+        await refreshResourcePanel();
+        await refreshVoiceGate();
+      }
+    });
+    window.api.onVoiceModelsProgress?.((p) => {
+      if (!p || !p.modelId) return;
+      _resProgress[p.modelId] = p;
+      updateResourceModelCard(p.modelId);
+    });
+    // 语音设置页「前往资源下载」
+    document.getElementById('btn-voice-goto-resources')?.addEventListener('click', () => {
+      // openSettingsTab 定义在命令面板 IIFE 内，通过 window 暴露；不可用时直接激活面板兜底
+      if (typeof window.openSettingsTab === 'function') {
+        window.openSettingsTab('resources');
+        return;
+      }
+      document.querySelectorAll('.settings-tab').forEach(b => b.classList.toggle('active', b.dataset.tab === 'resources'));
+      document.querySelectorAll('.settings-panel').forEach(p => p.classList.toggle('active', p.dataset.tab === 'resources'));
+      if (typeof refreshResourcePanel === 'function') refreshResourcePanel().catch(() => {});
+    });
   }
 
   function bindVoiceSettings() {

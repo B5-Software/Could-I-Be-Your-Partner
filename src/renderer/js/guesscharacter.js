@@ -134,6 +134,19 @@
 
   // AI 回答玩家提问
   async function aiAnswerQuestion(question) {
+    // 决策模型优先：三分类（是/否/不确定），低置信/未启用回退 LLM
+    if (typeof window.gameAPI?.decisionChoice === 'function') {
+      try {
+        const r = await window.gameAPI.decisionChoice({
+          state: `已选人物：${character}\n问答历史：\n${buildHistoryContext()}\n玩家新提问：${question}`,
+          instructions: '根据人物的真实属性回答玩家提问（是 / 否 / 不确定）',
+          criteria: { '是': '该问题的答案确实为"是"', '否': '该问题的答案确实为"否"', '不确定': '无法判断或问题与人物无关' },
+          key: 'ans',
+          usage: 'gameDecisions'
+        });
+        if (r && r.value) return r.value;
+      } catch (_) { /* 回退 LLM */ }
+    }
     const sys = `你在玩"是否猜人物"游戏。
 你心中已选定人物：「${character}」（不要直接说出名字）。
 玩家将通过提问来猜测，你只能用以下三种方式回答：
@@ -162,6 +175,18 @@
 
   // AI 判定玩家猜测
   async function aiJudgeGuess(guess) {
+    // 决策模型优先：同一人物判定（noul），低置信/未启用回退 LLM
+    if (typeof window.gameAPI?.decisionNoul === 'function') {
+      try {
+        const r = await window.gameAPI.decisionNoul({
+          state: `选定人物：${character}\n玩家猜测：${guess}`,
+          instructions: '玩家猜测的人物与选定人物是否为同一人物？（允许别名/译名差异）',
+          key: 'same',
+          usage: 'gameDecisions'
+        });
+        if (r && (r.value === true || r.value === false)) return r.value;
+      } catch (_) { /* 回退 LLM */ }
+    }
     const sys = `你在玩"是否猜人物"游戏。
 你心中已选定人物：「${character}」。
 玩家现在给出了猜测：「${guess}」。

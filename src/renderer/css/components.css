@@ -2243,3 +2243,36 @@ html[data-modal-animations="off"] .modal-fade-out {
   gap: 8px;
   flex-shrink: 0;
 }
+
+/* ---- 图片预览灯箱：工具栏 / 缩放 / 拖拽 ---- */
+.image-modal-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.image-modal-sep {
+  width: 1px;
+  height: 18px;
+  background: var(--border-color);
+  margin: 0 4px;
+}
+.image-zoom-label {
+  min-width: 52px;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.image-modal-body {
+  overflow: hidden;
+  cursor: grab;
+  position: relative;
+}
+.image-modal-body.dragging { cursor: grabbing; }
+#image-modal-frame {
+  transform-origin: center center;
+  will-change: transform;
+  transition: transform 0.06s linear;
+}
+.image-modal-body.dragging #image-modal-frame { transition: none; }
+#image-preview-img { user-select: none; -webkit-user-drag: none; }

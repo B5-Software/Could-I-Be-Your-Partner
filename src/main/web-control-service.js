@@ -43,6 +43,7 @@ class WebControlService {
     this.onUiEvent = null;     // (data) => void — WebUI UI event forwarded to renderer
     this.onFileUploaded = null; // (filePath, fileName, isImage) => void — WebUI uploaded file, notify renderer to refresh attachments
     this.onToggleOsk = null;   // () => void — WebUI 切换屏幕软键盘
+    this.resolveLocalImage = null; // (path) => string|null — 本地图片路径校验（WebUI 显示 file:// 图片用）
 
     // Upload directory — set by main.js to workspace base dir
     this.workDir = null;
@@ -208,6 +209,32 @@ class WebControlService {
     // ---- Avatars ----
     app.get('/api/avatars', (req, res) => {
       res.json({ ok: true, avatars: this._currentAvatars });
+    });
+
+    // ---- Local image proxy ----
+    // WebUI 页面运行在 http(s)://host:port，无法加载宿主机的 file:// 图片；
+    // 渲染器镜像 DOM 时会把本地图片 src 重写为 /api/local-image?path=<绝对路径>。
+    // 仅允许 main.js 注入的目录白名单（用户数据目录 / 工作区 / 当前工作目录）。
+    app.get('/api/local-image', (req, res) => {
+      try {
+        if (typeof this.resolveLocalImage !== 'function') {
+          return res.status(403).json({ ok: false, error: '本地图片代理未启用' });
+        }
+        const requested = String(req.query.path || '');
+        if (!requested) return res.status(400).json({ ok: false, error: '缺少 path 参数' });
+        const resolved = this.resolveLocalImage(requested);
+        if (!resolved) return res.status(403).json({ ok: false, error: '路径不在允许范围' });
+        const stat = fs.statSync(resolved);
+        if (!stat.isFile() || stat.size > 64 * 1024 * 1024) {
+          return res.status(400).json({ ok: false, error: '无效图片文件' });
+        }
+        const mime = WebControlService.MIME_BY_EXT[path.extname(resolved).toLowerCase()] || 'application/octet-stream';
+        res.setHeader('Content-Type', mime);
+        res.setHeader('Cache-Control', 'private, max-age=3600');
+        fs.createReadStream(resolved).on('error', () => { try { res.end(); } catch (_) {} }).pipe(res);
+      } catch (e) {
+        res.status(404).json({ ok: false, error: e.message });
+      }
     });
 
     // ---- Status ----
@@ -1618,6 +1645,71 @@ html,body{height:100%;overflow:hidden;font-family:-apple-system,BlinkMacSystemFo
   // 轮询兜底：若引擎仍在加载，等 worker 就绪后能力自动广播（setVoiceCapabilities）
   setTimeout(requestVoiceCaps,3000);
 
+  // ---- 图片灯箱（WebUI 本地实现：缩放 / 拖拽 / 下载 / Esc）----
+  (function(){
+    var ov=null,imgEl=null,label=null,scale=1,fitScale=1,tx=0,ty=0,fit=true,drag=null;
+    function ensure(){
+      if(ov)return;
+      ov=document.createElement('div');
+      ov.style.cssText='position:fixed;inset:0;z-index:100000;background:rgba(0,0,0,.82);display:none;align-items:center;justify-content:center;flex-direction:column';
+      ov.innerHTML='<div style="position:absolute;top:12px;right:16px;display:flex;gap:8px;align-items:center">'
+        +'<button data-z="out" style="width:36px;height:36px;border-radius:9px;border:none;background:rgba(255,255,255,.16);color:#fff;font-size:16px;cursor:pointer">−</button>'
+        +'<span data-z="label" style="color:#fff;font-size:12px;min-width:46px;text-align:center;font-variant-numeric:tabular-nums">100%</span>'
+        +'<button data-z="in" style="width:36px;height:36px;border-radius:9px;border:none;background:rgba(255,255,255,.16);color:#fff;font-size:16px;cursor:pointer">+</button>'
+        +'<button data-z="fit" style="height:36px;padding:0 12px;border-radius:9px;border:none;background:rgba(255,255,255,.16);color:#fff;font-size:12px;cursor:pointer">适应窗口</button>'
+        +'<a data-z="dl" download style="height:36px;display:inline-flex;align-items:center;padding:0 12px;border-radius:9px;background:rgba(255,255,255,.16);color:#fff;font-size:12px;text-decoration:none;cursor:pointer">下载</a>'
+        +'<button data-z="close" style="width:36px;height:36px;border-radius:9px;border:none;background:rgba(255,255,255,.16);color:#fff;font-size:16px;cursor:pointer">×</button>'
+        +'</div>'
+        +'<img data-z="img" style="max-width:92vw;max-height:88vh;transform-origin:center center;cursor:grab;user-select:none;-webkit-user-drag:none" draggable="false">';
+      document.body.appendChild(ov);
+      imgEl=ov.querySelector('[data-z="img"]');
+      label=ov.querySelector('[data-z="label"]');
+      function apply(){ imgEl.style.transform='translate('+tx+'px,'+ty+'px) scale('+scale+')'; label.textContent=Math.round(scale*100)+'%'; }
+      function zoom(next,cx,cy){
+        next=Math.max(.05,Math.min(8,next));
+        if(cx!=null){
+          var r=ov.getBoundingClientRect(),px=cx-r.left-r.width/2,py=cy-r.top-r.height/2,k=next/scale;
+          tx=px-(px-tx)*k; ty=py-(py-ty)*k;
+        }
+        scale=next; fit=false; apply();
+      }
+      function fitView(){
+        if(!imgEl.naturalWidth)return;
+        var s=Math.min((window.innerWidth-80)/imgEl.naturalWidth,(window.innerHeight-80)/imgEl.naturalHeight,1);
+        fitScale=Math.max(.05,s); scale=fitScale; tx=0; ty=0; fit=true; apply();
+      }
+      function close(){ ov.style.display='none'; }
+      ov.addEventListener('click',function(e){
+        var z=e.target.getAttribute&&e.target.getAttribute('data-z');
+        if(z==='close'||e.target===ov)close();
+        else if(z==='in')zoom(scale*1.25);
+        else if(z==='out')zoom(scale/1.25);
+        else if(z==='fit')fitView();
+      });
+      ov.addEventListener('wheel',function(e){e.preventDefault();zoom(scale*(e.deltaY<0?1.12:.9),e.clientX,e.clientY);},{passive:false});
+      ov.addEventListener('mousedown',function(e){drag={x:e.clientX,y:e.clientY,tx:tx,ty:ty};imgEl.style.cursor='grabbing';e.preventDefault();});
+      window.addEventListener('mousemove',function(e){if(!drag)return;tx=drag.tx+(e.clientX-drag.x);ty=drag.ty+(e.clientY-drag.y);fit=false;apply();});
+      window.addEventListener('mouseup',function(){drag=null;if(imgEl)imgEl.style.cursor='grab';});
+      imgEl.addEventListener('dblclick',function(){ if(fit){scale=1;tx=0;ty=0;fit=false;apply();}else fitView(); });
+      window.addEventListener('keydown',function(e){ if(ov.style.display==='none')return; if(e.key==='Escape')close(); else if(e.key==='0')fitView(); else if(e.key==='1'){scale=1;tx=0;ty=0;fit=false;apply();} });
+      window.addEventListener('resize',function(){ if(ov.style.display!=='none'&&fit)fitView(); });
+      ov._fit=fitView;
+      ov._img=imgEl;
+    }
+    document.addEventListener('click',function(e){
+      var img=e.target.closest?e.target.closest('img[data-previewable],.chat-image,img.chat-image'):null;
+      if(!img)return;
+      ensure();
+      tx=0;ty=0;fit=true;
+      imgEl.src=img.src;
+      var a=ov.querySelector('[data-z="dl"]');
+      try{ a.href=img.src; a.download=(img.dataset.localPath||'').split(/[\\/]/).pop()||'image.png'; }catch(_){}
+      ov.style.display='flex';
+      var doFit=function(){ov._fit();};
+      if(imgEl.complete&&imgEl.naturalWidth)doFit();else imgEl.onload=doFit;
+    },true);
+  })();
+
   window.voiced=true;
 })();
 </script>
@@ -1625,5 +1717,16 @@ html,body{height:100%;overflow:hidden;font-family:-apple-system,BlinkMacSystemFo
 </html>`;
   }
 }
+
+WebControlService.MIME_BY_EXT = {
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.webp': 'image/webp',
+  '.gif': 'image/gif',
+  '.bmp': 'image/bmp',
+  '.avif': 'image/avif',
+  '.svg': 'image/svg+xml',
+};
 
 module.exports = { WebControlService };

@@ -11,6 +11,8 @@
 
 'use strict';
 
+const { ts, maskUrl, lastUserSnippet, bodyMeta } = require('./req-log');
+
 // ---- Constants ----
 const DEFAULT_MAX_RETRIES = 10;
 const BASE_DELAY_MS = 500;
@@ -165,6 +167,7 @@ async function fetchLLMWithRetry(cfg) {
   const fallbackModel = opts.fallbackModel || null;
   const requestId = opts.requestId || null;
   const onRetry = typeof cfg.onRetry === 'function' ? cfg.onRetry : () => {};
+  const label = cfg.label || 'LLM';
 
   let lastError = null;
   let consecutive529 = 0;
@@ -178,6 +181,14 @@ async function fetchLLMWithRetry(cfg) {
     controller._sessionKey = opts.sessionKey || null;
     _activeControllers.add(controller);
     const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const startedAt = Date.now();
+    // 请求日志：所有 LLM 调用（chat/chatStream/summarize/子代理/游戏/DS 插件）都会经过这里
+    if (attempt === 1) {
+      const meta = bodyMeta(cfg.body);
+      console.log(`[${label} ${ts()}] → POST ${maskUrl(currentEndpoint)} model=${currentModel} msgs=${meta.msgs} tools=${meta.tools} stream=${meta.stream} max=${meta.max == null ? '-' : meta.max} retries=${maxRetries} timeout=${Math.round(timeoutMs / 1000)}s msg="${lastUserSnippet(cfg.body?.messages)}"`);
+    } else {
+      console.log(`[${label} ${ts()}] ↻ attempt ${attempt}/${maxRetries} model=${currentModel} endpoint=${maskUrl(currentEndpoint)}`);
+    }
     let success = false;
     try {
       const reqBody = { ...cfg.body, model: currentModel };
@@ -191,6 +202,7 @@ async function fetchLLMWithRetry(cfg) {
         signal: controller.signal
       });
       clearTimeout(timer);
+      const dur = Date.now() - startedAt;
 
       const cls = classifyHttpResponse(resp);
 
@@ -199,9 +211,10 @@ async function fetchLLMWithRetry(cfg) {
           // 成功返回：controller 保留在 _activeControllers 中（流式响应仍在读取时需可被 abort）
           // 调用方读取完流后应调用 releaseController() 释放
           success = true;
+          console.log(`[${label} ${ts()}] ← ${resp.status} (${dur}ms) model=${currentModel} type=${String(resp.headers.get('content-type') || '').split(';')[0] || 'json'}`);
           return {
             ok: true,
-            response: resp,
+            response: augmentSSEResponse(resp, transport),
             controller,
             releaseController: () => _activeControllers.delete(controller)
           };
@@ -228,6 +241,7 @@ async function fetchLLMWithRetry(cfg) {
           (Array.isArray(errBody?.detail) && errBody.detail[0]?.msg) ||
           errBody?.error?.code ||
           `HTTP ${resp.status}`;
+        console.error(`[${label} ${ts()}] ✗ ${resp.status} (${dur}ms) model=${currentModel} kind=${cls.kind}: ${String(errMsg).slice(0, 300)}`);
         return {
           ok: false,
           error: errMsg,
@@ -239,16 +253,7 @@ async function fetchLLMWithRetry(cfg) {
       // Retryable HTTP status.
       if (cls.kind === 'overloaded') {
         consecutive529++;
-        if (consecutive529 >= MAX_529_RETRIES && fallbackModel && !usingFallback) {
-          usingFallback = true;
-          currentModel = fallbackModel;
-          consecutive529 = 0;
-          onRetry({
-            attempt, status: resp.status, kind: cls.kind,
-            reason: 'fallback_to_' + fallbackModel, requestId
-          });
-          continue; // skip sleep on first fallback switch
-        }
+        // 已移除 529 自动降级模型：会话锁定后不自动切换（保护提示词缓存），仅退避重试
       } else if (cls.kind === 'payment') {
         // 402 计费不足：仅重试有限次数（用户可能中途充值/切换模型），超过上限则终止
         consecutivePayment++;
@@ -258,6 +263,7 @@ async function fetchLLMWithRetry(cfg) {
             `HTTP ${resp.status}: ${errText.slice(0, 200)}`,
             { status: resp.status, retryAfter: cls.retryAfter, kind: cls.kind }
           );
+          console.error(`[${label} ${ts()}] ✗ ${resp.status} (${dur}ms) model=${currentModel} kind=${cls.kind}（计费不足重试次数用尽）: ${lastError.message.slice(0, 200)}`);
           break;
         }
       } else {
@@ -271,6 +277,7 @@ async function fetchLLMWithRetry(cfg) {
         { status: resp.status, retryAfter: cls.retryAfter, kind: cls.kind }
       );
       const delay = getRetryDelay(attempt, cls.retryAfter);
+      console.warn(`[${label} ${ts()}] ↻ ${resp.status} (${dur}ms) model=${currentModel} kind=${cls.kind} → ${Math.round(delay / 1000)}s 后重试（${attempt}/${maxRetries}）: ${String(errText).replace(/\s+/g, ' ').slice(0, 200)}`);
       onRetry({
         attempt, status: resp.status, kind: cls.kind, delayMs: delay,
         requestId, error: lastError.message
@@ -278,18 +285,22 @@ async function fetchLLMWithRetry(cfg) {
       await sleep(delay, controller.signal);
     } catch (err) {
       clearTimeout(timer);
+      const dur = Date.now() - startedAt;
       // 用户主动停止（abortAllRequests 触发）— 不重试、不通知 UI 重试
       if (controller._userAborted) {
         lastError = new LLMError(err.message || String(err), { kind: 'aborted' });
+        console.warn(`[${label} ${ts()}] ✗ 已取消 (${dur}ms) model=${currentModel}`);
         break;
       }
       const cls = classifyThrownError(err);
       if (!cls.retry || attempt >= maxRetries) {
         lastError = new LLMError(err.message || String(err), { kind: cls.kind });
+        console.error(`[${label} ${ts()}] ✗ ${err.name || 'Error'} (${dur}ms) model=${currentModel} kind=${cls.kind}: ${err.message}`);
         break;
       }
       const delay = getRetryDelay(attempt, null);
       lastError = new LLMError(err.message || String(err), { kind: cls.kind });
+      console.warn(`[${label} ${ts()}] ↻ ${err.name || 'Error'} (${dur}ms) model=${currentModel} kind=${cls.kind} → ${Math.round(delay / 1000)}s 后重试（${attempt}/${maxRetries}）: ${err.message}`);
       onRetry({
         attempt, kind: cls.kind, delayMs: delay, requestId, error: err.message
       });
@@ -304,6 +315,7 @@ async function fetchLLMWithRetry(cfg) {
     }
   }
 
+  console.error(`[${label} ${ts()}] ✗ 最终失败 model=${currentModel} kind=${lastError?.kind || 'unknown'}: ${lastError?.message || 'unknown error after retries'}`);
   return {
     ok: false,
     error: lastError?.message || 'unknown error after retries',
@@ -391,7 +403,8 @@ function finalizeResponsesToolCall(state, id) {
  * @param {string} [transport='openai'] - 'openai' or 'anthropic'
  * @param {number} [streamTimeoutMs=120000] - max idle time between chunks before aborting
  */
-async function consumeSSEStream(bodyStream, onChunk, requestId, transport = 'openai', streamTimeoutMs = 120000) {
+async function consumeSSEStream(bodyStream, onChunk, requestId, transport = 'openai', streamTimeoutMs = 120000, info = {}) {
+  const _logStart = info && info.label ? Date.now() : 0;
   const reader = bodyStream.getReader();
   const decoder = new TextDecoder();
   let fullContent = '';
@@ -557,6 +570,14 @@ async function consumeSSEStream(bodyStream, onChunk, requestId, transport = 'ope
   if (!finishReason) {
     finishReason = toolCalls.length ? 'tool_calls' : 'stop';
   }
+  if (info && info.label) {
+    const u = usage || {};
+    const inTok = u.prompt_tokens ?? u.input_tokens ?? 0;
+    const outTok = u.completion_tokens ?? u.output_tokens ?? 0;
+    const durMs = info.durationMs != null ? info.durationMs : (_logStart ? Date.now() - _logStart : null);
+    const dr = durMs != null ? ` (${durMs}ms)` : '';
+    console.log(`[${info.label} ${ts()}] ✓ stream${dr} model=${info.model || ''} finish=${finishReason} content=${fullContent.length}字 reasoning=${fullReasoning.length}字 tools=${toolCalls.length} usage=in:${inTok}/out:${outTok}`);
+  }
   return {
     content: fullContent,
     reasoning: fullReasoning,
@@ -599,11 +620,148 @@ function abortRequests(filter = {}) {
   return count;
 }
 
+// ---- SSE → JSON 聚合 ----
+// 匿名 Zen 免费池会强制流式（见 llm-providers.js），非流式调用方拿到的响应是 SSE。
+// augmentSSEResponse 给 Response 挂一个惰性 json()：只在调用 .json() 时读取并聚合，
+// 流式调用方照常使用 .body，不受影响。
+function aggregateSSEToJSON(text, transport = 'openai') {
+  const events = [];
+  for (const line of String(text || '').split(/\r?\n/)) {
+    const m = /^data:\s?(.*)$/.exec(line);
+    if (!m) continue;
+    const payload = m[1].trim();
+    if (!payload || payload === '[DONE]') continue;
+    try { events.push(JSON.parse(payload)); } catch (_) { /* skip */ }
+  }
+
+  if (transport === 'responses') {
+    for (let i = events.length - 1; i >= 0; i--) {
+      const ev = events[i];
+      if (ev && ev.type === 'response.completed' && ev.response) return ev.response;
+    }
+    let out = '';
+    let usage = null;
+    let model = null;
+    for (const ev of events) {
+      if (ev && ev.type === 'response.output_text.delta' && typeof ev.delta === 'string') out += ev.delta;
+      if (ev && ev.response && ev.response.usage) usage = ev.response.usage;
+      if (ev && ev.response && ev.response.model) model = ev.response.model;
+    }
+    return {
+      id: 'sse_aggregated', object: 'response', status: 'completed', model,
+      output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: out }] }],
+      usage: usage || {}
+    };
+  }
+
+  if (transport === 'anthropic') {
+    let id = null;
+    let model = null;
+    let usage = null;
+    let stopReason = null;
+    let text = '';
+    const blocks = [];
+    for (const ev of events) {
+      if (!ev || typeof ev.type !== 'string') continue;
+      if (ev.type === 'message_start' && ev.message) {
+        id = ev.message.id || id;
+        model = ev.message.model || model;
+        usage = ev.message.usage || usage;
+      } else if (ev.type === 'content_block_start' && ev.content_block && ev.content_block.type === 'tool_use') {
+        blocks[ev.index] = { type: 'tool_use', id: ev.content_block.id, name: ev.content_block.name, input: '' };
+      } else if (ev.type === 'content_block_delta' && ev.delta) {
+        if (ev.delta.type === 'text_delta') text += ev.delta.text || '';
+        else if (ev.delta.type === 'input_json_delta') {
+          if (!blocks[ev.index]) blocks[ev.index] = { type: 'tool_use', id: '', name: '', input: '' };
+          blocks[ev.index].input += ev.delta.partial_json || '';
+        }
+      } else if (ev.type === 'message_delta') {
+        stopReason = (ev.delta && ev.delta.stop_reason) || stopReason;
+        if (ev.usage) usage = { ...(usage || {}), output_tokens: ev.usage.output_tokens ?? (usage || {}).output_tokens };
+      }
+    }
+    const content = [];
+    if (text) content.push({ type: 'text', text });
+    for (const b of blocks) {
+      if (!b || b.type !== 'tool_use') continue;
+      let input = {};
+      try { input = JSON.parse(b.input || '{}'); } catch (_) { /* keep empty */ }
+      content.push({ type: 'tool_use', id: b.id, name: b.name, input });
+    }
+    return { id, type: 'message', role: 'assistant', model, content, stop_reason: stopReason || 'end_turn', usage: usage || { input_tokens: 0, output_tokens: 0 } };
+  }
+
+  // OpenAI chat.completion 流（默认）
+  let id = null;
+  let model = null;
+  let usage = null;
+  let finishReason = null;
+  let content = '';
+  let reasoning = '';
+  const toolAcc = new Map();
+  for (const ev of events) {
+    if (!ev || typeof ev !== 'object') continue;
+    if (ev.id) id = ev.id;
+    if (ev.model) model = ev.model;
+    if (ev.usage) usage = ev.usage;
+    const choice = Array.isArray(ev.choices) ? ev.choices[0] : null;
+    if (!choice) continue;
+    if (choice.finish_reason) finishReason = choice.finish_reason;
+    const d = choice.delta || {};
+    if (typeof d.content === 'string') content += d.content;
+    if (typeof d.reasoning === 'string') reasoning += d.reasoning;
+    else if (typeof d.reasoning_content === 'string') reasoning += d.reasoning_content;
+    for (const tc of d.tool_calls || []) {
+      const idx = tc.index ?? 0;
+      const cur = toolAcc.get(idx) || { id: '', type: 'function', function: { name: '', arguments: '' } };
+      if (tc.id) cur.id = tc.id;
+      if (tc.function && tc.function.name) cur.function.name = tc.function.name;
+      if (tc.function && tc.function.arguments) cur.function.arguments += tc.function.arguments;
+      toolAcc.set(idx, cur);
+    }
+  }
+  const toolCalls = toolAcc.size
+    ? [...toolAcc.entries()].sort((a, b) => a[0] - b[0]).map(([, v]) => v)
+    : undefined;
+  const message = { role: 'assistant', content };
+  if (reasoning) message.reasoning = reasoning;
+  if (toolCalls) message.tool_calls = toolCalls;
+  return {
+    id: id || 'sse_aggregated',
+    object: 'chat.completion',
+    model,
+    choices: [{ index: 0, message, finish_reason: finishReason || 'stop' }],
+    usage: usage || {}
+  };
+}
+
+function augmentSSEResponse(resp, transport) {
+  try {
+    const ct = resp && resp.headers && typeof resp.headers.get === 'function'
+      ? (resp.headers.get('content-type') || '')
+      : '';
+    if (!ct.includes('text/event-stream')) return resp;
+    let cached = null;
+    Object.defineProperty(resp, 'json', {
+      configurable: true,
+      value: async () => {
+        if (cached) return cached;
+        const text = await resp.text();
+        cached = aggregateSSEToJSON(text, transport);
+        return cached;
+      }
+    });
+  } catch (_) { /* 保持原始 Response */ }
+  return resp;
+}
+
 module.exports = {
   LLMError,
   fetchLLMWithRetry,
   consumeSSEStream,
   processResponsesEvent,
+  aggregateSSEToJSON,
+  augmentSSEResponse,
   getRetryDelay,
   classifyHttpResponse,
   classifyThrownError,

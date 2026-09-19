@@ -120,6 +120,10 @@ window.api.onWebControlSendMessage(async (message) => {
           if (Array.isArray(result)) result = extractTextContent(result);
           try { result = JSON.parse(result); } catch {}
           updateToolCallResult(toolName, result);
+          // 恢复 AI 生图气泡（WebUI 载入会话时同样可见）
+          if (toolName === 'generateImage' && result && typeof result === 'object' && result.ok && result.url) {
+            addImageMessage(result.url, { path: result.path });
+          }
         } else if (msg.role === 'system') {
           // 回放历史时显示系统消息（不重复持久化）
           addSystemMessage(msg.content, { persist: false });

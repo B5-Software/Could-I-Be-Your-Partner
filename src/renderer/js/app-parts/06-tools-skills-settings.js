@@ -1,17 +1,22 @@
   // ---- Tools Page ----
   function renderToolsStats(mode) {
     mode = mode || codeEditorModeFilter || 'chat';
-    const enabledSettings = agent.settings.tools || {};
-    const allDefs = getAllToolDefinitions(mode);
+    const isEnabled = (name) => (typeof isToolEnabledForSettings === 'function'
+      ? isToolEnabledForSettings(name, agent.settings)
+      : (agent.settings.tools || {})[name] !== false);
+    // 配置门控工具（生图/决策）未配置时直接不展示
+    const allDefs = typeof filterToolDefsByConfig === 'function'
+      ? filterToolDefsByConfig(getAllToolDefinitions(mode), agent.settings)
+      : getAllToolDefinitions(mode);
     const total = allDefs.length;
-    const enabledCount = allDefs.filter(t => enabledSettings[t.name] !== false).length;
-    const enabledSchemas = getToolSchemas(enabledSettings, mode);
+    const enabledCount = allDefs.filter(t => isEnabled(t.name)).length;
+    const enabledSchemas = getToolSchemas(Object.fromEntries(allDefs.filter(t => isEnabled(t.name)).map(t => [t.name, true])), mode);
     const schemaChars = JSON.stringify(enabledSchemas).length;
     const estTokens = Math.ceil(schemaChars / 4);
     const hasOptimized = (typeof agent.hasUsableOptimizedSelection === 'function')
       ? agent.hasUsableOptimizedSelection()
       : Array.isArray(agent.optimizedToolNames);
-    const activeTools = (typeof agent.getActiveToolNames === 'function') ? agent.getActiveToolNames() : allDefs.filter(t => enabledSettings[t.name] !== false).map(t => t.name);
+    const activeTools = (typeof agent.getActiveToolNames === 'function') ? agent.getActiveToolNames() : allDefs.filter(t => isEnabled(t.name)).map(t => t.name);
     const activeMap = {};
     allDefs.forEach(t => { activeMap[t.name] = false; });
     activeTools.forEach(n => { activeMap[n] = true; });
@@ -38,7 +43,10 @@
     currentToolModalCategory = category;
     const enabledSettings = agent.settings.tools || {};
     const mode = codeEditorModeFilter || 'chat';
-    const tools = getAllToolDefinitions(mode).filter(t => (t.category || '其他') === category);
+    const allDefs = getAllToolDefinitions(mode);
+    const tools = (typeof filterToolDefsByConfig === 'function'
+      ? filterToolDefsByConfig(allDefs, agent.settings)
+      : allDefs).filter(t => (t.category || '其他') === category);
     const meta = typeof getCategoryMeta === 'function' ? getCategoryMeta(category) : { icon: 'fa-layer-group', desc: '' };
     const isMcp = String(category || '').startsWith('MCP:');
     const titleText = isMcp
@@ -57,20 +65,24 @@
       return;
     }
     body.innerHTML = tools.map(tool => {
-      const enabled = enabledSettings[tool.name] !== false;
+      const gated = typeof isConfigGatedTool === 'function' && isConfigGatedTool(tool.name);
+      const enabled = typeof isToolEnabledForSettings === 'function'
+        ? isToolEnabledForSettings(tool.name, agent.settings)
+        : enabledSettings[tool.name] !== false;
       const desc = typeof i18nGetToolDesc === 'function' ? i18nGetToolDesc(tool.name, tool.desc) : tool.desc;
       const dsBadge = tool.pluginId
         ? `<span class="ds-compat-badge ${tool.compatTier || 'native'}">${tool.compatTier || 'native'}</span>`
         : '';
+      const autoBadge = gated ? '<span class="ds-compat-badge native">配置后自动启用</span>' : '';
       return `
         <div class="tools-modal-row ${enabled ? '' : 'disabled'}" data-tool="${escapeHtml(tool.name)}">
           <div class="tmr-main">
-            <div class="tmr-name"><i class="fa-solid tmr-icon ${escapeHtml(tool.icon)}"></i>${escapeHtml(tool.name)}${dsBadge}</div>
+            <div class="tmr-name"><i class="fa-solid tmr-icon ${escapeHtml(tool.icon)}"></i>${escapeHtml(tool.name)}${dsBadge}${autoBadge}</div>
             <div class="tmr-desc">${escapeHtml(desc)}</div>
           </div>
           <div class="tmr-toggle">
             <div class="toggle-switch">
-              <input type="checkbox" ${enabled ? 'checked' : ''} data-tool-name="${escapeHtml(tool.name)}">
+              <input type="checkbox" ${enabled ? 'checked' : ''} ${gated ? 'disabled' : ''} data-tool-name="${escapeHtml(tool.name)}">
               <span class="toggle-slider"></span>
             </div>
           </div>
@@ -78,6 +90,10 @@
     }).join('');
     body.querySelectorAll('input[data-tool-name]').forEach(cb => {
       cb.addEventListener('change', async () => {
+        if (typeof isConfigGatedTool === 'function' && isConfigGatedTool(cb.dataset.toolName)) {
+          cb.checked = true;
+          return; // 门控工具配置后自动启用，不允许手动关闭
+        }
         await updateToolSetting(cb.dataset.toolName, cb.checked, cb);
         renderToolGroupModal(category);
         loadToolsPage();
@@ -155,11 +171,18 @@
     }
     // Filter tools by current mode (Chat vs Code)
     const mode = codeEditorModeFilter || 'chat';
-    const allDefs = getAllToolDefinitions(mode);
+    const allDefsRaw = getAllToolDefinitions(mode);
+    // 配置门控工具（生图/决策）：未配置时不出现在工具页
+    const allDefs = typeof filterToolDefsByConfig === 'function'
+      ? filterToolDefsByConfig(allDefsRaw, agent.settings)
+      : allDefsRaw;
+    const isToolOn = (name) => (typeof isToolEnabledForSettings === 'function'
+      ? isToolEnabledForSettings(name, agent.settings)
+      : enabledSettings[name] !== false);
     const hasOptimized = (typeof agent.hasUsableOptimizedSelection === 'function')
       ? agent.hasUsableOptimizedSelection()
       : Array.isArray(agent.optimizedToolNames);
-    const activeToolSet = new Set((typeof agent.getActiveToolNames === 'function') ? agent.getActiveToolNames() : allDefs.filter(t => enabledSettings[t.name] !== false).map(t => t.name));
+    const activeToolSet = new Set((typeof agent.getActiveToolNames === 'function') ? agent.getActiveToolNames() : allDefs.filter(t => isToolOn(t.name)).map(t => t.name));
     renderToolsStats(mode);
 
     // Sync mode switcher buttons
@@ -220,7 +243,7 @@
     }
 
     const renderRow = ([category, tools]) => {
-      const enabledCount = tools.filter(t => enabledSettings[t.name] !== false).length;
+      const enabledCount = tools.filter(t => isToolOn(t.name)).length;
       const allOn = enabledCount === tools.length;
       const noneOn = enabledCount === 0;
       const meta = typeof getCategoryMeta === 'function' ? getCategoryMeta(category) : { icon: 'fa-layer-group', desc: '' };
@@ -355,8 +378,13 @@
     if (!agent.settings.tools || typeof agent.settings.tools !== 'object') {
       agent.settings.tools = {};
     }
-    const toolsInCategory = getAllToolDefinitions(codeEditorModeFilter || 'chat').filter(t => (t.category || '其他') === category);
+    const allCategoryTools = getAllToolDefinitions(codeEditorModeFilter || 'chat').filter(t => (t.category || '其他') === category);
+    const toolsInCategory = typeof filterToolDefsByConfig === 'function'
+      ? filterToolDefsByConfig(allCategoryTools, agent.settings)
+      : allCategoryTools;
     toolsInCategory.forEach(t => {
+      // 配置门控工具（生图/决策）配置后自动启用，不允许被组开关关闭
+      if (typeof isConfigGatedTool === 'function' && isConfigGatedTool(t.name)) return;
       agent.settings.tools[t.name] = enabled;
     });
     await window.api.setSettings(agent.settings);
@@ -368,6 +396,11 @@
   }
 
   async function updateToolSetting(name, enabled, checkboxEl) {
+    // 配置门控工具（生图/决策）配置后自动启用，不允许手动关闭
+    if (typeof isConfigGatedTool === 'function' && isConfigGatedTool(name)) {
+      if (checkboxEl) checkboxEl.checked = true;
+      return;
+    }
     if (!agent.settings.tools || typeof agent.settings.tools !== 'object') {
       agent.settings.tools = {};
     }
@@ -1011,6 +1044,11 @@
       imgUsageEl.classList.add('warning');
       imgUsageEl.textContent = `今日已用: ${imgUsage} (接近限制 ${imgLimit})`;
     }
+    // 生图多厂商预设 / 高级参数回填（异步，不阻塞设置页渲染）
+    refreshImageGenUI(s.imageGen).catch(() => {});
+    // 模型池 + 决策模型设置回填
+    refreshPoolUI(s).catch(() => {});
+    loadDecisionSettings(s);
 
     document.getElementById('setting-accent-color').value = s.theme.accentColor;
     document.getElementById('setting-bg-color').value = s.theme.backgroundColor;
@@ -3407,9 +3445,15 @@
           const vPanel = document.querySelector('.settings-panel[data-tab="voice"]');
           if (vTab) vTab.hidden = false;
           if (vPanel) vPanel.hidden = false;
+          // 必需模型未下载时锁定语音设置并提示前往「资源下载」
+          if (typeof refreshVoiceGate === 'function') refreshVoiceGate().catch(() => {});
         }
       })
       .catch(() => {});
+  }
+  // 资源下载面板（语音模型）：初始化事件绑定
+  if (typeof initResourceDownloads === 'function') {
+    try { initResourceDownloads(); } catch (_) {}
   }
 
   document.querySelectorAll('.settings-tab').forEach(btn => {
@@ -3425,6 +3469,18 @@
         loadUsageStats(activePeriod ? activePeriod.dataset.period : 'daily');
       }
       if (btn.dataset.tab === 'environment') refreshEnvironmentPanel();
+      if (btn.dataset.tab === 'resources' && typeof refreshResourcePanel === 'function') {
+        refreshResourcePanel().catch(() => {});
+      }
+      if (btn.dataset.tab === 'decision' && typeof refreshDecisionStatus === 'function') {
+        refreshDecisionStatus().catch(() => {});
+      }
+      if (btn.dataset.tab === 'llm' && typeof refreshPoolUI === 'function') {
+        refreshPoolUI().catch(() => {});
+      }
+      if (btn.dataset.tab === 'voice' && typeof refreshVoiceGate === 'function') {
+        refreshVoiceGate().catch(() => {});
+      }
       // 推送设置选项卡和面板的 active 状态到 WebUI/Remote
       document.querySelectorAll('.settings-tab').forEach(b => {
         WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '.settings-tab[data-tab="' + b.dataset.tab + '"]', attr: 'class', value: b.className });
@@ -4023,22 +4079,446 @@
     window.showToast('用量统计已刷新', 'success');
   });
 
-  // Image settings
-  ['setting-img-url', 'setting-img-key', 'setting-img-model', 'setting-img-daily-limit'].forEach(id => {
-    document.getElementById(id).addEventListener('change', async (e) => {
-      const key = { 'setting-img-url': 'apiUrl', 'setting-img-key': 'apiKey', 'setting-img-model': 'model', 'setting-img-daily-limit': 'dailyMaxImages' }[id];
+  // ---- Image settings（多厂商预设 / 高级参数）----
+  let _imageProviders = null;
+  let _imageProviderBound = false;
+
+  async function loadImageProviders() {
+    if (_imageProviders) return _imageProviders;
+    try { _imageProviders = await window.api.imageProviders(); }
+    catch (_) { _imageProviders = { ok: false, providers: [] }; }
+    return _imageProviders;
+  }
+
+  function applyImageProviderFields(g, preset) {
+    const sizeSel = document.getElementById('setting-img-size');
+    if (sizeSel) {
+      const sizes = (preset && preset.sizes && preset.sizes.length) ? preset.sizes : [g?.imageSize || '1024x1024'];
+      const current = (g && g.imageSize) || sizes[0];
+      const options = sizes.includes(current) ? sizes : [current, ...sizes];
+      sizeSel.innerHTML = options.map(s => `<option value="${s}">${s}</option>`).join('');
+      sizeSel.value = current;
+    }
+    const dl = document.getElementById('setting-img-model-presets');
+    if (dl) {
+      dl.innerHTML = ((preset && preset.models) || []).map(m => `<option value="${m}"></option>`).join('');
+    }
+    const hint = document.getElementById('setting-img-provider-hint');
+    if (hint && preset) hint.textContent = preset.hint || '';
+    const tplItem = document.getElementById('setting-img-template-item');
+    if (tplItem) tplItem.style.display = (preset && preset.id === 'custom') ? '' : 'none';
+  }
+
+  function fillImageGenForm(g) {
+    const setVal = (id, v) => { const el = document.getElementById(id); if (el) el.value = v == null ? '' : v; };
+    const setChk = (id, v) => { const el = document.getElementById(id); if (el) el.checked = !!v; };
+    const provSel = document.getElementById('setting-img-provider');
+    if (provSel && g.provider) provSel.value = g.provider;
+    setVal('setting-img-url', g.apiUrl);
+    setVal('setting-img-key', g.apiKey);
+    setVal('setting-img-model', g.model);
+    setVal('setting-img-n', g.n || 1);
+    setVal('setting-img-quality', g.quality || '');
+    setVal('setting-img-background', g.background || '');
+    setVal('setting-img-format', g.outputFormat || '');
+    setVal('setting-img-negative', g.negativePrompt || '');
+    setVal('setting-img-seed', g.seed);
+    setVal('setting-img-steps', g.steps);
+    setVal('setting-img-guidance', g.guidance);
+    setVal('setting-img-style', g.style || '');
+    setVal('setting-img-template', g.bodyTemplate || '');
+    setChk('setting-img-watermark', g.watermark);
+  }
+
+  async function refreshImageGenUI(g) {
+    const data = await loadImageProviders();
+    const providers = (data && data.providers) || [];
+    const provSel = document.getElementById('setting-img-provider');
+    if (!provSel) return;
+    if (!_imageProviderBound) {
+      _imageProviderBound = true;
+      provSel.innerHTML = providers.map(p => `<option value="${p.id}">${p.label}</option>`).join('');
+    }
+    const preset = providers.find(p => p.id === (g?.provider || data.current)) || providers[0] || null;
+    fillImageGenForm(g || {});
+    applyImageProviderFields(g || {}, preset);
+  }
+
+  function bindImageSettings() {
+    if (window.__imgSettingsBound) return;
+    window.__imgSettingsBound = true;
+    const saveField = (id, key, transform) => {
+      document.getElementById(id)?.addEventListener('change', async (e) => {
+        const s = await window.api.getSettings();
+        let v = e.target.value;
+        if (transform) v = transform(v);
+        s.imageGen[key] = v;
+        await saveSettings(s);
+      });
+    };
+    // 厂商切换：保存 + 更新预设（自动填充空 URL / 空模型）
+    document.getElementById('setting-img-provider')?.addEventListener('change', async (e) => {
       const s = await window.api.getSettings();
-      const val = id === 'setting-img-daily-limit' ? parseInt(e.target.value) : e.target.value;
-      s.imageGen[key] = val;
+      const data = await loadImageProviders();
+      const preset = ((data && data.providers) || []).find(p => p.id === e.target.value);
+      s.imageGen.provider = e.target.value;
+      if (preset) {
+        const otherDefaults = ((data && data.providers) || [])
+          .filter(p => p.id !== preset.id).map(p => p.defaultUrl).filter(Boolean);
+        if (!s.imageGen.apiUrl || otherDefaults.includes(s.imageGen.apiUrl)) s.imageGen.apiUrl = preset.defaultUrl || '';
+        if (!s.imageGen.model && preset.models && preset.models.length) s.imageGen.model = preset.models[0];
+      }
+      await saveSettings(s);
+      fillImageGenForm(s.imageGen);
+      applyImageProviderFields(s.imageGen, preset);
+    });
+    saveField('setting-img-url', 'apiUrl');
+    saveField('setting-img-key', 'apiKey');
+    saveField('setting-img-model', 'model');
+    saveField('setting-img-daily-limit', 'dailyMaxImages', (v) => parseInt(v) || 0);
+    document.getElementById('setting-img-size')?.addEventListener('change', async (e) => {
+      const s = await window.api.getSettings();
+      s.imageGen.imageSize = e.target.value;
       await saveSettings(s);
     });
-  });
+    saveField('setting-img-n', 'n', (v) => Math.max(1, Math.min(10, parseInt(v) || 1)));
+    saveField('setting-img-quality', 'quality');
+    saveField('setting-img-background', 'background');
+    saveField('setting-img-format', 'outputFormat');
+    saveField('setting-img-negative', 'negativePrompt');
+    saveField('setting-img-seed', 'seed');
+    saveField('setting-img-steps', 'steps');
+    saveField('setting-img-guidance', 'guidance');
+    saveField('setting-img-style', 'style');
+    saveField('setting-img-template', 'bodyTemplate');
+    document.getElementById('setting-img-watermark')?.addEventListener('change', async (e) => {
+      const s = await window.api.getSettings();
+      s.imageGen.watermark = e.target.checked;
+      await saveSettings(s);
+    });
+  }
+  bindImageSettings();
 
-  document.getElementById('setting-img-size').addEventListener('change', async (e) => {
+  // ---- LLM 模型池（单层：每条自带 provider/URL/Key）----
+  const POOL_PROVIDER_LABELS = {
+    'opencode-zen': 'OpenCode Zen',
+    'opencode-go': 'OpenCode Go',
+    'openai-compat': 'OpenAI 兼容',
+    'openai-responses': 'OpenAI Responses',
+    'anthropic-compat': 'Anthropic 兼容',
+  };
+  const POOL_EFFORT_LABELS = { off: '关闭', auto: '自动', low: '低', medium: '中', high: '高' };
+  let _poolEditingId = null;
+  let _poolBound = false;
+
+  function poolEsc(v) {
+    return String(v == null ? '' : v).replace(/[&<>"']/g, c => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    }[c]));
+  }
+
+  function poolEntryLabel(e) {
+    return e.label || e.model || '未命名模型';
+  }
+
+  function renderPoolList(s) {
+    const listEl = document.getElementById('llm-pool-list');
+    if (!listEl) return;
+    const pool = Array.isArray(s?.llm?.pool) ? s.llm.pool : [];
+    const activeId = s?.llm?.activeEntryId || '';
+    if (pool.length === 0) {
+      listEl.innerHTML = '<div class="empty-state"><i class="fa-solid fa-layer-group"></i><p>模型池为空：点击下方「添加模型」，可自由组合 OpenCode Zen/Go、OpenAI 兼容、Anthropic 兼容等</p></div>';
+    } else {
+      const sorted = pool.slice().sort((a, b) => (a.priority || 0) - (b.priority || 0));
+      listEl.innerHTML = sorted.map((e) => {
+        const enabled = e.enabled !== false;
+        const active = e.id === activeId;
+        return `
+          <div class="llm-pool-card${active ? ' active' : ''}${enabled ? '' : ' disabled'}" data-id="${poolEsc(e.id)}">
+            <div class="llm-pool-main">
+              <div class="llm-pool-name">${poolEsc(poolEntryLabel(e))}
+                <span class="pool-badge provider">${poolEsc(POOL_PROVIDER_LABELS[e.provider] || e.provider || '?')}</span>
+                ${active ? '<span class="pool-badge default">默认</span>' : ''}
+                ${e.vision ? '<span class="pool-badge vision">视觉</span>' : ''}
+                ${enabled ? '' : '<span class="pool-badge off">已禁用</span>'}
+              </div>
+              <div class="llm-pool-meta">${poolEsc(e.model || '')} · 智慧 ${Number(e.intelligence) || 0} · 优先级 ${Number(e.priority) || 0} · Effort ${poolEsc(POOL_EFFORT_LABELS[e.effort] || e.effort || '关闭')}${e.apiKey ? ' · 已配 Key' : ' · 无 Key'}</div>
+            </div>
+            <div class="llm-pool-actions">
+              ${active ? '' : '<button class="btn-secondary btn-sm" data-pool-act="default">设为默认</button>'}
+              <button class="btn-secondary btn-sm" data-pool-act="edit">编辑</button>
+              <button class="btn-secondary btn-sm" data-pool-act="delete">删除</button>
+            </div>
+          </div>`;
+      }).join('');
+    }
+    const routing = s?.llm?.routing || {};
+    const modelStrategyEl = document.getElementById('setting-llm-model-strategy');
+    const effortStrategyEl = document.getElementById('setting-llm-effort-strategy');
+    if (modelStrategyEl) modelStrategyEl.value = routing.modelStrategy === 'intelligence' ? 'intelligence' : 'priority';
+    if (effortStrategyEl) effortStrategyEl.value = routing.effortStrategy === 'jev' ? 'jev' : 'manual';
+    const hintEl = document.getElementById('llm-pool-hint');
+    if (hintEl) {
+      const enabledCount = pool.filter(e => e.enabled !== false).length;
+      hintEl.textContent = pool.length ? `${enabledCount}/${pool.length} 个启用；优先级越小越先被选中` : '';
+    }
+  }
+
+  async function refreshPoolUI(s) {
+    if (!s) s = await window.api.getSettings();
+    renderPoolList(s);
+  }
+
+  async function savePool(pool, extra = {}) {
     const s = await window.api.getSettings();
-    s.imageGen.imageSize = e.target.value;
+    s.llm.pool = pool;
+    if (extra.activeEntryId !== undefined) s.llm.activeEntryId = extra.activeEntryId;
+    if (extra.routing) s.llm.routing = extra.routing;
     await saveSettings(s);
-  });
+    renderPoolList(s);
+  }
+
+  function fillPoolEditor(entry) {
+    const v = (id, val) => { const el = document.getElementById(id); if (el) el.value = val == null ? '' : val; };
+    const c = (id, val) => { const el = document.getElementById(id); if (el) el.checked = !!val; };
+    const e = entry || {};
+    v('pool-edit-label', e.label || '');
+    v('pool-edit-provider', e.provider || 'opencode-zen');
+    v('pool-edit-url', e.apiUrl || '');
+    v('pool-edit-key', e.apiKey || '');
+    v('pool-edit-model', e.model || '');
+    v('pool-edit-ctx', e.contextLength || 131072);
+    v('pool-edit-intelligence', e.intelligence != null ? e.intelligence : 50);
+    v('pool-edit-priority', e.priority != null ? e.priority : 0);
+    v('pool-edit-effort', e.effort || 'off');
+    c('pool-edit-vision', e.vision);
+    c('pool-edit-enabled', e.enabled !== false);
+    const sel = document.getElementById('pool-edit-model-select');
+    if (sel) { sel.classList.add('hidden'); sel.innerHTML = ''; }
+  }
+
+  function openPoolEditor(entry) {
+    _poolEditingId = entry ? entry.id : null;
+    const title = document.getElementById('llm-pool-editor-title');
+    if (title) title.textContent = entry ? '编辑模型' : '添加模型';
+    fillPoolEditor(entry);
+    document.getElementById('llm-pool-editor')?.classList.remove('hidden');
+  }
+
+  function closePoolEditor() {
+    document.getElementById('llm-pool-editor')?.classList.add('hidden');
+    _poolEditingId = null;
+  }
+
+  async function savePoolEditor() {
+    const val = (id) => (document.getElementById(id)?.value || '').trim();
+    const chk = (id) => !!document.getElementById(id)?.checked;
+    const provider = val('pool-edit-provider') || 'openai-compat';
+    const model = val('pool-edit-model');
+    if (!model) { window.showToast('请填写模型 ID', 'error'); return; }
+    const entry = {
+      id: _poolEditingId || ('pool-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6)),
+      label: val('pool-edit-label') || model,
+      provider,
+      apiUrl: val('pool-edit-url'),
+      apiKey: val('pool-edit-key'),
+      model,
+      contextLength: parseInt(val('pool-edit-ctx'), 10) || 131072,
+      intelligence: Math.max(0, Math.min(100, parseInt(val('pool-edit-intelligence'), 10) || 0)),
+      priority: Math.max(0, parseInt(val('pool-edit-priority'), 10) || 0),
+      effort: val('pool-edit-effort') || 'off',
+      vision: chk('pool-edit-vision'),
+      enabled: chk('pool-edit-enabled'),
+    };
+    const s = await window.api.getSettings();
+    const pool = Array.isArray(s.llm.pool) ? s.llm.pool.slice() : [];
+    const idx = pool.findIndex(x => x.id === entry.id);
+    if (idx >= 0) pool[idx] = entry; else pool.push(entry);
+    const activeEntryId = s.llm.activeEntryId || entry.id;
+    await savePool(pool, { activeEntryId });
+    closePoolEditor();
+    window.showToast(idx >= 0 ? '模型已更新' : '模型已添加', 'success', 2000);
+  }
+
+  function bindPoolUI() {
+    if (_poolBound) return;
+    _poolBound = true;
+    document.getElementById('btn-pool-add')?.addEventListener('click', () => openPoolEditor(null));
+    document.getElementById('btn-pool-editor-close')?.addEventListener('click', closePoolEditor);
+    document.getElementById('btn-pool-editor-cancel')?.addEventListener('click', closePoolEditor);
+    document.getElementById('btn-pool-editor-save')?.addEventListener('click', () => { savePoolEditor().catch(e => window.showToast('保存失败: ' + e.message, 'error')); });
+    document.getElementById('llm-pool-editor')?.addEventListener('click', (e) => {
+      if (e.target && e.target.id === 'llm-pool-editor') closePoolEditor();
+    });
+    document.getElementById('btn-pool-edit-fetch')?.addEventListener('click', async () => {
+      const provider = document.getElementById('pool-edit-provider')?.value || '';
+      const apiUrl = document.getElementById('pool-edit-url')?.value || '';
+      const apiKey = document.getElementById('pool-edit-key')?.value || '';
+      const btn = document.getElementById('btn-pool-edit-fetch');
+      if (btn) btn.disabled = true;
+      try {
+        let models = [];
+        if (provider === 'opencode-zen' || provider === 'opencode-go') {
+          const r = await window.api.zenFetchModels();
+          const list = (r && (r.data || r.models)) || [];
+          models = list.map(m => ({ id: m.id, name: m.name || '' }));
+        } else {
+          const r = await window.api.llmFetchModels(provider, apiUrl, apiKey);
+          models = (r && (r.models || r.data)) || [];
+        }
+        const sel = document.getElementById('pool-edit-model-select');
+        if (sel && models.length) {
+          sel.innerHTML = '<option value="">-- 选择模型 --</option>' + models.map(m => `<option value="${poolEsc(m.id)}">${poolEsc(m.name || m.id)}</option>`).join('');
+          sel.classList.remove('hidden');
+        } else {
+          window.showToast('未获取到模型列表', 'warn');
+        }
+      } catch (e) {
+        window.showToast('获取失败: ' + e.message, 'error');
+      } finally {
+        if (btn) btn.disabled = false;
+      }
+    });
+    document.getElementById('pool-edit-model-select')?.addEventListener('change', (e) => {
+      const modelEl = document.getElementById('pool-edit-model');
+      if (modelEl && e.target.value) modelEl.value = e.target.value;
+    });
+    document.getElementById('pool-edit-provider')?.addEventListener('change', (e) => {
+      const urlEl = document.getElementById('pool-edit-url');
+      if (urlEl && !urlEl.value.trim()) {
+        urlEl.placeholder = (e.target.value === 'opencode-zen' || e.target.value === 'opencode-go')
+          ? '留空自动使用 OpenCode 端点'
+          : 'https://api.example.com/v1/chat/completions';
+      }
+    });
+    document.getElementById('llm-pool-list')?.addEventListener('click', async (e) => {
+      const btn = e.target.closest('button[data-pool-act]');
+      const card = e.target.closest('.llm-pool-card');
+      if (!btn || !card) return;
+      const id = card.dataset.id;
+      const s = await window.api.getSettings();
+      const pool = Array.isArray(s.llm.pool) ? s.llm.pool.slice() : [];
+      const idx = pool.findIndex(x => x.id === id);
+      if (idx < 0) return;
+      const act = btn.dataset.poolAct;
+      if (act === 'edit') openPoolEditor(pool[idx]);
+      else if (act === 'default') await savePool(pool, { activeEntryId: id });
+      else if (act === 'delete') {
+        const ok = window.api.confirmSensitive ? await window.api.confirmSensitive('确定删除该模型条目吗？') : window.confirm('确定删除该模型条目吗？');
+        if (!ok) return;
+        pool.splice(idx, 1);
+        const activeEntryId = s.llm.activeEntryId === id ? (pool[0]?.id || '') : s.llm.activeEntryId;
+        await savePool(pool, { activeEntryId });
+      }
+    });
+    document.getElementById('setting-llm-model-strategy')?.addEventListener('change', async (e) => {
+      const s = await window.api.getSettings();
+      s.llm.routing = { ...(s.llm.routing || {}), modelStrategy: e.target.value };
+      await saveSettings(s);
+      renderPoolList(s);
+    });
+    document.getElementById('setting-llm-effort-strategy')?.addEventListener('change', async (e) => {
+      const s = await window.api.getSettings();
+      s.llm.routing = { ...(s.llm.routing || {}), effortStrategy: e.target.value };
+      await saveSettings(s);
+    });
+  }
+  bindPoolUI();
+
+  // ---- 决策模型设置页 ----
+  let _decisionBound = false;
+  const DECISION_USAGE_IDS = {
+    modelRouting: 'setting-decision-use-model',
+    reasoningRouting: 'setting-decision-use-effort',
+    toolSelection: 'setting-decision-use-tools',
+    commandGuard: 'setting-decision-use-guard',
+    gameDecisions: 'setting-decision-use-games',
+    llmTool: 'setting-decision-use-llm-tool',
+    emailIntent: 'setting-decision-use-email',
+    contextRetention: 'setting-decision-use-context',
+  };
+
+  function loadDecisionSettings(s) {
+    const cfg = (s && s.decision) || {};
+    const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = v == null ? '' : v; };
+    const chk = (id, v) => { const el = document.getElementById(id); if (el) el.checked = !!v; };
+    chk('setting-decision-enabled', cfg.enabled);
+    set('setting-decision-provider', cfg.provider === 'typesafe' ? 'typesafe' : 'zen');
+    set('setting-decision-url', cfg.apiUrl || '');
+    set('setting-decision-key', cfg.apiKey || '');
+    set('setting-decision-model', cfg.model || '');
+    set('setting-decision-threshold', cfg.confidenceThreshold != null ? cfg.confidenceThreshold : 0.5);
+    set('setting-decision-guard', cfg.guardThreshold != null ? cfg.guardThreshold : 0.85);
+    set('setting-decision-timeout', cfg.timeoutMs != null ? cfg.timeoutMs : 8000);
+    set('setting-decision-limit', cfg.dailyMaxCalls != null ? cfg.dailyMaxCalls : 0);
+    const usages = cfg.usages || {};
+    for (const [key, id] of Object.entries(DECISION_USAGE_IDS)) chk(id, usages[key] !== false);
+    refreshDecisionStatus().catch(() => {});
+  }
+
+  async function refreshDecisionStatus() {
+    try {
+      const st = await window.api.decisionStatus();
+      const el = document.getElementById('decision-usage');
+      if (el && st && st.ok) {
+        const limit = st.dailyMaxCalls > 0 ? ` / ${st.dailyMaxCalls}` : '';
+        el.textContent = `今日已调用: ${st.callsToday || 0}${limit} · 模型 ${st.model}`;
+      }
+    } catch (_) {}
+  }
+
+  function bindDecisionSettings() {
+    if (_decisionBound) return;
+    _decisionBound = true;
+    const saveField = (id, key, transform) => {
+      document.getElementById(id)?.addEventListener('change', async (e) => {
+        const s = await window.api.getSettings();
+        if (!s.decision) s.decision = {};
+        s.decision[key] = transform ? transform(e.target.value) : e.target.value;
+        await saveSettings(s);
+      });
+    };
+    document.getElementById('setting-decision-enabled')?.addEventListener('change', async (e) => {
+      const s = await window.api.getSettings();
+      s.decision = { ...(s.decision || {}), enabled: e.target.checked };
+      await saveSettings(s);
+      refreshDecisionStatus().catch(() => {});
+    });
+    document.getElementById('setting-decision-provider')?.addEventListener('change', async (e) => {
+      const s = await window.api.getSettings();
+      const provider = e.target.value === 'typesafe' ? 'typesafe' : 'zen';
+      s.decision = { ...(s.decision || {}), provider, apiUrl: '', model: '' };
+      await saveSettings(s);
+      loadDecisionSettings(s);
+    });
+    saveField('setting-decision-url', 'apiUrl');
+    saveField('setting-decision-key', 'apiKey');
+    saveField('setting-decision-model', 'model');
+    saveField('setting-decision-threshold', 'confidenceThreshold', (v) => Math.max(0.05, Math.min(0.99, parseFloat(v) || 0.5)));
+    saveField('setting-decision-guard', 'guardThreshold', (v) => Math.max(0.5, Math.min(0.99, parseFloat(v) || 0.85)));
+    saveField('setting-decision-timeout', 'timeoutMs', (v) => Math.max(1000, Math.min(60000, parseInt(v, 10) || 8000)));
+    saveField('setting-decision-limit', 'dailyMaxCalls', (v) => Math.max(0, parseInt(v, 10) || 0));
+    for (const [key, id] of Object.entries(DECISION_USAGE_IDS)) {
+      document.getElementById(id)?.addEventListener('change', async (e) => {
+        const s = await window.api.getSettings();
+        if (!s.decision) s.decision = {};
+        s.decision.usages = { ...(s.decision.usages || {}), [key]: e.target.checked };
+        await saveSettings(s);
+      });
+    }
+    document.getElementById('btn-decision-test')?.addEventListener('click', async () => {
+      const statusEl = document.getElementById('decision-test-status');
+      if (statusEl) statusEl.textContent = '测试中…';
+      try {
+        const r = await window.api.decisionTest();
+        if (statusEl) statusEl.textContent = r && r.ok ? `连通正常（概率 ${Number(r.probability).toFixed(3)}）` : `失败: ${(r && r.error) || '无响应'}`;
+      } catch (e) {
+        if (statusEl) statusEl.textContent = '失败: ' + e.message;
+      }
+      refreshDecisionStatus().catch(() => {});
+    });
+  }
+  bindDecisionSettings();
 
   // Theme mode
   document.querySelectorAll('.theme-mode-btn').forEach(btn => {

@@ -15,6 +15,7 @@ const path = require('path');
 const { Worker } = require('worker_threads');
 const { EventEmitter } = require('events');
 const { buildKeywordsFile } = require('./voice-kws-encoder');
+const vm = require('./voice-models');
 
 // Kokoro 多语言 v1_0 音色 → sid 映射（官方 53 音色表）
 const KOKORO_VOICES = {
@@ -38,21 +39,10 @@ const DEFAULT_VOICES = { zh: 'zf_xiaoxiao', en: 'af_heart', de: 'thorsten' };
  * 解析内置模型根目录（无需复制到 userData：sherpa 原生层直接读真实文件）。
  * 打包后模型位于 app.asar.unpacked/assets/voice-models（asarUnpack），
  * 开发时位于 <project>/assets/voice-models。
+ * 兼容旧安装包 / 便携版；新安装默认不再随包分发（用户手动下载到模型目录）。
  */
 function resolveBundledModelRoot(app) {
-  const candidates = [];
-  try {
-    if (process.resourcesPath) {
-      candidates.push(path.join(process.resourcesPath, 'app.asar.unpacked', 'assets', 'voice-models'));
-      candidates.push(path.join(process.resourcesPath, 'assets', 'voice-models'));
-    }
-  } catch (_) {}
-  try { candidates.push(path.join(app.getAppPath(), 'assets', 'voice-models')); } catch (_) {}
-  candidates.push(path.join(__dirname, '..', '..', 'assets', 'voice-models'));
-  for (const c of candidates) {
-    try { if (fs.existsSync(c)) return c; } catch (_) {}
-  }
-  return null;
+  return vm.resolveBundledModelRoot(app);
 }
 
 class VoiceEngine extends EventEmitter {
@@ -80,7 +70,8 @@ class VoiceEngine extends EventEmitter {
   /** 汇总模型清单；缺失项写入 missing[] */
   resolveModels() {
     this.modelRoot = resolveBundledModelRoot(this.app);
-    this.userModelRoot = path.join(this.app.getPath('userData'), 'voice-models');
+    // 用户模型目录：settings.resources.voiceModelDir（默认 userData/voice-models）
+    this.userModelRoot = vm.resolveVoiceModelDir(this.app, (this.getSettings && this.getSettings()) || {});
     const missing = [];
     const root = this.modelRoot;
     const P = (rel) => {
@@ -162,13 +153,44 @@ class VoiceEngine extends EventEmitter {
   /** 引擎状态（供设置页展示） */
   status() {
     const missing = this._missing || [];
+    // 按能力分别计算就绪状态：缺 TTS 不影响 STT，缺唤醒模型不影响听写/朗读
+    let missingRequired = [];
+    const capabilities = {
+      stt: { ready: true, missing: [] },
+      tts: { ready: true, missing: [] },
+      wake: { ready: true, missing: [] },
+      ttsDe: { ready: true, missing: [] },
+    };
+    try {
+      const settings = (this.getSettings && this.getSettings()) || {};
+      const roots = vm.searchRoots(this.app, settings);
+      const need = vm.requiredModelIds(settings);
+      const isInstalled = (id) => {
+        const model = vm.CATALOG.find(m => m.id === id);
+        return model ? vm.modelStatus(roots, model, null).installed : true;
+      };
+      const sttMissing = need.stt.filter(id => !isInstalled(id));
+      const ttsMissing = need.tts.filter(id => !isInstalled(id));
+      const wakeMissing = need.wake.filter(id => !isInstalled(id));
+      const deMissing = isInstalled('tts-piper-de') ? [] : ['tts-piper-de'];
+      capabilities.stt = { ready: sttMissing.length === 0, missing: sttMissing };
+      capabilities.tts = { ready: ttsMissing.length === 0, missing: ttsMissing };
+      capabilities.wake = { ready: wakeMissing.length === 0, missing: wakeMissing };
+      capabilities.ttsDe = { ready: deMissing.length === 0, missing: deMissing };
+      missingRequired = [...new Set([...sttMissing, ...ttsMissing, ...wakeMissing])];
+    } catch (_) {}
     return {
       modelRoot: this.modelRoot,
+      userModelRoot: this.userModelRoot,
       workerRunning: !!this.worker,
       workerReady: this.workerReady,
       wakeActive: this.wakeActive,
       sttActiveSessions: [...this.sttSessions],
       missing,
+      missingRequired,
+      modelsReady: missingRequired.length === 0,
+      anyReady: capabilities.stt.ready || capabilities.tts.ready,
+      capabilities,
       ready: missing.length === 0,
     };
   }

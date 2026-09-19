@@ -53,7 +53,7 @@
 ### 前沿技术集成
 
 - **MCP 协议**：完整支持 Model Context Protocol
-- **多模型支持**：LLM 和扩散式生图模型分别配置 API、密钥、参数
+- **多模型支持**：LLM 与生图分别配置 API、密钥、参数；生图内置 OpenAI / SiliconFlow / 火山方舟 / Gemini / Imagen / Stability / 自定义 JSON 多厂商预设
 - **本地 GeoGebra**：内置本地化的 GeoGebra JS 数学引擎（离线可用）
 - **OCR 识别**：集成 Tesseract 进行本地文字识别
 - **技能系统**：创建、管理、更新自定义 AI 技能
@@ -96,7 +96,7 @@
 - **NPM**: >= 9.x
 - **操作系统**: Windows 10+、macOS 10.15+、Linux (x64)
 - **内存**: >= 4GB RAM（语音功能建议 >= 8GB）
-- **存储**: >= 1GB 可用空间（语音模型与 OCR 数据额外占用约 500MB）
+- **存储**: >= 1GB 可用空间（语音模型不随包分发，需在应用内按需下载，约 440MB，存放于程序数据目录或自定义目录）
 
 ---
 
@@ -169,7 +169,7 @@ npm test
 | 资源 | 目录 | 来源 | 用途 |
 |------|------|------|------|
 | aria2 二进制 | `assets/aria2/{os}-{arch}/` | GitHub Releases（官方 win/mac，musl 静态 linux） | 下载管理器，打包必需（extraResources） |
-| 语音模型 / 音色 / UI 字体 / GeoGebra 离线包 | `assets/voice-models/`、`assets/ui-fonts/`、`assets/geogebra-app/` | `scripts/download-voice-models.js` | STT/TTS、界面字体、GeoGebra 离线运行 |
+| 语音模型 / 音色 / UI 字体 / GeoGebra 离线包 | `assets/ui-fonts/`、`assets/geogebra-app/`（语音模型不再内置，见下） | `scripts/download-voice-models.js`（语音模型需 `--voice`） | 界面字体、GeoGebra 离线运行；语音模型改由应用内「设置 → 资源下载」手动下载 |
 | Tesseract OCR 训练数据 | `assets/ocr/` **及根目录**（两处各一份） | `scripts/fetch-assets.sh` / `.ps1` | 本地 OCR 识别 |
 | Font Awesome | `assets/fonts/`、`assets/webfonts/` | `scripts/fetch-assets.sh` / `.ps1` | 本地图标库 |
 | Three.js | `assets/lib/three/` | `scripts/fetch-assets.sh` / `.ps1` | PCB-EDA 3D 预览 |
@@ -179,7 +179,8 @@ npm test
 
 ```bash
 node scripts/prepare-build-assets.js     # aria2 + OCR + FA + Three + IME
-node scripts/download-voice-models.js    # 语音模型 + UI 字体 + GeoGebra 离线包
+node scripts/download-voice-models.js    # UI 字体 + GeoGebra 离线包（语音模型默认跳过）
+node scripts/download-voice-models.js --voice  # 仅在需要随包内置语音模型时使用（维护者）
 ```
 
 `fetch-assets.sh` 支持镜像参数 `--mirror <前缀>`（GitHub 镜像，GFW 环境可用），
@@ -301,11 +302,14 @@ AI Agent 的大脑，负责：维护对话上下文和状态、执行工具调�
 核心配置项包括：
 
 - **LLM**：`apiUrl`、`apiKey`、`model`、`temperature`、`maxContextLength`
-- **生图**：`apiUrl`、`apiKey`、`model`、`imageSize`
+- **生图**：厂商预设（OpenAI / SiliconFlow / 火山方舟 / Gemini / Imagen / Stability / 自定义 JSON）、
+  `apiUrl`、`apiKey`、`model`、`imageSize`、`n`、`quality`、`background`、`outputFormat`、
+  `negativePrompt`、`seed`、`steps`、`guidance`、`watermark`、`bodyTemplate`、`customHeaders`
 - **AI 人设**：`name`、`personality`、`bio`、`pronouns`、`customPrompt`
 - **主题**：`mode`（auto/light/dark）、`accentColor`、`backgroundColor`
 - **语音**（语音可用平台）：STT 模型（base/tiny）、TTS 音色/语速/音量、
-  唤醒词列表、热键
+  唤醒词列表、热键；语音模型需先在「资源下载」中手动下载
+- **资源下载**：下载源（CN 镜像 / 官方源）、自定义模型目录；aria2 优先、普通下载回退
 
 ---
 
@@ -430,7 +434,8 @@ A: 语音引擎 sherpa-onnx-node 不提供 Windows ARM64 原生库，该平台�
 
 A: 首次克隆缺少被 `.gitignore` 忽略的构建资源。直接使用
 `npm run build:*` 会自动准备；若自定义打包流程，先执行
-`node scripts/prepare-build-assets.js` 与 `node scripts/download-voice-models.js`。
+`node scripts/prepare-build-assets.js` 与 `node scripts/download-voice-models.js`
+（语音模型已不再随安装包分发，无需 `--voice`）。
 
 ### Q: GFW 环境下资源下载失败？
 

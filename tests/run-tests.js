@@ -1290,8 +1290,8 @@ async function runLiveLLMTests() {
     console.log('  SKIP: 未找到 AI 配置 (settings.json)，跳过真实 LLM 测试');
     return;
   }
-  if (liveLLMConfig.provider === 'opencode-zen' && !liveLLMConfig.zenApiKey) {
-    console.log('  SKIP: OpenCode Zen 未配置 API Key，跳过真实 LLM 测试');
+  if (liveLLMConfig.provider === 'opencode-zen' && !liveLLMConfig.zenApiKey && !liveLLMConfig.apiKey) {
+    console.log('  SKIP: OpenCode Zen 未配置任何 Key，跳过真实 LLM 测试');
     return;
   }
   if (liveLLMConfig.provider !== 'opencode-zen' && (!liveLLMConfig.apiUrl || !liveLLMConfig.apiKey)) {
@@ -1328,7 +1328,10 @@ async function runLiveLLMTests() {
       throw new Error(`HTTP ${resp.status}: ${await resp.text()}`);
     }
 
-    const rawData = await resp.json();
+    // 匿名 Zen 免费池强制流式：非流式测试调用需把 SSE 聚合为 JSON
+    const rawData = (resp.headers.get('content-type') || '').includes('text/event-stream')
+      ? llmRetry.aggregateSSEToJSON(await resp.text(), req.transport)
+      : await resp.json();
     if (rawData.error) {
       throw new Error(`API error: ${rawData.error.message || JSON.stringify(rawData.error)}`);
     }
@@ -1383,7 +1386,10 @@ async function runLiveLLMTests() {
       throw new Error(`HTTP ${resp.status}: ${await resp.text()}`);
     }
 
-    const rawData = await resp.json();
+    // 匿名 Zen 免费池强制流式：非流式测试调用需把 SSE 聚合为 JSON
+    const rawData = (resp.headers.get('content-type') || '').includes('text/event-stream')
+      ? llmRetry.aggregateSSEToJSON(await resp.text(), req.transport)
+      : await resp.json();
     if (rawData.error) {
       throw new Error(`API error: ${rawData.error.message || JSON.stringify(rawData.error)}`);
     }
@@ -1444,7 +1450,10 @@ async function runLiveLLMTests() {
       throw new Error(`HTTP ${resp.status}: ${await resp.text()}`);
     }
 
-    const rawData = await resp.json();
+    // 匿名 Zen 免费池强制流式：非流式测试调用需把 SSE 聚合为 JSON
+    const rawData = (resp.headers.get('content-type') || '').includes('text/event-stream')
+      ? llmRetry.aggregateSSEToJSON(await resp.text(), req.transport)
+      : await resp.json();
     if (rawData.error) {
       throw new Error(`API error: ${rawData.error.message || JSON.stringify(rawData.error)}`);
     }
@@ -1913,7 +1922,7 @@ test('isOpenCodeUrl / isOpenCodeGoUrl 识别', () => {
   assert.strictEqual(ocHeadersMod.isOpenCodeGoUrl('https://opencode.ai/zen/v1/chat/completions'), false);
 });
 
-test('applyProviderHeaders: zen URL 自动会话头组（不含 UA）+ 无 key 时 public 兜底', () => {
+test('applyProviderHeaders: zen URL 自动会话头组（官方 ID 形状，不含 UA）+ 无 key 时 public 兜底', () => {
   const out = ocHeadersMod.applyProviderHeaders({
     url: 'https://opencode.ai/zen/v1/chat/completions',
     headers: { 'Content-Type': 'application/json' },
@@ -1923,11 +1932,32 @@ test('applyProviderHeaders: zen URL 自动会话头组（不含 UA）+ 无 key �
   });
   // UA 不自动注入：由用户主动添加（UI 已告知官方方案与风险）
   assert.strictEqual(out['User-Agent'], undefined);
-  assert.strictEqual(out['x-opencode-session'], 'sess_abc');
-  assert.strictEqual(out['x-opencode-request'], 'req_1');
+  // sessionKey 规范化为官方形状；非法 requestId 回退为官方 msg_ 形状（2026-09 免费池校验）
+  assert.strictEqual(out['x-opencode-session'], ocHeadersMod.canonicalizeSessionId('sess_abc'));
+  assert.match(out['x-opencode-session'], ocHeadersMod.OPENCODE_SESSION_RE);
+  assert.match(out['x-opencode-request'], ocHeadersMod.OPENCODE_REQUEST_RE);
   assert.strictEqual(out['x-opencode-client'], 'cli');
   assert.strictEqual(out['x-opencode-project'], 'global');
   assert.strictEqual(out['Authorization'], 'Bearer public');
+});
+
+test('canonicalizeSessionId: 官方形状原样保留 / 同一 sessionKey 稳定映射', () => {
+  const official = 'ses_0123456789abABCDEFGHIJKLMn';
+  assert.match(official, ocHeadersMod.OPENCODE_SESSION_RE);
+  assert.strictEqual(ocHeadersMod.canonicalizeSessionId(official), official);
+  const a = ocHeadersMod.canonicalizeSessionId('sess-abc');
+  assert.match(a, ocHeadersMod.OPENCODE_SESSION_RE);
+  assert.strictEqual(ocHeadersMod.canonicalizeSessionId('sess-abc'), a);
+  assert.notStrictEqual(ocHeadersMod.canonicalizeSessionId('sess-def'), a);
+  assert.match(ocHeadersMod.canonicalizeSessionId(undefined), ocHeadersMod.OPENCODE_SESSION_RE);
+});
+
+test('makeRequestId: 官方 msg_ 形状且每次唯一', () => {
+  const r1 = ocHeadersMod.makeRequestId();
+  const r2 = ocHeadersMod.makeRequestId();
+  assert.match(r1, ocHeadersMod.OPENCODE_REQUEST_RE);
+  assert.match(r2, ocHeadersMod.OPENCODE_REQUEST_RE);
+  assert.notStrictEqual(r1, r2);
 });
 
 test('applyProviderHeaders: 用户主动添加的 UA 头生效（免费模型门控路径）', () => {
@@ -1939,7 +1969,7 @@ test('applyProviderHeaders: 用户主动添加的 UA 头生效（免费模型门
   });
   assert.strictEqual(out['User-Agent'], 'opencode/1.18.31');
   assert.strictEqual(out['Authorization'], 'Bearer public');
-  assert.strictEqual(out['x-opencode-session'], 'sess_u');
+  assert.strictEqual(out['x-opencode-session'], ocHeadersMod.canonicalizeSessionId('sess_u'));
 });
 
 test('applyProviderHeaders: 非 opencode URL 不注入自动头；自定义头可覆盖 UA；autoOpencodeHeaders=false 关闭', () => {
@@ -1974,7 +2004,7 @@ test('applyProviderHeaders: 保留已有 Authorization（Go 订阅 key 不被 pu
     llm: { customHeaders: [] }
   });
   assert.strictEqual(out['Authorization'], 'Bearer ocg-xxx');
-  assert.strictEqual(out['x-opencode-session'], typeof out['x-opencode-session'] === 'string' ? out['x-opencode-session'] : undefined);
+  assert.match(out['x-opencode-session'], ocHeadersMod.OPENCODE_SESSION_RE);
 });
 
 test('buildLLMRequest opencode-go: glm → chat/completions / minimax → messages / gpt-5 → responses', () => {
@@ -1994,7 +2024,7 @@ test('buildLLMRequest opencode-go: glm → chat/completions / minimax → messag
   assert.strictEqual(gp.transport, 'responses');
   for (const req of [glm, mm, gp]) {
     assert.strictEqual(req.headers['User-Agent'], undefined, 'UA 不自动注入');
-    assert.strictEqual(req.headers['x-opencode-session'], 'sess_x');
+    assert.strictEqual(req.headers['x-opencode-session'], ocHeadersMod.canonicalizeSessionId('sess_x'));
   }
 });
 
@@ -2006,7 +2036,75 @@ test('buildLLMRequest opencode-zen: free 模型 public key + 会话头（UA 由�
   assert.strictEqual(req.url, 'https://opencode.ai/zen/v1/chat/completions');
   assert.strictEqual(req.headers['Authorization'], 'Bearer public');
   assert.strictEqual(req.headers['User-Agent'], 'opencode/1.18.31');
-  assert.strictEqual(req.headers['x-opencode-session'], 'sess_z');
+  assert.strictEqual(req.headers['x-opencode-session'], ocHeadersMod.canonicalizeSessionId('sess_z'));
+});
+
+test('buildLLMRequest opencode-zen: 匿名 public 强制 agent 形状（stream + 5 核心工具名）', () => {
+  const req = llmProvidersMod.buildLLMRequest(
+    { provider: 'opencode-zen', zenApiKey: 'public', model: 'big-pickle' },
+    { messages: [{ role: 'user', content: 'hi' }], stream: false, sessionKey: 'sess_a' });
+  assert.strictEqual(req.body.stream, true, '匿名免费池必须流式');
+  assert.deepStrictEqual(req.body.stream_options, { include_usage: true });
+  const names = (req.body.tools || []).map(t => t.function?.name).filter(Boolean);
+  for (const need of llmProvidersMod.FREE_TIER_CORE_TOOLS) {
+    assert.ok(names.includes(need), `缺少核心工具 ${need}`);
+  }
+  assert.strictEqual(req.zenAnonymous, true);
+});
+
+test('buildLLMRequest opencode-zen: 带真实 key 不注入免费池工具、不强制流式', () => {
+  const req = llmProvidersMod.buildLLMRequest(
+    { provider: 'opencode-zen', zenApiKey: 'sk-real', model: 'claude-sonnet-4-6' },
+    { messages: [{ role: 'user', content: 'hi' }], stream: false, tools: [{ type: 'function', function: { name: 'readFile', parameters: { type: 'object' } } }] });
+  assert.strictEqual(req.body.stream, false);
+  const names = (req.body.tools || []).map(t => t.function?.name || t.name);
+  assert.deepStrictEqual(names, ['readFile']);
+  assert.strictEqual(req.zenAnonymous, undefined);
+});
+
+test('buildLLMRequest opencode-zen: 已有工具时补全缺失核心工具（保留原工具）', () => {
+  const req = llmProvidersMod.buildLLMRequest(
+    { provider: 'opencode-zen', zenApiKey: 'public', model: 'big-pickle' },
+    { messages: [{ role: 'user', content: 'hi' }], stream: true,
+      tools: [{ type: 'function', function: { name: 'readFile', parameters: { type: 'object' } } }] });
+  const names = (req.body.tools || []).map(t => t.function?.name);
+  assert.ok(names.includes('readFile'));
+  for (const need of llmProvidersMod.FREE_TIER_CORE_TOOLS) assert.ok(names.includes(need));
+});
+
+testAsync('aggregateSSEToJSON: OpenAI / Anthropic / Responses 聚合', async () => {
+  const llmRetryMod = llmRetry;
+  const openai = [
+    'data: {"id":"c1","model":"m","choices":[{"index":0,"delta":{"content":"Hel"}}]}',
+    'data: {"choices":[{"index":0,"delta":{"content":"lo"}}]}',
+    'data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"t1","function":{"name":"bash","arguments":"{\\"command\\""}}]}}]}',
+    'data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":":\\"ls\\"}"}}]},"finish_reason":"tool_calls"}],"usage":{"total_tokens":7}}',
+    'data: [DONE]'
+  ].join('\n');
+  const o = llmRetryMod.aggregateSSEToJSON(openai, 'openai');
+  assert.strictEqual(o.choices[0].message.content, 'Hello');
+  assert.strictEqual(o.choices[0].message.tool_calls[0].function.name, 'bash');
+  assert.strictEqual(o.choices[0].message.tool_calls[0].function.arguments, '{"command":"ls"}');
+  assert.strictEqual(o.choices[0].finish_reason, 'tool_calls');
+  assert.strictEqual(o.usage.total_tokens, 7);
+
+  const anthropic = [
+    'data: {"type":"message_start","message":{"id":"m1","model":"claude","usage":{"input_tokens":3,"output_tokens":0}}}',
+    'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"喵"}}',
+    'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":2}}'
+  ].join('\n');
+  const a = llmRetryMod.aggregateSSEToJSON(anthropic, 'anthropic');
+  assert.strictEqual(a.content[0].text, '喵');
+  assert.strictEqual(a.stop_reason, 'end_turn');
+  assert.strictEqual(a.usage.output_tokens, 2);
+
+  const responses = [
+    'data: {"type":"response.output_text.delta","delta":"Hey"}',
+    'data: {"type":"response.completed","response":{"id":"r1","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"Hey"}]}],"usage":{"total_tokens":1}}}'
+  ].join('\n');
+  const r = llmRetryMod.aggregateSSEToJSON(responses, 'responses');
+  assert.strictEqual(r.id, 'r1');
+  assert.strictEqual(r.output[0].content[0].text, 'Hey');
 });
 
 testAsync('refreshOpenCodeVersion: 成功缓存 / 非法响应回退默认', async () => {
@@ -2025,6 +2123,271 @@ testAsync('refreshOpenCodeVersion: 成功缓存 / 非法响应回退默认', asy
   assert.strictEqual(v2, null);
   assert.strictEqual(ocHeadersMod.getOpenCodeVersion(), '9.9.9-test');
 });
+
+// ---- 生图多厂商适配（image-gen）----
+console.log('\n生图多厂商适配（image-gen）:');
+const imageGenMod = require('../src/main/image-gen');
+
+test('image-gen: 配置迁移（旧版无 provider）', () => {
+  assert.strictEqual(imageGenMod.normalizeImageGenConfig({}).provider, 'openai');
+  assert.strictEqual(imageGenMod.normalizeImageGenConfig({ apiUrl: 'https://x/v1/images/generations' }).provider, 'siliconflow');
+  assert.strictEqual(imageGenMod.normalizeImageGenConfig({ provider: 'gemini' }).provider, 'gemini');
+  assert.strictEqual(imageGenMod.normalizeImageGenConfig({ provider: 'gemini' }).apiUrl, imageGenMod.PROVIDERS.gemini.defaultUrl);
+});
+
+test('image-gen: 各厂商请求构建（URL / kind / body 规范）', () => {
+  const openai = imageGenMod.buildImageRequest({ provider: 'openai', apiUrl: 'https://api.openai.com/v1/images/generations', apiKey: 'k', model: 'gpt-image-2', imageSize: '1024x1024', n: 2, quality: 'high', background: 'transparent', outputFormat: 'png' }, 'a cat');
+  assert.strictEqual(openai.kind, 'data');
+  assert.strictEqual(openai.headers.Authorization, 'Bearer k');
+  assert.strictEqual(openai.body.model, 'gpt-image-2');
+  assert.strictEqual(openai.body.n, 2);
+  assert.strictEqual(openai.body.quality, 'high');
+  assert.strictEqual(openai.body.response_format, undefined, 'gpt-image 不支持 response_format');
+  const dalle = imageGenMod.buildImageRequest({ provider: 'openai', apiUrl: 'https://api.openai.com/v1/images/generations', apiKey: 'k', model: 'dall-e-3' }, 'x');
+  assert.strictEqual(dalle.body.response_format, 'b64_json');
+  const sf = imageGenMod.buildImageRequest({ provider: 'siliconflow', apiUrl: 'https://api.siliconflow.cn/v1/images/generations', apiKey: 'k', model: 'Qwen/Qwen-Image', imageSize: '1328x1328', steps: 20, guidance: 7.5, negativePrompt: 'bad' }, 'x');
+  assert.strictEqual(sf.body.image_size, '1328x1328');
+  assert.strictEqual(sf.body.batch_size, 1);
+  assert.strictEqual(sf.body.num_inference_steps, 20);
+  assert.strictEqual(sf.body.guidance_scale, 7.5);
+  assert.strictEqual(sf.body.negative_prompt, 'bad');
+  const ark = imageGenMod.buildImageRequest({ provider: 'ark', apiUrl: 'https://ark.cn-beijing.volces.com/api/v3/images/generations', apiKey: 'k', model: 'doubao-seedream-5-0-lite-260128', imageSize: '2K' }, 'x');
+  assert.strictEqual(ark.body.response_format, 'b64_json');
+  assert.strictEqual(ark.body.watermark, false);
+  const gem = imageGenMod.buildImageRequest({ provider: 'gemini', apiUrl: 'https://generativelanguage.googleapis.com/v1beta', apiKey: 'g', model: 'gemini-3-pro-image', imageSize: '1536x1024' }, 'x');
+  assert.strictEqual(gem.url, 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image:generateContent');
+  assert.strictEqual(gem.headers['x-goog-api-key'], 'g');
+  assert.deepStrictEqual(gem.body.generationConfig.responseModalities, ['TEXT', 'IMAGE']);
+  assert.strictEqual(gem.body.generationConfig.imageConfig.aspectRatio, '3:2');
+  const st = imageGenMod.buildImageRequest({ provider: 'stability', apiUrl: 'https://api.stability.ai', apiKey: 's', model: 'ultra', imageSize: '1024x1024' }, 'x');
+  assert.strictEqual(st.url, 'https://api.stability.ai/v2beta/stable-image/generate/ultra');
+  assert.strictEqual(st.headers.Accept, 'image/*');
+  const img = imageGenMod.buildImageRequest({ provider: 'imagen', apiUrl: 'https://generativelanguage.googleapis.com/v1beta', apiKey: 'g', model: 'imagen-4.0-generate-001', imageSize: '1024x1792' }, 'x');
+  assert.match(img.url, /:predict$/);
+  assert.strictEqual(img.body.parameters.aspectRatio, '9:16');
+  const cus = imageGenMod.buildImageRequest({ provider: 'custom', apiUrl: 'https://local/gen', model: 'm', bodyTemplate: '{"p":"{{prompt}}","m":"{{model}}"}' }, 'hi');
+  assert.deepStrictEqual(cus.body, { p: 'hi', m: 'm' });
+});
+
+testAsync('image-gen: 响应解析（b64 / inlineData / predictions / 原始二进制）', async () => {
+  const mkResp = (body, ct) => ({ ok: true, status: 200, headers: { get: () => ct || 'application/json' }, json: async () => body, arrayBuffer: async () => body });
+  const r1 = await imageGenMod.extractImages('data', mkResp({ data: [{ b64_json: Buffer.from('a').toString('base64') }] }));
+  assert.strictEqual(r1.images.length, 1);
+  assert.strictEqual(r1.images[0].buffer.toString(), 'a');
+  const r2 = await imageGenMod.extractImages('images', mkResp({ images: [{ b64_json: Buffer.from('b').toString('base64'), mime_type: 'image/webp' }] }));
+  assert.strictEqual(r2.images[0].buffer.toString(), 'b');
+  assert.strictEqual(imageGenMod.extForMime(r2.images[0].mime), 'webp');
+  const gem = await imageGenMod.extractImages('gemini', mkResp({ candidates: [{ content: { parts: [{ inlineData: { mimeType: 'image/png', data: Buffer.from('c').toString('base64') } }] } }] }));
+  assert.strictEqual(gem.images[0].buffer.toString(), 'c');
+  const pred = await imageGenMod.extractImages('imagen', mkResp({ predictions: [{ bytesBase64Encoded: Buffer.from('e').toString('base64'), mimeType: 'image/png' }] }));
+  assert.strictEqual(pred.images[0].buffer.toString(), 'e');
+  const img = await imageGenMod.extractImages('stability', { ok: true, status: 200, headers: { get: () => 'image/png' }, arrayBuffer: async () => Buffer.from('d') });
+  assert.strictEqual(img.images[0].buffer.toString(), 'd');
+  const stJson = await imageGenMod.extractImages('stability', mkResp({ image: Buffer.from('f').toString('base64') }));
+  assert.strictEqual(stJson.images[0].buffer.toString(), 'f');
+  const err = await imageGenMod.extractImages('data', { ok: false, status: 403, headers: { get: () => 'application/json' }, json: async () => ({ error: { message: 'nope' } }) });
+  assert.strictEqual(err.images.length, 0);
+  assert.match(err.error, /nope/);
+});
+
+// ---- 语音模型目录 / 启动审计（voice-models）----
+console.log('\n语音模型目录 / 启动审计（voice-models）:');
+const voiceModelsMod = require('../src/main/voice-models');
+
+test('voice-models: 镜像 URL / 必需模型 / KWS tar 回退', () => {
+  const f = { type: 'hf', repo: 'csukuangfj/kokoro-int8-multi-lang-v1_0', file: 'model.int8.onnx' };
+  assert.strictEqual(voiceModelsMod.resolveFileUrl(f, 'cn'), 'https://hf-mirror.com/csukuangfj/kokoro-int8-multi-lang-v1_0/resolve/main/model.int8.onnx');
+  assert.strictEqual(voiceModelsMod.resolveFileUrl(f, 'official'), 'https://huggingface.co/csukuangfj/kokoro-int8-multi-lang-v1_0/resolve/main/model.int8.onnx');
+  assert.strictEqual(voiceModelsMod.resolveFileUrl({ type: 'url', url: 'https://github.com/x/y.onnx' }, 'cn'), 'https://github.com/x/y.onnx');
+  assert.deepStrictEqual(voiceModelsMod.requiredModelIds({ voice: { sttModel: 'tiny' } }).stt, ['stt-tiny']);
+  const kws = voiceModelsMod.CATALOG.find(m => m.id === 'kws');
+  assert.ok(kws && kws.tar && kws.tar.url.includes('sherpa-onnx-kws'), 'KWS 使用 GitHub tar 包');
+  assert.ok(voiceModelsMod.CATALOG.find(m => m.id === 'tts-kokoro').dirs.includes('espeak-ng-data'));
+});
+
+test('voice-models: 启动审计自动关闭缺失模型的语音开关', () => {
+  const osLocal = require('os');
+  const tmp = fs.mkdtempSync(path_.join(osLocal.tmpdir(), 'cibyp-vm-'));
+  const settings = { voice: { sttEnabled: true, ttsEnabled: true, wakeEnabled: true, sttModel: 'base' } };
+  const audit = voiceModelsMod.auditVoiceSettings(settings, [tmp]);
+  assert.strictEqual(audit.changed, true);
+  assert.strictEqual(settings.voice.sttEnabled, false);
+  assert.strictEqual(settings.voice.ttsEnabled, false);
+  assert.strictEqual(settings.voice.wakeEnabled, false);
+  // 模型存在时不应改动
+  const settings2 = { voice: { sttEnabled: false, ttsEnabled: false, wakeEnabled: false, sttModel: 'base' } };
+  const audit2 = voiceModelsMod.auditVoiceSettings(settings2, [tmp]);
+  assert.strictEqual(audit2.changed, false);
+  fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+test('voice-models: tar 模型完整性检测', () => {
+  const osLocal = require('os');
+  const tmp = fs.mkdtempSync(path_.join(osLocal.tmpdir(), 'cibyp-vm2-'));
+  const kws = voiceModelsMod.CATALOG.find(m => m.id === 'kws');
+  assert.strictEqual(voiceModelsMod.modelStatus([tmp], kws, tmp).installed, false);
+  const dir = path_.join(tmp, voiceModelsMod.KWS_DIR);
+  fs.mkdirSync(dir, { recursive: true });
+  for (const name of kws.tar.keep) fs.writeFileSync(path_.join(dir, name), 'x');
+  const st = voiceModelsMod.modelStatus([tmp], kws, tmp);
+  assert.strictEqual(st.installed, true);
+  fs.rmSync(tmp, { recursive: true, force: true });
+});
+
+// ---- 决策模型服务（decision-service）----
+console.log('\n决策模型服务（decision-service）:');
+const decisionMod = require('../src/main/decision-service');
+
+test('decision-service: 配置归一化与用途开关', () => {
+  const cfg = decisionMod.normalizeDecisionSettings({ enabled: true, confidenceThreshold: 0.2, guardThreshold: 0.1, usages: { toolSelection: false } });
+  assert.strictEqual(cfg.confidenceThreshold, 0.2);
+  assert.strictEqual(cfg.guardThreshold, 0.5);
+  const svc = new decisionMod.DecisionService({ getSettings: () => ({ decision: { ...cfg } }) });
+  assert.strictEqual(svc.enabledFor('toolSelection'), false);
+  assert.strictEqual(svc.enabledFor('commandGuard'), true);
+  assert.strictEqual(svc.enabledFor('anything'), true);
+  const svc2 = new decisionMod.DecisionService({ getSettings: () => ({ decision: { enabled: false } }) });
+  assert.strictEqual(svc2.enabledFor('commandGuard'), false);
+});
+
+testAsync('decision-service: choice/score/noul 置信回退与解析', async () => {
+  const state = { decision: { enabled: true, provider: 'zen', model: 'jev-1.13-free', confidenceThreshold: 0.5, guardThreshold: 0.85, cache: false } };
+  let lastBody = null;
+  const mockFetch = async (url, init) => {
+    lastBody = JSON.parse(init.body);
+    return {
+      ok: true, status: 200,
+      json: async () => ({
+        answers: {
+          v: { type: 'choice', choice: 'b', confidence: 0.9, probabilities: { a: 0.1, b: 0.9 } },
+          u: { type: 'choice', choice: 'a', confidence: 0.3, probabilities: { a: 0.4, b: 0.35, c: 0.25 } },
+          r: { type: 'noul', noul: 0.95 },
+          r2: { type: 'noul', noul: 0.6 },
+          s: { type: 'score', score: 1.2, confidence: 0.8 },
+        },
+        usage: { input_tokens: 10, output_tokens: 0 },
+      }),
+    };
+  };
+  const svc = new decisionMod.DecisionService({ getSettings: () => state, persistSettings: () => {}, fetchImpl: mockFetch });
+  const c1 = await svc.choice('s', 'q', { a: 'A', b: 'B' }, { key: 'v' });
+  assert.strictEqual(c1.value, 'b');
+  const c2 = await svc.choice('s', 'q', { a: 'A', b: 'B', c: 'C' }, { key: 'u' });
+  assert.strictEqual(c2.value, null);
+  assert.strictEqual(c2.lowConfidence, true);
+  const n1 = await svc.noul('s', 'q', { key: 'r', threshold: 0.85 });
+  assert.strictEqual(n1.value, true);
+  const n2 = await svc.noul('s', 'q', { key: 'r2', threshold: 0.85 });
+  assert.strictEqual(n2.value, null, '0.6 概率在 0.85 阈值下应弃权');
+  const sc = await svc.score('s', 'q', ['l1', 'l2'], { key: 's' });
+  assert.strictEqual(sc.value, 1.2);
+  assert.strictEqual(lastBody.model, 'jev-1.13-free');
+  assert.ok(lastBody.state);
+});
+
+testAsync('decision-service: 未启用时不发请求', async () => {
+  let called = false;
+  const svc = new decisionMod.DecisionService({
+    getSettings: () => ({ decision: { enabled: false } }),
+    fetchImpl: async () => { called = true; return { ok: true, status: 200, json: async () => ({ answers: {} }) }; },
+  });
+  const r = await svc.call('s', { q: { type: 'noul', instructions: 'x' } });
+  assert.strictEqual(r.ok, false);
+  assert.strictEqual(called, false);
+});
+
+// ---- 配置门控工具（生图 / 决策模型）----
+console.log('\n配置门控工具（生图 / 决策模型）:');
+{
+  const vm = require('vm');
+  const toolsContent = fs.readFileSync(require('path').join(__dirname, '../src/renderer/js/tools-def.js'), 'utf-8');
+  const ctx = {};
+  vm.createContext(ctx);
+  vm.runInContext(toolsContent, ctx);
+
+  test('tools-def: 生图/决策工具仅在配置后可见，且配置后自动启用', () => {
+    const off = { llm: {}, imageGen: {}, decision: { enabled: false } };
+    const on = { llm: {}, imageGen: { apiUrl: 'https://x/v1/images/generations', model: 'm' }, decision: { enabled: true, usages: { llmTool: true } } };
+    const defs = [{ name: 'generateImage' }, { name: 'decisionModel' }, { name: 'calculator' }];
+    assert.deepStrictEqual(ctx.filterToolDefsByConfig(defs, off).map(d => d.name), ['calculator']);
+    assert.deepStrictEqual(ctx.filterToolDefsByConfig(defs, on).map(d => d.name), ['generateImage', 'decisionModel', 'calculator']);
+    // 请求侧过滤（filterToolsByConfig 基于 schema 的 function.name）
+    const schemas = [{ function: { name: 'generateImage' } }, { function: { name: 'decisionModel' } }, { function: { name: 'calculator' } }];
+    assert.deepStrictEqual(ctx.filterToolsByConfig(schemas, off).map(t => t.function.name), ['calculator']);
+    assert.strictEqual(ctx.filterToolsByConfig(schemas, on).length, 3);
+    // 自动启用：配置后忽略手动关闭
+    assert.strictEqual(ctx.isToolEnabledForSettings('generateImage', on), true);
+    assert.strictEqual(ctx.isToolEnabledForSettings('decisionModel', on), true);
+    assert.strictEqual(ctx.isToolEnabledForSettings('generateImage', off), false);
+    assert.strictEqual(ctx.isToolEnabledForSettings('generateImage', { ...on, tools: { generateImage: false } }), true, '配置后自动启用');
+    assert.strictEqual(ctx.isToolEnabledForSettings('calculator', { tools: { calculator: false } }), false, '普通工具仍可手动关闭');
+    // 决策模型关闭 llmTool 开关时，决策工具不可见
+    assert.strictEqual(ctx.isToolEnabledForSettings('decisionModel', { decision: { enabled: true, usages: { llmTool: false } } }), false);
+  });
+
+  test('tools-def: decisionModel 已注册 schema 与元数据', () => {
+    const schemas = ctx.getToolSchemas({ decisionModel: true }, 'chat');
+    const dm = Array.isArray(schemas)
+      ? schemas.find(t => t.function?.name === 'decisionModel')
+      : schemas.decisionModel;
+    assert.ok(dm, '缺少 decisionModel schema');
+    assert.strictEqual(dm.function.name, 'decisionModel');
+    assert.deepStrictEqual([...dm.function.parameters.required], ['type', 'instructions']);
+    assert.ok(toolsContent.includes("{ name: 'decisionModel'"), '缺少工具元数据');
+    assert.ok(toolsContent.includes("'decisionModel',"), 'Code/Babe 白名单缺少决策工具');
+  });
+
+  test('tools-def: normalizeDecisionCriteria 兼容多种模型写法', () => {
+    // choice：对象
+    assert.deepStrictEqual(Object.keys(ctx.normalizeDecisionCriteria('choice', { '711': '便利店', '罗森': '便利店' }).map), ['711', '罗森']);
+    // choice：字符串数组（新 schema 推荐格式）
+    assert.deepStrictEqual(Object.keys(ctx.normalizeDecisionCriteria('choice', ['711', '罗森']).map), ['711', '罗森']);
+    // choice：官方风格对象数组
+    const c1 = ctx.normalizeDecisionCriteria('choice', [{ option: '711', description: '便利店快餐' }, { option: '罗森', description: '便利店快餐' }]);
+    assert.strictEqual(c1.map['711'], '便利店快餐');
+    // choice：单键对象数组（模型实测写法）
+    const c2 = ctx.normalizeDecisionCriteria('choice', [{ '711': '便利店快餐' }, { '罗森': '便利店快餐' }]);
+    assert.deepStrictEqual(Object.keys(c2.map), ['711', '罗森']);
+    // choice：JSON 字符串
+    const c3 = ctx.normalizeDecisionCriteria('choice', '["711","罗森"]');
+    assert.deepStrictEqual(Object.keys(c3.map), ['711', '罗森']);
+    // choice：无 criteria，从问题文本"A还是B"推断
+    const c4 = ctx.normalizeDecisionCriteria('choice', undefined, { instructions: '明天中午吃711还是罗森？' });
+    assert.deepStrictEqual(Object.keys(c4.map), ['711', '罗森']);
+    assert.strictEqual(c4.derived, true);
+    // choice：无 criteria 且是长句 → 报错
+    assert.ok(ctx.normalizeDecisionCriteria('choice', undefined, { instructions: '请综合学业、心理和现实情况判断是否应该请假' }).error);
+    // choice：不足两个选项报错
+    assert.ok(ctx.normalizeDecisionCriteria('choice', ['711']).error);
+    // score：字符串数组 / 对象数组 / 索引对象
+    assert.deepStrictEqual([...ctx.normalizeDecisionCriteria('score', ['低', '中', '高']).list], ['低', '中', '高']);
+    assert.deepStrictEqual([...ctx.normalizeDecisionCriteria('score', [{ name: '低', description: '不紧急' }, { name: '高', description: '紧急' }]).list], ['低（不紧急）', '高（紧急）']);
+    assert.deepStrictEqual([...ctx.normalizeDecisionCriteria('score', { 0: '低', 1: '高' }).list], ['低', '高']);
+    // score：无 criteria，从 instructions 的 "1-5分" 推断量表
+    const s1 = ctx.normalizeDecisionCriteria('score', undefined, { instructions: '请从1-5分打分，5分最支持请假' });
+    assert.deepStrictEqual([...s1.list], ['1', '2', '3', '4', '5']);
+    assert.strictEqual(s1.derived, true);
+    // score：显式 scale 参数
+    const s2 = ctx.normalizeDecisionCriteria('score', undefined, { scale: '0-10' });
+    assert.strictEqual(s2.list.length, 11);
+    assert.strictEqual(s2.list[0], '0');
+    // score：criteria 传数字（量表上限）
+    const s3 = ctx.normalizeDecisionCriteria('score', 5);
+    assert.deepStrictEqual([...s3.list], ['1', '2', '3', '4', '5']);
+    // score：字符串 "1~5" 也算量表
+    assert.deepStrictEqual([...ctx.normalizeDecisionCriteria('score', '1~5').list], ['1', '2', '3', '4', '5']);
+    // score：提到"评分"但无量表 → 回退标准 1-5
+    const s4 = ctx.normalizeDecisionCriteria('score', undefined, { instructions: '请为该方案评分' });
+    assert.deepStrictEqual([...s4.list], ['1', '2', '3', '4', '5']);
+    assert.strictEqual(s4.derived, true);
+    // score：完全无线索 → 报错
+    assert.ok(ctx.normalizeDecisionCriteria('score', undefined, { instructions: '判断是否请假' }).error);
+    assert.ok(ctx.normalizeDecisionCriteria('score', []).error);
+    // 未知类型
+    assert.ok(ctx.normalizeDecisionCriteria('foo', []).error);
+  });
+}
+
 // ---- 主进程网络代理（net-proxy）----
 console.log('\n主进程网络代理（net-proxy）:');
 const netProxyMod = require('../src/main/net-proxy');

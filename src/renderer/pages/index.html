@@ -796,6 +796,8 @@
             <button class="settings-tab" data-tab="terminal"><i class="fa-solid fa-terminal"></i> 终端</button>
             <button class="settings-tab" data-tab="ime"><i class="fa-solid fa-keyboard"></i> 输入法</button>
             <button class="settings-tab" data-tab="voice" hidden><i class="fa-solid fa-microphone-lines"></i> 语音</button>
+            <button class="settings-tab" data-tab="resources"><i class="fa-solid fa-download"></i> 资源下载</button>
+            <button class="settings-tab" data-tab="decision"><i class="fa-solid fa-scale-balanced"></i> 决策模型</button>
             <button class="settings-tab" data-tab="context"><i class="fa-solid fa-compress"></i> 上下文</button>
             <button class="settings-tab" data-tab="sandbox"><i class="fa-solid fa-shield-halved"></i> 沙箱</button>
             <button class="settings-tab" data-tab="automation"><i class="fa-solid fa-bolt"></i> 自动化</button>
@@ -963,8 +965,34 @@
             </div>
 
             <div class="settings-panel" data-tab="llm">
+              <!-- 模型池：会话创建时选定并锁定模型，之后不再自动切换（保护提示词缓存） -->
+              <div class="settings-group" id="llm-pool-group">
+                <h3><i class="fa-solid fa-layer-group"></i> 模型池</h3>
+                <p class="setting-hint" style="margin-bottom:10px">会话创建时按下方策略选定一个模型并锁定到该会话，之后不再自动切换（保护提示词缓存）；仅可用 <code>/model</code> 手动切换。</p>
+                <div class="setting-item">
+                  <label>模型选择策略</label>
+                  <select id="setting-llm-model-strategy" style="width:280px">
+                    <option value="priority">手动优先级（按优先级取第一个可用）</option>
+                    <option value="intelligence">Jev 智慧分数（按消息难度选）</option>
+                  </select>
+                </div>
+                <div class="setting-item">
+                  <label>Reasoning Effort 策略</label>
+                  <select id="setting-llm-effort-strategy" style="width:280px">
+                    <option value="manual">按模型条目手动设置</option>
+                    <option value="jev">Jev 决策（会话创建时一次）</option>
+                  </select>
+                  <div class="setting-hint">Jev 决策需先在「决策模型」标签页启用；失败时回退到条目手动值</div>
+                </div>
+                <div id="llm-pool-list" class="llm-pool-list"></div>
+                <div style="display:flex;gap:8px;align-items:center;margin-top:8px">
+                  <button class="btn-secondary btn-sm" id="btn-pool-add" type="button"><i class="fa-solid fa-plus"></i> 添加模型</button>
+                  <span class="setting-hint" id="llm-pool-hint"></span>
+                </div>
+              </div>
               <div class="settings-group">
                 <h3><i class="fa-solid fa-microchip"></i> LLM 配置</h3>
+                <div id="llm-legacy-config" class="hidden">
                 <div class="setting-item">
                   <label>接入方式</label>
                   <select id="setting-llm-provider">
@@ -1041,6 +1069,7 @@
                     </div>
                   </div>
                 </div>
+                </div>
                 <div class="setting-item">
                   <label>多模态视觉输入 (强制启用)</label>
                   <div class="toggle-switch">
@@ -1066,7 +1095,7 @@
                   </div>
                   <p id="ev-model-status" style="font-size:11px;color:var(--text-tertiary);margin-top:4px"></p>
                 </div>
-                <div class="setting-item">
+                <div class="setting-item" style="display:none">
                   <label>推理强度 / 变体</label>
                   <select id="setting-llm-reasoning">
                     <option value="off">关闭</option>
@@ -1110,10 +1139,10 @@
                   <label>请求超时 (秒, 0为不限制)</label>
                   <input type="number" id="setting-llm-timeout" min="0" max="3600" value="300">
                 </div>
-                <div class="setting-item">
+                <div class="setting-item" style="display:none">
                   <label>529 过载时回退模型 (可选)</label>
                   <input type="text" id="setting-llm-fallback-model" placeholder="例如 gpt-4o-mini">
-                  <div class="setting-hint">连续 529 过载后自动切换到此模型</div>
+                  <div class="setting-hint">已移除自动降级（会话锁定模型后不再自动切换，保护提示词缓存）</div>
                 </div>
                 <div class="setting-item">
                   <label>自动附加 OpenCode 会话头</label>
@@ -1121,7 +1150,7 @@
                     <input type="checkbox" id="setting-llm-oc-auto">
                     <span class="toggle-slider"></span>
                   </div>
-                  <div class="setting-hint">URL 命中 opencode.ai 时自动发送 x-opencode-session/request/project 等会话与路由头（Go 订阅必需，网关转发上游前会剥离这些头）。免费模型所需的 User-Agent 不会自动注入——见下方免费模型说明，由你决定是否添加</div>
+                  <div class="setting-hint">URL 命中 opencode.ai 时自动发送 x-opencode-session/request/project 等身份头（官方 ID 形状：ses_/msg_ + 12 位十六进制 + 14 位 base62；Go 订阅与免费模型池均会校验）。免费模型所需的 User-Agent 不会自动注入——见下方免费模型说明，由你决定是否添加</div>
                 </div>
                 <div class="setting-item">
                   <label>自定义请求头 (对所有文本/VLM 请求生效)</label>
@@ -1328,13 +1357,18 @@
               <div class="settings-group">
                 <h3><i class="fa-solid fa-image"></i> 生图模型配置</h3>
                 <div class="setting-item">
+                  <label>厂商预设</label>
+                  <select id="setting-img-provider"></select>
+                  <div class="setting-hint" id="setting-img-provider-hint">选择厂商后自动填充端点与推荐模型，均可手动修改</div>
+                </div>
+                <div class="setting-item">
                   <label>API URL</label>
                   <input type="text" id="setting-img-url" placeholder="https://api.example.com/v1/images/generations">
                 </div>
                 <div class="setting-item">
                   <label>API Key</label>
                   <div class="input-with-toggle">
-                    <input type="password" id="setting-img-key" placeholder="sk-...">
+                    <input type="password" id="setting-img-key" placeholder="sk-...（本地端点可留空）">
                     <button class="btn-icon btn-toggle-pwd" data-target="setting-img-key">
                       <i class="fa-solid fa-eye"></i>
                     </button>
@@ -1342,18 +1376,75 @@
                 </div>
                 <div class="setting-item">
                   <label>模型</label>
-                  <input type="text" id="setting-img-model" placeholder="provider/model-name">
+                  <input type="text" id="setting-img-model" placeholder="gpt-image-2 / Qwen/Qwen-Image / doubao-seedream-5-0-lite-260128 …" list="setting-img-model-presets">
+                  <datalist id="setting-img-model-presets"></datalist>
                 </div>
                 <div class="setting-item">
-                  <label>图像分辨率</label>
-                  <select id="setting-img-size">
-                    <option value="512x512">512x512</option>
-                    <option value="768x768">768x768</option>
-                    <option value="1024x1024" selected>1024x1024</option>
-                    <option value="1024x768">1024x768</option>
-                    <option value="768x1024">768x1024</option>
-                  </select>
+                  <label>图像尺寸 / 宽高比</label>
+                  <select id="setting-img-size"></select>
+                  <div class="setting-hint">Gemini/Imagen/Stability 会自动换算为对应的 aspectRatio</div>
                 </div>
+                <div class="setting-item">
+                  <label>生成数量</label>
+                  <input type="number" id="setting-img-n" min="1" max="10" step="1" value="1" style="width:120px">
+                  <div class="setting-hint">部分模型/端点仅支持 1 张</div>
+                </div>
+                <details class="settings-advanced">
+                  <summary><i class="fa-solid fa-sliders"></i> 高级参数（按厂商生效，留空用默认）</summary>
+                  <div class="settings-advanced-body">
+                    <div class="setting-item"><label>质量 quality</label>
+                      <select id="setting-img-quality">
+                        <option value="">默认</option>
+                        <option value="auto">auto</option>
+                        <option value="low">low</option>
+                        <option value="medium">medium</option>
+                        <option value="high">high</option>
+                        <option value="standard">standard (DALL·E)</option>
+                        <option value="hd">hd (DALL·E)</option>
+                      </select>
+                    </div>
+                    <div class="setting-item"><label>背景 background</label>
+                      <select id="setting-img-background">
+                        <option value="">默认</option>
+                        <option value="auto">auto</option>
+                        <option value="transparent">transparent</option>
+                        <option value="opaque">opaque</option>
+                      </select>
+                    </div>
+                    <div class="setting-item"><label>输出格式</label>
+                      <select id="setting-img-format">
+                        <option value="">默认</option>
+                        <option value="png">png</option>
+                        <option value="jpeg">jpeg</option>
+                        <option value="webp">webp</option>
+                      </select>
+                    </div>
+                    <div class="setting-item"><label>负面提示词</label>
+                      <input type="text" id="setting-img-negative" placeholder="不要出现的元素…">
+                    </div>
+                    <div class="setting-item"><label>种子 seed</label>
+                      <input type="number" id="setting-img-seed" placeholder="留空随机">
+                    </div>
+                    <div class="setting-item"><label>采样步数 steps</label>
+                      <input type="number" id="setting-img-steps" placeholder="SD 风格端点专用">
+                    </div>
+                    <div class="setting-item"><label>引导系数 guidance</label>
+                      <input type="number" step="0.1" id="setting-img-guidance" placeholder="SD 风格端点专用">
+                    </div>
+                    <div class="setting-item"><label>风格预设 style</label>
+                      <input type="text" id="setting-img-style" placeholder="photographic / cinematic…（Stability）">
+                    </div>
+                    <div class="setting-item"><label>添加水印</label>
+                      <div class="toggle-switch"><input type="checkbox" id="setting-img-watermark"><span class="toggle-slider"></span></div>
+                      <div class="setting-hint">火山方舟等端点生效</div>
+                    </div>
+                    <div class="setting-item" id="setting-img-template-item" style="display:none">
+                      <label>自定义请求体 JSON 模板</label>
+                      <textarea id="setting-img-template" rows="4" placeholder='{"model":"{{model}}","prompt":"{{prompt}}","size":"{{size}}","n":{{n}}}'></textarea>
+                      <div class="setting-hint">占位符：{{prompt}} {{model}} {{size}} {{n}} {{seed}} {{negative_prompt}}；响应自动探测</div>
+                    </div>
+                  </div>
+                </details>
                 <div class="setting-item">
                   <label>每日最大生成图片数 (0为不限制)</label>
                   <input type="number" id="setting-img-daily-limit" min="0" step="1" placeholder="例如 50">
@@ -2621,13 +2712,21 @@
             </div>
             </div>
             <div class="settings-panel" data-tab="voice" hidden>
-              <div class="settings-group">
+              <div class="voice-model-gate hidden" id="voice-model-gate">
+                <i class="fa-solid fa-triangle-exclamation"></i>
+                <div class="voice-model-gate-text">
+                  <strong>语音模型未就绪</strong>
+                  <p id="voice-model-gate-text">请先在「资源下载」中下载语音模型，下载完成前语音设置不可用。</p>
+                </div>
+                <button class="btn-secondary btn-sm" id="btn-voice-goto-resources">前往资源下载</button>
+              </div>
+              <div class="settings-group" data-voice-cap="stt">
                 <h3><i class="fa-solid fa-microphone-lines"></i> 语音输入（STT）</h3>
                 <div class="setting-item"><label class="setting-label">语音识别</label><div class="toggle-switch"><input type="checkbox" id="setting-voice-stt"><span class="toggle-slider"></span></div></div>
                 <div class="setting-item"><label class="setting-label">识别模型</label><select id="setting-voice-stt-model" style="width:200px"><option value="base">base（更准，推荐）</option><option value="tiny">tiny（更快，省内存）</option></select><p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">切换后下次语音识别时生效；主窗口听写与后台唤醒框共用此模型</p></div>
                 <div class="setting-item"><label class="setting-label">发音尾词即发送</label><input type="text" id="setting-voice-stt-send-keywords" placeholder="例如：发送、发（留空关闭）" style="width:220px"><p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">听写结束语包含这些词（逗号分隔）时，自动发送该条消息并去掉关键词</p></div>
               </div>
-              <div class="settings-group">
+              <div class="settings-group" data-voice-cap="tts">
                 <h3><i class="fa-solid fa-volume-high"></i> 语音朗读（TTS）</h3>
                 <div class="setting-item"><label class="setting-label">语音朗读</label><div class="toggle-switch"><input type="checkbox" id="setting-voice-tts"><span class="toggle-slider"></span></div></div>
                 <div class="setting-item"><label class="setting-label">自动朗读 AI 回复</label><div class="toggle-switch"><input type="checkbox" id="setting-voice-tts-auto"><span class="toggle-slider"></span></div><p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">AI 流式输出时实时朗读，无需等待完成</p></div>
@@ -2640,13 +2739,13 @@
                 <div class="setting-item" id="req-voice-tts-chunk-size"><label class="setting-label">每块字数</label><div style="display:flex;align-items:center;gap:10px"><input type="range" id="setting-voice-tts-chunk-size" min="40" max="300" step="10" value="120" style="width:200px"><span id="setting-voice-tts-chunk-size-val" style="min-width:48px;text-align:right;font-size:13px;color:var(--text-secondary)">120字</span></div></div>
                 <div class="setting-item"><button class="btn-secondary" id="btn-voice-test">试听短句</button><span style="font-size:11px;color:var(--text-tertiary);margin-left:8px">使用当前音色朗读测试文本</span></div>
               </div>
-              <div class="settings-group">
+              <div class="settings-group" data-voice-cap="wake">
                 <h3><i class="fa-solid fa-bell"></i> 后台唤醒</h3>
                 <div class="setting-item"><label class="setting-label">启用语音唤醒</label><div class="toggle-switch"><input type="checkbox" id="setting-voice-wake"><span class="toggle-slider"></span></div><p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">常驻麦克风监听，约占用 1~3% CPU</p></div>
                 <div class="setting-item" id="voice-wake-words-section"><label class="setting-label">唤醒词列表</label><div id="voice-wake-words-list" style="margin-bottom:8px"></div><div style="display:flex;gap:6px;align-items:center"><input type="text" id="voice-new-wake-phrase" placeholder="输入唤醒词…" style="flex:1;min-width:140px"><select id="voice-new-wake-action" style="width:130px"><option value="voicebar">弹语音条</option><option value="mainwindow">弹出主窗口</option></select><button class="btn-secondary btn-sm" id="btn-voice-add-wake">添加</button></div></div>
                 <div class="setting-item"><label class="setting-label">检测灵敏度</label><select id="setting-voice-kws-threshold" style="width:200px"><option value="0.15">高</option><option value="0.25" selected>中</option><option value="0.40">低</option></select></div>
               </div>
-              <div class="settings-group">
+              <div class="settings-group" data-voice-cap="stt">
                 <h3><i class="fa-solid fa-keyboard"></i> 快捷键</h3>
                 <div class="setting-item"><label class="setting-label">全局热键</label><div style="display:flex;align-items:center;gap:8px"><input type="text" id="setting-voice-hotkey" placeholder="Control+Shift+Space" style="width:200px"><button class="btn-secondary btn-sm" id="btn-voice-record-hotkey" style="white-space:nowrap">录制</button></div><p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">按此组合键开关听写</p></div>
               </div>
@@ -2654,6 +2753,109 @@
                 <h3><i class="fa-solid fa-hard-drive"></i> 模型状态</h3>
                 <p id="voice-model-status" style="font-size:12px;color:var(--text-secondary)">检查中…</p>
                 <div style="margin-top:8px"><button class="btn-secondary btn-sm" id="btn-voice-refresh-status">刷新状态</button></div>
+              </div>
+            </div>
+            <div class="settings-panel" data-tab="resources">
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-download"></i> 下载设置</h3>
+                <p class="setting-hint" style="margin-bottom:12px">语音模型体积较大，不再随安装包分发。模型由你手动下载，下载后即时生效、无需重启；下载引擎优先使用内置 aria2（多连接加速），不可用时自动回退普通下载。</p>
+                <div class="setting-item">
+                  <label>下载源</label>
+                  <select id="setting-res-mirror" style="width:260px">
+                    <option value="cn">CN 镜像（hf-mirror.com，推荐国内网络）</option>
+                    <option value="official">官方源（huggingface.co）</option>
+                  </select>
+                  <div class="setting-hint">唤醒词 KWS 托管在 GitHub Release，不受镜像选择影响</div>
+                </div>
+                <div class="setting-item">
+                  <label>模型下载目录</label>
+                  <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+                    <input type="text" id="setting-res-dir" readonly style="flex:1;min-width:220px" placeholder="默认：程序数据目录/voice-models">
+                    <button class="btn-secondary btn-sm" id="btn-res-choose-dir">选择目录</button>
+                    <button class="btn-secondary btn-sm" id="btn-res-open-dir">打开目录</button>
+                  </div>
+                  <div class="setting-hint">默认程序数据目录；自定义目录对所有语音模型生效</div>
+                </div>
+                <div class="setting-item">
+                  <button class="btn-secondary" id="btn-res-download-all"><i class="fa-solid fa-download"></i> 下载全部必需模型</button>
+                  <span class="setting-hint" style="margin-left:8px">必需模型合计约 440MB（VAD + KWS + Whisper base + Kokoro）</span>
+                </div>
+              </div>
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-microphone-lines"></i> 语音模型</h3>
+                <div id="res-models-list"><div class="empty-state"><i class="fa-solid fa-spinner fa-spin"></i><p>正在读取模型状态…</p></div></div>
+              </div>
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-circle-info"></i> 使用说明</h3>
+                <ul class="res-help-list">
+                  <li>未下载模型时，「语音」设置页不可用，启动时会自动关闭已开启的语音开关，避免运行时报错。</li>
+                  <li>下载中断可再次点击「下载」，已完成的文件会自动跳过；aria2 支持断点续传。</li>
+                  <li>删除模型只影响当前下载目录中的文件；如果你使用自定义目录，请确保磁盘空间充足。</li>
+                  <li>模型来源：sherpa-onnx 官方发布（HuggingFace csukuangfj/* / GitHub k2-fsa）。</li>
+                </ul>
+              </div>
+            </div>
+            <div class="settings-panel" data-tab="decision">
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-scale-balanced"></i> 决策模型（System One / Jev）</h3>
+                <p class="setting-hint" style="margin-bottom:12px">Jev 不生成文本，只做「选择 / 打分 / 是否」类快速决策（70–500ms），用于模型池选型、工具选择、命令护栏、游戏决策等。低置信一律回退原有逻辑，不会阻塞主流程。</p>
+                <div class="setting-item">
+                  <label class="setting-label">启用决策模型</label>
+                  <div class="toggle-switch"><input type="checkbox" id="setting-decision-enabled"><span class="toggle-slider"></span></div>
+                </div>
+                <div class="setting-item">
+                  <label>服务源</label>
+                  <select id="setting-decision-provider" style="width:300px">
+                    <option value="zen">OpenCode Zen（免费 Jev 1.13）</option>
+                    <option value="typesafe">TypeSafe 直连（自备 Key）</option>
+                  </select>
+                </div>
+                <div class="setting-item">
+                  <label>API URL</label>
+                  <input type="text" id="setting-decision-url" placeholder="留空使用默认地址" autocomplete="off">
+                </div>
+                <div class="setting-item">
+                  <label>API Key</label>
+                  <input type="password" id="setting-decision-key" placeholder="Zen 免费可留空（public）；TypeSafe 必填" autocomplete="off">
+                </div>
+                <div class="setting-item">
+                  <label>模型</label>
+                  <input type="text" id="setting-decision-model" placeholder="默认 jev-1.13-free（Zen）/ jev-latest（TypeSafe）" autocomplete="off">
+                </div>
+                <div class="setting-item">
+                  <label>置信阈值</label>
+                  <input type="number" id="setting-decision-threshold" min="0.05" max="0.99" step="0.05" value="0.5" style="width:120px">
+                  <div class="setting-hint">choice/score 低于该置信度 → 回退原有逻辑</div>
+                </div>
+                <div class="setting-item">
+                  <label>护栏阈值（noul）</label>
+                  <input type="number" id="setting-decision-guard" min="0.5" max="0.99" step="0.05" value="0.85" style="width:120px">
+                  <div class="setting-hint">危险命令判断等保守场景：概率达到该值才判定为「危险 / 需要确认」</div>
+                </div>
+                <div class="setting-item">
+                  <label>超时 (ms)</label>
+                  <input type="number" id="setting-decision-timeout" min="1000" max="60000" step="1000" value="8000" style="width:120px">
+                </div>
+                <div class="setting-item">
+                  <label>每日调用上限 (0为不限制)</label>
+                  <input type="number" id="setting-decision-limit" min="0" step="100" value="0" style="width:120px">
+                  <div class="setting-hint" id="decision-usage">今日已调用: 0</div>
+                </div>
+                <div class="setting-item">
+                  <button class="btn-secondary" id="btn-decision-test"><i class="fa-solid fa-plug-circle-check"></i> 连通性测试</button>
+                  <span class="setting-hint" id="decision-test-status" style="margin-left:8px"></span>
+                </div>
+              </div>
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-toggle-on"></i> 接入点开关</h3>
+                <div class="setting-item"><label class="setting-label">模型池选型（会话创建时）</label><div class="toggle-switch"><input type="checkbox" id="setting-decision-use-model"><span class="toggle-slider"></span></div></div>
+                <div class="setting-item"><label class="setting-label">Reasoning Effort 决策（会话创建时）</label><div class="toggle-switch"><input type="checkbox" id="setting-decision-use-effort"><span class="toggle-slider"></span></div></div>
+                <div class="setting-item"><label class="setting-label">工具自动选择</label><div class="toggle-switch"><input type="checkbox" id="setting-decision-use-tools"><span class="toggle-slider"></span></div></div>
+                <div class="setting-item"><label class="setting-label">危险命令护栏</label><div class="toggle-switch"><input type="checkbox" id="setting-decision-use-guard"><span class="toggle-slider"></span></div></div>
+                <div class="setting-item"><label class="setting-label">游戏决策（猜人物/卧底/三国杀/成语/飞花令）</label><div class="toggle-switch"><input type="checkbox" id="setting-decision-use-games"><span class="toggle-slider"></span></div></div>
+                <div class="setting-item"><label class="setting-label">LLM 主动调用（decisionModel 工具）</label><div class="toggle-switch"><input type="checkbox" id="setting-decision-use-llm-tool"><span class="toggle-slider"></span></div><div class="setting-hint">允许模型在对话中自行调用决策模型；关闭后决策工具对 LLM 隐藏</div></div>
+                <div class="setting-item"><label class="setting-label">邮件/热消息意图分类</label><div class="toggle-switch"><input type="checkbox" id="setting-decision-use-email"><span class="toggle-slider"></span></div><div class="setting-hint">关闭可避免把邮件内容发送给决策服务（隐私）</div></div>
+                <div class="setting-item"><label class="setting-label">上下文保留打分</label><div class="toggle-switch"><input type="checkbox" id="setting-decision-use-context"><span class="toggle-slider"></span></div></div>
               </div>
             </div>
             <div class="settings-panel" data-tab="context">
@@ -2943,18 +3145,85 @@
       <div class="image-modal-header">
         <div class="image-modal-title">
           <i class="fa-solid fa-image"></i>
-          <span>图片预览</span>
+          <span id="image-preview-title">图片预览</span>
         </div>
         <div class="image-modal-actions">
-          <button class="btn-icon" id="btn-close-image-modal" title="关闭">
+          <button class="btn-icon" id="btn-img-zoom-out" title="缩小 (Ctrl+-)"><i class="fa-solid fa-magnifying-glass-minus"></i></button>
+          <button class="btn-icon image-zoom-label" id="btn-img-zoom-reset" title="适应窗口 / 100% 切换">100%</button>
+          <button class="btn-icon" id="btn-img-zoom-in" title="放大 (Ctrl+=)"><i class="fa-solid fa-magnifying-glass-plus"></i></button>
+          <span class="image-modal-sep"></span>
+          <button class="btn-icon" id="btn-img-download" title="下载到本地"><i class="fa-solid fa-download"></i></button>
+          <button class="btn-icon" id="btn-img-copy" title="复制图片"><i class="fa-regular fa-copy"></i></button>
+          <button class="btn-icon" id="btn-img-folder" title="打开所在文件夹"><i class="fa-solid fa-folder-open"></i></button>
+          <span class="image-modal-sep"></span>
+          <button class="btn-icon" id="btn-close-image-modal" title="关闭 (Esc)">
             <i class="fa-solid fa-xmark"></i>
           </button>
         </div>
       </div>
-      <div class="image-modal-body">
-        <div class="image-modal-frame">
-          <img id="image-preview-img" src="" alt="预览">
+      <div class="image-modal-body" id="image-modal-viewport">
+        <div class="image-modal-frame" id="image-modal-frame">
+          <img id="image-preview-img" src="" alt="预览" draggable="false">
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- LLM 模型池编辑器 -->
+  <div class="modal-overlay hidden" id="llm-pool-editor">
+    <div class="modal llm-pool-editor-modal">
+      <div class="modal-header">
+        <h3><i class="fa-solid fa-layer-group"></i> <span id="llm-pool-editor-title">添加模型</span></h3>
+        <button class="btn-icon" id="btn-pool-editor-close"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+      <div class="modal-body">
+        <div class="setting-item"><label>名称</label><input type="text" id="pool-edit-label" placeholder="如 Zen 免费 Big Pickle"></div>
+        <div class="setting-item">
+          <label>接入方式</label>
+          <select id="pool-edit-provider">
+            <option value="opencode-zen">OpenCode Zen (免费/按量)</option>
+            <option value="opencode-go">OpenCode Go (订阅)</option>
+            <option value="openai-compat">OpenAI 兼容</option>
+            <option value="openai-responses">OpenAI Responses</option>
+            <option value="anthropic-compat">Anthropic 兼容</option>
+          </select>
+        </div>
+        <div class="setting-item"><label>API URL</label><input type="text" id="pool-edit-url" placeholder="留空按接入方式自动（Zen/Go 自动）" autocomplete="off"></div>
+        <div class="setting-item">
+          <label>API Key</label>
+          <div class="input-with-toggle">
+            <input type="password" id="pool-edit-key" placeholder="Zen 免费可填 public；其他填对应 Key" autocomplete="off">
+            <button class="btn-icon btn-toggle-pwd" data-target="pool-edit-key"><i class="fa-solid fa-eye"></i></button>
+          </div>
+        </div>
+        <div class="setting-item">
+          <label>模型</label>
+          <div style="display:flex;gap:8px;align-items:center">
+            <input type="text" id="pool-edit-model" placeholder="如 big-pickle / gpt-image / glm-5.3-flash" style="flex:1" autocomplete="off">
+            <button class="btn-secondary btn-sm" id="btn-pool-edit-fetch" title="获取模型列表"><i class="fa-solid fa-rotate"></i></button>
+          </div>
+          <select id="pool-edit-model-select" class="hidden" style="margin-top:6px"></select>
+        </div>
+        <div class="setting-item"><label>上下文长度</label><input type="number" id="pool-edit-ctx" min="1024" max="2000000" step="1024" placeholder="默认 131072"></div>
+        <div class="setting-item"><label>智慧分数 (0-100，模型选择策略=Jev 时使用)</label><input type="number" id="pool-edit-intelligence" min="0" max="100" step="1" placeholder="50"></div>
+        <div class="setting-item"><label>优先级 (越小越优先)</label><input type="number" id="pool-edit-priority" min="0" step="1" placeholder="0"></div>
+        <div class="setting-item">
+          <label>Reasoning Effort</label>
+          <select id="pool-edit-effort">
+            <option value="off">关闭 (off)</option>
+            <option value="auto">自动 (auto)</option>
+            <option value="low">低 (low)</option>
+            <option value="medium">中 (medium)</option>
+            <option value="high">高 (high)</option>
+          </select>
+          <div class="setting-hint">全局策略为「Jev 决策」时此项作为回退值</div>
+        </div>
+        <div class="setting-item"><label>支持视觉（图片直接注入）</label><div class="toggle-switch"><input type="checkbox" id="pool-edit-vision"><span class="toggle-slider"></span></div></div>
+        <div class="setting-item"><label>启用</label><div class="toggle-switch"><input type="checkbox" id="pool-edit-enabled" checked><span class="toggle-slider"></span></div></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-secondary" id="btn-pool-editor-cancel">取消</button>
+        <button class="btn-primary" id="btn-pool-editor-save">保存</button>
       </div>
     </div>
   </div>
