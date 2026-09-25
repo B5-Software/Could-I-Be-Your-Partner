@@ -1,6 +1,6 @@
 {
   "name": "could-i-be-your-partner",
-  "version": "1.8.0-alpha.25",
+  "version": "1.8.0",
   "description": "全自动AI Agent，帮助完成一切任务",
   "license": "GPL-3.0-or-later",
   "main": "src/main/main.js",
@@ -9,9 +9,10 @@
     "test": "node scripts/build-app-bundle.js && node tests/run-tests.js",
     "build-app-bundle": "node scripts/build-app-bundle.js",
     "download-voice-models": "node scripts/download-voice-models.js --voice",
-    "download-assets": "node scripts/download-voice-models.js",
+    "download-assets": "node scripts/download-voice-models.js && node scripts/download-ocr-paddle.js",
     "prepare-build-assets": "node scripts/prepare-build-assets.js",
     "test:geogebra": "electron tests/geogebra-offline-smoke-main.js",
+    "test:ocr": "electron tests/ocr-engine-smoke-main.js",
     "build": "npm run build-app-bundle && npm run prepare-build-assets && npm run download-assets && node scripts/package.js",
     "build:win:x64": "npm run build-app-bundle && npm run prepare-build-assets && npm run download-assets && node scripts/package.js --win --x64",
     "build:win:arm64": "npm run build-app-bundle && npm run prepare-build-assets && npm run download-assets && node scripts/package.js --win --arm64",
@@ -55,6 +56,11 @@
     ],
     "asarUnpack": [
       "assets/ocr/**/*",
+      "assets/ocr-paddle/**/*",
+      "node_modules/@repeato/ocr/**/*",
+      "node_modules/onnxruntime-node/**/*",
+      "node_modules/sharp/**/*",
+      "node_modules/@img/**/*",
       "assets/ui-fonts/**/*",
       "assets/geogebra-app/**/*",
       "src/main/voice-worker.js",
@@ -83,6 +89,10 @@
     ],
     "win": {
       "icon": "assets/icons/icons/icon.ico",
+      "files": [
+        "!node_modules/onnxruntime-node/bin/napi-v6/darwin/**",
+        "!node_modules/onnxruntime-node/bin/napi-v6/linux/**"
+      ],
       "extraResources": [
         {
           "from": "assets/sandbox/win",
@@ -101,6 +111,10 @@
     },
     "mac": {
       "icon": "assets/icons/icons/icon.icns",
+      "files": [
+        "!node_modules/onnxruntime-node/bin/napi-v6/win32/**",
+        "!node_modules/onnxruntime-node/bin/napi-v6/linux/**"
+      ],
       "extendInfo": {
         "NSLocalNetworkUsageDescription": "需要访问本地网络以连接 Remote 模式下的远端设备和 WebUI 控制服务。",
         "NSMicrophoneUsageDescription": "需要访问麦克风以提供语音输入与后台唤醒功能。音频仅在本机处理，不会上传或存储。",
@@ -116,11 +130,19 @@
     },
     "linux": {
       "icon": "assets/icons/icons",
+      "files": [
+        "!node_modules/onnxruntime-node/bin/napi-v6/win32/**",
+        "!node_modules/onnxruntime-node/bin/napi-v6/darwin/**"
+      ],
       "maintainer": "B5-Software <b5-software@users.noreply.github.com>",
       "category": "Utility",
       "target": [
-        { "target": "AppImage" },
-        { "target": "deb" }
+        {
+          "target": "AppImage"
+        },
+        {
+          "target": "deb"
+        }
       ]
     }
   },
@@ -152,6 +174,7 @@
     "@deepseek-ai/schemastery": "3.18.1",
     "@eslint/js": "^10.0.1",
     "@nut-tree-fork/nut-js": "^4.2.6",
+    "@repeato/ocr": "^1.5.21",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
     "adm-zip": "^0.6.0",
@@ -167,8 +190,8 @@
     "fast-xml-parser": "^5.10.1",
     "iconv-lite": "^0.7.3",
     "imap-simple": "^1.6.3",
-    "jsqr": "^1.4.0",
     "js-yaml": "^4.3.0",
+    "jsqr": "^1.4.0",
     "katex": "^0.17.0",
     "mailparser": "^3.9.14",
     "mammoth": "^1.12.1",
@@ -198,7 +221,10 @@
     "@ffprobe-installer/darwin-x64@5.1.0": true,
     "fsevents@2.3.2": true,
     "tesseract.js@6.0.1": true,
-    "electron-winstaller@5.4.0": true
+    "electron-winstaller@5.4.0": true,
+    "onnxruntime-node@1.22.0-rev": true,
+    "sharp@0.34.5": true,
+    "protobufjs@7.6.6": true
   },
   "optionalDependencies": {
     "@ffmpeg-installer/ffmpeg": "^1.1.0",
