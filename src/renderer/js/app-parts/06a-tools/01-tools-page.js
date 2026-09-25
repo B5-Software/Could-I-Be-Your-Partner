@@ -10,7 +10,10 @@
       : getAllToolDefinitions(mode);
     const total = allDefs.length;
     const enabledCount = allDefs.filter(t => isEnabled(t.name)).length;
-    const enabledSchemas = getToolSchemas(Object.fromEntries(allDefs.filter(t => isEnabled(t.name)).map(t => [t.name, true])), mode);
+    // 注意：getToolSchemas 只排除显式 false 的条目；省略等于"未禁用"，
+    // 因此必须为每个工具写入 true/false，否则关闭工具后 token 估算不变。
+    const enabledMap = Object.fromEntries(allDefs.map(t => [t.name, isEnabled(t.name)]));
+    const enabledSchemas = getToolSchemas(enabledMap, mode);
     const schemaChars = JSON.stringify(enabledSchemas).length;
     const estTokens = Math.ceil(schemaChars / 4);
     const hasOptimized = (typeof agent.hasUsableOptimizedSelection === 'function')

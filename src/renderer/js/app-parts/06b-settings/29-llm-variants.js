@@ -40,11 +40,17 @@
       }
       if (res && res.ok && res.contextLength) contextLength = res.contextLength;
     } catch (_) { /* 网络/端点失败：走本地兜底 */ }
-    // 上下文长度：仅当用户未手动改过（空或默认 131072）时用 API 元数据补全
+    // 上下文长度：用户填写过（maxContextLengthExplicit）就按用户填写的值，绝不自动覆盖；
+    // 只有没填（空或仍是默认 131072）时才用 API 元数据补全，并同步到当前模型池条目。
     const ctxEl = document.getElementById('setting-llm-ctx');
-    if (ctxEl && contextLength && (!ctxEl.value || Number(ctxEl.value) === 131072) && Number(contextLength) !== Number(ctxEl.value)) {
-      ctxEl.value = String(contextLength);
-      s.llm.maxContextLength = Number(contextLength);
+    const ctxExplicit = s.llm.maxContextLengthExplicit === true;
+    if (ctxEl && contextLength && !ctxExplicit && (!ctxEl.value || Number(ctxEl.value) === 131072) && Number(contextLength) !== Number(ctxEl.value)) {
+      const next = Number(contextLength);
+      ctxEl.value = String(next);
+      s.llm.maxContextLength = next;
+      const pool = Array.isArray(s.llm.pool) ? s.llm.pool : [];
+      const active = pool.find(en => en && en.id === s.llm.activeEntryId) || pool[0];
+      if (active) active.contextLength = next;
       try { await saveSettings(s); } catch (_) { /* 忽略保存失败 */ }
     }
     if (!variants || !variants.length) {

@@ -821,6 +821,31 @@ test('LLM 模型自动获取列表：模型过多时也应全部可浏览（可�
   assert.ok(/\.llm-model-options\s*\{[\s\S]*max-height:\s*280px[\s\S]*overflow-y:\s*auto/.test(css), '下拉列表应限高可滚动');
 });
 
+test('模型上下文长度：用户填写后不得被自动拉取覆盖（仅未填时补全）', () => {
+  const fsLocal = require('fs');
+  const pathLocal = require('path');
+  const mainContent = fsLocal.readFileSync(pathLocal.join(__dirname, '../src/main/main.js'), 'utf-8');
+  const settingsJs = readAppParts('06b-settings');
+  // 主进程投影：显式用户值优先，并同步回池条目
+  assert.ok(mainContent.includes('if (llm.maxContextLengthExplicit && Number(llm.maxContextLength) > 0)'), '主进程应识别用户显式填写的上下文长度');
+  assert.ok(/entry\.contextLength\s*=\s*Number\(llm\.maxContextLength\)/.test(mainContent), '用户值应同步到当前池条目');
+  // 自动补全：仅在非显式 + 空/默认值时执行
+  assert.ok(settingsJs.includes('const ctxExplicit = s.llm.maxContextLengthExplicit === true'), '自动补全前应检查显式标记');
+  assert.ok(/!ctxExplicit\s*&&\s*\(!ctxEl\.value \|\| Number\(ctxEl\.value\) === 131072\)/.test(settingsJs), '显式填写后不应自动覆盖');
+  // 用户编辑：标记显式 + 同步池条目；清空则取消标记（允许后续自动拉取）
+  assert.ok(settingsJs.includes('s.llm.maxContextLengthExplicit = true'), '用户填写后应标记显式值');
+  assert.ok(/s\.llm\.maxContextLengthExplicit = true[\s\S]{0,400}active\.contextLength = val/.test(settingsJs), '用户填写应同步到池条目');
+  // 池编辑器：用户改过上下文长度后不再用元数据覆盖
+  assert.ok(settingsJs.includes('_poolCtxTouched'), '池编辑器应跟踪用户是否手改上下文长度');
+  assert.ok(/ctxEl && contextLength && !_poolCtxTouched && \(!ctxEl\.value \|\| Number\(ctxEl\.value\) === 131072\)/.test(settingsJs), '池编辑器自动补全应尊重用户输入');
+});
+
+test('工具上下文 token 统计随工具开关变化（禁用工具必须显式为 false）', () => {
+  const part = readAppParts('06a-tools');
+  assert.ok(part.includes('Object.fromEntries(allDefs.map(t => [t.name, isEnabled(t.name)]))'), '启用状态映射应为每个工具写入 true/false');
+  assert.ok(!part.includes('Object.fromEntries(allDefs.filter(t => isEnabled(t.name)).map(t => [t.name, true]))'), '不应省略被禁用工具（getToolSchemas 只排除显式 false）');
+});
+
 test('SKILL.md 导入：除元数据外全部正文进 prompt（未知章节不截断）', () => {
   const vm = require('vm');
   const src = fs.readFileSync(require('path').join(__dirname, '../src/renderer/js/skill-parsers.js'), 'utf-8');

@@ -68,9 +68,26 @@
       const key = { 'setting-llm-url': 'apiUrl', 'setting-llm-key': 'apiKey', 'setting-llm-model': 'model', 'setting-llm-ctx': 'maxContextLength', 'setting-llm-daily-limit': 'dailyMaxTokens', 'setting-llm-max-response': 'maxResponseTokens' }[id];
       const val = (id === 'setting-llm-ctx' || id === 'setting-llm-daily-limit' || id === 'setting-llm-max-response') ? parseInt(e.target.value) : e.target.value;
       const s = await window.api.getSettings();
+      if (key === 'maxContextLength') {
+        // 模型上下文长度：用户填写了就按填写的值，不再自动拉取覆盖；
+        // 清空则取消显式标记，允许下一次自动获取（只有没填时才拉）。
+        if (Number.isFinite(val) && val > 0) {
+          s.llm.maxContextLength = val;
+          s.llm.maxContextLengthExplicit = true;
+          const pool = Array.isArray(s.llm.pool) ? s.llm.pool : [];
+          const active = pool.find(en => en && en.id === s.llm.activeEntryId) || pool[0];
+          if (active) active.contextLength = val;
+          await saveSettings(s);
+          agent.contextManager.setMaxTokens(val);
+        } else {
+          s.llm.maxContextLengthExplicit = false;
+          await saveSettings(s);
+          refreshReasoningVariants();
+        }
+        return;
+      }
       s.llm[key] = val;
       await saveSettings(s);
-      if (key === 'maxContextLength') agent.contextManager.setMaxTokens(val);
       if (key === 'model' || key === 'apiUrl') refreshReasoningVariants();
     });
   });

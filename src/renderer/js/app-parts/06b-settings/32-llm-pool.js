@@ -12,6 +12,7 @@
   };
   let _poolEditingId = null;
   let _poolBound = false;
+  let _poolCtxTouched = false;
 
   function poolEsc(v) {
     return String(v == null ? '' : v).replace(/[&<>"']/g, c => ({
@@ -76,6 +77,8 @@
     s.llm.pool = pool;
     if (extra.activeEntryId !== undefined) s.llm.activeEntryId = extra.activeEntryId;
     if (extra.routing) s.llm.routing = extra.routing;
+    if (extra.maxContextLength !== undefined) s.llm.maxContextLength = extra.maxContextLength;
+    if (extra.maxContextLengthExplicit !== undefined) s.llm.maxContextLengthExplicit = extra.maxContextLengthExplicit;
     await saveSettings(s);
     renderPoolList(s);
   }
@@ -124,13 +127,15 @@
       effortEl.value = variants.some(v => v.id === current) ? current : (variants[0]?.id || 'off');
     }
     const ctxEl = document.getElementById('pool-edit-ctx');
-    if (ctxEl && contextLength && (!ctxEl.value || Number(ctxEl.value) === 131072)) {
+    // 用户已手动改过上下文长度：不再用 API 元数据覆盖（只有没填时才拉）
+    if (ctxEl && contextLength && !_poolCtxTouched && (!ctxEl.value || Number(ctxEl.value) === 131072)) {
       ctxEl.value = String(contextLength);
     }
   }
 
   function openPoolEditor(entry) {
     _poolEditingId = entry ? entry.id : null;
+    _poolCtxTouched = false;
     const title = document.getElementById('llm-pool-editor-title');
     if (title) title.textContent = entry ? '编辑模型' : '添加模型';
     fillPoolEditor(entry);
@@ -169,7 +174,13 @@
     const idx = pool.findIndex(x => x.id === entry.id);
     if (idx >= 0) pool[idx] = entry; else pool.push(entry);
     const activeEntryId = s.llm.activeEntryId || entry.id;
-    await savePool(pool, { activeEntryId });
+    const extra = { activeEntryId };
+    // 编辑的是当前生效条目且用户改过上下文长度：视为用户显式填写，主进程不再覆盖
+    if (_poolCtxTouched && activeEntryId === entry.id) {
+      extra.maxContextLength = entry.contextLength;
+      extra.maxContextLengthExplicit = true;
+    }
+    await savePool(pool, extra);
     closePoolEditor();
     window.showToast(idx >= 0 ? '模型已更新' : '模型已添加', 'success', 2000);
   }
@@ -221,6 +232,7 @@
     document.getElementById('pool-edit-model')?.addEventListener('change', () => {
       refreshPoolEditorVariants().catch(() => {});
     });
+    document.getElementById('pool-edit-ctx')?.addEventListener('input', () => { _poolCtxTouched = true; });
     document.getElementById('pool-edit-provider')?.addEventListener('change', (e) => {
       const urlEl = document.getElementById('pool-edit-url');
       if (urlEl && !urlEl.value.trim()) {
@@ -240,13 +252,28 @@
       if (idx < 0) return;
       const act = btn.dataset.poolAct;
       if (act === 'edit') openPoolEditor(pool[idx]);
-      else if (act === 'default') await savePool(pool, { activeEntryId: id });
+      else if (act === 'default') {
+        // 切换默认模型：采用新条目的上下文长度，并清除"用户显式填写"标记
+        const next = pool[idx];
+        await savePool(pool, {
+          activeEntryId: id,
+          maxContextLength: next.contextLength || s.llm.maxContextLength,
+          maxContextLengthExplicit: false,
+        });
+      }
       else if (act === 'delete') {
         const ok = window.api.confirmSensitive ? await window.api.confirmSensitive('确定删除该模型条目吗？') : window.confirm('确定删除该模型条目吗？');
         if (!ok) return;
+        const wasActive = s.llm.activeEntryId === id;
         pool.splice(idx, 1);
-        const activeEntryId = s.llm.activeEntryId === id ? (pool[0]?.id || '') : s.llm.activeEntryId;
-        await savePool(pool, { activeEntryId });
+        const activeEntryId = wasActive ? (pool[0]?.id || '') : s.llm.activeEntryId;
+        const extra = { activeEntryId };
+        if (wasActive) {
+          const nextActive = pool.find(x => x.id === activeEntryId);
+          if (nextActive && nextActive.contextLength) extra.maxContextLength = nextActive.contextLength;
+          extra.maxContextLengthExplicit = false;
+        }
+        await savePool(pool, extra);
       }
     });
     document.getElementById('setting-llm-model-strategy')?.addEventListener('change', async (e) => {

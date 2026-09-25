@@ -5,7 +5,8 @@
  * This file is part of Could I Be Your Partner.
  */
 
-const { app, BrowserWindow, ipcMain, nativeTheme, dialog, clipboard, screen, shell, systemPreferences, Notification, Tray, Menu, nativeImage, protocol, net, safeStorage } = require('electron');
+const { app, BrowserWindow, ipcMain, nativeTheme, dialog, clipboard, screen, shell, systemPreferences, Notification, Tray, Menu, nativeImage, protocol, net, safeStorage, crashReporter } = require('electron');
+const appLog = require('./app-log');
 
 // stdout/stderr 被关闭或管道截断（如 `npm start | head`）时，console.log 会抛
 // EPIPE 未捕获异常直接崩溃主进程 —— 吞掉流错误，此后写操作变为无害 no-op。
@@ -17,9 +18,23 @@ process.stderr.on('error', () => {});
 // 完整堆栈会写入日志，便于现场定位。
 process.on('uncaughtException', (err) => {
   try { console.error('[main] Uncaught exception:', err); } catch { /* ignore */ }
+  try {
+    appLog.writeCrashRecord({
+      source: 'uncaughtException',
+      message: (err && err.message) || String(err),
+      stack: (err && err.stack) || '',
+    });
+  } catch { /* ignore */ }
 });
 process.on('unhandledRejection', (reason) => {
   try { console.error('[main] Unhandled rejection:', reason); } catch { /* ignore */ }
+  try {
+    appLog.writeCrashRecord({
+      source: 'unhandledRejection',
+      message: (reason && reason.message) || String(reason),
+      stack: (reason && reason.stack) || '',
+    });
+  } catch { /* ignore */ }
 });
 
 const path = require('path');
@@ -44,7 +59,7 @@ const { extractWordText, createWordDocument, fillWordTemplate, getWordMetadata, 
 const mathTools = require('./math-tools');
 const tarotTools = require('./tarot-tools');
 const { decodeXmlEntities, encodeXmlEntities } = require('./xml-utils');
-const { recognizeImageWithTesseract } = require('./ocr');
+const { recognizeImageWithTesseract, recognizeImageDetailed, disposeOcrEngines } = require('./ocr');
 const sandboxRunner = require('./sandbox-runner');
 const { PluginManager } = require('./ds-compat/plugin-manager');
 const {
@@ -126,6 +141,51 @@ const babeHistoryDir = path.join(dataDir, 'babe-history'); // Babe mode 独立�
 const workspacesBaseDir = path.join(app.getPath('documents'), 'Could-I-Be-Your-Partner');
 
 [dataDir, imagesDir, skillsDir, historyDir, babeHistoryDir, workspacesBaseDir].forEach(d => { if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true }); });
+
+// ---- 崩溃诊断基础设施：原生 minidump + 持久化日志 ----
+// crashReporter 必须在 ready 之前启动，否则 Chromium 的 crashpad handler 不会连接，
+// 只会打印 "not connected" 且不产生任何 dump。
+const crashDumpsPath = path.join(userDataPath, 'Crashpad');
+try { fs.mkdirSync(crashDumpsPath, { recursive: true }); } catch { /* ignore */ }
+try { app.setPath('crashDumps', crashDumpsPath); } catch { /* ignore */ }
+try {
+  crashReporter.start({
+    productName: 'Could I Be Your Partner',
+    companyName: 'B5-Software',
+    submitURL: 'https://localhost.invalid/crash-report',
+    uploadToServer: false,
+    compress: true,
+  });
+} catch (e) {
+  try { console.warn('[crash] crashReporter start failed:', e && e.message); } catch { /* ignore */ }
+}
+appLog.initLogging({ logDir: path.join(userDataPath, 'logs'), crashDir: path.join(dataDir, 'crash') });
+
+app.on('render-process-gone', (_event, webContents, details) => {
+  try {
+    appLog.writeCrashRecord({
+      source: 'render-process-gone',
+      message: `reason=${details && details.reason} exitCode=${details && details.exitCode}`,
+      stack: '',
+      extra: {
+        url: webContents && !webContents.isDestroyed() ? webContents.getURL() : '',
+        type: webContents ? webContents.getType() : '',
+        details: details || null,
+      },
+    });
+  } catch { /* ignore */ }
+});
+
+app.on('child-process-gone', (_event, details) => {
+  try {
+    appLog.writeCrashRecord({
+      source: 'child-process-gone',
+      message: `type=${details && details.type} reason=${details && details.reason} exitCode=${details && details.exitCode}`,
+      stack: '',
+      extra: details || null,
+    });
+  } catch { /* ignore */ }
+});
 
 // ---- 崩溃会话清扫：应用异常退出后，把残留"运行中"的历史标记为"异常退出" ----
 // 用"上次优雅退出时间戳"做门闸：只检查该时刻之后修改过的历史文件，启动开销恒定很小。
@@ -597,8 +657,26 @@ function normalizeMessagesForThinking(messages) {
   return changed ? out : messages;
 }
 
+// settings 持久化去抖：settings.json 可能较大（头像已外置后通常 <300KB），
+// 高频调用（用量记账/设置页连续修改）合并为一次紧凑写盘；退出前 flush。
+let _settingsPersistTimer = null;
+function scheduleSettingsPersist(delay = 900) {
+  if (_settingsPersistTimer) clearTimeout(_settingsPersistTimer);
+  _settingsPersistTimer = setTimeout(() => {
+    _settingsPersistTimer = null;
+    try { saveJSON(settingsPath, settings, false); } catch { /* ignore */ }
+  }, delay);
+  if (_settingsPersistTimer.unref) _settingsPersistTimer.unref();
+}
+function flushSettingsPersist() {
+  if (_settingsPersistTimer) {
+    clearTimeout(_settingsPersistTimer);
+    _settingsPersistTimer = null;
+  }
+  try { saveJSON(settingsPath, settings, false); } catch { /* ignore */ }
+}
 function persistSettings() {
-  saveJSON(settingsPath, settings);
+  scheduleSettingsPersist();
 }
 
 // ---- CIBYP-IM 安全存储与状态持久化（模块顶层：启动/before-quit/IPC 共用）----
@@ -621,10 +699,10 @@ function cibypImUnsealConfig(cfg) {
         const plain = safeStorage.decryptString(Buffer.from(c.vault, 'base64'));
         Object.assign(c, JSON.parse(plain));
       } else {
-        console.error('[CIBYP-IM] safeStorage 不可用，无法解密本机密钥vault');
+        console.error('[CIBYP-IM] safeStorage unavailable, cannot decrypt local key vault');
       }
     } catch (e) {
-      console.error('[CIBYP-IM] vault 解密失败:', e.message);
+      console.error('[CIBYP-IM] vault decrypt failed:', e.message);
     }
   } else if (Object.keys(legacy).length) {
     Object.assign(c, legacy); // 明文迁移路径
@@ -639,11 +717,11 @@ function cibypImSealState(stateObj) {
     try {
       return { vault: safeStorage.encryptString(JSON.stringify(sensitive)).toString('base64') };
     } catch (e) {
-      console.error('[CIBYP-IM] vault 加密失败:', e.message);
+      console.error('[CIBYP-IM] vault encrypt failed:', e.message);
     }
   } else if (!_cibypImPlainWarned) {
     _cibypImPlainWarned = true;
-    console.warn('[CIBYP-IM] safeStorage 不可用，密钥将以明文保存在 settings.json（不建议）');
+    console.warn('[CIBYP-IM] safeStorage unavailable; key will be stored in plaintext in settings.json (not recommended)');
   }
   return sensitive; // 兜底：明文（功能优先，已警告）
 }
@@ -659,7 +737,7 @@ function saveCibypImState(immediate = false) {
       settings.cibypIm = next;
       persistSettings();
     } catch (e) {
-      console.error('[CIBYP-IM] 状态持久化失败:', e.message);
+      console.error('[CIBYP-IM] state persist failed:', e.message);
     }
   };
   if (immediate) {
@@ -679,7 +757,7 @@ function cibypImConfigureFromSettings() {
     // 旧版明文残留：立即密封落盘，缩短明文暴露窗口
     if (hasLegacyPlaintext) saveCibypImState(true);
   } catch (e) {
-    console.error('[CIBYP-IM] 初始化失败:', e.message);
+    console.error('[CIBYP-IM] init failed:', e.message);
   }
 }
 
@@ -1034,20 +1112,27 @@ function projectActivePoolEntry() {
     if (entry.provider === 'opencode-zen' || entry.provider === 'opencode-go') llm.zenApiKey = entry.apiKey || '';
     else llm.apiKey = entry.apiKey || '';
     if (entry.effort) llm.reasoningEffort = entry.effort;
+    // 上下文长度：用户在设置里手动填写过（maxContextLengthExplicit=true）时以用户值为准，
+    // 同步写入池条目，避免被条目默认值或模型元数据再次覆盖。
+    if (llm.maxContextLengthExplicit && Number(llm.maxContextLength) > 0) {
+      entry.contextLength = Number(llm.maxContextLength);
+    }
     if (entry.contextLength) llm.maxContextLength = entry.contextLength;
   } catch (e) {
-    console.warn('[llm] 模型池投影失败:', e.message);
+    console.warn('[llm] model pool projection failed:', e.message);
   }
 }
 if (!Array.isArray(settings.imageGen.customHeaders)) settings.imageGen.customHeaders = [];
 // Migrate: 生图多厂商配置（旧版无 provider → 有 URL 视为 siliconflow，否则 openai）
 settings.imageGen = require('./image-gen').normalizeImageGenConfig(settings.imageGen);
+// 迁移写入标记：只有确实发生迁移才写盘（避免每次启动无条件重写大文件）
+let needsSettingsWrite = false;
 // Migrate: 资源下载设置（镜像 / 模型目录）
-if (!settings.resources || typeof settings.resources !== 'object') settings.resources = { mirror: 'cn', voiceModelDir: '' };
+if (!settings.resources || typeof settings.resources !== 'object') { settings.resources = { mirror: 'cn', voiceModelDir: '' }; needsSettingsWrite = true; }
 if (settings.resources.mirror !== 'official') settings.resources.mirror = 'cn';
-if (typeof settings.resources.voiceModelDir !== 'string') settings.resources.voiceModelDir = '';
+if (typeof settings.resources.voiceModelDir !== 'string') { settings.resources.voiceModelDir = ''; needsSettingsWrite = true; }
 // Migrate: per-day usage tracking (for token stats tab).
-if (!settings.llm.usageHistory) settings.llm.usageHistory = {};
+if (!settings.llm.usageHistory) { settings.llm.usageHistory = {}; needsSettingsWrite = true; }
 // Migrate: automation 旧版 serverToken 字符串 → tokens 列表；补齐 allowNoToken/tokens 默认结构。
 {
   const normAuto = normalizeAutomationSettings(settings.automation);
@@ -1065,9 +1150,11 @@ if (settings.budget && settings.budget.models) {
     if (!p) continue;
     if (p.promptPerK != null && p.inputPerM == null) {
       p.inputPerM = (Number(p.promptPerK) || 0) * 1000;
+      needsSettingsWrite = true;
     }
     if (p.completionPerK != null && p.outputPerM == null) {
       p.outputPerM = (Number(p.completionPerK) || 0) * 1000;
+      needsSettingsWrite = true;
     }
     if (p.cacheReadPerM == null && p.inputPerM != null) {
       // 缓存读取默认按输入价格的 0.1 倍计费
@@ -1081,20 +1168,23 @@ if (settings.budget && settings.budget.models) {
     // 保留旧字段以兼容旧版本回滚（不删除）
   }
 }
-if (!settings.budget) settings.budget = { models: {}, peakHours: { enabled: false, start: 9, end: 18, inputMul: 1.5, cacheReadMul: 1.5, outputMul: 1.5, cacheWriteMul: 1.5 }, dailyLimitUSD: 0, monthlyLimitUSD: 0, warningThreshold: 0.8 };
+if (!settings.budget) { settings.budget = { models: {}, peakHours: { enabled: false, start: 9, end: 18, inputMul: 1.5, cacheReadMul: 1.5, outputMul: 1.5, cacheWriteMul: 1.5 }, dailyLimitUSD: 0, monthlyLimitUSD: 0, warningThreshold: 0.8 }; needsSettingsWrite = true; }
 // 工具首次使用授权状态迁移
-if (!settings.toolAuthGranted) settings.toolAuthGranted = { playwright: false, computerUse: false };
+if (!settings.toolAuthGranted) { settings.toolAuthGranted = { playwright: false, computerUse: false }; needsSettingsWrite = true; }
 else {
-  if (typeof settings.toolAuthGranted.playwright !== 'boolean') settings.toolAuthGranted.playwright = false;
-  if (typeof settings.toolAuthGranted.computerUse !== 'boolean') settings.toolAuthGranted.computerUse = false;
+  if (typeof settings.toolAuthGranted.playwright !== 'boolean') { settings.toolAuthGranted.playwright = false; needsSettingsWrite = true; }
+  if (typeof settings.toolAuthGranted.computerUse !== 'boolean') { settings.toolAuthGranted.computerUse = false; needsSettingsWrite = true; }
 }
 // 后台托盘模式设置迁移
 if (!settings.closeToTray || !['ask', 'always', 'never', 'once'].includes(settings.closeToTray)) {
   settings.closeToTray = 'ask';
+  needsSettingsWrite = true;
 }
-if (typeof settings.trayEnabled !== 'boolean') settings.trayEnabled = true;
-if (!settings.budget.peakHours) settings.budget.peakHours = { enabled: false, start: 9, end: 18, inputMul: 1.5, cacheReadMul: 1.5, outputMul: 1.5, cacheWriteMul: 1.5 };
-saveJSON(settingsPath, settings);
+if (typeof settings.trayEnabled !== 'boolean') { settings.trayEnabled = true; needsSettingsWrite = true; }
+if (!settings.budget.peakHours) { settings.budget.peakHours = { enabled: false, start: 9, end: 18, inputMul: 1.5, cacheReadMul: 1.5, outputMul: 1.5, cacheWriteMul: 1.5 }; needsSettingsWrite = true; }
+if (needsSettingsWrite || !fs.existsSync(settingsPath)) {
+  try { saveJSON(settingsPath, settings, false); } catch (e) { console.warn('[settings] initial write failed:', e && e.message); }
+}
 
 let memory = loadJSON(memoryPath, []);
 let knowledge = loadJSON(knowledgePath, []);
@@ -1151,7 +1241,8 @@ function createSplashWindow() {
   splashWindow = new BrowserWindow({
     width: 420, height: 300,
     frame: false,
-    transparent: true,
+    transparent: false,
+    backgroundColor: '#17181d',
     resizable: false,
     movable: true,
     alwaysOnTop: true,
@@ -1174,13 +1265,15 @@ function createSplashWindow() {
   const fonts = (settings.fonts || {});
   const fontFamily = SPLASH_FONT_WHITELIST.includes(fonts[lang]) ? fonts[lang]
     : SPLASH_FONT_WHITELIST.includes(fonts.zh) ? fonts.zh : '';
+  try { splashWindow.setBackgroundColor(bg); } catch { /* ignore */ }
   const params = {
     dark: dark ? '1' : '0',
     accent: accent.slice(1),
     bg: bg.slice(1),
     version: app.getVersion(),
     gitHash: getGitShortHash(),
-    font: fontFamily
+    // 启动画面不加载体积巨大的自定义字体，避免与主窗口重复解析（主窗口仍正常应用）
+    font: ''
   };
   splashWindow.loadFile(path.join(__dirname, '../renderer/pages/splash.html'), { query: params });
   splashWindow.once('ready-to-show', () => {
@@ -1205,13 +1298,15 @@ function createWindow() {
     icon: path.join(__dirname, '../../assets/icons/icon.png'),
     show: false,
     backgroundColor: '#1e1e1e',
+    // 启动阶段不绘制隐藏窗口，减少 Windows 首屏竞争；show 后正常绘制
+    paintWhenInitiallyHidden: false,
     webPreferences: {
       preload: path.join(__dirname, '../preload/preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
-      // 隐藏到托盘后仍需保持 LLM 流式/语音播报/Agent 后台运行，禁用节流
-      backgroundThrottling: false
+      // 启动阶段允许节流；首次 show 后关闭节流（隐藏到托盘仍需后台运行 Agent/语音）
+      backgroundThrottling: true
     }
   });
   mainWindowShownOnce = false;
@@ -1224,8 +1319,11 @@ function createWindow() {
   }, MAIN_WINDOW_SHOW_FALLBACK_MS);
   registerRendererReadyListener();
   mainWindow.loadFile(path.join(__dirname, '../renderer/pages/index.html'));
-  // 主窗口一旦显示（渲染器就绪或超时兜底）即关闭 Splash
-  mainWindow.on('show', () => closeSplash());
+  // 主窗口一旦显示（渲染器就绪或超时兜底）即关闭 Splash，并解除后台节流
+  mainWindow.on('show', () => {
+    closeSplash();
+    try { mainWindow.webContents.setBackgroundThrottling(false); } catch { /* ignore */ }
+  });
   // Resize the built-in browser (BrowserView) when the main window resizes.
 
   // 关闭拦截：根据 settings.closeToTray 决定是否最小化到托盘
@@ -1261,6 +1359,185 @@ function createWindow() {
     }
   });
 }
+
+// ---- 崩溃报告窗口：上轮异常退出时本次启动自动弹出 ----
+let crashReportWindow = null;
+let pendingCrashReport = null;
+
+function detectPendingCrashReport(previousCleanExit, crashedSessionCount) {
+  try {
+    const since = previousCleanExit || (Date.now() - 24 * 3600 * 1000);
+    const records = appLog.readCrashRecords(since);
+    const dumps = appLog.listDumpFiles(crashDumpsPath).filter((d) => !previousCleanExit || d.mtimeMs > previousCleanExit);
+    if (crashedSessionCount > 0 || records.length > 0 || dumps.length > 0) {
+      pendingCrashReport = {
+        previousCleanExit: previousCleanExit || 0,
+        crashedSessionCount: crashedSessionCount || 0,
+        records,
+        dumps,
+        detectedAt: Date.now(),
+      };
+      console.warn(`[crash] previous run ended abnormally: sessions=${crashedSessionCount} records=${records.length} dumps=${dumps.length}`);
+    }
+  } catch (e) {
+    console.warn('[crash] detection failed:', e && e.message);
+  }
+}
+
+function buildSettingsSummary() {
+  const s = settings || {};
+  const llm = s.llm || {};
+  const decision = s.decision || {};
+  return {
+    llm: {
+      provider: llm.provider || '',
+      model: llm.model || '',
+      apiUrl: llm.apiUrl || '',
+      hasApiKey: !!(llm.apiKey || llm.zenApiKey),
+    },
+    decision: {
+      enabled: !!decision.enabled,
+      provider: decision.provider || '',
+      model: decision.model || '',
+      usages: decision.usages || {},
+    },
+    voice: {
+      enabled: !!(s.voice && s.voice.enabled),
+      wakeEnabled: !!(s.voice && s.voice.wakeEnabled),
+    },
+    proxy: {
+      mode: s.proxy ? s.proxy.mode : '',
+      hasRules: !!(s.proxy && s.proxy.proxyRules),
+    },
+    enabledToolCount: s.tools ? Object.keys(s.tools).length : 0,
+  };
+}
+
+function buildCrashInfo() {
+  const info = pendingCrashReport || { previousCleanExit: 0, crashedSessionCount: 0, records: [], dumps: [], detectedAt: Date.now() };
+  let appMetrics = [];
+  try { appMetrics = app.getAppMetrics(); } catch { /* ignore */ }
+  let mem = null;
+  try { mem = process.memoryUsage(); } catch { /* ignore */ }
+  return {
+    meta: {
+      version: app.getVersion(),
+      name: app.getName(),
+      electron: process.versions.electron,
+      chrome: process.versions.chrome,
+      node: process.versions.node,
+      platform: process.platform,
+      arch: process.arch,
+      pid: process.pid,
+      uptimeSec: Math.round(process.uptime()),
+    },
+    detectedAt: info.detectedAt,
+    previousCleanExit: info.previousCleanExit,
+    crashedSessionCount: info.crashedSessionCount,
+    records: info.records,
+    dumps: (info.dumps || []).map((d) => ({ name: path.basename(d.path), path: d.path, size: d.size, mtimeMs: d.mtimeMs })),
+    logPath: appLog.currentLogPath(),
+    logTail: appLog.tailLines(300),
+    logDir: appLog.getLogDir(),
+    crashDir: appLog.getCrashDir(),
+    dumpsDir: crashDumpsPath,
+    currentMemory: mem ? { rss: mem.rss, heapUsed: mem.heapUsed, heapTotal: mem.heapTotal, external: mem.external } : null,
+    appMetrics: appMetrics.map((m) => ({ pid: m.pid, type: m.type, name: m.name, cpu: m.cpu, memory: m.memory })),
+  };
+}
+
+function openCrashReportWindow() {
+  if (!pendingCrashReport) return;
+  if (crashReportWindow && !crashReportWindow.isDestroyed()) {
+    crashReportWindow.focus();
+    return;
+  }
+  crashReportWindow = new BrowserWindow({
+    width: 880, height: 700, minWidth: 680, minHeight: 480,
+    title: 'Crash Report',
+    frame: false,
+    show: false,
+    backgroundColor: '#15171c',
+    webPreferences: {
+      preload: path.join(__dirname, '../preload/crash-report-preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+    },
+  });
+  crashReportWindow.loadFile(path.join(__dirname, '../renderer/pages/crash-report.html'));
+  crashReportWindow.once('ready-to-show', () => crashReportWindow.show());
+  crashReportWindow.on('closed', () => { crashReportWindow = null; });
+}
+
+function closeCrashReportWindow() {
+  if (crashReportWindow && !crashReportWindow.isDestroyed()) crashReportWindow.close();
+}
+
+ipcMain.handle('crash:info', () => buildCrashInfo());
+ipcMain.handle('crash:close', () => { closeCrashReportWindow(); });
+ipcMain.handle('crash:dismiss', () => {
+  appLog.clearCrashRecords();
+  pendingCrashReport = null;
+  closeCrashReportWindow();
+  return { ok: true };
+});
+ipcMain.handle('crash:openDumpsDir', () => {
+  try { shell.showItemInFolder(crashDumpsPath); } catch { /* ignore */ }
+  return { ok: true, dir: crashDumpsPath };
+});
+ipcMain.handle('crash:exportBundle', async () => {
+  try {
+    const AdmZip = require('adm-zip');
+    const ts = new Date().toISOString().replace(/[:.]/g, '-');
+    const defPath = path.join(app.getPath('documents'), `cibyp-crash-${ts}.zip`);
+    const parent = crashReportWindow && !crashReportWindow.isDestroyed() ? crashReportWindow : mainWindow;
+    const dialogOptions = {
+      title: 'Export crash diagnostics',
+      defaultPath: defPath,
+      filters: [{ name: 'Zip archive', extensions: ['zip'] }],
+    };
+    const result = parent ? await dialog.showSaveDialog(parent, dialogOptions) : await dialog.showSaveDialog(dialogOptions);
+    if (result.canceled || !result.filePath) return { ok: false, canceled: true };
+    const zip = new AdmZip();
+    const info = buildCrashInfo();
+    zip.addFile('report.json', Buffer.from(JSON.stringify({ ...info, logTail: undefined }, null, 2), 'utf8'));
+    zip.addFile('settings-summary.json', Buffer.from(JSON.stringify(buildSettingsSummary(), null, 2), 'utf8'));
+    if (info.logTail) zip.addFile('logs/main-tail.log', Buffer.from(info.logTail, 'utf8'));
+    const logPath = appLog.currentLogPath();
+    if (logPath && fs.existsSync(logPath)) {
+      try { zip.addLocalFile(logPath, 'logs'); } catch { /* ignore */ }
+    }
+    for (const d of info.dumps) {
+      try { if (fs.existsSync(d.path)) zip.addLocalFile(d.path, 'dumps'); } catch { /* ignore */ }
+    }
+    zip.writeZip(result.filePath);
+    return { ok: true, path: result.filePath };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+ipcMain.handle('crash:heapSnapshot', async () => {
+  try {
+    const v8 = require('v8');
+    const ts = new Date().toISOString().replace(/[:.]/g, '-');
+    const defPath = path.join(app.getPath('documents'), `heap-${ts}.heapsnapshot`);
+    const parent = crashReportWindow && !crashReportWindow.isDestroyed() ? crashReportWindow : mainWindow;
+    const dialogOptions = {
+      title: 'Export heap snapshot',
+      defaultPath: defPath,
+      filters: [{ name: 'Heap snapshot', extensions: ['heapsnapshot'] }],
+    };
+    const result = parent ? await dialog.showSaveDialog(parent, dialogOptions) : await dialog.showSaveDialog(dialogOptions);
+    if (result.canceled || !result.filePath) return { ok: false, canceled: true };
+    const out = v8.writeHeapSnapshot(result.filePath);
+    let size = 0;
+    try { size = fs.statSync(out).size; } catch { /* ignore */ }
+    return { ok: true, path: out, size };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
 
 // 渲染器预渲染完成 → 显示主窗口（sender 校验防止子窗口误触发；
 // 模块级一次性注册，避免窗口重建时重复累积监听器）
@@ -1485,15 +1762,15 @@ async function applyProxySettings(proxy) {
     // 关闭基于旧代理配置的连接池 socket，避免动态切换后复用旧连接
     try { await session.defaultSession.closeAllConnections(); } catch { /* ignore */ }
   } catch (e) {
-    console.warn('[Proxy] 设置 Electron session 代理失败:', e.message);
+    console.warn('[Proxy] failed to set Electron session proxy:', e.message);
   }
   // 主进程 fetch dispatcher + 子进程 env
   try {
     await netProxy.setConfig(proxy);
   } catch (e) {
-    console.warn('[Proxy] 应用主进程代理失败:', e.message);
+    console.warn('[Proxy] failed to apply main-process proxy:', e.message);
   }
-  console.log('[Proxy] 已应用代理设置:', config.mode, config.mode === 'fixed_servers' ? config.proxyRules : '');
+  console.log('[Proxy] proxy settings applied:', config.mode, config.mode === 'fixed_servers' ? config.proxyRules : '');
 }
 
 // 代理设置变更时动态更新（由渲染进程 settings 保存后触发）
@@ -1505,7 +1782,7 @@ ipcMain.handle('proxy:apply', async (_, proxy) => {
       await aria2Manager.start(proxy);
     }
     // 同步 FediKitten 服务代理（主进程 fetch 需要独立 dispatcher）
-    try { await fedikittenService.refreshProxy(proxy); } catch (e) { console.warn('[Proxy] 刷新 FediKitten 代理失败:', e.message); }
+    try { await fedikittenService.refreshProxy(proxy); } catch (e) { console.warn('[Proxy] failed to refresh FediKitten proxy:', e.message); }
     return { ok: true };
   } catch (e) {
     return { ok: false, error: e.message };
@@ -1514,42 +1791,30 @@ ipcMain.handle('proxy:apply', async (_, proxy) => {
 
 app.whenReady().then(() => {
   // 崩溃会话清扫：上次运行异常退出时残留的"运行中"历史 → 标记"异常退出"
+  const previousCleanExit = readLastCleanExit();
+  let crashedSessionCount = 0;
   try {
-    const fixed = markActiveHistoriesCrashed(readLastCleanExit());
-    if (fixed > 0) console.log(`[history] 已将 ${fixed} 个异常退出的会话标记为 crashed`);
-  } catch (e) { console.error('[history] 崩溃清扫失败:', e.message); }
+    crashedSessionCount = markActiveHistoriesCrashed(previousCleanExit);
+    if (crashedSessionCount > 0) console.log(`[history] marked ${crashedSessionCount} session(s) as crashed`);
+  } catch (e) { console.error('[history] crash sweep failed:', e.message); }
   _bootTime = Date.now();
   writeLastCleanExit(_bootTime);
+  // 崩溃检测：上轮异常退出 / 原生 minidump / 未捕获异常记录 → 本次启动展示独立报告窗口
+  detectPendingCrashReport(previousCleanExit, crashedSessionCount);
+  // 头像迁移：历史版本把 10MB+ base64 头像存在 settings.json 里，首次启动迁到文件（保留备份）
+  try { _migrateAvatarsToFiles(); } catch (e) { console.warn('[avatars] migration failed:', e && e.message); }
   // CIBYP-IM：ready 后解封 vault（safeStorage 需要 ready），服务状态常驻内存
   cibypImConfigureFromSettings();
   // 注册 GeoGebra 离线静态服务（ggb://app/... → assets/geogebra-app/GeoGebra/HTML5/5.0/...）
   registerGeogebraProtocol();
-  // 启动时复制 OCR traineddata 文件到当前执行目录根，避免 GFW blocking
   const appPath = app.getAppPath();
   // 检测 .no-tarot 标志文件（由 build --no-tarot 脚本写入）：若存在则屏蔽所有塔罗牌元素/工具/UI
   const NO_TAROT_BUILD = fs.existsSync(path.join(appPath, '.no-tarot'));
   if (NO_TAROT_BUILD) {
-    console.log('[CIBYP] .no-tarot 标志文件存在，塔罗牌功能已被屏蔽');
+    console.log('[CIBYP] .no-tarot flag present, tarot features disabled');
     // 强制覆盖设置中的 tarotVisible 为 false（即使用户之前保存过 true）
     settings.tarotVisible = false;
     try { fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2)); } catch {}
-  }
-  const srcOcrDir = path.join(appPath, 'assets', 'ocr');
-  const destOcrDir = process.cwd();
-  if (fs.existsSync(srcOcrDir)) {
-    try {
-      const files = fs.readdirSync(srcOcrDir);
-      for (const file of files) {
-        if (file.endsWith('.traineddata') || file.endsWith('.gz')) {
-          const destPath = path.join(destOcrDir, file);
-          if (!fs.existsSync(destPath)) {
-            fs.copyFileSync(path.join(srcOcrDir, file), destPath);
-          }
-        }
-      }
-    } catch (e) {
-      console.error('Failed to copy OCR data:', e);
-    }
   }
   // macOS：通过 Electron systemPreferences 触发无障碍权限请求。
   // 只在「有生以来第一次」弹出系统授权框（settings.permissions.accessibilityPromptShown 持久化标记）：
@@ -1573,7 +1838,7 @@ app.whenReady().then(() => {
         } catch { /* ignore */ }
       }
       if (!trusted) {
-        console.warn('[Accessibility] Not trusted. 如需使用桌面控制/自动化，请在 系统设置 > 隐私与安全性 > 辅助功能 中手动开启。');
+        console.warn('[Accessibility] Not trusted. To use desktop control/automation, enable it manually in System Settings > Privacy & Security > Accessibility.');
       }
     } catch (e) {
       console.warn('[Accessibility] Check failed:', e.message);
@@ -1605,7 +1870,7 @@ app.whenReady().then(() => {
   // 让 settings.proxy 真正生效：Electron session + 主进程 fetch dispatcher + 子进程 env
   netProxy.install();
   applyProxySettings(settings.proxy).catch((e) => {
-    console.warn('[Proxy] 启动应用代理失败:', e.message);
+    console.warn('[Proxy] failed to start app proxy:', e.message);
   });
   // 同步 FediKitten 服务代理（主进程 fetch 使用 undici dispatcher）
   try { fedikittenService.refreshProxy(settings.proxy); } catch (e) { /* 直连回退 */ }
@@ -1627,6 +1892,12 @@ app.whenReady().then(() => {
   createSplashWindow();
   // 启动时即创建托盘图标（若启用）
   if (settings.trayEnabled) createAppTray();
+  // 上轮异常退出 → 独立崩溃报告窗口（延后到主窗口开始加载后，避免抢占启动）
+  if (pendingCrashReport) setTimeout(() => { try { openCrashReportWindow(); } catch { /* ignore */ } }, 1200);
+  // History v2 迁移：启动稳定后空闲执行（图片外置 + 备份），只跑一次
+  setTimeout(() => { migrateHistoryV2().catch(() => {}); }, 6000);
+  // 模型元数据（models.dev）后台预热：24h 磁盘缓存，失败静默走硬编码兜底
+  setTimeout(() => { fetchModelsDevData().catch(() => {}); }, 8000);
 
   // ===== 语音子系统初始化（STT/TTS/唤醒，全本地 sherpa-onnx） =====
   // 启动审计：对应模型未下载时自动关闭语音开关（模型由用户手动下载，不自动拉取）
@@ -1634,11 +1905,11 @@ app.whenReady().then(() => {
     const voiceModels = require('./voice-models');
     const audit = voiceModels.auditVoiceSettings(settings, voiceModels.searchRoots(app, settings));
     if (audit.changed) {
-      console.warn('[voice] 模型缺失，已自动关闭语音开关:', audit.disabled.join(', '));
+      console.warn('[voice] models missing, voice toggles disabled:', audit.disabled.join(', '));
       persistSettings();
     }
   } catch (e) {
-    console.warn('[voice] 模型审计失败:', e.message);
+    console.warn('[voice] model audit failed:', e.message);
   }
   try {
     const { initVoice } = require('./voice-ipc');
@@ -1654,14 +1925,16 @@ app.whenReady().then(() => {
         try { if (webControlService && typeof webControlService.pushVoiceEvent === 'function') webControlService.pushVoiceEvent(channel, payload); } catch {}
       },
     });
-    // P2：worker 就绪后同步语音能力到 WebUI（浏览器麦克风按钮依赖）
+    // P2：同步语音能力到 WebUI（浏览器麦克风按钮依赖）。
+    // worker 仅在语音确实启用时预热：sherpa 原生推理库未使用时加载会白白占用内存，
+    // 且原生模块故障会直接杀死主进程。
     (async () => {
       try {
-        if (voiceIpc && voiceIpc.engine && webControlService) {
-          await voiceIpc.engine.ensureWorker().catch(() => {});
-          const st = voiceIpc.getStatus ? voiceIpc.getStatus() : null;
-          if (st) webControlService.setVoiceCapabilities(st);
-        }
+        if (!voiceIpc || !voiceIpc.engine) return;
+        const voiceWanted = !!(settings.voice && (settings.voice.sttEnabled || settings.voice.ttsEnabled || settings.voice.wakeEnabled));
+        if (voiceWanted) await voiceIpc.engine.ensureWorker().catch(() => {});
+        const st = voiceIpc.getStatus ? voiceIpc.getStatus() : null;
+        if (st && webControlService) webControlService.setVoiceCapabilities(st);
       } catch {}
     })();
     // WebUI → 引擎反向桥（Web 端采集的音频 → STT 引擎）
@@ -1679,7 +1952,7 @@ app.whenReady().then(() => {
       };
     }
   } catch (e) {
-    console.error('[voice] 初始化失败:', e);
+    console.error('[voice] init failed:', e);
   }
 });
 // 关闭所有窗口时：若启用了托盘模式且非真正退出，不退出应用（保留托盘）
@@ -1772,7 +2045,7 @@ ipcMain.handle('settings:set', (_, newSettings) => {
   try { projectActivePoolEntry(); } catch (_) {}
   // 决策模型配置变更时清空决策缓存
   try { if (newSettings && newSettings.decision) decisionService.clearCache(); } catch (_) {}
-  saveJSON(settingsPath, settings);
+  scheduleSettingsPersist();
   // 代理设置变化时自动重应用（含导入/其他页面保存，无需依赖 proxy:apply IPC）
   const newProxyJson = JSON.stringify(settings.proxy || null);
   if (newProxyJson !== prevProxyJson) {
@@ -1780,7 +2053,7 @@ ipcMain.handle('settings:set', (_, newSettings) => {
       try { fedikittenService.refreshProxy(settings.proxy); } catch { /* ignore */ }
       if (aria2Manager.ready) return aria2Manager.start(settings.proxy);
       return null;
-    }).catch((e) => console.warn('[Proxy] 设置变更应用代理失败:', e.message));
+    }).catch((e) => console.warn('[Proxy] failed to apply proxy after settings change:', e.message));
   }
   // 广播主题/语言变化到所有窗口（主窗口 + 子窗口 CAD/EDA/小游戏）
   broadcastThemeChanged();
@@ -3026,8 +3299,8 @@ ipcMain.handle('image:generate', async (_, prompt, workspacePath) => {
     });
     const parsed = await imageGen.extractImages(req.kind, response, g);
     if (!parsed.images || parsed.images.length === 0) {
-      console.error(`[IMG ${logTs()}] ✗ ${response.status} (${Date.now() - imgStartedAt}ms) provider=${g.provider} model=${g.model}: ${parsed.error || '未返回有效图片'}`);
-      return { ok: false, error: parsed.error || '生图API未返回有效图片' };
+      console.error(`[IMG ${logTs()}] ✗ ${response.status} (${Date.now() - imgStartedAt}ms) provider=${g.provider} model=${g.model}: ${parsed.error || 'no valid image returned'}`);
+      return { ok: false, error: parsed.error || '生图APIno valid image returned' };
     }
 
     // Save to workspace if provided, otherwise use imagesDir
@@ -3050,7 +3323,7 @@ ipcMain.handle('image:generate', async (_, prompt, workspacePath) => {
     const toFileUrl = (p) => 'file://' + encodeURI(p.replace(/\\/g, '/')).replace(/#/g, '%23');
     return { ok: true, path: paths[0], url: toFileUrl(paths[0]), paths, urls: paths.map(toFileUrl) };
   } catch (e) {
-    console.error(`[IMG ${logTs()}] ✗ 请求异常: ${e.message}`);
+    console.error(`[IMG ${logTs()}] ✗ request failed: ${e.message}`);
     return { ok: false, error: e.message };
   }
 });
@@ -3147,89 +3420,133 @@ ipcMain.handle('decision:status', () => {
   };
 });
 
+// ---- Offscreen 渲染公共设施：串行 + 崩溃防护 ----
+const OFFSCREEN_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+let offscreenQueue = Promise.resolve();
+
+function createOffscreenWindow(options) {
+  const win = new BrowserWindow(options);
+  try { win.webContents.setAudioMuted(true); } catch { /* ignore */ }
+  try {
+    win.webContents.on('render-process-gone', (_e, details) => {
+      try {
+        appLog.writeCrashRecord({
+          source: 'offscreen-window-gone',
+          message: `reason=${details && details.reason} exitCode=${details && details.exitCode}`,
+          stack: '',
+          extra: { url: (() => { try { return win.webContents.getURL(); } catch { return ''; } })(), details: details || null },
+        });
+      } catch { /* ignore */ }
+    });
+  } catch { /* ignore */ }
+  return win;
+}
+
+function withOffscreenWindow(options, worker) {
+  const run = async () => {
+    const win = createOffscreenWindow(options);
+    try {
+      return await worker(win);
+    } finally {
+      try { if (!win.isDestroyed()) win.destroy(); } catch { /* ignore */ }
+    }
+  };
+  const next = offscreenQueue.then(run, run);
+  offscreenQueue = next.then(() => {}, () => {});
+  return next;
+}
+
+function saveOffscreenShot(win, prepareTargetDir, prefix) {
+  try {
+    const wc = win.webContents;
+    if (win.isDestroyed() || wc.isDestroyed()) return '';
+    let targetDir = imagesDir;
+    if (typeof prepareTargetDir === 'function') {
+      const t = prepareTargetDir();
+      if (t) targetDir = t;
+    }
+    return wc.capturePage().then((image) => {
+      if (!image || image.isEmpty()) return '';
+      const imgPath = path.join(targetDir, `${prefix}_${Date.now()}.png`);
+      fs.writeFileSync(imgPath, image.toPNG());
+      return imgPath;
+    }).catch(() => '');
+  } catch {
+    return Promise.resolve('');
+  }
+}
+
 // ---- IPC: Web Search & Fetch ----
 ipcMain.handle('web:search', async (_, query, workspacePath) => {
-  if (!mainWindow) return { ok: false, error: '主窗口未就绪' };
-
-  // 创建离屏隐藏窗口进行后台渲染
-  const offscreenWindow = new BrowserWindow({
-    width: 1200,
-    height: 800,
-    show: false,
-    webPreferences: {
-      offscreen: true,
-      contextIsolation: true,
-      sandbox: true,
-      nodeIntegration: false
-    }
-  });
-
+  if (!mainWindow) return { ok: false, error: 'main window not ready' };
   try {
-    const url = `https://www.bing.com/search?q=${encodeURIComponent(query)}`;
-    await offscreenWindow.webContents.loadURL(url, {
-      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-    });
-
-    // 等待渲染稳定
-    await new Promise(r => setTimeout(r, 2000));
-
-    const result = await offscreenWindow.webContents.executeJavaScript(`(() => {
-      const items = [];
-      const nodes = document.querySelectorAll('li.b_algo');
-      for (let i = 0; i < nodes.length && items.length < 15; i++) {
-        const li = nodes[i];
-        const a = li.querySelector('h2 a');
-        const p = li.querySelector('p, .b_caption p');
-        items.push({
-          title: a ? a.textContent.trim() : '',
-          url: a ? a.href : '',
-          snippet: p ? p.textContent.trim() : '',
-          id: li.id || ''
-        });
+    return await withOffscreenWindow({
+      width: 1200,
+      height: 800,
+      show: false,
+      webPreferences: {
+        offscreen: true,
+        contextIsolation: true,
+        sandbox: true,
+        nodeIntegration: false
       }
+    }, async (offscreenWindow) => {
+      const url = `https://www.bing.com/search?q=${encodeURIComponent(query)}`;
+      await offscreenWindow.webContents.loadURL(url, { userAgent: OFFSCREEN_UA });
+
+      // 等待渲染稳定
+      await new Promise(r => setTimeout(r, 2000));
+
+      const result = await offscreenWindow.webContents.executeJavaScript(`(() => {
+        const items = [];
+        const nodes = document.querySelectorAll('li.b_algo');
+        for (let i = 0; i < nodes.length && items.length < 15; i++) {
+          const li = nodes[i];
+          const a = li.querySelector('h2 a');
+          const p = li.querySelector('p, .b_caption p');
+          items.push({
+            title: a ? a.textContent.trim() : '',
+            url: a ? a.href : '',
+            snippet: p ? p.textContent.trim() : '',
+            id: li.id || ''
+          });
+        }
+        return {
+          title: document.title,
+          url: location.href,
+          results: items,
+          html: document.documentElement.outerHTML.slice(0, 150000)
+        };
+      })()`);
+
+      // Code 模式：检测工作区下 .cibyp-code-history 目录是否存在，是则保存到其 assets/ 子目录
+      // 否则保持原有行为（保存到工作区根目录或 imagesDir）
+      const imgPath = await saveOffscreenShot(offscreenWindow, () => {
+        if (workspacePath && fs.existsSync(workspacePath)) {
+          const codeHistDir = path.join(workspacePath, '.cibyp-code-history');
+          if (fs.existsSync(codeHistDir)) {
+            const assetsDir = path.join(codeHistDir, 'assets');
+            try { fs.mkdirSync(assetsDir, { recursive: true }); } catch {}
+            return assetsDir;
+          }
+          return workspacePath;
+        }
+        return imagesDir;
+      }, 'bing');
+
       return {
-        title: document.title,
-        url: location.href,
-        results: items,
-        html: document.documentElement.outerHTML.slice(0, 150000)
+        ok: true,
+        query,
+        url: result.url,
+        title: result.title,
+        results: result.results,
+        html: result.html,
+        screenshotPath: imgPath || '',
+        screenshotUrl: imgPath ? `file://${imgPath}` : ''
       };
-    })()`);
-
-    const image = await offscreenWindow.webContents.capturePage();
-    // Code 模式：检测工作区下 .cibyp-code-history 目录是否存在，是则保存到其 assets/ 子目录
-    // 否则保持原有行为（保存到工作区根目录或 imagesDir）
-    let targetDir = imagesDir;
-    if (workspacePath && fs.existsSync(workspacePath)) {
-      const codeHistDir = path.join(workspacePath, '.cibyp-code-history');
-      if (fs.existsSync(codeHistDir)) {
-        const assetsDir = path.join(codeHistDir, 'assets');
-        try { fs.mkdirSync(assetsDir, { recursive: true }); } catch {}
-        targetDir = assetsDir;
-      } else {
-        targetDir = workspacePath;
-      }
-    }
-    const imgPath = path.join(targetDir, `bing_${Date.now()}.png`);
-    fs.writeFileSync(imgPath, image.toPNG());
-
-    return {
-      ok: true,
-      query,
-      url: result.url,
-      title: result.title,
-      results: result.results,
-      html: result.html,
-      screenshotPath: imgPath,
-      screenshotUrl: `file://${imgPath}`
-    };
+    });
   } catch (e) {
     return { ok: false, error: e.message };
-  } finally {
-    try {
-      if (!offscreenWindow.isDestroyed()) {
-        offscreenWindow.close();
-      }
-    } catch { /* ignore */ }
   }
 });
 ipcMain.handle('web:fetch', async (_, url) => {
@@ -3248,55 +3565,47 @@ ipcMain.handle('web:offscreenSnapshotOCR', async (_, options = {}) => {
   const targetUrl = String(options.url || '').trim();
   const waitMs = Number.isFinite(Number(options.waitMs)) ? Math.max(0, Number(options.waitMs)) : 10000;
   const workspacePath = options.workspacePath;
-  if (!targetUrl) return { ok: false, error: '缺少URL' };
-
-  const offscreenWindow = new BrowserWindow({
-    width: Number(options.width) || 1366,
-    height: Number(options.height) || 900,
-    show: false,
-    webPreferences: {
-      offscreen: true,
-      contextIsolation: true,
-      sandbox: true,
-      nodeIntegration: false
-    }
-  });
+  if (!targetUrl) return { ok: false, error: 'missing url' };
 
   try {
-    await offscreenWindow.webContents.loadURL(targetUrl, {
-      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    return await withOffscreenWindow({
+      width: Number(options.width) || 1366,
+      height: Number(options.height) || 900,
+      show: false,
+      webPreferences: {
+        offscreen: true,
+        contextIsolation: true,
+        sandbox: true,
+        nodeIntegration: false
+      }
+    }, async (offscreenWindow) => {
+      await offscreenWindow.webContents.loadURL(targetUrl, { userAgent: OFFSCREEN_UA });
+      if (waitMs > 0) await new Promise(r => setTimeout(r, waitMs));
+
+      const targetDir = workspacePath && fs.existsSync(workspacePath) ? workspacePath : imagesDir;
+      const imgPath = await saveOffscreenShot(offscreenWindow, () => targetDir, 'offscreen');
+
+      const ocrText = imgPath ? await recognizeImageWithTesseract(imgPath) : '';
+      const pageMeta = await offscreenWindow.webContents.executeJavaScript(`({
+        title: document.title || '',
+        url: location.href || '',
+        text: (document.body && document.body.innerText ? document.body.innerText : '').slice(0, 50000)
+      })`);
+
+      return {
+        ok: true,
+        requestedUrl: targetUrl,
+        finalUrl: pageMeta?.url || targetUrl,
+        title: pageMeta?.title || '',
+        screenshotPath: imgPath || '',
+        screenshotUrl: imgPath ? `file://${imgPath}` : '',
+        waitMs,
+        ocrText: String(ocrText || '').slice(0, 100000),
+        renderedText: String(pageMeta?.text || '').slice(0, 100000)
+      };
     });
-    if (waitMs > 0) await new Promise(r => setTimeout(r, waitMs));
-
-    const image = await offscreenWindow.webContents.capturePage();
-    const targetDir = workspacePath && fs.existsSync(workspacePath) ? workspacePath : imagesDir;
-    const imgPath = path.join(targetDir, `offscreen_${Date.now()}.png`);
-    fs.writeFileSync(imgPath, image.toPNG());
-
-    const ocrText = await recognizeImageWithTesseract(imgPath);
-    const pageMeta = await offscreenWindow.webContents.executeJavaScript(`({
-      title: document.title || '',
-      url: location.href || '',
-      text: (document.body && document.body.innerText ? document.body.innerText : '').slice(0, 50000)
-    })`);
-
-    return {
-      ok: true,
-      requestedUrl: targetUrl,
-      finalUrl: pageMeta?.url || targetUrl,
-      title: pageMeta?.title || '',
-      screenshotPath: imgPath,
-      screenshotUrl: `file://${imgPath}`,
-      waitMs,
-      ocrText: String(ocrText || '').slice(0, 100000),
-      renderedText: String(pageMeta?.text || '').slice(0, 100000)
-    };
   } catch (e) {
     return { ok: false, error: e.message };
-  } finally {
-    try {
-      if (!offscreenWindow.isDestroyed()) offscreenWindow.close();
-    } catch {}
   }
 });
 
@@ -3306,60 +3615,52 @@ ipcMain.handle('web:offscreenRenderedContent', async (_, options = {}) => {
   const workspacePath = options.workspacePath;
   const captureScreenshot = options.captureScreenshot !== false;
   const includeHtml = options.includeHtml !== false;
-  if (!targetUrl) return { ok: false, error: '缺少URL' };
-
-  const offscreenWindow = new BrowserWindow({
-    width: Number(options.width) || 1366,
-    height: Number(options.height) || 900,
-    show: false,
-    webPreferences: {
-      offscreen: true,
-      contextIsolation: true,
-      sandbox: true,
-      nodeIntegration: false
-    }
-  });
+  if (!targetUrl) return { ok: false, error: 'missing url' };
 
   try {
-    await offscreenWindow.webContents.loadURL(targetUrl, {
-      userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    return await withOffscreenWindow({
+      width: Number(options.width) || 1366,
+      height: Number(options.height) || 900,
+      show: false,
+      webPreferences: {
+        offscreen: true,
+        contextIsolation: true,
+        sandbox: true,
+        nodeIntegration: false
+      }
+    }, async (offscreenWindow) => {
+      await offscreenWindow.webContents.loadURL(targetUrl, { userAgent: OFFSCREEN_UA });
+      if (waitMs > 0) await new Promise(r => setTimeout(r, waitMs));
+
+      const pageMeta = await offscreenWindow.webContents.executeJavaScript(`({
+        title: document.title || '',
+        url: location.href || '',
+        text: (document.body && document.body.innerText ? document.body.innerText : '').slice(0, 150000),
+        html: (document.documentElement && document.documentElement.outerHTML ? document.documentElement.outerHTML : '').slice(0, 500000)
+      })`);
+
+      let screenshotPath = '';
+      let screenshotUrl = '';
+      if (captureScreenshot) {
+        const targetDir = workspacePath && fs.existsSync(workspacePath) ? workspacePath : imagesDir;
+        screenshotPath = await saveOffscreenShot(offscreenWindow, () => targetDir, 'offscreen_content');
+        screenshotUrl = screenshotPath ? `file://${screenshotPath}` : '';
+      }
+
+      return {
+        ok: true,
+        requestedUrl: targetUrl,
+        finalUrl: pageMeta?.url || targetUrl,
+        title: pageMeta?.title || '',
+        waitMs,
+        screenshotPath,
+        screenshotUrl,
+        renderedText: String(pageMeta?.text || '').slice(0, 150000),
+        renderedHtml: includeHtml ? String(pageMeta?.html || '').slice(0, 500000) : ''
+      };
     });
-    if (waitMs > 0) await new Promise(r => setTimeout(r, waitMs));
-
-    const pageMeta = await offscreenWindow.webContents.executeJavaScript(`({
-      title: document.title || '',
-      url: location.href || '',
-      text: (document.body && document.body.innerText ? document.body.innerText : '').slice(0, 150000),
-      html: (document.documentElement && document.documentElement.outerHTML ? document.documentElement.outerHTML : '').slice(0, 500000)
-    })`);
-
-    let screenshotPath = '';
-    let screenshotUrl = '';
-    if (captureScreenshot) {
-      const image = await offscreenWindow.webContents.capturePage();
-      const targetDir = workspacePath && fs.existsSync(workspacePath) ? workspacePath : imagesDir;
-      screenshotPath = path.join(targetDir, `offscreen_content_${Date.now()}.png`);
-      fs.writeFileSync(screenshotPath, image.toPNG());
-      screenshotUrl = `file://${screenshotPath}`;
-    }
-
-    return {
-      ok: true,
-      requestedUrl: targetUrl,
-      finalUrl: pageMeta?.url || targetUrl,
-      title: pageMeta?.title || '',
-      waitMs,
-      screenshotPath,
-      screenshotUrl,
-      renderedText: String(pageMeta?.text || '').slice(0, 150000),
-      renderedHtml: includeHtml ? String(pageMeta?.html || '').slice(0, 500000) : ''
-    };
   } catch (e) {
     return { ok: false, error: e.message };
-  } finally {
-    try {
-      if (!offscreenWindow.isDestroyed()) offscreenWindow.close();
-    } catch {}
   }
 });
 
@@ -3548,9 +3849,62 @@ ipcMain.handle('skill-editor:getSkill', (_, id) => {
   return { ok: false, error: '技能不存在' };
 });
 
-// ---- 模型能力缓存 + 变体解析（Anthropic /v1/models 内省） ----
-const modelCapabilityCache = new Map(); // key -> { capabilities, ts }
+// ---- 模型能力/元数据缓存 + 变体解析（Anthropic /v1/models + models.dev） ----
+const modelCapabilityCache = new Map(); // key -> { capabilities, metadata, ts }
 const MODEL_CAPABILITY_TTL = 10 * 60 * 1000;
+const modelsDevCache = { data: null, fetchedAt: 0 };
+const MODELS_DEV_TTL = 24 * 60 * 60 * 1000;
+
+function modelsDevCacheFile() {
+  return path.join(dataDir, 'models-dev.json');
+}
+
+async function fetchModelsDevData(force = false) {
+  if (!force && modelsDevCache.data && Date.now() - modelsDevCache.fetchedAt < MODELS_DEV_TTL) {
+    return modelsDevCache.data;
+  }
+  if (!force) {
+    const cached = loadJSON(modelsDevCacheFile(), null);
+    if (cached && cached.fetchedAt && cached.data && Date.now() - cached.fetchedAt < MODELS_DEV_TTL) {
+      modelsDevCache.data = cached.data;
+      modelsDevCache.fetchedAt = cached.fetchedAt;
+      return cached.data;
+    }
+  }
+  try {
+    const resp = await fetch('https://models.dev/api.json', {
+      headers: { 'User-Agent': 'cibyp/1.0' },
+      signal: AbortSignal.timeout(12000),
+    });
+    if (!resp.ok) return modelsDevCache.data || null;
+    const data = await resp.json();
+    modelsDevCache.data = data;
+    modelsDevCache.fetchedAt = Date.now();
+    try { fs.writeFileSync(modelsDevCacheFile(), JSON.stringify({ fetchedAt: modelsDevCache.fetchedAt, data }), 'utf8'); } catch { /* ignore */ }
+    return data;
+  } catch {
+    return modelsDevCache.data || null;
+  }
+}
+
+function lookupModelsDevModel(data, modelId, provider) {
+  if (!data || typeof data !== 'object') return null;
+  const wanted = String(modelId || '').toLowerCase();
+  if (!wanted) return null;
+  const providerKeys = provider === 'opencode-go' ? ['opencode-go', 'opencode'] : ['opencode', 'opencode-go'];
+  for (const pk of providerKeys) {
+    const prov = data[pk];
+    const models = prov && (prov.models || null);
+    if (!models || typeof models !== 'object') continue;
+    if (models[wanted]) return { providerKey: pk, model: models[wanted] };
+  }
+  for (const [pk, prov] of Object.entries(data)) {
+    const models = prov && prov.models;
+    if (!models || typeof models !== 'object') continue;
+    if (models[wanted]) return { providerKey: pk, model: models[wanted] };
+  }
+  return null;
+}
 
 function normalizeAnthropicThinkingCapability(raw) {
   if (!raw) return null;
@@ -3567,34 +3921,88 @@ function normalizeAnthropicThinkingCapability(raw) {
   return out;
 }
 
-async function fetchModelCapabilities(provider, model, apiUrl, apiKey) {
-  // 仅 Anthropic 端点有官方能力内省；其他 provider 返回 null（走模型名内置表）
-  if (provider !== 'anthropic-compat' || !apiUrl) return null;
-  const base = String(apiUrl).replace(/\/messages\/?$/, '').replace(/\/$/, '');
-  const modelsUrl = `${base}/models`;
-  const headers = {
-    'Content-Type': 'application/json',
-    'anthropic-version': '2023-06-01'
-  };
-  if (apiKey) headers['x-api-key'] = apiKey;
-  const resp = await fetch(modelsUrl, { headers, signal: AbortSignal.timeout(8000) });
-  if (!resp.ok) return null;
-  const data = await resp.json();
-  const list = data.data || data.models || data || [];
-  const entry = (Array.isArray(list) ? list : []).find(x => String(x.id) === String(model))
-    || (Array.isArray(list) ? list[0] : null);
-  if (!entry || !entry.capabilities) return null;
-  const thinking = normalizeAnthropicThinkingCapability(entry.capabilities);
-  return thinking ? { thinking } : null;
+// 解析 Anthropic /v1/models capabilities.effort（新版官方字段），兼容多种形状
+function normalizeAnthropicEffortCapability(raw) {
+  if (!raw) return null;
+  const e = raw.effort || raw.reasoning_effort || raw.reasoningEffort || null;
+  if (!e) return null;
+  const values = Array.isArray(e) ? e
+    : Array.isArray(e.values) ? e.values
+    : Array.isArray(e.supported) ? e.supported
+    : Array.isArray(e.supported_values) ? e.supported_values
+    : Array.isArray(e.types) ? e.types
+    : null;
+  if (!values || !values.length) return null;
+  return { type: 'effort', values };
 }
 
-function getCachedModelCapabilities(model, provider, apiUrl, apiKey) {
+/**
+ * 拉取模型元数据（models.dev + Anthropic /models），返回 { capabilities, metadata }。
+ * 非 Anthropic 端点主要依赖 models.dev；两者都拿不到时返回 null（走硬编码表）。
+ */
+async function fetchModelMetadata(provider, model, apiUrl, apiKey) {
+  const out = { capabilities: null, metadata: null };
+  // 1) models.dev（覆盖 Zen/Go 与常见模型生态）：
+  //    有缓存直接用；无缓存最多等 1.5s，其余在后台完成并落盘，避免阻塞设置页
+  try {
+    let dev = modelsDevCache.data;
+    if (!dev) {
+      dev = await Promise.race([
+        fetchModelsDevData(),
+        new Promise((resolve) => setTimeout(() => resolve(null), 1500)),
+      ]);
+    }
+    const entry = lookupModelsDevModel(dev, model, provider);
+    if (entry) {
+      const m = entry.model || {};
+      out.metadata = {
+        reasoning: m.reasoning,
+        reasoningOptions: m.reasoning_options || m.reasoningOptions || null,
+        contextLength: (m.limit && (m.limit.context || m.limit.input)) || m.context_length || null,
+        maxOutput: (m.limit && m.limit.output) || null,
+        source: `models.dev:${entry.providerKey}`,
+      };
+    }
+  } catch { /* ignore */ }
+  // 2) Anthropic /v1/models：thinking 模式 + effort 档位 + 上下文长度
+  if (provider === 'anthropic-compat' && apiUrl) {
+    try {
+      const base = String(apiUrl).replace(/\/messages\/?$/, '').replace(/\/$/, '');
+      const modelsUrl = `${base}/models`;
+      const headers = { 'Content-Type': 'application/json', 'anthropic-version': '2023-06-01' };
+      if (apiKey) headers['x-api-key'] = apiKey;
+      const resp = await fetch(modelsUrl, { headers, signal: AbortSignal.timeout(8000) });
+      if (resp.ok) {
+        const data = await resp.json();
+        const list = data.data || data.models || data || [];
+        const entry = (Array.isArray(list) ? list : []).find(x => String(x.id) === String(model))
+          || (Array.isArray(list) ? list[0] : null);
+        if (entry && entry.capabilities) {
+          const thinking = normalizeAnthropicThinkingCapability(entry.capabilities);
+          if (thinking) out.capabilities = { thinking };
+          const effort = normalizeAnthropicEffortCapability(entry.capabilities);
+          out.metadata = out.metadata || {};
+          if (effort) out.metadata.reasoningOptions = effort;
+          const ctx = (entry.limit && entry.limit.context) || entry.context_length || null;
+          if (ctx && !out.metadata.contextLength) out.metadata.contextLength = ctx;
+          if (!out.metadata.source) out.metadata.source = 'anthropic:/models';
+        }
+      }
+    } catch { /* ignore */ }
+  }
+  if (!out.capabilities && !out.metadata) return null;
+  return out;
+}
+
+function getCachedModelMetadata(model, provider, apiUrl, apiKey) {
   const key = `${provider}|${model}|${apiUrl}`;
   const hit = modelCapabilityCache.get(key);
-  if (hit && Date.now() - hit.ts < MODEL_CAPABILITY_TTL) return hit.capabilities;
-  // 不阻塞请求：异步预热缓存；首次请求先用模型名推断兜底
-  fetchModelCapabilities(provider, model, apiUrl, apiKey)
-    .then(caps => { modelCapabilityCache.set(key, { capabilities: caps, ts: Date.now() }); })
+  if (hit && Date.now() - hit.ts < MODEL_CAPABILITY_TTL) return hit;
+  // 不阻塞请求：异步预热缓存；首次请求先用模型名推断/硬编码兜底
+  fetchModelMetadata(provider, model, apiUrl, apiKey)
+    .then((res) => {
+      modelCapabilityCache.set(key, { capabilities: res ? res.capabilities : null, metadata: res ? res.metadata : null, ts: Date.now() });
+    })
     .catch(() => {});
   return null;
 }
@@ -3610,18 +4018,24 @@ ipcMain.handle('llm:capabilities', async (_, provider, model, apiUrl, apiKey) =>
     const key = `${effectiveProvider}|${effectiveModel}|${effectiveUrl}`;
     let hit = modelCapabilityCache.get(key);
     if (!hit || Date.now() - hit.ts >= MODEL_CAPABILITY_TTL) {
-      const capabilities = await fetchModelCapabilities(effectiveProvider, effectiveModel, effectiveUrl, effectiveKey);
-      hit = { capabilities, ts: Date.now() };
+      const res = await fetchModelMetadata(effectiveProvider, effectiveModel, effectiveUrl, effectiveKey);
+      hit = {
+        capabilities: res ? res.capabilities : null,
+        metadata: res ? res.metadata : null,
+        ts: Date.now(),
+      };
       modelCapabilityCache.set(key, hit);
     }
-    const table = LLMProviders.resolveReasoningVariants(effectiveModel, effectiveProvider, hit.capabilities);
+    const table = LLMProviders.resolveReasoningVariants(effectiveModel, effectiveProvider, hit.capabilities, hit.metadata);
     return {
       ok: true,
       model: effectiveModel,
       provider: effectiveProvider,
       capabilities: hit.capabilities || null,
+      metadata: hit.metadata || null,
+      contextLength: (hit.metadata && hit.metadata.contextLength) || null,
       variants: table.variants,
-      defaultId: table.defaultId
+      defaultId: table.defaultId,
     };
   } catch (e) {
     return { ok: false, error: e.message };
@@ -3664,10 +4078,10 @@ ipcMain.handle('vision:describeImage', async (_, { dataUrl, prompt }) => {
     const content = data.choices?.[0]?.message?.content || '';
     const usage = data.usage || null;
     if (usage) recordTokenUsage(usage, ev.model);
-    console.log(`[VLM ${logTs()}] ✓ ${resp.status} (${Date.now() - vlmStartedAt}ms) model=${ev.model} → ${content.length}字 tokens:${usage?.prompt_tokens || '?'}+${usage?.completion_tokens || '?'}=${usage?.total_tokens || '?'}`);
+    console.log(`[VLM ${logTs()}] ✓ ${resp.status} (${Date.now() - vlmStartedAt}ms) model=${ev.model} → ${content.length}chars tokens:${usage?.prompt_tokens || '?'}+${usage?.completion_tokens || '?'}=${usage?.total_tokens || '?'}`);
     return { ok: true, description: content, usage: usage ? { prompt_tokens: usage.prompt_tokens, completion_tokens: usage.completion_tokens, total_tokens: usage.total_tokens } : null };
   } catch (e) {
-    console.error(`[VLM ${logTs()}] ✗ 请求异常:`, e.message);
+    console.error(`[VLM ${logTs()}] ✗ request failed:`, e.message);
     return { ok: false, error: e.message };
   }
 });
@@ -3713,8 +4127,9 @@ ipcMain.handle('llm:chat', async (event, messages, options = {}) => {
     const requestModel = options.model || llm.model;
     const requestEffort = options.reasoningEffort !== undefined ? options.reasoningEffort
       : (llm.reasoningEffort || 'off');
-    const capabilities = getCachedModelCapabilities(requestModel, llm.provider, llm.apiUrl, llm.apiKey);
-    const variantCheck = LLMProviders.validateReasoningEffort(requestEffort, requestModel, llm.provider, capabilities);
+    const modelMeta = getCachedModelMetadata(requestModel, llm.provider, llm.apiUrl, llm.apiKey);
+      const capabilities = modelMeta ? modelMeta.capabilities : null;
+    const variantCheck = LLMProviders.validateReasoningEffort(requestEffort, requestModel, llm.provider, capabilities, modelMeta ? modelMeta.metadata : null);
     const llmForRequest = { ...llm, model: requestModel, capabilities };
     const req = LLMProviders.buildLLMRequest(llmForRequest, {
       messages: normalizeMessagesForThinking(messages),
@@ -3782,7 +4197,7 @@ ipcMain.handle('llm:chat', async (event, messages, options = {}) => {
       const reasoning = data.choices?.[0]?.message?.reasoning || data.choices?.[0]?.message?.reasoning_content || '';
       const preview = typeof content === 'string' ? content.slice(0, 120) : JSON.stringify(content || '').slice(0, 120);
       const suffix = content.length > 120 ? `…[${content.length} 字符]` : '';
-      console.log(`[LLM:chat ${logTs()}] ✓ ${llmForRequest.model} finish=${data.choices?.[0]?.finish_reason || '-'} tokens:${usage.prompt_tokens}+${usage.completion_tokens}=${usage.total_tokens}${usage._estimated ? '(est)' : ''} reasoning=${reasoning.length}字 → "${preview}${suffix}"${toolCalls ? ` | tool_calls:${toolCalls.length}` : ''}`);
+      console.log(`[LLM:chat ${logTs()}] ✓ ${llmForRequest.model} finish=${data.choices?.[0]?.finish_reason || '-'} tokens:${usage.prompt_tokens}+${usage.completion_tokens}=${usage.total_tokens}${usage._estimated ? '(est)' : ''} reasoning=${reasoning.length}chars → "${preview}${suffix}"${toolCalls ? ` | tool_calls:${toolCalls.length}` : ''}`);
     }
     const usageTokens = usage.total_tokens
       || estimateTokens(JSON.stringify(req.body)) + estimateTokens(data.choices?.[0]?.message?.content || '');
@@ -3830,8 +4245,9 @@ ipcMain.handle('llm:chatStream', async (_, messages, options = {}) => {
     const requestModel = options.model || llm.model;
     const requestEffort = options.reasoningEffort !== undefined ? options.reasoningEffort
       : (llm.reasoningEffort || 'off');
-    const capabilities = getCachedModelCapabilities(requestModel, llm.provider, llm.apiUrl, llm.apiKey);
-    const variantCheck = LLMProviders.validateReasoningEffort(requestEffort, requestModel, llm.provider, capabilities);
+    const modelMeta = getCachedModelMetadata(requestModel, llm.provider, llm.apiUrl, llm.apiKey);
+      const capabilities = modelMeta ? modelMeta.capabilities : null;
+    const variantCheck = LLMProviders.validateReasoningEffort(requestEffort, requestModel, llm.provider, capabilities, modelMeta ? modelMeta.metadata : null);
     const llmForRequest = { ...llm, model: requestModel, capabilities };
 
     const req = LLMProviders.buildLLMRequest(llmForRequest, {
@@ -3904,7 +4320,8 @@ ipcMain.handle('llm:chatStream', async (_, messages, options = {}) => {
       usage = {
         prompt_tokens: estPrompt,
         completion_tokens: estCompletion,
-        total_tokens: estPrompt + estCompletion
+        total_tokens: estPrompt + estCompletion,
+        _estimated: true
       };
       estimated = true;
     }
@@ -3951,8 +4368,9 @@ ipcMain.handle('llm:summarize', async (_, messages, options = {}) => {
     const requestModel = options.model || llm.model;
     const requestEffort = options.reasoningEffort !== undefined ? options.reasoningEffort
       : (llm.reasoningEffort || 'off');
-    const capabilities = getCachedModelCapabilities(requestModel, llm.provider, llm.apiUrl, llm.apiKey);
-    const variantCheck = LLMProviders.validateReasoningEffort(requestEffort, requestModel, llm.provider, capabilities);
+    const modelMeta = getCachedModelMetadata(requestModel, llm.provider, llm.apiUrl, llm.apiKey);
+      const capabilities = modelMeta ? modelMeta.capabilities : null;
+    const variantCheck = LLMProviders.validateReasoningEffort(requestEffort, requestModel, llm.provider, capabilities, modelMeta ? modelMeta.metadata : null);
     const llmForRequest = { ...llm, model: requestModel, capabilities };
     const req = LLMProviders.buildLLMRequest(llmForRequest, {
       messages: normalizeMessagesForThinking(messages),
@@ -3991,8 +4409,13 @@ ipcMain.handle('llm:summarize', async (_, messages, options = {}) => {
     if (rawData.error) return { ok: false, error: rawData.error.message || JSON.stringify(rawData.error) };
     const data = LLMProviders.parseLLMResponse(rawData, req.transport);
     const content = data.choices?.[0]?.message?.content || '';
-    const usage = data.usage || {};
-    console.log(`[LLM:summarize ${logTs()}] ✓ ${llmForRequest.model} tokens:${usage.prompt_tokens || 0}+${usage.completion_tokens || 0}=${usage.total_tokens || 0} 摘要=${content.length}字`);
+    let usage = data.usage || {};
+    if (!usage.total_tokens && !usage.prompt_tokens && !usage.completion_tokens) {
+      const estPrompt = estimateTokens(JSON.stringify(req.body));
+      const estCompletion = estimateTokens(content);
+      usage = { prompt_tokens: estPrompt, completion_tokens: estCompletion, total_tokens: estPrompt + estCompletion, _estimated: true };
+    }
+    console.log(`[LLM:summarize ${logTs()}] ✓ ${llmForRequest.model} tokens:${usage.prompt_tokens || 0}+${usage.completion_tokens || 0}=${usage.total_tokens || 0}${usage._estimated ? '(est)' : ''} summary=${content.length}chars`);
     const usageTokens = usage.total_tokens
       || estimateTokens(JSON.stringify(req.body)) + estimateTokens(content);
     settings.llm.dailyTokensUsed = (settings.llm.dailyTokensUsed || 0) + usageTokens;
@@ -4006,6 +4429,57 @@ ipcMain.handle('llm:summarize', async (_, messages, options = {}) => {
     };
     return { ok: true, content, data };
   } catch (e) { return { ok: false, error: e.message }; }
+});
+
+// ---- IPC: 精确 token 计数（Tier1，Anthropic messages 协议支持 count_tokens）----
+const _countTokensUnsupported = new Set();
+ipcMain.handle('llm:countTokens', async (_, payload = {}) => {
+  try {
+    const llm = settings.llm || {};
+    const provider = llm.provider || '';
+    const model = payload.model || llm.model || '';
+    const apiUrl = payload.apiUrl || llm.apiUrl || '';
+    if (!apiUrl || !model) return { ok: false, unsupported: true, error: 'missing apiUrl/model' };
+    const isMessagesEndpoint = /\/messages(\?|$)/.test(apiUrl);
+    const looksAnthropic = isMessagesEndpoint || provider === 'anthropic-compat' || provider === 'opencode-zen' || provider === 'opencode-go';
+    if (!looksAnthropic) return { ok: false, unsupported: true, error: 'count_tokens unsupported for this provider' };
+    let countUrl;
+    if (isMessagesEndpoint) countUrl = apiUrl.replace(/\/messages(\?.*)?$/, '/messages/count_tokens');
+    else if (/\/chat\/completions(\?|$)/.test(apiUrl)) countUrl = apiUrl.replace(/\/chat\/completions(\?.*)?$/, '/messages/count_tokens');
+    else countUrl = apiUrl.replace(/\/+$/, '') + '/messages/count_tokens';
+    if (_countTokensUnsupported.has(countUrl)) return { ok: false, unsupported: true, error: 'cached unsupported' };
+    const headers = { 'Content-Type': 'application/json', 'anthropic-version': '2023-06-01' };
+    const apiKey = payload.apiKey || llm.apiKey || llm.zenApiKey || '';
+    if (provider === 'opencode-zen' || provider === 'opencode-go') headers['Authorization'] = `Bearer ${apiKey || 'public'}`;
+    else if (apiKey) headers['x-api-key'] = apiKey;
+    const finalHeaders = ocHeaders.applyProviderHeaders({
+      url: countUrl,
+      headers,
+      llm: { ...llm, customHeaders: llm.customHeaders || [] },
+      sessionKey: payload.sessionKey || 'count',
+    });
+    const body = { model, messages: Array.isArray(payload.messages) ? payload.messages : [] };
+    if (payload.system) body.system = String(payload.system);
+    if (Array.isArray(payload.tools) && payload.tools.length) body.tools = payload.tools;
+    const resp = await fetch(countUrl, {
+      method: 'POST',
+      headers: finalHeaders,
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(15000),
+    });
+    if (resp.status === 404 || resp.status === 400 || resp.status === 405 || resp.status === 501) {
+      _countTokensUnsupported.add(countUrl);
+      return { ok: false, unsupported: true, error: `HTTP ${resp.status}` };
+    }
+    const data = await resp.json().catch(() => null);
+    const tokens = data && (data.input_tokens ?? data.tokens ?? data.total_tokens);
+    if (!resp.ok || !Number.isFinite(Number(tokens))) {
+      return { ok: false, error: (data && data.error && data.error.message) || `HTTP ${resp.status}` };
+    }
+    return { ok: true, tokens: Number(tokens), model };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
 });
 
 // ---- IPC: OpenCode models list（mode: 'zen'（默认）| 'go'）----
@@ -4181,8 +4655,77 @@ ipcMain.handle('dialog:confirm', async (_, message) => {
 });
 
 // ---- IPC: Dialog File Picker (系统对话框) ----
-// Avatar: pick image file and return base64 data URL
-ipcMain.handle('avatar:pickAndEncode', async () => {
+// 头像统一存为 userData/avatars 下的缩略图文件（settings 只保存路径），
+// 避免 base64 头像（可达 10MB+）写爆 settings.json 并进入每条消息 DOM。
+const avatarsDir = path.join(userDataPath, 'avatars');
+try { fs.mkdirSync(avatarsDir, { recursive: true }); } catch { /* ignore */ }
+const AVATAR_MAX_SIZE = 256;
+
+function _avatarSafeId(id) {
+  return String(id || 'avatar').replace(/[^a-z0-9_-]/gi, '') || 'avatar';
+}
+
+function _resizeAvatarImage(image, maxSize = AVATAR_MAX_SIZE) {
+  const size = image.getSize();
+  if (!size.width || !size.height) return image;
+  if (size.width <= maxSize && size.height <= maxSize) return image;
+  const ratio = Math.min(maxSize / size.width, maxSize / size.height);
+  return image.resize({ width: Math.max(1, Math.round(size.width * ratio)), height: Math.max(1, Math.round(size.height * ratio)), quality: 'better' });
+}
+
+function _saveAvatarDataUrl(slot, dataUrl) {
+  const image = nativeImage.createFromDataURL(dataUrl);
+  if (!image || image.isEmpty()) return '';
+  const resized = _resizeAvatarImage(image);
+  const file = path.join(avatarsDir, `${_avatarSafeId(slot)}-${Date.now()}.png`);
+  fs.writeFileSync(file, resized.toPNG());
+  return file;
+}
+
+function _avatarFileToDataUrl(filePath, maxSize = AVATAR_MAX_SIZE) {
+  try {
+    if (!filePath || !fs.existsSync(filePath)) return '';
+    const image = nativeImage.createFromPath(filePath);
+    if (!image || image.isEmpty()) {
+      // SVG 等 nativeImage 不支持的格式：原样返回（一般体积很小）
+      const buf = fs.readFileSync(filePath);
+      const ext = path.extname(filePath).slice(1).toLowerCase();
+      const mime = ext === 'svg' ? 'image/svg+xml' : ext === 'gif' ? 'image/gif' : ext === 'webp' ? 'image/webp' : ext === 'png' ? 'image/png' : 'image/jpeg';
+      return `data:${mime};base64,` + buf.toString('base64');
+    }
+    const resized = _resizeAvatarImage(image, maxSize);
+    return resized.toDataURL();
+  } catch {
+    return '';
+  }
+}
+
+function _migrateAvatarsToFiles() {
+  const slots = [['aiPersona', 'avatar'], ['userProfile', 'avatar'], ['babe', 'avatar']];
+  let changed = false;
+  for (const [objKey, field] of slots) {
+    const obj = settings && settings[objKey];
+    if (!obj || typeof obj[field] !== 'string') continue;
+    const value = obj[field];
+    if (!value.startsWith('data:')) continue;
+    try {
+      const saved = _saveAvatarDataUrl(objKey, value);
+      if (saved) { obj[field] = saved; changed = true; }
+    } catch { /* ignore */ }
+  }
+  if (changed) {
+    try {
+      if (fs.existsSync(settingsPath)) fs.copyFileSync(settingsPath, settingsPath + '.bak-avatars');
+      saveJSON(settingsPath, settings, false);
+      console.log('[avatars] migrated inline avatars to files');
+    } catch (e) {
+      console.warn('[avatars] migration persist failed:', e && e.message);
+    }
+  }
+  return changed;
+}
+
+ipcMain.handle('avatar:pickAndEncode', async (_, slot) => {
   try {
     const result = await dialog.showOpenDialog(mainWindow, {
       title: '选择头像图片',
@@ -4191,21 +4734,33 @@ ipcMain.handle('avatar:pickAndEncode', async () => {
     });
     if (result.canceled || !result.filePaths[0]) return { ok: false };
     const fp = result.filePaths[0];
-    const buf = fs.readFileSync(fp);
-    const ext = path.extname(fp).slice(1).toLowerCase();
-    const mime = ext === 'svg' ? 'image/svg+xml' : ext === 'gif' ? 'image/gif' : ext === 'webp' ? 'image/webp' : ext === 'png' ? 'image/png' : 'image/jpeg';
-    return { ok: true, dataUrl: `data:${mime};base64,` + buf.toString('base64') };
+    const image = nativeImage.createFromPath(fp);
+    let file = '';
+    let dataUrl = '';
+    if (image && !image.isEmpty()) {
+      const resized = _resizeAvatarImage(image);
+      file = path.join(avatarsDir, `${_avatarSafeId(slot)}-${Date.now()}.png`);
+      fs.writeFileSync(file, resized.toPNG());
+      dataUrl = resized.toDataURL();
+    } else {
+      const buf = fs.readFileSync(fp);
+      const ext = path.extname(fp).slice(1).toLowerCase();
+      const mime = ext === 'svg' ? 'image/svg+xml' : ext === 'gif' ? 'image/gif' : ext === 'webp' ? 'image/webp' : ext === 'png' ? 'image/png' : 'image/jpeg';
+      dataUrl = `data:${mime};base64,` + buf.toString('base64');
+    }
+    return { ok: true, path: file, dataUrl };
   } catch (e) { return { ok: false, error: e.message }; }
 });
 
-// Avatar: encode an existing file path to base64 data URL (for migration)
+// 头像文件 → 缩略 data URL（用于 WebUI 镜像/即时预览，不写回 settings）
 ipcMain.handle('avatar:encodeFile', async (_, filePath) => {
   try {
-    if (!filePath || !fs.existsSync(filePath)) return { ok: false };
-    const buf = fs.readFileSync(filePath);
-    const ext = path.extname(filePath).slice(1).toLowerCase();
-    const mime = ext === 'svg' ? 'image/svg+xml' : ext === 'gif' ? 'image/gif' : ext === 'webp' ? 'image/webp' : ext === 'png' ? 'image/png' : 'image/jpeg';
-    return { ok: true, dataUrl: `data:${mime};base64,` + buf.toString('base64') };
+    if (!filePath) return { ok: false };
+    if (String(filePath).startsWith('data:')) return { ok: true, dataUrl: filePath };
+    if (!fs.existsSync(filePath)) return { ok: false };
+    const dataUrl = _avatarFileToDataUrl(filePath);
+    if (!dataUrl) return { ok: false };
+    return { ok: true, dataUrl };
   } catch (e) { return { ok: false, error: e.message }; }
 });
 
@@ -4244,6 +4799,174 @@ ipcMain.handle('dialog:saveFile', async (_, options = {}) => {
 // agentLoop 每轮迭代都会全量保存历史（1~2 次），一次对话可达数十次。
 // 防抖合并：仅保留最后一次数据写盘（紧凑 JSON），大幅降低 JSON 序列化
 // 与磁盘 I/O 的峰值压力；退出前 flush 保证数据不丢失。
+// ---- History v2：图片外置 + 元数据索引 ----
+// 1) 会话消息里的 base64 图片（image_url part）落盘到 images/history/<id>/，历史 JSON 只存文件引用；
+//    恢复会话（用于上下文/LLM 请求）时再 rehydrate 回 data URL。
+// 2) 列表元数据维护在 *-index.json，history:list/code:listHistory 不再解析全部历史文件。
+const historyImagesDir = path.join(imagesDir, 'history');
+const HISTORY_INDEX_VERSION = 2;
+
+function _historyIndexFile(kind, dir) {
+  if (kind === 'chat') return path.join(dataDir, 'history-index.json');
+  if (kind === 'babe') return path.join(dataDir, 'babe-history-index.json');
+  return path.join(dir, 'index.json');
+}
+
+function _loadHistoryIndex(indexFile) {
+  const data = loadJSON(indexFile, null);
+  if (data && data.version === HISTORY_INDEX_VERSION && data.entries && typeof data.entries === 'object') {
+    return data.entries;
+  }
+  return null;
+}
+
+function _saveHistoryIndex(indexFile, entries) {
+  try {
+    fs.mkdirSync(path.dirname(indexFile), { recursive: true });
+    fs.writeFileSync(indexFile, JSON.stringify({ version: HISTORY_INDEX_VERSION, entries }), 'utf8');
+  } catch { /* ignore */ }
+}
+
+function _historyJsonFiles(dir, indexFile) {
+  try {
+    const indexName = indexFile ? path.basename(indexFile) : '';
+    return fs.readdirSync(dir).filter((f) => f.endsWith('.json') && f !== indexName);
+  } catch {
+    return [];
+  }
+}
+
+function _rebuildHistoryIndex(dir, indexFile, metaBuilder) {
+  const entries = {};
+  for (const f of _historyJsonFiles(dir, indexFile)) {
+    try {
+      const filePath = path.join(dir, f);
+      const data = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+      const meta = metaBuilder(f.replace(/\.json$/, ''), data, filePath);
+      if (meta) entries[meta.id] = meta;
+    } catch { /* 单个损坏文件跳过 */ }
+  }
+  _saveHistoryIndex(indexFile, entries);
+  return entries;
+}
+
+function _getHistoryIndex(dir, indexFile, metaBuilder) {
+  let entries = _loadHistoryIndex(indexFile);
+  const fileCount = _historyJsonFiles(dir, indexFile).length;
+  if (!entries || Object.keys(entries).length !== fileCount) {
+    entries = _rebuildHistoryIndex(dir, indexFile, metaBuilder);
+  }
+  return entries;
+}
+
+function _putHistoryIndexEntry(indexFile, id, meta) {
+  const entries = _loadHistoryIndex(indexFile) || {};
+  entries[id] = meta;
+  _saveHistoryIndex(indexFile, entries);
+}
+
+function _removeHistoryIndexEntry(indexFile, id) {
+  const entries = _loadHistoryIndex(indexFile);
+  if (!entries) return;
+  delete entries[id];
+  _saveHistoryIndex(indexFile, entries);
+}
+
+function _historyImageExt(mime) {
+  if (mime === 'image/jpeg') return 'jpg';
+  if (mime === 'image/png') return 'png';
+  if (mime === 'image/webp') return 'webp';
+  if (mime === 'image/gif') return 'gif';
+  return 'bin';
+}
+
+function _externalizeHistoryImages(conversation) {
+  if (!conversation || !Array.isArray(conversation.messages)) return conversation;
+  const dir = path.join(historyImagesDir, String(conversation.id || 'unknown'));
+  let counter = 0;
+  for (const msg of conversation.messages) {
+    if (!Array.isArray(msg && msg.content)) continue;
+    for (const part of msg.content) {
+      const url = part && part.image_url && part.image_url.url;
+      if (typeof url !== 'string' || !url.startsWith('data:')) continue;
+      try {
+        const m = /^data:([^;,]+);base64,(.*)$/s.exec(url);
+        if (!m) continue;
+        const file = path.join(dir, `img-${Date.now()}-${counter++}.${_historyImageExt(m[1])}`);
+        fs.mkdirSync(dir, { recursive: true });
+        if (!fs.existsSync(file)) fs.writeFileSync(file, Buffer.from(m[2], 'base64'));
+        const { pathToFileURL } = require('url');
+        part.image_url = { url: pathToFileURL(file).href, _cibypHistoryFile: true };
+      } catch { /* 失败保留原始数据 */ }
+    }
+  }
+  return conversation;
+}
+
+function _rehydrateHistoryImages(conversation) {
+  if (!conversation || !Array.isArray(conversation.messages)) return conversation;
+  const { fileURLToPath } = require('url');
+  for (const msg of conversation.messages) {
+    if (!Array.isArray(msg && msg.content)) continue;
+    for (const part of msg.content) {
+      const iu = part && part.image_url;
+      if (!iu || !iu._cibypHistoryFile || typeof iu.url !== 'string') continue;
+      try {
+        const p = fileURLToPath(iu.url);
+        if (!fs.existsSync(p)) continue;
+        const ext = path.extname(p).slice(1).toLowerCase();
+        const mime = ext === 'jpg' ? 'image/jpeg' : ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : ext === 'gif' ? 'image/gif' : 'application/octet-stream';
+        part.image_url = { url: `data:${mime};base64,` + fs.readFileSync(p).toString('base64') };
+      } catch { /* ignore */ }
+    }
+  }
+  return conversation;
+}
+
+function _deleteHistoryImages(conversationId) {
+  try {
+    fs.rmSync(path.join(historyImagesDir, String(conversationId)), { recursive: true, force: true });
+  } catch { /* ignore */ }
+}
+
+// 一次性迁移：把现存历史里的 base64 图片外置（备份原目录，只执行一次）
+async function migrateHistoryV2() {
+  if (settings.performance?.historyV2Migrated) return;
+  try {
+    const jobs = [
+      { dir: historyDir, indexFile: _historyIndexFile('chat', historyDir) },
+      { dir: babeHistoryDir, indexFile: _historyIndexFile('babe', babeHistoryDir) },
+    ];
+    // 迁移前整目录备份一次（只备份 >1MB 的文件以控制磁盘占用）
+    const backupRoot = path.join(dataDir, 'history-v1-backup');
+    try { fs.mkdirSync(backupRoot, { recursive: true }); } catch { /* ignore */ }
+    let migrated = 0;
+    for (const { dir, indexFile } of jobs) {
+      const files = _historyJsonFiles(dir, indexFile);
+      for (let i = 0; i < files.length; i++) {
+        if (i % 5 === 0) await new Promise((r) => setImmediate(r));
+        const filePath = path.join(dir, files[i]);
+        try {
+          if (fs.statSync(filePath).size < 256 * 1024) continue;
+          const raw = fs.readFileSync(filePath, 'utf8');
+          if (!raw.includes('"data:')) continue;
+          const data = JSON.parse(raw);
+          _externalizeHistoryImages(data);
+          try { fs.copyFileSync(filePath, path.join(backupRoot, path.basename(dir) + '-' + files[i])); } catch { /* ignore */ }
+          saveJSON(filePath, data, false);
+          migrated++;
+        } catch { /* 单个失败不影响其余 */ }
+      }
+    }
+    settings.performance = settings.performance || {};
+    settings.performance.historyV2Migrated = true;
+    scheduleSettingsPersist();
+    if (migrated > 0) console.log(`[history] v2 migration externalized images in ${migrated} file(s)`);
+  } catch (e) {
+    console.warn('[history] v2 migration failed:', e && e.message);
+  }
+}
+
 const pendingHistorySaves = new Map(); // key -> { timer, filePath, data }
 const HISTORY_SAVE_DEBOUNCE_MS = 1200;
 
@@ -4252,7 +4975,7 @@ function queueHistorySave(key, filePath, data) {
   if (existing) clearTimeout(existing.timer);
   const timer = setTimeout(() => {
     pendingHistorySaves.delete(key);
-    try { saveJSON(filePath, data, false); } catch (e) { console.error('queueHistorySave 写盘失败:', e); }
+    try { saveJSON(filePath, data, false); } catch (e) { console.error('queueHistorySave write failed:', e); }
   }, HISTORY_SAVE_DEBOUNCE_MS);
   pendingHistorySaves.set(key, { timer, filePath, data });
 }
@@ -4261,35 +4984,35 @@ function flushPendingHistorySaves() {
   if (pendingHistorySaves.size === 0) return;
   for (const [key, { timer, filePath, data }] of pendingHistorySaves) {
     clearTimeout(timer);
-    try { saveJSON(filePath, data, false); } catch (e) { console.error('flushPendingHistorySaves 写盘失败:', e); }
+    try { saveJSON(filePath, data, false); } catch (e) { console.error('flushPendingHistorySaves write failed:', e); }
     pendingHistorySaves.delete(key);
   }
+}
+
+function _chatHistoryMeta(id, data) {
+  return {
+    id: data.id || id,
+    title: data.title || '未命名对话',
+    createdAt: data.createdAt,
+    updatedAt: data.updatedAt,
+    messageCount: Array.isArray(data.messages) ? data.messages.length : 0,
+    mode: data.mode || 'chat',
+    status: data.status || 'idle',
+    lastError: data.lastError || null,
+    usage: data.usage || null,
+    finishedAt: data.finishedAt || null,
+    workingMs: Number(data.workingMs) || 0
+  };
 }
 
 ipcMain.handle('history:list', () => {
   try {
     flushPendingHistorySaves();
-    const files = fs.readdirSync(historyDir).filter(f => f.endsWith('.json')).sort((a, b) => b.localeCompare(a));
-    return files.map(f => {
-      const data = loadJSON(path.join(historyDir, f), {});
-      const meta = {
-        id: data.id,
-        title: data.title || '未命名对话',
-        createdAt: data.createdAt,
-        updatedAt: data.updatedAt,
-        messageCount: Array.isArray(data.messages) ? data.messages.length : 0,
-        mode: data.mode || 'chat',
-        status: data.status || 'idle',
-        lastError: data.lastError || null,
-        usage: data.usage || null,
-        finishedAt: data.finishedAt || null,
-        workingMs: Number(data.workingMs) || 0
-      };
-      // 列表只需元数据：释放大数组引用，避免历史文件全量驻留内存
-      delete data.messages;
-      delete data.summaries;
-      return meta;
-    });
+    const indexFile = _historyIndexFile('chat', historyDir);
+    const entries = _getHistoryIndex(historyDir, indexFile, _chatHistoryMeta);
+    return Object.values(entries)
+      .filter(Boolean)
+      .sort((a, b) => String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || '')));
   } catch { return []; }
 });
 
@@ -4398,14 +5121,16 @@ ipcMain.handle('history:search', async (_, opts = {}) => {
 ipcMain.handle('history:get', (_, id) => {
   flushPendingHistorySaves();
   const p = path.join(historyDir, `${id}.json`);
-  return loadJSON(p, null);
+  return _rehydrateHistoryImages(loadJSON(p, null));
 });
 
 ipcMain.handle('history:save', (_, conversation) => {
   if (!conversation || !conversation.id) return { ok: false, error: 'invalid conversation' };
   conversation.updatedAt = new Date().toISOString();
   if (!conversation.createdAt) conversation.createdAt = new Date().toISOString();
+  _externalizeHistoryImages(conversation);
   queueHistorySave('history:' + conversation.id, path.join(historyDir, `${conversation.id}.json`), conversation);
+  _putHistoryIndexEntry(_historyIndexFile('chat', historyDir), conversation.id, _chatHistoryMeta(conversation.id, conversation));
   return { ok: true, queued: true };
 });
 
@@ -4413,6 +5138,8 @@ ipcMain.handle('history:delete', (_, id) => {
   try {
     flushPendingHistorySaves();
     fs.unlinkSync(path.join(historyDir, `${id}.json`));
+    _removeHistoryIndexEntry(_historyIndexFile('chat', historyDir), id);
+    _deleteHistoryImages(id);
     return { ok: true };
   } catch (e) { return { ok: false, error: e.message }; }
 });
@@ -4421,7 +5148,13 @@ ipcMain.handle('history:rename', (_, id, title) => {
   flushPendingHistorySaves();
   const p = path.join(historyDir, `${id}.json`);
   const data = loadJSON(p, null);
-  if (data) { data.title = title; data.updatedAt = new Date().toISOString(); saveJSON(p, data); return { ok: true }; }
+  if (data) {
+    data.title = title;
+    data.updatedAt = new Date().toISOString();
+    saveJSON(p, data, false);
+    _putHistoryIndexEntry(_historyIndexFile('chat', historyDir), id, _chatHistoryMeta(id, data));
+    return { ok: true };
+  }
   return { ok: false };
 });
 
@@ -4601,44 +5334,46 @@ async function runAutoUpdateCheck() {
 }
 
 // ---- IPC: Babe History (独立持久化，含好感度等会话属性) ----
+function _babeHistoryMeta(id, data) {
+  return {
+    id: data.id || id,
+    title: data.title || '未命名对话',
+    createdAt: data.createdAt,
+    updatedAt: data.updatedAt,
+    messageCount: (data.messages || []).length,
+    affection: data.affection ?? 0,
+    mode: data.mode || 'babe',
+    status: data.status || 'idle',
+    lastError: data.lastError || null,
+    usage: data.usage || null,
+    workingMs: Number(data.workingMs) || 0
+  };
+}
+
 ipcMain.handle('babeHistory:list', () => {
   flushPendingHistorySaves();
   try {
-    const files = fs.readdirSync(babeHistoryDir).filter(f => f.endsWith('.json')).sort((a, b) => b.localeCompare(a));
-    return files.map(f => {
-      const data = loadJSON(path.join(babeHistoryDir, f), {});
-      const meta = {
-        id: data.id,
-        title: data.title || '未命名对话',
-        createdAt: data.createdAt,
-        updatedAt: data.updatedAt,
-        messageCount: (data.messages || []).length,
-        affection: data.affection ?? 0,
-        mode: data.mode || 'babe',
-        status: data.status || 'idle',
-        lastError: data.lastError || null,
-        usage: data.usage || null,
-        workingMs: Number(data.workingMs) || 0
-      };
-      // 列表只需元数据：释放大数组引用
-      delete data.messages;
-      delete data.summaries;
-      return meta;
-    });
+    const indexFile = _historyIndexFile('babe', babeHistoryDir);
+    const entries = _getHistoryIndex(babeHistoryDir, indexFile, _babeHistoryMeta);
+    return Object.values(entries)
+      .filter(Boolean)
+      .sort((a, b) => String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || '')));
   } catch { return []; }
 });
 
 ipcMain.handle('babeHistory:get', (_, id) => {
   flushPendingHistorySaves();
   const p = path.join(babeHistoryDir, `${id}.json`);
-  return loadJSON(p, null);
+  return _rehydrateHistoryImages(loadJSON(p, null));
 });
 
 ipcMain.handle('babeHistory:save', (_, conversation) => {
   if (!conversation || !conversation.id) return { ok: false, error: 'invalid conversation' };
   conversation.updatedAt = new Date().toISOString();
   if (!conversation.createdAt) conversation.createdAt = new Date().toISOString();
+  _externalizeHistoryImages(conversation);
   queueHistorySave('babe:' + conversation.id, path.join(babeHistoryDir, `${conversation.id}.json`), conversation);
+  _putHistoryIndexEntry(_historyIndexFile('babe', babeHistoryDir), conversation.id, _babeHistoryMeta(conversation.id, conversation));
   return { ok: true, queued: true };
 });
 
@@ -4646,6 +5381,8 @@ ipcMain.handle('babeHistory:delete', (_, id) => {
   try {
     flushPendingHistorySaves();
     fs.unlinkSync(path.join(babeHistoryDir, `${id}.json`));
+    _removeHistoryIndexEntry(_historyIndexFile('babe', babeHistoryDir), id);
+    _deleteHistoryImages(id);
     return { ok: true };
   } catch (e) { return { ok: false, error: e.message }; }
 });
@@ -4654,7 +5391,13 @@ ipcMain.handle('babeHistory:rename', (_, id, title) => {
   flushPendingHistorySaves();
   const p = path.join(babeHistoryDir, `${id}.json`);
   const data = loadJSON(p, null);
-  if (data) { data.title = title; data.updatedAt = new Date().toISOString(); saveJSON(p, data); return { ok: true }; }
+  if (data) {
+    data.title = title;
+    data.updatedAt = new Date().toISOString();
+    saveJSON(p, data, false);
+    _putHistoryIndexEntry(_historyIndexFile('babe', babeHistoryDir), id, _babeHistoryMeta(id, data));
+    return { ok: true };
+  }
   return { ok: false };
 });
 
@@ -4695,10 +5438,35 @@ ipcMain.handle('firmware:export', async () => {
 });
 
 // ---- IPC: Workspace (Agent Working Directory) ----
-ipcMain.handle('workspace:create', () => {
+ipcMain.handle('workspace:create', (_, options = {}) => {
+  try {
+    // 复用最近一次工作区，避免每次启动都新建目录（历史上已堆积大量空目录）
+    if (!options || options.fresh !== true) {
+      const last = settings.workspace?.lastWorkspace;
+      if (last && fs.existsSync(last)) return { ok: true, path: last, reused: true };
+      let latest = '';
+      let latestMtime = -1;
+      try {
+        for (const entry of fs.readdirSync(workspacesBaseDir, { withFileTypes: true })) {
+          if (!entry.isDirectory()) continue;
+          try {
+            const m = fs.statSync(path.join(workspacesBaseDir, entry.name)).mtimeMs;
+            if (m > latestMtime) { latestMtime = m; latest = path.join(workspacesBaseDir, entry.name); }
+          } catch { /* ignore */ }
+        }
+      } catch { /* ignore */ }
+      if (latest) {
+        settings.workspace = { ...(settings.workspace || {}), lastWorkspace: latest };
+        scheduleSettingsPersist();
+        return { ok: true, path: latest, reused: true };
+      }
+    }
+  } catch { /* fall through to create */ }
   const ts = Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6);
   const dir = path.join(workspacesBaseDir, ts);
   fs.mkdirSync(dir, { recursive: true });
+  settings.workspace = { ...(settings.workspace || {}), lastWorkspace: dir };
+  scheduleSettingsPersist();
   return { ok: true, path: dir };
 });
 
@@ -4793,40 +5561,32 @@ ipcMain.handle('code:setLastWorkspace', (_, wsPath) => {
   return { ok: true };
 });
 
+function _codeHistoryMeta(id, data, filePath) {
+  let ts = Number(data.ts);
+  if (!isFinite(ts) || ts <= 0) {
+    try { ts = fs.statSync(filePath).mtimeMs; } catch { ts = 0; }
+  }
+  return {
+    id,
+    title: data.title || '未命名',
+    ts,
+    messageCount: (data.messages || []).length,
+    mode: data.mode || 'code',
+    status: data.status || 'idle',
+    lastError: data.lastError || null,
+    usage: data.usage || null,
+    workingMs: Number(data.workingMs) || 0
+  };
+}
+
 ipcMain.handle('code:listHistory', (_, workspacePath) => {
   const histDir = getCodeHistoryDir(workspacePath);
   if (!histDir) return { ok: false, error: 'no workspace' };
   try {
     flushPendingHistorySaves();
-    const files = fs.readdirSync(histDir)
-      .filter(f => f.endsWith('.json'))
-      .map(f => {
-        try {
-          const filePath = path.join(histDir, f);
-          const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
-          // ts 缺失或非法时回退到文件修改时间，避免旧历史显示 1970 年
-          let ts = Number(data.ts);
-          if (!isFinite(ts) || ts <= 0) {
-            try { ts = fs.statSync(filePath).mtimeMs; } catch { ts = 0; }
-          }
-          const meta = {
-            id: f.replace('.json', ''),
-            title: data.title || '未命名',
-            ts,
-            messageCount: (data.messages || []).length,
-            mode: data.mode || 'code',
-            status: data.status || 'idle',
-            lastError: data.lastError || null,
-            usage: data.usage || null,
-            workingMs: Number(data.workingMs) || 0
-          };
-          // 列表只需元数据：释放大数组引用
-          delete data.messages;
-          return meta;
-        } catch { return null; }
-      })
-      .filter(Boolean)
-      .sort((a, b) => b.ts - a.ts);
+    const indexFile = _historyIndexFile('code', histDir);
+    const entries = _getHistoryIndex(histDir, indexFile, _codeHistoryMeta);
+    const files = Object.values(entries).filter(Boolean).sort((a, b) => b.ts - a.ts);
     return { ok: true, history: files };
   } catch (e) { return { ok: false, error: e.message }; }
 });
@@ -4836,7 +5596,7 @@ ipcMain.handle('code:loadHistory', (_, workspacePath, id) => {
   if (!histDir) return { ok: false, error: 'no workspace' };
   try {
     flushPendingHistorySaves();
-    const data = JSON.parse(fs.readFileSync(path.join(histDir, id + '.json'), 'utf-8'));
+    const data = _rehydrateHistoryImages(JSON.parse(fs.readFileSync(path.join(histDir, id + '.json'), 'utf-8')));
     return { ok: true, data };
   } catch (e) { return { ok: false, error: e.message }; }
 });
@@ -4845,7 +5605,11 @@ ipcMain.handle('code:saveHistory', (_, workspacePath, id, data) => {
   const histDir = getCodeHistoryDir(workspacePath);
   if (!histDir) return { ok: false, error: 'no workspace' };
   try {
+    if (data && typeof data === 'object') _externalizeHistoryImages(data);
     queueHistorySave('code:' + id, path.join(histDir, id + '.json'), data);
+    if (data && typeof data === 'object') {
+      _putHistoryIndexEntry(_historyIndexFile('code', histDir), id, _codeHistoryMeta(id, data, path.join(histDir, id + '.json')));
+    }
     return { ok: true, queued: true };
   } catch (e) { return { ok: false, error: e.message }; }
 });
@@ -4856,6 +5620,8 @@ ipcMain.handle('code:deleteHistory', (_, workspacePath, id) => {
   try {
     flushPendingHistorySaves();
     fs.unlinkSync(path.join(histDir, id + '.json'));
+    _removeHistoryIndexEntry(_historyIndexFile('code', histDir), id);
+    _deleteHistoryImages(id);
     return { ok: true };
   } catch (e) { return { ok: false, error: e.message }; }
 });
@@ -6490,9 +7256,12 @@ app.whenReady().then(async () => {
   // 启动时全量重审 DeepSeek 插件（后台执行，不阻断启动：
   // 交互式插件探测可能耗时，await 会导致后续 IPC 注册延迟，
   // 渲染器早期调用如 webControl:getStatus 找不到 handler）
-  pluginManager.refreshAll().catch(e => console.warn('[DS Plugins] 启动加载失败:', e.message));
+  // 延后到首屏后再重审插件，避免与窗口初始化/渲染器启动争 I/O
+  setTimeout(() => {
+    pluginManager.refreshAll().catch(e => console.warn('[DS Plugins] startup load failed:', e.message));
+  }, 3000);
   // 启动自动化任务调度循环（cron / 通知 / HTTP 信号服务器）
-  try { automationManager.start(); } catch (e) { console.warn('[automation] 启动失败:', e.message); }
+  try { automationManager.start(); } catch (e) { console.warn('[automation] startup failed:', e.message); }
 
   // ---- Serial Port Agent Tools ----
   const agentSerialPorts = new Map(); // path → { port, buffer }
@@ -7398,7 +8167,7 @@ app.whenReady().then(async () => {
         requestId: `im-create-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
         instructions: prompt
       }, 30000);
-      if (res && res.error) console.error('[CIBYP-IM] 主人来信创建会话失败:', res.error);
+      if (res && res.error) console.error('[CIBYP-IM] master-message create session failed:', res.error);
       return;
     }
     // continue：优先继续当前活跃且非空的 Chat 会话；否则退回新建
@@ -7428,7 +8197,7 @@ app.whenReady().then(async () => {
         requestId: `im-create-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
         instructions: prompt
       }, 30000);
-      if (res && res.error) console.error('[CIBYP-IM] 主人来信创建会话失败:', res.error);
+      if (res && res.error) console.error('[CIBYP-IM] master-message create session failed:', res.error);
     }
   }
 
@@ -7456,14 +8225,14 @@ app.whenReady().then(async () => {
           imSeqCursor.set(r.conversationId, seq); // 处理成功才推进游标，失败的下次轮询重试
           processed++;
         } catch (e) {
-          console.error('[CIBYP-IM] 主人来信处理失败:', e && e.message ? e.message : e);
+          console.error('[CIBYP-IM] master-message handling failed:', e && e.message ? e.message : e);
         }
       }
       imBaselineReady = true; // 首轮基线建立完成，此后新消息触发处理
       // 轮询可能创建 responder 会话/消耗 OPK/推进 ratchet —— 持久化（防抖）
       saveCibypImState();
     } catch (e) {
-      console.error('[CIBYP-IM] 主人来信轮询错误:', e && e.message ? e.message : e);
+      console.error('[CIBYP-IM] master-message polling error:', e && e.message ? e.message : e);
     }
   }
 
@@ -7475,6 +8244,14 @@ app.whenReady().then(async () => {
   startImOwnerPolling();
 
   // ---- Web Control IPC ----
+  // 通知渲染层 Web 控制是否运行：渲染层据此彻底跳过镜像序列化/IPC
+  function broadcastWebControlRunning() {
+    try {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('webControl:running', !!webControlService.running);
+      }
+    } catch { /* ignore */ }
+  }
 
   ipcMain.handle('webControl:start', async () => {
     try {
@@ -7524,6 +8301,7 @@ app.whenReady().then(async () => {
         }
       };
       const result = await webControlService.start();
+      broadcastWebControlRunning();
       return result;
     } catch (e) {
       console.error('[WebControl] Start error:', e);
@@ -7533,7 +8311,9 @@ app.whenReady().then(async () => {
 
   ipcMain.handle('webControl:stop', async () => {
     try {
-      return await webControlService.stop();
+      const result = await webControlService.stop();
+      broadcastWebControlRunning();
+      return result;
     } catch (e) {
       return { ok: false, error: e.message };
     }
@@ -7793,6 +8573,7 @@ app.whenReady().then(async () => {
       };
       webControlService.start().then(r => {
         console.log('[WebControl] Auto-started:', r.message);
+        broadcastWebControlRunning();
       }).catch(e => console.error('[WebControl] Auto-start failed:', e.message));
     } catch (e) {
       console.error('[WebControl] Auto-start config error:', e.message);
@@ -7817,10 +8598,14 @@ app.on('before-quit', async (event) => {
   // 优雅退出时仍在运行的会话：Agent 随进程终止，标记"异常退出"（本次运行触碰过的文件）
   try {
     const fixed = markActiveHistoriesCrashed(_bootTime);
-    if (fixed > 0) console.log(`[history] ${fixed} 个运行中的会话因退出被标记为 crashed`);
+    if (fixed > 0) console.log(`[history] ${fixed} running session(s) marked crashed on quit`);
   } catch { /* ignore */ }
   // 记录优雅退出时间戳：下次启动只清扫该时刻之后变动的历史
   writeLastCleanExit(Date.now());
+  try { appLog.flush(); } catch { /* ignore */ }
+  try { decisionService.flushPersist(); } catch { /* ignore */ }
+  try { flushSettingsPersist(); } catch { /* ignore */ }
+  try { await disposeOcrEngines(); } catch { /* ignore */ }
   // CIBYP-IM：退出前立即落盘加密状态（ratchet/OPK 变更不丢）
   try { saveCibypImState(true); } catch { /* ignore */ }
   await mcpService.stopAllMcpServers();
