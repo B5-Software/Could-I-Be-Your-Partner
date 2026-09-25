@@ -2822,11 +2822,9 @@ test('Ctrl/Cmd+F 按页面路由：聊天搜索不泄露到其他标签页', () 
 test('各模式历史接入虚拟滚动与搜索', () => {
   const fsLocal = require('fs');
   const pathLocal = require('path');
-  const parts = ['07-history', '08-code', '09-babe-input.js'];
+  const parts = ['07-history', '08-code', '09a-babe'];
   for (const part of parts) {
-    const content = part.endsWith('.js')
-      ? fsLocal.readFileSync(pathLocal.join(__dirname, '../src/renderer/js/app-parts', part), 'utf-8')
-      : readAppParts(part);
+    const content = readAppParts(part);
     assert.ok(content.includes('HistoryList.attach'), `${part} 应接入 HistoryList 虚拟滚动`);
     assert.ok(content.includes('makeHistorySearch'), `${part} 应接入历史搜索`);
     assert.ok(content.includes('materializeAll'), `${part} 镜像快照前应展开虚拟列表`);
