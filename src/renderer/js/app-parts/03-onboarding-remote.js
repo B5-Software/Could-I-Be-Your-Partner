@@ -22,13 +22,24 @@
     document.getElementById('ob-ai-personality').value = s.aiPersona?.personality || '';
     document.getElementById('ob-ai-persona').value = s.aiPersona?.customPrompt || '';
     document.getElementById('ob-user-name').value = s.userProfile?.name || '';
-    // 头像预览
-    if (s.aiPersona?.avatar) {
-      document.getElementById('ob-ai-avatar-preview').innerHTML = `<img src="${s.aiPersona.avatar}" alt="">`;
-    }
-    if (s.userProfile?.avatar) {
-      document.getElementById('ob-user-avatar-preview').innerHTML = `<img src="${s.userProfile.avatar}" alt="">`;
-    }
+    // 头像预览（settings 存文件路径，需解析为可显示的 data URL/直接路径）
+    const obResolvePreview = async (value, previewId) => {
+      if (!value) return;
+      let src = value;
+      if (!value.startsWith('data:') && !value.startsWith('http')) {
+        try {
+          const enc = await window.api.avatarEncodeFile(value);
+          if (enc && enc.ok) src = enc.dataUrl;
+        } catch { /* ignore */ }
+      }
+      const preview = document.getElementById(previewId);
+      if (preview) {
+        preview.innerHTML = `<img src="${src}" alt="">`;
+        preview.dataset.avatar = value;
+      }
+    };
+    obResolvePreview(s.aiPersona?.avatar, 'ob-ai-avatar-preview');
+    obResolvePreview(s.userProfile?.avatar, 'ob-user-avatar-preview');
     // LLM 字段
     const provider = s.llm?.provider || 'opencode-zen';
     document.getElementById('ob-llm-provider').value = provider;
@@ -259,12 +270,13 @@
   // 头像选择（复用 avatarPickAndEncode，与设置页一致，macOS/Windows 均可用）
   async function obPickAvatar(target) {
     try {
-      const result = await window.api.avatarPickAndEncode();
-      if (!result?.ok || !result.dataUrl) return;
+      const result = await window.api.avatarPickAndEncode(target === 'ai' ? 'aiPersona' : 'userProfile');
+      if (!result?.ok || (!result.path && !result.dataUrl)) return;
       const preview = document.getElementById(target === 'ai' ? 'ob-ai-avatar-preview' : 'ob-user-avatar-preview');
       if (preview) {
-        preview.innerHTML = `<img src="${result.dataUrl}" alt="">`;
-        preview.dataset.avatar = result.dataUrl;
+        preview.innerHTML = `<img src="${result.dataUrl || result.path}" alt="">`;
+        // settings 存文件路径；dataUrl 仅用于即时预览
+        preview.dataset.avatar = result.path || result.dataUrl;
       }
     } catch (e) {
       console.error('[Onboarding] avatar pick failed:', e);
@@ -682,10 +694,14 @@
         var tmp = document.createElement('div');
         tmp.innerHTML = msg.html || '';
         while (tmp.firstChild) c.appendChild(tmp.firstChild);
-        // 自动滚屏（聊天容器）
+        // 自动滚屏（聊天容器，吸附状态才生效）
         var chatContainers = ['#chat-messages', '#code-chat-messages', '#babe-chat-messages'];
         for (var i = 0; i < chatContainers.length; i++) {
-          if (c.closest(chatContainers[i])) { c.scrollTop = c.scrollHeight; break; }
+          if (c.closest(chatContainers[i])) {
+            if (typeof window.requestAutoScroll === 'function') window.requestAutoScroll(c);
+            else c.scrollTop = c.scrollHeight;
+            break;
+          }
         }
       }
     } catch (e) { console.error('[Remote] dom_append error:', e); }

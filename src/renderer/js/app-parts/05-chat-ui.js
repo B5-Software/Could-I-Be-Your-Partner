@@ -1,23 +1,160 @@
   // ---- Chat Functions ----
-  // 滚动节流：合并同一帧内的多次滚动请求，避免密集重排
-  let _scrollRafScheduled = false;
-  // 滚动到指定聊天容器的底部。目标元素取容器最后一条消息（而非 thinking-indicator），
-  // 这样当 Agent 发送问卷、卡片等带交互的富内容时，滚动定位到内容自身而不是工具调用控件。
-  function scrollChatToBottom(targetEl) {
-    const container = targetEl || document.getElementById('thinking-indicator')?.parentElement || chatMessages;
-    if (_scrollRafScheduled) return;
-    _scrollRafScheduled = true;
+  // 自动滚动控制器（stick-to-bottom，Chat/Code/Babe 共用）：
+  //   - 默认吸附底部；用户上滚（滚轮/触屏/键盘）解除吸附
+  //   - 回到底部按钮恢复吸附；内容后长（markdown 重渲染/图片/tool 结果）在吸附时自动补滚
+  const _autoScrollStates = new WeakMap();
+  const AUTO_SCROLL_BOTTOM_EPS = 48;
+  const SCROLL_BTN_TARGETS = [
+    { id: 'chat-messages', inputSelector: '.chat-input-area' },
+    { id: 'code-chat-messages', inputSelector: '.code-chat-input' },
+    { id: 'babe-chat-messages', inputSelector: '.babe-chat-input' },
+  ];
+
+  function _containerAtBottom(container) {
+    return (container.scrollHeight - container.scrollTop - container.clientHeight) <= AUTO_SCROLL_BOTTOM_EPS;
+  }
+
+  function _ensureScrollState(container) {
+    let st = _autoScrollStates.get(container);
+    if (st) return st;
+    st = { stick: true, scheduled: false, lastProgrammaticAt: 0, btn: null, observer: null };
+    _autoScrollStates.set(container, st);
+
+    const setStick = (value) => {
+      st.stick = value;
+      if (st.btn) _updateScrollButton(st);
+    };
+
+    container.addEventListener('wheel', (e) => {
+      if (e.deltaY < 0 && !_containerAtBottom(container)) setStick(false);
+    }, { passive: true });
+    container.addEventListener('touchmove', () => {
+      if (!_containerAtBottom(container)) setStick(false);
+    }, { passive: true });
+    container.addEventListener('keydown', (e) => {
+      if ((e.key === 'PageUp' || e.key === 'ArrowUp' || e.key === 'Home') && !_containerAtBottom(container)) setStick(false);
+    });
+    container.addEventListener('scroll', () => {
+      // 程序化滚动后的短窗口内忽略 scroll 事件，避免误清除吸附
+      if (Date.now() - st.lastProgrammaticAt < 180) return;
+      setStick(_containerAtBottom(container));
+    }, { passive: true });
+
+    const onGrow = () => {
+      if (st.stick) _scheduleAutoScroll(container, st);
+      if (st.btn) _updateScrollButton(st);
+    };
+    try {
+      st.observer = new MutationObserver(onGrow);
+      st.observer.observe(container, { childList: true, subtree: true, characterData: true });
+    } catch { /* ignore */ }
+    container.addEventListener('load', (e) => {
+      if (e.target && e.target.tagName === 'IMG') onGrow();
+    }, true);
+    container.addEventListener('resize', onGrow, true);
+    return st;
+  }
+
+  function _scheduleAutoScroll(container, st) {
+    if (!st.stick || st.scheduled) return;
+    st.scheduled = true;
     requestAnimationFrame(() => {
-      _scrollRafScheduled = false;
-      const target = container.lastElementChild;
-      if (target && target.scrollIntoView) {
-        // 直接定位到容器内容底部（内容可能比视口高，用 end 保证底部贴齐）
-        target.scrollIntoView({ behavior: 'auto', block: 'end' });
-      } else {
-        container.scrollTop = container.scrollHeight;
-      }
+      st.scheduled = false;
+      if (!st.stick) return;
+      st.lastProgrammaticAt = Date.now();
+      container.scrollTop = container.scrollHeight;
     });
   }
+
+  // 请求自动滚动（吸附状态才生效）
+  function requestAutoScroll(container) {
+    if (!container) return;
+    const st = _ensureScrollState(container);
+    _scheduleAutoScroll(container, st);
+  }
+
+  // 强制回到底部并恢复吸附（历史回放/切换会话）
+  function forceScrollToBottom(container) {
+    if (!container) return;
+    const st = _ensureScrollState(container);
+    st.stick = true;
+    st.lastProgrammaticAt = Date.now();
+    container.scrollTop = container.scrollHeight;
+    if (st.btn) _updateScrollButton(st);
+  }
+
+  function _updateScrollButton(st) {
+    if (!st.btn) return;
+    const container = st.container;
+    if (!container) return;
+    const rect = container.getBoundingClientRect();
+    const inputArea = st.inputSelector ? document.querySelector(st.inputSelector) : null;
+    const inputTop = inputArea ? inputArea.getBoundingClientRect().top : rect.bottom;
+    st.btn.style.right = Math.max(12, Math.round(window.innerWidth - rect.right + 18)) + 'px';
+    st.btn.style.bottom = Math.max(12, Math.round(window.innerHeight - inputTop + 12)) + 'px';
+    const visible = rect.width > 0 && rect.height > 0;
+    const shouldShow = visible && !st.stick && !_containerAtBottom(container);
+    st.btn.classList.toggle('sbb-hidden', !shouldShow);
+  }
+
+  function _ensureScrollButton(container, inputSelector) {
+    const st = _ensureScrollState(container);
+    st.container = container;
+    st.inputSelector = inputSelector;
+    if (st.btn) return st.btn;
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'scroll-to-bottom-btn sbb-hidden';
+    btn.setAttribute('aria-label', 'scroll to bottom');
+    btn.innerHTML = '<i class="fa-solid fa-arrow-down"></i>';
+    btn.addEventListener('click', () => {
+      st.stick = true;
+      st.lastProgrammaticAt = Date.now();
+      if (st.btn) st.btn.classList.add('sbb-hidden');
+      try { container.scrollTo({ top: container.scrollHeight, behavior: 'smooth' }); }
+      catch { container.scrollTop = container.scrollHeight; }
+    });
+    document.body.appendChild(btn);
+    st.btn = btn;
+    _updateScrollButton(st);
+    window.addEventListener('resize', () => _updateScrollButton(st));
+    try {
+      const ro = new ResizeObserver(() => _updateScrollButton(st));
+      ro.observe(container);
+      const inputArea = inputSelector ? document.querySelector(inputSelector) : null;
+      if (inputArea) ro.observe(inputArea);
+    } catch { /* ignore */ }
+    return btn;
+  }
+
+  function _initAutoScrollTargets() {
+    SCROLL_BTN_TARGETS.forEach(({ id, inputSelector }) => {
+      const container = document.getElementById(id);
+      if (!container) return;
+      _ensureScrollState(container);
+      _ensureScrollButton(container, inputSelector);
+    });
+  }
+
+  // 滚动到指定聊天容器的底部（保留旧签名，供现有调用点复用）
+  function scrollChatToBottom(targetEl) {
+    const container = targetEl || document.getElementById('thinking-indicator')?.parentElement || chatMessages;
+    requestAutoScroll(container);
+  }
+
+  // 元素所在模式的滚动容器
+  function _scrollContainerOf(el) {
+    const container = el && el.closest && el.closest('#chat-messages, #code-chat-messages, #babe-chat-messages');
+    return container || document.getElementById('thinking-indicator')?.parentElement || chatMessages;
+  }
+
+  function scrollElementIntoView(el) {
+    scrollChatToBottom(_scrollContainerOf(el));
+  }
+
+  _initAutoScrollTargets();
+  window.requestAutoScroll = requestAutoScroll;
+  window.forceScrollToBottom = forceScrollToBottom;
 
   // 暴露 renderMarkdown 供 VirtualScroller 使用
   window.renderMarkdown = renderMarkdown;
@@ -269,10 +406,8 @@
     document.getElementById('chat-search-next')?.addEventListener('click', () => { next(1); focusInput(true); });
     document.getElementById('chat-search-prev')?.addEventListener('click', () => { next(-1); focusInput(true); });
     document.getElementById('chat-search-close')?.addEventListener('click', close);
-    // 浮窗内点空白处也关闭（可选，增强交互）
-    overlay.addEventListener('click', (e) => {
-      if (e.target === overlay) close();
-    });
+    // 浮窗内点空白处也关闭（可选，增强交互）；拖选文本松手到框外不触发
+    if (typeof bindBackdropClose === 'function') bindBackdropClose(overlay, close);
     // Chat 模式搜索按钮（下载按钮左边）——绑定放在 IIFE 内，保证与搜索模块同生命周期
     document.getElementById('btn-chat-search')?.addEventListener('click', () => {
       open();
@@ -498,14 +633,14 @@
         bubble.renderTimer = null;
         if (bubble.contentEl) {
           bubble.contentEl.innerHTML = bubble.rawContent
-            ? renderMarkdown(bubble.rawContent) + '<span class="streaming-cursor">▋</span>'
+            ? renderMarkdown(bubble.rawContent) + '<span class="streaming-cursor"></span>'
             : '';
         }
         if (bubble.reasoningContentEl && bubble.rawReasoning) {
           // During streaming: show reasoning expanded (live)
           // 一旦 final content 开始，就移除 reasoning 的光标（思考已结束）
           bubble.reasoningEl.classList.remove('collapsed');
-          const reasoningCursor = bubble.contentStarted ? '' : '<span class="streaming-cursor">▋</span>';
+          const reasoningCursor = bubble.contentStarted ? '' : '<span class="streaming-cursor"></span>';
           bubble.reasoningContentEl.innerHTML = renderMarkdown(bubble.rawReasoning) + reasoningCursor;
           // 自动滚屏：让最新 reasoning 文本可见
           try { bubble.reasoningContentEl.scrollTop = bubble.reasoningContentEl.scrollHeight; } catch (_) {}
@@ -704,7 +839,7 @@
     });
 
     requestAnimationFrame(() => {
-      msg.scrollIntoView({ behavior: 'smooth', block: 'end' });
+            scrollElementIntoView(msg);
     });
   }
 
@@ -749,7 +884,7 @@
         '<div class="message-time">' + time + '</div>' +
       '</div>';
     appendChatElement(msg);
-    requestAnimationFrame(() => { msg.scrollIntoView({ behavior: 'smooth', block: 'end' }); });
+          scrollElementIntoView(msg);
   }
 
   // 显示图片右键菜单
@@ -1167,9 +1302,7 @@
       <div class="tool-call-result" style="display:none"></div>`;
     appendChatElement(el);
     // Ensure complete scroll to bottom
-    requestAnimationFrame(() => {
-      el.scrollIntoView({ behavior: 'smooth', block: 'end' });
-    });
+    scrollElementIntoView(el);
   }
 
   function updateToolCallResult(toolName, result, isError = false, callId = null) {
@@ -1244,7 +1377,7 @@
     const welcome = container.querySelector('.welcome-message');
     if (welcome) welcome.remove();
     container.appendChild(el);
-    requestAnimationFrame(() => { el.scrollIntoView({ behavior: 'smooth', block: 'end' }); });
+      scrollElementIntoView(el);
     // 绑定下载按钮点击
     const dlBtn = el.querySelector('.file-present-download-btn');
     if (dlBtn) {
@@ -1365,7 +1498,7 @@
       e.stopPropagation();
       showSubAgentDetailModal(id);
     });
-    requestAnimationFrame(() => { el.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); });
+    scrollElementIntoView(el);
   }
 
   function updateSubAgentCard(id, updates) {
@@ -1438,7 +1571,7 @@
         el.appendChild(warnEl);
       }
     }
-    requestAnimationFrame(() => { el.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); });
+    scrollElementIntoView(el);
   }
 
   function appendSubAgentLog(id, content) {
@@ -1448,7 +1581,7 @@
     line.className = 'sub-agent-log-line';
     line.innerHTML = `<div class="markdown-body">${renderMarkdown(content)}</div>`;
     rec.logEl.appendChild(line);
-    requestAnimationFrame(() => { rec.el.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); });
+    scrollElementIntoView(rec.el);
   }
 
   // 子代理详情模态框：显示完整对话历史、上下文窗口、token 用量
@@ -1696,9 +1829,7 @@
       } catch (e) { /* 静默失败：UI 已显示，不应阻塞 */ }
     }
     // Ensure complete scroll to bottom
-    requestAnimationFrame(() => {
-      el.scrollIntoView({ behavior: 'smooth', block: 'end' });
-    });
+    scrollElementIntoView(el);
   }
 
   // ---- 系统通知辅助 ----
@@ -1819,7 +1950,7 @@
         showMessageContextMenu(e, msg, 'assistant');
       });
 
-      requestAnimationFrame(() => msg.scrollIntoView({ behavior: 'smooth', block: 'end' }));
+      scrollElementIntoView(msg);
     });
   };
 
@@ -2343,9 +2474,9 @@
   document.getElementById('btn-close-image-modal')?.addEventListener('click', () => {
     fadeOutHide(imagePreviewModal);
   });
-  imagePreviewModal?.addEventListener('click', (e) => {
-    if (e.target === imagePreviewModal) fadeOutHide(imagePreviewModal);
-  });
+  if (imagePreviewModal && typeof bindBackdropClose === 'function') {
+    bindBackdropClose(imagePreviewModal, () => fadeOutHide(imagePreviewModal));
+  }
 
   // ---- Open Workspace ----
   if (btnOpenWorkspace) {
@@ -2459,6 +2590,19 @@
     // 增量推送：替换待办列表内容
     WebUIMirror.pushDomEvent({ type: 'dom_replace', container: '#todo-list', html: todoList.innerHTML });
   }
+
+  // 事件委托：勾选/删除（列表内容每次重渲染，绑定在容器上）
+  todoList.addEventListener('click', (e) => {
+    const itemEl = e.target.closest('.todo-item');
+    if (!itemEl) return;
+    const id = Number(itemEl.dataset.id);
+    if (!Number.isFinite(id)) return;
+    if (e.target.closest('.todo-delete')) {
+      agent.handleTodo({ action: 'remove', id });
+    } else if (e.target.closest('.todo-checkbox')) {
+      agent.handleTodo({ action: 'toggle', id });
+    }
+  });
 
   // ---- Approval Panel ----
   function showApprovalPanel(toolName, args) {

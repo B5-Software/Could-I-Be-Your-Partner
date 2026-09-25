@@ -172,10 +172,7 @@
           });
           // 批量加载结束：触发首屏渲染（仅渲染可视区域内的消息）
           if (typeof VirtualScroller !== 'undefined') VirtualScroller.markBatchEnd();
-          requestAnimationFrame(() => {
-            const last = chatMessages.lastElementChild;
-            if (last) last.scrollIntoView({ behavior: 'smooth', block: 'end' });
-          });
+          if (typeof window.forceScrollToBottom === 'function') window.forceScrollToBottom(chatMessages);
         }
       });
     });
@@ -448,10 +445,7 @@
         cancelCheck: () => window.__chatReplayGeneration !== chatGeneration
       });
       if (typeof VirtualScroller !== 'undefined') VirtualScroller.markBatchEnd();
-      requestAnimationFrame(() => {
-        const last = chatMessages.lastElementChild;
-        if (last) last.scrollIntoView({ behavior: 'smooth', block: 'end' });
-      });
+      if (typeof window.forceScrollToBottom === 'function') window.forceScrollToBottom(chatMessages);
     } else if (action === 'open-workspace') {
       const conv = await window.api.historyGet(id);
       if (conv?.workspacePath) {
@@ -682,10 +676,7 @@
           });
         }
       }
-      requestAnimationFrame(() => {
-        const last = chatMessages.lastElementChild;
-        if (last) last.scrollIntoView({ behavior: 'smooth', block: 'end' });
-      });
+      if (typeof window.forceScrollToBottom === 'function') window.forceScrollToBottom(chatMessages);
     });
   }
 
@@ -1957,7 +1948,7 @@
         if (e.key === 'Enter') close(input.value);
         if (e.key === 'Escape') close(null);
       });
-      overlay.addEventListener('click', (e) => { if (e.target === overlay) close(null); });
+      if (typeof bindBackdropClose === 'function') bindBackdropClose(overlay, () => close(null));
     });
   }
 
@@ -1982,6 +1973,6 @@
       }
       box.querySelector('.btn-cancel').addEventListener('click', () => close(false));
       box.querySelector('.btn-ok').addEventListener('click', () => close(true));
-      overlay.addEventListener('click', (e) => { if (e.target === overlay) close(false); });
+      if (typeof bindBackdropClose === 'function') bindBackdropClose(overlay, () => close(false));
     });
   }

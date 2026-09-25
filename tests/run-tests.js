@@ -35,6 +35,15 @@ async function testAsync(name, fn) {
 
 console.log('Running tests...\n');
 
+// ---- app-parts 按功能拆分到子目录后，测试按整目录拼接读取（顺序与 app.js 一致） ----
+function readAppParts(relDir) {
+  const fs_ = require('fs');
+  const path_ = require('path');
+  const dir = path_.join(__dirname, '../src/renderer/js/app-parts', relDir);
+  return fs_.readdirSync(dir).filter(f => f.endsWith('.js')).sort()
+    .map(f => fs_.readFileSync(path_.join(dir, f), 'utf-8')).join('\n');
+}
+
 // ---- Test Tarot Data ----
 console.log('Tarot Data:');
 const tarotCards = require('../src/data/tarot.js');
@@ -4028,7 +4037,7 @@ test('index.html 含字体设置页（tab + zh/en/de 三选器）', () => {
 
 test('全局字体栈：内置自由字体 + 默认外观不变', () => {
   const mainCss = fs.readFileSync(require('path').join(__dirname, '../src/renderer/css/main.css'), 'utf-8');
-  const initJs = fs.readFileSync(require('path').join(__dirname, '../src/renderer/js/app-parts/01-app-init.js'), 'utf-8');
+  const initJs = readAppParts('01-boot');
   for (const family of ['Noto Sans SC', 'LXGW WenKai', 'Noto Serif SC', 'Inter', 'Source Sans 3', 'Noto Sans']) {
     assert.ok(mainCss.includes(`font-family: '${family}'`), `应有 ${family} @font-face`);
   }
@@ -5317,6 +5326,226 @@ test('agent.js 标题生成：走 title-utils 且 LLM 失败时用启发式兜�
   assert.ok(html.includes('title-utils.js'), 'index.html 未加载 title-utils.js');
 });
 
+// ---- 批量工具 + todo 批处理 ----
+async function runBatchToolTests() {
+  console.log('\n批量工具与待办:');
+  const prevContextManager = global.ContextManager;
+  global.ContextManager = class TestCM { constructor() { this.prompt = ''; } setSystemPrompt() {} clearWorkingContext() {} };
+  let Agent;
+  try {
+    ({ Agent } = require('../src/renderer/js/agent.js'));
+  } catch (e) {
+    global.ContextManager = prevContextManager;
+    test('agent.js 可被 Node 加载（批量工具测试前提）', () => { throw e; });
+    return;
+  }
+
+  try {
+
+  test('agent.js 导出 Agent 与批量规格', () => {
+    assert.strictEqual(typeof Agent, 'function');
+  });
+
+  test('todoList：单条 add 兼容旧行为', () => {
+    const a = new Agent();
+    let updates = 0;
+    a.onTodoUpdate = () => updates++;
+    const r = a.handleTodo({ action: 'add', text: 'first' });
+    assert.strictEqual(r.ok, true);
+    assert.strictEqual(a.todoItems.length, 1);
+    assert.strictEqual(updates, 1);
+  });
+
+  test('todoList：operations 批量 add/toggle/remove 一次更新', () => {
+    const a = new Agent();
+    let updates = 0;
+    a.onTodoUpdate = () => updates++;
+    const r = a.handleTodo({ action: 'batch', operations: [
+      { action: 'add', text: 'a' },
+      { action: 'add', text: 'b' },
+      { action: 'add', text: 'c' },
+    ] });
+    assert.strictEqual(r.ok, true);
+    assert.strictEqual(r.succeeded, 3);
+    assert.strictEqual(a.todoItems.length, 3);
+    const ids = a.todoItems.map(t => t.id);
+    const r2 = a.handleTodo({ operations: [
+      { action: 'toggle', id: ids[1] },
+      { action: 'remove', id: ids[2] },
+    ] });
+    assert.strictEqual(r2.succeeded, 2);
+    assert.strictEqual(a.todoItems.length, 2);
+    assert.strictEqual(a.todoItems.find(t => t.id === ids[1]).done, true);
+    assert.strictEqual(updates, 2, '批量操作应只触发一次 onTodoUpdate');
+  });
+
+  test('todoList：批量中单项失败不影响其余项', () => {
+    const a = new Agent();
+    a.handleTodo({ action: 'add', text: 'only' });
+    const r = a.handleTodo({ operations: [
+      { action: 'toggle', id: 999 },
+      { action: 'add', text: 'later' },
+    ] });
+    assert.strictEqual(r.succeeded, 1);
+    assert.strictEqual(a.todoItems.length, 2);
+    assert.strictEqual(r.results[0].ok, false);
+    assert.strictEqual(r.results[1].ok, true);
+  });
+
+  test('todoList：list 返回全部条目', () => {
+    const a = new Agent();
+    a.handleTodo({ action: 'add', text: 'x' });
+    const r = a.handleTodo({ action: 'list' });
+    assert.strictEqual(r.ok, true);
+    assert.strictEqual(r.items.length, 1);
+  });
+
+  await testAsync('批量工具：paths 数组展开为并发单项调用并聚合结果', async () => {
+    const a = new Agent();
+    const calls = [];
+    let inFlight = 0;
+    let maxInFlight = 0;
+    a.executeTool = async (name, arg) => {
+      calls.push({ name, arg });
+      inFlight++;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise(r => setTimeout(r, 5));
+      inFlight--;
+      return { ok: true, path: arg.path, content: 'c' };
+    };
+    const r = await a._maybeBatchTool('readFile', { paths: ['a', 'b', 'c', 'd', 'e'] });
+    assert.strictEqual(r.total, 5);
+    assert.strictEqual(r.succeeded, 5);
+    assert.strictEqual(calls.length, 5);
+    assert.strictEqual(maxInFlight, 4, '并发上限应为 readFile 的 4');
+    assert.ok(r.results[0].result.content === 'c');
+  });
+
+  await testAsync('批量工具：单项数组退化为普通调用', async () => {
+    const a = new Agent();
+    const calls = [];
+    a.executeTool = async (name, arg) => { calls.push(arg); return { ok: true }; };
+    const r = await a._maybeBatchTool('listDirectory', { paths: ['only'] });
+    assert.deepStrictEqual(r, { ok: true });
+    assert.deepStrictEqual(calls, [{ paths: ['only'], path: 'only' }]);
+  });
+
+  await testAsync('批量工具：非批量参数返回 null，不干预普通路径', async () => {
+    const a = new Agent();
+    assert.strictEqual(await a._maybeBatchTool('readFile', { path: 'single' }), null);
+    assert.strictEqual(await a._maybeBatchTool('unknownTool', { paths: ['a'] }), null);
+  });
+
+  test('tools-def：批量工具 schema 含数组参数', () => {
+    const content = fs.readFileSync(require('path').join(__dirname, '../src/renderer/js/tools-def.js'), 'utf-8');
+    for (const key of ['paths', 'imagePaths', 'searches', 'requests', 'urls', 'hostnames', 'items']) {
+      assert.ok(content.includes(`${key}: { type: 'array'`), `缺少批量参数 ${key}`);
+    }
+    assert.ok(content.includes("enum: ['add', 'remove', 'toggle', 'list', 'batch']"), 'todoList 应支持 batch');
+  });
+
+  } finally {
+    global.ContextManager = prevContextManager;
+  }
+}
+
+// ---- 真实 token 基线（Tier0/Tier1）----
+function runTokenBasisTests() {
+  console.log('\n真实 token 计量:');
+  const { ContextManager } = require('../src/renderer/js/context-manager.js');
+
+  test('Tier0：API 真实 prompt_tokens 作为占用基线', () => {
+    const cm = new ContextManager(100000);
+    cm.setSystemPrompt('system');
+    cm.addMessage({ role: 'user', content: '你好' });
+    cm.setRealBasis(5000, 'test-model');
+    const stats = cm.getStats();
+    assert.strictEqual(stats.basis, 'api');
+    assert.strictEqual(stats.exact, true);
+    assert.strictEqual(stats.realPromptTokens, 5000);
+    const before = cm.getTotalTokens();
+    cm.addMessage({ role: 'assistant', content: 'world world world' });
+    const after = cm.getTotalTokens();
+    assert.ok(after > before, '追加消息后占用应增长');
+    assert.ok(after >= 5000, '基线应保留真实 prompt_tokens');
+  });
+
+  test('Tier0：压缩/剪枝后基线失效回退估算', () => {
+    const cm = new ContextManager(100000);
+    cm.setSystemPrompt('system');
+    for (let i = 0; i < 10; i++) cm.addMessage({ role: 'tool', name: 'readFile', content: 'x'.repeat(5000), tool_call_id: 't' + i });
+    cm.setRealBasis(8000, 'test-model');
+    assert.strictEqual(cm.getStats().basis, 'api');
+    cm.pruneOldToolResults(cm.resolvePolicy({}), 800, 400);
+    assert.strictEqual(cm.getStats().basis, 'estimate');
+  });
+
+  test('Tier0：系统提示词变化使基线失效', () => {
+    const cm = new ContextManager(100000);
+    cm.setSystemPrompt('system A');
+    cm.addMessage({ role: 'user', content: 'hi' });
+    cm.setRealBasis(1234, 'm');
+    assert.strictEqual(cm.getStats().basis, 'api');
+    cm.setSystemPrompt('system B changed');
+    assert.strictEqual(cm.getStats().basis, 'estimate');
+  });
+
+  test('Tier0：估算计入 reasoning/name/tool_call_id 与摘要', () => {
+    const cm = new ContextManager(100000);
+    const base = cm.estimateMessageTokens({ role: 'assistant', content: 'x' });
+    const withExtras = cm.estimateMessageTokens({ role: 'assistant', content: 'x', reasoning: 'y'.repeat(200), name: 'n', tool_call_id: 'id-123' });
+    assert.ok(withExtras > base, 'reasoning/name/tool_call_id 应计入估算');
+    cm.summaries = [{ summary: 'z'.repeat(500) }];
+    const rawWithSummary = cm.getRawTotalTokens();
+    cm.summaries = [];
+    const rawWithout = cm.getRawTotalTokens();
+    assert.ok(rawWithSummary > rawWithout, '摘要应计入 raw 估算');
+  });
+}
+
+// ---- 模型元数据（models.dev / Anthropic effort）与变体 ----
+function runModelMetadataTests() {
+  console.log('\n模型元数据与变体:');
+  const LP = require('../src/main/llm-providers.js');
+
+  test('metadata.effort 优先于硬编码档位', () => {
+    const t = LP.resolveReasoningVariants('some-model', 'openai-compat', null, {
+      reasoningOptions: { type: 'effort', values: ['low', 'high', 'max'] }
+    });
+    assert.deepStrictEqual(t.variants.map(v => v.id), ['off', 'low', 'high', 'max']);
+  });
+
+  test('metadata budget_tokens 映射四档', () => {
+    const t = LP.resolveReasoningVariants('claude-x', 'anthropic-compat', null, {
+      reasoningOptions: { type: 'budget_tokens', min: 1024, max: 32000 }
+    });
+    assert.deepStrictEqual(t.variants.map(v => v.id), ['off', 'low', 'medium', 'high']);
+  });
+
+  test('无 metadata 时回退硬编码档位', () => {
+    const t = LP.resolveReasoningVariants('deepseek-v4', 'openai-compat');
+    assert.ok(t.variants.some(v => v.id === 'xhigh'), 'deepseek-v4 应包含 xhigh');
+    const t2 = LP.resolveReasoningVariants('mimo-v2.6-flash-free', 'opencode-zen');
+    assert.ok(t2.variants.length >= 3);
+  });
+
+  test('opencode-go 也按模型名分派（claude → anthropic 形态）', () => {
+    const t = LP.resolveReasoningVariants('claude-sonnet-4-6', 'opencode-go', null, {
+      reasoningOptions: { type: 'effort', values: ['low', 'medium', 'high', 'xhigh'] }
+    });
+    assert.deepStrictEqual(t.variants.map(v => v.id), ['off', 'low', 'medium', 'high', 'xhigh']);
+  });
+
+  test('validateReasoningEffort 接受 metadata 扩展档位', () => {
+    const meta = { reasoningOptions: { type: 'effort', values: ['low', 'xhigh', 'max'] } };
+    const ok = LP.validateReasoningEffort('max', 'gpt-5.1', 'openai-compat', null, meta);
+    assert.strictEqual(ok.valid, true);
+    assert.strictEqual(ok.resolved, 'max');
+    const bad = LP.validateReasoningEffort('bogus', 'gpt-5.1', 'openai-compat', null, meta);
+    assert.strictEqual(bad.changed, true);
+  });
+}
+
 // ---- Summary ----
 (async () => {
   // 等待异步 LLM 测试完成
@@ -5330,6 +5559,9 @@ test('agent.js 标题生成：走 title-utils 且 LLM 失败时用启发式兜�
   await runMcpSpecTests();
   await runPlaywrightDataModeTests();
   await runDsPluginTests();
+  await runBatchToolTests();
+  runTokenBasisTests();
+  runModelMetadataTests();
 
   console.log(`\n${'='.repeat(40)}`);
   console.log(`Results: ${passed} passed, ${failed} failed, ${passed + failed} total`);

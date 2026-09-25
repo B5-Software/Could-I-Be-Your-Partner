@@ -179,6 +179,11 @@
         if (document.getElementById('page-tools')?.classList.contains('active')) {
           loadToolsPage();
         }
+        // 工具组弹窗若打开，同步刷新高亮（当前优化集合变化）
+        if (typeof currentToolModalCategory !== 'undefined' && currentToolModalCategory
+            && document.getElementById('tools-group-modal')?.classList.contains('open')) {
+          renderToolGroupModal(currentToolModalCategory);
+        }
         break;
       case 'approval':
         if (!isActive()) break;
@@ -546,7 +551,7 @@
       if (usageEl) usageEl.textContent = fmtTokenCount(data.dailyTokensUsed || 0);
       try { refreshBudgetMiniBars(); } catch { /* ignore */ }
       try { refreshSessionCostMini(); } catch { /* ignore */ }
-      const activeTab = document.querySelector('.settings-tab-btn.active');
+      const activeTab = document.querySelector('.settings-tab.active');
       if (activeTab && activeTab.dataset.tab === 'usage') {
         try { loadUsageStats(document.querySelector('.usage-period-btn.active')?.dataset.period || 'daily'); } catch { /* ignore */ }
       }
@@ -905,10 +910,7 @@
     while (session.uiRoot.firstChild) {
       container.appendChild(session.uiRoot.firstChild);
     }
-    requestAnimationFrame(() => {
-      const last = container.lastElementChild;
-      if (last && last.scrollIntoView) last.scrollIntoView({ block: 'end' });
-    });
+    if (typeof window.forceScrollToBottom === 'function') window.forceScrollToBottom(container);
   }
 
   // 会话切走前：把属于该会话的交互卡片从可见容器收回离屏根节点

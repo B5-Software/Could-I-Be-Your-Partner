@@ -32,18 +32,31 @@
     { cmd: '/help', icon: 'fa-circle-question', desc: '查看可用命令' }
   ];
 
-  // /config 可直达的设置标签页（id + 中文名）
-  const SETTINGS_TABS = [
-    ['ai', 'AI 形象'], ['babe', 'Babe 模式'], ['user', '个人资料'], ['llm', 'LLM'],
-    ['usage', '用量统计'], ['budget', '预算控制'], ['image', '生图'], ['theme', '主题'],
-    ['animations', '动效'], ['fonts', '字体'], ['language', '语言'], ['network', '网络'],
-    ['entropy', '熵源'], ['firmware', 'TRNG固件'], ['security', '安全'], ['mcp', 'MCP'],
-    ['email', '邮箱'], ['fedikitten', 'FediKitten'], ['webcontrol', 'Web控制'], ['playwright', 'Playwright'],
-    ['notifications', '通知'], ['terminal', '终端'], ['ime', '输入法'], ['voice', '语音'],
-    ['resources', '资源下载'], ['decision', '决策模型'],
-    ['context', '上下文'], ['sandbox', '沙箱'], ['automation', '自动化'], ['plugins', '插件'],
-    ['environment', '环境检测'], ['updates', '更新']
-  ];
+  // /config 的设置分类：运行时从设置侧栏 DOM 动态读取（单一数据源，永不与 index.html 失同步）
+  function getSettingsTabs() {
+    const root = document.getElementById('page-settings') || document;
+    const seen = new Set();
+    const out = [];
+    root.querySelectorAll('.settings-tab[data-tab]').forEach((tab) => {
+      const id = tab.dataset.tab;
+      if (!id || tab.hidden || seen.has(id)) return;
+      if (tab.style.display === 'none') return;
+      seen.add(id);
+      const label = (tab.textContent || '').replace(/\s+/g, ' ').trim() || id;
+      let icon = 'fa-gear';
+      const iconEl = tab.querySelector('i');
+      if (iconEl) {
+        for (const cls of iconEl.classList) {
+          if (cls.startsWith('fa-') && cls !== 'fa-solid' && cls !== 'fa-regular' && cls !== 'fa-brands') {
+            icon = cls;
+            break;
+          }
+        }
+      }
+      out.push({ id, label, icon });
+    });
+    return out;
+  }
 
   let panel = null;
   let panelInput = null;
@@ -281,14 +294,14 @@
     }
     if (cmd === '/config') {
       const q = query.toLowerCase();
-      renderItems(SETTINGS_TABS
-        .filter(([id, label]) => !q || id.includes(q) || label.includes(q))
-        .map(([id, label]) => ({
-          label,
-          icon: 'fa-gear',
-          desc: `tab: ${id}`,
+      renderItems(getSettingsTabs()
+        .filter((t) => !q || t.id.toLowerCase().includes(q) || t.label.toLowerCase().includes(q))
+        .map((t) => ({
+          label: t.label,
+          icon: t.icon,
+          desc: `tab: ${t.id}`,
           action: 'config',
-          tab: id
+          tab: t.id
         })));
       showPanel();
       return;
@@ -575,7 +588,7 @@
   }
 
   function openSettingsTab(tabId) {
-    const valid = SETTINGS_TABS.some(([id]) => id === tabId);
+    const valid = getSettingsTabs().some((t) => t.id === tabId);
     const target = valid ? tabId : null;
     document.querySelector('.nav-item[data-page="settings"]')?.click();
     if (!target) return;
@@ -583,8 +596,9 @@
     const tryTab = () => {
       const page = document.getElementById('page-settings');
       const tab = document.querySelector(`.settings-tab[data-tab="${target}"]`);
-      if (tab && page && page.classList.contains('active')) {
-        tab.click();
+      if (tab && !tab.hidden && page && page.classList.contains('active')) {
+        if (typeof window.activateSettingsTab === 'function') window.activateSettingsTab(target);
+        else tab.click();
       } else if (Date.now() - started < 4000) {
         setTimeout(tryTab, 80);
       }

@@ -50,17 +50,17 @@
             bubble.rawContent = dedup.raw;
             bubble._lastChunk = dedup.lastChunk;
             bubble.contentStarted = true;
-            bubble.contentEl.innerHTML = renderMarkdown(bubble.rawContent) + '<span class="streaming-cursor">▋</span>';
+            bubble.contentEl.innerHTML = renderMarkdown(bubble.rawContent) + '<span class="streaming-cursor"></span>';
             if (bubble.rawReasoning) bubble.reasoningEl.innerHTML = renderMarkdown(bubble.rawReasoning);
           }
           if (data.reasoning) {
             bubble.rawReasoning += data.reasoning;
             bubble.reasoningSection.style.display = 'block';
-            const rCursor = bubble.contentStarted ? '' : '<span class="streaming-cursor">▋</span>';
+            const rCursor = bubble.contentStarted ? '' : '<span class="streaming-cursor"></span>';
             bubble.reasoningEl.innerHTML = renderMarkdown(bubble.rawReasoning) + rCursor;
             try { bubble.reasoningEl.scrollTop = bubble.reasoningEl.scrollHeight; } catch (_) {}
           }
-          msgsEl.scrollTop = msgsEl.scrollHeight;
+          scrollChatToBottom(msgsEl);
           if (!bubble.renderTimer) {
             bubble.renderTimer = setTimeout(() => {
               bubble.renderTimer = null;
@@ -290,7 +290,7 @@
       hideHistoryProgress();
     }
     requestAnimationFrame(() => {
-      msgsEl.scrollTop = msgsEl.scrollHeight;
+      scrollChatToBottom(msgsEl);
       WebUIMirror.pushDomEvent({ type: 'dom_replace', container: '#babe-chat-messages', html: msgsEl.innerHTML });
     });
     updateBabeAffection(session.agent.babeAffection);
@@ -324,7 +324,7 @@
     msgsEl.appendChild(msg);
     // 增量推送：Babe 流式气泡创建后追加到 WebUI
     WebUIMirror.pushDomEvent({ type: 'dom_append', container: '#babe-chat-messages', html: msg.outerHTML });
-    msgsEl.scrollTop = msgsEl.scrollHeight;
+    scrollChatToBottom(msgsEl);
     return {
       el: msg,
       contentEl: msg.querySelector('.babe-msg-bubble'),
@@ -369,7 +369,7 @@
     msgsEl.appendChild(msg);
     // 增量推送：Babe 消息追加到 WebUI
     WebUIMirror.pushDomEvent({ type: 'dom_append', container: '#babe-chat-messages', html: msg.outerHTML });
-    msgsEl.scrollTop = msgsEl.scrollHeight;
+    scrollChatToBottom(msgsEl);
     babeMessages.push({ role, content });
   }
 
@@ -387,7 +387,7 @@
     msgsEl.appendChild(div);
     // 增量推送：Babe 工具调用卡片追加到 WebUI
     WebUIMirror.pushDomEvent({ type: 'dom_append', container: '#babe-chat-messages', html: div.outerHTML });
-    msgsEl.scrollTop = msgsEl.scrollHeight;
+    scrollChatToBottom(msgsEl);
     return div;
   }
 
@@ -417,6 +417,8 @@
     if (targetCard.id) {
       WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#' + targetCard.id, html: targetCard.outerHTML });
     }
+    // 结果注入会撑高卡片：吸附状态下补滚到底
+    scrollChatToBottom(msgsEl);
   }
 
   // 更新好感度显示
@@ -444,7 +446,7 @@
     msgsEl.appendChild(div);
     // 增量推送：好感度变化提示追加到 WebUI
     WebUIMirror.pushDomEvent({ type: 'dom_append', container: '#babe-chat-messages', html: div.outerHTML });
-    msgsEl.scrollTop = msgsEl.scrollHeight;
+    scrollChatToBottom(msgsEl);
     // 2秒后淡出
     setTimeout(() => { div.style.opacity = '0'; if (div.id) WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#' + div.id, attr: 'style', value: div.getAttribute('style') || '' }); }, 2000);
     setTimeout(() => { div.remove(); if (div.id) WebUIMirror.pushDomEvent({ type: 'dom_remove', selector: '#' + div.id }); }, 3000);
@@ -1511,6 +1513,7 @@
         window.openSettingsTab('resources');
         return;
       }
+      if (typeof window.activateSettingsTab === 'function' && window.activateSettingsTab('resources')) return;
       document.querySelectorAll('.settings-tab').forEach(b => b.classList.toggle('active', b.dataset.tab === 'resources'));
       document.querySelectorAll('.settings-panel').forEach(p => p.classList.toggle('active', p.dataset.tab === 'resources'));
       if (typeof refreshResourcePanel === 'function') refreshResourcePanel().catch(() => {});

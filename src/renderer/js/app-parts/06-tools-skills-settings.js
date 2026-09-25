@@ -64,6 +64,12 @@
       body.innerHTML = '<div class="empty-state"><i class="fa-solid fa-inbox"></i><p>该组在当前模式下无可用工具</p></div>';
       return;
     }
+    const hasOptimized = (typeof agent.hasUsableOptimizedSelection === 'function')
+      ? agent.hasUsableOptimizedSelection()
+      : Array.isArray(agent.optimizedToolNames);
+    const activeSet = hasOptimized
+      ? new Set((typeof agent.getActiveToolNames === 'function') ? agent.getActiveToolNames() : [])
+      : null;
     body.innerHTML = tools.map(tool => {
       const gated = typeof isConfigGatedTool === 'function' && isConfigGatedTool(tool.name);
       const enabled = typeof isToolEnabledForSettings === 'function'
@@ -74,10 +80,13 @@
         ? `<span class="ds-compat-badge ${tool.compatTier || 'native'}">${tool.compatTier || 'native'}</span>`
         : '';
       const autoBadge = gated ? '<span class="ds-compat-badge native">配置后自动启用</span>' : '';
+      const isActive = activeSet ? activeSet.has(tool.name) : null;
+      const optClass = isActive === true ? 'optimized-active' : (isActive === false && enabled ? 'optimized-muted' : '');
+      const optBadge = isActive === true ? '<span class="ds-compat-badge optimized" data-i18n="当前优化"><i class="fa-solid fa-wand-magic-sparkles"></i> 当前优化</span>' : '';
       return `
-        <div class="tools-modal-row ${enabled ? '' : 'disabled'}" data-tool="${escapeHtml(tool.name)}">
+        <div class="tools-modal-row ${enabled ? '' : 'disabled'} ${optClass}" data-tool="${escapeHtml(tool.name)}"${isActive === true ? ' data-optimized="1"' : ''}>
           <div class="tmr-main">
-            <div class="tmr-name"><i class="fa-solid tmr-icon ${escapeHtml(tool.icon)}"></i>${escapeHtml(tool.name)}${dsBadge}${autoBadge}</div>
+            <div class="tmr-name"><i class="fa-solid tmr-icon ${escapeHtml(tool.icon)}"></i>${escapeHtml(tool.name)}${dsBadge}${autoBadge}${optBadge}</div>
             <div class="tmr-desc">${escapeHtml(desc)}</div>
           </div>
           <div class="tmr-toggle">
@@ -119,9 +128,9 @@
   }
 
   document.getElementById('tools-modal-close')?.addEventListener('click', closeToolGroupModal);
-  document.getElementById('tools-group-modal')?.addEventListener('click', (e) => {
-    if (e.target === e.currentTarget) closeToolGroupModal();
-  });
+  if (typeof bindBackdropClose === 'function') {
+    bindBackdropClose(document.getElementById('tools-group-modal'), closeToolGroupModal);
+  }
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && document.getElementById('tools-group-modal')?.classList.contains('open')) {
       closeToolGroupModal();
@@ -255,9 +264,14 @@
         : '';
       const stateLabel = allOn ? '开' : (noneOn ? '关' : '半开');
       const indeterminate = (!allOn && !noneOn) ? ' data-indeterminate="1"' : '';
+      const optimizedCount = hasOptimized ? tools.filter(t => activeToolSet.has(t.name)).length : 0;
+      const optClass = hasOptimized ? (optimizedCount > 0 ? 'optimized-active' : 'optimized-muted') : '';
+      const optBadge = hasOptimized && optimizedCount > 0
+        ? `<span class="tgr-optimized-badge" title="当前优化已选 ${optimizedCount} / ${tools.length}"><i class="fa-solid fa-wand-magic-sparkles"></i> ${optimizedCount}</span>`
+        : '';
       return `
-        <div class="tool-group-row ${isDsCategory(category) ? 'ds-plugin-row' : ''}" data-tool-category="${escapeHtml(category)}" role="button" tabindex="0">
-          <div class="tgr-name"><span class="tgr-icon"><i class="fa-solid ${meta.icon || 'fa-layer-group'}"></i></span>${escapeHtml(title)}${dsBadge}</div>
+        <div class="tool-group-row ${isDsCategory(category) ? 'ds-plugin-row' : ''} ${optClass}" data-tool-category="${escapeHtml(category)}"${hasOptimized ? ` data-optimized-count="${optimizedCount}"` : ''} role="button" tabindex="0">
+          <div class="tgr-name"><span class="tgr-icon"><i class="fa-solid ${meta.icon || 'fa-layer-group'}"></i></span>${escapeHtml(title)}${dsBadge}${optBadge}</div>
           <div class="tgr-desc">${escapeHtml(meta.desc || '')}</div>
           <div class="tgr-count"><strong>${enabledCount}</strong> / ${tools.length}</div>
           <div class="tgr-toggle">
@@ -1135,12 +1149,9 @@
     // Language setting
     const langSelect = document.getElementById('setting-language');
     if (langSelect) langSelect.value = s.language || 'zh-CN';
-    // Avatar migration: if stored as file path, convert to base64
-    let aiAvatarData = persona.avatar || '';
-    if (aiAvatarData && !aiAvatarData.startsWith('data:') && !aiAvatarData.startsWith('http')) {
-      const enc = await window.api.avatarEncodeFile(aiAvatarData);
-      if (enc.ok) { aiAvatarData = enc.dataUrl; s.aiPersona.avatar = aiAvatarData; await window.api.setSettings(s); }
-    }
+    // 头像以文件路径为准；data URL 仅在推送到 WebUI 镜像时按需生成（不写回 settings）
+    const aiAvatarData = persona.avatar || '';
+    const aiAvatarMirror = await _avatarMirrorData(aiAvatarData);
     // 头像框系统：加载 AI 头像框状态并预加载 SVG
     _avatarFrameState.ai = persona.avatarFrame || null;
     if (_avatarFrameState.ai) await loadAvatarFrameSVG(_avatarFrameState.ai);
@@ -1164,12 +1175,8 @@
     if (babeUserNicknameEl) babeUserNicknameEl.value = babe.userNickname || '';
     if (babeProactiveIntervalEl) babeProactiveIntervalEl.value = String(babe.proactiveInterval ?? 0);
     if (babeInitialAffectionEl) babeInitialAffectionEl.value = babe.initialAffection ?? 30;
-    // Babe 头像：迁移文件路径为 base64（与 AI/User 头像一致）
-    let babeAvatarData = babe.avatar || '';
-    if (babeAvatarData && !babeAvatarData.startsWith('data:') && !babeAvatarData.startsWith('http')) {
-      const enc = await window.api.avatarEncodeFile(babeAvatarData);
-      if (enc.ok) { babeAvatarData = enc.dataUrl; s.babe.avatar = babeAvatarData; await window.api.setSettings(s); }
-    }
+    // Babe 头像：文件路径为准
+    const babeAvatarData = babe.avatar || '';
     // 头像框系统：加载 Babe 头像框状态并预加载 SVG
     _avatarFrameState.babe = babe.avatarFrame || null;
     if (_avatarFrameState.babe) await loadAvatarFrameSVG(_avatarFrameState.babe);
@@ -1181,16 +1188,13 @@
     const userBioEl = document.getElementById('setting-user-bio');
     if (userNameEl) userNameEl.value = userProfile.name || '';
     if (userBioEl) userBioEl.value = userProfile.bio || '';
-    let userAvatarData = userProfile.avatar || '';
-    if (userAvatarData && !userAvatarData.startsWith('data:') && !userAvatarData.startsWith('http')) {
-      const enc = await window.api.avatarEncodeFile(userAvatarData);
-      if (enc.ok) { userAvatarData = enc.dataUrl; s.userProfile.avatar = userAvatarData; await window.api.setSettings(s); }
-    }
+    const userAvatarData = userProfile.avatar || '';
+    const userAvatarMirror = await _avatarMirrorData(userAvatarData);
     // 头像框系统：加载 User 头像框状态并预加载 SVG
     _avatarFrameState.user = userProfile.avatarFrame || null;
     if (_avatarFrameState.user) await loadAvatarFrameSVG(_avatarFrameState.user);
     updateUserAvatarPreview(userAvatarData);
-    window.api.webControlSetAvatars({ ai: aiAvatarData, user: userAvatarData });
+    window.api.webControlSetAvatars({ ai: aiAvatarMirror, user: userAvatarMirror });
 
     // 头像框系统：加载并渲染头像框选择器 grid（异步，不阻塞设置面板其他渲染）
     loadAvatarFrames();
@@ -3219,6 +3223,16 @@
     }
   }
 
+  // 头像路径 → 小尺寸 data URL（仅用于 WebUI/远程镜像；data:/http 原样返回）
+  async function _avatarMirrorData(value) {
+    if (!value) return '';
+    if (value.startsWith('data:') || value.startsWith('http')) return value;
+    try {
+      const enc = await window.api.avatarEncodeFile(value);
+      return enc && enc.ok ? enc.dataUrl : '';
+    } catch { return ''; }
+  }
+
   function updateAvatarPreview(avatarData) {
     const preview = document.getElementById('setting-ai-avatar-preview');
     if (!preview) return;
@@ -3456,40 +3470,61 @@
     try { initResourceDownloads(); } catch (_) {}
   }
 
-  document.querySelectorAll('.settings-tab').forEach(btn => {
-    btn.addEventListener('click', () => {
-      document.querySelectorAll('.settings-tab').forEach(b => b.classList.remove('active'));
-      document.querySelectorAll('.settings-panel').forEach(p => p.classList.remove('active'));
-      btn.classList.add('active');
-      const panel = document.querySelector(`.settings-panel[data-tab="${btn.dataset.tab}"]`);
-      if (panel) panel.classList.add('active');
-      // Lazy-load usage stats when the tab is opened
-      if (btn.dataset.tab === 'usage') {
-        const activePeriod = document.querySelector('.usage-period-btn.active');
-        loadUsageStats(activePeriod ? activePeriod.dataset.period : 'daily');
-      }
-      if (btn.dataset.tab === 'environment') refreshEnvironmentPanel();
-      if (btn.dataset.tab === 'resources' && typeof refreshResourcePanel === 'function') {
-        refreshResourcePanel().catch(() => {});
-      }
-      if (btn.dataset.tab === 'decision' && typeof refreshDecisionStatus === 'function') {
-        refreshDecisionStatus().catch(() => {});
-      }
-      if (btn.dataset.tab === 'llm' && typeof refreshPoolUI === 'function') {
-        refreshPoolUI().catch(() => {});
-      }
-      if (btn.dataset.tab === 'voice' && typeof refreshVoiceGate === 'function') {
-        refreshVoiceGate().catch(() => {});
-      }
-      // 推送设置选项卡和面板的 active 状态到 WebUI/Remote
-      document.querySelectorAll('.settings-tab').forEach(b => {
-        WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '.settings-tab[data-tab="' + b.dataset.tab + '"]', attr: 'class', value: b.className });
-      });
-      document.querySelectorAll('.settings-panel').forEach(p => {
-        if (p.dataset.tab) WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '.settings-panel[data-tab="' + p.dataset.tab + '"]', attr: 'class', value: p.className });
-      });
+  function activateSettingsTabCore(btn) {
+    if (!btn || !btn.dataset || !btn.dataset.tab) return;
+    document.querySelectorAll('.settings-tab').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.settings-panel').forEach(p => p.classList.remove('active'));
+    btn.classList.add('active');
+    const panel = document.querySelector(`.settings-panel[data-tab="${btn.dataset.tab}"]`);
+    if (panel) panel.classList.add('active');
+    // Lazy-load usage stats when the tab is opened
+    if (btn.dataset.tab === 'usage') {
+      const activePeriod = document.querySelector('.usage-period-btn.active');
+      loadUsageStats(activePeriod ? activePeriod.dataset.period : 'daily');
+    }
+    if (btn.dataset.tab === 'environment') refreshEnvironmentPanel();
+    if (btn.dataset.tab === 'resources' && typeof refreshResourcePanel === 'function') {
+      refreshResourcePanel().catch(() => {});
+    }
+    if (btn.dataset.tab === 'decision' && typeof refreshDecisionStatus === 'function') {
+      refreshDecisionStatus().catch(() => {});
+    }
+    if (btn.dataset.tab === 'llm' && typeof refreshPoolUI === 'function') {
+      refreshPoolUI().catch(() => {});
+    }
+    if (btn.dataset.tab === 'voice' && typeof refreshVoiceGate === 'function') {
+      refreshVoiceGate().catch(() => {});
+    }
+    // 推送设置选项卡和面板的 active 状态到 WebUI/Remote
+    document.querySelectorAll('.settings-tab').forEach(b => {
+      WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '.settings-tab[data-tab="' + b.dataset.tab + '"]', attr: 'class', value: b.className });
     });
+    document.querySelectorAll('.settings-panel').forEach(p => {
+      if (p.dataset.tab) WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '.settings-panel[data-tab="' + p.dataset.tab + '"]', attr: 'class', value: p.className });
+    });
+  }
+
+  document.querySelectorAll('.settings-tab').forEach(btn => {
+    btn.addEventListener('click', () => activateSettingsTabCore(btn));
   });
+
+  // 供 /config、语音页跳转等复用；按 id 激活并触发懒加载
+  window.activateSettingsTab = (tabId) => {
+    const btn = document.querySelector(`.settings-tab[data-tab="${tabId}"]`);
+    if (!btn || btn.hidden || btn.style.display === 'none') return false;
+    activateSettingsTabCore(btn);
+    return true;
+  };
+
+  // 初始高亮：HTML 只有面板带 active，补上对应 tab 高亮
+  try {
+    if (!document.querySelector('.settings-tab.active')) {
+      const activePanel = document.querySelector('.settings-panel.active[data-tab]');
+      const initial = (activePanel && document.querySelector(`.settings-tab[data-tab="${activePanel.dataset.tab}"]`))
+        || document.querySelector('.settings-tab:not([hidden])');
+      if (initial) initial.classList.add('active');
+    }
+  } catch { /* ignore */ }
 
   // ============ 设置页搜索（Ctrl/Cmd+F 打开，仅设置页生效） ============
   const settingsSearch = (() => {
@@ -3540,6 +3575,16 @@
         }
         const tab = document.querySelector(`.settings-tab[data-tab="${panel.dataset.tab}"]`);
         if (tab) tab.style.display = q ? (panelVisible ? '' : 'none') : '';
+      });
+      // 分组标题：组内 tab 全被过滤时隐藏
+      document.querySelectorAll('#page-settings .settings-tab-group').forEach(header => {
+        let visible = false;
+        let el = header.nextElementSibling;
+        while (el && !el.classList.contains('settings-tab-group')) {
+          if (el.classList.contains('settings-tab') && !el.hidden && el.style.display !== 'none') { visible = true; break; }
+          el = el.nextElementSibling;
+        }
+        header.style.display = q ? (visible ? '' : 'none') : '';
       });
       countEl.textContent = q ? `${matchCount} 项` : '';
       input.classList.toggle('has-results', !!q);
@@ -4027,6 +4072,7 @@
     const model = s.llm.model || '';
     let variants = null;
     let defaultId = 'off';
+    let contextLength = null;
     try {
       const apiUrl = provider === 'opencode-zen' ? '' : (s.llm.apiUrl || '');
       const apiKey = provider === 'opencode-zen' ? (s.llm.zenApiKey || '') : (s.llm.apiKey || '');
@@ -4035,7 +4081,15 @@
         variants = res.variants;
         defaultId = res.defaultId || 'off';
       }
+      if (res && res.ok && res.contextLength) contextLength = res.contextLength;
     } catch (_) { /* 网络/端点失败：走本地兜底 */ }
+    // 上下文长度：仅当用户未手动改过（空或默认 131072）时用 API 元数据补全
+    const ctxEl = document.getElementById('setting-llm-ctx');
+    if (ctxEl && contextLength && (!ctxEl.value || Number(ctxEl.value) === 131072) && Number(contextLength) !== Number(ctxEl.value)) {
+      ctxEl.value = String(contextLength);
+      s.llm.maxContextLength = Number(contextLength);
+      try { await saveSettings(s); } catch (_) { /* 忽略保存失败 */ }
+    }
     if (!variants || !variants.length) {
       // 未知 openai-compat 兜底五档（off/auto/low/medium/high）
       variants = ['off', 'auto', 'low', 'medium', 'high'].map(id => ({
@@ -4207,7 +4261,10 @@
     'openai-responses': 'OpenAI Responses',
     'anthropic-compat': 'Anthropic 兼容',
   };
-  const POOL_EFFORT_LABELS = { off: '关闭', auto: '自动', low: '低', medium: '中', high: '高' };
+  const POOL_EFFORT_LABELS = {
+    off: '关闭', auto: '自动', none: '无推理', minimal: '极低',
+    low: '低', medium: '中', high: '高', xhigh: '很高', max: '最高'
+  };
   let _poolEditingId = null;
   let _poolBound = false;
 
@@ -4297,12 +4354,44 @@
     if (sel) { sel.classList.add('hidden'); sel.innerHTML = ''; }
   }
 
+  // 池编辑器：按 provider+model 动态填充 effort 档位与上下文长度（API 元数据优先，失败保持静态兜底）
+  async function refreshPoolEditorVariants() {
+    const provider = document.getElementById('pool-edit-provider')?.value || 'openai-compat';
+    const model = (document.getElementById('pool-edit-model')?.value || '').trim();
+    const apiUrl = document.getElementById('pool-edit-url')?.value || '';
+    const apiKey = document.getElementById('pool-edit-key')?.value || '';
+    const effortEl = document.getElementById('pool-edit-effort');
+    if (!effortEl) return;
+    let variants = null;
+    let contextLength = null;
+    try {
+      if (model && typeof window.api.llmCapabilities === 'function') {
+        const res = await window.api.llmCapabilities(provider, model, apiUrl, apiKey);
+        if (res && res.ok) {
+          if (Array.isArray(res.variants) && res.variants.length) variants = res.variants;
+          contextLength = res.contextLength || null;
+        }
+      }
+    } catch { /* keep static fallback */ }
+    if (variants && variants.length) {
+      const current = effortEl.value;
+      effortEl.innerHTML = variants.map(v => `<option value="${escapeHtml(v.id)}">${escapeHtml(v.label || v.id)}</option>`).join('');
+      effortEl.value = variants.some(v => v.id === current) ? current : (variants[0]?.id || 'off');
+    }
+    const ctxEl = document.getElementById('pool-edit-ctx');
+    if (ctxEl && contextLength && (!ctxEl.value || Number(ctxEl.value) === 131072)) {
+      ctxEl.value = String(contextLength);
+    }
+  }
+
   function openPoolEditor(entry) {
     _poolEditingId = entry ? entry.id : null;
     const title = document.getElementById('llm-pool-editor-title');
     if (title) title.textContent = entry ? '编辑模型' : '添加模型';
     fillPoolEditor(entry);
     document.getElementById('llm-pool-editor')?.classList.remove('hidden');
+    // 已有模型：异步拉取元数据刷新档位/上下文长度
+    if (entry && entry.model) refreshPoolEditorVariants().catch(() => {});
   }
 
   function closePoolEditor() {
@@ -4347,9 +4436,9 @@
     document.getElementById('btn-pool-editor-close')?.addEventListener('click', closePoolEditor);
     document.getElementById('btn-pool-editor-cancel')?.addEventListener('click', closePoolEditor);
     document.getElementById('btn-pool-editor-save')?.addEventListener('click', () => { savePoolEditor().catch(e => window.showToast('保存失败: ' + e.message, 'error')); });
-    document.getElementById('llm-pool-editor')?.addEventListener('click', (e) => {
-      if (e.target && e.target.id === 'llm-pool-editor') closePoolEditor();
-    });
+    if (typeof bindBackdropClose === 'function') {
+      bindBackdropClose(document.getElementById('llm-pool-editor'), closePoolEditor);
+    }
     document.getElementById('btn-pool-edit-fetch')?.addEventListener('click', async () => {
       const provider = document.getElementById('pool-edit-provider')?.value || '';
       const apiUrl = document.getElementById('pool-edit-url')?.value || '';
@@ -4382,6 +4471,10 @@
     document.getElementById('pool-edit-model-select')?.addEventListener('change', (e) => {
       const modelEl = document.getElementById('pool-edit-model');
       if (modelEl && e.target.value) modelEl.value = e.target.value;
+      refreshPoolEditorVariants().catch(() => {});
+    });
+    document.getElementById('pool-edit-model')?.addEventListener('change', () => {
+      refreshPoolEditorVariants().catch(() => {});
     });
     document.getElementById('pool-edit-provider')?.addEventListener('change', (e) => {
       const urlEl = document.getElementById('pool-edit-url');
@@ -4999,15 +5092,15 @@
 
   // AI avatar file picker
   document.getElementById('btn-ai-avatar-pick')?.addEventListener('click', async () => {
-    const result = await window.api.avatarPickAndEncode();
-    if (result.ok && result.dataUrl) {
+    const result = await window.api.avatarPickAndEncode('aiPersona');
+    if (result.ok && (result.path || result.dataUrl)) {
       const s = await window.api.getSettings();
       if (!s.aiPersona) s.aiPersona = {};
-      s.aiPersona.avatar = result.dataUrl;
+      s.aiPersona.avatar = result.path || result.dataUrl;
       await saveSettings(s);
-      updateAvatarPreview(result.dataUrl);
+      updateAvatarPreview(s.aiPersona.avatar);
       updatePersonaDisplay(s.aiPersona);
-      window.api.webControlSetAvatars({ ai: result.dataUrl, user: s.userProfile?.avatar || '' });
+      window.api.webControlSetAvatars({ ai: result.dataUrl || '', user: await _avatarMirrorData(s.userProfile?.avatar || '') });
     }
   });
 
@@ -5018,7 +5111,7 @@
     await saveSettings(s);
     updateAvatarPreview('');
     updatePersonaDisplay(s.aiPersona);
-    window.api.webControlSetAvatars({ ai: '', user: s.userProfile?.avatar || '' });
+    window.api.webControlSetAvatars({ ai: '', user: await _avatarMirrorData(s.userProfile?.avatar || '') });
   });
 
   function updatePersonaDisplay(persona) {
@@ -5060,14 +5153,14 @@
   });
 
   document.getElementById('btn-user-avatar-pick')?.addEventListener('click', async () => {
-    const result = await window.api.avatarPickAndEncode();
-    if (result.ok && result.dataUrl) {
+    const result = await window.api.avatarPickAndEncode('userProfile');
+    if (result.ok && (result.path || result.dataUrl)) {
       const s = await window.api.getSettings();
       if (!s.userProfile) s.userProfile = {};
-      s.userProfile.avatar = result.dataUrl;
+      s.userProfile.avatar = result.path || result.dataUrl;
       await saveSettings(s);
-      updateUserAvatarPreview(result.dataUrl);
-      window.api.webControlSetAvatars({ ai: s.aiPersona?.avatar || '', user: result.dataUrl });
+      updateUserAvatarPreview(s.userProfile.avatar);
+      window.api.webControlSetAvatars({ ai: await _avatarMirrorData(s.aiPersona?.avatar || ''), user: result.dataUrl || '' });
     }
   });
 
@@ -5077,20 +5170,20 @@
     s.userProfile.avatar = '';
     await saveSettings(s);
     updateUserAvatarPreview('');
-    window.api.webControlSetAvatars({ ai: s.aiPersona?.avatar || '', user: '' });
+    window.api.webControlSetAvatars({ ai: await _avatarMirrorData(s.aiPersona?.avatar || ''), user: '' });
   });
 
   // ---- Babe Avatar Settings ----
   document.getElementById('btn-babe-avatar-pick')?.addEventListener('click', async () => {
-    const result = await window.api.avatarPickAndEncode();
-    if (result.ok && result.dataUrl) {
+    const result = await window.api.avatarPickAndEncode('babe');
+    if (result.ok && (result.path || result.dataUrl)) {
       const s = await window.api.getSettings();
       if (!s.babe) s.babe = {};
-      s.babe.avatar = result.dataUrl;
+      s.babe.avatar = result.path || result.dataUrl;
       await saveSettings(s);
       // 同步到 babeAgent.settings
       if (babeAgent?.settings) babeAgent.settings.babe = s.babe;
-      updateBabeAvatarPreview(result.dataUrl);
+      updateBabeAvatarPreview(s.babe.avatar);
       updateBabePersonaDisplay(s.babe);
     }
   });

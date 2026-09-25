@@ -803,17 +803,17 @@
             bubble.rawContent = dedup.raw;
             bubble._lastChunk = dedup.lastChunk;
             bubble.contentStarted = true;
-            bubble.contentEl.innerHTML = renderMarkdown(bubble.rawContent) + '<span class="streaming-cursor">▋</span>';
+            bubble.contentEl.innerHTML = renderMarkdown(bubble.rawContent) + '<span class="streaming-cursor"></span>';
             if (bubble.rawReasoning) bubble.reasoningEl.innerHTML = renderMarkdown(bubble.rawReasoning);
           }
           if (data.reasoning) {
             bubble.rawReasoning += data.reasoning;
             bubble.reasoningSection.style.display = 'block';
-            const rCursor = bubble.contentStarted ? '' : '<span class="streaming-cursor">▋</span>';
+            const rCursor = bubble.contentStarted ? '' : '<span class="streaming-cursor"></span>';
             bubble.reasoningEl.innerHTML = renderMarkdown(bubble.rawReasoning) + rCursor;
             try { bubble.reasoningEl.scrollTop = bubble.reasoningEl.scrollHeight; } catch (_) {}
           }
-          msgsEl.scrollTop = msgsEl.scrollHeight;
+          scrollChatToBottom(msgsEl);
           if (!bubble.renderTimer) {
             bubble.renderTimer = setTimeout(() => {
               bubble.renderTimer = null;
@@ -1034,7 +1034,7 @@
       hideHistoryProgress();
     }
     requestAnimationFrame(() => {
-      msgsEl.scrollTop = msgsEl.scrollHeight;
+      scrollChatToBottom(msgsEl);
       WebUIMirror.pushDomEvent({ type: 'dom_replace', container: '#code-chat-messages', html: msgsEl.innerHTML });
     });
   }
@@ -1067,7 +1067,7 @@
     msgsEl.appendChild(msg);
     // 增量推送：流式气泡创建后追加到 WebUI
     WebUIMirror.pushDomEvent({ type: 'dom_append', container: '#code-chat-messages', html: msg.outerHTML });
-    msgsEl.scrollTop = msgsEl.scrollHeight;
+    scrollChatToBottom(msgsEl);
     return {
       el: msg,
       contentEl: msg.querySelector('.message-content'),
@@ -1102,7 +1102,7 @@
     msgsEl.appendChild(msg);
     // 增量推送：Code 消息追加到 WebUI
     WebUIMirror.pushDomEvent({ type: 'dom_append', container: '#code-chat-messages', html: msg.outerHTML });
-    msgsEl.scrollTop = msgsEl.scrollHeight;
+    scrollChatToBottom(msgsEl);
 
     // Track for history
     if (track) codeMessages.push({ role, content });
@@ -1123,7 +1123,7 @@
     msgsEl.appendChild(div);
     // 增量推送：工具调用卡片追加到 WebUI
     WebUIMirror.pushDomEvent({ type: 'dom_append', container: '#code-chat-messages', html: div.outerHTML });
-    msgsEl.scrollTop = msgsEl.scrollHeight;
+    scrollChatToBottom(msgsEl);
     return div;
   }
 
@@ -1157,6 +1157,8 @@
     if (targetCard.id) {
       WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#' + targetCard.id, html: targetCard.outerHTML });
     }
+    // 结果注入会撑高卡片：吸附状态下补滚到底
+    scrollChatToBottom(msgsEl);
   }
 
   function showCodeApprovalPanel(toolName, args) {
@@ -1182,7 +1184,7 @@
     msgsEl.appendChild(div);
     // 增量推送：审批面板追加到 WebUI
     WebUIMirror.pushDomEvent({ type: 'dom_append', container: '#code-chat-messages', html: div.outerHTML });
-    msgsEl.scrollTop = msgsEl.scrollHeight;
+    scrollChatToBottom(msgsEl);
     div.querySelector('.btn-approval-approve').addEventListener('click', () => {
       if (codeAgent) codeAgent.resolveApproval(true);
       div.remove();
