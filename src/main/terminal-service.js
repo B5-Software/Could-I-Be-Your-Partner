@@ -15,7 +15,7 @@ const path = require('path');
 const os = require('os');
 const { abortAllRequests, abortRequests } = require('./llm-retry');
 
-module.exports = function registerTerminalIpc({ ipcMain, getMainWindow, getSettings }) {
+module.exports = function registerTerminalIpc({ ipcMain, getMainWindow, getSettings, getVmService }) {
 const terminals = new Map();
 let terminalIdCounter = 0;
 const TERMINAL_HISTORY_MAX = 100000; // 100KB
@@ -147,8 +147,38 @@ function _resolveTerminalShell(shellSetting, customShellPath) {
 
 ipcMain.handle('terminal:make', (_, cwd, opts = {}) => {
   try {
-    const pty = require('node-pty');
     const id = ++terminalIdCounter;
+    // 运行位置=虚拟机：终端直接开在 VM 内（ssh2 真 PTY），与本机终端共用同一套 IPC 与 UI。
+    // 工作区内路径映射由 vm-pty 提供；P2 的工作区同步模块会注入真实映射表。
+    const rt = (() => { try { return getSettings().runtime || {}; } catch { return {}; } })();
+    const vmSvc = typeof getVmService === 'function' ? getVmService() : null;
+    if (rt.location === 'vm' && vmSvc && !vmSvc.emergencyHost) {
+      const { VmPtyAdapter, mapHostPathToVm } = require('./vm/vm-pty');
+      const vmCwd = mapHostPathToVm(cwd, {
+        hostRoot: (opts && opts.workspaceRoot) || null,
+        vmMount: (opts && opts.vmMount) || '/workspace',
+      });
+      const term = new VmPtyAdapter({ vmService: vmSvc, cwd: vmCwd });
+      const entry = {
+        term,
+        agentBuffer: '',
+        fullHistory: '',
+        cwd: vmCwd,
+        createdAt: Date.now(),
+        lastCommand: '',
+        shellName: 'bash (VM)',
+        ownerSessionKey: typeof opts.sessionKey === 'string' ? opts.sessionKey : null,
+        sandboxMode: 'vm',
+        sandboxed: true,
+        location: 'vm',
+        buffer: () => { const b = entry.agentBuffer; entry.agentBuffer = ''; return b; }
+      };
+      term.onData(data => _appendTerminalData(id, entry, data));
+      term.onExit(({ exitCode }) => { _broadcastTerminalEvent('terminal:exit', { id, exitCode }); });
+      terminals.set(id, entry);
+      return { ok: true, terminalId: id, cwd: vmCwd, createdAt: entry.createdAt, location: 'vm' };
+    }
+    const pty = require('node-pty');
     // Shell 选择：手动选择（设置-终端）优先，否则自动检测
     const shellSetting = (getSettings().terminal && getSettings().terminal.shell) || 'auto';
     const customShellPath = (getSettings().terminal && getSettings().terminal.customShellPath) || '';

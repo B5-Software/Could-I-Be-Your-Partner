@@ -1,6 +1,6 @@
 {
   "name": "could-i-be-your-partner",
-  "version": "1.8.0",
+  "version": "1.9.0-alpha.1",
   "description": "全自动AI Agent，帮助完成一切任务",
   "license": "GPL-3.0-or-later",
   "main": "src/main/main.js",
@@ -208,11 +208,14 @@
     "qrcode": "^1.5.4",
     "serialport": "^13.0.0",
     "sherpa-onnx-node": "^1.13.4",
+    "ssh2": "^1.17.0",
     "tesseract.js": "^6.0.1",
     "undici": "^7.28.0"
   },
   "allowScripts": {
     "node-pty@1.1.0": true,
+    "cpu-features@0.0.10": false,
+    "ssh2@1.17.0": true,
     "@serialport/bindings-cpp@13.0.1": true,
     "@serialport/bindings-cpp@13.0.0": true,
     "@ffmpeg-installer/darwin-arm64@4.1.5": true,

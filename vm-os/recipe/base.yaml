@@ -1,0 +1,39 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (c) 2026 B5-Software
+#
+# CIBYP-VM-OS「base」变体：Agent 默认执行环境。
+# 目标体积 ≤ 350MB（qcow2, zstd）。只装"跑命令/改代码/装包"必需的底座，
+# 重型语言栈与数据库交给 full 变体，避免默认下载过大。
+
+{{- $arch := or .architecture "amd64" -}}
+{{- $version := or .version "0.1.0" -}}
+{{- $variant := "base" -}}
+
+architecture: {{$arch}}
+
+actions:
+  - action: recipe
+    recipe: common.yaml
+    variables:
+      architecture: {{$arch}}
+      variant: {{$variant}}
+      version: {{$version}}
+
+  # base 的少量补充：调试与查看工具（体积小、日常高频）
+  - action: apt
+    packages:
+      - git-lfs
+      - tree
+      - strace
+      - gdb
+      - cmake
+      - ncdu
+      - man-db
+
+  - action: recipe
+    recipe: tail.yaml
+    variables:
+      architecture: {{$arch}}
+      variant: {{$variant}}
+      version: {{$version}}
+      imagesize: 8G

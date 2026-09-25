@@ -3596,6 +3596,129 @@ function runSandboxTests() {
   });
 }
 
+// ---- VM 沙盒（CIBYP-VM-OS：QEMU 运行时 / 镜像目录 / 路径映射 / PTY 适配）----
+function runVmSandboxTests() {
+  console.log('\nVM Sandbox (CIBYP-VM-OS):');
+  const qemuRt = require('../src/main/vm/qemu-runtime.js');
+  const vmImages = require('../src/main/vm/vm-images.js');
+  const { mapHostPathToVm, shellQuote } = require('../src/main/vm/vm-pty.js');
+  const provision = require('../src/main/vm/vm-provision.js');
+
+  test('guest 架构与二进制命名（宿主架构一对一）', () => {
+    assert.strictEqual(qemuRt.guestArchOf('x64'), 'amd64');
+    assert.strictEqual(qemuRt.guestArchOf('arm64'), 'arm64');
+    assert.ok(/^qemu-system-(x86_64|aarch64)/.test(qemuRt.qemuBinName('system', 'amd64')));
+    assert.ok(/^qemu-img/.test(qemuRt.qemuBinName('img', 'arm64')));
+  });
+
+  test('WHPX 不使用自定义 CPU 模型（-cpu max 会崩）', () => {
+    assert.strictEqual(qemuRt.cpuModelFor('whpx'), null);
+    assert.strictEqual(qemuRt.cpuModelFor('kvm'), 'host');
+    assert.strictEqual(qemuRt.cpuModelFor('hvf'), 'host');
+    assert.strictEqual(qemuRt.cpuModelFor('tcg'), 'max');
+  });
+
+  test('内核命令行包含 root/console/网络名（amd64 与 arm64 控制台不同）', () => {
+    const a = qemuRt.kernelCmdline('amd64');
+    assert.ok(a.includes('root=LABEL=cibyp-root'));
+    assert.ok(a.includes('console=ttyS0,115200'));
+    const b = qemuRt.kernelCmdline('arm64');
+    assert.ok(b.includes('console=ttyAMA0,115200'));
+    assert.ok(b.includes('net.ifnames=0'));
+  });
+
+  test('buildArgv：镜像/内核/串口/hostfwd/cloud-init 参数齐全且顺序可解析', () => {
+    const argv = qemuRt.buildArgv({
+      exe: 'qemu-system-x86_64', dataDir: '/q/share', guestArch: 'amd64', accel: 'tcg',
+      smp: 4, memMB: 4096, overlay: '/tmp/overlay.qcow2', kernel: '/tmp/vmlinuz', initrd: '/tmp/initrd',
+      sshPort: 2222, serialPort: 2223, ciPort: 2224, netMode: 'nat',
+    });
+    const has = (flag, value) => {
+      const i = argv.indexOf(flag);
+      return i !== -1 && (value === undefined || argv[i + 1] === value);
+    };
+    assert.ok(has('-kernel', '/tmp/vmlinuz'));
+    assert.ok(has('-initrd', '/tmp/initrd'));
+    assert.ok(has('-accel', 'tcg'));
+    assert.ok(argv.some((v) => v.includes('hostfwd=tcp:127.0.0.1:2222-:22')), 'hostfwd 应带端口');
+    assert.ok(argv.some((v) => v.includes('ds=nocloud-net;s=http://10.0.2.2:2224/')), 'smbios 应带 cloud-init 地址');
+    assert.ok(argv.includes('-L') || argv.indexOf('-L') === -1, 'dataDir 可空');
+    // restricted 模式应加 restrict=on
+    const restr = qemuRt.buildArgv({
+      exe: 'q', guestArch: 'amd64', accel: 'tcg', smp: 1, memMB: 512,
+      overlay: 'o', kernel: 'k', initrd: 'i', sshPort: 1, serialPort: 2, ciPort: 3, netMode: 'restricted',
+    });
+    assert.ok(restr.some((v) => v.includes('restrict=on')), 'restricted 模式应隔离宿主');
+  });
+
+  test('镜像资源路径与本地状态扫描（缺文件时给出 missing 列表）', () => {
+    const os = require('os');
+    const fsLocal = require('fs');
+    const pathLocal = require('path');
+    const dir = fsLocal.mkdtempSync(pathLocal.join(os.tmpdir(), 'vmos-test-'));
+    try {
+      const paths = vmImages.assetPaths(dir, { platform: 'win32', arch: 'x64', variant: 'base' });
+      assert.ok(paths.qemuDir.endsWith(pathLocal.join('qemu', 'win32-x64')));
+      assert.strictEqual(paths.guestArch, 'amd64');
+      const empty = vmImages.localStatus(dir, { variant: 'base' });
+      assert.strictEqual(empty.installed, false);
+      assert.deepStrictEqual(empty.missing, ['image', 'kernel', 'initrd']);
+      // 伪造一个完整版本目录
+      const verDir = pathLocal.join(dir, 'images', 'base', '1.2.3');
+      fsLocal.mkdirSync(verDir, { recursive: true });
+      fsLocal.writeFileSync(pathLocal.join(verDir, 'cibyp-vmos-1.2.3-base-amd64.qcow2'), 'x');
+      fsLocal.writeFileSync(pathLocal.join(verDir, 'vmlinuz-amd64'), 'y');
+      fsLocal.writeFileSync(pathLocal.join(verDir, 'initrd-amd64.img'), 'z');
+      const st = vmImages.localStatus(dir, { variant: 'base' });
+      assert.strictEqual(st.installed, true);
+      assert.strictEqual(st.selected.version, '1.2.3');
+    } finally {
+      try { fsLocal.rmSync(dir, { recursive: true, force: true }); } catch { /* ignore */ }
+    }
+  });
+
+  test('manifest 解析与镜像前缀（缺字段抛错）', () => {
+    const manifest = {
+      schema: 1,
+      version: '1.0.0',
+      variants: { base: { arches: { amd64: { url: 'https://x/a.qcow2', sha256: 'a'.repeat(64), size: 10 } } } },
+      kernel: { amd64: { kernel: { url: 'https://x/vmlinuz', sha256: 'b'.repeat(64), size: 1 }, initrd: { url: 'https://x/initrd', sha256: 'c'.repeat(64), size: 1 }, cmdline: 'root=LABEL=cibyp-root' } },
+    };
+    const picked = vmImages.pickArtifacts(manifest, { variant: 'base', arch: 'x64', mirror: 'official' });
+    assert.strictEqual(picked.image.downloadUrl, 'https://x/a.qcow2');
+    assert.strictEqual(picked.cmdline, 'root=LABEL=cibyp-root');
+    const cn = vmImages.pickArtifacts(manifest, { variant: 'base', arch: 'x64', mirror: 'cn' });
+    assert.ok(cn.image.downloadUrl !== picked.image.downloadUrl, 'cn 镜像应加前缀');
+    assert.throws(() => vmImages.pickArtifacts({ schema: 1, variants: {} }, { variant: 'base', arch: 'x64' }));
+  });
+
+  test('宿主路径 → VM 路径映射（含越界回退与引号转义）', () => {
+    assert.strictEqual(mapHostPathToVm('D:/ws/proj/a.js', { hostRoot: 'D:/ws', vmMount: '/workspace' }), '/workspace/proj/a.js');
+    assert.strictEqual(mapHostPathToVm('E:/other/a.js', { hostRoot: 'D:/ws', vmMount: '/workspace' }), '/workspace');
+    assert.strictEqual(mapHostPathToVm(null, {}), '/workspace');
+    assert.strictEqual(shellQuote("a b'c"), "'a b'\\''c'");
+  });
+
+  test('cloud-init user-data：用户/密钥/sudo/工作区就绪标记', () => {
+    const key = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITESTKEY test';
+    const ud = provision.buildUserData({ authorizedKey: key, instanceId: 'i-1', timezone: 'UTC' });
+    assert.ok(ud.startsWith('#cloud-config'));
+    assert.ok(ud.includes('name: cibyp'));
+    assert.ok(ud.includes('sudo: ALL=(ALL) NOPASSWD:ALL'));
+    assert.ok(ud.includes(key));
+    assert.ok(ud.includes('/workspace/.cibyp-ready'));
+    const md = provision.buildMetaData({ instanceId: 'i-1' });
+    assert.ok(md.includes('instance-id: i-1'));
+  });
+
+  test('ssh2 密钥生成：OpenSSH 私钥格式 + authorized_keys 行', () => {
+    const kp = provision.generateSshKeyPair();
+    assert.ok(kp.privateKey.includes('BEGIN OPENSSH PRIVATE KEY') || kp.privateKey.includes('BEGIN PRIVATE KEY'),
+      'ssh2 只稳定支持 OpenSSH/PEM 私钥');
+    assert.ok(/^ssh-ed25519 [A-Za-z0-9+/=]+/.test(provision.toAuthorizedKey(kp.publicKey, 'x')) || /^ssh-ed25519 /.test(kp.publicKey));
+  });
+}
+
 // ---- DeepSeek 插件兼容层（fixture 插件端到端）----
 async function runDsPluginTests() {
   console.log('\nDeepSeek Plugin Compatibility:');
@@ -5709,6 +5832,7 @@ function runModelMetadataTests() {
   runToolsPageRefactorTests();
   runPromptCacheTests();
   runSandboxTests();
+  runVmSandboxTests();
   await runAutomationTests();
   await runMcpSpecTests();
   await runPlaywrightDataModeTests();

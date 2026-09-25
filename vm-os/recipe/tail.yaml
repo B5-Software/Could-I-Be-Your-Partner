@@ -1,0 +1,42 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+# Copyright (c) 2026 B5-Software
+#
+# CIBYP-VM-OS 落盘层：分区 + 部署 + 收集内核/initramfs。
+#
+# 本镜像刻意不带引导器：宿主 QEMU 用 -kernel/-initrd 直接引导，
+# 因此不需要 GRUB/ESP/UEFI 固件，启动更快、镜像更小、维护面更窄。
+#
+# 产物（artifact 目录）：
+#   cibyp-vmos-<version>-<variant>-<arch>.img   原始磁盘镜像（CI 转 qcow2+zstd）
+#   vmlinuz-<arch>                              内核（宿主 -kernel）
+#   initrd-<arch>.img                           初始内存盘（宿主 -initrd）
+
+{{- $arch := or .architecture "amd64" -}}
+{{- $variant := or .variant "base" -}}
+{{- $version := or .version "0.1.0" -}}
+{{- $imagesize := or .imagesize "8G" -}}
+
+actions:
+  - action: image-partition
+    imagename: cibyp-vmos-{{$version}}-{{$variant}}-{{$arch}}.img
+    imagesize: {{$imagesize}}
+    partitiontype: msdos
+    partitions:
+      - name: root
+        fs: ext4
+        fslabel: cibyp-root
+        start: 1MB
+        end: 100%
+    mountpoints:
+      - mountpoint: /
+        partition: root
+
+  - action: filesystem-deploy
+    setup-fstab: true
+    setup-kernel-cmdline: true
+    append-kernel-cmdline: "console=ttyS0,115200 net.ifnames=0 rootwait rw"
+
+  - action: run
+    chroot: false
+    label: 收集内核与 initramfs
+    script: collect-kernel.sh {{$arch}}

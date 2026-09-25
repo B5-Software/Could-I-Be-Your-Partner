@@ -805,6 +805,7 @@
             <button class="settings-tab" data-tab="plugins"><i class="fa-solid fa-puzzle-piece"></i> 插件</button>
             <button class="settings-tab" data-tab="terminal"><i class="fa-solid fa-terminal"></i> 终端</button>
             <button class="settings-tab" data-tab="sandbox"><i class="fa-solid fa-shield-halved"></i> 沙箱</button>
+            <button class="settings-tab" data-tab="runtime"><i class="fa-solid fa-server"></i> 运行位置</button>
             <div class="settings-tab-group" data-i18n="ui.settings.groups.system">系统与安全</div>
             <button class="settings-tab" data-tab="security"><i class="fa-solid fa-shield-halved"></i> 安全</button>
             <button class="settings-tab" data-tab="network"><i class="fa-solid fa-network-wired"></i> 网络</button>
@@ -2656,6 +2657,82 @@
               </div>
             </div>
 
+
+            <div class="settings-panel" data-tab="runtime">
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-server"></i> 运行位置</h3>
+                <div class="setting-item">
+                  <label class="setting-label">命令与终端在哪里运行</label>
+                  <select id="setting-runtime-location" style="width:260px">
+                    <option value="host">本机（当前系统）</option>
+                    <option value="vm">虚拟机（CIBYP-VM-OS）</option>
+                  </select>
+                  <p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">
+                    虚拟机是隔离的 Linux 环境（基于 Debian，按需下载）。选择虚拟机后：终端、Shell / Python / Node、端口预览都在虚拟机内运行；
+                    <strong>切换需要重启应用</strong>。虚拟机故障时可随时切回本机。
+                  </p>
+                </div>
+                <div class="setting-item">
+                  <label class="setting-label">工作区模式</label>
+                  <select id="setting-runtime-workspace-mode" style="width:300px">
+                    <option value="shared">共享工作区（本机为准 + 双向同步）</option>
+                    <option value="isolated">独立工作区（虚拟机内为准，按需导出）</option>
+                  </select>
+                  <p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">
+                    共享：文件保留在本机，虚拟机通过 <code>/workspace</code> 访问，本机的文档解析 / OCR / 预览等原生能力不受影响，
+                    <strong>重置虚拟机不会丢失工作区</strong>。独立：工作区只存在于虚拟机内，导出才回本机（隔离更强，适合运行不可信代码）。
+                  </p>
+                </div>
+                <div class="setting-item" id="runtime-restart-row" hidden>
+                  <p id="runtime-restart-hint" style="font-size:12px;color:var(--warning,#b7791f)"></p>
+                  <button class="btn-secondary btn-sm" id="btn-runtime-relaunch" style="margin-top:6px"><i class="fa-solid fa-rotate-right"></i> 立即重启应用</button>
+                </div>
+              </div>
+
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-cube"></i> 虚拟机沙盒（CIBYP-VM-OS）</h3>
+                <div class="setting-item">
+                  <label class="setting-label">镜像变体</label>
+                  <select id="setting-vm-variant" style="width:300px"></select>
+                  <p id="vm-variant-desc" style="font-size:11px;color:var(--text-tertiary);margin-top:4px"></p>
+                </div>
+                <div class="setting-item">
+                  <label class="setting-label">资源状态</label>
+                  <p id="vm-assets-status" style="font-size:12px;color:var(--text-secondary)">检查中…</p>
+                  <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+                    <button class="btn-secondary btn-sm" id="btn-vm-download"><i class="fa-solid fa-download"></i> 下载 / 更新镜像</button>
+                    <button class="btn-secondary btn-sm" id="btn-vm-cancel-download" hidden><i class="fa-solid fa-stop"></i> 取消下载</button>
+                    <button class="btn-secondary btn-sm" id="btn-vm-reset"><i class="fa-solid fa-eraser"></i> 重置虚拟机</button>
+                    <button class="btn-secondary btn-sm" id="btn-vm-open-dir"><i class="fa-solid fa-folder-open"></i> 打开资源目录</button>
+                    <button class="btn-secondary btn-sm" id="btn-vm-choose-dir"><i class="fa-solid fa-folder-tree"></i> 更换目录</button>
+                  </div>
+                  <div id="vm-progress-wrap" hidden style="margin-top:8px">
+                    <div style="height:6px;border-radius:4px;background:var(--border-color,#333);overflow:hidden"><i id="vm-progress-bar" style="display:block;height:100%;width:0%;background:var(--accent,#4f8cff);transition:width .3s"></i></div>
+                    <p id="vm-progress-text" style="font-size:11px;color:var(--text-tertiary);margin-top:4px"></p>
+                  </div>
+                  <p style="font-size:11px;color:var(--text-tertiary);margin-top:6px">
+                    下载源：GitHub Release（CIBYP-VM-OS）。资源不进安装包，全部按需下载并做 sha256 校验。
+                  </p>
+                </div>
+                <div class="setting-item">
+                  <label class="setting-label">自检</label>
+                  <p id="vm-probe-status" style="font-size:12px;color:var(--text-secondary)">未检测</p>
+                  <button class="btn-secondary btn-sm" id="btn-vm-probe" style="margin-top:6px"><i class="fa-solid fa-stethoscope"></i> 运行自检</button>
+                  <p style="font-size:11px;color:var(--text-tertiary);margin-top:6px">
+                    检查 QEMU 运行时、硬件加速（Windows: WHPX / Linux: KVM / macOS: HVF）与镜像完整性。无硬件加速时退化为软件模拟（TCG，明显较慢）。
+                  </p>
+                </div>
+                <div class="setting-item">
+                  <label class="setting-label">虚拟机状态</label>
+                  <p id="vm-runtime-status" style="font-size:12px;color:var(--text-secondary)">未运行</p>
+                  <div style="display:flex;gap:8px;margin-top:6px">
+                    <button class="btn-secondary btn-sm" id="btn-vm-start"><i class="fa-solid fa-play"></i> 启动</button>
+                    <button class="btn-secondary btn-sm" id="btn-vm-stop"><i class="fa-solid fa-power-off"></i> 停止</button>
+                  </div>
+                  <pre id="vm-serial-tail" style="display:none;margin-top:8px;max-height:140px;overflow:auto;font-size:10px;line-height:1.35;background:var(--bg-tertiary,#111);padding:8px;border-radius:6px;color:var(--text-tertiary)"></pre>
+                </div>
+              </div>
+            </div>
 
             <div class="settings-panel" data-tab="security">
               <div class="settings-group">

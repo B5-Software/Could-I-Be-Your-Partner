@@ -35,6 +35,9 @@
     if (btn.dataset.tab === 'resources' && typeof refreshResourcePanel === 'function') {
       refreshResourcePanel().catch(() => {});
     }
+    if (btn.dataset.tab === 'runtime' && typeof refreshVmSettings === 'function') {
+      refreshVmSettings().catch(() => {});
+    }
     if (btn.dataset.tab === 'decision' && typeof refreshDecisionStatus === 'function') {
       refreshDecisionStatus().catch(() => {});
     }

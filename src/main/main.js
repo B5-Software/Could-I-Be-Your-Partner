@@ -76,6 +76,8 @@ const { AutomationManager, normalizeAutomationSettings } = require('./automation
 const { getAutomationGuide } = require('./automation/guide');
 const { registerGeogebraProtocol } = require('./geogebra-protocol');
 const { VoiceModelManager } = require('./voice-model-manager');
+const { VmService } = require('./vm/vm-service');
+const { aria2Manager } = require('./aria2-manager');
 const { DecisionService, DEFAULT_DECISION_SETTINGS, normalizeDecisionSettings } = require('./decision-service');
 const { ts: logTs, maskUrl: maskLogUrl, snippet: logSnippet } = require('./req-log');
 
@@ -96,6 +98,24 @@ voiceModelManager.on('done', (e) => {
 voiceModelManager.on('error', (e) => {
   try { mainWindow?.webContents.send('resources:voiceModels:progress', { modelId: e?.modelId, phase: 'error', error: e?.error || '下载失败' }); } catch (_) {}
 });
+// 虚拟机沙盒（CIBYP-VM-OS / QEMU）：资源按需下载（aria2），不进安装包
+const vmService = new VmService({
+  app,
+  getSettings: () => settings,
+  persistSettings: () => { try { saveJSON(settingsPath, settings); } catch (_) {} },
+  aria2: aria2Manager,
+});
+/** 向 Splash 与主窗口广播 VM 事件（任一不存在则跳过） */
+function broadcastVm(channel, payload) {
+  for (const win of [typeof splashWindow !== 'undefined' ? splashWindow : null, typeof mainWindow !== 'undefined' ? mainWindow : null]) {
+    try { if (win && !win.isDestroyed()) win.webContents.send(channel, payload); } catch (_) {}
+  }
+}
+vmService.on('state', (s) => broadcastVm('vm:state', s));
+vmService.on('progress', (p) => broadcastVm('vm:progress', p));
+vmService.on('serial', (t) => { try { if (t && String(t).trim()) broadcastVm('vm:serial', String(t).slice(-8192)); } catch (_) {} });
+vmService.on('ready', () => { vmRuntimeGate.ready = true; vmRuntimeGate.failed = false; tryShowMainWindow(); });
+vmService.on('error', (e) => broadcastVm('vm:error', { message: e?.message || String(e) }));
 // 决策模型（System One / Jev）服务
 const decisionService = new DecisionService({
   getSettings: () => settings,
@@ -823,6 +843,26 @@ let settings = loadJSON(settingsPath, {
     modeOverrides: { chat: null, code: null, babe: null },
     requireApproval: true
   },
+  // 运行位置：本机 / 虚拟机（CIBYP-VM-OS，基于 Debian 的隔离环境，资源按需下载）
+  // - location     : 'host' | 'vm'；切换需重启应用（终端/工作区路径语义随之改变）
+  // - workspaceMode: 'shared'（宿主为准 + 增量双向同步）| 'isolated'（VM 内为准，按需导出）
+  // - vm.*         : QEMU 运行参数与资源目录（assetsDir 为空 = userData/vm）
+  runtime: {
+    location: 'host',
+    workspaceMode: 'shared',
+    vm: {
+      variant: 'base',
+      imageVersion: null,
+      assetsDir: '',
+      mirror: 'cn',
+      accel: 'auto',
+      allowTcg: true,
+      smp: 4,
+      memMB: 4096,
+      netMode: 'nat',
+      shutdownOnExit: true
+    }
+  },
   // 自动化触发（HTTP 信号服务器）
   // - enabled     : 总开关（默认禁用，需用户在设置 → 自动化 中主动开启）
   // - allowNoToken: 无任何 token 也允许启动（不安全，UI 有警告）
@@ -1024,7 +1064,7 @@ let settings = loadJSON(settingsPath, {
 });
 if (fs.existsSync(settingsPath)) {
   const saved = loadJSON(settingsPath, {});
-  settings = { ...settings, ...saved, llm: { ...settings.llm, ...(saved.llm || {}) }, agent: { ...settings.agent, ...(saved.agent || {}) }, sessions: { ...settings.sessions, ...(saved.sessions || {}) }, permissions: { ...settings.permissions, ...(saved.permissions || {}) }, imageGen: { ...settings.imageGen, ...(saved.imageGen || {}) }, resources: { ...settings.resources, ...(saved.resources || {}) }, decision: { ...settings.decision, ...(saved.decision || {}) }, theme: { ...settings.theme, ...(saved.theme || {}) }, aiPersona: { ...settings.aiPersona, ...(saved.aiPersona || {}) }, userProfile: { ...settings.userProfile, ...(saved.userProfile || {}) }, entropy: { ...settings.entropy, ...(saved.entropy || {}) }, proxy: { ...settings.proxy, ...(saved.proxy || {}) }, mcp: { ...settings.mcp, ...(saved.mcp || {}) }, email: { ...settings.email, ...(saved.email || {}) }, fedikitten: { ...settings.fedikitten, ...(saved.fedikitten || {}) }, cibypIm: { ...settings.cibypIm, ...(saved.cibypIm || {}) }, webControl: { ...settings.webControl, ...(saved.webControl || {}) }, budget: { ...settings.budget, ...(saved.budget || {}) }, terminal: { ...settings.terminal, ...(saved.terminal || {}) }, privacyProtection: { ...settings.privacyProtection, ...(saved.privacyProtection || {}) }, ime: { ...settings.ime, ...(saved.ime || {}) }, voice: { ...settings.voice, ...(saved.voice || {}) }, notifications: { ...settings.notifications, ...(saved.notifications || {}) }, updates: { ...settings.updates, ...(saved.updates || {}) } };
+  settings = { ...settings, ...saved, llm: { ...settings.llm, ...(saved.llm || {}) }, agent: { ...settings.agent, ...(saved.agent || {}) }, sessions: { ...settings.sessions, ...(saved.sessions || {}) }, permissions: { ...settings.permissions, ...(saved.permissions || {}) }, imageGen: { ...settings.imageGen, ...(saved.imageGen || {}) }, resources: { ...settings.resources, ...(saved.resources || {}) }, runtime: { ...settings.runtime, ...(saved.runtime || {}), vm: { ...settings.runtime.vm, ...((saved.runtime || {}).vm || {}) } }, decision: { ...settings.decision, ...(saved.decision || {}) }, theme: { ...settings.theme, ...(saved.theme || {}) }, aiPersona: { ...settings.aiPersona, ...(saved.aiPersona || {}) }, userProfile: { ...settings.userProfile, ...(saved.userProfile || {}) }, entropy: { ...settings.entropy, ...(saved.entropy || {}) }, proxy: { ...settings.proxy, ...(saved.proxy || {}) }, mcp: { ...settings.mcp, ...(saved.mcp || {}) }, email: { ...settings.email, ...(saved.email || {}) }, fedikitten: { ...settings.fedikitten, ...(saved.fedikitten || {}) }, cibypIm: { ...settings.cibypIm, ...(saved.cibypIm || {}) }, webControl: { ...settings.webControl, ...(saved.webControl || {}) }, budget: { ...settings.budget, ...(saved.budget || {}) }, terminal: { ...settings.terminal, ...(saved.terminal || {}) }, privacyProtection: { ...settings.privacyProtection, ...(saved.privacyProtection || {}) }, ime: { ...settings.ime, ...(saved.ime || {}) }, voice: { ...settings.voice, ...(saved.voice || {}) }, notifications: { ...settings.notifications, ...(saved.notifications || {}) }, updates: { ...settings.updates, ...(saved.updates || {}) } };
   // 生图设置去品牌化迁移：旧版本内置的默认端点/模型清空，改为用户显式配置
   if (settings.imageGen.apiUrl === 'https://api.siliconflow.cn/v1/images/generations') settings.imageGen.apiUrl = '';
   if (settings.imageGen.model === 'Kwai-Kolors/Kolors') settings.imageGen.model = '';
@@ -1235,11 +1275,67 @@ function getGitShortHash() {
   } catch { return ''; }
 }
 
+// ---- 运行位置门控：location=vm 时主窗口必须等 VM 就绪（或紧急回退/超时）----
+// 设计约束：门控与判据全部在主进程、零 VM 依赖 —— VM 挂了也一定能进主界面。
+const vmRuntimeGate = { required: false, ready: true, failed: false, reason: null };
+
+/** 尝试显示主窗口；VM 门控未放行时返回 false（调用方无需处理） */
+function tryShowMainWindow() {
+  if (!mainWindow || mainWindow.isDestroyed() || mainWindowShownOnce) return false;
+  if (vmRuntimeGate.required && !vmRuntimeGate.ready) return false;
+  mainWindowShownOnce = true;
+  mainWindow.show();
+  try { mainWindow.focus(); } catch { /* ignore */ }
+  console.log('[vm] 主窗口已显示' + (vmRuntimeGate.required ? '（虚拟机门控已放行）' : ''));
+  return true;
+}
+
+/**
+ * location=vm 的启动编排：
+ *   VM 就绪 → 放行主窗口；
+ *   启动失败 → Splash 展示故障信息（含串口尾部）+ 紧急按钮，超时后自动回退本机模式。
+ */
+async function startVmBootForSplash() {
+  try {
+    vmService.emergencyHost = false;
+    console.log('[vm] 开始虚拟机启动编排（Splash 门控生效）');
+    broadcastVm('vm:boot-begin', { status: vmService.status() });
+    await vmService.start();
+    vmRuntimeGate.ready = true;
+    vmRuntimeGate.failed = false;
+    console.log('[vm] 虚拟机就绪: ' + JSON.stringify({
+      accel: vmService.status().inst?.accel,
+      detail: vmService.status().inst?.detail,
+    }));
+    broadcastVm('vm:boot-ready', { status: vmService.status() });
+    tryShowMainWindow();
+  } catch (e) {
+    vmRuntimeGate.failed = true;
+    vmRuntimeGate.reason = e.message;
+    console.error('[vm] 虚拟机启动失败: ' + e.message);
+    broadcastVm('vm:boot-failed', {
+      message: e.message,
+      code: e.code || null,
+      serialTail: String((vmService.status().inst || {}).serialTail || '').slice(-8192)
+    });
+    const delay = Math.max(5000, Number(settings.runtime?.vm?.autoFallbackMs) || 20000);
+    setTimeout(() => {
+      if (!mainWindowShownOnce) {
+        vmService.emergencyHostMode();
+        vmRuntimeGate.ready = true;
+        tryShowMainWindow();
+      }
+    }, delay);
+  }
+}
+
 function createSplashWindow() {
   if (splashCreated || !mainWindow || mainWindow.isDestroyed()) return;
   splashCreated = true;
+  const vmMode = !!(settings.runtime && settings.runtime.location === 'vm');
   splashWindow = new BrowserWindow({
-    width: 420, height: 300,
+    width: vmMode ? 540 : 420,
+    height: vmMode ? 440 : 300,
     frame: false,
     transparent: false,
     backgroundColor: '#17181d',
@@ -1250,7 +1346,8 @@ function createSplashWindow() {
     show: false,
     webPreferences: {
       contextIsolation: true,
-      nodeIntegration: false
+      nodeIntegration: false,
+      preload: path.join(__dirname, '../preload/splash-preload.js')
     }
   });
   // Splash 跟随主题：深浅色 + 强调色 + 背景色 + 版本号
@@ -1276,6 +1373,11 @@ function createSplashWindow() {
     font: ''
   };
   splashWindow.loadFile(path.join(__dirname, '../renderer/pages/splash.html'), { query: params });
+  splashWindow.webContents.once('did-finish-load', () => {
+    try {
+      splashWindow.webContents.send('vm:init', { vmMode, status: vmService.status() });
+    } catch { /* ignore */ }
+  });
   splashWindow.once('ready-to-show', () => {
     if (!splashWindow || splashWindow.isDestroyed()) return;
     splashWindow.center();
@@ -1310,13 +1412,18 @@ function createWindow() {
     }
   });
   mainWindowShownOnce = false;
-  // 兜底：渲染器 boot 异常/超时时也必须显示窗口
+  // 兜底：渲染器 boot 异常/超时时也必须显示窗口。
+  // 运行位置=虚拟机时，兜底时间放宽到「VM 启动超时 + 15s」，避免抢在 VM 就绪前弹出空界面。
+  const vmMode = settings.runtime && settings.runtime.location === 'vm';
+  const fallbackMs = vmMode
+    ? Math.max(MAIN_WINDOW_SHOW_FALLBACK_MS, (Number(settings.runtime?.vm?.bootTimeoutMs) || 180000) + 15000)
+    : MAIN_WINDOW_SHOW_FALLBACK_MS;
   setTimeout(() => {
     if (!mainWindowShownOnce && mainWindow && !mainWindow.isDestroyed()) {
-      mainWindowShownOnce = true;
-      mainWindow.show();
+      vmRuntimeGate.ready = true; // 超时兜底：强制放行，绝不让用户卡在 Splash
+      tryShowMainWindow();
     }
-  }, MAIN_WINDOW_SHOW_FALLBACK_MS);
+  }, fallbackMs);
   registerRendererReadyListener();
   mainWindow.loadFile(path.join(__dirname, '../renderer/pages/index.html'));
   // 主窗口一旦显示（渲染器就绪或超时兜底）即关闭 Splash，并解除后台节流
@@ -1548,9 +1655,8 @@ function registerRendererReadyListener() {
   ipcMain.on('app:renderer-ready', (event) => {
     if (!mainWindowShownOnce && mainWindow && !mainWindow.isDestroyed()
         && event.sender === mainWindow.webContents) {
-      mainWindowShownOnce = true;
-      mainWindow.show();
-      mainWindow.focus();
+      // 运行位置=虚拟机时，渲染器就绪不代表可以进主界面 —— 还要等 VM 门控放行
+      tryShowMainWindow();
     }
   });
 }
@@ -1890,6 +1996,12 @@ app.whenReady().then(() => {
   createWindow();
   // Splash 启动画面：主窗口预渲染完成前展示品牌画面（主窗口 show 时自动关闭）
   createSplashWindow();
+  // 运行位置=虚拟机：Splash 阶段完成 VM 启动编排（就绪后才放行主窗口）
+  if (settings.runtime && settings.runtime.location === 'vm') {
+    vmRuntimeGate.required = true;
+    vmRuntimeGate.ready = false;
+    startVmBootForSplash().catch((e) => { console.warn('[vm] boot failed:', e.message); });
+  }
   // 启动时即创建托盘图标（若启用）
   if (settings.trayEnabled) createAppTray();
   // 上轮异常退出 → 独立崩溃报告窗口（延后到主窗口开始加载后，避免抢占启动）
@@ -2847,7 +2959,9 @@ ipcMain.handle('fs:searchInFiles', async (_, paths, pattern, options = {}) => {
 registerTerminalIpc({
   ipcMain,
   getMainWindow: () => mainWindow,
-  getSettings: () => settings
+  getSettings: () => settings,
+  // 运行位置=虚拟机时，终端改由 VM 内 PTY 承载（vm-pty 适配器）
+  getVmService: () => vmService
 });
 
 // ---- FFmpeg / FFprobe 媒体工具集 ----
@@ -3111,7 +3225,55 @@ function runJSConfinedWin32(runnerPath, code, cwd, sandboxMode, workspacePath) {
   });
 }
 
+// ---- 运行位置=虚拟机：脚本类工具路由到 VM 内执行 ----
+// 语义变化（工具描述已注明）：VM 模式下 runShell/runPython/runNodeJS/runJS 在隔离环境内执行，
+// 只有 guest 里存在的运行时（bash/python3/node）可用，宿主 API 不可用。
+function vmLocationActive() {
+  try {
+    const r = settings.runtime || {};
+    return r.location === 'vm' && !vmService.emergencyHost;
+  } catch { return false; }
+}
+
+/** 宿主 cwd → VM 内路径（P1 统一落到 /workspace；P2 工作区同步模块会注入真实映射） */
+function vmCwdFor(cwd) {
+  const { mapHostPathToVm } = require('./vm/vm-pty');
+  return mapHostPathToVm(cwd, { hostRoot: null, vmMount: '/workspace' });
+}
+
+/**
+ * 在 VM 内执行脚本：写临时文件 → 解释器执行 → 收集输出。
+ * @param {'shell'|'python'|'node'} interpreter
+ */
+async function runScriptInVm(script, cwd, interpreter) {
+  try {
+    const inst = vmService.instance || await vmService.start();
+    if (!inst || inst.state !== 'ready') return { ok: false, error: '虚拟机未就绪', location: 'vm' };
+    const ext = interpreter === 'python' ? 'py' : interpreter === 'node' ? 'js' : 'sh';
+    const remote = `/tmp/cibyp-run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
+    const sftp = await inst.sftp();
+    await sftp.writeFile(remote, String(script));
+    const vmCwd = vmCwdFor(cwd);
+    const runner = interpreter === 'python' ? 'python3 -u' : interpreter === 'node' ? 'node' : 'bash';
+    const cmd = `cd ${JSON.stringify(vmCwd)} 2>/dev/null || cd /workspace; ${runner} ${remote}; rc=$?; rm -f ${remote}; exit $rc`;
+    const r = await inst.exec(cmd, { timeoutMs: 120000 });
+    if (r.ok) return { ok: true, output: r.stdout, stderr: r.stderr, location: 'vm', sandboxed: true };
+    return {
+      ok: false,
+      error: r.stderr || `进程退出码 ${r.code}`,
+      stderr: r.stderr,
+      output: r.stdout,
+      code: r.code,
+      location: 'vm',
+      sandboxed: true,
+    };
+  } catch (e) {
+    return { ok: false, error: e.message, location: 'vm' };
+  }
+}
+
 ipcMain.handle('code:runJS', (_, code, cwd, sandboxMode) => {
+  if (vmLocationActive()) return runScriptInVm(code, cwd, 'node');
   const restrictedWin32 = process.platform === 'win32' && sandboxMode && sandboxMode !== 'danger-full-access';
   if (restrictedWin32) {
     return runJSConfinedWin32(path.join(__dirname, '../tools/js-runner.js'), code, cwd, sandboxMode, cwd);
@@ -3147,6 +3309,7 @@ ipcMain.handle('code:runJS', (_, code, cwd, sandboxMode) => {
 
 // ---- IPC: Run JS Code (Node.js enabled) ----
 ipcMain.handle('code:runNodeJS', (_, code, cwd, sandboxMode) => {
+  if (vmLocationActive()) return runScriptInVm(code, cwd, 'node');
   const restrictedWin32 = process.platform === 'win32' && sandboxMode && sandboxMode !== 'danger-full-access';
   if (restrictedWin32) {
     return runJSConfinedWin32(path.join(__dirname, '../tools/js-runner-node.js'), code, cwd, sandboxMode, cwd);
@@ -3181,6 +3344,7 @@ ipcMain.handle('code:runNodeJS', (_, code, cwd, sandboxMode) => {
 
 // ---- IPC: Run Shell Script ----
 ipcMain.handle('code:runShell', (_, script, cwd, sandboxMode) => {
+  if (vmLocationActive()) return runScriptInVm(script, cwd, 'shell');
   return new Promise((resolve) => {
     const { execFile } = require('child_process');
     const tmpFile = path.join(os.tmpdir(), `script_${Date.now()}${process.platform === 'win32' ? '.ps1' : '.sh'}`);
@@ -3211,6 +3375,7 @@ ipcMain.handle('code:runShell', (_, script, cwd, sandboxMode) => {
 
 // ---- IPC: Run Python Script ----
 ipcMain.handle('code:runPython', (_, script, cwd, sandboxMode) => {
+  if (vmLocationActive()) return runScriptInVm(script, cwd, 'python');
   return new Promise((resolve) => {
     const { execFile } = require('child_process');
     const tmpFile = path.join(os.tmpdir(), `skill_py_${Date.now()}.py`);
@@ -3344,6 +3509,100 @@ ipcMain.handle('image:providers', () => {
 });
 
 // ---- IPC: Resources（资源下载：语音模型等）----
+// ---- 运行位置（本机 / 虚拟机）+ 虚拟机沙盒（CIBYP-VM-OS）----
+ipcMain.handle('runtime:getLocation', () => {
+  const r = settings.runtime || {};
+  const st = vmService.status();
+  return {
+    ok: true,
+    location: r.location === 'vm' ? 'vm' : 'host',
+    workspaceMode: r.workspaceMode === 'isolated' ? 'isolated' : 'shared',
+    vmState: (st.inst || {}).state || 'idle',
+    vmReady: (st.inst || {}).state === 'ready',
+    emergencyHost: !!vmService.emergencyHost,
+  };
+});
+ipcMain.handle('runtime:setLocation', (_, location) => {
+  const loc = location === 'vm' ? 'vm' : 'host';
+  settings.runtime = settings.runtime || {};
+  settings.runtime.location = loc;
+  try { saveJSON(settingsPath, settings); } catch (_) {}
+  return { ok: true, location: loc, requiresRestart: true };
+});
+ipcMain.handle('runtime:setWorkspaceMode', (_, mode) => {
+  const m = mode === 'isolated' ? 'isolated' : 'shared';
+  settings.runtime = settings.runtime || {};
+  settings.runtime.workspaceMode = m;
+  try { saveJSON(settingsPath, settings); } catch (_) {}
+  return { ok: true, workspaceMode: m, requiresRestart: true };
+});
+ipcMain.handle('runtime:relaunch', () => {
+  setTimeout(() => {
+    try { app.relaunch(); } catch (_) {}
+    try { app.exit(0); } catch (_) {}
+  }, 200);
+  return { ok: true };
+});
+
+ipcMain.handle('vm:status', () => ({ ok: true, ...vmService.status() }));
+ipcMain.handle('vm:start', async () => {
+  try {
+    const st = await vmService.start();
+    vmRuntimeGate.required = false;
+    vmRuntimeGate.ready = true;
+    return { ok: true, status: st };
+  } catch (e) {
+    return { ok: false, error: e.message, code: e.code || null };
+  }
+});
+ipcMain.handle('vm:stop', async () => {
+  try { await vmService.stop(); return { ok: true }; } catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('vm:reset', async () => {
+  try { await vmService.reset(); return { ok: true }; } catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('vm:probe', async () => {
+  try { return { ok: true, ...(await vmService.probe()) }; } catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('vm:logs', () => ({ ok: true, ...vmService.status() }));
+ipcMain.handle('vm:variants', () => ({ ok: true, variants: vmService.variants() }));
+ipcMain.handle('vm:assetsStatus', (_, variant) => ({ ok: true, ...vmService.assetsStatus(variant) }));
+ipcMain.handle('vm:manifest', async (_, opts) => {
+  try { return await vmService.manifest(opts || {}); } catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('vm:download', async (_, opts) => vmService.download(opts || {}));
+ipcMain.handle('vm:downloadCancel', () => vmService.cancelDownload());
+ipcMain.handle('vm:setVariant', (_, variant) => vmService.setVariant(variant));
+ipcMain.handle('vm:chooseAssetsDir', async () => {
+  try {
+    const r = await dialog.showOpenDialog(mainWindow, {
+      properties: ['openDirectory', 'createDirectory'],
+      defaultPath: vmService.assetsDir,
+      title: '选择虚拟机资源目录（QEMU / 镜像 / 实例数据）'
+    });
+    if (r.canceled || !r.filePaths.length) return { ok: false, canceled: true };
+    settings.runtime = settings.runtime || {};
+    settings.runtime.vm = Object.assign({}, settings.runtime.vm, { assetsDir: r.filePaths[0] });
+    try { saveJSON(settingsPath, settings); } catch (_) {}
+    return { ok: true, dir: r.filePaths[0] };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('vm:openAssetsDir', async () => {
+  try {
+    fs.mkdirSync(vmService.assetsDir, { recursive: true });
+    await shell.openPath(vmService.assetsDir);
+    return { ok: true, dir: vmService.assetsDir };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+// 紧急切回本机：本次运行生效（不写设置），Splash/主界面均可调用
+ipcMain.handle('vm:emergencyHostMode', () => {
+  vmService.emergencyHostMode();
+  vmRuntimeGate.required = false;
+  vmRuntimeGate.ready = true;
+  tryShowMainWindow();
+  return { ok: true };
+});
+
 ipcMain.handle('resources:voiceModels:status', () => {
   try { return { ok: true, ...voiceModelManager.status() }; } catch (e) { return { ok: false, error: e.message }; }
 });
@@ -5938,7 +6197,7 @@ ipcMain.handle('qr:generate', async (_, text, workspacePath, filename) => {
 });
 // ---- IPC: Download Manager (aria2) ----
 // 替换旧的同步 file:download：现在使用 aria2 异步下载，返回 gid 立即继续工作
-const { aria2Manager } = require('./aria2-manager');
+// （aria2Manager 已在文件头部 require，供 VM 资源下载复用同一实例）
 
 // 启动 aria2（首次下载时自动触发，也可在打开下载管理器时预热）
 // 自动同步 settings.proxy 代理设置
@@ -8609,6 +8868,13 @@ app.on('before-quit', async (event) => {
   // CIBYP-IM：退出前立即落盘加密状态（ratchet/OPK 变更不丢）
   try { saveCibypImState(true); } catch { /* ignore */ }
   await mcpService.stopAllMcpServers();
+  // 虚拟机沙盒：退出时优雅关机（默认开启；上限 10s 避免拖住退出）
+  try {
+    const vmCfg = (settings.runtime || {}).vm || {};
+    if (vmService.instance && vmCfg.shutdownOnExit !== false) {
+      await vmService.instance.stop({ timeoutMs: 10000 }).catch(() => {});
+    }
+  } catch { /* ignore */ }
   if (webControlService.running) {
     webControlService.stop().catch(() => {});
   }

@@ -60,6 +60,22 @@
       letter-spacing: 0.3px;
       font-family: Consolas, "Courier New", monospace;
     }
+    /* ---- 虚拟机启动面板（运行位置=虚拟机时显示）---- */
+    .vm-panel { width: 100%; padding: 0 34px; display: flex; flex-direction: column; gap: 10px; }
+    .vm-panel[hidden] { display: none; }
+    .vm-title { font-size: 12px; font-weight: 600; opacity: 0.85; display: flex; justify-content: space-between; align-items: baseline; }
+    .vm-pct { font-family: Consolas, "Courier New", monospace; font-size: 11px; opacity: 0.65; }
+    .vm-bar { height: 6px; border-radius: 4px; background: var(--splash-spin-bg); overflow: hidden; }
+    .vm-bar > i { display: block; height: 100%; width: 0%; background: var(--splash-accent); transition: width .3s ease; }
+    .vm-detail { font-size: 11px; opacity: 0.7; min-height: 14px; }
+    .vm-log { margin-top: 2px; max-height: 96px; overflow: hidden; font-family: Consolas, "Courier New", monospace;
+      font-size: 10px; line-height: 1.35; opacity: 0.55; white-space: pre-wrap; word-break: break-all; }
+    .vm-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+    .vm-btn { font: inherit; font-size: 11px; padding: 5px 10px; border-radius: 8px; cursor: pointer;
+      border: 1px solid var(--splash-spin-bg); background: transparent; color: inherit; }
+    .vm-btn:hover { border-color: var(--splash-accent); }
+    .vm-note { font-size: 10px; opacity: 0.55; }
+    .vm-error { color: #ff6b6b; font-size: 11px; white-space: pre-wrap; word-break: break-word; max-height: 96px; overflow: auto; }
     /* 内置自由字体（OFL，与主界面 main.css 同一批 assets/ui-fonts；缺失时回退系统字体） */
     @font-face {
       font-family: 'Noto Sans SC';
@@ -110,7 +126,21 @@
     <div class="top-meta" id="topMeta"></div>
     <img class="icon" src="../../../assets/icons/icon.png" alt="">
     <div class="name">Could I Be Your Partner</div>
-    <div class="spinner"></div>
+    <div class="spinner" id="spinner"></div>
+
+    <!-- 运行位置=虚拟机：展示 CIBYP-VM-OS 启动进度，并提供紧急切回本机 -->
+    <div class="vm-panel" id="vmPanel" hidden>
+      <div class="vm-title"><span id="vmTitle">正在启动虚拟机环境</span><span class="vm-pct" id="vmPct">0%</span></div>
+      <div class="vm-bar"><i id="vmBar"></i></div>
+      <div class="vm-detail" id="vmDetail"></div>
+      <div class="vm-log" id="vmLog"></div>
+      <div class="vm-error" id="vmError" hidden></div>
+      <div class="vm-actions">
+        <button class="vm-btn" id="vmFallback">以本机模式启动（本次）</button>
+        <span class="vm-note" id="vmNote"></span>
+      </div>
+    </div>
+
     <div class="version" id="version"></div>
   </div>
   <script>
@@ -130,6 +160,107 @@
     if (font) root.style.setProperty('--splash-font', "'" + font + "', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif");
     document.getElementById('version').textContent = version ? 'v' + version.split('+')[0] : '';
     document.getElementById('topMeta').textContent = gitHash || '';
+
+    // ---- 虚拟机启动进度（运行位置=虚拟机）----
+    (function () {
+      const panel = document.getElementById('vmPanel');
+      const bar = document.getElementById('vmBar');
+      const pct = document.getElementById('vmPct');
+      const detail = document.getElementById('vmDetail');
+      const logEl = document.getElementById('vmLog');
+      const errEl = document.getElementById('vmError');
+      const noteEl = document.getElementById('vmNote');
+      const btnFallback = document.getElementById('vmFallback');
+      const spinner = document.getElementById('spinner');
+      let vmMode = false;
+      let fallbackTimer = null;
+
+      const LABELS = {
+        idle: '等待启动',
+        checking: '检查运行时资源',
+        booting: '启动虚拟机',
+        preparing: '等待系统就绪',
+        ready: '就绪',
+        failed: '启动失败',
+        stopping: '正在关闭'
+      };
+
+      function setProgress(p) {
+        const v = Math.max(0, Math.min(100, Number(p) || 0));
+        bar.style.width = v + '%';
+        pct.textContent = v + '%';
+      }
+
+      function appendLog(text) {
+        if (!text) return;
+        logEl.textContent = (logEl.textContent + text).slice(-1200);
+        logEl.scrollTop = logEl.scrollHeight;
+      }
+
+      function fail(message, serialTail) {
+        errEl.hidden = false;
+        errEl.textContent = String(message || '虚拟机启动失败');
+        if (serialTail) appendLog(serialTail.slice(-800));
+        spinner.style.display = 'none';
+        detail.textContent = '已停止等待 —— 可切回本机，或稍后重试';
+        setProgress(0);
+        // 自动回退倒计时（主进程也会兜底，这里只做提示）
+        let left = 20;
+        noteEl.textContent = `${left}s 后自动以本机模式启动`;
+        if (fallbackTimer) clearInterval(fallbackTimer);
+        fallbackTimer = setInterval(() => {
+          left -= 1;
+          if (left <= 0) { clearInterval(fallbackTimer); fallbackTimer = null; noteEl.textContent = '正在以本机模式启动…'; return; }
+          noteEl.textContent = `${left}s 后自动以本机模式启动`;
+        }, 1000);
+      }
+
+      function onEvent(channel, data) {
+        switch (channel) {
+          case 'vm:init': {
+            vmMode = !!(data && data.vmMode);
+            panel.hidden = !vmMode;
+            if (vmMode) {
+              document.getElementById('spinner').style.display = '';
+              const st = (data && data.status) || {};
+              const inst = st.inst || {};
+              setProgress(inst.progress || 0);
+              detail.textContent = inst.detail || LABELS[inst.state] || '';
+            }
+            break;
+          }
+          case 'vm:state': {
+            if (!vmMode) break;
+            setProgress(data && data.progress);
+            const st = (data && data.state) || '';
+            if (!errEl.hidden && st !== 'failed') errEl.hidden = true;
+            detail.textContent = (data && data.detail) || LABELS[st] || '';
+            if (st === 'ready') { spinner.style.display = 'none'; setProgress(100); }
+            break;
+          }
+          case 'vm:serial': appendLog(data || ''); break;
+          case 'vm:boot-begin': if (vmMode) detail.textContent = '正在启动虚拟机环境…'; break;
+          case 'vm:boot-failed': fail(data && data.message, data && data.serialTail); break;
+          case 'vm:boot-ready': spinner.style.display = 'none'; setProgress(100); detail.textContent = '虚拟机就绪，正在进入主界面…'; break;
+          case 'vm:error': if (vmMode) appendLog('[error] ' + ((data && data.message) || '')); break;
+          default: break;
+        }
+      }
+
+      btnFallback.addEventListener('click', async () => {
+        if (fallbackTimer) { clearInterval(fallbackTimer); fallbackTimer = null; }
+        noteEl.textContent = '正在以本机模式启动…';
+        try { await window.vmSplash.emergencyHostMode(); } catch (_) { /* ignore */ }
+      });
+
+      if (window.vmSplash && typeof window.vmSplash.onEvent === 'function') {
+        window.vmSplash.onEvent(({ channel, data }) => { try { onEvent(channel, data); } catch (_) { /* ignore */ } });
+        // 主动拉一次运行位置，避免错过 init 消息
+        window.vmSplash.getRuntime().then((r) => {
+          if (r && r.location === 'vm') onEvent('vm:init', { vmMode: true });
+        }).catch(() => {});
+      }
+    })();
   </script>
 </body>
 </html>

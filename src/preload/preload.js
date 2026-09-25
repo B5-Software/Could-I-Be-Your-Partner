@@ -370,6 +370,53 @@ contextBridge.exposeInMainWorld('api', {
   decisionTest: () => ipcRenderer.invoke('decision:test'),
   decisionStatus: () => ipcRenderer.invoke('decision:status'),
 
+  // ---- 运行位置（本机 / 虚拟机）----
+  runtime: {
+    getLocation: () => ipcRenderer.invoke('runtime:getLocation'),
+    setLocation: (location) => ipcRenderer.invoke('runtime:setLocation', location),
+    setWorkspaceMode: (mode) => ipcRenderer.invoke('runtime:setWorkspaceMode', mode),
+    relaunch: () => ipcRenderer.invoke('runtime:relaunch'),
+    onChanged: (cb) => {
+      const listener = (_, data) => cb(data);
+      ipcRenderer.on('runtime:changed', listener);
+      return () => ipcRenderer.removeListener('runtime:changed', listener);
+    },
+  },
+
+  // ---- 虚拟机沙盒（CIBYP-VM-OS / QEMU）----
+  vm: {
+    status: () => ipcRenderer.invoke('vm:status'),
+    start: () => ipcRenderer.invoke('vm:start'),
+    stop: () => ipcRenderer.invoke('vm:stop'),
+    reset: () => ipcRenderer.invoke('vm:reset'),
+    probe: () => ipcRenderer.invoke('vm:probe'),
+    logs: () => ipcRenderer.invoke('vm:logs'),
+    variants: () => ipcRenderer.invoke('vm:variants'),
+    assetsStatus: (variant) => ipcRenderer.invoke('vm:assetsStatus', variant),
+    manifest: (opts) => ipcRenderer.invoke('vm:manifest', opts || {}),
+    download: (opts) => ipcRenderer.invoke('vm:download', opts || {}),
+    cancelDownload: () => ipcRenderer.invoke('vm:downloadCancel'),
+    setVariant: (variant) => ipcRenderer.invoke('vm:setVariant', variant),
+    chooseAssetsDir: () => ipcRenderer.invoke('vm:chooseAssetsDir'),
+    openAssetsDir: () => ipcRenderer.invoke('vm:openAssetsDir'),
+    emergencyHostMode: () => ipcRenderer.invoke('vm:emergencyHostMode'),
+    onProgress: (cb) => {
+      const listener = (_, data) => cb(data);
+      ipcRenderer.on('vm:progress', listener);
+      return () => ipcRenderer.removeListener('vm:progress', listener);
+    },
+    onState: (cb) => {
+      const listener = (_, data) => cb(data);
+      ipcRenderer.on('vm:state', listener);
+      return () => ipcRenderer.removeListener('vm:state', listener);
+    },
+    onSerial: (cb) => {
+      const listener = (_, data) => cb(data);
+      ipcRenderer.on('vm:serial', listener);
+      return () => ipcRenderer.removeListener('vm:serial', listener);
+    },
+  },
+
   // Paths
   getPath: (name) => ipcRenderer.invoke('app:getPath', name),
   getAppVersion: () => ipcRenderer.invoke('app:getVersion'),
