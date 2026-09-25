@@ -771,37 +771,47 @@
         </div>
         <div class="settings-shell">
           <div class="settings-tabs">
+            <div class="settings-tab-group" data-i18n="ui.settings.groups.assistant">助手与个性化</div>
             <button class="settings-tab" data-tab="ai"><i class="fa-solid fa-user-astronaut"></i> AI 形象</button>
             <button class="settings-tab" data-tab="babe"><i class="fa-solid fa-heart"></i> Babe 模式</button>
             <button class="settings-tab" data-tab="user"><i class="fa-solid fa-user"></i> 个人资料</button>
+            <div class="settings-tab-group" data-i18n="ui.settings.groups.model">模型与智能</div>
             <button class="settings-tab" data-tab="llm"><i class="fa-solid fa-microchip"></i> LLM</button>
+            <button class="settings-tab" data-tab="decision"><i class="fa-solid fa-scale-balanced"></i> 决策模型</button>
+            <button class="settings-tab" data-tab="context"><i class="fa-solid fa-compress"></i> 上下文</button>
+            <button class="settings-tab" data-tab="image"><i class="fa-solid fa-image"></i> 生图</button>
+            <div class="settings-tab-group" data-i18n="ui.settings.groups.usage">用量与成本</div>
             <button class="settings-tab" data-tab="usage"><i class="fa-solid fa-chart-bar"></i> 用量统计</button>
             <button class="settings-tab" data-tab="budget"><i class="fa-solid fa-wallet"></i> 预算控制</button>
-            <button class="settings-tab" data-tab="image"><i class="fa-solid fa-image"></i> 生图</button>
+            <div class="settings-tab-group" data-i18n="ui.settings.groups.appearance">外观与语言</div>
             <button class="settings-tab" data-tab="theme"><i class="fa-solid fa-palette"></i> 主题</button>
             <button class="settings-tab" data-tab="animations"><i class="fa-solid fa-wand-magic-sparkles"></i> 动效</button>
             <button class="settings-tab" data-tab="fonts"><i class="fa-solid fa-font"></i> 字体</button>
             <button class="settings-tab" data-tab="language"><i class="fa-solid fa-language"></i> 语言</button>
-            <button class="settings-tab" data-tab="network"><i class="fa-solid fa-network-wired"></i> 网络</button>
-            <button class="settings-tab" data-tab="entropy"><i class="fa-solid fa-dice"></i> 熵源</button>
-            <button class="settings-tab" data-tab="firmware"><i class="fa-solid fa-microchip"></i> TRNG固件</button>
-            <button class="settings-tab" data-tab="security"><i class="fa-solid fa-shield-halved"></i> 安全</button>
+            <div class="settings-tab-group" data-i18n="ui.settings.groups.voiceInput">语音与输入</div>
+            <button class="settings-tab" data-tab="voice" hidden><i class="fa-solid fa-microphone-lines"></i> 语音</button>
+            <button class="settings-tab" data-tab="ime"><i class="fa-solid fa-keyboard"></i> 输入法</button>
+            <div class="settings-tab-group" data-i18n="ui.settings.groups.notifications">通知</div>
+            <button class="settings-tab" data-tab="notifications"><i class="fa-solid fa-bell"></i> 通知</button>
+            <div class="settings-tab-group" data-i18n="ui.settings.groups.connections">连接与集成</div>
             <button class="settings-tab" data-tab="mcp"><i class="fa-solid fa-plug"></i> MCP</button>
             <button class="settings-tab" data-tab="email"><i class="fa-solid fa-envelope"></i> 邮箱</button>
             <button class="settings-tab" data-tab="fedikitten"><i class="fa-solid fa-cat"></i> FediKitten</button>
             <button class="settings-tab" data-tab="cibypim"><i class="fa-solid fa-comments"></i> CIBYP-IM</button>
             <button class="settings-tab" data-tab="webcontrol"><i class="fa-solid fa-globe"></i> Web控制</button>
             <button class="settings-tab" data-tab="playwright"><i class="fa-solid fa-window-restore"></i> Playwright</button>
-            <button class="settings-tab" data-tab="notifications"><i class="fa-solid fa-bell"></i> 通知</button>
-            <button class="settings-tab" data-tab="terminal"><i class="fa-solid fa-terminal"></i> 终端</button>
-            <button class="settings-tab" data-tab="ime"><i class="fa-solid fa-keyboard"></i> 输入法</button>
-            <button class="settings-tab" data-tab="voice" hidden><i class="fa-solid fa-microphone-lines"></i> 语音</button>
-            <button class="settings-tab" data-tab="resources"><i class="fa-solid fa-download"></i> 资源下载</button>
-            <button class="settings-tab" data-tab="decision"><i class="fa-solid fa-scale-balanced"></i> 决策模型</button>
-            <button class="settings-tab" data-tab="context"><i class="fa-solid fa-compress"></i> 上下文</button>
-            <button class="settings-tab" data-tab="sandbox"><i class="fa-solid fa-shield-halved"></i> 沙箱</button>
+            <div class="settings-tab-group" data-i18n="ui.settings.groups.automation">自动化与执行</div>
             <button class="settings-tab" data-tab="automation"><i class="fa-solid fa-bolt"></i> 自动化</button>
             <button class="settings-tab" data-tab="plugins"><i class="fa-solid fa-puzzle-piece"></i> 插件</button>
+            <button class="settings-tab" data-tab="terminal"><i class="fa-solid fa-terminal"></i> 终端</button>
+            <button class="settings-tab" data-tab="sandbox"><i class="fa-solid fa-shield-halved"></i> 沙箱</button>
+            <div class="settings-tab-group" data-i18n="ui.settings.groups.system">系统与安全</div>
+            <button class="settings-tab" data-tab="security"><i class="fa-solid fa-shield-halved"></i> 安全</button>
+            <button class="settings-tab" data-tab="network"><i class="fa-solid fa-network-wired"></i> 网络</button>
+            <button class="settings-tab" data-tab="entropy"><i class="fa-solid fa-dice"></i> 熵源</button>
+            <button class="settings-tab" data-tab="firmware"><i class="fa-solid fa-microchip"></i> TRNG固件</button>
+            <div class="settings-tab-group" data-i18n="ui.settings.groups.maintenance">维护</div>
+            <button class="settings-tab" data-tab="resources"><i class="fa-solid fa-download"></i> 资源下载</button>
             <button class="settings-tab" data-tab="environment"><i class="fa-solid fa-stethoscope"></i> 环境检测</button>
             <button class="settings-tab" data-tab="updates"><i class="fa-solid fa-arrows-rotate"></i> 更新</button>
           </div>
@@ -857,6 +867,7 @@
                 </div>
               </div>
             </div>
+
 
             <!-- Babe Mode Settings -->
             <div class="settings-panel" data-tab="babe">
@@ -930,6 +941,7 @@
               </div>
             </div>
 
+
             <!-- User Profile -->
             <div class="settings-panel" data-tab="user">
               <div class="settings-group">
@@ -963,6 +975,7 @@
                 </div>
               </div>
             </div>
+
 
             <div class="settings-panel" data-tab="llm">
               <!-- 模型池：会话创建时选定并锁定模型，之后不再自动切换（保护提示词缓存） -->
@@ -1163,6 +1176,193 @@
               </div>
             </div>
 
+            <div class="settings-panel" data-tab="decision">
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-scale-balanced"></i> 决策模型（System One / Jev）</h3>
+                <p class="setting-hint" style="margin-bottom:12px">Jev 不生成文本，只做「选择 / 打分 / 是否」类快速决策（70–500ms），用于模型池选型、工具选择、命令护栏、游戏决策等。低置信一律回退原有逻辑，不会阻塞主流程。</p>
+                <div class="setting-item">
+                  <label class="setting-label">启用决策模型</label>
+                  <div class="toggle-switch"><input type="checkbox" id="setting-decision-enabled"><span class="toggle-slider"></span></div>
+                </div>
+                <div class="setting-item">
+                  <label>服务源</label>
+                  <select id="setting-decision-provider" style="width:300px">
+                    <option value="zen">OpenCode Zen（免费 Jev 1.13）</option>
+                    <option value="typesafe">TypeSafe 直连（自备 Key）</option>
+                  </select>
+                </div>
+                <div class="setting-item">
+                  <label>API URL</label>
+                  <input type="text" id="setting-decision-url" placeholder="留空使用默认地址" autocomplete="off">
+                </div>
+                <div class="setting-item">
+                  <label>API Key</label>
+                  <input type="password" id="setting-decision-key" placeholder="Zen 免费可留空（public）；TypeSafe 必填" autocomplete="off">
+                </div>
+                <div class="setting-item">
+                  <label>模型</label>
+                  <input type="text" id="setting-decision-model" placeholder="默认 jev-1.13-free（Zen）/ jev-latest（TypeSafe）" autocomplete="off">
+                </div>
+                <div class="setting-item">
+                  <label>置信阈值</label>
+                  <input type="number" id="setting-decision-threshold" min="0.05" max="0.99" step="0.05" value="0.5" style="width:120px">
+                  <div class="setting-hint">choice/score 低于该置信度 → 回退原有逻辑</div>
+                </div>
+                <div class="setting-item">
+                  <label>护栏阈值（noul）</label>
+                  <input type="number" id="setting-decision-guard" min="0.5" max="0.99" step="0.05" value="0.85" style="width:120px">
+                  <div class="setting-hint">危险命令判断等保守场景：概率达到该值才判定为「危险 / 需要确认」</div>
+                </div>
+                <div class="setting-item">
+                  <label>超时 (ms)</label>
+                  <input type="number" id="setting-decision-timeout" min="1000" max="60000" step="1000" value="8000" style="width:120px">
+                </div>
+                <div class="setting-item">
+                  <label>每日调用上限 (0为不限制)</label>
+                  <input type="number" id="setting-decision-limit" min="0" step="100" value="0" style="width:120px">
+                  <div class="setting-hint" id="decision-usage">今日已调用: 0</div>
+                </div>
+                <div class="setting-item">
+                  <button class="btn-secondary" id="btn-decision-test"><i class="fa-solid fa-plug-circle-check"></i> 连通性测试</button>
+                  <span class="setting-hint" id="decision-test-status" style="margin-left:8px"></span>
+                </div>
+              </div>
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-toggle-on"></i> 接入点开关</h3>
+                <div class="setting-item"><label class="setting-label">模型池选型（会话创建时）</label><div class="toggle-switch"><input type="checkbox" id="setting-decision-use-model"><span class="toggle-slider"></span></div></div>
+                <div class="setting-item"><label class="setting-label">Reasoning Effort 决策（会话创建时）</label><div class="toggle-switch"><input type="checkbox" id="setting-decision-use-effort"><span class="toggle-slider"></span></div></div>
+                <div class="setting-item"><label class="setting-label">工具自动选择</label><div class="toggle-switch"><input type="checkbox" id="setting-decision-use-tools"><span class="toggle-slider"></span></div></div>
+                <div class="setting-item"><label class="setting-label">危险命令护栏</label><div class="toggle-switch"><input type="checkbox" id="setting-decision-use-guard"><span class="toggle-slider"></span></div></div>
+                <div class="setting-item"><label class="setting-label">游戏决策（猜人物/卧底/三国杀/成语/飞花令）</label><div class="toggle-switch"><input type="checkbox" id="setting-decision-use-games"><span class="toggle-slider"></span></div></div>
+                <div class="setting-item"><label class="setting-label">LLM 主动调用（decisionModel 工具）</label><div class="toggle-switch"><input type="checkbox" id="setting-decision-use-llm-tool"><span class="toggle-slider"></span></div><div class="setting-hint">允许模型在对话中自行调用决策模型；关闭后决策工具对 LLM 隐藏</div></div>
+                <div class="setting-item"><label class="setting-label">邮件/热消息意图分类</label><div class="toggle-switch"><input type="checkbox" id="setting-decision-use-email"><span class="toggle-slider"></span></div><div class="setting-hint">关闭可避免把邮件内容发送给决策服务（隐私）</div></div>
+                <div class="setting-item"><label class="setting-label">上下文保留打分</label><div class="toggle-switch"><input type="checkbox" id="setting-decision-use-context"><span class="toggle-slider"></span></div></div>
+              </div>
+            </div>
+
+            <div class="settings-panel" data-tab="context">
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-compress"></i> 上下文压缩</h3>
+                <div class="setting-item"><label class="setting-label">自动压缩</label><div class="toggle-switch"><input type="checkbox" id="setting-context-auto"><span class="toggle-slider"></span></div><p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">上下文占用超过阈值时自动压缩（剪枝 + 结构化摘要检查点）</p></div>
+                <div class="setting-item"><label class="setting-label">触发阈值</label><div style="display:flex;align-items:center;gap:10px"><input type="range" id="setting-context-threshold" min="60" max="95" step="1" value="80" style="width:200px"><span id="setting-context-threshold-val" style="min-width:40px;text-align:right;font-size:13px;color:var(--text-secondary)">80%</span></div><p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">输入包络（系统提示词 + 工具定义 + 对话 + 输出预留）占上下文窗口的比例</p></div>
+                <div class="setting-item"><label class="setting-label">保留尾巴比例</label><div style="display:flex;align-items:center;gap:10px"><input type="range" id="setting-context-retain" min="5" max="40" step="1" value="16" style="width:200px"><span id="setting-context-retain-val" style="min-width:40px;text-align:right;font-size:13px;color:var(--text-secondary)">16%</span></div><p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">最近对话原样保留的 token 预算（占窗口比例），压缩只动更早的历史</p></div>
+                <div class="setting-item"><label class="setting-label">摘要重试次数</label><input type="number" id="setting-context-retries" min="0" max="5" step="1" value="1" style="width:120px"><p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">摘要未收敛（没有明显缩短）时的额外重试次数</p></div>
+                <div class="setting-item"><label class="setting-label">摘要最大输出</label><input type="number" id="setting-context-max-tokens" min="512" max="8192" step="256" value="2048" style="width:120px"><p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">单次摘要请求的最大输出 token（八段式结构化检查点）</p></div>
+                <div class="setting-item"><button class="btn-secondary" id="btn-context-compact-now"><i class="fa-solid fa-wand-magic-sparkles"></i> 立即压缩</button><span style="font-size:11px;color:var(--text-tertiary);margin-left:8px">对当前模式会话手动执行一次压缩</span></div>
+                <p id="context-compact-status" style="font-size:12px;color:var(--text-secondary)"></p>
+              </div>
+            </div>
+
+
+            <div class="settings-panel" data-tab="image">
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-image"></i> 生图模型配置</h3>
+                <div class="setting-item">
+                  <label>厂商预设</label>
+                  <select id="setting-img-provider"></select>
+                  <div class="setting-hint" id="setting-img-provider-hint">选择厂商后自动填充端点与推荐模型，均可手动修改</div>
+                </div>
+                <div class="setting-item">
+                  <label>API URL</label>
+                  <input type="text" id="setting-img-url" placeholder="https://api.example.com/v1/images/generations">
+                </div>
+                <div class="setting-item">
+                  <label>API Key</label>
+                  <div class="input-with-toggle">
+                    <input type="password" id="setting-img-key" placeholder="sk-...（本地端点可留空）">
+                    <button class="btn-icon btn-toggle-pwd" data-target="setting-img-key">
+                      <i class="fa-solid fa-eye"></i>
+                    </button>
+                  </div>
+                </div>
+                <div class="setting-item">
+                  <label>模型</label>
+                  <input type="text" id="setting-img-model" placeholder="gpt-image-2 / Qwen/Qwen-Image / doubao-seedream-5-0-lite-260128 …" list="setting-img-model-presets">
+                  <datalist id="setting-img-model-presets"></datalist>
+                </div>
+                <div class="setting-item">
+                  <label>图像尺寸 / 宽高比</label>
+                  <select id="setting-img-size"></select>
+                  <div class="setting-hint">Gemini/Imagen/Stability 会自动换算为对应的 aspectRatio</div>
+                </div>
+                <div class="setting-item">
+                  <label>生成数量</label>
+                  <input type="number" id="setting-img-n" min="1" max="10" step="1" value="1" style="width:120px">
+                  <div class="setting-hint">部分模型/端点仅支持 1 张</div>
+                </div>
+                <details class="settings-advanced">
+                  <summary><i class="fa-solid fa-sliders"></i> 高级参数（按厂商生效，留空用默认）</summary>
+                  <div class="settings-advanced-body">
+                    <div class="setting-item"><label>质量 quality</label>
+                      <select id="setting-img-quality">
+                        <option value="">默认</option>
+                        <option value="auto">auto</option>
+                        <option value="low">low</option>
+                        <option value="medium">medium</option>
+                        <option value="high">high</option>
+                        <option value="standard">standard (DALL·E)</option>
+                        <option value="hd">hd (DALL·E)</option>
+                      </select>
+                    </div>
+                    <div class="setting-item"><label>背景 background</label>
+                      <select id="setting-img-background">
+                        <option value="">默认</option>
+                        <option value="auto">auto</option>
+                        <option value="transparent">transparent</option>
+                        <option value="opaque">opaque</option>
+                      </select>
+                    </div>
+                    <div class="setting-item"><label>输出格式</label>
+                      <select id="setting-img-format">
+                        <option value="">默认</option>
+                        <option value="png">png</option>
+                        <option value="jpeg">jpeg</option>
+                        <option value="webp">webp</option>
+                      </select>
+                    </div>
+                    <div class="setting-item"><label>负面提示词</label>
+                      <input type="text" id="setting-img-negative" placeholder="不要出现的元素…">
+                    </div>
+                    <div class="setting-item"><label>种子 seed</label>
+                      <input type="number" id="setting-img-seed" placeholder="留空随机">
+                    </div>
+                    <div class="setting-item"><label>采样步数 steps</label>
+                      <input type="number" id="setting-img-steps" placeholder="SD 风格端点专用">
+                    </div>
+                    <div class="setting-item"><label>引导系数 guidance</label>
+                      <input type="number" step="0.1" id="setting-img-guidance" placeholder="SD 风格端点专用">
+                    </div>
+                    <div class="setting-item"><label>风格预设 style</label>
+                      <input type="text" id="setting-img-style" placeholder="photographic / cinematic…（Stability）">
+                    </div>
+                    <div class="setting-item"><label>添加水印</label>
+                      <div class="toggle-switch"><input type="checkbox" id="setting-img-watermark"><span class="toggle-slider"></span></div>
+                      <div class="setting-hint">火山方舟等端点生效</div>
+                    </div>
+                    <div class="setting-item" id="setting-img-template-item" style="display:none">
+                      <label>自定义请求体 JSON 模板</label>
+                      <textarea id="setting-img-template" rows="4" placeholder='{"model":"{{model}}","prompt":"{{prompt}}","size":"{{size}}","n":{{n}}}'></textarea>
+                      <div class="setting-hint">占位符：{{prompt}} {{model}} {{size}} {{n}} {{seed}} {{negative_prompt}}；响应自动探测</div>
+                    </div>
+                  </div>
+                </details>
+                <div class="setting-item">
+                  <label>每日最大生成图片数 (0为不限制)</label>
+                  <input type="number" id="setting-img-daily-limit" min="0" step="1" placeholder="例如 50">
+                  <div class="setting-hint" id="setting-img-usage">今日已用: 0</div>
+                </div>
+                <div class="setting-item">
+                  <label>自定义请求头 (生图 API 生效)</label>
+                  <div id="img-custom-headers"></div>
+                  <div style="display:flex;gap:8px;align-items:center;margin-top:6px;">
+                    <button class="btn-secondary btn-sm" id="btn-img-add-header" type="button"><i class="fa-solid fa-plus"></i> 添加请求头</button>
+                  </div>
+                  <div class="setting-hint">URL 命中 opencode.ai 时同样会自动附加 OpenCode 官方请求头；自定义头优先级最高</div>
+                </div>
+              </div>
+            </div>
+
+
             <!-- Usage Stats Tab -->
             <div class="settings-panel" data-tab="usage">
               <div style="display:flex;justify-content:flex-end;align-items:center;margin-bottom:2px;">
@@ -1183,6 +1383,7 @@
                 <div id="usage-models"></div>
               </div>
             </div>
+
 
             <!-- Budget Control Tab -->
             <div class="settings-panel" data-tab="budget">
@@ -1353,113 +1554,6 @@
               </div>
             </div>
 
-            <div class="settings-panel" data-tab="image">
-              <div class="settings-group">
-                <h3><i class="fa-solid fa-image"></i> 生图模型配置</h3>
-                <div class="setting-item">
-                  <label>厂商预设</label>
-                  <select id="setting-img-provider"></select>
-                  <div class="setting-hint" id="setting-img-provider-hint">选择厂商后自动填充端点与推荐模型，均可手动修改</div>
-                </div>
-                <div class="setting-item">
-                  <label>API URL</label>
-                  <input type="text" id="setting-img-url" placeholder="https://api.example.com/v1/images/generations">
-                </div>
-                <div class="setting-item">
-                  <label>API Key</label>
-                  <div class="input-with-toggle">
-                    <input type="password" id="setting-img-key" placeholder="sk-...（本地端点可留空）">
-                    <button class="btn-icon btn-toggle-pwd" data-target="setting-img-key">
-                      <i class="fa-solid fa-eye"></i>
-                    </button>
-                  </div>
-                </div>
-                <div class="setting-item">
-                  <label>模型</label>
-                  <input type="text" id="setting-img-model" placeholder="gpt-image-2 / Qwen/Qwen-Image / doubao-seedream-5-0-lite-260128 …" list="setting-img-model-presets">
-                  <datalist id="setting-img-model-presets"></datalist>
-                </div>
-                <div class="setting-item">
-                  <label>图像尺寸 / 宽高比</label>
-                  <select id="setting-img-size"></select>
-                  <div class="setting-hint">Gemini/Imagen/Stability 会自动换算为对应的 aspectRatio</div>
-                </div>
-                <div class="setting-item">
-                  <label>生成数量</label>
-                  <input type="number" id="setting-img-n" min="1" max="10" step="1" value="1" style="width:120px">
-                  <div class="setting-hint">部分模型/端点仅支持 1 张</div>
-                </div>
-                <details class="settings-advanced">
-                  <summary><i class="fa-solid fa-sliders"></i> 高级参数（按厂商生效，留空用默认）</summary>
-                  <div class="settings-advanced-body">
-                    <div class="setting-item"><label>质量 quality</label>
-                      <select id="setting-img-quality">
-                        <option value="">默认</option>
-                        <option value="auto">auto</option>
-                        <option value="low">low</option>
-                        <option value="medium">medium</option>
-                        <option value="high">high</option>
-                        <option value="standard">standard (DALL·E)</option>
-                        <option value="hd">hd (DALL·E)</option>
-                      </select>
-                    </div>
-                    <div class="setting-item"><label>背景 background</label>
-                      <select id="setting-img-background">
-                        <option value="">默认</option>
-                        <option value="auto">auto</option>
-                        <option value="transparent">transparent</option>
-                        <option value="opaque">opaque</option>
-                      </select>
-                    </div>
-                    <div class="setting-item"><label>输出格式</label>
-                      <select id="setting-img-format">
-                        <option value="">默认</option>
-                        <option value="png">png</option>
-                        <option value="jpeg">jpeg</option>
-                        <option value="webp">webp</option>
-                      </select>
-                    </div>
-                    <div class="setting-item"><label>负面提示词</label>
-                      <input type="text" id="setting-img-negative" placeholder="不要出现的元素…">
-                    </div>
-                    <div class="setting-item"><label>种子 seed</label>
-                      <input type="number" id="setting-img-seed" placeholder="留空随机">
-                    </div>
-                    <div class="setting-item"><label>采样步数 steps</label>
-                      <input type="number" id="setting-img-steps" placeholder="SD 风格端点专用">
-                    </div>
-                    <div class="setting-item"><label>引导系数 guidance</label>
-                      <input type="number" step="0.1" id="setting-img-guidance" placeholder="SD 风格端点专用">
-                    </div>
-                    <div class="setting-item"><label>风格预设 style</label>
-                      <input type="text" id="setting-img-style" placeholder="photographic / cinematic…（Stability）">
-                    </div>
-                    <div class="setting-item"><label>添加水印</label>
-                      <div class="toggle-switch"><input type="checkbox" id="setting-img-watermark"><span class="toggle-slider"></span></div>
-                      <div class="setting-hint">火山方舟等端点生效</div>
-                    </div>
-                    <div class="setting-item" id="setting-img-template-item" style="display:none">
-                      <label>自定义请求体 JSON 模板</label>
-                      <textarea id="setting-img-template" rows="4" placeholder='{"model":"{{model}}","prompt":"{{prompt}}","size":"{{size}}","n":{{n}}}'></textarea>
-                      <div class="setting-hint">占位符：{{prompt}} {{model}} {{size}} {{n}} {{seed}} {{negative_prompt}}；响应自动探测</div>
-                    </div>
-                  </div>
-                </details>
-                <div class="setting-item">
-                  <label>每日最大生成图片数 (0为不限制)</label>
-                  <input type="number" id="setting-img-daily-limit" min="0" step="1" placeholder="例如 50">
-                  <div class="setting-hint" id="setting-img-usage">今日已用: 0</div>
-                </div>
-                <div class="setting-item">
-                  <label>自定义请求头 (生图 API 生效)</label>
-                  <div id="img-custom-headers"></div>
-                  <div style="display:flex;gap:8px;align-items:center;margin-top:6px;">
-                    <button class="btn-secondary btn-sm" id="btn-img-add-header" type="button"><i class="fa-solid fa-plus"></i> 添加请求头</button>
-                  </div>
-                  <div class="setting-hint">URL 命中 opencode.ai 时同样会自动附加 OpenCode 官方请求头；自定义头优先级最高</div>
-                </div>
-              </div>
-            </div>
 
             <div class="settings-panel" data-tab="theme">
               <div class="settings-group">
@@ -1707,6 +1801,7 @@
               </div>
             </div>
 
+
             <div class="settings-panel" data-tab="animations">
               <div class="settings-group">
                 <h3><i class="fa-solid fa-wand-magic-sparkles"></i> 界面动效</h3>
@@ -1723,161 +1818,30 @@
               </div>
             </div>
 
-            <div class="settings-panel" data-tab="entropy">
+            <div class="settings-panel" data-tab="fonts">
               <div class="settings-group">
-                <h3><i class="fa-solid fa-dice"></i> 熵源设定</h3>
-                <p class="setting-hint">为命运之牌（Agent + SubAgent 抽牌、工具调用抽牌）设定随机数来源。</p>
+                <h3><i class="fa-solid fa-font"></i> 全局字体</h3>
                 <div class="setting-item">
-                  <label>熵源类型</label>
-                  <div class="entropy-source-selector">
-                    <button class="entropy-mode-btn active" data-source="csprng">
-                      <i class="fa-solid fa-microchip"></i> CSPRNG
-                      <small>系统级密码学安全伪随机</small>
-                    </button>
-                    <button class="entropy-mode-btn" data-source="trng">
-                      <i class="fa-solid fa-satellite-dish"></i> TRNG
-                      <small>ESP32 硬件真随机数</small>
-                    </button>
-                  </div>
-                </div>
-              </div>
-              <div class="settings-group entropy-trng-settings" id="entropy-trng-settings" style="display:none">
-                <h3><i class="fa-solid fa-satellite-dish"></i> TRNG 设备配置</h3>
-                <div class="setting-item">
-                  <label>连接方式</label>
-                  <div class="entropy-source-selector">
-                    <button class="trng-mode-btn active" data-mode="network">
-                      <i class="fa-solid fa-wifi"></i> 网络 API
-                    </button>
-                    <button class="trng-mode-btn" data-mode="serial">
-                      <i class="fa-solid fa-plug"></i> 串口
-                    </button>
-                  </div>
-                </div>
-                <div class="trng-network-settings" id="trng-network-settings">
-                  <div class="setting-item">
-                    <label>设备 IP 地址</label>
-                    <input type="text" id="setting-trng-host" placeholder="192.168.4.1" value="192.168.4.1">
-                  </div>
-                  <div class="setting-item">
-                    <label>设备端口</label>
-                    <input type="number" id="setting-trng-port" placeholder="80" value="80" min="1" max="65535">
-                  </div>
-                </div>
-                <div class="trng-serial-settings" id="trng-serial-settings" style="display:none">
-                  <div class="setting-item">
-                    <label>串口</label>
-                    <div class="serial-port-row">
-                      <select id="setting-trng-serial-port">
-                        <option value="">选择串口...</option>
-                      </select>
-                      <button class="btn-secondary" id="btn-refresh-ports"><i class="fa-solid fa-rotate"></i> 刷新</button>
-                    </div>
-                    <div class="setting-hint" id="trng-port-status"></div>
-                  </div>
-                  <div class="setting-item">
-                    <label>波特率</label>
-                    <select id="setting-trng-serial-baud">
-                      <option value="9600">9600</option>
-                      <option value="19200">19200</option>
-                      <option value="38400">38400</option>
-                      <option value="57600">57600</option>
-                      <option value="115200" selected>115200</option>
-                      <option value="230400">230400</option>
-                      <option value="460800">460800</option>
-                      <option value="921600">921600</option>
-                    </select>
-                  </div>
+                  <p class="setting-hint">内置多款自由字体（SIL OFL 开源协议），可按语言分别配置。选择后立即全局生效；保持“系统默认”即维持当前外观。</p>
                 </div>
                 <div class="setting-item">
-                  <button class="btn-secondary" id="btn-trng-test"><i class="fa-solid fa-vial"></i> 测试 TRNG 连接</button>
-                  <div class="setting-hint" id="trng-test-result"></div>
+                  <label class="setting-label" data-i18n="ui.settings.fonts.zhLabel">中文字体（zh）</label>
+                  <select id="setting-font-zh" style="width:320px;max-width:100%"></select>
+                  <p class="setting-hint">中文字形（含 CJK）使用该字体。</p>
+                </div>
+                <div class="setting-item">
+                  <label class="setting-label" data-i18n="ui.settings.fonts.enLabel">英文字体（en）</label>
+                  <select id="setting-font-en" style="width:320px;max-width:100%"></select>
+                  <p class="setting-hint">拉丁字形优先使用该字体；未选择时回退到德文字体。</p>
+                </div>
+                <div class="setting-item">
+                  <label class="setting-label" data-i18n="ui.settings.fonts.deLabel">德文字体（de）</label>
+                  <select id="setting-font-de" style="width:320px;max-width:100%"></select>
+                  <p class="setting-hint">英文字体未选择时，拉丁字形（含德文变音符号 ä ö ü ß）使用该字体。</p>
                 </div>
               </div>
             </div>
 
-            <div class="settings-panel" data-tab="firmware">
-              <div class="settings-group">
-                <h3><i class="fa-solid fa-microchip"></i> ESP32 TRNG 固件烧录教程</h3>
-                <p class="setting-hint">
-                  如果你需要使用 TRNG 硬件真随机数生成器，需要先将固件烧录到 ESP32 开发板上。
-                </p>
-                <div class="firmware-export-section">
-                  <div class="setting-item">
-                    <label>步骤 1：导出固件源代码</label>
-                    <button class="btn-primary" id="btn-export-firmware">
-                      <i class="fa-solid fa-file-export"></i> 导出固件源码到指定目录
-                    </button>
-                    <p class="setting-hint">
-                      导出 CIBYP-TRNG 固件源代码，以便在 Arduino IDE 中打开。
-                    </p>
-                  </div>
-                  <div class="setting-item">
-                    <label>步骤 2：安装 Arduino IDE 2</label>
-                    <p class="setting-hint">
-                      1. 访问 <a href="#" class="link-arduino-download">https://www.arduino.cc/en/software</a> 下载 Arduino IDE 2.x<br>
-                      2. 安装完成后打开 Arduino IDE
-                    </p>
-                  </div>
-                  <div class="setting-item">
-                    <label>步骤 3：安装 ESP32 开发板支持</label>
-                    <p class="setting-hint">
-                      1. File → Preferences → Additional Boards Manager URLs<br>
-                      2. 添加：<code>https://espressif.github.io/arduino-esp32/package_esp32_index.json</code><br>
-                      3. Tools → Board → Boards Manager → 搜索 "ESP32"<br>
-                      4. 安装 "esp32 by Espressif Systems"
-                    </p>
-                  </div>
-                  <div class="setting-item">
-                    <label>步骤 4：配置和烧录</label>
-                    <p class="setting-hint">
-                      1. 在 Arduino IDE 中打开导出的 <code>CIBYP-TRNG.ino</code> 文件<br>
-                      2. Tools → Board → esp32 → 选择你的 ESP32 型号（如 ESP32 Dev Module）<br>
-                      3. Tools → Port → 选择对应的 COM 端口<br>
-                      4. （可选）在代码中修改 WiFi SSID 和密码<br>
-                      5. 点击 Arduino IDE 顶部的 "Upload" 按钮（右箭头图标）<br>
-                      6. 等待编译和烧录完成
-                    </p>
-                  </div>
-                  <div class="setting-item">
-                    <label>常见问题</label>
-                    <div class="firmware-faq">
-                      <details>
-                        <summary>烧录失败怎么办？</summary>
-                        <p>
-                          - 确认 USB 线支持数据传输（不是充电线）<br>
-                          - 确认已选择正确的 COM 端口<br>
-                          - 尝试按住 ESP32 的 BOOT 按钮再点击 Upload<br>
-                          - 降低 Upload Speed 到 115200
-                        </p>
-                      </details>
-                      <details>
-                        <summary>无法连接 WiFi？</summary>
-                        <p>
-                          - 检查 WiFi SSID 和密码是否正确<br>
-                          - 确认 WiFi 是 2.4GHz（ESP32 不支持 5GHz）<br>
-                          - 查看串口监视器的日志信息
-                        </p>
-                      </details>
-                      <details>
-                        <summary>串口无数据输出？</summary>
-                        <p>
-                          - 确认波特率设置正确（默认 115200）<br>
-                          - 检查 USB 驱动是否正确安装<br>
-                          - 尝试重新插拔 USB 线或重启 ESP32
-                        </p>
-                      </details>
-                    </div>
-                  </div>
-                  <div class="setting-item">
-                    <label>更多信息</label>
-                    <p class="setting-hint">
-                      请参阅导出的固件目录中的 README.md 文件。
-                    </p>
-                  </div>
-                </div>
-              </div>
-            </div>
 
             <div class="settings-panel" data-tab="language">
               <div class="settings-group">
@@ -1899,157 +1863,181 @@
               </div>
             </div>
 
-            <div class="settings-panel" data-tab="network">
+            <div class="settings-panel" data-tab="voice" hidden>
+              <div class="voice-model-gate hidden" id="voice-model-gate">
+                <i class="fa-solid fa-triangle-exclamation"></i>
+                <div class="voice-model-gate-text">
+                  <strong>语音模型未就绪</strong>
+                  <p id="voice-model-gate-text">请先在「资源下载」中下载语音模型，下载完成前语音设置不可用。</p>
+                </div>
+                <button class="btn-secondary btn-sm" id="btn-voice-goto-resources">前往资源下载</button>
+              </div>
+              <div class="settings-group" data-voice-cap="stt">
+                <h3><i class="fa-solid fa-microphone-lines"></i> 语音输入（STT）</h3>
+                <div class="setting-item"><label class="setting-label">语音识别</label><div class="toggle-switch"><input type="checkbox" id="setting-voice-stt"><span class="toggle-slider"></span></div></div>
+                <div class="setting-item"><label class="setting-label">识别模型</label><select id="setting-voice-stt-model" style="width:200px"><option value="base">base（更准，推荐）</option><option value="tiny">tiny（更快，省内存）</option></select><p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">切换后下次语音识别时生效；主窗口听写与后台唤醒框共用此模型</p></div>
+                <div class="setting-item"><label class="setting-label">发音尾词即发送</label><input type="text" id="setting-voice-stt-send-keywords" placeholder="例如：发送、发（留空关闭）" style="width:220px"><p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">听写结束语包含这些词（逗号分隔）时，自动发送该条消息并去掉关键词</p></div>
+              </div>
+              <div class="settings-group" data-voice-cap="tts">
+                <h3><i class="fa-solid fa-volume-high"></i> 语音朗读（TTS）</h3>
+                <div class="setting-item"><label class="setting-label">语音朗读</label><div class="toggle-switch"><input type="checkbox" id="setting-voice-tts"><span class="toggle-slider"></span></div></div>
+                <div class="setting-item"><label class="setting-label">自动朗读 AI 回复</label><div class="toggle-switch"><input type="checkbox" id="setting-voice-tts-auto"><span class="toggle-slider"></span></div><p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">AI 流式输出时实时朗读，无需等待完成</p></div>
+                <div class="setting-item"><label class="setting-label">朗读语言</label><select id="setting-voice-tts-lang" style="width:200px"><option value="auto">自动检测</option><option value="zh">中文</option><option value="en">English</option><option value="de">Deutsch</option></select></div>
+                <div class="setting-item"><label class="setting-label">中文音色</label><select id="setting-voice-zh" style="width:200px"><option value="zf_xiaoxiao">晓晓 (女声)</option><option value="zf_xiaobei">小北</option><option value="zf_xiaoni">小妮</option><option value="zf_xiaoyi">小伊</option><option value="zm_yunjian">云建 (男声)</option><option value="zm_yunxi">云希</option></select></div>
+                <div class="setting-item"><label class="setting-label">英文音色</label><select id="setting-voice-en" style="width:200px"><option value="af_heart">Heart (美·女声)</option><option value="af_bella">Bella (美·女声)</option><option value="af_nicole">Nicole (美·女声)</option><option value="bm_lewis">Lewis (英·男声)</option><option value="bf_emma">Emma (英·女声)</option><option value="am_michael">Michael (美·男声)</option></select></div>
+                <div class="setting-item"><label class="setting-label">语速</label><div style="display:flex;align-items:center;gap:10px"><input type="range" id="setting-voice-speed" min="50" max="200" step="5" value="100" style="width:200px"><span id="setting-voice-speed-val" style="min-width:40px;text-align:right;font-size:13px;color:var(--text-secondary)">1.0x</span></div></div>
+                <div class="setting-item"><label class="setting-label">音量</label><div style="display:flex;align-items:center;gap:10px"><input type="range" id="setting-voice-volume" min="10" max="100" step="5" value="100" style="width:200px"><span id="setting-voice-volume-val" style="min-width:40px;text-align:right;font-size:13px;color:var(--text-secondary)">100%</span></div></div>
+                <div class="setting-item"><label class="setting-label">长文本自动分块</label><div class="toggle-switch"><input type="checkbox" id="setting-voice-tts-chunk"><span class="toggle-slider"></span></div><p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">长文本自动切成小块合成，防止单次合成占用过多内存导致 OOM</p></div>
+                <div class="setting-item" id="req-voice-tts-chunk-size"><label class="setting-label">每块字数</label><div style="display:flex;align-items:center;gap:10px"><input type="range" id="setting-voice-tts-chunk-size" min="40" max="300" step="10" value="120" style="width:200px"><span id="setting-voice-tts-chunk-size-val" style="min-width:48px;text-align:right;font-size:13px;color:var(--text-secondary)">120字</span></div></div>
+                <div class="setting-item"><button class="btn-secondary" id="btn-voice-test">试听短句</button><span style="font-size:11px;color:var(--text-tertiary);margin-left:8px">使用当前音色朗读测试文本</span></div>
+              </div>
+              <div class="settings-group" data-voice-cap="wake">
+                <h3><i class="fa-solid fa-bell"></i> 后台唤醒</h3>
+                <div class="setting-item"><label class="setting-label">启用语音唤醒</label><div class="toggle-switch"><input type="checkbox" id="setting-voice-wake"><span class="toggle-slider"></span></div><p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">常驻麦克风监听，约占用 1~3% CPU</p></div>
+                <div class="setting-item" id="voice-wake-words-section"><label class="setting-label">唤醒词列表</label><div id="voice-wake-words-list" style="margin-bottom:8px"></div><div style="display:flex;gap:6px;align-items:center"><input type="text" id="voice-new-wake-phrase" placeholder="输入唤醒词…" style="flex:1;min-width:140px"><select id="voice-new-wake-action" style="width:130px"><option value="voicebar">弹语音条</option><option value="mainwindow">弹出主窗口</option></select><button class="btn-secondary btn-sm" id="btn-voice-add-wake">添加</button></div></div>
+                <div class="setting-item"><label class="setting-label">检测灵敏度</label><select id="setting-voice-kws-threshold" style="width:200px"><option value="0.15">高</option><option value="0.25" selected>中</option><option value="0.40">低</option></select></div>
+              </div>
+              <div class="settings-group" data-voice-cap="stt">
+                <h3><i class="fa-solid fa-keyboard"></i> 快捷键</h3>
+                <div class="setting-item"><label class="setting-label">全局热键</label><div style="display:flex;align-items:center;gap:8px"><input type="text" id="setting-voice-hotkey" placeholder="Control+Shift+Space" style="width:200px"><button class="btn-secondary btn-sm" id="btn-voice-record-hotkey" style="white-space:nowrap">录制</button></div><p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">按此组合键开关听写</p></div>
+              </div>
               <div class="settings-group">
-                <h3><i class="fa-solid fa-network-wired"></i> 网络代理</h3>
-                <div class="setting-item">
-                  <label>代理模式</label>
-                  <div class="btn-group" style="margin-top:8px;">
-                    <button class="proxy-mode-btn btn-secondary" data-mode="none">不使用代理</button>
-                    <button class="proxy-mode-btn btn-secondary active" data-mode="system">系统代理</button>
-                    <button class="proxy-mode-btn btn-secondary" data-mode="manual">手动配置</button>
-                  </div>
-                </div>
-                <div id="manual-proxy-settings" style="display:none;margin-top:16px;">
-                  <div class="setting-item">
-                    <label>HTTP 代理</label>
-                    <input type="text" id="setting-proxy-http" placeholder="http://127.0.0.1:7890">
-                    <p class="setting-hint">HTTP和HTTPS请求使用的代理地址</p>
-                  </div>
-                  <div class="setting-item">
-                    <label>HTTPS 代理</label>
-                    <input type="text" id="setting-proxy-https" placeholder="http://127.0.0.1:7890">
-                    <p class="setting-hint">可选，留空则使用HTTP代理设置</p>
-                  </div>
-                  <div class="setting-item">
-                    <label>不代理的地址</label>
-                    <input type="text" id="setting-proxy-bypass" placeholder="localhost,127.0.0.1,*.local">
-                    <p class="setting-hint">逗号分隔的不使用代理的主机名或IP</p>
-                  </div>
-                </div>
-                <p class="setting-hint">
-                  <i class="fa-solid fa-circle-info"></i>
-                  代理即时生效（无需重启），覆盖：AI/VLM/生图请求、模型列表、网页抓取与 net:* 工具、Playwright 浏览器、aria2 下载、npm/curl 等子进程。DNS/ping/traceroute 等底层探测与 IMAP 收信始终直连。
+                <h3><i class="fa-solid fa-hard-drive"></i> 模型状态</h3>
+                <p id="voice-model-status" style="font-size:12px;color:var(--text-secondary)">检查中…</p>
+                <div style="margin-top:8px"><button class="btn-secondary btn-sm" id="btn-voice-refresh-status">刷新状态</button></div>
+              </div>
+            </div>
+
+            <div class="settings-panel" data-tab="ime">
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-keyboard"></i> 屏幕软键盘 / 输入法</h3>
+                <p class="setting-hint" style="margin-bottom:12px">
+                  内置屏幕软键盘，支持中文拼音（雾凇拼音词库）与英文/德文输入。
+                  点击窗口标题栏的键盘图标或按 F8 随时开关。词库由 scripts/build-ime-dicts.js 下载生成。
                 </p>
-              </div>
-            </div>
-
-            <div class="settings-panel" data-tab="security">
-              <div class="settings-group">
-                <h3><i class="fa-solid fa-shield-halved"></i> 安全</h3>
                 <div class="setting-item">
-                  <label class="toggle-label">
-                    <span>自动批准敏感操作</span>
-                    <div class="toggle-switch">
-                      <input type="checkbox" id="setting-auto-approve">
-                      <span class="toggle-slider"></span>
-                    </div>
-                  </label>
-                  <p class="setting-warning">
-                    <i class="fa-solid fa-triangle-exclamation"></i>
-                    开启后，AI Agent将自动执行包括文件删除、终端命令等敏感操作，存在安全风险。请确保你信任当前运行的任务。
-                  </p>
-                </div>
-              </div>
-
-              <!-- 隐私信息保护 -->
-              <div class="settings-group">
-                <h3><i class="fa-solid fa-user-shield"></i> 隐私信息保护</h3>
-                <div class="setting-item">
-                  <label class="toggle-label">
-                    <span>启用隐私信息保护</span>
-                    <div class="toggle-switch">
-                      <input type="checkbox" id="setting-privacy-enabled">
-                      <span class="toggle-slider"></span>
-                    </div>
-                  </label>
-                  <p class="setting-hint">
-                    启用后，在工具调用过程中自动过滤手机号、证件号、社保号、API Key、SSH 私钥、.env 密钥行、Tor Hidden Service 地址、git key 以及配置文件（json/yaml/config 等）中的密码，防止隐私信息进入 AI 上下文与历史记录。
-                  </p>
-                </div>
-                <div class="setting-item" id="privacy-trigger-item">
-                  <label>过滤触发器（需开启总开关后生效）</label>
-                  <div class="privacy-trigger-options">
-                    <label class="checkbox-label">
-                      <input type="checkbox" id="setting-privacy-filter-results" checked>
-                      <span>工具结果过滤</span>
-                      <span class="privacy-trigger-desc">工具返回内容注入 AI 上下文前过滤</span>
-                    </label>
-                    <label class="checkbox-label">
-                      <input type="checkbox" id="setting-privacy-filter-args" checked>
-                      <span>工具参数脱敏</span>
-                      <span class="privacy-trigger-desc">写入上下文时隐藏参数中的密码、Token、密钥</span>
-                    </label>
-                    <label class="checkbox-label">
-                      <input type="checkbox" id="setting-privacy-filter-terminal" checked>
-                      <span>终端内容过滤</span>
-                      <span class="privacy-trigger-desc">终端命令与脚本中的密钥、Token 脱敏</span>
-                    </label>
-                    <label class="checkbox-label">
-                      <input type="checkbox" id="setting-privacy-filter-attachments" checked>
-                      <span>附件文本过滤</span>
-                      <span class="privacy-trigger-desc">上传附件的 OCR/提取文本过滤</span>
-                    </label>
+                  <label class="setting-label">应用启动时自动打开屏幕软键盘</label>
+                  <div class="toggle-switch">
+                    <input type="checkbox" id="setting-ime-enabled">
+                    <span class="toggle-slider"></span>
                   </div>
-                </div>
-                <div class="setting-item" id="privacy-categories-item">
-                  <label>过滤内容类别（可单独关闭）</label>
-                  <div class="privacy-category-grid">
-                    <label class="checkbox-label"><input type="checkbox" data-cat="phone" checked><span>手机号</span></label>
-                    <label class="checkbox-label"><input type="checkbox" data-cat="idCard" checked><span>身份证号</span></label>
-                    <label class="checkbox-label"><input type="checkbox" data-cat="ssn" checked><span>社保号/SSN</span></label>
-                    <label class="checkbox-label"><input type="checkbox" data-cat="apiKey" checked><span>API Key</span></label>
-                    <label class="checkbox-label"><input type="checkbox" data-cat="sshKey" checked><span>SSH 私钥</span></label>
-                    <label class="checkbox-label"><input type="checkbox" data-cat="env" checked><span>.env 密钥</span></label>
-                    <label class="checkbox-label"><input type="checkbox" data-cat="tor" checked><span>Tor 地址/密钥</span></label>
-                    <label class="checkbox-label"><input type="checkbox" data-cat="gitKey" checked><span>Git Key</span></label>
-                    <label class="checkbox-label"><input type="checkbox" data-cat="configPassword" checked><span>配置密码</span></label>
-                    <label class="checkbox-label"><input type="checkbox" data-cat="evasion"><span>变换逃逸检测</span></label>
-                  </div>
-                </div>
-              </div>
-
-              <!-- 后台托盘模式 -->
-              <div class="settings-group">
-                <h3><i class="fa-solid fa-window-restore"></i> 后台托盘</h3>
-                <div class="setting-item">
-                  <label class="toggle-label">
-                    <span>启用托盘图标</span>
-                    <div class="toggle-switch">
-                      <input type="checkbox" id="setting-tray-enabled">
-                      <span class="toggle-slider"></span>
-                    </div>
-                  </label>
-                  <p class="setting-hint">关闭后应用将不在系统托盘显示图标，关闭窗口即退出。</p>
+                  <p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">关闭后键盘图标/F8 仍可临时打开；开启时应用启动即显示。</p>
                 </div>
                 <div class="setting-item">
-                  <label for="setting-close-to-tray">关闭窗口时</label>
-                  <select id="setting-close-to-tray">
-                    <option value="ask">每次询问</option>
-                    <option value="always">始终后台运行</option>
-                    <option value="never">始终直接退出</option>
+                  <label class="setting-label">默认输入模式</label>
+                  <select id="setting-ime-mode" style="width:240px">
+                    <option value="zh" selected>中文（拼音）</option>
+                    <option value="en">英文</option>
+                    <option value="de">德文</option>
                   </select>
-                  <p class="setting-hint">"每次询问"将在关闭窗口时弹窗询问您的偏好。"始终"选项会记住选择。</p>
                 </div>
                 <div class="setting-item">
-                  <button class="btn-secondary" id="btn-tray-test-hide" type="button">
-                    <i class="fa-solid fa-eye-slash"></i> 测试：隐藏到托盘
-                  </button>
-                  <p class="setting-hint">点击后窗口将立即最小化到托盘，可单击托盘图标恢复。</p>
+                  <label class="setting-label">候选词数量</label>
+                  <select id="setting-ime-candidate-count" style="width:240px">
+                    <option value="5">5</option>
+                    <option value="7">7</option>
+                    <option value="9" selected>9</option>
+                    <option value="12">12</option>
+                    <option value="15">15</option>
+                  </select>
                 </div>
-              </div>
-              <div class="settings-group">
-                <h3><i class="fa-solid fa-chart-line"></i> 使用量管理</h3>
                 <div class="setting-item">
-                  <button class="btn-reset-usage" id="btn-reset-usage">
-                    <i class="fa-solid fa-rotate-left"></i> 重置每日使用量
-                  </button>
-                  <p class="setting-hint">
-                    重置今日的Token用量和图片生成数统计，谨慎使用。
-                  </p>
+                  <label class="setting-label">键盘不透明度</label>
+                  <div style="display:flex;align-items:center;gap:10px">
+                    <input type="range" id="setting-ime-opacity" min="30" max="100" step="5" value="100" style="width:200px">
+                    <span class="setting-value" id="setting-ime-opacity-val" style="min-width:44px;text-align:right;font-size:13px;color:var(--text-secondary)">100%</span>
+                  </div>
+                  <p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">键盘整体透明度，默认不透明。</p>
                 </div>
               </div>
             </div>
+
+            <!-- Notifications Tab -->
+            <div class="settings-panel" data-tab="notifications">
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-bell"></i> 系统通知</h3>
+                <p class="setting-hint" style="margin-bottom:12px">
+                  在需要您干预时发送系统桌面通知（敏感操作审批、会话完成、问卷、文件呈递等）。
+                  关闭后所有通知都不再弹窗（但 App 内的消息提示仍会显示）。
+                </p>
+                <div class="setting-item">
+                  <label class="toggle-label">
+                    <span>启用系统通知</span>
+                    <div class="toggle-switch">
+                      <input type="checkbox" id="setting-notify-enabled">
+                      <span class="toggle-slider"></span>
+                    </div>
+                  </label>
+                </div>
+              </div>
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-list-check"></i> 通知类型</h3>
+                <div class="setting-item">
+                  <label class="toggle-label">
+                    <span>敏感操作审批请求</span>
+                    <div class="toggle-switch">
+                      <input type="checkbox" id="setting-notify-approval" checked>
+                      <span class="toggle-slider"></span>
+                    </div>
+                  </label>
+                  <p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">如删除文件、执行危险命令等需要您批准时</p>
+                </div>
+                <div class="setting-item">
+                  <label class="toggle-label">
+                    <span>当前会话已完成</span>
+                    <div class="toggle-switch">
+                      <input type="checkbox" id="setting-notify-session-done" checked>
+                      <span class="toggle-slider"></span>
+                    </div>
+                  </label>
+                  <p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">Agent 结束一轮工作并等待下一条指令时</p>
+                </div>
+                <div class="setting-item">
+                  <label class="toggle-label">
+                    <span>问卷（askQuestions）</span>
+                    <div class="toggle-switch">
+                      <input type="checkbox" id="setting-notify-question" checked>
+                      <span class="toggle-slider"></span>
+                    </div>
+                  </label>
+                  <p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">Agent 向您询问选择题/填空题时</p>
+                </div>
+                <div class="setting-item">
+                  <label class="toggle-label">
+                    <span>文件呈递（presentFile）</span>
+                    <div class="toggle-switch">
+                      <input type="checkbox" id="setting-notify-present" checked>
+                      <span class="toggle-slider"></span>
+                    </div>
+                  </label>
+                  <p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">Agent 想给您看一个文件内容时</p>
+                </div>
+                <div class="setting-item">
+                  <label class="toggle-label">
+                    <span>Babe 主动消息</span>
+                    <div class="toggle-switch">
+                      <input type="checkbox" id="setting-notify-babe-proactive" checked>
+                      <span class="toggle-slider"></span>
+                    </div>
+                  </label>
+                  <p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">Babe 主动发来消息时通知您（即便您正在其他模式）</p>
+                </div>
+                <div class="setting-item">
+                  <label class="toggle-label">
+                    <span>发现新版本</span>
+                    <div class="toggle-switch">
+                      <input type="checkbox" id="setting-notify-update" checked>
+                      <span class="toggle-slider"></span>
+                    </div>
+                  </label>
+                  <p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">自动更新检查发现新版本时提醒（「更新」页可查看详情）</p>
+                </div>
+                <div style="display:flex;gap:8px;margin-top:12px">
+                  <button class="btn-primary" id="btn-notify-test"><i class="fa-solid fa-flask"></i> 发送测试通知</button>
+                </div>
+              </div>
+            </div>
+
 
             <!-- MCP Settings -->
             <div class="settings-panel" data-tab="mcp">
@@ -2107,103 +2095,7 @@
                 </div>
               </div>
             </div>
-            <!-- FediKitten Settings -->
-            <div class="settings-panel" data-tab="fedikitten">
-              <div class="settings-group">
-                <h3><i class="fa-solid fa-cat"></i> FediKitten 连接</h3>
-                <p class="setting-hint" style="margin-bottom:12px">
-                  连接任意 FediKitten（Mastodon 兼容）实例，让 AI 伙伴可以刷社媒、发帖、私信。登录后 token 会保存在本机，重启后保持登录状态。
-                </p>
-                <div id="fedikitten-status-card" class="fedikitten-status-card">
-                  <div class="fedikitten-status-icon"><i class="fa-solid fa-cat"></i></div>
-                  <div class="fedikitten-status-body">
-                    <div class="fedikitten-status-title" id="fedikitten-status-title">未连接</div>
-                    <div class="fedikitten-status-sub" id="fedikitten-status-sub">登录后即可让 AI 伙伴使用 FediKitten 能力</div>
-                  </div>
-                </div>
-                <div class="setting-item">
-                  <label>实例地址</label>
-                  <input type="text" id="setting-fedikitten-url" placeholder="https://fedikitten.pages.dev 或 http://localhost:8787">
-                </div>
-                <div class="setting-item">
-                  <label>用户名</label>
-                  <input type="text" id="setting-fedikitten-username" placeholder="你的用户名">
-                </div>
-                <div class="setting-item">
-                  <label>密码</label>
-                  <input type="password" id="setting-fedikitten-password" placeholder="登录密码（仅用于登录，不会保存）">
-                </div>
-                <div style="display:flex;gap:8px;margin-top:8px">
-                  <button class="btn-primary" id="btn-fedikitten-login"><i class="fa-solid fa-right-to-bracket"></i> 登录</button>
-                  <button class="btn-secondary" id="btn-fedikitten-logout" style="display:none"><i class="fa-solid fa-right-from-bracket"></i> 退出</button>
-                </div>
-                <div id="fedikitten-status" style="margin-top:12px;font-size:13px;color:var(--text-secondary)"></div>
-              </div>
-            </div>
-            <!-- CIBYP-IM Settings -->
-            <div class="settings-panel" data-tab="cibypim">
-              <div class="settings-group">
-                <h3><i class="fa-solid fa-comments"></i> CIBYP-IM 连接</h3>
-                <p class="setting-hint" style="margin-bottom:12px">
-                  连接 CIBYP-IM 实例（端到端加密即时通讯），让 AI 伙伴可以收发加密消息、管理群聊。密钥保存在本机，重启后保持登录与解密能力。
-                </p>
-                <div id="cibypim-status-card" class="fedikitten-status-card">
-                  <div class="fedikitten-status-icon"><i class="fa-solid fa-comments"></i></div>
-                  <div class="fedikitten-status-body">
-                    <div class="fedikitten-status-title" id="cibypim-status-title">未连接</div>
-                    <div class="fedikitten-status-sub" id="cibypim-status-sub">登录后即可让 AI 伙伴使用 CIBYP-IM 能力</div>
-                  </div>
-                </div>
-                <div class="setting-item">
-                  <label>服务器地址</label>
-                  <input type="text" id="setting-cibypim-url" placeholder="https://cibyp-im.pages.dev 或 http://localhost:8787">
-                </div>
-                <div class="setting-item">
-                  <label>用户名</label>
-                  <input type="text" id="setting-cibypim-username" placeholder="你的用户名">
-                </div>
-                <div class="setting-item">
-                  <label>密码</label>
-                  <input type="password" id="setting-cibypim-password" placeholder="登录密码（仅用于登录，不会保存）">
-                </div>
-                <div style="display:flex;gap:8px;margin-top:8px">
-                  <button class="btn-primary" id="btn-cibypim-login"><i class="fa-solid fa-right-to-bracket"></i> 登录</button>
-                  <button class="btn-secondary" id="btn-cibypim-logout" style="display:none"><i class="fa-solid fa-right-from-bracket"></i> 退出</button>
-                </div>
-                <div class="setting-item" id="cibypim-takeover-row" style="display:none;margin-top:10px">
-                  <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
-                    <input type="checkbox" id="cibypim-takeover" style="width:auto">
-                    <span>接管身份（作废其他设备的加密会话）</span>
-                  </label>
-                </div>
-                <div id="cibypim-status" style="margin-top:12px;font-size:13px;color:var(--text-secondary)"></div>
-              </div>
-              <div class="settings-group">
-                <h3><i class="fa-solid fa-bell"></i> 主人来信</h3>
-                <div class="setting-item">
-                  <label>主人用户名</label>
-                  <input type="text" id="setting-cibypim-owner" placeholder="主人（你）的 IM 用户名，如 admin">
-                </div>
-                <div class="setting-item">
-                  <label>收到主人的消息时</label>
-                  <select id="setting-cibypim-owner-mode">
-                    <option value="none">无反应</option>
-                    <option value="create">创建新 Chat 会话并发送</option>
-                    <option value="continue">继续当前 Chat 会话（不在 Chat 或空会话则新建）</option>
-                  </select>
-                </div>
-                <div class="setting-item">
-                  <label>轮询间隔（秒）</label>
-                  <input type="number" id="setting-cibypim-poll-interval" value="300" min="10" step="5">
-                </div>
-                <div style="display:flex;gap:8px;margin-top:8px">
-                  <button class="btn-secondary" id="btn-cibypim-save-owner"><i class="fa-solid fa-floppy-disk"></i> 保存主人设置</button>
-                </div>
-                <div id="cibypim-owner-status" style="margin-top:12px;font-size:13px;color:var(--text-secondary)">
-                  配置后，Agent 会定期检查主人发来的私聊消息，并按所选模式处理：先回 IM 确认收到，完成后通过 IM 交付结果（文本 / 文件）。
-                </div>
-              </div>
-            </div>
+
             <!-- Email Settings -->
             <div class="settings-panel" data-tab="email">
               <div class="settings-group">
@@ -2348,6 +2240,106 @@
               </div>
             </div>
 
+            <!-- FediKitten Settings -->
+            <div class="settings-panel" data-tab="fedikitten">
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-cat"></i> FediKitten 连接</h3>
+                <p class="setting-hint" style="margin-bottom:12px">
+                  连接任意 FediKitten（Mastodon 兼容）实例，让 AI 伙伴可以刷社媒、发帖、私信。登录后 token 会保存在本机，重启后保持登录状态。
+                </p>
+                <div id="fedikitten-status-card" class="fedikitten-status-card">
+                  <div class="fedikitten-status-icon"><i class="fa-solid fa-cat"></i></div>
+                  <div class="fedikitten-status-body">
+                    <div class="fedikitten-status-title" id="fedikitten-status-title">未连接</div>
+                    <div class="fedikitten-status-sub" id="fedikitten-status-sub">登录后即可让 AI 伙伴使用 FediKitten 能力</div>
+                  </div>
+                </div>
+                <div class="setting-item">
+                  <label>实例地址</label>
+                  <input type="text" id="setting-fedikitten-url" placeholder="https://fedikitten.pages.dev 或 http://localhost:8787">
+                </div>
+                <div class="setting-item">
+                  <label>用户名</label>
+                  <input type="text" id="setting-fedikitten-username" placeholder="你的用户名">
+                </div>
+                <div class="setting-item">
+                  <label>密码</label>
+                  <input type="password" id="setting-fedikitten-password" placeholder="登录密码（仅用于登录，不会保存）">
+                </div>
+                <div style="display:flex;gap:8px;margin-top:8px">
+                  <button class="btn-primary" id="btn-fedikitten-login"><i class="fa-solid fa-right-to-bracket"></i> 登录</button>
+                  <button class="btn-secondary" id="btn-fedikitten-logout" style="display:none"><i class="fa-solid fa-right-from-bracket"></i> 退出</button>
+                </div>
+                <div id="fedikitten-status" style="margin-top:12px;font-size:13px;color:var(--text-secondary)"></div>
+              </div>
+            </div>
+
+            <!-- CIBYP-IM Settings -->
+            <div class="settings-panel" data-tab="cibypim">
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-comments"></i> CIBYP-IM 连接</h3>
+                <p class="setting-hint" style="margin-bottom:12px">
+                  连接 CIBYP-IM 实例（端到端加密即时通讯），让 AI 伙伴可以收发加密消息、管理群聊。密钥保存在本机，重启后保持登录与解密能力。
+                </p>
+                <div id="cibypim-status-card" class="fedikitten-status-card">
+                  <div class="fedikitten-status-icon"><i class="fa-solid fa-comments"></i></div>
+                  <div class="fedikitten-status-body">
+                    <div class="fedikitten-status-title" id="cibypim-status-title">未连接</div>
+                    <div class="fedikitten-status-sub" id="cibypim-status-sub">登录后即可让 AI 伙伴使用 CIBYP-IM 能力</div>
+                  </div>
+                </div>
+                <div class="setting-item">
+                  <label>服务器地址</label>
+                  <input type="text" id="setting-cibypim-url" placeholder="https://cibyp-im.pages.dev 或 http://localhost:8787">
+                </div>
+                <div class="setting-item">
+                  <label>用户名</label>
+                  <input type="text" id="setting-cibypim-username" placeholder="你的用户名">
+                </div>
+                <div class="setting-item">
+                  <label>密码</label>
+                  <input type="password" id="setting-cibypim-password" placeholder="登录密码（仅用于登录，不会保存）">
+                </div>
+                <div style="display:flex;gap:8px;margin-top:8px">
+                  <button class="btn-primary" id="btn-cibypim-login"><i class="fa-solid fa-right-to-bracket"></i> 登录</button>
+                  <button class="btn-secondary" id="btn-cibypim-logout" style="display:none"><i class="fa-solid fa-right-from-bracket"></i> 退出</button>
+                </div>
+                <div class="setting-item" id="cibypim-takeover-row" style="display:none;margin-top:10px">
+                  <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+                    <input type="checkbox" id="cibypim-takeover" style="width:auto">
+                    <span>接管身份（作废其他设备的加密会话）</span>
+                  </label>
+                </div>
+                <div id="cibypim-status" style="margin-top:12px;font-size:13px;color:var(--text-secondary)"></div>
+              </div>
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-bell"></i> 主人来信</h3>
+                <div class="setting-item">
+                  <label>主人用户名</label>
+                  <input type="text" id="setting-cibypim-owner" placeholder="主人（你）的 IM 用户名，如 admin">
+                </div>
+                <div class="setting-item">
+                  <label>收到主人的消息时</label>
+                  <select id="setting-cibypim-owner-mode">
+                    <option value="none">无反应</option>
+                    <option value="create">创建新 Chat 会话并发送</option>
+                    <option value="continue">继续当前 Chat 会话（不在 Chat 或空会话则新建）</option>
+                  </select>
+                </div>
+                <div class="setting-item">
+                  <label>轮询间隔（秒）</label>
+                  <input type="number" id="setting-cibypim-poll-interval" value="300" min="10" step="5">
+                </div>
+                <div style="display:flex;gap:8px;margin-top:8px">
+                  <button class="btn-secondary" id="btn-cibypim-save-owner"><i class="fa-solid fa-floppy-disk"></i> 保存主人设置</button>
+                </div>
+                <div id="cibypim-owner-status" style="margin-top:12px;font-size:13px;color:var(--text-secondary)">
+                  配置后，Agent 会定期检查主人发来的私聊消息，并按所选模式处理：先回 IM 确认收到，完成后通过 IM 交付结果（文本 / 文件）。
+                </div>
+              </div>
+            </div>
+
+
             <!-- Web Control Panel -->
             <div class="settings-panel" data-tab="webcontrol">
               <div class="settings-group">
@@ -2416,6 +2408,7 @@
                 <p id="wc-status-result" style="font-size:13px;margin-top:8px"></p>
               </div>
             </div>
+
 
             <!-- Playwright Panel -->
             <div class="settings-panel" data-tab="playwright">
@@ -2529,91 +2522,73 @@
               </div>
             </div>
 
-            <!-- Notifications Tab -->
-            <div class="settings-panel" data-tab="notifications">
+            <div class="settings-panel" data-tab="automation">
               <div class="settings-group">
-                <h3><i class="fa-solid fa-bell"></i> 系统通知</h3>
-                <p class="setting-hint" style="margin-bottom:12px">
-                  在需要您干预时发送系统桌面通知（敏感操作审批、会话完成、问卷、文件呈递等）。
-                  关闭后所有通知都不再弹窗（但 App 内的消息提示仍会显示）。
-                </p>
+                <h3><i class="fa-solid fa-bolt"></i> 自动化触发</h3>
                 <div class="setting-item">
-                  <label class="toggle-label">
-                    <span>启用系统通知</span>
-                    <div class="toggle-switch">
-                      <input type="checkbox" id="setting-notify-enabled">
-                      <span class="toggle-slider"></span>
-                    </div>
-                  </label>
-                </div>
-              </div>
-              <div class="settings-group">
-                <h3><i class="fa-solid fa-list-check"></i> 通知类型</h3>
-                <div class="setting-item">
-                  <label class="toggle-label">
-                    <span>敏感操作审批请求</span>
-                    <div class="toggle-switch">
-                      <input type="checkbox" id="setting-notify-approval" checked>
-                      <span class="toggle-slider"></span>
-                    </div>
-                  </label>
-                  <p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">如删除文件、执行危险命令等需要您批准时</p>
+                  <label class="setting-label">HTTP 信号服务器</label>
+                  <div class="toggle-switch"><input type="checkbox" id="setting-automation-enabled"><span class="toggle-slider"></span></div>
+                  <p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">监听 127.0.0.1 本地端口，允许外部脚本（curl/网页/其他程序）POST 触发自动化任务。默认禁用：未经你主动开启，服务器不会启动</p>
                 </div>
                 <div class="setting-item">
-                  <label class="toggle-label">
-                    <span>当前会话已完成</span>
-                    <div class="toggle-switch">
-                      <input type="checkbox" id="setting-notify-session-done" checked>
-                      <span class="toggle-slider"></span>
-                    </div>
-                  </label>
-                  <p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">Agent 结束一轮工作并等待下一条指令时</p>
+                  <label class="setting-label">允许无 Token 启动</label>
+                  <div class="toggle-switch"><input type="checkbox" id="setting-automation-allow-notoken"><span class="toggle-slider"></span></div>
+                  <p style="font-size:11px;color:#c0392b;margin-top:4px">⚠️ 不安全：开启后，不携带 Token 的请求也会被放行（即使已配置 Token 列表），任何本机程序（包括浏览器中的网页）都能直接触发任务。仅在无其他选择时使用</p>
                 </div>
                 <div class="setting-item">
-                  <label class="toggle-label">
-                    <span>问卷（askQuestions）</span>
-                    <div class="toggle-switch">
-                      <input type="checkbox" id="setting-notify-question" checked>
-                      <span class="toggle-slider"></span>
-                    </div>
-                  </label>
-                  <p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">Agent 向您询问选择题/填空题时</p>
+                  <label class="setting-label">端口</label>
+                  <input type="number" id="setting-automation-port" min="1" max="65535" step="1" style="width:120px" value="8765">
+                  <p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">修改后需重启服务器生效（关闭再开启开关）</p>
                 </div>
                 <div class="setting-item">
-                  <label class="toggle-label">
-                    <span>文件呈递（presentFile）</span>
-                    <div class="toggle-switch">
-                      <input type="checkbox" id="setting-notify-present" checked>
-                      <span class="toggle-slider"></span>
-                    </div>
-                  </label>
-                  <p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">Agent 想给您看一个文件内容时</p>
+                  <label class="setting-label">Token 列表</label>
+                  <div style="flex:1;display:flex;flex-direction:column;gap:8px">
+                    <div id="automation-tokens-list" style="display:flex;flex-direction:column;gap:8px"></div>
+                    <button class="btn-secondary btn-sm" id="btn-automation-add-token" style="align-self:flex-start"><i class="fa-solid fa-plus"></i> 添加 Token</button>
+                    <p style="font-size:11px;color:var(--text-tertiary);margin:0">每个 Token 可独立设置名称、有效期、允许传参与可触发的任务范围。外部调用需携带请求头 <code>Authorization: Bearer &lt;token&gt;</code>，POST <code>http://127.0.0.1:端口/trigger/{任务ID}</code></p>
+                  </div>
                 </div>
                 <div class="setting-item">
-                  <label class="toggle-label">
-                    <span>Babe 主动消息</span>
-                    <div class="toggle-switch">
-                      <input type="checkbox" id="setting-notify-babe-proactive" checked>
-                      <span class="toggle-slider"></span>
-                    </div>
-                  </label>
-                  <p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">Babe 主动发来消息时通知您（即便您正在其他模式）</p>
-                </div>
-                <div class="setting-item">
-                  <label class="toggle-label">
-                    <span>发现新版本</span>
-                    <div class="toggle-switch">
-                      <input type="checkbox" id="setting-notify-update" checked>
-                      <span class="toggle-slider"></span>
-                    </div>
-                  </label>
-                  <p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">自动更新检查发现新版本时提醒（「更新」页可查看详情）</p>
-                </div>
-                <div style="display:flex;gap:8px;margin-top:12px">
-                  <button class="btn-primary" id="btn-notify-test"><i class="fa-solid fa-flask"></i> 发送测试通知</button>
+                  <label class="setting-label">服务器状态</label>
+                  <p id="automation-settings-server-status" style="font-size:12px;color:var(--text-secondary)">检查中…</p>
                 </div>
               </div>
             </div>
+
+            <div class="settings-panel" data-tab="plugins">
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-puzzle-piece"></i> DeepSeek 插件</h3>
+                <p class="page-desc">完全兼容 DeepSeek Harness 插件生态：插件通过 Cordis 内核加载，工具经名称/实现翻译层接入 CIBYP。插件为受信代码，安装后默认禁用，请手动启用。</p>
+                <div class="setting-item">
+                  <label class="setting-label">从本地目录安装</label>
+                  <div style="display:flex;gap:8px;align-items:center">
+                    <input type="text" id="plugin-install-dir" placeholder="插件目录路径" style="flex:1;min-width:200px">
+                    <button class="btn-secondary btn-sm" id="btn-plugin-pick-dir">选择</button>
+                    <button class="btn-primary btn-sm" id="btn-plugin-install-dir">安装</button>
+                  </div>
+                </div>
+                <div class="setting-item">
+                  <label class="setting-label">从 npm 安装</label>
+                  <div style="display:flex;gap:8px;align-items:center">
+                    <input type="text" id="plugin-install-npm" placeholder="npm 包名" style="flex:1;min-width:200px">
+                    <button class="btn-primary btn-sm" id="btn-plugin-install-npm">安装</button>
+                  </div>
+                </div>
+                <div class="setting-item">
+                  <label class="setting-label">从 GitHub 安装</label>
+                  <div style="display:flex;gap:8px;align-items:center">
+                    <input type="text" id="plugin-install-github" placeholder="owner/repo" style="flex:1;min-width:200px">
+                    <button class="btn-primary btn-sm" id="btn-plugin-install-github">安装</button>
+                  </div>
+                </div>
+                <div class="setting-item"><p id="plugin-install-status" style="font-size:12px;color:var(--text-secondary)"></p></div>
+              </div>
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-list"></i> 已安装插件</h3>
+                <div id="plugins-list"></div>
+              </div>
+            </div>
+
             <div class="settings-panel" data-tab="terminal">
               <div class="settings-group">
                 <h3><i class="fa-solid fa-terminal"></i> 终端策略</h3>
@@ -2668,93 +2643,331 @@
                 </div>
               </div>
             </div>
-            <div class="settings-panel" data-tab="ime">
+
+            <div class="settings-panel" data-tab="sandbox">
               <div class="settings-group">
-                <h3><i class="fa-solid fa-keyboard"></i> 屏幕软键盘 / 输入法</h3>
-                <p class="setting-hint" style="margin-bottom:12px">
-                  内置屏幕软键盘，支持中文拼音（雾凇拼音词库）与英文/德文输入。
-                  点击窗口标题栏的键盘图标或按 F8 随时开关。词库由 scripts/build-ime-dicts.js 下载生成。
+                <h3><i class="fa-solid fa-shield-halved"></i> 进程沙箱</h3>
+                <div class="setting-item"><label class="setting-label">默认模式</label><select id="setting-sandbox-default" style="width:220px"><option value="danger-full-access">完全访问（不限制）</option><option value="workspace-write">工作区可写</option><option value="read-only">只读</option></select><p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">约束 Agent 启动的进程（Shell/Python/Node/终端/FFmpeg）的文件写入范围；网络与进程不受限</p></div>
+                <div class="setting-item"><label class="setting-label">Chat 模式覆盖</label><select id="setting-sandbox-chat" style="width:220px"><option value="">跟随默认</option><option value="danger-full-access">完全访问</option><option value="workspace-write">工作区可写</option><option value="read-only">只读</option></select></div>
+                <div class="setting-item"><label class="setting-label">Code 模式覆盖</label><select id="setting-sandbox-code" style="width:220px"><option value="">跟随默认</option><option value="danger-full-access">完全访问</option><option value="workspace-write">工作区可写</option><option value="read-only">只读</option></select></div>
+                <div class="setting-item"><label class="setting-label">Babe 模式覆盖</label><select id="setting-sandbox-babe" style="width:220px"><option value="">跟随默认</option><option value="danger-full-access">完全访问</option><option value="workspace-write">工作区可写</option><option value="read-only">只读</option></select></div>
+                <div class="setting-item"><label class="setting-label">拦截时确认升级</label><div class="toggle-switch"><input type="checkbox" id="setting-sandbox-approval"><span class="toggle-slider"></span></div><p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">命令被沙箱拦截或后端不可用时，弹窗确认后以完全权限重试（关闭则直接报错）</p></div>
+                <div class="setting-item"><label class="setting-label">后端状态</label><p id="sandbox-backend-status" style="font-size:12px;color:var(--text-secondary)">检查中…</p><button class="btn-secondary btn-sm" id="btn-sandbox-probe" style="margin-top:6px"><i class="fa-solid fa-stethoscope"></i> 运行自检</button></div>
+              </div>
+            </div>
+
+
+            <div class="settings-panel" data-tab="security">
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-shield-halved"></i> 安全</h3>
+                <div class="setting-item">
+                  <label class="toggle-label">
+                    <span>自动批准敏感操作</span>
+                    <div class="toggle-switch">
+                      <input type="checkbox" id="setting-auto-approve">
+                      <span class="toggle-slider"></span>
+                    </div>
+                  </label>
+                  <p class="setting-warning">
+                    <i class="fa-solid fa-triangle-exclamation"></i>
+                    开启后，AI Agent将自动执行包括文件删除、终端命令等敏感操作，存在安全风险。请确保你信任当前运行的任务。
+                  </p>
+                </div>
+              </div>
+
+              <!-- 隐私信息保护 -->
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-user-shield"></i> 隐私信息保护</h3>
+                <div class="setting-item">
+                  <label class="toggle-label">
+                    <span>启用隐私信息保护</span>
+                    <div class="toggle-switch">
+                      <input type="checkbox" id="setting-privacy-enabled">
+                      <span class="toggle-slider"></span>
+                    </div>
+                  </label>
+                  <p class="setting-hint">
+                    启用后，在工具调用过程中自动过滤手机号、证件号、社保号、API Key、SSH 私钥、.env 密钥行、Tor Hidden Service 地址、git key 以及配置文件（json/yaml/config 等）中的密码，防止隐私信息进入 AI 上下文与历史记录。
+                  </p>
+                </div>
+                <div class="setting-item" id="privacy-trigger-item">
+                  <label>过滤触发器（需开启总开关后生效）</label>
+                  <div class="privacy-trigger-options">
+                    <label class="checkbox-label">
+                      <input type="checkbox" id="setting-privacy-filter-results" checked>
+                      <span>工具结果过滤</span>
+                      <span class="privacy-trigger-desc">工具返回内容注入 AI 上下文前过滤</span>
+                    </label>
+                    <label class="checkbox-label">
+                      <input type="checkbox" id="setting-privacy-filter-args" checked>
+                      <span>工具参数脱敏</span>
+                      <span class="privacy-trigger-desc">写入上下文时隐藏参数中的密码、Token、密钥</span>
+                    </label>
+                    <label class="checkbox-label">
+                      <input type="checkbox" id="setting-privacy-filter-terminal" checked>
+                      <span>终端内容过滤</span>
+                      <span class="privacy-trigger-desc">终端命令与脚本中的密钥、Token 脱敏</span>
+                    </label>
+                    <label class="checkbox-label">
+                      <input type="checkbox" id="setting-privacy-filter-attachments" checked>
+                      <span>附件文本过滤</span>
+                      <span class="privacy-trigger-desc">上传附件的 OCR/提取文本过滤</span>
+                    </label>
+                  </div>
+                </div>
+                <div class="setting-item" id="privacy-categories-item">
+                  <label>过滤内容类别（可单独关闭）</label>
+                  <div class="privacy-category-grid">
+                    <label class="checkbox-label"><input type="checkbox" data-cat="phone" checked><span>手机号</span></label>
+                    <label class="checkbox-label"><input type="checkbox" data-cat="idCard" checked><span>身份证号</span></label>
+                    <label class="checkbox-label"><input type="checkbox" data-cat="ssn" checked><span>社保号/SSN</span></label>
+                    <label class="checkbox-label"><input type="checkbox" data-cat="apiKey" checked><span>API Key</span></label>
+                    <label class="checkbox-label"><input type="checkbox" data-cat="sshKey" checked><span>SSH 私钥</span></label>
+                    <label class="checkbox-label"><input type="checkbox" data-cat="env" checked><span>.env 密钥</span></label>
+                    <label class="checkbox-label"><input type="checkbox" data-cat="tor" checked><span>Tor 地址/密钥</span></label>
+                    <label class="checkbox-label"><input type="checkbox" data-cat="gitKey" checked><span>Git Key</span></label>
+                    <label class="checkbox-label"><input type="checkbox" data-cat="configPassword" checked><span>配置密码</span></label>
+                    <label class="checkbox-label"><input type="checkbox" data-cat="evasion"><span>变换逃逸检测</span></label>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 后台托盘模式 -->
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-window-restore"></i> 后台托盘</h3>
+                <div class="setting-item">
+                  <label class="toggle-label">
+                    <span>启用托盘图标</span>
+                    <div class="toggle-switch">
+                      <input type="checkbox" id="setting-tray-enabled">
+                      <span class="toggle-slider"></span>
+                    </div>
+                  </label>
+                  <p class="setting-hint">关闭后应用将不在系统托盘显示图标，关闭窗口即退出。</p>
+                </div>
+                <div class="setting-item">
+                  <label for="setting-close-to-tray">关闭窗口时</label>
+                  <select id="setting-close-to-tray">
+                    <option value="ask">每次询问</option>
+                    <option value="always">始终后台运行</option>
+                    <option value="never">始终直接退出</option>
+                  </select>
+                  <p class="setting-hint">"每次询问"将在关闭窗口时弹窗询问您的偏好。"始终"选项会记住选择。</p>
+                </div>
+                <div class="setting-item">
+                  <button class="btn-secondary" id="btn-tray-test-hide" type="button">
+                    <i class="fa-solid fa-eye-slash"></i> 测试：隐藏到托盘
+                  </button>
+                  <p class="setting-hint">点击后窗口将立即最小化到托盘，可单击托盘图标恢复。</p>
+                </div>
+              </div>
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-chart-line"></i> 使用量管理</h3>
+                <div class="setting-item">
+                  <button class="btn-reset-usage" id="btn-reset-usage">
+                    <i class="fa-solid fa-rotate-left"></i> 重置每日使用量
+                  </button>
+                  <p class="setting-hint">
+                    重置今日的Token用量和图片生成数统计，谨慎使用。
+                  </p>
+                </div>
+              </div>
+            </div>
+
+
+            <div class="settings-panel" data-tab="network">
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-network-wired"></i> 网络代理</h3>
+                <div class="setting-item">
+                  <label>代理模式</label>
+                  <div class="btn-group" style="margin-top:8px;">
+                    <button class="proxy-mode-btn btn-secondary" data-mode="none">不使用代理</button>
+                    <button class="proxy-mode-btn btn-secondary active" data-mode="system">系统代理</button>
+                    <button class="proxy-mode-btn btn-secondary" data-mode="manual">手动配置</button>
+                  </div>
+                </div>
+                <div id="manual-proxy-settings" style="display:none;margin-top:16px;">
+                  <div class="setting-item">
+                    <label>HTTP 代理</label>
+                    <input type="text" id="setting-proxy-http" placeholder="http://127.0.0.1:7890">
+                    <p class="setting-hint">HTTP和HTTPS请求使用的代理地址</p>
+                  </div>
+                  <div class="setting-item">
+                    <label>HTTPS 代理</label>
+                    <input type="text" id="setting-proxy-https" placeholder="http://127.0.0.1:7890">
+                    <p class="setting-hint">可选，留空则使用HTTP代理设置</p>
+                  </div>
+                  <div class="setting-item">
+                    <label>不代理的地址</label>
+                    <input type="text" id="setting-proxy-bypass" placeholder="localhost,127.0.0.1,*.local">
+                    <p class="setting-hint">逗号分隔的不使用代理的主机名或IP</p>
+                  </div>
+                </div>
+                <p class="setting-hint">
+                  <i class="fa-solid fa-circle-info"></i>
+                  代理即时生效（无需重启），覆盖：AI/VLM/生图请求、模型列表、网页抓取与 net:* 工具、Playwright 浏览器、aria2 下载、npm/curl 等子进程。DNS/ping/traceroute 等底层探测与 IMAP 收信始终直连。
                 </p>
-                <div class="setting-item">
-                  <label class="setting-label">应用启动时自动打开屏幕软键盘</label>
-                  <div class="toggle-switch">
-                    <input type="checkbox" id="setting-ime-enabled">
-                    <span class="toggle-slider"></span>
-                  </div>
-                  <p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">关闭后键盘图标/F8 仍可临时打开；开启时应用启动即显示。</p>
-                </div>
-                <div class="setting-item">
-                  <label class="setting-label">默认输入模式</label>
-                  <select id="setting-ime-mode" style="width:240px">
-                    <option value="zh" selected>中文（拼音）</option>
-                    <option value="en">英文</option>
-                    <option value="de">德文</option>
-                  </select>
-                </div>
-                <div class="setting-item">
-                  <label class="setting-label">候选词数量</label>
-                  <select id="setting-ime-candidate-count" style="width:240px">
-                    <option value="5">5</option>
-                    <option value="7">7</option>
-                    <option value="9" selected>9</option>
-                    <option value="12">12</option>
-                    <option value="15">15</option>
-                  </select>
-                </div>
-                <div class="setting-item">
-                  <label class="setting-label">键盘不透明度</label>
-                  <div style="display:flex;align-items:center;gap:10px">
-                    <input type="range" id="setting-ime-opacity" min="30" max="100" step="5" value="100" style="width:200px">
-                    <span class="setting-value" id="setting-ime-opacity-val" style="min-width:44px;text-align:right;font-size:13px;color:var(--text-secondary)">100%</span>
-                  </div>
-                  <p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">键盘整体透明度，默认不透明。</p>
               </div>
             </div>
-            </div>
-            <div class="settings-panel" data-tab="voice" hidden>
-              <div class="voice-model-gate hidden" id="voice-model-gate">
-                <i class="fa-solid fa-triangle-exclamation"></i>
-                <div class="voice-model-gate-text">
-                  <strong>语音模型未就绪</strong>
-                  <p id="voice-model-gate-text">请先在「资源下载」中下载语音模型，下载完成前语音设置不可用。</p>
-                </div>
-                <button class="btn-secondary btn-sm" id="btn-voice-goto-resources">前往资源下载</button>
-              </div>
-              <div class="settings-group" data-voice-cap="stt">
-                <h3><i class="fa-solid fa-microphone-lines"></i> 语音输入（STT）</h3>
-                <div class="setting-item"><label class="setting-label">语音识别</label><div class="toggle-switch"><input type="checkbox" id="setting-voice-stt"><span class="toggle-slider"></span></div></div>
-                <div class="setting-item"><label class="setting-label">识别模型</label><select id="setting-voice-stt-model" style="width:200px"><option value="base">base（更准，推荐）</option><option value="tiny">tiny（更快，省内存）</option></select><p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">切换后下次语音识别时生效；主窗口听写与后台唤醒框共用此模型</p></div>
-                <div class="setting-item"><label class="setting-label">发音尾词即发送</label><input type="text" id="setting-voice-stt-send-keywords" placeholder="例如：发送、发（留空关闭）" style="width:220px"><p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">听写结束语包含这些词（逗号分隔）时，自动发送该条消息并去掉关键词</p></div>
-              </div>
-              <div class="settings-group" data-voice-cap="tts">
-                <h3><i class="fa-solid fa-volume-high"></i> 语音朗读（TTS）</h3>
-                <div class="setting-item"><label class="setting-label">语音朗读</label><div class="toggle-switch"><input type="checkbox" id="setting-voice-tts"><span class="toggle-slider"></span></div></div>
-                <div class="setting-item"><label class="setting-label">自动朗读 AI 回复</label><div class="toggle-switch"><input type="checkbox" id="setting-voice-tts-auto"><span class="toggle-slider"></span></div><p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">AI 流式输出时实时朗读，无需等待完成</p></div>
-                <div class="setting-item"><label class="setting-label">朗读语言</label><select id="setting-voice-tts-lang" style="width:200px"><option value="auto">自动检测</option><option value="zh">中文</option><option value="en">English</option><option value="de">Deutsch</option></select></div>
-                <div class="setting-item"><label class="setting-label">中文音色</label><select id="setting-voice-zh" style="width:200px"><option value="zf_xiaoxiao">晓晓 (女声)</option><option value="zf_xiaobei">小北</option><option value="zf_xiaoni">小妮</option><option value="zf_xiaoyi">小伊</option><option value="zm_yunjian">云建 (男声)</option><option value="zm_yunxi">云希</option></select></div>
-                <div class="setting-item"><label class="setting-label">英文音色</label><select id="setting-voice-en" style="width:200px"><option value="af_heart">Heart (美·女声)</option><option value="af_bella">Bella (美·女声)</option><option value="af_nicole">Nicole (美·女声)</option><option value="bm_lewis">Lewis (英·男声)</option><option value="bf_emma">Emma (英·女声)</option><option value="am_michael">Michael (美·男声)</option></select></div>
-                <div class="setting-item"><label class="setting-label">语速</label><div style="display:flex;align-items:center;gap:10px"><input type="range" id="setting-voice-speed" min="50" max="200" step="5" value="100" style="width:200px"><span id="setting-voice-speed-val" style="min-width:40px;text-align:right;font-size:13px;color:var(--text-secondary)">1.0x</span></div></div>
-                <div class="setting-item"><label class="setting-label">音量</label><div style="display:flex;align-items:center;gap:10px"><input type="range" id="setting-voice-volume" min="10" max="100" step="5" value="100" style="width:200px"><span id="setting-voice-volume-val" style="min-width:40px;text-align:right;font-size:13px;color:var(--text-secondary)">100%</span></div></div>
-                <div class="setting-item"><label class="setting-label">长文本自动分块</label><div class="toggle-switch"><input type="checkbox" id="setting-voice-tts-chunk"><span class="toggle-slider"></span></div><p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">长文本自动切成小块合成，防止单次合成占用过多内存导致 OOM</p></div>
-                <div class="setting-item" id="req-voice-tts-chunk-size"><label class="setting-label">每块字数</label><div style="display:flex;align-items:center;gap:10px"><input type="range" id="setting-voice-tts-chunk-size" min="40" max="300" step="10" value="120" style="width:200px"><span id="setting-voice-tts-chunk-size-val" style="min-width:48px;text-align:right;font-size:13px;color:var(--text-secondary)">120字</span></div></div>
-                <div class="setting-item"><button class="btn-secondary" id="btn-voice-test">试听短句</button><span style="font-size:11px;color:var(--text-tertiary);margin-left:8px">使用当前音色朗读测试文本</span></div>
-              </div>
-              <div class="settings-group" data-voice-cap="wake">
-                <h3><i class="fa-solid fa-bell"></i> 后台唤醒</h3>
-                <div class="setting-item"><label class="setting-label">启用语音唤醒</label><div class="toggle-switch"><input type="checkbox" id="setting-voice-wake"><span class="toggle-slider"></span></div><p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">常驻麦克风监听，约占用 1~3% CPU</p></div>
-                <div class="setting-item" id="voice-wake-words-section"><label class="setting-label">唤醒词列表</label><div id="voice-wake-words-list" style="margin-bottom:8px"></div><div style="display:flex;gap:6px;align-items:center"><input type="text" id="voice-new-wake-phrase" placeholder="输入唤醒词…" style="flex:1;min-width:140px"><select id="voice-new-wake-action" style="width:130px"><option value="voicebar">弹语音条</option><option value="mainwindow">弹出主窗口</option></select><button class="btn-secondary btn-sm" id="btn-voice-add-wake">添加</button></div></div>
-                <div class="setting-item"><label class="setting-label">检测灵敏度</label><select id="setting-voice-kws-threshold" style="width:200px"><option value="0.15">高</option><option value="0.25" selected>中</option><option value="0.40">低</option></select></div>
-              </div>
-              <div class="settings-group" data-voice-cap="stt">
-                <h3><i class="fa-solid fa-keyboard"></i> 快捷键</h3>
-                <div class="setting-item"><label class="setting-label">全局热键</label><div style="display:flex;align-items:center;gap:8px"><input type="text" id="setting-voice-hotkey" placeholder="Control+Shift+Space" style="width:200px"><button class="btn-secondary btn-sm" id="btn-voice-record-hotkey" style="white-space:nowrap">录制</button></div><p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">按此组合键开关听写</p></div>
-              </div>
+
+
+            <div class="settings-panel" data-tab="entropy">
               <div class="settings-group">
-                <h3><i class="fa-solid fa-hard-drive"></i> 模型状态</h3>
-                <p id="voice-model-status" style="font-size:12px;color:var(--text-secondary)">检查中…</p>
-                <div style="margin-top:8px"><button class="btn-secondary btn-sm" id="btn-voice-refresh-status">刷新状态</button></div>
+                <h3><i class="fa-solid fa-dice"></i> 熵源设定</h3>
+                <p class="setting-hint">为命运之牌（Agent + SubAgent 抽牌、工具调用抽牌）设定随机数来源。</p>
+                <div class="setting-item">
+                  <label>熵源类型</label>
+                  <div class="entropy-source-selector">
+                    <button class="entropy-mode-btn active" data-source="csprng">
+                      <i class="fa-solid fa-microchip"></i> CSPRNG
+                      <small>系统级密码学安全伪随机</small>
+                    </button>
+                    <button class="entropy-mode-btn" data-source="trng">
+                      <i class="fa-solid fa-satellite-dish"></i> TRNG
+                      <small>ESP32 硬件真随机数</small>
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <div class="settings-group entropy-trng-settings" id="entropy-trng-settings" style="display:none">
+                <h3><i class="fa-solid fa-satellite-dish"></i> TRNG 设备配置</h3>
+                <div class="setting-item">
+                  <label>连接方式</label>
+                  <div class="entropy-source-selector">
+                    <button class="trng-mode-btn active" data-mode="network">
+                      <i class="fa-solid fa-wifi"></i> 网络 API
+                    </button>
+                    <button class="trng-mode-btn" data-mode="serial">
+                      <i class="fa-solid fa-plug"></i> 串口
+                    </button>
+                  </div>
+                </div>
+                <div class="trng-network-settings" id="trng-network-settings">
+                  <div class="setting-item">
+                    <label>设备 IP 地址</label>
+                    <input type="text" id="setting-trng-host" placeholder="192.168.4.1" value="192.168.4.1">
+                  </div>
+                  <div class="setting-item">
+                    <label>设备端口</label>
+                    <input type="number" id="setting-trng-port" placeholder="80" value="80" min="1" max="65535">
+                  </div>
+                </div>
+                <div class="trng-serial-settings" id="trng-serial-settings" style="display:none">
+                  <div class="setting-item">
+                    <label>串口</label>
+                    <div class="serial-port-row">
+                      <select id="setting-trng-serial-port">
+                        <option value="">选择串口...</option>
+                      </select>
+                      <button class="btn-secondary" id="btn-refresh-ports"><i class="fa-solid fa-rotate"></i> 刷新</button>
+                    </div>
+                    <div class="setting-hint" id="trng-port-status"></div>
+                  </div>
+                  <div class="setting-item">
+                    <label>波特率</label>
+                    <select id="setting-trng-serial-baud">
+                      <option value="9600">9600</option>
+                      <option value="19200">19200</option>
+                      <option value="38400">38400</option>
+                      <option value="57600">57600</option>
+                      <option value="115200" selected>115200</option>
+                      <option value="230400">230400</option>
+                      <option value="460800">460800</option>
+                      <option value="921600">921600</option>
+                    </select>
+                  </div>
+                </div>
+                <div class="setting-item">
+                  <button class="btn-secondary" id="btn-trng-test"><i class="fa-solid fa-vial"></i> 测试 TRNG 连接</button>
+                  <div class="setting-hint" id="trng-test-result"></div>
+                </div>
               </div>
             </div>
+
+
+            <div class="settings-panel" data-tab="firmware">
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-microchip"></i> ESP32 TRNG 固件烧录教程</h3>
+                <p class="setting-hint">
+                  如果你需要使用 TRNG 硬件真随机数生成器，需要先将固件烧录到 ESP32 开发板上。
+                </p>
+                <div class="firmware-export-section">
+                  <div class="setting-item">
+                    <label>步骤 1：导出固件源代码</label>
+                    <button class="btn-primary" id="btn-export-firmware">
+                      <i class="fa-solid fa-file-export"></i> 导出固件源码到指定目录
+                    </button>
+                    <p class="setting-hint">
+                      导出 CIBYP-TRNG 固件源代码，以便在 Arduino IDE 中打开。
+                    </p>
+                  </div>
+                  <div class="setting-item">
+                    <label>步骤 2：安装 Arduino IDE 2</label>
+                    <p class="setting-hint">
+                      1. 访问 <a href="#" class="link-arduino-download">https://www.arduino.cc/en/software</a> 下载 Arduino IDE 2.x<br>
+                      2. 安装完成后打开 Arduino IDE
+                    </p>
+                  </div>
+                  <div class="setting-item">
+                    <label>步骤 3：安装 ESP32 开发板支持</label>
+                    <p class="setting-hint">
+                      1. File → Preferences → Additional Boards Manager URLs<br>
+                      2. 添加：<code>https://espressif.github.io/arduino-esp32/package_esp32_index.json</code><br>
+                      3. Tools → Board → Boards Manager → 搜索 "ESP32"<br>
+                      4. 安装 "esp32 by Espressif Systems"
+                    </p>
+                  </div>
+                  <div class="setting-item">
+                    <label>步骤 4：配置和烧录</label>
+                    <p class="setting-hint">
+                      1. 在 Arduino IDE 中打开导出的 <code>CIBYP-TRNG.ino</code> 文件<br>
+                      2. Tools → Board → esp32 → 选择你的 ESP32 型号（如 ESP32 Dev Module）<br>
+                      3. Tools → Port → 选择对应的 COM 端口<br>
+                      4. （可选）在代码中修改 WiFi SSID 和密码<br>
+                      5. 点击 Arduino IDE 顶部的 "Upload" 按钮（右箭头图标）<br>
+                      6. 等待编译和烧录完成
+                    </p>
+                  </div>
+                  <div class="setting-item">
+                    <label>常见问题</label>
+                    <div class="firmware-faq">
+                      <details>
+                        <summary>烧录失败怎么办？</summary>
+                        <p>
+                          - 确认 USB 线支持数据传输（不是充电线）<br>
+                          - 确认已选择正确的 COM 端口<br>
+                          - 尝试按住 ESP32 的 BOOT 按钮再点击 Upload<br>
+                          - 降低 Upload Speed 到 115200
+                        </p>
+                      </details>
+                      <details>
+                        <summary>无法连接 WiFi？</summary>
+                        <p>
+                          - 检查 WiFi SSID 和密码是否正确<br>
+                          - 确认 WiFi 是 2.4GHz（ESP32 不支持 5GHz）<br>
+                          - 查看串口监视器的日志信息
+                        </p>
+                      </details>
+                      <details>
+                        <summary>串口无数据输出？</summary>
+                        <p>
+                          - 确认波特率设置正确（默认 115200）<br>
+                          - 检查 USB 驱动是否正确安装<br>
+                          - 尝试重新插拔 USB 线或重启 ESP32
+                        </p>
+                      </details>
+                    </div>
+                  </div>
+                  <div class="setting-item">
+                    <label>更多信息</label>
+                    <p class="setting-hint">
+                      请参阅导出的固件目录中的 README.md 文件。
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+
             <div class="settings-panel" data-tab="resources">
               <div class="settings-group">
                 <h3><i class="fa-solid fa-download"></i> 下载设置</h3>
@@ -2795,157 +3008,7 @@
                 </ul>
               </div>
             </div>
-            <div class="settings-panel" data-tab="decision">
-              <div class="settings-group">
-                <h3><i class="fa-solid fa-scale-balanced"></i> 决策模型（System One / Jev）</h3>
-                <p class="setting-hint" style="margin-bottom:12px">Jev 不生成文本，只做「选择 / 打分 / 是否」类快速决策（70–500ms），用于模型池选型、工具选择、命令护栏、游戏决策等。低置信一律回退原有逻辑，不会阻塞主流程。</p>
-                <div class="setting-item">
-                  <label class="setting-label">启用决策模型</label>
-                  <div class="toggle-switch"><input type="checkbox" id="setting-decision-enabled"><span class="toggle-slider"></span></div>
-                </div>
-                <div class="setting-item">
-                  <label>服务源</label>
-                  <select id="setting-decision-provider" style="width:300px">
-                    <option value="zen">OpenCode Zen（免费 Jev 1.13）</option>
-                    <option value="typesafe">TypeSafe 直连（自备 Key）</option>
-                  </select>
-                </div>
-                <div class="setting-item">
-                  <label>API URL</label>
-                  <input type="text" id="setting-decision-url" placeholder="留空使用默认地址" autocomplete="off">
-                </div>
-                <div class="setting-item">
-                  <label>API Key</label>
-                  <input type="password" id="setting-decision-key" placeholder="Zen 免费可留空（public）；TypeSafe 必填" autocomplete="off">
-                </div>
-                <div class="setting-item">
-                  <label>模型</label>
-                  <input type="text" id="setting-decision-model" placeholder="默认 jev-1.13-free（Zen）/ jev-latest（TypeSafe）" autocomplete="off">
-                </div>
-                <div class="setting-item">
-                  <label>置信阈值</label>
-                  <input type="number" id="setting-decision-threshold" min="0.05" max="0.99" step="0.05" value="0.5" style="width:120px">
-                  <div class="setting-hint">choice/score 低于该置信度 → 回退原有逻辑</div>
-                </div>
-                <div class="setting-item">
-                  <label>护栏阈值（noul）</label>
-                  <input type="number" id="setting-decision-guard" min="0.5" max="0.99" step="0.05" value="0.85" style="width:120px">
-                  <div class="setting-hint">危险命令判断等保守场景：概率达到该值才判定为「危险 / 需要确认」</div>
-                </div>
-                <div class="setting-item">
-                  <label>超时 (ms)</label>
-                  <input type="number" id="setting-decision-timeout" min="1000" max="60000" step="1000" value="8000" style="width:120px">
-                </div>
-                <div class="setting-item">
-                  <label>每日调用上限 (0为不限制)</label>
-                  <input type="number" id="setting-decision-limit" min="0" step="100" value="0" style="width:120px">
-                  <div class="setting-hint" id="decision-usage">今日已调用: 0</div>
-                </div>
-                <div class="setting-item">
-                  <button class="btn-secondary" id="btn-decision-test"><i class="fa-solid fa-plug-circle-check"></i> 连通性测试</button>
-                  <span class="setting-hint" id="decision-test-status" style="margin-left:8px"></span>
-                </div>
-              </div>
-              <div class="settings-group">
-                <h3><i class="fa-solid fa-toggle-on"></i> 接入点开关</h3>
-                <div class="setting-item"><label class="setting-label">模型池选型（会话创建时）</label><div class="toggle-switch"><input type="checkbox" id="setting-decision-use-model"><span class="toggle-slider"></span></div></div>
-                <div class="setting-item"><label class="setting-label">Reasoning Effort 决策（会话创建时）</label><div class="toggle-switch"><input type="checkbox" id="setting-decision-use-effort"><span class="toggle-slider"></span></div></div>
-                <div class="setting-item"><label class="setting-label">工具自动选择</label><div class="toggle-switch"><input type="checkbox" id="setting-decision-use-tools"><span class="toggle-slider"></span></div></div>
-                <div class="setting-item"><label class="setting-label">危险命令护栏</label><div class="toggle-switch"><input type="checkbox" id="setting-decision-use-guard"><span class="toggle-slider"></span></div></div>
-                <div class="setting-item"><label class="setting-label">游戏决策（猜人物/卧底/三国杀/成语/飞花令）</label><div class="toggle-switch"><input type="checkbox" id="setting-decision-use-games"><span class="toggle-slider"></span></div></div>
-                <div class="setting-item"><label class="setting-label">LLM 主动调用（decisionModel 工具）</label><div class="toggle-switch"><input type="checkbox" id="setting-decision-use-llm-tool"><span class="toggle-slider"></span></div><div class="setting-hint">允许模型在对话中自行调用决策模型；关闭后决策工具对 LLM 隐藏</div></div>
-                <div class="setting-item"><label class="setting-label">邮件/热消息意图分类</label><div class="toggle-switch"><input type="checkbox" id="setting-decision-use-email"><span class="toggle-slider"></span></div><div class="setting-hint">关闭可避免把邮件内容发送给决策服务（隐私）</div></div>
-                <div class="setting-item"><label class="setting-label">上下文保留打分</label><div class="toggle-switch"><input type="checkbox" id="setting-decision-use-context"><span class="toggle-slider"></span></div></div>
-              </div>
-            </div>
-            <div class="settings-panel" data-tab="context">
-              <div class="settings-group">
-                <h3><i class="fa-solid fa-compress"></i> 上下文压缩</h3>
-                <div class="setting-item"><label class="setting-label">自动压缩</label><div class="toggle-switch"><input type="checkbox" id="setting-context-auto"><span class="toggle-slider"></span></div><p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">上下文占用超过阈值时自动压缩（剪枝 + 结构化摘要检查点）</p></div>
-                <div class="setting-item"><label class="setting-label">触发阈值</label><div style="display:flex;align-items:center;gap:10px"><input type="range" id="setting-context-threshold" min="60" max="95" step="1" value="80" style="width:200px"><span id="setting-context-threshold-val" style="min-width:40px;text-align:right;font-size:13px;color:var(--text-secondary)">80%</span></div><p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">输入包络（系统提示词 + 工具定义 + 对话 + 输出预留）占上下文窗口的比例</p></div>
-                <div class="setting-item"><label class="setting-label">保留尾巴比例</label><div style="display:flex;align-items:center;gap:10px"><input type="range" id="setting-context-retain" min="5" max="40" step="1" value="16" style="width:200px"><span id="setting-context-retain-val" style="min-width:40px;text-align:right;font-size:13px;color:var(--text-secondary)">16%</span></div><p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">最近对话原样保留的 token 预算（占窗口比例），压缩只动更早的历史</p></div>
-                <div class="setting-item"><label class="setting-label">摘要重试次数</label><input type="number" id="setting-context-retries" min="0" max="5" step="1" value="1" style="width:120px"><p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">摘要未收敛（没有明显缩短）时的额外重试次数</p></div>
-                <div class="setting-item"><label class="setting-label">摘要最大输出</label><input type="number" id="setting-context-max-tokens" min="512" max="8192" step="256" value="2048" style="width:120px"><p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">单次摘要请求的最大输出 token（八段式结构化检查点）</p></div>
-                <div class="setting-item"><button class="btn-secondary" id="btn-context-compact-now"><i class="fa-solid fa-wand-magic-sparkles"></i> 立即压缩</button><span style="font-size:11px;color:var(--text-tertiary);margin-left:8px">对当前模式会话手动执行一次压缩</span></div>
-                <p id="context-compact-status" style="font-size:12px;color:var(--text-secondary)"></p>
-              </div>
-            </div>
-            <div class="settings-panel" data-tab="sandbox">
-              <div class="settings-group">
-                <h3><i class="fa-solid fa-shield-halved"></i> 进程沙箱</h3>
-                <div class="setting-item"><label class="setting-label">默认模式</label><select id="setting-sandbox-default" style="width:220px"><option value="danger-full-access">完全访问（不限制）</option><option value="workspace-write">工作区可写</option><option value="read-only">只读</option></select><p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">约束 Agent 启动的进程（Shell/Python/Node/终端/FFmpeg）的文件写入范围；网络与进程不受限</p></div>
-                <div class="setting-item"><label class="setting-label">Chat 模式覆盖</label><select id="setting-sandbox-chat" style="width:220px"><option value="">跟随默认</option><option value="danger-full-access">完全访问</option><option value="workspace-write">工作区可写</option><option value="read-only">只读</option></select></div>
-                <div class="setting-item"><label class="setting-label">Code 模式覆盖</label><select id="setting-sandbox-code" style="width:220px"><option value="">跟随默认</option><option value="danger-full-access">完全访问</option><option value="workspace-write">工作区可写</option><option value="read-only">只读</option></select></div>
-                <div class="setting-item"><label class="setting-label">Babe 模式覆盖</label><select id="setting-sandbox-babe" style="width:220px"><option value="">跟随默认</option><option value="danger-full-access">完全访问</option><option value="workspace-write">工作区可写</option><option value="read-only">只读</option></select></div>
-                <div class="setting-item"><label class="setting-label">拦截时确认升级</label><div class="toggle-switch"><input type="checkbox" id="setting-sandbox-approval"><span class="toggle-slider"></span></div><p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">命令被沙箱拦截或后端不可用时，弹窗确认后以完全权限重试（关闭则直接报错）</p></div>
-                <div class="setting-item"><label class="setting-label">后端状态</label><p id="sandbox-backend-status" style="font-size:12px;color:var(--text-secondary)">检查中…</p><button class="btn-secondary btn-sm" id="btn-sandbox-probe" style="margin-top:6px"><i class="fa-solid fa-stethoscope"></i> 运行自检</button></div>
-              </div>
-            </div>
-            <div class="settings-panel" data-tab="automation">
-              <div class="settings-group">
-                <h3><i class="fa-solid fa-bolt"></i> 自动化触发</h3>
-                <div class="setting-item">
-                  <label class="setting-label">HTTP 信号服务器</label>
-                  <div class="toggle-switch"><input type="checkbox" id="setting-automation-enabled"><span class="toggle-slider"></span></div>
-                  <p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">监听 127.0.0.1 本地端口，允许外部脚本（curl/网页/其他程序）POST 触发自动化任务。默认禁用：未经你主动开启，服务器不会启动</p>
-                </div>
-                <div class="setting-item">
-                  <label class="setting-label">允许无 Token 启动</label>
-                  <div class="toggle-switch"><input type="checkbox" id="setting-automation-allow-notoken"><span class="toggle-slider"></span></div>
-                  <p style="font-size:11px;color:#c0392b;margin-top:4px">⚠️ 不安全：开启后，不携带 Token 的请求也会被放行（即使已配置 Token 列表），任何本机程序（包括浏览器中的网页）都能直接触发任务。仅在无其他选择时使用</p>
-                </div>
-                <div class="setting-item">
-                  <label class="setting-label">端口</label>
-                  <input type="number" id="setting-automation-port" min="1" max="65535" step="1" style="width:120px" value="8765">
-                  <p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">修改后需重启服务器生效（关闭再开启开关）</p>
-                </div>
-                <div class="setting-item">
-                  <label class="setting-label">Token 列表</label>
-                  <div style="flex:1;display:flex;flex-direction:column;gap:8px">
-                    <div id="automation-tokens-list" style="display:flex;flex-direction:column;gap:8px"></div>
-                    <button class="btn-secondary btn-sm" id="btn-automation-add-token" style="align-self:flex-start"><i class="fa-solid fa-plus"></i> 添加 Token</button>
-                    <p style="font-size:11px;color:var(--text-tertiary);margin:0">每个 Token 可独立设置名称、有效期、允许传参与可触发的任务范围。外部调用需携带请求头 <code>Authorization: Bearer &lt;token&gt;</code>，POST <code>http://127.0.0.1:端口/trigger/{任务ID}</code></p>
-                  </div>
-                </div>
-                <div class="setting-item">
-                  <label class="setting-label">服务器状态</label>
-                  <p id="automation-settings-server-status" style="font-size:12px;color:var(--text-secondary)">检查中…</p>
-                </div>
-              </div>
-            </div>
-            <div class="settings-panel" data-tab="plugins">
-              <div class="settings-group">
-                <h3><i class="fa-solid fa-puzzle-piece"></i> DeepSeek 插件</h3>
-                <p class="page-desc">完全兼容 DeepSeek Harness 插件生态：插件通过 Cordis 内核加载，工具经名称/实现翻译层接入 CIBYP。插件为受信代码，安装后默认禁用，请手动启用。</p>
-                <div class="setting-item">
-                  <label class="setting-label">从本地目录安装</label>
-                  <div style="display:flex;gap:8px;align-items:center">
-                    <input type="text" id="plugin-install-dir" placeholder="插件目录路径" style="flex:1;min-width:200px">
-                    <button class="btn-secondary btn-sm" id="btn-plugin-pick-dir">选择</button>
-                    <button class="btn-primary btn-sm" id="btn-plugin-install-dir">安装</button>
-                  </div>
-                </div>
-                <div class="setting-item">
-                  <label class="setting-label">从 npm 安装</label>
-                  <div style="display:flex;gap:8px;align-items:center">
-                    <input type="text" id="plugin-install-npm" placeholder="npm 包名" style="flex:1;min-width:200px">
-                    <button class="btn-primary btn-sm" id="btn-plugin-install-npm">安装</button>
-                  </div>
-                </div>
-                <div class="setting-item">
-                  <label class="setting-label">从 GitHub 安装</label>
-                  <div style="display:flex;gap:8px;align-items:center">
-                    <input type="text" id="plugin-install-github" placeholder="owner/repo" style="flex:1;min-width:200px">
-                    <button class="btn-primary btn-sm" id="btn-plugin-install-github">安装</button>
-                  </div>
-                </div>
-                <div class="setting-item"><p id="plugin-install-status" style="font-size:12px;color:var(--text-secondary)"></p></div>
-              </div>
-              <div class="settings-group">
-                <h3><i class="fa-solid fa-list"></i> 已安装插件</h3>
-                <div id="plugins-list"></div>
-              </div>
-            </div>
+
             <div class="settings-panel" data-tab="environment">
               <div class="settings-group">
                 <h3><i class="fa-solid fa-stethoscope"></i> 开发环境检测</h3>
@@ -2963,6 +3026,7 @@
                 <div id="env-detect-actions" style="margin-top:12px"></div>
               </div>
             </div>
+
             <div class="settings-panel" data-tab="updates">
               <div class="settings-group">
                 <h3><i class="fa-solid fa-arrows-rotate"></i> 自动更新检查</h3>
@@ -3001,29 +3065,6 @@
                   <p id="updates-current-version" style="font-size:12px;color:var(--text-secondary)"></p>
                   <div id="updates-result-body" style="font-size:13px;line-height:1.6;max-height:220px;overflow:auto;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:12px"></div>
                   <button class="btn-secondary btn-sm" id="btn-updates-open-release"><i class="fa-solid fa-arrow-up-right-from-square"></i> 打开 Releases 页</button>
-                </div>
-              </div>
-            </div>
-            <div class="settings-panel" data-tab="fonts">
-              <div class="settings-group">
-                <h3><i class="fa-solid fa-font"></i> 全局字体</h3>
-                <div class="setting-item">
-                  <p class="setting-hint">内置多款自由字体（SIL OFL 开源协议），可按语言分别配置。选择后立即全局生效；保持“系统默认”即维持当前外观。</p>
-                </div>
-                <div class="setting-item">
-                  <label class="setting-label" data-i18n="ui.settings.fonts.zhLabel">中文字体（zh）</label>
-                  <select id="setting-font-zh" style="width:320px;max-width:100%"></select>
-                  <p class="setting-hint">中文字形（含 CJK）使用该字体。</p>
-                </div>
-                <div class="setting-item">
-                  <label class="setting-label" data-i18n="ui.settings.fonts.enLabel">英文字体（en）</label>
-                  <select id="setting-font-en" style="width:320px;max-width:100%"></select>
-                  <p class="setting-hint">拉丁字形优先使用该字体；未选择时回退到德文字体。</p>
-                </div>
-                <div class="setting-item">
-                  <label class="setting-label" data-i18n="ui.settings.fonts.deLabel">德文字体（de）</label>
-                  <select id="setting-font-de" style="width:320px;max-width:100%"></select>
-                  <p class="setting-hint">英文字体未选择时，拉丁字形（含德文变音符号 ä ö ü ß）使用该字体。</p>
                 </div>
               </div>
             </div>
