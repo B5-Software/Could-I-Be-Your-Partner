@@ -192,7 +192,7 @@ const I18N_SELECTOR_MAP = [
   // ── Code page ──
   { sel: '#btn-code-open-workspace', key: 'ui.code.openWorkspace', attr: 'title' },
   { sel: '#code-workspace-path', key: 'ui.code.noWorkspaceSelected' },
-  { sel: '#btn-code-new-chat', key: 'ui.code.newChat', attr: 'title' },
+  { sel: '#btn-code-new-chat', key: 'ui.chat.newChat', attr: 'title' },
   { sel: '#btn-code-attach-file', key: 'ui.code.addFileToContext', attr: 'title' },
   { sel: '#code-chat-input', key: 'ui.code.inputPlaceholder', attr: 'placeholder' },
 
@@ -204,21 +204,21 @@ const I18N_SELECTOR_MAP = [
   { sel: '#babe-chat-input', key: 'ui.babe.inputPlaceholder', attr: 'placeholder' },
 
   // ── Settings tabs ──
-  { sel: '.settings-tab[data-tab="ai"]', key: 'ui.settings.aiPersona' },
-  { sel: '.settings-tab[data-tab="babe"]', key: 'ui.settings.babeMode' },
-  { sel: '.settings-tab[data-tab="user"]', key: 'ui.settings.profile' },
-  { sel: '.settings-tab[data-tab="llm"]', key: 'ui.settings.llm' },
-  { sel: '.settings-tab[data-tab="usage"]', key: 'ui.settings.usage' },
-  { sel: '.settings-tab[data-tab="image"]', key: 'ui.settings.imageGen' },
-  { sel: '.settings-tab[data-tab="theme"]', key: 'ui.settings.theme' },
+  { sel: '.settings-tab[data-tab="ai"]', key: 'ui.settings.tabs.aiPersona' },
+  { sel: '.settings-tab[data-tab="babe"]', key: 'ui.settings.tabs.babeMode' },
+  { sel: '.settings-tab[data-tab="user"]', key: 'ui.settings.tabs.profile' },
+  { sel: '.settings-tab[data-tab="llm"]', key: 'ui.settings.tabs.llm' },
+  { sel: '.settings-tab[data-tab="usage"]', key: 'ui.settings.tabs.usage' },
+  { sel: '.settings-tab[data-tab="image"]', key: 'ui.settings.tabs.imageGen' },
+  { sel: '.settings-tab[data-tab="theme"]', key: 'ui.settings.tabs.theme' },
   { sel: '.settings-tab[data-tab="language"]', key: 'ui.settings.tabs.language' },
-  { sel: '.settings-tab[data-tab="network"]', key: 'ui.settings.network' },
-  { sel: '.settings-tab[data-tab="entropy"]', key: 'ui.settings.entropy' },
-  { sel: '.settings-tab[data-tab="firmware"]', key: 'ui.settings.trngFirmware' },
-  { sel: '.settings-tab[data-tab="security"]', key: 'ui.settings.security' },
-  { sel: '.settings-tab[data-tab="mcp"]', key: 'ui.settings.mcp' },
-  { sel: '.settings-tab[data-tab="email"]', key: 'ui.settings.email' },
-  { sel: '.settings-tab[data-tab="webcontrol"]', key: 'ui.settings.webControl' },
+  { sel: '.settings-tab[data-tab="network"]', key: 'ui.settings.tabs.network' },
+  { sel: '.settings-tab[data-tab="entropy"]', key: 'ui.settings.tabs.entropy' },
+  { sel: '.settings-tab[data-tab="firmware"]', key: 'ui.settings.tabs.trngFirmware' },
+  { sel: '.settings-tab[data-tab="security"]', key: 'ui.settings.tabs.security' },
+  { sel: '.settings-tab[data-tab="mcp"]', key: 'ui.settings.tabs.mcp' },
+  { sel: '.settings-tab[data-tab="email"]', key: 'ui.settings.tabs.email' },
+  { sel: '.settings-tab[data-tab="webcontrol"]', key: 'ui.settings.tabs.webControl' },
   { sel: '.settings-tab[data-tab="playwright"]', key: 'ui.settings.tabs.playwright' },
   { sel: '.settings-tab[data-tab="budget"]', key: 'ui.settings.tabs.budget' },
   { sel: '.settings-tab[data-tab="notifications"]', key: 'ui.settings.tabs.notifications' },
@@ -227,16 +227,26 @@ const I18N_SELECTOR_MAP = [
   { sel: '.settings-tab[data-tab="voice"]', key: 'ui.settings.tabs.voice' },
   { sel: '.settings-tab[data-tab="environment"]', key: 'ui.settings.tabs.environment' },
   { sel: '.settings-tab[data-tab="fonts"]', key: 'ui.settings.tabs.fonts' },
+  { sel: '.settings-tab[data-tab="decision"]', key: 'ui.settings.tabs.decision' },
+  { sel: '.settings-tab[data-tab="context"]', key: 'ui.settings.tabs.context' },
+  { sel: '.settings-tab[data-tab="animations"]', key: 'ui.settings.tabs.animations' },
+  { sel: '.settings-tab[data-tab="fedikitten"]', key: 'ui.settings.tabs.fedikitten' },
+  { sel: '.settings-tab[data-tab="cibypim"]', key: 'ui.settings.tabs.cibypim' },
+  { sel: '.settings-tab[data-tab="automation"]', key: 'ui.settings.tabs.automation' },
+  { sel: '.settings-tab[data-tab="plugins"]', key: 'ui.settings.tabs.plugins' },
+  { sel: '.settings-tab[data-tab="sandbox"]', key: 'ui.settings.tabs.sandbox' },
+  { sel: '.settings-tab[data-tab="resources"]', key: 'ui.settings.tabs.resources' },
+  { sel: '.settings-tab[data-tab="updates"]', key: 'ui.settings.tabs.updates' },
 
   // ── Language settings panel ──
-  { sel: '#setting-language option[value="zh-CN"]', key: 'ui.settings.zhCN' },
-  { sel: '#setting-language option[value="en"]', key: 'ui.settings.en' },
-  { sel: '#setting-language option[value="de"]', key: 'ui.settings.de' },
-  { sel: '#btn-save-language', key: 'ui.settings.saveSettings' },
+  { sel: '#setting-language option[value="zh-CN"]', key: 'ui.language.zhCN' },
+  { sel: '#setting-language option[value="en"]', key: 'ui.language.en' },
+  { sel: '#setting-language option[value="de"]', key: 'ui.language.de' },
+  { sel: '#btn-save-language', key: 'ui.language.save' },
 
   // ── Tools page ──
   { sel: '#page-tools h2, #tools-page h2', key: 'ui.tools.management' },
-  { sel: '#page-tools .page-desc, #tools-page .page-desc', key: 'ui.tools.enableDisableDesc' },
+  { sel: '#page-tools .page-desc, #tools-page .page-desc', key: 'ui.tools.manageDesc' },
 
   // ── History pages ──
   { sel: '#page-history .empty-state', key: 'ui.history.noChatHistory' },
@@ -387,6 +397,9 @@ function i18nGetToolSchemaDesc(toolName, fallbackDesc) {
   if (_i18nLang === 'zh-CN') return fallbackDesc;
   const schemas = _i18nDict._toolSchemas;
   if (schemas && schemas[toolName]) return schemas[toolName];
+  // 没有专门的 schema 翻译时回退到工具描述地图（避免整段漏翻）
+  const tools = _i18nDict._tools;
+  if (tools && tools[toolName]) return tools[toolName];
   return fallbackDesc;
 }
 

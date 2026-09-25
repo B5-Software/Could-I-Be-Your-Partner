@@ -22,7 +22,7 @@ ui: {
     minimize: 'Minimieren',
     maximize: 'Maximieren',
     close: 'Schließen',
-    unnamedConversation: 'Unbenannte Unterhaltung'
+    untitledConversation: 'Unbenannte Unterhaltung'
   },
 
   // Sidebar nav
@@ -48,8 +48,8 @@ ui: {
     tarotNotDrawn: 'Tarot: Nicht gezogen',
     reoptimizeTools: 'Tool-Auswahl manuell neu optimieren',
     openWorkspace: 'Arbeitsverzeichnis öffnen',
-    newConversation: 'Neuer Chat',
-    clearConversation: 'Chat leeren',
+    newChat: 'Neuer Chat',
+    clearChat: 'Chat leeren',
     greeting: 'Hallo, ich bin dein KI-Partner',
     greetingDesc: 'Ich kann dir bei verschiedenen Aufgaben helfen, darunter Dateioperationen, Programmierung, Informationssuche, Bildgenerierung und mehr. Sag mir, wie ich helfen soll!',
     searchNews: 'Nachrichten suchen',
@@ -57,21 +57,32 @@ ui: {
     todoList: 'Aufgabenliste',
     writeCode: 'Code schreiben',
     addTodoPlaceholder: 'Neue Aufgabe hinzufügen...',
-    sensitiveConfirm: 'Bestätigung für sensible Operation',
-    reject: 'Ablehnen',
-    approve: 'Ausführung genehmigen',
+    sensitiveConfirmTitle: 'Bestätigung für sensible Operation',
+    deny: 'Ablehnen',
+    approveExecution: 'Ausführung genehmigen',
     inputPlaceholder: 'Nachricht eingeben, der KI-Agent hilft dir...',
     attachFile: 'Datei anhängen',
     takePhoto: 'Foto aufnehmen',
     send: 'Senden',
-    stop: 'Stopp'
+    stop: 'Stopp',
+    copyFormatted: 'Mit Formatierung kopieren',
+    copyPlain: 'Als reinen Text kopieren',
+    quoteAction: 'Zitieren',
+    quote: 'Zitat',
+    copyCode: 'Codeblock kopieren',
+    selectMessage: 'Ganze Nachricht auswählen',
+    copied: 'Kopiert',
+    copyFailed: 'Kopieren fehlgeschlagen',
+    quoted: 'Ins Eingabefeld zitiert',
+    me: 'Ich',
+    ai: 'KI'
   },
 
   // Code page
   code: {
     openWorkspace: 'Arbeitsbereich öffnen',
     workspace: 'Arbeitsbereich',
-    noWorkspace: 'Kein Arbeitsbereich ausgewählt',
+    noWorkspaceSelected: 'Kein Arbeitsbereich ausgewählt',
     showFileTree: 'Dateibaum anzeigen',
     showEditor: 'Editor anzeigen',
     showChat: 'Chat anzeigen',
@@ -83,8 +94,8 @@ ui: {
   babe: {
     welcome: 'Willkommen beim Babe-Modus',
     configurePrompt: 'Bitte konfiguriere in den Einstellungen das Aussehen, den Namen und die Persönlichkeit',
-    description: 'TA hat ein eigenes Gedächtnis, einen Zuneigungsgrad und kann von sich aus mit dir sprechen.',
-    letTAInitiate: 'TA aktiv eine Nachricht senden lassen',
+    featureDesc: 'TA hat ein eigenes Gedächtnis, einen Zuneigungsgrad und kann von sich aus mit dir sprechen.',
+    proactiveMessage: 'TA aktiv eine Nachricht senden lassen',
     inputPlaceholder: 'Sag etwas zu TA...'
   },
 
@@ -114,7 +125,29 @@ ui: {
       voice: 'Sprach-E/A',
       language: 'Sprache',
       environment: 'Umgebung',
-      fonts: 'Schriftarten'
+      fonts: 'Schriftarten',
+      decision: 'Entscheidungsmodell',
+      context: 'Kontext',
+      animations: 'Animationen',
+      fedikitten: 'FediKitten',
+      cibypim: 'CIBYP-IM',
+      automation: 'Automatisierung',
+      plugins: 'Plugins',
+      sandbox: 'Sandbox',
+      resources: 'Ressourcen',
+      updates: 'Updates',
+    },
+    groups: {
+      assistant: 'Assistent & Personalisierung',
+      model: 'Modell & Intelligenz',
+      usage: 'Nutzung & Kosten',
+      appearance: 'Darstellung & Sprache',
+      voiceInput: 'Sprache & Eingabe',
+      notifications: 'Benachrichtigungen',
+      connections: 'Verbindungen & Integrationen',
+      automation: 'Automatisierung & Ausführung',
+      system: 'System & Sicherheit',
+      maintenance: 'Wartung'
     },
     fonts: {
       zhLabel: 'Chinesische Schrift (zh)',
@@ -145,7 +178,7 @@ ui: {
   // Tools page
   tools: {
     management: 'Werkzeugverwaltung',
-    managementDesc: 'Werkzeuge des KI-Agenten aktivieren/deaktivieren',
+    manageDesc: 'Werkzeuge des KI-Agenten aktivieren/deaktivieren',
     autoOptimize: 'Tool-Auswahl automatisch optimieren',
     displayMode: 'Anzeigemodus:',
     chatModeTools: 'Chat-Modus-Werkzeuge',
@@ -156,15 +189,15 @@ ui: {
   // Skills page
   skills: {
     management: 'Fertigkeitsverwaltung',
-    managementDesc: 'Fertigkeiten des KI-Agenten verwalten oder automatisch generieren lassen',
+    manageDesc: 'Fertigkeiten des KI-Agenten verwalten oder automatisch generieren lassen',
     importSkillMd: 'SKILL.md importieren',
-    add: 'Fertigkeit hinzufügen',
+    addSkill: 'Fertigkeit hinzufügen',
     empty: 'Keine Fertigkeiten, oben klicken zum Hinzufügen'
   },
 
   // Knowledge base page
   knowledge: {
-    title: 'Wissensbasis',
+    knowledgeBase: 'Wissensbasis',
     searchPlaceholder: 'Wissensbasis durchsuchen...',
     importFile: 'Datei importieren',
     empty: 'Wissensbasis ist leer, der KI-Agent sammelt Wissen bei der Arbeit'
@@ -178,13 +211,14 @@ ui: {
 
   // About page
   about: {
+    title: 'Über',
     tagline: 'Vollautonomer KI-Agent, der bei allem hilft',
-    developer: 'Entwickelt von B5-Software',
-    intelligentAgent: 'Intelligenter KI-Agent',
+    developedBy: 'Entwickelt von B5-Software',
+    smartAgent: 'Intelligenter KI-Agent',
     builtInTools: 'Eingebaute Werkzeuge',
     longTermMemory: 'Langzeitgedächtnis',
     knowledgeBase: 'Wissensbasis',
-    skillsSystem: 'Fertigkeitensystem',
+    skillSystem: 'Fertigkeitensystem',
     contextManagement: 'Kontextverwaltung'
   },
 
@@ -200,13 +234,13 @@ ui: {
     preview: 'Vorschau',
     editMemory: 'Gedächtnis bearbeiten',
     content: 'Inhalt',
-    tags: 'Tags (kommagetrennt)',
+    tagsCommaSeparated: 'Tags (kommagetrennt)',
     skillName: 'Fertigkeitsname',
     description: 'Beschreibung',
     systemPrompt: 'System-Prompt',
     addSkill: 'Fertigkeit hinzufügen',
     editSkill: 'Fertigkeit bearbeiten',
-    takePhoto: 'Aufnehmen'
+    capture: 'Aufnehmen'
   },
 
   // Onboarding wizard
@@ -217,23 +251,21 @@ ui: {
     setupPartner: 'Richte deinen KI-Partner ein',
     setupDesc: 'Gib der KI ein Aussehen und eine Persönlichkeit für natürliche Gespräche',
     next: 'Weiter',
-    prev: 'Zurück',
+    previous: 'Zurück',
     finish: 'Fertig',
     skip: 'Überspringen'
   },
 
-  // ── Bildschirmtastatur ──
-  oskey: {
-    title: 'Bildschirmtastatur',
-    space: 'Leertaste',
-    backspace: 'Rücktaste',
-    clear: 'Löschen',
-    close: 'Schließen',
-    enter: 'Neue Zeile / Senden',
-    resize: 'Ziehen zum Verändern der Größe'
-  },
 
   // Remote connection
+  language: {
+    notice: 'Hinweis',
+    saved: 'Spracheinstellungen gespeichert. Einige Texte werden erst nach dem nächsten Start vollständig wirksam.',
+    save: 'Einstellungen speichern',
+    zhCN: 'Vereinfachtes Chinesisch',
+    en: 'Englisch',
+    de: 'Deutsch'
+  },
   remote: {
     connecting: 'Verbinde mit Remote-Host...',
     connected: 'Mit Remote-Host verbunden',
@@ -243,14 +275,14 @@ ui: {
     reconnect: 'Erneut verbinden',
     loginFailed: 'Anmeldung fehlgeschlagen',
     connectionFailed: 'Verbindung fehlgeschlagen, Adresse oder Netzwerk prüfen',
-    fillAddressPassword: 'Bitte Adresse und Passwort eingeben',
+    enterAddressAndPassword: 'Bitte Adresse und Passwort eingeben',
     authFailed: 'Authentifizierung fehlgeschlagen'
   },
 
   // Status/messages
   status: {
     aiThinking: 'KI denkt nach...',
-    fileInContext: 'Diese Datei ist bereits im Kontext',
+    fileAlreadyInContext: 'Diese Datei ist bereits im Kontext',
     cannotReadFile: 'Datei kann nicht gelesen werden',
     tokenLimitReached: 'Das heutige LLM-Token-Limit wurde erreicht',
     configureLlmFirst: 'Bitte zuerst die LLM-API in den Einstellungen konfigurieren',
@@ -259,8 +291,122 @@ ui: {
   }
 },
 
+// ── Bildschirmtastatur (OSK) ──
+oskey: {
+  title: 'Bildschirmtastatur',
+  space: 'Leertaste',
+  backspace: 'Rücktaste',
+  clear: 'Löschen',
+  close: 'Schließen',
+  enter: 'Neue Zeile / Senden',
+  resize: 'Ziehen zum Verändern der Größe'
+},
 // ── Tool Descriptions ───────────────────────────────────────────────────────
 _tools: {
+  automationList: 'Automatisierungs-Trigger-Aufgaben auflisten',
+  automationGetGuide: 'Vollständige Automatisierungs-Anleitung bei Bedarf abrufen (DSL/Trigger/HTTP/Beispiele)',
+  automationCreate: 'Automatisierungs-Trigger-Aufgabe erstellen oder aktualisieren (Zeitplan/Benachrichtigung/HTTP)',
+  automationToggle: 'Automatisierungsaufgabe aktivieren oder deaktivieren',
+  automationRun: 'Automatisierungsaufgabe sofort auslösen',
+  automationTest: 'Automatisierungs-DSL rendern/testen (ohne Ausführung)',
+  automationDelete: 'Automatisierungsaufgabe löschen',
+  decisionModel: 'Entscheidungsmodell (Jev) für Auswahl/Bewertung/Ja-Nein aufrufen (automatisch aktiv, sobald konfiguriert)',
+  readImageFile: 'Bilddatei lesen (multimodal: direkt in den Kontext injiziert)',
+  getFileEncodingInfo: 'Dateikodierung und Zeilenende-Modus ermitteln',
+  convertFileEncoding: 'Dateikodierung und Zeilenenden konvertieren',
+  eslintLint: 'ESLint-Diagnose für den gesamten Arbeitsbereich',
+  eslintLintFile: 'ESLint-Diagnose für eine einzelne Datei',
+  geogebraEvalCAS: 'CAS-Symbolberechnung (Solve/Expand/Factor/Integral…)',
+  geogebraGetObject: 'Details eines Objekts abrufen (Typ/Wert/Definition/Befehl)',
+  geogebraGetXML: 'Vollständiges Konstruktions-XML exportieren',
+  geogebraSetXML: 'Konstruktion per XML leeren und neu aufbauen',
+  geogebraSetStyle: 'Objektstile stapelweise ändern (Farbe/Breite/Punkt/Label/Ebene)',
+  geogebraGetError: 'Fehlermeldung des letzten Befehls lesen',
+  geogebraScreenshot: 'PNG-Screenshot der Konstruktion abrufen (Base64, keine Datei)',
+  geogebraSave: 'Konstruktion als .ggb-Datei im Arbeitsbereich speichern',
+  geogebraLoad: 'Konstruktion aus lokaler .ggb-Datei laden',
+  geogebraGuide: 'GeoGebra-Befehlskategorien bei Bedarf nachschlagen',
+  importCipypCadDxf: 'Externe DXF-Datei in CIPYP-CAD importieren (R12/R2000+, automatische Ebenen/Blöcke)',
+  getCipypCadHatchPatterns: 'Integrierte CIPYP-CAD-Schraffurmuster auflisten (15 Typen)',
+  pcbSetView: 'PCB-Ansichtsseite wechseln (top/bottom/toggle, KiCad V+B)',
+  pcbGetView: 'Aktuelle PCB-Ansichtsseite abrufen',
+  pcbFlipComponent: 'Bauteil auf die andere Seite spiegeln (F↔B, Pads folgen)',
+  pcbSetComponentSide: 'Bauteilseite direkt setzen (F/B)',
+  pcbRouteSingle: 'Ein Netz automatisch routen (A* + 45°-Optimierung)',
+  pcbClearRoutes: 'Alle Leiterbahnen und Vias löschen (optional ein Netz)',
+  pcbSetLayerVisibility: 'Sichtbarkeit von Kupfer/Lötstopplack/Siebdruck setzen',
+  pcbGetLayerVisibility: 'Sichtbarkeit aller Ebenen und der aktiven Ebene abrufen',
+  pcbSetActiveLayer: 'Aktive Ebene setzen (Standard fürs Routing)',
+  pcbGetDesignFlowGuide: 'Leitfaden für Zwei-Lagen-Design (IPC-2221, 10 Phasen) abrufen',
+  pcbRunDrcIncremental: 'Inkrementelle DRC: nur betroffene Objekte prüfen (5-50× schneller)',
+  pcbSetLiveDrc: 'Live-inkrementelle DRC umschalten (liefert drcDelta bei jedem PCB-Aufruf)',
+  pcbGetDrcDelta: 'Letztes DRC-Delta abrufen (added/removed/summary)',
+  pcbUndo: 'Letzte PCB-Operation rückgängig machen',
+  pcbRedo: 'PCB-Operation wiederholen',
+  getDownloadStatus: 'Download-Status prüfen (Fortschritt/Geschwindigkeit)',
+  pauseDownload: 'Download pausieren',
+  resumeDownload: 'Pausierten Download fortsetzen',
+  cancelDownload: 'Download abbrechen',
+  fedikittenPostStatus: 'Beitrag auf FediKitten veröffentlichen',
+  fedikittenDirectMessage: 'FediKitten-Direktnachricht senden',
+  fedikittenHomeTimeline: 'FediKitten-Startseiten-Timeline abrufen',
+  fedikittenPublicTimeline: 'Öffentliche FediKitten-Timeline abrufen',
+  fedikittenGetStatus: 'Einzelnen Beitrag abrufen',
+  fedikittenStatusContext: 'Antwortkontext eines Beitrags abrufen',
+  fedikittenDeleteStatus: 'Eigenen Beitrag löschen',
+  fedikittenFavourite: 'Beitrag favorisieren',
+  fedikittenUnfavourite: 'Favorisierung entfernen',
+  fedikittenReblog: 'Beitrag teilen (Reblog)',
+  fedikittenUnreblog: 'Reblog rückgängig machen',
+  fedikittenSearch: 'Beiträge/Konten/Hashtags suchen',
+  fedikittenLookupAccount: 'Konto anhand des Namens nachschlagen',
+  fedikittenFollow: 'Konto folgen',
+  fedikittenUnfollow: 'Konto entfolgen',
+  fedikittenAccountStatuses: 'Beiträge eines Kontos auflisten',
+  fedikittenUploadMedia: 'Lokale Medien zu FediKitten hochladen (vor Medien-Beiträgen)',
+  fedikittenGetMedia: 'Infos zu hochgeladenen Medien abrufen',
+  fedikittenDownloadMedia: 'Medien lokal herunterladen (alle öffentlichen Medien)',
+  fedikittenConversations: 'DM-Unterhaltungen auflisten',
+  fedikittenNotifications: 'Benachrichtigungen auflisten',
+  cibypimListConversations: 'CIBYP-IM-Unterhaltungen auflisten',
+  cibypimReadMessages: 'Nachrichten lesen (automatisch entschlüsseln)',
+  cibypimSendMessage: 'Verschlüsselte CIBYP-IM-Nachricht senden',
+  cibypimSearchUsers: 'CIBYP-IM-Benutzer suchen',
+  cibypimStartDirect: 'Direktchat starten',
+  cibypimCreateGroup: 'Gruppenchat erstellen (verteilt Gruppenschlüssel)',
+  cibypimListMembers: 'Gruppenmitglieder auflisten',
+  cibypimAddMember: 'Gruppenmitglied hinzufügen',
+  cibypimRemoveMember: 'Gruppenmitglied entfernen (rotiert Gruppenschlüssel)',
+  cibypimLeaveGroup: 'Gruppenchat verlassen',
+  cibypimMarkRead: 'Unterhaltung als gelesen markieren',
+  cibypimGetOnline: 'Online-Status eines Benutzers abfragen',
+  cibypimSendFile: 'Verschlüsselte Datei senden',
+  cibypimDownloadMedia: 'Medien aus Nachrichten herunterladen und entschlüsseln',
+  cibypimSendVoiceMessage: 'Sprachnachricht senden',
+  cibypimSearchMessages: 'Nachrichten in einer Unterhaltung durchsuchen',
+  cibypimGetProfile: 'Benutzerprofil anzeigen',
+  cibypimUpdateProfile: 'Eigenes Profil aktualisieren',
+  ffmpegInfo: 'Medieninfos abrufen (Dauer/Auflösung/Codec/Bitrate)',
+  ffmpegTranscode: 'Videoformat und Codec transkodieren/konvertieren',
+  ffmpegCompress: 'Videogröße komprimieren (CRF-Qualitätssteuerung)',
+  ffmpegTrim: 'Zeitbereich ausschneiden',
+  ffmpegCrop: 'Bildbereich zuschneiden',
+  ffmpegResize: 'Auflösung ändern',
+  ffmpegRotate: 'Video drehen/spiegeln',
+  ffmpegExtractAudio: 'Audio extrahieren',
+  ffmpegRemoveAudio: 'Audiospur entfernen',
+  ffmpegExtractFrame: 'Einzelbild/Cover extrahieren',
+  ffmpegExtractFrames: 'Frames als Bildsequenz extrahieren',
+  ffmpegToGif: 'Video in GIF umwandeln',
+  ffmpegConcat: 'Mehrere Videos verketten',
+  ffmpegMux: 'Audiospur zusammenführen/ersetzen',
+  ffmpegVolume: 'Lautstärke anpassen',
+  ffmpegSpeed: 'Video-/Audio-Geschwindigkeit ändern',
+  ffmpegWatermark: 'Bild-/Text-Wasserzeichen hinzufügen',
+  ffmpegAddSubtitle: 'Untertitel einbrennen',
+  ffmpegSlideshow: 'Video aus Bildern + Audio erstellen',
+  ffmpegAudioMerge: 'Mehrere Audiodateien verketten',
+  ffmpegRunCommand: 'Beliebigen FFmpeg-Befehl ausführen (freie Argumente)',
   getTarot: 'Eine Tarotkarte ziehen',
   todoList: 'Aufgabenliste verwalten',
   runSubAgent: 'Unter-Agent ausführen',
@@ -479,6 +625,13 @@ _tools: {
 
 // ── Categories ───────────────────────────────────────────────────────────────
 _categories: {
+  '自动化': 'Automatisierung',
+  '决策': 'Entscheidung',
+  'FediKitten': 'FediKitten',
+  'CIBYP-IM': 'CIBYP-IM',
+  'Office 硬解': 'Office (Low-Level)',
+  'PPT Maker': 'PPT Maker',
+  'FFmpeg 媒体': 'FFmpeg-Medien',
   '娱乐': 'Unterhaltung',
   '效率': 'Produktivität',
   '代理': 'Agent',
@@ -672,6 +825,8 @@ ${p.toolListSection}`;
 
 // ── Tool Return Messages ────────────────────────────────────────────────────
 _toolReturns: {
+  todo_text_required: 'Aufgabeninhalt darf nicht leer sein',
+  todo_operations_required: 'operations darf nicht leer sein',
   'param_required': '{param}-Parameter ist erforderlich',
   'old_string_not_found': 'old_string in Datei nicht gefunden (Bitte Einrückung, Leerzeichen, Zeilenumbrüche exakt prüfen)',
   'old_string_multiple': 'old_string erscheint {count}-mal in der Datei. Längeren Kontext angeben oder replace_all=true setzen',
@@ -699,6 +854,7 @@ _toolReturns: {
 
 // ── Text Map (Chinese → German hardcoded UI text) ───────────────────────────
 _textMap: {
+  '已使用免登录公共 Key（public），仅可调用限时免费模型': 'Öffentlicher Key (public) aktiv – nur zeitlich begrenzt kostenlose Modelle verfügbar',
   // ── Common UI ──
   '未命名对话': 'Unbenannte Unterhaltung',
   '单击编辑': 'Zum Bearbeiten klicken',
@@ -943,6 +1099,7 @@ _textMap: {
   '开启后，每个新对话首条消息前会先优化本次可用工具集合...': 'Wenn aktiviert, werden Werkzeuge vor der ersten Nachricht jedes neuen Gesprächs optimiert...',
   '工具上下文': 'Werkzeugkontext',
   '当前优化:': 'Aktuelle Optimierung:',
+  '当前优化': 'Im Einsatz',
   '未执行': 'Nicht ausgeführt',
   '优化后': 'Nach Optimierung',
   '已优化': 'Optimiert',
@@ -1101,6 +1258,13 @@ _textMap: {
 
   // ── Settings: Modellpool / Entscheidungsmodell ──
   '决策模型': 'Entscheidungsmodell',
+  '动效': 'Animationen',
+  '资源下载': 'Ressourcen',
+  '上下文': 'Kontext',
+  '沙箱': 'Sandbox',
+  '自动化': 'Automatisierung',
+  '插件': 'Plugins',
+  '更新': 'Aktualisierungen',
   '模型池': 'Modellpool',
   '模型选择策略': 'Modellauswahl-Strategie',
   '手动优先级（按优先级取第一个可用）': 'Manuelle Priorität (erster verfügbarer nach Priorität)',
@@ -2493,6 +2657,8 @@ _textMap: {
   'eda.panel.flowAlert': 'Dual-Panel-Design-Ablauf-Leitfaden (IPC-2221):\n\n{lines}',
   'eda.panel.flowUnavailable': 'Ablaufleitfaden nicht verfügbar',
   'eda.panel.autoroute': 'Auto-Route (Dual-Panel)',
+  'eda.panel.autorouteBusy': 'Auto-Routing läuft...',
+  'eda.panel.projectInfo': 'Projektinfo',
   'eda.panel.sync': 'Schaltplan → PCB-Sync',
   'eda.panel.displayOpts': 'Anzeigeoptionen',
   'eda.tool.selectDrag': 'Auswählen/Ziehen',
@@ -2641,6 +2807,7 @@ _textMap: {
   'eda.drc.width': 'Leiterbahnbreite {w}mm < min {min}mm (Netz {net})',
   'eda.erc.duplicateRef': 'Doppelter Ref {ref} ({n} mal)',
   'eda.erc.noFootprint': '{ref} hat keinen Footprint',
+  'eda.erc.unusedGateHint': '{ref} hat {n} unverbundene Pins; ungenutzte Gate-Eingänge auf GND/VCC legen, um Störungen durch Floating zu vermeiden',
   'eda.erc.notAnnotated': 'Bauteil nicht annotiert (lib={lib})',
   'eda.erc.singlePin': 'Netz {net} verbindet nur einen Pin',
   'eda.erc.unconnected': '{ref} Pin {num} ({name}) nicht verbunden',

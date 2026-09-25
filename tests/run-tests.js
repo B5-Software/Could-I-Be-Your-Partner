@@ -431,6 +431,42 @@ test('i18n settings tab translations are complete for budget/notifications/termi
   }
 });
 
+test('i18n 完整性：en/de 覆盖全部工具描述、分类、设置标签与语言键', () => {
+  const vm = require('vm');
+  const pathMod = require('path');
+  const loadDict = (file) => {
+    let dict = null;
+    const ctx = { window: {}, i18nRegister: (lang, d) => { dict = d; }, console };
+    vm.createContext(ctx);
+    vm.runInContext(fs.readFileSync(pathMod.join(__dirname, '../src/renderer/js/i18n', file), 'utf-8'), ctx, { filename: file });
+    return dict;
+  };
+  const en = loadDict('en.js');
+  const de = loadDict('de.js');
+  const i18nJs = fs.readFileSync(pathMod.join(__dirname, '../src/renderer/js/i18n.js'), 'utf-8');
+  // i18n.js 选择器里的设置标签键必须能在双语字典里解析
+  const tabKeys = [...i18nJs.matchAll(/key: 'ui\.settings\.tabs\.([A-Za-z]+)'/g)].map(m => m[1]);
+  for (const key of tabKeys) {
+    assert.ok(en.ui.settings.tabs[key], `en.js 缺少设置标签 key: ${key}`);
+    assert.ok(de.ui.settings.tabs[key], `de.js 缺少设置标签 key: ${key}`);
+  }
+  // 工具描述与分类必须全覆盖（tools-def 为准）
+  const toolsDef = fs.readFileSync(pathMod.join(__dirname, '../src/renderer/js/tools-def.js'), 'utf-8');
+  const toolNames = [...new Set([...toolsDef.matchAll(/name:\s*'([A-Za-z][\w]*)'/g)].map(m => m[1]))];
+  const cats = [...new Set([...toolsDef.matchAll(/category:\s*'([^']+)'/g)].map(m => m[1]))];
+  for (const [lang, dict] of [['en', en], ['de', de]]) {
+    const missTools = toolNames.filter(n => !(dict._tools || {})[n]);
+    assert.strictEqual(missTools.length, 0, `${lang}._tools 缺 ${missTools.length} 个：${missTools.slice(0, 5).join(', ')}`);
+    const missCats = cats.filter(c => !(dict._categories || {})[c]);
+    assert.strictEqual(missCats.length, 0, `${lang}._categories 缺：${missCats.join(', ')}`);
+    assert.ok(dict.ui.language && dict.ui.language.notice && dict.ui.language.saved && dict.ui.language.save, `${lang} 应有 ui.language 键`);
+    assert.ok(dict.oskey && dict.oskey.title && !dict.ui.oskey, `${lang} oskey 翻译应在顶层`);
+    assert.ok(dict._toolReturns.todo_text_required && dict._toolReturns.todo_operations_required, `${lang} 应有 todo 错误翻译`);
+    assert.ok(dict._textMap['当前优化'], `${lang} _textMap 应有「当前优化」`);
+  }
+  assert.ok(i18nJs.includes('const tools = _i18nDict._tools;'), 'schema 描述缺失时应回退到 _tools');
+});
+
 test('filterSensitiveArgs masks sensitive keys and keeps others', () => {
   const out = PrivacyFilter.filterSensitiveArgs({ apiKey: 'sk-xxx', DB_PASSWORD: 'pwd1', path: '/home/user', nested: { password: 'pwd', port: 3000 } });
   assert.strictEqual(out.apiKey, '[已过滤]');
