@@ -33,34 +33,22 @@
         : agent;
       if (targetAgent && targetAgent.contextManager) {
         const cm = targetAgent.contextManager;
-        const stats = cm.getStats ? cm.getStats() : null;
-        const estimateMsg = (msg) => (cm.estimateMessageTokens ? cm.estimateMessageTokens(msg) : 0);
-        const estimateText = (text) => (cm.estimateTokens ? cm.estimateTokens(text) : 0);
-        const systemGuidanceTokens = cm.systemPrompt ? estimateMsg(cm.systemPrompt) : 0;
-        const toolDefsTokens = Math.ceil(JSON.stringify(
-          (typeof targetAgent.getRuntimeToolSchemas === 'function')
-            ? targetAgent.getRuntimeToolSchemas()
-            : []
-        ).length / 4);
-        let chatTokens = 0, toolResultTokens = 0;
-        (cm.messages || []).forEach(msg => {
-          if (!msg) return;
-          if (msg.role === 'tool') toolResultTokens += estimateMsg(msg);
-          else if (msg.role === 'user' || msg.role === 'assistant') chatTokens += estimateMsg(msg);
-        });
-        const summaryTokens = (cm.summaries || []).reduce((acc, s) => acc + estimateText(String(s || '')) + 4, 0);
-        const otherTokens = Math.max(0, summaryTokens);
-        const tokens = systemGuidanceTokens + toolDefsTokens + chatTokens + toolResultTokens + otherTokens;
-        const maxTokens = stats?.maxTokens ?? (targetAgent.settings?.llm?.maxContextLength || 0);
-        const percentage = maxTokens ? Math.min(100, (tokens / maxTokens) * 100) : 0;
+        const bd = (typeof cm.getUsageBreakdown === 'function') ? cm.getUsageBreakdown() : null;
         // Remote 模式下不向本地 WebUI 服务器推送（避免远端/本地循环推送导致上下文进度抽搐）
-        if (!isRemoteMode) {
+        if (bd && !isRemoteMode) {
           window.api.webControlPushContextProgress({
             mode: currentMode,
-            used: tokens,
-            max: maxTokens,
-            percentage,
-            details: { systemGuidanceTokens, toolDefsTokens, chatTokens, toolResultTokens, otherTokens }
+            used: bd.totalUsed,
+            max: bd.max,
+            percentage: bd.pct,
+            exact: bd.exact === true,
+            details: {
+              systemGuidanceTokens: bd.detail.system,
+              toolDefsTokens: bd.detail.tools,
+              chatTokens: bd.detail.chat,
+              toolResultTokens: bd.detail.tool,
+              otherTokens: bd.detail.summaries,
+            }
           });
         }
       }

@@ -21,15 +21,37 @@
   function computeContextStats(ag) {
     const cm = ag && ag.contextManager;
     if (!cm) return null;
+    const usage = { ...(ag.sessionUsage || {}) };
+    const bd = (typeof cm.getUsageBreakdown === 'function') ? cm.getUsageBreakdown() : null;
+    if (bd) {
+      return {
+        sys: bd.detail.system,
+        tools: bd.detail.tools,
+        chat: bd.detail.chat,
+        tool: bd.detail.tool,
+        summaries: bd.detail.summaries,
+        used: bd.used,
+        max: bd.max,
+        reserve: bd.reserve,
+        totalOcc: bd.totalUsed,
+        pct: bd.pct,
+        inputPct: bd.inputPct,
+        exact: bd.exact === true,
+        usage,
+      };
+    }
+    // 兜底（理论不达）：旧实例按本地估算展示
     const stats = (typeof cm.getStats === 'function') ? cm.getStats() : null;
     const estimateMsg = (m) => (typeof cm.estimateMessageTokens === 'function' ? cm.estimateMessageTokens(m) : 0);
     const estimateText = (t) => (typeof cm.estimateTokens === 'function' ? cm.estimateTokens(t) : 0);
     const sys = cm.systemPrompt ? estimateMsg(cm.systemPrompt) : 0;
-    let tools = 0;
-    try {
-      const schemas = (typeof ag.getRuntimeToolSchemas === 'function') ? ag.getRuntimeToolSchemas() : [];
-      tools = Math.ceil(JSON.stringify(schemas).length / 4);
-    } catch { /* ignore */ }
+    let tools = cm.toolSchemaTokens || 0;
+    if (!tools) {
+      try {
+        const schemas = (typeof ag.getRuntimeToolSchemas === 'function') ? ag.getRuntimeToolSchemas() : [];
+        tools = Math.ceil(JSON.stringify(schemas).length / 4);
+      } catch { /* ignore */ }
+    }
     let chat = 0;
     let tool = 0;
     (cm.messages || []).forEach((m) => {
@@ -43,18 +65,22 @@
     const reserve = (ag.settings && ag.settings.llm && ag.settings.llm.maxResponseTokens) || 8192;
     const totalOcc = used + reserve;
     const pct = max ? Math.min(100, (totalOcc / max) * 100) : 0;
-    return { sys, tools, chat, tool, summaries, used, max, reserve, totalOcc, pct, usage: { ...(ag.sessionUsage || {}) } };
+    return { sys, tools, chat, tool, summaries, used, max, reserve, totalOcc, pct, inputPct: max ? Math.min(100, (used / max) * 100) : 0, exact: !!(stats && stats.exact), usage };
   }
 
   function renderPopoverContext(stats) {
     if (!stats) return '该会话上下文尚未初始化';
-    const fmt = (n) => (typeof fmtTokenCount === 'function' ? fmtTokenCount(n) : String(n));
+    // 估算数据加 ~ 前缀；API 实测基线不加
+    const pfx = stats.exact ? '' : '~';
+    const fmt = (n) => (typeof fmtTokenCount === 'function' ? fmtTokenCount(n, pfx) : `${pfx}${n}`);
     const level = stats.pct >= 85 ? 'danger' : stats.pct >= 65 ? 'warn' : '';
     // 已用段实色，输出预留段半透明（同一进度条内区分两种含义）
     const usedPct = stats.max ? Math.min(100, (stats.used / stats.max) * 100) : 0;
     const reservePct = stats.max ? Math.max(0, Math.min(100 - usedPct, (stats.reserve / stats.max) * 100)) : 0;
     // 预留段从最左开始铺满"已用+预留"，实心已用段覆盖其上 → 中间无缝隙、无额外圆角
     const totalPct = Math.min(100, usedPct + reservePct);
+    const usagePfx = stats.usage.estimated ? '~' : '';
+    const ufmt = (n) => (typeof fmtTokenCount === 'function' ? fmtTokenCount(n, usagePfx) : `${usagePfx}${n}`);
     const rows = [
       ['系统指导 + 工具定义', fmt(stats.sys + stats.tools)],
       ['对话消息', fmt(stats.chat)],
@@ -62,7 +88,8 @@
       ['摘要', fmt(stats.summaries)],
       ['输入占用', fmt(stats.used)],
       ['输出预留', fmt(stats.reserve)],
-      ['本会话累计 Token', fmt(stats.usage.total || 0)]
+      ['数据来源', stats.exact ? 'API 实测' : '估算（下一条回复后校准）'],
+      ['本会话累计 Token', ufmt(stats.usage.total || 0)]
     ];
     return rows.map(([label, value]) => `<div class="stp-ctx-row"><span>${escapeHtml(label)}</span><b>${value}</b></div>`).join('')
       + `<div class="stp-ctx-bar">`

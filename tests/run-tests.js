@@ -797,6 +797,47 @@ test('geogebra-panel HTML should exist with ggb-element div', () => {
   assert.ok(htmlContent.includes('id="ggb-element"'), '缺少 ggb-element 容器');
 });
 
+test('Markdown 列表健壮化：重复编号自动递增 + 松散/嵌套/CJK 编号', () => {
+  const vm = require('vm');
+  const src = fs.readFileSync(require('path').join(__dirname, '../src/renderer/js/app-utils.js'), 'utf-8');
+  // 最小 DOM/窗口 shim：escapeHtml 用 createElement，其余函数在渲染时不需要真实 DOM
+  const fakeDocument = {
+    createElement: () => {
+      let text = '';
+      return {
+        set textContent(v) { text = String(v); },
+        get innerHTML() {
+          return text.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+        }
+      };
+    }
+  };
+  const ctx = { document: fakeDocument, window: {} };
+  vm.createContext(ctx);
+  vm.runInContext(src, ctx);
+  const md = ctx.renderMarkdown;
+
+  // 全写 1. 的编号：渲染为一个有序列表，浏览器会从 1 递增
+  const same = md('1. 甲\n1. 乙\n1. 丙');
+  assert.strictEqual((same.match(/<ol>/g) || []).length, 1, '应合成一个有序列表');
+  assert.strictEqual((same.match(/<li>/g) || []).length, 3, '应包含 3 个列表项');
+  assert.ok(!same.includes('value='), '不应写死 value，应让浏览器递增编号');
+
+  // 松散列表（项间空行）
+  const loose = md('1. 甲\n\n1. 乙');
+  assert.strictEqual((loose.match(/<ol>/g) || []).length, 1, '空行分隔的编号项仍应属于同一列表');
+  assert.strictEqual((loose.match(/<li>/g) || []).length, 2);
+
+  // CJK 编号（1、/1）/（1））与缩进嵌套
+  assert.ok(md('1、甲\n2、乙').includes('<ol>'), '1、编号应识别为有序列表');
+  assert.ok(md('1) 甲\n1) 乙').includes('<ol>'), '1) 编号应识别为有序列表');
+  assert.ok(/(<ol><li>A<ul><li>x<\/li><li>y<\/li><\/ul><\/li><\/ol>)/.test(md('1. A\n   - x\n   - y')), '缩进子列表应嵌套在父项内');
+
+  // 回归保护：代码块内的编号不解析；行中编号不误判
+  assert.ok(!md('```\n1. not a list\n```').includes('<ol>'), '代码块内不应解析列表');
+  assert.ok(!md('前面文字 1. 不是列表').includes('<ol>'), '非行首编号不应误判为列表');
+});
+
 test('sanguosha 窗口应自带 escapeHtml（未加载 app-utils.js）', () => {
   const sgJs = fs.readFileSync(require('path').join(__dirname, '../src/renderer/js/sanguosha.js'), 'utf-8');
   const sgHtml = fs.readFileSync(require('path').join(__dirname, '../src/renderer/pages/sanguosha.html'), 'utf-8');
@@ -844,6 +885,23 @@ test('工具上下文 token 统计随工具开关变化（禁用工具必须显�
   const part = readAppParts('06a-tools');
   assert.ok(part.includes('Object.fromEntries(allDefs.map(t => [t.name, isEnabled(t.name)]))'), '启用状态映射应为每个工具写入 true/false');
   assert.ok(!part.includes('Object.fromEntries(allDefs.filter(t => isEnabled(t.name)).map(t => [t.name, true]))'), '不应省略被禁用工具（getToolSchemas 只排除显式 false）');
+});
+
+test('实时上下文占用：API 实测优先，估算加 ~ 前缀（圆环 / tooltip / 悬停弹窗共用）', () => {
+  const fsLocal = require('fs');
+  const pathLocal = require('path');
+  const cmContent = fsLocal.readFileSync(pathLocal.join(__dirname, '../src/renderer/js/context-manager.js'), 'utf-8');
+  assert.ok(cmContent.includes('getUsageBreakdown()'), 'ContextManager 应提供共用占用明细');
+  assert.ok(/getUsageBreakdown\(\) \{[\s\S]*?\.\.\.stats,/.test(cmContent), '明细应复用 getStats 的真实基线字段');
+  const ring = readAppParts('03c-session-status');
+  assert.ok(ring.includes('getUsageBreakdown()'), '圆环应使用真实基线明细');
+  assert.ok(ring.includes("const pfx = exact ? '' : '~'"), '估算时数字应加 ~ 前缀');
+  assert.ok(ring.includes('API 实测基线') && ring.includes('估算（下一条回复后校准）'), 'tooltip 应标注数据来源');
+  const popover = readAppParts('02-modes');
+  assert.ok(popover.includes('getUsageBreakdown()'), '悬停弹窗应共用同一明细');
+  assert.ok(popover.includes('数据来源'), '悬停弹窗应标注数据来源');
+  const wc = fsLocal.readFileSync(pathLocal.join(__dirname, '../src/main/web-control-service.js'), 'utf-8');
+  assert.ok(wc.includes("d.exact===false?'~':''"), 'Remote 客户端估算时应加 ~ 前缀');
 });
 
 test('SKILL.md 导入：除元数据外全部正文进 prompt（未知章节不截断）', () => {
@@ -5540,6 +5598,26 @@ function runTokenBasisTests() {
     cm.summaries = [];
     const rawWithout = cm.getRawTotalTokens();
     assert.ok(rawWithSummary > rawWithout, '摘要应计入 raw 估算');
+  });
+
+  test('UI 明细：getUsageBreakdown 实测优先、估算标注、分量与总量一致', () => {
+    const cm = new ContextManager(100000);
+    cm.setSystemPrompt('system prompt');
+    cm.addMessage({ role: 'user', content: '你好，测试上下文占用' });
+    cm.setToolSchemaTokens(3000);
+    cm.setOutputReserve(8192);
+    let bd = cm.getUsageBreakdown();
+    assert.strictEqual(bd.exact, false, '无 API 基线时应为估算');
+    assert.strictEqual(bd.basis, 'estimate');
+    assert.ok(bd.used > 0, '估算占用应大于 0');
+    assert.strictEqual(bd.totalUsed, bd.used + 8192, '总占用应包含输出预留');
+    const sum = bd.detail.system + bd.detail.tools + bd.detail.chat + bd.detail.tool + bd.detail.summaries;
+    assert.ok(Math.abs(sum - bd.used) / Math.max(1, bd.used) < 0.02, '各分量之和应约等于总量');
+    cm.setRealBasis(50000, 'm');
+    bd = cm.getUsageBreakdown();
+    assert.strictEqual(bd.exact, true, '有 API 基线时应为实测');
+    assert.strictEqual(bd.used, 50000, '实测时应直接使用 API prompt_tokens');
+    assert.strictEqual(bd.realPromptTokens, 50000);
   });
 }
 

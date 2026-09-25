@@ -1201,7 +1201,8 @@ html,body{height:100%;overflow:hidden;font-family:-apple-system,BlinkMacSystemFo
     if(fill)fill.setAttribute('stroke-dasharray',pct+' '+(100-pct));
     if(text){
       var fmt=function(n){return n>=1000?(n/1000).toFixed(1)+'K':''+n;};
-      text.textContent=fmt(used)+'/'+fmt(max);
+      // exact=false 表示当前为估算值（无 API 实测基线），用 ~ 前缀提示
+      text.textContent=(d.exact===false?'~':'')+fmt(used)+'/'+fmt(max);
     }
     if(ind){
       ind.dataset.used=used;
@@ -1514,14 +1515,14 @@ html,body{height:100%;overflow:hidden;font-family:-apple-system,BlinkMacSystemFo
 // 使用 Web Worker 内联 Worklet 采集麦克风，经 WS 发送到主机计算，接收 TTS 流播放。
 (function(){
   if(!('AudioContext' in window || 'webkitAudioContext' in window)) return;
-  if(!ws){ console.warn('[Voice] WS未连接'); return; }
+  if(!ws){ console.warn('[Voice] WS not connected'); return; }
 
   // 安全上下文检查：麦克风仅在 https 或 loopback（localhost / 127.0.0.1 / ::1）可用。
   // 局域网 http 访问（如 http://192.168.x.x:3030）会被浏览器拦截 getUserMedia。
   var loc=window.location;
   var isSecure=loc.protocol==='https:'||loc.hostname==='localhost'||loc.hostname==='127.0.0.1'||loc.hostname==='::1'||loc.hostname==='[::1]';
   if(!isSecure){
-    console.warn('[Voice] 非安全上下文(需 https 或 localhost)，麦克风禁用。请用 http://localhost:'+(loc.port||3030)+' 访问。');
+    console.warn('[Voice] insecure context (https or localhost required), microphone disabled. Use http://localhost:'+(loc.port||3030)+' to access.');
   }
 
   var VOICE_READY=true;
@@ -1609,7 +1610,7 @@ html,body{height:100%;overflow:hidden;font-family:-apple-system,BlinkMacSystemFo
         case'sttFinal':if(m.sessionId===sttSession){ updateSttText(m.text);stopStt(false); } break;
         case'ttsAudio':ttsPush(m.reqId,m.samples,m.sampleRate);break;
         case'ttsDone':ttsDone(m.reqId);break;
-        case'ttsError':console.warn('[Voice] TTS错误',m.error);break;
+        case'ttsError':console.warn('[Voice] TTS error',m.error);break;
         case'voiceStatus':
           if(m.capabilities){
             voiceReady=(m.capabilities.ready!==false)&&!!m.capabilities.workerRunning;

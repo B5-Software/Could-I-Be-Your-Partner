@@ -89,6 +89,11 @@ class ContextManager {
     // 启发式估算与真实 tokenizer 存在偏差（尤其 CJK）。用 API 返回的
     // 真实 prompt_tokens 做滑动校准，把估算值往真实值拉齐。
     this.tokenCalibration = 1.0;
+    // ---- API 真实基线（Tier0）----
+    // 每次成功响应后用 provider 返回的 prompt_tokens 锚定真实占用；
+    // 追加式对话下：真实占用 = 基线 + 基线之后新增消息的估算。
+    // 压缩/剪枝/清空/换系统提示词会失效，下一次 API 响应自动重锚。
+    this.realBasis = null; // { promptTokens, msgCount, envelopeHash, model, ts }
     // 压缩事务锁：{ id, start, end, inProgress }。内存 + 会话状态持久化，
     // 崩溃后孤儿锁可检测（借鉴 dsh compaction/start…end 括号）。
     this.compactionLock = null;
@@ -153,13 +158,23 @@ class ContextManager {
     if (msg.tool_calls) {
       tokens += this.estimateTokens(JSON.stringify(msg.tool_calls));
     }
-    return tokens;
+    // 盲点修正：reasoning / name / tool_call_id 也会进入请求体
+    if (msg.reasoning) tokens += this.estimateTokens(String(msg.reasoning));
+    if (msg.reasoning_content) tokens += this.estimateTokens(String(msg.reasoning_content));
+    if (msg.name) tokens += this.estimateTokens(String(msg.name));
+    if (msg.tool_call_id) tokens += this.estimateTokens(String(msg.tool_call_id));
+    // 未知模型安全余量：估算偏低会导致上下文溢出，宁可高估
+    return Math.ceil(tokens * 1.0);
   }
 
   // 未乘校准因子的原始估算（供校准器使用；校准因子按 raw 与实际值之比更新）
   getRawTotalTokens() {
     let total = 0;
     if (this.systemPrompt) total += this.estimateMessageTokens(this.systemPrompt);
+    // 摘要在 getMessages() 中作为 system 消息前置，估算必须计入
+    if (Array.isArray(this.summaries) && this.summaries.length) {
+      total += this.estimateTokens(JSON.stringify(this.summaries));
+    }
     for (const msg of this.messages) {
       total += this.estimateMessageTokens(msg);
     }
@@ -167,7 +182,45 @@ class ContextManager {
     return total + this.toolSchemaTokens;
   }
 
+  // 输入包络指纹：系统提示词/工具 schema/摘要长度变化会让真实基线失效
+  _envelopeHash() {
+    const summaryLen = Array.isArray(this.summaries) ? JSON.stringify(this.summaries).length : 0;
+    const systemLen = this.systemPrompt ? String(this.systemPrompt.content || '').length : 0;
+    return `${systemLen}|${this.toolSchemaTokens}|${summaryLen}|${this.checkpointCount || 0}`;
+  }
+
+  // 用 API 真实 prompt_tokens 锚定基线（Tier0：真实用量优先）
+  setRealBasis(promptTokens, model) {
+    const actual = Number(promptTokens);
+    if (!Number.isFinite(actual) || actual <= 0 || actual > 100000000) return false;
+    this.realBasis = {
+      promptTokens: actual,
+      msgCount: this.messages.length,
+      envelopeHash: this._envelopeHash(),
+      model: model || '',
+      ts: Date.now()
+    };
+    return true;
+  }
+
+  invalidateRealBasis() {
+    this.realBasis = null;
+  }
+
+  isRealBasisValid() {
+    const basis = this.realBasis;
+    return !!(basis && basis.envelopeHash === this._envelopeHash() && this.messages.length >= basis.msgCount);
+  }
+
   getTotalTokens() {
+    const basis = this.realBasis;
+    if (basis && basis.envelopeHash === this._envelopeHash() && this.messages.length >= basis.msgCount) {
+      let appended = 0;
+      for (let i = basis.msgCount; i < this.messages.length; i++) {
+        appended += this.estimateMessageTokens(this.messages[i]);
+      }
+      return Math.ceil(basis.promptTokens + appended);
+    }
     const raw = this.getRawTotalTokens();
     return Math.ceil(raw * this.tokenCalibration);
   }
@@ -194,6 +247,7 @@ class ContextManager {
    * @param {Array} messages 历史消息数组
    */
   loadFromHistory(messages) {
+    this.invalidateRealBasis();
     const arr = Array.isArray(messages) ? messages : [];
     this.messages = arr.slice(); // 浅拷贝：避免上下文 slice() 影响入参
     this.historyMessages = arr.slice(); // 历史记录独立持有一份引用
@@ -296,6 +350,7 @@ class ContextManager {
    * 不修改原对象（保护 historyMessages 中的引用）。
    */
   microCompact(keepLast = MICROCOMPACT_KEEP_LAST) {
+    this.invalidateRealBasis();
     let cleared = 0;
     const toolIndices = [];
     for (let i = 0; i < this.messages.length; i++) {
@@ -423,6 +478,7 @@ class ContextManager {
    * @returns {number} 剪枝条数
    */
   pruneOldToolResults(policy, capChars = 800, keepHeadChars = 400) {
+    this.invalidateRealBasis();
     const p = policy || this.resolvePolicy();
     const n = this.messages.length;
     if (n === 0) return 0;
@@ -674,6 +730,7 @@ class ContextManager {
    * 落定后字节冻结（checkpointIndexes 标记，后续压缩不再改写）。
    */
   applyCheckpoint(start, end, summaryText, meta = {}) {
+    this.invalidateRealBasis();
     const text = String(summaryText || '').trim() || '[压缩检查点：早期对话内容]';
     const checkpointMsg = {
       role: 'user',
@@ -753,6 +810,7 @@ class ContextManager {
    * @returns {number} 被替换的消息条数
    */
   hardTruncate(policy) {
+    this.invalidateRealBasis();
     const range = this.findCompactRange(policy);
     if (!range) return 0;
     this.applyCheckpoint(range.start, range.end, '早期对话内容因上下文溢出被截断，详见对话历史。', { mechanical: true });
@@ -802,7 +860,52 @@ class ContextManager {
       compactions: this.compactBoundaries.length,
       toolSchemaTokens: this.toolSchemaTokens,
       tokenCalibration: Number(this.tokenCalibration.toFixed(3)),
-      checkpoints: this.checkpointCount
+      checkpoints: this.checkpointCount,
+      basis: this.isRealBasisValid() ? 'api' : 'estimate',
+      exact: this.isRealBasisValid(),
+      realPromptTokens: this.realBasis ? this.realBasis.promptTokens : null
+    };
+  }
+
+  // UI / WebUI 镜像 / 会话悬停弹窗共用的上下文占用明细。
+  // - used 优先用 API 真实基线（“API 实测 + 增量估算”），无基线时为校准后的估算
+  // - exact/basis 标明数据来源，UI 据此决定是否加 ~ 前缀
+  // - detail 按 used 等比缩放，保证各部分之和与总量一致
+  getUsageBreakdown() {
+    const stats = this.getStats();
+    const estimateMsg = (m) => this.estimateMessageTokens(m);
+    const system = this.systemPrompt ? estimateMsg(this.systemPrompt) : 0;
+    const tools = this.toolSchemaTokens || 0;
+    let chat = 0;
+    let tool = 0;
+    for (const msg of this.messages) {
+      if (!msg) continue;
+      if (msg.role === 'tool') tool += estimateMsg(msg);
+      else if (msg.role === 'user' || msg.role === 'assistant') chat += estimateMsg(msg);
+    }
+    const summaries = (this.summaries || []).reduce((acc, s) => acc + this.estimateTokens(String(s || '')) + 4, 0);
+    const rawSum = Math.max(1, system + tools + chat + tool + summaries);
+    const used = stats.tokens;
+    const scale = rawSum > 0 ? used / rawSum : 1;
+    const detail = {
+      system: Math.round(system * scale),
+      tools: Math.round(tools * scale),
+      chat: Math.round(chat * scale),
+      tool: Math.round(tool * scale),
+      summaries: Math.round(summaries * scale),
+    };
+    const max = stats.maxTokens;
+    const reserve = this.outputReserve || 0;
+    const totalUsed = used + reserve;
+    return {
+      ...stats,
+      used,
+      max,
+      reserve,
+      totalUsed,
+      pct: max ? Math.min(100, (totalUsed / max) * 100) : 0,
+      inputPct: max ? Math.min(100, (used / max) * 100) : 0,
+      detail,
     };
   }
 
@@ -825,6 +928,7 @@ class ContextManager {
   }
 
   clear() {
+    this.invalidateRealBasis();
     this.messages = [];
     this.historyMessages = [];
     this.pinnedMessages = [];
@@ -843,6 +947,7 @@ class ContextManager {
    * 可见聊天记录与持久化历史不动，下一次请求从全新上下文开始。
    */
   clearWorkingContext() {
+    this.invalidateRealBasis();
     this.messages = [];
     this.pinnedMessages = [];
     this.summaries = [];
@@ -869,6 +974,7 @@ class ContextManager {
    * 返回 { fixed: boolean, removedCount, details } 用于日志展示。
    */
   sanitize() {
+    this.invalidateRealBasis();
     let removedCount = 0;
     const details = [];
     const before = this.messages.length;

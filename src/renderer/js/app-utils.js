@@ -77,6 +77,85 @@ function getPathBasename(filePath) {
   return idx >= 0 ? p.slice(idx + 1) : p;
 }
 
+// ---- Markdown 列表解析 ----
+// 模型输出的编号经常不规范（全写 1.、用 1、/1) /（1）、项间空行、缩进嵌套等）。
+// 统一由这里解析：源编号只用于识别"这是有序列表"，渲染时一律从 1 递增，避免出现 "1. 1. 1."。
+// 兼容：`1. x`（点号后必须空格）、`1、x` / `1)x` / `（1）x`（可无空格）、`- * + •` 等符号。
+const MD_LIST_LINE_RE = /^([ \t]*)(?:(?:([-*+•‣·◦])[ \t]+)|(?:(?:\d{1,3})\.(?=[ \t])[ \t]+)|(?:(?:\d{1,3})[、)）][ \t]*)|(?:[(（]\d{1,3}[)）][ \t]*))(\S.*)$/m;
+
+function _mdListMarker(line) {
+  const m = MD_LIST_LINE_RE.exec(line);
+  if (!m) return null;
+  return {
+    indent: m[1].replace(/\t/g, '  ').length,
+    type: m[2] ? 'ul' : 'ol',
+    content: m[3],
+  };
+}
+
+// 递归渲染列表树：相邻同类节点合成一个 <ol>/<ul>，有序列表由浏览器从 1 递增编号
+function _mdRenderList(nodes) {
+  let out = '';
+  let i = 0;
+  while (i < nodes.length) {
+    const tag = nodes[i].type;
+    let j = i;
+    while (j < nodes.length && nodes[j].type === tag) j++;
+    out += `<${tag}>`;
+    for (let k = i; k < j; k++) {
+      const n = nodes[k];
+      out += `<li>${n.content}`;
+      if (n.children && n.children.length) out += _mdRenderList(n.children);
+      out += '</li>';
+    }
+    out += `</${tag}>`;
+    i = j;
+  }
+  return out;
+}
+
+// 提取连续列表行（允许空行间隔、缩进嵌套）→ 占位符 __LISTn__
+function _mdExtractLists(html, lists) {
+  if (!MD_LIST_LINE_RE.test(html)) return html;
+  const lines = html.split('\n');
+  const out = [];
+  let i = 0;
+  while (i < lines.length) {
+    if (!_mdListMarker(lines[i])) { out.push(lines[i]); i++; continue; }
+    const items = [];
+    let j = i;
+    while (j < lines.length) {
+      const item = _mdListMarker(lines[j]);
+      if (item) { items.push({ ...item, children: [] }); j++; continue; }
+      const line = lines[j];
+      if (line.trim() === '') {
+        // 松散列表：空行后若仍是列表项，视为同一列表继续
+        if (j + 1 < lines.length && _mdListMarker(lines[j + 1])) { j++; continue; }
+        break;
+      }
+      // 缩进续行并入上一项（模型偶尔把一项写成多行）
+      if (items.length && /^ {2,}\S/.test(line)) {
+        items[items.length - 1].content += ' ' + line.trim();
+        j++;
+        continue;
+      }
+      break;
+    }
+    // 按缩进构建嵌套树（最多 3 层，防止异常缩进把内容推得过深）
+    const root = { children: [] };
+    const stack = [root];
+    for (const it of items) {
+      while (stack.length > 1 && (it.indent <= stack[stack.length - 1].indent || stack.length >= 4)) stack.pop();
+      stack[stack.length - 1].children.push(it);
+      stack.push(it);
+    }
+    lists.push(root.children);
+    out.push(`__LIST${lists.length - 1}__`);
+    i = j;
+  }
+  return out.join('\n');
+}
+
 function renderMarkdown(text) {
   if (!text) return '';
   let html = text;
@@ -84,6 +163,7 @@ function renderMarkdown(text) {
   const mathBlocks = [];
   const inlineMath = [];
   const tables = [];
+  const lists = [];
 
   html = html.replace(/(\n|^)(\|.+\|)\n(\|[-:\s|]+\|)\n((?:\|.+\|\n?)*)/gm, (match, prefix, header, separator, rows) => {
     const tableData = {
@@ -117,15 +197,16 @@ function renderMarkdown(text) {
   html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
   html = html.replace(/^---$/gm, '<hr>');
   html = html.replace(/^> (.+)$/gm, '<blockquote>$1</blockquote>');
-  html = html.replace(/^[\-\*] (.+)$/gm, '<UL_ITEM>$1</UL_ITEM>');
-  html = html.replace(/(<UL_ITEM>.*<\/UL_ITEM>\n?)+/g, '<ul>$&</ul>');
-  html = html.replace(/<UL_ITEM>/g, '<li>').replace(/<\/UL_ITEM>/g, '</li>');
-  html = html.replace(/^\d+\. (.+)$/gm, '<OL_ITEM>$1</OL_ITEM>');
-  html = html.replace(/(<OL_ITEM>.*<\/OL_ITEM>\n?)+/g, '<ol>$&</ol>');
-  html = html.replace(/<OL_ITEM>/g, '<li>').replace(/<\/OL_ITEM>/g, '</li>');
   html = html.replace(/\[([^\]]+)\]\(([^\)]+)\)/g, '<a href="$2" data-external="true">$1</a>');
+  // 列表：在行内元素（加粗/代码/链接）转换之后提取，保证列表项内容享受同样的行内渲染；
+  // 序号自动递增、支持嵌套与松散列表（模型常写成 1. 1. 1. 或不规范编号）
+  html = _mdExtractLists(html, lists);
   html = html.replace(/\n\n/g, '</p><p>');
   html = html.replace(/\n/g, '<br>');
+
+  // 先把列表占位符还原：列表项里可能还有 __INLINEMATH__/__CODEBLOCK__ 等占位符，
+  // 需要在这几步之前展开，后续替换才能覆盖到列表内部。
+  html = html.replace(/__LIST(\d+)__/g, (m, i) => _mdRenderList(lists[parseInt(i)] || []));
 
   html = html.replace(/__TABLE(\d+)__/g, (m, i) => {
     const table = tables[parseInt(i)];
@@ -300,3 +381,19 @@ function fadeOutRemove(el, cb) {
 
 window.fadeOutHide = fadeOutHide;
 window.fadeOutRemove = fadeOutRemove;
+
+// 点击遮罩关闭：必须 mousedown 与 mouseup 都发生在遮罩本身才关闭。
+// 避免在弹窗内拖选文本、鼠标松开在遮罩上时误关闭。
+function bindBackdropClose(overlay, closeFn) {
+  if (!overlay || typeof closeFn !== 'function') return;
+  let downOnBackdrop = false;
+  overlay.addEventListener('mousedown', (e) => {
+    downOnBackdrop = e.target === overlay;
+  });
+  overlay.addEventListener('mouseup', (e) => {
+    const shouldClose = downOnBackdrop && e.target === overlay;
+    downOnBackdrop = false;
+    if (shouldClose) closeFn();
+  });
+}
+window.bindBackdropClose = bindBackdropClose;
