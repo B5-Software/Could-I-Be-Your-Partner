@@ -3717,6 +3717,140 @@ function runVmSandboxTests() {
       'ssh2 只稳定支持 OpenSSH/PEM 私钥');
     assert.ok(/^ssh-ed25519 [A-Za-z0-9+/=]+/.test(provision.toAuthorizedKey(kp.publicKey, 'x')) || /^ssh-ed25519 /.test(kp.publicKey));
   });
+
+  // ---- tar 编解码（工作区同步的传输层）----
+  const { writeTar, parseTar, dirEntriesFor, splitUstarName, paxRecord } = require('../src/main/vm/vm-tar.js');
+
+  test('tar：短路径与目录条目回环', () => {
+    const entries = [...dirEntriesFor(['a/b.txt']), { name: 'a/b.txt', data: 'hello' }];
+    const { entries: back, warnings } = parseTar(writeTar(entries));
+    assert.deepStrictEqual(warnings, []);
+    const dirs = back.filter((e) => e.type === '5').map((e) => e.name);
+    assert.ok(dirs.includes('a/'), '应自动补齐目录条目');
+    const file = back.find((e) => e.name === 'a/b.txt');
+    assert.strictEqual(file.data.toString(), 'hello');
+  });
+
+  test('tar：长路径（ustar prefix 拆分 ≤255）与超长路径（pax）', () => {
+    const midName = 'mid/' + 'x'.repeat(90) + '/file.js';
+    const split = splitUstarName(midName);
+    assert.ok(split && split.prefix === 'mid' && split.name.endsWith('/file.js'), '应拆出 prefix 并保留完整相对路径');
+    assert.ok(Buffer.byteLength(split.name) <= 100 && Buffer.byteLength(split.prefix) <= 155);
+    // 真正超过 255 字节（prefix+name 装不下）才走 pax
+    const huge = 'deep/'.repeat(40) + 'y'.repeat(80) + '.js';
+    assert.ok(Buffer.byteLength(huge, 'utf8') > 255, 'fixture 应超过 255 字节: ' + Buffer.byteLength(huge, 'utf8'));
+    assert.strictEqual(splitUstarName(huge), null, '超过 255 应交给 pax');
+    const entries = [...dirEntriesFor([midName, huge]), { name: midName, data: 'mid' }, { name: huge, data: 'huge' }];
+    const { entries: back, warnings } = parseTar(writeTar(entries));
+    assert.deepStrictEqual(warnings, []);
+    assert.strictEqual(back.find((e) => e.name === midName).data.toString(), 'mid');
+    assert.strictEqual(back.find((e) => e.name === huge).data.toString(), 'huge', 'pax 长路径应能回环');
+  });
+
+  test('tar：pax 记录长度自洽（多字节字符也正确）', () => {
+    for (const v of ['abc', '中文路径/文件.js', 'x'.repeat(120)]) {
+      const rec = paxRecord('path', v);
+      const len = parseInt(rec.split(' ')[0], 10);
+      assert.strictEqual(Buffer.byteLength(rec, 'utf8'), len, 'pax 长度应等于实际字节数: ' + v);
+      assert.ok(rec.endsWith('\n'));
+    }
+  });
+
+  test('tar：损坏输入不抛错（返回 warning）', () => {
+    const tar = writeTar([{ name: 'a.txt', data: 'x' }]);
+    const broken = Buffer.from(tar);
+    broken[0] = 0; // 破坏首头校验和
+    const r = parseTar(broken);
+    assert.ok(r.warnings.length > 0, '应报告 warning 而不是抛错');
+  });
+
+  // ---- 工作区同步 diff 语义 ----
+  const { WorkspaceSync } = require('../src/main/vm/vm-workspace.js');
+
+  test('工作区同步：diff 三方比较（推送/拉回/冲突/删除）', () => {
+    const sync = new WorkspaceSync({ hostRoot: '/tmp/ws', vmMount: '/workspace', options: { dryRun: true } });
+    const t = 1000;
+    sync.baseline = {
+      version: 1,
+      files: {
+        'a.txt': { size: 1, mtimeMs: t },
+        'b.txt': { size: 1, mtimeMs: t },
+        'c.txt': { size: 1, mtimeMs: t },
+        'd.txt': { size: 1, mtimeMs: t },
+        'keep.txt': { size: 1, mtimeMs: t },
+      },
+    };
+    const host = {
+      'a.txt': { size: 2, mtimeMs: t + 5000 },   // 宿主改 → 推送
+      'b.txt': { size: 1, mtimeMs: t },           // 未变
+      'c.txt': { size: 1, mtimeMs: t },           // VM 改 → 不推送
+      'd.txt': { size: 1, mtimeMs: t },           // 两侧未变
+      'new.txt': { size: 1, mtimeMs: t + 1 },     // 宿主新增 → 推送
+      'keep.txt': { size: 1, mtimeMs: t },        // VM 删除、宿主未变 → 同步删除到宿主
+    };
+    const vm = {
+      'a.txt': { size: 1, mtimeMs: t },
+      'b.txt': { size: 1, mtimeMs: t },
+      'c.txt': { size: 3, mtimeMs: t + 9000 },    // VM 改 → 拉回
+      'd.txt': { size: 1, mtimeMs: t },
+      'gone.txt': { size: 9, mtimeMs: t + 70000 },// VM 新增 → 拉回
+      // keep.txt 在 VM 被删且宿主未变 → deletesHost
+    };
+    const d = sync.diff(host, vm);
+    assert.deepStrictEqual(d.toVm.sort(), ['a.txt', 'new.txt'].sort());
+    assert.deepStrictEqual(d.toHost.sort(), ['c.txt', 'gone.txt'].sort());
+    assert.deepStrictEqual(d.deletesHost, ['keep.txt']);
+    assert.deepStrictEqual(d.deletesVm, []);
+    assert.deepStrictEqual(d.conflicts, []);
+  });
+
+  test('工作区同步：删除方向（宿主删→删 VM；VM 删→删宿主）', () => {
+    const sync = new WorkspaceSync({ hostRoot: '/tmp/ws', options: { dryRun: true } });
+    sync.baseline = { version: 1, files: { 'hostdel.txt': { size: 1, mtimeMs: 1 }, 'vmdel.txt': { size: 1, mtimeMs: 1 } } };
+    const host = { 'vmdel.txt': { size: 1, mtimeMs: 1 } };              // hostdel.txt 宿主删除
+    const vm = { 'hostdel.txt': { size: 1, mtimeMs: 1 } };              // vmdel.txt 在 VM 删除
+    const d = sync.diff(host, vm);
+    assert.deepStrictEqual(d.deletesVm, ['hostdel.txt'], '宿主删除应同步到 VM');
+    assert.deepStrictEqual(d.deletesHost, ['vmdel.txt'], 'VM 删除应同步到宿主');
+  });
+
+  test('工作区同步：两侧同改判定冲突（较新方胜）', () => {
+    const sync = new WorkspaceSync({ hostRoot: '/tmp/ws', options: { dryRun: true } });
+    sync.baseline = { version: 1, files: { 'x.txt': { size: 1, mtimeMs: 1000 } } };
+    const host = { 'x.txt': { size: 10, mtimeMs: 5000 } };
+    const vm = { 'x.txt': { size: 20, mtimeMs: 9000 } };
+    const d = sync.diff(host, vm);
+    assert.strictEqual(d.conflicts.length, 1);
+    assert.strictEqual(d.conflicts[0].winner, 'vm');
+    assert.deepStrictEqual(d.toHost, ['x.txt']);
+    assert.deepStrictEqual(d.toVm, []);
+    // 两侧内容一致 → 无冲突
+    const d2 = sync.diff({ 'x.txt': { size: 5, mtimeMs: 5000 } }, { 'x.txt': { size: 5, mtimeMs: 5000 } });
+    assert.deepStrictEqual(d2.conflicts, []);
+  });
+
+  test('工作区同步：排除规则（node_modules/dist/.git/大文件后缀）', () => {
+    const sync = new WorkspaceSync({ hostRoot: '/tmp/ws', options: {} });
+    for (const p of ['node_modules/x/y.js', 'a/dist/b.js', '.git/HEAD', 'a/b.qcow2', 'a/b.log', 'deep/node_modules/z']) {
+      assert.strictEqual(sync.shouldExclude(p), true, '应排除: ' + p);
+    }
+    for (const p of ['src/a.js', '.gitignore', 'docs/readme.md', 'dist.txt']) {
+      assert.strictEqual(sync.shouldExclude(p), false, '不应排除: ' + p);
+    }
+  });
+
+  test('工作区同步：分批（字节/文件数上限）与路径映射', () => {
+    const sizes = { a: { size: 10 * 1024 * 1024 }, b: { size: 10 * 1024 * 1024 }, c: { size: 1024 } };
+    const batches = WorkspaceSync.batches(['a', 'b', 'c'], sizes, 16 * 1024 * 1024, 2000);
+    assert.strictEqual(batches.length, 2, '两个 10MB 文件不应同批（16MB 上限）');
+    assert.deepStrictEqual(batches[0], ['a']);
+    assert.deepStrictEqual(batches[1], ['b', 'c']);
+    const byCount = WorkspaceSync.batches(['a', 'b', 'c'], sizes, 1024 ** 3, 2);
+    assert.strictEqual(byCount.length, 2);
+    const sync = new WorkspaceSync({ hostRoot: 'D:/ws', vmMount: '/workspace' });
+    assert.strictEqual(sync.toVmPath('D:/ws/sub/a.js'), '/workspace/sub/a.js');
+    assert.strictEqual(sync.toHostPath('/workspace/sub/a.js').replace(/\\/g, '/'), 'D:/ws/sub/a.js');
+  });
 }
 
 // ---- DeepSeek 插件兼容层（fixture 插件端到端）----

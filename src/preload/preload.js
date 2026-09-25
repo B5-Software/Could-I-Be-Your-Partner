@@ -397,6 +397,29 @@ contextBridge.exposeInMainWorld('api', {
     download: (opts) => ipcRenderer.invoke('vm:download', opts || {}),
     cancelDownload: () => ipcRenderer.invoke('vm:downloadCancel'),
     setVariant: (variant) => ipcRenderer.invoke('vm:setVariant', variant),
+    qemuPackStatus: () => ipcRenderer.invoke('vm:qemuPackStatus'),
+    enableWhpx: () => ipcRenderer.invoke('vm:enableWhpx'),
+    forwardPort: (guestPort) => ipcRenderer.invoke('vm:forwardPort', guestPort),
+    unforwardPort: (hostPort) => ipcRenderer.invoke('vm:unforwardPort', hostPort),
+    listForwards: () => ipcRenderer.invoke('vm:listForwards'),
+    openDesktop: () => ipcRenderer.invoke('vm:openDesktop'),
+    graphicsStatus: () => ipcRenderer.invoke('vm:graphicsStatus'),
+    graphicsStart: (opts) => ipcRenderer.invoke('vm:graphicsStart', opts || {}),
+    graphicsStop: () => ipcRenderer.invoke('vm:graphicsStop'),
+    graphicsChromium: (opts) => ipcRenderer.invoke('vm:graphicsChromium', opts || {}),
+    sync: (opts) => ipcRenderer.invoke('vm:sync', opts || {}),
+    syncStatus: () => ipcRenderer.invoke('vm:syncStatus'),
+    chooseWorkspaceRoot: () => ipcRenderer.invoke('vm:chooseWorkspaceRoot'),
+    onSyncDone: (cb) => {
+      const listener = (_, data) => cb(data);
+      ipcRenderer.on('vm:sync-done', listener);
+      return () => ipcRenderer.removeListener('vm:sync-done', listener);
+    },
+    onSyncWarn: (cb) => {
+      const listener = (_, data) => cb(data);
+      ipcRenderer.on('vm:sync-warn', listener);
+      return () => ipcRenderer.removeListener('vm:sync-warn', listener);
+    },
     chooseAssetsDir: () => ipcRenderer.invoke('vm:chooseAssetsDir'),
     openAssetsDir: () => ipcRenderer.invoke('vm:openAssetsDir'),
     emergencyHostMode: () => ipcRenderer.invoke('vm:emergencyHostMode'),

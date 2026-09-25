@@ -116,6 +116,12 @@ vmService.on('progress', (p) => broadcastVm('vm:progress', p));
 vmService.on('serial', (t) => { try { if (t && String(t).trim()) broadcastVm('vm:serial', String(t).slice(-8192)); } catch (_) {} });
 vmService.on('ready', () => { vmRuntimeGate.ready = true; vmRuntimeGate.failed = false; tryShowMainWindow(); });
 vmService.on('error', (e) => broadcastVm('vm:error', { message: e?.message || String(e) }));
+vmService.on('sync-done', (r) => broadcastVm('vm:sync-done', r));
+vmService.on('sync-warn', (w) => broadcastVm('vm:sync-warn', { message: String(w) }));
+vmService.on('graphics-log', (l) => broadcastVm('vm:graphics-log', String(l)));
+vmService.on('graphics-progress', (p) => broadcastVm('vm:graphics-progress', p));
+vmService.on('forward-added', (f) => broadcastVm('vm:forward-added', f));
+vmService.on('forward-removed', (f) => broadcastVm('vm:forward-removed', f));
 // 决策模型（System One / Jev）服务
 const decisionService = new DecisionService({
   getSettings: () => settings,
@@ -1659,6 +1665,36 @@ function registerRendererReadyListener() {
       tryShowMainWindow();
     }
   });
+}
+
+/**
+ * VM 桌面窗口（P4）：内嵌 noVNC 显示虚拟机里的 X 会话。
+ * 连接信息由 vm-desktop-preload 经 IPC 取得；VNC 仅监听 guest loopback。
+ */
+let vmDesktopWindow = null;
+function openVmDesktopWindow() {
+  if (vmDesktopWindow && !vmDesktopWindow.isDestroyed()) {
+    vmDesktopWindow.show();
+    vmDesktopWindow.focus();
+    return vmDesktopWindow;
+  }
+  vmDesktopWindow = new BrowserWindow({
+    width: 1180, height: 800, minWidth: 820, minHeight: 560,
+    title: 'VM 桌面 · CIBYP-VM-OS',
+    icon: path.join(__dirname, '../../assets/icons/icon.png'),
+    backgroundColor: '#14161b',
+    show: false,
+    webPreferences: {
+      preload: path.join(__dirname, '../preload/vm-desktop-preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+    },
+  });
+  vmDesktopWindow.loadFile(path.join(__dirname, '../renderer/pages/vm-desktop.html'));
+  vmDesktopWindow.once('ready-to-show', () => { try { vmDesktopWindow.show(); } catch { /* ignore */ } });
+  vmDesktopWindow.on('closed', () => { vmDesktopWindow = null; });
+  return vmDesktopWindow;
 }
 
 /**
@@ -3228,6 +3264,9 @@ function runJSConfinedWin32(runnerPath, code, cwd, sandboxMode, workspacePath) {
 // ---- 运行位置=虚拟机：脚本类工具路由到 VM 内执行 ----
 // 语义变化（工具描述已注明）：VM 模式下 runShell/runPython/runNodeJS/runJS 在隔离环境内执行，
 // 只有 guest 里存在的运行时（bash/python3/node）可用，宿主 API 不可用。
+function qemuRuntimeVersionSafe(exe) {
+  try { return require('./vm/qemu-runtime').qemuVersion(exe); } catch { return null; }
+}
 function vmLocationActive() {
   try {
     const r = settings.runtime || {};
@@ -3235,20 +3274,28 @@ function vmLocationActive() {
   } catch { return false; }
 }
 
-/** 宿主 cwd → VM 内路径（P1 统一落到 /workspace；P2 工作区同步模块会注入真实映射） */
+/** 宿主 cwd → VM 内路径（shared 模式下由工作区同步器给出真实映射） */
 function vmCwdFor(cwd) {
-  const { mapHostPathToVm } = require('./vm/vm-pty');
-  return mapHostPathToVm(cwd, { hostRoot: null, vmMount: '/workspace' });
+  try { return vmService.toVmPath(cwd); } catch { return '/workspace'; }
 }
 
 /**
  * 在 VM 内执行脚本：写临时文件 → 解释器执行 → 收集输出。
+ * shared 模式：执行前推送宿主改动（让 VM 看到最新文件），执行后拉回 VM 改动。
  * @param {'shell'|'python'|'node'} interpreter
  */
 async function runScriptInVm(script, cwd, interpreter) {
   try {
     const inst = vmService.instance || await vmService.start();
     if (!inst || inst.state !== 'ready') return { ok: false, error: '虚拟机未就绪', location: 'vm' };
+    const shared = (settings.runtime || {}).workspaceMode !== 'isolated';
+    let syncNote = '';
+    if (shared) {
+      try {
+        const pre = await vmService.syncWorkspace({ direction: 'push', reason: 'pre-tool' });
+        if (pre && !pre.ok && pre.error) syncNote += `[工作区同步] ${pre.error}\n`;
+      } catch (e) { syncNote += `[工作区同步] ${e.message}\n`; }
+    }
     const ext = interpreter === 'python' ? 'py' : interpreter === 'node' ? 'js' : 'sh';
     const remote = `/tmp/cibyp-run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
     const sftp = await inst.sftp();
@@ -3257,11 +3304,18 @@ async function runScriptInVm(script, cwd, interpreter) {
     const runner = interpreter === 'python' ? 'python3 -u' : interpreter === 'node' ? 'node' : 'bash';
     const cmd = `cd ${JSON.stringify(vmCwd)} 2>/dev/null || cd /workspace; ${runner} ${remote}; rc=$?; rm -f ${remote}; exit $rc`;
     const r = await inst.exec(cmd, { timeoutMs: 120000 });
-    if (r.ok) return { ok: true, output: r.stdout, stderr: r.stderr, location: 'vm', sandboxed: true };
+    if (shared) {
+      try {
+        const post = await vmService.syncWorkspace({ direction: 'pull', reason: 'post-tool' });
+        if (post && !post.ok && post.error) syncNote += `[工作区同步] ${post.error}\n`;
+      } catch (e) { syncNote += `[工作区同步] ${e.message}\n`; }
+    }
+    const stderr = (syncNote + (r.stderr || '')).trim();
+    if (r.ok) return { ok: true, output: r.stdout, stderr, location: 'vm', sandboxed: true };
     return {
       ok: false,
-      error: r.stderr || `进程退出码 ${r.code}`,
-      stderr: r.stderr,
+      error: stderr || `进程退出码 ${r.code}`,
+      stderr,
       output: r.stdout,
       code: r.code,
       location: 'vm',
@@ -3555,6 +3609,28 @@ ipcMain.handle('vm:start', async () => {
     return { ok: false, error: e.message, code: e.code || null };
   }
 });
+// ---- 工作区同步（shared 模式）----
+ipcMain.handle('vm:sync', async (_, opts) => {
+  try {
+    const r = await vmService.syncWorkspace({ direction: (opts && opts.direction) || 'both', reason: 'manual' });
+    return r;
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('vm:syncStatus', () => ({ ok: true, ...vmService.syncStats(), workspaceRoot: vmService.workspaceRoot, workspaceMode: vmService.runtime.workspaceMode }));
+ipcMain.handle('vm:chooseWorkspaceRoot', async () => {
+  try {
+    const r = await dialog.showOpenDialog(mainWindow, {
+      properties: ['openDirectory', 'createDirectory'],
+      defaultPath: vmService.workspaceRoot || undefined,
+      title: '选择工作区根目录（宿主侧权威副本）'
+    });
+    if (r.canceled || !r.filePaths.length) return { ok: false, canceled: true };
+    settings.runtime = settings.runtime || {};
+    settings.runtime.vm = Object.assign({}, settings.runtime.vm, { workspaceRoot: r.filePaths[0] });
+    try { saveJSON(settingsPath, settings); } catch (_) {}
+    return { ok: true, dir: r.filePaths[0], requiresRestart: true };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
 ipcMain.handle('vm:stop', async () => {
   try { await vmService.stop(); return { ok: true }; } catch (e) { return { ok: false, error: e.message }; }
 });
@@ -3570,8 +3646,47 @@ ipcMain.handle('vm:assetsStatus', (_, variant) => ({ ok: true, ...vmService.asse
 ipcMain.handle('vm:manifest', async (_, opts) => {
   try { return await vmService.manifest(opts || {}); } catch (e) { return { ok: false, error: e.message }; }
 });
-ipcMain.handle('vm:download', async (_, opts) => vmService.download(opts || {}));
+ipcMain.handle('vm:download', async (_, opts) => vmService.downloadAll(opts || {}));
 ipcMain.handle('vm:downloadCancel', () => vmService.cancelDownload());
+ipcMain.handle('vm:qemuPackStatus', () => {
+  try {
+    const info = vmService.qemuPackInstalled();
+    if (!info) return { ok: true, installed: false };
+    return { ok: true, installed: true, dir: info.dir, version: qemuRuntimeVersionSafe(info.exe), source: info.source };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+// 端口预览：把 VM 内服务映射到宿主 loopback
+ipcMain.handle('vm:forwardPort', async (_, guestPort) => {
+  try {
+    const inst = vmService.instance;
+    if (!inst || inst.state !== 'ready') return { ok: false, error: '虚拟机未就绪' };
+    return { ok: true, ...(await vmService.forwardPort(Number(guestPort))) };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('vm:unforwardPort', (_, hostPort) => {
+  try { return { ok: true, ...vmService.unforwardPort(Number(hostPort)) }; } catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('vm:listForwards', () => ({ ok: true, forwards: vmService.listForwards() }));
+// 一键开启 Windows Hypervisor Platform（需要管理员，会弹 UAC）
+ipcMain.handle('vm:enableWhpx', async () => {
+  if (process.platform !== 'win32') return { ok: false, error: '仅 Windows 需要该操作' };
+  try {
+    const { spawn } = require('child_process');
+    const ps = [
+      '-NoProfile', '-Command',
+      'Start-Process -FilePath dism.exe -ArgumentList "/Online","/Enable-Feature","/FeatureName:HypervisorPlatform","/All","/NoRestart" -Verb RunAs -Wait; ' +
+      'Start-Process -FilePath dism.exe -ArgumentList "/Online","/Enable-Feature","/FeatureName:VirtualMachinePlatform","/All","/NoRestart" -Verb RunAs -Wait',
+    ];
+    await new Promise((resolve, reject) => {
+      const p = spawn('powershell.exe', ps, { windowsHide: true });
+      p.on('exit', (code) => (code === 0 ? resolve() : reject(new Error('DISM 退出码 ' + code))));
+      p.on('error', reject);
+    });
+    return { ok: true, note: '功能已申请开启（若刚开启则需重启一次才能使用 WHPX 加速）' };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
 ipcMain.handle('vm:setVariant', (_, variant) => vmService.setVariant(variant));
 ipcMain.handle('vm:chooseAssetsDir', async () => {
   try {
@@ -3600,6 +3715,25 @@ ipcMain.handle('vm:emergencyHostMode', () => {
   vmRuntimeGate.required = false;
   vmRuntimeGate.ready = true;
   tryShowMainWindow();
+  return { ok: true };
+});
+
+// ---- VM 桌面（P4：Xvfb + x11vnc + noVNC / Chromium CDP）----
+ipcMain.handle('vm:graphicsStatus', () => ({ ok: true, ...vmService.graphicsStatus() }));
+ipcMain.handle('vm:graphicsStart', async (_, opts) => {
+  try { return await vmService.graphicsStart(opts || {}); } catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('vm:graphicsStop', async () => {
+  try { return await vmService.graphicsStop(); } catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('vm:graphicsChromium', async (_, opts) => {
+  try { return await vmService.graphicsChromium(opts || {}); } catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('vm:openExternal', async (_, url) => {
+  try { await shell.openExternal(String(url)); return { ok: true }; } catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('vm:openDesktop', () => {
+  openVmDesktopWindow();
   return { ok: true };
 });
 

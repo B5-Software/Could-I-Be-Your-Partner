@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<!--
+  SPDX-License-Identifier: GPL-3.0-or-later
+  Copyright (c) 2026 B5-Software
+  This file is part of Could I Be Your Partner.
+
+  VM 桌面：通过 noVNC 内嵌显示虚拟机内的 X 会话（Xvfb + x11vnc）。
+  连接参数（宿主 loopback 端口）由主进程经 IPC 提供，VNC 本身只监听 guest loopback。
+-->
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <title>VM 桌面</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; background: #14161b; color: #e6e8ef;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Microsoft YaHei", sans-serif; overflow: hidden; }
+    #bar { height: 40px; display: flex; align-items: center; gap: 10px; padding: 0 12px;
+      background: #1b1e25; border-bottom: 1px solid #2a2f3a; font-size: 12px; }
+    #bar .spacer { flex: 1; }
+    button { font: inherit; font-size: 12px; padding: 5px 10px; border-radius: 6px; cursor: pointer;
+      border: 1px solid #333a48; background: #232833; color: inherit; }
+    button:hover { border-color: #4f8cff; }
+    button:disabled { opacity: .5; cursor: default; }
+    #status { color: #9aa4b6; }
+    #status.ok { color: #4ade80; }
+    #status.warn { color: #fbbf24; }
+    #screen-wrap { position: absolute; top: 40px; left: 0; right: 0; bottom: 0; display: flex; align-items: center; justify-content: center; background: #0f1115; }
+    #screen { width: 100%; height: 100%; }
+    #log { position: absolute; left: 0; right: 0; bottom: 0; max-height: 120px; overflow: auto; display: none;
+      background: rgba(15,17,21,.92); border-top: 1px solid #2a2f3a; font-family: Consolas, monospace; font-size: 10.5px;
+      line-height: 1.4; padding: 8px 12px; white-space: pre-wrap; color: #9aa4b6; }
+    #overlay { position: absolute; top: 40px; left: 0; right: 0; bottom: 0; display: flex; flex-direction: column;
+      align-items: center; justify-content: center; gap: 12px; background: #0f1115; font-size: 13px; color: #9aa4b6; }
+    #overlay[hidden] { display: none; }
+    .spinner { width: 24px; height: 24px; border: 3px solid rgba(230,232,239,.18); border-top-color: #4f8cff;
+      border-radius: 50%; animation: spin .9s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    code { font-family: Consolas, monospace; background: #232833; padding: 1px 4px; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <div id="bar">
+    <strong>VM 桌面</strong>
+    <span id="status">初始化…</span>
+    <span class="spacer"></span>
+    <button id="btn-chromium" title="在 VM 内启动 Chromium 并把 CDP 暴露给宿主（Playwright 可接管）">启动 Chromium</button>
+    <button id="btn-log">日志</button>
+    <button id="btn-restart">重启图形环境</button>
+    <button id="btn-stop">停止</button>
+  </div>
+  <div id="overlay"><div class="spinner"></div><div id="overlay-text">正在准备虚拟机图形环境…</div></div>
+  <div id="screen-wrap"><div id="screen"></div></div>
+  <pre id="log"></pre>
+
+  <script type="module">
+    import RFB from '../../../node_modules/@novnc/novnc/core/rfb.js';
+
+    const $ = (id) => document.getElementById(id);
+    const statusEl = $('status');
+    const overlay = $('overlay');
+    const overlayText = $('overlay-text');
+    const logEl = $('log');
+
+    let rfb = null;
+    let currentWsUrl = null;
+
+    function setStatus(text, kind) {
+      statusEl.textContent = text;
+      statusEl.className = kind || '';
+    }
+    function showOverlay(text) {
+      overlay.hidden = false;
+      if (text) overlayText.textContent = text;
+    }
+    function hideOverlay() { overlay.hidden = true; }
+    function appendLog(line) {
+      logEl.textContent = (logEl.textContent + line + '\n').slice(-4000);
+      logEl.scrollTop = logEl.scrollHeight;
+    }
+
+    async function ensureStarted() {
+      setStatus('检查图形环境…');
+      const st = await window.vmDesktop.getStatus();
+      if (st && st.ok && st.running && st.vncHostPort) {
+        return st;
+      }
+      showOverlay('正在启动虚拟机图形环境（首次会安装 Xvfb/x11vnc，约 1~3 分钟）…');
+      setStatus('启动中…');
+      const r = await window.vmDesktop.start({});
+      if (!r || !r.ok) throw new Error((r && r.error) || '启动失败');
+      return r;
+    }
+
+    async function connect() {
+      const st = await ensureStarted();
+      const insec = location.protocol === 'file:' ? true : false;
+      currentWsUrl = `ws://127.0.0.1:${st.vncHostPort}/`;
+      setStatus(`连接 ${currentWsUrl}`);
+      rfb = new RFB($('screen'), currentWsUrl, { shared: true });
+      rfb.scaleViewport = true;
+      rfb.resizeSession = false;
+      rfb.viewOnly = false;
+      rfb.addEventListener('connect', () => { hideOverlay(); setStatus('已连接（可交互）', 'ok'); });
+      rfb.addEventListener('disconnect', (e) => {
+        setStatus('连接已断开' + (e.detail && e.detail.clean ? '' : '（异常）'), 'warn');
+        if (!e.detail || !e.detail.clean) setTimeout(connect, 2000);
+      });
+      rfb.addEventListener('securityfailure', (e) => {
+        setStatus('安全握手失败：' + JSON.stringify(e.detail || {}), 'warn');
+      });
+      rfb.addEventListener('credentialsrequired', () => { rfb.sendCredentials({ password: '' }); });
+    }
+
+    window.vmDesktop.onLog((line) => appendLog(line));
+    window.vmDesktop.onProgress((p) => {
+      if (!p) return;
+      const label = { apt: '安装图形依赖', x: '启动 X 虚拟显示', vnc: '启动 x11vnc', ready: '就绪' }[p.phase] || p.phase;
+      showOverlay(`${label}…`);
+      setStatus(label + '…');
+    });
+
+    $('btn-log').addEventListener('click', () => {
+      logEl.style.display = logEl.style.display === 'block' ? 'none' : 'block';
+    });
+    $('btn-restart').addEventListener('click', async () => {
+      try { if (rfb) rfb.disconnect(); } catch (_) { /* ignore */ }
+      await window.vmDesktop.stop().catch(() => {});
+      showOverlay('正在重启图形环境…');
+      connect().catch((e) => { showOverlay('启动失败：' + e.message); setStatus('启动失败', 'warn'); });
+    });
+    $('btn-stop').addEventListener('click', async () => {
+      try { if (rfb) rfb.disconnect(); } catch (_) { /* ignore */ }
+      await window.vmDesktop.stop().catch(() => {});
+      setStatus('已停止图形环境', 'warn');
+      showOverlay('图形环境已停止（可点「重启图形环境」再开）');
+    });
+    $('btn-chromium').addEventListener('click', async () => {
+      setStatus('正在 VM 内启动 Chromium…');
+      const r = await window.vmDesktop.startChromium({}).catch((e) => ({ ok: false, error: e.message }));
+      if (r && r.ok) {
+        appendLog('Chromium CDP: ' + r.cdpUrl + '（Playwright 可用 connectOverCDP 接管）');
+        setStatus('Chromium 已启动，CDP: ' + r.cdpUrl, 'ok');
+      } else {
+        setStatus('Chromium 启动失败：' + ((r && r.error) || ''), 'warn');
+      }
+    });
+
+    connect().catch((e) => {
+      showOverlay('启动失败：' + e.message);
+      setStatus('启动失败', 'warn');
+    });
+  </script>
+</body>
+</html>

@@ -295,18 +295,31 @@ class VmInstance extends EventEmitter {
   }
 
   _attachSerial(port) {
+    let attempts = 0;
     const connect = () => {
       if (this.exit || this._serialStopped) return;
+      if (attempts++ > 120) { // 最多重试 2 分钟，避免 QEMU 已死时空转
+        this.emit('serial', '[host] 串口连接放弃（重试超限）');
+        return;
+      }
       const sock = net.connect({ host: '127.0.0.1', port });
       this.serialClient = sock;
-      sock.on('connect', () => this.emit('serial', `[host] 串口已连接 :${port}`));
+      // 关键：error 与 close 可能同时触发，必须用一次性闸门，
+      // 否则每个失败 socket 会分裂出两个重连 → 指数级增长 → OOM（实测踩坑）
+      let retried = false;
+      const retry = () => {
+        if (retried) return;
+        retried = true;
+        if (!this.exit && !this._serialStopped) setTimeout(connect, 1000);
+      };
+      sock.on('connect', () => { attempts = 0; this.emit('serial', `[host] 串口已连接 :${port}`); });
       sock.on('data', (d) => {
         const text = d.toString('utf8');
         this.serialBuf = (this.serialBuf + text).slice(-SERIAL_RING_BYTES);
         this.emit('serial', text);
       });
-      sock.on('error', () => setTimeout(connect, 1000));
-      sock.on('close', () => { if (!this.exit && !this._serialStopped) setTimeout(connect, 1000); });
+      sock.on('error', retry);
+      sock.on('close', retry);
     };
     connect();
   }

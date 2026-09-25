@@ -153,12 +153,15 @@ ipcMain.handle('terminal:make', (_, cwd, opts = {}) => {
     const rt = (() => { try { return getSettings().runtime || {}; } catch { return {}; } })();
     const vmSvc = typeof getVmService === 'function' ? getVmService() : null;
     if (rt.location === 'vm' && vmSvc && !vmSvc.emergencyHost) {
-      const { VmPtyAdapter, mapHostPathToVm } = require('./vm/vm-pty');
-      const vmCwd = mapHostPathToVm(cwd, {
-        hostRoot: (opts && opts.workspaceRoot) || null,
-        vmMount: (opts && opts.vmMount) || '/workspace',
-      });
+      const { VmPtyAdapter } = require('./vm/vm-pty');
+      const vmCwd = (() => { try { return vmSvc.toVmPath(cwd); } catch { return '/workspace'; } })();
       const term = new VmPtyAdapter({ vmService: vmSvc, cwd: vmCwd });
+      // shared 模式：终端打开时后台做一次同步（让 VM 看到宿主最新文件）
+      try {
+        if ((rt.workspaceMode || 'shared') === 'shared') {
+          vmSvc.syncWorkspace({ direction: 'both', reason: 'terminal-open' }).catch(() => {});
+        }
+      } catch { /* ignore */ }
       const entry = {
         term,
         agentBuffer: '',

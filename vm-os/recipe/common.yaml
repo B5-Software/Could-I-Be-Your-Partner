@@ -13,6 +13,8 @@
 {{- $arch := or .architecture "amd64" -}}
 {{- $version := or .version "0.1.0" -}}
 
+architecture: {{$arch}}
+
 actions:
   - action: debootstrap
     suite: trixie

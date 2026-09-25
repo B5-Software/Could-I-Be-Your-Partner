@@ -22,6 +22,8 @@ const path = require('path');
 
 const REPO = 'B5-Software/Could-I-Be-Your-Partner';
 const MANIFEST_URL = `https://github.com/${REPO}/releases/download/vm-os-latest/runtime-manifest.json`;
+/** QEMU 运行时包清单（裁剪后的 qemu-system-* + qemu-img + share 固件 + 依赖闭包） */
+const QEMU_PACK_MANIFEST_URL = `https://github.com/${REPO}/releases/download/vm-runtime-latest/runtime-pack-manifest.json`;
 // GitHub 直连在部分地区不可用时的镜像前缀（可用 settings.runtime.vm.mirror 切换）
 const MIRROR_PREFIXES = {
   official: '',
@@ -140,6 +142,40 @@ async function fetchManifest({ url = MANIFEST_URL, mirror = 'official', timeoutM
   }
 }
 
+/** 拉取 QEMU 运行时包清单 */
+async function fetchQemuPackManifest({ url = QEMU_PACK_MANIFEST_URL, mirror = 'official', timeoutMs = 20000 } = {}) {
+  const target = applyMirror(url, mirror);
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const resp = await fetch(target, { signal: ctrl.signal, redirect: 'follow' });
+    if (!resp.ok) throw new Error(`QEMU 包清单 HTTP ${resp.status}`);
+    const json = await resp.json();
+    if (!json || json.schema !== 1 || !json.packs) throw new Error('QEMU 包清单结构不合法');
+    return json;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** 从 QEMU 包清单里挑当前平台/架构的包 */
+function pickQemuPack(manifest, { platform = process.platform, arch = process.arch, mirror = 'official' } = {}) {
+  const key = platformKey(platform, arch);
+  const pack = manifest.packs[key];
+  if (!pack) throw new Error(`QEMU 包清单里没有 ${key}（可用: ${Object.keys(manifest.packs).join(', ')}）`);
+  return {
+    key,
+    platform,
+    arch,
+    qemuVersion: pack.qemuVersion || manifest.qemuVersion || null,
+    size: pack.sizeBytes || pack.size || null,
+    sha256: pack.sha256,
+    url: pack.url,
+    downloadUrl: applyMirror(pack.url, mirror),
+    license: manifest.license || pack.license || null,
+  };
+}
+
 /** 从 manifest 解析某变体 × 架构的资源集合 */
 function pickArtifacts(manifest, { variant = 'base', arch = process.arch, mirror = 'official' } = {}) {
   const ga = guestArch(arch);
@@ -167,6 +203,7 @@ function pickArtifacts(manifest, { variant = 'base', arch = process.arch, mirror
 module.exports = {
   REPO,
   MANIFEST_URL,
+  QEMU_PACK_MANIFEST_URL,
   MIRROR_PREFIXES,
   VARIANTS,
   variantById,
@@ -176,5 +213,7 @@ module.exports = {
   localStatus,
   applyMirror,
   fetchManifest,
+  fetchQemuPackManifest,
+  pickQemuPack,
   pickArtifacts,
 };

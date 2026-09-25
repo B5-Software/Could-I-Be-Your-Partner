@@ -24,6 +24,8 @@ const images = require('./vm-images');
 const qemuRuntime = require('./qemu-runtime');
 const { VmInstance } = require('./vm-instance');
 const { downloadFile, DownloadCancelled } = require('./vm-download');
+const { WorkspaceSync } = require('./vm-workspace');
+const { VmGraphics } = require('./vm-graphics');
 
 class VmService extends EventEmitter {
   /**
@@ -60,6 +62,72 @@ class VmService extends EventEmitter {
     const custom = this.runtime.vm.assetsDir;
     if (custom && String(custom).trim()) return path.resolve(String(custom).trim());
     return path.join(this.app.getPath('userData'), 'vm');
+  }
+
+  /** 工作区根目录（宿主侧权威副本；默认 文档/Could-I-Be-Your-Partner） */
+  get workspaceRoot() {
+    const custom = this.runtime.vm.workspaceRoot;
+    if (custom && String(custom).trim()) return path.resolve(String(custom).trim());
+    try { return path.join(this.app.getPath('documents'), 'Could-I-Be-Your-Partner'); } catch { return null; }
+  }
+
+  // ---------------------------------------------------------------- 工作区同步
+
+  /** 惰性创建同步器（宿主工作区 ↔ VM /workspace） */
+  _workspaceSync() {
+    const root = this.workspaceRoot;
+    if (!root) return null;
+    if (this.sync && this.sync.hostRoot === root) return this.sync;
+    const inst = this.instance;
+    const sync = new WorkspaceSync({
+      vmService: this,
+      hostRoot: root,
+      vmMount: (this.runtime.vm.workspaceMount || '/workspace'),
+      instanceDir: inst && inst.dir ? inst.dir : null,
+      options: {
+        maxFileMB: this.runtime.vm.syncMaxFileMB || 64,
+        syncGit: !!this.runtime.vm.syncGit,
+      },
+    });
+    sync.on('warn', (w) => this.emit('sync-warn', w));
+    sync.on('progress', (p) => this.emit('sync-progress', p));
+    sync.on('sync-done', (r) => this.emit('sync-done', r));
+    this.sync = sync;
+    return sync;
+  }
+
+  /** 宿主路径 → VM 路径（未同步/未就绪时退化为 /workspace） */
+  toVmPath(hostPath) {
+    try {
+      const sync = this._workspaceSync();
+      return sync ? sync.toVmPath(hostPath) : '/workspace';
+    } catch { return '/workspace'; }
+  }
+
+  /** VM 路径 → 宿主路径 */
+  toHostPath(vmPath) {
+    try {
+      const sync = this._workspaceSync();
+      return sync ? sync.toHostPath(vmPath) : null;
+    } catch { return null; }
+  }
+
+  /**
+   * 同步工作区（shared 模式）。
+   * @param {object} opts { direction: 'both'|'push'|'pull', reason }
+   */
+  async syncWorkspace(opts = {}) {
+    if (this.runtime.workspaceMode !== 'shared') {
+      return { ok: false, error: '当前为独立工作区模式（不自动同步）', mode: 'isolated' };
+    }
+    const sync = this._workspaceSync();
+    if (!sync) return { ok: false, error: '工作区根目录未就绪' };
+    if (!this.instance || this.instance.state !== 'ready') return { ok: false, error: '虚拟机未就绪' };
+    return sync.sync(opts);
+  }
+
+  syncStats() {
+    return this.sync ? this.sync.stats : { lastSyncAt: null, baselineFiles: 0 };
   }
 
   get variant() {
@@ -107,6 +175,8 @@ class VmService extends EventEmitter {
       workspaceMode: this.runtime.workspaceMode,
       variant: this.variant,
       assetsDir: this.assetsDir,
+      workspaceRoot: this.workspaceRoot,
+      sync: this.syncStats(),
       emergencyHost: this.emergencyHost,
       inst: inst ? inst.status() : { state: 'idle', progress: 0, detail: null },
     };
@@ -147,6 +217,13 @@ class VmService extends EventEmitter {
     for (const ev of ['state', 'serial', 'ready', 'error', 'exit']) {
       inst.on(ev, (payload) => this.emit(ev, payload));
     }
+    // shared 模式：VM 就绪后做一次全量双向同步（后台执行，不阻塞启动）
+    inst.on('ready', () => {
+      if (this.runtime.workspaceMode !== 'shared') return;
+      setTimeout(() => {
+        this.syncWorkspace({ direction: 'both', reason: 'boot' }).catch(() => {});
+      }, 500);
+    });
     this.instance = inst;
     return inst;
   }
@@ -178,6 +255,67 @@ class VmService extends EventEmitter {
   async shell(opts) {
     const inst = this._ensureInstance();
     return inst.shell(opts);
+  }
+
+  // ---------------------------------------------------------------- 图形环境（P4）
+
+  /** 惰性创建图形环境控制器（Xvfb + x11vnc + 可选 Chromium/CDP） */
+  graphicsController() {
+    if (!this._graphics || this._graphics.vmService !== this) {
+      this._graphics = new VmGraphics({ vmService: this });
+      this._graphics.vmService = this;
+    }
+    return this._graphics;
+  }
+
+  async graphicsStart(opts = {}) {
+    const g = this.graphicsController();
+    return g.start({ onProgress: (p) => this.emit('graphics-progress', p) });
+  }
+
+  async graphicsStop() {
+    if (!this._graphics) return { ok: true };
+    return this._graphics.stop();
+  }
+
+  graphicsStatus() {
+    return this._graphics ? this._graphics.status : { running: false, chromium: false };
+  }
+
+  async graphicsChromium(opts = {}) {
+    const g = this.graphicsController();
+    return g.startChromium(opts);
+  }
+
+  // ---------------------------------------------------------------- 端口预览
+
+  /**
+   * 把 VM 内服务端口映射到宿主 loopback（用于在宿主浏览器/内置浏览器预览）。
+   * @param {number} guestPort
+   * @param {number|null} hostPort
+   */
+  async forwardPort(guestPort, hostPort = null) {
+    const inst = this._ensureInstance();
+    if (!inst.ssh || !inst.ssh.connected) throw new Error('虚拟机未就绪');
+    const entry = await inst.ssh.forwardToHost(guestPort, hostPort);
+    this._forwards = this._forwards || new Map();
+    this._forwards.set(entry.hostPort, { guestPort, hostPort: entry.hostPort, createdAt: Date.now(), close: entry.close });
+    this.emit('forward-added', { guestPort, hostPort: entry.hostPort });
+    return { guestPort, hostPort: entry.hostPort, url: `http://127.0.0.1:${entry.hostPort}/` };
+  }
+
+  unforwardPort(hostPort) {
+    if (!this._forwards || !this._forwards.has(hostPort)) return { ok: false, error: '该端口未在转发列表中' };
+    const e = this._forwards.get(hostPort);
+    try { e.close(); } catch { /* ignore */ }
+    this._forwards.delete(hostPort);
+    this.emit('forward-removed', { guestPort: e.guestPort, hostPort });
+    return { ok: true };
+  }
+
+  listForwards() {
+    if (!this._forwards) return [];
+    return [...this._forwards.values()].map(({ close, ...rest }) => rest);
   }
 
   /** 紧急切回本机（本次运行生效；不写 settings） */
@@ -217,6 +355,104 @@ class VmService extends EventEmitter {
       return { ok: true };
     }
     return { ok: false, error: '没有进行中的下载' };
+  }
+
+  /** 当前平台是否已安装 QEMU 运行时包 */
+  qemuPackInstalled() {
+    const dir = qemuRuntime.resolveQemuDir({
+      assetsDir: this.assetsDir,
+      resourcesPath: process.resourcesPath,
+      appPath: this.app.getAppPath(),
+    });
+    if (!dir) return null;
+    const info = qemuRuntime.inspectQemuDir(dir.dir, images.guestArch(process.arch));
+    return info ? { ...info, source: dir.source } : null;
+  }
+
+  /**
+   * 下载并安装 QEMU 运行时包（裁剪版 zip，含 sha256 校验与解压自检）。
+   * @param {object} opts { mirror, manifest }
+   */
+  async downloadQemuPack(opts = {}) {
+    const mirror = opts.mirror || this.runtime.vm.mirror || 'official';
+    const task = opts.task || { cancelled: false };
+    const manifest = opts.manifest || await images.fetchQemuPackManifest({ mirror });
+    const pack = images.pickQemuPack(manifest, { mirror });
+    const key = images.platformKey(process.platform, process.arch);
+    const zipPath = path.join(this.assetsDir, 'downloads', path.basename(new URL(pack.downloadUrl).pathname) || `cibyp-qemu-${key}.zip`);
+    this.emit('progress', { phase: 'start', kind: 'qemu', version: pack.qemuVersion, variant: 'qemu-pack' });
+    await downloadFile({
+      url: pack.downloadUrl,
+      dest: zipPath,
+      sha256: pack.sha256,
+      aria2: this.aria2,
+      isCancelled: () => !!task.cancelled,
+      onProgress: (p) => this.emit('progress', { phase: 'download', kind: 'qemu', version: pack.qemuVersion, ...p }),
+    });
+    if (task.cancelled) throw new DownloadCancelled();
+
+    // 解压到 <assetsDir>/qemu/<platform-arch>/（先解压到临时目录，成功后再替换，避免半成品）
+    this.emit('progress', { phase: 'extract', kind: 'qemu', percent: 100 });
+    const targetDir = path.join(this.assetsDir, 'qemu', key);
+    const tmpDir = path.join(this.assetsDir, 'qemu', `.tmp-${key}-${Date.now()}`);
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    fs.mkdirSync(tmpDir, { recursive: true });
+    try {
+      const AdmZip = require('adm-zip');
+      const zip = new AdmZip(zipPath);
+      zip.extractAllTo(tmpDir, true);
+      // 自检：确认二进制可执行且能用
+      const info = qemuRuntime.inspectQemuDir(tmpDir, images.guestArch(process.arch));
+      if (!info) throw new Error('解压后未找到 qemu-system-* / qemu-img（包结构异常）');
+      const ver = qemuRuntime.qemuVersion(info.exe);
+      if (!ver) throw new Error('解压后的 QEMU 无法运行（缺少依赖 DLL？）');
+      fs.rmSync(targetDir, { recursive: true, force: true });
+      fs.mkdirSync(path.dirname(targetDir), { recursive: true });
+      fs.renameSync(tmpDir, targetDir);
+      this.emit('progress', { phase: 'done', kind: 'qemu', percent: 100, version: ver });
+      return { ok: true, dir: targetDir, version: ver, qemuVersion: ver };
+    } catch (e) {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+      throw e;
+    }
+  }
+
+  /**
+   * 一键准备运行时：QEMU 包（缺则下载）+ 镜像变体（缺则下载）。
+   * @param {object} opts { variant, mirror, manifest }
+   */
+  async downloadAll(opts = {}) {
+    if (this._download) return { ok: false, error: '已有下载任务进行中' };
+    const task = { cancelled: false, current: null };
+    this._download = task;
+    try {
+      const mirror = opts.mirror || this.runtime.vm.mirror || 'official';
+      const results = { qemu: null, image: null };
+      // 1) QEMU 运行时
+      const qemu = this.qemuPackInstalled();
+      if (!qemu || opts.forceQemu) {
+        task.current = 'qemu';
+        const packManifest = opts.qemuManifest || await images.fetchQemuPackManifest({ mirror });
+        results.qemu = await this.downloadQemuPack({ mirror, manifest: packManifest, task });
+      } else {
+        results.qemu = { ok: true, skipped: true, dir: qemu.dir };
+        this.emit('progress', { phase: 'done', kind: 'qemu', percent: 100, skipped: true });
+      }
+      if (task.cancelled) throw new DownloadCancelled();
+      // 2) 镜像
+      task.current = 'image';
+      results.image = await this.download({ variant: opts.variant, mirror, manifest: opts.manifest, task });
+      if (!results.image.ok && !results.image.error?.includes('已取消')) {
+        return { ok: false, error: results.image.error, results };
+      }
+      if (task.cancelled) throw new DownloadCancelled();
+      return { ok: true, results, version: results.image.version, variant: results.image.variant };
+    } catch (e) {
+      if (e instanceof DownloadCancelled || e.code === 'DOWNLOAD_CANCELLED') return { ok: false, error: '已取消' };
+      return { ok: false, error: e.message };
+    } finally {
+      this._download = null;
+    }
   }
 
   /**

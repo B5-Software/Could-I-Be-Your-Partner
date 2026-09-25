@@ -64,6 +64,100 @@
     }
   }
 
+  async function refreshVmSyncStatus(extra) {
+    const el = document.getElementById('vm-sync-status');
+    const rootEl = document.getElementById('vm-ws-root');
+    if (!el || !window.api.vm.syncStatus) return;
+    try {
+      const st = await window.api.vm.syncStatus();
+      const when = st.lastSyncAt ? new Date(st.lastSyncAt).toLocaleTimeString() : '尚未同步';
+      if (rootEl) rootEl.textContent = st.workspaceRoot ? `宿主目录：${st.workspaceRoot}` : '';
+      if (st.workspaceMode === 'isolated') {
+        _vmSetText('vm-sync-status', '独立工作区模式：不自动同步（导出/导入请用下方按钮）', false);
+        return;
+      }
+      const modeNote = '手动';
+      const detail = extra || '';
+      _vmSetText('vm-sync-status',
+        `上次同步：${when}（${st.lastReason || modeNote}）· 基线文件 ${st.baselineFiles || 0} 个` +
+        (detail ? ` · ${detail}` : ''), false);
+    } catch (e) {
+      _vmSetText('vm-sync-status', '状态获取失败：' + (e.message || e), true);
+    }
+  }
+
+  function _vmBindSyncButtons() {
+    const run = async (direction, label) => {
+      _vmSetText('vm-sync-status', `${label}中…`, false);
+      try {
+        const r = await window.api.vm.sync({ direction });
+        if (r && r.ok) {
+          window.showToast?.(`同步完成：推送 ${r.pushed} / 拉回 ${r.pulled} / 删除 ${r.deleted}${r.conflicts && r.conflicts.length ? ` / 冲突 ${r.conflicts.length}` : ''}`, 'success', 3000);
+          refreshVmSyncStatus(`用时 ${r.ms}ms`);
+        } else {
+          _vmSetText('vm-sync-status', `${label}失败：` + ((r && r.error) || '未知错误'), true);
+        }
+      } catch (e) {
+        _vmSetText('vm-sync-status', `${label}失败：` + (e.message || e), true);
+      }
+    };
+    document.getElementById('btn-vm-sync')?.addEventListener('click', () => run('both', '双向同步'));
+    document.getElementById('btn-vm-sync-push')?.addEventListener('click', () => run('push', '推送'));
+    document.getElementById('btn-vm-sync-pull')?.addEventListener('click', () => run('pull', '拉回'));
+    document.getElementById('btn-vm-ws-root')?.addEventListener('click', async () => {
+      const r = await window.api.vm.chooseWorkspaceRoot();
+      if (r && r.ok) {
+        window.showToast?.('工作区目录已更改，重启应用后生效：' + r.dir, 'success', 3500);
+        _vmMarkRestartRequired('工作区目录已变更，需要重启应用后生效。');
+        refreshVmSyncStatus();
+      }
+    });
+    if (typeof window.api.vm.onSyncDone === 'function') {
+      window.api.vm.onSyncDone((r) => {
+        if (r && r.ok) refreshVmSyncStatus(`自动同步：推 ${r.pushed} / 拉 ${r.pulled}`);
+      });
+    }
+    if (typeof window.api.vm.onSyncWarn === 'function') {
+      window.api.vm.onSyncWarn((w) => {
+        if (w && w.message) window.showToast?.(w.message, 'warning', 4000);
+      });
+    }
+  }
+
+  function _vmUpdateKindsLabel(p) {
+    return { qemu: 'QEMU 运行时', image: '系统镜像', kernel: '内核', initrd: 'initrd' }[p.kind] || p.kind || '';
+  }
+
+  async function refreshVmForwards() {
+    const el = document.getElementById('vm-forwards');
+    if (!el || !window.api.vm.listForwards) return;
+    try {
+      const r = await window.api.vm.listForwards();
+      const list = (r && r.forwards) || [];
+      if (!list.length) { el.textContent = '未映射端口'; return; }
+      el.innerHTML = list
+        .map((f) => `VM :${f.guestPort} → <a href="#" data-host-port="${f.hostPort}" class="vm-fwd-link">http://127.0.0.1:${f.hostPort}</a> <a href="#" data-remove-port="${f.hostPort}" style="color:var(--warning,#b7791f)">解除</a>`)
+        .join('<br>');
+      el.querySelectorAll('[data-remove-port]').forEach((a) => a.addEventListener('click', async (ev) => {
+        ev.preventDefault();
+        await window.api.vm.unforwardPort(Number(a.dataset.removePort));
+        refreshVmForwards();
+      }));
+      el.querySelectorAll('[data-host-port]').forEach((a) => a.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        try { window.api.openExternal?.(a.getAttribute('href')) || window.open(a.getAttribute('href'), '_blank'); } catch (_) { /* ignore */ }
+      }));
+    } catch { /* ignore */ }
+  }
+
+  async function _vmRefreshWhpxButton(accel) {
+    const btn = document.getElementById('btn-vm-enable-whpx');
+    if (!btn) return;
+    const isWin = (navigator.userAgent || '').includes('Windows');
+    const unavailable = !accel || !accel.available || (accel.backend && accel.backend === 'tcg');
+    btn.hidden = !(isWin && unavailable);
+  }
+
   async function refreshVmSettings() {
     if (!window.api.vm || !window.api.runtime) return;
     try {
@@ -88,7 +182,8 @@
         if (current) sel.value = current;
         _vmUpdateVariantDesc();
       }
-      await Promise.all([refreshVmAssetsStatus(), refreshVmRuntimeStatus()]);
+      await Promise.all([refreshVmAssetsStatus(), refreshVmRuntimeStatus(), refreshVmSyncStatus(), refreshVmForwards()]);
+      _vmRefreshWhpxButton(null);
     } catch (e) {
       _vmSetText('vm-assets-status', '初始化失败：' + (e.message || e), true);
     }
@@ -228,6 +323,7 @@
       lines.push(`镜像：${installed.length ? installed.join(', ') : '未安装'}`);
       lines.push(`资源目录：${r.assetsDir}`);
       _vmSetText('vm-probe-status', lines.join('　|　'), !(r.accel && r.accel.available));
+      _vmRefreshWhpxButton(r.accel);
     } catch (e) {
       _vmSetText('vm-probe-status', '自检失败：' + (e.message || e), true);
     }
@@ -245,13 +341,51 @@
     refreshVmRuntimeStatus();
   });
 
+  document.getElementById('btn-vm-enable-whpx')?.addEventListener('click', async () => {
+    const ok = typeof window.confirmDialog === 'function'
+      ? await window.confirmDialog('将调用 DISM 开启 Windows Hypervisor Platform（需要管理员权限，会弹 UAC）。\n\n若此前未开启，需要重启一次系统才能生效。是否继续？', '开启硬件加速')
+      : window.confirm('开启 Windows Hypervisor Platform？需要管理员权限，可能需重启。');
+    if (!ok) return;
+    _vmSetText('vm-probe-status', '正在申请开启（请在 UAC 弹窗中确认）…', false);
+    const r = await window.api.vm.enableWhpx();
+    if (r && r.ok) {
+      window.showToast?.(r.note || '已申请开启', 'success', 5000);
+      _vmSetText('vm-probe-status', '✅ 已申请开启，若刚开启请重启系统后重新自检', false);
+    } else {
+      _vmSetText('vm-probe-status', '开启失败：' + ((r && r.error) || '未知错误'), true);
+    }
+  });
+
+  document.getElementById('btn-vm-desktop')?.addEventListener('click', async () => {
+    // 先确保 VM 就绪，再开桌面窗口（窗口内部会自动启动 Xvfb/x11vnc）
+    const st = await window.api.vm.status().catch(() => null);
+    if (!st || !st.inst || st.inst.state !== 'ready') {
+      window.showToast?.('请先启动虚拟机，再打开 VM 桌面', 'warning', 3500);
+      return;
+    }
+    await window.api.vm.openDesktop();
+  });
+
+  document.getElementById('btn-vm-forward')?.addEventListener('click', async () => {    const input = document.getElementById('vm-forward-port');
+    const port = parseInt((input && input.value) || '', 10);
+    if (!port || port < 1 || port > 65535) { window.showToast?.('请填写 1-65535 的端口', 'warning', 3000); return; }
+    const r = await window.api.vm.forwardPort(port);
+    if (r && r.ok) {
+      window.showToast?.(`已映射：VM :${port} → ${r.url}`, 'success', 4000);
+      if (input) input.value = '';
+    } else {
+      window.showToast?.('映射失败：' + ((r && r.error) || '未知错误'), 'error', 4000);
+    }
+    refreshVmForwards();
+  });
+
   // 下载进度事件（与资源下载页共用同一套事件机制）
   if (window.api.vm && typeof window.api.vm.onProgress === 'function') {
     window.api.vm.onProgress((p) => {
       const bar = document.getElementById('vm-progress-bar');
       const txt = document.getElementById('vm-progress-text');
       if (!p) return;
-      const kindLabel = { image: '镜像', kernel: '内核', initrd: 'initrd' }[p.kind] || p.kind || '';
+      const kindLabel = _vmUpdateKindsLabel(p);
       if (bar && typeof p.percent === 'number') bar.style.width = Math.max(0, Math.min(100, p.percent)) + '%';
       if (txt) {
         const speed = p.speed ? ` · ${_fmtBytes(p.speed)}/s` : '';
@@ -269,5 +403,6 @@
 
   // 首次渲染 + 打开该标签页时刷新
   if (window.api.vm) {
+    _vmBindSyncButtons();
     refreshVmSettings().catch(() => {});
   }

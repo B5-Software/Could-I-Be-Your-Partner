@@ -2683,6 +2683,21 @@
                     <strong>重置虚拟机不会丢失工作区</strong>。独立：工作区只存在于虚拟机内，导出才回本机（隔离更强，适合运行不可信代码）。
                   </p>
                 </div>
+                <div class="setting-item" id="vm-sync-row">
+                  <label class="setting-label">工作区同步（共享模式）</label>
+                  <p id="vm-sync-status" style="font-size:12px;color:var(--text-secondary)">未同步</p>
+                  <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+                    <button class="btn-secondary btn-sm" id="btn-vm-sync"><i class="fa-solid fa-rotate"></i> 立即同步</button>
+                    <button class="btn-secondary btn-sm" id="btn-vm-sync-push"><i class="fa-solid fa-arrow-up"></i> 仅推送</button>
+                    <button class="btn-secondary btn-sm" id="btn-vm-sync-pull"><i class="fa-solid fa-arrow-down"></i> 仅拉回</button>
+                    <button class="btn-secondary btn-sm" id="btn-vm-ws-root"><i class="fa-solid fa-folder-tree"></i> 更换工作区目录</button>
+                  </div>
+                  <p id="vm-ws-root" style="font-size:11px;color:var(--text-tertiary);margin-top:6px"></p>
+                  <p style="font-size:11px;color:var(--text-tertiary)">
+                    宿主工作区为权威副本，VM 内 <code>/workspace</code> 与其双向增量同步（默认排除 node_modules / dist / .git / 大文件）；
+                    冲突时较新一方胜出，败方另存 <code>*.conflict-时间戳</code>，不静默丢数据。
+                  </p>
+                </div>
                 <div class="setting-item" id="runtime-restart-row" hidden>
                   <p id="runtime-restart-hint" style="font-size:12px;color:var(--warning,#b7791f)"></p>
                   <button class="btn-secondary btn-sm" id="btn-runtime-relaunch" style="margin-top:6px"><i class="fa-solid fa-rotate-right"></i> 立即重启应用</button>
@@ -2717,17 +2732,33 @@
                 <div class="setting-item">
                   <label class="setting-label">自检</label>
                   <p id="vm-probe-status" style="font-size:12px;color:var(--text-secondary)">未检测</p>
-                  <button class="btn-secondary btn-sm" id="btn-vm-probe" style="margin-top:6px"><i class="fa-solid fa-stethoscope"></i> 运行自检</button>
+                  <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px">
+                    <button class="btn-secondary btn-sm" id="btn-vm-probe"><i class="fa-solid fa-stethoscope"></i> 运行自检</button>
+                    <button class="btn-secondary btn-sm" id="btn-vm-enable-whpx" hidden><i class="fa-solid fa-microchip"></i> 开启 WHPX 硬件加速</button>
+                  </div>
                   <p style="font-size:11px;color:var(--text-tertiary);margin-top:6px">
                     检查 QEMU 运行时、硬件加速（Windows: WHPX / Linux: KVM / macOS: HVF）与镜像完整性。无硬件加速时退化为软件模拟（TCG，明显较慢）。
+                    开启 WHPX 需要管理员权限（会弹 UAC），开启后需重启一次系统。
+                  </p>
+                </div>
+                <div class="setting-item">
+                  <label class="setting-label">端口预览</label>
+                  <p id="vm-forwards" style="font-size:12px;color:var(--text-secondary)">未映射端口</p>
+                  <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px;align-items:center">
+                    <input id="vm-forward-port" type="number" min="1" max="65535" placeholder="VM 内端口，如 3000" style="width:200px;padding:4px 8px;font-size:12px">
+                    <button class="btn-secondary btn-sm" id="btn-vm-forward"><i class="fa-solid fa-plug"></i> 映射到本机</button>
+                  </div>
+                  <p style="font-size:11px;color:var(--text-tertiary);margin-top:6px">
+                    在 VM 里启动的开发服务器（如 <code>npm run dev</code>）可通过这里映射到宿主 127.0.0.1，然后用内置浏览器预览。
                   </p>
                 </div>
                 <div class="setting-item">
                   <label class="setting-label">虚拟机状态</label>
                   <p id="vm-runtime-status" style="font-size:12px;color:var(--text-secondary)">未运行</p>
-                  <div style="display:flex;gap:8px;margin-top:6px">
+                  <div style="display:flex;gap:8px;margin-top:6px;flex-wrap:wrap">
                     <button class="btn-secondary btn-sm" id="btn-vm-start"><i class="fa-solid fa-play"></i> 启动</button>
                     <button class="btn-secondary btn-sm" id="btn-vm-stop"><i class="fa-solid fa-power-off"></i> 停止</button>
+                    <button class="btn-secondary btn-sm" id="btn-vm-desktop"><i class="fa-solid fa-desktop"></i> 打开 VM 桌面</button>
                   </div>
                   <pre id="vm-serial-tail" style="display:none;margin-top:8px;max-height:140px;overflow:auto;font-size:10px;line-height:1.35;background:var(--bg-tertiary,#111);padding:8px;border-radius:6px;color:var(--text-tertiary)"></pre>
                 </div>

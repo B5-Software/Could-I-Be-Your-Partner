@@ -16,6 +16,8 @@
 {{- $version := or .version "0.1.0" -}}
 {{- $imagesize := or .imagesize "8G" -}}
 
+architecture: {{$arch}}
+
 actions:
   - action: image-partition
     imagename: cibyp-vmos-{{$version}}-{{$variant}}-{{$arch}}.img
