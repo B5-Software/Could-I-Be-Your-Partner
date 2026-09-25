@@ -2459,7 +2459,7 @@ const indexHtmlContent = readSrc('renderer/pages/index.html');
 const settingsPartContent = readSrc('renderer/js/app-parts/06-tools-skills-settings.js');
 const appUtilsContent = readSrc('renderer/js/app-utils.js');
 const dlManagerContent = readSrc('renderer/js/download-manager.js');
-const chatUiContent = readSrc('renderer/js/app-parts/05-chat-ui.js');
+const chatUiContent = readAppParts('05-chat');
 const historyContent = readSrc('renderer/js/app-parts/07-history-panels.js');
 const themeJsContent = readSrc('renderer/js/theme.js');
 const componentsCssContent = readSrc('renderer/css/components.css');
@@ -2813,7 +2813,7 @@ test('app.js 以 ESM 形式生成并作为 module 加载', () => {
 test('Ctrl/Cmd+F 按页面路由：聊天搜索不泄露到其他标签页', () => {
   const fsLocal = require('fs');
   const pathLocal = require('path');
-  const chatUi = fsLocal.readFileSync(pathLocal.join(__dirname, '../src/renderer/js/app-parts/05-chat-ui.js'), 'utf-8');
+  const chatUi = readAppParts('05-chat');
   assert.ok(chatUi.includes("document.querySelector('.page.active')"), 'Ctrl+F 路由应基于当前激活页面');
   assert.ok(chatUi.includes("window.__pageSearchHandlers[pageId]"), 'Ctrl+F 路由应查页面级搜索注册表');
   assert.ok(!chatUi.includes('if ((e.ctrlKey || e.metaKey) && (e.key === \'f\' || e.key === \'F\')) {\n        e.preventDefault();\n        if (isOpen())'), '不应保留旧的无条件全局 Ctrl+F 处理');
