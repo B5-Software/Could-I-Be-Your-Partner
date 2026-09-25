@@ -2460,7 +2460,7 @@ const settingsPartContent = readAppParts('06b-settings');
 const appUtilsContent = readSrc('renderer/js/app-utils.js');
 const dlManagerContent = readSrc('renderer/js/download-manager.js');
 const chatUiContent = readAppParts('05-chat');
-const historyContent = readSrc('renderer/js/app-parts/07-history-panels.js');
+const historyContent = readAppParts('07-history');
 const themeJsContent = readSrc('renderer/js/theme.js');
 const componentsCssContent = readSrc('renderer/css/components.css');
 const chatCssContent = readSrc('renderer/css/chat.css');
@@ -2782,7 +2782,7 @@ test('LLM 重试事件按 sessionKey 过滤，避免串到其他会话', () => {
   const pathLocal = require('path');
   const agentContent = fsLocal.readFileSync(pathLocal.join(__dirname, '../src/renderer/js/agent.js'), 'utf-8');
   const mainContent = fsLocal.readFileSync(pathLocal.join(__dirname, '../src/main/main.js'), 'utf-8');
-  const codeContent = fsLocal.readFileSync(pathLocal.join(__dirname, '../src/renderer/js/app-parts/08-code-mode.js'), 'utf-8');
+  const codeContent = readAppParts('08-code');
   assert.ok(agentContent.includes('info.sessionKey && info.sessionKey !== this.sessionKey'), 'agent.js 应按 sessionKey 过滤重试事件');
   assert.ok(codeContent.includes('info.sessionKey && info.sessionKey !== ag.sessionKey'), 'code-mode 应按 sessionKey 过滤重试事件');
   assert.ok(mainContent.includes('sessionKey: options.sessionKey || null'), '主进程广播重试事件应携带 sessionKey');
@@ -2822,9 +2822,11 @@ test('Ctrl/Cmd+F 按页面路由：聊天搜索不泄露到其他标签页', () 
 test('各模式历史接入虚拟滚动与搜索', () => {
   const fsLocal = require('fs');
   const pathLocal = require('path');
-  const parts = ['07-history-panels.js', '08-code-mode.js', '09-babe-input.js'];
+  const parts = ['07-history', '08-code', '09-babe-input.js'];
   for (const part of parts) {
-    const content = fsLocal.readFileSync(pathLocal.join(__dirname, '../src/renderer/js/app-parts', part), 'utf-8');
+    const content = part.endsWith('.js')
+      ? fsLocal.readFileSync(pathLocal.join(__dirname, '../src/renderer/js/app-parts', part), 'utf-8')
+      : readAppParts(part);
     assert.ok(content.includes('HistoryList.attach'), `${part} 应接入 HistoryList 虚拟滚动`);
     assert.ok(content.includes('makeHistorySearch'), `${part} 应接入历史搜索`);
     assert.ok(content.includes('materializeAll'), `${part} 镜像快照前应展开虚拟列表`);
