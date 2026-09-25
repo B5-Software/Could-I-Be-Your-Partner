@@ -11,9 +11,51 @@ const path = require('path');
 const partsDir = path.join(__dirname, '../src/renderer/js/app-parts');
 const outFile = path.join(__dirname, '../src/renderer/js/app.js');
 
-const files = fs.readdirSync(partsDir)
-  .filter(f => /\.js$/.test(f))
-  .sort((a, b) => a.localeCompare(b));
+/**
+ * 递归收集 app-parts 下的 .js 文件。
+ * 目录与文件名均以 `<数字>-<功能名>` 开头，按「目录数字 → 目录名 → 文件数字 → 文件名」
+ * 的自然顺序拼接；所有 part 共享同一个 appEntry 作用域，顺序即执行顺序。
+ */
+function collectParts(dir, prefix = '') {
+  const entries = fs.readdirSync(dir, { withFileTypes: true });
+  const files = [];
+  for (const entry of entries) {
+    const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) {
+      files.push(...collectParts(path.join(dir, entry.name), rel));
+    } else if (/\.js$/.test(entry.name)) {
+      files.push(rel);
+    }
+  }
+  return files;
+}
+
+function segmentNumber(seg) {
+  const m = /^(\d+)/.exec(seg);
+  return m ? Number(m[1]) : Number.POSITIVE_INFINITY;
+}
+
+function compareSegments(a, b) {
+  const na = segmentNumber(a);
+  const nb = segmentNumber(b);
+  if (na !== nb) return na - nb;
+  return a.localeCompare(b);
+}
+
+function compareParts(a, b) {
+  const pa = a.split('/');
+  const pb = b.split('/');
+  const len = Math.max(pa.length, pb.length);
+  for (let i = 0; i < len; i++) {
+    if (pa[i] === undefined) return -1;
+    if (pb[i] === undefined) return 1;
+    const cmp = compareSegments(pa[i], pb[i]);
+    if (cmp !== 0) return cmp;
+  }
+  return 0;
+}
+
+const files = collectParts(partsDir).sort(compareParts);
 
 if (files.length === 0) {
   console.error('[build-app-bundle] app-parts 目录为空');
@@ -33,7 +75,7 @@ const banner = [
   ' *',
   ' * This file is part of Could I Be Your Partner.',
   ' *',
-  ' * 生成文件：由 scripts/build-app-bundle.js 从 src/renderer/js/app-parts/*.js 拼接生成。',
+  ' * 生成文件：由 scripts/build-app-bundle.js 从 src/renderer/js/app-parts/**/*.js 拼接生成。',
   ' * 请勿直接编辑本文件，修改 app-parts 后运行 npm run build-app-bundle。',
   ' */',
   '',
