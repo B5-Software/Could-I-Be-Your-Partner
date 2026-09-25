@@ -536,7 +536,7 @@ test('session manager should track background sessions and queue overflow', () =
 });
 
 test('多会话标签栏常驻并支持右键批量关闭', () => {
-  const sessionsContent = fs.readFileSync(require('path').join(__dirname, '../src/renderer/js/app-parts/02-mode-sessions.js'), 'utf-8');
+  const sessionsContent = readAppParts('02-modes');
   assert.ok(sessionsContent.includes('标签栏常驻'), '标签栏应常驻，不随会话数量隐藏');
   assert.ok(sessionsContent.includes('打开工作目录'), '右键菜单应含打开工作目录');
   assert.ok(sessionsContent.includes('关闭左侧所有标签页'), '右键菜单应含关闭左侧');
@@ -548,7 +548,7 @@ test('多会话标签栏常驻并支持右键批量关闭', () => {
 });
 
 test('切换会话标签页应中断语音播报及其队列', () => {
-  const sessionsContent = fs.readFileSync(require('path').join(__dirname, '../src/renderer/js/app-parts/02-mode-sessions.js'), 'utf-8');
+  const sessionsContent = readAppParts('02-modes');
   const idx = sessionsContent.indexOf('async function activateSession');
   assert.ok(idx !== -1, '应存在 activateSession');
   const block = sessionsContent.slice(idx, idx + 1400);
