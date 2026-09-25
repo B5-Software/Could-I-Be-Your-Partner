@@ -209,11 +209,16 @@ node scripts/download-voice-models.js --voice  # 仅在需要随包内置语音�
 │   ├── renderer/                # 渲染进程（UI 层）
 │   │   ├── js/
 │   │   │   ├── app.js          # ★ 拼接产物（勿手改！见 app-parts）
-│   │   │   ├── app-parts/      # ★ 主控制器源码，按文件名顺序拼接成 app.js
-│   │   │   │   ├── 01-app-init.js
-│   │   │   │   ├── 05-chat-ui.js
-│   │   │   │   ├── 06-tools-skills-settings.js
-│   │   │   │   └── ...         # 11 个 part（另有 app-parts/README.md 说明）
+│   │   │   ├── app-parts/      # ★ 主控制器源码（按功能分子目录，自然排序拼接成 app.js）
+│   │   │   │   ├── 01-boot/            # 启动、字体、头像框、WebUI 镜像、页面导航
+│   │   │   │   ├── 02-modes/           # 模式切换与会话标签栏
+│   │   │   │   ├── 03a-onboarding/     # 首次引导
+│   │   │   │   ├── 03b-remote/         # Remote 镜像
+│   │   │   │   ├── 03c-session-status/ # 上下文/费用显示
+│   │   │   │   ├── 05-chat/            # 聊天界面
+│   │   │   │   ├── 06a-tools/          # 工具/技能/知识/记忆页
+│   │   │   │   ├── 06b-settings/       # 设置页
+│   │   │   │   └── ...                 # 共 16 个功能目录、169 个 part（见 app-parts/README.md）
 │   │   │   ├── voice-ui.js     # 主窗口语音控制器（麦克风按钮/听写）
 │   │   │   ├── agent.js        # AI Agent 引擎核心（指令与工具路由）
 │   │   │   ├── context-manager.js  # 上下文管理系统
@@ -241,14 +246,16 @@ node scripts/download-voice-models.js --voice  # 仅在需要随包内置语音�
 
 ## app-parts 结构（重要）
 
-`src/renderer/js/app.js` **不是手写源码**，由
-`src/renderer/js/app-parts/*.js` 按文件名顺序拼接生成（ESM 输出），
+`src/renderer/js/app.js` **不是手写源码**，由 `src/renderer/js/app-parts/**/*.js`
+按「目录数字 → 目录名 → 文件数字 → 文件名」的自然顺序拼接生成（ESM 输出），
 页面通过 `<script type="module">` 加载。
 
-- 所有 part 共享同一个作用域，可互相直接引用
+- 目录按功能划分（`NN-xxx/`），目录内文件按功能命名并编号（`NN-xxx.js`）
+- 所有 part 共享同一个作用域，可互相直接引用；拼接顺序即执行顺序
 - **修改 UI 控制器请编辑 app-parts 中的对应文件**，不要直接改 `app.js`
 - 改完后运行 `npm run build-app-bundle` 重新拼接
 - `npm start`、`npm test` 和打包脚本会自动执行拼接，通常无需手动运行
+- 各目录职责与文件清单见 `src/renderer/js/app-parts/README.md`
 
 ---
 

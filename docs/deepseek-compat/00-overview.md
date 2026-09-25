@@ -22,7 +22,7 @@
 |---|---|---|
 | [01-plugin-compat.md](01-plugin-compat.md) | 插件兼容层 + 翻译器 + 插件管理 | `src/main/ds-compat/`、`src/renderer/js/ds-compat/`、设置「插件」页 |
 | [02-sandbox.md](02-sandbox.md) | 沙箱运行器 + 设置页 | `src/main/sandbox-runner.js`、设置「沙箱」页 |
-| [03-tools-page.md](03-tools-page.md) | 工具页两级重构 | `app-parts/06-*`、`pages/index.html` |
+| [03-tools-page.md](03-tools-page.md) | 工具页两级重构 | `app-parts/06a-tools/`、`pages/index.html` |
 | [04-prompt-cache.md](04-prompt-cache.md) | 前缀缓存纪律 | `agent.js`、`context-manager.js`、`tools-def.js` |
 | [05-context-compaction.md](05-context-compaction.md) | 上下文压缩重构 | `context-manager.js`、`agent.js`、`main.js` |
 
@@ -34,5 +34,5 @@
 
 ## 提交纪律
 
-- `src/renderer/js/app.js` 是 `scripts/build-app-bundle.js` 的产物，**绝不手改**；只改 `app-parts/*` 后运行 `npm run build-app-bundle`。
+- `src/renderer/js/app.js` 是 `scripts/build-app-bundle.js` 的产物，**绝不手改**；只改 `app-parts/**/*` 后运行 `npm run build-app-bundle`。
 - 每阶段跑 `npm test`；提交信息遵循仓库既有风格（feat/fix/refactor + 中文说明）。

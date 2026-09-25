@@ -75,7 +75,7 @@ const banner = [
   ' *',
   ' * This file is part of Could I Be Your Partner.',
   ' *',
-  ' * 生成文件：由 scripts/build-app-bundle.js 从 src/renderer/js/app-parts/**/*.js 拼接生成。',
+  ' * 生成文件：由 scripts/build-app-bundle.js 从 src/renderer/js/app-parts 下的 part 文件拼接生成。',
   ' * 请勿直接编辑本文件，修改 app-parts 后运行 npm run build-app-bundle。',
   ' */',
   '',
