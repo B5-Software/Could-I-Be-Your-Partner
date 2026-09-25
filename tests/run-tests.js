@@ -2788,6 +2788,21 @@ test('LLM 重试事件按 sessionKey 过滤，避免串到其他会话', () => {
   assert.ok(mainContent.includes('sessionKey: options.sessionKey || null'), '主进程广播重试事件应携带 sessionKey');
 });
 
+test('多模态工具结果（读图/截图）必须回填工具卡片完成状态', () => {
+  const fsLocal = require('fs');
+  const pathLocal = require('path');
+  const agentContent = fsLocal.readFileSync(pathLocal.join(__dirname, '../src/renderer/js/agent.js'), 'utf-8');
+  // Chat 模式工具卡片只监听 onToolCall：多模态分支 continue 前必须发射 done，
+  // 否则卡片会永久停留在"执行中"。
+  const branchIdx = agentContent.indexOf('toolResult._multimodal && toolResult.imageUrl');
+  assert.ok(branchIdx !== -1, '应存在多模态工具结果分支');
+  const branch = agentContent.slice(branchIdx, branchIdx + 2600);
+  assert.ok(branch.includes("this.onToolCall(toolName, args, 'done', uiResult, tc.id)"), '多模态分支应通知 UI 工具已完成');
+  // UI 事件只发一次，且展示副本不含 base64 图片
+  assert.strictEqual((agentContent.match(/onMessage\('tool-result'/g) || []).length, 1, 'tool-result 事件应只发射一次');
+  assert.ok(agentContent.includes('multimodal: true, text: toolResult.text'), 'UI 卡片展示副本应只含文字摘要，不带 base64');
+});
+
 test('Office 硬解工具改名并新增正规 Word/PPT 工具', () => {
   const fsLocal = require('fs');
   const pathLocal = require('path');

@@ -42,6 +42,24 @@ const MINIMAL_TOOL_NAMES = [
   'readFile', 'listDirectory', 'editFile'
 ];
 
+// 只读工具的批量/并行规格：itemsKey 为批量参数名，singularKey 为单项参数名（null=对象合并），
+// limit 为并发上限，itemChars 为单项结果注入上下文前的截断长度。
+const BATCH_TOOL_SPECS = {
+  readFile: { itemsKey: 'paths', singularKey: 'path', limit: 4, itemChars: 6000 },
+  listDirectory: { itemsKey: 'paths', singularKey: 'path', limit: 4, itemChars: 4000 },
+  getFileEncodingInfo: { itemsKey: 'paths', singularKey: 'path', limit: 4, itemChars: 2000 },
+  eslintLintFile: { itemsKey: 'paths', singularKey: 'path', limit: 4, itemChars: 4000 },
+  extractTextFromImage: { itemsKey: 'imagePaths', singularKey: 'imagePath', limit: 2, itemChars: 8000 },
+  scanQRCode: { itemsKey: 'imagePaths', singularKey: 'imagePath', limit: 2, itemChars: 2000 },
+  localSearch: { itemsKey: 'searches', singularKey: null, limit: 3, itemChars: 4000 },
+  httpRequest: { itemsKey: 'requests', singularKey: null, limit: 4, itemChars: 4000 },
+  webFetch: { itemsKey: 'urls', singularKey: 'url', limit: 3, itemChars: 8000 },
+  dnsLookup: { itemsKey: 'hostnames', singularKey: 'hostname', limit: 4, itemChars: 1500 },
+  checkSSLCert: { itemsKey: 'hostnames', singularKey: 'hostname', limit: 4, itemChars: 2000 },
+  memoryAdd: { itemsKey: 'items', singularKey: null, limit: 2, itemChars: 1500 },
+  knowledgeBaseAdd: { itemsKey: 'items', singularKey: null, limit: 2, itemChars: 1500 },
+};
+
 // AI Agent Engine - handles the autonomous agent loop
 class Agent {
   constructor() {
@@ -234,14 +252,31 @@ class Agent {
       let effort = entry.effort || 'off';
       if (routing.effortStrategy === 'jev' && decisionOn
           && decisionUsages.reasoningRouting !== false && typeof window.api.decisionChoice === 'function') {
+        // 档位跟随模型真实能力（API 元数据优先，失败回退五档）
+        let variantLevels = null;
+        try {
+          if (typeof window.api.llmCapabilities === 'function') {
+            const caps = await window.api.llmCapabilities(
+              entry.provider || 'openai-compat',
+              entry.model || '',
+              entry.apiUrl || '',
+              entry.apiKey || ''
+            );
+            if (caps && caps.ok && Array.isArray(caps.variants) && caps.variants.length) variantLevels = caps.variants;
+          }
+        } catch { /* fall back below */ }
+        const levels = variantLevels || ['off', 'auto', 'low', 'medium', 'high'].map(id => ({ id, label: id }));
+        const criteria = {};
+        for (const v of levels.slice(0, 9)) criteria[v.id] = v.label || v.id;
+        const accepted = Object.keys(criteria);
         const r2 = await window.api.decisionChoice({
-          state: `用户消息：${state}\n\n即将使用的模型：${entry.model}。任务：选择该任务的推理强度。简单问答/闲聊选 off；多步工具任务选 low/medium；复杂推理/调试/架构选 high。`,
+          state: `用户消息：${state}\n\n即将使用的模型：${entry.model}。任务：选择该任务的推理强度（可选档位：${accepted.join('/')}）。简单问答/闲聊选 off/auto；多步工具任务选低中档；复杂推理/调试/架构选高档。`,
           instructions: 'How much reasoning effort is appropriate?',
-          criteria: { off: '不需要推理（最快）', low: '少量推理', medium: '中等推理', high: '深度推理' },
+          criteria,
           key: 'effort',
           usage: 'reasoningRouting'
         });
-        if (r2 && r2.value && ['off', 'low', 'medium', 'high', 'auto'].includes(r2.value)) {
+        if (r2 && r2.value && accepted.includes(r2.value)) {
           effort = r2.value;
           decidedBy += '+jev-effort';
         }
@@ -2012,6 +2047,41 @@ ${affectionDesc}
     }
   }
 
+  // 调用 provider 精确 count_tokens（仅 Anthropic messages 协议支持，主进程缓存不支持端点）
+  async _countTokensExact() {
+    try {
+      if (!this.contextManager || typeof this.contextManager.setRealBasis !== 'function') return false;
+      if (typeof window.api?.llmCountTokens !== 'function') return false;
+      const llm = this.settings?.llm || {};
+      const model = this.llmOverride?.model || llm.model || '';
+      const apiUrl = llm.apiUrl || '';
+      if (!model || !apiUrl) return false;
+      const msgs = typeof this.contextManager.getMessages === 'function' ? this.contextManager.getMessages() : [];
+      const systemParts = [];
+      const rest = [];
+      for (const m of msgs) {
+        if (m && m.role === 'system') {
+          systemParts.push(typeof m.content === 'string' ? m.content : '');
+        } else if (m) {
+          rest.push(m);
+        }
+      }
+      const r = await window.api.llmCountTokens({
+        model,
+        apiUrl,
+        system: systemParts.join('\n\n'),
+        messages: rest,
+        tools: this.getRuntimeToolSchemas(),
+        sessionKey: this.sessionKey || null,
+      });
+      if (!r || !r.ok || !r.tokens) return false;
+      this.contextManager.setRealBasis(r.tokens, model);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   async _manageContext(ctx = this.contextManager, notify, opts = {}) {
     const maxFailures = opts.maxFailures ?? (this.settings?.agent?.autoCompactMaxFailures ?? 3);
     const isSub = !!opts.isSubAgent;
@@ -2028,6 +2098,16 @@ ${affectionDesc}
     let stats = readStats();
     let usage = usageOf(stats);
     let action = 'none';
+
+    // Tier1（精确计数）：Anthropic messages 协议端点支持 count_tokens，
+    // 估算进入阈值 90% 临界区时用精确输入 token 锚定，避免估算偏差导致溢出/误压缩
+    if (stats.basis !== 'api' && usage > thresholdPct * 0.9) {
+      const counted = await this._countTokensExact();
+      if (counted) {
+        stats = readStats();
+        usage = usageOf(stats);
+      }
+    }
 
     // Tier0.5：决策模型逐条评估旧工具结果（默认关；仅高置信"不再需要"才清理，失败/低置信不动）
     {
@@ -2289,10 +2369,17 @@ ${affectionDesc}
       // - Anthropic: usage.cache_read_input_tokens + usage.cache_creation_input_tokens
       if (result.data?.usage) {
         this._accumulateUsage(result.data.usage, result.data?._meta?.model);
-        // 用真实 prompt_tokens 校准估算器（滑动平滑，修正 CJK 等估算偏差）
+        // 真实用量优先：以 API prompt_tokens 作为上下文占用基线；
+        // 估算值仅用于校准兜底，且不拿"估算出来的 usage"再校准自己（防止自强化漂移）
+        const usageEstimated = result.data.usage._estimated === true;
         const promptTokens = result.data.usage.prompt_tokens ?? result.data.usage.input_tokens;
-        if (promptTokens && this.contextManager && typeof this.contextManager.calibrateTokens === 'function') {
-          this.contextManager.calibrateTokens(promptTokens, this.contextManager.getRawTotalTokens());
+        if (!usageEstimated && promptTokens && this.contextManager) {
+          if (typeof this.contextManager.setRealBasis === 'function') {
+            this.contextManager.setRealBasis(promptTokens, result.data?._meta?.model);
+          }
+          if (typeof this.contextManager.calibrateTokens === 'function') {
+            this.contextManager.calibrateTokens(promptTokens, this.contextManager.getRawTotalTokens());
+          }
         }
       }
 
@@ -2538,9 +2625,14 @@ ${affectionDesc}
 
           // 隐私信息保护：UI 展示副本过滤隐私信息（真实 toolResult 仍保留完整结构）
           const displayResult = this._sanitizeToolResultForDisplay(toolResult);
+          // 多模态结果的 imageUrl 是数 MB 的 base64：UI 卡片只展示文字摘要，
+          // 避免序列化整张图片，也避免卡片里出现无意义的 base64 文本。
+          const uiResult = toolResult && toolResult._multimodal
+            ? { ok: toolResult.ok !== false, multimodal: true, text: toolResult.text || '' }
+            : displayResult;
 
           // 通知 UI 工具执行结果
-          if (this.onMessage) this.onMessage('tool-result', { name: toolName, result: displayResult, callId: tc.id });
+          if (this.onMessage) this.onMessage('tool-result', { name: toolName, result: uiResult, callId: tc.id });
 
           // 多模态工具结果：图片以 image_url 格式注入上下文，而非 base64 字符串
           if (toolResult && toolResult._multimodal && toolResult.imageUrl) {
@@ -2566,7 +2658,8 @@ ${affectionDesc}
                 : JSON.stringify(toolResult);
               this.contextManager.addToolResult(tc.id, toolName, combined);
             }
-            if (this.onMessage) this.onMessage('tool-result', { name: toolName, result: displayResult, callId: tc.id });
+            // 多模态结果同样要通知 UI 工具已完成，否则卡片会永久停留在"执行中"
+            if (this.onToolCall) this.onToolCall(toolName, args, 'done', uiResult, tc.id);
             continue;
           }
 
@@ -2674,6 +2767,84 @@ ${affectionDesc}
     }
   }
 
+  async _runBatch(items, limit, worker) {
+    const results = new Array(items.length);
+    const concurrency = Math.max(1, Math.min(items.length, Number(limit) || 4));
+    let cursor = 0;
+    const runners = new Array(concurrency).fill(0).map(async () => {
+      while (true) {
+        const index = cursor++;
+        if (index >= items.length) return;
+        try { results[index] = await worker(items[index], index); }
+        catch (e) { results[index] = { ok: false, error: e && e.message ? e.message : String(e) }; }
+      }
+    });
+    await Promise.all(runners);
+    return results;
+  }
+
+  _truncateBatchResult(result, maxChars) {
+    if (typeof result === 'string') {
+      return result.length > maxChars ? result.slice(0, maxChars) + `\n...[truncated ${result.length - maxChars} chars]` : result;
+    }
+    if (result && typeof result === 'object') {
+      const clone = { ...result };
+      for (const key of ['content', 'text', 'result', 'data', 'html', 'output', 'ocrText', 'renderedText']) {
+        const value = clone[key];
+        if (typeof value === 'string' && value.length > maxChars) {
+          clone[key] = value.slice(0, maxChars) + `\n...[truncated ${value.length - maxChars} chars]`;
+        }
+      }
+      return clone;
+    }
+    return result;
+  }
+
+  async _maybeBatchTool(name, args) {
+    const spec = BATCH_TOOL_SPECS[name];
+    if (!spec || !args || typeof args !== 'object') return null;
+    if (this.settings?.tools && this.settings.tools[name] === false) return null;
+    const list = args[spec.itemsKey];
+    if (!Array.isArray(list) || list.length === 0) return null;
+    if (list.length === 1) {
+      const only = this._batchItemArgs(spec, args, list[0]);
+      if (only) return this.executeTool(name, only);
+    }
+    const base = { ...args };
+    delete base[spec.itemsKey];
+    const singles = [];
+    for (const item of list) {
+      const single = this._batchItemArgs(spec, base, item);
+      if (single) singles.push(single);
+    }
+    if (!singles.length) return { ok: false, error: `${spec.itemsKey} 中没有有效条目` };
+    const results = await this._runBatch(singles, spec.limit, (single) => this.executeTool(name, single));
+    const summarized = results.map((r, i) => ({
+      index: i,
+      input: this._truncateBatchResult(singles[i], 300),
+      ok: !(r && r.ok === false),
+      result: this._truncateBatchResult(r, spec.itemChars),
+    }));
+    const succeeded = summarized.filter((s) => s.ok).length;
+    return {
+      ok: succeeded > 0,
+      total: summarized.length,
+      succeeded,
+      failed: summarized.length - succeeded,
+      results: summarized,
+    };
+  }
+
+  _batchItemArgs(spec, base, item) {
+    if (item == null) return null;
+    if (typeof item === 'string' || typeof item === 'number') {
+      if (!spec.singularKey) return null;
+      return { ...base, [spec.singularKey]: item };
+    }
+    if (typeof item !== 'object') return null;
+    return { ...base, ...item };
+  }
+
   async executeTool(name, args) {
     try {
       // OpenCode 免费池 agent 工具别名（bash/read/edit/glob/grep）→ CIBYP 本地实现
@@ -2726,6 +2897,9 @@ ${affectionDesc}
         }
         return { ok: false, error: typeof i18nToolReturn === 'function' ? i18nToolReturn('tool_disabled', '该工具已禁用') : '该工具已禁用' };
       }
+      // 只读工具批量/并行：args 携带批量数组时展开为多项并发执行并聚合结果
+      const batchResult = await this._maybeBatchTool(name, args);
+      if (batchResult !== null && batchResult !== undefined) return batchResult;
       switch (name) {
         case 'getTarot': {
           const result = await window.api.drawTarot(args?.spread ? { spread: args.spread } : undefined);
@@ -4123,9 +4297,53 @@ ${affectionDesc}
           const coord = args.coordinate;
           switch (action) {
             case 'screenshot':
-              return await window.api.computerScreenshot(this.workspacePath);
+              return await window.api.computerScreenshot(this.workspacePath, { display_id: args.display_id, annotate: args.annotate });
+            case 'list_displays':
+              return await window.api.computerListDisplays();
             case 'get_ui_tree':
-              return await window.api.computerGetUITree();
+              return await window.api.computerGetUITree({
+                includeOcr: args.include_ocr,
+                ocrOnly: args.ocr_only,
+                displayId: args.display_id,
+                engine: args.engine,
+                workspacePath: this.workspacePath,
+              });
+            case 'ocr':
+              return await window.api.computerOcr({ workspacePath: this.workspacePath, displayId: args.display_id, engine: args.engine });
+            case 'find_element': {
+              if (!args.text) return { ok: false, error: 'text parameter required for find_element' };
+              return await window.api.computerFindElement({
+                text: args.text,
+                role: args.role,
+                nth: args.nth,
+                source: args.source,
+                refresh: args.refresh,
+                workspacePath: this.workspacePath,
+                displayId: args.display_id,
+              });
+            }
+            case 'click_element': {
+              const clickPayload = {
+                id: args.element_id,
+                text: args.text,
+                nth: args.nth,
+                space: args.coord_space || 'screenshot',
+                button: args.button || 'left',
+                doubleClick: !!args.double_click,
+                verify: args.verify !== false,
+                verifyWaitMs: args.verify_wait_ms,
+                workspacePath: this.workspacePath,
+                displayId: args.display_id,
+              };
+              if (Array.isArray(coord) && coord.length >= 2) {
+                clickPayload.x = coord[0];
+                clickPayload.y = coord[1];
+              }
+              if (!clickPayload.id && !clickPayload.text && !Number.isFinite(Number(clickPayload.x))) {
+                return { ok: false, error: 'click_element requires element_id, text or coordinate [x,y]' };
+              }
+              return await window.api.computerClickElement(clickPayload);
+            }
             case 'mouse_move': {
               if (!Array.isArray(coord) || coord.length < 2)
                 return { ok: false, error: 'coordinate [x,y] required for mouse_move' };
@@ -4220,26 +4438,53 @@ ${affectionDesc}
     }
   }
 
-  handleTodo(args) {
-    switch (args.action) {
-      case 'add':
-        this.todoIdCounter++;
-        this.todoItems.push({ id: this.todoIdCounter, text: args.text, done: false });
-        if (this.onTodoUpdate) this.onTodoUpdate(this.todoItems);
-        return { ok: true, id: this.todoIdCounter };
-      case 'remove':
-        this.todoItems = this.todoItems.filter(t => t.id !== args.id);
-        if (this.onTodoUpdate) this.onTodoUpdate(this.todoItems);
-        return { ok: true };
-      case 'toggle':
-        const item = this.todoItems.find(t => t.id === args.id);
-        if (item) { item.done = !item.done; if (this.onTodoUpdate) this.onTodoUpdate(this.todoItems); return { ok: true, done: item.done }; }
-        return { ok: false, error: typeof i18nToolReturn === 'function' ? i18nToolReturn('todo_not_found', '未找到该待办事项') : '未找到该待办事项' };
-      case 'list':
-        return { ok: true, items: this.todoItems };
-      default:
-        return { ok: false, error: typeof i18nToolReturn === 'function' ? i18nToolReturn('unknown_action', '未知操作') : '未知操作' };
+  _applyTodoOp(op) {
+    const action = op && op.action;
+    if (action === 'add') {
+      const text = typeof op.text === 'string' ? op.text.trim() : '';
+      if (!text) return { ok: false, error: typeof i18nToolReturn === 'function' ? i18nToolReturn('todo_text_required', '待办内容不能为空') : '待办内容不能为空' };
+      this.todoIdCounter++;
+      this.todoItems.push({ id: this.todoIdCounter, text, done: false });
+      return { ok: true, action, id: this.todoIdCounter, text };
     }
+    if (action === 'remove') {
+      const id = Number(op.id);
+      const before = this.todoItems.length;
+      this.todoItems = this.todoItems.filter(t => t.id !== id);
+      if (this.todoItems.length === before) return { ok: false, action, id, error: typeof i18nToolReturn === 'function' ? i18nToolReturn('todo_not_found', '未找到该待办事项') : '未找到该待办事项' };
+      return { ok: true, action, id };
+    }
+    if (action === 'toggle') {
+      const id = Number(op.id);
+      const item = this.todoItems.find(t => t.id === id);
+      if (!item) return { ok: false, action, id, error: typeof i18nToolReturn === 'function' ? i18nToolReturn('todo_not_found', '未找到该待办事项') : '未找到该待办事项' };
+      item.done = !item.done;
+      return { ok: true, action, id, done: item.done, text: item.text };
+    }
+    return { ok: false, action, error: typeof i18nToolReturn === 'function' ? i18nToolReturn('unknown_action', '未知操作') : '未知操作' };
+  }
+
+  handleTodo(args = {}) {
+    if (args.action === 'list') return { ok: true, items: this.todoItems };
+    const ops = Array.isArray(args.operations) && args.operations.length
+      ? args.operations
+      : (args.action && args.action !== 'batch' ? [args] : []);
+    if (args.action === 'batch' && ops.length === 0) {
+      return { ok: false, error: typeof i18nToolReturn === 'function' ? i18nToolReturn('todo_operations_required', 'operations 不能为空') : 'operations 不能为空' };
+    }
+    if (ops.length === 0) {
+      return { ok: false, error: typeof i18nToolReturn === 'function' ? i18nToolReturn('unknown_action', '未知操作') : '未知操作' };
+    }
+    const results = ops.map(op => this._applyTodoOp(op));
+    if (this.onTodoUpdate) this.onTodoUpdate(this.todoItems);
+    const ok = results.every(r => r.ok);
+    const added = results.filter(r => r.ok && r.action === 'add').map(r => r.id);
+    if (results.length === 1) {
+      const r = results[0];
+      if (!r.ok) return r;
+      return { ...r, ok: true, items: this.todoItems };
+    }
+    return { ok, count: results.length, succeeded: results.filter(r => r.ok).length, results, added, items: this.todoItems };
   }
 
   async runSubAgent(args) {
@@ -4730,6 +4975,10 @@ ${tarotLine}
       return { ok: false, skipped: false, message: e && e.message ? e.message : String(e) };
     }
   }
+}
+
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = { Agent, BATCH_TOOL_SPECS };
 }
 
 // ---- MCP 状态变化 → 自动刷新动态工具注册 ----
