@@ -557,7 +557,7 @@ test('切换会话标签页应中断语音播报及其队列', () => {
 });
 
 test('上下文滑动条指示器应实时跟随拖动（input 事件，change 落盘）', () => {
-  const settingsJs = fs.readFileSync(require('path').join(__dirname, '../src/renderer/js/app-parts/06-tools-skills-settings.js'), 'utf-8');
+  const settingsJs = readAppParts('06b-settings');
   assert.ok(settingsJs.includes('bindRangeIndicator'), '应有滑动条指示器绑定');
   assert.ok(settingsJs.includes("bindRangeIndicator('setting-context-threshold'"), '阈值滑动条应绑定 input');
   assert.ok(settingsJs.includes("bindRangeIndicator('setting-context-retain'"), '保留比例滑动条应绑定 input');
@@ -807,7 +807,7 @@ test('sanguosha 窗口应自带 escapeHtml（未加载 app-utils.js）', () => {
 
 test('LLM 模型自动获取列表：模型过多时也应全部可浏览（可滚动自绘下拉）', () => {
   const html = fs.readFileSync(require('path').join(__dirname, '../src/renderer/pages/index.html'), 'utf-8');
-  const settingsJs = fs.readFileSync(require('path').join(__dirname, '../src/renderer/js/app-parts/06-tools-skills-settings.js'), 'utf-8');
+  const settingsJs = readAppParts('06b-settings');
   // 原生 datalist 已被可滚动、可搜索的自绘下拉替代
   assert.ok(html.includes('id="llm-model-dropdown"') && html.includes('id="llm-model-options"'), '缺少模型下拉面板');
   assert.ok(!html.includes('datalist id="llm-model-list"'), '不应再使用原生 datalist');
@@ -2456,7 +2456,7 @@ const readSrc = (rel) => fs.readFileSync(path_.join(__dirname, '../src/' + rel),
 const mainJsContent = readSrc('main/main.js');
 const preloadContent2 = readSrc('preload/preload.js');
 const indexHtmlContent = readSrc('renderer/pages/index.html');
-const settingsPartContent = readSrc('renderer/js/app-parts/06-tools-skills-settings.js');
+const settingsPartContent = readAppParts('06b-settings');
 const appUtilsContent = readSrc('renderer/js/app-utils.js');
 const dlManagerContent = readSrc('renderer/js/download-manager.js');
 const chatUiContent = readAppParts('05-chat');
@@ -2837,7 +2837,7 @@ test('各模式历史接入虚拟滚动与搜索', () => {
 test('设置页支持搜索', () => {
   const fsLocal = require('fs');
   const pathLocal = require('path');
-  const settingsPart = fsLocal.readFileSync(pathLocal.join(__dirname, '../src/renderer/js/app-parts/06-tools-skills-settings.js'), 'utf-8');
+  const settingsPart = readAppParts('06b-settings');
   const indexHtml = fsLocal.readFileSync(pathLocal.join(__dirname, '../src/renderer/pages/index.html'), 'utf-8');
   assert.ok(settingsPart.includes("getElementById('settings-search-input')"), '设置搜索应绑定输入框');
   assert.ok(settingsPart.includes("registerPageSearch('settings'"), '设置搜索应注册到页面级路由');
@@ -3183,7 +3183,7 @@ function runToolsPageRefactorTests() {
   const pathLocal = require('path');
 
   test('工具页主界面为组表格 + 三态开关 + 模态下钻', () => {
-    const part = fsLocal.readFileSync(pathLocal.join(__dirname, '../src/renderer/js/app-parts/06-tools-skills-settings.js'), 'utf-8');
+    const part = readAppParts('06a-tools');
     assert.ok(part.includes('tool-group-row'), '应渲染组表格行');
     assert.ok(part.includes('indeterminate'), '应实现三态开关');
     assert.ok(part.includes('openToolGroupModal'), '应有点组打开模态框');
@@ -4994,7 +4994,7 @@ test('界面动效：主标签页切换动画可选 + 打包版本注入 git 哈
   const mainContent = fsL.readFileSync(pathL.join(__dirname, '../src/main/main.js'), 'utf-8');
   const cssContent = fsL.readFileSync(pathL.join(__dirname, '../src/renderer/css/main.css'), 'utf-8');
   const themeJs = fsL.readFileSync(pathL.join(__dirname, '../src/renderer/js/theme.js'), 'utf-8');
-  const settingsJs = fsL.readFileSync(pathL.join(__dirname, '../src/renderer/js/app-parts/06-tools-skills-settings.js'), 'utf-8');
+  const settingsJs = readAppParts('06b-settings');
   const pkg = JSON.parse(fsL.readFileSync(pathL.join(__dirname, '../package.json'), 'utf-8'));
 
   // 设置页「动效」tab
