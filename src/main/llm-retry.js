@@ -263,7 +263,7 @@ async function fetchLLMWithRetry(cfg) {
             `HTTP ${resp.status}: ${errText.slice(0, 200)}`,
             { status: resp.status, retryAfter: cls.retryAfter, kind: cls.kind }
           );
-          console.error(`[${label} ${ts()}] ✗ ${resp.status} (${dur}ms) model=${currentModel} kind=${cls.kind}（计费不足重试次数用尽）: ${lastError.message.slice(0, 200)}`);
+          console.error(`[${label} ${ts()}] ✗ ${resp.status} (${dur}ms) model=${currentModel} kind=${cls.kind} (billing-insufficient retries exhausted): ${lastError.message.slice(0, 200)}`);
           break;
         }
       } else {
@@ -277,7 +277,7 @@ async function fetchLLMWithRetry(cfg) {
         { status: resp.status, retryAfter: cls.retryAfter, kind: cls.kind }
       );
       const delay = getRetryDelay(attempt, cls.retryAfter);
-      console.warn(`[${label} ${ts()}] ↻ ${resp.status} (${dur}ms) model=${currentModel} kind=${cls.kind} → ${Math.round(delay / 1000)}s 后重试（${attempt}/${maxRetries}）: ${String(errText).replace(/\s+/g, ' ').slice(0, 200)}`);
+      console.warn(`[${label} ${ts()}] ↻ ${resp.status} (${dur}ms) model=${currentModel} kind=${cls.kind} → ${Math.round(delay / 1000)}s retry (${attempt}/${maxRetries}）: ${String(errText).replace(/\s+/g, ' ').slice(0, 200)}`);
       onRetry({
         attempt, status: resp.status, kind: cls.kind, delayMs: delay,
         requestId, error: lastError.message
@@ -289,7 +289,7 @@ async function fetchLLMWithRetry(cfg) {
       // 用户主动停止（abortAllRequests 触发）— 不重试、不通知 UI 重试
       if (controller._userAborted) {
         lastError = new LLMError(err.message || String(err), { kind: 'aborted' });
-        console.warn(`[${label} ${ts()}] ✗ 已取消 (${dur}ms) model=${currentModel}`);
+        console.warn(`[${label} ${ts()}] ✗ cancelled (${dur}ms) model=${currentModel}`);
         break;
       }
       const cls = classifyThrownError(err);
@@ -300,7 +300,7 @@ async function fetchLLMWithRetry(cfg) {
       }
       const delay = getRetryDelay(attempt, null);
       lastError = new LLMError(err.message || String(err), { kind: cls.kind });
-      console.warn(`[${label} ${ts()}] ↻ ${err.name || 'Error'} (${dur}ms) model=${currentModel} kind=${cls.kind} → ${Math.round(delay / 1000)}s 后重试（${attempt}/${maxRetries}）: ${err.message}`);
+      console.warn(`[${label} ${ts()}] ↻ ${err.name || 'Error'} (${dur}ms) model=${currentModel} kind=${cls.kind} → ${Math.round(delay / 1000)}s retry (${attempt}/${maxRetries}）: ${err.message}`);
       onRetry({
         attempt, kind: cls.kind, delayMs: delay, requestId, error: err.message
       });
@@ -315,7 +315,7 @@ async function fetchLLMWithRetry(cfg) {
     }
   }
 
-  console.error(`[${label} ${ts()}] ✗ 最终失败 model=${currentModel} kind=${lastError?.kind || 'unknown'}: ${lastError?.message || 'unknown error after retries'}`);
+  console.error(`[${label} ${ts()}] ✗ final failure model=${currentModel} kind=${lastError?.kind || 'unknown'}: ${lastError?.message || 'unknown error after retries'}`);
   return {
     ok: false,
     error: lastError?.message || 'unknown error after retries',
@@ -526,15 +526,19 @@ async function consumeSSEStream(bodyStream, onChunk, requestId, transport = 'ope
         if (!usage) usage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
         usage.completion_tokens = parsed.usage.output_tokens || usage.completion_tokens;
         usage.total_tokens = usage.prompt_tokens + usage.completion_tokens;
+        // message_delta 也可能携带缓存字段（部分网关），补齐避免费用漏算
+        if (parsed.usage.cache_read_input_tokens != null) usage.cache_read_input_tokens = parsed.usage.cache_read_input_tokens;
+        if (parsed.usage.cache_creation_input_tokens != null) usage.cache_creation_input_tokens = parsed.usage.cache_creation_input_tokens;
       }
     } else if (type === 'message_start') {
       const msg = parsed.message || {};
-      if (msg.usage?.input_tokens) {
+      if (msg.usage && (msg.usage.input_tokens != null || msg.usage.cache_read_input_tokens != null || msg.usage.cache_creation_input_tokens != null)) {
         if (!usage) usage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
-        usage.prompt_tokens = msg.usage.input_tokens;
+        if (msg.usage.input_tokens != null) usage.prompt_tokens = msg.usage.input_tokens;
         // 透传 Anthropic 原生缓存字段，供 computeUsageCost 计算缓存费用
         usage.cache_read_input_tokens = msg.usage.cache_read_input_tokens || 0;
         usage.cache_creation_input_tokens = msg.usage.cache_creation_input_tokens || 0;
+        usage.total_tokens = usage.prompt_tokens + usage.completion_tokens;
       }
     }
   }
@@ -576,7 +580,7 @@ async function consumeSSEStream(bodyStream, onChunk, requestId, transport = 'ope
     const outTok = u.completion_tokens ?? u.output_tokens ?? 0;
     const durMs = info.durationMs != null ? info.durationMs : (_logStart ? Date.now() - _logStart : null);
     const dr = durMs != null ? ` (${durMs}ms)` : '';
-    console.log(`[${info.label} ${ts()}] ✓ stream${dr} model=${info.model || ''} finish=${finishReason} content=${fullContent.length}字 reasoning=${fullReasoning.length}字 tools=${toolCalls.length} usage=in:${inTok}/out:${outTok}`);
+    console.log(`[${info.label} ${ts()}] ✓ stream${dr} model=${info.model || ''} finish=${finishReason} content=${fullContent.length}chars reasoning=${fullReasoning.length}chars tools=${toolCalls.length} usage=in:${inTok}/out:${outTok}`);
   }
   return {
     content: fullContent,

@@ -112,7 +112,7 @@ function _resolveTerminalShell(shellSetting, customShellPath) {
   // 自定义 Shell：路径有效则直接使用，否则回退自动检测
   if (shellSetting === 'custom' && customShellPath) {
     if (fs.existsSync(customShellPath)) return customShellPath;
-    console.warn('[terminal] customShellPath 无效，回退自动检测:', customShellPath);
+    console.warn('[terminal] invalid customShellPath, falling back to auto-detect:', customShellPath);
   }
   if (platform === 'win32') {
     const pwshCandidates = [

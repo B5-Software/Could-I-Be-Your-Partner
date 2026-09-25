@@ -1123,3 +1123,7 @@ html[data-animations="off"] .page {
   border-radius: 10px;
   background: var(--bg-secondary);
 }
+
+[hidden] {
+  display: none !important;
+}

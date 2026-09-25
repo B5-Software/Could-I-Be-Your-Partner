@@ -1979,11 +1979,34 @@ html[data-modal-animations="off"] .modal-fade-out {
 }
 
 .tool-group-row + .tool-group-row {
-  margin-top: 8px;
+  margin-top: 10px;
 }
 
 .tool-group-row.ds-plugin-row {
   border-left: 3px solid var(--accent);
+}
+
+.tool-group-row.optimized-active {
+  border-color: var(--accent);
+  background: var(--accent-bg, rgba(99, 102, 241, 0.08));
+}
+
+.tool-group-row.optimized-muted:not(.optimized-active) {
+  opacity: 0.68;
+}
+
+.tgr-optimized-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 6px;
+  padding: 1px 7px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+  border-radius: 999px;
+  background: var(--accent-bg, rgba(99, 102, 241, 0.1));
 }
 
 .tgr-name {
@@ -2139,6 +2162,9 @@ html[data-modal-animations="off"] .modal-fade-out {
   overflow-y: auto;
   padding: 8px 18px 18px;
   overscroll-behavior: contain;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
 .tools-modal-row {
@@ -2146,12 +2172,14 @@ html[data-modal-animations="off"] .modal-fade-out {
   grid-template-columns: minmax(0, 1fr) 56px;
   gap: 12px;
   align-items: center;
-  padding: 10px 4px;
-  border-bottom: 1px solid var(--border);
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  transition: border-color var(--transition), background var(--transition);
 }
 
-.tools-modal-row:last-child {
-  border-bottom: none;
+.tools-modal-row:hover {
+  border-color: var(--accent);
 }
 
 .tmr-main {
@@ -2187,6 +2215,21 @@ html[data-modal-animations="off"] .modal-fade-out {
 
 .tools-modal-row.disabled {
   opacity: 0.5;
+}
+
+.tools-modal-row.optimized-active {
+  border-color: var(--accent);
+  background: var(--accent-bg, rgba(99, 102, 241, 0.08));
+}
+
+.tools-modal-row.optimized-muted:not(.disabled):not(.optimized-active) {
+  opacity: 0.68;
+}
+
+.ds-compat-badge.optimized {
+  color: var(--accent);
+  border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+  background: var(--accent-bg, rgba(99, 102, 241, 0.1));
 }
 
 .ds-section-header {

@@ -158,7 +158,7 @@ function getAgent(proxyUrl) {
   try {
     agent = new undici.ProxyAgent(key);
   } catch (e) {
-    console.warn('[Proxy] 创建代理 dispatcher 失败:', key, e.message);
+    console.warn('[Proxy] create proxy dispatcher failed:', key, e.message);
     agent = undefined;
   }
   if (agent) _agentCache.set(key, agent);
@@ -243,7 +243,7 @@ function install() {
   if (_installed) return;
   _installed = true;
   if (!undici || typeof undici.fetch !== 'function') {
-    console.warn('[Proxy] undici 不可用，主进程 fetch 代理包装未启用');
+    console.warn('[Proxy] undici unavailable, main-process fetch proxy wrapper disabled');
     return;
   }
   const undiciFetch = undici.fetch.bind(undici);
@@ -268,7 +268,7 @@ function install() {
     wrapped.__cibypProxiedFetch = true;
   } catch { /* ignore */ }
   globalThis.fetch = wrapped;
-  console.log('[Proxy] 主进程 fetch 代理包装已启用（undici dispatcher）');
+  console.log('[Proxy] main-process fetch proxy wrapper enabled (undici dispatcher)');
 }
 
 /**

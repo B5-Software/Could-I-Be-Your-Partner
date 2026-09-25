@@ -87,6 +87,28 @@ class DecisionService {
     this.persistSettings = opts.persistSettings || (() => {});
     this.fetchImpl = typeof opts.fetchImpl === 'function' ? opts.fetchImpl : null;
     this._cache = new Map(); // key -> answers
+    this._persistTimer = null;
+    this._lastPersistAt = 0;
+  }
+
+  _schedulePersist() {
+    if (this._persistTimer) return;
+    const wait = Math.max(0, 15000 - (Date.now() - this._lastPersistAt));
+    this._persistTimer = setTimeout(() => {
+      this._persistTimer = null;
+      this._lastPersistAt = Date.now();
+      try { this.persistSettings(); } catch (_) { /* ignore */ }
+    }, wait);
+    if (this._persistTimer.unref) this._persistTimer.unref();
+  }
+
+  flushPersist() {
+    if (this._persistTimer) {
+      clearTimeout(this._persistTimer);
+      this._persistTimer = null;
+    }
+    this._lastPersistAt = Date.now();
+    try { this.persistSettings(); } catch (_) { /* ignore */ }
   }
 
   get config() {
@@ -106,7 +128,7 @@ class DecisionService {
     const usage = { ...cfg.usage };
     if (usage.date !== stamp) { usage.date = stamp; usage.calls = 0; }
     if (cfg.dailyMaxCalls > 0 && usage.calls >= cfg.dailyMaxCalls) {
-      return { ok: false, error: `已达到决策模型今日调用上限（${cfg.dailyMaxCalls}）` };
+      return { ok: false, error: `decision model daily call cap reached (${cfg.dailyMaxCalls})` };
     }
     return { ok: true, usage };
   }
@@ -118,7 +140,8 @@ class DecisionService {
       const prev = (s.decision && s.decision.usage) || {};
       const next = prev.date === stamp ? { date: stamp, calls: (prev.calls || 0) + 1 } : { date: stamp, calls: 1 };
       s.decision = { ...(s.decision || {}), usage: next };
-      this.persistSettings();
+      // 用量记账去抖持久化：settings.json 可达十几 MB，每次决策同步全量写盘会卡顿主进程
+      this._schedulePersist();
     } catch (_) { /* ignore */ }
   }
 
@@ -153,12 +176,12 @@ class DecisionService {
   async call(state, questions, opts = {}) {
     const cfg = this.config;
     if (!cfg.enabled) {
-      console.log(`[JEV ${ts()}] · 跳过请求：决策模型未启用`);
-      return { ok: false, error: '决策模型未启用' };
+      console.log(`[JEV ${ts()}] · skip request: decision model disabled`);
+      return { ok: false, error: 'decision model disabled' };
     }
-    if (!state || typeof state !== 'string') return { ok: false, error: 'state 必须是非空字符串' };
+    if (!state || typeof state !== 'string') return { ok: false, error: 'state must be a non-empty string' };
     if (!questions || typeof questions !== 'object' || !Object.keys(questions).length) {
-      return { ok: false, error: '缺少 questions' };
+      return { ok: false, error: 'missing questions' };
     }
 
     const provider = cfg.provider;
@@ -172,14 +195,14 @@ class DecisionService {
 
     const gate = this._usageGate(cfg);
     if (!gate.ok) {
-      console.error(`[JEV ${ts()}] ✗ 跳过 model=${model}: ${gate.error}`);
+      console.error(`[JEV ${ts()}] ✗ skip model=${model}: ${gate.error}`);
       return { ok: false, error: gate.error };
     }
 
     const url = cfg.apiUrl || (provider === 'typesafe' ? TYPESAFE_URL : ZEN_SYSTEMONE_URL);
     const headers = { 'Content-Type': 'application/json' };
     if (provider === 'typesafe') {
-      if (!cfg.apiKey) return { ok: false, error: 'TypeSafe 直连需要 API Key' };
+      if (!cfg.apiKey) return { ok: false, error: 'TypeSafe direct requires an API key' };
       headers['Authorization'] = `Bearer ${cfg.apiKey}`;
     }
     const finalHeaders = ocHeaders.applyProviderHeaders({
@@ -190,7 +213,7 @@ class DecisionService {
     });
 
     const qSummary = Object.entries(questions).map(([k, v]) => `${k}:${v?.type || '?'}`).join(',');
-    console.log(`[JEV ${ts()}] → POST ${maskUrl(url)} provider=${provider} model=${model} state=${String(state).length}字 q=[${qSummary}] usage=${opts.usage || '-'}`);
+    console.log(`[JEV ${ts()}] → POST ${maskUrl(url)} provider=${provider} model=${model} state=${String(state).length}chars q=[${qSummary}] usage=${opts.usage || '-'}`);
     const startedAt = Date.now();
     let resp;
     try {
@@ -202,8 +225,8 @@ class DecisionService {
         signal: AbortSignal.timeout(cfg.timeoutMs),
       });
     } catch (e) {
-      console.error(`[JEV ${ts()}] ✗ 请求异常 (${Date.now() - startedAt}ms) model=${model}: ${e.message}`);
-      return { ok: false, error: `决策模型请求失败: ${e.message}` };
+      console.error(`[JEV ${ts()}] ✗ request failed (${Date.now() - startedAt}ms) model=${model}: ${e.message}`);
+      return { ok: false, error: `decision model request failed: ${e.message}` };
     }
     const dur = Date.now() - startedAt;
 
@@ -211,18 +234,18 @@ class DecisionService {
     try {
       data = await resp.json();
     } catch (_) {
-      console.error(`[JEV ${ts()}] ✗ 响应非 JSON (${dur}ms) HTTP ${resp.status} model=${model}`);
-      return { ok: false, error: `决策模型响应非 JSON（HTTP ${resp.status}）` };
+      console.error(`[JEV ${ts()}] ✗ response not JSON (${dur}ms) HTTP ${resp.status} model=${model}`);
+      return { ok: false, error: `decision model response not JSON (HTTP ${resp.status})` };
     }
     if (!resp.ok) {
       const msg = data?.error?.message || data?.message || data?.error || `HTTP ${resp.status}`;
       console.error(`[JEV ${ts()}] ✗ HTTP ${resp.status} (${dur}ms) model=${model}: ${String(msg).slice(0, 200)}`);
-      return { ok: false, error: `决策模型 HTTP ${resp.status}: ${String(msg).slice(0, 200)}` };
+      return { ok: false, error: `decision model HTTP ${resp.status}: ${String(msg).slice(0, 200)}` };
     }
     const answers = data?.answers;
     if (!answers || typeof answers !== 'object') {
-      console.error(`[JEV ${ts()}] ✗ 响应缺少 answers (${dur}ms) model=${model}`);
-      return { ok: false, error: '决策模型响应缺少 answers' };
+      console.error(`[JEV ${ts()}] ✗ response missing answers (${dur}ms) model=${model}`);
+      return { ok: false, error: 'decision model response missing answers' };
     }
     console.log(`[JEV ${ts()}] ✓ ${resp.status} (${dur}ms) model=${model} answers=[${summarizeAnswers(answers)}] in:${data.usage?.input_tokens ?? '-'} out:${data.usage?.output_tokens ?? '-'}`);
     this._cacheSet(cacheKey, answers, cfg);
@@ -240,9 +263,9 @@ class DecisionService {
     const res = await this.call(state, { [key]: { type: 'noul', instructions } }, opts);
     if (!res.ok) return { value: null, error: res.error, raw: null };
     const p = Number(res.answers?.[key]?.noul);
-    if (!Number.isFinite(p)) return { value: null, error: 'noul 响应缺少概率', raw: res.answers?.[key] };
+    if (!Number.isFinite(p)) return { value: null, error: 'noul response missing probability', raw: res.answers?.[key] };
     const value = p >= threshold ? true : (p <= 1 - threshold ? false : null);
-    if (value === null) console.log(`[JEV ${ts()}] · noul 不确定 p=${p.toFixed(3)}（阈值 ${threshold}）→ 回退`);
+    if (value === null) console.log(`[JEV ${ts()}] · noul uncertain p=${p.toFixed(3)} (threshold ${threshold}) -> fallback`);
     return { value, probability: p, raw: res.answers?.[key], usage: res.usage, cached: res.cached };
   }
 
@@ -253,9 +276,9 @@ class DecisionService {
     const res = await this.call(state, { [key]: { type: 'choice', instructions, criteria } }, opts);
     if (!res.ok) return { value: null, error: res.error, raw: null };
     const ans = res.answers?.[key];
-    if (!ans || typeof ans.choice !== 'string') return { value: null, error: 'choice 响应缺少 choice', raw: ans };
+    if (!ans || typeof ans.choice !== 'string') return { value: null, error: 'choice response missing choice', raw: ans };
     if (Number(ans.confidence) < threshold) {
-      console.log(`[JEV ${ts()}] · choice 低置信 ${ans.choice}(c=${Number(ans.confidence).toFixed(2)}<${threshold}) → 回退（suggested=${ans.choice}）`);
+      console.log(`[JEV ${ts()}] · choice low confidence ${ans.choice}(c=${Number(ans.confidence).toFixed(2)}<${threshold}) -> fallback (suggested=${ans.choice})`);
       return { value: null, confidence: Number(ans.confidence), lowConfidence: true, raw: ans, usage: res.usage };
     }
     return { value: ans.choice, probabilities: ans.probabilities, confidence: Number(ans.confidence), raw: ans, usage: res.usage, cached: res.cached };
@@ -268,9 +291,9 @@ class DecisionService {
     const res = await this.call(state, { [key]: { type: 'score', instructions, criteria } }, opts);
     if (!res.ok) return { value: null, error: res.error, raw: null };
     const ans = res.answers?.[key];
-    if (!ans || !Number.isFinite(Number(ans.score))) return { value: null, error: 'score 响应缺少 score', raw: ans };
+    if (!ans || !Number.isFinite(Number(ans.score))) return { value: null, error: 'score response missing score', raw: ans };
     if (Number(ans.confidence) < threshold) {
-      console.log(`[JEV ${ts()}] · score 低置信 ${Number(ans.score).toFixed(2)}(c=${Number(ans.confidence).toFixed(2)}<${threshold}) → 回退`);
+      console.log(`[JEV ${ts()}] · score low confidence ${Number(ans.score).toFixed(2)}(c=${Number(ans.confidence).toFixed(2)}<${threshold}) -> fallback`);
       return { value: null, confidence: Number(ans.confidence), lowConfidence: true, raw: ans, usage: res.usage };
     }
     return { value: Number(ans.score), legend: ans.legend, confidence: Number(ans.confidence), raw: ans, usage: res.usage, cached: res.cached };
@@ -282,7 +305,7 @@ class DecisionService {
     if (res.value === null) {
       // noul 没有 confidence；能拿到概率即视为连通
       if (Number.isFinite(res.probability)) return { ok: true, probability: res.probability };
-      return { ok: false, error: res.error || '无响应' };
+      return { ok: false, error: res.error || 'no response' };
     }
     return { ok: true, probability: res.probability };
   }

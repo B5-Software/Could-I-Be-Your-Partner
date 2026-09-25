@@ -56,7 +56,7 @@ function resolveGeogebraRoot() {
 function registerGeogebraProtocol() {
   const root = resolveGeogebraRoot();
   if (!root) {
-    console.warn('[GeoGebra] 未找到离线包 assets/geogebra-app，GeoGebra 将不可用（请运行 scripts/download-voice-models.js）');
+    console.warn('[GeoGebra] offline bundle assets/geogebra-app not found, GeoGebra unavailable (run scripts/download-voice-models.js)');
     return null;
   }
   const rootPrefix = root.endsWith(path.sep) ? root : root + path.sep;
@@ -84,11 +84,11 @@ function registerGeogebraProtocol() {
       const body = new Uint8Array(buffer);
       return new Response(body, { status: 200, headers });
     } catch (e) {
-      console.error('[GeoGebra] ggb:// 协议处理失败:', e && e.stack || e);
+      console.error('[GeoGebra] ggb:// protocol handler failed:', e && e.stack || e);
       return new Response('Bad Request', { status: 400 });
     }
   });
-  console.log('[GeoGebra] 离线协议 ggb:// 已注册，根目录:', root);
+  console.log('[GeoGebra] offline protocol ggb:// registered, root:', root);
   return root;
 }
 

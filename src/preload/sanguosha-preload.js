@@ -1,6 +1,6 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
-contextBridge.exposeInMainWorld('sanguoshaAPI', {
+const sanguoshaAPI = {
   decisionCall: (payload) => ipcRenderer.invoke('decision:call', payload),
   decisionNoul: (payload) => ipcRenderer.invoke('decision:noul', payload),
   decisionChoice: (payload) => ipcRenderer.invoke('decision:choice', payload),
@@ -16,4 +16,7 @@ contextBridge.exposeInMainWorld('sanguoshaAPI', {
   closeWindow: () => ipcRenderer.invoke('sanguosha:close'),
   reportResult: (result) => ipcRenderer.send('game:result', { game: 'sanguosha', result }),
   trngGetSeed: () => ipcRenderer.invoke('game:trngGetSeed'),
-});
+};
+
+contextBridge.exposeInMainWorld('sanguoshaAPI', sanguoshaAPI);
+contextBridge.exposeInMainWorld('gameAPI', sanguoshaAPI);

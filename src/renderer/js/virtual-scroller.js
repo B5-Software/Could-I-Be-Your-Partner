@@ -233,9 +233,10 @@
       }
     }
     pendingRender.clear();
-    // 滚动到底部
+    // 滚动到底部（批量恢复后强制回到底部并恢复吸附）
     if (container) {
-      container.scrollTop = container.scrollHeight;
+      if (typeof window.forceScrollToBottom === 'function') window.forceScrollToBottom(container);
+      else container.scrollTop = container.scrollHeight;
     }
   }
 

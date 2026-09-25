@@ -222,7 +222,7 @@ function repairReactRuntime(installDir, pkg) {
     const fixed = JSON.parse(fs.readFileSync(reactJson, 'utf8'));
     return !!(fixed.exports && fixed.exports['./compiler-runtime']);
   } catch (e) {
-    console.warn('[DS Plugins] react 修复失败:', e.message);
+    console.warn('[DS Plugins] react repair failed:', e.message);
     return false;
   } finally {
     try { fs.rmSync(packDir, { recursive: true, force: true }); } catch { /* ignore */ }
@@ -886,7 +886,7 @@ class PluginManager {
         let pkg = null;
         try { pkg = this._readPackage(rec.installDir); } catch { /* ignore */ }
         if (pkg && repairReactRuntime(rec.installDir, pkg)) {
-          console.log(`[DS Plugins] 已修复 ${rec.name} 的 react 版本漂移`);
+          console.log(`[DS Plugins] fixed react version drift for ${rec.name}`);
         }
         if (isInteractiveTuiPlugin(rec.installDir)) {
           rec.compatIssues = ['交互式终端插件（TUI 前端门）：CIBYP GUI 不渲染其终端界面，已跳过加载'];

@@ -36,7 +36,15 @@ const VARIANT_LABELS = {
 };
 
 function makeVariantTable(ids, defaultId) {
-  const variants = (Array.isArray(ids) ? ids : []).map(id => ({
+  const seen = new Set();
+  const unique = [];
+  for (const id of (Array.isArray(ids) ? ids : [])) {
+    const key = String(id || '').toLowerCase();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    unique.push(key);
+  }
+  const variants = unique.map(id => ({
     id,
     label: VARIANT_LABELS[id] || id,
     wire: id
@@ -48,6 +56,33 @@ function makeVariantTable(ids, defaultId) {
       : (variants[0]?.id || 'off');
   }
   return { variants, defaultId: def };
+}
+
+/**
+ * 从外部元数据（models.dev / Anthropic capabilities.effort）构建档位表。
+ * 支持：reasoning_options 为数组或对象；type=effort（values）/ type=budget_tokens / type=toggle。
+ * 无法可靠映射时返回 null，交由硬编码兜底。
+ */
+function buildVariantsFromMetadata(metadata) {
+  const meta = metadata && typeof metadata === 'object' ? metadata : null;
+  if (!meta) return null;
+  let options = meta.reasoningOptions ?? meta.reasoning_options ?? null;
+  if (options && !Array.isArray(options)) options = [options];
+  if (Array.isArray(options) && options.length) {
+    for (const opt of options) {
+      if (!opt || typeof opt !== 'object') continue;
+      const type = opt.type;
+      if (type === 'effort' && Array.isArray(opt.values) && opt.values.length) {
+        return { ids: ['off', ...opt.values], defaultId: 'auto' };
+      }
+      if (type === 'budget_tokens') {
+        return { ids: ['off', 'low', 'medium', 'high'], defaultId: 'auto' };
+      }
+    }
+    // 只有 toggle 类型（无 effort 档位）：走硬编码兜底，避免出现无意义的 on/off
+  }
+  if (meta.reasoning === false) return { ids: ['off', 'auto'], defaultId: 'off' };
+  return null;
 }
 
 /**
@@ -80,23 +115,29 @@ function anthropicThinkingMode(model, capabilities) {
  * @param {object} [capabilities] Anthropic /v1/models 的 capabilities（可选）
  * @returns {{ variants: Array<{id,label,wire}>, defaultId: string }}
  */
-function resolveReasoningVariants(model, provider, capabilities) {
+function resolveReasoningVariants(model, provider, capabilities, metadata) {
   const m = String(model || '').toLowerCase();
   let p = provider || 'openai-compat';
-  if (p === 'opencode-zen') {
+  if (p === 'opencode-zen' || p === 'opencode-go') {
     const pt = zenModelProviderType(m);
     p = pt === 'anthropic' ? 'anthropic-compat'
       : pt === 'openai-responses' ? 'openai-responses'
       : 'openai-compat';
   }
 
-  // Anthropic：capabilities 优先，模型名推断兜底
+  // Anthropic：capabilities（thinking 模式）优先判不支持；支持时 metadata.effort 优先，其次硬编码
   if (p === 'anthropic-compat') {
     const mode = anthropicThinkingMode(m, capabilities);
     if (mode === 'none') return makeVariantTable(['off', 'auto'], 'auto');
+    const metaTable = buildVariantsFromMetadata(metadata);
+    if (metaTable) return makeVariantTable(metaTable.ids, metaTable.defaultId);
     if (mode === 'adaptive') return makeVariantTable(['off', 'minimal', 'low', 'medium', 'high'], 'medium');
     return makeVariantTable(['off', 'auto', 'low', 'medium', 'high'], 'auto');
   }
+
+  // 其他 provider：API 元数据（models.dev / 端点 fields）优先于模型名硬编码
+  const metaTable = buildVariantsFromMetadata(metadata);
+  if (metaTable) return makeVariantTable(metaTable.ids, metaTable.defaultId);
 
   // OpenAI Responses API
   if (p === 'openai-responses') {
@@ -126,8 +167,8 @@ function resolveReasoningVariants(model, provider, capabilities) {
  * 校验一个 effort 值对给定模型是否合法；不合法时收敛到该模型默认档。
  * @returns {{ valid: boolean, resolved: string, changed: boolean }}
  */
-function validateReasoningEffort(effort, model, provider, capabilities) {
-  const table = resolveReasoningVariants(model, provider, capabilities);
+function validateReasoningEffort(effort, model, provider, capabilities, metadata) {
+  const table = resolveReasoningVariants(model, provider, capabilities, metadata);
   const ids = table.variants.map(v => v.id);
   const input = effort == null || effort === '' ? table.defaultId : String(effort);
   if (ids.includes(input)) return { valid: true, resolved: input, changed: false, variants: table.variants, defaultId: table.defaultId };
@@ -141,7 +182,7 @@ function validateReasoningEffort(effort, model, provider, capabilities) {
 function resolveVariantForRequest(llm, effort) {
   const provider = llm.provider || 'openai-compat';
   const caps = llm.capabilities || null;
-  const table = resolveReasoningVariants(llm.model, provider, caps);
+  const table = resolveReasoningVariants(llm.model, provider, caps, llm.metadata || null);
   const ids = table.variants.map(v => v.id);
   let eff = effort == null || effort === '' ? table.defaultId : String(effort);
   if (!ids.includes(eff)) eff = table.defaultId;

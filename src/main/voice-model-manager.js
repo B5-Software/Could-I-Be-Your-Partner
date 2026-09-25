@@ -193,6 +193,7 @@ class VoiceModelManager extends EventEmitter {
       const link = resp.headers.get('link') || '';
       const m = /<([^>]+)>\s*;\s*rel="next"/.exec(link);
       if (!m) break;
+      let next = null;
       try { next = new URL(m[1]).searchParams.get('cursor'); } catch (_) { next = null; }
       if (!next || next === cursor) break;
       cursor = next;

@@ -333,10 +333,14 @@
     $('btn-code-show-downloads')?.addEventListener('click', openModal);
     $('btn-close-download-manager')?.addEventListener('click', closeModal);
 
-    // 模态框背景点击关闭
-    $(MODAL_ID)?.addEventListener('click', (e) => {
-      if (e.target === $(MODAL_ID)) closeModal();
-    });
+    // 模态框背景点击关闭（拖选文本松手到框外不关闭）
+    if (typeof bindBackdropClose === 'function') {
+      bindBackdropClose($(MODAL_ID), closeModal);
+    } else {
+      $(MODAL_ID)?.addEventListener('click', (e) => {
+        if (e.target === $(MODAL_ID)) closeModal();
+      });
+    }
 
     // 操作按钮
     $('btn-dm-add')?.addEventListener('click', openAddDialog);
@@ -347,9 +351,13 @@
     $('btn-close-add-download')?.addEventListener('click', closeAddDialog);
     $('btn-add-dl-cancel')?.addEventListener('click', closeAddDialog);
     $('btn-add-dl-confirm')?.addEventListener('click', confirmAddDownload);
-    $(ADD_MODAL_ID)?.addEventListener('click', (e) => {
-      if (e.target === $(ADD_MODAL_ID)) closeAddDialog();
-    });
+    if (typeof bindBackdropClose === 'function') {
+      bindBackdropClose($(ADD_MODAL_ID), closeAddDialog);
+    } else {
+      $(ADD_MODAL_ID)?.addEventListener('click', (e) => {
+        if (e.target === $(ADD_MODAL_ID)) closeAddDialog();
+      });
+    }
     $('add-dl-url')?.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') confirmAddDownload();
     });

@@ -539,38 +539,55 @@ ${player.hero.skillFn === 'paoxiao' ? '(咆哮技能：可无限出杀)' : ''}
 "使用 [牌名] 对 [目标英雄名]" 或 "使用 [牌名]"（无目标牌）或 "不出"（跳过该牌）
 只回复动作列表，不要解释。`;
 
-        const resp = await this._askLLM(systemPrompt, userPrompt, player.index);
+        const skipOption = '本回合不主动使用战略牌';
+        const actionCtx = { player, strategicCards, inRangeTargets, allTargets, actions };
+
+        // 决策模型优先（choice）：从「牌+目标」候选中选一个；低置信/未启用回退 LLM
+        let jevLine = null;
+        if (typeof window.sanguoshaAPI?.decisionChoice === 'function') {
+          const candidates = [];
+          for (const sc of strategicCards) {
+            const cardName = CARD_TYPES[sc.key]?.name || sc.key;
+            if (sc.key === 'sha') {
+              const canMulti = player.hero.skillFn === 'paoxiao' || (player.equip.weapon && player.equip.weapon.key === 'zhugenu');
+              if (player.shaUsedThisTurn && !canMulti) continue;
+              for (const t of inRangeTargets) candidates.push(`使用【${cardName}】对${t.hero.name}`);
+            } else if (sc.key === 'juedou' || sc.key === 'guohechaiqiao' || sc.key === 'shunshouqianyang') {
+              const pool = sc.key === 'guohechaiqiao'
+                ? allTargets.filter(t => t.hand.length > 0 || Object.values(t.equip).some(e => e))
+                : allTargets;
+              for (const t of pool) candidates.push(`使用【${cardName}】对${t.hero.name}`);
+            } else if (sc.key === 'nanmanruqin' || sc.key === 'wanjianqifa') {
+              candidates.push(`使用【${cardName}】`);
+            } else if (sc.key === 'taoyuanjieyi') {
+              if (this.alivePlayers().some(p => p.hp < p.maxHp)) candidates.push(`使用【${cardName}】`);
+            }
+            if (candidates.length >= 24) break;
+          }
+          candidates.push(skipOption);
+          try {
+            const r = await window.sanguoshaAPI.decisionChoice({
+              state: userPrompt,
+              instructions: '你是三国杀AI，判断本回合最值得使用的一张战略牌与目标（综合考虑身份职责、血量、距离、手牌数与局势），也可以选择不使用。',
+              criteria: candidates,
+              key: 'action',
+              usage: 'gameDecisions',
+              threshold: 0.5,
+            });
+            if (r && typeof r.value === 'string') jevLine = r.value;
+          } catch (_) { /* 回退 LLM */ }
+        }
+
+        if (jevLine && jevLine !== skipOption) {
+          this._applyStrategyLine(jevLine, actionCtx);
+        }
+        const jevApplied = jevLine === skipOption || actions.some(a => a.type === 'play' && strategicCards.includes(a.card));
+        const resp = jevApplied ? null : await this._askLLM(systemPrompt, userPrompt, player.index);
         if (resp) {
           const lines = resp.split('\n').filter(l => l.trim());
           for (const line of lines) {
             if (line.includes('不出') || line.includes('跳过')) continue;
-
-            // Parse action
-            for (const sc of strategicCards) {
-              const cardName = CARD_TYPES[sc.key]?.name || sc.key;
-              if (!line.includes(cardName)) continue;
-              if (actions.find(a => a.card?.id === sc.id)) continue; // Already added
-
-              if (sc.key === 'sha') {
-                const canMulti = player.hero.skillFn === 'paoxiao' || (player.equip.weapon && player.equip.weapon.key === 'zhugenu');
-                if (player.shaUsedThisTurn && !canMulti) continue;
-                const target = this._findTargetInText(line, inRangeTargets);
-                if (target) actions.push({ type: 'play', card: sc, target });
-              } else if (sc.key === 'juedou' || sc.key === 'guohechaiqiao' || sc.key === 'shunshouqianyang') {
-                const pool = sc.key === 'guohechaiqiao'
-                  ? allTargets.filter(t => t.hand.length > 0 || Object.values(t.equip).some(e => e))
-                  : allTargets;
-                const target = this._findTargetInText(line, pool);
-                if (target) actions.push({ type: 'play', card: sc, target });
-              } else if (sc.key === 'nanmanruqin' || sc.key === 'wanjianqifa') {
-                actions.push({ type: 'play', card: sc, target: null });
-              } else if (sc.key === 'taoyuanjieyi') {
-                if (this.alivePlayers().some(p => p.hp < p.maxHp)) {
-                  actions.push({ type: 'play', card: sc, target: null });
-                }
-              }
-              break;
-            }
+            this._applyStrategyLine(line, actionCtx);
           }
         }
       }
@@ -636,6 +653,38 @@ ${player.hero.skillFn === 'paoxiao' ? '(咆哮技能：可无限出杀)' : ''}
       return targets.length > 0 ? targets[Math.floor(gameRng() * targets.length)] : null;
     }
 
+    _applyStrategyLine(line, ctx) {
+      const { player, strategicCards, inRangeTargets, allTargets, actions } = ctx;
+      for (const sc of strategicCards) {
+        const cardName = CARD_TYPES[sc.key]?.name || sc.key;
+        if (!line.includes(cardName)) continue;
+        if (actions.find(a => a.card?.id === sc.id)) return false;
+
+        if (sc.key === 'sha') {
+          const canMulti = player.hero.skillFn === 'paoxiao' || (player.equip.weapon && player.equip.weapon.key === 'zhugenu');
+          if (player.shaUsedThisTurn && !canMulti) return false;
+          const target = this._findTargetInText(line, inRangeTargets);
+          if (target) { actions.push({ type: 'play', card: sc, target }); return true; }
+        } else if (sc.key === 'juedou' || sc.key === 'guohechaiqiao' || sc.key === 'shunshouqianyang') {
+          const pool = sc.key === 'guohechaiqiao'
+            ? allTargets.filter(t => t.hand.length > 0 || Object.values(t.equip).some(e => e))
+            : allTargets;
+          const target = this._findTargetInText(line, pool);
+          if (target) { actions.push({ type: 'play', card: sc, target }); return true; }
+        } else if (sc.key === 'nanmanruqin' || sc.key === 'wanjianqifa') {
+          actions.push({ type: 'play', card: sc, target: null });
+          return true;
+        } else if (sc.key === 'taoyuanjieyi') {
+          if (this.alivePlayers().some(p => p.hp < p.maxHp)) {
+            actions.push({ type: 'play', card: sc, target: null });
+            return true;
+          }
+        }
+        return false;
+      }
+      return false;
+    }
+
     _fallbackSelectTarget(player, targets) {
       const role = player.role;
       if (role === 'zhugong' || role === 'zhongchen') {
@@ -667,9 +716,9 @@ ${player.hero.skillFn === 'paoxiao' ? '(咆哮技能：可无限出杀)' : ''}
       const userPrompt = `当前局势:\n${playerSummaries}\n\n你的HP: ${player.hp}/${player.maxHp}\n手牌数: ${player.hand.length}\n${shan ? '你有闪可以使用' : '你可以用龙胆技能将杀当闪使用'}\n\n是否使用闪？回复"是"或"否"，不要解释。`;
 
       // 决策模型优先（noul）：低置信/未启用回退 LLM
-      if (typeof window.gameAPI?.decisionNoul === 'function') {
+      if (typeof window.sanguoshaAPI?.decisionNoul === 'function') {
         try {
-          const r = await window.gameAPI.decisionNoul({
+          const r = await window.sanguoshaAPI.decisionNoul({
             state: `AI「${player.hero.name}」(${ROLE_NAMES[player.role]})，HP ${player.hp}/${player.maxHp}，手牌 ${player.hand.length}。局势：\n${playerSummaries}\n有人对 AI 使用【杀】${shan ? '，AI 有闪' : '，AI 可用龙胆将杀当闪'}`,
             instructions: '是否应该使用闪来抵消这次【杀】？',
             key: 'block',
@@ -702,9 +751,9 @@ ${player.hero.skillFn === 'paoxiao' ? '(咆哮技能：可无限出杀)' : ''}
       const userPrompt = `当前局势:\n${playerSummaries}\n\n你的HP: ${player.hp}/${player.maxHp}\n手牌中杀的数量: ${player.hand.filter(c => c.key === 'sha').length}\n\n是否出杀继续决斗？回复"是"或"否"。`;
 
       // 决策模型优先（noul）：低置信/未启用回退 LLM
-      if (typeof window.gameAPI?.decisionNoul === 'function') {
+      if (typeof window.sanguoshaAPI?.decisionNoul === 'function') {
         try {
-          const r = await window.gameAPI.decisionNoul({
+          const r = await window.sanguoshaAPI.decisionNoul({
             state: `AI「${player.hero.name}」(${ROLE_NAMES[player.role]})，HP ${player.hp}/${player.maxHp}，手牌杀数量 ${player.hand.filter(c => c.key === 'sha').length}。局势：\n${playerSummaries}`,
             instructions: '是否应该出【杀】继续决斗？',
             key: 'fight',

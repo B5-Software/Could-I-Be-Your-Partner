@@ -214,7 +214,7 @@ module.exports = function registerMcpIpc({ ipcMain, getSettings, persist, appVer
     // 服务器通知
     if (msg.method === 'notifications/tools/list_changed') {
       refreshTools(entry).then(() => emitChanged()).catch((e) => {
-        console.error(`[MCP:${entry.name}] tools/list_changed 刷新失败: ${e.message}`);
+        console.error(`[MCP:${entry.name}] tools/list_changed refresh failed: ${e.message}`);
       });
     }
     // 其余通知（logging/message 等）暂不处理
@@ -257,7 +257,7 @@ module.exports = function registerMcpIpc({ ipcMain, getSettings, persist, appVer
       child.stderr.on('data', (data) => {
         const text = data.toString();
         // 限制单条日志长度，避免失控服务器刷爆主进程日志
-        console.error(`[MCP:${entry.name}] stderr: ${text.length > 2000 ? text.slice(0, 2000) + '…[截断]' : text}`);
+        console.error(`[MCP:${entry.name}] stderr: ${text.length > 2000 ? text.slice(0, 2000) + '...[truncated]' : text}`);
       });
       resolve();
     });
@@ -295,7 +295,7 @@ module.exports = function registerMcpIpc({ ipcMain, getSettings, persist, appVer
   function ingestJsonText(entry, text) {
     let msg;
     try { msg = JSON.parse(text); } catch (e) {
-      console.warn(`[MCP:${entry.name}] 无法解析的入站消息: ${text.slice(0, 120)}`);
+      console.warn(`[MCP:${entry.name}] unparseable inbound message: ${text.slice(0, 120)}`);
       return;
     }
     handleIncomingMessage(entry, msg);
@@ -492,7 +492,7 @@ module.exports = function registerMcpIpc({ ipcMain, getSettings, persist, appVer
         entry.protocolVersion = String(initResult.protocolVersion);
         if (entry.protocolVersion !== SUPPORTED_PROTOCOL_VERSION &&
             !LEGACY_PROTOCOL_VERSIONS.includes(entry.protocolVersion)) {
-          console.warn(`[MCP:${entry.name}] 服务器协商了未知协议版本 ${entry.protocolVersion}，将继续但可能不兼容`);
+          console.warn(`[MCP:${entry.name}] server negotiated unknown protocol version ${entry.protocolVersion}; continuing may be incompatible`);
         }
       }
       if (initResult && typeof initResult.instructions === 'string') {

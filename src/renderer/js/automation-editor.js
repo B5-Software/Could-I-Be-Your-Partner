@@ -436,9 +436,18 @@ Content-Type: application/json
     $('ae-doc-link')?.addEventListener('click', (e) => { e.preventDefault(); openDoc('all', '自动化与 DSL 文档'); });
     $('ae-doc-http')?.addEventListener('click', (e) => { e.preventDefault(); openDoc('http', 'HTTP 信号接口'); });
     $('btn-close-doc')?.addEventListener('click', () => $('ae-doc-overlay')?.classList.add('hidden'));
-    $('ae-doc-overlay')?.addEventListener('click', (e) => {
-      if (e.target === e.currentTarget) $('ae-doc-overlay').classList.add('hidden');
-    });
+    (() => {
+      const overlay = $('ae-doc-overlay');
+      if (!overlay) return;
+      const hide = () => overlay.classList.add('hidden');
+      let downOnBackdrop = false;
+      overlay.addEventListener('mousedown', (e) => { downOnBackdrop = e.target === overlay; });
+      overlay.addEventListener('mouseup', (e) => {
+        const shouldClose = downOnBackdrop && e.target === overlay;
+        downOnBackdrop = false;
+        if (shouldClose) hide();
+      });
+    })();
     $('btn-close')?.addEventListener('click', async () => {
       if (dirty && !window.confirm('当前修改尚未保存，确定关闭吗？')) return;
       api.closeWindow();

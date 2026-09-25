@@ -13,7 +13,8 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { shell } = require('electron');
+const { shell, screen, desktopCapturer, nativeImage } = require('electron');
+const { recognizeImageDetailed } = require('./ocr');
 
 module.exports = function registerComputerUseIpc({ ipcMain, getImagesDir }) {
 // ---- Computer Use Protocol (CUP) ----
@@ -50,18 +51,106 @@ function _cupKeyToNutKey(keyStr) {
   return map[keyStr.toLowerCase()] || keyStr;
 }
 
-ipcMain.handle('computer:screenshot', async (_, workspacePath) => {
+// ---- 显示器/坐标基础 ----
+// Electron display.bounds 为 DIP（逻辑像素），截图与 nut 键鼠均使用物理像素。
+// 统一以"主显示器左上角为原点的物理像素虚拟桌面"作为坐标基准。
+let _lastCapture = null;
+let _lastElementSnapshot = null;
+
+function _displayList() {
+  const primaryId = screen.getPrimaryDisplay().id;
+  return screen.getAllDisplays().map((d, index) => {
+    const scale = Number(d.scaleFactor) || 1;
+    const physical = {
+      x: Math.round(d.bounds.x * scale),
+      y: Math.round(d.bounds.y * scale),
+      width: Math.round(d.size.width * scale),
+      height: Math.round(d.size.height * scale),
+    };
+    return {
+      id: d.id,
+      index,
+      primary: d.id === primaryId,
+      scaleFactor: scale,
+      bounds: { x: d.bounds.x, y: d.bounds.y, width: d.bounds.width, height: d.bounds.height },
+      physical,
+    };
+  });
+}
+
+function _findDisplay(displayId) {
+  const displays = _displayList();
+  if (displayId === undefined || displayId === null || displayId === '') {
+    return displays.find((d) => d.primary) || displays[0];
+  }
+  const wanted = String(displayId);
+  return displays.find((d) => String(d.id) === wanted || String(d.index) === wanted) || displays.find((d) => d.primary) || displays[0];
+}
+
+function _ensureDir(dir, fallback) {
+  const target = dir && fs.existsSync(dir) ? dir : fallback;
+  try { fs.mkdirSync(target, { recursive: true }); } catch { /* ignore */ }
+  return target;
+}
+
+async function _grabScreen(options = {}) {
+  const display = _findDisplay(options.displayId);
+  const thumbW = Math.max(1, display.physical.width);
+  const thumbH = Math.max(1, display.physical.height);
+  const sources = await desktopCapturer.getSources({
+    types: ['screen'],
+    thumbnailSize: { width: thumbW, height: thumbH },
+  });
+  if (!sources.length) throw new Error('no screen source available');
+  let source = null;
+  if (display.id != null) {
+    source = sources.find((s) => String(s.display_id) === String(display.id));
+  }
+  if (!source) source = sources[0];
+  const image = source.thumbnail;
+  if (!image || image.isEmpty()) throw new Error('capture returned an empty image');
+  const size = image.getSize();
+  return { image, width: size.width, height: size.height, display };
+}
+
+async function _captureScreen(workspacePath, options = {}) {
+  const grabbed = await _grabScreen(options);
+  const targetDir = _ensureDir(workspacePath, getImagesDir());
+  const imgPath = path.join(targetDir, `computer_screenshot_${Date.now()}.png`);
+  fs.writeFileSync(imgPath, grabbed.image.toPNG());
+  const capture = {
+    path: imgPath,
+    width: grabbed.width,
+    height: grabbed.height,
+    display: grabbed.display,
+    // 截图像素 → 物理虚拟桌面坐标的换算（nut-js 使用物理坐标）
+    origin: { x: grabbed.display.physical.x, y: grabbed.display.physical.y },
+    capturedAt: Date.now(),
+  };
+  _lastCapture = capture;
+  return capture;
+}
+
+ipcMain.handle('computer:listDisplays', () => {
+  try { return { ok: true, displays: _displayList() }; }
+  catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('computer:screenshot', async (_, workspacePath, options = {}) => {
   try {
-    const sources = await require('electron').desktopCapturer.getSources({
-      types: ['screen'], thumbnailSize: { width: 1920, height: 1080 }
-    });
-    if (sources.length > 0) {
-      const targetDir = workspacePath && fs.existsSync(workspacePath) ? workspacePath : getImagesDir();
-      const imgPath = path.join(targetDir, `computer_screenshot_${Date.now()}.png`);
-      fs.writeFileSync(imgPath, sources[0].thumbnail.toPNG());
-      return { ok: true, path: imgPath };
-    }
-    return { ok: false, error: '无法截取屏幕' };
+    const capture = await _captureScreen(workspacePath, options || {});
+    const annotate = options && options.annotate;
+    return {
+      ok: true,
+      path: capture.path,
+      width: capture.width,
+      height: capture.height,
+      display: capture.display,
+      origin: capture.origin,
+      coordinateSpace: 'screenshot-pixels',
+      note: 'coordinate [x,y] in this screenshot map to physical cursor via origin offset; use click action with space="screenshot"',
+      annotated: !!annotate,
+    };
   } catch (e) { return { ok: false, error: e.message }; }
 });
 
@@ -471,31 +560,310 @@ print(json.dumps({"truncated": trunc[0], "count": len(elements), "elements": ele
   return JSON.parse(out.trim());
 }
 
-ipcMain.handle('computer:getUITree', async () => {
-  try {
-    let tree;
-    if (process.platform === 'win32') {
-      tree = await _getWindowsUITree();
-    } else if (process.platform === 'darwin') {
-      tree = await _getMacUITree();
-    } else {
-      tree = await _getLinuxUITree();
+// ---- 元素层：UIA 树 + OCR 文本行融合 ----
+function _rectCenter(bbox) {
+  return { x: Math.round(bbox.x + bbox.w / 2), y: Math.round(bbox.y + bbox.h / 2) };
+}
+
+function _uiaToElements(tree) {
+  return ((tree && tree.elements) || []).map((el, i) => ({
+    id: `uia-${el.index != null ? el.index : i}`,
+    source: 'uia',
+    name: String(el.name || ''),
+    role: String(el.type || ''),
+    value: el.value == null ? null : el.value,
+    bbox: el.bbox ? { x: el.bbox.x, y: el.bbox.y, w: el.bbox.w, h: el.bbox.h } : null,
+    center: el.bbox ? { x: el.bbox.cx, y: el.bbox.cy } : null,
+    actions: Array.isArray(el.actions) ? el.actions : [],
+    depth: el.depth,
+  }));
+}
+
+async function _ocrToElements(workspacePath, options = {}) {
+  const capture = await _captureScreen(workspacePath, options);
+  const result = await recognizeImageDetailed(capture.path, { engine: options.engine });
+  const scaleX = result.resized && result.width ? capture.width / result.width : 1;
+  const scaleY = result.resized && result.height ? capture.height / result.height : 1;
+  const elements = (result.lines || [])
+    .filter((line) => line.bbox && line.text)
+    .map((line, i) => {
+      const bbox = {
+        x: Math.round(line.bbox.x * scaleX),
+        y: Math.round(line.bbox.y * scaleY),
+        w: Math.round(line.bbox.w * scaleX),
+        h: Math.round(line.bbox.h * scaleY),
+      };
+      return {
+        id: `ocr-${i}`,
+        source: 'ocr',
+        name: line.text,
+        role: 'text',
+        value: null,
+        bbox,
+        center: _rectCenter(bbox),
+        confidence: line.confidence,
+        actions: [],
+      };
+    });
+  return { capture, engine: result.engine, elements };
+}
+
+async function _getPlatformUITree() {
+  if (process.platform === 'win32') return _getWindowsUITree();
+  if (process.platform === 'darwin') return _getMacUITree();
+  return _getLinuxUITree();
+}
+
+async function _buildElementSnapshot(options = {}) {
+  let tree = { elements: [], truncated: false, count: 0, error: null };
+  if (!options.ocrOnly) {
+    try {
+      tree = await _getPlatformUITree();
+    } catch (e) {
+      tree = { elements: [], truncated: false, count: 0, error: e.message };
     }
-    return { ok: true, ...tree };
+  }
+  const elements = _uiaToElements(tree);
+  const uiaCount = elements.length;
+  let ocr = null;
+  const wantOcr = options.includeOcr === true || (options.includeOcr !== false && uiaCount < 5);
+  if (wantOcr) {
+    try {
+      const result = await _ocrToElements(options.workspacePath, options);
+      ocr = { engine: result.engine, count: result.elements.length, capture: result.capture };
+      elements.push(...result.elements);
+    } catch (e) {
+      ocr = { engine: 'none', count: 0, error: e.message };
+    }
+  }
+  const snapshot = {
+    at: Date.now(),
+    capture: (ocr && ocr.capture) || _lastCapture,
+    elements,
+    uiaCount,
+    ocr,
+    truncated: !!tree.truncated,
+    uiaError: tree.error || null,
+  };
+  _lastElementSnapshot = snapshot;
+  return snapshot;
+}
+
+ipcMain.handle('computer:getUITree', async (_, options = {}) => {
+  try {
+    const snapshot = await _buildElementSnapshot(options || {});
+    return {
+      ok: true,
+      at: snapshot.at,
+      truncated: snapshot.truncated,
+      count: snapshot.elements.length,
+      uiaCount: snapshot.uiaCount,
+      ocr: snapshot.ocr ? { engine: snapshot.ocr.engine, count: snapshot.ocr.count, error: snapshot.ocr.error || null } : null,
+      uiaError: snapshot.uiaError,
+      capture: snapshot.capture ? { path: snapshot.capture.path, width: snapshot.capture.width, height: snapshot.capture.height, display: snapshot.capture.display, origin: snapshot.capture.origin } : null,
+      elements: snapshot.elements,
+    };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('computer:ocr', async (_, options = {}) => {
+  try {
+    const result = await _ocrToElements((options || {}).workspacePath, options || {});
+    _lastCapture = result.capture;
+    _lastElementSnapshot = { at: Date.now(), capture: result.capture, elements: result.elements, uiaCount: 0, ocr: { engine: result.engine, count: result.elements.length }, truncated: false, uiaError: null };
+    return {
+      ok: true,
+      engine: result.engine,
+      path: result.capture.path,
+      width: result.capture.width,
+      height: result.capture.height,
+      display: result.capture.display,
+      origin: result.capture.origin,
+      count: result.elements.length,
+      elements: result.elements,
+    };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+ipcMain.handle('computer:findElement', async (_, payload = {}) => {
+  try {
+    let snapshot = _lastElementSnapshot && (Date.now() - _lastElementSnapshot.at < 30000) ? _lastElementSnapshot : null;
+    if (!snapshot || payload.refresh) {
+      snapshot = await _buildElementSnapshot({ includeOcr: true, workspacePath: payload.workspacePath, displayId: payload.displayId, engine: payload.engine });
+    }
+    const query = String(payload.text || '').trim().toLowerCase();
+    const source = payload.source ? String(payload.source) : '';
+    const roleFilter = payload.role ? String(payload.role).toLowerCase() : '';
+    let matches = snapshot.elements.filter((el) => {
+      if (source && el.source !== source) return false;
+      if (roleFilter && !String(el.role || '').toLowerCase().includes(roleFilter)) return false;
+      if (!query) return true;
+      return String(el.name || '').toLowerCase().includes(query);
+    });
+    if (!matches.length && query) {
+      // 模糊兜底：按字符重合度排序（OCR 错字/空格差异）
+      const chars = new Set(query.replace(/\s+/g, ''));
+      matches = snapshot.elements
+        .filter((el) => !source || el.source === source)
+        .map((el) => {
+          const name = String(el.name || '').toLowerCase();
+          let hit = 0;
+          for (const ch of chars) if (name.includes(ch)) hit++;
+          return { el, score: chars.size ? hit / chars.size : 0 };
+        })
+        .filter((x) => x.score >= 0.6)
+        .sort((a, b) => b.score - a.score)
+        .map((x) => x.el);
+    }
+    matches.sort((a, b) => {
+      const aName = String(a.name || '').toLowerCase();
+      const bName = String(b.name || '').toLowerCase();
+      const aExact = aName === query ? 1 : 0;
+      const bExact = bName === query ? 1 : 0;
+      if (aExact !== bExact) return bExact - aExact;
+      return aName.length - bName.length;
+    });
+    const nth = Number.isFinite(Number(payload.nth)) ? Number(payload.nth) : 0;
+    const pick = matches[nth] || matches[0] || null;
+    return {
+      ok: true,
+      query: payload.text || '',
+      count: matches.length,
+      matches: matches.slice(0, 20).map((el) => ({ id: el.id, source: el.source, name: el.name, role: el.role, bbox: el.bbox, center: el.center, confidence: el.confidence })),
+      pick: pick ? { id: pick.id, source: pick.source, name: pick.name, center: pick.center, bbox: pick.bbox } : null,
+      capture: snapshot.capture ? { path: snapshot.capture.path, width: snapshot.capture.width, height: snapshot.capture.height } : null,
+    };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+
+function _toPhysical(point, space) {
+  const x = Number(point.x);
+  const y = Number(point.y);
+  if (space === 'physical') return { x: Math.round(x), y: Math.round(y) };
+  const capture = _lastCapture;
+  if (!capture || !capture.display) return { x: Math.round(x), y: Math.round(y) };
+  const display = capture.display;
+  if (process.platform === 'darwin') {
+    // macOS：nut-js 使用逻辑点坐标，截图是 Retina 物理像素 → 除以缩放
+    const scale = display.scaleFactor || 1;
+    return { x: Math.round(display.bounds.x + x / scale), y: Math.round(display.bounds.y + y / scale) };
+  }
+  return { x: Math.round(display.physical.x + x), y: Math.round(display.physical.y + y) };
+}
+
+function _regionDiff(imageA, imageB, rect, step = 2) {
+  try {
+    const size = imageA.getSize();
+    if (!size.width || !size.height) return { changed: 0, total: 0, ratio: 0 };
+    const bmpA = imageA.toBitmap();
+    const bmpB = imageB.toBitmap();
+    const stride = size.width * 4;
+    const x0 = Math.max(0, Math.floor(rect.x));
+    const y0 = Math.max(0, Math.floor(rect.y));
+    const x1 = Math.min(size.width, Math.ceil(rect.x + rect.w));
+    const y1 = Math.min(size.height, Math.ceil(rect.y + rect.h));
+    let changed = 0;
+    let total = 0;
+    for (let y = y0; y < y1; y += step) {
+      for (let x = x0; x < x1; x += step) {
+        const i = y * stride + x * 4;
+        total++;
+        const delta = Math.abs(bmpA[i] - bmpB[i]) + Math.abs(bmpA[i + 1] - bmpB[i + 1]) + Math.abs(bmpA[i + 2] - bmpB[i + 2]);
+        if (delta > 36) changed++;
+      }
+    }
+    return { changed, total, ratio: total ? changed / total : 0 };
+  } catch {
+    return { changed: 0, total: 0, ratio: 0 };
+  }
+}
+
+async function _resolveElementTarget(payload) {
+  if (payload.id && _lastElementSnapshot) {
+    const hit = _lastElementSnapshot.elements.find((el) => el.id === payload.id);
+    if (hit && hit.center) return { center: hit.center, element: hit };
+  }
+  if (payload.text) {
+    const result = await (async () => {
+      let snapshot = _lastElementSnapshot && (Date.now() - _lastElementSnapshot.at < 30000) ? _lastElementSnapshot : null;
+      if (!snapshot) snapshot = await _buildElementSnapshot({ includeOcr: true, workspacePath: payload.workspacePath, displayId: payload.displayId });
+      const query = String(payload.text).trim().toLowerCase();
+      const nth = Number.isFinite(Number(payload.nth)) ? Number(payload.nth) : 0;
+      const matches = snapshot.elements.filter((el) => String(el.name || '').toLowerCase().includes(query));
+      const pick = matches[nth] || matches[0] || null;
+      return pick ? { center: pick.center, element: pick } : null;
+    })();
+    if (result && result.center) return result;
+  }
+  if (Number.isFinite(Number(payload.x)) && Number.isFinite(Number(payload.y))) {
+    return { center: { x: Number(payload.x), y: Number(payload.y) }, element: null };
+  }
+  return null;
+}
+
+ipcMain.handle('computer:clickElement', async (_, payload = {}) => {
+  const nut = await _getNut();
+  if (!nut) return { ok: false, error: 'nut-js not available' };
+  try {
+    const resolved = await _resolveElementTarget(payload);
+    if (!resolved) return { ok: false, error: 'element not found; call get_ui_tree/find_element/ocr first or provide x/y' };
+    const space = payload.space || 'screenshot';
+    const physical = _toPhysical(resolved.center, space);
+    const button = payload.button === 'right' ? nut.Button.RIGHT : payload.button === 'middle' ? nut.Button.MIDDLE : nut.Button.LEFT;
+    const verify = payload.verify !== false;
+    let before = null;
+    let beforeDisplay = null;
+    if (verify) {
+      try { const grabbed = await _grabScreen({ displayId: payload.displayId }); before = grabbed.image; beforeDisplay = grabbed.display; } catch { /* ignore */ }
+    }
+    await nut.mouse.setPosition(new nut.Point(physical.x, physical.y));
+    await nut.mouse.click(button);
+    if (payload.doubleClick) await nut.mouse.click(button);
+    let verification = null;
+    if (verify && before) {
+      await new Promise((r) => setTimeout(r, Math.min(3000, Math.max(100, Number(payload.verifyWaitMs) || 350))));
+      try {
+        const grabbedAfter = await _grabScreen({ displayId: payload.displayId });
+        // before/after 抓取的是目标显示器的完整截图；取点击点周围 80x80 区域
+        // 做像素差异，判断 UI 是否发生可见变化。
+        const targetDisplay = beforeDisplay || _findDisplay(payload.displayId);
+        let regionCenter;
+        if (space === 'physical') {
+          regionCenter = process.platform === 'darwin'
+            ? { x: (physical.x - targetDisplay.bounds.x) * (targetDisplay.scaleFactor || 1), y: (physical.y - targetDisplay.bounds.y) * (targetDisplay.scaleFactor || 1) }
+            : { x: physical.x - targetDisplay.physical.x, y: physical.y - targetDisplay.physical.y };
+        } else {
+          regionCenter = resolved.center;
+        }
+        const region = {
+          x: Math.round(regionCenter.x - 40),
+          y: Math.round(regionCenter.y - 40),
+          w: 80,
+          h: 80,
+        };
+        const diff = _regionDiff(before, grabbedAfter.image, region);
+        verification = { changed: diff.ratio > 0.004, ratio: Number(diff.ratio.toFixed(4)) };
+      } catch (e) {
+        verification = { changed: null, error: e.message };
+      }
+    }
+    return {
+      ok: true,
+      clicked: physical,
+      screenshotPoint: resolved.center,
+      space,
+      target: resolved.element ? { id: resolved.element.id, source: resolved.element.source, name: resolved.element.name } : null,
+      doubleClick: !!payload.doubleClick,
+      verification,
+    };
   } catch (e) { return { ok: false, error: e.message }; }
 });
 
 // ---- IPC: Screenshot ----
 ipcMain.handle('screenshot:take', async (_, workspacePath) => {
   try {
-    const sources = await require('electron').desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: 1920, height: 1080 } });
-    if (sources.length > 0) {
-      const targetDir = workspacePath && fs.existsSync(workspacePath) ? workspacePath : getImagesDir();
-      const imgPath = path.join(targetDir, `screenshot_${Date.now()}.png`);
-      fs.writeFileSync(imgPath, sources[0].thumbnail.toPNG());
-      return { ok: true, path: imgPath };
-    }
-    return { ok: false, error: '无法截取屏幕' };
+    const capture = await _captureScreen(workspacePath, {});
+    return { ok: true, path: capture.path, width: capture.width, height: capture.height, display: capture.display, origin: capture.origin };
   } catch (e) { return { ok: false, error: e.message }; }
 });
 

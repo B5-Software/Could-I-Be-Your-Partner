@@ -137,7 +137,7 @@ async function startWake() {
   const v = voiceSettings();
   const words = (v.wakeWords || []).filter((w) => w && w.phrase && w.enabled !== false);
   if (!words.length) {
-    log('无有效唤醒词，跳过启动');
+    log('no valid wake words, skip start');
     return { ok: false, error: 'no-wake-words' };
   }
   try {
@@ -156,11 +156,11 @@ async function startWake() {
     }
   } catch (e) {
     const msg = String((e && e.message) || e);
-    log('启动唤醒失败:', msg);
+    log('failed to start wake:', msg);
     broadcast('voice:error', { scope: 'wake', error: msg });
     throw e;
   }
-  log('后台唤醒已启用');
+  log('background wake enabled');
   return { ok: true };
 }
 
@@ -171,7 +171,7 @@ async function stopWake() {
   destroyCaptureWindow();
   barAudioShared = false;
   await engine.stopWake();
-  log('后台唤醒已停用');
+  log('background wake disabled');
   return { ok: true };
 }
 
@@ -195,7 +195,7 @@ async function setWakeEnabled(enabled) {
 
 /** 唤醒命中路由 */
 async function onWake({ keyword, phrase, action }) {
-  log('唤醒命中:', keyword, '→', action);
+  log('wake hit:', keyword, '→', action);
   // 命中即停止正在播放的 TTS（barge-in）
   try { engine.cancelAllTts(); } catch (_) {}
   broadcast('voice:wake', { keyword, phrase, action });
@@ -207,7 +207,7 @@ async function onWake({ keyword, phrase, action }) {
   // 立即开启 STT 会话并让采集窗音频分流（用户往往唤醒词刚说完继续说指令，
   // 若等语音条窗口重新 getUserMedia 会丢句首 → whisper 识别严重失真）
   if (voiceSettings().sttEnabled === false) {
-    log('STT 已禁用，跳过直通识别');
+    log('STT disabled, skip pass-through recognition');
     openVoiceBar();
     return;
   }
@@ -217,7 +217,7 @@ async function onWake({ keyword, phrase, action }) {
     await engine.startStt('bar-stt');
   } catch (e) {
     barAudioShared = false;
-    log('唤醒直通 STT 启动失败:', e.message);
+    log('wake pass-through STT start failed:', e.message);
   }
   const bar = openVoiceBar();
   const notify = () => {
@@ -246,12 +246,12 @@ function registerHotkey() {
     });
     if (ok) {
       registeredHotkey = acc;
-      log('全局热键已注册:', acc);
+      log('global hotkey registered:', acc);
     } else {
-      log('全局热键注册失败（被占用？）:', acc);
+      log('global hotkey registration failed (in use?):', acc);
     }
   } catch (e) {
-    log('全局热键异常:', e.message);
+    log('global hotkey error:', e.message);
   }
 }
 
@@ -340,7 +340,7 @@ function registerIpc(ipcMain) {
       ctx.showWindowFromTray();
       win.webContents.send('voice:bar:fill', { text, autoSend: true });
     } catch (e) {
-      log('voice:bar:command 处理失败:', e && e.message);
+      log('voice:bar:command failed:', e && e.message);
     }
   });
 
@@ -353,7 +353,7 @@ function registerIpc(ipcMain) {
       const text = (data && data.text ? data.text : '').trim();
       if (text) win.webContents.send('voice:bar:fill', { text, autoSend: false });
     } catch (e) {
-      log('voice:bar:show-main 处理失败:', e && e.message);
+      log('voice:bar:show-main failed:', e && e.message);
     }
   });
 
@@ -372,7 +372,7 @@ function wireEngineEvents() {
   engine.on('tts.done', (msg) => broadcast('voice:tts-done', msg));
   engine.on('tts.error', (msg) => broadcast('voice:tts-error', msg));
   engine.on('engine.error', (msg) => {
-    log('引擎错误:', msg.scope, msg.error);
+    log('engine error:', msg.scope, msg.error);
     broadcast('voice:error', msg);
   });
 }
@@ -430,7 +430,7 @@ function registerDisabledIpc(ipcMain) {
 function initVoice(context) {
   ctx = context;
   if (!VOICE_SUPPORTED) {
-    log(`当前平台不支持语音引擎（win32/arm64，sherpa-onnx-node 无官方原生库），语音子系统已禁用`);
+    log(`voice engine unsupported on this platform (win32/arm64: no official sherpa-onnx-node binary); voice subsystem disabled`);
     registerDisabledIpc(ctx.ipcMain);
     const noop = () => {};
     return {
@@ -455,7 +455,7 @@ function initVoice(context) {
 
   // 开机自启后台唤醒
   if (voiceSettings().wakeEnabled) {
-    setTimeout(() => { startWake().catch((e) => log('自启唤醒失败:', e.message)); }, 3000);
+    setTimeout(() => { startWake().catch((e) => log('auto-start wake failed:', e.message)); }, 3000);
   }
   return {
     engine,
@@ -474,7 +474,7 @@ function initVoice(context) {
       if (v.sttModel !== prev.sttModel) {
         const wasWake = await engine.reloadModels();
         if (wasWake && v.wakeEnabled) {
-          try { await startWake(); } catch (e) { log('模型重载后重建唤醒失败:', e.message); }
+          try { await startWake(); } catch (e) { log('failed to restart wake after model reload:', e.message); }
         }
       }
       if (!!v.wakeEnabled !== !!prev.wakeEnabled) {

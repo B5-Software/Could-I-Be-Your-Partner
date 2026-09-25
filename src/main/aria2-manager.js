@@ -167,7 +167,7 @@ class Aria2Manager {
       // 如果代理设置变化，重启 aria2
       const newProxy = await this.resolveProxy(proxySettings);
       if (newProxy !== this.currentProxy) {
-        console.log('[aria2] 代理设置变化，重启 aria2...');
+        console.log('[aria2] proxy settings changed, restarting aria2...');
         await this.shutdown();
       } else {
         return true;
@@ -230,9 +230,9 @@ class Aria2Manager {
       if (bypassList.length > 0) {
         args.push(`--no-proxy=${bypassList.join(',')}`);
       }
-      console.log(`[aria2] 使用代理: ${proxyUrl}${bypassList.length ? ' (bypass: ' + bypassList.join(',') + ')' : ''}`);
+      console.log(`[aria2] using proxy: ${proxyUrl}${bypassList.length ? ' (bypass: ' + bypassList.join(',') + ')' : ''}`);
     } else {
-      console.log('[aria2] 不使用代理');
+      console.log('[aria2] proxy disabled');
     }
 
     return new Promise((resolve, reject) => {
@@ -248,20 +248,20 @@ class Aria2Manager {
         });
 
         this.process.on('error', (err) => {
-          console.error(`[aria2] 进程启动失败: ${err.message}`);
+          console.error(`[aria2] spawn failed: ${err.message}`);
           this.ready = false;
           reject(err);
         });
 
         this.process.on('exit', (code) => {
           const wasReady = this.ready;
-          console.log(`[aria2] 进程退出，code=${code}${wasReady && code !== 0 ? '（异常退出）' : ''}`);
+          console.log(`[aria2] process exited, code=${code}${wasReady && code !== 0 ? ' (abnormal exit)' : ''}`);
           this.ready = false;
           this.process = null;
           // 异常退出告警：可能是 OOM/崩溃。下一次调用会通过 ensureStarted 自动重启，
           // 且 --save-session 会恢复未完成的任务，无需用户干预。
           if (wasReady && code !== 0) {
-            console.error(`[aria2] ⚠️ aria2 异常退出（code=${code}），正在下载的任务将由会话文件自动恢复`);
+            console.error(`[aria2] ⚠️ aria2 exited abnormally (code=${code}); active downloads will resume from session file`);
           }
         });
 

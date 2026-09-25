@@ -203,7 +203,7 @@ class VoiceEngine extends EventEmitter {
       this._pendingInitReject = reject;
       const { missing } = this._models ? { missing: this._missing } : this.resolveModels();
       // 缺失核心模型仍允许启动（各功能在使用时报错），但记录日志
-      if (missing && missing.length) this.log('模型缺失:', missing.join(', '));
+      if (missing && missing.length) this.log('models missing:', missing.join(', '));
 
       const workerPath = path.join(__dirname, 'voice-worker.js');
       try {
@@ -215,7 +215,7 @@ class VoiceEngine extends EventEmitter {
       }
       this.worker.on('message', (msg) => this._onWorkerMessage(msg));
       this.worker.on('error', (e) => {
-        this.log('worker 错误:', e.message);
+        this.log('worker error:', e.message);
         this.emit('error', { scope: 'worker', error: e.message });
         if (this._pendingInitReject) {
           const rej = this._pendingInitReject;
@@ -225,7 +225,7 @@ class VoiceEngine extends EventEmitter {
         }
       });
       this.worker.on('exit', (code) => {
-        this.log('worker 退出 code=' + code);
+        this.log('worker exited code=' + code);
         if (this._pendingInitReject) {
           const rej = this._pendingInitReject;
           this._pendingInitReject = null;
@@ -322,7 +322,7 @@ class VoiceEngine extends EventEmitter {
     const kwFile = path.join(kwDir, 'keywords.txt');
     const enabled = (wakeWords || []).filter((w) => w && w.phrase && w.enabled !== false);
     const { content, errors } = buildKeywordsFile(enabled, kws.enPhone || '');
-    if (errors.length) this.log('唤醒词编码失败:', JSON.stringify(errors));
+    if (errors.length) this.log('wake word encoding failed:', JSON.stringify(errors));
     if (!content.trim()) throw new Error('无有效唤醒词');
     fs.writeFileSync(kwFile, content, 'utf8');
 
@@ -341,12 +341,12 @@ class VoiceEngine extends EventEmitter {
       keywordsThreshold: kw.threshold != null ? kw.threshold : 0.25,
     });
     this.wakeActive = true;
-    this.log('唤醒监听已启动，词表:', enabled.map((w) => w.phrase).join(' / '));
+    this.log('wake listening started, phrases:', enabled.map((w) => w.phrase).join(' / '));
     // 若此刻已有活跃听写会话（打开唤醒时正在听写）→ 保持互斥立即暂停
     if (this.sttSessions.size > 0 && !this._sttSuspendWake) {
       this._sttSuspendWake = true;
       this.suspendWake();
-      this.log('已有听写会话，唤醒监听保持暂停');
+      this.log('active dictation session, wake listening stays paused');
     }
   }
 
@@ -380,7 +380,7 @@ class VoiceEngine extends EventEmitter {
     if (this._sttSuspendWake && this.sttSessions.size === 0) {
       this._sttSuspendWake = false;
       this.resumeWake();
-      this.log('听写会话全部结束，恢复唤醒监听');
+      this.log('all dictation sessions ended, wake listening resumed');
     }
   }
 
@@ -393,7 +393,7 @@ class VoiceEngine extends EventEmitter {
     if (this.wakeActive && !this._sttSuspendWake) {
       this._sttSuspendWake = true;
       this.suspendWake();
-      this.log('听写开始，暂停唤醒监听');
+      this.log('dictation started, wake listening paused');
     }
     this.worker.postMessage({ type: 'stt.start', sessionId, vad: opts.vad });
   }
@@ -470,7 +470,7 @@ class VoiceEngine extends EventEmitter {
     this._sttSuspendWake = false;
     this.resolveModels();
     this.wakeActive = false;
-    this.log('语音模型已重载（sttModel 变更）');
+    this.log('voice models reloaded (sttModel changed)');
     return wasWake;
   }
 }

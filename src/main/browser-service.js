@@ -188,13 +188,13 @@ async function _launchPwBrowser(overrideSettings = null) {
     try {
       if (typeof _pwBrowser.isConnected === 'function') alive = _pwBrowser.isConnected();
     } catch {
-      console.log('[Playwright] 检查连接状态异常，清理后重新启动');
+      console.log('[Playwright] connection check failed, cleaning up and restarting');
       alive = false;
     }
     if (alive) {
       return _pwBrowser;
     }
-    console.log('[Playwright] 现有实例已断开，清理后重新启动');
+    console.log('[Playwright] existing instance disconnected, cleaning up and restarting');
     _pwBrowser = null;
     _pwWorkspaces.clear();
     _hidePwBanner();

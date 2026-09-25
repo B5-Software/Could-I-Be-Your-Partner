@@ -127,7 +127,7 @@ class AutomationManager {
   start() {
     this._refresh();
     this.refreshServer().catch(e => {
-      console.error(`[automation] HTTP 信号服务器刷新失败:`, e.message);
+      console.error(`[automation] HTTP signal server refresh failed:`, e.message);
     });
   }
 
@@ -193,7 +193,7 @@ class AutomationManager {
       if (this._lastFire.get(task.id) === key) continue;
       this._lastFire.set(task.id, key);
       this.run(task.id, { kind: 'schedule', time: now.toISOString() }).catch(e => {
-        console.error(`[automation] 任务 ${task.name} 执行失败:`, e.message);
+        console.error(`[automation] task ${task.name} failed:`, e.message);
       });
     }
   }
@@ -211,7 +211,7 @@ class AutomationManager {
       const bodyMatch = !cfg.bodyRegex || safeRegex(cfg.bodyRegex).test(body);
       if (kindMatch && titleMatch && bodyMatch) {
         this.run(task.id, { kind: 'notification', params: { notification }, time: new Date().toISOString() }).catch(e => {
-          console.error(`[automation] 任务 ${task.name} 执行失败:`, e.message);
+          console.error(`[automation] task ${task.name} failed:`, e.message);
         });
       }
     }
@@ -287,7 +287,7 @@ class AutomationManager {
     this.serverInsecure = insecure;
     this.serverTokenCount = tokens.length;
     this.serverState = 'running';
-    console.log(`[automation] HTTP 信号服务器已启动: http://127.0.0.1:${this.serverPort}/trigger/:taskId${insecure ? '（allowNoToken 模式）' : ''}`);
+    console.log(`[automation] HTTP signal server started: http://127.0.0.1:${this.serverPort}/trigger/:taskId${insecure ? ' (allowNoToken mode)' : ''}`);
   }
 
   _json(res, code, payload) {

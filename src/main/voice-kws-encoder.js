@@ -37,7 +37,7 @@ function loadCmuDict(enPhonePath) {
       if (word && phones && !_cmuDict.has(word)) _cmuDict.set(word, phones);
     }
   } catch (e) {
-    console.warn('[voice-kws-encoder] en.phone 加载失败:', e.message);
+    console.warn('[voice-kws-encoder] en.phone load failed:', e.message);
   }
   return _cmuDict;
 }

@@ -243,7 +243,11 @@ contextBridge.exposeInMainWorld('api', {
   avatarFramesGet: (id) => ipcRenderer.invoke('avatar-frames:get', id),
 
   // Computer Use Protocol (CUP)
-  computerScreenshot: (workspacePath) => ipcRenderer.invoke('computer:screenshot', workspacePath),
+  computerScreenshot: (workspacePath, options) => ipcRenderer.invoke('computer:screenshot', workspacePath, options),
+  computerListDisplays: () => ipcRenderer.invoke('computer:listDisplays'),
+  computerOcr: (options) => ipcRenderer.invoke('computer:ocr', options),
+  computerFindElement: (payload) => ipcRenderer.invoke('computer:findElement', payload),
+  computerClickElement: (payload) => ipcRenderer.invoke('computer:clickElement', payload),
   computerMouseMove: (x, y) => ipcRenderer.invoke('computer:mouseMove', x, y),
   computerClick: (button, x, y, doubleClick) => ipcRenderer.invoke('computer:click', button, x, y, doubleClick),
   computerDrag: (startX, startY, endX, endY) => ipcRenderer.invoke('computer:drag', startX, startY, endX, endY),
@@ -253,13 +257,14 @@ contextBridge.exposeInMainWorld('api', {
   computerCursorPosition: () => ipcRenderer.invoke('computer:cursorPosition'),
   computerWait: (duration) => ipcRenderer.invoke('computer:wait', duration),
   computerGetScreenSize: () => ipcRenderer.invoke('computer:getScreenSize'),
-  computerGetUITree: () => ipcRenderer.invoke('computer:getUITree'),
+  computerGetUITree: (options) => ipcRenderer.invoke('computer:getUITree', options),
 
   // LLM
   chatLLM: (messages, options) => ipcRenderer.invoke('llm:chat', messages, options),
   visionDescribeImage: ({ dataUrl, prompt }) => ipcRenderer.invoke('vision:describeImage', { dataUrl, prompt }),
   chatLLMStream: (messages, options) => ipcRenderer.invoke('llm:chatStream', messages, options),
   summarizeLLM: (messages, options) => ipcRenderer.invoke('llm:summarize', messages, options),
+  llmCountTokens: (payload) => ipcRenderer.invoke('llm:countTokens', payload),
   zenFetchModels: (mode) => ipcRenderer.invoke('zen:fetchModels', mode),
   llmFetchModels: (provider, apiUrl, apiKey) => ipcRenderer.invoke('llm:fetchModels', provider, apiUrl, apiKey),
   // 查询模型可用的变体（思考强度）档位 + Anthropic 能力内省
@@ -694,6 +699,7 @@ contextBridge.exposeInMainWorld('api', {
   onWebControlStopAgent: (cb) => ipcRenderer.on('webControl:stopAgent', () => cb()),
   onWebControlApprovalResponse: (cb) => ipcRenderer.on('webControl:approvalResponse', (_, approved) => cb(approved)),
   onWebControlLoadConversation: (cb) => ipcRenderer.on('webControl:loadConversation', (_, id) => cb(id)),
+  onWebControlRunning: (cb) => ipcRenderer.on('webControl:running', (_, running) => cb(running)),
   // DOM Mirror: renderer listens for mirror-init trigger, sends mirror updates, receives UI events from WebUI
   webControlMirrorInit: (cb) => ipcRenderer.on('webControl:mirrorInit', () => cb()),
   webControlUiEvent: (data) => ipcRenderer.send('webControl:uiEvent', data),

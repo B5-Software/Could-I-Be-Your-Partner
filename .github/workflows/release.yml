@@ -80,12 +80,13 @@ jobs:
             assets/geogebra-app
             assets/geogebra
             assets/ocr
+            assets/ocr-paddle
             assets/fonts
             assets/webfonts
             assets/lib
             assets/ime
             assets/aria2
-          key: assets-${{ hashFiles('scripts/download-voice-models.js', 'scripts/fetch-assets.sh', 'scripts/fetch-assets.ps1', 'scripts/download-aria2.js', 'scripts/build-ime-dicts.js') }}
+          key: assets-${{ hashFiles('scripts/download-voice-models.js', 'scripts/download-ocr-paddle.js', 'scripts/fetch-assets.sh', 'scripts/fetch-assets.ps1', 'scripts/download-aria2.js', 'scripts/build-ime-dicts.js') }}
 
       - name: Build (${{ matrix.name }})
         run: npm run ${{ matrix.script }}
