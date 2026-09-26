@@ -37,6 +37,18 @@
       border-radius: 50%; animation: spin .9s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
     code { font-family: Consolas, monospace; background: #232833; padding: 1px 4px; border-radius: 4px; }
+    /* ---- 主题（跟随设置：深浅色/强调色/背景色）---- */
+    :root {
+      --vm-accent: #4f8cff;
+      --vm-bg: #14161b;
+      --vm-fg: #e6e8ef;
+      --vm-bar-bg: #1b1e25;
+      --vm-border: #2a2f3a;
+    }
+    body { background: var(--vm-bg); color: var(--vm-fg); }
+    #bar { background: var(--vm-bar-bg); border-bottom: 1px solid var(--vm-border); -webkit-app-region: drag; }
+    #bar button, #bar input, #bar select { -webkit-app-region: no-drag; }
+    #btn-close { margin-left: 4px; }
   </style>
 </head>
 <body>
@@ -48,6 +60,7 @@
     <button id="btn-log">日志</button>
     <button id="btn-restart">重启图形环境</button>
     <button id="btn-stop">停止</button>
+    <button id="btn-close" title="关闭窗口">✕</button>
   </div>
   <div id="overlay"><div class="spinner"></div><div id="overlay-text">正在准备虚拟机图形环境…</div></div>
   <div id="screen-wrap"><div id="screen"></div></div>
@@ -55,6 +68,26 @@
 
   <script type="module">
     import RFB from '../../../node_modules/@novnc/novnc/core/rfb.js';
+
+    // 主题跟随设置（主进程经 query 传入，与 Splash 同一套约定）
+    (function vmThemeApply() {
+      const q = new URLSearchParams(location.search);
+      const dark = q.get('dark') !== '0';
+      const accent = q.get('accent') || '4f8cff';
+      const bg = q.get('bg') || (dark ? '17181d' : 'f5f7fa');
+      const root = document.documentElement;
+      root.style.setProperty('--vm-accent', '#' + accent);
+      root.style.setProperty('--vm-bg', '#' + bg);
+      root.style.setProperty('--vm-fg', dark ? '#e6e8ef' : '#2a2d35');
+      root.style.setProperty('--vm-bar-bg', dark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.04)');
+      root.style.setProperty('--vm-border', dark ? '#2a2f3a' : '#dfe3ea');
+      document.querySelectorAll('button').forEach((b) => { b.style.borderColor = 'var(--vm-border)'; b.style.background = dark ? '#232833' : '#ffffff'; b.style.color = 'var(--vm-fg)'; });
+      document.getElementById('status') || null;
+      const st = document.getElementById('status');
+      if (st) st.style.color = dark ? '#9aa4b6' : '#5b6474';
+      const log = document.getElementById('log');
+      if (log) { log.style.background = dark ? 'rgba(15,17,21,.92)' : 'rgba(255,255,255,.94)'; log.style.color = dark ? '#9aa4b6' : '#5b6474'; }
+    })();
 
     const $ = (id) => document.getElementById(id);
     const statusEl = $('status');
@@ -120,6 +153,7 @@
       setStatus(label + '…');
     });
 
+    $('btn-close')?.addEventListener('click', () => { try { window.close(); } catch (_) { /* ignore */ } });
     $('btn-log').addEventListener('click', () => {
       logEl.style.display = logEl.style.display === 'block' ? 'none' : 'block';
     });

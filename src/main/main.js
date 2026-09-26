@@ -1705,6 +1705,7 @@ function openVmDesktopWindow() {
     icon: path.join(__dirname, '../../assets/icons/icon.png'),
     backgroundColor: '#14161b',
     show: false,
+    frame: false,
     webPreferences: {
       preload: path.join(__dirname, '../preload/vm-desktop-preload.js'),
       contextIsolation: true,
@@ -1712,7 +1713,15 @@ function openVmDesktopWindow() {
       sandbox: false,
     },
   });
-  vmDesktopWindow.loadFile(path.join(__dirname, '../renderer/pages/vm-desktop.html'));
+  {
+    const th = settings.theme || {};
+    const mode = th.mode || 'system';
+    const dark = mode === 'dark' ? true : mode === 'light' ? false : nativeTheme.shouldUseDarkColors;
+    const accent = /^#[0-9a-fA-F]{6}$/.test(th.accentColor || '') ? th.accentColor : '#4f8cff';
+    const bg = /^#[0-9a-fA-F]{6}$/.test(th.backgroundColor || '') ? th.backgroundColor : (dark ? '#17181d' : '#f5f7fa');
+    try { vmDesktopWindow.setBackgroundColor(bg); } catch { /* ignore */ }
+    vmDesktopWindow.loadFile(path.join(__dirname, '../renderer/pages/vm-desktop.html'), { query: { dark: dark ? '1' : '0', accent: accent.slice(1), bg: bg.slice(1) } });
+  }
   vmDesktopWindow.once('ready-to-show', () => { try { vmDesktopWindow.show(); } catch { /* ignore */ } });
   vmDesktopWindow.on('closed', () => { vmDesktopWindow = null; });
   return vmDesktopWindow;
@@ -3686,7 +3695,7 @@ ipcMain.handle('vm:probe', async () => {
   try { return { ok: true, ...(await vmService.probe()) }; } catch (e) { return { ok: false, error: e.message }; }
 });
 ipcMain.handle('vm:logs', () => ({ ok: true, ...vmService.status() }));
-ipcMain.handle('vm:variants', () => ({ ok: true, variants: vmService.variants() }));
+ipcMain.handle('vm:variants', () => ({ ok: true, current: vmService.variant, variants: vmService.variants() }));
 ipcMain.handle('vm:assetsStatus', (_, variant) => ({ ok: true, ...vmService.assetsStatus(variant) }));
 ipcMain.handle('vm:manifest', async (_, opts) => {
   try { return await vmService.manifest(opts || {}); } catch (e) { return { ok: false, error: e.message }; }
@@ -9112,6 +9121,52 @@ app.whenReady().then(async () => {
 // ---- VM 工具路由：已由 ipcMain.handle 包装就地安装（见文件头部）----
 // 自检放在 whenReady 之后（word/ppt/spreadsheet 等处理器在 whenReady 里注册）。
 function logVmRoutingSelfCheck() {
+  // VM 模式：系统信息类工具报虚拟机（否则 Agent 会以为自己在宿主上跑）
+  try {
+    const vmSystemInfo = async (full) => {
+      const inst = vmService.instance;
+      if (!inst || inst.state !== 'ready') return null;
+      const cmd = [
+        'uname -m', 'nproc',
+        "grep -E '^(PRETTY_NAME|VERSION_ID)=' /etc/os-release | tr '\n' '|'",
+        'head -1 /proc/meminfo',
+        'df -m / | tail -1',
+        'uname -r',
+      ].join('; echo "\n---"; ');
+      const r = await inst.exec(cmd, { timeoutMs: 20000 });
+      const [arch, cpus, osRel, memLine, dfLine, kernel] = r.stdout.split('---').map((x) => x.trim());
+      const memKB = parseInt(((memLine || '').match(/(\d+)/) || [])[1], 10) || 0;
+      const memMB = Math.round(memKB / 1024);
+      const diskMB = parseInt(((dfLine || '').trim().split(/\s+/)[1] || '0'), 10) || 0;
+      const pretty = (osRel || '').split('|').filter(Boolean)[0] || 'CIBYP-VM-OS';
+      const base = {
+        location: 'vm',
+        platform: 'linux',
+        arch: arch || 'x86_64',
+        cpus: parseInt(cpus, 10) || 0,
+        totalMemory: (parseInt(memMB, 10) || 0) * 1024 * 1024,
+        osRelease: kernel || '',
+        distro: pretty,
+      };
+      if (!full) return base;
+      return { ...base, hostname: 'cibyp-vmos', diskMB: parseInt(diskMB, 10) || 0, shell: '/bin/bash', note: '运行位置=虚拟机（信息来自 VM 内）' };
+    };
+    for (const ch of ['system:info', 'system:fullInfo']) {
+      const orig = __ipcHandlers.get(ch);
+      if (!orig) continue;
+      ipcMain.removeHandler(ch);
+      __originalIpcHandle(ch, async (e, ...args) => {
+        try {
+          if ((settings.runtime || {}).location === 'vm') {
+            const info = await vmSystemInfo(ch === 'system:fullInfo');
+            if (info) return ch === 'system:fullInfo' ? { ...(orig(e, ...args) || {}), ...info } : info;
+          }
+        } catch { /* 回退宿主 */ }
+        return orig(e, ...args);
+      });
+      console.log('[vm] ' + ch + ' 已接入 VM 探测');
+    }
+  } catch (e) { console.warn('[vm] system:info 接入失败:', e.message); }
   try {
     const probe = ['fs:readFile', 'word:create', 'ppt:create', 'spreadsheet:exportFile', 'image:generate', 'file:download', 'ffmpeg:invoke'];
     const missing = probe.filter((ch) => !__ipcHandlers.has(ch));
@@ -9140,6 +9195,8 @@ try {
       return __origFfmpegAvail(e, ...args);
     });
     console.log('[vm] ffmpeg:available 已接入 VM 探测');
+
+
   }
 } catch (e) { console.warn('[vm] ffmpeg:available 接入失败:', e.message); }
 

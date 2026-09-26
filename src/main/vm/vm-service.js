@@ -396,6 +396,7 @@ class VmService extends EventEmitter {
   // ---------------------------------------------------------------- 资源
 
   variants() {
+    const current = this.variant;
     return images.VARIANTS.map((v) => ({
       id: v.id,
       label: v.label,

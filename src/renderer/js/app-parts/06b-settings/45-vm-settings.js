@@ -197,7 +197,8 @@
           opt.textContent = `${v.label}（≤${v.limitMB}MB${v.installed ? ' · 已安装' : ''}）`;
           sel.appendChild(opt);
         }
-        if (current) sel.value = current;
+        // 变体持久化：优先用后端当前值（否则首次渲染会落到第一项 base）
+        sel.value = (variants.current || current || 'base');
         _vmUpdateVariantDesc();
       }
       await Promise.all([refreshVmAssetsStatus(), refreshVmRuntimeStatus(), refreshVmSyncStatus(), refreshVmForwards(), refreshVmDownloadUi()]);
