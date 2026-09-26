@@ -989,3 +989,9 @@ input[id^="setting-budget-peak-"][type="text"]:focus {
 .pool-badge.vision { color: #8b5cf6; border-color: currentColor; }
 .pool-badge.off { color: var(--text-tertiary); }
 .llm-pool-editor-modal { width: min(92vw, 580px); max-height: 88vh; overflow: auto; }
+
+/* ---- 运行位置面板：统一按钮行与进度条（避免内联样式不一致导致布局混乱） ---- */
+.vm-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 8px; }
+.vm-row .btn-secondary { white-space: nowrap; }
+.vm-bar { height: 6px; border-radius: 4px; background: var(--border-color, #333); overflow: hidden; margin-top: 2px; }
+.vm-bar > i { display: block; height: 100%; width: 0%; background: var(--accent, #4f8cff); transition: width .3s; }

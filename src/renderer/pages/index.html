@@ -2662,123 +2662,104 @@
               <div class="settings-group">
                 <h3><i class="fa-solid fa-server"></i> 运行位置</h3>
                 <div class="setting-item">
-                  <label class="setting-label">命令与终端在哪里运行</label>
+                  <label class="setting-label">命令与终端运行在</label>
                   <select id="setting-runtime-location" style="width:260px">
                     <option value="host">本机（当前系统）</option>
                     <option value="vm">虚拟机（CIBYP-VM-OS）</option>
                   </select>
-                  <p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">
-                    虚拟机是隔离的 Linux 环境（基于 Debian，按需下载）。选择虚拟机后：终端、Shell / Python / Node、端口预览都在虚拟机内运行；
-                    <strong>切换需要重启应用</strong>。虚拟机故障时可随时切回本机。
-                  </p>
+                  <p class="setting-hint">选择虚拟机后：终端、Shell / Python / Node、文件读写、文档与媒体工具、浏览器自动化全部作用于隔离的 Linux 环境；切换需要重启应用。</p>
                 </div>
                 <div class="setting-item">
                   <label class="setting-label">工作区模式</label>
                   <select id="setting-runtime-workspace-mode" style="width:300px">
                     <option value="shared">共享工作区（本机为准 + 双向同步）</option>
-                    <option value="isolated">独立工作区（虚拟机内为准，按需导出）</option>
+                    <option value="isolated">独立工作区（虚拟机内为准）</option>
                   </select>
-                  <p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">
-                    共享：文件保留在本机，虚拟机通过 <code>/workspace</code> 访问，本机的文档解析 / OCR / 预览等原生能力不受影响，
-                    <strong>重置虚拟机不会丢失工作区</strong>。独立：工作区只存在于虚拟机内，导出才回本机（隔离更强，适合运行不可信代码）。
-                  </p>
+                  <p class="setting-hint">共享：文件留在本机，虚拟机通过 <code>/workspace</code> 双向增量同步；<b>重置虚拟机不会丢工作区</b>。独立：工作区只在虚拟机内，需要时显式导出（隔离更强）。</p>
                 </div>
-                <div class="setting-item" id="vm-sync-row">
-                  <label class="setting-label">工作区同步（共享模式）</label>
-                  <p id="vm-sync-status" style="font-size:12px;color:var(--text-secondary)">未同步</p>
-                  <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+                <div class="setting-item">
+                  <label class="setting-label">工作区同步</label>
+                  <p id="vm-sync-status" class="setting-hint">未同步</p>
+                  <div class="vm-row">
                     <button class="btn-secondary btn-sm" id="btn-vm-sync"><i class="fa-solid fa-rotate"></i> 立即同步</button>
                     <button class="btn-secondary btn-sm" id="btn-vm-sync-push"><i class="fa-solid fa-arrow-up"></i> 仅推送</button>
                     <button class="btn-secondary btn-sm" id="btn-vm-sync-pull"><i class="fa-solid fa-arrow-down"></i> 仅拉回</button>
-                    <button class="btn-secondary btn-sm" id="btn-vm-ws-root"><i class="fa-solid fa-folder-tree"></i> 更换工作区目录</button>
+                    <button class="btn-secondary btn-sm" id="btn-vm-ws-root"><i class="fa-solid fa-folder-tree"></i> 更换目录</button>
                   </div>
-                  <p id="vm-ws-root" style="font-size:11px;color:var(--text-tertiary);margin-top:6px"></p>
-                  <p style="font-size:11px;color:var(--text-tertiary)">
-                    宿主工作区为权威副本，VM 内 <code>/workspace</code> 与其双向增量同步（默认排除 node_modules / dist / .git / 大文件）；
-                    冲突时较新一方胜出，败方另存 <code>*.conflict-时间戳</code>，不静默丢数据。
-                  </p>
+                  <p id="vm-ws-root" class="setting-hint"></p>
                 </div>
                 <div class="setting-item" id="runtime-restart-row" hidden>
-                  <p id="runtime-restart-hint" style="font-size:12px;color:var(--warning,#b7791f)"></p>
-                  <button class="btn-secondary btn-sm" id="btn-runtime-relaunch" style="margin-top:6px"><i class="fa-solid fa-rotate-right"></i> 立即重启应用</button>
+                  <p id="runtime-restart-hint" class="setting-hint" style="color:var(--warning,#b7791f)"></p>
+                  <div class="vm-row">
+                    <button class="btn-secondary btn-sm" id="btn-runtime-relaunch"><i class="fa-solid fa-rotate-right"></i> 立即重启应用</button>
+                  </div>
                 </div>
               </div>
 
               <div class="settings-group">
                 <h3><i class="fa-solid fa-cube"></i> 虚拟机沙盒（CIBYP-VM-OS）</h3>
                 <div class="setting-item">
-                  <label class="setting-label">镜像变体</label>
-                  <select id="setting-vm-variant" style="width:300px"></select>
-                  <p id="vm-variant-desc" style="font-size:11px;color:var(--text-tertiary);margin-top:4px"></p>
-                </div>
-                <div class="setting-item">
-                  <label class="setting-label">资源状态</label>
-                  <p id="vm-assets-status" style="font-size:12px;color:var(--text-secondary)">检查中…</p>
-                  <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
-                    <button class="btn-secondary btn-sm" id="btn-vm-download"><i class="fa-solid fa-download"></i> 下载 / 更新镜像</button>
-                    <button class="btn-secondary btn-sm" id="btn-vm-cancel-download" hidden><i class="fa-solid fa-stop"></i> 取消下载</button>
-                    <button class="btn-secondary btn-sm" id="btn-vm-reset"><i class="fa-solid fa-eraser"></i> 重置虚拟机</button>
-                    <button class="btn-secondary btn-sm" id="btn-vm-open-dir"><i class="fa-solid fa-folder-open"></i> 打开资源目录</button>
-                    <button class="btn-secondary btn-sm" id="btn-vm-choose-dir"><i class="fa-solid fa-folder-tree"></i> 更换目录</button>
-                  </div>
-                  <div id="vm-progress-wrap" hidden style="margin-top:8px">
-                    <div style="height:6px;border-radius:4px;background:var(--border-color,#333);overflow:hidden"><i id="vm-progress-bar" style="display:block;height:100%;width:0%;background:var(--accent,#4f8cff);transition:width .3s"></i></div>
-                    <p id="vm-progress-text" style="font-size:11px;color:var(--text-tertiary);margin-top:4px"></p>
-                  </div>
-                  <p style="font-size:11px;color:var(--text-tertiary);margin-top:6px">
-                    下载源：GitHub Release（CIBYP-VM-OS）。资源不进安装包，全部按需下载并做 sha256 校验。
-                  </p>
-                </div>
-                <div class="setting-item">
-                  <label class="setting-label">自检</label>
-                  <p id="vm-probe-status" style="font-size:12px;color:var(--text-secondary)">未检测</p>
-                  <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px">
-                    <button class="btn-secondary btn-sm" id="btn-vm-probe"><i class="fa-solid fa-stethoscope"></i> 运行自检</button>
-                    <button class="btn-secondary btn-sm" id="btn-vm-enable-whpx" hidden><i class="fa-solid fa-microchip"></i> 开启 WHPX 硬件加速</button>
-                  </div>
-                  <p style="font-size:11px;color:var(--text-tertiary);margin-top:6px">
-                    检查 QEMU 运行时、硬件加速（Windows: WHPX / Linux: KVM / macOS: HVF）与镜像完整性。无硬件加速时退化为软件模拟（TCG，明显较慢）。
-                    开启 WHPX 需要管理员权限（会弹 UAC），开启后需重启一次系统。
-                  </p>
-                </div>
-                <div class="setting-item">
-                  <label class="setting-label">端口预览</label>
-                  <p id="vm-forwards" style="font-size:12px;color:var(--text-secondary)">未映射端口</p>
-                  <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px;align-items:center">
-                    <input id="vm-forward-port" type="number" min="1" max="65535" placeholder="VM 内端口，如 3000" style="width:200px;padding:4px 8px;font-size:12px">
-                    <button class="btn-secondary btn-sm" id="btn-vm-forward"><i class="fa-solid fa-plug"></i> 映射到本机</button>
-                  </div>
-                  <p style="font-size:11px;color:var(--text-tertiary);margin-top:6px">
-                    在 VM 里启动的开发服务器（如 <code>npm run dev</code>）可通过这里映射到宿主 127.0.0.1，然后用内置浏览器预览。
-                  </p>
-                </div>
-                <div class="setting-item">
-                  <label class="setting-label">在虚拟机内下载文件</label>
-                  <p id="vm-dl-status" style="font-size:12px;color:var(--text-secondary)">下载的文件会直接落到虚拟机里（宿主用 aria2 多连接下载，支持 GitHub 加速镜像）</p>
-                  <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;align-items:center">
-                    <input id="vm-dl-url" type="text" placeholder="https://github.com/…/file.zip" style="flex:1;min-width:320px;padding:5px 8px;font-size:12px">
-                    <input id="vm-dl-dir" type="text" value="/workspace" placeholder="虚拟机内目录" style="width:170px;padding:5px 8px;font-size:12px">
-                    <select id="vm-dl-mirror" style="width:210px;padding:5px 8px;font-size:12px"></select>
-                    <button class="btn-secondary btn-sm" id="btn-vm-dl"><i class="fa-solid fa-download"></i> 下载到虚拟机</button>
-                    <button class="btn-secondary btn-sm" id="btn-vm-dl-cancel" hidden><i class="fa-solid fa-stop"></i> 取消</button>
-                  </div>
-                  <div id="vm-dl-progress-wrap" hidden style="margin-top:8px">
-                    <div style="height:6px;border-radius:4px;background:var(--border-color,#333);overflow:hidden"><i id="vm-dl-bar" style="display:block;height:100%;width:0%;background:var(--accent,#4f8cff);transition:width .3s"></i></div>
-                    <p id="vm-dl-progress-text" style="font-size:11px;color:var(--text-tertiary);margin-top:4px"></p>
-                  </div>
-                  <p style="font-size:11px;color:var(--text-tertiary);margin-top:6px">
-                    加速镜像只对 GitHub 链接生效（<code>github.com / raw.githubusercontent.com</code>），其他直链自动跳过；镜像前缀与「资源下载」的镜像设置一致。
-                  </p>
-                </div>
-                <div class="setting-item">
-                  <label class="setting-label">虚拟机状态</label>
-                  <p id="vm-runtime-status" style="font-size:12px;color:var(--text-secondary)">未运行</p>
-                  <div style="display:flex;gap:8px;margin-top:6px;flex-wrap:wrap">
+                  <label class="setting-label">状态</label>
+                  <p id="vm-runtime-status" class="setting-hint">未运行</p>
+                  <div class="vm-row">
                     <button class="btn-secondary btn-sm" id="btn-vm-start"><i class="fa-solid fa-play"></i> 启动</button>
                     <button class="btn-secondary btn-sm" id="btn-vm-stop"><i class="fa-solid fa-power-off"></i> 停止</button>
                     <button class="btn-secondary btn-sm" id="btn-vm-desktop"><i class="fa-solid fa-desktop"></i> 打开 VM 桌面</button>
                   </div>
-                  <pre id="vm-serial-tail" style="display:none;margin-top:8px;max-height:140px;overflow:auto;font-size:10px;line-height:1.35;background:var(--bg-tertiary,#111);padding:8px;border-radius:6px;color:var(--text-tertiary)"></pre>
+                  <pre id="vm-serial-tail" style="display:none;margin-top:8px;max-height:140px;overflow:auto;font-size:10.5px;line-height:1.4;background:var(--bg-tertiary,#111);padding:8px;border-radius:6px;color:var(--text-tertiary)"></pre>
+                </div>
+                <div class="setting-item">
+                  <label class="setting-label">镜像变体</label>
+                  <select id="setting-vm-variant" style="width:300px"></select>
+                  <p id="vm-variant-desc" class="setting-hint"></p>
+                </div>
+                <div class="setting-item">
+                  <label class="setting-label">资源</label>
+                  <p id="vm-assets-status" class="setting-hint">检查中…</p>
+                  <div class="vm-row">
+                    <button class="btn-secondary btn-sm" id="btn-vm-download"><i class="fa-solid fa-download"></i> 下载 / 更新</button>
+                    <button class="btn-secondary btn-sm" id="btn-vm-cancel-download" hidden><i class="fa-solid fa-stop"></i> 取消</button>
+                    <button class="btn-secondary btn-sm" id="btn-vm-reset"><i class="fa-solid fa-eraser"></i> 重置虚拟机</button>
+                    <button class="btn-secondary btn-sm" id="btn-vm-open-dir"><i class="fa-solid fa-folder-open"></i> 打开目录</button>
+                    <button class="btn-secondary btn-sm" id="btn-vm-choose-dir"><i class="fa-solid fa-folder-tree"></i> 更换目录</button>
+                  </div>
+                  <div id="vm-progress-wrap" hidden style="margin-top:8px">
+                    <div class="vm-bar"><i id="vm-progress-bar"></i></div>
+                    <p id="vm-progress-text" class="setting-hint"></p>
+                  </div>
+                </div>
+                <div class="setting-item">
+                  <label class="setting-label">自检</label>
+                  <p id="vm-probe-status" class="setting-hint">未检测</p>
+                  <div class="vm-row">
+                    <button class="btn-secondary btn-sm" id="btn-vm-probe"><i class="fa-solid fa-stethoscope"></i> 运行自检</button>
+                    <button class="btn-secondary btn-sm" id="btn-vm-enable-whpx" hidden><i class="fa-solid fa-microchip"></i> 开启 WHPX 硬件加速</button>
+                  </div>
+                  <p class="setting-hint">检查 QEMU 运行时、硬件加速（Windows: WHPX / Linux: KVM / macOS: HVF）与镜像完整性；无硬件加速时退化为软件模拟（较慢，需管理员权限开启 WHPX）。</p>
+                </div>
+                <div class="setting-item">
+                  <label class="setting-label">端口预览</label>
+                  <p id="vm-forwards" class="setting-hint">未映射端口</p>
+                  <div class="vm-row">
+                    <input id="vm-forward-port" type="number" min="1" max="65535" placeholder="VM 内端口，如 3000" style="width:190px;padding:4px 8px;font-size:12px">
+                    <button class="btn-secondary btn-sm" id="btn-vm-forward"><i class="fa-solid fa-plug"></i> 映射到本机</button>
+                  </div>
+                  <p class="setting-hint">在虚拟机里起的开发服务器可通过这里映射到宿主 127.0.0.1，用内置浏览器预览。</p>
+                </div>
+                <div class="setting-item">
+                  <label class="setting-label">在虚拟机内下载文件</label>
+                  <p id="vm-dl-status" class="setting-hint">宿主 aria2 多连接下载后自动送入虚拟机；GitHub 链接可用加速镜像</p>
+                  <div class="vm-row">
+                    <input id="vm-dl-url" type="text" placeholder="https://github.com/…/file.zip" style="flex:1;min-width:300px;padding:5px 8px;font-size:12px">
+                    <input id="vm-dl-dir" type="text" value="/workspace" placeholder="虚拟机内目录" style="width:150px;padding:5px 8px;font-size:12px">
+                    <select id="vm-dl-mirror" style="width:190px;padding:5px 8px;font-size:12px"></select>
+                    <button class="btn-secondary btn-sm" id="btn-vm-dl"><i class="fa-solid fa-download"></i> 下载</button>
+                    <button class="btn-secondary btn-sm" id="btn-vm-dl-cancel" hidden><i class="fa-solid fa-stop"></i> 取消</button>
+                  </div>
+                  <div id="vm-dl-progress-wrap" hidden style="margin-top:8px">
+                    <div class="vm-bar"><i id="vm-dl-bar"></i></div>
+                    <p id="vm-dl-progress-text" class="setting-hint"></p>
+                  </div>
                 </div>
               </div>
             </div>

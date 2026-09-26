@@ -16,6 +16,22 @@
 
 'use strict';
 
+/** 依次尝试多个镜像前缀拉取清单（CN 网络下 GitHub 直连/单一镜像常失败） */
+async function fetchWithFallback(fetchFn, preferred) {
+  const order = [...new Set([preferred, 'cn', 'cn2', 'cn3', 'official'].filter(Boolean))];
+  let lastErr = null;
+  for (const mirror of order) {
+    try {
+      const data = await fetchFn(mirror);
+      if (mirror !== preferred) console.log('[vm] 清单拉取回退到镜像:', mirror);
+      return { data, mirror };
+    } catch (e) { lastErr = e; console.warn('[vm] 清单拉取失败（' + mirror + '）:', e.message); }
+  }
+  throw lastErr || new Error('清单拉取失败');
+}
+const fetchManifestWithFallback = (mirror) => fetchWithFallback((m) => images.fetchManifest({ mirror: m }), mirror);
+const fetchQemuManifestWithFallback = (mirror) => fetchWithFallback((m) => images.fetchQemuPackManifest({ mirror: m }), mirror);
+
 const fs = require('fs');
 const path = require('path');
 const { EventEmitter } = require('events');
@@ -475,8 +491,8 @@ class VmService extends EventEmitter {
    */
   async downloadAll(opts = {}) {
     if (this._download) return { ok: false, error: '已有下载任务进行中' };
-    const task = { cancelled: false, current: null };
-    this._download = task;
+    const task = opts.task || { cancelled: false, current: null };
+    if (!opts.task) this._download = task;
     try {
       const mirror = opts.mirror || this.runtime.vm.mirror || 'official';
       const results = { qemu: null, image: null };
@@ -484,7 +500,7 @@ class VmService extends EventEmitter {
       const qemu = this.qemuPackInstalled();
       if (!qemu || opts.forceQemu) {
         task.current = 'qemu';
-        const packManifest = opts.qemuManifest || await images.fetchQemuPackManifest({ mirror });
+        const packManifest = opts.qemuManifest || (await fetchQemuManifestWithFallback(mirror)).data;
         results.qemu = await this.downloadQemuPack({ mirror, manifest: packManifest, task });
       } else {
         results.qemu = { ok: true, skipped: true, dir: qemu.dir };
@@ -494,7 +510,7 @@ class VmService extends EventEmitter {
       // 2) 镜像
       task.current = 'image';
       results.image = await this.download({ variant: opts.variant, mirror, manifest: opts.manifest, task });
-      if (!results.image.ok && !results.image.error?.includes('已取消')) {
+      if (!results.image.ok && !(results.image.error || '').includes('已取消')) {
         return { ok: false, error: results.image.error, results };
       }
       if (task.cancelled) throw new DownloadCancelled();
@@ -512,13 +528,14 @@ class VmService extends EventEmitter {
    * @param {object} opts { variant, version, mirror, manifest }
    */
   async download(opts = {}) {
-    if (this._download) return { ok: false, error: '已有下载任务进行中' };
+    // opts.task：由 downloadAll 传入（共享同一个任务，避免"已有下载任务进行中"误挡）
+    if (!opts.task && this._download) return { ok: false, error: '已有下载任务进行中' };
     const variant = images.variantById(opts.variant || this.variant).id;
     const mirror = opts.mirror || this.runtime.vm.mirror || 'official';
     const task = { cancelled: false, current: null };
     this._download = task;
     try {
-      const manifest = opts.manifest || await images.fetchManifest({ mirror });
+      const manifest = opts.manifest || (await fetchManifestWithFallback(mirror)).data;
       const picked = images.pickArtifacts(manifest, { variant, mirror });
       const verDir = path.join(this.assetsDir, 'images', variant, picked.version);
       fs.mkdirSync(verDir, { recursive: true });
@@ -552,7 +569,7 @@ class VmService extends EventEmitter {
       if (e instanceof DownloadCancelled || e.code === 'DOWNLOAD_CANCELLED') return { ok: false, error: '已取消' };
       return { ok: false, error: e.message };
     } finally {
-      this._download = null;
+      if (!opts.task) this._download = null;
     }
   }
 
