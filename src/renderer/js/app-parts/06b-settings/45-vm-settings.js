@@ -158,6 +158,24 @@
     btn.hidden = !(isWin && unavailable);
   }
 
+  async function refreshVmDownloadUi() {
+    const sel = document.getElementById('vm-dl-mirror');
+    if (!sel || sel.dataset.ready === '1' || !window.api.vm.mirrors) return;
+    try {
+      const r = await window.api.vm.mirrors();
+      if (!r || !r.ok) return;
+      sel.innerHTML = '';
+      for (const m of r.mirrors) {
+        const opt = document.createElement('option');
+        opt.value = m.id;
+        opt.textContent = m.prefix ? `${m.id}（${m.prefix}）` : 'official（直连）';
+        sel.appendChild(opt);
+      }
+      sel.value = r.current || 'official';
+      sel.dataset.ready = '1';
+    } catch { /* ignore */ }
+  }
+
   async function refreshVmSettings() {
     if (!window.api.vm || !window.api.runtime) return;
     try {
@@ -182,7 +200,7 @@
         if (current) sel.value = current;
         _vmUpdateVariantDesc();
       }
-      await Promise.all([refreshVmAssetsStatus(), refreshVmRuntimeStatus(), refreshVmSyncStatus(), refreshVmForwards()]);
+      await Promise.all([refreshVmAssetsStatus(), refreshVmRuntimeStatus(), refreshVmSyncStatus(), refreshVmForwards(), refreshVmDownloadUi()]);
       _vmRefreshWhpxButton(null);
     } catch (e) {
       _vmSetText('vm-assets-status', '初始化失败：' + (e.message || e), true);
@@ -366,6 +384,40 @@
     await window.api.vm.openDesktop();
   });
 
+  document.getElementById('btn-vm-dl')?.addEventListener('click', async () => {
+    const url = (document.getElementById('vm-dl-url') || {}).value || '';
+    const dir = (document.getElementById('vm-dl-dir') || {}).value || '/workspace';
+    const mirror = (document.getElementById('vm-dl-mirror') || {}).value || 'official';
+    const wrap = document.getElementById('vm-dl-progress-wrap');
+    const bar = document.getElementById('vm-dl-bar');
+    const txt = document.getElementById('vm-dl-progress-text');
+    const cancelBtn = document.getElementById('btn-vm-dl-cancel');
+    if (!/^https?:\/\//i.test(String(url).trim())) { window.showToast?.('请填写 http(s) 链接', 'warning', 3000); return; }
+    if (wrap) wrap.hidden = false;
+    if (cancelBtn) cancelBtn.hidden = false;
+    _vmSetText('vm-dl-status', '下载中（宿主 aria2 → 推入虚拟机）…', false);
+    try {
+      const r = await window.api.vm.downloadFile({ url: String(url).trim(), dir, mirror });
+      if (r && r.ok) {
+        _vmSetText('vm-dl-status', `✅ 已下载到虚拟机：${r.path}（${_fmtBytes(r.size)}）`, false);
+        window.showToast?.(`已下载到虚拟机：${r.path}`, 'success', 4000);
+      } else {
+        _vmSetText('vm-dl-status', '下载失败：' + ((r && r.error) || '未知错误'), true);
+      }
+    } catch (e) {
+      _vmSetText('vm-dl-status', '下载失败：' + (e.message || e), true);
+    } finally {
+      if (cancelBtn) cancelBtn.hidden = true;
+      if (bar) bar.style.width = '0%';
+      if (txt) txt.textContent = '';
+      setTimeout(() => { if (wrap) wrap.hidden = true; }, 1200);
+    }
+  });
+  document.getElementById('btn-vm-dl-cancel')?.addEventListener('click', async () => {
+    await window.api.vm.cancelDownload().catch(() => {});
+    window.showToast?.('已请求取消下载', 'info', 2000);
+  });
+
   document.getElementById('btn-vm-forward')?.addEventListener('click', async () => {    const input = document.getElementById('vm-forward-port');
     const port = parseInt((input && input.value) || '', 10);
     if (!port || port < 1 || port > 65535) { window.showToast?.('请填写 1-65535 的端口', 'warning', 3000); return; }
@@ -386,6 +438,15 @@
       const txt = document.getElementById('vm-progress-text');
       if (!p) return;
       const kindLabel = _vmUpdateKindsLabel(p);
+      if (p.kind === 'vm-file') {
+        const dbar = document.getElementById('vm-dl-bar');
+        const dtxt = document.getElementById('vm-dl-progress-text');
+        const dwrap = document.getElementById('vm-dl-progress-wrap');
+        if (dwrap) dwrap.hidden = false;
+        if (dbar && typeof p.percent === 'number') dbar.style.width = Math.max(0, Math.min(100, p.percent)) + '%';
+        if (dtxt) dtxt.textContent = `${p.filename || ''}${p.percent != null ? ` · ${p.percent}%` : ''}${p.downloaded != null && p.total ? ` · ${_fmtBytes(p.downloaded)} / ${_fmtBytes(p.total)}` : ''}${p.speed ? ` · ${_fmtBytes(p.speed)}/s` : ''}`;
+        return;
+      }
       if (bar && typeof p.percent === 'number') bar.style.width = Math.max(0, Math.min(100, p.percent)) + '%';
       if (txt) {
         const speed = p.speed ? ` · ${_fmtBytes(p.speed)}/s` : '';

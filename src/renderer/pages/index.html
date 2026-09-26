@@ -2753,6 +2753,24 @@
                   </p>
                 </div>
                 <div class="setting-item">
+                  <label class="setting-label">在虚拟机内下载文件</label>
+                  <p id="vm-dl-status" style="font-size:12px;color:var(--text-secondary)">下载的文件会直接落到虚拟机里（宿主用 aria2 多连接下载，支持 GitHub 加速镜像）</p>
+                  <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;align-items:center">
+                    <input id="vm-dl-url" type="text" placeholder="https://github.com/…/file.zip" style="flex:1;min-width:320px;padding:5px 8px;font-size:12px">
+                    <input id="vm-dl-dir" type="text" value="/workspace" placeholder="虚拟机内目录" style="width:170px;padding:5px 8px;font-size:12px">
+                    <select id="vm-dl-mirror" style="width:210px;padding:5px 8px;font-size:12px"></select>
+                    <button class="btn-secondary btn-sm" id="btn-vm-dl"><i class="fa-solid fa-download"></i> 下载到虚拟机</button>
+                    <button class="btn-secondary btn-sm" id="btn-vm-dl-cancel" hidden><i class="fa-solid fa-stop"></i> 取消</button>
+                  </div>
+                  <div id="vm-dl-progress-wrap" hidden style="margin-top:8px">
+                    <div style="height:6px;border-radius:4px;background:var(--border-color,#333);overflow:hidden"><i id="vm-dl-bar" style="display:block;height:100%;width:0%;background:var(--accent,#4f8cff);transition:width .3s"></i></div>
+                    <p id="vm-dl-progress-text" style="font-size:11px;color:var(--text-tertiary);margin-top:4px"></p>
+                  </div>
+                  <p style="font-size:11px;color:var(--text-tertiary);margin-top:6px">
+                    加速镜像只对 GitHub 链接生效（<code>github.com / raw.githubusercontent.com</code>），其他直链自动跳过；镜像前缀与「资源下载」的镜像设置一致。
+                  </p>
+                </div>
+                <div class="setting-item">
                   <label class="setting-label">虚拟机状态</label>
                   <p id="vm-runtime-status" style="font-size:12px;color:var(--text-secondary)">未运行</p>
                   <div style="display:flex;gap:8px;margin-top:6px;flex-wrap:wrap">

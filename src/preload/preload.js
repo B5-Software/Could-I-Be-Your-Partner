@@ -403,6 +403,8 @@ contextBridge.exposeInMainWorld('api', {
     unforwardPort: (hostPort) => ipcRenderer.invoke('vm:unforwardPort', hostPort),
     listForwards: () => ipcRenderer.invoke('vm:listForwards'),
     openDesktop: () => ipcRenderer.invoke('vm:openDesktop'),
+    downloadFile: (payload) => ipcRenderer.invoke('vm:downloadFile', payload || {}),
+    mirrors: () => ipcRenderer.invoke('vm:mirrors'),
     graphicsStatus: () => ipcRenderer.invoke('vm:graphicsStatus'),
     graphicsStart: (opts) => ipcRenderer.invoke('vm:graphicsStart', opts || {}),
     graphicsStop: () => ipcRenderer.invoke('vm:graphicsStop'),

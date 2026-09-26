@@ -287,6 +287,58 @@ class VmService extends EventEmitter {
     return g.startChromium(opts);
   }
 
+  // ---------------------------------------------------------------- 虚拟机内下载（aria2 + GitHub 加速镜像）
+
+  /**
+   * 把远程文件下载并落到虚拟机里（宿主用 aria2 下载 → 推入 VM）。
+   * @param {object} opts { url, dir（VM 内目录，默认 /workspace）、filename、mirror、sha256 }
+   */
+  async downloadFileToVm(opts = {}) {
+    const url = String(opts.url || '').trim();
+    if (!/^https?:\/\//i.test(url)) return { ok: false, error: '请填写 http(s) 链接' };
+    if (this._download) return { ok: false, error: '已有下载任务进行中（资源下载或文件下载）' };
+    const mirror = opts.mirror || this.runtime.vm.mirror || 'official';
+    const finalUrl = images.applyMirrorToUrl(url, mirror);
+    const dir = String(opts.dir || '/workspace').replace(/\/+$/, '') || '/workspace';
+    let filename = String(opts.filename || '').trim();
+    if (!filename) {
+      try {
+        const u = new URL(finalUrl);
+        filename = decodeURIComponent(u.pathname.split('/').filter(Boolean).pop() || `download-${Date.now()}`);
+      } catch { filename = `download-${Date.now()}`; }
+    }
+    filename = filename.replace(/[\\/]/g, '_');
+    const task = { cancelled: false };
+    this._download = task;
+    const tmpDir = path.join(this.assetsDir, 'downloads', 'vm-files');
+    const tmpFile = path.join(tmpDir, `${Date.now()}_${filename}`);
+    try {
+      this.emit('progress', { phase: 'start', kind: 'vm-file', filename, url: finalUrl, variant: 'vm-file' });
+      await downloadFile({
+        url: finalUrl,
+        dest: tmpFile,
+        sha256: opts.sha256 || undefined,
+        aria2: this.aria2,
+        isCancelled: () => !!task.cancelled,
+        onProgress: (p) => this.emit('progress', { phase: 'download', kind: 'vm-file', filename, ...p }),
+      });
+      if (task.cancelled) throw new DownloadCancelled();
+      // 推入虚拟机
+      const { VmFs } = require('./vm-fs');
+      const vmFs = new VmFs({ vmService: this });
+      const vmPath = await vmFs.pushFromHost(tmpFile, `${dir}/${filename}`);
+      const size = fs.statSync(tmpFile).size;
+      this.emit('progress', { phase: 'done', kind: 'vm-file', filename, percent: 100, path: vmPath });
+      return { ok: true, path: vmPath, size, filename, url: finalUrl, mirror };
+    } catch (e) {
+      if (e instanceof DownloadCancelled || e.code === 'DOWNLOAD_CANCELLED') return { ok: false, error: '已取消' };
+      return { ok: false, error: e.message };
+    } finally {
+      this._download = null;
+      try { fs.rmSync(tmpFile, { force: true }); } catch { /* ignore */ }
+    }
+  }
+
   // ---------------------------------------------------------------- 端口预览
 
   /**

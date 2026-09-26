@@ -1,0 +1,9 @@
+[
+  {
+    "ts": 1790400073829,
+    "source": "uncaughtException",
+    "message": "Identifier 'MIRROR_PREFIXES' has already been declared",
+    "stack": "D:\\Electron-Projects\\Could-I-Be-Your-Partner\\src\\main\\vm\\vm-images.js:61\nconst MIRROR_PREFIXES = {\n      ^\n\nSyntaxError: Identifier 'MIRROR_PREFIXES' has already been declared\n    at wrapSafe (node:internal/modules/cjs/loader:1811:18)\n    at Module._compile (node:internal/modules/cjs/loader:1852:20)\n    at Object..js (node:internal/modules/cjs/loader:2012:10)\n    at Module.load (node:internal/modules/cjs/loader:1601:32)\n    at node:internal/modules/cjs/loader:1403:12\n    at Module._load (node:electron/js2c/node_init:2:18068)\n    at wrapModuleLoad (node:internal/modules/cjs/loader:262:19)\n    at Module.require (node:internal/modules/cjs/loader:1624:12)\n    at require (node:internal/modules/helpers:153:16)\n    at Object.<anonymous> (D:\\Electron-Projects\\Could-I-Be-Your-Partner\\src\\main\\vm\\vm-service.js:23:16)",
+    "extra": null
+  }
+]

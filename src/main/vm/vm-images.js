@@ -30,14 +30,49 @@ const VM_REPO = 'B5-Software/cibyp-vm-os';
 const MANIFEST_URL = `https://github.com/${VM_REPO}/releases/download/vm-os-latest/runtime-manifest.json`;
 /** QEMU 运行时包清单（裁剪后的 qemu-system-* + qemu-img + share 固件 + 依赖闭包） */
 const QEMU_PACK_MANIFEST_URL = `https://github.com/${VM_REPO}/releases/download/vm-runtime-latest/runtime-pack-manifest.json`;
+
+
+/** 是否是 GitHub 资源（镜像前缀只对它们有意义） */
+function isGithubUrl(url) {
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    return ['github.com', 'www.github.com', 'raw.githubusercontent.com', 'objects.githubusercontent.com', 'codeload.github.com', 'gist.github.com', 'github.io'].includes(host);
+  } catch { return false; }
+}
+
+/** 给下载 URL 套用镜像前缀（非 GitHub 直链不加；官方源不加） */
+function applyMirrorToUrl(url, mirror = 'official') {
+  const prefix = MIRROR_PREFIXES[mirror] || '';
+  if (!prefix) return url;
+  if (!isGithubUrl(url)) return url;
+  return prefix + url;
+}
 // GitHub 直连在部分地区不可用时的镜像前缀（可用 settings.runtime.vm.mirror 切换）
+// （镜像前缀定义见上）
+
+/** GitHub 加速镜像（下载用；仅对 GitHub 域名生效） */
 const MIRROR_PREFIXES = {
   official: '',
   cn: 'https://gh-proxy.com/',
   cn2: 'https://ghfast.top/',
+  cn3: 'https://gh.tryxd.cn/',
 };
 
-/** 镜像变体目录（与 vm-os/tests/boot-smoke.js 的体积门禁一致） */
+/** 是否是 GitHub 资源（镜像前缀只对它们有意义） */
+function isGithubUrl(url) {
+  try {
+    const host = new URL(url).hostname.toLowerCase();
+    return ['github.com', 'www.github.com', 'raw.githubusercontent.com', 'objects.githubusercontent.com', 'codeload.github.com', 'gist.github.com'].includes(host);
+  } catch { return false; }
+}
+
+/** 给下载 URL 套用镜像前缀（非 GitHub 直链不加；官方源不加） */
+function applyMirrorToUrl(url, mirror = 'official') {
+  const prefix = MIRROR_PREFIXES[mirror] || '';
+  if (!prefix) return url;
+  if (!isGithubUrl(url)) return url;
+  return prefix + url;
+}
 const VARIANTS = [
   {
     id: 'base',
@@ -219,6 +254,9 @@ module.exports = {
   assetPaths,
   localStatus,
   applyMirror,
+  applyMirrorToUrl,
+  isGithubUrl,
+  MIRROR_PREFIXES,
   fetchManifest,
   fetchQemuPackManifest,
   pickQemuPack,

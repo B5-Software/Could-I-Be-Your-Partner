@@ -808,7 +808,7 @@ function cibypImConfigureFromSettings() {
 
 
 
-let settings = loadJSON(settingsPath, {
+const DEFAULT_SETTINGS = {
   llm: {
     provider: 'openai-compat',
     apiUrl: '',
@@ -1085,10 +1085,13 @@ let settings = loadJSON(settingsPath, {
     hotkey: 'Control+Shift+Space',
     pushToTalk: true
   }
-});
+};
+// 注意：loadJSON 不与默认值合并（settings.json 存在时原样返回），必须显式以 DEFAULT_SETTINGS 为基，
+// 否则老用户的配置文件会缺新版本新增的键（曾导致读取 settings.runtime.vm 直接崩溃）
+let settings = { ...DEFAULT_SETTINGS, ...loadJSON(settingsPath, {}) };
 if (fs.existsSync(settingsPath)) {
   const saved = loadJSON(settingsPath, {});
-  settings = { ...settings, ...saved, llm: { ...settings.llm, ...(saved.llm || {}) }, agent: { ...settings.agent, ...(saved.agent || {}) }, sessions: { ...settings.sessions, ...(saved.sessions || {}) }, permissions: { ...settings.permissions, ...(saved.permissions || {}) }, imageGen: { ...settings.imageGen, ...(saved.imageGen || {}) }, resources: { ...settings.resources, ...(saved.resources || {}) }, runtime: { ...settings.runtime, ...(saved.runtime || {}), vm: { ...settings.runtime.vm, ...((saved.runtime || {}).vm || {}) } }, decision: { ...settings.decision, ...(saved.decision || {}) }, theme: { ...settings.theme, ...(saved.theme || {}) }, aiPersona: { ...settings.aiPersona, ...(saved.aiPersona || {}) }, userProfile: { ...settings.userProfile, ...(saved.userProfile || {}) }, entropy: { ...settings.entropy, ...(saved.entropy || {}) }, proxy: { ...settings.proxy, ...(saved.proxy || {}) }, mcp: { ...settings.mcp, ...(saved.mcp || {}) }, email: { ...settings.email, ...(saved.email || {}) }, fedikitten: { ...settings.fedikitten, ...(saved.fedikitten || {}) }, cibypIm: { ...settings.cibypIm, ...(saved.cibypIm || {}) }, webControl: { ...settings.webControl, ...(saved.webControl || {}) }, budget: { ...settings.budget, ...(saved.budget || {}) }, terminal: { ...settings.terminal, ...(saved.terminal || {}) }, privacyProtection: { ...settings.privacyProtection, ...(saved.privacyProtection || {}) }, ime: { ...settings.ime, ...(saved.ime || {}) }, voice: { ...settings.voice, ...(saved.voice || {}) }, notifications: { ...settings.notifications, ...(saved.notifications || {}) }, updates: { ...settings.updates, ...(saved.updates || {}) } };
+  settings = { ...settings, ...saved, llm: { ...settings.llm, ...(saved.llm || {}) }, agent: { ...settings.agent, ...(saved.agent || {}) }, sessions: { ...settings.sessions, ...(saved.sessions || {}) }, permissions: { ...settings.permissions, ...(saved.permissions || {}) }, imageGen: { ...settings.imageGen, ...(saved.imageGen || {}) }, resources: { ...settings.resources, ...(saved.resources || {}) }, runtime: (() => { const d = settings.runtime || {}; const s = saved.runtime || {}; return { ...d, ...s, vm: { ...(d.vm || {}), ...(s.vm || {}) } }; })(), decision: { ...settings.decision, ...(saved.decision || {}) }, theme: { ...settings.theme, ...(saved.theme || {}) }, aiPersona: { ...settings.aiPersona, ...(saved.aiPersona || {}) }, userProfile: { ...settings.userProfile, ...(saved.userProfile || {}) }, entropy: { ...settings.entropy, ...(saved.entropy || {}) }, proxy: { ...settings.proxy, ...(saved.proxy || {}) }, mcp: { ...settings.mcp, ...(saved.mcp || {}) }, email: { ...settings.email, ...(saved.email || {}) }, fedikitten: { ...settings.fedikitten, ...(saved.fedikitten || {}) }, cibypIm: { ...settings.cibypIm, ...(saved.cibypIm || {}) }, webControl: { ...settings.webControl, ...(saved.webControl || {}) }, budget: { ...settings.budget, ...(saved.budget || {}) }, terminal: { ...settings.terminal, ...(saved.terminal || {}) }, privacyProtection: { ...settings.privacyProtection, ...(saved.privacyProtection || {}) }, ime: { ...settings.ime, ...(saved.ime || {}) }, voice: { ...settings.voice, ...(saved.voice || {}) }, notifications: { ...settings.notifications, ...(saved.notifications || {}) }, updates: { ...settings.updates, ...(saved.updates || {}) } };
   // 生图设置去品牌化迁移：旧版本内置的默认端点/模型清空，改为用户显式配置
   if (settings.imageGen.apiUrl === 'https://api.siliconflow.cn/v1/images/generations') settings.imageGen.apiUrl = '';
   if (settings.imageGen.model === 'Kwai-Kolors/Kolors') settings.imageGen.model = '';
@@ -3747,8 +3750,27 @@ ipcMain.handle('vm:graphicsStop', async () => {
 ipcMain.handle('vm:graphicsChromium', async (_, opts) => {
   try { return await vmService.graphicsChromium(opts || {}); } catch (e) { return { ok: false, error: e.message }; }
 });
-ipcMain.handle('vm:openExternal', async (_, url) => {
-  try { await shell.openExternal(String(url)); return { ok: true }; } catch (e) { return { ok: false, error: e.message }; }
+// 虚拟机内文件下载（宿主 aria2 下载 → 推入 VM；支持 GitHub 加速镜像）
+ipcMain.handle('vm:downloadFile', async (_, payload) => {
+  try {
+    const p = payload || {};
+    if (!p.url) return { ok: false, error: '请填写下载链接' };
+    const inst = vmService.instance;
+    if (!inst || inst.state !== 'ready') return { ok: false, error: '请先启动虚拟机（运行位置=虚拟机时会自动启动）' };
+    return await vmService.downloadFileToVm(p);
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('vm:mirrors', () => {
+  try {
+    const images = require('./vm/vm-images');
+    return {
+      ok: true,
+      current: vmService.runtime.vm.mirror || 'official',
+      mirrors: Object.entries(images.MIRROR_PREFIXES).map(([id, prefix]) => ({ id, prefix })),
+    };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
+ipcMain.handle('vm:openExternal', async (_, url) => {  try { await shell.openExternal(String(url)); return { ok: true }; } catch (e) { return { ok: false, error: e.message }; }
 });
 ipcMain.handle('vm:openDesktop', () => {
   openVmDesktopWindow();
