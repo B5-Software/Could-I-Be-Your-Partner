@@ -80,3 +80,7 @@ src/renderer/js/app.js
 build-info.json
 
 
+
+# 崩溃报告（运行时生成，不入库）
+crashes.json
+last-crash.json
