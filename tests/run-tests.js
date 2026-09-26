@@ -3711,6 +3711,38 @@ function runVmSandboxTests() {
     assert.ok(md.includes('instance-id: i-1'));
   });
 
+  // ---- VM 工具路由（路径暂存/回映）----
+  const { remapResult, translateDeep, TOOL_ROUTES, FS_ROUTES } = require('../src/main/vm/vm-tools.js');
+
+  test('VM 工具路由：通道覆盖表完整（fs:* 15 个 + 文档/媒体 11 个）', () => {
+    const fsChannels = ['fs:readFile', 'fs:writeFile', 'fs:createFile', 'fs:getFileInfo', 'fs:convertFileEncoding', 'fs:deleteFile', 'fs:moveFile', 'fs:copyFile', 'fs:listDirectory', 'fs:makeDirectory', 'fs:deleteDirectory', 'fs:localSearch', 'fs:searchInFiles', 'fs:readFileBase64', 'fs:saveUploadedFile'];
+    for (const ch of fsChannels) assert.ok(FS_ROUTES[ch], '缺 fs 路由: ' + ch);
+    for (const ch of ['word:extractText', 'word:create', 'word:fillTemplate', 'word:getMetadata', 'word:listStyles', 'ppt:create', 'spreadsheet:importFile', 'spreadsheet:exportFile', 'ocr:recognize', 'image:generate', 'file:download', 'ffmpeg:invoke']) {
+      assert.ok(TOOL_ROUTES[ch], '缺工具路由: ' + ch);
+    }
+  });
+
+  test('VM 工具路由：返回值路径回映（宿主临时 → VM 路径）', () => {
+    const tmp = 'C:\\Users\\x\\AppData\\Local\\Temp\\cibyp-vmtool-abc';
+    const mappings = [[tmp, '/workspace/report'], ['/tmp/cibyp-x/a.png', '/workspace/_images/a.png']];
+    const out = remapResult({ ok: true, path: tmp + '\\report.docx', items: [{ file: tmp + '\\sub\\b.txt' }, { other: 1 }] }, mappings);
+    assert.strictEqual(out.path, '/workspace/report/report.docx');
+    assert.strictEqual(out.items[0].file, '/workspace/report/sub/b.txt');
+    assert.strictEqual(out.items[1].other, 1);
+    assert.strictEqual(remapResult('/tmp/cibyp-x/a.png', mappings), '/workspace/_images/a.png');
+  });
+
+  test('VM 工具路由：ffmpeg params 深度翻译（对象/数组/非路径字符串）', () => {
+    const toVm = (p) => '/workspace' + String(p).replace(/^D:\\ws/, '').split('\\').join('/');
+    const params = { input: 'D:\\ws\\a.mp4', outputs: ['D:\\ws\\out.mp4'], flags: '-c:v libx264', n: 2, nested: { srt: 'D:\\ws\\s.srt' } };
+    const t = translateDeep(params, toVm);
+    assert.strictEqual(t.input, '/workspace/a.mp4');
+    assert.deepStrictEqual(t.outputs, ['/workspace/out.mp4']);
+    assert.strictEqual(t.flags, '-c:v libx264');
+    assert.strictEqual(t.n, 2);
+    assert.strictEqual(t.nested.srt, '/workspace/s.srt');
+  });
+
   test('ssh2 密钥生成：OpenSSH 私钥格式 + authorized_keys 行', () => {
     const kp = provision.generateSshKeyPair();
     assert.ok(kp.privateKey.includes('BEGIN OPENSSH PRIVATE KEY') || kp.privateKey.includes('BEGIN PRIVATE KEY'),

@@ -114,6 +114,7 @@ node scripts/vm-pack.js --src <qemu解包目录> --out <输出> --platform win32
 | 设置里加"运行位置"（本机/虚拟机），切换需重启 | 设置 → 运行位置；`runtime:setLocation` + 重启提示与一键重启 |
 | 虚拟机带重置按钮，默认不重置 | 「重置虚拟机」按钮（确认后才删 overlay 回出厂态） |
 | 工作目录跟着改变 | 工作区同步：宿主为权威副本，VM 内 `/workspace` 双向增量同步（共享/独立两种模式） |
+| **所有工具操作都作用于虚拟机** | 统一 VM 工具路由：`fs:*` 15 个文件通道直连 VM（SFTP/SSH，返回结构与宿主一致）；文档/媒体类宿主库工具（word/ppt/spreadsheet/ocr/image/file:download/ffmpeg）用「路径暂存」——输入从 VM 拉取、产物推回 VM、返回值路径回映为 VM 路径；覆盖表见 `src/main/vm/vm-tools.js` |
 | 终端改成虚拟机的 PTY | `terminal:make` VM 分支 → ssh2 真 PTY（xterm 侧零改动） |
 | Splash 窗口加载虚拟机，就绪才进入 | `vmRuntimeGate` + Splash 进度/串口日志面板 |
 | 紧急按钮切回本机 | Splash「以本机模式启动（本次）」+ 失败 20s 自动回退 + 运行期可随时切 |
