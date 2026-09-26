@@ -413,7 +413,7 @@ class Agent {
     // Don't draw tarot card on init - draw on first message
     // Create workspace
     this.resetOptimizedTools();
-    const ws = await window.api.workspaceCreate();
+    const ws = await window.api.workspaceCreate({ fresh: true });
     if (ws.ok) {
       this.workspacePath = ws.path;
       window.api.webControlSetWorkDir(ws.path);

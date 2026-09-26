@@ -5923,17 +5923,29 @@ ipcMain.handle('firmware:export', async () => {
 });
 
 // ---- IPC: Workspace (Agent Working Directory) ----
-ipcMain.handle('workspace:create', (_, options = {}) => {
+ipcMain.handle('workspace:create', async (_, options = {}) => {
+  const inVm = (settings.runtime && settings.runtime.location) === 'vm';
+  const vmWorkspaceExists = async (hostPath) => {
+    // VM 模式：宿主机存在不代表 VM 里有（Agent 实际工作在 VM 内）
+    try {
+      const { VmFs } = require('./vm/vm-fs');
+      return await new VmFs({ vmService }).exists(hostPath);
+    } catch { return false; }
+  };
   try {
     // 复用最近一次工作区，避免每次启动都新建目录（历史上已堆积大量空目录）
-    if (!options || options.fresh !== true) {
+    // 注意：VM 模式下必须确认"VM 内也有该目录"，否则会一直复用一个 VM 里并不存在的旧目录
+    // 复用仅在调用方显式要求时发生（历史遗留的"堆空目录"担忧由调用方决定；
+    // 渲染层新会话传 fresh:true，恢复会话则由历史自带 workspacePath，不再调用本接口）
+    if (options && options.reuse === true) {
       const last = settings.workspace?.lastWorkspace;
-      if (last && fs.existsSync(last)) return { ok: true, path: last, reused: true };
+      if (last && fs.existsSync(last) && (!inVm || await vmWorkspaceExists(last))) return { ok: true, path: last, reused: true };
       let latest = '';
       let latestMtime = -1;
       try {
         for (const entry of fs.readdirSync(workspacesBaseDir, { withFileTypes: true })) {
           if (!entry.isDirectory()) continue;
+          if (entry.name.startsWith('.')) continue; // 跳过 .cibyp-conflicts 等非会话目录
           try {
             const m = fs.statSync(path.join(workspacesBaseDir, entry.name)).mtimeMs;
             if (m > latestMtime) { latestMtime = m; latest = path.join(workspacesBaseDir, entry.name); }
@@ -5950,9 +5962,16 @@ ipcMain.handle('workspace:create', (_, options = {}) => {
   const ts = Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6);
   const dir = path.join(workspacesBaseDir, ts);
   fs.mkdirSync(dir, { recursive: true });
+  // VM 模式：同时在虚拟机内建同名目录（Agent 的 fs/终端都作用于 VM）
+  if (inVm) {
+    try {
+      const { VmFs } = require('./vm/vm-fs');
+      await new VmFs({ vmService }).makeDirectory(dir);
+    } catch (e) { console.warn('[vm] 新工作区在 VM 内创建失败:', e.message); }
+  }
   settings.workspace = { ...(settings.workspace || {}), lastWorkspace: dir };
   scheduleSettingsPersist();
-  return { ok: true, path: dir };
+  return { ok: true, path: dir, createdInVm: inVm };
 });
 
 ipcMain.handle('workspace:getBase', () => workspacesBaseDir);
