@@ -5,9 +5,9 @@
 # base + X11 + x11vnc + Chromium（宿主可用 CDP 跨网接管浏览器）。
 # 目标体积 ≤ 750MB（qcow2, zstd）。
 
-{{- $arch := or .architecture "amd64" -}}
-{{- $version := or .version "0.1.0" -}}
-{{- $variant := "desktop" -}}
+{{- $arch := or .architecture "amd64" }}
+{{- $version := or .version "0.1.0" }}
+{{- $variant := "desktop" }}
 
 architecture: {{$arch}}
 
@@ -18,17 +18,6 @@ actions:
       architecture: {{$arch}}
       variant: {{$variant}}
       version: {{$version}}
-
-  # base 补充（同 base.yaml，保持变体间能力单调递增）
-  - action: apt
-    packages:
-      - git-lfs
-      - tree
-      - strace
-      - gdb
-      - cmake
-      - ncdu
-      - man-db
 
   # 图形栈：Xorg + x11vnc + 轻量 WM（无 systemd 图形会话依赖，适合 headless VM）
   - action: apt

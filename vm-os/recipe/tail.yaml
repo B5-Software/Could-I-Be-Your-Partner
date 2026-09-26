@@ -1,44 +1,33 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (c) 2026 B5-Software
 #
-# CIBYP-VM-OS 落盘层：分区 + 部署 + 收集内核/initramfs。
+# CIBYP-VM-OS 落盘层：只产出 rootfs 包。
 #
-# 本镜像刻意不带引导器：宿主 QEMU 用 -kernel/-initrd 直接引导，
-# 因此不需要 GRUB/ESP/UEFI 固件，启动更快、镜像更小、维护面更窄。
+# 为什么不用 image-partition + filesystem-deploy：
+#   那套需要 loop 设备与 mount 特权（parted 刷新分区表在容器/WSL 里直接失败：
+#   "unable to inform the kernel of the change"），CI 与本地都不稳。
+#   改为「debos 只做 rootfs」+「vm-os/tools/assemble-image.js 用 mke2fs -d 免挂载组装镜像」，
+#   并且**不带分区表**（整盘 ext4，宿主直接 -kernel 引导，root=LABEL=cibyp-root）。
 #
 # 产物（artifact 目录）：
-#   cibyp-vmos-<version>-<variant>-<arch>.img   原始磁盘镜像（CI 转 qcow2+zstd）
-#   vmlinuz-<arch>                              内核（宿主 -kernel）
-#   initrd-<arch>.img                           初始内存盘（宿主 -initrd）
+#   cibyp-vmos-<version>-<variant>-<arch>-rootfs.tar.zst   rootfs 包（组装镜像 + 抽内核用）
 
-{{- $arch := or .architecture "amd64" -}}
-{{- $variant := or .variant "base" -}}
-{{- $version := or .version "0.1.0" -}}
-{{- $imagesize := or .imagesize "8G" -}}
+{{- $arch := or .architecture "amd64" }}
+{{- $variant := or .variant "base" }}
+{{- $version := or .version "0.1.0" }}
 
 architecture: {{$arch}}
 
 actions:
-  - action: image-partition
-    imagename: cibyp-vmos-{{$version}}-{{$variant}}-{{$arch}}.img
-    imagesize: {{$imagesize}}
-    partitiontype: msdos
-    partitions:
-      - name: root
-        fs: ext4
-        fslabel: cibyp-root
-        start: 1MB
-        end: 100%
-    mountpoints:
-      - mountpoint: /
-        partition: root
-
-  - action: filesystem-deploy
-    setup-fstab: true
-    setup-kernel-cmdline: true
-    append-kernel-cmdline: "console=ttyS0,115200 net.ifnames=0 rootwait rw"
-
+  # 收尾（必须在所有 apt 之后）：体积清理 + 出厂干净化
   - action: run
-    chroot: false
-    label: 收集内核与 initramfs
-    script: collect-kernel.sh {{$arch}}
+    chroot: true
+    label: CIBYP 收尾清理
+    command: sh /opt/cibyp-overlay/finalize.sh
+
+  - action: pack
+    # 注意：Ubuntu noble 自带的 debos（1.1.x）pack 只支持 gz/bzip2/xz/none（不支持 zstd）。
+    # 这里只是为了把 rootfs 搬出来（组装完即删），用 gz 换速度（xz 单线程约 6 分钟）；
+    # 组装脚本用 `tar -xf` 自动识别压缩格式。
+    file: cibyp-vmos-{{$version}}-{{$variant}}-{{$arch}}-rootfs.tar.gz
+    compression: gz

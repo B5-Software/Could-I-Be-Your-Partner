@@ -89,6 +89,19 @@ cibyp ALL=(ALL) NOPASSWD:ALL
 EOF
 chmod 0440 /etc/sudoers.d/cibyp
 
+# ---------------------------------------------------------------- locale
+# 生成中英文 locale（cloud-init 的 locale 模块要求目标 locale 已生成，否则首启报错）
+if [ -f /etc/locale.gen ]; then
+  sed -i 's/^# *\(en_US.UTF-8 UTF-8\)/\1/; s/^# *\(zh_CN.UTF-8 UTF-8\)/\1/' /etc/locale.gen
+  locale-gen >/dev/null 2>&1 || true
+fi
+cat > /etc/default/locale <<'EOF'
+LANG=en_US.UTF-8
+LANGUAGE=en_US:zh_CN
+LC_ALL=
+EOF
+update-locale LANG=en_US.UTF-8 >/dev/null 2>&1 || true
+
 # ---------------------------------------------------------------- SSH
 install -d -m 0755 /etc/ssh/sshd_config.d
 cat > /etc/ssh/sshd_config.d/10-cibyp.conf <<'EOF'
@@ -139,12 +152,19 @@ datasource:
     dsmode: net
 ssh_deletekeys: true
 ssh_genkeytypes: [ ed25519, rsa ]
+# 镜像为"整盘 ext4、无分区表"：只做文件系统扩容（growfs），不尝试扩分区
 growpart:
-  mode: auto
+  mode: growfs
   devices: ['/']
 resize_rootfs: true
 EOF
 mkdir -p /var/lib/cloud/seed
+
+# ---------------------------------------------------------------- fstab（整盘 ext4，无分区表）
+cat > /etc/fstab <<'EOF'
+# CIBYP-VM-OS：整盘 ext4，由宿主 QEMU 直接内核引导（root=LABEL=cibyp-root）
+LABEL=cibyp-root  /  ext4  defaults,noatime  0 1
+EOF
 
 # ---------------------------------------------------------------- 内核与 initramfs（直接引导）
 cat > /etc/initramfs-tools/conf.d/10-cibyp.conf <<'EOF'
@@ -202,6 +222,15 @@ fi
 
 # ---------------------------------------------------------------- QGA
 systemctl enable qemu-guest-agent.service >/dev/null 2>&1 || true
+
+# ---------------------------------------------------------------- 启动优化
+# cloud-init 等 network-online.target，而 networkd-wait-online 会额外等"所有链路就绪"，
+# 在单网卡 VM 里纯属浪费（实测首启 SSH 就绪 58s）。我们的 networkd 配置本身秒级就绪。
+systemctl mask systemd-networkd-wait-online.service >/dev/null 2>&1 || true
+systemctl mask NetworkManager-wait-online.service >/dev/null 2>&1 || true
+# 不需要的定时任务（减少首启与运行期抖动）
+systemctl disable e2scrub_reap.service >/dev/null 2>&1 || true
+systemctl disable apt-daily.timer apt-daily-upgrade.timer >/dev/null 2>&1 || true
 
 # ---------------------------------------------------------------- 出厂干净化
 : > /etc/machine-id

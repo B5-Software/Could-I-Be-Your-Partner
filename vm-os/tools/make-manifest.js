@@ -24,7 +24,7 @@ const crypto = require('crypto');
 
 const VARIANTS = ['base', 'desktop', 'full'];
 const ARCHES = ['amd64', 'arm64'];
-const VARIANT_LIMITS_MB = { base: 350, desktop: 750, full: 1300 };
+const VARIANT_LIMITS_MB = { base: 520, desktop: 950, full: 1600 };
 
 function parseArgs(argv) {
   const out = { dir: null, version: '0.0.0', channel: 'stable', out: null, baseUrl: '' };

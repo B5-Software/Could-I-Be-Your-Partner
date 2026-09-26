@@ -9,8 +9,35 @@
 | P1 | 运行时骨架：qemu-runtime / vm-instance / vm-ssh / vm-provision + Splash 门控 + 紧急回退 + VM 终端 + 设置页 | ✅ | 整机 E2E：`electron . --user-data-dir=<隔离>` → `[vm] 主窗口已显示（虚拟机门控已放行）` |
 | P2 | 工作区同步（双向增量 + 冲突保留 + 时钟偏移校正）、端口预览、脚本类工具路由、WHPX 一键开启 | ✅ | `vm-os/tests/sync-smoke.js` **12/12** |
 | P3 | QEMU 运行时裁剪打包（PE/DLL 闭包）+ 六平台 CI + 应用内下载安装 | ✅ | 1.25GB → **511MB（zip 80.6MB）**，裁剪包启动 VM **8/8** |
-| P3.5 | CIBYP-VM-OS（debos 三变体配方 + 出厂契约 + CI 构建/boot 冒烟/体积门禁/Release/manifest） | 🟡 配方与 CI 就绪，首次构建待 CI 执行 | 配方 YAML 校验通过；boot 冒烟脚本就绪 |
+| P3.5 | CIBYP-VM-OS（debos 三变体配方 + 出厂契约 + CI 构建/boot 冒烟/体积门禁/Release/manifest） | ✅ 本机完整验证（WSL 构建 → Windows 引导） | `vm-os/P0-REPORT.md` + 下方数据 |
 | P4 | 图形化 VM：Xvfb + x11vnc + noVNC 内嵌 + Chromium CDP（浏览器沙盒） | ✅ | `vm-os/tests/graphics-smoke.js` **6/6**（RFB banner / 进程 / 仅 loopback / 清理） |
+
+## CIBYP-VM-OS 实测（0.1.0-test / base / amd64）
+
+构建路径（**不需要 loop/mount/特权**，容器与 WSL 都能跑）：
+
+```
+debos --disable-fakemachine（debootstrap + apt + overlay 出厂配置 + finalize 清理 + pack rootfs.tar.gz）
+  → vm-os/tools/assemble-image.js（mke2fs -d 免挂载写入整盘 ext4 → qemu-img convert -zstd）
+  → QEMU -kernel/-initrd 直接引导（root=LABEL=cibyp-root，无分区表、无引导器）
+```
+
+| 项 | 数值 |
+|---|---|
+| debos 构建耗时 | 5m10s（含 debootstrap + 全部 apt + 打包） |
+| 镜像体积 | **457.8MB** qcow2（zstd；门禁 520MB） |
+| rootfs | 1.2GB（tar.gz 456MB，组装后即删） |
+| 内核 / initrd | 11.6MB / 33.8MB |
+| 首启到 SSH | 56.4s（含 cloud-init；后续可继续优化 initramfs/cloud-init 模块） |
+| boot 冒烟 | **12/12**（cloud-init 契约 / 品牌 os-release / cibyp+sudo+/workspace / 静态网络 / qemu-ga / 直接引导 / **持久化** / **重置回出厂态**） |
+
+镜像自查发现的并已修复的问题：
+- 缺 `e2fsprogs` → cloud-init 的整盘扩容（resize2fs）首启报错
+- 未生成 locale → cloud-init locale 模块报错
+- 变体 apt 装在清理之后 → 镜像多出 ~200MB（清理移入 finalize，在所有 apt 之后）
+- `debos` 的 `script:` 子目录路径不稳 → 改 `overlay` + `command: sh ...`
+- `pack` 不支持 zstd（noble 的 debos 1.1.x）→ 用 gz/xz
+- parted/losetup 在容器里必然失败 → 彻底改为免挂载组装（本文件「构建路径」）
 
 ## 关键实测数字（WHPX）
 

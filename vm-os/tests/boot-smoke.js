@@ -35,6 +35,9 @@ const QEMU_BIN = { amd64: 'qemu-system-x86_64', arm64: 'qemu-system-aarch64' };
 const QEMU_MACHINE = { amd64: 'q35', arm64: 'virt' };
 const GUEST_CONSOLE = { amd64: 'ttyS0', arm64: 'ttyAMA0' };
 
+// 复用运行时的 CPU 模型策略（WHPX 不支持 -cpu max，会直接打死 vCPU：实测踩坑）
+const qemuRuntime = require('../../src/main/vm/qemu-runtime.js');
+
 function parseArgs(argv) {
   const out = {
     image: null, kernel: null, initrd: null, arch: 'amd64', variant: 'base',
@@ -130,6 +133,8 @@ class Vm {
   }
 
   start({ accel, sshPort, serialPort, ciPort, overlay }) {
+    this.exit = null;      // 关键：新一轮启动必须清掉上一轮的退出状态
+    this.serialBuf = '';
     const cmdline = `root=LABEL=cibyp-root rw console=${GUEST_CONSOLE[this.opts.arch]},115200 net.ifnames=0 rootwait`;
     const argv = [
       '-name', `vmos-smoke-${this.opts.variant}`,
@@ -150,8 +155,11 @@ class Vm {
       '-display', 'none',
       '-monitor', 'none',
     ];
-    if (accel === 'kvm' || accel === 'hvf') argv.push('-cpu', accel === 'kvm' ? 'host' : 'host');
-    else argv.push('-cpu', 'max');
+    if (accel === 'kvm' || accel === 'hvf') argv.push('-cpu', 'host');
+    else {
+      const cpu = qemuRuntime.cpuModelFor(accel); // whpx → null（默认模型），tcg → max
+      if (cpu) argv.push('-cpu', cpu);
+    }
 
     const out = fs.createWriteStream(this.qemuLog, { flags: 'w' });
     out.write(`# ${QEMU_BIN[this.opts.arch]} ${argv.join(' ')}\n`);
@@ -165,9 +173,16 @@ class Vm {
     const connect = () => {
       if (this.exit) return;
       const sock = net.connect({ host: '127.0.0.1', port: serialPort });
+      // error 与 close 可能同时触发：用一次性闸门，避免重连指数分裂（实测导致 OOM）
+      let retried = false;
+      const retry = () => {
+        if (retried) return;
+        retried = true;
+        if (!this.exit) setTimeout(connect, 1000);
+      };
       sock.on('data', (d) => { this.serialBuf = (this.serialBuf + d.toString('utf8')).slice(-128 * 1024); ser.write(d); });
-      sock.on('error', () => setTimeout(connect, 1000));
-      sock.on('close', () => { if (!this.exit) setTimeout(connect, 1000); });
+      sock.on('error', retry);
+      sock.on('close', retry);
     };
     connect();
     return argv;
@@ -178,10 +193,17 @@ class Vm {
     while (Date.now() - t0 < timeoutMs) {
       const alive = await new Promise((resolve) => {
         const s = net.connect({ host: '127.0.0.1', port });
+        let settled = false;
+        const finish = (v) => { if (settled) return; settled = true; clearTimeout(hard); try { s.destroy(); } catch { /* ignore */ } resolve(v); };
+        // 硬超时 + end/close 兜底：slirp 在 guest sshd 未就绪时会直接关连接（FIN），
+        // 只监听 data/error/timeout 会永久挂住（实测踩坑，与 p0 spike 同因）
+        const hard = setTimeout(() => finish(false), 6000);
         s.setTimeout(4000);
-        s.once('data', () => { s.destroy(); resolve(true); });
-        s.once('error', () => { s.destroy(); resolve(false); });
-        s.once('timeout', () => { s.destroy(); resolve(false); });
+        s.once('data', () => finish(true));
+        s.once('error', () => finish(false));
+        s.once('timeout', () => finish(false));
+        s.once('end', () => finish(false));
+        s.once('close', () => finish(false));
       });
       if (alive) return { ok: true, ms: Date.now() - t0 };
       if (this.exit) return { ok: false, ms: Date.now() - t0, reason: `qemu 提前退出 code=${this.exit.code}` };
@@ -293,10 +315,12 @@ async function main() {
   log(`架构=${opts.arch} 变体=${opts.variant} 加速器=${accel.chosen}（可用: ${accel.list.join(', ')}）`);
 
   /** 启动一轮：返回 ssh 端口与就绪信息 */
-  async function boot(roundLabel) {
+  async function boot(roundLabel, { recreateOverlay = false } = {}) {
     const sshPort = await freePort();
     const serialPort = await freePort();
-    createOverlay();
+    // 只有"首轮/重置"才重建 overlay；持久化轮必须复用同一份实例磁盘
+    if (recreateOverlay) createOverlay();
+    if (!fs.existsSync(overlay)) createOverlay();
     const t0 = Date.now();
     vm.start({ accel: accel.chosen, sshPort, serialPort, ciPort, overlay });
     const ready = await vm.waitSshReady(sshPort, Math.min(opts.timeout * 1000, 600000));
@@ -311,7 +335,7 @@ async function main() {
   }
 
   // ============ 第一轮：出厂契约 ============
-  const r1 = await boot('第1轮');
+  const r1 = await boot('第1轮', { recreateOverlay: true });
   const ci = await sshWaitFor(key, r1.sshPort, knownHosts, 'cloud-init status --wait >/dev/null 2>&1; echo ok', 300000, 5000);
   checks.assert('cloud-init 完成', ci.code === 0 && ci.out.includes('ok'), ci.err);
 
@@ -332,7 +356,7 @@ async function main() {
   const netd = probe('systemctl is-active systemd-networkd');
   checks.assert('systemd-networkd 运行（网络不依赖 cloud-init）', netd.out === 'active', netd.out);
 
-  const qga = probe('command -v qemu-ga >/dev/null && echo present || echo absent');
+  const qga = probe('test -x /usr/sbin/qemu-ga -o -x /usr/bin/qemu-ga && echo present || echo absent');
   checks.assert('qemu-guest-agent 已安装', qga.out === 'present', qga.out);
 
   const info = probe('cibyp-vmos-info | head -3');
@@ -356,7 +380,7 @@ async function main() {
 
   // ============ 第三轮：删除 overlay（重置）→ 回出厂态 ============
   await vm.poweroff(key, r2.sshPort, knownHosts);
-  const r3 = await boot('第3轮（重置后）');
+  const r3 = await boot('第3轮（重置后）', { recreateOverlay: true });
   const afterReset = await sshWaitFor(key, r3.sshPort, knownHosts, 'test -f /workspace/persist.txt && echo exists || echo gone', 120000, 3000);
   checks.assert('重置语义：删除 overlay 后回到出厂态', afterReset.out === 'gone', afterReset.out);
 

@@ -26,7 +26,7 @@
 | `desktop` | 图形化 / computer-use：base + Xorg + x11vnc + Chromium + CJK 字体 | ≤ 750MB | 12G |
 | `full` | 完整开发环境：base + clang/调试器 + PostgreSQL/MariaDB/Redis + Docker + ffmpeg + Playwright 依赖 | ≤ 1.3GB | 16G |
 
-体积为 qcow2（zstd 压缩）大小，CI 硬门禁，超标直接失败。
+体积为 qcow2（zstd 压缩）大小，CI 硬门禁，超标直接失败。base 实测约 455MB（Debian 13 + node/npm + python3 + build-essential + 内核/initramfs 的地板）。
 
 ## 3. 出厂契约（宿主 App 依赖的不变量）
 

@@ -33,10 +33,35 @@ function getGitHash() {
   }
 }
 
+/**
+ * 剔除 ssh2 的可选原生依赖 cpu-features。
+ *
+ * 原因：cpu-features 的 npm 包里缺少 gyp 子模块（buildcheck.gypi），而 electron-builder
+ * 的 @electron/rebuild 会扫描 node_modules 并对所有 native 模块重编译 →
+ * 六个平台全部构建失败（gyp: buildcheck.gypi not found）。
+ * ssh2 对它的引用包在 try/catch 里（lib/protocol/constants.js），缺失时自动回退纯 JS 实现，
+ * 功能不受影响（仅少一点 CPU 特性探测的加速）。
+ */
+function dropUnbuildableOptionalDeps() {
+  const targets = ['cpu-features'];
+  for (const name of targets) {
+    const dir = path.join(projectRoot, 'node_modules', name);
+    if (!fs.existsSync(dir)) continue;
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+      console.log(`[package] 已剔除无法编译的可选原生依赖: ${name}`);
+    } catch (e) {
+      console.warn(`[package] 剔除 ${name} 失败（可能被占用）: ${e.message}`);
+    }
+  }
+}
+
 function main() {
   const pkg = JSON.parse(fs.readFileSync(path.join(projectRoot, 'package.json'), 'utf-8'));
   const gitHash = getGitHash();
   const ebArgs = process.argv.slice(2);
+
+  dropUnbuildableOptionalDeps();
 
   if (gitHash) {
     const version = `${pkg.version}+${gitHash}`;

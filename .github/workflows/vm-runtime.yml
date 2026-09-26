@@ -73,11 +73,20 @@ jobs:
           $ver = '20260811'
           $url = "https://qemu.weilnetz.de/w64/qemu-w64-setup-$ver.exe"
           New-Item -ItemType Directory -Force -Path qemu-src | Out-Null
-          curl.exe -L -sS -o qemu-setup.exe $url
+          # 上游是单机小服务器，CI 上偶发超时/限速 → 多重试 + 体积校验
+          curl.exe -L --retry 6 --retry-all-errors --retry-delay 5 --connect-timeout 30 -o qemu-setup.exe $url
+          $size = (Get-Item qemu-setup.exe).Length
+          if ($size -lt 150MB) { throw "QEMU 安装包下载不完整: $size 字节" }
+          Write-Host "已下载: $([math]::Round($size/1MB,1))MB"
           $sevenZip = 'C:\Program Files\7-Zip\7z.exe'
-          if (-not (Test-Path $sevenZip)) { $sevenZip = '7z' }
+          if (-not (Test-Path $sevenZip)) {
+            $cmd = Get-Command 7z -ErrorAction SilentlyContinue
+            if ($cmd) { $sevenZip = $cmd.Source } else { choco install 7zip -y --no-progress; $sevenZip = 'C:\Program Files\7-Zip\7z.exe' }
+          }
           & $sevenZip x -y -oqemu-src qemu-setup.exe | Out-Null
-          Write-Host "解包完成: $((Get-ChildItem qemu-src -File | Measure-Object).Count) 个文件"
+          $count = (Get-ChildItem qemu-src -File | Measure-Object).Count
+          if ($count -lt 100) { throw "解包异常：只有 $count 个文件" }
+          Write-Host "解包完成: $count 个文件"
 
       - name: 获取 QEMU（Linux）
         if: matrix.platform == 'linux'
@@ -93,7 +102,7 @@ jobs:
       - name: 获取 QEMU（macOS）
         if: matrix.platform == 'darwin'
         run: |
-          brew install qemu dylibbundler || true
+          brew install qemu dylibbundler
           PREFIX="$(brew --prefix)"
           mkdir -p qemu-src/bin
           cp "$PREFIX"/opt/qemu/bin/qemu-system-x86_64 "$PREFIX"/opt/qemu/bin/qemu-system-aarch64 qemu-src/bin/ 2>/dev/null || true

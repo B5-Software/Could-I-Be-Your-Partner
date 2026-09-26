@@ -10,8 +10,8 @@
 #   variant       变体名（base / desktop / full）
 #   version       CIBYP-VM-OS 版本号
 
-{{- $arch := or .architecture "amd64" -}}
-{{- $version := or .version "0.1.0" -}}
+{{- $arch := or .architecture "amd64" }}
+{{- $version := or .version "0.1.0" }}
 
 architecture: {{$arch}}
 
@@ -69,6 +69,9 @@ actions:
       - systemd-resolved
       - zram-tools
       - unattended-upgrades
+      # cloud-init 的整盘扩容（growfs → resize2fs）依赖 e2fsprogs；
+      # debootstrap minbase 不自带，缺了会导致首启 cloud-init 报错（实测）
+      - e2fsprogs
 
   # ---- 开发基础（完整语言栈由 full 变体补齐） ----
   - action: apt
@@ -91,8 +94,14 @@ actions:
       - linux-image-arm64
       {{- end }}
 
-  # ---- 品牌化 / 出厂配置（os-release、用户、sshd、cloud-init、串口、网络） ----
+  # ---- 品牌化 / 出厂配置 ----
+  # 用 overlay 把脚本放进 rootfs 再用 sh 执行：debos 的 `script:` 在子目录路径/执行位上
+  # 有坑（实测 "setup.sh: not found"），overlay + command 最稳。
+  - action: overlay
+    source: overlay
+    destination: /opt/cibyp-overlay
+
   - action: run
     chroot: true
     label: CIBYP 出厂配置
-    script: overlay/setup.sh
+    command: sh /opt/cibyp-overlay/setup.sh

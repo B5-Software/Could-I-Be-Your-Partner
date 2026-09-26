@@ -236,18 +236,18 @@ function main() {
     fs.mkdirSync(auxDir, { recursive: true });
     for (const e of entries) copyFile(e, path.join(auxDir, path.basename(e)));
     if (which.status === 0) {
+      // dylibbundler 的 -x 每次只接受一个文件（必须重复传参）
+      const xArgs = entries.flatMap((e) => ['-x', path.join(auxDir, path.basename(e))]);
       const r = spawnSync('dylibbundler', [
-        '-od', '-b',
-        '-x', ...entries.map((e) => path.join(auxDir, path.basename(e))),
+        '-od', '-of', '-b',
+        ...xArgs,
         '-d', libDir,
         '-p', '@executable_path/lib',
       ], { encoding: 'utf8' });
-      if (r.status !== 0) throw new Error('dylibbundler 失败: ' + (r.stderr || '').trim().slice(0, 200));
+      if (r.status !== 0) throw new Error('dylibbundler 失败: ' + ((r.stderr || '') + (r.stdout || '')).trim().slice(0, 300));
       console.log('[vm-pack] dylibbundler 完成 dylib 闭包与路径改写');
     } else {
-      console.warn('[vm-pack] 未找到 dylibbundler，将以内联方式收集 dylib（可能路径未改写）');
-      deps = unixClosure(entries);
-      for (const d of deps) copyFile(d, path.join(libDir, path.basename(d)));
+      throw new Error('缺少 dylibbundler（macOS 构建需要：brew install dylibbundler）');
     }
   } else {
     deps = unixClosure(entries);

@@ -1,10 +1,12 @@
 name: vm-os
 
 # CIBYP-VM-OS 镜像构建：Debian remix，产物发布到 GitHub Release（rolling tag: vm-os-latest）。
-# - 构建用 debos（Ubuntu 官方源提供），--disable-fakemachine 直接在 runner 上执行，
-#   因此不需要 /dev/kvm，amd64 / arm64 原生 runner 都能跑。
-# - 每个变体构建后立刻做 boot 冒烟（QEMU 直接引导内核 + cloud-init over HTTP + SSH 契约校验）。
-# - 体积门禁在 publish 阶段由 make-manifest.js 统一执行，超标即失败。
+#
+# 构建路径（刻意避开 loop/parted/mount —— 容器与 WSL 里那套会直接失败）：
+#   1) debos --disable-fakemachine 只产出 rootfs tar + 内核 + initramfs
+#   2) vm-os/tools/assemble-image.js 用 mke2fs -d 免挂载组装整盘 ext4 → qcow2(zstd)
+#   3) QEMU 直接内核引导做 boot 冒烟（cloud-init / SSH / 出厂契约 / 持久化 / 重置）
+#   4) 体积门禁在 publish 阶段统一执行，超标即失败
 
 on:
   push:
@@ -12,7 +14,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: '版本号（留空则用当天日期，如 2026.09.25）'
+        description: '版本号（留空则用当天日期，如 2026.09.26）'
         required: false
         default: ''
   schedule:
@@ -22,7 +24,6 @@ permissions:
   contents: write
 
 jobs:
-  # ---- 版本号归一 ----
   version:
     runs-on: ubuntu-latest
     outputs:
@@ -42,11 +43,9 @@ jobs:
           else
             V="$(date -u +%Y.%m.%d)"
           fi
-          echo "VMOS_VERSION=$V" >> "$GITHUB_OUTPUT"
           echo "value=$V" >> "$GITHUB_OUTPUT"
           echo "版本号: $V"
 
-  # ---- 构建 3 变体 × 2 架构 ----
   build:
     needs: version
     strategy:
@@ -70,14 +69,25 @@ jobs:
         with:
           node-version: 24
 
-      - name: 安装构建与冒烟依赖
+      - name: 安装 debos（apt 优先，缺失则源码构建）
         run: |
+          set -e
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            debos qemu-utils e2fsprogs util-linux parted kpartx \
-            ${{ matrix.qemuPkg }}
+            e2fsprogs util-linux zstd qemu-utils ${{ matrix.qemuPkg }} || true
+          if sudo apt-get install -y --no-install-recommends debos; then
+            echo "debos 来自 apt: $(command -v debos)"
+          else
+            echo "::warning::apt 无 debos（该架构未提供），改为源码构建"
+            sudo apt-get install -y --no-install-recommends build-essential git golang-go \
+              libglib2.0-dev libostree-dev pkg-config
+            go install github.com/go-debos/debos/cmd/debos@v1.1.7
+            sudo cp "$(go env GOPATH)/bin/debos" /usr/local/bin/debos
+            echo "debos 已源码构建: $(command -v debos)"
+          fi
+          debos --help | head -3
 
-      - name: 构建镜像（debos）
+      - name: 构建 rootfs + 内核（debos）
         env:
           VMOS_VERSION: ${{ needs.version.outputs.value }}
         run: |
@@ -90,18 +100,28 @@ jobs:
             vm-os/recipe/${{ matrix.variant }}.yaml
           ls -lh vm-os/out
 
-      - name: 转换为 qcow2 + 计算校验和
+      - name: 组装镜像（mke2fs -d，免挂载）+ 校验和
         env:
           VMOS_VERSION: ${{ needs.version.outputs.value }}
         run: |
           set -e
+          case "${{ matrix.variant }}" in
+            base) SIZE=8G ;;
+            desktop) SIZE=12G ;;
+            full) SIZE=16G ;;
+            *) SIZE=8G ;;
+          esac
+          ROOTFS="$(ls -1 vm-os/out/*-rootfs.tar.xz | head -1)"
+          node vm-os/tools/assemble-image.js \
+            --rootfs "$ROOTFS" \
+            --out vm-os/out \
+            --version "$VMOS_VERSION" \
+            --variant "${{ matrix.variant }}" \
+            --arch "${{ matrix.arch }}" \
+            --size "$SIZE"
+          rm -f "$ROOTFS"
           cd vm-os/out
-          IMG="cibyp-vmos-${VMOS_VERSION}-${{ matrix.variant }}-${{ matrix.arch }}.img"
-          QCOW="cibyp-vmos-${VMOS_VERSION}-${{ matrix.variant }}-${{ matrix.arch }}.qcow2"
-          qemu-img convert -O qcow2 -c -o compression_type=zstd "$IMG" "$QCOW"
-          rm -f "$IMG"
-          sha256sum "$QCOW" > "$QCOW.sha256"
-          for f in "vmlinuz-${{ matrix.arch }}" "initrd-${{ matrix.arch }}.img"; do
+          for f in *.qcow2 *.img 2>/dev/null; do
             [ -f "$f" ] && sha256sum "$f" > "$f.sha256"
           done
           ls -lh
@@ -127,9 +147,9 @@ jobs:
             vm-os/out/*.sha256
             vm-os/out/vmlinuz-*
             vm-os/out/initrd-*
+            vm-os/out/image-meta-*.json
           if-no-files-found: error
 
-  # ---- 汇总 manifest + 发布 rolling release ----
   publish:
     needs: [version, build]
     if: needs.build.result == 'success'
@@ -171,14 +191,13 @@ jobs:
           CIBYP-VM-OS is based on Debian GNU/Linux. Debian is a registered trademark owned by Software in the Public Interest, Inc.
           CIBYP-VM-OS is not affiliated with or endorsed by the Debian project.
           
-          资产说明：每个变体 × 架构一份 qcow2（base/desktop/full），内核与 initrd 由宿主 QEMU 直接引导使用。
+          资产说明：每个变体 × 架构一份 qcow2（base/desktop/full）+ 内核/initrd（宿主 QEMU 直接引导）。
           清单：runtime-manifest.json（含 sha256、大小、体积门禁与兼容性信息）。"
           if ! gh release view vm-os-latest >/dev/null 2>&1; then
             gh release create vm-os-latest --title "CIBYP-VM-OS (latest)" --notes "$NOTES" --target "$GITHUB_SHA"
           else
             gh release edit vm-os-latest --notes "$NOTES"
           fi
-          # 清理旧版本资产（只保留当前版本）
           gh release view vm-os-latest --json assets -q '.assets[].name' | while read -r name; do
             case "$name" in
               *"${VMOS_VERSION}"*|runtime-manifest.json) ;;

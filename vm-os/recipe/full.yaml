@@ -7,9 +7,9 @@
 #
 # 刻意不装：Rust/Go/Java 工具链（单个 500MB~1GB 且版本敏感），需要时 VM 内自行安装。
 
-{{- $arch := or .architecture "amd64" -}}
-{{- $version := or .version "0.1.0" -}}
-{{- $variant := "full" -}}
+{{- $arch := or .architecture "amd64" }}
+{{- $version := or .version "0.1.0" }}
+{{- $variant := "full" }}
 
 architecture: {{$arch}}
 
