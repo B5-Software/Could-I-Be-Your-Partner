@@ -1,5 +1,10 @@
 # CIBYP-VM-OS / QEMU 沙盒 —— 实施进度（P0 → P4）
 
+> **镜像与 QEMU 运行时包的构建/发布已拆分到独立公开仓库：
+> <https://github.com/B5-Software/cibyp-vm-os>**（本文中的 debos 配方、组装工具、boot 冒烟、
+> CI 流水线现在都在那边；主仓只保留应用侧运行时 `src/main/vm/*` 与集成冒烟
+> `vm-os/tests/{runtime,sync,graphics}-smoke.js`。）
+
 > 全部数据来自本机（Windows 11 / WHPX / Intel x64，32 线程 / 31GB）实测，不是估算。
 > 复现脚本都在 `vm-os/tests/`，用 `node` 直接跑。
 
