@@ -182,6 +182,10 @@ class VmFs {
     try {
       const vm = this.toVm(filePath);
       await this.exec(`mkdir -p ${shellQuote(path.posix.dirname(vm))}`, 20000);
+      try {
+        const host = this.toHost(vm);
+        if (host) fs.mkdirSync(path.dirname(host), { recursive: true });
+      } catch { /* ignore */ }
       return await this.writeFile(filePath, content || '', options);
     } catch (e) {
       return { ok: false, error: '虚拟机文件创建失败: ' + e.message };
@@ -269,8 +273,14 @@ class VmFs {
 
   async makeDirectory(dirPath) {
     try {
-      const r = await this.exec(`mkdir -p ${shellQuote(this.toVm(dirPath))}`);
+      const vm = this.toVm(dirPath);
+      const r = await this.exec(`mkdir -p ${shellQuote(vm)}`);
       if (!r.ok) throw new Error(r.stderr || 'mkdir 失败');
+      // VM 模式：同时在宿主镜像里建同名目录（否则宿主侧看不到新会话目录，UI 会误判"没建成功"）
+      try {
+        const host = this.toHost(vm);
+        if (host) fs.mkdirSync(host, { recursive: true });
+      } catch { /* ignore */ }
       return { ok: true };
     } catch (e) { return { ok: false, error: '虚拟机建目录失败: ' + e.message }; }
   }
