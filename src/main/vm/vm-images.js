@@ -21,9 +21,15 @@ const fs = require('fs');
 const path = require('path');
 
 const REPO = 'B5-Software/Could-I-Be-Your-Partner';
-const MANIFEST_URL = `https://github.com/${REPO}/releases/download/vm-os-latest/runtime-manifest.json`;
+/**
+ * 镜像与 QEMU 运行时包的构建/发布仓库（与主应用分离）：
+ * 重型构建（debootstrap + 3 变体 × 2 架构 + boot 冒烟）不污染主仓的四平台发布流水线，
+ * 产物本身也是可独立分发的 GPL 合规物。
+ */
+const VM_REPO = 'B5-Software/cibyp-vm-os';
+const MANIFEST_URL = `https://github.com/${VM_REPO}/releases/download/vm-os-latest/runtime-manifest.json`;
 /** QEMU 运行时包清单（裁剪后的 qemu-system-* + qemu-img + share 固件 + 依赖闭包） */
-const QEMU_PACK_MANIFEST_URL = `https://github.com/${REPO}/releases/download/vm-runtime-latest/runtime-pack-manifest.json`;
+const QEMU_PACK_MANIFEST_URL = `https://github.com/${VM_REPO}/releases/download/vm-runtime-latest/runtime-pack-manifest.json`;
 // GitHub 直连在部分地区不可用时的镜像前缀（可用 settings.runtime.vm.mirror 切换）
 const MIRROR_PREFIXES = {
   official: '',
@@ -202,6 +208,7 @@ function pickArtifacts(manifest, { variant = 'base', arch = process.arch, mirror
 
 module.exports = {
   REPO,
+  VM_REPO,
   MANIFEST_URL,
   QEMU_PACK_MANIFEST_URL,
   MIRROR_PREFIXES,
