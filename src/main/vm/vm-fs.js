@@ -67,7 +67,10 @@ class VmFs {
 
   async sftp() { return this.instance.sftp(); }
 
-  async exec(cmd, timeoutMs = 60000) { return this.instance.exec(cmd, { timeoutMs }); }
+  async exec(cmd, timeoutMs = 60000) {
+    // 统一 UTF-8：guest 内 unzip/tar/grep 等在 C locale 下会把中文文件名写成乱码（实测踩坑）
+    return this.instance.exec(`export LANG=C.UTF-8 LC_ALL=C.UTF-8; ${cmd}`, { timeoutMs });
+  }
 
   // ---------------------------------------------------------------- 读
 

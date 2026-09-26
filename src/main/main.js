@@ -3356,7 +3356,8 @@ async function runScriptInVm(script, cwd, interpreter) {
     await sftp.writeFile(remote, String(script));
     const vmCwd = vmCwdFor(cwd);
     const runner = interpreter === 'python' ? 'python3 -u' : interpreter === 'node' ? 'node' : 'bash';
-    const cmd = `cd ${JSON.stringify(vmCwd)} 2>/dev/null || cd /workspace; ${runner} ${remote}; rc=$?; rm -f ${remote}; exit $rc`;
+    // 统一 UTF-8（否则 guest 内工具会把中文名写成乱码）
+    const cmd = `export LANG=C.UTF-8 LC_ALL=C.UTF-8; cd ${JSON.stringify(vmCwd)} 2>/dev/null || cd /workspace; ${runner} ${remote}; rc=$?; rm -f ${remote}; exit $rc`;
     const r = await inst.exec(cmd, { timeoutMs: 120000 });
     if (shared) {
       try {
