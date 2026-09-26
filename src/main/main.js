@@ -81,12 +81,21 @@ const { aria2Manager } = require('./aria2-manager');
 const { DecisionService, DEFAULT_DECISION_SETTINGS, normalizeDecisionSettings } = require('./decision-service');
 const { ts: logTs, maskUrl: maskLogUrl, snippet: logSnippet } = require('./req-log');
 
-// ---- VM 工具路由：记录每个通道的原始处理器（随后由 installVmToolRouting 覆盖）----
+// ---- VM 工具路由：记录每个通道的原始处理器，并在**注册时就地包装** ----
 // 运行位置=虚拟机时，所有文件类工具都要作用于虚拟机；宿主实现保留为回退路径。
+// 就地包装（而不是事后统一覆盖）是为了兼容在 app.whenReady 里才注册的处理器（word/ppt/spreadsheet 等）。
 const __ipcHandlers = new Map();
 const __originalIpcHandle = ipcMain.handle.bind(ipcMain);
+const { ROUTE_CHANNELS, createRoutedHandler } = require('./vm/vm-tools');
 ipcMain.handle = (channel, fn) => {
   __ipcHandlers.set(channel, fn);
+  if (ROUTE_CHANNELS.has(channel)) {
+    const wrapped = createRoutedHandler(channel, fn, {
+      getVmService: () => vmService,
+      isLocationVm: () => vmLocationActive(),
+    });
+    return __originalIpcHandle(channel, wrapped);
+  }
   return __originalIpcHandle(channel, fn);
 };
 
@@ -8992,21 +9001,18 @@ app.whenReady().then(async () => {
 
 // Cleanup MCP servers, serial ports, and web control on app quit
 // 若渲染器有正在工作的会话，先通知其保存 pending 状态，等待完成后再退出
-// ---- 安装 VM 工具路由（必须在所有处理器注册之后）----
-// 纯文件操作用 vm-fs 直连 VM；文档/媒体等宿主库工具用"路径暂存"把效果落到 VM。
-try {
-  const { installVmToolRouting } = require('./vm/vm-tools');
-  const r = installVmToolRouting({
-    ipcMain,
-    handlers: __ipcHandlers,
-    getVmService: () => vmService,
-    isLocationVm: () => vmLocationActive(),
-    originalHandle: __originalIpcHandle,
-  });
-  console.log(`[vm] 工具路由已安装（${r.installed.length} 个通道）`);
-} catch (e) {
-  console.error('[vm] 工具路由安装失败（不影响本机模式）:', e.message);
+// ---- VM 工具路由：已由 ipcMain.handle 包装就地安装（见文件头部）----
+// 自检放在 whenReady 之后（word/ppt/spreadsheet 等处理器在 whenReady 里注册）。
+function logVmRoutingSelfCheck() {
+  try {
+    const probe = ['fs:readFile', 'word:create', 'ppt:create', 'spreadsheet:exportFile', 'image:generate', 'file:download', 'ffmpeg:invoke'];
+    const missing = probe.filter((ch) => !__ipcHandlers.has(ch));
+    console.log(`[vm] 工具路由就绪（已记录 ${__ipcHandlers.size} 个通道；路由通道 ${ROUTE_CHANNELS.size} 个；缺: ${missing.length ? missing.join(',') : '无'}）`);
+  } catch (e) {
+    console.error('[vm] 工具路由自检失败（不影响本机模式）:', e.message);
+  }
 }
+setTimeout(logVmRoutingSelfCheck, 3000);
 
 app.on('before-quit', async (event) => {
   isQuitting = true; // 标记真正退出，避免 close 事件再次拦截

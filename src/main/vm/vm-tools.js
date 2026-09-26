@@ -97,112 +97,116 @@ function remapResult(value, mapping) {
   return value;
 }
 
+/** 需要 VM 路由的通道集合（供 main.js 在注册时就地包装，兼容 whenReady 里注册的处理器） */
+const ROUTE_CHANNELS = new Set([...Object.keys(FS_ROUTES), ...Object.keys(TOOL_ROUTES)]);
+
 /**
- * 安装 VM 工具路由（须在原始处理器注册之后调用）。
- * @param {object} opts { ipcMain, handlers, getVmService, isLocationVm, originalHandle }
- *   handlers: Map<channel, fn>（main.js 用包装后的 ipcMain.handle 记录）
- *   originalHandle: 未包装的 ipcMain.handle（用于覆盖注册）
- * @returns {{ installed: string[], vmFs: VmFs }}
+ * 为一个通道创建 VM 感知的处理器（VM 模式走 VM 实现，否则透传原实现）。
+ * @param {string} channel
+ * @param {Function} original 原处理器
+ * @param {object} deps { getVmService, isLocationVm }
+ */
+function createRoutedHandler(channel, original, deps) {
+  const fsImpl = FS_ROUTES[channel];
+  if (fsImpl) {
+    const vmFs = new VmFs({ vmService: deps.getVmService() });
+    return async (_e, ...args) => {
+      if (!deps.isLocationVm()) return original(_e, ...args);
+      try { return await fsImpl(vmFs, args); } catch (e) { return { ok: false, error: '虚拟机文件操作失败: ' + e.message }; }
+    };
+  }
+  const route = TOOL_ROUTES[channel];
+  if (route) return createStagedToolHandler(route, original, deps);
+  return original;
+}
+
+/**
+ * 宿主库工具：路径暂存（输入从 VM 拉取、产物推回 VM、返回值路径回映）
+ * @param {object} route { read?: number[], writeFile?: number[], writeDir?: number[], deep?: number[] }
+ */
+function createStagedToolHandler(route, original, deps) {
+  return async (_e, ...args) => {
+    if (!deps.isLocationVm()) return original(_e, ...args);
+    const vmFs = new VmFs({ vmService: deps.getVmService() });
+    const staging = { pulls: new Map(), tmpDirs: [], mappings: [], outputs: [] };
+    try {
+      const hostArgs = [...args];
+      // 读入：VM → 宿主临时
+      for (const idx of route.read || []) {
+        const p = hostArgs[idx];
+        if (!isPathLike(p)) continue;
+        const pulled = await vmFs.pullToTemp(p);
+        staging.tmpDirs.push(pulled.dir);
+        staging.pulls.set(pulled.file, vmFs.toVm(p));
+        staging.mappings.push([pulled.file, vmFs.toVm(p)]);
+        hostArgs[idx] = pulled.file;
+      }
+      // 写出单文件：VM 路径 → 临时文件（调用后推回）
+      const writeFiles = [];
+      for (const idx of route.writeFile || []) {
+        const p = hostArgs[idx];
+        if (!isPathLike(p)) continue;
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cibyp-vmtool-'));
+        staging.tmpDirs.push(tmpDir);
+        const tmpFile = path.join(tmpDir, path.basename(vmFs.toVm(p)));
+        writeFiles.push({ tmpFile, vmPath: vmFs.toVm(p) });
+        staging.mappings.push([tmpFile, vmFs.toVm(p)]);
+        hostArgs[idx] = tmpFile;
+      }
+      // 输出目录：宿主临时目录，调用后整目录推回
+      const writeDirs = [];
+      for (const idx of route.writeDir || []) {
+        const p = hostArgs[idx];
+        const vmDir = vmFs.toVm(p || '/workspace');
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cibyp-vmtool-'));
+        staging.tmpDirs.push(tmpDir);
+        writeDirs.push({ tmpDir, vmDir });
+        staging.mappings.push([tmpDir, vmDir]);
+        hostArgs[idx] = tmpDir;
+      }
+      // 深度暂存（ffmpeg params 等）
+      for (const idx of route.deep || []) {
+        hostArgs[idx] = await stageDeepValue(hostArgs[idx], vmFs, staging);
+      }
+
+      const result = await original(null, ...hostArgs);
+
+      for (const w of writeFiles) {
+        if (fs.existsSync(w.tmpFile)) await vmFs.pushFromHost(w.tmpFile, w.vmPath).catch(() => {});
+      }
+      for (const w of writeDirs) {
+        if (fs.readdirSync(w.tmpDir).length) await vmFs.pushDir(w.tmpDir, w.vmDir).catch(() => {});
+      }
+      for (const o of staging.outputs) {
+        if (fs.existsSync(o.tmpFile)) await vmFs.pushFromHost(o.tmpFile, o.vmPath).catch(() => {});
+      }
+      return remapResult(result, staging.mappings);
+    } catch (e) {
+      return { ok: false, error: '虚拟机工具执行失败: ' + e.message };
+    } finally {
+      for (const d of staging.tmpDirs) { try { fs.rmSync(d, { recursive: true, force: true }); } catch { /* ignore */ } }
+    }
+  };
+}
+
+/**
+ * 兼容接口：在处理器注册完成后统一覆盖（测试与旧调用点用）。
+ * 生产路径改用 createRoutedHandler 在 main.js 的 ipcMain.handle 包装里就地安装。
  */
 function installVmToolRouting({ ipcMain, handlers, getVmService, isLocationVm, originalHandle }) {
   if (typeof isLocationVm !== 'function') throw new Error('installVmToolRouting 需要 isLocationVm()');
-  const vmFs = new VmFs({
-    vmService: {
-      get instance() { const s = getVmService(); return s && s.instance; },
-      get runtime() { const s = getVmService(); return s && s.runtime; },
-      toVmPath: (p) => getVmService().toVmPath(p),
-      toHostPath: (p) => getVmService().toHostPath(p),
-    },
-  });
+  const deps = { getVmService, isLocationVm };
   const installed = [];
-
-  const register = (channel, impl) => {
-    originalHandle(channel, impl);
-    installed.push(channel);
-  };
-
-  // ---- 1) 纯文件操作：直接在 VM 内执行 ----
-  for (const [channel, impl] of Object.entries(FS_ROUTES)) {
-    if (!handlers.has(channel)) continue;
-    register(channel, async (_e, ...args) => {
-      if (!isLocationVm()) return handlers.get(channel)(_e, ...args);
-      try { return await impl(vmFs, args); } catch (e) { return { ok: false, error: '虚拟机文件操作失败: ' + e.message }; }
-    });
-  }
-
-  // ---- 2) 宿主库工具：路径暂存 ----
-  for (const [channel, route] of Object.entries(TOOL_ROUTES)) {
+  for (const channel of ROUTE_CHANNELS) {
     const original = handlers.get(channel);
     if (!original) continue;
-    register(channel, async (_e, ...args) => {
-      if (!isLocationVm()) return original(_e, ...args);
-      const staging = { pulls: new Map(), tmpDirs: [], mappings: [] };
-      try {
-        const hostArgs = [...args];
-        // 读入：VM → 宿主临时
-        for (const idx of route.read || []) {
-          const p = hostArgs[idx];
-          if (!isPathLike(p)) continue;
-          const pulled = await vmFs.pullToTemp(p);
-          staging.tmpDirs.push(pulled.dir);
-          staging.pulls.set(pulled.file, vmFs.toVm(p));
-          staging.mappings.push([pulled.file, vmFs.toVm(p)]);
-          hostArgs[idx] = pulled.file;
-        }
-        // 写出单文件：VM 路径 → 临时文件（调用后推回）
-        const writeFiles = [];
-        for (const idx of route.writeFile || []) {
-          const p = hostArgs[idx];
-          if (!isPathLike(p)) continue;
-          const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cibyp-vmtool-'));
-          staging.tmpDirs.push(tmpDir);
-          const tmpFile = path.join(tmpDir, path.basename(vmFs.toVm(p)));
-          writeFiles.push({ tmpFile, vmPath: vmFs.toVm(p) });
-          staging.mappings.push([tmpFile, vmFs.toVm(p)]);
-          hostArgs[idx] = tmpFile;
-        }
-        // 输出目录：宿主临时目录，调用后整目录推回
-        const writeDirs = [];
-        for (const idx of route.writeDir || []) {
-          const p = hostArgs[idx];
-          const vmDir = vmFs.toVm(p || '/workspace');
-          const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cibyp-vmtool-'));
-          staging.tmpDirs.push(tmpDir);
-          writeDirs.push({ tmpDir, vmDir });
-          staging.mappings.push([tmpDir, vmDir]);
-          hostArgs[idx] = tmpDir;
-        }
-        // 深度翻译（ffmpeg params 等）：存在的文件→拉到宿主临时；不存在的→视为输出，落到临时后推回
-        for (const idx of route.deep || []) {
-          staging.outputs = staging.outputs || [];
-          hostArgs[idx] = await stageDeepValue(hostArgs[idx], vmFs, staging);
-        }
-
-        const result = await original(null, ...hostArgs);
-
-        // 推回产物
-        for (const w of writeFiles) {
-          if (fs.existsSync(w.tmpFile)) await vmFs.pushFromHost(w.tmpFile, w.vmPath).catch(() => {});
-        }
-        for (const w of writeDirs) {
-          const produced = fs.readdirSync(w.tmpDir).filter((f) => !staging.pulls.has(path.join(w.tmpDir, f)));
-          if (produced.length) await vmFs.pushDir(w.tmpDir, w.vmDir).catch(() => {});
-        }
-        for (const o of staging.outputs || []) {
-          if (fs.existsSync(o.tmpFile)) await vmFs.pushFromHost(o.tmpFile, o.vmPath).catch(() => {});
-        }
-        // ffmpeg 等：写出目录里的产物（输出路径可能是临时文件，已含在 tmpDir 内）
-        return remapResult(result, staging.mappings);
-      } catch (e) {
-        return { ok: false, error: '虚拟机工具执行失败: ' + e.message };
-      } finally {
-        for (const d of staging.tmpDirs) { try { fs.rmSync(d, { recursive: true, force: true }); } catch { /* ignore */ } }
-      }
-    });
+    try { ipcMain.removeHandler(channel); } catch { /* 假 ipcMain 无此方法 */ }
+    originalHandle(channel, createRoutedHandler(channel, original, deps));
+    installed.push(channel);
   }
-
-  return { installed, vmFs };
+  return { installed };
 }
+
 
 /**
  * 深度暂存（ffmpeg params 等）：
@@ -244,4 +248,4 @@ async function stageDeepValue(value, vmFs, staging) {
   return value;
 }
 
-module.exports = { installVmToolRouting, TOOL_ROUTES, FS_ROUTES, translateDeep, remapResult, stageDeepValue };
+module.exports = { installVmToolRouting, createRoutedHandler, ROUTE_CHANNELS, TOOL_ROUTES, FS_ROUTES, translateDeep, remapResult, stageDeepValue, createStagedToolHandler };
