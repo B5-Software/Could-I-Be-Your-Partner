@@ -241,7 +241,8 @@ function buildArgv(o) {
     '-m', String(o.memMB || 4096),
     '-kernel', o.kernel,
     '-initrd', o.initrd,
-    '-append', o.cmdline || kernelCmdline(o.guestArch),
+    // cloud-init 种子：SMBIOS 之外再走内核命令行（ARM virt 上 SMBIOS 不可靠，实测会回退 DataSourceNone）
+    '-append', (o.cmdline || kernelCmdline(o.guestArch)) + ` ds=nocloud-net;s=http://10.0.2.2:${o.ciPort}/`,
     '-drive', `file=${o.overlay},if=virtio,format=qcow2,cache=writeback,discard=unmap`,
   );
   if (o.netMode === 'restricted') {
