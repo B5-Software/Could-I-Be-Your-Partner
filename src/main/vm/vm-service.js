@@ -246,10 +246,24 @@ class VmService extends EventEmitter {
 
   /** 该路径是否应按"VM 内路径"处理（统一判定，见 vm-paths.js） */
   isVmPath(p) {
+    const s = String(p || '');
+    if (!s.startsWith('/')) return false;
+    const paths = require('./vm-paths');
+    // 1) 命中宿主映射根 → 必为宿主路径（新建文件也算，POSIX 上尤为重要）
+    try {
+      const hostRoots = [];
+      const wsRoot = this.workspaceRoot;
+      if (wsRoot) hostRoots.push(path.resolve(wsRoot));
+      for (const extra of (this.extraHostRoots || [])) if (extra) hostRoots.push(path.resolve(extra));
+      if (this._externMounts) for (const [h] of this._externMounts) hostRoots.push(path.resolve(h));
+      for (const h of hostRoots) {
+        if (paths.isUnder(h, s)) return false;
+      }
+    } catch { /* ignore */ }
     const mount = (this.runtime.vm && this.runtime.vm.workspaceMount) || '/workspace';
     const vmRoots = [];
     if (this._externMounts) for (const [, v] of this._externMounts) vmRoots.push(v);
-    return require('./vm-paths').isVmPath(p, { mount, vmRoots });
+    return paths.isVmPath(s, { mount, vmRoots });
   }
 
   /** 宿主路径 → VM 路径（未同步/未就绪时退化为 /workspace） */

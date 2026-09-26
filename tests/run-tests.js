@@ -3750,22 +3750,47 @@ function runVmSandboxTests() {
   const _os = require('os');
 
   testAsync('VM 路径映射：工作区/POSIX/外部挂载/未挂载目录', async () => {
-    // 平台无关夹具：Windows 用盘符，POSIX 用 /tmp（避免把 C:\ 当字面目录名导致断言不可移植）
+    // 平台无关夹具：POSIX 上必须用"真实存在且不在 guest 系统目录白名单里"的目录，
+    // 否则会命中 isVmPath 的 /tmp 前缀规则（/tmp 视为 VM 内路径）
     const isWin = process.platform === 'win32';
-    const WS_ROOT = isWin ? 'C:\\work' : '/tmp/cibyp-ws';
-    const PROJ_ROOT = isWin ? 'D:\\proj' : '/tmp/cibyp-proj';
-    const vmService = {
-      runtime: { vm: { workspaceMount: '/workspace' } },
-      workspaceRoot: WS_ROOT,
-      _externMounts: new Map([[PROJ_ROOT, '/workspace/_external/proj']]),
-    };
-    const vmFs = new VmFs({ vmService });
-    assert.strictEqual(vmFs.mapVmTarget('/workspace/a.txt').vm, '/workspace/a.txt', 'POSIX 路径原样');
-    assert.strictEqual(vmFs.mapVmTarget(_path.join(WS_ROOT, 'sub', 'a.txt')).vm, '/workspace/sub/a.txt', '工作区内映射');
-    assert.strictEqual(vmFs.mapVmTarget(_path.join(PROJ_ROOT, 'src', 'a.js')).vm, '/workspace/_external/proj/src/a.js', '外部挂载映射');
-    assert.strictEqual(vmFs.mapVmTarget(WS_ROOT).vm, '/workspace', '工作区根');
-    assert.strictEqual(vmFs.mapVmTarget(WS_ROOT, { forWrite: true }).ok, false, '目录不能被当文件写');
-    assert.strictEqual(vmFs.mapVmTarget(isWin ? 'E:\\other\\a.js' : '/tmp/cibyp-other/a.js').ok, false, '未挂载目录应拒绝（避免误写 /workspace）');
+    const fixtureRoot = fs.mkdtempSync(_path.join(_path.resolve(__dirname, '..'), '.cibyp-test-fixtures-'));
+    const WS_ROOT = _path.join(fixtureRoot, 'ws');
+    const PROJ_ROOT = _path.join(fixtureRoot, 'proj');
+    const OTHER_ROOT = _path.join(fixtureRoot, 'other');
+    for (const d of [WS_ROOT, PROJ_ROOT, OTHER_ROOT]) fs.mkdirSync(d, { recursive: true });
+    // POSIX：未挂载目录里的"真实文件"才可能被判定为宿主路径（不存在的绝对路径默认按 VM 路径处理）
+    const otherFile = _path.join(OTHER_ROOT, 'a.js');
+    fs.writeFileSync(otherFile, 'x');
+    try {
+      const vmService = {
+        runtime: { vm: { workspaceMount: '/workspace' } },
+        workspaceRoot: WS_ROOT,
+        _externMounts: new Map([[PROJ_ROOT, '/workspace/_external/proj']]),
+      };
+      const vmFs = new VmFs({ vmService });
+      assert.strictEqual(vmFs.mapVmTarget('/workspace/a.txt').vm, '/workspace/a.txt', 'POSIX 路径原样');
+      assert.strictEqual(vmFs.mapVmTarget(_path.join(WS_ROOT, 'sub', 'a.txt')).vm, '/workspace/sub/a.txt', '工作区内映射');
+      assert.strictEqual(vmFs.mapVmTarget(_path.join(WS_ROOT, 'new', 'n.txt')).vm, '/workspace/new/n.txt', '工作区内新建（尚不存在）文件也应映射');
+      assert.strictEqual(vmFs.mapVmTarget(_path.join(PROJ_ROOT, 'src', 'a.js')).vm, '/workspace/_external/proj/src/a.js', '外部挂载映射');
+      assert.strictEqual(vmFs.mapVmTarget(WS_ROOT).vm, '/workspace', '工作区根');
+      assert.strictEqual(vmFs.mapVmTarget(WS_ROOT, { forWrite: true }).ok, false, '目录不能被当文件写');
+      assert.strictEqual(vmFs.mapVmTarget(otherFile).ok, false, '未挂载目录应拒绝（避免误写 /workspace）');
+      // POSIX 风格宿主根：即使文件尚不存在，也必须判为宿主路径（映射根优先于"不存在就当 VM 路径"的兜底）
+      const posixSvc = {
+        runtime: { vm: { workspaceMount: '/workspace' } },
+        workspaceRoot: '/home/u/ws',
+        _externMounts: new Map([['/srv/proj', '/workspace/_external/proj']]),
+      };
+      const posixFs = new VmFs({ vmService: posixSvc });
+      assert.strictEqual(posixFs.isVmPath('/home/u/ws/new.txt'), false, 'POSIX 宿主根内的新文件不应被当作 VM 路径');
+      assert.strictEqual(posixFs.isVmPath('/srv/proj/a.js'), false, '外部挂载根内的路径不应被当作 VM 路径');
+      assert.strictEqual(posixFs.isVmPath('/workspace/a.txt'), true, '挂载点内 → VM 路径');
+      assert.strictEqual(posixFs.mapVmTarget('/home/u/ws/new.txt').vm, '/workspace/new.txt', 'POSIX 新文件映射到 /workspace');
+      // Windows 盘符路径永不当作 VM 路径（无需真实盘符）
+      if (isWin) assert.strictEqual(vmFs.isVmPath('C:\\Users\\x\\a.txt'), false, 'Windows 盘符路径 → 宿主路径');
+    } finally {
+      fs.rmSync(fixtureRoot, { recursive: true, force: true });
+    }
   });
 
   testAsync('外部挂载：重复挂载幂等（不重复 push 覆盖 VM 改动）', async () => {

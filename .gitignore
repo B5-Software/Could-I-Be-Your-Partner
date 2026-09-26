@@ -4,6 +4,9 @@ dist-*/
 dist/
 out/
 
+# 测试临时夹具（tests/run-tests.js 创建，异常退出可能残留）
+.cibyp-test-fixtures-*/
+
 # Logs & env
 .env
 *.log

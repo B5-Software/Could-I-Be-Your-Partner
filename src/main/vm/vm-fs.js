@@ -88,6 +88,16 @@ class VmFs {
 
   /** 该路径是否应按"VM 内路径"处理（统一判定，见 vm-paths.js） */
   isVmPath(p) {
+    const s = String(p || '');
+    if (!s.startsWith('/')) return false;
+    const paths = require('./vm-paths');
+    // 1) 命中宿主映射根（工作区/额外宿主根/外部挂载）→ 必为宿主路径，
+    //    即使文件尚不存在（POSIX 上新建文件不能落到"不存在就当 VM 路径"的兜底里）
+    try {
+      for (const [hostRoot] of this.mappingRoots()) {
+        if (paths.isUnder(hostRoot, s)) return false;
+      }
+    } catch { /* ignore */ }
     const mount = (this.vmService && this.vmService.runtime && this.vmService.runtime.vm.workspaceMount) || '/workspace';
     const vmRoots = [];
     try {
@@ -95,7 +105,7 @@ class VmFs {
         for (const [, v] of this.vmService._externMounts) vmRoots.push(v);
       }
     } catch { /* ignore */ }
-    return require('./vm-paths').isVmPath(p, { mount, vmRoots });
+    return paths.isVmPath(s, { mount, vmRoots });
   }
 
   /**

@@ -38,6 +38,14 @@ function main() {
     gitHash: getGitShortHash(),
     buildTime: new Date().toISOString()
   };
+  // git 不可用时（例如打包阶段临时移出 .git）不要覆盖已有的 hash：
+  // 否则打包产物里的 build-info.json 会丢 git 哈希，Splash 顶部显示不出来
+  if (!info.gitHash) {
+    try {
+      const prev = JSON.parse(fs.readFileSync(outFile, 'utf-8'));
+      if (prev && prev.gitHash) info.gitHash = String(prev.gitHash);
+    } catch { /* ignore */ }
+  }
   try {
     fs.writeFileSync(outFile, JSON.stringify(info, null, 2), 'utf-8');
     console.log(`[build-info] ${info.gitHash ? 'gitHash=' + info.gitHash : 'gitHash 不可用（无 git 环境）'} -> ${path.basename(outFile)}`);
