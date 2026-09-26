@@ -120,3 +120,14 @@ node scripts/vm-pack.js --src <qemu解包目录> --out <输出> --platform win32
 | 紧急按钮切回本机 | Splash「以本机模式启动（本次）」+ 失败 20s 自动回退 + 运行期可随时切 |
 | 图形化 VM / computer-use | VM 桌面窗口（noVNC）+ VM 内 Chromium CDP（Playwright 可 connectOverCDP） |
 | 不占安装包体积 | 全部运行时资源按需下载（QEMU 包 + 镜像 + 内核/initrd），走 aria2 + sha256 |
+
+
+## 修复批次（2026-09-26，第 4 轮）：工具选择 / ESLint / Monaco(Code) 的 VM 贯通
+
+| 问题 | 根因 | 修复 | 验证 |
+|---|---|---|---|
+| AI 点名 ffmpegInfo，`__reoptimizeToolSelection` 返回 ok 但没补上工具 | ① 内部工具 schema 只有 reason，无法点名工具；② Jev 决策模型按类别提问且 `slice(0,24)` 把「FFmpeg 媒体」（第 30 类）裁掉；③ Jev 的 state 不含触发原因；④ 启发式没有媒体/ESLint 关键词 | schema 增加 `tools[]` 点名参数；点名工具校验后**直接追加**（不再依赖选择模型判断）；类别不再截断（上限 64）；reason + 点名工具写入 Jev state；LLM 选择提示加入点名清单与规则 8；补媒体/ESLint 启发式关键词 | `npm test` 静态回归；选择器为纯渲染层逻辑（无 VM 依赖） |
+| ESLint 工具恒失败 | `main.js` 调用不存在的 `ESLintService.lintFile`（导出名是 `lintSingleFile`）；`eslint:lint` 无 VM 分支 | 全部 eslint 通道统一走 `eslintResolveHostPath`（VM 路径→宿主镜像 + pullExternalDir + syncWorkspace pull）与 `remapVmToolResult`（结果路径回映 VM） | 真机 24/24（含 `no-unused-vars` 诊断 + 路径回映）；`npm test` 新增 lintSingleFile 用例 |
+| Code 模式 + Monaco 在 VM 下打开/保存不可用 | `code:getLastWorkspace` 的 mount 在 `return` 之后（死代码）→ 重启后无挂载；`writeBuffer` 用 `toVm`，未挂载路径被静默映射到 `/workspace` 导致写目录失败；`code:getFileTree` 读宿主旧镜像 | mount 移到 return 之前；VM ready 钩子补挂最近 Code 工作区；`mountExternalDir` 幂等（已挂载不重复 push）；新增 `VmFs.mapVmTarget`（写路径仅允许工作区/外部挂载，未挂载给出明确错误）；新增 `pullExternalDir`（VM 改动拉回宿主镜像，供文件树/ESLint）；`code:getFileTree` 改为读 VM 生成树 | 真机 24/24（挂载幂等/保留 VM 改动、writeBuffer 映射、pull、ESLint）；应用级日志实测 `[vm] 已挂载外部目录: D:\cibyp-vm-p0\code-proj-test → /workspace/_external/code-proj-test` |
+
+冒烟脚本：`vm-os/tests/attach-mount-smoke.js`（真机 24/24）；`npm test` 374 通过。

@@ -125,12 +125,44 @@ class VmFs {
     return sftp.readFile(await this.ensureVmFile(filePath));
   }
 
+  /**
+   * 宿主路径 → VM 路径映射（仅命中已知根：工作区根 + 外部挂载目录）。未命中返回 { ok:false }。
+   * forWrite=true 时不允许把"根目录本身"当文件；forWrite=false（目录/读）时允许。
+   */
+  mapVmTarget(hostOrVmPath, { forWrite = false } = {}) {
+    const s = String(hostOrVmPath || '');
+    if (!s) return { ok: false, error: '路径为空' };
+    if (s.startsWith('/')) return { ok: true, vm: s, mapped: 'vm' };
+    const roots = [];
+    try {
+      const wsRoot = this.vmService.workspaceRoot;
+      const mount = (this.vmService.runtime && this.vmService.runtime.vm.workspaceMount) || '/workspace';
+      if (wsRoot) roots.push([path.resolve(wsRoot), mount]);
+    } catch { /* ignore */ }
+    if (this.vmService._externMounts) {
+      for (const [h, v] of this.vmService._externMounts) roots.push([path.resolve(h), v]);
+    }
+    const p = path.resolve(s);
+    for (const [h, v] of roots) {
+      const rel = path.relative(h, p);
+      if (rel === '') {
+        if (forWrite) return { ok: false, error: '目标是目录而不是文件: ' + s };
+        return { ok: true, vm: v, mapped: 'root' };
+      }
+      if (rel && !rel.startsWith('..') && !path.isAbsolute(rel)) {
+        return { ok: true, vm: v + '/' + rel.split(path.sep).join('/'), mapped: 'root' };
+      }
+    }
+    return { ok: false, error: '路径不在虚拟机映射范围内（该目录未挂载进虚拟机）: ' + s };
+  }
+
   async writeBuffer(filePath, buf) {
-    const vm = this.toVm(filePath);
+    const t = this.mapVmTarget(filePath, { forWrite: true });
+    if (!t.ok) throw new Error(t.error + '；请在 Code 模式打开该工作区（会自动挂载进虚拟机）');
     const sftp = await this.sftp();
-    await this.exec(`mkdir -p ${shellQuote(path.posix.dirname(vm))}`, 20000);
-    await sftp.writeFile(vm, buf);
-    return vm;
+    await this.exec(`mkdir -p ${shellQuote(path.posix.dirname(t.vm))}`, 20000);
+    await sftp.writeFile(t.vm, buf);
+    return t.vm;
   }
 
   async exists(filePath) {
@@ -321,7 +353,9 @@ class VmFs {
 
   async makeDirectory(dirPath) {
     try {
-      const vm = this.toVm(dirPath);
+      const t = this.mapVmTarget(dirPath);
+      if (!t.ok) throw new Error(t.error);
+      const vm = t.vm;
       const r = await this.exec(`mkdir -p ${shellQuote(vm)}`);
       if (!r.ok) throw new Error(r.stderr || 'mkdir 失败');
       // VM 模式：同时在宿主镜像里建同名目录（否则宿主侧看不到新会话目录，UI 会误判"没建成功"）
@@ -335,7 +369,10 @@ class VmFs {
 
   async deleteDirectory(dirPath) {
     try {
-      const r = await this.exec(`rm -rf ${shellQuote(this.toVm(dirPath))}`);
+      const t = this.mapVmTarget(dirPath);
+      if (!t.ok) throw new Error(t.error);
+      if (t.vm === '/workspace' || t.vm === '/') throw new Error('拒绝删除虚拟机根目录: ' + t.vm);
+      const r = await this.exec(`rm -rf ${shellQuote(t.vm)}`);
       if (!r.ok) throw new Error(r.stderr || 'rm -rf 失败');
       return { ok: true };
     } catch (e) { return { ok: false, error: '虚拟机删目录失败: ' + e.message }; }

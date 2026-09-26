@@ -3743,6 +3743,85 @@ function runVmSandboxTests() {
     assert.strictEqual(t.nested.srt, '/workspace/s.srt');
   });
 
+  // ---- VM 路径映射（Code 模式外部挂载 / 写路径保护）----
+  const { VmFs } = require('../src/main/vm/vm-fs.js');
+  const { VmService } = require('../src/main/vm/vm-service.js');
+  const _path = require('path');
+  const _os = require('os');
+
+  testAsync('VM 路径映射：工作区/POSIX/外部挂载/未挂载目录', async () => {
+    const vmService = {
+      runtime: { vm: { workspaceMount: '/workspace' } },
+      workspaceRoot: 'C:\\work',
+      _externMounts: new Map([['D:\\proj', '/workspace/_external/proj']]),
+    };
+    const vmFs = new VmFs({ vmService });
+    assert.strictEqual(vmFs.mapVmTarget('/workspace/a.txt').vm, '/workspace/a.txt', 'POSIX 路径原样');
+    assert.strictEqual(vmFs.mapVmTarget('C:\\work\\sub\\a.txt').vm, '/workspace/sub/a.txt', '工作区内映射');
+    assert.strictEqual(vmFs.mapVmTarget('D:\\proj\\src\\a.js').vm, '/workspace/_external/proj/src/a.js', '外部挂载映射');
+    assert.strictEqual(vmFs.mapVmTarget('C:\\work').vm, '/workspace', '工作区根');
+    assert.strictEqual(vmFs.mapVmTarget('C:\\work', { forWrite: true }).ok, false, '目录不能被当文件写');
+    assert.strictEqual(vmFs.mapVmTarget('E:\\other\\a.js').ok, false, '未挂载目录应拒绝（避免误写 /workspace）');
+  });
+
+  testAsync('外部挂载：重复挂载幂等（不重复 push 覆盖 VM 改动）', async () => {
+    const svc = new VmService({ getSettings: () => ({ runtime: { vm: {} } }) });
+    const dir = fs.mkdtempSync(_path.join(_os.tmpdir(), 'cibyp-mount-idem-'));
+    svc._externMounts = new Map([[_path.resolve(dir), '/workspace/_external/keep']]);
+    const r = await svc.mountExternalDir(dir);
+    assert.strictEqual(r.ok, true);
+    assert.strictEqual(r.reused, true, '已挂载应直接复用映射');
+    assert.strictEqual(r.vmRoot, '/workspace/_external/keep');
+    const miss = await svc.mountExternalDir(_path.join(dir, '__not_exists__'));
+    assert.strictEqual(miss.ok, false, '目录不存在应报错');
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  testAsync('外部挂载：pullExternalDir 在无挂载/非挂载目录时安全跳过', async () => {
+    const svc = new VmService({ getSettings: () => ({ runtime: { vm: {} } }) });
+    svc.instance = { state: 'ready' };
+    const a = await svc.pullExternalDir('E:\\project');
+    assert.strictEqual(a.ok, true);
+    assert.strictEqual(a.skipped, 'no-mounts');
+    svc._externMounts = new Map([['D:\\other', '/workspace/_external/other']]);
+    const b = await svc.pullExternalDir('E:\\project');
+    assert.strictEqual(b.ok, true);
+    assert.strictEqual(b.skipped, 'not-external');
+  });
+
+  // ---- ESLint：lintSingleFile（此前 main.js 调用了不存在的 lintFile → 工具恒失败）----
+  testAsync('ESLint：lintSingleFile 对临时工程返回诊断（含 no-unused-vars）', async () => {
+    const ESLintService = require('../src/main/eslint-service.js');
+    assert.strictEqual(typeof ESLintService.lintSingleFile, 'function', '服务应导出 lintSingleFile');
+    assert.strictEqual(typeof ESLintService.lintFile, 'undefined', '不存在 lintFile（避免再次误用）');
+    const proj = fs.mkdtempSync(_path.join(_os.tmpdir(), 'cibyp-eslint-'));
+    try {
+      fs.writeFileSync(_path.join(proj, 'eslint.config.mjs'), "export default [{ rules: { 'no-unused-vars': 'error' } }];\n");
+      const file = _path.join(proj, 'a.js');
+      fs.writeFileSync(file, 'const unused = 1;\n');
+      assert.strictEqual(ESLintService.isProjectLintable(proj), true, '有 eslint.config 应判定为可 lint');
+      const r = await ESLintService.lintSingleFile(file);
+      assert.strictEqual(r.ok, true, 'lintSingleFile 应成功: ' + JSON.stringify(r).slice(0, 200));
+      assert.ok(Array.isArray(r.results) && r.results.length >= 1, '应至少有一条诊断');
+      assert.strictEqual(r.results[0].ruleId, 'no-unused-vars');
+      assert.strictEqual(r.results[0].severity, 'error');
+    } finally {
+      fs.rmSync(proj, { recursive: true, force: true });
+    }
+  });
+
+  // ---- 工具选择：点名工具/触发原因/媒体类别（静态回归，防止再次出现"ok 但没补上 ffmpeg"）----
+  test('工具选择：reoptimize 支持点名工具且原因进入选择（静态回归）', () => {
+    const src = fs.readFileSync(_path.join(__dirname, '..', 'src', 'renderer', 'js', 'agent.js'), 'utf8');
+    assert.ok(/__reoptimizeToolSelection/.test(src));
+    assert.ok(/tools:\s*\{[\s\S]{0,200}type:\s*'array'/.test(src), '内部工具 schema 应支持点名 tools 数组');
+    assert.ok(/requestedValid/.test(src), '应处理点名工具');
+    assert.ok(!/slice\(0,\s*24\)/.test(src), '决策模型不应再截断类别（ffmpeg 类别曾被裁掉）');
+    assert.ok(/本次需要补充工具的原因/.test(src), 'Jev 决策模型的 state 应包含触发原因');
+    assert.ok(/FFmpeg 媒体/.test(src) && /ffmpegInfo/.test(src), '启发式应包含媒体类别/明确示例');
+    assert.ok(/eslintLint/.test(src), '选择提示应包含 eslint 示例');
+  });
+
   test('ssh2 密钥生成：OpenSSH 私钥格式 + authorized_keys 行', () => {
     const kp = provision.generateSshKeyPair();
     assert.ok(kp.privateKey.includes('BEGIN OPENSSH PRIVATE KEY') || kp.privateKey.includes('BEGIN PRIVATE KEY'),

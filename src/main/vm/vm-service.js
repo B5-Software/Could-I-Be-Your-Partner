@@ -117,12 +117,16 @@ class VmService extends EventEmitter {
    * 用于 Code 模式打开的项目目录：之后所有 fs/终端/工具都按该映射作用于 VM。
    * 跳过 node_modules/.git/dist 等，单文件默认上限 20MB。
    */
-  async mountExternalDir(hostDir, { maxFileMB = 20 } = {}) {
+  async mountExternalDir(hostDir, { maxFileMB = 20, refresh = false } = {}) {
     const hostRoot = path.resolve(String(hostDir || ''));
     if (!hostRoot || !fs.existsSync(hostRoot)) return { ok: false, error: '目录不存在: ' + hostRoot };
     const name = path.basename(hostRoot).replace(/[^\w.-]+/g, '_') || 'ws';
     const vmRoot = `/workspace/_external/${name}`;
     this._externMounts = this._externMounts || new Map();
+    if (this._externMounts.has(hostRoot) && !refresh) {
+      // 已挂载：不重复 push，避免用宿主旧副本覆盖 VM 内的新改动（Monaco 保存只写 VM）
+      return { ok: true, hostRoot, vmRoot: this._externMounts.get(hostRoot), reused: true };
+    }
     this._externMounts.set(hostRoot, vmRoot);
     const { VmFs } = require('./vm-fs');
     const vmFs = new VmFs({ vmService: this });
@@ -142,6 +146,62 @@ class VmService extends EventEmitter {
     await push(hostRoot, vmRoot);
     console.log('[vm] 已挂载外部目录:', hostRoot, '→', vmRoot);
     return { ok: true, hostRoot, vmRoot };
+  }
+
+  /**
+   * 外部挂载目录：把 VM 内的新改动拉回宿主镜像（只在新/更新时覆盖，不删除宿主文件）。
+   * 供 Code 模式文件树刷新、ESLint、打开资源管理器前调用，保证宿主镜像与 VM 一致。
+   */
+  async pullExternalDir(hostOrVmPath, { maxFileMB = 20 } = {}) {
+    if (!this.instance || this.instance.state !== 'ready') return { ok: false, error: '虚拟机未就绪' };
+    if (!this._externMounts || !this._externMounts.size) return { ok: true, pulled: 0, skipped: 'no-mounts' };
+    const raw = String(hostOrVmPath || '');
+    let hostRoot = null;
+    let vmRoot = null;
+    if (raw.startsWith('/')) {
+      for (const [h, v] of this._externMounts) {
+        if (raw === v || raw.startsWith(v + '/')) { hostRoot = h; vmRoot = v; break; }
+      }
+    } else {
+      const p = path.resolve(raw);
+      for (const [h, v] of this._externMounts) {
+        if (p === h || p.startsWith(h + path.sep)) { hostRoot = h; vmRoot = v; break; }
+      }
+    }
+    if (!hostRoot || !vmRoot) return { ok: true, pulled: 0, skipped: 'not-external' };
+    const { VmFs } = require('./vm-fs');
+    const vmFs = new VmFs({ vmService: this });
+    const skip = new Set(['node_modules', '.git', 'dist', 'out', '.cache', '.venv', '__pycache__', '.next']);
+    const maxBytes = Math.max(1, Number(maxFileMB) || 20) * 1024 * 1024;
+    let pulled = 0;
+    const walk = async (vmDir, hostDir) => {
+      fs.mkdirSync(hostDir, { recursive: true });
+      const r = await vmFs.listDirectory(vmDir).catch(() => null);
+      if (!r || !r.ok || !Array.isArray(r.entries)) return;
+      for (const e of r.entries) {
+        const name = e && e.name;
+        if (!name || skip.has(name)) continue;
+        const vp = vmDir + '/' + name;
+        const hp = path.join(hostDir, name);
+        if (e.isDirectory) { await walk(vp, hp); continue; }
+        try {
+          const st = await vmFs.stat(vp);
+          if (!st || st.size > maxBytes) continue;
+          let hostStat = null;
+          try { hostStat = fs.statSync(hp); } catch { /* missing */ }
+          const vmMs = Number(st.mtimeMs) || 0;
+          if (!hostStat || vmMs > hostStat.mtimeMs + 1000) {
+            const sftp = await vmFs.sftp();
+            fs.mkdirSync(path.dirname(hp), { recursive: true });
+            await sftp.fastGet(vp, hp);
+            if (vmMs) { try { const t = new Date(vmMs); fs.utimesSync(hp, t, t); } catch { /* ignore */ } }
+            pulled++;
+          }
+        } catch { /* 单个文件失败不影响整体 */ }
+      }
+    };
+    await walk(vmRoot, hostRoot);
+    return { ok: true, pulled, hostRoot, vmRoot };
   }
 
   /** 宿主路径 → VM 路径（未同步/未就绪时退化为 /workspace） */

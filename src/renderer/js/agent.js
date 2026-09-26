@@ -13,7 +13,12 @@ const INTERNAL_REOPTIMIZE_TOOL_SCHEMA = {
     parameters: {
       type: 'object',
       properties: {
-        reason: { type: 'string', description: '为什么需要重优化工具选择' }
+        reason: { type: 'string', description: '为什么需要重优化工具选择' },
+        tools: {
+          type: 'array',
+          items: { type: 'string' },
+          description: '本次任务明确缺少的工具名（必须在 allEnabled 列表中逐字填写，例如 ffmpegInfo）。点名后会直接追加到本会话工具列表，不再依赖选择模型二次判断。'
+        }
       },
       required: []
     }
@@ -1207,6 +1212,8 @@ ${affectionDesc}
       { test: /dns|ping|ssl|证书|端口|扫描|traceroute|路由|域名/i, categories: ['网络工具'] },
       { test: /下载|download|上传|upload|表单|multipart/i, categories: ['网络工具'] },
       { test: /mcp|MCP|服务端|protocol/i, categories: ['MCP'] },
+      { test: /音频|视频|媒体|转码|压缩|裁剪|拼接|字幕|音轨|水印|截帧|gif|mp3|mp4|wav|flac|aac|mov|mkv|avi|webm|ffmpeg|media|audio|video|时长|比特率|分辨率/i, categories: ['FFmpeg 媒体'] },
+      { test: /eslint|lint|代码检查|静态检查|语法检查|代码质量|诊断|警告|报错/i, categories: ['代码'] },
     ];
 
     const categoryBoost = new Set();
@@ -1309,10 +1316,28 @@ ${affectionDesc}
     return { merged: false, added: next.length };
   }
 
-  async optimizeToolsForConversation(firstUserMessage, reason = '') {
-    // Code 模式不参与自动优化，始终使用全部启用工具
-    if (this.mode === 'code') return { ok: true, selected: [], skipped: 'code_mode' };
-    const enabledDefs = this.getEnabledToolDefinitions();
+  async optimizeToolsForConversation(firstUserMessage, reason = '', requestedTools = []) {
+    const nameOf = new Map();
+    const enabledDefsAll = this.getEnabledToolDefinitions();
+    enabledDefsAll.forEach(t => nameOf.set(t.name.toLowerCase(), t.name));
+    const normalizeName = (n) => {
+      if (typeof n !== 'string') return null;
+      const s = n.trim();
+      if (!s) return null;
+      if (nameOf.has(s.toLowerCase())) return nameOf.get(s.toLowerCase());
+      const stripped = s.toLowerCase().replace(/[\s_-]/g, '');
+      for (const [l, orig] of nameOf) {
+        if (l.replace(/[\s_-]/g, '') === stripped) return orig;
+      }
+      return null;
+    };
+    const requestedValid = (Array.isArray(requestedTools) ? requestedTools : []).map(normalizeName).filter(Boolean);
+    // Code 模式不参与自动优化，始终使用全部启用工具（点名工具仍会记录）
+    if (this.mode === 'code') {
+      if (requestedValid.length) this._mergeOptimizedSelection(requestedValid);
+      return { ok: true, selected: requestedValid, skipped: 'code_mode' };
+    }
+    const enabledDefs = enabledDefsAll;
     const fallback = this.compactOptimizedSelection([], enabledDefs, firstUserMessage);
     if (!enabledDefs.length) {
       this.optimizedToolNames = [];
@@ -1333,19 +1358,23 @@ ${affectionDesc}
             if (!byCat.has(cat)) byCat.set(cat, []);
             byCat.get(cat).push(t.name);
           }
-          const catList = [...byCat.keys()].slice(0, 24);
+          const catList = [...byCat.keys()].slice(0, 64);
           const questions = {};
           catList.forEach((cat, i) => {
             questions['c' + i] = { type: 'noul', instructions: `完成任务是否需要「${cat}」类工具？（不需要返回低概率）` };
           });
           const res = await window.api.decisionCall({
-            state: `用户消息：${String(firstUserMessage || '').slice(0, 800)}`,
+            state: [
+              `用户消息：${String(firstUserMessage || '').slice(0, 800)}`,
+              reason ? `本次需要补充工具的原因：${String(reason).slice(0, 500)}` : '',
+              requestedValid.length ? `已明确点名需要的工具：${requestedValid.join(', ')}` : ''
+            ].filter(Boolean).join('\n'),
             questions,
             sessionKey: this.sessionKey || null,
             usage: 'toolSelection'
           });
           if (res && res.ok && res.answers) {
-            const selected = [];
+            const selected = [...requestedValid];
             catList.forEach((cat, i) => {
               const p = Number(res.answers['c' + i]?.noul);
               if (Number.isFinite(p) && p >= 0.5) selected.push(...byCat.get(cat));
@@ -1393,18 +1422,20 @@ ${affectionDesc}
         '4) selected 按重要性排序，最重要的放最前面；',
         '5) 若涉及搜索/网页信息，需同时选 webFetch + offscreenRenderContent 之一配合 webSearch；',
         '6) 若涉及文件/代码，需包含 readFile/listDirectory/editFile 之一；',
-        '7) 若涉及编程/执行，需包含 runCommand 或 runSubAgent。'
+        '7) 若涉及编程/执行，需包含 runCommand 或 runSubAgent；',
+        '8) 若"触发原因"里点名了工具或能力（例如 ffmpeg/音频/视频/ESLint），必须选择对应工具（如 ffmpegInfo、eslintLint）。'
       ].join('\n');
       const userPrompt = [
         reason ? `触发原因：${reason}` : '触发原因：首条消息优化',
-        `【用户消息】（工具选择的唯一依据）：`,
+        requestedValid.length ? `已明确点名需要的工具（必须全部包含）：${requestedValid.join(', ')}` : '',
+        `【用户消息 + 触发原因】（工具选择的依据，两者都要考虑）：`,
         `>>>${firstUserMessage || ''}<<<`,
         '',
         '候选工具列表：',
         candidates,
         '',
         '请直接输出 JSON（不要任何推理或解释）：'
-      ].join('\n\n');
+      ].filter(Boolean).join('\n\n');
       // 关键：强制 JSON 模式 + 低 temperature + 较大 max_tokens 容纳 JSON
       const result = await window.api.chatLLM([
         { role: 'system', content: systemPrompt },
@@ -1471,7 +1502,8 @@ ${affectionDesc}
       enabledDefs.forEach(t => { lowerNameMap.set(t.name.toLowerCase(), t.name); });
 
       const selectedRaw = Array.isArray(parsed?.selected) ? parsed.selected : [];
-      let selected = selectedRaw
+      let selected = requestedValid.length > 0 ? [...requestedValid] : [];
+      selected = selected.concat(selectedRaw
         .map(name => {
           if (typeof name !== 'string') return null;
           const trimmed = name.trim();
@@ -1486,7 +1518,7 @@ ${affectionDesc}
           }
           return null;
         })
-        .filter(Boolean);
+        .filter(Boolean));
 
       // 兜底：当模型不支持 response_format 或仍把推理塞进 content 时，
       // 从文本中扫描有效工具名 token（静默处理，不再打印"JSON 解析失败"）。
@@ -2455,15 +2487,26 @@ ${affectionDesc}
           if (toolName === '__reoptimizeToolSelection') {
             if (this.onToolCall) this.onToolCall(toolName, args, 'calling', undefined, tc.id);
             const reasonText = typeof args?.reason === 'string' ? args.reason : '';
+            const requested = Array.isArray(args?.tools) ? args.tools.filter(t => typeof t === 'string' && t.trim()) : [];
+            const enabledNames = new Set(this.getEnabledToolDefinitions().map(t => t.name));
+            const wanted = requested.filter(n => enabledNames.has(n.trim()));
             const beforeCount = Array.isArray(this.optimizedToolNames) ? this.optimizedToolNames.length : 0;
-            const optimizeRes = await this.optimizeToolsForConversation(this.getLatestUserMessageText(), reasonText || '运行中重优化');
+            const optimizeRes = await this.optimizeToolsForConversation(this.getLatestUserMessageText(), reasonText || '运行中重优化', wanted);
+            // 点名工具必须进列表：选择模型可能仍然判为"不需要"，这里做最终兜底
+            const missing = wanted.filter(n => !(this.optimizedToolNames || []).includes(n));
+            if (missing.length > 0) {
+              this.optimizedToolNames = [...(this.optimizedToolNames || []), ...missing];
+            }
             const afterCount = Array.isArray(this.optimizedToolNames) ? this.optimizedToolNames.length : 0;
             const appended = Math.max(0, afterCount - beforeCount);
+            const notEnabled = requested.filter(n => !enabledNames.has(n.trim()));
             const resultStr = JSON.stringify({
               ok: optimizeRes.ok !== false,
               selected: this.optimizedToolNames || [],
               reason: this.optimizedToolReason || reasonText || '重优化完成',
               appended,
+              requested: wanted,
+              requestedNotEnabled: notEnabled,
               message: appended > 0
                 ? `已追加 ${appended} 个工具（已有工具保持原序，前缀缓存仅尾部受影响）`
                 : '当前工具已足够，未追加新工具',

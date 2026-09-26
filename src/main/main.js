@@ -132,7 +132,18 @@ function broadcastVm(channel, payload) {
 vmService.on('state', (s) => broadcastVm('vm:state', s));
 vmService.on('progress', (p) => broadcastVm('vm:progress', p));
 vmService.on('serial', (t) => { try { if (t && String(t).trim()) broadcastVm('vm:serial', String(t).slice(-8192)); } catch (_) {} });
-vmService.on('ready', () => { vmRuntimeGate.ready = true; vmRuntimeGate.failed = false; tryShowMainWindow(); });
+vmService.on('ready', () => {
+  vmRuntimeGate.ready = true;
+  vmRuntimeGate.failed = false;
+  tryShowMainWindow();
+  // VM 重启后外部挂载映射（内存态）丢失：补挂 Code 模式最近工作区，否则 Code 模式打开/保存会打到宿主旧副本
+  try {
+    const lastWs = settings.codeMode && settings.codeMode.lastWorkspace;
+    if (lastWs && typeof vmLocationActive === 'function' && vmLocationActive()) {
+      vmService.mountExternalDir(lastWs).catch((e) => console.warn('[vm] VM 就绪后补挂 Code 工作区失败:', e.message));
+    }
+  } catch { /* ignore */ }
+});
 vmService.on('error', (e) => broadcastVm('vm:error', { message: e?.message || String(e) }));
 vmService.on('sync-done', (r) => broadcastVm('vm:sync-done', r));
 vmService.on('sync-warn', (w) => broadcastVm('vm:sync-warn', { message: String(w) }));
@@ -3057,10 +3068,40 @@ registerComputerUseIpc({
 });
 
 // ===== ESLint 集成 =====
+/**
+ * VM 模式下把入参归一化为"宿主镜像路径"：
+ * - /workspace/... 之类的 VM 路径 → 宿主镜像路径（映射不到则返回 null）
+ * - 宿主路径原样返回
+ * 同时把外部挂载目录 / 工作区同步的 VM 最新改动拉回宿主，保证 lint 的是最新内容。
+ */
+async function eslintResolveHostPath(p) {
+  const s = String(p || '');
+  const isVm = (settings.runtime || {}).location === 'vm' && vmService.instance && vmService.instance.state === 'ready';
+  if (!isVm) return s;
+  let host = s;
+  if (s.startsWith('/')) {
+    host = vmService.toHostPath(s) || '';
+  }
+  if (!host) return null;
+  try { await vmService.pullExternalDir(host); } catch { /* ignore */ }
+  try { await vmService.syncWorkspace({ direction: 'pull', reason: 'eslint' }); } catch { /* ignore */ }
+  return host;
+}
+
+/** 宿主镜像路径 → VM 路径（用于把 lint 结果里的宿主路径回映成 VM 路径） */
+function eslintVmPathFor(p) {
+  const s = String(p || '');
+  if (!s) return null;
+  if (s.startsWith('/')) return s;
+  try { return vmService.toVmPath(s); } catch { return null; }
+}
+
 // 检测工作区是否为 ESLint 支持的项目（前端用于决定是否显示 ESLint 状态面板）
-ipcMain.handle('eslint:isLintable', (_, workspacePath) => {
+ipcMain.handle('eslint:isLintable', async (_, workspacePath) => {
   try {
-    return { ok: true, lintable: ESLintService.isProjectLintable(workspacePath) };
+    const host = await eslintResolveHostPath(workspacePath);
+    if (!host) return { ok: true, lintable: false, error: '工作区尚未映射到宿主镜像' };
+    return { ok: true, lintable: ESLintService.isProjectLintable(host) };
   } catch (e) {
     return { ok: false, error: e.message };
   }
@@ -3069,28 +3110,45 @@ ipcMain.handle('eslint:isLintable', (_, workspacePath) => {
 // 对工作区执行 ESLint 检测（全量扫描或指定文件列表）
 // 参数：(_, workspacePath, opts?)，opts = { files?: string[], maxFiles?: number }
 ipcMain.handle('eslint:lint', async (_, workspacePath, opts) => {
-  return await ESLintService.lintWorkspace(workspacePath, opts || {});
+  const o = { ...(opts || {}) };
+  try {
+    const host = await eslintResolveHostPath(workspacePath);
+    if (!host) return { ok: false, error: '无法把工作区映射到宿主镜像: ' + workspacePath };
+    if (Array.isArray(o.files)) {
+      o.files = o.files
+        .map(f => String(f).startsWith('/') ? (vmService.toHostPath(String(f)) || '') : String(f))
+        .filter(Boolean);
+    }
+    const r = await ESLintService.lintWorkspace(host, o);
+    const vmBase = eslintVmPathFor(workspacePath);
+    return vmBase && vmBase !== host ? remapVmToolResult(r, host, vmBase) : r;
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
 });
 
 // 检测单个文件（编辑器实时显示）
 ipcMain.handle('eslint:lintFile', async (_, filePath) => {
-  // 运行位置=虚拟机：先确保宿主镜像是 VM 的最新状态，再对镜像 lint，并把结果路径回映为 VM 路径
   try {
-    if ((settings.runtime || {}).location === 'vm') {
-      await vmService.syncWorkspace({ direction: 'pull', reason: 'eslint' }).catch(() => {});
-      const hostPath = vmService.toHostPath(filePath) || filePath;
-      const r = await ESLintService.lintFile(hostPath);
-      return remapVmToolResult(r, hostPath, filePath);
-    }
-  } catch (e) { return { ok: false, error: e.message }; }
-  return ESLintService.lintFile(filePath);
-  return await ESLintService.lintSingleFile(filePath);
+    const hostPath = await eslintResolveHostPath(filePath);
+    if (!hostPath) return { ok: false, error: '无法把文件映射到宿主镜像: ' + filePath };
+    const r = await ESLintService.lintSingleFile(hostPath);
+    const vmPath = eslintVmPathFor(filePath);
+    return vmPath && vmPath !== hostPath ? remapVmToolResult(r, hostPath, vmPath) : r;
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
 });
 
 // 清除缓存（工作区切换 / 配置变更时）
-ipcMain.handle('eslint:clearCache', (_, workspacePath) => {
-  ESLintService.clearCache(workspacePath);
-  return { ok: true };
+ipcMain.handle('eslint:clearCache', async (_, workspacePath) => {
+  try {
+    const host = await eslintResolveHostPath(workspacePath);
+    if (host) ESLintService.clearCache(host);
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
 });
 
 ipcMain.handle('calc:evaluate', async (_, expression) => {
@@ -6060,6 +6118,25 @@ function generateFileTreeStructured(dir, depth, maxDepth) {
   return result;
 }
 
+// VM 模式文件树：直接读虚拟机（Monaco 保存只写 VM，宿主镜像可能是旧的）
+// node.path 返回宿主镜像路径（渲染层后续 fs:* 调用按映射自动作用于 VM）
+async function generateVmFileTree(vmFs, vmDir, depth, maxDepth) {
+  const out = [];
+  if (depth >= maxDepth) return out;
+  const r = await vmFs.listDirectory(vmDir).catch(() => null);
+  if (!r || !r.ok || !Array.isArray(r.entries)) return out;
+  const entries = r.entries.filter(e => e && e.name && !e.name.startsWith('.') && e.name !== 'node_modules' && e.name !== '.git');
+  for (const entry of entries) {
+    const vmPath = vmDir.replace(/\/+$/, '') + '/' + entry.name;
+    const node = { name: entry.name, path: vmFs.toHost(vmPath) || vmPath, vmPath, type: entry.isDirectory ? 'directory' : 'file' };
+    if (entry.isDirectory && depth < maxDepth - 1) {
+      node.children = await generateVmFileTree(vmFs, vmPath, depth + 1, maxDepth);
+    }
+    out.push(node);
+  }
+  return out;
+}
+
 // ---- IPC: Code Mode (workspace + per-workspace history) ----
 // Code mode history is stored per-workspace to prevent cross-contamination.
 function getCodeHistoryDir(workspacePath) {
@@ -6091,13 +6168,14 @@ ipcMain.handle('code:openWorkspace', async () => {
 });
 
 ipcMain.handle('code:getLastWorkspace', async () => {
-  return settings.codeMode?.lastWorkspace || null;
-  // VM 模式：启动恢复 Code 工作区时也挂载进 VM（幂等，目录已存在则直接复用）
+  const last = settings.codeMode?.lastWorkspace || null;
+  // VM 模式：恢复 Code 工作区时挂载进 VM（映射在内存里，VM 重启后必须重挂）
   try {
-    if (settings.codeMode && settings.codeMode.lastWorkspace && (settings.runtime || {}).location === 'vm' && vmService.instance && vmService.instance.state === 'ready') {
-      await vmService.mountExternalDir(settings.codeMode.lastWorkspace).catch(() => {});
+    if (last && (settings.runtime || {}).location === 'vm' && vmService.instance && vmService.instance.state === 'ready') {
+      await vmService.mountExternalDir(last).catch(() => {});
     }
   } catch { /* ignore */ }
+  return last;
 });
 
 ipcMain.handle('code:setLastWorkspace', (_, wsPath) => {
@@ -6188,8 +6266,24 @@ ipcMain.handle('code:deleteHistory', (_, workspacePath, id) => {
   } catch (e) { return { ok: false, error: e.message }; }
 });
 
-ipcMain.handle('code:getFileTree', (_, dirPath) => {
+ipcMain.handle('code:getFileTree', async (_, dirPath) => {
   try {
+    const inVm = (settings.runtime || {}).location === 'vm' && vmService.instance && vmService.instance.state === 'ready';
+    if (inVm) {
+      const s = String(dirPath || '');
+      // 外部挂载：先把 VM 内的新改动拉回宿主镜像（资源管理器/ESLint 读宿主镜像）
+      if (!s.startsWith('/')) {
+        await vmService.pullExternalDir(s).catch(() => {});
+      }
+      const { VmFs } = require('./vm/vm-fs');
+      const vmFs = new VmFs({ vmService });
+      const t = vmFs.mapVmTarget(s);
+      if (t.ok) {
+        const tree = await generateVmFileTree(vmFs, t.vm, 0, 4);
+        return { ok: true, tree, source: 'vm' };
+      }
+      console.warn('[vm] code:getFileTree 目录未挂载到 VM，回退宿主:', t.error);
+    }
     const tree = generateFileTreeStructured(dirPath, 0, 4); // 4 levels for code mode UI
     return { ok: true, tree };
   } catch (e) { return { ok: false, error: e.message }; }

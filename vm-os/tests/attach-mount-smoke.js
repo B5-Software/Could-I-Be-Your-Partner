@@ -1,5 +1,9 @@
 /**
- * 真机冒烟：附件入库 VM（ensureVmFile / copyFile）+ Code 模式外部目录挂载（mountExternalDir）
+ * 真机冒烟：附件入库 VM（ensureVmFile / copyFile）+ Code 模式外部目录挂载
+ *   - mountExternalDir / 路径映射（宿主↔VM）/ 幂等性
+ *   - Monaco 保存路径（writeBuffer 按映射写入 VM）
+ *   - pullExternalDir（VM 新改动拉回宿主镜像，供文件树/ESLint 使用）
+ *   - ESLint 端到端（lintSingleFile 可用 + 诊断 + 结果路径回映 VM）
  *
  * 用法（在仓库根目录，需已装好镜像）：
  *   node vm-os/tests/attach-mount-smoke.js
@@ -133,6 +137,43 @@ const fakeApp = {
     const ls = await vmFs.exec(`ls ${JSON.stringify(mount.vmRoot)} | tr '\\n' ' '`);
     check('跳过 node_modules', ls && !ls.stdout.includes('node_modules'), ls && ls.stdout.trim());
     check('顶层文件已同步', ls && ls.stdout.includes('root.txt') && ls.stdout.includes('src'), ls && ls.stdout.trim());
+
+    // ---------- 5) 重复挂载幂等（不覆盖 VM 内改动）----------
+    await vmFs.writeBuffer(`${mount.vmRoot}/root.txt`, Buffer.from('vm-edited'));
+    const again = await vmService.mountExternalDir(projDir);
+    check('重复挂载复用映射（reused=true）', again && again.ok && again.reused === true, JSON.stringify(again));
+    const kept = await vmFs.readBuffer(`${mount.vmRoot}/root.txt`);
+    check('重复挂载未覆盖 VM 内改动', kept.toString('utf8') === 'vm-edited', kept.toString('utf8'));
+
+    // ---------- 6) Monaco 保存路径：writeBuffer 按映射写入 VM ----------
+    const hostSave = path.join(projDir, 'src', 'saved.js');
+    const wv = await vmFs.writeBuffer(hostSave, Buffer.from('const saved = 1;\n'));
+    check('writeBuffer 映射到 /workspace/_external', wv === `${mount.vmRoot}/src/saved.js`, String(wv));
+
+    // ---------- 7) pullExternalDir：VM 新改动拉回宿主镜像 ----------
+    await vmFs.writeBuffer(path.join(projDir, 'src', 'from-vm.txt'), Buffer.from('created-in-vm'));
+    const pull = await vmService.pullExternalDir(projDir);
+    check('pullExternalDir 成功', pull && pull.ok, JSON.stringify(pull));
+    const pulledHost = path.join(projDir, 'src', 'from-vm.txt');
+    check('VM 新建文件已拉回宿主', fs.existsSync(pulledHost) && fs.readFileSync(pulledHost, 'utf8') === 'created-in-vm');
+    const pullFile = await vmService.pullExternalDir(path.join(projDir, 'src', 'saved.js'));
+    check('pullExternalDir 支持传入文件路径', pullFile && pullFile.ok, JSON.stringify(pullFile));
+
+    // ---------- 8) ESLint 端到端：宿主镜像 lint + 结果路径回映 VM ----------
+    const ESLintService = require(path.join(APP_ROOT, 'src', 'main', 'eslint-service.js'));
+    fs.writeFileSync(path.join(projDir, 'eslint.config.mjs'), "export default [{ rules: { 'no-unused-vars': 'error' } }];\n");
+    fs.writeFileSync(path.join(projDir, 'src', 'lint-me.js'), 'const unused = 1;\n');
+    // 确保这些文件在 VM 内也存在（模拟编辑器保存后两端一致）
+    await vmFs.ensureVmFile(path.join(projDir, 'eslint.config.mjs'));
+    await vmFs.ensureVmFile(path.join(projDir, 'src', 'lint-me.js'));
+    await vmService.pullExternalDir(projDir);
+    check('eslint 服务导出 lintSingleFile（修掉不存在的 lintFile）', typeof ESLintService.lintSingleFile === 'function');
+    const lintRes = await ESLintService.lintSingleFile(path.join(projDir, 'src', 'lint-me.js'));
+    check('ESLint lintSingleFile 可用', lintRes && lintRes.ok === true, JSON.stringify(lintRes).slice(0, 160));
+    check('ESLint 检出 no-unused-vars', Array.isArray(lintRes.results) && lintRes.results.some(r => r.ruleId === 'no-unused-vars'),
+      JSON.stringify((lintRes.results || []).slice(0, 2)));
+    const remap = vmService.toVmPath(path.join(projDir, 'src', 'lint-me.js'));
+    check('lint 结果路径可回映为 VM 路径', remap === `${mount.vmRoot}/src/lint-me.js`, String(remap));
 
     fs.rmSync(projDir, { recursive: true, force: true });
   } catch (e) {
