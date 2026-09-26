@@ -3750,18 +3750,22 @@ function runVmSandboxTests() {
   const _os = require('os');
 
   testAsync('VM 路径映射：工作区/POSIX/外部挂载/未挂载目录', async () => {
+    // 平台无关夹具：Windows 用盘符，POSIX 用 /tmp（避免把 C:\ 当字面目录名导致断言不可移植）
+    const isWin = process.platform === 'win32';
+    const WS_ROOT = isWin ? 'C:\\work' : '/tmp/cibyp-ws';
+    const PROJ_ROOT = isWin ? 'D:\\proj' : '/tmp/cibyp-proj';
     const vmService = {
       runtime: { vm: { workspaceMount: '/workspace' } },
-      workspaceRoot: 'C:\\work',
-      _externMounts: new Map([['D:\\proj', '/workspace/_external/proj']]),
+      workspaceRoot: WS_ROOT,
+      _externMounts: new Map([[PROJ_ROOT, '/workspace/_external/proj']]),
     };
     const vmFs = new VmFs({ vmService });
     assert.strictEqual(vmFs.mapVmTarget('/workspace/a.txt').vm, '/workspace/a.txt', 'POSIX 路径原样');
-    assert.strictEqual(vmFs.mapVmTarget('C:\\work\\sub\\a.txt').vm, '/workspace/sub/a.txt', '工作区内映射');
-    assert.strictEqual(vmFs.mapVmTarget('D:\\proj\\src\\a.js').vm, '/workspace/_external/proj/src/a.js', '外部挂载映射');
-    assert.strictEqual(vmFs.mapVmTarget('C:\\work').vm, '/workspace', '工作区根');
-    assert.strictEqual(vmFs.mapVmTarget('C:\\work', { forWrite: true }).ok, false, '目录不能被当文件写');
-    assert.strictEqual(vmFs.mapVmTarget('E:\\other\\a.js').ok, false, '未挂载目录应拒绝（避免误写 /workspace）');
+    assert.strictEqual(vmFs.mapVmTarget(_path.join(WS_ROOT, 'sub', 'a.txt')).vm, '/workspace/sub/a.txt', '工作区内映射');
+    assert.strictEqual(vmFs.mapVmTarget(_path.join(PROJ_ROOT, 'src', 'a.js')).vm, '/workspace/_external/proj/src/a.js', '外部挂载映射');
+    assert.strictEqual(vmFs.mapVmTarget(WS_ROOT).vm, '/workspace', '工作区根');
+    assert.strictEqual(vmFs.mapVmTarget(WS_ROOT, { forWrite: true }).ok, false, '目录不能被当文件写');
+    assert.strictEqual(vmFs.mapVmTarget(isWin ? 'E:\\other\\a.js' : '/tmp/cibyp-other/a.js').ok, false, '未挂载目录应拒绝（避免误写 /workspace）');
   });
 
   testAsync('外部挂载：重复挂载幂等（不重复 push 覆盖 VM 改动）', async () => {
@@ -4034,9 +4038,10 @@ function runVmSandboxTests() {
     assert.deepStrictEqual(batches[1], ['b', 'c']);
     const byCount = WorkspaceSync.batches(['a', 'b', 'c'], sizes, 1024 ** 3, 2);
     assert.strictEqual(byCount.length, 2);
-    const sync = new WorkspaceSync({ hostRoot: 'D:/ws', vmMount: '/workspace' });
-    assert.strictEqual(sync.toVmPath('D:/ws/sub/a.js'), '/workspace/sub/a.js');
-    assert.strictEqual(sync.toHostPath('/workspace/sub/a.js').replace(/\\/g, '/'), 'D:/ws/sub/a.js');
+    const hostRoot = process.platform === 'win32' ? 'D:/ws' : '/tmp/cibyp-ws-test';
+    const sync = new WorkspaceSync({ hostRoot, vmMount: '/workspace' });
+    assert.strictEqual(sync.toVmPath(hostRoot + '/sub/a.js'), '/workspace/sub/a.js');
+    assert.strictEqual(sync.toHostPath('/workspace/sub/a.js').replace(/\\/g, '/'), hostRoot + '/sub/a.js');
   });
 }
 
@@ -5121,8 +5126,8 @@ async function runPlaywrightDataModeTests() {
     const h = createPwHarness(tmp);
     const chrome = h.exported._defaultUserDataDir('chrome');
     const edge = h.exported._defaultUserDataDir('edge');
-    assert.ok(chrome && chrome.includes('Chrome'), 'chrome 目录应含 Chrome: ' + chrome);
-    assert.ok(edge && (edge.includes('Edge') || edge.includes('edge')), 'edge 目录应含 Edge: ' + edge);
+    assert.ok(chrome && (chrome.includes('Chrome') || chrome.includes('chrome')), 'chrome 目录应含 Chrome/chrome: ' + chrome);
+    assert.ok(edge && (edge.includes('Edge') || edge.includes('edge')), 'edge 目录应含 Edge/edge: ' + edge);
     assert.notStrictEqual(chrome, edge, '两者不得相同');
     fs.rmSync(tmp, { recursive: true, force: true });
   });
