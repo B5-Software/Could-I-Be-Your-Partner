@@ -41,7 +41,8 @@ class WebControlService {
     // DOM Mirror callbacks
     this.onMirrorInit = null;  // () => void — WS client connected, request renderer to push mirror snapshot
     this.onUiEvent = null;     // (data) => void — WebUI UI event forwarded to renderer
-    this.onFileUploaded = null; // (filePath, fileName, isImage) => void — WebUI uploaded file, notify renderer to refresh attachments
+    this.onFileUploaded = null;
+    this.vmUploader = null;   // async (hostPath, name) => { ok, vmPath }｜运行位置=虚拟机时把上传文件送进 VM // (filePath, fileName, isImage) => void — WebUI uploaded file, notify renderer to refresh attachments
     this.onToggleOsk = null;   // () => void — WebUI 切换屏幕软键盘
     this.resolveLocalImage = null; // (path) => string|null — 本地图片路径校验（WebUI 显示 file:// 图片用）
 
@@ -314,7 +315,7 @@ class WebControlService {
     app.post('/api/upload-attachment', async (req, res) => {
       try {
         const { name, type, data } = req.body;
-        const result = this._saveUpload(name, type, data);
+        const result = await this._saveUpload(name, type, data);
         if (result.ok) res.json(result);
         else res.json({ ok: false, error: result.error });
       } catch (e) {
@@ -611,7 +612,7 @@ class WebControlService {
   }
 
   // 保存上传文件到工作目录（HTTP 与 WS 上传共用）
-  _saveUpload(name, type, data) {
+  async _saveUpload(name, type, data) {
     if (!name || !data) return { ok: false, error: '缺少文件信息' };
     const base64Data = data.replace(/^data:[^;]+;base64,/, '');
     const buf = Buffer.from(base64Data, 'base64');
@@ -623,10 +624,18 @@ class WebControlService {
     const savePath = path.join(saveDir, safeName);
     fs.writeFileSync(savePath, buf);
     console.log('[WebControl] File uploaded to workspace:', savePath, 'size:', buf.length);
+    
+    // 运行位置=虚拟机：把上传文件也送进虚拟机（附件路径对 Agent 才有意义）
+    if (typeof this.vmUploader === 'function') {
+      try {
+        const up = await this.vmUploader(savePath, name);
+        if (up && up.ok) return { ok: true, path: up.vmPath, name, type, hostPath: savePath };
+      } catch (e) { console.warn('[WebControl] VM 上传失败，保留宿主路径:', e.message); }
+    }
     return { ok: true, path: savePath, name, type };
   }
 
-  _handleWsMessage(ws, msg) {
+  async _handleWsMessage(ws, msg) {
     // 未认证连接只允许 auth 消息
     if (!ws._authenticated && msg.type !== 'auth') return;
     switch (msg.type) {
@@ -720,7 +729,7 @@ class WebControlService {
       // 远程客户端上传附件（跨源无法用 HTTP + cookie，故走 WS）
       case 'uploadAttachment':
         try {
-          const r = this._saveUpload(msg.name, msg.type, msg.data);
+          const r = await this._saveUpload(msg.name, msg.type, msg.data);
           ws.send(JSON.stringify({ type: 'uploadResult', ...r }));
           // 通知渲染器有文件从 WebUI 上传，刷新附件列表
           if (r.ok && typeof this.onFileUploaded === 'function') {

@@ -3022,7 +3022,7 @@ registerTerminalIpc({
 });
 
 // ---- FFmpeg / FFprobe 媒体工具集 ----
-registerFfmpegIpc({ ipcMain });
+registerFfmpegIpc({ ipcMain, getVmService: () => vmService });
 
 // ---- IPC: Clipboard ----
 ipcMain.handle('clipboard:read', () => {
@@ -3065,6 +3065,16 @@ ipcMain.handle('eslint:lint', async (_, workspacePath, opts) => {
 
 // 检测单个文件（编辑器实时显示）
 ipcMain.handle('eslint:lintFile', async (_, filePath) => {
+  // 运行位置=虚拟机：先确保宿主镜像是 VM 的最新状态，再对镜像 lint，并把结果路径回映为 VM 路径
+  try {
+    if ((settings.runtime || {}).location === 'vm') {
+      await vmService.syncWorkspace({ direction: 'pull', reason: 'eslint' }).catch(() => {});
+      const hostPath = vmService.toHostPath(filePath) || filePath;
+      const r = await ESLintService.lintFile(hostPath);
+      return remapVmToolResult(r, hostPath, filePath);
+    }
+  } catch (e) { return { ok: false, error: e.message }; }
+  return ESLintService.lintFile(filePath);
   return await ESLintService.lintSingleFile(filePath);
 });
 
@@ -3280,6 +3290,20 @@ function runJSConfinedWin32(runnerPath, code, cwd, sandboxMode, workspacePath) {
       }
     });
   });
+}
+
+/** eslint 等宿主库结果里的宿主路径 → VM 路径回映（VM 模式） */
+
+function remapVmToolResult(result, hostPath, vmPath) {
+
+  if (!result || typeof result !== 'object') return result;
+
+  const fix = (v) => (typeof v === 'string' && hostPath && v.startsWith(hostPath)) ? vmPath + v.slice(hostPath.length) : v;
+
+  const walk = (v) => Array.isArray(v) ? v.map(walk) : (v && typeof v === 'object' ? Object.fromEntries(Object.entries(v).map(([k, x]) => [k, walk(x)])) : fix(v));
+
+  return walk(result);
+
 }
 
 // ---- 运行位置=虚拟机：脚本类工具路由到 VM 内执行 ----
@@ -5254,6 +5278,16 @@ function _loadHistoryIndex(indexFile) {
 }
 
 function _saveHistoryIndex(indexFile, entries) {
+  // 统一记录运行位置：跨模式继续会话时做同步护栏（见 code:loadHistory）
+  try {
+    const loc = (settings.runtime && settings.runtime.location) === 'vm' ? 'vm' : 'host';
+    if (entries && typeof entries === 'object') {
+      for (const k of Object.keys(entries)) {
+        if (entries[k] && typeof entries[k] === 'object') entries[k].runtimeLocation = loc;
+      }
+    }
+  } catch { /* ignore */ }
+
   try {
     fs.mkdirSync(path.dirname(indexFile), { recursive: true });
     fs.writeFileSync(indexFile, JSON.stringify({ version: HISTORY_INDEX_VERSION, entries }), 'utf8');
@@ -8921,6 +8955,28 @@ app.whenReady().then(async () => {
     }
   };
   // WebUI 上传文件后通知渲染器刷新附件列表
+  // 运行位置=虚拟机：WebUI 上传的文件送进 VM（返回 VM 路径作为附件路径）
+
+  try {
+
+    webControlService.vmUploader = async (hostPath, name) => {
+
+      if ((settings.runtime || {}).location !== 'vm' || !vmService.instance || vmService.instance.state !== 'ready') return { ok: false };
+
+      const { VmFs } = require('./vm/vm-fs');
+
+      const vmFs = new VmFs({ vmService });
+
+      const dir = /.(png|jpg|jpeg|gif|bmp|webp|svg)$/i.test(name || '') ? '/workspace/_images' : '/workspace/_uploads';
+
+      const vmPath = await vmFs.pushFromHost(hostPath, dir + '/' + Date.now() + '_' + String(name || 'upload.bin').replace(/[\\/]/g, '_'));
+
+      return { ok: true, vmPath };
+
+    };
+
+  } catch (e) { console.warn('[vm] WebUI 上传 hook 注入失败:', e.message); }
+
   webControlService.onFileUploaded = (filePath, fileName, isImage) => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('webControl:fileUploaded', { path: filePath, name: fileName, isImage });
@@ -9065,6 +9121,27 @@ function logVmRoutingSelfCheck() {
   }
 }
 setTimeout(logVmRoutingSelfCheck, 3000);
+
+// VM 模式：ffmpeg:available 改为报虚拟机内可用性（宿主实现作为回退）
+try {
+  const __origFfmpegAvail = __ipcHandlers.get('ffmpeg:available');
+  if (__origFfmpegAvail) {
+    ipcMain.removeHandler('ffmpeg:available');
+    __originalIpcHandle('ffmpeg:available', async (e, ...args) => {
+      try {
+        const inVm = (settings.runtime || {}).location === 'vm' && vmService.instance && vmService.instance.state === 'ready';
+        if (inVm) {
+          const r = await vmService.instance.exec('command -v ffmpeg >/dev/null && (ffmpeg -version | head -1) || echo absent', { timeoutMs: 15000 });
+          const out = (r.stdout || '').trim();
+          const absent = /absent/.test(out);
+          return { ok: !absent, location: 'vm', version: out, hint: absent ? '虚拟机内没有 ffmpeg：可在 VM 内执行 sudo apt-get install -y ffmpeg（或改用 full 变体镜像）' : '' };
+        }
+      } catch { /* 回退宿主 */ }
+      return __origFfmpegAvail(e, ...args);
+    });
+    console.log('[vm] ffmpeg:available 已接入 VM 探测');
+  }
+} catch (e) { console.warn('[vm] ffmpeg:available 接入失败:', e.message); }
 
 app.on('before-quit', async (event) => {
   isQuitting = true; // 标记真正退出，避免 close 事件再次拦截
