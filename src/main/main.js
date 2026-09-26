@@ -5905,7 +5905,21 @@ ipcMain.handle('workspace:create', (_, options = {}) => {
 
 ipcMain.handle('workspace:getBase', () => workspacesBaseDir);
 
-ipcMain.handle('workspace:openInExplorer', (_, dirPath) => {
+ipcMain.handle('workspace:openInExplorer', async (_, dirPath) => {
+  try {
+
+    const isVm = (settings.runtime && settings.runtime.location) === 'vm';
+
+    if (isVm) {
+
+      const r = await vmService.syncWorkspace({ direction: 'pull', reason: 'open-workspace' }).catch((e) => ({ ok: false, error: e.message }));
+
+      if (!r || !r.ok) console.warn('[vm] 打开工作目录前同步失败:', (r && r.error) || 'unknown');
+
+    }
+
+  } catch { /* ignore */ }
+
   shell.openPath(dirPath || workspacesBaseDir);
   return { ok: true };
 });
@@ -6024,12 +6038,23 @@ ipcMain.handle('code:listHistory', (_, workspacePath) => {
   } catch (e) { return { ok: false, error: e.message }; }
 });
 
-ipcMain.handle('code:loadHistory', (_, workspacePath, id) => {
+ipcMain.handle('code:loadHistory', async (_, workspacePath, id) => {
   const histDir = getCodeHistoryDir(workspacePath);
   if (!histDir) return { ok: false, error: 'no workspace' };
   try {
     flushPendingHistorySaves();
     const data = _rehydrateHistoryImages(JSON.parse(fs.readFileSync(path.join(histDir, id + '.json'), 'utf-8')));
+    // 运行位置护栏：会话属于另一种模式时，必须先完成一次成功的双向同步，否则拒绝加载（避免工作目录错乱）
+    const cur = (settings.runtime && settings.runtime.location) === 'vm' ? 'vm' : 'host';
+    const own = data && data.__runtimeLocation;
+    if (own && own !== cur) {
+      const sync = await vmService.syncWorkspace({ direction: 'both', reason: 'cross-mode-history' }).catch((e) => ({ ok: false, error: e.message }));
+      if (!sync || !sync.ok) {
+        return { ok: false, locationMismatch: true, ownLocation: own, error: `该会话在「${own === 'vm' ? '虚拟机' : '本机'}」模式下创建，切换前必须完成工作区同步（失败：${(sync && sync.error) || '未知原因'}）；请先在设置 → 运行位置 点「立即同步」后重试` };
+      }
+      data.__runtimeLocation = cur;
+      try { fs.writeFileSync(path.join(histDir, id + '.json'), JSON.stringify(data)); } catch { /* ignore */ }
+    }
     return { ok: true, data };
   } catch (e) { return { ok: false, error: e.message }; }
 });
@@ -6038,7 +6063,11 @@ ipcMain.handle('code:saveHistory', (_, workspacePath, id, data) => {
   const histDir = getCodeHistoryDir(workspacePath);
   if (!histDir) return { ok: false, error: 'no workspace' };
   try {
-    if (data && typeof data === 'object') _externalizeHistoryImages(data);
+    if (data && typeof data === 'object') {
+      // 记录创建时的运行位置（主机/虚拟机），供跨模式继续会话时做同步护栏
+      data.__runtimeLocation = (settings.runtime && settings.runtime.location) === 'vm' ? 'vm' : 'host';
+      _externalizeHistoryImages(data);
+    }
     queueHistorySave('code:' + id, path.join(histDir, id + '.json'), data);
     if (data && typeof data === 'object') {
       _putHistoryIndexEntry(_historyIndexFile('code', histDir), id, _codeHistoryMeta(id, data, path.join(histDir, id + '.json')));
@@ -7677,6 +7706,7 @@ const mcpService = registerMcpIpc({
 
 // ---- Playwright 浏览器控制（实现已拆分到 ./browser-service.js）----
 const pwService = registerPlaywrightIpc({
+  getVmService: () => vmService,   // 运行位置=虚拟机时，Playwright 通过 CDP 接管 VM 内 Chromium
   ipcMain,
   getSettings: () => settings,
   getMainWindow: () => mainWindow,

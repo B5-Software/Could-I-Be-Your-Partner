@@ -11,11 +11,13 @@
 
 'use strict';
 
+let _getVmService = null;
 const fs = require('fs');
 const path = require('path');
 const { BrowserWindow, dialog, screen } = require('electron');
 
-module.exports = function registerPlaywrightIpc({ ipcMain, getSettings, getMainWindow, getImagesDir, getUserDataPath }) {
+module.exports = function registerPlaywrightIpc({ getVmService, ipcMain, getSettings, getMainWindow, getImagesDir, getUserDataPath }) {
+  _getVmService = typeof _getVmService === 'function' ? getVmService : null;
 let _pwBrowser = null; // shared browser instance (chromium.launch 或 launchPersistentContext)
 let _pwDataMode = 'isolated'; // 当前浏览器实例的数据模式（isolated/persistent/profile-copy）
 const _pwWorkspaces = new Map(); // workspacePath -> { context, page }
@@ -326,7 +328,21 @@ async function _launchPwBrowser(overrideSettings = null) {
 
   if (pwSettings.mode === 'chromium') {
     try {
-      _pwBrowser = await chromium.launch({ headless, args: extraArgs, ...(pwProxy ? { proxy: pwProxy } : {}) });
+      // 运行位置=虚拟机：在 VM 内启动 Chromium 并通过 CDP 接管（浏览器沙盒）
+  if (typeof getVmService === 'function') {
+    const vmSvc = _getVmService();
+    const inVm = vmSvc && (vmSvc.runtime || {}).location === 'vm' && !vmSvc.emergencyHost;
+    if (inVm) {
+      const cr = await vmSvc.graphicsChromium({ url: 'about:blank' });
+      if (!cr || !cr.ok) throw new Error('虚拟机内 Chromium 启动失败: ' + ((cr && cr.error) || '未知错误'));
+      _pwBrowser = await chromium.connectOverCDP(cr.cdpUrl);
+      console.log('[vm] Playwright 已接管虚拟机内 Chromium:', cr.cdpUrl);
+      _onPwBrowserLaunched(!headless);
+      _attachPwDisconnectListener(_pwBrowser);
+      return _pwBrowser;
+    }
+  }
+  _pwBrowser = await chromium.launch({ headless, args: extraArgs, ...(pwProxy ? { proxy: pwProxy } : {}) });
       console.log('Playwright launched with built-in Chromium, headless:', headless);
       _onPwBrowserLaunched(!headless);
       _attachPwDisconnectListener(_pwBrowser);
