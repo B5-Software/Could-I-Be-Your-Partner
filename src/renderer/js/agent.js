@@ -1612,6 +1612,22 @@ ${affectionDesc}
     // Refresh system prompt with current time and tarot card
     this.contextManager.setSystemPrompt(this.getSystemPrompt());
 
+    // VM 模式：把附件路径翻译成 VM 内路径（Agent 的读写/媒体工具都作用于 VM）
+    try {
+      if (typeof window.api.runtimeToVmPath === 'function') {
+        for (const a of attachments) {
+          if (a.path) {
+            const r = await window.api.runtimeToVmPath(a.path);
+            if (r && r.ok && r.path) { a.hostPath = a.path; a.path = r.path; }
+          }
+          if (a.convertedPath) {
+            const r2 = await window.api.runtimeToVmPath(a.convertedPath);
+            if (r2 && r2.ok && r2.path) a.convertedPath = r2.path;
+          }
+        }
+      }
+    } catch { /* ignore */ }
+
     // Build message content with attachments
     let fullMessage = userMessage;
     if (attachments.length > 0) {

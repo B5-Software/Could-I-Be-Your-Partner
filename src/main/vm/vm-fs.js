@@ -65,6 +65,52 @@ class VmFs {
     try { return this.vmService.toHostPath(p); } catch { return null; }
   }
 
+  /**
+   * 确保文件在 VM 内可用，返回 VM 路径。
+   * - 已是 VM 路径（/ 开头）→ 原样返回（幂等）
+   * - 宿主路径落在工作区/外部挂载内 → 映射；VM 内没有则按映射路径上传
+   * - 宿主其它位置（如下载目录的附件）→ 上传到 /workspace/_uploads/<ts>_<name>
+   */
+  async ensureVmFile(hostOrVmPath) {
+    const s = String(hostOrVmPath || '');
+    if (!s) return s;
+    if (s.startsWith('/')) return s;
+    // 1) 目标 VM 路径：工作区根 → /workspace，外部挂载 → /workspace/_external/<name>
+    let target = null;
+    try {
+      const roots = [];
+      const wsRoot = this.vmService.workspaceRoot;
+      const mount = (this.vmService.runtime && this.vmService.runtime.vm.workspaceMount) || '/workspace';
+      if (wsRoot) roots.push([path.resolve(wsRoot), mount]);
+      if (this.vmService._externMounts) {
+        for (const [h, v] of this.vmService._externMounts) roots.push([path.resolve(h), v]);
+      }
+      const p = path.resolve(s);
+      for (const [h, v] of roots) {
+        const rel = path.relative(h, p);
+        if (rel === '') { target = v; break; }
+        if (rel && !rel.startsWith('..') && !path.isAbsolute(rel)) {
+          target = v + '/' + rel.split(path.sep).join('/');
+          break;
+        }
+      }
+    } catch { /* ignore */ }
+    const isKnown = !!target;
+    if (isKnown) {
+      try { if (await this.exists(target)) return target; } catch { /* ignore */ }
+    } else {
+      const mount = (this.vmService.runtime && this.vmService.runtime.vm.workspaceMount) || '/workspace';
+      target = `${mount}/_uploads/${Date.now()}_${path.basename(s)}`;
+    }
+    // 2) 宿主文件 → 按目标路径推入 VM
+    try {
+      if (fs.existsSync(s) && fs.statSync(s).isFile()) {
+        return await this.pushFromHost(s, target);
+      }
+    } catch { /* ignore */ }
+    return isKnown ? target : s;
+  }
+
   async sftp() { return this.instance.sftp(); }
 
   async exec(cmd, timeoutMs = 60000) {
@@ -76,7 +122,7 @@ class VmFs {
 
   async readBuffer(filePath) {
     const sftp = await this.sftp();
-    return sftp.readFile(this.toVm(filePath));
+    return sftp.readFile(await this.ensureVmFile(filePath));
   }
 
   async writeBuffer(filePath, buf) {
@@ -239,7 +285,8 @@ class VmFs {
 
   async moveFile(src, dest) {
     try {
-      const r = await this.exec(`mkdir -p ${shellQuote(path.posix.dirname(this.toVm(dest)))} && mv -f ${shellQuote(this.toVm(src))} ${shellQuote(this.toVm(dest))}`);
+      const srcVm = await this.ensureVmFile(src);
+      const r = await this.exec(`mkdir -p ${shellQuote(path.posix.dirname(this.toVm(dest)))} && mv -f ${shellQuote(srcVm)} ${shellQuote(this.toVm(dest))}`);
       if (!r.ok) throw new Error(r.stderr || 'mv 失败');
       return { ok: true };
     } catch (e) { return { ok: false, error: '虚拟机移动失败: ' + e.message }; }
@@ -247,7 +294,8 @@ class VmFs {
 
   async copyFile(src, dest) {
     try {
-      const r = await this.exec(`mkdir -p ${shellQuote(path.posix.dirname(this.toVm(dest)))} && cp -f ${shellQuote(this.toVm(src))} ${shellQuote(this.toVm(dest))}`);
+      const srcVm = await this.ensureVmFile(src);
+      const r = await this.exec(`mkdir -p ${shellQuote(path.posix.dirname(this.toVm(dest)))} && cp -f ${shellQuote(srcVm)} ${shellQuote(this.toVm(dest))}`);
       if (!r.ok) throw new Error(r.stderr || 'cp 失败');
       return { ok: true };
     } catch (e) { return { ok: false, error: '虚拟机复制失败: ' + e.message }; }
@@ -411,7 +459,7 @@ class VmFs {
 
   /** 把 VM 内文件拉到宿主临时文件（供 docx/ocr/ffmpeg 等宿主库使用） */
   async pullToTemp(vmOrHostPath, suffix = '') {
-    const vm = this.toVm(vmOrHostPath);
+    const vm = await this.ensureVmFile(vmOrHostPath);
     const base = path.basename(vm);
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cibyp-vm-stage-'));
     const target = path.join(dir, suffix ? base.replace(/(\.[^.]*)?$/, suffix) : base);

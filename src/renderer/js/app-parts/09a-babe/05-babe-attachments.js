@@ -40,7 +40,14 @@
       const safeName = (att.name || 'attachment').replace(/[\\/:*?"<>|]/g, '_');
       const destPath = `${workspacePath}/${safeName}`;
       const copyResult = await window.api.copyFile(att.path, destPath);
-      if (copyResult.ok) { att.originalPath = att.path; att.path = destPath; }
+      if (copyResult.ok) {
+        att.originalPath = att.path;
+        att.hostPath = destPath;
+        // 运行位置=虚拟机：path 翻译为 VM 内路径（未就绪/本机模式则原样）
+        att.path = (typeof window.api?.runtimeToVmPath === 'function')
+          ? (await window.api.runtimeToVmPath(destPath).then(r => (r && r.ok && r.path) ? r.path : destPath).catch(() => destPath))
+          : destPath;
+      }
     }
   }
 

@@ -112,9 +112,53 @@ class VmService extends EventEmitter {
     return sync;
   }
 
+  /**
+   * 把宿主任意目录挂载进 VM：<dir> → /workspace/_external/<name>。
+   * 用于 Code 模式打开的项目目录：之后所有 fs/终端/工具都按该映射作用于 VM。
+   * 跳过 node_modules/.git/dist 等，单文件默认上限 20MB。
+   */
+  async mountExternalDir(hostDir, { maxFileMB = 20 } = {}) {
+    const hostRoot = path.resolve(String(hostDir || ''));
+    if (!hostRoot || !fs.existsSync(hostRoot)) return { ok: false, error: '目录不存在: ' + hostRoot };
+    const name = path.basename(hostRoot).replace(/[^\w.-]+/g, '_') || 'ws';
+    const vmRoot = `/workspace/_external/${name}`;
+    this._externMounts = this._externMounts || new Map();
+    this._externMounts.set(hostRoot, vmRoot);
+    const { VmFs } = require('./vm-fs');
+    const vmFs = new VmFs({ vmService: this });
+    const skip = new Set(['node_modules', '.git', 'dist', 'out', '.cache', '.venv', '__pycache__', '.next']);
+    const maxBytes = Math.max(1, Number(maxFileMB) || 20) * 1024 * 1024;
+    const push = async (from, to) => {
+      await vmFs.exec(`mkdir -p ${JSON.stringify(to)}`, 20000);
+      for (const e of fs.readdirSync(from, { withFileTypes: true })) {
+        if (skip.has(e.name)) continue;
+        const src = path.join(from, e.name);
+        const dst = to + '/' + e.name;
+        if (e.isDirectory()) { await push(src, dst); continue; }
+        try { if (fs.statSync(src).size > maxBytes) continue; } catch { continue; }
+        await vmFs.pushFromHost(src, dst).catch(() => {});
+      }
+    };
+    await push(hostRoot, vmRoot);
+    console.log('[vm] 已挂载外部目录:', hostRoot, '→', vmRoot);
+    return { ok: true, hostRoot, vmRoot };
+  }
+
   /** 宿主路径 → VM 路径（未同步/未就绪时退化为 /workspace） */
   toVmPath(hostPath) {
     try {
+      const raw = String(hostPath || '');
+      if (!raw) return raw;
+      if (raw.startsWith('/')) return raw; // 已是 VM 内 POSIX 路径（幂等）
+      if (this._externMounts && this._externMounts.size) {
+        const p = path.resolve(String(hostPath || ''));
+        for (const [hostRoot, vmRoot] of this._externMounts) {
+          if (p === hostRoot || p.startsWith(hostRoot + path.sep)) {
+            const rel = path.relative(hostRoot, p).split(path.sep).join('/');
+            return rel ? `${vmRoot}/${rel}` : vmRoot;
+          }
+        }
+      }
       const sync = this._workspaceSync();
       return sync ? sync.toVmPath(hostPath) : '/workspace';
     } catch { return '/workspace'; }
@@ -123,6 +167,15 @@ class VmService extends EventEmitter {
   /** VM 路径 → 宿主路径 */
   toHostPath(vmPath) {
     try {
+      if (this._externMounts && this._externMounts.size) {
+        const p = String(vmPath || '');
+        for (const [hostRoot, vmRoot] of this._externMounts) {
+          if (p === vmRoot || p.startsWith(vmRoot + '/')) {
+            const rel = p.slice(vmRoot.length).replace(/^\/+/, '');
+            return rel ? path.join(hostRoot, ...rel.split('/')) : hostRoot;
+          }
+        }
+      }
       const sync = this._workspaceSync();
       return sync ? sync.toHostPath(vmPath) : null;
     } catch { return null; }

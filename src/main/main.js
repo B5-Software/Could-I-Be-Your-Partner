@@ -3812,6 +3812,23 @@ ipcMain.handle('vm:mirrors', () => {
     };
   } catch (e) { return { ok: false, error: e.message }; }
 });
+// 运行位置=虚拟机时把宿主路径翻译为 VM 内路径（渲染层拼提示词/附件路径用）
+ipcMain.handle('runtime:toVmPath', async (_, p) => {
+  try {
+    const isVm = (settings.runtime || {}).location === 'vm';
+    if (!isVm) return { ok: true, path: p, location: 'host' };
+    const s = String(p || '');
+    if (s.startsWith('/')) return { ok: true, path: s, location: 'vm' }; // 已是 VM 路径（幂等）
+    if (vmService.instance && vmService.instance.state === 'ready') {
+      try {
+        const { VmFs } = require('./vm/vm-fs');
+        const vm = await new VmFs({ vmService }).ensureVmFile(s);
+        if (vm && vm.startsWith('/')) return { ok: true, path: vm, location: 'vm' };
+      } catch { /* 退化到纯映射 */ }
+    }
+    return { ok: true, path: vmService.toVmPath(s), location: 'vm' };
+  } catch (e) { return { ok: false, error: e.message }; }
+});
 ipcMain.handle('vm:openExternal', async (_, url) => {  try { await shell.openExternal(String(url)); return { ok: true }; } catch (e) { return { ok: false, error: e.message }; }
 });
 ipcMain.handle('vm:openDesktop', () => {
@@ -6060,15 +6077,27 @@ ipcMain.handle('code:openWorkspace', async () => {
   });
   if (result.canceled || !result.filePaths.length) return { ok: false, canceled: true };
   const wsPath = result.filePaths[0];
-  // Save as last opened workspace
   settings.codeMode = settings.codeMode || {};
   settings.codeMode.lastWorkspace = wsPath;
   persistSettings();
+  // VM 模式：把项目目录挂载进虚拟机（/workspace/_external/<name>），之后文件/终端/工具都作用于 VM
+  try {
+    if ((settings.runtime || {}).location === 'vm' && vmService.instance && vmService.instance.state === 'ready') {
+      const mount = await vmService.mountExternalDir(wsPath);
+      if (mount && mount.ok) return { ok: true, path: mount.hostRoot, vmPath: mount.vmRoot, mounted: true };
+    }
+  } catch (e) { console.warn('[vm] Code 工作区挂载失败:', e.message); }
   return { ok: true, path: wsPath };
 });
 
-ipcMain.handle('code:getLastWorkspace', () => {
+ipcMain.handle('code:getLastWorkspace', async () => {
   return settings.codeMode?.lastWorkspace || null;
+  // VM 模式：启动恢复 Code 工作区时也挂载进 VM（幂等，目录已存在则直接复用）
+  try {
+    if (settings.codeMode && settings.codeMode.lastWorkspace && (settings.runtime || {}).location === 'vm' && vmService.instance && vmService.instance.state === 'ready') {
+      await vmService.mountExternalDir(settings.codeMode.lastWorkspace).catch(() => {});
+    }
+  } catch { /* ignore */ }
 });
 
 ipcMain.handle('code:setLastWorkspace', (_, wsPath) => {

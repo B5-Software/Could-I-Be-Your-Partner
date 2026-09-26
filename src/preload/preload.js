@@ -35,6 +35,8 @@ function onChannel(channel, cb) {
 }
 
 contextBridge.exposeInMainWorld('api', {
+  // 运行位置=虚拟机时把宿主路径翻译为 VM 内路径（顶层别名，渲染层附件提示词用）
+  runtimeToVmPath: (p) => ipcRenderer.invoke('runtime:toVmPath', p),
   // Settings
   getSettings: () => ipcRenderer.invoke('settings:get'),
   setSettings: (s) => ipcRenderer.invoke('settings:set', s),
@@ -376,6 +378,8 @@ contextBridge.exposeInMainWorld('api', {
     setLocation: (location) => ipcRenderer.invoke('runtime:setLocation', location),
     setWorkspaceMode: (mode) => ipcRenderer.invoke('runtime:setWorkspaceMode', mode),
     relaunch: () => ipcRenderer.invoke('runtime:relaunch'),
+    toVmPath: (p) => ipcRenderer.invoke('runtime:toVmPath', p),
+    runtimeToVmPath: (p) => ipcRenderer.invoke('runtime:toVmPath', p),
     onChanged: (cb) => {
       const listener = (_, data) => cb(data);
       ipcRenderer.on('runtime:changed', listener);

@@ -39,7 +39,11 @@
       const copyResult = await window.api.copyFile(att.path, destPath);
       if (copyResult.ok) {
         att.originalPath = att.path;
-        att.path = destPath;
+        att.hostPath = destPath;
+        // 运行位置=虚拟机：path 翻译为 VM 内路径（未就绪/本机模式则原样）
+        att.path = (typeof window.api?.runtimeToVmPath === 'function')
+          ? (await window.api.runtimeToVmPath(destPath).then(r => (r && r.ok && r.path) ? r.path : destPath).catch(() => destPath))
+          : destPath;
       }
     }
   }
@@ -81,7 +85,11 @@
         for (const p of result.paths) {
           const name = p.split(/[\\/]/).pop();
           const isImage = /\.(png|jpg|jpeg|gif|bmp|webp|svg)$/i.test(name);
-          currentAttachments.push({ name, path: p, isImage });
+          // 运行位置=虚拟机：路径翻译为 VM 内路径（hostPath 保留宿主原路径）
+          const vmPath = (typeof window.api?.runtimeToVmPath === 'function')
+            ? (await window.api.runtimeToVmPath(p).then(r => (r && r.ok && r.path) ? r.path : p).catch(() => p))
+            : p;
+          currentAttachments.push({ name, path: vmPath, hostPath: p, isImage });
         }
         renderAttachments();
       }
@@ -90,9 +98,13 @@
 
   // WebUI 上传文件后通知渲染器刷新附件列表
   if (typeof window.api?.onWebControlFileUploaded === 'function') {
-    window.api.onWebControlFileUploaded((data) => {
+    window.api.onWebControlFileUploaded(async (data) => {
       if (data && data.path) {
-        currentAttachments.push({ name: data.name, path: data.path, isImage: data.isImage });
+        const hostPath = data.path;
+        const vmPath = (typeof window.api?.runtimeToVmPath === 'function')
+          ? await window.api.runtimeToVmPath(hostPath).then(r => (r && r.ok && r.path) ? r.path : hostPath).catch(() => hostPath)
+          : hostPath;
+        currentAttachments.push({ name: data.name, path: vmPath, hostPath, isImage: data.isImage });
         renderAttachments();
       }
     });
