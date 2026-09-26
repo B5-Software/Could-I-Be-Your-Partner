@@ -3775,7 +3775,15 @@ ipcMain.handle('vm:emergencyHostMode', () => {
 // ---- VM 桌面（P4：Xvfb + x11vnc + noVNC / Chromium CDP）----
 ipcMain.handle('vm:graphicsStatus', () => ({ ok: true, ...vmService.graphicsStatus() }));
 ipcMain.handle('vm:graphicsStart', async (_, opts) => {
-  try { return await vmService.graphicsStart(opts || {}); } catch (e) { return { ok: false, error: e.message }; }
+  try {
+    // 打开 VM 桌面时如果虚拟机没在跑，自动启动（用户不需要先手动点"启动"）
+    const inst = vmService.instance;
+    if (!inst || inst.state !== 'ready') {
+      console.log('[vm] VM 桌面：虚拟机未就绪，先启动虚拟机…');
+      await vmService.start();
+    }
+    return await vmService.graphicsStart(opts || {});
+  } catch (e) { return { ok: false, error: e.message, detail: e.stack ? String(e.stack).slice(0, 800) : null }; }
 });
 ipcMain.handle('vm:graphicsStop', async () => {
   try { return await vmService.graphicsStop(); } catch (e) { return { ok: false, error: e.message }; }

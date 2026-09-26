@@ -64,6 +64,7 @@
   </div>
   <div id="overlay"><div class="spinner"></div><div id="overlay-text">正在准备虚拟机图形环境…</div></div>
   <div id="screen-wrap"><div id="screen"></div></div>
+  <pre id="err-detail" style="display:none;position:absolute;left:0;right:0;bottom:0;max-height:45%;overflow:auto;background:rgba(20,22,27,.96);border-top:1px solid var(--vm-border,#2a2f3a);padding:10px 12px;font-family:Consolas,monospace;font-size:11px;line-height:1.45;white-space:pre-wrap;color:#f0a0a0"></pre>
   <pre id="log"></pre>
 
   <script type="module">
@@ -125,6 +126,15 @@
       return r;
     }
 
+    function showFailure(msg) {
+      const d = document.getElementById('err-detail');
+      const lines = [String(msg), '', '— 最近日志 —', logEl.textContent.trim() || '(无)'].join('\n');
+      if (d) { d.style.display = 'block'; d.textContent = lines; }
+      setStatus('启动失败', 'warn');
+      showOverlay('启动失败：' + String(msg).slice(0, 120) + '（详情见底部）');
+      appendLog('❌ ' + String(msg).slice(0, 300));
+    }
+
     async function connect() {
       const st = await ensureStarted();
       const insec = location.protocol === 'file:' ? true : false;
@@ -161,7 +171,7 @@
       try { if (rfb) rfb.disconnect(); } catch (_) { /* ignore */ }
       await window.vmDesktop.stop().catch(() => {});
       showOverlay('正在重启图形环境…');
-      connect().catch((e) => { showOverlay('启动失败：' + e.message); setStatus('启动失败', 'warn'); });
+      connect().catch((e) => showFailure(e && e.message ? e.message : String(e)));
     });
     $('btn-stop').addEventListener('click', async () => {
       try { if (rfb) rfb.disconnect(); } catch (_) { /* ignore */ }
@@ -180,10 +190,7 @@
       }
     });
 
-    connect().catch((e) => {
-      showOverlay('启动失败：' + e.message);
-      setStatus('启动失败', 'warn');
-    });
+    connect().catch((e) => showFailure(e && e.message ? e.message : String(e)));
   </script>
 </body>
 </html>

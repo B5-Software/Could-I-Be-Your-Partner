@@ -13,7 +13,11 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('vmDesktop', {
   getStatus: () => ipcRenderer.invoke('vm:graphicsStatus'),
-  start: (opts) => ipcRenderer.invoke('vm:graphicsStart', opts || {}),
+  start: async (opts) => {
+    const r = await ipcRenderer.invoke('vm:graphicsStart', opts || {});
+    if (r && !r.ok && r.detail) console.warn('[vm-desktop] 启动失败详情:', r.detail);
+    return r;
+  },
   stop: () => ipcRenderer.invoke('vm:graphicsStop'),
   startChromium: (opts) => ipcRenderer.invoke('vm:graphicsChromium', opts || {}),
   openExternal: (url) => ipcRenderer.invoke('vm:openExternal', url),
