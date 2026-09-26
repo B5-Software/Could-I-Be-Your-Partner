@@ -73,8 +73,10 @@ jobs:
         run: |
           set -e
           sudo apt-get update -qq
+          # 注意：arm64 的 noble 源里没有 debos 包（E: no installation candidate），
+          # 因此 debootstrap/debos 的运行时依赖必须显式安装。
           sudo apt-get install -y --no-install-recommends \
-            e2fsprogs util-linux zstd qemu-utils ${{ matrix.qemuPkg }} || true
+            debootstrap e2fsprogs util-linux zstd qemu-utils ${{ matrix.qemuPkg }} || true
           if sudo apt-get install -y --no-install-recommends debos; then
             echo "debos 来自 apt: $(command -v debos)"
           else
@@ -86,6 +88,7 @@ jobs:
             echo "debos 已源码构建: $(command -v debos)"
           fi
           debos --help | head -3
+          debootstrap --version
 
       - name: 构建 rootfs + 内核（debos）
         env:
@@ -111,8 +114,10 @@ jobs:
             full) SIZE=16G ;;
             *) SIZE=8G ;;
           esac
-          ROOTFS="$(ls -1 vm-os/out/*-rootfs.tar.xz | head -1)"
-          node vm-os/tools/assemble-image.js \
+          ROOTFS="$(ls -1 vm-os/out/*-rootfs.tar.* | head -1)"
+          echo "rootfs: $ROOTFS"
+          # mke2fs -d 需要 root（要还原 tar 中的 uid/gid/权限），否则报 Operation not permitted
+          sudo -E env "PATH=$PATH" node vm-os/tools/assemble-image.js \
             --rootfs "$ROOTFS" \
             --out vm-os/out \
             --version "$VMOS_VERSION" \

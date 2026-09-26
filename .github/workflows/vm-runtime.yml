@@ -111,6 +111,7 @@ jobs:
           ls -l qemu-src/bin
 
       - name: 裁剪打包
+        shell: bash
         env:
           VMOS_VERSION: ${{ needs.version.outputs.value }}
         run: |
