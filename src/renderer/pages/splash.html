@@ -68,8 +68,8 @@
     .vm-bar { height: 6px; border-radius: 4px; background: var(--splash-spin-bg); overflow: hidden; }
     .vm-bar > i { display: block; height: 100%; width: 0%; background: var(--splash-accent); transition: width .3s ease; }
     .vm-detail { font-size: 11px; opacity: 0.7; min-height: 14px; }
-    .vm-log { margin-top: 2px; max-height: 96px; overflow: hidden; font-family: Consolas, "Courier New", monospace;
-      font-size: 10px; line-height: 1.35; opacity: 0.55; white-space: pre-wrap; word-break: break-all; }
+    .vm-log { margin-top: 2px; font-family: Consolas, "Courier New", monospace;
+      font-size: 10.5px; line-height: 1.4; opacity: 0.6; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .vm-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
     .vm-btn { font: inherit; font-size: 11px; padding: 5px 10px; border-radius: 8px; cursor: pointer;
       border: 1px solid var(--splash-spin-bg); background: transparent; color: inherit; }
@@ -193,8 +193,12 @@
 
       function appendLog(text) {
         if (!text) return;
-        logEl.textContent = (logEl.textContent + text).slice(-1200);
-        logEl.scrollTop = logEl.scrollHeight;
+        // 只显示最后一行（终端式单行滚动）：避免 VM 串口日志把 Splash 垂直挤满
+        const lines = String(text).split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+        if (!lines.length) return;
+        const last = lines[lines.length - 1];
+        logEl.textContent = last.length > 220 ? last.slice(-220) : last;
+        logEl.title = last; // 悬停可看全文（含被截断部分）
       }
 
       function fail(message, serialTail) {
