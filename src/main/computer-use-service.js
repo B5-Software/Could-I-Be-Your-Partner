@@ -16,7 +16,21 @@ const os = require('os');
 const { shell, screen, desktopCapturer, nativeImage } = require('electron');
 const { recognizeImageDetailed } = require('./ocr');
 
-module.exports = function registerComputerUseIpc({ ipcMain, getImagesDir }) {
+module.exports = function registerComputerUseIpc({ ipcMain, getImagesDir, getVmService }) {
+  /**
+   * 运行位置=虚拟机：电脑控制（截图/键鼠/剪贴板）作用于虚拟机（Xvfb + xdotool/xclip），
+   * 返回图形控制器；非 VM 模式返回 null（走宿主实现）。
+   * 这是沙盒边界：VM 模式下绝不允许落到宿主桌面。
+   */
+  const vmComputer = () => {
+    try {
+      const svc = typeof getVmService === 'function' ? getVmService() : null;
+      if (!svc || svc.emergencyHost) return null;
+      if (!svc.runtime || svc.runtime.location !== 'vm') return null;
+      return svc.graphicsController();
+    } catch { return null; }
+  };
+  const VM_UI_GAP = 'VM 模式下该动作依赖宿主 UI 自动化（UIA/OCR），已禁用以免操作宿主机；可用：截图/键鼠注入（xdotool）、VM 桌面窗口、终端与浏览器工具';
 // ---- Computer Use Protocol (CUP) ----
 // Lazy-loaded nut-js for mouse/keyboard control
 let _nutLoaded = null;
@@ -132,11 +146,23 @@ async function _captureScreen(workspacePath, options = {}) {
 }
 
 ipcMain.handle('computer:listDisplays', () => {
+  const g = vmComputer();
+  if (g) {
+    const s = g.screenSize();
+    return { ok: true, displays: [{ id: 1, idString: 'vm-display-:99', name: '虚拟机桌面', bounds: { x: 0, y: 0, width: s.width, height: s.height }, size: { width: s.width, height: s.height }, scaleFactor: 1, rotation: 0, internal: false, primary: true, location: 'vm' }] };
+  }
   try { return { ok: true, displays: _displayList() }; }
   catch (e) { return { ok: false, error: e.message }; }
 });
 
 ipcMain.handle('computer:screenshot', async (_, workspacePath, options = {}) => {
+  const g = vmComputer();
+  if (g) {
+    try {
+      const cap = await g.capture({ workspacePath });
+      return { ok: true, path: cap.path, vmPath: cap.vmPath, width: cap.width, height: cap.height, display: 1, origin: { x: 0, y: 0 }, coordinateSpace: 'screenshot-pixels', annotated: false, location: 'vm' };
+    } catch (e) { return { ok: false, error: e.message }; }
+  }
   try {
     const capture = await _captureScreen(workspacePath, options || {});
     const annotate = options && options.annotate;
@@ -155,6 +181,8 @@ ipcMain.handle('computer:screenshot', async (_, workspacePath, options = {}) => 
 });
 
 ipcMain.handle('computer:mouseMove', async (_, x, y) => {
+  const g = vmComputer();
+  if (g) { try { return await g.mouseMove(x, y); } catch (e) { return { ok: false, error: e.message }; } }
   const nut = await _getNut();
   if (!nut) return { ok: false, error: 'nut-js not available' };
   try {
@@ -164,6 +192,8 @@ ipcMain.handle('computer:mouseMove', async (_, x, y) => {
 });
 
 ipcMain.handle('computer:click', async (_, button, x, y, doubleClick) => {
+  const g = vmComputer();
+  if (g) { try { await g.click(button, x, y, doubleClick); return { ok: true, button: button || 'left', doubleClick: !!doubleClick }; } catch (e) { return { ok: false, error: e.message }; } }
   const nut = await _getNut();
   if (!nut) return { ok: false, error: 'nut-js not available' };
   try {
@@ -180,6 +210,8 @@ ipcMain.handle('computer:click', async (_, button, x, y, doubleClick) => {
 });
 
 ipcMain.handle('computer:drag', async (_, startX, startY, endX, endY) => {
+  const g = vmComputer();
+  if (g) { try { await g.drag(startX, startY, endX, endY); return { ok: true, startX, startY, endX, endY }; } catch (e) { return { ok: false, error: e.message }; } }
   const nut = await _getNut();
   if (!nut) return { ok: false, error: 'nut-js not available' };
   try {
@@ -199,6 +231,8 @@ ipcMain.handle('computer:drag', async (_, startX, startY, endX, endY) => {
 });
 
 ipcMain.handle('computer:type', async (_, text) => {
+  const g = vmComputer();
+  if (g) { try { await g.typeText(text); return { ok: true, length: String(text || '').length }; } catch (e) { return { ok: false, error: e.message }; } }
   const nut = await _getNut();
   if (!nut) return { ok: false, error: 'nut-js not available' };
   try {
@@ -208,6 +242,8 @@ ipcMain.handle('computer:type', async (_, text) => {
 });
 
 ipcMain.handle('computer:key', async (_, keyStr) => {
+  const g = vmComputer();
+  if (g) { try { await g.pressKey(keyStr); return { ok: true, key: keyStr }; } catch (e) { return { ok: false, error: e.message }; } }
   const nut = await _getNut();
   if (!nut) return { ok: false, error: 'nut-js not available' };
   try {
@@ -250,6 +286,8 @@ ipcMain.handle('computer:key', async (_, keyStr) => {
 });
 
 ipcMain.handle('computer:scroll', async (_, x, y, direction, amount) => {
+  const g = vmComputer();
+  if (g) { try { await g.scroll(x, y, direction, amount); return { ok: true, direction, amount: Math.round(amount || 3) }; } catch (e) { return { ok: false, error: e.message }; } }
   const nut = await _getNut();
   if (!nut) return { ok: false, error: 'nut-js not available' };
   try {
@@ -273,6 +311,8 @@ ipcMain.handle('computer:scroll', async (_, x, y, direction, amount) => {
 });
 
 ipcMain.handle('computer:cursorPosition', async () => {
+  const g = vmComputer();
+  if (g) { try { return await g.cursorPosition(); } catch (e) { return { ok: false, error: e.message }; } }
   const nut = await _getNut();
   if (!nut) return { ok: false, error: 'nut-js not available' };
   try {
@@ -288,6 +328,8 @@ ipcMain.handle('computer:wait', async (_, duration) => {
 });
 
 ipcMain.handle('computer:getScreenSize', async () => {
+  const g = vmComputer();
+  if (g) { const s = g.screenSize(); return { ok: true, width: s.width, height: s.height, location: 'vm' }; }
   const nut = await _getNut();
   if (!nut) return { ok: false, error: 'nut-js not available' };
   try {
@@ -650,6 +692,7 @@ async function _buildElementSnapshot(options = {}) {
 }
 
 ipcMain.handle('computer:getUITree', async (_, options = {}) => {
+  if (vmComputer()) return { ok: false, error: VM_UI_GAP };
   try {
     const snapshot = await _buildElementSnapshot(options || {});
     return {
@@ -667,6 +710,7 @@ ipcMain.handle('computer:getUITree', async (_, options = {}) => {
 });
 
 ipcMain.handle('computer:ocr', async (_, options = {}) => {
+  if (vmComputer()) return { ok: false, error: VM_UI_GAP };
   try {
     const result = await _ocrToElements((options || {}).workspacePath, options || {});
     _lastCapture = result.capture;
@@ -686,6 +730,7 @@ ipcMain.handle('computer:ocr', async (_, options = {}) => {
 });
 
 ipcMain.handle('computer:findElement', async (_, payload = {}) => {
+  if (vmComputer()) return { ok: false, error: VM_UI_GAP };
   try {
     let snapshot = _lastElementSnapshot && (Date.now() - _lastElementSnapshot.at < 30000) ? _lastElementSnapshot : null;
     if (!snapshot || payload.refresh) {
@@ -802,6 +847,7 @@ async function _resolveElementTarget(payload) {
 }
 
 ipcMain.handle('computer:clickElement', async (_, payload = {}) => {
+  if (vmComputer()) return { ok: false, error: VM_UI_GAP };
   const nut = await _getNut();
   if (!nut) return { ok: false, error: 'nut-js not available' };
   try {
@@ -861,6 +907,13 @@ ipcMain.handle('computer:clickElement', async (_, payload = {}) => {
 
 // ---- IPC: Screenshot ----
 ipcMain.handle('screenshot:take', async (_, workspacePath) => {
+  const g = vmComputer();
+  if (g) {
+    try {
+      const cap = await g.capture({ workspacePath });
+      return { ok: true, path: cap.path, vmPath: cap.vmPath, width: cap.width, height: cap.height, display: 1, origin: { x: 0, y: 0 }, location: 'vm' };
+    } catch (e) { return { ok: false, error: e.message }; }
+  }
   try {
     const capture = await _captureScreen(workspacePath, {});
     return { ok: true, path: capture.path, width: capture.width, height: capture.height, display: capture.display, origin: capture.origin };
@@ -897,9 +950,17 @@ ipcMain.handle('shell:openBrowser', (_, url) => {
     return { ok: false, error: e.message };
   }
 });
-ipcMain.handle('shell:openFileExplorer', (_, p) => {
+ipcMain.handle('shell:openFileExplorer', async (_, p) => {
   try {
     if (!p) return { ok: false, error: '路径为空' };
+    // VM 模式：先把 VM 内的最新改动拉回宿主镜像，再打开宿主镜像（资源管理器无法直接浏览 VM 文件）
+    const g = vmComputer();
+    if (g) {
+      const svc = typeof getVmService === 'function' ? getVmService() : null;
+      if (svc && typeof svc.pullExternalDir === 'function') {
+        await svc.pullExternalDir(p).catch(() => {});
+      }
+    }
     // 区分文件和目录：文件用 showItemInFolder 在资源管理器中定位并选中，
     // 目录用 openPath 直接打开。
     let isFile = false;
@@ -907,6 +968,9 @@ ipcMain.handle('shell:openFileExplorer', (_, p) => {
       const stat = require('fs').statSync(p);
       isFile = stat.isFile();
     } catch (_) { /* 路径不存在时按目录处理 */ }
+    if (!require('fs').existsSync(p)) {
+      return { ok: false, error: (g ? '虚拟机内文件尚未同步到宿主镜像（或路径不存在）: ' : '路径不存在: ') + p };
+    }
     if (isFile) {
       shell.showItemInFolder(p);
     } else {

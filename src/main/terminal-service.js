@@ -101,7 +101,7 @@ function _resolveTerminalShell(shellSetting, customShellPath) {
   const _existsInPath = (name) => {
     try {
       if (name.includes('\\') || name.includes('/')) return fs.existsSync(name);
-      return (process.env.PATH || '').split(/[;]+/).some(d => {
+      return (process.env.PATH || '').split(path.delimiter).some(d => {
         if (!d) return false;
         try { return fs.existsSync(path.join(d, name)); } catch { return false; }
       });

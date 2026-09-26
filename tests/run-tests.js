@@ -3822,6 +3822,82 @@ function runVmSandboxTests() {
     assert.ok(/eslintLint/.test(src), '选择提示应包含 eslint 示例');
   });
 
+  // ---- 路径判定（全平台生产级：不能再用"以 / 开头 = VM 路径"）----
+  const vmPaths = require('../src/main/vm/vm-paths.js');
+
+  test('VM 路径判定：工作区/系统目录/C 盘/相对路径', () => {
+    assert.strictEqual(vmPaths.isVmPath('/workspace/a.txt'), true, '挂载点内 → VM');
+    assert.strictEqual(vmPaths.isVmPath('/workspace'), true);
+    assert.strictEqual(vmPaths.isVmPath('/tmp/x.png'), true, 'guest 系统目录 → VM');
+    assert.strictEqual(vmPaths.isVmPath('/root/.bashrc'), true);
+    assert.strictEqual(vmPaths.isVmPath('C:\\Users\\x\\a.txt'), false, 'Windows 宿主路径');
+    assert.strictEqual(vmPaths.isVmPath('relative/file.txt'), false, '相对路径');
+    assert.strictEqual(vmPaths.isVmPath('/workspaceXYZ/a'), true, '不在挂载点内的绝对路径默认按 VM 处理（边界由 isUnder/relUnder 保证）');
+  });
+
+  test('VM 路径判定：isUnder 边界（避免 /workspaceXYZ 命中 /workspace）', () => {
+    assert.strictEqual(vmPaths.isUnder('/a/b', '/a/b/c'), true);
+    assert.strictEqual(vmPaths.isUnder('/a/b', '/a/b'), true);
+    assert.strictEqual(vmPaths.isUnder('/a/b', '/a/bc/d'), false);
+    assert.strictEqual(vmPaths.relUnder('/a/b', '/a/b/c/d.txt'), 'c/d.txt');
+    assert.strictEqual(vmPaths.relUnder('/a/b', '/a/bc/d'), null);
+    assert.ok(!vmPaths.shellQuote("a'b").includes("'a'b'"), 'shellQuote 应转义单引号');
+  });
+
+  test('remapResult：file:// 前缀与反斜杠路径也能回映', () => {
+    const tmp = 'C:\\Users\\x\\AppData\\Local\\Temp\\cibyp-shot';
+    const out = remapResult({
+      url: 'file://' + tmp.replace(/\\/g, '/') + '/shot.png',
+      urls: ['file://' + tmp.replace(/\\/g, '/') + '/a.png'],
+    }, [[tmp, '/workspace/_uploads']]);
+    assert.strictEqual(out.url, 'file:///workspace/_uploads/shot.png');
+    assert.strictEqual(out.urls[0], 'file:///workspace/_uploads/a.png');
+  });
+
+  testAsync('stageDeepValue：宿主映射路径按输入/输出分类，未映射宿主资源原样保留', async () => {
+    const { stageDeepValue } = require('../src/main/vm/vm-tools.js');
+    const pulled = [];
+    const outputs = [];
+    const fakeFs = {
+      isVmPath: (p) => String(p).startsWith('/'),
+      mapHostToVm: (p) => (String(p).startsWith('C:\\work\\') ? '/workspace/' + String(p).slice('C:\\work\\'.length).replace(/\\/g, '/') : null),
+      mountRoot: () => '/workspace',
+      exists: async (p) => p === '/workspace/in.mp4',
+      pullToTemp: async (p) => { pulled.push(p); return { dir: _os.tmpdir(), file: 'TMPFILE', vmPath: p }; },
+    };
+    const staging = { pulls: new Map(), tmpDirs: [], mappings: [], outputs: [] };
+    const inRes = await stageDeepValue('C:\\work\\in.mp4', fakeFs, staging);
+    assert.strictEqual(inRes, 'TMPFILE');
+    assert.deepStrictEqual(pulled, ['/workspace/in.mp4']);
+    const outRes = await stageDeepValue('C:\\work\\out.mp4', fakeFs, staging);
+    assert.notStrictEqual(outRes, 'C:\\work\\out.mp4');
+    assert.strictEqual(staging.outputs[0].vmPath, '/workspace/out.mp4');
+    const asset = await stageDeepValue('C:\\app-assets\\font.ttf', fakeFs, staging);
+    assert.strictEqual(asset, 'C:\\app-assets\\font.ttf', '未映射宿主资源应原样保留');
+    const vmIn = await stageDeepValue('/workspace/in.mp4', fakeFs, staging);
+    assert.strictEqual(vmIn, 'TMPFILE', 'VM 路径存在 → 拉取为输入');
+  });
+
+  // ---- 打包/平台：关键配置不回归 ----
+  test('打包配置：mac 签名 entitlements + sherpa 平台包 + 排除 VM 构建目录', () => {
+    const pkg = JSON.parse(fs.readFileSync(_path.join(__dirname, '..', 'package.json'), 'utf8'));
+    const b = pkg.build || {};
+    assert.ok(b.mac && b.mac.hardenedRuntime === true, 'mac.hardenedRuntime 应开启');
+    assert.ok(b.mac.entitlements && b.mac.entitlementsInherit, '应配置 entitlements');
+    assert.ok((b.asarUnpack || []).includes('node_modules/sherpa-onnx-*/**/*'), 'sherpa 平台包应通配 unpack');
+    assert.ok((b.files || []).some((f) => f.includes('assets/voice-models')), '打包应排除语音模型（运行期按需下载）');
+    assert.ok((b.files || []).some((f) => f.includes('assets/aria2')), '打包应排除构建期 aria2 多平台二进制');
+    const packScript = fs.readFileSync(_path.join(__dirname, '..', 'scripts', 'package.js'), 'utf8');
+    for (const rel of ['vm-os', 'tests', 'docs', '.git', 'assets/voice-models']) {
+      assert.ok(packScript.includes("'" + rel + "'"), '打包入口应把 ' + rel + ' 临时移出产物');
+    }
+    const pkgForHooks = JSON.parse(fs.readFileSync(_path.join(__dirname, '..', 'package.json'), 'utf8'));
+    assert.ok(pkgForHooks.build && pkgForHooks.build.beforePack, '应保留 beforePack 钩子（build-info.json）');
+    for (const f of [b.mac.entitlements, b.mac.entitlementsInherit]) {
+      assert.ok(fs.existsSync(_path.join(__dirname, '..', f)), 'entitlements 文件应存在: ' + f);
+    }
+  });
+
   test('ssh2 密钥生成：OpenSSH 私钥格式 + authorized_keys 行', () => {
     const kp = provision.generateSshKeyPair();
     assert.ok(kp.privateKey.includes('BEGIN OPENSSH PRIVATE KEY') || kp.privateKey.includes('BEGIN PRIVATE KEY'),

@@ -22,6 +22,11 @@ const DEFAULT_GEOMETRY = '1280x800x24';
 const VNC_PORT = 5900;
 const CDP_PORT = 9222;
 
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { shellQuote } = require('./vm-paths');
+
 class VmGraphics {
   /**
    * @param {object} opts { vmService, geometry, display }
@@ -85,6 +90,10 @@ class VmGraphics {
     if (!(await this._has('Xvfb'))) need.push('xvfb');
     if (!(await this._has('x11vnc'))) need.push('x11vnc');
     if (!(await this._has('openbox'))) need.push('openbox');
+    // 电脑控制/剪贴板/截图（VM 模式下这些必须作用于虚拟机，而不是宿主机）
+    if (!(await this._has('xdotool'))) need.push('xdotool');
+    if (!(await this._has('xclip'))) need.push('xclip');
+    if (!(await this._has('ffmpeg')) && !(await this._has('import'))) need.push('imagemagick');
     if (!need.length) return { ok: true, installed: false };
     if (onProgress) onProgress({ phase: 'apt', packages: need });
     this._logLine(`安装图形依赖: ${need.join(' ')}`);
@@ -96,6 +105,142 @@ class VmGraphics {
     this._logLine(r.stdout.slice(-500));
     if (!r.ok) throw new Error('安装图形依赖失败: ' + (r.stderr || '').slice(-300));
     return { ok: true, installed: true, packages: need };
+  }
+
+  /** 屏幕几何（去掉色深） */
+  screenSize() {
+    const [w, h] = String(this.geometry).split('x').map((n) => parseInt(n, 10) || 0);
+    return { width: w || 1280, height: h || 800 };
+  }
+
+  /** 选择截图工具：ffmpeg（x11grab）优先，其次 ImageMagick import */
+  async _captureTool() {
+    if (await this._has('ffmpeg')) return 'ffmpeg';
+    if (await this._has('import')) return 'import';
+    return null;
+  }
+
+  /**
+   * VM 屏幕截图：Xvfb → PNG。返回 { path(宿主镜像路径), vmPath, width, height }。
+   * 有工作区时写入工作区（宿主镜像 + VM 双写），否则落到 <mount>/_uploads 并返回宿主临时镜像。
+   */
+  async capture({ workspacePath = '', filename = '' } = {}) {
+    const inst = this._inst();
+    await this.start();
+    let tool = await this._captureTool();
+    if (!tool) {
+      await this.ensureGuestPackages();
+      tool = await this._captureTool();
+    }
+    if (!tool) throw new Error('虚拟机内缺少截图工具（ffmpeg / imagemagick），无法抓取虚拟机屏幕');
+    const ts = Date.now();
+    const name = filename || `screenshot-${ts}.png`;
+    const vmTmp = `/tmp/cibyp-shot-${ts}.png`;
+    const geom = String(this.geometry).split('x').slice(0, 2).join('x');
+    const cmd = tool === 'ffmpeg'
+      ? `DISPLAY=${this.display} ffmpeg -hide_banner -loglevel error -y -f x11grab -video_size ${geom} -i ${this.display} -frames:v 1 ${shellQuote(vmTmp)}`
+      : `DISPLAY=${this.display} import -display ${this.display} -window root ${shellQuote(vmTmp)}`;
+    const r = await inst.exec(cmd, { timeoutMs: 60000 });
+    if (!r.ok) throw new Error('虚拟机截图失败: ' + (r.stderr || r.stdout || '').slice(-200));
+    const { VmFs } = require('./vm-fs');
+    const vmFs = new VmFs({ vmService: this.vmService });
+    const buf = await vmFs.readBuffer(vmTmp);
+    const size = this.screenSize();
+    let target = null;
+    if (workspacePath) {
+      const t = vmFs.resolveVmPath(workspacePath);
+      if (t.ok) {
+        const hostDir = vmFs.toHost(t.vm) || workspacePath;
+        try { fs.mkdirSync(hostDir, { recursive: true }); } catch { /* ignore */ }
+        target = { hostFile: path.join(hostDir, name), vmFile: `${t.vm.replace(/\/+$/, '')}/${name}` };
+      }
+    }
+    if (target) {
+      fs.writeFileSync(target.hostFile, buf);
+      await vmFs.pushFromHost(target.hostFile, target.vmFile).catch(() => {});
+      return { path: target.hostFile, vmPath: target.vmFile, width: size.width, height: size.height, tool };
+    }
+    const vmPath = `${vmFs.mountRoot()}/_uploads/${name}`;
+    await vmFs.writeBuffer(vmPath, buf);
+    const tmp = path.join(os.tmpdir(), name);
+    try { fs.writeFileSync(tmp, buf); } catch { /* ignore */ }
+    return { path: tmp, vmPath, width: size.width, height: size.height, tool };
+  }
+
+  /** 在 VM 内执行 xdotool 命令（缺包时自动安装） */
+  async _xdotool(args, timeoutMs = 30000) {
+    const inst = this._inst();
+    await this.start();
+    if (!(await this._has('xdotool'))) await this.ensureGuestPackages();
+    const r = await inst.exec(`DISPLAY=${this.display} xdotool ${args}`, { timeoutMs });
+    if (!r.ok) throw new Error('虚拟机输入注入失败: ' + (r.stderr || r.stdout || '').slice(-200));
+    return r.stdout;
+  }
+
+  async mouseMove(x, y) {
+    await this._xdotool(`mousemove --sync ${Math.round(Number(x) || 0)} ${Math.round(Number(y) || 0)}`);
+    return { ok: true, x: Math.round(Number(x) || 0), y: Math.round(Number(y) || 0) };
+  }
+
+  async click(button, x, y, doubleClick = false) {
+    const b = button === 'right' ? 3 : button === 'middle' ? 2 : 1;
+    const move = (x != null && y != null) ? `mousemove --sync ${Math.round(Number(x) || 0)} ${Math.round(Number(y) || 0)} ` : '';
+    await this._xdotool(`${move}click ${doubleClick ? '--repeat 2 --delay 80 ' : ''}${b}`);
+    return { ok: true };
+  }
+
+  async drag(startX, startY, endX, endY) {
+    const r = (n) => Math.round(Number(n) || 0);
+    await this._xdotool(`mousemove --sync ${r(startX)} ${r(startY)} mousedown 1 mousemove --sync ${r(endX)} ${r(endY)} mouseup 1`);
+    return { ok: true };
+  }
+
+  async typeText(text) {
+    await this._xdotool(`type --delay 15 -- ${shellQuote(String(text == null ? '' : text))}`);
+    return { ok: true };
+  }
+
+  async pressKey(keyStr) {
+    // 归一化常见写法：Control+c / CTRL+C / ctrl-c → ctrl+c
+    const key = String(keyStr || '')
+      .split('+').map((k) => k.trim().toLowerCase()
+        .replace(/^control$/, 'ctrl').replace(/^escape$/, 'Escape').replace(/^enter$/, 'Return'))
+      .join('+');
+    if (!key) return { ok: false, error: '按键为空' };
+    await this._xdotool(`key --clearmodifiers ${shellQuote(key)}`);
+    return { ok: true };
+  }
+
+  async scroll(x, y, direction, amount = 3) {
+    const button = direction === 'up' ? 4 : 5;
+    const n = Math.max(1, Math.min(50, parseInt(amount, 10) || 3));
+    await this._xdotool(`mousemove --sync ${Math.round(Number(x) || 0)} ${Math.round(Number(y) || 0)} click --repeat ${n} --delay 30 ${button}`);
+    return { ok: true };
+  }
+
+  async cursorPosition() {
+    const out = await this._xdotool('getmouselocation --shell');
+    const mx = /X=(\d+)/.exec(out);
+    const my = /Y=(\d+)/.exec(out);
+    return { ok: true, x: mx ? Number(mx[1]) : 0, y: my ? Number(my[1]) : 0 };
+  }
+
+  /** VM 剪贴板（X11 selection，走 xclip；不触碰宿主剪贴板） */
+  async clipboardGet() {
+    const inst = this._inst();
+    await this.start();
+    if (!(await this._has('xclip'))) await this.ensureGuestPackages();
+    const r = await inst.exec(`DISPLAY=${this.display} xclip -selection clipboard -o 2>/dev/null || true`, { timeoutMs: 20000 });
+    return { ok: true, text: r.stdout || '' };
+  }
+
+  async clipboardSet(text) {
+    const inst = this._inst();
+    await this.start();
+    if (!(await this._has('xclip'))) await this.ensureGuestPackages();
+    const r = await inst.exec(`printf %s ${shellQuote(String(text == null ? '' : text))} | DISPLAY=${this.display} xclip -selection clipboard -i`, { timeoutMs: 20000 });
+    if (!r.ok) throw new Error('写入虚拟机剪贴板失败: ' + (r.stderr || '').slice(-200));
+    return { ok: true };
   }
 
   /** 启动 Xvfb + x11vnc（幂等） */

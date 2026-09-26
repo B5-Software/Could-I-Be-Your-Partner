@@ -58,21 +58,6 @@ const MIRROR_PREFIXES = {
   cn3: 'https://gh.tryxd.cn/',
 };
 
-/** 是否是 GitHub 资源（镜像前缀只对它们有意义） */
-function isGithubUrl(url) {
-  try {
-    const host = new URL(url).hostname.toLowerCase();
-    return ['github.com', 'www.github.com', 'raw.githubusercontent.com', 'objects.githubusercontent.com', 'codeload.github.com', 'gist.github.com'].includes(host);
-  } catch { return false; }
-}
-
-/** 给下载 URL 套用镜像前缀（非 GitHub 直链不加；官方源不加） */
-function applyMirrorToUrl(url, mirror = 'official') {
-  const prefix = MIRROR_PREFIXES[mirror] || '';
-  if (!prefix) return url;
-  if (!isGithubUrl(url)) return url;
-  return prefix + url;
-}
 const VARIANTS = [
   {
     id: 'base',

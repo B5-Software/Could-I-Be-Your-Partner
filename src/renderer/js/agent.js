@@ -3979,6 +3979,21 @@ ${affectionDesc}
           if (args.dir) {
             targetDir = args.dir;
           }
+          // 运行位置=虚拟机：走 file:download（VM 路由：下载到宿主临时目录后把产物推入 VM，按映射落位）
+          let inVm = false;
+          try {
+            if (window.api?.runtime?.getLocation) {
+              const loc = await window.api.runtime.getLocation();
+              inVm = !!(loc && loc.location === 'vm');
+            }
+          } catch { /* ignore */ }
+          if (inVm && typeof window.api.downloadFile === 'function') {
+            const r = await window.api.downloadFile(args.url, args.filename || '', targetDir);
+            if (r && r.ok) {
+              return { ok: true, path: r.path || r.vmPath || null, dir: targetDir, message: '已下载到虚拟机工作区（可用 fs 工具继续处理）' };
+            }
+            return { ok: false, error: (r && r.error) || '虚拟机内下载失败' };
+          }
           const opts = { dir: targetDir };
           if (args.filename) opts.out = args.filename;
           if (args.headers) opts.headers = args.headers;

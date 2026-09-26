@@ -57,10 +57,10 @@ function platformKey(platform = process.platform, arch = process.arch) {
   return `${platform}-${arch}`;
 }
 
-function qemuBinName(kind, guestArch) {
+function qemuBinName(kind, guestArch, platform = process.platform) {
   const suffix = GUEST_ARCH_TO_QEMU[guestArch] || 'x86_64';
-  if (kind === 'img') return process.platform === 'win32' ? 'qemu-img.exe' : 'qemu-img';
-  return process.platform === 'win32' ? `qemu-system-${suffix}.exe` : `qemu-system-${suffix}`;
+  if (kind === 'img') return platform === 'win32' ? 'qemu-img.exe' : 'qemu-img';
+  return platform === 'win32' ? `qemu-system-${suffix}.exe` : `qemu-system-${suffix}`;
 }
 
 /**
@@ -90,12 +90,19 @@ function inspectQemuDir(dir, guestArch) {
   const img = path.join(dir, qemuBinName('img', guestArch));
   if (!fs.existsSync(exe) || !fs.existsSync(img)) return null;
   // 固件目录：Windows 安装布局为 <dir>/share，部分构建为 <dir>/share/qemu
+  // 现代 QEMU 固件名不固定：x86 为 bios.bin/bios-256k.bin/bios-512k.bin，
+  // arm64 为 edk2-*.fd；只要命中任一即认为可用（否则 -L 不传，部分平台会启动失败）
+  const FIRMWARE_NAMES = ['bios.bin', 'bios-256k.bin', 'bios-512k.bin', 'kvmvapic.bin', 'vgabios-stdvga.bin', 'efi-virtio.rom'];
+  const hasFirmware = (d) => {
+    try {
+      if (!fs.existsSync(d)) return false;
+      if (FIRMWARE_NAMES.some((n) => fs.existsSync(path.join(d, n)))) return true;
+      return fs.readdirSync(d).some((n) => /^edk2-.*.(fd|rom)$/i.test(n) || /.fd$/i.test(n));
+    } catch { return false; }
+  };
   let dataDir = null;
-  for (const cand of [path.join(dir, 'share', 'qemu'), path.join(dir, 'share')]) {
-    if (fs.existsSync(path.join(cand, 'bios.bin')) || fs.existsSync(path.join(cand, 'kvmvapic.bin'))) {
-      dataDir = cand;
-      break;
-    }
+  for (const cand of [path.join(dir, 'share', 'qemu'), path.join(dir, 'share'), dir]) {
+    if (hasFirmware(cand)) { dataDir = cand; break; }
   }
   return { dir, exe, img, dataDir };
 }

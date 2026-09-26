@@ -1,6 +1,6 @@
 {
   "name": "could-i-be-your-partner",
-  "version": "1.9.0-alpha.3",
+  "version": "1.9.0-alpha.4",
   "description": "全自动AI Agent，帮助完成一切任务",
   "license": "GPL-3.0-or-later",
   "main": "src/main/main.js",
@@ -33,26 +33,13 @@
   "build": {
     "appId": "org.b5-software.cibyp",
     "productName": "Could I Be Your Partner",
-    "beforePack": "./scripts/eb-before-pack.js",
     "files": [
       "**/*",
-      "!claude-code-ref/**/*",
-      "!claude-code-ref",
-      "!dist/**/*",
-      "!dist",
-      "!dist-*/**/*",
-      "!dist-*",
-      "!out/**/*",
-      "!out",
-      "!tests/**/*",
-      "!tests",
-      "!*.md",
-      "!dist-output.txt",
-      "!assets/geogebra-src/**/*",
-      "!assets/geogebra-src",
-      "!assets/sandbox/**/*",
-      "!assets/voice-models/**/*",
-      "!assets/voice-models"
+      "!**/*.md",
+      "!**/.git{,/**/*}",
+      "!**/assets/voice-models{,/**/*}",
+      "!**/assets/aria2{,/**/*}",
+      "!**/dist-output.txt"
     ],
     "asarUnpack": [
       "assets/ocr/**/*",
@@ -72,11 +59,12 @@
       "node_modules/@xterm/xterm/lib/**/*",
       "node_modules/@xterm/addon-fit/lib/**/*",
       "node_modules/sherpa-onnx-node/**/*",
-      "node_modules/sherpa-onnx-darwin-arm64/**/*",
-      "node_modules/sherpa-onnx-win-x64/**/*",
       "node_modules/pinyin-pro/**/*",
       "node_modules/@ffmpeg-installer/**/*",
-      "node_modules/@ffprobe-installer/**/*"
+      "node_modules/@ffprobe-installer/**/*",
+      "node_modules/sherpa-onnx-*/**/*",
+      "IoT-Firmware/**/*",
+      "src/main/tools/**/*"
     ],
     "extraResources": [
       {
@@ -126,7 +114,18 @@
         ],
         "NSAppleEventsUsageDescription": "需要发送 AppleEvent 以使用系统无障碍 API 获取 UI 树和自动化操作。",
         "NSAppleMusicUsageDescription": "应用需要控制媒体播放以执行用户指令。"
-      }
+      },
+      "hardenedRuntime": true,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.inherit.plist",
+      "target": [
+        {
+          "target": "dmg"
+        },
+        {
+          "target": "zip"
+        }
+      ]
     },
     "linux": {
       "icon": "assets/icons/icons",
@@ -144,7 +143,9 @@
           "target": "deb"
         }
       ]
-    }
+    },
+    "beforePack": "./scripts/eb-before-pack.js",
+    "afterPack": "./scripts/eb-after-pack.js"
   },
   "overrides": {
     "semver": "^7.6.3",

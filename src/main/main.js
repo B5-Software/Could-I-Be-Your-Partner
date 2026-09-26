@@ -123,6 +123,8 @@ const vmService = new VmService({
   persistSettings: () => { try { saveJSON(settingsPath, settings); } catch (_) {} },
   aria2: aria2Manager,
 });
+// App 工作区基目录也纳入宿主→VM 映射（用户自定义 vm.workspaceRoot 时二者会分离）
+try { vmService.addHostRoot(workspacesBaseDir); } catch { /* ignore */ }
 /** 向 Splash 与主窗口广播 VM 事件（任一不存在则跳过） */
 function broadcastVm(channel, payload) {
   for (const win of [typeof splashWindow !== 'undefined' ? splashWindow : null, typeof mainWindow !== 'undefined' ? mainWindow : null]) {
@@ -2565,8 +2567,33 @@ function detectEnvTool(candidates, pathEnv) {
   return { found: false, command: candidates[0] || null, version: null, path: null };
 }
 
-ipcMain.handle('env:detect', () => {
+ipcMain.handle('env:detect', async () => {
   try {
+    // VM 模式：探测虚拟机内的运行时（Agent 的 shell/python/node 脚本都在 guest 里执行）
+    if ((settings.runtime || {}).location === 'vm' && vmService.instance && vmService.instance.state === 'ready') {
+      const probeOne = async (candidates) => {
+        for (const c of candidates) {
+          const r = await vmService.instance
+            .exec(`command -v ${c} >/dev/null 2>&1 && { command -v ${c}; ${c} --version 2>&1 | head -2; } || true`, { timeoutMs: 15000 })
+            .catch(() => null);
+          const out = (r && r.stdout ? r.stdout : '').trim();
+          if (out) {
+            const lines = out.split('\n');
+            const exePath = (lines[0] || '').trim();
+            return { found: true, command: c, version: normalizeEnvVersion(lines.slice(1).join(' ')), path: exePath || null };
+          }
+        }
+        return { found: false, command: candidates[0] || null, version: null, path: null };
+      };
+      const results = {
+        python: await probeOne(['python3', 'python']),
+        node: await probeOne(['node']),
+        npm: await probeOne(['npm']),
+        bun: await probeOne(['bun']),
+        git: await probeOne(['git']),
+      };
+      return { ok: true, results, platform: 'linux', location: 'vm' };
+    }
     const pathEnv = process.platform === 'darwin' ? getLoginPathEnv() : process.env.PATH;
     const results = {
       python: detectEnvTool(process.platform === 'win32' ? ['py', 'python', 'python3'] : ['python3', 'python'], pathEnv),
@@ -2575,7 +2602,7 @@ ipcMain.handle('env:detect', () => {
       bun: detectEnvTool(['bun'], pathEnv),
       git: detectEnvTool(['git'], pathEnv)
     };
-    return { ok: true, results, platform: process.platform };
+    return { ok: true, results, platform: process.platform, location: 'host' };
   } catch (e) {
     return { ok: false, error: e.message };
   }
@@ -3045,17 +3072,34 @@ registerTerminalIpc({
 registerFfmpegIpc({ ipcMain, getVmService: () => vmService });
 
 // ---- IPC: Clipboard ----
-ipcMain.handle('clipboard:read', () => {
+// VM 模式：剪贴板必须作用于虚拟机（X11 selection via xclip），不能落到宿主机剪贴板
+ipcMain.handle('clipboard:read', async () => {
   try {
-    return { ok: true, content: clipboard.readText() };
+    if (vmLocationActive() && vmService.instance && vmService.instance.state === 'ready') {
+      try {
+        const r = await vmService.graphicsController().clipboardGet();
+        return { ok: true, content: r.text || '', location: 'vm' };
+      } catch (e) {
+        return { ok: false, error: '虚拟机剪贴板不可用: ' + e.message + '（需要图形栈：设置页可一键准备）' };
+      }
+    }
+    return { ok: true, content: clipboard.readText(), location: 'host' };
   } catch (e) {
     return { ok: false, error: e.message };
   }
 });
-ipcMain.handle('clipboard:write', (_, text) => {
+ipcMain.handle('clipboard:write', async (_, text) => {
   try {
+    if (vmLocationActive() && vmService.instance && vmService.instance.state === 'ready') {
+      try {
+        await vmService.graphicsController().clipboardSet(text);
+        return { ok: true, location: 'vm' };
+      } catch (e) {
+        return { ok: false, error: '虚拟机剪贴板不可用: ' + e.message + '（需要图形栈：设置页可一键准备）' };
+      }
+    }
     clipboard.writeText(text);
-    return { ok: true };
+    return { ok: true, location: 'host' };
   } catch (e) {
     return { ok: false, error: e.message };
   }
@@ -3064,7 +3108,8 @@ ipcMain.handle('clipboard:write', (_, text) => {
 // ---- Computer Use / 截图 / 系统信息 / shell 打开（实现已拆分）----
 registerComputerUseIpc({
   ipcMain,
-  getImagesDir: () => imagesDir
+  getImagesDir: () => imagesDir,
+  getVmService: () => vmService
 });
 
 // ===== ESLint 集成 =====
@@ -3079,7 +3124,7 @@ async function eslintResolveHostPath(p) {
   const isVm = (settings.runtime || {}).location === 'vm' && vmService.instance && vmService.instance.state === 'ready';
   if (!isVm) return s;
   let host = s;
-  if (s.startsWith('/')) {
+  if (vmService.isVmPath(s)) {
     host = vmService.toHostPath(s) || '';
   }
   if (!host) return null;
@@ -3092,7 +3137,7 @@ async function eslintResolveHostPath(p) {
 function eslintVmPathFor(p) {
   const s = String(p || '');
   if (!s) return null;
-  if (s.startsWith('/')) return s;
+  if (vmService.isVmPath(s)) return s;
   try { return vmService.toVmPath(s); } catch { return null; }
 }
 
@@ -3116,7 +3161,7 @@ ipcMain.handle('eslint:lint', async (_, workspacePath, opts) => {
     if (!host) return { ok: false, error: '无法把工作区映射到宿主镜像: ' + workspacePath };
     if (Array.isArray(o.files)) {
       o.files = o.files
-        .map(f => String(f).startsWith('/') ? (vmService.toHostPath(String(f)) || '') : String(f))
+        .map(f => vmService.isVmPath(String(f)) ? (vmService.toHostPath(String(f)) || '') : String(f))
         .filter(Boolean);
     }
     const r = await ESLintService.lintWorkspace(host, o);
@@ -3876,7 +3921,7 @@ ipcMain.handle('runtime:toVmPath', async (_, p) => {
     const isVm = (settings.runtime || {}).location === 'vm';
     if (!isVm) return { ok: true, path: p, location: 'host' };
     const s = String(p || '');
-    if (s.startsWith('/')) return { ok: true, path: s, location: 'vm' }; // 已是 VM 路径（幂等）
+    if (vmService.isVmPath(s)) return { ok: true, path: s, location: 'vm' }; // 已是 VM 路径（幂等）
     if (vmService.instance && vmService.instance.state === 'ready') {
       try {
         const { VmFs } = require('./vm/vm-fs');
@@ -6070,8 +6115,13 @@ ipcMain.handle('workspace:openInExplorer', async (_, dirPath) => {
   return { ok: true };
 });
 
-ipcMain.handle('workspace:getFileTree', (_, dirPath) => {
+ipcMain.handle('workspace:getFileTree', async (_, dirPath) => {
   try {
+    // VM 模式：先拉回 VM 内的最新改动，保证系统提示词里的文件树不是旧镜像
+    if ((settings.runtime || {}).location === 'vm' && vmService.instance && vmService.instance.state === 'ready') {
+      await vmService.pullExternalDir(dirPath).catch(() => {});
+      await vmService.syncWorkspace({ direction: 'pull', reason: 'file-tree' }).catch(() => {});
+    }
     const tree = generateFileTree(dirPath, '', 0, 3); // 最多3层
     return { ok: true, tree };
   } catch (e) {
@@ -6272,7 +6322,7 @@ ipcMain.handle('code:getFileTree', async (_, dirPath) => {
     if (inVm) {
       const s = String(dirPath || '');
       // 外部挂载：先把 VM 内的新改动拉回宿主镜像（资源管理器/ESLint 读宿主镜像）
-      if (!s.startsWith('/')) {
+      if (!vmService.isVmPath(s)) {
         await vmService.pullExternalDir(s).catch(() => {});
       }
       const { VmFs } = require('./vm/vm-fs');

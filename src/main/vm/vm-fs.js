@@ -51,13 +51,34 @@ class VmFs {
     return inst;
   }
 
-  /** 宿主路径 → VM 路径（已是 VM 路径则原样返回） */
+  /**
+   * 宿主路径 → VM 路径（严格映射）。
+   * - 已是 VM 路径 → 原样返回
+   * - 命中映射根（工作区根/额外宿主根/外部挂载）→ 映射后的 VM 路径
+   * - 其余宿主路径 → 返回原路径（调用方负责报错；不要用它做写操作）
+   */
   toVm(p) {
     const s = String(p || '');
     if (!s) return s;
-    const mount = (this.vmService && this.vmService.runtime && this.vmService.runtime.vm.workspaceMount) || '/workspace';
-    if (s.startsWith('/')) return s; // POSIX 绝对路径（/workspace、/tmp…）视为已在 VM 内
-    try { return this.vmService.toVmPath(s); } catch { return s; }
+    if (this.isVmPath(s)) return s;
+    const mapped = this.mapHostToVm(s);
+    if (mapped) return mapped;
+    return s;
+  }
+
+  /** 严格解析写/删目标：无法映射到 VM 时返回 { ok:false }（避免误写到 guest 根） */
+  resolveVmPath(hostOrVmPath, { forWrite = false } = {}) {
+    const s = String(hostOrVmPath || '');
+    if (!s) return { ok: false, error: '路径为空' };
+    if (this.isVmPath(s)) return { ok: true, vm: s, mapped: 'vm' };
+    const mapped = this.mapHostToVm(s);
+    if (mapped) {
+      if (forWrite && mapped === ((this.vmService.runtime && this.vmService.runtime.vm.workspaceMount) || '/workspace')) {
+        return { ok: false, error: '目标是目录而不是文件: ' + s };
+      }
+      return { ok: true, vm: mapped, mapped: 'root' };
+    }
+    return { ok: false, error: '路径不在虚拟机映射范围内（该目录未挂载进虚拟机）: ' + s };
   }
 
   /** VM 路径 → 宿主路径（宿主镜像用；映射不到返回 null） */
@@ -65,37 +86,63 @@ class VmFs {
     try { return this.vmService.toHostPath(p); } catch { return null; }
   }
 
+  /** 该路径是否应按"VM 内路径"处理（统一判定，见 vm-paths.js） */
+  isVmPath(p) {
+    const mount = (this.vmService && this.vmService.runtime && this.vmService.runtime.vm.workspaceMount) || '/workspace';
+    const vmRoots = [];
+    try {
+      if (this.vmService && this.vmService._externMounts) {
+        for (const [, v] of this.vmService._externMounts) vmRoots.push(v);
+      }
+    } catch { /* ignore */ }
+    return require('./vm-paths').isVmPath(p, { mount, vmRoots });
+  }
+
+  /**
+   * 宿主根清单（用于宿主路径 → VM 路径映射）：工作区根 + 额外宿主根 + 外部挂载。
+   * @returns {Array<[string, string]>} [[宿主根, VM 挂载点], ...]，宿主根已 resolve
+   */
+  mappingRoots() {
+    const roots = [];
+    try {
+      const mount = (this.vmService.runtime && this.vmService.runtime.vm.workspaceMount) || '/workspace';
+      const wsRoot = this.vmService.workspaceRoot;
+      if (wsRoot) roots.push([path.resolve(wsRoot), mount]);
+      for (const extra of (this.vmService.extraHostRoots || [])) {
+        if (extra) roots.push([path.resolve(extra), mount]);
+      }
+      if (this.vmService._externMounts) {
+        for (const [h, v] of this.vmService._externMounts) roots.push([path.resolve(h), v]);
+      }
+    } catch { /* ignore */ }
+    return roots;
+  }
+
+  /** 宿主路径 → VM 路径（仅映射，不做 IO）；未命中返回 null */
+  mapHostToVm(p) {
+    const paths = require('./vm-paths');
+    for (const [h, v] of this.mappingRoots()) {
+      const rel = paths.relUnder(h, p);
+      if (rel === null) continue;
+      return rel ? `${v}/${rel}` : v;
+    }
+    return null;
+  }
+
   /**
    * 确保文件在 VM 内可用，返回 VM 路径。
-   * - 已是 VM 路径（/ 开头）→ 原样返回（幂等）
+   * - 已是 VM 路径 → 原样返回（幂等）
    * - 宿主路径落在工作区/外部挂载内 → 映射；VM 内没有则按映射路径上传
    * - 宿主其它位置（如下载目录的附件）→ 上传到 /workspace/_uploads/<ts>_<name>
    */
   async ensureVmFile(hostOrVmPath) {
     const s = String(hostOrVmPath || '');
     if (!s) return s;
-    if (s.startsWith('/')) return s;
-    // 1) 目标 VM 路径：工作区根 → /workspace，外部挂载 → /workspace/_external/<name>
-    let target = null;
-    try {
-      const roots = [];
-      const wsRoot = this.vmService.workspaceRoot;
-      const mount = (this.vmService.runtime && this.vmService.runtime.vm.workspaceMount) || '/workspace';
-      if (wsRoot) roots.push([path.resolve(wsRoot), mount]);
-      if (this.vmService._externMounts) {
-        for (const [h, v] of this.vmService._externMounts) roots.push([path.resolve(h), v]);
-      }
-      const p = path.resolve(s);
-      for (const [h, v] of roots) {
-        const rel = path.relative(h, p);
-        if (rel === '') { target = v; break; }
-        if (rel && !rel.startsWith('..') && !path.isAbsolute(rel)) {
-          target = v + '/' + rel.split(path.sep).join('/');
-          break;
-        }
-      }
-    } catch { /* ignore */ }
-    const isKnown = !!target;
+    if (this.isVmPath(s)) return s;
+    // 1) 目标 VM 路径：工作区根/额外宿主根 → /workspace，外部挂载 → /workspace/_external/<name>
+    const mapped = this.mapHostToVm(s);
+    const isKnown = !!mapped;
+    let target = mapped;
     if (isKnown) {
       try { if (await this.exists(target)) return target; } catch { /* ignore */ }
     } else {
@@ -126,34 +173,16 @@ class VmFs {
   }
 
   /**
-   * 宿主路径 → VM 路径映射（仅命中已知根：工作区根 + 外部挂载目录）。未命中返回 { ok:false }。
+   * 宿主路径 → VM 路径映射（仅命中已知根：工作区根/额外宿主根 + 外部挂载目录）。未命中返回 { ok:false }。
    * forWrite=true 时不允许把"根目录本身"当文件；forWrite=false（目录/读）时允许。
    */
   mapVmTarget(hostOrVmPath, { forWrite = false } = {}) {
-    const s = String(hostOrVmPath || '');
-    if (!s) return { ok: false, error: '路径为空' };
-    if (s.startsWith('/')) return { ok: true, vm: s, mapped: 'vm' };
-    const roots = [];
-    try {
-      const wsRoot = this.vmService.workspaceRoot;
-      const mount = (this.vmService.runtime && this.vmService.runtime.vm.workspaceMount) || '/workspace';
-      if (wsRoot) roots.push([path.resolve(wsRoot), mount]);
-    } catch { /* ignore */ }
-    if (this.vmService._externMounts) {
-      for (const [h, v] of this.vmService._externMounts) roots.push([path.resolve(h), v]);
-    }
-    const p = path.resolve(s);
-    for (const [h, v] of roots) {
-      const rel = path.relative(h, p);
-      if (rel === '') {
-        if (forWrite) return { ok: false, error: '目标是目录而不是文件: ' + s };
-        return { ok: true, vm: v, mapped: 'root' };
-      }
-      if (rel && !rel.startsWith('..') && !path.isAbsolute(rel)) {
-        return { ok: true, vm: v + '/' + rel.split(path.sep).join('/'), mapped: 'root' };
-      }
-    }
-    return { ok: false, error: '路径不在虚拟机映射范围内（该目录未挂载进虚拟机）: ' + s };
+    return this.resolveVmPath(hostOrVmPath, { forWrite });
+  }
+
+  /** 配置的 VM 挂载点（默认 /workspace） */
+  mountRoot() {
+    return (this.vmService && this.vmService.runtime && this.vmService.runtime.vm.workspaceMount) || '/workspace';
   }
 
   async writeBuffer(filePath, buf) {
@@ -309,7 +338,11 @@ class VmFs {
 
   async deleteFile(filePath) {
     try {
-      const r = await this.exec(`rm -f ${shellQuote(this.toVm(filePath))}`);
+      const t = this.resolveVmPath(filePath);
+      if (!t.ok) throw new Error(t.error);
+      const mount = (this.vmService.runtime && this.vmService.runtime.vm.workspaceMount) || '/workspace';
+      if (t.vm === mount || t.vm === '/') throw new Error('拒绝删除挂载根目录: ' + t.vm);
+      const r = await this.exec(`rm -f ${shellQuote(t.vm)}`);
       if (!r.ok) throw new Error(r.stderr || 'rm 失败');
       return { ok: true };
     } catch (e) { return { ok: false, error: '虚拟机删除失败: ' + e.message }; }
@@ -317,8 +350,10 @@ class VmFs {
 
   async moveFile(src, dest) {
     try {
+      const dst = this.resolveVmPath(dest, { forWrite: true });
+      if (!dst.ok) throw new Error(dst.error);
       const srcVm = await this.ensureVmFile(src);
-      const r = await this.exec(`mkdir -p ${shellQuote(path.posix.dirname(this.toVm(dest)))} && mv -f ${shellQuote(srcVm)} ${shellQuote(this.toVm(dest))}`);
+      const r = await this.exec(`mkdir -p ${shellQuote(path.posix.dirname(dst.vm))} && mv -f ${shellQuote(srcVm)} ${shellQuote(dst.vm)}`);
       if (!r.ok) throw new Error(r.stderr || 'mv 失败');
       return { ok: true };
     } catch (e) { return { ok: false, error: '虚拟机移动失败: ' + e.message }; }
@@ -326,8 +361,10 @@ class VmFs {
 
   async copyFile(src, dest) {
     try {
+      const dst = this.resolveVmPath(dest, { forWrite: true });
+      if (!dst.ok) throw new Error(dst.error);
       const srcVm = await this.ensureVmFile(src);
-      const r = await this.exec(`mkdir -p ${shellQuote(path.posix.dirname(this.toVm(dest)))} && cp -f ${shellQuote(srcVm)} ${shellQuote(this.toVm(dest))}`);
+      const r = await this.exec(`mkdir -p ${shellQuote(path.posix.dirname(dst.vm))} && cp -f ${shellQuote(srcVm)} ${shellQuote(dst.vm)}`);
       if (!r.ok) throw new Error(r.stderr || 'cp 失败');
       return { ok: true };
     } catch (e) { return { ok: false, error: '虚拟机复制失败: ' + e.message }; }
@@ -371,7 +408,8 @@ class VmFs {
     try {
       const t = this.mapVmTarget(dirPath);
       if (!t.ok) throw new Error(t.error);
-      if (t.vm === '/workspace' || t.vm === '/') throw new Error('拒绝删除虚拟机根目录: ' + t.vm);
+      const mount = (this.vmService.runtime && this.vmService.runtime.vm.workspaceMount) || '/workspace';
+      if (t.vm === mount || t.vm === '/') throw new Error('拒绝删除虚拟机根目录: ' + t.vm);
       const r = await this.exec(`rm -rf ${shellQuote(t.vm)}`);
       if (!r.ok) throw new Error(r.stderr || 'rm -rf 失败');
       return { ok: true };

@@ -131,3 +131,40 @@ node scripts/vm-pack.js --src <qemu解包目录> --out <输出> --platform win32
 | Code 模式 + Monaco 在 VM 下打开/保存不可用 | `code:getLastWorkspace` 的 mount 在 `return` 之后（死代码）→ 重启后无挂载；`writeBuffer` 用 `toVm`，未挂载路径被静默映射到 `/workspace` 导致写目录失败；`code:getFileTree` 读宿主旧镜像 | mount 移到 return 之前；VM ready 钩子补挂最近 Code 工作区；`mountExternalDir` 幂等（已挂载不重复 push）；新增 `VmFs.mapVmTarget`（写路径仅允许工作区/外部挂载，未挂载给出明确错误）；新增 `pullExternalDir`（VM 改动拉回宿主镜像，供文件树/ESLint）；`code:getFileTree` 改为读 VM 生成树 | 真机 24/24（挂载幂等/保留 VM 改动、writeBuffer 映射、pull、ESLint）；应用级日志实测 `[vm] 已挂载外部目录: D:\cibyp-vm-p0\code-proj-test → /workspace/_external/code-proj-test` |
 
 冒烟脚本：`vm-os/tests/attach-mount-smoke.js`（真机 24/24）；`npm test` 374 通过。
+
+
+## 修复批次（2026-09-27，第 5 轮）：全平台生产级 + 打包产物可用 + 沙盒边界
+
+### 路径判定（macOS/Linux 生产级）
+- 新增 `src/main/vm/vm-paths.js`：唯一权威的宿主/VM 路径判定（消除"以 / 开头=VM 路径"在 POSIX 上把宿主路径当 VM 路径的误判）
+- `vm-fs`(toVm/ensureVmFile/mapVmTarget/resolveVmPath) / `vm-service`(isVmPath/toVmPath/pullExternalDir/mappingRoots/addHostRoot) / `vm-tools`(stageDeepValue + 写路径严格校验) / `main.js`(eslint / runtime:toVmPath / code:getFileTree / workspace:getFileTree) 全部改用它
+- `vm-workspace`：toHostPath 前缀边界、pull 保留 mtime、时钟偏移采样顺序修正、guest 命令改 shellQuote（消除注入面）、排除规则大小写不敏感、baseline 原子写
+- 写路径（writeBuffer/makeDirectory/deleteDirectory/copyFile/moveFile）严格映射，不再静默落到 /workspace
+
+### 沙盒边界（VM 模式不再触碰宿主）
+- Playwright：修 `_getVmService` 自引用 bug；VM 模式下**任意** playwright.mode 都走 VM 内 Chromium(CDP)，失败即明确报错，不再回落宿主 Edge/Chrome
+- 截图 / 电脑控制 / 剪贴板：VM 模式下走 Xvfb + xdotool/xclip（vm-graphics 新增 capture/mouseMove/click/drag/type/pressKey/scroll/clipboardGet/Set），依赖 UIA/OCR 的动作明确禁用并提示
+- `shell:openFileExplorer`：先 pull 再打开宿主镜像，路径不存在时明确报错（不再静默无效）
+- `env:detect`：VM 模式下探测 guest 内 python/node/npm/bun/git
+- office 硬解 9 个通道纳入 VM 路由（支持文件与目录输入）；ffmpeg 默认输出/宿主临时产物"抢救"进 VM；image:generate 的 file:// URL 也能回映
+- downloadFile/aria2：VM 模式下改走 file:download（产物落 VM）
+- `.cibyp-code-history` 明确为宿主侧，并从外部挂载/同步排除
+- workspace:getFileTree / code:getFileTree / eslint 前置 pull
+
+### 打包与 CI（六平台）
+- QEMU 包解压保留执行位 + 显式 chmod 755 + macOS xattr/codesign 尝试 + 平台化失败提示（此前 mac/linux 必失败）
+- `sherpa-onnx-*` 平台包通配 asarUnpack（Linux 全部 + macOS x64 语音此前不可用）
+- macOS：hardenedRuntime + entitlements（麦克风/AppleEvent/JIT/库校验）
+- ffmpeg：补 execFileSync 导入、win32-arm64 回退 x64、binPath asar.unpacked 替换
+- `scripts/package.js`：打包前把 .git / vm-os / tests / docs / claude-code-ref / 语音模型 / geogebra-src / 崩溃文件移出项目（同盘 stash，退出即恢复）
+  → app.asar 从 6.9GB（误含旧 dist + .git + 语音模型）降到 **476MB**，且不再缺 node_modules 文件
+- `.github/workflows/release.yml`：新增 test job（npm test），build 依赖 test
+
+### 验证
+- `npm test` 379 通过（新增路径判定/remap/stageDeepValue/打包配置 5 项）
+- 真机冒烟 `vm-os/tests/attach-mount-smoke.js` 24/24（附件入库 VM、挂载幂等、writeBuffer、pullExternalDir、ESLint 端到端 + 路径回映）
+- 打包产物实测（dist-test/win-unpacked 启动）：`[vm] 虚拟机就绪 {"accel":"whpx"}` → `[vm] 已挂载外部目录 …code-proj-test → /workspace/_external/code-proj-test` → `[vm] 工具路由就绪（437 通道 / 路由 36 / 缺: 无）`
+
+### 明确仍属宿主能力（非 VM 化，按设计）
+- serial/trng 宿主硬件、MCP / DS 插件宿主进程、自动化 DSL 的 fetch/env、WebUI 本地图片代理 roots、CAD/EDA 与 GeoGebra 导出、qr 生成、web:search/net:* 宿主网络类工具
+- 这些在 VM 模式下不做隔离（涉及宿主硬件/网络/应用级数据），需要时按工具描述与设置页说明操作

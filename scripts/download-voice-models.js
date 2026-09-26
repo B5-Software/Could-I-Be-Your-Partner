@@ -221,7 +221,8 @@ function ensureDir(dir) {
 
 function aria2Available() {
   try {
-    const p = path.resolve(__dirname, '..', 'assets', 'aria2', process.platform === 'win32' ? 'win-x64' : '', 'aria2c' + (process.platform === 'win32' ? '.exe' : ''));
+    const aria2DirName = (process.platform === 'win32' ? 'win' : process.platform === 'darwin' ? 'mac' : 'linux') + '-' + (process.arch === 'arm64' ? 'arm64' : 'x64');
+    const p = path.resolve(__dirname, '..', 'assets', 'aria2', aria2DirName, 'aria2c' + (process.platform === 'win32' ? '.exe' : ''));
     return fs.existsSync(p) ? p : false;
   } catch { return false; }
 }

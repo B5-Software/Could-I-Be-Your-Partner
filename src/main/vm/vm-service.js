@@ -38,6 +38,7 @@ const { EventEmitter } = require('events');
 
 const images = require('./vm-images');
 const qemuRuntime = require('./qemu-runtime');
+const vmpaths = require('./vm-paths');
 const { VmInstance } = require('./vm-instance');
 const { downloadFile, DownloadCancelled } = require('./vm-download');
 const { WorkspaceSync } = require('./vm-workspace');
@@ -56,6 +57,16 @@ class VmService extends EventEmitter {
     this.instance = null;
     this.emergencyHost = false;
     this._download = null; // { cancelled, current }
+    this.extraHostRoots = []; // 额外宿主根（如工作区基目录），映射到同一个 VM 挂载点
+  }
+
+  /** 登记额外宿主根（App 工作区基目录等），保证宿主路径 → VM 路径映射完整 */
+  addHostRoot(p) {
+    if (!p) return;
+    try {
+      const abs = path.resolve(String(p));
+      if (!this.extraHostRoots.some((x) => path.resolve(x) === abs)) this.extraHostRoots.push(abs);
+    } catch { /* ignore */ }
   }
 
   // ---------------------------------------------------------------- 配置
@@ -130,10 +141,10 @@ class VmService extends EventEmitter {
     this._externMounts.set(hostRoot, vmRoot);
     const { VmFs } = require('./vm-fs');
     const vmFs = new VmFs({ vmService: this });
-    const skip = new Set(['node_modules', '.git', 'dist', 'out', '.cache', '.venv', '__pycache__', '.next']);
+    const skip = new Set(['node_modules', '.git', 'dist', 'out', '.cache', '.venv', '__pycache__', '.next', '.cibyp-code-history']);
     const maxBytes = Math.max(1, Number(maxFileMB) || 20) * 1024 * 1024;
     const push = async (from, to) => {
-      await vmFs.exec(`mkdir -p ${JSON.stringify(to)}`, 20000);
+      await vmFs.exec(`mkdir -p ${vmpaths.shellQuote(to)}`, 20000);
       for (const e of fs.readdirSync(from, { withFileTypes: true })) {
         if (skip.has(e.name)) continue;
         const src = path.join(from, e.name);
@@ -152,28 +163,57 @@ class VmService extends EventEmitter {
    * 外部挂载目录：把 VM 内的新改动拉回宿主镜像（只在新/更新时覆盖，不删除宿主文件）。
    * 供 Code 模式文件树刷新、ESLint、打开资源管理器前调用，保证宿主镜像与 VM 一致。
    */
-  async pullExternalDir(hostOrVmPath, { maxFileMB = 20 } = {}) {
+  async pullExternalDir(hostOrVmPath, { maxFileMB = 20, deleted = false } = {}) {
     if (!this.instance || this.instance.state !== 'ready') return { ok: false, error: '虚拟机未就绪' };
     if (!this._externMounts || !this._externMounts.size) return { ok: true, pulled: 0, skipped: 'no-mounts' };
+    const paths = require('./vm-paths');
     const raw = String(hostOrVmPath || '');
     let hostRoot = null;
     let vmRoot = null;
-    if (raw.startsWith('/')) {
+    let sub = ''; // 相对挂载根的 VM 侧子路径
+    if (this.isVmPath(raw)) {
       for (const [h, v] of this._externMounts) {
-        if (raw === v || raw.startsWith(v + '/')) { hostRoot = h; vmRoot = v; break; }
+        if (raw === v || raw.startsWith(v + '/')) {
+          hostRoot = h; vmRoot = v; sub = raw.slice(v.length).replace(/^\/+/, ''); break;
+        }
       }
     } else {
-      const p = path.resolve(raw);
       for (const [h, v] of this._externMounts) {
-        if (p === h || p.startsWith(h + path.sep)) { hostRoot = h; vmRoot = v; break; }
+        const rel = paths.relUnder(h, raw);
+        if (rel !== null) { hostRoot = h; vmRoot = v; sub = rel; break; }
       }
     }
     if (!hostRoot || !vmRoot) return { ok: true, pulled: 0, skipped: 'not-external' };
     const { VmFs } = require('./vm-fs');
     const vmFs = new VmFs({ vmService: this });
-    const skip = new Set(['node_modules', '.git', 'dist', 'out', '.cache', '.venv', '__pycache__', '.next']);
+    const skip = new Set(['node_modules', '.git', 'dist', 'out', '.cache', '.venv', '__pycache__', '.next', '.cibyp-code-history']);
     const maxBytes = Math.max(1, Number(maxFileMB) || 20) * 1024 * 1024;
     let pulled = 0;
+    let removed = 0;
+    const targetVm = sub ? `${vmRoot}/${sub}` : vmRoot;
+    const targetHost = sub ? path.join(hostRoot, ...sub.split('/')) : hostRoot;
+    const stat = await vmFs.stat(targetVm).catch(() => null);
+    if (!stat) {
+      // VM 内已不存在：删除宿主镜像对应项（仅在明确的删除操作后执行）
+      if (deleted) {
+        try { fs.rmSync(targetHost, { recursive: true, force: true }); removed = 1; } catch { /* ignore */ }
+      }
+      return { ok: true, pulled: 0, removed, hostRoot, vmRoot };
+    }
+    if (stat.isFile) {
+      try {
+        let hostStat = null;
+        try { hostStat = fs.statSync(targetHost); } catch { /* missing */ }
+        if (!hostStat || stat.size !== hostStat.size || (Number(stat.mtimeMs) || 0) > hostStat.mtimeMs + 1000) {
+          const sftp = await vmFs.sftp();
+          fs.mkdirSync(path.dirname(targetHost), { recursive: true });
+          await sftp.fastGet(targetVm, targetHost);
+          if (stat.mtimeMs) { try { const t = new Date(stat.mtimeMs); fs.utimesSync(targetHost, t, t); } catch { /* ignore */ } }
+          pulled = 1;
+        }
+      } catch { /* ignore */ }
+      return { ok: true, pulled, hostRoot, vmRoot };
+    }
     const walk = async (vmDir, hostDir) => {
       fs.mkdirSync(hostDir, { recursive: true });
       const r = await vmFs.listDirectory(vmDir).catch(() => null);
@@ -200,8 +240,16 @@ class VmService extends EventEmitter {
         } catch { /* 单个文件失败不影响整体 */ }
       }
     };
-    await walk(vmRoot, hostRoot);
-    return { ok: true, pulled, hostRoot, vmRoot };
+    await walk(targetVm, targetHost);
+    return { ok: true, pulled, removed, hostRoot, vmRoot };
+  }
+
+  /** 该路径是否应按"VM 内路径"处理（统一判定，见 vm-paths.js） */
+  isVmPath(p) {
+    const mount = (this.runtime.vm && this.runtime.vm.workspaceMount) || '/workspace';
+    const vmRoots = [];
+    if (this._externMounts) for (const [, v] of this._externMounts) vmRoots.push(v);
+    return require('./vm-paths').isVmPath(p, { mount, vmRoots });
   }
 
   /** 宿主路径 → VM 路径（未同步/未就绪时退化为 /workspace） */
@@ -209,14 +257,12 @@ class VmService extends EventEmitter {
     try {
       const raw = String(hostPath || '');
       if (!raw) return raw;
-      if (raw.startsWith('/')) return raw; // 已是 VM 内 POSIX 路径（幂等）
+      if (this.isVmPath(raw)) return raw; // 已是 VM 内路径（幂等）
+      const paths = require('./vm-paths');
       if (this._externMounts && this._externMounts.size) {
-        const p = path.resolve(String(hostPath || ''));
         for (const [hostRoot, vmRoot] of this._externMounts) {
-          if (p === hostRoot || p.startsWith(hostRoot + path.sep)) {
-            const rel = path.relative(hostRoot, p).split(path.sep).join('/');
-            return rel ? `${vmRoot}/${rel}` : vmRoot;
-          }
+          const rel = paths.relUnder(hostRoot, raw);
+          if (rel !== null) return rel ? `${vmRoot}/${rel}` : vmRoot;
         }
       }
       const sync = this._workspaceSync();
@@ -582,15 +628,51 @@ class VmService extends EventEmitter {
     try {
       const AdmZip = require('adm-zip');
       const zip = new AdmZip(zipPath);
-      zip.extractAllTo(tmpDir, true);
+      // 第三个参数 keepOriginalPermission：macOS/Linux 必须保留 unix 执行位，否则 qemu 二进制 EACCES
+      try { zip.extractAllTo(tmpDir, true, true); } catch { zip.extractAllTo(tmpDir, true); }
+      if (process.platform !== 'win32') {
+        // 兜底：Windows 打的 zip 通常没有 unix 权限位 → 显式给可执行位
+        const fixExec = (dir) => {
+          for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+            const p = path.join(dir, e.name);
+            if (e.isDirectory()) { fixExec(p); continue; }
+            if (/^(qemu-system-|qemu-img$)/.test(e.name) || e.name === 'qemu-img') {
+              try { fs.chmodSync(p, 0o755); } catch { /* ignore */ }
+            }
+          }
+        };
+        fixExec(tmpDir);
+        if (process.platform === 'darwin') {
+          // Apple Silicon 上未签名的 Mach-O 会被内核拒绝；去 quarantine + ad-hoc 签名（失败不阻断）
+          const { execFile } = require('child_process');
+          try {
+            execFile('/usr/bin/xattr', ['-dr', 'com.apple.quarantine', tmpDir], () => {});
+          } catch { /* ignore */ }
+          try {
+            execFile('/usr/bin/codesign', ['--force', '--sign', '-', tmpDir], () => {});
+          } catch { /* ignore */ }
+        }
+      }
       // 自检：确认二进制可执行且能用
       const info = qemuRuntime.inspectQemuDir(tmpDir, images.guestArch(process.arch));
       if (!info) throw new Error('解压后未找到 qemu-system-* / qemu-img（包结构异常）');
       const ver = qemuRuntime.qemuVersion(info.exe);
-      if (!ver) throw new Error('解压后的 QEMU 无法运行（缺少依赖 DLL？）');
+      if (!ver) {
+        const hint = process.platform === 'win32'
+          ? '缺少依赖 DLL（Microsoft Visual C++ 运行库）'
+          : process.platform === 'darwin'
+            ? '二进制不可执行或缺少依赖（已被 Gatekeeper 拦截 / 依赖 dylib 缺失 / 需要 chmod +x）'
+            : '二进制不可执行或缺少依赖（需要 chmod +x / glibc 版本或共享库缺失）';
+        throw new Error('解压后的 QEMU 无法运行：' + hint);
+      }
       fs.rmSync(targetDir, { recursive: true, force: true });
       fs.mkdirSync(path.dirname(targetDir), { recursive: true });
       fs.renameSync(tmpDir, targetDir);
+      // rename 后再自检一次（跨设备/权限变化时能尽早发现）
+      const finalInfo = qemuRuntime.inspectQemuDir(targetDir, images.guestArch(process.arch));
+      if (finalInfo && !qemuRuntime.qemuVersion(finalInfo.exe)) {
+        throw new Error('QEMU 安装后无法执行（权限/依赖问题），请查看设置页的自检输出');
+      }
       this.emit('progress', { phase: 'done', kind: 'qemu', percent: 100, version: ver });
       return { ok: true, dir: targetDir, version: ver, qemuVersion: ver };
     } catch (e) {

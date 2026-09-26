@@ -28,6 +28,7 @@ const fs = require('fs');
 const path = require('path');
 const { EventEmitter } = require('events');
 const { writeTar, parseTar, dirEntriesFor } = require('./vm-tar');
+const { shellQuote } = require('./vm-paths');
 
 const BATCH_MAX_BYTES = 16 * 1024 * 1024;
 const BATCH_MAX_FILES = 2000;
@@ -42,7 +43,10 @@ const DEFAULT_EXCLUDES = {
 
 function nowMs() { return Date.now(); }
 
-function toPosix(p) { return String(p).split(path.sep).join('/'); }
+function toPosix(p) {
+  const s = String(p);
+  return path.sep === '\\' ? s.replace(/\\+/g, '/') : s;
+}
 
 class WorkspaceSync extends EventEmitter {
   /**
@@ -89,7 +93,10 @@ class WorkspaceSync extends EventEmitter {
     if (!this.baselineFile) return;
     try {
       fs.mkdirSync(path.dirname(this.baselineFile), { recursive: true });
-      fs.writeFileSync(this.baselineFile, JSON.stringify(this.baseline));
+      // 原子写：异常中断也不会留下截断的 JSON
+      const tmp = `${this.baselineFile}.tmp`;
+      fs.writeFileSync(tmp, JSON.stringify(this.baseline));
+      fs.renameSync(tmp, this.baselineFile);
     } catch (e) {
       this.emit('warn', '保存同步基线失败: ' + e.message);
     }
@@ -108,32 +115,35 @@ class WorkspaceSync extends EventEmitter {
 
   toHostPath(vmPath) {
     const p = String(vmPath || '');
-    if (!p.startsWith(this.vmMount)) return null;
-    const rel = p.slice(this.vmMount.length).replace(/^\/+/, '');
+    const mount = String(this.vmMount || '/workspace').replace(/\/+$/, '');
+    if (p !== mount && !p.startsWith(mount + '/')) return null;
+    const rel = p.slice(mount.length).replace(/^\/+/, '');
     if (!rel) return this.hostRoot;
     return this.hostRoot ? path.join(this.hostRoot, ...rel.split('/')) : null;
   }
 
   // ---------------------------------------------------------------- 扫描
 
-  /** 排除判定 */
+  /** 排除判定（大小写不敏感：Windows/macOS 文件系统默认不区分大小写） */
   shouldExclude(rel) {
-    const r = toPosix(rel);
+    const r = toPosix(rel).toLowerCase();
     const segs = r.split('/');
     for (const s of DEFAULT_EXCLUDES.segments) {
-      if (segs.includes(s)) return true;
+      if (segs.includes(String(s).toLowerCase())) return true;
     }
     if (!this.syncGit && (segs[0] === '.git' || segs.includes('.git'))) return true;
     for (const suf of DEFAULT_EXCLUDES.suffixes) {
-      if (r.endsWith(suf)) return true;
+      if (r.endsWith(String(suf).toLowerCase())) return true;
     }
     for (const pre of DEFAULT_EXCLUDES.prefixes) {
-      if (r.startsWith(pre)) return true;
+      if (r.startsWith(String(pre).toLowerCase())) return true;
     }
     if (this.excludes) {
       for (const pat of this.excludes) {
         try {
-          if (pat instanceof RegExp ? pat.test(r) : r.includes(String(pat))) return true;
+          if (pat instanceof RegExp) { if (pat.test(r)) return true; continue; }
+          const needle = String(pat).replace(/\\/g, '/').toLowerCase();
+          if (needle && r.includes(needle)) return true;
         } catch { /* ignore */ }
       }
     }
@@ -167,19 +177,20 @@ class WorkspaceSync extends EventEmitter {
   /** VM 侧清单（find -printf，一次扫描拿全部；用 guest 当前时间校正时钟偏移） */
   async scanVm() {
     const inst = this._instance();
-    const cmd = `date +%s; find ${JSON.stringify(this.vmMount)} -mindepth 1 \\( -type f -o -type d \\) -printf '%y\\t%P\\t%s\\t%T@\\n' 2>/dev/null`;
+    // 注意：date 必须在 find **之后**执行——否则 offset 会把本次扫描耗时算进去（大工作区可达数秒，导致反复误判变更）
+    const cmd = `find ${JSON.stringify(this.vmMount)} -mindepth 1 \\( -type f -o -type d \\) -printf '%y\\t%P\\t%s\\t%T@\\n' 2>/dev/null; date +%s`;
     const r = await inst.exec(cmd, { timeoutMs: 120000 });
     const files = {};
     if (!r.ok) return files;
     const lines = r.stdout.split('\n');
-    // 第一行是 guest 的 epoch（秒）：宿主与 guest 常有几百毫秒~几秒的时钟偏移，
+    // 最后一行是 guest 的 epoch（秒）：宿主与 guest 常有几百毫秒~几秒的时钟偏移，
     // 直接比较 mtime 会把"较新的一方"判反（实测：VM 后写的内容被判为更旧）
-    const guestEpoch = parseFloat(lines[0]);
+    const guestEpoch = parseFloat(lines[lines.length - 1]);
     if (Number.isFinite(guestEpoch) && guestEpoch > 0) {
       this._vmClockOffsetMs = Date.now() - guestEpoch * 1000;
     }
     const offset = this._vmClockOffsetMs || 0;
-    for (let i = 1; i < lines.length; i++) {
+    for (let i = 0; i < lines.length - 1; i++) {
       const line = lines[i];
       if (!line) continue;
       const [type, rel, size, mtime] = line.split('\t');
@@ -291,8 +302,8 @@ class WorkspaceSync extends EventEmitter {
     const sizes = await this.scanVm();
     let files = 0, bytes = 0;
     for (const batch of WorkspaceSync.batches(rels, sizes)) {
-      const list = batch.map((r) => JSON.stringify(r)).join(' ');
-      const cmd = `tar -c -f - -C ${JSON.stringify(this.vmMount)} --format=pax -- ${list}`;
+      const list = batch.map((r) => shellQuote(r)).join(' ');
+      const cmd = `tar -c -f - -C ${shellQuote(this.vmMount)} --format=pax -- ${list}`;
       const buf = await this._execWithStdout(inst, cmd, 300000);
       if (!buf || !buf.length) continue;
       const { entries, warnings } = parseTar(buf);
@@ -305,6 +316,11 @@ class WorkspaceSync extends EventEmitter {
         try {
           fs.mkdirSync(path.dirname(abs), { recursive: true });
           fs.writeFileSync(abs, e.data);
+          // 保留 mtime（tar 记录的是整秒）：否则拉回后宿主 mtime=now，下次 diff 会误判"宿主改了"
+          if (e.mtime) {
+            const t = new Date(Number(e.mtime) * 1000);
+            try { fs.utimesSync(abs, t, t); } catch { /* ignore */ }
+          }
           files++; bytes += e.data.length;
         } catch (err) {
           this.emit('warn', `写入失败 ${targetRel}: ${err.message}`);
@@ -319,7 +335,7 @@ class WorkspaceSync extends EventEmitter {
   async deleteInVm(rels) {
     if (!rels.length) return 0;
     const inst = this._instance();
-    const list = rels.map((r) => JSON.stringify(path.posix.join(this.vmMount, r))).join(' ');
+    const list = rels.map((r) => shellQuote(path.posix.join(this.vmMount, r))).join(' ');
     await inst.exec(`rm -f -- ${list}`, { timeoutMs: 60000 });
     return rels.length;
   }

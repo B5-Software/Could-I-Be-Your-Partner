@@ -17,7 +17,7 @@ const path = require('path');
 const { BrowserWindow, dialog, screen } = require('electron');
 
 module.exports = function registerPlaywrightIpc({ getVmService, ipcMain, getSettings, getMainWindow, getImagesDir, getUserDataPath }) {
-  _getVmService = typeof _getVmService === 'function' ? getVmService : null;
+  _getVmService = typeof getVmService === 'function' ? getVmService : null;
 let _pwBrowser = null; // shared browser instance (chromium.launch 或 launchPersistentContext)
 let _pwDataMode = 'isolated'; // 当前浏览器实例的数据模式（isolated/persistent/profile-copy）
 const _pwWorkspaces = new Map(); // workspacePath -> { context, page }
@@ -244,6 +244,29 @@ async function _launchPwBrowser(overrideSettings = null) {
   } catch { /* ignore */ }
 
   let lastError = null;
+
+  // ---- 运行位置=虚拟机：始终在 VM 内启动 Chromium 并用 CDP 接管（浏览器沙盒）----
+  // 与 playwright.mode 无关：只要运行位置是虚拟机，就不允许落到宿主 Edge/Chrome。
+  if (typeof getVmService === 'function') {
+    let vmSvc = null;
+    try { vmSvc = _getVmService ? _getVmService() : null; } catch { vmSvc = null; }
+    const inVm = vmSvc && (vmSvc.runtime || {}).location === 'vm' && !vmSvc.emergencyHost;
+    if (inVm) {
+      try {
+        const cr = await vmSvc.graphicsChromium({ url: 'about:blank' });
+        if (!cr || !cr.ok) throw new Error((cr && cr.error) || '未知错误');
+        _pwBrowser = await chromium.connectOverCDP(cr.cdpUrl);
+        _pwDataMode = 'isolated';
+        console.log('[vm] Playwright 已接管虚拟机内 Chromium:', cr.cdpUrl);
+        _onPwBrowserLaunched(!headless);
+        _attachPwDisconnectListener(_pwBrowser);
+        return _pwBrowser;
+      } catch (e) {
+        throw new Error('虚拟机内浏览器启动失败: ' + e.message
+          + '。请确认虚拟机已就绪且镜像包含图形栈（full 变体），或在设置页运行 VM 自检。');
+      }
+    }
+  }
 
   // ---- 浏览器数据模式：persistent / profile-copy → launchPersistentContext ----
   // （登录态/cookies/localStorage 落盘到专用目录，跨会话保留；与系统浏览器完全隔离）

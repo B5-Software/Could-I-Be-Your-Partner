@@ -17,7 +17,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { execFile } = require('child_process');
+const { execFile, execFileSync } = require('child_process');
 
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
 const MAX_TIMEOUT_MS = 30 * 60 * 1000;
@@ -26,6 +26,7 @@ const FFMPEG_PLATFORM_PKG = {
   'darwin-arm64': '@ffmpeg-installer/darwin-arm64',
   'darwin-x64': '@ffmpeg-installer/darwin-x64',
   'win32-x64': '@ffmpeg-installer/win32-x64',
+  'win32-arm64': '@ffmpeg-installer/win32-x64', // Windows arm64：上游无 arm64 包，回退 x64（x64 模拟运行）
   'linux-x64': '@ffmpeg-installer/linux-x64',
   'linux-arm64': '@ffmpeg-installer/linux-arm64'
 };
@@ -33,6 +34,7 @@ const FFPROBE_PLATFORM_PKG = {
   'darwin-arm64': '@ffprobe-installer/darwin-arm64',
   'darwin-x64': '@ffprobe-installer/darwin-x64',
   'win32-x64': '@ffprobe-installer/win32-x64',
+  'win32-arm64': '@ffprobe-installer/win32-x64', // Windows arm64：上游无 arm64 包，回退 x64
   'linux-x64': '@ffprobe-installer/linux-x64',
   'linux-arm64': '@ffprobe-installer/linux-arm64'
 };
@@ -89,6 +91,8 @@ function resolveBinary(kind) {
       if (binPath && fs.existsSync(binPath)) {
         // npm 可能因 ignore-scripts 跳过 chmod，运行前补一次可执行权限
         try { fs.accessSync(binPath, fs.constants.X_OK); } catch { try { fs.chmodSync(binPath, 0o755); } catch { /* ignore */ } }
+        // asar 打包后二进制在 app.asar.unpacked（不带该替换时 spawn 会失败）
+        if (binPath.includes('app.asar')) binPath = binPath.replace('app.asar', 'app.asar.unpacked');
         return binPath;
       }
     } catch { /* 该平台包未安装 */ }

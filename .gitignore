@@ -1,4 +1,6 @@
 # Build output
+# electron-builder 本地验证输出（打包产物，不入库）
+dist-*/
 dist/
 out/
 
