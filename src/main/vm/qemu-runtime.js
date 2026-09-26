@@ -251,7 +251,9 @@ function buildArgv(o) {
     argv.push('-netdev', `user,id=n0,hostfwd=tcp:127.0.0.1:${o.sshPort}-:22`);
   }
   argv.push(
-    '-device', 'virtio-net-pci,netdev=n0',
+    // romfile= 关闭 virtio 网卡的 option ROM（我们用不到 PXE；且部分平台/发行版不带 efi-virtio.rom，
+    // 缺失会导致 QEMU 直接启动失败：failed to find romfile "efi-virtio.rom"）
+    '-device', 'virtio-net-pci,netdev=n0,romfile=',
     '-chardev', `socket,id=ser0,host=127.0.0.1,port=${o.serialPort},server=on,wait=off`,
     '-serial', 'chardev:ser0',
     '-smbios', `type=1,serial=ds=nocloud-net;s=http://10.0.2.2:${o.ciPort}/`,
