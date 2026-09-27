@@ -1904,15 +1904,18 @@
         };
       },
       DIMENSION(ctx) {
-        // 简化: 把 DIMENSION 降级为 TEXT (显示其文本)
-        const x = parseFloat(ctx.fields[11]), y = parseFloat(ctx.fields[21]);
+        // 降级为 TEXT（显示其文本）；很多 DIMENSION 没有 11/21（测量点），回退到 10/20（定义点）
+        const x11 = parseFloat(ctx.fields[11]), y21 = parseFloat(ctx.fields[21]);
+        const x10 = parseFloat(ctx.fields[10]), y20 = parseFloat(ctx.fields[20]);
+        const x = Number.isFinite(x11) ? x11 : x10;
+        const y = Number.isFinite(y21) ? y21 : y20;
         const txt = ctx.fields[1] || '';
-        if (isNaN(x) || isNaN(y)) return null;
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
         return {
           type: 'text', layer: ctx.fields[8] || 'Layer0',
           props: { position: { x, y }, height: 10, text: txt || '<dim>', rotation: 0 }
         };
-      }
+      },
     },
 
     // 解析 INSERT 块引用并展开为对象列表
@@ -1930,8 +1933,10 @@
       if (!block) return { objects: [], next: i };
       const ix = parseFloat(fields[10]) || 0;
       const iy = parseFloat(fields[20]) || 0;
-      const scale = parseFloat(fields[41]) || 1;
-      const sy = parseFloat(fields[42]) || scale;
+      const s1 = parseFloat(fields[41]);
+      const s2 = parseFloat(fields[42]);
+      const scale = Number.isFinite(s1) ? s1 : 1;
+      const sy = Number.isFinite(s2) ? s2 : scale;
       const rotDeg = parseFloat(fields[50]) || 0;
       const ang = rotDeg * Math.PI / 180;
       // 把块内每个对象克隆+变换
@@ -2676,7 +2681,9 @@
         case 'line': sh(p.start); sh(p.end); break;
         case 'polyline': case 'hatch': (p.points || []).forEach(sh); break;
         case 'rect': sh(p.corner1); sh(p.corner2); break;
-        case 'circle': case 'arc': case 'ellipse': case 'text': sh(p.center || p.position); if (p.position) sh(p.position); break;
+        case 'circle': case 'arc': case 'ellipse': sh(p.center); break;
+        case 'text': sh(p.position); break;
+        case 'point': if (p.position) sh(p.position); break;
         case 'dim': sh(p.start); sh(p.end); if (p.projEnd) sh(p.projEnd); break;
         case 'dimradius': sh(p.center); sh(p.edgePoint); sh(p.leaderEnd); break;
         case 'dimdiameter': sh(p.center); sh(p.point1); sh(p.point2); if (p.leaderEnd) sh(p.leaderEnd); break;
@@ -3247,10 +3254,16 @@
           // 沿线段方向延伸，找到与边界对象的交点
           for (const b of bounds) {
             if (b.type !== 'line') continue;
-            // 把 t 当作无限长直线，与 b 求交点
+            // 把 t 当作无限长直线与 b 求交点
             const ip = lineIntersect(t.props.start, t.props.end, b.props.start, b.props.end);
             if (!ip) continue;
-            // 选择离当前端点更远的一端延伸
+            // 交点在原线段范围内 → 跳过：否则会把远端点拉到交点上（延长变缩短）
+            const ddx = t.props.end.x - t.props.start.x, ddy = t.props.end.y - t.props.start.y;
+            const len2 = ddx * ddx + ddy * ddy;
+            if (len2 < 1e-12) continue;
+            const tt = ((ip.x - t.props.start.x) * ddx + (ip.y - t.props.start.y) * ddy) / len2;
+            if (tt > -1e-9 && tt < 1 + 1e-9) continue;
+            // 应交点在线段外侧：把离交点更远的端点延伸到交点
             const dStart = dist(ip, t.props.start), dEnd = dist(ip, t.props.end);
             if (dStart > dEnd) t.props.end = ip; else t.props.start = ip;
             extended++;

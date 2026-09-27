@@ -1061,6 +1061,21 @@ test('pcb-model: pads/nets/connectivity/ratsnest', () => {
   assert.ok(rats.some(l => l.net === 'NET1'));
 });
 
+test('pcb-model: B 面镜像+旋转一致性（锁定当前约定，防止无意改语义）', () => {
+  const mk = (rot, side, y) => {
+    const b = PCBModelT.newBoard('Bside', 40, 30, 2);
+    PCBModelT.Board.addComponent(b, { ref: 'R1', value: '10k', footprint: 'R_0805', x: 20, y, rot, side });
+    return PCBModelT.Board.allPads(b, PCBFpT).filter((p) => p.ref === 'R1').map((p) => ({ x: +(p.x - 20).toFixed(4), y: +(p.y - y).toFixed(4) }));
+  };
+  const key = (p) => p.x + ',' + p.y;
+  const f0 = mk(0, 'F', 10), b0 = mk(0, 'B', 20), b90 = mk(90, 'B', 30);
+  // B 面 rot=0 = F 面的 X 镜像
+  assert.deepStrictEqual(b0.map(key).sort(), f0.map((p) => ({ x: -p.x, y: p.y })).map(key).sort(), 'B 面 rot=0 应为 X 镜像');
+  // B 面 rot=90 = 镜像后按 +90° 旋转（当前约定；与 KiCad 的实机复核见 docs/CAD-EDA-审计与修复-2026-09.md B1）
+  const rot90 = (p) => ({ x: +(-p.y).toFixed(4), y: +p.x.toFixed(4) });
+  assert.deepStrictEqual(b90.map(key).sort(), b0.map(rot90).map(key).sort(), 'B 面 rot=90 约定被改变');
+});
+
 test('pcb-model: single-file + multi-file serialization roundtrip', () => {
   const doc = PCBModelT.Doc;
   doc.reset('RoundTrip', 50, 40, 2);
