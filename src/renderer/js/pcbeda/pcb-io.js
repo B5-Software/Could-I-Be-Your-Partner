@@ -321,24 +321,26 @@
     L.push('(kicad_pcb (version 20221018) (generator "cibyp_pcb_eda")');
     L.push('  (general (thickness ' + (board.stackup.boardThickness || 1.6) + '))');
     L.push('  (paper "A4")');
+    // KiCad s-expression 字符串转义（ref/value/net 含 " 或反斜杠会产出非法文件）
+    const escSx = (v) => String(v == null ? '' : v).replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/[\r\n]+/g, ' ');
     const layerDefs = [];
     const cuLayers = board.stackup.layers.filter(l => l.type === 'copper');
     for (const l of cuLayers) {
       const num = l.id === 'F.Cu' ? 0 : (l.id === 'B.Cu' ? 31 : 1 + parseInt(l.id.replace(/\D/g, ''), 10) - 1);
       layerDefs.push('(' + num + " \"" + l.id + "\" signal)");
     }
-    layerDefs.push('(36 "B.SilkS" user)', '(37 "F.SilkS" user)', '(44 "Edge.Cuts" user)');
+    layerDefs.push('(34 "B.Paste" user)', '(35 "F.Paste" user)', '(36 "B.SilkS" user)', '(37 "F.SilkS" user)', '(38 "B.Mask" user)', '(39 "F.Mask" user)', '(44 "Edge.Cuts" user)');
     L.push('  (layers ' + layerDefs.join(' ') + ')');
     L.push('  (setup (pad_to_mask_clearance 0))');
-    for (const [name, code] of netCode) L.push('  (net ' + code + ' "' + name + '")');
+    for (const [name, code] of netCode) L.push('  (net ' + code + ' "' + escSx(name) + '")');
     // footprints
     for (const comp of board.components) {
       const fp = fpLib.generate(comp.footprint, comp.params || {});
       if (!fp) continue;
       L.push('  (footprint "CIBYP:' + comp.footprint + '" (layer "' + (comp.side === 'B' ? 'B.Cu' : 'F.Cu') + '")');
       L.push('    (at ' + comp.x.toFixed(4) + ' ' + comp.y.toFixed(4) + ' ' + (comp.rot || 0) + ')');
-      L.push('    (fp_text reference "' + comp.ref + '" (at 0 -2 0 unlocked) (layer "' + (comp.side === 'B' ? 'B.SilkS' : 'F.SilkS') + '") (effects (font (size 1 1) (thickness 0.15))))');
-      L.push('    (fp_text value "' + (comp.value || '') + '" (at 0 2 0 unlocked) (layer "' + (comp.side === 'B' ? 'B.SilkS' : 'F.SilkS') + '") (effects (font (size 1 1) (thickness 0.15))))');
+      L.push('    (fp_text reference "' + escSx(comp.ref) + '" (at 0 -2 0 unlocked) (layer "' + (comp.side === 'B' ? 'B.SilkS' : 'F.SilkS') + '") (effects (font (size 1 1) (thickness 0.15))))');
+      L.push('    (fp_text value "' + escSx(comp.value || '') + '" (at 0 2 0 unlocked) (layer "' + (comp.side === 'B' ? 'B.SilkS' : 'F.SilkS') + '") (effects (font (size 1 1) (thickness 0.15))))');
       for (const pad of fp.pads) {
         const type = pad.drill ? 'thru_hole' : 'smd';
         const shape = pad.shape === 'circle' ? 'circle' : (pad.shape === 'oval' ? 'oval' : 'rect');

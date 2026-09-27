@@ -216,6 +216,9 @@
       this._history.push(this.snapshot());
       if (this._history.length > this._maxHistory) this._history.shift();
       this._redoStack.length = 0;
+      // 所有走历史栈的变更都算脏：此前 move/rotate/scale/mirror/trim/extend 等
+      // 只 pushHistory 不置脏 → 关窗不提示保存、Agent 自动保存被跳过（静默丢数据）。
+      this.modified = true;
     },
 
     undo() {
@@ -1125,17 +1128,38 @@
     const r = parseInt(hex.slice(1, 3), 16);
     const g = parseInt(hex.slice(3, 5), 16);
     const b = parseInt(hex.slice(5, 7), 16);
-    return 1 + ((r + g + b) % 8);
-  }
-
   function fnum(n) {
-    // DXF requires max 16 significant digits, no scientific notation
+    // 非有限值（NaN/Infinity）绝不能写进 DXF（会让文件不可读）；
+    // 超大值不能输出科学计数法（DXF 解析器不支持）。
+    if (!Number.isFinite(Number(n))) return '0.0';
+    const r = Math.round(Number(n) * 1e6) / 1e6;
+    if (Math.abs(r) < 1e-9) return '0.0';
+    let s = String(r);
+    if (s.includes('e') || s.includes('E')) {
+      s = r.toLocaleString('en-US', { useGrouping: false, maximumFractionDigits: 6 });
+    }
+    return s;
+  }
     if (Math.abs(n) < 1e-12) return '0.0';
     return Number(n.toFixed(6)).toString();
   }
 
   function dxfPair(code, value) {
-    return `${code}\n${value}\n`;
+    // DXF 是逐行「组码/值」结构：值中出现 CR/LF 会把下一行当组码解析，直接损坏文件
+    // （实测 MTEXT 导入的 \n 经 TEXT 导出后破坏整个 DXF）；统一清洗为空格。
+    const v = String(value == null ? '' : value).replace(/[\r\n]+/g, ' ');
+    return `${code}\n${v}\n`;
+  }
+
+  // 工程标题更新（顶层作用域）——loadProject / importDxf 回调在顶层调用，
+  // 此前该函数定义在 UI.init() 内，导致调用即 ReferenceError（加载/导入假失败）。
+  function updateDocTitle(filePath) {
+    if (typeof document === 'undefined') return;
+    const el = document.getElementById('doc-name');
+    if (!el) return;
+    if (!filePath) { el.textContent = t('cad.untitled', '未命名工程'); return; }
+    const parts = String(filePath).split(/[\\/]/);
+    el.textContent = parts[parts.length - 1] || t('cad.untitled', '未命名工程');
   }
 
   const DXFExporter = {
@@ -4681,8 +4705,9 @@
         added.push(o.id);
       }
       if (filePath) {
-        Document.filePath = filePath;
-        updateDocTitle(filePath);
+        // 导入的 DXF 是「来源」不是「保存目标」：绝不能写进 Document.filePath，
+        // 否则关窗自动保存会把工程 JSON 覆盖到原 DXF 上（实测 P0 数据损坏）。
+        updateDocTitle(filePath + ' (' + t('cad.imported', '导入') + ')');
       }
       Renderer.fit();
       UI.refreshLayers();

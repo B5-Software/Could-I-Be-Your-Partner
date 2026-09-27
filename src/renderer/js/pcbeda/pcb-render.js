@@ -209,7 +209,7 @@
       // offscreen: fill zone color, punch clearances, composite
       const zc = this._zoneCanvas;
       const dpr = window.devicePixelRatio || 1;
-      if (zc.width !== this.canvas.width) { zc.width = this.canvas.width; zc.height = this.canvas.height; }
+      if (zc.width !== this.canvas.width || zc.height !== this.canvas.height) { zc.width = this.canvas.width; zc.height = this.canvas.height; }
       const c2 = zc.getContext('2d');
       c2.setTransform(dpr, 0, 0, dpr, 0, 0);
       c2.clearRect(0, 0, this.width, this.height);

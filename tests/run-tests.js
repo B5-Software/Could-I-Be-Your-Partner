@@ -1158,6 +1158,40 @@ test('pcb-gerber: Excellon drill with tool table', () => {
   assert.ok(drl.trim().endsWith('M30'), 'missing M30 end');
 });
 
+test('pcb-gerber: PnP/BOM 规范（Y 轴取反 / CSV 转义 / 分组键 / UTF-8 BOM）', () => {
+  const b = PCBModelT.newBoard('PnP规范', 40, 30, 1);
+  PCBModelT.Board.addComponent(b, { ref: 'U1', value: 'X,"Y"', footprint: 'SOIC-8', x: 5, y: 8 });
+  PCBModelT.Board.addComponent(b, { ref: 'U2', value: 'A|B', footprint: 'R_0805', x: 12, y: 8 });
+  PCBModelT.Board.addComponent(b, { ref: 'U3', value: 'A|B', footprint: 'R_0805', x: 20, y: 8 });
+  const pnp = PCBGerberT.emitPnP(b);
+  assert.ok(pnp.startsWith('\uFEFFDesignator'), 'PnP 应带 UTF-8 BOM 表头');
+  const rows = pnp.replace(/^\uFEFF/, '').split('\n').filter(Boolean).slice(1);
+  assert.ok(rows.some((r) => r.includes('"X,""Y"""')), 'PnP 值应 CSV 转义: ' + JSON.stringify(rows));
+  const rowU1 = rows.find((r) => r.startsWith('U1,'));
+  assert.ok(rowU1 && rowU1.includes(',-8.000,'), 'PnP 的 Y 必须与 Gerber 一致（取反）: ' + rowU1);
+  const bom = PCBGerberT.emitBOM(b);
+  assert.ok(bom.startsWith('\uFEFFQuantity'), 'BOM 应带 UTF-8 BOM 表头');
+  const lines = bom.replace(/^\uFEFF/, '').trim().split('\n').slice(1);
+  assert.ok(lines.some((l) => l.startsWith('2,') && l.includes('A|B')), 'BOM 分组键不应被 | 破坏: ' + JSON.stringify(lines));
+});
+
+test('vm-tools: CAD/EDA 文件通道纳入 VM 路由（运行位置=虚拟机时写盘落虚拟机）', () => {
+  const VMT = require('../src/main/vm/vm-tools.js');
+  const expect = {
+    'cipypcad:saveProject': 'writeFile', 'cipypcad:loadProject': 'read',
+    'cipypcad:exportDxf': 'writeFile', 'cipypcad:exportImage': 'writeFile',
+    'pcbeda:saveProject': 'writeDirOf', 'pcbeda:loadProject': 'read',
+    'pcbeda:exportFiles': 'writeDir', 'pcbeda:writeFile': 'writeFile',
+    'pcbeda:writeFileBase64': 'writeFile', 'pcbeda:exportGerber': 'writeDir',
+    'pcbeda:exportTextFile': 'writeFile', 'pcbeda:importFile': 'read',
+  };
+  for (const [ch, kind] of Object.entries(expect)) {
+    assert.ok(VMT.ROUTE_CHANNELS.has(ch), ch + ' 必须纳入 VM 路由（否则 VM 模式下直写宿主）');
+    const route = VMT.TOOL_ROUTES[ch];
+    assert.ok(route && Array.isArray(route[kind]) && route[kind].length, ch + ' 缺少 ' + kind + ' 索引');
+  }
+});
+
 test('pcb-gerber: stroke font + IPC356 + PnP + BOM', () => {
   const segs = PCBGerberT.textToSegments('R1', 0, 0, 1.2, 0, 'left');
   assert.ok(segs.length > 5);

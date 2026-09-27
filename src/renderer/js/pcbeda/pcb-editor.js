@@ -184,9 +184,16 @@
         return;
       }
       if (this.dragState && this.dragState.kind === 'move') {
-        const dx = w.x - this.dragState.lastW.x, dy = w.y - this.dragState.lastW.y;
-        this._moveSelection(dx, dy);
-        this.dragState.lastW = w;
+        // 位移超过 3px 才算拖动：否则单击会被吸附到网格并置脏（off-grid 元件被悄悄移动）
+        if (!this.dragState.moved && this.dragState.startScreen) {
+          const dpx = Math.hypot(sx - this.dragState.startScreen.x, sy - this.dragState.startScreen.y);
+          if (dpx > 3) this.dragState.moved = true;
+        }
+        if (this.dragState.moved) {
+          const dx = w.x - this.dragState.lastW.x, dy = w.y - this.dragState.lastW.y;
+          this._moveSelection(dx, dy);
+          this.dragState.lastW = w;
+        }
         this.refresh();
         return;
       }
@@ -216,9 +223,14 @@
     handleMouseUp(e, sx, sy) {
       if (this.dragState && this.dragState.kind === 'pan') { this.dragState = null; return; }
       if (this.dragState && this.dragState.kind === 'move') {
+        const moved = !!this.dragState.moved;
         this.dragState = null;
-        this._snapSelectionToGrid();
-        this.modified();
+        if (moved) {
+          this._snapSelectionToGrid();
+          this.modified();
+        } else if (Doc._undo && Doc._undo.length) {
+          Doc._undo.pop(); // 单击未拖动：撤掉 mousedown 的空快照（撤销栈不再被空操作填满）
+        }
         this.refresh();
         return;
       }
@@ -256,7 +268,7 @@
             if (hit.type === 'pad' || hit.type === 'comp' || hit.type === 'trace' || hit.type === 'via') {
               this.activeNet = hit.pad ? hit.pad.net : (hit.obj.net || this.activeNet);
             }
-            this.dragState = { kind: 'move', lastW: w, moved: false };
+            this.dragState = { kind: 'move', lastW: w, moved: false, startScreen: { x: sx, y: sy } };
             Doc.snapshot();
           } else {
             if (!e.ctrlKey) this.selection.clear();
@@ -817,7 +829,7 @@
       }
       if (key === 'r' || key === 'R') { this.rotateSelection(90); return true; }
       if ((key === 'm' || key === 'M') && this.mode === 'sch') { this.mirrorSelection(); return true; }
-      if ((key === 'v' || key === 'V') && this.mode === 'pcb') { this.routeLayerSwitch(); return true; }
+      if ((key === 'v' || key === 'V') && this.mode === 'pcb' && !e.ctrlKey && !e.shiftKey) { this.routeLayerSwitch(); return true; }
       // B 键：PCB 模式下切换顶/底视图（类 KiCad/Altium V+B）
       if ((key === 'b' || key === 'B') && this.mode === 'pcb' && !e.ctrlKey && !e.shiftKey) {
         this.setView('toggle'); return true;
@@ -826,7 +838,7 @@
       if ((key === 'f' || key === 'F') && this.mode === 'pcb' && e.shiftKey) {
         this.flipSelectionToOtherSide(); return true;
       }
-      if (key === 'f' || key === 'F') { this.fitView(); return true; }
+      if ((key === 'f' || key === 'F') && !e.ctrlKey && !e.shiftKey) { this.fitView(); return true; }
       if ((key === 'z' || key === 'Z') && e.ctrlKey) { Doc.undo(); this.refresh(); this.panel(); return true; }
       if ((key === 'y' || key === 'Y') && e.ctrlKey) { Doc.redo(); this.refresh(); this.panel(); return true; }
       return false;

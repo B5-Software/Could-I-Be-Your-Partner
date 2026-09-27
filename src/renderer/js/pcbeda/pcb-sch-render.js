@@ -420,13 +420,13 @@
           S.push('<circle cx="' + p.x.toFixed(2) + '" cy="' + p.y.toFixed(2) + '" r="0.2" fill="' + pinC + '"/>');
         }
         const rp = tx(0, this._symbolTop(def) - 1.2);
-        S.push('<text x="' + rp.x.toFixed(2) + '" y="' + rp.y.toFixed(2) + '" fill="#4fb0ff" font-size="2.2" text-anchor="middle" font-family="sans-serif">' + (sym.ref || '?') + '</text>');
+        S.push('<text x="' + rp.x.toFixed(2) + '" y="' + rp.y.toFixed(2) + '" fill="#4fb0ff" font-size="2.2" text-anchor="middle" font-family="sans-serif">' + escXml(sym.ref || '?') + '</text>');
         if (sym.value) {
-          S.push('<text x="' + rp.x.toFixed(2) + '" y="' + (rp.y + 2.6).toFixed(2) + '" fill="#9fb0c8" font-size="2" text-anchor="middle" font-family="sans-serif">' + String(sym.value) + '</text>');
+        S.push('<text x="' + rp.x.toFixed(2) + '" y="' + (rp.y + 2.6).toFixed(2) + '" fill="#9fb0c8" font-size="2" text-anchor="middle" font-family="sans-serif">' + escXml(sym.value) + '</text>');
         }
       }
       for (const lb of sheet.labels) {
-        S.push('<text x="' + (lb.x + 1).toFixed(2) + '" y="' + (lb.y - 1).toFixed(2) + '" fill="#4fd0e0" font-size="2.2" font-family="sans-serif">' + lb.text + '</text>');
+        S.push('<text x="' + (lb.x + 1).toFixed(2) + '" y="' + (lb.y - 1).toFixed(2) + '" fill="#4fd0e0" font-size="2.2" font-family="sans-serif">' + escXml(lb.text) + '</text>');
       }
       for (const t of sheet.texts) {
         S.push('<text x="' + t.x.toFixed(2) + '" y="' + t.y.toFixed(2) + '" fill="#c8d0e0" font-size="' + (t.size || 1.6) + '" font-family="sans-serif">' + String(t.text).replace(/&/g, '&amp;').replace(/</g, '&lt;') + '</text>');
@@ -436,5 +436,11 @@
     }
   };
 
+  // SVG 文本转义（ref/value/标签含 & < > " 会直接产出非法 XML）
+  function escXml(v) {
+    return String(v == null ? '' : v)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&apos;');
+  }
   global.PCBSchRender = SchRenderer;
 })(typeof window !== 'undefined' ? window : globalThis);

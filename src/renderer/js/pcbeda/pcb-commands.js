@@ -141,7 +141,10 @@
         updated++;
       }
     }
-    for (const comp of board.components) comp.padNets = {};
+    // 只清理本次网表涉及元件的 padNets：此前清空全部元件，
+    // 会把原理图中不存在的元件（安装孔/测试点）的手工网络一起抹掉。
+    const syncedRefs = new Set(pinNets.map((pn) => pn.ref));
+    for (const comp of board.components) if (syncedRefs.has(comp.ref)) comp.padNets = {};
     for (const pn of pinNets) {
       Model.Board.setPadNet(board, pn.ref, pn.num, pn.net);
     }

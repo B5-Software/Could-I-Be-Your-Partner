@@ -32,7 +32,6 @@ contextBridge.exposeInMainWorld('cadAPI', {
   importDxfDialog: () => ipcRenderer.invoke('cipypcad:importDxfDialog'),
   getHatchPatterns: () => ipcRenderer.invoke('cipypcad:getHatchPatterns'),
   exportImage: (path, format) => ipcRenderer.invoke('cipypcad:exportImage', path, format),
-  writeFile: (path, content) => ipcRenderer.invoke('cipypcad:writeFile', path, content),
 
   // Close window (triggers save prompt via close-requested)
   closeWindow: () => ipcRenderer.invoke('cipypcad:close'),

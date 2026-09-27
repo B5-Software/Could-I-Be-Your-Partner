@@ -7304,6 +7304,8 @@ ipcMain.handle('cipypcad:agentClose', async () => {
       if (res && res.ok) {
         // 优先级：state.filePath（渲染进程最新保存路径）→ _cadLastPath（IPC 缓存）→ recovery/ 兜底
         let target = (st.state.filePath) || _cadLastPath;
+        // 只允许写回工程文件（DXF/SVG/PNG 等导入来源绝不覆盖）
+        if (target && !/\.(cipyproj|json)$/i.test(String(target))) target = null;
         if (!target) {
           const dir = path.join(app.getPath('userData'), 'recovery');
           fs.mkdirSync(dir, { recursive: true });
@@ -7312,7 +7314,9 @@ ipcMain.handle('cipypcad:agentClose', async () => {
         fs.writeFileSync(target, JSON.stringify(res.data, null, 2), 'utf-8');
       }
     }
-  } catch (e) { /* best-effort save */ }
+  } catch (e) {
+    return { ok: false, error: 'CAD 自动保存失败，窗口保持打开: ' + e.message };
+  }
   cipypCadWindow.removeAllListeners('close');
   cipypCadWindow.destroy();
   cipypCadWindow = null;
@@ -7464,7 +7468,7 @@ ipcMain.handle('cipypcad:importDxfDialog', async () => {
     const safeContent = JSON.stringify(content);
     const safePath = JSON.stringify(filePath);
     const r = await _cadExec(`window.cadImportDxfString(${safeContent}, ${safePath})`);
-    if (r && r.ok) _cadLastPath = filePath;
+    // 注意：DXF 是导入来源，不写入 _cadLastPath —— 否则 agentClose 会把 JSON 保存到 .dxf
     return r;
   } catch (e) {
     return { ok: false, error: e.message };
@@ -7502,14 +7506,7 @@ ipcMain.handle('cipypcad:exportImage', async (_, filePath, format) => {
   }
 });
 
-ipcMain.handle('cipypcad:writeFile', async (_, filePath, content) => {
-  try {
-    fs.writeFileSync(filePath, content, 'utf-8');
-    return { ok: true };
-  } catch (e) {
-    return { ok: false, error: e.message };
-  }
-});
+
 
 // ===========================================================================
 // CIBYP-PCB-EDA - PCB design sub-application (schematic + layout + Gerber)
@@ -7593,6 +7590,8 @@ ipcMain.handle('pcbeda:agentClose', async () => {
     if (st && st.ok && st.state && st.state.modified) {
       // 优先级：state.filePath（渲染进程最新保存路径）→ _pcbLastPath（IPC 缓存）→ recovery/ 兜底
       let target = (st.state.filePath) || _pcbLastPath;
+      // 只允许写回工程文件；导入来源（KiCad 等）绝不覆盖
+      if (target && !/\.(cipypcb|cibypcbproj|json)$/i.test(String(target))) target = null;
       let isMulti = false;
       if (!target) {
         const dir = path.join(app.getPath('userData'), 'recovery');
@@ -7619,7 +7618,9 @@ ipcMain.handle('pcbeda:agentClose', async () => {
         }
       }
     }
-  } catch (e) { /* best-effort save */ }
+  } catch (e) {
+    return { ok: false, error: 'PCB 自动保存失败，窗口保持打开: ' + e.message };
+  }
   if (pcbEdaWindow && !pcbEdaWindow.isDestroyed()) {
     pcbEdaWindow.removeAllListeners('close');
     pcbEdaWindow.destroy();
@@ -7896,13 +7897,20 @@ ipcMain.handle('pcbeda:exportTextFile', async (_, kind, filePath, baseName) => {
     const res = await _pcbExec(script);
     if (!res || !res.ok) return res || { ok: false, error: '导出失败' };
     if (extra === 'obj') {
-      fs.writeFileSync(filePath, res.data.obj, 'utf-8');
+      // 文件名不含 .obj 时 replace 不匹配 → MTL 覆盖 OBJ（实测数据损坏）；并同步 OBJ 内 mtllib 名
+      if (!/\.obj$/i.test(filePath)) filePath = filePath + '.obj';
+      if (!fs.existsSync(path.dirname(filePath))) fs.mkdirSync(path.dirname(filePath), { recursive: true });
       const mtlPath = filePath.replace(/\.obj$/i, '.mtl');
+      const mtlBase = path.basename(mtlPath);
+      const objText = String(res.data.obj).replace(/^mtllib\s+.*$/m, 'mtllib ' + mtlBase);
+      fs.writeFileSync(filePath, objText, 'utf-8');
       fs.writeFileSync(mtlPath, res.data.mtl, 'utf-8');
       return { ok: true, path: filePath, extra: mtlPath };
     }
+    if (!fs.existsSync(path.dirname(filePath))) fs.mkdirSync(path.dirname(filePath), { recursive: true });
     if (isBase64) {
       const b64 = String(res.dataUrl || '').replace(/^data:image\/\w+;base64,/, '');
+      if (!b64) return { ok: false, error: 'PNG 数据为空（渲染层未返回图像）' };
       fs.writeFileSync(filePath, Buffer.from(b64, 'base64'));
     } else {
       fs.writeFileSync(filePath, res.content != null ? res.content : (res.svg || ''), 'utf-8');

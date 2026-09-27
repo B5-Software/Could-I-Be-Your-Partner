@@ -51,6 +51,21 @@ const TOOL_ROUTES = {
   'office:wordFillTemplate': { read: [0] },
   // ffmpeg：params 里可能含输入/输出路径 → 递归翻译（见 translateDeep）
   'ffmpeg:invoke': { deep: [1], writeDir: [2] },
+  // CAD / PCB-EDA 原生窗口：运行位置=虚拟机时，工程与导出文件必须落到虚拟机
+  // （此前直写宿主，且宿主镜像上的产物会在下一次 pull 同步中被删除）。
+  // writeDirOf：参数是文件路径，调用后把整个暂存目录推回该文件的所在目录（多文件工程用）。
+  'cipypcad:saveProject': { writeFile: [0] },
+  'cipypcad:loadProject': { read: [0] },
+  'cipypcad:exportDxf': { writeFile: [0] },
+  'cipypcad:exportImage': { writeFile: [0] },
+  'pcbeda:saveProject': { writeDirOf: [0] },
+  'pcbeda:loadProject': { read: [0] },
+  'pcbeda:exportFiles': { writeDir: [0] },
+  'pcbeda:writeFile': { writeFile: [0] },
+  'pcbeda:writeFileBase64': { writeFile: [0] },
+  'pcbeda:exportGerber': { writeDir: [0] },
+  'pcbeda:exportTextFile': { writeFile: [1] },
+  'pcbeda:importFile': { read: [0] },
 };
 
 const FS_ROUTES = {
@@ -230,6 +245,20 @@ function createStagedToolHandler(route, original, deps) {
         staging.mappings.push([tmpDir, vmDir]);
         hostArgs[idx] = tmpDir;
       }
+      // 文件路径 + 同目录多产物（多文件工程：manifest 与分片同目录）
+      const writeDirOfs = [];
+      for (const idx of route.writeDirOf || []) {
+        const p = hostArgs[idx];
+        if (!isPathLike(p)) continue;
+        const t = vmFs.resolveVmPath(p, { forWrite: true });
+        if (!t.ok) throw new Error(t.error);
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cibyp-vmtool-'));
+        staging.tmpDirs.push(tmpDir);
+        const tmpFile = path.join(tmpDir, path.posix.basename(t.vm));
+        writeDirOfs.push({ tmpDir, vmDir: path.posix.dirname(t.vm) });
+        staging.mappings.push([tmpDir, path.posix.dirname(t.vm)]);
+        hostArgs[idx] = tmpFile;
+      }
       // 深度暂存（ffmpeg params 等）
       for (const idx of route.deep || []) {
         hostArgs[idx] = await stageDeepValue(hostArgs[idx], vmFs, staging);
@@ -242,6 +271,11 @@ function createStagedToolHandler(route, original, deps) {
       }
       for (const w of writeDirs) {
         if (fs.readdirSync(w.tmpDir).length) await vmFs.pushDir(w.tmpDir, w.vmDir).catch(() => {});
+      }
+      for (const w of writeDirOfs) {
+        try {
+          if (fs.readdirSync(w.tmpDir).length) await vmFs.pushDir(w.tmpDir, w.vmDir);
+        } catch { /* ignore */ }
       }
       for (const o of staging.outputs) {
         if (fs.existsSync(o.tmpFile)) await vmFs.pushFromHost(o.tmpFile, o.vmPath).catch(() => {});

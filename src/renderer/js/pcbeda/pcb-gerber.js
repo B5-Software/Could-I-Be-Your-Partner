@@ -535,11 +535,12 @@
   // Pick & Place + BOM
   // ---------------------------------------------------------------------------
   function emitPnP(board) {
-    const L = ['Designator,Value,Footprint,X(mm),Y(mm),Rotation,Side'];
+    const L = ['\uFEFFDesignator,Value,Footprint,X(mm),Y(mm),Rotation,Side'];
     const comps = [...board.components].sort((a, b) => a.ref.localeCompare(b.ref, undefined, { numeric: true }));
     for (const c of comps) {
-      L.push([c.ref, csvEsc(c.value || ''), c.footprint,
-        c.x.toFixed(3), c.y.toFixed(3), (c.rot || 0).toFixed(1), c.side === 'B' ? 'Bottom' : 'Top'].join(','));
+      // PnP 的 Y 必须与 Gerber/钻孔一致（内部坐标 Y 向下，导出统一取反），否则贴片位置镜像
+      L.push([csvEsc(c.ref), csvEsc(c.value || ''), csvEsc(c.footprint),
+        c.x.toFixed(3), (-c.y).toFixed(3), (c.rot || 0).toFixed(1), c.side === 'B' ? 'Bottom' : 'Top'].join(','));
     }
     return L.join('\n') + '\n';
   }
@@ -552,16 +553,17 @@
   function emitBOM(board) {
     const groups = new Map();
     for (const c of board.components) {
-      const key = (c.value || '') + '|' + c.footprint;
-      if (!groups.has(key)) groups.set(key, []);
-      groups.get(key).push(c.ref);
+      // 用 JSON 作分组键：旧实现用 '|' 拼接，值里含 '|' 时 split 拆错（分组键损坏）
+      const key = JSON.stringify([c.value || '', c.footprint || '']);
+      if (!groups.has(key)) groups.set(key, { value: c.value || '', footprint: c.footprint || '', refs: [] });
+      groups.get(key).refs.push(c.ref);
     }
-    const L = ['Quantity,Designators,Value,Footprint'];
+    const L = ['\uFEFFQuantity,Designators,Value,Footprint'];
     const keys = [...groups.keys()].sort();
     for (const k of keys) {
-      const [value, fp] = k.split('|');
-      const refs = groups.get(k).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
-      L.push([refs.length, csvEsc(refs.join(' ')), csvEsc(value), fp].join(','));
+      const g = groups.get(k);
+      const refs = g.refs.sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+      L.push([refs.length, csvEsc(refs.join(' ')), csvEsc(g.value), csvEsc(g.footprint)].join(','));
     }
     return L.join('\n') + '\n';
   }
