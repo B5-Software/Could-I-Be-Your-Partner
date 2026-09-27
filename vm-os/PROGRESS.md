@@ -168,3 +168,17 @@ node scripts/vm-pack.js --src <qemu解包目录> --out <输出> --platform win32
 ### 明确仍属宿主能力（非 VM 化，按设计）
 - serial/trng 宿主硬件、MCP / DS 插件宿主进程、自动化 DSL 的 fetch/env、WebUI 本地图片代理 roots、CAD/EDA 与 GeoGebra 导出、qr 生成、web:search/net:* 宿主网络类工具
 - 这些在 VM 模式下不做隔离（涉及宿主硬件/网络/应用级数据），需要时按工具描述与设置页说明操作
+
+
+## 第 6 轮（2026-09-27）：应用侧 Wayland 适配（配合 CIBYP-VM-OS 0.2.0 自研桌面）
+
+- `src/main/vm/vm-graphics.js` 新增 **Wayland 后端**（自动探测 `sway`）：
+  - 会话：启动 `cibyp-session`（sway + 自研外壳 cibyp-shell/cibyp-desktop）；无该脚本时直接
+    `sway --config /etc/cibyp/sway/config`；环境 `WLR_BACKENDS=headless WLR_HEADLESS_OUTPUTS=1
+    WLR_RENDERER=pixman` + `XDG_RUNTIME_DIR` 自动解析 + `CIBYP_GEOMETRY`
+  - 远程桌面：`wayvnc`（loopback + SSH 端口转发，沿用原 VNC 通道与 noVNC 桌面窗口）
+  - 截图：`grim`（替代 ffmpeg x11grab）；输入：`wtype`（键盘/文本）+ `ydotool`（鼠标，ydotoold + 0666 socket）；
+    剪贴板：`wl-copy`/`wl-paste`（base64 传输避免转义问题）
+  - Chromium：`--ozone-platform=wayland --disable-gpu`（CDP 接管逻辑不变）
+  - 旧镜像（无 sway）自动回退 X11 路径（Xvfb/x11vnc/xdotool/xclip 全部保留）
+- 单测新增 Wayland 静态回归（实现完整性 + X11 回退不被删除 + 后端探测）

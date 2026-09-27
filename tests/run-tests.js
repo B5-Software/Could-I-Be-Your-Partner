@@ -3907,6 +3907,33 @@ function runVmSandboxTests() {
     assert.strictEqual(vmIn, 'TMPFILE', 'VM 路径存在 → 拉取为输入');
   });
 
+
+  // ---- VM 图形栈：Wayland（sway/wayvnc/grim/wtype/wl-clipboard）与 X11 回退 ----
+  test('VM 图形栈：Wayland 后端实现完整且保留 X11 回退（静态回归）', () => {
+    const src = fs.readFileSync(_path.join(__dirname, '..', 'src', 'main', 'vm', 'vm-graphics.js'), 'utf8');
+    for (const needle of [
+      "_startWayland", "cibyp-session", "WAYLAND_DISPLAY", "wayvnc", "grim",
+      "wtype", "ydotool", "wl-copy", "wl-paste", "WLR_BACKENDS", "WLR_RENDERER",
+      "ozone-platform=wayland",
+    ]) {
+      assert.ok(src.includes(needle), '缺少 Wayland 支持：' + needle);
+    }
+    for (const legacy of ["Xvfb", "x11vnc", "xdotool", "xclip", "x11grab"]) {
+      assert.ok(src.includes(legacy), '旧镜像 X11 回退不应被删除：' + legacy);
+    }
+    assert.ok(/'wayland' \| 'x11'/.test(src) || src.includes("? 'wayland' : 'x11'"), '应自动探测后端');
+  });
+
+  // ---- CIBYP-VM-OS 0.2.0：镜像侧自研桌面契约（应用依赖的不变量）----
+  test('镜像契约：自研桌面（cibyp-shell/cibyp-session/基础软件）由 CI 断言', () => {
+    const vmos = 'D:/cibyp-vm-os-repo/tests/boot-smoke.js';
+    if (!fs.existsSync(vmos)) { console.log('    (跳过：本机无 cibyp-vm-os 检出)'); return; }
+    const src = fs.readFileSync(vmos, 'utf8');
+    for (const needle of ['cibyp-desktop-smoke', 'cibyp-session', 'cibyp-shell', 'Gtk4LayerShell', 'desktop-preview']) {
+      assert.ok(src.includes(needle), 'boot 冒烟应校验：' + needle);
+    }
+  });
+
   // ---- 打包/平台：关键配置不回归 ----
   test('打包配置：mac 签名 entitlements + sherpa 平台包 + 排除 VM 构建目录', () => {
     const pkg = JSON.parse(fs.readFileSync(_path.join(__dirname, '..', 'package.json'), 'utf8'));

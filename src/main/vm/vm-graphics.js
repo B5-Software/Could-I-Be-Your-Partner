@@ -36,11 +36,16 @@ class VmGraphics {
     this.display = opts.display || DEFAULT_DISPLAY;
     this.geometry = opts.geometry || DEFAULT_GEOMETRY;
     this.state = { x: false, vnc: false, chromium: false, vncForward: null, cdpForward: null, vncHostPort: null, cdpHostPort: null };
+    this.mode = null;            // 'wayland' | 'x11'（首次 start 时探测决定）
+    this.runtimeDir = '/tmp/cibyp-runtime-0';
+    this.waylandDisplay = '';    // 会话 socket 名（wayland-0/1…）
+    this._ydotoold = false;
     this._log = [];
   }
 
   get status() {
     return {
+      mode: this.mode || (this.state.vnc ? 'wayland' : null),
       running: this.state.vnc,
       chromium: this.state.chromium,
       display: this.display,
@@ -84,16 +89,26 @@ class VmGraphics {
     return r.stdout.trim() === 'yes';
   }
 
-  /** 确保图形环境所需软件包存在（缺则 apt 安装；base 变体也能用） */
+  /** 确保图形环境所需软件包存在（缺则 apt 安装；base 变体也能用）
+   *  - 新镜像（CIBYP-VM-OS ≥ 0.2）：Wayland 栈（sway + wayvnc + grim + wl-clipboard + ydotool/wtype）
+   *  - 旧镜像：X11 栈（Xvfb + x11vnc + openbox + xdotool/xclip）——保持兼容
+   */
   async ensureGuestPackages({ onProgress } = {}) {
     const need = [];
-    if (!(await this._has('Xvfb'))) need.push('xvfb');
-    if (!(await this._has('x11vnc'))) need.push('x11vnc');
-    if (!(await this._has('openbox'))) need.push('openbox');
-    // 电脑控制/剪贴板/截图（VM 模式下这些必须作用于虚拟机，而不是宿主机）
-    if (!(await this._has('xdotool'))) need.push('xdotool');
-    if (!(await this._has('xclip'))) need.push('xclip');
-    if (!(await this._has('ffmpeg')) && !(await this._has('import'))) need.push('imagemagick');
+    const wayland = await this._has('sway');
+    if (wayland) {
+      for (const [cmd, pkg] of [['sway', 'sway'], ['wayvnc', 'wayvnc'], ['grim', 'grim'], ['wl-copy', 'wl-clipboard'],
+        ['ydotool', 'ydotool'], ['wtype', 'wtype'], ['wlr-randr', 'wlr-randr'], ['foot', 'foot']]) {
+        if (!(await this._has(cmd))) need.push(pkg);
+      }
+    } else {
+      if (!(await this._has('Xvfb'))) need.push('xvfb');
+      if (!(await this._has('x11vnc'))) need.push('x11vnc');
+      if (!(await this._has('openbox'))) need.push('openbox');
+      if (!(await this._has('xdotool'))) need.push('xdotool');
+      if (!(await this._has('xclip'))) need.push('xclip');
+      if (!(await this._has('ffmpeg')) && !(await this._has('import'))) need.push('imagemagick');
+    }
     if (!need.length) return { ok: true, installed: false };
     if (onProgress) onProgress({ phase: 'apt', packages: need });
     this._logLine(`安装图形依赖: ${need.join(' ')}`);
@@ -113,11 +128,26 @@ class VmGraphics {
     return { width: w || 1280, height: h || 800 };
   }
 
-  /** 选择截图工具：ffmpeg（x11grab）优先，其次 ImageMagick import */
+  /** 选择截图工具：Wayland → grim；X11 → ffmpeg(x11grab) / ImageMagick import */
   async _captureTool() {
+    if (this.mode === 'wayland') return (await this._has('grim')) ? 'grim' : null;
     if (await this._has('ffmpeg')) return 'ffmpeg';
     if (await this._has('import')) return 'import';
     return null;
+  }
+
+  /** Wayland 环境变量前缀（grim/wayvnc/wtype/wl-copy 都要用） */
+  _wlEnv() {
+    return `XDG_RUNTIME_DIR=${shellQuote(this.runtimeDir)}${this.waylandDisplay ? ` WAYLAND_DISPLAY=${shellQuote(this.waylandDisplay)}` : ''}`;
+  }
+
+  /** 解析无头 Wayland 会话的 socket 名（sway 会创建 wayland-0/1…） */
+  async _detectWaylandDisplay() {
+    const inst = this._inst();
+    const r = await inst.exec(`ls -t ${shellQuote(this.runtimeDir)}/wayland-* 2>/dev/null | head -1`, { timeoutMs: 10000 });
+    const p = (r.stdout || '').trim();
+    if (p) this.waylandDisplay = p.split('/').pop();
+    return this.waylandDisplay;
   }
 
   /**
@@ -132,14 +162,16 @@ class VmGraphics {
       await this.ensureGuestPackages();
       tool = await this._captureTool();
     }
-    if (!tool) throw new Error('虚拟机内缺少截图工具（ffmpeg / imagemagick），无法抓取虚拟机屏幕');
+    if (!tool) throw new Error('虚拟机内缺少截图工具（Wayland: grim；X11: ffmpeg/imagemagick），无法抓取虚拟机屏幕');
     const ts = Date.now();
     const name = filename || `screenshot-${ts}.png`;
     const vmTmp = `/tmp/cibyp-shot-${ts}.png`;
     const geom = String(this.geometry).split('x').slice(0, 2).join('x');
-    const cmd = tool === 'ffmpeg'
-      ? `DISPLAY=${this.display} ffmpeg -hide_banner -loglevel error -y -f x11grab -video_size ${geom} -i ${this.display} -frames:v 1 ${shellQuote(vmTmp)}`
-      : `DISPLAY=${this.display} import -display ${this.display} -window root ${shellQuote(vmTmp)}`;
+    const cmd = tool === 'grim'
+      ? `${this._wlEnv()} grim ${shellQuote(vmTmp)}`
+      : tool === 'ffmpeg'
+        ? `DISPLAY=${this.display} ffmpeg -hide_banner -loglevel error -y -f x11grab -video_size ${geom} -i ${this.display} -frames:v 1 ${shellQuote(vmTmp)}`
+        : `DISPLAY=${this.display} import -display ${this.display} -window root ${shellQuote(vmTmp)}`;
     const r = await inst.exec(cmd, { timeoutMs: 60000 });
     if (!r.ok) throw new Error('虚拟机截图失败: ' + (r.stderr || r.stdout || '').slice(-200));
     const { VmFs } = require('./vm-fs');
@@ -167,7 +199,36 @@ class VmGraphics {
     return { path: tmp, vmPath, width: size.width, height: size.height, tool };
   }
 
-  /** 在 VM 内执行 xdotool 命令（缺包时自动安装） */
+  /** 确保 ydotoold 运行（鼠标注入需要 uinput；socket 0666 便于普通用户使用） */
+  async _ensureYdotoold() {
+    if (this._ydotoold) return;
+    const inst = this._inst();
+    const chk = await inst.exec('pgrep -x ydotoold >/dev/null && echo up || echo down', { timeoutMs: 10000 });
+    if (!chk.stdout.includes('up')) {
+      await inst.exec('sudo nohup setsid ydotoold --socket-path=/tmp/.ydotool_socket --socket-perm=0666 >/tmp/ydotoold.log 2>&1 & sleep 0.6; echo started', { timeoutMs: 20000 });
+      this._logLine('已启动 ydotoold（鼠标注入守护）');
+    }
+    this._ydotoold = true;
+  }
+
+  /** Wayland 鼠标注入（ydotool 客户端，经 0666 socket，无需 sudo） */
+  async _ydotool(args, timeoutMs = 30000) {
+    const inst = this._inst();
+    await this._ensureYdotoold();
+    const r = await inst.exec(`YDOTOOL_SOCKET=/tmp/.ydotool_socket ydotool ${args}`, { timeoutMs });
+    if (!r.ok) throw new Error('虚拟机鼠标注入失败: ' + (r.stderr || r.stdout || '').slice(-200));
+    return r.stdout;
+  }
+
+  /** Wayland 键盘/文本注入（wtype，走 wlroots virtual-keyboard） */
+  async _wtype(args, timeoutMs = 30000) {
+    const inst = this._inst();
+    const r = await inst.exec(`${this._wlEnv()} wtype ${args}`, { timeoutMs });
+    if (!r.ok) throw new Error('虚拟机键盘注入失败: ' + (r.stderr || r.stdout || '').slice(-200));
+    return r.stdout;
+  }
+
+  /** 在 VM 内执行 xdotool 命令（X11 后端；缺包时自动安装） */
   async _xdotool(args, timeoutMs = 30000) {
     const inst = this._inst();
     await this.start();
@@ -178,12 +239,22 @@ class VmGraphics {
   }
 
   async mouseMove(x, y) {
-    await this._xdotool(`mousemove --sync ${Math.round(Number(x) || 0)} ${Math.round(Number(y) || 0)}`);
-    return { ok: true, x: Math.round(Number(x) || 0), y: Math.round(Number(y) || 0) };
+    const px = Math.round(Number(x) || 0);
+    const py = Math.round(Number(y) || 0);
+    if (this.mode === 'wayland') await this._ydotool(`mousemove ${px} ${py}`);
+    else await this._xdotool(`mousemove --sync ${px} ${py}`);
+    this._cursor = { x: px, y: py };
+    return { ok: true, x: px, y: py };
   }
 
   async click(button, x, y, doubleClick = false) {
     const b = button === 'right' ? 3 : button === 'middle' ? 2 : 1;
+    if (this.mode === 'wayland') {
+      if (x != null && y != null) await this._ydotool(`mousemove ${Math.round(Number(x) || 0)} ${Math.round(Number(y) || 0)}`);
+      const btnName = b === 3 ? 'right' : b === 2 ? 'middle' : 'left';
+      await this._ydotool(`click ${doubleClick ? '--repeat 2 --delay 80 ' : ''}${btnName}`);
+      return { ok: true };
+    }
     const move = (x != null && y != null) ? `mousemove --sync ${Math.round(Number(x) || 0)} ${Math.round(Number(y) || 0)} ` : '';
     await this._xdotool(`${move}click ${doubleClick ? '--repeat 2 --delay 80 ' : ''}${b}`);
     return { ok: true };
@@ -191,12 +262,24 @@ class VmGraphics {
 
   async drag(startX, startY, endX, endY) {
     const r = (n) => Math.round(Number(n) || 0);
+    if (this.mode === 'wayland') {
+      await this._ydotool(`mousemove ${r(startX)} ${r(startY)}`);
+      await this._ydotool('mousedown left');
+      await this._ydotool(`mousemove ${r(endX)} ${r(endY)}`);
+      await this._ydotool('mouseup left');
+      return { ok: true };
+    }
     await this._xdotool(`mousemove --sync ${r(startX)} ${r(startY)} mousedown 1 mousemove --sync ${r(endX)} ${r(endY)} mouseup 1`);
     return { ok: true };
   }
 
   async typeText(text) {
-    await this._xdotool(`type --delay 15 -- ${shellQuote(String(text == null ? '' : text))}`);
+    const t = String(text == null ? '' : text);
+    if (this.mode === 'wayland') {
+      await this._wtype(`-- ${shellQuote(t)}`);
+      return { ok: true };
+    }
+    await this._xdotool(`type --delay 15 -- ${shellQuote(t)}`);
     return { ok: true };
   }
 
@@ -207,28 +290,63 @@ class VmGraphics {
         .replace(/^control$/, 'ctrl').replace(/^escape$/, 'Escape').replace(/^enter$/, 'Return'))
       .join('+');
     if (!key) return { ok: false, error: '按键为空' };
+    if (this.mode === 'wayland') {
+      // wtype 语义：修饰键用 -M/-m，主键用 -k。例如 ctrl+c → -M ctrl -k c -m ctrl
+      const parts = key.split('+').map((k) => k.trim()).filter(Boolean);
+      const mods = [];
+      const mapMod = (k) => ({
+        ctrl: 'ctrl', control: 'ctrl', alt: 'alt', shift: 'shift', super: 'logo', win: 'logo', meta: 'logo',
+      }[k.toLowerCase()] || '');
+      while (parts.length > 1) {
+        const m = mapMod(parts[0]);
+        if (!m) break;
+        mods.push(m);
+        parts.shift();
+      }
+      const main = parts.join('+') || '';
+      const modArgs = mods.length ? `-M ${mods.join(' ')} ` : '';
+      const relArgs = mods.length ? ` -m ${mods.slice().reverse().join(' ')}` : '';
+      const keyName = main.length === 1 ? main : main.charAt(0).toUpperCase() + main.slice(1);
+      await this._wtype(`${modArgs}-k ${shellQuote(keyName)}${relArgs}`);
+      return { ok: true };
+    }
     await this._xdotool(`key --clearmodifiers ${shellQuote(key)}`);
     return { ok: true };
   }
 
   async scroll(x, y, direction, amount = 3) {
-    const button = direction === 'up' ? 4 : 5;
+    const wheelDir = direction === 'up' ? 'up' : 'down';
     const n = Math.max(1, Math.min(50, parseInt(amount, 10) || 3));
+    if (this.mode === 'wayland') {
+      if (x != null && y != null) await this._ydotool(`mousemove ${Math.round(Number(x) || 0)} ${Math.round(Number(y) || 0)}`);
+      await this._ydotool(`click --repeat ${n} --delay 30 ${wheelDir === 'up' ? 4 : 5}`);
+      return { ok: true };
+    }
+    const button = direction === 'up' ? 4 : 5;
     await this._xdotool(`mousemove --sync ${Math.round(Number(x) || 0)} ${Math.round(Number(y) || 0)} click --repeat ${n} --delay 30 ${button}`);
     return { ok: true };
   }
 
   async cursorPosition() {
+    if (this.mode === 'wayland') {
+      const c = this._cursor || { x: 0, y: 0 };
+      return { ok: true, x: c.x, y: c.y };
+    }
     const out = await this._xdotool('getmouselocation --shell');
     const mx = /X=(\d+)/.exec(out);
     const my = /Y=(\d+)/.exec(out);
     return { ok: true, x: mx ? Number(mx[1]) : 0, y: my ? Number(my[1]) : 0 };
   }
 
-  /** VM 剪贴板（X11 selection，走 xclip；不触碰宿主剪贴板） */
+  /** VM 剪贴板（Wayland: wl-paste；X11: xclip；不触碰宿主剪贴板） */
   async clipboardGet() {
     const inst = this._inst();
     await this.start();
+    if (this.mode === 'wayland') {
+      if (!(await this._has('wl-paste'))) await this.ensureGuestPackages();
+      const r = await inst.exec(`${this._wlEnv()} wl-paste --no-newline 2>/dev/null || true`, { timeoutMs: 20000 });
+      return { ok: true, text: r.stdout || '' };
+    }
     if (!(await this._has('xclip'))) await this.ensureGuestPackages();
     const r = await inst.exec(`DISPLAY=${this.display} xclip -selection clipboard -o 2>/dev/null || true`, { timeoutMs: 20000 });
     return { ok: true, text: r.stdout || '' };
@@ -237,13 +355,33 @@ class VmGraphics {
   async clipboardSet(text) {
     const inst = this._inst();
     await this.start();
+    if (this.mode === 'wayland') {
+      if (!(await this._has('wl-copy'))) await this.ensureGuestPackages();
+      const payload = Buffer.from(String(text == null ? '' : text), 'utf8').toString('base64');
+      const r = await inst.exec(`printf %s ${shellQuote(payload)} | base64 -d | ${this._wlEnv()} wl-copy`, { timeoutMs: 20000 });
+      if (!r.ok) throw new Error('写入虚拟机剪贴板失败: ' + (r.stderr || '').slice(-200));
+      return { ok: true };
+    }
     if (!(await this._has('xclip'))) await this.ensureGuestPackages();
     const r = await inst.exec(`printf %s ${shellQuote(String(text == null ? '' : text))} | DISPLAY=${this.display} xclip -selection clipboard -i`, { timeoutMs: 20000 });
     if (!r.ok) throw new Error('写入虚拟机剪贴板失败: ' + (r.stderr || '').slice(-200));
     return { ok: true };
   }
 
-  /** 启动 Xvfb + x11vnc（幂等） */
+  /** 计算 guest 内可用的 XDG_RUNTIME_DIR */
+  async _resolveRuntimeDir() {
+    const inst = this._inst();
+    const r = await inst.exec('id -u', { timeoutMs: 10000 });
+    const uid = (r.stdout || '0').trim() || '0';
+    const candidates = [`/run/user/${uid}`, `/tmp/cibyp-runtime-${uid}`];
+    for (const d of candidates) {
+      const t = await inst.exec(`mkdir -p ${shellQuote(d)} && chmod 700 ${shellQuote(d)} && test -w ${shellQuote(d)} && echo ok || echo no`, { timeoutMs: 10000 });
+      if (t.stdout.includes('ok')) { this.runtimeDir = d; return d; }
+    }
+    return this.runtimeDir;
+  }
+
+  /** 启动图形会话（Wayland: sway + 自研桌面 + wayvnc；X11: Xvfb + x11vnc）——幂等 */
   async start({ onProgress } = {}) {
     const inst = this._inst();
     // 已在跑则直接复用（并确保端口转发仍在）
@@ -252,6 +390,8 @@ class VmGraphics {
       return { ok: true, reused: true, ...this.status, url: this.vncLocalUrl };
     }
     await this.ensureGuestPackages({ onProgress });
+    if (!this.mode) this.mode = (await this._has('sway')) ? 'wayland' : 'x11';
+    if (this.mode === 'wayland') return await this._startWayland({ onProgress });
     if (onProgress) onProgress({ phase: 'x' });
     // 1) X 虚拟显示
     await this._startDetached(`Xvfb ${this.display} -screen 0 ${this.geometry} -nolisten tcp`);
@@ -277,6 +417,58 @@ class VmGraphics {
     return { ok: true, ...this.status, url: this.vncLocalUrl };
   }
 
+  /** Wayland 会话：sway（+自研桌面 cibyp-session）→ wayvnc → 端口转发 */
+  async _startWayland({ onProgress } = {}) {
+    const inst = this._inst();
+    await this._resolveRuntimeDir();
+    const geom = String(this.geometry).split('x').slice(0, 2).join('x');
+    const env = [
+      'WLR_BACKENDS=headless',
+      'WLR_HEADLESS_OUTPUTS=1',
+      'WLR_RENDERER=pixman',
+      'WLR_LIBINPUT_NO_DEVICES=1',
+      `XDG_RUNTIME_DIR=${shellQuote(this.runtimeDir)}`,
+      `CIBYP_GEOMETRY=${shellQuote(geom)}`,
+      'XDG_SESSION_TYPE=wayland',
+      'XDG_CURRENT_DESKTOP=CIBYP',
+    ].join(' ');
+    if (onProgress) onProgress({ phase: 'wayland' });
+    const hasSession = await this._has('cibyp-session');
+    if (hasSession) {
+      await this._startDetached(`env ${env} cibyp-session`, { logFile: '/tmp/cibyp-session.log' });
+      this._logLine('已启动自研桌面会话（cibyp-session：sway + cibyp-shell + cibyp-desktop）');
+    } else {
+      await this._startDetached(`env ${env} sway --config /etc/cibyp/sway/config`, { logFile: '/tmp/cibyp-sway.log' });
+      this._logLine('已启动 sway（镜像未包含 cibyp-session，使用合成器自带桌面）');
+    }
+    this.state.x = true;
+    // 等 Wayland socket
+    let disp = '';
+    const t0 = Date.now();
+    while (Date.now() - t0 < 20000) {
+      disp = await this._detectWaylandDisplay();
+      if (disp) break;
+      await new Promise((r) => setTimeout(r, 700));
+    }
+    if (!disp) throw new Error('Wayland 会话未在 20s 内就绪（见 guest /tmp/cibyp-session.log）');
+    this._logLine(`Wayland 显示就绪: ${disp}`);
+    // VNC（wayvnc，仅监听 loopback，宿主经 SSH 转发）
+    if (onProgress) onProgress({ phase: 'vnc' });
+    await this._startDetached(`env ${this._wlEnv()} wayvnc 127.0.0.1 ${VNC_PORT}`, { logFile: '/tmp/cibyp-wayvnc.log' });
+    this.state.vnc = true;
+    const deadline = Date.now() + 20000;
+    let ready = false;
+    while (Date.now() < deadline) {
+      const r = await inst.exec(`(exec 3<>/dev/tcp/127.0.0.1/${VNC_PORT}) 2>/dev/null && echo up || echo down`, { timeoutMs: 10000 });
+      if (r.stdout.includes('up')) { ready = true; break; }
+      await new Promise((r2) => setTimeout(r2, 700));
+    }
+    if (!ready) throw new Error('wayvnc 未在 20s 内就绪（详见 guest /tmp/cibyp-wayvnc.log）');
+    await this._ensureForward();
+    if (onProgress) onProgress({ phase: 'ready' });
+    return { ok: true, mode: 'wayland', ...this.status, url: this.vncLocalUrl };
+  }
+
   async _ensureForward() {
     if (this.state.vncForward && this.state.vncHostPort) return;
     const f = await this.vmService.forwardPort(VNC_PORT);
@@ -295,6 +487,7 @@ class VmGraphics {
 
   /** 在 VM 内启动 Chromium（CDP 暴露给宿主 Playwright），用于浏览器沙盒 */
   async startChromium({ url = 'about:blank', extraArgs = [] } = {}) {
+    const wlArgs = this.mode === 'wayland' ? ['--ozone-platform=wayland', '--disable-gpu'] : [];
     const inst = this._inst();
     if (!(await this._has('chromium')) && !(await this._has('chromium-browser'))) {
       this._logLine('安装 chromium（约 150MB）…');
@@ -303,7 +496,9 @@ class VmGraphics {
     }
     const bin = (await this._has('chromium')) ? 'chromium' : 'chromium-browser';
     const args = [
-      `--display=${this.display}`,
+      ...wlArgs,
+      // Wayland 会话下不再需要 --display（X11 后端保留兼容）
+      ...(this.mode === 'wayland' ? [] : [`--display=${this.display}`]),
       '--no-sandbox',
       '--disable-dev-shm-usage',
       `--remote-debugging-address=127.0.0.1`,
@@ -312,7 +507,7 @@ class VmGraphics {
       '--window-size=1280,800',
       url,
     ].join(' ');
-    await this._startDetached(`env DISPLAY=${this.display} ${bin} ${args}`);
+    await this._startDetached(this.mode === 'wayland' ? `env ${this._wlEnv()} ${bin} ${args}` : `env DISPLAY=${this.display} ${bin} ${args}`);
     this.state.chromium = true;
     // 等 CDP 就绪并映射到宿主
     const deadline = Date.now() + 20000;
@@ -338,7 +533,7 @@ class VmGraphics {
     const inst = this.vmService && this.vmService.instance;
     this.state = { x: false, vnc: false, chromium: false, vncForward: null, cdpForward: null, vncHostPort: null, cdpHostPort: null };
     if (!inst || inst.state !== 'ready') return { ok: true };
-    try { await inst.exec('pkill -f "x11vnc -display" ; pkill -f "Xvfb :99" ; pkill -f "chromium" ; true', { timeoutMs: 30000 }); } catch { /* ignore */ }
+    try { await inst.exec('pkill -f "x11vnc -display" ; pkill -f "Xvfb :99" ; pkill -f "chromium" ; pkill -f "wayvnc" ; pkill -f "cibyp-session" ; pkill -f "cibyp-shell" ; pkill -f "cibyp-desktop" ; pkill -x sway ; sudo pkill -x ydotoold ; true', { timeoutMs: 30000 }); } catch { /* ignore */ }
     this._logLine('图形环境已停止');
     return { ok: true };
   }
