@@ -220,6 +220,25 @@ class VmGraphics {
     return r.stdout;
   }
 
+  /** 自研 uinput 鼠标注入器（镜像内无 ydotool 时的回退；零第三方依赖） */
+  async _cibypInput(args, timeoutMs = 30000) {
+    const inst = this._inst();
+    const r = await inst.exec(`sudo XDG_RUNTIME_DIR=${shellQuote(this.runtimeDir)} cibyp-input ${args}`, { timeoutMs });
+    if (!r.ok) throw new Error('虚拟机鼠标注入失败（cibyp-input）: ' + (r.stderr || r.stdout || '').slice(-200));
+    return r.stdout;
+  }
+
+  /** 鼠标注入统一入口：优先 ydotool（若镜像带），否则自研 cibyp-input */
+  async _mouse(args, timeoutMs = 30000) {
+    if (this._hasYdotool === undefined) {
+      this._hasYdotool = await this._has('ydotool');
+      this._hasCibypInput = await this._has('cibyp-input');
+    }
+    if (this._hasYdotool) return await this._ydotool(args, timeoutMs);
+    if (this._hasCibypInput) return await this._cibypInput(args, timeoutMs);
+    throw new Error('虚拟机内没有可用的鼠标注入器（ydotool 或 cibyp-input）');
+  }
+
   /** Wayland 键盘/文本注入（wtype，走 wlroots virtual-keyboard） */
   async _wtype(args, timeoutMs = 30000) {
     const inst = this._inst();
@@ -241,7 +260,7 @@ class VmGraphics {
   async mouseMove(x, y) {
     const px = Math.round(Number(x) || 0);
     const py = Math.round(Number(y) || 0);
-    if (this.mode === 'wayland') await this._ydotool(`mousemove ${px} ${py}`);
+    if (this.mode === 'wayland') await this._mouse(this._hasYdotool === false ? `move ${px} ${py}` : `mousemove ${px} ${py}`);
     else await this._xdotool(`mousemove --sync ${px} ${py}`);
     this._cursor = { x: px, y: py };
     return { ok: true, x: px, y: py };
@@ -250,9 +269,11 @@ class VmGraphics {
   async click(button, x, y, doubleClick = false) {
     const b = button === 'right' ? 3 : button === 'middle' ? 2 : 1;
     if (this.mode === 'wayland') {
-      if (x != null && y != null) await this._ydotool(`mousemove ${Math.round(Number(x) || 0)} ${Math.round(Number(y) || 0)}`);
+      const px = x != null ? Math.round(Number(x) || 0) : null;
+      const py = y != null ? Math.round(Number(y) || 0) : null;
+      if (px != null && py != null) await this._mouse(`move ${px} ${py}`);
       const btnName = b === 3 ? 'right' : b === 2 ? 'middle' : 'left';
-      await this._ydotool(`click ${doubleClick ? '--repeat 2 --delay 80 ' : ''}${btnName}`);
+      await this._mouse(`click ${btnName}${doubleClick ? ' --repeat 2' : ''}`);
       return { ok: true };
     }
     const move = (x != null && y != null) ? `mousemove --sync ${Math.round(Number(x) || 0)} ${Math.round(Number(y) || 0)} ` : '';
@@ -263,10 +284,10 @@ class VmGraphics {
   async drag(startX, startY, endX, endY) {
     const r = (n) => Math.round(Number(n) || 0);
     if (this.mode === 'wayland') {
-      await this._ydotool(`mousemove ${r(startX)} ${r(startY)}`);
-      await this._ydotool('mousedown left');
-      await this._ydotool(`mousemove ${r(endX)} ${r(endY)}`);
-      await this._ydotool('mouseup left');
+      await this._mouse(`move ${r(startX)} ${r(startY)}`);
+      await this._mouse('mousedown left');
+      await this._mouse(`move ${r(endX)} ${r(endY)}`);
+      await this._mouse('mouseup left');
       return { ok: true };
     }
     await this._xdotool(`mousemove --sync ${r(startX)} ${r(startY)} mousedown 1 mousemove --sync ${r(endX)} ${r(endY)} mouseup 1`);
@@ -318,8 +339,10 @@ class VmGraphics {
     const wheelDir = direction === 'up' ? 'up' : 'down';
     const n = Math.max(1, Math.min(50, parseInt(amount, 10) || 3));
     if (this.mode === 'wayland') {
-      if (x != null && y != null) await this._ydotool(`mousemove ${Math.round(Number(x) || 0)} ${Math.round(Number(y) || 0)}`);
-      await this._ydotool(`click --repeat ${n} --delay 30 ${wheelDir === 'up' ? 4 : 5}`);
+      const px = x != null ? Math.round(Number(x) || 0) : null;
+      const py = y != null ? Math.round(Number(y) || 0) : null;
+      if (px != null && py != null) await this._mouse(`move ${px} ${py}`);
+      await this._mouse(`scroll ${wheelDir} ${n}`);
       return { ok: true };
     }
     const button = direction === 'up' ? 4 : 5;

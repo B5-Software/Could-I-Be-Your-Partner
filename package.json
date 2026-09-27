@@ -1,6 +1,6 @@
 {
   "name": "could-i-be-your-partner",
-  "version": "1.9.0-alpha.5",
+  "version": "1.9.0-alpha.6",
   "description": "全自动AI Agent，帮助完成一切任务",
   "license": "GPL-3.0-or-later",
   "main": "src/main/main.js",
@@ -29,7 +29,10 @@
     "audit": "npm audit",
     "audit:fix": "npm audit fix"
   },
-  "author": "B5-Software",
+  "author": {
+    "name": "B5-Software",
+    "email": "dev@b5-software.invalid"
+  },
   "build": {
     "appId": "org.b5-software.cibyp",
     "productName": "Could I Be Your Partner",
@@ -236,5 +239,10 @@
     "@ffmpeg-installer/win32-x64": "^4.1.0",
     "@ffprobe-installer/ffprobe": "^2.1.2",
     "@ffprobe-installer/win32-x64": "^5.1.0"
+  },
+  "homepage": "https://github.com/B5-Software/Could-I-Be-Your-Partner",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/B5-Software/Could-I-Be-Your-Partner.git"
   }
 }
