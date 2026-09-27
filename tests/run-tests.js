@@ -1095,6 +1095,59 @@ test('pcb-gerber: RS-274X structure + zones (LP) + apertures', () => {
   assert.ok(gtl.trim().endsWith('M02*'), 'missing M02 end');
 });
 
+test('pcb-gerber: 规范符合性（%ADD 光圈号 / 宏参数 / 4.6 坐标位 / 区域配对）', () => {
+  const b = makeTestBoard();
+  const files = PCBGerberT.exportAll(b, PCBFpT, 'spec', { naming: 'jlc' });
+  const gerbers = files.filter(f => /\.(gtl|gbl|gts|gbs|gto|gbo|gtp|gbp|gko)$/i.test(f.name));
+  assert.ok(gerbers.length >= 5, '应生成多层 Gerber');
+  for (const f of gerbers) {
+    const t = f.content;
+    for (const m of t.matchAll(/%ADD([^*]*)\*%/g)) {
+      assert.ok(/^\d+/.test(m[1]), f.name + ' 的 %ADD 光圈号非法: %ADD' + m[1].slice(0, 20));
+    }
+    const defs = new Set([...t.matchAll(/%ADD(\d+)/g)].map(m => m[1]));
+    for (const m of t.matchAll(/D(\d{2,})\*/g)) {
+      const d = m[1];
+      if (Number(d) >= 10) assert.ok(defs.has(d), f.name + ' 使用了未定义光圈 D' + d);
+    }
+    const fs2 = t.match(/%FSLAX(\d)(\d)Y\d\d\*%/);
+    if (fs2) {
+      let maxInt = 0;
+      for (const m of t.matchAll(/X(-?\d+)Y(-?\d+)/g)) {
+        maxInt = Math.max(maxInt, String(Math.floor(Math.abs(Number(m[1])) / 1e6)).length);
+      }
+      assert.ok(maxInt <= Number(fs2[1]), f.name + ' 坐标超出 FS 声明位数');
+    }
+    const g36 = (t.match(/G36\*/g) || []).length;
+    const g37 = (t.match(/G37\*/g) || []).length;
+    assert.strictEqual(g36, g37, f.name + ' G36/G37 不成对');
+    for (const m of t.matchAll(/%ADD\d+([A-Za-z_][A-Za-z0-9_]*),([^*]*)\*%/g)) {
+      assert.ok(!m[2].includes(','), f.name + ' 宏光圈参数应以 X 分隔: ' + m[1]);
+    }
+    for (const m of t.matchAll(/%AM([A-Za-z0-9_]+)\*([^*]*)\*%/g)) {
+      if (/^7,/.test(m[2])) assert.strictEqual(m[2].split(',').length - 1, 5, f.name + ' thermal 宏参数个数错误');
+    }
+  }
+});
+
+test('pcb-gerber: Excellon 规范（FMAT,2 / G90 / G05 / T0 / 刀具表一致）', () => {
+  const b = makeTestBoard();
+  for (const plated of [true, false]) {
+    const drl = PCBGerberT.emitDrill(b, plated);
+    assert.ok(/^M48/m.test(drl), '缺 M48');
+    assert.ok(/FMAT,2/.test(drl), '缺 FMAT,2');
+    assert.ok(/^(METRIC|INCH)/m.test(drl), '缺单位');
+    assert.ok(/^G90/m.test(drl), '缺 G90');
+    assert.ok(/^G05/m.test(drl), '缺 G05');
+    assert.ok(/^T0\s*$/m.test(drl), '缺 T0（刀具复位）');
+    assert.ok(/M30/.test(drl), '缺 M30');
+    const tools = new Set([...drl.matchAll(/^T(\d+)C([\d.]+)/gm)].map(m => m[1]));
+    for (const m of drl.matchAll(/^T(\d+)\s*$/gm)) {
+      if (m[1] !== '0') assert.ok(tools.has(m[1]), '使用了未定义刀具 T' + m[1]);
+    }
+  }
+});
+
 test('pcb-gerber: Excellon drill with tool table', () => {
   const b = makeTestBoard();
   const drl = PCBGerberT.emitDrill(b, true);
@@ -1137,6 +1190,58 @@ test('pcb-autorouter: routes a simple net', () => {
   assert.ok(res.routed >= 1, 'should route at least 1 connection');
   assert.ok(res.traces.length >= 1, 'should produce traces');
 });
+
+test('pcb-autorouter: L 形路径终点必须落在焊盘上（45° 优化不丢终点）', () => {
+  const b = PCBModelT.newBoard('AR-L', 30, 20, 2);
+  PCBModelT.Board.addComponent(b, { ref: 'TP1', footprint: 'TP-TH', x: 5, y: 10 });
+  PCBModelT.Board.addComponent(b, { ref: 'TP2', footprint: 'TP-TH', x: 25, y: 20 });
+  PCBModelT.Board.setPadNet(b, 'TP1', '1', 'N1');
+  PCBModelT.Board.setPadNet(b, 'TP2', '1', 'N1');
+  const res = PCBRouteT.autoroute(b, PCBFpT, {});
+  assert.ok(res.ok && res.traces.length >= 1, 'autoroute failed');
+  const pads = PCBModelT.Board.allPads(b, PCBFpT);
+  const nearPad = (pt) => Math.min(...pads.map(p => Math.hypot(p.x - pt.x, p.y - pt.y)));
+  for (const tr of res.traces) {
+    const first = tr.pts[0], last = tr.pts[tr.pts.length - 1];
+    assert.ok(nearPad(first) < 1.0, 'trace start not on pad: ' + nearPad(first).toFixed(3));
+    assert.ok(nearPad(last) < 1.0, 'trace end not on pad: ' + nearPad(last).toFixed(3));
+  }
+});
+
+test('pcb-autorouter: 多网络同步布线（静态阻挡逐网重建，全部布通）', () => {
+  const b = PCBModelT.newBoard('AR-M', 40, 30, 2);
+  const defs = [['TP1', 5, 8, 'A'], ['TP2', 35, 8, 'A'], ['TP3', 5, 22, 'B'], ['TP4', 35, 22, 'B']];
+  for (const [ref, x, y] of defs) PCBModelT.Board.addComponent(b, { ref, footprint: 'TP-TH', x, y });
+  for (const [ref, , , net] of defs) PCBModelT.Board.setPadNet(b, ref, '1', net);
+  const res = PCBRouteT.autoroute(b, PCBFpT, {});
+  assert.ok(res.ok, 'autoroute failed: ' + (res.error || ''));
+  assert.strictEqual(res.failed, 0, 'both nets must route, failedNets=' + JSON.stringify(res.failedNets || []));
+  assert.ok(res.routed >= 2, 'routed=' + res.routed);
+});
+
+testAsync('pcb-autorouter: autorouteAsync 写板契约（writesBoard=true，板上只写一次）', async () => {
+  const b = PCBModelT.newBoard('AR-A', 40, 30, 2);
+  const defs = [['TP1', 5, 8, 'A'], ['TP2', 35, 8, 'A'], ['TP3', 5, 22, 'B'], ['TP4', 35, 22, 'B']];
+  for (const [ref, x, y] of defs) PCBModelT.Board.addComponent(b, { ref, footprint: 'TP-TH', x, y });
+  for (const [ref, , , net] of defs) PCBModelT.Board.setPadNet(b, ref, '1', net);
+  const before = b.traces.length;
+  const res = await PCBRouteT.autorouteAsync(b, PCBFpT, {});
+  assert.ok(res.ok, 'autorouteAsync failed');
+  assert.strictEqual(res.writesBoard, true, 'async 版必须声明已写板（调用方才能跳过二次写入）');
+  assert.strictEqual(b.traces.length, before + res.traces.length, '板上走线数必须等于返回数（只写一次）');
+});
+
+test('pcb-drc: 增量过孔间距（新孔 vs 旧孔，对称判定）', () => {
+  const b = PCBModelT.newBoard('DRC-VIA', 40, 30, 2);
+  PCBModelT.Board.addVia(b, { net: 'A', x: 10, y: 10, drill: 0.3, diameter: 0.6 });
+  const idx = PCBDrctT.DrcIndex.create();
+  idx.run(b, PCBFpT); // 基线：此时板上无违规
+  const v2 = PCBModelT.Board.addVia(b, { net: 'B', x: 10.3, y: 10, drill: 0.3, diameter: 0.6 });
+  const delta = idx.runIncremental(b, PCBFpT, ['via:' + v2.id]);
+  const added = (delta.added || []).filter(e => e.type === 'clearance');
+  assert.ok(added.length >= 1, '增量 DRC 必须检出新增过孔与已有过孔的间距违规');
+});
+
 
 test('pcb-io: kicad_pcb export/import roundtrip', () => {
   const b = makeTestBoard();

@@ -28,8 +28,12 @@
   }
 
   function parsePt(s) {
-    const m = /^(-?[\d.]+),(-?[\d.]+)$/.exec(s || '');
-    return m ? { x: parseFloat(m[1]), y: parseFloat(m[2]) } : null;
+    // 严格校验：旧正则接受 "." / "1..2"，parseFloat 出 NaN 并直达 Gerber/DRC（非法几何）
+    const m = /^(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)$/.exec(String(s || '').trim());
+    if (!m) throw new Error('坐标格式应为 x,y：' + s);
+    const x = Number(m[1]), y = Number(m[2]);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) throw new Error('坐标不是有限数：' + s);
+    return { x, y };
   }
 
   function ok(data) { return Object.assign({ ok: true }, data || {}); }
@@ -960,13 +964,16 @@
         }
         return AR.autoroute(b, fpLib(), opts);
       };
+      // 布线前快照：异步布线过程中会写板（writesBoard），必须能整体回滚 ——
+      // 原实现快照在布线完成后才执行，导致布线无法撤销。
+      Doc.snapshot();
       const res = await runRoute();
       if (res.ok) {
-        Doc.snapshot();
-        for (const tr of res.traces) Model.Board.addTrace(b, tr);
-        for (const v of res.vias) Model.Board.addVia(b, v);
-        Doc.touch();
-        this._ui();
+        // autorouteAsync 已边布边写板；只有未写板的实现才在这里写。
+        if (!res.writesBoard) {
+          for (const tr of res.traces) Model.Board.addTrace(b, tr);
+          for (const v of res.vias) Model.Board.addVia(b, v);
+        }
       }
       return res.ok ? ok({ routed: res.routed, failed: res.failed, failedNets: res.failedNets, traces: res.traces.length, vias: res.vias.length, gridSize: res.gridSize, layerCount: res.layerCount, iter: res.iter || opts.maxRipRerouteIter, async: !!res.asyncSharded }) : res;
     }

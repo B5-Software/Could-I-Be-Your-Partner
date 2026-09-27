@@ -373,14 +373,19 @@
         if (typeof window.pcbAutoroute === 'function') {
           res = await window.pcbAutoroute(['--async']);
         } else if (PCBAutorouter && PCBAutorouter.autorouteAsync) {
+          Doc.snapshot(); // 直连 API 由 UI 侧自行快照（命令路径由 pcb-commands 负责）
           res = await PCBAutorouter.autorouteAsync(Doc.board(), PCBFootprints, {});
         } else {
+          Doc.snapshot();
           res = PCBAutorouter.autoroute(Doc.board(), PCBFootprints, {});
         }
         if (res.ok) {
-          Doc.snapshot();
-          for (const tr of (res.traces || [])) PCBModel.Board.addTrace(Doc.board(), tr);
-          for (const v of (res.vias || [])) PCBModel.Board.addVia(Doc.board(), v);
+          // autorouteAsync 已边布边写板（writesBoard），跳过二次写入（否则走线/过孔成倍复制）；
+          // 未写板的同步实现则在这里写入。
+          if (!res.writesBoard) {
+            for (const tr of (res.traces || [])) PCBModel.Board.addTrace(Doc.board(), tr);
+            for (const v of (res.vias || [])) PCBModel.Board.addVia(Doc.board(), v);
+          }
           Doc.touch();
           Editor.status(t('eda.status.autorouteDone', '自动布线完成: {routed} 成功, {failed} 失败{iter}', { routed: res.routed, failed: res.failed, iter: res.iter ? t('eda.status.ripupIter', ' ({n} 轮 rip-up)', { n: res.iter }) : '' }));
         } else {
@@ -712,14 +717,18 @@
         Editor.status(res.ok ? t('eda.status.gerberExported', 'Gerber 已导出: {path} ({count} 个文件)', { path: res.zipPath || d.path, count: g.files.length }) : t('eda.status.exportFailed', '导出失败: {error}', { error: res.error }));
         return;
       }
+      const needOk = (r, what) => {
+        if (!r || !r.ok) throw new Error((r && r.error) || (what + ' export failed'));
+        return r;
+      };
       const textExports = {
-        'kicad': () => ({ name: base + '.kicad_pcb', content: window.pcbGetKicadPcb().content, filter: 'KiCad PCB' }),
-        'netlist-kicad': () => ({ name: base + '.net', content: window.pcbGetNetlist('kicad').content, filter: 'KiCad Netlist' }),
-        'netlist-csv': () => ({ name: base + '-netlist.csv', content: window.pcbGetNetlist('csv').content, filter: 'CSV' }),
+        'kicad': () => ({ name: base + '.kicad_pcb', content: needOk(window.pcbGetKicadPcb(), 'KiCad').content, filter: 'KiCad PCB' }),
+        'netlist-kicad': () => ({ name: base + '.net', content: needOk(window.pcbGetNetlist('kicad'), 'KiCad netlist').content, filter: 'KiCad Netlist' }),
+        'netlist-csv': () => ({ name: base + '-netlist.csv', content: needOk(window.pcbGetNetlist('csv'), 'CSV netlist').content, filter: 'CSV' }),
         'pnp': () => ({ name: base + '-PnP.csv', content: PCBGerber.emitPnP(Doc.board()), filter: 'CSV' }),
         'bom': () => ({ name: base + '-BOM.csv', content: PCBGerber.emitBOM(Doc.board()), filter: 'CSV' }),
-        'svg-pcb': () => ({ name: base + '-pcb.svg', content: window.pcbGetSVGString('pcb').svg, filter: 'SVG' }),
-        'svg-sch': () => ({ name: base + '-sch.svg', content: window.pcbGetSVGString('sch').svg, filter: 'SVG' })
+        'svg-pcb': () => ({ name: base + '-pcb.svg', content: needOk(window.pcbGetSVGString('pcb'), 'SVG').svg, filter: 'SVG' }),
+        'svg-sch': () => ({ name: base + '-sch.svg', content: needOk(window.pcbGetSVGString('sch'), 'SVG').svg, filter: 'SVG' })
       };
       if (textExports[kind]) {
         const f = textExports[kind]();
@@ -741,10 +750,15 @@
         const r = window.pcbGet3DOBJ(base);
         const d = await window.pcbAPI.saveFileDialog(base + '.obj', 'OBJ 3D');
         if (!d || !d.ok) return;
-        let res = await window.pcbAPI.writeFile(d.path, r.data.obj);
+        let objPath = d.path;
+        if (!/\.obj$/i.test(objPath)) objPath += '.obj';
+        const mtlPath = objPath.replace(/\.obj$/i, '.mtl');
+        const mtlBase = mtlPath.split(/[\\/]/).pop();
+        const objContent = String(r.data.obj).replace(/^mtllib\s+.*$/m, 'mtllib ' + mtlBase);
+        let res = await window.pcbAPI.writeFile(objPath, objContent);
         if (res.ok) {
-          const mtlPath = d.path.replace(/\.obj$/i, '.mtl');
-          await window.pcbAPI.writeFile(mtlPath, r.data.mtl);
+          const resMtl = await window.pcbAPI.writeFile(mtlPath, r.data.mtl);
+          if (!resMtl.ok) res = resMtl;
         }
         Editor.status(res.ok ? t('eda.status.exported', '已导出: {path}', { path: d.path }) : t('eda.status.exportFailed', '导出失败: {error}', { error: res.error }));
         return;
@@ -757,11 +771,11 @@
   // ---------------- command line ----------------
   function initCommandLine() {
     const input = document.getElementById('pcb-cmd');
-    input.addEventListener('keydown', (e) => {
+    input.addEventListener('keydown', async (e) => {
       if (e.key === 'Enter') {
         const cmd = input.value.trim();
         if (!cmd) return;
-        const r = window.pcbExecuteCommand(cmd);
+        const r = await window.pcbExecuteCommand(cmd);
         if (r.ok) {
           Editor.status(t('eda.status.cmdOk', '✓ {cmd}', { cmd }) + (r.error ? '' : ''));
           input.value = '';

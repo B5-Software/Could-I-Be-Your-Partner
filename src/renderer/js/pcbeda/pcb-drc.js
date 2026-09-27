@@ -28,7 +28,8 @@
       const n2 = v.net2 || '';
       // 规范化网络对顺序，确保 (A,B) 和 (B,A) 视为同一对
       const pair = n1 < n2 ? n1 + '|' + n2 : n2 + '|' + n1;
-      return [v.type, pair, layer].join('|');
+      // 纳入对象 ID：否则同一对网络（尤其是都无网络的对象）的多处违规会折叠成 1 条
+      return [v.type, pair, layer, idA, idB].join('|');
     }
     const x = (v.x || 0).toFixed(2);
     const y = (v.y || 0).toFixed(2);
@@ -455,12 +456,13 @@
               }
             }
             // via clearances: 变更 via vs 全量
+            // via clearances: 变更 via vs 全量（对称判定！新增过孔总在数组末尾，
+            // 原实现要求较早索引的 v 必须在变更集内 → 新过孔与已有过孔永不检查）
             for (let i = 0; i < board.vias.length; i++) {
               const v = board.vias[i];
-              if (!sel.viaIds.has(v.id)) continue;
               for (let j = i + 1; j < board.vias.length; j++) {
                 const w = board.vias[j];
-                if (v.net && w.net && v.net === w.net) continue;
+                if (!sel.viaIds.has(v.id) && !sel.viaIds.has(w.id)) continue;
                 const d = Geo.dist(v.x, v.y, w.x, w.y) - v.diameter / 2 - w.diameter / 2;
                 if (d < cl - 1e-9) add('error', 'clearance', t('eda.drc.viaClearance', '过孔间距不足'), (v.x + w.x) / 2, (v.y + w.y) / 2, 1, { idA: v.id, idB: w.id, net1: v.net || '', net2: w.net || '' });
               }

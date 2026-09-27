@@ -65,7 +65,10 @@
     // blocked[li] = Uint8Array(W*H)：1=异网阻挡
     // ownedBy[li] = Int32Array(W*H)：当前网络 id（0=无），用于 rip-up
     const blocked = layers.map(() => new Uint8Array(W * H));
-    const ownedBy = layers.map(() => new Int32Array(W * H)); // 0=空, n=网络序号(1-based)
+    const ownedBy = layers.map(() => new Int32Array(W * H)); // 0=无, n=网络序号(1-based)
+    const W_H = W * H;
+    let staticMarks = [];       // 上一次 blockStaticObstacles 画下的格子（li * W_H + idx）
+    let staticRecording = null; // 记录开关（仅 blockStaticObstacles 内启用）
 
     function blockCircle(x, y, r, layerIds, ownerNetId) {
       const g = toGrid(x, y);
@@ -83,6 +86,7 @@
             if (Geo.dist(wx, wy, x, y) <= r) {
               const ci = gIdx(ngx, ngy);
               arr[ci] = 1;
+              if (staticRecording) staticRecording.push(li * W_H + ci);
               if (ownerNetId > 0) own[ci] = ownerNetId;
             }
           }
@@ -108,6 +112,7 @@
             if (Geo.dist(wx, wy, x, y) <= r) {
               const ci = gIdx(ngx, ngy);
               arr[ci] = 1;
+              if (staticRecording) staticRecording.push(li * W_H + ci);
               if (ownerNetId > 0) own[ci] = ownerNetId;
             }
           }
@@ -135,6 +140,17 @@
     // 阻挡板外 + 板边距 + 异网铜（外部对象 ownerNetId=0，不会被 rip-up）
     // 注意：outline 板外阻挡已在上方一次性计算，此处只处理异网铜
     function blockStaticObstacles(skipNet) {
+      // 逐网重建静态阻挡：先清除上一次的标记（owner=0 的异网铜格）再重画，
+      // 否则阻挡跨网络累积会把后续网络自己的起终点也堵死 —— 同步 autoroute
+      // 在多网络下只有第 1 条能布通（实测推演：第 2 条起点格全 blocked）。
+      for (const key of staticMarks) {
+        const li0 = (key / W_H) | 0;
+        const idx0 = key % W_H;
+        if (ownedBy[li0][idx0] === 0) blocked[li0][idx0] = 0;
+      }
+      const marks = [];
+      staticRecording = marks;
+      try {
       for (const p of allPads) {
         if (p.net === skipNet) continue;
         const r = Math.max(p.w, p.h) / 2 + inflate;
@@ -152,6 +168,10 @@
           blockSegment(t.pts[i].x, t.pts[i].y, t.pts[i + 1].x, t.pts[i + 1].y, t.width / 2 + inflate, t.layer, 0);
         }
       }
+      } finally {
+        staticRecording = null;
+      }
+      staticMarks = marks;
     }
 
     // 清除某网络此前布线留下的阻挡（用于 rip-up）
@@ -395,8 +415,15 @@
         out.push(b);
         i++;
       }
-      // 加最后一个点
-      if (i === pts.length - 1) out.push(pts[pts.length - 1]);
+      // 加最后一个点：必须无条件补上——末端拐角也可倒角时 i 会越过 pts.length-1，
+      // 原实现导致终点丢失、走线悬空未接触焊盘却仍报 routed 成功。
+      {
+        const lastPt = pts[pts.length - 1];
+        const tailPt = out[out.length - 1];
+        if (!tailPt || Math.abs(tailPt.x - lastPt.x) > 1e-9 || Math.abs(tailPt.y - lastPt.y) > 1e-9) {
+          out.push(lastPt);
+        }
+      }
       return out;
     }
 
@@ -702,7 +729,10 @@
       vias: newVias,
       gridSize: opts.gridSize || 0.225,
       layerCount: Model.Board.copperLayerIds(board).length,
-      asyncSharded: true
+      asyncSharded: true,
+      // 本函数在布线过程中已把每条网络写入 board（供后续网络作为阻挡）；
+      // 调用方必须据此跳过二次写入，否则走线/过孔会成倍复制。
+      writesBoard: true
     };
   }
 

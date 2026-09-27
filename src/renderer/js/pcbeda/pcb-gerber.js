@@ -113,19 +113,30 @@
       this.lines.push('%LPD*%');
     }
     _coord(v) {
+      // 非有限值绝不能写进 Gerber（NaN/Infinity 会让整个文件不可用），退化并记录
+      if (!Number.isFinite(v)) { this.badValues = (this.badValues || 0) + 1; return '0'; }
       const n = Math.round(v * 1e6);
       return (n < 0 ? '-' : '') + String(Math.abs(n));
     }
-    _fmtD(d) { return Math.round(d * 1e6) / 1e6; }
+    _fmtD(d) {
+      // 光圈尺寸必须为正的有限值；<=0 或非有限会让 %ADD 非法
+      if (!Number.isFinite(Number(d)) || Number(d) <= 0) { this.badValues = (this.badValues || 0) + 1; return 0.01; }
+      return Math.round(Number(d) * 1e6) / 1e6;
+    }
     aperture(def, macroDef) {
       if (this.apertures.has(def)) return this.apertures.get(def);
-      const code = 'D' + (this.nextD++);
+      const dnum = this.nextD++;
+      const code = 'D' + dnum;
       if (macroDef) {
-        const macroName = 'MACRO' + code;
+        // 宏名不带 D 前缀（D 只用于选择语句 D10*）
+        const macroName = 'MACRO' + dnum;
+        // 宏定义：%AM<name>*<body>*%（body 内每条图元以 * 结束）
         this.lines.push('%AM' + macroName + '*' + macroDef + '*%');
-        this.lines.push('%ADD' + code + macroName + ',' + def + '*%');
+        // 宏光圈引用：%ADD<dcode><name>,<参数以 X 分隔>*%
+        this.lines.push('%ADD' + dnum + macroName + ',' + def + '*%');
       } else {
-        this.lines.push('%ADD' + code + def + '*%');
+        // 标准光圈：%ADD<dcode><模板>,<参数以 X 分隔>*%
+        this.lines.push('%ADD' + dnum + def + '*%');
       }
       this.apertures.set(def, code);
       return code;
@@ -133,8 +144,10 @@
     circleAperture(dia) { return this.aperture('C,' + this._fmtD(dia)); }
     rectAperture(w, h) { return this.aperture('R,' + this._fmtD(w) + 'X' + this._fmtD(h)); }
     thermalAperture(od, id, gap) {
-      return this.aperture(this._fmtD(od) + ',' + this._fmtD(id) + ',' + this._fmtD(gap),
-        '7,0,0,$1,$2,$3,0.0');
+      // 宏图元 7（thermal）：7,<x>,<y>,<od>,<id>,<gap> —— 恰好 5 个参数
+      // 引用时的参数按 Gerber 规范以 X 分隔
+      return this.aperture(this._fmtD(od) + 'X' + this._fmtD(id) + 'X' + this._fmtD(gap),
+        '7,0,0,$1,$2,$3');
     }
     select(code) {
       if (this.curD !== code) { this.lines.push(code + '*'); this.curD = code; }
@@ -207,13 +220,15 @@
       const rot = ((pad.rot || 0) % 360 + 360) % 360;
       this.endRegion();
       const axisAligned = (rot % 180 === 0);
+      // 只有 90/270 才交换宽高；180 与 0 等价（原实现 rot!==0 就交换，180° 焊盘形状错误）
       if (pad.shape === 'circle') {
         this.setPolarity('D');
         this.select(this.circleAperture(pad.w + 2 * inf));
         this.flash(pad.x, pad.y);
       } else if (axisAligned) {
         this.setPolarity('D');
-        const w = rot === 0 ? pad.w : pad.h, h = rot === 0 ? pad.h : pad.w;
+        const swap = (rot === 90 || rot === 270);
+        const w = swap ? pad.h : pad.w, h = swap ? pad.w : pad.h;
         this.select(this.rectAperture(w + 2 * inf, h + 2 * inf));
         this.flash(pad.x, pad.y);
       } else {
@@ -229,7 +244,8 @@
         this.select(this.circleAperture(pad.w + 2 * inf));
         this.flash(pad.x, pad.y);
       } else if (rot % 180 === 0) {
-        const w = rot === 0 ? pad.w : pad.h, h = rot === 0 ? pad.h : pad.w;
+        const swap = (rot === 90 || rot === 270);
+        const w = swap ? pad.h : pad.w, h = swap ? pad.w : pad.h;
         this.select(this.rectAperture(w + 2 * inf, h + 2 * inf));
         this.flash(pad.x, pad.y);
       } else {
@@ -442,9 +458,14 @@
   function emitDrill(board, plated) {
     // plated=true: PTH (via holes + TH pads); false: NPTH (non-plated pads)
     const holes = []; // {x,y,d}
-    for (const v of board.vias) if (plated) holes.push({ x: v.x, y: v.y, d: v.drill });
+    for (const v of board.vias) {
+      if (!plated) continue;
+      if (!Number.isFinite(v.x) || !Number.isFinite(v.y) || !Number.isFinite(Number(v.drill))) continue;
+      holes.push({ x: v.x, y: v.y, d: v.drill });
+    }
     for (const p of ensurePads(board)) {
       if (!p.drill) continue;
+      if (!Number.isFinite(p.x) || !Number.isFinite(p.y) || !Number.isFinite(Number(p.drill))) continue;
       const isPlated = p.plated !== false;
       if (isPlated === plated) holes.push({ x: p.x, y: p.y, d: p.drill });
     }
@@ -456,17 +477,24 @@
     const L = [];
     L.push('M48');
     L.push('; CIBYP-PCB-EDA ' + (plated ? 'PTH' : 'NPTH') + ' drill file');
+    // 标准头：类型声明（CAM 工具据此区分镀孔/非镀孔）+ 格式 2（坐标带小数点的十进制格式）
+    L.push(';TYPE=' + (plated ? 'PLATED' : 'NON_PLATED'));
+    L.push('FMAT,2');
     L.push('METRIC,TZ');
     for (const [d, n] of tools) {
       L.push('T' + String(n).padStart(2, '0') + 'C' + d.toFixed(3));
     }
     L.push('%');
+    // 标准体：绝对坐标 + 钻孔模式
+    L.push('G90');
+    L.push('G05');
     let curT = null;
     for (const h of holes) {
       const t = tools.get(Math.round(h.d * 1000) / 1000);
       if (t !== curT) { L.push('T' + String(t).padStart(2, '0')); curT = t; }
       L.push('X' + h.x.toFixed(3) + 'Y' + (-h.y).toFixed(3));
     }
+    L.push('T0');
     L.push('M30');
     return L.join('\n') + '\n';
   }
@@ -478,7 +506,8 @@
     const L = [];
     L.push('P  CIBYP-PCB-EDA IPC-D-356 netlist');
     L.push('C  generated test netlist, units mm');
-    const f9 = (v) => (v >= 0 ? '+' : '') + v.toFixed(4).padStart(9, '0');
+    // IPC-D-356：符号在前、再对绝对值零填充（原实现把符号插到零填充之后，产出 "0-12.3456" 这类非法字段）
+    const f9 = (v) => (v < 0 ? '-' : '+') + Math.abs(v).toFixed(4).padStart(9, '0');
     for (const p of ensurePads(board)) {
       const net = (p.net || 'N/C').padEnd(14, ' ').slice(0, 14);
       const padRef = (p.ref + '-' + p.num).padEnd(8, ' ').slice(0, 8);
