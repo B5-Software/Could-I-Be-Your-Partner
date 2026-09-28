@@ -71,6 +71,10 @@ async function main() {
   const vmService = {
     instance: inst,
     runtime: { vm: { workspaceMount: '/workspace' }, workspaceMode: 'shared' },
+    // 映射必需：宿主侧工作区根（VmFs.mappingRoots 依赖它；缺失时新语义会拒绝映射外路径）
+    workspaceRoot: hostRoot,
+    extraHostRoots: [],
+    _externMounts: null,
     toVmPath: (p) => {
       const rel = path.relative(path.resolve(hostRoot), path.resolve(String(p))).split(path.sep).join('/');
       if (!rel || rel.startsWith('..')) return '/workspace';

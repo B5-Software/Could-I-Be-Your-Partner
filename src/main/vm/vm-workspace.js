@@ -185,7 +185,13 @@ class WorkspaceSync extends EventEmitter {
     const lines = r.stdout.split('\n');
     // 最后一行是 guest 的 epoch（秒）：宿主与 guest 常有几百毫秒~几秒的时钟偏移，
     // 直接比较 mtime 会把"较新的一方"判反（实测：VM 后写的内容被判为更旧）
-    const guestEpoch = parseFloat(lines[lines.length - 1]);
+    // 注意：date 输出带换行，split 后最后一个元素是空串 —— 必须取最后一个"非空数字行"
+    //（此前直接取 lines[len-1] 恒为 NaN，offset 永远 undefined，补偿形同虚设）
+    let guestEpoch = NaN;
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const t = parseFloat(lines[i]);
+      if (Number.isFinite(t) && t > 0) { guestEpoch = t; break; }
+    }
     if (Number.isFinite(guestEpoch) && guestEpoch > 0) {
       this._vmClockOffsetMs = Date.now() - guestEpoch * 1000;
     }
