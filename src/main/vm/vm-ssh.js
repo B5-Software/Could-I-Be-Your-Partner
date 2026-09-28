@@ -211,17 +211,27 @@ class VmSsh extends EventEmitter {
   async forwardToHost(guestPort, hostPort = null) {
     const net = require('net');
     const server = net.createServer((sock) => {
+      // 本地 socket / SSH 通道的错误绝不能冒泡成未捕获异常：
+      // 实测 VNC 客户端断开后 guest 继续推数据 → sock.write EPIPE → 打断主进程、桌面打不开。
+      sock.on('error', () => { try { sock.destroy(); } catch { /* ignore */ } });
+      try { sock.setNoDelay(true); } catch { /* ignore */ }
       this.client.forwardOut('127.0.0.1', sock.remotePort || 0, '127.0.0.1', guestPort, (err, stream) => {
-        if (err) { sock.destroy(); return; }
-        sock.pipe(stream).pipe(sock);
-        stream.on('close', () => sock.destroy());
-        sock.on('close', () => stream.close());
+        if (err) { try { sock.destroy(); } catch { /* ignore */ } return; }
+        // ssh2 通道也会 emit 'error'（channel 被对端关闭等）——同样要兜住
+        stream.on('error', () => { try { sock.destroy(); } catch { /* ignore */ } });
+        sock.on('error', () => { try { stream.close(); } catch { /* ignore */ } });
+        sock.pipe(stream);
+        stream.pipe(sock);
+        stream.on('close', () => { try { sock.destroy(); } catch { /* ignore */ } });
+        sock.on('close', () => { try { stream.close(); } catch { /* ignore */ } });
       });
     });
     await new Promise((resolve, reject) => {
       server.once('error', reject);
       server.listen(hostPort || 0, '127.0.0.1', resolve);
     });
+    // listen 成功后的服务器级错误（socket 处理之外的）同样兜住，避免未捕获异常
+    server.on('error', () => { /* ignore */ });
     const actual = server.address().port;
     const entry = { hostPort: actual, close: () => { try { server.close(); } catch { /* ignore */ } this._forwards.delete(entry); } };
     this._forwards.add(entry);

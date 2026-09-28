@@ -1190,6 +1190,38 @@ test('pcb-gerber: PnP/BOM 规范（Y 轴取反 / CSV 转义 / 分组键 / UTF-8 
   assert.ok(lines.some((l) => l.startsWith('2,') && l.includes('A|B')), 'BOM 分组键不应被 | 破坏: ' + JSON.stringify(lines));
 });
 
+testAsync('vm-ssh: forwardToHost 客户端断开后不产生未捕获异常（EPIPE 防护）', async () => {
+  const { VmSsh } = require('../src/main/vm/vm-ssh');
+  const net = require('net');
+  const { PassThrough } = require('stream');
+  // 最小实例：绕过真实 SSH，直接注入受控的 forwardOut 流
+  const inst = Object.create(VmSsh.prototype);
+  inst._forwards = new Set();
+  inst.client = {
+    forwardOut: (_sh, _sp, _dh, _dp, cb) => {
+      const st = new PassThrough();
+      cb(null, st);
+      // 模拟：本地客户端断开后，guest 侧仍在推数据（旧实现在这里 sock.write EPIPE → 未捕获异常）
+      setTimeout(() => { try { st.write('GUEST-DATA-AFTER-CLIENT-GONE'); } catch { /* ignore */ } }, 30);
+      return true;
+    },
+  };
+  let uncaught = null;
+  const onUncaught = (e) => { uncaught = e; };
+  process.once("uncaughtException", onUncaught);
+  try {
+    const entry = await inst.forwardToHost(5900);
+    const sock = net.connect(entry.hostPort, '127.0.0.1');
+    await new Promise((res, rej) => { sock.once('connect', res); sock.once('error', rej); });
+    sock.destroy(); // 客户端断开
+    await new Promise((r) => setTimeout(r, 200));
+    entry.close();
+  } finally {
+    process.removeListener("uncaughtException", onUncaught);
+  }
+  assert.strictEqual(uncaught, null, 'forward 错误不应冒泡为未捕获异常：' + (uncaught && uncaught.message));
+});
+
 test('vm-tools: CAD/EDA 文件通道纳入 VM 路由（运行位置=虚拟机时写盘落虚拟机）', () => {
   const VMT = require('../src/main/vm/vm-tools.js');
   const expect = {
