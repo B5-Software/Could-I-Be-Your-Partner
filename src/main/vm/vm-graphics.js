@@ -90,7 +90,7 @@ class VmGraphics {
   }
 
   /** 确保图形环境所需软件包存在（缺则 apt 安装；base 变体也能用）
-   *  - 新镜像（CIBYP-VM-OS ≥ 0.2）：Wayland 栈（sway + wayvnc + grim + wl-clipboard + ydotool/wtype）
+   *  - 新镜像（CIBYP-VM-OS ≥ 0.2）：Wayland 栈（sway + wayvnc + grim + wl-clipboard + wtype + 自研 cibyp-input）
    *  - 旧镜像：X11 栈（Xvfb + x11vnc + openbox + xdotool/xclip）——保持兼容
    */
   async ensureGuestPackages({ onProgress } = {}) {
@@ -98,8 +98,12 @@ class VmGraphics {
     const wayland = await this._has('sway');
     if (wayland) {
       for (const [cmd, pkg] of [['sway', 'sway'], ['wayvnc', 'wayvnc'], ['grim', 'grim'], ['wl-copy', 'wl-clipboard'],
-        ['ydotool', 'ydotool'], ['wtype', 'wtype'], ['wlr-randr', 'wlr-randr'], ['foot', 'foot']]) {
+        ['wtype', 'wtype'], ['wlr-randr', 'wlr-randr'], ['foot', 'foot']]) {
         if (!(await this._has(cmd))) need.push(pkg);
+      }
+      // 鼠标注入：自研 cibyp-input（写 /dev/uinput，零第三方依赖）优先；ydotool 仅在 backports，不再安装
+      if (!(await this._has("cibyp-input")) && !(await this._has("ydotool"))) {
+        this._logLine("提示：镜像内既无 cibyp-input 也无 ydotool，鼠标注入将不可用（键盘 wtype 不受影响）");
       }
     } else {
       if (!(await this._has('Xvfb'))) need.push('xvfb');
@@ -556,7 +560,16 @@ class VmGraphics {
     const inst = this.vmService && this.vmService.instance;
     this.state = { x: false, vnc: false, chromium: false, vncForward: null, cdpForward: null, vncHostPort: null, cdpHostPort: null };
     if (!inst || inst.state !== 'ready') return { ok: true };
-    try { await inst.exec('pkill -f "x11vnc -display" ; pkill -f "Xvfb :99" ; pkill -f "chromium" ; pkill -f "wayvnc" ; pkill -f "cibyp-session" ; pkill -f "cibyp-shell" ; pkill -f "cibyp-desktop" ; pkill -x sway ; sudo pkill -x ydotoold ; true', { timeoutMs: 30000 }); } catch { /* ignore */ }
+    // 注意：pkill -f 的模式会匹配到本命令自身的 cmdline（实测：第一个模式就自伤，
+    // 自己的 shell 被杀 → 后续清理全部没执行，wayvnc 残留）。全部改用精确进程名
+    //（-x）或锚定结尾（pkill -f "xxx$"），并在结束前轮询确认。
+    const killCmd = 'pkill -x x11vnc ; pkill -x Xvfb ; pkill -x chromium ; pkill -x chrome ; pkill -x wayvnc ; pkill -x sway ; pkill -x swaybg ; pkill -f "cibyp-session$" ; pkill -f "cibyp-shell$" ; pkill -f "cibyp-desktop$" ; sudo pkill -x ydotoold ; true';
+    try { await inst.exec(killCmd, { timeoutMs: 30000 }); } catch { /* ignore */ }
+    for (let i = 0; i < 20; i++) {
+      const r = await inst.exec('pgrep -x wayvnc >/dev/null && echo up || echo down', { timeoutMs: 10000 }).catch(() => null);
+      if (!r || !/\bup\b/.test(r.stdout)) break;
+      await new Promise((res) => setTimeout(res, 250));
+    }
     this._logLine('图形环境已停止');
     return { ok: true };
   }

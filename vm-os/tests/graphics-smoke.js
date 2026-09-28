@@ -95,12 +95,20 @@ async function main() {
   check('宿主经端口转发读到 RFB banner', !!banner && /^RFB \d+\.\d+/.test(banner), banner || '(无)');
 
   const pg = async (name) => (await inst.exec(`pgrep -x ${JSON.stringify(name)} | head -3`, { timeoutMs: 15000 })).stdout.trim();
-  const xvfb = await pg('Xvfb');
-  check('guest 内 Xvfb 运行中', /^\d+/m.test(xvfb), xvfb);
-  const vnc = await pg('x11vnc');
-  check('guest 内 x11vnc 运行中', /^\d+/m.test(vnc), vnc);
+  const isWayland = g.mode === 'wayland';
+  if (isWayland) {
+    const sway = await pg('sway');
+    check('guest 内 sway 运行中', /^\d+/m.test(sway), sway || '(无进程)');
+    const vnc = await pg('wayvnc');
+    check('guest 内 wayvnc 运行中', /^\d+/m.test(vnc), vnc || '(无进程)');
+  } else {
+    const xvfb = await pg('Xvfb');
+    check('guest 内 Xvfb 运行中', /^\d+/m.test(xvfb), xvfb);
+    const vnc = await pg('x11vnc');
+    check('guest 内 x11vnc 运行中', /^\d+/m.test(vnc), vnc);
+  }
   const vncListen = (await inst.exec('ss -ltn | grep 5900 || true', { timeoutMs: 15000 })).stdout.trim();
-  check('x11vnc 仅监听 loopback', /127\.0\.0\.1:5900/.test(vncListen), vncListen || '(未监听?)');
+  check('VNC 仅监听 loopback', /127\.0\.0\.1:5900/.test(vncListen), vncListen || '(未监听)');
 
   if (opts.withChromium) {
     const t1 = Date.now();
@@ -113,8 +121,8 @@ async function main() {
   }
 
   await g.stop();
-  const after = await pg('x11vnc');
-  check('停止后 x11vnc 已退出', !/^\d+/m.test(after), after || '(无进程)');
+  const after = await pg(isWayland ? 'wayvnc' : 'x11vnc');
+  check('停止后 VNC 已退出', !/^\d+/m.test(after), after || '(无进程)');
 
   await inst.stop({ timeoutMs: 20000 });
   for (const f of forwards.values()) { try { f.close(); } catch { /* ignore */ } }
