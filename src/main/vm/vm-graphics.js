@@ -229,9 +229,22 @@ class VmGraphics {
     return r.stdout;
   }
 
+  /** 确保常驻鼠标注入守护运行（设备必须常驻，一次性设备的事件会被合成器忽略） */
+  async _ensureCibypInputd() {
+    if (this._cibypInputd) return;
+    const inst = this._inst();
+    const chk = await inst.exec("pgrep -f 'cibyp-input daemon' >/dev/null && echo up || echo down", { timeoutMs: 10000 });
+    if (!/up/.test(chk.stdout)) {
+      await inst.exec(`sudo -n setsid env XDG_RUNTIME_DIR=${shellQuote(this.runtimeDir)} nohup /usr/local/bin/cibyp-input daemon >/tmp/cibyp-inputd.log 2>&1 </dev/null & sleep 1`, { timeoutMs: 15000 });
+      this._logLine('已启动 cibyp-input 守护（鼠标注入）');
+    }
+    this._cibypInputd = true;
+  }
+
   /** 自研 uinput 鼠标注入器（镜像内无 ydotool 时的回退；零第三方依赖） */
   async _cibypInput(args, timeoutMs = 30000) {
     const inst = this._inst();
+    await this._ensureCibypInputd();
     const r = await inst.exec(`sudo XDG_RUNTIME_DIR=${shellQuote(this.runtimeDir)} cibyp-input ${args}`, { timeoutMs });
     if (!r.ok) throw new Error('虚拟机鼠标注入失败（cibyp-input）: ' + (r.stderr || r.stdout || '').slice(-200));
     return r.stdout;
@@ -454,11 +467,18 @@ class VmGraphics {
     const inst = this._inst();
     await this._resolveRuntimeDir();
     const geom = String(this.geometry).split('x').slice(0, 2).join('x');
+    // 输入支持取决于 seatd：SSH 会话没有 logind session，libseat 必须走 seatd
+    // （没有 seatd 时不能挂 libinput 后端，否则 sway 起不来）
+    const hasSeatd = await this._has('seatd');
     const env = [
-      'WLR_BACKENDS=headless',
+      `WLR_BACKENDS=${hasSeatd ? 'headless,libinput' : 'headless'}`,
+      // 说明：libinput 需要 libseat + seatd（SSH 会话没有 logind session）；
+      // 装了 seatd 的镜像自动获得输入设备支持；未装的（旧镜像/WSL）保持纯 headless。
+      ...(hasSeatd ? ['LIBSEAT_BACKEND=seatd'] : []),
       'WLR_HEADLESS_OUTPUTS=1',
       'WLR_RENDERER=pixman',
-      'WLR_LIBINPUT_NO_DEVICES=1',
+      // 注意：这里绝不能设 WLR_LIBINPUT_NO_DEVICES=1 —— 它会让 sway 忽略所有输入设备，
+      // 自研鼠标（uinput）就永远无法生效（实测 get_inputs 为空、点击无效）。
       `XDG_RUNTIME_DIR=${shellQuote(this.runtimeDir)}`,
       `CIBYP_GEOMETRY=${shellQuote(geom)}`,
       'XDG_SESSION_TYPE=wayland',
