@@ -26,6 +26,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { shellQuote } = require('./vm-paths');
+const { VncWsBridge } = require('./vm-vnc-ws');
 
 class VmGraphics {
   /**
@@ -35,12 +36,14 @@ class VmGraphics {
     this.vmService = opts.vmService;
     this.display = opts.display || DEFAULT_DISPLAY;
     this.geometry = opts.geometry || DEFAULT_GEOMETRY;
-    this.state = { x: false, vnc: false, chromium: false, vncForward: null, cdpForward: null, vncHostPort: null, cdpHostPort: null };
+    this.state = { x: false, vnc: false, chromium: false, vncForward: null, cdpForward: null, vncHostPort: null, cdpHostPort: null, vncWsPort: null };
     this.mode = null;            // 'wayland' | 'x11'（首次 start 时探测决定）
     this.runtimeDir = '/tmp/cibyp-runtime-0';
     this.waylandDisplay = '';    // 会话 socket 名（wayland-0/1…）
     this._ydotoold = false;
     this._log = [];
+    // noVNC 只能连 WebSocket：裸 VNC 端口必须经本机 WS 桥（带 token）
+    this._vncWs = new VncWsBridge({ log: (m) => this._logLine(m) });
   }
 
   get status() {
@@ -51,6 +54,8 @@ class VmGraphics {
       display: this.display,
       geometry: this.geometry,
       vncHostPort: this.state.vncHostPort,
+      vncWsPort: this.state.vncWsPort,
+      vncWsUrl: this.vncWsUrl,
       cdpHostPort: this.state.cdpHostPort,
       log: this._log.slice(-30),
     };
@@ -501,7 +506,10 @@ class VmGraphics {
     const f = await this.vmService.forwardPort(VNC_PORT);
     this.state.vncForward = f;
     this.state.vncHostPort = f.hostPort;
-    this._logLine(`VNC 已映射到宿主 127.0.0.1:${f.hostPort}`);
+    // noVNC 只能连 WebSocket：为裸 VNC 端口起本机 WS 桥（带 token，仅 loopback）
+    const bridge = await this._vncWs.start(f.hostPort);
+    this.state.vncWsPort = bridge.port;
+    this._logLine(`VNC 已映射到宿主 127.0.0.1:${f.hostPort}；noVNC WS 桥 ${bridge.url}`);
   }
 
   get vncLocalUrl() {
@@ -509,7 +517,8 @@ class VmGraphics {
   }
 
   get vncWsUrl() {
-    return this.state.vncHostPort ? `ws://127.0.0.1:${this.state.vncHostPort}/` : null;
+    // noVNC 必须连 WebSocket：返回本机 WS 桥地址（带随机 token），而不是裸 VNC 端口
+    return this.state.vncWsPort ? this._vncWs.url : null;
   }
 
   /** 在 VM 内启动 Chromium（CDP 暴露给宿主 Playwright），用于浏览器沙盒 */
@@ -558,7 +567,8 @@ class VmGraphics {
   /** 停止图形环境（保留 VM 运行） */
   async stop() {
     const inst = this.vmService && this.vmService.instance;
-    this.state = { x: false, vnc: false, chromium: false, vncForward: null, cdpForward: null, vncHostPort: null, cdpHostPort: null };
+    this.state = { x: false, vnc: false, chromium: false, vncForward: null, cdpForward: null, vncHostPort: null, cdpHostPort: null, vncWsPort: null };
+    try { this._vncWs && this._vncWs.stop(); } catch { /* ignore */ }
     if (!inst || inst.state !== 'ready') return { ok: true };
     // 注意：pkill -f 的模式会匹配到本命令自身的 cmdline（实测：第一个模式就自伤，
     // 自己的 shell 被杀 → 后续清理全部没执行，wayvnc 残留）。全部改用精确进程名

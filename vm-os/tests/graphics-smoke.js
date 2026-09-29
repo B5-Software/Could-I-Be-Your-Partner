@@ -94,6 +94,72 @@ async function main() {
   const banner = await readBanner(startRes.vncHostPort);
   check('宿主经端口转发读到 RFB banner', !!banner && /^RFB \d+\.\d+/.test(banner), banner || '(无)');
 
+  // noVNC 真实路径：经主进程 WS 桥完成完整 RFB 握手（vm-desktop.html 里 new RFB(ws://…) 走的就是这条）
+  let rfbOk = false, rfbDetail = '';
+  try {
+    const WebSocket = require('ws');
+    const wsUrl = g.status && g.status.vncWsUrl;
+    if (!wsUrl) throw new Error('status 未提供 vncWsUrl（WS 桥未启动？）');
+    const wsc = new WebSocket(wsUrl, { perMessageDeflate: false });
+    let phase = 'banner';
+    let buf = Buffer.alloc(0);
+    let settled = false;
+    const finish = (okVal, detail) => { if (settled) return; settled = true; rfbOk = okVal; if (detail) rfbDetail = detail; };
+    const onData = (chunk) => {
+      buf = Buffer.concat([buf, chunk]);
+      // 循环解析：RFB 的 SecurityResult 与 ServerInit 可能在同一个 TCP/WS 分片里，
+      // 必须逐段消费缓冲区，不能整块清空（否则丢 ServerInit 导致"超时"）。
+      for (;;) {
+        if (phase === 'banner') {
+          if (buf.length < 12) return;
+          const banner = buf.slice(0, 12).toString('utf8');
+          if (!/^RFB \d{3}\.\d{3}\n$/.test(banner)) return finish(false, 'banner 异常: ' + JSON.stringify(banner));
+          rfbDetail = 'banner=' + banner.trim();
+          buf = buf.slice(12);
+          phase = 'security';
+          wsc.send('RFB 003.008\n');
+          continue;
+        }
+        if (phase === 'security') {
+          if (buf.length < 1) return;
+          const n = buf[0];
+          if (buf.length < 1 + n) return;
+          const types = Array.from(buf.slice(1, 1 + n));
+          rfbDetail += ' security=' + JSON.stringify(types);
+          buf = buf.slice(1 + n);
+          if (types.includes(1)) { phase = 'result'; wsc.send(Buffer.from([1])); continue; }
+          return finish(false, rfbDetail + '（无 None(1) 认证方式）');
+        }
+        if (phase === 'result') {
+          if (buf.length < 4) return;
+          const code = buf.readUInt32BE(0);
+          buf = buf.slice(4);
+          if (code !== 0) return finish(false, rfbDetail + ' 认证结果=' + code);
+          wsc.send(Buffer.from([1])); // ClientInit（shared-flag=1）：不发它，服务器不会发 ServerInit
+          phase = 'init';
+          continue;
+        }
+        if (phase === 'init') {
+          if (buf.length < 24) return;
+          const w = buf.readUInt16BE(0), h = buf.readUInt16BE(2);
+          return finish(true, rfbDetail + ' 会话建立 ' + w + 'x' + h);
+        }
+        return;
+      }
+    };
+    wsc.on('message', (d) => onData(Buffer.from(d)));
+    wsc.on('error', (e) => finish(false, 'ws error: ' + e.message));
+    wsc.on('close', () => finish(false, rfbDetail + ' 连接被关闭'));
+    await new Promise((resolve) => {
+      const t = setTimeout(() => { finish(false, rfbDetail + ' 超时'); resolve(); }, 15000);
+      const iv = setInterval(() => { if (settled) { clearInterval(iv); clearTimeout(t); resolve(); } }, 100);
+    });
+    try { wsc.close(); } catch { /* ignore */ }
+  } catch (e) {
+    rfbOk = false; rfbDetail = e.message;
+  }
+  check('noVNC 路径（WS 桥 + RFB 握手到会话建立）', rfbOk, rfbDetail || '(无详情)');
+
   const pg = async (name) => (await inst.exec(`pgrep -x ${JSON.stringify(name)} | head -3`, { timeoutMs: 15000 })).stdout.trim();
   const isWayland = g.mode === 'wayland';
   if (isWayland) {

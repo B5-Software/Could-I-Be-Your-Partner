@@ -138,7 +138,9 @@
     async function connect() {
       const st = await ensureStarted();
       const insec = location.protocol === 'file:' ? true : false;
-      currentWsUrl = `ws://127.0.0.1:${st.vncHostPort}/`;
+      // noVNC 只能连 WebSocket：优先用主进程提供的 WS 桥地址（带 token）；
+      // 裸 VNC 端口只是 TCP，直接连必然失败（表现为"连接已断开（异常）"）
+      currentWsUrl = st.vncWsUrl || `ws://127.0.0.1:${st.vncHostPort}/`;
       setStatus(`连接 ${currentWsUrl}`);
       rfb = new RFB($('screen'), currentWsUrl, { shared: true });
       rfb.scaleViewport = true;

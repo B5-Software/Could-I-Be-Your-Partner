@@ -215,7 +215,8 @@
     "sherpa-onnx-node": "^1.13.4",
     "ssh2": "^1.17.0",
     "tesseract.js": "^6.0.1",
-    "undici": "^7.28.0"
+    "undici": "^7.28.0",
+    "ws": "^8.18.0"
   },
   "allowScripts": {
     "node-pty@1.1.0": true,
