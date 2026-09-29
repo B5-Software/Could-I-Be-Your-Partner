@@ -119,7 +119,7 @@
       if (st && st.ok && st.running && st.vncHostPort) {
         return st;
       }
-      showOverlay('正在启动虚拟机图形环境（首次会安装 Xvfb/x11vnc，约 1~3 分钟）…');
+      showOverlay('正在启动虚拟机图形环境（自研 Wayland 桌面，通常 10~60 秒）…');
       setStatus('启动中…');
       const r = await window.vmDesktop.start({});
       if (!r || !r.ok) throw new Error((r && r.error) || '启动失败');
@@ -160,7 +160,7 @@
     window.vmDesktop.onLog((line) => appendLog(line));
     window.vmDesktop.onProgress((p) => {
       if (!p) return;
-      const label = { apt: '安装图形依赖', x: '启动 X 虚拟显示', vnc: '启动 x11vnc', ready: '就绪' }[p.phase] || p.phase;
+      const label = { apt: '安装图形依赖', x: '启动 X 虚拟显示', wayland: '启动自研 Wayland 桌面（sway + 面板/壁纸）', vnc: '启动远程画面（wayvnc/x11vnc）', ready: '就绪' }[p.phase] || p.phase;
       showOverlay(`${label}…`);
       setStatus(label + '…');
     });
