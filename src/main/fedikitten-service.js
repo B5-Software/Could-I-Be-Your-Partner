@@ -30,10 +30,10 @@ const EXT_MIME = {
 };
 
 let fileTypeModule = null;
-async function detectMime(filePath) {
+async function detectMime(filePath, bytes) {
   try {
     if (!fileTypeModule) fileTypeModule = await import('file-type');
-    const ft = await fileTypeModule.fileTypeFromFile(filePath);
+    const ft = bytes ? await fileTypeModule.fileTypeFromBuffer(bytes) : await fileTypeModule.fileTypeFromFile(filePath);
     if (ft && ft.mime) return ft.mime;
   } catch (e) {
     // fall through to extension mapping
@@ -665,7 +665,7 @@ class FediKittenService {
     if (!filePath) return { ok: false, error: '缺少媒体文件路径 filePath' };
     let stat;
     try {
-      stat = fs.statSync(filePath);
+      stat = this.fileAccess ? await this.fileAccess.stat(filePath) : fs.statSync(filePath);
     } catch (e) {
       return { ok: false, error: `媒体文件不存在: ${filePath}` };
     }
@@ -673,11 +673,11 @@ class FediKittenService {
     if (stat.size > MAX_UPLOAD_BYTES) {
       return { ok: false, error: `文件超过 90MB 上传上限（${(stat.size / 1048576).toFixed(1)}MB）` };
     }
-    const mime = await detectMime(filePath);
+    const mime = await detectMime(filePath, this.fileAccess ? await this.fileAccess.read(filePath) : null);
     if (!mime) return { ok: false, error: '无法识别媒体类型，仅支持 jpeg/png/gif/webp/avif/mp4/webm/mpeg/ogg/wav' };
     let bytes;
     try {
-      bytes = fs.readFileSync(filePath);
+      bytes = this.fileAccess ? await this.fileAccess.read(filePath) : fs.readFileSync(filePath);
     } catch (e) {
       return { ok: false, error: `读取文件失败: ${e.message}` };
     }
@@ -746,7 +746,7 @@ class FediKittenService {
     if (!/^https?:$/.test(parsedUrl.protocol)) return { ok: false, error: '仅支持 http/https 媒体 url' };
     const savePath = String(args.savePath || '').trim();
     if (!savePath) return { ok: false, error: '请提供 savePath（相对工作目录或绝对路径）指定保存位置' };
-    const outDir = path.dirname(savePath);
+    const outDir = this.fileAccess ? this.fileAccess.dirname(savePath) : path.dirname(savePath);
     const outFile = path.basename(savePath) || (path.basename(parsedUrl.pathname) || 'media');
 
     const tryFetch = async () => {
@@ -762,17 +762,17 @@ class FediKittenService {
       if (!/^(image|video|audio)\//.test(mime)) {
         return { ok: false, error: `目标不是媒体文件（content-type: ${mime || '未知'}）` };
       }
-      fs.mkdirSync(outDir, { recursive: true });
-      fs.writeFileSync(path.join(outDir, outFile), got.buf);
+      if (this.fileAccess) await this.fileAccess.write(savePath, got.buf); else { fs.mkdirSync(outDir, { recursive: true }); fs.writeFileSync(path.join(outDir, outFile), got.buf); }
       return {
         ok: true,
-        path: path.join(outDir, outFile),
+        path: this.fileAccess ? this.fileAccess.resolve(savePath) : path.join(outDir, outFile),
         size: got.buf.length,
         mimeType: mime,
         source: 'direct',
-        message: `已下载媒体到 ${path.join(outDir, outFile)}，可用 readImageFile 查看（多模态）或 extractTextFromImage 做 OCR`,
+        message: `已下载媒体到 ${this.fileAccess ? this.fileAccess.resolve(savePath) : path.join(outDir, outFile)}，可用 readImageFile 查看（多模态）或 extractTextFromImage 做 OCR`,
       };
     } catch (e) {
+      if (this.fileAccess?.active()) return { ok: false, error: 'VM 媒体下载失败: ' + e.message };
       // 直连失败（超时/网络不通，常见于远端联邦实例媒体）→ 降级 aria2（走用户代理）
       try {
         const { aria2Manager } = require('./aria2-manager');

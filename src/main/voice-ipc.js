@@ -72,10 +72,10 @@ function openVoiceBar() {
     minimizable: false,
     fullscreenable: false,
     webPreferences: {
-      preload: path.join(__dirname, '../preload/voice-preload.js'),
+      preload: path.join(__dirname, '../preload/generated/voice-preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      sandbox: true,
       backgroundThrottling: false,
     },
   });
@@ -113,10 +113,10 @@ function ensureCaptureWindow() {
     skipTaskbar: true,
     focusable: false,
     webPreferences: {
-      preload: path.join(__dirname, '../preload/voice-preload.js'),
+      preload: path.join(__dirname, '../preload/generated/voice-preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: false,
+      sandbox: true,
       backgroundThrottling: false,
     },
   });

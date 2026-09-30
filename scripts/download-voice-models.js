@@ -305,7 +305,6 @@ function listHfDirFiles(repo, dir) {
     files.length = 0;
     cursor = '';
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'voice-tree-'));
-    let ok = false;
     try {
       let mayHaveMore = true;
       let guard = 0;
@@ -341,7 +340,6 @@ function listHfDirFiles(repo, dir) {
         }
         try { fs.unlinkSync(hdrFile); fs.unlinkSync(bodyFile); } catch (_) {}
       }
-      ok = true;
       if (files.length === 0) throw new Error('清单为空');
       return files;
     } catch (e) {
@@ -349,7 +347,6 @@ function listHfDirFiles(repo, dir) {
       console.warn(`[voice-models] 列出 ${dir} 失败(${e.message})，重试 ${attempt + 2}/${LIST_RETRIES}`);
     } finally {
       try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (_) {}
-      if (ok) break;
     }
   }
   return files;

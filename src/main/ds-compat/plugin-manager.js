@@ -351,6 +351,7 @@ function runNpmAsync(args, opts = {}) {
 
 class PluginManager {
   constructor(dataDir, options = {}) {
+    this.getVmService = options.getVmService;
     this.dataDir = dataDir;
     this.pluginsDir = path.join(dataDir, 'plugins');
     this.manifestPath = path.join(dataDir, 'plugins.json');
@@ -750,7 +751,13 @@ class PluginManager {
         return { ok: true, plugin: this._public(rec) };
       }
       if (rec.enabled) {
-        const res = await this.host.loadPlugin(id, rec.entry, { name: rec.name, config: rec.config });
+        const service = this.getVmService?.();
+        const inVm = require('../vm/tool-location').isVmOperation(() => service);
+        if (inVm) await this.host.unloadPlugin(id);
+        const res = inVm
+          ? await require('../vm/vm-tool-runtime').runGuestPlugin(service, rec, null, {}, {})
+          : await this.host.loadPlugin(id, rec.entry, { name: rec.name, config: rec.config });
+        if (res.ok === false) throw new Error(res.error);
         rec.tools = res.tools;
         rec.toolCount = res.tools.length;
         rec.compatIssues = res.issues || [];
@@ -854,6 +861,11 @@ class PluginManager {
   }
 
   async callTool(pluginId, toolName, args, execCtx = {}) {
+    if (require('../vm/tool-location').isVmOperation(this.getVmService)) {
+      const record = this.plugins.find(plugin => plugin.id === pluginId && plugin.enabled);
+      if (!record) return {ok:false,location:'vm',error:'插件未启用'};
+      return require('../vm/vm-tool-runtime').runGuestPlugin(this.getVmService(),record,toolName,args || {},execCtx);
+    }
     return await this.host.callTool(pluginId, toolName, args || {}, execCtx);
   }
 
@@ -881,6 +893,8 @@ class PluginManager {
    * 让插件卡显示当前宿主能力的真实结论。
    */
   async refreshAll() {
+    const service = this.getVmService?.();
+    if (service?.runtime.location === 'vm' && !service.emergencyHost) return this.loadEnabled();
     for (const rec of this.plugins) {
       try {
         let pkg = null;

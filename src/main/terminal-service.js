@@ -145,7 +145,7 @@ function _resolveTerminalShell(shellSetting, customShellPath) {
   return shellCandidates.find(s => fs.existsSync(s)) || '/bin/sh';
 }
 
-ipcMain.handle('terminal:make', (_, cwd, opts = {}) => {
+ipcMain.handle('terminal:make', async (_, cwd, opts = {}) => {
   try {
     const id = ++terminalIdCounter;
     // 运行位置=虚拟机：终端直接开在 VM 内（ssh2 真 PTY），与本机终端共用同一套 IPC 与 UI。
@@ -154,14 +154,8 @@ ipcMain.handle('terminal:make', (_, cwd, opts = {}) => {
     const vmSvc = typeof getVmService === 'function' ? getVmService() : null;
     if (rt.location === 'vm' && vmSvc && !vmSvc.emergencyHost) {
       const { VmPtyAdapter } = require('./vm/vm-pty');
-      const vmCwd = (() => { try { return vmSvc.toVmPath(cwd); } catch { return '/workspace'; } })();
+      const vmCwd = await vmSvc.prepareTerminalDirectory(cwd);
       const term = new VmPtyAdapter({ vmService: vmSvc, cwd: vmCwd });
-      // shared 模式：终端打开时后台做一次同步（让 VM 看到宿主最新文件）
-      try {
-        if ((rt.workspaceMode || 'shared') === 'shared') {
-          vmSvc.syncWorkspace({ direction: 'both', reason: 'terminal-open' }).catch(() => {});
-        }
-      } catch { /* ignore */ }
       const entry = {
         term,
         agentBuffer: '',
@@ -178,6 +172,7 @@ ipcMain.handle('terminal:make', (_, cwd, opts = {}) => {
       };
       term.onData(data => _appendTerminalData(id, entry, data));
       term.onExit(({ exitCode }) => { _broadcastTerminalEvent('terminal:exit', { id, exitCode }); });
+      await term.ready();
       terminals.set(id, entry);
       return { ok: true, terminalId: id, cwd: vmCwd, createdAt: entry.createdAt, location: 'vm' };
     }

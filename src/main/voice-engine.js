@@ -257,6 +257,7 @@ class VoiceEngine extends EventEmitter {
   _onWorkerMessage(msg) {
     switch (msg.type) {
       case 'error': {
+        this.emit('engine.error', msg);
         if (msg.scope === 'init' && this._pendingInitReject) {
           const rej = this._pendingInitReject;
           this._pendingInitReject = null;
@@ -296,9 +297,6 @@ class VoiceEngine extends EventEmitter {
         break;
       case 'tts.error':
         this.emit('tts.error', msg);
-        break;
-      case 'error':
-        this.emit('engine.error', msg);
         break;
       default:
         break;

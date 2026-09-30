@@ -178,7 +178,7 @@ class WorkspaceSync extends EventEmitter {
   async scanVm() {
     const inst = this._instance();
     // 注意：date 必须在 find **之后**执行——否则 offset 会把本次扫描耗时算进去（大工作区可达数秒，导致反复误判变更）
-    const cmd = `find ${JSON.stringify(this.vmMount)} -mindepth 1 \\( -type f -o -type d \\) -printf '%y\\t%P\\t%s\\t%T@\\n' 2>/dev/null; date +%s`;
+    const cmd = `find ${shellQuote(this.vmMount)} -mindepth 1 \\( -type f -o -type d \\) -printf '%y\\t%P\\t%s\\t%T@\\n' 2>/dev/null; date +%s`;
     const r = await inst.exec(cmd, { timeoutMs: 120000 });
     const files = {};
     if (!r.ok) return files;
@@ -295,7 +295,7 @@ class WorkspaceSync extends EventEmitter {
       }
       if (!entries.length) continue;
       const tar = writeTar(entries);
-      await this._execWithStdin(inst, `tar -x -f - -C ${JSON.stringify(this.vmMount)} --no-same-owner --no-same-permissions`, tar, 300000);
+      await this._execWithStdin(inst, `tar -x -f - -C ${shellQuote(this.vmMount)} --no-same-owner --no-same-permissions`, tar, 300000);
       this.emit('progress', { direction: 'push', files, bytes });
     }
     return { files, bytes };

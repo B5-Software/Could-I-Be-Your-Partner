@@ -43,6 +43,7 @@ const { VmInstance } = require('./vm-instance');
 const { downloadFile, DownloadCancelled } = require('./vm-download');
 const { WorkspaceSync } = require('./vm-workspace');
 const { VmGraphics } = require('./vm-graphics');
+const { VmAppearanceSync } = require('./vm-theme');
 
 class VmService extends EventEmitter {
   /**
@@ -55,6 +56,11 @@ class VmService extends EventEmitter {
     this.persistSettings = opts.persistSettings || (() => {});
     this.aria2 = opts.aria2 || null;
     this.instance = null;
+    this.appearanceSync = new VmAppearanceSync({
+      getInstance: () => this.instance,
+      getTheme: () => this.getSettings().theme || {},
+      getSystemDark: opts.getSystemDark || (() => false),
+    });
     this.emergencyHost = false;
     this._download = null; // { cancelled, current }
     this.extraHostRoots = []; // 额外宿主根（如工作区基目录），映射到同一个 VM 挂载点
@@ -164,6 +170,7 @@ class VmService extends EventEmitter {
    * 供 Code 模式文件树刷新、ESLint、打开资源管理器前调用，保证宿主镜像与 VM 一致。
    */
   async pullExternalDir(hostOrVmPath, { maxFileMB = 20, deleted = false } = {}) {
+    if (this.runtime.workspaceMode !== 'shared') return {ok:true,pulled:0,skipped:'isolated'};
     if (!this.instance || this.instance.state !== 'ready') return { ok: false, error: '虚拟机未就绪' };
     if (!this._externMounts || !this._externMounts.size) return { ok: true, pulled: 0, skipped: 'no-mounts' };
     const paths = require('./vm-paths');
@@ -315,6 +322,47 @@ class VmService extends EventEmitter {
     return sync.sync(opts);
   }
 
+  /** Prepare the actual session directory before an interactive shell is opened. */
+  async prepareTerminalDirectory(hostOrVmPath) {
+    if (!this.instance || this.instance.state !== 'ready') await this.start();
+    const { VmFs } = require('./vm-fs');
+    const vmFs = new VmFs({ vmService: this });
+    const mount = this.runtime.vm.workspaceMount || '/workspace';
+    const raw = String(hostOrVmPath || mount);
+    const target = vmFs.resolveVmPath(raw);
+    if (!target.ok) throw new Error(target.error);
+    if (this.runtime.workspaceMode === 'shared') {
+      const extra = !vmFs.isVmPath(raw) && vmFs.mappingRoots().find(([root]) => vmpaths.isUnder(root, raw));
+      let synced;
+      if (extra && path.resolve(extra[0]) !== path.resolve(this.workspaceRoot)) {
+        // Session workspaces are also registered by the app. Synchronize this
+        // directory, with its own baseline, rather than the unrelated default root.
+        if (!fs.statSync(raw).isDirectory()) throw new Error('终端工作目录不是文件夹: ' + raw);
+        const key = require('crypto').createHash('sha256').update(path.resolve(raw) + '\0' + target.vm).digest('hex');
+        this._terminalSyncs = this._terminalSyncs || new Map();
+        let sync = this._terminalSyncs.get(key);
+        if (!sync) {
+          sync = new WorkspaceSync({
+            vmService: this, hostRoot: raw, vmMount: target.vm,
+            instanceDir: this.instance.dir ? path.join(this.instance.dir, 'terminal-sync', key) : null,
+            options: { maxFileMB: this.runtime.vm.syncMaxFileMB || 64, syncGit: !!this.runtime.vm.syncGit },
+          });
+          this._terminalSyncs.set(key, sync);
+        }
+        synced = await sync.sync({ direction: 'both', reason: 'terminal-open' });
+      } else synced = await this.syncWorkspace({ direction: 'both', reason: 'terminal-open' });
+      if (!synced.ok) throw new Error(synced.error || '工作区同步失败');
+    }
+    // File synchronization does not transfer empty folders. Create mapped workspace
+    // directories explicitly, but do not create arbitrary guest system directories.
+    const isWorkspace = target.vm === mount || target.vm.startsWith(mount.replace(/\/+$/, '') + '/');
+    const quoted = vmpaths.shellQuote(target.vm);
+    const command = `${isWorkspace ? `mkdir -p -- ${quoted} && ` : ''}test -d ${quoted} && test -x ${quoted}`;
+    const checked = await this.instance.exec(command, { timeoutMs: 20000 });
+    if (!checked.ok) throw new Error(`无法进入虚拟机工作目录 ${target.vm}: ${checked.stderr || '目录不存在或没有访问权限'}`);
+    return target.vm;
+  }
+
   syncStats() {
     return this.sync ? this.sync.stats : { lastSyncAt: null, baselineFiles: 0 };
   }
@@ -375,7 +423,7 @@ class VmService extends EventEmitter {
   // ---------------------------------------------------------------- 生命周期
 
   _ensureInstance() {
-    if (this.instance) return this.instance;
+    if (this.instance && !['idle', 'failed'].includes(this.instance.state)) return this.instance;
     const st = images.localStatus(this.assetsDir, { variant: this.variant });
     const selected = this.runtime.vm.imageVersion
       ? st.versions.find((v) => v.version === this.runtime.vm.imageVersion && v.ok) || st.selected
@@ -385,6 +433,17 @@ class VmService extends EventEmitter {
       err.code = qemuRuntime.VM_SANDBOX_UNAVAILABLE;
       throw err;
     }
+    if (this.instance && this.instance.opts.imagePath === selected.image && this.instance.assetsDir === this.assetsDir) return this.instance;
+    // Each image gets a persistent disk. Keep compatible legacy instances, and
+    // leave older image disks untouched when installing a new OS version.
+    let instanceName = 'default-' + require('crypto').createHash('sha256').update(path.resolve(selected.image)).digest('hex').slice(0, 16);
+    try {
+      const legacy = JSON.parse(fs.readFileSync(path.join(this.assetsDir, 'instances', 'default', 'instance.json'), 'utf8'));
+      if (legacy.imagePath && path.resolve(legacy.imagePath) === path.resolve(selected.image)) instanceName = 'default';
+    } catch { /* No compatible legacy instance. */ }
+    this.sync = null;
+    this._terminalSyncs = new Map();
+    this._externMounts = new Map();
     const inst = new VmInstance({
       assetsDir: this.assetsDir,
       imagePath: selected.image,
@@ -393,7 +452,7 @@ class VmService extends EventEmitter {
       variant: this.variant,
       version: selected.version,
       appPath: this.app.getAppPath(),
-      instanceName: 'default',
+      instanceName,
       config: {
         smp: this.runtime.vm.smp,
         memMB: this.runtime.vm.memMB,
@@ -408,6 +467,7 @@ class VmService extends EventEmitter {
     }
     // shared 模式：VM 就绪后做一次全量双向同步（后台执行，不阻塞启动）
     inst.on('ready', () => {
+      this.syncAppearance({ force: true }).catch((error) => console.warn('[vm] 个性化同步:', error.message));
       if (this.runtime.workspaceMode !== 'shared') return;
       setTimeout(() => {
         this.syncWorkspace({ direction: 'both', reason: 'boot' }).catch(() => {});
@@ -422,15 +482,25 @@ class VmService extends EventEmitter {
     return inst.start();
   }
 
+  syncAppearance(options) {
+    return this.appearanceSync.sync(options);
+  }
+
   async stop() {
     if (!this.instance) return { ok: true };
+    await this.graphicsStop();
+    for (const port of [...(this._forwards || new Map()).keys()]) this.unforwardPort(port);
     await this.instance.stop();
     return { ok: true };
   }
 
   async reset() {
     const inst = this._ensureInstance();
+    await this.graphicsStop();
     await inst.reset();
+    this.sync = null;
+    this._terminalSyncs = new Map();
+    this._externMounts = new Map();
     return { ok: true };
   }
 
@@ -448,7 +518,7 @@ class VmService extends EventEmitter {
 
   // ---------------------------------------------------------------- 图形环境（P4）
 
-  /** 惰性创建图形环境控制器（Xvfb + x11vnc + 可选 Chromium/CDP） */
+  /** 连接镜像内的 Wayland 桌面；旧镜像保留 X11 兼容路径。 */
   graphicsController() {
     if (!this._graphics || this._graphics.vmService !== this) {
       this._graphics = new VmGraphics({ vmService: this });
@@ -472,7 +542,9 @@ class VmService extends EventEmitter {
   }
 
   async graphicsChromium(opts = {}) {
+    if (!this.instance || this.instance.state !== 'ready') await this.start();
     const g = this.graphicsController();
+    await g.start();
     return g.startChromium(opts);
   }
 
@@ -482,50 +554,35 @@ class VmService extends EventEmitter {
    * 把远程文件下载并落到虚拟机里（宿主用 aria2 下载 → 推入 VM）。
    * @param {object} opts { url, dir（VM 内目录，默认 /workspace）、filename、mirror、sha256 }
    */
+  downloadsController() {
+    if (!this._guestDownloads) this._guestDownloads = new (require('./vm-download-manager').VmDownloadManager)(this);
+    return this._guestDownloads;
+  }
+
   async downloadFileToVm(opts = {}) {
     const url = String(opts.url || '').trim();
     if (!/^https?:\/\//i.test(url)) return { ok: false, error: '请填写 http(s) 链接' };
-    if (this._download) return { ok: false, error: '已有下载任务进行中（资源下载或文件下载）' };
-    const mirror = opts.mirror || this.runtime.vm.mirror || 'official';
-    const finalUrl = images.applyMirrorToUrl(url, mirror);
-    const dir = String(opts.dir || '/workspace').replace(/\/+$/, '') || '/workspace';
-    let filename = String(opts.filename || '').trim();
-    if (!filename) {
-      try {
-        const u = new URL(finalUrl);
-        filename = decodeURIComponent(u.pathname.split('/').filter(Boolean).pop() || `download-${Date.now()}`);
-      } catch { filename = `download-${Date.now()}`; }
-    }
-    filename = filename.replace(/[\\/]/g, '_');
+    const finalUrl = images.applyMirrorToUrl(url, opts.mirror || this.runtime.vm.mirror || 'official');
+    const name = String(opts.filename || decodeURIComponent(new URL(finalUrl).pathname.split('/').pop()) || `download-${Date.now()}`).replace(/[\\/]/g, '_');
+    const manager = this.downloadsController();
+    if (this._download) return { ok: false, error: '已有下载任务进行中' };
     const task = { cancelled: false };
     this._download = task;
-    const tmpDir = path.join(this.assetsDir, 'downloads', 'vm-files');
-    const tmpFile = path.join(tmpDir, `${Date.now()}_${filename}`);
     try {
-      this.emit('progress', { phase: 'start', kind: 'vm-file', filename, url: finalUrl, variant: 'vm-file' });
-      await downloadFile({
-        url: finalUrl,
-        dest: tmpFile,
-        sha256: opts.sha256 || undefined,
-        aria2: this.aria2,
-        isCancelled: () => !!task.cancelled,
-        onProgress: (p) => this.emit('progress', { phase: 'download', kind: 'vm-file', filename, ...p }),
-      });
-      if (task.cancelled) throw new DownloadCancelled();
-      // 推入虚拟机
-      const { VmFs } = require('./vm-fs');
-      const vmFs = new VmFs({ vmService: this });
-      const vmPath = await vmFs.pushFromHost(tmpFile, `${dir}/${filename}`);
-      const size = fs.statSync(tmpFile).size;
-      this.emit('progress', { phase: 'done', kind: 'vm-file', filename, percent: 100, path: vmPath });
-      return { ok: true, path: vmPath, size, filename, url: finalUrl, mirror };
-    } catch (e) {
-      if (e instanceof DownloadCancelled || e.code === 'DOWNLOAD_CANCELLED') return { ok: false, error: '已取消' };
-      return { ok: false, error: e.message };
-    } finally {
-      this._download = null;
-      try { fs.rmSync(tmpFile, { force: true }); } catch { /* ignore */ }
-    }
+      const gid = await manager.addUri(finalUrl, { dir: opts.dir || '/workspace', out: name, checksum: opts.sha256 ? 'sha-256=' + opts.sha256 : undefined });
+      const deadline = Date.now() + 600000;
+      while (Date.now() < deadline) {
+        if (task.cancelled) { await manager.cancel(gid, true); throw new DownloadCancelled(); }
+        const status = await manager.tellStatus(gid);
+        this.emit('progress', { phase: 'download', kind: 'vm-file', filename: name, percent: Number(status.totalLength) ? Number(status.completedLength) / Number(status.totalLength) * 100 : 0 });
+        if (status.status === 'complete') return { ok: true, location: 'vm', path: status.files[0].path, size: Number(status.completedLength), filename: name };
+        if (status.status === 'error' || status.status === 'removed') throw new Error(status.errorMessage || status.status);
+        await new Promise(resolve => setTimeout(resolve, 300));
+      }
+      await manager.cancel(gid, true);
+      throw new Error('VM 下载超时');
+    } catch (error) { return { ok: false, location: 'vm', error: error instanceof DownloadCancelled ? '已取消' : error.message }; }
+    finally { this._download = null; }
   }
 
   // ---------------------------------------------------------------- 端口预览
@@ -742,7 +799,7 @@ class VmService extends EventEmitter {
     if (!opts.task && this._download) return { ok: false, error: '已有下载任务进行中' };
     const variant = images.variantById(opts.variant || this.variant).id;
     const mirror = opts.mirror || this.runtime.vm.mirror || 'official';
-    const task = { cancelled: false, current: null };
+    const task = opts.task || { cancelled: false, current: null };
     this._download = task;
     try {
       const manifest = opts.manifest || (await fetchManifestWithFallback(mirror)).data;

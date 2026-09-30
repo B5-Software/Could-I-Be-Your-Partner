@@ -92,9 +92,9 @@
 
 ## 系统要求
 
-- **Node.js**: >= 18.x
-- **NPM**: >= 9.x
-- **操作系统**: Windows 10+、macOS 10.15+、Linux (x64)
+- **Node.js**: >= 24.13.0（建议使用 Node.js 24 LTS）
+- **NPM**: >= 11
+- **操作系统**: Windows、macOS、Linux（具体版本及架构受 Electron 与原生依赖支持范围限制）
 - **内存**: >= 4GB RAM（语音功能建议 >= 8GB）
 - **存储**: >= 1GB 可用空间（语音模型不随包分发，需在应用内按需下载，约 440MB，存放于程序数据目录或自定义目录）
 
@@ -121,7 +121,12 @@ npm install
 npm start
 ```
 
-> `npm start` 会自动拼接 `app.js`（见下文"app-parts 结构"）后启动 Electron。
+> `npm start` 会先通过 esbuild 构建渲染入口、共享 TypeScript 模块和沙箱预加载脚本，再启动 Electron。
+
+开发时运行 `npm run check` 执行代码检查、格式检查、类型检查与离线回归；
+运行 `npm run test:desktop` 在临时配置目录中验证完整应用启动。
+真实模型测试需要显式运行 `npm run test:live`，该命令会使用已配置的模型并可能产生费用。
+架构与维护说明见 [现代化改造记录](docs/modernization.md)。
 
 ### 4. 构建打包
 
@@ -197,6 +202,10 @@ node scripts/download-voice-models.js --voice  # 仅在需要随包内置语音�
 ├── src/
 │   ├── main/                    # Electron 主进程
 │   │   ├── main.js             # 入口：窗口管理、IPC 组装、数据持久化
+│   │   ├── core/               # IPC 路由、窗口信任边界、原子存储与路径校验
+│   │   ├── ipc/                # 按功能划分的 IPC 注册模块
+│   │   ├── services/           # 预算与历史记录服务
+│   │   ├── settings/           # 默认设置与安全的深层合并
 │   │   ├── voice-ipc.js        # 语音子系统（IPC/语音条/唤醒/热键；win-arm64 自动禁用）
 │   │   ├── voice-engine.js     # sherpa-onnx 语音引擎（STT/TTS）
 │   │   ├── voice-worker.js     # 语音 worker（按平台加载 sherpa addon）
@@ -207,9 +216,11 @@ node scripts/download-voice-models.js --voice  # 仅在需要随包内置语音�
 │   │   └── ...                 # 邮件、表格、Web 控制、沙箱、数学工具等
 │   ├── preload/                 # 预加载脚本（preload.js 暴露 IPC 桥）
 │   ├── renderer/                # 渲染进程（UI 层）
+│   │   ├── core/               # 独立 TypeScript 模块
+│   │   ├── legacy-parts.json   # 旧 UI 控制器的显式构建清单
 │   │   ├── js/
-│   │   │   ├── app.js          # ★ 拼接产物（勿手改！见 app-parts）
-│   │   │   ├── app-parts/      # ★ 主控制器源码（按功能分子目录，自然排序拼接成 app.js）
+│   │   │   ├── app.js          # ★ esbuild 构建产物（勿手改！见 app-parts）
+│   │   │   ├── app-parts/      # ★ 旧 UI 控制器源码（按清单顺序构建）
 │   │   │   │   ├── 01-boot/            # 启动、字体、头像框、WebUI 镜像、页面导航
 │   │   │   │   ├── 02-modes/           # 模式切换与会话标签栏
 │   │   │   │   ├── 03a-onboarding/     # 首次引导
@@ -218,7 +229,7 @@ node scripts/download-voice-models.js --voice  # 仅在需要随包内置语音�
 │   │   │   │   ├── 05-chat/            # 聊天界面
 │   │   │   │   ├── 06a-tools/          # 工具/技能/知识/记忆页
 │   │   │   │   ├── 06b-settings/       # 设置页
-│   │   │   │   └── ...                 # 共 16 个功能目录、169 个 part（见 app-parts/README.md）
+│   │   │   │   └── ...                 # 共 16 个功能目录、171 个 part（见 app-parts/README.md）
 │   │   │   ├── voice-ui.js     # 主窗口语音控制器（麦克风按钮/听写）
 │   │   │   ├── agent.js        # AI Agent 引擎核心（指令与工具路由）
 │   │   │   ├── context-manager.js  # 上下文管理系统
@@ -228,6 +239,7 @@ node scripts/download-voice-models.js --voice  # 仅在需要随包内置语音�
 │   │   └── pages/
 │   │       ├── index.html      # 主 HTML 模板
 │   │       └── ...             # 语音条、采集页、小游戏子界面等
+│   ├── shared/                  # 主进程与 UI 共用的 TypeScript 业务逻辑
 │   ├── data/
 │   │   └── tarot.js            # 塔罗牌数据（78 张牌）
 │   └── tools/
@@ -237,7 +249,9 @@ node scripts/download-voice-models.js --voice  # 仅在需要随包内置语音�
 ├── IoT-Firmware/
 │   └── CIBYP-TRNG/              # 真随机数硬件对接固件源码
 ├── tests/
-│   └── run-tests.js            # 测试框架
+│   ├── unit/                   # Node.js 原生行为测试
+│   ├── integration/            # 临时配置下的桌面启动检查
+│   └── run-tests.js            # 既有功能回归（真实模型测试需显式开启）
 ├── package.json                 # NPM 项目配置
 └── README.md                    # 本文件
 ```
@@ -246,15 +260,16 @@ node scripts/download-voice-models.js --voice  # 仅在需要随包内置语音�
 
 ## app-parts 结构（重要）
 
-`src/renderer/js/app.js` **不是手写源码**，由 `src/renderer/js/app-parts/**/*.js`
-按「目录数字 → 目录名 → 文件数字 → 文件名」的自然顺序拼接生成（ESM 输出），
-页面通过 `<script type="module">` 加载。
+`src/renderer/js/app.js` **不是手写源码**。构建器按 `src/renderer/legacy-parts.json`
+列出的顺序读取旧 UI 控制器，与独立 TypeScript 模块一起交给 esbuild 构建为 ESM，
+并生成可追溯到原始文件的 source map。页面通过 `<script type="module">` 加载。
 
 - 目录按功能划分（`NN-xxx/`），目录内文件按功能命名并编号（`NN-xxx.js`）
-- 所有 part 共享同一个作用域，可互相直接引用；拼接顺序即执行顺序
+- 旧 part 仍共享兼容作用域，清单顺序即执行顺序；新增可独立功能优先使用真正的模块
+- 新增或删除 part 时同步更新清单；重复、遗漏或缺失文件会使构建失败
 - **修改 UI 控制器请编辑 app-parts 中的对应文件**，不要直接改 `app.js`
-- 改完后运行 `npm run build-app-bundle` 重新拼接
-- `npm start`、`npm test` 和打包脚本会自动执行拼接，通常无需手动运行
+- 改完后运行 `npm run build-app-bundle` 重新构建
+- `npm start`、`npm test` 和打包脚本会自动执行构建，通常无需手动运行
 - 各目录职责与文件清单见 `src/renderer/js/app-parts/README.md`
 
 ---
@@ -377,7 +392,8 @@ voice:getStatus 返回 { supported: false }
 ### 修改 UI 控制器
 
 1. 编辑 `src/renderer/js/app-parts/` 下对应的 part 文件
-2. 运行 `npm run build-app-bundle` 重新拼接 `app.js`
+2. 增删文件时同步更新 `src/renderer/legacy-parts.json`
+3. 运行 `npm run check` 重新构建并检查；独立逻辑优先放入 `src/renderer/core/` 或 `src/shared/`
 
 ### 添加新工具
 
@@ -461,9 +477,12 @@ A: 进入设置面板 → AI 人设，修改名称、性格、个人简介、代
 
 | 技术 | 版本 | 用途 |
 |------|------|------|
-| Electron | 40.x | 桌面应用框架 |
-| Node.js | >= 18.x | 后端运行时 |
-| Vanilla JavaScript | ES2020+ | 前端逻辑（ESM） |
+| Electron | 43.x | 桌面应用框架、沙箱预加载与上下文隔离 |
+| Node.js | >= 24.13.0 | 开发与构建运行时 |
+| TypeScript | 7.x | 独立核心与共享业务模块（严格类型检查） |
+| JavaScript | ESM / CommonJS | 现有 UI 与 Electron 功能模块 |
+| esbuild | 0.28.x | 渲染入口、共享模块与预加载脚本构建 |
+| ESLint / Prettier | 10.x / 3.x | 正确性检查与新模块格式统一 |
 | Font Awesome | 6.x | 本地图标库 |
 | sherpa-onnx-node | 1.13.x | 本地语音识别与合成（无 win-arm64） |
 | node-pty | 1.x | 终端集成（含 win32-arm64 prebuild） |
@@ -472,7 +491,7 @@ A: 进入设置面板 → AI 人设，修改名称、性格、个人简介、代
 | Three.js | 0.160.x | PCB-EDA 3D 预览 |
 | KaTeX | - | 数学公式渲染 |
 | x-spreadsheet | - | 内嵌电子表格面板 |
-| electron-builder | 25.x | 应用打包工具 |
+| electron-builder | 26.x | 应用打包与产物边界校验 |
 
 ---
 

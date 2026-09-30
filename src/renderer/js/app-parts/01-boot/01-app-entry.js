@@ -9,11 +9,7 @@
 // 注：本 part 已不包含 IIFE 包装，由 build-app-bundle.js 生成 ESM app.js 时
 // 统一包在 `export default (async function appEntry() { ... })();` 中。
   // Wait for KaTeX to load
-  let waitCount = 0;
-  while (!window.katex && waitCount < 50) {
-    await new Promise(r => setTimeout(r, 100));
-    waitCount++;
-  }
+  await waitForDependency(() => !!window.katex);
 
   // Init theme
   await ThemeManager.init();

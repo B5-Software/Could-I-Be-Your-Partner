@@ -233,12 +233,10 @@
     document.getElementById('btn-close-terminal-modal')?.addEventListener('click', closeTerminalModal);
 
     document.getElementById('btn-terminal-new')?.addEventListener('click', async () => {
-      // 优先使用 Code 模式工作区，其次 Chat 模式工作目录
-      let cwd = codeWorkspacePath || null;
-      if (!cwd && typeof agent !== 'undefined' && agent && agent.workspacePath) {
-        cwd = agent.workspacePath;
-      }
-      const result = await window.api.makeTerminal(cwd);
+      // Open in the visible session, so another mode's project never steals cwd.
+      const activeAgent = currentMode === 'code' ? codeAgent : currentMode === 'babe' ? babeAgent : agent;
+      const cwd = (currentMode === 'code' && codeWorkspacePath) || activeAgent?.workspacePath || null;
+      const result = await window.api.makeTerminal(cwd, activeAgent?.sessionKey || null);
       if (result && result.ok) {
         await refreshTerminalList();
         switchToTerminal(result.terminalId);

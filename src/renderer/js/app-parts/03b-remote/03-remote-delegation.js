@@ -40,7 +40,7 @@
         reader.onload = function() {
           var dataUrl = reader.result;
           var base64 = dataUrl.split(',')[1];
-          remoteWsSend({ type: 'uploadAttachment', name: file.name, type: file.type, data: base64 });
+          remoteWsSend({ type: 'uploadAttachment', name: file.name, mimeType: file.type, data: base64 });
         };
         reader.readAsDataURL(file);
         return;

@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   test:
-    name: 单元测试（npm test）
+    name: 工程检查与回归测试
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -19,8 +19,10 @@ jobs:
           node-version: '24'
       - name: 安装依赖
         run: npm ci
-      - name: 生成前端 bundle 并运行测试
-        run: npm test
+      - name: 静态检查、类型检查与回归测试
+        run: npm run check
+      - name: 检查高危依赖
+        run: npm audit --audit-level=high
 
   # ---- 检测 package.json 版本是否递增 ----
   detect:

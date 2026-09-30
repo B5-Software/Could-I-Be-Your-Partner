@@ -464,8 +464,8 @@ const EN_DICT = {
     officeHardList: 'List Office internal files',
     officeHardReadFile: 'Read inner file from Office package',
     officeHardWriteFile: 'Write inner file in Office package',
-    officeHardGetSlideTexts: 'Get slide text nodes from PPTX XML',
-    officeHardSetSlideTexts: 'Set slide text nodes in PPTX XML',
+
+
     officeHardWordApplyTexts: 'Rewrite Word runs in place (keep formatting)',
     wordExtractText: 'Extract text from Word document',
     wordCreate: 'Create a new Word document from JSON',
@@ -843,7 +843,7 @@ ${p.toolListSection}`;
     '断开': 'Disconnect',
     '启动': 'Start',
     '停止': 'Stop',
-    '保存设置': 'Save settings',
+
     '测试连接': 'Test connection',
     '验证': 'Verify',
     '其他': 'Other',
@@ -880,7 +880,7 @@ ${p.toolListSection}`;
     '超额时若选择 fallback 策略，将自动切换到该模型；请在下方价格表中也填写该模型的价格。': 'If the fallback policy is chosen on over-budget, it will switch to that model; also add its price in the pricing table below.',
     '预算统计图表': 'Budget statistics',
     '按当前周期设置展示日/周/月消费趋势与预算占比。': 'Shows daily/weekly/monthly spend trends and budget ratio per the current period settings.',
-    '今日': 'Today',
+
     '本周': 'This week',
     '本月': 'This month',
     '消费趋势': 'Spend trend',
@@ -904,7 +904,7 @@ ${p.toolListSection}`;
     '启用峰谷价': 'Enable peak/off-peak pricing',
     '勾选后在下方时段内应用倍率': 'Applies multipliers within the time ranges below when checked',
     '峰时段': 'Peak hours',
-    '从': 'From',
+
     '时': 'h',
     '到': 'To',
     '(起 ≥ 终 时表示跨夜)': '(start ≥ end means overnight)',
@@ -960,7 +960,7 @@ ${p.toolListSection}`;
     'Code历史': 'Code History',
     'Babe历史': 'Babe History',
     '工具': 'Tools',
-    '技能': 'Skills',
+
     '知识库': 'Knowledge',
     '记忆': 'Memory',
     '设置': 'Settings',
@@ -1187,7 +1187,7 @@ ${p.toolListSection}`;
 
     // ── Settings: LLM ──
     'LLM 配置': 'LLM Configuration',
-    '接入方式': 'Provider',
+
     'OpenAI 兼容': 'OpenAI compatible',
     'Anthropic 兼容': 'Anthropic compatible',
     'OpenCode Zen (免费模型可用)': 'OpenCode Zen (free models available)',
@@ -1464,9 +1464,9 @@ ${p.toolListSection}`;
     '更多信息': 'More info',
     '请参阅导出的固件目录中的 README.md 文件。': 'Please refer to README.md in the exported firmware directory.',
     '固件源码已导出到：': 'Firmware source exported to:',
-    '导出成功': 'Export success',
+
     '请在 Arduino IDE 中打开 CIBYP-TRNG.ino 文件。': 'Open CIBYP-TRNG.ino in Arduino IDE.',
-    '导出失败：': 'Export failed:',
+
     '未知错误': 'Unknown error',
     '导出失败': 'Export failed',
 
@@ -1498,7 +1498,7 @@ ${p.toolListSection}`;
     '环境变量格式错误(需JSON对象)': 'Invalid env format (JSON object required)',
     '添加失败': 'Add failed',
     '已连接': 'Connected',
-    '连接中...': 'Connecting...',
+
     '错误': 'Error',
     '未连接': 'Disconnected',
 

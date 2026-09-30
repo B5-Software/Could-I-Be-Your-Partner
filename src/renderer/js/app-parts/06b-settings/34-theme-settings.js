@@ -1,68 +1,54 @@
+  // Serialize edits so rapid color changes cannot restore an older snapshot.
+  let appearanceQueue = Promise.resolve();
+  function updateAppearance(change) {
+    const operation = appearanceQueue.catch(() => {}).then(async () => {
+      const current = await window.api.getSettings();
+      const theme = { ...current.theme };
+      if (typeof change === 'function') await change(theme);
+      else Object.assign(theme, change);
+      await saveSettings({ theme });
+      ThemeManager.apply(theme);
+      return theme;
+    });
+    appearanceQueue = operation;
+    return operation;
+  }
+
   document.querySelectorAll('.theme-mode-btn').forEach(btn => {
     btn.addEventListener('click', async () => {
-      document.querySelectorAll('.theme-mode-btn').forEach(b => b.classList.remove('active'));
-      btn.classList.add('active');
-      const s = await window.api.getSettings();
-      const oldMode = s.theme.mode;
-      s.theme.mode = btn.dataset.mode;
-
-      // 检测是否切换了深浅色模式
-      const oldDark = await ThemeManager.getCurrentDarkMode(oldMode);
-      const newDark = await ThemeManager.getCurrentDarkMode(s.theme.mode);
-      const currentBgDark = ThemeManager.isBackgroundDark(s.theme.backgroundColor);
-
-      // 如果深浅色模式改变，或者当前配色与目标模式不符，随机应用目标色系的配色
-      if (oldDark !== newDark || currentBgDark !== newDark) {
-        const scheme = ThemeManager.getRandomScheme(newDark);
-        s.theme.accentColor = scheme.accent;
-        s.theme.backgroundColor = scheme.bg;
-        document.getElementById('setting-accent-color').value = scheme.accent;
-        document.getElementById('setting-bg-color').value = scheme.bg;
-      }
-
-      await saveSettings(s);
-      ThemeManager.apply(s.theme);
+      const mode = btn.dataset.mode;
+      document.querySelectorAll('.theme-mode-btn').forEach(b => b.classList.toggle('active', b === btn));
+      await updateAppearance(async theme => {
+        const oldDark = await ThemeManager.getCurrentDarkMode(theme.mode);
+        const newDark = await ThemeManager.getCurrentDarkMode(mode);
+        theme.mode = mode;
+        if (oldDark !== newDark || ThemeManager.isBackgroundDark(theme.backgroundColor) !== newDark) {
+          const scheme = ThemeManager.getRandomScheme(newDark);
+          theme.accentColor = scheme.accent;
+          theme.backgroundColor = scheme.bg;
+          document.getElementById('setting-accent-color').value = scheme.accent;
+          document.getElementById('setting-bg-color').value = scheme.bg;
+        }
+      });
       updateColorSchemeVisibility();
     });
   });
 
-  // Accent color
-  document.getElementById('setting-accent-color').addEventListener('input', async (e) => {
-    const s = await window.api.getSettings();
-    s.theme.accentColor = e.target.value;
-    await saveSettings(s);
-    ThemeManager.apply(s.theme);
-  });
-
-  document.querySelectorAll('#accent-presets .color-dot').forEach(dot => {
-    dot.addEventListener('click', async () => {
-      const color = dot.dataset.color;
-      document.getElementById('setting-accent-color').value = color;
-      const s = await window.api.getSettings();
-      s.theme.accentColor = color;
-      await saveSettings(s);
-      ThemeManager.apply(s.theme);
+  for (const [id, presets, field] of [
+    ['setting-accent-color', 'accent-presets', 'accentColor'],
+    ['setting-bg-color', 'bg-presets', 'backgroundColor'],
+  ]) {
+    document.getElementById(id).addEventListener('input', e => {
+      const color = e.target.value;
+      updateAppearance({ [field]: color }).catch(error => console.error('Appearance:', error));
     });
-  });
-
-  // Background color
-  document.getElementById('setting-bg-color').addEventListener('input', async (e) => {
-    const s = await window.api.getSettings();
-    s.theme.backgroundColor = e.target.value;
-    await saveSettings(s);
-    ThemeManager.apply(s.theme);
-  });
-
-  document.querySelectorAll('#bg-presets .color-dot').forEach(dot => {
-    dot.addEventListener('click', async () => {
-      const color = dot.dataset.color;
-      document.getElementById('setting-bg-color').value = color;
-      const s = await window.api.getSettings();
-      s.theme.backgroundColor = color;
-      await saveSettings(s);
-      ThemeManager.apply(s.theme);
+    document.querySelectorAll('#' + presets + ' .color-dot').forEach(dot => {
+      dot.addEventListener('click', async () => {
+        document.getElementById(id).value = dot.dataset.color;
+        await updateAppearance({ [field]: dot.dataset.color });
+      });
     });
-  });
+  }
 
   // 界面动效开关（主标签页切换动画）
   document.getElementById('setting-ui-animations').addEventListener('change', async (e) => {
@@ -102,11 +88,7 @@
       const bg = btn.dataset.bg;
       document.getElementById('setting-accent-color').value = accent;
       document.getElementById('setting-bg-color').value = bg;
-      const s = await window.api.getSettings();
-      s.theme.accentColor = accent;
-      s.theme.backgroundColor = bg;
-      await saveSettings(s);
-      ThemeManager.apply(s.theme);
+      await updateAppearance({ accentColor: accent, backgroundColor: bg });
     });
   });
 

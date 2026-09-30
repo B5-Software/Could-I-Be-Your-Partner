@@ -87,7 +87,7 @@ function resolveBinary(kind) {
     try {
       // 平台包没有 main 入口，直接解析包目录拼出二进制路径
       const pkgJsonPath = require.resolve(`${pkg}/package.json`);
-      const binPath = path.join(path.dirname(pkgJsonPath), process.platform === 'win32' ? `${kind}.exe` : kind);
+      let binPath = path.join(path.dirname(pkgJsonPath), process.platform === 'win32' ? `${kind}.exe` : kind);
       if (binPath && fs.existsSync(binPath)) {
         // npm 可能因 ignore-scripts 跳过 chmod，运行前补一次可执行权限
         try { fs.accessSync(binPath, fs.constants.X_OK); } catch { try { fs.chmodSync(binPath, 0o755); } catch { /* ignore */ } }

@@ -6,25 +6,15 @@
  *
  * VM 工具路由：运行位置=虚拟机时，让**所有文件类工具**都作用于虚拟机。
  *
- * 两类接入方式：
- *   1. 纯文件操作（fs:*）→ 直接在 VM 内执行（vm-fs.js，SFTP/SSH）
- *   2. 宿主库工具（word/ppt/spreadsheet/ocr/image/file:download/ffmpeg）
- *      → "路径暂存"：把 VM 内的输入文件拉到宿主临时目录，用宿主库处理，
- *        再把产物推回 VM 对应路径，并把返回值里的宿主临时路径回映成 VM 路径。
- *        这样工具语义（库能力）不变，但**效果落在虚拟机里**。
- *
- * 安装方式：在 main.js 里先记录原始处理器（__ipcHandlers），在所有处理器注册完成后调用
- * installVmToolRouting() 覆盖同名通道：VM 模式走 VM 实现，否则透传原处理器。
+ * 文件 CRUD 经 SFTP/SSH，Office/OCR/二维码/音视频经 Linux Node worker，
+ * CAD/EDA/GeoGebra 的界面保留在 App，文件接口直接访问 VM。
+ * VM 失败时返回错误，禁止调用宿主处理器或在宿主暂存工程文件。
+ * 工具工作区同步仅用于 shared 模式的显式镜像。
  */
 
 'use strict';
 
-const fs = require('fs');
-const os = require('os');
-const path = require('path');
-
 const { VmFs } = require('./vm-fs');
-const { isUnder } = require('./vm-paths');
 
 /** 宿主库工具的路径参数位置表（read=读入、writeFile=写出单文件、writeDir=输出目录） */
 const TOOL_ROUTES = {
@@ -68,6 +58,39 @@ const TOOL_ROUTES = {
   'pcbeda:importFile': { read: [0] },
 };
 
+const GUEST_ROUTES = Object.fromEntries(
+  Object.entries(TOOL_ROUTES).filter(([name]) =>
+    /^(word|ppt|spreadsheet|office|ffmpeg):/.test(name),
+  ),
+);
+GUEST_ROUTES['word:create'].deep = [0];
+GUEST_ROUTES['word:create'].pathKeys = ['path'];
+GUEST_ROUTES['ppt:create'].deep = [0];
+GUEST_ROUTES['ppt:create'].pathKeys = ['path', 'imagePath', 'imagePaths', 'gallery', 'cover'];
+Object.assign(GUEST_ROUTES, {
+  'qr:generate': { writeDir: [1] },
+  'qr:scan': { read: [0] },
+  'knowledge:importFile': { read: [0], writeDir: [1] },
+  'ocr:recognize': { read: [0] },
+  'ffmpeg:available': {},
+  'eslint:isLintable': { read: [0] },
+  'eslint:lint': { read: [0], deep: [1] },
+  'eslint:lintFile': { read: [0] },
+  'eslint:clearCache': { read: [0] },
+  'system:info': {},
+  'system:fullInfo': {},
+  'system:network': {},
+  'net:httpRequest': {},
+  'net:httpFormPost': { deep: [0], pathKeys: ['filePath'] },
+  'net:dnsLookup': {},
+  'net:ping': {},
+  'net:urlShorten': {},
+  'net:urlEncodeDecode': {},
+  'net:checkSSLCert': {},
+  'net:traceroute': {},
+  'net:portScan': {},
+});
+
 const FS_ROUTES = {
   'fs:readFile': (v, a) => v.readFile(a[0], a[1]),
   'fs:writeFile': (v, a) => v.writeFile(a[0], a[1], a[2]),
@@ -85,6 +108,16 @@ const FS_ROUTES = {
   'fs:readFileBase64': (v, a) => v.readFileBase64(a[0]),
   'fs:saveUploadedFile': (v, a) => v.saveUploadedFile(a[0], a[1]),
 };
+const DIRECT_ROUTES = Object.fromEntries(
+  Object.entries(TOOL_ROUTES).filter(([name]) => /^(cipypcad|pcbeda):/.test(name)),
+);
+Object.assign(DIRECT_ROUTES, {
+  'cipypcad:agentClose': {},
+  'pcbeda:agentClose': {},
+  'geogebra:exportPNG': { writeDir: [0] },
+  'geogebra:save': { writeDir: [0] },
+  'geogebra:load': { read: [0] },
+});
 
 function isPathLike(s) {
   if (typeof s !== 'string' || s.length < 2) return false;
@@ -137,13 +170,26 @@ const PULL_AFTER_INDEX = {
   'fs:convertFileEncoding': [0],
   'fs:deleteFile': [0],
   'fs:deleteDirectory': [0],
-  'fs:moveFile': [1],
+  'fs:moveFile': [0, 1],
   'fs:copyFile': [1],
   'fs:makeDirectory': [0],
 };
 
 /** 需要 VM 路由的通道集合（供 main.js 在注册时就地包装，兼容 whenReady 里注册的处理器） */
-const ROUTE_CHANNELS = new Set([...Object.keys(FS_ROUTES), ...Object.keys(TOOL_ROUTES)]);
+const VM_UNSUPPORTED = new Set([
+  'serial:listPorts',
+  'serial:openPort',
+  'serial:writePort',
+  'serial:readPort',
+  'serial:closePort',
+  'serial:setSignals',
+]);
+const ROUTE_CHANNELS = new Set([
+  ...Object.keys(FS_ROUTES),
+  ...Object.keys(GUEST_ROUTES),
+  ...Object.keys(DIRECT_ROUTES),
+  ...VM_UNSUPPORTED,
+]);
 
 /**
  * 为一个通道创建 VM 感知的处理器（VM 模式走 VM 实现，否则透传原实现）。
@@ -152,6 +198,54 @@ const ROUTE_CHANNELS = new Set([...Object.keys(FS_ROUTES), ...Object.keys(TOOL_R
  * @param {object} deps { getVmService, isLocationVm }
  */
 function createRoutedHandler(channel, original, deps) {
+  if (VM_UNSUPPORTED.has(channel))
+    return (event, ...args) =>
+      deps.isLocationVm()
+        ? {
+            ok: false,
+            location: 'vm',
+            error: '虚拟机暂未配置串口设备透传，不能使用宿主串口；请在本机模式使用此工具',
+          }
+        : original(event, ...args);
+  const direct = DIRECT_ROUTES[channel];
+  if (direct)
+    return async (event, ...args) => {
+      if (!deps.isLocationVm()) return original(event, ...args);
+      try {
+        const service = deps.getVmService();
+        if (!service.instance || service.instance.state !== 'ready') await service.start();
+        const io = new VmFs({ vmService: service });
+        for (const index of [
+          ...(direct.read || []),
+          ...(direct.writeFile || []),
+          ...(direct.writeDir || []),
+          ...(direct.writeDirOf || []),
+        ]) {
+          if (!args[index]) continue;
+          const resolved = io.resolveVmPath(args[index]);
+          if (!resolved.ok) throw new Error(resolved.error);
+          args[index] = resolved.vm;
+        }
+        return { ...(await original(event, ...args)), location: 'vm' };
+      } catch (error) {
+        return { ok: false, location: 'vm', error: error.message };
+      }
+    };
+  const guest = GUEST_ROUTES[channel];
+  if (guest)
+    return async (event, ...args) => {
+      if (!deps.isLocationVm()) return original(event, ...args);
+      try {
+        return await require('./vm-tool-runtime').runGuestTool(
+          deps.getVmService(),
+          channel,
+          args,
+          guest,
+        );
+      } catch (error) {
+        return { ok: false, location: 'vm', error: '虚拟机工具执行失败: ' + error.message };
+      }
+    };
   const fsImpl = FS_ROUTES[channel];
   if (fsImpl) {
     const vmFs = new VmFs({ vmService: deps.getVmService() });
@@ -161,7 +255,7 @@ function createRoutedHandler(channel, original, deps) {
         const r = await fsImpl(vmFs, args);
         // 外部挂载目录：写入/删除后把 VM 新状态拉回宿主镜像（文件树/ESLint/资源管理器读宿主镜像）
         const idxs = PULL_AFTER_INDEX[channel];
-        if (idxs && r && r.ok !== false) {
+        if (idxs && r && r.ok !== false && deps.getVmService().runtime.workspaceMode === 'shared') {
           const svc = deps.getVmService();
           for (const i of idxs) {
             const p = args[i];
@@ -171,155 +265,12 @@ function createRoutedHandler(channel, original, deps) {
           }
         }
         return r;
-      } catch (e) { return { ok: false, error: '虚拟机文件操作失败: ' + e.message }; }
+      } catch (e) {
+        return { ok: false, error: '虚拟机文件操作失败: ' + e.message };
+      }
     };
   }
-  const route = TOOL_ROUTES[channel];
-  if (route) return createStagedToolHandler(route, original, deps);
   return original;
-}
-
-/**
- * 宿主库工具：路径暂存（输入从 VM 拉取、产物推回 VM、返回值路径回映）
- * @param {object} route { read?: number[], writeFile?: number[], writeDir?: number[], deep?: number[] }
- */
-function createStagedToolHandler(route, original, deps) {
-  return async (_e, ...args) => {
-    if (!deps.isLocationVm()) return original(_e, ...args);
-    const vmFs = new VmFs({ vmService: deps.getVmService() });
-    const staging = { pulls: new Map(), tmpDirs: [], mappings: [], outputs: [] };
-    try {
-      const hostArgs = [...args];
-      // 读入：VM → 宿主临时（宿主路径会先按映射/上传进入 VM，保证读到 VM 内的最新版本）
-      // 文件与目录都支持（officeHardList 等工具吃目录）
-      for (const idx of route.read || []) {
-        const p = hostArgs[idx];
-        if (!isPathLike(p)) continue;
-        let vmIn = null;
-        try {
-          vmIn = vmFs.isVmPath(p) ? p : (vmFs.mapHostToVm(p) || await vmFs.ensureVmFile(p));
-        } catch { vmIn = null; }
-        if (!vmIn) continue;
-        const st = await vmFs.stat(vmIn).catch(() => null);
-        if (st && st.isDirectory) {
-          const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cibyp-vmtool-'));
-          staging.tmpDirs.push(tmpRoot);
-          const hostDir = path.join(tmpRoot, path.posix.basename(vmIn.replace(/\/+$/, '')) || 'dir');
-          await vmFs.pullDir(vmIn, hostDir);
-          staging.dirPairs = staging.dirPairs || [];
-          staging.dirPairs.push({ hostDir, vmDir: vmIn });
-          staging.mappings.push([hostDir, vmIn]);
-          hostArgs[idx] = hostDir;
-          continue;
-        }
-        const pulled = await vmFs.pullToTemp(vmIn);
-        staging.tmpDirs.push(pulled.dir);
-        staging.pulls.set(pulled.file, pulled.vmPath);
-        staging.mappings.push([pulled.file, pulled.vmPath]);
-        hostArgs[idx] = pulled.file;
-      }
-      // 写出单文件：VM 路径 → 临时文件（调用后推回）；目标必须在映射范围内，避免误写宿主/VM 的意外位置
-      const writeFiles = [];
-      for (const idx of route.writeFile || []) {
-        const p = hostArgs[idx];
-        if (!isPathLike(p)) continue;
-        const t = vmFs.resolveVmPath(p, { forWrite: true });
-        if (!t.ok) throw new Error(t.error);
-        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cibyp-vmtool-'));
-        staging.tmpDirs.push(tmpDir);
-        const tmpFile = path.join(tmpDir, path.posix.basename(t.vm));
-        writeFiles.push({ tmpFile, vmPath: t.vm });
-        staging.mappings.push([tmpFile, t.vm]);
-        hostArgs[idx] = tmpFile;
-      }
-      // 输出目录：宿主临时目录，调用后整目录推回
-      const writeDirs = [];
-      for (const idx of route.writeDir || []) {
-        const p = hostArgs[idx];
-        const t = vmFs.resolveVmPath(p || vmFs.mountRoot());
-        if (!t.ok) throw new Error(t.error);
-        const vmDir = t.vm;
-        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cibyp-vmtool-'));
-        staging.tmpDirs.push(tmpDir);
-        writeDirs.push({ tmpDir, vmDir });
-        staging.mappings.push([tmpDir, vmDir]);
-        hostArgs[idx] = tmpDir;
-      }
-      // 文件路径 + 同目录多产物（多文件工程：manifest 与分片同目录）
-      const writeDirOfs = [];
-      for (const idx of route.writeDirOf || []) {
-        const p = hostArgs[idx];
-        if (!isPathLike(p)) continue;
-        const t = vmFs.resolveVmPath(p, { forWrite: true });
-        if (!t.ok) throw new Error(t.error);
-        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cibyp-vmtool-'));
-        staging.tmpDirs.push(tmpDir);
-        const tmpFile = path.join(tmpDir, path.posix.basename(t.vm));
-        writeDirOfs.push({ tmpDir, vmDir: path.posix.dirname(t.vm) });
-        staging.mappings.push([tmpDir, path.posix.dirname(t.vm)]);
-        hostArgs[idx] = tmpFile;
-      }
-      // 深度暂存（ffmpeg params 等）
-      for (const idx of route.deep || []) {
-        hostArgs[idx] = await stageDeepValue(hostArgs[idx], vmFs, staging);
-      }
-
-      const result = await original(null, ...hostArgs);
-
-      for (const w of writeFiles) {
-        if (fs.existsSync(w.tmpFile)) await vmFs.pushFromHost(w.tmpFile, w.vmPath).catch(() => {});
-      }
-      for (const w of writeDirs) {
-        if (fs.readdirSync(w.tmpDir).length) await vmFs.pushDir(w.tmpDir, w.vmDir).catch(() => {});
-      }
-      for (const w of writeDirOfs) {
-        try {
-          if (fs.readdirSync(w.tmpDir).length) await vmFs.pushDir(w.tmpDir, w.vmDir);
-        } catch { /* ignore */ }
-      }
-      for (const o of staging.outputs) {
-        if (fs.existsSync(o.tmpFile)) await vmFs.pushFromHost(o.tmpFile, o.vmPath).catch(() => {});
-      }
-      // 目录型输入（office 硬解等）：调用后整目录推回 VM（读操作也安全，幂等覆盖）
-      for (const d of staging.dirPairs || []) {
-        try { await vmFs.pushDir(d.hostDir, d.vmDir); } catch { /* ignore */ }
-      }
-      // 抢救：结果里仍指向宿主临时目录的产物（例如 ffmpeg 未指定输出路径时的默认落点）
-      // → 推入 VM _uploads 并回映，避免 finally 清理后文件消失
-      const rescueHosts = [];
-      const collectHostTmp = (v) => {
-        if (typeof v === 'string') {
-          if (isPathLike(v)) {
-            const bare = /^file:\/\//i.test(v) ? v.replace(/^file:\/\//i, '') : v;
-            if (!vmFs.isVmPath(bare) && isUnder(os.tmpdir(), bare)) {
-              try { if (fs.existsSync(bare)) rescueHosts.push(bare); } catch { /* ignore */ }
-            }
-          }
-          return;
-        }
-        if (Array.isArray(v)) { v.forEach(collectHostTmp); return; }
-        if (v && typeof v === 'object') { for (const x of Object.values(v)) collectHostTmp(x); }
-      };
-      collectHostTmp(result);
-      for (const p of rescueHosts) {
-        const base = path.basename(p);
-        let isDir = false;
-        try { isDir = fs.statSync(p).isDirectory(); } catch { /* ignore */ }
-        const target = `${vmFs.mountRoot()}/_uploads/${Date.now()}_${base}`;
-        try {
-          if (isDir) await vmFs.pushDir(p, target);
-          else await vmFs.pushFromHost(p, target);
-          staging.mappings.push([p, target]);
-          staging.pulls.set(p, target);
-        } catch { /* ignore */ }
-      }
-      return remapResult(result, staging.mappings);
-    } catch (e) {
-      return { ok: false, error: '虚拟机工具执行失败: ' + e.message };
-    } finally {
-      for (const d of staging.tmpDirs) { try { fs.rmSync(d, { recursive: true, force: true }); } catch { /* ignore */ } }
-    }
-  };
 }
 
 /**
@@ -327,67 +278,32 @@ function createStagedToolHandler(route, original, deps) {
  * 生产路径改用 createRoutedHandler 在 main.js 的 ipcMain.handle 包装里就地安装。
  */
 function installVmToolRouting({ ipcMain, handlers, getVmService, isLocationVm, originalHandle }) {
-  if (typeof isLocationVm !== 'function') throw new Error('installVmToolRouting 需要 isLocationVm()');
+  if (typeof isLocationVm !== 'function')
+    throw new Error('installVmToolRouting 需要 isLocationVm()');
   const deps = { getVmService, isLocationVm };
   const installed = [];
   for (const channel of ROUTE_CHANNELS) {
     const original = handlers.get(channel);
     if (!original) continue;
-    try { ipcMain.removeHandler(channel); } catch { /* 假 ipcMain 无此方法 */ }
+    try {
+      ipcMain.removeHandler(channel);
+    } catch {
+      /* 假 ipcMain 无此方法 */
+    }
     originalHandle(channel, createRoutedHandler(channel, original, deps));
     installed.push(channel);
   }
   return { installed };
 }
 
-
-/**
- * 深度暂存（ffmpeg params 等）：
- *   - VM 路径：存在 → 拉到宿主临时（输入）；不存在 → 视为输出，调用后推回
- *   - 宿主路径：命中映射根（工作区/外部挂载）→ 以 VM 内副本为准；未命中 → 原样保留（字体/素材等宿主资源）
- */
-async function stageDeepValue(value, vmFs, staging) {
-  if (typeof value === 'string') {
-    if (!isPathLike(value)) return value;
-    const asVmInput = async (vmPath) => {
-      const pulled = await vmFs.pullToTemp(vmPath);
-      staging.tmpDirs.push(pulled.dir);
-      staging.pulls.set(pulled.file, pulled.vmPath || vmPath);
-      staging.mappings.push([pulled.file, pulled.vmPath || vmPath]);
-      return pulled.file;
-    };
-    const asOutput = (vmPath) => {
-      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cibyp-vmtool-'));
-      staging.tmpDirs.push(tmpDir);
-      const tmpFile = path.join(tmpDir, path.posix.basename(String(vmPath)));
-      staging.outputs.push({ tmpFile, vmPath });
-      staging.mappings.push([tmpFile, vmPath]);
-      return tmpFile;
-    };
-    try {
-      if (vmFs.isVmPath(value)) {
-        return await vmFs.exists(value) ? await asVmInput(value) : asOutput(value);
-      }
-      const mapped = vmFs.mapHostToVm(value);
-      if (mapped) {
-        return await vmFs.exists(mapped) ? await asVmInput(mapped) : asOutput(mapped);
-      }
-      return value; // 宿主资源（应用素材/字体等），宿主库直接读取
-    } catch {
-      return value;
-    }
-  }
-  if (Array.isArray(value)) {
-    const out = [];
-    for (const v of value) out.push(await stageDeepValue(v, vmFs, staging));
-    return out;
-  }
-  if (value && typeof value === 'object') {
-    const out = {};
-    for (const [k, v] of Object.entries(value)) out[k] = await stageDeepValue(v, vmFs, staging);
-    return out;
-  }
-  return value;
-}
-
-module.exports = { installVmToolRouting, createRoutedHandler, ROUTE_CHANNELS, TOOL_ROUTES, FS_ROUTES, translateDeep, remapResult, stageDeepValue, createStagedToolHandler };
+module.exports = {
+  installVmToolRouting,
+  createRoutedHandler,
+  ROUTE_CHANNELS,
+  TOOL_ROUTES,
+  GUEST_ROUTES,
+  DIRECT_ROUTES,
+  FS_ROUTES,
+  translateDeep,
+  remapResult,
+};

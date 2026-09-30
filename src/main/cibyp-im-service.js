@@ -733,14 +733,14 @@ class CibypImService {
   }
 
   async uploadMedia({ filePath, name } = {}) {
-    if (!filePath || !fs.existsSync(filePath)) return { ok: false, error: '文件不存在: ' + filePath };
-    const stats = fs.statSync(filePath);
+    if (!filePath || !(this.fileAccess ? await this.fileAccess.exists(filePath) : fs.existsSync(filePath))) return { ok: false, error: '文件不存在: ' + filePath };
+    const stats = this.fileAccess ? await this.fileAccess.stat(filePath) : fs.statSync(filePath);
     if (stats.size > MAX_UPLOAD_BYTES) return { ok: false, error: '文件超过 10MB 上限（与服务端限制一致）' };
     // 客户端加密后上传（服务端只见密文）
     const key = crypto.getRandomValues(new Uint8Array(32));
     const iv = crypto.getRandomValues(new Uint8Array(12));
     const aad = TE.encode('CIBYP-IM:FILE:v1');
-    const plain = fs.readFileSync(filePath);
+    const plain = this.fileAccess ? await this.fileAccess.read(filePath) : fs.readFileSync(filePath);
     const aesKey = await crypto.subtle.importKey('raw', key, { name: 'AES-GCM' }, false, ['encrypt']);
     const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv, additionalData: aad }, aesKey, plain));
     const fd = new FormData();
@@ -772,11 +772,11 @@ class CibypImService {
         iv: unb64url(iv || ''),
         additionalData: TE.encode('CIBYP-IM:FILE:v1'),
       }, aesKey, encBytes));
-      fs.writeFileSync(savePath, plain);
+      if (this.fileAccess) await this.fileAccess.write(savePath, Buffer.from(plain)); else fs.writeFileSync(savePath, plain);
     } else {
-      fs.writeFileSync(savePath, encBytes);
+      if (this.fileAccess) await this.fileAccess.write(savePath, Buffer.from(encBytes)); else fs.writeFileSync(savePath, encBytes);
     }
-    return { ok: true, savedTo: savePath, size: fs.statSync(savePath).size };
+    return { ok: true, savedTo: savePath, size: (this.fileAccess ? await this.fileAccess.stat(savePath) : fs.statSync(savePath)).size };
   }
 
   async sendFile({ conversationId, filePath, text = '' } = {}) {

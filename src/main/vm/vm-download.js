@@ -30,7 +30,7 @@ function sha256File(file) {
   try {
     const buf = Buffer.alloc(1024 * 1024);
     let n;
-    // eslint-disable-next-line no-cond-assign
+
     while ((n = fs.readSync(fd, buf, 0, buf.length, null)) > 0) hash.update(buf.subarray(0, n));
   } finally {
     fs.closeSync(fd);

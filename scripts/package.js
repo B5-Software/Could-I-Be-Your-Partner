@@ -17,7 +17,6 @@
 'use strict';
 
 const fs = require('fs');
-const os = require('os');
 const path = require('path');
 const { spawn } = require('child_process');
 
@@ -57,68 +56,6 @@ function dropUnbuildableOptionalDeps() {
   }
 }
 
-/**
- * 打包前把"不该进安装包、但构建/资源复制阶段不能少"的目录移到项目外，
- * 打包完成后恢复。
- *
- * 背景：这版 electron-builder 对"字面名"否定模式（!vm-os/**\/*、!assets/voice-models/**\/*）
- * 在本项目环境里不生效，导致 .git/测试/文档/语音模型被打进 app.asar（安装包白增数百 MB）。
- * 移到项目外是确定性做法，且在 CI 与本地一致。
- */
-const HIDE_FOR_PACK = [
-  '.git',
-  'vm-os',
-  'tests',
-  'docs',
-  'claude-code-ref',
-  'assets/voice-models',
-  'assets/geogebra-src',
-  'crashes.json',
-  'last-crash.json',
-];
-
-function hideForPack() {
-  // 注意：必须与项目同盘（Windows 跨盘 rename 会 EXDEV），所以放在项目父目录下
-  const stash = path.join(path.dirname(projectRoot), '.cibyp-pack-hide');
-  const moved = [];
-  // 上次中断残留：先恢复
-  if (fs.existsSync(stash)) {
-    for (const name of fs.readdirSync(stash)) {
-      const rel = name.replace(/__/g, '/');
-      const dst = path.join(projectRoot, rel);
-      try {
-        if (!fs.existsSync(dst)) { fs.renameSync(path.join(stash, name), dst); console.log('[package] 恢复上次残留:', rel); }
-      } catch { /* ignore */ }
-    }
-  }
-  fs.mkdirSync(stash, { recursive: true });
-  for (const rel of HIDE_FOR_PACK) {
-    const src = path.join(projectRoot, rel);
-    if (!fs.existsSync(src)) continue;
-    const dst = path.join(stash, rel.replace(/[\\/]/g, '__'));
-    try {
-      fs.renameSync(src, dst);
-      moved.push([src, dst]);
-      console.log('[package] 临时移出打包内容:', rel);
-    } catch (e) {
-      console.warn('[package] 移出失败（跳过）:', rel, e.message);
-    }
-  }
-  return { stash, moved };
-}
-
-function restoreAfterPack(state) {
-  if (!state) return;
-  for (const [src, dst] of state.moved) {
-    try {
-      if (fs.existsSync(dst) && !fs.existsSync(src)) fs.renameSync(dst, src);
-    } catch (e) {
-      console.warn('[package] 恢复失败:', src, e.message);
-    }
-  }
-  try { fs.rmdirSync(state.stash); } catch { /* ignore */ }
-}
-
 function main() {
   const pkg = JSON.parse(fs.readFileSync(path.join(projectRoot, 'package.json'), 'utf-8'));
   const gitHash = getGitHash();
@@ -146,17 +83,22 @@ function main() {
   const args = [cli, ...ebArgs];
   console.log(`[package] 执行: ${process.execPath} ${args.join(' ')}`);
 
-  const hidden = hideForPack();
   const child = spawn(process.execPath, args, { cwd: projectRoot, stdio: 'inherit', shell: false });
   child.on('error', (err) => {
     console.error('[package] 启动 electron-builder 失败:', err.message);
-    restoreAfterPack(hidden);
     process.exit(1);
   });
   child.on('exit', (code) => {
-    restoreAfterPack(hidden);
     process.exit(code === null ? 1 : code);
   });
 }
 
-main();
+if (require.main === module) {
+  require('./build-app-bundle')
+    .buildApp()
+    .then(main)
+    .catch((error) => {
+      console.error(error);
+      process.exitCode = 1;
+    });
+}

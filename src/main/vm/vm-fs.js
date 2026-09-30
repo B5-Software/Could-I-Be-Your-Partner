@@ -20,10 +20,7 @@
 
 'use strict';
 
-const fs = require('fs');
-const os = require('os');
 const path = require('path');
-const crypto = require('crypto');
 
 const fileEncoding = require('../file-encoding');
 
@@ -68,9 +65,10 @@ class VmFs {
 
   /** 严格解析写/删目标：无法映射到 VM 时返回 { ok:false }（避免误写到 guest 根） */
   resolveVmPath(hostOrVmPath, { forWrite = false } = {}) {
-    const s = String(hostOrVmPath || '');
+    const raw = String(hostOrVmPath || '');
+    const s = raw.replace(/\\/g,'/');
     if (!s) return { ok: false, error: '路径为空' };
-    if (this.isVmPath(s)) return { ok: true, vm: s, mapped: 'vm' };
+    if (!/^[A-Za-z]:|^[/\\]{2}/.test(raw) && this.isVmPath(s)) return { ok: true, vm: path.posix.normalize(s), mapped: 'vm' };
     const mapped = this.mapHostToVm(s);
     if (mapped) {
       if (forWrite && mapped === ((this.vmService.runtime && this.vmService.runtime.vm.workspaceMount) || '/workspace')) {
@@ -139,35 +137,6 @@ class VmFs {
     return null;
   }
 
-  /**
-   * 确保文件在 VM 内可用，返回 VM 路径。
-   * - 已是 VM 路径 → 原样返回（幂等）
-   * - 宿主路径落在工作区/外部挂载内 → 映射；VM 内没有则按映射路径上传
-   * - 宿主其它位置（如下载目录的附件）→ 上传到 /workspace/_uploads/<ts>_<name>
-   */
-  async ensureVmFile(hostOrVmPath) {
-    const s = String(hostOrVmPath || '');
-    if (!s) return s;
-    if (this.isVmPath(s)) return s;
-    // 1) 目标 VM 路径：工作区根/额外宿主根 → /workspace，外部挂载 → /workspace/_external/<name>
-    const mapped = this.mapHostToVm(s);
-    const isKnown = !!mapped;
-    let target = mapped;
-    if (isKnown) {
-      try { if (await this.exists(target)) return target; } catch { /* ignore */ }
-    } else {
-      const mount = (this.vmService.runtime && this.vmService.runtime.vm.workspaceMount) || '/workspace';
-      target = `${mount}/_uploads/${Date.now()}_${path.basename(s)}`;
-    }
-    // 2) 宿主文件 → 按目标路径推入 VM
-    try {
-      if (fs.existsSync(s) && fs.statSync(s).isFile()) {
-        return await this.pushFromHost(s, target);
-      }
-    } catch { /* ignore */ }
-    return isKnown ? target : s;
-  }
-
   async sftp() { return this.instance.sftp(); }
 
   async exec(cmd, timeoutMs = 60000) {
@@ -179,7 +148,9 @@ class VmFs {
 
   async readBuffer(filePath) {
     const sftp = await this.sftp();
-    return sftp.readFile(await this.ensureVmFile(filePath));
+    const target = this.resolveVmPath(filePath);
+    if (!target.ok) throw new Error(target.error);
+    return sftp.readFile(target.vm);
   }
 
   /**
@@ -188,6 +159,12 @@ class VmFs {
    */
   mapVmTarget(hostOrVmPath, { forWrite = false } = {}) {
     return this.resolveVmPath(hostOrVmPath, { forWrite });
+  }
+
+  strictPath(raw, options) {
+    const target = this.resolveVmPath(raw, options);
+    if (!target.ok) throw new Error(target.error);
+    return target.vm;
   }
 
   /** 配置的 VM 挂载点（默认 /workspace） */
@@ -205,12 +182,12 @@ class VmFs {
   }
 
   async exists(filePath) {
-    const r = await this.exec(`test -e ${shellQuote(this.toVm(filePath))} && echo yes || echo no`, 20000);
+    const r = await this.exec(`test -e ${shellQuote(this.strictPath(filePath))} && echo yes || echo no`, 20000);
     return r.stdout.trim() === 'yes';
   }
 
   async stat(filePath) {
-    const vm = this.toVm(filePath);
+    const vm = this.strictPath(filePath);
     const sftp = await this.sftp();
     try {
       const st = await sftp.stat(vm);
@@ -297,12 +274,8 @@ class VmFs {
   /** fs:createFile 语义（自动建目录） */
   async createFile(filePath, content, options = {}) {
     try {
-      const vm = this.toVm(filePath);
+      const vm = this.strictPath(filePath, {forWrite:true});
       await this.exec(`mkdir -p ${shellQuote(path.posix.dirname(vm))}`, 20000);
-      try {
-        const host = this.toHost(vm);
-        if (host) fs.mkdirSync(path.dirname(host), { recursive: true });
-      } catch { /* ignore */ }
       return await this.writeFile(filePath, content || '', options);
     } catch (e) {
       return { ok: false, error: '虚拟机文件创建失败: ' + e.message };
@@ -362,7 +335,7 @@ class VmFs {
     try {
       const dst = this.resolveVmPath(dest, { forWrite: true });
       if (!dst.ok) throw new Error(dst.error);
-      const srcVm = await this.ensureVmFile(src);
+      const srcVm = this.strictPath(src);
       const r = await this.exec(`mkdir -p ${shellQuote(path.posix.dirname(dst.vm))} && mv -f ${shellQuote(srcVm)} ${shellQuote(dst.vm)}`);
       if (!r.ok) throw new Error(r.stderr || 'mv 失败');
       return { ok: true };
@@ -373,7 +346,7 @@ class VmFs {
     try {
       const dst = this.resolveVmPath(dest, { forWrite: true });
       if (!dst.ok) throw new Error(dst.error);
-      const srcVm = await this.ensureVmFile(src);
+      const srcVm = this.strictPath(src);
       const r = await this.exec(`mkdir -p ${shellQuote(path.posix.dirname(dst.vm))} && cp -f ${shellQuote(srcVm)} ${shellQuote(dst.vm)}`);
       if (!r.ok) throw new Error(r.stderr || 'cp 失败');
       return { ok: true };
@@ -382,7 +355,7 @@ class VmFs {
 
   async listDirectory(dirPath) {
     try {
-      const vm = this.toVm(dirPath);
+      const vm = this.strictPath(dirPath);
       const sftp = await this.sftp();
       const list = await sftp.readdir(vm);
       return {
@@ -405,11 +378,6 @@ class VmFs {
       const vm = t.vm;
       const r = await this.exec(`mkdir -p ${shellQuote(vm)}`);
       if (!r.ok) throw new Error(r.stderr || 'mkdir 失败');
-      // VM 模式：同时在宿主镜像里建同名目录（否则宿主侧看不到新会话目录，UI 会误判"没建成功"）
-      try {
-        const host = this.toHost(vm);
-        if (host) fs.mkdirSync(host, { recursive: true });
-      } catch { /* ignore */ }
       return { ok: true };
     } catch (e) { return { ok: false, error: '虚拟机建目录失败: ' + e.message }; }
   }
@@ -439,7 +407,7 @@ class VmFs {
       } catch (e) {
         return { ok: false, error: `Invalid ${regex ? 'regex' : 'glob'} pattern: ${e.message}` };
       }
-      const vmDir = this.toVm(dirPath);
+      const vmDir = this.strictPath(dirPath);
       const depthArg = depth >= 0 ? ` -maxdepth ${Number(depth) + 1}` : '';
       const typeArg = fileOnly ? ' -type f' : dirOnly ? ' -type d' : '';
       const r = await this.exec(`find ${shellQuote(vmDir)} -mindepth 1${depthArg}${typeArg} -printf '%y\\t%p\\n' 2>/dev/null | head -${Math.max(1, Number(maxResults)) * 3}`, 60000);
@@ -473,7 +441,7 @@ class VmFs {
         ignoreCase = false, regex = false, maxResults = 200,
         include = null, exclude = null, contextLines = 0, encoding = '',
       } = options;
-      const vmPaths = paths.map((p) => this.toVm(p));
+      const vmPaths = paths.map((p) => this.strictPath(p));
       const args = ['grep', '-rIn', '--binary-files=without-match'];
       if (ignoreCase) args.push('-i');
       if (!regex) args.push('-F');
@@ -526,7 +494,7 @@ class VmFs {
       const ext = path.posix.extname(String(fileName || '')).toLowerCase();
       const isImage = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg'].includes(ext);
       const dir = isImage ? '/workspace/_images' : '/workspace/_uploads';
-      const target = `${dir}/${Date.now()}_${String(fileName || 'upload.bin')}`;
+      const target = `${dir}/${Date.now()}_${path.posix.basename(String(fileName || 'upload.bin').replace(/\\/g,'/'))}`;
       let buf;
       if (Buffer.isBuffer(data)) buf = data;
       else if (data instanceof ArrayBuffer) buf = Buffer.from(data);
@@ -540,60 +508,16 @@ class VmFs {
     }
   }
 
-  // ---------------------------------------------------------------- 宿主库暂存（文档/媒体工具用）
-
-  /** 把 VM 内文件拉到宿主临时文件（供 docx/ocr/ffmpeg 等宿主库使用） */
-  async pullToTemp(vmOrHostPath, suffix = '') {
-    const vm = await this.ensureVmFile(vmOrHostPath);
-    const base = path.basename(vm);
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cibyp-vm-stage-'));
-    const target = path.join(dir, suffix ? base.replace(/(\.[^.]*)?$/, suffix) : base);
-    const sftp = await this.sftp();
-    await sftp.fastGet(vm, target);
-    return { dir, file: target, vmPath: vm };
-  }
-
   /** 把宿主文件推到 VM 指定路径（返回 VM 路径） */
   async pushFromHost(hostPath, vmTargetPath) {
-    const vm = this.toVm(vmTargetPath);
+    const vm = this.strictPath(vmTargetPath);
     const sftp = await this.sftp();
     await this.exec(`mkdir -p ${shellQuote(path.posix.dirname(vm))}`, 20000);
     await sftp.fastPut(hostPath, vm);
     return vm;
   }
 
-  /** 递归把宿主目录内容推到 VM 目录 */
-  async pushDir(hostDir, vmDir) {
-    const vm = this.toVm(vmDir);
-    const sftp = await this.sftp();
-    const walk = async (from, to) => {
-      await this.exec(`mkdir -p ${shellQuote(to)}`, 20000);
-      for (const e of fs.readdirSync(from, { withFileTypes: true })) {
-        const src = path.join(from, e.name);
-        const dst = path.posix.join(to, e.name);
-        if (e.isDirectory()) await walk(src, dst);
-        else await sftp.fastPut(src, dst);
-      }
-    };
-    await walk(hostDir, vm);
-    return vm;
-  }
 
-  /** 把 VM 目录内容拉回宿主目录 */
-  async pullDir(vmDir, hostDir) {
-    const sftp = await this.sftp();
-    const walk = async (from, to) => {
-      fs.mkdirSync(to, { recursive: true });
-      for (const it of await sftp.readdir(from)) {
-        const src = path.posix.join(from, it.filename);
-        const dst = path.join(to, it.filename);
-        if (it.attrs && typeof it.attrs.isDirectory === 'function' && it.attrs.isDirectory()) await walk(src, dst);
-        else await sftp.fastGet(src, dst);
-      }
-    };
-    await walk(this.toVm(vmDir), hostDir);
-    return hostDir;
-  }
 }
 
 module.exports = { VmFs };

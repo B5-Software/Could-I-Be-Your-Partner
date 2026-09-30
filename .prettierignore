@@ -1,0 +1,6 @@
+node_modules/
+dist*/
+src/preload/generated/
+src/shared/generated/
+src/renderer/js/app.js
+src/renderer/js/app-parts/

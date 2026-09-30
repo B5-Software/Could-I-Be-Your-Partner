@@ -6,7 +6,7 @@
   "main": "src/main/main.js",
   "scripts": {
     "start": "node scripts/build-app-bundle.js && electron .",
-    "test": "node scripts/build-app-bundle.js && node tests/run-tests.js",
+    "test": "npm run test:unit && npm run test:legacy",
     "build-app-bundle": "node scripts/build-app-bundle.js",
     "download-voice-models": "node scripts/download-voice-models.js --voice",
     "download-assets": "node scripts/download-voice-models.js && node scripts/download-ocr-paddle.js",
@@ -27,7 +27,18 @@
     "build:no-tarot:linux": "node scripts/build-no-tarot.js --linux",
     "dist": "node scripts/package.js",
     "audit": "npm audit",
-    "audit:fix": "npm audit fix"
+    "audit:fix": "npm audit fix",
+    "test:unit": "npm run build-app-bundle && node --test tests/unit/*.test.cjs",
+    "test:legacy": "node tests/run-tests.js",
+    "test:live": "npm run build-app-bundle && node tests/run-tests.js --live",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run lint && npm run format:check && npm run typecheck && npm test",
+    "test:desktop": "npm run build-app-bundle && electron tests/integration/desktop-smoke.cjs",
+    "format": "prettier --write src/main/core src/main/ipc src/main/services src/main/settings src/shared/pricing.ts src/renderer/core src/preload/channel-subscriptions.js scripts/build-app-bundle.js scripts/lib scripts/package.js scripts/eb-before-pack.js scripts/eb-after-pack.js tests/unit tests/integration eslint.config.cjs tsconfig.json src/main/vm/{guest-tool-worker,tool-files,tool-location,vm-download-manager,vm-file-dialog,vm-process,vm-tool-runtime,vm-tools,vm-theme}.js src/preload/vm-file-dialog-preload.js src/renderer/js/vm-file-dialog.js src/renderer/pages/vm-file-dialog.html",
+    "format:check": "prettier --check src/main/core src/main/ipc src/main/services src/main/settings src/shared/pricing.ts src/renderer/core src/preload/channel-subscriptions.js scripts/build-app-bundle.js scripts/lib scripts/package.js scripts/eb-before-pack.js scripts/eb-after-pack.js tests/unit tests/integration eslint.config.cjs tsconfig.json src/main/vm/{guest-tool-worker,tool-files,tool-location,vm-download-manager,vm-file-dialog,vm-process,vm-tool-runtime,vm-tools,vm-theme}.js src/preload/vm-file-dialog-preload.js src/renderer/js/vm-file-dialog.js src/renderer/pages/vm-file-dialog.html",
+    "test:vm-picker": "npm run build-app-bundle && electron tests/integration/vm-file-picker-smoke.cjs"
   },
   "author": {
     "name": "B5-Software",
@@ -37,12 +48,20 @@
     "appId": "org.b5-software.cibyp",
     "productName": "Could I Be Your Partner",
     "files": [
-      "**/*",
+      "src/**/*",
+      "assets/**/*",
+      "IoT-Firmware/**/*",
+      "package.json",
+      "LICENSE",
+      "build-info.json",
+      ".no-tarot",
       "!**/*.md",
-      "!**/.git{,/**/*}",
+      "!**/*.map",
+      "!**/*.ts",
       "!**/assets/voice-models{,/**/*}",
+      "!**/assets/geogebra-src{,/**/*}",
       "!**/assets/aria2{,/**/*}",
-      "!**/dist-output.txt"
+      "!**/src/renderer/js/app-parts{,/**/*}"
     ],
     "asarUnpack": [
       "assets/ocr/**/*",
@@ -80,10 +99,6 @@
     ],
     "win": {
       "icon": "assets/icons/icons/icon.ico",
-      "files": [
-        "!node_modules/onnxruntime-node/bin/napi-v6/darwin/**",
-        "!node_modules/onnxruntime-node/bin/napi-v6/linux/**"
-      ],
       "extraResources": [
         {
           "from": "assets/sandbox/win",
@@ -102,10 +117,6 @@
     },
     "mac": {
       "icon": "assets/icons/icons/icon.icns",
-      "files": [
-        "!node_modules/onnxruntime-node/bin/napi-v6/win32/**",
-        "!node_modules/onnxruntime-node/bin/napi-v6/linux/**"
-      ],
       "extendInfo": {
         "NSLocalNetworkUsageDescription": "需要访问本地网络以连接 Remote 模式下的远端设备和 WebUI 控制服务。",
         "NSMicrophoneUsageDescription": "需要访问麦克风以提供语音输入与后台唤醒功能。音频仅在本机处理，不会上传或存储。",
@@ -132,10 +143,6 @@
     },
     "linux": {
       "icon": "assets/icons/icons",
-      "files": [
-        "!node_modules/onnxruntime-node/bin/napi-v6/win32/**",
-        "!node_modules/onnxruntime-node/bin/napi-v6/darwin/**"
-      ],
       "maintainer": "B5-Software <b5-software@users.noreply.github.com>",
       "category": "Utility",
       "target": [
@@ -153,25 +160,42 @@
   "overrides": {
     "semver": "^7.6.3",
     "tmp": "^0.2.4",
-    "tar": "^7.5.4",
+    "tar": "^7.5.22",
     "lodash": "^4.17.23",
     "ws": "^8.18.0",
     "form-data": "^4.0.4",
-    "qs": "^6.14.0",
+    "qs": "^6.16.0",
     "path-to-regexp": "^8.3.0",
     "picomatch": "^4.0.4",
     "ip-address": "^10.1.0",
     "brace-expansion": "^5.0.9",
     "dompurify": "^3.4.13",
-    "@xmldom/xmldom": "^0.8.13",
-    "linkify-it": "^5.0.0"
+    "@xmldom/xmldom": "^0.8.15",
+    "linkify-it": "^5.0.0",
+    "sharp": "^0.35.5",
+    "image-size": "^2.0.4",
+    "uuid": "^11.1.1",
+    "fast-uri": "^3.1.7",
+    "deepmerge-ts": "^8.0.0",
+    "adm-zip": "$adm-zip",
+    "nodemailer": "$nodemailer",
+    "js-yaml": "$js-yaml",
+    "undici": "$undici",
+    "onnxruntime-node": "^1.30.0"
   },
   "devDependencies": {
+    "@electron/asar": "^4.3.1",
     "@electron/rebuild": "^4.1.0",
     "@serialport/bindings-cpp": "^13.0.1",
-    "electron": "^43.4.0",
+    "electron": "^43.7.6",
     "electron-builder": "^26.15.3",
-    "node-gyp": "^12.2.0"
+    "node-gyp": "^12.2.0",
+    "esbuild": "^0.28.2",
+    "typescript": "^7.0.2",
+    "globals": "^17.12.0",
+    "@types/node": "^24.0.0",
+    "@jridgewell/gen-mapping": "^0.3.13",
+    "prettier": "^3.9.9"
   },
   "dependencies": {
     "@deepseek-ai/cordis": "4.0.1",
@@ -182,7 +206,7 @@
     "@repeato/ocr": "^1.5.21",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/xterm": "^6.0.0",
-    "adm-zip": "^0.6.0",
+    "adm-zip": "^0.6.1",
     "bcryptjs": "^3.0.3",
     "chardet": "^2.2.0",
     "docx": "^9.7.1",
@@ -195,15 +219,15 @@
     "fast-xml-parser": "^5.10.1",
     "iconv-lite": "^0.7.3",
     "imap-simple": "^1.6.3",
-    "js-yaml": "^4.3.0",
+    "js-yaml": "^4.3.2",
     "jsqr": "^1.4.0",
     "katex": "^0.17.0",
-    "mailparser": "^3.9.14",
+    "mailparser": "^3.9.31",
     "mammoth": "^1.12.1",
     "monaco-editor": "^0.55.1",
     "node-pty": "^1.1.0",
-    "nodemailer": "^9.0.3",
-    "officeparser": "^6.1.1",
+    "nodemailer": "^10.0.12",
+    "officeparser": "^8.1.0",
     "otpauth": "^9.5.1",
     "pdf-parse": "^2.4.5",
     "pinyin-pro": "^3.28.2",
@@ -215,7 +239,7 @@
     "sherpa-onnx-node": "^1.13.4",
     "ssh2": "^1.17.0",
     "tesseract.js": "^6.0.1",
-    "undici": "^7.28.0",
+    "undici": "^7.30.0",
     "ws": "^8.18.0"
   },
   "allowScripts": {
@@ -233,7 +257,9 @@
     "electron-winstaller@5.4.0": true,
     "onnxruntime-node@1.22.0-rev": true,
     "sharp@0.34.5": true,
-    "protobufjs@7.6.6": true
+    "protobufjs@7.6.6": true,
+    "onnxruntime-node@1.30.0": true,
+    "sharp@0.35.5": true
   },
   "optionalDependencies": {
     "@ffmpeg-installer/ffmpeg": "^1.1.0",
@@ -245,5 +271,10 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/B5-Software/Could-I-Be-Your-Partner.git"
-  }
+  },
+  "engines": {
+    "node": ">=24.13.0",
+    "npm": ">=11"
+  },
+  "packageManager": "npm@11.19.0"
 }

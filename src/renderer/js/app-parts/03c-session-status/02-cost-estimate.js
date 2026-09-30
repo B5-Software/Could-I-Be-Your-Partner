@@ -1,38 +1,8 @@
   function computeSessionCostForModel(agentInstance, model, usage) {
     const pricing = getSessionPricing(agentInstance, model);
     if (!pricing) return null;
-    const su = usage || {};
-    const toPerM = (v, isPerK) => isPerK ? (Number(v) || 0) * 1000 : (Number(v) || 0);
-    const inputPerM = toPerM(pricing.inputPerM ?? pricing.promptPerK, !pricing.inputPerM && !!pricing.promptPerK);
-    const cacheReadPerM = pricing.cacheReadPerM != null ? Number(pricing.cacheReadPerM) : inputPerM * 0.1;
-    const outputPerM = toPerM(pricing.outputPerM ?? pricing.completionPerK, !pricing.outputPerM && !!pricing.completionPerK);
-    const cacheWritePerM = pricing.hasCacheWrite
-      ? (pricing.cacheWritePerM != null ? Number(pricing.cacheWritePerM) : inputPerM * 1.25)
-      : 0;
-    const ph = agentInstance?.settings?.budget?.peakHours || {};
-    let inMul = 1, crMul = 1, outMul = 1, cwMul = 1;
-    if (ph.enabled) {
-      const hour = new Date().getHours();
-      const s = Number(ph.start) ?? 0;
-      const e = Number(ph.end) ?? 24;
-      const isPeak = s <= e ? (hour >= s && hour < e) : (hour >= s || hour < e);
-      if (isPeak) {
-        inMul = Number(ph.inputMul) || 1;
-        crMul = Number(ph.cacheReadMul) || 1;
-        outMul = Number(ph.outputMul) || 1;
-        cwMul = Number(ph.cacheWriteMul) || 1;
-      }
-    }
-    const nonCachedPrompt = Math.max(0, (su.prompt || 0) - (su.cached || 0) - (su.cacheCreation || 0));
-    const inputCost = (nonCachedPrompt / 1e6) * inputPerM * inMul;
-    const cacheReadCost = ((su.cached || 0) / 1e6) * cacheReadPerM * crMul;
-    const outputCost = ((su.completion || 0) / 1e6) * outputPerM * outMul;
-    const cacheWriteCost = ((su.cacheCreation || 0) / 1e6) * cacheWritePerM * cwMul;
-    return {
-      inputCost, cacheReadCost, outputCost, cacheWriteCost,
-      totalCost: inputCost + cacheReadCost + outputCost + cacheWriteCost,
-      pricing
-    };
+    return { ...calculateTokenCost(usage || {}, pricing, agentInstance?.settings?.budget?.peakHours,
+      Date.now(), agentInstance?.settings?.budget?.timezone), pricing };
   }
 
   // 获取当前会话所用模型的单价配置（来自 settings.budget.models）

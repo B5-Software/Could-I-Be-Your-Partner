@@ -4,7 +4,7 @@
     const att = { name: file.name, size: file.size, type: file.type, isImage, path: file.path || null, pendingSave: null };
 
     // If it's a blob/File without path, save to workspace
-    if (!att.path && file.arrayBuffer) {
+    if (file.arrayBuffer) {
       att.pendingSave = file.arrayBuffer().then(buf => {
         return window.api.saveUploadedFile(file.name, buf).then(result => {
           if (result.ok) att.path = result.path;

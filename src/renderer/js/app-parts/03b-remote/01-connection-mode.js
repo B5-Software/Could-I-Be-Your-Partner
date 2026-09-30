@@ -213,8 +213,8 @@
         if (r?.ok && r.data) dataUrl = r.data;
       }
       if (!dataUrl) return null;
-      const resp = await remoteWsRequest({ type: 'uploadAttachment', name: att.name, type: att.type, data: dataUrl }, 'uploadResult');
-      if (resp.ok) return { name: resp.name, path: resp.path, type: resp.type };
+      const resp = await remoteWsRequest({ type: 'uploadAttachment', name: att.name, mimeType: att.type, data: dataUrl }, 'uploadResult');
+      if (resp.ok) return { name: resp.name, path: resp.path, type: resp.mimeType };
       return null;
     } catch (e) { console.error('[Remote] 附件上传失败:', e); return null; }
   }

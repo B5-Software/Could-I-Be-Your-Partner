@@ -276,7 +276,15 @@ function buildArgv(o) {
 
 /** 创建 qcow2 overlay（backing = 只读基础镜像；重置 = 删除该文件） */
 function createOverlay(qemuImg, baseImage, overlayPath) {
-  if (fs.existsSync(overlayPath)) fs.rmSync(overlayPath, { force: true });
+  if (fs.existsSync(overlayPath)) {
+    const info = overlayInfo(qemuImg, overlayPath);
+    const backing = info && (info['full-backing-filename'] || info['backing-filename']);
+    const normalize = (file) => process.platform === 'win32' ? path.resolve(file).toLowerCase() : path.resolve(file);
+    if (!backing || normalize(path.resolve(path.dirname(overlayPath), backing)) !== normalize(baseImage)) {
+      throw new Error('现有虚拟机磁盘与所选镜像不匹配，已保留原磁盘；请使用独立实例或导出后重置');
+    }
+    return overlayPath;
+  }
   fs.mkdirSync(path.dirname(overlayPath), { recursive: true });
   const r = spawnSync(qemuImg, ['create', '-f', 'qcow2', '-b', path.resolve(baseImage), '-F', 'qcow2', overlayPath], {
     encoding: 'utf8', windowsHide: true,

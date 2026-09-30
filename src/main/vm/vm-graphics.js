@@ -4,12 +4,12 @@
  *
  * This file is part of Could I Be Your Partner.
  *
- * VM 图形环境（P4）：在 VM 内起 X 虚拟显示 + x11vnc，宿主用 noVNC 内嵌显示；
+ * VM 图形环境：原生 Wayland Campus 桌面 + wayvnc，宿主用 noVNC 内嵌显示；
  * 同时可把 VM 内的 Chromium 以 CDP 暴露给宿主 Playwright（安全浏览器沙盒）。
  *
  * 设计取舍：
- *   - 不需要在 Guest 装桌面环境（GNOME/XFCE），只起 Xvfb + 轻量 WM（openbox）+ 可选 Chromium，
- *     内存占用小、启动快；需要完整桌面时用户可在 VM 内自行 apt 安装
+ *   - 桌面由独立 OS 仓库构建进系统镜像；App 只连接、控制与同步外观。
+ *   - 旧镜像保留 X11 兼容路径。
  *   - VNC 只监听 guest loopback（-localhost），宿主经 SSH 端口转发访问，不暴露到网络
  *   - 所有长驻进程用 `nohup setsid ... &` 启动，SSH 通道关闭不影响
  *   - base 变体也能用：缺包时按需 apt 安装（约 200MB，需要 guest 能出网）
@@ -40,8 +40,10 @@ class VmGraphics {
     this.mode = null;            // 'wayland' | 'x11'（首次 start 时探测决定）
     this.runtimeDir = '/tmp/cibyp-runtime-0';
     this.waylandDisplay = '';    // 会话 socket 名（wayland-0/1…）
+    this.guestVncPort = VNC_PORT;
     this._ydotoold = false;
     this._log = [];
+    this._ownedProcesses = [];
     // noVNC 只能连 WebSocket：裸 VNC 端口必须经本机 WS 桥（带 token）
     this._vncWs = new VncWsBridge({ log: (m) => this._logLine(m) });
   }
@@ -81,10 +83,19 @@ class VmGraphics {
   /** 后台启动一条常驻命令 */
   async _startDetached(cmd, { logFile = '/tmp/cibyp-graphics.log' } = {}) {
     const inst = this._inst();
-    const full = `nohup setsid ${cmd} >> ${logFile} 2>&1 & echo started`;
+    const record = `import pathlib, signal, subprocess, sys
+signal.signal(signal.SIGHUP, signal.SIG_IGN)
+with open(sys.argv[2], 'ab') as log:
+    child = subprocess.Popen(['bash', '-c', sys.argv[1]], stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+    state = pathlib.Path('/proc')/str(child.pid)/'stat'
+    if state.exists(): print('CIBYP_PROCESS='+str(child.pid)+':'+state.read_text().rsplit(') ',1)[1].split()[19])
+`;
+    const full = `python3 -c ${shellQuote(record)} ${shellQuote(cmd)} ${shellQuote(logFile)}`;
     const r = await inst.exec(full, { timeoutMs: 30000 });
     this._logLine(`$ ${cmd}`);
     if (!r.ok) throw new Error(`启动失败: ${r.stderr || r.stdout || ('退出码 ' + r.code)}`);
+    const match = (r.stdout || '').match(/CIBYP_PROCESS=(\d+):(\d+)/);
+    if (match) this._ownedProcesses.push({ pid: Number(match[1]), start: match[2] });
     return r;
   }
 
@@ -153,7 +164,24 @@ class VmGraphics {
   /** 解析无头 Wayland 会话的 socket 名（sway 会创建 wayland-0/1…） */
   async _detectWaylandDisplay() {
     const inst = this._inst();
-    const r = await inst.exec(`ls -t ${shellQuote(this.runtimeDir)}/wayland-* 2>/dev/null | head -1`, { timeoutMs: 10000 });
+    if (this.desktopRoot) {
+      const inspect = `import json, os, pathlib, sys
+runtime = pathlib.Path(sys.argv[1])
+try:
+    pid = int((runtime/'campus-session.pid').read_text())
+    os.kill(pid, 0)
+    command = (pathlib.Path('/proc')/str(pid)/'cmdline').read_bytes().split(b'\\0')
+    state = json.loads((runtime/'campus-environment.json').read_text())
+    display = state['WAYLAND_DISPLAY']
+    if (sys.argv[2]+'/session/campus-session.py').encode() in command and (runtime/display).is_socket(): print(display)
+except (OSError, ValueError, KeyError): pass
+`;
+      const result = await inst.exec(`python3 -c ${shellQuote(inspect)} ${shellQuote(this.runtimeDir)} ${shellQuote(this.desktopRoot)}`, { timeoutMs: 10000 });
+      const display = (result.stdout || '').trim();
+      this.waylandDisplay = /^wayland-\d+$/.test(display) ? display : '';
+      return this.waylandDisplay;
+    }
+    const r = await inst.exec(`find ${shellQuote(this.runtimeDir)} -maxdepth 1 -type s -name 'wayland-*' -print | head -1`, { timeoutMs: 10000 });
     const p = (r.stdout || '').trim();
     if (p) this.waylandDisplay = p.split('/').pop();
     return this.waylandDisplay;
@@ -187,25 +215,12 @@ class VmGraphics {
     const vmFs = new VmFs({ vmService: this.vmService });
     const buf = await vmFs.readBuffer(vmTmp);
     const size = this.screenSize();
-    let target = null;
-    if (workspacePath) {
-      const t = vmFs.resolveVmPath(workspacePath);
-      if (t.ok) {
-        const hostDir = vmFs.toHost(t.vm) || workspacePath;
-        try { fs.mkdirSync(hostDir, { recursive: true }); } catch { /* ignore */ }
-        target = { hostFile: path.join(hostDir, name), vmFile: `${t.vm.replace(/\/+$/, '')}/${name}` };
-      }
-    }
-    if (target) {
-      fs.writeFileSync(target.hostFile, buf);
-      await vmFs.pushFromHost(target.hostFile, target.vmFile).catch(() => {});
-      return { path: target.hostFile, vmPath: target.vmFile, width: size.width, height: size.height, tool };
-    }
-    const vmPath = `${vmFs.mountRoot()}/_uploads/${name}`;
+    const target = workspacePath ? vmFs.resolveVmPath(workspacePath) : {ok:true,vm:vmFs.mountRoot()+'/_uploads'};
+    if (!target.ok) throw new Error(target.error);
+    const vmPath = `${target.vm.replace(/\/+$/, '')}/${path.posix.basename(name)}`;
     await vmFs.writeBuffer(vmPath, buf);
-    const tmp = path.join(os.tmpdir(), name);
-    try { fs.writeFileSync(tmp, buf); } catch { /* ignore */ }
-    return { path: tmp, vmPath, width: size.width, height: size.height, tool };
+    await inst.exec(`rm -f -- ${shellQuote(vmTmp)}`);
+    return { path: vmPath, vmPath, width: size.width, height: size.height, tool };
   }
 
   /** 确保 ydotoold 运行（鼠标注入需要 uinput；socket 0666 便于普通用户使用） */
@@ -427,7 +442,13 @@ class VmGraphics {
   }
 
   /** 启动图形会话（Wayland: sway + 自研桌面 + wayvnc；X11: Xvfb + x11vnc）——幂等 */
-  async start({ onProgress } = {}) {
+  start(options = {}) {
+    if (this._startingPromise) return this._startingPromise;
+    this._startingPromise = this._start(options).finally(() => { this._startingPromise = null; });
+    return this._startingPromise;
+  }
+
+  async _start({ onProgress } = {}) {
     const inst = this._inst();
     // 已在跑则直接复用（并确保端口转发仍在）
     if (this.state.vnc) {
@@ -446,7 +467,7 @@ class VmGraphics {
     try { await this._startDetached(`env DISPLAY=${this.display} openbox`); } catch (e) { this._logLine('openbox 启动失败（不影响）: ' + e.message); }
     // 3) x11vnc（仅监听 guest loopback，宿主经 SSH 转发访问）
     if (onProgress) onProgress({ phase: 'vnc' });
-    await this._startDetached(`x11vnc -display ${this.display} -forever -shared -nopw -localhost -rfbport ${VNC_PORT} -quiet -bg -o /tmp/cibyp-x11vnc.log`);
+    await this._startDetached(`x11vnc -display ${this.display} -forever -shared -nopw -localhost -rfbport ${VNC_PORT} -quiet -o /tmp/cibyp-x11vnc.log`);
     this.state.vnc = true;
     // 等 VNC 端口就绪
     const deadline = Date.now() + 15000;
@@ -466,6 +487,18 @@ class VmGraphics {
   async _startWayland({ onProgress } = {}) {
     const inst = this._inst();
     await this._resolveRuntimeDir();
+    const campus = await inst.exec('test -f /usr/local/lib/cibyp-desktop/session/campus-session.py && echo yes || true', { timeoutMs: 10000 });
+    this.desktopRoot = (campus.stdout || '').trim() === 'yes' ? '/usr/local/lib/cibyp-desktop' : null;
+    if (this.desktopRoot) {
+      this.runtimeDir += '/cibyp-campus';
+      const runtime = await inst.exec(`mkdir -p -- ${shellQuote(this.runtimeDir)} && chmod 0700 ${shellQuote(this.runtimeDir)}`, { timeoutMs: 10000 });
+      if (!runtime.ok) throw new Error('无法准备 Campus 桌面运行目录');
+      const allocate = "import socket; s=socket.socket(); s.bind(('127.0.0.1', 0)); print(s.getsockname()[1]); s.close()";
+      const port = await inst.exec(`python3 -c ${shellQuote(allocate)}`, { timeoutMs: 10000 });
+      this.guestVncPort = Number((port.stdout || '').trim());
+      if (!port.ok || !Number.isInteger(this.guestVncPort) || this.guestVncPort < 1024 || this.guestVncPort > 65535) throw new Error('无法分配桌面连接端口');
+    }
+    await this.vmService.syncAppearance();
     const geom = String(this.geometry).split('x').slice(0, 2).join('x');
     // 输入支持取决于 seatd：SSH 会话没有 logind session，libseat 必须走 seatd
     // （没有 seatd 时不能挂 libinput 后端，否则 sway 起不来）
@@ -483,11 +516,13 @@ class VmGraphics {
       `CIBYP_GEOMETRY=${shellQuote(geom)}`,
       'XDG_SESSION_TYPE=wayland',
       'XDG_CURRENT_DESKTOP=CIBYP',
+      ...(this.desktopRoot ? [`CIBYP_DESKTOP_ROOT=${shellQuote(this.desktopRoot)}`, `PATH=${shellQuote(this.desktopRoot + '/bin')}:"$PATH"`] : []),
     ].join(' ');
     if (onProgress) onProgress({ phase: 'wayland' });
     const hasSession = await this._has('cibyp-session');
-    if (hasSession) {
-      await this._startDetached(`env ${env} cibyp-session`, { logFile: '/tmp/cibyp-session.log' });
+    if (this.desktopRoot || hasSession) {
+      const session = this.desktopRoot ? shellQuote(this.desktopRoot + '/session/cibyp-session') : 'cibyp-session';
+      await this._startDetached(`env ${env} ${session}`, { logFile: '/tmp/cibyp-session.log' });
       this._logLine('已启动自研桌面会话（cibyp-session：sway + cibyp-shell + cibyp-desktop）');
     } else {
       await this._startDetached(`env ${env} sway --config /etc/cibyp/sway/config`, { logFile: '/tmp/cibyp-sway.log' });
@@ -506,12 +541,12 @@ class VmGraphics {
     this._logLine(`Wayland 显示就绪: ${disp}`);
     // VNC（wayvnc，仅监听 loopback，宿主经 SSH 转发）
     if (onProgress) onProgress({ phase: 'vnc' });
-    await this._startDetached(`env ${this._wlEnv()} wayvnc 127.0.0.1 ${VNC_PORT}`, { logFile: '/tmp/cibyp-wayvnc.log' });
+    await this._startDetached(`env ${this._wlEnv()} wayvnc 127.0.0.1 ${this.guestVncPort}`, { logFile: '/tmp/cibyp-wayvnc.log' });
     this.state.vnc = true;
     const deadline = Date.now() + 20000;
     let ready = false;
     while (Date.now() < deadline) {
-      const r = await inst.exec(`(exec 3<>/dev/tcp/127.0.0.1/${VNC_PORT}) 2>/dev/null && echo up || echo down`, { timeoutMs: 10000 });
+      const r = await inst.exec(`(exec 3<>/dev/tcp/127.0.0.1/${this.guestVncPort}) 2>/dev/null && echo up || echo down`, { timeoutMs: 10000 });
       if (r.stdout.includes('up')) { ready = true; break; }
       await new Promise((r2) => setTimeout(r2, 700));
     }
@@ -523,7 +558,7 @@ class VmGraphics {
 
   async _ensureForward() {
     if (this.state.vncForward && this.state.vncHostPort) return;
-    const f = await this.vmService.forwardPort(VNC_PORT);
+    const f = await this.vmService.forwardPort(this.guestVncPort);
     this.state.vncForward = f;
     this.state.vncHostPort = f.hostPort;
     // noVNC 只能连 WebSocket：为裸 VNC 端口起本机 WS 桥（带 token，仅 loopback）
@@ -561,8 +596,9 @@ class VmGraphics {
       `--remote-debugging-port=${CDP_PORT}`,
       '--user-data-dir=/tmp/cibyp-chrome',
       '--window-size=1280,800',
+      ...extraArgs,
       url,
-    ].join(' ');
+    ].map(shellQuote).join(' ');
     await this._startDetached(this.mode === 'wayland' ? `env ${this._wlEnv()} ${bin} ${args}` : `env DISPLAY=${this.display} ${bin} ${args}`);
     this.state.chromium = true;
     // 等 CDP 就绪并映射到宿主
@@ -590,16 +626,39 @@ class VmGraphics {
     this.state = { x: false, vnc: false, chromium: false, vncForward: null, cdpForward: null, vncHostPort: null, cdpHostPort: null, vncWsPort: null };
     try { this._vncWs && this._vncWs.stop(); } catch { /* ignore */ }
     if (!inst || inst.state !== 'ready') return { ok: true };
-    // 注意：pkill -f 的模式会匹配到本命令自身的 cmdline（实测：第一个模式就自伤，
-    // 自己的 shell 被杀 → 后续清理全部没执行，wayvnc 残留）。全部改用精确进程名
-    //（-x）或锚定结尾（pkill -f "xxx$"），并在结束前轮询确认。
-    const killCmd = 'pkill -x x11vnc ; pkill -x Xvfb ; pkill -x chromium ; pkill -x chrome ; pkill -x wayvnc ; pkill -x sway ; pkill -x swaybg ; pkill -f "cibyp-session$" ; pkill -f "cibyp-shell$" ; pkill -f "cibyp-desktop$" ; sudo pkill -x ydotoold ; true';
-    try { await inst.exec(killCmd, { timeoutMs: 30000 }); } catch { /* ignore */ }
-    for (let i = 0; i < 20; i++) {
-      const r = await inst.exec('pgrep -x wayvnc >/dev/null && echo up || echo down', { timeoutMs: 10000 }).catch(() => null);
-      if (!r || !/\bup\b/.test(r.stdout)) break;
-      await new Promise((res) => setTimeout(res, 250));
-    }
+    const owned = this._ownedProcesses.splice(0);
+    const data = Buffer.from(JSON.stringify({ owned, root: this.desktopRoot || '', runtime: this.runtimeDir })).toString('base64');
+    // Start ticks protect against PID reuse. A recovered versioned supervisor
+    // is identified by its runtime marker and actual command, then owns cleanup.
+    const cleanup = `import base64, json, os, pathlib, signal, sys, time
+state = json.loads(base64.b64decode(sys.argv[1]))
+owned = state['owned']
+def ticks(pid):
+    return (pathlib.Path('/proc')/str(pid)/'stat').read_text().rsplit(') ',1)[1].split()[19]
+if state['root']:
+    try:
+        pid = int((pathlib.Path(state['runtime'])/'campus-session.pid').read_text())
+        command = (pathlib.Path('/proc')/str(pid)/'cmdline').read_bytes().split(b'\\0')
+        if (state['root']+'/session/campus-session.py').encode() in command:
+            owned.append({'pid': pid, 'start': ticks(pid)})
+    except (OSError, ValueError, IndexError): pass
+for item in owned:
+    try:
+        pid = item['pid']
+        if pid > 1 and ticks(pid) == item['start'] and os.getpgid(pid) == pid:
+            os.killpg(pid, signal.SIGTERM)
+    except (OSError, ValueError, IndexError): pass
+deadline = time.monotonic()+15
+while time.monotonic() < deadline:
+    alive = []
+    for item in owned:
+        try:
+            if ticks(item['pid']) == item['start']: alive.append(item)
+        except (OSError, ValueError, IndexError): pass
+    if not alive: break
+    time.sleep(.2)
+`;
+    try { await inst.exec(`python3 -c ${shellQuote(cleanup)} ${shellQuote(data)}`, { timeoutMs: 20000 }); } catch (error) { this._logLine('图形会话清理: ' + error.message); }
     this._logLine('图形环境已停止');
     return { ok: true };
   }

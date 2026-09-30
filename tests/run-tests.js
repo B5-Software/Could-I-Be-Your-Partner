@@ -8,6 +8,20 @@
 // Tests for core components
 const assert = require('assert');
 
+// Source assertions inspect feature modules after the main-process split.
+function readRendererSource() {
+  const fs = require('node:fs'), path = require('node:path');
+  const manifest = require('../src/renderer/legacy-parts.json');
+  return manifest.map(file => fs.readFileSync(path.join(__dirname, '../src/renderer/js/app-parts', file), 'utf8')).join('\n');
+}
+function readMainSource() {
+  const fs = require('node:fs'), path = require('node:path');
+  const root = path.join(__dirname, '../src/main');
+  const dirs = ['ipc', 'services', 'settings'];
+  return fs.readFileSync(path.join(root, 'main.js'), 'utf8') + '\n' + dirs.flatMap(dir =>
+    fs.readdirSync(path.join(root, dir)).filter(file => file.endsWith('.js')).sort().map(file => fs.readFileSync(path.join(root, dir, file), 'utf8'))).join('\n');
+}
+
 let passed = 0;
 let failed = 0;
 
@@ -407,7 +421,7 @@ test('privacy filter evasion does not corrupt normal text', () => {
 
 test('evasion category defaults wired in main.js and settings UI', () => {
   const path = require('path');
-  const mainContent = fs.readFileSync(path.join(__dirname, '../src/main/main.js'), 'utf-8');
+  const mainContent = readMainSource();
   assert.ok(mainContent.includes('evasion: false'), 'main.js default categories should have evasion off');
   const htmlContent = fs.readFileSync(path.join(__dirname, '../src/renderer/pages/index.html'), 'utf-8');
   assert.ok(htmlContent.includes('data-cat="evasion"'), 'settings UI should have evasion checkbox');
@@ -518,7 +532,7 @@ test('JS runner should use strict mode', () => {
 // ---- Test Main Process Structure ----
 console.log('\nMain Process:');
 
-const mainContent = fs.readFileSync(require('path').join(__dirname, '../src/main/main.js'), 'utf-8');
+const mainContent = readMainSource();
 const llmRetry = require('../src/main/llm-retry');
 const sessionPreloadContent = fs.readFileSync(require('path').join(__dirname, '../src/preload/preload.js'), 'utf-8');
 const sessionIndexContent = fs.readFileSync(require('path').join(__dirname, '../src/renderer/pages/index.html'), 'utf-8');
@@ -691,7 +705,7 @@ test('preload should expose all required APIs', () => {
 // ---- Test GeoGebra Integration ----
 console.log('\nGeoGebra Integration:');
 
-const appContent = fs.readFileSync(require('path').join(__dirname, '../src/renderer/js/app.js'), 'utf-8');
+const appContent = readRendererSource();
 
 test('initGeoGebra should be async (return Promise)', () => {
   // 必须返回 Promise（或 ggbInitPromise）—— 修复同步返回导致后续工具调用的 race condition
@@ -901,7 +915,7 @@ test('LLM 模型自动获取列表：模型过多时也应全部可浏览（可�
 test('模型上下文长度：用户填写后不得被自动拉取覆盖（仅未填时补全）', () => {
   const fsLocal = require('fs');
   const pathLocal = require('path');
-  const mainContent = fsLocal.readFileSync(pathLocal.join(__dirname, '../src/main/main.js'), 'utf-8');
+  const mainContent = readMainSource();
   const settingsJs = readAppParts('06b-settings');
   // 主进程投影：显式用户值优先，并同步回池条目
   assert.ok(mainContent.includes('if (llm.maxContextLengthExplicit && Number(llm.maxContextLength) > 0)'), '主进程应识别用户显式填写的上下文长度');
@@ -1600,6 +1614,10 @@ try {
 
 // 异步测试辅助：返回 Promise，resolve(true) 表示通过
 async function runLiveLLMTests() {
+  if (!process.argv.includes('--live')) {
+    console.log('  SKIP: 在线模型测试默认关闭；使用 npm run test:live 显式启用');
+    return;
+  }
   if (!liveLLMConfig) {
     console.log('  SKIP: 未找到 AI 配置 (settings.json)，跳过真实 LLM 测试');
     return;
@@ -2757,7 +2775,7 @@ test('applyEnv: manual 模式注入子进程代理环境变量 / none 清除', (
 
 // ---- 更新检查 / 通知 / 模态框 UI 接线 ----
 console.log('\n更新检查 / 通知 / 模态框 UI 接线:');
-const readSrc = (rel) => fs.readFileSync(path_.join(__dirname, '../src/' + rel), 'utf-8');
+const readSrc = (rel) => rel === 'main/main.js' ? readMainSource() : fs.readFileSync(path_.join(__dirname, '../src/' + rel), 'utf-8');
 const mainJsContent = readSrc('main/main.js');
 const preloadContent2 = readSrc('preload/preload.js');
 const indexHtmlContent = readSrc('renderer/pages/index.html');
@@ -3086,7 +3104,7 @@ test('LLM 重试事件按 sessionKey 过滤，避免串到其他会话', () => {
   const fsLocal = require('fs');
   const pathLocal = require('path');
   const agentContent = fsLocal.readFileSync(pathLocal.join(__dirname, '../src/renderer/js/agent.js'), 'utf-8');
-  const mainContent = fsLocal.readFileSync(pathLocal.join(__dirname, '../src/main/main.js'), 'utf-8');
+  const mainContent = readMainSource();
   const codeContent = readAppParts('08-code');
   assert.ok(agentContent.includes('info.sessionKey && info.sessionKey !== this.sessionKey'), 'agent.js 应按 sessionKey 过滤重试事件');
   assert.ok(codeContent.includes('info.sessionKey && info.sessionKey !== ag.sessionKey'), 'code-mode 应按 sessionKey 过滤重试事件');
@@ -3122,11 +3140,11 @@ test('Office 硬解工具改名并新增正规 Word/PPT 工具', () => {
 test('app.js 以 ESM 形式生成并作为 module 加载', () => {
   const fsLocal = require('fs');
   const pathLocal = require('path');
-  const appContent = fsLocal.readFileSync(pathLocal.join(__dirname, '../src/renderer/js/app.js'), 'utf-8');
+  const appContent = fsLocal.readFileSync(pathLocal.join(__dirname, '../src/renderer/js/app.js'), 'utf8');
   const indexHtml = fsLocal.readFileSync(pathLocal.join(__dirname, '../src/renderer/pages/index.html'), 'utf-8');
   assert.ok(appContent.trimStart().startsWith('/*'), 'app.js 应保留生成头注释');
-  assert.ok(appContent.includes('export default (async function appEntry()'), 'app.js 应为 ESM（默认导出初始化 Promise）');
-  assert.ok(appContent.trimEnd().endsWith('})();'), 'app.js 应闭合 appEntry');
+  assert.ok(/export\s*\{[\s\S]*?as default/.test(appContent), 'app.js 应为 ESM（默认导出初始化 Promise）');
+  assert.ok(appContent.includes('appReady.catch(reportBootstrapFailure)'), 'app.js 应处理初始化失败');
   assert.ok(indexHtml.includes('<script type="module" src="../js/app.js"></script>'), 'index.html 应以 module 方式加载 app.js');
 });
 
@@ -4069,28 +4087,11 @@ function runVmSandboxTests() {
     assert.strictEqual(out.urls[0], 'file:///workspace/_uploads/a.png');
   });
 
-  testAsync('stageDeepValue：宿主映射路径按输入/输出分类，未映射宿主资源原样保留', async () => {
-    const { stageDeepValue } = require('../src/main/vm/vm-tools.js');
-    const pulled = [];
-    const outputs = [];
-    const fakeFs = {
-      isVmPath: (p) => String(p).startsWith('/'),
-      mapHostToVm: (p) => (String(p).startsWith('C:\\work\\') ? '/workspace/' + String(p).slice('C:\\work\\'.length).replace(/\\/g, '/') : null),
-      mountRoot: () => '/workspace',
-      exists: async (p) => p === '/workspace/in.mp4',
-      pullToTemp: async (p) => { pulled.push(p); return { dir: _os.tmpdir(), file: 'TMPFILE', vmPath: p }; },
-    };
-    const staging = { pulls: new Map(), tmpDirs: [], mappings: [], outputs: [] };
-    const inRes = await stageDeepValue('C:\\work\\in.mp4', fakeFs, staging);
-    assert.strictEqual(inRes, 'TMPFILE');
-    assert.deepStrictEqual(pulled, ['/workspace/in.mp4']);
-    const outRes = await stageDeepValue('C:\\work\\out.mp4', fakeFs, staging);
-    assert.notStrictEqual(outRes, 'C:\\work\\out.mp4');
-    assert.strictEqual(staging.outputs[0].vmPath, '/workspace/out.mp4');
-    const asset = await stageDeepValue('C:\\app-assets\\font.ttf', fakeFs, staging);
-    assert.strictEqual(asset, 'C:\\app-assets\\font.ttf', '未映射宿主资源应原样保留');
-    const vmIn = await stageDeepValue('/workspace/in.mp4', fakeFs, staging);
-    assert.strictEqual(vmIn, 'TMPFILE', 'VM 路径存在 → 拉取为输入');
+  test('VM 工具文件接口：未映射宿主资源禁止原样传入', () => {
+    const { createToolFiles } = require('../src/main/vm/tool-files');
+    const io = createToolFiles({ fs, getVmService: () => ({ runtime: { location: 'vm', vm: { workspaceMount: '/workspace' } }, workspaceRoot: null }) });
+    assert.throws(() => io.resolve('C:/app-assets/font.ttf'), /映射范围/);
+    assert.strictEqual(io.resolve('/workspace/a.txt'), '/workspace/a.txt');
   });
 
 
@@ -4130,9 +4131,9 @@ function runVmSandboxTests() {
     assert.ok((b.files || []).some((f) => f.includes('assets/voice-models')), '打包应排除语音模型（运行期按需下载）');
     assert.ok((b.files || []).some((f) => f.includes('assets/aria2')), '打包应排除构建期 aria2 多平台二进制');
     const packScript = fs.readFileSync(_path.join(__dirname, '..', 'scripts', 'package.js'), 'utf8');
-    for (const rel of ['vm-os', 'tests', 'docs', '.git', 'assets/voice-models']) {
-      assert.ok(packScript.includes("'" + rel + "'"), '打包入口应把 ' + rel + ' 临时移出产物');
-    }
+    assert.ok(!packScript.includes('hideForPack'), '打包不应移动源目录');
+    assert.ok(b.files.includes('src/**/*') && b.files.includes('assets/**/*'), '打包应显式收集运行资源');
+    assert.ok(!b.files.includes('**/*'), '不应把整个仓库打入产物');
     const pkgForHooks = JSON.parse(fs.readFileSync(_path.join(__dirname, '..', 'package.json'), 'utf8'));
     assert.ok(pkgForHooks.build && pkgForHooks.build.beforePack, '应保留 beforePack 钩子（build-info.json）');
     for (const f of [b.mac.entitlements, b.mac.entitlementsInherit]) {
@@ -4779,9 +4780,9 @@ async function runDsPluginTests() {
 
 test('DS 服务翻译层 IPC 接线（preload / main / renderer / 授权模态框）', () => {
     const preloadContent = fsLocal.readFileSync(pathLocal.join(__dirname, '../src/preload/preload.js'), 'utf-8');
-    const mainContent = fsLocal.readFileSync(pathLocal.join(__dirname, '../src/main/main.js'), 'utf-8');
+    const mainContent = readMainSource();
     const htmlContent = fsLocal.readFileSync(pathLocal.join(__dirname, '../src/renderer/pages/index.html'), 'utf-8');
-    const appContent = fsLocal.readFileSync(pathLocal.join(__dirname, '../src/renderer/js/app.js'), 'utf-8');
+    const appContent = readRendererSource();
     const agentContent = fsLocal.readFileSync(pathLocal.join(__dirname, '../src/renderer/js/agent.js'), 'utf-8');
     for (const api of ['dsAgentSync', 'dsApprovalRespond', 'onDsAgentMessage', 'onDsAgentCreateRequest', 'onDsAgentResumeRequest', 'onDsApprovalRequest']) {
       assert.ok(preloadContent.includes(api), `preload 应暴露 ${api}`);
@@ -4803,7 +4804,7 @@ test('DS 服务翻译层 IPC 接线（preload / main / renderer / 授权模态�
 console.log('\nEnvironment Detection:');
 
 test('main.js 注册 env:detect 并检测 Python/Node/npm/Bun/Git', () => {
-  const mainContent = fs.readFileSync(require('path').join(__dirname, '../src/main/main.js'), 'utf-8');
+  const mainContent = readMainSource();
   assert.ok(mainContent.includes("ipcMain.handle('env:detect'"), '应注册 env:detect IPC');
   assert.ok(mainContent.includes("['py', 'python', 'python3']"), 'Python 检测应覆盖 Windows py 启动器');
   for (const name of ['node', 'npm', 'bun', 'git']) {
@@ -4826,7 +4827,7 @@ test('index.html 含环境检测设置页（tab + 面板 + 刷新按钮）', () 
 });
 
 test('app.js 环境检测交互（渲染 / 一键安装 / 新会话发送）', () => {
-  const appContent = fs.readFileSync(require('path').join(__dirname, '../src/renderer/js/app.js'), 'utf-8');
+  const appContent = readRendererSource();
   assert.ok(appContent.includes('askAgentToInstall'), '应有让 Agent 安装逻辑');
   assert.ok(appContent.includes('askAgentInstallMissing'), '应有一键安装全部缺失项');
   assert.ok(appContent.includes('openChatSessionAndSend'), '应创建新 Chat 会话并发送');
@@ -4896,7 +4897,7 @@ test('字体设置 i18n（zh/en/de）与 app.js 集成', () => {
   const i18nJs = fs.readFileSync(require('path').join(__dirname, '../src/renderer/js/i18n.js'), 'utf-8');
   const enJs = fs.readFileSync(require('path').join(__dirname, '../src/renderer/js/i18n/en.js'), 'utf-8');
   const deJs = fs.readFileSync(require('path').join(__dirname, '../src/renderer/js/i18n/de.js'), 'utf-8');
-  const appContent = fs.readFileSync(require('path').join(__dirname, '../src/renderer/js/app.js'), 'utf-8');
+  const appContent = readRendererSource();
   assert.ok(i18nJs.includes('data-tab="fonts"]'), 'i18n.js 应映射 fonts tab');
   assert.ok(enJs.includes('fonts:') && enJs.includes('zhLabel'), 'en.js 应有字体翻译');
   assert.ok(deJs.includes('fonts:') && deJs.includes('zhLabel'), 'de.js 应有字体翻译');
@@ -5756,8 +5757,8 @@ test('自动化 UI/IPC 接线（nav/页面/Monaco 编辑器/分发回执）', ()
   const editorCss = fs.readFileSync(require('path').join(__dirname, '../src/renderer/css/automation-editor.css'), 'utf-8');
   const preloadContent = fs.readFileSync(require('path').join(__dirname, '../src/preload/preload.js'), 'utf-8');
   const editorPreload = fs.readFileSync(require('path').join(__dirname, '../src/preload/automation-editor-preload.js'), 'utf-8');
-  const mainContent = fs.readFileSync(require('path').join(__dirname, '../src/main/main.js'), 'utf-8');
-  const appContent = fs.readFileSync(require('path').join(__dirname, '../src/renderer/js/app.js'), 'utf-8');
+  const mainContent = readMainSource();
+  const appContent = readRendererSource();
   assert.ok(htmlContent.includes('id="nav-automation"'), '侧栏应有触发入口');
   assert.ok(htmlContent.includes('id="page-automation"'), '应有触发页');
   assert.ok(!htmlContent.includes('id="automation-editor-modal"'), '主界面不应再有编辑器模态框');
@@ -5792,7 +5793,7 @@ test('Splash：顶部 git 哈希 + 底部版本号（build-info 接线）', () =
   const fsL = require('fs');
   const pathL = require('path');
   const splashHtml = fsL.readFileSync(pathL.join(__dirname, '../src/renderer/pages/splash.html'), 'utf-8');
-  const mainContent = fsL.readFileSync(pathL.join(__dirname, '../src/main/main.js'), 'utf-8');
+  const mainContent = readMainSource();
   const pkg = JSON.parse(fsL.readFileSync(pathL.join(__dirname, '../package.json'), 'utf-8'));
   assert.ok(splashHtml.includes('id="topMeta"'), 'splash 顶部应有 git 哈希元素');
   assert.ok(splashHtml.includes('.top-meta'), 'splash 应有顶部元信息样式');
@@ -5812,7 +5813,7 @@ test('界面动效：主标签页切换动画可选 + 打包版本注入 git 哈
   const fsL = require('fs');
   const pathL = require('path');
   const htmlContent = fsL.readFileSync(pathL.join(__dirname, '../src/renderer/pages/index.html'), 'utf-8');
-  const mainContent = fsL.readFileSync(pathL.join(__dirname, '../src/main/main.js'), 'utf-8');
+  const mainContent = readMainSource();
   const cssContent = fsL.readFileSync(pathL.join(__dirname, '../src/renderer/css/main.css'), 'utf-8');
   const themeJs = fsL.readFileSync(pathL.join(__dirname, '../src/renderer/js/theme.js'), 'utf-8');
   const settingsJs = readAppParts('06b-settings');
@@ -5846,7 +5847,7 @@ test('界面动效：主标签页切换动画可选 + 打包版本注入 git 哈
 
 test('插件启动全量重审：清除旧版本遗留 compatIssues', () => {
   const pmContent = fs.readFileSync(require('path').join(__dirname, '../src/main/ds-compat/plugin-manager.js'), 'utf-8');
-  const mainContent = fs.readFileSync(require('path').join(__dirname, '../src/main/main.js'), 'utf-8');
+  const mainContent = readMainSource();
   assert.ok(pmContent.includes('async refreshAll()'), '应有 refreshAll 全量重审');
   assert.ok(pmContent.includes('unloadPlugin'), '禁用插件应探测后立即卸载');
   assert.ok(mainContent.includes('pluginManager.refreshAll()'), '启动时应全量重审插件兼容性');
@@ -5859,7 +5860,7 @@ test('插件启动全量重审：清除旧版本遗留 compatIssues', () => {
 test('Agent 自动化工具集：定义/路由/指导按需获取（不注入系统提示）', () => {
   const toolsDef = fs.readFileSync(require('path').join(__dirname, '../src/renderer/js/tools-def.js'), 'utf-8');
   const agentJs = fs.readFileSync(require('path').join(__dirname, '../src/renderer/js/agent.js'), 'utf-8');
-  const mainContent = fs.readFileSync(require('path').join(__dirname, '../src/main/main.js'), 'utf-8');
+  const mainContent = readMainSource();
   const preloadContent = fs.readFileSync(require('path').join(__dirname, '../src/preload/preload.js'), 'utf-8');
   const guideJs = fs.readFileSync(require('path').join(__dirname, '../src/main/automation/guide.js'), 'utf-8');
   for (const name of ['automationList', 'automationGetGuide', 'automationCreate', 'automationToggle', 'automationRun', 'automationTest', 'automationDelete']) {

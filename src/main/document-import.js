@@ -9,6 +9,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { extractOfficeText } = require('./services/office-text');
 
 // 知识库导入大小上限（字节）
 const MAX_IMPORT_SIZE = 50 * 1024 * 1024;
@@ -127,12 +128,21 @@ async function extractXlsxText(filePath) {
  * PDF → 文本。使用 pdf-parse v2（基于 pdf.js 的成熟解析，支持中文）。
  */
 async function extractPdfText(filePath) {
+  if (process.env.CIBYP_VM_TOOL_WORKER === '1') {
+    return require('node:child_process').execFileSync('pdftotext', ['-layout', filePath, '-'], {
+      encoding: 'utf8', timeout: 120000, maxBuffer: 32 * 1024 * 1024,
+    });
+  }
   const { PDFParse } = require('pdf-parse');
   const data = await fs.promises.readFile(filePath);
   const parser = new PDFParse({ data });
-  const result = await parser.getText();
-  const text = result && typeof result === 'object' ? (result.text || '') : String(result || '');
-  return text || '(该 PDF 未提取到可选择的文本，扫描件请先 OCR)';
+  try {
+    const result = await parser.getText();
+    const text = result && typeof result === 'object' ? (result.text || '') : String(result || '');
+    return text || '(该 PDF 未提取到可选择的文本，扫描件请先 OCR)';
+  } finally {
+    await parser.destroy();
+  }
 }
 
 /**
@@ -140,19 +150,7 @@ async function extractPdfText(filePath) {
  * 产出结构化 AST），覆盖 XML 命名空间、顺序、表格等细节，不用手写正则。
  */
 async function extractViaOfficeParser(filePath) {
-  const officeParser = require('officeparser');
-  const ast = await officeParser.parseOffice(filePath, {
-    ignoreNotes: false,
-    putNotesAtLast: false,
-    newlineDelimiter: '\n',
-    outputErrorToConsole: false,
-    extractAttachments: false,
-    ocr: false
-  });
-  if (ast && typeof ast.toText === 'function') return ast.toText();
-  if (typeof ast === 'string') return ast;
-  if (ast && typeof ast.text === 'string') return ast.text;
-  return '';
+  return extractOfficeText(filePath);
 }
 
 /**

@@ -21,6 +21,12 @@ module.exports = function registerPlaywrightIpc({ getVmService, ipcMain, getSett
 let _pwBrowser = null; // shared browser instance (chromium.launch 或 launchPersistentContext)
 let _pwDataMode = 'isolated'; // 当前浏览器实例的数据模式（isolated/persistent/profile-copy）
 const _pwWorkspaces = new Map(); // workspacePath -> { context, page }
+const files = require('./vm/tool-files').createToolFiles({ fs, getVmService });
+let _pwLocation = null;
+const requestedLocation = () => files.active() ? 'vm' : 'host';
+async function ensureLocation() {
+  if (_pwBrowser && _pwLocation !== requestedLocation()) await _closePwBrowserInternal();
+}
 
 // Get Playwright settings (with defaults)
 function _getPwSettings() {
@@ -182,6 +188,8 @@ function _getPwAcceptLanguage(lang) {
 }
 
 async function _launchPwBrowser(overrideSettings = null) {
+  await ensureLocation();
+  _pwLocation = requestedLocation();
   // 检查现有实例是否仍然连接；若已断开（用户关闭/崩溃），置空后重新启动
   // 注意：持久化模式下 _pwBrowser 是 BrowserContext（无 isConnected 方法），
   // 其死亡由 disconnected 监听器清理，这里默认存活。
@@ -250,7 +258,7 @@ async function _launchPwBrowser(overrideSettings = null) {
   if (typeof getVmService === 'function') {
     let vmSvc = null;
     try { vmSvc = _getVmService ? _getVmService() : null; } catch { vmSvc = null; }
-    const inVm = vmSvc && (vmSvc.runtime || {}).location === 'vm' && !vmSvc.emergencyHost;
+    const inVm = files.active();
     if (inVm) {
       try {
         const cr = await vmSvc.graphicsChromium({ url: 'about:blank' });
@@ -540,6 +548,7 @@ async function _closePwBrowserInternal() {
 }
 
 async function ensureBrowser(workspacePath) {
+  await ensureLocation();
   const key = workspacePath || '__default__';
   // 每次调用 Playwright 工具都重新显示横幅（Agent 第二轮操作浏览器时横幅已被隐藏）
   _showPwBanner();
@@ -607,6 +616,7 @@ async function ensureBrowser(workspacePath) {
 }
 
 function _getPage(workspacePath) {
+  if (_pwLocation !== requestedLocation()) return null;
   const key = workspacePath || '__default__';
   const ws = _pwWorkspaces.get(key);
   return ws ? ws.page : null;
@@ -637,6 +647,12 @@ ipcMain.handle('browser:screenshot', async (_, fullPage, workspacePath) => {
     if (!page) return { ok: false, error: 'no page' };
     const buf = await page.screenshot({ fullPage: !!fullPage, type: 'png' });
     const dataUrl = 'data:image/png;base64,' + buf.toString('base64');
+    if (files.active()) {
+      const directory = workspacePath ? files.resolve(workspacePath) : '/workspace/_images';
+      const filePath = files.join(directory, `browser-screenshot-${Date.now()}.png`);
+      await files.write(filePath, buf);
+      return { ok: true, dataUrl, filePath, location: 'vm' };
+    }
     let filePath = null;
     try {
       // Code 模式：检测 .cibyp-code-history 目录，保存到其 assets/ 子目录
@@ -879,6 +895,7 @@ ipcMain.handle('pw:testLaunch', async (_, testPwSettings) => {
 
 // 枚举可复制的系统浏览器 User Data 来源（含存在性校验）
 ipcMain.handle('pw:getProfileSources', async () => {
+  if (files.active()) return {ok:true, sources:[], location:'vm', message:'VM 使用虚拟机内独立浏览器资料'};
   try {
     const candidates = [
       { id: 'chrome', name: 'Google Chrome' },
@@ -947,6 +964,7 @@ function _hideCopyProgress() {
 
 // 复制系统浏览器 User Data → 独立副本目录（首次确认 + 进度窗）
 ipcMain.handle('pw:copyProfile', async (_, sourceId) => {
+  if (files.active()) return {ok:false,location:'vm',error:'VM 模式使用虚拟机内浏览器资料，不能复制宿主浏览器资料'};
   const src = _defaultUserDataDir(sourceId === 'edge' ? 'edge' : 'chrome');
   if (!fs.existsSync(src)) return { ok: false, error: `未找到 ${sourceId === 'edge' ? 'Edge' : 'Chrome'} 的用户数据目录` };
   const dst = _getCloneProfileDir();
@@ -1018,5 +1036,22 @@ ipcMain.handle('pw:hideBanner', () => {
   return { ok: true };
 });
 
-  return { _hidePwBanner, ensureBrowser, _getPwSettings, _defaultUserDataDir, dirStats, copyDirWithProgress, _getPersistentProfileDir, _getCloneProfileDir };
+  async function renderVm(options = {}) {
+    if (!files.active()) throw new Error('VM browser requested outside VM mode');
+    const browser = await _launchPwBrowser();
+    const context = await browser.newContext({ viewport: { width: Math.min(3840, Math.max(320, Number(options.width) || 1366)), height: Math.min(2160, Math.max(240, Number(options.height) || 900)) } });
+    try {
+      const page = await context.newPage();
+      await page.goto(options.url, { waitUntil: 'domcontentloaded', timeout: 60000 });
+      await page.waitForTimeout(Math.min(30000, Math.max(0, Number(options.waitMs) || 0)));
+      const meta = await page.evaluate(() => ({ title: document.title, url: globalThis.location.href, text: (document.body?.innerText || '').slice(0,150000), html: document.documentElement.outerHTML.slice(0,500000), results: Array.from(document.querySelectorAll('li.b_algo')).slice(0,15).map((node) => ({ title: node.querySelector('h2 a')?.textContent?.trim() || '', url: node.querySelector('h2 a')?.href || '', snippet: node.querySelector('p')?.textContent?.trim() || '' })) }));
+      let screenshotPath = '';
+      if (options.captureScreenshot !== false) {
+        screenshotPath = files.join(options.workspacePath ? files.resolve(options.workspacePath) : '/workspace/_images', `web-${Date.now()}.png`);
+        await files.write(screenshotPath, await page.screenshot({ type: 'png' }));
+      }
+      return { ...meta, screenshotPath, screenshotUrl: screenshotPath ? `file://${screenshotPath}` : '', location: 'vm' };
+    } finally { await context.close(); }
+  }
+  return { _hidePwBanner, ensureBrowser, renderVm, _getPwSettings, _defaultUserDataDir, dirStats, copyDirWithProgress, _getPersistentProfileDir, _getCloneProfileDir };
 };

@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>选择文件</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #eff7f3;
+        --fg: #283a40;
+        --accent: #65a99b;
+        --surface: #fff;
+        --line: #ccdcd5;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--fg);
+        font: 14px system-ui;
+        height: 100vh;
+        display: flex;
+        flex-direction: column;
+        padding: 20px;
+        gap: 14px;
+      }
+      header {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+      h1 {
+        font-size: 20px;
+        margin: 0;
+        flex: 1;
+      }
+      .label {
+        font-size: 12px;
+        opacity: 0.7;
+      }
+      button,
+      input {
+        font: inherit;
+        color: inherit;
+        border: 1px solid var(--line);
+        border-radius: 9px;
+        padding: 9px 12px;
+        background: var(--surface);
+      }
+      button {
+        cursor: pointer;
+      }
+      button:hover {
+        border-color: var(--accent);
+      }
+      nav,
+      footer {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+      }
+      input {
+        flex: 1;
+        min-width: 0;
+      }
+      #entries {
+        flex: 1;
+        min-height: 0;
+        overflow: auto;
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 6px;
+      }
+      .entry {
+        display: flex;
+        width: 100%;
+        text-align: left;
+        border: 0;
+        gap: 12px;
+        align-items: center;
+        margin: 2px 0;
+      }
+      .entry[aria-selected='true'] {
+        background: var(--accent);
+        color: #fff;
+      }
+      .icon {
+        font-size: 20px;
+      }
+      .name {
+        flex: 1;
+        overflow-wrap: anywhere;
+      }
+      .size {
+        opacity: 0.6;
+        font-size: 12px;
+      }
+      #status {
+        min-height: 18px;
+        color: #ac4747;
+      }
+      .primary {
+        background: var(--accent);
+        color: white;
+        border-color: var(--accent);
+      }
+      .spacer {
+        flex: 1;
+      }
+      #folderForm {
+        display: flex;
+        gap: 8px;
+      }
+      #folderForm[hidden] {
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1 id="title">选择文件</h1>
+      <span class="label">虚拟机文件</span>
+    </header>
+    <nav>
+      <button id="up" aria-label="上一级">↑</button
+      ><input id="directory" aria-label="当前目录" /><button id="go">前往</button
+      ><button id="newFolder">新建文件夹</button>
+    </nav>
+    <div id="folderForm" hidden>
+      <input id="folderName" aria-label="新文件夹名称" placeholder="文件夹名称" />
+      <button id="createFolder" class="primary">创建</button>
+      <button id="cancelFolder">取消</button>
+    </div>
+    <main id="entries" aria-label="文件列表"></main>
+    <div id="status" role="status"></div>
+    <footer>
+      <label for="filename">文件名</label><input id="filename" /><button id="cancel">取消</button
+      ><button id="choose" class="primary">打开</button>
+    </footer>
+    <script src="../js/vm-file-dialog.js"></script>
+  </body>
+</html>

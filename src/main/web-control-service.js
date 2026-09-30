@@ -616,6 +616,14 @@ class WebControlService {
     if (!name || !data) return { ok: false, error: '缺少文件信息' };
     const base64Data = data.replace(/^data:[^;]+;base64,/, '');
     const buf = Buffer.from(base64Data, 'base64');
+    if (typeof this.vmUploader === 'function') {
+      try {
+        const up = await this.vmUploader(buf, name);
+        if (up) return up.ok
+          ? { ok: true, path: up.vmPath, name, type, location: 'vm' }
+          : { ok: false, error: up.error || '虚拟机上传失败' };
+      } catch (error) { return { ok: false, error: '虚拟机上传失败: ' + error.message }; }
+    }
     const safeName = name.replace(/[^a-zA-Z0-9._\-]/g, '_').substring(0, 100);
     const saveDir = this.workDir || os.tmpdir();
     if (this.workDir && !fs.existsSync(this.workDir)) {
@@ -625,13 +633,6 @@ class WebControlService {
     fs.writeFileSync(savePath, buf);
     console.log('[WebControl] File uploaded to workspace:', savePath, 'size:', buf.length);
     
-    // 运行位置=虚拟机：把上传文件也送进虚拟机（附件路径对 Agent 才有意义）
-    if (typeof this.vmUploader === 'function') {
-      try {
-        const up = await this.vmUploader(savePath, name);
-        if (up && up.ok) return { ok: true, path: up.vmPath, name, type, hostPath: savePath };
-      } catch (e) { console.warn('[WebControl] VM 上传失败，保留宿主路径:', e.message); }
-    }
     return { ok: true, path: savePath, name, type };
   }
 
@@ -729,8 +730,8 @@ class WebControlService {
       // 远程客户端上传附件（跨源无法用 HTTP + cookie，故走 WS）
       case 'uploadAttachment':
         try {
-          const r = await this._saveUpload(msg.name, msg.type, msg.data);
-          ws.send(JSON.stringify({ type: 'uploadResult', ...r }));
+          const r = await this._saveUpload(msg.name, msg.mimeType, msg.data);
+          ws.send(JSON.stringify({ ...r, mimeType: r.type, type: 'uploadResult' }));
           // 通知渲染器有文件从 WebUI 上传，刷新附件列表
           if (r.ok && typeof this.onFileUploaded === 'function') {
             const isImage = /\.(png|jpg|jpeg|gif|bmp|webp|svg)$/i.test(r.name || '');
@@ -1417,7 +1418,7 @@ html,body{height:100%;overflow:hidden;font-family:-apple-system,BlinkMacSystemFo
             var base64=dataUrl.split(',')[1];
             // 通过 WS 上传到主进程保存到工作目录
             if(ws&&ws.readyState===1){
-              ws.send(JSON.stringify({type:'uploadAttachment',name:file.name,type:file.type,data:dataUrl}));
+              ws.send(JSON.stringify({type:'uploadAttachment',name:file.name,mimeType:file.type,data:dataUrl}));
             }
             pending--;
             if(pending===0){
@@ -1462,7 +1463,7 @@ html,body{height:100%;overflow:hidden;font-family:-apple-system,BlinkMacSystemFo
       var dataUrl=canvas.toDataURL('image/png');
       var name='camera-'+Date.now()+'.png';
       if(ws&&ws.readyState===1){
-        ws.send(JSON.stringify({type:'uploadAttachment',name:name,type:'image/png',data:dataUrl}));
+        ws.send(JSON.stringify({type:'uploadAttachment',name:name,mimeType:'image/png',data:dataUrl}));
       }
       // 拍照已通过 uploadAttachment 上传到主进程，onFileUploaded 回调会通知渲染器刷新附件列表
       close();

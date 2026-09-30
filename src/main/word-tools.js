@@ -13,6 +13,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { extractOfficeText } = require('./services/office-text');
 
 const { resolveImagePath } = require('./ppt-maker');
 
@@ -75,11 +76,7 @@ async function extractWordText(filePath, format = 'text') {
   if (isOdt(filePath)) {
     if (fmt !== 'text') return { ok: false, error: '.odt 仅支持 text 格式提取' };
     try {
-      const officeParser = require('officeparser');
-      const ast = await officeParser.parseOffice(filePath, {
-        ignoreNotes: false, newlineDelimiter: '\n', outputErrorToConsole: false, ocr: false
-      });
-      const content = ast && typeof ast.toText === 'function' ? ast.toText() : '';
+      const content = await extractOfficeText(filePath);
       return { ok: true, type: 'odt', format: 'text', content: content || '' };
     } catch (e) {
       return { ok: false, error: `读取odt失败：${e.message}` };

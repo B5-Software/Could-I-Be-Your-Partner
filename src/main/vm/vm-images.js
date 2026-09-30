@@ -70,7 +70,7 @@ const VARIANTS = [
   {
     id: 'desktop',
     label: '图形环境',
-    desc: 'base + Xorg / x11vnc / Chromium / 中文字体，用于图形化与浏览器沙盒',
+    desc: 'base + Wayland 校园桌面 / 原生应用 / Chromium / 中文字体，用于图形化与浏览器沙盒',
     limitMB: 950,
     diskGB: 12,
   },
@@ -138,7 +138,7 @@ function localStatus(assetsDir, { variant = 'base', arch = process.arch } = {}) 
       .reduce((n, p) => n + fs.statSync(p).size, 0);
     out.versions.push({ version: entry.name, image, kernel, initrd, missing, bytes, ok: missing.length === 0 });
   }
-  out.versions.sort((a, b) => String(b.version).localeCompare(String(a.version)));
+  out.versions.sort((a, b) => String(b.version).localeCompare(String(a.version), 'en', { numeric: true }));
   out.selected = out.versions.find((x) => x.ok) || null;
   out.installed = !!out.selected;
   out.missing = out.selected ? [] : (out.versions[0] ? out.versions[0].missing : ['image', 'kernel', 'initrd']);
@@ -204,6 +204,9 @@ function pickQemuPack(manifest, { platform = process.platform, arch = process.ar
 
 /** 从 manifest 解析某变体 × 架构的资源集合 */
 function pickArtifacts(manifest, { variant = 'base', arch = process.arch, mirror = 'official' } = {}) {
+  if (!manifest || typeof manifest.version !== 'string' || !/^\d+(?:\.\d+){1,3}(?:[-+][A-Za-z0-9]+(?:[.-][A-Za-z0-9]+)*)?$/.test(manifest.version)) {
+    throw new Error('manifest 镜像版本号不合法');
+  }
   const ga = guestArch(arch);
   const v = variantById(variant);
   const entry = manifest && manifest.variants && manifest.variants[v.id];
@@ -241,7 +244,6 @@ module.exports = {
   applyMirror,
   applyMirrorToUrl,
   isGithubUrl,
-  MIRROR_PREFIXES,
   fetchManifest,
   fetchQemuPackManifest,
   pickQemuPack,

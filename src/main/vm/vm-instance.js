@@ -163,6 +163,9 @@ class VmInstance extends EventEmitter {
 
   async _start() {
     this.lastError = null;
+    this.exit = null;
+    this._serialStopped = false;
+    this.serialBuf = '';
     try {
       // 1) 资产
       this._setState('checking', '检查运行时资源', 2);
@@ -197,7 +200,8 @@ class VmInstance extends EventEmitter {
       const prov = await provision.provision({
         dir: path.join(this.dir, 'cloud-init'),
         timezone: this.config.timezone,
-        instanceId: this.opts.instanceName || undefined,
+        // A fresh cloud-init identity rotates the in-memory SSH key on each boot
+        // without discarding the persistent instance disk.
       });
       this.ciServer = prov;
       this.sshKey = prov.keys.privateKey;
@@ -295,9 +299,10 @@ class VmInstance extends EventEmitter {
   }
 
   _attachSerial(port) {
+    const generation = this._serialGeneration = (this._serialGeneration || 0) + 1;
     let attempts = 0;
     const connect = () => {
-      if (this.exit || this._serialStopped) return;
+      if (this.exit || this._serialStopped || this._serialGeneration !== generation) return;
       if (attempts++ > 120) { // 最多重试 2 分钟，避免 QEMU 已死时空转
         this.emit('serial', '[host] 串口连接放弃（重试超限）');
         return;
@@ -310,7 +315,7 @@ class VmInstance extends EventEmitter {
       const retry = () => {
         if (retried) return;
         retried = true;
-        if (!this.exit && !this._serialStopped) setTimeout(connect, 1000);
+        if (!this.exit && !this._serialStopped && this._serialGeneration === generation) setTimeout(connect, 1000);
       };
       sock.on('connect', () => { attempts = 0; this.emit('serial', `[host] 串口已连接 :${port}`); });
       sock.on('data', (d) => {
@@ -438,6 +443,7 @@ class VmInstance extends EventEmitter {
       await new Promise((r) => setTimeout(r, 1000));
     }
     this._serialStopped = true;
+    if (this.serialClient) { this.serialClient.destroy(); this.serialClient = null; }
     if (this.ssh) { this.ssh.disconnect(); this.ssh = null; }
     if (this.ciServer) { this.ciServer.close(); this.ciServer = null; }
     this.child = null;
@@ -467,6 +473,7 @@ class VmInstance extends EventEmitter {
       }
     } catch { /* ignore */ }
     this._serialStopped = true;
+    if (this.serialClient) { this.serialClient.destroy(); this.serialClient = null; }
   }
 }
 

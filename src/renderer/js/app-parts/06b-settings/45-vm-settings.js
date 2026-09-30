@@ -47,9 +47,9 @@
         idle: '未运行', checking: '检查资源', booting: '启动中', preparing: '等待就绪',
         ready: '已就绪', stopping: '正在关闭', failed: '启动失败'
       }[inst.state] || inst.state || '未知';
-      const accel = st.accel ? ` · 加速：${st.accel}` : '';
+      const accel = inst.accel ? ` · 加速：${inst.accel}` : '';
       _vmSetText('vm-runtime-status',
-        `${inst.state === 'ready' ? '✅' : inst.state === 'failed' ? '⚠️' : 'ℹ️'} ${label}${accel}` +
+        `${inst.state === 'ready' ? '✅' : inst.state === 'failed' ? '⚠️' : 'ℹ️'} ${label}${inst.imageVersion ? ` · ${inst.variant} ${inst.imageVersion}` : ''}${accel}` +
         (inst.detail ? ` · ${inst.detail}` : '') +
         (inst.uptimeMs ? ` · 已运行 ${Math.round(inst.uptimeMs / 1000)}s` : ''),
         inst.state === 'failed');
@@ -273,7 +273,8 @@
     try {
       const r = await window.api.vm.download({ variant });
       if (r && r.ok) {
-        window.showToast?.(`镜像下载完成（${r.version}）`, 'success', 3000);
+        window.showToast?.(`系统镜像 ${r.version} 已安装，重启虚拟机后使用`, 'success', 4000);
+        _vmMarkRestartRequired('系统镜像已安装。停止再启动虚拟机即可使用；新版本使用独立磁盘，旧版本数据保留，共享工作区会继续同步。');
         _vmSetText('vm-assets-status', `✅ 已安装：${r.variant} ${r.version}`, false);
       } else {
         _vmSetText('vm-assets-status', '下载失败：' + ((r && r.error) || '未知错误'), true);
@@ -376,7 +377,7 @@
   });
 
   document.getElementById('btn-vm-desktop')?.addEventListener('click', async () => {
-    // 先确保 VM 就绪，再开桌面窗口（窗口内部会自动启动 Xvfb/x11vnc）
+    // 桌面来自已安装的 OS 镜像，窗口内部连接 Wayland / VNC。
     const st = await window.api.vm.status().catch(() => null);
     if (!st || !st.inst || st.inst.state !== 'ready') {
       window.showToast?.('请先启动虚拟机，再打开 VM 桌面', 'warning', 3500);

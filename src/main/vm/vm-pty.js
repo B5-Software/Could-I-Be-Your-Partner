@@ -18,6 +18,7 @@
 'use strict';
 
 const path = require('path');
+const { StringDecoder } = require('node:string_decoder');
 
 /** 宿主路径 → VM 内路径（默认映射到 /workspace 下） */
 function mapHostPathToVm(hostPath, { hostRoot, vmMount = '/workspace' } = {}) {
@@ -67,15 +68,15 @@ class VmPtyAdapter {
   async _open() {
     const svc = this.vmService;
     if (!svc) throw new Error('虚拟机服务不可用');
-    const inst = svc.instance || (await svc.start());
+    if (!svc.instance || svc.instance.state !== 'ready') await svc.start();
+    const inst = svc.instance;
     if (!inst || inst.state !== 'ready') throw new Error('虚拟机未就绪');
-    const channel = await inst.shell({ cols: this.cols, rows: this.rows, term: this.term });
+    const channel = await inst.shell({ cols: this.cols, rows: this.rows, term: this.term, cwd: this.cwd });
     if (this.closed) { try { channel.close(); } catch { /* ignore */ } return; }
     this.channel = channel;
-    channel.onData((d) => this._emitData(d.toString('utf8')));
-    channel.onClose(() => this._emitExit(0));
-    // 定位到工作目录（失败则退回 /workspace）
-    channel.write(`cd ${shellQuote(this.cwd)} 2>/dev/null || cd /workspace\n`);
+    const decoder = new StringDecoder('utf8');
+    channel.onData((d) => this._emitData(typeof d === 'string' ? d : decoder.write(d)));
+    channel.onClose(() => { this._emitData(decoder.end()); this._emitExit(0); });
     // 冲刷就绪前的写入
     for (const w of this._pendingWrites) channel.write(w);
     this._pendingWrites = [];
@@ -85,6 +86,8 @@ class VmPtyAdapter {
       try { channel.resize(cols, rows); } catch { /* ignore */ }
     }
   }
+
+  ready() { return this._ready; }
 
   _emitData(s) {
     if (!s) return;
@@ -113,7 +116,6 @@ class VmPtyAdapter {
   }
 
   kill() {
-    this.closed = true;
     try { if (this.channel) this.channel.close(); } catch { /* ignore */ }
     this._emitExit(0);
   }

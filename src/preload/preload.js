@@ -7,32 +7,9 @@
 
 const { contextBridge, ipcRenderer } = require('electron');
 
-// 多会话复用型事件通道：每个通道只往 ipcRenderer 挂一个监听器，
-// 订阅者以 Set 维护，退订时按引用移除。这样无论同时存在多少个会话，
-// 每个通道的 ipcRenderer 监听器数量恒为 1，彻底避免
-// MaxListenersExceededWarning（默认上限 10，多会话并发时极易触发）。
-const _channelSubscribers = new Map();
-function onChannel(channel, cb) {
-  if (!_channelSubscribers.has(channel)) {
-    const subs = new Set();
-    const listener = (_event, data) => {
-      for (const fn of subs) {
-        try { fn(data); } catch { /* 单个订阅者异常不应影响其他订阅者 */ }
-      }
-    };
-    ipcRenderer.on(channel, listener);
-    _channelSubscribers.set(channel, { subs, listener });
-  }
-  const entry = _channelSubscribers.get(channel);
-  entry.subs.add(cb);
-  return () => {
-    entry.subs.delete(cb);
-    if (entry.subs.size === 0) {
-      ipcRenderer.removeListener(channel, entry.listener);
-      _channelSubscribers.delete(channel);
-    }
-  };
-}
+const { createChannelSubscriptions } = require('./channel-subscriptions');
+const { subscribe: onChannel, dispose: disposeSubscriptions } = createChannelSubscriptions(ipcRenderer);
+window.addEventListener('unload', disposeSubscriptions, { once: true });
 
 contextBridge.exposeInMainWorld('api', {
   // 运行位置=虚拟机时把宿主路径翻译为 VM 内路径（顶层别名，渲染层附件提示词用）
@@ -41,15 +18,11 @@ contextBridge.exposeInMainWorld('api', {
   getSettings: () => ipcRenderer.invoke('settings:get'),
   setSettings: (s) => ipcRenderer.invoke('settings:set', s),
   // 监听设置广播（语言/主题/输入法/语音等），返回取消订阅函数
-  onSettingsChanged: (cb) => {
-    const listener = (_, data) => cb(data);
-    ipcRenderer.on('settings:changed', listener);
-    return () => ipcRenderer.removeListener('settings:changed', listener);
-  },
+  onSettingsChanged: (cb) => onChannel('settings:changed', cb),
 
   // Theme
   getTheme: () => ipcRenderer.invoke('theme:get'),
-  onThemeChanged: (cb) => ipcRenderer.on('theme:changed', (_, data) => cb(data)),
+  onThemeChanged: (cb) => onChannel('theme:changed', cb),
 
   // 构建标志：检测是否为 --no-tarot 打包版本
   isNoTarotBuild: () => ipcRenderer.invoke('app:is-no-tarot-build'),
@@ -64,10 +37,7 @@ contextBridge.exposeInMainWorld('api', {
 
   // Tray Mode (后台托盘模式)
   // 监听主进程发出的"关闭时询问"事件 → 渲染器弹模态框
-  onTrayAskCloseDecision: (cb) => {
-    ipcRenderer.removeAllListeners('tray:ask-close-decision');
-    ipcRenderer.on('tray:ask-close-decision', () => cb());
-  },
+  onTrayAskCloseDecision: (cb) => onChannel('tray:ask-close-decision', cb),
   // 渲染器回传用户的决策：'always' | 'once' | 'never' | 'cancel'
   trayRespondCloseDecision: (decision) => ipcRenderer.send('tray:respond-close-decision', decision),
   // 修改设置项
@@ -124,14 +94,8 @@ contextBridge.exposeInMainWorld('api', {
   readTerminalOutput: (id, lastLines) => ipcRenderer.invoke('terminal:read', id, lastLines),
   sendTerminalText: (id, text) => ipcRenderer.invoke('terminal:sendText', id, text),
   pressTerminalKey: (id, keyName) => ipcRenderer.invoke('terminal:pressKey', id, keyName),
-  onTerminalData: (cb) => {
-    ipcRenderer.removeAllListeners('terminal:data');
-    ipcRenderer.on('terminal:data', (_, payload) => cb(payload));
-  },
-  onTerminalExit: (cb) => {
-    ipcRenderer.removeAllListeners('terminal:exit');
-    ipcRenderer.on('terminal:exit', (_, payload) => cb(payload));
-  },
+  onTerminalData: (cb) => onChannel('terminal:data', cb),
+  onTerminalExit: (cb) => onChannel('terminal:exit', cb),
 
   // Clipboard
   readClipboard: () => ipcRenderer.invoke('clipboard:read'),
@@ -196,11 +160,7 @@ contextBridge.exposeInMainWorld('api', {
   deleteSkill: (id) => ipcRenderer.invoke('skills:delete', id),
   updateSkill: (id, data) => ipcRenderer.invoke('skills:update', id, data),
   openSkillEditor: (payload) => ipcRenderer.invoke('skill-editor:open', payload),
-  onSkillsChanged: (cb) => {
-    const listener = () => cb();
-    ipcRenderer.on('skills:changed', listener);
-    return () => ipcRenderer.removeListener('skills:changed', listener);
-  },
+  onSkillsChanged: (cb) => onChannel('skills:changed', cb),
 
   // ---- Code Mode ----
   codeOpenWorkspace: () => ipcRenderer.invoke('code:openWorkspace'),
@@ -272,11 +232,7 @@ contextBridge.exposeInMainWorld('api', {
   // 查询模型可用的变体（思考强度）档位 + Anthropic 能力内省
   llmCapabilities: (provider, model, apiUrl, apiKey) => ipcRenderer.invoke('llm:capabilities', provider, model, apiUrl, apiKey),
   usageGetRange: (period) => ipcRenderer.invoke('usage:getRange', period),
-  onUsageChanged: (cb) => {
-    const listener = (_, data) => cb(data);
-    ipcRenderer.on('usage:changed', listener);
-    return () => ipcRenderer.removeListener('usage:changed', listener);
-  },
+  onUsageChanged: (cb) => onChannel('usage:changed', cb),
   budgetGetStatus: () => ipcRenderer.invoke('budget:getStatus'),
   budgetCheck: () => ipcRenderer.invoke('budget:check'),
   // ESLint
@@ -304,51 +260,15 @@ contextBridge.exposeInMainWorld('api', {
   voiceWakeSetEnabled: (enabled) => ipcRenderer.invoke('voice:wake:setEnabled', enabled),
   voiceWakeRestart: () => ipcRenderer.invoke('voice:wake:restart'),
   voiceBarOpen: () => ipcRenderer.invoke('voice:bar:open'),
-  onVoiceSttPartial: (cb) => {
-    const listener = (_, data) => cb(data);
-    ipcRenderer.on('voice:stt-partial', listener);
-    return () => ipcRenderer.removeListener('voice:stt-partial', listener);
-  },
-  onVoiceSttFinal: (cb) => {
-    const listener = (_, data) => cb(data);
-    ipcRenderer.on('voice:stt-final', listener);
-    return () => ipcRenderer.removeListener('voice:stt-final', listener);
-  },
-  onVoiceTtsAudio: (cb) => {
-    const listener = (_, data) => cb(data);
-    ipcRenderer.on('voice:tts-audio', listener);
-    return () => ipcRenderer.removeListener('voice:tts-audio', listener);
-  },
-  onVoiceTtsDone: (cb) => {
-    const listener = (_, data) => cb(data);
-    ipcRenderer.on('voice:tts-done', listener);
-    return () => ipcRenderer.removeListener('voice:tts-done', listener);
-  },
-  onVoiceTtsError: (cb) => {
-    const listener = (_, data) => cb(data);
-    ipcRenderer.on('voice:tts-error', listener);
-    return () => ipcRenderer.removeListener('voice:tts-error', listener);
-  },
-  onVoiceWake: (cb) => {
-    const listener = (_, data) => cb(data);
-    ipcRenderer.on('voice:wake', listener);
-    return () => ipcRenderer.removeListener('voice:wake', listener);
-  },
-  onVoiceHotkeyToggle: (cb) => {
-    const listener = (_, data) => cb(data);
-    ipcRenderer.on('voice:hotkey-toggle', listener);
-    return () => ipcRenderer.removeListener('voice:hotkey-toggle', listener);
-  },
-  onVoiceError: (cb) => {
-    const listener = (_, data) => cb(data);
-    ipcRenderer.on('voice:error', listener);
-    return () => ipcRenderer.removeListener('voice:error', listener);
-  },
-  onVoiceClientState: (cb) => {
-    const listener = (_, data) => cb(data);
-    ipcRenderer.on('voice:client-state', listener);
-    return () => ipcRenderer.removeListener('voice:client-state', listener);
-  },
+  onVoiceSttPartial: (cb) => onChannel('voice:stt-partial', cb),
+  onVoiceSttFinal: (cb) => onChannel('voice:stt-final', cb),
+  onVoiceTtsAudio: (cb) => onChannel('voice:tts-audio', cb),
+  onVoiceTtsDone: (cb) => onChannel('voice:tts-done', cb),
+  onVoiceTtsError: (cb) => onChannel('voice:tts-error', cb),
+  onVoiceWake: (cb) => onChannel('voice:wake', cb),
+  onVoiceHotkeyToggle: (cb) => onChannel('voice:hotkey-toggle', cb),
+  onVoiceError: (cb) => onChannel('voice:error', cb),
+  onVoiceClientState: (cb) => onChannel('voice:client-state', cb),
 
   // ---- 资源下载（语音模型）----
   voiceModelsStatus: () => ipcRenderer.invoke('resources:voiceModels:status'),
@@ -358,11 +278,7 @@ contextBridge.exposeInMainWorld('api', {
   voiceModelsChooseDir: () => ipcRenderer.invoke('resources:voiceModels:chooseDir'),
   voiceModelsOpenDir: (dir) => ipcRenderer.invoke('resources:voiceModels:openDir', dir),
   voiceModelsSetMirror: (mirror) => ipcRenderer.invoke('resources:voiceModels:setMirror', mirror),
-  onVoiceModelsProgress: (cb) => {
-    const listener = (_, data) => cb(data);
-    ipcRenderer.on('resources:voiceModels:progress', listener);
-    return () => ipcRenderer.removeListener('resources:voiceModels:progress', listener);
-  },
+  onVoiceModelsProgress: (cb) => onChannel('resources:voiceModels:progress', cb),
 
   // ---- 决策模型（Jev / System One）----
   decisionCall: (payload) => ipcRenderer.invoke('decision:call', payload),
@@ -380,11 +296,7 @@ contextBridge.exposeInMainWorld('api', {
     relaunch: () => ipcRenderer.invoke('runtime:relaunch'),
     toVmPath: (p) => ipcRenderer.invoke('runtime:toVmPath', p),
     runtimeToVmPath: (p) => ipcRenderer.invoke('runtime:toVmPath', p),
-    onChanged: (cb) => {
-      const listener = (_, data) => cb(data);
-      ipcRenderer.on('runtime:changed', listener);
-      return () => ipcRenderer.removeListener('runtime:changed', listener);
-    },
+    onChanged: (cb) => onChannel('runtime:changed', cb),
   },
 
   // ---- 虚拟机沙盒（CIBYP-VM-OS / QEMU）----
@@ -416,34 +328,14 @@ contextBridge.exposeInMainWorld('api', {
     sync: (opts) => ipcRenderer.invoke('vm:sync', opts || {}),
     syncStatus: () => ipcRenderer.invoke('vm:syncStatus'),
     chooseWorkspaceRoot: () => ipcRenderer.invoke('vm:chooseWorkspaceRoot'),
-    onSyncDone: (cb) => {
-      const listener = (_, data) => cb(data);
-      ipcRenderer.on('vm:sync-done', listener);
-      return () => ipcRenderer.removeListener('vm:sync-done', listener);
-    },
-    onSyncWarn: (cb) => {
-      const listener = (_, data) => cb(data);
-      ipcRenderer.on('vm:sync-warn', listener);
-      return () => ipcRenderer.removeListener('vm:sync-warn', listener);
-    },
+    onSyncDone: (cb) => onChannel('vm:sync-done', cb),
+    onSyncWarn: (cb) => onChannel('vm:sync-warn', cb),
     chooseAssetsDir: () => ipcRenderer.invoke('vm:chooseAssetsDir'),
     openAssetsDir: () => ipcRenderer.invoke('vm:openAssetsDir'),
     emergencyHostMode: () => ipcRenderer.invoke('vm:emergencyHostMode'),
-    onProgress: (cb) => {
-      const listener = (_, data) => cb(data);
-      ipcRenderer.on('vm:progress', listener);
-      return () => ipcRenderer.removeListener('vm:progress', listener);
-    },
-    onState: (cb) => {
-      const listener = (_, data) => cb(data);
-      ipcRenderer.on('vm:state', listener);
-      return () => ipcRenderer.removeListener('vm:state', listener);
-    },
-    onSerial: (cb) => {
-      const listener = (_, data) => cb(data);
-      ipcRenderer.on('vm:serial', listener);
-      return () => ipcRenderer.removeListener('vm:serial', listener);
-    },
+    onProgress: (cb) => onChannel('vm:progress', cb),
+    onState: (cb) => onChannel('vm:state', cb),
+    onSerial: (cb) => onChannel('vm:serial', cb),
   },
 
   // Paths
@@ -534,7 +426,7 @@ contextBridge.exposeInMainWorld('api', {
   firmwareExport: () => ipcRenderer.invoke('firmware:export'),
   
   // Dialog Events (for in-app modals)
-  onShowConfirmDialog: (cb) => ipcRenderer.on('show-confirm-dialog', (_, data) => cb(data)),
+  onShowConfirmDialog: (cb) => onChannel('show-confirm-dialog', cb),
   sendConfirmDialogResponse: (response) => ipcRenderer.send('confirm-dialog-response', response),
   // File picker dialog uses system dialog now
 
@@ -595,11 +487,7 @@ contextBridge.exposeInMainWorld('api', {
   mcpListTools: (serverName) => ipcRenderer.invoke('mcp:listTools', serverName),
   pwGetProfileSources: () => ipcRenderer.invoke('pw:getProfileSources'),
   pwCopyProfile: (sourceId) => ipcRenderer.invoke('pw:copyProfile', sourceId),
-  onMcpChanged: (cb) => {
-    const listener = (_event, payload) => cb(payload);
-    ipcRenderer.on('mcp:servers-changed', listener);
-    return () => ipcRenderer.removeListener('mcp:servers-changed', listener);
-  },
+  onMcpChanged: (cb) => onChannel('mcp:servers-changed', cb),
   // ---- DeepSeek 插件 ----
   dsListPlugins: () => ipcRenderer.invoke('plugins:list'),
   dsInstallLocal: (dirPath) => ipcRenderer.invoke('plugins:installLocal', dirPath),
@@ -625,58 +513,36 @@ contextBridge.exposeInMainWorld('api', {
   automationGetGuide: (topic) => ipcRenderer.invoke('automation:guide', topic),
   openAutomationEditor: (id) => ipcRenderer.invoke('automation-editor:open', id ? { id } : {}),
   detectEnvironment: () => ipcRenderer.invoke('env:detect'),
-  onPluginsChanged: (cb) => {
-    const listener = () => cb();
-    ipcRenderer.on('plugins:changed', listener);
-    return () => ipcRenderer.removeListener('plugins:changed', listener);
-  },
-  onPluginsInstallProgress: (cb) => {
-    const listener = (_event, payload) => cb(payload);
-    ipcRenderer.on('plugins:installProgress', listener);
-    return () => ipcRenderer.removeListener('plugins:installProgress', listener);
-  },
-  onDsAgentMessage: (cb) => {
-    const listener = (_event, payload) => cb(payload);
-    ipcRenderer.on('ds:pluginAgentMessage', listener);
-    return () => ipcRenderer.removeListener('ds:pluginAgentMessage', listener);
-  },
+  onPluginsChanged: (cb) => onChannel('plugins:changed', cb),
+  onPluginsInstallProgress: (cb) => onChannel('plugins:installProgress', cb),
+  onDsAgentMessage: (cb) => onChannel('ds:pluginAgentMessage', cb),
   onDsAgentCreateRequest: (cb) => {
-    const listener = (_event, payload) => {
+    return onChannel('ds:agentCreate', (payload) => {
       if (!payload || !payload.requestId) return;
-      Promise.resolve(cb(payload)).then(
+      Promise.resolve().then(() => cb(payload)).then(
         (result) => ipcRenderer.send('ds:agentCreateResult', payload.requestId, result || {}),
         (error) => ipcRenderer.send('ds:agentCreateResult', payload.requestId, { error: error && error.message ? error.message : String(error) })
       );
-    };
-    ipcRenderer.on('ds:agentCreate', listener);
-    return () => ipcRenderer.removeListener('ds:agentCreate', listener);
+    });
   },
   onDsAgentResumeRequest: (cb) => {
-    const listener = (_event, payload) => {
+    return onChannel('ds:agentResume', (payload) => {
       if (!payload || !payload.requestId) return;
-      Promise.resolve(cb(payload)).then(
+      Promise.resolve().then(() => cb(payload)).then(
         (result) => ipcRenderer.send('ds:agentResumeResult', payload.requestId, result || {}),
         (error) => ipcRenderer.send('ds:agentResumeResult', payload.requestId, { error: error && error.message ? error.message : String(error) })
       );
-    };
-    ipcRenderer.on('ds:agentResume', listener);
-    return () => ipcRenderer.removeListener('ds:agentResume', listener);
+    });
   },
-  onDsApprovalRequest: (cb) => {
-    const listener = (_event, payload) => cb(payload);
-    ipcRenderer.on('ds:approvalRequest', listener);
-    return () => ipcRenderer.removeListener('ds:approvalRequest', listener);
-  },
+  onDsApprovalRequest: (cb) => onChannel('ds:approvalRequest', cb),
   onAutomationDispatch: (cb) => {
-    const listener = (_event, payload) => {
+    return onChannel('automation:dispatch', (payload) => {
       if (!payload || !payload.requestId) return;
-      Promise.resolve(cb(payload)).then(
+      Promise.resolve().then(() => cb(payload)).then(
         (result) => ipcRenderer.send('automation:dispatched', payload.requestId, result || {}),
         (error) => ipcRenderer.send('automation:dispatched', payload.requestId, { error: error && error.message ? error.message : String(error) })
       );
-    };
-    ipcRenderer.on('automation:dispatch', listener);
-    return () => ipcRenderer.removeListener('automation:dispatch', listener);
+    });
   },
   mcpCallTool: (serverName, toolName, args) => ipcRenderer.invoke('mcp:callTool', serverName, toolName, args),
   mcpGetStatus: () => ipcRenderer.invoke('mcp:getStatus'),
@@ -726,7 +592,7 @@ contextBridge.exposeInMainWorld('api', {
   emailStopPolling: () => ipcRenderer.invoke('email:stopPolling'),
   emailRequestApproval: (toolName, args, chatMd) => ipcRenderer.invoke('email:requestApproval', toolName, args, chatMd),
   emailSendConversation: (messages, title) => ipcRenderer.invoke('email:sendConversation', messages, title),
-  onEmailReceived: (cb) => ipcRenderer.on('email:received', (_, email) => cb(email)),
+  onEmailReceived: (cb) => onChannel('email:received', cb),
 
   // FediKitten
   fedikittenGetState: () => ipcRenderer.invoke('fedikitten:getState'),
@@ -765,34 +631,30 @@ contextBridge.exposeInMainWorld('api', {
   webControlPushContextProgress: (data) => ipcRenderer.send('webControl:pushContextProgress', data),
   webControlPushReoptimizeState: (visible) => ipcRenderer.send('webControl:pushReoptimizeState', visible),
   webControlPushOskState: (state) => ipcRenderer.send('webControl:pushOskState', state),
-  onWebControlToggleOsk: (cb) => ipcRenderer.on('webControl:toggleOsk', () => cb()),
-  onWebControlSwitchMode: (cb) => ipcRenderer.on('webControl:switchMode', (_, mode) => cb(mode)),
-  onWebControlReoptimizeTools: (cb) => ipcRenderer.on('webControl:reoptimizeTools', () => cb()),
+  onWebControlToggleOsk: (cb) => onChannel('webControl:toggleOsk', cb),
+  onWebControlSwitchMode: (cb) => onChannel('webControl:switchMode', cb),
+  onWebControlReoptimizeTools: (cb) => onChannel('webControl:reoptimizeTools', cb),
   avatarPickAndEncode: () => ipcRenderer.invoke('avatar:pickAndEncode'),
   avatarEncodeFile: (filePath) => ipcRenderer.invoke('avatar:encodeFile', filePath),
-  onWebControlNewChat: (cb) => ipcRenderer.on('webControl:newChat', () => cb()),
-  onWebControlSendMessage: (cb) => ipcRenderer.on('webControl:sendMessage', (_, message) => cb(message)),
-  onWebControlStopAgent: (cb) => ipcRenderer.on('webControl:stopAgent', () => cb()),
-  onWebControlApprovalResponse: (cb) => ipcRenderer.on('webControl:approvalResponse', (_, approved) => cb(approved)),
-  onWebControlLoadConversation: (cb) => ipcRenderer.on('webControl:loadConversation', (_, id) => cb(id)),
-  onWebControlRunning: (cb) => ipcRenderer.on('webControl:running', (_, running) => cb(running)),
+  onWebControlNewChat: (cb) => onChannel('webControl:newChat', cb),
+  onWebControlSendMessage: (cb) => onChannel('webControl:sendMessage', cb),
+  onWebControlStopAgent: (cb) => onChannel('webControl:stopAgent', cb),
+  onWebControlApprovalResponse: (cb) => onChannel('webControl:approvalResponse', cb),
+  onWebControlLoadConversation: (cb) => onChannel('webControl:loadConversation', cb),
+  onWebControlRunning: (cb) => onChannel('webControl:running', cb),
   // DOM Mirror: renderer listens for mirror-init trigger, sends mirror updates, receives UI events from WebUI
-  webControlMirrorInit: (cb) => ipcRenderer.on('webControl:mirrorInit', () => cb()),
+  webControlMirrorInit: (cb) => onChannel('webControl:mirrorInit', cb),
   webControlUiEvent: (data) => ipcRenderer.send('webControl:uiEvent', data),
   webControlMirrorUpdate: (data) => ipcRenderer.send('webControl:mirrorUpdate', data),
-  onWebControlUiEvent: (cb) => ipcRenderer.on('webControl:uiEvent', (_, data) => cb(data)),
-  onWebControlFileUploaded: (cb) => ipcRenderer.on('webControl:fileUploaded', (_, data) => cb(data)),
-  onGameFinished: (cb) => ipcRenderer.on('game:finished', (_, data) => cb(data)),
+  onWebControlUiEvent: (cb) => onChannel('webControl:uiEvent', cb),
+  onWebControlFileUploaded: (cb) => onChannel('webControl:fileUploaded', cb),
+  onGameFinished: (cb) => onChannel('game:finished', cb),
 
   // 语音条：把识别文本填入当前模式输入框 / 自动发送
-  onVoiceBarFill: (cb) => {
-    const listener = (_, data) => cb(data);
-    ipcRenderer.on('voice:bar:fill', listener);
-    return () => ipcRenderer.removeListener('voice:bar:fill', listener);
-  },
+  onVoiceBarFill: (cb) => onChannel('voice:bar:fill', cb),
 
   // Pending Session: 异常中断时保存正在工作的会话，启动时弹模态框询问是否继续
-  onSavePending: (cb) => ipcRenderer.on('agent:save-pending', () => cb()),
+  onSavePending: (cb) => onChannel('agent:save-pending', cb),
   savePendingSession: (payload) => ipcRenderer.invoke('agent:save-pending-session', payload),
   skipPending: () => ipcRenderer.invoke('agent:skip-pending'),
   getPendingSession: () => ipcRenderer.invoke('agent:get-pending-session'),
@@ -800,7 +662,7 @@ contextBridge.exposeInMainWorld('api', {
 
   // Notifications: 系统桌面通知（敏感操作/会话完成/问卷/文件呈递等需用户干预时）
   sendNotification: (opts) => ipcRenderer.invoke('notifications:send', opts),
-  onNotificationClick: (cb) => ipcRenderer.on('notifications:click', (_, data) => cb(data)),
+  onNotificationClick: (cb) => onChannel('notifications:click', cb),
 
   // 更新检查：GitHub Releases 自动更新（设置页「更新」tab）
   updatesCheck: () => ipcRenderer.invoke('updates:check'),

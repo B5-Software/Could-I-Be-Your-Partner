@@ -20,7 +20,7 @@
 
 'use strict';
 
-module.exports = function registerMcpIpc({ ipcMain, getSettings, persist, appVersion, notifyRenderer, defaultTimeoutMs, shutdownTermGraceMs, shutdownKillGraceMs }) {
+module.exports = function registerMcpIpc({ ipcMain, getSettings, persist, appVersion, notifyRenderer, defaultTimeoutMs, shutdownTermGraceMs, shutdownKillGraceMs, getVmService }) {
   const SUPPORTED_PROTOCOL_VERSION = '2025-06-18';
   const LEGACY_PROTOCOL_VERSIONS = ['2025-03-26', '2024-11-05'];
   const DEFAULT_TIMEOUT = Math.max(1000, Number(defaultTimeoutMs) || 30000);
@@ -222,14 +222,16 @@ module.exports = function registerMcpIpc({ ipcMain, getSettings, persist, appVer
 
   // ---------- stdio 传输 ----------
 
-  function startStdioTransport(entry) {
-    return new Promise((resolve, reject) => {
+  async function startStdioTransport(entry) {
       const { command, args, shell } = spawnOptionsFor(entry.config);
-      if (!command) { reject(new Error('命令不能为空')); return; }
+      if (!command) throw new Error('命令不能为空');
       const { spawn } = require('child_process');
       let child;
       try {
-        child = spawn(command, args, {
+        const service = getVmService?.();
+        const inVm = require('./vm/tool-location').isVmOperation(() => service);
+        entry.executionLocation = inVm ? 'vm' : 'host';
+        child = inVm ? await require('./vm/vm-process').spawnVmProcess(service, { command: entry.config.command, args: entry.config.args || [], cwd: entry.config.cwd, env: entry.config.env || {} }) : spawn(command, args, {
           env: buildEnv(entry.config),
           cwd: entry.config.cwd || process.cwd(),
           stdio: ['pipe', 'pipe', 'pipe'],
@@ -237,8 +239,7 @@ module.exports = function registerMcpIpc({ ipcMain, getSettings, persist, appVer
           windowsHide: true
         });
       } catch (e) {
-        reject(e);
-        return;
+        throw e;
       }
       entry.child = child;
       child.on('error', (err) => {
@@ -259,8 +260,7 @@ module.exports = function registerMcpIpc({ ipcMain, getSettings, persist, appVer
         // 限制单条日志长度，避免失控服务器刷爆主进程日志
         console.error(`[MCP:${entry.name}] stderr: ${text.length > 2000 ? text.slice(0, 2000) + '...[truncated]' : text}`);
       });
-      resolve();
-    });
+
   }
 
   // 入站字节流：优先按规范 NDJSON（\n 分隔）解析；兼容旧实现/特殊服务器的
@@ -433,6 +433,18 @@ module.exports = function registerMcpIpc({ ipcMain, getSettings, persist, appVer
   async function startHttpTransport(entry) {
     const url = String(entry.config.url || '');
     if (!/^https?:\/\//i.test(url)) throw new Error('HTTP 传输需要有效的 http(s) URL');
+    const service = getVmService?.();
+    const target = new URL(url);
+    entry.localHttp = ['localhost', '127.0.0.1', '[::1]'].includes(target.hostname);
+    if (require('./vm/tool-location').isVmOperation(() => service) && entry.localHttp) {
+      if (!service.instance || service.instance.state !== 'ready') await service.start();
+      const forward = await service.forwardPort(Number(target.port) || (target.protocol === 'https:' ? 443 : 80));
+      entry.guestForward = forward.hostPort;
+      target.hostname = '127.0.0.1';
+      target.port = String(forward.hostPort);
+      entry.config = { ...entry.config, url: target.href };
+      entry.executionLocation = 'vm';
+    } else entry.executionLocation = entry.localHttp ? 'host' : 'remote';
     // initialize 在 startMcpServer 统一发送；这里只做 URL 校验
   }
 
@@ -515,6 +527,7 @@ module.exports = function registerMcpIpc({ ipcMain, getSettings, persist, appVer
     if (entry.type === 'http') {
       await httpDeleteSession(entry);
       if (entry.httpAbort) { try { entry.httpAbort.abort(); } catch { /* ignore */ } }
+      if (entry.guestForward) getVmService?.()?.unforwardPort(entry.guestForward);
     } else {
       await shutdownStdio(entry);
     }
@@ -602,6 +615,7 @@ module.exports = function registerMcpIpc({ ipcMain, getSettings, persist, appVer
         key,
         status: entry ? entry.status : 'disconnected',
         toolCount: entry ? entry.tools.length : 0,
+        executionLocation: entry?.executionLocation || null,
         protocolVersion: entry ? entry.protocolVersion : null
       };
     });
@@ -672,34 +686,43 @@ module.exports = function registerMcpIpc({ ipcMain, getSettings, persist, appVer
   });
 
   ipcMain.handle('mcp:callTool', async (_, serverName, toolName, args) => {
+    const existing = findEntryByNameOrKey(serverName);
+    const service = getVmService?.();
+    if (existing && (existing.type === 'stdio' || existing.localHttp) && existing.executionLocation !== (require('./vm/tool-location').isVmOperation(() => service) ? 'vm':'host')) return { ok: false, error: '此 MCP 连接的运行位置已变化，请重新连接' };
+
     const entry = findEntryByNameOrKey(serverName);
     if (!entry || entry.status !== 'connected') {
       return { ok: false, error: `MCP 服务器 "${serverName}" 未连接` };
     }
     try {
+      if (entry.executionLocation === 'vm') {
+        const io = new (require('./vm/vm-fs').VmFs)({vmService:service});
+        args = require('./vm/vm-tools').translateDeep(args || {}, value => io.strictPath(value));
+      }
       const result = await request(entry, 'tools/call', { name: toolName, arguments: args || {} });
       const norm = normalizeToolResult(result);
-      if (norm.isError) return { ok: false, error: norm.text };
+      if (norm.isError) return { ok: false, error: norm.text, location: entry.executionLocation };
       if (norm.images.length) {
         const img = norm.images[0];
         return {
           ok: true,
           text: norm.text,
+          location: entry.executionLocation,
           _multimodal: true,
           imageUrl: `data:${img.mime};base64,${img.data}`,
           extraImages: norm.images.slice(1).map((im) => `data:${im.mime};base64,${im.data}`)
         };
       }
-      return { ok: true, text: norm.text };
+      return { ok: true, text: norm.text, location: entry.executionLocation };
     } catch (e) {
-      return { ok: false, error: e.message };
+      return { ok: false, error: e.message, location: entry.executionLocation };
     }
   });
 
   ipcMain.handle('mcp:getStatus', () => {
     const statuses = {};
     for (const [key, entry] of mcpServers) {
-      statuses[key] = { status: entry.status, tools: entry.tools.length, name: entry.name, protocolVersion: entry.protocolVersion };
+      statuses[key] = { status: entry.status, tools: entry.tools.length, name: entry.name, protocolVersion: entry.protocolVersion, executionLocation: entry.executionLocation };
     }
     return statuses;
   });

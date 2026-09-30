@@ -274,20 +274,18 @@ class Aria2Manager {
     });
   }
 
-  _waitForReady(timeoutMs) {
+  async _waitForReady(timeoutMs) {
     const start = Date.now();
     const tryRpc = () => {
       return this.rpc('aria2.getVersion', [])
         .then(() => true)
         .catch(() => false);
     };
-    return new Promise(async (resolve, reject) => {
-      while (Date.now() - start < timeoutMs) {
-        if (await tryRpc()) return resolve(true);
-        await new Promise(r => setTimeout(r, 300));
-      }
-      reject(new Error('aria2 RPC 启动超时'));
-    });
+    while (Date.now() - start < timeoutMs) {
+      if (await tryRpc()) return true;
+      await new Promise(r => setTimeout(r, 300));
+    }
+    throw new Error('aria2 RPC 启动超时');
   }
 
   /**

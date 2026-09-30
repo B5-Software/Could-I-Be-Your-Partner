@@ -13,7 +13,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { shell, screen, desktopCapturer, nativeImage } = require('electron');
+const { shell, screen, desktopCapturer, nativeImage, systemPreferences } = require('electron');
 const { recognizeImageDetailed } = require('./ocr');
 
 module.exports = function registerComputerUseIpc({ ipcMain, getImagesDir, getVmService }) {
@@ -25,10 +25,9 @@ module.exports = function registerComputerUseIpc({ ipcMain, getImagesDir, getVmS
   const vmComputer = () => {
     try {
       const svc = typeof getVmService === 'function' ? getVmService() : null;
-      if (!svc || svc.emergencyHost) return null;
-      if (!svc.runtime || svc.runtime.location !== 'vm') return null;
+      if (!require('./vm/tool-location').isVmOperation(() => svc)) return null;
       return svc.graphicsController();
-    } catch { return null; }
+    } catch (error) { throw new Error('无法确定 VM 执行位置: ' + error.message); }
   };
   const VM_UI_GAP = 'VM 模式下该动作依赖宿主 UI 自动化（UIA/OCR），已禁用以免操作宿主机；可用：截图/键鼠注入（xdotool）、VM 桌面窗口、终端与浏览器工具';
 // ---- Computer Use Protocol (CUP) ----
@@ -49,7 +48,7 @@ async function _getNut() {
 // Key name mapping: CUP key names → nut-js Key enum
 function _cupKeyToNutKey(keyStr) {
   const map = {
-    'return': 'Enter', 'enter': 'Enter', 'return': 'Enter',
+    'return': 'Enter', 'enter': 'Enter',
     'tab': 'Tab', 'space': 'Space', 'backspace': 'Backspace',
     'escape': 'Escape', 'esc': 'Escape', 'delete': 'Delete',
     'up': 'Up', 'down': 'Down', 'left': 'Left', 'right': 'Right',
@@ -942,8 +941,9 @@ ipcMain.handle('system:network', () => {
 });
 
 // ---- IPC: Shell & Browser ----
-ipcMain.handle('shell:openBrowser', (_, url) => {
+ipcMain.handle('shell:openBrowser', async (_, url) => {
   try {
+    if (vmComputer()) return getVmService().graphicsChromium({ url });
     shell.openExternal(url);
     return { ok: true };
   } catch (e) {
@@ -957,9 +957,11 @@ ipcMain.handle('shell:openFileExplorer', async (_, p) => {
     const g = vmComputer();
     if (g) {
       const svc = typeof getVmService === 'function' ? getVmService() : null;
-      if (svc && typeof svc.pullExternalDir === 'function') {
-        await svc.pullExternalDir(p).catch(() => {});
-      }
+      const io = new (require('./vm/vm-fs').VmFs)({ vmService: svc });
+      const target = io.resolveVmPath(p);
+      if (!target.ok) return target;
+      await g.start();
+      return svc.instance.exec(`${g._wlEnv()} cibyp-files ${require('./vm/vm-paths').shellQuote(target.vm)} >/dev/null 2>&1 &`);
     }
     // 区分文件和目录：文件用 showItemInFolder 在资源管理器中定位并选中，
     // 目录用 openPath 直接打开。

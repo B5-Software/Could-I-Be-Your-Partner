@@ -494,8 +494,8 @@ _tools: {
   officeHardList: 'Interne Office-Dateien auflisten',
   officeHardReadFile: 'Innere Datei aus Office-Paket lesen',
   officeHardWriteFile: 'Innere Datei in Office-Paket schreiben',
-  officeHardGetSlideTexts: 'Folien-Textknoten aus PPTX-XML abrufen',
-  officeHardSetSlideTexts: 'Folien-Textknoten in PPTX-XML setzen',
+
+
   officeHardWordApplyTexts: 'Word-Läufe formatgetreu umschreiben',
   wordExtractText: 'Text aus Word-Dokument extrahieren',
   wordCreate: 'Neues Word-Dokument aus JSON erstellen',
@@ -866,7 +866,7 @@ _textMap: {
   '保存': 'Speichern',
   '删除': 'Löschen',
   '编辑': 'Bearbeiten',
-  '确定': 'OK',
+
   '提示': 'Hinweis',
   '预览': 'Vorschau',
   '刷新': 'Aktualisieren',
@@ -874,7 +874,7 @@ _textMap: {
   '断开': 'Trennen',
   '启动': 'Starten',
   '停止': 'Stopp',
-  '保存设置': 'Einstellungen speichern',
+
   '测试连接': 'Verbindung testen',
   '验证': 'Verifizieren',
   '其他': 'Andere',
@@ -911,7 +911,7 @@ _textMap: {
   '超额时若选择 fallback 策略，将自动切换到该模型；请在下方价格表中也填写该模型的价格。': 'Wenn bei Überschreitung die Fallback-Richtlinie gewählt ist, wird automatisch auf dieses Modell gewechselt; tragen Sie den Preis auch in der Preistabelle unten ein.',
   '预算统计图表': 'Budgetstatistiken',
   '按当前周期设置展示日/周/月消费趋势与预算占比。': 'Zeigt Tages-/Wochen-/Monatsausgaben und Budgetanteil gemäß den aktuellen Zykluseinstellungen.',
-  '今日': 'Heute',
+
   '本周': 'Diese Woche',
   '本月': 'Diesen Monat',
   '消费趋势': 'Ausgabentrend',
@@ -935,7 +935,7 @@ _textMap: {
   '启用峰谷价': 'Haupt-/Nebenzeiten-Preise aktivieren',
   '勾选后在下方时段内应用倍率': 'Wendet Multiplikatoren in den untenstehenden Zeiträumen an, wenn aktiviert',
   '峰时段': 'Spitzenzeiten',
-  '从': 'Von',
+
   '时': 'Uhr',
   '到': 'Bis',
   '(起 ≥ 终 时表示跨夜)': '(Start ≥ Ende bedeutet über Nacht)',
@@ -980,7 +980,7 @@ _textMap: {
 
   // ── Titlebar ──
   'Chat 模式': 'Chat-Modus',
-  'Code 模式': 'Code-Modus',
+
   'Babe 模式（恋爱模式）': 'Babe-Modus (Begleiter)',
   '本地模式（操作本机 Agent）': 'Lokaler Modus (Host-Agent bedienen)',
   '远程模式（连接别人的 WebUI）': 'Remote-Modus (mit anderer WebUI verbinden)',
@@ -991,7 +991,7 @@ _textMap: {
   'Code历史': 'Code-Verlauf',
   'Babe历史': 'Babe-Verlauf',
   '工具': 'Werkzeuge',
-  '技能': 'Fertigkeiten',
+
   '知识库': 'Wissensbasis',
   '记忆': 'Gedächtnis',
   '设置': 'Einstellungen',
@@ -1024,7 +1024,7 @@ _textMap: {
   // ── Code page ──
   '工作区': 'Arbeitsbereich',
   '未选择工作区': 'Kein Arbeitsbereich ausgewählt',
-  '文件': 'Datei',
+
   '隐藏': 'Ausblenden',
   '打开工作区后显示文件树': 'Dateibaum erscheint nach Öffnen eines Arbeitsbereichs',
   '点击文件树中的文件以打开': 'Auf eine Datei im Baum klicken zum Öffnen',
@@ -1079,7 +1079,7 @@ _textMap: {
   '加载远程历史…': 'Remote-Verlauf wird geladen...',
   '远端暂无对话历史': 'Kein Remote-Gesprächsverlauf',
   '未知时间': 'Unbekannte Zeit',
-  '条消息': ' Nachrichten',
+
   '删除对话': 'Gespräch löschen',
   '确定要删除这轮对话吗？': 'Dieses Gespräch wirklich löschen?',
 
@@ -1219,7 +1219,7 @@ _textMap: {
 
   // ── Settings: LLM ──
   'LLM 配置': 'LLM-Konfiguration',
-  '接入方式': 'Anbieter',
+
   'OpenAI 兼容': 'OpenAI-kompatibel',
   'Anthropic 兼容': 'Anthropic-kompatibel',
   'OpenCode Zen (免费模型可用)': 'OpenCode Zen (kostenlose Modelle verfügbar)',
@@ -1496,9 +1496,9 @@ _textMap: {
   '更多信息': 'Weitere Infos',
   '请参阅导出的固件目录中的 README.md 文件。': 'Siehe README.md im exportierten Firmware-Verzeichnis.',
   '固件源码已导出到：': 'Firmware-Quellcode exportiert nach:',
-  '导出成功': 'Export erfolgreich',
+
   '请在 Arduino IDE 中打开 CIBYP-TRNG.ino 文件。': 'CIBYP-TRNG.ino in Arduino IDE öffnen.',
-  '导出失败：': 'Export fehlgeschlagen:',
+
   '未知错误': 'Unbekannter Fehler',
   '导出失败': 'Export fehlgeschlagen',
 
@@ -1530,7 +1530,7 @@ _textMap: {
   '环境变量格式错误(需JSON对象)': 'Ungültiges Umgebungsvariablenformat (JSON-Objekt erforderlich)',
   '添加失败': 'Hinzufügen fehlgeschlagen',
   '已连接': 'Verbunden',
-  '连接中...': 'Verbinde...',
+
   '错误': 'Fehler',
   '未连接': 'Getrennt',
 
@@ -1578,7 +1578,7 @@ _textMap: {
   '发件人:': 'Von:',
   '主题:': 'Betreff:',
   '无主题': 'Kein Betreff',
-  '已停止': 'Gestoppt',
+
   '❌ 停止失败:': '❌ Stoppen fehlgeschlagen:',
   '❌ 启动失败:': '❌ Starten fehlgeschlagen:',
   '未运行': 'Nicht aktiv',
@@ -1592,7 +1592,7 @@ _textMap: {
   '注意：': 'Hinweis:',
   '独立窗口小游戏（飞花令/三国杀/谁是卧底）在Web控制模式下不可用，GeoGebra仅在主机运行。': 'Eigenständige Spielfenster sind im Web-Steuerungsmodus nicht verfügbar. GeoGebra läuft nur auf dem Host.',
   '访问安全': 'Zugriffssicherheit',
-  '访问密码': 'Zugriffspasswort',
+
   '设置访问密码': 'Zugriffspasswort festlegen',
   '启用 2FA 两步验证': '2FA aktivieren',
   '服务器设置': 'Server-Einstellungen',
