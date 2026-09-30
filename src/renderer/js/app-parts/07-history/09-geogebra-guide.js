@@ -28,7 +28,7 @@
 
   if (btnCloseGgb) {
     btnCloseGgb.addEventListener('click', () => {
-      ggbPanel.classList.add('hidden');
-      document.body.classList.remove('geogebra-open');
+      window.setAppPanelOpen('geogebra-panel', false);
+
     });
   }

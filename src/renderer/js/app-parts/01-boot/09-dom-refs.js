@@ -29,8 +29,6 @@
     }).catch(() => {});
   }
   const todoPanel = document.getElementById('todo-panel');
-  const todoList = document.getElementById('todo-list');
-  const todoInput = document.getElementById('todo-input');
   const approvalPanel = document.getElementById('approval-panel');
   const approvalContent = document.getElementById('approval-content');
   // 工具首次使用授权模态框（Playwright / Computer Use）

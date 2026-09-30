@@ -7,6 +7,12 @@
     const r3 = document.getElementById('btn-restore-chat');
     const s1 = document.getElementById('code-resizer-1');
     const s2 = document.getElementById('code-resizer-2');
+    [fileTree, editor, chat].forEach(panel => {
+      if (!panel) return;
+      panel.inert = panel.classList.contains('collapsed');
+      panel.setAttribute('aria-hidden', String(panel.inert));
+      WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#' + panel.id, attr: 'aria-hidden', value: panel.getAttribute('aria-hidden') });
+    });
     r1?.classList.toggle('hidden', !fileTree?.classList.contains('collapsed'));
     r2?.classList.toggle('hidden', !editor?.classList.contains('collapsed'));
     r3?.classList.toggle('hidden', !chat?.classList.contains('collapsed'));
@@ -23,17 +29,22 @@
     if (s1) WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#code-resizer-1', attr: 'class', value: s1.className });
     if (s2) WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#code-resizer-2', attr: 'class', value: s2.className });
   }
-  document.getElementById('btn-close-file-tree')?.addEventListener('click', () => {
-    document.getElementById('code-file-tree-panel')?.classList.add('collapsed');
+  function collapseCodePanel(id) {
+    const open = [...document.querySelectorAll('#code-file-tree-panel, #code-editor-panel, #code-chat')].filter(panel => !panel.classList.contains('collapsed'));
+    if (open.length <= 1) { showToast('至少保留一个工作面板', 'info'); return; }
+    const panel = document.getElementById(id);
+    if (panel?.contains(document.activeElement)) document.getElementById(id === 'code-file-tree-panel' ? 'btn-restore-file-tree' : id === 'code-editor-panel' ? 'btn-restore-editor' : 'btn-restore-chat')?.focus();
+    panel?.classList.add('collapsed');
     updateCodePanelRestoreBar();
+  }
+  document.getElementById('btn-close-file-tree')?.addEventListener('click', () => {
+    collapseCodePanel('code-file-tree-panel');
   });
   document.getElementById('btn-close-editor')?.addEventListener('click', () => {
-    document.getElementById('code-editor-panel')?.classList.add('collapsed');
-    updateCodePanelRestoreBar();
+    collapseCodePanel('code-editor-panel');
   });
   document.getElementById('btn-close-chat')?.addEventListener('click', () => {
-    document.getElementById('code-chat')?.classList.add('collapsed');
-    updateCodePanelRestoreBar();
+    collapseCodePanel('code-chat');
   });
   // 恢复按钮
   document.getElementById('btn-restore-file-tree')?.addEventListener('click', () => {

@@ -8,8 +8,7 @@
     let lastActiveTab = 'ai';
 
     function activateTab(tabId) {
-      document.querySelectorAll('.settings-tab').forEach(b => b.classList.toggle('active', b.dataset.tab === tabId));
-      document.querySelectorAll('.settings-panel').forEach(p => p.classList.toggle('active', p.dataset.tab === tabId));
+      window.activateSettingsTab(tabId);
     }
 
     function settingItemText(item) {
@@ -108,11 +107,7 @@
     // 全局字体即时生效
     if (typeof applyFontSettings === 'function') applyFontSettings(merged);
     // 即时生效：更新 maxTokens + 重算 systemPrompt（persona/llm 变更后立即生效，无需重启）
-    if (typeof agent.applySettings === 'function') {
-      agent.applySettings(merged);
-    } else {
-      agent.settings = merged;
-    }
+    for (const live of allLiveAgents()) live.applySettings(merged);
     // 隐私信息保护：同步到 Code / Babe 代理实例（其 settings 为独立快照）
     if (merged.privacyProtection) {
       if (typeof codeAgent !== 'undefined' && codeAgent && codeAgent.settings) codeAgent.settings.privacyProtection = merged.privacyProtection;

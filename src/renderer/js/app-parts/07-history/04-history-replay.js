@@ -50,7 +50,7 @@
         const end = Math.min(total, start + chunkSize);
         for (let i = start; i < end; i++) {
           const msg = list[i];
-          if (!msg) continue;
+          if (!msg || msg.metadata?.kind === 'context-update') continue;
           if (msg.role === 'user') {
             addMessageToChat('user', extractTextContent(msg.content));
           } else if (msg.role === 'assistant') {
@@ -100,10 +100,7 @@
     setTitlebarTitle(agent.conversationTitle || conv?.title || '未命名对话');
     updateContextProgress();
     // 切换到 chat 页
-    document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
-    document.querySelector('.nav-item[data-page="chat"]')?.classList.add('active');
-    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-    document.getElementById('page-chat')?.classList.add('active');
+    navigatePage('chat');
     // 清空并回放消息（异步分块渲染，避免长历史阻塞渲染器）
     chatMessages.innerHTML = '';
     if (typeof VirtualScroller !== 'undefined') VirtualScroller.reset();

@@ -22,10 +22,19 @@
   function activateSettingsTabCore(btn) {
     if (!btn || !btn.dataset || !btn.dataset.tab) return;
     document.querySelectorAll('.settings-tab').forEach(b => b.classList.remove('active'));
-    document.querySelectorAll('.settings-panel').forEach(p => p.classList.remove('active'));
+    document.querySelectorAll('.settings-panel').forEach(p => {
+      p.classList.remove('active');
+      p.inert = true;
+      p.setAttribute('aria-hidden', 'true');
+    });
     btn.classList.add('active');
     const panel = document.querySelector(`.settings-panel[data-tab="${btn.dataset.tab}"]`);
-    if (panel) panel.classList.add('active');
+    if (panel) {
+      panel.classList.add('active');
+      panel.inert = false;
+      panel.setAttribute('aria-hidden', 'false');
+      if (motionEnabled()) panel.animate([{ opacity: 0, transform: 'translateY(6px)' }, { opacity: 1, transform: 'translateY(0)' }], { duration: 160 });
+    }
     // Lazy-load usage stats when the tab is opened
     if (btn.dataset.tab === 'usage') {
       const activePeriod = document.querySelector('.usage-period-btn.active');

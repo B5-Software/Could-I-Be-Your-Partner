@@ -85,6 +85,7 @@
         const end = Math.min(total, start + chunkSize);
         for (let i = start; i < end; i++) {
           const m = messages[i];
+          if (m.metadata?.kind === 'context-update') continue;
           if (m.role === 'user') {
             addBabeMessage('user', extractTextContent(m.content) || '[多模态内容]');
           } else if (m.role === 'assistant') {

@@ -101,6 +101,7 @@
         const end = Math.min(total, start + chunkSize);
         for (let i = start; i < end; i++) {
           const msg = messages[i];
+          if (msg.metadata?.kind === 'context-update') continue;
           if (msg.role === 'user') {
             addCodeMessage('user', extractTextContent(msg.content), false);
           } else if (msg.role === 'assistant') {

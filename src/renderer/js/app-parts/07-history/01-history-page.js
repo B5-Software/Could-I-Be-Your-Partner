@@ -37,10 +37,7 @@
             // 高亮当前项；远端加载后会推送 messagesSync
             list.querySelectorAll('.history-item').forEach(el => el.classList.toggle('active', el.dataset.id === btn.dataset.id));
             // 切换到对话页
-            document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
-            document.querySelector('.nav-item[data-page="chat"]')?.classList.add('active');
-            document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-            document.getElementById('page-chat')?.classList.add('active');
+            navigatePage('chat');
             clearChatMessagesUI();
             addThinkingIndicator();
           });
@@ -116,6 +113,7 @@
       lines.push('');
 
       (conv.messages || []).forEach(msg => {
+      if (msg.metadata?.kind === 'context-update') return;
         const role = msg.role || 'assistant';
         const roleName = role === 'user' ? '用户' : role === 'assistant' ? 'AI' : role === 'system' ? '系统' : '工具';
         lines.push(`## ${roleName}`);
@@ -155,10 +153,7 @@
           setTitlebarTitle(agent.conversationTitle || '未命名对话');
           updateContextProgress();
           // Switch to chat page
-          document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
-          document.querySelector('.nav-item[data-page="chat"]')?.classList.add('active');
-          document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-          document.getElementById('page-chat')?.classList.add('active');
+          navigatePage('chat');
           // Replay messages（异步分块渲染 + 进度模态框，避免长历史阻塞/卡死）
           chatMessages.innerHTML = '';
           if (typeof VirtualScroller !== 'undefined') VirtualScroller.reset();

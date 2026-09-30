@@ -5828,8 +5828,10 @@ test('界面动效：主标签页切换动画可选 + 打包版本注入 git 哈
   assert.ok((settingsJs.match(/setting-ui-animations/g) || []).length >= 2, '设置页脚本应恢复并监听动效开关');
   assert.ok(settingsJs.includes('s.animations = e.target.checked'), '动效开关应保存到设置');
 
-  // 主标签页切换动画：纯淡入 + 可关闭
-  assert.ok(cssContent.includes('animation: fadeIn 0.3s ease'), '.page 切换动画应为纯淡入');
+  // 主标签页切换动画：统一控制器，遵守设置和减少动态效果偏好
+  const surfaces = fsL.readFileSync(pathL.join(__dirname, '../src/renderer/core/surfaces.ts'), 'utf-8');
+  assert.ok(surfaces.includes('page.animate('), '页面切换应由统一控制器驱动');
+  assert.ok(surfaces.includes('prefers-reduced-motion'), '动画应遵守系统减少动态效果偏好');
   assert.ok(!cssContent.includes('@keyframes pageIn'), '不应再有 pageIn 位移动画');
   assert.ok(cssContent.includes('html[data-animations="off"] .page'), '应有关闭动画的 CSS 规则');
 
@@ -6263,7 +6265,7 @@ async function runBatchToolTests() {
     for (const key of ['paths', 'imagePaths', 'searches', 'requests', 'urls', 'hostnames', 'items']) {
       assert.ok(content.includes(`${key}: { type: 'array'`), `缺少批量参数 ${key}`);
     }
-    assert.ok(content.includes("enum: ['add', 'remove', 'toggle', 'list', 'batch']"), 'todoList 应支持 batch');
+    assert.ok(content.includes("enum: ['add', 'update', 'remove', 'toggle', 'list', 'batch']"), 'todoList 应支持编辑和 batch');
   });
 
   } finally {

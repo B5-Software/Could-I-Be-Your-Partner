@@ -3,8 +3,8 @@
     const result = await window.api.spreadsheetImportFile(filePath);
     if (!result.ok) return result;
     ensureSpreadsheet();
-    spreadsheetPanel.classList.remove('hidden');
-    document.body.classList.add('geogebra-open');
+    window.setAppPanelOpen('spreadsheet-panel', true);
+
     if (result.sheetName) ssEngine.title = result.sheetName;
     if (result.cells && result.cells.length > 0) {
       ssEngine.setCells(result.cells);

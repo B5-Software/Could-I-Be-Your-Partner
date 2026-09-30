@@ -8,16 +8,16 @@
 
     // 已初始化且配置一致 → 直接显示面板
     if (ggbInitialized && ggbApplet && ggbCurrentConfig && ggbCurrentConfig.key === key) {
-      ggbPanel.classList.remove('hidden');
-      document.body.classList.add('geogebra-open');
+      window.setAppPanelOpen('geogebra-panel', true);
+
       return Promise.resolve({ ok: true, message: 'GeoGebra已显示', ready: true, appName });
     }
     // 正在进行中的初始化：配置一致则复用其结果；否则等完成后按新配置重建
     if (ggbInitPromise) {
       return ggbInitPromise.then((r) => {
         if (r && r.ok && ggbCurrentConfig && ggbCurrentConfig.key === key) {
-          ggbPanel.classList.remove('hidden');
-          document.body.classList.add('geogebra-open');
+          window.setAppPanelOpen('geogebra-panel', true);
+
           return { ...r, ready: true, appName };
         }
         return window.initGeoGebra(opts);
@@ -56,8 +56,8 @@
       // 再用具体像素值传给 GGB params（而非 '100%'）。
       // GGB inject 时会把 '100%' 解析为 host clientWidth/Height，若此时为 0（flex 布局未完成）就固化为 0×0，
       // 后续 setSize 也救不回来（GGB 内部 canvas 已按 0×0 创建）。
-      ggbPanel.classList.remove('hidden');
-      document.body.classList.add('geogebra-open');
+      window.setAppPanelOpen('geogebra-panel', true);
+
 
       // 用 requestAnimationFrame ×2 确保布局完成（一帧可能不够，flex 有时需要两帧）
       requestAnimationFrame(() => {

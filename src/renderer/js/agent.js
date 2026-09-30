@@ -520,7 +520,7 @@ class Agent {
     const userProfile = this.settings?.userProfile || {};
     const displayName = userProfile.name || username;
     const userBio = userProfile.bio || '';
-    const platform = sysInfo.platform || process.platform || 'unknown';
+    const platform = sysInfo.platform || (typeof process !== 'undefined' ? process.platform : 'unknown');
     const homeDir = sysInfo.homeDir || '';
     const documentsDir = sysInfo.documentsDir || '';
     const desktopDir = sysInfo.desktopDir || '';
@@ -528,24 +528,10 @@ class Agent {
     const osType = sysInfo.osType || '';
 
     // 工作目录信息（会在 init 时异步更新）
-    const workspaceTree = this.cachedWorkspaceTree || '';
-    const workspaceTreeStr = workspaceTree ? `\n\n工作目录文件树：\n\`\`\`\n${workspaceTree}\n\`\`\`\n` : '';
+    const workspaceTreeStr = ''; // file tree updates are admitted separately from the stable prompt
     
     const convoTitle = this.conversationTitle || '未命名对话';
-    const skillsSection = this.skillsCatalog.length > 0
-      ? `\n\n已加载技能目录：\n- ${this.skillsCatalog
-          .map(skill => {
-            const scripts = Array.isArray(skill?.scripts)
-              ? skill.scripts.filter(s => /\.(js|mjs|cjs|py|sh|bash|zsh|ps1|bat|cmd)$/i.test(String(s?.name || s || ''))).map(s => s?.name || s)
-              : [];
-            const scriptsText = scripts.length ? `（脚本: ${scripts.join(', ')}）` : '';
-            const allowedText = Array.isArray(skill?.allowedTools) && skill.allowedTools.length ? `（allowed-tools: ${skill.allowedTools.join(' ')}）` : '';
-            const compatibilityText = skill?.compatibility ? `（兼容: ${skill.compatibility}）` : '';
-            const hasPrompt = skill.prompt ? ' [含prompt]' : '';
-            return `${skill.name || '未命名技能'}: ${skill.description || '无描述'}${scriptsText}${allowedText}${compatibilityText}${hasPrompt}`;
-          })
-          .join('\n- ')}`
-      : '';
+    const skillsSection = ''; // catalog is an independently observed context source
     const optimizationGuidance = this.settings?.autoOptimizeToolSelection && !this.sessionAutoOptimizeDisabled
       ? `\n\n【工具优化模式（必须遵守）】：
 - 当前处于“工具精简”模式，你只会看到本轮优化后的工具。
@@ -668,12 +654,24 @@ ${customPrompt ? '\n用户自定义提示词:\n' + customPrompt : ''}${skillsSec
     ].join('\n');
   }
 
-  /**
-   * 已激活技能的完整指令（易变块）。
-   * 不放进 system prompt，而是在请求消息序列的末尾、最后一条 user 消息之前注入：
-   * 激活/停用技能只改变这个尾部块，稳定的 system + 历史前缀保持逐字节不变，
-   * 提示词前缀缓存（DeepSeek/OpenRouter 等 context caching）不会被整段击穿。
-   */
+  /** Skill guidance is an independent runtime source, admitted at provider boundaries. */
+  getSkillsCatalogBlock() {
+    return this.skillsCatalog.length > 0
+      ? `\n\n已加载技能目录：\n- ${this.skillsCatalog
+          .map(skill => {
+            const scripts = Array.isArray(skill?.scripts)
+              ? skill.scripts.filter(s => /\.(js|mjs|cjs|py|sh|bash|zsh|ps1|bat|cmd)$/i.test(String(s?.name || s || ''))).map(s => s?.name || s)
+              : [];
+            const scriptsText = scripts.length ? `（脚本: ${scripts.join(', ')}）` : '';
+            const allowedText = Array.isArray(skill?.allowedTools) && skill.allowedTools.length ? `（allowed-tools: ${skill.allowedTools.join(' ')}）` : '';
+            const compatibilityText = skill?.compatibility ? `（兼容: ${skill.compatibility}）` : '';
+            const hasPrompt = skill.prompt ? ' [含prompt]' : '';
+            return `${skill.name || '未命名技能'}: ${skill.description || '无描述'}${scriptsText}${allowedText}${compatibilityText}${hasPrompt}`;
+          })
+          .join('\n- ')}`
+      : '';
+  }
+
   getActiveSkillsBlock() {
     if (this.minimalMode) return '';
     if (!Array.isArray(this.activeSkills) || this.activeSkills.length === 0) return '';
@@ -769,10 +767,9 @@ ${affectionDesc}
   getCodeSystemPrompt() {
     const sysInfo = this.systemInfo || {};
     const username = sysInfo.username || '用户';
-    const platform = sysInfo.platform || process.platform || 'unknown';
+    const platform = sysInfo.platform || (typeof process !== 'undefined' ? process.platform : 'unknown');
     const workspace = this.codeWorkspacePath || this.workspacePath || '(未选择工作区)';
-    const workspaceTree = this.cachedWorkspaceTree || '';
-    const workspaceTreeStr = workspaceTree ? `\n\n工作区文件树：\n\`\`\`\n${workspaceTree}\n\`\`\`\n` : '';
+    const workspaceTreeStr = ''; // file tree updates are admitted separately from the stable prompt
 
     const convoTitle = this.conversationTitle || '未命名会话';
 
@@ -946,8 +943,9 @@ ${affectionDesc}
     let userSkills = [];
     try {
       const skills = await window.api.listSkills();
-      userSkills = Array.isArray(skills) ? skills : [];
-    } catch { /* ignore */ }
+      if (!Array.isArray(skills)) return;
+      userSkills = skills;
+    } catch { return; } // a failed observation must not revoke admitted guidance
     // Merge bundled skills (built-in) with user skills.
     // User skills take precedence when names collide (user can override bundled).
     let bundled = [];
@@ -958,6 +956,28 @@ ${affectionDesc}
     for (const s of bundled) byName.set(s.name, s);
     for (const s of userSkills) byName.set(s.name, s); // user overrides bundled
     this.skillsCatalog = Array.from(byName.values());
+    // Keep activated skill bodies current, including explicit deletion.
+    this.activeSkills = (this.activeSkills || []).flatMap(active => {
+      const latest = byName.get(active.name);
+      return latest ? [{ ...active, ...latest }] : [];
+    });
+  }
+
+  async observeRuntimeContext() {
+    // This is a safe provider boundary: no model stream or unsettled tool batch is active.
+    if (this.workspacePath && typeof window.api.workspaceGetFileTree === 'function') {
+      try {
+        const tree = await window.api.workspaceGetFileTree(this.workspacePath);
+        if (tree?.ok && typeof tree.tree === 'string') this.cachedWorkspaceTree = tree.tree;
+      } catch { /* unavailable: retain the last successfully observed tree */ }
+    }
+    this.contextManager.setSystemPrompt(this.getSystemPrompt());
+    this.contextManager.setContextSource('技能目录', this.minimalMode ? '' : this.getSkillsCatalogBlock());
+    this.contextManager.setContextSource('工作目录文件树', this.minimalMode ? '' : this.cachedWorkspaceTree || '');
+    this.contextManager.setContextSource('已激活技能', this.getActiveSkillsBlock());
+    this.contextManager.setContextSource('当前会话待办', this.todoItems.length
+      ? JSON.stringify(this.todoItems.map(({ id, text, done }) => ({ id, text, done }))) : '');
+    this.contextManager.admitContextUpdates();
   }
 
   getActiveToolNames() {
@@ -1187,7 +1207,7 @@ ${affectionDesc}
   getLatestUserMessageText() {
     const msgs = this.contextManager?.messages || [];
     for (let i = msgs.length - 1; i >= 0; i--) {
-      if (msgs[i]?.role === 'user' && typeof msgs[i].content === 'string') {
+      if (msgs[i]?.role === 'user' && msgs[i].metadata?.kind !== 'context-update' && typeof msgs[i].content === 'string') {
         return msgs[i].content;
       }
     }
@@ -1762,6 +1782,8 @@ ${affectionDesc}
         updatedAt: new Date().toISOString(),
         schemaVersion: 2, // 历史格式版本：新版持久化完整 transcript（historyMessages）到 messages
         messages: this.contextManager.getHistoryMessages(),
+        todoItems: this.todoItems.map(item => ({ ...item })),
+        todoIdCounter: this.todoIdCounter,
         summaries: this.contextManager.summaries,
         tarotCard: this.tarotCard,
         workspacePath: this.workspacePath,
@@ -1871,6 +1893,11 @@ ${affectionDesc}
       historyMsgs = this._migrateLegacyHistory(conversation, historyMsgs);
     }
     this.contextManager.loadFromHistory(historyMsgs);
+    const todoIds = new Set();
+    this.todoItems = (Array.isArray(conversation.todoItems) ? conversation.todoItems : [])
+      .filter(item => item && Number.isSafeInteger(item.id) && item.id > 0 && typeof item.text === 'string' && item.text.trim() && !todoIds.has(item.id) && todoIds.add(item.id))
+      .map(({ id, text, done }) => ({ id, text, done: done === true }));
+    this.todoIdCounter = Math.max(Number.isSafeInteger(conversation.todoIdCounter) ? conversation.todoIdCounter : 0, ...this.todoItems.map(item => item.id));
     if (conversation.tarotCard) {
       this.tarotCard = conversation.tarotCard;
       if (this.onMessage) this.onMessage('tarot', this.tarotCard);
@@ -2248,6 +2275,10 @@ ${affectionDesc}
         break;
       }
 
+      await this.observeRuntimeContext();
+      if (this.stopped || runId !== this.runId) break;
+      // Include the current advertised tools in the budget before compaction.
+      this.getRuntimeToolSchemas();
       // 上下文管理：水位线压缩（Tier0 剪枝 → Tier1 结构化摘要 → Tier2 溢出恢复）
       // 自动压缩总开关在设置「上下文」页，关闭后跳过（手动按钮仍可用）。
       if (!this.minimalMode && this.settings?.contextCompaction?.enabled !== false) {
@@ -2267,8 +2298,11 @@ ${affectionDesc}
         await this.optimizeToolsForConversation(this.getLatestUserMessageText(), '循环检测到优化未执行，自动补偿优化');
       }
 
-      // 已激活技能作为易变后缀注入（最后一条 user 消息前），保护前缀缓存
-      const messages = this.injectActiveSkillsSuffix(this.contextManager.getMessages());
+      // Rebase only after a completed checkpoint; otherwise admit append-only changes.
+      this.contextManager.setSystemPrompt(this.getSystemPrompt());
+      this.contextManager.admitContextUpdates();
+      if (this.stopped || runId !== this.runId) break;
+      const messages = this.contextManager.getMessages();
       const tools = this.getRuntimeToolSchemas();
       const streamEnabled = this.settings?.llm?.streamResponses !== false;
       // requestId 必须全局唯一：并发会话可能在同一毫秒启动同一轮循环，
@@ -2385,7 +2419,8 @@ ${affectionDesc}
           await new Promise(r => setTimeout(r, 800 * retryCount));
           if (this.stopped || runId !== this.runId) break;
           // 重新构建消息（修复可能已改动上下文）并用非流式重试，避免流式事件错乱
-          const retryMessages = this.injectActiveSkillsSuffix(this.contextManager.getMessages());
+          this.contextManager.admitContextUpdates();
+          const retryMessages = this.contextManager.getMessages();
           const retryTools = this.getRuntimeToolSchemas();
           try {
             result = await window.api.chatLLM(retryMessages, this._llmOptions({
@@ -4528,11 +4563,15 @@ ${affectionDesc}
       if (this.todoItems.length === before) return { ok: false, action, id, error: typeof i18nToolReturn === 'function' ? i18nToolReturn('todo_not_found', '未找到该待办事项') : '未找到该待办事项' };
       return { ok: true, action, id };
     }
-    if (action === 'toggle') {
+    if (action === 'toggle' || action === 'update') {
       const id = Number(op.id);
       const item = this.todoItems.find(t => t.id === id);
       if (!item) return { ok: false, action, id, error: typeof i18nToolReturn === 'function' ? i18nToolReturn('todo_not_found', '未找到该待办事项') : '未找到该待办事项' };
-      item.done = !item.done;
+      if (action === 'update') {
+        const text = typeof op.text === 'string' ? op.text.trim() : '';
+        if (!text) return { ok: false, error: '待办内容不能为空' };
+        item.text = text;
+      } else item.done = !item.done;
       return { ok: true, action, id, done: item.done, text: item.text };
     }
     return { ok: false, action, error: typeof i18nToolReturn === 'function' ? i18nToolReturn('unknown_action', '未知操作') : '未知操作' };
@@ -4551,6 +4590,8 @@ ${affectionDesc}
     }
     const results = ops.map(op => this._applyTodoOp(op));
     if (this.onTodoUpdate) this.onTodoUpdate(this.todoItems);
+    if (typeof window !== 'undefined') window.AppBus?.emit('todo-updated', { agent: this });
+    if (results.some(result => result.ok)) this.saveToHistory();
     const ok = results.every(r => r.ok);
     const added = results.filter(r => r.ok && r.action === 'add').map(r => r.id);
     if (results.length === 1) {

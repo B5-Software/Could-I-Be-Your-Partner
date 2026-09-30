@@ -10,13 +10,9 @@
     }
 
     // Close GeoGebra if open (only one split-screen at a time)
-    if (ggbPanel && !ggbPanel.classList.contains('hidden')) {
-      ggbPanel.classList.add('hidden');
-      document.body.classList.remove('geogebra-open');
-    }
 
-    canvasPanel.classList.remove('hidden');
-    document.body.classList.add('geogebra-open'); // Reuse same CSS class for split-screen
+    window.setAppPanelOpen('canvas-panel', true);
+
 
     // Auto-clear canvas when initializing
     window.clearCanvas();
@@ -126,7 +122,7 @@
 
   if (btnCloseCanvas) {
     btnCloseCanvas.addEventListener('click', () => {
-      canvasPanel.classList.add('hidden');
-      document.body.classList.remove('geogebra-open');
+      window.setAppPanelOpen('canvas-panel', false);
+
     });
   }

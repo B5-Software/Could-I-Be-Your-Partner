@@ -84,10 +84,7 @@ window.api.onWebControlSendMessage(async (message) => {
       setTitlebarTitle(agent.conversationTitle || '未命名对话');
       updateContextProgress();
       // Switch to chat page
-      document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
-      document.querySelector('.nav-item[data-page="chat"]')?.classList.add('active');
-      document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-      document.getElementById('page-chat')?.classList.add('active');
+      navigatePage('chat');
       // 推送 nav-item 和 page 切换状态到 WebUI/Remote
       document.querySelectorAll('.nav-item[data-page]').forEach(b => {
         WebUIMirror.pushDomEvent({ type: 'dom_update', selector: `.nav-item[data-page="${b.dataset.page}"]`, attr: 'class', value: b.className });
@@ -99,6 +96,7 @@ window.api.onWebControlSendMessage(async (message) => {
       clearChatMessagesUI();
       const toolCallMap = {};
       for (const msg of (conv.messages || [])) {
+        if (msg.metadata?.kind === 'context-update') continue;
         if (msg.role === 'user') {
           addMessageToChat('user', extractTextContent(msg.content));
         } else if (msg.role === 'assistant') {

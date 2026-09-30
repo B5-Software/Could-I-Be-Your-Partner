@@ -109,6 +109,7 @@
     if (conv.workspacePath) lines.push(`- 工作目录：${conv.workspacePath}`);
     lines.push('');
     (conv.messages || []).forEach(msg => {
+      if (msg.metadata?.kind === 'context-update') return;
       const role = msg.role || 'assistant';
       const roleName = role === 'user' ? '用户' : role === 'assistant' ? 'AI' : role === 'system' ? '系统' : '工具';
       lines.push(`## ${roleName}`);
@@ -179,10 +180,7 @@
       }
       setTitlebarTitle(agent.conversationTitle || '未命名对话');
       updateContextProgress();
-      document.querySelectorAll('.nav-item').forEach(b => b.classList.remove('active'));
-      document.querySelector('.nav-item[data-page="chat"]')?.classList.add('active');
-      document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-      document.getElementById('page-chat')?.classList.add('active');
+      navigatePage('chat');
       chatMessages.innerHTML = '';
       if (typeof VirtualScroller !== 'undefined') VirtualScroller.reset();
       if (typeof VirtualScroller !== 'undefined') VirtualScroller.markBatchStart();

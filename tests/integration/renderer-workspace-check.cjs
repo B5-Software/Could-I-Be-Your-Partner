@@ -1,0 +1,112 @@
+/* Native Chromium checks: real layout, animation cancellation, focus and session-owned state. */
+module.exports = async function checkWorkspace(webContents) {
+  return webContents.executeJavaScript(`(async () => {
+    const check = (condition, message) => { if (!condition) throw new Error(message); };
+    // Chromium pauses CSS timelines in hidden windows. Finish their actual animations
+    // after the delay so we can validate completion/cancellation without showing a window.
+    const wait = async ms => {
+      await new Promise(resolve => setTimeout(resolve, ms));
+      if (document.hidden) {
+        document.getAnimations().forEach(animation => { if (animation.playState === 'running') animation.finish(); });
+        await new Promise(resolve => setTimeout(resolve, 0));
+      }
+    };
+    const click = selector => { const element = document.querySelector(selector); check(element, selector); element.click(); };
+    const root = document.getElementById('todo-panel');
+    const input = document.getElementById('todo-input');
+    const manager = window.__sessionManager;
+    const primary = manager.getActive('chat');
+    check(primary, 'active Chat session');
+    document.documentElement.dataset.animations = 'on';
+    click('#btn-todo-sidebar');
+    check(getComputedStyle(root).position === 'fixed', 'Todo must float above the workspace');
+    check(!root.inert && document.activeElement === input, 'Todo open restores interactivity and focus');
+    input.value = '<img src=x onerror=alert(1)> small goal';
+    document.getElementById('todo-form').requestSubmit();
+    check(primary.agent.todoItems.length === 1, 'form adds to the current session');
+    check(!root.querySelector('.todo-list img'), 'Todo content is rendered as plain text');
+    click('[data-todo-action="edit"]');
+    const editor = root.querySelector('.todo-edit-input');
+    editor.value = 'edited goal';
+    editor.form.requestSubmit();
+    check(primary.agent.todoItems[0].text === 'edited goal', 'editing updates the item');
+    click('[data-todo-action="toggle"]');
+    check(primary.agent.todoItems[0].done, 'toggle completes an item');
+    click('[data-todo-filter="pending"]');
+    check(root.querySelectorAll('.todo-item').length === 0, 'pending filter excludes completed items');
+    click('[data-todo-filter="all"]');
+    input.value = 'draft in first session';
+    const otherAgent = new primary.agent.constructor();
+    otherAgent.settings = primary.agent.settings;
+    otherAgent.workspacePath = primary.agent.workspacePath;
+    otherAgent.conversationId = 'ui-second-session';
+    otherAgent.conversationTitle = '第二个会话';
+    const other = manager.registerAgent('chat', otherAgent);
+    manager.activate('chat', other.key);
+    check(!input.value && root.querySelectorAll('.todo-item').length === 0, 'new session has independent Todos and draft');
+    input.value = 'second goal';
+    document.getElementById('todo-form').requestSubmit();
+    check(otherAgent.todoItems.length === 1 && primary.agent.todoItems.length === 1, 'edits never cross sessions');
+    manager.activate('chat', primary.key);
+    check(input.value === 'draft in first session', 'switching back restores the draft');
+    check(root.querySelector('.todo-text').textContent === 'edited goal', 'switching back restores the list');
+    click('#btn-clear-completed');
+    check(!primary.agent.todoItems.length && otherAgent.todoItems.length === 1, 'clear completed affects only its owner');
+    // Closing and immediately reopening must cancel the stale completion callback.
+    click('#btn-close-todo');
+    click('#btn-todo-sidebar');
+    await wait(240);
+    check(!root.classList.contains('hidden') && !root.inert, 'stale Todo exit cannot hide a reopened window');
+    click('#btn-close-todo');
+    await wait(240);
+    check(root.classList.contains('hidden') && root.inert, 'closed Todo is removed from keyboard navigation');
+    check(document.activeElement.id === 'btn-todo-sidebar', 'closing returns keyboard focus');
+    click('#btn-sidebar-toggle');
+    await wait(220);
+    check(document.getElementById('sidebar').offsetWidth > 120, 'sidebar expands with readable labels: ' + JSON.stringify({ width: document.getElementById('sidebar').offsetWidth, classes: document.getElementById('sidebar').className, widthRule: getComputedStyle(document.getElementById('sidebar')).width, visibility: document.visibilityState, animations: document.getElementById('sidebar').getAnimations().map(a => ({state:a.playState,time:a.currentTime})) }));
+    click('#btn-sidebar-toggle');
+    window.navigatePage('about');
+    check(document.querySelectorAll('#main-content > .page.active').length === 1, 'navigation has one active page');
+    check(document.getElementById('page-chat').inert, 'inactive pages cannot receive focus');
+    click('.nav-item[data-page="about"]');
+    check(document.getElementById('page-chat').classList.contains('active'), 'clicking an expanded auxiliary app returns to the session');
+    for (const page of ['tools','skills','knowledge','memory','automation','history','settings','about']) window.navigatePage(page);
+    window.navigatePage('chat');
+    await wait(400);
+    check(document.getElementById('page-chat').classList.contains('active'), 'late loaders cannot reactivate a previous page');
+    window.initCanvas();
+    check(document.body.classList.contains('geogebra-open'), 'opening dock allocates workspace space');
+    window.minimizePanel('canvas-panel');
+    window.restorePanel('canvas-panel');
+    await wait(240);
+    check(!document.getElementById('canvas-panel').classList.contains('hidden'), 'rapid dock restore cancels stale exits');
+    window.initSpreadsheet('native check');
+    await wait(240);
+    check(document.getElementById('canvas-panel').classList.contains('hidden'), 'dock apps are mutually exclusive');
+    check(document.querySelector('[data-panel-id="canvas-panel"]'), 'switching dock retains the previous app as a restore tab');
+    window.setAppPanelOpen('spreadsheet-panel', false);
+    check(!document.body.classList.contains('geogebra-open'), 'closing active dock releases layout');
+    click('[data-panel-id="canvas-panel"]');
+    window.setAppPanelOpen('canvas-panel', false);
+    await wait(240);
+    check(!document.querySelector('[data-panel-id="canvas-panel"]'), 'closing restored app removes its minimized tab');
+    document.documentElement.dataset.animations = 'off';
+    click('#btn-todo-sidebar');
+    click('#btn-close-todo');
+    check(root.classList.contains('hidden'), 'disabled animation closes immediately');
+    // Code panels retain at least one usable pane even after repeated collapse commands.
+    click('#btn-close-file-tree');
+    click('#btn-close-editor');
+    click('#btn-close-chat');
+    check([...document.querySelectorAll('#code-file-tree-panel, #code-editor-panel, #code-chat')].filter(panel => !panel.classList.contains('collapsed')).length === 1, 'workspace never collapses all panes');
+    click('#btn-restore-file-tree');
+    click('#btn-restore-editor');
+    check(!document.getElementById('code-file-tree-panel').inert, 'restored Code panels regain keyboard navigation');
+    document.documentElement.dataset.animations = 'on';
+    window.navigatePage('settings');
+    window.activateSettingsTab('animations');
+    check(document.querySelector('.settings-panel[data-tab="animations"]').getAttribute('aria-hidden') === 'false', 'settings tabs share accessible activation');
+    window.navigatePage('chat');
+    return { todo: 'floating, editable, safe text, session-owned', panels: 'cancelled exits, exclusive docks, navigation, focus' };
+  })()`);
+};

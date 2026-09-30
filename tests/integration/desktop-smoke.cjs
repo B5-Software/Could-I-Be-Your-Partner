@@ -28,7 +28,11 @@ global.fetch = async () => {
 };
 const errors = [];
 app.on('browser-window-created', (_event, window) => {
-  window.on('show', () => window.hide());
+  if (process.env.CIBYP_UI_PREVIEW_DIR) {
+    // A transparent test window lets Windows paint Chromium for native screenshots.
+    window.setOpacity(0);
+    window.setSkipTaskbar(true);
+  } else window.on('show', () => window.hide());
   window.webContents.on('preload-error', (_event, _file, error) => errors.push(error.message));
   window.webContents.on('render-process-gone', (_event, details) =>
     errors.push(`Renderer terminated: ${details.reason}`),
@@ -63,6 +67,60 @@ ipcMain.once('app:renderer-ready', (event) => {
         BrowserWindow.getAllWindows().some((window) => window.webContents === event.sender),
         true,
       );
+      event.sender.setBackgroundThrottling(false);
+      const workspace = await require('./renderer-workspace-check.cjs')(event.sender);
+      console.log('[desktop-smoke] Workspace interactions:', workspace);
+      event.sender.debugger.attach('1.3');
+      await event.sender.debugger.sendCommand('Emulation.setEmulatedMedia', {
+        features: [{ name: 'prefers-reduced-motion', value: 'reduce' }],
+      });
+      const reduced = await event.sender.executeJavaScript(`(() => {
+        document.documentElement.dataset.animations = 'on';
+        document.getElementById('btn-todo-sidebar').click();
+        document.getElementById('btn-close-todo').click();
+        return document.getElementById('todo-panel').classList.contains('hidden');
+      })()`);
+      assert.equal(reduced, true, 'system reduced-motion preference closes without animation');
+      event.sender.debugger.detach();
+      if (process.env.CIBYP_UI_PREVIEW_DIR) {
+        const directory = path.resolve(process.env.CIBYP_UI_PREVIEW_DIR);
+        fs.mkdirSync(directory, { recursive: true });
+        await event.sender.executeJavaScript(`(() => {
+          const active = window.__sessionManager.getActive('chat').agent;
+          active.conversationTitle = '校园项目 · 今天的小目标';
+          active.handleTodo({ operations: [
+            { action: 'add', text: '查阅 OpenCode 的上下文更新设计' },
+            { action: 'add', text: '重做 Todo 浮窗与会话状态' },
+            { action: 'add', text: '统一侧边栏动画与键盘交互' },
+            { action: 'add', text: '完成回归检查并提交代码' },
+            { action: 'toggle', id: active.todoIdCounter + 1 }
+          ] });
+          document.documentElement.dataset.animations = 'off';
+          document.getElementById('btn-todo-sidebar').click();
+        })()`);
+        for (const mode of ['light', 'dark']) {
+          const applied = await event.sender.executeJavaScript(`(async () => {
+            const settings = await window.api.getSettings();
+            const theme = { ...settings.theme, mode: '${mode}', accentColor: '#7377dc', backgroundColor: '${mode === 'dark' ? '#171b2b' : '#f5f7fc'}' };
+            await window.api.setSettings({ ...settings, theme });
+            ThemeManager.apply(theme);
+            await new Promise(resolve => setTimeout(resolve, 200));
+            return { mode: document.documentElement.dataset.theme, background: getComputedStyle(document.getElementById('todo-panel')).backgroundColor };
+          })()`);
+          assert.equal(applied.mode, mode);
+          assert.equal(
+            applied.background,
+            mode === 'dark' ? 'rgb(43, 47, 63)' : 'rgb(235, 237, 242)',
+          );
+          fs.writeFileSync(
+            path.join(directory, `todo-${mode}.png`),
+            (
+              await event.sender.capturePage(undefined, { stayHidden: true, stayAwake: true })
+            ).toPNG(),
+          );
+        }
+        console.log('[desktop-smoke] UI previews:', directory);
+      }
       assert.deepEqual(errors, []);
       finish();
     } catch (error) {

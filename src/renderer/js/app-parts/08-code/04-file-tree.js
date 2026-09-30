@@ -1,6 +1,7 @@
   // ---- File tree rendering (with collapsible dirs + context menu) ----
   function renderCodeFileTree(container, tree, basePath) {
     container.innerHTML = '';
+    let directoryIndex = 0;
     function buildNode(node, depth, holder) {
       const row = document.createElement('div');
       row.className = 'tree-node ' + (node.type === 'directory' ? 'dir' : 'file');
@@ -9,6 +10,12 @@
       row.dataset.name = node.name;
       row.dataset.type = node.type;
       if (node.type === 'directory') {
+        row.tabIndex = 0;
+        row.setAttribute('role', 'button');
+        row.setAttribute('aria-expanded', 'false');
+        row.addEventListener('keydown', event => {
+          if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); row.click(); }
+        });
         row.innerHTML = '<i class="fa-solid fa-chevron-right tree-toggle"></i><i class="fa-solid fa-folder"></i> <span>' + escapeHtml(node.name) + '</span>';
         row.addEventListener('click', (e) => {
           e.stopPropagation();
@@ -16,11 +23,14 @@
           const folderIcon = row.querySelector('.fa-folder, .fa-folder-open');
           const childHolder = row.nextElementSibling;
           if (childHolder && childHolder.classList.contains('tree-children')) {
-            const collapsed = childHolder.style.display === 'none';
-            childHolder.style.display = collapsed ? 'block' : 'none';
-            if (toggle) toggle.classList.toggle('fa-chevron-right', !collapsed);
-            if (toggle) toggle.classList.toggle('fa-chevron-down', collapsed);
-            if (folderIcon) folderIcon.className = collapsed ? 'fa-solid fa-folder-open' : 'fa-solid fa-folder';
+            const open = row.getAttribute('aria-expanded') !== 'true';
+            row.setAttribute('aria-expanded', String(open));
+            setDisclosureOpen(childHolder, open, element => {
+              ['class', 'aria-hidden'].forEach(attr => WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#' + element.id, attr, value: element.getAttribute(attr) || '' }));
+            });
+            if (toggle) toggle.classList.toggle('fa-chevron-right', !open);
+            if (toggle) toggle.classList.toggle('fa-chevron-down', open);
+            if (folderIcon) folderIcon.className = open ? 'fa-solid fa-folder-open' : 'fa-solid fa-folder';
           }
         });
       } else {
@@ -40,7 +50,11 @@
       holder.appendChild(row);
       if (node.children && node.type === 'directory') {
         const childHolder = document.createElement('div');
-        childHolder.className = 'tree-children';
+        childHolder.className = 'tree-children hidden';
+        childHolder.id = 'code-tree-children-' + directoryIndex++;
+        childHolder.inert = true;
+        childHolder.setAttribute('aria-hidden', 'true');
+        row.setAttribute('aria-controls', childHolder.id);
         for (const child of node.children) buildNode(child, depth + 1, childHolder);
         holder.appendChild(childHolder);
       }

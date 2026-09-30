@@ -79,6 +79,10 @@ class ContextManager {
     this.historyMessages = [];
     this.pinnedMessages = []; // Important messages that should not be removed
     this.systemPrompt = null;
+    this._latestSystemPrompt = '';
+    this._contextSources = new Map();
+    this._admittedSources = null;
+    this._epochCheckpoint = -1;
     this.summaries = []; // Compressed history summaries
     this.compactBoundaries = []; // CompactBoundary tracking
     this._msgTokenCache = new WeakMap(); // 消息对象 -> token 估算值（避免重复全量正则扫描）
@@ -113,7 +117,51 @@ class ContextManager {
   }
 
   setSystemPrompt(prompt) {
-    this.systemPrompt = { role: 'system', content: prompt };
+    if (typeof prompt !== 'string') return; // unavailable observations retain the last value
+    this._latestSystemPrompt = prompt;
+    if (!this._admittedSources) this.systemPrompt = { role: 'system', content: prompt };
+  }
+
+  // Observe now; admit only between complete provider/tool turns. Empty strings revoke a source.
+  setContextSource(name, content) {
+    if (typeof content === 'string') this._contextSources.set(name, content);
+  }
+
+  admitContextUpdates() {
+    const current = new Map([['系统提示', this._latestSystemPrompt], ...this._contextSources]);
+    if (!this._admittedSources || this._epochCheckpoint !== this.checkpointCount) {
+      // A completed checkpoint starts a fresh epoch. Superseded runtime updates stay in
+      // the durable transcript, but cannot override the current baseline in working context.
+      const old = this.messages;
+      const indexes = new Map();
+      this.messages = old.filter((msg, index) => {
+        if (msg.metadata?.kind === 'context-update') return false;
+        indexes.set(index, indexes.size);
+        return true;
+      });
+      const remap = (values) => [...values].filter(i => indexes.has(i)).map(i => indexes.get(i));
+      this.pinnedMessages = remap(this.pinnedMessages);
+      this.checkpointIndexes = new Set(remap(this.checkpointIndexes));
+      this.prunedIndexes = new Set(remap(this.prunedIndexes));
+      const sources = [...this._contextSources].filter(([, value]) => value)
+        .map(([name, value]) => `【${name}】\n${value}`).join('\n\n');
+      this.systemPrompt = { role: 'system', content: this._latestSystemPrompt + (sources ? '\n\n' + sources : '') };
+      this._admittedSources = current;
+      this._epochCheckpoint = this.checkpointCount;
+      this.invalidateRealBasis();
+      return true;
+    }
+    const changed = [...current].filter(([name, value]) => this._admittedSources.get(name) !== value);
+    if (!changed.length) return false;
+    this.addMessage({
+      role: 'user',
+      content: '【运行时上下文更新】以下是系统提供的当前状态，不是用户的新任务。'
+        + '同名来源的完整内容替代该来源先前版本；其他约束与当前任务继续有效。\n\n'
+        + changed.map(([name, value]) => `【${name}】\n${value || '该来源已撤销，不再采用先前内容。'}`).join('\n\n'),
+      metadata: { kind: 'context-update', at: Date.now() }
+    });
+    this._admittedSources = current;
+    return true;
   }
 
   // 由 agent 在每次计算工具 schema 后调用：把 tools 计入上下文预算。
@@ -249,7 +297,8 @@ class ContextManager {
   loadFromHistory(messages) {
     this.invalidateRealBasis();
     const arr = Array.isArray(messages) ? messages : [];
-    this.messages = arr.slice(); // 浅拷贝：避免上下文 slice() 影响入参
+    this.messages = arr.filter(msg => msg?.metadata?.kind !== 'context-update');
+    this._admittedSources = null;
     this.historyMessages = arr.slice(); // 历史记录独立持有一份引用
     this.pinnedMessages = [];
     this.summaries = []; // 清空：上下文管理器会按需重新压缩
@@ -928,6 +977,8 @@ class ContextManager {
   }
 
   clear() {
+    this._admittedSources = null;
+    this._contextSources.clear();
     this.invalidateRealBasis();
     this.messages = [];
     this.historyMessages = [];
@@ -947,6 +998,7 @@ class ContextManager {
    * 可见聊天记录与持久化历史不动，下一次请求从全新上下文开始。
    */
   clearWorkingContext() {
+    this._admittedSources = null;
     this.invalidateRealBasis();
     this.messages = [];
     this.pinnedMessages = [];

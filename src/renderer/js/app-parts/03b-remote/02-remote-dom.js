@@ -112,6 +112,7 @@
       if (!el || _isLocalControlEl(el)) return;
       if (msg.attr !== undefined) {
         el.setAttribute(msg.attr, msg.value != null ? msg.value : '');
+        if (msg.attr === 'aria-hidden') el.inert = msg.value === 'true';
       } else if (msg.html !== undefined && el.outerHTML) {
         el.outerHTML = msg.html;
       }

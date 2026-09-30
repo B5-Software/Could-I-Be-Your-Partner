@@ -14,6 +14,12 @@ async function buildApp() {
     fs.readFileSync(path.join(root, 'src/renderer/legacy-parts.json'), 'utf8'),
   );
   const header = [
+    'import { activatePage, DockPanels, setDisclosureOpen, motionEnabled, installMotionPreferences } from ' +
+      JSON.stringify(path.join(root, 'src/renderer/core/surfaces.ts')) +
+      ';',
+    'import { TodoWindow } from ' +
+      JSON.stringify(path.join(root, 'src/renderer/core/todo-window.ts')) +
+      ';',
     'import { calculateTokenCost } from ' +
       JSON.stringify(path.join(root, 'src/shared/pricing.ts')) +
       ';',

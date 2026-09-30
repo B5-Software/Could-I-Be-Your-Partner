@@ -150,6 +150,9 @@
       if (!panel) return;
       panel.classList.toggle('collapsed');
       const collapsed = panel.classList.contains('collapsed');
+      const body = panel.querySelector('.code-eslint-body');
+      if (body) setDisclosureOpen(body, !collapsed);
+      document.getElementById('btn-eslint-toggle')?.setAttribute('aria-expanded', String(!collapsed));
       const icon = document.querySelector('#btn-eslint-toggle i');
       if (icon) icon.className = collapsed ? 'fa-solid fa-chevron-up' : 'fa-solid fa-chevron-down';
       if (resizer) resizer.style.display = collapsed ? 'none' : '';

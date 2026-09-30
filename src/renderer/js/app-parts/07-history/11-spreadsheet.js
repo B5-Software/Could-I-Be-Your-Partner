@@ -26,16 +26,8 @@
   window.initSpreadsheet = function(title) {
     if (!spreadsheetPanel) return { ok: false, error: '数据表格面板元素未找到' };
     // Close other panels
-    if (ggbPanel && !ggbPanel.classList.contains('hidden')) {
-      ggbPanel.classList.add('hidden');
-      document.body.classList.remove('geogebra-open');
-    }
-    if (canvasPanel && !canvasPanel.classList.contains('hidden')) {
-      canvasPanel.classList.add('hidden');
-      document.body.classList.remove('geogebra-open');
-    }
-    spreadsheetPanel.classList.remove('hidden');
-    document.body.classList.add('geogebra-open');
+    window.setAppPanelOpen('spreadsheet-panel', true);
+
     const { engine } = ensureSpreadsheet();
     if (title) engine.title = title;
     return { ok: true, message: '数据表格已打开' };
@@ -108,7 +100,7 @@
 
   if (btnCloseSpreadsheet) {
     btnCloseSpreadsheet.addEventListener('click', () => {
-      spreadsheetPanel.classList.add('hidden');
-      document.body.classList.remove('geogebra-open');
+      window.setAppPanelOpen('spreadsheet-panel', false);
+
     });
   }

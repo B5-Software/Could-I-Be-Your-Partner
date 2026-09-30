@@ -1,0 +1,27 @@
+# 运行时上下文与工作区面板
+
+本次设计参考 [OpenCode V2 的 Context Epoch 设计](https://github.com/anomalyco/opencode/blob/dev/specs/v2/session.md)。实现为 CIBYP 自有代码，使用现有 Electron IPC 和会话历史格式。
+
+## 上下文更新
+
+`ContextManager` 保留当前 epoch 的系统提示基线。`setSystemPrompt` 和 `setContextSource` 只记录最新观察值；`Agent.observeRuntimeContext` 在一轮模型响应及其工具调用全部结束后、下一次模型请求之前统一接纳变化。
+
+分别观察系统提示、技能目录、已激活技能正文、工作目录文件树和当前会话待办。文件树或待办变化只追加对应来源的完整新值，同一边界前的多次修改合并为最后一次。读取失败保留此前值，确认删除使用空字符串明确撤销。全局设置和技能变更同步到所有已打开会话；具体工具参数和文件读取结果仍由工具返回。
+
+更新以带有 `metadata.kind = context-update` 的内部消息追加，兼容只接受首条 system 消息的网关。它们保留在完整历史中，不渲染为用户聊天，也不参与“最近用户意图”的工具选择。完成压缩检查点后重建完整基线，并从工作上下文剔除旧更新；历史 transcript 保持完整。重新打开历史或清空工作上下文也会建立新 epoch。
+
+模型、工具定义和权限继续按下一轮请求组装。已经发出的请求不受后来变更影响。本次没有引入 OpenCode 的运行时依赖或数据库格式，也没有改变已有的压缩策略。
+
+## 窗口与导航
+
+`core/todo-window.ts` 实现非模态 Todo 浮窗，跟随当前 Chat、Code 或 Babe 会话。支持拖动、视口约束、添加、编辑、完成、删除、筛选、清除已完成和进度展示。输入草稿按 Agent 保留，待办与 ID 计数保存到会话历史。文本通过 DOM textContent 渲染。
+
+`core/surfaces.ts` 管理可取消的展开/折叠动画、减少动态效果偏好、焦点和 inert 状态。GeoGebra、画布、表格共享一个 DockPanels 状态：同时显示一个应用，切换时把此前应用留在恢复标签中。关闭和最小化有不同的恢复语义。Code 面板保留至少一个可用区域。
+
+侧边栏页面导航集中于 `navigatePage`。再次点击已打开的辅助页面会返回当前模式会话。异步加载不会改变当前导航，每个页面的在途加载复用同一个 Promise。历史恢复、设置搜索和远程控制复用对应控制器；镜像客户端用 aria-hidden 更新 inert 状态。
+
+## 验证
+
+- `npm run check`：静态检查、类型检查、上下文 epoch 和待办持久化测试，以及现有回归。
+- `npm run test:desktop`：使用临时配置和禁用网络的真实 Electron，检查浮窗、会话隔离、动画取消、导航竞争、面板恢复、键盘焦点和系统减少动态效果偏好。
+- 可选 `CIBYP_UI_PREVIEW_DIR` 输出真实 Chromium 的深浅色截图。截图测试使用透明、不显示任务栏的临时窗口，避免隐藏窗口暂停绘制。

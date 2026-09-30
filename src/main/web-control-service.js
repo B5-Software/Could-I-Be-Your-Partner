@@ -1092,6 +1092,7 @@ html,body{height:100%;overflow:hidden;font-family:-apple-system,BlinkMacSystemFo
       if(msg.attr!==undefined){
         // 更新属性
         el.setAttribute(msg.attr,msg.value!=null?msg.value:'');
+        if(msg.attr==='aria-hidden')el.inert=msg.value==='true';
       }else{
         // 替换整个元素的 outerHTML
         if(msg.html!==undefined&&el.outerHTML){

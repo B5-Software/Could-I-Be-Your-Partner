@@ -84,6 +84,7 @@
     <!-- Sidebar -->
     <aside id="sidebar">
       <div class="sidebar-header">
+        <button class="btn-icon" id="btn-sidebar-toggle" title="展开侧边栏" aria-label="展开或收起侧边栏" aria-controls="sidebar" aria-expanded="false"><i class="fa-solid fa-angles-right" aria-hidden="true"></i></button>
         <div class="app-logo">
           <img src="../../../assets/icons/icon.png" alt="App">
         </div>
@@ -136,6 +137,7 @@
         </button>
       </nav>
       <div class="sidebar-footer">
+        <button class="nav-item" id="btn-todo-sidebar" data-todo-toggle aria-controls="todo-panel" aria-expanded="false" title="待办事项"><i class="fa-solid fa-list-check" aria-hidden="true"></i><span>待办</span></button>
         <button class="nav-item" data-page="settings" title="设置">
           <i class="fa-solid fa-gear"></i>
           <span>设置</span>
@@ -247,23 +249,6 @@
           <!-- Attachments Preview -->
           <div class="attachments-preview hidden" id="attachments-preview"></div>
 
-          <!-- Todo List Panel -->
-          <div class="todo-panel hidden" id="todo-panel">
-            <div class="todo-header">
-              <h3><i class="fa-solid fa-list-check"></i> 待办事项</h3>
-              <button class="btn-icon" id="btn-close-todo">
-                <i class="fa-solid fa-xmark"></i>
-              </button>
-            </div>
-            <div class="todo-list" id="todo-list"></div>
-            <div class="todo-input-area">
-              <input type="text" id="todo-input" placeholder="添加新的待办事项...">
-              <button class="btn-primary btn-sm" id="btn-add-todo">
-                <i class="fa-solid fa-plus"></i>
-              </button>
-            </div>
-          </div>
-
           <!-- Approval Panel -->
           <div class="approval-panel hidden" id="approval-panel">
             <div class="approval-header">
@@ -291,7 +276,7 @@
                 <button class="btn-icon" id="btn-camera" title="拍照">
                   <i class="fa-solid fa-camera"></i>
                 </button>
-                <button class="btn-icon" id="btn-todo-toggle" title="待办事项">
+              <button class="btn-icon" id="btn-todo-toggle" data-todo-toggle aria-controls="todo-panel" aria-expanded="false" title="待办事项">
                   <i class="fa-solid fa-list-check"></i>
                 </button>
                 <button class="btn-icon btn-mic" id="btn-mic" title="语音输入" hidden>
@@ -3224,6 +3209,27 @@
 
       <!-- 折叠面板的索引贴（最小化后在右侧边缘显示） -->
       <div class="panel-tabs-container" id="panel-tabs-container"></div>
+      <section class="todo-panel hidden" id="todo-panel" role="dialog" aria-modal="false" aria-labelledby="todo-title" aria-hidden="true" inert>
+        <div class="todo-header">
+          <h3 id="todo-title"><i class="fa-solid fa-list-check" aria-hidden="true"></i> 待办事项</h3>
+          <button class="btn-icon" id="btn-close-todo" title="关闭待办浮窗" aria-label="关闭待办浮窗"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
+        </div>
+        <div id="todo-summary" class="todo-summary">
+          <p id="todo-session-label"></p>
+          <div class="todo-progress-row"><span id="todo-progress-text" aria-live="polite"></span><button class="btn-icon" id="btn-clear-completed" title="清除已完成的待办">清除已完成</button></div>
+          <progress id="todo-progress" max="1" value="0" aria-label="待办完成进度"></progress>
+        </div>
+        <div id="todo-filters" class="todo-filters" role="group" aria-label="筛选待办">
+          <button type="button" data-todo-filter="all" aria-pressed="true" class="active">全部</button>
+          <button type="button" data-todo-filter="pending" aria-pressed="false">未完成</button>
+          <button type="button" data-todo-filter="done" aria-pressed="false">已完成</button>
+        </div>
+        <div class="todo-list" id="todo-list"></div>
+        <form class="todo-input-area" id="todo-form">
+          <input type="text" id="todo-input" maxlength="4000" placeholder="添加一个小目标…" aria-label="新的待办内容" autocomplete="off">
+          <button type="submit" class="btn-primary btn-sm" id="btn-add-todo" title="添加待办" aria-label="添加待办"><i class="fa-solid fa-plus" aria-hidden="true"></i></button>
+        </form>
+      </section>
 
       <!-- 聊天记录搜索覆盖层（Chat/Code/Babe 共用，Ctrl+F 打开） -->
       <div class="chat-search-overlay hidden" id="chat-search-overlay">
