@@ -20,7 +20,6 @@
   <link rel="stylesheet" href="../css/components.css">
   <link rel="stylesheet" href="../../../assets/fonts/fontawesome.min.css">
   <script src="../../../assets/geogebra/deployggb.js"></script>
-  <script src="../../../node_modules/monaco-editor/min/vs/loader.js"></script>
   <script>
     // 临时屏蔽 Monaco 的 AMD define，让 xterm.js/addon-fit.js 走全局路径
     // （UMD 检测到 define.amd 时会调用 define([], factory)，但 AMD loader
@@ -373,133 +372,28 @@
         </div>
       </section>
 
-      <!-- Code Mode Page -->
-      <section id="page-code" class="page">
+      <!-- Code Mode Page: the complete desktop workbench owns the IDE surface. -->
+      <section id="page-code" class="page codeoss-page">
         <div class="code-toolbar">
           <div class="code-toolbar-left">
-            <button class="btn-icon btn-sm" id="btn-code-show-downloads" title="下载管理（Ctrl+D）">
-              <i class="fa-solid fa-download"></i>
-              <span class="badge hidden" id="download-badge-code">0</span>
-            </button>
-            <button class="btn-icon btn-sm" id="btn-code-show-terminals" title="显示终端（Ctrl+T）">
-              <i class="fa-solid fa-terminal"></i>
-            </button>
-            <button class="btn-secondary btn-sm" id="btn-code-open-workspace" title="打开工作区">
-              <i class="fa-solid fa-folder-open"></i> 工作区
-            </button>
-            <button class="btn-icon btn-sm" id="btn-code-open-in-explorer" title="在系统文件管理器中打开工作区">
-              <i class="fa-solid fa-folder-tree"></i>
-            </button>
+            <button class="btn-secondary btn-sm" id="btn-code-open-workspace"><i class="fa-solid fa-folder-open"></i> 工作区</button>
             <span class="code-workspace-path" id="code-workspace-path">未选择工作区</span>
           </div>
           <div class="code-toolbar-right">
-            <button class="btn-icon btn-sm" id="btn-code-chat-search" title="搜索聊天记录（Ctrl+F）">
-              <i class="fa-solid fa-magnifying-glass"></i>
-            </button>
-            <button class="btn-secondary btn-sm" id="btn-code-new-chat" title="新对话">
-              <i class="fa-solid fa-plus"></i> 新对话
-            </button>
+            <button class="btn-icon btn-sm" id="btn-code-ide-terminal" title="终端"><i class="fa-solid fa-terminal"></i></button>
+            <button class="btn-icon btn-sm" id="btn-code-git" title="源代码管理"><i class="fa-brands fa-git-alt"></i></button>
+            <button class="btn-icon btn-sm" id="btn-code-extensions" title="扩展"><i class="fa-solid fa-puzzle-piece"></i></button>
+            <button class="btn-secondary btn-sm" id="btn-code-agent"><i class="fa-solid fa-wand-magic-sparkles"></i> Agent</button>
           </div>
         </div>
-        <div class="code-container" id="code-container">
-          <div class="code-panel code-file-tree-panel" id="code-file-tree-panel">
-            <div class="code-panel-header">
-              <span class="code-panel-title"><i class="fa-solid fa-folder-tree"></i> 文件</span>
-              <button class="code-panel-close" id="btn-close-file-tree" title="隐藏"><i class="fa-solid fa-xmark"></i></button>
-            </div>
-            <div class="code-file-tree" id="code-file-tree">
-              <div class="empty-state">
-                <i class="fa-solid fa-folder-tree"></i>
-                <p>打开工作区后显示文件树</p>
-              </div>
-            </div>
-            <!-- ESLint 状态面板（位于文件树下方，可上下拖动调节高度） -->
-            <div class="code-eslint-resizer" id="code-eslint-resizer" title="拖动调节高度"></div>
-            <div class="code-eslint-panel" id="code-eslint-panel">
-              <div class="code-eslint-header">
-                <span class="code-eslint-title"><i class="fa-solid fa-shield-halved"></i> ESLint</span>
-                <div class="code-eslint-summary" id="code-eslint-summary">
-                  <span class="es-null">未运行</span>
-                </div>
-                <div class="code-eslint-actions">
-                  <button class="btn-icon btn-sm" id="btn-eslint-refresh" title="重新运行 ESLint">
-                    <i class="fa-solid fa-rotate-right"></i>
-                  </button>
-                  <button class="btn-icon btn-sm" id="btn-eslint-toggle" title="折叠/展开">
-                    <i class="fa-solid fa-chevron-down"></i>
-                  </button>
-                </div>
-              </div>
-              <div class="code-eslint-body" id="code-eslint-body">
-                <div class="code-eslint-empty">打开支持的项目后自动运行</div>
-              </div>
-            </div>
-          </div>
-          <div class="code-resizer" id="code-resizer-1" data-panel1="code-file-tree-panel" data-panel2="code-editor-panel"></div>
-          <div class="code-panel code-editor-panel" id="code-editor-panel">
-            <div class="code-panel-header">
-              <div class="editor-tabs" id="code-editor-tabs"></div>
-              <button class="code-panel-close" id="btn-close-editor" title="隐藏"><i class="fa-solid fa-xmark"></i></button>
-            </div>
-            <div class="editor-host" id="code-editor-host">
-              <div class="empty-state">
-                <i class="fa-solid fa-file-code"></i>
-                <p>点击文件树中的文件以打开</p>
-              </div>
-            </div>
-          </div>
-          <div class="code-resizer" id="code-resizer-2" data-panel1="code-editor-panel" data-panel2="code-chat"></div>
-          <div class="code-panel code-chat" id="code-chat">
-            <div class="code-panel-header">
-              <span class="code-panel-title"><i class="fa-solid fa-robot"></i> AI</span>
-              <div class="context-indicator" id="code-context-indicator" data-used="0" data-max="131072">
-                <svg class="context-ring" viewBox="0 0 36 36" width="22" height="22">
-                  <circle class="context-ring-bg" cx="18" cy="18" r="15.915" fill="none" stroke-width="3"/>
-                  <circle class="context-ring-fg" id="code-context-progress-fill" cx="18" cy="18" r="15.915" fill="none" stroke-width="3" stroke-dasharray="0 100" stroke-dashoffset="0" transform="rotate(-90 18 18)"/>
-                  <circle class="context-ring-fg context-ring-reserve" id="code-context-progress-reserve" cx="18" cy="18" r="15.915" fill="none" stroke-width="3" stroke-dasharray="0 100" stroke-dashoffset="0" transform="rotate(-90 18 18)"/>
-                </svg>
-                <span class="progress-text" id="code-context-progress-text">0/128K</span>
-                <span class="session-cost-mini" id="code-session-cost" title="当前会话消费（USD）" style="display:none">
-                  <i class="fa-solid fa-receipt" style="font-size:9px"></i>
-                  <span class="scm-value">$0.0000</span>
-                </span>
-                <span class="budget-mini-bar" id="code-budget-mini-bar" title="今日预算使用情况" style="display:none">
-                  <i class="fa-solid fa-coins" style="font-size:9px"></i>
-                  <span class="bmb-track"><span class="bmb-fill"></span></span>
-                  <span class="bmb-cost">$0.00</span>
-                </span>
-              </div>
-              <button class="code-panel-close" id="btn-close-chat" title="隐藏"><i class="fa-solid fa-xmark"></i></button>
-            </div>
-            <div class="code-chat-messages" id="code-chat-messages">
-              <div class="welcome-message">
-                <div class="welcome-icon"><i class="fa-solid fa-code"></i></div>
-                <h2>Code 模式</h2>
-                <p>打开一个文件夹作为工作区，AI 将专注编程任务</p>
-              </div>
-            </div>
-            <div class="attachments-preview hidden" id="code-attachments-preview"></div>
-            <div class="code-chat-input">
-              <button class="btn-icon btn-code-attach" id="btn-code-attach-file" title="添加文件到上下文">
-                <i class="fa-solid fa-paperclip"></i>
-              </button>
-              <textarea id="code-chat-input" placeholder="输入编程任务..." rows="1"></textarea>
-              <button class="btn-icon btn-mic" id="btn-code-mic" title="语音输入" hidden>
-                <i class="fa-solid fa-microphone"></i>
-              </button>
-              <button class="btn-primary btn-send" id="btn-code-send">
-                <i class="fa-solid fa-paper-plane"></i>
-              </button>
-              <button class="btn-danger btn-send hidden" id="btn-code-stop">
-                <i class="fa-solid fa-stop"></i>
-              </button>
-            </div>
-          </div>
+        <div id="codeoss-viewport" class="codeoss-viewport" data-state="starting">
+          <div class="codeoss-loading"><i class="fa-solid fa-code"></i><p id="codeoss-status" role="status">正在启动桌面工作台…</p><button class="btn-secondary btn-sm" id="btn-codeoss-retry">重试</button></div>
         </div>
-        <div class="code-panel-restore-bar" id="code-panel-restore-bar">
-          <button class="code-restore-btn hidden" id="btn-restore-file-tree" title="显示文件树"><i class="fa-solid fa-folder-tree"></i></button>
-          <button class="code-restore-btn hidden" id="btn-restore-editor" title="显示编辑器"><i class="fa-solid fa-file-code"></i></button>
-          <button class="code-restore-btn hidden" id="btn-restore-chat" title="显示聊天"><i class="fa-solid fa-robot"></i></button>
+        <!-- Compatibility render target for the shared Agent/session runtime and remote WebUI. -->
+        <div id="code-agent-runtime" hidden aria-hidden="true">
+          <div id="code-chat-session-tabs"></div><div id="code-context-indicator"></div>
+          <div id="code-chat-messages"></div><div id="code-attachments-preview" class="hidden"></div>
+          <textarea id="code-chat-input"></textarea><button id="btn-code-send"></button><button id="btn-code-stop" class="hidden"></button>
         </div>
       </section>
 

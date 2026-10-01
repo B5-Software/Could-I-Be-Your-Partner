@@ -145,28 +145,9 @@
   document.getElementById('btn-code-open-workspace')?.addEventListener('click', async () => {
     const result = await window.api.codeOpenWorkspace();
     if (result.ok && result.path) {
-      codeWorkspacePath = result.path;
-      const wsPathEl = document.getElementById('code-workspace-path');
-      if (wsPathEl) wsPathEl.textContent = result.path;
-      await loadCodeFileTree(result.path);
-      // 工作区切换：Code 历史按工作区隔离保存，旧工作区的会话一律停止并关闭，
-      // 随后立即创建新工作区的第一个会话标签（与其他模式行为对齐）。
-      if (sessionManager) {
-        const oldSessions = sessionManager.list('code');
-        for (const session of oldSessions) {
-          try { sessionManager.close(session); } catch { /* ignore */ }
-        }
-      }
-      // Reset current conversation
-      unsubscribeAgentStreams(codeAgent);
-      codeAgent = null;
-      codeCurrentHistoryId = null;
-      codeMessages = [];
-      const msgsEl = document.getElementById('code-chat-messages');
-      if (msgsEl) {
-        msgsEl.innerHTML = '<div class="welcome-message"><div class="welcome-icon"><i class="fa-solid fa-code"></i></div><h2>Code 模式</h2><p>工作区已打开，开始编程任务吧。历史记录按工作区隔离保存。</p></div>';
-      }
-      await createCodeSession();
+      const opened = await loadCodeFileTree(result.path);
+      if (!opened?.ok) return;
+      await adoptCodeOSSWorkspace(opened);
     }
   });
 

@@ -53,6 +53,7 @@
     };
 
     ag.onMessage = (type, data) => {
+      publishCodeOSSAgentEvent(ag, type, data);
       const msgsEl = document.getElementById('code-chat-messages');
       if (!msgsEl) return;
       if (!isActive()) {
@@ -160,7 +161,7 @@
           break;
         case 'tool-result':
           addCodeToolResult(data);
-          if (data && _fileSystemTools.has(data.name) && codeWorkspacePath) loadCodeFileTree(codeWorkspacePath);
+          // Code-OSS owns filesystem watchers and refreshes the Explorer automatically.
           break;
         case 'present-file':
           addFilePresentCard(data);

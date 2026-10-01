@@ -17,6 +17,34 @@ module.exports = async function afterPack(context) {
     .readdirSync(path.join(__dirname, '../src/preload'))
     .filter((file) => file === 'preload.js' || file.endsWith('-preload.js'))
     .map((file) => `/src/preload/generated/${file}`);
+  const codeoss = path.join(context.packager.getResourcesDir(context.appOutDir), 'codeoss/app');
+  const lock = require('../integrations/codeoss/runtime-lock.json');
+  for (const file of [
+    'out/main.js',
+    'out/vs/workbench/workbench.desktop.main.js',
+    'product.json',
+    'extensions/cibyp-workbench/dist/extension.cjs',
+    'extensions/git/package.json',
+    'node_modules.asar',
+  ]) {
+    if (!fs.existsSync(path.join(codeoss, file)))
+      throw new Error(`Packaged Code-OSS file missing: ${file}`);
+  }
+  const marker = JSON.parse(fs.readFileSync(path.join(codeoss, 'cibyp-runtime.json'), 'utf8'));
+  if (
+    marker.commit !== lock.commit ||
+    marker.platform !== context.electronPlatformName ||
+    marker.arch !== require('builder-util').Arch[context.arch]
+  )
+    throw new Error('Packaged Code-OSS target or version does not match the host');
+  const product = JSON.parse(fs.readFileSync(path.join(codeoss, 'product.json'), 'utf8'));
+  const checksum = require('node:crypto')
+    .createHash('sha256')
+    .update(fs.readFileSync(path.join(codeoss, 'out/vs/workbench/workbench.desktop.main.js')))
+    .digest('base64')
+    .replace(/=+$/, '');
+  if (product.checksums['vs/workbench/workbench.desktop.main.js'] !== checksum)
+    throw new Error('Packaged Code-OSS integrity metadata does not match its patched workbench');
   for (const required of [
     '/LICENSE',
     '/src/main/main.js',

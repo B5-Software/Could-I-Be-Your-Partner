@@ -90,6 +90,7 @@ const { ts: logTs, maskUrl: maskLogUrl, snippet: logSnippet } = require('./req-l
 const { createIpcRouter } = require('./core/ipc-router');
 const { createWindowSecurity } = require('./core/window-security');
 const { ROUTE_CHANNELS, createRoutedHandler } = require('./vm/vm-tools');
+let codeOSSService;
 const pagesDirectory = path.join(__dirname, '../renderer/pages');
 const windowSecurity = createWindowSecurity({
   pagesDirectory,
@@ -101,7 +102,10 @@ const ipcMain = createIpcRouter(electronIpcMain, {
   validateSender: windowSecurity.validateSender,
   routeHandler: (channel, handler) => {
     const routed = ROUTE_CHANNELS.has(channel) ? createRoutedHandler(channel, handler, { getVmService: () => vmService, isLocationVm: () => vmLocationActive() }) : handler;
-    return (event, ...args) => require('./vm/tool-location').withToolLocation(() => vmService, () => routed(event, ...args));
+    return (event, ...args) => require('./vm/tool-location').withToolLocation(() => vmService, async () => {
+      const editorResult = codeOSSService ? await codeOSSService.interceptFile(channel, args) : null;
+      return editorResult === null ? routed(event, ...args) : editorResult;
+    });
   },
 });
 const __ipcHandlers = ipcMain.originalHandlers;
@@ -150,13 +154,6 @@ vmService.on('ready', () => {
   vmRuntimeGate.ready = true;
   vmRuntimeGate.failed = false;
   tryShowMainWindow();
-  // VM 重启后外部挂载映射（内存态）丢失：补挂 Code 模式最近工作区，否则 Code 模式打开/保存会打到宿主旧副本
-  try {
-    const lastWs = settings.codeMode && settings.codeMode.lastWorkspace;
-    if (lastWs && typeof vmLocationActive === 'function' && vmLocationActive()) {
-      vmService.mountExternalDir(lastWs).catch((e) => console.warn('[vm] VM 就绪后补挂 Code 工作区失败:', e.message));
-    }
-  } catch { /* ignore */ }
 });
 vmService.on('error', (e) => broadcastVm('vm:error', { message: e?.message || String(e) }));
 vmService.on('sync-done', (r) => broadcastVm('vm:sync-done', r));
@@ -665,6 +662,22 @@ let memory = loadJSON(memoryPath, []);
 let knowledge = loadJSON(knowledgePath, []);
 
 let mainWindow;
+codeOSSService = new (require('./services/codeoss-service').CodeOSSService)({
+  getMainWindow: () => mainWindow,
+  getSettings: () => settings,
+  getVmService: () => vmService,
+  dataDirectory: dataDir,
+  onWorkspaceChanged: (target) => {
+    settings.codeMode = { ...settings.codeMode, lastWorkspace: target.path || null };
+    saveJSON(settingsPath, settings, false);
+  },
+});
+ipcMain.handle('codeoss:open', (_, directory) => codeOSSService.open(directory));
+ipcMain.handle('codeoss:layout', (_, layout) => codeOSSService.setLayout(layout));
+ipcMain.handle('codeoss:command', (_, command) => codeOSSService.request('ide.command', { command }));
+ipcMain.handle('codeoss:agent-response', (_, response) => codeOSSService.agentResponse(response));
+ipcMain.handle('codeoss:agent-event', (_, event) => codeOSSService.agentEvent(event));
+ipcMain.handle('codeoss:context', () => codeOSSService.request('ide.context', {}));
 let appTray = null;
 let skillEditorWindow = null;
 let automationEditorWindow = null;
@@ -1900,6 +1913,7 @@ require('./ipc/environment')({
 ipcMain.handle('theme:get', () => ({ shouldUseDarkColors: nativeTheme.shouldUseDarkColors, mode: settings.theme.mode, theme: settings.theme }));
 // 广播主题变化到所有 BrowserWindow（含子窗口 CAD/EDA/小游戏）
 function broadcastThemeChanged() {
+  codeOSSService.syncPersonalization();
   vmService.syncAppearance().catch((error) => console.warn('[vm] 个性化同步:', error.message));
   const payload = { shouldUseDarkColors: nativeTheme.shouldUseDarkColors, mode: settings.theme.mode };
   for (const win of BrowserWindow.getAllWindows()) {
@@ -1911,6 +1925,7 @@ function broadcastThemeChanged() {
   }
 }
 function broadcastSettingsChanged() {
+  codeOSSService.syncPersonalization();
   const payload = { language: settings.language, theme: settings.theme, ime: settings.ime, voice: settings.voice };
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) win.webContents.send('settings:changed', payload);

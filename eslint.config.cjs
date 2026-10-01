@@ -19,6 +19,7 @@ module.exports = [
   {
     ignores: [
       'node_modules/**',
+      '.cache/**',
       'dist*/**',
       'assets/**',
       'claude-code-ref/**',
@@ -48,6 +49,7 @@ module.exports = [
       'src/data/**/*.js',
       'scripts/**/*.{js,cjs}',
       'tests/**/*.{js,cjs}',
+      'integrations/codeoss/**/*.{js,cjs}',
       '*.cjs',
     ],
     languageOptions: {
@@ -56,6 +58,10 @@ module.exports = [
       globals: { ...globals.node, ...globals.es2025 },
     },
     rules: correctness,
+  },
+  {
+    files: ['integrations/codeoss/extension/media/*.js'],
+    languageOptions: { globals: { ...globals.browser, acquireVsCodeApi: 'readonly' } },
   },
   {
     files: ['src/renderer/js/**/*.js'],

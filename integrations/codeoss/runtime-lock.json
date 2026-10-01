@@ -1,0 +1,51 @@
+{
+  "remote": {
+    "linux-arm64": {
+      "bytes": 122743771,
+      "url": "https://github.com/VSCodium/vscodium/releases/download/1.135.06055/vscodium-reh-linux-arm64-1.135.06055.tar.gz",
+      "sha256": "697d2cf622152b3b3affbbd18d48e5ff51e1e2fbf5833ad66262bda413c599c5"
+    },
+    "linux-x64": {
+      "bytes": 124905950,
+      "url": "https://github.com/VSCodium/vscodium/releases/download/1.135.06055/vscodium-reh-linux-x64-1.135.06055.tar.gz",
+      "sha256": "bd23015a35b915bac3c6fca962ca5db427f5c8f049702e48ddeb72757ab32745"
+    }
+  },
+  "vscodeVersion": "1.135.0",
+  "upstream": "https://github.com/microsoft/vscode",
+  "version": "1.135.06055",
+  "distribution": "https://github.com/VSCodium/vscodium",
+  "desktop": {
+    "win32-arm64": {
+      "bytes": 250511125,
+      "url": "https://github.com/VSCodium/vscodium/releases/download/1.135.06055/VSCodium-win32-arm64-1.135.06055.zip",
+      "sha256": "079aafaf0a141abd3a0b2078eca0a86b502cee38089014b81415ebb8e3675f21"
+    },
+    "linux-x64": {
+      "bytes": 243185899,
+      "url": "https://github.com/VSCodium/vscodium/releases/download/1.135.06055/VSCodium-linux-x64-1.135.06055.tar.gz",
+      "sha256": "c09d8ac8dd7f52b09ee159ee24b440541dfd8f937a0f6f88cc428c78e48ee1f2"
+    },
+    "darwin-x64": {
+      "bytes": 243084648,
+      "url": "https://github.com/VSCodium/vscodium/releases/download/1.135.06055/VSCodium-darwin-x64-1.135.06055.zip",
+      "sha256": "2fce180317a011576dc7e0910e1033d3287472b56e362b33175f5416415b604a"
+    },
+    "darwin-arm64": {
+      "bytes": 237868790,
+      "url": "https://github.com/VSCodium/vscodium/releases/download/1.135.06055/VSCodium-darwin-arm64-1.135.06055.zip",
+      "sha256": "61ff9ebc3ac5563c63a0a9e1b479822647e7f2c3303b0629f15fefe9e291f7cc"
+    },
+    "win32-x64": {
+      "bytes": 250898961,
+      "url": "https://github.com/VSCodium/vscodium/releases/download/1.135.06055/VSCodium-win32-x64-1.135.06055.zip",
+      "sha256": "0bec978f201238624bc9ad43966f5e201ed8afacc37d77035a822252d9c9c200"
+    },
+    "linux-arm64": {
+      "bytes": 237904555,
+      "url": "https://github.com/VSCodium/vscodium/releases/download/1.135.06055/VSCodium-linux-arm64-1.135.06055.tar.gz",
+      "sha256": "9765cea4f707ff7dc83a40be408a7318a59abb6996b359631639d9aab2f48a90"
+    }
+  },
+  "commit": "1a46a584725d5dd330e0bcd7f5510f24990efcf2"
+}

@@ -14,6 +14,9 @@ async function buildApp() {
     fs.readFileSync(path.join(root, 'src/renderer/legacy-parts.json'), 'utf8'),
   );
   const header = [
+    'import { CodeOSSController } from ' +
+      JSON.stringify(path.join(root, 'src/renderer/core/codeoss.ts')) +
+      ';',
     'import { activatePage, DockPanels, setDisclosureOpen, motionEnabled, installMotionPreferences } from ' +
       JSON.stringify(path.join(root, 'src/renderer/core/surfaces.ts')) +
       ';',

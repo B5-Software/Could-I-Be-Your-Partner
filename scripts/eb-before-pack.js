@@ -14,7 +14,11 @@
 
 const buildInfo = require('./build-info');
 
-exports.beforePack = (context) => {
+exports.beforePack = async (context) => {
+  await require('./prepare-codeoss').prepareCodeOSS(
+    context.electronPlatformName,
+    require('builder-util').Arch[context.arch],
+  );
   buildInfo();
   if (context.electronPlatformName === 'darwin') {
     require('./build-macos-computer').buildMacComputer(require('builder-util').Arch[context.arch]);

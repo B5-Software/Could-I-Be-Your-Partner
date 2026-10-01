@@ -10,6 +10,13 @@
 
 ## 功能特色
 
+### 原生 Code-OSS 编程工作台
+
+- 完整桌面工作台、扩展宿主、Git、终端、调试与 Open VSX / VSIX 扩展管理
+- CIBYP Agent 原生侧栏、文档冲突保护、AI 修改差异与撤销
+- 深浅色、强调色和背景色实时跟随 CIBYP；VM 工作区连接 OS 镜像内置的远程扩展宿主
+- 架构、构建与验证说明见 [Code-OSS 工作台](docs/codeoss-workbench.md)
+
 ### 智能 AI Agent 引擎
 
 - **自主决策执行**：AI Agent 接收任务后可独立工作，无需人工干预，直到任务完成

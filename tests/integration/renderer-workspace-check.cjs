@@ -123,14 +123,10 @@ module.exports = async function checkWorkspace(webContents) {
     click('#btn-todo-sidebar');
     click('#btn-close-todo');
     check(root.classList.contains('hidden'), 'disabled animation closes immediately');
-    // Code panels retain at least one usable pane even after repeated collapse commands.
-    click('#btn-close-file-tree');
-    click('#btn-close-editor');
-    click('#btn-close-chat');
-    check([...document.querySelectorAll('#code-file-tree-panel, #code-editor-panel, #code-chat')].filter(panel => !panel.classList.contains('collapsed')).length === 1, 'workspace never collapses all panes');
-    click('#btn-restore-file-tree');
-    click('#btn-restore-editor');
-    check(!document.getElementById('code-file-tree-panel').inert, 'restored Code panels regain keyboard navigation');
+    // Native pane/layout behavior is exercised by codeoss-desktop.cjs.
+    check(document.getElementById('codeoss-viewport'), 'Code page exposes a native workbench viewport');
+    check(document.getElementById('code-agent-runtime').hidden, 'legacy Agent DOM stays hidden');
+    check(typeof window.api.codeOSSOpen === 'function', 'native workbench uses the isolated preload bridge');
     document.documentElement.dataset.animations = 'on';
     window.navigatePage('settings');
     window.activateSettingsTab('animations');

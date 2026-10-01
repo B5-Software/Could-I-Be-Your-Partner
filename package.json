@@ -1,11 +1,13 @@
 {
   "name": "could-i-be-your-partner",
-  "version": "1.9.0-alpha.6",
+  "version": "1.9.0-alpha.7",
   "description": "全自动AI Agent，帮助完成一切任务",
   "license": "GPL-3.0-or-later",
   "main": "src/main/main.js",
   "scripts": {
-    "start": "node scripts/build-macos-computer.js && node scripts/build-app-bundle.js && electron .",
+    "start": "node scripts/prepare-codeoss.js && node scripts/build-macos-computer.js && node scripts/build-app-bundle.js && electron .",
+    "prepare:codeoss": "node scripts/prepare-codeoss.js",
+    "test:codeoss": "npm run prepare:codeoss && npm run build-app-bundle && electron tests/integration/codeoss-desktop.cjs",
     "build:computer": "node scripts/build-macos-computer.js",
     "test": "npm run test:unit && npm run test:legacy",
     "build-app-bundle": "node scripts/build-app-bundle.js",
@@ -37,9 +39,10 @@
     "typecheck": "tsc --noEmit",
     "check": "npm run lint && npm run format:check && npm run typecheck && npm test",
     "test:desktop": "npm run build-app-bundle && electron tests/integration/desktop-smoke.cjs",
-    "format": "prettier --write src/main/core src/main/ipc src/main/services src/main/settings src/shared/pricing.ts src/renderer/core src/preload/channel-subscriptions.js scripts/build-app-bundle.js scripts/lib scripts/package.js scripts/eb-before-pack.js scripts/eb-after-pack.js tests/unit tests/integration eslint.config.cjs tsconfig.json src/main/vm/{guest-tool-worker,tool-files,tool-location,vm-download-manager,vm-file-dialog,vm-process,vm-tool-runtime,vm-tools,vm-theme}.js src/preload/vm-file-dialog-preload.js src/renderer/js/vm-file-dialog.js src/renderer/pages/vm-file-dialog.html",
-    "format:check": "prettier --check src/main/core src/main/ipc src/main/services src/main/settings src/shared/pricing.ts src/renderer/core src/preload/channel-subscriptions.js scripts/build-app-bundle.js scripts/lib scripts/package.js scripts/eb-before-pack.js scripts/eb-after-pack.js tests/unit tests/integration eslint.config.cjs tsconfig.json src/main/vm/{guest-tool-worker,tool-files,tool-location,vm-download-manager,vm-file-dialog,vm-process,vm-tool-runtime,vm-tools,vm-theme}.js src/preload/vm-file-dialog-preload.js src/renderer/js/vm-file-dialog.js src/renderer/pages/vm-file-dialog.html",
-    "test:vm-picker": "npm run build-app-bundle && electron tests/integration/vm-file-picker-smoke.cjs"
+    "format": "prettier --write src/main/core src/main/ipc src/main/services src/main/settings src/shared/pricing.ts src/renderer/core src/preload/channel-subscriptions.js scripts/build-app-bundle.js scripts/lib scripts/package.js scripts/eb-before-pack.js scripts/eb-after-pack.js tests/unit tests/integration eslint.config.cjs tsconfig.json src/main/vm/{guest-tool-worker,tool-files,tool-location,vm-download-manager,vm-file-dialog,vm-process,vm-tool-runtime,vm-tools,vm-theme}.js src/preload/vm-file-dialog-preload.js src/renderer/js/vm-file-dialog.js src/renderer/pages/vm-file-dialog.html integrations/codeoss scripts/prepare-codeoss.js tests/fixtures/codeoss",
+    "format:check": "prettier --check src/main/core src/main/ipc src/main/services src/main/settings src/shared/pricing.ts src/renderer/core src/preload/channel-subscriptions.js scripts/build-app-bundle.js scripts/lib scripts/package.js scripts/eb-before-pack.js scripts/eb-after-pack.js tests/unit tests/integration eslint.config.cjs tsconfig.json src/main/vm/{guest-tool-worker,tool-files,tool-location,vm-download-manager,vm-file-dialog,vm-process,vm-tool-runtime,vm-tools,vm-theme}.js src/preload/vm-file-dialog-preload.js src/renderer/js/vm-file-dialog.js src/renderer/pages/vm-file-dialog.html integrations/codeoss scripts/prepare-codeoss.js tests/fixtures/codeoss",
+    "test:vm-picker": "npm run build-app-bundle && electron tests/integration/vm-file-picker-smoke.cjs",
+    "test:codeoss:vm": "npm run prepare:codeoss && electron tests/integration/codeoss-vm.cjs"
   },
   "author": {
     "name": "B5-Software",
@@ -54,6 +57,9 @@
       "!src/main/native/**/*.mm",
       "!src/main/native/**/binding.gyp",
       "assets/**/*",
+      "!assets/codeoss{,/**/*}",
+      "integrations/codeoss/runtime-lock.json",
+      "integrations/codeoss/theme.cjs",
       "IoT-Firmware/**/*",
       "package.json",
       "LICENSE",
@@ -93,6 +99,13 @@
       "src/main/tools/**/*"
     ],
     "extraResources": [
+      {
+        "from": "assets/codeoss/${os}-${arch}/app",
+        "to": "codeoss/app",
+        "filter": [
+          "**/*"
+        ]
+      },
       {
         "from": "assets/aria2/${os}-${arch}",
         "to": "aria2",
@@ -175,7 +188,6 @@
     "brace-expansion": "^5.0.9",
     "dompurify": "^3.4.13",
     "@xmldom/xmldom": "^0.8.15",
-    "linkify-it": "^5.0.0",
     "sharp": "^0.35.5",
     "image-size": "^2.0.4",
     "uuid": "^11.1.1",
@@ -228,6 +240,7 @@
     "katex": "^0.17.0",
     "mailparser": "^3.9.31",
     "mammoth": "^1.12.1",
+    "markdown-it": "^15.0.2",
     "monaco-editor": "^0.55.1",
     "node-pty": "^1.1.0",
     "nodemailer": "^10.0.12",

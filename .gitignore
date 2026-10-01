@@ -40,6 +40,7 @@ assets/geogebra/
 assets/geogebra-app/
 # GeoGebra 完整源码（仅参考，不打包）
 assets/geogebra-src/
+assets/codeoss/
 
 # Tesseract OCR 训练数据
 assets/ocr/

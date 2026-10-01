@@ -12,6 +12,15 @@ const { subscribe: onChannel, dispose: disposeSubscriptions } = createChannelSub
 window.addEventListener('unload', disposeSubscriptions, { once: true });
 
 contextBridge.exposeInMainWorld('api', {
+  codeOSSOpen: (directory) => ipcRenderer.invoke('codeoss:open', directory),
+  codeOSSLayout: (layout) => ipcRenderer.invoke('codeoss:layout', layout),
+  codeOSSCommand: (command) => ipcRenderer.invoke('codeoss:command', command),
+  codeOSSContext: () => ipcRenderer.invoke('codeoss:context'),
+  codeOSSAgentResponse: (response) => ipcRenderer.invoke('codeoss:agent-response', response),
+  codeOSSAgentEvent: (event) => ipcRenderer.invoke('codeoss:agent-event', event),
+  onCodeOSSState: (cb) => onChannel('codeoss:state', cb),
+  onCodeOSSWorkspace: (cb) => onChannel('codeoss:workspace', cb),
+  onCodeOSSAgentRequest: (cb) => onChannel('codeoss:agent-request', cb),
   // 运行位置=虚拟机时把宿主路径翻译为 VM 内路径（顶层别名，渲染层附件提示词用）
   runtimeToVmPath: (p) => ipcRenderer.invoke('runtime:toVmPath', p),
   // Settings

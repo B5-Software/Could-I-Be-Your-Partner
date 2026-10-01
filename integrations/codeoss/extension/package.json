@@ -1,0 +1,127 @@
+{
+  "name": "workbench",
+  "publisher": "cibyp",
+  "displayName": "CIBYP Agent & VM",
+  "description": "CIBYP Agent, document-aware edits, personalization and VM workspaces.",
+  "version": "1.0.0",
+  "license": "GPL-3.0-or-later",
+  "engines": {
+    "vscode": "^1.135.0"
+  },
+  "main": "./dist/extension.cjs",
+  "extensionKind": [
+    "ui"
+  ],
+  "enabledApiProposals": [
+    "resolvers"
+  ],
+  "activationEvents": [
+    "onStartupFinished",
+    "onResolveRemoteAuthority:cibyp-vm"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": true
+    }
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "cibyp.agent.focus",
+        "title": "CIBYP: 打开 Agent",
+        "icon": "$(sparkle)"
+      },
+      {
+        "command": "cibyp.agent.explain",
+        "title": "CIBYP: 解释选中代码"
+      },
+      {
+        "command": "cibyp.agent.refactor",
+        "title": "CIBYP: 重构选中代码"
+      },
+      {
+        "command": "cibyp.agent.review",
+        "title": "CIBYP: 审查工作区变更"
+      },
+      {
+        "command": "cibyp.agent.settings",
+        "title": "CIBYP: 模型与预算设置"
+      },
+      {
+        "command": "cibyp.changes.open",
+        "title": "CIBYP: 查看 AI 修改"
+      },
+      {
+        "command": "cibyp.changes.accept",
+        "title": "CIBYP: 接受修改",
+        "icon": "$(check)"
+      },
+      {
+        "command": "cibyp.changes.revert",
+        "title": "CIBYP: 撤销修改",
+        "icon": "$(discard)"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "cibyp",
+          "title": "CIBYP",
+          "icon": "media/agent.svg"
+        }
+      ]
+    },
+    "views": {
+      "cibyp": [
+        {
+          "id": "cibyp.agent",
+          "name": "Agent",
+          "type": "webview"
+        },
+        {
+          "id": "cibyp.changes",
+          "name": "AI 修改"
+        }
+      ]
+    },
+    "chatParticipants": [
+      {
+        "id": "cibyp.agent",
+        "name": "cibyp",
+        "fullName": "CIBYP",
+        "description": "使用 CIBYP 当前模型、工具与预算执行编程任务。"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "cibyp.agent.explain",
+          "group": "cibyp@1",
+          "when": "editorHasSelection"
+        },
+        {
+          "command": "cibyp.agent.refactor",
+          "group": "cibyp@2",
+          "when": "editorHasSelection"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "cibyp.changes.open",
+          "when": "view == cibyp.changes",
+          "group": "inline@1"
+        },
+        {
+          "command": "cibyp.changes.accept",
+          "when": "view == cibyp.changes",
+          "group": "inline@2"
+        },
+        {
+          "command": "cibyp.changes.revert",
+          "when": "view == cibyp.changes",
+          "group": "inline@3"
+        }
+      ]
+    }
+  }
+}

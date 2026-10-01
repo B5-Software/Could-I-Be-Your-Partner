@@ -32,13 +32,6 @@
     _origApply(theme);
     // Defer slightly to allow applyThemeMode (which sets data-theme) to settle
     setTimeout(pushThemeToWebControl, 50);
-    // Monaco 主题跟随
-    setTimeout(() => {
-      if (monacoEditor) {
-        const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
-        monaco.editor.setTheme(isDark ? 'vs-dark' : 'vs');
-      }
-    }, 50);
   };
   // Push initial theme (ThemeManager.init already ran with the original apply)
   setTimeout(pushThemeToWebControl, 200);

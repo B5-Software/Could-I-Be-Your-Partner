@@ -132,22 +132,39 @@ class VmService extends EventEmitter {
   /**
    * 把宿主任意目录挂载进 VM：<dir> → /workspace/_external/<name>。
    * 用于 Code 模式打开的项目目录：之后所有 fs/终端/工具都按该映射作用于 VM。
-   * 跳过 node_modules/.git/dist 等，单文件默认上限 20MB。
+   * 跳过生成文件，单文件默认上限 20MB；IDE 导入保留 Git 并持久识别宿主来源。
    */
-  async mountExternalDir(hostDir, { maxFileMB = 20, refresh = false } = {}) {
+  async mountExternalDir(hostDir, { maxFileMB = 20, refresh = false, preserveGit = false } = {}) {
     const hostRoot = path.resolve(String(hostDir || ''));
     if (!hostRoot || !fs.existsSync(hostRoot)) return { ok: false, error: '目录不存在: ' + hostRoot };
     const name = path.basename(hostRoot).replace(/[^\w.-]+/g, '_') || 'ws';
-    const vmRoot = `/workspace/_external/${name}`;
+    let vmRoot = `/workspace/_external/${name}`;
+    const identity = require('node:crypto').createHash('sha256').update(process.platform === 'win32' ? hostRoot.toLowerCase() : hostRoot).digest('hex');
+    if (preserveGit) vmRoot += '-' + identity.slice(0, 8);
     this._externMounts = this._externMounts || new Map();
     if (this._externMounts.has(hostRoot) && !refresh) {
-      // 已挂载：不重复 push，避免用宿主旧副本覆盖 VM 内的新改动（Monaco 保存只写 VM）
+      // 已挂载：不重复 push，避免用宿主旧副本覆盖 VM 内的新改动。
       return { ok: true, hostRoot, vmRoot: this._externMounts.get(hostRoot), reused: true };
     }
-    this._externMounts.set(hostRoot, vmRoot);
+    if ([...this._externMounts.entries()].some(([other, target]) => other !== hostRoot && target === vmRoot)) {
+      vmRoot += '-' + require('node:crypto').createHash('sha256').update(hostRoot).digest('hex').slice(0, 8);
+    }
+    if (preserveGit && fs.existsSync(path.join(hostRoot, '.git')) && !fs.statSync(path.join(hostRoot, '.git')).isDirectory()) {
+      return { ok: false, error: 'Git worktree 的 .git 文件引用宿主目录，请在 VM 内克隆仓库后打开，避免导入失效的 Git 路径。' };
+    }
     const { VmFs } = require('./vm-fs');
     const vmFs = new VmFs({ vmService: this });
+    const marker = vmRoot + '/.cibyp-host-import';
+    if (preserveGit && await vmFs.exists(vmRoot)) {
+      let previous;
+      try { previous = JSON.parse((await vmFs.readBuffer(marker)).toString('utf8')); } catch { /* Unknown or incomplete import stays untouched. */ }
+      if (previous?.identity !== identity) return { ok: false, error: 'VM 导入目录已存在但来源无法确认。请直接在 IDE 中打开 ' + vmRoot + '，避免覆盖已有文件。' };
+      this._externMounts.set(hostRoot, vmRoot);
+      return { ok: true, hostRoot, vmRoot, reused: true };
+    }
     const skip = new Set(['node_modules', '.git', 'dist', 'out', '.cache', '.venv', '__pycache__', '.next', '.cibyp-code-history']);
+    if (preserveGit) skip.delete('.git');
+    skip.add('.cibyp-host-import');
     const maxBytes = Math.max(1, Number(maxFileMB) || 20) * 1024 * 1024;
     const push = async (from, to) => {
       await vmFs.exec(`mkdir -p ${vmpaths.shellQuote(to)}`, 20000);
@@ -156,11 +173,14 @@ class VmService extends EventEmitter {
         const src = path.join(from, e.name);
         const dst = to + '/' + e.name;
         if (e.isDirectory()) { await push(src, dst); continue; }
-        try { if (fs.statSync(src).size > maxBytes) continue; } catch { continue; }
-        await vmFs.pushFromHost(src, dst).catch(() => {});
+        if (e.isSymbolicLink()) continue;
+        if (!path.relative(hostRoot, src).split(path.sep).includes('.git') && fs.statSync(src).size > maxBytes) continue;
+        await vmFs.pushFromHost(src, dst);
       }
     };
     await push(hostRoot, vmRoot);
+    if (preserveGit) await vmFs.writeBuffer(marker, Buffer.from(JSON.stringify({ identity, hostRoot }) + '\n'));
+    this._externMounts.set(hostRoot, vmRoot);
     console.log('[vm] 已挂载外部目录:', hostRoot, '→', vmRoot);
     return { ok: true, hostRoot, vmRoot };
   }

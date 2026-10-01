@@ -307,52 +307,11 @@ module.exports = function registerWorkspacesIpc({
       title: '选择 Code 模式工作区文件夹',
     });
     if (result.canceled || !result.filePaths.length) return { ok: false, canceled: true };
-    const wsPath = result.filePaths[0];
-    if (
-      require('../vm/tool-location').isVmOperation(() => vmService) &&
-      vmService.isVmPath(wsPath)
-    ) {
-      getSettings().codeMode = { ...getSettings().codeMode, lastWorkspace: wsPath };
-      persistSettings();
-      return { ok: true, path: wsPath, vmPath: wsPath, location: 'vm' };
-    }
-    getSettings().codeMode = getSettings().codeMode || {};
-    getSettings().codeMode.lastWorkspace = wsPath;
-    persistSettings();
-    // VM 模式：把项目目录挂载进虚拟机（/workspace/_external/<name>），之后文件/终端/工具都作用于 VM
-    try {
-      if ((getSettings().runtime || {}).location === 'vm' && !vmService.emergencyHost) {
-        const mount = await vmService.mountExternalDir(wsPath);
-        if (mount && mount.ok)
-          return {
-            ok: true,
-            path: mount.hostRoot,
-            vmPath: mount.vmRoot,
-            mounted: true,
-          };
-      }
-    } catch (e) {
-      console.warn('[vm] Code 工作区挂载失败:', e.message);
-    }
-    return { ok: true, path: wsPath };
+    // Selection only: Code-OSS resolves/imports and persists after accepting the switch.
+    return { ok: true, path: result.filePaths[0] };
   });
 
-  ipcMain.handle('code:getLastWorkspace', async () => {
-    const last = getSettings().codeMode?.lastWorkspace || null;
-    // VM 模式：恢复 Code 工作区时挂载进 VM（映射在内存里，VM 重启后必须重挂）
-    try {
-      if (
-        last &&
-        !vmService.isVmPath(last) &&
-        require('../vm/tool-location').isVmOperation(() => vmService)
-      ) {
-        await vmService.mountExternalDir(last).catch(() => {});
-      }
-    } catch {
-      /* ignore */
-    }
-    return last;
-  });
+  ipcMain.handle('code:getLastWorkspace', () => getSettings().codeMode?.lastWorkspace || null);
 
   ipcMain.handle('code:setLastWorkspace', (_, wsPath) => {
     if (!wsPath || typeof wsPath !== 'string') return { ok: false };
