@@ -1,116 +1,72 @@
-  // ============ 设置页搜索（Ctrl/Cmd+F 打开，仅设置页生效） ============
+  // Search indexes labels and help, never stored API keys or passwords.
   const settingsSearch = (() => {
     const input = document.getElementById('settings-search-input');
-    const countEl = document.getElementById('settings-search-count');
-    if (!input || !countEl) return null;
-
-    let query = '';
-    let lastActiveTab = 'ai';
-
-    function activateTab(tabId) {
-      window.activateSettingsTab(tabId);
-    }
-
-    function settingItemText(item) {
-      let text = item.textContent || '';
-      item.querySelectorAll('input, textarea, select').forEach(el => {
-        text += ' ' + (el.value || '') + ' ' + (el.placeholder || '');
-      });
-      return text.toLowerCase();
-    }
-
+    const count = document.getElementById('settings-search-count');
+    const results = document.getElementById('settings-search-results');
     function applyQuery() {
-      const q = query;
-      const panels = Array.from(document.querySelectorAll('#page-settings .settings-panel'));
-      let matchCount = 0;
-      let firstPanelTab = null;
-      panels.forEach(panel => {
-        const items = Array.from(panel.querySelectorAll(':scope > .settings-group > .setting-item, :scope > .setting-item'));
-        let panelMatches = 0;
-        items.forEach(item => {
-          const ok = !q || settingItemText(item).includes(q);
-          item.classList.toggle('settings-search-match', !!q && ok);
-          item.style.display = q ? (ok ? '' : 'none') : '';
-          if (q && ok) panelMatches++;
+      const query = input.value.trim().toLowerCase();
+      results.replaceChildren(); results.hidden = !query;
+      document.querySelectorAll('.settings-search-match').forEach(el => el.classList.remove('settings-search-match'));
+      if (!query) { count.textContent = ''; return; }
+      const words = query.split(/\s+/).filter(Boolean);
+      const matches = [];
+      document.querySelectorAll('#page-settings .settings-panel').forEach(panel => {
+        if (panel.hidden) return;
+        const info = settingsHelp[panel.dataset.tab] || [panel.dataset.tab, '', ''];
+        panel.querySelectorAll('.setting-item').forEach(item => {
+          for (let parent = item; parent && parent !== panel; parent = parent.parentElement) {
+            if (parent.hidden || parent.style.display === 'none') return;
+          }
+          const label = item.querySelector('label')?.textContent.trim() || item.querySelector('button')?.textContent.trim();
+          if (!label) return;
+          const text = (item.textContent + ' ' + [...item.querySelectorAll('input, textarea')].map(el => el.placeholder || '').join(' ')).toLowerCase();
+          const all = text + ' ' + info.join(' ').toLowerCase();
+          if (words.every(word => all.includes(word))) matches.push({ item, panel, label, info,
+            score: words.reduce((score, word) => score + (label.toLowerCase().includes(word) ? 6 : text.includes(word) ? 3 : 1), 0) });
         });
-        panel.querySelectorAll(':scope > .settings-group').forEach(group => {
-          const hasVisibleItem = group.querySelector('.setting-item:not([style*="display: none"])');
-          const titleMatch = q && group.querySelector('h3') && (group.querySelector('h3').textContent || '').toLowerCase().includes(q);
-          group.style.display = q ? ((hasVisibleItem || titleMatch) ? '' : 'none') : '';
-        });
-        const panelVisible = !q || panelMatches > 0;
-        panel.style.display = q ? (panelVisible ? '' : 'none') : '';
-        if (panelVisible && q) {
-          matchCount += panelMatches;
-          if (!firstPanelTab) firstPanelTab = panel.dataset.tab;
-        }
-        const tab = document.querySelector(`.settings-tab[data-tab="${panel.dataset.tab}"]`);
-        if (tab) tab.style.display = q ? (panelVisible ? '' : 'none') : '';
       });
-      // 分组标题：组内 tab 全被过滤时隐藏
-      document.querySelectorAll('#page-settings .settings-tab-group').forEach(header => {
-        let visible = false;
-        let el = header.nextElementSibling;
-        while (el && !el.classList.contains('settings-tab-group')) {
-          if (el.classList.contains('settings-tab') && !el.hidden && el.style.display !== 'none') { visible = true; break; }
-          el = el.nextElementSibling;
-        }
-        header.style.display = q ? (visible ? '' : 'none') : '';
-      });
-      countEl.textContent = q ? `${matchCount} 项` : '';
-      input.classList.toggle('has-results', !!q);
-      if (q && firstPanelTab) activateTab(firstPanelTab);
-      else if (!q) activateTab(lastActiveTab);
-    }
-
-    function open() {
-      lastActiveTab = document.querySelector('.settings-tab.active')?.dataset.tab || 'ai';
-      input.focus({ preventScroll: true });
-      try { input.scrollIntoView({ block: 'nearest' }); } catch { /* ignore */ }
-      Promise.resolve().then(() => input.focus({ preventScroll: true }));
-    }
-
-    function close() {
-      if (query || input.value) {
-        query = '';
-        input.value = '';
-        applyQuery();
+      matches.sort((a, b) => b.score - a.score);
+      count.textContent = matches.length + ' 项';
+      const title = document.createElement('p'); title.className = 'setting-hint';
+      title.textContent = matches.length ? '选择结果跳转到对应设置' : '没有匹配设置，试试“模型”“Token”“预算”或“虚拟机”。';
+      results.append(title);
+      for (const match of matches.slice(0, 20)) {
+        const button = document.createElement('button'); button.type = 'button';
+        const name = document.createElement('strong'); name.textContent = match.label;
+        const path = document.createElement('span'); path.textContent = match.info[0];
+        button.append(name, path);
+        button.onclick = () => {
+          window.activateSettingsTab(match.panel.dataset.tab);
+          for (let parent = match.item.parentElement; parent && parent !== match.panel; parent = parent.parentElement) if (parent.tagName === 'DETAILS') parent.open = true;
+          match.item.classList.add('settings-search-match');
+          match.item.scrollIntoView({ block: 'center', behavior: motionEnabled() ? 'smooth' : 'instant' });
+          match.item.querySelector('input:not([disabled]), select:not([disabled]), textarea:not([disabled]), button')?.focus({ preventScroll: true });
+          results.hidden = true;
+        };
+        results.append(button);
       }
-      input.blur();
     }
-
-    input.addEventListener('input', () => {
-      query = input.value.trim().toLowerCase();
-      applyQuery();
-    });
-    input.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        close();
-      }
-    });
-    document.querySelectorAll('.settings-tab').forEach(b => {
-      b.addEventListener('click', () => { if (!query) lastActiveTab = b.dataset.tab; });
-    });
-
-    if (typeof window.registerPageSearch === 'function') {
-      window.registerPageSearch('settings', { open, close });
-    }
+    function open() { input.focus({ preventScroll: true }); if (input.value) applyQuery(); }
+    function close() { input.value = ''; applyQuery(); input.blur(); }
+    input.addEventListener('input', applyQuery);
+    input.addEventListener('keydown', e => { if (e.key === 'Escape') { e.preventDefault(); close(); } });
+    window.registerPageSearch?.('settings', { open, close });
     return { open, close };
   })();
 
-  // Settings change handlers
+  var settingsWriter;
+  function getSettingsWriter() { return settingsWriter ||= SettingsClient.create(window.api, (state, error) => {
+    const status = document.getElementById('settings-save-status');
+    if (!status) return;
+    status.dataset.state = state;
+    status.textContent = state === 'saving' ? '正在保存…' : state === 'error' ? '保存失败：' + error.message : '已保存';
+  }); }
+  async function readSettings() { return getSettingsWriter().read(); }
   async function saveSettings(updates) {
-    const current = await window.api.getSettings();
-    const merged = { ...current, ...updates };
-    await window.api.setSettings(merged);
-    // 全局字体即时生效
-    if (typeof applyFontSettings === 'function') applyFontSettings(merged);
-    // 即时生效：更新 maxTokens + 重算 systemPrompt（persona/llm 变更后立即生效，无需重启）
-    for (const live of allLiveAgents()) live.applySettings(merged);
-    // 隐私信息保护：同步到 Code / Babe 代理实例（其 settings 为独立快照）
-    if (merged.privacyProtection) {
-      if (typeof codeAgent !== 'undefined' && codeAgent && codeAgent.settings) codeAgent.settings.privacyProtection = merged.privacyProtection;
-      if (typeof babeAgent !== 'undefined' && babeAgent && babeAgent.settings) babeAgent.settings.privacyProtection = merged.privacyProtection;
-    }
+    const saved = await getSettingsWriter().save(updates);
+    if (typeof applyFontSettings === 'function') applyFontSettings(saved);
+    for (const live of allLiveAgents()) live.applySettings(saved);
+    window.refreshSettingsOverview?.(saved);
+    window.refreshTokenSettings?.(saved);
+    return saved;
   }

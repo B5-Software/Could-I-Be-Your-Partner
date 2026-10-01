@@ -171,39 +171,6 @@
       }
     });
 
-    const autoOptimizeEl = document.getElementById('toggle-auto-optimize-tools');
-    if (autoOptimizeEl) {
-      autoOptimizeEl.checked = !!agent.settings.autoOptimizeToolSelection;
-      autoOptimizeEl.onchange = async () => {
-        agent.settings.autoOptimizeToolSelection = autoOptimizeEl.checked;
-        agent.resetOptimizedTools();
-        await window.api.setSettings({ autoOptimizeToolSelection: autoOptimizeEl.checked });
-        updateReoptimizeButtonVisibility();
-        renderToolsStats();
-      };
-    }
-    const discoveryEl = document.getElementById('toggle-tool-discovery');
-    if (discoveryEl) {
-      discoveryEl.checked = agent.settings?.toolExposure?.mode !== 'all';
-      discoveryEl.onchange = async () => {
-        agent.settings.toolExposure = { ...(agent.settings.toolExposure || {}), mode: discoveryEl.checked ? 'adaptive' : 'all', budgetTokens: agent.settings.toolExposure?.budgetTokens || 4000 };
-        agent.resetOptimizedTools();
-        await window.api.setSettings({ toolExposure: { mode: discoveryEl.checked ? 'adaptive' : 'all' } });
-        renderToolsStats();
-      };
-    }
-    const budgetInput = document.getElementById('tool-schema-budget');
-    if (budgetInput) {
-      budgetInput.value = agent.settings.toolExposure?.budgetTokens || 4000;
-      budgetInput.onchange = async () => {
-        const budget = Math.min(16000, Math.max(1000, Number(budgetInput.value) || 4000));
-        agent.settings.toolExposure = { ...(agent.settings.toolExposure || { mode: 'adaptive' }), budgetTokens: budget };
-        budgetInput.value = budget;
-        await window.api.setSettings({ toolExposure: { budgetTokens: budget } });
-        renderToolsStats();
-      };
-    }
-
     const categoryMap = new Map();
     for (const tool of allDefs) {
       const cat = tool.category || '其他';

@@ -1,5 +1,7 @@
   async function loadSettingsPage() {
-    const s = await window.api.getSettings();
+    const s = await readSettings();
+    refreshSettingsOverview(s);
+    refreshTokenSettings(s);
     populateFontSelects(s);
     applyFontSettings(s);
     document.getElementById('setting-llm-url').value = s.llm.apiUrl || '';
@@ -9,7 +11,7 @@
     document.getElementById('setting-temp-val').textContent = s.llm.temperature;
     document.getElementById('setting-llm-ctx').value = s.llm.maxContextLength;
     document.getElementById('setting-llm-max-response').value = s.llm.maxResponseTokens || 8192;
-    document.getElementById('setting-llm-daily-limit').value = s.llm.dailyMaxTokens || 0;
+    document.getElementById('setting-llm-daily-limit').value = s.budget?.dailyTokenLimit || 0;
     document.getElementById('setting-llm-stream').checked = s.llm.streamResponses !== false;
     const forceVisionEl = document.getElementById('setting-llm-force-vision');
     if (forceVisionEl) forceVisionEl.checked = s.llm.forceVision === true;
@@ -22,10 +24,10 @@
     if (evModel) evModel.value = s.llm.externalVision?.model || '';
     document.getElementById('setting-llm-retries').value = s.llm.maxRetries ?? 10;
     document.getElementById('setting-llm-timeout').value = Math.round((s.llm.timeoutMs ?? 300000) / 1000);
-    document.getElementById('setting-llm-fallback-model').value = s.llm.fallbackModel || '';
     const llmUsage = s.llm.dailyTokensUsed || 0;
-    const llmLimit = s.llm.dailyMaxTokens || 0;
+    const llmLimit = s.budget?.dailyTokenLimit || 0;
     const llmUsageEl = document.getElementById('setting-llm-usage');
+    llmUsageEl.classList.remove('warning');
     llmUsageEl.textContent = `今日已用: ${llmUsage}`;
     if (llmLimit > 0 && llmUsage >= llmLimit * 0.8) {
       llmUsageEl.classList.add('warning');
@@ -70,6 +72,7 @@
     const imgUsage = s.imageGen.dailyImagesUsed || 0;
     const imgLimit = s.imageGen.dailyMaxImages || 0;
     const imgUsageEl = document.getElementById('setting-img-usage');
+    imgUsageEl.classList.remove('warning');
     imgUsageEl.textContent = `今日已用: ${imgUsage}`;
     if (imgLimit > 0 && imgUsage >= imgLimit * 0.8) {
       imgUsageEl.classList.add('warning');

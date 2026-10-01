@@ -2,7 +2,7 @@
   let appearanceQueue = Promise.resolve();
   function updateAppearance(change) {
     const operation = appearanceQueue.catch(() => {}).then(async () => {
-      const current = await window.api.getSettings();
+      const current = await readSettings();
       const theme = { ...current.theme };
       if (typeof change === 'function') await change(theme);
       else Object.assign(theme, change);
@@ -52,7 +52,7 @@
 
   // 界面动效开关（主标签页切换动画）
   document.getElementById('setting-ui-animations').addEventListener('change', async (e) => {
-    const s = await window.api.getSettings();
+    const s = await readSettings();
     s.animations = e.target.checked;
     document.documentElement.setAttribute('data-animations', s.animations === false ? 'off' : 'on');
     await saveSettings(s);
@@ -60,7 +60,7 @@
 
   // 模态框动效开关（打开/关闭渐显渐隐）
   document.getElementById('setting-ui-modal-animations').addEventListener('change', async (e) => {
-    const s = await window.api.getSettings();
+    const s = await readSettings();
     s.modalAnimations = e.target.checked;
     document.documentElement.setAttribute('data-modal-animations', s.modalAnimations === false ? 'off' : 'on');
     await saveSettings(s);
@@ -68,7 +68,7 @@
 
   // Color schemes
   async function updateColorSchemeVisibility() {
-    const s = await window.api.getSettings();
+    const s = await readSettings();
     const isDark = await ThemeManager.getCurrentDarkMode(s.theme.mode);
     document.querySelectorAll('.scheme-btn').forEach(btn => {
       const bgColor = btn.dataset.bg;

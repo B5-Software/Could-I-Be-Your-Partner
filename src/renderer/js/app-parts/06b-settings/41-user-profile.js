@@ -4,7 +4,7 @@
     if (el) {
       el.addEventListener('change', async () => {
         const key = { 'setting-user-name': 'name', 'setting-user-bio': 'bio' }[id];
-        const s = await window.api.getSettings();
+        const s = await readSettings();
         if (!s.userProfile) s.userProfile = {};
         s.userProfile[key] = el.value;
         await saveSettings(s);
@@ -17,7 +17,7 @@
   document.getElementById('btn-user-avatar-pick')?.addEventListener('click', async () => {
     const result = await window.api.avatarPickAndEncode('userProfile');
     if (result.ok && (result.path || result.dataUrl)) {
-      const s = await window.api.getSettings();
+      const s = await readSettings();
       if (!s.userProfile) s.userProfile = {};
       s.userProfile.avatar = result.path || result.dataUrl;
       await saveSettings(s);
@@ -27,7 +27,7 @@
   });
 
   document.getElementById('btn-user-avatar-clear')?.addEventListener('click', async () => {
-    const s = await window.api.getSettings();
+    const s = await readSettings();
     if (!s.userProfile) s.userProfile = {};
     s.userProfile.avatar = '';
     await saveSettings(s);

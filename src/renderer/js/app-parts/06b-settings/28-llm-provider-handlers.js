@@ -1,7 +1,7 @@
   const ocAutoEl = document.getElementById('setting-llm-oc-auto');
   if (ocAutoEl) {
     ocAutoEl.addEventListener('change', async (e) => {
-      const s = await window.api.getSettings();
+      const s = await readSettings();
       s.llm.autoOpencodeHeaders = e.target.checked;
       await saveSettings(s);
     });
@@ -10,7 +10,7 @@
   // Provider selection — switches between OpenAI-compat and Zen/Go fields
   document.getElementById('setting-llm-provider').addEventListener('change', async (e) => {
     const provider = e.target.value;
-    const s = await window.api.getSettings();
+    const s = await readSettings();
     s.llm.provider = provider;
     // When switching to Zen/Go, persist a sensible default apiUrl/model
     if (provider === 'opencode-zen') {
@@ -52,7 +52,7 @@
 
   // Zen API key
   document.getElementById('setting-llm-zen-key').addEventListener('change', async (e) => {
-    const s = await window.api.getSettings();
+    const s = await readSettings();
     s.llm.zenApiKey = e.target.value.trim();
     // 用户手动改 key 时清除 public 标记
     if (e.target.value.trim() === 'public') {
@@ -67,7 +67,7 @@
 
   // Zen model select — sync to llm.model
   document.getElementById('setting-llm-zen-model').addEventListener('change', async (e) => {
-    const s = await window.api.getSettings();
+    const s = await readSettings();
     s.llm.model = e.target.value;
     await saveSettings(s);
     refreshReasoningVariants();
@@ -77,7 +77,7 @@
   // Zen refresh button
   const zenRefreshBtn = document.getElementById('btn-zen-refresh');
   if (zenRefreshBtn) zenRefreshBtn.addEventListener('click', async () => {
-    const s = await window.api.getSettings();
+    const s = await readSettings();
     await refreshZenModels(s.llm.model);
   });
 
@@ -89,7 +89,7 @@
     // 使用 opencode 内置的免登录公共 key："public"（仅可调用限时免费模型）
     keyInput.value = 'public';
     keyInput.dataset.publicKey = '1';
-    const s = await window.api.getSettings();
+    const s = await readSettings();
     s.llm.zenApiKey = 'public';
     s.llm.provider = 'opencode-zen';
     s.llm.apiUrl = 'https://opencode.ai/zen/v1/chat/completions';

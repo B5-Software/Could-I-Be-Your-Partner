@@ -4,6 +4,14 @@
     try {
       // 使用新的 budget:getStatus API（后端已根据价格表+峰谷价计算好）
       const st = await window.api.budgetGetStatus();
+      for (const [id, used, limit] of [['setting-llm-usage', st.daily?.tokensUsed, st.daily?.tokenLimit],
+        ['setting-img-usage', st.daily?.imagesUsed, st.daily?.imageLimit]]) {
+        const hint = document.getElementById(id);
+        if (hint) {
+          hint.textContent = `今日已用: ${used || 0}${limit > 0 ? ' / ' + limit : ''}`;
+          hint.classList.toggle('warning', limit > 0 && used >= limit * 0.8);
+        }
+      }
       const fmt = (v) => `$${(Number(v) || 0).toFixed(4)}`;
       const fmtLimit = (v) => `$${(Number(v) || 0).toFixed(2)}`;
       const renderSection = (title, info) => {

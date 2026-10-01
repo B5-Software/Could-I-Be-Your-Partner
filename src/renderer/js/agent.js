@@ -172,8 +172,7 @@ class Agent {
     this.settings = merged;
     if (selectionChanged) this.resetOptimizedTools();
     if (this.contextManager) {
-      this.contextManager.setMaxTokens(merged?.llm?.maxContextLength || 8192);
-      this.contextManager.setOutputReserve(merged?.llm?.maxResponseTokens || 8192);
+      this.syncTokenLimits();
       this.contextManager.setSystemPrompt(this.getSystemPrompt());
     }
   }
@@ -206,6 +205,8 @@ class Agent {
       }
     }
     const base = {
+      contextLength: this.getTokenLimits().contextTokens,
+      poolEntryId: ov.poolEntryId || undefined,
       model: ov.model || undefined,
       reasoningEffort: this.getActiveReasoningEffort(),
       ...(ov.provider ? { provider: ov.provider } : {}),
@@ -214,6 +215,20 @@ class Agent {
     };
     if (extra && typeof extra === 'object') return { ...base, ...extra };
     return base;
+  }
+
+  getTokenLimits() {
+    const policy = typeof TokenPolicy !== 'undefined' ? TokenPolicy
+      : typeof require === 'function' ? require('../../shared/token-policy') : null;
+    return policy ? policy.resolve(this.settings || {}, this.llmOverride || {})
+      : { contextTokens: this.settings?.llm?.maxContextLength || 131072, outputTokens: this.settings?.llm?.maxResponseTokens || 8192, toolTokens: this.settings?.toolExposure?.budgetTokens || 4000 };
+  }
+
+  syncTokenLimits() {
+    const limits = this.getTokenLimits();
+    this.contextManager?.setMaxTokens(limits.contextTokens);
+    this.contextManager?.setOutputReserve(limits.outputTokens);
+    return limits;
   }
 
   /**
@@ -301,6 +316,7 @@ class Agent {
         apiUrl: entry.apiUrl || null,
         apiKey: entry.apiKey || null,
         vision: entry.vision === true,
+        contextLength: entry.contextLength || null,
         reasoningEffort: effort
       };
       try { if (typeof this.saveToHistory === 'function') await this.saveToHistory(); } catch (_) {}
@@ -419,8 +435,7 @@ class Agent {
       this.settings.tools = {};
     }
     this.systemInfo = await window.api.getFullSystemInfo();
-    this.contextManager.setMaxTokens(this.settings.llm.maxContextLength || 8192);
-    this.contextManager.setOutputReserve(this.settings?.llm?.maxResponseTokens || 8192);
+    this.syncTokenLimits();
     // Don't draw tarot card on init - draw on first message
     // Create workspace
     this.resetOptimizedTools();
@@ -955,8 +970,7 @@ ${affectionDesc}
       adaptReadImageFileSchema(byName, this.settings, () => this.isVisionModel());
       schemas = schemas.map(t => byName[t.function.name]);
     }
-    const contextLimit = Number(this.settings?.llm?.maxContextLength) || 32768;
-    const budget = Math.min(Number(this.settings?.toolExposure?.budgetTokens) || 4000, Math.max(1000, contextLimit * 0.2));
+    const budget = this.syncTokenLimits().toolTokens;
     this.toolExposure.configure(definitions, schemas, budget);
     return this.toolExposure;
   }
@@ -1057,6 +1071,7 @@ ${affectionDesc}
   }
 
   getRuntimeToolSchemas() {
+    this.syncTokenLimits();
     if (this.usesToolDiscovery()) {
       const tools = this.prepareToolExposure().schemas();
       this.contextManager?.setToolSchemaTokens(Math.ceil(JSON.stringify(tools).length / 4));
@@ -2048,9 +2063,9 @@ ${affectionDesc}
         { role: 'system', content: TU ? TU.buildTitlePrompt(this.mode) : '你是会话标题助手。只输出 2-12 字中文标题，提炼主题，禁止照抄用户原话。' },
         { role: 'user', content: cleaned }
       ], {
-        ...this._llmOptions(),
-        temperature: 0, // 温度>0 会让部分思考型模型把 CoT 灌进 content（实测 nemotron lightning）
-        max_tokens: 512, // 给结论留出空间；思考本身不在该预算内
+        ...this._llmOptions({ reasoningEffort: 'off' }),
+        temperature: 0,
+        max_tokens: 512,
         requestId: Date.now().toString(),
         sessionKey: this.sessionKey || null
       });
@@ -2301,7 +2316,7 @@ ${affectionDesc}
           sessionKey: this.sessionKey || null,
           tools: this.getRuntimeToolSchemas(), // 会话回放：复用暖前缀缓存
           maxRetries: this.settings?.contextCompaction?.compactionRetries ?? 1,
-          maxTokens: this.settings?.contextCompaction?.summarizeMaxTokens || 2048,
+          maxTokens: this.getTokenLimits().summaryTokens || 2048,
           ...this._llmOptions()
         });
         if (sumRes.ok && !sumRes.skipped) {

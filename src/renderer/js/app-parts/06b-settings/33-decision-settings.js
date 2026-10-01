@@ -45,20 +45,20 @@
     _decisionBound = true;
     const saveField = (id, key, transform) => {
       document.getElementById(id)?.addEventListener('change', async (e) => {
-        const s = await window.api.getSettings();
+        const s = await readSettings();
         if (!s.decision) s.decision = {};
         s.decision[key] = transform ? transform(e.target.value) : e.target.value;
         await saveSettings(s);
       });
     };
     document.getElementById('setting-decision-enabled')?.addEventListener('change', async (e) => {
-      const s = await window.api.getSettings();
+      const s = await readSettings();
       s.decision = { ...(s.decision || {}), enabled: e.target.checked };
       await saveSettings(s);
       refreshDecisionStatus().catch(() => {});
     });
     document.getElementById('setting-decision-provider')?.addEventListener('change', async (e) => {
-      const s = await window.api.getSettings();
+      const s = await readSettings();
       const provider = e.target.value === 'typesafe' ? 'typesafe' : 'zen';
       s.decision = { ...(s.decision || {}), provider, apiUrl: '', model: '' };
       await saveSettings(s);
@@ -73,7 +73,7 @@
     saveField('setting-decision-limit', 'dailyMaxCalls', (v) => Math.max(0, parseInt(v, 10) || 0));
     for (const [key, id] of Object.entries(DECISION_USAGE_IDS)) {
       document.getElementById(id)?.addEventListener('change', async (e) => {
-        const s = await window.api.getSettings();
+        const s = await readSettings();
         if (!s.decision) s.decision = {};
         s.decision.usages = { ...(s.decision.usages || {}), [key]: e.target.checked };
         await saveSettings(s);

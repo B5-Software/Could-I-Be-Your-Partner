@@ -259,6 +259,7 @@ function mergeFreeTierTools(tools) {
  * @returns {{ url, headers, body, transport }} transport: 'openai' | 'anthropic' | 'responses'
  */
 function buildLLMRequest(llm, opts) {
+  opts = { ...opts, max_tokens: require('../shared/token-policy').requestOutput({ llm }, opts) };
   const provider = llm.provider || 'openai-compat';
   const model = llm.model;
   // 允许调用方（如游戏）通过 opts.reasoningEffort 覆盖全局设置，
@@ -573,11 +574,12 @@ function buildAnthropicRequest(llm, opts, reasoningEffort) {
     if (mode === 'adaptive') {
       body.thinking = { type: 'adaptive', effort: resolvedVariant.effort };
     } else {
-      const budget = REASONING_BUDGET_MAP[resolvedVariant.effort] || 0;
+      const requestedBudget = REASONING_BUDGET_MAP[resolvedVariant.effort] || 0;
+      // Keep a quarter of the output allowance for the answer, within the user's cap.
+      const budget = Math.min(requestedBudget, Math.max(1024, Math.floor(body.max_tokens * 0.75)), Math.max(0, body.max_tokens - 1));
       if (budget > 0) {
+        if (budget < 1024) throw new Error('当前思考档位需要单次输出上限至少 1025 tokens；请在 Token 与上下文设置中提高上限，或关闭思考。');
         body.thinking = { type: 'enabled', budget_tokens: budget };
-        // Anthropic requires max_tokens > budget_tokens
-        if (body.max_tokens <= budget) body.max_tokens = budget + 4096;
       }
     }
   }

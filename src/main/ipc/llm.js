@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later; Copyright (c) 2026 B5-Software */
 'use strict';
+const TokenPolicy = require('../../shared/token-policy');
 
 module.exports = function registerLlmIpc({
   path,
@@ -24,6 +25,16 @@ module.exports = function registerLlmIpc({
   consumeSSEStream,
   ocHeaders,
 }) {
+  function budgetFailure() {
+    resetDailyUsageIfNeeded();
+    const check = checkBudgetExceeded(getSettings().budget || {});
+    if (!check.exceeded || check.action === 'warn') return null;
+    const error =
+      check.kind === 'tokens'
+        ? `每日 Token 用量已达上限（${check.cost} / ${check.limit}）。可在「消费与用量上限」中调整；下一预算日恢复。`
+        : `预算超限（${check.period}周期已用 $${check.cost.toFixed(4)} / $${check.limit.toFixed(2)}），已停止接受新请求`;
+    return { ok: false, code: 'usage_limit_exceeded', error, limit: check };
+  }
   // ---- 模型能力/元数据缓存 + 变体解析（Anthropic /v1/models + models.dev） ----
   const modelCapabilityCache = new Map(); // key -> { capabilities, metadata, ts }
   const MODEL_CAPABILITY_TTL = 10 * 60 * 1000;
@@ -276,6 +287,8 @@ module.exports = function registerLlmIpc({
   // 当主模型不支持多模态时，通过独立配置的 VLM API 描述图片，结果作为文本返回给 Agent。
   // usage 走 recordTokenUsage → 价格表/预算控制/上下文模态框自动纳入。
   ipcMain.handle('vision:describeImage', async (_, { dataUrl, prompt }) => {
+    const blocked = budgetFailure();
+    if (blocked) return blocked;
     try {
       const ev = getSettings().llm?.externalVision;
       if (!ev || !ev.apiUrl || !ev.model)
@@ -304,7 +317,7 @@ module.exports = function registerLlmIpc({
       const body = JSON.stringify({
         model: ev.model,
         messages,
-        max_tokens: 4096,
+        max_tokens: TokenPolicy.requestOutput(getSettings(), { max_tokens: 4096 }),
       });
       // 智能拼接：如果 apiUrl 已含 /chat/completions 则直接用，否则追加
       let url = ev.apiUrl.replace(/\/+$/, '');
@@ -329,8 +342,15 @@ module.exports = function registerLlmIpc({
       }
       const data = await resp.json();
       const content = data.choices?.[0]?.message?.content || '';
-      const usage = data.usage || null;
-      if (usage) recordTokenUsage(usage, ev.model);
+      const usage =
+        data.usage?.total_tokens || data.usage?.prompt_tokens || data.usage?.completion_tokens
+          ? data.usage
+          : {
+              prompt_tokens: estimateTokens(userText),
+              completion_tokens: estimateTokens(content),
+              _estimated: true,
+            };
+      recordTokenUsage(usage, ev.model);
       console.log(
         `[VLM ${logTs()}] ✓ ${resp.status} (${Date.now() - vlmStartedAt}ms) model=${ev.model} → ${content.length}chars tokens:${usage?.prompt_tokens || '?'}+${usage?.completion_tokens || '?'}=${usage?.total_tokens || '?'}`,
       );
@@ -356,6 +376,7 @@ module.exports = function registerLlmIpc({
   function applySessionModelOverrides(baseLlm, options) {
     if (!options || typeof options !== 'object') return baseLlm;
     const out = { ...baseLlm };
+    if (options.contextLength) out.maxContextLength = options.contextLength;
     if (options.provider) out.provider = options.provider;
     if (options.apiUrl) out.apiUrl = options.apiUrl;
     if (options.apiKey !== undefined && options.apiKey !== null && options.apiKey !== '') {
@@ -376,22 +397,8 @@ module.exports = function registerLlmIpc({
         return { ok: false, error: '请先在设置中配置LLM API' };
       }
 
-      resetDailyUsageIfNeeded();
-      const maxTokensDaily = getSettings().llm.dailyMaxTokens || 0;
-      if (maxTokensDaily > 0 && getSettings().llm.dailyTokensUsed >= maxTokensDaily) {
-        return { ok: false, error: '已达到今日LLM Token上限，请明天再试' };
-      }
-
-      // 预算控制：检查是否超限（已移除自动降级模型：会话锁定后不自动切换，保护提示词缓存）
-      const budgetCheck = checkBudgetExceeded(getSettings().budget || {});
-      if (budgetCheck.exceeded) {
-        if (budgetCheck.action === 'stop' || budgetCheck.action === 'fallback') {
-          return {
-            ok: false,
-            error: `预算超限（${budgetCheck.period}周期已用 $${budgetCheck.cost.toFixed(4)} / $${budgetCheck.limit.toFixed(2)}），已停止接受新请求`,
-          };
-        }
-      }
+      const blocked = budgetFailure();
+      if (blocked) return blocked;
 
       // 会话级覆盖优先：/model 或会话锁定的模型池条目（options.model/provider/apiUrl/apiKey）
       const requestModel = options.model || llm.model;
@@ -410,6 +417,8 @@ module.exports = function registerLlmIpc({
       );
       const llmForRequest = { ...llm, model: requestModel, capabilities };
       const req = LLMProviders.buildLLMRequest(llmForRequest, {
+        poolEntryId: options.poolEntryId,
+        contextLength: options.contextLength,
         messages: normalizeMessagesForThinking(messages),
         tools: options.tools,
         tool_choice: options.tool_choice,
@@ -504,12 +513,7 @@ module.exports = function registerLlmIpc({
           `[LLM:chat ${logTs()}] ✓ ${llmForRequest.model} finish=${data.choices?.[0]?.finish_reason || '-'} tokens:${usage.prompt_tokens}+${usage.completion_tokens}=${usage.total_tokens}${usage._estimated ? '(est)' : ''} reasoning=${reasoning.length}chars → "${preview}${suffix}"${toolCalls ? ` | tool_calls:${toolCalls.length}` : ''}`,
         );
       }
-      const usageTokens =
-        usage.total_tokens ||
-        estimateTokens(JSON.stringify(req.body)) +
-          estimateTokens(data.choices?.[0]?.message?.content || '');
-      getSettings().llm.dailyTokensUsed = (getSettings().llm.dailyTokensUsed || 0) + usageTokens;
-      // 按实际请求模型归属（含会话级覆盖 / 预算 fallback）
+      // 按实际请求模型归属（含会话级覆盖）
       recordTokenUsage(usage, llmForRequest.model);
       persistSettings();
       broadcastUsageChanged();
@@ -552,23 +556,8 @@ module.exports = function registerLlmIpc({
         return { ok: false, error: '请先在设置中配置LLM API' };
       }
 
-      resetDailyUsageIfNeeded();
-      const maxTokensDaily = getSettings().llm.dailyMaxTokens || 0;
-      if (maxTokensDaily > 0 && getSettings().llm.dailyTokensUsed >= maxTokensDaily) {
-        return { ok: false, error: '已达到今日LLM Token上限，请明天再试' };
-      }
-
-      // 预算控制：检查是否超限（已移除自动降级；会话锁定模型不自动切换）
-      const budgetCheck = checkBudgetExceeded(getSettings().budget || {});
-      if (
-        budgetCheck.exceeded &&
-        (budgetCheck.action === 'stop' || budgetCheck.action === 'fallback')
-      ) {
-        return {
-          ok: false,
-          error: `预算超限（${budgetCheck.period}周期已用 $${budgetCheck.cost.toFixed(4)} / $${budgetCheck.limit.toFixed(2)}），已停止接受新请求`,
-        };
-      }
+      const blocked = budgetFailure();
+      if (blocked) return blocked;
       // 会话级覆盖优先：/model 或会话锁定的模型池条目
       const requestModel = options.model || llm.model;
       const requestEffort =
@@ -587,6 +576,8 @@ module.exports = function registerLlmIpc({
       const llmForRequest = { ...llm, model: requestModel, capabilities };
 
       const req = LLMProviders.buildLLMRequest(llmForRequest, {
+        poolEntryId: options.poolEntryId,
+        contextLength: options.contextLength,
         messages: normalizeMessagesForThinking(messages),
         tools: options.tools,
         tool_choice: options.tool_choice,
@@ -683,10 +674,6 @@ module.exports = function registerLlmIpc({
         };
         estimated = true;
       }
-      const usageTokens =
-        usage.total_tokens ||
-        estimateTokens(JSON.stringify(req.body)) + estimateTokens(streamResult.content || '');
-      getSettings().llm.dailyTokensUsed = (getSettings().llm.dailyTokensUsed || 0) + usageTokens;
       recordTokenUsage(usage, llmForRequest.model);
       persistSettings();
       broadcastUsageChanged();
@@ -720,6 +707,8 @@ module.exports = function registerLlmIpc({
   // ---- IPC: LLM Summary (one-shot, no tools, for context compaction) ----
   ipcMain.handle('llm:summarize', async (_, messages, options = {}) => {
     try {
+      const blocked = budgetFailure();
+      if (blocked) return blocked;
       const llm = applySessionModelOverrides(getSettings().llm, options);
       if (llm.provider === 'opencode-zen' || llm.provider === 'opencode-go') {
         if (!llm.zenApiKey || !llm.model) return { ok: false, error: '请先配置OpenCode' };
@@ -744,6 +733,8 @@ module.exports = function registerLlmIpc({
       );
       const llmForRequest = { ...llm, model: requestModel, capabilities };
       const req = LLMProviders.buildLLMRequest(llmForRequest, {
+        poolEntryId: options.poolEntryId,
+        contextLength: options.contextLength,
         messages: normalizeMessagesForThinking(messages),
         temperature: options.temperature ?? 0.3,
         max_tokens: options.max_tokens ?? llm.maxResponseTokens ?? 8192,
@@ -800,9 +791,6 @@ module.exports = function registerLlmIpc({
       console.log(
         `[LLM:summarize ${logTs()}] ✓ ${llmForRequest.model} tokens:${usage.prompt_tokens || 0}+${usage.completion_tokens || 0}=${usage.total_tokens || 0}${usage._estimated ? '(est)' : ''} summary=${content.length}chars`,
       );
-      const usageTokens =
-        usage.total_tokens || estimateTokens(JSON.stringify(req.body)) + estimateTokens(content);
-      getSettings().llm.dailyTokensUsed = (getSettings().llm.dailyTokensUsed || 0) + usageTokens;
       recordTokenUsage(usage, llmForRequest.model);
       persistSettings();
       broadcastUsageChanged();

@@ -4,7 +4,7 @@
       document.querySelectorAll('.proxy-mode-btn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
       const mode = btn.dataset.mode;
-      const s = await window.api.getSettings();
+      const s = await readSettings();
       if (!s.proxy) s.proxy = {};
       s.proxy.mode = mode;
       await saveSettings(s);
@@ -17,7 +17,7 @@
   ['setting-proxy-http', 'setting-proxy-https', 'setting-proxy-bypass'].forEach(id => {
     document.getElementById(id)?.addEventListener('change', async (e) => {
       const key = id.replace('setting-proxy-', '');
-      const s = await window.api.getSettings();
+      const s = await readSettings();
       if (!s.proxy) s.proxy = {};
       s.proxy[key] = e.target.value;
       await saveSettings(s);

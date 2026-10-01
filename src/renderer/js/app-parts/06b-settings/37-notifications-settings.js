@@ -11,7 +11,7 @@
     const el = document.getElementById(id);
     if (!el) return;
     el.addEventListener('change', async () => {
-      const s = await window.api.getSettings();
+      const s = await readSettings();
       if (!s.notifications) s.notifications = {};
       s.notifications[key] = el.checked;
       await saveSettings(s);

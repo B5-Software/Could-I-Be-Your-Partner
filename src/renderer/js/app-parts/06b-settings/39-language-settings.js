@@ -3,7 +3,7 @@
     btnSaveLanguage.addEventListener('click', async () => {
       const langSelect = document.getElementById('setting-language');
       const lang = langSelect ? langSelect.value : 'zh-CN';
-      const s = await window.api.getSettings();
+      const s = await readSettings();
       s.language = lang;
       await saveSettings(s);
       if (typeof i18nSetLanguage === 'function') {

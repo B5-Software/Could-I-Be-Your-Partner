@@ -16,7 +16,7 @@
         const val = (id === 'setting-babe-proactive-interval' || id === 'setting-babe-initial-affection')
           ? parseInt(el.value, 10) || 0
           : el.value;
-        const s = await window.api.getSettings();
+        const s = await readSettings();
         if (!s.babe) s.babe = {};
         s.babe[key] = val;
         await saveSettings(s);
@@ -37,7 +37,7 @@
   document.getElementById('btn-ai-avatar-pick')?.addEventListener('click', async () => {
     const result = await window.api.avatarPickAndEncode('aiPersona');
     if (result.ok && (result.path || result.dataUrl)) {
-      const s = await window.api.getSettings();
+      const s = await readSettings();
       if (!s.aiPersona) s.aiPersona = {};
       s.aiPersona.avatar = result.path || result.dataUrl;
       await saveSettings(s);
@@ -48,7 +48,7 @@
   });
 
   document.getElementById('btn-ai-avatar-clear')?.addEventListener('click', async () => {
-    const s = await window.api.getSettings();
+    const s = await readSettings();
     if (!s.aiPersona) s.aiPersona = {};
     s.aiPersona.avatar = '';
     await saveSettings(s);

@@ -68,12 +68,12 @@
   }
 
   async function refreshPoolUI(s) {
-    if (!s) s = await window.api.getSettings();
+    if (!s) s = await readSettings();
     renderPoolList(s);
   }
 
   async function savePool(pool, extra = {}) {
-    const s = await window.api.getSettings();
+    const s = await readSettings();
     s.llm.pool = pool;
     if (extra.activeEntryId !== undefined) s.llm.activeEntryId = extra.activeEntryId;
     if (extra.routing) s.llm.routing = extra.routing;
@@ -169,7 +169,7 @@
       vision: chk('pool-edit-vision'),
       enabled: chk('pool-edit-enabled'),
     };
-    const s = await window.api.getSettings();
+    const s = await readSettings();
     const pool = Array.isArray(s.llm.pool) ? s.llm.pool.slice() : [];
     const idx = pool.findIndex(x => x.id === entry.id);
     if (idx >= 0) pool[idx] = entry; else pool.push(entry);
@@ -246,7 +246,7 @@
       const card = e.target.closest('.llm-pool-card');
       if (!btn || !card) return;
       const id = card.dataset.id;
-      const s = await window.api.getSettings();
+      const s = await readSettings();
       const pool = Array.isArray(s.llm.pool) ? s.llm.pool.slice() : [];
       const idx = pool.findIndex(x => x.id === id);
       if (idx < 0) return;
@@ -277,13 +277,13 @@
       }
     });
     document.getElementById('setting-llm-model-strategy')?.addEventListener('change', async (e) => {
-      const s = await window.api.getSettings();
+      const s = await readSettings();
       s.llm.routing = { ...(s.llm.routing || {}), modelStrategy: e.target.value };
       await saveSettings(s);
       renderPoolList(s);
     });
     document.getElementById('setting-llm-effort-strategy')?.addEventListener('change', async (e) => {
-      const s = await window.api.getSettings();
+      const s = await readSettings();
       s.llm.routing = { ...(s.llm.routing || {}), effortStrategy: e.target.value };
       await saveSettings(s);
     });

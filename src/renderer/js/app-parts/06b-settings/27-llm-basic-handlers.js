@@ -1,21 +1,21 @@
   document.getElementById('setting-llm-temp').addEventListener('input', async (e) => {
     const val = parseFloat(e.target.value);
     document.getElementById('setting-temp-val').textContent = val;
-    const s = await window.api.getSettings();
+    const s = await readSettings();
     s.llm.temperature = val;
     await saveSettings(s);
   });
 
   // Streaming / retry / timeout / fallback model
   document.getElementById('setting-llm-stream').addEventListener('change', async (e) => {
-    const s = await window.api.getSettings();
+    const s = await readSettings();
     s.llm.streamResponses = e.target.checked;
     await saveSettings(s);
   });
   const forceVisionSaveEl = document.getElementById('setting-llm-force-vision');
   if (forceVisionSaveEl) {
     forceVisionSaveEl.addEventListener('change', async (e) => {
-      const s = await window.api.getSettings();
+      const s = await readSettings();
       s.llm.forceVision = e.target.checked;
       await saveSettings(s);
     });
@@ -25,7 +25,7 @@
       const el = document.getElementById(id);
       if (el) {
         el.addEventListener('change', async () => {
-          const s = await window.api.getSettings();
+          const s = await readSettings();
           if (!s.llm.externalVision) s.llm.externalVision = {};
           const fieldMap = { 'setting-llm-external-vision-url': 'apiUrl', 'setting-llm-external-vision-key': 'apiKey', 'setting-llm-external-vision-model': 'model' };
           s.llm.externalVision[fieldMap[id]] = el.value.trim();
@@ -38,7 +38,7 @@
     const alignBtn = document.getElementById('btn-ev-align-main');
     if (alignBtn) {
       alignBtn.addEventListener('click', async () => {
-        const s = await window.api.getSettings();
+        const s = await readSettings();
         const llm = s.llm || {};
         const provider = llm.provider || 'openai-compat';
         let url = '', key = '';
@@ -97,18 +97,13 @@
       });
     }
   document.getElementById('setting-llm-retries').addEventListener('change', async (e) => {
-    const s = await window.api.getSettings();
+    const s = await readSettings();
     s.llm.maxRetries = Math.max(0, parseInt(e.target.value) || 0);
     await saveSettings(s);
   });
   document.getElementById('setting-llm-timeout').addEventListener('change', async (e) => {
-    const s = await window.api.getSettings();
+    const s = await readSettings();
     s.llm.timeoutMs = Math.max(0, parseInt(e.target.value) || 0) * 1000;
-    await saveSettings(s);
-  });
-  document.getElementById('setting-llm-fallback-model').addEventListener('change', async (e) => {
-    const s = await window.api.getSettings();
-    s.llm.fallbackModel = e.target.value.trim();
     await saveSettings(s);
   });
   // OpenCode 自动头开关

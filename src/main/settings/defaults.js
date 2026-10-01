@@ -11,12 +11,10 @@ module.exports = function createDefaultSettings({ DEFAULT_DECISION_SETTINGS }) {
       temperature: 0.7,
       maxContextLength: 131072,
       maxResponseTokens: 8192,
-      dailyMaxTokens: 0,
       dailyTokensUsed: 0,
       dailyTokenDate: '',
       maxRetries: 10,
       timeoutMs: 300000,
-      fallbackModel: '',
       streamResponses: true,
       zenApiKey: '',
       reasoningEffort: 'off',
@@ -286,11 +284,11 @@ module.exports = function createDefaultSettings({ DEFAULT_DECISION_SETTINGS }) {
         cacheWriteMul: 1.5,
       },
       dailyLimitUSD: 0, // 0 表示不限制
+      dailyTokenLimit: 0, // 所有文本/视觉/摘要请求共用；达到后停止新请求
       weeklyLimitUSD: 0,
       monthlyLimitUSD: 0,
       warningThreshold: 0.8,
-      overLimitAction: 'warn', // 'warn' | 'fallback' | 'stop'
-      fallbackModel: '',
+      overLimitAction: 'warn', // 'warn' | 'stop'
       timezone: 'Asia/Shanghai',
       weekMode: 'natural', // 'natural' (周一起) | 'rolling' (滚动7天)
       monthMode: 'natural', // 'natural' (1日起) | 'rolling' (滚动30天)

@@ -4,7 +4,7 @@
       document.querySelectorAll('.entropy-mode-btn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
       const source = btn.dataset.source;
-      const s = await window.api.getSettings();
+      const s = await readSettings();
       if (!s.entropy) s.entropy = {};
       s.entropy.source = source;
       await saveSettings(s);
@@ -17,7 +17,7 @@
       document.querySelectorAll('.trng-mode-btn').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
       const mode = btn.dataset.mode;
-      const s = await window.api.getSettings();
+      const s = await readSettings();
       if (!s.entropy) s.entropy = {};
       s.entropy.trngMode = mode;
       await saveSettings(s);
@@ -33,7 +33,7 @@
     document.getElementById(id)?.addEventListener('change', async (e) => {
       const key = id === 'setting-trng-host' ? 'trngNetworkHost' : 'trngNetworkPort';
       const val = id === 'setting-trng-port' ? parseInt(e.target.value) : e.target.value;
-      const s = await window.api.getSettings();
+      const s = await readSettings();
       if (!s.entropy) s.entropy = {};
       s.entropy[key] = val;
       await saveSettings(s);
@@ -41,13 +41,13 @@
   });
 
   document.getElementById('setting-trng-serial-port')?.addEventListener('change', async (e) => {
-    const s = await window.api.getSettings();
+    const s = await readSettings();
     if (!s.entropy) s.entropy = {};
     s.entropy.trngSerialPort = e.target.value;
     await saveSettings(s);
   });
   document.getElementById('setting-trng-serial-baud')?.addEventListener('change', async (e) => {
-    const s = await window.api.getSettings();
+    const s = await readSettings();
     if (!s.entropy) s.entropy = {};
     s.entropy.trngSerialBaud = parseInt(e.target.value);
     await saveSettings(s);

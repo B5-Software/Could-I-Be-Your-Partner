@@ -68,7 +68,7 @@
     window.__imgSettingsBound = true;
     const saveField = (id, key, transform) => {
       document.getElementById(id)?.addEventListener('change', async (e) => {
-        const s = await window.api.getSettings();
+        const s = await readSettings();
         let v = e.target.value;
         if (transform) v = transform(v);
         s.imageGen[key] = v;
@@ -77,7 +77,7 @@
     };
     // 厂商切换：保存 + 更新预设（自动填充空 URL / 空模型）
     document.getElementById('setting-img-provider')?.addEventListener('change', async (e) => {
-      const s = await window.api.getSettings();
+      const s = await readSettings();
       const data = await loadImageProviders();
       const preset = ((data && data.providers) || []).find(p => p.id === e.target.value);
       s.imageGen.provider = e.target.value;
@@ -96,7 +96,7 @@
     saveField('setting-img-model', 'model');
     saveField('setting-img-daily-limit', 'dailyMaxImages', (v) => parseInt(v) || 0);
     document.getElementById('setting-img-size')?.addEventListener('change', async (e) => {
-      const s = await window.api.getSettings();
+      const s = await readSettings();
       s.imageGen.imageSize = e.target.value;
       await saveSettings(s);
     });
@@ -111,7 +111,7 @@
     saveField('setting-img-style', 'style');
     saveField('setting-img-template', 'bodyTemplate');
     document.getElementById('setting-img-watermark')?.addEventListener('change', async (e) => {
-      const s = await window.api.getSettings();
+      const s = await readSettings();
       s.imageGen.watermark = e.target.checked;
       await saveSettings(s);
     });

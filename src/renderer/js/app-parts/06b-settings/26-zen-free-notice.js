@@ -28,14 +28,14 @@
     const modelSel = document.getElementById('setting-llm-zen-model');
     let model = modelSel?.value || '';
     if (!model) {
-      const s = await window.api.getSettings();
+      const s = await readSettings();
       model = s?.llm?.model || '';
     }
     const isFree = provider === 'opencode-zen' && (key === 'public' || ZEN_FREE_MODEL_RE.test(model));
     notice.classList.toggle('hidden', !isFree);
     if (!isFree) return;
     // 已添加官方 UA 时给出状态提示
-    const s = await window.api.getSettings();
+    const s = await readSettings();
     const ua = findOpenCodeUaHeader(s?.llm?.customHeaders);
     const status = document.getElementById('zen-ua-status');
     if (status) status.textContent = ua ? `已添加: User-Agent: ${ua.value || '(空)'}` : '';
@@ -45,7 +45,7 @@
   const zenAddUaBtn = document.getElementById('btn-zen-add-ua');
   if (zenAddUaBtn) {
     zenAddUaBtn.addEventListener('click', async () => {
-      const s = await window.api.getSettings();
+      const s = await readSettings();
       s.llm.customHeaders = Array.isArray(s.llm.customHeaders) ? s.llm.customHeaders : [];
       const version = opencodeUaVersionFromSettings(s);
       const existing = findOpenCodeUaHeader(s.llm.customHeaders);
@@ -65,9 +65,9 @@
   // LLM settings
   ['setting-llm-url', 'setting-llm-key', 'setting-llm-model', 'setting-llm-ctx', 'setting-llm-daily-limit', 'setting-llm-max-response'].forEach(id => {
     document.getElementById(id).addEventListener('change', async (e) => {
-      const key = { 'setting-llm-url': 'apiUrl', 'setting-llm-key': 'apiKey', 'setting-llm-model': 'model', 'setting-llm-ctx': 'maxContextLength', 'setting-llm-daily-limit': 'dailyMaxTokens', 'setting-llm-max-response': 'maxResponseTokens' }[id];
+      const key = { 'setting-llm-url': 'apiUrl', 'setting-llm-key': 'apiKey', 'setting-llm-model': 'model', 'setting-llm-ctx': 'maxContextLength', 'setting-llm-daily-limit': 'dailyTokenLimit', 'setting-llm-max-response': 'maxResponseTokens' }[id];
       const val = (id === 'setting-llm-ctx' || id === 'setting-llm-daily-limit' || id === 'setting-llm-max-response') ? parseInt(e.target.value) : e.target.value;
-      const s = await window.api.getSettings();
+      const s = await readSettings();
       if (key === 'maxContextLength') {
         // 模型上下文长度：用户填写了就按填写的值，不再自动拉取覆盖；
         // 清空则取消显式标记，允许下一次自动获取（只有没填时才拉）。
@@ -84,6 +84,10 @@
           await saveSettings(s);
           refreshReasoningVariants();
         }
+        return;
+      }
+      if (key === 'dailyTokenLimit') {
+        await saveSettings({ budget: { dailyTokenLimit: Number.isFinite(val) ? val : 0 } });
         return;
       }
       s.llm[key] = val;

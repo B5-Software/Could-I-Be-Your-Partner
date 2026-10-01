@@ -917,9 +917,9 @@ test('模型上下文长度：用户填写后不得被自动拉取覆盖（仅�
   const pathLocal = require('path');
   const mainContent = readMainSource();
   const settingsJs = readAppParts('06b-settings');
-  // 主进程投影：显式用户值优先，并同步回池条目
-  assert.ok(mainContent.includes('if (llm.maxContextLengthExplicit && Number(llm.maxContextLength) > 0)'), '主进程应识别用户显式填写的上下文长度');
-  assert.ok(/entry\.contextLength\s*=\s*Number\(llm\.maxContextLength\)/.test(mainContent), '用户值应同步到当前池条目');
+  // 显式修改只同步当前默认条目，切换模型不再传播旧模型的容量。
+  assert.ok(mainContent.includes('syncActiveEntry(settings, patch)'), '显式编辑应交由统一策略同步');
+  assert.ok(!mainContent.includes('if (llm.maxContextLengthExplicit && Number(llm.maxContextLength) > 0)'), '投影不能覆盖其他模型容量');
   // 自动补全：仅在非显式 + 空/默认值时执行
   assert.ok(settingsJs.includes('const ctxExplicit = s.llm.maxContextLengthExplicit === true'), '自动补全前应检查显式标记');
   assert.ok(/!ctxExplicit\s*&&\s*\(!ctxEl\.value \|\| Number\(ctxEl\.value\) === 131072\)/.test(settingsJs), '显式填写后不应自动覆盖');
@@ -2101,8 +2101,8 @@ test('buildAnthropicRequest: adaptive 用 effort / legacy 用 budget_tokens', ()
   const legacy = llmProvidersMod.buildLLMRequest(
     { provider: 'anthropic-compat', apiUrl: 'u', apiKey: '', model: 'claude-sonnet-4-5', maxResponseTokens: 8192 },
     { messages: [{ role: 'user', content: 'hi' }], stream: false, max_tokens: 8192, reasoningEffort: 'medium' });
-  assert.deepStrictEqual(legacy.body.thinking, { type: 'enabled', budget_tokens: 16000 });
-  assert.strictEqual(legacy.body.max_tokens > 16000, true);
+  assert.deepStrictEqual(legacy.body.thinking, { type: 'enabled', budget_tokens: 6144 });
+  assert.strictEqual(legacy.body.max_tokens, 8192);
 });
 
 test('opencode-zen 路由：按模型名解析变体表', () => {
@@ -3178,7 +3178,7 @@ test('设置页支持搜索', () => {
   const settingsPart = readAppParts('06b-settings');
   const indexHtml = fsLocal.readFileSync(pathLocal.join(__dirname, '../src/renderer/pages/index.html'), 'utf-8');
   assert.ok(settingsPart.includes("getElementById('settings-search-input')"), '设置搜索应绑定输入框');
-  assert.ok(settingsPart.includes("registerPageSearch('settings'"), '设置搜索应注册到页面级路由');
+  assert.ok(settingsPart.includes("registerPageSearch?.('settings'"), '设置搜索应注册到页面级路由');
   assert.ok(indexHtml.includes('id="settings-search-input"'), '设置页应包含搜索输入框');
 });
 

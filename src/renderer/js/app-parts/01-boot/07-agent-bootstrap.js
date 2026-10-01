@@ -9,6 +9,8 @@
     const settings = await window.api.getSettings();
     if (revision !== settingsRefresh) return;
     for (const live of allLiveAgents()) live.applySettings(settings);
+    window.refreshSettingsOverview?.(settings);
+    window.refreshTokenSettings?.(settings);
   });
 
   // Skill 编辑器保存/创建/删除后，主窗口自动刷新目录和当前技能页。

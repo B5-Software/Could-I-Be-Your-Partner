@@ -1,6 +1,6 @@
   // ---- 上下文压缩设置（水位线策略）----
   async function loadContextCompactionSettings() {
-    const s = await window.api.getSettings();
+    const s = await readSettings();
     const c = s.contextCompaction || {};
     const autoEl = document.getElementById('setting-context-auto');
     const thEl = document.getElementById('setting-context-threshold');
@@ -22,10 +22,7 @@
     if (maxTEl) maxTEl.value = String(c.summarizeMaxTokens ?? 2048);
   }
   async function updateContextCompactionSettings(patch, toast) {
-    const s = await window.api.getSettings();
-    if (!s.contextCompaction || typeof s.contextCompaction !== 'object') s.contextCompaction = {};
-    Object.assign(s.contextCompaction, patch);
-    await saveSettings(s);
+    await saveSettings({ contextCompaction: patch });
     if (toast) window.showToast?.(toast, 'success', 2000);
   }
   // 滑动条指示器实时跟随拖动（input 事件），保存仍走 change（释放时落盘）
@@ -58,7 +55,7 @@
     await updateContextCompactionSettings({ retainRatio: pct / 100 });
   });
   document.getElementById('setting-context-retries')?.addEventListener('change', async (e) => {
-    const v = Math.max(0, Math.min(5, Number(e.target.value) || 1));
+    const v = Math.max(0, Math.min(5, Number(e.target.value)));
     e.target.value = String(v);
     await updateContextCompactionSettings({ compactionRetries: v });
   });
@@ -81,6 +78,10 @@
     if (statusEl) statusEl.textContent = '正在压缩…';
     try {
       const res = await cm.summarizeWithLLM({
+        ...targetAgent._llmOptions(),
+        force: true,
+        maxRetries: targetAgent.settings?.contextCompaction?.compactionRetries ?? 1,
+        maxTokens: TokenPolicy.resolve(targetAgent.settings, targetAgent.llmOverride || {}).summaryTokens,
         sessionKey: targetAgent.sessionKey || null,
         tools: targetAgent.getRuntimeToolSchemas?.() || null
       });

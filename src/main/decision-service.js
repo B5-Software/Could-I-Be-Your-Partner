@@ -80,10 +80,11 @@ function normalizeDecisionSettings(raw) {
 
 class DecisionService {
   /**
-   * @param {object} opts { getSettings: () => settings, persistSettings?: () => void }
+   * @param {object} opts { getSettings: () => settings, persistSettings?: () => void, getDayKey?: () => string }
    */
   constructor(opts) {
     this.getSettings = opts.getSettings || (() => ({}));
+    this.getDayKey = opts.getDayKey || todayStamp;
     this.persistSettings = opts.persistSettings || (() => {});
     this.fetchImpl = typeof opts.fetchImpl === 'function' ? opts.fetchImpl : null;
     this._cache = new Map(); // key -> answers
@@ -124,7 +125,7 @@ class DecisionService {
   }
 
   _usageGate(cfg) {
-    const stamp = todayStamp();
+    const stamp = this.getDayKey();
     const usage = { ...cfg.usage };
     if (usage.date !== stamp) { usage.date = stamp; usage.calls = 0; }
     if (cfg.dailyMaxCalls > 0 && usage.calls >= cfg.dailyMaxCalls) {
@@ -136,7 +137,7 @@ class DecisionService {
   _bumpUsage(usage) {
     try {
       const s = this.getSettings();
-      const stamp = todayStamp();
+      const stamp = this.getDayKey();
       const prev = (s.decision && s.decision.usage) || {};
       const next = prev.date === stamp ? { date: stamp, calls: (prev.calls || 0) + 1 } : { date: stamp, calls: 1 };
       s.decision = { ...(s.decision || {}), usage: next };

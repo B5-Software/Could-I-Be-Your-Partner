@@ -72,6 +72,8 @@ ipcMain.once('app:renderer-ready', (event) => {
       console.log('[desktop-smoke] Tool discovery and permissions:', tools);
       const workspace = await require('./renderer-workspace-check.cjs')(event.sender);
       console.log('[desktop-smoke] Workspace interactions:', workspace);
+      const settingsCheck = await require('./renderer-settings-check.cjs')(event.sender);
+      console.log('[desktop-smoke] Settings interactions:', settingsCheck);
       event.sender.debugger.attach('1.3');
       await event.sender.debugger.sendCommand('Emulation.setEmulatedMedia', {
         features: [{ name: 'prefers-reduced-motion', value: 'reduce' }],
@@ -114,6 +116,24 @@ ipcMain.once('app:renderer-ready', (event) => {
             applied.background,
             mode === 'dark' ? 'rgb(43, 47, 63)' : 'rgb(235, 237, 242)',
           );
+          for (const tab of ['overview', 'context', 'budget']) {
+            await event.sender.executeJavaScript(`(async () => {
+              await window.navigatePage('settings');
+              document.getElementById('btn-close-todo').click();
+              document.querySelectorAll('#toast-container .toast-item').forEach(toast => toast.click());
+              window.activateSettingsTab('${tab}');
+              document.querySelector('.settings-panels').scrollTop = 0;
+              document.querySelectorAll('.settings-advanced').forEach(details => details.open = false);
+              await new Promise(resolve => setTimeout(resolve, 350));
+            })()`);
+            fs.writeFileSync(
+              path.join(directory, `settings-${tab}-${mode}.png`),
+              (
+                await event.sender.capturePage(undefined, { stayHidden: true, stayAwake: true })
+              ).toPNG(),
+            );
+          }
+          await event.sender.executeJavaScript("window.navigatePage('chat')");
           fs.writeFileSync(
             path.join(directory, `todo-${mode}.png`),
             (
@@ -121,6 +141,25 @@ ipcMain.once('app:renderer-ready', (event) => {
             ).toPNG(),
           );
         }
+        const previewWindow = BrowserWindow.fromWebContents(event.sender);
+        const originalSize = previewWindow.getSize();
+        previewWindow.setSize(850, 700);
+        await event.sender.executeJavaScript(`(async () => {
+          await window.navigatePage('settings');
+          window.activateSettingsTab('context');
+          document.getElementById('btn-close-todo').click();
+          document.querySelector('.settings-panels').scrollTop = 0;
+          await new Promise(resolve => setTimeout(resolve, 350));
+          const panel = document.querySelector('.settings-panels');
+          if (panel.scrollWidth > panel.clientWidth + 2) throw new Error('narrow settings overflow horizontally');
+        })()`);
+        fs.writeFileSync(
+          path.join(directory, 'settings-context-narrow.png'),
+          (
+            await event.sender.capturePage(undefined, { stayHidden: true, stayAwake: true })
+          ).toPNG(),
+        );
+        previewWindow.setSize(...originalSize);
         console.log('[desktop-smoke] UI previews:', directory);
       }
       assert.deepEqual(errors, []);

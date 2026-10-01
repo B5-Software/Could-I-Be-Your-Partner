@@ -1,19 +1,17 @@
   async function loadBudgetSettings() {
-    const s = await window.api.getSettings();
+    const s = await readSettings();
     const budget = s.budget || {};
     const dailyCapInput = document.getElementById('setting-budget-daily-cap');
     const weeklyCapInput = document.getElementById('setting-budget-weekly-cap');
     const capInput = document.getElementById('setting-budget-monthly-cap');
     const actionSel = document.getElementById('setting-budget-action');
-    const fallbackInput = document.getElementById('setting-budget-fallback-model');
     const tzSel = document.getElementById('setting-budget-timezone');
     const weekModeSel = document.getElementById('setting-budget-week-mode');
     const monthModeSel = document.getElementById('setting-budget-month-mode');
     if (dailyCapInput) dailyCapInput.value = budget.dailyLimitUSD ?? 0;
     if (weeklyCapInput) weeklyCapInput.value = budget.weeklyLimitUSD ?? 0;
     if (capInput) capInput.value = budget.monthlyLimitUSD ?? 0;
-    if (actionSel) actionSel.value = budget.overLimitAction || budget.overAction || 'warn';
-    if (fallbackInput) fallbackInput.value = budget.fallbackModel || '';
+    if (actionSel) actionSel.value = budget.overLimitAction || 'warn';
     if (tzSel) tzSel.value = budget.timezone || 'Asia/Shanghai';
     if (weekModeSel) weekModeSel.value = budget.weekMode || 'natural';
     if (monthModeSel) monthModeSel.value = budget.monthMode || 'natural';
@@ -59,7 +57,7 @@
     const importCurrentBtn = document.getElementById('btn-budget-import-current');
     if (importCurrentBtn) {
       importCurrentBtn.onclick = async () => {
-        const cur = await window.api.getSettings();
+        const cur = await readSettings();
         const model = cur?.llm?.model;
         if (!model) { window.showToast('未检测到当前 LLM 模型', 'warn'); return; }
         if (!listEl) return;
@@ -90,48 +88,16 @@
       await refreshBudgetStatus();
       window.showToast('预算数据已刷新', 'success');
     };
-    const pickFallbackBtn = document.getElementById('btn-budget-pick-fallback');
-    if (pickFallbackBtn) {
-      pickFallbackBtn.onclick = async () => {
-        // 复用 LLM 设置的模型选择逻辑：列出可用模型
-        try {
-          const cur = await window.api.getSettings();
-          // llmFetchModels 返回 {ok, models} 对象，需要从中提取 models 数组
-          const provider = cur?.llm?.provider || 'openai-compat';
-          const apiUrl = cur?.llm?.apiUrl || '';
-          const apiKey = cur?.llm?.apiKey || '';
-          const zenKey = cur?.llm?.zenApiKey || '';
-          let res;
-          if (provider === 'opencode-zen') {
-            res = await window.api.zenFetchModels();
-          } else {
-            res = await window.api.llmFetchModels(provider, apiUrl, apiKey || zenKey);
-          }
-          const list = Array.isArray(res?.models) ? res.models : [];
-          if (list.length === 0) {
-            window.showToast('无可选模型，请先在 LLM 标签页获取模型列表', 'warn');
-            return;
-          }
-          // 弹出简单选择框
-          const picked = prompt('选择 fallback 模型（输入序号）:\n' + list.map((m, i) => `${i + 1}. ${m.id || m.name || m}`).join('\n'));
-          const idx = parseInt(picked) - 1;
-          if (!isNaN(idx) && list[idx]) {
-            const modelId = typeof list[idx] === 'string' ? list[idx] : (list[idx].id || list[idx].name);
-            if (fallbackInput) fallbackInput.value = modelId;
-          }
-        } catch (e) { window.showToast('获取模型列表失败: ' + e.message, 'error'); }
-      };
-    }
-
     // 自动保存：绑定输入事件
-    [dailyCapInput, capInput, actionSel, fallbackInput, phEnabled, phStart, phEnd, phInMul, phCrMul, phOutMul, phCwMul].forEach(el => {
+    [dailyCapInput, weeklyCapInput, capInput, actionSel, phEnabled, phStart, phEnd, phInMul, phCrMul, phOutMul, phCwMul,
+      ...['setting-budget-timezone', 'setting-budget-week-mode', 'setting-budget-month-mode'].map(id => document.getElementById(id))].forEach(el => {
       if (!el) return;
-      el.addEventListener('change', saveBudgetSettings);
+      el.onchange = saveBudgetSettings;
     });
-    listEl?.addEventListener('input', () => { /* 输入时仅更新内部状态，保存由 change 触发 */ });
     // 注意：listEl 不再绑定 change 事件，因为 appendBudgetPricingRow 中
     // 已经为每个 input 单独绑定了 change → saveBudgetSettings，
     // 若 listEl 也绑定会导致 change 事件冒泡时重复触发保存（弹两次 toast）
 
     await refreshBudgetStatus(budget);
+    await refreshDecisionStatus();
   }

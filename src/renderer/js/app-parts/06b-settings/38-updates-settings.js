@@ -1,7 +1,7 @@
   // ---- 更新检查（GitHub Releases）----
   const updAutoEl = document.getElementById('setting-updates-auto');
   updAutoEl?.addEventListener('change', async () => {
-    const s = await window.api.getSettings();
+    const s = await readSettings();
     if (!s.updates) s.updates = {};
     s.updates.autoCheckEnabled = updAutoEl.checked;
     const r = await window.api.updatesSave({ autoCheckEnabled: updAutoEl.checked });
@@ -10,7 +10,7 @@
   });
   const updIntervalEl = document.getElementById('setting-updates-interval');
   updIntervalEl?.addEventListener('change', async () => {
-    const s = await window.api.getSettings();
+    const s = await readSettings();
     if (!s.updates) s.updates = {};
     s.updates.intervalHours = Number(updIntervalEl.value);
     const r = await window.api.updatesSave({ intervalHours: Number(updIntervalEl.value) });
@@ -20,7 +20,7 @@
   const updChannelEl = document.getElementById('setting-updates-channel');
   updChannelEl?.addEventListener('change', async () => {
     const channel = updChannelEl.value === 'all' ? 'all' : 'stable';
-    const s = await window.api.getSettings();
+    const s = await readSettings();
     if (!s.updates) s.updates = {};
     s.updates.channel = channel;
     const r = await window.api.updatesSave({ channel });
@@ -77,7 +77,7 @@
   });
   const btnUpdatesOpenRelease = document.getElementById('btn-updates-open-release');
   btnUpdatesOpenRelease?.addEventListener('click', async () => {
-    const s = await window.api.getSettings();
+    const s = await readSettings();
     const url = s.updates?.lastResult?.htmlUrl;
     await window.api.updatesOpenRelease(url);
   });

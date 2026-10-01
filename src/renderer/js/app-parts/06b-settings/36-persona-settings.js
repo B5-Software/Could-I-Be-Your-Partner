@@ -10,7 +10,7 @@
           'setting-ai-personality': 'personality',
           'setting-ai-custom-prompt': 'customPrompt',
         }[id];
-        const s = await window.api.getSettings();
+        const s = await readSettings();
         if (!s.aiPersona) s.aiPersona = {};
         s.aiPersona[key] = el.value;
         await saveSettings(s);
@@ -27,7 +27,7 @@
   const tarotVisibleToggle = document.getElementById('setting-tarot-visible');
   if (tarotVisibleToggle) {
     tarotVisibleToggle.addEventListener('change', async () => {
-      const s = await window.api.getSettings();
+      const s = await readSettings();
       s.tarotVisible = tarotVisibleToggle.checked;
       await saveSettings(s);
       applyTarotVisibility(s.tarotVisible);

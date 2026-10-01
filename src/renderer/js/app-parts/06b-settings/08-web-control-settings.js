@@ -22,7 +22,7 @@
   }
 
   async function saveWebControlSettings() {
-    const s = await window.api.getSettings();
+    const s = await readSettings();
     const passwordInput = document.getElementById('setting-wc-password')?.value?.trim();
     let passwordHash = s.webControl?.passwordHash || '';
     if (passwordInput) {
@@ -66,7 +66,7 @@
         if (qrImg) qrImg.src = result.qrDataUrl;
         if (secretText) secretText.textContent = `密钥: ${result.secret}`;
         // Save to settings
-        const s = await window.api.getSettings();
+        const s = await readSettings();
         s.webControl = s.webControl || {};
         s.webControl.totpSecret = result.secret;
         await saveSettings(s);

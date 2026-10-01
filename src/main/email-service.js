@@ -64,7 +64,7 @@ class EmailService {
       totpSecret: emailSettings.totpSecret || null,
       pollInterval: (parseInt(emailSettings.pollInterval) || 30) * 1000, // default 30s
       approvalTimeout: parseInt(emailSettings.approvalResendMinutes) || 5,     // TOTP validity window in minutes
-      maxResends: parseInt(emailSettings.maxResends) || 3,
+      maxResends: Number.isFinite(parseInt(emailSettings.maxResends)) ? Math.max(0, parseInt(emailSettings.maxResends)) : 3,
       resendInterval: (parseInt(emailSettings.resendIntervalMinutes) || 30) * 60 * 1000,
       allowedSenders,
     };
@@ -334,12 +334,12 @@ class EmailService {
       // Set up resend timer
       const resendTimer = setInterval(async () => {
         if (resolved) { clearInterval(resendTimer); return; }
-        resendCount++;
-        if (resendCount >= (this.config?.maxResends || 3)) {
+        if (resendCount >= (this.config?.maxResends ?? 3)) {
           clearInterval(resendTimer);
           // Don't resolve - keep waiting for reply, just stop resending
           return;
         }
+        resendCount++;
         await sendRequest();
       }, this.config?.resendInterval || 30 * 60 * 1000);
 

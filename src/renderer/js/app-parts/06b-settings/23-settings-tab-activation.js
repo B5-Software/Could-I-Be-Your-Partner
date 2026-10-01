@@ -21,13 +21,14 @@
 
   function activateSettingsTabCore(btn) {
     if (!btn || !btn.dataset || !btn.dataset.tab) return;
-    document.querySelectorAll('.settings-tab').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.settings-tab').forEach(b => { b.classList.remove('active'); b.setAttribute('aria-selected', 'false'); b.tabIndex = -1; });
     document.querySelectorAll('.settings-panel').forEach(p => {
       p.classList.remove('active');
       p.inert = true;
       p.setAttribute('aria-hidden', 'true');
     });
     btn.classList.add('active');
+    btn.setAttribute('aria-selected', 'true'); btn.tabIndex = 0;
     const panel = document.querySelector(`.settings-panel[data-tab="${btn.dataset.tab}"]`);
     if (panel) {
       panel.classList.add('active');
@@ -56,6 +57,9 @@
     if (btn.dataset.tab === 'voice' && typeof refreshVoiceGate === 'function') {
       refreshVoiceGate().catch(() => {});
     }
+    if (btn.dataset.tab === 'budget') loadBudgetSettings().catch(() => {});
+    if (btn.dataset.tab === 'context') refreshTokenSettings(agent.settings);
+    if (btn.dataset.tab === 'overview') refreshSettingsOverview(agent.settings);
     // 推送设置选项卡和面板的 active 状态到 WebUI/Remote
     document.querySelectorAll('.settings-tab').forEach(b => {
       WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '.settings-tab[data-tab="' + b.dataset.tab + '"]', attr: 'class', value: b.className });

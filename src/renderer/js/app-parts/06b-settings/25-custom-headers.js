@@ -59,12 +59,12 @@
     };
   }
   const llmHeaderEditor = initHeaderEditor('llm-custom-headers', 'btn-llm-add-header', async (list) => {
-    const s = await window.api.getSettings();
+    const s = await readSettings();
     s.llm.customHeaders = list;
     await saveSettings(s);
   });
   const imgHeaderEditor = initHeaderEditor('img-custom-headers', 'btn-img-add-header', async (list) => {
-    const s = await window.api.getSettings();
+    const s = await readSettings();
     s.imageGen.customHeaders = list;
     await saveSettings(s);
   });

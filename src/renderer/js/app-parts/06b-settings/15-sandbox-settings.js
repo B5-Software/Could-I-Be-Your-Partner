@@ -1,6 +1,6 @@
   // ---- 沙箱设置 + 后端自检 ----
   async function loadSandboxSettings() {
-    const s = await window.api.getSettings();
+    const s = await readSettings();
     const sb = s.sandbox || {};
     const setSel = (id, v) => { const el = document.getElementById(id); if (el) el.value = v ?? ''; };
     setSel('setting-sandbox-default', sb.defaultMode || 'danger-full-access');
@@ -28,7 +28,7 @@
     }
   }
   async function updateSandboxSettings(patch, toast) {
-    const s = await window.api.getSettings();
+    const s = await readSettings();
     if (!s.sandbox || typeof s.sandbox !== 'object') s.sandbox = {};
     if (patch.modeOverrides !== undefined) {
       if (!s.sandbox.modeOverrides || typeof s.sandbox.modeOverrides !== 'object') s.sandbox.modeOverrides = {};

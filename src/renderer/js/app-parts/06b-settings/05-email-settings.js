@@ -39,7 +39,7 @@
       delBtn.innerHTML = '<i class="fa-solid fa-xmark"></i>';
       delBtn.style.cssText = 'color:var(--danger);padding:2px 6px';
       delBtn.addEventListener('click', async () => {
-        const s = await window.api.getSettings();
+        const s = await readSettings();
         const cur = Array.isArray(s.email?.allowedSenders) ? s.email.allowedSenders : [];
         const next = cur.filter(x => String(x).toLowerCase() !== String(addr).toLowerCase());
         s.email = { ...(s.email || {}), allowedSenders: next };
@@ -70,7 +70,7 @@
         alert('请输入有效的邮箱地址');
         return;
       }
-      const s = await window.api.getSettings();
+      const s = await readSettings();
       const cur = Array.isArray(s.email?.allowedSenders) ? s.email.allowedSenders.map(x => String(x).toLowerCase()) : [];
       if (cur.includes(val)) {
         alert('该邮箱已在白名单中');
@@ -167,7 +167,7 @@
   }
 
   async function saveEmailSettings() {
-    const s = await window.api.getSettings();
+    const s = await readSettings();
     // 保留已有的 allowedSenders 列表（白名单由专门的添加/删除按钮管理，这里只读不覆盖）
     const existingAllowed = Array.isArray(s.email?.allowedSenders) ? s.email.allowedSenders : [];
     s.email = {
@@ -185,7 +185,7 @@
       totpSecret: document.getElementById('setting-email-totp-secret')?.value?.trim() || s.email?.totpSecret || '',
       pollInterval: parseInt(document.getElementById('setting-email-poll-interval')?.value) || 30,
       resendIntervalMinutes: parseInt(document.getElementById('setting-email-resend-interval')?.value) || 30,
-      maxResends: parseInt(document.getElementById('setting-email-max-resends')?.value) || 3,
+      maxResends: Number.isFinite(parseInt(document.getElementById('setting-email-max-resends')?.value)) ? parseInt(document.getElementById('setting-email-max-resends').value) : 3,
       allowedSenders: existingAllowed,
     };
     await saveSettings(s);

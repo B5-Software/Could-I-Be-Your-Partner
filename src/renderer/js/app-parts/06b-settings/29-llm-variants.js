@@ -11,7 +11,7 @@
 
   // Reasoning effort
   document.getElementById('setting-llm-reasoning').addEventListener('change', async (e) => {
-    const s = await window.api.getSettings();
+    const s = await readSettings();
     s.llm.reasoningEffort = e.target.value;
     await saveSettings(s);
   });
@@ -24,7 +24,7 @@
   async function refreshReasoningVariants() {
     const el = document.getElementById('setting-llm-reasoning');
     if (!el) return;
-    const s = await window.api.getSettings();
+    const s = await readSettings();
     const provider = s.llm.provider || 'openai-compat';
     const model = s.llm.model || '';
     let variants = null;

@@ -28,7 +28,6 @@
     idEl?.addEventListener('change', () => {
       if (/claude/i.test(idEl.value || '')) {
         cwEl.checked = true;
-        saveBudgetSettings();
       }
     });
     row.querySelector('button').onclick = () => {
@@ -44,7 +43,6 @@
     const weeklyCapInput = document.getElementById('setting-budget-weekly-cap');
     const capInput = document.getElementById('setting-budget-monthly-cap');
     const actionSel = document.getElementById('setting-budget-action');
-    const fallbackInput = document.getElementById('setting-budget-fallback-model');
     const tzSel = document.getElementById('setting-budget-timezone');
     const weekModeSel = document.getElementById('setting-budget-week-mode');
     const monthModeSel = document.getElementById('setting-budget-month-mode');
@@ -81,26 +79,21 @@
       dailyLimitUSD: parseFloat(dailyCapInput?.value) || 0,
       weeklyLimitUSD: parseFloat(weeklyCapInput?.value) || 0,
       monthlyLimitUSD: parseFloat(capInput?.value) || 0,
-      monthlyCapUsd: parseFloat(capInput?.value) || 0, // 保留旧字段以兼容旧代码
       overLimitAction: actionSel?.value || 'warn',
-      overAction: actionSel?.value || 'warn', // 保留旧字段以兼容旧代码
-      fallbackModel: (fallbackInput?.value || '').trim(),
-      warningThreshold: 0.8,
       timezone: tzSel?.value || 'Asia/Shanghai',
       weekMode: weekModeSel?.value || 'natural',
       monthMode: monthModeSel?.value || 'natural',
       models,
       peakHours: {
         enabled: !!phEnabled?.checked,
-        start: parseInt(phStart?.value) ?? 9,
-        end: parseInt(phEnd?.value) ?? 18,
-        inputMul: parseFloat(phInMul?.value) || 1,
-        cacheReadMul: parseFloat(phCrMul?.value) || 1,
-        outputMul: parseFloat(phOutMul?.value) || 1,
-        cacheWriteMul: parseFloat(phCwMul?.value) || 1
+        start: Number.isFinite(Number(phStart?.value)) ? Number(phStart.value) : 9,
+        end: Number.isFinite(Number(phEnd?.value)) ? Number(phEnd.value) : 18,
+        inputMul: Number.isFinite(parseFloat(phInMul?.value)) ? parseFloat(phInMul.value) : 1,
+        cacheReadMul: Number.isFinite(parseFloat(phCrMul?.value)) ? parseFloat(phCrMul.value) : 1,
+        outputMul: Number.isFinite(parseFloat(phOutMul?.value)) ? parseFloat(phOutMul.value) : 1,
+        cacheWriteMul: Number.isFinite(parseFloat(phCwMul?.value)) ? parseFloat(phCwMul.value) : 1
       }
     };
     await saveSettings({ budget });
     await refreshBudgetStatus(budget);
-    if (typeof window.showToast === 'function') window.showToast('预算设置已保存', 'success', 2500);
   }

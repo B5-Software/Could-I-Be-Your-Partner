@@ -16,6 +16,7 @@
   // 数据来源：API 真实基线优先（精确），无基线时用校准估算；估算时数字加 ~ 前缀
   function updateAgentContextProgress(agentInstance, fillId, textId) {
     if (!agentInstance || !agentInstance.contextManager) return;
+    agentInstance.syncTokenLimits?.();
     const cm = agentInstance.contextManager;
     const progressFill = document.getElementById(fillId);
     const progressText = document.getElementById(textId);

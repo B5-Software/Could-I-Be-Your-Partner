@@ -709,6 +709,8 @@ class ContextManager {
             purpose: 'compaction',
             // 会话级模型/变体覆盖：压缩与主请求同模型，复用暖前缀缓存
             model: options.model || null,
+            poolEntryId: options.poolEntryId || null,
+            contextLength: options.contextLength || null,
             reasoningEffort: options.reasoningEffort || null,
             provider: options.provider || null,
             apiUrl: options.apiUrl || null,

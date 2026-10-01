@@ -2,7 +2,7 @@
   let autoCfg = { enabled: false, allowNoToken: false, serverPort: 8765, tokens: [] };
   let autoTasks = [];
   async function loadAutomationSettings() {
-    const s = await window.api.getSettings();
+    const s = await readSettings();
     autoCfg = s.automation || autoCfg;
     const enabledEl = document.getElementById('setting-automation-enabled');
     const noTokenEl = document.getElementById('setting-automation-allow-notoken');

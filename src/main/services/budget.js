@@ -83,11 +83,21 @@ module.exports = function createBudgetService({ calculateTokenCost, getSettings 
     return { startKey: todayKey, endKey: todayKey };
   }
 
-  // 检查预算是否超限，返回 { exceeded, period, level, action, fallbackModel }
+  // 检查累计限额，返回 { exceeded, kind?, period, level, action }。
   function checkBudgetExceeded(budget) {
     if (!budget) return { exceeded: false };
-    const tz = budget.timezone || 'UTC';
-    const todayKey = getTodayKeyTZ(tz);
+    const tokenLimit = Number(budget.dailyTokenLimit ?? getSettings().llm?.dailyMaxTokens) || 0;
+    const tokensUsed = Number(getSettings().llm?.dailyTokensUsed) || 0;
+    if (tokenLimit > 0 && tokensUsed >= tokenLimit)
+      return {
+        exceeded: true,
+        kind: 'tokens',
+        period: 'daily',
+        cost: tokensUsed,
+        limit: tokenLimit,
+        level: 'danger',
+        action: 'stop',
+      };
     const warn = Number(budget.warningThreshold) || 0.8;
     const action = budget.overLimitAction || 'warn';
 
@@ -109,6 +119,7 @@ module.exports = function createBudgetService({ calculateTokenCost, getSettings 
       },
     ];
 
+    let warning = null;
     for (const p of periods) {
       if (p.limit <= 0) continue;
       const agg = aggregateUsage(p.keys.startKey, p.keys.endKey);
@@ -121,22 +132,20 @@ module.exports = function createBudgetService({ calculateTokenCost, getSettings 
           limit: p.limit,
           level: 'danger',
           action,
-          fallbackModel: budget.fallbackModel || '',
         };
       }
-      if (cost >= p.limit * warn) {
-        return {
+      if (!warning && cost >= p.limit * warn) {
+        warning = {
           exceeded: false,
           period: p.name,
           cost,
           limit: p.limit,
           level: 'warn',
           action,
-          fallbackModel: budget.fallbackModel || '',
         };
       }
     }
-    return { exceeded: false };
+    return warning || { exceeded: false };
   }
 
   function estimateTokens(text) {
@@ -192,9 +201,18 @@ module.exports = function createBudgetService({ calculateTokenCost, getSettings 
       };
     }
     const day = getSettings().llm.usageHistory[today];
+    // Older usage records may predate per-model counters.
+    day.models ||= {};
+    for (const key of ['totalTokens', 'promptTokens', 'completionTokens', 'requestCount'])
+      day[key] ||= 0;
     const pt = usage.prompt_tokens || 0;
     const ct = usage.completion_tokens || 0;
     const tt = usage.total_tokens || pt + ct;
+    if (getSettings().llm.dailyTokenDate !== today) {
+      getSettings().llm.dailyTokenDate = today;
+      getSettings().llm.dailyTokensUsed = 0;
+    }
+    getSettings().llm.dailyTokensUsed = (getSettings().llm.dailyTokensUsed || 0) + tt;
     // 解析缓存命中 token：
     // - OpenAI: usage.prompt_tokens_details.cached_tokens（已命中的 prompt 缓存）
     // - Anthropic: usage.cache_read_input_tokens（已命中） + cache_creation_input_tokens（缓存写入，按 1.25x 计费）

@@ -110,18 +110,10 @@
     // Show stop button immediately
     setSendButtons(true);
 
-    // Check daily limits before sending
-    const settings = await window.api.getSettings();
-    const llmLimit = settings.llm.dailyMaxTokens || 0;
-    const llmUsed = settings.llm.dailyTokensUsed || 0;
-    if (llmLimit > 0) {
-      if (llmUsed >= llmLimit) {
-        addSystemMessage(`⚠️ 已达到今日LLM Token上限(${llmLimit})，请明天再试或在设置中重置使用量。`);
-        setSendButtons(false);
-        return;
-      } else if (llmUsed >= llmLimit * 0.9) {
-        addSystemMessage(`⚠️ 警告：今日Token已使用${llmUsed}，接近限制${llmLimit}(${((llmUsed/llmLimit)*100).toFixed(1)}%)`);
-      }
+    const limitCheck = await window.api.budgetCheck();
+    if (limitCheck.exceeded && limitCheck.action !== 'warn') {
+      addSystemMessage(limitCheck.kind === 'tokens' ? '今日 Token 用量已达上限；请到设置 → 消费与用量上限调整。' : 'LLM 消费已达预算上限；请到设置 → 消费与用量上限调整。');
+      setSendButtons(false); return;
     }
 
     chatInput.value = '';

@@ -1,5 +1,5 @@
   async function loadPlaywrightSettings() {
-    const s = await window.api.getSettings();
+    const s = await readSettings();
     const pw = s.playwright || {};
     const modeSelect = document.getElementById('setting-pw-mode');
     const pathInput = document.getElementById('setting-pw-path');
@@ -135,7 +135,7 @@
         };
         // 先持久化设置：测试启动即应用，避免用户忘记点"保存"导致 Agent 调用仍用旧浏览器
         try {
-          const s2 = await window.api.getSettings();
+          const s2 = await readSettings();
           s2.playwright = testSettings;
           await saveSettings(s2);
           await window.api.pwCloseBrowser();
@@ -158,7 +158,7 @@
     // Save
     if (saveBtn) {
       saveBtn.addEventListener('click', async () => {
-        const s2 = await window.api.getSettings();
+        const s2 = await readSettings();
         s2.playwright = {
           mode: modeSelect ? modeSelect.value : 'auto',
           path: pathInput ? pathInput.value : '',
@@ -182,7 +182,7 @@
 
   // ── Budget Control Settings ──
   // 数据结构：settings.budget = {
-  //   monthlyCapUsd, dailyLimitUSD, overAction, fallbackModel, warningThreshold,
+  //   dailyTokenLimit, dailyLimitUSD, weeklyLimitUSD, monthlyLimitUSD, overLimitAction, warningThreshold,
   //   models: { [modelId]: { inputPerM, cacheReadPerM, outputPerM, cacheWritePerM, hasCacheWrite } },
   //   peakHours: { enabled, start, end, inputMul, cacheReadMul, outputMul, cacheWriteMul }
   // }

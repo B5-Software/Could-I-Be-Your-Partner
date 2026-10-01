@@ -6,7 +6,7 @@
         return;
       }
     }
-    const s = await window.api.getSettings();
+    const s = await readSettings();
     s.autoApproveSensitive = e.target.checked;
     await saveSettings(s);
   });
@@ -26,7 +26,7 @@
   }
 
   async function savePrivacySettings() {
-    const s = await window.api.getSettings();
+    const s = await readSettings();
     const categories = {};
     document.querySelectorAll('#privacy-categories-item input[data-cat]').forEach(inp => {
       categories[inp.dataset.cat] = inp.checked;
@@ -90,10 +90,10 @@
 
   // Usage reset button
   document.getElementById('btn-reset-usage')?.addEventListener('click', async () => {
-    const confirmed = await window.api.confirmSensitive('确定要重置每日使用量统计吗？\n\n这将清零今日的Token用量和图片生成数。');
+    const confirmed = await window.api.confirmSensitive('确定要重置每日使用量统计吗？\n\n这将清零今日的 Token 和图片生成数，费用历史及美元预算计数仍保留。');
     if (!confirmed) return;
 
-    const s = await window.api.getSettings();
+    const s = await readSettings();
     s.llm.dailyTokensUsed = 0;
     s.llm.dailyTokenDate = '';
     s.imageGen.dailyImagesUsed = 0;
@@ -103,7 +103,8 @@
     // Refresh display
     document.getElementById('setting-llm-usage').textContent = '今日已用: 0';
     document.getElementById('setting-img-usage').textContent = '今日已用: 0';
-    alert('使用量已重置');
+    window.showToast('今日用量计数已清零，费用历史仍保留', 'success');
+    await refreshBudgetStatus();
   });
 
   // Firmware export button

@@ -168,6 +168,7 @@ vmService.on('forward-removed', (f) => broadcastVm('vm:forward-removed', f));
 // 决策模型（System One / Jev）服务
 const decisionService = new DecisionService({
   getSettings: () => settings,
+  getDayKey: () => getTodayKeyTZ(settings.budget?.timezone || 'UTC'),
   persistSettings: () => { try { saveJSON(settingsPath, settings); } catch (_) {} },
 });
 const APP_VERSION = app.getVersion();
@@ -590,11 +591,7 @@ function projectActivePoolEntry() {
     if (entry.provider === 'opencode-zen' || entry.provider === 'opencode-go') llm.zenApiKey = entry.apiKey || '';
     else llm.apiKey = entry.apiKey || '';
     if (entry.effort) llm.reasoningEffort = entry.effort;
-    // 上下文长度：用户在设置里手动填写过（maxContextLengthExplicit=true）时以用户值为准，
-    // 同步写入池条目，避免被条目默认值或模型元数据再次覆盖。
-    if (llm.maxContextLengthExplicit && Number(llm.maxContextLength) > 0) {
-      entry.contextLength = Number(llm.maxContextLength);
-    }
+    // 容量属于模型池条目；显式编辑由 syncActiveEntry 仅同步到当前默认条目。
     if (entry.contextLength) llm.maxContextLength = entry.contextLength;
   } catch (e) {
     console.warn('[llm] model pool projection failed:', e.message);
@@ -1606,7 +1603,10 @@ ipcMain.handle('settings:set', (_, newSettings) => {
   const previousLocation = settings.runtime?.location;
   const prevVoice = settings.voice ? JSON.parse(JSON.stringify(settings.voice)) : null;
   const prevProxyJson = JSON.stringify(settings.proxy || null);
-  settings = mergeSettings(settings, newSettings);
+  const tokenPolicy = require('../shared/token-policy');
+  const patch = tokenPolicy.migratePatch(newSettings);
+  settings = tokenPolicy.normalize(mergeSettings(settings, patch));
+  tokenPolicy.syncActiveEntry(settings, patch);
   if (settings.runtime?.location !== previousLocation) {
     require('./vm/tool-location').withRuntimeLocation(() => vmService, () => pluginManager.refreshAll()).catch(error => console.warn('[DS Plugins] location change:', error.message));
   }
@@ -2619,7 +2619,7 @@ ipcMain.handle('decision:test', async () => {
 });
 ipcMain.handle('decision:status', () => {
   const cfg = normalizeDecisionSettings(settings.decision);
-  const stamp = new Date().toISOString().slice(0, 10);
+  const stamp = getTodayKeyTZ(settings.budget?.timezone || 'UTC');
   const usage = cfg.usage || { date: '', calls: 0 };
   return {
     ok: true,
@@ -3133,6 +3133,7 @@ ipcMain.handle('usage:getRange', (_, period) => {
 // ---- IPC: Budget (预算控制) ----
 // 返回当前预算状态：日/周/月已花费、限额、占比、是否告警
 ipcMain.handle('budget:getStatus', () => {
+  resetDailyUsageIfNeeded();
   const b = settings.budget || {};
   const warn = Number(b.warningThreshold) || 0.8;
 
@@ -3159,11 +3160,16 @@ ipcMain.handle('budget:getStatus', () => {
       endKey: p.keys.endKey
     };
   }
+  result.daily.tokensUsed = settings.llm.dailyTokensUsed || 0;
+  result.daily.tokenLimit = b.dailyTokenLimit || 0;
+  result.daily.imagesUsed = settings.imageGen.dailyImagesUsed || 0;
+  result.daily.imageLimit = settings.imageGen.dailyMaxImages || 0;
   return result;
 });
 
 // ---- IPC: Budget check (预算检查，供 LLM 请求前调用) ----
 ipcMain.handle('budget:check', () => {
+  resetDailyUsageIfNeeded();
   return checkBudgetExceeded(settings.budget || {});
 });
 
