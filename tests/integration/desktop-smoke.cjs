@@ -126,8 +126,15 @@ ipcMain.once('app:renderer-ready', (event) => {
       console.log('[desktop-smoke] Workspace interactions:', workspace);
       const settingsCheck = await require('./renderer-settings-check.cjs')(event.sender);
       console.log('[desktop-smoke] Settings interactions:', settingsCheck);
+      // Hosted Windows runners can default to reduced motion. Exercise both
+      // system preferences explicitly instead of depending on this machine's UI.
+      event.sender.debugger.attach('1.3');
+      await event.sender.debugger.sendCommand('Emulation.setEmulatedMedia', {
+        features: [{ name: 'prefers-reduced-motion', value: 'no-preference' }],
+      });
       const motion = await require('./renderer-motion-check.cjs')(event.sender);
       console.log('[desktop-smoke] Motion policy:', motion);
+      event.sender.debugger.detach();
       // DevTools created from the native menu can initially have null web preferences.
       const devToolsOpened = new Promise((resolve) =>
         event.sender.once('devtools-opened', resolve),
