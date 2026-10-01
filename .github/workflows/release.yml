@@ -4,6 +4,11 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      publish_run_id:
+        description: Publish existing build artifacts (leave empty for normal version detection)
+        required: false
+        type: string
 
 permissions:
   contents: write
@@ -52,6 +57,27 @@ jobs:
           echo "changed=$CHANGED" >> "$GITHUB_OUTPUT"
           echo "version=$CUR" >> "$GITHUB_OUTPUT"
           echo "prerelease=$PRERELEASE" >> "$GITHUB_OUTPUT"
+
+      # Pin the build revision while it is still a branch head. GitHub requires
+      # workflow-write permission to auto-tag an unreferenced workflow commit.
+      - name: Pin version tag before building
+        if: steps.check.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.check.outputs.version }}
+        run: |
+          TAG="v$VERSION"
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null; then
+            git fetch --no-tags origin "refs/tags/$TAG:refs/tags/$TAG"
+            PINNED=$(git rev-parse "refs/tags/$TAG^{commit}")
+            if [ "$PINNED" != "$GITHUB_SHA" ]; then
+              echo "::error::Version $VERSION is already tagged at another commit; increment the version."
+              exit 1
+            fi
+          else
+            gh api "repos/$GITHUB_REPOSITORY/git/refs" --method POST \
+              -f "ref=refs/tags/$TAG" -f "sha=$GITHUB_SHA"
+          fi
 
   # ---- 四平台打包（版本递增时） ----
   build:
@@ -124,20 +150,39 @@ jobs:
 
   # ---- 发布到 GitHub Releases（tag: v<version>） ----
   release:
-    needs: [detect, build]
-    if: always() && needs.build.result == 'success'
+    needs: [test, detect, build]
+    if: always() && needs.test.result == 'success' && needs.detect.result == 'success' && (needs.build.result == 'success' || inputs.publish_run_id != '')
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
     steps:
       - name: Checkout
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
+      - name: Verify artifact revision
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILD_RUN_ID: ${{ inputs.publish_run_id || github.run_id }}
+          VERSION: ${{ needs.detect.outputs.version }}
+        run: |
+          if [[ ! "$BUILD_RUN_ID" =~ ^[0-9]+$ ]]; then exit 1; fi
+          BUILD_SHA=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$BUILD_RUN_ID" --jq '.head_sha')
+          TAG_SHA=$(git rev-parse "refs/tags/v$VERSION^{commit}")
+          if [ "$BUILD_SHA" != "$TAG_SHA" ]; then
+            echo "::error::Artifacts and version tag refer to different commits."
+            exit 1
+          fi
+
       - name: Download all artifacts
         uses: actions/download-artifact@v8
         with:
           path: release-artifacts
           merge-multiple: true
+          run-id: ${{ inputs.publish_run_id || github.run_id }}
+          github-token: ${{ github.token }}
 
       - name: Create GitHub Release
         env:
@@ -147,4 +192,4 @@ jobs:
           PRERELEASE="${{ needs.detect.outputs.prerelease }}"
           ARGS=(--title "v$VERSION" --generate-notes)
           if [ "$PRERELEASE" = "true" ]; then ARGS+=(--prerelease); fi
-          gh release create "v$VERSION" release-artifacts/* --target "$GITHUB_SHA" "${ARGS[@]}"
+          gh release create "v$VERSION" release-artifacts/* --verify-tag "${ARGS[@]}"
