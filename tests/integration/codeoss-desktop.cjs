@@ -262,6 +262,7 @@ ipcMain.once('app:renderer-ready', (event) => {
       const preview = path.resolve(__dirname, '../../.cibyp-test-fixtures-codeoss-preview');
       fs.mkdirSync(preview, { recursive: true });
       fs.writeFileSync(path.join(preview, 'workbench.png'), screenshot.toPNG());
+      await require('./codeoss-overlay-check.cjs')(renderer, service, preview, waitFor);
       const secondWorkspace = path.join(profile, 'second-workspace');
       fs.mkdirSync(secondWorkspace);
       fs.writeFileSync(path.join(secondWorkspace, 'second.js'), 'const second = true;\n');
@@ -316,6 +317,7 @@ ipcMain.once('app:renderer-ready', (event) => {
       const oldView = service.view;
       service.embeddedWindow.close();
       await waitFor(() => !service.view, 15000);
+      assert.equal(service.overlay.view, null, 'closing the IDE must release the overlay renderer');
       assert.equal((await service.open(nativeWorkspace)).ok, true);
       await waitFor(() => service.activePeer(), 30000).catch(async (error) => {
         console.error('[codeoss-desktop] reopen state', {

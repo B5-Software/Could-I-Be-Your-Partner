@@ -12,6 +12,7 @@
     const pages = [...document.querySelectorAll('#main-content > .page')];
     const changed = !page.classList.contains('active');
     if (changed) {
+      document.getElementById('session-tab-popover')?.classList.add('hidden');
       const focusInOldPage = pages.some(item => item !== page && item.contains(document.activeElement));
       activatePage(page, pages);
       page.scrollTop = 0;
@@ -39,7 +40,8 @@
     if (loader && !navigationLoads.has(name)) {
       const destination = name;
       const loadedPage = page;
-      const task = Promise.resolve().then(loader).then(() => {
+      // The bundle can yield during Agent initialization before later modules exist.
+      const task = appReady.then(loader).then(() => {
         // Serialize form state correctly for mirrored clients.
         loadedPage.querySelectorAll('input, textarea, select').forEach(element => {
           if (element.tagName === 'TEXTAREA') element.textContent = element.value;
@@ -69,6 +71,9 @@
   document.getElementById('tools-mode-switcher')?.addEventListener('click', event => {
     const button = event.target.closest('.tools-mode-btn');
     if (!button) return;
-    codeEditorModeFilter = button.dataset.toolMode;
-    Promise.resolve(loadToolsPage()).then(() => WebUIMirror.pushDomEvent({ type: 'dom_replace', container: '#page-tools', html: document.getElementById('page-tools').innerHTML }));
+    void appReady.then(() => {
+      codeEditorModeFilter = button.dataset.toolMode;
+      return loadToolsPage();
+    }).then(() => WebUIMirror.pushDomEvent({ type: 'dom_replace', container: '#page-tools', html: document.getElementById('page-tools').innerHTML }))
+      .catch(error => console.error('[navigation] Failed to load tools', error));
   });

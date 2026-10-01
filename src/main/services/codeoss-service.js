@@ -11,6 +11,7 @@ const lock = require('../../../integrations/codeoss/runtime-lock.json');
 const { workbenchColors } = require('../../../integrations/codeoss/theme.cjs');
 const { VmFs } = require('../vm/vm-fs');
 const { shellQuote } = require('../vm/vm-paths');
+const { CodeOSSOverlay } = require('./codeoss-overlay');
 
 const SCHEMES = [
   {
@@ -88,6 +89,7 @@ class CodeOSSService {
     });
     this.serverReady = this.startBridge();
     this.switchQueue = Promise.resolve();
+    this.overlay = new CodeOSSOverlay(this.getMainWindow);
     app.on('will-quit', () => this.dispose());
   }
 
@@ -505,6 +507,7 @@ class CodeOSSService {
     };
     parent.once('closed', closeOwner);
     owner.once('closed', () => {
+      this.overlay.destroy();
       parent.removeListener('focus', forwardFocus);
       parent.removeListener('closed', closeOwner);
       if (!parent.isDestroyed()) parent.contentView.removeChildView(view);
@@ -519,7 +522,7 @@ class CodeOSSService {
     return owner;
   }
 
-  setLayout({ visible, bounds } = {}) {
+  setLayout({ visible, bounds, overlay } = {}) {
     this.visible = visible === true;
     if (bounds) {
       const parent = this.getMainWindow();
@@ -537,6 +540,7 @@ class CodeOSSService {
       if (this.bounds) this.view.setBounds(this.bounds);
       this.view.setVisible(this.visible);
     }
+    this.overlay.update(this.visible && this.view ? overlay : null);
     return { ok: true };
   }
 
@@ -662,6 +666,7 @@ class CodeOSSService {
   dispose() {
     if (this.disposed) return;
     this.disposed = true;
+    this.overlay.destroy();
     for (const entry of this.pending.values()) {
       clearTimeout(entry.timer);
       entry.reject(new Error('Application closed'));

@@ -165,5 +165,6 @@
   "09b-input/06-voice-settings-bind.js",
   "10-automation/01-automation-page.js",
   "11-command-palette/01-command-palette.js",
-  "12-selection-menu/01-selection-menu.js"
+  "12-selection-menu/01-selection-menu.js",
+  "13-ready/01-bootstrap-complete.js"
 ]

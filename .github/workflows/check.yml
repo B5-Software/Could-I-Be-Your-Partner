@@ -25,6 +25,8 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run check
+      - run: npm run test:desktop
+        if: runner.os == 'Windows' && matrix.node == '24'
       - run: npm audit --audit-level=high
   macos-computer:
     strategy:

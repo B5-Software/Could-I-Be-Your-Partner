@@ -27,6 +27,41 @@ global.fetch = async () => {
   throw new Error('Network disabled in desktop smoke check');
 };
 const errors = [];
+let startupNavigationChecked = false;
+// Pause the settings request used by Agent.init after navigation listeners exist.
+// This reproduces fast clicks during a slow startup, rather than testing only
+// pages after renderer-ready has already initialized every lexical variable.
+const originalHandle = ipcMain.handle.bind(ipcMain);
+ipcMain.handle = (channel, handler) =>
+  originalHandle(channel, async (event, ...args) => {
+    if (
+      channel === 'settings:get' &&
+      !startupNavigationChecked &&
+      event.sender.getURL().endsWith('/index.html')
+    ) {
+      const hasNavigation = await event.sender.executeJavaScript(
+        "typeof window.navigatePage === 'function'",
+      );
+      if (hasNavigation) {
+        startupNavigationChecked = true;
+        try {
+          await event.sender.executeJavaScript(`(() => {
+          window.navigatePage('settings');
+          window.navigatePage('history');
+          window.navigatePage('tools');
+          document.querySelector('.tools-mode-btn[data-tool-mode="code"]').click();
+          document.querySelector('.mode-btn[data-mode="babe"]').click();
+          document.querySelector('.mode-btn[data-mode="chat"]').click();
+        })()`);
+          await new Promise((resolve) => setTimeout(resolve, 150));
+          assert.deepEqual(errors, [], 'early navigation must wait for initialization');
+        } catch (error) {
+          finish(error);
+        }
+      }
+    }
+    return handler(event, ...args);
+  });
 process.on('uncaughtExceptionMonitor', (error) => errors.push(`Main exception: ${error.message}`));
 app.on('browser-window-created', (_event, window) => {
   if (process.env.CIBYP_UI_PREVIEW_DIR) {
@@ -39,7 +74,10 @@ app.on('browser-window-created', (_event, window) => {
     errors.push(`Renderer terminated: ${details.reason}`),
   );
   window.webContents.on('console-message', (event) => {
-    if (event.level === 'error' && /Uncaught|Initialization failed/.test(event.message))
+    if (
+      event.level === 'error' &&
+      /Uncaught|Initialization failed|\[navigation\] Failed/.test(event.message)
+    )
       errors.push(event.message);
   });
 });
@@ -51,6 +89,19 @@ const timeout = setTimeout(
 ipcMain.once('app:renderer-ready', (event) => {
   setTimeout(async () => {
     try {
+      assert.equal(startupNavigationChecked, true, 'slow startup regression must execute');
+      console.log(
+        '[desktop-smoke] Queued navigation and mode switches during slow initialization passed.',
+      );
+      await event.sender.executeJavaScript(`(async () => {
+        const deadline = Date.now() + 5000;
+        while (!document.getElementById('llm-custom-headers')?.children.length ||
+          !document.getElementById('history-list')?.dataset.hlAttached ||
+          !document.querySelector('#page-tools [data-computer-recheck]')) {
+          if (Date.now() > deadline) throw new Error('Queued startup pages did not hydrate: ' + JSON.stringify({headers: document.getElementById('llm-custom-headers')?.children.length, history: document.getElementById('history-list')?.dataset.hlAttached, tools: !!document.querySelector('#page-tools [data-computer-recheck]')}));
+          await new Promise(resolve => setTimeout(resolve, 25));
+        }
+      })()`);
       const state = await event.sender.executeJavaScript(`(async () => ({
         hasBridge: typeof window.api?.getSettings === 'function',
         settings: await window.api.getSettings(),

@@ -92,11 +92,3 @@
       renderAllSessionTabs();
     }
   }
-
-  await normalizeToolSettings();
-  setTitlebarTitle(agent.conversationTitle || '未命名对话');
-  updateReoptimizeButtonVisibility();
-  updateContextProgress();
-  // 初始化完成后渲染一次标签栏：单个会话也保持可见，避免启动后栏状态与后续行为不一致
-  renderAllSessionTabs();
-  showSessionTabsForMode(currentMode);

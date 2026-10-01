@@ -8,11 +8,22 @@ type Workspace = {
   error?: string;
   cancelled?: boolean;
 };
+type Bounds = { x: number; y: number; width: number; height: number };
+type HoverCard = {
+  html: string;
+  bounds: Bounds;
+  offset: { x: number; y: number };
+  size: { width: number; height: number };
+  theme: string;
+  variables: Record<string, string>;
+  font: string;
+};
 type API = {
   codeOSSOpen(directory?: string | null): Promise<Workspace>;
   codeOSSLayout(layout: {
     visible: boolean;
-    bounds: { x: number; y: number; width: number; height: number };
+    bounds: Bounds;
+    overlay?: HoverCard | null;
   }): Promise<unknown>;
   codeOSSCommand(command: string): Promise<unknown>;
   onCodeOSSState(callback: (state: State) => void): () => void;
@@ -41,13 +52,19 @@ export class CodeOSSController {
       this.scheduleLayout();
     });
     new ResizeObserver(() => this.scheduleLayout()).observe(viewport);
-    new MutationObserver(() => this.scheduleLayout()).observe(document.body, {
+    new MutationObserver(() => this.scheduleLayout()).observe(document.documentElement, {
       subtree: true,
       attributes: true,
-      attributeFilter: ['class', 'hidden', 'style', 'aria-hidden'],
+      attributeFilter: ['class', 'hidden', 'style', 'aria-hidden', 'data-theme'],
       childList: true,
+      characterData: true,
     });
     window.addEventListener('resize', () => this.scheduleLayout());
+    // CSS :hover tooltips change visibility without a DOM mutation.
+    for (const event of ['pointerover', 'pointerout', 'focusin', 'focusout', 'scroll']) {
+      document.addEventListener(event, () => this.scheduleLayout(), true);
+    }
+    document.addEventListener('visibilitychange', () => this.scheduleLayout());
     window.addEventListener('beforeunload', () => {
       void api.codeOSSLayout({ visible: false, bounds: { x: 0, y: 0, width: 0, height: 0 } });
     });
@@ -93,11 +110,54 @@ export class CodeOSSController {
     const layout = {
       visible,
       bounds: { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height },
+      overlay: visible ? this.hoverCard(bounds) : null,
     };
     const key = JSON.stringify(layout);
     if (key === this.lastLayout) return;
     this.lastLayout = key;
-    void this.api.codeOSSLayout(layout).catch((error) => console.warn('[Code-OSS layout]', error));
+    void this.api.codeOSSLayout(layout).catch((error) => {
+      if (this.lastLayout === key) this.lastLayout = '';
+      console.warn('[Code-OSS layout]', error);
+    });
+  }
+  private hoverCard(viewport: DOMRect): HoverCard | null {
+    const card = [
+      ...document.querySelectorAll<HTMLElement>('.session-tab-popover, .context-tooltip'),
+    ].find((element) => {
+      if (!element.getClientRects().length) return false;
+      const rect = element.getBoundingClientRect();
+      return (
+        rect.right > viewport.left &&
+        rect.left < viewport.right &&
+        rect.bottom > viewport.top &&
+        rect.top < viewport.bottom
+      );
+    });
+    if (!card) return null;
+    const rect = card.getBoundingClientRect();
+    // Keep the native overlay inside the IDE: covering the hovered tab itself
+    // would trigger mouseleave and cause the card to flicker open and closed.
+    const x = Math.max(Math.ceil(viewport.left), Math.floor(rect.x - 24));
+    const y = Math.max(Math.ceil(viewport.top), Math.floor(rect.y - 24));
+    const root = getComputedStyle(document.documentElement);
+    const variables: Record<string, string> = {};
+    for (const name of root) {
+      if (name.startsWith('--')) variables[name] = root.getPropertyValue(name);
+    }
+    return {
+      html: card.outerHTML,
+      bounds: {
+        x,
+        y,
+        width: Math.min(viewport.right - x, rect.right - x + 24),
+        height: Math.min(viewport.bottom - y, rect.bottom - y + 24),
+      },
+      offset: { x: rect.x - x, y: rect.y - y },
+      size: { width: rect.width, height: rect.height },
+      theme: document.documentElement.dataset.theme || 'light',
+      variables,
+      font: getComputedStyle(document.body).font,
+    };
   }
   command(command: string): Promise<unknown> {
     return this.api.codeOSSCommand(command);
