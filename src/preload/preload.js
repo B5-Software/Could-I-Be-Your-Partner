@@ -141,7 +141,7 @@ contextBridge.exposeInMainWorld('api', {
   // Code Execution
   runJS: (code, cwd, sandboxMode) => ipcRenderer.invoke('code:runJS', code, cwd, sandboxMode),
   runNodeJS: (code, cwd, sandboxMode) => ipcRenderer.invoke('code:runNodeJS', code, cwd, sandboxMode),
-  runShell: (script, cwd, sandboxMode) => ipcRenderer.invoke('code:runShell', script, cwd, sandboxMode),
+  runShell: (script, cwd, sandboxMode, options) => ipcRenderer.invoke('code:runShell', script, cwd, sandboxMode, options),
   runPython: (code, cwd, sandboxMode) => ipcRenderer.invoke('code:runPython', code, cwd, sandboxMode),
   sandboxGetStatus: () => ipcRenderer.invoke('sandbox:getStatus'),
   sandboxProbe: () => ipcRenderer.invoke('sandbox:probe'),

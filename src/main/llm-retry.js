@@ -12,6 +12,7 @@
 'use strict';
 
 const { ts, maskUrl, lastUserSnippet, bodyMeta } = require('./req-log');
+const TokenUsage = require('../shared/token-usage');
 
 // ---- Constants ----
 const DEFAULT_MAX_RETRIES = 10;
@@ -369,14 +370,7 @@ function processResponsesEvent(state, parsed) {
     else if (resp.status) state.finishReason = 'stop';
     const u = resp.usage || {};
     if (u.input_tokens !== undefined || u.output_tokens !== undefined) {
-      state.usage = {
-        prompt_tokens: u.input_tokens || 0,
-        completion_tokens: u.output_tokens || 0,
-        total_tokens: (u.input_tokens || 0) + (u.output_tokens || 0),
-        // 透传缓存/推理明细，供 computeUsageCost 计费
-        cache_read_input_tokens: u.input_tokens_details?.cached_tokens || 0,
-        reasoning_output_tokens: u.output_tokens_details?.reasoning_tokens || 0
-      };
+      state.usage = TokenUsage.normalize(u, 'responses');
     }
   }
 }
@@ -522,24 +516,9 @@ async function consumeSSEStream(bodyStream, onChunk, requestId, transport = 'ope
       }
     } else if (type === 'message_delta') {
       if (parsed.delta?.stop_reason) finishReason = parsed.delta.stop_reason === 'end_turn' ? 'stop' : parsed.delta.stop_reason;
-      if (parsed.usage) {
-        if (!usage) usage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
-        usage.completion_tokens = parsed.usage.output_tokens || usage.completion_tokens;
-        usage.total_tokens = usage.prompt_tokens + usage.completion_tokens;
-        // message_delta 也可能携带缓存字段（部分网关），补齐避免费用漏算
-        if (parsed.usage.cache_read_input_tokens != null) usage.cache_read_input_tokens = parsed.usage.cache_read_input_tokens;
-        if (parsed.usage.cache_creation_input_tokens != null) usage.cache_creation_input_tokens = parsed.usage.cache_creation_input_tokens;
-      }
+      if (parsed.usage) usage = { ...(usage || {}), ...parsed.usage };
     } else if (type === 'message_start') {
-      const msg = parsed.message || {};
-      if (msg.usage && (msg.usage.input_tokens != null || msg.usage.cache_read_input_tokens != null || msg.usage.cache_creation_input_tokens != null)) {
-        if (!usage) usage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
-        if (msg.usage.input_tokens != null) usage.prompt_tokens = msg.usage.input_tokens;
-        // 透传 Anthropic 原生缓存字段，供 computeUsageCost 计算缓存费用
-        usage.cache_read_input_tokens = msg.usage.cache_read_input_tokens || 0;
-        usage.cache_creation_input_tokens = msg.usage.cache_creation_input_tokens || 0;
-        usage.total_tokens = usage.prompt_tokens + usage.completion_tokens;
-      }
+      if (parsed.message?.usage) usage = { ...parsed.message.usage };
     }
   }
 
@@ -574,6 +553,7 @@ async function consumeSSEStream(bodyStream, onChunk, requestId, transport = 'ope
   if (!finishReason) {
     finishReason = toolCalls.length ? 'tool_calls' : 'stop';
   }
+  usage = TokenUsage.normalize(usage, transport);
   if (info && info.label) {
     const u = usage || {};
     const inTok = u.prompt_tokens ?? u.input_tokens ?? 0;

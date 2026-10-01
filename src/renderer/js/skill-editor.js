@@ -29,6 +29,7 @@
   };
 
   let monacoEditor = null;
+  let runningShellJob = null;
   let monacoReady = null;
   let promptModel = null;
   let scriptModels = new Map();
@@ -629,6 +630,7 @@
 
   function runResultToText(result) {
     if (!result) return '无返回';
+    if (result.running) return [result.output, result.stderr, '脚本仍在后台运行。可读取输出或停止任务。'].filter(Boolean).join('\n');
     if (result.ok === false) return result.error || result.stderr || '执行失败';
     if (result.result && typeof result.result === 'object') {
       const r = result.result;
@@ -661,6 +663,7 @@
   }
 
   async function runCurrentScript() {
+    if (runningShellJob) { await inspectShellJob(false); if (runningShellJob) return; }
     const script = currentScript();
     if (!script) {
       notify('请先选择一个脚本', 'warn');
@@ -675,11 +678,30 @@
       const result = await runScriptCode(script, code);
       const text = runResultToText(result);
       showOutput(text, result && result.ok === false);
-      updateStatusMessage(result && result.ok === false ? '运行失败' : '运行完成');
+      runningShellJob = result?.running ? result.jobId : null;
+      updateShellJobButtons();
+      updateStatusMessage(result?.running ? '后台运行中' : result && result.ok === false ? '运行失败' : '运行完成');
     } catch (e) {
       showOutput(e.message || '运行失败', true);
       updateStatusMessage('运行失败');
     }
+  }
+
+  function updateShellJobButtons() {
+    $('btn-read-shell-job').classList.toggle('hidden', !runningShellJob);
+    $('btn-stop-shell-job').classList.toggle('hidden', !runningShellJob);
+  }
+  async function inspectShellJob(stop) {
+    if (!runningShellJob) return;
+    const id = runningShellJob;
+    try {
+      const result = await api.runShell(undefined, { jobId: id, action: stop ? 'stop' : 'poll' });
+      if (id !== runningShellJob) return;
+      showOutput(runResultToText(result), result.ok === false);
+      if (result.status && !result.running) runningShellJob = null;
+      updateShellJobButtons();
+      updateStatusMessage(result.running ? '后台运行中' : result.status === 'stopped' ? '已停止' : result.ok === false ? '运行失败' : '运行完成');
+    } catch (error) { showOutput(error.message, true); }
   }
 
   async function addScript() {
@@ -733,6 +755,8 @@
     $('btn-add-script').addEventListener('click', addScript);
     $('btn-import-script').addEventListener('click', importScriptFile);
     $('btn-run-script').addEventListener('click', runCurrentScript);
+    $('btn-read-shell-job').addEventListener('click', () => inspectShellJob(false));
+    $('btn-stop-shell-job').addEventListener('click', () => inspectShellJob(true));
     $('btn-clear-output').addEventListener('click', clearOutput);
     $('btn-close-output').addEventListener('click', clearOutput);
     $('btn-close').addEventListener('click', () => {

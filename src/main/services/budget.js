@@ -163,6 +163,7 @@ module.exports = function createBudgetService({ calculateTokenCost, getSettings 
    * 并应用峰谷时段倍率（peakHours）。
    */
   function computeUsageCost(usage, model, ts) {
+    usage = require('../../shared/token-usage').normalize(usage);
     return calculateTokenCost(
       {
         prompt: usage?.prompt_tokens,
@@ -179,6 +180,7 @@ module.exports = function createBudgetService({ calculateTokenCost, getSettings 
 
   function recordTokenUsage(usage, model) {
     if (!usage) return;
+    usage = require('../../shared/token-usage').normalize(usage);
     // 使用时区感知的日期键，确保与预算周期计算一致
     const tz = getSettings().budget?.timezone || 'UTC';
     const today = getTodayKeyTZ(tz);

@@ -250,6 +250,9 @@
           total: Number(usage.total) || 0,
           cached: Number(usage.cached) || 0,
           cacheCreation: Number(usage.cacheCreation) || 0,
+          cacheReportedPrompt: Number(usage.cacheReportedPrompt) || 0,
+          cacheReports: Number(usage.cacheReports) || 0,
+          lastCache: usage.lastCache || null,
           estimated: usage.estimated === true
         };
       } else if (session.agent?.sessionUsage) {

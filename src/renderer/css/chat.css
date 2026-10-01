@@ -1608,6 +1608,7 @@ html[data-modal-animations="off"] .sub-agent-modal-dialog {
   position: relative; width: min(340px, 40vw); flex-shrink: 0;
   min-height: 0; background: var(--bg-secondary); border-left: 1px solid var(--border);
   display: flex; flex-direction: column; overflow: hidden; z-index: 10;
+  contain: layout paint;
 }
 .todo-header { display: flex; align-items: center; justify-content: space-between; padding: 16px 18px; background: var(--accent-bg); }
 .todo-header h3 { font-size: 15px; display: flex; align-items: center; gap: 10px; }
@@ -2927,7 +2928,8 @@ html[data-modal-animations="off"] .sub-agent-modal-dialog {
 .code-file-tree-panel.collapsed, .code-editor-panel.collapsed, .code-chat.collapsed { pointer-events: none; }
 html[data-animations="off"] .code-file-tree-panel, html[data-animations="off"] .code-editor-panel, html[data-animations="off"] .code-chat { transition: none; }
 @media (prefers-reduced-motion: reduce) { .code-file-tree-panel, .code-editor-panel, .code-chat { transition: none; } }
-.geogebra-panel, .todo-panel { transition: transform 180ms ease; }
+.geogebra-panel { transition: transform 180ms ease; }
+.todo-panel { transition: none; }
 .geogebra-panel[aria-hidden="true"], .todo-panel[aria-hidden="true"] { transform: translateX(18px); }
 html[data-animations="off"] .geogebra-panel, html[data-animations="off"] .todo-panel { transition: none; }
 @media (prefers-reduced-motion: reduce) { .geogebra-panel, .todo-panel { transition: none; } }

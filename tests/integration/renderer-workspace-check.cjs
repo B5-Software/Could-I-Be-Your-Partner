@@ -21,6 +21,18 @@ module.exports = async function checkWorkspace(webContents) {
     const main = document.getElementById('main-content');
     const fullWidth = main.getBoundingClientRect().width;
     click('#btn-todo-sidebar');
+    const opening = root.getAnimations().find(animation => animation.effect.getKeyframes().some(frame => 'marginRight' in frame));
+    check(opening, 'Todo workspace and sidebar share an animation timeline');
+    opening.pause();
+    opening.currentTime = 0;
+    const startWidth = main.getBoundingClientRect().width;
+    opening.currentTime = 90;
+    const middleWidth = main.getBoundingClientRect().width;
+    check(Math.abs(root.getBoundingClientRect().left - main.getBoundingClientRect().right) < 1, 'sidebar edge tracks the conversation throughout its slide');
+    opening.currentTime = 180;
+    const endWidth = main.getBoundingClientRect().width;
+    check(Math.abs(startWidth - fullWidth) < 1 && middleWidth < startWidth && middleWidth > endWidth, 'conversation width changes continuously with the sidebar');
+    opening.finish();
     await wait(240);
     check(root.parentElement.id === 'app' && root.tagName === 'ASIDE', 'Todo must be a workspace sidebar');
     check(getComputedStyle(root).position === 'relative', 'Todo must participate in workspace layout');
@@ -76,6 +88,9 @@ module.exports = async function checkWorkspace(webContents) {
     check(!document.getElementById('btn-sidebar-toggle') && !document.getElementById('sidebar').classList.contains('expanded'), 'left navigation stays compact');
     check(!document.querySelector('#main-content .page-dismiss'), 'primary pages have no redundant close buttons');
     check(!document.querySelector('#page-tools [data-settings-open]'), 'Tools has no settings entry button');
+    const permissions = document.getElementById('computer-permissions-card');
+    check(permissions.previousElementSibling.id === 'tool-auth-section', 'computer permissions are below all tool cards');
+    check(parseFloat(getComputedStyle(permissions).marginTop) >= 16, 'computer permission card has vertical spacing');
     const fillers = ['about', 'skills'].map(name => {
       const page = document.getElementById('page-' + name);
       const filler = document.createElement('div');

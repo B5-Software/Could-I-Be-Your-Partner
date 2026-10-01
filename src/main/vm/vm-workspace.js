@@ -29,6 +29,7 @@ const path = require('path');
 const { EventEmitter } = require('events');
 const { writeTar, parseTar, dirEntriesFor } = require('./vm-tar');
 const { shellQuote } = require('./vm-paths');
+const { scanDirectory, guestScanScript } = require('./workspace-manifest');
 
 const BATCH_MAX_BYTES = 16 * 1024 * 1024;
 const BATCH_MAX_FILES = 2000;
@@ -38,7 +39,7 @@ const CONFLICT_DIR = '.cibyp-conflicts';
 const DEFAULT_EXCLUDES = {
   segments: ['node_modules', 'dist', 'out', '.cache', '.next', '.nuxt', '.venv', 'venv', '__pycache__', '.pytest_cache', '.idea', '.vs', CONFLICT_DIR],
   suffixes: ['.qcow2', '.img', '.vmdk', '.vhdx', '.iso', '.tar.gz', '.zip.tmp', '.log'],
-  prefixes: ['.git/objects/pack/tmp_', '.git/index.lock'],
+  prefixes: ['.git/objects/pack/tmp_', '.git/index.lock', '.cibyp-ready'],
 };
 
 function nowMs() { return Date.now(); }
@@ -71,6 +72,7 @@ class WorkspaceSync extends EventEmitter {
     this.baselineFile = this.instanceDir ? path.join(this.instanceDir, 'sync-baseline.json') : null;
     this.baseline = this._loadBaseline();
     this._chain = Promise.resolve();
+    this._hostCache = {};
     this._stats = { lastSyncAt: null, lastReason: null, pushed: 0, pulled: 0, conflicts: 0, skipped: [], deleted: 0 };
   }
 
@@ -88,15 +90,15 @@ class WorkspaceSync extends EventEmitter {
     return { version: 1, savedAt: null, files: {} };
   }
 
-  _saveBaseline(files) {
-    this.baseline = { version: 1, savedAt: new Date().toISOString(), files };
+  async _saveBaseline(files) {
+    this.baseline = { version: 2, savedAt: new Date().toISOString(), files };
     if (!this.baselineFile) return;
     try {
-      fs.mkdirSync(path.dirname(this.baselineFile), { recursive: true });
+      await fs.promises.mkdir(path.dirname(this.baselineFile), { recursive: true });
       // 原子写：异常中断也不会留下截断的 JSON
       const tmp = `${this.baselineFile}.tmp`;
-      fs.writeFileSync(tmp, JSON.stringify(this.baseline));
-      fs.renameSync(tmp, this.baselineFile);
+      await fs.promises.writeFile(tmp, JSON.stringify(this.baseline));
+      await fs.promises.rename(tmp, this.baselineFile);
     } catch (e) {
       this.emit('warn', '保存同步基线失败: ' + e.message);
     }
@@ -150,63 +152,30 @@ class WorkspaceSync extends EventEmitter {
     return false;
   }
 
-  /** 宿主侧清单：rel → { size, mtimeMs } */
-  scanHost() {
-    const files = {};
-    if (!this.hostRoot || !fs.existsSync(this.hostRoot)) return files;
-    const walk = (dir, relBase) => {
-      let entries = [];
-      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
-      for (const e of entries) {
-        const rel = relBase ? `${relBase}/${e.name}` : e.name;
-        if (this.shouldExclude(rel)) continue;
-        const abs = path.join(dir, e.name);
-        let st = null;
-        try { st = fs.lstatSync(abs); } catch { continue; }
-        if (st.isSymbolicLink()) continue;      // 符号链接不同步（跨平台语义差异大）
-        if (st.isDirectory()) { walk(abs, rel); continue; }
-        if (!st.isFile()) continue;
-        if (st.size > this.maxFileMB * 1024 * 1024) { this._stats.skipped.push(`${rel}（超过 ${this.maxFileMB}MB）`); continue; }
-        files[rel] = { size: st.size, mtimeMs: Math.round(st.mtimeMs) };
-      }
+  _scanOptions() {
+    return {
+      excludes: DEFAULT_EXCLUDES, syncGit: this.syncGit,
+      maxBytes: this.maxFileMB * 1024 * 1024,
+      extra: (this.excludes || []).map(value => value instanceof RegExp
+        ? { regex: value.source, flags: value.flags.replace(/[gy]/g, '') }
+        : { text: String(value).replace(/\\/g, '/').toLowerCase() }).filter(value => value.regex || value.text),
     };
-    walk(this.hostRoot, '');
+  }
+
+  async scanHost() {
+    const files = await scanDirectory(this.hostRoot, this._scanOptions(), this._hostCache);
+    this._hostCache = files;
     return files;
   }
 
-  /** VM 侧清单（find -printf，一次扫描拿全部；用 guest 当前时间校正时钟偏移） */
   async scanVm() {
     const inst = this._instance();
-    // 注意：date 必须在 find **之后**执行——否则 offset 会把本次扫描耗时算进去（大工作区可达数秒，导致反复误判变更）
-    const cmd = `find ${shellQuote(this.vmMount)} -mindepth 1 \\( -type f -o -type d \\) -printf '%y\\t%P\\t%s\\t%T@\\n' 2>/dev/null; date +%s`;
-    const r = await inst.exec(cmd, { timeoutMs: 120000 });
-    const files = {};
-    if (!r.ok) return files;
-    const lines = r.stdout.split('\n');
-    // 最后一行是 guest 的 epoch（秒）：宿主与 guest 常有几百毫秒~几秒的时钟偏移，
-    // 直接比较 mtime 会把"较新的一方"判反（实测：VM 后写的内容被判为更旧）
-    // 注意：date 输出带换行，split 后最后一个元素是空串 —— 必须取最后一个"非空数字行"
-    //（此前直接取 lines[len-1] 恒为 NaN，offset 永远 undefined，补偿形同虚设）
-    let guestEpoch = NaN;
-    for (let i = lines.length - 1; i >= 0; i--) {
-      const t = parseFloat(lines[i]);
-      if (Number.isFinite(t) && t > 0) { guestEpoch = t; break; }
-    }
-    if (Number.isFinite(guestEpoch) && guestEpoch > 0) {
-      this._vmClockOffsetMs = Date.now() - guestEpoch * 1000;
-    }
-    const offset = this._vmClockOffsetMs || 0;
-    for (let i = 0; i < lines.length - 1; i++) {
-      const line = lines[i];
-      if (!line) continue;
-      const [type, rel, size, mtime] = line.split('\t');
-      if (!rel) continue;
-      if (this.shouldExclude(rel)) continue;
-      if (type === 'd') continue;               // 目录由 tar 的目录条目兜底
-      const sz = parseInt(size, 10) || 0;
-      if (sz > this.maxFileMB * 1024 * 1024) { this._stats.skipped.push(`${rel}（VM 侧超过 ${this.maxFileMB}MB）`); continue; }
-      files[rel] = { size: sz, mtimeMs: Math.round((parseFloat(mtime) || 0) * 1000 + offset) };
-    }
+    const identity = require('node:crypto').createHash('sha256').update(this.vmMount).digest('hex');
+    const script = guestScanScript(this.vmMount, this._scanOptions(), '/tmp/cibyp-sync-' + identity + '.json');
+    const result = await inst.exec('node -e ' + shellQuote(script), { timeoutMs: 120000 });
+    if (!result.ok) throw new Error('VM 工作区扫描失败: ' + (result.stderr || result.code));
+    const files = JSON.parse(result.stdout);
+    if (!files || typeof files !== 'object' || Array.isArray(files)) throw new Error('VM 工作区清单无效');
     return files;
   }
 
@@ -214,6 +183,7 @@ class WorkspaceSync extends EventEmitter {
 
   static sameEntry(a, b) {
     if (!a || !b) return false;
+    if (a.hash && b.hash) return a.hash === b.hash;
     return a.size === b.size && Math.abs((a.mtimeMs || 0) - (b.mtimeMs || 0)) < 1500;
   }
 
@@ -224,8 +194,8 @@ class WorkspaceSync extends EventEmitter {
     for (const rel of all) {
       if (this.shouldExclude(rel)) continue;
       const b = base[rel], h = host[rel], v = vm[rel];
-      const hostChanged = !WorkspaceSync.sameEntry(h, b);
-      const vmChanged = !WorkspaceSync.sameEntry(v, b);
+      const hostChanged = !WorkspaceSync.sameEntry(h, b?.host || b);
+      const vmChanged = !WorkspaceSync.sameEntry(v, b?.vm || b);
       if (h && !v) {
         if (hostChanged) toVm.push(rel);           // 宿主改 + VM 删 → 以宿主为准（复活到 VM）
         else if (b) deletesHost.push(rel);         // 宿主未变、VM 删除 → 把删除同步到宿主
@@ -279,17 +249,19 @@ class WorkspaceSync extends EventEmitter {
   }
 
   /** 推送若干文件到 VM（tar over ssh） */
-  async push(rels) {
+  async push(rels, sizes) {
     if (!rels.length) return { files: 0, bytes: 0 };
     const inst = this._instance();
-    const sizes = this.scanHost();
+    sizes = sizes || await this.scanHost();
     let files = 0, bytes = 0;
     for (const batch of WorkspaceSync.batches(rels, sizes)) {
       const entries = [...dirEntriesFor(batch)];
       for (const rel of batch) {
         const abs = path.join(this.hostRoot, ...rel.split('/'));
         let data = null;
-        try { data = fs.readFileSync(abs); } catch (e) { this.emit('warn', `读取失败 ${rel}: ${e.message}`); continue; }
+        data = await fs.promises.readFile(abs);
+        if (sizes[rel]?.hash && require('crypto').createHash('sha256').update(data).digest('hex') !== sizes[rel].hash)
+          throw new Error('推送期间宿主文件发生变化: ' + rel);
         entries.push({ name: rel, data, mtime: Math.floor((sizes[rel] || {}).mtimeMs / 1000) });
         files++; bytes += data.length;
       }
@@ -302,10 +274,10 @@ class WorkspaceSync extends EventEmitter {
   }
 
   /** 从 VM 拉回若干文件；targetMap 可把某个 rel 落到别的宿主相对路径（冲突备份用） */
-  async pull(rels, targetMap = null) {
+  async pull(rels, targetMap = null, sizes = null, expectedHost = null) {
     if (!rels.length) return { files: 0, bytes: 0 };
     const inst = this._instance();
-    const sizes = await this.scanVm();
+    sizes = sizes || await this.scanVm();
     let files = 0, bytes = 0;
     for (const batch of WorkspaceSync.batches(rels, sizes)) {
       const list = batch.map((r) => shellQuote(r)).join(' ');
@@ -317,19 +289,28 @@ class WorkspaceSync extends EventEmitter {
       for (const e of entries) {
         if (e.type !== '0') continue;
         const rel = e.name.replace(/^\.\//, '');
+        if (!batch.includes(rel)) throw new Error('VM 返回了未请求的文件: ' + rel);
+        const digest = require('crypto').createHash('sha256').update(e.data).digest('hex');
+        if (sizes[rel]?.hash && digest !== sizes[rel].hash) throw new Error('拉取期间 VM 文件发生变化: ' + rel);
         const targetRel = (targetMap && targetMap.get(rel)) || rel;
         const abs = path.join(this.hostRoot, ...targetRel.split('/'));
+        if (expectedHost) {
+          let current = null;
+          try { current = await fs.promises.readFile(abs); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+          if (current === null ? !!expectedHost[rel] : !expectedHost[rel] || require('crypto').createHash('sha256').update(current).digest('hex') !== expectedHost[rel].hash)
+            throw new Error('拉取期间宿主文件发生变化，保留两端文件等待下次同步: ' + rel);
+        }
         try {
-          fs.mkdirSync(path.dirname(abs), { recursive: true });
-          fs.writeFileSync(abs, e.data);
+          await fs.promises.mkdir(path.dirname(abs), { recursive: true });
+          await fs.promises.writeFile(abs, e.data);
           // 保留 mtime（tar 记录的是整秒）：否则拉回后宿主 mtime=now，下次 diff 会误判"宿主改了"
           if (e.mtime) {
             const t = new Date(Number(e.mtime) * 1000);
-            try { fs.utimesSync(abs, t, t); } catch { /* ignore */ }
+            try { await fs.promises.utimes(abs, t, t); } catch { /* ignore */ }
           }
           files++; bytes += e.data.length;
         } catch (err) {
-          this.emit('warn', `写入失败 ${targetRel}: ${err.message}`);
+          throw new Error(`写入失败 ${targetRel}: ${err.message}`);
         }
       }
       this.emit('progress', { direction: 'pull', files, bytes });
@@ -342,14 +323,15 @@ class WorkspaceSync extends EventEmitter {
     if (!rels.length) return 0;
     const inst = this._instance();
     const list = rels.map((r) => shellQuote(path.posix.join(this.vmMount, r))).join(' ');
-    await inst.exec(`rm -f -- ${list}`, { timeoutMs: 60000 });
+    const result = await inst.exec(`rm -f -- ${list}`, { timeoutMs: 60000 });
+    if (!result.ok) throw new Error('VM 删除同步失败: ' + result.stderr);
     return rels.length;
   }
 
-  deleteInHost(rels) {
+  async deleteInHost(rels) {
     let n = 0;
     for (const rel of rels) {
-      try { fs.rmSync(path.join(this.hostRoot, ...rel.split('/')), { force: true }); n++; } catch { /* ignore */ }
+      await fs.promises.rm(path.join(this.hostRoot, ...rel.split('/')), { force: true }); n++;
     }
     return n;
   }
@@ -360,16 +342,16 @@ class WorkspaceSync extends EventEmitter {
   }
 
   /** 冲突：败方另存（保数据，不静默丢） */
-  preserveConflict(rel, loserSide, hostSnapshot, stamp) {
+  async preserveConflict(rel, loserSide, hostSnapshot, stamp) {
     const relSafe = this.conflictPathFor(rel, stamp || new Date().toISOString().replace(/[:.]/g, '-'));
     try {
       if (loserSide === 'host' && hostSnapshot) {
         const abs = path.join(this.hostRoot, ...relSafe.split('/'));
-        fs.mkdirSync(path.dirname(abs), { recursive: true });
-        fs.writeFileSync(abs, hostSnapshot);
+        await fs.promises.mkdir(path.dirname(abs), { recursive: true });
+        await fs.promises.writeFile(abs, hostSnapshot);
       }
       this.emit('warn', `冲突保留（${loserSide === 'host' ? '宿主' : 'VM'}侧副本）: ${relSafe}`);
-    } catch (e) { this.emit('warn', '冲突保留失败: ' + e.message); }
+    } catch (e) { throw new Error('冲突保留失败: ' + e.message); }
   }
 
   // ---------------------------------------------------------------- 主入口
@@ -386,52 +368,57 @@ class WorkspaceSync extends EventEmitter {
   }
 
   async _syncOnce({ direction = 'both', reason = 'manual' } = {}) {
-    if (!this.hostRoot || !fs.existsSync(this.hostRoot)) {
+    if (!this.hostRoot) {
       return { ok: false, error: '工作区目录不存在: ' + this.hostRoot };
     }
     const t0 = nowMs();
     this.emit('sync-start', { direction, reason });
     try {
-      const host = this.scanHost();
-      const vm = await this.scanVm();
+      this._stats.skipped = [];
+      const [host, vm] = await Promise.all([this.scanHost(), this.scanVm()]);
       const d = this.diff(host, vm);
 
       let toVm = d.toVm, toHost = d.toHost;
       if (direction === 'push') toHost = [];
       if (direction === 'pull') toVm = [];
 
-      const beforePull = toHost.length ? new Map(toHost.map((rel) => [rel, this._readHostFileSafe(rel)])) : new Map();
+      const beforePull = new Map();
+      for (const conflict of d.conflicts.filter(c => c.winner === 'vm' && toHost.includes(c.rel))) {
+        beforePull.set(conflict.rel, await fs.promises.readFile(path.join(this.hostRoot, ...conflict.rel.split('/'))));
+      }
       const stamp = new Date().toISOString().replace(/[:.]/g, '-');
 
       // 冲突处理：无论哪一方胜出，败方内容都保留到 .cibyp-conflicts/（不静默丢数据）
       const hostWins = d.conflicts.filter((c) => c.winner === 'host' && direction !== 'pull');
       if (hostWins.length) {
         const targetMap = new Map(hostWins.map((c) => [c.rel, this.conflictPathFor(c.rel, stamp)]));
-        await this.pull(hostWins.map((c) => c.rel), targetMap);
+        if (!this.dryRun) await this.pull(hostWins.map((c) => c.rel), targetMap, vm);
         for (const c of hostWins) this.emit('warn', `冲突保留（VM 侧副本）: ${this.conflictPathFor(c.rel, stamp)}`);
       }
 
       let pushRes = { files: 0, bytes: 0 }, pullRes = { files: 0, bytes: 0 };
-      if (toVm.length) pushRes = await this.push(toVm);
-      if (toHost.length) {
+      if (toVm.length && !this.dryRun) pushRes = await this.push(toVm, host);
+      if (toHost.length && !this.dryRun) {
         for (const c of d.conflicts) {
-          if (c.winner === 'vm' && beforePull.has(c.rel)) this.preserveConflict(c.rel, 'host', beforePull.get(c.rel), stamp);
+          if (c.winner === 'vm' && beforePull.has(c.rel)) await this.preserveConflict(c.rel, 'host', beforePull.get(c.rel), stamp);
         }
-        pullRes = await this.pull(toHost);
+        pullRes = await this.pull(toHost, null, vm, host);
       }
-      const deletedVm = this.dryRun ? 0 : await this.deleteInVm(d.deletesVm);
-      const deletedHost = this.dryRun ? 0 : this.deleteInHost(d.deletesHost);
+      const deletedVm = this.dryRun || direction === 'pull' ? 0 : await this.deleteInVm(d.deletesVm);
+      const deletedHost = this.dryRun || direction === 'push' ? 0 : await this.deleteInHost(d.deletesHost);
 
       // 重新扫描并落 baseline（只记录"两侧都成功"的文件，失败的下次重试）
-      const hostAfter = this.scanHost();
-      const vmAfter = await this.scanVm();
-      const files = {};
+      const [hostAfter, vmAfter] = await Promise.all([this.scanHost(), this.scanVm()]);
+      // A directional sync must retain the last consensus for changes awaiting
+      // the other direction. Dropping it turns the next legitimate edit into a conflict.
+      const files = Object.assign(Object.create(null), this.baseline.files);
+      for (const rel of Object.keys(files)) if (!hostAfter[rel] && !vmAfter[rel]) delete files[rel];
       for (const rel of Object.keys(hostAfter)) {
         if (vmAfter[rel] && WorkspaceSync.sameEntry(hostAfter[rel], vmAfter[rel])) {
-          files[rel] = { size: hostAfter[rel].size, mtimeMs: hostAfter[rel].mtimeMs };
+          files[rel] = { host: hostAfter[rel], vm: vmAfter[rel] };
         }
       }
-      this._saveBaseline(files);
+      if (!this.dryRun) await this._saveBaseline(files);
 
       this._stats = {
         ...this._stats,
@@ -462,15 +449,6 @@ class WorkspaceSync extends EventEmitter {
       this.emit('sync-error', out);
       return out;
     }
-  }
-
-  _readHostFileSafe(rel) {
-    try {
-      const abs = path.join(this.hostRoot, ...rel.split('/'));
-      const st = fs.statSync(abs);
-      if (st.size > 4 * 1024 * 1024) return null; // 冲突备份上限 4MB
-      return fs.readFileSync(abs);
-    } catch { return null; }
   }
 
   // ---------------------------------------------------------------- SSH 管道

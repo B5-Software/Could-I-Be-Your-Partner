@@ -889,6 +889,7 @@ ${affectionDesc}
   _accumulateUsage(usage, model) {
     if (!usage || typeof usage !== 'object') return;
     try {
+      if (typeof TokenUsage !== 'undefined') usage = TokenUsage.normalize(usage);
       const pt = usage.prompt_tokens || 0;
       const ct = usage.completion_tokens || 0;
       const tt = usage.total_tokens || (pt + ct);
@@ -902,6 +903,12 @@ ${affectionDesc}
       this.sessionUsage.total += tt;
       this.sessionUsage.cached += cached;
       this.sessionUsage.cacheCreation += cacheCreation;
+      const cacheKnown = usage._cacheReported ?? (usage.prompt_tokens_details?.cached_tokens != null || usage.cache_read_input_tokens != null);
+      if (cacheKnown && !usage._estimated) {
+        this.sessionUsage.cacheReportedPrompt = (this.sessionUsage.cacheReportedPrompt || 0) + pt;
+        this.sessionUsage.cacheReports = (this.sessionUsage.cacheReports || 0) + 1;
+      }
+      this.sessionUsage.lastCache = { reported: !!cacheKnown && !usage._estimated, prompt: pt, cached };
       // 任意一次 API 响应未返回 usage（使用估算）→ 整个会话统计标记为估算
       if (usage._estimated) this.sessionUsage.estimated = true;
       // 按模型分桶：混合模型会话的费用/用量正确归属
@@ -1943,6 +1950,9 @@ ${affectionDesc}
       this.sessionUsage.cached = Number(savedUsage.cached) || 0;
       this.sessionUsage.cacheCreation = Number(savedUsage.cacheCreation) || 0;
       this.sessionUsage.estimated = savedUsage.estimated === true;
+      this.sessionUsage.cacheReportedPrompt = Number(savedUsage.cacheReportedPrompt) || (savedUsage.cached > 0 && !savedUsage.estimated ? Number(savedUsage.prompt) || 0 : 0);
+      this.sessionUsage.cacheReports = Number(savedUsage.cacheReports) || (savedUsage.cached > 0 && !savedUsage.estimated ? 1 : 0);
+      this.sessionUsage.lastCache = savedUsage.lastCache || null;
     }
     // 恢复持久化的会话累计工作时长（旧版会话无该字段时从 0 开始）
     this.workingMs = Math.max(0, Number(conversation && conversation.workingMs) || 0);
@@ -3068,7 +3078,7 @@ ${affectionDesc}
       const FT_ALIAS = { bash: 'runShellScriptCode', read: 'readFile', edit: 'editFile', glob: 'localSearch', grep: 'searchInFiles' };
       if (FT_ALIAS[name]) {
         const a = args || {};
-        if (name === 'bash') args = { script: String(a.command || a.script || '') };
+        if (name === 'bash') args = { ...a, script: String(a.command || a.script || '') };
         else if (name === 'read') args = { path: a.filePath || a.path, ...(a.encoding ? { encoding: a.encoding } : {}) };
         else if (name === 'edit') {
           args = {
@@ -3496,7 +3506,9 @@ ${affectionDesc}
         }
         case 'runShellScriptCode': {
           return await this._execWithSandboxEscalation('runShellScriptCode', (mode) =>
-            window.api.runShell(args.script, this._scriptCwd(), mode));
+            window.api.runShell(args.script, this._scriptCwd(), mode, {
+              jobId: args.jobId, action: args.action, yieldMs: args.yieldMs, sessionKey: this.sessionKey
+            }));
         }
         case 'makeTerminal': {
           // 传入工作目录：Chat 模式用 workspacePath，Code 模式用 codeWorkspacePath
@@ -3671,7 +3683,7 @@ ${affectionDesc}
               window.api.runPython(code, this._scriptCwd(), mode));
           } else if (ext === 'sh' || ext === 'bash' || ext === 'zsh' || ext === 'ps1' || ext === 'bat' || ext === 'cmd' || declaredRuntime === 'shell') {
             runRes = await this._execWithSandboxEscalation('runShellScriptCode', (mode) =>
-              window.api.runShell(code, this._scriptCwd(), mode));
+              window.api.runShell(code, this._scriptCwd(), mode, { sessionKey: this.sessionKey }));
           } else if (ext === 'js' || ext === 'mjs' || ext === 'cjs' || declaredRuntime === 'javascript' || declaredRuntime === 'node') {
             const needsNode = declaredRuntime === 'node'
               || ext === 'mjs'

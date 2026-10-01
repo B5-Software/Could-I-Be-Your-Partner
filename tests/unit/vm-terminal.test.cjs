@@ -101,8 +101,9 @@ test('workspace scans quote shell metacharacters in directory names literally', 
   const mount = "/workspace/student's $(literal) `notes`";
   const sync = new WorkspaceSync({ vmService: vm, hostRoot: root, vmMount: mount });
   t.mock.method(vm.instance, 'exec', async (command) => {
-    assert.ok(command.startsWith("find '/workspace/student'\\''s $(literal) `notes`' "));
-    return { ok: true, stdout: `${Math.floor(Date.now() / 1000)}\n` };
+    assert.ok(command.startsWith('node -e '));
+    assert.ok(command.includes("student'\\''s $(literal) `notes`"));
+    return { ok: true, stdout: '{}' };
   });
   assert.deepEqual(await sync.scanVm(), {});
 });

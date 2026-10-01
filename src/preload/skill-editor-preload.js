@@ -31,7 +31,7 @@ contextBridge.exposeInMainWorld('skillEditorAPI', {
 
   runJS: (code) => ipcRenderer.invoke('code:runJS', code),
   runNodeJS: (code) => ipcRenderer.invoke('code:runNodeJS', code),
-  runShell: (script) => ipcRenderer.invoke('code:runShell', script),
+  runShell: (script, options) => ipcRenderer.invoke('code:runShell', script, undefined, undefined, options),
   runPython: (code) => ipcRenderer.invoke('code:runPython', code),
 
   readFile: (p, encoding) => ipcRenderer.invoke('fs:readFile', p, encoding),

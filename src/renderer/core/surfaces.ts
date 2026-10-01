@@ -31,16 +31,26 @@ export function motionEnabled(): boolean {
 /** A cancelled exit must never hide a surface that has already reopened. */
 export function setSurfaceOpen(element: HTMLElement, open: boolean, mirror?: Mirror): void {
   const previous = transitions.get(element);
-  const transform = getComputedStyle(element).transform;
+  const style = getComputedStyle(element);
+  const transform = style.transform;
+  const marginRight = style.marginRight;
+  const reservesSpace = element.classList.contains('todo-panel');
   previous?.cancel();
   transitions.delete(element);
   element.dataset.surfaceOpen = String(open);
   element.inert = !open;
   element.setAttribute('aria-hidden', String(!open));
   if (open) element.classList.remove('hidden');
+  // The sidebar has a fixed content width. Animate its reserved space on the same
+  // timeline as its translation, so the conversation never snaps at either end.
+  const width = reservesSpace ? element.getBoundingClientRect().width : 18;
+  element.style.transform = reservesSpace || open ? 'translateX(0)' : `translateX(${width}px)`;
+  if (reservesSpace) element.style.marginRight = open ? '0px' : `${-width}px`;
+  element.style.willChange = reservesSpace ? 'transform, margin-right' : 'transform';
   const finish = () => {
     if (element.dataset.surfaceOpen !== String(open)) return;
     element.classList.toggle('hidden', !open);
+    element.style.willChange = '';
     mirror?.(element);
   };
   mirror?.(element);
@@ -51,9 +61,21 @@ export function setSurfaceOpen(element: HTMLElement, open: boolean, mirror?: Mir
   const animation = element.animate(
     [
       {
-        transform: previous ? transform : open ? 'translateX(18px)' : 'translateX(0)',
+        transform: reservesSpace
+          ? 'translateX(0)'
+          : previous
+            ? transform
+            : open
+              ? `translateX(${width}px)`
+              : 'translateX(0)',
+        ...(reservesSpace
+          ? { marginRight: previous ? marginRight : open ? `${-width}px` : '0px' }
+          : {}),
       },
-      { transform: open ? 'translateX(0)' : 'translateX(18px)' },
+      {
+        transform: reservesSpace || open ? 'translateX(0)' : `translateX(${width}px)`,
+        ...(reservesSpace ? { marginRight: open ? '0px' : `${-width}px` } : {}),
+      },
     ],
     { duration: 180, easing: 'cubic-bezier(.2,.8,.2,1)' },
   );

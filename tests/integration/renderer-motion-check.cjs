@@ -43,7 +43,8 @@ module.exports = async function checkMotion(webContents) {
     const sidebar = document.getElementById('todo-panel');
     document.getElementById('btn-todo-sidebar').click();
     const sliding = sidebar.getAnimations();
-    check(sliding.length && sliding.every(animation => framesUse(animation, 'transform')), 'sidebar must only slide horizontally');
+    check(sliding.length && sliding.every(animation => animation.effect.getKeyframes().every(frame =>
+      Object.keys(frame).every(key => ['offset', 'computedOffset', 'easing', 'composite', 'transform', 'marginRight'].includes(key)))), 'sidebar must slide and reserve horizontal space without fading');
     check(getComputedStyle(sidebar).opacity === '1', 'sidebar must not fade');
     document.documentElement.dataset.animations = 'off';
     document.getElementById('btn-close-todo').click();

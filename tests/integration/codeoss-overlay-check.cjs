@@ -69,10 +69,10 @@ module.exports = async function checkOverlay(renderer, service, preview, waitFor
         `({accent: getComputedStyle(document.documentElement).getPropertyValue('--accent').trim(), background: getComputedStyle(document.getElementById('session-tab-popover')).backgroundColor})`,
       );
       assert.deepEqual(colors, expected, 'card must follow the host theme in real time');
-      assert.equal(
-        await service.overlay.view.webContents.executeJavaScript('document.hidden'),
-        false,
-        'overlay must have an active Chromium display surface',
+      // Native setVisible and Chromium's visibility event are asynchronous.
+      await waitFor(
+        async () => !(await service.overlay.view.webContents.executeJavaScript('document.hidden')),
+        5000,
       );
       fs.writeFileSync(
         path.join(preview, 'popover-' + mode + '.png'),

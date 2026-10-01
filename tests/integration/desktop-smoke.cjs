@@ -120,6 +120,11 @@ ipcMain.once('app:renderer-ready', (event) => {
         true,
       );
       event.sender.setBackgroundThrottling(false);
+      // Control the system preference for layout interpolation as well as motion checks.
+      event.sender.debugger.attach('1.3');
+      await event.sender.debugger.sendCommand('Emulation.setEmulatedMedia', {
+        features: [{ name: 'prefers-reduced-motion', value: 'no-preference' }],
+      });
       const tools = await require('./renderer-tool-check.cjs')(event.sender);
       console.log('[desktop-smoke] Tool discovery and permissions:', tools);
       const workspace = await require('./renderer-workspace-check.cjs')(event.sender);
@@ -128,10 +133,6 @@ ipcMain.once('app:renderer-ready', (event) => {
       console.log('[desktop-smoke] Settings interactions:', settingsCheck);
       // Hosted Windows runners can default to reduced motion. Exercise both
       // system preferences explicitly instead of depending on this machine's UI.
-      event.sender.debugger.attach('1.3');
-      await event.sender.debugger.sendCommand('Emulation.setEmulatedMedia', {
-        features: [{ name: 'prefers-reduced-motion', value: 'no-preference' }],
-      });
       const motion = await require('./renderer-motion-check.cjs')(event.sender);
       console.log('[desktop-smoke] Motion policy:', motion);
       event.sender.debugger.detach();

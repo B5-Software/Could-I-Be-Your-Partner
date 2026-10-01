@@ -4,9 +4,17 @@ const vm = require('node:vm');
 const fs = require('node:fs');
 const path = require('node:path');
 const { ContextManager } = require('../../src/renderer/js/context-manager');
+const TokenUsage = require('../../src/shared/token-usage');
 
 function agentFixture(api = {}) {
-  const scope = { ContextManager, module: { exports: {} }, window: { api }, console, process };
+  const scope = {
+    ContextManager,
+    TokenUsage,
+    module: { exports: {} },
+    window: { api },
+    console,
+    process,
+  };
   vm.runInNewContext(
     fs.readFileSync(path.join(__dirname, '../../src/renderer/js/agent.js'), 'utf8'),
     scope,
@@ -40,6 +48,40 @@ test('runtime changes are coalesced at provider boundaries and preserve every ad
   );
   assert.equal(cm.admitContextUpdates(), false, 'unchanged observations never grow context');
   assert.equal(cm.realBasis.promptTokens, 100, 'append-only updates keep the measured baseline');
+});
+
+test('measured cache input and last-request reporting survive saving without treating missing usage as a miss', async () => {
+  let saved;
+  const agent = agentFixture({
+    historySave: async (payload) => {
+      saved = structuredClone(payload);
+    },
+  });
+  agent.conversationId = 'cache-fixture';
+  agent._accumulateUsage(
+    {
+      input_tokens: 100,
+      output_tokens: 10,
+      cache_read_input_tokens: 800,
+      cache_creation_input_tokens: 100,
+    },
+    'claude',
+  );
+  agent._accumulateUsage(
+    { prompt_tokens: 200, completion_tokens: 10, prompt_tokens_details: { cached_tokens: 0 } },
+    'other',
+  );
+  agent._accumulateUsage({ prompt_tokens: 300, completion_tokens: 10 }, 'unknown');
+  assert.equal(agent.sessionUsage.prompt, 1500);
+  assert.equal(agent.sessionUsage.cached, 800);
+  assert.equal(agent.sessionUsage.cacheReportedPrompt, 1200);
+  assert.equal(agent.sessionUsage.cacheReports, 2);
+  assert.equal(agent.sessionUsage.lastCache.reported, false);
+  await agent.saveToHistory();
+  const restored = agentFixture({});
+  await restored.loadFromHistory(saved);
+  assert.equal(restored.sessionUsage.cacheReportedPrompt, 1200);
+  assert.equal(restored.sessionUsage.lastCache.reported, false);
 });
 
 test('unavailable sources retain guidance; explicit removal revokes it; other sessions are isolated', () => {

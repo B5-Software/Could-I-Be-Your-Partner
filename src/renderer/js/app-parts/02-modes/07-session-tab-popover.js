@@ -91,6 +91,10 @@
       ['数据来源', stats.exact ? 'API 实测' : '估算（下一条回复后校准）'],
       ['本会话累计 Token', ufmt(stats.usage.total || 0)]
     ];
+    const reportedPrompt = stats.usage.cacheReportedPrompt || (stats.usage.cached > 0 && !stats.usage.estimated ? stats.usage.prompt : 0);
+    rows.push(['缓存命中（已报告输入）', stats.usage.cacheReports || reportedPrompt
+      ? `${ufmt(stats.usage.cached || 0)} (${reportedPrompt > 0 ? (Math.min(1, (stats.usage.cached || 0) / reportedPrompt) * 100).toFixed(1) : '0.0'}%)`
+      : stats.usage.total ? '接口未返回缓存数据' : '尚无请求用量']);
     return rows.map(([label, value]) => `<div class="stp-ctx-row"><span>${escapeHtml(label)}</span><b>${value}</b></div>`).join('')
       + `<div class="stp-ctx-bar">`
       + `<div class="stp-ctx-bar-reserve ${level}" style="width:${totalPct.toFixed(1)}%"></div>`

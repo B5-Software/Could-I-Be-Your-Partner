@@ -11,6 +11,7 @@
 'use strict';
 
 const ocHeaders = require('./opencode-headers');
+const TokenUsage = require('../shared/token-usage');
 
 const ZEN_BASE = 'https://opencode.ai/zen/v1';
 const OC_GO_BASE = 'https://opencode.ai/zen/go/v1';
@@ -216,7 +217,7 @@ function zenModelProviderType(modelId) {
 const FREE_TIER_CORE_TOOLS = ['bash', 'edit', 'glob', 'grep', 'read'];
 
 const FREE_TIER_AGENT_TOOLS = {
-  bash: { type: 'function', function: { name: 'bash', description: '在终端执行 shell 命令并返回输出', parameters: { type: 'object', properties: { command: { type: 'string', description: '要执行的命令' } }, required: ['command'] } } },
+  bash: { type: 'function', function: { name: 'bash', description: '执行 shell 命令；长命令或服务器返回 jobId 后继续运行。用 jobId 查询输出，action=stop 停止，action=list 列出当前会话任务。等待结束不会杀进程，服务器可直接前台启动。', parameters: { type: 'object', properties: { command: { type: 'string', description: '新任务命令，查询时省略' }, jobId: { type: 'string' }, action: { type: 'string', enum: ['poll', 'stop', 'list'] }, yieldMs: { type: 'number', description: '等待毫秒数，上限10000' } } } } },
   read: { type: 'function', function: { name: 'read', description: '读取文件内容', parameters: { type: 'object', properties: { filePath: { type: 'string' }, offset: { type: 'number' }, limit: { type: 'number' } }, required: ['filePath'] } } },
   edit: { type: 'function', function: { name: 'edit', description: '按字符串替换编辑文件', parameters: { type: 'object', properties: { filePath: { type: 'string' }, oldString: { type: 'string' }, newString: { type: 'string' }, replaceAll: { type: 'boolean' } }, required: ['filePath', 'oldString', 'newString'] } } },
   glob: { type: 'function', function: { name: 'glob', description: '按通配符查找文件', parameters: { type: 'object', properties: { pattern: { type: 'string' }, path: { type: 'string' } }, required: ['pattern'] } } },
@@ -529,14 +530,7 @@ function parseResponsesResponse(data) {
       },
       finish_reason: finishReason
     }],
-    usage: {
-      prompt_tokens: usage.input_tokens || 0,
-      completion_tokens: usage.output_tokens || 0,
-      total_tokens: (usage.input_tokens || 0) + (usage.output_tokens || 0),
-      // 透传 Responses API 缓存 / 推理明细，供 computeUsageCost 计费
-      cache_read_input_tokens: usage.input_tokens_details?.cached_tokens || 0,
-      reasoning_output_tokens: usage.output_tokens_details?.reasoning_tokens || 0
-    }
+    usage: TokenUsage.normalize(usage, 'responses')
   };
 }
 
@@ -764,6 +758,7 @@ function parseLLMResponse(data, transport) {
       }
     }
   }
+  if (data?.usage) data.usage = TokenUsage.normalize(data.usage, 'openai');
   return data;
 }
 
@@ -791,14 +786,7 @@ function parseAnthropicResponse(data) {
       },
       finish_reason: data.stop_reason === 'end_turn' ? 'stop' : (data.stop_reason || 'stop')
     }],
-    usage: {
-      prompt_tokens: data.usage?.input_tokens || 0,
-      completion_tokens: data.usage?.output_tokens || 0,
-      total_tokens: (data.usage?.input_tokens || 0) + (data.usage?.output_tokens || 0),
-      // 透传 Anthropic 原生缓存字段，供 computeUsageCost 计算缓存费用
-      cache_read_input_tokens: data.usage?.cache_read_input_tokens || 0,
-      cache_creation_input_tokens: data.usage?.cache_creation_input_tokens || 0
-    }
+    usage: TokenUsage.normalize(data.usage, 'anthropic')
   };
 }
 

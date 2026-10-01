@@ -160,7 +160,10 @@
     const pfx = su.estimated ? '~' : '';
     // ≥1M 用 M（非 10M），≥1G/T/P 用对应单位（防御性编程）
     const fmt = (n) => fmtTokenCount(n, pfx);
-    const cachedPct = su.prompt > 0 ? (su.cached / su.prompt * 100).toFixed(1) : '0.0';
+    const reportedPrompt = su.cacheReportedPrompt || (su.cached > 0 && !su.estimated ? su.prompt : 0);
+    const cachedPct = reportedPrompt > 0 ? (Math.min(1, su.cached / reportedPrompt) * 100).toFixed(1) : '0.0';
+    const cacheLabel = su.cacheReports || reportedPrompt ? `${fmt(su.cached)} (${cachedPct}%)` : su.total ? '接口未返回缓存数据' : '尚无请求用量';
+    const lastCache = su.lastCache;
     const esc = (s) => String(s ?? '').replace(/[<>&"']/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&#39;' }[c]));
     // 按模型分桶：混合模型会话按各自单价计价并求和
     const byModel = agentInstance?.sessionUsageByModel || {};
@@ -213,7 +216,8 @@
       <div class="context-tooltip-row"><span>　输入</span><span>${fmt(su.prompt)}</span></div>
       <div class="context-tooltip-row"><span>　输出</span><span>${fmt(su.completion)}</span></div>
       <div class="context-tooltip-row"><span>　总计</span><span>${fmt(su.total)}</span></div>
-      ${su.cached > 0 ? `<div class="context-tooltip-row"><span>　缓存命中</span><span>${fmt(su.cached)} (${cachedPct}%)</span></div>` : ''}
+      <div class="context-tooltip-row"><span>　缓存命中（已报告输入）</span><span>${cacheLabel}</span></div>
+      ${lastCache ? `<div class="context-tooltip-row"><span>　最近请求命中</span><span>${lastCache.reported ? `${fmt(lastCache.cached)} (${lastCache.prompt > 0 ? (Math.min(1, lastCache.cached / lastCache.prompt) * 100).toFixed(1) : '0.0'}%)` : '接口未返回缓存数据'}</span></div>` : ''}
       ${su.cacheCreation > 0 ? `<div class="context-tooltip-row"><span>　缓存创建</span><span>${fmt(su.cacheCreation || 0)}</span></div>` : ''}
       ${perModelRows}
       ${costRow}

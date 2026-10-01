@@ -2310,12 +2310,6 @@ async function runScriptInVm(script, cwd, interpreter) {
     if (!inst || inst.state !== 'ready') return { ok: false, error: '虚拟机未就绪', location: 'vm' };
     const shared = (settings.runtime || {}).workspaceMode !== 'isolated';
     let syncNote = '';
-    if (shared) {
-      try {
-        const pre = await vmService.syncWorkspace({ direction: 'push', reason: 'pre-tool' });
-        if (pre && !pre.ok && pre.error) syncNote += `[工作区同步] ${pre.error}\n`;
-      } catch (e) { syncNote += `[工作区同步] ${e.message}\n`; }
-    }
     const ext = interpreter === 'python' ? 'py' : interpreter === 'node' ? 'js' : 'sh';
     const remote = `/tmp/cibyp-run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
     const sftp = await inst.sftp();
@@ -2418,35 +2412,22 @@ ipcMain.handle('code:runNodeJS', (_, code, cwd, sandboxMode) => {
 });
 
 // ---- IPC: Run Shell Script ----
-ipcMain.handle('code:runShell', (_, script, cwd, sandboxMode) => {
-  if (vmLocationActive()) return runScriptInVm(script, cwd, 'shell');
-  return new Promise((resolve) => {
-    const { execFile } = require('child_process');
-    const tmpFile = path.join(os.tmpdir(), `script_${Date.now()}${process.platform === 'win32' ? '.ps1' : '.sh'}`);
-    fs.writeFileSync(tmpFile, script, 'utf-8');
-    let shell = process.platform === 'win32' ? 'powershell.exe' : '/bin/bash';
-    let args = process.platform === 'win32' ? ['-NoProfile', '-NonInteractive', '-File', tmpFile] : [tmpFile];
-    let confined = null;
-    const wrapped = sandboxConfineFor(sandboxMode, cwd, [shell, ...args]);
-    if (wrapped.error) {
-      try { fs.unlinkSync(tmpFile); } catch {}
-      return resolve({ ok: false, error: wrapped.error.message, code: wrapped.error.code, sandboxUnavailable: true });
-    }
-    shell = wrapped.argv[0];
-    args = wrapped.argv.slice(1);
-    confined = wrapped;
-    const execOpts = { timeout: 120000, maxBuffer: 8 * 1024 * 1024 };
-    if (cwd && typeof cwd === 'string' && fs.existsSync(cwd)) execOpts.cwd = cwd;
-    execFile(shell, args, execOpts, (err, stdout, stderr) => {
-      try { fs.unlinkSync(tmpFile); } catch {}
-      if (err) {
-        resolve({ ok: false, error: err.message, stderr, sandboxDenied: sandboxRunner.isSandboxDenial(confined?.confined, stderr) });
-      } else {
-        resolve({ ok: true, output: stdout, stderr, sandboxed: !!confined?.confined });
-      }
-    });
-  });
+const shellJobs = new (require('./services/shell-jobs').ShellJobs)({
+  getVmService: () => vmService,
+  isVmOperation: vmLocationActive,
+  confine: sandboxConfineFor,
+  isSandboxDenial: (confined, stderr) => sandboxRunner.isSandboxDenial(confined, stderr),
 });
+const shellJobWindows = new WeakSet();
+ipcMain.handle('code:runShell', (event, script, cwd, sandboxMode, options) => {
+  const owner = options?.sessionKey || 'window:' + event.sender.id;
+  if (!options?.sessionKey && !shellJobWindows.has(event.sender)) {
+    shellJobWindows.add(event.sender);
+    event.sender.once('destroyed', () => { shellJobs.releaseOwner(owner).catch(() => {}); });
+  }
+  return shellJobs.run(script, cwd, sandboxMode, { ...options, sessionKey: owner });
+});
+app.on('will-quit', () => { shellJobs.dispose().catch(() => {}); });
 
 // ---- IPC: Run Python Script ----
 ipcMain.handle('code:runPython', (_, script, cwd, sandboxMode) => {
@@ -4310,63 +4291,76 @@ function logVmRoutingSelfCheck() {
 }
 setTimeout(logVmRoutingSelfCheck, 3000);
 
-app.on('before-quit', async (event) => {
-  isQuitting = true; // 标记真正退出，避免 close 事件再次拦截
-  closeSplash();
-  // 将防抖队列中的历史保存立即落盘，避免退出时丢失
-  flushPendingHistorySaves();
-  // 优雅退出时仍在运行的会话：Agent 随进程终止，标记"异常退出"（本次运行触碰过的文件）
-  try {
-    const fixed = markActiveHistoriesCrashed(_bootTime);
-    if (fixed > 0) console.log(`[history] ${fixed} running session(s) marked crashed on quit`);
-  } catch { /* ignore */ }
-  // 记录优雅退出时间戳：下次启动只清扫该时刻之后变动的历史
-  writeLastCleanExit(Date.now());
-  try { appLog.flush(); } catch { /* ignore */ }
-  try { decisionService.flushPersist(); } catch { /* ignore */ }
-  try { flushSettingsPersist(); } catch { /* ignore */ }
-  try { await disposeOcrEngines(); } catch { /* ignore */ }
-  // CIBYP-IM：退出前立即落盘加密状态（ratchet/OPK 变更不丢）
-  try { saveCibypImState(true); } catch { /* ignore */ }
-  await mcpService.stopAllMcpServers();
-  // 虚拟机沙盒：退出时优雅关机（默认开启；上限 10s 避免拖住退出）
-  try {
-    const vmCfg = (settings.runtime || {}).vm || {};
-    if (vmService.instance && vmCfg.shutdownOnExit !== false) {
-      await vmService.instance.stop({ timeoutMs: 10000 }).catch(() => {});
-    }
-  } catch { /* ignore */ }
-  if (webControlService.running) {
-    webControlService.stop().catch(() => {});
-  }
-  // 清理 Playwright 横幅窗口
-  pwService._hidePwBanner();
-  // 关闭 aria2 子进程（保存会话以便下次恢复未完成下载）
-  try { await aria2Manager.shutdown(); } catch {}
-  // 清理托盘图标
-  if (appTray) {
-    try { appTray.destroy(); } catch {}
-    appTray = null;
-  }
-  // 语音子系统（注销全局热键、关闭隐藏采集窗/语音条、终止推理 worker）
-  if (voiceIpc) {
-    try { await voiceIpc.dispose(); } catch {}
-    voiceIpc = null;
-  }
-  // 如果主窗口还存在且尚未确认 pending 保存完成，先阻止退出，请求渲染器保存
-  if (mainWindow && !mainWindow.isDestroyed() && !pendingSaveDone) {
-    event.preventDefault();
+// Electron does not await async event listeners. Hold the first quit synchronously,
+// finish CIBYP cleanup once, then let Code-OSS close its windows and databases.
+let quitPreparation = null;
+let quitPrepared = false;
+app.on('before-quit', (event) => {
+  isQuitting = true;
+  if (quitPrepared) return;
+  event.preventDefault();
+  if (quitPreparation) return;
+  quitPreparation = (async () => {
+    closeSplash();
+    // 将防抖队列中的历史保存立即落盘，避免退出时丢失
+    flushPendingHistorySaves();
+    // 优雅退出时仍在运行的会话：Agent 随进程终止，标记"异常退出"（本次运行触碰过的文件）
     try {
-      mainWindow.webContents.send('agent:save-pending');
-    } catch { /* 窗口可能已销毁 */ }
-    // 等待渲染器响应（最多 3 秒），然后强制退出
-    const startWait = Date.now();
-    const checkInterval = 100;
-    while (!pendingSaveDone && Date.now() - startWait < 3000) {
-      await new Promise(r => setTimeout(r, checkInterval));
+      const fixed = markActiveHistoriesCrashed(_bootTime);
+      if (fixed > 0) console.log(`[history] ${fixed} running session(s) marked crashed on quit`);
+    } catch { /* ignore */ }
+    // 记录优雅退出时间戳：下次启动只清扫该时刻之后变动的历史
+    writeLastCleanExit(Date.now());
+    try { appLog.flush(); } catch { /* ignore */ }
+    try { decisionService.flushPersist(); } catch { /* ignore */ }
+    try { flushSettingsPersist(); } catch { /* ignore */ }
+    try { await disposeOcrEngines(); } catch { /* ignore */ }
+    // CIBYP-IM：退出前立即落盘加密状态（ratchet/OPK 变更不丢）
+    try { saveCibypImState(true); } catch { /* ignore */ }
+    try { await shellJobs.dispose(); } catch (error) { console.error('[shell] Exit cleanup failed:', error); }
+    try { await mcpService.stopAllMcpServers(); } catch (error) { console.error('[mcp] Exit cleanup failed:', error); }
+    // 虚拟机沙盒：退出时优雅关机（默认开启；上限 10s 避免拖住退出）
+    try {
+      const vmCfg = (settings.runtime || {}).vm || {};
+      if (vmService.instance && vmCfg.shutdownOnExit !== false) {
+        await vmService.instance.stop({ timeoutMs: 10000 }).catch(() => {});
+      }
+    } catch { /* ignore */ }
+    if (webControlService.running) {
+      webControlService.stop().catch(() => {});
     }
-    // 保存完成或超时，触发真正的退出
-    pendingSaveDone = true;
+    // 清理 Playwright 横幅窗口
+    pwService._hidePwBanner();
+    // 关闭 aria2 子进程（保存会话以便下次恢复未完成下载）
+    try { await aria2Manager.shutdown(); } catch {}
+    // 清理托盘图标
+    if (appTray) {
+      try { appTray.destroy(); } catch {}
+      appTray = null;
+    }
+    // 语音子系统（注销全局热键、关闭隐藏采集窗/语音条、终止推理 worker）
+    if (voiceIpc) {
+      try { await voiceIpc.dispose(); } catch {}
+      voiceIpc = null;
+    }
+    // 如果主窗口还存在且尚未确认 pending 保存完成，先阻止退出，请求渲染器保存
+    if (mainWindow && !mainWindow.isDestroyed() && !pendingSaveDone) {
+      try {
+        mainWindow.webContents.send('agent:save-pending');
+      } catch { /* 窗口可能已销毁 */ }
+      // 等待渲染器响应（最多 3 秒），然后继续 Electron 正常退出
+      const startWait = Date.now();
+      const checkInterval = 100;
+      while (!pendingSaveDone && Date.now() - startWait < 3000) {
+        await new Promise(r => setTimeout(r, checkInterval));
+      }
+      // 保存完成或超时，允许下一次退出
+      pendingSaveDone = true;
+    }
+  })().catch((error) => {
+    console.error('[main] Exit preparation failed:', error);
+  }).finally(() => {
+    quitPrepared = true;
     app.quit();
-  }
+  });
 });

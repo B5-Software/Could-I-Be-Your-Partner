@@ -61,8 +61,8 @@
       fromCibyp: (r) => ({ ok: !!r?.ok })
     },
     bash: {
-      toCibyp: (a) => ({ script: typeof a?.command === 'string' ? a.command : a?.script }),
-      fromCibyp: (r) => ({ stdout: r?.output ?? '', stderr: r?.stderr ?? '', ok: !!r?.ok })
+      toCibyp: (a) => ({ ...a, script: typeof a?.command === 'string' ? a.command : a?.script }),
+      fromCibyp: (r) => ({ ...r, stdout: r?.output ?? '', stderr: r?.stderr ?? '', ok: !!r?.ok })
     },
     web_search: {
       toCibyp: (a) => ({ query: a?.query }),

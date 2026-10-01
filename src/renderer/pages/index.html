@@ -526,7 +526,6 @@
           <button class="btn-secondary tools-mode-btn" data-tool-mode="babe" style="padding:4px 12px;font-size:0.85em;">Babe 模式工具</button>
         </div>
         <div class="tools-stats" id="tools-stats"></div>
-        <div id="computer-permissions-card" class="tool-auth-section" role="region" aria-label="电脑控制权限检测"></div>
         <div class="tools-groups" id="tools-groups"></div>
 
         <!-- 工具首次使用授权状态（Playwright / Computer Use）-->
@@ -537,6 +536,8 @@
             <!-- 动态填充：每项 = 工具类别 + 当前状态 + 撤销按钮 -->
           </div>
         </div>
+
+        <div id="computer-permissions-card" class="tool-auth-section" role="region" aria-label="电脑控制权限检测"></div>
 
         <!-- 工具组模态框：点击组行打开，列出组内每个工具的 名称/描述/开关 -->
         <div class="tools-modal-backdrop" id="tools-group-modal" aria-hidden="true">
@@ -3799,6 +3800,7 @@
   <script src="../../data/bundled-skills.js"></script>
   <script src="../js/title-utils.js"></script>
   <script src="../../shared/token-policy.js"></script>
+  <script src="../../shared/token-usage.js"></script>
   <script src="../js/settings-client.js"></script>
   <script src="../js/agent.js"></script>
   <script src="../js/app-utils.js"></script>
