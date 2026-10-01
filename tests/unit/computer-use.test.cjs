@@ -231,7 +231,7 @@ test(
   () => {
     const state = JSON.parse(loadMacBridge().invoke('permissions', '{}'));
     assert.equal(state.ok, true);
-    assert.equal(typeof state.accessibility, 'boolean');
-    assert.equal(typeof state.screen, 'boolean');
+    for (const permission of ['accessibility', 'screen', 'postEvents'])
+      assert.equal(typeof state[permission], 'boolean');
   },
 );

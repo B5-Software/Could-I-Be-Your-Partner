@@ -85,8 +85,9 @@ static NSDictionary *tree(pid_t pid = 0) {
 
 static NSDictionary *perform(NSString *action, NSDictionary *args) {
   if ([action isEqualToString:@"permissions"]) {
-    return @{ @"ok": @YES, @"accessibility": @(AXIsProcessTrusted()),
-      @"postEvents": @(CGPreflightPostEventAccess()), @"screen": @(CGPreflightScreenCaptureAccess()) };
+    return @{ @"ok": @YES, @"accessibility": [NSNumber numberWithBool:AXIsProcessTrusted()],
+      @"postEvents": [NSNumber numberWithBool:CGPreflightPostEventAccess()],
+      @"screen": [NSNumber numberWithBool:CGPreflightScreenCaptureAccess()] };
   }
   if ([action isEqualToString:@"requestPermission"]) {
     if ([args[@"permission"] isEqualToString:@"accessibility"]) {
