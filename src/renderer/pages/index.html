@@ -621,12 +621,20 @@
           <p class="page-desc">启用或禁用AI Agent可以使用的工具</p>
           <div class="tools-header-actions">
             <label class="tools-auto-optimize">
-              <span>自动优化工具选择</span>
+              <span title="启用决策模型的工具选择后，由 Jev 根据任务预加载相关工具；未配置时使用本地候选，预加载仍受预算约束。">自动优化工具选择（Jev）</span>
               <div class="toggle-switch">
                 <input type="checkbox" id="toggle-auto-optimize-tools">
                 <span class="toggle-slider"></span>
               </div>
             </label>
+            <label class="tools-lazy-loading">
+              <span title="工具仍全部可用；AI 在需要时通过本地搜索加载，无需额外选择模型。">按需加载工具</span>
+              <div class="toggle-switch">
+                <input type="checkbox" id="toggle-tool-discovery">
+                <span class="toggle-slider"></span>
+              </div>
+            </label>
+            <label>工具预算（估算 tokens） <input id="tool-schema-budget" type="number" min="1000" max="16000" step="500" value="4000" style="width:90px;"></label>
           </div>
         </div>
         <div class="tools-mode-switcher" id="tools-mode-switcher" style="display:flex;gap:8px;margin-bottom:12px;align-items:center;">
@@ -636,6 +644,7 @@
           <button class="btn-secondary tools-mode-btn" data-tool-mode="babe" style="padding:4px 12px;font-size:0.85em;">Babe 模式工具</button>
         </div>
         <div class="tools-stats" id="tools-stats"></div>
+        <div id="computer-permissions-card" class="tool-auth-section" role="region" aria-label="电脑控制权限检测"></div>
         <div class="tools-groups" id="tools-groups"></div>
 
         <!-- 工具首次使用授权状态（Playwright / Computer Use）-->
@@ -3891,6 +3900,7 @@
   <script src="../js/i18n/de.js"></script>
   <script src="../js/ds-compat/translator.js"></script>
   <script src="../js/tools-def.js"></script>
+  <script src="../js/tool-exposure.js"></script>
   <script src="../js/privacy-filter.js"></script>
   <script src="../js/context-manager.js"></script>
   <script src="../js/fork-utils.js"></script>

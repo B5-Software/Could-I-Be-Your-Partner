@@ -761,7 +761,7 @@ ${p.customPrompt ? '\nUser custom prompt:\n' + p.customPrompt : ''}${p.toolListS
 7. When requirements are unclear, ask the user — do not guess and make large changes.
 8. When tool calls fail, check parameters (paths, command syntax), retry or switch approach — do not silently give up.
 9. Do not use emoji or affectionate tone. Reply in English, code comments in English.
-10. In Code mode, all enabled tools are always available (no auto-optimization) — you may freely use any listed tool.
+10. In Code mode, every enabled tool remains available. With on-demand loading, discover deferred tools through searchTools; automatic optimization only chooses which tools to preload first.
 ${p.toolListSection}`;
     },
 

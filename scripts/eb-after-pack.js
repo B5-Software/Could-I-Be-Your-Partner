@@ -27,6 +27,12 @@ module.exports = async function afterPack(context) {
   ]) {
     if (!entries.has(required)) throw new Error(`Packaged runtime file missing: ${required}`);
   }
+  if (
+    context.electronPlatformName === 'darwin' &&
+    !entries.has('/src/main/native/macos-computer/cibyp_computer.node')
+  ) {
+    throw new Error('Packaged macOS Computer Use native module missing');
+  }
   const forbidden = [
     '/.git',
     '/tests',

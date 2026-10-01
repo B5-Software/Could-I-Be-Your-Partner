@@ -147,6 +147,7 @@ module.exports = function createDefaultSettings({ DEFAULT_DECISION_SETTINGS }) {
     tools: {},
     autoApproveSensitive: false,
     autoOptimizeToolSelection: false,
+    toolExposure: { mode: 'adaptive', budgetTokens: 4000 },
     // 隐私信息保护：在工具调用过程中过滤隐私信息（手机号/证件号/SSN/API Key/SSH 私钥/.env/Tor/git key/配置密码）
     // - enabled           : 总开关（默认启用）
     // - filterResults     : 工具返回内容注入 AI 上下文前过滤（默认开）

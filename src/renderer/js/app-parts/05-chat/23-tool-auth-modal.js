@@ -43,6 +43,30 @@
       toolAuthToolEl.innerHTML = `当前工具：<code>${escapeHtmlSimple(toolName)}</code> — ${escapeHtmlSimple(dispName)}`;
     }
     toolAuthModal.classList.remove('hidden');
+    if (category === 'computerUse' && toolAuthWarningEl && window.api.computerPermissions) {
+      const helper = document.createElement('div');
+      helper.className = 'computer-auth-helper'; helper.setAttribute('role', 'status');
+      toolAuthWarningEl.appendChild(helper);
+      const owner = _toolAuthAgent;
+      const refresh = async () => {
+        const state = await window.api.computerPermissions();
+        if (_toolAuthAgent !== owner || !helper.isConnected) return;
+        helper.innerHTML = `<p>执行位置：${state.location === 'vm' ? '虚拟机' : '本机'} · ${state.ready ? '系统权限已就绪' : '系统权限未就绪'}</p>
+          ${state.guidance ? `<p>${escapeHtmlSimple(state.guidance)}</p>` : ''}
+          ${state.location === 'host' && state.platform === 'darwin' ? '<button class="btn-secondary" data-grant="accessibility">开启辅助功能</button> <button class="btn-secondary" data-grant="screen">开启屏幕录制</button> <button class="btn-secondary" data-recheck>重新检测</button>' : ''}`;
+        helper.querySelector('[data-recheck]')?.addEventListener('click', () => refresh().catch(() => {}));
+        helper.querySelectorAll('[data-grant]').forEach(button => button.addEventListener('click', async () => {
+          button.disabled = true;
+          try {
+            const result = await window.api.computerRequestPermission(button.dataset.grant);
+            if (result.alreadyRequested) await window.api.computerOpenPermissionSettings(button.dataset.grant);
+            await refresh();
+          } catch (error) { helper.textContent = error.message; }
+        }));
+        WebUIMirror.pushDomEvent({ type: 'dom_replace', container: '#' + toolAuthWarningEl.id, html: toolAuthWarningEl.innerHTML });
+      };
+      refresh().catch(error => { if (helper.isConnected) helper.textContent = error.message; });
+    }
     WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#tool-auth-modal', attr: 'class', value: toolAuthModal.className });
     // 系统通知
     sendAppNotification('approval', '工具授权请求', `AI 请求使用: ${dispName}`);

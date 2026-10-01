@@ -5,7 +5,8 @@
   "license": "GPL-3.0-or-later",
   "main": "src/main/main.js",
   "scripts": {
-    "start": "node scripts/build-app-bundle.js && electron .",
+    "start": "node scripts/build-macos-computer.js && node scripts/build-app-bundle.js && electron .",
+    "build:computer": "node scripts/build-macos-computer.js",
     "test": "npm run test:unit && npm run test:legacy",
     "build-app-bundle": "node scripts/build-app-bundle.js",
     "download-voice-models": "node scripts/download-voice-models.js --voice",
@@ -49,6 +50,9 @@
     "productName": "Could I Be Your Partner",
     "files": [
       "src/**/*",
+      "!src/main/native/**/build{,/**/*}",
+      "!src/main/native/**/*.mm",
+      "!src/main/native/**/binding.gyp",
       "assets/**/*",
       "IoT-Firmware/**/*",
       "package.json",
@@ -186,16 +190,16 @@
   "devDependencies": {
     "@electron/asar": "^4.3.1",
     "@electron/rebuild": "^4.1.0",
+    "@jridgewell/gen-mapping": "^0.3.13",
     "@serialport/bindings-cpp": "^13.0.1",
+    "@types/node": "^24.0.0",
     "electron": "^43.7.6",
     "electron-builder": "^26.15.3",
-    "node-gyp": "^12.2.0",
     "esbuild": "^0.28.2",
-    "typescript": "^7.0.2",
     "globals": "^17.12.0",
-    "@types/node": "^24.0.0",
-    "@jridgewell/gen-mapping": "^0.3.13",
-    "prettier": "^3.9.9"
+    "node-gyp": "^12.4.0",
+    "prettier": "^3.9.9",
+    "typescript": "^7.0.2"
   },
   "dependencies": {
     "@deepseek-ai/cordis": "4.0.1",

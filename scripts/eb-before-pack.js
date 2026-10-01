@@ -16,6 +16,9 @@ const buildInfo = require('./build-info');
 
 exports.beforePack = (context) => {
   buildInfo();
+  if (context.electronPlatformName === 'darwin') {
+    require('./build-macos-computer').buildMacComputer(require('builder-util').Arch[context.arch]);
+  }
   // Platform-level negative-only `files` creates another unrestricted matcher
   // in electron-builder. Keep native exclusions in the root allowlist instead.
   const platforms = ['win32', 'darwin', 'linux'];

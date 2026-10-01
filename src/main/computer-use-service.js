@@ -13,10 +13,13 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { shell, screen, desktopCapturer, nativeImage, systemPreferences } = require('electron');
+const { app, shell, screen, desktopCapturer, nativeImage, systemPreferences } = require('electron');
 const { recognizeImageDetailed } = require('./ocr');
+const { createMacComputer } = require('./services/macos-computer');
+const { createComputerPermissions } = require('./services/computer-permissions');
+const { toDesktopPoint } = require('./services/computer-coordinates');
 
-module.exports = function registerComputerUseIpc({ ipcMain, getImagesDir, getVmService }) {
+module.exports = function registerComputerUseIpc({ ipcMain, getImagesDir, getVmService, getSettings, persistSettings }) {
   /**
    * 运行位置=虚拟机：电脑控制（截图/键鼠/剪贴板）作用于虚拟机（Xvfb + xdotool/xclip），
    * 返回图形控制器；非 VM 模式返回 null（走宿主实现）。
@@ -30,18 +33,52 @@ module.exports = function registerComputerUseIpc({ ipcMain, getImagesDir, getVmS
     } catch (error) { throw new Error('无法确定 VM 执行位置: ' + error.message); }
   };
   const VM_UI_GAP = 'VM 模式下该动作依赖宿主 UI 自动化（UIA/OCR），已禁用以免操作宿主机；可用：截图/键鼠注入（xdotool）、VM 桌面窗口、终端与浏览器工具';
+  let macComputer;
+  const getMacComputer = () => macComputer ||= createMacComputer();
+  const permissions = createComputerPermissions({ platform: process.platform, preferences: systemPreferences, app, shell,
+    getSettings: getSettings || (() => ({})), persistSettings: persistSettings || (() => {}),
+    nativeStatus: () => getMacComputer().invoke('permissions'),
+    nativeRequest: permission => getMacComputer().invoke('requestPermission', { permission }) });
+  const originalIpc = ipcMain;
+  const inputChannels = new Set(['computer:mouseMove', 'computer:click', 'computer:drag', 'computer:type', 'computer:key', 'computer:scroll', 'computer:clickElement']);
+  const captureChannels = new Set(['computer:screenshot', 'computer:ocr', 'screenshot:take']);
+  // VM routing is checked FIRST. Neither permission reads nor requests touch the host in VM mode.
+  let inputQueue = Promise.resolve();
+  ipcMain = { handle(channel, handler) {
+    originalIpc.handle(channel, async (...args) => {
+      const run = async () => {
+        try {
+          if (!vmComputer()) {
+            const denied = inputChannels.has(channel) ? permissions.check('input') : captureChannels.has(channel) ? permissions.check('screen') : null;
+            if (denied) return denied;
+          }
+          return await handler(...args);
+        } catch (error) { return { ok: false, code: error.code || 'computer_error', error: error.message }; }
+      };
+      // Avoid overlapping drags/key chords from multiple sessions leaving input held.
+      if (!inputChannels.has(channel)) return run();
+      const pending = inputQueue.then(run, run); inputQueue = pending.then(() => {}, () => {}); return pending;
+    });
+  } };
+  ipcMain.handle('computer:permissions', () => vmComputer() ? { ok: true, location: 'vm', ready: true, platform: 'linux', accessibility: 'not-required', screen: 'not-required' } : permissions.status());
+  ipcMain.handle('computer:requestPermission', (_, permission) => vmComputer() ? { ok: false, error: 'VM 模式不请求宿主权限', location: 'vm' } : permissions.request(permission));
+  ipcMain.handle('computer:openPermissionSettings', (_, permission) => vmComputer() ? { ok: false, error: 'VM 模式不打开宿主设置', location: 'vm' } : permissions.openSettings(permission));
 // ---- Computer Use Protocol (CUP) ----
 // Lazy-loaded nut-js for mouse/keyboard control
 let _nutLoaded = null;
+let _nutError = null;
 async function _getNut() {
+  if (process.platform === 'darwin') return getMacComputer();
   if (_nutLoaded === null) {
     try {
       const nut = require('@nut-tree-fork/nut-js');
       _nutLoaded = nut;
     } catch (e) {
       _nutLoaded = false;
+      _nutError = e;
     }
   }
+  if (_nutLoaded === false) throw new Error('键鼠控制原生库加载失败：' + (_nutError?.message || 'unknown error'));
   return _nutLoaded;
 }
 
@@ -58,15 +95,15 @@ function _cupKeyToNutKey(keyStr) {
     'f7': 'F7', 'f8': 'F8', 'f9': 'F9', 'f10': 'F10', 'f11': 'F11', 'f12': 'F12',
     'ctrl': 'LeftControl', 'control': 'LeftControl',
     'alt': 'LeftAlt', 'option': 'LeftAlt',
-    'shift': 'LeftShift', 'cmd': 'LeftSuper', 'meta': 'LeftSuper', 'win': 'LeftSuper',
+    'shift': 'LeftShift', 'cmd': 'LeftSuper', 'command': 'LeftSuper', 'meta': 'LeftSuper', 'win': 'LeftSuper',
     'super': 'LeftSuper'
   };
   return map[keyStr.toLowerCase()] || keyStr;
 }
 
 // ---- 显示器/坐标基础 ----
-// Electron display.bounds 为 DIP（逻辑像素），截图与 nut 键鼠均使用物理像素。
-// 统一以"主显示器左上角为原点的物理像素虚拟桌面"作为坐标基准。
+// Screenshot pixels are display-local. macOS input/AX uses desktop points;
+// Windows/Linux input uses desktop pixels. Every pointer action shares one mapping.
 let _lastCapture = null;
 let _lastElementSnapshot = null;
 
@@ -75,8 +112,8 @@ function _displayList() {
   return screen.getAllDisplays().map((d, index) => {
     const scale = Number(d.scaleFactor) || 1;
     const physical = {
-      x: Math.round(d.bounds.x * scale),
-      y: Math.round(d.bounds.y * scale),
+      x: process.platform === 'win32' ? screen.dipToScreenPoint({ x: d.bounds.x, y: d.bounds.y }).x : Math.round(d.bounds.x * scale),
+      y: process.platform === 'win32' ? screen.dipToScreenPoint({ x: d.bounds.x, y: d.bounds.y }).y : Math.round(d.bounds.y * scale),
       width: Math.round(d.size.width * scale),
       height: Math.round(d.size.height * scale),
     };
@@ -97,7 +134,9 @@ function _findDisplay(displayId) {
     return displays.find((d) => d.primary) || displays[0];
   }
   const wanted = String(displayId);
-  return displays.find((d) => String(d.id) === wanted || String(d.index) === wanted) || displays.find((d) => d.primary) || displays[0];
+  const display = displays.find((d) => String(d.id) === wanted) || displays.find((d) => String(d.index) === wanted);
+  if (!display) throw new Error('Display not found: ' + wanted);
+  return display;
 }
 
 function _ensureDir(dir, fallback) {
@@ -107,7 +146,9 @@ function _ensureDir(dir, fallback) {
 }
 
 async function _grabScreen(options = {}) {
-  const display = _findDisplay(options.displayId);
+  const denied = permissions.check('screen');
+  if (denied) { const error = new Error(denied.error); error.code = denied.code; throw error; }
+  const display = _findDisplay(options.displayId ?? options.display_id);
   const thumbW = Math.max(1, display.physical.width);
   const thumbH = Math.max(1, display.physical.height);
   const sources = await desktopCapturer.getSources({
@@ -119,7 +160,8 @@ async function _grabScreen(options = {}) {
   if (display.id != null) {
     source = sources.find((s) => String(s.display_id) === String(display.id));
   }
-  if (!source) source = sources[0];
+  if (!source && sources.length === 1 && screen.getAllDisplays().length === 1) source = sources[0];
+  if (!source) throw new Error('Requested display has no capture source');
   const image = source.thumbnail;
   if (!image || image.isEmpty()) throw new Error('capture returned an empty image');
   const size = image.getSize();
@@ -173,48 +215,56 @@ ipcMain.handle('computer:screenshot', async (_, workspacePath, options = {}) => 
       display: capture.display,
       origin: capture.origin,
       coordinateSpace: 'screenshot-pixels',
-      note: 'coordinate [x,y] in this screenshot map to physical cursor via origin offset; use click action with space="screenshot"',
-      annotated: !!annotate,
+      note: 'All pointer actions use screenshot-local pixels by default; macOS maps pixels to desktop points. Use coord_space=physical for native desktop coordinates.',
+      annotated: false,
+      annotationRequested: !!annotate,
     };
   } catch (e) { return { ok: false, error: e.message }; }
 });
 
-ipcMain.handle('computer:mouseMove', async (_, x, y) => {
+ipcMain.handle('computer:mouseMove', async (_, x, y, options = {}) => {
   const g = vmComputer();
   if (g) { try { return await g.mouseMove(x, y); } catch (e) { return { ok: false, error: e.message }; } }
   const nut = await _getNut();
   if (!nut) return { ok: false, error: 'nut-js not available' };
   try {
-    await nut.mouse.setPosition(new nut.Point(Math.round(x), Math.round(y)));
-    return { ok: true, x: Math.round(x), y: Math.round(y) };
+    const point = _toPhysical({ x, y }, options.space || 'screenshot', options.displayId);
+    await nut.mouse.setPosition(new nut.Point(point.x, point.y));
+    return { ok: true, ...point };
   } catch (e) { return { ok: false, error: e.message }; }
 });
 
-ipcMain.handle('computer:click', async (_, button, x, y, doubleClick) => {
+ipcMain.handle('computer:click', async (_, button, x, y, doubleClick, options = {}) => {
   const g = vmComputer();
   if (g) { try { await g.click(button, x, y, doubleClick); return { ok: true, button: button || 'left', doubleClick: !!doubleClick }; } catch (e) { return { ok: false, error: e.message }; } }
   const nut = await _getNut();
   if (!nut) return { ok: false, error: 'nut-js not available' };
   try {
     if (x !== undefined && y !== undefined) {
-      await nut.mouse.setPosition(new nut.Point(Math.round(x), Math.round(y)));
+      const point = _toPhysical({ x, y }, options.space || 'screenshot', options.displayId);
+      await nut.mouse.setPosition(new nut.Point(point.x, point.y));
     }
     const btn = button === 'right' ? nut.Button.RIGHT
               : button === 'middle' ? nut.Button.MIDDLE
               : nut.Button.LEFT;
-    await nut.mouse.click(btn);
-    if (doubleClick) await nut.mouse.click(btn);
+    if (doubleClick && nut.mouse.doubleClick) await nut.mouse.doubleClick(btn);
+    else { await nut.mouse.click(btn); if (doubleClick) await nut.mouse.click(btn); }
     return { ok: true, button: button || 'left', doubleClick: !!doubleClick };
   } catch (e) { return { ok: false, error: e.message }; }
 });
 
-ipcMain.handle('computer:drag', async (_, startX, startY, endX, endY) => {
+ipcMain.handle('computer:drag', async (_, startX, startY, endX, endY, options = {}) => {
   const g = vmComputer();
   if (g) { try { await g.drag(startX, startY, endX, endY); return { ok: true, startX, startY, endX, endY }; } catch (e) { return { ok: false, error: e.message }; } }
   const nut = await _getNut();
   if (!nut) return { ok: false, error: 'nut-js not available' };
+  let pressed = false;
   try {
+    const start = _toPhysical({ x: startX, y: startY }, options.space || 'screenshot', options.displayId);
+    const end = _toPhysical({ x: endX, y: endY }, options.space || 'screenshot', options.displayId);
+    startX = start.x; startY = start.y; endX = end.x; endY = end.y;
     await nut.mouse.setPosition(new nut.Point(Math.round(startX), Math.round(startY)));
+    pressed = true;
     await nut.mouse.pressButton(nut.Button.LEFT);
     // Move in steps for smooth drag
     const steps = 10;
@@ -227,6 +277,7 @@ ipcMain.handle('computer:drag', async (_, startX, startY, endX, endY) => {
     await nut.mouse.releaseButton(nut.Button.LEFT);
     return { ok: true, startX, startY, endX, endY };
   } catch (e) { return { ok: false, error: e.message }; }
+  finally { if (pressed) try { await nut.mouse.releaseButton(nut.Button.LEFT); } catch { /* best effort release */ } }
 });
 
 ipcMain.handle('computer:type', async (_, text) => {
@@ -264,12 +315,12 @@ ipcMain.handle('computer:key', async (_, keyStr) => {
       const upVal = nut.Key[k.toUpperCase()];
       if (upVal !== undefined) return upVal;
       return null;
-    }).filter(k => k !== null);
+    });
 
-    if (nutKeys.length === 0) return { ok: false, error: `Unknown key: ${keyStr}` };
+    if (!nutKeys.length || nutKeys.some(k => k === null)) return { ok: false, error: `Unknown key: ${keyStr}` };
 
     // Press and release
-    if (nutKeys.length === 1) {
+    try { if (nutKeys.length === 1) {
       await nut.keyboard.pressKey(nutKeys[0]);
       await nut.keyboard.releaseKey(nutKeys[0]);
     } else {
@@ -279,21 +330,22 @@ ipcMain.handle('computer:key', async (_, keyStr) => {
       await nut.keyboard.pressKey(mainKey);
       await nut.keyboard.releaseKey(mainKey);
       await nut.keyboard.releaseKey(...modifiers.reverse());
-    }
+    } } finally { try { await nut.keyboard.releaseKey(...nutKeys.slice().reverse()); } catch { /* best effort release */ } }
     return { ok: true, key: keyStr };
   } catch (e) { return { ok: false, error: e.message }; }
 });
 
-ipcMain.handle('computer:scroll', async (_, x, y, direction, amount) => {
+ipcMain.handle('computer:scroll', async (_, x, y, direction, amount, options = {}) => {
   const g = vmComputer();
   if (g) { try { await g.scroll(x, y, direction, amount); return { ok: true, direction, amount: Math.round(amount || 3) }; } catch (e) { return { ok: false, error: e.message }; } }
   const nut = await _getNut();
   if (!nut) return { ok: false, error: 'nut-js not available' };
   try {
     if (x !== undefined && y !== undefined) {
-      await nut.mouse.setPosition(new nut.Point(Math.round(x), Math.round(y)));
+      const point = _toPhysical({ x, y }, options.space || 'screenshot', options.displayId);
+      await nut.mouse.setPosition(new nut.Point(point.x, point.y));
     }
-    const amt = Math.round(amount || 3);
+    const amt = Math.min(1000, Math.max(1, Math.round(Number(amount) || 3)));
     if (direction === 'down') {
       await nut.mouse.scrollDown(amt);
     } else if (direction === 'up') {
@@ -316,7 +368,7 @@ ipcMain.handle('computer:cursorPosition', async () => {
   if (!nut) return { ok: false, error: 'nut-js not available' };
   try {
     const pos = await nut.mouse.getPosition();
-    return { ok: true, x: pos.x, y: pos.y };
+    return { ok: true, x: pos.x, y: pos.y, coordinateSpace: process.platform === 'darwin' ? 'desktop-points' : 'desktop-pixels', note: 'Use coord_space=physical when reusing this position.' };
   } catch (e) { return { ok: false, error: e.message }; }
 });
 
@@ -329,12 +381,9 @@ ipcMain.handle('computer:wait', async (_, duration) => {
 ipcMain.handle('computer:getScreenSize', async () => {
   const g = vmComputer();
   if (g) { const s = g.screenSize(); return { ok: true, width: s.width, height: s.height, location: 'vm' }; }
-  const nut = await _getNut();
-  if (!nut) return { ok: false, error: 'nut-js not available' };
   try {
-    const w = await nut.screen.width();
-    const h = await nut.screen.height();
-    return { ok: true, width: w, height: h };
+    const display = _findDisplay();
+    return { ok: true, width: display.physical.width, height: display.physical.height, display, coordinateSpace: 'screenshot-pixels' };
   } catch (e) { return { ok: false, error: e.message }; }
 });
 
@@ -406,125 +455,11 @@ Walk $root 0
   return JSON.parse(out.trim());
 }
 
-// macOS: use osascript (AppleScript) via System Events to enumerate UI elements
+// macOS: in-process AX API; no System Events/AppleEvent permission chain.
 async function _getMacUITree() {
-  const scpt = `
-on walk(el, d, maxD, maxN)
-  set output to ""
-  set cnt to 0
-  if d > maxD then return ""
-  try
-    set kids to UI elements of el
-  on error
-    set kids to {}
-  end try
-  repeat with k in kids
-    if cnt >= maxN then
-      set output to output & "TRUNCATED"
-      return output
-    end if
-    try
-      set kClass to class of k as text
-      set kName to ""
-      set kDesc to ""
-      set kVal to ""
-      set kRole to ""
-      try
-        set kRole to role of k
-      end try
-      try
-        set kName to name of k
-      end try
-      try
-        set kDesc to description of k
-      end try
-      try
-        set kVal to value of k
-      end try
-      set kPos to ""
-      try
-        set kPos to position of k
-      end try
-      set kSize to ""
-      try
-        set kSize to size of k
-      end try
-      set posStr to ""
-      if kPos is not "" and kSize is not "" then
-        set px to item 1 of kPos
-        set py to item 2 of kPos
-        set sw to item 1 of kSize
-        set sh to item 2 of kSize
-        set cx to px + sw / 2
-        set cy to py + sh / 2
-        set posStr to "BBOX:" & (px as integer) & "," & (py as integer) & "," & (sw as integer) & "," & (sh as integer) & "," & (cx as integer) & "," & (cy as integer)
-      end if
-      set indent to ""
-      repeat d times
-        set indent to indent & "  "
-      end repeat
-      set output to output & indent & "- [" & kRole & "] " & kName & " | " & kClass & " | " & kVal & " | " & kDesc & " | " & posStr & linefeed
-      set output to output & my walk(k, d + 1, maxD, maxN)
-      set cnt to cnt + 1
-    end try
-  end repeat
-  return output
-end walk
-
-tell application "System Events"
-  set frontApp to first application process whose frontmost is true
-  set winList to windows of frontApp
-  set output to ""
-  if (count of winList) > 0 then
-    set w to item 1 of winList
-    set winName to name of w
-    set output to "- [AXWindow] " & winName & linefeed
-    set output to output & my walk(w, 1, 15, 300)
-  end if
-  return output
-end tell
-`;
-  // osascript doesn't easily produce JSON; we get text and parse minimally
-  let out;
-  try {
-    out = await _execCmd('osascript', ['-e', scpt]);
-  } catch (e) {
-    // Accessibility permission not granted or osascript failed
-    // 只做静默检测，不再触发系统授权弹窗（启动时已按“只弹一次”策略处理）
-    if (process.platform === 'darwin') {
-      try { systemPreferences.isTrustedAccessibilityClient(false); } catch {}
-      try { require('child_process').exec('open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"'); } catch {}
-    }
-    throw new Error('macOS 无障碍权限未授权，请在系统设置 > 隐私与安全性 > 辅助功能中启用本应用后重试。原始错误: ' + e.message);
-  }
-  // Parse the text output into a structured form
-  const lines = out.split('\n').filter(l => l.trim() && !l.startsWith('TRUNCATED'));
-  const truncated = out.includes('TRUNCATED');
-  const elements = [];
-  let idx = 0;
-  for (const line of lines) {
-    const m = line.match(/^(\s*)- \[(\w+)\]\s*(.*?) \| (.+?) \| (.+?) \| (.+?) \| (.*)$/);
-    if (!m) continue;
-    const depth = Math.floor((m[1] || '').length / 2);
-    const role = m[2];
-    const name = m[3] || '';
-    const cls = m[4] || '';
-    const val = m[5] || '';
-    const desc = m[6] || '';
-    const bboxStr = m[7] || '';
-    let bbox = null;
-    if (bboxStr.startsWith('BBOX:')) {
-      const parts = bboxStr.slice(5).split(',').map(Number);
-      if (parts.length === 6) {
-        bbox = { x: parts[0], y: parts[1], w: parts[2], h: parts[3], cx: parts[4], cy: parts[5] };
-      }
-    }
-    const actions = [];
-    if (cls === 'button' || cls === 'Button') actions.push('invoke');
-    if (cls === 'checkbox' || cls === 'CheckBox') actions.push('toggle');
-    elements.push({ index: idx++, depth, type: role, name, value: val || null, automationId: null, bbox, actions });
-  }
-  return { truncated, count: elements.length, elements };
+  const denied = permissions.check('tree');
+  if (denied) { const error = new Error(denied.error); error.code = denied.code; throw error; }
+  return getMacComputer().getUITree();
 }
 
 // Linux: use Python pyatspi (AT-SPI) if available
@@ -607,8 +542,9 @@ function _rectCenter(bbox) {
 }
 
 function _uiaToElements(tree) {
+  const snapshotId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
   return ((tree && tree.elements) || []).map((el, i) => ({
-    id: `uia-${el.index != null ? el.index : i}`,
+    id: `uia-${snapshotId}-${el.index != null ? el.index : i}`,
     source: 'uia',
     name: String(el.name || ''),
     role: String(el.type || ''),
@@ -635,7 +571,7 @@ async function _ocrToElements(workspacePath, options = {}) {
         h: Math.round(line.bbox.h * scaleY),
       };
       return {
-        id: `ocr-${i}`,
+        id: `ocr-${path.basename(capture.path, '.png')}-${i}`,
         source: 'ocr',
         name: line.text,
         role: 'text',
@@ -694,6 +630,10 @@ ipcMain.handle('computer:getUITree', async (_, options = {}) => {
   if (vmComputer()) return { ok: false, error: VM_UI_GAP };
   try {
     const snapshot = await _buildElementSnapshot(options || {});
+    if (!snapshot.elements.length && (snapshot.uiaError || snapshot.ocr?.error)) return {
+      ok: false, code: 'ui_unavailable', error: snapshot.uiaError || snapshot.ocr.error,
+      permissions: process.platform === 'darwin' ? permissions.status() : undefined,
+    };
     return {
       ok: true,
       at: snapshot.at,
@@ -780,19 +720,10 @@ ipcMain.handle('computer:findElement', async (_, payload = {}) => {
   } catch (e) { return { ok: false, error: e.message }; }
 });
 
-function _toPhysical(point, space) {
-  const x = Number(point.x);
-  const y = Number(point.y);
-  if (space === 'physical') return { x: Math.round(x), y: Math.round(y) };
-  const capture = _lastCapture;
-  if (!capture || !capture.display) return { x: Math.round(x), y: Math.round(y) };
-  const display = capture.display;
-  if (process.platform === 'darwin') {
-    // macOS：nut-js 使用逻辑点坐标，截图是 Retina 物理像素 → 除以缩放
-    const scale = display.scaleFactor || 1;
-    return { x: Math.round(display.bounds.x + x / scale), y: Math.round(display.bounds.y + y / scale) };
-  }
-  return { x: Math.round(display.physical.x + x), y: Math.round(display.physical.y + y) };
+function _toPhysical(point, space, displayId) {
+  const display = _findDisplay(displayId);
+  const capture = _lastCapture && (displayId == null || String(_lastCapture.display.id) === String(display.id)) ? _lastCapture : null;
+  return toDesktopPoint(point, { platform: process.platform, capture, display, space });
 }
 
 function _regionDiff(imageA, imageB, rect, step = 2) {
@@ -823,10 +754,11 @@ function _regionDiff(imageA, imageB, rect, step = 2) {
 }
 
 async function _resolveElementTarget(payload) {
-  if (payload.id && _lastElementSnapshot) {
+  if (payload.id && _lastElementSnapshot && Date.now() - _lastElementSnapshot.at < 30000) {
     const hit = _lastElementSnapshot.elements.find((el) => el.id === payload.id);
     if (hit && hit.center) return { center: hit.center, element: hit };
   }
+  if (payload.id) return null; // an expired/unknown ID must never fall through to an unrelated point
   if (payload.text) {
     const result = await (async () => {
       let snapshot = _lastElementSnapshot && (Date.now() - _lastElementSnapshot.at < 30000) ? _lastElementSnapshot : null;
@@ -839,7 +771,7 @@ async function _resolveElementTarget(payload) {
     })();
     if (result && result.center) return result;
   }
-  if (Number.isFinite(Number(payload.x)) && Number.isFinite(Number(payload.y))) {
+  if (Number.isFinite(payload.x) && Number.isFinite(payload.y)) {
     return { center: { x: Number(payload.x), y: Number(payload.y) }, element: null };
   }
   return null;
@@ -853,33 +785,42 @@ ipcMain.handle('computer:clickElement', async (_, payload = {}) => {
     const resolved = await _resolveElementTarget(payload);
     if (!resolved) return { ok: false, error: 'element not found; call get_ui_tree/find_element/ocr first or provide x/y' };
     const space = payload.space || 'screenshot';
-    const physical = _toPhysical(resolved.center, space);
+    const effectiveSpace = resolved.element?.source === 'uia' ? 'physical' : space;
+    const physical = _toPhysical(resolved.center, effectiveSpace, payload.displayId);
     const button = payload.button === 'right' ? nut.Button.RIGHT : payload.button === 'middle' ? nut.Button.MIDDLE : nut.Button.LEFT;
     const verify = payload.verify !== false;
     let before = null;
     let beforeDisplay = null;
+    let beforeSize = null;
+    let beforeError = null;
+    const targetDisplay = _displayList().find(display => {
+      const bounds = process.platform === 'darwin' ? display.bounds : display.physical;
+      return physical.x >= bounds.x && physical.y >= bounds.y && physical.x < bounds.x + bounds.width && physical.y < bounds.y + bounds.height;
+    });
+    const verifyDisplayId = payload.displayId ?? targetDisplay?.id;
     if (verify) {
-      try { const grabbed = await _grabScreen({ displayId: payload.displayId }); before = grabbed.image; beforeDisplay = grabbed.display; } catch { /* ignore */ }
+      try {
+        const grabbed = await _grabScreen({ displayId: verifyDisplayId });
+        before = grabbed.image; beforeDisplay = grabbed.display; beforeSize = { width: grabbed.width, height: grabbed.height };
+      } catch (error) { beforeError = error.message; }
     }
     await nut.mouse.setPosition(new nut.Point(physical.x, physical.y));
-    await nut.mouse.click(button);
-    if (payload.doubleClick) await nut.mouse.click(button);
-    let verification = null;
+    if (payload.doubleClick && nut.mouse.doubleClick) await nut.mouse.doubleClick(button);
+    else { await nut.mouse.click(button); if (payload.doubleClick) await nut.mouse.click(button); }
+    let verification = beforeError ? { changed: null, error: beforeError } : null;
     if (verify && before) {
       await new Promise((r) => setTimeout(r, Math.min(3000, Math.max(100, Number(payload.verifyWaitMs) || 350))));
       try {
-        const grabbedAfter = await _grabScreen({ displayId: payload.displayId });
+        const grabbedAfter = await _grabScreen({ displayId: verifyDisplayId });
         // before/after 抓取的是目标显示器的完整截图；取点击点周围 80x80 区域
         // 做像素差异，判断 UI 是否发生可见变化。
-        const targetDisplay = beforeDisplay || _findDisplay(payload.displayId);
-        let regionCenter;
-        if (space === 'physical') {
-          regionCenter = process.platform === 'darwin'
-            ? { x: (physical.x - targetDisplay.bounds.x) * (targetDisplay.scaleFactor || 1), y: (physical.y - targetDisplay.bounds.y) * (targetDisplay.scaleFactor || 1) }
-            : { x: physical.x - targetDisplay.physical.x, y: physical.y - targetDisplay.physical.y };
-        } else {
-          regionCenter = resolved.center;
-        }
+        const checkedDisplay = beforeDisplay || _findDisplay(verifyDisplayId);
+        const bounds = process.platform === 'darwin' ? checkedDisplay.bounds : checkedDisplay.physical;
+        const regionCenter = {
+          x: (physical.x - bounds.x) * beforeSize.width / bounds.width,
+          y: (physical.y - bounds.y) * beforeSize.height / bounds.height,
+        };
+        if (grabbedAfter.width !== beforeSize.width || grabbedAfter.height !== beforeSize.height) throw new Error('Display dimensions changed during verification');
         const region = {
           x: Math.round(regionCenter.x - 40),
           y: Math.round(regionCenter.y - 40),
@@ -896,7 +837,7 @@ ipcMain.handle('computer:clickElement', async (_, payload = {}) => {
       ok: true,
       clicked: physical,
       screenshotPoint: resolved.center,
-      space,
+      space: effectiveSpace,
       target: resolved.element ? { id: resolved.element.id, source: resolved.element.source, name: resolved.element.name } : null,
       doubleClick: !!payload.doubleClick,
       verification,

@@ -107,3 +107,5 @@ build-info.json
 crashes.json
 last-crash.json
 src/main/vm/generated/
+src/main/native/macos-computer/build/
+src/main/native/macos-computer/*.node

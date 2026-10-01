@@ -164,7 +164,13 @@ class Agent {
    * 解决"配置完显示未配置还得重启App"的问题。
    */
   applySettings(merged) {
+    const previous = this.settings || {};
+    const selectionChanged = previous.autoOptimizeToolSelection !== merged?.autoOptimizeToolSelection
+      || previous.toolExposure?.mode !== merged?.toolExposure?.mode
+      || previous.decision?.enabled !== merged?.decision?.enabled
+      || previous.decision?.usages?.toolSelection !== merged?.decision?.usages?.toolSelection;
     this.settings = merged;
+    if (selectionChanged) this.resetOptimizedTools();
     if (this.contextManager) {
       this.contextManager.setMaxTokens(merged?.llm?.maxContextLength || 8192);
       this.contextManager.setOutputReserve(merged?.llm?.maxResponseTokens || 8192);
@@ -532,7 +538,9 @@ class Agent {
     
     const convoTitle = this.conversationTitle || '未命名对话';
     const skillsSection = ''; // catalog is an independently observed context source
-    const optimizationGuidance = this.settings?.autoOptimizeToolSelection && !this.sessionAutoOptimizeDisabled
+    const optimizationGuidance = this.usesToolDiscovery()
+      ? '\n\n【工具按需加载】仅常用工具常驻；使用 searchTools 搜索工具名、分类或能力，匹配工具会在下一轮加载。空查询可分页浏览分类。使用 describeTool 查看原始参数，invokeTool 可调用已发现但超出预算的工具。所有已启用的内置、MCP 和插件工具仍然可用；不要因当前列表中缺少工具而放弃任务。搜索在本地执行，无需额外选择模型。'
+      : this.settings?.autoOptimizeToolSelection && !this.sessionAutoOptimizeDisabled
       ? `\n\n【工具优化模式（必须遵守）】：
 - 当前处于“工具精简”模式，你只会看到本轮优化后的工具。
 - 重优化工具选择会打断上下文前缀缓存、增加本轮输入费用，因此请只在“工具确实不足”时触发，且务必一次把本次任务所需的全部缺失工具都列全，不要反复触发。
@@ -796,7 +804,7 @@ ${affectionDesc}
 7. 遇到不确定的需求时主动询问用户，不要臆测后大量改代码。
 8. 工具调用失败时检查参数（路径、命令语法），重试或换方案，不要静默放弃。
 9. 不要使用 emoji 表情符号，不要使用"亲昵语气词"。使用简体中文回复，代码注释也用中文。
-10. Code 模式下所有已启用的工具始终可用（不进行自动优化），你可以自由使用任何列出的工具。
+10. Code 模式下所有已启用的工具均可使用。若启用了按需加载，尚未列出的工具可通过 searchTools 发现；自动优化仅决定优先预加载的工具。
 11. 【聊天记录目录隔离】工作区下的 \`.cibyp-code-history/\` 目录是 CIBYP 自身使用的聊天记录与截图存储区，不属于用户项目源代码。首次在该工作区工作时，必须：
     - 若工作区存在 \`.gitignore\` 文件，将 \`.cibyp-code-history/\` 追加到其中（若已存在则跳过）；
     - 若工作区使用其他打包/构建工具（如 npm 的 package.json#files、tsconfig.json#exclude、webpack/vite/rollup 配置、Docker .dockerignore、ESLint .eslintignore 等），同样将 \`.cibyp-code-history/\` 加入对应排除项；
@@ -843,6 +851,9 @@ ${affectionDesc}
   }
 
   resetOptimizedTools() {
+    this._toolOptimizationRevision = (this._toolOptimizationRevision || 0) + 1;
+    this._toolOptimizationPrepared = false;
+    this.toolExposure = null;
     this.optimizedToolNames = null;
     this.optimizedToolReason = '';
     this.sessionAutoOptimizeDisabled = false; // 重置会话级禁用标志，避免一次禁用永久失效
@@ -920,19 +931,44 @@ ${affectionDesc}
 
   getEnabledToolDefinitions() {
     return getAllToolDefinitions(this.mode || 'chat').filter(tool =>
-      typeof isToolEnabledForSettings === 'function'
+      (!this._toolScope || this._toolScope.has(tool.name)) && (typeof isToolEnabledForSettings === 'function'
         ? isToolEnabledForSettings(tool.name, this.settings)
-        : (this.settings?.tools || {})[tool.name] !== false
+        : (this.settings?.tools || {})[tool.name] !== false)
     );
+  }
+
+  usesToolDiscovery() {
+    return !this.minimalMode && typeof ToolExposure !== 'undefined'
+      && this.settings?.toolExposure?.mode !== 'all'
+      && !(this.settings?.autoOptimizeToolSelection && !this.settings?.toolExposure);
+  }
+
+  prepareToolExposure() {
+    if (!this.toolExposure) this.toolExposure = new ToolExposure();
+    const definitions = this.getEnabledToolDefinitions();
+    const allowed = new Set(definitions.map(t => t.name));
+    const map = Object.fromEntries(getAllToolDefinitions(this.mode || 'chat').map(t => [t.name, allowed.has(t.name)]));
+    let schemas = getToolSchemas(map, this.mode || 'chat', this.settings?.cibypIm?.ownerUsername);
+    if (typeof filterToolsByConfig === 'function') schemas = filterToolsByConfig(schemas, this.settings);
+    if (typeof adaptReadImageFileSchema === 'function') {
+      const byName = Object.fromEntries(schemas.map(t => [t.function.name, t]));
+      adaptReadImageFileSchema(byName, this.settings, () => this.isVisionModel());
+      schemas = schemas.map(t => byName[t.function.name]);
+    }
+    const contextLimit = Number(this.settings?.llm?.maxContextLength) || 32768;
+    const budget = Math.min(Number(this.settings?.toolExposure?.budgetTokens) || 4000, Math.max(1000, contextLimit * 0.2));
+    this.toolExposure.configure(definitions, schemas, budget);
+    return this.toolExposure;
   }
 
   hasUsableOptimizedSelection() {
     // 极简模式不参与自动工具优化
     if (this.minimalMode) return true;
-    // Code 模式始终使用全部启用工具，不参与自动优化
-    if (this.mode === 'code') return false;
+    // Code 的完整加载模式维持原行为；按需模式可接受 Jev 预加载。
+    if (this.mode === 'code' && !this.usesToolDiscovery()) return false;
     if (!this.settings?.autoOptimizeToolSelection) return false;
     if (this.sessionAutoOptimizeDisabled) return false; // LLM 在本 session 内禁用了自动优化
+    if (this.usesToolDiscovery() && this._toolOptimizationPrepared) return true;
     if (!Array.isArray(this.optimizedToolNames)) return false;
     const enabledCount = this.getEnabledToolDefinitions().length;
     if (enabledCount === 0) return true;
@@ -977,10 +1013,21 @@ ${affectionDesc}
     this.contextManager.setContextSource('已激活技能', this.getActiveSkillsBlock());
     this.contextManager.setContextSource('当前会话待办', this.todoItems.length
       ? JSON.stringify(this.todoItems.map(({ id, text, done }) => ({ id, text, done }))) : '');
+    this.contextManager.setContextSource('工具发现', this.usesToolDiscovery()
+      ? '工具按需加载：缺少能力时使用 searchTools(query/category/names)，空查询可浏览分类。搜索在本地执行；匹配定义在下一轮请求加载。describeTool 分段查看参数；invokeTool 调用已发现且启用的工具。工具类别：'
+        + [...new Set(this.getEnabledToolDefinitions().map(t => String(t.category || '其他').slice(0, 100)))].sort().slice(0, 40).join('、')
+      : '');
+    this.contextManager.setContextSource('工具优化建议', this.usesToolDiscovery() && this.settings?.autoOptimizeToolSelection && this._toolOptimizationPrepared
+      ? `${this.optimizedToolReason || '已优化'}。按预算预加载；未加载的能力可通过 searchTools 补充。建议工具：${(this.optimizedToolNames || []).slice(0, 20).join('、')}` : '');
     this.contextManager.admitContextUpdates();
   }
 
   getActiveToolNames() {
+    if (this.usesToolDiscovery()) {
+      const registry = this.prepareToolExposure();
+      registry.schemas();
+      return [...registry.loaded.keys()];
+    }
     return this._orderedActiveToolNames();
   }
 
@@ -1010,6 +1057,11 @@ ${affectionDesc}
   }
 
   getRuntimeToolSchemas() {
+    if (this.usesToolDiscovery()) {
+      const tools = this.prepareToolExposure().schemas();
+      this.contextManager?.setToolSchemaTokens(Math.ceil(JSON.stringify(tools).length / 4));
+      return tools;
+    }
     // 极简模式：只暴露持久终端（pty）+ 文件读写编辑，对齐 DSH minimal 预设
     if (this.minimalMode) {
       const enabledToolsMap = {};
@@ -1321,6 +1373,10 @@ ${affectionDesc}
    */
   _mergeOptimizedSelection(selectedNames) {
     const next = (Array.isArray(selectedNames) ? selectedNames : []).filter(n => !!n);
+    if (this.usesToolDiscovery()) {
+      this.prepareToolExposure().preload(next);
+      this._toolOptimizationPrepared = true;
+    }
     if (Array.isArray(this.optimizedToolNames) && this.optimizedToolNames.length > 0) {
       const have = new Set(this.optimizedToolNames);
       const added = [];
@@ -1337,6 +1393,21 @@ ${affectionDesc}
   }
 
   async optimizeToolsForConversation(firstUserMessage, reason = '', requestedTools = []) {
+    if (this._toolOptimizationInFlight) {
+      const result = await this._toolOptimizationInFlight;
+      const enabled = new Set(this.getEnabledToolDefinitions().map(tool => tool.name));
+      const requested = requestedTools.filter(name => enabled.has(name));
+      if (requested.length && !result.cancelled) this._mergeOptimizedSelection(requested);
+      return result;
+    }
+    const revision = this._toolOptimizationRevision || 0;
+    const pending = this._optimizeToolsForConversation(firstUserMessage, reason, requestedTools, revision);
+    this._toolOptimizationInFlight = pending;
+    try { return await pending; }
+    finally { if (this._toolOptimizationInFlight === pending) this._toolOptimizationInFlight = null; }
+  }
+
+  async _optimizeToolsForConversation(firstUserMessage, reason = '', requestedTools = [], revision = 0) {
     const nameOf = new Map();
     const enabledDefsAll = this.getEnabledToolDefinitions();
     enabledDefsAll.forEach(t => nameOf.set(t.name.toLowerCase(), t.name));
@@ -1352,8 +1423,8 @@ ${affectionDesc}
       return null;
     };
     const requestedValid = (Array.isArray(requestedTools) ? requestedTools : []).map(normalizeName).filter(Boolean);
-    // Code 模式不参与自动优化，始终使用全部启用工具（点名工具仍会记录）
-    if (this.mode === 'code') {
+    // 完整加载的 Code 模式跳过筛选；按需模式按预算预加载。
+    if (this.mode === 'code' && !this.usesToolDiscovery()) {
       if (requestedValid.length) this._mergeOptimizedSelection(requestedValid);
       return { ok: true, selected: requestedValid, skipped: 'code_mode' };
     }
@@ -1367,7 +1438,6 @@ ${affectionDesc}
 
     if (this.onMessage) this.onMessage('optimize-tools-start');
     try {
-      const candidates = enabledDefs.map(t => `${t.name} | ${t.category || '其他'} | ${t.desc}`).join('\n');
       // 决策模型优先：按工具类别批量 noul 判断相关性（一次调用；低置信/失败回退现有 LLM/启发式）
       const dcfg = this.settings?.decision || {};
       if (dcfg.enabled && dcfg.usages?.toolSelection !== false && typeof window.api.decisionCall === 'function') {
@@ -1381,7 +1451,7 @@ ${affectionDesc}
           const catList = [...byCat.keys()].slice(0, 64);
           const questions = {};
           catList.forEach((cat, i) => {
-            questions['c' + i] = { type: 'noul', instructions: `完成任务是否需要「${cat}」类工具？（不需要返回低概率）` };
+            questions['c' + i] = { type: 'noul', instructions: `完成任务是否需要「${String(cat).slice(0, 100)}」类工具？（不需要返回低概率）` };
           });
           const res = await window.api.decisionCall({
             state: [
@@ -1393,12 +1463,14 @@ ${affectionDesc}
             sessionKey: this.sessionKey || null,
             usage: 'toolSelection'
           });
+          if (revision !== (this._toolOptimizationRevision || 0)) return { ok: true, cancelled: true };
           if (res && res.ok && res.answers) {
             const selected = [...requestedValid];
-            catList.forEach((cat, i) => {
-              const p = Number(res.answers['c' + i]?.noul);
-              if (Number.isFinite(p) && p >= 0.5) selected.push(...byCat.get(cat));
-            });
+            const ranked = catList.map((cat, i) => ({ cat, probability: Number(res.answers['c' + i]?.noul) }))
+              .filter(item => Number.isFinite(item.probability) && item.probability >= 0.5)
+              .sort((a, b) => b.probability - a.probability).flatMap(item => byCat.get(item.cat));
+            const relevant = new Set(ranked);
+            selected.push(...this.buildHeuristicToolCandidates(firstUserMessage, enabledDefs).filter(name => relevant.has(name)), ...ranked);
             if (selected.length > 0) {
               const compacted = this.compactOptimizedSelection(selected, enabledDefs, firstUserMessage);
               let finalSelection = compacted.length > 0 ? compacted : fallback;
@@ -1410,9 +1482,19 @@ ${affectionDesc}
             }
           }
         } catch (e) {
-          console.warn('[tool-opt] 决策模型选择失败，回退 LLM:', e.message);
+          console.warn('[tool-opt] 决策模型选择失败，回退:', e.message);
         }
       }
+      // Discovery already provides a complete safety net. Do not send a second,
+      // expensive full-catalog selection request when Jev is disabled/unavailable.
+      if (revision !== (this._toolOptimizationRevision || 0)) return { ok: true, cancelled: true };
+      if (this.usesToolDiscovery()) {
+        this._mergeOptimizedSelection([...requestedValid, ...fallback]);
+        this.optimizedToolReason = dcfg.enabled && dcfg.usages?.toolSelection !== false
+          ? 'Jev 不可用或未给出有效选择，使用本地候选预加载' : '本地候选预加载（Jev 工具选择未启用）';
+        return { ok: true, selected: this.optimizedToolNames, reason: this.optimizedToolReason, localFallback: true };
+      }
+      const candidates = enabledDefs.map(t => `${t.name} | ${t.category || '其他'} | ${t.desc}`).join('\n');
       // 关键修复：思考模型会把推理同时塞进 content/reasoning_content，导致 JSON 解析失败。
       // 三管齐下：
       //  1) prompt 明确禁止任何推理/解释/前后文字，只输出 JSON 对象；
@@ -1468,6 +1550,7 @@ ${affectionDesc}
         requestId: Date.now().toString(),
         sessionKey: this.sessionKey || null
       });
+      if (revision !== (this._toolOptimizationRevision || 0)) return { ok: true, cancelled: true };
 
       const msg = result?.data?.choices?.[0]?.message;
       const rawContent = (msg?.content || '').trim();
@@ -1571,10 +1654,11 @@ ${affectionDesc}
       return { ok: true, selected: this.optimizedToolNames, reason: this.optimizedToolReason };
     } catch (e) {
       // 即使失败也要赋非空值，避免下次 sendMessage 重复触发补偿优化
+      if (revision !== (this._toolOptimizationRevision || 0)) return { ok: true, cancelled: true };
       let safeFallback = fallback.length > 0 ? fallback : enabledDefs.slice(0, 12).map(t => t.name);
       if (safeFallback.length === 0) safeFallback = enabledDefs.map(t => t.name);
       if (!Array.isArray(this.optimizedToolNames) || this.optimizedToolNames.length === 0) {
-        this.optimizedToolNames = safeFallback;
+        this._mergeOptimizedSelection(safeFallback);
         this.optimizedToolReason = '优化失败，回退到精简启发式工具集';
       }
       this.contextManager.setSystemPrompt(this.getSystemPrompt());
@@ -2275,6 +2359,17 @@ ${affectionDesc}
         break;
       }
 
+      // 热对话：注入用户在Agent工作期间发送的新消息
+      while (this.hotMessages.length > 0) {
+        const hotMsg = this.hotMessages.shift();
+        this.contextManager.addUserMessage(`【用户追加消息】${hotMsg}`);
+        if (this.onMessage) this.onMessage('system', '已将新消息注入当前对话');
+      }
+
+      if (!this.minimalMode && this.settings?.autoOptimizeToolSelection && !this.sessionAutoOptimizeDisabled && !this.hasUsableOptimizedSelection()) {
+        await this.optimizeToolsForConversation(this.getLatestUserMessageText(), '循环检测到优化未执行，自动补偿优化');
+      }
+
       await this.observeRuntimeContext();
       if (this.stopped || runId !== this.runId) break;
       // Include the current advertised tools in the budget before compaction.
@@ -2285,17 +2380,6 @@ ${affectionDesc}
         await this._manageContext(this.contextManager, (msg) => {
           if (this.onMessage) this.onMessage('system', msg);
         });
-      }
-
-      // 热对话：注入用户在Agent工作期间发送的新消息
-      while (this.hotMessages.length > 0) {
-        const hotMsg = this.hotMessages.shift();
-        this.contextManager.addUserMessage(`【用户追加消息】${hotMsg}`);
-        if (this.onMessage) this.onMessage('system', '已将新消息注入当前对话');
-      }
-
-      if (!this.minimalMode && this.settings?.autoOptimizeToolSelection && !this.sessionAutoOptimizeDisabled && !this.hasUsableOptimizedSelection()) {
-        await this.optimizeToolsForConversation(this.getLatestUserMessageText(), '循环检测到优化未执行，自动补偿优化');
       }
 
       // Rebase only after a completed checkpoint; otherwise admit append-only changes.
@@ -2621,18 +2705,31 @@ ${affectionDesc}
           if (this.onMessage) this.onMessage('tool_call', { name: toolName, args, callId: tc.id });
 
           // Check if sensitive
+          let permissionToolName = toolName;
+          let permissionArgs = args;
+          if (toolName === 'invokeTool' && this.usesToolDiscovery()) {
+            try {
+              const resolved = this.prepareToolExposure().resolve(args);
+              permissionToolName = resolved.name;
+              permissionArgs = resolved.args;
+            } catch (error) {
+              this.contextManager.addToolResult(tc.id, toolName, JSON.stringify({ ok: false, error: error.message }));
+              if (this.onToolCall) this.onToolCall(toolName, args, 'denied', undefined, tc.id);
+              continue;
+            }
+          }
           // OpenCode 免费池 agent 工具别名（bash/edit）按敏感工具处理
-          const FREE_TIER_SENSITIVE = toolName === 'bash' || toolName === 'edit';
-          const toolDef = TOOL_DEFINITIONS.find(t => t.name === toolName);
+          const FREE_TIER_SENSITIVE = permissionToolName === 'bash' || permissionToolName === 'edit';
+          const toolDef = getAllToolDefinitions(this.mode || 'chat').find(t => t.name === permissionToolName);
           const isSensitive = (toolDef?.sensitive || FREE_TIER_SENSITIVE) && !this.settings.autoApproveSensitive;
 
           // ===== 工具首次使用授权（Playwright / Computer Use）=====
           // 这些工具不再标记为 sensitive（不再每次调用都弹敏感确认），
           // 改为首次使用时弹出一次授权模态框：用户选择"允许并记住"后写入 settings.toolAuthGranted 持久化；
           // "仅本次"则只允许本次会话内使用；"拒绝"则跳过调用并返回错误。
-          const authCategory = (typeof getToolAuthCategory === 'function') ? getToolAuthCategory(toolName) : null;
+          const authCategory = (typeof getToolAuthCategory === 'function') ? getToolAuthCategory(permissionToolName) : null;
           if (authCategory && !(this.settings?.toolAuthGranted?.[authCategory] === true || this._sessionToolAuth?.[authCategory] === true)) {
-            const decision = await this.requestToolAuth(toolName, authCategory);
+            const decision = await this.requestToolAuth(permissionToolName, authCategory);
             if (decision === 'deny' || !decision) {
               const result = JSON.stringify({ ok: false, error: '用户未授权使用此工具' });
               this.contextManager.addToolResult(tc.id, toolName, result);
@@ -2642,11 +2739,8 @@ ${affectionDesc}
             // 'allow-once' 仅本次会话生效，不写入 settings
             if (decision === 'allow-always') {
               try {
-                const s = await window.api.getSettings();
-                if (!s.toolAuthGranted) s.toolAuthGranted = { playwright: false, computerUse: false };
-                s.toolAuthGranted[authCategory] = true;
-                await window.api.setSettings(s);
-                this.settings = s;
+                await window.api.setSettings({ toolAuthGranted: { [authCategory]: true } });
+                this.settings.toolAuthGranted = { ...(this.settings.toolAuthGranted || {}), [authCategory]: true };
               } catch (e) { /* 持久化失败时降级为本次会话内允许 */ }
             }
             // 'allow-once' / 'allow-always' 都允许本次会话内继续使用
@@ -2656,22 +2750,22 @@ ${affectionDesc}
 
           // Extra check for terminal commands
           let needsApproval = isSensitive;
-          if (toolName === 'runTerminalCommand' || toolName === 'awaitTerminalCommand' || toolName === 'runShellScriptCode' || toolName === 'bash') {
-            const cmd = args.command || args.script || '';
+          if (permissionToolName === 'runTerminalCommand' || permissionToolName === 'awaitTerminalCommand' || permissionToolName === 'runShellScriptCode' || permissionToolName === 'bash') {
+            const cmd = permissionArgs.command || permissionArgs.script || '';
             if (this.isDangerousCommand(cmd)) needsApproval = true;
           }
           // terminalSendInput / terminalAnswerPrompt 可能提交危险命令（shell 粘贴执行）
-          if (toolName === 'terminalSendInput' || toolName === 'terminalAnswerPrompt') {
-            const text = args.text || args.answer || '';
+          if (permissionToolName === 'terminalSendInput' || permissionToolName === 'terminalAnswerPrompt') {
+            const text = permissionArgs.text || permissionArgs.answer || '';
             if (this.isDangerousCommand(text)) needsApproval = true;
           }
           // 决策模型护栏（Jev noul）：与黑名单 OR；只有高概率判定为危险才拦截，低置信不拦截
           if (!needsApproval) {
             const cmdTools = ['runTerminalCommand', 'awaitTerminalCommand', 'runShellScriptCode', 'bash', 'terminalSendInput', 'terminalAnswerPrompt'];
-            if (cmdTools.includes(toolName)) {
+            if (cmdTools.includes(permissionToolName)) {
               const dcfg = this.settings?.decision || {};
               if (dcfg.enabled && dcfg.usages?.commandGuard !== false && typeof window.api.decisionNoul === 'function') {
-                const cmdText = String(args.command || args.script || args.text || args.answer || '').slice(0, 800);
+                const cmdText = String(permissionArgs.command || permissionArgs.script || permissionArgs.text || permissionArgs.answer || '').slice(0, 800);
                 if (cmdText) {
                   try {
                     const r = await window.api.decisionNoul({
@@ -2698,13 +2792,13 @@ ${affectionDesc}
                 if (m.role === 'assistant') return `**AI**: ${m.content || ''}`;
                 return '';
               }).filter(Boolean).join('\n\n');
-              const emailResult = await window.api.emailRequestApproval(toolName, args, chatMd);
+              const emailResult = await window.api.emailRequestApproval(permissionToolName, permissionArgs, chatMd);
               approved = emailResult.ok !== false && emailResult.approved;
             } else if (this.settings?.email?.enabled && emailMode !== 'send-receive') {
               // Email enabled but cannot do full approval flow → auto-reject
               approved = false;
             } else {
-              approved = await this.requestApproval(toolName, args);
+              approved = await this.requestApproval(permissionToolName, permissionArgs);
             }
             if (!approved) {
               const result = JSON.stringify({ ok: false, error: '用户拒绝了此操作' });
@@ -2940,6 +3034,18 @@ ${affectionDesc}
   }
 
   async executeTool(name, args) {
+    if (this.usesToolDiscovery() && ['searchTools', 'describeTool', 'invokeTool'].includes(name)) {
+      const registry = this.prepareToolExposure();
+      if (name === 'searchTools') return registry.search(args);
+      if (name === 'describeTool') return registry.describe(args);
+      try {
+        const resolved = registry.resolve(args);
+        return await this.executeTool(resolved.name, resolved.args);
+      } catch (error) { return { ok: false, error: error.message }; }
+    }
+    if (this._toolScope && !this._toolScope.has(name)) return { ok: false, error: 'Tool is outside this agent scope' };
+    if (this.toolExposure) this.toolExposure.touch(name);
+    if (this.settings?.tools?.[name] === false) return { ok: false, error: '该工具已禁用' };
     try {
       // OpenCode 免费池 agent 工具别名（bash/read/edit/glob/grep）→ CIBYP 本地实现
       // 这些工具名由主进程按免费池要求注入请求（见 llm-providers.js mergeFreeTierTools），
@@ -4404,7 +4510,9 @@ ${affectionDesc}
           const action = args.action;
           if (!action) return { ok: false, error: 'missing action parameter' };
           const coord = args.coordinate;
+          const pointerOptions = { space: args.coord_space || 'screenshot', displayId: args.display_id };
           switch (action) {
+            case 'permissions': return await window.api.computerPermissions();
             case 'screenshot':
               return await window.api.computerScreenshot(this.workspacePath, { display_id: args.display_id, annotate: args.annotate });
             case 'list_displays':
@@ -4456,7 +4564,7 @@ ${affectionDesc}
             case 'mouse_move': {
               if (!Array.isArray(coord) || coord.length < 2)
                 return { ok: false, error: 'coordinate [x,y] required for mouse_move' };
-              return await window.api.computerMouseMove(coord[0], coord[1]);
+              return await window.api.computerMouseMove(coord[0], coord[1], pointerOptions);
             }
             case 'left_click':
             case 'right_click':
@@ -4465,13 +4573,13 @@ ${affectionDesc}
               const button = action === 'right_click' ? 'right'
                           : action === 'middle_click' ? 'middle' : 'left';
               const dc = action === 'double_click';
-              return await window.api.computerClick(button, coord?.[0], coord?.[1], dc);
+              return await window.api.computerClick(button, coord?.[0], coord?.[1], dc, pointerOptions);
             }
             case 'left_click_drag': {
               const sc = args.start_coordinate;
               if (!Array.isArray(sc) || !Array.isArray(coord))
                 return { ok: false, error: 'start_coordinate and coordinate [x,y] required for left_click_drag' };
-              return await window.api.computerDrag(sc[0], sc[1], coord[0], coord[1]);
+              return await window.api.computerDrag(sc[0], sc[1], coord[0], coord[1], pointerOptions);
             }
             case 'type': {
               if (!args.text) return { ok: false, error: 'text parameter required for type' };
@@ -4484,7 +4592,7 @@ ${affectionDesc}
             case 'scroll': {
               if (!args.scroll_direction)
                 return { ok: false, error: 'scroll_direction required for scroll' };
-              return await window.api.computerScroll(coord?.[0], coord?.[1], args.scroll_direction, args.scroll_amount);
+              return await window.api.computerScroll(coord?.[0], coord?.[1], args.scroll_direction, args.scroll_amount, pointerOptions);
             }
             case 'wait':
               return await window.api.computerWait(args.duration || 1);
@@ -4610,11 +4718,6 @@ ${affectionDesc}
       'copyFile', 'makeDirectory', 'getSystemInfo', 'calculator', 'webSearch',
       'webFetch', 'runJavaScriptCode'
     ];
-    const DANGEROUS_TOOLS = new Set([
-      'deleteFile', 'deleteDirectory', 'moveFile', 'runNodeJavaScriptCode',
-      'runShellScriptCode', 'runTerminalCommand', 'awaitTerminalCommand',
-      'killTerminal', 'writeClipboard', 'openBrowser'
-    ]);
     try {
       const task = String(args?.task || '').trim();
       if (!task) return { ok: false, error: typeof i18nToolReturn === 'function' ? i18nToolReturn('task_empty', 'task 不能为空') : 'task 不能为空' };
@@ -4622,15 +4725,14 @@ ${affectionDesc}
       // Build tool whitelist
       let allowedTools;
       if (Array.isArray(args.tools) && args.tools.length > 0) {
-        // Caller-specified whitelist — but always drop dangerous tools unless
-        // explicitly listed AND the parent agent has them enabled.
-        const parentEnabled = new Set(this.getActiveToolNames ? this.getActiveToolNames() : []);
+        // Deferred tools remain delegatable, but disabled/out-of-mode tools do not.
+        const parentEnabled = new Set(this.getEnabledToolDefinitions().map(t => t.name));
         allowedTools = args.tools
           .filter(t => typeof t === 'string')
-          .filter(t => !DANGEROUS_TOOLS.has(t) || parentEnabled.has(t));
+          .filter(t => parentEnabled.has(t));
       } else {
         allowedTools = DEFAULT_SUB_TOOLS.filter(t =>
-          this.getActiveToolNames ? this.getActiveToolNames().includes(t) : true);
+          this.getEnabledToolDefinitions().some(def => def.name === t));
       }
       const allowedSet = new Set(allowedTools);
       // 移除迭代上限：原默认 10、上限 30 对复杂任务过小
@@ -4640,6 +4742,8 @@ ${affectionDesc}
       // Create isolated sub-agent
       const subAgent = new Agent();
       subAgent.settings = this.settings;
+      subAgent.mode = this.mode;
+      subAgent._toolScope = allowedSet;
       subAgent.workspacePath = this.workspacePath;
       subAgent.systemInfo = this.systemInfo;
       subAgent.cachedWorkspaceTree = this.cachedWorkspaceTree;
@@ -4690,6 +4794,7 @@ ${tarotLine}
       if (this.onMessage) this.onMessage('sub-agent-start', { id: subAgentId, task, tarot: subAgent.tarotCard, startTime });
 
       subAgent.contextManager.addUserMessage(task);
+      if (subAgent.usesToolDiscovery()) subAgent.contextManager.addUserMessage('需要未加载的工具时调用 searchTools；describeTool 查看参数，invokeTool 可调用已发现且在白名单内的工具。');
       subAgent.running = true;
       subAgent.stopped = false;
 
@@ -4722,8 +4827,7 @@ ${tarotLine}
         }, { isSubAgent: true });
 
         const messages = subAgent.injectActiveSkillsSuffix(subAgent.contextManager.getMessages());
-        const allSchemas = getToolSchemas(this.settings?.tools);
-        const subTools = allSchemas.filter(t => allowedSet.has(t.function?.name));
+        const subTools = subAgent.getRuntimeToolSchemas();
 
         let result = await window.api.chatLLM(messages, this._llmOptions({
           tools: subTools.length > 0 ? subTools : undefined,
@@ -4821,17 +4925,46 @@ ${tarotLine}
           for (const tc of assistantMsg.tool_calls) {
             if (subAgent.stopped || subRunId !== subAgent.runId) break;
             const toolName = tc.function.name;
-            if (!allowedSet.has(toolName)) {
+            const discoveryCall = subAgent.usesToolDiscovery() && ['searchTools','describeTool','invokeTool'].includes(toolName);
+            if (!allowedSet.has(toolName) && !discoveryCall) {
               const deny = JSON.stringify({ ok: false, error: `工具 ${toolName} 不在子代理白名单中` });
               subAgent.contextManager.addToolResult(tc.id, toolName, deny);
               continue;
             }
             let toolArgs;
             try { toolArgs = JSON.parse(tc.function.arguments || '{}'); } catch { toolArgs = {}; }
+            let realName = toolName, realArgs = toolArgs;
+            if (toolName === 'invokeTool' && discoveryCall) {
+              try {
+                const resolved = subAgent.prepareToolExposure().resolve(toolArgs);
+                realName = resolved.name; realArgs = resolved.args;
+              } catch (error) {
+                subAgent.contextManager.addToolResult(tc.id, toolName, JSON.stringify({ ok: false, error: error.message }));
+                continue;
+              }
+            }
+            const definition = this.getEnabledToolDefinitions().find(t => t.name === realName);
+            const category = typeof getToolAuthCategory === 'function' ? getToolAuthCategory(realName) : null;
+            if (category && !(this.settings?.toolAuthGranted?.[category] || this._sessionToolAuth?.[category])) {
+              const decision = await this.requestToolAuth(realName, category);
+              if (!decision || decision === 'deny') {
+                subAgent.contextManager.addToolResult(tc.id, toolName, JSON.stringify({ ok: false, error: '用户未授权使用此工具' })); continue;
+              }
+              this._sessionToolAuth ||= {}; this._sessionToolAuth[category] = true;
+              if (decision === 'allow-always') {
+                await window.api.setSettings({ toolAuthGranted: { [category]: true } });
+                this.settings.toolAuthGranted = { ...(this.settings.toolAuthGranted || {}), [category]: true };
+                subAgent.settings.toolAuthGranted = { ...(subAgent.settings.toolAuthGranted || {}), [category]: true };
+              }
+            }
+            const commands = ['runTerminalCommand','runShellScriptCode','terminalSendInput','terminalAnswerPrompt'];
+            const dangerous = commands.includes(realName) && this.isDangerousCommand(String(realArgs.command || realArgs.script || realArgs.text || realArgs.answer || ''));
+            if (!this.settings.autoApproveSensitive && (definition?.sensitive || dangerous) && !await this.requestApproval(realName, realArgs)) {
+              subAgent.contextManager.addToolResult(tc.id, toolName, JSON.stringify({ ok: false, error: '用户拒绝执行此工具' })); continue;
+            }
             if (subAgent.onToolCall) subAgent.onToolCall(toolName, toolArgs, 'calling');
-            // Sub-agent tool calls always run through the parent's executeTool
-            // (sensitive operations still respect user approval settings).
-            const toolResult = await this.executeTool(toolName, toolArgs);
+            // Discovery uses the scoped registry; real calls keep the original grants and approvals.
+            const toolResult = discoveryCall ? await subAgent.executeTool(toolName, toolArgs) : await this.executeTool(toolName, toolArgs);
             const resultStr = typeof toolResult === 'string' ? toolResult : JSON.stringify(toolResult);
             // 与主 agentLoop 一致：阈值 20000，保留前 18000 + 尾 2000
             let truncated = resultStr;

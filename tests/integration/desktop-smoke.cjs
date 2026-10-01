@@ -68,6 +68,8 @@ ipcMain.once('app:renderer-ready', (event) => {
         true,
       );
       event.sender.setBackgroundThrottling(false);
+      const tools = await require('./renderer-tool-check.cjs')(event.sender);
+      console.log('[desktop-smoke] Tool discovery and permissions:', tools);
       const workspace = await require('./renderer-workspace-check.cjs')(event.sender);
       console.log('[desktop-smoke] Workspace interactions:', workspace);
       event.sender.debugger.attach('1.3');

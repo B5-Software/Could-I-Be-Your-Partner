@@ -791,7 +791,7 @@ ${p.customPrompt ? '\nBenutzerdefinierter Prompt:\n' + p.customPrompt : ''}${p.t
 7. Bei unklaren Anforderungen nachfragen, nicht raten und große Änderungen machen.
 8. Bei Werkzeugfehlern Parameter prüfen, erneut versuchen oder Ansatz wechseln.
 9. Keine Emoji, kein vertraulicher Ton. Auf Deutsch antworten, Code-Kommentare auf Deutsch.
-10. Im Code-Modus sind alle aktivierten Werkzeuge immer verfügbar (keine Auto-Optimierung).
+10. Im Code-Modus bleiben alle aktivierten Werkzeuge verfügbar. Beim Laden nach Bedarf findest du weitere Werkzeuge über searchTools; die automatische Optimierung bestimmt nur, welche Werkzeuge zuerst geladen werden.
 ${p.toolListSection}`;
   },
 

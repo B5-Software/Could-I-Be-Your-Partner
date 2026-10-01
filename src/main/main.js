@@ -7,7 +7,7 @@
 
 'use strict';
 
-const { app, BrowserWindow, ipcMain: electronIpcMain, nativeTheme, dialog, clipboard, screen, shell, systemPreferences, Notification, Tray, Menu, nativeImage, protocol, net, safeStorage, crashReporter } = require('electron');
+const { app, BrowserWindow, ipcMain: electronIpcMain, nativeTheme, dialog, clipboard, screen, shell, Notification, Tray, Menu, nativeImage, protocol, net, safeStorage, crashReporter } = require('electron');
 const appLog = require('./app-log');
 
 // stdout/stderr 被关闭或管道截断（如 `npm start | head`）时，console.log 会抛
@@ -1399,33 +1399,9 @@ app.whenReady().then(() => {
     settings.tarotVisible = false;
     try { saveJSON(settingsPath, settings); } catch {}
   }
-  // macOS：通过 Electron systemPreferences 触发无障碍权限请求。
-  // 只在「有生以来第一次」弹出系统授权框（settings.permissions.accessibilityPromptShown 持久化标记）：
-  // 无论用户允许还是拒绝，此后每次启动都只做静默检测，绝不再自动弹窗、也不再自动跳转系统设置。
-  // 未授权但功能需要时，由具体功能入口给出提示并引导用户手动开启。
-  // 注意：osascript 调用 System Events 不需要无障碍权限，无法用 osascript 检测真实状态。
+  // Desktop permissions are requested only from the explicit Computer Use setup UI.
+  // Startup and tool calls must never trigger TCC prompts or open System Settings.
   if (process.platform === 'darwin') {
-    try {
-      if (!settings.permissions) settings.permissions = {};
-      let trusted = false;
-      if (!settings.permissions.accessibilityPromptShown) {
-        try {
-          trusted = systemPreferences.isTrustedAccessibilityClient(true);
-        } catch { /* 首次弹窗失败视为未授权，继续打标记 */ }
-        settings.permissions.accessibilityPromptShown = true;
-        try { persistSettings(); } catch { /* ignore */ }
-      } else {
-        // 已弹过：静默检测，绝不再次触发系统弹窗
-        try {
-          trusted = systemPreferences.isTrustedAccessibilityClient(false);
-        } catch { /* ignore */ }
-      }
-      if (!trusted) {
-        console.warn('[Accessibility] Not trusted. To use desktop control/automation, enable it manually in System Settings > Privacy & Security > Accessibility.');
-      }
-    } catch (e) {
-      console.warn('[Accessibility] Check failed:', e.message);
-    }
     // macOS Sequoia 15+: 主动触发本地网络权限请求（仅第一次，之后不再自动触发）
     // 仅声明 NSLocalNetworkUsageDescription + NSBonjourServices 不会自动弹窗，
     // 必须发起一次 Bonjour/mDNS 浏览才会触发系统权限弹窗。
@@ -2077,6 +2053,8 @@ ipcMain.handle('clipboard:write', async (_, text) => {
 // ---- Computer Use / 截图 / 系统信息 / shell 打开（实现已拆分）----
 registerComputerUseIpc({
   ipcMain,
+  getSettings: () => settings,
+  persistSettings,
   getImagesDir: () => imagesDir,
   getVmService: () => vmService
 });

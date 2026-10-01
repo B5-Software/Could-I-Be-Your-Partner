@@ -172,28 +172,34 @@
     });
 
     const autoOptimizeEl = document.getElementById('toggle-auto-optimize-tools');
-    const autoOptimizeLabel = document.querySelector('.tools-auto-optimize');
     if (autoOptimizeEl) {
       autoOptimizeEl.checked = !!agent.settings.autoOptimizeToolSelection;
-      // Code 模式不使用自动优化（始终用全部启用工具），隐藏开关
-      if (autoOptimizeLabel) autoOptimizeLabel.style.display = (mode === 'code') ? 'none' : '';
       autoOptimizeEl.onchange = async () => {
-        if (autoOptimizeEl.checked) {
-          const confirmed = await window.confirmDialog(
-            '开启后，每个新对话首条消息前会先优化本次可用工具集合，以节省上下文占用。\n\n注意：若任务中途发现工具不足，AI会通过内部机制重新优化。是否继续开启？',
-            '开启自动优化工具选择'
-          );
-          if (!confirmed) {
-            autoOptimizeEl.checked = false;
-            return;
-          }
-        }
-        agent.settings.autoOptimizeToolSelection = !!autoOptimizeEl.checked;
-        await window.api.setSettings(agent.settings);
-        if (typeof agent.resetOptimizedTools === 'function') {
-          agent.resetOptimizedTools();
-        }
+        agent.settings.autoOptimizeToolSelection = autoOptimizeEl.checked;
+        agent.resetOptimizedTools();
+        await window.api.setSettings({ autoOptimizeToolSelection: autoOptimizeEl.checked });
         updateReoptimizeButtonVisibility();
+        renderToolsStats();
+      };
+    }
+    const discoveryEl = document.getElementById('toggle-tool-discovery');
+    if (discoveryEl) {
+      discoveryEl.checked = agent.settings?.toolExposure?.mode !== 'all';
+      discoveryEl.onchange = async () => {
+        agent.settings.toolExposure = { ...(agent.settings.toolExposure || {}), mode: discoveryEl.checked ? 'adaptive' : 'all', budgetTokens: agent.settings.toolExposure?.budgetTokens || 4000 };
+        agent.resetOptimizedTools();
+        await window.api.setSettings({ toolExposure: { mode: discoveryEl.checked ? 'adaptive' : 'all' } });
+        renderToolsStats();
+      };
+    }
+    const budgetInput = document.getElementById('tool-schema-budget');
+    if (budgetInput) {
+      budgetInput.value = agent.settings.toolExposure?.budgetTokens || 4000;
+      budgetInput.onchange = async () => {
+        const budget = Math.min(16000, Math.max(1000, Number(budgetInput.value) || 4000));
+        agent.settings.toolExposure = { ...(agent.settings.toolExposure || { mode: 'adaptive' }), budgetTokens: budget };
+        budgetInput.value = budget;
+        await window.api.setSettings({ toolExposure: { budgetTokens: budget } });
         renderToolsStats();
       };
     }
@@ -288,12 +294,48 @@
 
     // 渲染工具首次使用授权状态列表（Playwright / Computer Use）
     renderToolAuthList();
+    renderComputerPermissions();
   }
 
   /**
    * 渲染工具首次使用授权状态列表（在工具管理页底部）。
    * 显示每个可授权工具的类别、当前状态（已授权/待授权）和撤销按钮。
    */
+  let computerPermissionRevision = 0;
+  async function renderComputerPermissions() {
+    const card = document.getElementById('computer-permissions-card');
+    if (!card || !window.api.computerPermissions) return;
+    const revision = ++computerPermissionRevision;
+    try {
+      const state = await window.api.computerPermissions();
+      if (revision !== computerPermissionRevision) return;
+      const labels = { granted: '已开启', denied: '未开启', 'not-determined': '未请求', restricted: '受限', unknown: '未知', 'not-required': '无需授权' };
+      card.innerHTML = `<h3><i class="fa-solid fa-desktop"></i> 电脑控制 · ${state.location === 'vm' ? '虚拟机' : state.platform === 'darwin' ? 'macOS' : '本机'}</h3>
+        <p role="status">辅助功能：${escapeHtml(labels[state.accessibility] || state.accessibility || '未知')} · 屏幕录制：${escapeHtml(labels[state.screen] || state.screen || '未知')}${state.platform === 'darwin' && state.location !== 'vm' ? ` · 输入控制：${state.postEvents ? '已开启' : '未开启'}` : ''} · ${state.ready ? '已就绪' : '需要设置'}</p>
+        ${state.guidance ? `<p>${escapeHtml(state.guidance)}</p>` : ''}
+        ${state.backendError ? `<p>${escapeHtml(state.backendError)}</p>` : ''}
+        ${state.executable ? `<p>当前应用：<code>${escapeHtml(state.executable)}</code></p>` : ''}
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          ${state.location !== 'vm' && state.platform === 'darwin' ? ['accessibility','screen'].map(permission => `<button class="btn-secondary" data-computer-request="${permission}">开启${permission === 'screen' ? '屏幕录制' : '辅助功能'}</button><button class="btn-secondary" data-computer-settings="${permission}">${permission === 'screen' ? '屏幕录制' : '辅助功能'}设置</button>`).join('') : ''}
+          <button class="btn-secondary" data-computer-recheck>重新检测</button>
+        </div>`;
+      card.querySelector('[data-computer-recheck]').onclick = renderComputerPermissions;
+      card.querySelectorAll('[data-computer-request]').forEach(button => {
+        button.onclick = async () => {
+          button.disabled = true;
+          try {
+            const result = await window.api.computerRequestPermission(button.dataset.computerRequest);
+            if (result.alreadyRequested) await window.api.computerOpenPermissionSettings(button.dataset.computerRequest);
+          } finally { await renderComputerPermissions(); }
+        };
+      });
+      card.querySelectorAll('[data-computer-settings]').forEach(button => {
+        button.onclick = () => window.api.computerOpenPermissionSettings(button.dataset.computerSettings);
+      });
+      WebUIMirror.pushDomEvent({ type: 'dom_replace', container: '#computer-permissions-card', html: card.innerHTML });
+    } catch (error) { if (revision === computerPermissionRevision) card.textContent = '权限检测失败：' + error.message; }
+  }
+
   async function renderToolAuthList() {
     const listEl = document.getElementById('tool-auth-list');
     if (!listEl) return;
@@ -335,13 +377,10 @@
         );
         if (!ok) return;
         try {
-          const s = await window.api.getSettings();
-          if (!s.toolAuthGranted) s.toolAuthGranted = { playwright: false, computerUse: false };
-          s.toolAuthGranted[cat] = false;
-          await window.api.setSettings(s);
+          await window.api.setSettings({ toolAuthGranted: { [cat]: false } });
           // 同步刷新当前 agent 实例的 settings 和会话内缓存
           for (const a of [agent, codeAgent, babeAgent]) {
-            if (a && a.settings) a.settings = s;
+            if (a && a.settings) a.settings.toolAuthGranted = { ...(a.settings.toolAuthGranted || {}), [cat]: false };
             if (a && a._sessionToolAuth) a._sessionToolAuth[cat] = false;
           }
           renderToolAuthList();
@@ -358,12 +397,14 @@
     const toolsInCategory = typeof filterToolDefsByConfig === 'function'
       ? filterToolDefsByConfig(allCategoryTools, agent.settings)
       : allCategoryTools;
+    const patch = {};
     toolsInCategory.forEach(t => {
       // 配置门控工具（生图/决策）配置后自动启用，不允许被组开关关闭
       if (typeof isConfigGatedTool === 'function' && isConfigGatedTool(t.name)) return;
       agent.settings.tools[t.name] = enabled;
+      patch[t.name] = enabled;
     });
-    await window.api.setSettings(agent.settings);
+    await window.api.setSettings({ tools: patch });
     agent.contextManager.setSystemPrompt(agent.getSystemPrompt());
     if (typeof agent.resetOptimizedTools === 'function') {
       agent.resetOptimizedTools();
@@ -381,7 +422,7 @@
       agent.settings.tools = {};
     }
     agent.settings.tools[name] = enabled;
-    await window.api.setSettings(agent.settings);
+    await window.api.setSettings({ tools: { [name]: enabled } });
     if (checkboxEl) {
       checkboxEl.closest('.tool-card')?.classList.toggle('disabled', !enabled);
     }

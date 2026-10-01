@@ -26,3 +26,19 @@ jobs:
       - run: npm ci
       - run: npm run check
       - run: npm audit --audit-level=high
+  macos-computer:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-26-intel, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm run build:computer
+      - run: node --test tests/unit/computer-use.test.cjs
+      - run: npx electron tests/integration/macos-computer-smoke.cjs
