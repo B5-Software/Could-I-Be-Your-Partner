@@ -23,9 +23,9 @@ async function fetchWithFallback(fetchFn, preferred) {
   for (const mirror of order) {
     try {
       const data = await fetchFn(mirror);
-      if (mirror !== preferred) console.log('[vm] 清单拉取回退到镜像:', mirror);
+      if (mirror !== preferred) console.log('[vm] Manifest download switched to mirror:', mirror);
       return { data, mirror };
-    } catch (e) { lastErr = e; console.warn('[vm] 清单拉取失败（' + mirror + '）:', e.message); }
+    } catch (e) { lastErr = e; console.warn('[vm] Manifest download failed (' + mirror + '):', e.message); }
   }
   throw lastErr || new Error('清单拉取失败');
 }
@@ -181,7 +181,7 @@ class VmService extends EventEmitter {
     await push(hostRoot, vmRoot);
     if (preserveGit) await vmFs.writeBuffer(marker, Buffer.from(JSON.stringify({ identity, hostRoot }) + '\n'));
     this._externMounts.set(hostRoot, vmRoot);
-    console.log('[vm] 已挂载外部目录:', hostRoot, '→', vmRoot);
+    console.log('[vm] External directory mounted:', hostRoot, '→', vmRoot);
     return { ok: true, hostRoot, vmRoot };
   }
 
@@ -487,7 +487,7 @@ class VmService extends EventEmitter {
     }
     // shared 模式：VM 就绪后做一次全量双向同步（后台执行，不阻塞启动）
     inst.on('ready', () => {
-      this.syncAppearance({ force: true }).catch((error) => console.warn('[vm] 个性化同步:', error.message));
+      this.syncAppearance({ force: true }).catch((error) => console.warn('[vm] Appearance synchronization failed:', error.message));
       if (this.runtime.workspaceMode !== 'shared') return;
       setTimeout(() => {
         this.syncWorkspace({ direction: 'both', reason: 'boot' }).catch(() => {});

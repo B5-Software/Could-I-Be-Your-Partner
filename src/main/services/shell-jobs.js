@@ -105,6 +105,7 @@ class ShellJobs {
       });
       job.child = child;
       job.pid = child.pid;
+      job.closed = new Promise((resolve) => child.once('close', resolve));
       const attach = (stream, key) => {
         const decoder = new StringDecoder('utf8');
         stream.on('data', (chunk) => {
@@ -125,6 +126,7 @@ class ShellJobs {
         job.signal = signal;
       });
       child.on('close', (code, signal) => {
+        job.childClosed = true;
         job.code = code;
         job.signal = signal;
         if (job.status === 'running') job.status = code === 0 ? 'completed' : 'failed';
@@ -257,7 +259,7 @@ class ShellJobs {
             execFile(
               'taskkill.exe',
               ['/PID', String(job.pid), '/T', '/F'],
-              { windowsHide: true },
+              { windowsHide: true, timeout: 10000 },
               () => resolve(),
             ),
           );
@@ -274,6 +276,9 @@ class ShellJobs {
             /* exited */
           }
         }
+        // taskkill returning does not mean Node has observed the final pipe/process
+        // closure. Windows can still hold the working directory open at this point.
+        await this.waitForHostClose(job);
       }
       job.status = 'stopped';
     })();
@@ -283,13 +288,35 @@ class ShellJobs {
       job.stopping = null;
     }
   }
+  async waitForHostClose(job) {
+    if (!job.closed || job.childClosed) return;
+    let timer;
+    try {
+      await Promise.race([
+        job.closed,
+        new Promise((_resolve, reject) => {
+          timer = setTimeout(() => reject(new Error('命令进程未完成退出，请重试停止')), 10000);
+        }),
+      ]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
   async cleanup(job) {
     if (job.location === 'vm') {
       if (job.instance?.state === 'ready' && job.directory)
         await job.instance
           .exec(`rm -rf -- ${shellQuote(job.directory)}`, { timeoutMs: 10000 })
           .catch(() => {});
-    } else if (job.directory) await fs.promises.rm(job.directory, { recursive: true, force: true });
+    } else if (job.directory) {
+      await this.waitForHostClose(job);
+      await fs.promises.rm(job.directory, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 100,
+      });
+    }
   }
   async dispose() {
     this.disposed = true;

@@ -95,7 +95,8 @@ export class TodoSidebar {
     if (open === this.open) return;
     this.open = open;
     if (open) this.returnFocus = document.activeElement as HTMLElement;
-    else if (this.root.contains(document.activeElement)) this.returnFocus?.focus();
+    else if (this.root.contains(document.activeElement))
+      this.returnFocus?.focus({ preventScroll: true });
     setSurfaceOpen(this.root, open, (element) => this.options.mirror(element));
     document.querySelectorAll<HTMLElement>('[data-todo-toggle]').forEach((button) => {
       button.setAttribute('aria-expanded', String(open));
@@ -103,7 +104,9 @@ export class TodoSidebar {
     });
     if (open) {
       this.render();
-      this.input.focus();
+      // The sidebar starts outside the viewport. Default focus scrolls the whole
+      // document sideways before the animation can reserve its space.
+      this.input.focus({ preventScroll: true });
     }
   }
   refresh(): void {

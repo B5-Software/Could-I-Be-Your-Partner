@@ -248,6 +248,8 @@ select {
 #app {
   display: flex;
   height: calc(100vh - 32px);
+  /* A sliding sidebar must not enlarge the document's horizontal scroll area. */
+  overflow: clip;
 }
 
 /* Sidebar */

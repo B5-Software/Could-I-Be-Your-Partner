@@ -734,7 +734,7 @@ function tryShowMainWindow() {
   mainWindowShownOnce = true;
   mainWindow.show();
   try { mainWindow.focus(); } catch { /* ignore */ }
-  console.log('[vm] 主窗口已显示' + (vmRuntimeGate.required ? '（虚拟机门控已放行）' : ''));
+  console.log('[vm] Main window shown' + (vmRuntimeGate.required ? ' (VM startup gate released)' : ''));
   return true;
 }
 
@@ -746,21 +746,21 @@ function tryShowMainWindow() {
 async function startVmBootForSplash() {
   try {
     vmService.emergencyHost = false;
-    console.log('[vm] 开始虚拟机启动编排（Splash 门控生效）');
+    console.log('[vm] Starting virtual machine (splash startup gate active)');
     broadcastVm('vm:boot-begin', { status: vmService.status() });
     await vmService.start();
     vmRuntimeGate.ready = true;
     vmRuntimeGate.failed = false;
-    console.log('[vm] 虚拟机就绪: ' + JSON.stringify({
+    console.log('[vm] Virtual machine ready: ' + JSON.stringify({
       accel: vmService.status().inst?.accel,
-      detail: vmService.status().inst?.detail,
+      detail: 'Virtual machine ready',
     }));
     broadcastVm('vm:boot-ready', { status: vmService.status() });
     tryShowMainWindow();
   } catch (e) {
     vmRuntimeGate.failed = true;
     vmRuntimeGate.reason = e.message;
-    console.error('[vm] 虚拟机启动失败: ' + e.message);
+    console.error('[vm] Virtual machine startup failed: ' + e.message);
     broadcastVm('vm:boot-failed', {
       message: e.message,
       code: e.code || null,
@@ -1914,7 +1914,7 @@ ipcMain.handle('theme:get', () => ({ shouldUseDarkColors: nativeTheme.shouldUseD
 // 广播主题变化到所有 BrowserWindow（含子窗口 CAD/EDA/小游戏）
 function broadcastThemeChanged() {
   codeOSSService.syncPersonalization();
-  vmService.syncAppearance().catch((error) => console.warn('[vm] 个性化同步:', error.message));
+  vmService.syncAppearance().catch((error) => console.warn('[vm] Appearance synchronization failed:', error.message));
   const payload = { shouldUseDarkColors: nativeTheme.shouldUseDarkColors, mode: settings.theme.mode };
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) {
@@ -4284,9 +4284,9 @@ function logVmRoutingSelfCheck() {
   try {
     const probe = ['fs:readFile', 'word:create', 'ppt:create', 'spreadsheet:exportFile', 'image:generate', 'file:download', 'ffmpeg:invoke'];
     const missing = probe.filter((ch) => !__ipcHandlers.has(ch));
-    console.log(`[vm] 工具路由就绪（已记录 ${__ipcHandlers.size} 个通道；路由通道 ${ROUTE_CHANNELS.size} 个；缺: ${missing.length ? missing.join(',') : '无'}）`);
+    console.log(`[vm] Tool routing ready (${__ipcHandlers.size} registered channels; ${ROUTE_CHANNELS.size} routed channels; missing: ${missing.length ? missing.join(',') : 'none'})`);
   } catch (e) {
-    console.error('[vm] 工具路由自检失败（不影响本机模式）:', e.message);
+    console.error('[vm] Tool routing self-check failed (host mode remains available):', e.message);
   }
 }
 setTimeout(logVmRoutingSelfCheck, 3000);
