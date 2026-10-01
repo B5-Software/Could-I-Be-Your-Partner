@@ -57,8 +57,8 @@ static NSDictionary *tree(pid_t pid = 0) {
     id bbox = [NSNull null];
     if (position && size && CFGetTypeID((__bridge CFTypeRef)position) == AXValueGetTypeID()
         && CFGetTypeID((__bridge CFTypeRef)size) == AXValueGetTypeID()
-        && AXValueGetValue((__bridge AXValueRef)position, kAXValueCGPointType, &point)
-        && AXValueGetValue((__bridge AXValueRef)size, kAXValueCGSizeType, &dimensions)) {
+        && AXValueGetValue((__bridge AXValueRef)position, static_cast<AXValueType>(kAXValueCGPointType), &point)
+        && AXValueGetValue((__bridge AXValueRef)size, static_cast<AXValueType>(kAXValueCGSizeType), &dimensions)) {
       bbox = @{ @"x": @(point.x), @"y": @(point.y), @"w": @(dimensions.width), @"h": @(dimensions.height),
         @"cx": @(point.x + dimensions.width / 2), @"cy": @(point.y + dimensions.height / 2) };
     }
