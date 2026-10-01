@@ -34,11 +34,15 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          fetch-depth: 2
-      - name: Compare version with previous commit
+          fetch-depth: 0
+      - name: Compare version with pre-push revision
         id: check
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
         run: |
-          PREV=$(git show HEAD~1:package.json | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{try{console.log(JSON.parse(s).version)}catch{console.log('')}})")
+          BASE=HEAD~1
+          if [ -n "$BEFORE_SHA" ] && git cat-file -e "$BEFORE_SHA^{commit}" 2>/dev/null; then BASE="$BEFORE_SHA"; fi
+          PREV=$(git show "$BASE:package.json" | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{try{console.log(JSON.parse(s).version)}catch{console.log('')}})")
           CUR=$(node -e "console.log(require('./package.json').version)")
           echo "previous=$PREV current=$CUR"
           CHANGED=false
@@ -143,4 +147,4 @@ jobs:
           PRERELEASE="${{ needs.detect.outputs.prerelease }}"
           ARGS=(--title "v$VERSION" --generate-notes)
           if [ "$PRERELEASE" = "true" ]; then ARGS+=(--prerelease); fi
-          gh release create "v$VERSION" release-artifacts/* "${ARGS[@]}"
+          gh release create "v$VERSION" release-artifacts/* --target "$GITHUB_SHA" "${ARGS[@]}"
