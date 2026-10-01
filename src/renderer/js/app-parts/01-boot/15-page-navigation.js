@@ -14,6 +14,8 @@
     if (changed) {
       const focusInOldPage = pages.some(item => item !== page && item.contains(document.activeElement));
       activatePage(page, pages);
+      page.scrollTop = 0;
+      page.querySelectorAll('.settings-panel, [data-page-scroll]').forEach(element => { element.scrollTop = 0; });
       if (focusInOldPage) document.querySelector(`.nav-item[data-page="${name}"]`)?.focus();
     }
     document.querySelectorAll('.nav-item[data-page]').forEach(button => {
@@ -63,29 +65,10 @@
   document.querySelectorAll('#main-content > .page').forEach(page => {
     page.inert = !page.classList.contains('active');
     page.setAttribute('aria-hidden', String(page.inert));
-    const name = page.id.slice(5);
-    if (primaryPages.has(name)) return;
-    const close = document.createElement('button');
-    close.type = 'button';
-    close.className = 'btn-icon page-dismiss';
-    close.title = '返回会话';
-    close.setAttribute('aria-label', '返回会话');
-    close.innerHTML = '<i class="fa-solid fa-xmark" aria-hidden="true"></i>';
-    close.addEventListener('click', () => navigatePage(currentMode));
-    page.prepend(close);
   });
   document.getElementById('tools-mode-switcher')?.addEventListener('click', event => {
     const button = event.target.closest('.tools-mode-btn');
     if (!button) return;
     codeEditorModeFilter = button.dataset.toolMode;
     Promise.resolve(loadToolsPage()).then(() => WebUIMirror.pushDomEvent({ type: 'dom_replace', container: '#page-tools', html: document.getElementById('page-tools').innerHTML }));
-  });
-  const sidebarToggle = document.getElementById('btn-sidebar-toggle');
-  sidebarToggle?.addEventListener('click', () => {
-    const sidebar = document.getElementById('sidebar');
-    const expanded = sidebar.classList.toggle('expanded');
-    sidebarToggle.setAttribute('aria-expanded', String(expanded));
-    sidebarToggle.title = expanded ? '收起侧边栏' : '展开侧边栏';
-    sidebarToggle.querySelector('i').className = 'fa-solid ' + (expanded ? 'fa-angles-left' : 'fa-angles-right');
-    WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#sidebar', attr: 'class', value: sidebar.className });
   });

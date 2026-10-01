@@ -1,5 +1,5 @@
-  // A single floating window follows the active Chat / Code / Babe session.
-  const todoWindow = new TodoWindow(todoPanel, {
+  // A right sidebar follows the active Chat / Code / Babe session.
+  const todoSidebar = new TodoSidebar(todoPanel, {
     getAgent: () => sessionManager ? sessionManager.getActive(currentMode)?.agent || null :
       (currentMode === 'chat' ? agent : currentMode === 'code' ? codeAgent : babeAgent),
     mirror: (element, contents) => {
@@ -11,12 +11,12 @@
     reportError: message => showToast(message, 'error')
   });
   document.querySelectorAll('[data-todo-toggle]').forEach(button => {
-    button.addEventListener('click', () => { button.focus(); todoWindow.toggle(); });
+    button.addEventListener('click', () => { button.focus(); todoSidebar.toggle(); });
   });
-  function renderTodoList() { todoWindow.refresh(); }
+  function renderTodoList() { todoSidebar.refresh(); }
   ['session-activated', 'session-closed', 'session-title', 'todo-updated'].forEach(type => {
-    AppBus.on(type, () => todoWindow.refresh());
+    AppBus.on(type, () => todoSidebar.refresh());
   });
   document.querySelectorAll('.mode-btn').forEach(button => {
-    button.addEventListener('click', () => todoWindow.refresh());
+    button.addEventListener('click', () => todoSidebar.refresh());
   });

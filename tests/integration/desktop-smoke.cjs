@@ -27,6 +27,7 @@ global.fetch = async () => {
   throw new Error('Network disabled in desktop smoke check');
 };
 const errors = [];
+process.on('uncaughtExceptionMonitor', (error) => errors.push(`Main exception: ${error.message}`));
 app.on('browser-window-created', (_event, window) => {
   if (process.env.CIBYP_UI_PREVIEW_DIR) {
     // A transparent test window lets Windows paint Chromium for native screenshots.
@@ -74,6 +75,15 @@ ipcMain.once('app:renderer-ready', (event) => {
       console.log('[desktop-smoke] Workspace interactions:', workspace);
       const settingsCheck = await require('./renderer-settings-check.cjs')(event.sender);
       console.log('[desktop-smoke] Settings interactions:', settingsCheck);
+      const motion = await require('./renderer-motion-check.cjs')(event.sender);
+      console.log('[desktop-smoke] Motion policy:', motion);
+      // DevTools created from the native menu can initially have null web preferences.
+      const devToolsOpened = new Promise((resolve) =>
+        event.sender.once('devtools-opened', resolve),
+      );
+      event.sender.openDevTools({ mode: 'detach', activate: false });
+      await devToolsOpened;
+      event.sender.closeDevTools();
       event.sender.debugger.attach('1.3');
       await event.sender.debugger.sendCommand('Emulation.setEmulatedMedia', {
         features: [{ name: 'prefers-reduced-motion', value: 'reduce' }],
@@ -82,7 +92,10 @@ ipcMain.once('app:renderer-ready', (event) => {
         document.documentElement.dataset.animations = 'on';
         document.getElementById('btn-todo-sidebar').click();
         document.getElementById('btn-close-todo').click();
-        return document.getElementById('todo-panel').classList.contains('hidden');
+        const modal = document.getElementById('message-modal');
+        modal.classList.remove('hidden');
+        window.fadeOutHide(modal);
+        return document.getElementById('todo-panel').classList.contains('hidden') && modal.classList.contains('hidden');
       })()`);
       assert.equal(reduced, true, 'system reduced-motion preference closes without animation');
       event.sender.debugger.detach();
@@ -94,7 +107,7 @@ ipcMain.once('app:renderer-ready', (event) => {
           active.conversationTitle = '校园项目 · 今天的小目标';
           active.handleTodo({ operations: [
             { action: 'add', text: '查阅 OpenCode 的上下文更新设计' },
-            { action: 'add', text: '重做 Todo 浮窗与会话状态' },
+            { action: 'add', text: '恢复 Todo 侧栏与会话状态' },
             { action: 'add', text: '统一侧边栏动画与键盘交互' },
             { action: 'add', text: '完成回归检查并提交代码' },
             { action: 'toggle', id: active.todoIdCounter + 1 }
@@ -116,13 +129,13 @@ ipcMain.once('app:renderer-ready', (event) => {
             applied.background,
             mode === 'dark' ? 'rgb(43, 47, 63)' : 'rgb(235, 237, 242)',
           );
-          for (const tab of ['overview', 'context', 'budget']) {
+          for (const tab of ['overview', 'context', 'budget', 'theme', 'security']) {
             await event.sender.executeJavaScript(`(async () => {
               await window.navigatePage('settings');
               document.getElementById('btn-close-todo').click();
               document.querySelectorAll('#toast-container .toast-item').forEach(toast => toast.click());
               window.activateSettingsTab('${tab}');
-              document.querySelector('.settings-panels').scrollTop = 0;
+              document.querySelector('.settings-panel.active').scrollTop = 0;
               document.querySelectorAll('.settings-advanced').forEach(details => details.open = false);
               await new Promise(resolve => setTimeout(resolve, 350));
             })()`);
@@ -133,7 +146,11 @@ ipcMain.once('app:renderer-ready', (event) => {
               ).toPNG(),
             );
           }
-          await event.sender.executeJavaScript("window.navigatePage('chat')");
+          await event.sender.executeJavaScript(`(async () => {
+            window.navigatePage('chat');
+            document.getElementById('btn-todo-sidebar').click();
+            await new Promise(resolve => setTimeout(resolve, 200));
+          })()`);
           fs.writeFileSync(
             path.join(directory, `todo-${mode}.png`),
             (
@@ -148,9 +165,9 @@ ipcMain.once('app:renderer-ready', (event) => {
           await window.navigatePage('settings');
           window.activateSettingsTab('context');
           document.getElementById('btn-close-todo').click();
-          document.querySelector('.settings-panels').scrollTop = 0;
+          document.querySelector('.settings-panel.active').scrollTop = 0;
           await new Promise(resolve => setTimeout(resolve, 350));
-          const panel = document.querySelector('.settings-panels');
+          const panel = document.querySelector('.settings-panel.active');
           if (panel.scrollWidth > panel.clientWidth + 2) throw new Error('narrow settings overflow horizontally');
         })()`);
         fs.writeFileSync(

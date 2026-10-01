@@ -203,13 +203,12 @@
     const color = colors[type] || colors.info;
     const icon = iconMap[type] || iconMap.info;
     const el = document.createElement('div');
-    el.style.cssText = `position:fixed;top:52px;right:18px;z-index:9999;display:flex;align-items:center;gap:8px;padding:10px 13px;border-radius:8px;background:${color};color:#fff;box-shadow:0 8px 24px rgba(0,0,0,0.22);font-size:12px;pointer-events:none;animation:se-toast-in .22s ease;`;
+    el.style.cssText = `position:fixed;top:52px;right:18px;z-index:9999;display:flex;align-items:center;gap:8px;padding:10px 13px;border-radius:8px;background:${color};color:#fff;box-shadow:0 8px 24px rgba(0,0,0,0.22);font-size:12px;pointer-events:none;animation:cibyp-fade-in .22s ease;`;
     el.innerHTML = `<i class="fa-solid ${icon}"></i><span>${escapeHtml(message)}</span>`;
     document.body.appendChild(el);
     setTimeout(() => {
-      el.style.transition = 'opacity .25s ease, transform .25s ease';
+      el.style.transition = 'opacity .25s ease';
       el.style.opacity = '0';
-      el.style.transform = 'translateY(-6px)';
       setTimeout(() => el.remove(), 250);
     }, 2600);
   }

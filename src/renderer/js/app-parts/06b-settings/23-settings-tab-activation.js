@@ -34,7 +34,9 @@
       panel.classList.add('active');
       panel.inert = false;
       panel.setAttribute('aria-hidden', 'false');
-      if (motionEnabled()) panel.animate([{ opacity: 0, transform: 'translateY(6px)' }, { opacity: 1, transform: 'translateY(0)' }], { duration: 160 });
+      panel.scrollTop = 0;
+      panel.querySelectorAll('[data-page-scroll]').forEach(element => { element.scrollTop = 0; });
+      if (motionEnabled()) panel.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 160 });
     }
     // Lazy-load usage stats when the tab is opened
     if (btn.dataset.tab === 'usage') {

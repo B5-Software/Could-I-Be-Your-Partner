@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later; Copyright (c) 2026 B5-Software */
-import { clampWindow, setSurfaceOpen } from './surfaces';
+import { setSurfaceOpen } from './surfaces';
 
 interface Todo {
   id: number;
@@ -18,7 +18,7 @@ interface Options {
   reportError(message: string): void;
 }
 
-export class TodoWindow {
+export class TodoSidebar {
   private input: HTMLInputElement;
   private list: HTMLElement;
   private filter = 'all';
@@ -86,8 +86,6 @@ export class TodoWindow {
         } else this.setOpen(false);
       }
     });
-    this.bindDrag();
-    window.addEventListener('resize', () => this.clamp());
     this.render();
   }
   toggle(): void {
@@ -105,7 +103,6 @@ export class TodoWindow {
     });
     if (open) {
       this.render();
-      this.clamp();
       this.input.focus();
     }
   }
@@ -217,7 +214,7 @@ export class TodoWindow {
           : '把大目标拆成小步骤，从这里开始';
       this.list.appendChild(empty);
     }
-    // Mirror only the changing regions so input drafts and drag position remain intact.
+    // Mirror only the changing regions so input drafts and keyboard focus remain intact.
     for (const id of ['todo-list', 'todo-summary', 'todo-filters']) {
       this.options.mirror(this.root.querySelector<HTMLElement>(`#${id}`)!, true);
     }
@@ -229,51 +226,5 @@ export class TodoWindow {
       ).focus();
     else if (focused?.classList.contains('todo-edit-input'))
       this.list.querySelector<HTMLInputElement>('.todo-edit-input')?.focus();
-  }
-  private clamp(): void {
-    if (!this.open) return;
-    const rect = this.root.getBoundingClientRect();
-    const point = clampWindow(
-      this.root.offsetLeft,
-      this.root.offsetTop,
-      rect.width,
-      rect.height,
-      innerWidth,
-      innerHeight,
-    );
-    this.root.style.left = `${point.x}px`;
-    this.root.style.top = `${point.y}px`;
-    this.root.style.right = 'auto';
-  }
-  private bindDrag(): void {
-    const handle = this.root.querySelector<HTMLElement>('.todo-header')!;
-    let drag: { id: number; x: number; y: number; left: number; top: number } | null = null;
-    handle.addEventListener('pointerdown', (event) => {
-      if (event.button !== 0 || (event.target as Element).closest('button')) return;
-      const rect = this.root.getBoundingClientRect();
-      drag = {
-        id: event.pointerId,
-        x: event.clientX,
-        y: event.clientY,
-        left: rect.left,
-        top: rect.top,
-      };
-      handle.setPointerCapture(event.pointerId);
-      event.preventDefault();
-    });
-    handle.addEventListener('pointermove', (event) => {
-      if (!drag || event.pointerId !== drag.id) return;
-      this.root.style.left = `${drag.left + event.clientX - drag.x}px`;
-      this.root.style.top = `${drag.top + event.clientY - drag.y}px`;
-      this.root.style.right = 'auto';
-      this.clamp();
-    });
-    const finish = () => {
-      drag = null;
-      this.options.mirror(this.root);
-    };
-    handle.addEventListener('pointerup', finish);
-    handle.addEventListener('pointercancel', finish);
-    handle.addEventListener('lostpointercapture', finish);
   }
 }

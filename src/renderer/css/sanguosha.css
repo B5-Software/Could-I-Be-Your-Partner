@@ -160,8 +160,8 @@ body {
 }
 
 @keyframes sgPulse {
-  0%, 100% { box-shadow: 0 0 12px rgba(212,168,83,0.3); }
-  50% { box-shadow: 0 0 20px rgba(212,168,83,0.5); }
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
 }
 
 .sg-hero-portrait {
@@ -339,14 +339,14 @@ body {
 }
 
 .sg-card:hover {
-  transform: translateY(-8px);
+
   border-color: var(--sg-accent);
   box-shadow: 0 4px 12px var(--sg-shadow);
   z-index: 100;
 }
 
 .sg-card.selected {
-  transform: translateY(-14px);
+
   border-color: var(--sg-accent-light);
   box-shadow: 0 4px 16px rgba(212,168,83,0.5);
   z-index: 101;
@@ -578,7 +578,7 @@ body {
 
 .sg-hero-option:hover {
   border-color: var(--sg-accent);
-  transform: translateY(-4px);
+
   box-shadow: 0 4px 16px var(--sg-shadow);
 }
 
@@ -665,10 +665,10 @@ body {
 }
 
 @keyframes sgBannerFade {
-  0% { opacity: 0; transform: translate(-50%,-50%) scale(0.8); }
-  20% { opacity: 1; transform: translate(-50%,-50%) scale(1); }
+  0% { opacity: 0;  }
+  20% { opacity: 1;  }
   80% { opacity: 1; }
-  100% { opacity: 0; transform: translate(-50%,-50%) scale(1.05); }
+  100% { opacity: 0;  }
 }
 
 /* ---- Game Over ---- */

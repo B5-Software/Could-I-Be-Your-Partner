@@ -347,7 +347,9 @@ window.showToast = showToast;
 const MODAL_FADE_MS = 200;
 
 function _modalAnimationsEnabled() {
-  return document.documentElement.getAttribute('data-modal-animations') !== 'off';
+  return document.documentElement.getAttribute('data-modal-animations') !== 'off' &&
+    document.documentElement.getAttribute('data-animations') !== 'off' &&
+    !matchMedia('(prefers-reduced-motion: reduce)').matches;
 }
 
 function _fadeOutPrepare(el) {

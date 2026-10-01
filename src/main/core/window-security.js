@@ -35,8 +35,8 @@ function createWindowSecurity({
     }
   }
   function protectWebContents(contents) {
-    const preload = contents.getLastWebPreferences().preload;
-    if (!preload) return;
+    const preload = contents.getLastWebPreferences()?.preload;
+    if (typeof preload !== 'string' || !preload) return;
     const relative = path.relative(preloadDirectory, preload);
     if (relative.startsWith('..') || path.isAbsolute(relative)) return;
     contents.setWindowOpenHandler(() => ({ action: 'deny' }));

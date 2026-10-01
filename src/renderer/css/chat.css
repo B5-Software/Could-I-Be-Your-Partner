@@ -214,8 +214,8 @@ body.no-tarot .setting-label-tarot + .toggle-switch + .setting-hint {
   animation: obWizardIn 0.3s cubic-bezier(0.16, 1, 0.3, 1);
 }
 @keyframes obWizardIn {
-  from { opacity: 0; transform: translateY(16px) scale(0.97); }
-  to   { opacity: 1; transform: translateY(0) scale(1); }
+  from { opacity: 0; }
+  to   { opacity: 1; }
 }
 
 /* ---- 顶部步骤指示器 ---- */
@@ -276,7 +276,7 @@ body.no-tarot .setting-label-tarot + .toggle-switch + .setting-hint {
   background: var(--accent);
   border-color: var(--accent);
   color: #fff;
-  transform: scale(1.12);
+
   box-shadow: 0 4px 14px var(--accent-bg);
 }
 .ob-step-item.active .ob-step-label { color: var(--accent); }
@@ -302,8 +302,8 @@ body.no-tarot .setting-label-tarot + .toggle-switch + .setting-hint {
   animation: obPageIn 0.35s cubic-bezier(0.16, 1, 0.3, 1);
 }
 @keyframes obPageIn {
-  from { opacity: 0; transform: translateX(24px); }
-  to   { opacity: 1; transform: translateX(0); }
+  from { opacity: 0; }
+  to   { opacity: 1; }
 }
 .ob-page-icon {
   width: 56px;
@@ -584,9 +584,7 @@ body.no-tarot .setting-label-tarot + .toggle-switch + .setting-hint {
 .remote-conn-banner[data-state="reconnecting"] .remote-conn-icon {
   animation: remoteSpin 1s linear infinite;
 }
-@keyframes remoteSpin {
-  to { transform: rotate(360deg); }
-}
+@keyframes remoteSpin { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 .remote-conn-banner .remote-conn-reconnect,
 .remote-conn-banner .remote-conn-dismiss {
   padding: 2px 8px;
@@ -762,7 +760,7 @@ body.no-tarot .setting-label-tarot + .toggle-switch + .setting-hint {
   width: 80%;
   max-width: 80%;
   margin: 0 20px 16px 20px;
-  animation: slideUp 0.3s ease;
+  animation: fadeIn 0.3s ease;
 }
 
 /* Markdown list spacing — fix bullets too close to left edge */
@@ -958,7 +956,7 @@ body.no-tarot .setting-label-tarot + .toggle-switch + .setting-hint {
 .scroll-to-bottom-btn:hover {
   color: var(--accent);
   border-color: var(--accent);
-  transform: translateY(-2px);
+
 }
 
 .scroll-to-bottom-btn.sbb-hidden {
@@ -1030,7 +1028,7 @@ body.no-tarot .setting-label-tarot + .toggle-switch + .setting-hint {
   padding: 10px 14px;
   margin: 4px 0;
   font-size: 13px;
-  animation: slideUp 0.2s ease;
+  animation: fadeIn 0.2s ease;
 }
 
 .tool-call-header {
@@ -1605,18 +1603,13 @@ html[data-modal-animations="off"] .sub-agent-modal-dialog {
   transition: transform var(--transition);
 }
 
-.message-image:hover { transform: scale(1.02); }
-
-/* Todo floating window */
+/* Todo sidebar */
 .todo-panel {
-  position: fixed; right: 24px; top: 110px;
-  width: min(390px, calc(100vw - 24px)); height: min(520px, calc(100vh - 64px));
-  min-height: 240px; background: var(--bg-secondary); border: 1px solid var(--border);
-  border-radius: 18px; box-shadow: var(--shadow-lg, 0 16px 60px #0003);
-  display: flex; flex-direction: column; overflow: hidden; z-index: 90;
+  position: relative; width: min(340px, 40vw); flex-shrink: 0;
+  min-height: 0; background: var(--bg-secondary); border-left: 1px solid var(--border);
+  display: flex; flex-direction: column; overflow: hidden; z-index: 10;
 }
-.todo-header { display: flex; align-items: center; justify-content: space-between; padding: 16px 18px; cursor: grab; touch-action: none; user-select: none; background: var(--accent-bg); }
-.todo-header:active { cursor: grabbing; }
+.todo-header { display: flex; align-items: center; justify-content: space-between; padding: 16px 18px; background: var(--accent-bg); }
 .todo-header h3 { font-size: 15px; display: flex; align-items: center; gap: 10px; }
 .todo-header h3 i { color: var(--accent); }
 .todo-summary { padding: 14px 18px 4px; }
@@ -1639,8 +1632,9 @@ html[data-modal-animations="off"] .sub-agent-modal-dialog {
 .todo-edit-form { display: flex; flex: 1; min-width: 0; gap: 4px; }
 .todo-edit-input { min-width: 0; width: 100%; border: 1px solid var(--accent); border-radius: 6px; padding: 5px; color: var(--text-primary); background: var(--bg-primary); }
 .todo-empty { padding: 36px 16px; text-align: center; font-size: 13px; line-height: 1.7; color: var(--text-tertiary); }
-.todo-input-area { display: flex; gap: 8px; padding: 14px; border-top: 1px solid var(--border); }
-#todo-input { min-width: 0; }
+.todo-input-area { display: flex; align-items: stretch; gap: 8px; padding: 14px; border-top: 1px solid var(--border); }
+#todo-input { flex: 1; min-width: 0; height: 40px; margin: 0; padding: 0 12px; box-sizing: border-box; }
+#btn-add-todo { flex: 0 0 40px; width: 40px; height: 40px; min-height: 0; margin: 0; padding: 0; box-sizing: border-box; display: flex; align-items: center; justify-content: center; }
 
 /* ---- Mode Switcher (titlebar) ---- */
 .mode-switcher {
@@ -2007,7 +2001,7 @@ html[data-modal-animations="off"] .sub-agent-modal-dialog {
 .code-eslint-actions .btn-icon { padding: 2px 6px; font-size: 0.8em; opacity: 0.7; }
 .code-eslint-actions .btn-icon:hover { opacity: 1; background: var(--bg-hover, rgba(0,0,0,0.08)); }
 .code-eslint-actions .btn-icon.spin i { animation: eslint-spin 0.8s linear infinite; }
-@keyframes eslint-spin { from { transform: rotate(0); } to { transform: rotate(360deg); } }
+@keyframes eslint-spin { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 
 .code-eslint-body {
   flex: 1;
@@ -2358,7 +2352,7 @@ html[data-modal-animations="off"] .sub-agent-modal-dialog {
   padding: 20px;
   box-shadow: var(--shadow-lg);
   z-index: 20;
-  animation: slideUp 0.3s ease;
+  animation: fadeIn 0.3s ease;
 }
 
 .approval-header {
@@ -2825,16 +2819,16 @@ html[data-modal-animations="off"] .sub-agent-modal-dialog {
   max-width: 560px;
   cursor: pointer;
   opacity: 0;
-  transform: translateY(-10px);
-  transition: opacity 0.25s ease, transform 0.25s ease;
+
+  transition: opacity 0.25s ease;
 }
 .toast-item.toast-visible {
   opacity: 1;
-  transform: translateY(0);
+
 }
 .toast-item.toast-leave {
   opacity: 0;
-  transform: translateY(-10px);
+
   transition-duration: 0.3s;
 }
 .toast-item .toast-icon {
@@ -2880,7 +2874,6 @@ html[data-modal-animations="off"] .sub-agent-modal-dialog {
   cursor: zoom-in;
   transition: transform 0.25s ease;
 }
-.chat-image-wrap:hover .chat-image { transform: scale(1.015); }
 .chat-image-toolbar {
   position: absolute;
   right: 8px;
@@ -2892,12 +2885,12 @@ html[data-modal-animations="off"] .sub-agent-modal-dialog {
   background: rgba(20, 22, 28, 0.62);
   backdrop-filter: blur(6px);
   opacity: 0;
-  transform: translateY(4px);
-  transition: opacity 0.18s ease, transform 0.18s ease;
+
+  transition: opacity 0.18s ease;
   z-index: 2;
 }
 .chat-image-wrap:hover .chat-image-toolbar,
-.chat-image-toolbar:focus-within { opacity: 1; transform: translateY(0); }
+.chat-image-toolbar:focus-within { opacity: 1; }
 .chat-image-btn {
   width: 30px;
   height: 30px;
@@ -2921,15 +2914,15 @@ html[data-modal-animations="off"] .sub-agent-modal-dialog {
   color: var(--text-tertiary);
   padding: 0 4px 2px;
 }
-.code-file-tree-panel, .code-editor-panel, .code-chat { transition: width 180ms ease, min-width 180ms ease, flex-grow 180ms ease, opacity 160ms ease; }
-.code-file-tree-panel.collapsed, .code-editor-panel.collapsed, .code-chat.collapsed { opacity: 0; pointer-events: none; }
+.code-file-tree-panel, .code-editor-panel, .code-chat { transition: width 180ms ease, min-width 180ms ease, flex-grow 180ms ease; }
+.code-file-tree-panel.collapsed, .code-editor-panel.collapsed, .code-chat.collapsed { pointer-events: none; }
 html[data-animations="off"] .code-file-tree-panel, html[data-animations="off"] .code-editor-panel, html[data-animations="off"] .code-chat { transition: none; }
 @media (prefers-reduced-motion: reduce) { .code-file-tree-panel, .code-editor-panel, .code-chat { transition: none; } }
-.geogebra-panel, .todo-panel { transition: opacity 180ms ease, transform 180ms ease; }
-.geogebra-panel[aria-hidden="true"], .todo-panel[aria-hidden="true"] { opacity: 0; transform: translateX(18px); }
+.geogebra-panel, .todo-panel { transition: transform 180ms ease; }
+.geogebra-panel[aria-hidden="true"], .todo-panel[aria-hidden="true"] { transform: translateX(18px); }
 html[data-animations="off"] .geogebra-panel, html[data-animations="off"] .todo-panel { transition: none; }
 @media (prefers-reduced-motion: reduce) { .geogebra-panel, .todo-panel { transition: none; } }
-.code-eslint-panel { transition: height 160ms ease; overflow: hidden; }
+.code-eslint-panel { overflow: hidden; }
 .code-eslint-panel.collapsed .code-eslint-body { display: block; }
 html[data-animations="off"] .code-eslint-panel { transition: none; }
 @media (prefers-reduced-motion: reduce) { .code-eslint-panel { transition: none; } }

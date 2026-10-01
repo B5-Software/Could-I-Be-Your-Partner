@@ -31,7 +31,7 @@ export function motionEnabled(): boolean {
 /** A cancelled exit must never hide a surface that has already reopened. */
 export function setSurfaceOpen(element: HTMLElement, open: boolean, mirror?: Mirror): void {
   const previous = transitions.get(element);
-  const opacity = getComputedStyle(element).opacity;
+  const transform = getComputedStyle(element).transform;
   previous?.cancel();
   transitions.delete(element);
   element.dataset.surfaceOpen = String(open);
@@ -51,10 +51,9 @@ export function setSurfaceOpen(element: HTMLElement, open: boolean, mirror?: Mir
   const animation = element.animate(
     [
       {
-        opacity: previous ? opacity : open ? 0 : 1,
-        transform: open ? 'translateX(18px)' : 'translateX(0)',
+        transform: previous ? transform : open ? 'translateX(18px)' : 'translateX(0)',
       },
-      { opacity: open ? 1 : 0, transform: open ? 'translateX(0)' : 'translateX(18px)' },
+      { transform: open ? 'translateX(0)' : 'translateX(18px)' },
     ],
     { duration: 180, easing: 'cubic-bezier(.2,.8,.2,1)' },
   );
@@ -130,10 +129,10 @@ export class DockPanels {
   }
 }
 
-/** Animate directory/disclosure height and prevent a stale exit from collapsing a reopened body. */
+/** Fade disclosure contents without vertical movement or a stale collapse after reopening. */
 export function setDisclosureOpen(element: HTMLElement, open: boolean, mirror?: Mirror): void {
   const previous = transitions.get(element);
-  const start = element.classList.contains('hidden') ? 0 : element.getBoundingClientRect().height;
+  const opacity = getComputedStyle(element).opacity;
   previous?.cancel();
   transitions.delete(element);
   element.dataset.disclosureOpen = String(open);
@@ -143,16 +142,14 @@ export function setDisclosureOpen(element: HTMLElement, open: boolean, mirror?: 
   const finish = () => {
     if (element.dataset.disclosureOpen !== String(open)) return;
     element.classList.toggle('hidden', !open);
-    element.style.overflow = '';
     mirror?.(element);
   };
   if (!motionEnabled()) {
     finish();
     return;
   }
-  element.style.overflow = 'hidden';
   const animation = element.animate(
-    [{ height: `${start}px` }, { height: `${open ? element.scrollHeight : 0}px` }],
+    [{ opacity: previous ? opacity : open ? 0 : 1 }, { opacity: open ? 1 : 0 }],
     { duration: 160, easing: 'ease-out' },
   );
   transitions.set(element, animation);
@@ -178,26 +175,6 @@ export function activatePage(page: HTMLElement, pages: HTMLElement[]): void {
   if (motionEnabled())
     transitions.set(
       page,
-      page.animate(
-        [
-          { opacity: 0, transform: 'translateY(8px)' },
-          { opacity: 1, transform: 'translateY(0)' },
-        ],
-        { duration: 160, easing: 'ease-out' },
-      ),
+      page.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 160, easing: 'ease-out' }),
     );
-}
-
-export function clampWindow(
-  x: number,
-  y: number,
-  width: number,
-  height: number,
-  viewportWidth: number,
-  viewportHeight: number,
-): { x: number; y: number } {
-  return {
-    x: Math.max(8, Math.min(x, viewportWidth - width - 8)),
-    y: Math.max(40, Math.min(y, viewportHeight - height - 8)),
-  };
 }

@@ -35,7 +35,7 @@
     #overlay[hidden] { display: none; }
     .spinner { width: 24px; height: 24px; border: 3px solid rgba(230,232,239,.18); border-top-color: #4f8cff;
       border-radius: 50%; animation: spin .9s linear infinite; }
-    @keyframes spin { to { transform: rotate(360deg); } }
+    @keyframes spin { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
     code { font-family: Consolas, monospace; background: #232833; padding: 1px 4px; border-radius: 4px; }
     /* ---- 主题（跟随设置：深浅色/强调色/背景色）---- */
     :root {
@@ -50,6 +50,7 @@
     #bar button, #bar input, #bar select { -webkit-app-region: no-drag; }
     #btn-close { margin-left: 4px; }
   </style>
+  <link rel="stylesheet" href="../css/motion.css">
 </head>
 <body>
   <div id="bar">

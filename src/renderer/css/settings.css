@@ -10,7 +10,8 @@
   display: grid;
   grid-template-columns: 200px 1fr;
   gap: 24px;
-  align-items: start;
+  align-items: stretch;
+  grid-template-rows: minmax(0, 1fr);
   background: color-mix(in srgb, var(--accent) 4%, var(--bg-primary));
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
@@ -26,6 +27,7 @@
   flex-direction: column;
   gap: 8px;
   overflow-y: auto;
+  min-height: 0;
   max-height: 100%;
 }
 
@@ -83,24 +85,34 @@
 .settings-panels {
   display: flex;
   flex-direction: column;
-  gap: 18px;
-  overflow-y: auto;
-  max-height: 100%;
-  padding-right: 6px;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .settings-panel {
   display: none;
+  min-width: 0;
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  padding-right: 6px;
   animation: fadeIn 0.3s ease;
 }
 
 .settings-panel.active {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 20px;
 }
 
+#page-settings { overflow: hidden; }
+
 .settings-group {
+  min-width: 0;
   background: var(--bg-secondary);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
@@ -863,7 +875,9 @@ input[id^="setting-budget-peak-"][type="text"]:focus {
   color: var(--text-secondary);
   user-select: none;
 }
-.settings-advanced-body { padding-top: 8px; }
+.settings-advanced-body { padding-top: 8px; display: flex; flex-direction: column; gap: 14px; }
+.settings-advanced-body > .setting-item { margin-bottom: 0; }
+.settings-panel > .settings-advanced { margin: 0; padding: 0; }
 
 /* ---- 资源下载（语音模型）---- */
 .res-model-card {
@@ -871,10 +885,9 @@ input[id^="setting-budget-peak-"][type="text"]:focus {
   align-items: center;
   gap: 12px;
   padding: 10px 12px;
-  border: 1px solid var(--border-color);
+  border: 1px solid var(--border);
   border-radius: 10px;
-  margin-bottom: 8px;
-  background: var(--surface-alt, transparent);
+  background: var(--bg-primary);
 }
 .res-model-info { flex: 1; min-width: 0; }
 .res-model-name {
@@ -949,15 +962,19 @@ input[id^="setting-budget-peak-"][type="text"]:focus {
 }
 
 /* ---- LLM 模型池 ---- */
-.llm-pool-list { display: flex; flex-direction: column; gap: 8px; }
+.llm-pool-list, #res-models-list, #plugins-list,
+#page-settings .mcp-servers-list, #page-settings .tool-auth-list {
+  display: flex; flex-direction: column; gap: 12px;
+}
+#page-settings .mcp-server-card, #page-settings .plugin-card { margin: 0; }
 .llm-pool-card {
   display: flex;
   align-items: center;
   gap: 10px;
   padding: 10px 12px;
-  border: 1px solid var(--border-color);
+  border: 1px solid var(--border);
   border-radius: 10px;
-  background: var(--surface-alt, transparent);
+  background: var(--bg-primary);
 }
 .llm-pool-card.active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
 .llm-pool-card.disabled { opacity: 0.55; }
@@ -1028,7 +1045,7 @@ input[id^="setting-budget-peak-"][type="text"]:focus {
   .settings-limit-guide { grid-template-columns:1fr; gap:12px; }
 }
 @media (max-width:680px) {
-  .settings-shell { grid-template-columns:minmax(0,1fr); }
+  .settings-shell { grid-template-columns:minmax(0,1fr); grid-template-rows:auto minmax(0,1fr); }
   .settings-tabs { flex-direction:row; max-height:120px; flex-wrap:wrap; gap:6px; }
   .settings-tab-group { display:none; }
   .settings-overview-grid { grid-template-columns:1fr; }

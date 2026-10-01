@@ -15,18 +15,33 @@ module.exports = async function checkSettings(webContents) {
     };
     await window.navigatePage('settings');
     await until(() => field('settings-overview-cards').children.length === 6, 'overview did not load');
-    const dismiss = document.querySelector('#page-settings .page-dismiss');
-    check(getComputedStyle(dismiss).position === 'absolute', 'return button is stretched into the settings layout');
+    check(!document.querySelector('#page-settings .page-dismiss'), 'settings has a redundant close button');
     const invalidDefaults = [...document.querySelectorAll('#page-settings input[type="number"]')]
       .filter(input => input.value !== '' && !input.disabled && !input.checkValidity()).map(input => input.id);
     check(!invalidDefaults.length, 'invalid default settings: ' + invalidDefaults.join(', '));
     const allTabs = [...document.querySelectorAll('.settings-tab')];
     check(allTabs.length === 35, 'settings category missing');
-    let visited = 0, labelled = 0;
+    let visited = 0, labelled = 0, spaced = 0;
     for (const tab of allTabs.filter(tab => !tab.hidden && tab.style.display !== 'none')) {
       check(window.activateSettingsTab(tab.dataset.tab), 'cannot open ' + tab.dataset.tab);
       const panel = document.querySelector('.settings-panel.active');
+      const advanced = [...panel.querySelectorAll('.settings-advanced')].map(details => [details, details.open]);
+      advanced.forEach(([details]) => details.open = true);
       check(panel?.dataset.tab === tab.dataset.tab && !panel.inert, 'wrong active panel');
+      check(panel.parentElement.classList.contains('settings-panels'), 'nested settings category: ' + tab.dataset.tab);
+      check(panel.getBoundingClientRect().width > 0 && panel.getBoundingClientRect().height > 0, 'blank settings category: ' + tab.dataset.tab);
+      check(getComputedStyle(panel).overflowY === 'auto', 'category has no independent scroller: ' + tab.dataset.tab);
+      check(panel.scrollTop === 0, 'category retained scroll: ' + tab.dataset.tab);
+      check(panel.clientHeight <= panel.parentElement.clientHeight, 'category scroller exceeds its viewport: ' + tab.dataset.tab);
+      check([...panel.querySelectorAll('.settings-group')].some(group => group.getBoundingClientRect().height > 0) || tab.dataset.tab === 'overview', 'category cards are hidden: ' + tab.dataset.tab);
+      for (const parent of [panel, ...panel.querySelectorAll('div, details')]) {
+        const cards = [...parent.children].filter(child => child.matches('.settings-group, .settings-advanced, .llm-pool-card, .res-model-card, .mcp-server-card, .plugin-card, .tool-auth-item') && child.getBoundingClientRect().height > 0);
+        for (let index = 1; index < cards.length; index++) {
+          const gap = cards[index].getBoundingClientRect().top - cards[index - 1].getBoundingClientRect().bottom;
+          check(gap >= 11, 'settings cards touch in ' + tab.dataset.tab + ': ' + gap);
+          spaced++;
+        }
+      }
       check(document.querySelectorAll('.settings-panel.active').length === 1, 'multiple active panels');
       check(tab.getAttribute('aria-selected') === 'true', 'tab selection not accessible');
       check([...document.querySelectorAll('.settings-panel:not(.active)')].every(p => p.inert), 'hidden panels are focusable');
@@ -36,6 +51,7 @@ module.exports = async function checkSettings(webContents) {
         check(control.labels?.length || control.getAttribute('aria-label'), 'control has no accessible label: ' + control.id);
         labelled++;
       }
+      advanced.forEach(([details, open]) => details.open = open);
       visited++;
     }
     window.activateSettingsTab('overview');
@@ -45,6 +61,23 @@ module.exports = async function checkSettings(webContents) {
     check(document.activeElement.classList.contains('settings-tab') && document.activeElement !== first, 'keyboard navigation failed');
 
     window.activateSettingsTab('context');
+    const contextPanel = field('setting-llm-ctx').closest('.settings-panel');
+    contextPanel.scrollTop = 140;
+    check(contextPanel.scrollTop > 0, 'long category cannot scroll');
+    const shared = contextPanel.parentElement;
+    check(getComputedStyle(shared).overflowY === 'hidden' && shared.scrollTop === 0, 'categories share an outer scroller');
+    check(document.getElementById('page-settings').scrollTop === 0, 'settings page steals category scrolling');
+    window.activateSettingsTab('security');
+    const securityPanel = document.querySelector('.settings-panel.active');
+    check(securityPanel.scrollTop === 0, 'security inherited the previous category position');
+    securityPanel.scrollTop = 140;
+    check(securityPanel.scrollTop > 0, 'security content cannot scroll independently');
+    window.activateSettingsTab('context');
+    check(contextPanel.scrollTop === 0, 'reopening a category did not reset scrolling');
+    contextPanel.scrollTop = 140;
+    window.navigatePage('about');
+    window.navigatePage('settings');
+    check(contextPanel.scrollTop === 0, 'reopening settings retained category scrolling');
     check(field('setting-llm-ctx').closest('.settings-panel').dataset.tab === 'context', 'capacity is not in context');
     change('setting-llm-max-response', '4096');
     change('tool-schema-budget', '2000');
@@ -100,6 +133,6 @@ module.exports = async function checkSettings(webContents) {
     check(limits.contextTokens === 8192 && probe.contextManager.maxTokens === 8192, 'session model uses global capacity');
     check(probe._llmOptions().contextLength === 8192 && probe._llmOptions().poolEntryId === 'small', 'request lost model allocation');
     window.activateSettingsTab('overview');
-    return { categories: allTabs.length, visited, labelled, search: 'advanced and credential-safe', persistence: 'Token, weekly, timezone, zero retries and price deletion' };
+    return { categories: allTabs.length, visible: visited, cardGaps: spaced, labelled, scrolling: 'independent categories, reset on every switch', search: 'advanced and credential-safe', persistence: 'Token, weekly, timezone, zero retries and price deletion' };
   })()`);
 };

@@ -64,8 +64,8 @@ html, body {
 .voice-bar.state-error .pulse-dot { background: var(--danger, #e74c3c); animation: none; }
 
 @keyframes pulse {
-  0%, 100% { transform: scale(1); opacity: 1; }
-  50% { transform: scale(1.45); opacity: 0.65; }
+  0%, 100% {  opacity: 1; }
+  50% {  opacity: 0.65; }
 }
 
 .bar-body { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center; gap: 3px; }

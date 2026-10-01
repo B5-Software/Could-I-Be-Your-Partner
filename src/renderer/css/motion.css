@@ -1,0 +1,24 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later; Copyright (c) 2026 B5-Software */
+/* Shared motion policy: fade UI content; reserve horizontal movement for sidebars. */
+*, *::before, *::after { transition-property: opacity !important; }
+.geogebra-panel, .todo-panel { transition-property: transform !important; }
+.code-file-tree-panel, .code-editor-panel, .code-chat {
+  transition-property: width, min-width, flex-grow !important;
+}
+#main-content { transition-property: padding-right !important; }
+
+@keyframes cibyp-opacity-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+.fa-spin, .fa-spin-pulse, .fa-pulse, .fa-beat, .fa-beat-fade,
+.fa-bounce, .fa-shake, .fa-flip, .fa-fade {
+  animation-name: cibyp-opacity-pulse !important;
+}
+@keyframes cibyp-fade-in { from { opacity: 0; } to { opacity: 1; } }
+
+html[data-animations="off"] *, html[data-animations="off"] *::before,
+html[data-animations="off"] *::after { animation: none !important; transition: none !important; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation: none !important; transition: none !important; }
+}

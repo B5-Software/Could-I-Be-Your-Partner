@@ -167,6 +167,30 @@ test('window policy blocks navigation, popups and webviews for app preloads', ()
   assert.equal(prevented, 2);
 });
 
+test('window policy accepts WebContents without app preload preferences', () => {
+  const preloadDirectory = path.resolve('src/preload/generated');
+  const security = createWindowSecurity({
+    pagesDirectory: path.resolve('src/renderer/pages'),
+    pageNames: ['index.html'],
+    preloadDirectory,
+  });
+  for (const preferences of [
+    null,
+    undefined,
+    {},
+    { preload: null },
+    { preload: 1 },
+    { preload: path.resolve('outside-preload.js') },
+  ]) {
+    const contents = new EventEmitter();
+    contents.getLastWebPreferences = () => preferences;
+    contents.setWindowOpenHandler = () => assert.fail('unrelated contents must be ignored');
+    assert.doesNotThrow(() => security.protectWebContents(contents));
+    assert.equal(contents.listenerCount('will-navigate'), 0);
+    assert.equal(contents.listenerCount('will-attach-webview'), 0);
+  }
+});
+
 test('pricing uses the budget timezone and handles overnight peak periods', () => {
   const cost = calculateTokenCost(
     { prompt: 1000000, completion: 1000000 },

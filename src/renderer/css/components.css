@@ -175,10 +175,7 @@
   animation: spin-mcp 0.8s linear infinite;
 }
 
-@keyframes spin-mcp {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
-}
+@keyframes spin-mcp { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 
 .mcp-tool-group {
   border-color: var(--accent-bg-hover, var(--border));
@@ -1524,8 +1521,8 @@ html[data-modal-animations="off"] .modal-fade-out {
 }
 
 @keyframes gameCardSlideIn {
-  from { opacity: 0; transform: translateY(16px) scale(0.96); }
-  to { opacity: 1; transform: translateY(0) scale(1); }
+  from { opacity: 0;  }
+  to { opacity: 1;  }
 }
 
 .game-invite-header {
