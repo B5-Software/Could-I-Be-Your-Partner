@@ -1,4 +1,5 @@
   // ---- IPC Dialog Listeners ----
+  installVmFileDialog(window.api);
   // 监听main进程的确认对话框请求
   window.api.onShowConfirmDialog(async (message) => {
     try {

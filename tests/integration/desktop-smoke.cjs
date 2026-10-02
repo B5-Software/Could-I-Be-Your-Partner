@@ -14,6 +14,7 @@ fs.writeFileSync(
   path.join(profile, 'data/settings.json'),
   JSON.stringify({
     onboardingCompleted: true,
+    notifications: { enabled: false },
     runtime: { location: 'host' },
     closeToTray: 'never',
     trayEnabled: false,
@@ -122,12 +123,16 @@ ipcMain.once('app:renderer-ready', (event) => {
       event.sender.setBackgroundThrottling(false);
       // Control the system preference for layout interpolation as well as motion checks.
       event.sender.debugger.attach('1.3');
+      await event.sender.debugger.sendCommand('Emulation.setFocusEmulationEnabled', {
+        enabled: true,
+      });
       await event.sender.debugger.sendCommand('Emulation.setEmulatedMedia', {
         features: [{ name: 'prefers-reduced-motion', value: 'no-preference' }],
       });
       const tools = await require('./renderer-tool-check.cjs')(event.sender);
       console.log('[desktop-smoke] Tool discovery and permissions:', tools);
       const workspace = await require('./renderer-workspace-check.cjs')(event.sender);
+      await require('./monaco-appearance-check.cjs')(event.sender, BrowserWindow);
       console.log('[desktop-smoke] Workspace interactions:', workspace);
       const settingsCheck = await require('./renderer-settings-check.cjs')(event.sender);
       console.log('[desktop-smoke] Settings interactions:', settingsCheck);
@@ -161,10 +166,10 @@ ipcMain.once('app:renderer-ready', (event) => {
       if (process.env.CIBYP_UI_PREVIEW_DIR) {
         const directory = path.resolve(process.env.CIBYP_UI_PREVIEW_DIR);
         fs.mkdirSync(directory, { recursive: true });
-        await event.sender.executeJavaScript(`(() => {
+        await event.sender.executeJavaScript(`(async () => {
           const active = window.__sessionManager.getActive('chat').agent;
           active.conversationTitle = '校园项目 · 今天的小目标';
-          active.handleTodo({ operations: [
+          await active.handleTodo({ operations: [
             { action: 'add', text: '查阅 OpenCode 的上下文更新设计' },
             { action: 'add', text: '恢复 Todo 侧栏与会话状态' },
             { action: 'add', text: '统一侧边栏动画与键盘交互' },

@@ -12,10 +12,23 @@ const { subscribe: onChannel, dispose: disposeSubscriptions } = createChannelSub
 window.addEventListener('unload', disposeSubscriptions, { once: true });
 
 contextBridge.exposeInMainWorld('api', {
+  onVMFileDialogOpen: (cb) => onChannel('vmFileDialog:open', cb),
+  onVMFileDialogClose: (cb) => onChannel('vmFileDialog:close', cb),
+  vmFileDialogConfig: (id) => ipcRenderer.invoke('vmFileDialog:config', id),
+  vmFileDialogBrowse: (id, directory) => ipcRenderer.invoke('vmFileDialog:browse', id, directory),
+  vmFileDialogMkdir: (id, directory) => ipcRenderer.invoke('vmFileDialog:mkdir', id, directory),
+  vmFileDialogChoose: (id, file, overwrite) => ipcRenderer.invoke('vmFileDialog:choose', id, file, overwrite),
+  vmFileDialogCancel: (id) => ipcRenderer.invoke('vmFileDialog:cancel', id),
   codeOSSOpen: (directory) => ipcRenderer.invoke('codeoss:open', directory),
+  codeOSSVersion: () => ipcRenderer.invoke('codeoss:version'),
+  todoGet: () => ipcRenderer.invoke('todo:get'),
+  startupRuntime: () => ipcRenderer.invoke('app:startup-runtime'),
+  todoMutate: (args) => ipcRenderer.invoke('todo:mutate', args),
+  onTodoState: (callback) => onChannel('todo:state', callback),
   codeOSSLayout: (layout) => ipcRenderer.invoke('codeoss:layout', layout),
   codeOSSCommand: (command) => ipcRenderer.invoke('codeoss:command', command),
   codeOSSContext: () => ipcRenderer.invoke('codeoss:context'),
+  codeOSSLanguage: (params, workspace) => ipcRenderer.invoke('codeoss:language', params, workspace),
   codeOSSChanges: (action = 'list', id) => ipcRenderer.invoke('codeoss:changes', action, id),
   onCodeOSSIDEState: (cb) => onChannel('codeoss:ide-state', cb),
   onCodeOSSChanges: (cb) => onChannel('codeoss:changes', cb),

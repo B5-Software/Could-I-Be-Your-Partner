@@ -1,8 +1,13 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 'use strict';
+const EditorColors = require('../../src/shared/editor-colors');
 
 /** Match CIBYP's primary/secondary surfaces while preserving IDE syntax colors. */
-function workbenchColors({ theme = {}, dark = false } = {}) {
+function workbenchColors({
+  theme = {},
+  dark = false,
+  focusOutlines = theme.focusOutlines !== false,
+} = {}) {
   const valid = (value, fallback) =>
     /^#[0-9a-f]{6}$/i.test(value || '') ? value.toLowerCase() : fallback;
   const accent = valid(theme.accentColor, '#4f8cff');
@@ -26,7 +31,8 @@ function workbenchColors({ theme = {}, dark = false } = {}) {
   const hover = shift(background, luminance(background) < 0.5 ? 40 : -5);
   const accentForeground = luminance(accent) > 0.6 ? '#172033' : '#ffffff';
   return {
-    focusBorder: accent,
+    ...EditorColors.selection(accent, dark),
+    focusBorder: focusOutlines ? accent : '#00000000',
     'button.background': accent,
     'button.hoverBackground': shift(accent, -20),
     'button.foreground': accentForeground,
@@ -67,7 +73,7 @@ function workbenchColors({ theme = {}, dark = false } = {}) {
     'list.hoverBackground': hover,
     'list.activeSelectionBackground': accent,
     'list.activeSelectionForeground': accentForeground,
-    'list.focusOutline': accent,
+    'list.focusOutline': focusOutlines ? accent : '#00000000',
     'badge.background': accent,
     'badge.foreground': accentForeground,
     'quickInput.background': secondary,

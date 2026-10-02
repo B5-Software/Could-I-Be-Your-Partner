@@ -166,6 +166,28 @@ app.whenReady().then(async () => {
     assert.equal(result.platform, 'linux');
     assert.equal(fs.existsSync('/workspace/codeoss-smoke/terminal-result.txt'), false);
     console.log('[codeoss-vm] PASS real remote workspace', result.passed);
+    await service.request('ide.language', {
+      action: 'command',
+      command: 'cibypFixture.terminal',
+      arguments: ['close'],
+    });
+    await service.request('ide.command', { command: 'workbench.action.terminal.toggleTerminal' });
+    const terminal = await service.request('ide.language', {
+      action: 'command',
+      command: 'cibypFixture.terminal',
+      arguments: ['probe'],
+    });
+    assert.equal(terminal.result.platform, 'linux', JSON.stringify(terminal));
+    console.log('[codeoss-vm] PASS toolbar terminal executes in guest workspace');
+    const completion = await service.request('ide.language', {
+      action: 'completion',
+      path: 'sample.js',
+      line: 1,
+      column: 1,
+      query: 'cibypFixture',
+    });
+    assert(JSON.stringify(completion).includes('cibypFixtureCompletion'));
+    console.log('[codeoss-vm] PASS language providers execute in installed remote extensions');
     const read = await service.request('ide.readDocument', {
       path: '/workspace/codeoss-smoke/sample.js',
       location: 'vm',
@@ -192,6 +214,35 @@ app.whenReady().then(async () => {
     assert.equal((await instance.exec('test -e /workspace/codeoss-smoke/ai-vm.js')).code, 1);
     assert.equal((await service.request('ide.changes', {})).changes.length, 0);
     console.log('[codeoss-vm] PASS host AI sidebar bridge reviews/reverts guest checkpoints');
+    await io.writeBuffer(imported.vmRoot + '/sample.js', Buffer.from('console.log(1);\n'));
+    await io.writeBuffer(imported.vmRoot + '/.cibyp-codeoss-test', Buffer.from('fixture'));
+    await instance.exec(`cd '${imported.vmRoot}' && git init -q`);
+    assert.equal((await service.open(imported.vmRoot)).ok, true);
+    await waitFor(() => service.activePeer());
+    await waitFor(
+      async () =>
+        (await instance.exec(`test -f '${imported.vmRoot}/fixture-result.json'`)).code === 0,
+    );
+    await service.request('ide.language', {
+      action: 'command',
+      command: 'cibypFixture.terminal',
+      arguments: ['close'],
+    });
+    await service.request('ide.command', { command: 'workbench.action.terminal.toggleTerminal' });
+    const reopened = await service.request('ide.language', {
+      action: 'command',
+      command: 'cibypFixture.terminal',
+      arguments: ['probe'],
+    });
+    assert.equal(reopened.result.platform, 'linux');
+    await service.request('ide.command', { command: 'workbench.action.terminal.toggleTerminal' });
+    assert.equal(
+      (await instance.exec(`cat '${imported.vmRoot}/toolbar-terminal.txt'`)).stdout,
+      'linux',
+    );
+    console.log(
+      '[codeoss-vm] PASS toolbar terminal opens/reuses the imported guest workspace after switching',
+    );
     await finish();
   } catch (error) {
     await finish(error);

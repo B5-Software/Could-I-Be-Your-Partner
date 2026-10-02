@@ -9,6 +9,7 @@
     }
   }
   syncAboutVersion();
+  window.api.codeOSSVersion().then(version => { document.getElementById('about-codeoss-version').textContent = `Code-OSS ${version}`; }).catch(() => {});
 
   function syncBuiltinToolCount() {
     const el = document.getElementById('about-builtins-count');

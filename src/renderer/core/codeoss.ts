@@ -25,6 +25,7 @@ type API = {
     bounds: Bounds;
     overlay?: HoverCard | null;
     interactionRevision?: number;
+    immersive?: boolean;
   }): Promise<unknown>;
   codeOSSCommand(command: string): Promise<unknown>;
   onCodeOSSState(callback: (state: State) => void): () => void;
@@ -37,11 +38,22 @@ export class CodeOSSController {
   private opening: Promise<Workspace> | null = null;
   private lastLayout = '';
   private interactionRevision = 0;
+  private immersive = localStorage.getItem('cibyp-code-immersive') === 'true';
   constructor(
     private api: API,
     private viewport: HTMLElement,
     private status: HTMLElement,
   ) {
+    document.getElementById('btn-code-immersive')?.addEventListener('click', () => {
+      this.immersive = !this.immersive;
+      localStorage.setItem('cibyp-code-immersive', String(this.immersive));
+      if (
+        this.immersive &&
+        document.getElementById('code-agent-panel')?.classList.contains('collapsed')
+      )
+        document.getElementById('btn-code-agent')?.click();
+      this.scheduleLayout();
+    });
     api.onCodeOSSInteraction((event) => {
       this.interactionRevision = event.revision;
       document.body.classList.add('codeoss-interacting');
@@ -49,8 +61,13 @@ export class CodeOSSController {
     });
     document.addEventListener(
       'pointermove',
-      () => {
-        if (document.body.classList.contains('codeoss-interacting')) {
+      (event) => {
+        const target = event.target;
+        if (
+          target instanceof Element &&
+          target.closest('.session-tab, .context-indicator') &&
+          document.body.classList.contains('codeoss-interacting')
+        ) {
           document.body.classList.remove('codeoss-interacting');
           this.scheduleLayout();
         }
@@ -112,6 +129,16 @@ export class CodeOSSController {
     });
   }
   private layout(): void {
+    const immersive = this.immersive && this.viewport.getClientRects().length > 0;
+    if (document.body.classList.contains('code-immersive') !== immersive)
+      document.body.classList.toggle('code-immersive', immersive);
+    const button = document.getElementById('btn-code-immersive');
+    if (button) {
+      const text = immersive ? '退出沉浸' : '沉浸模式';
+      if (button.textContent !== text) button.textContent = text;
+      if (button.getAttribute('aria-pressed') !== String(immersive))
+        button.setAttribute('aria-pressed', String(immersive));
+    }
     const bounds = this.viewport.getBoundingClientRect();
     const visibleModal = [
       ...document.querySelectorAll<HTMLElement>(
@@ -130,6 +157,7 @@ export class CodeOSSController {
       bounds: { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height },
       overlay: visible ? this.hoverCard(bounds) : null,
       interactionRevision: this.interactionRevision,
+      immersive,
     };
     const key = JSON.stringify(layout);
     if (key === this.lastLayout) return;
@@ -157,8 +185,8 @@ export class CodeOSSController {
     const rect = card.getBoundingClientRect();
     // Keep the native overlay inside the IDE: covering the hovered tab itself
     // would trigger mouseleave and cause the card to flicker open and closed.
-    const x = Math.max(Math.ceil(viewport.left), Math.floor(rect.x - 24));
-    const y = Math.max(Math.ceil(viewport.top), Math.floor(rect.y - 24));
+    const x = Math.max(Math.ceil(viewport.left), Math.floor(rect.x));
+    const y = Math.max(Math.ceil(viewport.top), Math.floor(rect.y));
     const root = getComputedStyle(document.documentElement);
     const variables: Record<string, string> = {};
     for (const name of root) {
@@ -169,8 +197,8 @@ export class CodeOSSController {
       bounds: {
         x,
         y,
-        width: Math.min(viewport.right - x, rect.right - x + 24),
-        height: Math.min(viewport.bottom - y, rect.bottom - y + 24),
+        width: Math.min(viewport.right - x, rect.right - x),
+        height: Math.min(viewport.bottom - y, rect.bottom - y),
       },
       offset: { x: rect.x - x, y: rect.y - y },
       size: { width: rect.width, height: rect.height },

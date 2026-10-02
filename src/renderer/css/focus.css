@@ -1,0 +1,18 @@
+/* Shared keyboard focus for every App page, including standalone editors. */
+:root:not([data-focus-outlines="off"]) :is(button, [role="button"], a, input, textarea, select, summary, [tabindex]):focus {
+  outline-color: var(--accent, var(--pcb-accent, #4f8cff)) !important;
+}
+:root:not([data-focus-outlines="off"]) :is(button, [role="button"], a, input, textarea, select, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--accent, var(--pcb-accent, #4f8cff)) !important;
+  outline-offset: 2px;
+}
+:root:not([data-focus-outlines="off"]) :is(input, textarea, select):focus {
+  border-color: var(--accent, var(--pcb-accent, #4f8cff));
+}
+/* Composers already draw the focus boundary around their full input surface. */
+:is(#chat-input, #code-chat-input, #babe-chat-input, .monaco-editor textarea):focus {
+  outline: none !important;
+}
+:root[data-focus-outlines="off"] :is(button, [role="button"], a, input, textarea, select, summary, [tabindex]):focus {
+  outline: none !important;
+}

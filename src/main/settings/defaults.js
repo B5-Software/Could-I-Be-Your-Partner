@@ -136,6 +136,7 @@ module.exports = function createDefaultSettings({ DEFAULT_DECISION_SETTINGS }) {
       mode: 'system',
       accentColor: '#4f8cff',
       backgroundColor: '#f5f7fa',
+      focusOutlines: true,
     },
     // 界面动效：关闭后主标签页切换无动画（设置页「动效」开关）
     animations: true,

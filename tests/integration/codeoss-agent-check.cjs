@@ -12,6 +12,67 @@ module.exports = async function checkAgent(renderer, service, requests, workspac
   const editor = await service.request('ide.context', {});
   assert(editor.path.endsWith('sample.js'));
   assert.equal(editor.selection.selected, true);
+  const invokeLanguage = (args) =>
+    evaluate(
+      `window.__sessionManager.getActive('code').agent.executeTool('codeIDE', ${JSON.stringify(args)})`,
+    );
+  const completion = await invokeLanguage({
+    action: 'completion',
+    path: 'sample.js',
+    line: 1,
+    column: 1,
+    limit: 100,
+    query: 'cibypFixtureCompletion',
+  });
+  assert(
+    completion.items.some((item) => item.label === 'cibypFixtureCompletion'),
+    'Agent must reach an installed extension completion provider',
+  );
+  const hover = await invokeLanguage({ action: 'hover', path: 'sample.js', line: 1, column: 1 });
+  assert(hover.items.some((item) => item.contents.includes('CIBYP language-service fixture')));
+  const definition = await invokeLanguage({
+    action: 'definition',
+    path: 'sample.js',
+    line: 1,
+    column: 1,
+  });
+  assert(
+    definition.items.some((item) => item.path.endsWith('sample.js') && item.range.start.line === 1),
+  );
+  const original = require('node:fs').readFileSync(path.join(workspace, 'sample.js'), 'utf8');
+  const rename = await invokeLanguage({
+    action: 'rename',
+    path: 'sample.js',
+    line: 1,
+    column: 1,
+    newName: 'renamedFixture',
+  });
+  assert(rename.preview && rename.items.some((item) => item.text === 'renamedFixture'));
+  assert.equal(
+    require('node:fs').readFileSync(path.join(workspace, 'sample.js'), 'utf8'),
+    original,
+    'Rename preview must not overwrite editor files',
+  );
+  const commands = await invokeLanguage({ action: 'commands', query: 'cibypFixture' });
+  assert(commands.items.some((item) => item.command === 'cibypFixture.echo'));
+  assert.deepEqual(
+    await service.request('ide.language', {
+      action: 'command',
+      command: 'cibypFixture.echo',
+      arguments: ['from Agent'],
+    }),
+    { ok: true, result: { echoed: 'from Agent' } },
+  );
+  await assert.rejects(
+    () =>
+      evaluate(
+        `window.api.codeOSSLanguage({action:'diagnostics'}, ${JSON.stringify(path.dirname(workspace))})`,
+      ),
+    /does not match/,
+  );
+  console.log(
+    '[codeoss-desktop] Agent → installed extension completion/hover/definition/rename preview/command passed.',
+  );
   await evaluate(`(() => {
     const input = document.getElementById('code-chat-input');
     input.value = 'sidebar UI fixture';

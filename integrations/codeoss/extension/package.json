@@ -3,7 +3,7 @@
   "publisher": "cibyp",
   "displayName": "CIBYP Editor & VM Bridge",
   "description": "Editor context, safe document edits, live personalization and VM workspaces for CIBYP.",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "license": "GPL-3.0-or-later",
   "engines": {
     "vscode": "^1.135.0"
@@ -13,7 +13,8 @@
     "ui"
   ],
   "enabledApiProposals": [
-    "resolvers"
+    "resolvers",
+    "extensionsAny"
   ],
   "activationEvents": [
     "onStartupFinished",

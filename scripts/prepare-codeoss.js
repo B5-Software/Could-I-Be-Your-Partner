@@ -117,7 +117,7 @@ async function prepareCodeOSS(platform = process.platform, arch = process.arch) 
       updateUrl: undefined,
       extensionEnabledApiProposals: {
         ...product.extensionEnabledApiProposals,
-        'cibyp.workbench': ['resolvers'],
+        'cibyp.workbench': ['resolvers', 'extensionsAny'],
       },
     });
     await fsp.writeFile(productFile, JSON.stringify(product, null, 2) + '\n');

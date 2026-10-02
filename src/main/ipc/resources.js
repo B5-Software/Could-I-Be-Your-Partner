@@ -27,7 +27,7 @@ module.exports = function registerResourcesIpc({
     const st = vmService.status();
     return {
       ok: true,
-      location: r.location === 'vm' ? 'vm' : 'host',
+      location: vmService.emergencyHost ? 'host' : r.location === 'vm' ? 'vm' : 'host',
       workspaceMode: r.workspaceMode === 'isolated' ? 'isolated' : 'shared',
       vmState: (st.inst || {}).state || 'idle',
       vmReady: (st.inst || {}).state === 'ready',
@@ -248,6 +248,11 @@ module.exports = function registerResourcesIpc({
   // 紧急切回本机：本次运行生效（不写设置），Splash/主界面均可调用
   ipcMain.handle('vm:emergencyHostMode', () => {
     vmService.emergencyHostMode();
+    // Stop the abandoned VM in the background; host initialization must not wait
+    // for guest SSH, QEMU shutdown or an already pending boot promise.
+    void vmService
+      .stop()
+      .catch((error) => console.warn('[vm] Abandoned startup cleanup:', error.message));
     vmRuntimeGate.required = false;
     vmRuntimeGate.ready = true;
     tryShowMainWindow();

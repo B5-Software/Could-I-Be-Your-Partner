@@ -67,6 +67,10 @@ const BATCH_TOOL_SPECS = {
 
 // AI Agent Engine - handles the autonomous agent loop
 class Agent {
+  get todoItems() { return typeof window !== 'undefined' && window.CibypTodos ? window.CibypTodos.todoItems : this._todoItems; }
+  set todoItems(items) { if (typeof window === 'undefined' || !window.CibypTodos) this._todoItems = items; }
+  get todoIdCounter() { return typeof window !== 'undefined' && window.CibypTodos ? window.CibypTodos.todoIdCounter : this._todoIdCounter; }
+  set todoIdCounter(counter) { if (typeof window === 'undefined' || !window.CibypTodos) this._todoIdCounter = counter; }
   constructor() {
     this.contextManager = new ContextManager();
     this.running = false;
@@ -169,7 +173,7 @@ class Agent {
       || previous.toolExposure?.mode !== merged?.toolExposure?.mode
       || previous.decision?.enabled !== merged?.decision?.enabled
       || previous.decision?.usages?.toolSelection !== merged?.decision?.usages?.toolSelection;
-    this.settings = merged;
+    this.settings = this.emergencyHost ? { ...merged, runtime: { ...merged.runtime, location: 'host' } } : merged;
     if (selectionChanged) this.resetOptimizedTools();
     if (this.contextManager) {
       this.syncTokenLimits();
@@ -431,6 +435,9 @@ class Agent {
 
   async init() {
     this.settings = await window.api.getSettings();
+    const currentRuntime = await window.api.runtime?.getLocation?.();
+    this.emergencyHost = currentRuntime?.emergencyHost === true;
+    if (this.emergencyHost) this.settings = { ...this.settings, runtime: { ...this.settings.runtime, location: 'host' } };
     if (!this.settings.tools || typeof this.settings.tools !== 'object') {
       this.settings.tools = {};
     }
@@ -1032,7 +1039,7 @@ ${affectionDesc}
     this.contextManager.setContextSource('技能目录', this.minimalMode ? '' : this.getSkillsCatalogBlock());
     this.contextManager.setContextSource('工作目录文件树', this.minimalMode ? '' : this.cachedWorkspaceTree || '');
     this.contextManager.setContextSource('已激活技能', this.getActiveSkillsBlock());
-    this.contextManager.setContextSource('当前会话待办', this.todoItems.length
+    this.contextManager.setContextSource(typeof window !== 'undefined' && window.CibypTodos ? '全局持久化待办' : '当前会话待办', this.todoItems.length
       ? JSON.stringify(this.todoItems.map(({ id, text, done }) => ({ id, text, done }))) : '');
     this.contextManager.setContextSource('工具发现', this.usesToolDiscovery()
       ? '工具按需加载：缺少能力时使用 searchTools(query/category/names)，空查询可浏览分类。搜索在本地执行；匹配定义在下一轮请求加载。describeTool 分段查看参数；invokeTool 调用已发现且启用的工具。工具类别：'
@@ -3133,6 +3140,11 @@ ${affectionDesc}
           return { ok: true, result };
         }
         case 'todoList': return this.handleTodo(args);
+        case 'codeIDE': {
+          if (this.mode !== 'code') return { ok: false, error: 'This tool requires Code mode.' };
+          if (args.action === 'command' && !this.settings.autoApproveSensitive && !await this.requestApproval('codeIDE', args)) return { ok: false, error: 'Extension command was declined.' };
+          return window.api.codeOSSLanguage(args, this.workspacePath);
+        }
         case 'runSubAgent': return await this.runSubAgent(args);
         case 'generateImage': {
           if (!this.workspacePath) {
@@ -4715,6 +4727,12 @@ ${affectionDesc}
   }
 
   handleTodo(args = {}) {
+    if (typeof window !== 'undefined' && window.CibypTodos) {
+      return window.CibypTodos.handleTodo(args).then(result => {
+        this.onTodoUpdate?.(this.todoItems);
+        return result;
+      });
+    }
     if (args.action === 'list') return { ok: true, items: this.todoItems };
     const ops = Array.isArray(args.operations) && args.operations.length
       ? args.operations

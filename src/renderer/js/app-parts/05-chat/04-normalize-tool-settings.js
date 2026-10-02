@@ -24,7 +24,7 @@
     });
 
     if (changed) {
-      await window.api.setSettings(agent.settings);
+      await window.api.setSettings({ tools: agent.settings.tools });
       agent.contextManager.setSystemPrompt(agent.getSystemPrompt());
     }
   }

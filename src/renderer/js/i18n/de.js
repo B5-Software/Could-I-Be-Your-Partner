@@ -303,6 +303,7 @@ oskey: {
 },
 // ── Tool Descriptions ───────────────────────────────────────────────────────
 _tools: {
+    codeIDE: 'Installierte Code-OSS-Erweiterungen und Sprachdienste (LSP) verwenden',
   automationList: 'Automatisierungs-Trigger-Aufgaben auflisten',
   automationGetGuide: 'Vollständige Automatisierungs-Anleitung bei Bedarf abrufen (DSL/Trigger/HTTP/Beispiele)',
   automationCreate: 'Automatisierungs-Trigger-Aufgabe erstellen oder aktualisieren (Zeitplan/Benachrichtigung/HTTP)',
@@ -625,6 +626,7 @@ _tools: {
 
 // ── Categories ───────────────────────────────────────────────────────────────
 _categories: {
+    '编程': 'Programmierung',
   '自动化': 'Automatisierung',
   '决策': 'Entscheidung',
   'FediKitten': 'FediKitten',
@@ -1337,6 +1339,9 @@ _textMap: {
 
   // ── Settings: Theme ──
   '外观模式': 'Erscheinungsmodus',
+  '外观': 'Erscheinungsbild',
+  '全局焦点描边': 'Fokusrahmen',
+  '使用强调色标示当前焦点，立即应用到各窗口': 'Fokus mit der Akzentfarbe hervorheben. Gilt sofort für alle Fenster.',
   '跟随系统': 'System folgen',
   '浅色': 'Hell',
   '深色': 'Dunkel',

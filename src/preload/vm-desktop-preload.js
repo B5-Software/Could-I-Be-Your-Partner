@@ -12,6 +12,12 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('vmDesktop', {
+  getTheme: () => ipcRenderer.invoke('theme:get'),
+  onThemeApply: (callback) => {
+    const listener = (_event, data) => callback(data);
+    ipcRenderer.on('theme:apply', listener);
+    return () => ipcRenderer.removeListener('theme:apply', listener);
+  },
   getStatus: () => ipcRenderer.invoke('vm:graphicsStatus'),
   start: async (opts) => {
     const r = await ipcRenderer.invoke('vm:graphicsStart', opts || {});

@@ -1,5 +1,14 @@
   let codeStreamBubble = null;
 
+  function refreshCodeAvatars() {
+    document.querySelectorAll('#code-chat-messages .message.user, #code-chat-messages .message.assistant').forEach(message => {
+      const ai = message.classList.contains('assistant');
+      const avatar = isRemoteMode ? (ai ? remoteAvatars?.ai : remoteAvatars?.user) : (ai ? codeAgent?.settings?.aiPersona?.avatar : codeAgent?.settings?.userProfile?.avatar);
+      const node = message.querySelector('.message-avatar');
+      if (node) node.innerHTML = makeFramedAvatarHTML(avatar, ai);
+    });
+  }
+
   function createCodeStreamBubble() {
     const msgsEl = document.getElementById('code-chat-messages');
     if (!msgsEl) return null;
@@ -11,7 +20,7 @@
     msg.className = 'message assistant streaming';
     msg.id = 'code-stream-' + Date.now();
     msg.innerHTML = `
-      <div class="message-avatar"><i class="fa-solid fa-robot"></i></div>
+      <div class="message-avatar">${makeFramedAvatarHTML(isRemoteMode ? remoteAvatars?.ai : codeAgent?.settings?.aiPersona?.avatar, true)}</div>
       <div class="message-body">
         <div class="reasoning-section" style="display:none;">
           <div class="reasoning-header" onclick="this.parentElement.classList.toggle('collapsed')">
@@ -48,12 +57,15 @@
     const msg = document.createElement('div');
     msg.className = 'message ' + role;
     const avatarIcon = role === 'assistant' ? 'fa-robot' : (role === 'system' ? 'fa-info-circle' : 'fa-user');
+    const avatarHTML = role === 'system' ? `<i class="fa-solid ${avatarIcon}"></i>` : makeFramedAvatarHTML(
+      isRemoteMode ? (role === 'assistant' ? remoteAvatars?.ai : remoteAvatars?.user) :
+        (role === 'assistant' ? codeAgent?.settings?.aiPersona?.avatar : codeAgent?.settings?.userProfile?.avatar), role === 'assistant');
     const rendered = (role === 'assistant') ? renderMarkdown(content) : escapeHtml(content);
     // 懒渲染用：保留原始内容与角色，离屏折叠后滚回时重新渲染
     msg.dataset.lazyRaw = content;
     msg.dataset.lazyRole = (role === 'assistant') ? 'md' : 'text';
     msg.innerHTML = `
-      <div class="message-avatar"><i class="fa-solid ${avatarIcon}"></i></div>
+      <div class="message-avatar">${avatarHTML}</div>
       <div class="message-body">
         <div class="message-content markdown-body">${rendered}</div>
         <div class="message-time">${new Date().toLocaleTimeString('zh-CN', {hour12: false})}</div>

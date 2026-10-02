@@ -121,6 +121,8 @@
     }
   </style>
   <link rel="stylesheet" href="../css/motion.css">
+  <link rel="stylesheet" href="../css/focus.css">
+  <script src="../js/focus-preferences.js" defer></script>
 </head>
 <body>
   <div class="splash">
@@ -240,13 +242,14 @@
             const st = (data && data.state) || '';
             if (!errEl.hidden && st !== 'failed') errEl.hidden = true;
             detail.textContent = (data && data.detail) || LABELS[st] || '';
-            if (st === 'ready') { spinner.style.display = 'none'; setProgress(100); }
+            if (st === 'ready') { detail.textContent = '虚拟机就绪，正在完成应用初始化…'; setProgress(100); }
             break;
           }
           case 'vm:serial': appendLog(data || ''); break;
           case 'vm:boot-begin': if (vmMode) detail.textContent = '正在启动虚拟机环境…'; break;
           case 'vm:boot-failed': fail(data && data.message, data && data.serialTail); break;
-          case 'vm:boot-ready': spinner.style.display = 'none'; setProgress(100); detail.textContent = '虚拟机就绪，正在进入主界面…'; break;
+          case 'vm:boot-ready': setProgress(100); detail.textContent = '虚拟机就绪，正在完成应用初始化…'; break;
+          case 'app:startup-ready': noteEl.textContent = '应用已预加载'; break;
           case 'vm:error': if (vmMode) appendLog('[error] ' + ((data && data.message) || '')); break;
           default: break;
         }

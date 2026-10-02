@@ -261,45 +261,8 @@
     return value || fallback;
   }
 
-  function colorWithAlpha(color, alpha) {
-    if (!color) return `rgba(79,140,255,${alpha})`;
-    const c = color.trim();
-    let r = 79, g = 140, b = 255;
-    if (c.startsWith('#')) {
-      if (c.length === 4) {
-        r = parseInt(c[1] + c[1], 16);
-        g = parseInt(c[2] + c[2], 16);
-        b = parseInt(c[3] + c[3], 16);
-      } else if (c.length >= 7) {
-        r = parseInt(c.slice(1, 3), 16);
-        g = parseInt(c.slice(3, 5), 16);
-        b = parseInt(c.slice(5, 7), 16);
-      }
-    } else {
-      const match = c.match(/rgba?\(([^)]+)\)/);
-      if (match) {
-        const parts = match[1].split(',').map(s => parseFloat(s.trim()));
-        r = parts[0] || r;
-        g = parts[1] || g;
-        b = parts[2] || b;
-      }
-    }
-    if ([r, g, b].some(v => !Number.isFinite(v))) return `rgba(79,140,255,${alpha})`;
-    return `rgba(${Math.round(r)},${Math.round(g)},${Math.round(b)},${alpha})`;
-  }
-
-  // subapp-theme.js 会用带空格的 rgb(r, g, b) 设置 CSS 变量，
-  // Monaco 的主题颜色解析不接受该格式，统一归一为 #hex / rgba(无空格)
-  function normalizeMonacoColor(color) {
-    const s = String(color || '').trim();
-    if (!s || s.startsWith('#')) return s;
-    const m = s.match(/^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*(?:,\s*([\d.]+))?\s*\)$/);
-    if (!m) return s;
-    const hex = (v) => Number(v).toString(16).padStart(2, '0');
-    const a = m[4] === undefined ? 1 : Math.min(1, Math.max(0, parseFloat(m[4])));
-    if (a >= 1) return `#${hex(m[1])}${hex(m[2])}${hex(m[3])}`;
-    return `rgba(${m[1]},${m[2]},${m[3]},${a})`;
-  }
+  function colorWithAlpha(color, alpha) { return window.EditorColors.withAlpha(color, alpha); }
+  function normalizeMonacoColor(color) { return window.EditorColors.hex(color); }
 
   function defineMonacoTheme() {
     if (!window.monaco) return;
@@ -310,7 +273,7 @@
     const secondary = normalizeMonacoColor(cssVar('--text-secondary', isDark ? '#a0a0c0' : '#5a5a7a'));
     const border = normalizeMonacoColor(cssVar('--border', isDark ? '#333360' : '#e2e6ee'));
     const hover = normalizeMonacoColor(cssVar('--bg-hover', isDark ? '#333360' : '#e8ecf2'));
-    const lineHighlight = isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.035)';
+    const lineHighlight = isDark ? '#ffffff0a' : '#00000009';
 
     window.monaco.editor.defineTheme('cipyp-skill', {
       base: isDark ? 'vs-dark' : 'vs',
@@ -330,8 +293,7 @@
         'editorLineNumber.foreground': secondary,
         'editorLineNumber.activeForeground': accent,
         'editorCursor.foreground': accent,
-        'editor.selectionBackground': colorWithAlpha(accent, 0.26),
-        'editor.inactiveSelectionBackground': colorWithAlpha(accent, 0.16),
+        ...window.EditorColors.selection(accent, isDark),
         'editor.lineHighlightBackground': lineHighlight,
         'editorLineNumber.activeBackground': lineHighlight,
         'editorIndentGuide.background1': colorWithAlpha(accent, 0.16),

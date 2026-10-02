@@ -1,6 +1,13 @@
   wireChatAgent(agent);
 
+  window.CibypTodos = new TodoStore(window.api, () => AppBus.emit('todo-updated'));
+  try { await window.CibypTodos.load(); } catch (error) { console.error('[todos] Persistent todos unavailable:', error); }
+
+  // Preload UI behind Splash, but never start guest workspace/file operations
+  // until the runtime has actually been selected and its startup gate released.
+  const startupRuntime = await window.api.startupRuntime();
   await agent.init();
+  if (startupRuntime.location === 'host') agent.settings.runtime.location = 'host';
   sessionManager = new SessionManager({
     maxConcurrent: Math.max(1, Number(agent.settings?.sessions?.maxConcurrent) || 10),
     // 关键：必须复用全局 AppBus，否则 SessionManager 内部默认会新建一个私有总线，

@@ -1,7 +1,6 @@
-  // A right sidebar follows the active Chat / Code / Babe session.
+  // One persistent list is shared by Chat / Code / Babe and the next App launch.
   const todoSidebar = new TodoSidebar(todoPanel, {
-    getAgent: () => sessionManager ? sessionManager.getActive(currentMode)?.agent || null :
-      (currentMode === 'chat' ? agent : currentMode === 'code' ? codeAgent : babeAgent),
+    getAgent: () => window.CibypTodos,
     mirror: (element, contents) => {
       if (contents) WebUIMirror.pushDomEvent({ type: 'dom_replace', container: '#' + element.id, html: element.innerHTML });
       else ['class', 'style', 'aria-hidden', 'aria-expanded'].forEach(attr => {

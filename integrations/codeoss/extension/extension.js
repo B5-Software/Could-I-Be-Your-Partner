@@ -4,7 +4,25 @@ const vscode = require('vscode');
 const crypto = require('node:crypto');
 const path = require('node:path');
 const WebSocket = require('ws');
-const { workbenchColors } = require('../theme.cjs');
+
+let toolbarTerminal;
+async function openWorkspaceTerminal() {
+  // A remote workspace URI lets Code-OSS resolve the guest shell and PTY. Do not
+  // restore a terminated terminal or reuse a host filesystem cwd in VM mode.
+  if (
+    !toolbarTerminal ||
+    toolbarTerminal.exitStatus ||
+    !vscode.window.terminals.includes(toolbarTerminal)
+  ) {
+    toolbarTerminal = vscode.window.createTerminal({
+      name: 'CIBYP',
+      cwd: vscode.workspace.workspaceFolders?.[0]?.uri,
+      isTransient: true,
+    });
+  }
+  toolbarTerminal.show(false);
+  return { ok: true };
+}
 
 class Bridge {
   constructor(context) {
@@ -365,37 +383,14 @@ class Changes {
   }
 }
 
-async function applyPersonalization(data) {
-  const configuration = vscode.workspace.getConfiguration();
-  const colors = {
-    ...configuration.inspect('workbench.colorCustomizations')?.globalValue,
-    ...workbenchColors(data),
-  };
-  const settings = {
-    'workbench.colorTheme': data.dark ? 'Dark Modern' : 'Light Modern',
-    'workbench.colorCustomizations': colors,
-    'workbench.reduceMotion': data.animations ? 'auto' : 'on',
-    'telemetry.telemetryLevel': 'off',
-  };
-  for (const [key, value] of Object.entries(settings)) {
-    if (JSON.stringify(configuration.inspect(key)?.globalValue) !== JSON.stringify(value))
-      await configuration.update(key, value, vscode.ConfigurationTarget.Global);
-  }
-}
-
 async function activate(context) {
   const bridge = new Bridge(context);
   const changes = new Changes(context);
   const output = vscode.window.createOutputChannel('CIBYP');
   context.subscriptions.push(bridge, output);
-  let themeUpdates = Promise.resolve();
   context.subscriptions.push(
     bridge.onEvent((event) => {
       if (event.event === 'connected') publishEditorState();
-      if (event.event === 'personalization')
-        themeUpdates = themeUpdates
-          .then(() => applyPersonalization(event.data))
-          .catch((error) => output.appendLine(error.message));
     }),
   );
   function publishEditorState() {
@@ -434,6 +429,7 @@ async function activate(context) {
     return { ...result, changes: changes.list() };
   });
   bridge.handlers.set('ide.context', () => contextSnapshot());
+  bridge.handlers.set('ide.language', require('./language').languageQuery);
   bridge.handlers.set('ide.readDocument', (params) => changes.read(params));
   bridge.handlers.set('ide.writeDocument', (params) => changes.write(params));
   bridge.handlers.set('ide.command', async (params) => {
@@ -446,6 +442,8 @@ async function activate(context) {
       'cibyp.agent.focus',
     ]);
     if (!allowed.has(params.command)) throw new Error('Command is not exposed to CIBYP');
+    if (params.command === 'workbench.action.terminal.toggleTerminal')
+      return openWorkspaceTerminal();
     return vscode.commands.executeCommand(params.command);
   });
   bridge.handlers.set('ide.openWorkspace', async (params) => {
@@ -525,16 +523,8 @@ async function activate(context) {
   }
   await bridge.ready();
   publishEditorState();
-  // Resolver activation must finish before workspace configuration becomes ready.
-  // Awaiting configuration.update here deadlocks remote workspace initialization.
-  void bridge
-    .request('personalization.get')
-    .then((data) => {
-      themeUpdates = themeUpdates
-        .then(() => applyPersonalization(data))
-        .catch((error) => output.appendLine(error.message));
-    })
-    .catch((error) => output.appendLine(error.message));
+  // Appearance is managed in the renderer's memory configuration layer. Never
+  // write User/settings.json while syncing colors or initializing the resolver.
   return {
     version: 1,
     getContext: contextSnapshot,

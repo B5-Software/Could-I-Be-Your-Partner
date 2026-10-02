@@ -34,6 +34,10 @@
     });
   });
 
+  document.getElementById('setting-focus-outlines').addEventListener('change', e => {
+    updateAppearance({ focusOutlines: e.target.checked }).catch(error => console.error('Appearance:', error));
+  });
+
   for (const [id, presets, field] of [
     ['setting-accent-color', 'accent-presets', 'accentColor'],
     ['setting-bg-color', 'bg-presets', 'backgroundColor'],

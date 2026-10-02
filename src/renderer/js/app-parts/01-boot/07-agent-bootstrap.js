@@ -8,7 +8,12 @@
     const revision = ++settingsRefresh;
     const settings = await window.api.getSettings();
     if (revision !== settingsRefresh) return;
+    const previousAppearance = JSON.stringify([agent.settings?.aiPersona, agent.settings?.userProfile, agent.settings?.babe?.avatarFrame]);
     for (const live of allLiveAgents()) live.applySettings(settings);
+    if (previousAppearance !== JSON.stringify([settings.aiPersona, settings.userProfile, settings.babe?.avatarFrame])) {
+      await initPersonaDisplay();
+      refreshCodeAvatars();
+    }
     window.refreshSettingsOverview?.(settings);
     window.refreshTokenSettings?.(settings);
   });

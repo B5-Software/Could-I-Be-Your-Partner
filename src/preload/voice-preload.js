@@ -14,6 +14,12 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('voiceApi', {
   // 设置（语音条读取 sttSendKeywords 等）
   getSettings: () => ipcRenderer.invoke('settings:get'),
+  getTheme: () => ipcRenderer.invoke('theme:get'),
+  onThemeApply: (callback) => {
+    const listener = (_event, data) => callback(data);
+    ipcRenderer.on('theme:apply', listener);
+    return () => ipcRenderer.removeListener('theme:apply', listener);
+  },
 
   // 音频帧上行（Int16 ArrayBuffer, 16kHz mono）
   sendAudio: (target, sessionId, samples) =>

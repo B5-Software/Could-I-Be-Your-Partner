@@ -76,6 +76,7 @@ class CodeOSSService {
     this.visible = false;
     this.sequence = 0;
     this.target = { location: 'host', path: '', uri: '' };
+    this.hostArgv = [...process.argv];
     this.scopeArgv = [
       process.execPath,
       '--user-data-dir',
@@ -87,6 +88,9 @@ class CodeOSSService {
       '--skip-welcome',
       '--skip-release-notes',
       '--disable-updates',
+      ...this.hostArgv.filter((arg) =>
+        /^--(?:trace|inspect(?:-brk)?-extensions(?:=\d+)?|disable-extensions)$/.test(arg),
+      ),
     ];
     fs.mkdirSync(this.profile, { recursive: true });
     this.token = crypto.randomBytes(32).toString('hex');
@@ -109,6 +113,11 @@ class CodeOSSService {
   argv() {
     return this.scopeArgv;
   }
+  relaunchArgv() {
+    // Electron development builds require CIBYP's entry path as the first arg.
+    // The IDE's --user-data-dir profile is never an Electron application path.
+    return this.hostArgv.slice(1);
+  }
   argvFile() {
     return path.join(this.profile, 'argv.json');
   }
@@ -126,6 +135,9 @@ class CodeOSSService {
   }
   ownerFor(contents) {
     return this.view?.webContents === contents ? this.embeddedWindow : undefined;
+  }
+  isEmbeddedWindow(window) {
+    return !!window && window === this.embeddedWindow;
   }
   setUserData() {
     /* Code-OSS's profile is scoped by --user-data-dir; CIBYP owns app.userData. */
@@ -251,6 +263,7 @@ class CodeOSSService {
         settings.theme?.mode === 'dark' ||
         (settings.theme?.mode !== 'light' && nativeTheme.shouldUseDarkColors),
       animations: settings.animations !== false,
+      focusOutlines: settings.theme?.focusOutlines !== false,
       language: settings.language,
       model: settings.llm?.model || '',
       maxContext: settings.llm?.maxContextLength || 131072,
@@ -265,6 +278,20 @@ class CodeOSSService {
     this.workbenches.add(contents);
     contents.on('did-finish-load', () => {
       this.applyWorkbenchAppearance(contents);
+      this.applyBranding(contents);
+      void contents
+        .insertCSS(
+          `
+        .menubar-menu-items-holder[popover], .context-view[popover] {
+          position: fixed; inset: auto; margin: 0; padding: 0; border: 0;
+          overflow: visible; background: transparent; color: inherit;
+        }
+        .menubar-menu-items-holder[popover]::backdrop, .context-view[popover]::backdrop {
+          background: transparent; pointer-events: none;
+        }
+      `,
+        )
+        .catch(() => {});
       void contents
         .executeJavaScript(
           `(() => {
@@ -274,6 +301,17 @@ class CodeOSSService {
         document.addEventListener('keydown', interact, true);
         document.addEventListener('pointerdown', interact, true);
         window.addEventListener('focus', interact);
+        // Keep upstream menu nodes/listeners, but paint them in Chromium's top
+        // layer so titlebar/sidepane stacking and GPU layers cannot cover them.
+        const promoteMenus = () => {
+          for (const menu of document.querySelectorAll('.menubar-menu-items-holder, .context-view:has(.monaco-menu-container)')) {
+            if (!menu.getClientRects().length || menu.matches(':popover-open')) continue;
+            menu.setAttribute('popover', 'manual');
+            menu.showPopover();
+          }
+        };
+        new MutationObserver(promoteMenus).observe(document.body, {childList: true, subtree: true, attributes: true, attributeFilter: ['style', 'class']});
+        promoteMenus();
       })()`,
         )
         .catch((error) => {
@@ -281,6 +319,33 @@ class CodeOSSService {
         });
     });
     contents.once('destroyed', () => this.workbenches.delete(contents));
+  }
+  applyBranding(contents) {
+    const icon = fs
+      .readFileSync(path.join(__dirname, '../../../assets/icons/icons/256x256.png'))
+      .toString('base64');
+    void contents
+      .insertCSS(
+        `
+      .monaco-workbench .window-appicon, .monaco-workbench .letterpress {
+        background-image: url("data:image/png;base64,${icon}") !important;
+        background-size: contain !important; background-repeat: no-repeat !important;
+        background-position: center !important; mask: none !important; -webkit-mask: none !important;
+      }
+      body:not([data-cibyp-immersive="true"]) .window-appicon,
+      body:not([data-cibyp-immersive="true"]) .letterpress { display: none !important; }
+      .monaco-workbench .window-appicon::before { content: none !important; }
+      .monaco-workbench .window-appicon { background-size: 18px 18px !important; width: 28px !important; height: 28px !important; }
+      .monaco-workbench .letterpress { background-size: 128px 128px !important; opacity: .12; }
+      :is(button, [role="button"], a, input, textarea, select, summary, [tabindex]):focus { outline-color: var(--vscode-focusBorder) !important; }
+    `,
+      )
+      .catch(() => {});
+    void contents
+      .executeJavaScript(
+        `document.body.dataset.cibypImmersive = ${JSON.stringify(String(this.immersive === true))}`,
+      )
+      .catch(() => {});
   }
   applyWorkbenchAppearance(contents) {
     if (contents.isDestroyed()) return;
@@ -471,6 +536,7 @@ class CodeOSSService {
   createWindow(options, nativeCodeWindow) {
     options = {
       ...options,
+      icon: path.join(__dirname, '../../../assets/icons/icons/256x256.png'),
       webPreferences: { ...options.webPreferences, session: this.session() },
     };
     if (this.embeddedWindow && !this.embeddedWindow.isDestroyed()) {
@@ -518,11 +584,11 @@ class CodeOSSService {
       'maximize',
       'unmaximize',
       'restore',
+      'setFullScreen',
+      'setAlwaysOnTop',
       'isMaximized',
       'isMinimized',
       'isFullScreen',
-      'setFullScreen',
-      'setAlwaysOnTop',
       'isAlwaysOnTop',
     ])
       owner[method] = (...args) => parent[method](...args);
@@ -537,6 +603,19 @@ class CodeOSSService {
       if (this.visible) owner.emit('focus');
     };
     parent.on('focus', forwardFocus);
+    const windowEvents = [
+      'maximize',
+      'unmaximize',
+      'minimize',
+      'restore',
+      'enter-full-screen',
+      'leave-full-screen',
+      'always-on-top-changed',
+    ].map((name) => {
+      const listener = (...args) => owner.emit(name, ...args);
+      parent.on(name, listener);
+      return [name, listener];
+    });
     const closeOwner = () => {
       if (!owner.isDestroyed()) owner.close();
     };
@@ -544,6 +623,7 @@ class CodeOSSService {
     owner.once('closed', () => {
       this.overlay.destroy();
       parent.removeListener('focus', forwardFocus);
+      for (const [name, listener] of windowEvents) parent.removeListener(name, listener);
       parent.removeListener('closed', closeOwner);
       if (!parent.isDestroyed()) parent.contentView.removeChildView(view);
       if (!view.webContents.isDestroyed()) view.webContents.close();
@@ -579,11 +659,21 @@ class CodeOSSService {
     this.emitRenderer('codeoss:interaction', { revision: this.interactionRevision });
   }
 
-  setLayout({ visible, bounds, overlay, interactionRevision = 0 } = {}) {
+  setLayout({ visible, bounds, overlay, interactionRevision = 0, immersive = false } = {}) {
+    if (this.immersive !== immersive) {
+      this.immersive = immersive;
+      for (const contents of this.workbenches)
+        if (!contents.isDestroyed())
+          void contents
+            .executeJavaScript(
+              `document.body.dataset.cibypImmersive = ${JSON.stringify(String(immersive))}`,
+            )
+            .catch(() => {});
+    }
     this.visible = visible === true;
     if (bounds) {
       const parent = this.getMainWindow();
-      const [width, height] = parent?.getContentSize() || [0, 0];
+      const [width, height] = parent && !parent.isDestroyed() ? parent.getContentSize() : [0, 0];
       const x = Math.max(0, Math.min(width, Math.round(Number(bounds.x) || 0)));
       const y = Math.max(0, Math.min(height, Math.round(Number(bounds.y) || 0)));
       this.bounds = {

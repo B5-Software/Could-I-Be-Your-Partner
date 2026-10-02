@@ -10,7 +10,9 @@ interface TodoAgent {
   todoItems: Todo[];
   sessionKey?: string;
   conversationTitle?: string;
-  handleTodo(args: Record<string, unknown>): { ok: boolean; error?: string };
+  handleTodo(
+    args: Record<string, unknown>,
+  ): { ok: boolean; error?: string } | Promise<{ ok: boolean; error?: string }>;
 }
 interface Options {
   getAgent(): TodoAgent | null;
@@ -34,11 +36,11 @@ export class TodoSidebar {
     this.input = root.querySelector<HTMLInputElement>('#todo-input')!;
     this.list = root.querySelector<HTMLElement>('#todo-list')!;
     root.querySelector('#btn-close-todo')!.addEventListener('click', () => this.setOpen(false));
-    root.querySelector('#todo-form')!.addEventListener('submit', (event) => {
+    root.querySelector('#todo-form')!.addEventListener('submit', async (event) => {
       event.preventDefault();
       const text = this.input.value.trim();
       if (!text || !this.owner) return;
-      if (this.apply({ action: 'add', text })) {
+      if (await this.apply({ action: 'add', text })) {
         this.input.value = '';
         this.drafts.delete(this.owner);
         this.input.focus();
@@ -112,17 +114,22 @@ export class TodoSidebar {
   refresh(): void {
     this.render();
   }
-  private apply(args: Record<string, unknown>): boolean {
+  private async apply(args: Record<string, unknown>): Promise<boolean> {
     // A session may change while a DOM event is queued. Never mutate its former owner.
     const agent = this.options.getAgent();
     if (!agent || agent !== this.owner) {
       this.render();
       return false;
     }
-    const result = agent.handleTodo(args);
-    if (!result.ok) this.options.reportError(result.error || '待办操作失败');
-    this.render();
-    return result.ok;
+    try {
+      const result = await agent.handleTodo(args);
+      if (!result.ok) this.options.reportError(result.error || '待办操作失败');
+      this.render();
+      return result.ok;
+    } catch (error) {
+      this.options.reportError(error instanceof Error ? error.message : '待办保存失败');
+      return false;
+    }
   }
   private render(): void {
     const owner = this.options.getAgent();

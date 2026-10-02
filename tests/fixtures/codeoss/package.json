@@ -11,5 +11,21 @@
   ],
   "activationEvents": [
     "onStartupFinished"
-  ]
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "cibypFixture.documents",
+        "title": "Fixture Documents"
+      },
+      {
+        "command": "cibypFixture.terminal",
+        "title": "Fixture Terminal"
+      },
+      {
+        "command": "cibypFixture.echo",
+        "title": "Fixture Echo"
+      }
+    ]
+  }
 }

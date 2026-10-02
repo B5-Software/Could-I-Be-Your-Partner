@@ -12,6 +12,9 @@
     // Update mode switcher labels based on language
     updateModeLabels(s.language || 'zh-CN');
     // 头像框系统：启动时加载 avatarFrame 状态并预加载 SVG 缓存
+    _avatarFrameState.ai = s.aiPersona?.avatarFrame || null;
+    _avatarFrameState.user = s.userProfile?.avatarFrame || null;
+    _avatarFrameState.babe = s.babe?.avatarFrame || null;
     if (s.aiPersona?.avatarFrame) {
       _avatarFrameState.ai = s.aiPersona.avatarFrame;
       await loadAvatarFrameSVG(s.aiPersona.avatarFrame);

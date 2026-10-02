@@ -55,6 +55,27 @@ module.exports = async function checkSettings(webContents) {
       visited++;
     }
     window.activateSettingsTab('overview');
+    window.activateSettingsTab('theme');
+    check(field('setting-focus-outlines').checked, 'focus outlines must default to enabled');
+    field('setting-focus-outlines').checked = false;
+    field('setting-focus-outlines').dispatchEvent(new Event('change', { bubbles: true }));
+    await until(async () => (await window.api.getSettings()).theme.focusOutlines === false && document.documentElement.dataset.focusOutlines === 'off', 'focus preference not saved/applied');
+    const focusButton = document.querySelector('.theme-mode-btn');
+    focusButton.focus();
+    check(getComputedStyle(focusButton).outlineStyle === 'none', 'disabled focus outline is still painted');
+    field('setting-focus-outlines').checked = true;
+    field('setting-focus-outlines').dispatchEvent(new Event('change', { bubbles: true }));
+    await until(async () => (await window.api.getSettings()).theme.focusOutlines === true && document.documentElement.dataset.focusOutlines === 'on', 'focus outlines did not re-enable');
+    focusButton.focus();
+    const accent = getComputedStyle(document.documentElement).getPropertyValue('--accent').trim();
+    const accentRGB = 'rgb(' + [1,3,5].map(offset => parseInt(accent.slice(offset,offset+2),16)).join(', ') + ')';
+    check(getComputedStyle(focusButton).outlineColor === accentRGB, 'focus accent mismatch');
+    await window.navigatePage('chat');
+    field('chat-input').focus();
+    check(getComputedStyle(field('chat-input')).outlineStyle === 'none', 'chat input has an inner outline');
+    await until(() => getComputedStyle(field('chat-input').closest('.input-wrapper')).borderColor === accentRGB, 'chat focus belongs on the outside wrapper');
+    await window.navigatePage('settings');
+    window.activateSettingsTab('overview');
     const first = allTabs.find(tab => tab.dataset.tab === 'overview');
     first.focus();
     first.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));

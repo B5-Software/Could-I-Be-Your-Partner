@@ -97,6 +97,11 @@ const ThemeManager = {
     }
     
     this.apply(settings.theme);
+    window.api.onSettingsChanged?.((next) => {
+      if (next.theme) this.apply(next.theme);
+      if (next.animations !== undefined) document.documentElement.setAttribute('data-animations', next.animations === false ? 'off' : 'on');
+      if (next.modalAnimations !== undefined) document.documentElement.setAttribute('data-modal-animations', next.modalAnimations === false ? 'off' : 'on');
+    });
     window.api.onThemeChanged(({ shouldUseDarkColors }) => {
       window.api.getSettings().then(s => {
         if (s.theme.mode === 'system') {
@@ -132,6 +137,7 @@ const ThemeManager = {
 
   apply(theme) {
     const { mode, accentColor, backgroundColor } = theme;
+    document.documentElement.dataset.focusOutlines = theme.focusOutlines === false ? 'off' : 'on';
     
     // Set theme mode
     if (mode === 'system') {

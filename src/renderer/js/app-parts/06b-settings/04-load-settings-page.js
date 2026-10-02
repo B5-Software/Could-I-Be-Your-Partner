@@ -87,6 +87,7 @@
     document.getElementById('setting-accent-color').value = s.theme.accentColor;
     document.getElementById('setting-bg-color').value = s.theme.backgroundColor;
     document.getElementById('setting-ui-animations').checked = s.animations !== false;
+    document.getElementById('setting-focus-outlines').checked = s.theme?.focusOutlines !== false;
     document.getElementById('setting-ui-modal-animations').checked = s.modalAnimations !== false;
     document.getElementById('setting-auto-approve').checked = s.autoApproveSensitive;
 

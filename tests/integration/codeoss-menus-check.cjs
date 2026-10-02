@@ -1,8 +1,14 @@
 /* Native context menus belong to the visible host; menubar menus remain visible. */
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
 module.exports = async function checkMenus(service, waitFor) {
   const contents = service.view.webContents;
   await waitFor(() => service.visible);
+  if (process.argv.includes('--visible')) {
+    service.getMainWindow().setContentSize(1800, 900);
+    await waitFor(() => service.view.getBounds().width > 1100, 5000);
+  }
   service.embeddedWindow.focus();
   await new Promise((resolve) => setTimeout(resolve, 150));
   if (process.platform !== 'darwin') {
@@ -26,8 +32,37 @@ module.exports = async function checkMenus(service, waitFor) {
     assert(menu.width > 80 && menu.height > 100);
     assert(menu.topmost, 'Alt+F menu must be above the workbench content');
     assert.match(menu.text, /New|Open|新建|打开/);
+    if (process.argv.includes('--visible')) {
+      const preview = path.resolve(__dirname, '../../.cibyp-test-fixtures-codeoss-preview');
+      fs.mkdirSync(preview, { recursive: true });
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      fs.writeFileSync(
+        path.join(preview, 'menu-workbench.png'),
+        (await contents.capturePage()).toPNG(),
+      );
+      const parent = service.getMainWindow();
+      const sources = await require('electron').desktopCapturer.getSources({
+        types: ['window'],
+        thumbnailSize: { width: 2560, height: 1600 },
+      });
+      const source = sources.find((item) => item.id === parent.getMediaSourceId());
+      assert(
+        source && !source.thumbnail.isEmpty(),
+        'The real App window must be captured with its embedded native IDE',
+      );
+      fs.writeFileSync(path.join(preview, 'menu-app.png'), source.thumbnail.toPNG());
+      console.log('[codeoss-desktop] Actual native App menu screenshot saved.');
+    }
+    contents.focus();
     contents.sendInputEvent({ type: 'keyDown', keyCode: 'Escape' });
     contents.sendInputEvent({ type: 'keyUp', keyCode: 'Escape' });
+    await waitFor(
+      () =>
+        contents.executeJavaScript(
+          `![...document.querySelectorAll('.menubar-menu-items-holder')].some(e=>e.getClientRects().length && e.innerText.trim() && getComputedStyle(e).visibility !== 'hidden')`,
+        ),
+      5000,
+    );
   }
   const original = service.popupMenu;
   let popup;
@@ -44,7 +79,7 @@ module.exports = async function checkMenus(service, waitFor) {
   };
   try {
     const point = await contents.executeJavaScript(`(() => {
-      const element = document.querySelector('.monaco-editor .view-lines') || document.querySelector('.explorer-viewlet');
+      const element = [...document.querySelectorAll('.monaco-editor .view-lines')].reverse().find(e => e.innerText.trim() && e.getBoundingClientRect().height > 20 && e.getBoundingClientRect().width > 60) || document.querySelector('.explorer-viewlet .monaco-list-row');
       const rect = element.getBoundingClientRect();
       return {x: Math.round(rect.left + 25), y: Math.round(rect.top + 20)};
     })()`);
@@ -54,7 +89,9 @@ module.exports = async function checkMenus(service, waitFor) {
     // native menu IPC separately, including the real upstream patched handler.
     if (process.platform !== 'darwin') {
       await waitFor(() =>
-        contents.executeJavaScript(`!!document.querySelector('.monaco-menu-container')`),
+        contents.executeJavaScript(
+          `!!document.querySelector('.monaco-menu-container') || [...document.querySelectorAll('.shadow-root-host')].some(e=>!!e.shadowRoot?.querySelector('.monaco-menu-container'))`,
+        ),
       );
       contents.sendInputEvent({ type: 'keyDown', keyCode: 'Escape' });
       contents.sendInputEvent({ type: 'keyUp', keyCode: 'Escape' });

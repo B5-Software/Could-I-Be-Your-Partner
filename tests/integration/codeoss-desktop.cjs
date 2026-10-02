@@ -32,6 +32,7 @@ fs.writeFileSync(
   path.join(profile, 'data/settings.json'),
   JSON.stringify({
     onboardingCompleted: true,
+    notifications: { enabled: false },
     runtime: { location: 'host' },
     closeToTray: 'never',
     trayEnabled: false,
@@ -39,6 +40,16 @@ fs.writeFileSync(
     voice: { wakeEnabled: false },
     codeMode: { lastWorkspace: workspace },
     theme: { mode: 'light', accentColor: '#725ce7', backgroundColor: '#f5f7fa' },
+    aiPersona: {
+      avatar:
+        'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aAuQAAAAASUVORK5CYII=',
+      avatarFrame: 'frame-001',
+    },
+    userProfile: {
+      avatar:
+        'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aAuQAAAAASUVORK5CYII=',
+      avatarFrame: 'frame-002',
+    },
   }),
 );
 const ideProfile = path.join(profile, 'data/codeoss');
@@ -54,6 +65,7 @@ fs.writeFileSync(
     'security.workspace.trust.enabled': false,
     'window.titleBarStyle': 'custom',
     'window.menuBarVisibility': 'classic',
+    'window.newWindowDimensions': 'maximized',
   }),
 );
 const modelRequests = [];
@@ -125,7 +137,7 @@ app.on('web-contents-created', (_event, contents) => {
   });
 });
 app.on('browser-window-created', (_event, win) => {
-  win.setOpacity(0);
+  if (!process.argv.includes('--visible')) win.setOpacity(0);
   win.setSkipTaskbar(true);
 });
 const timeout = setTimeout(() => finish(new Error('Code-OSS desktop test timeout')), 90000);
@@ -143,8 +155,23 @@ ipcMain.once('app:renderer-ready', (event) => {
       await renderer.executeJavaScript(
         `window.api.setSettings(${JSON.stringify({ llm: { apiUrl: `http://127.0.0.1:${mockModel.address().port}/v1/chat/completions`, apiKey: 'fixture-only', model: 'cibyp-fixture', maxRetries: 0 }, toolExposure: { mode: 'all' }, autoOptimizeToolSelection: false })})`,
       );
+      const outerWindow = service.getMainWindow();
+      const originalBounds = outerWindow.getBounds();
+      const originalMaximized = outerWindow.isMaximized();
       await renderer.executeJavaScript('window.navigatePage("code")');
       await waitFor(() => service.activePeer(), 60000);
+      assert.deepEqual(
+        outerWindow.getBounds(),
+        originalBounds,
+        'Entering Code must preserve the outer App bounds',
+      );
+      assert.equal(
+        outerWindow.isMaximized(),
+        originalMaximized,
+        'IDE maximized startup preference must not maximize CIBYP',
+      );
+      service.nativeCodeWindow.applyState({ mode: 0, width: 1600, height: 1000, x: 0, y: 0 });
+      assert.deepEqual(outerWindow.getBounds(), originalBounds);
       console.log('[codeoss-desktop] Native CIBYP extension connected.');
       assert.equal(app.getPath('userData'), profile, 'Code-OSS must preserve the CIBYP profile');
       assert.equal(
@@ -192,7 +219,16 @@ ipcMain.once('app:renderer-ready', (event) => {
         workspace,
         waitFor,
       );
+      service.view.webContents.debugger.attach('1.3');
+      await service.view.webContents.debugger.sendCommand('Emulation.setFocusEmulationEnabled', {
+        enabled: true,
+      });
       await require('./codeoss-menus-check.cjs')(service, waitFor);
+      await service.view.webContents.debugger.sendCommand('Emulation.setFocusEmulationEnabled', {
+        enabled: false,
+      });
+      service.view.webContents.debugger.detach();
+      await require('./codeoss-appearance-check.cjs')(renderer, service, waitFor);
       for (const [theme, systemMode] of [
         [{ mode: 'dark', accentColor: '#e3a3d4', backgroundColor: '#202536' }],
         [{ mode: 'light', accentColor: '#3b7c67', backgroundColor: '#faf7ed' }],
@@ -239,6 +275,31 @@ ipcMain.once('app:renderer-ready', (event) => {
           workspace,
           'Live theme changes must preserve the workspace',
         );
+        service.getMainWindow().focus();
+        renderer.focus();
+        const expectedFocus = `rgb(${[1, 3, 5].map((offset) => parseInt(theme.accentColor.slice(offset, offset + 2), 16)).join(', ')})`;
+        let focus;
+        await waitFor(async () => {
+          focus = await renderer.executeJavaScript(
+            `(() => { const input=document.getElementById('code-chat-input'); input.focus(); return {border:getComputedStyle(input).borderColor,accent:getComputedStyle(document.documentElement).getPropertyValue('--accent').trim(), focused:document.activeElement===input}; })()`,
+          );
+          return (
+            focus.focused &&
+            focus.accent.toLowerCase() === theme.accentColor &&
+            focus.border === expectedFocus
+          );
+        }).catch((error) => {
+          console.error('[codeoss-desktop] Input focus state:', focus);
+          throw error;
+        });
+        assert.equal(focus.border, expectedFocus, 'Chat focus border follows live accent changes');
+        const selection = await service.view.webContents.executeJavaScript(
+          `getComputedStyle(document.querySelector('.monaco-workbench')).getPropertyValue('--vscode-editor-selectionBackground').trim()`,
+        );
+        assert.equal(
+          require('../../src/shared/editor-colors').hex(selection),
+          expected['editor.selectionBackground'].toLowerCase(),
+        );
       }
       nativeTheme.themeSource = 'system';
       console.log(
@@ -277,9 +338,18 @@ ipcMain.once('app:renderer-ready', (event) => {
       );
       await require('./codeoss-overlay-check.cjs')(renderer, service, preview, waitFor);
       const secondWorkspace = path.join(profile, 'second-workspace');
+      const documents = await service.request('ide.language', {
+        action: 'command',
+        command: 'cibypFixture.documents',
+      });
+      assert(
+        documents.result.every((document) => !document.dirty),
+        'Appearance synchronization must never dirty IDE settings or editor documents',
+      );
       fs.mkdirSync(secondWorkspace);
       fs.writeFileSync(path.join(secondWorkspace, 'second.js'), 'const second = true;\n');
-      assert.equal((await service.open(secondWorkspace)).ok, true);
+      const secondResult = await service.open(secondWorkspace);
+      assert.equal(secondResult.ok, true, secondResult.error);
       await waitFor(() => service.activePeer(), 30000);
       assert.equal(service.target.path, secondWorkspace);
       await waitFor(
@@ -352,6 +422,43 @@ ipcMain.once('app:renderer-ready', (event) => {
         'A closed native workbench can reopen in the same CIBYP window',
       );
       console.log('[codeoss-desktop] Native workbench close and reopen passed.');
+      // Exercise the real upstream restart lifecycle without relaunching the test runner.
+      // Only intercept the final Electron restart and quit effects.
+      const lifecycle = service.nativeCodeWindow.lifecycleMainService;
+      const originalQuit = lifecycle.quit;
+      const originalRelaunch = app.relaunch;
+      const originalOnce = app.once;
+      let relaunchCallback, relaunched;
+      try {
+        lifecycle.quit = async () => false;
+        app.relaunch = (options) => {
+          relaunched = options;
+        };
+        app.once = function (name, listener) {
+          if (name === 'quit') {
+            relaunchCallback = listener;
+            return this;
+          }
+          return originalOnce.call(this, name, listener);
+        };
+        await lifecycle.relaunch({ addArgs: ['--disable-extensions'] });
+        assert(relaunchCallback, 'Code-OSS must register a restart after shutdown');
+        relaunchCallback();
+        assert.deepEqual(relaunched.args, [...process.argv.slice(1), '--disable-extensions']);
+        assert(
+          !relaunched.args.includes(service.profile),
+          'IDE profile must never replace the Electron App entry',
+        );
+        assert(
+          fs.existsSync(relaunched.args[0]),
+          'Development restart must launch a real App entry',
+        );
+      } finally {
+        lifecycle.quit = originalQuit;
+        app.relaunch = originalRelaunch;
+        app.once = originalOnce;
+      }
+      console.log('[codeoss-desktop] Outer bounds and actual upstream restart arguments passed.');
       console.log(
         '[codeoss-desktop] Complete workbench, extensions, terminal, independent CIBYP AI and menus passed.',
       );
@@ -365,7 +472,7 @@ ipcMain.once('app:renderer-ready', (event) => {
   }, 500);
 });
 
-async function waitFor(predicate, timeoutMs) {
+async function waitFor(predicate, timeoutMs = 15000) {
   const deadline = Date.now() + timeoutMs;
   while (!(await predicate())) {
     if (Date.now() >= deadline) throw new Error('Condition timed out');

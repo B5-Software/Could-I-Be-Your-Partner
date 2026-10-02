@@ -35,6 +35,7 @@
     window.define = __savedDefineForXterm;
   </script>
   <link rel="stylesheet" href="../css/motion.css">
+  <link rel="stylesheet" href="../css/focus.css">
 </head>
 <body>
   <!-- Custom Titlebar -->
@@ -384,6 +385,7 @@
             <button class="btn-icon btn-sm" id="btn-code-git" title="源代码管理"><i class="fa-brands fa-git-alt"></i></button>
             <button class="btn-icon btn-sm" id="btn-code-extensions" title="扩展"><i class="fa-solid fa-puzzle-piece"></i></button>
             <button class="btn-secondary btn-sm" id="btn-code-agent" title="显示或收起 AI 侧栏" aria-controls="code-agent-panel" aria-expanded="true"><i class="fa-solid fa-wand-magic-sparkles"></i> AI</button>
+            <button class="btn-secondary btn-sm" id="btn-code-immersive" aria-pressed="false">沉浸模式</button>
           </div>
         </div>
         <div class="code-workbench-layout">
@@ -699,7 +701,7 @@
             <button class="settings-tab" data-tab="usage"><i class="fa-solid fa-chart-bar"></i> 用量统计</button>
             <button class="settings-tab" data-tab="budget"><i class="fa-solid fa-wallet"></i> 消费与用量上限</button>
             <div class="settings-tab-group" data-i18n="ui.settings.groups.appearance">外观与语言</div>
-            <button class="settings-tab" data-tab="theme"><i class="fa-solid fa-palette"></i> 主题</button>
+            <button class="settings-tab" data-tab="theme"><i class="fa-solid fa-palette"></i> 外观</button>
             <button class="settings-tab" data-tab="animations"><i class="fa-solid fa-wand-magic-sparkles"></i> 动效</button>
             <button class="settings-tab" data-tab="fonts"><i class="fa-solid fa-font"></i> 字体</button>
             <button class="settings-tab" data-tab="language"><i class="fa-solid fa-language"></i> 语言</button>
@@ -1491,7 +1493,12 @@
 
             <div class="settings-panel" data-tab="theme">
               <div class="settings-group">
-                <h3><i class="fa-solid fa-palette"></i> 主题</h3>
+                <h3><i class="fa-solid fa-palette"></i> 外观</h3>
+                <div class="setting-item">
+                  <label for="setting-focus-outlines">全局焦点描边</label>
+                  <div class="toggle-switch"><input type="checkbox" id="setting-focus-outlines" checked><span class="toggle-slider"></span></div>
+                  <p class="setting-hint">使用强调色标示当前焦点，立即应用到各窗口</p>
+                </div>
                 <div class="setting-item">
                   <label>外观模式</label>
                   <div class="theme-mode-selector">
@@ -3107,6 +3114,7 @@
           </div>
           <h2>Could I Be Your Partner</h2>
           <p class="about-version" id="about-version">v-</p>
+          <p class="about-version" id="about-codeoss-version">Code-OSS —</p>
           <p class="about-desc">全自动AI Agent，帮助完成一切任务</p>
           <div class="about-divider"></div>
           <p class="about-author">
@@ -3854,5 +3862,28 @@
   <script type="module" src="../js/app.js"></script>
   <!-- 全局 Toast 容器：主题化、渐显渐隐、位于顶部搜索框位置 -->
   <div id="toast-container"></div>
+<template id="vm-file-dialog-template"><div class="vm-file-dialog-content">
+    <header>
+      <h1 id="title">选择文件</h1>
+      <span class="label">虚拟机文件</span>
+    </header>
+    <nav>
+      <button id="up" aria-label="上一级">↑</button
+      ><input id="directory" aria-label="当前目录" /><button id="go">前往</button
+      ><button id="newFolder">新建文件夹</button>
+    </nav>
+    <div id="folderForm" hidden>
+      <input id="folderName" aria-label="新文件夹名称" placeholder="文件夹名称" />
+      <button id="createFolder" class="primary">创建</button>
+      <button id="cancelFolder">取消</button>
+    </div>
+    <main id="entries" aria-label="文件列表"></main>
+    <div id="status" role="status"></div>
+    <footer>
+      <label for="filename">文件名</label><input id="filename" /><button id="cancel">取消</button
+      ><button id="choose" class="primary">打开</button>
+    </footer>
+    </div></template>
+<script src="../js/vm-file-dialog.js"></script>
 </body>
 </html>

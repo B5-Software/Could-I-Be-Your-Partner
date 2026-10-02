@@ -33,24 +33,14 @@
     return v || fallback;
   }
 
-  function colorWithAlpha(color, alpha) {
-    const c = String(color || '').trim();
-    let r = 79, g = 140, b = 255;
-    if (c.startsWith('#')) {
-      if (c.length === 4) {
-        r = parseInt(c[1] + c[1], 16); g = parseInt(c[2] + c[2], 16); b = parseInt(c[3] + c[3], 16);
-      } else if (c.length >= 7) {
-        r = parseInt(c.slice(1, 3), 16); g = parseInt(c.slice(3, 5), 16); b = parseInt(c.slice(5, 7), 16);
-      }
-    }
-    if ([r, g, b].some((x) => !Number.isFinite(x))) return `rgba(79,140,255,${alpha})`;
-    return `rgba(${Math.round(r)},${Math.round(g)},${Math.round(b)},${alpha})`;
-  }
+  function colorWithAlpha(color, alpha) { return window.EditorColors.withAlpha(color, alpha); }
+  function normalizeMonacoColor(color) { return window.EditorColors.hex(color); }
 
   function applyCssTheme(theme, shouldUseDarkColors) {
     // 与 subapp-theme.js 的 applyThemeToDoc 对齐：强调色 6 变量 + 背景亮度推导 + 文本派生，
     // 保证 automation-editor.css 引用的全部变量（含 --bg-secondary/--text-secondary 等）都有值
     const t = theme && typeof theme === 'object' ? theme : {};
+    document.documentElement.dataset.focusOutlines = t.focusOutlines === false ? 'off' : 'on';
     const mode = t.mode || 'system';
     let isDark;
     if (mode === 'dark') isDark = true;
@@ -114,13 +104,13 @@
   function defineMonacoTheme() {
     if (!window.monaco) return;
     const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
-    const accent = cssVar('--accent', isDark ? '#6c8cff' : '#4f8cff');
-    const background = cssVar('--bg-primary', isDark ? '#1a1a30' : '#f5f7fa');
-    const foreground = cssVar('--text-primary', isDark ? '#e8e8f0' : '#1a1a2e');
-    const secondary = cssVar('--text-secondary', isDark ? '#a0a0c0' : '#5a5a7a');
-    const border = cssVar('--border', isDark ? '#333360' : '#e2e6ee');
+    const accent = normalizeMonacoColor(cssVar('--accent', isDark ? '#6c8cff' : '#4f8cff'));
+    const background = normalizeMonacoColor(cssVar('--bg-primary', isDark ? '#1a1a30' : '#f5f7fa'));
+    const foreground = normalizeMonacoColor(cssVar('--text-primary', isDark ? '#e8e8f0' : '#1a1a2e'));
+    const secondary = normalizeMonacoColor(cssVar('--text-secondary', isDark ? '#a0a0c0' : '#5a5a7a'));
+    const border = normalizeMonacoColor(cssVar('--border', isDark ? '#333360' : '#e2e6ee'));
     // 当前行高亮用中性色（若用强调色，用户主题为红/粉系时会出现红色行背景）
-    const lineHighlight = isDark ? 'rgba(255,255,255,0.04)' : 'rgba(0,0,0,0.035)';
+    const lineHighlight = isDark ? '#ffffff0a' : '#00000009';
     window.monaco.editor.defineTheme('cipyp-dsl', {
       base: isDark ? 'vs-dark' : 'vs',
       inherit: true,
@@ -139,7 +129,7 @@
         'editorLineNumber.foreground': secondary,
         'editorLineNumber.activeForeground': accent,
         'editorCursor.foreground': accent,
-        'editor.selectionBackground': colorWithAlpha(accent, 0.26),
+        ...window.EditorColors.selection(accent, isDark),
         'editor.lineHighlightBackground': lineHighlight,
         'editorLineNumber.activeBackground': lineHighlight,
         'editorIndentGuide.background1': colorWithAlpha(accent, 0.14),

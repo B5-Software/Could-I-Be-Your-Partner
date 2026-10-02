@@ -3,86 +3,70 @@
 <head>
   <meta charset="UTF-8">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'">
-  <title>崩溃报告</title>
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    html, body { height: 100%; }
-    body {
-      font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
-      background: #15171c; color: #e6e8ee; font-size: 13px; overflow: hidden;
-      display: flex; flex-direction: column;
-    }
-    .cr-titlebar {
-      display: flex; align-items: center; gap: 8px; padding: 10px 14px;
-      background: #1b1e26; border-bottom: 1px solid #2a2f3a; -webkit-app-region: drag;
-      user-select: none;
-    }
-    .cr-titlebar i { color: #f59e0b; }
-    .cr-title { font-weight: 600; }
-    .cr-sub { color: #8b93a7; margin-left: 6px; }
-    .cr-close {
-      margin-left: auto; -webkit-app-region: no-drag; background: transparent; color: #9aa3b5;
-      border: 1px solid #333a49; border-radius: 6px; width: 30px; height: 26px; cursor: pointer;
-    }
-    .cr-close:hover { background: #2a3040; color: #fff; }
-    .cr-body { flex: 1; overflow-y: auto; padding: 14px; }
-    .cr-card { background: #1b1e26; border: 1px solid #2a2f3a; border-radius: 10px; padding: 12px 14px; margin-bottom: 12px; }
-    .cr-card h2 { font-size: 13px; margin-bottom: 8px; color: #c7cddc; display: flex; align-items: center; gap: 6px; }
-    .cr-kv { display: grid; grid-template-columns: 150px 1fr; gap: 4px 10px; color: #aab2c5; }
-    .cr-kv b { color: #e6e8ee; font-weight: 500; word-break: break-all; }
-    .cr-record { border-left: 3px solid #ef4444; padding: 6px 10px; margin: 6px 0; background: #201a1d; border-radius: 6px; }
-    .cr-record .src { color: #f87171; font-weight: 600; }
-    .cr-record pre, .cr-log { white-space: pre-wrap; word-break: break-all; font-family: Consolas, monospace; font-size: 11.5px; color: #b9c0d0; margin-top: 4px; max-height: 260px; overflow: auto; }
-    .cr-dump { display: flex; align-items: center; gap: 10px; padding: 5px 0; border-bottom: 1px dashed #2a2f3a; }
-    .cr-dump:last-child { border-bottom: none; }
-    .cr-dump .name { flex: 1; word-break: break-all; }
-    .cr-dump .size { color: #8b93a7; }
-    .cr-empty { color: #6b7385; }
-    .cr-actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px 14px; border-top: 1px solid #2a2f3a; background: #1b1e26; }
-    .cr-actions button {
-      padding: 8px 13px; border-radius: 7px; border: 1px solid #333a49; background: #222735;
-      color: #dfe3ee; cursor: pointer; font-size: 12.5px;
-    }
-    .cr-actions button:hover { background: #2a3040; }
-    .cr-actions button.primary { background: #4f46e5; border-color: #4f46e5; color: #fff; }
-    .cr-actions button.primary:hover { background: #5b53f0; }
-    .cr-actions button.danger { color: #f87171; border-color: #513040; }
-    .cr-status { margin-left: auto; color: #8b93a7; align-self: center; }
-  </style>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>运行诊断 · CIBYP</title>
+  <link rel="stylesheet" href="../css/theme.css">
+  <link rel="stylesheet" href="../css/crash-report.css">
   <link rel="stylesheet" href="../css/motion.css">
+  <link rel="stylesheet" href="../css/focus.css">
 </head>
 <body>
-  <div class="cr-titlebar">
-    <i class="fa-solid fa-triangle-exclamation">!</i>
-    <span class="cr-title">上次运行异常退出</span>
-    <span class="cr-sub" id="cr-when"></span>
-    <button class="cr-close" id="cr-close" title="关闭">✕</button>
-  </div>
-  <div class="cr-body">
-    <div class="cr-card">
-      <h2>概览</h2>
-      <div class="cr-kv" id="cr-overview"></div>
+  <header class="cr-titlebar">
+    <span class="cr-app-mark" aria-hidden="true">C</span>
+    <span>CIBYP <span class="cr-title-divider">/</span> 运行诊断</span>
+    <button class="cr-close" id="cr-close" aria-label="关闭诊断窗口" title="关闭">×</button>
+  </header>
+  <main class="cr-body" aria-busy="true">
+    <section class="cr-hero" aria-labelledby="cr-heading">
+      <div class="cr-hero-icon" aria-hidden="true">
+        <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 3 2.5 20h19L12 3Z" stroke-linejoin="round"/><path d="M12 9v5m0 3v.5" stroke-linecap="round"/></svg>
+      </div>
+      <div>
+        <p class="cr-eyebrow">异常退出记录</p>
+        <h1 id="cr-heading">上次运行意外中断</h1>
+        <p class="cr-description" id="cr-description">正在读取诊断信息…</p>
+      </div>
+    </section>
+    <section class="cr-summary" aria-label="异常摘要">
+      <div class="cr-cause"><span class="cr-label">最近异常</span><p id="cr-cause">读取中…</p><span id="cr-source" class="cr-muted"></span></div>
+      <dl class="cr-facts">
+        <div><dt>异常时间</dt><dd id="cr-when">—</dd></div>
+        <div><dt>被中断会话</dt><dd id="cr-sessions">—</dd></div>
+        <div><dt>应用版本</dt><dd id="cr-version">—</dd></div>
+      </dl>
+    </section>
+    <div class="cr-section-heading"><h2>诊断详情</h2><span class="cr-muted">按需展开</span></div>
+    <section class="cr-details" aria-label="技术诊断信息">
+      <details id="cr-record-details">
+        <summary><span class="cr-detail-icon" aria-hidden="true">⌁</span><span>异常记录</span><span class="cr-count" id="cr-record-count">0</span></summary>
+        <div class="cr-detail-body" id="cr-records"></div>
+      </details>
+      <details id="cr-log-details">
+        <summary><span class="cr-detail-icon" aria-hidden="true">≡</span><span>最近日志</span><span class="cr-summary-note">末尾 300 行</span></summary>
+        <div class="cr-detail-body"><pre class="cr-log" id="cr-log">读取中…</pre><button class="cr-text-button" id="cr-open-logs">打开日志目录 ↗</button></div>
+      </details>
+      <details id="cr-system-details">
+        <summary><span class="cr-detail-icon" aria-hidden="true">◇</span><span>环境与转储</span><span class="cr-summary-note" id="cr-dump-count">0 个转储文件</span></summary>
+        <div class="cr-detail-body"><dl class="cr-kv" id="cr-overview"></dl><h3>原生转储文件</h3><div id="cr-dumps"></div><button class="cr-text-button" id="cr-open-dir">打开转储目录 ↗</button></div>
+      </details>
+      <details id="cr-advanced-details">
+        <summary><span class="cr-detail-icon" aria-hidden="true">⚙</span><span>高级操作</span></summary>
+        <div class="cr-detail-body cr-advanced">
+          <div><h3>当前内存快照</h3><p>记录本次运行的内存状态，供排查使用。生成时应用可能短暂暂停。</p><button id="cr-heap">导出内存快照</button></div>
+          <div><h3>清除异常记录</h3><p>清除已保存的异常标记；日志和转储文件会保留。</p><button id="cr-dismiss" class="cr-danger">清除记录并关闭</button></div>
+        </div>
+      </details>
+    </section>
+  </main>
+  <footer class="cr-footer">
+    <p class="cr-status" id="cr-status" role="status" aria-live="polite"></p>
+    <div class="cr-actions">
+      <button id="cr-copy">复制报告</button>
+      <button id="cr-export">导出诊断包</button>
+      <button class="cr-primary" id="cr-continue">继续使用 <span aria-hidden="true">→</span></button>
     </div>
-    <div class="cr-card">
-      <h2>崩溃记录</h2>
-      <div id="cr-records"><div class="cr-empty">无记录（可能是原生进程崩溃，请查看下方转储文件）</div></div>
-    </div>
-    <div class="cr-card">
-      <h2>原生转储文件</h2>
-      <div id="cr-dumps"><div class="cr-empty">无 dump 文件</div></div>
-    </div>
-    <div class="cr-card">
-      <h2>日志尾部</h2>
-      <pre class="cr-log" id="cr-log">加载中…</pre>
-    </div>
-  </div>
-  <div class="cr-actions">
-    <button class="primary" id="cr-export">导出诊断包</button>
-    <button id="cr-heap">导出内存快照</button>
-    <button id="cr-open-dir">打开转储目录</button>
-    <button class="danger" id="cr-dismiss">忽略并清除记录</button>
-    <span class="cr-status" id="cr-status"></span>
-  </div>
+  </footer>
+  <script src="../js/subapp-theme.js"></script>
   <script src="../js/crash-report.js"></script>
 </body>
 </html>

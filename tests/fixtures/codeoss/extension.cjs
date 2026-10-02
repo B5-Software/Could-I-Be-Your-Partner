@@ -25,6 +25,43 @@ async function activate(context) {
     assert(typescript);
     await typescript.activate();
     context.subscriptions.push(
+      vscode.commands.registerCommand('cibypFixture.echo', (text) => ({ echoed: text })),
+      vscode.commands.registerCommand('cibypFixture.documents', () =>
+        vscode.workspace.textDocuments.map((document) => ({
+          uri: document.uri.toString(),
+          dirty: document.isDirty,
+        })),
+      ),
+      vscode.commands.registerCommand('cibypFixture.terminal', async (action) => {
+        if (action === 'close') {
+          for (const terminal of vscode.window.terminals) terminal.dispose();
+          await waitFor(() => !vscode.window.terminals.length);
+          return { ok: true };
+        }
+        const terminal = vscode.window.activeTerminal;
+        assert(terminal, 'Toolbar must open a terminal');
+        terminal.sendText(
+          `node -e "require('fs').writeFileSync('toolbar-terminal.txt',process.platform)"`,
+        );
+        await waitFor(() => fs.existsSync(path.join(root, 'toolbar-terminal.txt')));
+        return {
+          ok: true,
+          platform: fs.readFileSync(path.join(root, 'toolbar-terminal.txt'), 'utf8'),
+        };
+      }),
+      vscode.languages.registerHoverProvider('javascript', {
+        provideHover: () => new vscode.Hover('CIBYP language-service fixture'),
+      }),
+      vscode.languages.registerDefinitionProvider('javascript', {
+        provideDefinition: () => new vscode.Location(uri, new vscode.Position(0, 0)),
+      }),
+      vscode.languages.registerRenameProvider('javascript', {
+        provideRenameEdits: (_document, _position, name) => {
+          const edit = new vscode.WorkspaceEdit();
+          edit.replace(uri, new vscode.Range(0, 0, 0, 7), name);
+          return edit;
+        },
+      }),
       vscode.languages.registerCompletionItemProvider('javascript', {
         provideCompletionItems: () => [new vscode.CompletionItem('cibypFixtureCompletion')],
       }),

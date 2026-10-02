@@ -135,7 +135,7 @@ const vmService = new VmService({
   persistSettings: () => { try { saveJSON(settingsPath, settings); } catch (_) {} },
   aria2: aria2Manager,
 });
-const toolDialog = require('./vm/vm-file-dialog').createVmFileDialog({ ipcMain, BrowserWindow, dialog, getVmService: () => vmService, getTheme: () => settings.theme });
+const toolDialog = require('./vm/vm-file-dialog').createVmFileDialog({ ipcMain, dialog, getVmService: () => vmService, getTheme: () => settings.theme, getMainWindow: () => mainWindow });
 const toolFiles = require('./vm/tool-files').createToolFiles({ fs, getVmService: () => vmService });
 fedikittenService.fileAccess = toolFiles;
 cibypImService.fileAccess = toolFiles;
@@ -151,6 +151,7 @@ vmService.on('state', (s) => broadcastVm('vm:state', s));
 vmService.on('progress', (p) => broadcastVm('vm:progress', p));
 vmService.on('serial', (t) => { try { if (t && String(t).trim()) broadcastVm('vm:serial', String(t).slice(-8192)); } catch (_) {} });
 vmService.on('ready', () => {
+  if (vmService.emergencyHost) return;
   vmRuntimeGate.ready = true;
   vmRuntimeGate.failed = false;
   tryShowMainWindow();
@@ -209,6 +210,14 @@ const workspacesBaseDir = path.join(app.getPath('documents'), 'Could-I-Be-Your-P
 vmService.addHostRoot(workspacesBaseDir);
 
 [dataDir, imagesDir, skillsDir, historyDir, babeHistoryDir, workspacesBaseDir].forEach(d => { if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true }); });
+
+const todoService = new (require('./services/todo-service').TodoService)({
+  file: path.join(dataDir, 'todos.json'),
+  historyDirectories: [historyDir, babeHistoryDir],
+  changed: state => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('todo:state', state); }
+});
+ipcMain.handle('todo:get', () => todoService.get());
+ipcMain.handle('todo:mutate', (_, args) => todoService.mutate(args));
 
 // ---- 崩溃诊断基础设施：原生 minidump + 持久化日志 ----
 // crashReporter 必须在 ready 之前启动，否则 Chromium 的 crashpad handler 不会连接，
@@ -677,6 +686,17 @@ ipcMain.handle('codeoss:layout', (_, layout) => codeOSSService.setLayout(layout)
 ipcMain.handle('codeoss:command', (_, command) => codeOSSService.request('ide.command', { command }));
 ipcMain.handle('codeoss:agent-response', (_, response) => codeOSSService.agentResponse(response));
 ipcMain.handle('codeoss:context', () => codeOSSService.request('ide.context', {}));
+ipcMain.handle('codeoss:language', (_, params, workspace) => {
+  const target = codeOSSService.target;
+  const normalize = value => {
+    if (target.location === 'vm') return path.posix.resolve(String(value || '/'));
+    const absolute = path.resolve(String(value || '.'));
+    return process.platform === 'win32' ? absolute.toLowerCase() : absolute;
+  };
+  if (!workspace || normalize(workspace) !== normalize(target.path)) throw new Error('The Agent workspace does not match the active Code-OSS workspace.');
+  return codeOSSService.request('ide.language', params);
+});
+ipcMain.handle('codeoss:version', () => require('../../integrations/codeoss/runtime-lock.json').vscodeVersion);
 ipcMain.handle('codeoss:changes', (_, action = 'list', id) => codeOSSService.request('ide.changes', { action, id }));
 let appTray = null;
 let skillEditorWindow = null;
@@ -726,10 +746,21 @@ function getGitShortHash() {
 // ---- 运行位置门控：location=vm 时主窗口必须等 VM 就绪（或紧急回退/超时）----
 // 设计约束：门控与判据全部在主进程、零 VM 依赖 —— VM 挂了也一定能进主界面。
 const vmRuntimeGate = { required: false, ready: true, failed: false, reason: null };
+let mainRendererReady = false;
+const startupRuntimeWaiters = new Set();
+ipcMain.handle('app:startup-runtime', () => {
+  if (!vmRuntimeGate.required || vmRuntimeGate.ready) return { location: vmService.emergencyHost ? 'host' : settings.runtime.location };
+  return new Promise(resolve => startupRuntimeWaiters.add(resolve));
+});
 
 /** 尝试显示主窗口；VM 门控未放行时返回 false（调用方无需处理） */
 function tryShowMainWindow() {
+  if (!vmRuntimeGate.required || vmRuntimeGate.ready) {
+    for (const resolve of startupRuntimeWaiters) resolve({ location: vmService.emergencyHost ? 'host' : settings.runtime.location });
+    startupRuntimeWaiters.clear();
+  }
   if (!mainWindow || mainWindow.isDestroyed() || mainWindowShownOnce) return false;
+  if (!mainRendererReady) return false;
   if (vmRuntimeGate.required && !vmRuntimeGate.ready) return false;
   mainWindowShownOnce = true;
   mainWindow.show();
@@ -749,6 +780,7 @@ async function startVmBootForSplash() {
     console.log('[vm] Starting virtual machine (splash startup gate active)');
     broadcastVm('vm:boot-begin', { status: vmService.status() });
     await vmService.start();
+    if (vmService.emergencyHost) return;
     vmRuntimeGate.ready = true;
     vmRuntimeGate.failed = false;
     console.log('[vm] Virtual machine ready: ' + JSON.stringify({
@@ -758,6 +790,7 @@ async function startVmBootForSplash() {
     broadcastVm('vm:boot-ready', { status: vmService.status() });
     tryShowMainWindow();
   } catch (e) {
+    if (vmService.emergencyHost) return;
     vmRuntimeGate.failed = true;
     vmRuntimeGate.reason = e.message;
     console.error('[vm] Virtual machine startup failed: ' + e.message);
@@ -848,18 +881,18 @@ function createWindow() {
     icon: path.join(__dirname, '../../assets/icons/icon.png'),
     show: false,
     backgroundColor: '#1e1e1e',
-    // 启动阶段不绘制隐藏窗口，减少 Windows 首屏竞争；show 后正常绘制
-    paintWhenInitiallyHidden: false,
+    // Initialize and paint the App behind Splash while the VM starts in parallel.
+    paintWhenInitiallyHidden: true,
     webPreferences: {
       preload: path.join(__dirname, '../preload/generated/preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
-      // 启动阶段允许节流；首次 show 后关闭节流（隐藏到托盘仍需后台运行 Agent/语音）
-      backgroundThrottling: true
+      backgroundThrottling: false
     }
   });
   mainWindowShownOnce = false;
+  mainRendererReady = false;
   // 兜底：渲染器 boot 异常/超时时也必须显示窗口。
   // 运行位置=虚拟机时，兜底时间放宽到「VM 启动超时 + 15s」，避免抢在 VM 就绪前弹出空界面。
   const vmMode = settings.runtime && settings.runtime.location === 'vm';
@@ -868,7 +901,14 @@ function createWindow() {
     : MAIN_WINDOW_SHOW_FALLBACK_MS;
   setTimeout(() => {
     if (!mainWindowShownOnce && mainWindow && !mainWindow.isDestroyed()) {
-      vmRuntimeGate.ready = true; // 超时兜底：强制放行，绝不让用户卡在 Splash
+      if (vmRuntimeGate.required && !vmRuntimeGate.ready) {
+        vmService.emergencyHostMode();
+        vmRuntimeGate.required = false;
+        vmRuntimeGate.ready = true;
+        tryShowMainWindow();
+        return; // Initialize host workspace before revealing the App.
+      }
+      mainRendererReady = true;
       tryShowMainWindow();
     }
   }, fallbackMs);
@@ -1008,11 +1048,11 @@ function openCrashReportWindow() {
     return;
   }
   crashReportWindow = new BrowserWindow({
-    width: 880, height: 700, minWidth: 680, minHeight: 480,
+    width: 940, height: 760, minWidth: 660, minHeight: 540,
     title: 'Crash Report',
     frame: false,
     show: false,
-    backgroundColor: '#15171c',
+    backgroundColor: settings.theme.backgroundColor || (nativeTheme.shouldUseDarkColors ? '#1a1a2e' : '#f5f7fa'),
     webPreferences: {
       preload: path.join(__dirname, '../preload/generated/crash-report-preload.js'),
       contextIsolation: true,
@@ -1030,6 +1070,15 @@ function closeCrashReportWindow() {
 }
 
 ipcMain.handle('crash:info', () => buildCrashInfo());
+ipcMain.handle('crash:copy', () => {
+  const info = buildCrashInfo();
+  clipboard.writeText(JSON.stringify({ meta: info.meta, detectedAt: info.detectedAt, previousCleanExit: info.previousCleanExit, crashedSessionCount: info.crashedSessionCount, records: info.records, dumps: info.dumps, logTail: info.logTail }, null, 2));
+  return { ok: true };
+});
+ipcMain.handle('crash:openLogsDir', async () => {
+  const error = await shell.openPath(appLog.getLogDir());
+  return error ? { ok: false, error } : { ok: true };
+});
 ipcMain.handle('crash:close', () => { closeCrashReportWindow(); });
 ipcMain.handle('crash:dismiss', () => {
   appLog.clearCrashRecords();
@@ -1037,9 +1086,9 @@ ipcMain.handle('crash:dismiss', () => {
   closeCrashReportWindow();
   return { ok: true };
 });
-ipcMain.handle('crash:openDumpsDir', () => {
-  try { shell.showItemInFolder(crashDumpsPath); } catch { /* ignore */ }
-  return { ok: true, dir: crashDumpsPath };
+ipcMain.handle('crash:openDumpsDir', async () => {
+  const error = await shell.openPath(crashDumpsPath);
+  return error ? { ok: false, error } : { ok: true, dir: crashDumpsPath };
 });
 ipcMain.handle('crash:exportBundle', async () => {
   try {
@@ -1103,6 +1152,8 @@ function registerRendererReadyListener() {
   ipcMain.on('app:renderer-ready', (event) => {
     if (!mainWindowShownOnce && mainWindow && !mainWindow.isDestroyed()
         && event.sender === mainWindow.webContents) {
+      mainRendererReady = true;
+      broadcastVm('app:startup-ready', {});
       // 运行位置=虚拟机时，渲染器就绪不代表可以进主界面 —— 还要等 VM 门控放行
       tryShowMainWindow();
     }
@@ -1456,6 +1507,9 @@ app.whenReady().then(() => {
   });
   ocHeaders.refreshOpenCodeVersion().catch(() => {});
 
+  // Establish the VM gate before renderer loading can report readiness.
+  vmRuntimeGate.required = settings.runtime?.location === 'vm';
+  vmRuntimeGate.ready = !vmRuntimeGate.required;
   createWindow();
   // Splash 启动画面：主窗口预渲染完成前展示品牌画面（主窗口 show 时自动关闭）
   createSplashWindow();

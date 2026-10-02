@@ -96,7 +96,7 @@ const EN_DICT = {
         llm: 'LLM',
         usage: 'Usage',
         imageGen: 'Image Gen',
-        theme: 'Theme',
+        theme: 'Appearance',
         network: 'Network',
         entropy: 'Entropy',
         trngFirmware: 'TRNG Firmware',
@@ -273,6 +273,7 @@ const EN_DICT = {
 
   // ── Tool Descriptions ──
   _tools: {
+    codeIDE: 'Use installed Code-OSS extensions and language services (LSP)',
     automationList: 'List automation trigger tasks',
     automationGetGuide: 'Fetch the full automation guide on demand (DSL/triggers/HTTP/examples)',
     automationCreate: 'Create or update an automation trigger task (schedule/notification/HTTP)',
@@ -595,6 +596,7 @@ const EN_DICT = {
 
   // ── Categories ──
   _categories: {
+    '编程': 'Programming',
     '自动化': 'Automation',
     '决策': 'Decision',
     'FediKitten': 'FediKitten',
@@ -1305,6 +1307,9 @@ ${p.toolListSection}`;
 
     // ── Settings: Theme ──
     '外观模式': 'Appearance mode',
+    '外观': 'Appearance',
+    '全局焦点描边': 'Focus outlines',
+    '使用强调色标示当前焦点，立即应用到各窗口': 'Highlight focus with the accent color. Applies immediately to all windows.',
     '跟随系统': 'Follow system',
     '浅色': 'Light',
     '深色': 'Dark',

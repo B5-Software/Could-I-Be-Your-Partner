@@ -1,4 +1,4 @@
-/* Native Chromium checks: real layout, animation cancellation, focus and session-owned state. */
+/* Native Chromium checks: real layout, animation cancellation, focus and persistent global state. */
 module.exports = async function checkWorkspace(webContents) {
   return webContents.executeJavaScript(`(async () => {
     const check = (condition, message) => { if (!condition) throw new Error(message); };
@@ -6,11 +6,12 @@ module.exports = async function checkWorkspace(webContents) {
     // after the delay so we can validate completion/cancellation without showing a window.
     const wait = async ms => {
       await new Promise(resolve => setTimeout(resolve, ms));
-      if (document.hidden) {
+      {
         document.getAnimations().forEach(animation => { if (animation.playState === 'running') animation.finish(); });
         await new Promise(resolve => setTimeout(resolve, 0));
       }
     };
+    const until = async check => { for (let n = 0; n < 100; n++) { if (check()) return; await wait(20); } throw new Error('Todo persistence did not reach the UI'); };
     const click = selector => { const element = document.querySelector(selector); check(element, selector); element.click(); };
     const root = document.getElementById('todo-panel');
     const input = document.getElementById('todo-input');
@@ -57,15 +58,16 @@ module.exports = async function checkWorkspace(webContents) {
     check(!root.inert && document.activeElement === input, 'Todo open restores interactivity and focus');
     input.value = '<img src=x onerror=alert(1)> small goal';
     document.getElementById('todo-form').requestSubmit();
-    check(primary.agent.todoItems.length === 1, 'form adds to the current session');
+    await until(() => primary.agent.todoItems.length === 1);
+    check(primary.agent.todoItems.length === 1, 'form persists the global list');
     check(!root.querySelector('.todo-list img'), 'Todo content is rendered as plain text');
     click('[data-todo-action="edit"]');
     const editor = root.querySelector('.todo-edit-input');
     editor.value = 'edited goal';
     editor.form.requestSubmit();
-    check(primary.agent.todoItems[0].text === 'edited goal', 'editing updates the item');
+    await until(() => primary.agent.todoItems[0].text === 'edited goal');
     click('[data-todo-action="toggle"]');
-    check(primary.agent.todoItems[0].done, 'toggle completes an item');
+    await until(() => primary.agent.todoItems[0].done);
     click('[data-todo-filter="pending"]');
     check(root.querySelectorAll('.todo-item').length === 0, 'pending filter excludes completed items');
     click('[data-todo-filter="all"]');
@@ -77,15 +79,19 @@ module.exports = async function checkWorkspace(webContents) {
     otherAgent.conversationTitle = '第二个会话';
     const other = manager.registerAgent('chat', otherAgent);
     manager.activate('chat', other.key);
-    check(!input.value && root.querySelectorAll('.todo-item').length === 0, 'new session has independent Todos and draft');
+    check(input.value === 'draft in first session' && root.querySelectorAll('.todo-item').length === 1, 'Todos and drafts persist across sessions');
     input.value = 'second goal';
     document.getElementById('todo-form').requestSubmit();
-    check(otherAgent.todoItems.length === 1 && primary.agent.todoItems.length === 1, 'edits never cross sessions');
+    await until(() => otherAgent.todoItems.length === 2);
+    check(primary.agent.todoItems.length === 2, 'all Agents share the persistent list');
     manager.activate('chat', primary.key);
-    check(input.value === 'draft in first session', 'switching back restores the draft');
+    check(input.value === '', 'persisting an added todo clears the shared draft');
     check(root.querySelector('.todo-text').textContent === 'edited goal', 'switching back restores the list');
     click('#btn-clear-completed');
-    check(!primary.agent.todoItems.length && otherAgent.todoItems.length === 1, 'clear completed affects only its owner');
+    await until(() => primary.agent.todoItems.length === 1);
+    check(otherAgent.todoItems[0].text === 'second goal', 'clear completed preserves unfinished global todos');
+    primary.agent.clearContextOnly();
+    check(primary.agent.todoItems.length === 1, 'clearing a conversation must not clear global todos');
     // Closing and immediately reopening must cancel the stale completion callback.
     click('#btn-close-todo');
     fixedLeft();
@@ -176,6 +182,6 @@ module.exports = async function checkWorkspace(webContents) {
     window.activateSettingsTab('animations');
     check(document.querySelector('.settings-panel[data-tab="animations"]').getAttribute('aria-hidden') === 'false', 'settings tabs share accessible activation');
     window.navigatePage('chat');
-    return { todo: 'sidebar, aligned input, editable, safe text, session-owned', panels: 'cancelled exits, exclusive docks, navigation, focus, independent scrolling' };
+    return { todo: 'sidebar, aligned input, editable, safe text, persistent across sessions', panels: 'cancelled exits, exclusive docks, navigation, focus, independent scrolling' };
   })()`);
 };

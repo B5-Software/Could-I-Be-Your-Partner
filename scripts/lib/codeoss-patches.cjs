@@ -89,6 +89,18 @@ function patchDesktopMain(source) {
   );
   result = replaceOne(
     result,
+    /applyState\(([\w$]+),([\w$]+)=([\w$]+)\.screen\.getAllDisplays\(\)\.length>0\)\{/,
+    'applyState($1,$2=$3.screen.getAllDisplays().length>0){if(globalThis.__cibypWorkbenchHost.isEmbeddedWindow(this._win))return;',
+    'embedded startup window state isolation',
+  );
+  result = replaceOne(
+    result,
+    /const ([\w$]+)=process\.argv\.slice\(1\);if\(([\w$]+)\?\.addArgs/,
+    'const $1=globalThis.__cibypWorkbenchHost.relaunchArgv();if($2?.addArgs',
+    'outer application restart arguments',
+  );
+  result = replaceOne(
+    result,
     /this\.windowCounter===0&&\(![\w$]+\|\|this\._quitRequested\)&&this\.fireOnWillShutdown\(1\)/,
     'this.windowCounter===0&&this._quitRequested&&this.fireOnWillShutdown(1)',
     'embedded window close lifecycle',
@@ -127,7 +139,8 @@ function patchDesktopWorkbench(source) {
         "window.autoDetectColorScheme":false,
         "window.autoDetectHighContrast":false,
         "workbench.colorTheme":data.dark?"Dark Modern":"Light Modern",
-        "workbench.reduceMotion":data.animations?"auto":"on"
+        "workbench.reduceMotion":data.animations?"auto":"on",
+        "telemetry.telemetryLevel":"off"
       }))await this.configurationService.updateValue(key,value,8);
     };if(globalThis.__cibypAppearance)await globalThis.__cibypApplyAppearance(globalThis.__cibypAppearance);
     const $2=this.environmentService.extensionDevelopmentLocationURI,`,

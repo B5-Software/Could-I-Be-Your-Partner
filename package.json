@@ -1,6 +1,6 @@
 {
   "name": "could-i-be-your-partner",
-  "version": "1.9.0-alpha.11",
+  "version": "1.9.0-alpha.12",
   "description": "全自动AI Agent，帮助完成一切任务",
   "license": "GPL-3.0-or-later",
   "main": "src/main/main.js",
@@ -38,9 +38,9 @@
     "lint:fix": "eslint . --fix",
     "typecheck": "tsc --noEmit",
     "check": "npm run lint && npm run format:check && npm run typecheck && npm test",
-    "test:desktop": "npm run build-app-bundle && electron tests/integration/desktop-smoke.cjs",
-    "format": "prettier --write src/main/core src/main/ipc src/main/services src/main/settings src/shared/pricing.ts src/renderer/core src/preload/channel-subscriptions.js scripts/build-app-bundle.js scripts/lib scripts/package.js scripts/eb-before-pack.js scripts/eb-after-pack.js tests/unit tests/integration eslint.config.cjs tsconfig.json src/main/vm/{guest-tool-worker,tool-files,tool-location,vm-download-manager,vm-file-dialog,vm-process,vm-tool-runtime,vm-tools,vm-theme}.js src/preload/vm-file-dialog-preload.js src/renderer/js/vm-file-dialog.js src/renderer/pages/vm-file-dialog.html integrations/codeoss scripts/prepare-codeoss.js tests/fixtures/codeoss",
-    "format:check": "prettier --check src/main/core src/main/ipc src/main/services src/main/settings src/shared/pricing.ts src/renderer/core src/preload/channel-subscriptions.js scripts/build-app-bundle.js scripts/lib scripts/package.js scripts/eb-before-pack.js scripts/eb-after-pack.js tests/unit tests/integration eslint.config.cjs tsconfig.json src/main/vm/{guest-tool-worker,tool-files,tool-location,vm-download-manager,vm-file-dialog,vm-process,vm-tool-runtime,vm-tools,vm-theme}.js src/preload/vm-file-dialog-preload.js src/renderer/js/vm-file-dialog.js src/renderer/pages/vm-file-dialog.html integrations/codeoss scripts/prepare-codeoss.js tests/fixtures/codeoss",
+    "test:desktop": "npm run build-app-bundle && electron tests/integration/desktop-smoke.cjs && electron tests/integration/startup-gate.cjs && electron tests/integration/startup-gate.cjs --renderer-first && electron tests/integration/startup-gate.cjs --host-fallback && electron tests/integration/crash-report.cjs",
+    "format": "prettier --write src/main/core src/main/ipc src/main/services src/main/settings src/shared/pricing.ts src/renderer/core src/preload/channel-subscriptions.js scripts/build-app-bundle.js scripts/lib scripts/package.js scripts/eb-before-pack.js scripts/eb-after-pack.js tests/unit tests/integration eslint.config.cjs tsconfig.json src/main/vm/{guest-tool-worker,tool-files,tool-location,vm-download-manager,vm-file-dialog,vm-process,vm-tool-runtime,vm-tools,vm-theme}.js src/renderer/js/vm-file-dialog.js integrations/codeoss scripts/prepare-codeoss.js tests/fixtures/codeoss",
+    "format:check": "prettier --check src/main/core src/main/ipc src/main/services src/main/settings src/shared/pricing.ts src/renderer/core src/preload/channel-subscriptions.js scripts/build-app-bundle.js scripts/lib scripts/package.js scripts/eb-before-pack.js scripts/eb-after-pack.js tests/unit tests/integration eslint.config.cjs tsconfig.json src/main/vm/{guest-tool-worker,tool-files,tool-location,vm-download-manager,vm-file-dialog,vm-process,vm-tool-runtime,vm-tools,vm-theme}.js src/renderer/js/vm-file-dialog.js integrations/codeoss scripts/prepare-codeoss.js tests/fixtures/codeoss",
     "test:vm-picker": "npm run build-app-bundle && electron tests/integration/vm-file-picker-smoke.cjs",
     "test:codeoss:vm": "npm run prepare:codeoss && electron tests/integration/codeoss-vm.cjs"
   },

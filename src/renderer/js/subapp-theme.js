@@ -8,7 +8,7 @@
 
   // 检测当前子应用的 API
   function detectAPI() {
-    return window.pcbAPI || window.cadAPI || window.gameAPI || window.sanguoshaAPI || window.skillEditorAPI || null;
+    return window.pcbAPI || window.cadAPI || window.gameAPI || window.sanguoshaAPI || window.skillEditorAPI || window.crashReportAPI || null;
   }
 
   // 计算亮度
@@ -24,6 +24,7 @@
   function applyThemeToDoc(theme, shouldUseDarkColors) {
     const doc = document.documentElement;
     if (!theme) return;
+    doc.dataset.focusOutlines = theme.focusOutlines === false ? 'off' : 'on';
     const mode = theme.mode || 'system';
     let isDark;
     if (mode === 'dark') isDark = true;

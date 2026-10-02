@@ -20,6 +20,7 @@ function agentFixture(api = {}) {
     scope,
   );
   const agent = new scope.module.exports.Agent();
+  agent.testScope = scope;
   agent.settings = { llm: { streamResponses: false }, contextCompaction: { enabled: false } };
   agent.getSystemPrompt = () => 'persona: ' + (agent.settings.aiPersona?.name || 'Original');
   return agent;
@@ -231,7 +232,7 @@ test('workspace refreshes emit only the changed source and retain the last succe
   assert.match(agent.contextManager.getMessages().at(-1).content, /已撤销/);
 });
 
-test('provider requests retain their snapshot while later settings and Todo changes reach the next turn', async () => {
+test('provider requests retain their snapshot while cross-session persistent Todo changes reach the next turn', async () => {
   const requests = [];
   let settle;
   const api = {
@@ -248,6 +249,16 @@ test('provider requests retain their snapshot while later settings and Todo chan
     },
   };
   const agent = agentFixture(api);
+  const shared = {
+    todoItems: [],
+    todoIdCounter: 0,
+    async handleTodo(args) {
+      this.todoItems.push({ id: ++this.todoIdCounter, text: args.text, done: false });
+      return { ok: true };
+    },
+  };
+  agent.testScope.window.CibypTodos = shared;
+  const other = new agent.constructor();
   agent.getRuntimeToolSchemas = () => [];
   agent.contextManager.addUserMessage('task');
   agent.running = true;
@@ -255,7 +266,7 @@ test('provider requests retain their snapshot while later settings and Todo chan
   while (!settle) await new Promise((resolve) => setImmediate(resolve));
   const first = JSON.stringify(requests[0]);
   agent.applySettings({ ...agent.settings, aiPersona: { name: 'Changed' } });
-  agent.handleTodo({ action: 'add', text: 'user edit while streaming' });
+  await other.handleTodo({ action: 'add', text: 'user edit in another session while streaming' });
   agent.hotMessages.push('continue');
   settle({
     ok: true,
@@ -265,7 +276,8 @@ test('provider requests retain their snapshot while later settings and Todo chan
   assert.equal(requests.length, 2);
   assert.equal(JSON.stringify(requests[0]), first);
   assert.match(JSON.stringify(requests[1]), /Changed/);
-  assert.match(JSON.stringify(requests[1]), /user edit while streaming/);
+  assert.match(JSON.stringify(requests[1]), /user edit in another session while streaming/);
+  assert.match(JSON.stringify(requests[1]), /全局持久化待办/);
   assert.equal(requests[1][0].content, requests[0][0].content, 'baseline prefix remains frozen');
   assert.equal(
     agent.getLatestUserMessageText(),

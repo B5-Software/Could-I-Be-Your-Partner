@@ -1,7 +1,7 @@
 'use strict';
-(async () => {
-  const config = await window.filePicker.config();
-  const byId = (id) => document.getElementById(id);
+window.initializeVMFilePicker = async (container, filePicker) => {
+  const config = await filePicker.config();
+  const byId = (id) => container.querySelector('#' + id);
   const error = (message) => {
     byId('status').textContent = message || '';
   };
@@ -14,19 +14,19 @@
       surface: '#30384b',
       line: '#475064',
     }))
-      document.documentElement.style.setProperty('--' + name, value);
-    document.documentElement.style.colorScheme = 'dark';
+      container.style.setProperty('--' + name, value);
+    container.style.colorScheme = 'dark';
   }
   if (/^#[0-9a-f]{6}$/i.test(config.theme.accentColor || ''))
-    document.documentElement.style.setProperty('--accent', config.theme.accentColor);
+    container.style.setProperty('--accent', config.theme.accentColor);
   if (/^#[0-9a-f]{6}$/i.test(config.theme.backgroundColor || ''))
-    document.documentElement.style.setProperty('--bg', config.theme.backgroundColor);
+    container.style.setProperty('--bg', config.theme.backgroundColor);
   byId('title').textContent = config.title;
   byId('filename').value = config.filename;
   byId('filename').disabled = config.directory;
   byId('choose').textContent = config.save ? '保存' : config.directory ? '选择文件夹' : '打开';
   async function browse(directory) {
-    const result = await window.filePicker.browse(directory);
+    const result = await filePicker.browse(directory);
     if (!result.ok) return error(result.error);
     current = result.path;
     selected = null;
@@ -79,9 +79,9 @@
         ? current.replace(/\/$/, '') + '/' + selected.name
         : current
       : current.replace(/\/$/, '') + '/' + name;
-    let result = await window.filePicker.choose(target, false);
+    let result = await filePicker.choose(target, false);
     if (result.overwrite && window.confirm(result.error))
-      result = await window.filePicker.choose(target, true);
+      result = await filePicker.choose(target, true);
     if (!result.ok) error(result.error);
   }
   byId('choose').onclick = () => choose().catch((e) => error(e.message));
@@ -104,7 +104,7 @@
     const name = byId('folderName').value.trim();
     if (!name) return;
     if (/[/\\]/.test(name) || name === '..') return error('请输入有效的文件夹名称');
-    const result = await window.filePicker.mkdir(current.replace(/\/$/, '') + '/' + name);
+    const result = await filePicker.mkdir(current.replace(/\/$/, '') + '/' + name);
     if (!result.ok) return error(result.error);
     byId('folderForm').hidden = true;
     byId('folderName').value = '';
@@ -113,11 +113,9 @@
   byId('folderName').onkeydown = (event) => {
     if (event.key === 'Enter') byId('createFolder').click();
   };
-  byId('cancel').onclick = () => window.filePicker.cancel();
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') window.filePicker.cancel();
+  byId('cancel').onclick = () => filePicker.cancel();
+  container.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') filePicker.cancel();
   });
   await browse(current);
-})().catch((error) => {
-  document.getElementById('status').textContent = error.message;
-});
+};

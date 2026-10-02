@@ -12,7 +12,7 @@
 
 const { contextBridge, ipcRenderer } = require('electron');
 
-const CHANNELS = ['vm:init', 'vm:state', 'vm:progress', 'vm:serial', 'vm:boot-begin', 'vm:boot-ready', 'vm:boot-failed', 'vm:error'];
+const CHANNELS = ['vm:init', 'vm:state', 'vm:progress', 'vm:serial', 'vm:boot-begin', 'vm:boot-ready', 'vm:boot-failed', 'vm:error', 'app:startup-ready'];
 
 contextBridge.exposeInMainWorld('vmSplash', {
   /** 订阅 VM 启动相关事件；返回取消订阅函数 */
@@ -28,4 +28,10 @@ contextBridge.exposeInMainWorld('vmSplash', {
   emergencyHostMode: () => ipcRenderer.invoke('vm:emergencyHostMode'),
   /** 读取当前运行位置与 VM 状态 */
   getRuntime: () => ipcRenderer.invoke('runtime:getLocation'),
+  getTheme: () => ipcRenderer.invoke('theme:get'),
+  onThemeApply: (callback) => {
+    const listener = (_event, data) => callback(data);
+    ipcRenderer.on('theme:apply', listener);
+    return () => ipcRenderer.removeListener('theme:apply', listener);
+  },
 });

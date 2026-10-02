@@ -73,7 +73,20 @@ module.exports = async function checkOverlay(renderer, service, preview, waitFor
             'document.documentElement.dataset.theme',
           )) === mode,
         5000,
-      );
+      ).catch(async (error) => {
+        console.error('[codeoss-overlay] Theme hover state:', {
+          mode,
+          shown: shown(),
+          revision: service.interactionRevision,
+          source: await renderer.executeJavaScript(
+            `({class: document.body.className, theme: document.documentElement.dataset.theme, pop: getComputedStyle(document.getElementById('session-tab-popover')).display, hover:[...document.querySelectorAll(':hover')].map(e=>e.id || e.className).slice(-6)})`,
+          ),
+          mirror: await service.overlay.view?.webContents.executeJavaScript(
+            '({theme:document.documentElement.dataset.theme,hidden:document.hidden})',
+          ),
+        });
+        throw error;
+      });
       const colors = await service.overlay.view.webContents.executeJavaScript(
         `({accent: getComputedStyle(document.documentElement).getPropertyValue('--accent').trim(), background: getComputedStyle(document.querySelector('.session-tab-popover')).backgroundColor})`,
       );

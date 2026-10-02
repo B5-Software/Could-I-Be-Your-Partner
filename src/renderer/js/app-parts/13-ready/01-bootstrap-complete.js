@@ -8,5 +8,6 @@
 
   // Wait for a painted frame before revealing the main window.
   if (typeof window.api.rendererReady === 'function') {
+    await document.fonts.ready;
     requestAnimationFrame(() => requestAnimationFrame(() => window.api.rendererReady()));
   }
