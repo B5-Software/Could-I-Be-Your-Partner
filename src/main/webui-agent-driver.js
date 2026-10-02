@@ -10,9 +10,13 @@
  *
  * 这样 WebUI 不再依赖"某个开着的 GUI 窗口"，可以独立支撑整个对话闭环；
  * GUI 在线时仍走原来的遥控路径（见 ipc/web-control.js 的驱动选择）。
+ *
+ * 模式（chat/babe/code）与历史通道由运行时统一分流，驱动只做协议映射。
  */
 
 'use strict';
+
+const { MODES } = require('./agent-runtime.js');
 
 /** 运行时事件 → WebUI push 协议的映射。 */
 function attachWebUiAgentDriver({ webControlService, agentRuntime, log = console }) {
@@ -21,12 +25,14 @@ function attachWebUiAgentDriver({ webControlService, agentRuntime, log = console
   if (!agentRuntime) throw new TypeError('attachWebUiAgentDriver: agentRuntime is required');
 
   let activeKey = null;
-  const api = agentRuntime.api;
+  let currentMode = 'chat';
 
-  function ensureSession() {
-    if (activeKey && agentRuntime.getSession(activeKey)) return activeKey;
-    activeKey = `webui:chat:${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
-    agentRuntime.createSession({ key: activeKey, mode: 'chat' });
+  function ensureSession(mode) {
+    const wanted = MODES.includes(mode) ? mode : currentMode;
+    if (activeKey && agentRuntime.getSession(activeKey) && wanted === currentMode) return activeKey;
+    currentMode = wanted;
+    activeKey = `webui:${currentMode}:${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
+    agentRuntime.createSession({ key: activeKey, mode: currentMode });
     webControlService.pushConversationSwitch(activeKey);
     return activeKey;
   }
@@ -68,9 +74,24 @@ function attachWebUiAgentDriver({ webControlService, agentRuntime, log = console
         case 'title':
           webControlService.pushTitle(event.title);
           break;
+        case 'affection-change':
+          webControlService.pushMessage(
+            'system',
+            `好感度 ${event.data && event.data.delta > 0 ? '+' : ''}${(event.data && event.data.delta) || 0} → ${(event.data && event.data.value) || 0}`,
+          );
+          break;
+        case 'tarot':
+          if (event.data) webControlService.pushTarot(event.data);
+          break;
+        case 'present-file':
+          webControlService.pushMessage(
+            'assistant',
+            `已呈现文件：${(event.data && (event.data.title || event.data.path)) || ''}`,
+          );
+          break;
+        case 'stream-start':
         case 'stream-chunk':
         case 'stream-end':
-        case 'stream-start':
           // 流式过程由 message/toolCall 事件聚合展示（WebUI 无逐 token 渲染区）
           break;
         default:
@@ -101,11 +122,11 @@ function attachWebUiAgentDriver({ webControlService, agentRuntime, log = console
 
   webControlService.onNewChat = async () => {
     activeKey = null;
-    return ensureSession();
+    return ensureSession(currentMode);
   };
 
   webControlService.onSendMessage = (message) => {
-    const key = ensureSession();
+    const key = ensureSession(currentMode);
     // 不阻塞 HTTP/WS 响应：整轮 Agent 循环在后台跑，事件流实时推送
     agentRuntime.sendMessage(key, message).catch((error) => {
       log.warn?.(`[webui-driver] sendMessage failed: ${error.message}`);
@@ -123,35 +144,35 @@ function attachWebUiAgentDriver({ webControlService, agentRuntime, log = console
   };
 
   webControlService.onGetHistory = async () => {
-    const res = await api.historyList();
-    return res && res.ok !== false ? res : [];
+    try {
+      return (await agentRuntime.listHistory(currentMode)) || [];
+    } catch (error) {
+      log.warn?.(`[webui-driver] listHistory failed: ${error.message}`);
+      return [];
+    }
   };
 
   webControlService.onGetConversation = async (id) => {
-    const res = await api.historyGet(id);
-    return res && res.ok !== false ? res : null;
+    try {
+      return await agentRuntime.getHistory(currentMode, id);
+    } catch (error) {
+      log.warn?.(`[webui-driver] getHistory failed: ${error.message}`);
+      return null;
+    }
   };
 
   webControlService.onDeleteConversation = async (id) => {
-    await api.historyDelete(id);
+    await agentRuntime.deleteHistory(currentMode, id);
   };
 
   webControlService.onLoadConversation = async (id) => {
     try {
-      const conv = await api.historyGet(id);
-      if (!conv || conv.ok === false) return;
-      const session = agentRuntime.createSession({
-        key: ensureSession(),
-        mode: conv.mode || 'chat',
-      });
-      await session.agent.loadFromHistory(conv);
-      const messages = session.agent.contextManager.getHistoryMessages().map((m) => ({
-        role: m.role,
-        content: m.content,
-      }));
+      const key = ensureSession(currentMode);
+      const loaded = await agentRuntime.openHistory(key, id);
+      if (!loaded || loaded.ok === false) return;
       webControlService.pushConversationSwitch(id);
-      webControlService.pushHistoryMessages(messages);
-      webControlService.pushTitle(conv.title || '');
+      webControlService.pushHistoryMessages(loaded.messages || []);
+      webControlService.pushTitle(loaded.title || '');
     } catch (error) {
       log.warn?.(`[webui-driver] loadConversation failed: ${error.message}`);
     }
@@ -165,17 +186,19 @@ function attachWebUiAgentDriver({ webControlService, agentRuntime, log = console
       conversationId: activeKey,
       title: session ? session.title : '',
       workspacePath: session ? session.workspacePath : null,
+      mode: currentMode,
     };
   };
 
-  // 无头环境没有 GUI 可遥控：模式切换/工具重优化在运行时侧直接生效
+  // 无头环境没有 GUI 可遥控：模式切换在运行时侧生效（新建该模式的会话）
   webControlService.onSwitchMode = (mode) => {
-    const session = activeKey ? agentRuntime.getSession(activeKey) : null;
-    if (session) {
-      const record = agentRuntime.sessions.get(activeKey);
-      if (record && record.agent) record.agent.mode = mode || 'chat';
+    const wanted = MODES.includes(mode) ? mode : 'chat';
+    if (activeKey && agentRuntime.getSession(activeKey)) {
+      agentRuntime.close(activeKey);
     }
-    webControlService.pushModeSwitch(mode || 'chat');
+    activeKey = null;
+    ensureSession(wanted);
+    webControlService.pushModeSwitch(wanted);
   };
 
   webControlService.onReoptimizeTools = () => {
@@ -185,6 +208,9 @@ function attachWebUiAgentDriver({ webControlService, agentRuntime, log = console
   return {
     get activeSessionKey() {
       return activeKey;
+    },
+    get mode() {
+      return currentMode;
     },
     detach() {
       offEvents();

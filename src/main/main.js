@@ -110,11 +110,25 @@ const ipcMain = createIpcRouter(electronIpcMain, {
 });
 const __ipcHandlers = ipcMain.originalHandlers;
 
-// 无头模式：不起 GUI 窗口，仅运行主进程服务 + WebUI（供 --headless --web / 自动化场景）。
-// CLI：electron . --headless [--web]，配合环境变量 CIBYP_WEB_PASSWORD / CIBYP_WEB_PORT。
-const HEADLESS = process.argv.includes('--headless');
+// 无头模式：不起 GUI 窗口，仅运行主进程服务 + 一种无界面前端。
+// CLI：
+//   electron . --headless                        → WebUI（Web 服务直连 Agent 运行时）
+//   electron . --tui [--mode=chat|babe|code] [--workspace=路径] [--web]
+//                                                → 终端界面（类 Claude Code / OpenCode 的 TUI）
+// 环境变量：CIBYP_WEB_PASSWORD / CIBYP_WEB_PORT / CIBYP_AUTO_APPROVE=1
+const TUI = process.argv.includes('--tui');
+const WEB_FORCED = process.argv.includes('--web');
+const HEADLESS = process.argv.includes('--headless') || TUI;
 // 无头模式下的 Agent 运行时（GUI 模式为 null：会话由渲染进程承载）
 let agentRuntime = null;
+let tuiHandle = null;
+
+// 供无头前端（TUI/WebUI）与集成测试取用运行时实例
+module.exports = {
+  getAgentRuntime: () => agentRuntime,
+  getTuiHandle: () => tuiHandle,
+  isHeadless: () => HEADLESS,
+};
 
 // 事件总线：主进程向各前端（GUI 窗口 / WebUI / 无头运行时）推送的统一出口。
 // 主窗口 sink 维持改造前的 GUI 行为；无窗口（--headless）时事件仍可被订阅者接收。
@@ -4249,9 +4263,7 @@ app.whenReady().then(async () => {
   // 会话事件回流成 WebUI 既有 push 协议，历史/设置等仍共用同一套数据。
   if (HEADLESS) {
     try {
-      const { createAgentRuntime } = require('./agent-runtime');
-      const { attachWebUiAgentDriver } = require('./webui-agent-driver');
-      const { INTERACTION_POLICY } = require('./agent-runtime');
+      const { createAgentRuntime, INTERACTION_POLICY } = require('./agent-runtime');
       agentRuntime = createAgentRuntime({
         ipcMain,
         eventBus,
@@ -4261,17 +4273,48 @@ app.whenReady().then(async () => {
             ? INTERACTION_POLICY.AUTO_APPROVE
             : INTERACTION_POLICY.PROMPT,
       });
-      attachWebUiAgentDriver({ webControlService, agentRuntime });
       console.log('[headless] agent runtime ready');
 
-      // WebUI 自动启动：密码/端口优先取环境变量（便于容器/自动化），否则用设置里的 Web 控制配置
-      const webCfg = { ...(settings.webControl || {}) };
-      if (process.env.CIBYP_WEB_PASSWORD) webCfg.password = process.env.CIBYP_WEB_PASSWORD;
-      if (process.env.CIBYP_WEB_PORT) webCfg.port = process.env.CIBYP_WEB_PORT;
-      webControlService.configure(webCfg);
-      webControlService.workDir = workspacesBaseDir;
-      const started = await webControlService.start();
-      console.log('[headless] WebUI', started && started.ok !== false ? `listening on port ${webControlService.port}` : `failed: ${started && started.error}`);
+      // WebUI：无头默认自启；TUI 模式下需显式 --web 才同时提供 Web 服务。
+      const wantWeb = !TUI || WEB_FORCED;
+      if (wantWeb) {
+        const { attachWebUiAgentDriver } = require('./webui-agent-driver');
+        attachWebUiAgentDriver({ webControlService, agentRuntime });
+        // WebUI 自动启动：密码/端口优先取环境变量（便于容器/自动化），否则用设置里的 Web 控制配置
+        const webCfg = { ...(settings.webControl || {}) };
+        if (process.env.CIBYP_WEB_PASSWORD) webCfg.password = process.env.CIBYP_WEB_PASSWORD;
+        if (process.env.CIBYP_WEB_PORT) webCfg.port = process.env.CIBYP_WEB_PORT;
+        if (!webCfg.password && !webCfg.passwordHash) {
+          console.log('[headless] WebUI 未启动：未配置访问密码（设置 Web 控制密码或 CIBYP_WEB_PASSWORD）');
+        } else {
+          webControlService.configure(webCfg);
+          webControlService.workDir = workspacesBaseDir;
+          const started = await webControlService.start();
+          console.log(
+            '[headless] WebUI',
+            started && started.ok !== false
+              ? `listening on port ${webControlService.port}`
+              : `failed: ${started && started.error}`,
+          );
+        }
+      }
+
+      // TUI：终端界面（stdin/stdout 为 TTY 时进入交互界面，否则渲染一帧供自动化读取）
+      if (TUI) {
+        const { startTui } = require('./tui/launch.js');
+        tuiHandle = startTui({
+          runtime: agentRuntime,
+          argv: process.argv,
+          onExit: (code) => {
+            try {
+              app.exit(code || 0);
+            } catch {
+              /* ignore */
+            }
+          },
+        });
+        console.log('[headless] TUI ready');
+      }
     } catch (e) {
       console.error('[headless] startup failed:', e);
     }
@@ -4327,7 +4370,8 @@ app.whenReady().then(async () => {
   }
 
   // ---- Web Control Auto-Start ----
-  if (settings.webControl.autoStartOnOpen && settings.webControl.passwordHash) {
+  // 无头/TUI 模式由启动块直连 Agent 运行时（webui-agent-driver），此处不得覆盖其回调
+  if (!HEADLESS && settings.webControl.autoStartOnOpen && settings.webControl.passwordHash) {
     try {
       // Manually trigger the start via IPC-like path
       webControlService.configure(settings.webControl);
