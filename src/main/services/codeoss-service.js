@@ -5,7 +5,15 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { pathToFileURL, fileURLToPath } = require('node:url');
-const { app, BrowserWindow, WebContentsView, protocol, nativeTheme, session } = require('electron');
+const {
+  app,
+  BrowserWindow,
+  WebContentsView,
+  protocol,
+  nativeTheme,
+  session,
+  ipcMain,
+} = require('electron');
 const { WebSocketServer, WebSocket } = require('ws');
 const lock = require('../../../integrations/codeoss/runtime-lock.json');
 const { workbenchColors } = require('../../../integrations/codeoss/theme.cjs');
@@ -90,6 +98,11 @@ class CodeOSSService {
     this.serverReady = this.startBridge();
     this.switchQueue = Promise.resolve();
     this.overlay = new CodeOSSOverlay(this.getMainWindow);
+    this.interactionRevision = 0;
+    this.onWorkbenchInteraction = (event) => {
+      if (event.sender === this.view?.webContents) this.dismissHostHover();
+    };
+    ipcMain.on('vscode:cibyp-interaction', this.onWorkbenchInteraction);
     app.on('will-quit', () => this.dispose());
   }
 
@@ -206,6 +219,9 @@ class CodeOSSService {
         } else if (message.type === 'event' && message.event === 'workspace') {
           socket.workspace = message.data || [];
           if (this.isEmbeddedPeer(socket)) this.adoptWorkspace(socket);
+        } else if (message.type === 'event' && this.isEmbeddedPeer(socket)) {
+          if (message.event === 'ide-state') this.emitRenderer('codeoss:ide-state', message.data);
+          if (message.event === 'changes') this.emitRenderer('codeoss:changes', message.data);
         }
       });
     });
@@ -247,7 +263,23 @@ class CodeOSSService {
   }
   trackWorkbench(contents) {
     this.workbenches.add(contents);
-    contents.on('did-finish-load', () => this.applyWorkbenchAppearance(contents));
+    contents.on('did-finish-load', () => {
+      this.applyWorkbenchAppearance(contents);
+      void contents
+        .executeJavaScript(
+          `(() => {
+        if (globalThis.__cibypInteractionInstalled) return;
+        globalThis.__cibypInteractionInstalled = true;
+        const interact = () => window.vscode.ipcRenderer.send('vscode:cibyp-interaction');
+        document.addEventListener('keydown', interact, true);
+        document.addEventListener('pointerdown', interact, true);
+        window.addEventListener('focus', interact);
+      })()`,
+        )
+        .catch((error) => {
+          if (!contents.isDestroyed()) console.warn('[Code-OSS interaction]', error.message);
+        });
+    });
     contents.once('destroyed', () => this.workbenches.delete(contents));
   }
   applyWorkbenchAppearance(contents) {
@@ -462,6 +494,9 @@ class CodeOSSService {
     this.embeddedWindow = owner;
     this.view = view;
     this.trackWorkbench(view.webContents);
+    view.webContents.on('before-input-event', (_event, input) => {
+      if (input.type === 'keyDown') this.dismissHostHover();
+    });
     parent.contentView.addChildView(view);
     view.setBounds(this.bounds || { x: 0, y: 80, width: 1, height: 1 });
     view.setVisible(this.visible);
@@ -522,7 +557,29 @@ class CodeOSSService {
     return owner;
   }
 
-  setLayout({ visible, bounds, overlay } = {}) {
+  popupMenu(menu, contents, options) {
+    const embedded = contents === this.view?.webContents;
+    const window = embedded ? this.getMainWindow() : BrowserWindow.fromWebContents(contents);
+    if (!window || window.isDestroyed()) return options.callback?.();
+    // Electron popup coordinates are relative to the owning window, in DIP.
+    // The workbench sends coordinates relative to its embedded native surface.
+    const bounds = embedded ? this.view.getBounds() : { x: 0, y: 0 };
+    if (embedded) this.dismissHostHover();
+    menu.popup({
+      ...options,
+      window,
+      x: Number.isFinite(options.x) ? Math.round(bounds.x + options.x) : undefined,
+      y: Number.isFinite(options.y) ? Math.round(bounds.y + options.y) : undefined,
+    });
+  }
+
+  dismissHostHover() {
+    this.interactionRevision++;
+    this.overlay.update(null);
+    this.emitRenderer('codeoss:interaction', { revision: this.interactionRevision });
+  }
+
+  setLayout({ visible, bounds, overlay, interactionRevision = 0 } = {}) {
     this.visible = visible === true;
     if (bounds) {
       const parent = this.getMainWindow();
@@ -540,7 +597,9 @@ class CodeOSSService {
       if (this.bounds) this.view.setBounds(this.bounds);
       this.view.setVisible(this.visible);
     }
-    this.overlay.update(this.visible && this.view ? overlay : null);
+    this.overlay.update(
+      this.visible && this.view && interactionRevision >= this.interactionRevision ? overlay : null,
+    );
     return { ok: true };
   }
 
@@ -561,6 +620,7 @@ class CodeOSSService {
     if (
       ![
         'agent.send',
+        'agent.focus',
         'agent.cancel',
         'agent.approve',
         'agent.sessions',
@@ -596,12 +656,6 @@ class CodeOSSService {
     error ? entry.reject(new Error(error)) : entry.resolve(result);
     return { ok: true };
   }
-  agentEvent(data) {
-    for (const peer of this.peers)
-      if (this.isEmbeddedPeer(peer)) this.send(peer, { type: 'event', event: 'agent', data });
-    return { ok: true };
-  }
-
   async interceptFile(channel, args) {
     if (
       !this.started ||
@@ -666,6 +720,7 @@ class CodeOSSService {
   dispose() {
     if (this.disposed) return;
     this.disposed = true;
+    ipcMain.removeListener('vscode:cibyp-interaction', this.onWorkbenchInteraction);
     this.overlay.destroy();
     for (const entry of this.pending.values()) {
       clearTimeout(entry.timer);

@@ -163,7 +163,7 @@ module.exports = async function checkWorkspace(webContents) {
     check(root.classList.contains('hidden'), 'disabled animation closes immediately');
     // Native pane/layout behavior is exercised by codeoss-desktop.cjs.
     check(document.getElementById('codeoss-viewport'), 'Code page exposes a native workbench viewport');
-    check(document.getElementById('code-agent-runtime').hidden, 'legacy Agent DOM stays hidden');
+    check(document.getElementById('code-agent-panel') && !document.getElementById('code-agent-runtime'), 'CIBYP owns an independent AI sidebar');
     check(typeof window.api.codeOSSOpen === 'function', 'native workbench uses the isolated preload bridge');
     document.documentElement.dataset.animations = 'on';
     window.navigatePage('settings');

@@ -1749,7 +1749,9 @@ ${affectionDesc}
     }
 
     // 会话创建时锁定模型 + Reasoning Effort（模型池策略；锁定后不再自动切换）
+    const preparationRunId = this.runId;
     await this.ensureSessionModel(userMessage);
+    if (preparationRunId !== this.runId) return;
 
     const runId = ++this.runId;
     this.running = true;

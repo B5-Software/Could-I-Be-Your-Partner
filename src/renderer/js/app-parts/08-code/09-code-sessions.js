@@ -92,7 +92,7 @@
     const chunkSize = 40;
     const toolCallMap = {};
     if (total === 0) {
-      msgsEl.innerHTML = `<div class="welcome-message"><div class="welcome-icon"><i class="fa-solid fa-code"></i></div><h2>Code 模式</h2><p>继续编程任务</p></div>`;
+      msgsEl.innerHTML = `<div class="welcome-message code-agent-welcome"><i class="fa-solid fa-code"></i><h2>一起完成编程任务</h2><p>描述需求，或在编辑器中选中代码。AI 会结合当前工作区帮你修改、测试和审查。</p></div>`;
       return;
     }
     showHistoryProgress(total);
@@ -101,9 +101,10 @@
         const end = Math.min(total, start + chunkSize);
         for (let i = start; i < end; i++) {
           const msg = messages[i];
+          if (!msg || msg.metadata?.kind === 'context-update') continue;
           if (msg.metadata?.kind === 'context-update') continue;
           if (msg.role === 'user') {
-            addCodeMessage('user', extractTextContent(msg.content), false);
+            addCodeMessage('user', msg.metadata?.displayContent || extractTextContent(msg.content), false);
           } else if (msg.role === 'assistant') {
             const textContent = extractTextContent(msg.content);
             if (textContent) addCodeMessage('assistant', textContent, false);

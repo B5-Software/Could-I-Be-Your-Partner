@@ -18,6 +18,12 @@ function patchDesktopMain(source) {
   );
   result = replaceOne(
     result,
+    /([\w$]+)\.popup\(\{x:([\w$]+)\?\2\.x:void 0,y:\2\?\2\.y:void 0,positioningItem:\2\?\2\.positioningItem:void 0,callback:\(\)=>\{\1&&([\w$]+)\.sender\.send\(([\w$]+),([\w$]+)\)\}\}\)/,
+    'globalThis.__cibypWorkbenchHost.popupMenu($1,$3.sender,{x:$2?.x,y:$2?.y,positioningItem:$2?.positioningItem,callback:()=>{$1&&!$3.sender.isDestroyed()&&$3.sender.send($4,$5)}})',
+    'embedded native popup ownership',
+  );
+  result = replaceOne(
+    result,
     /([\w$]+)=new ([\w$]+),\1\.main\(\)/,
     '$1=new $2,globalThis.__cibypWorkbenchHost.deferStart(()=> $1.main())',
     'deferred startup',

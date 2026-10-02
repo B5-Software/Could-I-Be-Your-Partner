@@ -1,9 +1,9 @@
 {
   "name": "workbench",
   "publisher": "cibyp",
-  "displayName": "CIBYP Agent & VM",
-  "description": "CIBYP Agent, document-aware edits, personalization and VM workspaces.",
-  "version": "1.0.0",
+  "displayName": "CIBYP Editor & VM Bridge",
+  "description": "Editor context, safe document edits, live personalization and VM workspaces for CIBYP.",
+  "version": "1.1.0",
   "license": "GPL-3.0-or-later",
   "engines": {
     "vscode": "^1.135.0"
@@ -46,50 +46,6 @@
       {
         "command": "cibyp.agent.settings",
         "title": "CIBYP: 模型与预算设置"
-      },
-      {
-        "command": "cibyp.changes.open",
-        "title": "CIBYP: 查看 AI 修改"
-      },
-      {
-        "command": "cibyp.changes.accept",
-        "title": "CIBYP: 接受修改",
-        "icon": "$(check)"
-      },
-      {
-        "command": "cibyp.changes.revert",
-        "title": "CIBYP: 撤销修改",
-        "icon": "$(discard)"
-      }
-    ],
-    "viewsContainers": {
-      "activitybar": [
-        {
-          "id": "cibyp",
-          "title": "CIBYP",
-          "icon": "media/agent.svg"
-        }
-      ]
-    },
-    "views": {
-      "cibyp": [
-        {
-          "id": "cibyp.agent",
-          "name": "Agent",
-          "type": "webview"
-        },
-        {
-          "id": "cibyp.changes",
-          "name": "AI 修改"
-        }
-      ]
-    },
-    "chatParticipants": [
-      {
-        "id": "cibyp.agent",
-        "name": "cibyp",
-        "fullName": "CIBYP",
-        "description": "使用 CIBYP 当前模型、工具与预算执行编程任务。"
       }
     ],
     "menus": {
@@ -103,23 +59,6 @@
           "command": "cibyp.agent.refactor",
           "group": "cibyp@2",
           "when": "editorHasSelection"
-        }
-      ],
-      "view/item/context": [
-        {
-          "command": "cibyp.changes.open",
-          "when": "view == cibyp.changes",
-          "group": "inline@1"
-        },
-        {
-          "command": "cibyp.changes.accept",
-          "when": "view == cibyp.changes",
-          "group": "inline@2"
-        },
-        {
-          "command": "cibyp.changes.revert",
-          "when": "view == cibyp.changes",
-          "group": "inline@3"
         }
       ]
     }

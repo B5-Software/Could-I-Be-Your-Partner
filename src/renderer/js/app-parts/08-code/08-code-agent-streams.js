@@ -53,7 +53,6 @@
     };
 
     ag.onMessage = (type, data) => {
-      publishCodeOSSAgentEvent(ag, type, data);
       const msgsEl = document.getElementById('code-chat-messages');
       if (!msgsEl) return;
       if (!isActive()) {
@@ -152,6 +151,9 @@
           break;
         case 'tool_call':
           addCodeToolCall(data);
+          break;
+        case 'error':
+          addCodeMessage('system', `错误: ${data?.message || data}`);
           break;
         case 'approval':
           showCodeApprovalPanel(data.toolName, data.args);

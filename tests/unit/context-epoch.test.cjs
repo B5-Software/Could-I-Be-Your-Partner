@@ -25,6 +25,28 @@ function agentFixture(api = {}) {
   return agent;
 }
 
+test('stopping during model preparation must not start the cancelled task', async () => {
+  const agent = agentFixture();
+  agent.settings.llm.apiUrl = 'http://fixture.invalid';
+  let release;
+  agent.ensureSessionModel = () =>
+    new Promise((resolve) => {
+      release = resolve;
+    });
+  let modelStarted = false;
+  agent.agentLoop = async () => {
+    modelStarted = true;
+  };
+  const task = agent.sendMessage('cancel during setup');
+  agent.stop();
+  release();
+  await task;
+  assert.equal(agent.running, false);
+  assert.equal(agent.stopped, true);
+  assert.equal(modelStarted, false);
+  assert.equal(agent.contextManager.getHistoryMessages().length, 0);
+});
+
 test('runtime changes are coalesced at provider boundaries and preserve every admitted prefix byte', () => {
   const cm = new ContextManager();
   cm.setSystemPrompt('baseline');

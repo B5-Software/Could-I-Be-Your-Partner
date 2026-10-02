@@ -183,7 +183,8 @@ function findApp(directory, depth = 0) {
 }
 
 async function buildExtension(destination) {
-  const output = path.join(destination, 'extensions/cibyp-workbench');
+  const output = checkedChild(destination, path.join(destination, 'extensions/cibyp-workbench'));
+  await fsp.rm(output, { recursive: true, force: true });
   await fsp.mkdir(output, { recursive: true });
   await fsp.cp(path.join(root, 'integrations/codeoss/extension'), output, { recursive: true });
   await require('esbuild').build({

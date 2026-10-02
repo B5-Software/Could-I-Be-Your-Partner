@@ -676,8 +676,8 @@ ipcMain.handle('codeoss:open', (_, directory) => codeOSSService.open(directory))
 ipcMain.handle('codeoss:layout', (_, layout) => codeOSSService.setLayout(layout));
 ipcMain.handle('codeoss:command', (_, command) => codeOSSService.request('ide.command', { command }));
 ipcMain.handle('codeoss:agent-response', (_, response) => codeOSSService.agentResponse(response));
-ipcMain.handle('codeoss:agent-event', (_, event) => codeOSSService.agentEvent(event));
 ipcMain.handle('codeoss:context', () => codeOSSService.request('ide.context', {}));
+ipcMain.handle('codeoss:changes', (_, action = 'list', id) => codeOSSService.request('ide.changes', { action, id }));
 let appTray = null;
 let skillEditorWindow = null;
 let automationEditorWindow = null;

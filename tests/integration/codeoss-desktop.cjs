@@ -53,7 +53,7 @@ fs.writeFileSync(
   JSON.stringify({
     'security.workspace.trust.enabled': false,
     'window.titleBarStyle': 'custom',
-    'window.menuBarVisibility': 'compact',
+    'window.menuBarVisibility': 'classic',
   }),
 );
 const modelRequests = [];
@@ -166,10 +166,11 @@ ipcMain.once('app:renderer-ready', (event) => {
       assert.match(body, /sample.js/);
       assert(app.getAppMetrics().some((item) => item.name?.startsWith('extensionHost')));
       const state = await renderer.executeJavaScript(
-        '({viewport: document.getElementById("codeoss-viewport").getBoundingClientRect().toJSON(), legacy: document.getElementById("code-agent-runtime").hidden, errors: window.__bootstrapError})',
+        '({viewport: document.getElementById("codeoss-viewport").getBoundingClientRect().toJSON(), ai: document.getElementById("code-agent-panel").getBoundingClientRect().toJSON(), errors: window.__bootstrapError})',
       );
       assert(state.viewport.height > 300, 'Workbench must fill the Code page');
-      assert.equal(state.legacy, true);
+      assert(state.ai.width >= 300, 'CIBYP AI must be a visible sibling of the native IDE');
+      assert.equal(state.viewport.right, state.ai.left, 'IDE must not cover the AI sidebar');
       await waitFor(() => fs.existsSync(path.join(workspace, 'fixture-result.json')), 60000);
       const fixture = JSON.parse(
         fs.readFileSync(path.join(workspace, 'fixture-result.json'), 'utf8'),
@@ -184,6 +185,14 @@ ipcMain.once('app:renderer-ready', (event) => {
         modelRequests.some((item) => item.messages?.some((message) => message.role === 'tool')),
         'Agent must receive and continue after a real tool result',
       );
+      await require('./codeoss-agent-check.cjs')(
+        renderer,
+        service,
+        modelRequests,
+        workspace,
+        waitFor,
+      );
+      await require('./codeoss-menus-check.cjs')(service, waitFor);
       for (const [theme, systemMode] of [
         [{ mode: 'dark', accentColor: '#e3a3d4', backgroundColor: '#202536' }],
         [{ mode: 'light', accentColor: '#3b7c67', backgroundColor: '#faf7ed' }],
@@ -262,6 +271,10 @@ ipcMain.once('app:renderer-ready', (event) => {
       const preview = path.resolve(__dirname, '../../.cibyp-test-fixtures-codeoss-preview');
       fs.mkdirSync(preview, { recursive: true });
       fs.writeFileSync(path.join(preview, 'workbench.png'), screenshot.toPNG());
+      fs.writeFileSync(
+        path.join(preview, 'app-ai.png'),
+        (await service.getMainWindow().capturePage()).toPNG(),
+      );
       await require('./codeoss-overlay-check.cjs')(renderer, service, preview, waitFor);
       const secondWorkspace = path.join(profile, 'second-workspace');
       fs.mkdirSync(secondWorkspace);
@@ -340,7 +353,7 @@ ipcMain.once('app:renderer-ready', (event) => {
       );
       console.log('[codeoss-desktop] Native workbench close and reopen passed.');
       console.log(
-        '[codeoss-desktop] Complete desktop workbench, extension host, terminal, extension management and CIBYP view passed.',
+        '[codeoss-desktop] Complete workbench, extensions, terminal, independent CIBYP AI and menus passed.',
       );
       console.log('[codeoss-desktop] profile', profile);
       console.log('[codeoss-desktop] errors', errors);

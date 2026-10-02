@@ -116,6 +116,8 @@ async function activate(context) {
         passed.push('native extension → CIBYP Agent → LLM → real file tool → IDE checkpoint');
       }
     }
+    await vscode.window.showTextDocument(doc);
+    vscode.window.activeTextEditor.selection = new vscode.Selection(0, 0, 0, 10);
     fs.writeFileSync(
       path.join(root, 'fixture-result.json'),
       JSON.stringify({ ok: true, platform: process.platform, passed }),

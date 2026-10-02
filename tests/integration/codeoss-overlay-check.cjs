@@ -47,6 +47,18 @@ module.exports = async function checkOverlay(renderer, service, preview, waitFor
       'overlay must not cover the hovered tab',
     );
     console.log('[codeoss-desktop] Native hover stacking and sandbox passed.');
+    service.embeddedWindow.focus();
+    service.view.webContents.sendInputEvent({ type: 'keyDown', keyCode: 'Escape' });
+    service.view.webContents.sendInputEvent({ type: 'keyUp', keyCode: 'Escape' });
+    await waitFor(() => !shown(), 5000);
+    assert.equal(
+      await renderer.executeJavaScript("document.body.classList.contains('codeoss-interacting')"),
+      true,
+      'IDE keyboard input must dismiss host hover cards',
+    );
+    await move('.mode-btn[data-mode="chat"]');
+    await move('#code-session-tabs .session-tab');
+    await waitFor(shown, 5000);
     for (const mode of ['dark', 'light']) {
       await renderer.executeJavaScript(`(async () => {
         const settings = await window.api.getSettings();

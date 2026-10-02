@@ -8,6 +8,7 @@
 
   // IDE documents, tabs, navigation and diagnostics belong to Code-OSS.
   const codeWorkbench = new CodeOSSController(window.api, document.getElementById('codeoss-viewport'), document.getElementById('codeoss-status'));
+  const codeAgentPanel = new CodeAgentPanel(window.api, message => showToast(message, 'error'));
   let codeEditorModeFilter = 'chat';   // 'chat' | 'code' — tools page mode filter
 
   async function loadCodePage() {

@@ -39,7 +39,7 @@
   function refreshCodeStopButton() {
     const stopBtn = document.getElementById('btn-code-stop');
     if (!stopBtn) return;
-    stopBtn.classList.toggle('hidden', !(codeAgent && codeAgent.running) && !voiceSpeakingNow());
+    stopBtn.classList.toggle('hidden', !(codeAgent && (codeAgent.running || codeAgent.codeTaskPending)) && !voiceSpeakingNow());
     WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#btn-code-stop', attr: 'class', value: stopBtn.className });
   }
   function refreshBabeStopButton() {

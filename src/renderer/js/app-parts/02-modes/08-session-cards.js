@@ -99,6 +99,9 @@
         } catch { /* ignore */ }
       }
     } else if (mode === 'code') {
+      document.getElementById('btn-code-send')?.classList.toggle('hidden', ag?.running === true || ag?.codeTaskPending === true);
+      const status = document.getElementById('code-agent-status');
+      if (status) status.textContent = session?.attention?.label || (ag?.running || ag?.codeTaskPending ? '处理中…' : '待命中');
       if (typeof refreshCodeStopButton === 'function') refreshCodeStopButton();
     } else if (mode === 'babe') {
       if (typeof refreshBabeStopButton === 'function') refreshBabeStopButton();

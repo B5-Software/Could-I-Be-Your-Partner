@@ -1780,7 +1780,47 @@ html[data-modal-animations="off"] .sub-agent-modal-dialog {
 .codeoss-viewport[data-state="ready"] .codeoss-loading { visibility: hidden; }
 #btn-codeoss-retry { display: none; }
 .codeoss-viewport[data-state="error"] #btn-codeoss-retry, .codeoss-viewport[data-state="closed"] #btn-codeoss-retry { display: inline-flex; }
-#code-agent-runtime[hidden] { display: none !important; }
+.code-workbench-layout { display: flex; flex: 1; min-width: 0; min-height: 0; overflow: hidden; }
+.codeoss-interacting .session-tab-popover, .codeoss-interacting .context-tooltip { visibility: hidden !important; pointer-events: none; }
+.code-agent-panel { width: var(--code-agent-width, 420px); flex: 0 0 auto; min-width: 0; overflow: hidden; border-left: 1px solid var(--border); background: var(--bg-secondary); transition: width 200ms ease; }
+.code-agent-panel.collapsed { width: 0; border-left: 0; }
+.code-agent-inner { width: var(--code-agent-width, 420px); height: 100%; position: relative; display: flex; flex-direction: column; min-height: 0; transform: translateX(0); transition: transform 200ms ease; }
+.code-agent-panel.collapsed .code-agent-inner { transform: translateX(100%); }
+.code-agent-panel.resizing, .code-agent-panel.resizing .code-agent-inner { transition: none; }
+.code-agent-resizer { position: absolute; inset: 0 auto 0 0; width: 5px; cursor: col-resize; touch-action: none; z-index: 2; }
+.code-agent-resizer:hover, .code-agent-resizer:focus-visible { background: var(--accent); outline: none; }
+.code-agent-header { display: flex; align-items: center; gap: 10px; padding: 10px 12px; }
+.code-agent-header strong { display: flex; align-items: center; gap: 7px; font-size: 13px; }
+#code-agent-status { margin-left: auto; font-size: 11px; color: var(--text-secondary); }
+.code-agent-usage { padding: 0 12px 8px; border-bottom: 1px solid var(--border); }
+.code-agent-panel .context-indicator { margin: 0; }
+.code-agent-panel .code-chat-messages { min-height: 0; overscroll-behavior: contain; scrollbar-gutter: stable; }
+.code-agent-panel .message { gap: 8px; margin: 14px 0; }
+.code-agent-panel .message-avatar { width: 24px; height: 24px; font-size: 12px; }
+.code-agent-panel .message-body { min-width: 0; max-width: calc(100% - 32px); }
+.code-agent-panel .message-content { padding: 8px 10px; font-size: 13px; overflow-wrap: anywhere; }
+.code-agent-panel .welcome-message { padding: 32px 16px; }
+.code-agent-panel .welcome-message > i { font-size: 30px; margin-bottom: 18px; }
+.code-agent-panel .welcome-message h2 { font-size: 17px; margin-bottom: 10px; }
+.code-agent-panel .welcome-message p { font-size: 12px; line-height: 1.8; }
+.code-agent-changes { border-top: 1px solid var(--border); flex-shrink: 0; font-size: 12px; }
+.code-agent-changes summary { cursor: pointer; padding: 9px 12px; }
+#code-changes-count { color: var(--text-secondary); margin-left: 6px; }
+#code-changes-list { max-height: 150px; overflow-y: auto; overscroll-behavior: contain; padding: 0 12px 8px; }
+.code-changes-empty { margin: 4px 0; color: var(--text-secondary); }
+.code-change-row { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.code-change-row > div { display: flex; flex-shrink: 0; }
+.code-change-file { min-width: 0; background: transparent; border: 0; color: var(--text-primary); text-align: left; padding: 6px 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; cursor: pointer; }
+.code-change-file:hover { color: var(--accent); }
+.code-agent-composer { border-top: 1px solid var(--border); padding: 10px 12px; flex-shrink: 0; }
+.code-editor-context { display: flex; align-items: center; gap: 6px; color: var(--text-secondary); font-size: 11px; margin-bottom: 8px; cursor: pointer; }
+.code-editor-context span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.code-editor-context input { accent-color: var(--accent); }
+#code-chat-input { width: 100%; min-height: 72px; max-height: 160px; resize: none; border: 1px solid var(--border); border-radius: 10px; padding: 10px; background: var(--bg-primary); color: var(--text-primary); font: inherit; font-size: 13px; }
+.code-agent-composer-actions { display: flex; align-items: center; gap: 8px; margin-top: 7px; }
+.code-agent-composer-actions > span { color: var(--text-secondary); font-size: 10px; flex: 1; }
+.code-agent-composer-actions > button { font-size: 12px; }
+.code-agent-composer .attachments-preview { margin-bottom: 8px; max-height: 86px; overflow-y: auto; }
 .code-toolbar {
   display: flex;
   align-items: center;

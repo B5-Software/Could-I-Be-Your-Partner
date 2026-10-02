@@ -5,6 +5,8 @@
 .code-file-tree-panel, .code-editor-panel, .code-chat {
   transition-property: width, min-width, flex-grow !important;
 }
+.code-agent-panel { transition-property: width !important; }
+.code-agent-inner { transition-property: transform !important; }
 #main-content { transition-property: padding-right !important; }
 
 @keyframes cibyp-opacity-pulse {

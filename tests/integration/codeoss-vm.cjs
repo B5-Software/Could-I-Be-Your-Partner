@@ -10,7 +10,9 @@ const { VmFs } = require('../../src/main/vm/vm-fs');
 const { CodeOSSService } = require('../../src/main/services/codeoss-service');
 const images = require('../../src/main/vm/vm-images');
 const lock = require('../../integrations/codeoss/runtime-lock.json');
-const [assetsDir, version, variant = 'full', fixtureArchive = ''] = process.argv.slice(2);
+const [assetsDir, version, variant = 'full', fixtureArchive = ''] = process.argv
+  .slice(2)
+  .filter((value) => !value.startsWith('--runtime='));
 if (!assetsDir || !version)
   throw new Error(
     'Usage: electron codeoss-vm.cjs <assetsDir> <version> [variant] [test-only-backend-tar]',
@@ -52,6 +54,8 @@ const service = new CodeOSSService({
   getVmService: () => vm,
   dataDirectory: profile,
 });
+const testRuntime = process.argv.find((value) => value.startsWith('--runtime='));
+if (testRuntime) service.runtime = path.resolve(testRuntime.slice('--runtime='.length));
 const handleRequest = service.handleExtensionRequest.bind(service);
 service.handleExtensionRequest = async (peer, request) =>
   request.method === 'agent.sessions'
@@ -178,6 +182,16 @@ app.whenReady().then(async () => {
       'const insideVM = true;',
     );
     console.log('[codeoss-vm] PASS editor-aware AI read/write operate on guest files');
+    const changes = await service.request('ide.changes', {});
+    const checkpoint = changes.changes.find(
+      (item) => item.path === '/workspace/codeoss-smoke/ai-vm.js',
+    );
+    assert(checkpoint, 'Guest edit must be available for review in the host AI sidebar');
+    await service.request('ide.changes', { action: 'open', id: checkpoint.id });
+    await service.request('ide.changes', { action: 'revert', id: checkpoint.id });
+    assert.equal((await instance.exec('test -e /workspace/codeoss-smoke/ai-vm.js')).code, 1);
+    assert.equal((await service.request('ide.changes', {})).changes.length, 0);
+    console.log('[codeoss-vm] PASS host AI sidebar bridge reviews/reverts guest checkpoints');
     await finish();
   } catch (error) {
     await finish(error);

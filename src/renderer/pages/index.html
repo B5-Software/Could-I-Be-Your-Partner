@@ -383,17 +383,53 @@
             <button class="btn-icon btn-sm" id="btn-code-ide-terminal" title="终端"><i class="fa-solid fa-terminal"></i></button>
             <button class="btn-icon btn-sm" id="btn-code-git" title="源代码管理"><i class="fa-brands fa-git-alt"></i></button>
             <button class="btn-icon btn-sm" id="btn-code-extensions" title="扩展"><i class="fa-solid fa-puzzle-piece"></i></button>
-            <button class="btn-secondary btn-sm" id="btn-code-agent"><i class="fa-solid fa-wand-magic-sparkles"></i> Agent</button>
+            <button class="btn-secondary btn-sm" id="btn-code-agent" title="显示或收起 AI 侧栏" aria-controls="code-agent-panel" aria-expanded="true"><i class="fa-solid fa-wand-magic-sparkles"></i> AI</button>
           </div>
         </div>
+        <div class="code-workbench-layout">
         <div id="codeoss-viewport" class="codeoss-viewport" data-state="starting">
           <div class="codeoss-loading"><i class="fa-solid fa-code"></i><p id="codeoss-status" role="status">正在启动桌面工作台…</p><button class="btn-secondary btn-sm" id="btn-codeoss-retry">重试</button></div>
         </div>
-        <!-- Compatibility render target for the shared Agent/session runtime and remote WebUI. -->
-        <div id="code-agent-runtime" hidden aria-hidden="true">
-          <div id="code-chat-session-tabs"></div><div id="code-context-indicator"></div>
-          <div id="code-chat-messages"></div><div id="code-attachments-preview" class="hidden"></div>
-          <textarea id="code-chat-input"></textarea><button id="btn-code-send"></button><button id="btn-code-stop" class="hidden"></button>
+        <aside id="code-agent-panel" class="code-agent-panel" aria-label="编程 AI 助手">
+          <div class="code-agent-inner">
+            <div id="code-agent-resizer" class="code-agent-resizer" role="separator" tabindex="0" aria-label="调整 AI 侧栏宽度" aria-orientation="vertical" aria-valuemin="300" aria-valuemax="760" aria-valuenow="420"></div>
+            <header class="code-agent-header">
+              <strong><i class="fa-solid fa-wand-magic-sparkles"></i> CIBYP AI</strong>
+              <span id="code-agent-status" role="status">待命中</span>
+              <button class="btn-icon" id="btn-code-new-session" title="新建 Code 会话" aria-label="新建 Code 会话"><i class="fa-solid fa-plus"></i></button>
+            </header>
+            <div class="code-agent-usage">
+              <div class="context-indicator" id="code-context-indicator" data-used="0" data-max="8192">
+                <svg class="context-ring" viewBox="0 0 36 36" width="20" height="20">
+                  <circle class="context-ring-bg" cx="18" cy="18" r="15.915" fill="none" stroke-width="3"/>
+                  <circle class="context-ring-fg" id="code-context-progress-fill" cx="18" cy="18" r="15.915" fill="none" stroke-width="3" stroke-dasharray="0 100" transform="rotate(-90 18 18)"/>
+                  <circle class="context-ring-fg context-ring-reserve" id="code-context-progress-reserve" cx="18" cy="18" r="15.915" fill="none" stroke-width="3" stroke-dasharray="0 100" transform="rotate(-90 18 18)"/>
+                </svg>
+                <span class="progress-text" id="code-context-progress-text">0/8K</span>
+                <span class="session-cost-mini" id="code-session-cost" title="当前会话消费（USD）" style="display:none"><span class="scm-value">$0.0000</span></span>
+                <span class="budget-mini-bar" id="code-budget-mini-bar" title="今日预算" style="display:none"><span class="bmb-track"><span class="bmb-fill"></span></span><span class="bmb-cost">$0.00</span></span>
+              </div>
+            </div>
+            <div id="code-chat-messages" class="code-chat-messages" aria-label="AI 对话">
+              <div class="welcome-message code-agent-welcome"><i class="fa-solid fa-code"></i><h2>一起完成编程任务</h2><p>描述需求，或在编辑器中选中代码。AI 会结合当前工作区帮你修改、测试和审查。</p></div>
+            </div>
+            <details class="code-agent-changes" id="code-agent-changes">
+              <summary>AI 修改 <span id="code-changes-count">0</span></summary>
+              <div id="code-changes-list"><p class="code-changes-empty">暂无待审阅的修改</p></div>
+            </details>
+            <div class="code-agent-composer">
+              <label class="code-editor-context"><input id="code-include-editor" type="checkbox" checked><span id="code-editor-context-label">附带当前编辑器上下文</span></label>
+              <div id="code-attachments-preview" class="attachments-preview hidden"></div>
+              <textarea id="code-chat-input" rows="3" placeholder="描述编程任务… Enter 发送，Shift+Enter 换行" aria-label="编程任务"></textarea>
+              <div class="code-agent-composer-actions">
+                <button class="btn-icon" id="btn-code-attach-file" title="添加文件到上下文" aria-label="添加文件到上下文"><i class="fa-solid fa-paperclip"></i></button>
+                <span>使用当前模型与工具</span>
+                <button class="btn-primary" id="btn-code-send" title="发送任务"><i class="fa-solid fa-arrow-up"></i> 发送</button>
+                <button class="btn-secondary hidden" id="btn-code-stop" title="停止任务"><i class="fa-solid fa-stop"></i> 停止</button>
+              </div>
+            </div>
+          </div>
+        </aside>
         </div>
       </section>
 

@@ -24,9 +24,11 @@ type API = {
     visible: boolean;
     bounds: Bounds;
     overlay?: HoverCard | null;
+    interactionRevision?: number;
   }): Promise<unknown>;
   codeOSSCommand(command: string): Promise<unknown>;
   onCodeOSSState(callback: (state: State) => void): () => void;
+  onCodeOSSInteraction(callback: (event: { revision: number }) => void): () => void;
 };
 
 export class CodeOSSController {
@@ -34,11 +36,27 @@ export class CodeOSSController {
   private ready = false;
   private opening: Promise<Workspace> | null = null;
   private lastLayout = '';
+  private interactionRevision = 0;
   constructor(
     private api: API,
     private viewport: HTMLElement,
     private status: HTMLElement,
   ) {
+    api.onCodeOSSInteraction((event) => {
+      this.interactionRevision = event.revision;
+      document.body.classList.add('codeoss-interacting');
+      this.scheduleLayout();
+    });
+    document.addEventListener(
+      'pointermove',
+      () => {
+        if (document.body.classList.contains('codeoss-interacting')) {
+          document.body.classList.remove('codeoss-interacting');
+          this.scheduleLayout();
+        }
+      },
+      true,
+    );
     api.onCodeOSSState((state) => {
       this.ready = state.state === 'ready';
       this.status.textContent =
@@ -111,6 +129,7 @@ export class CodeOSSController {
       visible,
       bounds: { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height },
       overlay: visible ? this.hoverCard(bounds) : null,
+      interactionRevision: this.interactionRevision,
     };
     const key = JSON.stringify(layout);
     if (key === this.lastLayout) return;
@@ -121,6 +140,7 @@ export class CodeOSSController {
     });
   }
   private hoverCard(viewport: DOMRect): HoverCard | null {
+    if (document.body.classList.contains('codeoss-interacting')) return null;
     const card = [
       ...document.querySelectorAll<HTMLElement>('.session-tab-popover, .context-tooltip'),
     ].find((element) => {

@@ -2,10 +2,8 @@
 'use strict';
 const vscode = require('vscode');
 const crypto = require('node:crypto');
-const fs = require('node:fs');
 const path = require('node:path');
 const WebSocket = require('ws');
-const markdown = require('markdown-it')({ html: false, linkify: true });
 const { workbenchColors } = require('../theme.cjs');
 
 class Bridge {
@@ -138,14 +136,31 @@ function documentKey(uri) {
   const key = uri.toString();
   return process.platform === 'win32' && uri.scheme === 'file' ? key.toLowerCase() : key;
 }
+function editorState() {
+  const editor = vscode.window.activeTextEditor;
+  if (!editor) return {};
+  return {
+    path:
+      editor.document.uri.scheme === 'vscode-remote'
+        ? editor.document.uri.path
+        : editor.document.uri.fsPath,
+    dirty: editor.document.isDirty,
+    selection: {
+      start: editor.selection.start.line + 1,
+      end: editor.selection.end.line + 1,
+      selected: !editor.selection.isEmpty,
+    },
+  };
+}
 function contextSnapshot() {
   const editor = vscode.window.activeTextEditor;
   if (!editor) return { workspace: workspaceFolders(), diagnostics: [] };
   const selection = editor.document.getText(editor.selection);
   const full = editor.document.getText();
   const start = editor.document.offsetAt(editor.selection.start);
-  const content =
-    selection || full.slice(Math.max(0, start - 8000), Math.max(0, start - 8000) + 24000);
+  const content = selection
+    ? selection.slice(0, 24000)
+    : full.slice(Math.max(0, start - 8000), Math.max(0, start - 8000) + 24000);
   return {
     workspace: workspaceFolders(),
     uri: editor.document.uri.toString(true),
@@ -162,7 +177,7 @@ function contextSnapshot() {
       selected: !!selection,
     },
     content,
-    truncated: !selection && full.length > content.length,
+    truncated: selection ? selection.length > content.length : full.length > content.length,
     diagnostics: vscode.languages
       .getDiagnostics(editor.document.uri)
       .slice(0, 30)
@@ -189,16 +204,13 @@ class Changes {
       this.events,
     );
   }
-  getChildren() {
-    return [...this.items.values()];
-  }
-  getTreeItem(item) {
-    const tree = new vscode.TreeItem(path.basename(item.uri.path));
-    tree.description = vscode.workspace.asRelativePath(item.uri);
-    tree.tooltip = item.uri.fsPath;
-    tree.resourceUri = item.uri;
-    tree.command = { command: 'cibyp.changes.open', title: '查看 AI 修改', arguments: [item] };
-    return tree;
+  list() {
+    return [...this.items.values()].map((item) => ({
+      id: item.snapshot.toString(),
+      path: item.uri.scheme === 'vscode-remote' ? item.uri.path : item.uri.fsPath,
+      label: vscode.workspace.asRelativePath(item.uri),
+      created: item.before === null,
+    }));
   }
   record(uri, before, after) {
     const key = documentKey(uri);
@@ -353,162 +365,6 @@ class Changes {
   }
 }
 
-class AgentView {
-  constructor(context, bridge) {
-    this.context = context;
-    this.bridge = bridge;
-    this.streams = new Map();
-    this.attachments = [];
-  }
-  async resolveWebviewView(view) {
-    this.view = view;
-    const nonce = crypto.randomBytes(16).toString('hex');
-    view.webview.options = {
-      enableScripts: true,
-      localResourceRoots: [vscode.Uri.joinPath(this.context.extensionUri, 'media')],
-    };
-    const script = view.webview.asWebviewUri(
-      vscode.Uri.joinPath(this.context.extensionUri, 'media/agent.js'),
-    );
-    const style = view.webview.asWebviewUri(
-      vscode.Uri.joinPath(this.context.extensionUri, 'media/agent.css'),
-    );
-    view.webview.html = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${view.webview.cspSource}; script-src 'nonce-${nonce}';"><link rel="stylesheet" href="${style}"></head><body>
-      <header><select id="sessions" aria-label="Agent 会话"></select><button id="new" title="新会话">＋</button><button id="settings" title="模型与预算设置">⚙</button></header>
-      <div id="model" class="muted">正在连接 CIBYP…</div><main id="messages" aria-live="polite"></main>
-      <div id="approval" hidden><strong>工具需要确认</strong><pre id="approval-text"></pre><button id="approve">允许</button><button id="reject">拒绝</button></div>
-      <footer><div id="attachments"></div><label><input id="context" type="checkbox" checked>附带当前选区 / 文件与诊断</label><textarea id="prompt" rows="4" placeholder="描述编程任务，Enter 发送，Shift+Enter 换行" aria-label="编程任务"></textarea><div class="actions"><button id="attach" title="附加文件">＋ 文件</button><span id="status" class="muted">就绪</span><button id="stop" hidden>停止</button><button id="send">发送</button></div></footer>
-      <script nonce="${nonce}" src="${script}"></script></body></html>`;
-    view.webview.onDidReceiveMessage(
-      async (message) => {
-        try {
-          if (message.type === 'ready') {
-            await this.refresh();
-          } else if (
-            message.type === 'send' &&
-            typeof message.text === 'string' &&
-            message.text.trim()
-          ) {
-            const text = message.text.slice(0, 200000);
-            if (!vscode.workspace.isTrusted)
-              throw new Error('请先在 Code-OSS 中信任当前工作区，再执行 Agent 编程任务。');
-            this.post('user', { text });
-            this.post('running', true);
-            await this.bridge.request(
-              'agent.send',
-              {
-                text,
-                context: message.context ? contextSnapshot() : null,
-                attachments: this.attachments,
-              },
-              3600000,
-            );
-            this.post('running', false);
-            this.attachments = [];
-            this.post('attachments', []);
-            await this.refresh();
-          } else if (message.type === 'stop') await this.bridge.request('agent.cancel');
-          else if (message.type === 'approve')
-            await this.bridge.request('agent.approve', { approved: message.approved === true });
-          else if (message.type === 'new') {
-            await this.bridge.request('agent.newSession');
-            await this.refresh();
-          } else if (message.type === 'session') {
-            await this.bridge.request('agent.selectSession', { key: message.key });
-            await this.refresh();
-          } else if (message.type === 'attach') {
-            const files = await vscode.window.showOpenDialog({
-              canSelectMany: true,
-              canSelectFiles: true,
-              canSelectFolders: false,
-              defaultUri: vscode.workspace.workspaceFolders?.[0]?.uri,
-              title: '添加 Agent 上下文文件',
-            });
-            for (const uri of files || []) {
-              const file = {
-                path: uri.scheme === 'vscode-remote' ? uri.path : uri.fsPath,
-                name: path.basename(uri.path),
-              };
-              if (!this.attachments.some((item) => item.path === file.path))
-                this.attachments.push(file);
-            }
-            this.post('attachments', this.attachments);
-          } else if (message.type === 'removeAttachment') {
-            this.attachments.splice(Number(message.index), 1);
-            this.post('attachments', this.attachments);
-          } else if (message.type === 'settings') await this.bridge.request('app.settings');
-          else if (message.type === 'openLink' && typeof message.url === 'string') {
-            const uri = vscode.Uri.parse(message.url);
-            if (['http', 'https'].includes(uri.scheme)) await vscode.env.openExternal(uri);
-          }
-        } catch (error) {
-          this.post('error', error.message);
-          this.post('running', false);
-        }
-      },
-      undefined,
-      this.context.subscriptions,
-    );
-  }
-  post(type, data) {
-    this.view?.webview.postMessage({ type, data });
-  }
-  event(message) {
-    if (message.event === 'personalization') {
-      this.personalization = message.data;
-      this.post('personalization', message.data);
-    }
-    if (message.event === 'agent') {
-      const data = { ...message.data };
-      const key = `${data.sessionKey || ''}:${data.data?.requestId || ''}`;
-      if (data.type === 'stream-start')
-        this.streams.set(key, { content: '', ended: false, sessionKey: data.sessionKey });
-      const entry = this.streams.get(key);
-      if (data.type === 'stream-chunk' && data.data?.content) {
-        if (entry?.ended) return;
-        if (entry) {
-          entry.content += data.data.content;
-          data.html = markdown.render(entry.content);
-        }
-      }
-      if (data.type === 'stream-end') {
-        if (entry?.ended) return;
-        if (entry) entry.ended = true;
-        data.html = markdown.render(data.data?.content || entry?.content || '');
-      }
-      if (data.type === 'assistant')
-        data.html = markdown.render(
-          typeof data.data === 'string' ? data.data : data.data?.content || '',
-        );
-      if (this.streams.size > 100) this.streams.delete(this.streams.keys().next().value);
-      this.post('agent', data);
-    }
-    if (message.event === 'disconnected') this.post('error', 'CIBYP 连接暂时断开，正在重连。');
-    if (message.event === 'connected') this.refresh().catch(() => {});
-  }
-  async refresh() {
-    this.post('personalization', await this.bridge.request('personalization.get'));
-    const sessions = await this.bridge.request('agent.sessions');
-    sessions.messages = (sessions.messages || []).map((message) => ({
-      ...message,
-      html: markdown.render(message.content || ''),
-    }));
-    this.post('sessions', sessions);
-    if (sessions.running) {
-      const active = [...this.streams.values()].findLast(
-        (entry) => entry.sessionKey === sessions.activeKey && !entry.ended,
-      );
-      if (active?.content)
-        this.post('agent', {
-          type: 'stream-chunk',
-          sessionKey: sessions.activeKey,
-          html: markdown.render(active.content),
-        });
-    }
-    this.post('attachments', this.attachments);
-  }
-}
-
 async function applyPersonalization(data) {
   const configuration = vscode.workspace.getConfiguration();
   const colors = {
@@ -530,26 +386,53 @@ async function applyPersonalization(data) {
 async function activate(context) {
   const bridge = new Bridge(context);
   const changes = new Changes(context);
-  const agent = new AgentView(context, bridge);
   const output = vscode.window.createOutputChannel('CIBYP');
-  context.subscriptions.push(
-    bridge,
-    output,
-    vscode.window.registerWebviewViewProvider('cibyp.agent', agent, {
-      webviewOptions: { retainContextWhenHidden: true },
-    }),
-    vscode.window.registerTreeDataProvider('cibyp.changes', changes),
-  );
+  context.subscriptions.push(bridge, output);
   let themeUpdates = Promise.resolve();
   context.subscriptions.push(
     bridge.onEvent((event) => {
-      agent.event(event);
+      if (event.event === 'connected') publishEditorState();
       if (event.event === 'personalization')
         themeUpdates = themeUpdates
           .then(() => applyPersonalization(event.data))
           .catch((error) => output.appendLine(error.message));
     }),
   );
+  function publishEditorState() {
+    bridge.send({ type: 'event', event: 'ide-state', data: editorState() });
+    bridge.send({ type: 'event', event: 'changes', data: changes.list() });
+  }
+  let stateTimer;
+  const scheduleEditorState = () => {
+    clearTimeout(stateTimer);
+    stateTimer = setTimeout(
+      () => bridge.send({ type: 'event', event: 'ide-state', data: editorState() }),
+      75,
+    );
+  };
+  context.subscriptions.push(
+    { dispose: () => clearTimeout(stateTimer) },
+    changes.events.event(() =>
+      bridge.send({ type: 'event', event: 'changes', data: changes.list() }),
+    ),
+    vscode.window.onDidChangeActiveTextEditor(scheduleEditorState),
+    vscode.window.onDidChangeTextEditorSelection(scheduleEditorState),
+    vscode.workspace.onDidSaveTextDocument(scheduleEditorState),
+    vscode.workspace.onDidChangeTextDocument((event) => {
+      if (event.document === vscode.window.activeTextEditor?.document) scheduleEditorState();
+    }),
+  );
+  bridge.handlers.set('ide.changes', async ({ action = 'list', id }) => {
+    if (!['list', 'open', 'accept', 'revert'].includes(action))
+      throw new Error('Unknown change action');
+    let result;
+    if (action !== 'list') {
+      const item = [...changes.items.values()].find((item) => item.snapshot.toString() === id);
+      if (!item) throw new Error('This checkpoint has changed; refresh the changes list.');
+      result = await changes[action](item);
+    }
+    return { ...result, changes: changes.list() };
+  });
   bridge.handlers.set('ide.context', () => contextSnapshot());
   bridge.handlers.set('ide.readDocument', (params) => changes.read(params));
   bridge.handlers.set('ide.writeDocument', (params) => changes.write(params));
@@ -595,27 +478,15 @@ async function activate(context) {
       bridge.send({ type: 'event', event: 'workspace', data: workspaceFolders() }),
     ),
   );
+  const focusAgent = (draft) => bridge.request('agent.focus', { draft });
   const commands = {
-    'cibyp.agent.focus': () => vscode.commands.executeCommand('cibyp.agent.focus'),
-    'cibyp.agent.explain': async () => {
-      await vscode.commands.executeCommand('workbench.view.extension.cibyp');
-      agent.post('draft', '解释当前选中的代码，包括作用、潜在问题和改进建议。');
-    },
-    'cibyp.agent.refactor': async () => {
-      await vscode.commands.executeCommand('workbench.view.extension.cibyp');
-      agent.post('draft', '重构当前选中的代码，保持功能一致，改善结构并验证修改。');
-    },
-    'cibyp.agent.review': async () => {
-      await vscode.commands.executeCommand('workbench.view.extension.cibyp');
-      agent.post('draft', '审查当前工作区的 Git 变更，找出实际缺陷并说明影响。');
-    },
+    'cibyp.agent.focus': () => focusAgent(),
+    'cibyp.agent.explain': () => focusAgent('解释当前选中的代码，包括作用、潜在问题和改进建议。'),
+    'cibyp.agent.refactor': () =>
+      focusAgent('重构当前选中的代码，保持功能一致，改善结构并验证修改。'),
+    'cibyp.agent.review': () => focusAgent('审查当前工作区的 Git 变更，找出实际缺陷并说明影响。'),
     'cibyp.agent.settings': () => bridge.request('app.settings'),
-    'cibyp.changes.open': (item) => changes.open(item),
-    'cibyp.changes.accept': (item) => changes.accept(item),
-    'cibyp.changes.revert': (item) => changes.revert(item),
   };
-  // The view's generated focus command already exists; registering it again would recurse.
-  delete commands['cibyp.agent.focus'];
   for (const [command, handler] of Object.entries(commands))
     context.subscriptions.push(vscode.commands.registerCommand(command, handler));
   if (vscode.workspace.registerRemoteAuthorityResolver) {
@@ -652,39 +523,8 @@ async function activate(context) {
       }),
     );
   }
-  if (vscode.chat?.createChatParticipant) {
-    const participant = vscode.chat.createChatParticipant(
-      'cibyp.agent',
-      async (request, _chatContext, stream, token) => {
-        const subscription = bridge.onEvent((event) => {
-          if (event.event !== 'agent') return;
-          const data = event.data;
-          if (data.type === 'stream-chunk' && data.data?.content)
-            stream.markdown(data.data.content);
-          else if (data.type === 'tool_call')
-            stream.progress(`工具：${data.data?.name || data.data?.toolName || ''}`);
-          else if (data.type === 'error') stream.markdown(`\n${String(data.data)}`);
-        });
-        const cancel = token.onCancellationRequested(() =>
-          bridge.request('agent.cancel').catch(() => {}),
-        );
-        try {
-          await bridge.request(
-            'agent.send',
-            { text: request.prompt, context: contextSnapshot() },
-            3600000,
-          );
-        } finally {
-          subscription.dispose();
-          cancel.dispose();
-        }
-        return {};
-      },
-    );
-    participant.iconPath = new vscode.ThemeIcon('sparkle');
-    context.subscriptions.push(participant);
-  }
   await bridge.ready();
+  publishEditorState();
   // Resolver activation must finish before workspace configuration becomes ready.
   // Awaiting configuration.update here deadlocks remote workspace initialization.
   void bridge
