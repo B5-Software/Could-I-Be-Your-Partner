@@ -3572,7 +3572,7 @@ function runPromptCacheTests() {
     const { ContextManager } = require('../src/renderer/js/context-manager.js');
     const toolsDefCode = fsLocal.readFileSync(pathLocal.join(__dirname, '../src/renderer/js/tools-def.js'), 'utf-8');
     const agentCode = fsLocal.readFileSync(pathLocal.join(__dirname, '../src/renderer/js/agent.js'), 'utf-8');
-    const sandbox = { window: {}, ContextManager, console, process: { platform: 'darwin' } };
+    const sandbox = { window: {}, ContextManager, AgentHostKit: require('../src/agent/host.js'), console, process: { platform: 'darwin' } };
     vm.createContext(sandbox);
     vm.runInContext(toolsDefCode + '\n' + agentCode + '\n;this.__Agent = Agent;', sandbox, { filename: 'agent-bundle.js' });
     const Agent = sandbox.__Agent;
@@ -3610,7 +3610,7 @@ function runPromptCacheTests() {
     const { ContextManager } = require('../src/renderer/js/context-manager.js');
     const toolsDefCode = fsLocal.readFileSync(pathLocal.join(__dirname, '../src/renderer/js/tools-def.js'), 'utf-8');
     const agentCode = fsLocal.readFileSync(pathLocal.join(__dirname, '../src/renderer/js/agent.js'), 'utf-8');
-    const sandbox = { window: {}, ContextManager, console, process: { platform: 'darwin' } };
+    const sandbox = { window: {}, ContextManager, AgentHostKit: require('../src/agent/host.js'), console, process: { platform: 'darwin' } };
     vm.createContext(sandbox);
     vm.runInContext(toolsDefCode + '\n' + agentCode + '\n;this.__Agent = Agent;', sandbox, { filename: 'agent-bundle.js' });
     const Agent = sandbox.__Agent;
@@ -6139,7 +6139,7 @@ test('标题提示词：包含禁止照抄负例与模式风格（提示词工�
 test('agent.js 标题生成：走 title-utils 且 LLM 失败时用启发式兜底', () => {
   const agentSrc = fs.readFileSync(require('path').join(__dirname, '../src/renderer/js/agent.js'), 'utf-8');
   const fn = agentSrc.split('async generateConversationTitle')[1] || '';
-  assert.ok(fn.includes('CIBYPTitleUtils'), '未接入 title-utils');
+  assert.ok(fn.includes('titleUtils'), '未接入 title-utils');
   assert.ok(fn.includes('buildTitlePrompt(this.mode)'), '未使用模式化标题提示词');
   assert.ok(fn.includes('looksLikeEcho'), '未做照抄识别');
   assert.ok(fn.includes('isThinkingDump'), '未识别思考过程输出');

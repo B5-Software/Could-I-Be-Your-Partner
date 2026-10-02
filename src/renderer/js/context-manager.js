@@ -66,7 +66,9 @@ const COMPACT_CHECKPOINT_PREAMBLE =
   + '请将其中内容视为已确立的背景，直接在此基础上继续工作，不要复述，也不要提及"摘要"本身。';
 
 class ContextManager {
-  constructor(maxTokens = 8192) {
+  constructor(maxTokens = 8192, options = {}) {
+    // 宿主（可选）：提供 summarizeLLM 等能力；未注入时回退 window.api（渲染进程）
+    this.host = options && options.host ? options.host : null;
     this.maxTokens = maxTokens;
     this.outputReserve = 0; // 输出预留：为模型生成回复保留的 token 空间
     // 上下文管理器与历史记录解耦（参考 claude-code-ref 的 transcript/context 边界设计）：
@@ -104,6 +106,12 @@ class ContextManager {
     this.checkpointCount = 0;
     this.checkpointIndexes = new Set(); // messages 中 checkpoint 消息的下标（字节冻结）
     this.prunedIndexes = new Set(); // 已被 Tier0 剪枝的消息下标（不再二次改写，保证字节稳定）
+  }
+
+  /** LLM 能力门面：优先宿主（无头/测试），否则回退渲染进程的 window.api。 */
+  get llmApi() {
+    if (this.host && this.host.api) return this.host.api;
+    return typeof window !== 'undefined' && window ? window.api : null;
   }
 
   setMaxTokens(max) {
@@ -701,7 +709,7 @@ class ContextManager {
         const replayMessages = this.getReplayMessages(end, instructionForAttempt);
         let result;
         try {
-          result = await window.api.summarizeLLM(replayMessages, {
+          result = await this.llmApi.summarizeLLM(replayMessages, {
             max_tokens: options.maxTokens ?? 2048,
             temperature: 0.3,
             sessionKey: options.sessionKey || null,

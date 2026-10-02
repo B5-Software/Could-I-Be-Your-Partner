@@ -4,6 +4,7 @@ const vm = require('node:vm');
 const fs = require('node:fs');
 const { ToolExposure } = require('../../src/renderer/js/tool-exposure');
 const { ContextManager } = require('../../src/renderer/js/context-manager');
+const AgentHostKit = require('../../src/agent/host');
 
 function catalog(mode = 'chat') {
   const scope = {
@@ -13,6 +14,7 @@ function catalog(mode = 'chat') {
     module: { exports: {} },
     ToolExposure,
     ContextManager,
+    AgentHostKit,
   };
   vm.createContext(scope);
   vm.runInContext(fs.readFileSync('src/renderer/js/tools-def.js', 'utf8'), scope);

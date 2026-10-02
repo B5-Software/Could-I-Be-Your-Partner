@@ -65,14 +65,36 @@ const BATCH_TOOL_SPECS = {
   knowledgeBaseAdd: { itemsKey: 'items', singularKey: null, limit: 2, itemChars: 1500 },
 };
 
+// ---- 宿主接入（AgentHost，见 src/agent/host.js）------------------------------------
+// Agent 内核不再直接触碰 window：工具/LLM/存储等能力一律经 host.api，界面专属能力
+// 经 host.gui。页面以 <script src="../../agent/host.js"> 提供全局 AgentHostKit；
+// Node（require / src/agent/index.js）回退 require；测试沙箱可直接注入 AgentHostKit。
+const AGENT_HOST_KIT =
+  (typeof AgentHostKit !== 'undefined' && AgentHostKit) ||
+  (typeof require === 'function' ? require('../../agent/host.js') : null);
+
+function agentDefaultHost() {
+  if (AGENT_HOST_KIT && typeof AGENT_HOST_KIT.getDefaultHost === 'function') {
+    // root 由本模块所在 realm 解析（渲染进程=window；测试沙箱=沙箱 window；Node=无）
+    return AGENT_HOST_KIT.getDefaultHost(typeof window !== 'undefined' ? window : undefined);
+  }
+  throw new Error(
+    'AgentHostKit 缺失：请在加载 agent.js 前引入 src/agent/host.js（或向运行沙箱注入 AgentHostKit / require）',
+  );
+}
+
 // AI Agent Engine - handles the autonomous agent loop
 class Agent {
-  get todoItems() { return typeof window !== 'undefined' && window.CibypTodos ? window.CibypTodos.todoItems : this._todoItems; }
-  set todoItems(items) { if (typeof window === 'undefined' || !window.CibypTodos) this._todoItems = items; }
-  get todoIdCounter() { return typeof window !== 'undefined' && window.CibypTodos ? window.CibypTodos.todoIdCounter : this._todoIdCounter; }
-  set todoIdCounter(counter) { if (typeof window === 'undefined' || !window.CibypTodos) this._todoIdCounter = counter; }
-  constructor() {
-    this.contextManager = new ContextManager();
+  // 全局待办（多会话共享）由宿主提供；无宿主待办时退化为本实例私有待办。
+  get todoItems() { const todos = this.host && this.host.gui.todos; return todos ? todos.todoItems : this._todoItems; }
+  set todoItems(items) { const todos = this.host && this.host.gui.todos; if (!todos) this._todoItems = items; }
+  get todoIdCounter() { const todos = this.host && this.host.gui.todos; return todos ? todos.todoIdCounter : this._todoIdCounter; }
+  set todoIdCounter(counter) { const todos = this.host && this.host.gui.todos; if (!todos) this._todoIdCounter = counter; }
+  constructor(options = {}) {
+    // 宿主（AgentHost）：内核与前端运行时的唯一边界，见 src/agent/host.js。
+    // 未显式传入时取默认宿主（渲染进程=window 门面；Node/测试=无头宿主）。
+    this.host = options && options.host ? options.host : agentDefaultHost();
+    this.contextManager = new ContextManager(undefined, { host: this.host });
     this.running = false;
     this.stopped = false;
     this.paused = false;
@@ -244,7 +266,7 @@ class Agent {
   async ensureSessionModel(userMessage) {
     try {
       if (this.llmOverride && this.llmOverride.model) return false;
-      const s = this.settings || await window.api.getSettings();
+      const s = this.settings || await this.host.api.getSettings();
       const pool = (Array.isArray(s?.llm?.pool) ? s.llm.pool : [])
         .filter(e => e && e.enabled !== false && e.model);
       if (pool.length === 0) return false;
@@ -258,12 +280,12 @@ class Agent {
       let decidedBy = 'priority';
 
       if (routing.modelStrategy === 'intelligence' && decisionOn
-          && decisionUsages.modelRouting !== false && typeof window.api.decisionChoice === 'function') {
+          && decisionUsages.modelRouting !== false && typeof this.host.api.decisionChoice === 'function') {
         const criteria = {};
         for (const e of pool) {
           criteria[String(e.id)] = `${e.label || e.model}｜接入=${e.provider}｜模型=${e.model}｜智慧分=${Number(e.intelligence) || 0}`;
         }
-        const r = await window.api.decisionChoice({
+        const r = await this.host.api.decisionChoice({
           state: `用户消息：${state}\n\n任务：从候选模型中选择最合适的一个。越复杂/越高要求的任务选智慧分越高的模型；简单任务选智慧分较低（更快更省）的模型。`,
           instructions: 'Which model should handle this task?',
           criteria,
@@ -281,12 +303,12 @@ class Agent {
 
       let effort = entry.effort || 'off';
       if (routing.effortStrategy === 'jev' && decisionOn
-          && decisionUsages.reasoningRouting !== false && typeof window.api.decisionChoice === 'function') {
+          && decisionUsages.reasoningRouting !== false && typeof this.host.api.decisionChoice === 'function') {
         // 档位跟随模型真实能力（API 元数据优先，失败回退五档）
         let variantLevels = null;
         try {
-          if (typeof window.api.llmCapabilities === 'function') {
-            const caps = await window.api.llmCapabilities(
+          if (typeof this.host.api.llmCapabilities === 'function') {
+            const caps = await this.host.api.llmCapabilities(
               entry.provider || 'openai-compat',
               entry.model || '',
               entry.apiUrl || '',
@@ -299,7 +321,7 @@ class Agent {
         const criteria = {};
         for (const v of levels.slice(0, 9)) criteria[v.id] = v.label || v.id;
         const accepted = Object.keys(criteria);
-        const r2 = await window.api.decisionChoice({
+        const r2 = await this.host.api.decisionChoice({
           state: `用户消息：${state}\n\n即将使用的模型：${entry.model}。任务：选择该任务的推理强度（可选档位：${accepted.join('/')}）。简单问答/闲聊选 off/auto；多步工具任务选低中档；复杂推理/调试/架构选高档。`,
           instructions: 'How much reasoning effort is appropriate?',
           criteria,
@@ -397,7 +419,7 @@ class Agent {
 
   // 字符串替换编辑（Claude Code 风格 Edit 工具）
   async _applyStringReplace(filePath, oldString, newString, replaceAll, encoding, eol) {
-    const readRes = await window.api.readFile(filePath, encoding || '');
+    const readRes = await this.host.api.readFile(filePath, encoding || '');
     if (!readRes.ok) return readRes;
     const content = readRes.content;
     // 统计匹配次数
@@ -416,7 +438,7 @@ class Agent {
       newContent = content.replace(oldString, newString);
     }
     // 未显式指定 encoding/eol 时保持原文件编码与换行模式（readFile 返回检测结果）
-    const writeRes = await window.api.writeFile(filePath, newContent, {
+    const writeRes = await this.host.api.writeFile(filePath, newContent, {
       encoding: encoding || readRes.encoding || '',
       eol: eol || readRes.eol || ''
     });
@@ -434,28 +456,28 @@ class Agent {
   }
 
   async init() {
-    this.settings = await window.api.getSettings();
-    const currentRuntime = await window.api.runtime?.getLocation?.();
+    this.settings = await this.host.api.getSettings();
+    const currentRuntime = await this.host.api.runtime?.getLocation?.();
     this.emergencyHost = currentRuntime?.emergencyHost === true;
     if (this.emergencyHost) this.settings = { ...this.settings, runtime: { ...this.settings.runtime, location: 'host' } };
     if (!this.settings.tools || typeof this.settings.tools !== 'object') {
       this.settings.tools = {};
     }
-    this.systemInfo = await window.api.getFullSystemInfo();
+    this.systemInfo = await this.host.api.getFullSystemInfo();
     this.syncTokenLimits();
     // Don't draw tarot card on init - draw on first message
     // Create workspace
     this.resetOptimizedTools();
-    const ws = await window.api.workspaceCreate({ fresh: true });
+    const ws = await this.host.api.workspaceCreate({ fresh: true });
     if (ws.ok) {
       this.workspacePath = ws.path;
-      window.api.webControlSetWorkDir(ws.path);
+      this.host.api.webControlSetWorkDir(ws.path);
     }
     
     // 异步获取工作目录文件树
     if (this.workspacePath) {
       try {
-        const treeResult = await window.api.workspaceGetFileTree(this.workspacePath);
+        const treeResult = await this.host.api.workspaceGetFileTree(this.workspacePath);
         if (treeResult.ok) {
           this.cachedWorkspaceTree = treeResult.tree;
         }
@@ -469,8 +491,8 @@ class Agent {
     this.conversationId = Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 
     // Subscribe to LLM retry events to surface them to the UI
-    if (window.api?.onLLMRetry && !this._llmRetryUnsub) {
-      this._llmRetryUnsub = window.api.onLLMRetry((info) => {
+    if (this.host.api?.onLLMRetry && !this._llmRetryUnsub) {
+      this._llmRetryUnsub = this.host.api.onLLMRetry((info) => {
         if (!info) return;
         // 仅处理属于当前会话的重试事件（没有 sessionKey 的旧事件保持全局兜底）
         if (info.sessionKey && info.sessionKey !== this.sessionKey) return;
@@ -480,10 +502,10 @@ class Agent {
         const reasonTxt = info.reason ? `（${info.reason}）` : '';
         const msg = `LLM 请求失败${statusTxt}（${kind}），第 ${info.attempt || 1} 次重试${delayTxt}${reasonTxt}`;
         // 优先使用全局 toast 提示（自动消失），不再污染聊天记录
-        const activeSession = window.__sessionManager?.getByAgent(this);
-        if (typeof window.showToast === 'function' && (!activeSession || activeSession.active)) {
+        const activeSession = this.host.gui.sessions?.getByAgent(this);
+        if (typeof this.host.gui.toast === 'function' && (!activeSession || activeSession.active)) {
           const type = (kind === 'auth' || kind === 'client') ? 'error' : 'warn';
-          window.showToast(msg, type, 6000);
+          this.host.gui.toast(msg, type, 6000);
         } else if (this.onMessage) {
           this.onMessage('system', msg);
         }
@@ -492,11 +514,11 @@ class Agent {
 
     // 订阅游戏窗口/子窗口的 LLM usage 推送，累计到当前会话统计
     // （游戏窗口的 LLM 调用走主进程 IPC，主进程广播给主渲染器，再由 agent 累计）
-    if (window.api?.onLLMExternalUsage && !this._llmExternalUsageUnsub) {
-      this._llmExternalUsageUnsub = window.api.onLLMExternalUsage((data) => {
+    if (this.host.api?.onLLMExternalUsage && !this._llmExternalUsageUnsub) {
+      this._llmExternalUsageUnsub = this.host.api.onLLMExternalUsage((data) => {
         if (!data?.usage) return;
         if (data.sessionKey && data.sessionKey !== this.sessionKey) return;
-        const activeChat = window.__sessionManager?.getActive('chat');
+        const activeChat = this.host.gui.sessions?.getActive('chat');
         if (!data.sessionKey && activeChat && activeChat.agent !== this) return;
         this._accumulateUsage(data.usage, data.model);
       });
@@ -505,25 +527,25 @@ class Agent {
     // Subscribe to LLM stream events to surface live tokens to the UI.
     // Only chunks matching the active requestId are forwarded (sub-agent
     // loops use their own requestIds and don't emit to the main UI).
-    if (window.api?.onStreamChunk && !this._streamChunkUnsub) {
-      this._streamChunkUnsub = window.api.onStreamChunk((chunk) => {
+    if (this.host.api?.onStreamChunk && !this._streamChunkUnsub) {
+      this._streamChunkUnsub = this.host.api.onStreamChunk((chunk) => {
         if (!chunk || chunk.requestId !== this._activeStreamRequestId) return;
         if (this.onMessage) this.onMessage('stream-chunk', chunk);
         // 流式 TTS：实时投喂句子切分器（跳过 reasoning，仅播助理文本）
-        const activeSession = window.__sessionManager?.getByAgent(this);
-        if (window.VoiceUI && chunk.content && (!activeSession || activeSession.active)) {
-          window.VoiceUI.feedStreamChunk(chunk.content);
+        const activeSession = this.host.gui.sessions?.getByAgent(this);
+        if (this.host.gui.voice && chunk.content && (!activeSession || activeSession.active)) {
+          this.host.gui.voice.feedStreamChunk(chunk.content);
         }
       });
     }
-    if (window.api?.onStreamEnd && !this._streamEndUnsub) {
-      this._streamEndUnsub = window.api.onStreamEnd((data) => {
+    if (this.host.api?.onStreamEnd && !this._streamEndUnsub) {
+      this._streamEndUnsub = this.host.api.onStreamEnd((data) => {
         if (!data || data.requestId !== this._activeStreamRequestId) return;
         if (this.onMessage) this.onMessage('stream-end', data);
         // 流式 TTS 收尾（兜底非流式回退：若没喂过任何 chunk，播报 data.content 全文）
-        const activeSession = window.__sessionManager?.getByAgent(this);
-        if (window.VoiceUI && (!activeSession || activeSession.active)) {
-          window.VoiceUI.feedStreamEnd((data && data.content) ? data.content : null);
+        const activeSession = this.host.gui.sessions?.getByAgent(this);
+        if (this.host.gui.voice && (!activeSession || activeSession.active)) {
+          this.host.gui.voice.feedStreamEnd((data && data.content) ? data.content : null);
         }
       });
     }
@@ -1006,7 +1028,7 @@ ${affectionDesc}
   async refreshSkillsCatalog() {
     let userSkills = [];
     try {
-      const skills = await window.api.listSkills();
+      const skills = await this.host.api.listSkills();
       if (!Array.isArray(skills)) return;
       userSkills = skills;
     } catch { return; } // a failed observation must not revoke admitted guidance
@@ -1029,9 +1051,9 @@ ${affectionDesc}
 
   async observeRuntimeContext() {
     // This is a safe provider boundary: no model stream or unsettled tool batch is active.
-    if (this.workspacePath && typeof window.api.workspaceGetFileTree === 'function') {
+    if (this.workspacePath && typeof this.host.api.workspaceGetFileTree === 'function') {
       try {
-        const tree = await window.api.workspaceGetFileTree(this.workspacePath);
+        const tree = await this.host.api.workspaceGetFileTree(this.workspacePath);
         if (tree?.ok && typeof tree.tree === 'string') this.cachedWorkspaceTree = tree.tree;
       } catch { /* unavailable: retain the last successfully observed tree */ }
     }
@@ -1039,7 +1061,7 @@ ${affectionDesc}
     this.contextManager.setContextSource('技能目录', this.minimalMode ? '' : this.getSkillsCatalogBlock());
     this.contextManager.setContextSource('工作目录文件树', this.minimalMode ? '' : this.cachedWorkspaceTree || '');
     this.contextManager.setContextSource('已激活技能', this.getActiveSkillsBlock());
-    this.contextManager.setContextSource(typeof window !== 'undefined' && window.CibypTodos ? '全局持久化待办' : '当前会话待办', this.todoItems.length
+    this.contextManager.setContextSource(this.host.gui.todos ? '全局持久化待办' : '当前会话待办', this.todoItems.length
       ? JSON.stringify(this.todoItems.map(({ id, text, done }) => ({ id, text, done }))) : '');
     this.contextManager.setContextSource('工具发现', this.usesToolDiscovery()
       ? '工具按需加载：缺少能力时使用 searchTools(query/category/names)，空查询可浏览分类。搜索在本地执行；匹配定义在下一轮请求加载。describeTool 分段查看参数；invokeTool 调用已发现且启用的工具。工具类别：'
@@ -1469,7 +1491,7 @@ ${affectionDesc}
     try {
       // 决策模型优先：按工具类别批量 noul 判断相关性（一次调用；低置信/失败回退现有 LLM/启发式）
       const dcfg = this.settings?.decision || {};
-      if (dcfg.enabled && dcfg.usages?.toolSelection !== false && typeof window.api.decisionCall === 'function') {
+      if (dcfg.enabled && dcfg.usages?.toolSelection !== false && typeof this.host.api.decisionCall === 'function') {
         try {
           const byCat = new Map();
           for (const t of enabledDefs) {
@@ -1482,7 +1504,7 @@ ${affectionDesc}
           catList.forEach((cat, i) => {
             questions['c' + i] = { type: 'noul', instructions: `完成任务是否需要「${String(cat).slice(0, 100)}」类工具？（不需要返回低概率）` };
           });
-          const res = await window.api.decisionCall({
+          const res = await this.host.api.decisionCall({
             state: [
               `用户消息：${String(firstUserMessage || '').slice(0, 800)}`,
               reason ? `本次需要补充工具的原因：${String(reason).slice(0, 500)}` : '',
@@ -1568,7 +1590,7 @@ ${affectionDesc}
         '请直接输出 JSON（不要任何推理或解释）：'
       ].filter(Boolean).join('\n\n');
       // 关键：强制 JSON 模式 + 低 temperature + 较大 max_tokens 容纳 JSON
-      const result = await window.api.chatLLM([
+      const result = await this.host.api.chatLLM([
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userPrompt }
       ], {
@@ -1721,7 +1743,7 @@ ${affectionDesc}
 
     // 抽塔罗牌
     if (!this.tarotCard) {
-      this.tarotCard = await window.api.drawTarot();
+      this.tarotCard = await this.host.api.drawTarot();
       if (this.onMessage) this.onMessage('tarot', this.tarotCard);
     }
 
@@ -1767,7 +1789,7 @@ ${affectionDesc}
 
     // Draw tarot card on first message
     if (!this.tarotCard) {
-      this.tarotCard = await window.api.drawTarot();
+      this.tarotCard = await this.host.api.drawTarot();
       if (this.onMessage) this.onMessage('tarot', this.tarotCard);
     }
 
@@ -1781,14 +1803,14 @@ ${affectionDesc}
 
     // VM 模式：把附件路径翻译成 VM 内路径（Agent 的读写/媒体工具都作用于 VM）
     try {
-      if (typeof window.api.runtimeToVmPath === 'function') {
+      if (typeof this.host.api.runtimeToVmPath === 'function') {
         for (const a of attachments) {
           if (a.path) {
-            const r = await window.api.runtimeToVmPath(a.path);
+            const r = await this.host.api.runtimeToVmPath(a.path);
             if (r && r.ok && r.path) { a.hostPath = a.path; a.path = r.path; }
           }
           if (a.convertedPath) {
-            const r2 = await window.api.runtimeToVmPath(a.convertedPath);
+            const r2 = await this.host.api.runtimeToVmPath(a.convertedPath);
             if (r2 && r2.ok && r2.path) a.convertedPath = r2.path;
           }
         }
@@ -1831,7 +1853,7 @@ ${affectionDesc}
         if (!a.isImage || !a.path) continue;
         try {
           // 读取图片为 base64 data URL
-          const readRes = await window.api.readFileBase64(a.path);
+          const readRes = await this.host.api.readFileBase64(a.path);
           if (readRes && readRes.ok && readRes.data) {
             contentParts.push({ type: 'image_url', image_url: { url: readRes.data } });
           } else if (a.ocrText) {
@@ -1862,7 +1884,7 @@ ${affectionDesc}
       try {
         const messages = this.contextManager.getMessages();
         const title = userMessage.substring(0, 50) + (userMessage.length > 50 ? '...' : '');
-        await window.api.emailSendConversation(messages, title);
+        await this.host.api.emailSendConversation(messages, title);
       } catch (e) {
         console.error('[Email] Failed to send conversation summary:', e);
       }
@@ -1932,13 +1954,13 @@ ${affectionDesc}
       }
       if (this.mode === 'babe') {
         payload.affection = this.babeAffection;
-        await window.api.babeHistorySave(payload);
+        await this.host.api.babeHistorySave(payload);
       } else if (this.mode === 'code') {
         // Code 模式：保存到独立的工作区历史，避免逃逸到 Chat 历史
         // codeSaveHistory 签名：(workspacePath, id, data)
-        await window.api.codeSaveHistory(this.codeWorkspacePath || this.workspacePath, this.conversationId, payload);
+        await this.host.api.codeSaveHistory(this.codeWorkspacePath || this.workspacePath, this.conversationId, payload);
       } else {
-        await window.api.historySave(payload);
+        await this.host.api.historySave(payload);
       }
     } catch (e) { console.error('保存历史失败', e); }
   }
@@ -2025,7 +2047,7 @@ ${affectionDesc}
     }
     if (conversation.workspacePath) {
       this.workspacePath = conversation.workspacePath;
-      window.api.webControlSetWorkDir(conversation.workspacePath);
+      this.host.api.webControlSetWorkDir(conversation.workspacePath);
     }
     // Babe 模式：恢复好感度
     if (this.mode === 'babe' && typeof conversation.affection === 'number') {
@@ -2073,12 +2095,12 @@ ${affectionDesc}
   }
 
   async generateConversationTitle(userMessage) {
-    const TU = (typeof window !== 'undefined' && window.CIBYPTitleUtils) ? window.CIBYPTitleUtils : null;
+    const TU = this.host.gui.titleUtils || null;
     const cleaned = ((userMessage || '').replace(/[\s\r\n]+/g, ' ').trim()) || '未命名对话';
     // LLM 不可用/超限/解析失败时的兜底：剥礼貌前缀取语义片段，而不是照抄整句
     const fallback = () => (TU ? TU.heuristicFallback(cleaned) : cleaned.substring(0, 20));
     try {
-      const result = await window.api.chatLLM([
+      const result = await this.host.api.chatLLM([
         { role: 'system', content: TU ? TU.buildTitlePrompt(this.mode) : '你是会话标题助手。只输出 2-12 字中文标题，提炼主题，禁止照抄用户原话。' },
         { role: 'user', content: cleaned }
       ], {
@@ -2129,10 +2151,10 @@ ${affectionDesc}
     if (this.pendingToolAuth) this.resolveToolAuth('deny');
     // 按会话定向中止：只中止当前 Agent 的 LLM 请求和终端命令。
     // 没有 sessionKey 时回退到全局 abort（兼容旧调用/系统级停止）。
-    if (window.api?.agentAbort && this.sessionKey) {
-      try { window.api.agentAbort(this.sessionKey); } catch { /* ignore */ }
-    } else if (window.api?.agentAbortAll) {
-      try { window.api.agentAbortAll(); } catch { /* ignore */ }
+    if (this.host.api?.agentAbort && this.sessionKey) {
+      try { this.host.api.agentAbort(this.sessionKey); } catch { /* ignore */ }
+    } else if (this.host.api?.agentAbortAll) {
+      try { this.host.api.agentAbortAll(); } catch { /* ignore */ }
     }
     // 同步停止所有子代理
     for (const sub of this.subAgents) {
@@ -2193,7 +2215,7 @@ ${affectionDesc}
    */
   async _decisionPruneContext() {
     try {
-      if (typeof window.api.decisionCall !== 'function') return 0;
+      if (typeof this.host.api.decisionCall !== 'function') return 0;
       const msgs = this.contextManager.getMessages();
       if (!Array.isArray(msgs) || msgs.length <= 10) return 0;
       const keepTail = 8;
@@ -2214,7 +2236,7 @@ ${affectionDesc}
           instructions: `以下工具结果对完成当前任务是否仍有必要保留？（如已无必要返回低概率）\n${String(msgs[idx].content).slice(0, 280)}`
         };
       });
-      const res = await window.api.decisionCall({
+      const res = await this.host.api.decisionCall({
         state: `当前用户任务：${String(this.getLatestUserMessageText ? this.getLatestUserMessageText() : '').slice(0, 400)}`,
         questions,
         sessionKey: this.sessionKey || null,
@@ -2244,7 +2266,7 @@ ${affectionDesc}
   async _countTokensExact() {
     try {
       if (!this.contextManager || typeof this.contextManager.setRealBasis !== 'function') return false;
-      if (typeof window.api?.llmCountTokens !== 'function') return false;
+      if (typeof this.host.api?.llmCountTokens !== 'function') return false;
       const llm = this.settings?.llm || {};
       const model = this.llmOverride?.model || llm.model || '';
       const apiUrl = llm.apiUrl || '';
@@ -2259,7 +2281,7 @@ ${affectionDesc}
           rest.push(m);
         }
       }
-      const r = await window.api.llmCountTokens({
+      const r = await this.host.api.llmCountTokens({
         model,
         apiUrl,
         system: systemParts.join('\n\n'),
@@ -2429,13 +2451,13 @@ ${affectionDesc}
 
       let result;
       let usedStreaming = false;
-      if (streamEnabled && typeof window.api.chatLLMStream === 'function') {
+      if (streamEnabled && typeof this.host.api.chatLLMStream === 'function') {
         // Streaming path: surface live tokens to the UI via stream-chunk events.
         // If streaming fails for any reason, fall back to non-streaming.
         this._activeStreamRequestId = reqId;
         if (this.onMessage) this.onMessage('stream-start', { requestId: reqId });
         try {
-          result = await window.api.chatLLMStream(messages, this._llmOptions({
+          result = await this.host.api.chatLLMStream(messages, this._llmOptions({
             tools: tools.length > 0 ? tools : undefined,
             requestId: reqId,
             sessionKey: this.sessionKey || null
@@ -2450,7 +2472,7 @@ ${affectionDesc}
           // Streaming failed — fall back to non-streaming
           if (this.onMessage) this.onMessage('stream-end', { requestId: reqId, content: '', fallback: true });
           if (this.onMessage) this.onMessage('system', `流式请求失败，回退到普通模式：${streamErr.message || streamErr}`);
-          result = await window.api.chatLLM(messages, this._llmOptions({
+          result = await this.host.api.chatLLM(messages, this._llmOptions({
             tools: tools.length > 0 ? tools : undefined,
             requestId: reqId + '-retry',
             sessionKey: this.sessionKey || null
@@ -2476,7 +2498,7 @@ ${affectionDesc}
         }
       } else {
         // Non-streaming path (existing behavior).
-        result = await window.api.chatLLM(messages, {
+        result = await this.host.api.chatLLM(messages, {
           ...this._llmOptions(),
           tools: tools.length > 0 ? tools : undefined,
           requestId: reqId,
@@ -2541,7 +2563,7 @@ ${affectionDesc}
           const retryMessages = this.contextManager.getMessages();
           const retryTools = this.getRuntimeToolSchemas();
           try {
-            result = await window.api.chatLLM(retryMessages, this._llmOptions({
+            result = await this.host.api.chatLLM(retryMessages, this._llmOptions({
               tools: retryTools.length > 0 ? retryTools : undefined,
               requestId: reqId + '-retry-' + retryCount,
               sessionKey: this.sessionKey || null
@@ -2773,7 +2795,7 @@ ${affectionDesc}
             // 'allow-once' 仅本次会话生效，不写入 settings
             if (decision === 'allow-always') {
               try {
-                await window.api.setSettings({ toolAuthGranted: { [authCategory]: true } });
+                await this.host.api.setSettings({ toolAuthGranted: { [authCategory]: true } });
                 this.settings.toolAuthGranted = { ...(this.settings.toolAuthGranted || {}), [authCategory]: true };
               } catch (e) { /* 持久化失败时降级为本次会话内允许 */ }
             }
@@ -2798,11 +2820,11 @@ ${affectionDesc}
             const cmdTools = ['runTerminalCommand', 'awaitTerminalCommand', 'runShellScriptCode', 'bash', 'terminalSendInput', 'terminalAnswerPrompt'];
             if (cmdTools.includes(permissionToolName)) {
               const dcfg = this.settings?.decision || {};
-              if (dcfg.enabled && dcfg.usages?.commandGuard !== false && typeof window.api.decisionNoul === 'function') {
+              if (dcfg.enabled && dcfg.usages?.commandGuard !== false && typeof this.host.api.decisionNoul === 'function') {
                 const cmdText = String(permissionArgs.command || permissionArgs.script || permissionArgs.text || permissionArgs.answer || '').slice(0, 800);
                 if (cmdText) {
                   try {
-                    const r = await window.api.decisionNoul({
+                    const r = await this.host.api.decisionNoul({
                       state: `命令：${cmdText}\n工作区：${this.workspacePath || '(未设置)'}`,
                       instructions: '该命令可能造成不可逆破坏、数据丢失或系统级危险操作，且与当前任务无关或明显有害。',
                       threshold: dcfg.guardThreshold != null ? dcfg.guardThreshold : 0.85,
@@ -2826,7 +2848,7 @@ ${affectionDesc}
                 if (m.role === 'assistant') return `**AI**: ${m.content || ''}`;
                 return '';
               }).filter(Boolean).join('\n\n');
-              const emailResult = await window.api.emailRequestApproval(permissionToolName, permissionArgs, chatMd);
+              const emailResult = await this.host.api.emailRequestApproval(permissionToolName, permissionArgs, chatMd);
               approved = emailResult.ok !== false && emailResult.approved;
             } else if (this.settings?.email?.enabled && emailMode !== 'send-receive') {
               // Email enabled but cannot do full approval flow → auto-reject
@@ -2868,7 +2890,7 @@ ${affectionDesc}
               let descText = '';
               if (hasEV) {
                 try {
-                  const desc = await window.api.visionDescribeImage({ dataUrl: toolResult.imageUrl });
+                  const desc = await this.host.api.visionDescribeImage({ dataUrl: toolResult.imageUrl });
                   if (desc.ok) {
                     if (desc.usage) this._accumulateUsage(desc.usage, ev.model);
                     descText = desc.description;
@@ -2953,12 +2975,12 @@ ${affectionDesc}
       this.approvalResolve = null;
       this.pendingApproval = null;
     }
-    const session = window.__sessionManager?.getByAgent(this);
+    const session = this.host.gui.sessions?.getByAgent(this);
     if (session) {
       session.pendingApproval = null;
-      window.__sessionManager.setStatus(session, this.running ? window.SessionStatus.RUNNING
-        : (session.status === window.SessionStatus.STOPPED ? window.SessionStatus.STOPPED : window.SessionStatus.IDLE));
-      window.__sessionManager.setAttention(session, null);
+      this.host.gui.sessions.setStatus(session, this.running ? this.host.gui.sessionStatus.RUNNING
+        : (session.status === this.host.gui.sessionStatus.STOPPED ? this.host.gui.sessionStatus.STOPPED : this.host.gui.sessionStatus.IDLE));
+      this.host.gui.sessions.setAttention(session, null);
     }
   }
 
@@ -2980,12 +3002,12 @@ ${affectionDesc}
       this.toolAuthResolve = null;
       this.pendingToolAuth = null;
     }
-    const session = window.__sessionManager?.getByAgent(this);
+    const session = this.host.gui.sessions?.getByAgent(this);
     if (session) {
       session.pendingToolAuth = null;
-      window.__sessionManager.setStatus(session, this.running ? window.SessionStatus.RUNNING
-        : (session.status === window.SessionStatus.STOPPED ? window.SessionStatus.STOPPED : window.SessionStatus.IDLE));
-      window.__sessionManager.setAttention(session, null);
+      this.host.gui.sessions.setStatus(session, this.running ? this.host.gui.sessionStatus.RUNNING
+        : (session.status === this.host.gui.sessionStatus.STOPPED ? this.host.gui.sessionStatus.STOPPED : this.host.gui.sessionStatus.IDLE));
+      this.host.gui.sessions.setAttention(session, null);
     }
   }
 
@@ -3114,9 +3136,9 @@ ${affectionDesc}
         }
       }
       // DeepSeek 插件导入工具：ds__<pluginId>__<tool> 路由到插件宿主执行
-      if (typeof name === 'string' && name.startsWith('ds__') && typeof window.api.dsPluginToolCall === 'function') {
+      if (typeof name === 'string' && name.startsWith('ds__') && typeof this.host.api.dsPluginToolCall === 'function') {
         const [pluginId, toolName] = name.slice(4).split('__');
-        const result = await window.api.dsPluginToolCall(pluginId, toolName, args || {}, this._scriptCwd(), this._sandboxMode(), this.sessionKey || null);
+        const result = await this.host.api.dsPluginToolCall(pluginId, toolName, args || {}, this._scriptCwd(), this._sandboxMode(), this.sessionKey || null);
         if (result && typeof result === 'object' && result.ok !== undefined) return result;
         return { ok: true, result };
       }
@@ -3136,21 +3158,21 @@ ${affectionDesc}
       if (batchResult !== null && batchResult !== undefined) return batchResult;
       switch (name) {
         case 'getTarot': {
-          const result = await window.api.drawTarot(args?.spread ? { spread: args.spread } : undefined);
+          const result = await this.host.api.drawTarot(args?.spread ? { spread: args.spread } : undefined);
           return { ok: true, result };
         }
         case 'todoList': return this.handleTodo(args);
         case 'codeIDE': {
           if (this.mode !== 'code') return { ok: false, error: 'This tool requires Code mode.' };
           if (args.action === 'command' && !this.settings.autoApproveSensitive && !await this.requestApproval('codeIDE', args)) return { ok: false, error: 'Extension command was declined.' };
-          return window.api.codeOSSLanguage(args, this.workspacePath);
+          return this.host.api.codeOSSLanguage(args, this.workspacePath);
         }
         case 'runSubAgent': return await this.runSubAgent(args);
         case 'generateImage': {
           if (!this.workspacePath) {
             return { ok: false, error: typeof i18nToolReturn === 'function' ? i18nToolReturn('no_workspace', '未设置工作区路径') : '未设置工作区路径' };
           }
-          return await window.api.generateImage(args.prompt, this.workspacePath);
+          return await this.host.api.generateImage(args.prompt, this.workspacePath);
         }
         case 'decisionModel': {
           const dcfg = this.settings?.decision || {};
@@ -3177,12 +3199,12 @@ ${affectionDesc}
           let r;
           if (type === 'choice') {
             if (!norm || !norm.map) return { ok: false, error: (norm && norm.error) || 'choice 缺少有效选项' };
-            r = await window.api.decisionChoice({ state, instructions, criteria: norm.map, threshold, key: 'q', usage: 'llmTool' });
+            r = await this.host.api.decisionChoice({ state, instructions, criteria: norm.map, threshold, key: 'q', usage: 'llmTool' });
           } else if (type === 'score') {
             if (!norm || !norm.list) return { ok: false, error: (norm && norm.error) || 'score 缺少有效档位' };
-            r = await window.api.decisionScore({ state, instructions, criteria: norm.list, threshold, key: 'q', usage: 'llmTool' });
+            r = await this.host.api.decisionScore({ state, instructions, criteria: norm.list, threshold, key: 'q', usage: 'llmTool' });
           } else {
-            r = await window.api.decisionNoul({ state, instructions, threshold, key: 'q', usage: 'llmTool' });
+            r = await this.host.api.decisionNoul({ state, instructions, threshold, key: 'q', usage: 'llmTool' });
           }
           if (!r) return { ok: false, error: '决策模型无响应' };
           if (r.error && (r.value === null || r.value === undefined)) return { ok: false, error: r.error };
@@ -3210,51 +3232,51 @@ ${affectionDesc}
           return { ok: true, result };
         }
         case 'calculator': {
-          return await window.api.calcEvaluate(args.expression);
+          return await this.host.api.calcEvaluate(args.expression);
         }
         case 'factorInteger': {
-          return await window.api.calcFactorInteger(args.value);
+          return await this.host.api.calcFactorInteger(args.value);
         }
         case 'gcdLcm': {
-          return await window.api.calcGcdLcm(args.values);
+          return await this.host.api.calcGcdLcm(args.values);
         }
         case 'baseConvert': {
-          return await window.api.calcBaseConvert(args.value, args.fromBase, args.toBase);
+          return await this.host.api.calcBaseConvert(args.value, args.fromBase, args.toBase);
         }
         case 'factorial': {
-          return await window.api.calcFactorial(args.n);
+          return await this.host.api.calcFactorial(args.n);
         }
         case 'complexMath': {
-          return await window.api.calcComplexMath(args.operation, args.a, args.b, args.exponent);
+          return await this.host.api.calcComplexMath(args.operation, args.a, args.b, args.exponent);
         }
         case 'matrixMath': {
-          return await window.api.calcMatrixMath(args.operation, args.A, args.B);
+          return await this.host.api.calcMatrixMath(args.operation, args.A, args.B);
         }
         case 'vectorMath': {
-          return await window.api.calcVectorMath(args.operation, args.a, args.b, args.c);
+          return await this.host.api.calcVectorMath(args.operation, args.a, args.b, args.c);
         }
         case 'solveInequality': {
-          return await window.api.calcSolveInequality(args.coefficients, args.relation, args.variable);
+          return await this.host.api.calcSolveInequality(args.coefficients, args.relation, args.variable);
         }
         case 'solveLinearSystem': {
-          return await window.api.calcSolveLinearSystem(args.A, args.b);
+          return await this.host.api.calcSolveLinearSystem(args.A, args.b);
         }
         case 'solvePolynomial': {
-          return await window.api.calcSolvePolynomial(args.coefficients);
+          return await this.host.api.calcSolvePolynomial(args.coefficients);
         }
         case 'distributionCalc': {
-          return await window.api.calcDistribution(args.distribution, args.operation, args.params, args.x);
+          return await this.host.api.calcDistribution(args.distribution, args.operation, args.params, args.x);
         }
         case 'combinatorics': {
-          return await window.api.calcCombinatorics(args.operation, args.n, args.r, args.repetition);
+          return await this.host.api.calcCombinatorics(args.operation, args.n, args.r, args.repetition);
         }
         case 'fractionBaseConvert': {
-          return await window.api.calcFractionBaseConvert(args.value, args.fromBase, args.toBase, args.precision);
+          return await this.host.api.calcFractionBaseConvert(args.value, args.fromBase, args.toBase, args.precision);
         }
-        case 'webSearch': return await window.api.webSearch(args.query, this.workspacePath);
-        case 'webFetch': return await window.api.webFetch(args.url);
+        case 'webSearch': return await this.host.api.webSearch(args.query, this.workspacePath);
+        case 'webFetch': return await this.host.api.webFetch(args.url);
         case 'offscreenRenderOCR': {
-          return await window.api.webOffscreenSnapshotOCR({
+          return await this.host.api.webOffscreenSnapshotOCR({
             url: args.url,
             waitMs: args.waitMs,
             width: args.width,
@@ -3263,7 +3285,7 @@ ${affectionDesc}
           });
         }
         case 'offscreenRenderContent': {
-          return await window.api.webOffscreenRenderedContent({
+          return await this.host.api.webOffscreenRenderedContent({
             url: args.url,
             waitMs: args.waitMs,
             width: args.width,
@@ -3273,39 +3295,39 @@ ${affectionDesc}
             workspacePath: this.workspacePath
           });
         }
-        case 'knowledgeBaseSearch': return normalizeOk(await window.api.knowledgeSearch(args.query), 'items');
-        case 'knowledgeBaseAdd': return normalizeOk(await window.api.knowledgeAdd({ title: args.title, content: args.content }), 'item');
-        case 'knowledgeBaseDelete': return normalizeOk(await window.api.knowledgeDelete(args.id));
-        case 'knowledgeBaseUpdate': return normalizeOk(await window.api.knowledgeUpdate(args.id, { title: args.title, content: args.content }), 'item');
-        case 'memorySearch': return normalizeOk(await window.api.memorySearch(args.query), 'items');
-        case 'memoryAdd': return normalizeOk(await window.api.memoryAdd({ content: args.content, tags: args.tags || [] }), 'item');
-        case 'memoryDelete': return normalizeOk(await window.api.memoryDelete(args.id));
-        case 'memoryUpdate': return normalizeOk(await window.api.memoryUpdate(args.id, { content: args.content, tags: args.tags }), 'item');
-        case 'automationList': return await window.api.automationList();
-        case 'automationGetGuide': return normalizeOk(await window.api.automationGetGuide(args.topic || 'all'), 'guide');
-        case 'automationCreate': return await window.api.automationSave({
+        case 'knowledgeBaseSearch': return normalizeOk(await this.host.api.knowledgeSearch(args.query), 'items');
+        case 'knowledgeBaseAdd': return normalizeOk(await this.host.api.knowledgeAdd({ title: args.title, content: args.content }), 'item');
+        case 'knowledgeBaseDelete': return normalizeOk(await this.host.api.knowledgeDelete(args.id));
+        case 'knowledgeBaseUpdate': return normalizeOk(await this.host.api.knowledgeUpdate(args.id, { title: args.title, content: args.content }), 'item');
+        case 'memorySearch': return normalizeOk(await this.host.api.memorySearch(args.query), 'items');
+        case 'memoryAdd': return normalizeOk(await this.host.api.memoryAdd({ content: args.content, tags: args.tags || [] }), 'item');
+        case 'memoryDelete': return normalizeOk(await this.host.api.memoryDelete(args.id));
+        case 'memoryUpdate': return normalizeOk(await this.host.api.memoryUpdate(args.id, { content: args.content, tags: args.tags }), 'item');
+        case 'automationList': return await this.host.api.automationList();
+        case 'automationGetGuide': return normalizeOk(await this.host.api.automationGetGuide(args.topic || 'all'), 'guide');
+        case 'automationCreate': return await this.host.api.automationSave({
           id: args.id || undefined,
           name: args.name,
           enabled: args.enabled !== false,
           trigger: args.trigger || { type: 'schedule', config: {} },
           dsl: args.dsl || ''
         });
-        case 'automationToggle': return await window.api.automationSetEnabled(args.id, !!args.enabled);
-        case 'automationRun': return await window.api.automationRun(args.id, args.params || {});
+        case 'automationToggle': return await this.host.api.automationSetEnabled(args.id, !!args.enabled);
+        case 'automationRun': return await this.host.api.automationRun(args.id, args.params || {});
         case 'automationTest': {
           let task;
           if (args.id) {
-            const listRes = await window.api.automationList();
+            const listRes = await this.host.api.automationList();
             task = (listRes && listRes.tasks || []).find(t => t.id === args.id);
             if (!task) return { ok: false, error: '任务不存在' };
             if (typeof args.dsl === 'string') task = { ...task, dsl: args.dsl };
           } else {
             task = { name: 'test', enabled: false, trigger: { type: 'schedule', config: {} }, dsl: args.dsl || '' };
           }
-          return await window.api.automationTest(task, args.params || {});
+          return await this.host.api.automationTest(task, args.params || {});
         }
-        case 'automationDelete': return await window.api.automationDelete(args.id);
-        case 'localSearch': return await window.api.localSearch(this._resolveWorkspacePath(args.directory), args.pattern, args.options || {});
+        case 'automationDelete': return await this.host.api.automationDelete(args.id);
+        case 'localSearch': return await this.host.api.localSearch(this._resolveWorkspacePath(args.directory), args.pattern, args.options || {});
         case 'searchInFiles': {
           // 路径数组归一化：支持单字符串或数组
           let paths = args.paths;
@@ -3330,7 +3352,7 @@ ${affectionDesc}
             contextLines: args.contextLines ?? opts.contextLines,
             multiline: args.multiline ?? opts.multiline
           };
-          const res = await window.api.searchInFiles(paths, args.pattern, mergedOpts);
+          const res = await this.host.api.searchInFiles(paths, args.pattern, mergedOpts);
           if (res && res.ok) {
             // 提供格式化摘要，便于 LLM 快速理解结果规模
             res.summary = `共找到 ${res.totalMatches} 处匹配，分布在 ${res.filesWithMatches} 个文件中（扫描了 ${res.filesScanned} 个文件）${res.truncated ? '，结果已截断' : ''}`;
@@ -3343,19 +3365,19 @@ ${affectionDesc}
           const ext = pathStr.split('.').pop().toLowerCase();
           const officeFormats = ['docx', 'xlsx', 'pptx', 'doc', 'xls', 'ppt', 'pdf', 'odt', 'ods', 'odp'];
           if (officeFormats.includes(ext)) {
-            const imported = await window.api.knowledgeImportFile(pathStr, this.workspacePath);
+            const imported = await this.host.api.knowledgeImportFile(pathStr, this.workspacePath);
             if (!imported.ok) return imported;
             let convertedPath = null;
             if (this.workspacePath && imported.content) {
               const fileName = pathStr.split(/[\\/]/).pop().replace(/\.\w+$/, '.txt');
               convertedPath = `${this.workspacePath}\\${fileName}`;
-              await window.api.writeFile(convertedPath, imported.content);
+              await this.host.api.writeFile(convertedPath, imported.content);
             }
             // 为 Office 转换后的文本也添加行号
             const contentWithLines = this._addLineNumbers(imported.content || '');
             return { ok: true, content: contentWithLines, images: imported.images, convertedPath };
           }
-          const result = await window.api.readFile(pathStr, args.encoding || '');
+          const result = await this.host.api.readFile(pathStr, args.encoding || '');
           if (result.ok && result.content) {
             result.content = this._addLineNumbers(result.content);
           }
@@ -3366,7 +3388,7 @@ ${affectionDesc}
           const fp = this._resolveWorkspacePath(args.path || '');
           // 全量覆写模式（向后兼容）
           if (args.content !== undefined && args.old_string === undefined) {
-            const r = await window.api.writeFile(fp, args.content, {
+            const r = await this.host.api.writeFile(fp, args.content, {
               encoding: args.encoding || '',
               eol: args.eol || ''
             });
@@ -3386,7 +3408,7 @@ ${affectionDesc}
           // 统一路径解析：相对路径基于工作区，绝对路径原样使用
           const fp = this._resolveWorkspacePath(args.path || '');
           // 读取当前文件内容
-          const readRes = await window.api.readFile(fp, args.encoding || '');
+          const readRes = await this.host.api.readFile(fp, args.encoding || '');
           if (!readRes.ok) return readRes;
           let content = readRes.content;
           const appliedEdits = [];
@@ -3412,7 +3434,7 @@ ${affectionDesc}
             }
             appliedEdits.push({ index: i + 1, replacements: edit.replace_all ? count : 1 });
           }
-          const writeRes = await window.api.writeFile(fp, content, {
+          const writeRes = await this.host.api.writeFile(fp, content, {
             encoding: args.encoding || '',
             eol: args.eol || ''
           });
@@ -3424,7 +3446,7 @@ ${affectionDesc}
           const relPath = args.path || '';
           const fullPath = this._resolveWorkspacePath(relPath);
           // 读取文件验证存在性
-          const readRes = await window.api.readFile(fullPath);
+          const readRes = await this.host.api.readFile(fullPath);
           if (!readRes.ok) {
             return { ok: false, error: typeof i18nToolReturn === 'function' ? i18nToolReturn('file_not_exists', `文件不存在: ${relPath}`, { path: relPath }) : `文件不存在: ${relPath}` };
           }
@@ -3455,12 +3477,12 @@ ${affectionDesc}
           if (!this.isVisionModel()) {
             // 非视觉模型 + 外置视觉已配置 → 走 VLM 描述
             if (hasExternalVision) {
-              const readRes = await window.api.readFileBase64(imgFullPath);
+              const readRes = await this.host.api.readFileBase64(imgFullPath);
               if (!readRes || !readRes.ok || !readRes.data) {
                 return { ok: false, error: readRes?.error || '读取图片文件失败' };
               }
               const vlmPrompt = args.prompt || args.description || '详细描述这张图片的全部内容（界面元素、文字、图表、物体、布局）。';
-              const desc = await window.api.visionDescribeImage({ dataUrl: readRes.data, prompt: vlmPrompt });
+              const desc = await this.host.api.visionDescribeImage({ dataUrl: readRes.data, prompt: vlmPrompt });
               if (desc.ok) {
                 if (desc.usage) this._accumulateUsage(desc.usage, ev.model);
                 return { ok: true, text: `图片 ${imgRelPath} 的分析结果：\n${desc.description}` };
@@ -3470,7 +3492,7 @@ ${affectionDesc}
             return { ok: false, error: '当前模型不支持多模态视觉输入且未配置外置视觉。可在「设置 → LLM 配置」中开启「多模态视觉输入」或配置外置视觉 API，或使用 OCR 工具（extractTextFromImage）。' };
           }
 
-          const readRes2 = await window.api.readFileBase64(imgFullPath);
+          const readRes2 = await this.host.api.readFileBase64(imgFullPath);
           if (!readRes2 || !readRes2.ok || !readRes2.data) {
             return { ok: false, error: readRes2?.error || '读取图片文件失败（文件不存在或不是图片）' };
           }
@@ -3479,7 +3501,7 @@ ${affectionDesc}
           return { ok: true, _multimodal: true, imageUrl: readRes2.data, text: `已读取图片文件 ${imgRelPath}${imgDesc}（图片已注入上下文，可直接查看）` };
         }
         case 'createFile': {
-          const createRes = await window.api.createFile(this._resolveWorkspacePath(args.path), args.content || '', {
+          const createRes = await this.host.api.createFile(this._resolveWorkspacePath(args.path), args.content || '', {
             encoding: args.encoding || '',
             eol: args.eol || ''
           });
@@ -3490,7 +3512,7 @@ ${affectionDesc}
         }
         case 'getFileEncodingInfo': {
           const fp = this._resolveWorkspacePath(args.path || '');
-          const info = await window.api.getFileEncodingInfo(fp);
+          const info = await this.host.api.getFileEncodingInfo(fp);
           if (info && info.ok) {
             info.message = `编码 ${info.encoding}，换行模式 ${(info.eol || 'lf').toUpperCase()}，大小 ${info.size} 字节`;
           }
@@ -3498,7 +3520,7 @@ ${affectionDesc}
         }
         case 'convertFileEncoding': {
           const fp = this._resolveWorkspacePath(args.path || '');
-          const conv = await window.api.convertFileEncoding(fp, {
+          const conv = await this.host.api.convertFileEncoding(fp, {
             encoding: args.encoding || '',
             eol: args.eol || ''
           });
@@ -3507,20 +3529,20 @@ ${affectionDesc}
           }
           return conv;
         }
-        case 'deleteFile': return await window.api.deleteFile(this._resolveWorkspacePath(args.path));
-        case 'moveFile': return await window.api.moveFile(this._resolveWorkspacePath(args.source), this._resolveWorkspacePath(args.destination));
-        case 'copyFile': return await window.api.copyFile(this._resolveWorkspacePath(args.source), this._resolveWorkspacePath(args.destination));
-        case 'listDirectory': return await window.api.listDirectory(this._resolveWorkspacePath(args.path));
-        case 'makeDirectory': return await window.api.makeDirectory(this._resolveWorkspacePath(args.path));
-        case 'deleteDirectory': return await window.api.deleteDirectory(this._resolveWorkspacePath(args.path));
-        case 'runJavaScriptCode': return await window.api.runJS(args.code, this._scriptCwd(), this._sandboxMode());
+        case 'deleteFile': return await this.host.api.deleteFile(this._resolveWorkspacePath(args.path));
+        case 'moveFile': return await this.host.api.moveFile(this._resolveWorkspacePath(args.source), this._resolveWorkspacePath(args.destination));
+        case 'copyFile': return await this.host.api.copyFile(this._resolveWorkspacePath(args.source), this._resolveWorkspacePath(args.destination));
+        case 'listDirectory': return await this.host.api.listDirectory(this._resolveWorkspacePath(args.path));
+        case 'makeDirectory': return await this.host.api.makeDirectory(this._resolveWorkspacePath(args.path));
+        case 'deleteDirectory': return await this.host.api.deleteDirectory(this._resolveWorkspacePath(args.path));
+        case 'runJavaScriptCode': return await this.host.api.runJS(args.code, this._scriptCwd(), this._sandboxMode());
         case 'runNodeJavaScriptCode': {
           return await this._execWithSandboxEscalation('runNodeJavaScriptCode', (mode) =>
-            window.api.runNodeJS(args.code, this._scriptCwd(), mode));
+            this.host.api.runNodeJS(args.code, this._scriptCwd(), mode));
         }
         case 'runShellScriptCode': {
           return await this._execWithSandboxEscalation('runShellScriptCode', (mode) =>
-            window.api.runShell(args.script, this._scriptCwd(), mode, {
+            this.host.api.runShell(args.script, this._scriptCwd(), mode, {
               jobId: args.jobId, action: args.action, yieldMs: args.yieldMs, sessionKey: this.sessionKey
             }));
         }
@@ -3528,57 +3550,57 @@ ${affectionDesc}
           // 传入工作目录：Chat 模式用 workspacePath，Code 模式用 codeWorkspacePath
           const cwd = this.mode === 'code' ? (this.codeWorkspacePath || this.workspacePath) : this.workspacePath;
           const result = await this._execWithSandboxEscalation('makeTerminal', (mode) =>
-            window.api.makeTerminal(cwd, this.sessionKey, mode), { terminalOnly: true });
+            this.host.api.makeTerminal(cwd, this.sessionKey, mode), { terminalOnly: true });
           if (result.ok) this.terminals.set(result.terminalId, true);
           return result;
         }
-        case 'runTerminalCommand': return await window.api.runTerminalCommand(args.terminalId, args.command);
-        case 'awaitTerminalCommand': return await window.api.awaitTerminalCommand(args.terminalId, args.command, args.timeoutMs);
+        case 'runTerminalCommand': return await this.host.api.runTerminalCommand(args.terminalId, args.command);
+        case 'awaitTerminalCommand': return await this.host.api.awaitTerminalCommand(args.terminalId, args.command, args.timeoutMs);
         case 'killTerminal': {
           this.terminals.delete(args.terminalId);
-          return await window.api.killTerminal(args.terminalId);
+          return await this.host.api.killTerminal(args.terminalId);
         }
-        case 'terminalReadOutput': return await window.api.readTerminalOutput(args.terminalId, args.lastLines || 0);
-        case 'terminalSendInput': return await window.api.sendTerminalText(args.terminalId, args.text);
-        case 'terminalPressKey': return await window.api.pressTerminalKey(args.terminalId, args.key);
+        case 'terminalReadOutput': return await this.host.api.readTerminalOutput(args.terminalId, args.lastLines || 0);
+        case 'terminalSendInput': return await this.host.api.sendTerminalText(args.terminalId, args.text);
+        case 'terminalPressKey': return await this.host.api.pressTerminalKey(args.terminalId, args.key);
         case 'terminalAnswerPrompt': {
           // 回答交互式提问：先发送答案文本，再发送回车
-          const sendRes = await window.api.sendTerminalText(args.terminalId, args.answer);
+          const sendRes = await this.host.api.sendTerminalText(args.terminalId, args.answer);
           if (!sendRes.ok) return sendRes;
-          const enterRes = await window.api.pressTerminalKey(args.terminalId, 'Enter');
+          const enterRes = await this.host.api.pressTerminalKey(args.terminalId, 'Enter');
           if (!enterRes.ok) return enterRes;
           // 短暂等待程序处理输入后返回当前输出
           await new Promise(r => setTimeout(r, 500));
-          return await window.api.readTerminalOutput(args.terminalId, 20);
+          return await this.host.api.readTerminalOutput(args.terminalId, 20);
         }
-        case 'terminalListSessions': return await window.api.listTerminals();
+        case 'terminalListSessions': return await this.host.api.listTerminals();
         case 'readClipboard': {
-          const result = await window.api.readClipboard();
+          const result = await this.host.api.readClipboard();
           return result.ok ? result : { ok: true, content: result };
         }
         case 'writeClipboard': {
-          const result = await window.api.writeClipboard(args.text);
+          const result = await this.host.api.writeClipboard(args.text);
           return result.ok !== undefined ? result : { ok: true };
         }
-        case 'takeScreenshot': return await window.api.takeScreenshot(this.workspacePath);
+        case 'takeScreenshot': return await this.host.api.takeScreenshot(this.workspacePath);
         case 'extractTextFromImage': {
-          const ocrResult = await window.api.ocrRecognize(this._resolveWorkspacePath(args.imagePath || args.path));
+          const ocrResult = await this.host.api.ocrRecognize(this._resolveWorkspacePath(args.imagePath || args.path));
           return ocrResult;
         }
         case 'scanQRCode': {
-          return await window.api.qrScan(this._resolveWorkspacePath(args.imagePath || args.path));
+          return await this.host.api.qrScan(this._resolveWorkspacePath(args.imagePath || args.path));
         }
         case 'generateQRCode': {
-          return await window.api.qrGenerate(args.text, this.workspacePath, args.filename);
+          return await this.host.api.qrGenerate(args.text, this.workspacePath, args.filename);
         }
-        case 'getSystemInfo': return await window.api.getSystemInfo();
-        case 'getNetworkStatus': return await window.api.getNetworkStatus();
+        case 'getSystemInfo': return await this.host.api.getSystemInfo();
+        case 'getNetworkStatus': return await this.host.api.getNetworkStatus();
         case 'openBrowser': {
-          const result = await window.api.openBrowser(args.url);
+          const result = await this.host.api.openBrowser(args.url);
           return result.ok !== undefined ? result : { ok: true };
         }
         case 'openFileExplorer': {
-          const result = await window.api.openFileExplorer(this._resolveWorkspacePath(args.path));
+          const result = await this.host.api.openFileExplorer(this._resolveWorkspacePath(args.path));
           return result.ok !== undefined ? result : { ok: true };
         }
         case 'eslintLint': {
@@ -3588,13 +3610,13 @@ ${affectionDesc}
           const opts = {};
           if (Array.isArray(args.files) && args.files.length > 0) opts.files = args.files;
           if (typeof args.maxFiles === 'number' && args.maxFiles > 0) opts.maxFiles = args.maxFiles;
-          return await window.api.eslintLint(ws, opts);
+          return await this.host.api.eslintLint(ws, opts);
         }
         case 'eslintLintFile': {
           if (!args.path) return { ok: false, error: '参数 path 必填' };
           // 统一路径解析：Code 模式自动用 codeWorkspacePath
           const fp = this._resolveWorkspacePath(args.path);
-          return await window.api.eslintLintFile(fp);
+          return await this.host.api.eslintLintFile(fp);
         }
         // ---- FFmpeg 媒体工具集 ----
         case 'ffmpegInfo': case 'ffmpegTranscode': case 'ffmpegCompress': case 'ffmpegTrim':
@@ -3611,7 +3633,7 @@ ${affectionDesc}
             ffmpegSpeed: 'speed', ffmpegWatermark: 'watermark', ffmpegAddSubtitle: 'addSubtitle',
             ffmpegSlideshow: 'slideshow', ffmpegAudioMerge: 'audioMerge', ffmpegRunCommand: 'runCommand'
           };
-          return await window.api.ffmpegInvoke(OP_MAP[name], this._resolveFfmpegArgs(args), this._scriptCwd(), this._sandboxMode());
+          return await this.host.api.ffmpegInvoke(OP_MAP[name], this._resolveFfmpegArgs(args), this._scriptCwd(), this._sandboxMode());
         }
         case 'manageContext': return this.contextManager.manage(args.action, args);
         case 'autoSummarizeContext': {
@@ -3642,7 +3664,7 @@ ${affectionDesc}
           if (args.metadata !== undefined) payload.metadata = args.metadata && typeof args.metadata === 'object' ? args.metadata : {};
           if (args.runtime !== undefined) payload.runtime = args.runtime;
           if (Array.isArray(args.scripts)) payload.scripts = args.scripts;
-          const res = await window.api.createSkill(payload);
+          const res = await this.host.api.createSkill(payload);
           await this.refreshSkillsCatalog();
           this.contextManager.setSystemPrompt(this.getSystemPrompt());
           return normalizeOk(res, 'skill');
@@ -3659,7 +3681,7 @@ ${affectionDesc}
           if (args.metadata !== undefined) payload.metadata = args.metadata && typeof args.metadata === 'object' ? args.metadata : {};
           if (args.runtime !== undefined) payload.runtime = args.runtime;
           if (Array.isArray(args.scripts)) payload.scripts = args.scripts;
-          const res = await window.api.updateSkill(args.id, payload);
+          const res = await this.host.api.updateSkill(args.id, payload);
           await this.refreshSkillsCatalog();
           this.contextManager.setSystemPrompt(this.getSystemPrompt());
           return normalizeOk(res, 'skill');
@@ -3681,7 +3703,7 @@ ${affectionDesc}
           const scriptPath = String(scriptItem?.path || '').trim();
           let code = String(scriptItem?.code || '');
           if (!code && scriptPath) {
-            const readRes = await window.api.readFile(scriptPath);
+            const readRes = await this.host.api.readFile(scriptPath);
             if (!readRes?.ok) return readRes;
             code = readRes.content || '';
           }
@@ -3690,22 +3712,22 @@ ${affectionDesc}
           const declaredRuntime = String(scriptItem?.runtime || '').toLowerCase();
           let runRes;
           if (ext === 'py' || ext === 'pyw' || declaredRuntime === 'python') {
-            if (typeof window.api.runPython !== 'function') {
+            if (typeof this.host.api.runPython !== 'function') {
               return { ok: false, error: '当前版本不支持 Python 脚本，请升级应用' };
             }
             runRes = await this._execWithSandboxEscalation('runPython', (mode) =>
-              window.api.runPython(code, this._scriptCwd(), mode));
+              this.host.api.runPython(code, this._scriptCwd(), mode));
           } else if (ext === 'sh' || ext === 'bash' || ext === 'zsh' || ext === 'ps1' || ext === 'bat' || ext === 'cmd' || declaredRuntime === 'shell') {
             runRes = await this._execWithSandboxEscalation('runShellScriptCode', (mode) =>
-              window.api.runShell(code, this._scriptCwd(), mode, { sessionKey: this.sessionKey }));
+              this.host.api.runShell(code, this._scriptCwd(), mode, { sessionKey: this.sessionKey }));
           } else if (ext === 'js' || ext === 'mjs' || ext === 'cjs' || declaredRuntime === 'javascript' || declaredRuntime === 'node') {
             const needsNode = declaredRuntime === 'node'
               || ext === 'mjs'
               || ext === 'cjs'
               || (!declaredRuntime && /\brequire\s*\(|\bprocess\.\b|\bfs\.\b|\bpath\.\b|\bBuffer\b|__dirname|__filename|\bimport\s+/.test(code));
             runRes = needsNode
-              ? await this._execWithSandboxEscalation('runNodeJavaScriptCode', (mode) => window.api.runNodeJS(code, this._scriptCwd(), mode))
-              : await window.api.runJS(code, this._scriptCwd(), this._sandboxMode());
+              ? await this._execWithSandboxEscalation('runNodeJavaScriptCode', (mode) => this.host.api.runNodeJS(code, this._scriptCwd(), mode))
+              : await this.host.api.runJS(code, this._scriptCwd(), this._sandboxMode());
           } else {
             return { ok: false, error: '仅支持运行 .js、.py、.sh、.ps1、.bat 等 Skill 脚本' };
           }
@@ -3736,7 +3758,7 @@ ${affectionDesc}
           return { ok: true, message: '无激活技能' };
         }
         case 'initGeogebra': {
-          return await window.api.geogebraInit({
+          return await this.host.api.geogebraInit({
             appName: args.appName || 'classic',
             perspective: args.perspective,
             enableCAS: args.enableCAS,
@@ -3744,97 +3766,97 @@ ${affectionDesc}
           });
         }
         case 'runGeogebraCommand': {
-          return await window.api.geogebraEvalCommand(args.command);
+          return await this.host.api.geogebraEvalCommand(args.command);
         }
         case 'geogebraEvalCAS': {
-          return await window.api.geogebraEvalCAS(args.command);
+          return await this.host.api.geogebraEvalCAS(args.command);
         }
         case 'geogebraGetObject': {
-          return await window.api.geogebraGetObject(args.name);
+          return await this.host.api.geogebraGetObject(args.name);
         }
         case 'geogebraGetXML': {
-          return await window.api.geogebraGetXML();
+          return await this.host.api.geogebraGetXML();
         }
         case 'geogebraSetXML': {
-          return await window.api.geogebraSetXML(args.xml);
+          return await this.host.api.geogebraSetXML(args.xml);
         }
         case 'geogebraSetStyle': {
-          return await window.api.geogebraSetStyle(args.name, args.style);
+          return await this.host.api.geogebraSetStyle(args.name, args.style);
         }
         case 'geogebraGetError': {
-          return await window.api.geogebraGetError();
+          return await this.host.api.geogebraGetError();
         }
         case 'geogebraScreenshot': {
-          return await window.api.geogebraGetPNGBase64();
+          return await this.host.api.geogebraGetPNGBase64();
         }
         case 'geogebraSave': {
-          return await window.api.geogebraSave(this.workspacePath, args.fileName);
+          return await this.host.api.geogebraSave(this.workspacePath, args.fileName);
         }
         case 'geogebraLoad': {
-          return await window.api.geogebraLoad(args.filePath);
+          return await this.host.api.geogebraLoad(args.filePath);
         }
         case 'geogebraGuide': {
-          return await window.api.geogebraGuide(args.category);
+          return await this.host.api.geogebraGuide(args.category);
         }
         case 'getFunctionsFromGeogebra':
         case 'getCurrentGraphDataFromGeogebra': {
-          return await window.api.geogebraGetAllObjects();
+          return await this.host.api.geogebraGetAllObjects();
         }
         case 'deleteFunctionFromGeogebra': {
-          return await window.api.geogebraDeleteObject(args.label || args.name);
+          return await this.host.api.geogebraDeleteObject(args.label || args.name);
         }
         case 'getCurrentGraphFromGeogebra': {
-          return await window.api.geogebraExportPNG(this.workspacePath);
+          return await this.host.api.geogebraExportPNG(this.workspacePath);
         }
         case 'addFunctionToGeogebra': {
-          return await window.api.geogebraEvalCommand(args.expression);
+          return await this.host.api.geogebraEvalCommand(args.expression);
         }
         case 'updateFunctionInGeogebra': {
           // 优先按 name 重定义；若 AI 提供了 expression 直接使用（GGB 会按 label 重定义）
           const expr = args.expression || args.command;
           // 如果表达式形如 "f(x)=..." 且 name 为 "f"，直接 eval 即可
           if (expr) {
-            return await window.api.geogebraEvalCommand(expr);
+            return await this.host.api.geogebraEvalCommand(expr);
           }
           // 兜底：若只提供了 name，先读取旧值再重写（少见路径）
           return { ok: false, error: 'updateFunctionInGeogebra 需要 expression 参数' };
         }
         case 'initCanvas': {
-          return window.initCanvas ? window.initCanvas() : { ok: false, error: '画布功能未初始化' };
+          return this.host.gui.canvas.init();
         }
         case 'clearCanvas': {
-          return window.clearCanvas ? window.clearCanvas() : { ok: false, error: '画布功能未初始化' };
+          return this.host.gui.canvas.clear();
         }
         case 'addCanvasObject': {
-          return window.addCanvasObject ? window.addCanvasObject(args.type, args.id, args.attributes) : { ok: false, error: '画布功能未初始化' };
+          return this.host.gui.canvas.add(args.type, args.id, args.attributes);
         }
         case 'updateCanvasObject': {
-          return window.updateCanvasObject ? window.updateCanvasObject(args.id, args.attributes) : { ok: false, error: '画布功能未初始化' };
+          return this.host.gui.canvas.update(args.id, args.attributes);
         }
         case 'deleteCanvasObject': {
-          return window.deleteCanvasObject ? window.deleteCanvasObject(args.id) : { ok: false, error: '画布功能未初始化' };
+          return this.host.gui.canvas.remove(args.id);
         }
         case 'exportCanvasSVG': {
           if (!this.workspacePath) {
             return { ok: false, error: typeof i18nToolReturn === 'function' ? i18nToolReturn('no_workspace', '未设置工作区路径') : '未设置工作区路径' };
           }
-          return window.exportCanvasSVG ? window.exportCanvasSVG(args.filename || 'canvas.svg', this.workspacePath) : { ok: false, error: '画布功能未初始化' };
+          return this.host.gui.canvas.exportSVG(args.filename || 'canvas.svg', this.workspacePath);
         }
         // ---- CIPYP-CAD ----
         case 'initCipypCad': {
-          return await window.api.openCipypCad();
+          return await this.host.api.openCipypCad();
         }
         case 'runCipypCadCommand': {
-          return await window.api.cadRunCommand(args.command || '');
+          return await this.host.api.cadRunCommand(args.command || '');
         }
         case 'runCipypCadCommands': {
-          return await window.api.cadRunCommands(Array.isArray(args.commands) ? args.commands : []);
+          return await this.host.api.cadRunCommands(Array.isArray(args.commands) ? args.commands : []);
         }
         case 'getCipypCadState': {
-          return await window.api.cadGetState();
+          return await this.host.api.cadGetState();
         }
         case 'getCadObjectList': {
-          return await window.api.cadGetObjectList();
+          return await this.host.api.cadGetObjectList();
         }
         case 'saveCipypCadProject': {
           // renderer 中不可用 require('path')，用字符串拼接
@@ -3843,7 +3865,7 @@ ${affectionDesc}
           if (!targetPath) {
             return { ok: false, error: typeof i18nToolReturn === 'function' ? i18nToolReturn('no_workspace', '未设置工作区路径，且未提供 path 参数') : '未设置工作区路径，且未提供 path 参数' };
           }
-          const res = await window.api.cadSaveProject(targetPath);
+          const res = await this.host.api.cadSaveProject(targetPath);
           if (res.ok && this.onMessage) {
             this.onMessage('assistant', `📐 CIPYP-CAD 工程已保存到：\n\`${targetPath}\``);
           }
@@ -3853,7 +3875,7 @@ ${affectionDesc}
           if (!args.path) {
             return { ok: false, error: '需要 path 参数指定工程文件路径' };
           }
-          return await window.api.cadLoadProject(this._resolveWorkspacePath(args.path));
+          return await this.host.api.cadLoadProject(this._resolveWorkspacePath(args.path));
         }
         case 'exportCipypCadDxf': {
           const sep = (this.workspacePath && this.workspacePath.includes('\\')) ? '\\' : '/';
@@ -3861,7 +3883,7 @@ ${affectionDesc}
           if (!dxfPath) {
             return { ok: false, error: '未设置工作区路径，且未提供 path 参数' };
           }
-          const res = await window.api.cadExportDxf(dxfPath);
+          const res = await this.host.api.cadExportDxf(dxfPath);
           if (res.ok && this.onMessage) {
             this.onMessage('assistant', `📐 DXF (R2000 AC1015) 已导出到：\n\`${dxfPath}\`\n（可用 AutoCAD/FreeCAD/QCAD/LibreCAD 等打开）`);
           }
@@ -3869,7 +3891,7 @@ ${affectionDesc}
         }
         case 'importCipypCadDxf': {
           // 弹出系统文件选择对话框导入外部 DXF 文件
-          const res = await window.api.cadImportDxfDialog();
+          const res = await this.host.api.cadImportDxfDialog();
           if (!res) {
             return { ok: false, error: '导入 DXF 失败：未收到响应' };
           }
@@ -3881,7 +3903,7 @@ ${affectionDesc}
         }
         case 'getCipypCadHatchPatterns': {
           // 列出所有内置填充图案（供 LLM 在调用 hatch --pattern 前查询可用图案名）
-          return await window.api.cadGetHatchPatterns();
+          return await this.host.api.cadGetHatchPatterns();
         }
         case 'exportCipypCadImage': {
           const fmt = (args.format || 'png').toLowerCase();
@@ -3890,31 +3912,31 @@ ${affectionDesc}
           if (!imgPath) {
             return { ok: false, error: '未设置工作区路径，且未提供 path 参数' };
           }
-          const res = await window.api.cadExportImage(imgPath, fmt);
+          const res = await this.host.api.cadExportImage(imgPath, fmt);
           if (res.ok && this.onMessage) {
             this.onMessage('assistant', `📐 ${fmt.toUpperCase()} 已导出到：\n\`${imgPath}\``);
           }
           return res;
         }
         case 'closeCipypCad': {
-          return await window.api.cadAgentClose();
+          return await this.host.api.cadAgentClose();
         }
         // ---- CIBYP-PCB-EDA ----
         case 'initPcbEda': {
-          return await window.api.openPcbEda();
+          return await this.host.api.openPcbEda();
         }
         case 'closePcbEda': {
-          return await window.api.pcbAgentClose();
+          return await this.host.api.pcbAgentClose();
         }
         case 'runPcbEdaCommand': {
-          return await window.api.pcbRunCommand(args.command || '');
+          return await this.host.api.pcbRunCommand(args.command || '');
         }
         case 'runPcbEdaCommands': {
-          return await window.api.pcbRunCommands(Array.isArray(args.commands) ? args.commands : []);
+          return await this.host.api.pcbRunCommands(Array.isArray(args.commands) ? args.commands : []);
         }
         case 'pcbNewProject': {
           const cmds = ['new ' + (args.name || 'Untitled') + ' ' + (args.width || 100) + ' ' + (args.height || 80) + ' ' + (args.layers || 2)];
-          return await window.api.pcbRunCommands(cmds);
+          return await this.host.api.pcbRunCommands(cmds);
         }
         case 'pcbSetDesignRules': {
           const keys = ['minClearance', 'minTraceWidth', 'minViaDrill', 'minViaDiameter', 'minAnnularRing',
@@ -3922,18 +3944,18 @@ ${affectionDesc}
             'defaultTraceWidth', 'defaultViaDrill', 'defaultViaDiameter', 'zoneClearance', 'zoneThermalWidth'];
           const cmds = keys.filter(k => typeof args[k] === 'number').map(k => 'rules set ' + k + ' ' + args[k]);
           if (!cmds.length) return { ok: false, error: '未提供任何有效规则参数' };
-          return await window.api.pcbRunCommands(cmds);
+          return await this.host.api.pcbRunCommands(cmds);
         }
         case 'pcbSetStackup': {
           const cmds = [];
           if (args.copperLayers) cmds.push('stackup layers ' + args.copperLayers);
           if (args.boardThickness) cmds.push('stackup thickness ' + args.boardThickness);
           if (!cmds.length) return { ok: false, error: '未提供 stackup 参数' };
-          return await window.api.pcbRunCommands(cmds);
+          return await this.host.api.pcbRunCommands(cmds);
         }
         case 'pcbSetOutline': {
           if (!Array.isArray(args.points) || args.points.length < 3) return { ok: false, error: 'points 至少需要3个顶点 ("x,y")' };
-          return await window.api.pcbRunCommand('board outline ' + args.points.join(' '));
+          return await this.host.api.pcbRunCommand('board outline ' + args.points.join(' '));
         }
         case 'pcbSchAddSymbol': {
           let cmd = 'sch sym ' + args.lib + ' ' + (args.x || 0) + ' ' + (args.y || 0) + ' ' + (args.rot || 0);
@@ -3943,26 +3965,26 @@ ${affectionDesc}
           if (args.pins) cmd += ' --pins ' + args.pins;
           if (Array.isArray(args.left)) cmd += ' --left "' + args.left.join(',') + '"';
           if (Array.isArray(args.right)) cmd += ' --right "' + args.right.join(',') + '"';
-          return await window.api.pcbRunCommand(cmd);
+          return await this.host.api.pcbRunCommand(cmd);
         }
         case 'pcbSchAddWire': {
           if (!Array.isArray(args.points) || args.points.length < 2) return { ok: false, error: 'points 至少需要2个点' };
-          return await window.api.pcbRunCommand('sch wire ' + args.points.join(' '));
+          return await this.host.api.pcbRunCommand('sch wire ' + args.points.join(' '));
         }
         case 'pcbSchAddLabel': {
-          return await window.api.pcbRunCommand('sch label "' + (args.text || 'NET') + '" ' + (args.x || 0) + ',' + (args.y || 0));
+          return await this.host.api.pcbRunCommand('sch label "' + (args.text || 'NET') + '" ' + (args.x || 0) + ',' + (args.y || 0));
         }
         case 'pcbSchAddPower': {
-          return await window.api.pcbRunCommand('sch power ' + (args.ptype || 'GND') + ' ' + (args.x || 0) + ',' + (args.y || 0));
+          return await this.host.api.pcbRunCommand('sch power ' + (args.ptype || 'GND') + ' ' + (args.x || 0) + ',' + (args.y || 0));
         }
         case 'pcbSchAnnotate': {
-          return await window.api.pcbRunCommand('sch annotate');
+          return await this.host.api.pcbRunCommand('sch annotate');
         }
         case 'pcbSchSync': {
-          return await window.api.pcbRunCommand('sch sync');
+          return await this.host.api.pcbRunCommand('sch sync');
         }
         case 'pcbRunERC': {
-          return await window.api.pcbRunCommand('erc');
+          return await this.host.api.pcbRunCommand('erc');
         }
         case 'pcbAddComponent': {
           let cmd = 'comp add ' + args.footprint + ' ' + args.ref + ' ' + (args.x || 0) + ' ' + (args.y || 0) +
@@ -3970,41 +3992,41 @@ ${affectionDesc}
           if (args.params && typeof args.params === 'object') {
             for (const [k, v] of Object.entries(args.params)) cmd += ' ' + k + '=' + v;
           }
-          const res = await window.api.pcbRunCommand(cmd);
-          if (res.ok && args.value) await window.api.pcbRunCommand('comp value ' + args.ref + ' "' + args.value + '"');
+          const res = await this.host.api.pcbRunCommand(cmd);
+          if (res.ok && args.value) await this.host.api.pcbRunCommand('comp value ' + args.ref + ' "' + args.value + '"');
           return res;
         }
         case 'pcbMoveComponent': {
-          return await window.api.pcbRunCommand('comp move ' + args.ref + ' ' + args.x + ' ' + args.y);
+          return await this.host.api.pcbRunCommand('comp move ' + args.ref + ' ' + args.x + ' ' + args.y);
         }
         case 'pcbRotateComponent': {
-          return await window.api.pcbRunCommand('comp rot ' + args.ref + ' ' + args.rot);
+          return await this.host.api.pcbRunCommand('comp rot ' + args.ref + ' ' + args.rot);
         }
         case 'pcbDeleteComponent': {
-          return await window.api.pcbRunCommand('comp del ' + args.ref);
+          return await this.host.api.pcbRunCommand('comp del ' + args.ref);
         }
         case 'pcbListComponents': {
-          return await window.api.pcbRunCommand('comp list');
+          return await this.host.api.pcbRunCommand('comp list');
         }
         case 'pcbSetPadNet': {
-          return await window.api.pcbRunCommand('comp net ' + args.ref + ' ' + args.pad + ' ' + (args.net || ''));
+          return await this.host.api.pcbRunCommand('comp net ' + args.ref + ' ' + args.pad + ' ' + (args.net || ''));
         }
         case 'pcbRouteTrace': {
           if (!Array.isArray(args.points) || args.points.length < 2) return { ok: false, error: 'points 至少需要2个点' };
           const cmd = 'trace ' + (args.net || '') + ' ' + (args.layer || 'F.Cu') + ' ' + (args.width || 0) + ' ' + args.points.join(' ');
-          return await window.api.pcbRunCommand(cmd);
+          return await this.host.api.pcbRunCommand(cmd);
         }
         case 'pcbAddVia': {
           const cmd = 'via ' + (args.net || '') + ' ' + args.x + ' ' + args.y +
             (args.drill ? ' ' + args.drill : '') + (args.diameter ? ' ' + args.diameter : '');
-          return await window.api.pcbRunCommand(cmd);
+          return await this.host.api.pcbRunCommand(cmd);
         }
         case 'pcbAddCopperPour': {
           if (!Array.isArray(args.points) || args.points.length < 3) return { ok: false, error: 'points 至少需要3个顶点' };
           let cmd = 'zone ' + (args.net || '') + ' ' + (args.layer || 'F.Cu') + ' ' + args.points.join(' ');
           if (typeof args.clearance === 'number') cmd += ' --clearance ' + args.clearance;
           if (typeof args.thermalWidth === 'number') cmd += ' --thermal ' + args.thermalWidth;
-          return await window.api.pcbRunCommand(cmd);
+          return await this.host.api.pcbRunCommand(cmd);
         }
         case 'pcbAddSilkscreen': {
           const side = args.side || 'F';
@@ -4014,25 +4036,25 @@ ${affectionDesc}
           else if (args.kind === 'circle') cmd = 'silk circle ' + args.x1 + ',' + args.y1 + ' ' + (args.r || 2) + ' ' + side;
           else if (args.kind === 'text') cmd = 'silk text "' + (args.text || 'TEXT') + '" ' + args.x1 + ',' + args.y1;
           else return { ok: false, error: '未知丝印类型: ' + args.kind };
-          return await window.api.pcbRunCommand(cmd);
+          return await this.host.api.pcbRunCommand(cmd);
         }
         case 'pcbRunDRC': {
-          return await window.api.pcbRunCommand('drc');
+          return await this.host.api.pcbRunCommand('drc');
         }
         case 'pcbAutoroute': {
           const cmds = [];
           if (typeof args.traceWidth === 'number') cmds.push('rules set defaultTraceWidth ' + args.traceWidth);
           if (typeof args.clearance === 'number') cmds.push('rules set minClearance ' + args.clearance);
           cmds.push('autoroute' + (Array.isArray(args.nets) && args.nets.length ? ' ' + args.nets.join(',') : ''));
-          const res = await window.api.pcbRunCommands(cmds);
+          const res = await this.host.api.pcbRunCommands(cmds);
           if (res && res.results) return res.results[res.results.length - 1];
           return res;
         }
         case 'pcbGetBoardInfo': {
-          return await window.api.pcbGetState();
+          return await this.host.api.pcbGetState();
         }
         case 'pcbListLibrary': {
-          return await window.api.pcbRunCommand(args.type === 'symbol' ? 'symbols' : 'footprints');
+          return await this.host.api.pcbRunCommand(args.type === 'symbol' ? 'symbols' : 'footprints');
         }
         case 'pcbSaveProject': {
           const sep = (this.workspacePath && this.workspacePath.includes('\\')) ? '\\' : '/';
@@ -4040,7 +4062,7 @@ ${affectionDesc}
           const defName = args.filename || ('project' + (multi ? '.cibypcbproj' : '.cipypcb'));
           const targetPath = args.path || (this.workspacePath ? this.workspacePath.replace(/[\\/]+$/, '') + sep + defName : null);
           if (!targetPath) return { ok: false, error: '未设置工作区路径，且未提供 path 参数' };
-          const res = await window.api.pcbSaveProject(targetPath, multi);
+          const res = await this.host.api.pcbSaveProject(targetPath, multi);
           if (res.ok && this.onMessage) {
             this.onMessage('assistant', `🔌 PCB 工程已保存到：\n\`${targetPath}\``);
           }
@@ -4048,11 +4070,11 @@ ${affectionDesc}
         }
         case 'pcbLoadProject': {
           if (!args.path) return { ok: false, error: '需要 path 参数指定工程文件路径' };
-          return await window.api.pcbLoadProject(this._resolveWorkspacePath(args.path));
+          return await this.host.api.pcbLoadProject(this._resolveWorkspacePath(args.path));
         }
         case 'pcbImportFile': {
           if (!args.path) return { ok: false, error: '需要 path 参数指定导入文件路径' };
-          return await window.api.pcbImportFile(this._resolveWorkspacePath(args.path));
+          return await this.host.api.pcbImportFile(this._resolveWorkspacePath(args.path));
         }
         case 'pcbExportGerber': {
           const sep = (this.workspacePath && this.workspacePath.includes('\\')) ? '\\' : '/';
@@ -4060,7 +4082,7 @@ ${affectionDesc}
           const dir = args.dir || (this.workspacePath ? this.workspacePath.replace(/[\\/]+$/, '') + sep + 'gerber_' + ts : null);
           if (!dir) return { ok: false, error: '未设置工作区路径，且未提供 dir 参数' };
           const zip = args.zip !== false;
-          const res = await window.api.pcbExportGerber(dir, 'pcb',
+          const res = await this.host.api.pcbExportGerber(dir, 'pcb',
             { naming: args.naming || 'jlc', tentedVias: !!args.tentedVias },
             zip ? 'pcb-gerber.zip' : null);
           if (res.ok && this.onMessage) {
@@ -4074,7 +4096,7 @@ ${affectionDesc}
           const ext = extMap[args.kind] || '.txt';
           const targetPath = args.path || (this.workspacePath ? this.workspacePath.replace(/[\\/]+$/, '') + sep + (args.filename || ('pcb-' + args.kind + ext)) : null);
           if (!targetPath) return { ok: false, error: '未设置工作区路径，且未提供 path 参数' };
-          const res = await window.api.pcbExportTextFile(args.kind, targetPath, 'pcb');
+          const res = await this.host.api.pcbExportTextFile(args.kind, targetPath, 'pcb');
           if (res.ok && this.onMessage) {
             this.onMessage('assistant', `🔌 ${args.kind} 已导出到：\n\`${targetPath}\``);
           }
@@ -4082,20 +4104,20 @@ ${affectionDesc}
         }
         // ---- 双面板设计工具集 ----
         case 'pcbSetView': {
-          return await window.api.pcbRunCommand('view ' + (args.side || 'toggle'));
+          return await this.host.api.pcbRunCommand('view ' + (args.side || 'toggle'));
         }
         case 'pcbGetView': {
           // 直接通过 runPcbEdaCommand 查询
-          return await window.api.pcbRunCommand('state');
+          return await this.host.api.pcbRunCommand('state');
         }
         case 'pcbFlipComponent': {
           if (!args.ref) return { ok: false, error: '需要 ref 参数（元件位号）' };
-          return await window.api.pcbRunCommand('comp flip ' + args.ref);
+          return await this.host.api.pcbRunCommand('comp flip ' + args.ref);
         }
         case 'pcbSetComponentSide': {
           if (!args.ref) return { ok: false, error: '需要 ref 参数' };
           if (!['F', 'B'].includes(args.side)) return { ok: false, error: 'side 必须是 F 或 B' };
-          return await window.api.pcbRunCommand('comp side ' + args.ref + ' ' + args.side);
+          return await this.host.api.pcbRunCommand('comp side ' + args.ref + ' ' + args.side);
         }
         case 'pcbRouteSingle': {
           // 构造 autoroute single <net> <fromPt> <toPt> [options]
@@ -4106,48 +4128,48 @@ ${affectionDesc}
           if (typeof args.width === 'number') cmd += ' --width ' + args.width;
           if (typeof args.clearance === 'number') cmd += ' --clearance ' + args.clearance;
           if (typeof args.grid === 'number') cmd += ' --grid ' + args.grid;
-          return await window.api.pcbRunCommand(cmd);
+          return await this.host.api.pcbRunCommand(cmd);
         }
         case 'pcbClearRoutes': {
-          return await window.api.pcbRunCommand(args.net ? ('clear routes ' + args.net) : 'clear routes');
+          return await this.host.api.pcbRunCommand(args.net ? ('clear routes ' + args.net) : 'clear routes');
         }
         case 'pcbSetLayerVisibility': {
           if (!args.layer) return { ok: false, error: '需要 layer 参数' };
-          return await window.api.pcbRunCommand('layer vis ' + args.layer + ' ' + (args.visible ? 'on' : 'off'));
+          return await this.host.api.pcbRunCommand('layer vis ' + args.layer + ' ' + (args.visible ? 'on' : 'off'));
         }
         case 'pcbGetLayerVisibility': {
-          return await window.api.pcbRunCommand('layer list');
+          return await this.host.api.pcbRunCommand('layer list');
         }
         case 'pcbSetActiveLayer': {
           if (!args.layer) return { ok: false, error: '需要 layer 参数' };
-          return await window.api.pcbRunCommand('layer active ' + args.layer);
+          return await this.host.api.pcbRunCommand('layer active ' + args.layer);
         }
         case 'pcbGetDesignFlowGuide': {
-          return await window.api.pcbRunCommand('flow');
+          return await this.host.api.pcbRunCommand('flow');
         }
         case 'pcbRunDrcIncremental': {
           if (!Array.isArray(args.changedIds) || !args.changedIds.length) {
-            return await window.api.pcbRunCommand('drc');  // 全量
+            return await this.host.api.pcbRunCommand('drc');  // 全量
           }
-          return await window.api.pcbRunCommand('drc inc ' + args.changedIds.join(' '));
+          return await this.host.api.pcbRunCommand('drc inc ' + args.changedIds.join(' '));
         }
         case 'pcbSetLiveDrc': {
           // 通过专用命令设置实时 DRC
           // 简单实现：通过 runPcbEdaCommand 的 drc live 子命令
-          return await window.api.pcbRunCommand('drc live ' + (args.on ? 'on' : 'off'));
+          return await this.host.api.pcbRunCommand('drc live ' + (args.on ? 'on' : 'off'));
         }
         case 'pcbGetDrcDelta': {
           // 通过 state 命令返回（包含 lastDelta 字段）
-          return await window.api.pcbRunCommand('state');
+          return await this.host.api.pcbRunCommand('state');
         }
         case 'pcbUndo': {
-          return await window.api.pcbRunCommand('undo');
+          return await this.host.api.pcbRunCommand('undo');
         }
         case 'pcbRedo': {
-          return await window.api.pcbRunCommand('redo');
+          return await this.host.api.pcbRunCommand('redo');
         }
         case 'askQuestions': {
-          const answers = await window.askQuestions(args.questions, this);
+          const answers = await this.host.gui.askQuestions(args.questions, this);
           return { ok: true, answers };
         }
         case 'downloadFile': {
@@ -4164,13 +4186,13 @@ ${affectionDesc}
           // 运行位置=虚拟机：走 file:download（VM 路由：下载到宿主临时目录后把产物推入 VM，按映射落位）
           let inVm = false;
           try {
-            if (window.api?.runtime?.getLocation) {
-              const loc = await window.api.runtime.getLocation();
+            if (this.host.api?.runtime?.getLocation) {
+              const loc = await this.host.api.runtime.getLocation();
               inVm = !!(loc && loc.location === 'vm');
             }
           } catch { /* ignore */ }
-          if (inVm && typeof window.api.downloadFile === 'function') {
-            const r = await window.api.downloadFile(args.url, args.filename || '', targetDir);
+          if (inVm && typeof this.host.api.downloadFile === 'function') {
+            const r = await this.host.api.downloadFile(args.url, args.filename || '', targetDir);
             if (r && r.ok) {
               return { ok: true, path: r.path || r.vmPath || null, dir: targetDir, message: '已下载到虚拟机工作区（可用 fs 工具继续处理）' };
             }
@@ -4188,17 +4210,17 @@ ${affectionDesc}
           if (args.retryWait) opts.retryWait = args.retryWait;
           if (args.userAgent) opts.userAgent = args.userAgent;
           if (args.referer) opts.referer = args.referer;
-          const res = await window.api.aria2.addUri(args.url, opts);
+          const res = await this.host.api.aria2.addUri(args.url, opts);
           if (res.ok) {
             // 刷新下载管理器 UI（若已打开）
-            if (window.DownloadManager) window.DownloadManager.refresh();
+            if (this.host.gui.downloads) this.host.gui.downloads.refresh();
             return { ok: true, gid: res.gid, dir: targetDir, message: '下载已添加，可使用 getDownloadStatus 查询进度' };
           }
           return { ok: false, error: res.error || '添加下载失败' };
         }
         case 'getDownloadStatus': {
           if (args.gid) {
-            const r = await window.api.aria2.tellStatus(args.gid);
+            const r = await this.host.api.aria2.tellStatus(args.gid);
             if (!r.ok) return { ok: false, error: r.error };
             const st = r.status;
             const total = parseInt(st.totalLength || '0', 10);
@@ -4222,7 +4244,7 @@ ${affectionDesc}
             };
           }
           // 列出所有任务
-          const r = await window.api.aria2.listAll();
+          const r = await this.host.api.aria2.listAll();
           if (!r.ok) return { ok: false, error: r.error };
           const summarize = (items) => (items || []).map(it => ({
             gid: it.gid,
@@ -4244,18 +4266,18 @@ ${affectionDesc}
           };
         }
         case 'pauseDownload': {
-          const r = await window.api.aria2.pause(args.gid, args.force ?? false);
-          if (window.DownloadManager) window.DownloadManager.refresh();
+          const r = await this.host.api.aria2.pause(args.gid, args.force ?? false);
+          if (this.host.gui.downloads) this.host.gui.downloads.refresh();
           return r;
         }
         case 'resumeDownload': {
-          const r = await window.api.aria2.unpause(args.gid);
-          if (window.DownloadManager) window.DownloadManager.refresh();
+          const r = await this.host.api.aria2.unpause(args.gid);
+          if (this.host.gui.downloads) this.host.gui.downloads.refresh();
           return r;
         }
         case 'cancelDownload': {
-          const r = await window.api.aria2.cancel(args.gid, args.force ?? true);
-          if (window.DownloadManager) window.DownloadManager.refresh();
+          const r = await this.host.api.aria2.cancel(args.gid, args.force ?? true);
+          if (this.host.gui.downloads) this.host.gui.downloads.refresh();
           return r;
         }
         // ---- 游戏工具 ----
@@ -4264,7 +4286,7 @@ ${affectionDesc}
           if (this._fromWeb) {
             return { ok: false, error: typeof i18nToolReturn === 'function' ? i18nToolReturn('game_window_unavailable', '独立窗口小游戏在Web控制模式下不可用，请在主机上操作') : '独立窗口小游戏在Web控制模式下不可用，请在主机上操作' };
           }
-          const invitation = await window.showGameInvitation(args.game, args.message, args.suggestedAgents, this);
+          const invitation = await this.host.gui.showGameInvitation(args.game, args.message, args.suggestedAgents, this);
           if (!invitation.accepted) {
             return { ok: true, accepted: false, message: '用户忽略了游戏邀请' };
           }
@@ -4273,7 +4295,7 @@ ${affectionDesc}
         }
         // ---- MCP 工具 ----
         case 'mcpListTools': {
-          const result = await window.api.mcpListTools(args.serverName || null);
+          const result = await this.host.api.mcpListTools(args.serverName || null);
           // 刷新动态MCP工具注册
           if (result.ok && Array.isArray(result.tools)) {
             registerMcpTools(result.tools);
@@ -4283,124 +4305,124 @@ ${affectionDesc}
         }
         // ---- 扩充网络工具 ----
         case 'httpRequest':
-          return await window.api.httpRequest(args);
+          return await this.host.api.httpRequest(args);
         case 'httpFormPost':
-          return await window.api.httpFormPost(args);
+          return await this.host.api.httpFormPost(args);
         case 'dnsLookup':
-          return await window.api.dnsLookup(args.hostname, args.rrtype);
+          return await this.host.api.dnsLookup(args.hostname, args.rrtype);
         case 'ping':
-          return await window.api.ping(args.host, args.count);
+          return await this.host.api.ping(args.host, args.count);
         case 'urlShorten':
-          return await window.api.urlShorten(args.url);
+          return await this.host.api.urlShorten(args.url);
         case 'urlEncodeDecode':
-          return await window.api.urlEncodeDecode(args.input, args.operation);
+          return await this.host.api.urlEncodeDecode(args.input, args.operation);
         case 'checkSSLCert':
-          return await window.api.checkSSLCert(args.hostname, args.port);
+          return await this.host.api.checkSSLCert(args.hostname, args.port);
         case 'traceroute':
-          return await window.api.traceroute(args.host);
+          return await this.host.api.traceroute(args.host);
         case 'portScan':
-          return await window.api.portScan(args.host, args.ports, args.timeout);
+          return await this.host.api.portScan(args.host, args.ports, args.timeout);
         // ---- 串口工具 ----
         case 'serialListPorts':
-          return await window.api.serialListPorts();
+          return await this.host.api.serialListPorts();
         case 'serialOpenPort':
-          return await window.api.serialOpenPort(args.path, {
+          return await this.host.api.serialOpenPort(args.path, {
             baudRate: args.baudRate, dataBits: args.dataBits,
             stopBits: args.stopBits, parity: args.parity
           });
         case 'serialWritePort':
-          return await window.api.serialWritePort(args.path, args.data, args.encoding);
+          return await this.host.api.serialWritePort(args.path, args.data, args.encoding);
         case 'serialReadPort':
-          return await window.api.serialReadPort(args.path, args.timeout, args.encoding);
+          return await this.host.api.serialReadPort(args.path, args.timeout, args.encoding);
         case 'serialClosePort':
-          return await window.api.serialClosePort(args.path);
+          return await this.host.api.serialClosePort(args.path);
         case 'serialSetSignals':
-          return await window.api.serialSetSignals(args.path, { dtr: args.dtr, rts: args.rts, brk: args.brk });
+          return await this.host.api.serialSetSignals(args.path, { dtr: args.dtr, rts: args.rts, brk: args.brk });
         // ---- Office 硬解工具（低层 XML/容器操作）----
         case 'officeHardUnpack':
         case 'officeUnpack': // 旧名兼容
-          return await window.api.officeUnpack(this._resolveWorkspacePath(args.path));
+          return await this.host.api.officeUnpack(this._resolveWorkspacePath(args.path));
         case 'officeHardList':
         case 'officeListContents':
-          return await window.api.officeListContents(this._resolveWorkspacePath(args.dir));
+          return await this.host.api.officeListContents(this._resolveWorkspacePath(args.dir));
         case 'officeHardReadFile':
         case 'officeReadInnerFile':
-          return await window.api.readFile(this._resolveWorkspacePath(args.path));
+          return await this.host.api.readFile(this._resolveWorkspacePath(args.path));
         case 'officeHardWriteFile':
         case 'officeWriteInnerFile':
-          return await window.api.writeFile(this._resolveWorkspacePath(args.path), args.content);
+          return await this.host.api.writeFile(this._resolveWorkspacePath(args.path), args.content);
         case 'officeHardRepack':
         case 'officeRepack':
-          return await window.api.officeRepack(this._resolveWorkspacePath(args.dir), this._resolveWorkspacePath(args.outputPath));
+          return await this.host.api.officeRepack(this._resolveWorkspacePath(args.dir), this._resolveWorkspacePath(args.outputPath));
         case 'officeHardGetSlideTexts':
         case 'officeGetSlideTexts':
-          return await window.api.officeGetSlideTexts(this._resolveWorkspacePath(args.dir), args.slideFile);
+          return await this.host.api.officeGetSlideTexts(this._resolveWorkspacePath(args.dir), args.slideFile);
         case 'officeHardSetSlideTexts':
         case 'officeSetSlideTexts':
-          return await window.api.officeSetSlideTexts(this._resolveWorkspacePath(args.dir), args.slideFile, args.translations);
+          return await this.host.api.officeSetSlideTexts(this._resolveWorkspacePath(args.dir), args.slideFile, args.translations);
         case 'officeHardWordApplyTexts':
         case 'officeWordApplyTexts':
-          return await window.api.officeWordApplyTexts(this._resolveWorkspacePath(args.pathOrDir), args.updates || []);
+          return await this.host.api.officeWordApplyTexts(this._resolveWorkspacePath(args.pathOrDir), args.updates || []);
         // ---- Office-Word 工具（正规库）----
         case 'wordExtractText':
         case 'officeWordExtract': // 旧名兼容（语义升级为 mammoth 提取）
-          return await window.api.wordExtractText(this._resolveWorkspacePath(args.path || args.pathOrDir), args.format);
+          return await this.host.api.wordExtractText(this._resolveWorkspacePath(args.path || args.pathOrDir), args.format);
         case 'wordCreate':
-          return await window.api.wordCreate(args, this.workspacePath);
+          return await this.host.api.wordCreate(args, this.workspacePath);
         case 'wordFillTemplate':
         case 'officeWordFillTemplate': // 旧名兼容（语义升级为 docxtemplater）
-          return await window.api.wordFillTemplate(args.templatePath || args.pathOrDir, args.outputPath, args.data || args.replacements || {}, this.workspacePath);
+          return await this.host.api.wordFillTemplate(args.templatePath || args.pathOrDir, args.outputPath, args.data || args.replacements || {}, this.workspacePath);
         case 'wordGetMetadata':
-          return await window.api.wordGetMetadata(this._resolveWorkspacePath(args.path));
+          return await this.host.api.wordGetMetadata(this._resolveWorkspacePath(args.path));
         case 'wordListStyles':
         case 'officeWordGetStyles': // 旧名兼容
-          return await window.api.wordListStyles(this._resolveWorkspacePath(args.path || args.pathOrDir));
+          return await this.host.api.wordListStyles(this._resolveWorkspacePath(args.path || args.pathOrDir));
         // ---- PPT Maker ----
         case 'pptMakerCreate':
-          return await window.api.pptMakerCreate(args, this.workspacePath);
+          return await this.host.api.pptMakerCreate(args, this.workspacePath);
         // ---- 数据表格工具 ----
         case 'initSpreadsheet':
-          return window.initSpreadsheet ? window.initSpreadsheet(args.title) : { ok: false, error: '数据表格功能未初始化' };
+          return this.host.gui.spreadsheet.init(args.title);
         case 'spreadsheetSetCells':
-          return window.spreadsheetSetCells ? window.spreadsheetSetCells(args.entries) : { ok: false, error: '数据表格功能未初始化' };
+          return this.host.gui.spreadsheet.setCells(args.entries);
         case 'spreadsheetGetCells':
-          return window.spreadsheetGetCells ? window.spreadsheetGetCells(args.range) : { ok: false, error: '数据表格功能未初始化' };
+          return this.host.gui.spreadsheet.getCells(args.range);
         case 'spreadsheetSetCellFormat':
-          return window.spreadsheetSetCellFormat ? window.spreadsheetSetCellFormat(args.addr, args.format) : { ok: false, error: '数据表格功能未初始化' };
+          return this.host.gui.spreadsheet.setCellFormat(args.addr, args.format);
         case 'spreadsheetSetRangeFormat':
-          return window.spreadsheetSetRangeFormat ? window.spreadsheetSetRangeFormat(args.range, args.format) : { ok: false, error: '数据表格功能未初始化' };
+          return this.host.gui.spreadsheet.setRangeFormat(args.range, args.format);
         case 'spreadsheetClearCells':
-          return window.spreadsheetClearCells ? window.spreadsheetClearCells(args.range) : { ok: false, error: '数据表格功能未初始化' };
+          return this.host.gui.spreadsheet.clearCells(args.range);
         case 'spreadsheetInsertRows':
-          return window.spreadsheetInsertRows ? window.spreadsheetInsertRows(args.rowNum, args.count) : { ok: false, error: '数据表格功能未初始化' };
+          return this.host.gui.spreadsheet.insertRows(args.rowNum, args.count);
         case 'spreadsheetDeleteRows':
-          return window.spreadsheetDeleteRows ? window.spreadsheetDeleteRows(args.rowNum, args.count) : { ok: false, error: '数据表格功能未初始化' };
+          return this.host.gui.spreadsheet.deleteRows(args.rowNum, args.count);
         case 'spreadsheetInsertCols':
-          return window.spreadsheetInsertCols ? window.spreadsheetInsertCols(args.colLetter, args.count) : { ok: false, error: '数据表格功能未初始化' };
+          return this.host.gui.spreadsheet.insertCols(args.colLetter, args.count);
         case 'spreadsheetDeleteCols':
-          return window.spreadsheetDeleteCols ? window.spreadsheetDeleteCols(args.colLetter, args.count) : { ok: false, error: '数据表格功能未初始化' };
+          return this.host.gui.spreadsheet.deleteCols(args.colLetter, args.count);
         case 'spreadsheetSortRange':
-          return window.spreadsheetSortRange ? window.spreadsheetSortRange(args.range, args.colLetter, args.ascending !== false) : { ok: false, error: '数据表格功能未初始化' };
+          return this.host.gui.spreadsheet.sortRange(args.range, args.colLetter, args.ascending !== false);
         case 'spreadsheetGetData':
-          return window.spreadsheetGetData ? window.spreadsheetGetData() : { ok: false, error: '数据表格功能未初始化' };
+          return this.host.gui.spreadsheet.getData();
         case 'spreadsheetExportCSV':
-          return window.spreadsheetExportCSV ? window.spreadsheetExportCSV() : { ok: false, error: '数据表格功能未初始化' };
+          return this.host.gui.spreadsheet.exportCSV();
         case 'spreadsheetImportCSV':
-          return window.spreadsheetImportCSV ? window.spreadsheetImportCSV(args.csv, args.startAddr) : { ok: false, error: '数据表格功能未初始化' };
+          return this.host.gui.spreadsheet.importCSV(args.csv, args.startAddr);
         case 'spreadsheetImportFile':
-          return window.spreadsheetImportFile ? await window.spreadsheetImportFile(args.filePath) : { ok: false, error: '数据表格功能未初始化' };
+          return await this.host.gui.spreadsheet.importFile(args.filePath);
         case 'spreadsheetExportFile':
-          return window.spreadsheetExportFile ? await window.spreadsheetExportFile(args.filePath) : { ok: false, error: '数据表格功能未初始化' };
+          return await this.host.gui.spreadsheet.exportFile(args.filePath);
         // ---- 内置浏览器 (Playwright) ----
         case 'browserNavigate': {
           // 校验 url，避免 undefined 导致 Electron 报错
           const navUrl = args?.url || args?.target || '';
           if (!navUrl) return { ok: false, error: typeof i18nToolReturn === 'function' ? i18nToolReturn('browser_no_url', 'browserNavigate 缺少 url 参数') : 'browserNavigate 缺少 url 参数' };
-          const r = await window.api.browserNavigate(navUrl, args?.waitUntil, this.workspacePath);
+          const r = await this.host.api.browserNavigate(navUrl, args?.waitUntil, this.workspacePath);
           return r;
         }
         case 'browserScreenshot': {
-          const ssRes = await window.api.browserScreenshot(args?.fullPage, this.workspacePath);
+          const ssRes = await this.host.api.browserScreenshot(args?.fullPage, this.workspacePath);
           // 不向 LLM 返回 base64 dataUrl（过长且无用），仅返回文件路径信息
           if (ssRes && ssRes.ok) {
             return { ok: true, filePath: ssRes.filePath, message: '截图已保存。如需查看图片内容，请调用 readImageFile 工具读取该截图。' };
@@ -4408,31 +4430,31 @@ ${affectionDesc}
           return ssRes;
         }
         case 'browserClick':
-          return await window.api.browserClick(args.selector, args?.timeout, this.workspacePath);
+          return await this.host.api.browserClick(args.selector, args?.timeout, this.workspacePath);
         case 'browserType':
-          return await window.api.browserType(args.selector, args.text, args?.submit, args?.clear, this.workspacePath);
+          return await this.host.api.browserType(args.selector, args.text, args?.submit, args?.clear, this.workspacePath);
         case 'browserGetContent':
-          return await window.api.browserGetContent(args.selector, this.workspacePath);
+          return await this.host.api.browserGetContent(args.selector, this.workspacePath);
         case 'browserScroll':
-          return await window.api.browserScroll(args.direction, args.amount, this.workspacePath);
+          return await this.host.api.browserScroll(args.direction, args.amount, this.workspacePath);
         case 'browserBack':
-          return await window.api.browserBack(this.workspacePath);
+          return await this.host.api.browserBack(this.workspacePath);
         case 'browserForward':
-          return await window.api.browserForward(this.workspacePath);
+          return await this.host.api.browserForward(this.workspacePath);
         case 'browserRefresh':
-          return await window.api.browserRefresh(this.workspacePath);
+          return await this.host.api.browserRefresh(this.workspacePath);
         case 'browserEvaluate':
-          return await window.api.browserEvaluate(args.script, this.workspacePath);
+          return await this.host.api.browserEvaluate(args.script, this.workspacePath);
         case 'browserWait':
-          return await window.api.browserWait(args?.selector, args?.timeout, this.workspacePath);
+          return await this.host.api.browserWait(args?.selector, args?.timeout, this.workspacePath);
         case 'browserHover':
-          return await window.api.browserHover(args.selector, this.workspacePath);
+          return await this.host.api.browserHover(args.selector, this.workspacePath);
         case 'browserSelect':
-          return await window.api.browserSelect(args.selector, args.value, this.workspacePath);
+          return await this.host.api.browserSelect(args.selector, args.value, this.workspacePath);
         case 'browserGetInfo':
-          return await window.api.browserGetInfo(this.workspacePath);
+          return await this.host.api.browserGetInfo(this.workspacePath);
         case 'browserClose': {
-          return await window.api.browserClose(this.workspacePath);
+          return await this.host.api.browserClose(this.workspacePath);
         }
         // ---- Goal / 长任务跟踪 ----
         case 'goalSet': {
@@ -4510,7 +4532,7 @@ ${affectionDesc}
         }
         case 'adjustAppearance': {
           // 允许 LLM 主动调节深浅色模式 / 强调色 / 配色方案
-          const current = await window.api.getSettings();
+          const current = await this.host.api.getSettings();
           const theme = { ...(current.theme || {}) };
           const changes = [];
           if (args.mode && ['light', 'dark', 'system'].includes(args.mode)) {
@@ -4540,7 +4562,7 @@ ${affectionDesc}
             return { ok: false, error: typeof i18nToolReturn === 'function' ? i18nToolReturn('no_changes_provided', '未提供任何可应用的更改（mode/accentColor/schemeName 至少一个）') : '未提供任何可应用的更改（mode/accentColor/schemeName 至少一个）' };
           }
           const merged = { ...current, theme };
-          await window.api.setSettings(merged);
+          await this.host.api.setSettings(merged);
           if (typeof ThemeManager !== 'undefined') {
             ThemeManager.apply(theme);
           }
@@ -4553,13 +4575,13 @@ ${affectionDesc}
           const coord = args.coordinate;
           const pointerOptions = { space: args.coord_space || 'screenshot', displayId: args.display_id };
           switch (action) {
-            case 'permissions': return await window.api.computerPermissions();
+            case 'permissions': return await this.host.api.computerPermissions();
             case 'screenshot':
-              return await window.api.computerScreenshot(this.workspacePath, { display_id: args.display_id, annotate: args.annotate });
+              return await this.host.api.computerScreenshot(this.workspacePath, { display_id: args.display_id, annotate: args.annotate });
             case 'list_displays':
-              return await window.api.computerListDisplays();
+              return await this.host.api.computerListDisplays();
             case 'get_ui_tree':
-              return await window.api.computerGetUITree({
+              return await this.host.api.computerGetUITree({
                 includeOcr: args.include_ocr,
                 ocrOnly: args.ocr_only,
                 displayId: args.display_id,
@@ -4567,10 +4589,10 @@ ${affectionDesc}
                 workspacePath: this.workspacePath,
               });
             case 'ocr':
-              return await window.api.computerOcr({ workspacePath: this.workspacePath, displayId: args.display_id, engine: args.engine });
+              return await this.host.api.computerOcr({ workspacePath: this.workspacePath, displayId: args.display_id, engine: args.engine });
             case 'find_element': {
               if (!args.text) return { ok: false, error: 'text parameter required for find_element' };
-              return await window.api.computerFindElement({
+              return await this.host.api.computerFindElement({
                 text: args.text,
                 role: args.role,
                 nth: args.nth,
@@ -4600,12 +4622,12 @@ ${affectionDesc}
               if (!clickPayload.id && !clickPayload.text && !Number.isFinite(Number(clickPayload.x))) {
                 return { ok: false, error: 'click_element requires element_id, text or coordinate [x,y]' };
               }
-              return await window.api.computerClickElement(clickPayload);
+              return await this.host.api.computerClickElement(clickPayload);
             }
             case 'mouse_move': {
               if (!Array.isArray(coord) || coord.length < 2)
                 return { ok: false, error: 'coordinate [x,y] required for mouse_move' };
-              return await window.api.computerMouseMove(coord[0], coord[1], pointerOptions);
+              return await this.host.api.computerMouseMove(coord[0], coord[1], pointerOptions);
             }
             case 'left_click':
             case 'right_click':
@@ -4614,33 +4636,33 @@ ${affectionDesc}
               const button = action === 'right_click' ? 'right'
                           : action === 'middle_click' ? 'middle' : 'left';
               const dc = action === 'double_click';
-              return await window.api.computerClick(button, coord?.[0], coord?.[1], dc, pointerOptions);
+              return await this.host.api.computerClick(button, coord?.[0], coord?.[1], dc, pointerOptions);
             }
             case 'left_click_drag': {
               const sc = args.start_coordinate;
               if (!Array.isArray(sc) || !Array.isArray(coord))
                 return { ok: false, error: 'start_coordinate and coordinate [x,y] required for left_click_drag' };
-              return await window.api.computerDrag(sc[0], sc[1], coord[0], coord[1], pointerOptions);
+              return await this.host.api.computerDrag(sc[0], sc[1], coord[0], coord[1], pointerOptions);
             }
             case 'type': {
               if (!args.text) return { ok: false, error: 'text parameter required for type' };
-              return await window.api.computerType(args.text);
+              return await this.host.api.computerType(args.text);
             }
             case 'key': {
               if (!args.key) return { ok: false, error: 'key parameter required for key action' };
-              return await window.api.computerKey(args.key);
+              return await this.host.api.computerKey(args.key);
             }
             case 'scroll': {
               if (!args.scroll_direction)
                 return { ok: false, error: 'scroll_direction required for scroll' };
-              return await window.api.computerScroll(coord?.[0], coord?.[1], args.scroll_direction, args.scroll_amount, pointerOptions);
+              return await this.host.api.computerScroll(coord?.[0], coord?.[1], args.scroll_direction, args.scroll_amount, pointerOptions);
             }
             case 'wait':
-              return await window.api.computerWait(args.duration || 1);
+              return await this.host.api.computerWait(args.duration || 1);
             case 'cursor_position':
-              return await window.api.computerCursorPosition();
+              return await this.host.api.computerCursorPosition();
             case 'get_screen_size':
-              return await window.api.computerGetScreenSize();
+              return await this.host.api.computerGetScreenSize();
             default:
               return { ok: false, error: `Unknown computer action: ${action}` };
           }
@@ -4663,7 +4685,7 @@ ${affectionDesc}
             if (name === 'fedikittenDownloadMedia' && fkArgs.savePath) {
               fkArgs.savePath = this._resolveWorkspacePath(fkArgs.savePath);
             }
-            return await window.api.fedikittenCall(name, fkArgs);
+            return await this.host.api.fedikittenCall(name, fkArgs);
           }
           // CIBYP-IM 加密通讯工具路由
           if (name.startsWith('cibypim')) {
@@ -4674,7 +4696,7 @@ ${affectionDesc}
             if (name === 'cibypimSendVoiceMessage' && ciArgs.filePath) {
               ciArgs.filePath = this._resolveWorkspacePath(ciArgs.filePath);
             }
-            return await window.api.cibypImCall(name, ciArgs);
+            return await this.host.api.cibypImCall(name, ciArgs);
           }
           // MCP 动态工具路由: mcp__<serverName>__<toolName>
           if (name.startsWith('mcp__')) {
@@ -4682,7 +4704,7 @@ ${affectionDesc}
             if (parts.length >= 3) {
               const serverName = parts[1];
               const toolName = parts.slice(2).join('__');
-              return await window.api.mcpCallTool(serverName, toolName, args || {});
+              return await this.host.api.mcpCallTool(serverName, toolName, args || {});
             }
           }
           if (this.settings?.autoOptimizeToolSelection && !name.startsWith('__')) {
@@ -4727,8 +4749,8 @@ ${affectionDesc}
   }
 
   handleTodo(args = {}) {
-    if (typeof window !== 'undefined' && window.CibypTodos) {
-      return window.CibypTodos.handleTodo(args).then(result => {
+    if (this.host.gui.todos) {
+      return this.host.gui.todos.handleTodo(args).then(result => {
         this.onTodoUpdate?.(this.todoItems);
         return result;
       });
@@ -4745,7 +4767,7 @@ ${affectionDesc}
     }
     const results = ops.map(op => this._applyTodoOp(op));
     if (this.onTodoUpdate) this.onTodoUpdate(this.todoItems);
-    if (typeof window !== 'undefined') window.AppBus?.emit('todo-updated', { agent: this });
+    this.host.events?.emit('todo-updated', { agent: this });
     if (results.some(result => result.ok)) this.saveToHistory();
     const ok = results.every(r => r.ok);
     const added = results.filter(r => r.ok && r.action === 'add').map(r => r.id);
@@ -4794,7 +4816,7 @@ ${affectionDesc}
       subAgent.workspacePath = this.workspacePath;
       subAgent.systemInfo = this.systemInfo;
       subAgent.cachedWorkspaceTree = this.cachedWorkspaceTree;
-      subAgent.tarotCard = await window.api.drawTarot();
+      subAgent.tarotCard = await this.host.api.drawTarot();
       const maxCtx = this.settings?.llm?.maxContextLength || 8192;
       subAgent.contextManager = new ContextManager(maxCtx);
       subAgent.contextManager.setOutputReserve(this.settings?.llm?.maxResponseTokens || 8192);
@@ -4876,7 +4898,7 @@ ${tarotLine}
         const messages = subAgent.injectActiveSkillsSuffix(subAgent.contextManager.getMessages());
         const subTools = subAgent.getRuntimeToolSchemas();
 
-        let result = await window.api.chatLLM(messages, this._llmOptions({
+        let result = await this.host.api.chatLLM(messages, this._llmOptions({
           tools: subTools.length > 0 ? subTools : undefined,
           requestId: 'sub-' + Date.now().toString(),
           sessionKey: this.sessionKey || null
@@ -4913,7 +4935,7 @@ ${tarotLine}
             try {
               const retryMessages = subAgent.contextManager.getMessages();
               const retryTools = subTools.length > 0 ? subTools : undefined;
-              result = await window.api.chatLLM(retryMessages, this._llmOptions({
+              result = await this.host.api.chatLLM(retryMessages, this._llmOptions({
                 tools: retryTools,
                 requestId: 'sub-' + Date.now().toString() + '-retry-' + subRetryCount,
                 sessionKey: this.sessionKey || null
@@ -4999,7 +5021,7 @@ ${tarotLine}
               }
               this._sessionToolAuth ||= {}; this._sessionToolAuth[category] = true;
               if (decision === 'allow-always') {
-                await window.api.setSettings({ toolAuthGranted: { [category]: true } });
+                await this.host.api.setSettings({ toolAuthGranted: { [category]: true } });
                 this.settings.toolAuthGranted = { ...(this.settings.toolAuthGranted || {}), [category]: true };
                 subAgent.settings.toolAuthGranted = { ...(subAgent.settings.toolAuthGranted || {}), [category]: true };
               }
@@ -5049,7 +5071,7 @@ ${tarotLine}
             '【系统指令】你已达到迭代上限。请立即停止调用工具，写出当前任务的完整结果报告：\n' +
             '1. 已完成的工作和结果\n2. 未完成的步骤和原因\n3. 遇到的问题和建议\n请简洁但完整地总结。'
           );
-          const summaryResult = await window.api.chatLLM(subAgent.contextManager.getMessages(), {
+          const summaryResult = await this.host.api.chatLLM(subAgent.contextManager.getMessages(), {
             ...this._llmOptions(),
             requestId: 'sub-' + Date.now().toString() + '-final-report',
             sessionKey: this.sessionKey || null
@@ -5131,7 +5153,7 @@ ${tarotLine}
   async createGameAgent(name, buildPrompt) {
     const ga = new Agent();
     ga.settings = this.settings;
-    ga.tarotCard = await window.api.drawTarot();
+    ga.tarotCard = await this.host.api.drawTarot();
     ga.contextManager = new ContextManager(this.settings.llm.maxContextLength || 8192);
     ga.contextManager.setOutputReserve(this.settings?.llm?.maxResponseTokens || 8192);
     // buildPrompt receives tarotCard so callers can embed it without referencing ga before init
@@ -5144,7 +5166,7 @@ ${tarotLine}
   async gameAgentRespond(ga, userMsg) {
     ga.contextManager.addUserMessage(userMsg);
     const messages = ga.contextManager.getMessages();
-    const result = await window.api.chatLLM(messages, this._llmOptions({
+    const result = await this.host.api.chatLLM(messages, this._llmOptions({
       temperature: 0.9,
       max_tokens: this.settings?.llm?.maxResponseTokens || 2048,
       requestId: Date.now().toString(),
@@ -5164,7 +5186,7 @@ ${tarotLine}
 
   // ---- Flying Flower Game (飞花令) ----
   async playFlyingFlower(agentCount) {
-    const result = await window.api.openFlyingFlower(agentCount);
+    const result = await this.host.api.openFlyingFlower(agentCount);
     if (result && result.ok) {
       if (this.onMessage) this.onMessage('assistant', `🎮 **飞花令**游戏窗口已打开！\n\n${agentCount} 位 AI 玩家已就绪，请在游戏窗口中进行操作。`);
       return { ok: true, game: 'flyingFlower', message: '游戏窗口已打开' };
@@ -5174,7 +5196,7 @@ ${tarotLine}
 
   // ---- Undercover Game (谁是卧底) ----
   async playUndercover(agentCount) {
-    const result = await window.api.openUndercover(agentCount);
+    const result = await this.host.api.openUndercover(agentCount);
     if (result && result.ok) {
       if (this.onMessage) this.onMessage('assistant', `🎮 **谁是卧底**游戏窗口已打开！\n\n${agentCount} 位 AI 玩家已就绪，请在游戏窗口中进行操作。`);
       return { ok: true, game: 'undercover', message: '游戏窗口已打开' };
@@ -5185,7 +5207,7 @@ ${tarotLine}
   // ---- Sanguosha Game (三国杀) ----
   async playSanguosha(agentCount) {
     // Open the Sanguosha game in a new window
-    const result = await window.api.openSanguosha(agentCount);
+    const result = await this.host.api.openSanguosha(agentCount);
     if (result && result.ok) {
       if (this.onMessage) this.onMessage('assistant', `🎮 **三国杀**游戏窗口已打开！\n\n${agentCount} 位 AI 玩家已就绪，请在游戏窗口中进行操作。`);
       return { ok: true, game: 'sanguosha', message: '游戏窗口已打开' };
@@ -5195,7 +5217,7 @@ ${tarotLine}
 
   // ---- Idiom Chain Game (成语接龙) ----
   async playIdiom(agentCount) {
-    const result = await window.api.openIdiom(agentCount);
+    const result = await this.host.api.openIdiom(agentCount);
     if (result && result.ok) {
       if (this.onMessage) this.onMessage('assistant', `🎮 **成语接龙**游戏窗口已打开！\n\n${agentCount} 位 AI 玩家已就绪，请在游戏窗口中进行操作。`);
       return { ok: true, game: 'idiom', message: '游戏窗口已打开' };
@@ -5205,7 +5227,7 @@ ${tarotLine}
 
   // ---- Guess Character Game (是否猜人物) ----
   async playGuessCharacter(agentCount) {
-    const result = await window.api.openGuessCharacter(agentCount);
+    const result = await this.host.api.openGuessCharacter(agentCount);
     if (result && result.ok) {
       if (this.onMessage) this.onMessage('assistant', `🎮 **是否猜人物**游戏窗口已打开！\n\n请在游戏窗口中向 AI 提问并猜测人物。`);
       return { ok: true, game: 'guessCharacter', message: '游戏窗口已打开' };
@@ -5278,16 +5300,21 @@ if (typeof module !== 'undefined' && module.exports) {
 
 // ---- MCP 状态变化 → 自动刷新动态工具注册 ----
 // （服务器连接/断开/工具列表变更时主进程广播 mcp:servers-changed）
-if (typeof window !== 'undefined' && typeof window.api !== 'undefined' &&
-    typeof window.api.onMcpChanged === 'function' && typeof registerMcpTools === 'function') {
+(function installMcpToolRefresh() {
+  const host =
+    typeof AGENT_HOST_KIT !== 'undefined' && AGENT_HOST_KIT && typeof AGENT_HOST_KIT.getDefaultHost === 'function'
+      ? AGENT_HOST_KIT.getDefaultHost(typeof window !== 'undefined' ? window : undefined)
+      : null;
+  const api = host && host.api;
+  if (!api || typeof api.onMcpChanged !== 'function' || typeof registerMcpTools === 'undefined' || typeof registerMcpTools !== 'function') return;
   let _mcpRefreshTimer = null;
-  window.api.onMcpChanged(() => {
+  api.onMcpChanged(() => {
     // 防抖：连接建立/工具变更可能连续触发
     if (_mcpRefreshTimer) clearTimeout(_mcpRefreshTimer);
     _mcpRefreshTimer = setTimeout(async () => {
       _mcpRefreshTimer = null;
       try {
-        const r = await window.api.mcpListTools(null);
+        const r = await api.mcpListTools(null);
         if (r && r.ok && Array.isArray(r.tools)) {
           registerMcpTools(r.tools);
           // 已有 Agent 实例的 system prompt 含 MCP 工具清单，标记刷新
@@ -5300,4 +5327,4 @@ if (typeof window !== 'undefined' && typeof window.api !== 'undefined' &&
       } catch { /* 主进程未就绪等场景忽略 */ }
     }, 300);
   });
-}
+})();

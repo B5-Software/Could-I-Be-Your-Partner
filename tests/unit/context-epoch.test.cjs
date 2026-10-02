@@ -4,12 +4,14 @@ const vm = require('node:vm');
 const fs = require('node:fs');
 const path = require('node:path');
 const { ContextManager } = require('../../src/renderer/js/context-manager');
+const AgentHostKit = require('../../src/agent/host');
 const TokenUsage = require('../../src/shared/token-usage');
 
 function agentFixture(api = {}) {
   const scope = {
     ContextManager,
     TokenUsage,
+    AgentHostKit,
     module: { exports: {} },
     window: { api },
     console,
