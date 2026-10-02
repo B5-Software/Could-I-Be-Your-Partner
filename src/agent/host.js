@@ -112,8 +112,7 @@ function unavailable(feature) {
 
 /** 无头 GUI 能力：画布/表格/游戏等在无界面环境下优雅失败（与既有兜底返回值同形）。 */
 function createHeadlessGui({ todos = null, titleUtils = null, onInteractive = null } = {}) {
-  const guiUnavailable = (feature) =>
-    unavailable(feature)();
+  const guiUnavailable = (feature) => unavailable(feature)();
   return {
     todos,
     sessions: createHeadlessSessions(),
@@ -209,8 +208,7 @@ function wrapFacade(getSource) {
  * 在任意时机安装的 API / 单例都能被正确看到（与改造前 `window.X` 的语义一致）。
  */
 function createRendererHost(options = {}) {
-  const root =
-    options.root || (typeof window !== 'undefined' ? window : globalThis);
+  const root = options.root || (typeof window !== 'undefined' ? window : globalThis);
   const bus = options.events || new HostEventBus();
   const listeners = new Set();
 
@@ -278,31 +276,83 @@ function createRendererHost(options = {}) {
         init: () => (root.initCanvas ? root.initCanvas() : unavailable('initCanvas')()),
         clear: () => (root.clearCanvas ? root.clearCanvas() : unavailable('clearCanvas')()),
         add: (type, id, attributes) =>
-          root.addCanvasObject ? root.addCanvasObject(type, id, attributes) : unavailable('addCanvasObject')(),
+          root.addCanvasObject
+            ? root.addCanvasObject(type, id, attributes)
+            : unavailable('addCanvasObject')(),
         update: (id, attributes) =>
-          root.updateCanvasObject ? root.updateCanvasObject(id, attributes) : unavailable('updateCanvasObject')(),
+          root.updateCanvasObject
+            ? root.updateCanvasObject(id, attributes)
+            : unavailable('updateCanvasObject')(),
         remove: (id) =>
-          root.deleteCanvasObject ? root.deleteCanvasObject(id) : unavailable('deleteCanvasObject')(),
+          root.deleteCanvasObject
+            ? root.deleteCanvasObject(id)
+            : unavailable('deleteCanvasObject')(),
         exportSVG: (filename, workspacePath) =>
-          root.exportCanvasSVG ? root.exportCanvasSVG(filename, workspacePath) : unavailable('exportCanvasSVG')(),
+          root.exportCanvasSVG
+            ? root.exportCanvasSVG(filename, workspacePath)
+            : unavailable('exportCanvasSVG')(),
       },
       spreadsheet: {
-        init: (title) => (root.initSpreadsheet ? root.initSpreadsheet(title) : unavailable('initSpreadsheet')()),
-        setCells: (entries) => (root.spreadsheetSetCells ? root.spreadsheetSetCells(entries) : unavailable('spreadsheetSetCells')()),
-        getCells: (range) => (root.spreadsheetGetCells ? root.spreadsheetGetCells(range) : unavailable('spreadsheetGetCells')()),
-        setCellFormat: (addr, format) => (root.spreadsheetSetCellFormat ? root.spreadsheetSetCellFormat(addr, format) : unavailable('spreadsheetSetCellFormat')()),
-        setRangeFormat: (range, format) => (root.spreadsheetSetRangeFormat ? root.spreadsheetSetRangeFormat(range, format) : unavailable('spreadsheetSetRangeFormat')()),
-        clearCells: (range) => (root.spreadsheetClearCells ? root.spreadsheetClearCells(range) : unavailable('spreadsheetClearCells')()),
-        insertRows: (rowNum, count) => (root.spreadsheetInsertRows ? root.spreadsheetInsertRows(rowNum, count) : unavailable('spreadsheetInsertRows')()),
-        deleteRows: (rowNum, count) => (root.spreadsheetDeleteRows ? root.spreadsheetDeleteRows(rowNum, count) : unavailable('spreadsheetDeleteRows')()),
-        insertCols: (colLetter, count) => (root.spreadsheetInsertCols ? root.spreadsheetInsertCols(colLetter, count) : unavailable('spreadsheetInsertCols')()),
-        deleteCols: (colLetter, count) => (root.spreadsheetDeleteCols ? root.spreadsheetDeleteCols(colLetter, count) : unavailable('spreadsheetDeleteCols')()),
-        sortRange: (range, colLetter, ascending) => (root.spreadsheetSortRange ? root.spreadsheetSortRange(range, colLetter, ascending) : unavailable('spreadsheetSortRange')()),
-        getData: () => (root.spreadsheetGetData ? root.spreadsheetGetData() : unavailable('spreadsheetGetData')()),
-        exportCSV: () => (root.spreadsheetExportCSV ? root.spreadsheetExportCSV() : unavailable('spreadsheetExportCSV')()),
-        importCSV: (csv, startAddr) => (root.spreadsheetImportCSV ? root.spreadsheetImportCSV(csv, startAddr) : unavailable('spreadsheetImportCSV')()),
-        importFile: (filePath) => (root.spreadsheetImportFile ? root.spreadsheetImportFile(filePath) : unavailable('spreadsheetImportFile')()),
-        exportFile: (filePath) => (root.spreadsheetExportFile ? root.spreadsheetExportFile(filePath) : unavailable('spreadsheetExportFile')()),
+        init: (title) =>
+          root.initSpreadsheet ? root.initSpreadsheet(title) : unavailable('initSpreadsheet')(),
+        setCells: (entries) =>
+          root.spreadsheetSetCells
+            ? root.spreadsheetSetCells(entries)
+            : unavailable('spreadsheetSetCells')(),
+        getCells: (range) =>
+          root.spreadsheetGetCells
+            ? root.spreadsheetGetCells(range)
+            : unavailable('spreadsheetGetCells')(),
+        setCellFormat: (addr, format) =>
+          root.spreadsheetSetCellFormat
+            ? root.spreadsheetSetCellFormat(addr, format)
+            : unavailable('spreadsheetSetCellFormat')(),
+        setRangeFormat: (range, format) =>
+          root.spreadsheetSetRangeFormat
+            ? root.spreadsheetSetRangeFormat(range, format)
+            : unavailable('spreadsheetSetRangeFormat')(),
+        clearCells: (range) =>
+          root.spreadsheetClearCells
+            ? root.spreadsheetClearCells(range)
+            : unavailable('spreadsheetClearCells')(),
+        insertRows: (rowNum, count) =>
+          root.spreadsheetInsertRows
+            ? root.spreadsheetInsertRows(rowNum, count)
+            : unavailable('spreadsheetInsertRows')(),
+        deleteRows: (rowNum, count) =>
+          root.spreadsheetDeleteRows
+            ? root.spreadsheetDeleteRows(rowNum, count)
+            : unavailable('spreadsheetDeleteRows')(),
+        insertCols: (colLetter, count) =>
+          root.spreadsheetInsertCols
+            ? root.spreadsheetInsertCols(colLetter, count)
+            : unavailable('spreadsheetInsertCols')(),
+        deleteCols: (colLetter, count) =>
+          root.spreadsheetDeleteCols
+            ? root.spreadsheetDeleteCols(colLetter, count)
+            : unavailable('spreadsheetDeleteCols')(),
+        sortRange: (range, colLetter, ascending) =>
+          root.spreadsheetSortRange
+            ? root.spreadsheetSortRange(range, colLetter, ascending)
+            : unavailable('spreadsheetSortRange')(),
+        getData: () =>
+          root.spreadsheetGetData ? root.spreadsheetGetData() : unavailable('spreadsheetGetData')(),
+        exportCSV: () =>
+          root.spreadsheetExportCSV
+            ? root.spreadsheetExportCSV()
+            : unavailable('spreadsheetExportCSV')(),
+        importCSV: (csv, startAddr) =>
+          root.spreadsheetImportCSV
+            ? root.spreadsheetImportCSV(csv, startAddr)
+            : unavailable('spreadsheetImportCSV')(),
+        importFile: (filePath) =>
+          root.spreadsheetImportFile
+            ? root.spreadsheetImportFile(filePath)
+            : unavailable('spreadsheetImportFile')(),
+        exportFile: (filePath) =>
+          root.spreadsheetExportFile
+            ? root.spreadsheetExportFile(filePath)
+            : unavailable('spreadsheetExportFile')(),
       },
     },
   };

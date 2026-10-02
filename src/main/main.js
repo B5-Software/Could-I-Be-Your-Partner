@@ -110,6 +110,12 @@ const ipcMain = createIpcRouter(electronIpcMain, {
 });
 const __ipcHandlers = ipcMain.originalHandlers;
 
+// 无头模式：不起 GUI 窗口，仅运行主进程服务 + WebUI（供 --headless --web / 自动化场景）。
+// CLI：electron . --headless [--web]，配合环境变量 CIBYP_WEB_PASSWORD / CIBYP_WEB_PORT。
+const HEADLESS = process.argv.includes('--headless');
+// 无头模式下的 Agent 运行时（GUI 模式为 null：会话由渲染进程承载）
+let agentRuntime = null;
+
 // 事件总线：主进程向各前端（GUI 窗口 / WebUI / 无头运行时）推送的统一出口。
 // 主窗口 sink 维持改造前的 GUI 行为；无窗口（--headless）时事件仍可被订阅者接收。
 const { createEventBus } = require('./core/event-bus');
@@ -1519,19 +1525,20 @@ app.whenReady().then(() => {
   // Establish the VM gate before renderer loading can report readiness.
   vmRuntimeGate.required = settings.runtime?.location === 'vm';
   vmRuntimeGate.ready = !vmRuntimeGate.required;
-  createWindow();
+  // 无头模式（--headless）：不起窗口/启动画面，仅运行服务与 WebUI（见下方 headless 启动块）
+  if (!HEADLESS) createWindow();
   // Splash 启动画面：主窗口预渲染完成前展示品牌画面（主窗口 show 时自动关闭）
-  createSplashWindow();
+  if (!HEADLESS) createSplashWindow();
   // 运行位置=虚拟机：Splash 阶段完成 VM 启动编排（就绪后才放行主窗口）
   if (settings.runtime && settings.runtime.location === 'vm') {
     vmRuntimeGate.required = true;
     vmRuntimeGate.ready = false;
     startVmBootForSplash().catch((e) => { console.warn('[vm] boot failed:', e.message); });
   }
-  // 启动时即创建托盘图标（若启用）
-  if (settings.trayEnabled) createAppTray();
+  // 启动时即创建托盘图标（若启用；无头模式无窗口，不需要托盘）
+  if (settings.trayEnabled && !HEADLESS) createAppTray();
   // 上轮异常退出 → 独立崩溃报告窗口（延后到主窗口开始加载后，避免抢占启动）
-  if (pendingCrashReport) setTimeout(() => { try { openCrashReportWindow(); } catch { /* ignore */ } }, 1200);
+  if (pendingCrashReport && !HEADLESS) setTimeout(() => { try { openCrashReportWindow(); } catch { /* ignore */ } }, 1200);
   // History v2 迁移：启动稳定后空闲执行（图片外置 + 备份），只跑一次
   setTimeout(() => { migrateHistoryV2().catch(() => {}); }, 6000);
   // 模型元数据（models.dev）后台预热：24h 磁盘缓存，失败静默走硬编码兜底
@@ -1607,6 +1614,8 @@ app.on('window-all-closed', (event) => {
   if (process.platform !== 'darwin') app.quit();
 });
 app.on('activate', () => {
+  // 无头模式没有可恢复的窗口
+  if (HEADLESS) return;
   // macOS dock 点击：如果窗口被隐藏，重新显示
   if (!mainWindow || mainWindow.isDestroyed()) {
     createWindow();
@@ -4234,6 +4243,39 @@ app.whenReady().then(async () => {
     imagesDir,
     WebControlService
   });
+
+  // ===== 无头运行时启动：Agent 内核在主进程承载，WebUI 直连运行时 =====
+  // 与 GUI 模式的区别：WebUI 的命令不再转发给某个窗口，而是直接驱动 Agent 会话；
+  // 会话事件回流成 WebUI 既有 push 协议，历史/设置等仍共用同一套数据。
+  if (HEADLESS) {
+    try {
+      const { createAgentRuntime } = require('./agent-runtime');
+      const { attachWebUiAgentDriver } = require('./webui-agent-driver');
+      const { INTERACTION_POLICY } = require('./agent-runtime');
+      agentRuntime = createAgentRuntime({
+        ipcMain,
+        eventBus,
+        getSettings: () => settings,
+        interactionPolicy:
+          process.env.CIBYP_AUTO_APPROVE === '1'
+            ? INTERACTION_POLICY.AUTO_APPROVE
+            : INTERACTION_POLICY.PROMPT,
+      });
+      attachWebUiAgentDriver({ webControlService, agentRuntime });
+      console.log('[headless] agent runtime ready');
+
+      // WebUI 自动启动：密码/端口优先取环境变量（便于容器/自动化），否则用设置里的 Web 控制配置
+      const webCfg = { ...(settings.webControl || {}) };
+      if (process.env.CIBYP_WEB_PASSWORD) webCfg.password = process.env.CIBYP_WEB_PASSWORD;
+      if (process.env.CIBYP_WEB_PORT) webCfg.port = process.env.CIBYP_WEB_PORT;
+      webControlService.configure(webCfg);
+      webControlService.workDir = workspacesBaseDir;
+      const started = await webControlService.start();
+      console.log('[headless] WebUI', started && started.ok !== false ? `listening on port ${webControlService.port}` : `failed: ${started && started.error}`);
+    } catch (e) {
+      console.error('[headless] startup failed:', e);
+    }
+  }
 
   // Auto-start email if configured
   if (settings.email.enabled && settings.email.emailUser && settings.email.totpSecret) {

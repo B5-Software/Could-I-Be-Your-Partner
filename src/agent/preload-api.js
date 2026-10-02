@@ -50,7 +50,8 @@ function loadPreloadApi(bridge, options = {}) {
       invoke: (channel, ...args) => bridge.invoke(channel, ...args),
       send: (channel, ...args) => (bridge.send ? bridge.send(channel, ...args) : undefined),
       on: (channel, listener) => (bridge.on ? bridge.on(channel, listener) : undefined),
-      removeListener: (channel, listener) => (bridge.off ? bridge.off(channel, listener) : undefined),
+      removeListener: (channel, listener) =>
+        bridge.off ? bridge.off(channel, listener) : undefined,
       once: (channel, listener) => {
         if (!bridge.on) return;
         const wrapped = (...args) => {
@@ -91,7 +92,9 @@ function loadPreloadApi(bridge, options = {}) {
   vm.runInNewContext(source, sandbox, { filename: preloadPath });
 
   if (!captured || typeof captured !== 'object') {
-    throw new Error(`preload-api: ${preloadPath} 未通过 contextBridge.exposeInMainWorld('api', ...) 暴露门面`);
+    throw new Error(
+      `preload-api: ${preloadPath} 未通过 contextBridge.exposeInMainWorld('api', ...) 暴露门面`,
+    );
   }
   return captured;
 }

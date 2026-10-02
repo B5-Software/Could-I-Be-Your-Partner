@@ -81,7 +81,10 @@ function createAgentRuntime({
       emit({ type: 'interaction', key: session.key, kind, payload });
       if (interactionPolicy === INTERACTION_POLICY.AUTO_APPROVE) {
         // 自动放行：审批通过、授权仅本次、提问返回空答复
-        respondInteraction(session, kind === 'questions' ? { answers: [] } : kind === 'tool-auth' ? 'allow-once' : true);
+        respondInteraction(
+          session,
+          kind === 'questions' ? { answers: [] } : kind === 'tool-auth' ? 'allow-once' : true,
+        );
       }
     });
   }
@@ -93,7 +96,9 @@ function createAgentRuntime({
     // 提问工具的应答形状是 answers 数组（agent.js 的 askQuestions 直接返回数组）
     const value =
       interaction.kind === 'questions'
-        ? (response && Array.isArray(response.answers) ? response.answers : [])
+        ? response && Array.isArray(response.answers)
+          ? response.answers
+          : []
         : response;
     interaction.resolve(value);
     emit({ type: 'interaction-resolved', key: session.key, kind: interaction.kind });
@@ -105,31 +110,47 @@ function createAgentRuntime({
     switch (type) {
       case 'approval': {
         // 工具执行前的用户审批：挂起等待 respond()
-        requestInteraction(session, 'approval', { toolName: data.toolName, args: data.args })
-          .then((approved) => session.agent.resolveApproval(approved !== false));
+        requestInteraction(session, 'approval', { toolName: data.toolName, args: data.args }).then(
+          (approved) => session.agent.resolveApproval(approved !== false),
+        );
         return;
       }
       case 'tool-auth-required': {
-        requestInteraction(session, 'tool-auth', { toolName: data.toolName, category: data.category })
-          .then((decision) => session.agent.resolveToolAuth(decision || 'deny'));
+        requestInteraction(session, 'tool-auth', {
+          toolName: data.toolName,
+          category: data.category,
+        }).then((decision) => session.agent.resolveToolAuth(decision || 'deny'));
         return;
       }
       case 'tool_call':
-        emit({ type: 'tool-call', key: session.key, name: data.name, args: data.args, status: 'running', callId: data.callId });
+        emit({
+          type: 'tool-call',
+          key: session.key,
+          name: data.name,
+          args: data.args,
+          status: 'running',
+          callId: data.callId,
+        });
         return;
       case 'tool-result':
         emit({
           type: 'tool-call',
           key: session.key,
           name: data.name,
-          result: typeof data.result === 'string' ? data.result : JSON.stringify(data.result ?? null),
+          result:
+            typeof data.result === 'string' ? data.result : JSON.stringify(data.result ?? null),
           status: 'done',
         });
         return;
       case 'assistant':
       case 'system':
       case 'error':
-        emit({ type: 'message', key: session.key, role: type === 'error' ? 'system' : type, content: data });
+        emit({
+          type: 'message',
+          key: session.key,
+          role: type === 'error' ? 'system' : type,
+          content: data,
+        });
         return;
       case 'stream-start':
       case 'stream-chunk':
@@ -137,7 +158,12 @@ function createAgentRuntime({
         emit({ type, key: session.key, data });
         return;
       case 'present-file':
-        emit({ type: 'message', key: session.key, role: 'assistant', content: data && data.summary ? data.summary : JSON.stringify(data) });
+        emit({
+          type: 'message',
+          key: session.key,
+          role: 'assistant',
+          content: data && data.summary ? data.summary : JSON.stringify(data),
+        });
         return;
       default:
         emit({ type, key: session.key, data });
@@ -244,7 +270,12 @@ function createAgentRuntime({
           workspacePath: session.agent.workspacePath,
         };
       } catch (error) {
-        emit({ type: 'message', key: session.key, role: 'system', content: `[错误] ${error.message}` });
+        emit({
+          type: 'message',
+          key: session.key,
+          role: 'system',
+          content: `[错误] ${error.message}`,
+        });
         return { ok: false, error: error.message };
       } finally {
         session.busy = false;

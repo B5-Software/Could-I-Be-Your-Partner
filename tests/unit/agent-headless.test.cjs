@@ -139,7 +139,8 @@ test('preload 门面派生：事件订阅经 bridge.on 注册并可卸载', () =
     received = chunk;
   });
   assert.equal(subscriptions.get('llm:stream-chunk').size, 1);
-  for (const listener of subscriptions.get('llm:stream-chunk')) listener({}, { requestId: 'r1', content: 'hi' });
+  for (const listener of subscriptions.get('llm:stream-chunk'))
+    listener({}, { requestId: 'r1', content: 'hi' });
   assert.equal(received.content, 'hi');
   off();
   assert.equal(subscriptions.get('llm:stream-chunk').size, 0);
@@ -158,7 +159,10 @@ test('事件总线：会话级订阅过滤 + 通配订阅', () => {
   bus.publish('llm:stream-chunk', { sessionKey: 'b', content: '2' });
   bus.publish('llm:stream-chunk', { content: 'global' });
 
-  assert.deepEqual(seenA.map((p) => p.content), ['1', 'global']); // 无归属事件不过滤
+  assert.deepEqual(
+    seenA.map((p) => p.content),
+    ['1', 'global'],
+  ); // 无归属事件不过滤
   assert.equal(seenAll.length, 3);
 });
 
@@ -168,7 +172,16 @@ test('无头运行时：一轮对话完成，消息/工具事件成流', async (
   const llm = llmScript([
     {
       content: '',
-      tool_calls: [{ id: 'c1', type: 'function', function: { name: 'runTerminalCommand', arguments: JSON.stringify({ id: 't1', command: 'echo hi' }) } }],
+      tool_calls: [
+        {
+          id: 'c1',
+          type: 'function',
+          function: {
+            name: 'runTerminalCommand',
+            arguments: JSON.stringify({ id: 't1', command: 'echo hi' }),
+          },
+        },
+      ],
     },
     { content: '已完成：stub output' },
   ]);
@@ -215,7 +228,16 @@ test('无头运行时：危险命令挂起审批，应答后继续执行', async
   const llm = llmScript([
     {
       content: '',
-      tool_calls: [{ id: 'c1', type: 'function', function: { name: 'runTerminalCommand', arguments: JSON.stringify({ id: 't1', command: 'rm -rf /tmp/x' }) } }],
+      tool_calls: [
+        {
+          id: 'c1',
+          type: 'function',
+          function: {
+            name: 'runTerminalCommand',
+            arguments: JSON.stringify({ id: 't1', command: 'rm -rf /tmp/x' }),
+          },
+        },
+      ],
     },
     { content: '已执行危险命令' },
   ]);
@@ -261,7 +283,16 @@ test('无头运行时：拒绝审批则工具不执行并回填拒绝原因', as
   const llm = llmScript([
     {
       content: '',
-      tool_calls: [{ id: 'c1', type: 'function', function: { name: 'runTerminalCommand', arguments: JSON.stringify({ id: 't1', command: 'rm -rf /tmp/y' }) } }],
+      tool_calls: [
+        {
+          id: 'c1',
+          type: 'function',
+          function: {
+            name: 'runTerminalCommand',
+            arguments: JSON.stringify({ id: 't1', command: 'rm -rf /tmp/y' }),
+          },
+        },
+      ],
     },
     { content: '好的，已跳过' },
   ]);
@@ -294,7 +325,10 @@ test('无头运行时：拒绝审批则工具不执行并回填拒绝原因', as
   const withTool = [...llm.calls].reverse().find((c) => c.messages.some((m) => m.role === 'tool'));
   assert.ok(withTool, '应有一轮包含工具结果的 LLM 调用');
   const toolMessage = withTool.messages.find((m) => m.role === 'tool');
-  assert.ok(String(toolMessage.content).includes('拒绝'), `工具结果应说明拒绝：${toolMessage.content}`);
+  assert.ok(
+    String(toolMessage.content).includes('拒绝'),
+    `工具结果应说明拒绝：${toolMessage.content}`,
+  );
 });
 
 test('无头运行时：中止与关闭会话', async () => {
