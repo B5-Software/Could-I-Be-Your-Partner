@@ -1233,3 +1233,39 @@ function getToolSchemas(enabledTools, mode, imOwner) {
   }
   return result;
 }
+
+// Expose for node tests / headless runtime; in renderer these are globalThis-free
+// global lexical bindings consumed as free identifiers (see src/agent/index.js).
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = {
+    MCP_DYNAMIC_TOOLS,
+    MCP_DYNAMIC_SCHEMAS,
+    DS_PLUGIN_TOOLS,
+    DS_PLUGIN_SCHEMAS,
+    registerDsPluginTools,
+    clearDsPluginTools,
+    CATEGORY_META,
+    getCategoryMeta,
+    clearMcpDynamicTools,
+    registerMcpTools,
+    getAllToolDefinitions,
+    CHAT_ONLY_TOOLS,
+    isToolAvailableForMode,
+    getToolAuthCategory,
+    isImageGenConfigured,
+    isDecisionToolConfigured,
+    CONFIG_GATED_TOOLS,
+    isConfigGatedTool,
+    isConfigGatedToolAvailable,
+    filterToolDefsByConfig,
+    isToolEnabledForSettings,
+    normalizeDecisionCriteria,
+    filterToolsByConfig,
+    adaptReadImageFileSchema,
+    CODE_TOOLS,
+    BABE_ALLOWED_TOOLS,
+    TOOL_DEFINITIONS,
+    DANGEROUS_COMMANDS,
+    getToolSchemas,
+  };
+}

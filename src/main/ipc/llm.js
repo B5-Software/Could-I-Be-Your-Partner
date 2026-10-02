@@ -18,6 +18,7 @@ module.exports = function registerLlmIpc({
   checkBudgetExceeded,
   normalizeMessagesForThinking,
   getMainWindow,
+  publishEvent,
   fetchLLMWithRetry,
   estimateTokens,
   persistSettings,
@@ -441,7 +442,7 @@ module.exports = function registerLlmIpc({
       const onRetry = (info) => {
         // 带上 sessionKey，渲染进程各 Agent 据此过滤，避免其他会话的重试气泡串到当前会话
         try {
-          getMainWindow()?.webContents.send('llm:retry', {
+          publishEvent('llm:retry', {
             ...info,
             sessionKey: options.sessionKey || null,
           });
@@ -518,13 +519,14 @@ module.exports = function registerLlmIpc({
       persistSettings();
       broadcastUsageChanged();
       // 游戏窗口/子窗口调用 LLM 时，把 usage 推送给主渲染器，让其累计到当前会话统计
-      if (
-        getMainWindow() &&
-        !getMainWindow().isDestroyed() &&
-        event.sender !== getMainWindow().webContents
-      ) {
+      // 游戏窗口/子窗口的 LLM 调用回流 usage，供界面侧按会话累计当前统计。
+      // 事件经事件总线发布：GUI 窗口 sink 投递给渲染层，无头运行时由订阅者接收；
+      // 主窗口自己发起的调用不重复回流。
+      const senderWebContents =
+        getMainWindow() && !getMainWindow().isDestroyed() ? getMainWindow().webContents : null;
+      if (!senderWebContents || event.sender !== senderWebContents) {
         try {
-          getMainWindow().webContents.send('llm:external-usage', {
+          publishEvent('llm:external-usage', {
             usage,
             model: llmForRequest.model,
             sessionKey: options.sessionKey || null,
@@ -599,7 +601,7 @@ module.exports = function registerLlmIpc({
       const onRetry = (info) => {
         // 带上 sessionKey，渲染进程各 Agent 据此过滤，避免其他会话的重试气泡串到当前会话
         try {
-          getMainWindow()?.webContents.send('llm:retry', {
+          publishEvent('llm:retry', {
             ...info,
             sessionKey: options.sessionKey || null,
           });
@@ -633,11 +635,12 @@ module.exports = function registerLlmIpc({
                 // 丢弃与上一 chunk 完全相同的连续重复（防御流式传输双发导致的逐字/逐词重复）
                 if (chunkKey === lastChunkKey) return;
                 lastChunkKey = chunkKey;
-                getMainWindow()?.webContents.send('llm:stream-chunk', {
+                publishEvent('llm:stream-chunk', {
                   content: chunk.content || '',
                   reasoning: chunk.reasoning || '',
                   streamTimeout: chunk.streamTimeout || false,
                   requestId: options.requestId,
+                  sessionKey: options.sessionKey || null,
                 });
               }
             } catch {
@@ -657,8 +660,9 @@ module.exports = function registerLlmIpc({
         if (typeof result.releaseController === 'function') result.releaseController();
       }
 
-      getMainWindow()?.webContents.send('llm:stream-end', {
+      publishEvent('llm:stream-end', {
         requestId: options.requestId,
+        sessionKey: options.sessionKey || null,
       });
       let usage = streamResult.usage || {};
       let estimated = false;

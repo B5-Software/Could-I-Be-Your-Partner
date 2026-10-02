@@ -7,6 +7,7 @@ function createIpcRouter(
   { validateSender, routeHandler = (_channel, handler) => handler },
 ) {
   const originalHandlers = new Map();
+  const routedHandlers = new Map();
   const listeners = new Map();
   function handleDirect(channel, handler) {
     nativeIpc.handle(channel, (event, ...args) => {
@@ -37,10 +38,31 @@ function createIpcRouter(
     originalHandlers,
     handleDirect,
     handle(channel, handler) {
-      handleDirect(channel, routeHandler(channel, handler));
+      const routed = routeHandler(channel, handler);
+      handleDirect(channel, routed);
       originalHandlers.set(channel, handler);
+      routedHandlers.set(channel, routed);
     },
-    removeHandler: (channel) => nativeIpc.removeHandler(channel),
+    removeHandler: (channel) => {
+      routedHandlers.delete(channel);
+      return nativeIpc.removeHandler(channel);
+    },
+    /**
+     * 本地直调：与 IPC 进来的调用走同一条流水线（VM 路由 / 编辑器拦截），
+     * 但不经过发件人校验（无头运行时与测试自己发起的调用）。
+     */
+    invokeLocal(channel, event, ...args) {
+      const handler = routedHandlers.get(channel);
+      if (!handler) throw new Error(`No IPC handler registered for channel: ${channel}`);
+      return handler(event, ...args);
+    },
+    /** 本地广播到 ipcMain.on 监听器（无头运行时发起的 send 语义）。 */
+    emitLocal(channel, event, ...args) {
+      const entries = listeners.get(channel);
+      if (!entries || entries.size === 0) return false;
+      for (const [handler] of [...entries]) handler(event, ...args);
+      return true;
+    },
     on: (channel, handler) => listen(channel, handler, false),
     once: (channel, handler) => listen(channel, handler, true),
     removeListener,

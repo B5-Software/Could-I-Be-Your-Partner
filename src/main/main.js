@@ -110,6 +110,15 @@ const ipcMain = createIpcRouter(electronIpcMain, {
 });
 const __ipcHandlers = ipcMain.originalHandlers;
 
+// 事件总线：主进程向各前端（GUI 窗口 / WebUI / 无头运行时）推送的统一出口。
+// 主窗口 sink 维持改造前的 GUI 行为；无窗口（--headless）时事件仍可被订阅者接收。
+const { createEventBus } = require('./core/event-bus');
+const eventBus = createEventBus();
+const publishEvent = (channel, payload) => eventBus.publish(channel, payload);
+const detachWindowSink = eventBus.addSink(
+  eventBus.createWindowSink(() => mainWindow),
+);
+
 const emailService = new EmailService();
 const fedikittenService = new FediKittenService();
 const cibypImService = new CibypImService();
@@ -214,7 +223,7 @@ vmService.addHostRoot(workspacesBaseDir);
 const todoService = new (require('./services/todo-service').TodoService)({
   file: path.join(dataDir, 'todos.json'),
   historyDirectories: [historyDir, babeHistoryDir],
-  changed: state => { if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('todo:state', state); }
+  changed: state => { publishEvent('todo:state', state); }
 });
 ipcMain.handle('todo:get', () => todoService.get());
 ipcMain.handle('todo:mutate', (_, args) => todoService.mutate(args));
@@ -3145,6 +3154,7 @@ const { fetchModelsDevData } = require('./ipc/llm')({
   checkBudgetExceeded,
   normalizeMessagesForThinking,
   getMainWindow: () => mainWindow,
+  publishEvent,
   fetchLLMWithRetry,
   estimateTokens,
   persistSettings,
@@ -3879,9 +3889,7 @@ const mcpService = registerMcpIpc({
   // MCP 状态/工具变化 → 广播给渲染器刷新动态工具注册
   notifyRenderer: (payload) => {
     try {
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send('mcp:servers-changed', payload || {});
-      }
+      publishEvent('mcp:servers-changed', payload || {});
     } catch { /* ignore */ }
   }
 });
