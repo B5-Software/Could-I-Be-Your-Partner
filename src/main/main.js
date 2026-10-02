@@ -4301,7 +4301,7 @@ app.whenReady().then(async () => {
 
       // TUI：终端界面（stdin/stdout 为 TTY 时进入交互界面，否则渲染一帧供自动化读取）
       if (TUI) {
-        const { startTui } = require('./tui/launch.js');
+        const { startTui } = require('../tui/launch.js');
         tuiHandle = startTui({
           runtime: agentRuntime,
           argv: process.argv,

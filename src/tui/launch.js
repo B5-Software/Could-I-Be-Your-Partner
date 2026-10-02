@@ -94,6 +94,7 @@ function startTui(options) {
 
   const decoder = createKeyDecoder();
   let rendering = false;
+  let enteredScreen = false;
 
   function render() {
     if (rendering || quitRequested) return;
@@ -148,7 +149,8 @@ function startTui(options) {
       /* ignore */
     }
     try {
-      screen.exit();
+      if (enteredScreen) screen.exit();
+      else stdout.write('\n');
     } catch {
       /* ignore */
     }
@@ -180,6 +182,7 @@ function startTui(options) {
 
   if (interactive) {
     screen.enter();
+    enteredScreen = true;
     if (typeof stdin.setRawMode === 'function') stdin.setRawMode(true);
     stdin.resume();
     if (typeof stdin.setEncoding === 'function') stdin.setEncoding('utf8');
@@ -193,8 +196,14 @@ function startTui(options) {
       });
     }
   } else {
-    // 非 TTY（管道/测试）：不进 alt-screen，只渲染一次，便于自动化读取
-    render();
+    // 非 TTY（管道/自动化）：不进 alt-screen，渲染一帧后退出，
+    // 便于脚本直接读取界面文本（长驻无界面请用 --headless --web）。
+    boot
+      .then(() => {
+        render();
+        shutdown();
+      })
+      .catch(() => shutdown());
   }
 
   // 动画时钟：spinner / 闪烁 / 计时
