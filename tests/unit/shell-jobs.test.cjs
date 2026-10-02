@@ -134,7 +134,7 @@ test(
   async (t) => {
     const { root, service } = fixture(t);
     const file = path.join(root, 'running.js');
-    fs.writeFileSync(file, 'setInterval(()=>{}, 1000);');
+    fs.writeFileSync(file, "console.log('READY');setInterval(()=>{}, 1000);");
     const first = await service.run(command(file), root, null, {
       sessionKey: 'window:1',
       yieldMs: 50,
@@ -143,6 +143,19 @@ test(
       sessionKey: 'session:2',
       yieldMs: 50,
     });
+    // The owner test needs two running children, rather than PowerShell launchers
+    // still creating them. On a loaded Windows runner, a 50 ms yield can precede
+    // either launch and race taskkill's process-tree enumeration.
+    for (const [job, sessionKey] of [
+      [first, 'window:1'],
+      [other, 'session:2'],
+    ]) {
+      assert.equal(job.ok, true);
+      await until(
+        () => service.run(null, null, null, { sessionKey, jobId: job.jobId }),
+        (result) => result.output.includes('READY'),
+      );
+    }
     await service.releaseOwner('window:1');
     assert.equal(service.jobs.has(first.jobId), false);
     assert.equal(
