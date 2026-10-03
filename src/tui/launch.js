@@ -29,7 +29,7 @@ const ALT_ENTER = CSI + '?1049h' + CSI + '2J' + CSI + 'H';
 const ALT_EXIT = CSI + '?1049l';
 const HIDE_CURSOR = CSI + '?25l';
 const SHOW_CURSOR = CSI + '?25h';
-const CLEAR_LINE_END = CSI + 'K';
+const CLEAR_LINE = CSI + '2K';
 const CLEAR_REST = CSI + 'J';
 // 鼠标跟踪：普通点击 + SGR 坐标（滚轮滚动聊天记录；选中文本请按住 Shift 拖动）
 const MOUSE_ON = CSI + '?1000h' + CSI + '?1002h' + CSI + '?1006h';
@@ -161,20 +161,28 @@ function createTerminalScreen(stdout) {
     render(frame) {
       screen.setTitle(frame.title || '');
       const lines = (frame.lines || []).slice(0, screen.height);
-      let out = CSI + 'H';
+      let out = '';
       for (let i = 0; i < lines.length; i += 1) {
+        // ConPTY keeps the cursor in the final cell after an exact-width write.
+        // Erasing after that write removes the last character (including the
+        // version suffix). Clear first and address each row explicitly so a
+        // full bottom row cannot wrap or scroll the screen.
         out +=
+          CSI +
+          (i + 1) +
+          ';1H' +
+          CSI +
+          '0m' +
+          CLEAR_LINE +
           truncate(
             stripAnsi(lines[i], true).replace(/\n/g, ' ').replace(/\t/g, '    '),
             screen.width,
             '',
           ) +
           CSI +
-          '0m' +
-          CLEAR_LINE_END;
-        if (i < lines.length - 1) out += '\r\n';
+          '0m';
       }
-      out += CLEAR_REST;
+      if (lines.length < screen.height) out += CSI + (lines.length + 1) + ';1H' + CLEAR_REST;
       const cursor = frame.cursor || { row: 1, col: 1 };
       out +=
         CSI +

@@ -54,6 +54,35 @@ test('screen output permits only styling and clamps both dimensions and cursor',
   assert.equal(ansi.visibleWidth('e\u0301中文'), 5);
 });
 
+test('screen preserves full-width rows and clears stale rows before repainting', async () => {
+  const { Terminal } = require('@xterm/xterm');
+  const { createTerminalScreen } = require('../../src/tui/launch.js');
+  const terminal = new Terminal({ cols: 30, rows: 8, allowProposedApi: true });
+  const screen = createTerminalScreen({
+    columns: 30,
+    rows: 8,
+    write: (text) => terminal.write(text),
+  });
+  const flush = () => new Promise((resolve) => terminal.write('', resolve));
+  try {
+    const lines = Array.from({ length: 8 }, (_, index) => String(index).repeat(30));
+    screen.render({ lines });
+    await flush();
+    for (let row = 0; row < 8; row++)
+      assert.equal(terminal.buffer.active.getLine(row).translateToString(), lines[row]);
+    screen.render({ lines: ['short'] });
+    await flush();
+    assert.equal(terminal.buffer.active.getLine(0).translateToString(true), 'short');
+    for (let row = 1; row < 8; row++)
+      assert.equal(terminal.buffer.active.getLine(row).translateToString(true), '');
+    screen.render({ lines: [] });
+    await flush();
+    assert.equal(terminal.buffer.active.getLine(0).translateToString(true), '');
+  } finally {
+    terminal.dispose();
+  }
+});
+
 test('bracketed paste terminators survive every chunk split and decoder timeout', () => {
   const end = ESC + '[201~';
   for (let split = 1; split < end.length; split++) {

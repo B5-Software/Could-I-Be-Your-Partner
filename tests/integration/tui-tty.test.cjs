@@ -20,6 +20,7 @@ const http = require('node:http');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { Terminal } = require('@xterm/xterm');
 
 const root = path.resolve(__dirname, '../..');
 const pty = require(path.join(root, 'node_modules', 'node-pty'));
@@ -111,7 +112,7 @@ function makeProfile(port) {
 }
 
 /** 起 PTY 子进程；watchdogMs 到点未完成则杀掉并 reject（带阶段信息） */
-function runInPty({ args, env, onOutput, watchdogMs = 25000, describe }) {
+function runInPty({ args, env, onOutput, onScreen, watchdogMs = 25000, describe }) {
   return new Promise((resolve, reject) => {
     const resources = process.env.CIBYP_TEST_PACKAGED_RESOURCES;
     const binary = resources
@@ -129,11 +130,15 @@ function runInPty({ args, env, onOutput, watchdogMs = 25000, describe }) {
         CIBYP_DOCUMENTS: path.join(env.CIBYP_USER_DATA, 'documents'),
       }),
     });
+    const terminal = onScreen
+      ? new Terminal({ cols: 110, rows: 32, allowProposedApi: true })
+      : null;
     let out = '';
     let settled = false;
     const watchdog = setTimeout(() => {
       if (settled) return;
       settled = true;
+      terminal?.dispose();
       const plain = stripAnsi(out);
       try {
         child.kill();
@@ -151,13 +156,19 @@ function runInPty({ args, env, onOutput, watchdogMs = 25000, describe }) {
     }, watchdogMs);
     child.onData((data) => {
       out += data;
+      terminal?.write(data, () => onScreen(terminal));
       if (onOutput) onOutput(data, out, child);
     });
     child.onExit(({ exitCode }) => {
       clearTimeout(watchdog);
       if (settled) return;
       settled = true;
-      resolve({ exitCode, output: out });
+      const finish = () => {
+        terminal?.dispose();
+        resolve({ exitCode, output: out });
+      };
+      if (terminal) terminal.write('', finish);
+      else finish();
     });
   });
 }
@@ -168,6 +179,12 @@ test(
     const stub = await startStubLlm();
     const profile = makeProfile(stub.port);
     const stage = { welcomed: false, typed: false, echoed: false, replied: false, quitting: 0 };
+    const resources = process.env.CIBYP_TEST_PACKAGED_RESOURCES;
+    const version = require(
+      path.join(resources ? path.join(resources, 'app.asar.unpacked') : root, 'package.json'),
+    ).version.split('+')[0];
+    let completeVersionSeen = false;
+    let lastStatus = '';
 
     try {
       const result = await runInPty({
@@ -175,6 +192,13 @@ test(
         env: { CIBYP_USER_DATA: profile, CIBYP_AUTO_APPROVE: '1' },
         watchdogMs: 30000,
         describe: () => JSON.stringify({ stage, stubHits: stub.hits.count }),
+        onScreen: (terminal) => {
+          const row = terminal.buffer.active.getLine(31).translateToString(true);
+          if (row.includes('Could I Be Your Partner')) {
+            lastStatus = row;
+            completeVersionSeen ||= row.endsWith('Could I Be Your Partner ' + version);
+          }
+        },
         onOutput: (data, all, child) => {
           const plain = stripAnsi(all);
           if (!stage.welcomed && plain.includes('终端模式')) {
@@ -204,6 +228,10 @@ test(
       });
 
       assert.equal(result.exitCode, 0, 'Ctrl+C 两次后应干净退出；阶段=' + JSON.stringify(stage));
+      assert.ok(
+        completeVersionSeen,
+        `The actual terminal must display the complete version ${version}: ${lastStatus}`,
+      );
       for (const title of ['New', TITLE, '重命名终端']) {
         assert.ok(
           result.output.includes('CIBYP | ' + title),
