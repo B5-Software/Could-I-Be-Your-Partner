@@ -5,6 +5,17 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const os = require('node:os');
 
+function patchPtyHelperPaths(source) {
+  for (const name of ['app', 'node_modules']) {
+    const original = `helperPath.replace('${name}.asar', '${name}.asar.unpacked')`;
+    const replacement = `helperPath.replace(/${name}\\.asar(?!\\.unpacked)/g, '${name}.asar.unpacked')`;
+    if (source.includes(original)) source = source.replace(original, replacement);
+    else if (!source.includes(replacement))
+      throw new Error('Unsupported node-pty helper path resolver');
+  }
+  return source;
+}
+
 async function preparePackagedCLI(context) {
   const resources = context.packager.getResourcesDir(context.appOutDir);
   const platform = context.electronPlatformName;
@@ -52,6 +63,19 @@ async function preparePackagedCLI(context) {
   if (platform !== 'win32') {
     for (const name of ['cibyp', 'cibyp-tui'])
       await fs.promises.chmod(path.join(directory, name), 0o755);
+    // node-pty assumes an Electron virtual ASAR path. Pure Node resolves the
+    // physical directory, which must not become app.asar.unpacked.unpacked.
+    const moduleFile = path.join(cliRoot, 'node_modules/node-pty/lib/unixTerminal.js');
+    await fs.promises.writeFile(
+      moduleFile,
+      patchPtyHelperPaths(await fs.promises.readFile(moduleFile, 'utf8')),
+    );
+    if (platform === 'darwin') {
+      for (const directory of ['build/Release', 'build/Debug', `prebuilds/darwin-${arch}`]) {
+        const helper = path.join(cliRoot, 'node_modules/node-pty', directory, 'spawn-helper');
+        if (fs.existsSync(helper)) await fs.promises.chmod(helper, 0o755);
+      }
+    }
   }
   // Run the installed entry point with its own Node binary. This catches ASAR
   // resolution, missing CLI files and runtime/architecture errors in every CI build.
@@ -148,4 +172,4 @@ async function preparePackagedCLI(context) {
   );
 }
 
-module.exports = { preparePackagedCLI };
+module.exports = { preparePackagedCLI, patchPtyHelperPaths };
