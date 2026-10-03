@@ -86,6 +86,11 @@
     }
   }
 
+  document.getElementById('btn-vm-file-manager')?.addEventListener('click', async () => {
+    const result = await window.api.vm.openFileManager();
+    if (!result.ok) showToast(result.error);
+  });
+
   function _vmBindSyncButtons() {
     const run = async (direction, label) => {
       _vmSetText('vm-sync-status', `${label}中…`, false);

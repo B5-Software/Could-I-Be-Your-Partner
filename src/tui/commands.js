@@ -36,6 +36,9 @@ function localizeCommand(cmd) {
 
 /** 内置命令表 */
 const COMMANDS = [
+  { name: 'undo', args: '', desc: '停止并撤回最近一条用户消息及对应回复', group: 'message' },
+  { name: 'cwd', args: '', desc: '用系统文件管理器打开当前工作区', group: 'general' },
+  { name: 'config', args: '[搜索]', desc: '搜索和编辑共享设置', group: 'general' },
   { name: 'help', args: '', desc: '显示帮助', group: 'general' },
   {
     name: 'mode',
@@ -100,8 +103,8 @@ function parseCommandFile(name, text) {
   }
   return {
     name,
-    args: '[参数]',
-    desc: description || '自定义命令',
+    args: t('ui.tui.customArgs', '[参数]'),
+    desc: description || t('ui.tui.customCommand', '自定义命令'),
     group: 'custom',
     custom: true,
     agent: ['chat', 'babe', 'code'].includes(agent) ? agent : '',
@@ -171,7 +174,11 @@ function parseInput(raw, options = {}) {
     kind: 'command',
     name,
     argText,
-    error: `未知命令 /${name}（/help 查看命令表，/commands 查看自定义命令）`,
+    error: t(
+      'ui.tui.unknownCommandHelp',
+      '未知命令 /{name}（/help 查看命令表，/commands 查看自定义命令）',
+      { name },
+    ),
   };
 }
 

@@ -1,0 +1,78 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later */
+'use strict';
+module.exports = {
+  en: {
+    'ui.tui.customArgs': '[arguments]',
+    'ui.tui.customCommand': 'Custom command',
+    'ui.tui.unknownCommandHelp':
+      'Unknown command /{name} (/help lists commands; /commands lists custom commands)',
+    'ui.tui.cmd.undo': 'Stop and withdraw the last user message and its reply',
+    'ui.tui.cmd.cwd': 'Open the current workspace in the system file manager',
+    'ui.tui.cmd.config': 'Search and edit shared settings',
+    'ui.tui.args.config': '[search]',
+    'ui.tui.noDesktop': 'No graphical desktop is available; the file manager cannot be opened',
+    'ui.tui.undone': 'Last message withdrawn; completed file changes remain on disk',
+    'ui.tui.configBoolean': 'Enter true or false',
+    'ui.tui.configNumber': 'Enter a valid number',
+    'ui.tui.configTitle': 'Settings',
+    'ui.tui.configHint': 'Type to search · ↑↓ select · Enter edit · Esc close',
+    'ui.tui.configCount': '{count} settings · shared with GUI; fields save immediately',
+    'ui.tui.configReadOnly': 'Managed by the runtime; read only',
+    'ui.tui.configEditHint': 'Enter save · Esc back; JSON fields accept arrays and objects',
+    'ui.tui.configSaved': 'Saved: {path}',
+    'ui.tui.configRestart': 'Takes effect after restart',
+    'ui.tui.searchHint':
+      'Search {index}/{count} · Enter/F3 next · Shift+Enter/F3 previous · Esc back',
+    'ui.tui.interrupt': 'Esc stop',
+    'ui.tui.configGroup.llm': 'Model',
+    'ui.tui.configGroup.theme': 'Appearance',
+    'ui.tui.configGroup.runtime': 'Execution location',
+    'ui.tui.configGroup.webResearch': 'Web search',
+    'ui.tui.configGroup.budget': 'Usage and cost',
+    'ui.tui.configGroup.voice': 'Voice',
+    'ui.tui.configGroup.babe': 'Babe mode',
+    'ui.tui.configGroup.decision': 'Jev',
+    'ui.tui.configGroup.tools': 'Tools',
+    'ui.tui.configGroup.tarotVisible': 'Show destiny cards',
+    'ui.tui.configGroup.language': 'Language',
+  },
+  de: {
+    'ui.tui.customArgs': '[Argumente]',
+    'ui.tui.customCommand': 'Eigener Befehl',
+    'ui.tui.unknownCommandHelp':
+      'Unbekannter Befehl /{name} (/help zeigt Befehle; /commands zeigt eigene Befehle)',
+    'ui.tui.cmd.undo': 'Stoppen und letzte Benutzernachricht samt Antwort zurücknehmen',
+    'ui.tui.cmd.cwd': 'Aktuellen Arbeitsbereich im Dateimanager öffnen',
+    'ui.tui.cmd.config': 'Gemeinsame Einstellungen suchen und bearbeiten',
+    'ui.tui.args.config': '[Suche]',
+    'ui.tui.noDesktop':
+      'Kein grafischer Desktop verfügbar; der Dateimanager kann nicht geöffnet werden',
+    'ui.tui.undone':
+      'Letzte Nachricht zurückgenommen; bereits ausgeführte Dateiänderungen bleiben erhalten',
+    'ui.tui.configBoolean': 'true oder false eingeben',
+    'ui.tui.configNumber': 'Eine gültige Zahl eingeben',
+    'ui.tui.configTitle': 'Einstellungen',
+    'ui.tui.configHint': 'Tippen zum Suchen · ↑↓ auswählen · Enter bearbeiten · Esc schließen',
+    'ui.tui.configCount':
+      '{count} Einstellungen · gemeinsam mit der GUI; Felder werden sofort gespeichert',
+    'ui.tui.configReadOnly': 'Von der Laufzeit verwaltet; schreibgeschützt',
+    'ui.tui.configEditHint':
+      'Enter speichern · Esc zurück; JSON-Felder erlauben Arrays und Objekte',
+    'ui.tui.configSaved': 'Gespeichert: {path}',
+    'ui.tui.configRestart': 'Wirksam nach dem Neustart',
+    'ui.tui.searchHint':
+      'Suche {index}/{count} · Enter/F3 weiter · Shift+Enter/F3 zurück · Esc zurück',
+    'ui.tui.interrupt': 'Esc stoppen',
+    'ui.tui.configGroup.llm': 'Modell',
+    'ui.tui.configGroup.theme': 'Darstellung',
+    'ui.tui.configGroup.runtime': 'Ausführungsort',
+    'ui.tui.configGroup.webResearch': 'Websuche',
+    'ui.tui.configGroup.budget': 'Nutzung und Kosten',
+    'ui.tui.configGroup.voice': 'Spracheingabe',
+    'ui.tui.configGroup.babe': 'Babe-Modus',
+    'ui.tui.configGroup.decision': 'Jev',
+    'ui.tui.configGroup.tools': 'Tools',
+    'ui.tui.configGroup.tarotVisible': 'Schicksalskarten anzeigen',
+    'ui.tui.configGroup.language': 'Sprache',
+  },
+};

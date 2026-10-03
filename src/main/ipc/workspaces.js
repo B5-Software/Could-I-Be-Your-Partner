@@ -90,9 +90,9 @@ module.exports = function registerWorkspacesIpc({
       if (!target.ok) return target;
       const hostRoot = hostPath || io.toHost(target.vm);
       if (!hostRoot) return { ok: false, error: 'Workspace has no local mirror' };
-      if (target.vm.startsWith('/workspace/_external/')) {
+      if (vmService.externalPair(target.vm)) {
         return await vmService.pullExternalDir(target.vm, {
-          maxFileMB: vmService.runtime.vm.syncMaxFileMB || 64,
+          force: true,
         });
       }
       if (
@@ -102,28 +102,17 @@ module.exports = function registerWorkspacesIpc({
         return await vmService.syncWorkspace({ direction: 'pull', reason: 'code-turn' });
       }
       // A per-directory pull also supports an explicit export in isolated mode.
-      const { WorkspaceSync } = require('../vm/vm-workspace');
-      const identity = require('node:crypto')
-        .createHash('sha256')
-        .update(path.resolve(hostRoot) + '\0' + target.vm)
-        .digest('hex');
-      vmService._workspaceExports = vmService._workspaceExports || new Map();
-      let sync = vmService._workspaceExports.get(identity);
-      if (!sync) {
-        sync = new WorkspaceSync({
-          vmService,
-          hostRoot,
-          vmMount: target.vm,
-          instanceDir: vmService.instance?.dir
-            ? path.join(vmService.instance.dir, 'workspace-export', identity)
-            : null,
-          options: {
-            maxFileMB: vmService.runtime.vm.syncMaxFileMB || 64,
-            syncGit: !!vmService.runtime.vm.syncGit,
-          },
-        });
-        vmService._workspaceExports.set(identity, sync);
-      }
+      const mapping = io
+        .mappingRoots()
+        .sort((a, b) => b[1].length - a[1].length)
+        .find(
+          ([host, vm]) =>
+            require('../vm/vm-paths').isUnder(host, hostRoot) &&
+            (target.vm === vm || target.vm.startsWith(vm + '/')),
+        );
+      const sync = mapping
+        ? vmService.workspacePair(...mapping)
+        : vmService.workspacePair(hostRoot, target.vm);
       return await sync.sync({ direction: 'pull', reason: 'workspace-export' });
     } catch (error) {
       return { ok: false, error: error.message };
@@ -255,6 +244,41 @@ module.exports = function registerWorkspacesIpc({
       ? vmService.runtime.vm.workspaceMount || '/workspace'
       : workspacesBaseDir,
   );
+
+  ipcMain.handle('workspace:cwd', async (_, directory) => {
+    try {
+      if (!(await require('../core/graphical-environment').hasGraphicalEnvironment()))
+        return { ok: false, code: 'NO_DESKTOP', error: 'No usable graphical desktop is available' };
+      let local = directory || workspacesBaseDir;
+      if (require('../vm/tool-location').isVmOperation(() => vmService)) {
+        const io = new (require('../vm/vm-fs').VmFs)({ vmService });
+        const target = io.resolveVmPath(local);
+        if (!target.ok) return target;
+        local = vmService.toHostPath(target.vm);
+        if (!local)
+          return {
+            ok: false,
+            error: 'VM workspace has no host mirror. Export it with the VM file manager first.',
+          };
+        const external = vmService.externalPair(target.vm);
+        const mapping = io
+          .mappingRoots()
+          .sort((a, b) => b[1].length - a[1].length)
+          .find(([, vm]) => target.vm === vm || target.vm.startsWith(vm + '/'));
+        if (!external && !mapping)
+          return { ok: false, error: 'Workspace has no synchronized host mapping' };
+        const result = external
+          ? await vmService.pullExternalDir(target.vm, { force: true })
+          : await vmService
+              .workspacePair(...mapping)
+              .sync({ direction: 'pull', reason: 'cwd-export' });
+        if (!result.ok) return result;
+      }
+      return await require('../services/open-directory').openDirectory(local);
+    } catch (error) {
+      return { ok: false, error: error.message };
+    }
+  });
 
   ipcMain.handle('workspace:openInExplorer', async (_, dirPath) => {
     if (require('../vm/tool-location').isVmOperation(() => vmService)) {

@@ -2034,7 +2034,8 @@ function broadcastThemeChanged() {
 }
 function broadcastSettingsChanged() {
   codeOSSService.syncPersonalization();
-  const payload = { language: settings.language, theme: settings.theme, ime: settings.ime, voice: settings.voice };
+  const payload = { language: settings.language, theme: settings.theme, ime: settings.ime, voice: settings.voice, tarotVisible: settings.tarotVisible };
+  publishEvent('settings:changed', payload);
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) win.webContents.send('settings:changed', payload);
   }
@@ -2793,92 +2794,30 @@ function saveOffscreenShot(win, prepareTargetDir, prefix) {
 }
 
 // ---- IPC: Web Search & Fetch ----
-ipcMain.handle('web:search', async (_, query, workspacePath) => {
-  if (vmLocationActive()) {
-    try { return { ok: true, query, ...await pwService.renderVm({ url: `https://www.bing.com/search?q=${encodeURIComponent(query)}`, workspacePath, waitMs: 2000 }) }; }
-    catch (error) { return { ok: false, location: 'vm', error: error.message }; }
-  }
-  if (!mainWindow) return { ok: false, error: 'main window not ready' };
-  try {
-    return await withOffscreenWindow({
-      width: 1200,
-      height: 800,
-      show: false,
-      webPreferences: {
-        offscreen: true,
-        contextIsolation: true,
-        sandbox: true,
-        nodeIntegration: false
-      }
-    }, async (offscreenWindow) => {
-      const url = `https://www.bing.com/search?q=${encodeURIComponent(query)}`;
-      await offscreenWindow.webContents.loadURL(url, { userAgent: OFFSCREEN_UA });
-
-      // 等待渲染稳定
-      await new Promise(r => setTimeout(r, 2000));
-
-      const result = await offscreenWindow.webContents.executeJavaScript(`(() => {
-        const items = [];
-        const nodes = document.querySelectorAll('li.b_algo');
-        for (let i = 0; i < nodes.length && items.length < 15; i++) {
-          const li = nodes[i];
-          const a = li.querySelector('h2 a');
-          const p = li.querySelector('p, .b_caption p');
-          items.push({
-            title: a ? a.textContent.trim() : '',
-            url: a ? a.href : '',
-            snippet: p ? p.textContent.trim() : '',
-            id: li.id || ''
-          });
-        }
-        return {
-          title: document.title,
-          url: location.href,
-          results: items,
-          html: document.documentElement.outerHTML.slice(0, 150000)
-        };
-      })()`);
-
-      // Code 模式：检测工作区下 .cibyp-code-history 目录是否存在，是则保存到其 assets/ 子目录
-      // 否则保持原有行为（保存到工作区根目录或 imagesDir）
-      const imgPath = await saveOffscreenShot(offscreenWindow, () => {
-        if (workspacePath && fs.existsSync(workspacePath)) {
-          const codeHistDir = path.join(workspacePath, '.cibyp-code-history');
-          if (fs.existsSync(codeHistDir)) {
-            const assetsDir = path.join(codeHistDir, 'assets');
-            try { fs.mkdirSync(assetsDir, { recursive: true }); } catch {}
-            return assetsDir;
-          }
-          return workspacePath;
-        }
-        return imagesDir;
-      }, 'bing');
-
-      return {
-        ok: true,
-        query,
-        url: result.url,
-        title: result.title,
-        results: result.results,
-        html: result.html,
-        screenshotPath: imgPath || '',
-        screenshotUrl: imgPath ? `file://${imgPath}` : ''
-      };
+require('./services/vm-file-manager').registerVmFileManager({ ipcMain, BrowserWindow, vmService, getSettings: () => settings, systemDark: () => nativeTheme.shouldUseDarkColors });
+const webResearch = new (require('./services/web-research').WebResearch)({
+  getSettings: () => settings, vmService, vmActive: vmLocationActive,
+  bingSearch: async (query, options) => {
+    const url = `https://www.bing.com/search?q=${encodeURIComponent(query)}&setlang=${encodeURIComponent(settings.language || 'zh-CN')}&count=30`;
+    let result;
+    if (vmLocationActive()) result = await pwService.renderVm({ url, waitMs: 2000, captureScreenshot: false });
+    else result = await withOffscreenWindow({ width: 1200, height: 800, show: false,
+      webPreferences: { offscreen: true, contextIsolation: true, sandbox: true, nodeIntegration: false } }, async win => {
+      await win.webContents.loadURL(url, { userAgent: OFFSCREEN_UA });
+      return win.webContents.executeJavaScript(`Array.from(document.querySelectorAll('li.b_algo')).map(node => ({ title: node.querySelector('h2 a')?.textContent?.trim() || '', url: node.querySelector('h2 a')?.href || '', snippet: node.querySelector('.b_caption p, p')?.textContent?.trim() || '' }))`);
     });
-  } catch (e) {
-    return { ok: false, error: e.message };
+    const rows = require('./services/web-research').normalizeResults(Array.isArray(result) ? result : result.results || [], 'bing');
+    if (!rows.length) throw new Error('Bing returned no search results (possibly a bot challenge); select another engine');
+    return rows;
   }
 });
-ipcMain.handle('web:fetch', async (_, url) => {
-  try {
-    const resp = await fetch(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-      }
-    });
-    const text = await resp.text();
-    return { ok: true, content: text.substring(0, 200000) };
-  } catch (e) { return { ok: false, error: e.message }; }
+ipcMain.handle('web:search', async (_, input) => {
+  try { return await webResearch.search(input); }
+  catch (error) { return { ok: false, error: error.message }; }
+});
+ipcMain.handle('web:fetch', async (_, input) => {
+  try { return await webResearch.read(input); }
+  catch (error) { return { ok: false, error: error.message }; }
 });
 
 ipcMain.handle('web:offscreenSnapshotOCR', async (_, options = {}) => {

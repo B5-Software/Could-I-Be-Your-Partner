@@ -34,6 +34,8 @@ const APP_VERSION = require('../../package.json').version.split('+')[0];
 const { selectionRange, highlightLine } = require('./selection');
 const { FIGURES, BOX } = require('./theme.js');
 const { t } = require('./text.js');
+const { highlightSearch } = require('./transcript-search');
+const { markdownLines } = require('./markdown');
 
 /** 模式 → 强调色键 */
 const MODE_ACCENT = {
@@ -77,9 +79,8 @@ function renderInline(theme, text) {
 
 /** 正文排版：换行 + 行内标记（渲染标记前先按纯文本宽度换行） */
 function layoutText(theme, text, width, indent) {
-  const lines = wrapText(String(text == null ? '' : text), Math.max(4, width));
-  return lines.map((line) =>
-    indent ? indent + renderInline(theme, line) : renderInline(theme, line),
+  return markdownLines(theme, text, Math.max(4, width), renderInline).map(
+    (line) => (indent || '') + line,
   );
 }
 
@@ -156,7 +157,7 @@ function renderEntry(theme, entry, width, opts) {
   const state = opts || {};
   switch (entry.kind) {
     case 'brand':
-      return renderBrand(theme, width);
+      return renderBrand(theme, width, false, state.mode);
     case 'user': {
       const indent = '  ';
       const lines = layoutText(theme, entry.text, width - 4, indent);
@@ -266,12 +267,13 @@ function renderEntry(theme, entry, width, opts) {
       ];
     }
     case 'tarot': {
+      if (state.tarotVisible === false) return [];
       const name =
         (entry.card && (entry.card.name || entry.card.title)) || t('ui.tui.tarotCard', '命运之牌');
       const meaning = (entry.card && (entry.card.meaning || entry.card.desc)) || '';
       return [
         '  ' +
-          paint(theme, 'accent', FIGURES.diamond, { bold: true }) +
+          paint(theme, accentFor(state.mode), FIGURES.diamond, { bold: true }) +
           ' ' +
           style(t('ui.tui.tarot', '命运之牌') + ' · ' + name, { bold: true }) +
           (meaning
@@ -555,11 +557,19 @@ function composeFrame(state, opts) {
 
   const statusLine = renderStatusLine(theme, state, width);
   const footerLine = renderFooter(theme, options.hints || [], width);
-  const inputState = state.modal?.inputMode
-    ? { ...state, editorText: state.modal.editor.value, editorCursor: state.modal.editor.cursor }
-    : state;
+  const inputState = state.search?.active
+    ? { ...state, editorText: state.search.editor.value, editorCursor: state.search.editor.cursor }
+    : state.modal?.inputMode
+      ? {
+          ...state,
+          editorText: state.modal.masked
+            ? '•'.repeat(Array.from(state.modal.editor.value).length)
+            : state.modal.editor.value,
+          editorCursor: state.modal.editor.cursor,
+        }
+      : state;
   const inputView = renderInput(theme, inputState, width, {
-    hint: options.inputHint,
+    hint: state.search?.active ? state.search.hint : options.inputHint,
     maxRows: Math.min(6, Math.max(1, height - 10)),
   });
 
@@ -581,9 +591,12 @@ function composeFrame(state, opts) {
   // 消息区：从底部往上取（scrollOffset = 距底部的行数）
   const allLines = [];
   for (const entry of state.messages || []) {
+    if (entry.kind === 'tarot' && state.tarotVisible === false) continue;
     allLines.push(
       ...renderEntry(theme, entry, width, {
         running: state.running,
+        mode: state.mode,
+        tarotVisible: state.tarotVisible,
         blink: state.blink,
         thinkingExpanded: state.thinkingExpanded,
       }),
@@ -628,7 +641,14 @@ function composeFrame(state, opts) {
     messageAreaHeight > 0
       ? allLines
           .slice(start, end)
-          .map((line, index) => highlightLine(theme, line, start + index, range))
+          .map((line, index) =>
+            highlightLine(
+              theme,
+              highlightSearch(theme, line, state.search?.query),
+              start + index,
+              range,
+            ),
+          )
       : [];
   const rowLines = visible.map((_line, index) =>
     start + index < transcriptLines.length ? start + index : null,
@@ -679,10 +699,10 @@ function composeBootFrame(theme, state, width, height) {
   const barWidth = Math.max(20, Math.min(width - 8, 60));
 
   const body = [
-    ...renderBrand(theme, width, height < 15),
+    ...renderBrand(theme, width, height < 15, state.mode),
     '',
     '  ' +
-      style(frame, { fg: theme.accent, bold: true }) +
+      style(frame, { fg: theme[accentFor(state.mode)], bold: true }) +
       '  ' +
       style(t('ui.tui.vmBooting', '正在启动虚拟机…'), { bold: true }),
     '',
@@ -708,9 +728,9 @@ function composeBootFrame(theme, state, width, height) {
   };
 }
 
-function renderBrand(theme, width, compact = false) {
+function renderBrand(theme, width, compact = false, mode = 'chat') {
   return brandLines(Math.max(0, width - 4), compact).map(
-    (line) => '  ' + style(line, { fg: theme.accent, bold: true }),
+    (line) => '  ' + style(line, { fg: theme[accentFor(mode)], bold: true }),
   );
 }
 
@@ -718,7 +738,7 @@ function renderBrand(theme, width, compact = false) {
 function renderSpinnerLine(theme, state, width) {
   const frames = FIGURES.spinner;
   const glyph = frames[(state.spinnerFrame || 0) % frames.length];
-  const spin = style(glyph, { fg: theme.accent, bold: true });
+  const spin = style(glyph, { fg: theme[accentFor(state.mode)], bold: true });
   const label = state.spinnerLabel || t('ui.tui.spinnerThinking', '思考中');
   const elapsed = state.elapsedMs ? ' · ' + formatDuration(state.elapsedMs) : '';
   return (
@@ -726,7 +746,7 @@ function renderSpinnerLine(theme, state, width) {
     spin +
     ' ' +
     style(label, { dim: true }) +
-    paint(theme, 'subtle', ' (esc to interrupt' + elapsed + ')', { dim: true })
+    paint(theme, 'subtle', ' (' + t('ui.tui.interrupt', 'Esc 停止') + elapsed + ')', { dim: true })
   );
 }
 

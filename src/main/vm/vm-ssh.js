@@ -18,6 +18,7 @@
 
 const { EventEmitter } = require('events');
 const { Client } = require('ssh2');
+const { StringDecoder } = require('node:string_decoder');
 
 class VmSsh extends EventEmitter {
   /**
@@ -106,32 +107,43 @@ class VmSsh extends EventEmitter {
   }
 
   /** 执行命令，收集输出 */
-  exec(command, { timeoutMs = 300000 } = {}) {
+  exec(command, { timeoutMs = 300000, maxBuffer = 64 * 1024 * 1024 } = {}) {
     return new Promise((resolve, reject) => {
       if (!this.client || !this.connected) return reject(new Error('SSH 未连接'));
+      let stdout = '', stderr = '', bytes = 0, channel, settled = false;
+      const outDecoder = new StringDecoder('utf8'), errDecoder = new StringDecoder('utf8');
+      const fail = error => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        error.stdout = stdout; error.stderr = stderr;
+        reject(error);
+        try { channel?.close(); } catch { /* closed */ }
+      };
+      const timer = timeoutMs > 0 ? setTimeout(() => {
+        const error = new Error(`命令超时（${timeoutMs}ms）: ${command.slice(0, 120)}`);
+        error.code = 'VM_EXEC_TIMEOUT'; fail(error);
+      }, timeoutMs) : null;
       this.client.exec(command, { pty: false }, (err, stream) => {
-        if (err) return reject(err);
-        let stdout = '';
-        let stderr = '';
-        let timer = null;
+        if (err) return fail(err);
+        channel = stream;
+        if (settled) { stream.on('error', () => {}); stream.close(); return; }
         const done = (code, signal) => {
-          if (timer) clearTimeout(timer);
+          if (settled) return;
+          settled = true; clearTimeout(timer);
+          stdout += outDecoder.end(); stderr += errDecoder.end();
           resolve({ code, signal, stdout, stderr, ok: code === 0 });
         };
-        if (timeoutMs > 0) {
-          timer = setTimeout(() => {
-            try { stream.close(); } catch { /* ignore */ }
-            const e = new Error(`命令超时（${timeoutMs}ms）: ${command.slice(0, 120)}`);
-            e.code = 'VM_EXEC_TIMEOUT';
-            e.stdout = stdout;
-            e.stderr = stderr;
-            reject(e);
-          }, timeoutMs);
-        }
-        stream.on('data', (d) => { stdout += d.toString('utf8'); });
-        stream.stderr.on('data', (d) => { stderr += d.toString('utf8'); });
+        const collect = (d, errorStream) => {
+          if (settled) return;
+          bytes += d.length;
+          if (bytes > maxBuffer) { const error = new Error('VM command output exceeded maxBuffer; use a stream or bounded output'); error.code = 'VM_OUTPUT_LIMIT'; fail(error); return; }
+          if (errorStream) stderr += errDecoder.write(d); else stdout += outDecoder.write(d);
+        };
+        stream.on('data', d => collect(d, false));
+        stream.stderr.on('data', d => collect(d, true));
         stream.on('close', (code, signal) => done(code, signal));
-        stream.on('error', (e) => { if (timer) clearTimeout(timer); reject(e); });
+        stream.on('error', fail);
       });
     });
   }

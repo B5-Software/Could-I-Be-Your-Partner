@@ -194,6 +194,15 @@ module.exports = function createDefaultSettings({ DEFAULT_DECISION_SETTINGS }) {
       personality: '活泼可爱、热情友善',
       customPrompt: '',
     },
+    webResearch: {
+      engine: 'fusion',
+      providers: {
+        bing: { provider: 'bing', endpoint: '', apiKey: '', tool: '' },
+        exa: { provider: 'mcp', endpoint: '', apiKey: '', tool: '' },
+        parallel: { provider: 'mcp', endpoint: '', apiKey: '', tool: '' },
+        tinyfish: { provider: 'mcp', endpoint: '', apiKey: '', tool: '' },
+      },
+    },
     tarotVisible: true,
     userProfile: { name: '', avatar: '', avatarFrame: '', bio: '' },
     entropy: {

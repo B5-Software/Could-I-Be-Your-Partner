@@ -117,13 +117,17 @@ class VmFs {
       const wsRoot = this.vmService.workspaceRoot;
       if (wsRoot) roots.push([path.resolve(wsRoot), mount]);
       for (const extra of (this.vmService.extraHostRoots || [])) {
-        if (extra) roots.push([path.resolve(extra), mount]);
+        if (extra && path.resolve(extra) !== path.resolve(wsRoot)) {
+          const root = path.resolve(extra);
+          const identity = require('node:crypto').createHash('sha256').update(process.platform === 'win32' ? root.toLowerCase() : root).digest('hex').slice(0, 12);
+          roots.push([root, mount + '/_external/_root-' + identity]);
+        }
       }
       if (this.vmService._externMounts) {
         for (const [h, v] of this.vmService._externMounts) roots.push([path.resolve(h), v]);
       }
     } catch { /* ignore */ }
-    return roots;
+    return roots.reverse().sort((a, b) => b[0].length - a[0].length);
   }
 
   /** 宿主路径 → VM 路径（仅映射，不做 IO）；未命中返回 null */

@@ -91,7 +91,11 @@ test('content consensus survives clock drift, rapid same-size edits, directional
   write(guest, 'package.json', 'CCCC');
   assert.equal((await sync.sync({ direction: 'pull' })).conflicts.length, 0);
   assert.equal(fs.readFileSync(path.join(host, 'package.json'), 'utf8'), 'CCCC');
-  const restarted = new WorkspaceSync({ hostRoot: host, instanceDir: path.join(root, 'state') });
+  const restarted = new WorkspaceSync({
+    hostRoot: host,
+    vmMount: guest.replace(/\\/g, '/'),
+    instanceDir: path.join(root, 'state'),
+  });
   assert.equal(restarted.baseline.version, 2);
   assert.equal(
     restarted.baseline.files['package.json'].host.hash,
@@ -163,4 +167,50 @@ test('host edits arriving while a guest tar is being read are retained for a lat
   assert.equal((await sync.sync({ direction: 'pull' })).ok, false);
   assert.equal(fs.readFileSync(path.join(host, 'source.js'), 'utf8'), 'new host change');
   assert.equal(fs.readFileSync(path.join(guest, 'source.js'), 'utf8'), 'guest change');
+});
+
+test('oversized files and linked directories are excluded without propagating false deletions', async (t) => {
+  const { host, guest, sync, write, root } = fixture(t);
+  write(host, 'large.txt', 'baseline');
+  write(host, 'folder/child.txt', 'safe');
+  await sync.sync();
+  sync.maxFileMB = 0.001;
+  write(host, 'large.txt', 'x'.repeat(5000));
+  const outside = path.join(root, 'outside');
+  fs.mkdirSync(outside);
+  write(outside, 'child.txt', 'private');
+  fs.rmSync(path.join(host, 'folder'), { recursive: true });
+  fs.symlinkSync(
+    outside,
+    path.join(host, 'folder'),
+    process.platform === 'win32' ? 'junction' : 'dir',
+  );
+  const result = await sync.sync();
+  assert.equal(result.ok, true);
+  assert.equal(result.deleted, 0);
+  assert.equal(fs.readFileSync(path.join(guest, 'large.txt'), 'utf8'), 'baseline');
+  assert.equal(fs.readFileSync(path.join(guest, 'folder/child.txt'), 'utf8'), 'safe');
+  assert.equal(fs.readFileSync(path.join(outside, 'child.txt'), 'utf8'), 'private');
+  assert.ok(result.skipped.some((item) => item.reason === 'size-limit'));
+  assert.ok(result.skipped.some((item) => item.reason === 'symbolic-link'));
+});
+
+test('baselines are bound to both roots and unsafe guest manifests cannot escape the host workspace', async (t) => {
+  const { host, sync, write, root } = fixture(t);
+  write(host, 'keep.txt', 'safe');
+  await sync.sync();
+  const different = path.join(root, 'different');
+  fs.mkdirSync(different);
+  const reopened = new WorkspaceSync({
+    hostRoot: different,
+    vmMount: sync.vmMount,
+    instanceDir: path.join(root, 'state'),
+  });
+  assert.deepEqual(Object.keys(reopened.baseline.files), []);
+  sync.scanVm = async () => ({ '../outside': { size: 6, mtimeMs: 1, hash: 'forged' } });
+  const result = await sync.sync();
+  assert.equal(result.ok, false);
+  assert.match(result.error, /Unsafe sync path/);
+  assert.equal(fs.readFileSync(path.join(host, 'keep.txt'), 'utf8'), 'safe');
+  assert.ok(!fs.existsSync(path.join(root, 'outside')));
 });

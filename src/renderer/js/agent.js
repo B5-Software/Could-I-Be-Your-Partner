@@ -2918,7 +2918,7 @@ ${affectionDesc}
           // 小文件不截断：Code Agent 常需读取完整源代码，3000字符阈值会把小文件也截断。
           // 仅对大结果截断，且阈值提高到 20000，保留前 18000 + 尾部 2000（保留文件开头和结尾）。
           let truncated = resultStr;
-          if (resultStr.length > 20000) {
+          if (!['webSearch', 'webFetch'].includes(permissionToolName) && resultStr.length > 20000) {
             const head = resultStr.substring(0, 18000);
             const tail = resultStr.substring(resultStr.length - 2000);
             truncated = `${head}\n\n...[中间部分已截断，共${resultStr.length}字符]...\n\n${tail}`;
@@ -3073,7 +3073,7 @@ ${affectionDesc}
       index: i,
       input: this._truncateBatchResult(singles[i], 300),
       ok: !(r && r.ok === false),
-      result: this._truncateBatchResult(r, spec.itemChars),
+      result: name === 'webFetch' ? r : this._truncateBatchResult(r, spec.itemChars),
     }));
     const succeeded = summarized.filter((s) => s.ok).length;
     return {
@@ -3279,8 +3279,8 @@ ${affectionDesc}
         case 'fractionBaseConvert': {
           return await this.host.api.calcFractionBaseConvert(args.value, args.fromBase, args.toBase, args.precision);
         }
-        case 'webSearch': return await this.host.api.webSearch(args.query, this.workspacePath);
-        case 'webFetch': return await this.host.api.webFetch(args.url);
+        case 'webSearch': return await this.host.api.webSearch({ ...args, workspacePath: this.workspacePath });
+        case 'webFetch': return await this.host.api.webFetch(args);
         case 'offscreenRenderOCR': {
           return await this.host.api.webOffscreenSnapshotOCR({
             url: args.url,
@@ -5043,7 +5043,7 @@ ${tarotLine}
             const resultStr = typeof toolResult === 'string' ? toolResult : JSON.stringify(toolResult);
             // 与主 agentLoop 一致：阈值 20000，保留前 18000 + 尾 2000
             let truncated = resultStr;
-            if (resultStr.length > 20000) {
+            if (!['webSearch', 'webFetch'].includes(realName) && resultStr.length > 20000) {
               const head = resultStr.substring(0, 18000);
               const tail = resultStr.substring(resultStr.length - 2000);
               truncated = `${head}\n\n...[中间部分已截断，共${resultStr.length}字符]...\n\n${tail}`;

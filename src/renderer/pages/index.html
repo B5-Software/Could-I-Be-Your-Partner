@@ -1994,26 +1994,35 @@
                   <i class="fa-solid fa-plus"></i> 添加 MCP 服务器
                 </button>
                 <div class="mcp-add-form hidden" id="mcp-add-form">
+                  <h4 id="mcp-form-title">添加 MCP 服务器</h4>
+                  <p class="setting-hint" data-i18n="ui.mcp.editHint">保存修改后，已连接的服务器会重新连接并刷新工具。</p>
                   <div class="setting-item">
                     <label>服务器名称</label>
                     <input type="text" id="mcp-new-name" placeholder="my-server">
                   </div>
                   <div class="setting-item">
+                    <label for="mcp-new-type" data-i18n="ui.mcp.transport">连接方式</label>
+                    <select id="mcp-new-type"><option value="stdio">Standard I/O (stdio)</option><option value="http">Streamable HTTP</option></select>
+                  </div>
+                  <div class="setting-item" data-mcp-transport="stdio">
                     <label>启动命令</label>
                     <input type="text" id="mcp-new-command" placeholder="npx -y @modelcontextprotocol/server-xxx">
                   </div>
-                  <div class="setting-item">
+                  <div class="setting-item" data-mcp-transport="stdio">
                     <label>参数 (JSON 数组，可选)</label>
                     <input type="text" id="mcp-new-args" placeholder='["--port", "3000"]'>
                   </div>
-                  <div class="setting-item">
+                  <div class="setting-item" data-mcp-transport="stdio">
                     <label>环境变量 (JSON 对象，可选)</label>
                     <input type="text" id="mcp-new-env" placeholder='{"API_KEY": "xxx"}'>
                   </div>
-                  <div class="setting-item">
+                  <div class="setting-item" data-mcp-transport="stdio">
                     <label>工作目录 (可选)</label>
                     <input type="text" id="mcp-new-cwd" placeholder="留空则使用默认目录">
                   </div>
+                  <div class="setting-item" data-mcp-transport="stdio"><label class="toggle-label"><span data-i18n="ui.mcp.inheritEnv">继承系统环境变量</span><div class="toggle-switch"><input type="checkbox" id="mcp-new-inherit-env"><span class="toggle-slider"></span></div></label></div>
+                  <div class="setting-item hidden" data-mcp-transport="http"><label for="mcp-new-url">URL</label><input id="mcp-new-url" type="url" placeholder="https://example.com/mcp"></div>
+                  <div class="setting-item hidden" data-mcp-transport="http"><label for="mcp-new-headers" data-i18n="ui.mcp.headers">请求头 (JSON 对象，可选)</label><input id="mcp-new-headers" type="text" placeholder='{"Authorization": "Bearer ..."}'></div>
                   <div class="setting-item">
                     <label class="toggle-label">
                       <span>启动时自动连接</span>
@@ -2645,6 +2654,7 @@
                     <button class="btn-secondary btn-sm" id="btn-vm-start"><i class="fa-solid fa-play"></i> 启动</button>
                     <button class="btn-secondary btn-sm" id="btn-vm-stop"><i class="fa-solid fa-power-off"></i> 停止</button>
                     <button class="btn-secondary btn-sm" id="btn-vm-desktop"><i class="fa-solid fa-desktop"></i> 打开 VM 桌面</button>
+                    <button class="btn-secondary btn-sm" id="btn-vm-file-manager"><i class="fa-solid fa-folder-tree"></i> <span data-i18n="ui.vmFiles.title">虚拟机文件管理器</span></button>
                   </div>
                   <pre id="vm-serial-tail" style="display:none;margin-top:8px;max-height:140px;overflow:auto;font-size:10.5px;line-height:1.4;background:var(--bg-tertiary,#111);padding:8px;border-radius:6px;color:var(--text-tertiary)"></pre>
                 </div>
@@ -2812,6 +2822,16 @@
 
 
             <div class="settings-panel" data-tab="network">
+              <div class="settings-group" id="web-research-settings">
+                <h3><i class="fa-solid fa-magnifying-glass"></i> <span data-i18n="ui.search.title">网络搜索</span></h3>
+                <p class="setting-help" data-i18n="ui.search.help">Fusion 同时查询四个引擎、去重并按相关度排序。默认使用免登录 MCP；也可配置自己的 Provider、地址和 Key。免登录服务的可用性和限额由服务方决定。</p>
+                <div class="setting-item"><label data-i18n="ui.search.engine">默认搜索引擎</label><select data-search-engine><option value="fusion">Fusion</option><option value="bing">Bing</option><option value="exa">Exa</option><option value="parallel">Parallel</option><option value="tinyfish">TinyFish</option></select></div>
+                <details data-provider-slot="bing" style="margin-top:12px;padding:12px;border:1px solid var(--border-color);border-radius:10px"><summary>Bing <span data-i18n="ui.search.providerOptions">服务配置</span></summary><div style="display:grid;grid-template-columns:1fr 2fr;gap:12px;margin-top:12px"><label data-i18n="ui.search.provider">Provider</label><select data-search-field="provider"><option value="mcp">MCP</option><option value="bing">Bing</option><option value="exa">Exa API</option><option value="parallel">Parallel API</option><option value="tinyfish">TinyFish API</option><option value="tavily">Tavily API</option><option value="brave">Brave API</option><option value="searxng">SearXNG</option></select><label data-i18n="ui.search.endpoint">地址（留空使用默认）</label><input data-search-field="endpoint" type="url" placeholder="https://…"><label>API Key</label><input data-search-field="apiKey" type="password" autocomplete="off"><label data-i18n="ui.search.mcpTool">MCP 工具名（可选）</label><input data-search-field="tool" type="text"></div></details>
+                <details data-provider-slot="exa" style="margin-top:12px;padding:12px;border:1px solid var(--border-color);border-radius:10px"><summary>Exa <span data-i18n="ui.search.providerOptions">服务配置</span></summary><div style="display:grid;grid-template-columns:1fr 2fr;gap:12px;margin-top:12px"><label data-i18n="ui.search.provider">Provider</label><select data-search-field="provider"><option value="mcp">MCP</option><option value="bing">Bing</option><option value="exa">Exa API</option><option value="parallel">Parallel API</option><option value="tinyfish">TinyFish API</option><option value="tavily">Tavily API</option><option value="brave">Brave API</option><option value="searxng">SearXNG</option></select><label data-i18n="ui.search.endpoint">地址（留空使用默认）</label><input data-search-field="endpoint" type="url" placeholder="https://…"><label>API Key</label><input data-search-field="apiKey" type="password" autocomplete="off"><label data-i18n="ui.search.mcpTool">MCP 工具名（可选）</label><input data-search-field="tool" type="text"></div></details>
+                <details data-provider-slot="parallel" style="margin-top:12px;padding:12px;border:1px solid var(--border-color);border-radius:10px"><summary>Parallel <span data-i18n="ui.search.providerOptions">服务配置</span></summary><div style="display:grid;grid-template-columns:1fr 2fr;gap:12px;margin-top:12px"><label data-i18n="ui.search.provider">Provider</label><select data-search-field="provider"><option value="mcp">MCP</option><option value="bing">Bing</option><option value="exa">Exa API</option><option value="parallel">Parallel API</option><option value="tinyfish">TinyFish API</option><option value="tavily">Tavily API</option><option value="brave">Brave API</option><option value="searxng">SearXNG</option></select><label data-i18n="ui.search.endpoint">地址（留空使用默认）</label><input data-search-field="endpoint" type="url" placeholder="https://…"><label>API Key</label><input data-search-field="apiKey" type="password" autocomplete="off"><label data-i18n="ui.search.mcpTool">MCP 工具名（可选）</label><input data-search-field="tool" type="text"></div></details>
+                <details data-provider-slot="tinyfish" style="margin-top:12px;padding:12px;border:1px solid var(--border-color);border-radius:10px"><summary>TinyFish <span data-i18n="ui.search.providerOptions">服务配置</span></summary><div style="display:grid;grid-template-columns:1fr 2fr;gap:12px;margin-top:12px"><label data-i18n="ui.search.provider">Provider</label><select data-search-field="provider"><option value="mcp">MCP</option><option value="bing">Bing</option><option value="exa">Exa API</option><option value="parallel">Parallel API</option><option value="tinyfish">TinyFish API</option><option value="tavily">Tavily API</option><option value="brave">Brave API</option><option value="searxng">SearXNG</option></select><label data-i18n="ui.search.endpoint">地址（留空使用默认）</label><input data-search-field="endpoint" type="url" placeholder="https://…"><label>API Key</label><input data-search-field="apiKey" type="password" autocomplete="off"><label data-i18n="ui.search.mcpTool">MCP 工具名（可选）</label><input data-search-field="tool" type="text"></div></details>
+              </div>
+
               <div class="settings-group">
                 <h3><i class="fa-solid fa-network-wired"></i> 网络代理</h3>
                 <div class="setting-item">

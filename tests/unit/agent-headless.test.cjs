@@ -466,3 +466,106 @@ test('headless todos load at startup, synchronize globally and ignore stale snap
   assert.equal(events.length, count, 'Stale revisions cannot roll back the list');
   assert.equal(b.todoItems[0].done, true);
 });
+
+test('/undo immediately after submission restores a message before Agent initialization admitted it', async () => {
+  const runtime = createAgentRuntime({
+    ipcMain: createFakeIpcMain(baseHandlers()),
+    eventBus: createEventBus(),
+  });
+  const submitted = runtime.sendMessage('early-undo', 'restore this draft');
+  const undone = runtime.undo('early-undo');
+  await submitted;
+  assert.equal((await undone).text, 'restore this draft');
+  assert.ok(
+    !runtime.sessions
+      .get('early-undo')
+      .agent.contextManager.getHistoryMessages()
+      .some((m) => m.content === 'restore this draft'),
+  );
+});
+
+test('/undo prunes the last user turn, removes obsolete summaries and rebuilds hot context after rewinding', async () => {
+  const handlers = baseHandlers({ llmChat: llmScript([{ content: 'done' }]) });
+  let saved;
+  handlers.set('history:save', (_event, value) => {
+    saved = value;
+    return { ok: true };
+  });
+  const runtime = createAgentRuntime({
+    ipcMain: createFakeIpcMain(handlers),
+    eventBus: createEventBus(),
+  });
+  await runtime.sendMessage('undo', 'first');
+  await runtime.sendMessage('undo', 'second');
+  const context = runtime.sessions.get('undo').agent.contextManager;
+  context.addMessage({
+    role: 'user',
+    content: 'a live settings update',
+    metadata: { kind: 'context-update' },
+  });
+  context.summaries = ['obsolete'];
+  context.pinnedMessages = [1];
+  const result = await runtime.undo('undo');
+  assert.equal(result.text, 'second');
+  assert.equal(context.getHistoryMessages().filter((m) => m.role === 'user').length, 1);
+  assert.equal(context.getHistoryMessages().find((m) => m.role === 'user').content, 'first');
+  assert.deepEqual(context.summaries, []);
+  assert.deepEqual(context.pinnedMessages, []);
+  assert.equal(context._admittedSources, null);
+  assert.ok(!JSON.stringify(saved).includes('second'));
+  await runtime.sendMessage('undo', 'replacement');
+  assert.ok(context.getHistoryMessages().some((m) => m.content === 'replacement'));
+});
+
+test('/undo stops an active turn and withdraws an unconsumed hot message without deleting the preceding turn', async () => {
+  let entered, release;
+  const ready = new Promise((resolve) => {
+    entered = resolve;
+  });
+  const handlers = baseHandlers({
+    llmChat: async () => {
+      entered();
+      await new Promise((resolve) => {
+        release = resolve;
+      });
+      return { ok: true, data: { choices: [{ message: { content: 'late' } }] } };
+    },
+  });
+  const runtime = createAgentRuntime({
+    ipcMain: createFakeIpcMain(handlers),
+    eventBus: createEventBus(),
+  });
+  const pending = runtime.sendMessage('hot-undo', 'original');
+  await ready;
+  await runtime.inject('hot-undo', 'keep this addition');
+  await runtime.inject('hot-undo', 'withdraw this addition');
+  const undo = runtime.undo('hot-undo');
+  release();
+  await pending;
+  assert.equal((await undo).text, 'withdraw this addition');
+  const history = runtime.sessions.get('hot-undo').agent.contextManager.getHistoryMessages();
+  assert.ok(history.some((m) => m.content === 'original'));
+  assert.ok(history.some((m) => m.content === 'keep this addition'));
+  assert.ok(!history.some((m) => m.content === 'withdraw this addition'));
+  assert.equal(runtime.getSession('hot-undo').busy, false);
+});
+
+test('shared settings hot updates reach headless Agents while CodeOSS remains unavailable without a window', async () => {
+  const handlers = baseHandlers(),
+    eventBus = createEventBus();
+  let settings = structuredClone(SETTINGS);
+  handlers.set('settings:get', async () => settings);
+  handlers.set('settings:set', (_event, patch) => {
+    settings = { ...settings, ...patch };
+    return settings;
+  });
+  const runtime = createAgentRuntime({ ipcMain: createFakeIpcMain(handlers), eventBus });
+  const agent = runtime.createSession({ key: 'settings-hot' }).agent;
+  await runtime.saveSettings({ tarotVisible: false });
+  assert.equal(agent.settings.tarotVisible, false);
+  assert.equal(agent.settings.tools.codeIDE, false);
+  settings = { ...settings, tarotVisible: true };
+  eventBus.publish('settings:changed', { tarotVisible: true });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(agent.settings.tarotVisible, true);
+});

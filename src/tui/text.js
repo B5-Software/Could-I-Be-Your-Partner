@@ -407,4 +407,6 @@ function t(key, fallback, params) {
   return params ? fill(fallback, params) : fallback;
 }
 
+const extra = require('./text-extra');
+for (const language of ['en', 'de']) Object.assign(DICT[language], extra[language]);
 module.exports = { t, setLanguage, getLanguage, setGlobalTranslator, DICT, fill };

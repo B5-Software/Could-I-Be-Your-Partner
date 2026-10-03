@@ -56,16 +56,21 @@ test('extra session roots synchronize their own directory with a separate baseli
   const folder = path.join(extra, 'session');
   fs.mkdirSync(folder);
   vm.addHostRoot(extra);
+  const mapped = new (require('../../src/main/vm/vm-fs').VmFs)({ vmService: vm }).mapHostToVm(
+    extra,
+  );
+  assert.match(mapped, /^\/workspace\/_external\/_root-[a-f0-9]+$/);
   t.mock.method(vm, 'syncWorkspace', () => {
     throw new Error('wrong root');
   });
   const synchronize = t.mock.method(WorkspaceSync.prototype, 'sync', async function () {
-    assert.equal(this.hostRoot, folder);
-    assert.equal(this.vmMount, '/workspace/session');
-    assert.ok(this.baselineFile.startsWith(path.join(root, 'terminal-sync')));
+    assert.equal(this.hostRoot, extra);
+    assert.equal(this.vmMount, mapped);
+    assert.ok(this.baselineFile.startsWith(path.join(root, 'workspace-pairs')));
     return { ok: true };
   });
-  assert.equal(await vm.prepareTerminalDirectory(folder), '/workspace/session');
+  assert.equal(await vm.prepareTerminalDirectory(folder), mapped + '/session');
+  assert.equal(vm.toHostPath(mapped + '/session'), folder);
   assert.equal(synchronize.mock.callCount(), 1);
 });
 
@@ -212,4 +217,27 @@ test('VM terminal decodes Chinese characters split across SSH packets', async ()
   for (const byte of bytes) onData(Buffer.from([byte]));
   onClose();
   assert.equal(output.join(''), '校园终端');
+});
+
+test('SSH exec decodes split UTF-8 and rejects oversized output instead of silently truncating', async () => {
+  const { EventEmitter } = require('node:events');
+  const { VmSsh } = require('../../src/main/vm/vm-ssh');
+  const ssh = new VmSsh({});
+  ssh.connected = true;
+  let stream;
+  ssh.client = {
+    exec(_command, _options, callback) {
+      stream = new EventEmitter();
+      stream.stderr = new EventEmitter();
+      stream.close = () => stream.emit('close', 0);
+      callback(null, stream);
+    },
+  };
+  const result = ssh.exec('unicode');
+  for (const byte of Buffer.from('校园文件')) stream.emit('data', Buffer.from([byte]));
+  stream.emit('close', 0);
+  assert.equal((await result).stdout, '校园文件');
+  const oversized = ssh.exec('too much', { maxBuffer: 2 });
+  stream.emit('data', Buffer.from('excess'));
+  await assert.rejects(oversized, { code: 'VM_OUTPUT_LIMIT' });
 });

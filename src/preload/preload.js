@@ -167,8 +167,9 @@ contextBridge.exposeInMainWorld('api', {
   imageProviders: () => ipcRenderer.invoke('image:providers'),
 
   // Web
-  webSearch: (q, workspacePath) => ipcRenderer.invoke('web:search', q, workspacePath),
-  webFetch: (url) => ipcRenderer.invoke('web:fetch', url),
+  workspaceOpenCurrent: (directory) => ipcRenderer.invoke('workspace:cwd', directory),
+  webSearch: (options, workspacePath) => ipcRenderer.invoke('web:search', typeof options === 'string' ? { query: options, workspacePath } : options),
+  webFetch: (options) => ipcRenderer.invoke('web:fetch', options),
   webOffscreenSnapshotOCR: (options) => ipcRenderer.invoke('web:offscreenSnapshotOCR', options),
   webOffscreenRenderedContent: (options) => ipcRenderer.invoke('web:offscreenRenderedContent', options),
 
@@ -329,6 +330,7 @@ contextBridge.exposeInMainWorld('api', {
 
   // ---- 虚拟机沙盒（CIBYP-VM-OS / QEMU）----
   vm: {
+    openFileManager: () => ipcRenderer.invoke('vm-files:open'),
     status: () => ipcRenderer.invoke('vm:status'),
     start: () => ipcRenderer.invoke('vm:start'),
     stop: () => ipcRenderer.invoke('vm:stop'),

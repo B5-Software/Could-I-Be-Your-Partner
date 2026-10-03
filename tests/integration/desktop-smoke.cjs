@@ -136,6 +136,10 @@ ipcMain.once('app:renderer-ready', (event) => {
       console.log('[desktop-smoke] Workspace interactions:', workspace);
       const settingsCheck = await require('./renderer-settings-check.cjs')(event.sender);
       console.log('[desktop-smoke] Settings interactions:', settingsCheck);
+      console.log(
+        '[desktop-smoke] MCP editing:',
+        await require('./renderer-mcp-check.cjs')(event.sender),
+      );
       // Hosted Windows runners can default to reduced motion. Exercise both
       // system preferences explicitly instead of depending on this machine's UI.
       const motion = await require('./renderer-motion-check.cjs')(event.sender);

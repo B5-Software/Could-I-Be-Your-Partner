@@ -107,26 +107,48 @@ class VmService extends EventEmitter {
   // ---------------------------------------------------------------- 工作区同步
 
   /** 惰性创建同步器（宿主工作区 ↔ VM /workspace） */
-  _workspaceSync() {
-    const root = this.workspaceRoot;
-    if (!root) return null;
-    if (this.sync && this.sync.hostRoot === root) return this.sync;
-    const inst = this.instance;
-    const sync = new WorkspaceSync({
-      vmService: this,
-      hostRoot: root,
-      vmMount: (this.runtime.vm.workspaceMount || '/workspace'),
-      instanceDir: inst && inst.dir ? inst.dir : null,
-      options: {
-        maxFileMB: this.runtime.vm.syncMaxFileMB || 64,
-        syncGit: !!this.runtime.vm.syncGit,
-      },
-    });
-    sync.on('warn', (w) => this.emit('sync-warn', w));
-    sync.on('progress', (p) => this.emit('sync-progress', p));
-    sync.on('sync-done', (r) => this.emit('sync-done', r));
-    this.sync = sync;
+  workspacePair(hostRoot, vmMount, options = {}) {
+    const root = path.resolve(hostRoot);
+    const opts = { maxFileMB: this.runtime.vm.syncMaxFileMB || 64, syncGit: !!this.runtime.vm.syncGit, ...options };
+    if (vmMount === (this.runtime.vm.workspaceMount || '/workspace')) opts.excludes = [...(opts.excludes || []), /^_external(?:\/|$)/];
+    const childRoots = new (require('./vm-fs').VmFs)({ vmService: this }).mappingRoots().map(([child]) => vmpaths.relUnder(root, child)).filter(relative => relative);
+    opts.excludes = [...(opts.excludes || []), ...childRoots.map(relative => new RegExp('^' + relative.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '(?:/|$)'))];
+    const identity = require('node:crypto').createHash('sha256').update(root + '\0' + vmMount).digest('hex');
+    this._pairSyncs ||= new Map();
+    let sync = this._pairSyncs.get(identity);
+    if (sync) {
+      sync.maxFileMB = opts.maxFileMB; sync.syncGit = opts.syncGit; sync.excludes = opts.excludes;
+      sync._pairOptions = opts;
+      sync._explicitOptions = options;
+      return sync;
+    }
+    sync = new WorkspaceSync({ vmService: this, hostRoot: root, vmMount,
+      instanceDir: this.instance?.dir ? path.join(this.instance.dir, 'workspace-pairs', identity) : null, options: opts });
+    sync._pairOptions = opts;
+    sync._explicitOptions = options;
+    for (const [event, forwarded] of [['warn', 'sync-warn'], ['progress', 'sync-progress'], ['sync-done', 'sync-done']]) sync.on(event, result => this.emit(forwarded, result));
+    this._pairSyncs.set(identity, sync);
+    if (!this._syncTimer) {
+      this._syncTimer = setInterval(() => {
+        if (this._pollingSync || this._manualTransfers || this.instance?.state !== 'ready' || this.runtime.workspaceMode !== 'shared') return;
+        this._pollingSync = true;
+        (async () => {
+          for (const pair of this._pairSyncs.values()) {
+            this.workspacePair(pair.hostRoot, pair.vmMount, pair._explicitOptions);
+            const result = await pair.sync({ direction: 'both', reason: 'background' });
+            if (!result.ok) this.emit('sync-warn', result.error);
+          }
+        })().catch(error => this.emit('sync-warn', error.message)).finally(() => { this._pollingSync = false; });
+      }, 5000);
+      this._syncTimer.unref?.();
+    }
     return sync;
+  }
+
+  _workspaceSync() {
+    if (!this.workspaceRoot) return null;
+    this.sync = this.workspacePair(this.workspaceRoot, this.runtime.vm.workspaceMount || '/workspace', { excludes: [/^_external(?:\/|$)/] });
+    return this.sync;
   }
 
   /**
@@ -134,141 +156,52 @@ class VmService extends EventEmitter {
    * 用于 Code 模式打开的项目目录：之后所有 fs/终端/工具都按该映射作用于 VM。
    * 跳过生成文件，单文件默认上限 20MB；IDE 导入保留 Git 并持久识别宿主来源。
    */
-  async mountExternalDir(hostDir, { maxFileMB = 20, refresh = false, preserveGit = false } = {}) {
+  async mountExternalDir(hostDir, { refresh = false, preserveGit = false } = {}) {
     const hostRoot = path.resolve(String(hostDir || ''));
-    if (!hostRoot || !fs.existsSync(hostRoot)) return { ok: false, error: '目录不存在: ' + hostRoot };
-    const name = path.basename(hostRoot).replace(/[^\w.-]+/g, '_') || 'ws';
-    let vmRoot = `/workspace/_external/${name}`;
+    const stat = await fs.promises.stat(hostRoot).catch(() => null);
+    if (!stat) return { ok: false, error: 'Workspace directory not found' };
+    if (!stat.isDirectory()) return { ok: false, error: 'Workspace is not a directory' };
     const identity = require('node:crypto').createHash('sha256').update(process.platform === 'win32' ? hostRoot.toLowerCase() : hostRoot).digest('hex');
-    if (preserveGit) vmRoot += '-' + identity.slice(0, 8);
-    this._externMounts = this._externMounts || new Map();
-    if (this._externMounts.has(hostRoot) && !refresh) {
-      // 已挂载：不重复 push，避免用宿主旧副本覆盖 VM 内的新改动。
-      return { ok: true, hostRoot, vmRoot: this._externMounts.get(hostRoot), reused: true };
+    const name = path.basename(hostRoot).replace(/[^\w.-]+/g, '_') || 'ws';
+    this._externMounts ||= new Map();
+    const vmRoot = this._externMounts.get(hostRoot) || `${this.runtime.vm.workspaceMount || '/workspace'}/_external/${name}-${identity.slice(0, 8)}`;
+    if (preserveGit) {
+      const git = await fs.promises.stat(path.join(hostRoot, '.git')).catch(() => null);
+      if (git && !git.isDirectory()) return { ok: false, error: 'Host Git worktree references cannot be imported. Clone the repository in the VM instead.' };
     }
-    if ([...this._externMounts.entries()].some(([other, target]) => other !== hostRoot && target === vmRoot)) {
-      vmRoot += '-' + require('node:crypto').createHash('sha256').update(hostRoot).digest('hex').slice(0, 8);
-    }
-    if (preserveGit && fs.existsSync(path.join(hostRoot, '.git')) && !fs.statSync(path.join(hostRoot, '.git')).isDirectory()) {
-      return { ok: false, error: 'Git worktree 的 .git 文件引用宿主目录，请在 VM 内克隆仓库后打开，避免导入失效的 Git 路径。' };
-    }
+    if (this._externMounts.has(hostRoot) && !refresh && this.runtime.workspaceMode !== 'shared') return { ok: true, hostRoot, vmRoot, reused: true };
     const { VmFs } = require('./vm-fs');
-    const vmFs = new VmFs({ vmService: this });
+    const io = new VmFs({ vmService: this });
     const marker = vmRoot + '/.cibyp-host-import';
-    if (preserveGit && await vmFs.exists(vmRoot)) {
+    const exists = await io.exists(vmRoot);
+    if (exists && !this._externMounts.has(hostRoot)) {
       let previous;
-      try { previous = JSON.parse((await vmFs.readBuffer(marker)).toString('utf8')); } catch { /* Unknown or incomplete import stays untouched. */ }
-      if (previous?.identity !== identity) return { ok: false, error: 'VM 导入目录已存在但来源无法确认。请直接在 IDE 中打开 ' + vmRoot + '，避免覆盖已有文件。' };
-      this._externMounts.set(hostRoot, vmRoot);
-      return { ok: true, hostRoot, vmRoot, reused: true };
+      try { previous = JSON.parse((await io.readBuffer(marker)).toString('utf8')); } catch { /* incomplete import */ }
+      if (previous?.identity !== identity) return { ok: false, error: 'VM import directory has an unknown source: ' + vmRoot };
     }
-    const skip = new Set(['node_modules', '.git', 'dist', 'out', '.cache', '.venv', '__pycache__', '.next', '.cibyp-code-history']);
-    if (preserveGit) skip.delete('.git');
-    skip.add('.cibyp-host-import');
-    const maxBytes = Math.max(1, Number(maxFileMB) || 20) * 1024 * 1024;
-    const push = async (from, to) => {
-      await vmFs.exec(`mkdir -p ${vmpaths.shellQuote(to)}`, 20000);
-      for (const e of fs.readdirSync(from, { withFileTypes: true })) {
-        if (skip.has(e.name)) continue;
-        const src = path.join(from, e.name);
-        const dst = to + '/' + e.name;
-        if (e.isDirectory()) { await push(src, dst); continue; }
-        if (e.isSymbolicLink()) continue;
-        if (!path.relative(hostRoot, src).split(path.sep).includes('.git') && fs.statSync(src).size > maxBytes) continue;
-        await vmFs.pushFromHost(src, dst);
-      }
-    };
-    await push(hostRoot, vmRoot);
-    if (preserveGit) await vmFs.writeBuffer(marker, Buffer.from(JSON.stringify({ identity, hostRoot }) + '\n'));
+    await io.exec(`mkdir -p -- ${vmpaths.shellQuote(vmRoot)}`, 20000);
     this._externMounts.set(hostRoot, vmRoot);
-    console.log('[vm] External directory mounted:', hostRoot, '→', vmRoot);
-    return { ok: true, hostRoot, vmRoot };
+    const sync = this.workspacePair(hostRoot, vmRoot, { syncGit: preserveGit || !!this.runtime.vm.syncGit });
+    if (!exists || refresh || this.runtime.workspaceMode === 'shared') {
+      const result = await sync.sync({ direction: 'both', reason: exists ? 'external-refresh' : 'external-import' });
+      if (!result.ok) return result;
+    }
+    await io.writeBuffer(marker, Buffer.from(JSON.stringify({ identity, hostRoot }) + '\n'));
+    return { ok: true, hostRoot, vmRoot, reused: exists };
   }
 
-  /**
-   * 外部挂载目录：把 VM 内的新改动拉回宿主镜像（只在新/更新时覆盖，不删除宿主文件）。
-   * 供 Code 模式文件树刷新、ESLint、打开资源管理器前调用，保证宿主镜像与 VM 一致。
-   */
-  async pullExternalDir(hostOrVmPath, { maxFileMB = 20, deleted = false } = {}) {
-    if (this.runtime.workspaceMode !== 'shared') return {ok:true,pulled:0,skipped:'isolated'};
-    if (!this.instance || this.instance.state !== 'ready') return { ok: false, error: '虚拟机未就绪' };
-    if (!this._externMounts || !this._externMounts.size) return { ok: true, pulled: 0, skipped: 'no-mounts' };
-    const paths = require('./vm-paths');
-    const raw = String(hostOrVmPath || '');
-    let hostRoot = null;
-    let vmRoot = null;
-    let sub = ''; // 相对挂载根的 VM 侧子路径
-    if (this.isVmPath(raw)) {
-      for (const [h, v] of this._externMounts) {
-        if (raw === v || raw.startsWith(v + '/')) {
-          hostRoot = h; vmRoot = v; sub = raw.slice(v.length).replace(/^\/+/, ''); break;
-        }
-      }
-    } else {
-      for (const [h, v] of this._externMounts) {
-        const rel = paths.relUnder(h, raw);
-        if (rel !== null) { hostRoot = h; vmRoot = v; sub = rel; break; }
-      }
-    }
-    if (!hostRoot || !vmRoot) return { ok: true, pulled: 0, skipped: 'not-external' };
-    const { VmFs } = require('./vm-fs');
-    const vmFs = new VmFs({ vmService: this });
-    const skip = new Set(['node_modules', '.git', 'dist', 'out', '.cache', '.venv', '__pycache__', '.next', '.cibyp-code-history']);
-    const maxBytes = Math.max(1, Number(maxFileMB) || 20) * 1024 * 1024;
-    let pulled = 0;
-    let removed = 0;
-    const targetVm = sub ? `${vmRoot}/${sub}` : vmRoot;
-    const targetHost = sub ? path.join(hostRoot, ...sub.split('/')) : hostRoot;
-    const stat = await vmFs.stat(targetVm).catch(() => null);
-    if (!stat) {
-      // VM 内已不存在：删除宿主镜像对应项（仅在明确的删除操作后执行）
-      if (deleted) {
-        try { fs.rmSync(targetHost, { recursive: true, force: true }); removed = 1; } catch { /* ignore */ }
-      }
-      return { ok: true, pulled: 0, removed, hostRoot, vmRoot };
-    }
-    if (stat.isFile) {
-      try {
-        let hostStat = null;
-        try { hostStat = fs.statSync(targetHost); } catch { /* missing */ }
-        if (!hostStat || stat.size !== hostStat.size || (Number(stat.mtimeMs) || 0) > hostStat.mtimeMs + 1000) {
-          const sftp = await vmFs.sftp();
-          fs.mkdirSync(path.dirname(targetHost), { recursive: true });
-          await sftp.fastGet(targetVm, targetHost);
-          if (stat.mtimeMs) { try { const t = new Date(stat.mtimeMs); fs.utimesSync(targetHost, t, t); } catch { /* ignore */ } }
-          pulled = 1;
-        }
-      } catch { /* ignore */ }
-      return { ok: true, pulled, hostRoot, vmRoot };
-    }
-    const walk = async (vmDir, hostDir) => {
-      fs.mkdirSync(hostDir, { recursive: true });
-      const r = await vmFs.listDirectory(vmDir).catch(() => null);
-      if (!r || !r.ok || !Array.isArray(r.entries)) return;
-      for (const e of r.entries) {
-        const name = e && e.name;
-        if (!name || skip.has(name)) continue;
-        const vp = vmDir + '/' + name;
-        const hp = path.join(hostDir, name);
-        if (e.isDirectory) { await walk(vp, hp); continue; }
-        try {
-          const st = await vmFs.stat(vp);
-          if (!st || st.size > maxBytes) continue;
-          let hostStat = null;
-          try { hostStat = fs.statSync(hp); } catch { /* missing */ }
-          const vmMs = Number(st.mtimeMs) || 0;
-          if (!hostStat || vmMs > hostStat.mtimeMs + 1000) {
-            const sftp = await vmFs.sftp();
-            fs.mkdirSync(path.dirname(hp), { recursive: true });
-            await sftp.fastGet(vp, hp);
-            if (vmMs) { try { const t = new Date(vmMs); fs.utimesSync(hp, t, t); } catch { /* ignore */ } }
-            pulled++;
-          }
-        } catch { /* 单个文件失败不影响整体 */ }
-      }
-    };
-    await walk(targetVm, targetHost);
-    return { ok: true, pulled, removed, hostRoot, vmRoot };
+  externalPair(raw) {
+    const entries = [...(this._externMounts || new Map()).entries()].sort((a, b) => Math.max(b[0].length, b[1].length) - Math.max(a[0].length, a[1].length));
+    return entries.find(([host, vm]) => vmpaths.relUnder(host, raw) !== null || raw === vm || raw.startsWith(vm + '/'));
+  }
+
+  async pullExternalDir(raw, { force = false } = {}) {
+    if (!this._externMounts?.size) return { ok: true, pulled: 0, skipped: 'no-mounts' };
+    if (this.runtime.workspaceMode !== 'shared' && !force) return { ok: true, pulled: 0, skipped: 'isolated' };
+    const pair = this.externalPair(String(raw || ''));
+    if (!pair) return { ok: true, pulled: 0, skipped: 'not-external' };
+    const sync = [...(this._pairSyncs || new Map()).values()].find(item => item.hostRoot === pair[0] && item.vmMount === pair[1]) || this.workspacePair(pair[0], pair[1]);
+    return sync.sync({ direction: 'pull', reason: force ? 'external-export' : 'external-tool' });
   }
 
   /** 该路径是否应按"VM 内路径"处理（统一判定，见 vm-paths.js） */
@@ -306,8 +239,7 @@ class VmService extends EventEmitter {
           if (rel !== null) return rel ? `${vmRoot}/${rel}` : vmRoot;
         }
       }
-      const sync = this._workspaceSync();
-      return sync ? sync.toVmPath(hostPath) : '/workspace';
+      return new (require('./vm-fs').VmFs)({ vmService: this }).mapHostToVm(raw) || '/workspace';
     } catch { return '/workspace'; }
   }
 
@@ -323,8 +255,10 @@ class VmService extends EventEmitter {
           }
         }
       }
-      const sync = this._workspaceSync();
-      return sync ? sync.toHostPath(vmPath) : null;
+      const mappings = new (require('./vm-fs').VmFs)({ vmService: this }).mappingRoots().sort((a, b) => b[1].length - a[1].length);
+      const p = path.posix.normalize(String(vmPath || ''));
+      for (const [host, vm] of mappings) if (p === vm || p.startsWith(vm + '/')) return path.join(host, ...p.slice(vm.length).split('/').filter(Boolean));
+      return null;
     } catch { return null; }
   }
 
@@ -352,24 +286,16 @@ class VmService extends EventEmitter {
     const target = vmFs.resolveVmPath(raw);
     if (!target.ok) throw new Error(target.error);
     if (this.runtime.workspaceMode === 'shared') {
-      const extra = !vmFs.isVmPath(raw) && vmFs.mappingRoots().find(([root]) => vmpaths.isUnder(root, raw));
+      const external = this.externalPair(raw);
+      const extra = vmFs.mappingRoots().find(([root, mount]) => !vmFs.isVmPath(raw) ? vmpaths.isUnder(root, raw) : target.vm === mount || target.vm.startsWith(mount + '/'));
       let synced;
-      if (extra && path.resolve(extra[0]) !== path.resolve(this.workspaceRoot)) {
-        // Session workspaces are also registered by the app. Synchronize this
-        // directory, with its own baseline, rather than the unrelated default root.
-        if (!fs.statSync(raw).isDirectory()) throw new Error('终端工作目录不是文件夹: ' + raw);
-        const key = require('crypto').createHash('sha256').update(path.resolve(raw) + '\0' + target.vm).digest('hex');
-        this._terminalSyncs = this._terminalSyncs || new Map();
-        let sync = this._terminalSyncs.get(key);
-        if (!sync) {
-          sync = new WorkspaceSync({
-            vmService: this, hostRoot: raw, vmMount: target.vm,
-            instanceDir: this.instance.dir ? path.join(this.instance.dir, 'terminal-sync', key) : null,
-            options: { maxFileMB: this.runtime.vm.syncMaxFileMB || 64, syncGit: !!this.runtime.vm.syncGit },
-          });
-          this._terminalSyncs.set(key, sync);
-        }
+      if (external) {
+        const sync = [...(this._pairSyncs || new Map()).values()].find(item => item.hostRoot === external[0] && item.vmMount === external[1]) || this.workspacePair(...external);
         synced = await sync.sync({ direction: 'both', reason: 'terminal-open' });
+      } else if (extra && path.resolve(extra[0]) !== path.resolve(this.workspaceRoot)) {
+        const prepared = await this.instance.exec('mkdir -p -- ' + vmpaths.shellQuote(extra[1]), { timeoutMs: 20000 });
+        if (!prepared.ok) throw new Error(prepared.stderr || 'Cannot prepare VM workspace');
+        synced = await this.workspacePair(extra[0], extra[1]).sync({ direction: 'both', reason: 'terminal-open' });
       } else synced = await this.syncWorkspace({ direction: 'both', reason: 'terminal-open' });
       if (!synced.ok) throw new Error(synced.error || '工作区同步失败');
     }
@@ -463,6 +389,9 @@ class VmService extends EventEmitter {
     } catch { /* No compatible legacy instance. */ }
     this.sync = null;
     this._terminalSyncs = new Map();
+    this._pairSyncs = new Map();
+    if (this._syncTimer) clearInterval(this._syncTimer);
+    this._syncTimer = null;
     this._externMounts = new Map();
     const inst = new VmInstance({
       assetsDir: this.assetsDir,
@@ -520,6 +449,9 @@ class VmService extends EventEmitter {
     await inst.reset();
     this.sync = null;
     this._terminalSyncs = new Map();
+    this._pairSyncs = new Map();
+    if (this._syncTimer) clearInterval(this._syncTimer);
+    this._syncTimer = null;
     this._externMounts = new Map();
     return { ok: true };
   }

@@ -18,6 +18,24 @@ const I18N_SUPPORTED_LANGUAGES = [
 
 let _i18nLang = 'zh-CN';
 let _i18nDict = {}; // active dictionary (empty for zh-CN → falls back to caller-provided default)
+let _i18nTextEntries = [];
+const _i18nSources = new WeakMap();
+function _i18nSource(node, field, current) {
+  const values = _i18nSources.get(node) || {};
+  const previous = values[field];
+  if (previous && current === previous.output) return previous.source;
+  values[field] = { source: current, output: current };
+  _i18nSources.set(node, values);
+  return current;
+}
+function _i18nRemember(node, field, output) {
+  const values = _i18nSources.get(node);
+  if (values?.[field]) { values[field].output = output; values[field].language = _i18nLang; }
+}
+function _i18nAlreadyApplied(node, field, value) {
+  const previous = _i18nSources.get(node)?.[field];
+  return previous?.language === _i18nLang && previous.output === value;
+}
 
 /**
  * Initialise i18n from saved settings. Called once at app startup.
@@ -35,6 +53,7 @@ function i18nSetLanguage(lang) {
   if (!I18N_SUPPORTED_LANGUAGES.some(l => l.value === lang)) lang = 'zh-CN';
   _i18nLang = lang;
   _i18nDict = (lang === 'zh-CN') ? {} : (I18N_TRANSLATIONS[lang] || {});
+  _i18nTextEntries = Object.entries(_i18nDict._textMap || {}).sort((a, b) => b[0].length - a[0].length);
   document.documentElement.lang = lang;
   // Start MutationObserver for non-zh languages to auto-translate dynamic DOM
   if (lang !== 'zh-CN') {
@@ -43,6 +62,7 @@ function i18nSetLanguage(lang) {
     i18nStopObserver();
   }
   window.dispatchEvent(new CustomEvent('languagechange', { detail: { lang } }));
+  i18nApplyToDOM();
 }
 
 function i18nGetLanguage() {
@@ -101,20 +121,29 @@ function i18nApplyToDOM(root) {
   // textContent via data-i18n
   scope.querySelectorAll('[data-i18n]').forEach(el => {
     const key = el.getAttribute('data-i18n');
-    const val = t(key, el.textContent);
-    if (val) el.textContent = val;
+    const val = t(key, _i18nSource(el, 'text', el.textContent));
+    if (val && el.textContent !== val) el.textContent = val;
+    _i18nRemember(el, 'text', val);
   });
   // placeholder
   scope.querySelectorAll('[data-i18n-placeholder]').forEach(el => {
     const key = el.getAttribute('data-i18n-placeholder');
-    const val = t(key, el.getAttribute('placeholder'));
-    if (val) el.setAttribute('placeholder', val);
+    const val = t(key, _i18nSource(el, 'placeholder', el.getAttribute('placeholder')));
+    if (val && el.getAttribute('placeholder') !== val) el.setAttribute('placeholder', val);
+    _i18nRemember(el, 'placeholder', val);
   });
   // title
   scope.querySelectorAll('[data-i18n-title]').forEach(el => {
     const key = el.getAttribute('data-i18n-title');
-    const val = t(key, el.getAttribute('title'));
-    if (val) el.setAttribute('title', val);
+    const val = t(key, _i18nSource(el, 'title', el.getAttribute('title')));
+    if (val && el.getAttribute('title') !== val) el.setAttribute('title', val);
+    _i18nRemember(el, 'title', val);
+  });
+  scope.querySelectorAll('[data-i18n-aria-label]').forEach(el => {
+    const key = el.getAttribute('data-i18n-aria-label');
+    const val = t(key, _i18nSource(el, 'aria-label', el.getAttribute('aria-label')));
+    if (val && el.getAttribute('aria-label') !== val) el.setAttribute('aria-label', val);
+    _i18nRemember(el, 'aria-label', val);
   });
   // Selector-based translation (no data-i18n attributes needed)
   i18nApplySelectors(scope);
@@ -284,7 +313,7 @@ const I18N_SELECTOR_MAP = [
  * @param {Element|Document} scope
  */
 function i18nApplySelectors(scope) {
-  if (!I18N_SELECTOR_MAP || _i18nLang === 'zh-CN') return;
+  if (!I18N_SELECTOR_MAP) return;
   for (const entry of I18N_SELECTOR_MAP) {
     let els;
     try {
@@ -303,14 +332,17 @@ function i18nApplySelectors(scope) {
         fallback = el.getAttribute(attr) || '';
       }
       if (!fallback) return;
+      fallback = _i18nSource(el, attr, fallback);
+      if (entry.sel === '#titlebar-title' && attr === 'text' && !/^未命名/.test(fallback.trim())) return;
       const translated = t(entry.key, fallback);
-      if (!translated || translated === fallback) return;
+      if (!translated || translated === (attr === 'text' ? el.textContent : el.getAttribute(attr))) return;
       if (attr === 'text') {
         // Preserve child elements (like <i> icons) — only replace text nodes
         _i18nReplaceText(el, translated);
       } else {
         el.setAttribute(attr, translated);
       }
+      _i18nRemember(el, attr, attr === 'text' ? el.textContent : el.getAttribute(attr));
     });
   }
 }
@@ -439,9 +471,8 @@ function i18nToolReturn(key, fallback, params) {
  * @param {Element|Document} scope
  */
 function i18nApplyTextMap(scope) {
-  if (_i18nLang === 'zh-CN') return;
-  const textMap = _i18nDict._textMap;
-  if (!textMap) return;
+  const textMap = _i18nDict._textMap || {};
+  if (!document.createTreeWalker) return;
   const root = scope || document;
 
   // 1. Walk text nodes
@@ -452,6 +483,7 @@ function i18nApplyTextMap(scope) {
       if (!parent) return NodeFilter.FILTER_REJECT;
       const tag = parent.tagName;
       if (tag === 'SCRIPT' || tag === 'STYLE') return NodeFilter.FILTER_REJECT;
+      if (parent.closest?.('textarea, pre, code, .monaco-editor, .message-content, .message-text, .bubble-content, .todo-text, .file-name, .session-tab-title, .history-title, .history-preview, .memory-content, .item-title, .item-desc, .tool-output, .tool-result, [contenteditable], [data-i18n-nooverride], [data-i18n-skip]')) return NodeFilter.FILTER_REJECT;
       if (!node.textContent || !node.textContent.trim()) return NodeFilter.FILTER_REJECT;
       return NodeFilter.FILTER_ACCEPT;
     }
@@ -464,48 +496,63 @@ function i18nApplyTextMap(scope) {
   }
 
   textNodes.forEach(node => {
-    const original = node.textContent;
+    if (_i18nAlreadyApplied(node, 'text', node.textContent)) return;
+    const original = _i18nSource(node, 'text', node.textContent);
     if (!original) return;
+    if (!/[\u3400-\u9fff]/.test(original)) { _i18nRemember(node, 'text', original); return; }
     // Try exact match first
     const trimmed = original.trim();
     if (textMap[trimmed]) {
-      node.textContent = node.textContent.replace(trimmed, textMap[trimmed]);
+      const output = original.replace(trimmed, textMap[trimmed]);
+      if (node.textContent !== output) node.textContent = output;
+      _i18nRemember(node, 'text', output);
       return;
     }
     // Try partial replacement (for strings embedded in larger text)
     let replaced = original;
     let changed = false;
-    for (const [zh, tr] of Object.entries(textMap)) {
+    for (const [zh, tr] of _i18nTextEntries) {
       if (zh.length < 2) continue; // Skip very short strings
       if (replaced.includes(zh)) {
         replaced = replaced.split(zh).join(tr);
         changed = true;
       }
     }
-    if (changed) node.textContent = replaced;
+    if (changed || node.textContent !== original) {
+      if (node.textContent !== replaced) node.textContent = replaced;
+    }
+    _i18nRemember(node, 'text', replaced);
   });
 
   // 2. Scan attributes (placeholder, title, value)
-  root.querySelectorAll('[placeholder], [title]').forEach(el => {
-    ['placeholder', 'title'].forEach(attr => {
-      const val = el.getAttribute(attr);
+  root.querySelectorAll('[placeholder], [title], [aria-label]').forEach(el => {
+    if (el.closest('[data-i18n-skip], [data-i18n-nooverride]')) return;
+    ['placeholder', 'title', 'aria-label'].forEach(attr => {
+      if (_i18nAlreadyApplied(el, attr, el.getAttribute(attr))) return;
+      const val = _i18nSource(el, attr, el.getAttribute(attr));
       if (!val) return;
+      if (!/[\u3400-\u9fff]/.test(val)) { _i18nRemember(el, attr, val); return; }
       const trimmed = val.trim();
       if (textMap[trimmed]) {
-        el.setAttribute(attr, val.replace(trimmed, textMap[trimmed]));
+        const output = val.replace(trimmed, textMap[trimmed]);
+        if (el.getAttribute(attr) !== output) el.setAttribute(attr, output);
+        _i18nRemember(el, attr, output);
         return;
       }
       // Partial replacement
       let replaced = val;
       let changed = false;
-      for (const [zh, tr] of Object.entries(textMap)) {
+      for (const [zh, tr] of _i18nTextEntries) {
         if (zh.length < 2) continue;
         if (replaced.includes(zh)) {
           replaced = replaced.split(zh).join(tr);
           changed = true;
         }
       }
-      if (changed) el.setAttribute(attr, replaced);
+      if (changed || el.getAttribute(attr) !== val) {
+        if (el.getAttribute(attr) !== replaced) el.setAttribute(attr, replaced);
+      }
+      _i18nRemember(el, attr, replaced);
     });
   });
 }
@@ -536,9 +583,9 @@ function i18nStartObserver() {
   _i18nObserver.observe(document.body, {
     childList: true,
     subtree: true,
-    characterData: false,
+    characterData: true,
     attributes: true,
-    attributeFilter: ['placeholder', 'title']
+    attributeFilter: ['placeholder', 'title', 'aria-label']
   });
 }
 

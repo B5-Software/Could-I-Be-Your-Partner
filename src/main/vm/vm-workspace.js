@@ -39,7 +39,7 @@ const CONFLICT_DIR = '.cibyp-conflicts';
 const DEFAULT_EXCLUDES = {
   segments: ['node_modules', 'dist', 'out', '.cache', '.next', '.nuxt', '.venv', 'venv', '__pycache__', '.pytest_cache', '.idea', '.vs', CONFLICT_DIR],
   suffixes: ['.qcow2', '.img', '.vmdk', '.vhdx', '.iso', '.tar.gz', '.zip.tmp', '.log'],
-  prefixes: ['.git/objects/pack/tmp_', '.git/index.lock', '.cibyp-ready'],
+  prefixes: ['.git/objects/pack/tmp_', '.git/index.lock', '.cibyp-ready', '.cibyp-host-import', '.cibyp-code-history'],
 };
 
 function nowMs() { return Date.now(); }
@@ -84,14 +84,14 @@ class WorkspaceSync extends EventEmitter {
     try {
       if (this.baselineFile && fs.existsSync(this.baselineFile)) {
         const j = JSON.parse(fs.readFileSync(this.baselineFile, 'utf8'));
-        if (j && j.files && typeof j.files === 'object') return j;
+        if (j && j.files && j.hostRoot === this.hostRoot && j.vmMount === this.vmMount) return j;
       }
     } catch { /* 损坏则重建 */ }
     return { version: 1, savedAt: null, files: {} };
   }
 
   async _saveBaseline(files) {
-    this.baseline = { version: 2, savedAt: new Date().toISOString(), files };
+    this.baseline = { version: 2, hostRoot: this.hostRoot, vmMount: this.vmMount, savedAt: new Date().toISOString(), files };
     if (!this.baselineFile) return;
     try {
       await fs.promises.mkdir(path.dirname(this.baselineFile), { recursive: true });
@@ -182,7 +182,7 @@ class WorkspaceSync extends EventEmitter {
   // ---------------------------------------------------------------- diff
 
   static sameEntry(a, b) {
-    if (!a || !b) return false;
+    if (!a || !b || a.skipped || b.skipped) return false;
     if (a.hash && b.hash) return a.hash === b.hash;
     return a.size === b.size && Math.abs((a.mtimeMs || 0) - (b.mtimeMs || 0)) < 1500;
   }
@@ -191,8 +191,10 @@ class WorkspaceSync extends EventEmitter {
     const base = this.baseline.files || {};
     const toVm = [], toHost = [], conflicts = [], deletesVm = [], deletesHost = [];
     const all = new Set([...Object.keys(host), ...Object.keys(vm), ...Object.keys(base)]);
+    const blocked = [...Object.entries(host), ...Object.entries(vm)].filter(([, entry]) => entry.skipped).map(([rel]) => rel);
     for (const rel of all) {
-      if (this.shouldExclude(rel)) continue;
+      if (!WorkspaceSync.validRelative(rel)) throw new Error('Unsafe sync path: ' + rel);
+      if (this.shouldExclude(rel) || blocked.some(prefix => rel === prefix || rel.startsWith(prefix + '/'))) continue;
       const b = base[rel], h = host[rel], v = vm[rel];
       const hostChanged = !WorkspaceSync.sameEntry(h, b?.host || b);
       const vmChanged = !WorkspaceSync.sameEntry(v, b?.vm || b);
@@ -248,8 +250,51 @@ class WorkspaceSync extends EventEmitter {
     return out;
   }
 
+  static validRelative(rel) {
+    return typeof rel === 'string' && rel.length > 0 && !rel.startsWith('/') && !rel.includes('\\') && !/^[a-z]:/i.test(rel) && !rel.includes('\0') && rel.split('/').every(part => part && part !== '.' && part !== '..');
+  }
+
+  async safeHostPath(rel) {
+    if (!WorkspaceSync.validRelative(rel)) throw new Error('Unsafe sync path: ' + rel);
+    let cursor = this.hostRoot;
+    for (const part of ['', ...rel.split('/')]) {
+      if (part) cursor = path.join(cursor, part);
+      try { if ((await fs.promises.lstat(cursor)).isSymbolicLink()) throw new Error('Sync refuses symbolic links: ' + cursor); }
+      catch (error) { if (error.code !== 'ENOENT') throw error; }
+    }
+    return cursor;
+  }
+
+  async checkHost(rel, expected) {
+    const abs = await this.safeHostPath(rel);
+    let data = null;
+    try { data = await fs.promises.readFile(abs); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    if (data === null ? !!expected : !expected || require('crypto').createHash('sha256').update(data).digest('hex') !== expected.hash)
+      throw new Error('Host file changed during synchronization: ' + rel);
+    return abs;
+  }
+
+  async checkVm(rels, expected) {
+    const script = `(${async function check(root, rels, expected) {
+      const fs = require('node:fs').promises, path = require('node:path'), crypto = require('node:crypto');
+      for (const rel of rels) {
+        if (!rel || rel.startsWith('/') || rel.split('/').some(p => !p || p === '.' || p === '..')) throw new Error('Unsafe sync path');
+        let current = root;
+        for (const part of ['', ...rel.split('/')]) {
+          if (part) current = path.join(current, part);
+          try { if ((await fs.lstat(current)).isSymbolicLink()) throw new Error('Sync refuses symbolic links'); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+        }
+        let data = null;
+        try { data = await fs.readFile(current); } catch (e) { if (e.code !== 'ENOENT') throw e; }
+        if (data === null ? !!expected[rel] : !expected[rel] || crypto.createHash('sha256').update(data).digest('hex') !== expected[rel].hash) throw new Error('VM file changed during synchronization: ' + rel);
+      }
+    }.toString()})(${JSON.stringify(this.vmMount)},${JSON.stringify(rels)},${JSON.stringify(expected)}).catch(e=>{console.error(e.message);process.exitCode=1})`;
+    const result = await this._instance().exec('node -e ' + shellQuote(script), { timeoutMs: 60000 });
+    if (!result.ok) throw new Error(result.stderr || 'VM changed during synchronization');
+  }
+
   /** 推送若干文件到 VM（tar over ssh） */
-  async push(rels, sizes) {
+  async push(rels, sizes, expectedVm = null) {
     if (!rels.length) return { files: 0, bytes: 0 };
     const inst = this._instance();
     sizes = sizes || await this.scanHost();
@@ -257,7 +302,7 @@ class WorkspaceSync extends EventEmitter {
     for (const batch of WorkspaceSync.batches(rels, sizes)) {
       const entries = [...dirEntriesFor(batch)];
       for (const rel of batch) {
-        const abs = path.join(this.hostRoot, ...rel.split('/'));
+        const abs = await this.safeHostPath(rel);
         let data = null;
         data = await fs.promises.readFile(abs);
         if (sizes[rel]?.hash && require('crypto').createHash('sha256').update(data).digest('hex') !== sizes[rel].hash)
@@ -267,6 +312,7 @@ class WorkspaceSync extends EventEmitter {
       }
       if (!entries.length) continue;
       const tar = writeTar(entries);
+      if (expectedVm) await this.checkVm(batch, Object.fromEntries(batch.map(rel => [rel, expectedVm[rel] || null])));
       await this._execWithStdin(inst, `tar -x -f - -C ${shellQuote(this.vmMount)} --no-same-owner --no-same-permissions`, tar, 300000);
       this.emit('progress', { direction: 'push', files, bytes });
     }
@@ -293,7 +339,7 @@ class WorkspaceSync extends EventEmitter {
         const digest = require('crypto').createHash('sha256').update(e.data).digest('hex');
         if (sizes[rel]?.hash && digest !== sizes[rel].hash) throw new Error('拉取期间 VM 文件发生变化: ' + rel);
         const targetRel = (targetMap && targetMap.get(rel)) || rel;
-        const abs = path.join(this.hostRoot, ...targetRel.split('/'));
+        const abs = await this.safeHostPath(targetRel);
         if (expectedHost) {
           let current = null;
           try { current = await fs.promises.readFile(abs); } catch (error) { if (error.code !== 'ENOENT') throw error; }
@@ -302,7 +348,12 @@ class WorkspaceSync extends EventEmitter {
         }
         try {
           await fs.promises.mkdir(path.dirname(abs), { recursive: true });
-          await fs.promises.writeFile(abs, e.data);
+          const temporary = abs + '.cibyp-sync-' + require('crypto').randomBytes(8).toString('hex');
+          try {
+            await fs.promises.writeFile(temporary, e.data, { flag: 'wx' });
+            if (expectedHost) await this.checkHost(targetRel, expectedHost[rel]);
+            await fs.promises.rename(temporary, abs);
+          } finally { await fs.promises.rm(temporary, { force: true }).catch(() => {}); }
           // 保留 mtime（tar 记录的是整秒）：否则拉回后宿主 mtime=now，下次 diff 会误判"宿主改了"
           if (e.mtime) {
             const t = new Date(Number(e.mtime) * 1000);
@@ -319,19 +370,22 @@ class WorkspaceSync extends EventEmitter {
   }
 
   /** 删除（同步删除语义） */
-  async deleteInVm(rels) {
+  async deleteInVm(rels, expected = null) {
     if (!rels.length) return 0;
     const inst = this._instance();
+    if (rels.some(rel => !WorkspaceSync.validRelative(rel))) throw new Error('Unsafe deletion path');
+    if (expected) await this.checkVm(rels, Object.fromEntries(rels.map(rel => [rel, expected[rel]])));
     const list = rels.map((r) => shellQuote(path.posix.join(this.vmMount, r))).join(' ');
     const result = await inst.exec(`rm -f -- ${list}`, { timeoutMs: 60000 });
     if (!result.ok) throw new Error('VM 删除同步失败: ' + result.stderr);
     return rels.length;
   }
 
-  async deleteInHost(rels) {
+  async deleteInHost(rels, expected = null) {
     let n = 0;
     for (const rel of rels) {
-      await fs.promises.rm(path.join(this.hostRoot, ...rel.split('/')), { force: true }); n++;
+      const target = expected ? await this.checkHost(rel, expected[rel]) : await this.safeHostPath(rel);
+      await fs.promises.rm(target, { force: true }); n++;
     }
     return n;
   }
@@ -376,6 +430,7 @@ class WorkspaceSync extends EventEmitter {
     try {
       this._stats.skipped = [];
       const [host, vm] = await Promise.all([this.scanHost(), this.scanVm()]);
+      this._stats.skipped = [...Object.entries(host), ...Object.entries(vm)].filter(([, entry]) => entry.skipped).map(([rel, entry]) => ({ rel, reason: entry.skipped }));
       const d = this.diff(host, vm);
 
       let toVm = d.toVm, toHost = d.toHost;
@@ -397,15 +452,15 @@ class WorkspaceSync extends EventEmitter {
       }
 
       let pushRes = { files: 0, bytes: 0 }, pullRes = { files: 0, bytes: 0 };
-      if (toVm.length && !this.dryRun) pushRes = await this.push(toVm, host);
+      if (toVm.length && !this.dryRun) pushRes = await this.push(toVm, host, vm);
       if (toHost.length && !this.dryRun) {
         for (const c of d.conflicts) {
           if (c.winner === 'vm' && beforePull.has(c.rel)) await this.preserveConflict(c.rel, 'host', beforePull.get(c.rel), stamp);
         }
         pullRes = await this.pull(toHost, null, vm, host);
       }
-      const deletedVm = this.dryRun || direction === 'pull' ? 0 : await this.deleteInVm(d.deletesVm);
-      const deletedHost = this.dryRun || direction === 'push' ? 0 : await this.deleteInHost(d.deletesHost);
+      const deletedVm = this.dryRun || direction === 'pull' ? 0 : await this.deleteInVm(d.deletesVm, vm);
+      const deletedHost = this.dryRun || direction === 'push' ? 0 : await this.deleteInHost(d.deletesHost, host);
 
       // 重新扫描并落 baseline（只记录"两侧都成功"的文件，失败的下次重试）
       const [hostAfter, vmAfter] = await Promise.all([this.scanHost(), this.scanVm()]);
@@ -455,8 +510,12 @@ class WorkspaceSync extends EventEmitter {
 
   _execWithStdin(inst, cmd, buffer, timeoutMs) {
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('推送超时: ' + cmd.slice(0, 80))), timeoutMs);
+      let channel;
+      let expired = false;
+      const timer = setTimeout(() => { expired = true; try { channel?.close(); channel?.destroy(); } catch { /* closed */ } reject(new Error('Push timed out')); }, timeoutMs);
       inst.ssh.execStream(cmd).then(({ stream, done }) => {
+        channel = stream;
+        if (expired) { stream.close(); stream.destroy(); done.catch(() => {}); return; }
         let stderr = '';
         stream.on('data', () => { /* 消费 stdout，避免背压 */ });
         stream.stderr.on('data', (d) => { stderr += d.toString('utf8'); });
@@ -472,8 +531,12 @@ class WorkspaceSync extends EventEmitter {
 
   _execWithStdout(inst, cmd, timeoutMs) {
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(new Error('拉取超时: ' + cmd.slice(0, 80))), timeoutMs);
+      let channel;
+      let expired = false;
+      const timer = setTimeout(() => { expired = true; try { channel?.close(); channel?.destroy(); } catch { /* closed */ } reject(new Error('Pull timed out')); }, timeoutMs);
       inst.ssh.execStream(cmd).then(({ stream, done }) => {
+        channel = stream;
+        if (expired) { stream.close(); stream.destroy(); done.catch(() => {}); return; }
         const chunks = [];
         let total = 0;
         let stderr = '';

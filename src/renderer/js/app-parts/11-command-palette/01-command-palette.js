@@ -19,6 +19,7 @@
   ];
 
   const COMMAND_DEFS = [
+    { cmd: '/cwd', icon: 'fa-folder-open', desc: '用系统文件管理器打开当前工作区' },
     { cmd: '/model', icon: 'fa-robot', desc: '切换模型（仅本会话生效）' },
     { cmd: '/variant', icon: 'fa-gauge-high', desc: '切换变体 / 思考强度' },
     { cmd: '/minimal', icon: 'fa-wand-magic-sparkles', desc: '切换极简模式（精简提示词 + 最小工具集）' },
@@ -317,6 +318,11 @@
       showPanel();
       return;
     }
+    if (cmd === '/cwd') {
+      renderItems([{ label: typeof t === 'function' ? t('ui.cwd.open', '打开当前工作区') : '打开当前工作区', icon: 'fa-folder-open', action: 'cwd' }]);
+      showPanel();
+      return;
+    }
     if (cmd === '/vmdesk') {
       renderItems([{
         label: '打开 VM 桌面',
@@ -501,6 +507,11 @@
       case 'doctor': openSettingsTab('environment'); break;
       case 'export': await exportConversation(ag, item.format || 'md'); break;
       case 'vmdesk': await openVmDesktopCommand(); break;
+      case 'cwd': {
+        const result = await window.api.workspaceOpenCurrent(ag?.workspacePath);
+        if (!result.ok) showToast(result.code === 'NO_DESKTOP' ? t('ui.cwd.noDesktop', '没有可用的图形桌面，无法打开文件管理器') : result.error);
+        break;
+      }
       default: break;
     }
   }

@@ -29,6 +29,37 @@ module.exports = function registerMcpIpc({ ipcMain, getSettings, persist, appVer
 
   // serverKey -> entry（key 为净化后的服务器名，用于 mcp__<key>__<tool> 组合名路由）
   const mcpServers = new Map();
+  const connecting = new Map();
+  const failures = new Map();
+
+  function connectionState(entry, stage, progress) {
+    entry.stage = stage;
+    entry.progress = progress;
+    emitChanged();
+  }
+
+  async function abortable(entry, promise) {
+    const signal = entry.abort.signal;
+    if (signal.aborted) throw new Error('Connection cancelled');
+    let cancel;
+    const stopped = new Promise((_, reject) => { cancel = () => reject(new Error('Connection cancelled')); signal.addEventListener('abort', cancel, { once: true }); });
+    try { return await Promise.race([promise, stopped]); }
+    finally { signal.removeEventListener('abort', cancel); }
+  }
+
+  function safeError(entry, error) {
+    let text = String(error?.message || error || 'Connection failed');
+    for (const value of [...Object.values(entry.config.env || {}), ...Object.values(entry.config.headers || {})])
+      if (typeof value === 'string' && value.length > 3) text = text.split(value).join('[redacted]');
+    return text.replace(/Bearer\s+[^\s,]+/gi, 'Bearer [redacted]').slice(-2000);
+  }
+
+  function recordFailure(entry, error) {
+    if (entry.intentionalClose) return;
+    if (failures.get(entry.name)?.at >= entry.startedAt) return;
+    failures.set(entry.name, { error: safeError(entry, error), stage: entry.stage, detail: entry.stderr ? safeError(entry, entry.stderr) : null, at: Date.now() });
+    emitChanged();
+  }
 
   function getMcpSettings() {
     const mcp = getSettings().mcp || {};
@@ -50,9 +81,8 @@ module.exports = function registerMcpIpc({ ipcMain, getSettings, persist, appVer
 
   function findEntryByNameOrKey(nameOrKey) {
     if (mcpServers.has(nameOrKey)) return mcpServers.get(nameOrKey);
-    const want = sanitizeServerKey(nameOrKey);
     for (const entry of mcpServers.values()) {
-      if (entry.key === want || sanitizeServerKey(entry.name) === want) return entry;
+      if (entry.name === nameOrKey) return entry;
     }
     return null;
   }
@@ -116,7 +146,7 @@ module.exports = function registerMcpIpc({ ipcMain, getSettings, persist, appVer
 
   async function httpSendMessage(entry, msg) {
     // 有 id 的消息是请求/响应：POST 后等待应答；通知期望 202
-    const hasId = msg.id !== undefined;
+    const hasId = msg.id !== undefined && typeof msg.method === 'string';
     const out = await httpPost(entry, msg);
     if (!hasId) return; // 通知：202 即完成
     if (out.message) {
@@ -141,9 +171,7 @@ module.exports = function registerMcpIpc({ ipcMain, getSettings, persist, appVer
         timer: setTimeout(() => {
           server.pendingRequests.delete(id);
           // 规范：超时应发送取消通知并停止等待
-          try {
-            sendMessage(server, { jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId: id, reason: `timeout after ${ms}ms` } });
-          } catch { /* 连接已死则忽略 */ }
+          notify(server, 'notifications/cancelled', { requestId: id, reason: `timeout after ${ms}ms` });
           reject(new Error(`Request ${method} timed out after ${ms}ms`));
         }, ms)
       };
@@ -202,10 +230,10 @@ module.exports = function registerMcpIpc({ ipcMain, getSettings, persist, appVer
     if (msg.id !== undefined) {
       // 服务器→客户端请求：ping 必须回应；未实现的能力回 -32601
       if (msg.method === 'ping') {
-        try { sendMessage(entry, { jsonrpc: '2.0', id: msg.id, result: {} }); } catch { /* ignore */ }
+        try { Promise.resolve(sendMessage(entry, { jsonrpc: '2.0', id: msg.id, result: {} })).catch(() => {}); } catch { /* ignore */ }
       } else {
         try {
-          sendMessage(entry, { jsonrpc: '2.0', id: msg.id, error: { code: -32601, message: `Method not supported by client: ${msg.method}` } });
+          Promise.resolve(sendMessage(entry, { jsonrpc: '2.0', id: msg.id, error: { code: -32601, message: `Method not supported by client: ${msg.method}` } })).catch(() => {});
         } catch { /* ignore */ }
       }
       return;
@@ -242,13 +270,17 @@ module.exports = function registerMcpIpc({ ipcMain, getSettings, persist, appVer
         throw e;
       }
       entry.child = child;
+      if (entry.abort.signal.aborted) { try { child.kill('SIGTERM'); } catch {} throw new Error('Connection cancelled'); }
       child.on('error', (err) => {
         console.error(`[MCP:${entry.name}] process error: ${err.message}`);
         entry.status = 'error';
+        recordFailure(entry, err);
         rejectAllPending(entry, new Error(`进程错误: ${err.message}`));
       });
+      child.stdin.on('error', err => { recordFailure(entry, err); rejectAllPending(entry, err); });
       child.on('close', (code) => {
         console.log(`[MCP:${entry.name}] process exited with code ${code}`);
+        recordFailure(entry, new Error(`Server process exited with code ${code}`));
         entry.status = 'disconnected';
         rejectAllPending(entry, new Error('连接已关闭'));
         if (mcpServers.get(entry.key) === entry) mcpServers.delete(entry.key);
@@ -257,8 +289,9 @@ module.exports = function registerMcpIpc({ ipcMain, getSettings, persist, appVer
       child.stdout.on('data', (chunk) => feedStdioBytes(entry, chunk));
       child.stderr.on('data', (data) => {
         const text = data.toString();
+        entry.stderr = ((entry.stderr || '') + text).slice(-2000);
         // 限制单条日志长度，避免失控服务器刷爆主进程日志
-        console.error(`[MCP:${entry.name}] stderr: ${text.length > 2000 ? text.slice(0, 2000) + '...[truncated]' : text}`);
+        console.error(`[MCP:${entry.name}] stderr: ${safeError(entry, text)}`);
       });
 
   }
@@ -267,6 +300,11 @@ module.exports = function registerMcpIpc({ ipcMain, getSettings, persist, appVer
   // Content-Length（LSP 风格）帧 —— 以 "Content-Length:" 开头时切换到帧解析。
   function feedStdioBytes(entry, chunk) {
     entry.buffer = Buffer.concat([entry.buffer, chunk]);
+    if (entry.buffer.length > 32 * 1024 * 1024) {
+      recordFailure(entry, new Error('MCP response exceeded 32 MiB'));
+      teardownEntry(entry).catch(() => {});
+      return;
+    }
     while (entry.buffer.length > 0) {
       const head = entry.buffer.subarray(0, Math.min(entry.buffer.length, 15)).toString('latin1');
       if (/^Content-Length:/i.test(head)) {
@@ -350,12 +388,13 @@ module.exports = function registerMcpIpc({ ipcMain, getSettings, persist, appVer
     return {
       push(text) {
         buf += text;
-        let idx;
-        while ((idx = buf.indexOf('\n\n')) !== -1) {
-          const rawEvent = buf.slice(0, idx);
-          buf = buf.slice(idx + 2);
+        if (buf.length > 32 * 1024 * 1024) throw new Error('MCP event exceeded 32 MiB');
+        let separator;
+        while ((separator = /\r?\n\r?\n/.exec(buf))) {
+          const rawEvent = buf.slice(0, separator.index);
+          buf = buf.slice(separator.index + separator[0].length);
           const dataLines = [];
-          for (const line of rawEvent.split('\n')) {
+          for (const line of rawEvent.split(/\r?\n/)) {
             if (line.startsWith('data:')) dataLines.push(line.slice(5).replace(/^ /, ''));
           }
           if (dataLines.length) onData(dataLines.join('\n'));
@@ -370,7 +409,7 @@ module.exports = function registerMcpIpc({ ipcMain, getSettings, persist, appVer
       method: 'POST',
       headers: httpHeaders(entry),
       body: JSON.stringify(msgObj),
-      signal: AbortSignal.timeout(timeoutMs)
+      signal: AbortSignal.any([entry.abort.signal, AbortSignal.timeout(timeoutMs)])
     });
     const sid = res.headers.get('mcp-session-id');
     if (sid) entry.sessionId = sid;
@@ -378,37 +417,46 @@ module.exports = function registerMcpIpc({ ipcMain, getSettings, persist, appVer
     const ct = res.headers.get('content-type') || '';
     if (!res.ok) {
       const text = await res.text().catch(() => '');
-      throw new Error(`HTTP ${res.status}${text ? ': ' + text.slice(0, 200) : ''}`);
+      const error = new Error(`HTTP ${res.status}${text ? ': ' + text.slice(0, 200) : ''}`);
+      error.code = res.status === 404 && entry.sessionId ? 'MCP_SESSION_EXPIRED' : 'HTTP_' + res.status;
+      throw error;
     }
+    if (!msgObj.method || msgObj.id === undefined) { await res.body?.cancel(); return { status: res.status }; }
     if (ct.includes('text/event-stream')) {
       // 响应以 SSE 流返回：扫描事件直到出现与本请求 id 匹配的响应；
       // 途中出现的服务器请求/通知照常路由
-      const message = await new Promise((resolve, reject) => {
-        const parser = createSseParser((data) => {
+      let message;
+      const parser = createSseParser((data) => {
           let parsed;
           try { parsed = JSON.parse(data); } catch { return; }
           if (parsed && parsed.id !== undefined && parsed.method === undefined &&
               msgObj && parsed.id === msgObj.id) {
-            resolve(parsed);
+            validateRpcResponse(parsed, msgObj);
+            message = parsed;
           } else {
             handleIncomingMessage(entry, parsed);
           }
-        });
-        consumeBody(res, (chunk) => parser.push(chunk)).then(() => {
-          reject(new Error('HTTP 传输：SSE 流在收到响应前结束'));
-        }).catch((e) => reject(e));
       });
+      await consumeBody(res, (chunk) => { parser.push(chunk); return !message; });
+      if (!message) throw new Error('HTTP 传输：SSE 流在收到响应前结束');
       return { status: res.status, message };
     }
     const message = await res.json();
+    validateRpcResponse(message, msgObj);
     return { status: res.status, message };
+  }
+
+  function validateRpcResponse(message, requestMessage) {
+    if (!message || typeof message !== 'object' || message.jsonrpc !== '2.0' || message.id !== requestMessage.id || (!Object.hasOwn(message, 'result') && !Object.hasOwn(message, 'error'))) throw new Error('Invalid or mismatched JSON-RPC response');
   }
 
   async function consumeBody(res, onChunk) {
     if (!res.body) return;
     const decoder = new TextDecoder();
     for await (const chunk of res.body) {
-      onChunk(decoder.decode(chunk, { stream: true }));
+      // Returning from the iterator cancels the response body and releases its
+      // connection, even when a server leaves the POST event stream open.
+      if (onChunk(decoder.decode(chunk, { stream: true })) === false) return;
     }
     onChunk(decoder.decode());
   }
@@ -420,14 +468,16 @@ module.exports = function registerMcpIpc({ ipcMain, getSettings, persist, appVer
     const res = await fetch(entry.config.url, {
       method: 'GET',
       headers: httpHeaders(entry, { Accept: 'text/event-stream' }),
-      signal: ctrl.signal
+      signal: AbortSignal.any([ctrl.signal, entry.abort.signal])
     });
-    if (res.status === 405) return; // 服务器不支持服务器→客户端流
-    if (!res.ok) return;
+    if (res.status === 405) { await res.body?.cancel(); return false; } // Optional listener
+    if (!res.ok) throw new Error('Listener HTTP ' + res.status);
+    if (!(res.headers.get('content-type') || '').includes('text/event-stream')) throw new Error('Listener did not return an SSE stream');
     const parser = createSseParser((data) => {
       try { handleIncomingMessage(entry, JSON.parse(data)); } catch { /* ignore */ }
     });
-    consumeBody(res, (chunk) => parser.push(chunk)).catch(() => { /* 断流静默 */ });
+    await consumeBody(res, (chunk) => parser.push(chunk));
+    return true;
   }
 
   async function startHttpTransport(entry) {
@@ -439,6 +489,7 @@ module.exports = function registerMcpIpc({ ipcMain, getSettings, persist, appVer
     if (require('./vm/tool-location').isVmOperation(() => service) && entry.localHttp) {
       if (!service.instance || service.instance.state !== 'ready') await service.start();
       const forward = await service.forwardPort(Number(target.port) || (target.protocol === 'https:' ? 443 : 80));
+      if (entry.abort.signal.aborted) { service.unforwardPort(forward.hostPort); throw new Error('Connection cancelled'); }
       entry.guestForward = forward.hostPort;
       target.hostname = '127.0.0.1';
       target.port = String(forward.hostPort);
@@ -451,17 +502,26 @@ module.exports = function registerMcpIpc({ ipcMain, getSettings, persist, appVer
   async function httpDeleteSession(entry) {
     if (!entry.sessionId) return;
     try {
-      await fetch(entry.config.url, {
+      const response = await fetch(entry.config.url, {
         method: 'DELETE',
         headers: httpHeaders(entry),
         signal: AbortSignal.timeout(5000)
       });
+      await response.body?.cancel();
     } catch { /* 405/网络错误均忽略 */ }
   }
 
   // ---------- 生命周期 ----------
 
-  async function connectServer(config) {
+  function connectServer(config) {
+    if (connecting.has(config.name)) return connecting.get(config.name);
+    const pending = connectSingle(config).finally(() => { if (connecting.get(config.name) === pending) connecting.delete(config.name); });
+    connecting.set(config.name, pending);
+    return pending;
+  }
+
+  async function connectSingle(config) {
+    failures.delete(config.name);
     const key = sanitizeServerKey(config.name);
     // 同 key 冲突消歧（不同原始名净化后相同的情况）
     let finalKey = key;
@@ -469,7 +529,7 @@ module.exports = function registerMcpIpc({ ipcMain, getSettings, persist, appVer
     while (mcpServers.has(finalKey) && mcpServers.get(finalKey).name !== config.name) {
       finalKey = `${key}-${n++}`;
     }
-    if (mcpServers.has(finalKey)) await teardownEntry(mcpServers.get(finalKey));
+    if (mcpServers.has(finalKey)) { const old = mcpServers.get(finalKey); old.intentionalClose = true; await teardownEntry(old); }
 
     const type = config.type === 'http' ? 'http' : 'stdio';
     const entry = {
@@ -485,44 +545,69 @@ module.exports = function registerMcpIpc({ ipcMain, getSettings, persist, appVer
       requestId: 0,
       buffer: Buffer.alloc(0),
       instructions: null
+      ,abort: new AbortController(), startedAt: Date.now(), stage: 'starting', progress: 10
     };
     mcpServers.set(finalKey, entry);
+    emitChanged();
+    const deadline = setTimeout(() => {
+      recordFailure(entry, new Error('Connection timed out'));
+      teardownEntry(entry).catch(() => {});
+    }, Math.min(120000, Math.max(1000, Number(config.connectTimeoutMs) || 60000)));
 
     try {
       if (type === 'http') {
-        await startHttpTransport(entry);
+        await abortable(entry, startHttpTransport(entry));
       } else {
-        await startStdioTransport(entry);
+        await abortable(entry, startStdioTransport(entry));
       }
+      if (entry.abort.signal.aborted) throw new Error('Connection cancelled');
+      connectionState(entry, 'initialize', 35);
       // initialize：版本协商（发最新支持版本；服务器回它支持的版本，记录之）
       const initResult = await request(entry, 'initialize', {
         protocolVersion: SUPPORTED_PROTOCOL_VERSION,
         capabilities: {},
         clientInfo: { name: 'Could-I-Be-Your-Partner', title: 'Could I Be Your Partner', version: appVersion }
       });
+      if (!initResult?.protocolVersion || !initResult.capabilities) throw new Error('Server returned an invalid initialization result');
       if (initResult && initResult.protocolVersion) {
         entry.protocolVersion = String(initResult.protocolVersion);
         if (entry.protocolVersion !== SUPPORTED_PROTOCOL_VERSION &&
             !LEGACY_PROTOCOL_VERSIONS.includes(entry.protocolVersion)) {
-          console.warn(`[MCP:${entry.name}] server negotiated unknown protocol version ${entry.protocolVersion}; continuing may be incompatible`);
+          throw new Error(`Unsupported MCP protocol version: ${entry.protocolVersion}`);
         }
       }
       if (initResult && typeof initResult.instructions === 'string') {
         entry.instructions = initResult.instructions;
       }
-      notify(entry, 'notifications/initialized', {});
+      connectionState(entry, 'initialized', 55);
+      await sendMessage(entry, { jsonrpc: '2.0', method: 'notifications/initialized', params: {} });
+      connectionState(entry, 'tools', 65);
       await refreshTools(entry);
+      if (entry.abort.signal.aborted) throw new Error('Connection cancelled');
       entry.status = 'connected';
-      emitChanged();
+      connectionState(entry, 'connected', 100);
+      if (type === 'http') {
+        const listen = async attempt => {
+          try { if (!await openHttpListener(entry)) return; }
+          catch (error) { if (!entry.abort.signal.aborted) { entry.warning = safeError(entry, error); emitChanged(); } }
+          if (!entry.abort.signal.aborted && attempt < 3) entry.listenerRetry = setTimeout(() => listen(attempt+1), Math.min(10000, 1000 * 2 ** attempt));
+        };
+        listen(0).catch(() => {});
+      }
       return { ok: true, tools: entry.tools, protocolVersion: entry.protocolVersion, serverInfo: initResult && initResult.serverInfo };
     } catch (e) {
+      recordFailure(entry, e);
       await teardownEntry(entry);
-      return { ok: false, error: e.message };
-    }
+      return { ok: false, error: safeError(entry, e) };
+    } finally { clearTimeout(deadline); }
   }
 
   async function teardownEntry(entry) {
+    if (entry.closing) return entry.closing;
+    entry.closing = (async () => {
     entry.status = 'disconnected';
+    clearTimeout(entry.listenerRetry);
+    entry.abort.abort();
     rejectAllPending(entry, new Error('连接已关闭'));
     if (entry.type === 'http') {
       await httpDeleteSession(entry);
@@ -533,16 +618,21 @@ module.exports = function registerMcpIpc({ ipcMain, getSettings, persist, appVer
     }
     if (mcpServers.get(entry.key) === entry) mcpServers.delete(entry.key);
     emitChanged();
+    })();
+    return entry.closing;
   }
 
   async function stopMcpServer(nameOrKey) {
-    const entry = findEntryByNameOrKey(nameOrKey);
+    failures.delete(nameOrKey);
+    const entry = [...mcpServers.values()].find(e => e.name === nameOrKey) || findEntryByNameOrKey(nameOrKey);
     if (!entry) return;
+    entry.intentionalClose = true;
     await teardownEntry(entry);
   }
 
   async function stopAllMcpServers() {
     for (const entry of [...mcpServers.values()]) {
+      entry.intentionalClose = true;
       await teardownEntry(entry);
     }
   }
@@ -551,15 +641,25 @@ module.exports = function registerMcpIpc({ ipcMain, getSettings, persist, appVer
 
   // 分页循环：cursor/nextCursor 直到取完（规范 2025-06-18）
   async function refreshTools(entry) {
+    if (entry.refreshing) return entry.refreshing;
+    entry.refreshing = (async () => {
     const tools = [];
     let cursor;
+    const seen = new Set();
     do {
       const result = await request(entry, 'tools/list', cursor ? { cursor } : {});
-      if (result && Array.isArray(result.tools)) tools.push(...result.tools);
+      if (!Array.isArray(result?.tools)) throw new Error('Server returned an invalid tools list');
+      tools.push(...result.tools);
       cursor = result && result.nextCursor;
+      if (cursor) {
+        if (seen.has(cursor) || seen.size >= 1000) throw new Error('Server tools pagination did not advance');
+        seen.add(cursor);
+      }
     } while (cursor);
     entry.tools = tools;
     return tools;
+    })().finally(() => { entry.refreshing = null; });
+    return entry.refreshing;
   }
 
   // tools/call 结果规范化：content 各类型拼接；isError 语义正确传递
@@ -602,6 +702,24 @@ module.exports = function registerMcpIpc({ ipcMain, getSettings, persist, appVer
 
   // ---------- IPC ----------
 
+  function validateConfig(config) {
+    if (!config || typeof config !== 'object' || Array.isArray(config)) return 'Invalid server configuration';
+    if (typeof config.name !== 'string' || !config.name.trim()) return 'Server name is required';
+    if (config.type && !['stdio', 'http'].includes(config.type)) return 'Unsupported transport';
+    if (config.type === 'http') {
+      try { if (!['http:', 'https:'].includes(new URL(config.url).protocol)) return 'HTTP server requires an HTTP(S) URL'; }
+      catch { return 'HTTP server requires an HTTP(S) URL'; }
+    } else if (typeof config.command !== 'string' || !config.command.trim()) return 'Command is required';
+    if (config.args != null && (!Array.isArray(config.args) || config.args.some(v => typeof v !== 'string'))) return 'Arguments must be an array of strings';
+    for (const field of ['env', 'headers']) {
+      const value = config[field];
+      if (value != null && (typeof value !== 'object' || Array.isArray(value) || Object.values(value).some(v => typeof v !== 'string'))) return field + ' must be an object of strings';
+    }
+    if (config.cwd != null && typeof config.cwd !== 'string') return 'Working directory must be a string';
+    for (const field of ['autoConnect', 'inheritEnv']) if (config[field] != null && typeof config[field] !== 'boolean') return field + ' must be a boolean';
+    return null;
+  }
+
   ipcMain.handle('mcp:listServers', () => {
     const mcpSettings = getMcpSettings();
     return mcpSettings.servers.map((s) => {
@@ -610,10 +728,18 @@ module.exports = function registerMcpIpc({ ipcMain, getSettings, persist, appVer
       if (!entry || entry.name !== s.name) {
         for (const e of mcpServers.values()) if (e.name === s.name) { entry = e; break; }
       }
+      if (entry?.name !== s.name) entry = null;
+      const failure = failures.get(s.name);
       return {
         ...s,
-        key,
-        status: entry ? entry.status : 'disconnected',
+        key: entry?.key || key,
+        status: entry ? entry.status : failure ? 'error' : 'disconnected',
+        stage: entry?.stage || failure?.stage || 'disconnected',
+        progress: entry?.progress || 0,
+        startedAt: entry?.startedAt || null,
+        error: failure?.error || null,
+        errorDetail: failure?.detail || null,
+        warning: entry?.warning || null,
         toolCount: entry ? entry.tools.length : 0,
         executionLocation: entry?.executionLocation || null,
         protocolVersion: entry ? entry.protocolVersion : null
@@ -623,27 +749,24 @@ module.exports = function registerMcpIpc({ ipcMain, getSettings, persist, appVer
 
   ipcMain.handle('mcp:addServer', async (_, serverConfig) => {
     const mcpSettings = getMcpSettings();
-    const cfg = serverConfig || {};
-    if (!cfg.name || typeof cfg.name !== 'string') return { ok: false, error: '名称不能为空' };
-    const type = cfg.type === 'http' ? 'http' : 'stdio';
-    if (type === 'http') {
-      if (!cfg.url || !/^https?:\/\//i.test(String(cfg.url))) return { ok: false, error: 'HTTP 服务器需要有效的 http(s) URL' };
-    } else if (!cfg.command) {
-      return { ok: false, error: '名称和命令不能为空' };
-    }
+    const cfg = { ...serverConfig, name: typeof serverConfig?.name === 'string' ? serverConfig.name.trim() : '' };
+    const error = validateConfig(cfg);
+    if (error) return { ok: false, error };
     if (mcpSettings.servers.find((s) => s.name === cfg.name)) {
       return { ok: false, error: '同名服务器已存在' };
     }
     mcpSettings.servers.push(cfg);
     saveMcpSettings(mcpSettings);
+    emitChanged();
     return { ok: true };
   });
 
   ipcMain.handle('mcp:removeServer', async (_, name) => {
-    await stopMcpServer(name);
     const mcpSettings = getMcpSettings();
     mcpSettings.servers = mcpSettings.servers.filter((s) => s.name !== name);
     saveMcpSettings(mcpSettings);
+    emitChanged();
+    await stopMcpServer(name);
     return { ok: true };
   });
 
@@ -651,9 +774,32 @@ module.exports = function registerMcpIpc({ ipcMain, getSettings, persist, appVer
     const mcpSettings = getMcpSettings();
     const idx = mcpSettings.servers.findIndex((s) => s.name === name);
     if (idx === -1) return { ok: false, error: '服务器不存在' };
-    mcpSettings.servers[idx] = { ...mcpSettings.servers[idx], ...updates };
-    saveMcpSettings(mcpSettings);
-    return { ok: true };
+    const original = mcpSettings.servers[idx];
+    const config = { ...original, ...updates };
+    if (typeof config.name === 'string') config.name = config.name.trim();
+    const error = validateConfig(config);
+    if (error) return { ok: false, error };
+    if (mcpSettings.servers.some((s, i) => i !== idx && s.name === config.name)) return { ok: false, error: '同名服务器已存在' };
+    const entry = [...mcpServers.values()].find(e => e.name === name);
+    const reconnect = entry && ['connected', 'connecting'].includes(entry.status);
+    if (entry) { entry.intentionalClose = true; await teardownEntry(entry); }
+    if (connecting.has(name)) await connecting.get(name);
+    const currentSettings = getMcpSettings();
+    const currentIndex = currentSettings.servers.indexOf(original);
+    if (currentIndex === -1) return { ok: false, error: 'Server configuration changed or was removed during editing' };
+    if (currentSettings.servers.some((s, i) => i !== currentIndex && s.name === config.name)) return { ok: false, error: '同名服务器已存在' };
+    failures.delete(name);
+    currentSettings.servers[currentIndex] = config;
+    saveMcpSettings(currentSettings);
+    emitChanged();
+    // Keep an active connection active with the new configuration; leave an
+    // intentionally disconnected server disconnected. Failed reconnects still
+    // retain the saved configuration so the user can fix it and retry.
+    if (reconnect) {
+      const connected = await connectServer(config);
+      return { ok: true, reconnected: true, connected: connected.ok, connectionError: connected.error };
+    }
+    return { ok: true, reconnected: false };
   });
 
   ipcMain.handle('mcp:connect', async (_, name) => {
@@ -715,7 +861,11 @@ module.exports = function registerMcpIpc({ ipcMain, getSettings, persist, appVer
       }
       return { ok: true, text: norm.text, location: entry.executionLocation };
     } catch (e) {
-      return { ok: false, error: e.message, location: entry.executionLocation };
+      if (e.code === 'MCP_SESSION_EXPIRED') {
+        const config = getMcpSettings().servers.find(s => s.name === entry.name);
+        if (config) await connectServer(config);
+      }
+      return { ok: false, error: safeError(entry, e), location: entry.executionLocation };
     }
   });
 

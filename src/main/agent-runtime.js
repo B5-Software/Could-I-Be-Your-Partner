@@ -91,6 +91,7 @@ function createAgentRuntime({
       status: session.status,
       busy: session.busy,
       title: session.title,
+      model: session.agent?.getActiveModelId() || '',
       workspacePath: session.agent ? session.agent.workspacePath : null,
       hostWorkspacePath: session.hostWorkspacePath || null,
       conversationId: session.agent ? session.agent.conversationId : null,
@@ -495,6 +496,30 @@ function createAgentRuntime({
     return out;
   }
 
+  let settingsRevision = 0;
+  function applyRuntimeSettings(settings) {
+    if (settings?.language) core.i18n.i18nSetLanguage(settings.language);
+    for (const session of sessions.values())
+      session.agent.applySettings({ ...settings, tools: { ...settings.tools, codeIDE: false } });
+    emit({ type: 'settingsChanged' });
+  }
+  api.onSettingsChanged?.(async () => {
+    const revision = ++settingsRevision;
+    try {
+      const settings = await api.getSettings();
+      if (revision === settingsRevision) applyRuntimeSettings(settings);
+    } catch (error) {
+      log.warn?.('[agent-runtime] Settings refresh failed: ' + error.message);
+    }
+  });
+  api.onSkillsChanged?.(() => {
+    for (const session of sessions.values())
+      session.agent
+        .refreshSkillsCatalog()
+        .then(() => session.agent.contextManager?.setSystemPrompt(session.agent.getSystemPrompt()))
+        .catch((error) => log.warn?.('[agent-runtime] ' + error.message));
+  });
+
   return {
     INTERACTION_POLICY,
     MODES,
@@ -511,6 +536,17 @@ function createAgentRuntime({
     /** 设置快照（前端展示模型/人格等） */
     getSettings() {
       return api.getSettings();
+    },
+
+    async saveSettings(patch) {
+      const result = await api.setSettings(patch);
+      settingsRevision++;
+      applyRuntimeSettings(result);
+      return result;
+    },
+    async openCurrentDirectory(key) {
+      const session = sessions.get(key);
+      return api.workspaceOpenCurrent(session?.agent.workspacePath);
     },
 
     async getTodos() {
@@ -564,6 +600,7 @@ function createAgentRuntime({
      */
     async sendMessage(key, message, attachments = []) {
       const session = createSession({ key, mode: 'chat' });
+      if (session.rewinding) return { ok: false, error: 'Conversation is being rewound' };
       if (session.loadingHistory) return { ok: false, error: 'Conversation is still loading' };
       if (session.busy) {
         session.agent.injectHotMessage(message, attachments || []);
@@ -571,6 +608,13 @@ function createAgentRuntime({
         return { ok: true, injected: true };
       }
       session.busy = true;
+      session.unadmittedInput = {
+        text: message,
+        start: session.agent.contextManager.getHistoryMessages().length,
+      };
+      session.finished = new Promise((resolve) => {
+        session.finish = resolve;
+      });
       session.stopRequested = false;
       session.status = 'running';
       emit({ type: 'message', key: session.key, role: 'user', content: message });
@@ -615,7 +659,16 @@ function createAgentRuntime({
         });
         return { ok: false, error: error.message };
       } finally {
+        if (
+          session.unadmittedInput &&
+          session.agent.contextManager
+            .getHistoryMessages()
+            .slice(session.unadmittedInput.start)
+            .some((m) => m.role === 'user' && m.metadata?.kind !== 'context-update')
+        )
+          session.unadmittedInput = null;
         session.busy = false;
+        session.finish?.();
         session.status = 'idle';
         // 每轮结束推送用量/成本/上下文统计 → 前端状态栏
         try {
@@ -652,6 +705,52 @@ function createAgentRuntime({
       session.agent.stop();
       respondInteraction(session, false);
       return { ok: true };
+    },
+
+    async undo(key) {
+      const session = sessions.get(key);
+      if (!session) return { ok: false, error: 'Unknown session' };
+      if (session.loadingHistory) return { ok: false, error: 'Conversation is still loading' };
+      if (session.rewinding) return { ok: false, error: 'Conversation is being rewound' };
+      session.rewinding = true;
+      try {
+        const pending = session.agent.hotMessages.slice();
+        this.stop(key);
+        if (session.busy) await session.finished;
+        const context = session.agent.contextManager;
+        if (!pending.length && session.unadmittedInput) {
+          const text = session.unadmittedInput.text;
+          session.unadmittedInput = null;
+          return { ok: true, text };
+        }
+        if (pending.length) {
+          for (const message of pending.slice(0, -1)) context.addUserMessage(message);
+          await session.agent.saveToHistory();
+          this.emitUsageStats(key);
+          return { ok: true, text: pending.at(-1) };
+        }
+        const history = context.getHistoryMessages();
+        const index = history.findLastIndex(
+          (message) => message.role === 'user' && message.metadata?.kind !== 'context-update',
+        );
+        if (index < 0) return { ok: false, error: 'No user message to undo' };
+        const content = history[index].content;
+        const text =
+          typeof content === 'string'
+            ? content
+            : Array.isArray(content)
+              ? content
+                  .filter((part) => part.type === 'text')
+                  .map((part) => part.text)
+                  .join('\n')
+              : '';
+        context.loadFromHistory(history.slice(0, index));
+        await session.agent.saveToHistory();
+        this.emitUsageStats(key);
+        return { ok: true, text };
+      } finally {
+        session.rewinding = false;
+      }
     },
 
     /** 关闭会话（保留历史） */

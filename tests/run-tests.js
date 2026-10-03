@@ -3998,7 +3998,7 @@ function runVmSandboxTests() {
   });
 
   testAsync('外部挂载：重复挂载幂等（不重复 push 覆盖 VM 改动）', async () => {
-    const svc = new VmService({ getSettings: () => ({ runtime: { vm: {} } }) });
+    const svc = new VmService({ getSettings: () => ({ runtime: { workspaceMode: 'isolated', vm: {} } }) });
     const dir = fs.mkdtempSync(_path.join(_os.tmpdir(), 'cibyp-mount-idem-'));
     svc._externMounts = new Map([[_path.resolve(dir), '/workspace/_external/keep']]);
     const r = await svc.mountExternalDir(dir);
@@ -6264,7 +6264,7 @@ async function runBatchToolTests() {
   test('tools-def：批量工具 schema 含数组参数', () => {
     const content = fs.readFileSync(require('path').join(__dirname, '../src/renderer/js/tools-def.js'), 'utf-8');
     for (const key of ['paths', 'imagePaths', 'searches', 'requests', 'urls', 'hostnames', 'items']) {
-      assert.ok(content.includes(`${key}: { type: 'array'`), `缺少批量参数 ${key}`);
+      assert.ok(content.includes(`${key}: { type: 'array'`) || content.includes(`"${key}": {"type": "array"`), `缺少批量参数 ${key}`);
     }
     assert.ok(content.includes("enum: ['add', 'update', 'remove', 'toggle', 'list', 'batch']"), 'todoList 应支持编辑和 batch');
   });

@@ -117,6 +117,7 @@
   "06b-settings/43-entropy-settings.js",
   "06b-settings/44-proxy-settings.js",
   "06b-settings/45-vm-settings.js",
+  "06b-settings/46-web-research-settings.js",
   "07-history/00-app-panels.js",
   "07-history/01-history-page.js",
   "07-history/02-history-virtual-scroll.js",

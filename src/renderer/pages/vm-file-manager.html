@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; font-src 'self'; img-src 'self' data:; connect-src 'none'">
+  <title>VM Files | CIBYP</title>
+  <link rel="stylesheet" href="../../../assets/fonts/fontawesome.min.css">
+  <link rel="stylesheet" href="../css/vm-file-manager.css">
+  <link rel="stylesheet" href="../css/motion.css">
+</head>
+<body>
+  <header class="titlebar"><img src="../../../assets/icons/icon.png" alt=""><strong data-i18n="ui.vmFiles.title">虚拟机文件管理器</strong><span class="window-controls"><button data-action="minimize" data-i18n-aria-label="ui.vmFiles.minimize" aria-label="最小化">−</button><button data-action="maximize" data-i18n-aria-label="ui.vmFiles.maximize" aria-label="最大化">□</button><button data-action="close" data-i18n-aria-label="ui.vmFiles.closeWindow" aria-label="关闭窗口">×</button></span></header>
+  <main>
+    <section class="pane" data-side="host"><div class="pane-heading"><i class="fa-solid fa-computer"></i><h2 data-i18n="ui.vmFiles.host">主机</h2><span class="selection-count"></span></div><nav><button data-action="parent" data-i18n-title="ui.vmFiles.parent" title="上一级">↑</button><input class="path" data-i18n-aria-label="ui.vmFiles.hostPath" aria-label="主机路径"><button data-action="go" data-i18n="ui.vmFiles.go">前往</button><button data-action="refresh" data-i18n-title="ui.vmFiles.refresh" title="刷新">↻</button><button data-action="mkdir" data-i18n-title="ui.vmFiles.newFolder" title="新建文件夹"><i class="fa-solid fa-folder-plus"></i></button></nav><div class="files" role="listbox" aria-multiselectable="true" tabindex="0"></div></section>
+    <aside class="transfer-controls"><button id="upload" data-i18n-title="ui.vmFiles.upload" title="传输到虚拟机">→</button><button id="download" data-i18n-title="ui.vmFiles.download" title="传输到主机">←</button></aside>
+    <section class="pane" data-side="vm"><div class="pane-heading"><i class="fa-solid fa-server"></i><h2 data-i18n="ui.vmFiles.vm">虚拟机</h2><span class="selection-count"></span></div><nav><button data-action="parent" data-i18n-title="ui.vmFiles.parent" title="上一级">↑</button><input class="path" data-i18n-aria-label="ui.vmFiles.vmPath" aria-label="虚拟机路径"><button data-action="go" data-i18n="ui.vmFiles.go">前往</button><button data-action="refresh" data-i18n-title="ui.vmFiles.refresh" title="刷新">↻</button><button data-action="mkdir" data-i18n-title="ui.vmFiles.newFolder" title="新建文件夹"><i class="fa-solid fa-folder-plus"></i></button></nav><div class="files" role="listbox" aria-multiselectable="true" tabindex="0"></div></section>
+  </main>
+  <footer><label><input id="overwrite" type="checkbox"><span data-i18n="ui.vmFiles.overwrite">覆盖同名文件</span></label><span id="status" role="status" aria-live="polite"></span><button id="cancel" hidden data-i18n="ui.vmFiles.cancel">取消传输</button></footer>
+  <dialog id="folder-dialog"><form method="dialog"><h3 data-i18n="ui.vmFiles.newFolder">新建文件夹</h3><input id="folder-name" required autocomplete="off"><div><button value="cancel" formnovalidate data-i18n="ui.vmFiles.close">取消</button><button value="create" data-i18n="ui.vmFiles.create">创建</button></div></form></dialog>
+  <script src="../js/i18n.js"></script><script src="../js/i18n/en.js"></script><script src="../js/i18n/de.js"></script><script src="../js/vm-file-manager.js"></script>
+</body>
+</html>

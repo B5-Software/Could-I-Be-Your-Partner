@@ -27,6 +27,8 @@ const {
 const views = require('./views.js');
 const { t, setLanguage } = require('./text.js');
 const { pointAt, selectedText } = require('./selection');
+const { ConfigBrowser } = require('./config');
+const { TranscriptSearch } = require('./transcript-search');
 
 const MODES = ['chat', 'babe', 'code'];
 
@@ -74,6 +76,8 @@ class TuiApp {
       editorCursor: 0,
     };
 
+    this.configBrowser = new ConfigBrowser(this);
+    this.transcriptSearch = new TranscriptSearch(this);
     this.activeKey = null;
     this.quitArmedAt = null;
     this._toolEntries = new Map(); // callId / seq → 工具条目
@@ -144,6 +148,16 @@ class TuiApp {
     const accent = settings.theme && settings.theme.accentColor;
     if (accent) this.theme = applyAccent(this.theme, accent);
     this.state.theme = this.theme;
+    for (const [key, view] of this._sessionViews) {
+      view.state.settings = settings;
+      view.state.theme = this.theme;
+      view.state.tarotVisible = settings.tarotVisible !== false;
+      view.state.model = this.runtime.getSession?.(key)?.model || settings.llm?.model || '';
+    }
+    this.state.settings = settings;
+    this.state.tarotVisible = settings.tarotVisible !== false;
+    this.state.model =
+      this.runtime.getSession?.(this.activeKey)?.model || settings.llm?.model || '';
     // 界面语言：中文为源文（回退），en/de 走 i18n 词典（与 GUI 的 settings.language 一致）
     try {
       const language = settings.language || 'zh-CN';
@@ -156,6 +170,11 @@ class TuiApp {
     } catch {
       /* 语言设置失败不阻塞 */
     }
+  }
+
+  async refreshSettings() {
+    this._applySettings(await this.runtime.getSettings());
+    this._reloadCustomCommands();
   }
 
   /** 重载自定义命令（用户目录 + 工作区目录） */
@@ -217,10 +236,24 @@ class TuiApp {
     this.state.editorText = this.editor.value;
     this.state.editorCursor = this.editor.cursor;
     this.state.completion = this._computeCompletion();
-    const frame = views.composeFrame(this.state, {
+    let frame = views.composeFrame(this.state, {
       hints: this._footerHints(),
       inputHint: this._inputHint(),
     });
+    if (this.state.search) {
+      const locate = this.state.search.locate;
+      this.transcriptSearch.update(
+        frame.transcript?.lines || [],
+        frame.transcript?.rowLines.length || 10,
+      );
+      if (locate) {
+        this.state.scrollLineCount = frame.scroll?.totalLines;
+        frame = views.composeFrame(this.state, {
+          hints: this._footerHints(),
+          inputHint: this.state.search.hint,
+        });
+      }
+    }
     this.state.scrollOffset = frame.scroll?.offset || 0;
     this.state.scrollLineCount = frame.scroll?.totalLines;
     frame.title = this.state.title;
@@ -359,7 +392,13 @@ class TuiApp {
       return true;
     }
     if (!['wheel', 'pageup', 'pagedown'].includes(key?.name)) this.state.selection = null;
+    if (this.state.modal?.kind?.startsWith('config')) return this.configBrowser.handle(key);
     if (this.state.modal) return this._handleModalKey(key);
+    if (key.ctrl && key.char === 'f') {
+      this.transcriptSearch.open();
+      return true;
+    }
+    if (this.transcriptSearch.handle(key)) return true;
 
     const completionResult = this._handleCompletionKey(key);
     if (completionResult === 'submit') {
@@ -435,13 +474,18 @@ class TuiApp {
     return false;
   }
 
-  _handleMouse(key) {
+  async _handleMouse(key) {
+    if (key.button === 'right' && key.press && this.state.selection?.moved) {
+      await this._copySelection();
+      return true;
+    }
     if (key.button !== 'left' || this.state.modal) return true;
     const selection = this.state.selection;
     if (!key.press) {
       if (selection?.dragging) {
         this._extendSelection(key);
         selection.dragging = false;
+        if (selection.moved) await this._copySelection();
       }
       return true;
     }
@@ -454,6 +498,17 @@ class TuiApp {
       ? { anchor, focus: anchor, dragging: true, moved: false, mouse: key }
       : null;
     return true;
+  }
+
+  async _copySelection() {
+    const text = selectedText(this.state.selection, this.frame().transcript?.lines || []);
+    if (!text) return;
+    try {
+      await this.onCopy(text);
+      this.state.toast = { text: t('ui.tui.copied', '已复制选中的消息') };
+    } catch (error) {
+      this.state.toast = { text: error.message };
+    }
   }
 
   _extendSelection(mouse) {
@@ -716,6 +771,7 @@ class TuiApp {
 
   handleRuntimeEvent(event) {
     if (!event || !event.type) return;
+    if (event.type === 'settingsChanged') return this.refreshSettings();
     // 只处理属于当前会话的事件（多会话并存时避免互相串扰）
     if (
       event.key &&
@@ -1347,6 +1403,47 @@ class TuiApp {
             filePath +
             t('ui.tui.attachHint', '（随下一条消息发送）'),
         });
+        return;
+      }
+      case 'config':
+        await this.configBrowser.open(argText.trim());
+        return;
+      case 'cwd': {
+        const result = await this.runtime.openCurrentDirectory(this.activeKey);
+        if (!result.ok)
+          throw new Error(
+            result.code === 'NO_DESKTOP'
+              ? t('ui.tui.noDesktop', '没有可用的图形桌面，无法打开文件管理器')
+              : result.error,
+          );
+        this.state.toast = { text: result.path };
+        return;
+      }
+      case 'undo': {
+        const key = this.activeKey,
+          state = this.state,
+          editor = this.editor;
+        const result = await this.runtime.undo(key);
+        if (!result.ok) throw new Error(result.error);
+        await this.settled();
+        const index = state.messages.findLastIndex((entry) => entry.kind === 'user');
+        if (index >= 0) state.messages.splice(index);
+        const view = this._sessionViews.get(key);
+        view?.tools.clear();
+        if (view) view.stream = null;
+        if (key === this.activeKey) {
+          this._toolEntries.clear();
+          this._streamEntry = null;
+        }
+        state.running = false;
+        state.scrollOffset = 0;
+        state.selection = null;
+        state.search = null;
+        state.modal = null;
+        editor.setValue(result.text || '');
+        state.toast = {
+          text: t('ui.tui.undone', '已撤回最近一条消息；已执行的文件修改不会回滚'),
+        };
         return;
       }
       case 'workspace': {

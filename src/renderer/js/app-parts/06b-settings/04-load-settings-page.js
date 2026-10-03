@@ -1,5 +1,6 @@
   async function loadSettingsPage() {
     const s = await readSettings();
+    loadWebResearchSettings(s);
     refreshSettingsOverview(s);
     refreshTokenSettings(s);
     populateFontSelects(s);

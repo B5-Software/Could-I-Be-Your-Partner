@@ -29,15 +29,19 @@ async function scanDirectory(root, options = {}, cache = {}) {
     const entries = await fs.promises.readdir(directory, { withFileTypes: true });
     for (const entry of entries) {
       const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
-      if (excluded(rel) || entry.isSymbolicLink()) continue;
+      if (excluded(rel)) continue;
+      if (entry.isSymbolicLink()) { files[rel] = { skipped: 'symbolic-link' }; continue; }
       const abs = path.join(directory, entry.name);
       if (entry.isDirectory()) {
         await walk(abs, rel);
         continue;
       }
-      if (!entry.isFile()) continue;
+      if (!entry.isFile()) { files[rel] = { skipped: 'unsupported-type' }; continue; }
       const before = await fs.promises.lstat(abs);
-      if (!before.isFile() || before.isSymbolicLink() || before.size > options.maxBytes) continue;
+      if (!before.isFile() || before.isSymbolicLink() || before.size > options.maxBytes) {
+        files[rel] = { skipped: before.size > options.maxBytes ? 'size-limit' : 'unsupported-type', size: before.size };
+        continue;
+      }
       const previous = cache[rel];
       let hash = previous?.hash;
       if (!hash || !sameStat(before, previous)) {

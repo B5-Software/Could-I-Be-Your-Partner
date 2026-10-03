@@ -47,6 +47,8 @@ test('workspace IPC creates fresh hash directories, browses host folders and exp
     runtime: { location: 'host', workspaceMode: 'shared', vm: { workspaceMount: '/workspace' } },
     instance: { state: 'ready' },
     _externMounts: new Map(),
+    externalPair: () =>
+      vm._externMounts.size ? { vmMount: '/workspace/_external/project-identity' } : null,
     mountExternalDir: async (host) => {
       vm._externMounts.set(host, '/workspace/_external/project-identity');
       return { ok: true, vmRoot: '/workspace/_external/project-identity' };
