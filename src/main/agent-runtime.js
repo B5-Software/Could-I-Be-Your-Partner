@@ -22,7 +22,12 @@
 
 'use strict';
 
-const { loadAgentCore, loadPreloadApi, createRuntimeHost } = require('../agent/index.js');
+const {
+  loadAgentCore,
+  loadPreloadApi,
+  createRuntimeHost,
+  createTodoStore,
+} = require('../agent/index.js');
 const { createIpcDispatch } = require('./core/ipc-dispatch.js');
 
 /** 交互决策策略：'prompt' 等待前端应答；'auto-approve' 自动放行（脚本化/测试用）。 */
@@ -64,6 +69,9 @@ function createAgentRuntime({
 
   const sessions = new Map();
   const listeners = new Set();
+  // Todos belong to the App, including TUI/WebUI. A single store preserves
+  // revisions across sessions and forwards edits made by any frontend.
+  const todos = createTodoStore(api, () => emit({ type: 'todo', items: todos.todoItems }));
 
   function emit(event) {
     eventBus.publish('agent:session-event', event);
@@ -342,6 +350,7 @@ function createAgentRuntime({
     const agent = new core.Agent({
       host: createRuntimeHost({
         api,
+        todos,
         events: eventBus,
         onInteractive: (kind, payload) =>
           requestInteraction(session, kind === 'askQuestions' ? 'questions' : kind, payload),
@@ -356,6 +365,7 @@ function createAgentRuntime({
 
   async function ensureInitialized(session) {
     if (session.initialized) return;
+    await todos.load();
     // 语言要在系统提示生成之前确定（系统提示/工具描述跟随 settings.language）
     try {
       const settings = await api.getSettings();
@@ -476,6 +486,11 @@ function createAgentRuntime({
     /** 设置快照（前端展示模型/人格等） */
     getSettings() {
       return api.getSettings();
+    },
+
+    async getTodos() {
+      await todos.load();
+      return todos.todoItems;
     },
 
     /** 界面/系统提示语言（沿用 GUI 的 settings.language；中文为源文） */

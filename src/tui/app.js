@@ -95,6 +95,9 @@ class TuiApp {
 
     // 欢迎语放在建会话之后：newSession 会重置消息区
     await this.newSession(mode, opts.workspacePath);
+    if (typeof this.runtime.getTodos === 'function') {
+      this.state.todos = await this.runtime.getTodos();
+    }
     this.pushEntry({
       kind: 'notice',
       text: t('ui.tui.brand', 'CIBYP · 全能 AI 伙伴 · 终端模式（/help 查看命令）'),
@@ -185,10 +188,18 @@ class TuiApp {
     this.state.editorText = this.editor.value;
     this.state.editorCursor = this.editor.cursor;
     this.state.completion = this._computeCompletion();
-    return views.composeFrame(this.state, {
+    const frame = views.composeFrame(this.state, {
       hints: this._footerHints(),
       inputHint: this._inputHint(),
     });
+    this.state.scrollOffset = frame.scroll?.offset || 0;
+    return frame;
+  }
+
+  /** Bound navigation using the same wrapped lines and viewport as rendering. */
+  _scroll(delta) {
+    const { offset = 0, maxOffset = 0 } = this.frame().scroll || {};
+    this.state.scrollOffset = Math.max(0, Math.min(maxOffset, offset + delta));
   }
 
   /** 输入框上方的补全面板（命令 / 参数） */
@@ -331,11 +342,7 @@ class TuiApp {
     if (key.name === 'wheel') {
       // 鼠标滚轮：滚动聊天记录（历史调阅只走 ↑↓/Ctrl+P/N，不再被滚轮触发）
       const step = key.ctrl ? Math.floor(this.state.height / 2) : 3;
-      if (key.direction === 'up') {
-        this.state.scrollOffset += step;
-      } else {
-        this.state.scrollOffset = Math.max(0, this.state.scrollOffset - step);
-      }
+      this._scroll(key.direction === 'up' ? step : -step);
       return true;
     }
     if (key.name === 'escape') {
@@ -371,14 +378,11 @@ class TuiApp {
       return true;
     }
     if (key.name === 'pageup') {
-      this.state.scrollOffset += Math.floor(this.state.height / 2);
+      this._scroll(Math.floor(this.state.height / 2));
       return true;
     }
     if (key.name === 'pagedown') {
-      this.state.scrollOffset = Math.max(
-        0,
-        this.state.scrollOffset - Math.floor(this.state.height / 2),
-      );
+      this._scroll(-Math.floor(this.state.height / 2));
       return true;
     }
     return false;
@@ -734,6 +738,7 @@ class TuiApp {
         break;
       case 'todo':
         this.state.todos = (event.data && event.data.items) || event.items || [];
+        if (this.state.modal?.kind === 'todo') this._openTodoModal();
         break;
       case 'usage': {
         // 运行时每轮结束推送：{ usage, context:{used,max,reserve,pct,inputPct,exact}, costUSD }

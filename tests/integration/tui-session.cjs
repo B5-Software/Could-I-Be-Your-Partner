@@ -27,6 +27,15 @@ app.setPath('documents', path.join(profile, 'documents'));
 
 const CODE_WORKSPACE = path.join(profile, 'documents', 'tui-code-ws');
 fs.mkdirSync(CODE_WORKSPACE, { recursive: true });
+fs.writeFileSync(
+  path.join(profile, 'data/todos.json'),
+  JSON.stringify({
+    schemaVersion: 1,
+    revision: 4,
+    counter: 1,
+    items: [{ id: 1, text: 'Already saved todo', done: false }],
+  }),
+);
 
 fs.writeFileSync(
   path.join(profile, 'data/settings.json'),
@@ -173,6 +182,21 @@ async function run() {
     onQuit: () => {},
   });
   await tuiApp.start({ mode: 'chat' });
+  assert.equal(
+    tuiApp.state.todos[0].text,
+    'Already saved todo',
+    'TUI loads saved todos before the first message',
+  );
+  await tuiApp.handleKey({ name: 'char', char: 't', ctrl: true });
+  await runtime.api.todoMutate({ action: 'toggle', id: 1 });
+  await tuiApp.settled();
+  assert.ok(
+    frameText(tuiApp).includes('[x] 1. Already saved todo'),
+    'An open Todo panel updates live',
+  );
+  await tuiApp.handleKey({ name: 'escape' });
+  await tuiApp.newSession('chat');
+  assert.equal(tuiApp.state.todos[0].done, true, 'Todos remain global across sessions');
 
   // ---- 1. Chat：一轮完整对话 ----
   pushReply('你好，这是 TUI 集成测试回复');

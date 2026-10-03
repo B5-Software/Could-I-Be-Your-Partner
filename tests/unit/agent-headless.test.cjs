@@ -352,3 +352,30 @@ test('无头运行时：中止与关闭会话', async () => {
   assert.equal(runtime.close('s4').ok, true);
   assert.equal(runtime.getSession('s4'), null);
 });
+
+test('headless todos load at startup, synchronize globally and ignore stale snapshots', async () => {
+  const eventBus = createEventBus();
+  const handlers = baseHandlers();
+  let stored = { revision: 2, counter: 1, items: [{ id: 1, text: 'Saved task', done: false }] };
+  handlers.set('todo:get', async () => structuredClone(stored));
+  const runtime = createAgentRuntime({ ipcMain: createFakeIpcMain(handlers), eventBus });
+  const events = [];
+  runtime.onEvent((event) => events.push(event));
+  const a = runtime.createSession({ key: 'a' }).agent;
+  const b = runtime.createSession({ key: 'b' }).agent;
+  assert.deepEqual(await runtime.getTodos(), stored.items);
+  assert.deepEqual(a.todoItems, b.todoItems);
+  stored = { ...stored, revision: 3, items: [{ ...stored.items[0], done: true }] };
+  eventBus.publish('todo:state', stored);
+  assert.equal(a.todoItems[0].done, true);
+  assert.equal(b.todoItems[0].done, true);
+  assert.equal(
+    events.at(-1).key,
+    undefined,
+    'Todo changes reach every frontend, regardless of active session',
+  );
+  const count = events.length;
+  eventBus.publish('todo:state', { ...stored, revision: 1, items: [] });
+  assert.equal(events.length, count, 'Stale revisions cannot roll back the list');
+  assert.equal(b.todoItems[0].done, true);
+});

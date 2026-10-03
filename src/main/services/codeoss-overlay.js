@@ -29,7 +29,9 @@ class CodeOSSOverlay {
     this.parent = parent;
     view.setBackgroundColor('#00000000');
     view.setBounds(bounds);
-    view.setVisible(false);
+    // Attach the transparent surface before loading. Loading a hidden native
+    // view can leave Chromium without a display surface for its first card.
+    // A dismissed snapshot hides it immediately, including during loading.
     view.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
     view.webContents.on('will-navigate', (event) => event.preventDefault());
     view.webContents.on('will-attach-webview', (event) => event.preventDefault());

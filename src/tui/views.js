@@ -536,10 +536,12 @@ function composeFrame(state, opts) {
     allLines.push('');
   }
 
-  const offset = Math.max(
-    0,
-    Math.min(state.scrollOffset || 0, Math.max(0, allLines.length - messageAreaHeight)),
-  );
+  // Scrolling reserves one row for the indicator. Include it in the upper
+  // bound so the first message line is reachable, without accumulating offset
+  // once the viewport has reached the top.
+  const maxOffset =
+    allLines.length > messageAreaHeight ? allLines.length - messageAreaHeight + 1 : 0;
+  const offset = Math.max(0, Math.min(state.scrollOffset || 0, maxOffset));
   const indicatorHeight = offset > 0 ? 1 : 0;
   const end = allLines.length - offset;
   const start = Math.max(0, end - (messageAreaHeight - indicatorHeight));
@@ -565,6 +567,7 @@ function composeFrame(state, opts) {
 
   return {
     lines,
+    scroll: { offset, maxOffset },
     cursor: {
       // 消息区 + 模态 + 补全面板占掉前若干行，输入块内的行号接在其后
       row: visible.length + modalLines.length + completionLines.length + inputView.cursor.row,

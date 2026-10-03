@@ -107,11 +107,11 @@ function loadAgentCore() {
  * 组装一个无头运行时宿主：api 门面来自 preload 定义（经 bridge 派发），
  * GUI 能力优雅失败，标题/待办等纯逻辑能力正常工作。
  */
-function createRuntimeHost({ api, onInteractive, events, platform } = {}) {
+function createRuntimeHost({ api, onInteractive, events, platform, todos } = {}) {
   return hostKit.createHeadlessHost({
     api: api || {},
     titleUtils: loadAgentCore().titleUtils,
-    todos: hostKit.createTodoStore(api || {}),
+    todos: todos || hostKit.createTodoStore(api || {}),
     onInteractive,
     events,
     platform,

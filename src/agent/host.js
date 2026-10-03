@@ -61,7 +61,13 @@ class HostEventBus extends EventTarget {
 function createTodoStore(api, changed = () => {}) {
   const state = { revision: -1, counter: 0, items: [] };
   const accept = (next) => {
-    if (!next || next.revision <= state.revision) return;
+    if (
+      !next ||
+      !Number.isSafeInteger(next.revision) ||
+      !Array.isArray(next.items) ||
+      next.revision <= state.revision
+    )
+      return;
     state.revision = next.revision;
     state.counter = next.counter;
     state.items = next.items;

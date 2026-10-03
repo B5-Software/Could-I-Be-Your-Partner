@@ -13,7 +13,10 @@ module.exports = async function checkOverlay(renderer, service, preview, waitFor
     10000,
   );
   console.log('[codeoss-desktop] Testing host hover above native IDE.');
+  renderer.debugger.attach('1.3');
+  await renderer.debugger.sendCommand('Emulation.setFocusEmulationEnabled', { enabled: true });
   const move = async (selector) => {
+    renderer.focus();
     const point = await renderer.executeJavaScript(`(() => {
       const rect = document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();
       return {x: rect.x + rect.width / 2, y: rect.y + rect.height / 2};
@@ -23,7 +26,14 @@ module.exports = async function checkOverlay(renderer, service, preview, waitFor
   const shown = () => service.overlay.view?.getVisible();
   {
     await move('#code-session-tabs .session-tab');
-    await waitFor(shown, 10000);
+    await waitFor(
+      async () =>
+        shown() &&
+        service.overlay.view.webContents.executeJavaScript(
+          "!!document.querySelector('.session-tab-popover')",
+        ),
+      10000,
+    );
     const parent = service.getMainWindow();
     assert.equal(
       parent.contentView.children.at(-1),
@@ -60,6 +70,10 @@ module.exports = async function checkOverlay(renderer, service, preview, waitFor
     await move('#code-session-tabs .session-tab');
     await waitFor(shown, 5000);
     for (const mode of ['dark', 'light']) {
+      // Native capturePage can reset the host's hover state on Windows. Each
+      // live-theme check starts with a real pointer event over the tab.
+      await move('#code-session-tabs .session-tab');
+      await waitFor(shown, 5000);
       await renderer.executeJavaScript(`(async () => {
         const settings = await window.api.getSettings();
         const theme = {...settings.theme, mode: '${mode}', accentColor: '#916ad5', backgroundColor: '${mode === 'dark' ? '#202536' : '#faf7ed'}'};
@@ -94,11 +108,26 @@ module.exports = async function checkOverlay(renderer, service, preview, waitFor
         `({accent: getComputedStyle(document.documentElement).getPropertyValue('--accent').trim(), background: getComputedStyle(document.getElementById('session-tab-popover')).backgroundColor})`,
       );
       assert.deepEqual(colors, expected, 'card must follow the host theme in real time');
-      // Native setVisible and Chromium's visibility event are asynchronous.
-      await waitFor(
-        async () => !(await service.overlay.view.webContents.executeJavaScript('document.hidden')),
-        5000,
-      );
+      assert.equal(shown(), true, 'The native card must stay visible after a theme update');
+      assert.equal(parent.contentView.children.at(-1), service.overlay.view);
+      await waitFor(async () => {
+        await move('#code-session-tabs .session-tab');
+        return (
+          shown() && !(await service.overlay.view.webContents.executeJavaScript('document.hidden'))
+        );
+      }, 5000);
+      if (process.argv.includes('--visible')) {
+        const sources = await require('electron').desktopCapturer.getSources({
+          types: ['window'],
+          thumbnailSize: { width: 2560, height: 1600 },
+        });
+        const source = sources.find((item) => item.id === parent.getMediaSourceId());
+        assert(source && !source.thumbnail.isEmpty());
+        fs.writeFileSync(
+          path.join(preview, 'popover-app-' + mode + '.png'),
+          source.thumbnail.toPNG(),
+        );
+      }
       fs.writeFileSync(
         path.join(preview, 'popover-' + mode + '.png'),
         (
@@ -129,6 +158,8 @@ module.exports = async function checkOverlay(renderer, service, preview, waitFor
     assert.equal(shown(), false);
     await renderer.executeJavaScript("window.navigatePage('code')");
     await waitFor(() => service.visible, 10000);
+    await renderer.debugger.sendCommand('Emulation.setFocusEmulationEnabled', { enabled: false });
+    renderer.debugger.detach();
     console.log(
       '[codeoss-desktop] Hover overlay stacking, live updates, theme and dismissal passed.',
     );

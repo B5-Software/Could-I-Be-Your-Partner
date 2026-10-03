@@ -459,10 +459,50 @@ test('tui：Ctrl+T 待办面板 · PgUp/PgDn 滚动', async () => {
   assert.ok(text.includes('[ ] 2. 做设计'));
   await app.handleKey({ name: 'escape' });
 
+  app.pushEntry({
+    kind: 'assistant',
+    text: Array.from({ length: 60 }, (_, i) => `Line ${i}`).join('\n'),
+  });
   await app.handleKey({ name: 'pageup' });
   assert.ok(app.state.scrollOffset > 0);
   await app.handleKey({ name: 'pagedown' });
   assert.equal(app.state.scrollOffset, 0);
+});
+
+test('tui: repeated PgUp and wheel at the top do not delay scrolling down', async () => {
+  const { app } = await makeApp();
+  app.state.messages = [
+    { kind: 'assistant', text: Array.from({ length: 80 }, (_, i) => `Line ${i}`).join('\n') },
+  ];
+  for (const key of [{ name: 'pageup' }, { name: 'wheel', direction: 'up' }]) {
+    app.state.scrollOffset = 0;
+    for (let i = 0; i < 100; i++) await app.handleKey(key);
+    const top = app.frame();
+    assert.equal(app.state.scrollOffset, top.scroll.maxOffset);
+    assert.ok(stripAnsi(top.lines.join('\n')).includes('Line 0\n'), 'First line must be reachable');
+    const down =
+      key.name === 'pageup' ? { name: 'pagedown' } : { name: 'wheel', direction: 'down' };
+    await app.handleKey(down);
+    assert.ok(
+      app.state.scrollOffset < top.scroll.maxOffset,
+      'One down event must move immediately',
+    );
+    assert.notDeepEqual(app.frame().lines, top.lines);
+  }
+  app.dispose();
+});
+
+test('tui: viewport changes clamp the stored offset when messages shrink', async () => {
+  const { app } = await makeApp();
+  app.state.messages = [{ kind: 'assistant', text: 'Long message\n'.repeat(80) }];
+  for (let i = 0; i < 100; i++) await app.handleKey({ name: 'pageup' });
+  app.state.messages = [{ kind: 'assistant', text: 'Short message' }];
+  app.frame();
+  assert.equal(app.state.scrollOffset, 0);
+  await app.handleKey({ name: 'pageup' });
+  await app.handleKey({ name: 'wheel', direction: 'up' });
+  assert.equal(app.state.scrollOffset, 0, 'Content fitting in the viewport must not scroll');
+  app.dispose();
 });
 
 test('tui：Esc 在运行中请求停止，空闲时清空输入', async () => {
