@@ -4,6 +4,15 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 module.exports = async function checkOverlay(renderer, service, preview, waitFor) {
+  const window = service.getMainWindow();
+  const wasAlwaysOnTop = window.isAlwaysOnTop();
+  if (process.argv.includes('--visible')) {
+    // Native Chromium surfaces can be occluded by another desktop window.
+    // Visible screenshot checks must actually bring their isolated window forward.
+    window.setAlwaysOnTop(true);
+    window.show();
+    window.focus();
+  }
   await renderer.executeJavaScript(`document.querySelector('.mode-btn[data-mode="code"]').click()`);
   await waitFor(
     () =>
@@ -111,11 +120,23 @@ module.exports = async function checkOverlay(renderer, service, preview, waitFor
       assert.equal(shown(), true, 'The native card must stay visible after a theme update');
       assert.equal(parent.contentView.children.at(-1), service.overlay.view);
       await waitFor(async () => {
+        parent.focus();
         await move('#code-session-tabs .session-tab');
         return (
           shown() && !(await service.overlay.view.webContents.executeJavaScript('document.hidden'))
         );
-      }, 5000);
+      }, 5000).catch(async (error) => {
+        console.error('[codeoss-overlay] Capture visibility:', {
+          visible: parent.isVisible(),
+          minimized: parent.isMinimized(),
+          focused: parent.isFocused(),
+          shown: shown(),
+          state: await service.overlay.view.webContents.executeJavaScript(
+            '({hidden:document.hidden,visibility:document.visibilityState})',
+          ),
+        });
+        throw error;
+      });
       if (process.argv.includes('--visible')) {
         const sources = await require('electron').desktopCapturer.getSources({
           types: ['window'],
@@ -160,6 +181,7 @@ module.exports = async function checkOverlay(renderer, service, preview, waitFor
     await waitFor(() => service.visible, 10000);
     await renderer.debugger.sendCommand('Emulation.setFocusEmulationEnabled', { enabled: false });
     renderer.debugger.detach();
+    window.setAlwaysOnTop(wasAlwaysOnTop);
     console.log(
       '[codeoss-desktop] Hover overlay stacking, live updates, theme and dismissal passed.',
     );
