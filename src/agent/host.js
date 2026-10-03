@@ -117,13 +117,19 @@ function unavailable(feature) {
 }
 
 /** 无头 GUI 能力：画布/表格/游戏等在无界面环境下优雅失败（与既有兜底返回值同形）。 */
-function createHeadlessGui({ todos = null, titleUtils = null, onInteractive = null } = {}) {
+function createHeadlessGui({
+  todos = null,
+  titleUtils = null,
+  onInteractive = null,
+  notify = null,
+} = {}) {
   const guiUnavailable = (feature) => unavailable(feature)();
   return {
     todos,
     sessions: createHeadlessSessions(),
     sessionStatus: SESSION_STATUS,
-    toast: () => {},
+    toast: (message, type, duration, details) =>
+      notify?.('toast', { message, type, duration, ...details }),
     voice: null,
     titleUtils,
     downloads: null,
@@ -399,6 +405,9 @@ function createHeadlessHost(options = {}) {
       todos: options.todos || (options.api ? createTodoStore(options.api) : null),
       titleUtils: options.titleUtils || null,
       onInteractive: options.onInteractive || null,
+      notify: (type, payload) => {
+        for (const listener of [...listeners]) listener(type, payload);
+      },
     }),
   };
 }

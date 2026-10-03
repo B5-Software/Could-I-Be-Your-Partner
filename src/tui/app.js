@@ -14,7 +14,7 @@
 'use strict';
 
 const { LineEditor } = require('./editor.js');
-const { themeFromEnv, themeFromSettings, applyAccent } = require('./theme.js');
+const { themeFromEnv, themeFromSettings } = require('./theme.js');
 const {
   parseInput,
   suggestCommands,
@@ -102,6 +102,7 @@ class TuiApp {
     });
 
     try {
+      this._systemDark = (await this.runtime.getSystemTheme?.())?.shouldUseDarkColors;
       const settings = await this.runtime.getSettings();
       const model = settings && settings.llm ? settings.llm.model : '';
       this.state.model = model || '';
@@ -113,7 +114,7 @@ class TuiApp {
       /* 设置读取失败不阻塞启动 */
     }
     if (this._disposed) return this;
-    if (this.preferences) {
+    if (this.preferences && !this.state.settings?.tui) {
       try {
         const saved = await this.preferences.load();
         this._thinkingExpanded = saved?.thinkingExpanded !== false;
@@ -141,16 +142,14 @@ class TuiApp {
    */
   _applySettings(settings) {
     if (!settings) return;
-    const envTheme = this.env && this.env.CIBYP_TUI_THEME;
-    if (!envTheme) {
-      this.theme = themeFromSettings(settings, this.env);
-    }
-    const accent = settings.theme && settings.theme.accentColor;
-    if (accent) this.theme = applyAccent(this.theme, accent);
+    this.theme = themeFromSettings(settings, this.env, this._systemDark);
+    if (settings.tui) this._thinkingExpanded = settings.tui.thinkingExpanded !== false;
+    this.state.thinkingExpanded = this._thinkingExpanded;
     this.state.theme = this.theme;
     for (const [key, view] of this._sessionViews) {
       view.state.settings = settings;
       view.state.theme = this.theme;
+      view.state.thinkingExpanded = this._thinkingExpanded;
       view.state.tarotVisible = settings.tarotVisible !== false;
       view.state.model = this.runtime.getSession?.(key)?.model || settings.llm?.model || '';
     }
@@ -173,6 +172,7 @@ class TuiApp {
   }
 
   async refreshSettings() {
+    this._systemDark = (await this.runtime.getSystemTheme?.())?.shouldUseDarkColors;
     this._applySettings(await this.runtime.getSettings());
     this._reloadCustomCommands();
   }
@@ -212,6 +212,9 @@ class TuiApp {
 
   /** 动画时钟（spinner / 闪烁 / 计时） */
   tick() {
+    for (const view of this._sessionViews.values()) {
+      if (view.state.toast?.expiresAt <= this.clock()) view.state.toast = null;
+    }
     this.state.spinnerFrame = (this.state.spinnerFrame + 1) % 12;
     this.state.blink = !this.state.blink;
     const selection = this.state.selection;
@@ -233,6 +236,7 @@ class TuiApp {
 
   /** 渲染一帧 */
   frame() {
+    this.state.now = this.clock();
     this.state.editorText = this.editor.value;
     this.state.editorCursor = this.editor.cursor;
     this.state.completion = this._computeCompletion();
@@ -257,6 +261,7 @@ class TuiApp {
     this.state.scrollOffset = frame.scroll?.offset || 0;
     this.state.scrollLineCount = frame.scroll?.totalLines;
     frame.title = this.state.title;
+    frame.palette = { foreground: this.theme.text, background: this.theme.background };
     return frame;
   }
 
@@ -355,7 +360,7 @@ class TuiApp {
     const state = this.state;
     if (!(key?.ctrl && key.name === 'char' && ['c', 'd'].includes(key.char)))
       this.quitArmedAt = null;
-    this.state.toast = null;
+    if (!this.state.toast?.expiresAt) this.state.toast = null;
     // 先刷新补全面板：面板必须与当前输入同步，
     // 否则文本变化后回车会"补全"成陈旧建议（吞掉已输入的参数）。
     this.state.completion = this._computeCompletion();
@@ -493,7 +498,11 @@ class TuiApp {
       if (selection?.dragging) this._extendSelection(key);
       return true;
     }
-    const anchor = pointAt(this.frame().transcript, key.x, key.y);
+    const frame = this.frame();
+    const toast = frame.toastBounds;
+    if (toast && key.y > toast.top && key.y <= toast.top + toast.height && key.x > toast.left)
+      return true;
+    const anchor = pointAt(frame.transcript, key.x, key.y);
     this.state.selection = anchor
       ? { anchor, focus: anchor, dragging: true, moved: false, mouse: key }
       : null;
@@ -627,7 +636,7 @@ class TuiApp {
       modal.selected = (modal.selected + 1) % Math.max(1, options.length);
       return true;
     }
-    if (key.name === 'enter') {
+    if (key.name === 'enter' || (modal.kind === 'todo' && plainChar && key.char === ' ')) {
       await this._chooseModalOption(modal.selected);
       return true;
     }
@@ -648,6 +657,26 @@ class TuiApp {
     if (!modal) return;
     const option = (modal.options || [])[index];
     if (!option) return;
+    if (modal.kind === 'todo' && option.value !== 'close') {
+      if (modal.busy) return;
+      modal.busy = true;
+      try {
+        const result = await this.runtime.toggleTodo(option.value);
+        if (result?.ok === false) throw new Error(result.error || 'Todo update failed');
+        this.state.todos = await this.runtime.getTodos();
+        if (this.state.modal?.kind === 'todo') this._openTodoModal(option.value);
+      } catch (error) {
+        this.state.toast = {
+          text: error.message || String(error),
+          type: 'error',
+          expiresAt: this.clock() + 6000,
+        };
+      } finally {
+        modal.busy = false;
+        if (this.state.modal?.kind === 'todo') this.state.modal.busy = false;
+      }
+      return;
+    }
     this.state.modal = null;
 
     if (modal.kind === 'approval') {
@@ -793,6 +822,23 @@ class TuiApp {
       return;
     }
     switch (event.type) {
+      case 'notification': {
+        const payload = event.payload || {};
+        if (event.notificationType === 'toast') {
+          const delay = Math.max(0, Number(payload.retry?.delayMs) || 0);
+          const expiresAt =
+            this.clock() +
+            Math.max(1000, Number(payload.duration) || 5000, payload.retry ? delay + 2000 : 0);
+          this.state.toast = {
+            text: payload.message || '',
+            type: payload.type,
+            retry: payload.retry,
+            retryAt: this.clock() + delay,
+            expiresAt,
+          };
+        }
+        break;
+      }
       case 'message': {
         if (event.role === 'user') {
           this.pushEntry({ kind: 'user', text: event.content });
@@ -816,6 +862,7 @@ class TuiApp {
         this.pushEntry(this._streamEntry);
         break;
       case 'stream-chunk': {
+        if (this.state.toast?.retry) this.state.toast = null;
         // 推理与正文分通道：reasoning 进推理块，content 进正文
         const content = (event.data && event.data.content) || '';
         const reasoning = (event.data && event.data.reasoning) || '';
@@ -910,6 +957,7 @@ class TuiApp {
         this.state.running = event.status === 'running' || event.status === 'working';
         if (this.state.running && !this._startedAt) this._startedAt = this.clock();
         if (!this.state.running) {
+          if (this.state.toast?.retry) this.state.toast = null;
           if (this._streamEntry) this._streamEntry.streaming = false;
           this._streamEntry = null;
           for (const entry of this._toolEntries.values()) {
@@ -1063,6 +1111,7 @@ class TuiApp {
       ...this.state,
       modal: null,
       running: false,
+      toast: null,
       usage: null,
       context: null,
       costUSD: 0,
@@ -1577,7 +1626,7 @@ class TuiApp {
           view.state.thinkingExpanded = this._thinkingExpanded;
         this.state.scrollOffset = 0;
         try {
-          await this.preferences?.save({ thinkingExpanded: this._thinkingExpanded });
+          await this._saveTuiPreferences({ thinkingExpanded: this._thinkingExpanded });
         } catch (error) {
           this.pushEntry({ kind: 'system', text: error.message || String(error) });
         }
@@ -1586,6 +1635,23 @@ class TuiApp {
           text: this.state.thinkingExpanded
             ? t('ui.tui.thinkingExpanded', '推理内容：展开')
             : t('ui.tui.thinkingCollapsed', '推理内容：折叠'),
+        });
+        return;
+      }
+      case 'theme': {
+        const value = argText.trim().toLowerCase();
+        if (value && !['on', 'off', 'toggle'].includes(value)) {
+          this.pushEntry({ kind: 'system', text: t('ui.tui.themeUsage', '用法：/theme [on|off]') });
+          return;
+        }
+        const followGuiTheme =
+          value === 'on' || (value !== 'off' && this.state.settings?.tui?.followGuiTheme === false);
+        await this._saveTuiPreferences({ followGuiTheme });
+        this.pushEntry({
+          kind: 'notice',
+          text: followGuiTheme
+            ? t('ui.tui.themeGui', 'TUI 主题：沿用 GUI 色系')
+            : t('ui.tui.themeTerminal', 'TUI 主题：终端默认'),
         });
         return;
       }
@@ -1860,22 +1926,43 @@ class TuiApp {
     };
   }
 
-  _openTodoModal() {
+  async _saveTuiPreferences(patch) {
+    if (typeof this.runtime.saveSettings === 'function') {
+      const settings = await this.runtime.saveSettings({ tui: patch });
+      this._applySettings(settings);
+    } else {
+      // Compatibility for embedded runtimes using the former preference store.
+      const tui = { ...(this.state.settings?.tui || {}), ...patch };
+      await this.preferences?.save(tui);
+      this._applySettings({ ...this.state.settings, tui });
+    }
+  }
+
+  _openTodoModal(selectedId) {
     const todos = this.state.todos || [];
-    const scrollOffset = this.state.modal?.kind === 'todo' ? this.state.modal.scrollOffset : 0;
+    const previous = this.state.modal?.kind === 'todo' ? this.state.modal : null;
+    const scrollOffset = previous?.scrollOffset || 0;
+    selectedId ??= previous?.options?.[previous.selected]?.value;
     this.state.modal = {
       kind: 'todo',
       scrollOffset,
       colorKey: 'planMode',
       title: t('ui.tui.todoTitle', '待办清单'),
-      body:
-        todos.length === 0
-          ? t('ui.tui.todoEmpty', '（暂无待办）')
-          : todos
-              .map((item, index) => (item.done ? '[x] ' : '[ ] ') + (index + 1) + '. ' + item.text)
-              .join('\n'),
-      options: [{ label: t('ui.tui.helpClose', '关闭'), value: 'close' }],
-      selected: 0,
+      body: todos.length ? '' : t('ui.tui.todoEmpty', '（暂无待办）'),
+      options: todos.length
+        ? todos.map((item, index) => ({
+            label: (item.done ? '[x] ' : '[ ] ') + (index + 1) + '. ' + item.text,
+            value: item.id,
+          }))
+        : [{ label: t('ui.tui.helpClose', '关闭'), value: 'close' }],
+      footer: todos.length
+        ? t('ui.tui.todoNav', '↑↓ 选择 · Space / Enter 切换状态 · Esc 关闭')
+        : '',
+      selected: Math.max(
+        0,
+        selectedId == null ? 0 : todos.findIndex((item) => item.id === selectedId),
+      ),
+      busy: previous?.busy || false,
     };
   }
 

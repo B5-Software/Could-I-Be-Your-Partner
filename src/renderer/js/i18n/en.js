@@ -3795,4 +3795,21 @@ Object.assign(EN_DICT._textMap, {
   '保存修改后，已连接的服务器会重新连接并刷新工具。': EN_DICT['ui.mcp.editHint'], '连接方式': EN_DICT['ui.mcp.transport'],
   '继承系统环境变量': EN_DICT['ui.mcp.inheritEnv'], '请求头 (JSON 对象，可选)': EN_DICT['ui.mcp.headers']
 });
+Object.assign(EN_DICT, {
+  'ui.settings.tui.title': 'TUI preferences',
+  'ui.settings.tui.hint': 'Only affects the terminal UI; shares settings with /theme and /thinking. Changes save automatically.',
+  'ui.settings.tui.followTheme': 'Use GUI colors',
+  'ui.settings.tui.themeHint': 'Use GUI light/dark, accent and background colors with readable text contrast. Turn off to use terminal defaults.',
+  'ui.settings.tui.thinking': 'Expand reasoning',
+  'ui.settings.tui.thinkingHint': 'Show complete reasoning in TUI without changing the GUI reasoning display.',
+});
+Object.assign(EN_DICT._textMap, {
+  'TUI 偏好': EN_DICT['ui.settings.tui.title'],
+  '仅影响终端界面；与 /theme、/thinking 共享设置，修改后自动保存。': EN_DICT['ui.settings.tui.hint'],
+  '沿用 GUI 色系': EN_DICT['ui.settings.tui.followTheme'],
+  '使用 GUI 的深浅色、强调色和背景色，并调整文字对比度。关闭后使用终端默认配色。': EN_DICT['ui.settings.tui.themeHint'],
+  '展开思考内容': EN_DICT['ui.settings.tui.thinking'],
+  '在 TUI 完整显示思考内容，不改变 GUI 的思考折叠状态。': EN_DICT['ui.settings.tui.thinkingHint'],
+  '终端主题与思考展开偏好，和 TUI 命令共享配置。': 'Terminal theme and reasoning preferences shared with TUI commands.',
+});
 i18nRegister('en', EN_DICT);

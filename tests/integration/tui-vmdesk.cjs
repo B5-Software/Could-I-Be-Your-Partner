@@ -115,6 +115,21 @@ async function waitFor(predicate) {
 }
 async function run() {
   await new Promise((resolve) => server.once('listening', resolve));
+  // Exercise the production entry, not only the probe fixture. Electron does
+  // not mark its entry as require.main, so a guarded entry can silently hang.
+  const production = new VmDesktopCompanion({
+    timeoutMs: 10000,
+    subscribe: () => () => {},
+    invoke: async () => ({ ok: false, error: 'Disposable test VM is not running' }),
+    spawnProcess: (...args) => {
+      const child = spawn(...args);
+      children.push(child);
+      return child;
+    },
+  });
+  assert.equal((await production.open({ mode: 'dark' }, true)).ok, true);
+  production.dispose();
+  await waitFor(() => !production.child);
   assert.equal((await companion.open({ mode: 'light', accentColor: '#5566cc' }, false)).ok, true);
   const connected = await waitFor(async () => {
     const result = await probe('snapshot');
@@ -127,7 +142,7 @@ async function run() {
     'Child starts the graphics of the parent-owned VM',
   );
   await companion.open({});
-  assert.equal(children.length, 1, 'Repeated /vmdesk focuses the existing window');
+  assert.equal(children.length, 2, 'Repeated /vmdesk focuses the existing window');
   subscribers.get('theme:apply')({
     theme: { mode: 'dark', accentColor: '#22aabb' },
     shouldUseDarkColors: true,
@@ -144,7 +159,7 @@ async function run() {
   await waitFor(() => !companion.child);
   assert.equal(subscribers.size, 0);
   await companion.open({ mode: 'light' }, false);
-  assert.equal(children.length, 2, 'Closed desktop can be reopened');
+  assert.equal(children.length, 3, 'Closed desktop can be reopened');
   companion.dispose();
   await waitFor(() => !companion.child);
   console.log(

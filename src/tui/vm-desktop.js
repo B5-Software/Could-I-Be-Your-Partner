@@ -43,7 +43,7 @@ class VmDesktopCompanion {
     this.subscribe = subscribe;
     this.spawnProcess = spawnProcess;
     this.executable = executable;
-    this.entryPath = entryPath || path.join(__dirname, 'vm-desktop-entry.js');
+    this.entryPath = entryPath || path.join(__dirname, 'vm-desktop-bootstrap.cjs');
     this.timeoutMs = timeoutMs;
   }
 

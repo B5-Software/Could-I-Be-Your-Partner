@@ -3826,4 +3826,21 @@ Object.assign(DE_DICT._textMap, {
   '保存修改后，已连接的服务器会重新连接并刷新工具。': DE_DICT['ui.mcp.editHint'], '连接方式': DE_DICT['ui.mcp.transport'],
   '继承系统环境变量': DE_DICT['ui.mcp.inheritEnv'], '请求头 (JSON 对象，可选)': DE_DICT['ui.mcp.headers']
 });
+Object.assign(DE_DICT, {
+  'ui.settings.tui.title': 'TUI-Einstellungen',
+  'ui.settings.tui.hint': 'Nur für die Terminaloberfläche; gemeinsame Einstellungen mit /theme und /thinking. Änderungen werden automatisch gespeichert.',
+  'ui.settings.tui.followTheme': 'GUI-Farben übernehmen',
+  'ui.settings.tui.themeHint': 'GUI-Hell-/Dunkelmodus, Akzent- und Hintergrundfarbe mit lesbarem Textkontrast verwenden. Ausschalten für Terminalfarben.',
+  'ui.settings.tui.thinking': 'Gedankengang aufklappen',
+  'ui.settings.tui.thinkingHint': 'Vollständigen Gedankengang in TUI anzeigen, ohne die GUI-Anzeige zu ändern.',
+});
+Object.assign(DE_DICT._textMap, {
+  'TUI 偏好': DE_DICT['ui.settings.tui.title'],
+  '仅影响终端界面；与 /theme、/thinking 共享设置，修改后自动保存。': DE_DICT['ui.settings.tui.hint'],
+  '沿用 GUI 色系': DE_DICT['ui.settings.tui.followTheme'],
+  '使用 GUI 的深浅色、强调色和背景色，并调整文字对比度。关闭后使用终端默认配色。': DE_DICT['ui.settings.tui.themeHint'],
+  '展开思考内容': DE_DICT['ui.settings.tui.thinking'],
+  '在 TUI 完整显示思考内容，不改变 GUI 的思考折叠状态。': DE_DICT['ui.settings.tui.thinkingHint'],
+  '终端主题与思考展开偏好，和 TUI 命令共享配置。': 'Terminal-Thema und Gedankengang mit denselben Einstellungen wie die TUI-Befehle.',
+});
 i18nRegister('de', DE_DICT);

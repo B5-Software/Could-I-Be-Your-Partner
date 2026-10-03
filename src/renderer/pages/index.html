@@ -705,6 +705,7 @@
             <button class="settings-tab" data-tab="animations"><i class="fa-solid fa-wand-magic-sparkles"></i> 动效</button>
             <button class="settings-tab" data-tab="fonts"><i class="fa-solid fa-font"></i> 字体</button>
             <button class="settings-tab" data-tab="language"><i class="fa-solid fa-language"></i> 语言</button>
+            <button class="settings-tab" data-tab="tui"><i class="fa-solid fa-terminal"></i> <span data-i18n="ui.settings.tui.title">TUI 偏好</span></button>
             <div class="settings-tab-group" data-i18n="ui.settings.groups.voiceInput">语音与输入</div>
             <button class="settings-tab" data-tab="voice" hidden><i class="fa-solid fa-microphone-lines"></i> 语音</button>
             <button class="settings-tab" data-tab="ime"><i class="fa-solid fa-keyboard"></i> 输入法</button>
@@ -1742,6 +1743,23 @@
               </div>
             </div>
 
+
+            <div class="settings-panel" data-tab="tui">
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-terminal"></i> <span data-i18n="ui.settings.tui.title">TUI 偏好</span></h3>
+                <p class="setting-hint" data-i18n="ui.settings.tui.hint">仅影响终端界面；与 /theme、/thinking 共享设置，修改后自动保存。</p>
+                <div class="setting-item">
+                  <label class="setting-label" for="setting-tui-follow-theme" data-i18n="ui.settings.tui.followTheme">沿用 GUI 色系</label>
+                  <label class="toggle-switch"><input type="checkbox" id="setting-tui-follow-theme" data-tui-preference="followGuiTheme"><span class="toggle-slider"></span></label>
+                  <p class="setting-hint" data-i18n="ui.settings.tui.themeHint">使用 GUI 的深浅色、强调色和背景色，并调整文字对比度。关闭后使用终端默认配色。</p>
+                </div>
+                <div class="setting-item">
+                  <label class="setting-label" for="setting-tui-thinking" data-i18n="ui.settings.tui.thinking">展开思考内容</label>
+                  <label class="toggle-switch"><input type="checkbox" id="setting-tui-thinking" data-tui-preference="thinkingExpanded"><span class="toggle-slider"></span></label>
+                  <p class="setting-hint" data-i18n="ui.settings.tui.thinkingHint">在 TUI 完整显示思考内容，不改变 GUI 的思考折叠状态。</p>
+                </div>
+              </div>
+            </div>
 
             <div class="settings-panel" data-tab="animations">
               <div class="settings-group">

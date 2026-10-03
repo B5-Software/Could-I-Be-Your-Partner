@@ -136,6 +136,7 @@ class ConfigBrowser {
       {
         llm: '模型',
         theme: '外观',
+        tui: 'TUI 偏好',
         runtime: '运行位置',
         webResearch: '网络搜索',
         budget: '用量与成本',

@@ -507,7 +507,7 @@ class Agent {
         const activeSession = this.host.gui.sessions?.getByAgent(this);
         if (typeof this.host.gui.toast === 'function' && (!activeSession || activeSession.active)) {
           const type = (kind === 'auth' || kind === 'client') ? 'error' : 'warn';
-          this.host.gui.toast(msg, type, 6000);
+          this.host.gui.toast(msg, type, 6000, { retry: info });
         } else if (this.onMessage) {
           this.onMessage('system', msg);
         }

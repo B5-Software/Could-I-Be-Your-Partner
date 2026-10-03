@@ -23,7 +23,7 @@ const path = require('node:path');
 const { TuiApp } = require('./app.js');
 const { createKeyDecoder } = require('./keys.js');
 const { themeFromEnv } = require('./theme.js');
-const { CSI, CH, stripAnsi, truncate } = require('./ansi.js');
+const { CSI, CH, RESET, colorCode, stripAnsi, truncate } = require('./ansi.js');
 
 const ALT_ENTER = CSI + '?1049h' + CSI + '2J' + CSI + 'H';
 const ALT_EXIT = CSI + '?1049l';
@@ -142,7 +142,16 @@ function createTerminalScreen(stdout) {
     },
     exit() {
       screen._write(
-        CSI + '?2004l' + MOUSE_OFF + SHOW_CURSOR + CLEAR_REST + '\n' + ALT_EXIT + CSI + '23;0t',
+        RESET +
+          CSI +
+          '?2004l' +
+          MOUSE_OFF +
+          SHOW_CURSOR +
+          CLEAR_REST +
+          '\n' +
+          ALT_EXIT +
+          CSI +
+          '23;0t',
       );
     },
     setTitle(title) {
@@ -161,6 +170,8 @@ function createTerminalScreen(stdout) {
     render(frame) {
       screen.setTitle(frame.title || '');
       const lines = (frame.lines || []).slice(0, screen.height);
+      const base =
+        colorCode(frame.palette?.foreground) + colorCode(frame.palette?.background, true);
       let out = '';
       for (let i = 0; i < lines.length; i += 1) {
         // ConPTY keeps the cursor in the final cell after an exact-width write.
@@ -173,16 +184,20 @@ function createTerminalScreen(stdout) {
           ';1H' +
           CSI +
           '0m' +
+          base +
           CLEAR_LINE +
           truncate(
             stripAnsi(lines[i], true).replace(/\n/g, ' ').replace(/\t/g, '    '),
             screen.width,
             '',
-          ) +
+          )
+            .split(RESET)
+            .join(RESET + base) +
           CSI +
           '0m';
       }
-      if (lines.length < screen.height) out += CSI + (lines.length + 1) + ';1H' + CLEAR_REST;
+      if (lines.length < screen.height)
+        out += CSI + (lines.length + 1) + ';1H' + RESET + base + CLEAR_REST;
       const cursor = frame.cursor || { row: 1, col: 1 };
       out +=
         CSI +
@@ -246,7 +261,7 @@ function startTui(options) {
       shutdown();
     },
     onCopy: options.copyText || require('./clipboard').copyText,
-    preferences: options.preferences || require('./preferences').createPreferencesStore(),
+    preferences: options.preferences,
   });
 
   const decoder = createKeyDecoder();

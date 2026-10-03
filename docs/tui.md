@@ -45,7 +45,7 @@ TUI 与桌面端读**同一个数据目录**（`app.getPath('userData')` 同名�
 `/cwd` 用系统文件管理器打开当前工作目录。VM 模式先取回对应宿主镜像中的文件；没有可用图形环境时拒绝打开。
 
 - 审批/授权默认弹窗等待应答；`CIBYP_AUTO_APPROVE=1` 可自动放行（脚本化）。
-- 主题：`CIBYP_TUI_THEME=dark|light|ansi`（默认 dark 真彩，`NO_COLOR` 自动降 16 色）。
+- 主题：默认跟随 GUI，`/theme off` 使用终端默认配色；`CIBYP_TUI_THEME=dark|light|ansi` 可显式覆盖开启状态下的主题。
 - 用户数据默认与 Electron 共用：Windows 为 `%APPDATA%/<应用名>`，macOS 为 `~/Library/Application Support/<应用名>`，Linux 为 `${XDG_CONFIG_HOME:-~/.config}/<应用名>`。优先使用已有设置的目录；`CIBYP_USER_DATA` 可显式覆盖。
 
 ## 界面构成
@@ -159,7 +159,11 @@ TUI 占用整个终端后，LLM/网络/VM 的进程日志不再打到屏幕上�
 - 查看较早消息时，新回复到达会保持当前阅读位置；`Ctrl+L` 回到底部。
 - 终端标题实时显示 `CIBYP | 会话标题`，无标题的新对话显示 `CIBYP | New`；退出时恢复原终端标题。
 - TUI 启动虚拟机、新对话以及 GUI 启动前的终端使用同一幅 CIBYP ASCII 标识；窄窗口使用紧凑标识。
-- 推理默认完整展开，以“思考：”开头，与回复正文间留空行；`/thinking` 的折叠偏好保存至 `data/tui-preferences.json`，跨启动、跨会话生效，仅作用于 TUI。
+- 推理默认完整展开，以“思考：”开头，与回复正文间留空行；`/thinking` 的折叠偏好保存至共享设置的 `tui.thinkingExpanded`，跨启动、跨会话生效，仅作用于 TUI。原 `data/tui-preferences.json` 会自动迁移，之后无需维护单独文件。
+- `/theme` 切换是否沿用 GUI 色系，`/theme on`、`/theme off` 明确开启或关闭。默认开启：同步 GUI 的深浅色、强调色和背景色，自动调整各模式文字的对比度。关闭后使用终端默认前景、背景与 ANSI 调色板。
+- GUI 设置里的「TUI 偏好」可修改上述两项；与 TUI 命令使用同一份持久化配置。显式 `CIBYP_TUI_THEME` 环境变量仍可覆盖开启状态下的配色。
+- LLM 重试在右上角显示独立通知，包含次数、HTTP 状态、原因和倒计时；恢复响应、停止任务或到期后消失，不占用聊天记录或改变滚动位置。
+- `/todo` 或 `Ctrl+T` 打开共享待办清单，`↑↓` 选择，`Space` / `Enter` 切换完成状态，`Esc` 关闭。修改跨会话持久化，并实时更新 Agent 的待办上下文。
 
 ## VM 模式
 

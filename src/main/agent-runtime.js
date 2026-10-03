@@ -360,6 +360,9 @@ function createAgentRuntime({
           requestInteraction(session, kind === 'askQuestions' ? 'questions' : kind, payload),
       }),
     });
+    agent.host.onNotify((notificationType, payload) =>
+      emit({ type: 'notification', key: session.key, notificationType, payload }),
+    );
     agent.sessionKey = session.key;
     agent.mode = session.mode;
     agent.minimalMode = minimalMode;
@@ -512,6 +515,7 @@ function createAgentRuntime({
       log.warn?.('[agent-runtime] Settings refresh failed: ' + error.message);
     }
   });
+  api.onThemeChanged?.(() => emit({ type: 'settingsChanged' }));
   api.onSkillsChanged?.(() => {
     for (const session of sessions.values())
       session.agent
@@ -538,6 +542,10 @@ function createAgentRuntime({
       return api.getSettings();
     },
 
+    getSystemTheme() {
+      return api.getTheme();
+    },
+
     async saveSettings(patch) {
       const result = await api.setSettings(patch);
       settingsRevision++;
@@ -552,6 +560,10 @@ function createAgentRuntime({
     async getTodos() {
       await todos.load();
       return todos.todoItems;
+    },
+
+    toggleTodo(id) {
+      return todos.handleTodo({ action: 'toggle', id });
     },
 
     /** 界面/系统提示语言（沿用 GUI 的 settings.language；中文为源文） */

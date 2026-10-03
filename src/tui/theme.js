@@ -6,9 +6,9 @@
  *
  * TUI 主题令牌（设计语言对标 Claude Code / OpenCode 的终端界面）。
  *
- * - 默认 dark 真彩；支持 light 与纯 16 色 ANSI 降级（CIBYP_TUI_THEME=dark|light|ansi）
- * - 颜色值直接用真彩 RGB：避免用户终端调色板差异导致"设计感"丢失
- * - 语义命名：不绑定具体产品，accent 暖橙为 CIBYP 品牌色
+ * - 默认沿用 GUI；/theme off 使用终端默认颜色
+ * - GUI 背景与强调色使用真彩，各模式的文字色按实际背景调整对比度
+ * - 环境变量可显式指定 dark/light/ansi 主题
  */
 
 'use strict';
@@ -17,6 +17,7 @@
 const DARK = {
   name: 'dark',
   truecolor: true,
+  background: 'rgb(18,18,18)',
   // 品牌 / 强调
   accent: 'rgb(215,119,87)', // 暖橙（品牌）
   suggestion: 'rgb(177,185,249)', // 蓝紫：选中 / 交互强调
@@ -65,6 +66,7 @@ const DARK = {
 const LIGHT = {
   ...DARK,
   name: 'light',
+  background: 'rgb(250,250,250)',
   accent: 'rgb(215,119,87)',
   suggestion: 'rgb(87,105,247)',
   permission: 'rgb(87,105,247)',
@@ -96,6 +98,7 @@ const LIGHT = {
 const ANSI = {
   ...DARK,
   name: 'ansi',
+  background: null,
   truecolor: false,
   accent: 'ansi:brightYellow',
   suggestion: 'ansi:brightBlue',
@@ -135,6 +138,19 @@ const ANSI = {
 };
 
 const THEMES = { dark: DARK, light: LIGHT, ansi: ANSI };
+
+/** Use the terminal's foreground/background and its own ANSI palette. */
+const NATIVE = {
+  ...ANSI,
+  name: 'terminal',
+  background: null,
+  text: null,
+  subtle: null,
+  inactive: null,
+  promptBorder: null,
+  userMessageBackground: null,
+  memoryBackground: null,
+};
 
 /** 设计系统字符集（终端 UI 的"图标语言"） */
 const FIGURES = Object.freeze({
@@ -224,6 +240,33 @@ function relativeLuminance(rgb) {
   return 0.2126 * r + 0.7152 * g + 0.0722 * b;
 }
 
+function contrastRatio(first, second) {
+  const a = relativeLuminance(first),
+    b = relativeLuminance(second);
+  return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+}
+
+function mixColor(first, second, amount) {
+  const channels = (value) => value.slice(4, -1).split(',').map(Number);
+  const a = channels(first),
+    b = channels(second);
+  return `rgb(${a.map((n, i) => Math.round(n + (b[i] - n) * amount)).join(',')})`;
+}
+
+// Keep each mode's hue while bringing labels to WCAG's normal-text contrast.
+function readableColor(color, background, minimum = 4.5) {
+  if (!color?.startsWith('rgb(') || contrastRatio(color, background) >= minimum) return color;
+  const white = 'rgb(255,255,255)',
+    black = 'rgb(0,0,0)';
+  const target =
+    contrastRatio(white, background) > contrastRatio(black, background) ? white : black;
+  for (let step = 1; step <= 100; step++) {
+    const adjusted = mixColor(color, target, step / 100);
+    if (contrastRatio(adjusted, background) >= minimum) return adjusted;
+  }
+  return target;
+}
+
 /**
  * 终端深浅判定（settings.theme.mode = system 时用）：
  * 读 COLORFGBG（前景;背景 的 ANSI 索引），背景索引偏亮 → 浅色终端。
@@ -242,12 +285,56 @@ function detectTerminalDark(env = process.env) {
  * 按 GUI 设置挑主题（settings.theme.mode = system|dark|light）。
  * 环境变量 CIBYP_TUI_THEME 优先；system → 按终端深浅判定。
  */
-function themeFromSettings(settings, env = process.env) {
+function themeFromSettings(settings, env = process.env, systemDark) {
+  if (settings?.tui?.followGuiTheme === false) return NATIVE;
   if (env && env.CIBYP_TUI_THEME) return resolveTheme(env.CIBYP_TUI_THEME);
   const mode = settings && settings.theme && settings.theme.mode;
-  if (mode === 'light') return LIGHT;
-  if (mode === 'dark') return DARK;
-  return detectTerminalDark(env) ? DARK : LIGHT;
+  const base =
+    mode === 'light'
+      ? LIGHT
+      : mode === 'dark'
+        ? DARK
+        : (systemDark ?? detectTerminalDark(env))
+          ? DARK
+          : LIGHT;
+  const background = parseHexColor(settings?.theme?.backgroundColor) || base.background;
+  const dark =
+    contrastRatio('rgb(255,255,255)', background) > contrastRatio('rgb(0,0,0)', background);
+  const result = { ...(dark ? DARK : LIGHT), name: base.name, background };
+  const accent = parseHexColor(settings?.theme?.accentColor);
+  if (accent) result.accent = result.suggestion = result.permission = accent;
+  for (const key of [
+    'text',
+    'subtle',
+    'inactive',
+    'promptBorder',
+    'accent',
+    'suggestion',
+    'permission',
+    'planMode',
+    'bashBorder',
+    'fastMode',
+    'merged',
+    'success',
+    'error',
+    'warning',
+    'info',
+    'rateFill',
+  ])
+    result[key] = readableColor(result[key], background);
+  result.agents = result.agents.map((color) => readableColor(color, background));
+  // Message/selection fills stay close enough to the canvas that its text is
+  // readable on both backgrounds, including custom mid-tone GUI backgrounds.
+  for (const [key, amount] of [
+    ['userMessageBackground', 0.08],
+    ['memoryBackground', 0.06],
+    ['selectionBg', 0.1],
+  ]) {
+    const fill = mixColor(background, dark ? 'rgb(255,255,255)' : 'rgb(0,0,0)', amount);
+    result[key] = contrastRatio(result.text, fill) >= 4.5 ? fill : background;
+  }
+  result.inverseText = readableColor(dark ? LIGHT.text : DARK.text, result.suggestion);
+  return result;
 }
 
 /** 根据环境变量/终端能力挑主题：CIBYP_TUI_THEME 优先，其次 NO_COLOR/真彩能力 */
@@ -261,6 +348,7 @@ module.exports = {
   DARK,
   LIGHT,
   ANSI,
+  NATIVE,
   THEMES,
   FIGURES,
   BOX,
@@ -268,6 +356,8 @@ module.exports = {
   parseHexColor,
   applyAccent,
   relativeLuminance,
+  contrastRatio,
+  readableColor,
   detectTerminalDark,
   themeFromSettings,
   themeFromEnv,

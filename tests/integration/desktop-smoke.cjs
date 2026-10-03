@@ -130,6 +130,7 @@ ipcMain.once('app:renderer-ready', (event) => {
         features: [{ name: 'prefers-reduced-motion', value: 'no-preference' }],
       });
       const tools = await require('./renderer-tool-check.cjs')(event.sender);
+      await require('./tui-preferences-check.cjs')(event.sender);
       console.log('[desktop-smoke] Tool discovery and permissions:', tools);
       const workspace = await require('./renderer-workspace-check.cjs')(event.sender);
       await require('./monaco-appearance-check.cjs')(event.sender, BrowserWindow);

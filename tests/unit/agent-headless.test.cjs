@@ -100,6 +100,37 @@ function llmScript(responses) {
   return handler;
 }
 
+test('LLM retries reach headless frontends as structured notifications without entering conversation history', async () => {
+  const eventBus = createEventBus(),
+    notices = [];
+  const handlers = baseHandlers({ llmChat: llmScript([{ content: 'ready' }]) });
+  const runtime = createAgentRuntime({ ipcMain: createFakeIpcMain(handlers), eventBus });
+  runtime.onEvent((event) => {
+    if (event.type === 'notification') notices.push(event);
+  });
+  await runtime.sendMessage('retry-main', 'hello');
+  await runtime.sendMessage('retry-other', 'hello');
+  const retry = {
+    sessionKey: 'retry-main',
+    attempt: 3,
+    status: 429,
+    kind: 'rate_limit',
+    delayMs: 9000,
+    error: 'Provider rate limit',
+  };
+  eventBus.publish('llm:retry', retry);
+  assert.equal(notices.length, 1);
+  assert.equal(notices[0].key, 'retry-main');
+  assert.equal(notices[0].notificationType, 'toast');
+  assert.equal(notices[0].payload.retry.delayMs, 9000);
+  assert.equal(notices[0].payload.retry.error, 'Provider rate limit');
+  assert.ok(
+    !JSON.stringify(
+      runtime.sessions.get('retry-main').agent.contextManager.getHistoryMessages(),
+    ).includes('Provider rate limit'),
+  );
+});
+
 test('Code startup preserves the requested workspace and rejects changes during a task', async () => {
   const handlers = baseHandlers({ llmChat: llmScript([{ content: 'done' }]) });
   let created = 0;

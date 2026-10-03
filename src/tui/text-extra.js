@@ -2,6 +2,17 @@
 'use strict';
 module.exports = {
   en: {
+    'ui.tui.cmd.theme': 'Toggle following the GUI palette (saved)',
+    'ui.tui.args.theme': '[on|off]',
+    'ui.tui.themeUsage': 'Usage: /theme [on|off]',
+    'ui.tui.themeGui': 'TUI theme: GUI palette',
+    'ui.tui.themeTerminal': 'TUI theme: terminal defaults',
+    'ui.tui.todoNav': '↑↓ select · Space / Enter toggle · Esc close',
+    'ui.tui.retryTitle': 'LLM retry #{attempt}',
+    'ui.tui.retryWait': 'Retry in {seconds}s · Esc stop',
+    'ui.tui.retryRunning': 'Retrying · Esc stop',
+    'ui.tui.notificationTitle': 'Notification',
+    'ui.tui.configGroup.tui': 'TUI preferences',
     'ui.tui.customArgs': '[arguments]',
     'ui.tui.customCommand': 'Custom command',
     'ui.tui.unknownCommandHelp':
@@ -37,6 +48,17 @@ module.exports = {
     'ui.tui.configGroup.language': 'Language',
   },
   de: {
+    'ui.tui.cmd.theme': 'GUI-Farben übernehmen oder Terminalfarben verwenden (gespeichert)',
+    'ui.tui.args.theme': '[on|off]',
+    'ui.tui.themeUsage': 'Verwendung: /theme [on|off]',
+    'ui.tui.themeGui': 'TUI-Thema: GUI-Farben',
+    'ui.tui.themeTerminal': 'TUI-Thema: Terminalfarben',
+    'ui.tui.todoNav': '↑↓ auswählen · Leertaste / Enter umschalten · Esc schließen',
+    'ui.tui.retryTitle': 'LLM-Wiederholung #{attempt}',
+    'ui.tui.retryWait': 'Erneut in {seconds}s · Esc stoppen',
+    'ui.tui.retryRunning': 'Wird erneut versucht · Esc stoppen',
+    'ui.tui.notificationTitle': 'Benachrichtigung',
+    'ui.tui.configGroup.tui': 'TUI-Einstellungen',
     'ui.tui.customArgs': '[Argumente]',
     'ui.tui.customCommand': 'Eigener Befehl',
     'ui.tui.unknownCommandHelp':

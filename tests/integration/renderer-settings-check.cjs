@@ -20,7 +20,7 @@ module.exports = async function checkSettings(webContents) {
       .filter(input => input.value !== '' && !input.disabled && !input.checkValidity()).map(input => input.id);
     check(!invalidDefaults.length, 'invalid default settings: ' + invalidDefaults.join(', '));
     const allTabs = [...document.querySelectorAll('.settings-tab')];
-    check(allTabs.length === 35, 'settings category missing');
+    check(allTabs.length === 36, 'settings category missing: ' + allTabs.length);
     let visited = 0, labelled = 0, spaced = 0;
     for (const tab of allTabs.filter(tab => !tab.hidden && tab.style.display !== 'none')) {
       check(window.activateSettingsTab(tab.dataset.tab), 'cannot open ' + tab.dataset.tab);

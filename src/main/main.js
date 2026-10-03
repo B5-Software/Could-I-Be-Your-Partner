@@ -583,7 +583,7 @@ const { DEFAULT_SETTINGS } = require('./settings/defaults')({
   DEFAULT_DECISION_SETTINGS
 });
 
-let settings = loadSettings(DEFAULT_SETTINGS, loadJSON(settingsPath, {}));
+let settings = loadSettings(DEFAULT_SETTINGS, loadJSON(settingsPath, {}), loadJSON(path.join(path.dirname(settingsPath), 'tui-preferences.json'), {}));
 // Migrate: if provider field missing, default to openai-compat (preserves existing config).
 if (!settings.llm.provider) settings.llm.provider = 'openai-compat';
 if (!settings.llm.reasoningEffort) settings.llm.reasoningEffort = 'off';

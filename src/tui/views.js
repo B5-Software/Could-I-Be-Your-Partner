@@ -20,6 +20,7 @@
 
 const {
   style,
+  stripAnsi,
   paint,
   visibleWidth,
   wrapText,
@@ -507,12 +508,19 @@ function renderModal(theme, modal, width, maxHeight) {
     });
     lines.push(
       pad +
-        paint(theme, 'subtle', t('ui.tui.modalNav', '↑↓ 选择 · Enter 确认 · Esc 取消'), {
-          dim: true,
-        }),
+        paint(
+          theme,
+          'subtle',
+          modal.kind === 'todo' && modal.footer
+            ? modal.footer
+            : t('ui.tui.modalNav', '↑↓ 选择 · Enter 确认 · Esc 取消'),
+          {
+            dim: true,
+          },
+        ),
     );
   }
-  if (modal.footer) {
+  if (modal.footer && modal.kind !== 'todo') {
     lines.push(pad + paint(theme, 'subtle', modal.footer, { dim: true, italic: true }));
   }
   if (lines.length <= maxHeight) return lines;
@@ -608,17 +616,6 @@ function composeFrame(state, opts) {
     allLines.push(renderSpinnerLine(theme, state, width));
     allLines.push('');
   }
-  if (state.toast) {
-    allLines.push(
-      '  ' +
-        style(truncate(state.toast.text, width - 4), {
-          fg: theme.inverseText,
-          bg: theme.suggestion,
-          bold: true,
-        }),
-    );
-    allLines.push('');
-  }
 
   // Scrolling reserves one row for the indicator. Include it in the upper
   // bound so the first message line is reachable, without accumulating offset
@@ -674,9 +671,11 @@ function composeFrame(state, opts) {
   lines.push(...inputView.lines);
   lines.push(footerLine);
   lines.push(statusLine);
+  const toastBounds = overlayToast(theme, state.toast, lines, width, bottomBudget, state.now);
 
   return {
     lines,
+    toastBounds,
     transcript: { lines: transcriptLines, rowLines },
     scroll: { offset, maxOffset, totalLines: allLines.length },
     cursor: {
@@ -685,6 +684,60 @@ function composeFrame(state, opts) {
       col: inputView.cursor.col,
     },
   };
+}
+
+/** A timed top-right overlay never changes transcript rows or scroll position. */
+function overlayToast(theme, toast, lines, width, availableHeight, now = Date.now()) {
+  if (!toast || availableHeight < 3 || toast.expiresAt <= now) return null;
+  const retry = toast.retry;
+  const title = retry
+    ? t('ui.tui.retryTitle', 'LLM 重试 #{attempt}', { attempt: retry.attempt || 1 })
+    : t('ui.tui.notificationTitle', '通知');
+  const detail = retry
+    ? [retry.status ? `HTTP ${retry.status}` : retry.kind, retry.reason || retry.error]
+        .filter(Boolean)
+        .join(' · ')
+    : toast.text;
+  const countdown =
+    retry && availableHeight >= 4
+      ? toast.retryAt <= now
+        ? t('ui.tui.retryRunning', '正在重试 · Esc 停止')
+        : t('ui.tui.retryWait', '{seconds}s 后重试 · Esc 停止', {
+            seconds: Math.max(0, Math.ceil((toast.retryAt - now) / 1000)),
+          })
+      : '';
+  const boxWidth = Math.min(60, width - 4);
+  const innerWidth = boxWidth - 4;
+  const content = wrapText(
+    stripAnsi(detail).replace(/[\x00-\x09\x0b-\x1f\x7f]/g, ' '),
+    innerWidth,
+  ).slice(0, Math.max(0, Math.min(3, availableHeight - (countdown ? 4 : 3) - 1)));
+  const rows = [title, ...content, ...(countdown ? [countdown] : [])];
+  const color =
+    theme[toast.type === 'error' ? 'error' : retry || toast.type === 'warn' ? 'warning' : 'info'];
+  const background = theme.background;
+  const border = (text) => style(text, { fg: color, bg: background });
+  const box = [
+    border('╭' + '─'.repeat(boxWidth - 2) + '╮'),
+    ...rows.map(
+      (row, i) =>
+        border('│ ') +
+        style(padWidth(truncate(row, innerWidth, ''), innerWidth), {
+          fg: i === 0 ? color : theme.text,
+          bg: background,
+          bold: i === 0,
+        }) +
+        border(' │'),
+    ),
+    border('╰' + '─'.repeat(boxWidth - 2) + '╯'),
+  ];
+  const top = availableHeight > box.length ? 1 : 0;
+  const left = width - boxWidth - 2;
+  box.forEach((row, index) => {
+    lines[top + index] =
+      padWidth(truncate(lines[top + index] || '', left, ''), left) + RESET + row + '  ';
+  });
+  return { top, left, width: boxWidth, height: box.length };
 }
 
 /**
@@ -745,7 +798,7 @@ function renderSpinnerLine(theme, state, width) {
     '  ' +
     spin +
     ' ' +
-    style(label, { dim: true }) +
+    paint(theme, 'subtle', label) +
     paint(theme, 'subtle', ' (' + t('ui.tui.interrupt', 'Esc 停止') + elapsed + ')', { dim: true })
   );
 }

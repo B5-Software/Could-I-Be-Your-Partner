@@ -35,10 +35,17 @@ function mergeSettings(defaults, saved) {
   return merge(defaults, saved, 0);
 }
 
-function loadSettings(defaults, saved) {
-  return TokenPolicy.normalize(
-    mergeSettings(defaults, TokenPolicy.migratePatch(isRecord(saved) ? saved : {})),
-  );
+function loadSettings(defaults, saved, legacyTuiPreferences = {}) {
+  saved = isRecord(saved) ? saved : {};
+  // The former standalone file is read only for migration. New values live in
+  // shared settings, so /thinking, /theme and the GUI edit the same preferences.
+  const tui = { ...(isRecord(saved.tui) ? saved.tui : {}) };
+  for (const key of ['thinkingExpanded', 'followGuiTheme']) {
+    if (typeof tui[key] !== 'boolean' && typeof legacyTuiPreferences?.[key] === 'boolean')
+      tui[key] = legacyTuiPreferences[key];
+  }
+  if (Object.keys(tui).length) saved = { ...saved, tui };
+  return TokenPolicy.normalize(mergeSettings(defaults, TokenPolicy.migratePatch(saved)));
 }
 
 module.exports = { mergeSettings, loadSettings };

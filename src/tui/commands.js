@@ -39,6 +39,7 @@ const COMMANDS = [
   { name: 'undo', args: '', desc: '停止并撤回最近一条用户消息及对应回复', group: 'message' },
   { name: 'cwd', args: '', desc: '用系统文件管理器打开当前工作区', group: 'general' },
   { name: 'config', args: '[搜索]', desc: '搜索和编辑共享设置', group: 'general' },
+  { name: 'theme', args: '[on|off]', desc: '切换是否沿用 GUI 色系（持久化）', group: 'general' },
   { name: 'help', args: '', desc: '显示帮助', group: 'general' },
   {
     name: 'mode',
@@ -227,6 +228,11 @@ function suggestArgs(name, argPrefix, context = {}) {
     .trimStart()
     .toLowerCase();
   const items = [];
+  if (name === 'theme') {
+    for (const value of ['on', 'off']) {
+      if (value.startsWith(prefix)) items.push({ label: value, value });
+    }
+  }
   if (name === 'mode' || name === 'new') {
     for (const mode of context.modes || ['chat', 'babe', 'code']) {
       if (!mode.startsWith(prefix)) continue;
