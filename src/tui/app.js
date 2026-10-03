@@ -26,6 +26,7 @@ const {
 } = require('./commands.js');
 const views = require('./views.js');
 const { t, setLanguage } = require('./text.js');
+const { pointAt, selectedText } = require('./selection');
 
 const MODES = ['chat', 'babe', 'code'];
 
@@ -35,13 +36,15 @@ class TuiApp {
     if (!this.runtime) throw new TypeError('TuiApp: runtime is required');
     this.theme = options.theme || themeFromEnv();
     this.onQuit = options.onQuit || (() => {});
+    this.onCopy = options.onCopy || require('./clipboard').copyText;
+    this.preferences = options.preferences;
+    this._thinkingExpanded = true;
     this.clock = options.clock || (() => Date.now());
     this.editor = new LineEditor({ history: options.history || [] });
     this.attachments = [];
     this.env = options.env || (typeof process !== 'undefined' ? process.env : {});
     this.customCommands = new Map();
     this._completionSelected = 0;
-    this._historyCache = [];
 
     this.state = {
       theme: this.theme,
@@ -65,7 +68,7 @@ class TuiApp {
       costUSD: 0,
       context: null,
       boot: null, // VM 启动中：{ progress, detail }；就绪/失败后置 null
-      thinkingExpanded: false, // /thinking 全局切换推理折叠/展开
+      thinkingExpanded: true, // TUI-only persisted /thinking preference
       todos: [],
       editorText: '',
       editorCursor: 0,
@@ -104,6 +107,16 @@ class TuiApp {
       this._applySettings(settings);
     } catch {
       /* 设置读取失败不阻塞启动 */
+    }
+    if (this._disposed) return this;
+    if (this.preferences) {
+      try {
+        const saved = await this.preferences.load();
+        this._thinkingExpanded = saved?.thinkingExpanded !== false;
+        this.state.thinkingExpanded = this._thinkingExpanded;
+      } catch {
+        /* Default to showing complete reasoning. */
+      }
     }
     if (this._disposed) return this;
     // Create the first view with the saved language, appearance and affection.
@@ -172,6 +185,7 @@ class TuiApp {
   }
 
   resize(width, height) {
+    this.state.selection = null;
     this.state.width = width;
     this.state.height = height;
     this.state.scrollOffset = 0;
@@ -181,6 +195,18 @@ class TuiApp {
   tick() {
     this.state.spinnerFrame = (this.state.spinnerFrame + 1) % 12;
     this.state.blink = !this.state.blink;
+    const selection = this.state.selection;
+    if (selection?.dragging && selection.moved) {
+      const transcript = this.frame().transcript;
+      if (transcript?.rowLines.length) {
+        const direction =
+          selection.mouse.y <= 2 ? 2 : selection.mouse.y >= transcript.rowLines.length ? -2 : 0;
+        if (direction) {
+          this._scroll(direction);
+          this._extendSelection(selection.mouse);
+        }
+      }
+    }
     if (this.state.running && this._startedAt) {
       this.state.elapsedMs = this.clock() - this._startedAt;
     }
@@ -231,34 +257,13 @@ class TuiApp {
     const name = trimmed.slice(1, spaceIndex).toLowerCase();
     const argPrefix = trimmed.slice(spaceIndex + 1);
     if (/\s/.test(argPrefix)) return null;
-    // 历史类命令的参数补全需要历史清单：按需预取（异步填充，下一帧可见）
-    if ((name === 'open' || name === 'delete') && this._historyCache.length === 0) {
-      this._prefetchHistory();
-    }
-    const items = suggestArgs(name, argPrefix, { modes: MODES, history: this._historyCache });
+    const items = suggestArgs(name, argPrefix, { modes: MODES });
     if (items.length === 0) return null;
     return {
       kind: 'arg',
       items,
       selected: Math.min(this._completionSelected, items.length - 1),
     };
-  }
-
-  async _prefetchHistory() {
-    if (this._historyLoading) return;
-    const key = this.activeKey;
-    this._historyLoading = true;
-    try {
-      const list = await this.runtime.listHistory(
-        this.state.mode,
-        this.state.workspace || undefined,
-      );
-      if (this.activeKey === key) this._historyCache = Array.isArray(list) ? list : [];
-    } catch {
-      this._historyCache = [];
-    } finally {
-      this._historyLoading = false;
-    }
   }
 
   /** 补全面板按键；返回 true=已消费，'submit'=接受并执行 */
@@ -336,6 +341,24 @@ class TuiApp {
       if (key?.name === 'escape' || (key?.ctrl && ['c', 'd'].includes(key.char))) this.onQuit();
       return true;
     }
+    if (key?.name === 'mouse') return this._handleMouse(key);
+    if (this.state.selection && key?.ctrl && key.char === 'c') {
+      const text = selectedText(this.state.selection, this.frame().transcript?.lines || []);
+      if (text) {
+        try {
+          await this.onCopy(text);
+          this.state.toast = { text: t('ui.tui.copied', '已复制选中的消息') };
+        } catch (error) {
+          this.state.toast = { text: error.message || String(error) };
+        }
+        return true;
+      }
+    }
+    if (this.state.selection && key?.name === 'escape') {
+      this.state.selection = null;
+      return true;
+    }
+    if (!['wheel', 'pageup', 'pagedown'].includes(key?.name)) this.state.selection = null;
     if (this.state.modal) return this._handleModalKey(key);
 
     const completionResult = this._handleCompletionKey(key);
@@ -366,6 +389,7 @@ class TuiApp {
       // 鼠标滚轮：滚动聊天记录（历史调阅只走 ↑↓/Ctrl+P/N，不再被滚轮触发）
       const step = key.ctrl ? Math.floor(this.state.height / 2) : 3;
       this._scroll(key.direction === 'up' ? step : -step);
+      if (this.state.selection?.dragging) this._extendSelection(this.state.selection.mouse);
       return true;
     }
     if (key.name === 'escape') {
@@ -409,6 +433,39 @@ class TuiApp {
       return true;
     }
     return false;
+  }
+
+  _handleMouse(key) {
+    if (key.button !== 'left' || this.state.modal) return true;
+    const selection = this.state.selection;
+    if (!key.press) {
+      if (selection?.dragging) {
+        this._extendSelection(key);
+        selection.dragging = false;
+      }
+      return true;
+    }
+    if (key.motion) {
+      if (selection?.dragging) this._extendSelection(key);
+      return true;
+    }
+    const anchor = pointAt(this.frame().transcript, key.x, key.y);
+    this.state.selection = anchor
+      ? { anchor, focus: anchor, dragging: true, moved: false, mouse: key }
+      : null;
+    return true;
+  }
+
+  _extendSelection(mouse) {
+    const selection = this.state.selection;
+    if (!selection) return;
+    const focus = pointAt(this.frame().transcript, mouse.x, mouse.y, true);
+    selection.mouse = mouse;
+    if (focus) {
+      selection.focus = focus;
+      selection.moved ||=
+        focus.line !== selection.anchor.line || focus.column !== selection.anchor.column;
+    }
   }
 
   _armQuitOrStop() {
@@ -466,11 +523,21 @@ class TuiApp {
       return this._armQuitOrStop();
     }
 
-    if (modal.kind === 'ask' && modal.inputMode) {
+    if (modal.inputMode) {
       // 问答的自由文本输入
       if (key.name === 'enter' && !key.alt) {
         const value = modal.editor.value.trim();
-        this._answerQuestion(value, modal);
+        if (modal.kind === 'renameInput') {
+          if (!value) {
+            this.state.toast = { text: t('ui.tui.titleRequired', '请输入会话标题') };
+            return true;
+          }
+          const state = this.state;
+          await this._renameSession(modal.target, value);
+          if (state.modal === modal) state.modal = null;
+        } else {
+          this._answerQuestion(value, modal);
+        }
         return true;
       }
       modal.editor.handleKey(key);
@@ -537,12 +604,48 @@ class TuiApp {
     } else if (modal.kind === 'sessions') {
       await this._switchSession(option.value);
     } else if (modal.kind === 'mode') {
-      await this.newSession(
-        option.value,
-        option.value === 'code' ? this.state.workspace || undefined : undefined,
-      );
+      await this.newSession(option.value);
+    } else if (modal.kind === 'workspace') {
+      if (option.select) await this._setWorkspace(option.value, { local: true });
+      else await this._openWorkspaceModal(option.value);
     } else if (modal.kind === 'history') {
       await this._openHistory(option.value);
+    } else if (modal.kind === 'historyDelete') {
+      this.state.modal = {
+        kind: 'deleteConfirm',
+        colorKey: 'error',
+        title: t('ui.tui.deleteConfirmTitle', '删除会话'),
+        subtitle: option.label,
+        body: t('ui.tui.deleteConfirmBody', '会话记录将被删除，无法撤销。'),
+        target: option.target,
+        options: [
+          { label: t('ui.tui.cancel', '取消'), value: false },
+          { label: t('ui.tui.delete', '删除'), value: true },
+        ],
+        selected: 0,
+      };
+    } else if (modal.kind === 'deleteConfirm' && option.value) {
+      const state = this.state;
+      const target = modal.target;
+      const result = await this.runtime.deleteHistory(target.mode, target.id, target.workspace);
+      if (result?.ok === false) throw new Error(result.error || 'Delete failed');
+      state.messages.push({
+        kind: 'notice',
+        text: t('ui.tui.historyDeletedTitle', '已删除会话「{title}」', { title: target.title }),
+      });
+    } else if (modal.kind === 'renameSelect') {
+      const editor = new LineEditor();
+      editor.setValue(option.target.title);
+      this.state.modal = {
+        kind: 'renameInput',
+        colorKey: 'permission',
+        title: t('ui.tui.renameTitle', '重命名会话'),
+        subtitle: option.label,
+        target: option.target,
+        inputMode: true,
+        editor,
+        footer: t('ui.tui.renameFooter', '输入新标题 · Enter 保存 · Esc 取消'),
+      };
     } else if (modal.kind === 'help' || modal.kind === 'todo') {
       // 纯展示：直接关闭
     }
@@ -681,17 +784,26 @@ class TuiApp {
       }
       case 'assistant-reasoning': {
         // 非流式推理事件：挂到最近一条助手消息上；没有则建一条纯推理条目
-        const reasoningText = event.data && (event.data.text || event.data.reasoning);
+        const reasoningText =
+          typeof event.data === 'string'
+            ? event.data
+            : event.data && (event.data.text || event.data.reasoning);
         if (!reasoningText) break;
-        const entry = this._lastAssistantEntry();
-        if (entry) {
-          entry.reasoning = reasoningText;
-        } else {
-          this.pushEntry({ kind: 'assistant', text: '', reasoning: reasoningText });
-        }
+        // Non-streaming core events arrive BEFORE the matching assistant text.
+        // Keep a new entry ready for that text instead of altering an old reply.
+        if (!this._streamEntry) {
+          this._streamEntry = {
+            kind: 'assistant',
+            text: '',
+            reasoning: reasoningText,
+            streaming: false,
+          };
+          this.pushEntry(this._streamEntry);
+        } else this._streamEntry.reasoning = reasoningText;
         break;
       }
       case 'tool-call': {
+        if (this._streamEntry && !this._streamEntry.streaming) this._streamEntry = null;
         const key = event.callId || event.name;
         if (event.status === 'running') {
           const entry = { kind: 'tool', name: event.name, args: event.args, status: 'running' };
@@ -739,7 +851,7 @@ class TuiApp {
         }
         break;
       case 'status':
-        this.state.running = event.status === 'running';
+        this.state.running = event.status === 'running' || event.status === 'working';
         if (this.state.running && !this._startedAt) this._startedAt = this.clock();
         if (!this.state.running) {
           if (this._streamEntry) this._streamEntry.streaming = false;
@@ -859,6 +971,7 @@ class TuiApp {
     this.activeKey = key;
     this.state = view.state;
     this.state.theme = this.theme;
+    this.state.thinkingExpanded = this._thinkingExpanded;
     this.state.width = width;
     this.state.height = height;
     this.editor = view.editor;
@@ -872,11 +985,23 @@ class TuiApp {
 
   async newSession(mode, workspacePath) {
     this._saveView();
-    this._historyCache = [];
     this._completionSelected = 0;
     this._completionDismissedText = null;
     const key =
       'tui:' + mode + ':' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+    this.runtime.createSession({ key, mode, workspacePath });
+    let hostWorkspace = '';
+    if (mode === 'code' && this.runtime.prepareWorkspace) {
+      const result = await this.runtime.prepareWorkspace(key, workspacePath, {
+        local: Boolean(workspacePath && !workspacePath.startsWith('/workspace')),
+      });
+      if (result?.ok === false) {
+        this.runtime.close(key);
+        throw new Error(result.error || 'Workspace cannot be prepared');
+      }
+      workspacePath = result.workspacePath;
+      hostWorkspace = result.hostPath || '';
+    }
     this.activeKey = key;
     this.state = {
       ...this.state,
@@ -886,7 +1011,9 @@ class TuiApp {
       context: null,
       costUSD: 0,
       elapsedMs: 0,
+      selection: null,
       workspace: workspacePath || '',
+      hostWorkspace,
     };
     this.editor = new LineEditor({ history: this.editor.history });
     this.attachments = [];
@@ -901,10 +1028,10 @@ class TuiApp {
           : 30
         : null;
     this.state.messages = [];
+    this.pushEntry({ kind: 'brand' });
     this.state.scrollOffset = 0;
     this._toolEntries.clear();
     this._streamEntry = null;
-    this.runtime.createSession({ key, mode, workspacePath });
     if (mode === 'code' && workspacePath) this.state.workspace = workspacePath;
     this.pushEntry({
       kind: 'notice',
@@ -917,7 +1044,10 @@ class TuiApp {
             ? workspacePath
               ? t('ui.tui.mode.codeWorkspace', '已切换到 Code 模式 · 工作区 {path}', {
                   path: workspacePath,
-                })
+                }) +
+                (hostWorkspace && hostWorkspace !== workspacePath
+                  ? '\n' + t('ui.tui.workspaceLocal', '本地目录：{path}', { path: hostWorkspace })
+                  : '')
               : t('ui.tui.mode.code', '已切换到 Code 模式') +
                 t('ui.tui.mode.codeNoWorkspace', '（/workspace <路径> 设置工作区）')
             : t('ui.tui.mode.chat', '已切换到 Chat 模式'),
@@ -930,7 +1060,6 @@ class TuiApp {
     const session = this.runtime.getSession(key);
     if (!session) return;
     this._saveView();
-    this._historyCache = [];
     this._completionSelected = 0;
     this._completionDismissedText = null;
     if (this._sessionViews.has(key)) {
@@ -958,6 +1087,7 @@ class TuiApp {
     this.state.mode = session.mode || 'chat';
     this.state.title = session.title || '';
     this.state.workspace = session.workspacePath || '';
+    this.state.hostWorkspace = session.hostWorkspacePath || '';
     this.state.affection = session.mode === 'babe' ? session.affection : null;
     this.state.messages = [];
     this.state.scrollOffset = 0;
@@ -1063,14 +1193,7 @@ class TuiApp {
     try {
       const result = await this.runtime.openVmDesktop();
       if (result?.ok === false) throw new Error(result.error || 'VM graphics unavailable');
-      if (result && result.url) {
-        this.pushEntry({
-          kind: 'assistant',
-          text: t('ui.tui.vmdeskUrl', 'VM 桌面：{url}', { url: result.url }),
-        });
-      } else {
-        this.pushEntry({ kind: 'notice', text: t('ui.tui.vmdeskOpened', 'VM 桌面已打开') });
-      }
+      this.pushEntry({ kind: 'notice', text: t('ui.tui.vmdeskOpened', 'VM 桌面已打开') });
     } catch (error) {
       this.pushEntry({
         kind: 'system',
@@ -1142,20 +1265,14 @@ class TuiApp {
           });
           return;
         }
-        await this.newSession(
-          mode,
-          mode === 'code' ? this.state.workspace || undefined : undefined,
-        );
+        await this.newSession(mode);
         return;
       }
       case 'new': {
         const mode = MODES.includes(argText.trim().toLowerCase())
           ? argText.trim().toLowerCase()
           : this.state.mode;
-        await this.newSession(
-          mode,
-          mode === 'code' ? this.state.workspace || undefined : undefined,
-        );
+        await this.newSession(mode);
         return;
       }
       case 'sessions': {
@@ -1170,14 +1287,18 @@ class TuiApp {
           title: t('ui.tui.sessionsTitle', '会话列表'),
           options: list.map((s) => ({
             label:
-              (s.title || s.key) +
+              (s.title || 'New') +
+              (s.key === this.activeKey ? ' · ' + t('ui.tui.currentSession', '当前') : '') +
               '  [' +
               (s.mode || 'chat') +
               (s.busy ? ' · ' + t('ui.tui.running', '运行中') : '') +
               ']',
             value: s.key,
           })),
-          selected: 0,
+          selected: Math.max(
+            0,
+            list.findIndex((s) => s.key === this.activeKey),
+          ),
         };
         return;
       }
@@ -1186,46 +1307,20 @@ class TuiApp {
         return;
       }
       case 'open': {
-        const id = argText.trim();
-        if (!id) {
-          this.pushEntry({ kind: 'system', text: '用法：/open <会话 ID>（/history 查看列表）' });
-          return;
-        }
-        await this._openHistory(id);
+        await this._openHistoryModal('open', argText.trim());
         return;
       }
       case 'rename': {
         const title = argText.trim();
         if (!title) {
-          this.pushEntry({ kind: 'system', text: '用法：/rename <新标题>' });
+          await this._openHistoryModal('rename');
           return;
         }
-        const state = this.state;
-        const result = await this.runtime.setTitle(this.activeKey, title);
-        if (result?.ok === false) throw new Error(result.error || 'Rename failed');
-        state.title = title;
-        state.messages.push({
-          kind: 'notice',
-          text: t('ui.tui.renamedPrefix', '会话已重命名为「') + title + '」',
-        });
+        await this._renameSession({ key: this.activeKey }, title);
         return;
       }
       case 'delete': {
-        const id = argText.trim();
-        if (!id) {
-          this.pushEntry({ kind: 'system', text: '用法：/delete <会话 ID>' });
-          return;
-        }
-        const result = await this.runtime.deleteHistory(
-          this.state.mode,
-          id,
-          this.state.workspace || undefined,
-        );
-        if (result?.ok === false) throw new Error(result.error || 'Delete failed');
-        this.pushEntry({
-          kind: 'notice',
-          text: t('ui.tui.historyDeleted', '已删除历史会话 {id}', { id }),
-        });
+        await this._openHistoryModal('delete', argText.trim());
         return;
       }
       case 'attach': {
@@ -1257,27 +1352,24 @@ class TuiApp {
       case 'workspace': {
         const target = argText.trim();
         if (!target) {
-          this.pushEntry({
-            kind: 'system',
-            text:
-              t('ui.tui.workspaceCurrentPrefix', '当前工作区：') +
-              (this.state.workspace || t('ui.tui.workspaceUnset', '（未设置）')),
+          await this._openWorkspaceModal(this.state.hostWorkspace || undefined);
+          return;
+        }
+        if (target === 'sync') {
+          const state = this.state;
+          const result = await this.runtime.syncWorkspace(this.activeKey);
+          if (result?.ok === false)
+            throw new Error(result.error || 'Workspace synchronization failed');
+          state.messages.push({
+            kind: 'notice',
+            text: t('ui.tui.workspaceSynced', '工作区已同步到本地：{path}', {
+              path: state.hostWorkspace || state.workspace,
+            }),
           });
           return;
         }
-        const state = this.state;
-        const key = this.activeKey;
-        const result = await this.runtime.setWorkspace(
-          this.activeKey,
-          target.replace(/^(["'])(.*)\1$/, '$2'),
-        );
-        if (result?.ok === false) throw new Error(result.error || 'Invalid workspace');
-        state.workspace = result?.workspacePath || target;
-        if (this.activeKey === key) this._reloadCustomCommands();
-        state.messages.push({
-          kind: 'notice',
-          text: t('ui.tui.workspaceSet', '工作区已设置为 {path}', { path: target }),
-        });
+        const directory = target.replace(/^(["'])(.*)\1$/, '$2');
+        await this._setWorkspace(directory, { local: !directory.startsWith('/workspace') });
         return;
       }
       case 'todo': {
@@ -1382,7 +1474,16 @@ class TuiApp {
         return;
       }
       case 'thinking': {
-        this.state.thinkingExpanded = !this.state.thinkingExpanded;
+        this._thinkingExpanded = !this.state.thinkingExpanded;
+        this.state.thinkingExpanded = this._thinkingExpanded;
+        for (const view of this._sessionViews.values())
+          view.state.thinkingExpanded = this._thinkingExpanded;
+        this.state.scrollOffset = 0;
+        try {
+          await this.preferences?.save({ thinkingExpanded: this._thinkingExpanded });
+        } catch (error) {
+          this.pushEntry({ kind: 'system', text: error.message || String(error) });
+        }
         this.pushEntry({
           kind: 'notice',
           text: this.state.thinkingExpanded
@@ -1404,37 +1505,157 @@ class TuiApp {
     }
   }
 
-  async _openHistoryModal() {
+  async _setWorkspace(directory, options) {
     const state = this.state;
+    const key = this.activeKey;
+    const result = await this.runtime.setWorkspace(key, directory, options);
+    if (result?.ok === false) throw new Error(result.error || 'Invalid workspace');
+    state.workspace = result?.workspacePath || directory;
+    state.hostWorkspace = result?.hostPath || '';
+    if (this.activeKey === key) this._reloadCustomCommands();
+    state.messages.push({
+      kind: 'notice',
+      text:
+        t('ui.tui.workspaceSet', '工作区已设置为 {path}', { path: state.workspace }) +
+        (state.hostWorkspace && state.hostWorkspace !== state.workspace
+          ? '\n' + t('ui.tui.workspaceLocal', '本地目录：{path}', { path: state.hostWorkspace })
+          : ''),
+    });
+  }
+
+  async _openWorkspaceModal(directory) {
+    const state = this.state;
+    if (!this.runtime.listLocalWorkspaceDirectories) {
+      this.pushEntry({ kind: 'system', text: '用法：/workspace <本地目录>' });
+      return;
+    }
+    const result = await this.runtime.listLocalWorkspaceDirectories(directory);
+    if (result?.ok === false) throw new Error(result.error || 'Directory cannot be read');
+    if (state !== this.state) return;
+    this.state.modal = {
+      kind: 'workspace',
+      colorKey: 'permission',
+      title: t('ui.tui.workspacePickerTitle', '选择本地工作区'),
+      subtitle: result.path,
+      options: [
+        { label: t('ui.tui.useDirectory', '✓ 使用此目录'), value: result.path, select: true },
+        ...(result.parent !== result.path ? [{ label: '↑ ..', value: result.parent }] : []),
+        ...[...new Set([result.home, ...(result.roots || [])])]
+          .filter((entry) => entry && entry !== result.path)
+          .map((entry) => ({ label: '↗ ' + entry, value: entry })),
+        ...(result.directories || []).map((entry) => ({
+          label: entry.name + '/',
+          value: entry.path,
+        })),
+      ],
+      selected: 0,
+      footer: t('ui.tui.workspacePickerFooter', 'Enter 进入文件夹或使用目录 · Esc 取消'),
+    };
+  }
+
+  async _openHistoryModal(action = 'open', query = '') {
+    const state = this.state;
+    const mode = state.mode;
+    const workspace = state.workspace || undefined;
+    const live = (this.runtime.listSessions() || []).filter(
+      (session) =>
+        session.mode === mode && (mode !== 'code' || session.workspacePath === workspace),
+    );
     let list = [];
     try {
-      list =
-        (await this.runtime.listHistory(this.state.mode, this.state.workspace || undefined)) || [];
+      list = (await this.runtime.listHistory(mode, workspace)) || [];
     } catch (error) {
       state.messages.push({
         kind: 'system',
         text: t('ui.tui.historyReadFailed', '读取历史失败：') + error.message,
       });
-      return;
+      if (action !== 'rename') return;
     }
     if (this.state !== state) return;
-    if (list.length === 0) {
+    const prefix = query.toLowerCase();
+    const options = list
+      .filter(
+        (item) =>
+          !prefix ||
+          String(item.title || 'New')
+            .toLowerCase()
+            .includes(prefix) ||
+          String(item.id).toLowerCase().includes(prefix),
+      )
+      .map((item) => {
+        const session = live.find((entry) => entry.conversationId === item.id);
+        const title = item.title || 'New';
+        const current = session?.key === this.activeKey;
+        const date =
+          item.date ||
+          item.updatedAt ||
+          (Number(item.ts) > 0 ? new Date(Number(item.ts)).toISOString() : '');
+        return {
+          label:
+            title +
+            (current ? ' · ' + t('ui.tui.currentSession', '当前') : '') +
+            (date ? '  · ' + String(date).slice(0, 10) : ''),
+          value: item.id,
+          target: {
+            id: item.id,
+            mode,
+            workspace,
+            title,
+            ...(action === 'rename' && session ? { key: session.key } : {}),
+          },
+        };
+      });
+    if (action === 'rename') {
+      const saved = new Set(options.map((option) => option.target.key).filter(Boolean));
+      options.unshift(
+        ...live
+          .filter((session) => !saved.has(session.key))
+          .map((session) => ({
+            label:
+              (session.title || 'New') +
+              (session.key === this.activeKey ? ' · ' + t('ui.tui.currentSession', '当前') : ''),
+            value: session.key,
+            target: { key: session.key, title: session.title || '' },
+          })),
+      );
+    }
+    if (options.length === 0) {
       this.pushEntry({
         kind: 'system',
-        text: t('ui.tui.historyEmpty', '（{mode} 模式暂无历史会话）', { mode: this.state.mode }),
+        text: prefix
+          ? t('ui.tui.noMatchingSessions', '没有匹配的会话')
+          : t('ui.tui.historyEmpty', '（{mode} 模式暂无历史会话）', { mode }),
       });
       return;
     }
     this.state.modal = {
-      kind: 'history',
+      kind:
+        action === 'delete' ? 'historyDelete' : action === 'rename' ? 'renameSelect' : 'history',
       colorKey: 'permission',
-      title: t('ui.tui.historyTitle', '历史会话（{mode}）', { mode: this.state.mode }),
-      options: list.map((item) => ({
-        label: (item.title || item.id) + (item.date ? '  · ' + String(item.date).slice(0, 10) : ''),
-        value: item.id,
-      })),
+      title:
+        action === 'delete'
+          ? t('ui.tui.deletePickerTitle', '选择要删除的会话（{mode}）', { mode })
+          : action === 'rename'
+            ? t('ui.tui.renamePickerTitle', '选择要重命名的会话（{mode}）', { mode })
+            : t('ui.tui.historyTitle', '历史会话（{mode}）', { mode }),
+      options,
       selected: 0,
     };
+  }
+
+  async _renameSession(target, title) {
+    const state = this.state;
+    const result = target.key
+      ? await this.runtime.setTitle(target.key, title)
+      : await this.runtime.renameHistory(target.mode, target.id, title, target.workspace);
+    if (result?.ok === false) throw new Error(result.error || 'Rename failed');
+    const view =
+      target.key === this.activeKey ? this.state : this._sessionViews.get(target.key)?.state;
+    if (view) view.title = title;
+    state.messages.push({
+      kind: 'notice',
+      text: t('ui.tui.renamed', '会话已重命名为「{title}」', { title }),
+    });
   }
 
   async _openHistory(id) {
@@ -1495,7 +1716,12 @@ class TuiApp {
             .filter(Boolean)
             .join('\n')
         : message.content;
-      if (content) state.messages.push({ kind: message.role, text: content });
+      if (content || message.reasoning)
+        state.messages.push({
+          kind: message.role,
+          text: content || '',
+          reasoning: message.reasoning || '',
+        });
     }
   }
 
@@ -1588,7 +1814,9 @@ class TuiApp {
 
   _footerHints() {
     const hints = [];
-    if (this.state.running) hints.push(t('ui.tui.escStop', 'esc 停止'));
+    if (this.state.selection?.moved)
+      hints.push(t('ui.tui.selectionHint', 'ctrl+c 复制 · esc 取消选择'));
+    else if (this.state.running) hints.push(t('ui.tui.escStop', 'esc 停止'));
     else hints.push(t('ui.tui.enterSend', 'enter 发送'));
     hints.push(t('ui.tui.hints', 'tab 补全 · ctrl+t 待办 · ctrl+r 历史 · /help 命令'));
     if (this.attachments.length > 0) hints.push('附件 ' + this.attachments.length);

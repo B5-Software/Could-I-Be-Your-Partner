@@ -346,8 +346,8 @@ module.exports = function registerResourcesIpc({
       return { ok: false, error: e.message };
     }
   });
-  ipcMain.handle('vm:openDesktop', () => {
-    openVmDesktopWindow();
+  ipcMain.handle('vm:openDesktop', async () => {
+    await openVmDesktopWindow();
     return { ok: true };
   });
 

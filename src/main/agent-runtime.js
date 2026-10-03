@@ -29,7 +29,6 @@ const {
   createTodoStore,
 } = require('../agent/index.js');
 const { createIpcDispatch } = require('./core/ipc-dispatch.js');
-const path = require('node:path');
 
 /** 交互决策策略：'prompt' 等待前端应答；'auto-approve' 自动放行（脚本化/测试用）。 */
 const INTERACTION_POLICY = Object.freeze({
@@ -93,6 +92,7 @@ function createAgentRuntime({
       busy: session.busy,
       title: session.title,
       workspacePath: session.agent ? session.agent.workspacePath : null,
+      hostWorkspacePath: session.hostWorkspacePath || null,
       conversationId: session.agent ? session.agent.conversationId : null,
       affection: session.agent ? session.agent.babeAffection : null,
       pendingInteraction: session.pendingInteraction ? session.pendingInteraction.kind : null,
@@ -331,8 +331,10 @@ function createAgentRuntime({
     session.agent.onTodoUpdate = (items) =>
       emit({ type: 'todo', key: sessionKey, items: Array.isArray(items) ? items : [] });
     session.agent.onStatusChange = (status) => {
-      session.status = status;
-      emit({ type: 'status', key: sessionKey, status });
+      // The Agent core calls active work "working"; frontends use "running".
+      // Normalize here so the first tarot draw cannot clear the TUI spinner.
+      session.status = status === 'working' ? 'running' : status;
+      emit({ type: 'status', key: sessionKey, status: session.status });
     };
     session.agent.onTitleChange = (title) => {
       session.title = title || '';
@@ -368,11 +370,12 @@ function createAgentRuntime({
     if (session.initialized) return;
     await api.startupRuntime();
     await todos.load();
-    if (session.mode === 'code' && session.agent.codeWorkspacePath) {
+    if (session.mode === 'code') {
       const workspace = await validateWorkspace(session.agent.codeWorkspacePath);
       if (!workspace.ok) throw new Error(workspace.error);
       session.agent.workspacePath = workspace.path;
       session.agent.codeWorkspacePath = workspace.path;
+      session.hostWorkspacePath = session.hostWorkspacePath || workspace.hostPath;
     }
     // 语言要在系统提示生成之前确定（系统提示/工具描述跟随 settings.language）
     try {
@@ -403,15 +406,13 @@ function createAgentRuntime({
     session.initialized = true;
   }
 
-  async function validateWorkspace(directory) {
-    const location = await api.runtime.getLocation();
-    const selected =
-      location?.location === 'vm'
-        ? path.posix.resolve('/workspace', directory)
-        : path.resolve(directory);
-    const result = await api.workspaceGetFileTree(selected);
+  async function validateWorkspace(directory, options) {
+    await api.startupRuntime();
+    const target = await api.workspaceResolve(directory, options);
+    if (!target?.ok) return target || { ok: false, error: 'Workspace cannot be prepared' };
+    const result = await api.workspaceGetFileTree(target.path);
     return result?.ok
-      ? { ok: true, path: selected, tree: result.tree }
+      ? { ...target, tree: result.tree }
       : { ok: false, error: result?.error || 'Workspace cannot be read' };
   }
 
@@ -480,7 +481,11 @@ function createAgentRuntime({
     for (const message of (conversation && conversation.messages) || []) {
       if (!message || typeof message !== 'object') continue;
       if (message.role === 'user' || message.role === 'assistant') {
-        out.push({ role: message.role, content: message.content || '' });
+        out.push({
+          role: message.role,
+          content: message.content || '',
+          reasoning: message.reasoning || message.reasoning_content || '',
+        });
       } else if (message.role === 'tool') {
         out.push({ role: 'tool', name: message.name || 'tool', content: message.content || '' });
       } else if (message.role === 'system') {
@@ -574,6 +579,27 @@ function createAgentRuntime({
         await ensureInitialized(session);
         if (session.stopRequested) return { ok: true, stopped: true };
         await session.agent.sendMessage(message, attachments || []);
+        if (
+          session.mode === 'code' &&
+          session.hostWorkspacePath &&
+          session.agent.settings.runtime?.workspaceMode !== 'isolated'
+        ) {
+          // Exports use the sync queue, without keeping the conversation busy
+          // after the Agent has stopped accepting hot messages.
+          const reportSyncError = (error) =>
+            emit({
+              type: 'message',
+              key,
+              role: 'system',
+              content: 'Workspace synchronization failed: ' + error,
+            });
+          api
+            .workspaceSync(session.agent.workspacePath, session.hostWorkspacePath)
+            .then((sync) => {
+              if (sync?.ok === false) reportSyncError(sync.error);
+            })
+            .catch((error) => reportSyncError(error.message));
+        }
         return {
           ok: true,
           conversationId: session.agent.conversationId,
@@ -640,33 +666,12 @@ function createAgentRuntime({
       return { ok: true };
     },
 
-    /** VM 桌面：图形栈启动（VM 未就绪会自动先启动），返回 VNC 连接信息 */
+    /** Open a desktop window; its renderer prepares the existing VM graphics. */
     async openVmDesktop() {
-      if (!api.vm || typeof api.vm.graphicsStart !== 'function') {
+      if (!api.vm || typeof api.vm.openDesktop !== 'function') {
         return { ok: false, error: 'vm API unavailable' };
       }
-      const started = await api.vm.graphicsStart({});
-      if (!started || started.ok === false) {
-        return {
-          ok: false,
-          error: (started && started.error) || 'graphicsStart failed',
-        };
-      }
-      let status = started;
-      try {
-        const fresh = await api.vm.graphicsStatus();
-        if (fresh && fresh.ok !== false) status = fresh;
-      } catch {
-        /* 沿用 start 的返回值 */
-      }
-      return {
-        ok: true,
-        running: Boolean(status.running),
-        vncHostPort: status.vncHostPort || null,
-        url:
-          status.vncWsUrl || (status.vncHostPort ? `ws://127.0.0.1:${status.vncHostPort}/` : null),
-        detail: status.phase || status.detail || null,
-      };
+      return api.vm.openDesktop();
     },
 
     /** 推送一次用量/成本统计（用量事件 → TUI 状态栏） */
@@ -698,20 +703,35 @@ function createAgentRuntime({
     },
 
     /** 设置工作区（Code 模式） */
-    async setWorkspace(key, workspacePath) {
+    listLocalWorkspaceDirectories: (directory) => api.workspaceListLocalDirectories(directory),
+
+    async syncWorkspace(key) {
+      const session = sessions.get(key);
+      if (!session) return { ok: false, error: 'Unknown session' };
+      return api.workspaceSync(session.agent.workspacePath, session.hostWorkspacePath);
+    },
+
+    async prepareWorkspace(key, workspacePath, options = {}) {
+      return this.setWorkspace(key, workspacePath, { ...options, create: !workspacePath });
+    },
+
+    async setWorkspace(key, workspacePath, options = {}) {
       const session = sessions.get(key);
       if (!session) return { ok: false, error: `unknown session: ${key}` };
       if (session.busy)
         return { ok: false, error: 'Stop the running task before changing workspace' };
-      if (!workspacePath) return { ok: false, error: 'Workspace path is required' };
-      const workspace = await validateWorkspace(workspacePath);
+      if (!workspacePath && !options.create)
+        return { ok: false, error: 'Workspace path is required' };
+      const workspace = await validateWorkspace(workspacePath, options);
       if (!workspace.ok) return workspace;
       if (session.busy) return { ok: false, error: 'Task started while selecting workspace' };
       session.agent.workspacePath = workspace.path;
       session.agent.codeWorkspacePath = workspace.path;
       session.agent.cachedWorkspaceTree = workspace.tree;
+      session.hostWorkspacePath = workspace.hostPath;
       api.webControlSetWorkDir(workspace.path);
-      return { ok: true, workspacePath: workspace.path };
+      if (session.mode === 'code') await api.codeSetLastWorkspace(workspace.path);
+      return { ok: true, workspacePath: workspace.path, hostPath: workspace.hostPath };
     },
 
     getStats,

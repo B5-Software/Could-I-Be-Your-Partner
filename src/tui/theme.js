@@ -21,16 +21,16 @@ const DARK = {
   accent: 'rgb(215,119,87)', // 暖橙（品牌）
   suggestion: 'rgb(177,185,249)', // 蓝紫：选中 / 交互强调
   permission: 'rgb(177,185,249)',
-  planMode: 'rgb(72,150,140)', // teal：Babe/计划等模式色
-  bashBorder: 'rgb(253,93,177)', // 亮粉：Code/终端模式边框
+  planMode: 'rgb(72,150,140)', // teal：Code / 计划模式
+  bashBorder: 'rgb(253,93,177)', // 亮粉：Babe 模式
   fastMode: 'rgb(255,120,20)',
   merged: 'rgb(175,135,255)',
   // 文本
   text: 'rgb(255,255,255)',
   inverseText: 'rgb(0,0,0)',
-  subtle: 'rgb(80,80,80)', // 暗淡
-  inactive: 'rgb(153,153,153)',
-  promptBorder: 'rgb(136,136,136)',
+  subtle: 'rgb(172,172,172)',
+  inactive: 'rgb(204,204,204)',
+  promptBorder: 'rgb(166,166,166)',
   // 语义
   success: 'rgb(78,186,101)',
   error: 'rgb(255,107,128)',
@@ -74,8 +74,8 @@ const LIGHT = {
   merged: 'rgb(135,0,255)',
   text: 'rgb(0,0,0)',
   inverseText: 'rgb(255,255,255)',
-  subtle: 'rgb(175,175,175)',
-  inactive: 'rgb(102,102,102)',
+  subtle: 'rgb(104,104,104)',
+  inactive: 'rgb(80,80,80)',
   promptBorder: 'rgb(153,153,153)',
   success: 'rgb(44,122,57)',
   error: 'rgb(171,43,63)',
@@ -106,9 +106,9 @@ const ANSI = {
   merged: 'ansi:brightMagenta',
   text: 'ansi:white',
   inverseText: 'ansi:black',
-  subtle: 'ansi:brightBlack',
-  inactive: 'ansi:brightBlack',
-  promptBorder: 'ansi:brightBlack',
+  subtle: 'ansi:white',
+  inactive: 'ansi:white',
+  promptBorder: 'ansi:white',
   success: 'ansi:green',
   error: 'ansi:red',
   warning: 'ansi:yellow',

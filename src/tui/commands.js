@@ -46,12 +46,22 @@ const COMMANDS = [
   { name: 'new', args: '[mode]', desc: '新建会话', group: 'session' },
   { name: 'sessions', args: '', desc: '会话列表 / 切换', group: 'session' },
   { name: 'history', args: '', desc: '历史会话（按模式）', group: 'session' },
-  { name: 'open', args: '<id>', desc: '打开历史会话', group: 'session' },
-  { name: 'rename', args: '<标题>', desc: '重命名当前会话', group: 'session' },
-  { name: 'delete', args: '<id>', desc: '删除历史会话', group: 'session' },
+  { name: 'open', args: '[关键词]', desc: '选择并打开历史会话', group: 'session' },
+  {
+    name: 'rename',
+    args: '[标题]',
+    desc: '选择会话重命名；带标题时重命名当前会话',
+    group: 'session',
+  },
+  { name: 'delete', args: '[关键词]', desc: '选择并删除历史会话', group: 'session' },
   { name: 'commands', args: '', desc: '查看 / 重载自定义命令', group: 'general' },
   { name: 'attach', args: '<文件路径>', desc: '附加文件给下一条消息', group: 'message' },
-  { name: 'workspace', args: '[路径]', desc: '查看 / 设置 Code 模式工作区', group: 'session' },
+  {
+    name: 'workspace',
+    args: '[路径|sync]',
+    desc: '选择本地工作区；sync 取回 VM 文件',
+    group: 'session',
+  },
   { name: 'todo', args: '', desc: '查看待办清单', group: 'info' },
   { name: 'usage', args: '', desc: '查看本轮 Token 用量', group: 'info' },
   { name: 'model', args: '', desc: '查看当前模型与模型池', group: 'info' },
@@ -223,17 +233,6 @@ function suggestArgs(name, argPrefix, context = {}) {
               ? t('ui.tui.modeOptionBabe', '陪伴模式（好感度）')
               : t('ui.tui.modeOptionCode', '编码模式（工作区为中心）'),
       });
-    }
-  } else if (name === 'open' || name === 'delete') {
-    for (const item of (context.history || []).slice(0, 8)) {
-      const label = String(item.title || item.id);
-      if (
-        prefix &&
-        !String(item.id).toLowerCase().includes(prefix) &&
-        !label.toLowerCase().includes(prefix)
-      )
-        continue;
-      items.push({ label: label + '  ' + item.id, value: String(item.id), description: '' });
     }
   }
   return items.slice(0, 8);

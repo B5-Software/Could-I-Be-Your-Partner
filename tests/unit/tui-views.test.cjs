@@ -5,6 +5,17 @@
  * TUI 渲染测试：光标落位（回归：光标跑到输入框上方/中文横向漂移）与排版。
  */
 const { test } = require('node:test');
+
+test('Babe uses pink and Code uses green in every theme', () => {
+  const { accentFor } = require('../../src/tui/views');
+  const { resolveTheme } = require('../../src/tui/theme');
+  for (const name of ['dark', 'light', 'ansi']) {
+    const theme = resolveTheme(name);
+    assert.equal(theme[accentFor('babe')], theme.bashBorder);
+    assert.equal(theme[accentFor('code')], theme.planMode);
+    assert.notEqual(theme[accentFor('babe')], theme[accentFor('code')]);
+  }
+});
 const assert = require('node:assert/strict');
 
 const views = require('../../src/tui/views.js');
@@ -94,19 +105,19 @@ test('光标落在输入正文行（而不是顶线/上方）', () => {
 test('光标列按显示宽度计算（中文 2 格）', () => {
   // 空输入：光标在前缀之后（❯ = 1 格 + 1 空格 → 第 3 列）
   let frame = compose(inputState({ editorText: '', editorCursor: 0 }));
-  assert.equal(frame.cursor.col, 3, '空输入时应在 ❯ 之后');
+  assert.equal(frame.cursor.col, 4, '空输入时应在边框和 ❯ 之后');
 
   // 英文 2 字符 → 第 5 列
   frame = compose(inputState({ editorText: 'ab', editorCursor: 2 }));
-  assert.equal(frame.cursor.col, 5);
+  assert.equal(frame.cursor.col, 6);
 
   // 中文 2 字 = 4 显示格 → 第 7 列（回归：按字符数会算成 5）
   frame = compose(inputState({ editorText: '你好', editorCursor: 2 }));
-  assert.equal(frame.cursor.col, 7, '中文应按 2 格/字计算光标列');
+  assert.equal(frame.cursor.col, 8, '中文应按 2 格/字计算光标列');
 
   // 光标在中文中间
   frame = compose(inputState({ editorText: '你好', editorCursor: 1 }));
-  assert.equal(frame.cursor.col, 5);
+  assert.equal(frame.cursor.col, 6);
 });
 
 test('多行缓冲与软换行时光标落位正确', () => {
@@ -114,7 +125,7 @@ test('多行缓冲与软换行时光标落位正确', () => {
   const frame = compose(inputState({ editorText: '第一行\n第二行', editorCursor: 4 }));
   const { top } = locateInput(frame.lines);
   assert.equal(frame.cursor.row, top + 3, '第二行正文应在顶线下两行');
-  assert.equal(frame.cursor.col, 3);
+  assert.equal(frame.cursor.col, 4);
 
   // 软换行：超长英文把正文挤成两行，光标在末尾应落到第二条渲染行
   const long = 'a'.repeat(70);

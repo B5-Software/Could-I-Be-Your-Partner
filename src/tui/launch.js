@@ -237,6 +237,8 @@ function startTui(options) {
       quitRequested = true;
       shutdown();
     },
+    onCopy: options.copyText || require('./clipboard').copyText,
+    preferences: options.preferences || require('./preferences').createPreferencesStore(),
   });
 
   const decoder = createKeyDecoder();

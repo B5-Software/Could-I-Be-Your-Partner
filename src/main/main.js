@@ -9,6 +9,9 @@
 
 const { app, BrowserWindow, ipcMain: electronIpcMain, nativeTheme, dialog, clipboard, screen, shell, Notification, Tray, Menu, nativeImage, protocol, net, safeStorage, crashReporter } = require('electron');
 const appLog = require('./app-log');
+if (!process.argv.includes('--tui') && !process.argv.includes('--headless')) {
+  require('./core/terminal-brand').printStartupBrand();
+}
 
 // stdout/stderr 被关闭或管道截断（如 `npm start | head`）时，console.log 会抛
 // EPIPE 未捕获异常直接崩溃主进程 —— 吞掉流错误，此后写操作变为无害 no-op。
@@ -172,7 +175,10 @@ cibypImService.fileAccess = toolFiles;
 
 /** 向 Splash 与主窗口广播 VM 事件（任一不存在则跳过） */
 function broadcastVm(channel, payload) {
-  for (const win of [typeof splashWindow !== 'undefined' ? splashWindow : null, typeof mainWindow !== 'undefined' ? mainWindow : null]) {
+  publishEvent(channel, payload);
+  // The event bus already delivers to the main window; only child windows
+  // need a direct copy, otherwise each VM notification is rendered twice.
+  for (const win of [typeof splashWindow !== 'undefined' ? splashWindow : null, typeof vmDesktopWindow !== 'undefined' ? vmDesktopWindow : null]) {
     try { if (win && !win.isDestroyed()) win.webContents.send(channel, payload); } catch (_) {}
   }
 }
@@ -1194,36 +1200,24 @@ function registerRendererReadyListener() {
  * 连接信息由 vm-desktop-preload 经 IPC 取得；VNC 仅监听 guest loopback。
  */
 let vmDesktopWindow = null;
+let vmDesktopCompanion = null;
 function openVmDesktopWindow() {
+  if (!process.versions.electron) {
+    if (!vmDesktopCompanion) {
+      const { VmDesktopCompanion } = require('../tui/vm-desktop');
+      const { createIpcDispatch } = require('./core/ipc-dispatch');
+      const dispatch = createIpcDispatch({ ipcMain, publishEvent, subscribe: (channel, fn) => eventBus.subscribe(channel, fn) });
+      vmDesktopCompanion = new VmDesktopCompanion({ invoke: (...args) => dispatch.invoke(...args), subscribe: (channel, fn) => eventBus.subscribe(channel, fn) });
+    }
+    return vmDesktopCompanion.open(settings.theme || {}, nativeTheme.shouldUseDarkColors);
+  }
   if (vmDesktopWindow && !vmDesktopWindow.isDestroyed()) {
     vmDesktopWindow.show();
     vmDesktopWindow.focus();
     return vmDesktopWindow;
   }
-  vmDesktopWindow = new BrowserWindow({
-    width: 1180, height: 800, minWidth: 820, minHeight: 560,
-    title: 'VM 桌面 · CIBYP-VM-OS',
-    icon: path.join(__dirname, '../../assets/icons/icon.png'),
-    backgroundColor: '#14161b',
-    show: false,
-    frame: false,
-    webPreferences: {
-      preload: path.join(__dirname, '../preload/generated/vm-desktop-preload.js'),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-    },
-  });
-  {
-    const th = settings.theme || {};
-    const mode = th.mode || 'system';
-    const dark = mode === 'dark' ? true : mode === 'light' ? false : nativeTheme.shouldUseDarkColors;
-    const accent = /^#[0-9a-fA-F]{6}$/.test(th.accentColor || '') ? th.accentColor : '#4f8cff';
-    const bg = /^#[0-9a-fA-F]{6}$/.test(th.backgroundColor || '') ? th.backgroundColor : (dark ? '#17181d' : '#f5f7fa');
-    try { vmDesktopWindow.setBackgroundColor(bg); } catch { /* ignore */ }
-    vmDesktopWindow.loadFile(path.join(__dirname, '../renderer/pages/vm-desktop.html'), { query: { dark: dark ? '1' : '0', accent: accent.slice(1), bg: bg.slice(1) } });
-  }
-  vmDesktopWindow.once('ready-to-show', () => { try { vmDesktopWindow.show(); } catch { /* ignore */ } });
+  vmDesktopWindow = require('./services/vm-desktop-window').createVmDesktopWindow({ BrowserWindow, theme: settings.theme || {}, systemDark: nativeTheme.shouldUseDarkColors });
+  vmDesktopWindow.ready.catch(error => console.error('[vm-desktop] Window load failed:', error.message));
   vmDesktopWindow.on('closed', () => { vmDesktopWindow = null; });
   return vmDesktopWindow;
 }
@@ -1999,6 +1993,7 @@ require('./ipc/environment')({
 ipcMain.handle('theme:get', () => ({ shouldUseDarkColors: nativeTheme.shouldUseDarkColors, mode: settings.theme.mode, theme: settings.theme }));
 // 广播主题变化到所有 BrowserWindow（含子窗口 CAD/EDA/小游戏）
 function broadcastThemeChanged() {
+  publishEvent('theme:apply', { theme: settings.theme, shouldUseDarkColors: nativeTheme.shouldUseDarkColors });
   codeOSSService.syncPersonalization();
   vmService.syncAppearance().catch((error) => console.warn('[vm] Appearance synchronization failed:', error.message));
   const payload = { shouldUseDarkColors: nativeTheme.shouldUseDarkColors, mode: settings.theme.mode };
@@ -4317,6 +4312,7 @@ app.whenReady().then(async () => {
             };
           },
           onExit: async (code) => {
+            vmDesktopCompanion?.dispose();
             try { await vmService.stop(); } catch { /* report through VM service logging */ }
             try {
               app.exit(code || 0);
@@ -4456,6 +4452,7 @@ setTimeout(logVmRoutingSelfCheck, 3000);
 let quitPreparation = null;
 let quitPrepared = false;
 app.on('before-quit', (event) => {
+  vmDesktopCompanion?.dispose();
   isQuitting = true;
   if (quitPrepared) return;
   event.preventDefault();

@@ -32,7 +32,9 @@
       line-height: 1.4; padding: 8px 12px; white-space: pre-wrap; color: #9aa4b6; }
     #overlay { position: absolute; top: 40px; left: 0; right: 0; bottom: 0; display: flex; flex-direction: column;
       align-items: center; justify-content: center; gap: 12px; background: #0f1115; font-size: 13px; color: #9aa4b6; }
+    #overlay { z-index: 2; }
     #overlay[hidden] { display: none; }
+    #log, #err-detail { z-index: 3; }
     .spinner { width: 24px; height: 24px; border: 3px solid rgba(230,232,239,.18); border-top-color: #4f8cff;
       border-radius: 50%; animation: spin .9s linear infinite; }
     @keyframes spin { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
@@ -74,11 +76,12 @@
     import RFB from '../../../node_modules/@novnc/novnc/core/rfb.js';
 
     // 主题跟随设置（主进程经 query 传入，与 Splash 同一套约定）
-    (function vmThemeApply() {
+    function vmThemeApply(payload) {
       const q = new URLSearchParams(location.search);
-      const dark = q.get('dark') !== '0';
-      const accent = q.get('accent') || '4f8cff';
-      const bg = q.get('bg') || (dark ? '17181d' : 'f5f7fa');
+      const theme = payload?.theme;
+      const dark = theme ? theme.mode === 'dark' || (theme.mode !== 'light' && payload.shouldUseDarkColors) : q.get('dark') !== '0';
+      const accent = theme && /^#[0-9a-f]{6}$/i.test(theme.accentColor || '') ? theme.accentColor.slice(1) : q.get('accent') || '4f8cff';
+      const bg = theme ? /^#[0-9a-f]{6}$/i.test(theme.backgroundColor || '') ? theme.backgroundColor.slice(1) : dark ? '17181d' : 'f5f7fa' : q.get('bg') || (dark ? '17181d' : 'f5f7fa');
       const root = document.documentElement;
       root.style.setProperty('--vm-accent', '#' + accent);
       root.style.setProperty('--vm-bg', '#' + bg);
@@ -91,7 +94,9 @@
       if (st) st.style.color = dark ? '#9aa4b6' : '#5b6474';
       const log = document.getElementById('log');
       if (log) { log.style.background = dark ? 'rgba(15,17,21,.92)' : 'rgba(255,255,255,.94)'; log.style.color = dark ? '#9aa4b6' : '#5b6474'; }
-    })();
+    }
+    vmThemeApply();
+    window.vmDesktop.onThemeApply(vmThemeApply);
 
     const $ = (id) => document.getElementById(id);
     const statusEl = $('status');

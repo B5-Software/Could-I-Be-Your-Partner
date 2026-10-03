@@ -93,16 +93,16 @@ test('状态栏：用量在最右侧（右对齐），窄屏降级不超宽', ()
 
 // ---------------- 推理块 ----------------
 
-test('推理块：折叠一行摘要（∴ 思考中 (320 字)），展开全文', () => {
+test('推理块：可折叠，展开全文，用空行分隔正文', () => {
   const reasoning = '第一步分析问题\n第二步制定方案\n' + 'x'.repeat(400);
   const collapsed = views
     .renderEntry(theme, { kind: 'assistant', text: '最终答案', reasoning }, 80, {
       thinkingExpanded: false,
     })
     .map(stripAnsi);
-  assert.equal(collapsed.length, 2, `折叠应为 2 行（摘要+正文）: ${JSON.stringify(collapsed)}`);
+  assert.equal(collapsed.length, 3, `折叠应为标题、空行、正文: ${JSON.stringify(collapsed)}`);
   assert.ok(collapsed[0].includes('∴'), `应有思考标记: ${collapsed[0]}`);
-  assert.ok(collapsed[0].includes('思考中'), `应有折叠提示: ${collapsed[0]}`);
+  assert.ok(collapsed[0].includes('思考：'), `应有折叠提示: ${collapsed[0]}`);
 
   const expanded = views
     .renderEntry(theme, { kind: 'assistant', text: '最终答案', reasoning }, 80, {
@@ -121,10 +121,12 @@ test('/thinking 全局切换折叠/展开', async () => {
   const runtime = makeFakeRuntime();
   const app = new TuiApp({ runtime, theme, width: 100, height: 30, onQuit: () => {} });
   await app.start({ mode: 'chat' });
-  assert.equal(app.state.thinkingExpanded, false);
+  assert.equal(app.state.thinkingExpanded, true);
   for (const ch of '/thinking') app.editor.insert(ch);
   await app.handleKey({ name: 'enter' });
-  assert.equal(app.state.thinkingExpanded, true);
+  assert.equal(app.state.thinkingExpanded, false);
+  await app.handleKey({ name: 'paste', text: '/thinking' });
+  await app.handleKey({ name: 'enter' });
   // 推理事件挂到最近的助手消息
   await app.handleRuntimeEvent({
     type: 'assistant-reasoning',
@@ -209,7 +211,7 @@ test('/vmdesk：无 runtime.openVmDesktop 时给明确提示', async () => {
   app.dispose();
 });
 
-test('/vmdesk：有 API 时调用 graphics 并展示结果', async () => {
+test('/vmdesk：有 API 时打开窗口并展示完成提示', async () => {
   const runtime = makeFakeRuntime();
   runtime.openVmDesktop = async () => ({ ok: true, url: 'ws://127.0.0.1:6080/?token=x' });
   const app = new TuiApp({ runtime, theme, width: 100, height: 30, onQuit: () => {} });
@@ -217,7 +219,7 @@ test('/vmdesk：有 API 时调用 graphics 并展示结果', async () => {
   for (const ch of '/vmdesk') app.editor.insert(ch);
   await app.handleKey({ name: 'enter' });
   const text = stripAnsi(app.frame().lines.join('\n'));
-  assert.ok(text.includes('6080'), `应展示桌面地址: ${text.slice(-300)}`);
+  assert.ok(text.includes('VM 桌面已打开'), `应确认窗口已打开: ${text.slice(-300)}`);
   app.dispose();
 });
 

@@ -27,6 +27,109 @@ module.exports = function registerWorkspacesIpc({
   _removeHistoryIndexEntry,
   _deleteHistoryImages,
 }) {
+  ipcMain.handle('workspace:resolve', async (_, directory, options = {}) => {
+    try {
+      if (!directory) {
+        directory = path.join(
+          workspacesBaseDir,
+          require('node:crypto').randomBytes(8).toString('hex'),
+        );
+        await fs.promises.mkdir(directory, { recursive: true });
+        options = { local: true };
+      }
+      const target = await require('../services/workspace-target').resolveWorkspaceTarget(
+        vmService,
+        directory,
+        options,
+      );
+      if (target.location === 'vm') {
+        await vmService.prepareTerminalDirectory(target.hostPath || target.path);
+      }
+      return { ok: true, ...target };
+    } catch (error) {
+      return { ok: false, error: error.message };
+    }
+  });
+
+  // Host directory navigation is an explicit frontend picker, never an Agent file tool.
+  ipcMain.handle('workspace:listLocalDirectories', async (_, directory) => {
+    try {
+      const selected = path.resolve(directory || app.getPath('documents'));
+      const entries = await fs.promises.readdir(selected, { withFileTypes: true });
+      return {
+        ok: true,
+        path: selected,
+        parent: path.dirname(selected),
+        home: require('node:os').homedir(),
+        directories: entries
+          .filter((entry) => entry.isDirectory())
+          .map((entry) => ({
+            name: entry.name,
+            path: path.join(selected, entry.name),
+          }))
+          .sort((a, b) => a.name.localeCompare(b.name)),
+        roots:
+          process.platform === 'win32'
+            ? 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+                .split('')
+                .map((letter) => letter + ':\\')
+                .filter((root) => fs.existsSync(root))
+            : ['/'],
+      };
+    } catch (error) {
+      return { ok: false, error: error.message };
+    }
+  });
+
+  ipcMain.handle('workspace:sync', async (_, directory, hostPath) => {
+    try {
+      if (!require('../vm/tool-location').isVmOperation(() => vmService))
+        return { ok: true, skipped: 'host' };
+      const io = new (require('../vm/vm-fs').VmFs)({ vmService });
+      const target = io.resolveVmPath(directory);
+      if (!target.ok) return target;
+      const hostRoot = hostPath || io.toHost(target.vm);
+      if (!hostRoot) return { ok: false, error: 'Workspace has no local mirror' };
+      if (target.vm.startsWith('/workspace/_external/')) {
+        return await vmService.pullExternalDir(target.vm, {
+          maxFileMB: vmService.runtime.vm.syncMaxFileMB || 64,
+        });
+      }
+      if (
+        vmService.runtime.workspaceMode === 'shared' &&
+        require('../vm/vm-paths').isUnder(vmService.workspaceRoot, hostRoot)
+      ) {
+        return await vmService.syncWorkspace({ direction: 'pull', reason: 'code-turn' });
+      }
+      // A per-directory pull also supports an explicit export in isolated mode.
+      const { WorkspaceSync } = require('../vm/vm-workspace');
+      const identity = require('node:crypto')
+        .createHash('sha256')
+        .update(path.resolve(hostRoot) + '\0' + target.vm)
+        .digest('hex');
+      vmService._workspaceExports = vmService._workspaceExports || new Map();
+      let sync = vmService._workspaceExports.get(identity);
+      if (!sync) {
+        sync = new WorkspaceSync({
+          vmService,
+          hostRoot,
+          vmMount: target.vm,
+          instanceDir: vmService.instance?.dir
+            ? path.join(vmService.instance.dir, 'workspace-export', identity)
+            : null,
+          options: {
+            maxFileMB: vmService.runtime.vm.syncMaxFileMB || 64,
+            syncGit: !!vmService.runtime.vm.syncGit,
+          },
+        });
+        vmService._workspaceExports.set(identity, sync);
+      }
+      return await sync.sync({ direction: 'pull', reason: 'workspace-export' });
+    } catch (error) {
+      return { ok: false, error: error.message };
+    }
+  });
+
   // ---- IPC: Workspace (Agent Working Directory) ----
   ipcMain.handle('firmware:export', async () => {
     try {

@@ -40,7 +40,10 @@ function decodeMouseEvent(button, col, row, press) {
   if (code === 65)
     return Object.assign({ name: 'wheel', direction: 'down', x, y, press: true }, mods);
   const key = code === 2 ? 'right' : code === 1 ? 'middle' : 'left';
-  return Object.assign({ name: 'mouse', button: key, x, y, press: press === 'M' }, mods);
+  return Object.assign(
+    { name: 'mouse', button: key, x, y, press: press === 'M', motion: Boolean(button & 32) },
+    mods,
+  );
 }
 
 /** CSI 修饰参数 → 修饰键（xterm 编码：参数 = 1 + 位掩码 shift|alt|ctrl|meta） */

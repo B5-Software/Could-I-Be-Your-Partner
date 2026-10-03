@@ -132,6 +132,112 @@ function typeText(app, text) {
   for (const char of text) app.editor.insert(char);
 }
 
+test('session commands select named conversations and deletion requires confirmation', async () => {
+  const { app, runtime } = await makeApp();
+  runtime.listHistory = async () => [
+    { id: 'opaque-123', title: '项目设计' },
+    { id: 'opaque-456', title: '' },
+  ];
+  app.editor.setValue('/open');
+  await app.handleKey({ name: 'enter' });
+  assert.equal(app.state.modal.kind, 'history');
+  assert.deepEqual(
+    app.state.modal.options.map((option) => option.label),
+    ['项目设计', 'New'],
+  );
+  assert.ok(!frameText(app).includes('opaque-123'));
+  await app.handleKey({ name: 'enter' });
+  assert.ok(runtime.calls.some((call) => call[0] === 'openHistory' && call[2] === 'opaque-123'));
+
+  app.editor.setValue('/delete 项目');
+  await app.handleKey({ name: 'enter' });
+  assert.equal(app.state.modal.options.length, 1);
+  await app.handleKey({ name: 'enter' });
+  assert.equal(app.state.modal.kind, 'deleteConfirm');
+  assert.equal(app.state.modal.selected, 0);
+  await app.handleKey({ name: 'enter' });
+  assert.ok(!runtime.calls.some((call) => call[0] === 'deleteHistory'));
+  app.editor.setValue('/delete');
+  await app.handleKey({ name: 'enter' });
+  await app.handleKey({ name: 'enter' });
+  await app.handleKey({ name: 'down' });
+  await app.handleKey({ name: 'enter' });
+  assert.deepEqual(runtime.calls.at(-1), ['deleteHistory', 'chat', 'opaque-123']);
+  assert.ok(frameText(app).includes('已删除会话「项目设计」'));
+  app.dispose();
+});
+
+test('/rename selects live or saved sessions, edits titles and keeps the current draft', async () => {
+  const { app, runtime } = await makeApp();
+  app.editor.setValue('/rename');
+  await app.handleKey({ name: 'enter' });
+  assert.equal(app.state.modal.kind, 'renameSelect');
+  assert.equal(app.state.modal.options[0].label, 'New · 当前');
+  await app.handleKey({ name: 'enter' });
+  assert.equal(app.state.modal.kind, 'renameInput');
+  await app.handleKey({ name: 'enter' });
+  assert.equal(app.state.modal.kind, 'renameInput', 'empty title keeps the editor open');
+  await app.handleKey({ name: 'paste', text: '新名称' });
+  await app.handleKey({ name: 'enter' });
+  assert.deepEqual(runtime.calls.at(-1), ['setTitle', app.activeKey, '新名称']);
+  app.editor.setValue('/rename');
+  await app.handleKey({ name: 'enter' });
+  await app.handleKey({ name: 'down' });
+  await app.handleKey({ name: 'enter' });
+  assert.equal(app.state.modal.editor.value, '历史一');
+  app.state.modal.editor.setValue('历史重命名');
+  await app.handleKey({ name: 'enter' });
+  assert.deepEqual(runtime.calls.at(-1), ['renameHistory', 'chat', 'h1', '历史重命名']);
+  assert.equal(app.state.title, '新名称');
+  app.dispose();
+});
+
+test('Code sessions prepare fresh workspaces and the local directory picker preserves VM mapping', async () => {
+  const { app, runtime } = await makeApp();
+  let created = 0;
+  runtime.prepareWorkspace = async (_key, directory) => ({
+    ok: true,
+    workspacePath: directory || '/workspace/hash' + ++created,
+    hostPath: 'D:/projects/hash' + created,
+  });
+  await app.newSession('code');
+  assert.equal(app.state.workspace, '/workspace/hash1');
+  assert.equal(app.state.hostWorkspace, 'D:/projects/hash1');
+  await app.newSession('code');
+  assert.equal(app.state.workspace, '/workspace/hash2');
+  runtime.listLocalWorkspaceDirectories = async (directory) => ({
+    ok: true,
+    path: directory || 'D:/projects',
+    parent: 'D:/',
+    directories: [{ name: '项目', path: 'D:/projects/项目' }],
+  });
+  runtime.setWorkspace = async (key, directory, options) => {
+    runtime.calls.push(['setWorkspace', key, directory, options]);
+    return { ok: true, workspacePath: '/workspace/_external/project-hash', hostPath: directory };
+  };
+  app.editor.setValue('/workspace');
+  await app.handleKey({ name: 'enter' });
+  assert.equal(app.state.modal.kind, 'workspace');
+  const projectIndex = app.state.modal.options.findIndex((option) => option.label === '项目/');
+  await app._chooseModalOption(projectIndex);
+  assert.equal(app.state.modal.subtitle, 'D:/projects/项目');
+  await app.handleKey({ name: 'enter' });
+  assert.equal(app.state.workspace, '/workspace/_external/project-hash');
+  assert.equal(app.state.hostWorkspace, 'D:/projects/项目');
+  assert.deepEqual(runtime.calls.at(-1), [
+    'setWorkspace',
+    app.activeKey,
+    'D:/projects/项目',
+    { local: true },
+  ]);
+  runtime.syncWorkspace = async (key) => (runtime.calls.push(['syncWorkspace', key]), { ok: true });
+  app.editor.setValue('/workspace sync');
+  await app.handleKey({ name: 'enter' });
+  assert.deepEqual(runtime.calls.at(-1), ['syncWorkspace', app.activeKey]);
+  assert.ok(frameText(app).includes('工作区已同步到本地：D:/projects/项目'));
+  app.dispose();
+});
+
 test('titles, messages, drafts and attachments remain isolated across sessions', async () => {
   const { app, runtime } = await makeApp();
   assert.equal(app.frame().title, '');
@@ -261,7 +367,7 @@ test('first response adopts the auto-created workspace, including Code history q
 test('initial Babe view uses saved affection before rendering the first notice', async () => {
   const { app } = await makeApp({ mode: 'babe' });
   assert.equal(app.state.affection, 42);
-  assert.ok(app.state.messages[0].text.includes('42'));
+  assert.ok(app.state.messages.find((entry) => entry.kind === 'notice').text.includes('42'));
 });
 
 test('background approvals remain answerable after returning to that session', async () => {
@@ -590,10 +696,15 @@ test('tui：/rename /delete /attach /usage /model /compact', async () => {
   assert.deepEqual(runtime.calls.at(-1), ['setTitle', app.activeKey, '新标题']);
   assert.equal(app.state.title, '新标题');
 
-  typeText(app, '/delete h2');
+  typeText(app, '/delete');
+  await app.handleKey({ name: 'enter' });
+  assert.equal(app.state.modal.kind, 'historyDelete');
+  await app.handleKey({ name: 'enter' });
+  assert.equal(app.state.modal.kind, 'deleteConfirm');
+  await app.handleKey({ name: 'down' });
   await app.handleKey({ name: 'enter' });
   await app.settled();
-  assert.deepEqual(runtime.calls.at(-1), ['deleteHistory', 'chat', 'h2']);
+  assert.deepEqual(runtime.calls.at(-1), ['deleteHistory', 'chat', 'h1']);
 
   typeText(app, '/attach /tmp/report.pdf');
   await app.handleKey({ name: 'enter' });

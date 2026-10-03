@@ -65,6 +65,11 @@ function baseHandlers({ llmChat } = {}) {
   }));
   handlers.set('workspace:create', async () => ({ ok: true, path: 'C:/tmp/cibyp-test-ws' }));
   handlers.set('workspace:getFileTree', async () => ({ ok: true, tree: [] }));
+  handlers.set('workspace:resolve', async (_event, directory) => ({
+    ok: true,
+    path: directory || 'C:/tmp/cibyp-code-default',
+    hostPath: directory || 'C:/tmp/cibyp-code-default',
+  }));
   handlers.set('skills:list', async () => []);
   handlers.set('tarot:draw', async () => ({ name: 'The Star', meaning: '希望' }));
   handlers.set('history:save', async () => ({ ok: true }));
@@ -114,6 +119,37 @@ test('Code startup preserves the requested workspace and rejects changes during 
   runtime.sessions.get('code-workspace').busy = true;
   assert.equal((await runtime.setWorkspace('code-workspace', '/new')).ok, false);
   assert.equal((await runtime.openHistory('code-workspace', 'h1')).ok, false);
+});
+
+test('Code file exports cannot trap later user messages in a completed Agent turn', async () => {
+  const handlers = baseHandlers({ llmChat: llmScript([{ content: 'done' }]) });
+  const events = [];
+  let finishExport;
+  handlers.set(
+    'workspace:sync',
+    () =>
+      new Promise((resolve) => {
+        finishExport = resolve;
+      }),
+  );
+  const runtime = createAgentRuntime({
+    ipcMain: createFakeIpcMain(handlers),
+    eventBus: createEventBus(),
+  });
+  runtime.onEvent((event) => events.push(event));
+  runtime.createSession({ key: 'code-export', mode: 'code' });
+  const result = await Promise.race([
+    runtime.sendMessage('code-export', 'create files'),
+    new Promise((_, reject) => {
+      const timer = setTimeout(() => reject(new Error('Export blocked the Agent turn')), 2000);
+      timer.unref();
+    }),
+  ]);
+  assert.equal(result.ok, true);
+  assert.equal(runtime.getSession('code-export').busy, false);
+  finishExport({ ok: false, error: 'export failure' });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(events.some((event) => event.content?.includes('export failure')));
 });
 
 test('stopping during initialization prevents the first LLM request', async () => {

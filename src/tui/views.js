@@ -11,7 +11,7 @@
  *   - 工具调用：单行卡片「● 工具名 (参数摘要)」，状态点变色/闪烁
  *   - 工具结果：缩进 + ⎿ 前缀，超出折叠为「… 还有 N 行」
  *   - 代码块：▎ 引用条；行内 `code` 与 **bold** 轻量高亮
- *   - 输入框：仅上下两条圆角线，顶线右端内嵌提示；前缀 ❯（模式换色）
+ *   - 输入框：完整圆角边框，顶线右端内嵌提示；前缀 ❯（模式换色）
  *   - 模态：▔ 顶线（交互色）+ 标题 + 选项列表（❯ 指针 / ✓ 选中）
  *   - 状态栏：模型 │ Context │ 用量 │ 好感度，分隔符 dim
  */
@@ -26,15 +26,20 @@ const {
   truncate,
   padWidth,
   sliceByWidth,
+  RESET,
+  colorCode,
 } = require('./ansi.js');
+const { brandLines } = require('../main/core/terminal-brand');
+const APP_VERSION = require('../../package.json').version.split('+')[0];
+const { selectionRange, highlightLine } = require('./selection');
 const { FIGURES, BOX } = require('./theme.js');
 const { t } = require('./text.js');
 
 /** 模式 → 强调色键 */
 const MODE_ACCENT = {
   chat: 'suggestion',
-  babe: 'planMode',
-  code: 'bashBorder',
+  babe: 'bashBorder',
+  code: 'planMode',
 };
 
 const MODE_LABEL = {
@@ -125,32 +130,24 @@ function layoutResult(theme, result, width, indent) {
   return out;
 }
 
-/** 推理块：折叠时一行摘要（∴ 思考中 (320 字)），展开时缩进全文 */
+/** Reasoning is a separate block. Only /thinking deliberately folds it. */
 function renderReasoning(theme, reasoning, width, expanded) {
   const raw = String(reasoning || '').trim();
   if (!raw) return [];
-  const chars = raw.length;
-  const head = '  ' + paint(theme, 'subtle', FIGURES.thinking + ' ', { dim: true });
+  const head = '  ' + FIGURES.thinking + ' ' + t('ui.tui.thinking', '思考') + '：';
   if (!expanded) {
-    const preview = raw.split('\n')[0];
-    const summary = truncate(
-      preview,
-      Math.max(8, width - visibleWidth(head) - String(chars).length - 8),
-    );
     return [
-      head +
-        style(t('ui.tui.thinking', '思考中'), { dim: true, italic: true }) +
-        ' ' +
-        paint(theme, 'subtle', t('ui.tui.thinkingChars', '({count} 字)', { count: chars }), {
-          dim: true,
-        }) +
-        (summary ? '  ' + paint(theme, 'inactive', summary, { dim: true }) : ''),
+      paint(
+        theme,
+        'subtle',
+        truncate(head + ' ' + t('ui.tui.reasoningFolded', '（已折叠，/thinking 展开）'), width, ''),
+      ),
     ];
   }
   const lines = wrapText(raw, Math.max(8, width - 4));
   return [
-    head + style(t('ui.tui.thinking', '思考中'), { dim: true, bold: true }),
-    ...lines.map((line) => paint(theme, 'subtle', '    ' + line, { dim: true })),
+    paint(theme, 'subtle', head, { bold: true }),
+    ...lines.map((line) => paint(theme, 'subtle', '    ' + line)),
   ];
 }
 
@@ -158,13 +155,22 @@ function renderReasoning(theme, reasoning, width, expanded) {
 function renderEntry(theme, entry, width, opts) {
   const state = opts || {};
   switch (entry.kind) {
+    case 'brand':
+      return renderBrand(theme, width);
     case 'user': {
       const indent = '  ';
       const lines = layoutText(theme, entry.text, width - 4, indent);
       const mark = paint(theme, 'subtle', FIGURES.pointer + ' ');
       return lines.map((line, index) => {
         const content = index === 0 ? mark + line : '  ' + line;
-        return style(padWidth(content, width), { bg: theme.userMessageBackground });
+        // Inline colors/bold reset SGR; reapply the row background after each
+        // reset so every user message remains a complete rectangle.
+        return style(
+          padWidth(content, width)
+            .split(RESET)
+            .join(RESET + colorCode(theme.userMessageBackground, true)),
+          { bg: theme.userMessageBackground },
+        );
       });
     }
     case 'assistant': {
@@ -174,6 +180,7 @@ function renderEntry(theme, entry, width, opts) {
         out.push(...renderReasoning(theme, entry.reasoning, width, state.thinkingExpanded));
       }
       if (entry.text && String(entry.text).trim() !== '') {
+        if (entry.reasoning) out.push('');
         out.push(...layoutText(theme, entry.text, width - 2, '  '));
       }
       if (entry.streaming && state.running) {
@@ -335,18 +342,31 @@ function renderStatusLine(theme, state, width) {
   parts.push(paint(theme, accent, MODE_LABEL[state.mode] || state.mode, { bold: true }));
   if (state.model) parts.push(truncate(state.model, 28));
   if (state.mode === 'babe' && state.affection != null) {
-    parts.push(paint(theme, 'planMode', FIGURES.heart + ' ' + state.affection, { bold: true }));
+    parts.push(
+      paint(theme, accentFor('babe'), FIGURES.heart + ' ' + state.affection, { bold: true }),
+    );
   }
   if (state.workspace && state.mode === 'code') {
     parts.push(truncate(state.workspace, 24));
   }
   const sep = paint(theme, 'subtle', ' │ ', { dim: true });
   const left = parts.join(sep);
-  const right = renderUsageSummary(theme, state);
-  if (!right) return truncate(left, width);
-  const gap = width - visibleWidth(left) - visibleWidth(right) - 3;
-  if (gap < 1) return truncate(left + sep + right, width, '');
-  return left + ' '.repeat(gap) + paint(theme, 'inactive', right, { dim: true });
+  const brand = 'Could I Be Your Partner ' + APP_VERSION;
+  const usage = renderUsageSummary(theme, state);
+  const right = usage ? usage + ' │ ' + brand : brand;
+  // Reserve the right edge first, including when the model/workspace is long.
+  const rightText =
+    visibleWidth(right) <= width
+      ? right
+      : visibleWidth(brand) <= width
+        ? brand
+        : truncate('CIBYP ' + APP_VERSION, width, '');
+  const leftText = truncate(left, Math.max(0, width - visibleWidth(rightText) - 2), '');
+  return (
+    leftText +
+    ' '.repeat(Math.max(0, width - visibleWidth(leftText) - visibleWidth(rightText))) +
+    paint(theme, 'inactive', rightText, { dim: true })
+  );
 }
 
 /** 底部提示（dim，' · ' 连接） */
@@ -356,7 +376,7 @@ function renderFooter(theme, hints, width) {
   return truncate(usable.join(sep), width, '');
 }
 
-/** 输入框：上下双线 + ❯ 前缀（顶线右端内嵌提示） */
+/** Rounded input box with borders on every row and a reserved cursor cell. */
 function renderInput(theme, state, width, opts) {
   const accent = accentFor(state.mode);
   const borderColor = state.running ? theme.inactive : theme[accent] || theme.promptBorder;
@@ -378,7 +398,7 @@ function renderInput(theme, state, width, opts) {
     style(FIGURES.pointer, { fg: theme[accent] || theme.suggestion, bold: true }) + ' ';
   const promptWidth = visibleWidth(prompt);
   const textLines = String(state.editorText || '').split('\n');
-  const innerWidth = Math.max(4, topWidth - 2);
+  const innerWidth = Math.max(1, topWidth - 2 - promptWidth - 1);
 
   // 光标定位：把零宽占位符插到光标处再排版，然后在渲染行里找回它。
   // 这样软换行、CJK/全角（按 2 格）、多行缓冲的落位都天然正确 ——
@@ -412,7 +432,8 @@ function renderInput(theme, state, width, opts) {
   const body = rows.map((row, index) => {
     const clean = row.split(CARET).join('');
     const prefix = index === 0 ? prompt : '  ';
-    return prefix + clean;
+    const side = style(BOX.vertical, { fg: borderColor });
+    return side + padWidth(prefix + clean, topWidth - 2) + side;
   });
   const maxRows = Math.max(1, opts?.maxRows || 6);
   const startRow = Math.max(0, Math.min(rows.length - maxRows, caretRowIndex - maxRows + 1));
@@ -422,7 +443,7 @@ function renderInput(theme, state, width, opts) {
     lines: [top, ...body.slice(startRow, startRow + maxRows), bottom],
     cursor: {
       row: 2 + caretRowIndex - startRow,
-      col: Math.min(width, (caretRowIndex === 0 ? promptWidth : 2) + caretCol + 1),
+      col: Math.min(width - 1, (caretRowIndex === 0 ? promptWidth : 2) + caretCol + 2),
     },
   };
 }
@@ -561,10 +582,15 @@ function composeFrame(state, opts) {
   const allLines = [];
   for (const entry of state.messages || []) {
     allLines.push(
-      ...renderEntry(theme, entry, width, { running: state.running, blink: state.blink }),
+      ...renderEntry(theme, entry, width, {
+        running: state.running,
+        blink: state.blink,
+        thinkingExpanded: state.thinkingExpanded,
+      }),
     );
     allLines.push(''); // 条目间距
   }
+  const transcriptLines = allLines.slice();
   if (state.running) {
     allLines.push(renderSpinnerLine(theme, state, width));
     allLines.push('');
@@ -597,14 +623,26 @@ function composeFrame(state, opts) {
   const indicatorHeight = offset > 0 ? 1 : 0;
   const end = allLines.length - offset;
   const start = Math.max(0, end - (messageAreaHeight - indicatorHeight));
-  const visible = messageAreaHeight > 0 ? allLines.slice(start, end) : [];
-  while (visible.length < messageAreaHeight - indicatorHeight) visible.unshift('');
+  const range = selectionRange(state.selection, transcriptLines);
+  const visible =
+    messageAreaHeight > 0
+      ? allLines
+          .slice(start, end)
+          .map((line, index) => highlightLine(theme, line, start + index, range))
+      : [];
+  const rowLines = visible.map((_line, index) =>
+    start + index < transcriptLines.length ? start + index : null,
+  );
+  while (visible.length < messageAreaHeight - indicatorHeight) {
+    visible.unshift('');
+    rowLines.unshift(null);
+  }
   if (indicatorHeight > 0) {
     visible.push(
       paint(
         theme,
         'subtle',
-        '  ↑ ' + t('ui.tui.scrolledHint', '{count} 行未显示（PgUp 查看）', { count: offset }),
+        '  ↓ ' + t('ui.tui.scrolledHint', '{count} 行未显示（PgDn 查看）', { count: offset }),
         { dim: true },
       ),
     );
@@ -619,6 +657,7 @@ function composeFrame(state, opts) {
 
   return {
     lines,
+    transcript: { lines: transcriptLines, rowLines },
     scroll: { offset, maxOffset, totalLines: allLines.length },
     cursor: {
       // 消息区 + 模态 + 补全面板占掉前若干行，输入块内的行号接在其后
@@ -640,6 +679,7 @@ function composeBootFrame(theme, state, width, height) {
   const barWidth = Math.max(20, Math.min(width - 8, 60));
 
   const body = [
+    ...renderBrand(theme, width, height < 15),
     '',
     '  ' +
       style(frame, { fg: theme.accent, bold: true }) +
@@ -659,9 +699,19 @@ function composeBootFrame(theme, state, width, height) {
       }),
   ];
   const top = Math.max(0, Math.floor((height - body.length) / 2));
-  const lines = [...Array(top).fill(''), ...body];
+  const lines = [...Array(top).fill(''), ...body].slice(0, height);
   while (lines.length < height - 1) lines.push('');
-  return { lines, cursor: { row: 1, col: 1 }, hideCursor: true };
+  return {
+    lines: lines.map((line) => truncate(line, width, '')),
+    cursor: { row: 1, col: 1 },
+    hideCursor: true,
+  };
+}
+
+function renderBrand(theme, width, compact = false) {
+  return brandLines(Math.max(0, width - 4), compact).map(
+    (line) => '  ' + style(line, { fg: theme.accent, bold: true }),
+  );
 }
 
 /** 运行中的 spinner 行：闪烁字形 + 文案 + (esc to interrupt · 0:12) */

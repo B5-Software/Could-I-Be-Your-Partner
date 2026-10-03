@@ -71,8 +71,13 @@ process.argv.push('--headless');
 const FAKE_TITLE = '测试会话';
 const llmCalls = [];
 const llmQueue = [];
-function pushReply(content, toolCalls) {
-  llmQueue.push({ content: content || '', tool_calls: toolCalls || undefined });
+let titleGate = null;
+function pushReply(content, toolCalls, reasoning) {
+  llmQueue.push({
+    content: content || '',
+    tool_calls: toolCalls || undefined,
+    reasoning_content: reasoning,
+  });
 }
 const realFetch = globalThis.fetch;
 const fakeFetch = async (url, opts) => {
@@ -91,6 +96,7 @@ const fakeFetch = async (url, opts) => {
       opts.body &&
       JSON.parse(opts.body).temperature === 0 &&
       JSON.parse(opts.body).max_tokens === 512;
+    if (isTitle && titleGate) await titleGate;
     const next = isTitle
       ? { content: FAKE_TITLE }
       : llmQueue.length > 0
@@ -199,13 +205,37 @@ async function run() {
   assert.equal(tuiApp.state.todos[0].done, true, 'Todos remain global across sessions');
 
   // ---- 1. Chat：一轮完整对话 ----
-  pushReply('你好，这是 TUI 集成测试回复');
+  let releaseTitle;
+  titleGate = new Promise((resolve) => {
+    releaseTitle = resolve;
+  });
+  pushReply('你好，这是 TUI 集成测试回复', undefined, '先思考第一轮问题。\n完整保留推理末尾。');
   typeText(tuiApp, '你好，测试一下');
-  await tuiApp.handleKey({ name: 'enter' });
+  const firstTurn = tuiApp.handleKey({ name: 'enter' });
+  await waitFor(
+    () => tuiApp.state.messages.some((entry) => entry.kind === 'tarot'),
+    'first Fate Card',
+  );
+  assert.equal(runtime.getSession(tuiApp.activeKey).status, 'running');
+  assert.equal(tuiApp.state.running, true, 'Fate Card cannot hide the active-work indicator');
+  assert.ok(
+    frameText(tuiApp).includes('思考中'),
+    'Spinner stays visible while title/model requests wait',
+  );
+  releaseTitle();
+  titleGate = null;
+  await firstTurn;
   await tuiApp.settled();
+  assert.equal(tuiApp.state.running, false, 'Spinner stops after the actual Agent turn completes');
   let text = frameText(tuiApp);
   assert.ok(text.includes('你好，测试一下'), '用户消息应渲染');
   assert.ok(text.includes('TUI 集成测试回复'), '助手回复应渲染');
+  assert.ok(
+    text.includes('完整保留推理末尾。'),
+    'Non-streaming string reasoning is displayed completely',
+  );
+  assert.ok(text.includes('思考：'));
+  assert.ok(!text.includes('思考中'), 'Completed reasoning is not labelled as ongoing work');
   assert.ok(text.includes('❯'), '输入框应有指针（设计元素）');
   assert.ok(text.includes('│'), '状态栏应有分隔符（设计元素）');
 
@@ -223,6 +253,7 @@ async function run() {
       },
     },
   ]);
+  llmQueue[0].reasoning_content = '本轮先检查危险命令的审批要求。';
   pushReply('已按你的要求执行');
   typeText(tuiApp, '删掉那个临时目录');
   const pending = tuiApp.handleKey({ name: 'enter' });
@@ -238,6 +269,10 @@ async function run() {
   await tuiApp.settled();
   text = frameText(tuiApp);
   assert.ok(text.includes('已按你的要求执行'), '批准后应继续对话');
+  assert.ok(
+    tuiApp.state.messages.some((entry) => entry.reasoning === '本轮先检查危险命令的审批要求。'),
+    'Tool-only replies preserve non-streaming reasoning',
+  );
 
   // ---- 3. Babe：好感度 + babe 历史 ----
   typeText(tuiApp, '/mode babe');
@@ -262,6 +297,9 @@ async function run() {
   typeText(tuiApp, '/mode code');
   await tuiApp.handleKey({ name: 'enter' });
   await tuiApp.settled();
+  assert.ok(tuiApp.state.workspace, 'Code must have a workspace before the first message');
+  assert.match(path.basename(tuiApp.state.workspace), /^[a-f0-9]{16}$/);
+  assert.ok(fs.statSync(tuiApp.state.workspace).isDirectory());
   typeText(tuiApp, '/workspace ' + CODE_WORKSPACE);
   await tuiApp.handleKey({ name: 'enter' });
   await tuiApp.settled();

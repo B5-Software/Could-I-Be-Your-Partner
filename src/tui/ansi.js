@@ -90,7 +90,17 @@ function style(text, spec) {
 
 /** 便捷：主题色键 → 样式文本 */
 function paint(theme, key, text, extra) {
-  return style(text, Object.assign({}, extra, { fg: theme[key] }));
+  // Semantic gray already has a readable contrast. SGR dim would attenuate it
+  // again (and several terminals halve RGB values), making labels disappear.
+  return style(
+    text,
+    Object.assign(
+      {},
+      extra,
+      { fg: theme[key] },
+      ['subtle', 'inactive'].includes(key) ? { dim: false } : {},
+    ),
+  );
 }
 
 /** 去除 ANSI 控制序列（手写扫描，支持 CSI 与简单 ESC 序列） */

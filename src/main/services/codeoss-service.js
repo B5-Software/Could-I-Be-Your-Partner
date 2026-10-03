@@ -460,26 +460,7 @@ class CodeOSSService {
   }
 
   async resolveWorkspace(directory) {
-    const vm = this.getVmService();
-    const location = vm.runtime.location === 'vm' && !vm.emergencyHost ? 'vm' : 'host';
-    if (location === 'vm') {
-      if (vm.instance?.state !== 'ready') await vm.start();
-      let mapped = new VmFs({ vmService: vm }).resolveVmPath(
-        directory || vm.runtime.vm.workspaceMount || '/workspace',
-      );
-      if (!mapped.ok && directory) {
-        const mounted = await vm.mountExternalDir(directory, { preserveGit: true });
-        if (!mounted.ok) throw new Error(mounted.error);
-        mapped = { ok: true, vm: mounted.vmRoot };
-      }
-      if (!mapped.ok) throw new Error(mapped.error);
-      const uri = `vscode-remote://cibyp-vm+default${mapped.vm.split('/').map(encodeURIComponent).join('/')}`;
-      return { location, path: mapped.vm, originalPath: directory, uri };
-    }
-    if (!directory) return { location, path: '', uri: '' };
-    const absolute = path.resolve(directory);
-    if (!fs.statSync(absolute).isDirectory()) throw new Error('工作区必须是文件夹');
-    return { location, path: absolute, uri: pathToFileURL(absolute).href };
+    return require('./workspace-target').resolveWorkspaceTarget(this.getVmService(), directory);
   }
 
   open(directory) {

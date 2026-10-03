@@ -391,7 +391,10 @@ contextBridge.exposeInMainWorld('api', {
   babeHistoryRename: (id, title) => ipcRenderer.invoke('babeHistory:rename', id, title),
 
   // Workspace
-  workspaceCreate: () => ipcRenderer.invoke('workspace:create'),
+  workspaceCreate: (options) => ipcRenderer.invoke('workspace:create', options),
+  workspaceResolve: (directory, options) => ipcRenderer.invoke('workspace:resolve', directory, options),
+  workspaceListLocalDirectories: (directory) => ipcRenderer.invoke('workspace:listLocalDirectories', directory),
+  workspaceSync: (directory, hostPath) => ipcRenderer.invoke('workspace:sync', directory, hostPath),
   workspaceGetBase: () => ipcRenderer.invoke('workspace:getBase'),
   workspaceOpenInExplorer: (p) => ipcRenderer.invoke('workspace:openInExplorer', p),
   workspaceGetFileTree: (p) => ipcRenderer.invoke('workspace:getFileTree', p),
