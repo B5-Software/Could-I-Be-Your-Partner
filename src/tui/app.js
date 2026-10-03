@@ -94,27 +94,26 @@ class TuiApp {
         .catch(() => {});
     });
 
-    // 欢迎语放在建会话之后：newSession 会重置消息区
-    await this.newSession(mode, opts.workspacePath);
-    if (typeof this.runtime.getTodos === 'function') {
-      this.state.todos = await this.runtime.getTodos();
-    }
-    this.pushEntry({
-      kind: 'notice',
-      text: t('ui.tui.brand', 'CIBYP · 全能 AI 伙伴 · 终端模式（/help 查看命令）'),
-    });
     try {
       const settings = await this.runtime.getSettings();
       const model = settings && settings.llm ? settings.llm.model : '';
       this.state.model = model || '';
       if (settings && settings.babe && typeof settings.babe.initialAffection === 'number') {
         this.state.initialAffection = settings.babe.initialAffection;
-        if (mode === 'babe') this.state.affection = settings.babe.initialAffection;
       }
       this._applySettings(settings);
     } catch {
       /* 设置读取失败不阻塞启动 */
     }
+    if (this._disposed) return this;
+    // Create the first view with the saved language, appearance and affection.
+    await this.newSession(mode, opts.workspacePath);
+    if (typeof this.runtime.getTodos === 'function')
+      this.state.todos = await this.runtime.getTodos();
+    this.pushEntry({
+      kind: 'notice',
+      text: t('ui.tui.brand', 'CIBYP · 全能 AI 伙伴 · 终端模式（/help 查看命令）'),
+    });
     this._reloadCustomCommands();
     return this;
   }
@@ -155,6 +154,7 @@ class TuiApp {
   }
 
   dispose() {
+    this._disposed = true;
     if (this._unsubscribe) this._unsubscribe();
     this._unsubscribe = null;
     for (const key of this._sessionViews.keys()) this.runtime.stop(key);
@@ -1020,6 +1020,10 @@ class TuiApp {
     try {
       const result = await this.runtime.sendMessage(key, text, attachments);
       if (result?.ok === false) throw new Error(result.error || 'Request failed');
+      if (result?.workspacePath) {
+        state.workspace = result.workspacePath;
+        if (this.activeKey === key) this._reloadCustomCommands();
+      }
     } catch (error) {
       state.messages.push({
         kind: 'system',

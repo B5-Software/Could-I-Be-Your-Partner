@@ -243,6 +243,27 @@ test('VM boot accepts cancellation but cannot accidentally send a task before th
   assert.equal(quits.length, 1);
 });
 
+test('first response adopts the auto-created workspace, including Code history queries', async () => {
+  const { app, runtime } = await makeApp({ mode: 'code' });
+  runtime.sendMessage = async () => ({ ok: true, workspacePath: '/workspace/generated' });
+  await app._send('first task');
+  assert.equal(app.state.workspace, '/workspace/generated');
+  assert.ok(frameText(app).includes('/workspace/generated'));
+  let queried;
+  runtime.listHistory = async (_mode, directory) => {
+    queried = directory;
+    return [];
+  };
+  await app._openHistoryModal();
+  assert.equal(queried, '/workspace/generated');
+});
+
+test('initial Babe view uses saved affection before rendering the first notice', async () => {
+  const { app } = await makeApp({ mode: 'babe' });
+  assert.equal(app.state.affection, 42);
+  assert.ok(app.state.messages[0].text.includes('42'));
+});
+
 test('background approvals remain answerable after returning to that session', async () => {
   const { app, runtime } = await makeApp();
   const first = app.activeKey;
