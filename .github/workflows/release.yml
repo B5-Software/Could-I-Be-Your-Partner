@@ -131,7 +131,8 @@ jobs:
             assets/lib
             assets/ime
             assets/aria2
-          key: assets-${{ hashFiles('scripts/download-voice-models.js', 'scripts/download-ocr-paddle.js', 'scripts/fetch-assets.sh', 'scripts/fetch-assets.ps1', 'scripts/download-aria2.js', 'scripts/build-ime-dicts.js') }}
+            assets/node
+          key: assets-${{ matrix.name }}-${{ hashFiles('scripts/download-voice-models.js', 'scripts/download-ocr-paddle.js', 'scripts/fetch-assets.sh', 'scripts/fetch-assets.ps1', 'scripts/download-aria2.js', 'scripts/build-ime-dicts.js', 'build/cli/node-runtime.json') }}
 
       - name: Build (${{ matrix.name }})
         run: npm run ${{ matrix.script }}
@@ -143,6 +144,7 @@ jobs:
           path: |
             dist/*.exe
             dist/*.dmg
+            dist/*.pkg
             dist/*-mac.zip
             dist/*.AppImage
             dist/*.deb

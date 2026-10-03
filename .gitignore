@@ -50,6 +50,7 @@ assets/ocr-paddle/
 
 # aria2 二进制（由 scripts/download-aria2.js 下载，打包时自动包含）
 assets/aria2/
+assets/node/
 
 # 第三方 JS 库（Three.js 等，由 fetch-assets 脚本下载）
 assets/lib/

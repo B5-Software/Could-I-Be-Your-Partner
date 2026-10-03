@@ -1,0 +1,18 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
+set -eu
+volume=${3%/}
+directory="$volume/usr/local/bin"
+app="$volume/Applications/Could I Be Your Partner.app/Contents/Resources/cli"
+mkdir -p "$directory"
+for command in cibyp cibyp-tui; do
+    destination="$directory/$command"
+    target="$app/$command"
+    if [ -e "$destination" ] || [ -L "$destination" ]; then
+        if [ "$(readlink "$destination")" != "$target" ]; then
+            echo "Cannot register $command: $destination is owned by another installation" >&2
+            exit 1
+        fi
+    fi
+    ln -sfn "$target" "$destination"
+done

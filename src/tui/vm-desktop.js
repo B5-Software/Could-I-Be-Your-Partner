@@ -57,7 +57,7 @@ class VmDesktopCompanion {
     delete environment.ELECTRON_RUN_AS_NODE;
     const child = this.spawnProcess(
       this.executable || resolveElectronExecutable(),
-      [this.entryPath],
+      process.env.CIBYP_PACKAGED_RESOURCES ? ['--cibyp-vm-desktop'] : [this.entryPath],
       {
         stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
         windowsHide: true,

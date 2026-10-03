@@ -113,12 +113,21 @@ function makeProfile(port) {
 /** 起 PTY 子进程；watchdogMs 到点未完成则杀掉并 reject（带阶段信息） */
 function runInPty({ args, env, onOutput, watchdogMs = 25000, describe }) {
   return new Promise((resolve, reject) => {
-    const child = pty.spawn(process.execPath, args, {
+    const resources = process.env.CIBYP_TEST_PACKAGED_RESOURCES;
+    const binary = resources
+      ? path.join(resources, 'node', process.platform === 'win32' ? 'node.exe' : 'node')
+      : process.execPath;
+    const actualArgs = resources
+      ? [path.join(resources, 'cli/launch.cjs'), process.env.CIBYP_TEST_COMMAND || 'tui']
+      : args;
+    const child = pty.spawn(binary, actualArgs, {
       name: 'xterm-color',
       cols: 110,
       rows: 32,
       cwd: root,
-      env: Object.assign({}, process.env, env),
+      env: Object.assign({}, process.env, env, {
+        CIBYP_DOCUMENTS: path.join(env.CIBYP_USER_DATA, 'documents'),
+      }),
     });
     let out = '';
     let settled = false;

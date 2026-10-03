@@ -12,6 +12,7 @@ module.exports = async function afterPack(context) {
   const path = require('path');
   const asar = require('@electron/asar');
   const archive = path.join(context.packager.getResourcesDir(context.appOutDir), 'app.asar');
+  await require('./lib/packaged-cli.cjs').preparePackagedCLI(context);
   const entries = new Set(asar.listPackage(archive).map((file) => file.split(path.sep).join('/')));
   const preloads = fs
     .readdirSync(path.join(__dirname, '../src/preload'))
@@ -47,6 +48,8 @@ module.exports = async function afterPack(context) {
     throw new Error('Packaged Code-OSS integrity metadata does not match its patched workbench');
   for (const required of [
     '/LICENSE',
+    '/bin/cibyp.js',
+    '/bin/cibyp-tui.js',
     '/src/main/main.js',
     '/src/renderer/js/app.js',
     '/src/shared/generated/pricing.cjs',

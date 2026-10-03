@@ -8,6 +8,37 @@
 'use strict';
 
 const { app, BrowserWindow, ipcMain: electronIpcMain, nativeTheme, dialog, clipboard, screen, shell, Notification, Tray, Menu, nativeImage, protocol, net, safeStorage, crashReporter } = require('electron');
+// Packaged TUI companions use this executable only as a private window host.
+if (process.argv.includes('--cibyp-vm-desktop') && process.send) {
+  require('../tui/vm-desktop-entry').startDesktopHost();
+  return;
+}
+// Keep Electron's window activation behavior, and also exclude a pure Node TUI.
+if (!app.requestSingleInstanceLock()) {
+  app.quit();
+  process.exit(0);
+}
+const instanceMode = process.argv.includes('--tui') ? 'TUI' : process.argv.includes('--headless') ? 'headless' : 'GUI';
+let activeInstanceLease;
+app.on('will-quit', () => activeInstanceLease?.release?.());
+const startupAllowed = require('./core/instance-lock')
+  .acquireInstanceLock(app.getPath('userData'), instanceMode)
+  .then(async (lease) => {
+    activeInstanceLease = lease;
+    if (lease.acquired) return true;
+    const owner = lease.owner.mode;
+    console.error(`[startup] CIBYP ${owner} is already running. Close it before starting ${instanceMode}.`);
+    await app.whenReady();
+    if (instanceMode === 'GUI') dialog.showErrorBox('CIBYP 已在运行', `${owner} 已在运行。请先退出，再启动 ${instanceMode}。`);
+    setImmediate(() => app.exit(0));
+    return false;
+  }, async (error) => {
+    console.error('[startup] Cannot acquire instance lock:', error.message);
+    await app.whenReady();
+    if (instanceMode === 'GUI') dialog.showErrorBox('CIBYP 无法启动', error.message);
+    setImmediate(() => app.exit(1));
+    return false;
+  });
 const appLog = require('./app-log');
 if (!process.argv.includes('--tui') && !process.argv.includes('--headless')) {
   require('./core/terminal-brand').printStartupBrand();
@@ -207,11 +238,6 @@ const decisionService = new DecisionService({
 const APP_VERSION = app.getVersion();
 
 // Single instance lock — quit immediately if another instance is already running
-const gotSingleInstanceLock = app.requestSingleInstanceLock();
-if (!gotSingleInstanceLock) {
-  app.quit();
-  process.exit(0);
-}
 app.on('second-instance', () => {
   if (mainWindow) {
     if (mainWindow.isMinimized()) mainWindow.restore();
@@ -1456,7 +1482,8 @@ ipcMain.handle('proxy:apply', async (_, proxy) => {
   }
 });
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  if (!(await startupAllowed)) return;
   // 崩溃会话清扫：上次运行异常退出时残留的"运行中"历史 → 标记"异常退出"
   const previousCleanExit = readLastCleanExit();
   let crashedSessionCount = 0;
@@ -3924,6 +3951,7 @@ const pwService = registerPlaywrightIpc({
 
 // Auto-connect configured MCP servers on startup
 app.whenReady().then(async () => {
+  if (!(await startupAllowed)) return;
   // 启动时全量重审 DeepSeek 插件（后台执行，不阻断启动：
   // 交互式插件探测可能耗时，await 会导致后续 IPC 注册延迟，
   // 渲染器早期调用如 webControl:getStatus 找不到 handler）

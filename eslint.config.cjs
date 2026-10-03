@@ -48,6 +48,8 @@ module.exports = [
       'src/preload/**/*.js',
       'src/data/**/*.js',
       'scripts/**/*.{js,cjs}',
+      'bin/*.js',
+      'build/cli/*.cjs',
       'tests/**/*.{js,cjs}',
       'integrations/codeoss/**/*.{js,cjs}',
       '*.cjs',

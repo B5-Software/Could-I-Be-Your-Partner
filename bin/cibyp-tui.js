@@ -15,9 +15,26 @@
  */
 'use strict';
 
+const args = process.argv.slice(2);
+if (args.includes('--version') || args.includes('-v')) {
+  console.log(require('../package.json').version.split('+')[0]);
+  return;
+}
+if (args.includes('--help') || args.includes('-h')) {
+  console.log(`CIBYP terminal interface
+
+  cibyp-tui                         Chat
+  cibyp-tui --mode=babe             Babe
+  cibyp-tui --mode=code --workspace=/path
+  cibyp-tui --headless --web        Web service
+
+Use /help for interactive commands, /workspace to choose a local Code directory.
+GUI and TUI share settings and cannot run at the same time.`);
+  return;
+}
 const { bootNodeRuntime, waitForRuntime } = require('../src/tui/node-entry.js');
 
-const main = bootNodeRuntime(process.argv.slice(2));
+const main = bootNodeRuntime(args);
 
 waitForRuntime(main)
   .then(() => {

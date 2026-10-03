@@ -118,9 +118,10 @@ function createAppPaths({
     userData,
     appData,
     documents:
-      platform === 'win32' && env.USERPROFILE
+      env.CIBYP_DOCUMENTS ||
+      (platform === 'win32' && env.USERPROFILE
         ? path.join(env.USERPROFILE, 'Documents')
-        : path.join(home, 'Documents'),
+        : path.join(home, 'Documents')),
     downloads: path.join(home, 'Downloads'),
     desktop: path.join(home, 'Desktop'),
     temp: os.tmpdir(),
@@ -151,7 +152,7 @@ function createElectronShim() {
         return '0.0.0';
       }
     })(),
-    isPackaged: false,
+    isPackaged: !!process.env.CIBYP_PACKAGED_RESOURCES,
     isReady: () => true,
     whenReady: () => Promise.resolve(),
     getPath: (name) => paths[name] || permissive('app.getPath(' + name + ')'),

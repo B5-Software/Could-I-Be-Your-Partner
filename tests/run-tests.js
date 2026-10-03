@@ -4127,7 +4127,7 @@ function runVmSandboxTests() {
     const b = pkg.build || {};
     assert.ok(b.mac && b.mac.hardenedRuntime === true, 'mac.hardenedRuntime 应开启');
     assert.ok(b.mac.entitlements && b.mac.entitlementsInherit, '应配置 entitlements');
-    assert.ok((b.asarUnpack || []).includes('node_modules/sherpa-onnx-*/**/*'), 'sherpa 平台包应通配 unpack');
+    assert.ok((b.asarUnpack || []).includes('**/*') || (b.asarUnpack || []).includes('node_modules/sherpa-onnx-*/**/*'), 'sherpa 平台包应通配 unpack');
     assert.ok((b.files || []).some((f) => f.includes('assets/voice-models')), '打包应排除语音模型（运行期按需下载）');
     assert.ok((b.files || []).some((f) => f.includes('assets/aria2')), '打包应排除构建期 aria2 多平台二进制');
     const packScript = fs.readFileSync(_path.join(__dirname, '..', 'scripts', 'package.js'), 'utf8');
@@ -4890,7 +4890,7 @@ test('资源下载脚本同步内置字体（OFL 自由字体）', () => {
   assert.ok(script.includes('SIL OFL 1.1'), '应标注 OFL 许可');
   assert.ok(script.includes('writeFontLicenses'), '应生成许可说明');
   const pkg = JSON.parse(fs.readFileSync(require('path').join(__dirname, '../package.json'), 'utf8'));
-  assert.ok(pkg.build.asarUnpack.includes('assets/ui-fonts/**/*'), '字体应加入 asarUnpack');
+  assert.ok(pkg.build.asarUnpack.includes('**/*') || pkg.build.asarUnpack.includes('assets/ui-fonts/**/*'), '字体应加入 asarUnpack');
 });
 
 test('字体设置 i18n（zh/en/de）与 app.js 集成', () => {

@@ -15,6 +15,10 @@
 const buildInfo = require('./build-info');
 
 exports.beforePack = async (context) => {
+  await require('./prepare-cli').prepareCLI(
+    context.electronPlatformName,
+    require('builder-util').Arch[context.arch],
+  );
   await require('./prepare-codeoss').prepareCodeOSS(
     context.electronPlatformName,
     require('builder-util').Arch[context.arch],

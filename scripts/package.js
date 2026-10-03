@@ -57,6 +57,7 @@ function dropUnbuildableOptionalDeps() {
 }
 
 function main() {
+  require('./prepare-cli').prepareLinuxInstallers();
   const pkg = JSON.parse(fs.readFileSync(path.join(projectRoot, 'package.json'), 'utf-8'));
   const gitHash = getGitHash();
   const ebArgs = process.argv.slice(2);
