@@ -11,6 +11,9 @@ permissions:
 
 jobs:
   check:
+    # CPU binaries are bundled; GPU-less check runners need no optional CUDA download.
+    env:
+      ONNXRUNTIME_NODE_INSTALL: skip
     strategy:
       fail-fast: false
       matrix:

@@ -17,6 +17,8 @@ jobs:
   test:
     name: 工程检查与回归测试
     runs-on: ubuntu-latest
+    env:
+      ONNXRUNTIME_NODE_INSTALL: skip
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

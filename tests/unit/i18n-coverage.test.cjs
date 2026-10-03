@@ -33,7 +33,10 @@ test('every renderer page has translations for static Chinese labels and explici
             if (!dictionaries[language][key]) missing.push([language, file, key]);
       for (const child of node.children || []) walk(child);
     }
-    walk(parseDocument(fs.readFileSync('src/renderer/pages/' + file, 'utf8')));
+    // Browsers normalize HTML line endings to LF, independent of checkout OS.
+    walk(
+      parseDocument(fs.readFileSync('src/renderer/pages/' + file, 'utf8').replace(/\r\n?/g, '\n')),
+    );
   }
   assert.deepEqual(missing, []);
 });
