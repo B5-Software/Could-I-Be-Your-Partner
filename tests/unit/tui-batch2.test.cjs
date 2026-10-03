@@ -221,6 +221,49 @@ test('/vmdesk：有 API 时调用 graphics 并展示结果', async () => {
   app.dispose();
 });
 
+// ---------------- 启动屏（单渲染路径，防闪烁/防残留） ----------------
+
+test('启动屏：boot 未就绪时整帧只画进度，不画输入框', () => {
+  const state = {
+    theme,
+    width: 80,
+    height: 24,
+    mode: 'chat',
+    messages: [{ kind: 'assistant', text: '不该出现' }],
+    running: false,
+    blink: true,
+    spinnerFrame: 3,
+    scrollOffset: 0,
+    boot: { progress: 42, detail: '检查运行时资源' },
+    editorText: '也不该出现',
+    editorCursor: 5,
+  };
+  const frame = views.composeFrame(state, { hints: [], inputHint: '' });
+  const text = stripAnsi(frame.lines.join('\n'));
+  assert.ok(text.includes('正在启动虚拟机'), '应显示启动标题');
+  assert.ok(text.includes('42%'), '应显示百分比');
+  assert.ok(text.includes('检查运行时资源'), '应显示阶段文本');
+  assert.ok(!text.includes('不该出现'), '进度屏不应渲染消息区');
+  assert.ok(!text.includes('也不该出现'), '进度屏不应渲染输入框');
+  for (const line of frame.lines) {
+    assert.ok(visibleWidth(line) <= 80, `启动屏超宽: ${line}`);
+  }
+});
+
+test('启动屏：boot 清掉后恢复主界面（单路径无交替）', async () => {
+  const runtime = makeFakeRuntime();
+  const app = new TuiApp({ runtime, theme, width: 100, height: 30, onQuit: () => {} });
+  app.setBootStatus({ progress: 10, detail: 'x' });
+  let text = stripAnsi(app.frame().lines.join('\n'));
+  assert.ok(text.includes('正在启动虚拟机'));
+  app.setBootStatus(null);
+  await app.start({ mode: 'chat' });
+  text = stripAnsi(app.frame().lines.join('\n'));
+  assert.ok(!text.includes('正在启动虚拟机'), '清除后不应再画进度屏');
+  assert.ok(text.includes('终端模式'), '应回到主界面');
+  app.dispose();
+});
+
 // ---------------- 日志隔离 ----------------
 
 test('日志隔离：console.* 与 stdout/stderr 写入进文件，不撕裂界面', async () => {

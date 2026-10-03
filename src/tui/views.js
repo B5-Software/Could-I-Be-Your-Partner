@@ -498,6 +498,11 @@ function composeFrame(state, opts) {
   const height = Math.max(8, state.height || 24);
   const options = opts || {};
 
+  // 启动屏：VM 未就绪时整帧只画进度（不画输入框），避免两帧交替闪烁
+  if (state.boot && !state.boot.ready && !state.boot.failed) {
+    return composeBootFrame(theme, state, width, height);
+  }
+
   const statusLine = renderStatusLine(theme, state, width);
   const footerLine = renderFooter(theme, options.hints || [], width);
   const inputView = renderInput(theme, state, width, { hint: options.inputHint });
@@ -568,6 +573,42 @@ function composeFrame(state, opts) {
   };
 }
 
+/**
+ * 启动屏：VM 启动进度（百分比 + 阶段文本），垂直居中。
+ * 与 splash.html 同源（inst.progress/detail）。
+ */
+function composeBootFrame(theme, state, width, height) {
+  const boot = state.boot || {};
+  const frames = FIGURES.spinner;
+  const frame = frames[(state.spinnerFrame || 0) % frames.length];
+  const percent = Math.max(0, Math.min(100, Number(boot.progress) || 0));
+  const barWidth = Math.max(20, Math.min(width - 8, 60));
+
+  const body = [
+    '',
+    '  ' +
+      style(frame, { fg: theme.accent, bold: true }) +
+      '  ' +
+      style(t('ui.tui.vmBooting', '正在启动虚拟机…'), { bold: true }),
+    '',
+    '  ' +
+      renderProgress(theme, percent / 100, barWidth) +
+      '  ' +
+      paint(theme, 'suggestion', String(percent).padStart(3) + '%', { bold: true }),
+    '',
+    '  ' + paint(theme, 'subtle', truncate(String(boot.detail || ''), width - 6), { dim: true }),
+    '  ' +
+      paint(theme, 'subtle', t('ui.tui.vmBootHint', 'VM 就绪后自动进入界面'), {
+        dim: true,
+        italic: true,
+      }),
+  ];
+  const top = Math.max(0, Math.floor((height - body.length) / 2));
+  const lines = [...Array(top).fill(''), ...body];
+  while (lines.length < height - 1) lines.push('');
+  return { lines, cursor: { row: 1, col: 1 } };
+}
+
 /** 运行中的 spinner 行：闪烁字形 + 文案 + (esc to interrupt · 0:12) */
 function renderSpinnerLine(theme, state, width) {
   const frames = FIGURES.spinner;
@@ -608,6 +649,7 @@ module.exports = {
   renderCompletion,
   renderReasoning,
   renderUsageSummary,
+  composeBootFrame,
   fmtTokenCount,
   fmtCost,
   renderSpinnerLine,

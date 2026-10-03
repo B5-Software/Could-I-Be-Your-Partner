@@ -64,6 +64,7 @@ class TuiApp {
       usage: null,
       costUSD: 0,
       context: null,
+      boot: null, // VM 启动中：{ progress, detail }；就绪/失败后置 null
       thinkingExpanded: false, // /thinking 全局切换推理折叠/展开
       todos: [],
       editorText: '',
@@ -156,6 +157,12 @@ class TuiApp {
   /** 等待事件队列排空（测试用） */
   settled() {
     return this._eventQueue;
+  }
+
+  /** 设置 VM 启动进度（null = 清除，进主界面） */
+  setBootStatus(boot) {
+    this.state.boot = boot && typeof boot === 'object' ? boot : null;
+    if (this.state.boot) this.state.scrollOffset = 0;
   }
 
   resize(width, height) {

@@ -23,8 +23,7 @@ const path = require('node:path');
 const { TuiApp } = require('./app.js');
 const { createKeyDecoder } = require('./keys.js');
 const { themeFromEnv } = require('./theme.js');
-const { CSI, CH, style, paint, visibleWidth, padWidth, truncate } = require('./ansi.js');
-const { FIGURES, BOX } = require('./theme.js');
+const { CSI, CH } = require('./ansi.js');
 
 const ALT_ENTER = CSI + '?1049h' + CSI + '2J' + CSI + 'H';
 const ALT_EXIT = CSI + '?1049l';
@@ -152,64 +151,8 @@ function createTerminalScreen(stdout) {
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** 1/8 块进度条（与设计系统一致） */
-function renderBar(theme, ratio, width) {
-  const clamped = Math.max(0, Math.min(1, ratio));
-  const full = Math.floor(clamped * width);
-  const partial = Math.round((clamped * width - full) * 8);
-  let out = style(FIGURES.progress[8].repeat(full), { fg: theme.rateFill });
-  if (full < width && partial > 0) out += style(FIGURES.progress[partial], { fg: theme.rateFill });
-  const used = full + (partial > 0 ? 1 : 0);
-  out += style(FIGURES.progress[8].repeat(Math.max(0, width - used)), { fg: theme.rateEmpty });
-  return out;
-}
-
-/**
- * VM 启动屏：虚拟机模式下，VM 就绪后才进主界面；期间渲染加载进度条。
- * @param {() => ({required: boolean, ready: boolean, failed: boolean, progress: number, detail: string})} getBootState
- */
-async function waitForVmBoot(screen, theme, getBootState, options = {}) {
-  if (typeof getBootState !== 'function') return { skipped: true };
-  let state = getBootState();
-  if (!state || !state.required || state.ready || state.failed) return state || { ready: true };
-
-  const frames = FIGURES.spinner;
-  let tick = 0;
-  const startedAt = Date.now();
-  for (;;) {
-    state = getBootState();
-    const width = Math.max(20, Math.min(screen.width - 8, 60));
-    const percent = Math.max(0, Math.min(100, Number(state.progress) || 0));
-    const lines = [
-      '',
-      '  ' +
-        style(frames[tick % frames.length], { fg: theme.accent, bold: true }) +
-        '  ' +
-        style('正在启动虚拟机…', { bold: true }),
-      '',
-      '  ' +
-        renderBar(theme, percent / 100, width) +
-        '  ' +
-        paint(theme, 'suggestion', String(percent).padStart(3) + '%', { bold: true }),
-      '',
-      '  ' +
-        paint(
-          theme,
-          'subtle',
-          truncate(String(state.detail || state.phase || '准备运行环境…'), screen.width - 6),
-          { dim: true },
-        ),
-      '  ' + paint(theme, 'subtle', 'VM 就绪后自动进入界面', { dim: true, italic: true }),
-    ];
-    screen.render({ lines, cursor: { row: 1, col: 1 } });
-    tick += 1;
-    if (state.ready || state.failed) return state;
-    if (Date.now() - startedAt > (options.timeoutMs || 10 * 60 * 1000)) {
-      return Object.assign({}, state, { timeout: true });
-    }
-    await sleep(200);
-  }
-}
+/** VM 启动等待上限（10 分钟），超时则带着 timeout 标记进主界面 */
+const BOOT_TIMEOUT_MS = 10 * 60 * 1000;
 
 /**
  * 启动 TUI。
@@ -325,11 +268,38 @@ function startTui(options) {
     process.exit(typeof code === 'number' ? code : 0);
   }
 
-  // 启动流程：VM 启动（如需）→ 建会话 → 渲染
+  // 启动流程（单渲染路径，防闪烁/防残留）：
+  //   1. 先 screen.enter() 进 alt-screen（一次）
+  //   2. VM 需要启动 → state.boot 置进度，动画时钟统一渲染进度屏
+  //   3. VM 就绪 → state.boot 清掉，建会话，进主界面
+  // 进度与主界面走同一块画布：不存在"两帧交替"，退出时 exit() 恢复干净主屏。
+  const bootStartedAt = Date.now();
   const boot = (async () => {
-    const bootState = await waitForVmBoot(screen, theme, options.getBootState);
+    const getBootState = options.getBootState;
+    let bootState = typeof getBootState === 'function' ? getBootState() : null;
+    if (bootState && bootState.required && !bootState.ready && !bootState.failed) {
+      for (;;) {
+        bootState = getBootState();
+        app.setBootStatus({
+          progress: Number(bootState.progress) || 0,
+          detail: bootState.detail || bootState.phase || '',
+        });
+        render();
+        if (!bootState || !bootState.required || bootState.ready || bootState.failed) break;
+        if (Date.now() - bootStartedAt > BOOT_TIMEOUT_MS) {
+          bootState = Object.assign({}, bootState, { timeout: true });
+          break;
+        }
+        await sleep(200);
+      }
+      app.setBootStatus(null);
+    }
     if (bootState && bootState.failed) {
-      console.error('[tui] VM 启动失败:', bootState.detail || bootState.reason || '');
+      try {
+        console.error('[tui] VM 启动失败:', bootState.detail || bootState.reason || '');
+      } catch {
+        /* ignore */
+      }
     }
     const modeArg = argv.find((a) => a.startsWith('--mode='));
     const workspaceArg = argv.find((a) => a.startsWith('--workspace='));
@@ -415,8 +385,7 @@ module.exports = {
   startTui,
   createTerminalScreen,
   installLogIsolation,
-  renderBar,
-  waitForVmBoot,
+  BOOT_TIMEOUT_MS,
   ALT_ENTER,
   ALT_EXIT,
   CH,
