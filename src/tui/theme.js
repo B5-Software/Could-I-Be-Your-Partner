@@ -161,6 +161,7 @@ const FIGURES = Object.freeze({
   arrowUp: '↑',
   arrowDown: '↓',
   heavy: '━',
+  thinking: '∴',
 });
 
 /** 边框字符（圆角） */

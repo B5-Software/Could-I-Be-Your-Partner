@@ -56,6 +56,13 @@ const COMMANDS = [
   { name: 'usage', args: '', desc: '查看本轮 Token 用量', group: 'info' },
   { name: 'model', args: '', desc: '查看当前模型与模型池', group: 'info' },
   { name: 'status', args: '', desc: '查看运行状态', group: 'info' },
+  { name: 'thinking', args: '', desc: '切换推理内容折叠/展开', group: 'info' },
+  {
+    name: 'vmdesk',
+    args: '',
+    desc: '打开 VM 桌面（虚拟机图形环境）',
+    group: 'session',
+  },
   { name: 'clear', args: '', desc: '清屏（不影响历史）', group: 'general' },
   { name: 'stop', args: '', desc: '停止当前任务', group: 'message' },
   { name: 'continue', args: '[补充说明]', desc: '继续 / 热消息注入', group: 'message' },

@@ -64,6 +64,7 @@ class TuiApp {
       usage: null,
       costUSD: 0,
       context: null,
+      thinkingExpanded: false, // /thinking 全局切换推理折叠/展开
       todos: [],
       editorText: '',
       editorCursor: 0,
@@ -320,6 +321,16 @@ class TuiApp {
 
   async _handleGlobalKey(key) {
     if (!key) return false;
+    if (key.name === 'wheel') {
+      // 鼠标滚轮：滚动聊天记录（历史调阅只走 ↑↓/Ctrl+P/N，不再被滚轮触发）
+      const step = key.ctrl ? Math.floor(this.state.height / 2) : 3;
+      if (key.direction === 'up') {
+        this.state.scrollOffset += step;
+      } else {
+        this.state.scrollOffset = Math.max(0, this.state.scrollOffset - step);
+      }
+      return true;
+    }
     if (key.name === 'escape') {
       if (this.state.running) {
         this._stop();
@@ -401,6 +412,15 @@ class TuiApp {
     const options = modal.options || [];
     const isChar = key.name === 'char';
     const plainChar = isChar && !key.ctrl && !key.alt;
+    if (key.name === 'wheel') {
+      // 模态打开时滚轮翻选项（输入框区域滚轮仍滚动聊天记录：见 _handleGlobalKey）
+      if (key.direction === 'up') {
+        modal.selected = (modal.selected + options.length - 1) % Math.max(1, options.length);
+      } else {
+        modal.selected = (modal.selected + 1) % Math.max(1, options.length);
+      }
+      return true;
+    }
     if (key.name === 'escape') {
       this._cancelModal();
       return true;
@@ -558,23 +578,42 @@ class TuiApp {
         break;
       }
       case 'stream-start':
-        this._streamEntry = { kind: 'assistant', text: '', streaming: true };
+        this._streamEntry = { kind: 'assistant', text: '', reasoning: '', streaming: true };
         this.pushEntry(this._streamEntry);
         break;
       case 'stream-chunk': {
-        const content = (event.data && (event.data.content || event.data.reasoning)) || '';
-        if (this._streamEntry && content) {
-          this._streamEntry.text += content;
+        // 推理与正文分通道：reasoning 进推理块，content 进正文
+        const content = (event.data && event.data.content) || '';
+        const reasoning = (event.data && event.data.reasoning) || '';
+        if (this._streamEntry && (content || reasoning)) {
+          if (content) this._streamEntry.text += content;
+          if (reasoning) {
+            this._streamEntry.reasoning = (this._streamEntry.reasoning || '') + reasoning;
+          }
           this.state.scrollOffset = 0;
         }
         break;
       }
       case 'stream-end': {
         const content = event.data && event.data.content;
+        const reasoning = event.data && event.data.reasoning;
         if (this._streamEntry) {
           if (content && !this._streamEntry.text) this._streamEntry.text = content;
+          if (reasoning && !this._streamEntry.reasoning) this._streamEntry.reasoning = reasoning;
           this._streamEntry.streaming = false;
           this._streamEntry = null;
+        }
+        break;
+      }
+      case 'assistant-reasoning': {
+        // 非流式推理事件：挂到最近一条助手消息上；没有则建一条纯推理条目
+        const reasoningText = event.data && (event.data.text || event.data.reasoning);
+        if (!reasoningText) break;
+        const entry = this._lastAssistantEntry();
+        if (entry) {
+          entry.reasoning = reasoningText;
+        } else {
+          this.pushEntry({ kind: 'assistant', text: '', reasoning: reasoningText });
         }
         break;
       }
@@ -633,6 +672,19 @@ class TuiApp {
           this._startedAt = 0;
           this.state.elapsedMs = 0;
           this.state.spinnerLabel = t('ui.tui.spinnerThinking', '思考中');
+          // 兜底刷新统计（usage 事件是每轮结束推，这里确保状态栏最新）
+          try {
+            if (typeof this.runtime.getStats === 'function') {
+              const stats = this.runtime.getStats(this.activeKey);
+              if (stats) {
+                this.state.usage = stats.usage || this.state.usage;
+                this.state.context = stats.context || this.state.context;
+                this.state.costUSD = typeof stats.costUSD === 'number' ? stats.costUSD : 0;
+              }
+            }
+          } catch {
+            /* 统计读取失败不影响状态切换 */
+          }
         }
         break;
       case 'title':
@@ -676,11 +728,20 @@ class TuiApp {
       case 'todo':
         this.state.todos = (event.data && event.data.items) || event.items || [];
         break;
-      case 'usage':
-        this.state.usage = event.data || event.usage || null;
-        if (this.state.usage && typeof this.state.usage.costUSD === 'number')
-          this.state.costUSD = this.state.usage.costUSD;
+      case 'usage': {
+        // 运行时每轮结束推送：{ usage, context:{used,max,reserve,pct,inputPct,exact}, costUSD }
+        const usage = event.usage || (event.data && event.data.usage) || event.data || null;
+        if (usage) this.state.usage = usage;
+        const context =
+          event.context ||
+          (event.data && event.data.context) ||
+          (event.data && event.data.max ? event.data : null);
+        if (context) this.state.context = context;
+        const cost = event.costUSD != null ? event.costUSD : event.data && event.data.costUSD;
+        if (typeof cost === 'number') this.state.costUSD = cost;
+        else if (cost === null) this.state.costUSD = 0;
         break;
+      }
       case 'context-progress':
         this.state.context = event.data || null;
         break;
@@ -807,6 +868,38 @@ class TuiApp {
     this.state.running = false;
     this._startedAt = 0;
     this.state.toast = { text: t('ui.tui.stopRequested', '已请求停止当前任务') };
+  }
+
+  /** 打开 VM 桌面：VM 未启动先提示，图形栈启动中给进度 */
+  async _openVmDesktop() {
+    if (!this.runtime || typeof this.runtime.openVmDesktop !== 'function') {
+      this.pushEntry({
+        kind: 'system',
+        text: t('ui.tui.vmdeskFailed', '打开 VM 桌面失败：{error}', {
+          error: t('ui.tui.vmdeskNeedVm', '请先启动虚拟机（设置 → 虚拟机沙盒）'),
+        }),
+      });
+      return;
+    }
+    this.pushEntry({ kind: 'notice', text: t('ui.tui.vmdeskStarting', '正在启动 VM 图形栈…') });
+    try {
+      const result = await this.runtime.openVmDesktop();
+      if (result && result.url) {
+        this.pushEntry({
+          kind: 'assistant',
+          text: t('ui.tui.vmdeskUrl', 'VM 桌面：{url}', { url: result.url }),
+        });
+      } else {
+        this.pushEntry({ kind: 'notice', text: t('ui.tui.vmdeskOpened', 'VM 桌面已打开') });
+      }
+    } catch (error) {
+      this.pushEntry({
+        kind: 'system',
+        text: t('ui.tui.vmdeskFailed', '打开 VM 桌面失败：{error}', {
+          error: (error && error.message) || String(error),
+        }),
+      });
+    }
   }
 
   async _runCommand(name, argText) {
@@ -1089,6 +1182,20 @@ class TuiApp {
         this.onQuit();
         return;
       }
+      case 'thinking': {
+        this.state.thinkingExpanded = !this.state.thinkingExpanded;
+        this.pushEntry({
+          kind: 'notice',
+          text: this.state.thinkingExpanded
+            ? t('ui.tui.thinkingExpanded', '推理内容：展开')
+            : t('ui.tui.thinkingCollapsed', '推理内容：折叠'),
+        });
+        return;
+      }
+      case 'vmdesk': {
+        await this._openVmDesktop();
+        return;
+      }
       default: {
         this.pushEntry({
           kind: 'system',
@@ -1231,6 +1338,14 @@ class TuiApp {
   pushEntry(entry) {
     this.state.messages.push(entry);
     this.state.scrollOffset = 0;
+  }
+
+  _lastAssistantEntry() {
+    for (let i = this.state.messages.length - 1; i >= 0; i -= 1) {
+      const entry = this.state.messages[i];
+      if (entry.kind === 'assistant') return entry;
+    }
+    return null;
   }
 
   _lastToolEntry(name) {

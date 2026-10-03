@@ -29,6 +29,7 @@
     { cmd: '/config', icon: 'fa-gear', desc: '打开设置（/config llm 直达对应标签页）' },
     { cmd: '/doctor', icon: 'fa-stethoscope', desc: '检测开发环境（Python / Node / Bun / Git）' },
     { cmd: '/export', icon: 'fa-file-export', desc: '导出当前会话（/export md 或 /export json）' },
+    { cmd: '/vmdesk', icon: 'fa-desktop', desc: '打开 VM 桌面（虚拟机图形环境）' },
     { cmd: '/help', icon: 'fa-circle-question', desc: '查看可用命令' }
   ];
 
@@ -316,6 +317,16 @@
       showPanel();
       return;
     }
+    if (cmd === '/vmdesk') {
+      renderItems([{
+        label: '打开 VM 桌面',
+        icon: 'fa-desktop',
+        desc: 'noVNC 连接虚拟机图形环境（未启动会自动拉起）',
+        action: 'vmdesk'
+      }]);
+      showPanel();
+      return;
+    }
     if (cmd === '/export') {
       const q = query.toLowerCase();
       const formats = [
@@ -489,7 +500,26 @@
       case 'config': openSettingsTab(item.tab); break;
       case 'doctor': openSettingsTab('environment'); break;
       case 'export': await exportConversation(ag, item.format || 'md'); break;
+      case 'vmdesk': await openVmDesktopCommand(); break;
       default: break;
+    }
+  }
+
+  /** 打开 VM 桌面：逻辑复刻设置页按钮（45-vm-settings.js）——未就绪提示，不静默失败 */
+  async function openVmDesktopCommand() {
+    try {
+      const st = await window.api.vm.status().catch(() => null);
+      if (!st || !st.inst || st.inst.state !== 'ready') {
+        // 未启动：先尝试拉起（graphicsStart 内部会自动 vmService.start()）
+        const started = await window.api.vm.graphicsStart({}).catch((e) => ({ ok: false, error: e.message }));
+        if (!started || started.ok === false) {
+          window.showToast?.('请先启动虚拟机，再打开 VM 桌面', 'warning', 3500);
+          return;
+        }
+      }
+      await window.api.vm.openDesktop();
+    } catch (e) {
+      window.showToast?.('打开 VM 桌面失败：' + (e.message || String(e)), 'error', 4000);
     }
   }
 

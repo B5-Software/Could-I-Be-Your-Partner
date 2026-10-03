@@ -104,7 +104,7 @@ TUI 与桌面端读**同一个数据目录**（`app.getPath('userData')` 同名�
 `/mode ` 给出 chat/babe/code，`/open `、`/delete ` 给出历史会话。
 
 `/help` `/mode <chat|babe|code>` `/new [mode]` `/sessions` `/history` `/open <id>`
-`/rename <标题>` `/delete <id>` `/commands` `/attach <文件>` `/workspace [路径]`
+`/rename <标题>` `/delete <id>` `/commands` `/thinking` `/vmdesk` `/attach <文件>` `/workspace [路径]`
 `/todo` `/usage` `/model` `/status` `/clear` `/stop` `/continue [说明]`
 `/compact` `/quit`
 
@@ -121,6 +121,40 @@ agent: code            # 可选：限定模式（chat|babe|code）
 
 执行 `/commit 先跑测试` 时正文作为提示词发送，`$ARGUMENTS` / `{{args}}` 替换为参数；
 `agent` 与当前模式不同时自动切模式。`/commands` 查看与重载。
+
+## 推理内容（thinking）
+
+思考模型的推理过程在正文上方单独成块：默认折叠为一行摘要
+（`∴ 思考中 (320 字) + 首行预览`），`/thinking` 全局切换折叠/展开。
+流式过程中推理与正文分通道累积，互不干扰。
+
+## 状态栏用量与成本
+
+右置 `{占用} ({占比}%) · ${成本}`，例如 `676.1K (64%) · $1.89`：
+
+- 占用与 GUI 圆环同口径（含输出预留），`676.1K` 复刻 `fmtTokenCount`
+- 成本按 `settings.budget.models` 定价 + 峰谷倍率计算；**仅在配置了价格时显示 `$`**
+- 每轮结束自动推送；状态切换时兜底刷新一次
+
+## 日志隔离
+
+TUI 占用整个终端后，LLM/网络/VM 的进程日志不再打到屏幕上：
+`console.*` 与 `stdout/stderr` 写入一律改道 `<userData>/logs/tui-YYYYMMDD.log`
+（界面自身的渲染写入放行），退出时恢复。查日志不用来回切窗口了。
+
+## 输入
+
+- 鼠标滚轮滚动聊天记录（输入框/模态的滚轮翻各自选项，不再切输入历史；
+  输入历史调阅只走 `↑↓`/`Ctrl+P/N`）
+- 启用鼠标跟踪（点击/滚轮）；需要选中文本复制时**按住 Shift 再拖动**
+
+## VM 模式
+
+虚拟机模式下（设置 → 运行位置 → 虚拟机），TUI 在 VM 启动完成后才进界面，
+期间渲染加载进度条（百分比 + 阶段文本，来源与 splash 一致）。
+
+`/vmdesk` 打开 VM 桌面（GUI 命令面板与 TUI 通用）：VM 未启动时自动拉起图形栈，
+返回后打印桌面连接信息；仍未就绪则给明确提示而不是静默失败。
 
 ## 模式切换
 

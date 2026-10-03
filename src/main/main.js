@@ -4305,6 +4305,17 @@ app.whenReady().then(async () => {
         tuiHandle = startTui({
           runtime: agentRuntime,
           argv: process.argv,
+          // VM 模式：VM 启动完成后才进界面，期间由 TUI 渲染加载进度条
+          getBootState: () => {
+            const inst = vmService.status().inst || {};
+            return {
+              required: Boolean(vmRuntimeGate.required),
+              ready: Boolean(vmRuntimeGate.ready),
+              failed: Boolean(vmRuntimeGate.failed),
+              progress: Number(inst.progress) || 0,
+              detail: inst.detail || inst.state || '',
+            };
+          },
           onExit: (code) => {
             try {
               app.exit(code || 0);

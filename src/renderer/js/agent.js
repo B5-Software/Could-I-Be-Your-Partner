@@ -2642,6 +2642,10 @@ ${affectionDesc}
       // Emit assistant text — only in non-streaming mode (streaming path
       // already rendered tokens via stream-chunk/stream-end).
       if (!usedStreaming && assistantMsg.content) {
+        // 推理内容（reasoning_content/thinking）单独成事件：前端可折叠展示
+        if (assistantMsg.reasoning && this.onMessage) {
+          this.onMessage('assistant-reasoning', assistantMsg.reasoning);
+        }
         if (this.onMessage) this.onMessage('assistant', assistantMsg.content);
       }
 

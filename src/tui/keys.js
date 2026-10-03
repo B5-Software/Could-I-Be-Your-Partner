@@ -21,6 +21,28 @@ const DEL = String.fromCharCode(127);
 const PASTE_START = CH + '[200~';
 const PASTE_END = CH + '[201~';
 
+/** SGR 鼠标：ESC [ < btn ; col ; row (M=按下/滚轮 M=抬起) */
+const MOUSE_RE = /^<(\d+);(\d+);(\d+)([Mm])/;
+
+/** 鼠标按钮码 → 语义（滚轮 64/65、左 0、右 2、中 1、拖动位移 32） */
+function decodeMouseEvent(button, col, row, press) {
+  const mods = {
+    shift: Boolean(button & 4),
+    alt: Boolean(button & 8),
+    ctrl: Boolean(button & 16),
+    meta: false,
+  };
+  const code = button & ~(4 | 8 | 16 | 32);
+  const x = Number(col);
+  const y = Number(row);
+  if (code === 64)
+    return Object.assign({ name: 'wheel', direction: 'up', x, y, press: true }, mods);
+  if (code === 65)
+    return Object.assign({ name: 'wheel', direction: 'down', x, y, press: true }, mods);
+  const key = code === 2 ? 'right' : code === 1 ? 'middle' : 'left';
+  return Object.assign({ name: 'mouse', button: key, x, y, press: press === 'M' }, mods);
+}
+
 /** CSI 修饰参数 → 修饰键（xterm 编码：参数 = 1 + 位掩码 shift|alt|ctrl|meta） */
 function parseModifier(param) {
   const bits = (Number(param) || 1) - 1;
@@ -144,6 +166,16 @@ function createKeyDecoder() {
         }
 
         if (rest[1] === '[') {
+          // SGR 鼠标事件：ESC [ < btn ; col ; row M/m
+          if (rest[2] === '<') {
+            const mouse = MOUSE_RE.exec(rest.slice(2));
+            if (!mouse) break; // 序列未完整
+            i += 2 + mouse[0].length;
+            const event = decodeMouseEvent(Number(mouse[1]), mouse[2], mouse[3], mouse[4]);
+            if (event) events.push(event);
+            continue;
+          }
+
           let j = 2;
           while (j < rest.length) {
             const code = rest.charCodeAt(j);

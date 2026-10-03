@@ -91,6 +91,103 @@ function createAgentRuntime({
     };
   }
 
+  /** 会话成本：按 settings.budget.models 定价（未配置返回 null → 前端不显示 $） */
+  function computeSessionCost(agent, settings) {
+    const models = (settings && settings.budget && settings.budget.models) || {};
+    const pricingTable = (() => {
+      try {
+        return require('../shared/generated/pricing.cjs');
+      } catch {
+        return null;
+      }
+    })();
+    if (!pricingTable || typeof pricingTable.calculateTokenCost !== 'function') return null;
+    const priceFor = (model) => {
+      const p = models[model];
+      if (!p) return null;
+      const hasNew =
+        p.inputPerM != null ||
+        p.outputPerM != null ||
+        p.cacheReadPerM != null ||
+        p.cacheWritePerM != null;
+      const hasOld = p.promptPerK != null || p.completionPerK != null;
+      if (!hasNew && !hasOld) return null;
+      return Object.assign({}, p, {
+        hasCacheWrite: p.hasCacheWrite != null ? !!p.hasCacheWrite : /claude/i.test(String(model)),
+      });
+    };
+    const peak = (settings && settings.budget && settings.budget.peakHours) || {};
+    const timezone = settings && settings.budget && settings.budget.timezone;
+    let total = 0;
+    let priced = false;
+    const byModel = agent.sessionUsageByModel || {};
+    const buckets = Object.keys(byModel).length > 0 ? byModel : null;
+    if (buckets) {
+      for (const [model, usage] of Object.entries(buckets)) {
+        const pricing = priceFor(model);
+        if (!pricing) continue;
+        priced = true;
+        total += pricingTable.calculateTokenCost(
+          usage || {},
+          pricing,
+          peak,
+          Date.now(),
+          timezone,
+        ).totalCost;
+      }
+    } else {
+      const pricing = priceFor(settings && settings.llm && settings.llm.model);
+      if (pricing) {
+        priced = true;
+        total += pricingTable.calculateTokenCost(
+          agent.sessionUsage || {},
+          pricing,
+          peak,
+          Date.now(),
+          timezone,
+        ).totalCost;
+      }
+    }
+    return priced ? total : null;
+  }
+
+  function getStats(key) {
+    const session = sessions.get(key);
+    if (!session || !session.agent) return null;
+    const agent = session.agent;
+    const settings = agent.settings || {};
+    const limits = typeof agent.getTokenLimits === 'function' ? agent.getTokenLimits() : null;
+    // 上下文口径与 GUI 一致：getUsageBreakdown() 含输出预留的占比
+    const breakdown =
+      agent.contextManager && typeof agent.contextManager.getUsageBreakdown === 'function'
+        ? agent.contextManager.getUsageBreakdown()
+        : null;
+    const max = breakdown && breakdown.max ? breakdown.max : limits ? limits.contextTokens : 0;
+    const used =
+      breakdown && typeof breakdown.used === 'number'
+        ? breakdown.used
+        : agent.contextManager && typeof agent.contextManager.getRawTotalTokens === 'function'
+          ? agent.contextManager.getRawTotalTokens()
+          : 0;
+    const reserve = breakdown && typeof breakdown.reserve === 'number' ? breakdown.reserve : 0;
+    return {
+      usage: Object.assign({}, agent.sessionUsage || {}),
+      usageByModel: Object.assign({}, agent.sessionUsageByModel || {}),
+      context: {
+        used,
+        max,
+        reserve,
+        // 与 GUI 圆环一致：占比含输出预留
+        pct: max ? Math.min(100, ((used + reserve) / max) * 100) : 0,
+        inputPct: max ? Math.min(100, (used / max) * 100) : 0,
+        exact: breakdown ? breakdown.exact !== false : true,
+      },
+      costUSD: computeSessionCost(agent, settings),
+      affection: typeof agent.babeAffection === 'number' ? agent.babeAffection : null,
+      workingMs: agent.workingMs || 0,
+    };
+  }
+
   /** 统一的交互请求：审批 / 工具授权 / 向用户提问。 */
   function requestInteraction(session, kind, payload) {
     return new Promise((resolve) => {
@@ -445,6 +542,12 @@ function createAgentRuntime({
       } finally {
         session.busy = false;
         session.status = 'idle';
+        // 每轮结束推送用量/成本/上下文统计 → 前端状态栏
+        try {
+          this.emitUsageStats(session.key);
+        } catch {
+          /* 统计推送失败不影响主流程 */
+        }
         emit({ type: 'status', key: session.key, status: 'idle' });
       }
     },
@@ -486,7 +589,49 @@ function createAgentRuntime({
       return { ok: true };
     },
 
-    /** 设置会话标题并即时持久化 */
+    /** VM 桌面：图形栈启动（VM 未就绪会自动先启动），返回 VNC 连接信息 */
+    async openVmDesktop() {
+      if (!api.vm || typeof api.vm.graphicsStart !== 'function') {
+        return { ok: false, error: 'vm API unavailable' };
+      }
+      const started = await api.vm.graphicsStart({});
+      if (!started || started.ok === false) {
+        return {
+          ok: false,
+          error: (started && started.error) || 'graphicsStart failed',
+        };
+      }
+      let status = started;
+      try {
+        const fresh = await api.vm.graphicsStatus();
+        if (fresh && fresh.ok !== false) status = fresh;
+      } catch {
+        /* 沿用 start 的返回值 */
+      }
+      return {
+        ok: true,
+        running: Boolean(status.running),
+        vncHostPort: status.vncHostPort || null,
+        url:
+          status.vncWsUrl || (status.vncHostPort ? `ws://127.0.0.1:${status.vncHostPort}/` : null),
+        detail: status.phase || status.detail || null,
+      };
+    },
+
+    /** 推送一次用量/成本统计（用量事件 → TUI 状态栏） */
+    emitUsageStats(key) {
+      const session = sessions.get(key);
+      if (!session) return;
+      const stats = getStats(key);
+      if (!stats) return;
+      emit({
+        type: 'usage',
+        key: session.key,
+        usage: stats.usage,
+        context: stats.context,
+        costUSD: stats.costUSD,
+      });
+    },
     async setTitle(key, title) {
       const session = sessions.get(key);
       if (!session) return { ok: false, error: `unknown session: ${key}` };
@@ -510,26 +655,7 @@ function createAgentRuntime({
       return { ok: true, workspacePath: session.agent.workspacePath };
     },
 
-    /** 运行统计（用量 / 上下文 / 好感度），同步读取 */
-    getStats(key) {
-      const session = sessions.get(key);
-      if (!session || !session.agent) return null;
-      const agent = session.agent;
-      const limits = typeof agent.getTokenLimits === 'function' ? agent.getTokenLimits() : null;
-      return {
-        usage: Object.assign({}, agent.sessionUsage || {}),
-        context: {
-          used:
-            agent.contextManager && typeof agent.contextManager.getRawTotalTokens === 'function'
-              ? agent.contextManager.getRawTotalTokens()
-              : 0,
-          max: limits ? limits.contextTokens : 0,
-        },
-        affection: typeof agent.babeAffection === 'number' ? agent.babeAffection : null,
-        workingMs: agent.workingMs || 0,
-      };
-    },
-
+    getStats,
     // ------------------------------------------------------------- 历史接口
 
     listHistory: (mode, workspacePath) => historyList(mode || 'chat', workspacePath),

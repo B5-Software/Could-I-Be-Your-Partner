@@ -125,6 +125,35 @@ function layoutResult(theme, result, width, indent) {
   return out;
 }
 
+/** 推理块：折叠时一行摘要（∴ 思考中 (320 字)），展开时缩进全文 */
+function renderReasoning(theme, reasoning, width, expanded) {
+  const raw = String(reasoning || '').trim();
+  if (!raw) return [];
+  const chars = raw.length;
+  const head = '  ' + paint(theme, 'subtle', FIGURES.thinking + ' ', { dim: true });
+  if (!expanded) {
+    const preview = raw.split('\n')[0];
+    const summary = truncate(
+      preview,
+      Math.max(8, width - visibleWidth(head) - String(chars).length - 8),
+    );
+    return [
+      head +
+        style(t('ui.tui.thinking', '思考中'), { dim: true, italic: true }) +
+        ' ' +
+        paint(theme, 'subtle', t('ui.tui.thinkingChars', '({count} 字)', { count: chars }), {
+          dim: true,
+        }) +
+        (summary ? '  ' + paint(theme, 'inactive', summary, { dim: true }) : ''),
+    ];
+  }
+  const lines = wrapText(raw, Math.max(8, width - 4));
+  return [
+    head + style(t('ui.tui.thinking', '思考中'), { dim: true, bold: true }),
+    ...lines.map((line) => paint(theme, 'subtle', '    ' + line, { dim: true })),
+  ];
+}
+
 /** 消息条目 → 样式行 */
 function renderEntry(theme, entry, width, opts) {
   const state = opts || {};
@@ -139,12 +168,21 @@ function renderEntry(theme, entry, width, opts) {
       });
     }
     case 'assistant': {
-      const out = layoutText(theme, entry.text, width - 2, '  ');
+      const out = [];
+      // 推理内容（thinking/reasoning）：折叠一行摘要，展开全文（/thinking 全局切换）
+      if (entry.reasoning) {
+        out.push(...renderReasoning(theme, entry.reasoning, width, state.thinkingExpanded));
+      }
+      if (entry.text && String(entry.text).trim() !== '') {
+        out.push(...layoutText(theme, entry.text, width - 2, '  '));
+      }
       if (entry.streaming && state.running) {
-        // 流式中的光标块
-        if (out.length === 0)
+        // 流式中的光标块：落在最后一条可见行上
+        if (out.length === 0) {
           out.push('  ' + paint(theme, 'inactive', FIGURES.pending, { dim: true }));
-        else out[out.length - 1] += style(' ', { bg: theme.suggestion });
+        } else {
+          out[out.length - 1] += style(' ', { bg: theme.suggestion });
+        }
       }
       return out;
     }
@@ -228,7 +266,7 @@ function renderEntry(theme, entry, width, opts) {
         '  ' +
           paint(theme, 'accent', FIGURES.diamond, { bold: true }) +
           ' ' +
-          style(t('ui.tui.tarot', '塔罗') + ' · ' + name, { bold: true }) +
+          style(t('ui.tui.tarot', '命运之牌') + ' · ' + name, { bold: true }) +
           (meaning
             ? ' ' + paint(theme, 'subtle', truncate(meaning, width - 14), { dim: true })
             : ''),
@@ -255,30 +293,47 @@ function renderProgress(theme, ratio, width) {
   return out;
 }
 
-/** 状态栏：模型 │ Context │ 用量 │ 好感度 */
+/** Token 计数格式化（与 GUI 的 fmtTokenCount 一致：676.1K / 1.2M） */
+function fmtTokenCount(num) {
+  const value = Number(num) || 0;
+  if (value >= 1e15) return (value / 1e15).toFixed(2) + 'P';
+  if (value >= 1e12) return (value / 1e12).toFixed(2) + 'T';
+  if (value >= 1e9) return (value / 1e9).toFixed(2) + 'B';
+  if (value >= 1e6) return (value / 1e6).toFixed(2) + 'M';
+  if (value >= 1e3) return (value / 1e3).toFixed(1) + 'K';
+  return String(Math.round(value));
+}
+
+/** 成本显示：$1.89（小于 1 美分用更多小数位）；未配置价格返回 '' */
+function fmtCost(costUSD) {
+  if (typeof costUSD !== 'number' || !(costUSD > 0)) return '';
+  return '$' + (costUSD >= 0.01 ? costUSD.toFixed(2) : costUSD.toFixed(4));
+}
+
+/**
+ * 右侧用量摘要：`676.1K (64%) · $1.89`
+ *   - 676.1K = 上下文占用（含输出预留，与 GUI 圆环口径一致）
+ *   - 64%   = 占比（含预留）
+ *   - $1.89 = 会话成本；仅在配置了模型价格时显示
+ */
+function renderUsageSummary(theme, state) {
+  const context = state.context;
+  if (!context || !context.max) return '';
+  const occupied = (context.used || 0) + (context.reserve || 0);
+  const pct = typeof context.pct === 'number' ? context.pct : (occupied / context.max) * 100;
+  const prefix = context.exact === false ? '~' : '';
+  const parts = [prefix + fmtTokenCount(occupied) + ' (' + Math.round(pct) + '%)'];
+  const cost = fmtCost(state.costUSD);
+  if (cost) parts.push(cost);
+  return parts.join(' · ');
+}
+
+/** 状态栏：左＝模式/模型/好感度/工作区，右＝用量(占比)[· 成本] */
 function renderStatusLine(theme, state, width) {
   const parts = [];
   const accent = accentFor(state.mode);
   parts.push(paint(theme, accent, MODE_LABEL[state.mode] || state.mode, { bold: true }));
   if (state.model) parts.push(truncate(state.model, 28));
-  if (state.context && state.context.max) {
-    const pct = Math.round((state.context.used / state.context.max) * 100);
-    parts.push(
-      'Context ' +
-        pct +
-        '% (' +
-        Math.round(state.context.used / 1000) +
-        'k/' +
-        Math.round(state.context.max / 1000) +
-        'k)',
-    );
-  }
-  if (state.usage && state.usage.total) {
-    parts.push((state.usage.total / 1000).toFixed(1) + 'k tokens');
-  }
-  if (typeof state.costUSD === 'number' && state.costUSD > 0) {
-    parts.push('$' + state.costUSD.toFixed(2));
-  }
   if (state.mode === 'babe' && state.affection != null) {
     parts.push(paint(theme, 'planMode', FIGURES.heart + ' ' + state.affection, { bold: true }));
   }
@@ -286,8 +341,12 @@ function renderStatusLine(theme, state, width) {
     parts.push(truncate(state.workspace, 24));
   }
   const sep = paint(theme, 'subtle', ' │ ', { dim: true });
-  const line = parts.join(sep);
-  return truncate(line, width);
+  const left = parts.join(sep);
+  const right = renderUsageSummary(theme, state);
+  if (!right) return truncate(left, width);
+  const gap = width - visibleWidth(left) - visibleWidth(right) - 3;
+  if (gap < 1) return truncate(left + sep + right, width, '');
+  return left + ' '.repeat(gap) + paint(theme, 'inactive', right, { dim: true });
 }
 
 /** 底部提示（dim，' · ' 连接） */
@@ -547,6 +606,10 @@ module.exports = {
   renderInput,
   renderModal,
   renderCompletion,
+  renderReasoning,
+  renderUsageSummary,
+  fmtTokenCount,
+  fmtCost,
   renderSpinnerLine,
   composeFrame,
   formatDuration,
