@@ -1,0 +1,340 @@
+/*
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ * Copyright (c) 2026 B5-Software
+ *
+ * This file is part of Could I Be Your Partner.
+ *
+ * TUI 文案翻译。与渲染层 i18n 同一设计原则：
+ *   **中文是源文（回退值）**，其它语言通过词典覆盖；缺译文时永远回落中文。
+ *
+ * 与全局 i18n（src/renderer/js/i18n.js）双查：
+ *   1. 本地 TUI 词典（ui.tui.*，本文件维护）
+ *   2. 全局 i18n 词典（GUI 共用的 ui.* 等，经 src/agent/i18n-loader.js 加载）
+ *   3. 中文源文
+ *
+ * 语言取自 settings.language（与 GUI 完全一致）。
+ */
+
+'use strict';
+
+let language = 'zh-CN';
+let globalTranslator = null;
+
+function setLanguage(lang) {
+  language = lang || 'zh-CN';
+  return language;
+}
+
+function getLanguage() {
+  return language;
+}
+
+/** 接上全局 i18n 的 t（由 src/agent/index.js 注入） */
+function setGlobalTranslator(fn) {
+  globalTranslator = typeof fn === 'function' ? fn : null;
+}
+
+/** {name} 占位符填充 */
+function fill(template, params) {
+  if (!params) return template;
+  return String(template).replace(/\{(\w+)\}/g, (whole, key) =>
+    Object.prototype.hasOwnProperty.call(params, key) ? String(params[key]) : whole,
+  );
+}
+
+/** TUI 文案词典：键 = ui.tui.*；值 = 译文（{name} 可作占位符） */
+const DICT = {
+  en: {
+    'ui.tui.brand': 'CIBYP · your all-round AI partner · terminal mode (/help for commands)',
+    'ui.tui.mode.chat': 'Switched to Chat mode',
+    'ui.tui.mode.babe': 'Switched to Babe mode (affection {value})',
+    'ui.tui.mode.code': 'Switched to Code mode',
+    'ui.tui.mode.codeWorkspace': 'Switched to Code mode · workspace {path}',
+    'ui.tui.mode.codeNoWorkspace': ' (set one with /workspace <path>)',
+    'ui.tui.chatMode': 'Chat',
+    'ui.tui.babeMode': 'Babe',
+    'ui.tui.codeMode': 'Code',
+    'ui.tui.running': 'running',
+    'ui.tui.titleSeparator': ' · ',
+    'ui.tui.enterSend': 'enter send',
+    'ui.tui.escStop': 'esc stop',
+    'ui.tui.hints': 'tab complete · ctrl+t todos · ctrl+r history · /help commands',
+    'ui.tui.attachments': '{count} attachment(s)',
+    'ui.tui.toolRunning': 'running',
+    'ui.tui.toolDenied': 'denied by user',
+    'ui.tui.toolMoreLines': '… {count} more line(s)',
+    'ui.tui.scrolledHint': '↑ {count} line(s) hidden (PgUp to view)',
+    'ui.tui.modalNav': 'up/down select · Enter confirm · Esc cancel',
+    'ui.tui.completionNav': 'tab accept · up/down select · Enter run',
+    'ui.tui.spinnerThinking': 'thinking',
+    'ui.tui.spinnerOptimizing': 'optimizing tool selection',
+    'ui.tui.escToInterrupt': ' (esc to interrupt{elapsed})',
+    'ui.tui.quitArm': 'press Ctrl+C again to quit (or type /quit)',
+    'ui.tui.stopRequested': 'stop requested for the current task',
+    'ui.tui.affectionToast': 'affection {delta} → {value}',
+    'ui.tui.approvalTitle': 'Confirm tool execution',
+    'ui.tui.approvalFooter': 'y allow once · a always allow · n deny · Esc cancel',
+    'ui.tui.allowOnce': 'Allow once',
+    'ui.tui.allowAlways': 'Always allow',
+    'ui.tui.deny': 'Deny',
+    'ui.tui.toolAuthTitle': 'First-use authorization',
+    'ui.tui.toolAuthBody':
+      'This tool is used for the first time and needs your approval. Choosing "always allow" will not ask again.',
+    'ui.tui.toolAuthFooter': 'a always allow · y once · n deny · Esc cancel',
+    'ui.tui.authAlways': 'Allow and remember',
+    'ui.tui.authOnce': 'Allow once',
+    'ui.tui.authDeny': 'Deny',
+    'ui.tui.askTitle': 'Answer question ({index}/{total})',
+    'ui.tui.askFooter': 'type your answer then Enter · Esc to skip',
+    'ui.tui.sessionsTitle': 'Sessions',
+    'ui.tui.historyTitle': 'History ({mode})',
+    'ui.tui.todoTitle': 'Todo list',
+    'ui.tui.todoEmpty': '(no todos)',
+    'ui.tui.helpTitle': 'Commands',
+    'ui.tui.helpClose': 'Close',
+    'ui.tui.modeTitle': 'Switch mode',
+    'ui.tui.modeFooter': 'Enter confirm · Esc cancel · or type /mode chat',
+    'ui.tui.modeOptionChat': 'Chat · everyday chat (full toolset)',
+    'ui.tui.modeOptionBabe': 'Babe · companion mode (affection)',
+    'ui.tui.modeOptionCode': 'Code · coding mode (workspace-centric)',
+    'ui.tui.noOtherSessions': 'no other sessions',
+    'ui.tui.switchedToSession': 'switched to session {title}',
+    'ui.tui.sendFailed': 'failed to send: {error}',
+    'ui.tui.unknownCommand': 'unknown command /{name} (/help for commands, /commands for custom)',
+    'ui.tui.usageLine':
+      'usage this turn: prompt {prompt} · completion {completion} · total {total}',
+    'ui.tui.usageContext': 'context: {used} / {max}',
+    'ui.tui.usageAffection': 'affection: {value}',
+    'ui.tui.modelLine': 'current model: {model}{provider}',
+    'ui.tui.modelPool': 'model pool: {models}',
+    'ui.tui.statusLine': 'session {key} · mode {mode} · status {status}',
+    'ui.tui.statusWorkspace': 'workspace: {path}',
+    'ui.tui.historyEmpty': '(no history in {mode} mode)',
+    'ui.tui.historyOpened': 'loaded history session: {title}',
+    'ui.tui.historyDeleted': 'deleted history session {id}',
+    'ui.tui.renamed': 'renamed session to “{title}”',
+    'ui.tui.workspaceCurrent': 'current workspace: {path}',
+    'ui.tui.workspaceUnset': 'current workspace: (not set)',
+    'ui.tui.workspaceSet': 'workspace set to {path}',
+    'ui.tui.attachedFile': 'attached file: {path} (sends with the next message)',
+    'ui.tui.pendingAttachments': 'pending attachments: {paths}',
+    'ui.tui.execCustom': 'running custom command /{name}',
+    'ui.tui.customEmpty':
+      '(no custom commands)\nDrop *.md into ~/.cibyp/commands/ or <workspace>/.cibyp/commands/:',
+    'ui.tui.customList': 'custom commands:',
+    'ui.tui.noWorkspaceForCode': 'usage: /workspace <path> (Code mode uses a workspace)',
+    'ui.tui.compactHint':
+      'Please compact the context now (call manageContext / autoSummarizeContext) and keep the task continuous.',
+    'ui.tui.askDefault': 'Please answer',
+    'ui.tui.attachHint': ' (sends with the next message)',
+    'ui.tui.attachedFilePrefix': 'attached file: ',
+    'ui.tui.continueDefault': 'continue',
+    'ui.tui.customTag': 'custom',
+    'ui.tui.emptyCommand': '(empty command)',
+    'ui.tui.historyReadFailed': 'failed to read history: ',
+    'ui.tui.modeOptionBabeFull': 'Babe · companion mode (affection)',
+    'ui.tui.modeOptionChatFull': 'Chat · everyday chat (full toolset)',
+    'ui.tui.modeOptionCodeFull': 'Code · coding mode (workspace-centric)',
+    'ui.tui.openFailed': 'failed to open: ',
+    'ui.tui.pendingAttachmentsPrefix': 'pending attachments: ',
+    'ui.tui.renamedPrefix': 'session renamed to "',
+    'ui.tui.sendFailedPrefix': 'failed to send: ',
+    'ui.tui.tarot': 'Tarot',
+    'ui.tui.tarotCard': 'Card of Fate',
+    'ui.tui.unknownCommandPrefix': 'unknown command /',
+    'ui.tui.unknownError': 'unknown error',
+    'ui.tui.unknownTool': 'unknown tool',
+    'ui.tui.workspaceCurrentPrefix': 'current workspace: ',
+    'ui.tui.cmd.help': 'show help',
+    'ui.tui.cmd.mode': 'switch mode (no argument opens the picker)',
+    'ui.tui.cmd.new': 'new session',
+    'ui.tui.cmd.sessions': 'session list / switch',
+    'ui.tui.cmd.history': 'history sessions (by mode)',
+    'ui.tui.cmd.open': 'open a history session',
+    'ui.tui.cmd.rename': 'rename the current session',
+    'ui.tui.cmd.delete': 'delete a history session',
+    'ui.tui.cmd.commands': 'list / reload custom commands',
+    'ui.tui.cmd.attach': 'attach a file to the next message',
+    'ui.tui.cmd.workspace': 'show / set the Code mode workspace',
+    'ui.tui.cmd.todo': 'show the todo list',
+    'ui.tui.cmd.usage': 'show token usage for this turn',
+    'ui.tui.cmd.model': 'show current model and pool',
+    'ui.tui.cmd.status': 'show run status',
+    'ui.tui.cmd.clear': 'clear the screen (history is kept)',
+    'ui.tui.cmd.stop': 'stop the current task',
+    'ui.tui.cmd.continue': 'continue / inject a hot message',
+    'ui.tui.cmd.compact': 'compact the context (free the window)',
+    'ui.tui.cmd.quit': 'quit (same as Ctrl+C twice)',
+    'ui.tui.args.mode': '<chat|babe|code>',
+    'ui.tui.args.new': '[mode]',
+    'ui.tui.args.open': '<id>',
+    'ui.tui.args.rename': '<title>',
+    'ui.tui.args.delete': '<id>',
+    'ui.tui.args.attach': '<file path>',
+    'ui.tui.args.workspace': '[path]',
+    'ui.tui.args.continue': '[more]',
+    'ui.tui.group.general': 'General',
+    'ui.tui.group.session': 'Sessions',
+    'ui.tui.group.message': 'Messages',
+    'ui.tui.group.info': 'Info',
+    'ui.tui.group.custom': 'Custom commands',
+  },
+  de: {
+    'ui.tui.brand': 'CIBYP · dein Allround-KI-Partner · Terminalmodus (/help für Befehle)',
+    'ui.tui.mode.chat': 'Zu Chat-Modus gewechselt',
+    'ui.tui.mode.babe': 'Zu Babe-Modus gewechselt (Zuneigung {value})',
+    'ui.tui.mode.code': 'Zu Code-Modus gewechselt',
+    'ui.tui.mode.codeWorkspace': 'Zu Code-Modus gewechselt · Arbeitsbereich {path}',
+    'ui.tui.mode.codeNoWorkspace': ' (mit /workspace <Pfad> setzen)',
+    'ui.tui.chatMode': 'Chat',
+    'ui.tui.babeMode': 'Babe',
+    'ui.tui.codeMode': 'Code',
+    'ui.tui.running': 'läuft',
+    'ui.tui.titleSeparator': ' · ',
+    'ui.tui.enterSend': 'enter senden',
+    'ui.tui.escStop': 'esc stoppen',
+    'ui.tui.hints': 'tab vervollständigen · ctrl+t Todos · ctrl+r Verlauf · /help Befehle',
+    'ui.tui.attachments': '{count} Anhang/Anhänge',
+    'ui.tui.toolRunning': 'läuft',
+    'ui.tui.toolDenied': 'vom Benutzer abgelehnt',
+    'ui.tui.toolMoreLines': '… {count} weitere Zeile(n)',
+    'ui.tui.scrolledHint': '↑ {count} Zeile(n) ausgeblendet (PgUp zum Ansehen)',
+    'ui.tui.modalNav': 'hoch/runter wählen · Enter bestätigen · Esc abbrechen',
+    'ui.tui.completionNav': 'tab übernehmen · hoch/runter wählen · Enter ausführen',
+    'ui.tui.spinnerThinking': 'denke nach',
+    'ui.tui.spinnerOptimizing': 'Optimiere Tool-Auswahl',
+    'ui.tui.escToInterrupt': ' (esc zum Unterbrechen{elapsed})',
+    'ui.tui.quitArm': 'Ctrl+C erneut drücken zum Beenden (oder /quit eingeben)',
+    'ui.tui.stopRequested': 'Stopp für die aktuelle Aufgabe angefordert',
+    'ui.tui.affectionToast': 'Zuneigung {delta} → {value}',
+    'ui.tui.approvalTitle': 'Tool-Ausführung bestätigen',
+    'ui.tui.approvalFooter': 'y einmal erlauben · a immer erlauben · n ablehnen · Esc abbrechen',
+    'ui.tui.allowOnce': 'Einmal erlauben',
+    'ui.tui.allowAlways': 'Immer erlauben',
+    'ui.tui.deny': 'Ablehnen',
+    'ui.tui.toolAuthTitle': 'Erstnutzungs-Autorisierung',
+    'ui.tui.toolAuthBody':
+      'Dieses Tool wird zum ersten Mal verwendet und benötigt deine Zustimmung. „Immer erlauben“ fragt nicht erneut.',
+    'ui.tui.toolAuthFooter': 'a immer erlauben · y einmal · n ablehnen · Esc abbrechen',
+    'ui.tui.authAlways': 'Erlauben und merken',
+    'ui.tui.authOnce': 'Einmal erlauben',
+    'ui.tui.authDeny': 'Ablehnen',
+    'ui.tui.askTitle': 'Frage beantworten ({index}/{total})',
+    'ui.tui.askFooter': 'Antwort tippen und Enter · Esc überspringen',
+    'ui.tui.sessionsTitle': 'Sitzungen',
+    'ui.tui.historyTitle': 'Verlauf ({mode})',
+    'ui.tui.todoTitle': 'Todo-Liste',
+    'ui.tui.todoEmpty': '(keine Todos)',
+    'ui.tui.helpTitle': 'Befehle',
+    'ui.tui.helpClose': 'Schließen',
+    'ui.tui.modeTitle': 'Modus wechseln',
+    'ui.tui.modeFooter': 'Enter bestätigen · Esc abbrechen · oder /mode chat',
+    'ui.tui.modeOptionChat': 'Chat · Alltags-Chat (voller Toolumfang)',
+    'ui.tui.modeOptionBabe': 'Babe · Begleitmodus (Zuneigung)',
+    'ui.tui.modeOptionCode': 'Code · Coding-Modus (arbeitsbereichszentriert)',
+    'ui.tui.noOtherSessions': 'keine weiteren Sitzungen',
+    'ui.tui.switchedToSession': 'zu Sitzung {title} gewechselt',
+    'ui.tui.sendFailed': 'Senden fehlgeschlagen: {error}',
+    'ui.tui.unknownCommand': 'unbekannter Befehl /{name} (/help für Befehle, /commands für eigene)',
+    'ui.tui.usageLine':
+      'Nutzung in dieser Runde: prompt {prompt} · completion {completion} · gesamt {total}',
+    'ui.tui.usageContext': 'Kontext: {used} / {max}',
+    'ui.tui.usageAffection': 'Zuneigung: {value}',
+    'ui.tui.modelLine': 'aktuelles Modell: {model}{provider}',
+    'ui.tui.modelPool': 'Modell-Pool: {models}',
+    'ui.tui.statusLine': 'Sitzung {key} · Modus {mode} · Status {status}',
+    'ui.tui.statusWorkspace': 'Arbeitsbereich: {path}',
+    'ui.tui.historyEmpty': '(kein Verlauf im {mode}-Modus)',
+    'ui.tui.historyOpened': 'Verlaufssitzung geladen: {title}',
+    'ui.tui.historyDeleted': 'Verlaufssitzung {id} gelöscht',
+    'ui.tui.renamed': 'Sitzung umbenannt zu „{title}“',
+    'ui.tui.workspaceCurrent': 'aktueller Arbeitsbereich: {path}',
+    'ui.tui.workspaceUnset': 'aktueller Arbeitsbereich: (nicht gesetzt)',
+    'ui.tui.workspaceSet': 'Arbeitsbereich gesetzt auf {path}',
+    'ui.tui.attachedFile': 'Datei angehängt: {path} (wird mit der nächsten Nachricht gesendet)',
+    'ui.tui.pendingAttachments': 'ausstehende Anhänge: {paths}',
+    'ui.tui.execCustom': 'führe eigenen Befehl /{name} aus',
+    'ui.tui.customEmpty':
+      '(keine eigenen Befehle)\n*.md in ~/.cibyp/commands/ oder <workspace>/.cibyp/commands/ ablegen:',
+    'ui.tui.customList': 'eigene Befehle:',
+    'ui.tui.noWorkspaceForCode':
+      'Verwendung: /workspace <Pfad> (Code-Modus nutzt einen Arbeitsbereich)',
+    'ui.tui.compactHint':
+      'Bitte komprimiere jetzt den Kontext (manageContext / autoSummarizeContext) und halte die Aufgabe kontinuierlich.',
+    'ui.tui.askDefault': 'Bitte antworten',
+    'ui.tui.attachHint': ' (wird mit der nächsten Nachricht gesendet)',
+    'ui.tui.attachedFilePrefix': 'Datei angehängt: ',
+    'ui.tui.continueDefault': 'weiter',
+    'ui.tui.customTag': 'eigen',
+    'ui.tui.emptyCommand': '(leerer Befehl)',
+    'ui.tui.historyReadFailed': 'Verlauf konnte nicht gelesen werden: ',
+    'ui.tui.modeOptionBabeFull': 'Babe · Begleitmodus (Zuneigung)',
+    'ui.tui.modeOptionChatFull': 'Chat · Alltags-Chat (voller Toolumfang)',
+    'ui.tui.modeOptionCodeFull': 'Code · Coding-Modus (arbeitsbereichszentriert)',
+    'ui.tui.openFailed': 'Öffnen fehlgeschlagen: ',
+    'ui.tui.pendingAttachmentsPrefix': 'ausstehende Anhänge: ',
+    'ui.tui.renamedPrefix': 'Sitzung umbenannt zu „',
+    'ui.tui.sendFailedPrefix': 'Senden fehlgeschlagen: ',
+    'ui.tui.tarot': 'Tarot',
+    'ui.tui.tarotCard': 'Schicksalskarte',
+    'ui.tui.unknownCommandPrefix': 'unbekannter Befehl /',
+    'ui.tui.unknownError': 'unbekannter Fehler',
+    'ui.tui.unknownTool': 'unbekanntes Tool',
+    'ui.tui.workspaceCurrentPrefix': 'aktueller Arbeitsbereich: ',
+    'ui.tui.cmd.help': 'Hilfe anzeigen',
+    'ui.tui.cmd.mode': 'Modus wechseln (ohne Argument öffnet den Picker)',
+    'ui.tui.cmd.new': 'neue Sitzung',
+    'ui.tui.cmd.sessions': 'Sitzungsliste / wechseln',
+    'ui.tui.cmd.history': 'Verlaufssitzungen (nach Modus)',
+    'ui.tui.cmd.open': 'Verlaufssitzung öffnen',
+    'ui.tui.cmd.rename': 'aktuelle Sitzung umbenennen',
+    'ui.tui.cmd.delete': 'Verlaufssitzung löschen',
+    'ui.tui.cmd.commands': 'eigene Befehle anzeigen / neu laden',
+    'ui.tui.cmd.attach': 'Datei an die nächste Nachricht anhängen',
+    'ui.tui.cmd.workspace': 'Arbeitsbereich des Code-Modus anzeigen / setzen',
+    'ui.tui.cmd.todo': 'Todo-Liste anzeigen',
+    'ui.tui.cmd.usage': 'Token-Nutzung dieser Runde anzeigen',
+    'ui.tui.cmd.model': 'aktuelles Modell und Pool anzeigen',
+    'ui.tui.cmd.status': 'Ausführungsstatus anzeigen',
+    'ui.tui.cmd.clear': 'Bildschirm leeren (Verlauf bleibt)',
+    'ui.tui.cmd.stop': 'aktuelle Aufgabe stoppen',
+    'ui.tui.cmd.continue': 'weiter / Hot-Message einspeisen',
+    'ui.tui.cmd.compact': 'Kontext komprimieren (Fenster freigeben)',
+    'ui.tui.cmd.quit': 'beenden (wie Ctrl+C zweimal)',
+    'ui.tui.args.mode': '<chat|babe|code>',
+    'ui.tui.args.new': '[Modus]',
+    'ui.tui.args.open': '<id>',
+    'ui.tui.args.rename': '<Titel>',
+    'ui.tui.args.delete': '<id>',
+    'ui.tui.args.attach': '<Dateipfad>',
+    'ui.tui.args.workspace': '[Pfad]',
+    'ui.tui.args.continue': '[mehr]',
+    'ui.tui.group.general': 'Allgemein',
+    'ui.tui.group.session': 'Sitzungen',
+    'ui.tui.group.message': 'Nachrichten',
+    'ui.tui.group.info': 'Info',
+    'ui.tui.group.custom': 'Eigene Befehle',
+  },
+};
+
+/**
+ * 取文案：本地词典 → 全局 i18n → 中文源文（回退）。
+ * @param {string} key 形如 ui.tui.help 的键
+ * @param {string} fallback 中文源文（永远保留，作为回退）
+ */
+function t(key, fallback, params) {
+  if (language === 'zh-CN') return params ? fill(fallback, params) : fallback;
+  const local = DICT[language] && DICT[language][key];
+  if (typeof local === 'string') return params ? fill(local, params) : local;
+  if (globalTranslator) {
+    try {
+      const value = globalTranslator(key, fallback, params);
+      if (typeof value === 'string' && value !== fallback) return value;
+    } catch {
+      /* 全局词典不可用时回落中文 */
+    }
+  }
+  return params ? fill(fallback, params) : fallback;
+}
+
+module.exports = { t, setLanguage, getLanguage, setGlobalTranslator, DICT, fill };

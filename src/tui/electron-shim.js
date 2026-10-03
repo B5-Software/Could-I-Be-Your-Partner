@@ -63,14 +63,61 @@ function createImageStub() {
   };
 }
 
+/**
+ * 解析应用数据目录 —— 必须与 Electron 的 app.getPath('userData') 完全一致，
+ * 否则 TUI 读不到 GUI 的设置/记忆/知识/待办/历史（"没有沿用设置"）。
+ *
+ * Electron 的 userData = <appData>/<应用名>；应用名在开发态取 package.json 的
+ * name（could-i-be-your-partner），打包后可能是 productName（Could I Be Your
+ * Partner）。这里按"哪个目录已有 data/settings.json"优先选择，兜底新建 name 那个。
+ */
 function createAppPaths() {
   const home = os.homedir();
-  const userData = process.env.CIBYP_USER_DATA || path.join(home, '.cibyp');
+  const appData =
+    process.platform === 'win32'
+      ? process.env.APPDATA || path.join(home, 'AppData', 'Roaming')
+      : process.platform === 'darwin'
+        ? path.join(home, 'Library', 'Application Support')
+        : process.env.XDG_CONFIG_HOME || path.join(home, '.config');
+
+  const pkg = (() => {
+    try {
+      return require('../../package.json');
+    } catch {
+      return {};
+    }
+  })();
+  const names = [
+    pkg.name,
+    pkg.build && pkg.build.productName,
+    'could-i-be-your-partner',
+    'Could I Be Your Partner',
+  ].filter((name) => typeof name === 'string' && name.length > 0);
+
+  // CIBYP_USER_DATA 显式指定（测试/多配置隔离）优先；
+  // 否则与 Electron 完全一致取 <appData>/<package.json name>；
+  // 仅当该目录不存在而另一候选（打包名）已有设置时，才用后者（兼容旧安装）。
+  let userData = process.env.CIBYP_USER_DATA || '';
+  if (!userData) {
+    const candidates = [...new Set(names.map((name) => path.join(appData, name)))];
+    const withSettings = candidates.filter((dir) => {
+      try {
+        return fs.existsSync(path.join(dir, 'data', 'settings.json'));
+      } catch {
+        return false;
+      }
+    });
+    userData = withSettings[0] || candidates[0];
+  }
+
   return {
     home,
     userData,
-    appData: path.join(home, '.config'),
-    documents: path.join(home, 'Documents'),
+    appData,
+    documents:
+      process.platform === 'win32' && process.env.USERPROFILE
+        ? path.join(process.env.USERPROFILE, 'Documents')
+        : path.join(home, 'Documents'),
     downloads: path.join(home, 'Downloads'),
     desktop: path.join(home, 'Desktop'),
     temp: os.tmpdir(),
@@ -91,8 +138,9 @@ function createElectronShim() {
   }
 
   const appEmitter = new EventEmitter();
+  const appName = path.basename(paths.userData);
   const app = Object.assign(appEmitter, {
-    name: 'could-i-be-your-partner',
+    name: appName,
     version: (() => {
       try {
         return require('../../package.json').version;
@@ -107,7 +155,7 @@ function createElectronShim() {
     setPath: (name, value) => {
       paths[name] = value;
     },
-    getName: () => 'could-i-be-your-partner',
+    getName: () => appName,
     getVersion: () => app.version,
     getAppPath: () => path.resolve(__dirname, '../..'),
     getLocale: () => 'zh-CN',

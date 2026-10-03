@@ -22,6 +22,17 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
+const { t } = require('./text.js');
+
+/** 命令的展示文案（延迟翻译：语言由 settings.language 在运行时决定） */
+function localizeCommand(cmd) {
+  if (!cmd) return { desc: '', args: '' };
+  if (cmd.custom) return { desc: cmd.desc || '', args: cmd.args || '' };
+  return {
+    desc: t('ui.tui.cmd.' + cmd.name, cmd.desc),
+    args: t('ui.tui.args.' + cmd.name, cmd.args),
+  };
+}
 
 /** 内置命令表 */
 const COMMANDS = [
@@ -158,11 +169,12 @@ function suggestCommands(partial, options = {}) {
   const items = [];
   for (const cmd of COMMANDS) {
     if (!cmd.name.startsWith(query)) continue;
+    const localized = localizeCommand(cmd);
     items.push({
       label: '/' + cmd.name,
       value: '/' + cmd.name,
-      description: cmd.desc,
-      hint: cmd.args || '',
+      description: localized.desc,
+      hint: localized.args || '',
     });
   }
   const custom = options.customCommands;
@@ -173,7 +185,7 @@ function suggestCommands(partial, options = {}) {
         label: '/' + cmd.name,
         value: '/' + cmd.name,
         description: cmd.desc,
-        hint: '自定义',
+        hint: t('ui.tui.customTag', '自定义'),
       });
     }
   }
@@ -199,10 +211,10 @@ function suggestArgs(name, argPrefix, context = {}) {
         value: mode,
         description:
           mode === 'chat'
-            ? '日常对话（全工具面）'
+            ? t('ui.tui.modeOptionChat', '日常对话（全工具面）')
             : mode === 'babe'
-              ? '陪伴模式（好感度）'
-              : '编码模式（工作区为中心）',
+              ? t('ui.tui.modeOptionBabe', '陪伴模式（好感度）')
+              : t('ui.tui.modeOptionCode', '编码模式（工作区为中心）'),
       });
     }
   } else if (name === 'open' || name === 'delete') {
@@ -249,10 +261,14 @@ function helpLines(customCommands) {
   };
   const lines = [];
   for (const [key, list] of groups) {
-    const width = Math.max(...list.map((c) => ('/' + c.name + ' ' + c.args).length)) + 3;
-    lines.push(titles[key] || key);
-    for (const cmd of list) {
-      lines.push('  /' + (cmd.name + ' ' + cmd.args).padEnd(width) + cmd.desc);
+    const localized = list.map((cmd) => {
+      const text = localizeCommand(cmd);
+      return { head: '/' + cmd.name + ' ' + text.args, desc: text.desc };
+    });
+    const width = Math.max(...localized.map((c) => c.head.length)) + 3;
+    lines.push(t('ui.tui.group.' + key, titles[key] || key));
+    for (const entry of localized) {
+      lines.push('  ' + entry.head.padEnd(width) + entry.desc);
     }
     lines.push('');
   }

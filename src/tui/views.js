@@ -28,6 +28,7 @@ const {
   sliceByWidth,
 } = require('./ansi.js');
 const { FIGURES, BOX } = require('./theme.js');
+const { t } = require('./text.js');
 
 /** 模式 → 强调色键 */
 const MODE_ACCENT = {
@@ -110,7 +111,15 @@ function layoutResult(theme, result, width, indent) {
   if (hidden > 0) {
     out.push(
       indent +
-        paint(theme, 'subtle', '  ' + FIGURES.ellipsis + ' 还有 ' + hidden + ' 行', { dim: true }),
+        paint(
+          theme,
+          'subtle',
+          '  ' +
+            FIGURES.ellipsis +
+            ' ' +
+            t('ui.tui.toolMoreLines', '还有 {count} 行', { count: hidden }),
+          { dim: true },
+        ),
     );
   }
   return out;
@@ -167,13 +176,23 @@ function renderEntry(theme, entry, width, opts) {
       if (running) {
         out.push(
           '  ' +
-            paint(theme, 'subtle', '  ' + FIGURES.ellipsis + ' ' + (entry.hint || '执行中'), {
-              dim: true,
-              italic: true,
-            }),
+            paint(
+              theme,
+              'subtle',
+              '  ' + FIGURES.ellipsis + ' ' + (entry.hint || t('ui.tui.toolRunning', '执行中')),
+              {
+                dim: true,
+                italic: true,
+              },
+            ),
         );
       } else if (entry.status === 'denied') {
-        out.push('  ' + paint(theme, 'error', '  ' + FIGURES.cross + ' 用户拒绝', { dim: true }));
+        out.push(
+          '  ' +
+            paint(theme, 'error', '  ' + FIGURES.cross + ' ' + t('ui.tui.toolDenied', '用户拒绝'), {
+              dim: true,
+            }),
+        );
       } else if (entry.result != null && entry.result !== '') {
         out.push(...layoutResult(theme, entry.result, width, '  '));
       }
@@ -202,13 +221,14 @@ function renderEntry(theme, entry, width, opts) {
       ];
     }
     case 'tarot': {
-      const name = (entry.card && (entry.card.name || entry.card.title)) || '命运之牌';
+      const name =
+        (entry.card && (entry.card.name || entry.card.title)) || t('ui.tui.tarotCard', '命运之牌');
       const meaning = (entry.card && (entry.card.meaning || entry.card.desc)) || '';
       return [
         '  ' +
           paint(theme, 'accent', FIGURES.diamond, { bold: true }) +
           ' ' +
-          style('塔罗 · ' + name, { bold: true }) +
+          style(t('ui.tui.tarot', '塔罗') + ' · ' + name, { bold: true }) +
           (meaning
             ? ' ' + paint(theme, 'subtle', truncate(meaning, width - 14), { dim: true })
             : ''),
@@ -297,43 +317,50 @@ function renderInput(theme, state, width, opts) {
 
   const prompt =
     style(FIGURES.pointer, { fg: theme[accent] || theme.suggestion, bold: true }) + ' ';
+  const promptWidth = visibleWidth(prompt);
   const textLines = String(state.editorText || '').split('\n');
-  const rows = [];
   const innerWidth = Math.max(4, topWidth - 2);
-  textLines.forEach((line, index) => {
+
+  // 光标定位：把零宽占位符插到光标处再排版，然后在渲染行里找回它。
+  // 这样软换行、CJK/全角（按 2 格）、多行缓冲的落位都天然正确 ——
+  // 而不是按"字符数"估算（那会在中文输入时横向漂移）。
+  const CARET = String.fromCharCode(0x200b); // 零宽空格，宽度按 0 计
+  const cursorIndex = Number.isInteger(state.editorCursor)
+    ? Math.max(0, Math.min(state.editorCursor, Array.from(state.editorText || '').length))
+    : 0;
+  const chars = Array.from(state.editorText || '');
+  const markedText =
+    chars.slice(0, cursorIndex).join('') + CARET + chars.slice(cursorIndex).join('');
+
+  const rows = [];
+  for (const line of markedText.split('\n')) {
     const wrapped = wrapText(line, innerWidth);
     if (wrapped.length === 0) rows.push('');
     else rows.push(...wrapped);
-  });
+  }
   if (rows.length === 0) rows.push('');
 
-  const cursorIndex = Number.isInteger(state.editorCursor) ? state.editorCursor : 0;
-  // 计算光标所在行/列（按字符）
-  const chars = Array.from(state.editorText || '');
-  let consumed = 0;
-  let cursorRow = 0;
-  let cursorCol = 0;
-  for (let i = 0; i < chars.length; i += 1) {
-    if (i === cursorIndex) break;
-    if (chars[i] === '\n') {
-      cursorRow += 1;
-      cursorCol = 0;
-    } else {
-      cursorCol += 1;
-    }
-    consumed += 1;
-  }
-  if (cursorIndex >= chars.length) {
-    cursorRow = rows.length - 1;
-    cursorCol = Array.from(rows[rows.length - 1] || '').length;
-  }
+  // 找回占位符所在的渲染行与显示列
+  let caretRowIndex = rows.findIndex((row) => row.includes(CARET));
+  if (caretRowIndex === -1) caretRowIndex = rows.length - 1;
+  const caretRowText = rows[caretRowIndex];
+  const caretMarkerAt = caretRowText.indexOf(CARET);
+  const caretCol =
+    caretMarkerAt === -1
+      ? visibleWidth(caretRowText)
+      : visibleWidth(caretRowText.slice(0, caretMarkerAt));
 
   const body = rows.map((row, index) => {
+    const clean = row.split(CARET).join('');
     const prefix = index === 0 ? prompt : '  ';
-    return prefix + row;
+    return prefix + clean;
   });
 
-  return { lines: [top, ...body, bottom], cursor: { row: 1 + cursorRow, col: 2 + cursorCol } };
+  // row 为输入块内的 1-based 行号：1=顶线，2..=正文行；col 为 1-based 显示列
+  return {
+    lines: [top, ...body, bottom],
+    cursor: { row: 2 + caretRowIndex, col: (caretRowIndex === 0 ? promptWidth : 2) + caretCol + 1 },
+  };
 }
 
 /** 补全面板：命令 / 参数建议（输入框上方，无边框列表 + 指针） */
@@ -355,7 +382,11 @@ function renderCompletion(theme, completion, width) {
       : '';
     rows.push('  ' + pointer + label + description + hint);
   });
-  rows.push(paint(theme, 'subtle', '  tab 补全 · ↑↓ 选择 · Enter 执行', { dim: true }));
+  rows.push(
+    paint(theme, 'subtle', '  ' + t('ui.tui.completionNav', 'tab 补全 · ↑↓ 选择 · Enter 执行'), {
+      dim: true,
+    }),
+  );
   return rows;
 }
 
@@ -385,7 +416,12 @@ function renderModal(theme, modal, width) {
       const tag = option.hint ? paint(theme, 'subtle', '  ' + option.hint, { dim: true }) : '';
       lines.push(pad + pointer + label + tag);
     });
-    lines.push(pad + paint(theme, 'subtle', '↑↓ 选择 · Enter 确认 · Esc 取消', { dim: true }));
+    lines.push(
+      pad +
+        paint(theme, 'subtle', t('ui.tui.modalNav', '↑↓ 选择 · Enter 确认 · Esc 取消'), {
+          dim: true,
+        }),
+    );
   }
   if (modal.footer) {
     lines.push(pad + paint(theme, 'subtle', modal.footer, { dim: true, italic: true }));
@@ -446,7 +482,14 @@ function composeFrame(state, opts) {
   const visible = allLines.slice(start, end);
   while (visible.length < messageAreaHeight - indicatorHeight) visible.unshift('');
   if (indicatorHeight > 0) {
-    visible.push(paint(theme, 'subtle', '  ↑ ' + offset + ' 行未显示（PgUp 查看）', { dim: true }));
+    visible.push(
+      paint(
+        theme,
+        'subtle',
+        '  ↑ ' + t('ui.tui.scrolledHint', '{count} 行未显示（PgUp 查看）', { count: offset }),
+        { dim: true },
+      ),
+    );
   }
 
   const lines = [...visible];
@@ -459,7 +502,8 @@ function composeFrame(state, opts) {
   return {
     lines,
     cursor: {
-      row: visible.length + modalLines.length + inputView.cursor.row,
+      // 消息区 + 模态 + 补全面板占掉前若干行，输入块内的行号接在其后
+      row: visible.length + modalLines.length + completionLines.length + inputView.cursor.row,
       col: inputView.cursor.col,
     },
   };
@@ -470,7 +514,7 @@ function renderSpinnerLine(theme, state, width) {
   const frames = FIGURES.spinner;
   const glyph = frames[(state.spinnerFrame || 0) % frames.length];
   const spin = style(glyph, { fg: theme.accent, bold: true });
-  const label = state.spinnerLabel || '思考中';
+  const label = state.spinnerLabel || t('ui.tui.spinnerThinking', '思考中');
   const elapsed = state.elapsedMs ? ' · ' + formatDuration(state.elapsedMs) : '';
   return (
     '  ' +

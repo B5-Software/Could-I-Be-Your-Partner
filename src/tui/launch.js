@@ -170,11 +170,6 @@ function startTui(options) {
       /* ignore */
     }
     console.log = originalLog;
-    try {
-      console.error('[tui] shutdown: exiting cleanly');
-    } catch {
-      /* ignore */
-    }
     // 同步退出：不留竞态窗口（否则控制台可能再把排队的 Ctrl+C 当信号杀掉进程）
     const code = typeof options.onExit === 'function' ? options.onExit(0) : 0;
     process.exit(typeof code === 'number' ? code : 0);

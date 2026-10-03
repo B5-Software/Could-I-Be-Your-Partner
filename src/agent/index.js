@@ -19,6 +19,7 @@
 
 const hostKit = require('./host.js');
 const { loadPreloadApi } = require('./preload-api.js');
+const { loadI18n } = require('./i18n-loader.js');
 
 let cachedCore = null;
 
@@ -73,6 +74,18 @@ function loadAgentCore() {
     if (value !== undefined && globalThis[name] === undefined) globalThis[name] = value;
   }
 
+  // i18n：设置里的语言 → 系统提示/工具描述/工具回显的翻译（与 GUI 共用词典）
+  const i18n = loadI18n();
+  for (const [name, fn] of Object.entries(i18n)) {
+    if (typeof fn === 'function' && globalThis[name] === undefined) globalThis[name] = fn;
+  }
+  // TUI 文案层共享同一套词典（ui.* 等键可复用 GUI 的翻译）
+  try {
+    require('../tui/text.js').setGlobalTranslator(i18n.t);
+  } catch {
+    /* TUI 未加载时不影响内核 */
+  }
+
   const { Agent, BATCH_TOOL_SPECS } = require('../renderer/js/agent.js');
 
   cachedCore = {
@@ -85,6 +98,7 @@ function loadAgentCore() {
     titleUtils,
     toolsDef,
     BUNDLED_SKILLS,
+    i18n,
   };
   return cachedCore;
 }

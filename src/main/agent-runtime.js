@@ -259,6 +259,17 @@ function createAgentRuntime({
 
   async function ensureInitialized(session) {
     if (session.initialized) return;
+    // 语言要在系统提示生成之前确定（系统提示/工具描述跟随 settings.language）
+    try {
+      const settings = await api.getSettings();
+      if (settings && settings.language) {
+        const i18n = core.i18n;
+        if (i18n && typeof i18n.i18nSetLanguage === 'function')
+          i18n.i18nSetLanguage(settings.language);
+      }
+    } catch {
+      /* 语言读取失败沿用当前语言 */
+    }
     await session.agent.init();
     // 无界面运行：codeIDE 依赖 CodeOSS 窗口，显式禁用以免模型徒劳调用
     if (session.agent.settings && typeof session.agent.settings === 'object') {
@@ -368,6 +379,24 @@ function createAgentRuntime({
     /** 设置快照（前端展示模型/人格等） */
     getSettings() {
       return api.getSettings();
+    },
+
+    /** 界面/系统提示语言（沿用 GUI 的 settings.language；中文为源文） */
+    setLanguage(language) {
+      const i18n = core.i18n;
+      if (i18n && typeof i18n.i18nSetLanguage === 'function') {
+        i18n.i18nSetLanguage(language || 'zh-CN');
+        return {
+          ok: true,
+          language: typeof i18n.i18nGetLanguage === 'function' ? i18n.i18nGetLanguage() : language,
+        };
+      }
+      return { ok: false, language: 'zh-CN' };
+    },
+
+    getLanguage() {
+      const i18n = core.i18n;
+      return i18n && typeof i18n.i18nGetLanguage === 'function' ? i18n.i18nGetLanguage() : 'zh-CN';
     },
 
     listSessions() {

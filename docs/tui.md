@@ -20,6 +20,23 @@ Node 与 Electron 共用同一份编译产物；服务装配通过 `src/tui/elec
 > `process.stdin` 不是 TTY（`setRawMode` 都不存在）**，无法接收逐键输入。
 > `electron . --tui` 因此只渲染一帧预览并提示改用 `node bin/cibyp-tui.js`。
 
+## 沿用 GUI 的全部设置
+
+TUI 与桌面端读**同一个数据目录**（`app.getPath('userData')` 同名解析，打包/开发
+两种布局都能对上），因此设置、记忆、知识库、待办、历史、技能、工作区全部共享：
+
+| 设置项 | TUI 中的生效方式 |
+| --- | --- |
+| LLM（provider / api / 模型池 / 路由） | Agent 内核直接使用（状态栏显示当前模型） |
+| 人格 `aiPersona`、Babe 人设/初始好感度 | 系统提示与好感度随设置生成 |
+| 工具开关 / 敏感工具免审 / 工具授权记忆 | 工具面与审批策略沿用 |
+| 隐私保护、Token/预算限制 | 内核脱敏与预算护栏沿用 |
+| 主题 `theme.mode`（system/dark/light） | TUI 深浅色跟随（system 按终端 `COLORFGBG` 判定） |
+| 强调色 `theme.accentColor` | 沿用；**与终端明暗对比不足时回落默认色**（浅色主题的黑色强调不会搬进深色终端） |
+| 语言 `language` | 界面/系统提示/工具回显翻译（en/de 词典 + GUI 共用词典，中文为源文回退） |
+
+`CIBYP_USER_DATA` 可指定配置目录（测试/多配置隔离）；`CIBYP_TUI_THEME` 覆盖主题。
+
 - 审批/授权默认弹窗等待应答；`CIBYP_AUTO_APPROVE=1` 可自动放行（脚本化）。
 - 主题：`CIBYP_TUI_THEME=dark|light|ansi`（默认 dark 真彩，`NO_COLOR` 自动降 16 色）。
 - 用户数据：`CIBYP_USER_DATA` 可指定配置目录（默认 `~/.cibyp`）。
@@ -126,6 +143,8 @@ agent: code            # 可选：限定模式（chat|babe|code）
 | 用例 | 覆盖 |
 | --- | --- |
 | `tests/unit/tui-core.test.cjs` | CJK 排版/换行/截断、按键解码（含跨 chunk 与粘贴）、行编辑器 |
+| `tests/unit/tui-views.test.cjs` | **光标落位**（回归：跑出输入框/中文横向漂移、软换行、补全面板偏移）、帧宽自检、主题/强调色护栏 |
+| `tests/unit/tui-settings.test.cjs` | **i18n 覆盖率（漏译即红）**、t() 回退语义、数据目录与 Electron 对齐、无 DOM 语言切换 |
 | `tests/unit/tui-app.test.cjs` | 状态机：发送/流式/工具卡片/审批三态/提问/三模式/命令/补全面板/自定义命令/快捷键/窄屏 |
 | （契约）原始按键字节 → 解码器 → 应用 | 回归：Ctrl+ 组合键因键形状不一致全部失效 |
 | `tests/integration/tui-session.cjs` | 真实运行时 + TUI：Chat 一整轮、审批弹窗 y 批准、Babe 好感度+历史、Code 工作区+历史 |

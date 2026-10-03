@@ -180,6 +180,75 @@ function resolveTheme(name) {
   return THEMES[key] || DARK;
 }
 
+/** '#4f8cff' → 'rgb(79,140,255)'；非法输入返回 null */
+function parseHexColor(value) {
+  const match = String(value || '')
+    .trim()
+    .match(/^#?([0-9a-f]{6})$/i);
+  if (!match) return null;
+  const hex = match[1];
+  const r = parseInt(hex.slice(0, 2), 16);
+  const g = parseInt(hex.slice(2, 4), 16);
+  const b = parseInt(hex.slice(4, 6), 16);
+  return `rgb(${r},${g},${b})`;
+}
+
+/**
+ * 沿用 GUI 设置里的强调色（settings.theme.accentColor）：
+ * 应用到交互强调（suggestion/permission）与品牌强调（accent）。
+ *
+ * 对比度护栏：强调色是为 GUI 的背景（settings.theme.backgroundColor）设计的，
+ * 直接搬到相反明暗的终端上会不可读（例如浅色主题的黑色强调用在深色终端）。
+ * 因此只在与终端主题足够对比时沿用，否则保持主题默认色。
+ */
+function applyAccent(theme, accentColor) {
+  const rgb = parseHexColor(accentColor);
+  if (!rgb) return theme;
+  const luminance = relativeLuminance(rgb);
+  const dark = theme.name !== 'light';
+  const readable = dark ? luminance >= 0.2 : luminance <= 0.85;
+  if (!readable) return theme;
+  return Object.assign({}, theme, { suggestion: rgb, permission: rgb, accent: rgb });
+}
+
+/** 'rgb(r,g,b)' → 相对亮度（0..1，WCAG 近似） */
+function relativeLuminance(rgb) {
+  const parts = String(rgb)
+    .slice(4, -1)
+    .split(',')
+    .map((n) => Number(n) / 255);
+  const [r, g, b] = parts.map((v) =>
+    v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4),
+  );
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+/**
+ * 终端深浅判定（settings.theme.mode = system 时用）：
+ * 读 COLORFGBG（前景;背景 的 ANSI 索引），背景索引偏亮 → 浅色终端。
+ * 未知时默认深色（现代终端最常见）。
+ */
+function detectTerminalDark(env = process.env) {
+  const value = String(env.COLORFGBG || '');
+  const parts = value.split(';').map((n) => Number(n));
+  if (parts.length >= 2 && Number.isFinite(parts[parts.length - 1])) {
+    return parts[parts.length - 1] <= 8;
+  }
+  return true;
+}
+
+/**
+ * 按 GUI 设置挑主题（settings.theme.mode = system|dark|light）。
+ * 环境变量 CIBYP_TUI_THEME 优先；system → 按终端深浅判定。
+ */
+function themeFromSettings(settings, env = process.env) {
+  if (env && env.CIBYP_TUI_THEME) return resolveTheme(env.CIBYP_TUI_THEME);
+  const mode = settings && settings.theme && settings.theme.mode;
+  if (mode === 'light') return LIGHT;
+  if (mode === 'dark') return DARK;
+  return detectTerminalDark(env) ? DARK : LIGHT;
+}
+
 /** 根据环境变量/终端能力挑主题：CIBYP_TUI_THEME 优先，其次 NO_COLOR/真彩能力 */
 function themeFromEnv(env = process.env) {
   if (env.CIBYP_TUI_THEME) return resolveTheme(env.CIBYP_TUI_THEME);
@@ -187,4 +256,18 @@ function themeFromEnv(env = process.env) {
   return DARK;
 }
 
-module.exports = { DARK, LIGHT, ANSI, THEMES, FIGURES, BOX, resolveTheme, themeFromEnv };
+module.exports = {
+  DARK,
+  LIGHT,
+  ANSI,
+  THEMES,
+  FIGURES,
+  BOX,
+  resolveTheme,
+  parseHexColor,
+  applyAccent,
+  relativeLuminance,
+  detectTerminalDark,
+  themeFromSettings,
+  themeFromEnv,
+};

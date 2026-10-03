@@ -14,7 +14,7 @@
 'use strict';
 
 const { LineEditor } = require('./editor.js');
-const { themeFromEnv } = require('./theme.js');
+const { themeFromEnv, themeFromSettings, applyAccent } = require('./theme.js');
 const {
   parseInput,
   suggestCommands,
@@ -25,6 +25,7 @@ const {
   defaultCommandDirs,
 } = require('./commands.js');
 const views = require('./views.js');
+const { t, setLanguage } = require('./text.js');
 
 const MODES = ['chat', 'babe', 'code'];
 
@@ -52,7 +53,7 @@ class TuiApp {
       running: false,
       blink: true,
       spinnerFrame: 0,
-      spinnerLabel: '思考中',
+      spinnerLabel: t('ui.tui.spinnerThinking', '思考中'),
       elapsedMs: 0,
       scrollOffset: 0,
       toast: null,
@@ -92,7 +93,10 @@ class TuiApp {
 
     // 欢迎语放在建会话之后：newSession 会重置消息区
     await this.newSession(mode, opts.workspacePath);
-    this.pushEntry({ kind: 'notice', text: 'CIBYP · 全能 AI 伙伴 · 终端模式（/help 查看命令）' });
+    this.pushEntry({
+      kind: 'notice',
+      text: t('ui.tui.brand', 'CIBYP · 全能 AI 伙伴 · 终端模式（/help 查看命令）'),
+    });
     try {
       const settings = await this.runtime.getSettings();
       const model = settings && settings.llm ? settings.llm.model : '';
@@ -100,11 +104,39 @@ class TuiApp {
       if (settings && settings.babe && typeof settings.babe.initialAffection === 'number') {
         this.state.initialAffection = settings.babe.initialAffection;
       }
+      this._applySettings(settings);
     } catch {
       /* 设置读取失败不阻塞启动 */
     }
     this._reloadCustomCommands();
     return this;
+  }
+
+  /**
+   * 沿用 GUI 的设置项：主题（dark/light/system）、强调色、界面语言。
+   * CIBYP_TUI_THEME 显式指定时优先于设置。
+   */
+  _applySettings(settings) {
+    if (!settings) return;
+    const envTheme = this.env && this.env.CIBYP_TUI_THEME;
+    if (!envTheme) {
+      this.theme = themeFromSettings(settings, this.env);
+    }
+    const accent = settings.theme && settings.theme.accentColor;
+    if (accent) this.theme = applyAccent(this.theme, accent);
+    this.state.theme = this.theme;
+    // 界面语言：中文为源文（回退），en/de 走 i18n 词典（与 GUI 的 settings.language 一致）
+    try {
+      const language = settings.language || 'zh-CN';
+      setLanguage(language);
+      if (typeof this.runtime.setLanguage === 'function') {
+        this.runtime.setLanguage(language);
+      } else if (typeof globalThis.i18nSetLanguage === 'function') {
+        globalThis.i18nSetLanguage(language);
+      }
+    } catch {
+      /* 语言设置失败不阻塞 */
+    }
   }
 
   /** 重载自定义命令（用户目录 + 工作区目录） */
@@ -345,7 +377,7 @@ class TuiApp {
       return true;
     }
     this.quitArmedAt = now;
-    this.state.toast = { text: '再按一次 Ctrl+C 退出（或输入 /quit）' };
+    this.state.toast = { text: t('ui.tui.quitArm', '再按一次 Ctrl+C 退出（或输入 /quit）') };
     return true;
   }
 
@@ -462,7 +494,8 @@ class TuiApp {
 
   _buildAskModal(questions, index, answers) {
     const question = questions[index] || {};
-    const text = question.label || question.title || question.question || '请回答';
+    const text =
+      question.label || question.title || question.question || t('ui.tui.askDefault', '请回答');
     const options = Array.isArray(question.options)
       ? question.options.map((option) => ({
           label: typeof option === 'string' ? option : option.label || option.value,
@@ -472,7 +505,10 @@ class TuiApp {
     const modal = {
       kind: 'ask',
       colorKey: 'permission',
-      title: '回答提问（' + (index + 1) + '/' + questions.length + '）',
+      title: t('ui.tui.askTitle', '回答提问（{index}/{total}）', {
+        index: index + 1,
+        total: questions.length,
+      }),
       subtitle: String(text),
       questionIndex: index,
       questions,
@@ -484,7 +520,7 @@ class TuiApp {
     } else {
       modal.inputMode = true;
       modal.editor = new LineEditor();
-      modal.footer = '输入回答后 Enter 确认 · Esc 跳过';
+      modal.footer = t('ui.tui.askFooter', '输入回答后 Enter 确认 · Esc 跳过');
     }
     return modal;
   }
@@ -596,7 +632,7 @@ class TuiApp {
         if (!this.state.running) {
           this._startedAt = 0;
           this.state.elapsedMs = 0;
-          this.state.spinnerLabel = '思考中';
+          this.state.spinnerLabel = t('ui.tui.spinnerThinking', '思考中');
         }
         break;
       case 'title':
@@ -607,7 +643,10 @@ class TuiApp {
         const delta = event.data ? event.data.delta : event.delta;
         if (typeof delta === 'number' && delta !== 0) {
           this.state.toast = {
-            text: '好感度 ' + (delta > 0 ? '+' : '') + delta + ' → ' + this.state.affection,
+            text: t('ui.tui.affectionToast', '好感度 {delta} → {value}', {
+              delta: (delta > 0 ? '+' : '') + delta,
+              value: this.state.affection,
+            }),
           };
         }
         break;
@@ -646,10 +685,10 @@ class TuiApp {
         this.state.context = event.data || null;
         break;
       case 'optimize-tools-start':
-        this.state.spinnerLabel = '优化工具选择';
+        this.state.spinnerLabel = t('ui.tui.spinnerOptimizing', '优化工具选择');
         break;
       case 'optimize-tools-end':
-        this.state.spinnerLabel = '思考中';
+        this.state.spinnerLabel = t('ui.tui.spinnerThinking', '思考中');
         break;
       case 'session-created':
       case 'session-closed':
@@ -683,11 +722,17 @@ class TuiApp {
       kind: 'notice',
       text:
         mode === 'babe'
-          ? '已切换到 Babe 模式（好感度 ' + (this.state.affection ?? 0) + '）'
+          ? t('ui.tui.mode.babe', '已切换到 Babe 模式（好感度 {value}）', {
+              value: this.state.affection ?? 0,
+            })
           : mode === 'code'
-            ? '已切换到 Code 模式' +
-              (workspacePath ? ' · 工作区 ' + workspacePath : '（/workspace <路径> 设置工作区）')
-            : '已切换到 Chat 模式',
+            ? workspacePath
+              ? t('ui.tui.mode.codeWorkspace', '已切换到 Code 模式 · 工作区 {path}', {
+                  path: workspacePath,
+                })
+              : t('ui.tui.mode.code', '已切换到 Code 模式') +
+                t('ui.tui.mode.codeNoWorkspace', '（/workspace <路径> 设置工作区）')
+            : t('ui.tui.mode.chat', '已切换到 Chat 模式'),
     });
   }
 
@@ -700,7 +745,10 @@ class TuiApp {
     this.state.workspace = session.workspacePath || '';
     this.state.messages = [];
     this.state.scrollOffset = 0;
-    this.pushEntry({ kind: 'notice', text: '已切换到会话 ' + (session.title || key) });
+    this.pushEntry({
+      kind: 'notice',
+      text: t('ui.tui.switchedToSession', '已切换到会话 {title}', { title: session.title || key }),
+    });
   }
 
   async _submit(text) {
@@ -716,8 +764,11 @@ class TuiApp {
         if (parsed.custom.agent && parsed.custom.agent !== this.state.mode) {
           await this.newSession(parsed.custom.agent);
         }
-        this.pushEntry({ kind: 'notice', text: '执行自定义命令 /' + parsed.name });
-        await this._send(prompt || '（空命令）');
+        this.pushEntry({
+          kind: 'notice',
+          text: t('ui.tui.execCustom', '执行自定义命令 /{name}', { name: parsed.name }),
+        });
+        await this._send(prompt || t('ui.tui.emptyCommand', '（空命令）'));
         return;
       }
       await this._runCommand(parsed.name, parsed.argText);
@@ -737,7 +788,9 @@ class TuiApp {
     } catch (error) {
       this.pushEntry({
         kind: 'system',
-        text: '发送失败：' + (error && error.message ? error.message : String(error)),
+        text:
+          t('ui.tui.sendFailedPrefix', '发送失败：') +
+          (error && error.message ? error.message : String(error)),
       });
     } finally {
       this.state.running = false;
@@ -753,7 +806,7 @@ class TuiApp {
     }
     this.state.running = false;
     this._startedAt = 0;
-    this.state.toast = { text: '已请求停止当前任务' };
+    this.state.toast = { text: t('ui.tui.stopRequested', '已请求停止当前任务') };
   }
 
   async _runCommand(name, argText) {
@@ -762,9 +815,9 @@ class TuiApp {
         this.state.modal = {
           kind: 'help',
           colorKey: 'permission',
-          title: '命令表',
+          title: t('ui.tui.helpTitle', '命令表'),
           body: helpLines(this.customCommands).join('\n'),
-          options: [{ label: '关闭', value: 'close' }],
+          options: [{ label: t('ui.tui.helpClose', '关闭'), value: 'close' }],
           selected: 0,
         };
         return;
@@ -790,14 +843,23 @@ class TuiApp {
           this.state.modal = {
             kind: 'mode',
             colorKey: 'permission',
-            title: '切换模式',
+            title: t('ui.tui.modeTitle', '切换模式'),
             options: [
-              { label: 'Chat · 日常对话（全工具面）', value: 'chat' },
-              { label: 'Babe · 陪伴模式（好感度）', value: 'babe' },
-              { label: 'Code · 编码模式（工作区为中心）', value: 'code' },
+              {
+                label: t('ui.tui.modeOptionChatFull', 'Chat · 日常对话（全工具面）'),
+                value: 'chat',
+              },
+              {
+                label: t('ui.tui.modeOptionBabeFull', 'Babe · 陪伴模式（好感度）'),
+                value: 'babe',
+              },
+              {
+                label: t('ui.tui.modeOptionCodeFull', 'Code · 编码模式（工作区为中心）'),
+                value: 'code',
+              },
             ],
             selected: Math.max(0, MODES.indexOf(this.state.mode)),
-            footer: 'Enter 确认 · Esc 取消 · 也可直接 /mode chat',
+            footer: t('ui.tui.modeFooter', 'Enter 确认 · Esc 取消 · 也可直接 /mode chat'),
           };
           return;
         }
@@ -833,10 +895,14 @@ class TuiApp {
         this.state.modal = {
           kind: 'sessions',
           colorKey: 'permission',
-          title: '会话列表',
+          title: t('ui.tui.sessionsTitle', '会话列表'),
           options: list.map((s) => ({
             label:
-              (s.title || s.key) + '  [' + (s.mode || 'chat') + (s.busy ? ' · 运行中' : '') + ']',
+              (s.title || s.key) +
+              '  [' +
+              (s.mode || 'chat') +
+              (s.busy ? ' · ' + t('ui.tui.running', '运行中') : '') +
+              ']',
             value: s.key,
           })),
           selected: 0,
@@ -864,7 +930,10 @@ class TuiApp {
         }
         this.state.title = title;
         await this.runtime.setTitle(this.activeKey, title);
-        this.pushEntry({ kind: 'notice', text: '会话已重命名为「' + title + '」' });
+        this.pushEntry({
+          kind: 'notice',
+          text: t('ui.tui.renamedPrefix', '会话已重命名为「') + title + '」',
+        });
         return;
       }
       case 'delete': {
@@ -874,7 +943,10 @@ class TuiApp {
           return;
         }
         await this.runtime.deleteHistory(this.state.mode, id);
-        this.pushEntry({ kind: 'notice', text: '已删除历史会话 ' + id });
+        this.pushEntry({
+          kind: 'notice',
+          text: t('ui.tui.historyDeleted', '已删除历史会话 {id}', { id }),
+        });
         return;
       }
       case 'attach': {
@@ -883,7 +955,8 @@ class TuiApp {
           this.pushEntry({
             kind: 'system',
             text: this.attachments.length
-              ? '待发送附件：' + this.attachments.map((a) => a.path).join(', ')
+              ? t('ui.tui.pendingAttachmentsPrefix', '待发送附件：') +
+                this.attachments.map((a) => a.path).join(', ')
               : '用法：/attach <文件路径>',
           });
           return;
@@ -891,7 +964,10 @@ class TuiApp {
         this.attachments.push({ name: filePath.split(/[\\/]/).pop(), path: filePath });
         this.pushEntry({
           kind: 'notice',
-          text: '已附加文件：' + filePath + '（随下一条消息发送）',
+          text:
+            t('ui.tui.attachedFilePrefix', '已附加文件：') +
+            filePath +
+            t('ui.tui.attachHint', '（随下一条消息发送）'),
         });
         return;
       }
@@ -900,14 +976,19 @@ class TuiApp {
         if (!target) {
           this.pushEntry({
             kind: 'system',
-            text: '当前工作区：' + (this.state.workspace || '（未设置）'),
+            text:
+              t('ui.tui.workspaceCurrentPrefix', '当前工作区：') +
+              (this.state.workspace || t('ui.tui.workspaceUnset', '（未设置）')),
           });
           return;
         }
         this.state.workspace = target;
         await this.runtime.setWorkspace(this.activeKey, target);
         this._reloadCustomCommands();
-        this.pushEntry({ kind: 'notice', text: '工作区已设置为 ' + target });
+        this.pushEntry({
+          kind: 'notice',
+          text: t('ui.tui.workspaceSet', '工作区已设置为 {path}', { path: target }),
+        });
         return;
       }
       case 'todo': {
@@ -924,16 +1005,25 @@ class TuiApp {
         this.pushEntry({
           kind: 'system',
           text:
-            '本轮用量：prompt ' +
-            (usage.prompt || 0) +
-            ' · completion ' +
-            (usage.completion || 0) +
-            ' · total ' +
-            (usage.total || 0) +
+            t(
+              'ui.tui.usageLine',
+              '本轮用量：prompt {prompt} · completion {completion} · total {total}',
+              {
+                prompt: usage.prompt || 0,
+                completion: usage.completion || 0,
+                total: usage.total || 0,
+              },
+            ) +
             (context && context.max
-              ? '\n上下文占用：' + (context.used || 0) + ' / ' + context.max
+              ? '\n' +
+                t('ui.tui.usageContext', '上下文占用：{used} / {max}', {
+                  used: context.used || 0,
+                  max: context.max,
+                })
               : '') +
-            (stats && typeof stats.affection === 'number' ? '\n好感度：' + stats.affection : ''),
+            (stats && typeof stats.affection === 'number'
+              ? '\n' + t('ui.tui.usageAffection', '好感度：{value}', { value: stats.affection })
+              : ''),
         });
         return;
       }
@@ -946,10 +1036,13 @@ class TuiApp {
         this.pushEntry({
           kind: 'system',
           text:
-            '当前模型：' +
-            (llm.model || '（未设置）') +
-            (llm.provider ? ' @ ' + llm.provider : '') +
-            (pool.length ? '\n模型池：' + pool.join('、') : ''),
+            t('ui.tui.modelLine', '当前模型：{model}{provider}', {
+              model: llm.model || t('ui.tui.workspaceUnset', '（未设置）'),
+              provider: llm.provider ? ' @ ' + llm.provider : '',
+            }) +
+            (pool.length
+              ? '\n' + t('ui.tui.modelPool', '模型池：{models}', { models: pool.join('、') })
+              : ''),
         });
         return;
       }
@@ -958,13 +1051,14 @@ class TuiApp {
         this.pushEntry({
           kind: 'system',
           text:
-            '会话 ' +
-            (session.key || this.activeKey) +
-            ' · 模式 ' +
-            this.state.mode +
-            ' · 状态 ' +
-            (session.status || 'idle') +
-            (this.state.workspace ? '\n工作区：' + this.state.workspace : ''),
+            t('ui.tui.statusLine', '会话 {key} · 模式 {mode} · 状态 {status}', {
+              key: session.key || this.activeKey,
+              mode: this.state.mode,
+              status: session.status || 'idle',
+            }) +
+            (this.state.workspace
+              ? '\n' + t('ui.tui.statusWorkspace', '工作区：{path}', { path: this.state.workspace })
+              : ''),
         });
         return;
       }
@@ -978,13 +1072,16 @@ class TuiApp {
         return;
       }
       case 'continue': {
-        const text = argText.trim() || '继续';
+        const text = argText.trim() || t('ui.tui.continueDefault', '继续');
         await this._send(text);
         return;
       }
       case 'compact': {
         await this._send(
-          '请立即压缩上下文（调用 manageContext / autoSummarizeContext），保持任务连续性。',
+          t(
+            'ui.tui.compactHint',
+            '请立即压缩上下文（调用 manageContext / autoSummarizeContext），保持任务连续性。',
+          ),
         );
         return;
       }
@@ -993,7 +1090,10 @@ class TuiApp {
         return;
       }
       default: {
-        this.pushEntry({ kind: 'system', text: '未知命令 /' + name });
+        this.pushEntry({
+          kind: 'system',
+          text: t('ui.tui.unknownCommandPrefix', '未知命令 /') + name,
+        });
       }
     }
   }
@@ -1003,17 +1103,23 @@ class TuiApp {
     try {
       list = (await this.runtime.listHistory(this.state.mode)) || [];
     } catch (error) {
-      this.pushEntry({ kind: 'system', text: '读取历史失败：' + error.message });
+      this.pushEntry({
+        kind: 'system',
+        text: t('ui.tui.historyReadFailed', '读取历史失败：') + error.message,
+      });
       return;
     }
     if (list.length === 0) {
-      this.pushEntry({ kind: 'system', text: '（' + this.state.mode + ' 模式暂无历史会话）' });
+      this.pushEntry({
+        kind: 'system',
+        text: t('ui.tui.historyEmpty', '（{mode} 模式暂无历史会话）', { mode: this.state.mode }),
+      });
       return;
     }
     this.state.modal = {
       kind: 'history',
       colorKey: 'permission',
-      title: '历史会话（' + this.state.mode + '）',
+      title: t('ui.tui.historyTitle', '历史会话（{mode}）', { mode: this.state.mode }),
       options: list.slice(0, 20).map((item) => ({
         label: (item.title || item.id) + (item.date ? '  · ' + String(item.date).slice(0, 10) : ''),
         value: item.id,
@@ -1026,13 +1132,23 @@ class TuiApp {
     try {
       const loaded = await this.runtime.openHistory(this.activeKey, id);
       if (loaded && loaded.ok === false) {
-        this.pushEntry({ kind: 'system', text: '打开失败：' + (loaded.error || '未知错误') });
+        this.pushEntry({
+          kind: 'system',
+          text:
+            t('ui.tui.openFailed', '打开失败：') +
+            (loaded.error || t('ui.tui.unknownError', '未知错误')),
+        });
         return;
       }
       this.state.title = (loaded && loaded.title) || this.state.title;
       this.state.messages = [];
       this._toolEntries.clear();
-      this.pushEntry({ kind: 'notice', text: '已载入历史会话：' + (this.state.title || id) });
+      this.pushEntry({
+        kind: 'notice',
+        text: t('ui.tui.historyOpened', '已载入历史会话：{title}', {
+          title: this.state.title || id,
+        }),
+      });
       for (const message of (loaded && loaded.messages) || []) {
         if (message.role === 'user') this.pushEntry({ kind: 'user', text: message.content });
         else if (message.role === 'assistant')
@@ -1048,7 +1164,9 @@ class TuiApp {
     } catch (error) {
       this.pushEntry({
         kind: 'system',
-        text: '打开失败：' + (error && error.message ? error.message : String(error)),
+        text:
+          t('ui.tui.openFailed', '打开失败：') +
+          (error && error.message ? error.message : String(error)),
       });
     }
   }
@@ -1057,17 +1175,17 @@ class TuiApp {
     this.state.modal = {
       kind: 'approval',
       colorKey: 'permission',
-      title: '工具执行确认',
-      subtitle: (payload && payload.toolName) || '未知工具',
+      title: t('ui.tui.approvalTitle', '工具执行确认'),
+      subtitle: (payload && payload.toolName) || t('ui.tui.unknownTool', '未知工具'),
       body: payload && payload.args ? views.summarizeArgs(payload.args, 200) : '',
       options: [
-        { label: '允许一次', value: true, hint: 'y' },
-        { label: '总是允许', value: 'allow-always', hint: 'a' },
-        { label: '拒绝', value: false, hint: 'n' },
+        { label: t('ui.tui.allowOnce', '允许一次'), value: true, hint: 'y' },
+        { label: t('ui.tui.allowAlways', '总是允许'), value: 'allow-always', hint: 'a' },
+        { label: t('ui.tui.deny', '拒绝'), value: false, hint: 'n' },
       ],
       shortcuts: { y: 0, a: 1, n: 2 },
       selected: 0,
-      footer: 'y 允许 · a 总是允许 · n 拒绝 · Esc 取消',
+      footer: t('ui.tui.approvalFooter', 'y 允许 · a 总是允许 · n 拒绝 · Esc 取消'),
     };
   }
 
@@ -1075,19 +1193,19 @@ class TuiApp {
     this.state.modal = {
       kind: 'toolAuth',
       colorKey: 'permission',
-      title: '工具首次使用授权',
+      title: t('ui.tui.toolAuthTitle', '工具首次使用授权'),
       subtitle:
         ((payload && payload.toolName) || '') +
         (payload && payload.category ? '（' + payload.category + '）' : ''),
-      body: '该工具首次使用，需要你的授权。允许并记住后不再询问。',
+      body: t('ui.tui.toolAuthBody', '该工具首次使用，需要你的授权。允许并记住后不再询问。'),
       options: [
-        { label: '允许并记住', value: 'allow-always', hint: 'a' },
-        { label: '仅本次允许', value: 'allow-once', hint: 'y' },
-        { label: '拒绝', value: 'deny', hint: 'n' },
+        { label: t('ui.tui.authAlways', '允许并记住'), value: 'allow-always', hint: 'a' },
+        { label: t('ui.tui.authOnce', '仅本次允许'), value: 'allow-once', hint: 'y' },
+        { label: t('ui.tui.deny', '拒绝'), value: 'deny', hint: 'n' },
       ],
       shortcuts: { a: 0, y: 1, n: 2 },
       selected: 0,
-      footer: 'a 允许并记住 · y 仅本次 · n 拒绝 · Esc 取消',
+      footer: t('ui.tui.toolAuthFooter', 'a 允许并记住 · y 仅本次 · n 拒绝 · Esc 取消'),
     };
   }
 
@@ -1096,14 +1214,14 @@ class TuiApp {
     this.state.modal = {
       kind: 'todo',
       colorKey: 'planMode',
-      title: '待办清单',
+      title: t('ui.tui.todoTitle', '待办清单'),
       body:
         todos.length === 0
-          ? '（暂无待办）'
+          ? t('ui.tui.todoEmpty', '（暂无待办）')
           : todos
               .map((item, index) => (item.done ? '[x] ' : '[ ] ') + (index + 1) + '. ' + item.text)
               .join('\n'),
-      options: [{ label: '关闭', value: 'close' }],
+      options: [{ label: t('ui.tui.helpClose', '关闭'), value: 'close' }],
       selected: 0,
     };
   }
@@ -1133,9 +1251,9 @@ class TuiApp {
 
   _footerHints() {
     const hints = [];
-    if (this.state.running) hints.push('esc 停止');
-    else hints.push('enter 发送');
-    hints.push('tab 补全 · ctrl+t 待办 · ctrl+r 历史 · /help 命令');
+    if (this.state.running) hints.push(t('ui.tui.escStop', 'esc 停止'));
+    else hints.push(t('ui.tui.enterSend', 'enter 发送'));
+    hints.push(t('ui.tui.hints', 'tab 补全 · ctrl+t 待办 · ctrl+r 历史 · /help 命令'));
     if (this.attachments.length > 0) hints.push('附件 ' + this.attachments.length);
     return hints;
   }
@@ -1143,7 +1261,7 @@ class TuiApp {
   _inputHint() {
     // 补全建议由输入框上方的补全面板呈现，这里只显示会话状态
     const modeLabel = views.MODE_LABEL[this.state.mode] || this.state.mode;
-    if (this.state.running) return modeLabel + ' · 运行中';
+    if (this.state.running) return modeLabel + ' · ' + t('ui.tui.running', '运行中');
     return modeLabel + (this.state.title ? ' · ' + this.state.title : '');
   }
 }
