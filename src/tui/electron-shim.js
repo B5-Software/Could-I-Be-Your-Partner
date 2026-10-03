@@ -71,14 +71,17 @@ function createImageStub() {
  * name（could-i-be-your-partner），打包后可能是 productName（Could I Be Your
  * Partner）。这里按"哪个目录已有 data/settings.json"优先选择，兜底新建 name 那个。
  */
-function createAppPaths() {
-  const home = os.homedir();
+function createAppPaths({
+  platform = process.platform,
+  env = process.env,
+  home = os.homedir(),
+} = {}) {
   const appData =
-    process.platform === 'win32'
-      ? process.env.APPDATA || path.join(home, 'AppData', 'Roaming')
-      : process.platform === 'darwin'
+    platform === 'win32'
+      ? env.APPDATA || path.join(home, 'AppData', 'Roaming')
+      : platform === 'darwin'
         ? path.join(home, 'Library', 'Application Support')
-        : process.env.XDG_CONFIG_HOME || path.join(home, '.config');
+        : env.XDG_CONFIG_HOME || path.join(home, '.config');
 
   const pkg = (() => {
     try {
@@ -97,7 +100,7 @@ function createAppPaths() {
   // CIBYP_USER_DATA 显式指定（测试/多配置隔离）优先；
   // 否则与 Electron 完全一致取 <appData>/<package.json name>；
   // 仅当该目录不存在而另一候选（打包名）已有设置时，才用后者（兼容旧安装）。
-  let userData = process.env.CIBYP_USER_DATA || '';
+  let userData = env.CIBYP_USER_DATA || '';
   if (!userData) {
     const candidates = [...new Set(names.map((name) => path.join(appData, name)))];
     const withSettings = candidates.filter((dir) => {
@@ -115,8 +118,8 @@ function createAppPaths() {
     userData,
     appData,
     documents:
-      process.platform === 'win32' && process.env.USERPROFILE
-        ? path.join(process.env.USERPROFILE, 'Documents')
+      platform === 'win32' && env.USERPROFILE
+        ? path.join(env.USERPROFILE, 'Documents')
         : path.join(home, 'Documents'),
     downloads: path.join(home, 'Downloads'),
     desktop: path.join(home, 'Desktop'),

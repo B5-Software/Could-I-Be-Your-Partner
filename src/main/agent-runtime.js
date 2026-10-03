@@ -29,6 +29,7 @@ const {
   createTodoStore,
 } = require('../agent/index.js');
 const { createIpcDispatch } = require('./core/ipc-dispatch.js');
+const path = require('node:path');
 
 /** 交互决策策略：'prompt' 等待前端应答；'auto-approve' 自动放行（脚本化/测试用）。 */
 const INTERACTION_POLICY = Object.freeze({
@@ -365,7 +366,14 @@ function createAgentRuntime({
 
   async function ensureInitialized(session) {
     if (session.initialized) return;
+    await api.startupRuntime();
     await todos.load();
+    if (session.mode === 'code' && session.agent.codeWorkspacePath) {
+      const workspace = await validateWorkspace(session.agent.codeWorkspacePath);
+      if (!workspace.ok) throw new Error(workspace.error);
+      session.agent.workspacePath = workspace.path;
+      session.agent.codeWorkspacePath = workspace.path;
+    }
     // 语言要在系统提示生成之前确定（系统提示/工具描述跟随 settings.language）
     try {
       const settings = await api.getSettings();
@@ -393,6 +401,18 @@ function createAgentRuntime({
       if (typeof initial === 'number') session.agent.babeAffection = initial;
     }
     session.initialized = true;
+  }
+
+  async function validateWorkspace(directory) {
+    const location = await api.runtime.getLocation();
+    const selected =
+      location?.location === 'vm'
+        ? path.posix.resolve('/workspace', directory)
+        : path.resolve(directory);
+    const result = await api.workspaceGetFileTree(selected);
+    return result?.ok
+      ? { ok: true, path: selected, tree: result.tree }
+      : { ok: false, error: result?.error || 'Workspace cannot be read' };
   }
 
   // ------------------------------------------------------------- 历史（按模式）
@@ -520,6 +540,17 @@ function createAgentRuntime({
       return session ? sessionSnapshot(session) : null;
     },
 
+    getSessionDetails(key) {
+      const session = sessions.get(key);
+      if (!session) return null;
+      return {
+        messages: flattenMessages({ messages: session.agent.contextManager?.messages || [] }),
+        pendingInteraction: session.pendingInteraction
+          ? { kind: session.pendingInteraction.kind, payload: session.pendingInteraction.payload }
+          : null,
+      };
+    },
+
     createSession,
 
     /**
@@ -528,17 +559,20 @@ function createAgentRuntime({
      */
     async sendMessage(key, message, attachments = []) {
       const session = createSession({ key, mode: 'chat' });
+      if (session.loadingHistory) return { ok: false, error: 'Conversation is still loading' };
       if (session.busy) {
         session.agent.injectHotMessage(message, attachments || []);
         emit({ type: 'message', key: session.key, role: 'user', content: message, injected: true });
         return { ok: true, injected: true };
       }
       session.busy = true;
+      session.stopRequested = false;
       session.status = 'running';
       emit({ type: 'message', key: session.key, role: 'user', content: message });
       emit({ type: 'status', key: session.key, status: 'running' });
       try {
         await ensureInitialized(session);
+        if (session.stopRequested) return { ok: true, stopped: true };
         await session.agent.sendMessage(message, attachments || []);
         return {
           ok: true,
@@ -588,6 +622,7 @@ function createAgentRuntime({
     stop(key) {
       const session = sessions.get(key);
       if (!session) return { ok: false, error: `unknown session: ${key}` };
+      session.stopRequested = true;
       session.agent.stop();
       respondInteraction(session, false);
       return { ok: true };
@@ -597,6 +632,7 @@ function createAgentRuntime({
     close(key) {
       const session = sessions.get(key);
       if (!session) return { ok: false, error: `unknown session: ${key}` };
+      session.stopRequested = true;
       session.agent.stop();
       respondInteraction(session, false);
       sessions.delete(key);
@@ -662,12 +698,20 @@ function createAgentRuntime({
     },
 
     /** 设置工作区（Code 模式） */
-    setWorkspace(key, workspacePath) {
+    async setWorkspace(key, workspacePath) {
       const session = sessions.get(key);
       if (!session) return { ok: false, error: `unknown session: ${key}` };
-      session.agent.workspacePath = workspacePath || null;
-      session.agent.codeWorkspacePath = workspacePath || null;
-      return { ok: true, workspacePath: session.agent.workspacePath };
+      if (session.busy)
+        return { ok: false, error: 'Stop the running task before changing workspace' };
+      if (!workspacePath) return { ok: false, error: 'Workspace path is required' };
+      const workspace = await validateWorkspace(workspacePath);
+      if (!workspace.ok) return workspace;
+      if (session.busy) return { ok: false, error: 'Task started while selecting workspace' };
+      session.agent.workspacePath = workspace.path;
+      session.agent.codeWorkspacePath = workspace.path;
+      session.agent.cachedWorkspaceTree = workspace.tree;
+      api.webControlSetWorkDir(workspace.path);
+      return { ok: true, workspacePath: workspace.path };
     },
 
     getStats,
@@ -685,20 +729,31 @@ function createAgentRuntime({
      */
     async openHistory(key, id) {
       const session = createSession({ key, mode: 'chat' });
-      const conv = await historyGet(session.mode, id, session.agent.workspacePath);
-      if (!conv || conv.ok === false)
-        return { ok: false, error: (conv && conv.error) || '历史会话不存在' };
-      await ensureInitialized(session);
-      await session.agent.loadFromHistory(conv);
-      session.title = conv.title || '';
-      emit({ type: 'title', key: session.key, title: session.title });
-      return {
-        ok: true,
-        id: conv.id || id,
-        title: conv.title || '',
-        affection: typeof conv.affection === 'number' ? conv.affection : null,
-        messages: flattenMessages(conv),
-      };
+      if (session.busy)
+        return { ok: false, error: 'Stop the running task before replacing its conversation' };
+      session.busy = true;
+      session.loadingHistory = true;
+      session.stopRequested = false;
+      try {
+        const conv = await historyGet(session.mode, id, session.agent.workspacePath);
+        if (!conv || conv.ok === false)
+          return { ok: false, error: (conv && conv.error) || '历史会话不存在' };
+        await ensureInitialized(session);
+        if (session.stopRequested) return { ok: false, error: 'Conversation loading cancelled' };
+        await session.agent.loadFromHistory(conv);
+        session.title = conv.title || '';
+        emit({ type: 'title', key: session.key, title: session.title });
+        return {
+          ok: true,
+          id: conv.id || id,
+          title: conv.title || '',
+          affection: typeof conv.affection === 'number' ? conv.affection : null,
+          messages: flattenMessages(conv),
+        };
+      } finally {
+        session.loadingHistory = false;
+        session.busy = false;
+      }
     },
   };
 }

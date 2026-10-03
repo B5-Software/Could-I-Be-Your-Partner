@@ -13,6 +13,86 @@ const { LineEditor } = require('../../src/tui/editor.js');
 
 const ESC = String.fromCharCode(27);
 
+test('terminal title follows the conversation, defaults to New and restores on exit', () => {
+  const { createTerminalScreen } = require('../../src/tui/launch.js');
+  const writes = [];
+  const screen = createTerminalScreen({ columns: 80, rows: 24, write: (s) => writes.push(s) });
+  screen.enter();
+  assert.ok(writes.some((s) => s === ESC + ']0;CIBYP | New\x07'));
+  screen.render({ title: '作业讨论', lines: ['hello'], cursor: { row: 1, col: 1 } });
+  assert.ok(writes.includes(ESC + ']0;CIBYP | 作业讨论\x07'));
+  const count = writes.length;
+  screen.render({ title: '作业讨论', lines: ['hello'], cursor: { row: 1, col: 1 } });
+  assert.equal(writes.length, count, 'Idle frames do not repaint or resend the title');
+  screen.setTitle('');
+  assert.equal(writes.at(-1), ESC + ']0;CIBYP | New\x07');
+  screen.setTitle('标题' + ESC + ']52;c;clipboard\x07' + ESC + '[2J\n续行');
+  assert.equal(writes.at(-1), ESC + ']0;CIBYP | 标题 续行\x07');
+  screen.exit();
+  assert.ok(writes.at(-1).endsWith(ESC + '[23;0t'));
+  assert.ok(writes.at(-1).includes(ESC + '[?2004l'));
+});
+
+test('screen output permits only styling and clamps both dimensions and cursor', () => {
+  const { createTerminalScreen } = require('../../src/tui/launch.js');
+  const writes = [];
+  const screen = createTerminalScreen({ columns: 10, rows: 2, write: (s) => writes.push(s) });
+  screen.render({
+    title: '',
+    lines: ['中'.repeat(15) + ESC + '[2J', 'ok' + ESC + ']0;evil\x07', 'hidden'],
+    cursor: { row: 999, col: 999 },
+  });
+  assert.ok(!writes.at(-1).includes('[2J'));
+  assert.ok(!writes.at(-1).includes('evil'));
+  assert.ok(!writes.at(-1).includes('hidden'));
+  assert.ok(writes.at(-1).includes(ESC + '[2;10H'));
+  assert.equal(ansi.stripAnsi(ESC + 'Psecret' + ESC + '\\safe'), 'safe');
+  assert.deepEqual(
+    [ansi.style('one', { bold: true }), ansi.style('two', { bold: true })].map(ansi.stripAnsi),
+    ['one', 'two'],
+  );
+  assert.equal(ansi.visibleWidth('e\u0301中文'), 5);
+});
+
+test('bracketed paste terminators survive every chunk split and decoder timeout', () => {
+  const end = ESC + '[201~';
+  for (let split = 1; split < end.length; split++) {
+    const decoder = createKeyDecoder();
+    assert.deepEqual(decoder.push(ESC + '[200~多行\n🙂' + end.slice(0, split)), []);
+    assert.deepEqual(decoder.flush(), [], 'A partial paste marker is not an Esc key');
+    const events = decoder.push(end.slice(split) + 'x');
+    assert.equal(events[0].name, 'paste');
+    assert.equal(events[0].text, '多行\n🙂');
+    assert.equal(events[1].char, 'x');
+  }
+});
+
+test('decoder keeps full Unicode characters and distinguishes Ctrl+J from Enter', () => {
+  const decoder = createKeyDecoder();
+  assert.equal(decoder.push('🙂')[0].char, '🙂');
+  assert.deepEqual(decoder.push('\ud83d'), []);
+  assert.equal(decoder.push('\ude42')[0].char, '🙂');
+  const events = decoder.push('\n\r');
+  assert.equal(events[0].char, 'j');
+  assert.equal(events[0].ctrl, true);
+  assert.equal(events[1].name, 'enter');
+});
+
+test('multiline arrows edit the draft before recalling history; large paste cannot overflow the call stack', () => {
+  const editor = new LineEditor({ history: ['old message'] });
+  editor.setValue('abc\nx\nxyz');
+  editor.handleKey({ name: 'up' });
+  assert.equal(editor.value, 'abc\nx\nxyz');
+  assert.equal(editor.cursor, 5);
+  editor.handleKey({ name: 'up' });
+  assert.equal(editor.cursor, 1);
+  editor.handleKey({ name: 'down' });
+  assert.equal(editor.cursor, 5);
+  editor.clear();
+  editor.insert('中'.repeat(150000));
+  assert.equal(editor.chars.length, 150000);
+});
+
 // ---------------- ANSI 排版 ----------------
 
 test('ansi：CJK 与全角按 2 格计算宽度', () => {

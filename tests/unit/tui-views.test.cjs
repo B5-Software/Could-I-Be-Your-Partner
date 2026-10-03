@@ -43,6 +43,33 @@ function compose(state) {
   return views.composeFrame(state, { hints: [], inputHint: '' });
 }
 
+test('large multiline input and questions fit the terminal with the cursor inside the visible input', () => {
+  const text = Array.from({ length: 200 }, (_, i) => '第' + i + '行 🙂').join('\n');
+  for (const height of [8, 12, 20])
+    for (const width of [20, 45, 80]) {
+      const state = inputState({
+        width,
+        height,
+        editorText: text,
+        editorCursor: Array.from(text).length,
+        scrollOffset: 100,
+        modal: {
+          title: 'Approval',
+          body: 'Many details\n'.repeat(80),
+          options: [{ label: 'Allow' }, { label: 'Deny' }],
+          selected: 1,
+        },
+      });
+      const frame = compose(state);
+      assert.ok(frame.lines.length <= height, `height ${height}: ${frame.lines.length}`);
+      assert.ok(frame.cursor.row >= 1 && frame.cursor.row <= height);
+      assert.ok(frame.cursor.col >= 1 && frame.cursor.col <= width);
+    }
+  const tiny = compose(inputState({ width: 8, height: 3 }));
+  assert.equal(tiny.hideCursor, true);
+  assert.ok(tiny.lines.length <= 3);
+});
+
 /** 输入框内顶线/正文/底线的行号（1-based） */
 function locateInput(lines) {
   const top = lines.findIndex((line) => stripAnsi(line).includes(BOX_TOP));

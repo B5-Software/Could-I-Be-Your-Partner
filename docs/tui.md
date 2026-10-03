@@ -39,7 +39,7 @@ TUI 与桌面端读**同一个数据目录**（`app.getPath('userData')` 同名�
 
 - 审批/授权默认弹窗等待应答；`CIBYP_AUTO_APPROVE=1` 可自动放行（脚本化）。
 - 主题：`CIBYP_TUI_THEME=dark|light|ansi`（默认 dark 真彩，`NO_COLOR` 自动降 16 色）。
-- 用户数据：`CIBYP_USER_DATA` 可指定配置目录（默认 `~/.cibyp`）。
+- 用户数据默认与 Electron 共用：Windows 为 `%APPDATA%/<应用名>`，macOS 为 `~/Library/Application Support/<应用名>`，Linux 为 `${XDG_CONFIG_HOME:-~/.config}/<应用名>`。优先使用已有设置的目录；`CIBYP_USER_DATA` 可显式覆盖。
 
 ## 界面构成
 
@@ -84,11 +84,12 @@ TUI 与桌面端读**同一个数据目录**（`app.getPath('userData')` 同名�
 | `Ctrl+T` | 待办面板 |
 | `Ctrl+R` | 历史会话（按模式） |
 | `Shift+Tab` | 循环切换模式（chat → babe → code） |
-| `PgUp` / `PgDn` | 消息区滚动 |
-| `↑` `↓` | 输入历史调阅 |
+| `PgUp` / `PgDn` | 消息区滚动；模态打开时翻页，到边界停住 |
+| `↑` `↓` | 多行草稿中移动光标，到首末行后调阅历史；`Ctrl+P/N` 直接调阅历史 |
 | `Ctrl+A/E` `Home/End` | 行首 / 行尾 |
 | `Ctrl+W` / `Ctrl+U` / `Ctrl+K` | 删词 / 删到行首 / 删到行尾 |
-| `Ctrl+B/F` 或 `Ctrl+←/→` | 词移动 |
+| `Ctrl+B/F` | 字符移动 |
+| `Alt+B/F` 或 `Ctrl+←/→` | 词移动 |
 | `Tab` | 补全选中的命令 / 参数建议 |
 | 补全面板 `↑↓` `Ctrl+P/N` | 选择建议 |
 | 补全面板 `Enter` / `Esc` | 补全并执行 / 关闭 |
@@ -147,6 +148,9 @@ TUI 占用整个终端后，LLM/网络/VM 的进程日志不再打到屏幕上�
 - 鼠标滚轮滚动聊天记录（输入框/模态的滚轮翻各自选项，不再切输入历史；
   输入历史调阅只走 `↑↓`/`Ctrl+P/N`）
 - 启用鼠标跟踪（点击/滚轮）；需要选中文本复制时**按住 Shift 再拖动**
+- 启用括号粘贴，多行内容整体进入草稿，粘贴中的换行不会自动发送；长草稿只展示光标附近的输入行。
+- 查看较早消息时，新回复到达会保持当前阅读位置；`Ctrl+L` 回到底部。
+- 终端标题实时显示 `CIBYP | 会话标题`，无标题的新对话显示 `CIBYP | New`；退出时恢复原终端标题。
 
 ## VM 模式
 
@@ -161,6 +165,8 @@ TUI 占用整个终端后，LLM/网络/VM 的进程日志不再打到屏幕上�
 - `/mode` **无参数弹出选择器**（当前模式高亮，Enter 确认）
 - `/mode <chat|babe|code>` 直接切换（新建该模式的会话）
 - `Shift+Tab` 循环切换（chat → babe → code）
+- `/sessions` 切回已有会话时，消息、输入草稿、附件、用量与待应答的审批分别保留；后台会话继续接收自己的事件。
+- `/workspace` 验证目录，并在任务运行中拒绝切换；首次发送保持指定的 Code 工作区。
 
 ## 三种模式
 

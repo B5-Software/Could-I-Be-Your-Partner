@@ -268,11 +268,26 @@ async function run() {
   assert.equal(tuiApp.state.workspace, CODE_WORKSPACE);
   assert.ok(frameText(tuiApp).includes(CODE_WORKSPACE), '状态栏应显示工作区');
 
+  pushReply('', [
+    {
+      id: 'code-create',
+      type: 'function',
+      function: {
+        name: 'createFile',
+        arguments: JSON.stringify({ path: 'hello.txt', content: 'TUI workspace verified' }),
+      },
+    },
+  ]);
   pushReply('已在工作区创建文件');
   typeText(tuiApp, '建一个 hello.txt');
   await tuiApp.handleKey({ name: 'enter' });
   await tuiApp.settled();
   assert.ok(frameText(tuiApp).includes('已在工作区创建文件'));
+  assert.equal(runtime.getSession(tuiApp.activeKey).workspacePath, CODE_WORKSPACE);
+  assert.equal(
+    fs.readFileSync(path.join(CODE_WORKSPACE, 'hello.txt'), 'utf8'),
+    'TUI workspace verified',
+  );
 
   const codeHistory = await runtime.listHistory('code', CODE_WORKSPACE);
   assert.ok(Array.isArray(codeHistory), 'code 历史可读');

@@ -1,6 +1,6 @@
 {
   "name": "could-i-be-your-partner",
-  "version": "1.9.0-alpha.12",
+  "version": "1.9.0-alpha.13",
   "description": "全自动AI Agent，帮助完成一切任务",
   "license": "GPL-3.0-or-later",
   "main": "src/main/main.js",
@@ -180,6 +180,9 @@
     "afterPack": "./scripts/eb-after-pack.js"
   },
   "overrides": {
+    "app-builder-lib": {
+      "@electron/get": "^5.1.0"
+    },
     "semver": "^7.6.3",
     "tmp": "^0.2.4",
     "tar": "^7.5.22",

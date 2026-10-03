@@ -112,10 +112,8 @@ test('数据目录：CIBYP_USER_DATA 显式指定优先', () => {
 });
 
 test('数据目录：与 Electron userData 同名解析，并优先已有设置的目录', () => {
-  const previous = { CIBYP_USER_DATA: process.env.CIBYP_USER_DATA, APPDATA: process.env.APPDATA };
-  delete process.env.CIBYP_USER_DATA;
   const fakeAppData = fs.mkdtempSync(path.join(os.tmpdir(), 'cibyp-appdata-'));
-  process.env.APPDATA = fakeAppData;
+  const options = { platform: 'win32', home: fakeAppData, env: { APPDATA: fakeAppData } };
   try {
     // 两个候选目录：只有“打包名”那个有 settings.json
     const devName = require(path.join(root, 'package.json')).name;
@@ -125,17 +123,28 @@ test('数据目录：与 Electron userData 同名解析，并优先已有设置�
     fs.mkdirSync(path.join(packDir, 'data'), { recursive: true });
     fs.writeFileSync(path.join(packDir, 'data', 'settings.json'), '{}');
 
-    const paths = createAppPaths();
+    const paths = createAppPaths(options);
     assert.equal(paths.userData, packDir, '应优先选择已有 settings.json 的目录');
 
     // 都没有设置时回落到 name 目录（开发态同 Electron）
     fs.rmSync(path.join(packDir, 'data', 'settings.json'));
-    assert.equal(createAppPaths().userData, devDir);
-  } finally {
-    for (const [key, value] of Object.entries(previous)) {
-      if (value === undefined) delete process.env[key];
-      else process.env[key] = value;
+    assert.equal(createAppPaths(options).userData, devDir);
+    for (const platform of ['darwin', 'linux']) {
+      const paths = createAppPaths({
+        platform,
+        home: fakeAppData,
+        env: { XDG_CONFIG_HOME: fakeAppData },
+      });
+      assert.equal(
+        paths.appData,
+        platform === 'linux'
+          ? fakeAppData
+          : path.join(fakeAppData, 'Library', 'Application Support'),
+      );
+      assert.equal(paths.userData, path.join(paths.appData, devName));
     }
+  } finally {
+    fs.rmSync(fakeAppData, { recursive: true, force: true });
   }
 });
 

@@ -414,11 +414,16 @@ function renderInput(theme, state, width, opts) {
     const prefix = index === 0 ? prompt : '  ';
     return prefix + clean;
   });
+  const maxRows = Math.max(1, opts?.maxRows || 6);
+  const startRow = Math.max(0, Math.min(rows.length - maxRows, caretRowIndex - maxRows + 1));
 
   // row 为输入块内的 1-based 行号：1=顶线，2..=正文行；col 为 1-based 显示列
   return {
-    lines: [top, ...body, bottom],
-    cursor: { row: 2 + caretRowIndex, col: (caretRowIndex === 0 ? promptWidth : 2) + caretCol + 1 },
+    lines: [top, ...body.slice(startRow, startRow + maxRows), bottom],
+    cursor: {
+      row: 2 + caretRowIndex - startRow,
+      col: Math.min(width, (caretRowIndex === 0 ? promptWidth : 2) + caretCol + 1),
+    },
   };
 }
 
@@ -450,7 +455,7 @@ function renderCompletion(theme, completion, width) {
 }
 
 /** 模态：▔ 顶线 + 标题 + 选项 */
-function renderModal(theme, modal, width) {
+function renderModal(theme, modal, width, maxHeight) {
   const color = theme[modal.colorKey || 'permission'] || theme.permission;
   const lines = [style(FIGURES.modalTop.repeat(Math.max(8, width)), { fg: color })];
   const pad = '  ';
@@ -465,13 +470,15 @@ function renderModal(theme, modal, width) {
       lines.push(pad + paint(theme, 'inactive', line, { dim: true }));
     }
   }
+  let selectedRow = 0;
   if (Array.isArray(modal.options)) {
     modal.options.forEach((option, index) => {
       const selected = index === (modal.selected || 0);
+      if (selected) selectedRow = lines.length;
       const pointer = selected ? paint(theme, 'suggestion', FIGURES.pointer + ' ') : '  ';
       const label = selected
-        ? style(option.label, { bold: true, fg: theme.suggestion })
-        : paint(theme, 'inactive', option.label);
+        ? style(truncate(option.label, width - 6), { bold: true, fg: theme.suggestion })
+        : paint(theme, 'inactive', truncate(option.label, width - 6));
       const tag = option.hint ? paint(theme, 'subtle', '  ' + option.hint, { dim: true }) : '';
       lines.push(pad + pointer + label + tag);
     });
@@ -485,7 +492,21 @@ function renderModal(theme, modal, width) {
   if (modal.footer) {
     lines.push(pad + paint(theme, 'subtle', modal.footer, { dim: true, italic: true }));
   }
-  return lines;
+  if (lines.length <= maxHeight) return lines;
+  if (maxHeight < 4)
+    return [lines[1] || '', lines[selectedRow] || '', lines.at(-1)].slice(
+      0,
+      Math.max(0, maxHeight),
+    );
+  const available = Math.max(1, maxHeight - 3);
+  const content = lines.slice(2, -1);
+  const maxOffset = Math.max(0, content.length - available);
+  const offset =
+    modal.options?.length > 1
+      ? Math.max(0, Math.min(maxOffset, selectedRow - 2 - available + 1))
+      : Math.max(0, Math.min(maxOffset, modal.scrollOffset || 0));
+  modal.scrollOffset = offset;
+  return [...lines.slice(0, 2), ...content.slice(offset, offset + available), lines.at(-1)];
 }
 
 /**
@@ -503,14 +524,38 @@ function composeFrame(state, opts) {
     return composeBootFrame(theme, state, width, height);
   }
 
+  if ((state.width && state.width < 20) || (state.height && state.height < 8)) {
+    return {
+      lines: [truncate('CIBYP', state.width || 20, '')],
+      cursor: { row: 1, col: 1 },
+      hideCursor: true,
+    };
+  }
+
   const statusLine = renderStatusLine(theme, state, width);
   const footerLine = renderFooter(theme, options.hints || [], width);
-  const inputView = renderInput(theme, state, width, { hint: options.inputHint });
+  const inputState = state.modal?.inputMode
+    ? { ...state, editorText: state.modal.editor.value, editorCursor: state.modal.editor.cursor }
+    : state;
+  const inputView = renderInput(theme, inputState, width, {
+    hint: options.inputHint,
+    maxRows: Math.min(6, Math.max(1, height - 10)),
+  });
 
-  const modalLines = state.modal ? renderModal(theme, state.modal, width) : [];
-  const completionLines = state.completion ? renderCompletion(theme, state.completion, width) : [];
+  const bottomBudget = Math.max(0, height - inputView.lines.length - 2);
+  const modalLines = state.modal ? renderModal(theme, state.modal, width, bottomBudget) : [];
+  let completionLines =
+    !state.modal && state.completion ? renderCompletion(theme, state.completion, width) : [];
+  if (completionLines.length > bottomBudget) {
+    const count = Math.max(0, bottomBudget - 1);
+    const start = Math.max(0, (state.completion.selected || 0) - count + 1);
+    completionLines = [
+      ...completionLines.slice(start, start + count),
+      completionLines.at(-1),
+    ].slice(0, bottomBudget);
+  }
   const fixedBottom = inputView.lines.length + 1 + modalLines.length + completionLines.length; // + footer
-  const messageAreaHeight = Math.max(3, height - fixedBottom - 1);
+  const messageAreaHeight = Math.max(0, height - fixedBottom - 1);
 
   // 消息区：从底部往上取（scrollOffset = 距底部的行数）
   const allLines = [];
@@ -540,12 +585,19 @@ function composeFrame(state, opts) {
   // bound so the first message line is reachable, without accumulating offset
   // once the viewport has reached the top.
   const maxOffset =
-    allLines.length > messageAreaHeight ? allLines.length - messageAreaHeight + 1 : 0;
-  const offset = Math.max(0, Math.min(state.scrollOffset || 0, maxOffset));
+    messageAreaHeight > 1 && allLines.length > messageAreaHeight
+      ? allLines.length - messageAreaHeight + 1
+      : 0;
+  const requestedOffset =
+    (state.scrollOffset || 0) +
+    (state.scrollOffset > 0 && Number.isInteger(state.scrollLineCount)
+      ? allLines.length - state.scrollLineCount
+      : 0);
+  const offset = Math.max(0, Math.min(requestedOffset, maxOffset));
   const indicatorHeight = offset > 0 ? 1 : 0;
   const end = allLines.length - offset;
   const start = Math.max(0, end - (messageAreaHeight - indicatorHeight));
-  const visible = allLines.slice(start, end);
+  const visible = messageAreaHeight > 0 ? allLines.slice(start, end) : [];
   while (visible.length < messageAreaHeight - indicatorHeight) visible.unshift('');
   if (indicatorHeight > 0) {
     visible.push(
@@ -567,7 +619,7 @@ function composeFrame(state, opts) {
 
   return {
     lines,
-    scroll: { offset, maxOffset },
+    scroll: { offset, maxOffset, totalLines: allLines.length },
     cursor: {
       // 消息区 + 模态 + 补全面板占掉前若干行，输入块内的行号接在其后
       row: visible.length + modalLines.length + completionLines.length + inputView.cursor.row,
@@ -609,7 +661,7 @@ function composeBootFrame(theme, state, width, height) {
   const top = Math.max(0, Math.floor((height - body.length) / 2));
   const lines = [...Array(top).fill(''), ...body];
   while (lines.length < height - 1) lines.push('');
-  return { lines, cursor: { row: 1, col: 1 } };
+  return { lines, cursor: { row: 1, col: 1 }, hideCursor: true };
 }
 
 /** 运行中的 spinner 行：闪烁字形 + 文案 + (esc to interrupt · 0:12) */

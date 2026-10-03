@@ -23,7 +23,7 @@ const path = require('node:path');
 const { TuiApp } = require('./app.js');
 const { createKeyDecoder } = require('./keys.js');
 const { themeFromEnv } = require('./theme.js');
-const { CSI, CH } = require('./ansi.js');
+const { CSI, CH, stripAnsi, truncate } = require('./ansi.js');
 
 const ALT_ENTER = CSI + '?1049h' + CSI + '2J' + CSI + 'H';
 const ALT_EXIT = CSI + '?1049l';
@@ -60,6 +60,10 @@ function resolveLogFile() {
  */
 function installLogIsolation(logPath, screen) {
   const stream = fs.createWriteStream(logPath, { flags: 'a' });
+  let logFailed = false;
+  stream.on('error', () => {
+    logFailed = true;
+  });
   const format = (value) => {
     if (typeof value === 'string') return value;
     if (value instanceof Error) return value.stack || value.message;
@@ -71,7 +75,8 @@ function installLogIsolation(logPath, screen) {
   };
   const write = (level, args) => {
     try {
-      stream.write(`[${new Date().toISOString()}] ${level} ${args.map(format).join(' ')}\n`);
+      if (!logFailed)
+        stream.write(`[${new Date().toISOString()}] ${level} ${args.map(format).join(' ')}\n`);
     } catch {
       /* 日志失败不影响界面 */
     }
@@ -92,10 +97,15 @@ function installLogIsolation(logPath, screen) {
 
   const realStdout = process.stdout.write.bind(process.stdout);
   const realStderr = process.stderr.write.bind(process.stderr);
-  process.stdout.write = (chunk, ...rest) =>
-    screen.guarded ? realStdout(chunk, ...rest) : (write('stdout', [String(chunk)]), true);
-  process.stderr.write = (chunk, ...rest) =>
-    screen.guarded ? realStderr(chunk, ...rest) : (write('stderr', [String(chunk)]), true);
+  const routeWrite = (real, level, chunk, rest) => {
+    if (screen.guarded) return real(chunk, ...rest);
+    write(level, [String(chunk)]);
+    const callback = rest.find((value) => typeof value === 'function');
+    if (callback) queueMicrotask(callback);
+    return true;
+  };
+  process.stdout.write = (chunk, ...rest) => routeWrite(realStdout, 'stdout', chunk, rest);
+  process.stderr.write = (chunk, ...rest) => routeWrite(realStderr, 'stderr', chunk, rest);
 
   return {
     logPath,
@@ -127,22 +137,54 @@ function createTerminalScreen(stdout) {
       }
     },
     enter() {
-      screen._write(ALT_ENTER + HIDE_CURSOR + MOUSE_ON);
+      screen._write(CSI + '22;0t' + ALT_ENTER + HIDE_CURSOR + MOUSE_ON + CSI + '?2004h');
+      screen.setTitle('');
     },
     exit() {
-      screen._write(MOUSE_OFF + SHOW_CURSOR + CLEAR_REST + '\n' + ALT_EXIT);
+      screen._write(
+        CSI + '?2004l' + MOUSE_OFF + SHOW_CURSOR + CLEAR_REST + '\n' + ALT_EXIT + CSI + '23;0t',
+      );
+    },
+    setTitle(title) {
+      const label =
+        'CIBYP | ' +
+        (truncate(
+          stripAnsi(title)
+            .replace(/[\r\n\t]/g, ' ')
+            .trim(),
+          200,
+        ) || 'New');
+      if (label === screen.title) return;
+      screen.title = label;
+      screen._write(CH + ']0;' + label + '\u0007');
     },
     render(frame) {
-      const lines = frame.lines || [];
+      screen.setTitle(frame.title || '');
+      const lines = (frame.lines || []).slice(0, screen.height);
       let out = CSI + 'H';
       for (let i = 0; i < lines.length; i += 1) {
-        out += lines[i] + CLEAR_LINE_END;
+        out +=
+          truncate(
+            stripAnsi(lines[i], true).replace(/\n/g, ' ').replace(/\t/g, '    '),
+            screen.width,
+            '',
+          ) +
+          CSI +
+          '0m' +
+          CLEAR_LINE_END;
         if (i < lines.length - 1) out += '\r\n';
       }
       out += CLEAR_REST;
       const cursor = frame.cursor || { row: 1, col: 1 };
-      out += CSI + cursor.row + ';' + cursor.col + 'H';
-      out += SHOW_CURSOR;
+      out +=
+        CSI +
+        Math.max(1, Math.min(screen.height, cursor.row)) +
+        ';' +
+        Math.max(1, Math.min(screen.width, cursor.col)) +
+        'H';
+      out += frame.hideCursor ? HIDE_CURSOR : SHOW_CURSOR;
+      if (out === screen.lastFrame) return;
+      screen.lastFrame = out;
       screen._write(out);
     },
   };
@@ -172,7 +214,9 @@ function startTui(options) {
   // 交互性 = 能设原始模式（要收逐键输入）。
   // 注意：Windows 下 Electron 主进程的 stdin 不是 TTY（setRawMode 不存在），
   // 那种情况无法做交互界面 —— 渲染预览帧并提示改用纯 Node 入口（bin/cibyp-tui.js）。
-  const interactive = typeof stdin.setRawMode === 'function';
+  const interactive = Boolean(
+    stdin.isTTY && stdout.isTTY && typeof stdin.setRawMode === 'function',
+  );
   const looksLikeTerminal = Boolean(stdin.isTTY) || Boolean(stdout.isTTY);
   if (!interactive && looksLikeTerminal) {
     // 提示要在安装日志隔离之前输出（隔离后 stderr 也进文件）
@@ -223,6 +267,7 @@ function startTui(options) {
         } catch {
           /* ignore */
         }
+        app.pushEntry({ kind: 'system', text: error.message || String(error) });
       })
       .then(render);
   }
@@ -238,12 +283,27 @@ function startTui(options) {
   }
 
   let animTimer = null;
-  function shutdown() {
+  const onSigint = () => enqueueKey({ name: 'char', char: 'c', ctrl: true });
+  const onSigterm = () => shutdown();
+  const detachSignals = () => {
+    process.removeListener('SIGINT', onSigint);
+    process.removeListener('SIGTERM', onSigterm);
+  };
+  const onResize = () => {
+    screen.width = stdout.columns || screen.width;
+    screen.height = stdout.rows || screen.height;
+    screen.lastFrame = null;
+    app.resize(screen.width, screen.height);
+    render();
+  };
+  async function shutdown() {
     if (shutdown.done) return;
     shutdown.done = true;
+    quitRequested = true;
     detachSignals();
     clearInterval(animTimer);
     clearTimeout(onStdin.flushTimer);
+    stdout.removeListener?.('resize', onResize);
     try {
       stdin.removeListener('data', onStdin);
       if (typeof stdin.setRawMode === 'function') stdin.setRawMode(false);
@@ -264,7 +324,13 @@ function startTui(options) {
     }
     logIsolation.restore();
     // 同步退出：不留竞态窗口（否则控制台可能再把排队的 Ctrl+C 当信号杀掉进程）
-    const code = typeof options.onExit === 'function' ? options.onExit(0) : 0;
+    let code = 0;
+    try {
+      if (typeof options.onExit === 'function') code = await options.onExit(0);
+    } catch (error) {
+      console.error('[tui] shutdown failed:', error);
+      code = 1;
+    }
     process.exit(typeof code === 'number' ? code : 0);
   }
 
@@ -280,6 +346,7 @@ function startTui(options) {
     if (bootState && bootState.required && !bootState.ready && !bootState.failed) {
       for (;;) {
         bootState = getBootState();
+        if (quitRequested || !bootState) return;
         app.setBootStatus({
           progress: Number(bootState.progress) || 0,
           detail: bootState.detail || bootState.phase || '',
@@ -303,12 +370,17 @@ function startTui(options) {
     }
     const modeArg = argv.find((a) => a.startsWith('--mode='));
     const workspaceArg = argv.find((a) => a.startsWith('--workspace='));
+    if (quitRequested) return;
     await app.start({
       mode: modeArg ? modeArg.slice('--mode='.length) : 'chat',
       workspacePath: workspaceArg ? workspaceArg.slice('--workspace='.length) : undefined,
     });
+    if (bootState?.failed || bootState?.timeout)
+      app.pushEntry({ kind: 'system', text: bootState.detail || 'VM startup failed' });
   })()
     .catch((error) => {
+      app.setBootStatus(null);
+      app.pushEntry({ kind: 'system', text: error.message || String(error) });
       try {
         console.error('[tui] boot failed:', error);
       } catch {
@@ -322,24 +394,28 @@ function startTui(options) {
   if (interactive) {
     screen.enter();
     enteredScreen = true;
-    if (typeof stdin.setRawMode === 'function') stdin.setRawMode(true);
-    stdin.resume();
-    if (typeof stdin.setEncoding === 'function') stdin.setEncoding('utf8');
-    stdin.on('data', onStdin);
-    if (typeof process.stdout.on === 'function') {
-      process.stdout.on('resize', () => {
-        screen.width = process.stdout.columns || screen.width;
-        screen.height = process.stdout.rows || screen.height;
-        app.resize(screen.width, screen.height);
-        render();
-      });
+    try {
+      stdin.setRawMode(true);
+      stdin.resume();
+      if (typeof stdin.setEncoding === 'function') stdin.setEncoding('utf8');
+      stdin.on('data', onStdin);
+      stdout.on?.('resize', onResize);
+    } catch (error) {
+      console.error('[tui] terminal initialization failed:', error);
+      shutdown();
+      return { app, screen, boot, shutdown, logFile };
     }
   } else {
     // 非 TTY（管道/自动化，或 Windows 下的 Electron 主进程）：渲染一帧后退出，
     // 便于脚本直接读取界面文本（长驻无界面请用 --headless --web）。
     boot
       .then(() => {
-        render();
+        screen._write(
+          app
+            .frame()
+            .lines.map((line) => stripAnsi(line))
+            .join('\n') + '\n',
+        );
         shutdown();
       })
       .catch(() => shutdown());
@@ -356,17 +432,8 @@ function startTui(options) {
   //   - raw 模式下 Ctrl+C 本就是数据（0x03），走按键路径；
   //   - 非 raw（或窗口期）时控制台会发 CTRL_C_EVENT → Node 暴露为 SIGINT，
   //     若不处理会被默认行为直接杀掉（Windows 退出码 0xC000013A）。
-  const onSigint = () => enqueueKey({ name: 'char', char: 'c', ctrl: true });
-  const onSigterm = () => {
-    quitRequested = true;
-    shutdown();
-  };
   process.on('SIGINT', onSigint);
   process.on('SIGTERM', onSigterm);
-  const detachSignals = () => {
-    process.removeListener('SIGINT', onSigint);
-    process.removeListener('SIGTERM', onSigterm);
-  };
 
   return {
     app,

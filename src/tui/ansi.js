@@ -94,7 +94,7 @@ function paint(theme, key, text, extra) {
 }
 
 /** 去除 ANSI 控制序列（手写扫描，支持 CSI 与简单 ESC 序列） */
-function stripAnsi(str) {
+function stripAnsi(str, keepStyles = false) {
   const text = String(str == null ? '' : str);
   let out = '';
   let i = 0;
@@ -102,6 +102,7 @@ function stripAnsi(str) {
     const ch = text[i];
     if (ch === CH) {
       if (text[i + 1] === '[') {
+        const start = i;
         i += 2;
         // CSI：参数字节 0x30-0x3F、中间字节 0x20-0x2F、终止字节 0x40-0x7E
         while (i < text.length) {
@@ -109,12 +110,22 @@ function stripAnsi(str) {
           i += 1;
           if (code >= 0x40 && code <= 0x7e) break;
         }
+        if (keepStyles === true && /^\u001b\[[\d;:]*m$/.test(text.slice(start, i)))
+          out += text.slice(start, i);
+        continue;
+      }
+      if (']P^_'.includes(text[i + 1] || ' ')) {
+        i += 2;
+        while (i < text.length && text[i] !== '\u0007' && !(text[i] === CH && text[i + 1] === '\\'))
+          i++;
+        i += text[i] === CH ? 2 : 1;
         continue;
       }
       i += 2; // 其它 ESC 序列：ESC + 一个字节
       continue;
     }
-    out += ch;
+    const code = ch.charCodeAt(0);
+    if ((code >= 32 && !(code >= 127 && code <= 159)) || ch === '\n' || ch === '\t') out += ch;
     i += 1;
   }
   return out;
@@ -122,6 +133,7 @@ function stripAnsi(str) {
 
 /** 单字符显示宽度：CJK / 全角 / emoji 按 2 格 */
 function charWidth(codePoint) {
+  if (/\p{Mark}/u.test(String.fromCodePoint(codePoint)) || codePoint === 0x200d) return 0;
   if (codePoint === 0x200b || codePoint === 0xfeff) return 0; // 零宽
   if (
     (codePoint >= 0x1100 && codePoint <= 0x115f) || // 谚文字母

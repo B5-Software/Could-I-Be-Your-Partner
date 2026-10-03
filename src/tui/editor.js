@@ -43,7 +43,7 @@ class LineEditor {
   insert(text) {
     const add = Array.from(String(text == null ? '' : text));
     if (add.length === 0) return;
-    this.chars.splice(this.cursor, 0, ...add);
+    this.chars = [...this.chars.slice(0, this.cursor), ...add, ...this.chars.slice(this.cursor)];
     this.cursor += add.length;
     this.historyIndex = -1;
   }
@@ -71,6 +71,28 @@ class LineEditor {
 
   right() {
     if (this.cursor < this.chars.length) this.cursor += 1;
+  }
+
+  vertical(direction) {
+    let start = this.cursor;
+    while (start > 0 && this.chars[start - 1] !== '\n') start--;
+    const column = this.cursor - start;
+    if (direction < 0) {
+      if (start === 0) return false;
+      const end = start - 1;
+      start = end;
+      while (start > 0 && this.chars[start - 1] !== '\n') start--;
+      this.cursor = Math.min(end, start + column);
+    } else {
+      let next = this.cursor;
+      while (next < this.chars.length && this.chars[next] !== '\n') next++;
+      if (next === this.chars.length) return false;
+      const start = next + 1;
+      next = start;
+      while (next < this.chars.length && this.chars[next] !== '\n') next++;
+      this.cursor = Math.min(next, start + column);
+    }
+    return true;
   }
 
   home() {
@@ -220,12 +242,14 @@ class LineEditor {
         this.end();
         return 'handled';
       case 'up':
+        if (!key.ctrl && this.vertical(-1)) return 'handled';
         if (key.ctrl || this.cursorAtFirstLine()) {
           this.historyPrev();
           return 'handled';
         }
         return 'ignored';
       case 'down':
+        if (!key.ctrl && this.vertical(1)) return 'handled';
         if (key.ctrl || this.cursorAtLastLine()) {
           this.historyNext();
           return 'handled';

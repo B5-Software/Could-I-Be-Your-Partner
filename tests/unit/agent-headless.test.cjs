@@ -10,6 +10,8 @@
  */
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
+const path = require('node:path');
+const os = require('node:os');
 
 const { loadPreloadApi } = require('../../src/agent/preload-api.js');
 const { createEventBus } = require('../../src/main/core/event-bus.js');
@@ -92,6 +94,55 @@ function llmScript(responses) {
   handler.calls = calls;
   return handler;
 }
+
+test('Code startup preserves the requested workspace and rejects changes during a task', async () => {
+  const handlers = baseHandlers({ llmChat: llmScript([{ content: 'done' }]) });
+  let created = 0;
+  handlers.set('workspace:create', () => {
+    created++;
+    return { ok: true, path: '/unexpected' };
+  });
+  const runtime = createAgentRuntime({
+    ipcMain: createFakeIpcMain(handlers),
+    eventBus: createEventBus(),
+  });
+  const workspace = path.join(os.tmpdir(), 'requested-code-project');
+  runtime.createSession({ key: 'code-workspace', mode: 'code', workspacePath: workspace });
+  assert.equal((await runtime.sendMessage('code-workspace', 'hello')).ok, true);
+  assert.equal(runtime.getSession('code-workspace').workspacePath, workspace);
+  assert.equal(created, 0);
+  runtime.sessions.get('code-workspace').busy = true;
+  assert.equal((await runtime.setWorkspace('code-workspace', '/new')).ok, false);
+  assert.equal((await runtime.openHistory('code-workspace', 'h1')).ok, false);
+});
+
+test('stopping during initialization prevents the first LLM request', async () => {
+  let requests = 0;
+  let release;
+  const handlers = baseHandlers({
+    llmChat: () => {
+      requests++;
+      return { ok: true };
+    },
+  });
+  handlers.set(
+    'app:startup-runtime',
+    () =>
+      new Promise((resolve) => {
+        release = resolve;
+      }),
+  );
+  const runtime = createAgentRuntime({
+    ipcMain: createFakeIpcMain(handlers),
+    eventBus: createEventBus(),
+  });
+  const pending = runtime.sendMessage('stop-init', 'do not send');
+  runtime.stop('stop-init');
+  release({ ok: true });
+  assert.equal((await pending).stopped, true);
+  assert.equal(requests, 0);
+  assert.equal(runtime.getSession('stop-init').busy, false);
+});
 
 // ---- 1. preload 门面派生 ----
 

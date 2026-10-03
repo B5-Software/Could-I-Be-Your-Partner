@@ -142,8 +142,14 @@ function createKeyDecoder() {
       if (pasting) {
         const end = buffer.indexOf(PASTE_END, i);
         if (end === -1) {
-          pasteBuffer += buffer.slice(i);
-          i = buffer.length;
+          // Retain a partial closing marker, which may cross a stdin chunk.
+          let held = 0;
+          for (let n = 1; n < PASTE_END.length; n++) {
+            if (buffer.slice(i).endsWith(PASTE_END.slice(0, n))) held = n;
+          }
+          const stop = buffer.length - held;
+          pasteBuffer += buffer.slice(i, stop);
+          i = stop;
           break;
         }
         pasteBuffer += buffer.slice(i, end);
@@ -219,8 +225,10 @@ function createKeyDecoder() {
         if (rest.length < 2) break; // 孤立 ESC，等 flush() 判定
 
         // Alt + 字符（Alt+Enter / Alt+Backspace / Alt+字母）
-        const next = rest[1];
-        i += 2;
+        const point = rest.codePointAt(1);
+        if (point >= 0xd800 && point <= 0xdbff && rest.length === 2) break;
+        const next = String.fromCodePoint(point);
+        i += 1 + next.length;
         if (next === CH) {
           events.push(keyEvent('escape', {}));
         } else if (next === '\r' || next === '\n') {
@@ -234,10 +242,14 @@ function createKeyDecoder() {
       }
 
       // ---- 控制字符 ----
-      const code = ch.charCodeAt(0);
-      i += 1;
-      if (ch === '\r' || ch === '\n') {
+      const code = ch.codePointAt(0);
+      if (code >= 0xd800 && code <= 0xdbff && i === buffer.length - 1) break;
+      const character = String.fromCodePoint(buffer.codePointAt(i));
+      i += character.length;
+      if (ch === '\r') {
         events.push(keyEvent('enter', {}));
+      } else if (ch === '\n') {
+        events.push(keyEvent('char', { ctrl: true }, { char: 'j' }));
       } else if (ch === '\t') {
         events.push(keyEvent('tab', {}));
       } else if (ch === DEL || ch === BS) {
@@ -249,7 +261,7 @@ function createKeyDecoder() {
         events.push(keyEvent('char', { ctrl: true }, { char }));
       } else {
         // ---- 普通字符（含 CJK）----
-        events.push(keyEvent('char', {}, { char: ch }));
+        events.push(keyEvent('char', {}, { char: character }));
       }
     }
 
@@ -265,6 +277,7 @@ function createKeyDecoder() {
     /** 把缓冲里残留的孤立序列判定掉（ESC → escape） */
     flush() {
       const events = [];
+      if (pasting) return events;
       if (buffer === CH) {
         buffer = '';
         events.push(keyEvent('escape', {}));

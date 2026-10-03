@@ -24,14 +24,12 @@ const path = require('node:path');
 const root = path.resolve(__dirname, '../..');
 const pty = require(path.join(root, 'node_modules', 'node-pty'));
 const { stripAnsi } = require(path.join(root, 'src/tui/ansi.js'));
-const { BOX } = require(path.join(root, 'src/tui/theme.js'));
 
 const REPLY = '这是真终端测试回复';
 const TITLE = '真终端会话';
 const USER_TEXT = '你好';
 const CTRL_C = String.fromCharCode(3);
 const CR = String.fromCharCode(13);
-const BOX_TOP_LEFT = BOX.topLeft;
 
 function startStubLlm() {
   return new Promise((resolve) => {
@@ -183,6 +181,7 @@ test(
           }
           if (stage.echoed && !stage.replied && plain.includes(REPLY)) {
             stage.replied = true;
+            child.write('/rename 重命名终端' + CR);
             setTimeout(() => {
               stage.quitting = 1;
               child.write(CTRL_C);
@@ -196,6 +195,12 @@ test(
       });
 
       assert.equal(result.exitCode, 0, 'Ctrl+C 两次后应干净退出；阶段=' + JSON.stringify(stage));
+      for (const title of ['New', TITLE, '重命名终端']) {
+        assert.ok(
+          result.output.includes('CIBYP | ' + title),
+          'Terminal title should include ' + title,
+        );
+      }
     } finally {
       closeStub(stub);
     }
@@ -211,6 +216,7 @@ test(
     let frames = 0;
     let lastFrameAt = 0;
     let quitSent = false;
+    let typingStarted = false;
     const startedAt = Date.now();
 
     try {
@@ -220,14 +226,18 @@ test(
         watchdogMs: 25000,
         describe: () => 'frames=' + frames,
         onOutput: (data, all, child) => {
-          const seen = all.split(BOX_TOP_LEFT).length - 1;
-          if (seen > frames) {
-            frames = seen;
+          if (typingStarted && data) {
+            frames++;
             lastFrameAt = Date.now() - startedAt;
           }
-          // 只发一次退出序列：动画时钟持续出帧，重复写 Ctrl+C 会在应用退出
-          // 关掉 raw 模式后被控制台当作控制信号（Windows 0xC000013A）。
-          if (frames >= 8 && !quitSent) {
+          if (!typingStarted && stripAnsi(all).includes('终端模式')) {
+            typingStarted = true;
+            // Idle frames are deliberately deduplicated. Exercise redraws with
+            // real input and a terminal resize instead of demanding idle flicker.
+            child.resize(90, 25);
+            for (let i = 0; i < 8; i++) setTimeout(() => child.write('a'), 200 + i * 200);
+          }
+          if (stripAnsi(all).includes('aaaaaaaa') && !quitSent) {
             quitSent = true;
             child.write(CTRL_C);
             setTimeout(() => child.write(CTRL_C), 300);

@@ -4316,7 +4316,8 @@ app.whenReady().then(async () => {
               detail: inst.detail || inst.state || '',
             };
           },
-          onExit: (code) => {
+          onExit: async (code) => {
+            try { await vmService.stop(); } catch { /* report through VM service logging */ }
             try {
               app.exit(code || 0);
             } catch {

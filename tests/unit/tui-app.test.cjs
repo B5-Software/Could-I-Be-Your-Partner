@@ -132,6 +132,198 @@ function typeText(app, text) {
   for (const char of text) app.editor.insert(char);
 }
 
+test('titles, messages, drafts and attachments remain isolated across sessions', async () => {
+  const { app, runtime } = await makeApp();
+  assert.equal(app.frame().title, '');
+  const first = app.activeKey;
+  app.pushEntry({ kind: 'assistant', text: 'first reply' });
+  app.editor.setValue('unsent draft');
+  app.attachments.push({ name: 'a.txt', path: '/a.txt' });
+  runtime.emit({ type: 'title', key: first, title: 'First' });
+  await app.settled();
+  assert.equal(app.frame().title, 'First');
+  await app.newSession('code', '/workspace/project');
+  assert.equal(app.frame().title, '');
+  const second = app.activeKey;
+  app.resize(50, 14);
+  runtime.emit({ type: 'stream-start', key: first });
+  runtime.emit({ type: 'stream-chunk', key: first, data: { content: 'background reply' } });
+  runtime.emit({ type: 'stream-end', key: first });
+  runtime.emit({ type: 'todo', items: [{ id: 1, text: 'global todo' }] });
+  await app.settled();
+  assert.ok(!app.state.messages.some((m) => m.text === 'background reply'));
+  await app._switchSession(first);
+  assert.equal(app.frame().title, 'First');
+  assert.equal(app.editor.value, 'unsent draft');
+  assert.equal(app.attachments[0].name, 'a.txt');
+  assert.ok(app.state.messages.some((m) => m.text === 'background reply'));
+  assert.equal(app.state.width, 50);
+  assert.equal(app.state.todos[0].text, 'global todo');
+  await app._switchSession(second);
+  assert.equal(app.state.workspace, '/workspace/project');
+  assert.equal(app.editor.value, '');
+});
+
+test('late send failures do not change the active session or its running state', async () => {
+  const { app, runtime } = await makeApp();
+  const first = app.activeKey;
+  let finish;
+  runtime.sendMessage = () =>
+    new Promise((resolve) => {
+      finish = resolve;
+    });
+  const send = app._send('first task');
+  await app.newSession('chat');
+  app.state.running = true;
+  finish({ ok: false, error: 'first failed' });
+  await send;
+  assert.equal(app.state.running, true);
+  assert.ok(!frameText(app).includes('first failed'));
+  await app._switchSession(first);
+  assert.ok(frameText(app).includes('first failed'));
+});
+
+test('free-text questions show the answer buffer and allow cancellation and interruption', async () => {
+  const { app, runtime } = await makeApp();
+  app.state.modal = app._buildAskModal([{ title: 'Your answer' }], 0, []);
+  await app.handleKey({ name: 'paste', text: 'typed answer' });
+  assert.ok(frameText(app).includes('typed answer'));
+  await app.handleKey({ name: 'escape' });
+  assert.equal(app.state.modal, null);
+  assert.ok(runtime.calls.some((c) => c[0] === 'respond'));
+  app.state.running = true;
+  app.state.modal = app._buildAskModal([{ title: 'Your answer' }], 0, []);
+  await app.handleKey({ name: 'char', ctrl: true, char: 'c' });
+  assert.equal(app.state.modal, null);
+  assert.ok(runtime.calls.some((c) => c[0] === 'stop'));
+});
+
+test('modal scrolling clamps at both ends and keeps long selector choices visible', async () => {
+  const { app } = await makeApp();
+  app.resize(55, 16);
+  app.state.todos = Array.from({ length: 50 }, (_, i) => ({ text: 'Task ' + i }));
+  app._openTodoModal();
+  for (let i = 0; i < 40; i++) await app.handleKey({ name: 'pagedown' });
+  const end = app.state.modal.scrollOffset;
+  assert.ok(end > 0);
+  await app.handleKey({ name: 'pageup' });
+  assert.ok(app.state.modal.scrollOffset < end);
+  app.state.modal = {
+    kind: 'sessions',
+    title: 'Sessions',
+    selected: 39,
+    options: Array.from({ length: 40 }, (_, i) => ({ label: 'Session ' + i })),
+  };
+  assert.ok(frameText(app).includes('Session 39'));
+  assert.ok(app.frame().lines.length <= 16);
+});
+
+test('failed workspace and rename commands show errors without falsely updating state', async () => {
+  const { app, runtime } = await makeApp({ mode: 'code', workspacePath: '/valid' });
+  runtime.setWorkspace = async () => ({ ok: false, error: 'missing directory' });
+  app.editor.setValue('/workspace /missing');
+  await app.handleKey({ name: 'enter' });
+  assert.equal(app.state.workspace, '/valid');
+  assert.ok(frameText(app).includes('missing directory'));
+  runtime.setTitle = async () => ({ ok: false, error: 'rename denied' });
+  app.editor.setValue('/rename invalid');
+  await app.handleKey({ name: 'enter' });
+  assert.equal(app.frame().title, '');
+  assert.ok(frameText(app).includes('rename denied'));
+});
+
+test('VM boot accepts cancellation but cannot accidentally send a task before the session exists', async () => {
+  const { app, runtime, quits } = await makeApp();
+  app.setBootStatus({ progress: 20 });
+  await app.handleKey({ name: 'paste', text: 'premature task' });
+  await app.handleKey({ name: 'enter' });
+  assert.equal(app.editor.value, '');
+  assert.ok(!runtime.calls.some((c) => c[0] === 'sendMessage'));
+  await app.handleKey({ name: 'char', ctrl: true, char: 'c' });
+  assert.equal(quits.length, 1);
+});
+
+test('background approvals remain answerable after returning to that session', async () => {
+  const { app, runtime } = await makeApp();
+  const first = app.activeKey;
+  await app.newSession('chat');
+  runtime.emit({
+    type: 'interaction',
+    key: first,
+    kind: 'approval',
+    payload: { toolName: 'bash' },
+  });
+  await app.settled();
+  assert.equal(app.state.modal, null);
+  await app._switchSession(first);
+  assert.equal(app.state.modal.kind, 'approval');
+  await app.handleKey({ name: 'char', char: 'y' });
+  assert.deepEqual(runtime.calls.at(-1), ['respond', first, true]);
+});
+
+test('entering a runtime-created session hydrates its messages and pending question', async () => {
+  const { app, runtime } = await makeApp();
+  runtime.createSession({ key: 'external', mode: 'chat', title: 'WebUI conversation' });
+  runtime.getSessionDetails = () => ({
+    messages: [{ role: 'user', content: 'existing task' }],
+    pendingInteraction: { kind: 'questions', payload: { questions: [{ title: 'Continue?' }] } },
+  });
+  await app._switchSession('external');
+  assert.ok(app.state.messages.some((m) => m.text === 'existing task'));
+  assert.equal(app.state.modal.kind, 'ask');
+  assert.equal(app.frame().title, 'WebUI conversation');
+});
+
+test('a history response arriving after a session switch updates only the original conversation', async () => {
+  const { app, runtime } = await makeApp();
+  const first = app.activeKey;
+  let release;
+  runtime.openHistory = () =>
+    new Promise((resolve) => {
+      release = resolve;
+    });
+  const loading = app._openHistory('h1');
+  await app.newSession('chat');
+  release({
+    ok: true,
+    title: 'Loaded history',
+    messages: [{ role: 'assistant', content: 'previous answer' }],
+  });
+  await loading;
+  assert.equal(app.frame().title, '');
+  assert.ok(!app.state.messages.some((m) => m.text === 'previous answer'));
+  await app._switchSession(first);
+  assert.equal(app.frame().title, 'Loaded history');
+  assert.ok(app.state.messages.some((m) => m.text === 'previous answer'));
+});
+
+test('stream updates keep a scrolled viewport anchored, and clear releases old stream references', async () => {
+  const { app, runtime } = await makeApp();
+  app.resize(70, 16);
+  app.state.messages = [
+    { kind: 'assistant', text: Array.from({ length: 80 }, (_, i) => 'line ' + i).join('\n') },
+  ];
+  runtime.emit({ type: 'stream-start', key: app.activeKey });
+  await app.settled();
+  await app.handleKey({ name: 'pageup' });
+  const before = frameText(app).split('\n').slice(0, 6).join('\n');
+  runtime.emit({ type: 'stream-chunk', key: app.activeKey, data: { content: 'new\nnew\nnew' } });
+  await app.settled();
+  const after = frameText(app).split('\n').slice(0, 6).join('\n');
+  assert.equal(after, before);
+  app.editor.setValue('/clear');
+  await app.handleKey({ name: 'enter' });
+  assert.equal(app._streamEntry, null);
+  runtime.emit({
+    type: 'message',
+    key: app.activeKey,
+    role: 'assistant',
+    content: 'visible new reply',
+  });
+  await app.settled();
+  assert.ok(frameText(app).includes('visible new reply'));
+});
+
 // ---------------- 启动与渲染 ----------------
 
 test('tui：启动创建会话并渲染欢迎语与状态栏', async () => {
