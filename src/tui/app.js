@@ -15,7 +15,15 @@
 
 const { LineEditor } = require('./editor.js');
 const { themeFromEnv } = require('./theme.js');
-const { parseInput, suggest, helpLines, COMMAND_MAP } = require('./commands.js');
+const {
+  parseInput,
+  suggestCommands,
+  suggestArgs,
+  expandCustomCommand,
+  helpLines,
+  loadCustomCommands,
+  defaultCommandDirs,
+} = require('./commands.js');
 const views = require('./views.js');
 
 const MODES = ['chat', 'babe', 'code'];
@@ -29,6 +37,10 @@ class TuiApp {
     this.clock = options.clock || (() => Date.now());
     this.editor = new LineEditor({ history: options.history || [] });
     this.attachments = [];
+    this.env = options.env || (typeof process !== 'undefined' ? process.env : {});
+    this.customCommands = new Map();
+    this._completionSelected = 0;
+    this._historyCache = [];
 
     this.state = {
       theme: this.theme,
@@ -91,7 +103,16 @@ class TuiApp {
     } catch {
       /* 设置读取失败不阻塞启动 */
     }
+    this._reloadCustomCommands();
     return this;
+  }
+
+  /** 重载自定义命令（用户目录 + 工作区目录） */
+  _reloadCustomCommands() {
+    this.customCommands = loadCustomCommands(
+      defaultCommandDirs({ env: this.env, workspace: this.state.workspace || undefined }),
+    );
+    return this.customCommands;
   }
 
   dispose() {
@@ -123,10 +144,106 @@ class TuiApp {
   frame() {
     this.state.editorText = this.editor.value;
     this.state.editorCursor = this.editor.cursor;
+    this.state.completion = this._computeCompletion();
     return views.composeFrame(this.state, {
       hints: this._footerHints(),
       inputHint: this._inputHint(),
     });
+  }
+
+  /** 输入框上方的补全面板（命令 / 参数） */
+  _computeCompletion() {
+    const text = this.editor.value;
+    // Esc 关闭过面板：同一段文本不再弹出，直到文本变化
+    if (this._completionDismissedText != null) {
+      if (this._completionDismissedText === text) return null;
+      this._completionDismissedText = null;
+    }
+    const trimmed = text.trimStart();
+    if (!trimmed.startsWith('/')) return null;
+    const hasSpace = /\s/.test(trimmed);
+    if (!hasSpace) {
+      const items = suggestCommands(trimmed, { customCommands: this.customCommands });
+      if (items.length === 0) return null;
+      return {
+        kind: 'command',
+        items,
+        selected: Math.min(this._completionSelected, items.length - 1),
+      };
+    }
+    const spaceIndex = trimmed.search(/\s/);
+    const name = trimmed.slice(1, spaceIndex).toLowerCase();
+    const argPrefix = trimmed.slice(spaceIndex + 1);
+    if (/\s/.test(argPrefix)) return null;
+    // 历史类命令的参数补全需要历史清单：按需预取（异步填充，下一帧可见）
+    if ((name === 'open' || name === 'delete') && this._historyCache.length === 0) {
+      this._prefetchHistory();
+    }
+    const items = suggestArgs(name, argPrefix, { modes: MODES, history: this._historyCache });
+    if (items.length === 0) return null;
+    return {
+      kind: 'arg',
+      items,
+      selected: Math.min(this._completionSelected, items.length - 1),
+    };
+  }
+
+  async _prefetchHistory() {
+    try {
+      const list = await this.runtime.listHistory(this.state.mode);
+      this._historyCache = Array.isArray(list) ? list : [];
+    } catch {
+      this._historyCache = [];
+    }
+  }
+
+  /** 补全面板按键；返回 true=已消费，'submit'=接受并执行 */
+  _handleCompletionKey(key) {
+    const completion = this.state.completion;
+    if (!completion || !key) return false;
+    const items = completion.items;
+    if (key.name === 'escape') {
+      this._completionSelected = 0;
+      this.state.completion = null;
+      this._completionDismissedText = this.editor.value;
+      return true;
+    }
+    if (key.name === 'up' || (key.name === 'char' && key.ctrl && key.char === 'p')) {
+      this._completionSelected = (completion.selected + items.length - 1) % items.length;
+      return true;
+    }
+    if (key.name === 'down' || (key.name === 'char' && key.ctrl && key.char === 'n')) {
+      this._completionSelected = (completion.selected + 1) % items.length;
+      return true;
+    }
+    if (key.name === 'tab') {
+      this._acceptCompletion(items[completion.selected]);
+      return true;
+    }
+    if (key.name === 'enter' && !key.alt && completion.kind === 'command') {
+      // 命令补全面板打开时回车 = 补全并执行选中命令
+      this._acceptCompletion(items[completion.selected]);
+      return 'submit';
+    }
+    return false;
+  }
+
+  /** 把选中的补全项写回输入框 */
+  _acceptCompletion(item) {
+    if (!item) return;
+    const text = this.editor.value;
+    const trimmed = text.trimStart();
+    const lead = text.length - trimmed.length;
+    if (this.state.completion && this.state.completion.kind === 'arg') {
+      const spaceIndex = trimmed.search(/\s/);
+      const head = text.slice(0, lead + spaceIndex + 1);
+      this.editor.setValue(head + item.value + ' ');
+    } else {
+      this.editor.setValue(item.value + (item.hint ? ' ' : ''));
+    }
+    this._completionSelected = 0;
+    // 接受补全后对同一段文本不再弹出（避免刚补完又弹建议）
+    this._completionDismissedText = this.editor.value;
   }
 
   // ---------------------------------------------------------------- 键事件
@@ -134,7 +251,27 @@ class TuiApp {
   /** @returns {Promise<boolean>} 是否消费了该按键 */
   async handleKey(key) {
     this.state.toast = null;
+    // 先刷新补全面板：面板必须与当前输入同步，
+    // 否则文本变化后回车会"补全"成陈旧建议（吞掉已输入的参数）。
+    this.state.completion = this._computeCompletion();
+    try {
+      return await this._dispatchKey(key);
+    } finally {
+      this.state.completion = this._computeCompletion();
+    }
+  }
+
+  async _dispatchKey(key) {
     if (this.state.modal) return this._handleModalKey(key);
+
+    const completionResult = this._handleCompletionKey(key);
+    if (completionResult === 'submit') {
+      const text = this.editor.commit();
+      this._completionSelected = 0;
+      await this._submit(text);
+      return true;
+    }
+    if (completionResult) return true;
 
     const global = await this._handleGlobalKey(key);
     if (global) return true;
@@ -142,6 +279,7 @@ class TuiApp {
     const result = this.editor.handleKey(key);
     if (result === 'submit') {
       const text = this.editor.commit();
+      this._completionSelected = 0;
       await this._submit(text);
       return true;
     }
@@ -282,6 +420,11 @@ class TuiApp {
       this._answerQuestion(option.value, modal);
     } else if (modal.kind === 'sessions') {
       await this._switchSession(option.value);
+    } else if (modal.kind === 'mode') {
+      await this.newSession(
+        option.value,
+        option.value === 'code' ? this.state.workspace || undefined : undefined,
+      );
     } else if (modal.kind === 'history') {
       await this._openHistory(option.value);
     } else if (modal.kind === 'help' || modal.kind === 'todo') {
@@ -561,10 +704,20 @@ class TuiApp {
   }
 
   async _submit(text) {
-    const parsed = parseInput(text);
+    const parsed = parseInput(text, { customCommands: this.customCommands });
     if (parsed.kind === 'command') {
       if (parsed.error) {
         this.pushEntry({ kind: 'system', text: parsed.error });
+        return;
+      }
+      if (parsed.custom) {
+        // 自定义命令：正文即提示词，$ARGUMENTS / {{args}} 替换为参数
+        const prompt = expandCustomCommand(parsed.custom, parsed.argText);
+        if (parsed.custom.agent && parsed.custom.agent !== this.state.mode) {
+          await this.newSession(parsed.custom.agent);
+        }
+        this.pushEntry({ kind: 'notice', text: '执行自定义命令 /' + parsed.name });
+        await this._send(prompt || '（空命令）');
         return;
       }
       await this._runCommand(parsed.name, parsed.argText);
@@ -610,18 +763,49 @@ class TuiApp {
           kind: 'help',
           colorKey: 'permission',
           title: '命令表',
-          body: helpLines().join('\n'),
+          body: helpLines(this.customCommands).join('\n'),
           options: [{ label: '关闭', value: 'close' }],
           selected: 0,
         };
+        return;
+      }
+      case 'commands': {
+        this._reloadCustomCommands();
+        const list = [...this.customCommands.values()];
+        this.pushEntry({
+          kind: 'system',
+          text:
+            list.length === 0
+              ? '（暂无自定义命令）\n把 *.md 放到 ~/.cibyp/commands/ 或 <工作区>/.cibyp/commands/ 即可：\n---\ndescription: 提交代码\n---\n请整理改动并提交。$ARGUMENTS'
+              : '自定义命令：\n' + list.map((c) => '  /' + c.name + '  ' + c.desc).join('\n'),
+        });
         return;
       }
       case 'mode': {
         const mode = String(argText || '')
           .trim()
           .toLowerCase();
+        if (!mode) {
+          // 无参数：弹出模式选择器（当前模式高亮）
+          this.state.modal = {
+            kind: 'mode',
+            colorKey: 'permission',
+            title: '切换模式',
+            options: [
+              { label: 'Chat · 日常对话（全工具面）', value: 'chat' },
+              { label: 'Babe · 陪伴模式（好感度）', value: 'babe' },
+              { label: 'Code · 编码模式（工作区为中心）', value: 'code' },
+            ],
+            selected: Math.max(0, MODES.indexOf(this.state.mode)),
+            footer: 'Enter 确认 · Esc 取消 · 也可直接 /mode chat',
+          };
+          return;
+        }
         if (!MODES.includes(mode)) {
-          this.pushEntry({ kind: 'system', text: '用法：/mode <chat|babe|code>' });
+          this.pushEntry({
+            kind: 'system',
+            text: '用法：/mode <chat|babe|code>（无参数弹出选择器）',
+          });
           return;
         }
         await this.newSession(
@@ -722,6 +906,7 @@ class TuiApp {
         }
         this.state.workspace = target;
         await this.runtime.setWorkspace(this.activeKey, target);
+        this._reloadCustomCommands();
         this.pushEntry({ kind: 'notice', text: '工作区已设置为 ' + target });
         return;
       }
@@ -808,9 +993,7 @@ class TuiApp {
         return;
       }
       default: {
-        if (!COMMAND_MAP.has(name)) {
-          this.pushEntry({ kind: 'system', text: '未知命令 /' + name });
-        }
+        this.pushEntry({ kind: 'system', text: '未知命令 /' + name });
       }
     }
   }
@@ -952,17 +1135,13 @@ class TuiApp {
     const hints = [];
     if (this.state.running) hints.push('esc 停止');
     else hints.push('enter 发送');
-    hints.push('ctrl+t 待办 · ctrl+r 历史 · /help 命令');
+    hints.push('tab 补全 · ctrl+t 待办 · ctrl+r 历史 · /help 命令');
     if (this.attachments.length > 0) hints.push('附件 ' + this.attachments.length);
     return hints;
   }
 
   _inputHint() {
-    const text = this.editor.value.trimStart();
-    if (text.startsWith('/')) {
-      const matches = suggest(text);
-      if (matches.length > 0) return matches.map((c) => '/' + c.name).join(' · ');
-    }
+    // 补全建议由输入框上方的补全面板呈现，这里只显示会话状态
     const modeLabel = views.MODE_LABEL[this.state.mode] || this.state.mode;
     if (this.state.running) return modeLabel + ' · 运行中';
     return modeLabel + (this.state.title ? ' · ' + this.state.title : '');

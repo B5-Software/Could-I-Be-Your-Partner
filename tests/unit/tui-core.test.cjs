@@ -117,9 +117,11 @@ test('keys：修饰键组合（Ctrl+方向 / Shift+Tab / Alt+字母）', () => {
 
 test('keys：Ctrl+字母与孤立 ESC', () => {
   const events = decodeAll([String.fromCharCode(3), String.fromCharCode(21), ESC]);
-  assert.equal(events[0].name, 'c');
+  assert.equal(events[0].name, 'char');
+  assert.equal(events[0].char, 'c');
   assert.equal(events[0].ctrl, true);
-  assert.equal(events[1].name, 'u');
+  assert.equal(events[1].name, 'char');
+  assert.equal(events[1].char, 'u');
   assert.equal(events[1].ctrl, true);
   assert.equal(events[2].name, 'escape');
 });

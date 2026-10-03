@@ -65,7 +65,6 @@ function startTui(options) {
   const stdout = options.stdout || process.stdout;
   const stdin = options.stdin || process.stdin;
   const argv = options.argv || process.argv;
-  const interactive = Boolean(stdin.isTTY) && Boolean(stdout.isTTY);
 
   // 界面占 stdout：把日志改道 stderr，避免日志撕裂画面
   const originalLog = console.log;
@@ -80,6 +79,16 @@ function startTui(options) {
   const theme = themeFromEnv();
   const screen = createTerminalScreen(stdout);
   let quitRequested = false;
+
+  // 交互性 = 能设原始模式（要收逐键输入）。
+  // 注意：Windows 下 Electron 主进程的 stdin 不是 TTY（setRawMode 不存在），
+  // 那种情况无法做交互界面 —— 渲染预览帧并提示改用纯 Node 入口（bin/cibyp-tui.js）。
+  const interactive = typeof stdin.setRawMode === 'function';
+  const looksLikeTerminal = Boolean(stdin.isTTY) || Boolean(stdout.isTTY);
+  if (!interactive && looksLikeTerminal) {
+    console.error('[cibyp] 当前进程无法接收键盘输入（stdin 不是终端 / setRawMode 不可用）。');
+    console.error('[cibyp] 交互界面请运行: node bin/cibyp-tui.js   （已渲染一帧预览）');
+  }
 
   const app = new TuiApp({
     runtime: options.runtime,
@@ -139,11 +148,12 @@ function startTui(options) {
   function shutdown() {
     if (shutdown.done) return;
     shutdown.done = true;
+    detachSignals();
     clearInterval(animTimer);
     clearTimeout(onStdin.flushTimer);
     try {
       stdin.removeListener('data', onStdin);
-      if (stdin.isTTY && typeof stdin.setRawMode === 'function') stdin.setRawMode(false);
+      if (typeof stdin.setRawMode === 'function') stdin.setRawMode(false);
       stdin.pause();
     } catch {
       /* ignore */
@@ -154,10 +164,20 @@ function startTui(options) {
     } catch {
       /* ignore */
     }
-    app.dispose();
+    try {
+      app.dispose();
+    } catch {
+      /* ignore */
+    }
     console.log = originalLog;
-    if (typeof options.onExit === 'function') options.onExit(quitRequested ? 0 : 0);
-    else process.exit(0);
+    try {
+      console.error('[tui] shutdown: exiting cleanly');
+    } catch {
+      /* ignore */
+    }
+    // 同步退出：不留竞态窗口（否则控制台可能再把排队的 Ctrl+C 当信号杀掉进程）
+    const code = typeof options.onExit === 'function' ? options.onExit(0) : 0;
+    process.exit(typeof code === 'number' ? code : 0);
   }
 
   // 启动流程
@@ -212,6 +232,23 @@ function startTui(options) {
     render();
   }, 120);
   if (typeof animTimer.unref === 'function') animTimer.unref();
+
+  // 控制台信号也当作 Ctrl+C 键处理：
+  //   - raw 模式下 Ctrl+C 本就是数据（0x03），走按键路径；
+  //   - 非 raw（或窗口期）时控制台会发 CTRL_C_EVENT → Node 暴露为 SIGINT，
+  //     若不处理会被默认行为直接杀掉（Windows 退出码 0xC000013A）。
+  // 统一走按键路径后，退出由应用自己决定，退出码干净。
+  const onSigint = () => enqueueKey({ name: 'char', char: 'c', ctrl: true });
+  const onSigterm = () => {
+    quitRequested = true;
+    shutdown();
+  };
+  process.on('SIGINT', onSigint);
+  process.on('SIGTERM', onSigterm);
+  const detachSignals = () => {
+    process.removeListener('SIGINT', onSigint);
+    process.removeListener('SIGTERM', onSigterm);
+  };
 
   return {
     app,

@@ -211,8 +211,10 @@ function createKeyDecoder() {
       } else if (ch === DEL || ch === BS) {
         events.push(keyEvent('backspace', {}));
       } else if (code < 32) {
-        const name = CTRL_CHARS[code] || String.fromCharCode(code + 96);
-        events.push(keyEvent(name, { ctrl: true }, { char: name }));
+        // 控制字符 → 统一成 { name:'char', char, ctrl:true } 形状
+        // （与普通字符同构，编辑器与全局键位判定共用一套分支）
+        const char = code === 0 ? ' ' : String.fromCharCode(code + 96);
+        events.push(keyEvent('char', { ctrl: true }, { char }));
       } else {
         // ---- 普通字符（含 CJK）----
         events.push(keyEvent('char', {}, { char: ch }));

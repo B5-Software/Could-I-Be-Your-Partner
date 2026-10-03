@@ -336,6 +336,29 @@ function renderInput(theme, state, width, opts) {
   return { lines: [top, ...body, bottom], cursor: { row: 1 + cursorRow, col: 2 + cursorCol } };
 }
 
+/** 补全面板：命令 / 参数建议（输入框上方，无边框列表 + 指针） */
+function renderCompletion(theme, completion, width) {
+  if (!completion || !Array.isArray(completion.items) || completion.items.length === 0) return [];
+  const rows = [];
+  completion.items.forEach((item, index) => {
+    const selected = index === (completion.selected || 0);
+    const pointer = selected ? paint(theme, 'suggestion', FIGURES.pointer + ' ') : '  ';
+    const label = selected
+      ? style(truncate(item.label, 24), { bold: true, fg: theme.suggestion })
+      : paint(theme, 'inactive', truncate(item.label, 24));
+    const rest = Math.max(8, width - 30);
+    const description = item.description
+      ? paint(theme, 'subtle', '  ' + truncate(item.description, rest), { dim: true })
+      : '';
+    const hint = item.hint
+      ? paint(theme, 'subtle', '  ' + truncate(String(item.hint), 12), { dim: true })
+      : '';
+    rows.push('  ' + pointer + label + description + hint);
+  });
+  rows.push(paint(theme, 'subtle', '  tab 补全 · ↑↓ 选择 · Enter 执行', { dim: true }));
+  return rows;
+}
+
 /** 模态：▔ 顶线 + 标题 + 选项 */
 function renderModal(theme, modal, width) {
   const color = theme[modal.colorKey || 'permission'] || theme.permission;
@@ -385,7 +408,8 @@ function composeFrame(state, opts) {
   const inputView = renderInput(theme, state, width, { hint: options.inputHint });
 
   const modalLines = state.modal ? renderModal(theme, state.modal, width) : [];
-  const fixedBottom = inputView.lines.length + 1 + modalLines.length; // + footer
+  const completionLines = state.completion ? renderCompletion(theme, state.completion, width) : [];
+  const fixedBottom = inputView.lines.length + 1 + modalLines.length + completionLines.length; // + footer
   const messageAreaHeight = Math.max(3, height - fixedBottom - 1);
 
   // 消息区：从底部往上取（scrollOffset = 距底部的行数）
@@ -427,6 +451,7 @@ function composeFrame(state, opts) {
 
   const lines = [...visible];
   lines.push(...modalLines);
+  lines.push(...completionLines);
   lines.push(...inputView.lines);
   lines.push(footerLine);
   lines.push(statusLine);
@@ -477,6 +502,7 @@ module.exports = {
   renderFooter,
   renderInput,
   renderModal,
+  renderCompletion,
   renderSpinnerLine,
   composeFrame,
   formatDuration,

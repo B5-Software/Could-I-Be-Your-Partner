@@ -4,68 +4,269 @@
  *
  * This file is part of Could I Be Your Partner.
  *
- * TUI 斜杠命令：命令表（同时用于 /help 展示与输入补全提示）+ 解析。
+ * TUI 斜线命令体系：
+ *
+ *   - 内置命令表（同时用于 /help 与补全面板）
+ *   - 自定义命令：`~/.cibyp/commands/*.md` 与 `<工作区>/.cibyp/commands/*.md`
+ *       ---
+ *       description: 提交代码          ← 可选，补全面板显示
+ *       agent: code                   ← 可选，限定模式（chat|babe|code）
+ *       ---
+ *       请把工作区改动整理成一次提交…… $ARGUMENTS
+ *     执行 `/name 参数` 时正文作为提示词发送，$ARGUMENTS / {{args}} 替换为参数
+ *   - 补全建议：命令补全（带描述）与参数补全（模式 / 历史会话等）
  */
 
 'use strict';
 
-/** 命令表：name 参数名 说明 */
+const fs = require('node:fs');
+const path = require('node:path');
+const os = require('node:os');
+
+/** 内置命令表 */
 const COMMANDS = [
-  { name: 'help', args: '', desc: '显示帮助' },
-  { name: 'mode', args: '<chat|babe|code>', desc: '切换模式（新建该模式的会话）' },
-  { name: 'new', args: '[mode]', desc: '新建会话' },
-  { name: 'sessions', args: '', desc: '会话列表 / 切换' },
-  { name: 'history', args: '', desc: '历史会话（按模式）' },
-  { name: 'open', args: '<id>', desc: '打开历史会话' },
-  { name: 'rename', args: '<标题>', desc: '重命名当前会话' },
-  { name: 'delete', args: '<id>', desc: '删除历史会话' },
-  { name: 'attach', args: '<文件路径>', desc: '附加文件给下一条消息' },
-  { name: 'workspace', args: '[路径]', desc: '查看/设置 Code 模式工作区' },
-  { name: 'todo', args: '', desc: '查看待办清单' },
-  { name: 'usage', args: '', desc: '查看本轮 Token 用量' },
-  { name: 'model', args: '', desc: '查看当前模型与模型池' },
-  { name: 'status', args: '', desc: '查看运行状态' },
-  { name: 'clear', args: '', desc: '清屏（不影响历史）' },
-  { name: 'stop', args: '', desc: '停止当前任务' },
-  { name: 'continue', args: '[补充说明]', desc: '继续 / 热消息注入' },
-  { name: 'compact', args: '', desc: '压缩上下文（释放窗口）' },
-  { name: 'quit', args: '', desc: '退出（等价 Ctrl+C 两次）' },
+  { name: 'help', args: '', desc: '显示帮助', group: 'general' },
+  {
+    name: 'mode',
+    args: '<chat|babe|code>',
+    desc: '切换模式（无参数弹出选择器）',
+    group: 'session',
+  },
+  { name: 'new', args: '[mode]', desc: '新建会话', group: 'session' },
+  { name: 'sessions', args: '', desc: '会话列表 / 切换', group: 'session' },
+  { name: 'history', args: '', desc: '历史会话（按模式）', group: 'session' },
+  { name: 'open', args: '<id>', desc: '打开历史会话', group: 'session' },
+  { name: 'rename', args: '<标题>', desc: '重命名当前会话', group: 'session' },
+  { name: 'delete', args: '<id>', desc: '删除历史会话', group: 'session' },
+  { name: 'commands', args: '', desc: '查看 / 重载自定义命令', group: 'general' },
+  { name: 'attach', args: '<文件路径>', desc: '附加文件给下一条消息', group: 'message' },
+  { name: 'workspace', args: '[路径]', desc: '查看 / 设置 Code 模式工作区', group: 'session' },
+  { name: 'todo', args: '', desc: '查看待办清单', group: 'info' },
+  { name: 'usage', args: '', desc: '查看本轮 Token 用量', group: 'info' },
+  { name: 'model', args: '', desc: '查看当前模型与模型池', group: 'info' },
+  { name: 'status', args: '', desc: '查看运行状态', group: 'info' },
+  { name: 'clear', args: '', desc: '清屏（不影响历史）', group: 'general' },
+  { name: 'stop', args: '', desc: '停止当前任务', group: 'message' },
+  { name: 'continue', args: '[补充说明]', desc: '继续 / 热消息注入', group: 'message' },
+  { name: 'compact', args: '', desc: '压缩上下文（释放窗口）', group: 'message' },
+  { name: 'quit', args: '', desc: '退出（等价 Ctrl+C 两次）', group: 'general' },
 ];
 
-const COMMAND_MAP = new Map(COMMANDS.map((c) => [c.name, c]));
+/** 解析 markdown 自定义命令文件（简单 frontmatter） */
+function parseCommandFile(name, text) {
+  const raw = String(text == null ? '' : text);
+  let description = '';
+  let agent = '';
+  let body = raw;
+  const match = raw.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
+  if (match) {
+    body = match[2];
+    for (const line of match[1].split(/\r?\n/)) {
+      const kv = line.match(/^([A-Za-z-]+)\s*:\s*(.*)$/);
+      if (!kv) continue;
+      const key = kv[1].toLowerCase();
+      const value = kv[2].trim();
+      if (key === 'description' || key === 'desc') description = value;
+      else if (key === 'agent' || key === 'mode') agent = value.toLowerCase();
+    }
+  }
+  return {
+    name,
+    args: '[参数]',
+    desc: description || '自定义命令',
+    group: 'custom',
+    custom: true,
+    agent: ['chat', 'babe', 'code'].includes(agent) ? agent : '',
+    body: body.trim(),
+  };
+}
+
+/**
+ * 从目录列表加载自定义命令（不存在/不可读的目录跳过）。
+ * @param {string[]} dirs
+ * @returns {Map<string, object>}
+ */
+function loadCustomCommands(dirs) {
+  const map = new Map();
+  for (const dir of dirs || []) {
+    if (!dir) continue;
+    let entries = [];
+    try {
+      entries = fs.readdirSync(dir).filter((f) => f.toLowerCase().endsWith('.md'));
+    } catch {
+      continue;
+    }
+    for (const file of entries) {
+      const name = file
+        .replace(/\.md$/i, '')
+        .toLowerCase()
+        .replace(/[^a-z0-9_-]/g, '-');
+      if (!name) continue;
+      try {
+        const text = fs.readFileSync(path.join(dir, file), 'utf8');
+        map.set(name, parseCommandFile(name, text));
+      } catch {
+        /* 单个文件读取失败不影响其余 */
+      }
+    }
+  }
+  return map;
+}
+
+/** 默认的自定义命令目录（用户级 + 工作区级） */
+function defaultCommandDirs(options = {}) {
+  const home = (options.env && options.env.CIBYP_USER_DATA) || path.join(os.homedir(), '.cibyp');
+  const dirs = [path.join(home, 'commands')];
+  if (options.workspace) dirs.push(path.join(options.workspace, '.cibyp', 'commands'));
+  return dirs;
+}
 
 /**
  * 解析输入文本。
- * @returns {{kind: 'command'|'message', name?: string, args?: string, argText?: string, text?: string, error?: string}}
+ * @returns {{kind: 'command'|'message', name?: string, argText?: string, error?: string, custom?: object, text?: string}}
  */
-function parseInput(raw) {
+function parseInput(raw, options = {}) {
   const text = String(raw == null ? '' : raw);
   const trimmed = text.trim();
   if (!trimmed.startsWith('/')) return { kind: 'message', text };
   const spaceIndex = trimmed.search(/\s/);
   const name = (spaceIndex === -1 ? trimmed.slice(1) : trimmed.slice(1, spaceIndex)).toLowerCase();
   const argText = spaceIndex === -1 ? '' : trimmed.slice(spaceIndex + 1).trim();
-  const command = COMMAND_MAP.get(name);
-  if (!command)
-    return { kind: 'command', name, argText, error: `未知命令 /${name}（输入 /help 查看命令表）` };
-  return { kind: 'command', name, argText, args: argText };
+
+  const builtin = COMMANDS.find((c) => c.name === name);
+  if (builtin) return { kind: 'command', name, argText, builtin };
+
+  const custom = options.customCommands && options.customCommands.get(name);
+  if (custom) return { kind: 'command', name, argText, custom };
+
+  return {
+    kind: 'command',
+    name,
+    argText,
+    error: `未知命令 /${name}（/help 查看命令表，/commands 查看自定义命令）`,
+  };
 }
 
-/** 输入中的斜杠命令前缀 → 补全建议 */
-function suggest(partial) {
+/**
+ * 命令补全建议（输入以 / 开头时）。
+ * @returns {Array<{label: string, value: string, description: string, hint?: string}>}
+ */
+function suggestCommands(partial, options = {}) {
   const text = String(partial || '').trimStart();
   if (!text.startsWith('/')) return [];
-  const query = text.slice(1).toLowerCase();
-  return COMMANDS.filter((c) => c.name.startsWith(query)).slice(0, 6);
+  const query = text.slice(1).split(/\s/)[0].toLowerCase();
+  const items = [];
+  for (const cmd of COMMANDS) {
+    if (!cmd.name.startsWith(query)) continue;
+    items.push({
+      label: '/' + cmd.name,
+      value: '/' + cmd.name,
+      description: cmd.desc,
+      hint: cmd.args || '',
+    });
+  }
+  const custom = options.customCommands;
+  if (custom) {
+    for (const cmd of custom.values()) {
+      if (!cmd.name.startsWith(query)) continue;
+      items.push({
+        label: '/' + cmd.name,
+        value: '/' + cmd.name,
+        description: cmd.desc,
+        hint: '自定义',
+      });
+    }
+  }
+  return items.slice(0, 8);
 }
 
-/** /help 内容行 */
-function helpLines() {
-  const width = Math.max(...COMMANDS.map((c) => c.name.length + c.args.length)) + 3;
-  return COMMANDS.map((c) => {
-    const head = ('/' + c.name + ' ' + c.args).padEnd(width);
-    return head + c.desc;
-  });
+/**
+ * 参数补全建议。
+ * @param {string} name 命令名
+ * @param {string} argPrefix 已输入的参数前缀
+ * @param {{modes?: string[], history?: Array<{id: string, title?: string}>}} context
+ */
+function suggestArgs(name, argPrefix, context = {}) {
+  const prefix = String(argPrefix || '')
+    .trimStart()
+    .toLowerCase();
+  const items = [];
+  if (name === 'mode' || name === 'new') {
+    for (const mode of context.modes || ['chat', 'babe', 'code']) {
+      if (!mode.startsWith(prefix)) continue;
+      items.push({
+        label: mode,
+        value: mode,
+        description:
+          mode === 'chat'
+            ? '日常对话（全工具面）'
+            : mode === 'babe'
+              ? '陪伴模式（好感度）'
+              : '编码模式（工作区为中心）',
+      });
+    }
+  } else if (name === 'open' || name === 'delete') {
+    for (const item of (context.history || []).slice(0, 8)) {
+      const label = String(item.title || item.id);
+      if (
+        prefix &&
+        !String(item.id).toLowerCase().includes(prefix) &&
+        !label.toLowerCase().includes(prefix)
+      )
+        continue;
+      items.push({ label: label + '  ' + item.id, value: String(item.id), description: '' });
+    }
+  }
+  return items.slice(0, 8);
 }
 
-module.exports = { COMMANDS, COMMAND_MAP, parseInput, suggest, helpLines };
+/** 自定义命令正文 → 提示词（替换参数占位符） */
+function expandCustomCommand(command, argText) {
+  const args = String(argText || '');
+  return String(command.body || '')
+    .replace(/\$ARGUMENTS\b/g, args)
+    .replace(/\{\{\s*args\s*\}\}/g, args)
+    .trim();
+}
+
+/** /help 内容行（按分组） */
+function helpLines(customCommands) {
+  const groups = new Map();
+  const push = (cmd) => {
+    const key = cmd.group || 'general';
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(cmd);
+  };
+  COMMANDS.forEach(push);
+  if (customCommands) for (const cmd of customCommands.values()) push(cmd);
+
+  const titles = {
+    general: '通用',
+    session: '会话',
+    message: '消息',
+    info: '信息',
+    custom: '自定义命令',
+  };
+  const lines = [];
+  for (const [key, list] of groups) {
+    const width = Math.max(...list.map((c) => ('/' + c.name + ' ' + c.args).length)) + 3;
+    lines.push(titles[key] || key);
+    for (const cmd of list) {
+      lines.push('  /' + (cmd.name + ' ' + cmd.args).padEnd(width) + cmd.desc);
+    }
+    lines.push('');
+  }
+  return lines;
+}
+
+module.exports = {
+  COMMANDS,
+  parseCommandFile,
+  loadCustomCommands,
+  defaultCommandDirs,
+  parseInput,
+  suggestCommands,
+  suggestArgs,
+  expandCustomCommand,
+  helpLines,
+};

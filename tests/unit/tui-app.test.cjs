@@ -9,6 +9,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 
 const { TuiApp } = require('../../src/tui/app.js');
+const { createKeyDecoder } = require('../../src/tui/keys.js');
 const { stripAnsi, visibleWidth } = require('../../src/tui/ansi.js');
 const { themeFromEnv } = require('../../src/tui/theme.js');
 
@@ -34,6 +35,7 @@ function makeFakeRuntime() {
       return sessions.get(key) || null;
     },
     listSessions() {
+      calls.push(['listSessions']);
       return [...sessions.values()];
     },
     async sendMessage(key, text, attachments) {
@@ -474,12 +476,112 @@ test('tui：Esc 在运行中请求停止，空闲时清空输入', async () => {
   assert.ok(runtime.calls.some((c) => c[0] === 'stop'));
 });
 
-test('tui：命令补全建议出现在输入提示', async () => {
+test('tui：输入 / 时补全面板给出命令建议', async () => {
   const { app } = await makeApp();
   typeText(app, '/hi');
   const frame = app.frame();
   const text = stripAnsi(frame.lines.join('\n'));
-  assert.ok(text.includes('/history'), '应给出 /history 补全建议');
+  assert.ok(text.includes('/history'), '补全面板应给出 /history 建议');
+  assert.ok(app.state.completion && app.state.completion.kind === 'command');
+  assert.ok(text.includes('tab 补全'), '应有补全操作提示');
+});
+
+test('tui：补全面板 ↑↓ 选择 · Tab 补全 · Enter 执行 · Esc 关闭', async () => {
+  const { app, runtime } = await makeApp();
+  typeText(app, '/st');
+  assert.equal(app.frame().lines.length > 0, true);
+  assert.equal(app.state.completion.selected, 0);
+
+  await app.handleKey({ name: 'down' });
+  assert.equal(app.state.completion.selected, 1, '↓ 应移动选择');
+
+  await app.handleKey({ name: 'tab' });
+  assert.ok(app.editor.value.startsWith('/'), 'Tab 应把选中命令写回输入框');
+  assert.equal(app.state.completion, null, '接受后面板关闭');
+
+  // Esc 关闭后同一段文本不再弹出
+  app.editor.setValue('/hi');
+  app.frame();
+  assert.ok(app.state.completion, '重新输入应再弹出');
+  await app.handleKey({ name: 'escape' });
+  assert.equal(app.state.completion, null);
+  app.frame();
+  assert.equal(app.state.completion, null, 'Esc 后同文本不弹回');
+
+  // Enter：补全并执行选中命令（用未被 Esc 关闭过的新前缀）
+  app.editor.setValue('/sess');
+  app.frame();
+  assert.ok(app.state.completion, '/sess 应弹出补全');
+  await app.handleKey({ name: 'enter' });
+  await app.settled();
+  assert.ok(
+    runtime.calls.some((c) => c[0] === 'listSessions'),
+    '回车应补全并执行选中的 /sessions',
+  );
+  assert.equal(app.state.modal && app.state.modal.kind, 'sessions', '应打开会话选择器');
+});
+
+test('tui：/mode 无参数弹出模式选择器并可切换', async () => {
+  const { app, runtime } = await makeApp();
+  typeText(app, '/mode');
+  await app.handleKey({ name: 'enter' });
+  await app.settled();
+  assert.equal(app.state.modal.kind, 'mode');
+  const text = frameText(app);
+  assert.ok(text.includes('Babe · 陪伴模式'), '选择器应列出模式');
+  // 选中第二项（babe）
+  await app.handleKey({ name: 'down' });
+  await app.handleKey({ name: 'enter' });
+  await app.settled();
+  assert.equal(app.state.mode, 'babe');
+  assert.equal(runtime.sessions.get(app.activeKey).mode, 'babe');
+});
+
+test('tui：自定义命令（.md 文件）可补全、可执行、支持参数占位', async () => {
+  const os = require('node:os');
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const { app, runtime } = await makeApp();
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cibyp-cmds-'));
+  fs.mkdirSync(path.join(dir, 'commands'), { recursive: true });
+  fs.writeFileSync(
+    path.join(dir, 'commands', 'commit.md'),
+    '---\ndescription: 整理并提交改动\n---\n请把工作区改动整理成一次提交。$ARGUMENTS\n',
+  );
+  app.env = { CIBYP_USER_DATA: dir };
+  app._reloadCustomCommands();
+  assert.ok(app.customCommands.has('commit'), '应加载自定义命令');
+
+  // 补全
+  typeText(app, '/com');
+  const completion = app.frame().lines.join('\n');
+  assert.ok(stripAnsi(completion).includes('/commit'), '补全面板应包含自定义命令');
+
+  // 执行：正文 + 参数替换
+  app.editor.setValue('/commit 先跑测试');
+  await app.handleKey({ name: 'enter' });
+  await app.settled();
+  const sent = runtime.calls.filter((c) => c[0] === 'sendMessage').at(-1);
+  assert.ok(sent, '自定义命令应发送提示词');
+  assert.ok(sent[2].includes('请把工作区改动整理成一次提交'));
+  assert.ok(sent[2].includes('先跑测试'), '$ARGUMENTS 应替换为参数');
+
+  // /commands 列出
+  typeText(app, '/commands');
+  await app.handleKey({ name: 'enter' });
+  await app.settled();
+  assert.ok(frameText(app).includes('/commit'), '/commands 应列出自定义命令');
+});
+
+test('tui：参数补全（/mode 后给模式建议）', async () => {
+  const { app } = await makeApp();
+  typeText(app, '/mode ch');
+  app.frame();
+  assert.equal(app.state.completion.kind, 'arg');
+  const labels = app.state.completion.items.map((i) => i.label);
+  assert.deepEqual(labels, ['chat'], '应按前缀过滤模式');
+  await app.handleKey({ name: 'tab' });
+  assert.equal(app.editor.value, '/mode chat ', 'Tab 应补全参数');
 });
 
 test('tui：窄终端下渲染不超宽', async () => {
@@ -496,4 +598,31 @@ test('tui：窄终端下渲染不超宽', async () => {
   for (const line of lines) {
     assert.ok(visibleWidth(line) <= 48, `窄终端超宽: ${visibleWidth(line)} > 48（${line}）`);
   }
+});
+
+test('tui：原始按键字节 → 解码器 → 应用（契约一致性，回归：Ctrl+ 组合键失效）', async () => {
+  const { app, runtime, quits } = await makeApp();
+  const decoder = createKeyDecoder();
+  const feed = async (bytes) => {
+    for (const key of decoder.push(bytes)) {
+      await app.handleKey(key);
+    }
+  };
+
+  // 键入文本 + 回车（原始字节）→ 应触发发送
+  await feed('hi');
+  await feed(String.fromCharCode(13));
+  const sent = runtime.calls.find((c) => c[0] === 'sendMessage');
+  assert.ok(sent, '原始回车字节应触发发送');
+  assert.equal(sent[2], 'hi');
+
+  // Ctrl+C 两次（原始 0x03）→ 应触发退出（回归点：解码器与应用的键形状必须一致）
+  await feed(String.fromCharCode(3));
+  assert.equal(quits.length, 0, '第一次 Ctrl+C 只武装退出');
+  await feed(String.fromCharCode(3));
+  assert.equal(quits.length, 1, '第二次 Ctrl+C 应退出');
+
+  // Ctrl+T 打开待办（同样是组合键契约）
+  await feed(String.fromCharCode(20));
+  assert.equal(app.state.modal && app.state.modal.kind, 'todo', 'Ctrl+T 应打开待办面板');
 });
