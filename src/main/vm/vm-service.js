@@ -130,7 +130,7 @@ class VmService extends EventEmitter {
     this._pairSyncs.set(identity, sync);
     if (!this._syncTimer) {
       this._syncTimer = setInterval(() => {
-        if (this._pollingSync || this._manualTransfers || this.instance?.state !== 'ready' || this.runtime.workspaceMode !== 'shared') return;
+        if (this._pollingSync || this._manualTransfers || this._externMountTasks?.size || this.instance?.state !== 'ready' || this.runtime.workspaceMode !== 'shared') return;
         this._pollingSync = true;
         (async () => {
           for (const pair of this._pairSyncs.values()) {
@@ -157,14 +157,31 @@ class VmService extends EventEmitter {
    * 跳过生成文件，单文件默认上限 20MB；IDE 导入保留 Git 并持久识别宿主来源。
    */
   async mountExternalDir(hostDir, { refresh = false, preserveGit = false } = {}) {
+    if (!String(hostDir || '').trim()) return { ok: false, error: 'Workspace directory is required' };
     const hostRoot = path.resolve(String(hostDir || ''));
+    const key = process.platform === 'win32' ? hostRoot.toLowerCase() : hostRoot;
+    // GUI and TUI can request the same import while it is still synchronizing.
+    // Serialize its provenance check and transfer, including retries after failure.
+    this._externMountTasks ||= new Map();
+    const task = (this._externMountTasks.get(key) || Promise.resolve()).catch(() => {}).then(() =>
+      this._mountExternalDir(hostRoot, { refresh, preserveGit }));
+    this._externMountTasks.set(key, task);
+    try { return await task; }
+    finally { if (this._externMountTasks.get(key) === task) this._externMountTasks.delete(key); }
+  }
+
+  async _mountExternalDir(hostRoot, { refresh, preserveGit }) {
+    if (process.platform === 'win32') {
+      hostRoot = [...(this._externMounts?.keys() || [])].find(root => root.toLowerCase() === hostRoot.toLowerCase()) || hostRoot;
+    }
     const stat = await fs.promises.stat(hostRoot).catch(() => null);
     if (!stat) return { ok: false, error: 'Workspace directory not found' };
     if (!stat.isDirectory()) return { ok: false, error: 'Workspace is not a directory' };
     const identity = require('node:crypto').createHash('sha256').update(process.platform === 'win32' ? hostRoot.toLowerCase() : hostRoot).digest('hex');
     const name = path.basename(hostRoot).replace(/[^\w.-]+/g, '_') || 'ws';
     this._externMounts ||= new Map();
-    const vmRoot = this._externMounts.get(hostRoot) || `${this.runtime.vm.workspaceMount || '/workspace'}/_external/${name}-${identity.slice(0, 8)}`;
+    const prefix = `${this.runtime.vm.workspaceMount || '/workspace'}/_external/${name}-`;
+    let vmRoot = this._externMounts.get(hostRoot) || prefix + identity.slice(0, 8);
     if (preserveGit) {
       const git = await fs.promises.stat(path.join(hostRoot, '.git')).catch(() => null);
       if (git && !git.isDirectory()) return { ok: false, error: 'Host Git worktree references cannot be imported. Clone the repository in the VM instead.' };
@@ -172,22 +189,68 @@ class VmService extends EventEmitter {
     if (this._externMounts.has(hostRoot) && !refresh && this.runtime.workspaceMode !== 'shared') return { ok: true, hostRoot, vmRoot, reused: true };
     const { VmFs } = require('./vm-fs');
     const io = new VmFs({ vmService: this });
+    let exists, previous;
+    const preserved = [];
+    for (let attempt = 0; attempt < 100; attempt++) {
+      exists = await io.exists(vmRoot);
+      previous = null;
+      if (!exists) break;
+      try { previous = JSON.parse((await io.readBuffer(vmRoot + '/.cibyp-host-import')).toString('utf8')); }
+      catch (error) {
+        // A disconnected SFTP session is not an unknown directory. Propagate
+        // transport failures rather than allocating fresh copies on every retry.
+        if (!(error instanceof SyntaxError) && !['ENOENT', 2].includes(error.code)) throw error;
+      }
+      if (previous?.identity === identity) break;
+      // Older/interrupted imports may have a durable sync baseline but no marker.
+      if (!previous?.identity && this.instance?.dir) {
+        const pairIdentity = require('node:crypto').createHash('sha256').update(hostRoot + '\0' + vmRoot).digest('hex');
+        try {
+          const baseline = JSON.parse(await fs.promises.readFile(path.join(this.instance.dir, 'workspace-pairs', pairIdentity, 'sync-baseline.json'), 'utf8'));
+          if (baseline.hostRoot === hostRoot && baseline.vmMount === vmRoot && baseline.files) {
+            previous = { identity, status: 'pending' };
+            break;
+          }
+        } catch (error) { if (!(error instanceof SyntaxError) && error.code !== 'ENOENT') throw error; }
+      }
+      preserved.push(vmRoot);
+      // Never adopt/overwrite unowned guest contents. A deterministic full-hash
+      // alternative can be found and reused again after an App restart.
+      vmRoot = prefix + identity + (attempt ? '-' + (attempt + 1) : '');
+      if (attempt === 99) return { ok: false, error: 'Cannot find a safe VM import directory' };
+    }
+    if (!exists) {
+      const made = await io.exec(`mkdir -p -- ${vmpaths.shellQuote(path.posix.dirname(vmRoot))} && mkdir -- ${vmpaths.shellQuote(vmRoot)}`, 20000);
+      if (!made.ok) return { ok: false, error: made.stderr || 'Cannot create VM import directory' };
+    }
     const marker = vmRoot + '/.cibyp-host-import';
-    const exists = await io.exists(vmRoot);
-    if (exists && !this._externMounts.has(hostRoot)) {
-      let previous;
-      try { previous = JSON.parse((await io.readBuffer(marker)).toString('utf8')); } catch { /* incomplete import */ }
-      if (previous?.identity !== identity) return { ok: false, error: 'VM import directory has an unknown source: ' + vmRoot };
-    }
-    await io.exec(`mkdir -p -- ${vmpaths.shellQuote(vmRoot)}`, 20000);
+    const writeMarker = async status => {
+      await io.writeBuffer(marker + '.tmp', Buffer.from(JSON.stringify({ identity, hostRoot, status }) + '\n'));
+      const moved = await io.exec(`mv -f -- ${vmpaths.shellQuote(marker + '.tmp')} ${vmpaths.shellQuote(marker)}`, 20000);
+      if (!moved.ok) throw new Error(moved.stderr || 'Cannot save VM import source');
+    };
+    // Claim before transferring, and remember incomplete transfers across restarts.
+    await writeMarker('pending');
     this._externMounts.set(hostRoot, vmRoot);
-    const sync = this.workspacePair(hostRoot, vmRoot, { syncGit: preserveGit || !!this.runtime.vm.syncGit });
-    if (!exists || refresh || this.runtime.workspaceMode === 'shared') {
-      const result = await sync.sync({ direction: 'both', reason: exists ? 'external-refresh' : 'external-import' });
-      if (!result.ok) return result;
+    const pairIdentity = require('node:crypto').createHash('sha256').update(hostRoot + '\0' + vmRoot).digest('hex');
+    const existingPair = this._pairSyncs?.has(pairIdentity);
+    let completed = false;
+    try {
+      const sync = this.workspacePair(hostRoot, vmRoot, { syncGit: preserveGit || !!this.runtime.vm.syncGit });
+      if (!exists || refresh || previous?.status === 'pending' || this.runtime.workspaceMode === 'shared') {
+        const result = await sync.sync({ direction: 'both', reason: exists ? 'external-refresh' : 'external-import' });
+        if (!result.ok) return result;
+      }
+      await writeMarker('ready');
+      completed = true;
+      if (preserved.length) this.emit('sync-warn', 'Unverified VM import directories were preserved; using ' + vmRoot + ': ' + preserved.join(', '));
+      return { ok: true, hostRoot, vmRoot, reused: exists, preserved };
+    } finally {
+      if (!completed) {
+        this._externMounts.delete(hostRoot);
+        if (!existingPair) this._pairSyncs?.delete(pairIdentity);
+      }
     }
-    await io.writeBuffer(marker, Buffer.from(JSON.stringify({ identity, hostRoot }) + '\n'));
-    return { ok: true, hostRoot, vmRoot, reused: exists };
   }
 
   externalPair(raw) {

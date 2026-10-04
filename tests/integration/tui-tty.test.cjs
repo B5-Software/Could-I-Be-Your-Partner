@@ -118,7 +118,7 @@ function makeProfile(port) {
 }
 
 /** 起 PTY 子进程；watchdogMs 到点未完成则杀掉并 reject（带阶段信息） */
-function runInPty({ args, env, onOutput, onScreen, watchdogMs = 25000, describe }) {
+function runInPty({ args, env, onOutput, onScreen, watchdogMs = 25000, describe, command }) {
   return new Promise((resolve, reject) => {
     const exitMarker = 'CIBYP_TEST_EXIT_' + require('node:crypto').randomUUID() + ':';
     const resources = process.env.CIBYP_TEST_PACKAGED_RESOURCES;
@@ -126,7 +126,11 @@ function runInPty({ args, env, onOutput, onScreen, watchdogMs = 25000, describe 
       ? path.join(resources, 'node', process.platform === 'win32' ? 'node.exe' : 'node')
       : process.execPath;
     const actualArgs = resources
-      ? [path.join(resources, 'cli/launch.cjs'), process.env.CIBYP_TEST_COMMAND || 'tui']
+      ? [
+          path.join(resources, 'cli/launch.cjs'),
+          command || process.env.CIBYP_TEST_COMMAND || 'tui',
+          ...args.slice(1),
+        ]
       : args;
     const child = pty.spawn(binary, actualArgs, {
       name: 'xterm-color',
@@ -197,6 +201,74 @@ function runInPty({ args, env, onOutput, onScreen, watchdogMs = 25000, describe 
     });
   });
 }
+
+test('TUI Code startup workspace failure still accepts real keyboard input and workspace recovery', async () => {
+  const stub = await startStubLlm();
+  const profile = makeProfile(stub.port);
+  let stage = 'startup';
+  let child;
+  try {
+    const result = await runInPty({
+      args: [
+        path.join(root, 'bin/cibyp-tui.js'),
+        '--mode=code',
+        '--workspace=' + path.join(profile, 'missing-project'),
+        '--workspace-local',
+      ],
+      command: 'tui',
+      env: { CIBYP_USER_DATA: profile, CIBYP_AUTO_APPROVE: '1' },
+      watchdogMs: 35000,
+      describe: () => stage,
+      onOutput: (_data, _all, ptyChild) => {
+        child = ptyChild;
+      },
+      onScreen: (terminal) => {
+        const rows = Array.from(
+          { length: 32 },
+          (_, i) => terminal.buffer.active.getLine(i)?.translateToString(true) || '',
+        );
+        const screen = rows.join('\n');
+        if (!child) return;
+        if (
+          stage === 'startup' &&
+          screen.includes('工作区初始化失败') &&
+          screen.includes('终端模式')
+        ) {
+          stage = 'typing after startup failure';
+          child.write('draft-kept');
+        } else if (
+          stage === 'typing after startup failure' &&
+          rows.slice(-6).join('\n').includes('draft-kept')
+        ) {
+          stage = 'blocked send keeps draft';
+          child.write(CR);
+        } else if (
+          stage === 'blocked send keeps draft' &&
+          screen.split('工作区初始化失败').length >= 3
+        ) {
+          assert.ok(rows.slice(-6).join('\n').includes('draft-kept'));
+          assert.equal(stub.hits.count, 0, 'no LLM/tool execution in an unprepared workspace');
+          stage = 'recovering workspace';
+          child.write('\x1b');
+          setTimeout(() => child.write('/workspace ' + path.join(profile, 'documents') + CR), 80);
+        } else if (stage === 'recovering workspace' && screen.includes('工作区已设置为')) {
+          stage = 'sending after recovery';
+          child.write(USER_TEXT + CR);
+        } else if (stage === 'sending after recovery' && screen.includes(REPLY)) {
+          stage = 'quitting';
+          child.write(CTRL_C);
+          setTimeout(() => child.write(CTRL_C), 120);
+        }
+      },
+    });
+    assert.equal(stage, 'quitting');
+    assert.equal(result.exitCode, 0);
+    assert.ok(stub.hits.count > 0);
+  } finally {
+    closeStub(stub);
+    fs.rmSync(profile, { recursive: true, force: true });
+  }
+});
 
 test(
   'TUI 真终端：交互界面持续运行、可输入、可退出（回归：输入框闪退）',

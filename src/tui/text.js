@@ -51,6 +51,8 @@ const DICT = {
     'ui.tui.mode.code': 'Switched to Code mode',
     'ui.tui.mode.codeWorkspace': 'Switched to Code mode · workspace {path}',
     'ui.tui.mode.codeNoWorkspace': ' (set one with /workspace <path>)',
+    'ui.tui.workspaceFailed':
+      'Workspace initialization failed: {error}\nUse /workspace to select a directory or /config to change settings. Your draft is kept; sending requires a ready workspace.',
     'ui.tui.chatMode': 'Chat',
     'ui.tui.babeMode': 'Babe',
     'ui.tui.codeMode': 'Code',
@@ -214,6 +216,8 @@ const DICT = {
     'ui.tui.vmdeskFailed': 'failed to open the VM desktop: {error}',
   },
   de: {
+    'ui.tui.workspaceFailed':
+      'Arbeitsbereich konnte nicht initialisiert werden: {error}\nMit /workspace ein Verzeichnis wählen oder mit /config die Einstellungen ändern. Der Entwurf bleibt erhalten; Senden erfordert einen bereiten Arbeitsbereich.',
     'ui.tui.brand': 'CIBYP · dein Allround-KI-Partner · Terminalmodus (/help für Befehle)',
     'ui.tui.mode.chat': 'Zu Chat-Modus gewechselt',
     'ui.tui.mode.babe': 'Zu Babe-Modus gewechselt (Zuneigung {value})',

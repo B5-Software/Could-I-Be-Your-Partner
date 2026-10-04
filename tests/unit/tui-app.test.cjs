@@ -263,6 +263,65 @@ test('Code sessions prepare fresh workspaces and the local directory picker pres
   app.dispose();
 });
 
+for (const throws of [false, true]) {
+  test(`failed initial Code workspace remains editable and recoverable (${throws ? 'exception' : 'error result'})`, async () => {
+    const runtime = makeFakeRuntime();
+    runtime.prepareWorkspace = async () => {
+      if (throws) throw new Error('VM import directory has an unknown source');
+      return { ok: false, error: 'VM import directory has an unknown source' };
+    };
+    const app = new TuiApp({ runtime });
+    await app.start({ mode: 'code', workspacePath: 'D:/project', workspaceLocal: true });
+    assert.ok(app.activeKey, 'an initial workspace error must not disable all keyboard input');
+    assert.equal(runtime.sessions.get(app.activeKey).workspacePath, null);
+    assert.match(frameText(app), /unknown source/);
+    await app.handleKey({ name: 'char', char: '你' });
+    await app.handleKey({ name: 'char', char: '好' });
+    assert.equal(app.editor.value, '你好');
+    app.attachments.push({ path: 'draft.txt' });
+    await app.handleKey({ name: 'enter' });
+    assert.equal(app.editor.value, '你好', 'failed sends must preserve the draft');
+    assert.equal(app.attachments.length, 1);
+    assert.ok(!runtime.calls.some((call) => call[0] === 'sendMessage'));
+    app.editor.setValue('/help');
+    await app.handleKey({ name: 'enter' });
+    assert.ok(app.state.modal, 'recovery commands must work');
+    await app.handleKey({ name: 'escape' });
+    runtime.setWorkspace = async () => ({
+      ok: true,
+      workspacePath: '/workspace/_external/recovered',
+      hostPath: 'D:/project',
+    });
+    app.editor.setValue('/workspace D:/project');
+    await app.handleKey({ name: 'enter' });
+    assert.equal(app.state.workspaceError, '');
+    assert.equal(app.state.workspace, '/workspace/_external/recovered');
+    app.editor.setValue('你好');
+    await app.handleKey({ name: 'enter' });
+    assert.equal(runtime.calls.at(-1)[0], 'sendMessage');
+    assert.equal(runtime.calls.at(-1)[2], '你好');
+    assert.equal(runtime.calls.at(-1)[3].length, 1);
+    app.dispose();
+  });
+}
+
+test('a failed later Code session leaves the current conversation and draft intact', async () => {
+  const { app, runtime } = await makeApp();
+  const key = app.activeKey;
+  app.editor.setValue('keep this draft');
+  runtime.prepareWorkspace = async () => {
+    throw new Error('VM disconnected');
+  };
+  await assert.rejects(app.newSession('code', 'D:/project'), /VM disconnected/);
+  assert.equal(app.activeKey, key);
+  assert.equal(app.editor.value, 'keep this draft');
+  assert.equal(runtime.calls.at(-1)[0], 'close');
+  assert.notEqual(runtime.calls.at(-1)[1], key);
+  await app.handleKey({ name: 'char', char: '!' });
+  assert.equal(app.editor.value, 'keep this draft!');
+  app.dispose();
+});
+
 test('titles, messages, drafts and attachments remain isolated across sessions', async () => {
   const { app, runtime } = await makeApp();
   assert.equal(app.frame().title, '');

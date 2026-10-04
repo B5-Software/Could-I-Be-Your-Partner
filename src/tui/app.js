@@ -1096,18 +1096,37 @@ class TuiApp {
     this._completionDismissedText = null;
     const key =
       'tui:' + mode + ':' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-    this.runtime.createSession({ key, mode, workspacePath });
+    // Workspace preparation commits the mapped path to the runtime. Do not seed
+    // a Code Agent with an unvalidated host path when the execution target is VM.
+    this.runtime.createSession({
+      key,
+      mode,
+      workspacePath: mode === 'code' && this.runtime.prepareWorkspace ? null : workspacePath,
+    });
     let hostWorkspace = '';
+    let workspaceError = '';
     if (mode === 'code' && this.runtime.prepareWorkspace) {
-      const result = await this.runtime.prepareWorkspace(key, workspacePath, {
-        local: options.local ?? Boolean(workspacePath && !workspacePath.startsWith('/workspace')),
-      });
-      if (result?.ok === false) {
-        this.runtime.close(key);
-        throw new Error(result.error || 'Workspace cannot be prepared');
+      try {
+        const result = await this.runtime.prepareWorkspace(key, workspacePath, {
+          local: options.local ?? Boolean(workspacePath && !workspacePath.startsWith('/workspace')),
+        });
+        if (!result?.ok) throw new Error(result?.error || 'Workspace cannot be prepared');
+        workspacePath = result.workspacePath;
+        hostWorkspace = result.hostPath || '';
+      } catch (error) {
+        if (this.activeKey) {
+          await this.runtime.close(key);
+          throw error;
+        }
+        // The first session must remain interactive even when its workspace
+        // fails. /workspace and /config can recover without restarting the TUI.
+        workspacePath = '';
+        workspaceError = error.message || String(error);
       }
-      workspacePath = result.workspacePath;
-      hostWorkspace = result.hostPath || '';
+    }
+    if (this._disposed) {
+      await this.runtime.close(key);
+      return;
     }
     this.activeKey = key;
     this.state = {
@@ -1123,6 +1142,7 @@ class TuiApp {
       workspace: workspacePath || '',
       minimalMode: false,
       hostWorkspace,
+      workspaceError,
     };
     this.editor = new LineEditor({ history: this.editor.history });
     this.attachments = [];
@@ -1161,6 +1181,7 @@ class TuiApp {
                 t('ui.tui.mode.codeNoWorkspace', '（/workspace <路径> 设置工作区）')
             : t('ui.tui.mode.chat', '已切换到 Chat 模式'),
     });
+    if (workspaceError) this.pushEntry({ kind: 'system', text: this._workspaceFailure() });
     this._reloadCustomCommands();
     this._saveView();
   }
@@ -1187,6 +1208,7 @@ class TuiApp {
       context: null,
       costUSD: 0,
       elapsedMs: 0,
+      workspaceError: '',
     };
     this.editor = new LineEditor({ history: this.editor.history });
     this.attachments = [];
@@ -1252,6 +1274,11 @@ class TuiApp {
   async _send(text) {
     const state = this.state;
     const key = this.activeKey;
+    if (state.mode === 'code' && state.workspaceError) {
+      this.editor.setValue(text);
+      this.pushEntry({ kind: 'system', text: this._workspaceFailure() });
+      return;
+    }
     const attachments = this.attachments.splice(0, this.attachments.length);
     state.scrollOffset = 0;
     this._startedAt = this.clock();
@@ -1721,6 +1748,7 @@ class TuiApp {
     if (result?.ok === false) throw new Error(result.error || 'Invalid workspace');
     state.workspace = result?.workspacePath || directory;
     state.hostWorkspace = result?.hostPath || '';
+    state.workspaceError = '';
     if (this.activeKey === key) this._reloadCustomCommands();
     state.messages.push({
       kind: 'notice',
@@ -1730,6 +1758,14 @@ class TuiApp {
           ? '\n' + t('ui.tui.workspaceLocal', '本地目录：{path}', { path: state.hostWorkspace })
           : ''),
     });
+  }
+
+  _workspaceFailure() {
+    return t(
+      'ui.tui.workspaceFailed',
+      '工作区初始化失败：{error}\n可输入 /workspace 重新选择目录，或 /config 修改设置。草稿会保留，工作区就绪后才能发送。',
+      { error: this.state.workspaceError },
+    );
   }
 
   async _openWorkspaceModal(directory) {
