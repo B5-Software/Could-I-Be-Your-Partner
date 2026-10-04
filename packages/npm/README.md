@@ -31,5 +31,6 @@ Launcher and App versions are independent. `cibyp --version` reports the launche
 - `CIBYP_MIRRORS=off`: use official GitHub only. Otherwise specify comma-separated HTTPS prefixes, optionally containing `{url}`.
 - `CIBYP_DOWNLOAD_CONCURRENCY=1..8`: set connection count (default 4).
 - `CIBYP_SKIP_INSTALL=1` or npm `--ignore-scripts`: defer the runtime download until first use.
+- `CIBYP_GITHUB_TOKEN`: optional token for GitHub API rate limits on shared networks. It is only sent to `https://api.github.com`, never to download mirrors, and is not saved in the cache. Public installs normally need no token.
 
 Public installation needs no npm login. Use /help in TUI. cibyp-code maps its host working directory into the VM using the App's shared workspace synchronization.

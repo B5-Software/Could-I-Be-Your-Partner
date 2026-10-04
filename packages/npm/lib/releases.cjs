@@ -6,12 +6,26 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const { downloadVerified } = require('./download.cjs');
-async function json(url, { fetchJSON = fetch, signal, limit = 1024 * 1024 } = {}) {
+async function json(
+  url,
+  { fetchJSON = fetch, signal, limit = 1024 * 1024, env = process.env } = {},
+) {
+  const headers = { Accept: 'application/vnd.github+json', 'User-Agent': 'cibyp-launcher' };
+  const token = env.CIBYP_GITHUB_TOKEN || env.GH_TOKEN || env.GITHUB_TOKEN;
+  const authenticated = token && new URL(url).origin === 'https://api.github.com';
+  if (authenticated) headers.Authorization = 'Bearer ' + token;
   const response = await fetchJSON(url, {
-    headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'cibyp-launcher' },
+    headers,
+    ...(authenticated ? { redirect: 'error' } : {}),
     signal: AbortSignal.any([signal, AbortSignal.timeout(15000)].filter(Boolean)),
   });
-  if (!response.ok) throw new Error('GitHub release lookup failed: HTTP ' + response.status);
+  if (!response.ok) {
+    if (response.status === 403 && response.headers.get('x-ratelimit-remaining') === '0')
+      throw new Error(
+        'GitHub API rate limit exceeded; retry later or set CIBYP_GITHUB_TOKEN for official metadata requests',
+      );
+    throw new Error('GitHub release lookup failed: HTTP ' + response.status);
+  }
   const chunks = [];
   let length = 0;
   for await (const bytes of response.body) {

@@ -7,8 +7,36 @@ const os = require('node:os');
 const http = require('node:http');
 const crypto = require('node:crypto');
 const { sources, downloadVerified } = require('../../packages/npm/lib/download.cjs');
-const { discoverRelease } = require('../../packages/npm/lib/releases.cjs');
+const { discoverRelease, json } = require('../../packages/npm/lib/releases.cjs');
 const { resolveRuntime, writeState, readState } = require('../../packages/npm/lib/updates.cjs');
+
+test('optional GitHub credentials are scoped to the official API and rate limits have a clear error', async () => {
+  const calls = [];
+  const options = {
+    env: { CIBYP_GITHUB_TOKEN: 'fixture-token' },
+    fetchJSON: async (url, options) => {
+      calls.push({ url, ...options });
+      return new Response('{}');
+    },
+  };
+  await json('https://api.github.com/repos/B5-Software/Could-I-Be-Your-Partner/releases', options);
+  await json(
+    'https://github.com/B5-Software/Could-I-Be-Your-Partner/releases/download/fixture/manifest.json',
+    options,
+  );
+  await json('https://mirror.example/fixture.json', options);
+  assert.equal(calls[0].headers.Authorization, 'Bearer fixture-token');
+  assert.equal(calls[0].redirect, 'error');
+  assert.equal(calls[1].headers.Authorization, undefined);
+  assert.equal(calls[2].headers.Authorization, undefined);
+  await assert.rejects(
+    json('https://api.github.com/repos/fixture', {
+      fetchJSON: async () =>
+        new Response('{}', { status: 403, headers: { 'x-ratelimit-remaining': '0' } }),
+    }),
+    /rate limit exceeded/,
+  );
+});
 
 async function fixture(t, handler) {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cibyp-download-'));

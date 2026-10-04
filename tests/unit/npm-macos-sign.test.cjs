@@ -17,13 +17,19 @@ async function fixture(t) {
   const app = path.join(root, 'Could I Be Your Partner.app');
   const executable = 'Could I Be Your Partner.app/Contents/MacOS/CIBYP';
   const helper = path.join(app, 'Contents/Frameworks/Helper.app');
+  const framework = path.join(app, 'Contents/Frameworks/Electron.framework');
   await fs.mkdir(path.join(app, 'Contents/MacOS'), { recursive: true });
   await fs.mkdir(path.join(helper, 'Contents/MacOS'), { recursive: true });
   await fs.mkdir(path.join(app, 'Contents/Resources/native'), { recursive: true });
+  await fs.mkdir(path.join(framework, 'Versions/A/Helpers'), { recursive: true });
+  await fs.mkdir(path.join(framework, 'Resources'));
+  await fs.writeFile(path.join(framework, 'Resources/Info.plist'), 'fixture');
   for (const file of [
     path.join(root, executable),
     path.join(helper, 'Contents/MacOS/Helper'),
     path.join(app, 'Contents/Resources/native/addon.node'),
+    path.join(framework, 'Versions/A/Electron'),
+    path.join(framework, 'Versions/A/Helpers/chrome_crashpad_handler'),
   ]) {
     await fs.writeFile(file, Buffer.from([0xcf, 0xfa, 0xed, 0xfe, 0, 0, 0, 0]));
   }
@@ -34,11 +40,11 @@ async function fixture(t) {
     Buffer.from([0xca, 0xfe, 0xba, 0xbe, 0, 0, 0, 61]),
   );
   await fs.mkdir(path.join(app, 'Contents/Resources/assets.bundle'));
-  return { root, app, helper, asset: { executable } };
+  return { root, app, helper, framework, asset: { executable } };
 }
 
 test('local macOS signing preserves valid signatures and signs native code before enclosing bundles', async (t) => {
-  const { root, app, helper, asset } = await fixture(t);
+  const { root, app, helper, framework, asset } = await fixture(t);
   let calls = [];
   await prepareMacRuntime(root, asset, {
     log: () => {},
@@ -54,6 +60,15 @@ test('local macOS signing preserves valid signatures and signs native code befor
     log: () => {},
     run: async (file, args) => {
       calls.push([file, args]);
+      if (args.includes('--sign') && args.at(-1) === path.join(framework, 'Versions/A/Electron'))
+        assert.ok(
+          calls.some(
+            ([, previousArgs]) =>
+              previousArgs.includes('--sign') &&
+              previousArgs.at(-1).endsWith('chrome_crashpad_handler'),
+          ),
+          'framework helper must be signed before its main binary',
+        );
       if (args.includes('--verify') && ++verifies === 1) throw new Error('unsigned');
       if (args.includes('--display'))
         return {
@@ -66,7 +81,7 @@ test('local macOS signing preserves valid signatures and signs native code befor
     },
   });
   const signed = calls.filter(([, args]) => args.includes('--sign')).map(([, args]) => args.at(-1));
-  assert.equal(signed.length, 5);
+  assert.equal(signed.length, 8);
   assert.deepEqual(signed.slice(-2), [helper, app]);
   assert.ok(signed.some((file) => file.endsWith('addon.node')));
   assert.ok(!signed.some((file) => /Main.class|assets.bundle/.test(file)));
@@ -173,6 +188,6 @@ test(
     await fs.symlink(outside, path.join(app, 'Contents/Resources/external.node'));
     const targets = await signingTargets(app);
     assert.ok(!targets.binaries.includes(outside));
-    assert.equal(targets.binaries.length, 3);
+    assert.equal(targets.binaries.length, 5);
   },
 );

@@ -46,6 +46,7 @@ jobs:
         env:
           CIBYP_CACHE_DIR: ${{ runner.temp }}/cibyp-macos-runtime
           CIBYP_DESKTOP_DIR: ${{ runner.temp }}/cibyp-macos-applications
+          GH_TOKEN: ${{ github.token }}
         run: node packages/npm/bin/cibyp.cjs --install-only
   publish:
     needs: verify-macos
@@ -83,6 +84,7 @@ jobs:
         if: steps.version.outputs.needed == 'true'
         env:
           MANUAL: ${{ github.event_name == 'workflow_dispatch' }}
+          GH_TOKEN: ${{ github.token }}
         run: node -e "require('./packages/npm/lib/releases.cjs').discoverRelease().then(m=>{require('node:fs').appendFileSync(process.env.GITHUB_OUTPUT,'ready=true\n');console.log('Verified runtime release '+m.version)}).catch(e=>{console.error(e.message);if(process.env.MANUAL==='true')process.exitCode=1;else console.log('::notice::Publish complete runtime assets before the first launcher publication.')})"
       - name: Prepare one small JavaScript package
         if: steps.runtime.outputs.ready == 'true'

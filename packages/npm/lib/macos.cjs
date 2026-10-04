@@ -106,7 +106,9 @@ async function prepareMacRuntime(
     );
     // Sign leaves first, then enclosing bundles. --deep signing would replace
     // helper entitlements and can miss native modules in Contents/Resources.
-    const targets = [...binaries, ...bundles];
+    const targets = [...binaries, ...bundles].sort(
+      (a, b) => b.split(path.sep).length - a.split(path.sep).length,
+    );
     let completed = 0;
     for (const target of targets) {
       signal?.throwIfAborted();
