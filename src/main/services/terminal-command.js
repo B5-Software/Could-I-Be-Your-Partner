@@ -1,6 +1,33 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 'use strict';
 const crypto = require('node:crypto');
+const OSC_PATTERN = /\x1b\](?:[^\x07\x1b]|\x1b(?!\\))*(?:\x07|\x1b\\|$)/g;
+const CSI_PATTERN = /\x1b\[[0-?]*[ -/]*[@-~]/g;
+const IGNORED = '(?: |\\x1b\\[[0-?]*[ -/]*[@-~])*';
+
+function wrappedLiteral(text) {
+  return [...text]
+    .map((character) => {
+      const literal = character.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      // ConPTY redraws the last column before emitting the next wrapped row.
+      return literal + IGNORED + '(?:\\r?\\n\\x1b\\[\\d+;\\d+H' + literal + IGNORED + ')?';
+    })
+    .join('');
+}
+
+function wrappedCompletion(marker) {
+  return new RegExp(
+    wrappedLiteral(marker + ':') +
+      '((?:' +
+      wrappedLiteral('-') +
+      ')?(?:(\\d)' +
+      IGNORED +
+      '(?:\\r?\\n\\x1b\\[\\d+;\\d+H\\2' +
+      IGNORED +
+      ')?)+)' +
+      wrappedLiteral(':' + marker + '_END'),
+  );
+}
 
 class TerminalCommand {
   constructor(term, shellName) {
@@ -15,7 +42,14 @@ class TerminalCommand {
     if (typeof command !== 'string' || !command.trim())
       return { ok: false, error: 'command is required' };
     const marker = 'CIBYP_DONE_' + crypto.randomBytes(16).toString('hex');
-    this.current = { marker, output: '', running: true, offset: 0, waiters: new Set() };
+    this.current = {
+      marker,
+      output: '',
+      running: true,
+      offset: 0,
+      waiters: new Set(),
+      wrappedPattern: wrappedCompletion(marker),
+    };
     // Keep execution in the same shell (cd/export survive). The marker is emitted
     // after execution and cannot be confused with echoed input or shell prompts.
     let framed;
@@ -59,22 +93,32 @@ class TerminalCommand {
       current.offset = Math.max(0, current.offset - removed);
       current.truncated = true;
     }
-    const plain = current.output
-      .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
-      .replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, '');
+    // Mask title updates without shifting raw offsets. CMD titles can contain
+    // the expanded echo command before the actual marker has been printed.
+    const content = current.output.replace(OSC_PATTERN, (sequence) => ' '.repeat(sequence.length));
+    const plain = content.replace(CSI_PATTERN, '');
     // ConPTY can use cursor escapes instead of newlines. A complete random end
     // marker also prevents a split multi-digit exit code from finishing early.
     const pattern = current.marker + ':(-?\\d+):' + current.marker + '_END';
-    const match = new RegExp(pattern).exec(plain);
+    let match = new RegExp(pattern).exec(plain);
+    let rawMatch = new RegExp(pattern).exec(content);
+    if (!match) {
+      rawMatch = current.wrappedPattern.exec(content);
+      match = rawMatch;
+    }
     if (match) {
-      const rawMatch = new RegExp(pattern).exec(current.output);
       current.output = rawMatch
         ? current.output.slice(0, rawMatch.index)
         : plain.slice(0, match.index);
       current.output = current.output.replace(/[\r\n]+$/, '');
       // The usual raw marker keeps unread offsets stable across polls.
       current.offset = Math.min(current.offset, current.output.length);
-      current.exitCode = Number(match[1]);
+      current.exitCode = Number(
+        match[1]
+          .replace(CSI_PATTERN, '')
+          .replace(/(.)\r?\n\1/g, '$1')
+          .replace(/[\r\n ]/g, ''),
+      );
       current.running = false;
       for (const finish of [...current.waiters]) finish();
     }
@@ -100,7 +144,10 @@ class TerminalCommand {
         const timer = setTimeout(finish, Math.max(1, Math.min(60000, Number(timeoutMs) || 10000)));
         current.waiters.add(finish);
       });
-    const output = current.output.slice(current.offset).replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '');
+    const output = current.output
+      .slice(current.offset)
+      .replace(OSC_PATTERN, '')
+      .replace(CSI_PATTERN, '');
     current.offset = current.output.length;
     return {
       ok: !current.error && (current.running || current.exitCode === 0),

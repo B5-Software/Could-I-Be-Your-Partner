@@ -56,6 +56,34 @@ test('ConPTY completion needs neither newline nor prompt boundaries and waits fo
   assert.equal(result.exitCode, 127);
 });
 
+test('narrow ConPTY redraws preserve completion, exit status and unread output while titles are ignored', async () => {
+  const tracker = new TerminalCommand({ write() {} }, 'cmd.exe');
+  tracker.start('echo test');
+  const marker = tracker.current.marker;
+  const completed = marker + ':-127:' + marker + '_END';
+  tracker.append('\x1b]0;echo ' + completed);
+  assert.equal(
+    (await tracker.wait(1)).running,
+    true,
+    'an incomplete title cannot finish a command',
+  );
+  tracker.append('\x07');
+  const rows = completed.match(/.{1,7}/g);
+  const redraw = rows.reduce(
+    (text, row, index) =>
+      text + (index ? '\x1b[?25h\r\n\x1b[19;20H' + rows[index - 1].at(-1) : '') + row,
+    '',
+  );
+  tracker.append('final output\r\n' + redraw.slice(0, -4));
+  assert.equal(tracker.current.running, true);
+  tracker.append(redraw.slice(-4));
+  const result = await tracker.wait();
+  assert.equal(result.running, false);
+  assert.equal(result.exitCode, -127);
+  assert.match(result.output, /final output/);
+  assert(!result.output.includes(marker));
+});
+
 test(
   'persistent shell runs real commands, keeps cwd/environment and reports exit status',
   { timeout: 30000 },
