@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { waitForRegistry } = require('../../scripts/publish-npm.cjs');
+const { waitForRegistry, verifyLauncher } = require('../../scripts/publish-npm.cjs');
 const entry = (name) => ({
   pkg: { name, version: '1.9.0-alpha.20' },
   packed: { integrity: 'sha512-fixture' },
@@ -13,8 +13,8 @@ const response = (item, status = 200, changes = {}) => ({
 });
 
 test('npm scan delay and transient registry errors must settle before publication is confirmed', async () => {
-  const first = entry('cibyp-runtime-win32-x64-part-1');
-  const second = entry('cibyp-runtime-win32-x64');
+  const first = entry('cibyp');
+  const second = { ...entry('cibyp'), pkg: { name: 'cibyp', version: '1.0.1' } };
   const attempts = new Map();
   let time = 0;
   await waitForRegistry([first, second], {
@@ -26,16 +26,39 @@ test('npm scan delay and transient registry errors must settle before publicatio
     timeout: 100,
     log: () => {},
     fetchPackage: async (url) => {
-      const item = url.includes('-part-1/') ? first : second;
-      const count = (attempts.get(item.pkg.name) || 0) + 1;
-      attempts.set(item.pkg.name, count);
+      const item = url.endsWith('/1.0.1') ? second : first;
+      const count = (attempts.get(item.pkg.version) || 0) + 1;
+      attempts.set(item.pkg.version, count);
       if (item === second && count === 1) throw new Error('Temporary network failure');
       return response(item, count === 1 ? 404 : item === second && count === 2 ? 503 : 200);
     },
   });
   assert.equal(time, 20);
-  assert.equal(attempts.get(first.pkg.name), 2, 'confirmed parts should not be polled again');
-  assert.equal(attempts.get(second.pkg.name), 3);
+  assert.equal(attempts.get(first.pkg.version), 2, 'confirmed packages should not be polled again');
+  assert.equal(attempts.get(second.pkg.version), 3);
+});
+
+test('publisher rejects payload packages, dependencies, binaries and oversized archives', () => {
+  const pkg = { name: 'cibyp' },
+    packed = {
+      size: 100,
+      unpackedSize: 200,
+      files: [{ path: 'lib/runtime.cjs' }, { path: 'package.json' }],
+    };
+  verifyLauncher(pkg, packed);
+  assert.throws(
+    () => verifyLauncher({ ...pkg, name: 'cibyp-runtime-win32-x64' }, packed),
+    /restricted/,
+  );
+  assert.throws(
+    () => verifyLauncher({ ...pkg, optionalDependencies: { payload: '1' } }, packed),
+    /restricted/,
+  );
+  assert.throws(() => verifyLauncher(pkg, { ...packed, size: 300000 }), /budget/);
+  assert.throws(
+    () => verifyLauncher(pkg, { ...packed, files: [{ path: 'payload.bin' }] }),
+    /binary/,
+  );
 });
 
 test('npm held uploads time out explicitly instead of reporting a successful installable release', async () => {

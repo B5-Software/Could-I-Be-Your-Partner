@@ -1,9 +1,10 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 'use strict';
-const { ensureRuntime } = require('./runtime.cjs');
+const { resolveRuntime } = require('./updates.cjs');
 const { registerDesktop } = require('./desktop.cjs');
 
 async function install() {
+  if (process.env.CIBYP_SKIP_INSTALL === '1') return;
   // A sudo global installation must create the invoking user's launcher/cache.
   if (
     process.platform !== 'win32' &&
@@ -21,10 +22,7 @@ async function install() {
     );
     process.env.XDG_DATA_HOME = path.join(home, '.local/share');
   }
-  const manifest = require('../runtime.json');
-  if (manifest.version !== require('../package.json').version)
-    throw new Error('Mismatched npm/runtime version');
-  const runtime = await ensureRuntime(manifest);
+  const runtime = await resolveRuntime();
   try {
     const shortcut = await registerDesktop(runtime, {
       home: require('node:os').userInfo().homedir,

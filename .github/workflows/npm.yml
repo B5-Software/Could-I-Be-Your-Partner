@@ -1,0 +1,59 @@
+name: npm-launcher
+
+on:
+  workflow_run:
+    workflows: [build-release]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: npm-launcher-publish
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          registry-url: https://registry.npmjs.org
+      - name: Check whether the independent launcher version needs publishing
+        id: version
+        run: |
+          node - <<'JS'
+          const fs=require('node:fs');
+          const version=require('./packages/npm/package.json').version;
+          fetch('https://registry.npmjs.org/cibyp/'+encodeURIComponent(version),{signal:AbortSignal.timeout(30000)}).then(response=>{
+            if(![200,404].includes(response.status)) throw new Error('npm lookup failed: HTTP '+response.status);
+            fs.appendFileSync(process.env.GITHUB_OUTPUT,'needed='+(response.status===404)+'\n');
+            console.log(response.status===200?'Launcher version already published; no npm changes needed.':'Preparing the new launcher version.');
+          }).catch(error=>{console.error(error.message);process.exitCode=1});
+          JS
+      - name: Verify launcher, download safety and update behavior
+        if: steps.version.outputs.needed == 'true'
+        run: node --test tests/unit/npm-distribution.test.cjs tests/unit/npm-publication.test.cjs tests/unit/npm-download.test.cjs
+      - name: Verify official GitHub runtimes exist
+        id: runtime
+        if: steps.version.outputs.needed == 'true'
+        env:
+          MANUAL: ${{ github.event_name == 'workflow_dispatch' }}
+        run: node -e "require('./packages/npm/lib/releases.cjs').discoverRelease().then(m=>{require('node:fs').appendFileSync(process.env.GITHUB_OUTPUT,'ready=true\n');console.log('Verified runtime release '+m.version)}).catch(e=>{console.error(e.message);if(process.env.MANUAL==='true')process.exitCode=1;else console.log('::notice::Publish complete runtime assets before the first launcher publication.')})"
+      - name: Prepare one small JavaScript package
+        if: steps.runtime.outputs.ready == 'true'
+        run: npm run prepare:npm -- --output npm-dist
+      - name: Publish only the launcher
+        if: steps.runtime.outputs.ready == 'true'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm run publish:npm -- npm-dist

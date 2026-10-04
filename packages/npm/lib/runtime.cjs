@@ -9,6 +9,7 @@ const crypto = require('node:crypto');
 const { spawn, execFile } = require('node:child_process');
 const { promisify } = require('node:util');
 const run = promisify(execFile);
+const { downloadVerified } = require('./download.cjs');
 
 function inside(directory, relative) {
   if (
@@ -52,20 +53,6 @@ function selectTarget(manifest, platform, arch) {
     throw new Error('Invalid CIBYP runtime checksum or archive');
   // Validate every path before any download, cleanup or process execution.
   for (const name of ['node', 'entry', 'resources', 'executable']) inside('/runtime', asset[name]);
-  if (
-    asset.parts !== undefined &&
-    (!Array.isArray(asset.parts) ||
-      !asset.parts.length ||
-      asset.parts.some(
-        (part, index) =>
-          part.package !== `cibyp-runtime-${key}-part-${index + 1}` ||
-          !/^[a-f0-9]{64}$/.test(part.sha256 || '') ||
-          !Number.isSafeInteger(part.size) ||
-          part.size <= 0,
-      ) ||
-      asset.parts.reduce((sum, part) => sum + part.size, 0) !== asset.size)
-  )
-    throw new Error('Invalid CIBYP runtime parts');
   return asset;
 }
 
@@ -182,63 +169,15 @@ async function lockDirectory(directory, { signal, log, timeout = 20 * 60 * 1000 
   }
 }
 
-function resolvePart(part, version) {
-  let file;
-  try {
-    const platform = require.resolve(part.package.replace(/-part-\d+$/, '') + '/package.json');
-    file = require.resolve(part.package + '/package.json', { paths: [path.dirname(platform)] });
-  } catch {
-    throw new Error(
-      'Missing ' + part.package + '. Reinstall cibyp with optional dependencies enabled.',
-    );
-  }
-  const pkg = JSON.parse(fs.readFileSync(file, 'utf8'));
-  if (pkg.name !== part.package || pkg.version !== version)
-    throw new Error('Mismatched runtime package: ' + part.package);
-  return path.join(path.dirname(file), 'payload.bin');
-}
-
-async function assembleArchive(manifest, asset, archive, { resolvePayload = resolvePart, signal }) {
-  if (!asset.parts?.length) throw new Error('Missing runtime parts; reinstall cibyp');
-  const output = await fsp.open(archive, 'wx');
-  const hash = crypto.createHash('sha256');
-  let total = 0;
-  try {
-    for (const part of asset.parts) {
-      signal?.throwIfAborted();
-      const file = resolvePayload(part, manifest.version);
-      if ((await fsp.stat(file)).size !== part.size)
-        throw new Error('Incomplete runtime part: ' + part.package);
-      const partHash = crypto.createHash('sha256');
-      for await (const buffer of fs.createReadStream(file)) {
-        signal?.throwIfAborted();
-        hash.update(buffer);
-        partHash.update(buffer);
-        total += buffer.length;
-        // FileHandle.write may complete with a short write.
-        for (let offset = 0; offset < buffer.length;) {
-          const result = await output.write(buffer, offset, buffer.length - offset);
-          if (!result.bytesWritten) throw new Error('Unable to write runtime archive');
-          offset += result.bytesWritten;
-        }
-      }
-      if (partHash.digest('hex') !== part.sha256)
-        throw new Error('Runtime part checksum failed: ' + part.package);
-    }
-    if (total !== asset.size || hash.digest('hex') !== asset.sha256)
-      throw new Error('Runtime SHA-256 verification failed');
-  } finally {
-    await output.close();
-  }
-}
-
 async function ensureRuntime(
   manifest,
   {
     platform = process.platform,
     arch = process.arch,
     env = process.env,
-    resolvePayload = resolvePart,
+    download = downloadVerified,
+    mirrors,
+    concurrency,
     extract = run,
     signal,
     log = (message) => console.error(message),
@@ -256,7 +195,31 @@ async function ensureRuntime(
   try {
     if (await usable(destination, asset)) return { directory: destination, asset };
     log(`[cibyp] Preparing CIBYP ${manifest.version} for ${platform}-${arch}...`);
-    await assembleArchive(manifest, asset, archive, { resolvePayload, signal });
+    let last = 0;
+    const began = Date.now();
+    await download(asset, archive, {
+      mirrors,
+      concurrency,
+      signal,
+      onProgress({ downloaded, total, source, verified }) {
+        if (!verified && Date.now() - last < 1500) return;
+        last = Date.now();
+        const speed = downloaded / Math.max(1, (last - began) / 1000) / 1048576;
+        log(
+          '[cibyp] ' +
+            (downloaded / 1048576).toFixed(1) +
+            '/' +
+            (total / 1048576).toFixed(1) +
+            ' MiB, ' +
+            speed.toFixed(1) +
+            ' MiB/s (' +
+            new URL(source).host +
+            ')',
+        );
+      },
+    });
+    if ((await fsp.stat(archive)).size !== asset.size || (await checksum(archive)) !== asset.sha256)
+      throw new Error('Runtime SHA-256 verification failed');
     log('[cibyp] Verified SHA-256; extracting runtime...');
     await fsp.mkdir(staging);
     try {
@@ -314,46 +277,70 @@ async function startRuntime(mode, args, runtime, { spawnProcess = spawn, env = p
 
 async function main(mode, args = process.argv.slice(2)) {
   const pkg = require('../package.json');
+  if (args.includes('--desktop')) {
+    const launcherDirectory = path.dirname(__dirname);
+    if (path.basename(launcherDirectory) !== 'launcher-' + pkg.version)
+      throw new Error('Desktop starts require the managed launcher copy');
+    process.env.CIBYP_CACHE_DIR = path.dirname(launcherDirectory);
+  }
   if (args.includes('--version') || args.includes('-v')) {
     console.log(pkg.version);
     return;
   }
   if (args.includes('--help') || args.includes('-h')) {
-    console.log(`Could I Be Your Partner ${pkg.version}
-
-  cibyp                         GUI, or TUI when no desktop is available
-  cibyp --tui                   TUI
-  cibyp-tui                     TUI
-  cibyp-code                    Code TUI in the current terminal directory
-  cibyp-tui --mode=code --workspace="/your/project"
-  cibyp --install-only          Repair the runtime and register the GUI launcher
-
-npm installs the complete build for your platform, including GUI and Code-OSS.
-Starts are offline; settings and history are shared with the installed App.
-Use /help inside TUI. Set CIBYP_CACHE_DIR to move the runtime cache.`);
+    console.log(
+      'Could I Be Your Partner launcher ' +
+        pkg.version +
+        '\n\n' +
+        '  cibyp                GUI, or TUI without a desktop\n' +
+        '  cibyp-tui            TUI\n' +
+        '  cibyp-code           Code TUI using the current terminal directory\n' +
+        '  cibyp update         Download the latest verified GitHub runtime\n' +
+        '  cibyp --no-update    Use the cached runtime without checking updates\n' +
+        '  cibyp --channel=stable|preview    Persist the release channel (default: preview)\n' +
+        '  cibyp --runtime-version           Show the cached App version\n' +
+        '  cibyp --install-only              Install/repair and register the GUI\n\n' +
+        'Automatic runtime updates do not require npm updates. Downloads use SHA-256 verification.\n' +
+        'CIBYP_CACHE_DIR moves the cache. CIBYP_MIRRORS=off disables mirrors; otherwise supply comma-separated HTTPS prefixes.\n' +
+        'CIBYP_DOWNLOAD_CONCURRENCY=1..8 controls parallel downloads (default: 4). Use /help in TUI.',
+    );
     return;
   }
-  let manifest;
-  try {
-    manifest = require('../runtime.json');
-  } catch {
-    throw new Error('This npm package is missing its release manifest; reinstall cibyp from npm');
-  }
-  if (manifest.version !== pkg.version)
-    throw new Error('The npm package and its runtime have different versions');
+  const update = args[0] === 'update' || args.includes('--update');
+  const channel = args.find((arg) => arg.startsWith('--channel='))?.slice(10);
+  const installOnly = args.includes('--install-only');
   const controller = new AbortController();
   const interrupt = () => controller.abort(new Error('Runtime installation cancelled'));
   process.once('SIGINT', interrupt);
   let runtime;
   try {
-    runtime = await ensureRuntime(manifest, { signal: controller.signal });
-    if (args.includes('--install-only')) await require('./desktop.cjs').registerDesktop(runtime);
+    if (args.includes('--runtime-version')) {
+      const cached = await require('./updates.cjs').readState();
+      console.log(cached.manifest?.version || 'not installed');
+      return;
+    }
+    runtime = await require('./updates.cjs').resolveRuntime({
+      force: update || installOnly,
+      offline: args.includes('--no-update'),
+      channel,
+      signal: controller.signal,
+    });
+    await require('./desktop.cjs')
+      .registerDesktop(runtime)
+      .catch((error) => {
+        console.error('[cibyp] Desktop registration: ' + error.message);
+      });
   } finally {
     process.removeListener('SIGINT', interrupt);
   }
-  if (!args.includes('--install-only')) process.exitCode = await startRuntime(mode, args, runtime);
+  if (!update && !installOnly) {
+    const applicationArgs = args.filter(
+      (arg) =>
+        !['--no-update', '--update', '--desktop'].includes(arg) && !arg.startsWith('--channel='),
+    );
+    process.exitCode = await startRuntime(mode, applicationArgs, runtime);
+  }
 }
-
 module.exports = {
   main,
   ensureRuntime,
@@ -362,5 +349,6 @@ module.exports = {
   inside,
   checksum,
   cacheDirectory,
-  assembleArchive,
+  usable,
+  lockDirectory,
 };

@@ -18,7 +18,7 @@
 
 徽章自动读取 GitHub / npm；预发布版本筛选带 `-` 的版本标签，正式版排除预发布。
 构建徽章表示发布工作流状态：版本未变化时跳过打包，未配置 npm 发布身份时也不会发布。
-npm 首次发布前显示 `not found`；npm `latest` 可包含 alpha 版，与 GitHub 正式版通道独立。
+npm 版本是独立的纯 JS 启动器版本；App 二进制与自动更新来自 GitHub Release，默认 preview 通道包含 alpha。
 
 [checks-badge]: https://img.shields.io/github/actions/workflow/status/B5-Software/Could-I-Be-Your-Partner/check.yml?branch=main&label=checks&logo=githubactions&logoColor=white&style=flat-square
 [checks-url]: https://github.com/B5-Software/Could-I-Be-Your-Partner/actions/workflows/check.yml
@@ -141,7 +141,7 @@ npm 首次发布前显示 `not found`；npm `latest` 可包含 alpha 版，与 G
 
 ### 安装已发布的完整应用
 
-从 [GitHub Releases][prerelease-url] 下载系统安装包，或在 npm 首次发布完成后使用：
+从 [GitHub Releases][prerelease-url] 下载系统安装包，或使用纯 JS npm 启动器：
 
 ```sh
 npm install -g cibyp
@@ -151,12 +151,13 @@ cibyp-code     # Code TUI，使用终端当前目录作为宿主工作区
 # 无需全局安装：
 npx cibyp
 npx --package=cibyp cibyp-code
-# 更新：
-npm install -g cibyp@latest
+# 更新 App：
+cibyp update
 ```
 
-npm 安装需要 Node.js >= 22.14，安装时按系统和架构获取完整 GUI/TUI 运行时，
-注册当前用户的应用启动器。更新替换同一个启动入口，保留设置、历史和工作区。
+npm 只包含一个纯 JS 启动器，需要 Node.js >= 22.14。安装时从 GitHub 按系统/架构下载完整 GUI/TUI，
+自动选择可用镜像、并发加速，SHA-256 校验通过后安装并注册用户启动器。
+正常启动定期检查 App 更新；更新保留设置、历史和工作区，启动器无需随 App 每次发版更新 npm。
 安装公开包无需 npm 登录；维护者登录与 CI 发布配置见 [npm 发布说明](docs/npm-publishing.md#登录-npm-与配置-ci)。
 
 以下步骤用于从源码开发和构建。

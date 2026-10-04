@@ -4,8 +4,6 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const os = require('node:os');
-const http = require('node:http');
-const crypto = require('node:crypto');
 const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
 const run = promisify(execFile);
@@ -13,6 +11,7 @@ const {
   targets,
   archiveRuntime,
   preparePackage,
+  prepareRuntimeManifest,
 } = require('../../scripts/lib/npm-distribution.cjs');
 const {
   ensureRuntime,
@@ -57,32 +56,44 @@ async function fixtures(root) {
     await archiveRuntime({ dist, platform, arch, version });
   }
   const output = path.join(root, 'packages');
-  const manifest = await preparePackage({ assets: dist, output, version, chunkSize: 350 });
+  const manifest = await prepareRuntimeManifest({
+    assets: dist,
+    version,
+    revision: 'a'.repeat(40),
+  });
+  await preparePackage({ output });
   return { output, manifest, dist };
 }
 
-test('complete platform payloads install offline, serialize concurrent extraction and reject damaged parts', async (t) => {
+test('GitHub runtimes serialize extraction, reuse the verified cache and reject damaged downloads', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cibyp-npm-runtime-'));
   t.after(() => fs.rm(root, { recursive: true, force: true }));
   const { output, manifest, dist } = await fixtures(root);
   const platform = process.platform,
     arch = process.arch;
   const asset = selectTarget(manifest, platform, arch);
-  assert.ok(asset.parts.length > 1);
+  assert.equal(asset.parts, undefined);
   const pkg = JSON.parse(await fs.readFile(path.join(output, 'cibyp/package.json'), 'utf8'));
-  assert.equal(Object.keys(pkg.optionalDependencies).length, 6);
+  assert.equal(pkg.optionalDependencies, undefined);
+  assert.equal(pkg.dependencies, undefined);
+  assert.deepEqual(await fs.readdir(output), ['cibyp']);
   assert.equal(pkg.bin['cibyp-code'], 'bin/cibyp-code.cjs');
   await assert.rejects(preparePackage({ assets: dist, output, version }), /must be empty/);
   for (const unsafe of ['../outside', '/absolute', 'C:/outside', 'C:\\outside', '..'])
     assert.throws(() => inside(root, unsafe));
   const env = { CIBYP_CACHE_DIR: path.join(root, 'cache') };
-  const resolvePayload = (part) => path.join(output, part.package, 'payload.bin');
-  const options = { platform, arch, env, resolvePayload, log: () => {} };
+  let downloads = 0;
+  const download = async (item, destination) => {
+    downloads++;
+    await fs.copyFile(path.join(dist, item.file), destination);
+  };
+  const options = { platform, arch, env, download, log: () => {} };
   const [first, second] = await Promise.all([
     ensureRuntime(manifest, options),
     ensureRuntime(manifest, options),
   ]);
   assert.equal(first.directory, second.directory);
+  assert.equal(downloads, 1);
   assert.equal(
     await fs.readFile(
       inside(first.directory, asset.resources + '/app.asar.unpacked/keep.txt'),
@@ -97,16 +108,16 @@ test('complete platform payloads install offline, serialize concurrent extractio
   const files = await fs.readdir(env.CIBYP_CACHE_DIR);
   await ensureRuntime(manifest, {
     ...options,
-    resolvePayload: () => assert.fail('cache must be offline'),
+    download: () => assert.fail('cache must be offline'),
   });
   assert.deepEqual(await fs.readdir(env.CIBYP_CACHE_DIR), files);
-  const badPart = resolvePayload(asset.parts[0]);
+  const badPart = path.join(dist, asset.file);
   const bytes = await fs.readFile(badPart);
   bytes[0] ^= 1;
   await fs.writeFile(badPart, bytes);
   await assert.rejects(
     ensureRuntime(manifest, { ...options, env: { CIBYP_CACHE_DIR: path.join(root, 'bad-cache') } }),
-    /checksum failed/,
+    /SHA-256 verification failed/,
   );
   assert.deepEqual(await fs.readdir(path.join(root, 'bad-cache')), []);
 });
@@ -156,12 +167,14 @@ test('GUI launcher updates preserve other files and point at the new cached runt
 });
 
 test(
-  'a real npm install selects only the native platform, runs postinstall and exposes all three commands',
+  'a real global npm install contains only JavaScript and exposes all three commands',
   { timeout: 120000 },
   async (t) => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cibyp-npm-install-'));
     t.after(() => fs.rm(root, { recursive: true, force: true }));
-    const { output } = await fixtures(root);
+    const output = path.join(root, 'packages');
+    const pkg = await preparePackage({ output });
+    const cwd = path.join(output, 'cibyp');
     const npmCLI =
       process.env.npm_execpath ||
       path.resolve(path.dirname(process.execPath), 'node_modules/npm/bin/npm-cli.js');
@@ -171,55 +184,16 @@ test(
         maxBuffer: 1024 * 1024,
         ...options,
       });
-    const packages = new Map();
-    for (const name of await fs.readdir(output)) {
-      const cwd = path.join(output, name);
-      const packed = JSON.parse(
-        (await npm(['pack', '--json', '--ignore-scripts'], { cwd })).stdout,
-      )[0];
-      const pkg = JSON.parse(await fs.readFile(path.join(cwd, 'package.json'), 'utf8'));
-      packages.set(name, {
-        pkg,
-        packed,
-        bytes: await fs.readFile(path.join(cwd, packed.filename)),
-      });
-    }
-    const downloaded = [];
-    const server = http.createServer((req, res) => {
-      const name = decodeURIComponent(req.url.split('/')[1]);
-      const value = packages.get(name);
-      if (!value) {
-        res.writeHead(404);
-        res.end('{}');
-        return;
-      }
-      if (req.url.includes('/-/')) {
-        downloaded.push(name);
-        res.end(value.bytes);
-        return;
-      }
-      const pkg = {
-        ...value.pkg,
-        dist: {
-          tarball: `http://127.0.0.1:${server.address().port}/${name}/-/${value.packed.filename}`,
-          integrity: value.packed.integrity,
-          shasum: crypto.createHash('sha1').update(value.bytes).digest('hex'),
-        },
-      };
-      res.setHeader('content-type', 'application/json');
-      res.end(
-        JSON.stringify({ name, 'dist-tags': { latest: version }, versions: { [version]: pkg } }),
-      );
-    });
-    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-    t.after(() => new Promise((resolve) => server.close(resolve)));
+    const packed = JSON.parse(
+      (await npm(['pack', '--json', '--ignore-scripts'], { cwd })).stdout,
+    )[0];
+    require('../../scripts/publish-npm.cjs').verifyLauncher(pkg, packed);
+    assert.ok(packed.size < 64 * 1024);
     const prefix = path.join(root, 'prefix');
     const env = {
       ...process.env,
-      CIBYP_CACHE_DIR: path.join(root, 'runtime'),
-      APPDATA: path.join(root, 'roaming'),
-      XDG_DATA_HOME: path.join(root, 'desktop'),
-      CIBYP_DESKTOP_DIR: path.join(root, 'menu'),
+      CIBYP_SKIP_INSTALL: '1',
+      CIBYP_CACHE_DIR: path.join(root, 'cache'),
       npm_config_cache: path.join(root, 'npm-cache'),
     };
     await npm(
@@ -228,38 +202,27 @@ test(
         '--global',
         '--prefix',
         prefix,
-        '--registry',
-        `http://127.0.0.1:${server.address().port}`,
+        '--offline',
         '--no-audit',
         '--no-fund',
-        'cibyp@' + version,
+        path.join(cwd, packed.filename),
       ],
       { env },
     );
-    const modules =
-      process.platform === 'win32'
-        ? path.join(prefix, 'node_modules')
-        : path.join(prefix, 'lib/node_modules');
-    for (const entry of ['cibyp', 'cibyp-tui', 'cibyp-code']) {
+    const modules = path.join(
+      prefix,
+      process.platform === 'win32' ? 'node_modules' : 'lib/node_modules',
+    );
+    assert.deepEqual(await fs.readdir(modules), ['cibyp']);
+    for (const command of ['cibyp', 'cibyp-tui', 'cibyp-code']) {
       const result = await run(
         process.execPath,
-        [path.join(modules, 'cibyp/bin', entry + '.cjs'), '--version'],
+        [path.join(modules, 'cibyp/bin', command + '.cjs'), '--version'],
         { env },
       );
-      assert.equal(result.stdout.trim(), version);
+      assert.equal(result.stdout.trim(), pkg.version);
     }
-    assert.ok((await fs.readdir(env.CIBYP_CACHE_DIR)).some((name) => name.startsWith(version)));
-    assert.ok(
-      downloaded.some((name) =>
-        name.startsWith(`cibyp-runtime-${process.platform}-${process.arch}-part-`),
-      ),
-    );
-    assert.ok(
-      downloaded.every(
-        (name) =>
-          name === 'cibyp' || name.startsWith(`cibyp-runtime-${process.platform}-${process.arch}`),
-      ),
-    );
+    await assert.rejects(fs.stat(path.join(modules, 'cibyp/runtime.json')), { code: 'ENOENT' });
   },
 );
 

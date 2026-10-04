@@ -1,7 +1,7 @@
 {
   "name": "cibyp",
-  "version": "1.9.0-alpha.20",
-  "description": "Could I Be Your Partner — desktop and terminal AI Agent",
+  "version": "1.0.0",
+  "description": "Pure JavaScript launcher for CIBYP GUI and TUI — verified GitHub downloads and automatic updates",
   "license": "GPL-3.0-or-later",
   "bin": {
     "cibyp": "bin/cibyp.cjs",
@@ -23,7 +23,6 @@
   "files": [
     "bin",
     "lib",
-    "runtime.json",
     "LICENSE",
     "README.md"
   ],

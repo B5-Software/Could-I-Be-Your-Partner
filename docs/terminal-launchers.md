@@ -30,4 +30,4 @@ TUI 中 `/sessions`、`/open`、`/delete`、`/rename` 提供会话选择列表�
 
 `cibyp-code` 进入 Code TUI，当前终端目录作为宿主工作区，VM 自动映射同步。
 
-也可通过 npm 安装完整 GUI/TUI，并注册用户应用启动器，见 [npm 分发](npm-publishing.md)。
+也可通过纯 JS npm 启动器下载经 SHA-256 校验的 GitHub GUI/TUI 二进制，并注册用户应用启动器，见 [npm 分发](npm-publishing.md)。

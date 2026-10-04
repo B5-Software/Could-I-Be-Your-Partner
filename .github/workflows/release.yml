@@ -5,11 +5,10 @@ on:
     branches: [main]
   workflow_dispatch:
     inputs:
-      npm_only:
-        description: Build and publish npm from this revision without changing the version or GitHub Release
+      runtime_run_id:
+        description: Add verified runtime binaries from an existing six-platform build to its GitHub Release
         required: false
-        default: false
-        type: boolean
+        type: string
       publish_run_id:
         description: Publish existing build artifacts (leave empty for normal version detection)
         required: false
@@ -68,7 +67,7 @@ jobs:
       # Pin the build revision while it is still a branch head. GitHub requires
       # workflow-write permission to auto-tag an unreferenced workflow commit.
       - name: Pin version tag before building
-        if: steps.check.outputs.changed == 'true' && !inputs.npm_only
+        if: steps.check.outputs.changed == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.check.outputs.version }}
@@ -89,7 +88,7 @@ jobs:
   # ---- 六平台打包（版本递增或手动 npm 首次发布时） ----
   build:
     needs: [test, detect]
-    if: (needs.detect.outputs.changed == 'true' || inputs.npm_only) && inputs.publish_run_id == ''
+    if: needs.detect.outputs.changed == 'true' && inputs.publish_run_id == '' && inputs.runtime_run_id == ''
     strategy:
       fail-fast: false
       matrix:
@@ -144,7 +143,7 @@ jobs:
       - name: Build (${{ matrix.name }})
         run: npm run ${{ matrix.script }}
 
-      - name: Archive complete npm runtime
+      - name: Archive complete GitHub runtime
         run: node scripts/prepare-npm.cjs --archive
 
       - name: Upload artifacts
@@ -160,7 +159,7 @@ jobs:
             dist/*.deb
           if-no-files-found: error
 
-      - name: Upload npm runtime
+      - name: Upload portable runtime
         uses: actions/upload-artifact@v7
         with:
           name: npm-${{ matrix.name }}
@@ -172,7 +171,7 @@ jobs:
   # ---- 发布到 GitHub Releases（tag: v<version>） ----
   release:
     needs: [test, detect, build]
-    if: always() && !cancelled() && !inputs.npm_only && needs.test.result == 'success' && needs.detect.result == 'success' && (needs.build.result == 'success' || inputs.publish_run_id != '')
+    if: always() && !cancelled() && needs.test.result == 'success' && needs.detect.result == 'success' && (needs.build.result == 'success' || inputs.publish_run_id != '')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -197,126 +196,29 @@ jobs:
             exit 1
           fi
 
-      - name: Download all artifacts
-        uses: actions/download-artifact@v8
-        with:
-          path: release-artifacts
-          merge-multiple: true
-          run-id: ${{ inputs.publish_run_id || github.run_id }}
-          github-token: ${{ github.token }}
-
-      - name: Create GitHub Release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          VERSION="${{ needs.detect.outputs.version }}"
-          PRERELEASE="${{ needs.detect.outputs.prerelease }}"
-          ARGS=(--title "v$VERSION" --generate-notes)
-          if [ "$PRERELEASE" = "true" ]; then ARGS+=(--prerelease); fi
-          if gh release view "v$VERSION" >/dev/null 2>&1; then
-            gh release upload "v$VERSION" release-artifacts/* --clobber
-          else
-            gh release create "v$VERSION" release-artifacts/* --verify-tag "${ARGS[@]}"
-          fi
-
-  npm:
-    needs: [test, detect, build, release]
-    if: always() && !cancelled() && needs.test.result == 'success' && needs.detect.result == 'success' && (needs.release.result == 'success' || (inputs.npm_only && (needs.build.result == 'success' || inputs.publish_run_id != '')))
-    runs-on: ubuntu-latest
-    concurrency:
-      group: npm-publish
-      cancel-in-progress: false
-    permissions:
-      contents: read
-      actions: read
-      id-token: write
-    env:
-      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-    steps:
-      - name: Resolve verified build source
-        id: source
-        env:
-          GH_TOKEN: ${{ github.token }}
-          BUILD_RUN_ID: ${{ inputs.publish_run_id || github.run_id }}
-        run: |
-          if [[ ! "$BUILD_RUN_ID" =~ ^[0-9]+$ ]]; then exit 1; fi
-          RUN=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$BUILD_RUN_ID")
-          if ! jq -e '.head_branch == "main" and .path == ".github/workflows/release.yml" and (.event == "push" or .event == "workflow_dispatch")' <<< "$RUN" >/dev/null; then
-            echo "::error::npm artifacts must originate from this repository's main release workflow."
-            exit 1
-          fi
-          SHA=$(jq -r '.head_sha' <<< "$RUN")
-          if [[ ! "$SHA" =~ ^[a-f0-9]{40}$ ]]; then exit 1; fi
-          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ steps.source.outputs.sha }}
       - uses: actions/setup-node@v7
         with:
           node-version: '24'
-          registry-url: https://registry.npmjs.org
-      - name: Verify npm artifact revision
+      - name: Publish verified installers and runtime assets
         env:
           GH_TOKEN: ${{ github.token }}
           BUILD_RUN_ID: ${{ inputs.publish_run_id || github.run_id }}
-          EXPECTED_VERSION: ${{ needs.detect.outputs.version }}
-        run: |
-          if [[ ! "$BUILD_RUN_ID" =~ ^[0-9]+$ ]]; then exit 1; fi
-          BUILD_SHA=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$BUILD_RUN_ID" --jq '.head_sha')
-          if [ "$BUILD_SHA" != "$(git rev-parse HEAD)" ]; then
-            echo "::error::npm artifacts and source refer to different commits."
-            exit 1
-          fi
-          if [ "$EXPECTED_VERSION" != "$(node -p 'require("./package.json").version')" ]; then
-            echo "::error::Reused build and selected version do not match."
-            exit 1
-          fi
-      - name: Download only npm runtime archives
+        run: python3 scripts/publish-runtime-assets.py
+
+  runtime:
+    needs: [test, detect]
+    if: inputs.runtime_run_id != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - name: Add verified portable runtimes without replacing existing installers or tags
         env:
           GH_TOKEN: ${{ github.token }}
-          BUILD_RUN_ID: ${{ inputs.publish_run_id || github.run_id }}
-        run: |
-          python3 - <<'PY'
-          import json, os, pathlib, shutil, subprocess, tempfile, zipfile
-          repo = os.environ['GITHUB_REPOSITORY']
-          run = os.environ['BUILD_RUN_ID']
-          def api(endpoint):
-              return json.loads(subprocess.check_output(['gh', 'api', f'repos/{repo}/{endpoint}']))
-          artifacts = api(f'actions/runs/{run}/artifacts?per_page=100')['artifacts']
-          selected = [a for a in artifacts if a['name'].startswith('npm-')]
-          if not selected:
-              selected = [a for a in artifacts if a['name'].startswith('dist-')]
-          if len(selected) != 6 or any(a['expired'] for a in selected):
-              raise RuntimeError('Expected six complete platform artifacts')
-          destination = pathlib.Path('npm-assets')
-          destination.mkdir()
-          for artifact in selected:
-              print('Downloading runtime from ' + artifact['name'], flush=True)
-              # One ZIP at a time; legacy builds also contain large installers.
-              with tempfile.TemporaryFile() as archive:
-                  subprocess.run(['gh', 'api', f"repos/{repo}/actions/artifacts/{artifact['id']}/zip"], stdout=archive, check=True)
-                  archive.seek(0)
-                  with zipfile.ZipFile(archive) as bundle:
-                      copied = 0
-                      for entry in bundle.infolist():
-                          name = pathlib.PurePosixPath(entry.filename).name
-                          if not name.startswith('cibyp-runtime-') or not name.endswith(('.tar.gz', '.json')):
-                              continue
-                          if '\\' in name or entry.is_dir():
-                              raise RuntimeError('Invalid runtime archive entry')
-                          with bundle.open(entry) as source, (destination / name).open('xb') as output:
-                              shutil.copyfileobj(source, output, 1024 * 1024)
-                          copied += 1
-                      if copied != 2:
-                          raise RuntimeError('Incomplete platform runtime artifact')
-          PY
-      - name: Prepare and verify platform packages
-        run: npm run prepare:npm -- --assets npm-assets --output npm-dist
-      - name: Free verified source archive space
-        run: node -e "require('node:fs').rmSync('npm-assets', {recursive:true})"
-      - name: Publish runtime packages and launcher
-        if: env.NODE_AUTH_TOKEN != '' || vars.NPM_TRUSTED_PUBLISHING == 'true'
-        run: npm run publish:npm -- npm-dist
-      - name: Explain first-publication setup
-        if: env.NODE_AUTH_TOKEN == '' && vars.NPM_TRUSTED_PUBLISHING != 'true'
-        run: echo "::notice::npm packages verified but not published. Configure NPM_TOKEN for first publication, or NPM_TRUSTED_PUBLISHING=true after configuring all packages' trusted publishers. See docs/npm-publishing.md."
+          BUILD_RUN_ID: ${{ inputs.runtime_run_id }}
+        run: python3 scripts/publish-runtime-assets.py --runtime-only

@@ -1,50 +1,31 @@
-# Could I Be Your Partner
+# CIBYP launcher
 
-Complete GUI and terminal AI Agent with shared settings, history, todos and VM workspaces.
+A small, dependency-free JavaScript launcher. npm contains no Electron, Code-OSS or platform payload packages. Complete application binaries come from the official GitHub Release.
 
 ```sh
 npm install -g cibyp
-cibyp          # GUI; automatically uses TUI when no desktop is available
-cibyp-tui      # TUI
-cibyp-code     # Code TUI, using the current terminal directory as the host workspace
-```
-
-Or use npx:
-
-```sh
-npx cibyp
-npx cibyp --tui
+cibyp              # GUI; TUI when no graphical desktop is available
+cibyp-tui          # terminal Agent
+cibyp-code         # Code TUI using the current terminal directory
+npx cibyp          # no global installation
 npx --package=cibyp cibyp-code
+cibyp update       # explicitly update the App runtime
 ```
 
-Installation includes Electron, Code-OSS, Node.js and the compiled native tools for your
-OS/architecture. npm selects one platform package; large payloads are split into dependencies
-and verified against a pinned SHA-256 before local extraction. No GitHub download is needed
-on first start. A VM image is managed separately by the App's VM settings.
+Requires Node.js >= 22.14 and tar (included in Windows 10+, macOS and Linux).
+Windows/macOS/Linux x64 and arm64 are supported. Installation downloads the complete GUI/TUI runtime, verifies its SHA-256, and registers a user GUI launcher. VM images keep their separate download mechanism.
 
-The GUI is registered for the current user: Windows Start menu, macOS `~/Applications/CIBYP.app`,
-or the Linux application menu (`cibyp.desktop`). Reinstalling or updating replaces the same
-launcher with the new runtime; settings, history and workspaces are preserved. Existing
-processes continue using their version until restarted. Old runtime caches are retained to
-avoid deleting running binaries; the App's data is stored separately.
+GitHub and HTTPS mirrors are probed automatically. Range-capable servers use four concurrent connections, retry failed segments and fall back to streaming when ranges are unavailable. Every completed download must match the size and SHA-256 obtained from official GitHub metadata before extraction or execution. Corrupt mirrors are discarded.
 
-Update with `npm install -g cibyp@latest`. npx installations also register the GUI; its target
-lives in the CIBYP cache independently of npm's temporary npx directory.
+The runtime cache is independent of npm/npx. Starts check for App updates at most every six hours; verified cached versions remain usable if an automatic check fails. Explicit updates report failures. Updates replace the managed desktop entry and retain running versions, settings, history and workspaces. Windows Start Menu, macOS ~/Applications and Linux user applications launch through the cached JavaScript launcher, so they also check updates.
 
-Node.js 22.14+ is required for the small launcher; the actual App uses its bundled Node.js.
-Supported targets: Windows 10/11, macOS and glibc Linux, on x64 or arm64. Linux GUI needs
-Electron's system desktop libraries. Alpine/musl is unsupported. On Linux, prefer a
-user-owned npm prefix; sudo installations place the launcher/cache in the invoking user's
-profile. GUI and TUI share the App's single-instance lock.
+Launcher and App versions are independent. `cibyp --version` reports the launcher; `cibyp --runtime-version` reports the cached App. Update npm only when the launcher itself changes. The default App channel is preview (includes alpha); `cibyp --channel=stable` or `cibyp --channel=preview` persist the selected channel.
 
-`--help` and `--version` work without starting the App. If installation scripts were disabled,
-`cibyp --install-only` repairs the runtime from the already-installed npm payloads and registers
-the GUI. Normal starts can unpack those local payloads too. Do not omit optional dependencies.
-`CIBYP_CACHE_DIR` selects the writable runtime cache; keep it consistent across installs and starts.
+- `cibyp --no-update`: use the verified cache without a network check.
+- `cibyp --install-only`: download/repair the runtime and register the GUI entry.
+- `CIBYP_CACHE_DIR`: move the cache; use the same value for installation and starts.
+- `CIBYP_MIRRORS=off`: use official GitHub only. Otherwise specify comma-separated HTTPS prefixes, optionally containing `{url}`.
+- `CIBYP_DOWNLOAD_CONCURRENCY=1..8`: set connection count (default 4).
+- `CIBYP_SKIP_INSTALL=1` or npm `--ignore-scripts`: defer the runtime download until first use.
 
-The `latest` npm tag follows the current CIBYP release, including alpha versions.
-Pin a release with `npm install -g cibyp@VERSION`.
-
-[Source and documentation](https://github.com/B5-Software/Could-I-Be-Your-Partner)
-
-GPL-3.0-or-later
+Public installation needs no npm login. Use /help in TUI. cibyp-code maps its host working directory into the VM using the App's shared workspace synchronization.
