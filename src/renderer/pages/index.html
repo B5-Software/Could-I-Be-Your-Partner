@@ -675,7 +675,10 @@
       <!-- Settings Page -->
       <section id="page-settings" class="page">
         <div class="page-header">
-          <h2><i class="fa-solid fa-gear"></i> 设置</h2><span id="settings-save-status" role="status" aria-live="polite">字段修改后自动保存</span>
+          <div class="settings-heading">
+            <h2><i class="fa-solid fa-gear"></i> 设置</h2>
+            <span id="settings-save-status" role="status" aria-live="polite">字段修改后自动保存</span>
+          </div>
           <div class="page-header-actions">
             <div class="search-bar page-search-bar">
               <i class="fa-solid fa-magnifying-glass"></i>
@@ -1148,7 +1151,6 @@
                 <h3><i class="fa-solid fa-sliders"></i> Token 分配</h3>
                 <p class="setting-hint">上下文是单次请求的总容量；输出、工具定义和对话共用这份空间。每日累计用量与美元限额请到「消费与用量上限」。</p>
                 <div class="token-allocation" id="token-allocation" role="status"></div>
-                <div class="setting-item"><label for="setting-token-preset">快速配置</label><select id="setting-token-preset"><option value="">选择配置…</option><option value="balanced">均衡：输出 8192 · 工具 4000 · 自动压缩</option><option value="compact">节省输入：输出 4096 · 工具 2000 · 自动压缩</option><option value="long">较长回复：输出 16384 · 工具 4000 · 自动压缩</option></select><p class="setting-hint">只调整分配策略，保留模型、连接与消费限额；实际值仍受模型容量限制。</p></div>
                 <div class="setting-item">
                   <label>默认模型上下文容量（tokens）</label>
                   <input type="number" id="setting-llm-ctx" min="1024" max="2000000" value="8192">
@@ -2588,8 +2590,12 @@
               <div class="settings-group">
                 <h3><i class="fa-solid fa-gears"></i> Shell 选择</h3>
                 <p class="setting-hint" style="margin-bottom:12px">
-                  手动指定终端使用的 Shell。不熟悉时建议保持「自动检测」。
+                  宿主和虚拟机分别配置，新建终端时生效；Code 模式终端也使用当前配置。
                 </p>
+                <div class="setting-item">
+                  <label for="setting-terminal-target">编辑位置</label>
+                  <select id="setting-terminal-target"><option value="host">宿主机</option><option value="vm">虚拟机</option></select>
+                </div>
                 <div class="setting-item">
                   <label class="setting-label">Shell</label>
                   <select id="setting-terminal-shell" style="width:240px">
@@ -2603,11 +2609,20 @@
                   </select>
                 </div>
                 <div class="setting-item" id="terminal-custom-shell-row" style="display:none">
-                  <label class="setting-label">自定义 Shell 路径</label>
-                  <input type="text" id="setting-terminal-custom-path"
-                         placeholder="如 C:\Windows\System32\bash.exe 或 /bin/zsh"
-                         style="flex:1;max-width:360px">
-                  <p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">指定 Shell 不存在 or 无效时自动回退到自动检测。</p>
+                  <label for="setting-terminal-custom-path">自定义 Shell 二进制</label>
+                  <div class="terminal-shell-file">
+                    <input type="text" id="setting-terminal-custom-path" placeholder="Shell 可执行文件的路径或名称">
+                    <button type="button" id="btn-terminal-pick-shell" class="btn-secondary">选择二进制</button>
+                  </div>
+                  <p class="setting-hint">宿主路径只用于宿主；VM 路径必须指向虚拟机内已安装的 Linux 可执行文件。无效设置会报错。</p>
+                </div>
+                <div class="setting-item">
+                  <label for="setting-terminal-args">Shell 启动参数（JSON 数组）</label>
+                  <input type="text" id="setting-terminal-args" placeholder='例如 ["-NoLogo", "-NoProfile"] 或 ["-l"]'>
+                </div>
+                <div class="terminal-shell-check">
+                  <button type="button" id="btn-terminal-check-shell" class="btn-secondary">检测 Shell</button>
+                  <span id="terminal-shell-status" class="setting-hint" role="status" aria-live="polite"></span>
                 </div>
               </div>
             </div>

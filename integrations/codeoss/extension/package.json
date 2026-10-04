@@ -26,6 +26,15 @@
     }
   },
   "contributes": {
+    "terminal": {
+      "profiles": [
+        {
+          "id": "cibyp.shell",
+          "title": "CIBYP",
+          "icon": "terminal"
+        }
+      ]
+    },
     "commands": [
       {
         "command": "cibyp.agent.focus",

@@ -45,10 +45,3 @@
       updateReoptimizeButtonVisibility(); renderToolsStats();
     });
   }
-  document.getElementById('setting-token-preset').addEventListener('change', async e => {
-    const presets = { balanced: [8192, 4000], compact: [4096, 2000], long: [16384, 4000] };
-    const preset = presets[e.target.value]; if (!preset) return;
-    await saveSettings({ llm: { maxResponseTokens: preset[0] }, toolExposure: { mode: 'adaptive', budgetTokens: preset[1] },
-      contextCompaction: { enabled: true, thresholdRatio: 0.8, retainRatio: 0.16 } });
-    e.target.value = '';
-  });

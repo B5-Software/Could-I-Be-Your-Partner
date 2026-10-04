@@ -56,6 +56,16 @@ module.exports = async function checkMenus(service, waitFor) {
     contents.focus();
     contents.sendInputEvent({ type: 'keyDown', keyCode: 'Escape' });
     contents.sendInputEvent({ type: 'keyUp', keyCode: 'Escape' });
+    // With a narrow titlebar, Alt+F opens File inside the "More" menu.
+    // Escape returns to that parent; a second Escape dismisses it.
+    if (
+      await contents.executeJavaScript(
+        `!!document.querySelector('.menubar-menu-items-holder [role="menu"][aria-label="More"]')`,
+      )
+    ) {
+      contents.sendInputEvent({ type: 'keyDown', keyCode: 'Escape' });
+      contents.sendInputEvent({ type: 'keyUp', keyCode: 'Escape' });
+    }
     await waitFor(
       () =>
         contents.executeJavaScript(

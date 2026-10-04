@@ -180,7 +180,7 @@ test('SSH shell enters a quoted cwd before starting bash with a true PTY', async
   const stream = new EventEmitter();
   ssh.client = {
     exec: (command, options, callback) => {
-      assert.equal(command, "cd -- '/workspace/student'\\''s folder' && exec bash -l");
+      assert.equal(command, "cd -- '/workspace/student'\\''s folder' && exec 'bash' '-l'");
       assert.deepEqual(options.pty, { term: 'xterm-256color', cols: 80, rows: 24 });
       assert.ok(!command.includes('||'));
       callback(null, stream);

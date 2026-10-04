@@ -166,7 +166,7 @@ class VmSsh extends EventEmitter {
    * 打开交互式 shell（真 PTY）。
    * @returns {Promise<{ write, resize, close, onData, onClose, ptyModes }>}
    */
-  shell({ cols = 120, rows = 30, term = 'xterm-256color', cwd } = {}) {
+  shell({ cols = 120, rows = 30, term = 'xterm-256color', cwd, shell, args } = {}) {
     return new Promise((resolve, reject) => {
       if (!this.client || !this.connected) return reject(new Error('SSH 未连接'));
       const attach = (err, stream) => {
@@ -180,11 +180,14 @@ class VmSsh extends EventEmitter {
           onClose: (cb) => stream.on('close', cb),
         });
       };
-      if (cwd) {
+      if (cwd || shell) {
         const { shellQuote } = require('./vm-paths');
         // Start the shell in its directory before the first prompt. A missing cwd
         // fails visibly instead of silently falling back to a different directory.
-        this.client.exec(`cd -- ${shellQuote(cwd)} && exec bash -l`, { pty: { term, cols, rows } }, attach);
+        const executable = shell || 'bash';
+        const parameters = args || ['-l'];
+        const command = `${cwd ? `cd -- ${shellQuote(cwd)} && ` : ''}exec ${[executable, ...parameters].map(shellQuote).join(' ')}`;
+        this.client.exec(command, { pty: { term, cols, rows } }, attach);
       } else this.client.shell({ term, cols, rows }, attach);
     });
   }

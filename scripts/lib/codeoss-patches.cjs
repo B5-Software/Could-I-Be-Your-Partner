@@ -140,7 +140,10 @@ function patchDesktopWorkbench(source) {
         "window.autoDetectHighContrast":false,
         "workbench.colorTheme":data.dark?"Dark Modern":"Light Modern",
         "workbench.reduceMotion":data.animations?"auto":"on",
-        "telemetry.telemetryLevel":"off"
+        "telemetry.telemetryLevel":"off",
+        "terminal.integrated.defaultProfile.windows":data.terminalOverride?"CIBYP":undefined,
+        "terminal.integrated.defaultProfile.linux":data.terminalOverride?"CIBYP":undefined,
+        "terminal.integrated.defaultProfile.osx":data.terminalOverride?"CIBYP":undefined
       }))await this.configurationService.updateValue(key,value,8);
     };if(globalThis.__cibypAppearance)await globalThis.__cibypApplyAppearance(globalThis.__cibypAppearance);
     const $2=this.environmentService.extensionDevelopmentLocationURI,`,

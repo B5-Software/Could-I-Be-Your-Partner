@@ -6,19 +6,26 @@ const path = require('node:path');
 const WebSocket = require('ws');
 
 let toolbarTerminal;
-async function openWorkspaceTerminal() {
+let toolbarShellKey;
+async function openWorkspaceTerminal(bridge) {
+  const shell = await bridge.request('terminal.resolve');
+  const shellKey = JSON.stringify(shell);
   // A remote workspace URI lets Code-OSS resolve the guest shell and PTY. Do not
   // restore a terminated terminal or reuse a host filesystem cwd in VM mode.
   if (
     !toolbarTerminal ||
     toolbarTerminal.exitStatus ||
-    !vscode.window.terminals.includes(toolbarTerminal)
+    !vscode.window.terminals.includes(toolbarTerminal) ||
+    toolbarShellKey !== shellKey
   ) {
     toolbarTerminal = vscode.window.createTerminal({
       name: 'CIBYP',
       cwd: vscode.workspace.workspaceFolders?.[0]?.uri,
+      shellPath: shell.file,
+      shellArgs: shell.args,
       isTransient: true,
     });
+    toolbarShellKey = shellKey;
   }
   toolbarTerminal.show(false);
   return { ok: true };
@@ -385,6 +392,19 @@ class Changes {
 
 async function activate(context) {
   const bridge = new Bridge(context);
+  context.subscriptions.push(
+    vscode.window.registerTerminalProfileProvider('cibyp.shell', {
+      provideTerminalProfile: async () => {
+        const shell = await bridge.request('terminal.resolve');
+        return new vscode.TerminalProfile({
+          name: 'CIBYP',
+          shellPath: shell.file,
+          shellArgs: shell.args,
+          cwd: vscode.workspace.workspaceFolders?.[0]?.uri,
+        });
+      },
+    }),
+  );
   const changes = new Changes(context);
   const output = vscode.window.createOutputChannel('CIBYP');
   context.subscriptions.push(bridge, output);
@@ -443,7 +463,7 @@ async function activate(context) {
     ]);
     if (!allowed.has(params.command)) throw new Error('Command is not exposed to CIBYP');
     if (params.command === 'workbench.action.terminal.toggleTerminal')
-      return openWorkspaceTerminal();
+      return openWorkspaceTerminal(bridge);
     return vscode.commands.executeCommand(params.command);
   });
   bridge.handlers.set('ide.openWorkspace', async (params) => {

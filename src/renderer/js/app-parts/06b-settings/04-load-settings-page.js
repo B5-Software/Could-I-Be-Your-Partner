@@ -329,4 +329,5 @@
     updateWcToggleButton();
     setupWebControlEvents();
     loadImeSettings();
+    await loadTerminalSettings();
   }

@@ -48,6 +48,8 @@ class VmPtyAdapter {
     this.rows = opts.rows || 30;
     this.term = opts.term || 'xterm-256color';
     this.cwd = opts.cwd || '/workspace';
+    this.shell = opts.shell;
+    this.args = opts.args;
     this.pid = 0; // 无本地 pid；VM 内进程由 ssh 通道管理
     this.closed = false;
     this.channel = null;
@@ -71,7 +73,7 @@ class VmPtyAdapter {
     if (!svc.instance || svc.instance.state !== 'ready') await svc.start();
     const inst = svc.instance;
     if (!inst || inst.state !== 'ready') throw new Error('虚拟机未就绪');
-    const channel = await inst.shell({ cols: this.cols, rows: this.rows, term: this.term, cwd: this.cwd });
+    const channel = await inst.shell({ cols: this.cols, rows: this.rows, term: this.term, cwd: this.cwd, shell: this.shell, args: this.args });
     if (this.closed) { try { channel.close(); } catch { /* ignore */ } return; }
     this.channel = channel;
     const decoder = new StringDecoder('utf8');

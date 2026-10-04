@@ -31,9 +31,10 @@ function shellQuote(s) {
 }
 
 class VmFs {
-  /** @param {object} opts { vmService } */
+  /** @param {object} opts { vmService, guestPaths (explicit guest picker) } */
   constructor(opts = {}) {
     this.vmService = opts.vmService;
+    this.guestPaths = opts.guestPaths === true;
   }
 
   // ---------------------------------------------------------------- 基础
@@ -88,6 +89,9 @@ class VmFs {
   isVmPath(p) {
     const s = String(p || '');
     if (!s.startsWith('/')) return false;
+    // An explicit guest picker must not reinterpret / or a guest home directory
+    // as an identically named path on a POSIX host.
+    if (this.guestPaths) return true;
     const paths = require('./vm-paths');
     // 1) 命中宿主映射根（工作区/额外宿主根/外部挂载）→ 必为宿主路径，
     //    即使文件尚不存在（POSIX 上新建文件不能落到"不存在就当 VM 路径"的兜底里）

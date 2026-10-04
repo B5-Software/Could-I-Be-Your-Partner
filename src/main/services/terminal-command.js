@@ -24,13 +24,22 @@ class TerminalCommand {
         command +
         "\r$cibypExit=if($?){0}elseif($LASTEXITCODE){$LASTEXITCODE}else{1}; [Console]::WriteLine(('" +
         marker +
-        "'+':'+$cibypExit))\r";
+        "'+':'+$cibypExit+':" +
+        marker +
+        "_END'))\r";
     else if (/(?:^|[/\\])cmd(?:\.exe)?$/i.test(this.shellName))
-      framed = command + '\r@echo ' + marker + ':%errorlevel%\r';
+      framed = command + '\r@echo ' + marker + ':%errorlevel%:' + marker + '_END\r';
     else if (/fish/i.test(this.shellName))
-      framed = command + "\nprintf '\\n%s:%s\\n' '" + marker + "' $status\r";
+      framed =
+        command + "\nprintf '\\n%s:%s:%s\\n' '" + marker + "' $status '" + marker + "_END'\r";
     else
-      framed = command.replace(/\r?\n/g, '\n') + "\nprintf '\\n%s:%s\\n' '" + marker + '\' "$?"\r';
+      framed =
+        command.replace(/\r?\n/g, '\n') +
+        "\nprintf '\\n%s:%s:%s\\n' '" +
+        marker +
+        '\' "$?" \'' +
+        marker +
+        "_END'\r";
     try {
       this.term.write(framed);
     } catch (error) {
@@ -53,16 +62,16 @@ class TerminalCommand {
     const plain = current.output
       .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, '')
       .replace(/\x1b\][^\x07]*(?:\x07|\x1b\\)/g, '');
-    const match = new RegExp('(?:^|[\\r\\n])' + current.marker + ':(-?\\d+)(?:[\\r\\n]|$)').exec(
-      plain,
-    );
+    // ConPTY can use cursor escapes instead of newlines. A complete random end
+    // marker also prevents a split multi-digit exit code from finishing early.
+    const pattern = current.marker + ':(-?\\d+):' + current.marker + '_END';
+    const match = new RegExp(pattern).exec(plain);
     if (match) {
-      const rawMatch = new RegExp(
-        '(?:^|[\\r\\n])' + current.marker + ':(-?\\d+)(?:[\\r\\n]|$)',
-      ).exec(current.output);
+      const rawMatch = new RegExp(pattern).exec(current.output);
       current.output = rawMatch
         ? current.output.slice(0, rawMatch.index)
         : plain.slice(0, match.index);
+      current.output = current.output.replace(/[\r\n]+$/, '');
       // The usual raw marker keeps unread offsets stable across polls.
       current.offset = Math.min(current.offset, current.output.length);
       current.exitCode = Number(match[1]);

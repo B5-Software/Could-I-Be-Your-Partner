@@ -10,6 +10,10 @@ const { pipeline } = require('node:stream/promises');
 const { spawnSync } = require('node:child_process');
 const AdmZip = require('adm-zip');
 const { patchDesktopMain, patchDesktopWorkbench } = require('./lib/codeoss-patches.cjs');
+const {
+  materializeCodeOSSDependencies,
+  verifyCodeOSSDependencies,
+} = require('./lib/codeoss-runtime.cjs');
 const lock = require('../integrations/codeoss/runtime-lock.json');
 const root = path.resolve(__dirname, '..');
 
@@ -44,6 +48,7 @@ async function prepareCodeOSS(platform = process.platform, arch = process.arch) 
     .createHash('sha256')
     .update(await fsp.readFile(__filename))
     .update(await fsp.readFile(path.join(__dirname, 'lib/codeoss-patches.cjs')))
+    .update(await fsp.readFile(path.join(__dirname, 'lib/codeoss-runtime.cjs')))
     .digest('hex');
   let installed;
   try {
@@ -57,8 +62,13 @@ async function prepareCodeOSS(platform = process.platform, arch = process.arch) 
     installed.patchDigest === patchDigest &&
     installed.sha256 === asset.sha256
   ) {
-    await buildExtension(destination);
-    return destination;
+    try {
+      verifyCodeOSSDependencies(destination);
+      await buildExtension(destination);
+      return destination;
+    } catch (error) {
+      console.warn(`[codeoss] Rebuilding incomplete cached runtime: ${error.message}`);
+    }
   }
   const cache = path.join(root, '.cache/codeoss', lock.version, key);
   await fsp.mkdir(cache, { recursive: true });
@@ -102,6 +112,7 @@ async function prepareCodeOSS(platform = process.platform, arch = process.arch) 
       if (!appRoot) throw new Error('Code-OSS desktop payload is missing');
       await fsp.cp(appRoot, staging, { recursive: true, dereference: false });
     }
+    materializeCodeOSSDependencies(staging);
     const productFile = path.join(staging, 'product.json');
     const product = JSON.parse(await fsp.readFile(productFile, 'utf8'));
     if (product.commit !== lock.commit) throw new Error('Code-OSS commit mismatch');

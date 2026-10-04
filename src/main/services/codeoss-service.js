@@ -20,6 +20,7 @@ const { workbenchColors } = require('../../../integrations/codeoss/theme.cjs');
 const { VmFs } = require('../vm/vm-fs');
 const { shellQuote } = require('../vm/vm-paths');
 const { CodeOSSOverlay } = require('./codeoss-overlay');
+const { resolveTerminalShell } = require('../core/terminal-shell');
 
 const SCHEMES = [
   {
@@ -305,6 +306,13 @@ class CodeOSSService {
         // layer so titlebar/sidepane stacking and GPU layers cannot cover them.
         const promoteMenus = () => {
           for (const menu of document.querySelectorAll('.menubar-menu-items-holder, .context-view:has(.monaco-menu-container)')) {
+            // Upstream empties a submenu when Escape returns to its parent.
+            // Release its top-layer surface as well, including its hit area.
+            if (!menu.childElementCount) {
+              if (menu.matches(':popover-open')) menu.hidePopover();
+              menu.removeAttribute('popover');
+              continue;
+            }
             if (!menu.getClientRects().length || menu.matches(':popover-open')) continue;
             menu.setAttribute('popover', 'manual');
             menu.showPopover();
@@ -350,10 +358,15 @@ class CodeOSSService {
   applyWorkbenchAppearance(contents) {
     if (contents.isDestroyed()) return;
     const data = this.personalization();
+    const terminal = this.getSettings().terminal || {};
+    const shell = this.target.location === 'vm' ? terminal.vm || {} : terminal;
     const appearance = {
       dark: data.dark,
       animations: data.animations,
       colors: workbenchColors(data),
+      terminalOverride:
+        (!!shell.shell && shell.shell !== 'auto') ||
+        (Array.isArray(shell.args) && shell.args.length > 0),
     };
     const operation = (this.appearanceUpdates.get(contents) || Promise.resolve())
       .then(() => {
@@ -676,6 +689,11 @@ class CodeOSSService {
 
   async handleExtensionRequest(peer, { method, params = {}, id }) {
     if (method === 'personalization.get') return this.personalization();
+    if (method === 'terminal.resolve') {
+      if (!this.isEmbeddedPeer(peer))
+        throw new Error('Shell settings belong to the active CIBYP workbench');
+      return resolveTerminalShell(this.getSettings(), this.target.location, this.getVmService());
+    }
     if (method === 'vm.resolve') return this.resolveVm();
     if (method === 'vm.forward') {
       const port = Number(params.port);

@@ -38,6 +38,7 @@ async function activate(context) {
           await waitFor(() => !vscode.window.terminals.length);
           return { ok: true };
         }
+        await waitFor(() => vscode.window.activeTerminal?.name === 'CIBYP');
         const terminal = vscode.window.activeTerminal;
         assert(terminal, 'Toolbar must open a terminal');
         terminal.sendText(
@@ -47,6 +48,8 @@ async function activate(context) {
         return {
           ok: true,
           platform: fs.readFileSync(path.join(root, 'toolbar-terminal.txt'), 'utf8'),
+          shellPath: terminal.creationOptions.shellPath,
+          shellArgs: terminal.creationOptions.shellArgs,
         };
       }),
       vscode.languages.registerHoverProvider('javascript', {

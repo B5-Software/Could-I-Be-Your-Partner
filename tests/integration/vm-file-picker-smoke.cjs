@@ -10,6 +10,9 @@ const { createVmFileDialog } = require('../../src/main/vm/vm-file-dialog');
 const entries = new Map([
   ['/workspace', true],
   ['/workspace/guest.txt', false],
+  ['/', true],
+  ['/usr/bin', true],
+  ['/usr/bin/bash', false],
 ]);
 const service = {
   runtime: { location: 'vm', workspaceMode: 'isolated', vm: { workspaceMount: '/workspace' } },
@@ -185,6 +188,21 @@ app
     await waitFor(() => evaluate('!!document.getElementById("cancel")').catch(() => false));
     await evaluate('(document.getElementById("cancel").click(),true)').catch(() => {});
     assert.deepEqual(await cancelled, { canceled: true, filePaths: [] });
+    await waitFor(() => host.webContents.executeJavaScript('!document.querySelector("dialog")'));
+    service.runtime.location = 'host';
+    const executable = picker.showOpenDialogInVM(host, {
+      defaultPath: '/usr/bin',
+      properties: ['openFile'],
+    });
+    await waitFor(() =>
+      evaluate('document.getElementById("entries").textContent.includes("bash")').catch(
+        () => false,
+      ),
+    );
+    await evaluate(
+      '(document.getElementById("filename").value="bash",document.getElementById("choose").click(),true)',
+    ).catch(() => {});
+    assert.deepEqual(await executable, { canceled: false, filePaths: ['/usr/bin/bash'] });
     clearTimeout(timeout);
     console.log(
       'PASS App modal VM picker: guest listing, folder creation, save, cancel and focus restoration',

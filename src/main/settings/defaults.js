@@ -316,7 +316,13 @@ module.exports = function createDefaultSettings({ DEFAULT_DECISION_SETTINGS }) {
     //     'cmd'        - CMD
     //     'bash' / 'zsh' - POSIX shell
     //     'custom'     - 使用 customShellPath 指定的自定义 Shell
-    terminal: { abortStrategy: 'kill', shell: 'auto', customShellPath: '' },
+    terminal: {
+      abortStrategy: 'kill',
+      shell: 'auto',
+      customShellPath: '',
+      args: [],
+      vm: { shell: 'auto', customShellPath: '', args: [] },
+    },
     // 屏幕软键盘 / 输入法（OSK+IME）：
     //   enabled:       应用启动时是否自动打开屏幕键盘（可在输入框工具栏手动开关）
     //   mode:          默认输入模式 'zh' | 'en' | 'de'

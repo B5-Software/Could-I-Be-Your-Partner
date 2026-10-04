@@ -31,6 +31,7 @@ module.exports = async function afterPack(context) {
     if (!fs.existsSync(path.join(codeoss, file)))
       throw new Error(`Packaged Code-OSS file missing: ${file}`);
   }
+  require('./lib/codeoss-runtime.cjs').verifyCodeOSSDependencies(codeoss);
   const marker = JSON.parse(fs.readFileSync(path.join(codeoss, 'cibyp-runtime.json'), 'utf8'));
   if (
     marker.commit !== lock.commit ||

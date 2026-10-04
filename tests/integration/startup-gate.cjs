@@ -1,5 +1,7 @@
 /* Real App boot: preload UI first, initialize the Agent only after runtime selection. */
-const { app, ipcMain, BrowserWindow } = require('electron');
+const electron = require('electron');
+const { app, ipcMain, BrowserWindow } = electron;
+const { EventEmitter } = require('node:events');
 const fs = require('node:fs'),
   os = require('node:os'),
   path = require('node:path'),
@@ -20,7 +22,7 @@ fs.writeFileSync(
     onboardingCompleted: true,
     notifications: { enabled: false },
     runtime: { location: 'vm' },
-    trayEnabled: false,
+    trayEnabled: true,
     closeToTray: 'never',
     updates: { autoCheckEnabled: false },
     voice: { wakeEnabled: false },
@@ -34,6 +36,36 @@ let releaseVM,
   rendererReady = false,
   checkedEarly = false,
   workspaceCalls = 0;
+const trays = [];
+// Observe tray timing without creating a real icon in the user's system tray.
+class TestTray extends EventEmitter {
+  constructor() {
+    super();
+    assert(main().isVisible(), 'Tray must wait for the main window startup gate');
+    assert(
+      !BrowserWindow.getAllWindows().some((win) =>
+        win.webContents.getURL().includes('/splash.html'),
+      ),
+      'Tray must wait for Splash to close',
+    );
+    this.destroyed = false;
+    trays.push(this);
+  }
+  setToolTip() {}
+  setContextMenu() {}
+  destroy() {
+    this.destroyed = true;
+  }
+}
+const Module = require('node:module');
+const originalLoad = Module._load;
+const fixtureElectron = new Proxy(
+  {},
+  { get: (_target, name) => (name === 'Tray' ? TestTray : electron[name]) },
+);
+Module._load = function (request, ...args) {
+  return request === 'electron' ? fixtureElectron : originalLoad.call(this, request, ...args);
+};
 const { VmService } = require('../../src/main/vm/vm-service');
 // The real gate uses saved VM settings. These fixture file operations use host
 // storage so boot sequencing can be verified independently of a QEMU image.
@@ -62,6 +94,14 @@ ipcMain.handle = (channel, handler) =>
       assert(!main().isVisible());
       assert(!rendererReady);
       assert.equal(workspaceCalls, 0, 'No guest workspace initialization before VM readiness');
+      assert.equal(trays.length, 0, 'Startup must not create a tray');
+      await event.sender.executeJavaScript(`(async () => {
+        await window.api.traySetEnabled(false);
+        await window.api.traySetEnabled(true);
+        await window.api.trayShowWindow();
+      })()`);
+      assert(!main().isVisible(), 'Tray settings and restore cannot bypass startup');
+      assert.equal(trays.length, 0, 'Enabling the tray during startup must be deferred');
       checkedEarly = true;
       const result = handler(event, ...args);
       if (order === 'ui-first') {
@@ -91,6 +131,14 @@ ipcMain.once('app:renderer-ready', async (event) => {
     for (let i = 0; i < 100 && !main()?.isVisible(); i++)
       await new Promise((resolve) => setTimeout(resolve, 20));
     assert(main().isVisible());
+    for (let i = 0; i < 100 && !trays.length; i++)
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(trays.length, 1, 'Startup must create exactly one tray after Splash');
+    await event.sender.executeJavaScript('window.api.traySetEnabled(false)');
+    assert(trays[0].destroyed, 'Disabling the tray must destroy the icon');
+    await event.sender.executeJavaScript('window.api.traySetEnabled(true)');
+    await event.sender.executeJavaScript('window.api.traySetEnabled(true)');
+    assert.equal(trays.length, 2, 'Enabling the tray must not create duplicate icons');
     assert(workspaceCalls > 0);
     if (order === 'host-fallback') {
       assert(!vmReady, 'Host startup must not wait for pending VM boot');

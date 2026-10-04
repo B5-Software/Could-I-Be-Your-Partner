@@ -929,8 +929,12 @@ function createSplashWindow() {
 }
 
 function closeSplash() {
-  if (splashWindow && !splashWindow.isDestroyed()) splashWindow.close();
-  splashWindow = null;
+  if (!splashWindow || splashWindow.isDestroyed()) {
+    splashWindow = null;
+    return;
+  }
+  splashWindow.once('closed', createAppTray);
+  splashWindow.close();
 }
 
 function createWindow() {
@@ -979,6 +983,7 @@ function createWindow() {
   mainWindow.on('show', () => {
     closeSplash();
     try { mainWindow.webContents.setBackgroundThrottling(false); } catch { /* ignore */ }
+    createAppTray();
   });
   // Resize the built-in browser (BrowserView) when the main window resizes.
 
@@ -1254,7 +1259,7 @@ function openVmDesktopWindow() {
  * 在 Windows/Linux 上仅 hide()。
  */
 function hideWindowToTray() {
-  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (!mainWindowShownOnce || !mainWindow || mainWindow.isDestroyed()) return;
   mainWindow.hide();
   if (process.platform === 'darwin') {
     try { app.dock.hide(); } catch {}
@@ -1273,6 +1278,14 @@ function showWindowFromTray() {
     createWindow();
     return;
   }
+  // Activation and voice wake-up must not bypass the startup gate.
+  if (!mainWindowShownOnce) {
+    if (splashWindow && !splashWindow.isDestroyed()) {
+      splashWindow.show();
+      splashWindow.focus();
+    }
+    return;
+  }
   if (mainWindow.isMinimized()) mainWindow.restore();
   if (!mainWindow.isVisible()) mainWindow.show();
   mainWindow.focus();
@@ -1288,7 +1301,8 @@ function showWindowFromTray() {
  */
 function createAppTray() {
   if (appTray) return;
-  if (!settings.trayEnabled) return;
+  if (!settings.trayEnabled || HEADLESS || isQuitting || !mainWindowShownOnce) return;
+  if (splashWindow && !splashWindow.isDestroyed()) return;
   // 托盘图标：按 Electron/macOS 官方规范处理尺寸。
   // macOS 菜单栏图标必须是 Template Image：纯 alpha 通道（黑+透明），系统按深浅色自动着色。
   // 直接用全彩 icon.png 缩小再做模板，会得到"白色圆角方块"（颜色被忽略只剩不透明矩形）。
@@ -1570,8 +1584,6 @@ app.whenReady().then(async () => {
     vmRuntimeGate.ready = false;
     startVmBootForSplash().catch((e) => { console.warn('[vm] boot failed:', e.message); });
   }
-  // 启动时即创建托盘图标（若启用；无头模式无窗口，不需要托盘）
-  if (settings.trayEnabled && !HEADLESS) createAppTray();
   // 上轮异常退出 → 独立崩溃报告窗口（延后到主窗口开始加载后，避免抢占启动）
   if (pendingCrashReport && !HEADLESS) setTimeout(() => { try { openCrashReportWindow(); } catch { /* ignore */ } }, 1200);
   // History v2 迁移：启动稳定后空闲执行（图片外置 + 备份），只跑一次
@@ -2134,7 +2146,12 @@ registerTerminalIpc({
   getMainWindow: () => mainWindow,
   getSettings: () => settings,
   // 运行位置=虚拟机时，终端改由 VM 内 PTY 承载（vm-pty 适配器）
-  getVmService: () => vmService
+  getVmService: () => vmService,
+  selectShellBinary: (location) => {
+    const title = ({ en: 'Choose Shell executable', de: 'Shell-Programm auswählen' })[settings.language] || '选择 Shell 二进制';
+    const options = { title, properties: ['openFile'], defaultPath: location === 'vm' ? '/usr/bin' : undefined };
+    return location === 'vm' ? toolDialog.showOpenDialogInVM(mainWindow, options) : dialog.showOpenDialog(mainWindow, options);
+  }
 });
 
 // ---- FFmpeg / FFprobe 媒体工具集 ----

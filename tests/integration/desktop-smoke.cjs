@@ -138,6 +138,10 @@ ipcMain.once('app:renderer-ready', (event) => {
       const settingsCheck = await require('./renderer-settings-check.cjs')(event.sender);
       console.log('[desktop-smoke] Settings interactions:', settingsCheck);
       console.log(
+        '[desktop-smoke] Custom Shell:',
+        await require('./terminal-shell-check.cjs')(event.sender),
+      );
+      console.log(
         '[desktop-smoke] MCP editing:',
         await require('./renderer-mcp-check.cjs')(event.sender),
       );
@@ -198,7 +202,7 @@ ipcMain.once('app:renderer-ready', (event) => {
             applied.background,
             mode === 'dark' ? 'rgb(43, 47, 63)' : 'rgb(235, 237, 242)',
           );
-          for (const tab of ['overview', 'context', 'budget', 'theme', 'security']) {
+          for (const tab of ['overview', 'context', 'budget', 'theme', 'security', 'terminal']) {
             await event.sender.executeJavaScript(`(async () => {
               await window.navigatePage('settings');
               document.getElementById('btn-close-todo').click();
@@ -214,6 +218,27 @@ ipcMain.once('app:renderer-ready', (event) => {
                 await event.sender.capturePage(undefined, { stayHidden: true, stayAwake: true })
               ).toPNG(),
             );
+            if (tab === 'terminal') {
+              await event.sender.executeJavaScript(`(async () => {
+                const shell = document.getElementById('setting-terminal-shell');
+                shell.value = 'custom'; shell.dispatchEvent(new Event('change', { bubbles: true }));
+                document.getElementById('setting-terminal-custom-path').value = ${JSON.stringify(process.platform === 'win32' ? process.env.ComSpec : '/bin/sh')};
+                document.getElementById('setting-terminal-custom-path').dispatchEvent(new Event('change', { bubbles: true }));
+                for (let attempt=0; attempt<100; attempt++) {
+                  const terminal = (await window.api.getSettings()).terminal;
+                  if (terminal.shell === 'custom' && terminal.customShellPath === document.getElementById('setting-terminal-custom-path').value) break;
+                  await new Promise(resolve => setTimeout(resolve, 20));
+                }
+                document.getElementById('setting-terminal-target').closest('.settings-group').scrollIntoView({block:'end'});
+                await new Promise(resolve => setTimeout(resolve, 150));
+              })()`);
+              fs.writeFileSync(
+                path.join(directory, `shell-custom-${mode}.png`),
+                (
+                  await event.sender.capturePage(undefined, { stayHidden: true, stayAwake: true })
+                ).toPNG(),
+              );
+            }
           }
           await event.sender.executeJavaScript(`(async () => {
             window.navigatePage('chat');

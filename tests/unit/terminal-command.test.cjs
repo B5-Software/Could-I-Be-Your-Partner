@@ -12,7 +12,7 @@ test('prompt characters and echoed framing cannot end a command; polling keeps u
   assert.equal(first.running, true);
   assert.match(first.output, /price/);
   assert.equal(command.start('second').ok, false);
-  command.append('\n' + command.current.marker + ':0\r\n');
+  command.append('\n' + command.current.marker + ':0:' + command.current.marker + '_END\r\n');
   assert.equal((await command.wait()).exitCode, 0);
 });
 
@@ -29,7 +29,7 @@ test('split completion markers retain nonzero exit codes and do not kill a long 
   const marker = command.current.marker;
   const waiting = command.wait(1000);
   command.append('second chunk\n' + marker.slice(0, 12));
-  command.append(marker.slice(12) + ':127\r\n');
+  command.append(marker.slice(12) + ':127:' + marker + '_END\r\n');
   const result = await waiting;
   assert.equal(result.ok, false);
   assert.equal(result.exitCode, 127);
@@ -39,6 +39,21 @@ test('split completion markers retain nonzero exit codes and do not kill a long 
   assert.equal(command.start('echo next'), null);
   command.end('closed');
   assert.equal((await command.wait()).error, 'closed');
+});
+
+test('ConPTY completion needs neither newline nor prompt boundaries and waits for a split exit code', async () => {
+  let framed;
+  const tracker = new TerminalCommand({ write: (text) => (framed = text) }, 'C:\\Windows\\cmd.exe');
+  tracker.start('echo test');
+  tracker.append(framed + 'testC:\\work>');
+  assert.equal((await tracker.wait(1)).running, true, 'echoed framing cannot finish the command');
+  const marker = tracker.current.marker;
+  tracker.append(marker + ':1');
+  assert.equal((await tracker.wait(1)).running, true, 'partial exit status cannot finish');
+  tracker.append('27:' + marker + '_ENDC:\\work>');
+  const result = await tracker.wait();
+  assert.equal(result.running, false);
+  assert.equal(result.exitCode, 127);
 });
 
 test(

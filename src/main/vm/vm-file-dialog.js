@@ -48,8 +48,8 @@ function createVmFileDialog({ ipcMain, dialog, getVmService, getTheme, getMainWi
     context(event, id).finish();
     return { ok: true };
   });
-  async function show(save, parent, options = {}) {
-    if (!require('./tool-location').isVmOperation(getVmService))
+  async function show(save, parent, options = {}, forceVM = false) {
+    if (!forceVM && !require('./tool-location').isVmOperation(getVmService))
       return dialog[save ? 'showSaveDialog' : 'showOpenDialog'](parent, options);
     const host = getMainWindow?.() || parent;
     if (!host || host.isDestroyed()) throw new Error('CIBYP window is unavailable');
@@ -57,7 +57,7 @@ function createVmFileDialog({ ipcMain, dialog, getVmService, getTheme, getMainWi
       if (host.isDestroyed()) return save ? { canceled: true } : { canceled: true, filePaths: [] };
       const service = getVmService();
       if (!service.instance || service.instance.state !== 'ready') await service.start();
-      const io = new VmFs({ vmService: service });
+      const io = new VmFs({ vmService: service, guestPaths: forceVM });
       const rawDefault = String(options.defaultPath || '');
       const mapped = rawDefault && io.resolveVmPath(rawDefault);
       let directory = mapped?.ok
@@ -115,6 +115,7 @@ function createVmFileDialog({ ipcMain, dialog, getVmService, getTheme, getMainWi
   }
   return {
     showOpenDialog: (parent, options) => show(false, parent, options),
+    showOpenDialogInVM: (parent, options) => show(false, parent, options, true),
     showSaveDialog: (parent, options) => show(true, parent, options),
   };
 }

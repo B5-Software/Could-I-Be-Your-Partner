@@ -38,6 +38,11 @@ fs.writeFileSync(
     trayEnabled: false,
     updates: { autoCheckEnabled: false },
     voice: { wakeEnabled: false },
+    terminal: {
+      shell: 'custom',
+      customShellPath: process.platform === 'win32' ? process.env.ComSpec : '/bin/sh',
+      args: process.platform === 'win32' ? ['/D', '/Q'] : [],
+    },
     codeMode: { lastWorkspace: workspace },
     theme: { mode: 'light', accentColor: '#725ce7', backgroundColor: '#f5f7fa' },
     aiPersona: {
@@ -314,6 +319,21 @@ ipcMain.once('app:renderer-ready', (event) => {
       await waitFor(
         () => app.getAppMetrics().some((item) => item.name?.startsWith('ptyHost')),
         15000,
+      );
+      const terminalProbe = await service.request('ide.language', {
+        action: 'command',
+        command: 'cibypFixture.terminal',
+        arguments: ['probe'],
+      });
+      const configuredShell =
+        await require('../../src/main/core/terminal-shell').resolveTerminalShell(
+          service.getSettings(),
+          'host',
+        );
+      assert.equal(terminalProbe.result.shellPath, configuredShell.file);
+      assert.deepEqual(terminalProbe.result.shellArgs, configuredShell.args);
+      console.log(
+        '[codeoss-desktop] Toolbar terminal uses the configured custom binary and arguments.',
       );
       await service.request('ide.command', { command: 'workbench.view.extensions' });
       await service.request('ide.command', { command: 'cibyp.agent.focus' });

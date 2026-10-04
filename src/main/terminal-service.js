@@ -11,12 +11,12 @@
 'use strict';
 
 const fs = require('fs');
-const path = require('path');
 const os = require('os');
 const { abortAllRequests, abortRequests } = require('./llm-retry');
 const { TerminalCommand } = require('./services/terminal-command');
+const { resolveTerminalShell } = require('./core/terminal-shell');
 
-module.exports = function registerTerminalIpc({ ipcMain, getMainWindow, getSettings, getVmService }) {
+module.exports = function registerTerminalIpc({ ipcMain, getMainWindow, getSettings, getVmService, selectShellBinary }) {
 const terminals = new Map();
 let terminalIdCounter = 0;
 const TERMINAL_HISTORY_MAX = 100000; // 100KB
@@ -94,58 +94,18 @@ function _appendTerminalData(id, entry, data) {
   _broadcastTerminalEvent('terminal:data', { id, data });
 }
 
-// 解析终端使用的 Shell：
-//   shellSetting: 'auto' | 'pwsh' | 'powershell' | 'cmd' | 'bash' | 'zsh' | 'custom'
-//   customShellPath: shellSetting === 'custom' 时的自定义 Shell 路径
-// 返回可执行文件路径（优先）或可执行名（由 node-pty 通过 PATH 解析）
-function _resolveTerminalShell(shellSetting, customShellPath) {
-  const platform = process.platform;
-  const _existsInPath = (name) => {
-    try {
-      if (name.includes('\\') || name.includes('/')) return fs.existsSync(name);
-      return (process.env.PATH || '').split(path.delimiter).some(d => {
-        if (!d) return false;
-        try { return fs.existsSync(path.join(d, name)); } catch { return false; }
-      });
-    } catch { return false; }
-  };
-  const _firstExisting = (arr) => arr.find(p => { try { return fs.existsSync(p); } catch { return false; } });
-
-  // 自定义 Shell：路径有效则直接使用，否则回退自动检测
-  if (shellSetting === 'custom' && customShellPath) {
-    if (fs.existsSync(customShellPath)) return customShellPath;
-    console.warn('[terminal] invalid customShellPath, falling back to auto-detect:', customShellPath);
-  }
-  if (platform === 'win32') {
-    const pwshCandidates = [
-      'pwsh.exe',
-      path.join(process.env.ProgramFiles || 'C:\\Program Files', 'PowerShell', '7', 'pwsh.exe'),
-      path.join(process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)', 'PowerShell', '7', 'pwsh.exe')
-    ];
-    const ps5Path = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
-    switch (shellSetting) {
-      case 'pwsh': return pwshCandidates.find(p => _existsInPath(p)) || 'pwsh.exe';
-      case 'powershell': return (fs.existsSync(ps5Path) ? ps5Path : 'powershell.exe');
-      case 'cmd': return process.env.ComSpec || 'cmd.exe';
-      case 'bash': return _existsInPath('bash.exe') ? 'bash.exe' : (process.env.ComSpec || 'cmd.exe');
-      default: {
-        // 'auto' 或未知：优先 pwsh → PowerShell 5 → cmd
-        const foundPwsh = pwshCandidates.find(p => _existsInPath(p));
-        if (foundPwsh) return foundPwsh;
-        if (fs.existsSync(ps5Path)) return ps5Path;
-        return process.env.ComSpec || 'cmd.exe';
-      }
-    }
-  }
-  // macOS / Linux
-  const shellCandidates = [];
-  if (process.env.SHELL && fs.existsSync(process.env.SHELL)) shellCandidates.push(process.env.SHELL);
-  if (process.platform === 'darwin') shellCandidates.push('/bin/zsh', '/bin/bash', '/bin/sh');
-  else shellCandidates.push('/bin/bash', '/bin/sh');
-  if (shellSetting === 'zsh') return _firstExisting(['/bin/zsh', '/usr/bin/zsh', '/bin/bash', '/bin/sh']) || '/bin/sh';
-  if (shellSetting === 'bash') return _firstExisting(['/bin/bash', '/usr/bin/bash', '/bin/sh']) || '/bin/sh';
-  return shellCandidates.find(s => fs.existsSync(s)) || '/bin/sh';
-}
+ipcMain.handle('terminal:shellInfo', async (_, location) => {
+  try {
+    return { ok: true, ...await resolveTerminalShell(getSettings(), location, getVmService?.()) };
+  } catch (error) { return { ok: false, error: error.message }; }
+});
+ipcMain.handle('terminal:pickShell', async (_, location) => {
+  if (!['host', 'vm'].includes(location)) return { ok: false, error: 'Invalid Shell location' };
+  try {
+    const result = await selectShellBinary(location);
+    return { ok: true, canceled: result.canceled, file: result.filePaths?.[0] || '', location };
+  } catch (error) { return { ok: false, error: error.message }; }
+});
 
 ipcMain.handle('terminal:make', async (_, cwd, opts = {}) => {
   try {
@@ -154,10 +114,12 @@ ipcMain.handle('terminal:make', async (_, cwd, opts = {}) => {
     // 工作区内路径映射由 vm-pty 提供；P2 的工作区同步模块会注入真实映射表。
     const rt = (() => { try { return getSettings().runtime || {}; } catch { return {}; } })();
     const vmSvc = typeof getVmService === 'function' ? getVmService() : null;
-    if (rt.location === 'vm' && vmSvc && !vmSvc.emergencyHost) {
+    if (rt.location === 'vm' && !vmSvc?.emergencyHost) {
+      if (!vmSvc) throw new Error('Virtual machine service is unavailable');
       const { VmPtyAdapter } = require('./vm/vm-pty');
+      const shell = await resolveTerminalShell(getSettings(), 'vm', vmSvc);
       const vmCwd = await vmSvc.prepareTerminalDirectory(cwd);
-      const term = new VmPtyAdapter({ vmService: vmSvc, cwd: vmCwd });
+      const term = new VmPtyAdapter({ vmService: vmSvc, cwd: vmCwd, shell: shell.file, args: shell.args });
       const entry = {
         term,
         agentBuffer: '',
@@ -165,7 +127,7 @@ ipcMain.handle('terminal:make', async (_, cwd, opts = {}) => {
         cwd: vmCwd,
         createdAt: Date.now(),
         lastCommand: '',
-        shellName: 'bash (VM)',
+        shellName: shell.file,
         ownerSessionKey: typeof opts.sessionKey === 'string' ? opts.sessionKey : null,
         sandboxMode: 'vm',
         sandboxed: true,
@@ -177,14 +139,13 @@ ipcMain.handle('terminal:make', async (_, cwd, opts = {}) => {
       term.onExit(({ exitCode }) => { entry.commandTracker.end(); terminals.delete(id); _broadcastTerminalEvent('terminal:exit', { id, exitCode }); });
       await term.ready();
       terminals.set(id, entry);
-      return { ok: true, terminalId: id, cwd: vmCwd, createdAt: entry.createdAt, location: 'vm' };
+      return { ok: true, terminalId: id, cwd: vmCwd, createdAt: entry.createdAt, location: 'vm', shell: shell.file, args: shell.args };
     }
     const pty = require('node-pty');
     // Shell 选择：手动选择（设置-终端）优先，否则自动检测
-    const shellSetting = (getSettings().terminal && getSettings().terminal.shell) || 'auto';
-    const customShellPath = (getSettings().terminal && getSettings().terminal.customShellPath) || '';
-    const shellName = _resolveTerminalShell(shellSetting, customShellPath);
-    const shellArgs = [];
+    const shell = await resolveTerminalShell(getSettings(), 'host');
+    const shellName = shell.file;
+    const shellArgs = shell.args;
     // 优先使用传入的工作目录（Chat 模式工作目录 / Code 模式工作区），回退到家目录
     const effectiveCwd = (cwd && typeof cwd === 'string' && fs.existsSync(cwd)) ? cwd : os.homedir();
     // macOS 打包后 process.env 可能被精简（从 Finder 启动时 PATH 只有 /usr/bin:/bin），
@@ -198,7 +159,7 @@ ipcMain.handle('terminal:make', async (_, cwd, opts = {}) => {
       HOME: process.env.HOME || userInfo.homedir || os.homedir(),
       USER: process.env.USER || userInfo.username,
       LOGNAME: process.env.LOGNAME || process.env.USER || userInfo.username,
-      SHELL: process.env.SHELL || shellName,
+      SHELL: shellName,
       PATH: process.env.PATH || '/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin',
     };
     // 沙箱：受限模式（read-only / workspace-write）用后端包装 pty shell；
@@ -252,7 +213,7 @@ ipcMain.handle('terminal:make', async (_, cwd, opts = {}) => {
       _broadcastTerminalEvent('terminal:exit', { id, exitCode });
     });
     terminals.set(id, entry);
-    return { ok: true, terminalId: id, cwd: effectiveCwd, createdAt: entry.createdAt };
+    return { ok: true, terminalId: id, cwd: effectiveCwd, createdAt: entry.createdAt, location: 'host', shell: shell.file, args: shell.args };
   } catch (e) {
     // 捕获详细错误信息，便于诊断
     const detail = e.stack || e.message;

@@ -1014,7 +1014,14 @@ input[id^="setting-budget-peak-"][type="text"]:focus {
 .vm-bar > i { display: block; height: 100%; width: 0%; background: var(--accent, #4f8cff); transition: width .3s; }
 
 /* Settings overview, readable limits and search navigation. */
-#settings-save-status { font-size:12px; color:var(--text-secondary); margin-left:12px; }
+.settings-heading { display:flex; align-items:baseline; gap:12px; min-width:0; }
+.settings-heading h2 { flex-shrink:0; }
+.terminal-shell-file { display:flex; align-items:center; gap:8px; }
+.terminal-shell-file input { min-width:0; flex:1; }
+.terminal-shell-file button { flex-shrink:0; }
+.terminal-shell-check { display:flex; align-items:center; gap:12px; }
+#terminal-shell-status[data-state="error"] { color:var(--danger); }
+#settings-save-status { font-size:12px; line-height:1.5; color:var(--text-secondary); min-width:0; overflow-wrap:anywhere; }
 #settings-save-status[data-state="error"] { color:var(--danger); }
 .settings-panel[data-tab="overview"] .settings-group { padding:16px; }
 .settings-panel[data-tab="overview"] .settings-group h3 { font-size:15px; margin-bottom:12px; }

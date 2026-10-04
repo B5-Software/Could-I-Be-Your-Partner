@@ -107,6 +107,8 @@ contextBridge.exposeInMainWorld('api', {
 
   // Terminal
   makeTerminal: (cwd, sessionKey, sandboxMode) => ipcRenderer.invoke('terminal:make', cwd, { sessionKey, sandboxMode }),
+  terminalShellInfo: (location) => ipcRenderer.invoke('terminal:shellInfo', location),
+  terminalPickShell: (location) => ipcRenderer.invoke('terminal:pickShell', location),
   runTerminalCommand: (id, cmd) => ipcRenderer.invoke('terminal:run', id, cmd),
   awaitTerminalCommand: (id, cmd, timeoutMs) => ipcRenderer.invoke('terminal:await', id, cmd, timeoutMs),
   killTerminal: (id) => ipcRenderer.invoke('terminal:kill', id),
