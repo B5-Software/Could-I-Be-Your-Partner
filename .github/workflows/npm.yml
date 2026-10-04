@@ -22,8 +22,6 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@v7
-        with:
-          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
       - uses: actions/setup-node@v7
         with:
           node-version: '24'
@@ -42,7 +40,7 @@ jobs:
           JS
       - name: Verify launcher, download safety and update behavior
         if: steps.version.outputs.needed == 'true'
-        run: node --test tests/unit/npm-distribution.test.cjs tests/unit/npm-publication.test.cjs tests/unit/npm-download.test.cjs
+        run: npm run test:npm
       - name: Verify official GitHub runtimes exist
         id: runtime
         if: steps.version.outputs.needed == 'true'
