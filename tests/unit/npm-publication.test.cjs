@@ -2,6 +2,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { waitForRegistry, verifyLauncher } = require('../../scripts/publish-npm.cjs');
+const { verifyTrustedPublisher } = require('../../scripts/verify-npm-oidc.cjs');
 const entry = (name) => ({
   pkg: { name, version: '1.9.0-alpha.20' },
   packed: { integrity: 'sha512-fixture' },
@@ -91,4 +92,107 @@ test('npm availability verification rejects different bytes, invalid metadata an
       waitForRegistry([item], { fetchPackage: async () => result, log: () => {} }),
       expected,
     );
+});
+
+const oidcEnv = {
+  GITHUB_ACTIONS: 'true',
+  ACTIONS_ID_TOKEN_REQUEST_URL: 'https://test.actions.githubusercontent.com/idtoken?api-version=2',
+  ACTIONS_ID_TOKEN_REQUEST_TOKEN: 'github-request-fixture',
+};
+const temporaryCredential = () => ({
+  token_type: 'oidc',
+  token: 'npm-temporary-fixture',
+  expires: new Date(Date.now() + 3600000).toISOString(),
+});
+
+test('trusted publishing verifies GitHub identity at the official npm endpoint without retaining credentials', async () => {
+  const calls = [];
+  assert.equal(
+    await verifyTrustedPublisher({
+      env: { ...oidcEnv, NODE_AUTH_TOKEN: 'XXXXX-XXXXX-XXXXX-XXXXX' },
+      fetchRequest: async (url, options) => {
+        calls.push({ url: String(url), options });
+        return {
+          ok: true,
+          json: async () =>
+            calls.length === 1 ? { value: 'github-identity-fixture' } : temporaryCredential(),
+        };
+      },
+    }),
+    undefined,
+  );
+  assert.equal(calls.length, 2);
+  assert.equal(new URL(calls[0].url).searchParams.get('audience'), 'npm:registry.npmjs.org');
+  assert.equal(calls[0].options.headers.Authorization, 'Bearer github-request-fixture');
+  assert.equal(
+    calls[1].url,
+    'https://registry.npmjs.org/-/npm/v1/oidc/token/exchange/package/cibyp',
+  );
+  assert.equal(calls[1].options.method, 'POST');
+  assert.equal(calls[1].options.headers.Authorization, 'Bearer github-identity-fixture');
+  for (const { options } of calls) {
+    assert.equal(options.redirect, 'error', 'credentials must not follow redirects');
+    assert.ok(options.signal instanceof AbortSignal);
+    assert.equal(options.body, undefined, 'the verification must not upload a package');
+  }
+});
+
+test('trusted publishing rejects absent OIDC permissions and long-lived token fallback before network access', async () => {
+  for (const env of [
+    {},
+    { ...oidcEnv, GITHUB_ACTIONS: 'false' },
+    { ...oidcEnv, ACTIONS_ID_TOKEN_REQUEST_TOKEN: '' },
+    { ...oidcEnv, NPM_TOKEN: 'long-lived-fixture' },
+    { ...oidcEnv, NODE_AUTH_TOKEN: 'long-lived-fixture' },
+    {
+      ...oidcEnv,
+      ACTIONS_ID_TOKEN_REQUEST_URL: 'http://test.actions.githubusercontent.com/idtoken',
+    },
+  ])
+    await assert.rejects(
+      verifyTrustedPublisher({
+        env,
+        fetchRequest: async () => assert.fail('invalid context must not contact the registry'),
+      }),
+      /GitHub Actions|long-lived|HTTPS/,
+    );
+});
+
+test('trusted publishing fails closed without exposing response credentials or sensitive transport errors', async () => {
+  const sensitive = 'npm-secret-fixture-that-must-not-be-logged';
+  for (const failure of [
+    { ok: false, status: 404, json: async () => ({ error: sensitive }) },
+    {
+      ok: true,
+      json: async () => ({ ...temporaryCredential(), token_type: 'user', token: sensitive }),
+    },
+    {
+      ok: true,
+      json: async () => ({ ...temporaryCredential(), token: sensitive, expires: '2000-01-01' }),
+    },
+    {
+      ok: true,
+      json: async () => {
+        throw new Error(sensitive);
+      },
+    },
+    new Error(sensitive),
+  ]) {
+    let count = 0;
+    await assert.rejects(
+      verifyTrustedPublisher({
+        env: oidcEnv,
+        fetchRequest: async () => {
+          if (++count === 1) return { ok: true, json: async () => ({ value: sensitive }) };
+          if (failure instanceof Error) throw failure;
+          return failure;
+        },
+      }),
+      (error) => {
+        assert.equal(error.message.includes(sensitive), false);
+        assert.match(error.message, /trusted publisher|temporary OIDC/);
+        return true;
+      },
+    );
+  }
 });

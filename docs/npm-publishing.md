@@ -54,9 +54,23 @@ npm login --registry=https://registry.npmjs.org/ --auth-type=web
 npm whoami --registry=https://registry.npmjs.org/
 ```
 
-按终端提示完成浏览器认证。本机登录与 GitHub Actions 身份独立。首次创建 cibyp 可使用拥有 publish 权限的 granular Token，将其存为仓库 NPM_TOKEN Secret。配置允许无人值守发布所需的认证方式。不要将 Token 写入代码或提交。
+按终端提示完成浏览器认证。本机登录与 GitHub Actions 身份独立。CI 仅使用 OIDC 临时凭据，不需要 NPM_TOKEN Secret，也不注入 NODE_AUTH_TOKEN。首次创建其他新包时可在本机交互登录后发布；不要将 Token 写入代码或提交。
 
-cibyp 创建后可仅为这个包配置 Trusted Publisher：GitHub owner B5-Software，repository Could-I-Be-Your-Partner，workflow **npm.yml**。之后删除 NPM_TOKEN Secret 即可使用 OIDC 临时凭据。工作流具有 id-token: write，发布带 provenance。
+cibyp 的 Trusted Publisher 配置如下：
+
+| 字段                 | 内容                             |
+| -------------------- | -------------------------------- |
+| Publisher            | GitHub Actions                   |
+| Organization or user | B5-Software                      |
+| Repository           | Could-I-Be-Your-Partner          |
+| Workflow filename    | **npm.yml**（仅文件名）          |
+| Environment name     | 留空（工作流未配置 environment） |
+| Allow npm publish    | 勾选                             |
+| Allow npm dist-tag   | 不勾选（当前不独立修改标签）     |
+
+工作流使用 GitHub 托管 runner、Node.js 24、npm >= 11.5.1 和 id-token: write，发布带 provenance。每次运行都会向 npm 官方换证接口验证 GitHub 身份，即使启动器版本已发布也会验证；身份或连接配置错误会明确失败，不回退到长期 Token。验证不上传新版本、不修改 dist-tags、不保存或输出临时凭据。实际新版本发布仍由 npm CLI 自动换取新的 OIDC 凭据。
+
+迁移时先保存上述连接并运行 npm-launcher，确认 **Verify npm trusted publisher without publishing a version** 成功，再删除 GitHub NPM_TOKEN Secret，并在 npm Access Tokens 中撤销旧的 CI 发布令牌。本机交互登录无需删除。仅工作流/认证配置变更不会递增 App 或启动器版本。
 
 参考：[npm 登录](https://docs.npmjs.com/cli/v12/commands/npm-login/)、[npm Trusted Publishing](https://docs.npmjs.com/trusted-publishers/)。
 

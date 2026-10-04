@@ -64,6 +64,20 @@ jobs:
         with:
           node-version: '24'
           registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+      - name: Verify npm supports trusted publishing
+        run: |
+          node - <<'JS'
+          const {execFileSync}=require('node:child_process');
+          const version=execFileSync('npm',['--version'],{encoding:'utf8'}).trim();
+          const [major,minor,patch]=version.split('.').map(Number);
+          if(!(major>11 || major===11 && (minor>5 || minor===5 && patch>=1))) {
+            throw new Error('Trusted publishing requires npm >= 11.5.1; found '+version);
+          }
+          console.log('Trusted publishing supported by npm '+version);
+          JS
+      - name: Verify npm trusted publisher without publishing a version
+        run: node scripts/verify-npm-oidc.cjs
       - name: Check whether the independent launcher version needs publishing
         id: version
         run: |
@@ -89,8 +103,6 @@ jobs:
       - name: Prepare one small JavaScript package
         if: steps.runtime.outputs.ready == 'true'
         run: npm run prepare:npm -- --output npm-dist
-      - name: Publish only the launcher
+      - name: Publish only the launcher using OIDC
         if: steps.runtime.outputs.ready == 'true'
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm run publish:npm -- npm-dist
