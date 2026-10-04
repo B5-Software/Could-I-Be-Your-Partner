@@ -54,19 +54,16 @@ async function verifyTrustedPublisher({ env = process.env, fetchRequest = fetch 
     },
     'GitHub OIDC identity request',
   );
-  if (typeof identity.value !== 'string' || !identity.value)
+  if (typeof identity?.value !== 'string' || !identity.value)
     throw new Error('GitHub did not return an OIDC identity token.');
   const exchange = await request(
     'https://registry.npmjs.org/-/npm/v1/oidc/token/exchange/package/cibyp',
     { method: 'POST', headers: { Authorization: 'Bearer ' + identity.value } },
     'npm trusted publisher exchange',
   );
-  if (
-    exchange.token_type !== 'oidc' ||
-    typeof exchange.token !== 'string' ||
-    !exchange.token ||
-    !(Date.parse(exchange.expires) > Date.now())
-  )
+  // npm CLI only requires the exchanged token. Production responses do not
+  // necessarily include the token_type / expires fields shown in API examples.
+  if (typeof exchange?.token !== 'string' || !exchange.token)
     throw new Error('npm did not return a valid temporary OIDC credential.');
   // Discard both credentials without logging or saving them. npm publish obtains
   // its own fresh credentials; this check changes no package versions/dist-tags.

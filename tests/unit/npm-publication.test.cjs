@@ -100,9 +100,7 @@ const oidcEnv = {
   ACTIONS_ID_TOKEN_REQUEST_TOKEN: 'github-request-fixture',
 };
 const temporaryCredential = () => ({
-  token_type: 'oidc',
   token: 'npm-temporary-fixture',
-  expires: new Date(Date.now() + 3600000).toISOString(),
 });
 
 test('trusted publishing verifies GitHub identity at the official npm endpoint without retaining credentials', async () => {
@@ -164,11 +162,11 @@ test('trusted publishing fails closed without exposing response credentials or s
     { ok: false, status: 404, json: async () => ({ error: sensitive }) },
     {
       ok: true,
-      json: async () => ({ ...temporaryCredential(), token_type: 'user', token: sensitive }),
+      json: async () => ({ token_type: 'oidc', token: '' }),
     },
     {
       ok: true,
-      json: async () => ({ ...temporaryCredential(), token: sensitive, expires: '2000-01-01' }),
+      json: async () => null,
     },
     {
       ok: true,
