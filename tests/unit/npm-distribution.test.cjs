@@ -222,7 +222,13 @@ test(
     const cwd = path.join(output, 'cibyp');
     const npmCLI =
       process.env.npm_execpath ||
-      path.resolve(path.dirname(process.execPath), 'node_modules/npm/bin/npm-cli.js');
+      (process.platform !== 'win32' &&
+        (await fs.realpath(path.join(path.dirname(process.execPath), 'npm')).catch(() => null))) ||
+      path.resolve(
+        path.dirname(process.execPath),
+        process.platform === 'win32' ? 'node_modules' : '../lib/node_modules',
+        'npm/bin/npm-cli.js',
+      );
     const npm = (args, options = {}) =>
       run(process.execPath, [npmCLI, ...args], {
         timeout: 90000,

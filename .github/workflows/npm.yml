@@ -41,6 +41,12 @@ jobs:
       - name: Verify local signing with real Electron helpers and renderer
         if: steps.version.outputs.needed == 'true'
         run: node --test tests/unit/npm-macos-sign.test.cjs tests/unit/npm-distribution.test.cjs tests/unit/npm-download.test.cjs tests/integration/npm-macos-sign.cjs
+      - name: Verify full GitHub runtime installation and user launcher
+        if: steps.version.outputs.needed == 'true'
+        env:
+          CIBYP_CACHE_DIR: ${{ runner.temp }}/cibyp-macos-runtime
+          CIBYP_DESKTOP_DIR: ${{ runner.temp }}/cibyp-macos-applications
+        run: node packages/npm/bin/cibyp.cjs --install-only
   publish:
     needs: verify-macos
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
