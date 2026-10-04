@@ -38,6 +38,12 @@ function cacheDirectory(env = process.env, platform = process.platform) {
   return path.resolve(base, 'cibyp/npm');
 }
 
+function runtimeDirectoryName(manifest, platform, arch, asset) {
+  const name = `${manifest.version}-${platform}-${arch}-${asset.sha256.slice(0, 12)}`;
+  // Keep previously running copies untouched while migrating unsigned caches.
+  return platform === 'darwin' ? name + '-signed-' + require('./macos.cjs').policy : name;
+}
+
 function selectTarget(manifest, platform, arch) {
   const key = `${platform}-${arch}`;
   const asset = manifest?.targets?.[key];
@@ -179,13 +185,14 @@ async function ensureRuntime(
     mirrors,
     concurrency,
     extract = run,
+    prepareMac = require('./macos.cjs').prepareMacRuntime,
     signal,
     log = (message) => console.error(message),
   } = {},
 ) {
   const asset = selectTarget(manifest, platform, arch);
   const base = cacheDirectory(env, platform);
-  const name = `${manifest.version}-${platform}-${arch}-${asset.sha256.slice(0, 12)}`;
+  const name = runtimeDirectoryName(manifest, platform, arch, asset);
   const destination = inside(base, name);
   if (await usable(destination, asset)) return { directory: destination, asset };
   await fsp.mkdir(base, { recursive: true });
@@ -242,6 +249,7 @@ async function ensureRuntime(
       await fsp.chmod(inside(staging, asset.node), 0o755);
       await fsp.chmod(inside(staging, asset.executable), 0o755);
     }
+    if (platform === 'darwin') await prepareMac(staging, asset, { signal, log });
     await fsp.writeFile(
       path.join(staging, '.cibyp-runtime.json'),
       JSON.stringify({ sha256: asset.sha256 }),
@@ -349,6 +357,7 @@ module.exports = {
   inside,
   checksum,
   cacheDirectory,
+  runtimeDirectoryName,
   usable,
   lockDirectory,
 };

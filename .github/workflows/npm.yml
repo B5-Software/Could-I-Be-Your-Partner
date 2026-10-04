@@ -11,7 +11,38 @@ permissions:
   contents: read
 
 jobs:
+  verify-macos:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-26-intel, macos-latest]
+    runs-on: ${{ matrix.os }}
+    env:
+      ONNXRUNTIME_NODE_INSTALL: skip
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - name: Check whether launcher verification is needed
+        id: version
+        run: |
+          node - <<'JS'
+          const fs=require('node:fs');
+          const version=require('./packages/npm/package.json').version;
+          fetch('https://registry.npmjs.org/cibyp/'+encodeURIComponent(version),{signal:AbortSignal.timeout(30000)}).then(response=>{
+            if(![200,404].includes(response.status)) throw new Error('npm lookup failed: HTTP '+response.status);
+            fs.appendFileSync(process.env.GITHUB_OUTPUT,'needed='+(response.status===404)+'\n');
+          }).catch(error=>{console.error(error.message);process.exitCode=1});
+          JS
+      - run: npm ci
+        if: steps.version.outputs.needed == 'true'
+      - name: Verify local signing with real Electron helpers and renderer
+        if: steps.version.outputs.needed == 'true'
+        run: node --test tests/unit/npm-macos-sign.test.cjs tests/unit/npm-distribution.test.cjs tests/unit/npm-download.test.cjs tests/integration/npm-macos-sign.cjs
   publish:
+    needs: verify-macos
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     concurrency:

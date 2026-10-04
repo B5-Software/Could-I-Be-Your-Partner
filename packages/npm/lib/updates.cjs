@@ -5,6 +5,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const {
   cacheDirectory,
+  runtimeDirectoryName,
   inside,
   selectTarget,
   usable,
@@ -41,7 +42,7 @@ async function cachedRuntime(state, options) {
     const asset = selectTarget(state.manifest, options.platform, options.arch);
     const directory = inside(
       cacheDirectory(options.env, options.platform),
-      `${state.manifest.version}-${options.platform}-${options.arch}-${asset.sha256.slice(0, 12)}`,
+      runtimeDirectoryName(state.manifest, options.platform, options.arch, asset),
     );
     return (await usable(directory, asset)) ? { directory, asset } : null;
   } catch {

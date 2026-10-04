@@ -87,7 +87,7 @@ test('GitHub runtimes serialize extraction, reuse the verified cache and reject 
     downloads++;
     await fs.copyFile(path.join(dist, item.file), destination);
   };
-  const options = { platform, arch, env, download, log: () => {} };
+  const options = { platform, arch, env, download, prepareMac: async () => {}, log: () => {} };
   const [first, second] = await Promise.all([
     ensureRuntime(manifest, options),
     ensureRuntime(manifest, options),
@@ -146,6 +146,7 @@ test('GUI launcher updates preserve other files and point at the new cached runt
   await fs.writeFile(path.join(path.dirname(shortcut), 'unrelated.desktop'), 'keep');
   await registerDesktop(next, { platform: 'linux', env, home: root, run });
   assert.match(await fs.readFile(shortcut, 'utf8'), /cache[\\/]next/);
+  assert.match(await fs.readFile(shortcut, 'utf8'), /Name=Could I Be Your Partner/);
   assert.equal(
     await fs.readFile(path.join(path.dirname(shortcut), 'unrelated.desktop'), 'utf8'),
     'keep',
@@ -163,7 +164,7 @@ test('GUI launcher updates preserve other files and point at the new cached runt
     },
   });
   assert.equal(values.executable, inside(next.directory, next.asset.executable));
-  assert.equal(path.basename(values.shortcut), 'CIBYP.lnk');
+  assert.equal(path.basename(values.shortcut), 'Could I Be Your Partner.lnk');
   const launchCommand = Buffer.from(values.arguments.split(' ').at(-1), 'base64').toString(
     'utf16le',
   );
@@ -185,6 +186,11 @@ test('GUI launcher updates preserve other files and point at the new cached runt
     run,
   };
   const app = await registerDesktop(mac, macOptions);
+  assert.equal(path.basename(app), 'Could I Be Your Partner.app');
+  assert.match(
+    await fs.readFile(path.join(app, 'Contents/Info.plist'), 'utf8'),
+    /CFBundleDisplayName<\/key><string>Could I Be Your Partner/,
+  );
   assert.match(
     await fs.readFile(path.join(app, 'Contents/MacOS/CIBYP'), 'utf8'),
     new RegExp('launcher-' + launcherVersion.replaceAll('.', '\\.')),
@@ -194,6 +200,15 @@ test('GUI launcher updates preserve other files and point at the new cached runt
     macOptions,
   );
   assert.match(await fs.readFile(path.join(app, 'Contents/MacOS/CIBYP'), 'utf8'), /next revision/);
+  const legacy = path.join(macOptions.env.CIBYP_DESKTOP_DIR, 'CIBYP.app');
+  await fs.mkdir(legacy);
+  await fs.writeFile(path.join(legacy, '.cibyp-managed'), 'npm');
+  await registerDesktop(mac, macOptions);
+  await assert.rejects(fs.stat(legacy), { code: 'ENOENT' });
+  await fs.mkdir(legacy);
+  await fs.writeFile(path.join(legacy, 'user-file'), 'keep');
+  await registerDesktop(mac, macOptions);
+  assert.equal(await fs.readFile(path.join(legacy, 'user-file'), 'utf8'), 'keep');
 });
 
 test(

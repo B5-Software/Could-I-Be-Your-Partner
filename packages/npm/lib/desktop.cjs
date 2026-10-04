@@ -8,6 +8,7 @@ const { promisify } = require('node:util');
 const { inside, cacheDirectory } = require('./runtime.cjs');
 const crypto = require('node:crypto');
 const execute = promisify(execFile);
+const productName = 'Could I Be Your Partner';
 
 function desktopQuote(value) {
   return '"' + value.replace(/[\\"`$]/g, '\\$&').replace(/%/g, '%%') + '"';
@@ -57,11 +58,13 @@ async function registerDesktop(
       'Microsoft/Windows/Start Menu/Programs',
     );
     await fs.mkdir(programs, { recursive: true });
-    const shortcut = path.join(programs, 'CIBYP.lnk');
+    const shortcut = path.join(programs, productName + '.lnk');
     // Encode values as data; never interpolate paths into PowerShell code.
     const values = Buffer.from(
       JSON.stringify({
         shortcut,
+        legacyShortcut: path.join(programs, 'CIBYP.lnk'),
+        cache: cacheDirectory(env, platform),
         executable,
         directory: runtime.directory,
         arguments:
@@ -80,7 +83,7 @@ async function registerDesktop(
         '-Command',
         "$ErrorActionPreference='Stop'; $v=[Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('" +
           values +
-          "'))|ConvertFrom-Json; $shell=New-Object -ComObject WScript.Shell; $link=$shell.CreateShortcut($v.shortcut); $link.TargetPath=$PSHOME+'\\powershell.exe'; $link.Arguments=$v.arguments; $link.WorkingDirectory=$v.directory; $link.IconLocation=$v.executable+',0'; $link.Description='Could I Be Your Partner'; $link.Save()",
+          "'))|ConvertFrom-Json; $shell=New-Object -ComObject WScript.Shell; $link=$shell.CreateShortcut($v.shortcut); $link.TargetPath=$PSHOME+'\\powershell.exe'; $link.Arguments=$v.arguments; $link.WorkingDirectory=$v.directory; $link.IconLocation=$v.executable+',0'; $link.Description='Could I Be Your Partner'; $link.Save(); if(Test-Path -LiteralPath $v.legacyShortcut){$old=$shell.CreateShortcut($v.legacyShortcut); $base=[IO.Path]::GetFullPath($v.cache).TrimEnd('\\')+'\\'; if($old.Description -eq 'Could I Be Your Partner' -and $old.WorkingDirectory.StartsWith($base,[StringComparison]::OrdinalIgnoreCase) -and $old.IconLocation.StartsWith($base,[StringComparison]::OrdinalIgnoreCase) -and $old.TargetPath.EndsWith('\\powershell.exe',[StringComparison]::OrdinalIgnoreCase)){Remove-Item -LiteralPath $v.legacyShortcut}}",
       ],
       { windowsHide: true, timeout: 15000 },
     );
@@ -89,7 +92,8 @@ async function registerDesktop(
   if (platform === 'darwin') {
     const applications = env.CIBYP_DESKTOP_DIR || path.join(home, 'Applications');
     await fs.mkdir(applications, { recursive: true });
-    const shortcut = path.join(applications, 'CIBYP.app');
+    const shortcut = path.join(applications, productName + '.app');
+    const legacy = path.join(applications, 'CIBYP.app');
     if (!runtime.asset.executable.includes('.app/'))
       throw new Error('Missing macOS application bundle');
     const existing = await fs.lstat(shortcut).catch((error) => {
@@ -101,7 +105,7 @@ async function registerDesktop(
         !existing.isDirectory() ||
         (await fs.readFile(path.join(shortcut, '.cibyp-managed'), 'utf8').catch(() => '')) !== 'npm'
       )
-        throw new Error('An existing ~/Applications/CIBYP.app is not managed by npm');
+        throw new Error('An existing ' + shortcut + ' is not managed by npm');
     }
     const temporary = shortcut + '.tmp-' + process.pid;
     try {
@@ -124,7 +128,7 @@ async function registerDesktop(
         );
       await fs.writeFile(
         path.join(temporary, 'Contents/Info.plist'),
-        '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>org.b5-software.cibyp.launcher</string><key>CFBundleName</key><string>CIBYP</string><key>CFBundleExecutable</key><string>CIBYP</string><key>CFBundleIconFile</key><string>icon.icns</string><key>CFBundlePackageType</key><string>APPL</string></dict></plist>',
+        '<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><dict><key>CFBundleIdentifier</key><string>org.b5-software.cibyp.launcher</string><key>CFBundleName</key><string>Could I Be Your Partner</string><key>CFBundleDisplayName</key><string>Could I Be Your Partner</string><key>CFBundleExecutable</key><string>CIBYP</string><key>CFBundleIconFile</key><string>icon.icns</string><key>CFBundlePackageType</key><string>APPL</string></dict></plist>',
       );
       const previous = shortcut + '.previous-' + process.pid;
       if (existing) await fs.rename(shortcut, previous);
@@ -143,6 +147,22 @@ async function registerDesktop(
       ['-f', shortcut],
       { timeout: 15000 },
     ).catch(() => {});
+    const old = await fs.lstat(legacy).catch((error) => {
+      if (error.code !== 'ENOENT') throw error;
+      return null;
+    });
+    if (
+      old?.isDirectory() &&
+      !old.isSymbolicLink() &&
+      (await fs.readFile(path.join(legacy, '.cibyp-managed'), 'utf8').catch(() => '')) === 'npm'
+    ) {
+      await run(
+        '/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister',
+        ['-u', legacy],
+        { timeout: 15000 },
+      ).catch(() => {});
+      await fs.rm(legacy, { recursive: true, force: true });
+    }
     return shortcut;
   }
   if (platform === 'linux') {
@@ -160,7 +180,7 @@ async function registerDesktop(
       throw new Error('An existing cibyp.desktop is not managed by npm');
     const pkg = inside(runtime.directory, runtime.asset.resources + '/app.asar.unpacked');
     const icon = path.join(pkg, 'assets/icons/icons/256x256.png');
-    const entry = `[Desktop Entry]\nType=Application\nName=CIBYP\nComment=Could I Be Your Partner\nExec=${desktopQuote(node)} ${desktopQuote(launcher)} --desktop %U\nIcon=${icon}\nTerminal=false\nCategories=Utility;Development;\nStartupWMClass=could-i-be-your-partner\nX-CIBYP-Managed=npm\n`;
+    const entry = `[Desktop Entry]\nType=Application\nName=${productName}\nComment=Could I Be Your Partner\nExec=${desktopQuote(node)} ${desktopQuote(launcher)} --desktop %U\nIcon=${icon}\nTerminal=false\nCategories=Utility;Development;\nStartupWMClass=could-i-be-your-partner\nX-CIBYP-Managed=npm\n`;
     const temporary = shortcut + '.tmp-' + process.pid;
     try {
       await fs.writeFile(temporary, entry, { mode: 0o755 });

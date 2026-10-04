@@ -196,7 +196,15 @@ test('automatic updates fall back to the verified cache, explicit updates fail, 
     resources: 'resources',
   };
   const manifest = { schema: 1, version: '1.0.0', targets: { [key]: asset } };
-  const directory = path.join(root, `1.0.0-${key}-${asset.sha256.slice(0, 12)}`);
+  const directory = path.join(
+    root,
+    require('../../packages/npm/lib/runtime.cjs').runtimeDirectoryName(
+      manifest,
+      process.platform,
+      process.arch,
+      asset,
+    ),
+  );
   await fs.mkdir(directory);
   for (const name of ['node', 'launch.cjs', 'CIBYP'])
     await fs.writeFile(path.join(directory, name), 'fixture');
