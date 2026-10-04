@@ -120,6 +120,7 @@ function makeProfile(port) {
 /** 起 PTY 子进程；watchdogMs 到点未完成则杀掉并 reject（带阶段信息） */
 function runInPty({ args, env, onOutput, onScreen, watchdogMs = 25000, describe }) {
   return new Promise((resolve, reject) => {
+    const exitMarker = 'CIBYP_TEST_EXIT_' + require('node:crypto').randomUUID() + ':';
     const resources = process.env.CIBYP_TEST_PACKAGED_RESOURCES;
     const binary = resources
       ? path.join(resources, 'node', process.platform === 'win32' ? 'node.exe' : 'node')
@@ -134,6 +135,16 @@ function runInPty({ args, env, onOutput, onScreen, watchdogMs = 25000, describe 
       cwd: root,
       env: Object.assign({}, process.env, env, {
         CIBYP_DOCUMENTS: path.join(env.CIBYP_USER_DATA, 'documents'),
+        CIBYP_TEST_EXIT_MARKER: exitMarker,
+        NODE_OPTIONS: [
+          process.env.NODE_OPTIONS || '',
+          '--require=' +
+            JSON.stringify(
+              path.join(root, 'tests/fixtures/tui-exit-marker.cjs').replace(/\\/g, '/'),
+            ),
+        ]
+          .join(' ')
+          .trim(),
       }),
     });
     const terminal = onScreen
@@ -171,7 +182,15 @@ function runInPty({ args, env, onOutput, onScreen, watchdogMs = 25000, describe 
       settled = true;
       const finish = () => {
         terminal?.dispose();
-        resolve({ exitCode, output: out });
+        // ConPTY can close its output before node-pty receives the native exit
+        // code. Use the actual Node exit event, never assume a missing code is 0.
+        const marker = out.match(new RegExp(exitMarker + '(\\d+)'));
+        const reported = marker ? Number(marker[1]) : exitCode;
+        if (marker && Number.isInteger(exitCode) && reported !== exitCode) {
+          reject(new Error(`Node exit ${reported} disagrees with PTY exit ${exitCode}`));
+          return;
+        }
+        resolve({ exitCode: reported, output: out });
       };
       if (terminal) terminal.write('', finish);
       else finish();

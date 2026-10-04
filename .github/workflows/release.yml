@@ -172,7 +172,7 @@ jobs:
   # ---- 发布到 GitHub Releases（tag: v<version>） ----
   release:
     needs: [test, detect, build]
-    if: always() && !inputs.npm_only && needs.test.result == 'success' && needs.detect.result == 'success' && (needs.build.result == 'success' || inputs.publish_run_id != '')
+    if: always() && !cancelled() && !inputs.npm_only && needs.test.result == 'success' && needs.detect.result == 'success' && (needs.build.result == 'success' || inputs.publish_run_id != '')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -221,7 +221,7 @@ jobs:
 
   npm:
     needs: [test, detect, build, release]
-    if: always() && needs.test.result == 'success' && needs.detect.result == 'success' && (needs.release.result == 'success' || (inputs.npm_only && (needs.build.result == 'success' || inputs.publish_run_id != '')))
+    if: always() && !cancelled() && needs.test.result == 'success' && needs.detect.result == 'success' && (needs.release.result == 'success' || (inputs.npm_only && (needs.build.result == 'success' || inputs.publish_run_id != '')))
     runs-on: ubuntu-latest
     concurrency:
       group: npm-publish
