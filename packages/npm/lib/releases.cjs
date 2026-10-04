@@ -2,6 +2,10 @@
 'use strict';
 const repo = 'B5-Software/Could-I-Be-Your-Partner';
 const api = 'https://api.github.com/repos/' + repo;
+const fs = require('node:fs/promises');
+const os = require('node:os');
+const path = require('node:path');
+const { downloadVerified } = require('./download.cjs');
 async function json(url, { fetchJSON = fetch, signal, limit = 1024 * 1024 } = {}) {
   const response = await fetchJSON(url, {
     headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'cibyp-launcher' },
@@ -17,7 +21,14 @@ async function json(url, { fetchJSON = fetch, signal, limit = 1024 * 1024 } = {}
   }
   return JSON.parse(Buffer.concat(chunks).toString('utf8'));
 }
-async function discoverRelease({ channel = 'preview', version, signal, fetchJSON = fetch } = {}) {
+async function discoverRelease({
+  channel = 'preview',
+  version,
+  signal,
+  fetchJSON = fetch,
+  downloadManifest = downloadVerified,
+  mirrors,
+} = {}) {
   if (!['stable', 'preview'].includes(channel))
     throw new Error('Channel must be stable or preview');
   if (version && !/^\d+\.\d+\.\d+(?:-[\w.-]+)?$/.test(version))
@@ -34,10 +45,33 @@ async function discoverRelease({ channel = 'preview', version, signal, fetchJSON
     throw new Error('No complete runtime is available on the selected GitHub release channel');
   const asset = release.assets.find((a) => a.name === 'cibyp-runtime.json');
   const url = new URL(asset.browser_download_url);
-  if (url.hostname !== 'github.com' || !url.pathname.startsWith('/' + repo + '/releases/download/'))
+  if (
+    url.protocol !== 'https:' ||
+    url.username ||
+    url.password ||
+    url.hostname !== 'github.com' ||
+    !url.pathname.startsWith('/' + repo + '/releases/download/')
+  )
     throw new Error('Unexpected release manifest origin');
-  // Mirrors never supply the trusted checksum manifest.
-  const manifest = await json(url.href, { fetchJSON, signal });
+  // A mirror may carry metadata only when the official GitHub API pins its hash.
+  // Older assets without a digest must be read directly over official HTTPS.
+  let manifest;
+  if (/^sha256:[a-f0-9]{64}$/.test(asset.digest || '')) {
+    if (!Number.isSafeInteger(asset.size) || asset.size <= 0 || asset.size > 1024 * 1024)
+      throw new Error('Invalid release manifest size');
+    const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'cibyp-manifest-'));
+    try {
+      const file = path.join(temporary, 'manifest.json');
+      await downloadManifest(
+        { url: url.href, size: asset.size, sha256: asset.digest.slice(7) },
+        file,
+        { signal, mirrors, concurrency: 1 },
+      );
+      manifest = JSON.parse(await fs.readFile(file, 'utf8'));
+    } finally {
+      await fs.rm(temporary, { recursive: true, force: true });
+    }
+  } else manifest = await json(url.href, { fetchJSON, signal });
   if (manifest.schema !== 1 || release.tag_name !== 'v' + manifest.version)
     throw new Error('Release tag and runtime manifest disagree');
   const targets = [

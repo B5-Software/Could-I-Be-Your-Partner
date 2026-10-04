@@ -164,6 +164,36 @@ test('GUI launcher updates preserve other files and point at the new cached runt
   });
   assert.equal(values.executable, inside(next.directory, next.asset.executable));
   assert.equal(path.basename(values.shortcut), 'CIBYP.lnk');
+  const launchCommand = Buffer.from(values.arguments.split(' ').at(-1), 'base64').toString(
+    'utf16le',
+  );
+  const launcherVersion = require('../../packages/npm/package.json').version;
+  assert.ok(launchCommand.includes('launcher-' + launcherVersion));
+  assert.match(launchCommand, /bin[\\/]cibyp\.cjs' --desktop$/);
+  const mac = {
+    ...next,
+    asset: {
+      ...next.asset,
+      resources: 'CIBYP.app/Contents/Resources',
+      executable: 'CIBYP.app/Contents/MacOS/CIBYP',
+    },
+  };
+  const macOptions = {
+    platform: 'darwin',
+    env: { ...env, CIBYP_DESKTOP_DIR: path.join(root, 'Applications') },
+    home: root,
+    run,
+  };
+  const app = await registerDesktop(mac, macOptions);
+  assert.match(
+    await fs.readFile(path.join(app, 'Contents/MacOS/CIBYP'), 'utf8'),
+    new RegExp('launcher-' + launcherVersion.replaceAll('.', '\\.')),
+  );
+  await registerDesktop(
+    { ...mac, directory: path.join(env.CIBYP_CACHE_DIR, 'next revision') },
+    macOptions,
+  );
+  assert.match(await fs.readFile(path.join(app, 'Contents/MacOS/CIBYP'), 'utf8'), /next revision/);
 });
 
 test(

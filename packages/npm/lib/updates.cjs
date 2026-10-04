@@ -70,6 +70,7 @@ async function resolveRuntime({
   let state = await readState(options);
   let cached = await cachedRuntime(state, options);
   const fresh = (value) =>
+    now() >= value.checkedAt &&
     now() - value.checkedAt < (value.failedCheck ? 10 * 60 * 1000 : 6 * 60 * 60 * 1000);
   if (offline) {
     if (channel && channel !== state.channel)
@@ -86,14 +87,14 @@ async function resolveRuntime({
     const selected = channel || state.channel;
     if (cached && !force && selected === state.channel && fresh(state)) return cached;
     try {
-      const manifest = await discover({ channel: selected, signal });
-      selectTarget(manifest, platform, arch);
       const mirrors =
         env.CIBYP_MIRRORS === 'off'
           ? []
           : env.CIBYP_MIRRORS?.split(',')
               .map((value) => value.trim())
               .filter(Boolean);
+      const manifest = await discover({ channel: selected, signal, mirrors });
+      selectTarget(manifest, platform, arch);
       const concurrency = env.CIBYP_DOWNLOAD_CONCURRENCY
         ? Number(env.CIBYP_DOWNLOAD_CONCURRENCY)
         : 4;

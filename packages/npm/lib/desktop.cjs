@@ -90,7 +90,8 @@ async function registerDesktop(
     const applications = env.CIBYP_DESKTOP_DIR || path.join(home, 'Applications');
     await fs.mkdir(applications, { recursive: true });
     const shortcut = path.join(applications, 'CIBYP.app');
-    if (!executable.includes('.app/')) throw new Error('Missing macOS application bundle');
+    if (!runtime.asset.executable.includes('.app/'))
+      throw new Error('Missing macOS application bundle');
     const existing = await fs.lstat(shortcut).catch((error) => {
       if (error.code !== 'ENOENT') throw error;
       return null;

@@ -161,8 +161,25 @@ test('release discovery uses the official manifest, validates all targets and re
   assert.equal(found.targets['win32-x64'].url, base + manifest.targets['win32-x64'].file);
   assert.ok(urls.every((url) => url.startsWith('https://api.github.com/') || url.startsWith(base)));
   await assert.rejects(discoverRelease({ channel: 'stable', fetchJSON }), /No complete runtime/);
+  const encoded = JSON.stringify(manifest);
+  const metadata = assets.at(-1);
+  metadata.size = Buffer.byteLength(encoded);
+  metadata.digest = 'sha256:' + crypto.createHash('sha256').update(encoded).digest('hex');
+  const downloadManifest = async (asset, file, options) => {
+    assert.equal(
+      asset.sha256,
+      metadata.digest.slice(7),
+      'metadata hash must come from the official API',
+    );
+    assert.equal(asset.size, metadata.size);
+    assert.equal(options.concurrency, 1);
+    await fs.writeFile(file, encoded);
+  };
+  assert.equal((await discoverRelease({ fetchJSON, downloadManifest })).version, version);
   assets[0].digest = 'sha256:' + 'b'.repeat(64);
-  await assert.rejects(discoverRelease({ fetchJSON }), /official release asset/);
+  await assert.rejects(discoverRelease({ fetchJSON, downloadManifest }), /official release asset/);
+  metadata.browser_download_url = metadata.browser_download_url.replace('https:', 'http:');
+  await assert.rejects(discoverRelease({ fetchJSON, downloadManifest }), /manifest origin/);
 });
 test('automatic updates fall back to the verified cache, explicit updates fail, and channels persist', async (t) => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cibyp-update-'));
