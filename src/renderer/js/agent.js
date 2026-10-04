@@ -40,11 +40,22 @@ const INTERNAL_DISABLE_AUTO_OPTIMIZE_SCHEMA = {
 
 // 极简模式（/minimal）工具白名单：对齐 DSH minimal 预设
 // （persistent bash + str_replace_editor 的 view/create/str_replace/insert）
-const MINIMAL_TOOL_NAMES = [
-  'makeTerminal', 'runTerminalCommand', 'awaitTerminalCommand', 'killTerminal',
-  'terminalReadOutput', 'terminalSendInput', 'terminalPressKey', 'terminalAnswerPrompt',
-  'terminalListSessions',
-  'readFile', 'listDirectory', 'editFile'
+const MINIMAL_TOOL_SCHEMAS = [
+  { type: 'function', function: {
+    name: 'bash', description: 'Run commands in one persistent workspace shell. cd and environment changes survive calls. Long commands yield without being killed; poll for more output or interrupt/reset explicitly.',
+    parameters: { type: 'object', properties: {
+      command: { type: 'string' }, action: { type: 'string', enum: ['run', 'poll', 'interrupt', 'reset'] },
+      yieldMs: { type: 'integer', minimum: 1, maximum: 60000 }
+    }, required: [] }
+  } },
+  { type: 'function', function: {
+    name: 'str_replace_editor', description: 'View, create or edit a text file. Paths are relative to the workspace. view_range uses inclusive 1-based lines; -1 means EOF. Replacements must match exactly once. insert_line is the line after which to insert (0 prepends).',
+    parameters: { type: 'object', properties: {
+      command: { type: 'string', enum: ['view', 'create', 'str_replace', 'insert'] }, path: { type: 'string' },
+      file_text: { type: 'string' }, old_str: { type: 'string' }, new_str: { type: 'string' },
+      insert_line: { type: 'integer', minimum: 0 }, view_range: { type: 'array', items: { type: 'integer' }, minItems: 2, maxItems: 2 }
+    }, required: ['command', 'path'] }
+  } }
 ];
 
 // 只读工具的批量/并行规格：itemsKey 为批量参数名，singularKey 为单项参数名（null=对象合并），
@@ -231,6 +242,7 @@ class Agent {
       }
     }
     const base = {
+      minimalMode: this.minimalMode === true,
       contextLength: this.getTokenLimits().contextTokens,
       poolEntryId: ov.poolEntryId || undefined,
       model: ov.model || undefined,
@@ -273,7 +285,7 @@ class Agent {
 
       const routing = s?.llm?.routing || {};
       const decisionCfg = s?.decision || {};
-      const decisionOn = decisionCfg.enabled === true;
+      const decisionOn = !this.minimalMode && decisionCfg.enabled === true;
       const decisionUsages = decisionCfg.usages || {};
       const state = String(userMessage || this.getLatestUserMessageText() || '').slice(0, 1500);
       let entry = null;
@@ -477,7 +489,7 @@ class Agent {
     }
     
     // 异步获取工作目录文件树
-    if (this.workspacePath) {
+    if (!this.minimalMode && this.workspacePath) {
       try {
         const treeResult = await this.host.api.workspaceGetFileTree(this.workspacePath);
         if (treeResult.ok) {
@@ -486,7 +498,7 @@ class Agent {
       } catch { /* ignore */ }
     }
 
-    await this.refreshSkillsCatalog();
+    if (!this.minimalMode) await this.refreshSkillsCatalog();
 
     this.contextManager.setSystemPrompt(this.getSystemPrompt());
     // Generate conversation ID
@@ -696,16 +708,97 @@ ${customPrompt ? '\n用户自定义提示词:\n' + customPrompt : ''}${skillsSec
    * 内容固定且不注入日期/工具定义等易变信息，最大化提示词前缀缓存命中。
    */
   getMinimalSystemPrompt() {
-    return [
-      'You are a focused coding assistant running in minimal mode.',
-      '',
-      'Core rules:',
-      '1. Work directly and efficiently. Do exactly what the user asked; do not add unrequested features.',
-      '2. You have a persistent shell and a small file editor. Use the shell for exploration, builds and tests; use the editor for precise file changes.',
-      '3. Read before you edit. Quote the exact text to replace when editing files.',
-      '4. Keep responses concise. Report results and errors factually.',
-      '5. Do not ask unnecessary questions; make reasonable assumptions and proceed.'
-    ].join('\n');
+    return 'You are a helpful software engineer assistant.';
+  }
+
+  async setMinimalMode(value) {
+    if (this.running) return { ok: false, error: 'Stop the current task before changing Minimal mode' };
+    if (this.mode === 'babe' && value) return { ok: false, error: 'Minimal mode is available in Chat and Code' };
+    if (this.minimalMode === Boolean(value)) return { ok: true, minimalMode: this.minimalMode };
+    this.minimalMode = Boolean(value);
+    this.resetOptimizedTools();
+    // An explicit preset change starts a new context epoch; normal hot updates
+    // still append to the stable prefix. Durable messages are never removed.
+    this.contextManager.resetContextSources();
+    if (this.settings) await this.observeRuntimeContext();
+    await this.saveToHistory();
+    return { ok: true, minimalMode: this.minimalMode };
+  }
+
+  async executeMinimalTool(name, args = {}) {
+    if (name === 'bash') {
+      if (this.settings?.tools?.runShellScriptCode === false || this.settings?.tools?.makeTerminal === false || this.settings?.tools?.awaitTerminalCommand === false)
+        return { ok: false, error: 'Shell tools are disabled' };
+      const action = args.action || 'run';
+      if (!['run', 'poll', 'interrupt', 'reset'].includes(action)) return { ok: false, error: 'Unknown shell action' };
+      if (action === 'reset') {
+        await this.resetMinimalShell();
+        return { ok: true };
+      }
+      if (this._minimalTerminalId == null) {
+        if (action !== 'run' || !String(args.command || '').trim()) return { ok: false, error: 'No shell command to poll' };
+        const result = await this._execWithSandboxEscalation('makeTerminal', (mode) =>
+          this.host.api.makeTerminal(this._scriptCwd(), this.sessionKey, mode), { terminalOnly: true });
+        if (!result.ok) return result;
+        this._minimalTerminalId = result.terminalId;
+        this.terminals.set(result.terminalId, true);
+      }
+      if (action === 'interrupt') return this.host.api.pressTerminalKey(this._minimalTerminalId, 'CtrlC');
+      if (action === 'run' && !String(args.command || '').trim()) return { ok: false, error: 'command is required' };
+      const result = await this.host.api.awaitTerminalCommand(this._minimalTerminalId,
+        action === 'poll' ? null : args.command, Math.max(1, Math.min(60000, Number(args.yieldMs) || 10000)));
+      if (!result.ok && /does not exist|不存在/.test(result.error || '')) this._minimalTerminalId = null;
+      return result;
+    }
+    if (name !== 'str_replace_editor') return { ok: false, error: 'This tool is not available in Minimal mode' };
+    if (typeof args.path !== 'string' || !args.path.trim()) return { ok: false, error: 'path is required' };
+    const file = this._resolveWorkspacePath(args.path);
+    const disabled = (tool) => this.settings?.tools?.[tool] === false;
+    if (args.command === 'create') {
+      if (disabled('createFile') || disabled('editFile')) return { ok: false, error: 'File editing is disabled' };
+      if (typeof args.file_text !== 'string') return { ok: false, error: 'file_text is required' };
+      const existing = await this.host.api.getFileInfo(file);
+      if (existing?.ok || existing?.exists) return { ok: false, error: 'File already exists; use str_replace or insert' };
+      return this.host.api.createFile(file, args.file_text);
+    }
+    if (disabled('readFile')) return { ok: false, error: 'File reading is disabled' };
+    const read = await this.host.api.readFile(file, '');
+    if (!read?.ok) {
+      if (args.command === 'view' && !disabled('listDirectory')) return this.host.api.listDirectory(file);
+      return read;
+    }
+    const text = String(read.content ?? '');
+    const lines = text.split(/\r?\n/);
+    if (args.command === 'view') {
+      const [start, end] = args.view_range || [1, -1];
+      if (!Number.isInteger(start) || start < 1 || start > lines.length || !Number.isInteger(end) || (end !== -1 && end < start))
+        return { ok: false, error: 'Invalid view_range' };
+      return { ...read, content: lines.slice(start - 1, end === -1 ? undefined : end).map((line, index) => `${start + index}: ${line}`).join('\n'), totalLines: lines.length };
+    }
+    if (disabled('editFile') || disabled('writeFile')) return { ok: false, error: 'File editing is disabled' };
+    if (args.command === 'str_replace') {
+      if (typeof args.old_str !== 'string' || !args.old_str || typeof args.new_str !== 'string') return { ok: false, error: 'Nonempty old_str and new_str are required' };
+      return this._applyStringReplace(file, args.old_str, args.new_str, false);
+    }
+    if (args.command === 'insert') {
+      const line = args.insert_line;
+      if (!Number.isInteger(line) || line < 0 || line > lines.length || typeof args.new_str !== 'string') return { ok: false, error: 'Invalid insert_line or new_str' };
+      const eol = read.eol === 'crlf' ? '\r\n' : '\n';
+      const insertion = args.new_str.replace(/\r?\n/g, eol);
+      const prefix = lines.slice(0, line).join(eol);
+      const suffix = lines.slice(line).join(eol);
+      const content = prefix + (line ? eol : '') + insertion + (line < lines.length ? eol + suffix : '');
+      return this.host.api.writeFile(file, content, { encoding: read.encoding || '', eol: read.eol || '' });
+    }
+    return { ok: false, error: 'Unknown editor command' };
+  }
+
+  async resetMinimalShell() {
+    if (this._minimalTerminalId == null) return;
+    const id = this._minimalTerminalId;
+    this._minimalTerminalId = null;
+    this.terminals.delete(id);
+    await this.host.api.killTerminal(id);
   }
 
   /** Skill guidance is an independent runtime source, admitted at provider boundaries. */
@@ -1053,7 +1146,7 @@ ${affectionDesc}
 
   async observeRuntimeContext() {
     // This is a safe provider boundary: no model stream or unsettled tool batch is active.
-    if (this.workspacePath && typeof this.host.api.workspaceGetFileTree === 'function') {
+    if (!this.minimalMode && this.workspacePath && typeof this.host.api.workspaceGetFileTree === 'function') {
       try {
         const tree = await this.host.api.workspaceGetFileTree(this.workspacePath);
         if (tree?.ok && typeof tree.tree === 'string') this.cachedWorkspaceTree = tree.tree;
@@ -1063,7 +1156,7 @@ ${affectionDesc}
     this.contextManager.setContextSource('技能目录', this.minimalMode ? '' : this.getSkillsCatalogBlock());
     this.contextManager.setContextSource('工作目录文件树', this.minimalMode ? '' : this.cachedWorkspaceTree || '');
     this.contextManager.setContextSource('已激活技能', this.getActiveSkillsBlock());
-    this.contextManager.setContextSource(this.host.gui.todos ? '全局持久化待办' : '当前会话待办', this.todoItems.length
+    this.contextManager.setContextSource(this.host.gui.todos ? '全局持久化待办' : '当前会话待办', !this.minimalMode && this.todoItems.length
       ? JSON.stringify(this.todoItems.map(({ id, text, done }) => ({ id, text, done }))) : '');
     this.contextManager.setContextSource('工具发现', this.usesToolDiscovery()
       ? '工具按需加载：缺少能力时使用 searchTools(query/category/names)，空查询可浏览分类。搜索在本地执行；匹配定义在下一轮请求加载。describeTool 分段查看参数；invokeTool 调用已发现且启用的工具。工具类别：'
@@ -1075,6 +1168,7 @@ ${affectionDesc}
   }
 
   getActiveToolNames() {
+    if (this.minimalMode) return this.getRuntimeToolSchemas().map(tool => tool.function.name);
     if (this.usesToolDiscovery()) {
       const registry = this.prepareToolExposure();
       registry.schemas();
@@ -1115,28 +1209,11 @@ ${affectionDesc}
       this.contextManager?.setToolSchemaTokens(Math.ceil(JSON.stringify(tools).length / 4));
       return tools;
     }
-    // 极简模式：只暴露持久终端（pty）+ 文件读写编辑，对齐 DSH minimal 预设
     if (this.minimalMode) {
-      const enabledToolsMap = {};
-      getAllToolDefinitions(this.mode || 'chat').forEach(tool => {
-        enabledToolsMap[tool.name] = MINIMAL_TOOL_NAMES.includes(tool.name);
-      });
-      let tools = getToolSchemas(enabledToolsMap, this.mode || 'chat', (this.settings && this.settings.cibypIm && this.settings.cibypIm.ownerUsername) || undefined);
-      tools = tools.filter(t => MINIMAL_TOOL_NAMES.includes(t.function?.name));
-      if (typeof filterToolsByConfig === 'function') {
-        tools = filterToolsByConfig(tools, this.settings);
-      }
-      if (typeof adaptReadImageFileSchema === 'function') {
-        const schemaMap = Object.fromEntries(tools.map(t => [t.function?.name, t]));
-        adaptReadImageFileSchema(schemaMap, this.settings, () => this.isVisionModel());
-        if (schemaMap['readImageFile']) {
-          const idx = tools.findIndex(t => t.function?.name === 'readImageFile');
-          if (idx >= 0) tools[idx] = schemaMap['readImageFile'];
-        }
-      }
-      if (this.contextManager && typeof this.contextManager.setToolSchemaTokens === 'function') {
-        this.contextManager.setToolSchemaTokens(Math.ceil(JSON.stringify(tools).length / 4));
-      }
+      const tools = MINIMAL_TOOL_SCHEMAS.filter(tool => tool.function.name === 'bash'
+        ? this.settings?.tools?.runShellScriptCode !== false && this.settings?.tools?.makeTerminal !== false && this.settings?.tools?.awaitTerminalCommand !== false
+        : this.settings?.tools?.readFile !== false);
+      this.contextManager.setToolSchemaTokens(Math.ceil(JSON.stringify(tools).length / 4));
       return tools;
     }
     const activeNames = this._orderedActiveToolNames();
@@ -1166,7 +1243,7 @@ ${affectionDesc}
       if (schema) ordered.push(schema);
     }
     tools = ordered;
-    if (this.settings?.autoOptimizeToolSelection && !this.sessionAutoOptimizeDisabled && this.mode !== 'code') {
+    if (!this.minimalMode && this.settings?.autoOptimizeToolSelection && !this.sessionAutoOptimizeDisabled && this.mode !== 'code') {
       tools.push(INTERNAL_REOPTIMIZE_TOOL_SCHEMA);
       tools.push(INTERNAL_DISABLE_AUTO_OPTIMIZE_SCHEMA);
     }
@@ -1744,7 +1821,7 @@ ${affectionDesc}
     this._emitWorkingStatus('working');
 
     // 抽塔罗牌
-    if (!this.tarotCard) {
+    if (!this.minimalMode && !this.tarotCard) {
       this.tarotCard = await this.host.api.drawTarot();
       if (this.onMessage) this.onMessage('tarot', this.tarotCard);
     }
@@ -1790,13 +1867,13 @@ ${affectionDesc}
     this._emitWorkingStatus('working');
 
     // Draw tarot card on first message
-    if (!this.tarotCard) {
+    if (!this.minimalMode && !this.tarotCard) {
       this.tarotCard = await this.host.api.drawTarot();
       if (this.onMessage) this.onMessage('tarot', this.tarotCard);
     }
 
     if (!this.conversationTitle) {
-      this.conversationTitle = await this.generateConversationTitle(userMessage);
+      this.conversationTitle = this.minimalMode ? String(userMessage).replace(/\s+/g, ' ').trim().slice(0, 60) : await this.generateConversationTitle(userMessage);
       if (this.onTitleChange) this.onTitleChange(this.conversationTitle);
     }
 
@@ -1841,11 +1918,11 @@ ${affectionDesc}
       fullMessage = userMessage + '\n\n' + attachInfo;
     }
 
-    if (this.settings?.autoOptimizeToolSelection && !this.sessionAutoOptimizeDisabled && !this.hasUsableOptimizedSelection()) {
+    if (!this.minimalMode && this.settings?.autoOptimizeToolSelection && !this.sessionAutoOptimizeDisabled && !this.hasUsableOptimizedSelection()) {
       await this.optimizeToolsForConversation(fullMessage, '检测到优化未执行，发送前自动补偿优化');
     }
 
-    await this.refreshSkillsCatalog();
+    if (!this.minimalMode) await this.refreshSkillsCatalog();
     this.contextManager.setSystemPrompt(this.getSystemPrompt());
 
     // 多模态：如果模型支持 vision 且有图片附件，构造 content 数组（OpenAI vision format）
@@ -1968,6 +2045,7 @@ ${affectionDesc}
   }
 
   async loadFromHistory(conversation) {
+    await this.resetMinimalShell();
     this.conversationId = conversation.id;
     this.conversationTitle = conversation.title;
     this.resetOptimizedTools();
@@ -2040,7 +2118,7 @@ ${affectionDesc}
       .filter(item => item && Number.isSafeInteger(item.id) && item.id > 0 && typeof item.text === 'string' && item.text.trim() && !todoIds.has(item.id) && todoIds.add(item.id))
       .map(({ id, text, done }) => ({ id, text, done: done === true }));
     this.todoIdCounter = Math.max(Number.isSafeInteger(conversation.todoIdCounter) ? conversation.todoIdCounter : 0, ...this.todoItems.map(item => item.id));
-    if (conversation.tarotCard) {
+    if (!this.minimalMode && conversation.tarotCard) {
       this.tarotCard = conversation.tarotCard;
       if (this.onMessage) this.onMessage('tarot', this.tarotCard);
     } else {
@@ -2049,6 +2127,7 @@ ${affectionDesc}
     }
     if (conversation.workspacePath) {
       this.workspacePath = conversation.workspacePath;
+      if (this.mode === 'code') this.codeWorkspacePath = conversation.workspacePath;
       this.host.api.webControlSetWorkDir(conversation.workspacePath);
     }
     // Babe 模式：恢复好感度
@@ -2781,7 +2860,7 @@ ${affectionDesc}
             }
           }
           // OpenCode 免费池 agent 工具别名（bash/edit）按敏感工具处理
-          const FREE_TIER_SENSITIVE = permissionToolName === 'bash' || permissionToolName === 'edit';
+          const FREE_TIER_SENSITIVE = permissionToolName === 'bash' || permissionToolName === 'edit' || (permissionToolName === 'str_replace_editor' && args.command !== 'view');
           const toolDef = getAllToolDefinitions(this.mode || 'chat').find(t => t.name === permissionToolName);
           const isSensitive = (toolDef?.sensitive || FREE_TIER_SENSITIVE) && !this.settings.autoApproveSensitive;
 
@@ -2826,7 +2905,7 @@ ${affectionDesc}
             const cmdTools = ['runTerminalCommand', 'awaitTerminalCommand', 'runShellScriptCode', 'bash', 'terminalSendInput', 'terminalAnswerPrompt'];
             if (cmdTools.includes(permissionToolName)) {
               const dcfg = this.settings?.decision || {};
-              if (dcfg.enabled && dcfg.usages?.commandGuard !== false && typeof this.host.api.decisionNoul === 'function') {
+              if (!this.minimalMode && dcfg.enabled && dcfg.usages?.commandGuard !== false && typeof this.host.api.decisionNoul === 'function') {
                 const cmdText = String(permissionArgs.command || permissionArgs.script || permissionArgs.text || permissionArgs.answer || '').slice(0, 800);
                 if (cmdText) {
                   try {
@@ -3096,6 +3175,10 @@ ${affectionDesc}
   }
 
   async executeTool(name, args) {
+    if (this.minimalMode) {
+      try { return await this.executeMinimalTool(name, args); }
+      catch (error) { return { ok: false, error: error.message }; }
+    }
     if (this.usesToolDiscovery() && ['searchTools', 'describeTool', 'invokeTool'].includes(name)) {
       const registry = this.prepareToolExposure();
       if (name === 'searchTools') return registry.search(args);
@@ -3654,7 +3737,7 @@ ${affectionDesc}
           return { ok: true, summary: sumRes.summary, message: sumRes.message };
         }
         case 'listSkills': {
-          await this.refreshSkillsCatalog();
+          if (!this.minimalMode) await this.refreshSkillsCatalog();
           this.contextManager.setSystemPrompt(this.getSystemPrompt());
           return normalizeOk(this.skillsCatalog, 'skills');
         }
@@ -3671,7 +3754,7 @@ ${affectionDesc}
           if (args.runtime !== undefined) payload.runtime = args.runtime;
           if (Array.isArray(args.scripts)) payload.scripts = args.scripts;
           const res = await this.host.api.createSkill(payload);
-          await this.refreshSkillsCatalog();
+          if (!this.minimalMode) await this.refreshSkillsCatalog();
           this.contextManager.setSystemPrompt(this.getSystemPrompt());
           return normalizeOk(res, 'skill');
         }
@@ -3688,12 +3771,12 @@ ${affectionDesc}
           if (args.runtime !== undefined) payload.runtime = args.runtime;
           if (Array.isArray(args.scripts)) payload.scripts = args.scripts;
           const res = await this.host.api.updateSkill(args.id, payload);
-          await this.refreshSkillsCatalog();
+          if (!this.minimalMode) await this.refreshSkillsCatalog();
           this.contextManager.setSystemPrompt(this.getSystemPrompt());
           return normalizeOk(res, 'skill');
         }
         case 'runSkillScript': {
-          await this.refreshSkillsCatalog();
+          if (!this.minimalMode) await this.refreshSkillsCatalog();
           const skillId = String(args.skillId || '').trim();
           const scriptName = String(args.scriptName || '').trim();
           const skill = this.skillsCatalog.find(s => String(s?.id) === skillId);
@@ -3741,7 +3824,7 @@ ${affectionDesc}
         }
         case 'activateSkill': {
           // Inject a skill's prompt into the system context.
-          await this.refreshSkillsCatalog();
+          if (!this.minimalMode) await this.refreshSkillsCatalog();
           const skillId = String(args.skillId || '').trim();
           const skill = this.skillsCatalog.find(s => String(s?.id) === skillId || String(s?.name) === skillId);
           if (!skill) return { ok: false, error: typeof i18nToolReturn === 'function' ? i18nToolReturn('skill_not_exists', '技能不存在') : '技能不存在' };

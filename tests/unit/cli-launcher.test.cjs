@@ -119,7 +119,7 @@ test('GUI command launches the installed executable and forwards paths with spac
 });
 
 test('both command entry points report a clean version without starting the App', () => {
-  for (const entry of ['cibyp.js', 'cibyp-tui.js']) {
+  for (const entry of ['cibyp.js', 'cibyp-tui.js', 'cibyp-code.js']) {
     const result = cp.spawnSync(process.execPath, [path.resolve('bin', entry), '--version'], {
       encoding: 'utf8',
     });
@@ -143,6 +143,15 @@ test('no graphical environment routes the GUI command to TUI; the TUI command al
     graphical: () => assert.fail('TUI never probes a desktop'),
   });
   assert.equal(starts, 2);
+});
+
+test('cibyp-code uses the invoking host directory and bypasses graphical startup', async () => {
+  let selected;
+  await launch('code', [], {
+    graphical: () => assert.fail('Code command must use TUI'),
+    startTui: (args) => (selected = args),
+  });
+  assert.deepEqual(selected, ['--mode=code', '--workspace=' + process.cwd(), '--workspace-local']);
 });
 
 test(
@@ -183,7 +192,7 @@ test(
       );
     try {
       assert.equal(invoke().status, 0);
-      for (const command of ['cibyp', 'cibyp-tui'])
+      for (const command of ['cibyp', 'cibyp-tui', 'cibyp-code'])
         assert.equal(
           fs.readlinkSync(path.join(root, 'usr/local/bin', command)).replaceAll('\\', '/'),
           `${root.replaceAll('\\', '/')}/Applications/Could I Be Your Partner.app/Contents/Resources/cli/${command}`,

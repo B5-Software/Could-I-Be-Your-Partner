@@ -1,0 +1,10 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-3.0-or-later
+entry=$0
+while [ -L "$entry" ]; do
+  directory=$(CDPATH= cd -P -- "$(dirname -- "$entry")" && pwd) || exit 1
+  link=$(readlink "$entry") || exit 1
+  case "$link" in /*) entry=$link ;; *) entry=$directory/$link ;; esac
+done
+directory=$(CDPATH= cd -P -- "$(dirname -- "$entry")" && pwd) || exit 1
+exec "$directory/../node/node" "$directory/launch.cjs" code "$@"

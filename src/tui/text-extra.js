@@ -2,6 +2,13 @@
 'use strict';
 module.exports = {
   en: {
+    'ui.tui.cmd.minimal': 'Toggle Minimal mode (saved per conversation)',
+    'ui.tui.args.minimal': '[on|off]',
+    'ui.tui.minimalUsage': 'Usage: /minimal [on|off]',
+    'ui.tui.minimalBusy': 'Stop the current task before changing Minimal mode',
+    'ui.tui.minimalBabe': 'Minimal mode is available in Chat and Code',
+    'ui.tui.minimalOn': 'Minimal enabled: fixed prompt + shell / file editor',
+    'ui.tui.minimalOff': 'Minimal disabled',
     'ui.tui.cmd.theme': 'Toggle following the GUI palette (saved)',
     'ui.tui.args.theme': '[on|off]',
     'ui.tui.themeUsage': 'Usage: /theme [on|off]',
@@ -48,6 +55,13 @@ module.exports = {
     'ui.tui.configGroup.language': 'Language',
   },
   de: {
+    'ui.tui.cmd.minimal': 'Minimal-Modus umschalten (pro Unterhaltung gespeichert)',
+    'ui.tui.args.minimal': '[on|off]',
+    'ui.tui.minimalUsage': 'Verwendung: /minimal [on|off]',
+    'ui.tui.minimalBusy': 'Aktuelle Aufgabe vor dem Umschalten stoppen',
+    'ui.tui.minimalBabe': 'Minimal ist in Chat und Code verfügbar',
+    'ui.tui.minimalOn': 'Minimal aktiviert: fester Prompt + Shell / Dateieditor',
+    'ui.tui.minimalOff': 'Minimal deaktiviert',
     'ui.tui.cmd.theme': 'GUI-Farben übernehmen oder Terminalfarben verwenden (gespeichert)',
     'ui.tui.args.theme': '[on|off]',
     'ui.tui.themeUsage': 'Verwendung: /theme [on|off]',

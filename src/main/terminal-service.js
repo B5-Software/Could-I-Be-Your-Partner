@@ -14,6 +14,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { abortAllRequests, abortRequests } = require('./llm-retry');
+const { TerminalCommand } = require('./services/terminal-command');
 
 module.exports = function registerTerminalIpc({ ipcMain, getMainWindow, getSettings, getVmService }) {
 const terminals = new Map();
@@ -83,6 +84,7 @@ function _broadcastTerminalEvent(channel, payload) {
 }
 
 function _appendTerminalData(id, entry, data) {
+  entry.commandTracker?.append(data);
   entry.agentBuffer += data;
   entry.fullHistory += data;
   if (entry.fullHistory.length > TERMINAL_HISTORY_MAX) {
@@ -170,8 +172,9 @@ ipcMain.handle('terminal:make', async (_, cwd, opts = {}) => {
         location: 'vm',
         buffer: () => { const b = entry.agentBuffer; entry.agentBuffer = ''; return b; }
       };
+      entry.commandTracker = new TerminalCommand(term, entry.shellName);
       term.onData(data => _appendTerminalData(id, entry, data));
-      term.onExit(({ exitCode }) => { _broadcastTerminalEvent('terminal:exit', { id, exitCode }); });
+      term.onExit(({ exitCode }) => { entry.commandTracker.end(); terminals.delete(id); _broadcastTerminalEvent('terminal:exit', { id, exitCode }); });
       await term.ready();
       terminals.set(id, entry);
       return { ok: true, terminalId: id, cwd: vmCwd, createdAt: entry.createdAt, location: 'vm' };
@@ -241,8 +244,11 @@ ipcMain.handle('terminal:make', async (_, cwd, opts = {}) => {
       // 兼容旧接口：Agent 调用 t.buffer() 取走 agentBuffer
       buffer: () => { const b = entry.agentBuffer; entry.agentBuffer = ''; return b; }
     };
+    entry.commandTracker = new TerminalCommand(term, entry.shellName);
     term.onData(data => _appendTerminalData(id, entry, data));
     term.onExit(({ exitCode }) => {
+      entry.commandTracker.end();
+      terminals.delete(id);
       _broadcastTerminalEvent('terminal:exit', { id, exitCode });
     });
     terminals.set(id, entry);
@@ -356,6 +362,7 @@ ipcMain.handle('terminal:getHistory', (_, id) => {
 ipcMain.handle('terminal:run', (_, id, command) => {
   const t = terminals.get(id);
   if (!t) return { ok: false, error: '终端不存在' };
+  if (t.commandTracker.current?.running) return { ok: false, error: 'A command is still running' };
   t.agentBuffer = ''; // 清空 Agent 读取缓冲区
   t.term.write(command + '\r');
   t.lastCommand = String(command).slice(0, 60);
@@ -363,34 +370,20 @@ ipcMain.handle('terminal:run', (_, id, command) => {
     setTimeout(() => { resolve({ ok: true, output: t.buffer() }); }, 2000);
   });
 });
-ipcMain.handle('terminal:await', (_, id, command, timeoutMs) => {
+ipcMain.handle('terminal:await', async (_, id, command, timeoutMs) => {
   const t = terminals.get(id);
-  if (!t) return { ok: false, error: '终端不存在' };
-  t.agentBuffer = ''; // 清空 Agent 读取缓冲区
-  t.term.write(String(command) + '\r');
-  t.lastCommand = String(command).slice(0, 60);
-  const effectiveTimeout = (Number(timeoutMs) > 0) ? Number(timeoutMs) : 120000;
-  return new Promise(resolve => {
-    let resolved = false;
-    const finish = (result) => {
-      if (resolved) return;
-      resolved = true;
-      clearTimeout(timeout);
-      clearInterval(checkInterval);
-      resolve(result);
-    };
-    const timeout = setTimeout(() => finish({ ok: true, output: t.buffer(), timedOut: true }), effectiveTimeout);
-    let checkInterval = setInterval(() => {
-      const output = t.buffer();
-      if (output.includes('$') || output.includes('>') || output.includes('#') || output.includes('%')) {
-        finish({ ok: true, output });
-      }
-    }, 500);
-  });
+  if (!t) return { ok: false, error: 'Terminal does not exist' };
+  if (command != null && String(command).trim()) {
+    const error = t.commandTracker.start(String(command));
+    if (error) return error;
+    t.lastCommand = String(command).slice(0, 60);
+  }
+  return t.commandTracker.wait(timeoutMs);
 });
 ipcMain.handle('terminal:kill', (_, id) => {
   const t = terminals.get(id);
   if (t) {
+    t.commandTracker.end();
     try { t.term.kill(); } catch { /* ignore */ }
     terminals.delete(id);
     _broadcastTerminalEvent('terminal:exit', { id, exitCode: 0, killed: true });

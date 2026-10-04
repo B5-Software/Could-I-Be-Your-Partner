@@ -42,12 +42,14 @@
     "test:headless": "npm run build-app-bundle && electron tests/integration/headless-web.cjs",
     "test:tui": "npm run build-app-bundle && electron tests/integration/tui-session.cjs",
     "test:tui:tty": "node --test --test-force-exit tests/integration/tui-tty.test.cjs",
-    "format": "prettier --write src/main/core src/agent src/tui src/main/agent-runtime.js src/main/webui-agent-driver.js src/main/ipc src/main/services src/main/settings src/shared/pricing.ts src/renderer/core src/preload/channel-subscriptions.js scripts/build-app-bundle.js scripts/lib scripts/package.js scripts/eb-before-pack.js scripts/eb-after-pack.js tests/unit tests/integration eslint.config.cjs tsconfig.json src/main/vm/{guest-tool-worker,tool-files,tool-location,vm-download-manager,vm-file-dialog,vm-process,vm-tool-runtime,vm-tools,vm-theme}.js src/renderer/js/vm-file-dialog.js integrations/codeoss scripts/prepare-codeoss.js tests/fixtures/codeoss",
-    "format:check": "prettier --check src/main/core src/agent src/tui src/main/agent-runtime.js src/main/webui-agent-driver.js src/main/ipc src/main/services src/main/settings src/shared/pricing.ts src/renderer/core src/preload/channel-subscriptions.js scripts/build-app-bundle.js scripts/lib scripts/package.js scripts/eb-before-pack.js scripts/eb-after-pack.js tests/unit tests/integration eslint.config.cjs tsconfig.json src/main/vm/{guest-tool-worker,tool-files,tool-location,vm-download-manager,vm-file-dialog,vm-process,vm-tool-runtime,vm-tools,vm-theme}.js src/renderer/js/vm-file-dialog.js integrations/codeoss scripts/prepare-codeoss.js tests/fixtures/codeoss",
+    "format": "prettier --write src/main/core src/agent src/tui src/main/agent-runtime.js src/main/webui-agent-driver.js src/main/ipc src/main/services src/main/settings src/shared/pricing.ts src/renderer/core src/preload/channel-subscriptions.js scripts/build-app-bundle.js scripts/lib scripts/package.js scripts/eb-before-pack.js scripts/eb-after-pack.js tests/unit tests/integration eslint.config.cjs tsconfig.json src/main/vm/{guest-tool-worker,tool-files,tool-location,vm-download-manager,vm-file-dialog,vm-process,vm-tool-runtime,vm-tools,vm-theme}.js src/renderer/js/vm-file-dialog.js integrations/codeoss scripts/prepare-codeoss.js tests/fixtures/codeoss packages/npm scripts/prepare-npm.cjs scripts/publish-npm.cjs",
+    "format:check": "prettier --check src/main/core src/agent src/tui src/main/agent-runtime.js src/main/webui-agent-driver.js src/main/ipc src/main/services src/main/settings src/shared/pricing.ts src/renderer/core src/preload/channel-subscriptions.js scripts/build-app-bundle.js scripts/lib scripts/package.js scripts/eb-before-pack.js scripts/eb-after-pack.js tests/unit tests/integration eslint.config.cjs tsconfig.json src/main/vm/{guest-tool-worker,tool-files,tool-location,vm-download-manager,vm-file-dialog,vm-process,vm-tool-runtime,vm-tools,vm-theme}.js src/renderer/js/vm-file-dialog.js integrations/codeoss scripts/prepare-codeoss.js tests/fixtures/codeoss packages/npm scripts/prepare-npm.cjs scripts/publish-npm.cjs",
     "test:vm-picker": "npm run build-app-bundle && electron tests/integration/vm-file-picker-smoke.cjs",
     "test:codeoss:vm": "npm run prepare:codeoss && electron tests/integration/codeoss-vm.cjs",
     "tui": "node bin/cibyp-tui.js",
-    "tui:node": "node bin/cibyp-tui.js"
+    "tui:node": "node bin/cibyp-tui.js",
+    "prepare:npm": "node scripts/prepare-npm.cjs",
+    "publish:npm": "node scripts/publish-npm.cjs"
   },
   "author": {
     "name": "B5-Software",
@@ -112,6 +114,7 @@
           "*.cjs",
           "cibyp",
           "cibyp-tui",
+          "cibyp-code",
           "*.cmd",
           "*.ps1"
         ]
@@ -316,6 +319,7 @@
   "packageManager": "npm@11.19.0",
   "bin": {
     "cibyp": "bin/cibyp.js",
-    "cibyp-tui": "bin/cibyp-tui.js"
+    "cibyp-tui": "bin/cibyp-tui.js",
+    "cibyp-code": "bin/cibyp-code.js"
   }
 }

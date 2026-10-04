@@ -22,6 +22,10 @@ async function launch(
   } = {},
 ) {
   const root = path.resolve(__dirname, '../..');
+  if (mode === 'code') {
+    args = ['--mode=code', '--workspace=' + process.cwd(), '--workspace-local', ...args];
+    mode = 'tui';
+  }
   if (resources) {
     process.env.CIBYP_PACKAGED_RESOURCES = resources;
     process.env.CIBYP_ELECTRON_EXECUTABLE = executable;
@@ -36,6 +40,7 @@ async function launch(
 
   cibyp               Start the graphical App; use TUI when no desktop is available
   cibyp-tui           Start the terminal interface
+  cibyp-code          Start Code TUI in the current terminal directory
   cibyp-tui --mode=code --workspace=/path
 
 GUI and TUI share settings and cannot run at the same time.

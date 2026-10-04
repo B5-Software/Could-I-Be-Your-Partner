@@ -125,7 +125,7 @@ class TuiApp {
     }
     if (this._disposed) return this;
     // Create the first view with the saved language, appearance and affection.
-    await this.newSession(mode, opts.workspacePath);
+    await this.newSession(mode, opts.workspacePath, { local: opts.workspaceLocal });
     if (typeof this.runtime.getTodos === 'function')
       this.state.todos = await this.runtime.getTodos();
     this.pushEntry({
@@ -1025,6 +1025,9 @@ class TuiApp {
           for (const view of this._sessionViews.values()) view.state.todos = this.state.todos;
         if (this.state.modal?.kind === 'todo') this._openTodoModal();
         break;
+      case 'minimal':
+        this.state.minimalMode = event.minimalMode === true;
+        break;
       case 'usage': {
         // 运行时每轮结束推送：{ usage, context:{used,max,reserve,pct,inputPct,exact}, costUSD }
         const usage = event.usage || (event.data && event.data.usage) || event.data || null;
@@ -1087,7 +1090,7 @@ class TuiApp {
 
   // ---------------------------------------------------------------- 会话 / 命令
 
-  async newSession(mode, workspacePath) {
+  async newSession(mode, workspacePath, options = {}) {
     this._saveView();
     this._completionSelected = 0;
     this._completionDismissedText = null;
@@ -1097,7 +1100,7 @@ class TuiApp {
     let hostWorkspace = '';
     if (mode === 'code' && this.runtime.prepareWorkspace) {
       const result = await this.runtime.prepareWorkspace(key, workspacePath, {
-        local: Boolean(workspacePath && !workspacePath.startsWith('/workspace')),
+        local: options.local ?? Boolean(workspacePath && !workspacePath.startsWith('/workspace')),
       });
       if (result?.ok === false) {
         this.runtime.close(key);
@@ -1118,6 +1121,7 @@ class TuiApp {
       elapsedMs: 0,
       selection: null,
       workspace: workspacePath || '',
+      minimalMode: false,
       hostWorkspace,
     };
     this.editor = new LineEditor({ history: this.editor.history });
@@ -1190,6 +1194,7 @@ class TuiApp {
     this._streamEntry = null;
     this._startedAt = session.busy ? this.clock() : 0;
     this.state.mode = session.mode || 'chat';
+    this.state.minimalMode = session.minimalMode === true;
     this.state.title = session.title || '';
     this.state.workspace = session.workspacePath || '';
     this.state.hostWorkspace = session.hostWorkspacePath || '';
@@ -1638,6 +1643,47 @@ class TuiApp {
         });
         return;
       }
+      case 'minimal': {
+        const value = argText.trim().toLowerCase();
+        if (value && !['on', 'off', 'toggle'].includes(value)) {
+          this.pushEntry({
+            kind: 'system',
+            text: t('ui.tui.minimalUsage', '用法：/minimal [on|off]'),
+          });
+          return;
+        }
+        if (this.state.running) {
+          this.pushEntry({
+            kind: 'notice',
+            text: t('ui.tui.minimalBusy', '请先停止当前任务，再切换极简模式'),
+          });
+          return;
+        }
+        if (this.state.mode === 'babe') {
+          this.pushEntry({
+            kind: 'notice',
+            text: t('ui.tui.minimalBabe', '极简模式适用于 Chat 和 Code'),
+          });
+          return;
+        }
+        const enabled = value === 'on' || (value !== 'off' && !this.state.minimalMode);
+        const result = await this.runtime.setMinimalMode(this.activeKey, enabled);
+        if (!result?.ok) {
+          this.pushEntry({
+            kind: 'system',
+            text: result?.error || t('ui.tui.unknownError', '未知错误'),
+          });
+          return;
+        }
+        this.state.minimalMode = result.minimalMode;
+        this.pushEntry({
+          kind: 'notice',
+          text: this.state.minimalMode
+            ? t('ui.tui.minimalOn', 'Minimal 已开启：固定提示词 + shell / 文件编辑')
+            : t('ui.tui.minimalOff', 'Minimal 已关闭'),
+        });
+        return;
+      }
       case 'theme': {
         const value = argText.trim().toLowerCase();
         if (value && !['on', 'off', 'toggle'].includes(value)) {
@@ -1836,6 +1882,7 @@ class TuiApp {
         return;
       }
       state.title = loaded?.title || '';
+      state.minimalMode = loaded?.minimalMode === true;
       state.affection = loaded?.affection ?? state.affection;
       state.messages = [];
       state.scrollOffset = 0;

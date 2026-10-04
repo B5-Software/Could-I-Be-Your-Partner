@@ -92,6 +92,7 @@ function createAgentRuntime({
       busy: session.busy,
       title: session.title,
       model: session.agent?.getActiveModelId() || '',
+      minimalMode: session.agent?.minimalMode === true,
       workspacePath: session.agent ? session.agent.workspacePath : null,
       hostWorkspacePath: session.hostWorkspacePath || null,
       conversationId: session.agent ? session.agent.conversationId : null,
@@ -813,6 +814,21 @@ function createAgentRuntime({
       return { ok: true };
     },
 
+    async setMinimalMode(key, enabled) {
+      const session = sessions.get(key);
+      if (!session) return { ok: false, error: 'Unknown session' };
+      if (session.busy)
+        return { ok: false, error: 'Stop the current task before changing Minimal mode' };
+      session.busy = true;
+      try {
+        const result = await session.agent.setMinimalMode(enabled);
+        if (result.ok) emit({ type: 'minimal', key, minimalMode: result.minimalMode });
+        return result;
+      } finally {
+        session.busy = false;
+      }
+    },
+
     /** 设置工作区（Code 模式） */
     listLocalWorkspaceDirectories: (directory) => api.workspaceListLocalDirectories(directory),
 
@@ -836,6 +852,7 @@ function createAgentRuntime({
       const workspace = await validateWorkspace(workspacePath, options);
       if (!workspace.ok) return workspace;
       if (session.busy) return { ok: false, error: 'Task started while selecting workspace' };
+      await session.agent.resetMinimalShell();
       session.agent.workspacePath = workspace.path;
       session.agent.codeWorkspacePath = workspace.path;
       session.agent.cachedWorkspaceTree = workspace.tree;
@@ -879,6 +896,7 @@ function createAgentRuntime({
           id: conv.id || id,
           title: conv.title || '',
           affection: typeof conv.affection === 'number' ? conv.affection : null,
+          minimalMode: session.agent.minimalMode === true,
           messages: flattenMessages(conv),
         };
       } finally {

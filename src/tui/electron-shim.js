@@ -154,7 +154,7 @@ function createElectronShim() {
     })(),
     isPackaged: !!process.env.CIBYP_PACKAGED_RESOURCES,
     isReady: () => true,
-    whenReady: () => Promise.resolve(),
+    whenReady: () => nativeTheme.ready,
     getPath: (name) => paths[name] || permissive('app.getPath(' + name + ')'),
     setPath: (name, value) => {
       paths[name] = value;
@@ -248,12 +248,7 @@ function createElectronShim() {
     readShortcutLink: () => ({}),
   };
 
-  const nativeTheme = Object.assign(new EventEmitter(), {
-    shouldUseDarkColors: true,
-    shouldUseHighContrastColors: false,
-    themeSource: 'dark',
-    getHighContrastColors: () => ({ window: '', text: '' }),
-  });
+  const nativeTheme = require('./native-theme').createNativeTheme();
 
   const permissiveSession = () => {
     const ses = permissive('session');

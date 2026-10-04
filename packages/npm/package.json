@@ -1,0 +1,46 @@
+{
+  "name": "cibyp",
+  "version": "1.9.0-alpha.20",
+  "description": "Could I Be Your Partner — desktop and terminal AI Agent",
+  "license": "GPL-3.0-or-later",
+  "bin": {
+    "cibyp": "bin/cibyp.cjs",
+    "cibyp-tui": "bin/cibyp-tui.cjs",
+    "cibyp-code": "bin/cibyp-code.cjs"
+  },
+  "scripts": {
+    "postinstall": "node lib/install.cjs"
+  },
+  "os": [
+    "win32",
+    "darwin",
+    "linux"
+  ],
+  "cpu": [
+    "x64",
+    "arm64"
+  ],
+  "files": [
+    "bin",
+    "lib",
+    "runtime.json",
+    "LICENSE",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=22.14.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/B5-Software/Could-I-Be-Your-Partner.git",
+    "directory": "packages/npm"
+  },
+  "homepage": "https://github.com/B5-Software/Could-I-Be-Your-Partner",
+  "bugs": {
+    "url": "https://github.com/B5-Software/Could-I-Be-Your-Partner/issues"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  }
+}

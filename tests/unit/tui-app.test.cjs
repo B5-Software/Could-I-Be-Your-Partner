@@ -132,6 +132,31 @@ function typeText(app, text) {
   for (const char of text) app.editor.insert(char);
 }
 
+test('Minimal command is per session, visible in the footer and restored from history', async () => {
+  const { app, runtime } = await makeApp();
+  runtime.setMinimalMode = async (key, enabled) => {
+    runtime.sessions.get(key).minimalMode = enabled;
+    return { ok: true, minimalMode: enabled };
+  };
+  typeText(app, '/minimal');
+  await app.handleKey({ name: 'enter' });
+  assert.equal(app.state.minimalMode, true);
+  assert.match(frameText(app), /Chat · Minimal/);
+  const key = app.activeKey;
+  await app.newSession('chat');
+  assert.equal(app.state.minimalMode, false);
+  await app._switchSession(key);
+  assert.equal(app.state.minimalMode, true);
+  app.state.running = true;
+  typeText(app, '/minimal off');
+  await app.handleKey({ name: 'enter' });
+  assert.equal(app.state.minimalMode, true);
+  app.state.running = false;
+  runtime.openHistory = async () => ({ ok: true, minimalMode: false, messages: [] });
+  await app._openHistory('restore');
+  assert.equal(app.state.minimalMode, false);
+});
+
 test('session commands select named conversations and deletion requires confirmation', async () => {
   const { app, runtime } = await makeApp();
   runtime.listHistory = async () => [

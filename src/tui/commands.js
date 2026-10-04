@@ -40,6 +40,7 @@ const COMMANDS = [
   { name: 'cwd', args: '', desc: '用系统文件管理器打开当前工作区', group: 'general' },
   { name: 'config', args: '[搜索]', desc: '搜索和编辑共享设置', group: 'general' },
   { name: 'theme', args: '[on|off]', desc: '切换是否沿用 GUI 色系（持久化）', group: 'general' },
+  { name: 'minimal', args: '[on|off]', desc: '切换极简模式（保存到当前会话）', group: 'session' },
   { name: 'help', args: '', desc: '显示帮助', group: 'general' },
   {
     name: 'mode',
@@ -228,7 +229,7 @@ function suggestArgs(name, argPrefix, context = {}) {
     .trimStart()
     .toLowerCase();
   const items = [];
-  if (name === 'theme') {
+  if (name === 'theme' || name === 'minimal') {
     for (const value of ['on', 'off']) {
       if (value.startsWith(prefix)) items.push({ label: value, value });
     }

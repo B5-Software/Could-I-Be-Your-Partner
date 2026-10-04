@@ -242,10 +242,10 @@ function isAnonymousZen(llm) {
  * 合并免费池要求的核心工具：调用方已有工具 → 补全缺失项（真实描述）；
  * 无工具的辅助调用（标题/游戏/描述等）→ 注入占位定义，避免模型误用。
  */
-function mergeFreeTierTools(tools) {
+function mergeFreeTierTools(tools, minimalMode = false) {
   const list = Array.isArray(tools) ? tools.slice() : [];
   const present = new Set(list.map(t => t && (t.function?.name || t.name)).filter(Boolean));
-  const source = list.length > 0 ? FREE_TIER_AGENT_TOOLS : FREE_TIER_STUB_TOOLS;
+  const source = list.length > 0 && !minimalMode ? FREE_TIER_AGENT_TOOLS : FREE_TIER_STUB_TOOLS;
   for (const name of FREE_TIER_CORE_TOOLS) {
     if (!present.has(name)) list.push(source[name]);
   }
@@ -269,7 +269,7 @@ function buildLLMRequest(llm, opts) {
   // 匿名 Zen：免费池强制 agent 形状（stream + 核心工具名），带 key 不受限
   const zenAnonymous = provider === 'opencode-zen' && isAnonymousZen(llm);
   const buildOpts = zenAnonymous
-    ? { ...opts, stream: true, tools: mergeFreeTierTools(opts.tools) }
+    ? { ...opts, stream: true, tools: mergeFreeTierTools(opts.tools, opts.minimalMode === true) }
     : opts;
 
   let req;

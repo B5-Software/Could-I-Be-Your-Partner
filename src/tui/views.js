@@ -342,7 +342,14 @@ function renderUsageSummary(theme, state) {
 function renderStatusLine(theme, state, width) {
   const parts = [];
   const accent = accentFor(state.mode);
-  parts.push(paint(theme, accent, MODE_LABEL[state.mode] || state.mode, { bold: true }));
+  parts.push(
+    paint(
+      theme,
+      accent,
+      (MODE_LABEL[state.mode] || state.mode) + (state.minimalMode ? ' · Minimal' : ''),
+      { bold: true },
+    ),
+  );
   if (state.model) parts.push(truncate(state.model, 28));
   if (state.mode === 'babe' && state.affection != null) {
     parts.push(

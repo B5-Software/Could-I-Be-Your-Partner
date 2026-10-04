@@ -26,6 +26,8 @@ module.exports = function registerWorkspacesIpc({
   _putHistoryIndexEntry,
   _removeHistoryIndexEntry,
   _deleteHistoryImages,
+  hasDesktop = () => require('../core/graphical-environment').hasGraphicalEnvironment(),
+  openDirectory = (directory) => require('../services/open-directory').openDirectory(directory),
 }) {
   ipcMain.handle('workspace:resolve', async (_, directory, options = {}) => {
     try {
@@ -247,7 +249,7 @@ module.exports = function registerWorkspacesIpc({
 
   ipcMain.handle('workspace:cwd', async (_, directory) => {
     try {
-      if (!(await require('../core/graphical-environment').hasGraphicalEnvironment()))
+      if (!(await hasDesktop()))
         return { ok: false, code: 'NO_DESKTOP', error: 'No usable graphical desktop is available' };
       let local = directory || workspacesBaseDir;
       if (require('../vm/tool-location').isVmOperation(() => vmService)) {
@@ -260,6 +262,10 @@ module.exports = function registerWorkspacesIpc({
             ok: false,
             error: 'VM workspace has no host mirror. Export it with the VM file manager first.',
           };
+        // File manifests omit empty directories. An empty VM workspace still
+        // needs its own local mirror before opening the host file manager.
+        const exists = await io.exists(target.vm);
+        if (!exists) return { ok: false, error: 'The VM workspace no longer exists' };
         const external = vmService.externalPair(target.vm);
         const mapping = io
           .mappingRoots()
@@ -267,6 +273,7 @@ module.exports = function registerWorkspacesIpc({
           .find(([, vm]) => target.vm === vm || target.vm.startsWith(vm + '/'));
         if (!external && !mapping)
           return { ok: false, error: 'Workspace has no synchronized host mapping' };
+        await fs.promises.mkdir(local, { recursive: true });
         const result = external
           ? await vmService.pullExternalDir(target.vm, { force: true })
           : await vmService
@@ -274,7 +281,7 @@ module.exports = function registerWorkspacesIpc({
               .sync({ direction: 'pull', reason: 'cwd-export' });
         if (!result.ok) return result;
       }
-      return await require('../services/open-directory').openDirectory(local);
+      return await openDirectory(local);
     } catch (error) {
       return { ok: false, error: error.message };
     }

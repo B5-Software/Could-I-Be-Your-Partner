@@ -5,7 +5,7 @@ volume=${3%/}
 directory="$volume/usr/local/bin"
 app="$volume/Applications/Could I Be Your Partner.app/Contents/Resources/cli"
 mkdir -p "$directory"
-for command in cibyp cibyp-tui; do
+for command in cibyp cibyp-tui cibyp-code; do
     destination="$directory/$command"
     target="$app/$command"
     if [ -e "$destination" ] || [ -L "$destination" ]; then

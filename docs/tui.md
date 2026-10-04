@@ -4,7 +4,7 @@
 （桌面 GUI / WebUI / Remote / **TUI**），共享同一运行时与历史数据。
 
 ```bash
-npx cibyp-tui                              # Chat 模式（推荐入口）
+npx --package=cibyp cibyp-tui                              # Chat 模式（推荐入口）
 node bin/cibyp-tui.js                      # 同上（仓库内）
 node bin/cibyp-tui.js --mode=babe          # Babe 模式
 node bin/cibyp-tui.js --mode=code --workspace=/path
@@ -212,3 +212,11 @@ npm run test:tui:tty    # 真终端回归（PTY 驱动纯 Node CLI）
 npm run test:desktop    # 全部集成（GUI 冒烟 / WebUI 无头 / TUI / 真终端）
 npm run check           # lint + format + typecheck + 单元 + legacy
 ```
+
+## Code 工作区与 Minimal
+
+`cibyp-code` 使用当前终端的宿主目录进入 Code TUI；VM 模式自动映射并同步该目录。
+`/minimal [on|off]` 切换当前会话的 Minimal 预设，历史恢复后保持该会话偏好。
+开启后状态栏显示 `Chat · Minimal` 或 `Code · Minimal`，仅提供持久 shell 和文件编辑器。
+不注入待办、技能目录、文件树或命运之牌，不调用标题/工具选择/路由辅助模型。
+关闭时恢复普通模式；运行中的任务需先停止再切换。

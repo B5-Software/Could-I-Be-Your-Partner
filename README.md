@@ -6,6 +6,36 @@
 
 **License**: GPL-3.0-or-later | **Author**: B5-Software
 
+## 状态与版本
+
+| 项目 / 渠道 | 状态 / 渠道标识 | 版本 | 查看 |
+| --- | --- | --- | --- |
+| 工程检查 | [![Checks][checks-badge]][checks-url] | [![main 版本][source-version-badge]][source-url] | [检查与回归][checks-url] |
+| 构建与发布 | [![Build][build-badge]][build-url] | [![待构建版本][source-version-badge]][source-url] | [六平台构建][build-url] |
+| Release | [![正式版发布时间][release-date-badge]][release-url] | [![正式版][release-version-badge]][release-url] | [稳定版下载][release-url] |
+| Prerelease | [![预发布渠道][prerelease-channel-badge]][prerelease-url] | [![预发布版][prerelease-version-badge]][prerelease-url] | [预发布版下载][prerelease-url] |
+| npm | [![npm 月下载量][npm-downloads-badge]][npm-url] | [![npm latest][npm-version-badge]][npm-url] | [安装与发布说明](docs/npm-publishing.md) |
+
+徽章自动读取 GitHub / npm；预发布版本筛选带 `-` 的版本标签，正式版排除预发布。
+构建徽章表示发布工作流状态：版本未变化时跳过打包，未配置 npm 发布身份时也不会发布。
+npm 首次发布前显示 `not found`；npm `latest` 可包含 alpha 版，与 GitHub 正式版通道独立。
+
+[checks-badge]: https://img.shields.io/github/actions/workflow/status/B5-Software/Could-I-Be-Your-Partner/check.yml?branch=main&label=checks&logo=githubactions&logoColor=white&style=flat-square
+[checks-url]: https://github.com/B5-Software/Could-I-Be-Your-Partner/actions/workflows/check.yml
+[build-badge]: https://img.shields.io/github/actions/workflow/status/B5-Software/Could-I-Be-Your-Partner/release.yml?branch=main&label=build&logo=githubactions&logoColor=white&style=flat-square
+[build-url]: https://github.com/B5-Software/Could-I-Be-Your-Partner/actions/workflows/release.yml
+[source-version-badge]: https://img.shields.io/github/package-json/v/B5-Software/Could-I-Be-Your-Partner/main?label=main&logo=github&style=flat-square
+[source-url]: https://github.com/B5-Software/Could-I-Be-Your-Partner/blob/main/package.json
+[release-date-badge]: https://img.shields.io/github/release-date/B5-Software/Could-I-Be-Your-Partner?display_date=published_at&label=released&logo=github&style=flat-square
+[release-version-badge]: https://img.shields.io/github/v/release/B5-Software/Could-I-Be-Your-Partner?label=stable&logo=github&style=flat-square
+[release-url]: https://github.com/B5-Software/Could-I-Be-Your-Partner/releases/latest
+[prerelease-channel-badge]: https://img.shields.io/badge/channel-Prerelease-orange?logo=github&style=flat-square
+[prerelease-version-badge]: https://img.shields.io/github/v/release/B5-Software/Could-I-Be-Your-Partner?include_prereleases&filter=*-*&sort=semver&label=preview&logo=github&style=flat-square
+[prerelease-url]: https://github.com/B5-Software/Could-I-Be-Your-Partner/releases
+[npm-downloads-badge]: https://img.shields.io/npm/dm/cibyp?label=downloads&logo=npm&style=flat-square
+[npm-version-badge]: https://img.shields.io/npm/v/cibyp/latest?label=latest&logo=npm&style=flat-square
+[npm-url]: https://www.npmjs.com/package/cibyp
+
 ---
 
 ## 功能特色
@@ -108,6 +138,28 @@
 ---
 
 ## 快速开始
+
+### 安装已发布的完整应用
+
+从 [GitHub Releases][prerelease-url] 下载系统安装包，或在 npm 首次发布完成后使用：
+
+```sh
+npm install -g cibyp
+cibyp          # GUI；无可用图形环境时进入 TUI
+cibyp-tui      # TUI
+cibyp-code     # Code TUI，使用终端当前目录作为宿主工作区
+# 无需全局安装：
+npx cibyp
+npx --package=cibyp cibyp-code
+# 更新：
+npm install -g cibyp@latest
+```
+
+npm 安装需要 Node.js >= 22.14，安装时按系统和架构获取完整 GUI/TUI 运行时，
+注册当前用户的应用启动器。更新替换同一个启动入口，保留设置、历史和工作区。
+安装公开包无需 npm 登录；维护者登录与 CI 发布配置见 [npm 发布说明](docs/npm-publishing.md#登录-npm-与配置-ci)。
+
+以下步骤用于从源码开发和构建。
 
 ### 1. 克隆项目
 

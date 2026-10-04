@@ -399,6 +399,7 @@ function startTui(options) {
     await app.start({
       mode: modeArg ? modeArg.slice('--mode='.length) : 'chat',
       workspacePath: workspaceArg ? workspaceArg.slice('--workspace='.length) : undefined,
+      workspaceLocal: argv.includes('--workspace-local'),
     });
     if (bootState?.failed || bootState?.timeout)
       app.pushEntry({ kind: 'system', text: bootState.detail || 'VM startup failed' });

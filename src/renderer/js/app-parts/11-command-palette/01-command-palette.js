@@ -721,10 +721,11 @@
       if (typeof window.showToast === 'function') window.showToast('Babe 模式不支持极简模式', 'warn', 3000);
       return;
     }
-    ag.minimalMode = !ag.minimalMode;
-    if (typeof ag.resetOptimizedTools === 'function') { try { ag.resetOptimizedTools(); } catch (_) {} }
-    if (typeof ag.applySettings === 'function') { try { ag.applySettings(ag.settings); } catch (_) {} }
-    try { await ag.saveToHistory?.(); } catch (_) {}
+    const result = await ag.setMinimalMode(!ag.minimalMode);
+    if (!result.ok) {
+      window.showToast?.(result.error, 'warn', 3500);
+      return;
+    }
     updateMinimalBadge(input, ag.minimalMode);
     if (typeof window.showToast === 'function') {
       window.showToast(ag.minimalMode ? '已开启极简模式（精简提示词 + 最小工具集）' : '已关闭极简模式', 'success', 3500);

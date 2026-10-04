@@ -7,6 +7,45 @@ const path = require('node:path');
 const { resolveWorkspaceTarget } = require('../../src/main/services/workspace-target');
 const register = require('../../src/main/ipc/workspaces');
 
+test('/cwd creates a host mirror for an empty VM workspace and rejects missing guest directories', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cibyp-cwd-vm-'));
+  const mirror = path.join(root, 'empty-guest');
+  const handlers = new Map();
+  let exists = true,
+    opened = 0;
+  const vm = {
+    workspaceRoot: root,
+    runtime: { location: 'vm', vm: { workspaceMount: '/workspace' } },
+    instance: { state: 'ready', exec: async () => ({ stdout: exists ? 'yes\n' : 'no\n' }) },
+    toHostPath: () => mirror,
+    externalPair: () => null,
+    workspacePair: () => ({ sync: async () => ({ ok: true }) }),
+  };
+  register({
+    ipcMain: { handle: (name, handler) => handlers.set(name, handler) },
+    vmService: vm,
+    fs,
+    path,
+    workspacesBaseDir: root,
+    hasDesktop: async () => true,
+    openDirectory: async (directory) => {
+      assert.equal(directory, mirror);
+      assert.ok(fs.statSync(directory).isDirectory());
+      opened++;
+      return { ok: true, path: directory };
+    },
+  });
+  try {
+    assert.equal((await handlers.get('workspace:cwd')({}, '/workspace/empty-guest')).ok, true);
+    assert.equal(opened, 1);
+    exists = false;
+    assert.equal((await handlers.get('workspace:cwd')({}, '/workspace/missing')).ok, false);
+    assert.equal(opened, 1);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('TUI and Code-OSS use the same external VM project identity and preserve the local path', async () => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'cibyp-workspace-target-'));
   try {

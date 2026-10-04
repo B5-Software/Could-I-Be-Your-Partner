@@ -100,6 +100,169 @@ function llmScript(responses) {
   return handler;
 }
 
+test('Minimal uses only two tools and a fixed prompt; file edits and shell polling preserve shared routing', async () => {
+  const llm = llmScript([{ content: 'done' }]);
+  const handlers = baseHandlers({ llmChat: llm });
+  handlers.set('settings:get', () => ({
+    ...structuredClone(SETTINGS),
+    autoOptimizeToolSelection: true,
+    decision: { enabled: true },
+    llm: {
+      ...SETTINGS.llm,
+      pool: [
+        {
+          id: 'p',
+          model: 'stub-model',
+          provider: 'openai',
+          apiUrl: 'http://stub.local',
+          priority: 0,
+        },
+      ],
+      routing: { modelStrategy: 'intelligence', effortStrategy: 'jev' },
+    },
+  }));
+  handlers.set('tarot:draw', () => assert.fail('Minimal must not draw tarot'));
+  handlers.set('todo:get', () => ({
+    ok: true,
+    revision: 1,
+    items: [{ id: 1, text: 'shared todo', done: false }],
+  }));
+  handlers.set('decision:choice', () => assert.fail('Minimal must not call a routing model'));
+  const runtime = createAgentRuntime({
+    ipcMain: createFakeIpcMain(handlers),
+    eventBus: createEventBus(),
+    interactionPolicy: INTERACTION_POLICY.AUTO_APPROVE,
+  });
+  runtime.createSession({ key: 'minimal', minimalMode: true });
+  assert.equal((await runtime.sendMessage('minimal', 'hello minimal')).ok, true);
+  assert.equal(llm.calls.length, 1, 'No title or tool-selection LLM calls');
+  const call = llm.calls[0];
+  assert.equal(call.messages[0].content, 'You are a helpful software engineer assistant.');
+  assert.deepEqual(
+    call.options.tools.map((tool) => tool.function.name),
+    ['bash', 'str_replace_editor'],
+  );
+  const agent = runtime.sessions.get('minimal').agent;
+  let contents = 'one\r\ntwo\r\n';
+  handlers.set('fs:readFile', (_event, file) => {
+    assert.equal(file, agent._resolveWorkspacePath('a.txt'));
+    return { ok: true, content: contents, encoding: 'utf-8', eol: 'crlf' };
+  });
+  handlers.set('fs:writeFile', (_event, _file, content, options) => {
+    contents = content;
+    assert.equal(options.eol, 'crlf');
+    return { ok: true };
+  });
+  assert.equal(
+    (
+      await agent.executeTool('str_replace_editor', {
+        command: 'view',
+        path: 'a.txt',
+        view_range: [2, 2],
+      })
+    ).content,
+    '2: two',
+  );
+  assert.equal(
+    (
+      await agent.executeTool('str_replace_editor', {
+        command: 'str_replace',
+        path: 'a.txt',
+        old_str: '',
+        new_str: 'bad',
+      })
+    ).ok,
+    false,
+  );
+  assert.equal(
+    (
+      await agent.executeTool('str_replace_editor', {
+        command: 'insert',
+        path: 'a.txt',
+        insert_line: 1,
+        new_str: 'middle',
+      })
+    ).ok,
+    true,
+  );
+  assert.equal(contents, 'one\r\nmiddle\r\ntwo\r\n');
+  assert.equal((await agent.executeTool('webSearch', { query: 'not minimal' })).ok, false);
+  const shell = [];
+  handlers.set('terminal:make', () => ({ ok: true, terminalId: 77 }));
+  handlers.set('terminal:await', (_event, id, command) => {
+    shell.push([id, command]);
+    return { ok: true, running: Boolean(command), output: 'chunk' };
+  });
+  await agent.executeTool('bash', { command: 'export X=1' });
+  await agent.executeTool('bash', { action: 'poll' });
+  assert.deepEqual(shell, [
+    [77, 'export X=1'],
+    [77, null],
+  ]);
+  const transcript = JSON.stringify(agent.contextManager.getHistoryMessages());
+  assert.equal((await runtime.setMinimalMode('minimal', false)).ok, true);
+  await agent.observeRuntimeContext();
+  assert.ok(JSON.stringify(agent.contextManager.systemPrompt).includes('shared todo'));
+  assert.equal((await runtime.setMinimalMode('minimal', true)).ok, true);
+  assert.equal(
+    agent.contextManager.systemPrompt.content,
+    'You are a helpful software engineer assistant.',
+  );
+  assert.ok(JSON.stringify(agent.contextManager.getHistoryMessages()).includes('hello minimal'));
+  assert.ok(transcript.includes('hello minimal'));
+  runtime.sessions.get('minimal').busy = true;
+  assert.equal((await runtime.setMinimalMode('minimal', false)).ok, false);
+});
+
+test('Minimal shell follows workspace changes and history restores its preset without reusing the old shell', async () => {
+  const handlers = baseHandlers({ llmChat: llmScript([{ content: 'done' }]) });
+  const directories = [],
+    killed = [];
+  let saved;
+  handlers.set('terminal:make', (_event, cwd) => {
+    directories.push(cwd);
+    return { ok: true, terminalId: directories.length };
+  });
+  handlers.set('terminal:await', () => ({ ok: true, exitCode: 0, output: 'done' }));
+  handlers.set('terminal:kill', (_event, id) => {
+    killed.push(id);
+    return { ok: true };
+  });
+  handlers.set('code:saveHistory', (_event, _workspace, _id, data) => {
+    saved = structuredClone(data);
+    return { ok: true };
+  });
+  handlers.set('code:loadHistory', () => saved);
+  const runtime = createAgentRuntime({
+    ipcMain: createFakeIpcMain(handlers),
+    eventBus: createEventBus(),
+    interactionPolicy: INTERACTION_POLICY.AUTO_APPROVE,
+  });
+  const first = path.join(os.tmpdir(), 'minimal-shell-first');
+  const second = path.join(os.tmpdir(), 'minimal-shell-second');
+  runtime.createSession({
+    key: 'minimal-shell',
+    mode: 'code',
+    workspacePath: first,
+    minimalMode: true,
+  });
+  assert.equal((await runtime.sendMessage('minimal-shell', 'remember this message')).ok, true);
+  assert.equal(saved.minimal, true);
+  const agent = runtime.sessions.get('minimal-shell').agent;
+  await agent.executeTool('bash', { command: 'echo first' });
+  assert.equal((await runtime.setWorkspace('minimal-shell', second)).ok, true);
+  await agent.executeTool('bash', { command: 'echo second' });
+  assert.deepEqual(directories, [first, second]);
+  assert.deepEqual(killed, [1]);
+  const result = await runtime.openHistory('minimal-shell', saved.id);
+  assert.equal(result.ok, true);
+  assert.equal(result.minimalMode, true);
+  assert.ok(JSON.stringify(result.messages).includes('remember this message'));
+  assert.deepEqual(killed, [1, 2]);
+  await agent.executeTool('bash', { command: 'echo restored' });
+  assert.equal(directories[2], first);
+});
+
 test('LLM retries reach headless frontends as structured notifications without entering conversation history', async () => {
   const eventBus = createEventBus(),
     notices = [];

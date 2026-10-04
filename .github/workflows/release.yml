@@ -5,6 +5,11 @@ on:
     branches: [main]
   workflow_dispatch:
     inputs:
+      npm_only:
+        description: Build and publish npm from this revision without changing the version or GitHub Release
+        required: false
+        default: false
+        type: boolean
       publish_run_id:
         description: Publish existing build artifacts (leave empty for normal version detection)
         required: false
@@ -63,7 +68,7 @@ jobs:
       # Pin the build revision while it is still a branch head. GitHub requires
       # workflow-write permission to auto-tag an unreferenced workflow commit.
       - name: Pin version tag before building
-        if: steps.check.outputs.changed == 'true'
+        if: steps.check.outputs.changed == 'true' && !inputs.npm_only
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.check.outputs.version }}
@@ -81,10 +86,10 @@ jobs:
               -f "ref=refs/tags/$TAG" -f "sha=$GITHUB_SHA"
           fi
 
-  # ---- 四平台打包（版本递增时） ----
+  # ---- 六平台打包（版本递增或手动 npm 首次发布时） ----
   build:
     needs: [test, detect]
-    if: needs.detect.outputs.changed == 'true'
+    if: (needs.detect.outputs.changed == 'true' || inputs.npm_only) && inputs.publish_run_id == ''
     strategy:
       fail-fast: false
       matrix:
@@ -139,6 +144,9 @@ jobs:
       - name: Build (${{ matrix.name }})
         run: npm run ${{ matrix.script }}
 
+      - name: Archive complete npm runtime
+        run: node scripts/prepare-npm.cjs --archive
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v7
         with:
@@ -150,12 +158,14 @@ jobs:
             dist/*-mac.zip
             dist/*.AppImage
             dist/*.deb
+            dist/cibyp-runtime-*.tar.gz
+            dist/cibyp-runtime-*.json
           if-no-files-found: error
 
   # ---- 发布到 GitHub Releases（tag: v<version>） ----
   release:
     needs: [test, detect, build]
-    if: always() && needs.test.result == 'success' && needs.detect.result == 'success' && (needs.build.result == 'success' || inputs.publish_run_id != '')
+    if: always() && !inputs.npm_only && needs.test.result == 'success' && needs.detect.result == 'success' && (needs.build.result == 'success' || inputs.publish_run_id != '')
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -196,4 +206,56 @@ jobs:
           PRERELEASE="${{ needs.detect.outputs.prerelease }}"
           ARGS=(--title "v$VERSION" --generate-notes)
           if [ "$PRERELEASE" = "true" ]; then ARGS+=(--prerelease); fi
-          gh release create "v$VERSION" release-artifacts/* --verify-tag "${ARGS[@]}"
+          if gh release view "v$VERSION" >/dev/null 2>&1; then
+            gh release upload "v$VERSION" release-artifacts/* --clobber
+          else
+            gh release create "v$VERSION" release-artifacts/* --verify-tag "${ARGS[@]}"
+          fi
+
+  npm:
+    needs: [test, detect, build, release]
+    if: always() && needs.test.result == 'success' && needs.detect.result == 'success' && (needs.release.result == 'success' || (inputs.npm_only && (needs.build.result == 'success' || inputs.publish_run_id != '')))
+    runs-on: ubuntu-latest
+    concurrency:
+      group: npm-publish
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    env:
+      NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.npm_only && github.sha || format('v{0}', needs.detect.outputs.version) }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          registry-url: https://registry.npmjs.org
+      - name: Verify npm artifact revision
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILD_RUN_ID: ${{ inputs.publish_run_id || github.run_id }}
+        run: |
+          if [[ ! "$BUILD_RUN_ID" =~ ^[0-9]+$ ]]; then exit 1; fi
+          BUILD_SHA=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$BUILD_RUN_ID" --jq '.head_sha')
+          if [ "$BUILD_SHA" != "$(git rev-parse HEAD)" ]; then
+            echo "::error::npm artifacts and source refer to different commits."
+            exit 1
+          fi
+      - name: Download verified runtime artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: npm-assets
+          merge-multiple: true
+          run-id: ${{ inputs.publish_run_id || github.run_id }}
+          github-token: ${{ github.token }}
+      - name: Prepare and verify platform packages
+        run: npm run prepare:npm -- --assets npm-assets --output npm-dist
+      - name: Publish runtime packages and launcher
+        if: env.NODE_AUTH_TOKEN != '' || vars.NPM_TRUSTED_PUBLISHING == 'true'
+        run: npm run publish:npm -- npm-dist
+      - name: Explain first-publication setup
+        if: env.NODE_AUTH_TOKEN == '' && vars.NPM_TRUSTED_PUBLISHING != 'true'
+        run: echo "::notice::npm packages verified but not published. Configure NPM_TOKEN for first publication, or NPM_TRUSTED_PUBLISHING=true after configuring all packages' trusted publishers. See docs/npm-publishing.md."

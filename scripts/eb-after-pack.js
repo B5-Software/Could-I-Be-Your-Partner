@@ -50,6 +50,7 @@ module.exports = async function afterPack(context) {
     '/LICENSE',
     '/bin/cibyp.js',
     '/bin/cibyp-tui.js',
+    '/bin/cibyp-code.js',
     '/src/main/main.js',
     '/src/renderer/js/app.js',
     '/src/shared/generated/pricing.cjs',

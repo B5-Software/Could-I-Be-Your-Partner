@@ -50,6 +50,7 @@ module.exports = [
       'scripts/**/*.{js,cjs}',
       'bin/*.js',
       'build/cli/*.cjs',
+      'packages/npm/**/*.cjs',
       'tests/**/*.{js,cjs}',
       'integrations/codeoss/**/*.{js,cjs}',
       '*.cjs',

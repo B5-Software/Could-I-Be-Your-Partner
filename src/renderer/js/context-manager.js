@@ -135,6 +135,12 @@ class ContextManager {
     if (typeof content === 'string') this._contextSources.set(name, content);
   }
 
+  resetContextSources() {
+    this._contextSources.clear();
+    this._admittedSources = null;
+    this.invalidateRealBasis();
+  }
+
   admitContextUpdates() {
     const current = new Map([['系统提示', this._latestSystemPrompt], ...this._contextSources]);
     if (!this._admittedSources || this._epochCheckpoint !== this.checkpointCount) {
