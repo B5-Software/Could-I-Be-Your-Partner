@@ -14,10 +14,10 @@
 | 构建与发布 | [![Build][build-badge]][build-url] | [![待构建版本][source-version-badge]][source-url] | [六平台构建][build-url] |
 | Release | [![正式版发布时间][release-date-badge]][release-url] | [![正式版][release-version-badge]][release-url] | [稳定版下载][release-url] |
 | Prerelease | [![预发布渠道][prerelease-channel-badge]][prerelease-url] | [![预发布版][prerelease-version-badge]][prerelease-url] | [预发布版下载][prerelease-url] |
-| npm | [![npm 月下载量][npm-downloads-badge]][npm-url] | [![npm latest][npm-version-badge]][npm-url] | [安装与发布说明](docs/npm-publishing.md) |
+| npm 启动器 | [![npm 发布][npm-build-badge]][npm-build-url] [![npm 月下载量][npm-downloads-badge]][npm-url] | [![npm latest][npm-version-badge]][npm-url] | [安装与发布说明](docs/npm-publishing.md) |
 
 徽章自动读取 GitHub / npm；预发布版本筛选带 `-` 的版本标签，正式版排除预发布。
-构建徽章表示发布工作流状态：版本未变化时跳过打包，未配置 npm 发布身份时也不会发布。
+构建徽章表示 GitHub 发布工作流状态：App 版本未变化时跳过打包；npm 启动器版本已经发布时跳过重复发布。
 npm 版本是独立的纯 JS 启动器版本；App 二进制与自动更新来自 GitHub Release，默认 preview 通道包含 alpha。
 
 [checks-badge]: https://img.shields.io/github/actions/workflow/status/B5-Software/Could-I-Be-Your-Partner/check.yml?branch=main&label=checks&logo=githubactions&logoColor=white&style=flat-square
@@ -32,6 +32,8 @@ npm 版本是独立的纯 JS 启动器版本；App 二进制与自动更新来�
 [prerelease-channel-badge]: https://img.shields.io/badge/channel-Prerelease-orange?logo=github&style=flat-square
 [prerelease-version-badge]: https://img.shields.io/github/v/release/B5-Software/Could-I-Be-Your-Partner?include_prereleases&filter=*-*&sort=semver&label=preview&logo=github&style=flat-square
 [prerelease-url]: https://github.com/B5-Software/Could-I-Be-Your-Partner/releases
+[npm-build-badge]: https://img.shields.io/github/actions/workflow/status/B5-Software/Could-I-Be-Your-Partner/npm.yml?branch=main&label=npm%20publish&logo=npm&style=flat-square
+[npm-build-url]: https://github.com/B5-Software/Could-I-Be-Your-Partner/actions/workflows/npm.yml
 [npm-downloads-badge]: https://img.shields.io/npm/dm/cibyp?label=downloads&logo=npm&style=flat-square
 [npm-version-badge]: https://img.shields.io/npm/v/cibyp/latest?label=latest&logo=npm&style=flat-square
 [npm-url]: https://www.npmjs.com/package/cibyp
