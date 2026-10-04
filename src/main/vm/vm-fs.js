@@ -69,6 +69,9 @@ class VmFs {
     const raw = String(hostOrVmPath || '');
     const s = raw.replace(/\\/g,'/');
     if (!s) return { ok: false, error: '路径为空' };
+    if (this.guestPaths && (!raw.startsWith('/') || raw.startsWith('//') || raw.includes('\0'))) {
+      return { ok: false, error: 'VM file picker requires an absolute guest path' };
+    }
     if (!/^[A-Za-z]:|^[/\\]{2}/.test(raw) && this.isVmPath(s)) return { ok: true, vm: path.posix.normalize(s), mapped: 'vm' };
     const mapped = this.mapHostToVm(s);
     if (mapped) {

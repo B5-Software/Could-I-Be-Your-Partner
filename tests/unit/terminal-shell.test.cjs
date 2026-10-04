@@ -106,4 +106,6 @@ test('VM executable picker treats root and host-colliding POSIX paths as guest p
     assert.equal(io.resolveVmPath(file).vm, file);
   }
   assert.equal(io.resolveVmPath('C:\\Windows\\cmd.exe').ok, false);
+  assert.equal(io.resolveVmPath('relative-shell').ok, false);
+  assert.equal(io.resolveVmPath('//host/share/shell').ok, false);
 });
