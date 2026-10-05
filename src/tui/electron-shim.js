@@ -437,6 +437,8 @@ function createElectronShim() {
  * 只应在纯 Node 入口调用（Electron 进程里不要用）。
  */
 function installElectronShim() {
+  if (process.env.CIBYP_PACKAGED_RESOURCES)
+    process.resourcesPath = path.resolve(process.env.CIBYP_PACKAGED_RESOURCES);
   const shim = createElectronShim();
   const Module = require('node:module');
   if (!Module.__cibypElectronShimInstalled) {

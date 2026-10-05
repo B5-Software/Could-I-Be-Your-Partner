@@ -255,11 +255,13 @@ function createAgentRuntime({
     session.pendingInteraction = null;
     // 提问工具的应答形状是 answers 数组（agent.js 的 askQuestions 直接返回数组）
     const value =
-      interaction.kind === 'questions'
-        ? response && Array.isArray(response.answers)
-          ? response.answers
-          : []
-        : response;
+      interaction.kind === 'approval'
+        ? response === true || response === 'allowed-once' || response === 'allow-once'
+        : interaction.kind === 'questions'
+          ? response && Array.isArray(response.answers)
+            ? response.answers
+            : []
+          : response;
     interaction.resolve(value);
     emit({ type: 'interaction-resolved', key: session.key, kind: interaction.kind });
     return true;

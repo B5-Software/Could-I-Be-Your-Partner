@@ -183,7 +183,9 @@ app.on('web-contents-created', (_event, contents) => {
     });
     await Promise.all([
       runtime.api.updatesStart(),
-      web.webContents.executeJavaScript('window.api.updatesStart()'),
+      web.webContents.executeJavaScript(
+        `(() => { const input=document.querySelector('#chat-input'); input.value='/update '; input.dispatchEvent(new Event('input',{bubbles:true})); input.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true})); })()`,
+      ),
     ]);
     await until(
       () => web.webContents.executeJavaScript('!!document.querySelector(".app-update-notice")'),

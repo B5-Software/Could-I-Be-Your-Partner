@@ -10,7 +10,8 @@ module.exports = async function checkMotion(webContents) {
   }));
   for (const name of fs.readdirSync(path.join(renderer, 'pages'))) {
     const html = fs.readFileSync(path.join(renderer, 'pages', name), 'utf8');
-    if (!html.includes('../css/motion.css')) throw new Error(`Motion policy missing in ${name}`);
+    if (!/href=["'](?:\.\.\/css|\/src\/renderer\/css)\/motion\.css["']/.test(html))
+      throw new Error(`Motion policy missing in ${name}`);
     for (const match of html.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/g))
       styles.push({ name, css: match[1] });
   }

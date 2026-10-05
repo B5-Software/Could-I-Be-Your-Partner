@@ -1814,7 +1814,10 @@ ipcMain.handle('settings:set', async (_, newSettings) => {
   if (newSettings?.webControl?.password) {
     newSettings = { ...newSettings, webControl: { ...newSettings.webControl, passwordHash: await webControlService.hashPassword(newSettings.webControl.password), password: '' } };
   }
-  return updateAppSettings(newSettings);
+  const updated = updateAppSettings(newSettings);
+  // A settings RPC acknowledges durable preferences, including a TUI that exits immediately.
+  flushSettingsPersist();
+  return updated;
 });
 const settingsAssistant = new (require('./services/settings-assistant').SettingsAssistant)({ getSettings: () => settings, update: updateAppSettings });
 for (const method of ['catalog', 'patch', 'navigate']) ipcMain.handle('settings-assistant:' + method, (_event, argument) => {

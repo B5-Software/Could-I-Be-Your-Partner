@@ -31,6 +31,7 @@ async function main() {
       CIBYP_USER_DATA: directory,
       CIBYP_DOCUMENTS: path.join(directory, 'documents'),
       CIBYP_NO_GUI: '1',
+      CIBYP_ELECTRON_EXECUTABLE: path.join(directory, 'unavailable-desktop-executable'),
     };
     const script =
       'require(' +

@@ -796,3 +796,26 @@ test('shared settings hot updates reach headless Agents and preserve the web Cod
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(agent.settings.tarotVisible, true);
 });
+test('shared approval explicitly denies string responses and missing decisions', async () => {
+  const runtime = createAgentRuntime({
+    ipcMain: createFakeIpcMain(baseHandlers()),
+    eventBus: createEventBus(),
+    getSettings: () => SETTINGS,
+  });
+  const session = runtime.createSession({ mode: 'chat' });
+  for (const decision of ['denied', 'cancelled', null, false]) {
+    const pending = runtime.requestPluginApproval({
+      sessionKey: session.key,
+      toolName: 'test-plugin',
+    });
+    runtime.respond(session.key, decision);
+    assert.equal(await pending, 'denied');
+  }
+  const pending = runtime.requestPluginApproval({
+    sessionKey: session.key,
+    toolName: 'test-plugin',
+  });
+  runtime.respond(session.key, true);
+  assert.equal(await pending, 'allowed-once');
+  runtime.dispose();
+});
