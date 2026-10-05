@@ -12,7 +12,7 @@ function chooseAvatar() {
       if (!file) return resolve({ ok: false });
       try {
         if (file.size > 10 * 1024 * 1024) throw new Error('Avatar exceeds 10 MiB');
-        const bitmap = await createImageBitmap(file);
+        const bitmap = await window.createImageBitmap(file);
         const canvas = document.createElement('canvas');
         const scale = Math.min(1, 512 / Math.max(bitmap.width, bitmap.height));
         canvas.width = Math.max(1, Math.round(bitmap.width * scale)); canvas.height = Math.max(1, Math.round(bitmap.height * scale));

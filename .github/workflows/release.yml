@@ -5,6 +5,11 @@ on:
     branches: [main]
   workflow_dispatch:
     inputs:
+      build_current_version:
+        description: Retry the current version after validating its unpublished tag
+        required: false
+        type: boolean
+        default: false
       runtime_run_id:
         description: Add verified runtime binaries from an existing six-platform build to its GitHub Release
         required: false
@@ -50,6 +55,7 @@ jobs:
         id: check
         env:
           BEFORE_SHA: ${{ github.event.before }}
+          BUILD_CURRENT_VERSION: ${{ inputs.build_current_version }}
         run: |
           BASE=HEAD~1
           if [ -n "$BEFORE_SHA" ] && git cat-file -e "$BEFORE_SHA^{commit}" 2>/dev/null; then BASE="$BEFORE_SHA"; fi
@@ -58,6 +64,7 @@ jobs:
           echo "previous=$PREV current=$CUR"
           CHANGED=false
           if [ -n "$PREV" ] && [ "$PREV" != "$CUR" ]; then CHANGED=true; fi
+          if [ "$BUILD_CURRENT_VERSION" = "true" ]; then CHANGED=true; fi
           PRERELEASE=false
           case "$CUR" in *-*) PRERELEASE=true;; esac
           echo "changed=$CHANGED" >> "$GITHUB_OUTPUT"
