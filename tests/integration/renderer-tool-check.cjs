@@ -14,8 +14,11 @@ module.exports = async function checkTools(webContents) {
     check(probe.getRuntimeToolSchemas().some(tool => tool.function.name === 'downloadFile'), 'loaded schema missing from next request');
     const description = await probe.executeTool('describeTool', { name: 'downloadFile' });
     check(description.properties?.url, 'original tool parameters unavailable');
-    probe.settings.tools = { ...probe.settings.tools, downloadFile: false };
+    await window.api.backendRequest('saveSettings', { tools: { ...settings.tools, downloadFile: false } });
     check(!(await probe.executeTool('searchTools', { names: ['downloadFile'] })).tools.length, 'disabled tool remained discoverable');
+    await window.api.backendRequest('saveSettings', { tools: { ...settings.tools, downloadFile: true } });
+    await window.api.backendRequest('close', probe.backendKey);
+    probe.unsubscribeStreams();
     const permissions = await window.api.computerPermissions();
     check(permissions.ok && permissions.location === 'host', 'permission preflight IPC failed');
     await window.navigatePage('tools');

@@ -1,6 +1,6 @@
 {
   "name": "could-i-be-your-partner",
-  "version": "1.9.0-alpha.22",
+  "version": "1.9.0-alpha.23",
   "description": "全自动AI Agent，帮助完成一切任务",
   "license": "GPL-3.0-or-later",
   "main": "src/main/main.js",
@@ -50,7 +50,9 @@
     "tui:node": "node bin/cibyp-tui.js",
     "prepare:npm": "node scripts/prepare-npm.cjs",
     "publish:npm": "node scripts/publish-npm.cjs",
-    "test:npm": "node --test tests/unit/npm-distribution.test.cjs tests/unit/npm-publication.test.cjs tests/unit/npm-download.test.cjs"
+    "test:npm": "node --test tests/unit/npm-distribution.test.cjs tests/unit/npm-publication.test.cjs tests/unit/npm-download.test.cjs",
+    "webui": "node bin/cibyp-webui.js",
+    "test:backend": "npm run build-app-bundle && node --test tests/unit/backend-server.test.cjs && electron tests/integration/shared-backend.cjs"
   },
   "author": {
     "name": "B5-Software",
@@ -61,13 +63,19 @@
     "productName": "Could I Be Your Partner",
     "files": [
       "bin/**/*",
+      "packages/npm/lib/**/*",
+      "packages/npm/bin/**/*",
+      "packages/npm/package.json",
       "src/**/*",
       "!src/main/native/**/build{,/**/*}",
       "!src/main/native/**/*.mm",
       "!src/main/native/**/binding.gyp",
       "assets/**/*",
       "!assets/codeoss{,/**/*}",
+      "!assets/tor{,/**/*}",
       "integrations/codeoss/runtime-lock.json",
+      "integrations/tor/runtime-lock.json",
+      "scripts/lib/tor-runtime.cjs",
       "integrations/codeoss/theme.cjs",
       "IoT-Firmware/**/*",
       "package.json",
@@ -87,6 +95,13 @@
       "**/*"
     ],
     "extraResources": [
+      {
+        "from": "assets/tor/${os}-${arch}",
+        "to": "tor",
+        "filter": [
+          "**/*"
+        ]
+      },
       {
         "from": "assets/codeoss/${os}-${arch}",
         "to": "codeoss",
@@ -109,6 +124,10 @@
         ]
       },
       {
+        "from": "packages/npm/lib/aliases.cjs",
+        "to": "cli/aliases.cjs"
+      },
+      {
         "from": "build/cli",
         "to": "cli",
         "filter": [
@@ -117,7 +136,9 @@
           "cibyp-tui",
           "cibyp-code",
           "*.cmd",
-          "*.ps1"
+          "*.ps1",
+          "cibyp-webui",
+          "cibyp-webui.cmd"
         ]
       }
     ],
@@ -228,6 +249,7 @@
     "@jridgewell/gen-mapping": "^0.3.13",
     "@serialport/bindings-cpp": "^13.0.1",
     "@types/node": "^24.0.0",
+    "acorn": "^8.17.0",
     "electron": "^43.7.6",
     "electron-builder": "^26.15.3",
     "esbuild": "^0.28.2",
@@ -237,8 +259,12 @@
     "typescript": "^7.0.2"
   },
   "dependencies": {
-    "@deepseek-ai/cordis": "4.0.1",
-    "@deepseek-ai/schemastery": "3.18.1",
+    "@deepseek-ai/cordis": "4.0.5-alpha.1",
+    "@deepseek-ai/dsh-brand": "0.2.1-alpha.1",
+    "@deepseek-ai/dsh-llm": "0.2.1-alpha.1",
+    "@deepseek-ai/dsh-scope": "0.2.1-alpha.1",
+    "@deepseek-ai/dsh-util-values": "0.2.1-alpha.1",
+    "@deepseek-ai/schemastery": "3.18.5-alpha.1",
     "@eslint/js": "^10.0.1",
     "@novnc/novnc": "^1.7.0",
     "@nut-tree-fork/nut-js": "^4.2.6",
@@ -321,6 +347,7 @@
   "bin": {
     "cibyp": "bin/cibyp.js",
     "cibyp-tui": "bin/cibyp-tui.js",
-    "cibyp-code": "bin/cibyp-code.js"
+    "cibyp-code": "bin/cibyp-code.js",
+    "cibyp-webui": "bin/cibyp-webui.js"
   }
 }

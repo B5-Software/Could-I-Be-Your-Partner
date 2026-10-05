@@ -29,6 +29,7 @@ const {
   sliceByWidth,
   RESET,
   colorCode,
+  charWidth,
 } = require('./ansi.js');
 const { brandLines } = require('../main/core/terminal-brand');
 const APP_VERSION = require('../../package.json').version.split('+')[0];
@@ -333,8 +334,6 @@ function renderUsageSummary(theme, state) {
   const pct = typeof context.pct === 'number' ? context.pct : (occupied / context.max) * 100;
   const prefix = context.exact === false ? '~' : '';
   const parts = [prefix + fmtTokenCount(occupied) + ' (' + Math.round(pct) + '%)'];
-  const cost = fmtCost(state.costUSD);
-  if (cost) parts.push(cost);
   return parts.join(' · ');
 }
 
@@ -407,40 +406,42 @@ function renderInput(theme, state, width, opts) {
   const prompt =
     style(FIGURES.pointer, { fg: theme[accent] || theme.suggestion, bold: true }) + ' ';
   const promptWidth = visibleWidth(prompt);
-  const textLines = String(state.editorText || '').split('\n');
   const innerWidth = Math.max(1, topWidth - 2 - promptWidth - 1);
 
-  // 光标定位：把零宽占位符插到光标处再排版，然后在渲染行里找回它。
-  // 这样软换行、CJK/全角（按 2 格）、多行缓冲的落位都天然正确 ——
-  // 而不是按"字符数"估算（那会在中文输入时横向漂移）。
-  const CARET = String.fromCharCode(0x200b); // 零宽空格，宽度按 0 计
+  // Track the cursor and pointer hits using displayed cell widths, not string length.
   const cursorIndex = Number.isInteger(state.editorCursor)
     ? Math.max(0, Math.min(state.editorCursor, Array.from(state.editorText || '').length))
     : 0;
   const chars = Array.from(state.editorText || '');
-  const markedText =
-    chars.slice(0, cursorIndex).join('') + CARET + chars.slice(cursorIndex).join('');
-
-  const rows = [];
-  for (const line of markedText.split('\n')) {
-    const wrapped = wrapText(line, innerWidth);
-    if (wrapped.length === 0) rows.push('');
-    else rows.push(...wrapped);
+  // Keep source offsets while wrapping. Displayed spaces, wide glyphs and
+  // masked fields must map to the same editor positions as keyboard input.
+  const rows = [{ text: '', points: [{ column: 4, index: 0 }], width: 0 }];
+  let caretRowIndex = 0;
+  let caretCol = 0;
+  for (let index = 0; index <= chars.length; index++) {
+    let row = rows.at(-1);
+    const ch = chars[index];
+    const cells = ch == null || ch === '\n' ? 0 : charWidth(ch.codePointAt(0));
+    if (ch !== '\n' && (row.width >= innerWidth || row.width + cells > innerWidth)) {
+      row = { text: '', points: [{ column: 4, index }], width: 0 };
+      rows.push(row);
+    }
+    if (index === cursorIndex) {
+      caretRowIndex = rows.length - 1;
+      caretCol = row.width;
+    }
+    if (ch == null) break;
+    if (ch === '\n') {
+      rows.push({ text: '', points: [{ column: 4, index: index + 1 }], width: 0 });
+    } else {
+      row.text += ch;
+      row.width += cells;
+      row.points.push({ column: 4 + row.width, index: index + 1 });
+    }
   }
-  if (rows.length === 0) rows.push('');
-
-  // 找回占位符所在的渲染行与显示列
-  let caretRowIndex = rows.findIndex((row) => row.includes(CARET));
-  if (caretRowIndex === -1) caretRowIndex = rows.length - 1;
-  const caretRowText = rows[caretRowIndex];
-  const caretMarkerAt = caretRowText.indexOf(CARET);
-  const caretCol =
-    caretMarkerAt === -1
-      ? visibleWidth(caretRowText)
-      : visibleWidth(caretRowText.slice(0, caretMarkerAt));
 
   const body = rows.map((row, index) => {
-    const clean = row.split(CARET).join('');
+    const clean = row.text;
     const prefix = index === 0 ? prompt : '  ';
     const side = style(BOX.vertical, { fg: borderColor });
     return side + padWidth(prefix + clean, topWidth - 2) + side;
@@ -451,6 +452,7 @@ function renderInput(theme, state, width, opts) {
   // row 为输入块内的 1-based 行号：1=顶线，2..=正文行；col 为 1-based 显示列
   return {
     lines: [top, ...body.slice(startRow, startRow + maxRows), bottom],
+    points: rows.slice(startRow, startRow + maxRows).map((row) => row.points),
     cursor: {
       row: 2 + caretRowIndex - startRow,
       col: Math.min(width - 1, (caretRowIndex === 0 ? promptWidth : 2) + caretCol + 2),
@@ -486,7 +488,7 @@ function renderCompletion(theme, completion, width) {
 }
 
 /** 模态：▔ 顶线 + 标题 + 选项 */
-function renderModal(theme, modal, width, maxHeight) {
+function renderModal(theme, modal, width, maxHeight, hitRows = []) {
   const color = theme[modal.colorKey || 'permission'] || theme.permission;
   const lines = [style(FIGURES.modalTop.repeat(Math.max(8, width)), { fg: color })];
   const pad = '  ';
@@ -501,11 +503,25 @@ function renderModal(theme, modal, width, maxHeight) {
       lines.push(pad + paint(theme, 'inactive', line, { dim: true }));
     }
   }
+  for (const row of modal.usageRows || []) {
+    lines.push(pad + paint(theme, 'text', truncate(row.label, width - 4)));
+    if (Number.isFinite(row.pct))
+      lines.push(
+        pad +
+          renderProgress(theme, row.pct / 100, Math.max(4, Math.min(40, width - 15))) +
+          ' ' +
+          Math.round(row.pct) +
+          '%',
+      );
+    if (row.detail) lines.push(pad + paint(theme, 'subtle', truncate(row.detail, width - 4)));
+  }
+  const optionRows = new Map();
   let selectedRow = 0;
   if (Array.isArray(modal.options)) {
     modal.options.forEach((option, index) => {
       const selected = index === (modal.selected || 0);
       if (selected) selectedRow = lines.length;
+      optionRows.set(lines.length, index);
       const pointer = selected ? paint(theme, 'suggestion', FIGURES.pointer + ' ') : '  ';
       const label = selected
         ? style(truncate(option.label, width - 6), { bold: true, fg: theme.suggestion })
@@ -530,21 +546,31 @@ function renderModal(theme, modal, width, maxHeight) {
   if (modal.footer && modal.kind !== 'todo') {
     lines.push(pad + paint(theme, 'subtle', modal.footer, { dim: true, italic: true }));
   }
-  if (lines.length <= maxHeight) return lines;
+  const finish = (indices) => {
+    indices.forEach((source, row) => {
+      if (optionRows.has(source)) hitRows.push({ row: row + 1, index: optionRows.get(source) });
+    });
+    return indices.map((index) => lines[index] || '');
+  };
+  if (lines.length <= maxHeight) return finish(lines.map((_line, i) => i));
   if (maxHeight < 4)
-    return [lines[1] || '', lines[selectedRow] || '', lines.at(-1)].slice(
-      0,
-      Math.max(0, maxHeight),
-    );
+    return finish([1, selectedRow, lines.length - 1].slice(0, Math.max(0, maxHeight)));
   const available = Math.max(1, maxHeight - 3);
   const content = lines.slice(2, -1);
   const maxOffset = Math.max(0, content.length - available);
-  const offset =
-    modal.options?.length > 1
-      ? Math.max(0, Math.min(maxOffset, selectedRow - 2 - available + 1))
-      : Math.max(0, Math.min(maxOffset, modal.scrollOffset || 0));
+  let offset = Math.max(0, Math.min(maxOffset, modal.scrollOffset || 0));
+  if (modal.options?.length > 1) {
+    const selected = selectedRow - 2;
+    if (selected < offset) offset = Math.max(0, selected);
+    else if (selected >= offset + available) offset = Math.min(maxOffset, selected - available + 1);
+  }
   modal.scrollOffset = offset;
-  return [...lines.slice(0, 2), ...content.slice(offset, offset + available), lines.at(-1)];
+  return finish([
+    0,
+    1,
+    ...content.slice(offset, offset + available).map((_line, i) => offset + i + 2),
+    lines.length - 1,
+  ]);
 }
 
 /**
@@ -589,12 +615,17 @@ function composeFrame(state, opts) {
   });
 
   const bottomBudget = Math.max(0, height - inputView.lines.length - 2);
-  const modalLines = state.modal ? renderModal(theme, state.modal, width, bottomBudget) : [];
+  const modalHits = [];
+  const modalLines = state.modal
+    ? renderModal(theme, state.modal, width, bottomBudget, modalHits)
+    : [];
+  let completionStart = 0;
   let completionLines =
     !state.modal && state.completion ? renderCompletion(theme, state.completion, width) : [];
   if (completionLines.length > bottomBudget) {
     const count = Math.max(0, bottomBudget - 1);
     const start = Math.max(0, (state.completion.selected || 0) - count + 1);
+    completionStart = start;
     completionLines = [
       ...completionLines.slice(start, start + count),
       completionLines.at(-1),
@@ -683,6 +714,18 @@ function composeFrame(state, opts) {
   return {
     lines,
     toastBounds,
+    hits: {
+      modal: modalHits.map((hit) => ({ ...hit, row: visible.length + hit.row })),
+      modalBounds: { top: visible.length + 1, height: modalLines.length },
+      completion: completionLines.slice(0, -1).map((_line, index) => ({
+        row: visible.length + modalLines.length + index + 1,
+        index: completionStart + index,
+      })),
+      input: inputView.points.map((points, index) => ({
+        row: visible.length + modalLines.length + completionLines.length + index + 2,
+        points,
+      })),
+    },
     transcript: { lines: transcriptLines, rowLines },
     scroll: { offset, maxOffset, totalLines: allLines.length },
     cursor: {

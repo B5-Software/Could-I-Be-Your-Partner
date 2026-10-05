@@ -33,6 +33,8 @@ jobs:
         if: runner.os == 'Windows' && matrix.node == '24'
       - run: npm run test:desktop
         if: runner.os == 'Windows' && matrix.node == '24'
+      - run: npm run test:backend
+        if: runner.os == 'Windows' && matrix.node == '24'
       - run: npm audit --audit-level=high
   macos-computer:
     strategy:

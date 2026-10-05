@@ -162,7 +162,7 @@ module.exports = function createBudgetService({ calculateTokenCost, getSettings 
    * 同时按 settings.budget 中的价格表计算金钱消耗（inputPerM/cacheReadPerM/outputPerM/cacheWritePerM），
    * 并应用峰谷时段倍率（peakHours）。
    */
-  function computeUsageCost(usage, model, ts) {
+  function computeUsageCost(usage, model, ts, provider) {
     usage = require('../../shared/token-usage').normalize(usage);
     return calculateTokenCost(
       {
@@ -171,14 +171,24 @@ module.exports = function createBudgetService({ calculateTokenCost, getSettings 
         cached: usage?.prompt_tokens_details?.cached_tokens ?? usage?.cache_read_input_tokens,
         cacheCreation: usage?.cache_creation_input_tokens,
       },
-      getSettings().budget?.models?.[model || ''] || {},
+      usage?.billingMode === 'subscription' || provider === 'opencode-go'
+        ? { inputPerM: 0, outputPerM: 0, cacheReadPerM: 0, cacheWritePerM: 0 }
+        : require('./model-pricing').resolve(
+            model,
+            provider || getSettings().llm.provider,
+            getSettings().budget?.models?.[model || ''],
+            undefined,
+            (getSettings().llm.pool || []).find(
+              (e) => e.model === model && (!provider || e.provider === provider),
+            )?.apiUrl || getSettings().llm.apiUrl,
+          ).price,
       getSettings().budget?.peakHours,
       ts ?? Date.now(),
       getSettings().budget?.timezone,
     );
   }
 
-  function recordTokenUsage(usage, model) {
+  function recordTokenUsage(usage, model, provider) {
     if (!usage) return;
     usage = require('../../shared/token-usage').normalize(usage);
     // 使用时区感知的日期键，确保与预算周期计算一致
@@ -222,7 +232,30 @@ module.exports = function createBudgetService({ calculateTokenCost, getSettings 
       usage.prompt_tokens_details?.cached_tokens || usage.cache_read_input_tokens || 0;
     const cacheCreationTokens = usage.cache_creation_input_tokens || 0;
     // 计算金钱消耗
-    const cost = computeUsageCost(usage, model);
+    const cost = computeUsageCost(usage, model, undefined, provider);
+    if (usage.billingMode === 'subscription' || provider === 'opencode-go') {
+      const source = provider || getSettings().llm.provider;
+      const resolved = require('./model-pricing').resolve(
+        model,
+        source,
+        getSettings().budget?.models?.[model || ''],
+      );
+      const equivalent = calculateTokenCost(
+        { prompt: pt, completion: ct, cached: cachedTokens, cacheCreation: cacheCreationTokens },
+        resolved.price,
+      );
+      day.subscriptionEquivalent ||= {};
+      const counters = (day.subscriptionEquivalent[source] ||= {
+        costUSD: 0,
+        pricedRequests: 0,
+        unknownRequests: 0,
+      });
+      if (resolved.source === 'unknown') counters.unknownRequests++;
+      else {
+        counters.costUSD += equivalent.totalCost;
+        counters.pricedRequests++;
+      }
+    }
     day.totalTokens += tt;
     day.promptTokens += pt;
     day.completionTokens += ct;

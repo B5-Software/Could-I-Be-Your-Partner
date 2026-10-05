@@ -155,7 +155,7 @@ async function fetchLLMWithRetry(cfg) {
   const transport = cfg.transport ||
     (customHeaders && (customHeaders['x-api-key'] || customHeaders['anthropic-version']) ? 'anthropic' : 'openai');
   // 404 端点探索：用户可能配置了不完整的 API URL，预生成候选端点
-  const endpointCandidates = buildEndpointCandidates(apiUrl, transport);
+  const endpointCandidates = cfg.strictResponses ? [apiUrl] : buildEndpointCandidates(apiUrl, transport);
   let endpointIdx = 0;
   let currentEndpoint = endpointCandidates[0] || apiUrl;
   const opts = cfg.options || {};
@@ -177,6 +177,7 @@ async function fetchLLMWithRetry(cfg) {
   let usingFallback = false;
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    if (opts.signal?.aborted) return { ok: false, error: 'Request stopped: account changed or signed out', kind: 'aborted' };
     const controller = new AbortController();
     controller._requestId = requestId || null;
     controller._sessionKey = opts.sessionKey || null;
@@ -200,7 +201,7 @@ async function fetchLLMWithRetry(cfg) {
         method: 'POST',
         headers,
         body: JSON.stringify(reqBody),
-        signal: controller.signal
+        signal: opts.signal ? AbortSignal.any([controller.signal, opts.signal]) : controller.signal
       });
       clearTimeout(timer);
       const dur = Date.now() - startedAt;
@@ -215,7 +216,7 @@ async function fetchLLMWithRetry(cfg) {
           console.log(`[${label} ${ts()}] ← ${resp.status} (${dur}ms) model=${currentModel} type=${String(resp.headers.get('content-type') || '').split(';')[0] || 'json'}`);
           return {
             ok: true,
-            response: augmentSSEResponse(resp, transport),
+            response: augmentSSEResponse(resp, transport, cfg.strictResponses),
             controller,
             releaseController: () => _activeControllers.delete(controller)
           };
@@ -288,7 +289,7 @@ async function fetchLLMWithRetry(cfg) {
       clearTimeout(timer);
       const dur = Date.now() - startedAt;
       // 用户主动停止（abortAllRequests 触发）— 不重试、不通知 UI 重试
-      if (controller._userAborted) {
+      if (controller._userAborted || opts.signal?.aborted) {
         lastError = new LLMError(err.message || String(err), { kind: 'aborted' });
         console.warn(`[${label} ${ts()}] ✗ cancelled (${dur}ms) model=${currentModel}`);
         break;
@@ -306,7 +307,7 @@ async function fetchLLMWithRetry(cfg) {
         attempt, kind: cls.kind, delayMs: delay, requestId, error: err.message
       });
       try {
-        await sleep(delay);
+        await sleep(delay, opts.signal || controller.signal);
       } catch {
         break; // aborted during sleep
       }
@@ -410,6 +411,8 @@ async function consumeSSEStream(bodyStream, onChunk, requestId, transport = 'ope
   let anthropicToolBlocks = {};
   let responsesToolBuffer = {};
   let finalizedToolIds = new Set();
+  let responseCompleted = false;
+  let responseError = null;
 
   async function readWithTimeout() {
     return new Promise((resolve, reject) => {
@@ -430,6 +433,8 @@ async function consumeSSEStream(bodyStream, onChunk, requestId, transport = 'ope
     if (transport === 'anthropic') {
       processAnthropicEvent(parsed);
     } else if (transport === 'responses') {
+      if (parsed.type === 'response.completed' && (!parsed.response?.status || parsed.response.status === 'completed')) responseCompleted = true;
+      if (['response.failed', 'response.incomplete', 'error'].includes(parsed.type)) responseError = parsed.response?.error?.message || parsed.error?.message || parsed.message || parsed.response?.incomplete_details?.reason || 'Response did not complete';
       const state = {
         fullContent, fullReasoning, toolCalls, finishReason, usage,
         responsesToolBuffer, finalizedToolIds, onChunk, requestId
@@ -564,6 +569,7 @@ async function consumeSSEStream(bodyStream, onChunk, requestId, transport = 'ope
   }
   return {
     content: fullContent,
+    ...(responseError || (info.requiresCompleted && !responseCompleted) ? { error: responseError || 'OpenAI stream ended before response.completed' } : {}),
     reasoning: fullReasoning,
     toolCalls: toolCalls.length ? toolCalls : undefined,
     finishReason,
@@ -608,7 +614,7 @@ function abortRequests(filter = {}) {
 // 匿名 Zen 免费池会强制流式（见 llm-providers.js），非流式调用方拿到的响应是 SSE。
 // augmentSSEResponse 给 Response 挂一个惰性 json()：只在调用 .json() 时读取并聚合，
 // 流式调用方照常使用 .body，不受影响。
-function aggregateSSEToJSON(text, transport = 'openai') {
+function aggregateSSEToJSON(text, transport = 'openai', requiresCompleted = false) {
   const events = [];
   for (const line of String(text || '').split(/\r?\n/)) {
     const m = /^data:\s?(.*)$/.exec(line);
@@ -619,10 +625,16 @@ function aggregateSSEToJSON(text, transport = 'openai') {
   }
 
   if (transport === 'responses') {
+    const failed = events.find(ev => ['response.failed', 'response.incomplete', 'error'].includes(ev.type));
+    if (failed) return { error: { message: failed.response?.error?.message || failed.error?.message || failed.message || 'OpenAI response did not complete' } };
     for (let i = events.length - 1; i >= 0; i--) {
       const ev = events[i];
-      if (ev && ev.type === 'response.completed' && ev.response) return ev.response;
+      if (ev && ev.type === 'response.completed' && ev.response) {
+        if (requiresCompleted && ev.response.status && ev.response.status !== 'completed') return { error: { message: 'OpenAI response did not complete' } };
+        return ev.response;
+      }
     }
+    if (requiresCompleted) return { error: { message: 'OpenAI stream ended before response.completed' } };
     let out = '';
     let usage = null;
     let model = null;
@@ -719,7 +731,7 @@ function aggregateSSEToJSON(text, transport = 'openai') {
   };
 }
 
-function augmentSSEResponse(resp, transport) {
+function augmentSSEResponse(resp, transport, requiresCompleted = false) {
   try {
     const ct = resp && resp.headers && typeof resp.headers.get === 'function'
       ? (resp.headers.get('content-type') || '')
@@ -731,7 +743,7 @@ function augmentSSEResponse(resp, transport) {
       value: async () => {
         if (cached) return cached;
         const text = await resp.text();
-        cached = aggregateSSEToJSON(text, transport);
+        cached = aggregateSSEToJSON(text, transport, requiresCompleted);
         return cached;
       }
     });

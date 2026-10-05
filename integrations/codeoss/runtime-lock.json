@@ -47,5 +47,32 @@
       "sha256": "9765cea4f707ff7dc83a40be408a7318a59abb6996b359631639d9aab2f48a90"
     }
   },
-  "commit": "1a46a584725d5dd330e0bcd7f5510f24990efcf2"
+  "commit": "1a46a584725d5dd330e0bcd7f5510f24990efcf2",
+  "web": {
+    "darwin-arm64": {
+      "bytes": 130799447,
+      "url": "https://github.com/VSCodium/vscodium/releases/download/1.135.06055/vscodium-reh-web-darwin-arm64-1.135.06055.tar.gz",
+      "sha256": "87ffebc1df7bde31b9e863d38fa6121cdebe3e5f9794d65f95f062f986dcfa73"
+    },
+    "darwin-x64": {
+      "bytes": 132270729,
+      "url": "https://github.com/VSCodium/vscodium/releases/download/1.135.06055/vscodium-reh-web-darwin-x64-1.135.06055.tar.gz",
+      "sha256": "b0038f4ae482d6454bb293ae5b04d4af0834f8c7094f95dfeec3c6519d9fcb74"
+    },
+    "linux-arm64": {
+      "bytes": 134224094,
+      "url": "https://github.com/VSCodium/vscodium/releases/download/1.135.06055/vscodium-reh-web-linux-arm64-1.135.06055.tar.gz",
+      "sha256": "883596fdef9e8cb9aa27965b5a75ace1c7cd6de026dd7c8d96bdacd126fd4cec"
+    },
+    "linux-x64": {
+      "bytes": 136374833,
+      "url": "https://github.com/VSCodium/vscodium/releases/download/1.135.06055/vscodium-reh-web-linux-x64-1.135.06055.tar.gz",
+      "sha256": "e36cf545d526e7f2e10679e9b35a269e9ba573f9527038bf39bc26aab64d27a6"
+    },
+    "win32-x64": {
+      "bytes": 129574089,
+      "url": "https://github.com/VSCodium/vscodium/releases/download/1.135.06055/vscodium-reh-web-win32-x64-1.135.06055.tar.gz",
+      "sha256": "579121d3043b94fbd054aee3f1155b53b00dc2786995604a685fda9ba7e2b560"
+    }
+  }
 }

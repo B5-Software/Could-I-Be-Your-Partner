@@ -1,5 +1,6 @@
   async function loadSettingsPage() {
     const s = await readSettings();
+    refreshChatGPTAccounts();
     loadWebResearchSettings(s);
     loadTuiPreferences(s);
     refreshSettingsOverview(s);
@@ -314,6 +315,8 @@
 
     // Web Control settings
     const wc = s.webControl || {};
+    const wcHostEl = document.getElementById('setting-wc-host');
+    if (wcHostEl) wcHostEl.value = wc.host || '127.0.0.1';
     const wcPortEl = document.getElementById('setting-wc-port');
     if (wcPortEl) wcPortEl.value = wc.port || 3456;
     const wcEnabledEl = document.getElementById('setting-wc-enabled');

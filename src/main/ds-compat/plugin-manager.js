@@ -21,6 +21,9 @@ const { PluginHost } = require('./plugin-host');
 const SHIMS = {
   '@deepseek-ai/dsh-tools': path.join(__dirname, 'shims', 'dsh-tools'),
   '@deepseek-ai/cordis': path.join(__dirname, 'shims', 'cordis'),
+  ...Object.fromEntries(['dsh-llm', 'dsh-util-values', 'dsh-brand', 'dsh-scope'].map(name => [
+    '@deepseek-ai/' + name, path.join(__dirname, '..', '..', '..', 'node_modules', '@deepseek-ai', name)
+  ])),
   '@deepseek-ai/schemastery': path.join(__dirname, '..', '..', '..', 'node_modules', '@deepseek-ai', 'schemastery')
 };
 

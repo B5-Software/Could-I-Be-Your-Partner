@@ -1,4 +1,5 @@
   function restartBabeProactiveTimer(intervalOverride) {
+    if (window.CibypBackendViews) return;
     if (babeProactiveTimer) {
       clearInterval(babeProactiveTimer);
       babeProactiveTimer = null;

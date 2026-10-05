@@ -1,123 +1,104 @@
-  // ---- Web Control Settings Helpers ----
+  // WebUI is a frontend of the shared backend, independent of GUI lifetime.
   let wcEventsSetup = false;
-
+  function wcMessage(message, error = false) {
+    const el = document.getElementById('wc-status-result');
+    if (el) { el.textContent = message; el.style.color = error ? 'var(--error-color)' : 'var(--text-secondary)'; }
+  }
   async function updateWcToggleButton() {
+    const current = await readSettings();
+    const tor = current.remote?.tor || {};
+    for (const [id,key] of [['setting-tor-auto','autoStart'],['setting-tor-bridges-enabled','useBridges']]) { const el = document.getElementById(id); if (el) el.checked = !!tor[key]; }
+    const bridges = document.getElementById('setting-tor-bridges'); if (bridges && document.activeElement !== bridges) bridges.value = tor.bridges || '';
+    window.api.remoteTorStatus().then(renderTorStatus).catch(console.error);
     const btn = document.getElementById('btn-wc-toggle');
-    const resultEl = document.getElementById('wc-status-result');
     if (!btn) return;
     try {
       const status = await window.api.webControlGetStatus();
-      if (status.running) {
-        btn.innerHTML = '<i class="fa-solid fa-stop"></i> 停止';
-        btn.classList.remove('btn-primary');
-        btn.classList.add('btn-danger');
-        if (resultEl) { resultEl.textContent = `✅ 运行中: http://localhost:${status.port}`; resultEl.style.color = 'var(--success-color, #4caf50)'; }
-      } else {
-        btn.innerHTML = '<i class="fa-solid fa-play"></i> 启动';
-        btn.classList.remove('btn-danger');
-        btn.classList.add('btn-primary');
-        if (resultEl) { resultEl.textContent = '未运行'; resultEl.style.color = 'var(--text-secondary)'; }
-      }
-    } catch {}
+      btn.innerHTML = status.running ? '<i class="fa-solid fa-stop"></i> ' + t('ui.webui.stop', '停止 WebUI') : '<i class="fa-solid fa-play"></i> ' + t('ui.webui.start', '启动 WebUI');
+      btn.classList.toggle('btn-danger', status.running);
+      btn.classList.toggle('btn-primary', !status.running);
+      wcMessage(status.running ? t('ui.webui.running', '运行中：{url}', { url: (status.addresses || [status.url]).join(' · ') }) : t('ui.webui.stopped', 'WebUI 未启动；后台会话仍可继续运行'));
+      const detail = document.getElementById('wc-backend-status');
+      if (detail) detail.textContent = t('ui.webui.backendStatus', '后台 PID {pid} · {clients} 个浏览器 / Remote 连接', { pid: status.backendPid, clients: status.clients || 0 });
+    } catch (error) { wcMessage(error.message, true); }
   }
-
   async function saveWebControlSettings() {
     const s = await readSettings();
-    const passwordInput = document.getElementById('setting-wc-password')?.value?.trim();
+    const passwordInput = document.getElementById('setting-wc-password');
     let passwordHash = s.webControl?.passwordHash || '';
-    if (passwordInput) {
-      const hashResult = await window.api.webControlHashPassword(passwordInput);
-      if (hashResult.ok) passwordHash = hashResult.hash;
+    if (passwordInput?.value) {
+      const result = await window.api.webControlHashPassword(passwordInput.value);
+      if (!result.ok) throw new Error(result.error || t('ui.webui.passwordFailed', '密码保存失败'));
+      passwordHash = result.hash;
     }
-    s.webControl = {
-      enabled: document.getElementById('setting-wc-enabled')?.checked || false,
-      autoStartOnOpen: document.getElementById('setting-wc-autostart')?.checked || false,
-      port: parseInt(document.getElementById('setting-wc-port')?.value) || 3456,
-      password: '',
-      passwordHash,
-      enable2FA: document.getElementById('setting-wc-enable-2fa')?.checked || false,
-      totpSecret: s.webControl?.totpSecret || '',
+    const port = Number(document.getElementById('setting-wc-port')?.value);
+    if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new Error(t('ui.webui.invalidPort', '端口必须为 1024–65535 的整数'));
+    const enable2FA = !!document.getElementById('setting-wc-enable-2fa')?.checked;
+    if (enable2FA && !s.webControl?.totpSecret) throw new Error(t('ui.webui.needTotp', '请先生成并验证 TOTP 密钥'));
+    s.webControl = { ...s.webControl,
+      enabled: !!document.getElementById('setting-wc-enabled')?.checked,
+      autoStartOnOpen: !!document.getElementById('setting-wc-autostart')?.checked,
+      host: document.getElementById('setting-wc-host')?.value || '127.0.0.1', port,
+      password: '', passwordHash, enable2FA,
     };
     await saveSettings(s);
-    // Clear password field after save
-    const pwEl = document.getElementById('setting-wc-password');
-    if (pwEl) pwEl.value = '';
-    // 热更新运行中服务的配置（修复改密码后 WebUI 登录仍用旧 hash 的问题）
-    try { await window.api.webControlReconfigure(); } catch (_) {}
+    if (passwordInput) passwordInput.value = '';
+    const result = await window.api.webControlReconfigure();
+    if (result?.ok === false) throw new Error(result.error);
   }
-
   function setupWebControlEvents() {
     if (wcEventsSetup) return;
     wcEventsSetup = true;
-
-    // 2FA toggle
-    document.getElementById('setting-wc-enable-2fa')?.addEventListener('change', (e) => {
+    window.api.onRemoteTorState(renderTorStatus);
+    for (const [id,key] of [['setting-tor-auto','autoStart'],['setting-tor-bridges-enabled','useBridges'],['setting-tor-bridges','bridges']]) {
+      document.getElementById(id)?.addEventListener('change', async e => {
+        const settings = await readSettings(); const value = e.target.type === 'checkbox' ? e.target.checked : e.target.value;
+        await saveSettings({ ...settings, remote: { ...settings.remote, tor: { ...settings.remote?.tor, [key]: value } } });
+      });
+    }
+    document.getElementById('btn-tor-start')?.addEventListener('click', async () => {
+      try { await saveWebControlSettings(); renderTorStatus(await window.api.remoteTorStart()); } catch (e) { wcMessage(e.message,true); }
+    });
+    document.getElementById('btn-tor-stop')?.addEventListener('click', async () => renderTorStatus(await window.api.remoteTorStop()));
+    document.getElementById('btn-tor-bridges')?.addEventListener('click', () => window.api.updatesOpenRelease('https://bridges.torproject.org/'));
+    const run = async (button, action) => {
+      button.disabled = true; button.setAttribute('aria-busy', 'true');
+      wcMessage(t('ui.webui.applying', '正在应用…'));
+      try { await action(); await updateWcToggleButton(); }
+      catch (error) { wcMessage(error.message, true); }
+      finally { button.disabled = false; button.removeAttribute('aria-busy'); }
+    };
+    document.getElementById('setting-wc-enable-2fa')?.addEventListener('change', e => {
       document.getElementById('wc-2fa-area').style.display = e.target.checked ? '' : 'none';
     });
-
-    // Generate TOTP
-    document.getElementById('btn-wc-gen-totp')?.addEventListener('click', async () => {
+    document.getElementById('btn-wc-gen-totp')?.addEventListener('click', e => run(e.currentTarget, async () => {
       const result = await window.api.webControlGenerateTOTP();
-      if (result.ok) {
-        const qrArea = document.getElementById('wc-totp-qr-area');
-        const qrImg = document.getElementById('wc-totp-qr-img');
-        const secretText = document.getElementById('wc-totp-secret-text');
-        if (qrArea) qrArea.style.display = '';
-        if (qrImg) qrImg.src = result.qrDataUrl;
-        if (secretText) secretText.textContent = `密钥: ${result.secret}`;
-        // Save to settings
-        const s = await readSettings();
-        s.webControl = s.webControl || {};
-        s.webControl.totpSecret = result.secret;
-        await saveSettings(s);
-      } else {
-        alert('TOTP 生成失败: ' + (result.error || '未知错误'));
-      }
-    });
-
-    // Verify TOTP
-    document.getElementById('btn-wc-verify-totp')?.addEventListener('click', async () => {
-      const code = document.getElementById('wc-totp-verify-code')?.value?.trim();
-      if (!code) return;
-      const result = await window.api.webControlVerifyTOTP(code);
-      const span = document.getElementById('wc-totp-verify-result');
-      if (result.ok && result.valid) {
-        if (span) { span.textContent = '✅ 验证通过'; span.style.color = 'var(--success-color, #4caf50)'; }
-      } else {
-        if (span) { span.textContent = '❌ 验证失败'; span.style.color = 'var(--error-color, #f44336)'; }
-      }
-    });
-
-    // Save
-    document.getElementById('btn-wc-save')?.addEventListener('click', async () => {
-      await saveWebControlSettings();
-      const resultEl = document.getElementById('wc-status-result');
-      if (resultEl) { resultEl.textContent = '✅ 设置已保存'; resultEl.style.color = 'var(--success-color, #4caf50)'; }
-    });
-
-    // Toggle start/stop
-    document.getElementById('btn-wc-toggle')?.addEventListener('click', async () => {
-      const resultEl = document.getElementById('wc-status-result');
+      if (!result.ok) throw new Error(result.error);
+      document.getElementById('wc-totp-qr-area').style.display = '';
+      document.getElementById('wc-totp-qr-img').src = result.qrDataUrl;
+      document.getElementById('wc-totp-secret-text').textContent = result.secret;
+      const s = await readSettings(); s.webControl = { ...s.webControl, totpSecret: result.secret };
+      await saveSettings(s);
+    }));
+    document.getElementById('btn-wc-verify-totp')?.addEventListener('click', e => run(e.currentTarget, async () => {
+      const result = await window.api.webControlVerifyTOTP(document.getElementById('wc-totp-verify-code').value.trim());
+      document.getElementById('wc-totp-verify-result').textContent = result.valid ? t('ui.webui.verified', '验证通过') : t('ui.webui.invalidCode', '验证码不正确');
+    }));
+    document.getElementById('btn-wc-save')?.addEventListener('click', e => run(e.currentTarget, saveWebControlSettings));
+    document.getElementById('btn-wc-refresh')?.addEventListener('click', () => updateWcToggleButton());
+    document.getElementById('btn-wc-toggle')?.addEventListener('click', e => run(e.currentTarget, async () => {
       const status = await window.api.webControlGetStatus();
-      if (status.running) {
-        const r = await window.api.webControlStop();
-        if (r.ok) {
-          if (resultEl) { resultEl.textContent = '已停止'; resultEl.style.color = 'var(--text-secondary)'; }
-        } else {
-          if (resultEl) { resultEl.textContent = '❌ 停止失败: ' + (r.error || ''); resultEl.style.color = 'var(--error-color, #f44336)'; }
-        }
-      } else {
-        // Save first, then start
-        await saveWebControlSettings();
-        const r = await window.api.webControlStart();
-        if (r.ok) {
-          if (resultEl) { resultEl.textContent = `✅ ${r.message}`; resultEl.style.color = 'var(--success-color, #4caf50)'; }
-        } else {
-          if (resultEl) { resultEl.textContent = '❌ 启动失败: ' + (r.error || ''); resultEl.style.color = 'var(--error-color, #f44336)'; }
-        }
-      }
-      updateWcToggleButton();
-    });
+      if (!status.running) await saveWebControlSettings();
+      const result = status.running ? await window.api.webControlStop() : await window.api.webControlStart();
+      if (!result.ok) throw new Error(result.error);
+    }));
   }
 
   // ── Playwright Settings ──
+  function renderTorStatus(state) {
+    const labels = { stopped: t('ui.tor.stopped','Tor 未连接'), preparing: t('ui.tor.preparing','正在准备 Tor'), connecting: t('ui.tor.connecting','正在连接 Tor'), ready: t('ui.tor.ready','Tor 已连接'), error: t('ui.tor.error','Tor 连接失败') };
+    const status = document.getElementById('tor-status'); if (status) status.textContent = (labels[state.phase] || state.phase) + (state.error ? ': ' + state.error : state.phase === 'connecting' ? ` ${state.progress}%` : '');
+    const progress = document.getElementById('tor-progress'); if (progress) progress.value = state.progress || 0;
+    const address = document.getElementById('tor-onion-address'); if (address) address.value = state.onion || '';
+    const start = document.getElementById('btn-tor-start'); if (start) start.disabled = ['preparing','connecting','ready'].includes(state.phase);
+  }

@@ -6,7 +6,8 @@
   "bin": {
     "cibyp": "bin/cibyp.cjs",
     "cibyp-tui": "bin/cibyp-tui.cjs",
-    "cibyp-code": "bin/cibyp-code.cjs"
+    "cibyp-code": "bin/cibyp-code.cjs",
+    "cibyp-webui": "bin/cibyp-webui.cjs"
   },
   "scripts": {
     "postinstall": "node lib/install.cjs"

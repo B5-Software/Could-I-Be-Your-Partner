@@ -92,7 +92,12 @@ window.initializeVMFilePicker = async (container, filePicker) => {
   byId('filename').onkeydown = (e) => {
     if (e.key === 'Enter') byId('choose').click();
   };
-  byId('up').onclick = () => browse(current.split('/').slice(0, -1).join('/') || '/');
+  byId('up').onclick = () => {
+    const parent = current.replace(/\/$/, '').split('/').slice(0, -1).join('/') || '/';
+    return browse(
+      /^[a-z]:$/i.test(parent) ? parent + '/' : /^[a-z]:\/$/i.test(current) ? current : parent,
+    );
+  };
   byId('newFolder').onclick = () => {
     byId('folderForm').hidden = false;
     byId('folderName').focus();

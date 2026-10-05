@@ -1,3 +1,4 @@
+  const sessionPricingCache = new Map();
   function computeSessionCostForModel(agentInstance, model, usage) {
     const pricing = getSessionPricing(agentInstance, model);
     if (!pricing) return null;
@@ -13,7 +14,16 @@
       const model = modelId || agentInstance?.settings?.llm?.model;
       if (!model) return null;
       const prices = agentInstance?.settings?.budget?.models || {};
-      const p = prices[model];
+      const provider = agentInstance?.llmOverride?.provider || agentInstance?.settings?.llm?.provider;
+      const cacheKey = provider + ':' + model;
+      const cached = sessionPricingCache.get(cacheKey);
+      if (!cached || Date.now() - cached.at > 60000) {
+        sessionPricingCache.set(cacheKey, { at: Date.now(), price: cached?.price });
+        window.api.llmPricing(model, provider).then(result => {
+          sessionPricingCache.set(cacheKey, { at: Date.now(), price: result.source === 'unknown' ? null : result.price });
+        }).catch(() => {});
+      }
+      const p = cached?.price || prices[model];
       if (!p) return null;
       // 优先识别新格式字段
       const hasNew = p.inputPerM != null || p.outputPerM != null || p.cacheReadPerM != null || p.cacheWritePerM != null;

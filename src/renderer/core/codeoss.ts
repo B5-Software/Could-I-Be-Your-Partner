@@ -7,6 +7,7 @@ type Workspace = {
   location?: string;
   error?: string;
   cancelled?: boolean;
+  webUrl?: string;
 };
 type Bounds = { x: number; y: number; width: number; height: number };
 type HoverCard = {
@@ -38,6 +39,7 @@ export class CodeOSSController {
   private opening: Promise<Workspace> | null = null;
   private lastLayout = '';
   private interactionRevision = 0;
+  private webFrame: HTMLIFrameElement | null = null;
   private immersive = localStorage.getItem('cibyp-code-immersive') === 'true';
   constructor(
     private api: API,
@@ -111,6 +113,24 @@ export class CodeOSSController {
     this.opening = operation;
     try {
       const result = await operation;
+      if (result.ok && result.webUrl) {
+        if (!this.webFrame) {
+          this.webFrame = document.createElement('iframe');
+          this.webFrame.title = 'CIBYP Code-OSS';
+          Object.assign(this.webFrame.style, {
+            position: 'absolute',
+            inset: '0',
+            width: '100%',
+            height: '100%',
+            border: '0',
+            zIndex: '1',
+          });
+          this.viewport.append(this.webFrame);
+        }
+        this.webFrame.src = result.webUrl;
+        this.ready = true;
+        this.viewport.dataset.state = 'ready';
+      }
       if (!result.ok && !result.cancelled) {
         this.status.textContent = result.error || '工作台启动失败';
         this.viewport.dataset.state = 'error';
@@ -142,7 +162,7 @@ export class CodeOSSController {
     const bounds = this.viewport.getBoundingClientRect();
     const visibleModal = [
       ...document.querySelectorAll<HTMLElement>(
-        '.modal-overlay, .modal, [role="dialog"], .dock-panel',
+        '.modal-overlay, .modal, [role="dialog"], .dock-panel, .app-update-notice',
       ),
     ].some(
       (element) =>
@@ -160,6 +180,13 @@ export class CodeOSSController {
       immersive,
     };
     const key = JSON.stringify(layout);
+    if (this.webFrame) {
+      this.webFrame.contentWindow?.postMessage(
+        { type: 'cibyp-workbench-layout', immersive },
+        new URL(this.webFrame.src).origin,
+      );
+      return;
+    }
     if (key === this.lastLayout) return;
     this.lastLayout = key;
     void this.api.codeOSSLayout(layout).catch((error) => {

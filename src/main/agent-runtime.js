@@ -16,8 +16,7 @@
  *   - 事件流：Agent 的消息/工具/状态事件统一成 session-event，前端各取所需渲染；
  *   - 历史：按模式分流 chat/babe/code 三条历史通道。
  *
- * 注：Code 模式在此为**纯 Agent**（工作区 + 代码工具 + 终端），不接 CodeOSS/IDE；
- * codeIDE 工具在无界面环境下显式禁用，避免模型徒劳调用。
+ * Code 模式通过服务桥使用桌面或 Web Code-OSS 的扩展与语言服务。
  */
 
 'use strict';
@@ -88,6 +87,7 @@ function createAgentRuntime({
     return {
       key: session.key,
       mode: session.mode,
+      profile: session.profile,
       status: session.status,
       busy: session.busy,
       title: session.title,
@@ -114,8 +114,18 @@ function createAgentRuntime({
     })();
     if (!pricingTable || typeof pricingTable.calculateTokenCost !== 'function') return null;
     const priceFor = (model) => {
-      const p = models[model];
-      if (!p) return null;
+      const active = agent._llmOptions?.() || settings?.llm || {};
+      const provider =
+        active.model === model
+          ? active
+          : settings?.llm?.pool?.find((entry) => entry.model === model) || active;
+      const p = require('./services/model-pricing').resolve(
+        model,
+        provider.provider,
+        models[model],
+        provider.billingMode,
+        provider.apiUrl,
+      ).price;
       const hasNew =
         p.inputPerM != null ||
         p.outputPerM != null ||
@@ -162,11 +172,35 @@ function createAgentRuntime({
     return priced ? total : null;
   }
 
+  const subscriptionStates = new Map();
+  async function getSubscriptionUsage(key, options = {}) {
+    const agent = sessions.get(key)?.agent;
+    if (!agent || typeof api.subscriptionUsage !== 'function') return null;
+    const previous = subscriptionStates.get(key);
+    if (previous?.promise) return previous.promise;
+    if (!options.force && previous?.value && Date.now() - previous.at < 5000) return previous.value;
+    const state = { at: Date.now(), value: previous?.value };
+    subscriptionStates.set(key, state);
+    state.promise = Promise.resolve()
+      .then(() => api.subscriptionUsage({ ...agent._llmOptions?.(), ...options }))
+      .then((value) => {
+        if (sessions.get(key)?.agent !== agent || subscriptionStates.get(key) !== state)
+          return null;
+        state.value = value;
+        emit({ type: 'subscription-usage', key, data: value });
+        return value;
+      })
+      .finally(() => {
+        state.promise = null;
+      });
+    return state.promise;
+  }
   function getStats(key) {
     const session = sessions.get(key);
     if (!session || !session.agent) return null;
     const agent = session.agent;
     const settings = agent.settings || {};
+    const subscription = subscriptionStates.get(key);
     const limits = typeof agent.getTokenLimits === 'function' ? agent.getTokenLimits() : null;
     // 上下文口径与 GUI 一致：getUsageBreakdown() 含输出预留的占比
     const breakdown =
@@ -194,6 +228,7 @@ function createAgentRuntime({
         exact: breakdown ? breakdown.exact !== false : true,
       },
       costUSD: computeSessionCost(agent, settings),
+      subscriptionUsage: subscription?.value || null,
       affection: typeof agent.babeAffection === 'number' ? agent.babeAffection : null,
       workingMs: agent.workingMs || 0,
     };
@@ -232,6 +267,7 @@ function createAgentRuntime({
 
   /** Agent 消息事件 → 会话事件流 */
   function handleAgentMessage(session, type, data) {
+    emit({ type: 'agent-message', key: session.key, messageType: type, data });
     switch (type) {
       case 'approval': {
         requestInteraction(session, 'approval', { toolName: data.toolName, args: data.args }).then(
@@ -299,6 +335,7 @@ function createAgentRuntime({
     workspacePath = null,
     codeWorkspacePath = null,
     minimalMode = false,
+    profile = 'default',
   } = {}) {
     const sessionMode = MODES.includes(mode) ? mode : 'chat';
     const sessionKey =
@@ -318,6 +355,7 @@ function createAgentRuntime({
       title: '',
       createdAt: Date.now(),
       pendingInteraction: null,
+      profile: profile === 'settings-assistant' ? profile : 'default',
     };
     sessions.set(sessionKey, session);
 
@@ -352,7 +390,11 @@ function createAgentRuntime({
   }
 
   function createRuntimeAgent(session, minimalMode) {
+    const helper = session.profile === 'settings-assistant';
+    const helperTools = helper ? require('../shared/settings-assistant-tools') : null;
     const agent = new core.Agent({
+      ephemeral: helper,
+      allowedToolNames: helper ? helperTools.map((tool) => tool.function.name) : undefined,
       host: createRuntimeHost({
         api,
         todos,
@@ -367,13 +409,81 @@ function createAgentRuntime({
     agent.sessionKey = session.key;
     agent.mode = session.mode;
     agent.minimalMode = minimalMode;
+    if (helper) {
+      agent.minimalMode = true;
+      agent.getSystemPrompt = () =>
+        'You are CIBYP settings assistant. Reply in the user’s language. Only manage application settings. First read the safe settings catalog; exact paths and valid ranges are authoritative. Change only what the user explicitly requests. Navigate private, credential, account, provider and security settings for manual editing; never request or disclose secrets. Do not execute code, install software or access files. This conversation is ephemeral.';
+      agent.getRuntimeToolSchemas = () => helperTools;
+      agent.executeTool = async (name, args) => {
+        if (name === 'settings_read') return api.settingsAssistantCatalog(args.query);
+        if (name === 'settings_patch') return api.settingsAssistantPatch(args.changes);
+        if (name === 'settings_navigate') {
+          const result = await api.settingsAssistantNavigate(args.path);
+          emit({
+            type: 'agent-message',
+            key: session.key,
+            messageType: 'settings-navigate',
+            data: result,
+          });
+          return result;
+        }
+        return { ok: false, error: 'Only settings tools are available' };
+      };
+      const originalGetSettings = agent.host.api.getSettings;
+      agent.host.api = {
+        ...agent.host.api,
+        getSettings: async () => {
+          const settings = await originalGetSettings();
+          const entry =
+            settings.llm.pool?.find(
+              (entry) =>
+                entry.enabled !== false &&
+                entry.provider === 'opencode-zen' &&
+                (entry.providerLimits?.free ||
+                  entry.model === 'big-pickle' ||
+                  entry.model.endsWith('-free')),
+            ) ||
+            settings.llm.pool?.find(
+              (entry) => entry.id === settings.llm.activeEntryId && entry.enabled !== false,
+            );
+          if (entry)
+            agent.llmOverride = {
+              ...entry,
+              poolEntryId: entry.id,
+              reasoningEffort: entry.effort || 'auto',
+            };
+          return {
+            language: settings.language,
+            llm: settings.llm,
+            agent: { maxIterations: 12 },
+            email: { enabled: false },
+            decision: { enabled: false },
+            autoOptimizeToolSelection: false,
+            tools: {},
+            privacyProtection: { enabled: true, filterResults: true, filterArgs: true },
+          };
+        },
+        getFullSystemInfo: async () => ({}),
+        workspaceCreate: async () => ({ ok: false }),
+      };
+    }
     agent._fromWeb = true; // 无界面环境：窗口类工具（游戏邀请等）直接拒绝
     return agent;
   }
 
   async function ensureInitialized(session) {
     if (session.initialized) return;
+    if (session.initializing) return session.initializing;
+    session.initializing = initializeSession(session).finally(() => {
+      session.initializing = null;
+    });
+    return session.initializing;
+  }
+
+  async function initializeSession(session) {
     await api.startupRuntime();
+    const location = await api.runtime.getLocation();
+    if (location?.emergencyHost) session.runtimeOverride = 'host';
     await todos.load();
     if (session.mode === 'code') {
       const workspace = await validateWorkspace(session.agent.codeWorkspacePath);
@@ -394,12 +504,11 @@ function createAgentRuntime({
       /* 语言读取失败沿用当前语言 */
     }
     await session.agent.init();
-    // 无界面运行：codeIDE 依赖 CodeOSS 窗口，显式禁用以免模型徒劳调用
-    if (session.agent.settings && typeof session.agent.settings === 'object') {
-      session.agent.settings.tools = Object.assign({}, session.agent.settings.tools, {
-        codeIDE: false,
+    if (session.runtimeOverride)
+      session.agent.applySettings({
+        ...session.agent.settings,
+        runtime: { ...session.agent.settings.runtime, location: session.runtimeOverride },
       });
-    }
     // Babe：初始好感度取设置（与 GUI 建会话一致）；载入历史时由 loadFromHistory 覆盖
     if (session.mode === 'babe' && session.agent.babeAffection === 0) {
       const initial =
@@ -502,9 +611,20 @@ function createAgentRuntime({
 
   let settingsRevision = 0;
   function applyRuntimeSettings(settings) {
+    subscriptionStates.clear();
     if (settings?.language) core.i18n.i18nSetLanguage(settings.language);
     for (const session of sessions.values())
-      session.agent.applySettings({ ...settings, tools: { ...settings.tools, codeIDE: false } });
+      if (session.profile === 'settings-assistant') {
+        session.agent.host.api
+          .getSettings()
+          .then((value) => session.agent.applySettings(value))
+          .catch((error) => log.warn?.(error.message));
+      } else
+        session.agent.applySettings(
+          session.runtimeOverride
+            ? { ...settings, runtime: { ...settings.runtime, location: session.runtimeOverride } }
+            : settings,
+        );
     emit({ type: 'settingsChanged' });
   }
   api.onSettingsChanged?.(async () => {
@@ -525,7 +645,7 @@ function createAgentRuntime({
         .catch((error) => log.warn?.('[agent-runtime] ' + error.message));
   });
 
-  return {
+  const runtime = {
     INTERACTION_POLICY,
     MODES,
     api,
@@ -541,6 +661,9 @@ function createAgentRuntime({
     /** 设置快照（前端展示模型/人格等） */
     getSettings() {
       return api.getSettings();
+    },
+    async getSettingsCatalog() {
+      return require('./core/settings-catalog').settingsCatalog(await api.getSettings());
     },
 
     getSystemTheme() {
@@ -594,6 +717,43 @@ function createAgentRuntime({
       return session ? sessionSnapshot(session) : null;
     },
 
+    async requestPluginApproval(payload, signal) {
+      const session =
+        [...sessions.values()].find(
+          (s) =>
+            s.key === payload.sessionKey ||
+            String(s.agent.conversationId) === String(payload.sessionKey),
+        ) || createSession({ mode: 'chat' });
+      if (session.pendingInteraction)
+        throw new Error('A decision is already pending in this conversation');
+      signal?.throwIfAborted();
+      const pending = requestInteraction(session, 'approval', {
+        toolName: payload.toolName,
+        args: { reason: payload.reason },
+      });
+      const interaction = session.pendingInteraction;
+      let cancelled = false;
+      const cancel = () => {
+        cancelled = true;
+        if (session.pendingInteraction === interaction) respondInteraction(session, false);
+      };
+      const timer = setTimeout(cancel, 300000);
+      timer.unref?.();
+      signal?.addEventListener('abort', cancel, { once: true });
+      emit({
+        type: 'agent-message',
+        key: session.key,
+        messageType: 'approval',
+        data: { toolName: payload.toolName, args: { reason: payload.reason } },
+      });
+      try {
+        return (await pending) ? 'allowed-once' : cancelled ? 'cancelled' : 'denied';
+      } finally {
+        clearTimeout(timer);
+        signal?.removeEventListener('abort', cancel);
+      }
+    },
+
     getSessionDetails(key) {
       const session = sessions.get(key);
       if (!session) return null;
@@ -603,6 +763,144 @@ function createAgentRuntime({
           ? { kind: session.pendingInteraction.kind, payload: session.pendingInteraction.payload }
           : null,
       };
+    },
+
+    // Serializable view state; no executor, credential or Promise crosses the
+    // frontend boundary. All views observe the same owner and history.
+    getView(key) {
+      const session = sessions.get(key);
+      if (!session) return null;
+      const a = session.agent;
+      return {
+        session: sessionSnapshot(session),
+        runtimeOverride: session.runtimeOverride || null,
+        stats: getStats(key),
+        messages: a.contextManager?.getHistoryMessages() || [],
+        displayMessages: flattenMessages({ messages: a.contextManager?.messages || [] }),
+        llmOverride: a.llmOverride,
+        systemPrompt: a.contextManager?.systemPrompt || '',
+        tarotCard: a.tarotCard,
+        sessionUsage: a.sessionUsage,
+        sessionUsageByModel: a.sessionUsageByModel,
+        skills: a.skills || [],
+        skillsCatalog: a.skillsCatalog || [],
+        optimizedToolNames: a.optimizedToolNames,
+        optimizedToolReason: a.optimizedToolReason,
+        runtimeToolSchemas: a.getRuntimeToolSchemas(),
+        subAgents: (a.subAgents || []).map((r) => ({
+          id: r.id,
+          task: r.task,
+          tarot: r.tarot,
+          status: r.status,
+          startTime: r.startTime,
+          endTime: r.endTime,
+          iterations: r.iterations,
+          toolUseCount: r.toolUseCount,
+          usage: r.usage || {},
+          messages: r.messages || [],
+        })),
+        cachedWorkspaceTree: a.cachedWorkspaceTree,
+        pendingInteraction: session.pendingInteraction
+          ? { kind: session.pendingInteraction.kind, payload: session.pendingInteraction.payload }
+          : null,
+      };
+    },
+
+    async initialize(options) {
+      const session = createSession(options);
+      await ensureInitialized(session);
+      return this.getView(session.key);
+    },
+
+    async configureSession(key, values = {}) {
+      const session = sessions.get(key);
+      if (!session) throw new Error('Unknown session');
+      if (session.busy) throw new Error('Stop the task before changing session configuration');
+      await ensureInitialized(session);
+      const a = session.agent;
+      if (session.profile === 'default' && values.llmOverride) {
+        const allowed = [
+          'model',
+          'reasoningEffort',
+          'provider',
+          'poolEntryId',
+          'apiUrl',
+          'apiKey',
+          'vision',
+          'cache',
+          'sessionId',
+          'opencodeHeaders',
+          'providerLimits',
+          'maxContextLength',
+          'maxResponseTokens',
+        ];
+        a.llmOverride = Object.fromEntries(
+          Object.entries(values.llmOverride).filter(([name]) => allowed.includes(name)),
+        );
+      }
+      if (
+        session.mode === 'code' &&
+        values.workspacePath &&
+        values.workspacePath !== a.workspacePath
+      ) {
+        const result = await this.setWorkspace(key, values.workspacePath);
+        if (!result.ok) throw new Error(result.error);
+      }
+      if (typeof values.editorContext === 'string')
+        a.contextManager.setContextSource('当前编辑器', values.editorContext);
+      return this.getView(key);
+    },
+
+    async agentAction(key, action, args = []) {
+      const session = sessions.get(key);
+      if (!session) throw new Error('Unknown session');
+      const a = session.agent;
+      await ensureInitialized(session);
+      const allowed = new Set([
+        'saveToHistory',
+        'loadFromHistory',
+        'optimizeToolsForConversation',
+        'resetOptimizedTools',
+        'refreshSkillsCatalog',
+        'proactiveSend',
+        'setModelOverride',
+        'clearModelOverride',
+      ]);
+      if (action === 'executeTool') {
+        if (session.busy) throw new Error('The session is busy');
+        session.busy = true;
+        try {
+          const result = await a.executeTool(...args);
+          return { result, view: this.getView(key) };
+        } finally {
+          session.busy = false;
+        }
+      }
+      if (!allowed.has(action) || typeof a[action] !== 'function')
+        throw new Error('Unknown Agent action');
+      if (session.busy && ['loadFromHistory', 'proactiveSend'].includes(action))
+        throw new Error('The session is busy');
+      if (action === 'proactiveSend') {
+        session.busy = true;
+        session.stopRequested = false;
+        session.finished = new Promise((resolve) => {
+          session.finish = resolve;
+        });
+        try {
+          const result = await a[action](...args);
+          emit({ type: 'view-changed', key });
+          return { result, view: this.getView(key) };
+        } finally {
+          session.busy = false;
+          session.status = 'idle';
+          session.finish?.();
+          this.emitUsageStats(key);
+          emit({ type: 'status', key, status: 'idle' });
+        }
+      }
+      const result = await a[action](...args);
+      emit({ type: 'view-changed', key });
+      return { result, view: this.getView(key) };
     },
 
     createSession,
@@ -620,6 +918,9 @@ function createAgentRuntime({
         emit({ type: 'message', key: session.key, role: 'user', content: message, injected: true });
         return { ok: true, injected: true };
       }
+      const maximum = Math.max(1, Number(getSettings?.()?.sessions?.maxConcurrent) || 10);
+      if ([...sessions.values()].filter((value) => value.busy).length >= maximum)
+        return { ok: false, error: 'Maximum concurrent sessions reached' };
       session.busy = true;
       session.unadmittedInput = {
         text: message,
@@ -774,6 +1075,7 @@ function createAgentRuntime({
       session.agent.stop();
       respondInteraction(session, false);
       sessions.delete(key);
+      subscriptionStates.delete(key);
       emit({ type: 'session-closed', key });
       return { ok: true };
     },
@@ -863,6 +1165,7 @@ function createAgentRuntime({
     },
 
     getStats,
+    getSubscriptionUsage,
     // ------------------------------------------------------------- 历史接口
 
     listHistory: (mode, workspacePath) => historyList(mode || 'chat', workspacePath),
@@ -905,6 +1208,38 @@ function createAgentRuntime({
       }
     },
   };
+  // One owner schedules proactive Babe messages for every attached frontend.
+  // Creating a second window or disconnecting a browser never doubles the timer.
+  let proactiveTimer;
+  function scheduleProactive() {
+    clearInterval(proactiveTimer);
+    const minutes = Number(getSettings?.()?.babe?.proactiveInterval);
+    if (!Number.isFinite(minutes) || minutes <= 0) return;
+    proactiveTimer = setInterval(
+      () => {
+        const session =
+          [...sessions.values()]
+            .filter((s) => s.mode === 'babe' && s.profile === 'default')
+            .at(-1) || runtime.createSession({ mode: 'babe' });
+        if (session.busy || session.pendingInteraction) return;
+        runtime
+          .agentAction(session.key, 'proactiveSend', [
+            'Start a thoughtful conversation in the user’s preferred language.',
+          ])
+          .catch((error) => log.warn?.('[Babe] proactive message failed: ' + error.message));
+      },
+      Math.min(2147483647, Math.max(1000, minutes * 60000)),
+    );
+    proactiveTimer.unref();
+  }
+  const unsubscribeProactive = eventBus.subscribe('settings:changed', scheduleProactive);
+  scheduleProactive();
+  runtime.dispose = () => {
+    clearInterval(proactiveTimer);
+    unsubscribeProactive();
+    for (const session of sessions.values()) runtime.stop(session.key);
+  };
+  return runtime;
 }
 
 module.exports = { createAgentRuntime, INTERACTION_POLICY, MODES };

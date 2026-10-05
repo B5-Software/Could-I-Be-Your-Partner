@@ -102,6 +102,8 @@ class Agent {
   get todoIdCounter() { const todos = this.host && this.host.gui.todos; return todos ? todos.todoIdCounter : this._todoIdCounter; }
   set todoIdCounter(counter) { const todos = this.host && this.host.gui.todos; if (!todos) this._todoIdCounter = counter; }
   constructor(options = {}) {
+    this.ephemeral = options.ephemeral === true;
+    this.allowedToolNames = options.allowedToolNames ? new Set(options.allowedToolNames) : null;
     // 宿主（AgentHost）：内核与前端运行时的唯一边界，见 src/agent/host.js。
     // 未显式传入时取默认宿主（渲染进程=window 门面；Node/测试=无头宿主）。
     this.host = options && options.host ? options.host : agentDefaultHost();
@@ -238,7 +240,7 @@ class Agent {
       const pool = Array.isArray(this.settings?.llm?.pool) ? this.settings.llm.pool : [];
       const hit = pool.find(e => e && e.model === ov.model);
       if (hit) {
-        ov = { ...ov, provider: hit.provider, apiUrl: hit.apiUrl, apiKey: hit.apiKey, vision: hit.vision === true, poolEntryId: hit.id };
+        ov = { ...ov, provider: hit.provider, apiUrl: hit.apiUrl, apiKey: hit.apiKey, autoOpencodeHeaders: hit.autoOpencodeHeaders, vision: hit.vision === true, poolEntryId: hit.id };
       }
     }
     const base = {
@@ -249,7 +251,8 @@ class Agent {
       reasoningEffort: this.getActiveReasoningEffort(),
       ...(ov.provider ? { provider: ov.provider } : {}),
       ...(ov.apiUrl ? { apiUrl: ov.apiUrl } : {}),
-      ...(ov.apiKey !== undefined && ov.apiKey !== null && ov.apiKey !== '' ? { apiKey: ov.apiKey } : {})
+      ...(ov.apiKey !== undefined && ov.apiKey !== null && ov.apiKey !== '' ? { apiKey: ov.apiKey } : {}),
+      ...(typeof ov.autoOpencodeHeaders === 'boolean' ? { autoOpencodeHeaders: ov.autoOpencodeHeaders } : {})
     };
     if (extra && typeof extra === 'object') return { ...base, ...extra };
     return base;
@@ -265,7 +268,7 @@ class Agent {
   syncTokenLimits() {
     const limits = this.getTokenLimits();
     this.contextManager?.setMaxTokens(limits.contextTokens);
-    this.contextManager?.setOutputReserve(limits.outputTokens);
+    this.contextManager?.setOutputReserve(Number.isFinite(limits.inputTokens) ? limits.contextTokens - limits.inputTokens : limits.outputTokens);
     return limits;
   }
 
@@ -353,6 +356,7 @@ class Agent {
         provider: entry.provider || null,
         apiUrl: entry.apiUrl || null,
         apiKey: entry.apiKey || null,
+        autoOpencodeHeaders: entry.autoOpencodeHeaders,
         vision: entry.vision === true,
         contextLength: entry.contextLength || null,
         reasoningEffort: effort
@@ -1959,7 +1963,7 @@ ${affectionDesc}
 
     // Send conversation summary via email if enabled and can send
     const emailCfg = this.settings?.email;
-    if (emailCfg?.enabled && (emailCfg.mode === 'send-only' || emailCfg.mode === 'send-receive')) {
+    if (!this.ephemeral && emailCfg?.enabled && (emailCfg.mode === 'send-only' || emailCfg.mode === 'send-receive')) {
       try {
         const messages = this.contextManager.getMessages();
         const title = userMessage.substring(0, 50) + (userMessage.length > 50 ? '...' : '');
@@ -1986,6 +1990,7 @@ ${affectionDesc}
   }
 
   async saveToHistory() {
+    if (this.ephemeral) return;
     if (!this.conversationId) return;
     try {
       // 上下文管理器与历史记录解耦：
@@ -2093,6 +2098,7 @@ ${affectionDesc}
         provider: conversation.llmOverride.provider || null,
         apiUrl: conversation.llmOverride.apiUrl || null,
         apiKey: conversation.llmOverride.apiKey || null,
+        autoOpencodeHeaders: conversation.llmOverride.autoOpencodeHeaders,
         vision: conversation.llmOverride.vision === true
       };
     } else {
@@ -2744,6 +2750,10 @@ ${affectionDesc}
             args = {};
           }
 
+          if (this.allowedToolNames && !this.allowedToolNames.has(toolName)) {
+            this.contextManager.addToolResult(tc.id, toolName, JSON.stringify({ ok: false, error: 'This temporary assistant can only use its listed settings tools.' }));
+            continue;
+          }
           if (toolName === '__reoptimizeToolSelection') {
             if (this.onToolCall) this.onToolCall(toolName, args, 'calling', undefined, tc.id);
             const reasonText = typeof args?.reason === 'string' ? args.reason : '';
@@ -4908,7 +4918,7 @@ ${affectionDesc}
       subAgent.tarotCard = await this.host.api.drawTarot();
       const maxCtx = this.settings?.llm?.maxContextLength || 8192;
       subAgent.contextManager = new ContextManager(maxCtx);
-      subAgent.contextManager.setOutputReserve(this.settings?.llm?.maxResponseTokens || 8192);
+      subAgent.syncTokenLimits();
       const tarotLine = subAgent.tarotCard
         ? `你的命运之牌是: ${subAgent.tarotCard.name}${subAgent.tarotCard.isReversed ? '(逆位)' : '(正位)'} - ${(subAgent.tarotCard.isReversed ? subAgent.tarotCard.meaningOfReversed : subAgent.tarotCard.meaningOfUpright) || ''}`
         : '';
@@ -5244,7 +5254,7 @@ ${tarotLine}
     ga.settings = this.settings;
     ga.tarotCard = await this.host.api.drawTarot();
     ga.contextManager = new ContextManager(this.settings.llm.maxContextLength || 8192);
-    ga.contextManager.setOutputReserve(this.settings?.llm?.maxResponseTokens || 8192);
+    ga.syncTokenLimits();
     // buildPrompt receives tarotCard so callers can embed it without referencing ga before init
     const systemPrompt = typeof buildPrompt === 'function' ? buildPrompt(ga.tarotCard) : buildPrompt;
     ga.contextManager.setSystemPrompt(systemPrompt);

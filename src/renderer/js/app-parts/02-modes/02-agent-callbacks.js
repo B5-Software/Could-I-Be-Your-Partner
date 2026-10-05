@@ -34,6 +34,9 @@
           addSystemMessage(`${_isZh ? '抽取了命运之牌：' : 'Drew Tarot: '}${_cardName}(${position})${_isZh ? '（' : ' ('}${data.nameEn}${_isZh ? '）' : ')'}${entropyNote}\n${meaning || ''}`);
         }
         break;
+      case 'user':
+        if (isActive()) addMessageToChat('user', data);
+        break;
       case 'assistant':
         if (!isActive()) break;
         addMessageToChat('assistant', data);

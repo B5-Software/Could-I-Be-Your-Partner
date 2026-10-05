@@ -34,3 +34,16 @@ Launcher and App versions are independent. `cibyp --version` reports the launche
 - `CIBYP_GITHUB_TOKEN`: optional token for GitHub API rate limits on shared networks. It is only sent to `https://api.github.com`, never to download mirrors, and is not saved in the cache. Public installs normally need no token.
 
 Public installation needs no npm login. Use /help in TUI. cibyp-code maps its host working directory into the VM using the App's shared workspace synchronization.
+
+Create a family of command aliases without downloading a runtime:
+
+```sh
+cibyp alias add kamisato
+kamisato            # GUI, or TUI without a desktop
+kamisato-code       # Code TUI in the current terminal directory
+kamisato-tui        # TUI
+cibyp alias list
+cibyp alias remove kamisato
+```
+
+Aliases preserve arguments and the working directory. Their directory is added to the user PATH (Windows) or user shell profiles (macOS/Linux); reopen the terminal after creation. `CIBYP_ALIAS_DIR` overrides the directory. Existing files and modified managed aliases are preserved.

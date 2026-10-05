@@ -48,11 +48,19 @@ const SCHEMES = [
 ];
 
 class CodeOSSService {
-  constructor({ getMainWindow, getSettings, getVmService, dataDirectory, onWorkspaceChanged }) {
+  constructor({
+    getMainWindow,
+    getSettings,
+    getVmService,
+    dataDirectory,
+    onWorkspaceChanged,
+    publishEvent,
+  }) {
     this.getMainWindow = getMainWindow;
     this.getSettings = getSettings;
     this.getVmService = getVmService;
     this.onWorkspaceChanged = onWorkspaceChanged;
+    this.publishEvent = publishEvent;
     this.profile = path.join(dataDirectory, 'codeoss');
     this.sharedDataPath = path.join(this.profile, 'shared-data');
     const resourcePlatform =
@@ -244,6 +252,10 @@ class CodeOSSService {
     if (peer?.readyState === WebSocket.OPEN) peer.send(JSON.stringify(data));
   }
   emitRenderer(channel, data) {
+    if (this.publishEvent) {
+      this.publishEvent(channel, data);
+      return;
+    }
     const win = this.getMainWindow();
     if (win && !win.isDestroyed()) win.webContents.send(channel, data);
   }
@@ -391,6 +403,14 @@ class CodeOSSService {
     }
   }
   matchesPeer(peer) {
+    if (this.webWindowIds?.has(peer.windowId))
+      return peer.workspace?.some(
+        (folder) =>
+          folder.location === this.target.location &&
+          (process.platform === 'win32' && folder.location === 'host'
+            ? folder.path.toLowerCase() === this.target.path.toLowerCase()
+            : folder.path === this.target.path),
+      );
     return (
       !this.target.uri ||
       peer.workspace?.some((folder) => {
@@ -403,7 +423,7 @@ class CodeOSSService {
     );
   }
   isEmbeddedPeer(peer) {
-    return peer.windowId === this.embeddedWindow?.id;
+    return peer.windowId === this.embeddedWindow?.id || this.webWindowIds?.has(peer.windowId);
   }
   adoptWorkspace(peer) {
     const selected = peer.workspace[0];
@@ -411,7 +431,8 @@ class CodeOSSService {
       const uri = selected ? new URL(selected.uri) : null;
       if (uri && !['file:', 'vscode-remote:'].includes(uri.protocol)) return;
       if (uri?.protocol === 'vscode-remote:' && uri.host !== 'cibyp-vm+default') return;
-      const location = uri?.protocol === 'vscode-remote:' ? 'vm' : 'host';
+      const location =
+        selected?.location === 'vm' || uri?.protocol === 'vscode-remote:' ? 'vm' : 'host';
       let directory = uri
         ? location === 'vm'
           ? decodeURIComponent(uri.pathname)

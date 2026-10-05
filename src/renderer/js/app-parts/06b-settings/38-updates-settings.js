@@ -83,3 +83,36 @@
   });
 
   // Language settings save button
+  let updateNotice = null;
+  function displayDownloadState(state) {
+    if (!state || state.phase === 'idle') return;
+    const text = state.phase === 'ready' ? (state.kind === 'launcher' ? t('ui.update.launcherReady', '新版已下载并校验。执行 /update install 退出后，重新运行原启动命令启用新版。') : t('ui.update.ready', '新版已下载并校验。请重启安装（/update install）')) :
+      state.phase === 'installing' ? t('ui.update.installing', '正在退出并安装新版') :
+      state.phase === 'error' ? t('ui.update.error', '更新失败：') + state.error :
+      state.phase === 'current' ? t('ui.update.current', '已是最新版本') :
+      state.phase === 'downloading' ? t('ui.update.downloading', '正在下载新版') + (state.total ? ` ${Math.round(state.downloaded / state.total * 100)}%` : '') :
+      t('ui.update.checking', '正在检查更新');
+    if (state.phase === 'ready') {
+      if (!updateNotice) {
+        updateNotice = document.createElement('div'); updateNotice.className = 'app-update-notice'; updateNotice.setAttribute('role', 'status');
+        const label = document.createElement('span'); label.className = 'app-update-label';
+        const button = document.createElement('button'); button.textContent = t('ui.update.install', '重启安装');
+        button.onclick = async () => {
+          const state = await window.api.updatesStatus();
+          if (!window.confirm(state.kind === 'launcher' ? t('ui.update.launcherConfirm', '退出当前后台？再次运行原启动命令将启用已下载的新版。') : t('ui.update.confirm', '重启并安装新版？'))) return;
+          button.disabled = true;
+          try { const r = await window.api.updatesInstall(); if (!r.ok) throw new Error(r.error); }
+          catch (e) { window.showToast?.(e.message, 'error'); button.disabled = false; }
+        };
+        const dismiss = document.createElement('button'); dismiss.textContent = t('ui.update.later', '稍后'); dismiss.onclick = () => { updateNotice.remove(); updateNotice = null; };
+        updateNotice.append(label, button, dismiss); document.body.append(updateNotice);
+      }
+      updateNotice.querySelector('.app-update-label').textContent = text;
+    } else {
+      if (updateNotice) { updateNotice.remove(); updateNotice = null; }
+      const status = document.getElementById('updates-check-status'); if (status) status.textContent = text;
+      if (state.phase === 'error' || state.phase === 'current') window.showToast?.(text, state.phase === 'error' ? 'error' : 'info');
+    }
+  }
+  window.api.onUpdatesState(displayDownloadState);
+  window.api.updatesStatus().then(displayDownloadState).catch(console.error);

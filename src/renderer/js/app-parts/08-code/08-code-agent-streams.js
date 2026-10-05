@@ -6,7 +6,7 @@
   }
 
   function setupAgentStreamSubscriptions(ag, mode) {
-    if (!ag || !window.api) return;
+    if (!ag || !window.api || window.CibypBackendViews) return;
     if (window.api.onLLMRetry && !ag._llmRetryUnsub) {
       ag._llmRetryUnsub = window.api.onLLMRetry((info) => {
         if (!info || !ag.onMessage) return;
@@ -67,6 +67,9 @@
         return;
       }
       switch (type) {
+        case 'user':
+          addCodeMessage('user', data);
+          break;
         case 'assistant':
           addCodeMessage('assistant', data);
           break;

@@ -1134,3 +1134,6 @@ html[data-animations="off"] #sidebar, html[data-animations="off"] #main-content 
   .geogebra-panel { width: min(500px, calc(100vw - var(--sidebar-width))); box-shadow: var(--shadow-lg); }
   .geogebra-open #main-content { padding-right: 0; }
 }
+/* Update reminders must remain visible before the lazy settings stylesheet loads. */
+.app-update-notice { position: fixed; bottom: 20px; right: 20px; z-index: 120000; display: flex; align-items: center; gap: 12px; max-width: calc(100vw - 40px); padding: 14px 18px; border: 1px solid var(--border); border-radius: 14px; background: var(--bg-secondary); color: var(--text-primary); box-shadow: 0 6px 30px rgba(0,0,0,.15); }
+.app-update-notice button { padding: 7px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-primary); color: var(--text-primary); cursor: pointer; }

@@ -137,10 +137,13 @@ function createTerminalScreen(stdout) {
       }
     },
     enter() {
+      screen.entered = true;
+      screen.mouseEnabled = true;
       screen._write(CSI + '22;0t' + ALT_ENTER + HIDE_CURSOR + MOUSE_ON + CSI + '?2004h');
       screen.setTitle('');
     },
     exit() {
+      screen.entered = false;
       screen._write(
         RESET +
           CSI +
@@ -168,6 +171,11 @@ function createTerminalScreen(stdout) {
       screen._write(CH + ']0;' + label + '\u0007');
     },
     render(frame) {
+      const mouseEnabled = frame.mouseEnabled !== false;
+      if (screen.entered && screen.mouseEnabled !== mouseEnabled) {
+        screen._write(mouseEnabled ? MOUSE_ON : MOUSE_OFF);
+        screen.mouseEnabled = mouseEnabled;
+      }
       screen.setTitle(frame.title || '');
       const lines = (frame.lines || []).slice(0, screen.height);
       const base =

@@ -10,6 +10,7 @@ const root = path.resolve(__dirname, '..');
 const partsDirectory = path.join(root, 'src/renderer/js/app-parts');
 
 async function buildApp() {
+  require('./lib/settings-catalog.cjs').buildSettingsCatalog(root);
   const files = JSON.parse(
     fs.readFileSync(path.join(root, 'src/renderer/legacy-parts.json'), 'utf8'),
   );
@@ -73,6 +74,16 @@ async function buildApp() {
     sourcemap: true,
   });
   const preloadDirectory = path.join(root, 'src/preload');
+  await esbuild.build({
+    entryPoints: [path.join(preloadDirectory, 'preload.js')],
+    outfile: path.join(preloadDirectory, 'generated/browser-preload.js'),
+    bundle: true,
+    platform: 'browser',
+    format: 'iife',
+    target: 'chrome120',
+    alias: { electron: path.join(preloadDirectory, 'browser-electron.js') },
+    define: { 'process.platform': 'window.cibypPlatform' },
+  });
   const preloads = fs
     .readdirSync(preloadDirectory)
     .filter((file) => file === 'preload.js' || file.endsWith('-preload.js'));

@@ -50,7 +50,7 @@
     registerAgent(mode, agent, meta = {}) {
       if (!agent || !['chat', 'code', 'babe'].includes(mode)) return null;
       const id = agent.conversationId || meta.id || Date.now().toString(36);
-      const key = meta.key || this.makeKey(mode, id);
+      const key = meta.key || agent.backendKey || this.makeKey(mode, id);
       agent.setSessionKey?.(key);
 
       const session = {
@@ -354,6 +354,7 @@
         this.lastActiveByMode.delete(session.mode);
       }
       this.sessions.delete(session.key);
+      if (session.agent?.backendKey && window.api?.backendRequest) window.api.backendRequest('close', session.agent.backendKey).catch(console.error);
       this.bus.emit('session-closed', { session });
     }
 

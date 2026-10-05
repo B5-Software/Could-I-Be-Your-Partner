@@ -26,7 +26,7 @@ const theme = themeFromEnv({});
 
 // ---------------- 状态栏用量/成本 ----------------
 
-test('状态栏：右置 676.1K (64%) · $1.89，格式与 GUI 一致', () => {
+test('状态栏保留右置上下文，消费和额度通过 /usage 查看', () => {
   const line = stripAnsi(
     views.renderStatusLine(
       theme,
@@ -41,7 +41,7 @@ test('状态栏：右置 676.1K (64%) · $1.89，格式与 GUI 一致', () => {
     ),
   );
   assert.ok(line.includes('676.1K (68%)'), `用量数字错误: ${line}`);
-  assert.ok(line.includes('$1.89'), `成本错误: ${line}`);
+  assert.ok(!line.includes('$'), `消费不应常驻状态栏: ${line}`);
 });
 
 test('状态栏：M 单位两位小数；未配价格不显示 $', () => {

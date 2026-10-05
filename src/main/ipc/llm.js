@@ -25,7 +25,63 @@ module.exports = function registerLlmIpc({
   broadcastUsageChanged,
   consumeSSEStream,
   ocHeaders,
+  chatGPTAccounts,
 }) {
+  const formatDetector = new (require('../services/api-format').ApiFormatDetector)({
+    providers: LLMProviders,
+    recordUsage: recordTokenUsage,
+  });
+  ipcMain.handle('llm:detectFormat', async (_, config) => {
+    const blocked = budgetFailure();
+    if (blocked) return blocked;
+    try {
+      return await formatDetector.detect(config || {});
+    } catch (error) {
+      return { ok: false, error: error.message };
+    }
+  });
+  async function adaptConnection(llm) {
+    if (llm.provider !== 'auto') return llm;
+    const result = await formatDetector.detect(llm);
+    if (!result.ok) throw new Error(result.error);
+    return { ...llm, provider: result.provider, apiUrl: result.apiUrl };
+  }
+  async function fetchRequest(req, config) {
+    config.transport = req.transport;
+    await fetchModelsDevData();
+    if (!req.credentialProvider) return fetchLLMWithRetry(config);
+    if (!chatGPTAccounts) throw new Error('ChatGPT login service is unavailable');
+    let lease = await chatGPTAccounts.lease();
+    try {
+      const request = () =>
+        fetchLLMWithRetry({
+          ...config,
+          strictResponses: true,
+          headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + lease.token },
+          options: { ...config.options, signal: lease.signal },
+        });
+      let result = await request();
+      if (!result.ok && result.status === 401 && !lease.signal.aborted) {
+        const owner = lease.id;
+        lease.release();
+        lease = await chatGPTAccounts.lease(true, owner);
+        result = await request();
+      }
+      if (!result.ok) {
+        lease.release();
+        return result;
+      }
+      const release = result.releaseController;
+      result.releaseController = () => {
+        release?.();
+        lease.release();
+      };
+      return result;
+    } catch (error) {
+      lease.release();
+      throw error;
+    }
+  }
   function budgetFailure() {
     resetDailyUsageIfNeeded();
     const check = checkBudgetExceeded(getSettings().budget || {});
@@ -46,12 +102,32 @@ module.exports = function registerLlmIpc({
     return path.join(dataDir, 'models-dev.json');
   }
 
+  let modelsDevPending = null;
+  let modelsDevAttemptedAt = 0;
   async function fetchModelsDevData(force = false) {
+    if (modelsDevPending) return modelsDevPending;
+    if (!force && modelsDevAttemptedAt && Date.now() - modelsDevAttemptedAt < 60000)
+      return modelsDevCache.data;
+    modelsDevAttemptedAt = Date.now();
+    modelsDevPending = loadModelsDevData(force);
+    try {
+      return await modelsDevPending;
+    } finally {
+      modelsDevPending = null;
+    }
+  }
+  async function loadModelsDevData(force = false) {
     if (!force && modelsDevCache.data && Date.now() - modelsDevCache.fetchedAt < MODELS_DEV_TTL) {
       return modelsDevCache.data;
     }
     if (!force) {
       const cached = loadJSON(modelsDevCacheFile(), null);
+      if (cached?.data && cached.fetchedAt) {
+        modelsDevCache.data = cached.data;
+        modelsDevCache.fetchedAt = cached.fetchedAt;
+        require('../services/model-pricing').update(cached.data, cached.fetchedAt);
+        require('../opencode-models').updateOpenCodeCatalog(cached.data);
+      }
       if (
         cached &&
         cached.fetchedAt &&
@@ -59,7 +135,9 @@ module.exports = function registerLlmIpc({
         Date.now() - cached.fetchedAt < MODELS_DEV_TTL
       ) {
         modelsDevCache.data = cached.data;
+        require('../services/model-pricing').update(cached.data, cached.fetchedAt);
         modelsDevCache.fetchedAt = cached.fetchedAt;
+        require('../opencode-models').updateOpenCodeCatalog(cached.data);
         return cached.data;
       }
     }
@@ -71,7 +149,9 @@ module.exports = function registerLlmIpc({
       if (!resp.ok) return modelsDevCache.data || null;
       const data = await resp.json();
       modelsDevCache.data = data;
+      require('../services/model-pricing').update(data);
       modelsDevCache.fetchedAt = Date.now();
+      require('../opencode-models').updateOpenCodeCatalog(data);
       try {
         fs.writeFileSync(
           modelsDevCacheFile(),
@@ -91,6 +171,12 @@ module.exports = function registerLlmIpc({
     if (!data || typeof data !== 'object') return null;
     const wanted = String(modelId || '').toLowerCase();
     if (!wanted) return null;
+    if (provider === 'opencode-zen' || provider === 'opencode-go') {
+      const key = provider === 'opencode-go' ? 'opencode-go' : 'opencode';
+      return data[key]?.models?.[wanted]
+        ? { providerKey: key, model: data[key].models[wanted] }
+        : null;
+    }
     const providerKeys =
       provider === 'opencode-go' ? ['opencode-go', 'opencode'] : ['opencode', 'opencode-go'];
     for (const pk of providerKeys) {
@@ -177,6 +263,15 @@ module.exports = function registerLlmIpc({
     } catch {
       /* ignore */
     }
+    const channelLimits = require('../opencode-models').getOpenCodeLimits({ provider, model });
+    if (channelLimits)
+      out.metadata = {
+        ...out.metadata,
+        contextLength: channelLimits.context,
+        maxOutput: channelLimits.output,
+        providerLimits: channelLimits,
+        source: channelLimits.source,
+      };
     // 2) Anthropic /v1/models：thinking 模式 + effort 档位 + 上下文长度
     if (provider === 'anthropic-compat' && apiUrl) {
       try {
@@ -379,6 +474,8 @@ module.exports = function registerLlmIpc({
     const out = { ...baseLlm };
     if (options.contextLength) out.maxContextLength = options.contextLength;
     if (options.provider) out.provider = options.provider;
+    if (typeof options.autoOpencodeHeaders === 'boolean')
+      out.autoOpencodeHeaders = options.autoOpencodeHeaders;
     if (options.apiUrl) out.apiUrl = options.apiUrl;
     if (options.apiKey !== undefined && options.apiKey !== null && options.apiKey !== '') {
       out.apiKey = options.apiKey;
@@ -390,7 +487,11 @@ module.exports = function registerLlmIpc({
 
   ipcMain.handle('llm:chat', async (event, messages, options = {}) => {
     try {
-      const llm = applySessionModelOverrides(getSettings().llm, options);
+      if (getSettings().llm.provider === 'auto' || options.provider === 'auto') {
+        const gate = budgetFailure();
+        if (gate) return gate;
+      }
+      const llm = await adaptConnection(applySessionModelOverrides(getSettings().llm, options));
       if (llm.provider === 'opencode-zen' || llm.provider === 'opencode-go') {
         if (!llm.zenApiKey || !llm.model)
           return { ok: false, error: '请先在设置中配置OpenCode API Key和模型' };
@@ -451,7 +552,7 @@ module.exports = function registerLlmIpc({
         }
       };
 
-      const result = await fetchLLMWithRetry({
+      const result = await fetchRequest(req, {
         label: 'LLM:chat',
         apiUrl: req.url,
         apiKey: req.headers['x-api-key'] || llm.apiKey || llm.zenApiKey,
@@ -515,7 +616,11 @@ module.exports = function registerLlmIpc({
         );
       }
       // 按实际请求模型归属（含会话级覆盖）
-      recordTokenUsage(usage, llmForRequest.model);
+      recordTokenUsage(
+        { ...usage, ...(req.credentialProvider ? { billingMode: 'subscription' } : {}) },
+        llmForRequest.model,
+        llmForRequest.provider,
+      );
       persistSettings();
       broadcastUsageChanged();
       // 游戏窗口/子窗口调用 LLM 时，把 usage 推送给主渲染器，让其累计到当前会话统计
@@ -550,7 +655,11 @@ module.exports = function registerLlmIpc({
   // ---- IPC: LLM Streaming (with retry/backoff/timeout) ----
   ipcMain.handle('llm:chatStream', async (_, messages, options = {}) => {
     try {
-      const llm = applySessionModelOverrides(getSettings().llm, options);
+      if (getSettings().llm.provider === 'auto' || options.provider === 'auto') {
+        const gate = budgetFailure();
+        if (gate) return gate;
+      }
+      const llm = await adaptConnection(applySessionModelOverrides(getSettings().llm, options));
       if (llm.provider === 'opencode-zen' || llm.provider === 'opencode-go') {
         if (!llm.zenApiKey || !llm.model)
           return { ok: false, error: '请先在设置中配置OpenCode API Key和模型' };
@@ -610,7 +719,7 @@ module.exports = function registerLlmIpc({
         }
       };
 
-      const result = await fetchLLMWithRetry({
+      const result = await fetchRequest(req, {
         label: 'LLM:stream',
         apiUrl: req.url,
         apiKey: req.headers['x-api-key'] || llm.apiKey || llm.zenApiKey,
@@ -651,6 +760,7 @@ module.exports = function registerLlmIpc({
           req.transport,
           120000,
           {
+            requiresCompleted: !!req.credentialProvider,
             label: 'LLM:stream',
             model: llmForRequest.model,
           },
@@ -664,6 +774,7 @@ module.exports = function registerLlmIpc({
         requestId: options.requestId,
         sessionKey: options.sessionKey || null,
       });
+      if (streamResult.error) return { ok: false, error: streamResult.error };
       let usage = streamResult.usage || {};
       let estimated = false;
       // API 未返回 usage 时估算并标记
@@ -678,7 +789,11 @@ module.exports = function registerLlmIpc({
         };
         estimated = true;
       }
-      recordTokenUsage(usage, llmForRequest.model);
+      recordTokenUsage(
+        { ...usage, ...(req.credentialProvider ? { billingMode: 'subscription' } : {}) },
+        llmForRequest.model,
+        llmForRequest.provider,
+      );
       persistSettings();
       broadcastUsageChanged();
       return {
@@ -713,7 +828,11 @@ module.exports = function registerLlmIpc({
     try {
       const blocked = budgetFailure();
       if (blocked) return blocked;
-      const llm = applySessionModelOverrides(getSettings().llm, options);
+      if (getSettings().llm.provider === 'auto' || options.provider === 'auto') {
+        const gate = budgetFailure();
+        if (gate) return gate;
+      }
+      const llm = await adaptConnection(applySessionModelOverrides(getSettings().llm, options));
       if (llm.provider === 'opencode-zen' || llm.provider === 'opencode-go') {
         if (!llm.zenApiKey || !llm.model) return { ok: false, error: '请先配置OpenCode' };
       } else if (!llm.apiUrl || !llm.model) {
@@ -759,7 +878,7 @@ module.exports = function registerLlmIpc({
         timeoutMs: options.timeoutMs ?? llm.timeoutMs ?? undefined,
         sessionKey: options.sessionKey || null,
       };
-      const result = await fetchLLMWithRetry({
+      const result = await fetchRequest(req, {
         label: 'LLM:summarize',
         apiUrl: req.url,
         apiKey: req.headers['x-api-key'] || llm.apiKey || llm.zenApiKey,
@@ -795,7 +914,11 @@ module.exports = function registerLlmIpc({
       console.log(
         `[LLM:summarize ${logTs()}] ✓ ${llmForRequest.model} tokens:${usage.prompt_tokens || 0}+${usage.completion_tokens || 0}=${usage.total_tokens || 0}${usage._estimated ? '(est)' : ''} summary=${content.length}chars`,
       );
-      recordTokenUsage(usage, llmForRequest.model);
+      recordTokenUsage(
+        { ...usage, ...(req.credentialProvider ? { billingMode: 'subscription' } : {}) },
+        llmForRequest.model,
+        llmForRequest.provider,
+      );
       persistSettings();
       broadcastUsageChanged();
       data._meta = {
@@ -888,19 +1011,98 @@ module.exports = function registerLlmIpc({
   });
 
   // ---- IPC: OpenCode models list（mode: 'zen'（默认）| 'go'）----
-  ipcMain.handle('zen:fetchModels', async (_, mode) => {
+  async function probeModel(config = {}) {
+    if (!config.model || !config.provider) return { ok: false, error: '请选择模型' };
+    const blocked = budgetFailure();
+    if (blocked) return blocked;
+    try {
+      const llm = await adaptConnection({
+        ...getSettings().llm,
+        ...config,
+        autoOpencodeHeaders: true,
+        reasoningEffort: 'off',
+      });
+      const req = LLMProviders.buildLLMRequest(llm, {
+        messages: [{ role: 'user', content: 'Reply OK.' }],
+        stream: false,
+        max_tokens: 16,
+        sessionKey: 'cibyp-connection-probe',
+      });
+      const resultRequest = await fetchRequest(req, {
+        label: 'LLM:probe',
+        apiUrl: req.url,
+        headers: req.headers,
+        body: req.body,
+        options: { maxRetries: 1, timeoutMs: 20000 },
+      });
+      if (!resultRequest.ok) {
+        const failure = { ok: false, status: resultRequest.status, error: resultRequest.error };
+        if (config.provider === 'opencode-zen')
+          require('../opencode-models').markOpenCodeAvailability(config.model, failure);
+        return failure;
+      }
+      const response = resultRequest.response;
+      try {
+        if (!response.ok) {
+          const data = await response.json().catch(() => ({}));
+          return {
+            ok: false,
+            status: response.status,
+            error: data?.error?.message || `HTTP ${response.status}`,
+          };
+        }
+        const result = req.body.stream
+          ? await consumeSSEStream(
+              response.body,
+              () => {},
+              'probe-' + Date.now(),
+              req.transport,
+              20000,
+              { requiresCompleted: !!req.credentialProvider },
+            )
+          : LLMProviders.parseLLMResponse(await response.json(), req.transport);
+        if (
+          result.error ||
+          (!result.content &&
+            !result.reasoning &&
+            !result.choices?.[0]?.message?.content &&
+            !result.choices?.[0]?.message?.reasoning_content &&
+            !result.choices?.[0]?.message?.reasoning &&
+            !(result.toolCalls || result.tool_calls || result.choices?.[0]?.message?.tool_calls)
+              ?.length)
+        )
+          return { ok: false, error: result.error || '模型未返回有效响应' };
+        if (result.usage)
+          recordTokenUsage(
+            { ...result.usage, ...(req.credentialProvider ? { billingMode: 'subscription' } : {}) },
+            config.model,
+            config.provider,
+          );
+        if (config.provider === 'opencode-zen')
+          require('../opencode-models').markOpenCodeAvailability(config.model, { ok: true });
+        return { ok: true };
+      } finally {
+        resultRequest.releaseController?.();
+      }
+    } catch (error) {
+      return { ok: false, error: error.message };
+    }
+  }
+  ipcMain.handle('llm:probe', (_, config) => probeModel(config));
+  ipcMain.handle('zen:fetchModels', async (_, mode, options = {}) => {
     try {
       const isGo = mode === 'go' || mode === 'opencode-go';
       const base = isGo ? LLMProviders.OC_GO_BASE : LLMProviders.ZEN_BASE;
       const modelsUrl = `${base}/models`;
-      const apiKey = getSettings().llm.zenApiKey;
+      const apiKey =
+        typeof options.apiKey === 'string' ? options.apiKey.trim() : getSettings().llm.zenApiKey;
       const baseHeaders = { 'Content-Type': 'application/json' };
       if (apiKey) baseHeaders['Authorization'] = `Bearer ${apiKey}`;
       // 自动附加 OpenCode 官方头组 + 用户自定义头
       const headers = ocHeaders.applyProviderHeaders({
         url: modelsUrl,
         headers: baseHeaders,
-        llm: getSettings().llm,
+        llm: { ...getSettings().llm, autoOpencodeHeaders: true },
       });
       // 10 秒超时，避免网络挂起导致向导永远卡在"正在获取模型列表..."
       const controller = new AbortController();
@@ -919,7 +1121,31 @@ module.exports = function registerLlmIpc({
         };
       }
       const data = await resp.json();
-      return { ok: true, models: data.data || data.models || data };
+      const catalog = await fetchModelsDevData();
+      let models = require('../opencode-models').enrichOpenCodeModels(
+        data.data || data.models || data,
+        catalog,
+        isGo ? 'go' : 'zen',
+      );
+      if (!isGo && options.verifyFree) {
+        const candidates = models
+          .filter((m) => m.free)
+          .sort((a, b) => Number(b.id === 'big-pickle') - Number(a.id === 'big-pickle'));
+        for (const model of candidates.slice(0, 3)) {
+          const check = await probeModel({
+            provider: 'opencode-zen',
+            model: model.id,
+            zenApiKey: apiKey || 'public',
+            apiKey: apiKey || 'public',
+          });
+          if (check.ok) {
+            model.verified = true;
+            break;
+          }
+        }
+        models = require('../opencode-models').enrichOpenCodeModels(models, catalog);
+      }
+      return { ok: true, models };
     } catch (e) {
       if (e.name === 'AbortError') return { ok: false, error: '请求超时（10s），请检查网络连接' };
       return { ok: false, error: e.message };
@@ -929,6 +1155,7 @@ module.exports = function registerLlmIpc({
   // ---- IPC: Generic LLM models list (OpenAI/Anthropic compatible) ----
   ipcMain.handle('llm:fetchModels', async (_, provider, apiUrl, apiKey) => {
     try {
+      if (provider === 'chatgpt-codex') return chatGPTAccounts.models();
       if (!provider || !apiUrl) return { ok: false, error: '缺少 provider 或 apiUrl' };
       let modelsUrl = '';
       const headers = { 'Content-Type': 'application/json' };
@@ -982,5 +1209,18 @@ module.exports = function registerLlmIpc({
     }
   });
 
+  ipcMain.handle('llm:pricing', async (_event, model, provider, force = false) => {
+    await fetchModelsDevData(force);
+    return {
+      ok: true,
+      ...require('../services/model-pricing').resolve(
+        model || getSettings().llm.model,
+        provider || getSettings().llm.provider,
+        getSettings().budget?.models?.[model || getSettings().llm.model],
+        undefined,
+        getSettings().llm.apiUrl,
+      ),
+    };
+  });
   return { fetchModelsDevData };
 };

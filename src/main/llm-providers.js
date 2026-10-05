@@ -213,7 +213,7 @@ function zenModelProviderType(modelId) {
 // ---- OpenCode Zen 匿名免费池适配（2026-09-19 实测）----
 // 匿名请求（Authorization: Bearer public）只接受“agent 形状”：stream:true + 工具名包含
 // bash/edit/glob/grep/read 五个（仅名字参与校验，schema/描述可用最小占位）。缺任一项均返回
-// 403 FreeTierError。带真实 Zen key 的请求不受此限制。
+// 403 FreeTierError。仅对 Zen 免费模型补齐，不以 API Key 判断是否免费。
 const FREE_TIER_CORE_TOOLS = ['bash', 'edit', 'glob', 'grep', 'read'];
 
 const FREE_TIER_AGENT_TOOLS = {
@@ -260,15 +260,16 @@ function mergeFreeTierTools(tools, minimalMode = false) {
  * @returns {{ url, headers, body, transport }} transport: 'openai' | 'anthropic' | 'responses'
  */
 function buildLLMRequest(llm, opts) {
+  const channelLimits = require('./opencode-models').getOpenCodeLimits(llm);
+  if (channelLimits) llm = { ...llm, providerLimits: channelLimits };
   opts = { ...opts, max_tokens: require('../shared/token-policy').requestOutput({ llm }, opts) };
   const provider = llm.provider || 'openai-compat';
   const model = llm.model;
   // 允许调用方（如游戏）通过 opts.reasoningEffort 覆盖全局设置，
   // 避免思考模型把所有 token 都花在 reasoning 上导致 content 为空。
   const reasoningEffort = opts.reasoningEffort || llm.reasoningEffort || 'off';
-  // 匿名 Zen：免费池强制 agent 形状（stream + 核心工具名），带 key 不受限
-  const zenAnonymous = provider === 'opencode-zen' && isAnonymousZen(llm);
-  const buildOpts = zenAnonymous
+  const zenFree = require('./opencode-models').isOpenCodeFreeModel(llm);
+  const buildOpts = zenFree
     ? { ...opts, stream: true, tools: mergeFreeTierTools(opts.tools, opts.minimalMode === true) }
     : opts;
 
@@ -279,6 +280,15 @@ function buildLLMRequest(llm, opts) {
     req = buildOpencodeGoRequest(llm, buildOpts, reasoningEffort);
   } else if (provider === 'anthropic-compat') {
     req = buildAnthropicRequest(llm, buildOpts, reasoningEffort);
+  } else if (provider === 'chatgpt-codex') {
+    req = buildResponsesRequest({ ...llm, apiUrl: 'https://api.openai.com/v1/responses', apiKey: '', customHeaders: [] }, { ...buildOpts, stream: true }, reasoningEffort);
+    delete req.body.max_output_tokens;
+    delete req.body.temperature;
+    if (req.body.tools) req.body.tools = [{ type: 'namespace', name: 'cibyp', description: 'Tools executed by Could I Be Your Partner.', tools: req.body.tools.map(tool => ({ ...tool, strict: false })) }];
+    for (const item of req.body.input) if (item.type === 'function_call' || item.type === 'function_call_output') item.namespace = 'cibyp';
+    if (req.body.tool_choice?.name) req.body.tool_choice.namespace = 'cibyp';
+    else if (req.body.tool_choice?.type) req.body.tool_choice = req.body.tool_choice.type;
+    req.credentialProvider = 'chatgpt-codex';
   } else if (provider === 'openai-responses') {
     req = buildResponsesRequest(llm, buildOpts, reasoningEffort);
   } else {
@@ -286,13 +296,14 @@ function buildLLMRequest(llm, opts) {
     req = buildOpenAIRequest(llm, buildOpts, reasoningEffort);
   }
 
-  // 匿名 Zen 兜底：强制 stream（部分 builder 只在 opts.stream 时带 stream_options）
-  if (zenAnonymous) {
+  // Free models require streaming with the five compatible core tool names.
+  if (zenFree) {
     req.body.stream = true;
     if (req.transport === 'openai' && !req.body.stream_options) {
       req.body.stream_options = { include_usage: true };
     }
-    req.zenAnonymous = true;
+    req.zenFree = true;
+    if (isAnonymousZen(llm)) req.zenAnonymous = true;
   }
 
   // 统一请求头应用（所有种类 API 生效）：
@@ -302,7 +313,7 @@ function buildLLMRequest(llm, opts) {
   req.headers = ocHeaders.applyProviderHeaders({
     url: req.url,
     headers: req.headers,
-    llm,
+    llm: provider === 'chatgpt-codex' ? {} : llm,
     sessionKey: opts.sessionKey || null,
     requestId: opts.requestId || null
   });

@@ -125,7 +125,14 @@ class TuiApp {
     }
     if (this._disposed) return this;
     // Create the first view with the saved language, appearance and affection.
-    await this.newSession(mode, opts.workspacePath, { local: opts.workspaceLocal });
+    const existing =
+      !opts.workspacePath &&
+      this.runtime
+        .listSessions?.()
+        .filter((session) => session.mode === mode && session.profile !== 'settings-assistant')
+        .at(-1);
+    if (existing) await this._switchSession(existing.key);
+    else await this.newSession(mode, opts.workspacePath, { local: opts.workspaceLocal });
     if (typeof this.runtime.getTodos === 'function')
       this.state.todos = await this.runtime.getTodos();
     this.pushEntry({
@@ -262,6 +269,7 @@ class TuiApp {
     this.state.scrollLineCount = frame.scroll?.totalLines;
     frame.title = this.state.title;
     frame.palette = { foreground: this.theme.text, background: this.theme.background };
+    frame.mouseEnabled = this.state.settings?.tui?.mouse !== false;
     return frame;
   }
 
@@ -380,6 +388,7 @@ class TuiApp {
       return true;
     }
     if (key?.name === 'mouse') return this._handleMouse(key);
+    if (key?.name === 'wheel') return this._handleWheel(key);
     if (this.state.selection && key?.ctrl && key.char === 'c') {
       const text = selectedText(this.state.selection, this.frame().transcript?.lines || []);
       if (text) {
@@ -480,11 +489,79 @@ class TuiApp {
   }
 
   async _handleMouse(key) {
+    if (this.state.settings?.tui?.mouse === false || key.shift) return true;
     if (key.button === 'right' && key.press && this.state.selection?.moved) {
       await this._copySelection();
       return true;
     }
-    if (key.button !== 'left' || this.state.modal) return true;
+    if (key.button !== 'left') return true;
+    const frame = this.frame();
+    const toast = frame.toastBounds;
+    if (
+      toast &&
+      key.y > toast.top &&
+      key.y <= toast.top + toast.height &&
+      key.x > toast.left &&
+      key.x <= toast.left + toast.width
+    )
+      return true;
+    const hit = frame.hits?.modal.find((item) => item.row === key.y);
+    const modal = this.state.modal;
+    if (modal && hit) {
+      if (key.press && !key.motion) {
+        modal.selected = hit.index;
+        this._mouseOption = { modal, index: hit.index };
+      } else if (!key.press) {
+        const pressed = this._mouseOption;
+        this._mouseOption = null;
+        if (pressed?.modal === modal && pressed.index === hit.index && !modal.busy) {
+          if (modal.kind.startsWith('config')) await this.configBrowser.handle({ name: 'enter' });
+          else await this._chooseModalOption(hit.index);
+        }
+      }
+      return true;
+    }
+    const input = frame.hits?.input.find((item) => item.row === key.y);
+    if (input && key.press && !key.motion && key.x > 1 && key.x < this.state.width) {
+      const editor = this.state.search?.active
+        ? this.state.search.editor
+        : modal?.inputMode
+          ? modal.editor
+          : !modal
+            ? this.editor
+            : null;
+      if (editor) {
+        const nearest = input.points.reduce((best, point) =>
+          Math.abs(point.column - key.x) < Math.abs(best.column - key.x) ? point : best,
+        );
+        editor.cursor = nearest.index;
+      }
+      this.state.selection = null;
+      this._mouseOption = null;
+      return true;
+    }
+    const completion = frame.hits?.completion.find((item) => item.row === key.y);
+    if (!modal && completion) {
+      if (key.press && !key.motion) {
+        this._completionSelected = completion.index;
+        this._mouseCompletion = this.state.completion?.items[completion.index];
+      } else if (!key.press) {
+        const item = this.state.completion?.items[completion.index];
+        // Complete on release, but leave execution to Enter so a misplaced
+        // click cannot submit a destructive command.
+        if (
+          item?.value === this._mouseCompletion?.value &&
+          item?.label === this._mouseCompletion?.label
+        )
+          this._acceptCompletion(item);
+        this._mouseCompletion = null;
+      }
+      return true;
+    }
+    if (modal) {
+      this._mouseOption = null;
+      return true;
+    }
     const selection = this.state.selection;
     if (!key.press) {
       if (selection?.dragging) {
@@ -498,15 +575,41 @@ class TuiApp {
       if (selection?.dragging) this._extendSelection(key);
       return true;
     }
-    const frame = this.frame();
-    const toast = frame.toastBounds;
-    if (toast && key.y > toast.top && key.y <= toast.top + toast.height && key.x > toast.left)
-      return true;
     const anchor = pointAt(frame.transcript, key.x, key.y);
     this.state.selection = anchor
       ? { anchor, focus: anchor, dragging: true, moved: false, mouse: key }
       : null;
     return true;
+  }
+
+  async _handleWheel(key) {
+    if (
+      this.state.settings?.tui?.mouse === false ||
+      key.shift ||
+      !['up', 'down'].includes(key.direction)
+    )
+      return true;
+    const frame = this.frame();
+    if (this.state.modal?.kind?.startsWith('config')) return this.configBrowser.handle(key);
+    if (this.state.modal) return this._handleModalKey(key);
+    if (frame.hits?.completion.some((hit) => hit.row === key.y)) {
+      this._completionSelected = Math.max(
+        0,
+        Math.min(
+          (this.state.completion?.items.length || 1) - 1,
+          this._completionSelected + (key.direction === 'up' ? -1 : 1),
+        ),
+      );
+      return true;
+    }
+    if (frame.hits?.input.some((hit) => hit.row === key.y)) {
+      const editor = this.state.search?.active ? this.state.search.editor : this.editor;
+      editor.vertical(key.direction === 'up' ? -1 : 1);
+      return true;
+    }
+    if (!frame.transcript) return true;
+    if (key.y != null && (key.y < 1 || key.y > frame.transcript.rowLines.length)) return true;
+    return this._handleGlobalKey(key);
   }
 
   async _copySelection() {
@@ -612,11 +715,11 @@ class TuiApp {
     const isChar = key.name === 'char';
     const plainChar = isChar && !key.ctrl && !key.alt;
     if (key.name === 'wheel') {
-      // 模态打开时滚轮翻选项（输入框区域滚轮仍滚动聊天记录：见 _handleGlobalKey）
+      // Wheel selection stops at the first and last option.
       if (key.direction === 'up') {
-        modal.selected = (modal.selected + options.length - 1) % Math.max(1, options.length);
+        modal.selected = Math.max(0, (modal.selected || 0) - 1);
       } else {
-        modal.selected = (modal.selected + 1) % Math.max(1, options.length);
+        modal.selected = Math.min(Math.max(0, options.length - 1), (modal.selected || 0) + 1);
       }
       return true;
     }
@@ -679,7 +782,12 @@ class TuiApp {
     }
     this.state.modal = null;
 
-    if (modal.kind === 'approval') {
+    if (modal.kind === 'updateConfirm') {
+      if (option.value) {
+        const r = await this.runtime.api.updatesInstall();
+        if (!r.ok) throw new Error(r.error);
+      }
+    } else if (modal.kind === 'approval') {
       this.runtime.respond(this.activeKey, option.value);
     } else if (modal.kind === 'toolAuth') {
       this.runtime.respond(this.activeKey, option.value);
@@ -801,6 +909,20 @@ class TuiApp {
   handleRuntimeEvent(event) {
     if (!event || !event.type) return;
     if (event.type === 'settingsChanged') return this.refreshSettings();
+    if (event.type === 'reconnected') {
+      const editor = this.editor,
+        attachments = this.attachments;
+      this._sessionViews.clear();
+      this._switchSession(this.activeKey, { reload: true })
+        .then(() => {
+          this.editor = editor;
+          this.attachments = attachments;
+        })
+        .catch((error) => {
+          this.state.toast = { text: error.message };
+        });
+      return;
+    }
     // 只处理属于当前会话的事件（多会话并存时避免互相串扰）
     if (
       event.key &&
@@ -822,6 +944,33 @@ class TuiApp {
       return;
     }
     switch (event.type) {
+      case 'update': {
+        const s = event.state || {};
+        const text =
+          s.phase === 'ready'
+            ? s.kind === 'launcher'
+              ? t(
+                  'ui.update.launcherReady',
+                  '新版已下载并校验。执行 /update install 退出后，重新运行原启动命令启用新版。',
+                )
+              : t('ui.update.ready', '新版已下载并校验。请重启安装（/update install）')
+            : s.phase === 'installing'
+              ? t('ui.update.installing', '正在退出并安装新版')
+              : s.phase === 'current'
+                ? t('ui.update.current', '已是最新版本')
+                : s.phase === 'error'
+                  ? t('ui.update.error', '更新失败：') + s.error
+                  : s.phase === 'downloading'
+                    ? t('ui.update.downloading', '正在下载新版') +
+                      (s.total ? ' ' + Math.round((s.downloaded / s.total) * 100) + '%' : '')
+                    : t('ui.update.checking', '正在检查更新');
+        this.state.toast = {
+          text,
+          expiresAt: this.clock() + (s.phase === 'ready' || s.phase === 'error' ? 30000 : 5000),
+        };
+        if (s.phase === 'ready' || s.phase === 'error') this.pushEntry({ kind: 'notice', text });
+        break;
+      }
       case 'notification': {
         const payload = event.payload || {};
         if (event.notificationType === 'toast') {
@@ -981,6 +1130,9 @@ class TuiApp {
           }
         }
         break;
+      case 'subscription-usage':
+        this.state.subscriptionUsage = event.data;
+        break;
       case 'title':
         this.state.title = event.title || '';
         break;
@@ -1098,7 +1250,7 @@ class TuiApp {
       'tui:' + mode + ':' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
     // Workspace preparation commits the mapped path to the runtime. Do not seed
     // a Code Agent with an unvalidated host path when the execution target is VM.
-    this.runtime.createSession({
+    await this.runtime.createSession({
       key,
       mode,
       workspacePath: mode === 'code' && this.runtime.prepareWorkspace ? null : workspacePath,
@@ -1186,10 +1338,11 @@ class TuiApp {
     this._saveView();
   }
 
-  async _switchSession(key) {
+  async _switchSession(key, { reload = false } = {}) {
     const session = this.runtime.getSession(key);
     if (!session) return;
-    this._saveView();
+    if (!reload) this._saveView();
+    else this._sessionViews.delete(key);
     this._completionSelected = 0;
     this._completionDismissedText = null;
     if (this._sessionViews.has(key)) {
@@ -1238,6 +1391,7 @@ class TuiApp {
           usage: stats.usage,
           context: stats.context,
           costUSD: stats.costUSD,
+          subscriptionUsage: stats.subscriptionUsage,
         });
     }
     this._reloadCustomCommands();
@@ -1489,6 +1643,34 @@ class TuiApp {
       case 'config':
         await this.configBrowser.open(argText.trim());
         return;
+      case 'update': {
+        if (argText.trim() && argText.trim() !== 'install') throw new Error('/update [install]');
+        if (argText.trim() === 'install') {
+          const state = await this.runtime.api.updatesStatus();
+          this.state.modal = {
+            kind: 'updateConfirm',
+            title:
+              state.kind === 'launcher'
+                ? t(
+                    'ui.update.launcherConfirm',
+                    '退出当前后台？再次运行原启动命令将启用已下载的新版。',
+                  )
+                : t('ui.update.confirm', '重启并安装新版？'),
+            selected: 0,
+            options: [
+              { label: t('ui.update.later', '稍后'), value: false },
+              { label: t('ui.update.install', '重启安装'), value: true },
+            ],
+          };
+        } else {
+          await this.runtime.api.updatesStart();
+          this.state.toast = {
+            text: t('ui.update.started', '正在检查并下载新版；完成后会提醒重启安装'),
+            expiresAt: this.clock() + 5000,
+          };
+        }
+        return;
+      }
       case 'cwd': {
         const result = await this.runtime.openCurrentDirectory(this.activeKey);
         if (!result.ok)
@@ -1555,35 +1737,7 @@ class TuiApp {
         return;
       }
       case 'usage': {
-        const stats =
-          typeof this.runtime.getStats === 'function'
-            ? this.runtime.getStats(this.activeKey)
-            : null;
-        const usage = (stats && stats.usage) || this.state.usage || {};
-        const context = (stats && stats.context) || this.state.context;
-        this.pushEntry({
-          kind: 'system',
-          text:
-            t(
-              'ui.tui.usageLine',
-              '本轮用量：prompt {prompt} · completion {completion} · total {total}',
-              {
-                prompt: usage.prompt || 0,
-                completion: usage.completion || 0,
-                total: usage.total || 0,
-              },
-            ) +
-            (context && context.max
-              ? '\n' +
-                t('ui.tui.usageContext', '上下文占用：{used} / {max}', {
-                  used: context.used || 0,
-                  max: context.max,
-                })
-              : '') +
-            (stats && typeof stats.affection === 'number'
-              ? '\n' + t('ui.tui.usageAffection', '好感度：{value}', { value: stats.affection })
-              : ''),
-        });
+        await this._openUsage();
         return;
       }
       case 'model': {
@@ -1728,6 +1882,26 @@ class TuiApp {
         });
         return;
       }
+      case 'mouse': {
+        const value = argText.trim().toLowerCase();
+        if (value && !['on', 'off', 'toggle'].includes(value)) {
+          this.pushEntry({ kind: 'system', text: t('ui.tui.mouseUsage', '用法：/mouse [on|off]') });
+          return;
+        }
+        const mouse =
+          value === 'on' || (value !== 'off' && this.state.settings?.tui?.mouse === false);
+        await this._saveTuiPreferences({ mouse });
+        this.pushEntry({
+          kind: 'notice',
+          text: mouse
+            ? t(
+                'ui.tui.mouseOn',
+                '鼠标已开启：点击菜单、定位光标、滚轮翻页和拖选复制；Shift 可使用终端原生选择',
+              )
+            : t('ui.tui.mouseOff', '鼠标捕获已关闭：使用终端原生选择、复制和粘贴'),
+        });
+        return;
+      }
       case 'vmdesk': {
         await this._openVmDesktop();
         return;
@@ -1758,6 +1932,74 @@ class TuiApp {
           ? '\n' + t('ui.tui.workspaceLocal', '本地目录：{path}', { path: state.hostWorkspace })
           : ''),
     });
+  }
+
+  async _openUsage() {
+    const key = this.activeKey;
+    const stats = this.runtime.getStats?.(key) || {};
+    const usage = stats.usage || this.state.usage || {};
+    const context = stats.context || this.state.context;
+    const modal = {
+      kind: 'usage',
+      title: t('ui.tui.usageTitle', '用量与额度'),
+      body:
+        t(
+          'ui.tui.usageLine',
+          '本轮用量：prompt {prompt} · completion {completion} · total {total}',
+          { prompt: usage.prompt || 0, completion: usage.completion || 0, total: usage.total || 0 },
+        ) +
+        (context?.max
+          ? '\n' +
+            t('ui.tui.usageContext', '上下文占用：{used} / {max}', {
+              used: context.used || 0,
+              max: context.max,
+            })
+          : ''),
+      subtitle: t('ui.tui.usageLoading', '正在读取额度…'),
+      options: [{ label: t('ui.tui.helpClose', '关闭'), value: 'close' }],
+      selected: 0,
+    };
+    this.state.modal = modal;
+    try {
+      const data =
+        (await this.runtime.getSubscriptionUsage?.(key, { force: true, includeWindows: true })) ||
+        stats.subscriptionUsage ||
+        this.state.subscriptionUsage;
+      if (this.activeKey !== key || this.state.modal !== modal) return;
+      const { formatUsage } = require('../shared/usage-indicator');
+      const language = this.state.settings?.language || 'zh-CN';
+      const indicator = data ? formatUsage(data, language) : null;
+      modal.subtitle = indicator?.text || t('ui.tui.usageUnavailable', '额度暂不可用');
+      modal.usageRows = (data?.windows || []).map((window) => ({
+        label:
+          (window.label ? window.label + ' · ' : '') +
+          t(
+            'ui.tui.usagePeriod.' + window.period,
+            { '5hour': '5 小时限额', weekly: '周限额', monthly: '月限额', other: '额度' }[
+              window.period
+            ] || '额度',
+          ),
+        pct: window.usedPercent,
+        detail: window.resetsAt
+          ? t('ui.tui.usageReset', '重置时间：{time}', {
+              time: new Date(window.resetsAt).toLocaleString(language),
+            })
+          : '',
+      }));
+      if (indicator?.title) modal.body += '\n' + indicator.title;
+      if (!data?.subscription && Number.isFinite(stats.costUSD))
+        modal.body +=
+          '\n' +
+          t('ui.tui.usageSessionCost', '会话 API 消费：{cost}', {
+            cost: '$' + stats.costUSD.toFixed(4),
+          });
+      if (data?.subscription && data.equivalent) {
+        const estimate = formatUsage({ ...data, mode: 'api-equivalent' }, language);
+        if (data.mode !== 'api-equivalent') modal.body += '\n' + estimate.text;
+      }
+    } catch {
+      if (this.state.modal === modal) modal.subtitle = t('ui.tui.usageUnavailable', '额度暂不可用');
+    }
   }
 
   _workspaceFailure() {

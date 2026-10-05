@@ -35,11 +35,13 @@ function decodeMouseEvent(button, col, row, press) {
   const code = button & ~(4 | 8 | 16 | 32);
   const x = Number(col);
   const y = Number(row);
+  if (!Number.isSafeInteger(x) || !Number.isSafeInteger(y) || x < 1 || y < 1) return null;
   if (code === 64)
     return Object.assign({ name: 'wheel', direction: 'up', x, y, press: true }, mods);
   if (code === 65)
     return Object.assign({ name: 'wheel', direction: 'down', x, y, press: true }, mods);
-  const key = code === 2 ? 'right' : code === 1 ? 'middle' : 'left';
+  if (![0, 1, 2, 3].includes(code)) return null;
+  const key = code === 2 ? 'right' : code === 1 ? 'middle' : code === 3 ? 'none' : 'left';
   return Object.assign(
     { name: 'mouse', button: key, x, y, press: press === 'M', motion: Boolean(button & 32) },
     mods,

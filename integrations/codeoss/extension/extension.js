@@ -72,6 +72,26 @@ class Bridge {
         message.error ? entry.reject(new Error(message.error)) : entry.resolve(message.result);
       } else if (message.type === 'event') {
         this.events.fire(message);
+        if (message.event === 'personalization' && process.env.CIBYP_CODE_LOCATION) {
+          const data = message.data || {};
+          const colors = require('../theme.cjs').workbenchColors;
+          // The web extension is bundled by esbuild; the desktop equivalent uses its host style adapter.
+          this.appearanceQueue = (this.appearanceQueue || Promise.resolve())
+            .then(async () => {
+              const config = vscode.workspace.getConfiguration('workbench');
+              await config.update(
+                'colorTheme',
+                data.dark ? 'Default Dark Modern' : 'Default Light Modern',
+                vscode.ConfigurationTarget.Global,
+              );
+              await config.update(
+                'colorCustomizations',
+                colors(data),
+                vscode.ConfigurationTarget.Global,
+              );
+            })
+            .catch(() => {});
+        }
       } else if (message.type === 'request') {
         const handler = this.handlers.get(message.method);
         try {
@@ -145,11 +165,12 @@ function workspaceFolders() {
     uri: folder.uri.toString(true),
     path: folder.uri.scheme === 'vscode-remote' ? folder.uri.path : folder.uri.fsPath,
     name: folder.name,
-    location: folder.uri.scheme === 'vscode-remote' ? 'vm' : 'host',
+    location:
+      process.env.CIBYP_CODE_LOCATION || (folder.uri.scheme === 'vscode-remote' ? 'vm' : 'host'),
   }));
 }
 function targetUri(params) {
-  return params.location === 'vm'
+  return params.location === 'vm' && process.env.CIBYP_CODE_LOCATION !== 'vm'
     ? vscode.Uri.from({
         scheme: 'vscode-remote',
         authority: vscode.workspace.workspaceFolders?.[0]?.uri.authority || 'cibyp-vm+default',
@@ -449,6 +470,11 @@ async function activate(context) {
     return { ...result, changes: changes.list() };
   });
   bridge.handlers.set('ide.context', () => contextSnapshot());
+  bridge.handlers.set('ide.openFile', async (params) => {
+    const document = await vscode.workspace.openTextDocument(targetUri(params));
+    await vscode.window.showTextDocument(document, { preview: false });
+    return { ok: true };
+  });
   bridge.handlers.set('ide.language', require('./language').languageQuery);
   bridge.handlers.set('ide.readDocument', (params) => changes.read(params));
   bridge.handlers.set('ide.writeDocument', (params) => changes.write(params));

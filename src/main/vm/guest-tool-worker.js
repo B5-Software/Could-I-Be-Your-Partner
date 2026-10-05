@@ -150,4 +150,8 @@ module.exports = {
   vmShimCordis: require('@deepseek-ai/cordis'),
   vmShimTools: require('../ds-compat/shims/dsh-tools'),
   vmShimSchema: require('@deepseek-ai/schemastery'),
+  vmShimLlm: require('@deepseek-ai/dsh-llm'),
+  vmShimValues: require('@deepseek-ai/dsh-util-values'),
+  vmShimBrand: require('@deepseek-ai/dsh-brand'),
+  vmShimScope: require('@deepseek-ai/dsh-scope'),
 };

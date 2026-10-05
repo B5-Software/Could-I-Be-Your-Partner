@@ -16,7 +16,7 @@
     if (!obModal) return;
     obModal.classList.remove('hidden');
     // 预填现有值
-    const s = agent.settings || {};
+    const s = await window.api.getSettings().catch(() => agent.settings || {});
     document.getElementById('ob-ai-name').value = s.aiPersona?.name || '';
     document.getElementById('ob-ai-pronouns').value = s.aiPersona?.pronouns || '';
     document.getElementById('ob-ai-personality').value = s.aiPersona?.personality || '';
@@ -25,6 +25,9 @@
     // 头像预览（settings 存文件路径，需解析为可显示的 data URL/直接路径）
     const obResolvePreview = async (value, previewId) => {
       if (!value) return;
+      const preview = document.getElementById(previewId);
+      if (!preview) return;
+      preview.dataset.avatar = value;
       let src = value;
       if (!value.startsWith('data:') && !value.startsWith('http')) {
         try {
@@ -32,25 +35,27 @@
           if (enc && enc.ok) src = enc.dataUrl;
         } catch { /* ignore */ }
       }
-      const preview = document.getElementById(previewId);
-      if (preview) {
-        preview.innerHTML = `<img src="${src}" alt="">`;
+      if (preview.dataset.avatar === value) {
+        const image = document.createElement('img');
+        image.src = src;
+        image.alt = '';
+        preview.replaceChildren(image);
         preview.dataset.avatar = value;
       }
     };
     obResolvePreview(s.aiPersona?.avatar, 'ob-ai-avatar-preview');
     obResolvePreview(s.userProfile?.avatar, 'ob-user-avatar-preview');
     // LLM 字段
-    const provider = s.llm?.provider || 'opencode-zen';
+    const configured = !!(s.llm?.model && (s.llm?.apiUrl || s.llm?.zenApiKey));
+    const provider = configured ? s.llm.provider || 'opencode-zen' : 'opencode-zen';
     document.getElementById('ob-llm-provider').value = provider;
     document.getElementById('ob-llm-zen-key').value = s.llm?.zenApiKey || 'public';
     document.getElementById('ob-llm-url').value = s.llm?.apiUrl || '';
     document.getElementById('ob-llm-key').value = s.llm?.apiKey || '';
     updateObProviderFields(provider);
+    obPreferredModel = s.llm?.model || '';
     // 先显示第一步，避免模型加载慢时向导空白（按钮点击无反馈的假象）
     showOnboardingStep(1);
     await refreshObModels();
-    // 默认选 DeepSeek 模型
-    autoSelectDeepSeek();
-    updateObFreeNotice().catch(() => {});
+    updateObFreeNotice();
   }

@@ -14,19 +14,21 @@
     const entry = override.poolEntryId
       ? pool.find((e) => e.id === override.poolEntryId)
       : override.model
-        ? pool.find((e) => e.model === override.model)
+        ? pool.find((e) => e.model === override.model && (!override.provider || e.provider === override.provider))
         : pool.find((e) => e.id === llm.activeEntryId && e.model === llm.model) ||
           pool.find((e) => e.model === llm.model);
-    const contextTokens = integer(
+    const providerLimits = (typeof module !== 'undefined' && module.exports
+      ? require('./provider-limits') : root.ProviderLimits).resolve({ ...llm, ...(entry || {}), ...override });
+    const contextTokens = Math.min(providerLimits.context || Infinity, integer(
       entry?.contextLength || override.contextLength || llm.maxContextLength,
       131072,
       1024,
       2000000,
-    );
+    ));
     const requestedOutput = integer(llm.maxResponseTokens, 8192, 256, 100000);
     const minimumInput = Math.min(4096, Math.floor(contextTokens / 2));
-    const outputTokens = Math.min(requestedOutput, Math.max(256, contextTokens - minimumInput));
-    const inputTokens = contextTokens - outputTokens;
+    const outputTokens = Math.min(providerLimits.output || Infinity, requestedOutput, Math.max(256, contextTokens - minimumInput));
+    const inputTokens = Math.min(providerLimits.input || Infinity, contextTokens - outputTokens);
     const requestedTools = integer(settings.toolExposure?.budgetTokens, 4000, 1000, 16000);
     const toolTokens = Math.min(requestedTools, Math.max(512, Math.floor(inputTokens * 0.2)));
     return {
@@ -36,6 +38,7 @@
       toolTokens,
       requestedOutput,
       requestedTools,
+      providerLimits,
       summaryTokens: Math.min(
         integer(settings.contextCompaction?.summarizeMaxTokens, 2048, 512, 8192),
         outputTokens,
@@ -133,6 +136,7 @@
       apiKey: 'apiKey',
       zenApiKey: 'apiKey',
       model: 'model',
+      providerLimits: 'providerLimits',
       reasoningEffort: 'effort',
       maxContextLength: 'contextLength',
     })) {

@@ -100,6 +100,39 @@ function llmScript(responses) {
   return handler;
 }
 
+test('subscription usage is requested on demand, coalesced per session and discarded after close', async () => {
+  const handlers = baseHandlers();
+  let requests = 0,
+    finish;
+  handlers.set('subscription:usage', (_event, options) => {
+    requests++;
+    assert.equal(options.force, true);
+    return new Promise((resolve) => {
+      finish = resolve;
+    });
+  });
+  const runtime = createAgentRuntime({
+    ipcMain: createFakeIpcMain(handlers),
+    eventBus: createEventBus(),
+  });
+  runtime.createSession({ key: 'quota' });
+  for (let i = 0; i < 20; i++) runtime.getStats('quota');
+  assert.equal(requests, 0);
+  const first = runtime.getSubscriptionUsage('quota', { force: true });
+  const second = runtime.getSubscriptionUsage('quota', { force: true });
+  await Promise.resolve();
+  assert.equal(requests, 1);
+  finish({ subscription: true, windows: [{ usedPercent: 30 }] });
+  assert.deepEqual(await first, await second);
+  assert.equal(runtime.getStats('quota').subscriptionUsage.windows[0].usedPercent, 30);
+  const next = runtime.getSubscriptionUsage('quota', { force: true });
+  await Promise.resolve();
+  runtime.close('quota');
+  finish({ subscription: true, windows: [{ usedPercent: 80 }] });
+  assert.equal(await next, null);
+  assert.equal(runtime.getStats('quota'), null);
+});
+
 test('Minimal uses only two tools and a fixed prompt; file edits and shell polling preserve shared routing', async () => {
   const llm = llmScript([{ content: 'done' }]);
   const handlers = baseHandlers({ llmChat: llm });
@@ -744,7 +777,7 @@ test('/undo stops an active turn and withdraws an unconsumed hot message without
   assert.equal(runtime.getSession('hot-undo').busy, false);
 });
 
-test('shared settings hot updates reach headless Agents while CodeOSS remains unavailable without a window', async () => {
+test('shared settings hot updates reach headless Agents and preserve the web CodeOSS capability', async () => {
   const handlers = baseHandlers(),
     eventBus = createEventBus();
   let settings = structuredClone(SETTINGS);
@@ -755,9 +788,9 @@ test('shared settings hot updates reach headless Agents while CodeOSS remains un
   });
   const runtime = createAgentRuntime({ ipcMain: createFakeIpcMain(handlers), eventBus });
   const agent = runtime.createSession({ key: 'settings-hot' }).agent;
-  await runtime.saveSettings({ tarotVisible: false });
+  await runtime.saveSettings({ tarotVisible: false, tools: { codeIDE: true } });
   assert.equal(agent.settings.tarotVisible, false);
-  assert.equal(agent.settings.tools.codeIDE, false);
+  assert.equal(agent.settings.tools.codeIDE, true);
   settings = { ...settings, tarotVisible: true };
   eventBus.publish('settings:changed', { tarotVisible: true });
   await new Promise((resolve) => setImmediate(resolve));

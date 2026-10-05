@@ -8,10 +8,18 @@
 'use strict';
 
 const { app, BrowserWindow, ipcMain: electronIpcMain, nativeTheme, dialog, clipboard, screen, shell, Notification, Tray, Menu, nativeImage, protocol, net, safeStorage, crashReporter } = require('electron');
+if (process.env.CIBYP_USER_DATA) app.setPath('userData', process.env.CIBYP_USER_DATA);
 // Packaged TUI companions use this executable only as a private window host.
 if (process.argv.includes('--cibyp-vm-desktop') && process.send) {
   require('../tui/vm-desktop-entry').startDesktopHost();
   return;
+}
+if (process.versions.electron && !process.argv.includes('--headless') && !process.argv.includes('--tui')) {
+  const existing = require('./core/backend-discovery').readBackend(app.getPath('userData'));
+  if (existing && existing.native === false) {
+    require('./frontend-window').startFrontend(existing).catch(error => { console.error('[frontend]',error.message); app.exit(1); });
+    return;
+  }
 }
 // Keep Electron's window activation behavior, and also exclude a pure Node TUI.
 if (!app.requestSingleInstanceLock()) {
@@ -85,7 +93,7 @@ const { EmailService } = require('./email-service');
 const { FediKittenService } = require('./fedikitten-service');
 const { CibypImService } = require('./cibyp-im-service');
 const { importSpreadsheetFile, exportSpreadsheetFile } = require('./spreadsheet-io');
-const { WebControlService } = require('./web-control-service');
+const { WebControlService } = require('./backend-webui');
 const { fetchLLMWithRetry, consumeSSEStream, abortAllRequests, abortRequests, DEFAULT_TIMEOUT_MS } = require('./llm-retry');
 const LLMProviders = require('./llm-providers');
 const ocHeaders = require('./opencode-headers');
@@ -132,17 +140,21 @@ const windowSecurity = createWindowSecurity({
   preloadDirectory: path.join(__dirname, '../preload/generated'),
 });
 app.on('web-contents-created', (_event, contents) => windowSecurity.protectWebContents(contents));
+const remoteBackend = require('./core/remote-backend').createRemoteBackend();
 const ipcMain = createIpcRouter(electronIpcMain, {
   validateSender: windowSecurity.validateSender,
   routeHandler: (channel, handler) => {
     const routed = ROUTE_CHANNELS.has(channel) ? createRoutedHandler(channel, handler, { getVmService: () => vmService, isLocationVm: () => vmLocationActive() }) : handler;
-    return (event, ...args) => require('./vm/tool-location').withToolLocation(() => vmService, async () => {
+    return remoteBackend.route(channel, (event, ...args) => require('./vm/tool-location').withToolLocation(() => vmService, async () => {
       const editorResult = codeOSSService ? await codeOSSService.interceptFile(channel, args) : null;
       return editorResult === null ? routed(event, ...args) : editorResult;
-    });
+    }));
   },
 });
 const __ipcHandlers = ipcMain.originalHandlers;
+ipcMain.handle('backend:remote-connect', (event, options) => remoteBackend.connect(event.sender, options));
+ipcMain.handle('backend:remote-disconnect', event => remoteBackend.disconnect(event.sender));
+ipcMain.handle('backend:remote-status', event => remoteBackend.status(event.sender));
 
 // 无头模式：不起 GUI 窗口，仅运行主进程服务 + 一种无界面前端。
 // CLI：
@@ -152,15 +164,17 @@ const __ipcHandlers = ipcMain.originalHandlers;
 // 环境变量：CIBYP_WEB_PASSWORD / CIBYP_WEB_PORT / CIBYP_AUTO_APPROVE=1
 const TUI = process.argv.includes('--tui');
 const WEB_FORCED = process.argv.includes('--web');
-const HEADLESS = process.argv.includes('--headless') || TUI;
+let HEADLESS = process.argv.includes('--headless') || TUI;
 // 无头模式下的 Agent 运行时（GUI 模式为 null：会话由渲染进程承载）
 let agentRuntime = null;
+let backendServer, backendDispatch, removeBackendDiscovery;
 let tuiHandle = null;
 
 // 供无头前端（TUI/WebUI）与集成测试取用运行时实例
 module.exports = {
   getAgentRuntime: () => agentRuntime,
   getTuiHandle: () => tuiHandle,
+  getBackend: () => backendServer,
   isHeadless: () => HEADLESS,
 };
 
@@ -170,7 +184,7 @@ const { createEventBus } = require('./core/event-bus');
 const eventBus = createEventBus();
 const publishEvent = (channel, payload) => eventBus.publish(channel, payload);
 const detachWindowSink = eventBus.addSink(
-  eventBus.createWindowSink(() => mainWindow),
+  eventBus.createWindowSink(() => mainWindow && !mainWindow.isDestroyed() && !remoteBackend.has(mainWindow.webContents) ? mainWindow : null),
 );
 
 const emailService = new EmailService();
@@ -238,7 +252,8 @@ const decisionService = new DecisionService({
 const APP_VERSION = app.getVersion();
 
 // Single instance lock — quit immediately if another instance is already running
-app.on('second-instance', () => {
+app.on('second-instance', (_event, argv) => {
+  if (!argv?.includes('--headless') && !mainWindow && backendDispatch) backendDispatch({ method: 'desktop:open' }).catch(console.error);
   if (mainWindow) {
     if (mainWindow.isMinimized()) mainWindow.restore();
     mainWindow.focus();
@@ -406,12 +421,12 @@ const pluginSkillsProvider = () => {
 // DeepSeek 插件管理器（Cordis 内核 lib + CIBYP 自研 Provider）
 // 服务翻译层 transport：agent 消息/授权请求经 IPC 往返渲染进程
 const dsRequestPending = new Map();
+const ownerTransport = require('./services/backend-transport').createBackendTransport({ getRuntime: () => agentRuntime, publish: publishEvent, getSettings: () => settings });
 const dsTransportSend = (channel, payload) => {
-  try {
-    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(channel, payload);
-  } catch { /* ignore */ }
+  ownerTransport.send(channel, payload).catch(error => console.warn('[plugin-transport]', error.message));
 };
 const dsTransportRequest = (channel, payload, timeoutMs, signal) => {
+  if (ownerTransport.handles(channel)) return ownerTransport.request(channel, payload, timeoutMs, signal);
   return new Promise((resolve, reject) => {
     const id = payload && (payload.id || payload.requestId);
     if (!id) { reject(new Error('transport 请求缺少 id')); return; }
@@ -653,8 +668,10 @@ function projectActivePoolEntry() {
     if (!entry) return;
     llm.activeEntryId = entry.id;
     if (entry.provider) llm.provider = entry.provider;
+    if (typeof entry.autoOpencodeHeaders === 'boolean') llm.autoOpencodeHeaders = entry.autoOpencodeHeaders;
     llm.apiUrl = entry.apiUrl || '';
     llm.model = entry.model || '';
+    llm.providerLimits = entry.providerLimits || null;
     if (entry.provider === 'opencode-zen' || entry.provider === 'opencode-go') llm.zenApiKey = entry.apiKey || '';
     else llm.apiKey = entry.apiKey || '';
     if (entry.effort) llm.reasoningEffort = entry.effort;
@@ -737,11 +754,15 @@ codeOSSService = new (require('./services/codeoss-service').CodeOSSService)({
   getSettings: () => settings,
   getVmService: () => vmService,
   dataDirectory: dataDir,
+  publishEvent,
   onWorkspaceChanged: (target) => {
     settings.codeMode = { ...settings.codeMode, lastWorkspace: target.path || null };
     saveJSON(settingsPath, settings, false);
   },
 });
+const codeOSSWeb = new (require('./services/codeoss-web').CodeOSSWebService)({ bridge: codeOSSService, dataDirectory: dataDir, getVmService: () => vmService });
+app.on('before-quit', () => { codeOSSWeb.stop().catch(console.error); });
+ipcMain.handle('codeoss:open-web', (_, directory) => codeOSSWeb.open(directory));
 ipcMain.handle('codeoss:open', (_, directory) => codeOSSService.open(directory));
 ipcMain.handle('codeoss:layout', (_, layout) => codeOSSService.setLayout(layout));
 ipcMain.handle('codeoss:command', (_, command) => codeOSSService.request('ide.command', { command }));
@@ -1658,7 +1679,8 @@ app.on('window-all-closed', (event) => {
     event.preventDefault();
     return;
   }
-  if (process.platform !== 'darwin') app.quit();
+  // Closing a view does not stop other clients or in-flight tasks.
+  event.preventDefault();
 });
 app.on('activate', () => {
   // 无头模式没有可恢复的窗口
@@ -1731,10 +1753,12 @@ ipcMain.handle('tray:show-window', () => {
 
 // ---- IPC: Settings ----
 ipcMain.handle('settings:get', () => settings);
-ipcMain.handle('settings:set', (_, newSettings) => {
+function updateAppSettings(newSettings) {
   const previousLocation = settings.runtime?.location;
   const prevVoice = settings.voice ? JSON.parse(JSON.stringify(settings.voice)) : null;
   const prevProxyJson = JSON.stringify(settings.proxy || null);
+  const previousWebConfig = JSON.stringify(settings.webControl || {});
+  const previousTorConfig = JSON.stringify(settings.remote?.tor || {});
   const tokenPolicy = require('../shared/token-policy');
   const patch = tokenPolicy.migratePatch(newSettings);
   settings = tokenPolicy.normalize(mergeSettings(settings, patch));
@@ -1772,7 +1796,29 @@ ipcMain.handle('settings:set', (_, newSettings) => {
       if (st) webControlService.setVoiceCapabilities(st);
     }
   } catch {}
+  if ((JSON.stringify(settings.webControl || {}) !== previousWebConfig || JSON.stringify(settings.remote?.tor || {}) !== previousTorConfig) && webControlService.dispatch) {
+    clearTimeout(updateAppSettings.webTimer);
+    updateAppSettings.webTimer = setTimeout(async () => {
+      const restartTor = ['ready', 'connecting', 'preparing'].includes(torRemote.status().phase);
+      if (restartTor) torRemote.stop();
+      try {
+        await webControlService.reconfigure(settings.webControl || {});
+        if (restartTor) { await torRemote.operation; await torRemote.start(); }
+      } catch (error) { console.warn('[webui]', error.message); }
+    }, 100);
+    updateAppSettings.webTimer.unref();
+  }
   return settings;
+}
+ipcMain.handle('settings:set', async (_, newSettings) => {
+  if (newSettings?.webControl?.password) {
+    newSettings = { ...newSettings, webControl: { ...newSettings.webControl, passwordHash: await webControlService.hashPassword(newSettings.webControl.password), password: '' } };
+  }
+  return updateAppSettings(newSettings);
+});
+const settingsAssistant = new (require('./services/settings-assistant').SettingsAssistant)({ getSettings: () => settings, update: updateAppSettings });
+for (const method of ['catalog', 'patch', 'navigate']) ipcMain.handle('settings-assistant:' + method, (_event, argument) => {
+  try { return settingsAssistant[method](argument); } catch (error) { return { ok: false, error: error.message }; }
 });
 
 // ---- IPC: DeepSeek 插件管理 ----
@@ -1859,9 +1905,13 @@ ipcMain.handle('ds:listTools', () => ({
 }));
 
 // 渲染进程会话注册表同步 → 插件宿主的 agents/sessions seam
+async function syncOwnerAgents() {
+  if (!agentRuntime) return;
+  await pluginManager.syncAgents(agentRuntime.listSessions().map(s => ({ key: s.key, id: s.conversationId || s.key, mode: s.mode, title: s.title, cwd: s.workspacePath, status: s.status })));
+}
 ipcMain.handle('ds:agentsSync', async (_, entries) => {
   try {
-    await pluginManager.syncAgents(entries);
+    await syncOwnerAgents();
     return { ok: true };
   } catch (e) {
     return { ok: false, error: e.message };
@@ -3139,7 +3189,59 @@ ipcMain.handle('skill-editor:getSkill', (_, id) => {
 });
 
 // llm: explicit dependencies; mutable app state is read through getters.
+const chatGPTAccounts = new (require('./services/chatgpt-accounts').ChatGPTAccounts)({
+  file: path.join(dataDir, 'chatgpt-accounts.vault'),
+  openExternal: url => shell.openExternal(url),
+  onChange: state => publishEvent('chatgpt:changed', state),
+});
+app.on('before-quit', () => chatGPTAccounts.dispose());
+for (const [operation, handler] of Object.entries({
+  status: () => chatGPTAccounts.status(), login: id => chatGPTAccounts.login(id),
+  cancel: () => { chatGPTAccounts.cancelLogin(); return { ok: true }; },
+  switch: id => chatGPTAccounts.switchAccount(id), logout: id => chatGPTAccounts.logout(id),
+  models: () => chatGPTAccounts.models(), limits: () => chatGPTAccounts.limits(),
+})) ipcMain.handle('chatgpt:' + operation, async (_event, arg) => {
+  try { return await handler(arg); } catch (error) { return { ok: false, error: error.message }; }
+});
+// Reset credits are deliberately absent from Agent tools and remote APIs.
+ipcMain.handle('chatgpt:consume-reset', async (event, request) => {
+  if (!mainWindow || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents) return { ok: false, error: 'Open account settings in the desktop app to use a reset credit' };
+  try {
+    const en = settings.language === 'en'; const de = settings.language === 'de';
+    return await chatGPTAccounts.consumeReset(request, async ({ account, card }) => {
+      const target = card?.title || card?.resetType || 'Codex';
+      const expiry = card?.expiresAt ? new Date(card.expiresAt * 1000).toLocaleString(settings.language) : '—';
+      const response = await dialog.showMessageBox(mainWindow, { type: 'question', title: en ? 'Use a quota reset credit?' : de ? 'Kontingent mit einer Karte zurücksetzen?' : '确认使用额度重置卡？',
+        message: en ? 'This uses one earned reset credit.' : de ? 'Dabei wird eine gesammelte Karte verbraucht.' : '此操作会消耗一张已获得的重置卡。',
+        detail: `${account.label}\n${target}\n${en ? 'Expires' : de ? 'Gültig bis' : '到期时间'}: ${expiry}\n${en ? 'The service determines the reset scope. This action cannot be undone.' : de ? 'Der Dienst bestimmt den Umfang. Diese Aktion kann nicht rückgängig gemacht werden.' : '重置范围以服务端为准，操作无法撤销。'}`,
+        buttons: en ? ['Cancel', 'Use one credit'] : de ? ['Abbrechen', 'Eine Karte verwenden'] : ['取消', '使用一张重置卡'], defaultId: 0, cancelId: 0, noLink: true });
+      return response.response === 1;
+    });
+  } catch (error) { return { ok: false, error: error.message }; }
+});
+const subscriptionUsage = require('./services/subscription-usage');
+const goUsage = new subscriptionUsage.GoUsage();
+async function getSubscriptionUsage(options = {}) {
+  try {
+    const entry = settings.llm.pool?.find(entry => entry.id === options.poolEntryId) || (options.model ? settings.llm.pool?.find(entry => entry.model === options.model && (!options.provider || entry.provider === options.provider)) : null);
+    const llm = entry || settings.llm;
+    const provider = options.provider || llm.provider;
+    const mode = subscriptionUsage.MODES.includes(settings.budget?.subscriptionDisplay) ? settings.budget.subscriptionDisplay : 'urgent';
+    if (!['chatgpt-codex', 'opencode-go'].includes(provider)) {
+      const keys = getBudgetPeriodKeys('daily', settings.budget); const costUSD = aggregateUsage(keys.startKey, keys.endKey).costUSD || 0;
+      return { ok: true, subscription: false, mode, daily: { costUSD, limitUSD: Number(settings.budget?.dailyLimitUSD) || 0 } };
+    }
+    const today = settings.llm.usageHistory?.[getTodayKeyTZ(settings.budget?.timezone || 'UTC')]?.subscriptionEquivalent?.[provider];
+    const equivalent = today || { costUSD: 0, pricedRequests: 0, unknownRequests: 0 };
+    const result = mode === 'api-equivalent' && !options.includeWindows ? { ok: true, windows: [] } : provider === 'chatgpt-codex' ? subscriptionUsage.normalizeCodex(await chatGPTAccounts.limits(options.force === true)) : await goUsage.read(llm.provider === 'opencode-go' ? llm.apiKey : '', options.force === true);
+    return { ...result, subscription: true, provider, mode, equivalent, equivalentLimitUSD: Number(settings.budget?.dailyLimitUSD) || 0, selected: subscriptionUsage.selectWindow(result.windows, mode) };
+  } catch (error) { return { ok: false, subscription: true, error: error.message, windows: [] }; }
+}
+ipcMain.handle('subscription:usage', async (_, options) => {
+  const result = await getSubscriptionUsage(options); return { ...result, indicator: require('../shared/usage-indicator').formatUsage(result, settings.language) };
+});
 const { fetchModelsDevData } = require('./ipc/llm')({
+  chatGPTAccounts,
   path,
   dataDir,
   loadJSON,
@@ -3384,6 +3486,8 @@ ipcMain.handle('dialog:openFile', async (_, options = {}) => {
   }
 });
 
+require('./services/frontend-file-picker').registerFrontendFilePicker({ ipcMain, vmService, getSettings: () => settings });
+
 ipcMain.handle('dialog:saveFile', async (_, options = {}) => {
   try {
     const result = await toolDialog.showSaveDialog(mainWindow, {
@@ -3499,6 +3603,16 @@ ipcMain.handle('notifications:send', (event, opts) => {
 });
 
 // ---- IPC: GitHub Releases 更新检查 ----
+const appUpdates = new (require('./services/app-updates').AppUpdates)({ app, settings: () => settings, publish: publishEvent,
+  busy: () => agentRuntime?.listSessions().some(session => session.busy) || false });
+ipcMain.handle('updates:start', () => appUpdates.start());
+ipcMain.handle('updates:status', () => appUpdates.status());
+ipcMain.handle('updates:install', () => appUpdates.install());
+appUpdates.restore().catch(error => console.warn('[updates]', error.message));
+const torRemote = new (require('./services/tor-remote').TorRemote)({ app, web: webControlService, settings: () => settings, publish: publishEvent });
+ipcMain.handle('remoteTor:start', () => torRemote.start());
+ipcMain.handle('remoteTor:stop', () => torRemote.stop());
+ipcMain.handle('remoteTor:status', () => torRemote.status());
 // 返回 { ok, current, latest?, updateAvailable?, error? }
 // 失败时仅 error 字段（自动检查静默，手动检查由渲染器展示内联错误，不弹 toast）
 async function performUpdateCheck() {
@@ -4223,6 +4337,7 @@ app.whenReady().then(async () => {
 
   const { broadcastWebControlRunning } = require('./ipc/web-control')({
     getMainWindow: () => mainWindow,
+    beforeStop: () => torRemote.stop(),
     webControlService,
     ipcMain,
     getSettings: () => settings,
@@ -4237,80 +4352,43 @@ app.whenReady().then(async () => {
     WebControlService
   });
 
-  // ===== 无头运行时启动：Agent 内核在主进程承载，WebUI 直连运行时 =====
-  // 与 GUI 模式的区别：WebUI 的命令不再转发给某个窗口，而是直接驱动 Agent 会话；
-  // 会话事件回流成 WebUI 既有 push 协议，历史/设置等仍共用同一套数据。
-  if (HEADLESS) {
-    try {
-      const { createAgentRuntime, INTERACTION_POLICY } = require('./agent-runtime');
-      agentRuntime = createAgentRuntime({
-        ipcMain,
-        eventBus,
-        getSettings: () => settings,
-        interactionPolicy:
-          process.env.CIBYP_AUTO_APPROVE === '1'
-            ? INTERACTION_POLICY.AUTO_APPROVE
-            : INTERACTION_POLICY.PROMPT,
-      });
-      console.log('[headless] agent runtime ready');
-
-      // WebUI：无头默认自启；TUI 模式下需显式 --web 才同时提供 Web 服务。
-      const wantWeb = !TUI || WEB_FORCED;
-      if (wantWeb) {
-        const { attachWebUiAgentDriver } = require('./webui-agent-driver');
-        attachWebUiAgentDriver({ webControlService, agentRuntime });
-        // WebUI 自动启动：密码/端口优先取环境变量（便于容器/自动化），否则用设置里的 Web 控制配置
-        const webCfg = { ...(settings.webControl || {}) };
-        if (process.env.CIBYP_WEB_PASSWORD) webCfg.password = process.env.CIBYP_WEB_PASSWORD;
-        if (process.env.CIBYP_WEB_PORT) webCfg.port = process.env.CIBYP_WEB_PORT;
-        if (!webCfg.password && !webCfg.passwordHash) {
-          console.log('[headless] WebUI 未启动：未配置访问密码（设置 Web 控制密码或 CIBYP_WEB_PASSWORD）');
-        } else {
-          webControlService.configure(webCfg);
-          webControlService.workDir = workspacesBaseDir;
-          const started = await webControlService.start();
-          console.log(
-            '[headless] WebUI',
-            started && started.ok !== false
-              ? `listening on port ${webControlService.port}`
-              : `failed: ${started && started.error}`,
-          );
-        }
-      }
-
-      // TUI：终端界面（stdin/stdout 为 TTY 时进入交互界面，否则渲染一帧供自动化读取）
-      if (TUI) {
-        const { startTui } = require('../tui/launch.js');
-        tuiHandle = startTui({
-          runtime: agentRuntime,
-          argv: process.argv,
-          // VM 模式：VM 启动完成后才进界面，期间由 TUI 渲染加载进度条
-          getBootState: () => {
-            const inst = vmService.status().inst || {};
-            return {
-              required: Boolean(vmRuntimeGate.required),
-              ready: Boolean(vmRuntimeGate.ready),
-              failed: Boolean(vmRuntimeGate.failed),
-              progress: Number(inst.progress) || 0,
-              detail: inst.detail || inst.state || '',
-            };
-          },
-          onExit: async (code) => {
-            vmDesktopCompanion?.dispose();
-            try { await vmService.stop(); } catch { /* report through VM service logging */ }
-            try {
-              app.exit(code || 0);
-            } catch {
-              /* ignore */
-            }
-          },
-        });
-        console.log('[headless] TUI ready');
-      }
-    } catch (e) {
-      console.error('[headless] startup failed:', e);
-    }
+  // One owner for Agent execution, tools, VM, settings and history. Native,
+  // terminal and browser clients only attach views to this owner.
+  const { createAgentRuntime, INTERACTION_POLICY } = require('./agent-runtime');
+  agentRuntime = createAgentRuntime({ ipcMain, eventBus, getSettings: () => settings,
+    interactionPolicy: process.env.CIBYP_AUTO_APPROVE === '1' ? INTERACTION_POLICY.AUTO_APPROVE : INTERACTION_POLICY.PROMPT });
+  agentRuntime.onEvent(event => {
+    if (['session-created', 'session-closed', 'status', 'title', 'view-changed'].includes(event.type)) syncOwnerAgents().catch(error => console.warn('[plugin-agents]', error.message));
+  });
+  await syncOwnerAgents();
+  const bootState = () => {
+    const inst = vmService.status().inst || {};
+    return { required: !!vmRuntimeGate.required, ready: !!vmRuntimeGate.ready, failed: !!vmRuntimeGate.failed, progress: Number(inst.progress) || 0, detail: inst.detail || inst.state || '' };
+  };
+  backendDispatch = require('./core/backend-dispatch').createBackendDispatch({ runtime: agentRuntime, ipcMain, eventBus, bootState,
+    desktop: async () => {
+      if (!process.versions.electron) return { ok: false, error: 'No graphical environment available' };
+      HEADLESS = false;
+      if (!mainWindow || mainWindow.isDestroyed()) createWindow();
+      else showWindowFromTray();
+      return { ok: true };
+    } });
+  ipcMain.handle('backend:request', (_, method, ...args) => backendDispatch({ method, args }));
+  const token = require('node:crypto').randomBytes(32).toString('hex');
+  backendServer = new (require('./core/backend-server').BackendServer)({ dispatch: backendDispatch, eventBus, token, codeoss: codeOSSWeb });
+  const address = await backendServer.start();
+  removeBackendDiscovery = require('./core/backend-discovery').publishBackend(app.getPath('userData'), address, token);
+  webControlService.attach(backendDispatch, eventBus, codeOSSWeb);
+  const webCfg = { ...settings.webControl };
+  if (process.env.CIBYP_WEB_PASSWORD) webCfg.password = process.env.CIBYP_WEB_PASSWORD;
+  if (process.env.CIBYP_WEB_PORT) webCfg.port = Number(process.env.CIBYP_WEB_PORT);
+  webControlService.configure(webCfg);
+  if (settings.remote?.tor?.autoStart) torRemote.start();
+  if (WEB_FORCED || (webCfg.enabled && webCfg.autoStartOnOpen)) {
+    try { await webControlService.start(); }
+    catch (error) { console.error('[backend] WebUI startup failed:', error.message); }
   }
+  console.log('[backend] Shared runtime ready:', address.url);
 
   // Auto-start email if configured
   if (settings.email.enabled && settings.email.emailUser && settings.email.totpSecret) {
@@ -4361,59 +4439,7 @@ app.whenReady().then(async () => {
     console.error('[MCP] Auto-connect error:', e.message);
   }
 
-  // ---- Web Control Auto-Start ----
-  // 无头/TUI 模式由启动块直连 Agent 运行时（webui-agent-driver），此处不得覆盖其回调
-  if (!HEADLESS && settings.webControl.autoStartOnOpen && settings.webControl.passwordHash) {
-    try {
-      // Manually trigger the start via IPC-like path
-      webControlService.configure(settings.webControl);
-      webControlService.onGetHistory = async () => {
-        const files = fs.readdirSync(historyDir).filter(f => f.endsWith('.json'));
-        return files.map(f => {
-          const data = loadJSON(path.join(historyDir, f), {});
-          return { id: data.id || f.replace('.json', ''), title: data.title || '未命名', date: data.updatedAt || data.createdAt || '' };
-        }).sort((a, b) => (b.date || '').localeCompare(a.date || ''));
-      };
-      webControlService.onGetConversation = async (id) => {
-        const fp = dataPath(historyDir, id, '.json');
-        if (!fs.existsSync(fp)) return null;
-        return loadJSON(fp, null);
-      };
-      webControlService.onDeleteConversation = async (id) => {
-        const fp = dataPath(historyDir, id, '.json');
-        if (fs.existsSync(fp)) fs.unlinkSync(fp);
-      };
-      webControlService.onNewChat = async () => {
-        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('webControl:newChat');
-        return Date.now().toString();
-      };
-      webControlService.onSendMessage = async (message) => {
-        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('webControl:sendMessage', message);
-      };
-      webControlService.onStopAgent = async () => {
-        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('webControl:stopAgent');
-      };
-      webControlService.onApprovalResponse = (approved) => {
-        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('webControl:approvalResponse', approved);
-      };
-      webControlService.onLoadConversation = (id) => {
-        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('webControl:loadConversation', id);
-      };
-      webControlService.start().then(r => {
-        console.log('[WebControl] Auto-started:', r.message);
-        broadcastWebControlRunning();
-      }).catch(e => console.error('[WebControl] Auto-start failed:', e.message));
-    } catch (e) {
-      console.error('[WebControl] Auto-start config error:', e.message);
-    }
-  }
 
-  // ---- GitHub Releases 自动更新检查 ----
-  // 启动延迟 8s 首次检查（给渲染器留出初始化时间），之后按设置间隔定时
-  if ((settings.updates || {}).autoCheckEnabled !== false) {
-    setTimeout(() => { runAutoUpdateCheck().catch(() => {}); }, 8000);
-  }
-  scheduleAutoUpdateCheck();
 });
 
 // Cleanup MCP servers, serial ports, and web control on app quit
@@ -4442,7 +4468,12 @@ app.on('before-quit', (event) => {
   event.preventDefault();
   if (quitPreparation) return;
   quitPreparation = (async () => {
+    agentRuntime?.dispose();
+    torRemote.stop();
     closeSplash();
+    removeBackendDiscovery?.();
+    remoteBackend.close();
+    await backendServer?.stop();
     // 将防抖队列中的历史保存立即落盘，避免退出时丢失
     flushPendingHistorySaves();
     // 优雅退出时仍在运行的会话：Agent 随进程终止，标记"异常退出"（本次运行触碰过的文件）

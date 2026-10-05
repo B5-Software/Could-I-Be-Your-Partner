@@ -155,12 +155,35 @@ npx cibyp
 npx --package=cibyp cibyp-code
 # 更新 App：
 cibyp update
+# 创建 / 查看 / 删除整组命令别名：
+cibyp alias add kamisato   # kamisato、kamisato-code、kamisato-tui
+cibyp alias list
+cibyp alias remove kamisato
 ```
 
 npm 只包含一个纯 JS 启动器，需要 Node.js >= 22.14。安装时从 GitHub 按系统/架构下载完整 GUI/TUI，
 自动选择可用镜像、并发加速，SHA-256 校验通过后安装并注册用户启动器。
 正常启动定期检查 App 更新；更新保留设置、历史和工作区，启动器无需随 App 每次发版更新 npm。
 安装公开包无需 npm 登录；维护者登录与 CI 发布配置见 [npm 发布说明](docs/npm-publishing.md#登录-npm-与配置-ci)。
+
+别名保留原命令的参数与当前目录，`kamisato-code` 同样映射当前宿主工作区到 VM。
+Windows 写入用户 PATH；macOS/Linux 写入用户的 Shell 配置，无需管理员权限。首次创建后重新打开终端。
+设置 `CIBYP_ALIAS_DIR` 可指定命令目录；存在的命令文件或被手动改动的别名不会被覆盖或删除。
+
+首次启动的向导会自动识别模型。OpenCode Zen 免费模型可留空使用 `public`，
+模型池自动配置 SessionID 和 OpenCode UA；只有 Zen 免费模型会补齐网关要求的兼容工具定义。
+付费 Zen、Go 与其他 Provider 保留原来的工具列表。网络失败时可以重试或手动填写模型 ID。
+
+TUI 支持点击菜单与待办、定位输入光标、滚轮翻页、拖选消息及边缘滚动选择。
+`/mouse off` 恢复终端原生鼠标行为，`/mouse on` 重新开启；偏好与 GUI 设置 → TUI 偏好共享。
+额度与消费通过 `/usage` 按需查看（包含服务端返回的重置时间）；状态栏仅保留上下文摘要。
+GUI、Code AI 侧栏与 WebUI 使用同一套订阅进度偏好。账号接入、价格覆盖和额度限制见 [订阅与用量说明](docs/subscriptions.md)。
+
+GUI（Chat / Code / Babe）、TUI 和 WebUI 都支持 `/update`。下载由共享后台执行，
+使用 GitHub 官方发布的 SHA-256 校验并向所有连接的前端提示完成；不会自动停止任务或安装。
+下载完成后执行 `/update install`，确认后退出并打开安装器。正在运行任务时会拒绝安装。
+npm 启动器安装的版本会暂存到启动器缓存，确认退出后重新运行原启动命令即可启用新版。
+更新通道沿用「设置 → 更新」中的正式版 / 包含预发布版选择。
 
 以下步骤用于从源码开发和构建。
 
@@ -283,7 +306,7 @@ node scripts/download-voice-models.js --voice  # 仅在需要随包内置语音�
 │   │   ├── js/
 │   │   │   ├── app.js          # ★ esbuild 构建产物（勿手改！见 app-parts）
 │   │   │   ├── app-parts/      # ★ 旧 UI 控制器源码（按清单顺序构建）
-│   │   │   │   ├── 01-boot/            # 启动、字体、头像框、WebUI 镜像、页面导航
+│   │   │   │   ├── 01-boot/            # 启动、字体、头像框、共享会话、页面导航
 │   │   │   │   ├── 02-modes/           # 模式切换与会话标签栏
 │   │   │   │   ├── 03a-onboarding/     # 首次引导
 │   │   │   │   ├── 03b-remote/         # Remote 镜像

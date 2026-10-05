@@ -158,6 +158,10 @@ async function runGuestPlugin(service, record, name, args, context) {
     cordis: ['vmShimCordis', require('@deepseek-ai/cordis')],
     'dsh-tools': ['vmShimTools', require('../ds-compat/shims/dsh-tools')],
     schemastery: ['vmShimSchema', require('@deepseek-ai/schemastery')],
+    'dsh-llm': ['vmShimLlm', require('@deepseek-ai/dsh-llm')],
+    'dsh-util-values': ['vmShimValues', require('@deepseek-ai/dsh-util-values')],
+    'dsh-brand': ['vmShimBrand', require('@deepseek-ai/dsh-brand')],
+    'dsh-scope': ['vmShimScope', require('@deepseek-ai/dsh-scope')],
   };
   for (const [moduleName, [exportName, exports]] of Object.entries(shims)) {
     const directory = `${pluginRoot}/node_modules/@deepseek-ai/${moduleName}`;
@@ -165,7 +169,30 @@ async function runGuestPlugin(service, record, name, args, context) {
     await io.writeBuffer(
       `${directory}/package.json`,
       Buffer.from(
-        JSON.stringify({ name: '@deepseek-ai/' + moduleName, main: 'index.js', type: 'commonjs' }),
+        JSON.stringify({
+          name: '@deepseek-ai/' + moduleName,
+          main: 'index.js',
+          type: 'commonjs',
+          ...(moduleName === 'dsh-tools'
+            ? {
+                exports: {
+                  '.': './index.js',
+                  './schema': './index.js',
+                  './json-schema': './index.js',
+                  './testing': './index.js',
+                  './types': './types.js',
+                  './presentation': './types.js',
+                  './src/schema.ts': './index.js',
+                  './src/json-schema.ts': './index.js',
+                  './src/ts-types.ts': './index.js',
+                  './src/py-types.ts': './index.js',
+                  './src/types.ts': './types.js',
+                  './src/presentation.ts': './types.js',
+                  './package.json': './package.json',
+                },
+              }
+            : {}),
+        }),
       ),
     );
     const bridge =
@@ -175,6 +202,8 @@ async function runGuestPlugin(service, record, name, args, context) {
         .map((key) => `exports.${key}=shim.${key};`)
         .join('\n');
     await io.writeBuffer(`${directory}/index.js`, Buffer.from(bridge));
+    if (moduleName === 'dsh-tools')
+      await io.writeBuffer(`${directory}/types.js`, Buffer.from('module.exports = {};\n'));
   }
   const entryRelative = path.relative(record.installDir, record.entry);
   if (entryRelative.startsWith('..') || path.isAbsolute(entryRelative))

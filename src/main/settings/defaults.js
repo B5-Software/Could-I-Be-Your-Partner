@@ -139,7 +139,7 @@ module.exports = function createDefaultSettings({ DEFAULT_DECISION_SETTINGS }) {
       focusOutlines: true,
     },
     // 界面动效：关闭后主标签页切换无动画（设置页「动效」开关）
-    tui: { followGuiTheme: true, thinkingExpanded: true },
+    tui: { followGuiTheme: true, thinkingExpanded: true, mouse: true },
     animations: true,
     // 模态框动效：关闭后模态框打开/关闭为瞬时切换（设置页「动效」开关）
     modalAnimations: true,
@@ -205,6 +205,7 @@ module.exports = function createDefaultSettings({ DEFAULT_DECISION_SETTINGS }) {
       },
     },
     tarotVisible: true,
+    remote: { tor: { autoStart: false, useBridges: false, bridges: '' } },
     userProfile: { name: '', avatar: '', avatarFrame: '', bio: '' },
     entropy: {
       source: 'csprng',
@@ -253,6 +254,8 @@ module.exports = function createDefaultSettings({ DEFAULT_DECISION_SETTINGS }) {
     },
     webControl: {
       enabled: false,
+      autoStartOnOpen: false,
+      host: '127.0.0.1',
       port: 3456,
       password: '',
       passwordHash: '',
@@ -284,6 +287,7 @@ module.exports = function createDefaultSettings({ DEFAULT_DECISION_SETTINGS }) {
     },
     // 预算控制：每模型单价表（每 1M tokens 多少美元）+ 峰谷时段 + 限额
     budget: {
+      subscriptionDisplay: 'urgent',
       models: {}, // { [modelId]: { inputPerM, cacheReadPerM, outputPerM, cacheWritePerM, hasCacheWrite } }
       peakHours: {
         enabled: false,

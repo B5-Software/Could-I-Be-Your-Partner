@@ -19,6 +19,7 @@
   ];
 
   const COMMAND_DEFS = [
+    { cmd: '/update', icon: 'fa-download', desc: '下载新版；完成后提醒重启安装' },
     { cmd: '/cwd', icon: 'fa-folder-open', desc: '用系统文件管理器打开当前工作区' },
     { cmd: '/model', icon: 'fa-robot', desc: '切换模型（仅本会话生效）' },
     { cmd: '/variant', icon: 'fa-gauge-high', desc: '切换变体 / 思考强度' },
@@ -318,6 +319,12 @@
       showPanel();
       return;
     }
+    if (cmd === '/update') {
+      const items = [{ label: t('ui.update.download', '下载新版'), icon: 'fa-download', action: 'update' },
+        { label: t('ui.update.install', '重启安装'), icon: 'fa-rotate', action: 'update-install' }];
+      renderItems(query.toLowerCase() === 'install' ? items.slice(1) : items);
+      showPanel(); return;
+    }
     if (cmd === '/cwd') {
       renderItems([{ label: typeof t === 'function' ? t('ui.cwd.open', '打开当前工作区') : '打开当前工作区', icon: 'fa-folder-open', action: 'cwd' }]);
       showPanel();
@@ -499,6 +506,12 @@
   async function runAction(action, item, input, ag) {
     const mode = getModeForInput(input);
     switch (action) {
+      case 'update': await window.api.updatesStart(); window.showToast?.(t('ui.update.started', '正在检查并下载新版；完成后会提醒重启安装')); break;
+      case 'update-install': {
+        const state = await window.api.updatesStatus();
+        if (!window.confirm(state.kind === 'launcher' ? t('ui.update.launcherConfirm', '退出当前后台？再次运行原启动命令将启用已下载的新版。') : t('ui.update.confirm', '重启并安装新版？'))) break;
+        const r = await window.api.updatesInstall(); if (!r.ok) window.showToast?.(r.error, 'error'); break;
+      }
       case 'fork': await forkConversation(ag, input, item.upto ?? null); break;
       case 'clear': await clearContext(ag); break;
       case 'compact': await compactContext(ag, item.focus); break;
@@ -680,6 +693,7 @@
       provider: entry.provider || null,
       apiUrl: entry.apiUrl || null,
       apiKey: entry.apiKey || null,
+      autoOpencodeHeaders: entry.autoOpencodeHeaders,
       vision: entry.vision === true,
       reasoningEffort: entry.effort || 'off'
     };

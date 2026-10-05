@@ -22,6 +22,28 @@ async function launch(
   } = {},
 ) {
   const root = path.resolve(__dirname, '../..');
+  if (args[0] === 'alias') {
+    const { aliasCommand } = require(
+      resources
+        ? path.join(resources, 'cli/aliases.cjs')
+        : path.join(root, 'packages/npm/lib/aliases.cjs'),
+    );
+    const nativeEntry = resources && path.join(resources, 'cli/launch.cjs');
+    await aliasCommand(args.slice(1), {
+      node: process.execPath,
+      entries: Object.fromEntries(
+        ['gui', 'code', 'tui', 'webui'].map((kind) => [
+          kind,
+          nativeEntry ||
+            path.join(root, 'bin', kind === 'gui' ? 'cibyp.js' : 'cibyp-' + kind + '.js'),
+        ]),
+      ),
+      arguments: nativeEntry
+        ? { gui: ['gui'], code: ['code'], tui: ['tui'], webui: ['webui'] }
+        : {},
+    });
+    return;
+  }
   if (mode === 'code') {
     args = ['--mode=code', '--workspace=' + process.cwd(), '--workspace-local', ...args];
     mode = 'tui';
@@ -41,10 +63,15 @@ async function launch(
   cibyp               Start the graphical App; use TUI when no desktop is available
   cibyp-tui           Start the terminal interface
   cibyp-code          Start Code TUI in the current terminal directory
+  cibyp alias add <name> / remove <name> / list
   cibyp-tui --mode=code --workspace=/path
 
-GUI and TUI share settings and cannot run at the same time.
+GUI, TUI and WebUI connect to one shared backend.
 Use /help, /sessions and /workspace inside TUI.`);
+    return;
+  }
+  if (mode === 'webui') {
+    await require('./backend-connect').launchClient(args, true);
     return;
   }
   if (

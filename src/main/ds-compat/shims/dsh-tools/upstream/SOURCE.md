@@ -1,0 +1,1 @@
+Pure schema, validation, SDK rendering and fixture APIs from @deepseek-ai/dsh-tools 0.2.1-alpha.1 (MIT), npm tarball SHA-1 cddfeb4581db46ed9b363a7ce713d2ca20430895. Relative module extensions were changed to .mjs and missing source-map references removed. CIBYP owns service dispatch; the upstream Harness CLI and agent loop are not installed.

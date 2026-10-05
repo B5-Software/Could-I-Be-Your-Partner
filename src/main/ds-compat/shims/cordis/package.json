@@ -1,6 +1,6 @@
 {
   "name": "@deepseek-ai/cordis",
-  "version": "4.0.1-cibyp",
+  "version": "4.0.5-alpha.1-cibyp",
   "description": "CIBYP compatibility shim re-exporting the vendored Cordis kernel (ESM-first, single-instance)",
   "license": "MIT",
   "type": "module",

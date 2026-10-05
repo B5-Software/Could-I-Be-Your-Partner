@@ -1,5 +1,7 @@
   // ---- LLM 模型池（单层：每条自带 provider/URL/Key）----
   const POOL_PROVIDER_LABELS = {
+    auto: '自动识别 API 格式',
+    'chatgpt-codex': 'ChatGPT / Codex',
     'opencode-zen': 'OpenCode Zen',
     'opencode-go': 'OpenCode Go',
     'openai-compat': 'OpenAI 兼容',
@@ -13,6 +15,54 @@
   let _poolEditingId = null;
   let _poolBound = false;
   let _poolCtxTouched = false;
+  let _poolModelsGeneration = 0;
+  let _poolModels = [];
+
+  function renderPoolModels() {
+    const select = document.getElementById('pool-edit-model-select');
+    const current = document.getElementById('pool-edit-model').value;
+    const zen = document.getElementById('pool-edit-provider').value === 'opencode-zen';
+    const models = _poolModels.filter((model) => !zen || !document.getElementById('pool-edit-free-only').checked || model.free);
+    select.replaceChildren(new Option('选择模型', ''), ...models.map((model) => new Option((model.free ? '免费 · ' : '') + (model.name || model.id), model.id)));
+    select.classList.remove('hidden');
+    select.value = models.some((model) => model.id === current) ? current : '';
+    if (!current && zen && models.length) {
+      const model = models.find((model) => model.verified) || models.find((model) => model.id === 'big-pickle') || models.find((model) => model.free);
+      if (model) { select.value = model.id; document.getElementById('pool-edit-model').value = model.id; applyPoolModelMetadata(model); }
+    }
+    document.getElementById('pool-edit-model-status').textContent = models.length ? `识别到 ${models.length} 个模型` : '暂无模型；可关闭免费筛选或手动填写 ID';
+  }
+
+  function applyPoolModelMetadata(model) {
+    if (!_poolCtxTouched && model?.contextLength) document.getElementById('pool-edit-ctx').value = model.contextLength;
+    if (model) document.getElementById('pool-edit-vision').checked = !!model.vision;
+    refreshPoolEditorVariants().catch(() => {});
+  }
+
+  async function fetchPoolModels() {
+    const generation = ++_poolModelsGeneration;
+    const provider = document.getElementById('pool-edit-provider').value;
+    const apiUrl = document.getElementById('pool-edit-url').value.trim();
+    const apiKey = document.getElementById('pool-edit-key').value.trim();
+    const zen = provider.startsWith('opencode');
+    document.getElementById('pool-edit-opencode-note').classList.toggle('hidden', !zen);
+    document.getElementById('pool-edit-free-filter').classList.toggle('hidden', provider !== 'opencode-zen');
+    const button = document.getElementById('btn-pool-edit-fetch');
+    const status = document.getElementById('pool-edit-model-status');
+    button.disabled = true;
+    _poolModels = [];
+    document.getElementById('pool-edit-model-select').classList.add('hidden');
+    status.textContent = '正在识别模型…';
+    try {
+      if (!zen && provider !== 'chatgpt-codex' && !apiUrl) throw new Error('填写 API 地址后自动识别模型');
+      const result = zen ? await window.api.zenFetchModels(provider === 'opencode-go' ? 'go' : 'zen', { apiKey: apiKey || 'public', verifyFree: true })
+        : await window.api.llmFetchModels(provider, apiUrl, apiKey);
+      if (generation !== _poolModelsGeneration) return;
+      if (!result?.ok || !Array.isArray(result.models)) throw new Error(result?.error || '模型列表格式无效');
+      _poolModels = result.models; renderPoolModels();
+    } catch (error) { if (generation === _poolModelsGeneration) status.textContent = error.message + '；可手动填写模型 ID。'; }
+    finally { if (generation === _poolModelsGeneration) button.disabled = false; }
+  }
 
   function poolEsc(v) {
     return String(v == null ? '' : v).replace(/[&<>"']/g, c => ({
@@ -45,7 +95,7 @@
                 ${e.vision ? '<span class="pool-badge vision">视觉</span>' : ''}
                 ${enabled ? '' : '<span class="pool-badge off">已禁用</span>'}
               </div>
-              <div class="llm-pool-meta">${poolEsc(e.model || '')} · 智慧 ${Number(e.intelligence) || 0} · 优先级 ${Number(e.priority) || 0} · Effort ${poolEsc(POOL_EFFORT_LABELS[e.effort] || e.effort || '关闭')}${e.apiKey ? ' · 已配 Key' : ' · 无 Key'}</div>
+              <div class="llm-pool-meta">${poolEsc(e.model || '')} · 智慧 ${Number(e.intelligence) || 0} · 优先级 ${Number(e.priority) || 0} · Effort ${poolEsc(POOL_EFFORT_LABELS[e.effort] || e.effort || '关闭')}${e.provider === 'chatgpt-codex' ? ' · 订阅账号' : e.apiKey ? ' · 已配 Key' : ' · 无 Key'}</div>
             </div>
             <div class="llm-pool-actions">
               ${active ? '' : '<button class="btn-secondary btn-sm" data-pool-act="default">设为默认</button>'}
@@ -89,6 +139,7 @@
     const e = entry || {};
     v('pool-edit-label', e.label || '');
     v('pool-edit-provider', e.provider || 'opencode-zen');
+    updatePoolAccountFields();
     v('pool-edit-url', e.apiUrl || '');
     v('pool-edit-key', e.apiKey || '');
     v('pool-edit-model', e.model || '');
@@ -102,8 +153,14 @@
     if (sel) { sel.classList.add('hidden'); sel.innerHTML = ''; }
   }
 
+  function updatePoolAccountFields() {
+    const account = document.getElementById('pool-edit-provider').value === 'chatgpt-codex';
+    for (const id of ['pool-edit-url', 'pool-edit-key']) document.getElementById(id)?.closest('.setting-item')?.classList.toggle('hidden', account);
+  }
+
   // 池编辑器：按 provider+model 动态填充 effort 档位与上下文长度（API 元数据优先，失败保持静态兜底）
   async function refreshPoolEditorVariants() {
+    const generation = _poolModelsGeneration;
     const provider = document.getElementById('pool-edit-provider')?.value || 'openai-compat';
     const model = (document.getElementById('pool-edit-model')?.value || '').trim();
     const apiUrl = document.getElementById('pool-edit-url')?.value || '';
@@ -121,6 +178,7 @@
         }
       }
     } catch { /* keep static fallback */ }
+    if (generation !== _poolModelsGeneration || model !== document.getElementById('pool-edit-model')?.value.trim() || provider !== document.getElementById('pool-edit-provider')?.value) return;
     if (variants && variants.length) {
       const current = effortEl.value;
       effortEl.innerHTML = variants.map(v => `<option value="${escapeHtml(v.id)}">${escapeHtml(v.label || v.id)}</option>`).join('');
@@ -140,11 +198,14 @@
     if (title) title.textContent = entry ? '编辑模型' : '添加模型';
     fillPoolEditor(entry);
     document.getElementById('llm-pool-editor')?.classList.remove('hidden');
+    document.getElementById('pool-edit-free-only').checked = !entry || /-free$/.test(entry.model) || entry.model === 'big-pickle';
+    fetchPoolModels();
     // 已有模型：异步拉取元数据刷新档位/上下文长度
     if (entry && entry.model) refreshPoolEditorVariants().catch(() => {});
   }
 
   function closePoolEditor() {
+    ++_poolModelsGeneration;
     document.getElementById('llm-pool-editor')?.classList.add('hidden');
     _poolEditingId = null;
   }
@@ -159,9 +220,11 @@
       id: _poolEditingId || ('pool-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6)),
       label: val('pool-edit-label') || model,
       provider,
-      apiUrl: val('pool-edit-url'),
-      apiKey: val('pool-edit-key'),
+      apiUrl: provider === 'chatgpt-codex' ? 'https://api.openai.com/v1/responses' : val('pool-edit-url'),
+      apiKey: provider === 'chatgpt-codex' ? '' : val('pool-edit-key') || (provider.startsWith('opencode') ? 'public' : ''),
+      ...(provider.startsWith('opencode') ? { autoOpencodeHeaders: true } : {}),
       model,
+      providerLimits: _poolModels.find(model => model.id === val('pool-edit-model'))?.providerLimits || null,
       contextLength: parseInt(val('pool-edit-ctx'), 10) || 131072,
       intelligence: Math.max(0, Math.min(100, parseInt(val('pool-edit-intelligence'), 10) || 0)),
       priority: Math.max(0, parseInt(val('pool-edit-priority'), 10) || 0),
@@ -169,6 +232,11 @@
       vision: chk('pool-edit-vision'),
       enabled: chk('pool-edit-enabled'),
     };
+    if (provider === 'auto') {
+      const result = await window.api.llmDetectFormat(entry);
+      if (!result.ok) { window.showToast(result.error, 'error'); return; }
+      entry.provider = result.provider; entry.apiUrl = result.apiUrl;
+    }
     const s = await readSettings();
     const pool = Array.isArray(s.llm.pool) ? s.llm.pool.slice() : [];
     const idx = pool.findIndex(x => x.id === entry.id);
@@ -195,38 +263,18 @@
     if (typeof bindBackdropClose === 'function') {
       bindBackdropClose(document.getElementById('llm-pool-editor'), closePoolEditor);
     }
-    document.getElementById('btn-pool-edit-fetch')?.addEventListener('click', async () => {
-      const provider = document.getElementById('pool-edit-provider')?.value || '';
-      const apiUrl = document.getElementById('pool-edit-url')?.value || '';
-      const apiKey = document.getElementById('pool-edit-key')?.value || '';
-      const btn = document.getElementById('btn-pool-edit-fetch');
-      if (btn) btn.disabled = true;
-      try {
-        let models = [];
-        if (provider === 'opencode-zen' || provider === 'opencode-go') {
-          const r = await window.api.zenFetchModels();
-          const list = (r && (r.data || r.models)) || [];
-          models = list.map(m => ({ id: m.id, name: m.name || '' }));
-        } else {
-          const r = await window.api.llmFetchModels(provider, apiUrl, apiKey);
-          models = (r && (r.models || r.data)) || [];
-        }
-        const sel = document.getElementById('pool-edit-model-select');
-        if (sel && models.length) {
-          sel.innerHTML = '<option value="">-- 选择模型 --</option>' + models.map(m => `<option value="${poolEsc(m.id)}">${poolEsc(m.name || m.id)}</option>`).join('');
-          sel.classList.remove('hidden');
-        } else {
-          window.showToast('未获取到模型列表', 'warn');
-        }
-      } catch (e) {
-        window.showToast('获取失败: ' + e.message, 'error');
-      } finally {
-        if (btn) btn.disabled = false;
-      }
-    });
+    document.getElementById('btn-pool-edit-fetch')?.addEventListener('click', fetchPoolModels);
+    document.getElementById('pool-edit-free-only')?.addEventListener('change', renderPoolModels);
+    for (const id of ['pool-edit-key', 'pool-edit-url', 'pool-edit-provider']) document.getElementById(id)?.addEventListener('change', fetchPoolModels);
     document.getElementById('pool-edit-model-select')?.addEventListener('change', (e) => {
       const modelEl = document.getElementById('pool-edit-model');
       if (modelEl && e.target.value) modelEl.value = e.target.value;
+      const model = _poolModels.find(model => model.id === e.target.value);
+      if (model) {
+        if (!_poolCtxTouched && model.contextLength) document.getElementById('pool-edit-ctx').value = model.contextLength;
+        document.getElementById('pool-edit-vision').checked = model.vision === true || model.capabilities?.vision === true;
+        if (!document.getElementById('pool-edit-label').value.trim()) document.getElementById('pool-edit-label').value = model.name || model.id;
+      }
       refreshPoolEditorVariants().catch(() => {});
     });
     document.getElementById('pool-edit-model')?.addEventListener('change', () => {
@@ -234,6 +282,7 @@
     });
     document.getElementById('pool-edit-ctx')?.addEventListener('input', () => { _poolCtxTouched = true; });
     document.getElementById('pool-edit-provider')?.addEventListener('change', (e) => {
+      updatePoolAccountFields();
       const urlEl = document.getElementById('pool-edit-url');
       if (urlEl && !urlEl.value.trim()) {
         urlEl.placeholder = (e.target.value === 'opencode-zen' || e.target.value === 'opencode-go')

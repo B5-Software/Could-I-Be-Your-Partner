@@ -19,7 +19,7 @@ const nodePath = require('path');
 const fsp = require('fs/promises');
 const { spawn } = require('child_process');
 const sandboxRunner = require('../sandbox-runner');
-const { validateArgs } = require('./shims/dsh-tools');
+const { validateArgs, validateJsonSchemaValue } = require('./shims/dsh-tools');
 const {
   CibypAgentsService,
   CibypSessionsService,
@@ -29,11 +29,11 @@ const {
 } = require('./services');
 
 /** Schemastery Config（模块级导出）校验：Schema 可调用，失败抛 ValidationError。 */
-function validatePluginConfig(schema, config) {
+async function validatePluginConfig(schema, config) {
   if (!schema) return config || {};
   if (typeof schema === 'function') return schema(config || {});
   if (schema && typeof schema['~standard']?.validate === 'function') {
-    const res = schema['~standard'].validate(config || {});
+    const res = await schema['~standard'].validate(config || {});
     if (res && Array.isArray(res.issues) && res.issues.length) {
       throw new Error(res.issues.map((i) => i.message || String(i)).join('; '));
     }
@@ -44,11 +44,13 @@ function validatePluginConfig(schema, config) {
 
 // 当前正在挂载的插件身份（注册期同步标记，供 CibypToolsService.register 归属工具）
 const hostContext = { pluginId: null, pluginName: null };
+const PLUGIN_OWNER = Symbol('cibyp.plugin.owner');
 
 class CibypToolsService extends Service {
   constructor(ctx) {
     super(ctx, 'tools');
     this.tools = new Map(); // name → definition
+    this.guards = new Map();
   }
 
   /** DSH 工具面板/审计插件读取工具面的形状（dsh-context-doctor 等会调用）。 */
@@ -71,10 +73,25 @@ class CibypToolsService extends Service {
     if (this.tools.has(definition.name)) {
       throw new Error(`duplicate tool registration: ${definition.name}`);
     }
-    definition.pluginId = hostContext.pluginId || null;
-    definition.pluginName = hostContext.pluginName || null;
-    this.tools.set(definition.name, definition);
-    return () => { if (this.tools.get(definition.name) === definition) this.tools.delete(definition.name); };
+    const owner = this.ctx[PLUGIN_OWNER] || hostContext;
+    const registered = { ...definition, pluginId: owner.pluginId || null, pluginName: owner.pluginName || null };
+    return this.ctx.effect(() => {
+      this.tools.set(registered.name, registered);
+      this.ctx.emit('tools/change');
+      return () => {
+        if (this.tools.get(registered.name) === registered) this.tools.delete(registered.name);
+        this.ctx.emit('tools/change');
+      };
+    });
+  }
+
+  registerGuard(guard) {
+    if (typeof guard !== 'function') throw new TypeError('tools.registerGuard requires a function');
+    const owner = this.ctx[PLUGIN_OWNER] || hostContext;
+    return this.ctx.effect(() => {
+      this.guards.set(guard, owner.pluginId);
+      return () => this.guards.delete(guard);
+    });
   }
 }
 
@@ -87,6 +104,7 @@ class PluginHost {
     this.initialized = false;
     this.issues = new Map(); // pluginId → [string]
     this._opLock = new Map(); // pluginId → 串行操作链（探测/启用/卸载不并发）
+    this._activeTools = new Map();
   }
 
   /** 按插件串行化加载/卸载，避免“探测与启用并发”造成的服务残留竞态。 */
@@ -99,7 +117,16 @@ class PluginHost {
 
   async init() {
     if (this.initialized) return;
-    this.initialized = true;
+    if (this._initializing) return this._initializing;
+    this._initializing = this._init().catch((error) => {
+      this._initializing = null;
+      this.initialized = false;
+      throw error;
+    });
+    return this._initializing;
+  }
+
+  async _init() {
     await this.ctx.plugin(CibypToolsService);
     this.toolsService = this.ctx.tools;
     // 桥接 seams：skills / settings / sandbox 提供可用实现，其余 stub
@@ -320,6 +347,7 @@ class PluginHost {
         }
       });
     }
+    this.initialized = true;
   }
 
   async _importEntry(entryPath) {
@@ -333,7 +361,8 @@ class PluginHost {
     } catch (e) {
       // 回退 CJS require（部分插件发布为 commonjs）
       try { delete require.cache[require.resolve(resolved)]; } catch { /* ignore */ }
-      return require(resolved);
+      try { return require(resolved); }
+      catch { throw e; }
     }
   }
 
@@ -342,7 +371,7 @@ class PluginHost {
     const attachMeta = (fn, name, inject) => {
       try {
         Object.defineProperty(fn, 'name', { value: name || pluginId, configurable: true });
-        if (Array.isArray(inject)) Object.defineProperty(fn, 'inject', { value: inject, configurable: true });
+        if (inject) Object.defineProperty(fn, 'inject', { value: inject, configurable: true });
       } catch { /* 元数据附加失败不影响加载 */ }
       return fn;
     };
@@ -386,13 +415,46 @@ class PluginHost {
       this.issues.get(pluginId).push(`入口加载失败: ${e.message}`);
       return { tools: [], issues: this.issues.get(pluginId).slice() };
     }
-    const plugin = this._toPlugin(mod, pluginId);
+    let plugin;
+    try { plugin = this._toPlugin(mod, pluginId); }
+    catch (error) { this.issues.get(pluginId).push(error.message); return { tools: [], issues: this.issues.get(pluginId).slice() }; }
+    // Context ownership survives delayed registration and dependency activation.
+    // Do not mutate the plugin's definition or rely on a global async identity.
+    const identity = { pluginId, pluginName: meta.name || pluginId };
+    const original = plugin;
+    if (typeof original === 'function' && original.prototype instanceof Service) {
+      plugin = class extends original {
+        constructor(ctx, config) { ctx[PLUGIN_OWNER] = identity; super(ctx, config); }
+      };
+    } else if (typeof original === 'function') {
+      plugin = (ctx, config) => { ctx[PLUGIN_OWNER] = identity; return original(ctx, config); };
+    } else {
+      plugin = { ...original, apply(ctx, config) { ctx[PLUGIN_OWNER] = identity; return original.apply(ctx, config); } };
+    }
+    const declaredInject = original.inject;
+    if (Array.isArray(declaredInject)) plugin.inject = declaredInject;
+    else if (declaredInject) {
+      plugin.inject = {};
+      for (const [name, config] of Object.entries(declaredInject)) {
+        const optional = config === false || config?.required === false;
+        if (optional && !this.ctx.reflect._getImpl(name, true)) continue;
+        const intercept = config && typeof config === 'object' ? { ...config } : null;
+        if (intercept) delete intercept.required;
+        plugin.inject[name] = intercept;
+      }
+    } else {
+      // Legacy plugins omitted inject and relied on direct service access.
+      plugin.inject = ['tools', 'skills', 'fs', 'shell', 'settings', 'agents', 'sessions',
+        'llm', 'sandboxPolicy', 'approval', 'sandbox', 'webServer', 'jobs', 'storage', 'compaction']
+        .filter(name => this.ctx.reflect._getImpl(name, true));
+    }
+    if (original.Config) plugin.Config = original.Config;
     // 模块级 Config（Schemastery）：真实 DSH 宿主在 apply 前完成校验并合并默认值，
     // Cordis 只对“插件对象自带 Config”做校验，函数式插件因此必须由我们处理。
     let config = meta.config || {};
-    if (mod && typeof mod === 'object' && typeof mod.Config === 'function') {
+    if (mod && typeof mod === 'object' && mod.Config) {
       try {
-        config = validatePluginConfig(mod.Config, config);
+        config = await validatePluginConfig(mod.Config, config);
       } catch (e) {
         this.issues.get(pluginId).push(`配置校验失败: ${e.message}`);
         return { tools: [], issues: this.issues.get(pluginId).slice() };
@@ -423,10 +485,13 @@ class PluginHost {
       // apply 挂起保护：交互式 TUI 类插件（如 dsh-cc-tui）可能永不返回，
       // 超时后强制卸载纤维，避免阻塞启动/启用流程
       const applyTimeout = meta.applyTimeoutMs || this.options.applyTimeoutMs || 30000;
-      fiber = await Promise.race([
-        this.ctx.plugin(plugin, config),
-        new Promise((_, reject) => setTimeout(() => reject(new Error('apply 挂起超时（可能为交互式 TUI 插件）')), applyTimeout).unref())
-      ]);
+      let applyTimer;
+      try {
+        fiber = await Promise.race([
+          this.ctx.plugin(plugin, config),
+          new Promise((_, reject) => { applyTimer = setTimeout(() => reject(new Error('apply 挂起超时（可能为交互式 TUI 插件）')), applyTimeout); applyTimer.unref(); })
+        ]);
+      } finally { clearTimeout(applyTimer); }
       this.fibers.set(pluginId, fiber);
     } catch (e) {
       // 强制卸载可能已注册的纤维：挂起的 apply 不能被 await，否则会卡死宿主
@@ -474,9 +539,7 @@ class PluginHost {
     // 注入依赖缺口诊断：Cordis 对缺失服务不抛错，而是让插件纤维永远休眠
     // （表现为“零工具、零报错”）。这里把缺口显式记录为兼容问题。
     const inject = plugin.inject;
-    const injectNames = Array.isArray(inject)
-      ? inject
-      : (inject && typeof inject === 'object' ? Object.keys(inject) : []);
+    const injectNames = Array.isArray(inject) ? inject : (inject && typeof inject === 'object' ? Object.keys(inject) : []);
     const missing = injectNames.filter((name) => !this.ctx.reflect._getImpl(name, true));
     if (missing.length) {
       this.issues.get(pluginId).push(`缺少宿主服务注入: ${missing.join(', ')}（插件保持休眠，未注册工具）`);
@@ -496,6 +559,7 @@ class PluginHost {
 
   unloadPlugin(pluginId) {
     return this._serialize(pluginId, async () => {
+      for (const jobs of this._activeTools.values()) for (const job of jobs) if (job.pluginId === pluginId) job.controller.abort(new Error('Plugin unloaded'));
       const fiber = this.fibers.get(pluginId);
       if (fiber) {
         await Promise.race([
@@ -509,12 +573,14 @@ class PluginHost {
         for (const [name, def] of [...this.toolsService.tools.entries()]) {
           if (def.pluginId === pluginId) this.toolsService.tools.delete(name);
         }
+        for (const [guard, owner] of this.toolsService.guards) if (owner === pluginId) this.toolsService.guards.delete(guard);
       }
       return true;
     });
   }
 
   async dispose() {
+    for (const jobs of this._activeTools.values()) for (const job of jobs) job.controller.abort(new Error('Plugin host disposed'));
     for (const fiber of this.fibers.values()) {
       try {
         await Promise.race([
@@ -536,55 +602,119 @@ class PluginHost {
    * 执行插件工具（CIBYP executeTool 的 ds__ 路由落点）。
    */
   async callTool(pluginId, toolName, args, execCtx = {}) {
-    const def = this.toolsService && this.toolsService.tools.get(toolName);
-    if (!def || def.pluginId !== pluginId) {
-      return { ok: false, error: `插件 ${pluginId} 未提供工具 ${toolName}` };
-    }
-    const validated = validateArgs(def, args || {});
+    const def = this.toolsService?.tools.get(toolName);
+    if (!def || def.pluginId !== pluginId) return { ok: false, error: 'Plugin tool unavailable: ' + toolName };
+    const key = pluginId + ':' + toolName;
     const controller = new AbortController();
-    const timeoutMs = Math.max(1000, Math.min(def.timeoutMs || 120000, 600000));
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    const signal = execCtx.signal ? AbortSignal.any([controller.signal, execCtx.signal]) : controller.signal;
+    const timeoutMs = Math.max(1, Math.min(def.timeoutMs || 120000, 600000));
+    const timer = setTimeout(() => controller.abort(Object.assign(new Error('Plugin tool timed out'), { code: 'TIMEOUT' })), timeoutMs);
     const sessionKey = execCtx.sessionKey || execCtx.sessionId || null;
-    // 真实 agent 代理：由渲染进程同步会话元数据，followup/inject 经 IPC 送进对应会话
-    const liveAgent = (this.agentsService && sessionKey && this.agentsService.has(sessionKey))
-      ? this.agentsService.get(sessionKey)
-      : null;
-    const exec = {
-      signal: controller.signal,
-      token: `${pluginId}:${toolName}:${Date.now().toString(36)}`,
-      callId: execCtx.callId || `${pluginId}:${toolName}:${Math.random().toString(36).slice(2, 10)}`,
-      sessionId: sessionKey,
-      cwd: execCtx.cwd || null,
+    const liveAgent = this.agentsService && sessionKey && this.agentsService.has(sessionKey) ? this.agentsService.get(sessionKey) : null;
+    const exec = { signal };
+    const identity = {
+      name: toolName, arguments: args ?? {}, token: Symbol(key),
+      callId: execCtx.callId || key + ':' + Math.random().toString(36).slice(2),
+      sessionId: sessionKey, cwd: execCtx.cwd || null,
       sandboxMode: execCtx.sandboxMode || 'danger-full-access',
-      agent: liveAgent || {
-        inject: async () => { throw new Error('agent.inject 暂未在 CIBYP 桥接（缺少会话同步）'); }
-      }
+      agent: liveAgent || { inject: async () => { throw new Error('Agent session is not synchronized'); } },
     };
+    for (const [name, value] of Object.entries(identity)) Object.defineProperty(exec, name, { value, enumerable: true });
+    const failure = (error, code = error?.code || 'TOOL_ERROR') => ({
+      isError: true, content: [{ type: 'text', text: error?.message || String(error) }],
+      error: { code, message: error?.message || String(error) },
+    });
+    const render = async (value) => {
+      if (def.output?.schema) {
+        const errors = validateJsonSchemaValue(def.output.schema, value, 'output');
+        if (errors.length) throw Object.assign(new Error(errors.join('; ')), { code: 'INVALID_OUTPUT' });
+      }
+      const content = def.output?.render ? await def.output.render(exec.arguments, value)
+        : [{ type: 'text', text: typeof value === 'string' ? value : safeStringify(value) }];
+      if (!Array.isArray(content)) throw new TypeError('Tool output.render must return content blocks');
+      return content;
+    };
+    let outcome;
     try {
-      const value = await def.execute(validated, exec);
-      let content = '';
-      if (def.output && typeof def.output.render === 'function') {
-        const blocks = def.output.render(validated, value);
-        content = Array.isArray(blocks)
-          ? blocks.filter(b => b && b.type === 'text').map(b => b.text).join('\n')
-          : String(blocks || '');
-      } else {
-        content = typeof value === 'string' ? value : safeStringify(value);
-      }
-      return { ok: true, content, value, callId: exec.callId };
-    } catch (e) {
-      if (e && e.name === 'ToolArgsError') {
-        return { ok: false, error: e.message, invalidArgs: true };
-      }
-      return { ok: false, error: e.message || String(e) };
-    } finally {
-      clearTimeout(timer);
-    }
+      signal.throwIfAborted();
+      validateArgs(def, exec.arguments);
+      if (this._activeTools.has(key) && !def.isConcurrencySafe?.(exec.arguments))
+        throw Object.assign(new Error('The previous invocation is still running'), { code: 'TOOL_BUSY' });
+      const task = (async () => {
+        const decision = await this.ctx.waterfall('tools/pre-execute', exec, async () => ({ kind: 'allow' }));
+        if (!decision || !['allow', 'deny', 'cancel', 'ask'].includes(decision.kind)) throw new Error('Invalid tools/pre-execute decision');
+        if (decision.kind === 'deny') return failure(new Error(decision.reason || 'Tool denied'), 'TOOL_DENIED');
+        if (decision.kind === 'cancel') return failure(new Error('Tool cancelled'), 'CANCELLED');
+        if (decision.kind === 'ask') {
+          const answer = await this.ctx.approval.request({ ...decision, agent: exec.agent, toolName, callId: exec.callId, signal });
+          if (answer !== true && answer?.approved !== true) return failure(new Error('Tool approval declined'), 'TOOL_DENIED');
+        }
+        for (const guard of this.toolsService.guards.keys()) {
+          const reason = guard(exec);
+          if (reason) return failure(new Error(String(reason)), 'TOOL_DENIED');
+        }
+        signal.throwIfAborted();
+        let result = await this.ctx.waterfall('tools/execute', exec, async () => {
+          try {
+            const fusedSignal = AbortSignal.any([signal, exec.signal]);
+            const value = await def.execute(exec.arguments, { ...exec, signal: fusedSignal });
+            signal.throwIfAborted();
+            return { isError: false, value, content: await render(value),
+              ...(def.output?.presentationMeta ? { meta: await def.output.presentationMeta(exec.arguments, value) } : {}) };
+          } catch (error) { return failure(error); }
+        });
+        if (!result || typeof result.isError !== 'boolean') throw new Error('Invalid tools/execute result');
+        signal.throwIfAborted();
+        const post = await this.ctx.waterfall('tools/post-execute', exec, Object.freeze(result), async () => ({ kind: 'accept' }));
+        if (post?.kind === 'block') result = { isError: true, content: post.feedback || [], error: { code: 'TOOL_BLOCKED', message: 'Tool result blocked' } };
+        else if (post?.kind === 'accept') {
+          if ('value' in post && 'content' in post) throw new Error('Cannot replace both value and content');
+          if ('value' in post) {
+            if (result.isError) throw new Error('Cannot replace the value of a failed result');
+            result = { ...result, value: post.value, content: await render(post.value) };
+          } else if ('content' in post) result = { ...result, content: post.content };
+          if (post.additionalContexts) result = { ...result, additionalContexts: post.additionalContexts };
+        } else throw new Error('Invalid tools/post-execute decision');
+        if (def.finalizeContent) {
+          const content = await def.finalizeContent(Object.freeze({ ...exec, signal }), Object.freeze(result));
+          if (content !== undefined) result = { ...result, content };
+        }
+        signal.throwIfAborted();
+        return result;
+      })();
+      const job = { pluginId, controller };
+      const jobs = this._activeTools.get(key) || new Set();
+      jobs.add(job);
+      this._activeTools.set(key, jobs);
+      task.finally(() => { jobs.delete(job); if (!jobs.size) this._activeTools.delete(key); }).catch(() => {});
+      outcome = await abortable(task, signal);
+    } catch (error) { outcome = failure(error, signal.aborted ? signal.reason?.code || 'CANCELLED' : error?.code); }
+    finally { clearTimeout(timer); }
+    // Observers cannot turn a successful execution into a failure.
+    try { await abortable(this.ctx.parallel('tools/result', Object.freeze({ ...exec, signal }), Object.freeze(outcome)), AbortSignal.timeout(1000)); }
+    catch (error) { this.ctx.logger.warn('tools/result observer failed: ' + error.message); }
+    const blocks = Array.isArray(outcome.content) ? outcome.content : [];
+    return {
+      ok: !outcome.isError, content: blocks.filter((block) => block?.type === 'text').map((block) => block.text).join('\n'),
+      contentBlocks: blocks, value: outcome.value, callId: exec.callId, meta: outcome.meta,
+      ...(outcome.isError ? { error: outcome.error?.message || 'Plugin tool failed', code: outcome.error?.code,
+        invalidArgs: outcome.error?.code === 'INVALID_ARGS' } : {}),
+      ...(outcome.additionalContexts ? { additionalContexts: outcome.additionalContexts } : {}),
+    };
   }
 }
 
 function safeStringify(value) {
   try { return JSON.stringify(value); } catch { return String(value); }
+}
+
+function abortable(task, signal) {
+  return new Promise((resolve, reject) => {
+    const abort = () => reject(signal.reason || new Error('Plugin tool cancelled'));
+    if (signal.aborted) { abort(); return; }
+    signal.addEventListener('abort', abort, { once: true });
+    task.then(resolve, reject).finally(() => signal.removeEventListener('abort', abort));
+  });
 }
 
 module.exports = { PluginHost, CibypToolsService };

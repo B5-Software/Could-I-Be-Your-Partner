@@ -22,7 +22,20 @@ function shellQuote(value) {
 async function desktopLauncher(env, platform) {
   const pkg = require('../package.json');
   const base = cacheDirectory(env, platform);
-  const directory = inside(base, 'launcher-' + pkg.version);
+  // Preserve aliases made by npx while also refreshing a changed launcher
+  // whose npm version has not been bumped yet.
+  const fingerprint = crypto.createHash('sha256');
+  for (const folder of ['bin', 'lib']) {
+    const files = (await fs.readdir(path.join(__dirname, '..', folder))).sort();
+    for (const file of files) {
+      fingerprint.update(folder + '/' + file);
+      fingerprint.update(await fs.readFile(path.join(__dirname, '..', folder, file)));
+    }
+  }
+  const directory = inside(
+    base,
+    'launcher-' + pkg.version + '-' + fingerprint.digest('hex').slice(0, 12),
+  );
   try {
     const existing = JSON.parse(await fs.readFile(path.join(directory, 'package.json'), 'utf8'));
     if (existing.version === pkg.version) return inside(directory, 'bin/cibyp.cjs');
@@ -194,4 +207,4 @@ async function registerDesktop(
   throw new Error('Unsupported desktop platform: ' + platform);
 }
 
-module.exports = { registerDesktop, desktopQuote };
+module.exports = { registerDesktop, desktopQuote, desktopLauncher };

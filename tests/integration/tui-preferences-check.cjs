@@ -22,7 +22,7 @@ module.exports = async function checkTuiPreferences(renderer) {
     }
     await wait(async () => {
       const settings = await window.api.getSettings();
-      return settings.tui.followGuiTheme === false && settings.tui.thinkingExpanded === false;
+      return settings.tui.followGuiTheme === false && settings.tui.thinkingExpanded === false && settings.tui.mouse === false;
     });
     const off = (await window.api.getSettings()).tui;
     for (const input of inputs) {
@@ -31,12 +31,12 @@ module.exports = async function checkTuiPreferences(renderer) {
     }
     await wait(async () => {
       const settings = await window.api.getSettings();
-      return settings.tui.followGuiTheme === true && settings.tui.thinkingExpanded === true;
+      return settings.tui.followGuiTheme === true && settings.tui.thinkingExpanded === true && settings.tui.mouse === true;
     });
     return {count: inputs.length, off, on: (await window.api.getSettings()).tui};
   })()`);
-  assert.equal(result.count, 2);
-  assert.deepEqual(result.off, { followGuiTheme: false, thinkingExpanded: false });
-  assert.deepEqual(result.on, { followGuiTheme: true, thinkingExpanded: true });
+  assert.equal(result.count, 3);
+  assert.deepEqual(result.off, { followGuiTheme: false, thinkingExpanded: false, mouse: false });
+  assert.deepEqual(result.on, { followGuiTheme: true, thinkingExpanded: true, mouse: true });
   console.log('[desktop-smoke] TUI preference category opens and saves both shared preferences.');
 };

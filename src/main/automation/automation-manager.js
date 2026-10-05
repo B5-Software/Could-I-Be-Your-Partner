@@ -322,6 +322,7 @@ class AutomationManager {
         delivery: task.delivery || { mode: 'new' },
         trigger: { kind: triggerInfo.kind || 'manual', params: triggerInfo.params || {} }
       }, 30000);
+      if (!result || result.error || !result.sessionKey) throw new Error(result?.error || 'Automation was not accepted by the backend');
       task.runCount = (Number(task.runCount) || 0) + 1;
       task.lastRunAt = Date.now();
       task.lastError = null;

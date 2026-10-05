@@ -16,6 +16,13 @@
 'use strict';
 
 const args = process.argv.slice(2);
+if (args[0] === 'alias') {
+  require('../src/tui/launcher').launch('tui', args).catch((error) => {
+    console.error('[cibyp-tui]', error.message);
+    process.exitCode = 1;
+  });
+  return;
+}
 if (args.includes('--version') || args.includes('-v')) {
   console.log(require('../package.json').version.split('+')[0]);
   return;
@@ -29,18 +36,10 @@ if (args.includes('--help') || args.includes('-h')) {
   cibyp-tui --headless --web        Web service
 
 Use /help for interactive commands, /workspace to choose a local Code directory.
-GUI and TUI share settings and cannot run at the same time.`);
+GUI, TUI and WebUI connect to one shared backend.`);
   return;
 }
-const { bootNodeRuntime, waitForRuntime } = require('../src/tui/node-entry.js');
-
-const main = bootNodeRuntime(args);
-
-waitForRuntime(main)
-  .then(() => {
-    // TUI 由 main.js 的 --tui 启动块拉起；此处仅保证运行时可见
-  })
-  .catch((error) => {
-    console.error('[cibyp-tui] 启动失败:', error);
-    process.exit(1);
-  });
+require('../src/tui/backend-connect').launchClient(args).catch(error => {
+  console.error('[cibyp-tui]', error.message);
+  process.exitCode = 1;
+});

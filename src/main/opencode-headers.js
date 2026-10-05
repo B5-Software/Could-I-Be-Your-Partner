@@ -8,13 +8,13 @@
  *   x-opencode-request: <请求 ID>          （同上，官方形状 msg_<12 hex><14 base62>）
  *   x-opencode-client: <客户端标识>        （官方 TUI 为 "cli"）
  *   x-opencode-project: <项目 ID>
- *   User-Agent: opencode/<version>         （免费模型门控需要 —— 本应用不自动注入，
- *                                           由用户在设置中主动添加，并已告知官方方案与风险）
+ *   User-Agent: opencode/<version>         （按用户要求自动注入，可配置覆盖）
  * 免费模型的上游（Console 推理池）当前校验客户端身份（2026-09-17 起收紧，实测）：
  *   1. User-Agent 必须形如 opencode/<正式发布版本>（>=1.17.0），版本串不能带 git 后缀；
  *   2. x-opencode-session / x-opencode-request 必须符合官方 ID 形状
  *      （<prefix>_<12 hex><14 base62>，共 26 字符；UUID/任意串会直接 403 FreeTierError）；
- *   3. 匿名 Authorization: Bearer public 目前仍被免费池拒绝，需要已登录的 Zen key。
+ *   3. 免费池要求包含 bash/edit/glob/grep/read 的工具定义和流式请求；
+ *      2026-10-05 实测满足条件的 Authorization: Bearer public 请求正常返回。
  * 官方未登录时 Authorization 使用字面量 "public"（provider.ts: options: { apiKey: "public" }）。
  *
  * 同时提供"自定义请求头"通用能力：所有 AI API（文本/VLM/生图等）可配置任意请求头。
@@ -26,7 +26,7 @@ const crypto = require('crypto');
 
 // npm 包 opencode-ai 的近期版本；网关只校验 opencode/ 前缀，不校验具体版本。
 // 启动时会尝试从 npm registry 拉取最新版本并缓存（refreshOpenCodeVersion）。
-const OPENCODE_DEFAULT_VERSION = '1.18.31';
+const OPENCODE_DEFAULT_VERSION = '1.18.34';
 const VERSION_TTL_MS = 24 * 60 * 60 * 1000;
 
 // 版本缓存（由 main.js 注入 settings 读写器，避免本模块反向依赖主进程状态）
@@ -117,7 +117,7 @@ async function refreshOpenCodeVersion(fetchImpl) {
 function isOpenCodeUrl(url) {
   try {
     const u = new URL(String(url));
-    return /(^|\.)opencode\.ai$/i.test(u.hostname);
+    return u.protocol === 'https:' && /(^|\.)opencode\.ai$/i.test(u.hostname);
   } catch {
     return false;
   }
@@ -168,7 +168,14 @@ function normalizeHeaderList(list) {
  */
 function mergeCustomHeaders(baseHeaders, list) {
   const { headers } = normalizeHeaderList(list);
-  return { ...baseHeaders, ...headers };
+  const result = { ...baseHeaders };
+  for (const [name, value] of Object.entries(headers)) {
+    for (const previous of Object.keys(result)) {
+      if (previous.toLowerCase() === name.toLowerCase()) delete result[previous];
+    }
+    result[name] = value;
+  }
+  return result;
 }
 
 // ---- OpenCode 官方头组 ----
@@ -228,14 +235,14 @@ function makeRequestId() {
 
 /**
  * 构建 OpenCode 官方头组（仅补齐缺失项，不覆盖已有值）。
- * 注意：不含 User-Agent —— 免费模型的 UA 门控头由用户在设置中主动添加
- * （UI 会告知官方方案与风险，用户自行决定），本应用不代填。
+ * 自动提供 User-Agent；自定义请求头优先。
  * @param {object} opts - { sessionKey?, requestId? }
  * @returns {object} 需要附加的头
  */
 function buildOpenCodeHeaders(opts = {}) {
   const requestId = String(opts.requestId || '').trim();
   return {
+    'User-Agent': getOpenCodeUserAgent(),
     'x-opencode-session': canonicalizeSessionId(opts.sessionKey),
     'x-opencode-request': OPENCODE_REQUEST_RE.test(requestId) ? requestId : makeRequestId(),
     'x-opencode-client': OPENCODE_CLIENT_ID,
@@ -246,7 +253,7 @@ function buildOpenCodeHeaders(opts = {}) {
 /**
  * 统一的请求头应用入口（所有 LLM/VLM builder 与生图共用）：
  *   1. 自动头：URL 命中 opencode.ai 且 llm.autoOpencodeHeaders !== false 时，
- *      补齐官方头组（不含 User-Agent；Authorization 缺失时回退 "public"）；
+ *      补齐 SessionID、UA 等头（Authorization 缺失时回退 "public"）；
  *   2. 自定义头：用户配置最后合并（含用户主动添加的免费模型 UA），优先级最高。
  * @param {object} p - { url, headers, llm, sessionKey, requestId }
  * @returns {object} 最终 headers
@@ -257,7 +264,8 @@ function applyProviderHeaders({ url, headers, llm, sessionKey, requestId }) {
   if (isOpenCodeUrl(url) && llmCfg.autoOpencodeHeaders !== false) {
     const auto = buildOpenCodeHeaders({ sessionKey, requestId });
     for (const [k, v] of Object.entries(auto)) {
-      if (out[k] === undefined || out[k] === null || out[k] === '') out[k] = v;
+      const existing = Object.keys(out).find((name) => name.toLowerCase() === k.toLowerCase());
+      if (!existing || out[existing] == null || out[existing] === '') out[existing || k] = v;
     }
     // Authorization 兜底：官方未登录时使用字面量 "public"（provider.ts）。
     // 注意：public 目前仅能拉模型列表（GET /zen/v1/models 返回 200），
@@ -265,8 +273,7 @@ function applyProviderHeaders({ url, headers, llm, sessionKey, requestId }) {
     const hasAuth = Object.keys(out).some(k => k.toLowerCase() === 'authorization');
     if (!hasAuth) out['Authorization'] = 'Bearer public';
   }
-  const custom = normalizeHeaderList(llmCfg.customHeaders);
-  return { ...out, ...custom.headers };
+  return mergeCustomHeaders(out, llmCfg.customHeaders);
 }
 
 module.exports = {

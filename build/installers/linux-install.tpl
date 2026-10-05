@@ -1,5 +1,5 @@
 # CIBYP terminal and graphical commands. Preserve unrelated commands.
-for command in cibyp cibyp-tui cibyp-code; do
+for command in cibyp cibyp-tui cibyp-code cibyp-webui; do
     target='/opt/${sanitizedProductName}/resources/cli/'"$command"
     destination="/usr/bin/$command"
     if [ -e "$destination" ] || [ -L "$destination" ]; then

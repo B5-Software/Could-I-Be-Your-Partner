@@ -12,6 +12,13 @@ const { subscribe: onChannel, dispose: disposeSubscriptions } = createChannelSub
 window.addEventListener('unload', disposeSubscriptions, { once: true });
 
 contextBridge.exposeInMainWorld('api', {
+  backendRequest: (method, ...args) => ipcRenderer.invoke('backend:request', method, ...args),
+  onBackendEvent: (callback) => onChannel('agent:session-event', callback),
+  backendRemoteConnect: (options) => ipcRenderer.invoke('backend:remote-connect', options),
+  backendRemoteDisconnect: () => ipcRenderer.invoke('backend:remote-disconnect'),
+  backendRemoteStatus: () => ipcRenderer.invoke('backend:remote-status'),
+  onBackendReconnected: (callback) => onChannel('backend:reconnected', callback),
+  onBackendConnection: (callback) => onChannel('backend:connection', callback),
   onVMFileDialogOpen: (cb) => onChannel('vmFileDialog:open', cb),
   onVMFileDialogClose: (cb) => onChannel('vmFileDialog:close', cb),
   vmFileDialogConfig: (id) => ipcRenderer.invoke('vmFileDialog:config', id),
@@ -20,6 +27,7 @@ contextBridge.exposeInMainWorld('api', {
   vmFileDialogChoose: (id, file, overwrite) => ipcRenderer.invoke('vmFileDialog:choose', id, file, overwrite),
   vmFileDialogCancel: (id) => ipcRenderer.invoke('vmFileDialog:cancel', id),
   codeOSSOpen: (directory) => ipcRenderer.invoke('codeoss:open', directory),
+  codeOSSOpenWeb: (directory) => ipcRenderer.invoke('codeoss:open-web', directory),
   codeOSSVersion: () => ipcRenderer.invoke('codeoss:version'),
   todoGet: () => ipcRenderer.invoke('todo:get'),
   startupRuntime: () => ipcRenderer.invoke('app:startup-runtime'),
@@ -41,6 +49,9 @@ contextBridge.exposeInMainWorld('api', {
   runtimeToVmPath: (p) => ipcRenderer.invoke('runtime:toVmPath', p),
   // Settings
   getSettings: () => ipcRenderer.invoke('settings:get'),
+  settingsAssistantCatalog: query => ipcRenderer.invoke('settings-assistant:catalog', query),
+  settingsAssistantPatch: changes => ipcRenderer.invoke('settings-assistant:patch', changes),
+  settingsAssistantNavigate: path => ipcRenderer.invoke('settings-assistant:navigate', path),
   setSettings: (s) => ipcRenderer.invoke('settings:set', s),
   // 监听设置广播（语言/主题/输入法/语音等），返回取消订阅函数
   onSettingsChanged: (cb) => onChannel('settings:changed', cb),
@@ -254,11 +265,24 @@ contextBridge.exposeInMainWorld('api', {
 
   // LLM
   chatLLM: (messages, options) => ipcRenderer.invoke('llm:chat', messages, options),
+  llmDetectFormat: config => ipcRenderer.invoke('llm:detectFormat', config),
   visionDescribeImage: ({ dataUrl, prompt }) => ipcRenderer.invoke('vision:describeImage', { dataUrl, prompt }),
   chatLLMStream: (messages, options) => ipcRenderer.invoke('llm:chatStream', messages, options),
   summarizeLLM: (messages, options) => ipcRenderer.invoke('llm:summarize', messages, options),
   llmCountTokens: (payload) => ipcRenderer.invoke('llm:countTokens', payload),
-  zenFetchModels: (mode) => ipcRenderer.invoke('zen:fetchModels', mode),
+  chatGPTStatus: () => ipcRenderer.invoke('chatgpt:status'),
+  chatGPTLogin: id => ipcRenderer.invoke('chatgpt:login', id),
+  chatGPTCancel: () => ipcRenderer.invoke('chatgpt:cancel'),
+  chatGPTSwitch: id => ipcRenderer.invoke('chatgpt:switch', id),
+  chatGPTLogout: id => ipcRenderer.invoke('chatgpt:logout', id),
+  chatGPTModels: () => ipcRenderer.invoke('chatgpt:models'),
+  chatGPTLimits: () => ipcRenderer.invoke('chatgpt:limits'),
+  chatGPTConsumeReset: request => ipcRenderer.invoke('chatgpt:consume-reset', request),
+  subscriptionUsage: options => ipcRenderer.invoke('subscription:usage', options),
+  onChatGPTChanged: callback => onChannel('chatgpt:changed', callback),
+  llmPricing: (model, provider, force) => ipcRenderer.invoke('llm:pricing', model, provider, force),
+  zenFetchModels: (mode, options) => ipcRenderer.invoke('zen:fetchModels', mode, options),
+  llmProbe: (config) => ipcRenderer.invoke('llm:probe', config),
   llmFetchModels: (provider, apiUrl, apiKey) => ipcRenderer.invoke('llm:fetchModels', provider, apiUrl, apiKey),
   // 查询模型可用的变体（思考强度）档位 + Anthropic 能力内省
   llmCapabilities: (provider, model, apiUrl, apiKey) => ipcRenderer.invoke('llm:capabilities', provider, model, apiUrl, apiKey),
@@ -378,6 +402,10 @@ contextBridge.exposeInMainWorld('api', {
   // Dialog
   confirmSensitive: (msg) => ipcRenderer.invoke('dialog:confirm', msg),
   openFileDialog: (opts) => ipcRenderer.invoke('dialog:openFile', opts),
+  filePickerPrepare: (save, options) => ipcRenderer.invoke('filePicker:prepare', save, options),
+  filePickerBrowse: (directory) => ipcRenderer.invoke('filePicker:browse', directory),
+  filePickerMkdir: (directory) => ipcRenderer.invoke('filePicker:mkdir', directory),
+  filePickerValidate: (file, config, overwrite) => ipcRenderer.invoke('filePicker:validate', file, config, overwrite),
   saveFileDialog: (opts) => ipcRenderer.invoke('dialog:saveFile', opts),
 
   // Chat History
@@ -664,6 +692,7 @@ contextBridge.exposeInMainWorld('api', {
   webControlSetAvatars: (avatars) => ipcRenderer.send('webControl:setAvatars', avatars),
   webControlPushModeSwitch: (mode) => ipcRenderer.send('webControl:pushModeSwitch', mode),
   webControlPushContextProgress: (data) => ipcRenderer.send('webControl:pushContextProgress', data),
+  webControlPushSubscriptionUsage: data => ipcRenderer.send('webControl:pushSubscriptionUsage', data),
   webControlPushReoptimizeState: (visible) => ipcRenderer.send('webControl:pushReoptimizeState', visible),
   webControlPushOskState: (state) => ipcRenderer.send('webControl:pushOskState', state),
   onWebControlToggleOsk: (cb) => onChannel('webControl:toggleOsk', cb),
@@ -701,6 +730,14 @@ contextBridge.exposeInMainWorld('api', {
 
   // 更新检查：GitHub Releases 自动更新（设置页「更新」tab）
   updatesCheck: () => ipcRenderer.invoke('updates:check'),
+  updatesStart: () => ipcRenderer.invoke('updates:start'),
+  updatesStatus: () => ipcRenderer.invoke('updates:status'),
+  remoteTorStart: () => ipcRenderer.invoke('remoteTor:start'),
+  remoteTorStop: () => ipcRenderer.invoke('remoteTor:stop'),
+  remoteTorStatus: () => ipcRenderer.invoke('remoteTor:status'),
+  onRemoteTorState: (callback) => onChannel('remoteTor:state', callback),
+  updatesInstall: () => ipcRenderer.invoke('updates:install'),
+  onUpdatesState: (callback) => onChannel('updates:state', callback),
   updatesSave: (cfg) => ipcRenderer.invoke('updates:save', cfg),
   updatesOpenRelease: (url) => ipcRenderer.invoke('updates:openRelease', url),
 });

@@ -284,10 +284,32 @@ async function startRuntime(mode, args, runtime, { spawnProcess = spawn, env = p
 }
 
 async function main(mode, args = process.argv.slice(2)) {
+  if (args[0] === 'alias') {
+    const launcher = await require('./desktop.cjs').desktopLauncher(process.env, process.platform);
+    const bin = path.dirname(launcher);
+    await require('./aliases.cjs').aliasCommand(args.slice(1), {
+      node: process.execPath,
+      entries: {
+        gui: launcher,
+        code: path.join(bin, 'cibyp-code.cjs'),
+        tui: path.join(bin, 'cibyp-tui.cjs'),
+        webui: path.join(bin, 'cibyp-webui.cjs'),
+      },
+    });
+    return;
+  }
   const pkg = require('../package.json');
   if (args.includes('--desktop')) {
     const launcherDirectory = path.dirname(__dirname);
-    if (path.basename(launcherDirectory) !== 'launcher-' + pkg.version)
+    const launcherName = path.basename(launcherDirectory);
+    const expectedPrefix = 'launcher-' + pkg.version;
+    if (
+      launcherName !== expectedPrefix &&
+      !(
+        launcherName.startsWith(expectedPrefix + '-') &&
+        /^[a-f0-9]{12}$/.test(launcherName.slice(expectedPrefix.length + 1))
+      )
+    )
       throw new Error('Desktop starts require the managed launcher copy');
     process.env.CIBYP_CACHE_DIR = path.dirname(launcherDirectory);
   }
@@ -303,6 +325,7 @@ async function main(mode, args = process.argv.slice(2)) {
         '  cibyp                GUI, or TUI without a desktop\n' +
         '  cibyp-tui            TUI\n' +
         '  cibyp-code           Code TUI using the current terminal directory\n' +
+        '  cibyp alias add <name> | remove <name> | list\n' +
         '  cibyp update         Download the latest verified GitHub runtime\n' +
         '  cibyp --no-update    Use the cached runtime without checking updates\n' +
         '  cibyp --channel=stable|preview    Persist the release channel (default: preview)\n' +

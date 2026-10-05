@@ -2254,7 +2254,7 @@ test('isOpenCodeUrl / isOpenCodeGoUrl 识别', () => {
   assert.strictEqual(ocHeadersMod.isOpenCodeGoUrl('https://opencode.ai/zen/v1/chat/completions'), false);
 });
 
-test('applyProviderHeaders: zen URL 自动会话头组（官方 ID 形状，不含 UA）+ 无 key 时 public 兜底', () => {
+test('applyProviderHeaders: zen URL 自动会话头组（官方 ID 形状，自动 UA）+ 无 key 时 public 兜底', () => {
   const out = ocHeadersMod.applyProviderHeaders({
     url: 'https://opencode.ai/zen/v1/chat/completions',
     headers: { 'Content-Type': 'application/json' },
@@ -2262,8 +2262,8 @@ test('applyProviderHeaders: zen URL 自动会话头组（官方 ID 形状，不�
     sessionKey: 'sess_abc',
     requestId: 'req_1'
   });
-  // UA 不自动注入：由用户主动添加（UI 已告知官方方案与风险）
-  assert.strictEqual(out['User-Agent'], undefined);
+  // Compatible UA is automatic; a custom header can override it.
+  assert.strictEqual(out['User-Agent'], ocHeadersMod.getOpenCodeUserAgent());
   // sessionKey 规范化为官方形状；非法 requestId 回退为官方 msg_ 形状（2026-09 免费池校验）
   assert.strictEqual(out['x-opencode-session'], ocHeadersMod.canonicalizeSessionId('sess_abc'));
   assert.match(out['x-opencode-session'], ocHeadersMod.OPENCODE_SESSION_RE);
@@ -2355,7 +2355,7 @@ test('buildLLMRequest opencode-go: glm → chat/completions / minimax → messag
   assert.strictEqual(gp.url, 'https://opencode.ai/zen/go/v1/responses');
   assert.strictEqual(gp.transport, 'responses');
   for (const req of [glm, mm, gp]) {
-    assert.strictEqual(req.headers['User-Agent'], undefined, 'UA 不自动注入');
+    assert.strictEqual(req.headers['User-Agent'], ocHeadersMod.getOpenCodeUserAgent());
     assert.strictEqual(req.headers['x-opencode-session'], ocHeadersMod.canonicalizeSessionId('sess_x'));
   }
 });

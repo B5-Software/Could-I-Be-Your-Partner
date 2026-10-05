@@ -3,6 +3,7 @@
     const openaiFields = document.getElementById('llm-openai-fields');
     const zenFields = document.getElementById('llm-zen-fields');
     if (!openaiFields || !zenFields) return;
+    if (provider === 'chatgpt-codex') { openaiFields.classList.add('hidden'); zenFields.classList.add('hidden'); refreshChatGPTAccounts(); return; }
     if (provider === 'opencode-zen' || provider === 'opencode-go') {
       openaiFields.classList.add('hidden');
       zenFields.classList.remove('hidden');
@@ -22,7 +23,7 @@
     sel.innerHTML = '<option value="">加载中...</option>';
     if (hint) hint.textContent = '正在获取模型列表...';
     try {
-      const res = await window.api.zenFetchModels(isGo ? 'go' : 'zen');
+      const res = await window.api.zenFetchModels(isGo ? 'go' : 'zen', { apiKey: document.getElementById('setting-llm-zen-key')?.value || 'public' });
       if (!res || !res.ok || !Array.isArray(res.models)) {
         sel.innerHTML = '<option value="">(获取失败)</option>';
         if (hint) hint.textContent = res?.error || '获取失败，请检查 OpenCode API Key 或网络';
@@ -34,11 +35,11 @@
       const isPublicKey = !isGo && ((keyInput?.value || '').trim() === 'public' || keyInput?.dataset?.publicKey === '1');
       let models = res.models.slice();
       if (isPublicKey) {
-        models = models.filter(m => FREE_KEYWORDS.test(m.id));
+        models = models.filter(m => m.free);
       }
       models.sort((a, b) => {
-        const af = FREE_KEYWORDS.test(a.id) ? 0 : 1;
-        const bf = FREE_KEYWORDS.test(b.id) ? 0 : 1;
+        const af = a.free ? 0 : 1;
+        const bf = b.free ? 0 : 1;
         if (af !== bf) return af - bf;
         return (a.id || '').localeCompare(b.id || '');
       });
@@ -46,7 +47,7 @@
       for (const m of models) {
         const opt = document.createElement('option');
         opt.value = m.id;
-        const isFree = !isGo && FREE_KEYWORDS.test(m.id);
+        const isFree = !isGo && m.free;
         opt.textContent = (isFree ? '[免费] ' : '') + (m.name || m.id);
         sel.appendChild(opt);
       }

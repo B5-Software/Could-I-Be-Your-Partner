@@ -68,7 +68,8 @@ const COMMANDS = [
     group: 'session',
   },
   { name: 'todo', args: '', desc: '查看待办清单', group: 'info' },
-  { name: 'usage', args: '', desc: '查看本轮 Token 用量', group: 'info' },
+  { name: 'usage', args: '', desc: '查看 Token、消费与订阅额度', group: 'info' },
+  { name: 'mouse', args: '[on|off]', desc: '切换鼠标捕获（持久保存）', group: 'general' },
   { name: 'model', args: '', desc: '查看当前模型与模型池', group: 'info' },
   { name: 'status', args: '', desc: '查看运行状态', group: 'info' },
   { name: 'thinking', args: '', desc: '切换推理内容折叠/展开', group: 'info' },
@@ -83,6 +84,7 @@ const COMMANDS = [
   { name: 'continue', args: '[补充说明]', desc: '继续 / 热消息注入', group: 'message' },
   { name: 'compact', args: '', desc: '压缩上下文（释放窗口）', group: 'message' },
   { name: 'quit', args: '', desc: '退出（等价 Ctrl+C 两次）', group: 'general' },
+  { name: 'update', args: '[install]', desc: '下载新版；下载完成后重启安装', group: 'general' },
 ];
 
 /** 解析 markdown 自定义命令文件（简单 frontmatter） */

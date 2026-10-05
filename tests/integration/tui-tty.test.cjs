@@ -25,6 +25,29 @@ const { Terminal } = require('@xterm/xterm');
 const root = path.resolve(__dirname, '../..');
 const pty = require(path.join(root, 'node_modules', 'node-pty'));
 const { stripAnsi } = require(path.join(root, 'src/tui/ansi.js'));
+const { readBackend, fileFor } = require(path.join(root, 'src/main/core/backend-discovery.js'));
+
+async function cleanupProfile(profile) {
+  assert.equal(path.dirname(profile), os.tmpdir());
+  assert.ok(path.basename(profile).startsWith('cibyp-tui-tty-'));
+  const backend = readBackend(profile);
+  if (backend) {
+    if (process.platform === 'win32') {
+      require('node:child_process').spawnSync(
+        'taskkill.exe',
+        ['/PID', String(backend.pid), '/T', '/F'],
+        {
+          windowsHide: true,
+          stdio: 'ignore',
+        },
+      );
+    } else {
+      process.kill(backend.pid, 'SIGTERM');
+    }
+  }
+  fs.rmSync(fileFor(profile), { force: true });
+  await fs.promises.rm(profile, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 });
+}
 
 const REPLY = '这是真终端测试回复';
 const TITLE = '真终端会话';
@@ -202,6 +225,78 @@ function runInPty({ args, env, onOutput, onScreen, watchdogMs = 25000, describe,
   });
 }
 
+test('TUI real terminal accepts pointer clicks, opens /usage on demand and releases mouse capture', async () => {
+  const stub = await startStubLlm();
+  const profile = makeProfile(stub.port);
+  let child;
+  let stage = 'startup';
+  let captureReleased = false;
+  const click = (row) => child.write(`\x1b[<0;8;${row}M\x1b[<0;8;${row}m`);
+  try {
+    const result = await runInPty({
+      args: [path.join(root, 'bin/cibyp-tui.js')],
+      env: { CIBYP_USER_DATA: profile, CIBYP_AUTO_APPROVE: '1' },
+      watchdogMs: 30000,
+      describe: () => stage,
+      onOutput: (data, _all, current) => {
+        child = current;
+        if (stage === 'disable mouse' && data.includes('\x1b[?1006l')) captureReleased = true;
+      },
+      onScreen: (terminal) => {
+        const rows = Array.from(
+          { length: 32 },
+          (_, i) => terminal.buffer.active.getLine(i)?.translateToString(true) || '',
+        );
+        const screen = rows.join('\n');
+        if (!child) return;
+        if (stage === 'startup' && screen.includes('终端模式')) {
+          stage = 'mode picker';
+          child.write('/mode' + CR);
+        } else if (stage === 'mode picker' && screen.includes('切换模式')) {
+          const row = rows.findIndex((row) => row.includes('Babe ·'));
+          if (row < 0) return;
+          stage = 'Babe clicked';
+          click(row + 1);
+        } else if (stage === 'Babe clicked' && rows.at(-1).startsWith('Babe')) {
+          stage = 'usage panel';
+          child.write('/usage' + CR);
+        } else if (
+          stage === 'usage panel' &&
+          screen.includes('用量与额度') &&
+          screen.includes('今日 API 消费')
+        ) {
+          assert.ok(!rows.at(-1).includes('$'), 'Spending must not remain in the footer');
+          const row = rows.findIndex((row) => row.trim() === '❯ 关闭');
+          if (row < 0) return;
+          stage = 'closed usage';
+          click(row + 1);
+        } else if (stage === 'closed usage' && !screen.includes('用量与额度')) {
+          stage = 'disable mouse';
+          child.write('/mouse off' + CR);
+        } else if (
+          stage === 'disable mouse' &&
+          captureReleased &&
+          screen.includes('鼠标捕获已关闭')
+        ) {
+          stage = 'quitting';
+          child.write(CTRL_C);
+          setTimeout(() => child.write(CTRL_C), 150);
+        }
+      },
+    });
+    assert.equal(stage, 'quitting');
+    assert.equal(result.exitCode, 0);
+    assert.equal(stub.hits.count, 0, 'UI commands never invoke the LLM');
+    assert.equal(
+      JSON.parse(fs.readFileSync(path.join(profile, 'data/settings.json'), 'utf8')).tui.mouse,
+      false,
+    );
+  } finally {
+    closeStub(stub);
+    await cleanupProfile(profile);
+  }
+});
+
 test('TUI Code startup workspace failure still accepts real keyboard input and workspace recovery', async () => {
   const stub = await startStubLlm();
   const profile = makeProfile(stub.port);
@@ -266,7 +361,7 @@ test('TUI Code startup workspace failure still accepts real keyboard input and w
     assert.ok(stub.hits.count > 0);
   } finally {
     closeStub(stub);
-    fs.rmSync(profile, { recursive: true, force: true });
+    await cleanupProfile(profile);
   }
 });
 
@@ -337,6 +432,7 @@ test(
       }
     } finally {
       closeStub(stub);
+      await cleanupProfile(profile);
     }
   },
   { timeout: 60000 },
@@ -422,6 +518,7 @@ test(
       );
     } finally {
       closeStub(stub);
+      await cleanupProfile(profile);
     }
   },
   { timeout: 60000 },
@@ -469,6 +566,7 @@ test(
       assert.equal(result.exitCode, 0);
     } finally {
       closeStub(stub);
+      await cleanupProfile(profile);
     }
   },
   { timeout: 60000 },

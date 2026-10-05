@@ -1,14 +1,52 @@
+  let budgetMiniGeneration = 0;
   async function refreshBudgetMiniBars() {
+    const generation = ++budgetMiniGeneration;
     try {
       const st = await window.api.budgetGetStatus();
       if (!st?.ok) return;
       const daily = st.daily || {};
       const monthly = st.monthly || {};
       // 三种模式的预算小条使用同一份数据（按当日总花费）
-      const targets = ['chat-budget-mini-bar', 'code-budget-mini-bar', 'babe-budget-mini-bar'];
-      for (const id of targets) {
+      const targets = [{ id: 'chat-budget-mini-bar', agent }, { id: 'code-budget-mini-bar', agent: codeAgent }, { id: 'babe-budget-mini-bar', agent: babeAgent }];
+      const states = await Promise.all(targets.map(({ agent: a }) => window.api.subscriptionUsage(a?._llmOptions?.() || {})));
+      if (generation !== budgetMiniGeneration) return;
+      for (const [index, { id }] of targets.entries()) {
         const el = document.getElementById(id);
         if (!el) continue;
+        const subscription = states[index];
+        window.api.webControlPushSubscriptionUsage?.({ ...subscription, mode: ['chat', 'code', 'babe'][index] });
+        if (subscription?.subscription) {
+          el.style.display = '';
+          const fill = el.querySelector('.bmb-fill'); const label = el.querySelector('.bmb-cost');
+          if (subscription.indicator) {
+            if (label) label.textContent = subscription.indicator.text;
+            if (fill) fill.style.width = subscription.indicator.pct + '%';
+            el.title = subscription.indicator.title;
+            el.dataset.level = subscription.indicator.level;
+            continue;
+          }
+          const quota = subscription.selected;
+          let pct = 0;
+          if (subscription.mode === 'api-equivalent') {
+            const equivalent = subscription.equivalent;
+            const known = equivalent && (equivalent.pricedRequests > 0 || equivalent.unknownRequests === 0);
+            const limit = subscription.equivalentLimitUSD;
+            pct = known && limit > 0 ? equivalent.costUSD / limit * 100 : 0;
+            if (label) label.textContent = known ? `${chatGPTText('API 等效')} $${equivalent.costUSD.toFixed(4)}${limit > 0 ? ' / $' + limit.toFixed(2) : ''}${equivalent.unknownRequests > 0 ? ' *' : ''}` : chatGPTText('自动价格暂不可用');
+            el.title = chatGPTText('今日 API 等效消费；仅供比较，不代表订阅扣费') + (equivalent?.unknownRequests > 0 ? '\n' + chatGPTText('部分请求没有参考价格') : '');
+          } else if (quota) {
+            pct = quota.usedPercent;
+            const period = chatGPTText(quota.period === '5hour' ? '5 小时' : quota.period === 'weekly' ? '每周' : quota.period === 'monthly' ? '每月' : '额度');
+            if (label) label.textContent = `${period} · ${(100 - pct).toFixed(0)}% ${chatGPTText('剩余')}`;
+            el.title = `${quota.label} · ${period}${quota.resetsAt ? '\n' + chatGPTText('重置时间') + ': ' + new Date(quota.resetsAt).toLocaleString() : ''}`;
+          } else {
+            if (label) label.textContent = chatGPTText('额度不可用');
+            el.title = subscription.error || chatGPTText('账号暂未提供对应额度数据');
+          }
+          if (fill) fill.style.width = Math.max(0, Math.min(100, pct)) + '%';
+          el.dataset.level = pct >= 100 ? 'danger' : pct >= 80 ? 'warn' : 'normal';
+          continue;
+        }
         const cost = daily.costUSD || 0;
         const limit = daily.limitUSD || 0;
         // 仅在 (有限额) 或 (已花费 > 0) 时显示
@@ -85,7 +123,8 @@
           const valEl = el.querySelector('.scm-value');
           const fmtCost = totalCost >= 0.01 ? `$${totalCost.toFixed(4)}` : `$${totalCost.toFixed(6)}`;
           if (valEl) valEl.textContent = (su.estimated ? '~' : '') + fmtCost;
-          el.title = `当前会话消费${su.estimated ? ' (估算)' : ''}：${fmtCost}\n模型：${modelLabel || '未知'}`;
+          const subscription = ['chatgpt-codex', 'opencode-go'].includes(a.llmOverride?.provider || a.settings?.llm?.provider);
+          el.title = `${subscription ? chatGPTText('API 等效消费；订阅不按此扣费') : chatGPTText('当前会话消费')}${su.estimated ? ' ~' : ''}: ${fmtCost}\n${modelLabel || ''}`;
         } else {
           el.style.display = 'none';
         }

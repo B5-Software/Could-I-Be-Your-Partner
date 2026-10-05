@@ -12,6 +12,7 @@
     const provider = e.target.value;
     const s = await readSettings();
     s.llm.provider = provider;
+    s.llm.providerLimits = null;
     // When switching to Zen/Go, persist a sensible default apiUrl/model
     if (provider === 'opencode-zen') {
       if (!s.llm.model || !s.llm.model.startsWith('gpt-') && !s.llm.model.startsWith('claude-') &&
@@ -23,6 +24,16 @@
           !s.llm.model.startsWith('grok-')) {
         s.llm.model = 'big-pickle';
       }
+    } else if (provider === 'chatgpt-codex') {
+      const result = await window.api.chatGPTModels();
+      if (!result.ok || !result.models?.length) {
+        updateLLMProviderFields(provider);
+        chatGPTStatusText(result.error || '账号没有可用模型');
+        return;
+      }
+      const model = result.models.find(model => model.id === s.llm.model) || result.models[0];
+      s.llm.model = model.id; s.llm.apiUrl = 'https://api.openai.com/v1/responses'; s.llm.apiKey = '';
+      if (model.contextLength) s.llm.maxContextLength = model.contextLength;
     } else if (provider === 'opencode-go') {
       if (!s.llm.model || !s.llm.model.startsWith('glm-') && !s.llm.model.startsWith('kimi-') &&
           !s.llm.model.startsWith('deepseek') && !s.llm.model.startsWith('minimax-') &&

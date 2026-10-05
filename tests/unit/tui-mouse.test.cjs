@@ -159,7 +159,8 @@ test('status keeps clean version on the far right and places context immediately
     ),
   );
   assert.equal(visibleWidth(row), 120);
-  assert.ok(row.endsWith('25.0K (25%) · $0.50 │ Could I Be Your Partner ' + version));
+  assert.ok(row.endsWith('25.0K (25%) │ Could I Be Your Partner ' + version));
+  assert.ok(!row.includes('$'), 'Spending is available on demand in /usage');
   assert.ok(!row.includes('+'));
 });
 

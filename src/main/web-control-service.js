@@ -541,6 +541,11 @@ class WebControlService {
     this._currentContextProgress = data;
     this.broadcast({ type: 'contextProgress', data });
   }
+  pushSubscriptionUsage(data) {
+    this._subscriptionUsage ||= {};
+    this._subscriptionUsage[data.mode || 'chat'] = data;
+    this.broadcast({ type: 'subscriptionUsage', data });
+  }
 
   // 重新优化按钮可见性同步
   pushReoptimizeState(visible) {
@@ -599,6 +604,7 @@ class WebControlService {
         avatars: this._currentAvatars,
         mode: this._currentMode,
         contextProgress: this._currentContextProgress,
+        subscriptionUsage: this._subscriptionUsage || {},
         reoptimizeVisible: this._reoptimizeVisible,
         oskState: this._oskState,
       }));
@@ -701,6 +707,7 @@ class WebControlService {
             type: 'stateSnapshot',
             mode: this._currentMode || 'chat',
             contextProgress: this._currentContextProgress || null,
+            subscriptionUsage: this._subscriptionUsage || {},
             reoptimizeVisible: !!this._reoptimizeVisible,
             oskState: this._oskState,
             voiceCapabilities: this._voiceCapabilities,
@@ -857,6 +864,7 @@ html,body{height:100%;overflow:hidden;font-family:-apple-system,BlinkMacSystemFo
 <script>
 (function(){
   var ws=null,authenticated=false,applyingRemote=false,reconnectTimer=null;
+  var voiceMessageHandler=null,voiceConnectionHandler=null;
   var loginOverlay=document.getElementById('login-overlay');
   var loginErr=document.getElementById('login-err');
   var loadingEl=document.getElementById('mirror-loading');
@@ -882,6 +890,7 @@ html,body{height:100%;overflow:hidden;font-family:-apple-system,BlinkMacSystemFo
     sock.onmessage=function(ev){
       var msg;try{msg=JSON.parse(ev.data);}catch(e){return;}
       handle(msg);
+      if(voiceMessageHandler)voiceMessageHandler(msg);
     };
     sock.onclose=function(){
       if(ws!==sock)return; // 旧连接关闭，不覆盖新连接
@@ -930,6 +939,8 @@ html,body{height:100%;overflow:hidden;font-family:-apple-system,BlinkMacSystemFo
         authenticated=true;
         loginOverlay.classList.remove('show');
         if(msg.theme)applyThemeVars(msg.theme);
+        Object.values(msg.subscriptionUsage||{}).forEach(applySubscriptionUsage);
+        if(voiceConnectionHandler)voiceConnectionHandler();
         break;
       case 'mirror_head':
         applyHead(msg);
@@ -1009,6 +1020,13 @@ html,body{height:100%;overflow:hidden;font-family:-apple-system,BlinkMacSystemFo
         break;
       case 'contextProgress':
         applyContextProgress(msg.data);
+        break;
+      case 'subscriptionUsage':
+        applySubscriptionUsage(msg.data);
+        break;
+      case 'stateSnapshot':
+        Object.values(msg.subscriptionUsage||{}).forEach(applySubscriptionUsage);
+        if(msg.contextProgress)applyContextProgress(msg.contextProgress);
         break;
       case 'oskState':
         applyOskState(msg.state);
@@ -1223,6 +1241,18 @@ html,body{height:100%;overflow:hidden;font-family:-apple-system,BlinkMacSystemFo
       else ind.dataset.level='normal';
     }
   }
+  var subscriptionUsageStates={};
+  function applySubscriptionUsage(data){
+    if(!data||!data.indicator)return;
+    var mode=data.mode||'chat';
+    subscriptionUsageStates[mode]=data;
+    var el=document.getElementById(mode+'-budget-mini-bar');
+    if(!el)return;
+    el.style.display='';el.title=data.indicator.title;el.dataset.level=data.indicator.level;
+    var fill=el.querySelector('.bmb-fill'),label=el.querySelector('.bmb-cost');
+    if(fill)fill.style.width=data.indicator.pct+'%';
+    if(label)label.textContent=data.indicator.text;
+  }
 
   function applyThemeVars(t){
     if(!t)return;
@@ -1314,6 +1344,7 @@ html,body{height:100%;overflow:hidden;font-family:-apple-system,BlinkMacSystemFo
       }
     }
     app.innerHTML=msg.html||'';
+    Object.values(subscriptionUsageStates).forEach(applySubscriptionUsage);
     // 恢复滚动位置
     for(var k=0;k<scrolls.length;k++){
       var s=scrolls[k];
@@ -1519,9 +1550,6 @@ html,body{height:100%;overflow:hidden;font-family:-apple-system,BlinkMacSystemFo
   },true);
 
   connect();
-})();
-</script>
-<script>
 // ===== WebUI 语音（STT/TTS） =====
 // 使用 Web Worker 内联 Worklet 采集麦克风，经 WS 发送到主机计算，接收 TTS 流播放。
 (function(){
@@ -1611,11 +1639,9 @@ html,body{height:100%;overflow:hidden;font-family:-apple-system,BlinkMacSystemFo
   function ttsStopAll(){ for(var id in activeTts){var s=activeTts[id];s.sources.forEach(function(x){try{x.stop();}catch(_){}});} activeTts={}; }
 
   // ---- WS 语音事件接收 ----
-  var _origOnMsg=ws.onmessage;
-  ws.onmessage=function(e){
-    if(_origOnMsg) _origOnMsg.call(ws,e);
+  // Share the current connection with the shell, including reconnects.
+  voiceMessageHandler=function(m){
     try{
-      var m=JSON.parse(e.data);
       switch(m.type){
         case'sttPartial':if(m.sessionId===sttSession&&listening){ updateSttText(m.text); } break;
         case'sttFinal':if(m.sessionId===sttSession){ updateSttText(m.text);stopStt(false); } break;
@@ -1653,7 +1679,7 @@ html,body{height:100%;overflow:hidden;font-family:-apple-system,BlinkMacSystemFo
 
   // 请求语音引擎能力状态（模型就绪、worker 运行等），用于启用/禁用麦克风按钮
   function requestVoiceCaps(){ try{ ws.send(JSON.stringify({type:'voiceGetStatus'})); }catch(_){} }
-  if(ws.readyState===1) requestVoiceCaps(); else ws.addEventListener('open',requestVoiceCaps,{once:true});
+  voiceConnectionHandler=requestVoiceCaps;
   // 轮询兜底：若引擎仍在加载，等 worker 就绪后能力自动广播（setVoiceCapabilities）
   setTimeout(requestVoiceCaps,3000);
 
@@ -1723,6 +1749,7 @@ html,body{height:100%;overflow:hidden;font-family:-apple-system,BlinkMacSystemFo
   })();
 
   window.voiced=true;
+})();
 })();
 </script>
 </body>

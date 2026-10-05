@@ -1,0 +1,98 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later */
+'use strict';
+
+const fs = require('node:fs');
+const path = require('node:path');
+const { createIpcDispatch } = require('./ipc-dispatch');
+
+// The preload is the single capability declaration for every frontend. Never
+// expose arbitrary properties of the runtime, Electron, or the IPC registry.
+function createBackendDispatch({ runtime, ipcMain, eventBus, desktop, bootState }) {
+  const source = fs.readFileSync(path.join(__dirname, '../../preload/preload.js'), 'utf8');
+  const channels = new Set(
+    [...source.matchAll(/ipcRenderer\.(?:invoke|send)\(['"]([^'"]+)['"]/g)].map((m) => m[1]),
+  );
+  const ipc = createIpcDispatch({
+    ipcMain,
+    publishEvent: (c, p) => eventBus.publish(c, p),
+    subscribe: (c, f) => eventBus.subscribe(c, f),
+  });
+  const methods = new Set([
+    'getSettings',
+    'saveSettings',
+    'getSystemTheme',
+    'getLanguage',
+    'setLanguage',
+    'listSessions',
+    'getSession',
+    'getSessionDetails',
+    'getStats',
+    'getSubscriptionUsage',
+    'getTodos',
+    'toggleTodo',
+    'openCurrentDirectory',
+    'openVmDesktop',
+    'setTitle',
+    'sendMessage',
+    'inject',
+    'stop',
+    'undo',
+    'close',
+    'respond',
+    'answerQuestions',
+    'setMinimalMode',
+    'setWorkspace',
+    'syncWorkspace',
+    'listLocalWorkspaceDirectories',
+    'listHistory',
+    'getHistory',
+    'deleteHistory',
+    'renameHistory',
+    'openHistory',
+    'getView',
+    'initialize',
+    'agentAction',
+    'configureSession',
+    'prepareWorkspace',
+  ]);
+  return async function dispatch({ method, args = [] } = {}) {
+    if (!Array.isArray(args) || args.length > 30) throw new Error('Invalid arguments');
+    if (method === 'snapshot')
+      return {
+        sessions: runtime.listSessions(),
+        views: Object.fromEntries(
+          runtime.listSessions().map((s) => [s.key, runtime.getView(s.key)]),
+        ),
+        boot: bootState?.() || { ready: true },
+        platform: process.platform,
+        pid: process.pid,
+      };
+    if (method === 'settings:catalog')
+      return require('./settings-catalog').settingsCatalog(await runtime.getSettings());
+    if (method === 'boot:state') return bootState?.() || { ready: true };
+    if (method === 'desktop:open')
+      return desktop ? desktop() : { ok: false, error: 'No graphical environment available' };
+    if (method === 'createSession') {
+      const session = runtime.createSession(args[0]);
+      return runtime.getSession(session.key);
+    }
+    if (method === 'ipc:invoke' || method === 'ipc:send') {
+      const [channel, ...values] = args;
+      if (!channels.has(channel) || channel === 'backend:request')
+        throw new Error('Unknown capability');
+      if (/^backend:remote/.test(channel))
+        throw new Error('Remote connections belong to the client');
+      // Browser window chrome belongs to the client, not to the server's GUI.
+      if (/^(window:|tray:|app:renderer-ready|webControl:push|webControl:mirror)/.test(channel))
+        return null;
+      return method === 'ipc:invoke'
+        ? ipc.invoke(channel, ...values)
+        : ipc.send(channel, ...values);
+    }
+    if (!methods.has(method) || typeof runtime[method] !== 'function')
+      throw new Error('Unknown backend method');
+    return runtime[method](...args);
+  };
+}
+
+module.exports = { createBackendDispatch };

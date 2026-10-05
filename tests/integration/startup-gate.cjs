@@ -139,6 +139,8 @@ ipcMain.once('app:renderer-ready', async (event) => {
     await event.sender.executeJavaScript('window.api.traySetEnabled(true)');
     await event.sender.executeJavaScript('window.api.traySetEnabled(true)');
     assert.equal(trays.length, 2, 'Enabling the tray must not create duplicate icons');
+    const workspace = await event.sender.executeJavaScript('window.api.workspaceCreate()');
+    assert.equal(workspace.ok, true, 'Workspace operations are available after the startup gate');
     assert(workspaceCalls > 0);
     if (order === 'host-fallback') {
       assert(!vmReady, 'Host startup must not wait for pending VM boot');

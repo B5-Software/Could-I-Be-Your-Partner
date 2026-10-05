@@ -47,7 +47,7 @@ fs.writeFileSync(
 );
 
 // 无头启动：main.js 按 process.argv 识别
-process.argv.push('--headless');
+process.argv.push('--headless', '--web');
 process.env.CIBYP_WEB_PASSWORD = WEB_PASSWORD;
 process.env.CIBYP_WEB_PORT = String(WEB_PORT);
 process.env.CIBYP_AUTO_APPROVE = '1';
@@ -132,114 +132,37 @@ async function waitForWebUi() {
   throw new Error(`WebUI did not start on port ${WEB_PORT}`);
 }
 
-function cookieFrom(response) {
-  const raw =
-    typeof response.headers.getSetCookie === 'function' ? response.headers.getSetCookie() : [];
-  return raw.map((c) => c.split(';')[0]).join('; ');
-}
-
-async function waitForMessages(baseUrl, cookie, predicate, label) {
-  for (let i = 0; i < 200; i++) {
-    const res = await fetch(`${baseUrl}/api/messages`, { headers: { Cookie: cookie } });
-    const body = await res.json();
-    if (predicate(body.messages || [])) return body.messages;
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-  throw new Error(`timeout waiting for ${label}`);
-}
-
 async function run() {
-  // ---- 启动即无窗口 ----
-  assert.equal(BrowserWindow.getAllWindows().length, 0, 'headless 不应创建任何窗口');
-
+  assert.equal(BrowserWindow.getAllWindows().length, 0, 'Headless owner creates no windows');
   await waitForWebUi();
-  const base = apiBase();
-
-  // ---- 页面可访问 ----
-  const page = await fetch(`${base}/`);
-  assert.equal(page.status, 200, 'WebUI 首页应可访问');
-  const html = await page.text();
-  assert.ok(html.length > 500, 'WebUI 首页应返回完整 HTML');
-
-  // ---- 登录 ----
-  const login = await fetch(`${base}/api/login`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ password: WEB_PASSWORD }),
+  const { BackendClient } = require('../../src/shared/backend-client');
+  const client = new BackendClient({
+    url: apiBase(),
+    socketFactory: (url, token) =>
+      new (require('ws'))(url, { headers: { Authorization: 'Bearer ' + token } }),
   });
-  const loginBody = await login.json();
-  assert.equal(loginBody.ok, true, `登录应成功：${JSON.stringify(loginBody)}`);
-  const cookie = cookieFrom(login);
-  assert.ok(cookie.includes('connect.sid'), '登录应下发会话 cookie');
-
-  // ---- HTTP 发消息 → Agent 完整一轮 → 消息回流 ----
-  const send = await fetch(`${base}/api/chat/send`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Cookie: cookie },
-    body: JSON.stringify({ message: '你好，这是无头测试' }),
-  });
-  const sendBody = await send.json();
-  assert.equal(sendBody.ok, true, `发消息应成功：${JSON.stringify(sendBody)}`);
-
-  const messages = await waitForMessages(
-    base,
-    cookie,
-    (list) => list.some((m) => m.content === FAKE_REPLY),
-    'assistant reply',
-  );
-  assert.ok(
-    messages.some((m) => m.role === 'user'),
-    '消息流应包含用户消息',
-  );
-  assert.ok(llmCalls.length > 0, '应发起过 LLM 调用');
-  assert.equal(BrowserWindow.getAllWindows().length, 0, '对话过程中仍不应出现窗口');
-
-  // ---- 会话状态 / 历史 ----
-  const status = await (await fetch(`${base}/api/status`, { headers: { Cookie: cookie } })).json();
-  assert.equal(status.ok, true, '状态接口应可用');
-  assert.equal(status.agentStatus, 'idle', '轮次结束后状态应回到 idle');
-
-  const history = await (
-    await fetch(`${base}/api/history`, { headers: { Cookie: cookie } })
-  ).json();
-  assert.equal(history.ok, true, '历史接口应可用');
-
-  // ---- WS 协议：auth → sendMessage → message 推送 ----
-  await new Promise((resolve, reject) => {
-    const WebSocket = require('ws');
-    const ws = new WebSocket(`ws://127.0.0.1:${WEB_PORT}/ws`);
-    const pushes = [];
-    const wsTimeout = setTimeout(() => {
-      ws.terminate();
-      reject(new Error(`WS check timed out; got ${JSON.stringify(pushes.map((p) => p.type))}`));
-    }, 30000);
-    ws.on('open', () => ws.send(JSON.stringify({ type: 'auth', password: WEB_PASSWORD })));
-    ws.on('message', (raw) => {
-      const msg = JSON.parse(String(raw));
-      pushes.push(msg);
-      if (msg.type === 'auth_fail') {
-        clearTimeout(wsTimeout);
-        ws.terminate();
-        reject(new Error(`WS auth failed: ${msg.error}`));
-        return;
-      }
-      if (msg.type === 'init') {
-        // 认证成功（服务端推 init 快照）后发起第二轮
-        ws.send(JSON.stringify({ type: 'sendMessage', message: 'WS 第二轮' }));
-        return;
-      }
-      if (msg.type === 'message' && msg.message && msg.message.content === FAKE_REPLY) {
-        clearTimeout(wsTimeout);
-        ws.close();
-        resolve();
-      }
-    });
-    ws.on('error', (error) => {
-      clearTimeout(wsTimeout);
-      reject(error);
-    });
-  });
-
+  const events = [];
+  client.onEvent((event) => events.push(event));
+  try {
+    await client.login(WEB_PASSWORD);
+    const snapshot = await client.connect();
+    assert.equal(snapshot.pid, process.pid);
+    for (let n = 0; n < 100 && !events.some((e) => e.type === 'connection'); n++)
+      await new Promise((r) => setTimeout(r, 20));
+    const session = await client.request('createSession', { mode: 'chat' });
+    const result = await client.request('sendMessage', session.key, 'Headless test');
+    assert.equal(result.ok, true);
+    const view = await client.request('getView', session.key);
+    assert.ok(view.messages.some((m) => m.role === 'assistant' && m.content === FAKE_REPLY));
+    assert.ok(events.some((e) => e.payload?.key === session.key && e.payload?.type === 'message'));
+    const history = await client.request('listHistory', 'chat');
+    assert.ok(Array.isArray(history));
+    assert.ok(llmCalls.length > 0);
+    assert.equal(BrowserWindow.getAllWindows().length, 0);
+    console.log('[headless-web] Shared RPC + authenticated events + history passed without a GUI.');
+  } finally {
+    client.close();
+  }
   clearTimeout(timeout);
   finish();
 }

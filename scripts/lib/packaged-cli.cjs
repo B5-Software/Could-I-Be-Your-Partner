@@ -52,6 +52,7 @@ async function preparePackagedCLI(context) {
     'bin/cibyp-tui.js',
     'bin/cibyp.js',
     'bin/cibyp-code.js',
+    'bin/cibyp-webui.js',
     'src/main/main.js',
     'src/tui/launcher.js',
     'package.json',
@@ -62,7 +63,7 @@ async function preparePackagedCLI(context) {
       throw new Error(`Unpacked CLI runtime missing: ${file}`);
   }
   if (platform !== 'win32') {
-    for (const name of ['cibyp', 'cibyp-tui', 'cibyp-code'])
+    for (const name of ['cibyp', 'cibyp-tui', 'cibyp-code', 'cibyp-webui'])
       await fs.promises.chmod(path.join(directory, name), 0o755);
     // node-pty assumes an Electron virtual ASAR path. Pure Node resolves the
     // physical directory, which must not become app.asar.unpacked.unpacked.

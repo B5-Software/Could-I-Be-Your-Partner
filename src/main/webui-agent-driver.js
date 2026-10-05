@@ -38,8 +38,12 @@ function attachWebUiAgentDriver({ webControlService, agentRuntime, log = console
   }
 
   function handleRuntimeEvent(event) {
+    if (event.key && event.key !== activeKey) return;
     try {
       switch (event.type) {
+        case 'subscription-usage':
+          webControlService.pushSubscriptionUsage?.({ ...event.data, mode: currentMode });
+          break;
         case 'message':
           webControlService.pushMessage(event.role, event.content);
           break;
@@ -180,6 +184,7 @@ function attachWebUiAgentDriver({ webControlService, agentRuntime, log = console
 
   webControlService.onGetStatus = () => {
     const session = activeKey ? agentRuntime.getSession(activeKey) : null;
+    const stats = activeKey ? agentRuntime.getStats(activeKey) : null;
     return {
       agentStatus: session ? session.status : 'idle',
       running: session ? session.busy : false,
@@ -187,6 +192,7 @@ function attachWebUiAgentDriver({ webControlService, agentRuntime, log = console
       title: session ? session.title : '',
       workspacePath: session ? session.workspacePath : null,
       mode: currentMode,
+      subscriptionUsage: stats?.subscriptionUsage || null,
     };
   };
 
@@ -204,6 +210,11 @@ function attachWebUiAgentDriver({ webControlService, agentRuntime, log = console
   webControlService.onReoptimizeTools = () => {
     webControlService.pushMessage('system', '无头运行环境：工具选择优化由会话内自动进行');
   };
+  const usageTimer = setInterval(() => {
+    if (activeKey && webControlService.running && webControlService.wsClients?.size)
+      agentRuntime.getSubscriptionUsage?.(activeKey)?.catch(() => {});
+  }, 5000);
+  usageTimer.unref?.();
 
   return {
     get activeSessionKey() {
@@ -213,6 +224,7 @@ function attachWebUiAgentDriver({ webControlService, agentRuntime, log = console
       return currentMode;
     },
     detach() {
+      clearInterval(usageTimer);
       offEvents();
       for (const [name, fn] of Object.entries(previous)) {
         webControlService[name] = fn;

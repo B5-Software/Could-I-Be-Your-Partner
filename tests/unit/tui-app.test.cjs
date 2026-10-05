@@ -13,6 +13,31 @@ const { createKeyDecoder } = require('../../src/tui/keys.js');
 const { stripAnsi, visibleWidth } = require('../../src/tui/ansi.js');
 const { themeFromEnv } = require('../../src/tui/theme.js');
 
+test('/update downloads in the background and installation requires an explicit selection', async () => {
+  const runtime = makeFakeRuntime();
+  let downloads = 0,
+    installs = 0;
+  runtime.api = {
+    updatesStart: async () => {
+      downloads++;
+      return { phase: 'downloading' };
+    },
+    updatesStatus: async () => ({ phase: 'ready', kind: 'installer' }),
+    updatesInstall: async () => {
+      installs++;
+      return { ok: true };
+    },
+  };
+  const app = new TuiApp({ runtime });
+  await app._runCommand('update', '');
+  assert.equal(downloads, 1);
+  assert.equal(installs, 0);
+  await app._runCommand('update', 'install');
+  assert.equal(app.state.modal.kind, 'updateConfirm');
+  assert.equal(app.state.modal.options[app.state.modal.selected].value, false);
+  assert.equal(installs, 0, 'showing the confirmation must not install');
+});
+
 function makeFakeRuntime() {
   const listeners = new Set();
   const sessions = new Map();
@@ -746,7 +771,12 @@ test('tui：/help 打开命令表，Esc 关闭', async () => {
   assert.equal(app.state.modal.kind, 'help');
   const text = frameText(app);
   assert.ok(text.includes('命令表'));
-  assert.ok(text.includes('/sessions'));
+  let commands = text;
+  for (let page = 0; page < 8 && !commands.includes('/sessions'); page++) {
+    await app.handleKey({ name: 'pagedown' });
+    commands += frameText(app);
+  }
+  assert.ok(commands.includes('/sessions'));
   await app.handleKey({ name: 'escape' });
   assert.equal(app.state.modal, null);
 });
@@ -799,6 +829,8 @@ test('tui：/rename /delete /attach /usage /model /compact', async () => {
   await app.handleKey({ name: 'enter' });
   await app.settled();
   assert.ok(frameText(app).includes('prompt 120'), '应展示用量');
+  assert.equal(app.state.modal.kind, 'usage');
+  await app.handleKey({ name: 'escape' });
 
   typeText(app, '/model');
   await app.handleKey({ name: 'enter' });

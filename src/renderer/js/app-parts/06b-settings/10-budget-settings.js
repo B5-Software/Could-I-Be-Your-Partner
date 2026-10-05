@@ -1,6 +1,13 @@
   async function loadBudgetSettings() {
     const s = await readSettings();
     const budget = s.budget || {};
+    const display = document.getElementById('setting-subscription-display');
+    if (display) { display.value = budget.subscriptionDisplay || 'urgent'; display.onchange = saveBudgetSettings; }
+    const quotaCard = document.getElementById('subscription-usage-settings');
+    if (quotaCard) {
+      quotaCard.hidden = !['chatgpt-codex', 'opencode-go'].includes(s.llm?.provider);
+      if (!quotaCard.hidden) refreshSubscriptionWindows();
+    }
     const dailyCapInput = document.getElementById('setting-budget-daily-cap');
     const weeklyCapInput = document.getElementById('setting-budget-weekly-cap');
     const capInput = document.getElementById('setting-budget-monthly-cap');
@@ -98,6 +105,7 @@
     // 已经为每个 input 单独绑定了 change → saveBudgetSettings，
     // 若 listEl 也绑定会导致 change 事件冒泡时重复触发保存（弹两次 toast）
 
+    refreshAutoPricing();
     await refreshBudgetStatus(budget);
     await refreshDecisionStatus();
   }

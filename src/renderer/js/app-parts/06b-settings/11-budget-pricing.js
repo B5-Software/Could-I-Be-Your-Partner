@@ -6,9 +6,9 @@
     let outputPerM = price.outputPerM;
     if (outputPerM == null && price.completionPerK != null) outputPerM = (Number(price.completionPerK) || 0) * 1000;
     let cacheReadPerM = price.cacheReadPerM;
-    if (cacheReadPerM == null && inputPerM != null) cacheReadPerM = (Number(inputPerM) || 0) * 0.1;
+
     let cacheWritePerM = price.cacheWritePerM;
-    if (cacheWritePerM == null && inputPerM != null) cacheWritePerM = (Number(inputPerM) || 0) * 1.25;
+
     const hasCacheWrite = price.hasCacheWrite != null ? !!price.hasCacheWrite : /claude/i.test(modelId || '');
     const esc = (v) => String(v ?? '').replace(/[<>&"]/g, s => ({ '<':'&lt;','>':'&gt;','&':'&amp;' }[s]));
     const row = document.createElement('div');
@@ -25,6 +25,8 @@
     // 当模型 ID 改变且未手动勾选过 CW 时，根据模型名自动推断
     const idEl = row.querySelector('.budget-model-id');
     const cwEl = row.querySelector('.budget-has-cache-write');
+    if (price.hasCacheWrite != null) cwEl.dataset.touched = 'true';
+    cwEl.addEventListener('change', () => { cwEl.dataset.touched = 'true'; });
     idEl?.addEventListener('change', () => {
       if (/claude/i.test(idEl.value || '')) {
         cwEl.checked = true;
@@ -67,15 +69,16 @@
         const cwEl = row.querySelector('.budget-cachewrite-perm');
         const hcwEl = row.querySelector('.budget-has-cache-write');
         models[mid] = {
-          inputPerM: parseFloat(pEl?.value) || 0,
-          cacheReadPerM: parseFloat(crEl?.value) || 0,
-          outputPerM: parseFloat(cEl?.value) || 0,
-          cacheWritePerM: parseFloat(cwEl?.value) || 0,
-          hasCacheWrite: !!hcwEl?.checked
+          ...(pEl?.value.trim() !== '' && Number.isFinite(parseFloat(pEl?.value)) ? { inputPerM: Math.max(0, parseFloat(pEl.value)) } : {}),
+          ...(crEl?.value.trim() !== '' && Number.isFinite(parseFloat(crEl?.value)) ? { cacheReadPerM: Math.max(0, parseFloat(crEl.value)) } : {}),
+          ...(cEl?.value.trim() !== '' && Number.isFinite(parseFloat(cEl?.value)) ? { outputPerM: Math.max(0, parseFloat(cEl.value)) } : {}),
+          ...(cwEl?.value.trim() !== '' && Number.isFinite(parseFloat(cwEl?.value)) ? { cacheWritePerM: Math.max(0, parseFloat(cwEl.value)) } : {}),
+          ...(hcwEl?.dataset.touched === 'true' ? { hasCacheWrite: !!hcwEl.checked } : {})
         };
       });
     }
     const budget = {
+      subscriptionDisplay: document.getElementById('setting-subscription-display')?.value || 'urgent',
       dailyLimitUSD: parseFloat(dailyCapInput?.value) || 0,
       weeklyLimitUSD: parseFloat(weeklyCapInput?.value) || 0,
       monthlyLimitUSD: parseFloat(capInput?.value) || 0,
@@ -96,4 +99,5 @@
     };
     await saveSettings({ budget });
     await refreshBudgetStatus(budget);
+    refreshAutoPricing();
   }

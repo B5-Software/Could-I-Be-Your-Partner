@@ -1,8 +1,23 @@
 {
   "name": "@deepseek-ai/dsh-tools",
-  "version": "1.0.0-cibyp",
+  "version": "0.2.1-alpha.1-cibyp",
   "description": "CIBYP-owned compatibility shim for @deepseek-ai/dsh-tools (defineTool / register)",
   "license": "GPL-3.0-or-later",
   "main": "index.js",
-  "type": "commonjs"
+  "type": "commonjs",
+  "exports": {
+    ".": { "import": "./index.mjs", "require": "./index.js" },
+    "./types": "./types.mjs",
+    "./presentation": "./types.mjs",
+    "./src/types.ts": "./types.mjs",
+    "./src/presentation.ts": "./types.mjs",
+    "./schema": "./upstream/schema.mjs",
+    "./json-schema": "./upstream/json-schema.mjs",
+    "./testing": "./upstream/testing.mjs",
+    "./src/schema.ts": "./upstream/schema.mjs",
+    "./src/json-schema.ts": "./upstream/json-schema.mjs",
+    "./src/ts-types.ts": "./upstream/ts-types.mjs",
+    "./src/py-types.ts": "./upstream/py-types.mjs",
+    "./package.json": "./package.json"
+  }
 }

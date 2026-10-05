@@ -34,6 +34,7 @@
         return;
       }
       switch (type) {
+        case 'user': addBabeMessage('user', data); break;
         case 'assistant':
           addBabeMessage('assistant', data);
           if (babeProactiveActive) babeProactiveProduced = true;
