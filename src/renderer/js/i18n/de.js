@@ -4077,11 +4077,13 @@ DE_DICT['ui.reasoning.preserveHelp'] = DE_DICT.ui.reasoning.preserveHelp;
 Object.assign(DE_DICT, {
   "ui.tor.bridgeHint": "Unterstützt obfs4, Snowflake, WebTunnel und meek. meek und meek_lite werden akzeptiert; url / front / targets bleiben erhalten. Tor nach Änderungen neu verbinden.",
   "ui.tor.useMeek": "Integrierte meek-Brücke verwenden",
-  "ui.tor.meekSelected": "meek-Brücke übernommen; Tor verbinden zum Starten"
+  "ui.tor.meekSelected": "meek-Brücke übernommen; Tor verbinden zum Starten",
+  "ui.tor.address": "Adresse für die Fernverbindung"
 });
 Object.assign(DE_DICT._textMap, {
   "支持 obfs4、Snowflake、WebTunnel 和 meek。meek 与 meek_lite 均可填写，url / front / targets 参数会完整保留。修改后重新连接 Tor。": DE_DICT['ui.tor.bridgeHint'],
   "使用内置 meek 网桥": DE_DICT['ui.tor.useMeek'],
+  "远程连接地址": DE_DICT['ui.tor.address'],
   "已应用 meek 网桥，点击“连接 Tor”启动": DE_DICT['ui.tor.meekSelected']
 });
 DE_DICT._textMap["默认关闭。开启后将服务商的加密推理与签名保存到聊天记录，并随 JSON / Markdown 导出。关闭后不再保存或导出这些数据；已有文件不会立即清除。当前工具轮次仍在内存中保留续接所需数据。加密数据不会显示为推理文本。"] = DE_DICT.ui.reasoning.preserveHelp;

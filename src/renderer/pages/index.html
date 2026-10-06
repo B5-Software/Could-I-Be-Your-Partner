@@ -35,6 +35,8 @@
     // 恢复 Monaco 的 define，保证后续 require([...)/define(...) 可用
     window.define = __savedDefineForXterm;
   </script>
+  <link rel="stylesheet" href="../css/controls.css">
+  <script defer src="../js/controls.js"></script>
   <link rel="stylesheet" href="../css/motion.css">
   <link rel="stylesheet" href="../css/focus.css">
   <script defer src="../js/motion-policy.js"></script>
@@ -2415,18 +2417,17 @@
                 <p id="wc-status-result" class="setting-hint" role="status" aria-live="polite"></p>
                 <p id="wc-backend-status" class="setting-hint"></p>
               </div>
-              <div class="settings-group">
+              <div class="settings-group tor-remote-settings">
                 <h3><i class="fa-solid fa-mobile-screen"></i> Tor Remote</h3>
                 <p class="setting-hint" data-i18n="ui.tor.hint">通过 Tor 洋葱服务连接原生手机 App，继续使用 WebUI 密码和两步验证。无需开放公网端口。</p>
                 <div class="setting-item"><label for="setting-tor-auto" data-i18n="ui.tor.auto">后台启动时自动连接 Tor</label><input id="setting-tor-auto" data-setting="remote.tor.autoStart" type="checkbox"></div>
                 <div class="setting-item"><label for="setting-tor-bridges-enabled" data-i18n="ui.tor.useBridges">使用网桥</label><input id="setting-tor-bridges-enabled" data-setting="remote.tor.useBridges" type="checkbox"></div>
                 <div class="setting-item"><label for="setting-tor-bridges" data-i18n="ui.tor.bridges">网桥配置（每行一条）</label><textarea id="setting-tor-bridges" data-setting="remote.tor.bridges" rows="3" spellcheck="false" placeholder="obfs4 IP:PORT FINGERPRINT cert=... iat-mode=0"></textarea></div>
                 <p class="setting-hint" data-i18n="ui.tor.bridgeHint">支持 obfs4、Snowflake、WebTunnel 和 meek。meek 与 meek_lite 均可填写，url / front / targets 参数会完整保留。修改后重新连接 Tor。</p>
-                <div class="settings-actions"><button id="btn-tor-meek" class="btn-secondary" data-i18n="ui.tor.useMeek">使用内置 meek 网桥</button></div>
-                <div class="settings-actions"><button id="btn-tor-start" class="btn-primary" data-i18n="ui.tor.start">连接 Tor</button><button id="btn-tor-stop" class="btn-secondary" data-i18n="ui.tor.stop">停止 Tor</button><button id="btn-tor-bridges" class="btn-secondary" data-i18n="ui.tor.getBridges">获取网桥</button></div>
-                <progress id="tor-progress" max="100" value="0" style="width:100%;margin-top:12px"></progress>
-                <p id="tor-status" class="setting-hint" role="status"></p>
-                <input id="tor-onion-address" readonly aria-label="Tor onion address" style="width:100%;box-sizing:border-box">
+                <div class="settings-actions tor-bridge-actions"><button id="btn-tor-meek" class="btn-secondary" data-i18n="ui.tor.useMeek">使用内置 meek 网桥</button><button id="btn-tor-bridges" class="btn-secondary" data-i18n="ui.tor.getBridges">获取网桥</button></div>
+                <div class="settings-actions tor-connect-actions"><button id="btn-tor-start" class="btn-primary" data-i18n="ui.tor.start">连接 Tor</button><button id="btn-tor-stop" class="btn-secondary" data-i18n="ui.tor.stop">停止 Tor</button></div>
+                <div class="tor-connection-status"><progress id="tor-progress" max="100" value="0" aria-label="Tor connection progress"></progress><p id="tor-status" class="setting-hint" role="status"></p></div>
+                <div class="setting-item"><label for="tor-onion-address" data-i18n="ui.tor.address">远程连接地址</label><input id="tor-onion-address" type="text" readonly></div>
               </div>
             </div>
 

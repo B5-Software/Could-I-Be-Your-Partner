@@ -163,6 +163,22 @@ html[data-animations="false"] .settings-assistant, html[data-animations="false"]
 
 .setting-item:last-child { margin-bottom: 0; }
 
+.setting-item:has(> input[type="checkbox"]) {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 44px;
+  align-items: center;
+  gap: 10px 16px;
+}
+.setting-item:has(> input[type="checkbox"]) > label { margin: 0; }
+.setting-item:has(> input[type="checkbox"]) > input { justify-self: end; }
+.setting-item:has(> input[type="checkbox"]) > :not(label, input) { grid-column: 1 / -1; }
+.settings-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-block: 14px; }
+.tor-remote-settings { display: flex; flex-direction: column; gap: 12px; }
+.tor-remote-settings > :is(h3, p, .setting-item, .settings-actions) { margin: 0; }
+.tor-remote-settings > .tor-connect-actions { margin-top: 4px; }
+.tor-remote-settings .setting-hint { line-height: 1.65; margin: 0; }
+.tor-connection-status { display: grid; gap: 10px; padding-block: 4px; }
+
 .setting-item label {
   display: block;
   font-size: 13px;
@@ -655,7 +671,7 @@ input[id^="setting-budget-peak-"][type="text"]:focus {
 /* 隐私信息保护：过滤类别勾选网格 */
 .privacy-category-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr));
   gap: 10px 16px;
   margin-top: 8px;
 }

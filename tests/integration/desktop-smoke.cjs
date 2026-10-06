@@ -136,6 +136,7 @@ ipcMain.once('app:renderer-ready', (event) => {
       await require('./monaco-appearance-check.cjs')(event.sender, BrowserWindow);
       console.log('[desktop-smoke] Workspace interactions:', workspace);
       const settingsCheck = await require('./renderer-settings-check.cjs')(event.sender);
+      await require('./renderer-controls-check.cjs')(event.sender);
       console.log('[desktop-smoke] Settings interactions:', settingsCheck);
       console.log(
         '[desktop-smoke] Custom Shell:',
