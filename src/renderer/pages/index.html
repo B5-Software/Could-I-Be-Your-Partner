@@ -2421,6 +2421,8 @@
                 <div class="setting-item"><label for="setting-tor-auto" data-i18n="ui.tor.auto">后台启动时自动连接 Tor</label><input id="setting-tor-auto" data-setting="remote.tor.autoStart" type="checkbox"></div>
                 <div class="setting-item"><label for="setting-tor-bridges-enabled" data-i18n="ui.tor.useBridges">使用网桥</label><input id="setting-tor-bridges-enabled" data-setting="remote.tor.useBridges" type="checkbox"></div>
                 <div class="setting-item"><label for="setting-tor-bridges" data-i18n="ui.tor.bridges">网桥配置（每行一条）</label><textarea id="setting-tor-bridges" data-setting="remote.tor.bridges" rows="3" spellcheck="false" placeholder="obfs4 IP:PORT FINGERPRINT cert=... iat-mode=0"></textarea></div>
+                <p class="setting-hint" data-i18n="ui.tor.bridgeHint">支持 obfs4、Snowflake、WebTunnel 和 meek。meek 与 meek_lite 均可填写，url / front / targets 参数会完整保留。修改后重新连接 Tor。</p>
+                <div class="settings-actions"><button id="btn-tor-meek" class="btn-secondary" data-i18n="ui.tor.useMeek">使用内置 meek 网桥</button></div>
                 <div class="settings-actions"><button id="btn-tor-start" class="btn-primary" data-i18n="ui.tor.start">连接 Tor</button><button id="btn-tor-stop" class="btn-secondary" data-i18n="ui.tor.stop">停止 Tor</button><button id="btn-tor-bridges" class="btn-secondary" data-i18n="ui.tor.getBridges">获取网桥</button></div>
                 <progress id="tor-progress" max="100" value="0" style="width:100%;margin-top:12px"></progress>
                 <p id="tor-status" class="setting-hint" role="status"></p>
@@ -3864,6 +3866,7 @@
   <script src="../../shared/token-usage.js"></script>
   <script src="../../shared/attachments.js"></script>
   <script src="../../shared/reasoning.js"></script>
+  <script src="../../shared/tor-bridges.js"></script>
   <script src="../js/settings-client.js"></script>
   <script src="../../agent/host.js"></script>
   <script src="../js/agent.js"></script>

@@ -6,7 +6,7 @@ WebUI 直接复用 GUI 的 HTML、CSS 和渲染代码，不再同步 GUI 的 DOM
 
 ## Tor 远程连接
 
-设置 → WebUI 中配置密码和可选的二次认证，再启动 Tor。桌面内置经过官方 SHA-256 校验的 Tor Expert Bundle，建立 v3 onion 服务到本地 WebUI；无需打开路由器端口。可填写 obfs4、snowflake、webtunnel 网桥。连接过程中显示下载、初始化、引导进度及错误；停止 WebUI 同时停止 Tor。
+设置 → WebUI 中配置密码和可选的二次认证，再启动 Tor。桌面内置经过官方 SHA-256 校验的 Tor Expert Bundle，建立 v3 onion 服务到本地 WebUI；无需打开路由器端口。可填写 obfs4、snowflake、webtunnel、meek 网桥，也可点击“使用内置 meek 网桥”。内置 meek 参数取自 Tor Expert Bundle 15.0.24 的 `pt_config.json`；支持自定义 `url` / `front` / `targets`，将 `meek` 自动转为运行时要求的 `meek_lite`，指纹可选。修改配置后重新连接 Tor。连接过程中显示下载、初始化、引导进度及错误；停止 WebUI 同时停止 Tor。
 
 隐藏地址不能代替身份认证。所有 RPC 均要求认证与请求 ID，WebSocket 会话过期后需要重新登录。不要公开访问密码。网桥是否有效取决于实际网络与网桥可用性，不能保证所有网络都可连接。没有配置网桥时使用 Tor 的默认连接；不会在 Tor 失败时回退到公网明文直连。
 

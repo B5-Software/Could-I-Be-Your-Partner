@@ -3,25 +3,11 @@
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
-const quoted = (value) => '"' + String(value).replace(/\\/g, '/').replace(/"/g, '\\"') + '"';
+const { parse: parseBridges } = require('../../shared/tor-bridges');
+const { startTransport } = require('./tor-transport');
+const quoted = (value) => '"' + String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
 function bridgeLines(text) {
-  const lines = String(text || '')
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-  if (!lines.length || lines.length > 32) throw new Error('Enter 1–32 bridge lines');
-  return lines.map((line) => {
-    line = line.replace(/^Bridge\s+/i, '');
-    if (
-      line.length > 4096 ||
-      /[\x00-\x1f\x7f]/.test(line) ||
-      !/^(?:(?:obfs4|webtunnel|snowflake)\s+)?(?:\[[0-9a-f:]+\]|[\d.]+):\d+\s+[a-f0-9]{40}(?:\s+[^\r\n]*)?$/i.test(
-        line,
-      )
-    )
-      throw new Error('Invalid Tor bridge line');
-    return 'Bridge ' + line;
-  });
+  return parseBridges(text).map((bridge) => 'Bridge ' + bridge.line);
 }
 class TorRemote {
   constructor({ app, web, settings, publish, prepare }) {
@@ -46,6 +32,8 @@ class TorRemote {
         if (generation !== this.generation) return;
         this.child?.kill();
         this.child = null;
+        this.transport?.stop();
+        this.transport = null;
         this.change({ phase: 'error', error: error.message });
       })
       .finally(() => {
@@ -85,12 +73,26 @@ class TorRemote {
       'HiddenServiceVersion 3',
       'HiddenServicePort 80 127.0.0.1:' + this.web.port,
     ];
-    if (bridges.length)
-      torrc.push(
-        'UseBridges 1',
-        'ClientTransportPlugin obfs4,snowflake,webtunnel exec ' + quoted(transport),
-        ...bridges,
-      );
+    if (bridges.length) {
+      const requested = parseBridges(cfg.bridges)
+        .map((bridge) => bridge.transport)
+        .filter(Boolean);
+      if (requested.length) {
+        const managed = await startTransport(
+          transport,
+          path.join(this.directory, 'transports'),
+          requested,
+        );
+        if (this.generation !== generation) {
+          managed.stop();
+          return;
+        }
+        this.transport = managed;
+        for (const [name, port] of Object.entries(managed.ports))
+          torrc.push('ClientTransportPlugin ' + name + ' socks5 127.0.0.1:' + port);
+      }
+      torrc.push('UseBridges 1', ...bridges);
+    }
     for (const file of ['geoip', 'geoip6']) {
       const location = path.join(runtime, 'data', file);
       if (await fs.stat(location).catch(() => null))
@@ -106,25 +108,35 @@ class TorRemote {
       env: { ...process.env, LD_LIBRARY_PATH: path.join(runtime, 'tor') },
     });
     this.child = child;
+    const managed = this.transport;
+    managed?.child.once('exit', () => {
+      if (generation === this.generation && this.child === child) child.kill();
+    });
     await new Promise((resolve, reject) => {
       let output = '',
         settled = false;
-      const timer = setTimeout(() => {
+      const stalled = () => {
         if (!settled) {
           settled = true;
+          clearTimeout(maxTimer);
           reject(new Error('Tor bootstrap timed out; check the network or use a working bridge'));
         }
-      }, 180000);
+      };
+      let timer = setTimeout(stalled, 180000);
+      const maxTimer = setTimeout(stalled, 600000);
       const accept = (chunk) => {
         output = (output + String(chunk)).slice(-16384);
         const match = /Bootstrapped (\d+)%[^\r\n]*/g;
         let current;
         while ((current = match.exec(output))) {
           if (generation !== this.generation || Number(current[1]) <= this.state.progress) continue;
+          clearTimeout(timer);
+          timer = setTimeout(stalled, 180000);
           this.change({ progress: Number(current[1]), detail: current[0] });
           if (Number(current[1]) === 100 && !settled) {
             settled = true;
             clearTimeout(timer);
+            clearTimeout(maxTimer);
             resolve();
           }
         }
@@ -133,12 +145,16 @@ class TorRemote {
       child.stderr.on('data', accept);
       child.once('error', (error) => {
         clearTimeout(timer);
+        clearTimeout(maxTimer);
         settled = true;
         reject(error);
       });
       child.once('exit', (code) => {
         clearTimeout(timer);
+        clearTimeout(maxTimer);
         if (this.child === child) this.child = null;
+        managed?.stop();
+        if (this.transport === managed) this.transport = null;
         if (!settled) {
           settled = true;
           reject(
@@ -165,6 +181,8 @@ class TorRemote {
     this.change({ phase: 'stopped', progress: 0, onion: '' });
     this.child?.kill();
     this.child = null;
+    this.transport?.stop();
+    this.transport = null;
     return this.status();
   }
 }

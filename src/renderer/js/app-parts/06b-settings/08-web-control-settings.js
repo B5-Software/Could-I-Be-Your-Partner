@@ -41,6 +41,11 @@
       host: document.getElementById('setting-wc-host')?.value || '127.0.0.1', port,
       password: '', passwordHash, enable2FA,
     };
+    const useBridges = !!document.getElementById('setting-tor-bridges-enabled')?.checked;
+    const bridgeText = document.getElementById('setting-tor-bridges')?.value || '';
+    const bridges = useBridges ? TorBridges.parse(bridgeText).map(b => b.line).join('\n') : bridgeText;
+    s.remote = { ...s.remote, tor: { ...s.remote?.tor, useBridges, bridges,
+      autoStart: !!document.getElementById('setting-tor-auto')?.checked } };
     await saveSettings(s);
     if (passwordInput) passwordInput.value = '';
     const result = await window.api.webControlReconfigure();
@@ -61,6 +66,19 @@
     });
     document.getElementById('btn-tor-stop')?.addEventListener('click', async () => renderTorStatus(await window.api.remoteTorStop()));
     document.getElementById('btn-tor-bridges')?.addEventListener('click', () => window.api.updatesOpenRelease('https://bridges.torproject.org/'));
+    document.getElementById('btn-tor-meek')?.addEventListener('click', async e => {
+      const button = e.currentTarget;
+      button.disabled = true;
+      try {
+        const settings = await readSettings();
+        await saveSettings({ ...settings, remote: { ...settings.remote, tor: { ...settings.remote?.tor, useBridges: true, bridges: TorBridges.DEFAULT_MEEK } } });
+        document.getElementById('setting-tor-bridges-enabled').checked = true;
+        document.getElementById('setting-tor-bridges').value = TorBridges.DEFAULT_MEEK;
+        renderTorStatus(await window.api.remoteTorStop());
+        wcMessage(t('ui.tor.meekSelected', '已应用 meek 网桥，点击“连接 Tor”启动'));
+      } catch (error) { wcMessage(error.message, true); }
+      finally { button.disabled = false; }
+    });
     const run = async (button, action) => {
       button.disabled = true; button.setAttribute('aria-busy', 'true');
       wcMessage(t('ui.webui.applying', '正在应用…'));

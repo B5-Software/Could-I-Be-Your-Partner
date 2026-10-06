@@ -10,7 +10,8 @@ module.exports = async function checkSettings(webContents) {
     }
     const field = id => document.getElementById(id);
     const change = (id, value) => {
-      field(id).value = value;
+      if (field(id).type === 'checkbox') field(id).checked = !!value;
+      else field(id).value = value;
       field(id).dispatchEvent(new Event('change', { bubbles: true }));
     };
     await window.navigatePage('settings');
@@ -114,7 +115,7 @@ module.exports = async function checkSettings(webContents) {
 
     const search = field('settings-search-input');
     search.value = '摘要'; search.dispatchEvent(new Event('input', { bubbles: true }));
-    const summary = [...field('settings-search-results').querySelectorAll('button')].find(button => button.textContent.includes('摘要'));
+    const summary = [...field('settings-search-results').querySelectorAll('button')].find(button => button.textContent.includes('单次压缩摘要上限'));
     check(summary, 'advanced summary setting not searchable');
     summary.click();
     check(field('setting-context-max-tokens').closest('details').open, 'search did not expand advanced settings');
@@ -123,6 +124,16 @@ module.exports = async function checkSettings(webContents) {
     search.value = 'secret-probe-do-not-index'; search.dispatchEvent(new Event('input', { bubbles: true }));
     check(!field('settings-search-results').querySelector('button'), 'search indexed a credential');
     search.value = ''; search.dispatchEvent(new Event('input', { bubbles: true }));
+
+    window.activateSettingsTab('webcontrol');
+    field('btn-tor-meek').click();
+    await until(async () => {
+      const tor = (await window.api.getSettings()).remote?.tor;
+      return tor?.useBridges && tor.bridges.startsWith('meek_lite ') && !field('btn-tor-meek').disabled;
+    }, 'built-in meek bridge was not applied');
+    check(field('setting-tor-bridges-enabled').checked && field('setting-tor-bridges').value.includes('utls=HelloRandomizedALPN'), 'meek fronting parameters missing from the form');
+    change('setting-tor-bridges-enabled', false);
+    await until(async () => !(await window.api.getSettings()).remote.tor.useBridges, 'bridge toggle was not saved');
 
     for (let i = 0; i < 3; i++) window.activateSettingsTab('budget');
     await pause(); await pause();
