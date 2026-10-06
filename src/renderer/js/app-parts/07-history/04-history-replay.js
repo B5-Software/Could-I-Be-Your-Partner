@@ -54,7 +54,7 @@
           if (msg.role === 'user') {
             addMessageToChat('user', msg);
           } else if (msg.role === 'assistant') {
-            if (msg.content) addMessageToChat('assistant', msg);
+            if (msg.content || ReasoningData.presentation(msg).reasoning) addMessageToChat('assistant', msg);
             if (msg.tool_calls && msg.tool_calls.length > 0) {
               for (const tc of msg.tool_calls) {
                 const toolName = tc.function?.name || 'tool';

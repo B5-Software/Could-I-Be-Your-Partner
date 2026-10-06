@@ -1179,6 +1179,8 @@
               </div>
               <div class="settings-group">
                 <h3><i class="fa-solid fa-compress"></i> 上下文压缩</h3>
+                <div class="setting-item"><label class="setting-label" data-i18n="ui.reasoning.requestSummary">请求推理摘要</label><div class="toggle-switch"><input type="checkbox" id="setting-reasoning-summary"><span class="toggle-slider"></span></div><p class="setting-description" data-i18n="ui.reasoning.summaryHelp">请求服务商提供的可读摘要，不额外调用模型。关闭不代表免除内部推理 Token 费用；兼容服务可能不支持此选项。</p></div>
+                <div class="setting-item"><label class="setting-label" data-i18n="ui.reasoning.preserve">保留加密推理</label><div class="toggle-switch"><input type="checkbox" id="setting-reasoning-preserve"><span class="toggle-slider"></span></div><p class="setting-description" data-i18n="ui.reasoning.preserveHelp">默认关闭。开启后将服务商的加密推理与签名保存到聊天记录，并随 JSON / Markdown 导出。关闭后不再保存或导出这些数据；已有文件不会立即清除。当前工具轮次仍在内存中保留续接所需数据。加密数据不会显示为推理文本。</p></div>
                 <div class="setting-item"><label class="setting-label">自动压缩</label><div class="toggle-switch"><input type="checkbox" id="setting-context-auto"><span class="toggle-slider"></span></div><p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">上下文占用超过阈值时自动压缩（剪枝 + 结构化摘要检查点）</p></div>
                 <div class="setting-item"><label class="setting-label">开始压缩的占用比例</label><div style="display:flex;align-items:center;gap:10px"><input type="range" id="setting-context-threshold" min="60" max="95" step="1" value="80" style="width:200px"><span id="setting-context-threshold-val" style="min-width:40px;text-align:right;font-size:13px;color:var(--text-secondary)">80%</span></div><p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">输入包络（系统提示词 + 工具定义 + 对话 + 输出预留）占上下文窗口的比例</p></div>
                 <div class="setting-item"><label class="setting-label">保留最近对话比例</label><div style="display:flex;align-items:center;gap:10px"><input type="range" id="setting-context-retain" min="5" max="40" step="1" value="16" style="width:200px"><span id="setting-context-retain-val" style="min-width:40px;text-align:right;font-size:13px;color:var(--text-secondary)">16%</span></div><p style="font-size:11px;color:var(--text-tertiary);margin-top:4px">最近对话原样保留的 token 预算（占窗口比例），压缩只动更早的历史</p></div>
@@ -3861,6 +3863,7 @@
   <script src="../../shared/token-policy.js"></script>
   <script src="../../shared/token-usage.js"></script>
   <script src="../../shared/attachments.js"></script>
+  <script src="../../shared/reasoning.js"></script>
   <script src="../js/settings-client.js"></script>
   <script src="../../agent/host.js"></script>
   <script src="../js/agent.js"></script>

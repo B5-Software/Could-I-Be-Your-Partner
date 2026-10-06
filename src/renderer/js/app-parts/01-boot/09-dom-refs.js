@@ -49,3 +49,4 @@
   const cameraModal = document.getElementById('camera-modal');
 
   // Streaming message bubbles: requestId → { el, contentEl, rawContent, renderTimer, shown }
+  const streamingBubbles = new Map();

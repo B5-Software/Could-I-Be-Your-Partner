@@ -113,6 +113,7 @@
       const role = msg.role || 'assistant';
       const roleName = role === 'user' ? '用户' : role === 'assistant' ? 'AI' : role === 'system' ? '系统' : '工具';
       lines.push(`## ${roleName}`);
+      if (role === 'assistant') lines.push(ReasoningData.markdown(msg));
       if (role === 'tool') {
         let toolContent = msg.content;
         try { toolContent = JSON.stringify(JSON.parse(msg.content), null, 2); } catch {}
@@ -134,6 +135,8 @@
    */
   async function exportConversationToFile(conv, format) {
     if (!conv) return null;
+    const settings = await readSettings();
+    conv = ReasoningData.retention(conv, settings.llm?.preserveEncryptedReasoning === true);
     const isJson = format === 'json';
     const filename = `${sanitizeHistoryFileName(conv.title || '对话记录')}.${isJson ? 'json' : 'md'}`;
     const result = await window.api.saveFileDialog({

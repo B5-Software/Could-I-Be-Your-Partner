@@ -2,6 +2,10 @@
   async function loadContextCompactionSettings() {
     const s = await readSettings();
     const c = s.contextCompaction || {};
+    const summaryEl = document.getElementById('setting-reasoning-summary');
+    const preserveEl = document.getElementById('setting-reasoning-preserve');
+    if (summaryEl) summaryEl.checked = s.llm?.requestReasoningSummary !== false;
+    if (preserveEl) preserveEl.checked = s.llm?.preserveEncryptedReasoning === true;
     const autoEl = document.getElementById('setting-context-auto');
     const thEl = document.getElementById('setting-context-threshold');
     const thVal = document.getElementById('setting-context-threshold-val');
@@ -91,3 +95,5 @@
     }
   });
   loadContextCompactionSettings();
+  document.getElementById('setting-reasoning-summary')?.addEventListener('change', (event) => saveSettings({ llm: { requestReasoningSummary: event.target.checked } }));
+  document.getElementById('setting-reasoning-preserve')?.addEventListener('change', (event) => saveSettings({ llm: { preserveEncryptedReasoning: event.target.checked } }));

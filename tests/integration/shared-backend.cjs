@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 const { app, BrowserWindow } = require('electron');
+app.disableHardwareAcceleration();
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
@@ -47,7 +48,17 @@ require('undici').fetch = async (url, options) => {
       json: async () => ({
         choices: [
           {
-            message: { role: 'assistant', content: 'Shared backend reply' },
+            message: {
+              role: 'assistant',
+              content: 'Shared backend reply',
+              reasoning_details: [
+                {
+                  type: 'reasoning.summary',
+                  summary: 'Checked the project requirements before replying.',
+                },
+                { type: 'reasoning.encrypted', data: 'OPAQUE-NEVER-DISPLAY' },
+              ],
+            },
             finish_reason: 'stop',
           },
         ],
@@ -116,6 +127,11 @@ app.on('web-contents-created', (_event, contents) => {
     const { clientFor } = require('../../src/tui/backend-connect');
     const client = clientFor(local);
     const runtime = await require('../../src/tui/backend-runtime').createBackendRuntime(client);
+    await until(
+      () =>
+        BrowserWindow.getAllWindows().some((w) => w.webContents.getURL().endsWith('/index.html')),
+      'GUI created',
+    );
     const gui = BrowserWindow.getAllWindows().find((w) =>
       w.webContents.getURL().endsWith('/index.html'),
     );
@@ -135,14 +151,12 @@ app.on('web-contents-created', (_event, contents) => {
       width: 1440,
       height: 980,
       webPreferences: {
+        offscreen: true,
         contextIsolation: true,
         nodeIntegration: false,
         partition: 'webui-integration',
       },
     });
-    web.setOpacity(0.01);
-    web.setSkipTaskbar(true);
-    web.showInactive();
     await web.loadURL(status.url + '/login');
     await web.webContents.executeJavaScript(
       `document.querySelector('#password').value='shared-backend-test';document.querySelector('form').requestSubmit();`,
@@ -181,6 +195,59 @@ app.on('web-contents-created', (_event, contents) => {
         )
       ).some((m) => m.content === 'Shared backend reply'),
     );
+    for (const frontend of [gui, web]) {
+      await until(
+        () =>
+          frontend.webContents.executeJavaScript(
+            '!!document.querySelector(".reasoning-content")?.textContent.includes("Checked the project requirements")',
+          ),
+        'readable reasoning summary',
+      );
+      assert.match(
+        await frontend.webContents.executeJavaScript(
+          'document.querySelector(".reasoning-header").textContent',
+        ),
+        /推理摘要|Reasoning summary/,
+      );
+      assert.equal(
+        await frontend.webContents.executeJavaScript(
+          'document.body.textContent.includes("OPAQUE-NEVER-DISPLAY")',
+        ),
+        false,
+      );
+      assert.equal(
+        await frontend.webContents.executeJavaScript(
+          'document.querySelector(".reasoning-section").getBoundingClientRect().height > 0',
+        ),
+        true,
+        'completed-only messages are visible',
+      );
+    }
+    const publicMessages = (await client.request('getSessionDetails', key)).messages;
+    assert.ok(publicMessages.some((message) => message.reasoningKind === 'summary'));
+    assert.equal(
+      JSON.stringify(publicMessages).includes('OPAQUE-NEVER-DISPLAY'),
+      false,
+      'mobile and other clients receive readable reasoning only',
+    );
+    await web.loadURL(web.webContents.getURL());
+    await until(
+      () =>
+        web.webContents.executeJavaScript(
+          '!!document.querySelector(".reasoning-content")?.textContent.includes("Checked the project requirements")',
+        ),
+      'summary survives frontend reconnect',
+    );
+    await web.webContents.executeJavaScript(
+      'document.querySelector(".reasoning-section").classList.remove("collapsed")',
+    );
+    await pause(300);
+    const screenshots = path.resolve(__dirname, '../../.cache/screenshots');
+    fs.mkdirSync(screenshots, { recursive: true });
+    fs.writeFileSync(
+      path.join(screenshots, 'reasoning-summary-webui.png'),
+      (await web.webContents.capturePage(undefined, { stayHidden: true, stayAwake: true })).toPNG(),
+    );
     const updateEvents = [];
     const unsubscribe = runtime.onEvent((event) => {
       if (event.type === 'update') updateEvents.push(event.state);
@@ -201,8 +268,6 @@ app.on('web-contents-created', (_event, contents) => {
     );
     await until(() => updateEvents.some((state) => state.phase === 'ready'), 'TUI update reminder');
     assert.equal(downloads, 1, 'all clients share one download');
-    const screenshots = path.resolve(__dirname, '../../.cache/screenshots');
-    fs.mkdirSync(screenshots, { recursive: true });
     await pause(500);
     assert.equal(
       await web.webContents.executeJavaScript(
@@ -213,7 +278,7 @@ app.on('web-contents-created', (_event, contents) => {
     );
     fs.writeFileSync(
       path.join(screenshots, 'update-ready-webui.png'),
-      (await web.webContents.capturePage()).toPNG(),
+      (await web.webContents.capturePage(undefined, { stayHidden: true, stayAwake: true })).toPNG(),
     );
     // Exercise the real owner, GUI and browser indicator with a delayed summary.
     const attachment = await client.request('uploadAttachment', key, {
@@ -271,7 +336,7 @@ app.on('web-contents-created', (_event, contents) => {
     await pause(100);
     fs.writeFileSync(
       path.join(screenshots, 'context-compacting.png'),
-      (await web.webContents.capturePage()).toPNG(),
+      (await web.webContents.capturePage(undefined, { stayHidden: true, stayAwake: true })).toPNG(),
     );
     assert.equal(
       (await client.request('sendMessage', key, 'Do not lose this message')).ok,
@@ -300,7 +365,7 @@ app.on('web-contents-created', (_event, contents) => {
     await pause(300);
     fs.writeFileSync(
       path.join(screenshots, 'context-compacted.png'),
-      (await web.webContents.capturePage()).toPNG(),
+      (await web.webContents.capturePage(undefined, { stayHidden: true, stayAwake: true })).toPNG(),
     );
     stopCompactEvents();
     await runtime.saveSettings({ animations: false });

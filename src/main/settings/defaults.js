@@ -18,6 +18,8 @@ module.exports = function createDefaultSettings({ DEFAULT_DECISION_SETTINGS }) {
       streamResponses: true,
       zenApiKey: '',
       reasoningEffort: 'off',
+      requestReasoningSummary: true,
+      preserveEncryptedReasoning: false,
       // 自定义请求头（所有文本/VLM 请求生效）：[{ name, value, enabled }]
       customHeaders: [],
       // URL 命中 opencode.ai 时自动附加官方请求头（免费模型 UA 门控 / Go 会话头）

@@ -1034,6 +1034,7 @@ class TuiApp {
         const reasoning = (event.data && event.data.reasoning) || '';
         if (this._streamEntry && (content || reasoning)) {
           if (content) this._streamEntry.text += content;
+          if (event.data.reasoningKind) this._streamEntry.reasoningKind = event.data.reasoningKind;
           if (reasoning) {
             this._streamEntry.reasoning = (this._streamEntry.reasoning || '') + reasoning;
           }
@@ -1045,7 +1046,8 @@ class TuiApp {
         const reasoning = event.data && event.data.reasoning;
         if (this._streamEntry) {
           if (content && !this._streamEntry.text) this._streamEntry.text = content;
-          if (reasoning && !this._streamEntry.reasoning) this._streamEntry.reasoning = reasoning;
+          if (reasoning) this._streamEntry.reasoning = reasoning;
+          if (event.data?.reasoningKind) this._streamEntry.reasoningKind = event.data.reasoningKind;
           this._streamEntry.streaming = false;
           this._streamEntry = null;
         }
@@ -2245,6 +2247,7 @@ class TuiApp {
           kind: message.role,
           text: content || '',
           reasoning: message.reasoning || '',
+          reasoningKind: message.reasoningKind,
           attachments: message.attachments || [],
         });
     }

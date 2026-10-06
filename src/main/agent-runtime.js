@@ -607,7 +607,7 @@ function createAgentRuntime({
           role: message.role,
           content: display.content,
           attachments: display.attachments,
-          reasoning: message.reasoning || message.reasoning_content || '',
+          ...require('../shared/reasoning').presentation(message),
         });
       } else if (message.role === 'tool') {
         out.push({

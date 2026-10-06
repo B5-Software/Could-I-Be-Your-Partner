@@ -134,10 +134,15 @@ function layoutResult(theme, result, width, indent) {
 }
 
 /** Reasoning is a separate block. Only /thinking deliberately folds it. */
-function renderReasoning(theme, reasoning, width, expanded) {
+function renderReasoning(theme, reasoning, width, expanded, kind) {
   const raw = String(reasoning || '').trim();
   if (!raw) return [];
-  const head = '  ' + FIGURES.thinking + ' ' + t('ui.tui.thinking', '思考') + '：';
+  const head =
+    '  ' +
+    FIGURES.thinking +
+    ' ' +
+    (kind === 'summary' ? t('ui.reasoning.summary', '推理摘要') : t('ui.tui.thinking', '思考')) +
+    '：';
   if (!expanded) {
     return [
       paint(
@@ -190,7 +195,15 @@ function renderEntry(theme, entry, width, opts) {
       const out = [];
       // 推理内容（thinking/reasoning）：折叠一行摘要，展开全文（/thinking 全局切换）
       if (entry.reasoning) {
-        out.push(...renderReasoning(theme, entry.reasoning, width, state.thinkingExpanded));
+        out.push(
+          ...renderReasoning(
+            theme,
+            entry.reasoning,
+            width,
+            state.thinkingExpanded,
+            entry.reasoningKind,
+          ),
+        );
       }
       if (entry.text && String(entry.text).trim() !== '') {
         if (entry.reasoning) out.push('');

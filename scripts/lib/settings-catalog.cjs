@@ -174,6 +174,8 @@ function buildSettingsCatalog(root) {
     walk(tree);
   }
   const extras = {
+    'setting-reasoning-summary': 'llm.requestReasoningSummary',
+    'setting-reasoning-preserve': 'llm.preserveEncryptedReasoning',
     'setting-wc-host': 'webControl.host',
     'setting-wc-enabled': 'webControl.enabled',
     'setting-wc-autostart': 'webControl.autoStartOnOpen',

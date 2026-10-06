@@ -90,7 +90,7 @@
             addBabeMessage('user', m);
           } else if (m.role === 'assistant') {
             const textContent = extractTextContent(m.content);
-            if (textContent) addBabeMessage('assistant', textContent);
+            if (textContent || ReasoningData.presentation(m).reasoning) addBabeMessage('assistant', { ...m, content: textContent });
             if (m.tool_calls && m.tool_calls.length > 0) {
               for (const tc of m.tool_calls) {
                 const toolName = tc.function?.name || 'tool';

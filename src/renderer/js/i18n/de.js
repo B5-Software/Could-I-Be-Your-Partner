@@ -11,6 +11,14 @@ const DE_DICT = {
 
 // ── UI Strings ──────────────────────────────────────────────────────────────
 ui: {
+    reasoning: {
+  "summary": "Denkzusammenfassung",
+  "text": "Denkprozess",
+  "requestSummary": "Denkzusammenfassungen anfordern",
+  "preserve": "Verschlüsselte Denkprozesse behalten",
+  "summaryHelp": "Lesbare Anbieterzusammenfassungen ohne zusätzlichen Modellaufruf anfordern. Ausschalten verhindert nicht die Abrechnung interner Denktoken. Kompatible Anbieter unterstützen diese Option möglicherweise nicht.",
+  "preserveHelp": "Standardmäßig aus. Verschlüsselte Denkprozesse und Signaturen werden nur bei aktivierter Option gespeichert und mit JSON / Markdown exportiert. Bestehende Dateien werden nicht sofort gelöscht. Aktive Werkzeugrunden behalten die nötigen Daten im Speicher. Verschlüsselte Daten erscheinen nie als lesbarer Denkprozess."
+},
   // Titlebar & Mode switcher
   titlebar: {
     chatMode: 'Chat-Modus',
@@ -4058,3 +4066,12 @@ DE_DICT.ui.attachment = { unavailable: 'Anhang nicht verfügbar' };
 Object.assign(DE_DICT.ui.history ||= {}, { deleteWait: 'Vor dem Löschen das Ende der aktuellen Aufgabe abwarten', deleteTurn: 'Dialogrunde löschen', deleteTurnConfirm: 'Diese Dialogrunde und ihren ursprünglichen Kontext löschen? Bereits zusammengefasste Inhalte bleiben erhalten.' });
 
 Object.assign(DE_DICT.ui.update ||= {}, { newReady: 'Neue Version bereit', verified: 'SHA-256 geprüft', restartHint: 'Der Download ist bereit. Starte die App neu, um die neue Version zu installieren.', launcherHint: 'Sicher heruntergeladen. Beende das Backend und starte es erneut mit dem ursprünglichen Befehl.' });
+
+DE_DICT['ui.reasoning.requestSummary'] = DE_DICT.ui.reasoning.requestSummary;
+DE_DICT._textMap["请求推理摘要"] = DE_DICT.ui.reasoning.requestSummary;
+DE_DICT['ui.reasoning.preserve'] = DE_DICT.ui.reasoning.preserve;
+DE_DICT._textMap["保留加密推理"] = DE_DICT.ui.reasoning.preserve;
+DE_DICT['ui.reasoning.summaryHelp'] = DE_DICT.ui.reasoning.summaryHelp;
+DE_DICT._textMap["请求服务商提供的可读摘要，不额外调用模型。关闭不代表免除内部推理 Token 费用；兼容服务可能不支持此选项。"] = DE_DICT.ui.reasoning.summaryHelp;
+DE_DICT['ui.reasoning.preserveHelp'] = DE_DICT.ui.reasoning.preserveHelp;
+DE_DICT._textMap["默认关闭。开启后将服务商的加密推理与签名保存到聊天记录，并随 JSON / Markdown 导出。关闭后不再保存或导出这些数据；已有文件不会立即清除。当前工具轮次仍在内存中保留续接所需数据。加密数据不会显示为推理文本。"] = DE_DICT.ui.reasoning.preserveHelp;

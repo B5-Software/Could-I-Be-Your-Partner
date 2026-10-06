@@ -12,6 +12,17 @@
 
 const ocHeaders = require('./opencode-headers');
 const TokenUsage = require('../shared/token-usage');
+const ReasoningData = require('../shared/reasoning');
+const { createHash } = require('node:crypto');
+
+function reasoningSource(llm) {
+  return createHash('sha256').update(JSON.stringify([llm?.provider, llm?.apiUrl, llm?.model, llm?.accountId, llm?.apiKey || llm?.zenApiKey])).digest('hex');
+}
+function stampReasoning(message, llm) {
+  if (message?.providerReasoning) message.providerReasoning.source = reasoningSource(llm);
+  if (message?.providerReasoning?.transport === 'anthropic') message.reasoningKind = ReasoningData.anthropic(message.providerReasoning.items, llm?.model).reasoningKind;
+  return message;
+}
 
 const ZEN_BASE = 'https://opencode.ai/zen/v1';
 const OC_GO_BASE = 'https://opencode.ai/zen/go/v1';
@@ -260,6 +271,13 @@ function mergeFreeTierTools(tools, minimalMode = false) {
  * @returns {{ url, headers, body, transport }} transport: 'openai' | 'anthropic' | 'responses'
  */
 function buildLLMRequest(llm, opts) {
+  // Opaque state belongs to the exact configured provider/model/account. Never
+  // forward it when model-pool routing changes that source.
+  opts = { ...opts, messages: (opts.messages || []).map((m) => {
+    const out = { ...m };
+    if (out.providerReasoning?.source !== reasoningSource(llm)) delete out.providerReasoning;
+    return out;
+  }) };
   const channelLimits = require('./opencode-models').getOpenCodeLimits(llm);
   if (channelLimits) llm = { ...llm, providerLimits: channelLimits };
   opts = { ...opts, max_tokens: require('../shared/token-policy').requestOutput({ llm }, opts) };
@@ -289,6 +307,7 @@ function buildLLMRequest(llm, opts) {
     if (req.body.tool_choice?.name) req.body.tool_choice.namespace = 'cibyp';
     else if (req.body.tool_choice?.type) req.body.tool_choice = req.body.tool_choice.type;
     req.credentialProvider = 'chatgpt-codex';
+    req.credentialAccountId = llm.accountId;
   } else if (provider === 'openai-responses') {
     req = buildResponsesRequest(llm, buildOpts, reasoningEffort);
   } else {
@@ -325,7 +344,13 @@ function buildOpenAIRequest(llm, opts, reasoningEffort) {
   const url = llm.apiUrl; // full URL to chat/completions
   const body = {
     model: llm.model,
-    messages: opts.messages,
+    messages: (opts.messages || []).map((m) => {
+      const { providerReasoning, reasoningKind, reasoning, reasoning_details, reasoning_summary, ...message } = m;
+      if (message.role === 'assistant' && !message.reasoning_content && reasoningKind !== 'summary' && /^deepseek/i.test(llm.model || '') && typeof reasoning === 'string') message.reasoning_content = reasoning;
+      if (/^(gpt-|o\d)/i.test(llm.model || '')) delete message.reasoning_content;
+      if (providerReasoning?.transport === 'openai') message.reasoning_details = providerReasoning.items;
+      return message;
+    }),
     temperature: opts.temperature ?? llm.temperature,
     max_tokens: opts.max_tokens ?? llm.maxResponseTokens ?? 8192,
     stream: !!opts.stream
@@ -415,6 +440,12 @@ function buildResponsesRequest(llm, opts, reasoningEffort) {
   if (resolvedVariant.effort && resolvedVariant.effort !== 'off' && resolvedVariant.effort !== 'auto') {
     body.reasoning = { effort: resolvedVariant.effort };
   }
+  // Ask supported reasoning models for readable summaries independently of
+  // encrypted continuation state (including stateless Codex requests).
+  if (llm.requestReasoningSummary !== false && (/^(gpt-[5-9]|o[1-9]|codex)/i.test(llm.model || '') || llm.provider === 'chatgpt-codex')) {
+    body.reasoning = { ...body.reasoning, summary: 'auto' };
+  }
+  body.include = ['reasoning.encrypted_content'];
   const responsesHeaders = { 'Content-Type': 'application/json' };
   if (llm.apiKey) responsesHeaders['Authorization'] = `Bearer ${llm.apiKey}`;
   return {
@@ -452,6 +483,7 @@ function convertMessagesToResponses(messages) {
       continue;
     }
     if (m.role === 'assistant') {
+      if (m.providerReasoning?.transport === 'responses') input.push(...m.providerReasoning.items);
       if (m.tool_calls && m.tool_calls.length > 0) {
         for (const tc of m.tool_calls) {
           input.push({
@@ -536,7 +568,7 @@ function parseResponsesResponse(data) {
       message: {
         role: 'assistant',
         content: textParts.join(''),
-        reasoning: reasoning || undefined,
+        ...ReasoningData.responses(output),
         tool_calls: toolCalls.length > 0 ? toolCalls : undefined
       },
       finish_reason: finishReason
@@ -570,14 +602,15 @@ function buildAnthropicRequest(llm, opts, reasoningEffort) {
     }
   }
   // Reasoning：Anthropic 按模型能力自适应。
-  // - adaptive 模型（Claude 4.6+/5 系）：thinking.type=adaptive + effort(minimal/low/medium/high)
+  // - adaptive 模型：thinking.type=adaptive + output_config.effort
   // - legacy 模型：thinking.type=enabled + budget_tokens(8k/16k/32k)
   // - 'off'/'auto'：不注入 thinking（模型默认行为）
   const resolvedVariant = resolveVariantForRequest(llm, reasoningEffort);
   if (resolvedVariant.effort && resolvedVariant.effort !== 'off' && resolvedVariant.effort !== 'auto') {
     const mode = anthropicThinkingMode(llm.model, llm.capabilities);
     if (mode === 'adaptive') {
-      body.thinking = { type: 'adaptive', effort: resolvedVariant.effort };
+      body.thinking = { type: 'adaptive' };
+      body.output_config = { effort: resolvedVariant.effort };
     } else {
       const requestedBudget = REASONING_BUDGET_MAP[resolvedVariant.effort] || 0;
       // Keep a quarter of the output allowance for the answer, within the user's cap.
@@ -588,7 +621,15 @@ function buildAnthropicRequest(llm, opts, reasoningEffort) {
       }
     }
   }
+  // A persisted tool turn may have had opaque blocks removed by the user's
+  // retention preference. Legacy manual thinking cannot resume that turn
+  // without a signature; use its ordinary tool protocol for this request.
+  const lastAssistant = (opts.messages || []).findLast((m) => m.role === 'assistant');
+  if (body.thinking?.type === 'enabled' && lastAssistant?.tool_calls?.length && !lastAssistant.providerReasoning?.items?.some((block) => block.type === 'thinking' && block.signature || block.type === 'redacted_thinking' && block.data)) delete body.thinking;
   // 当未配置 API Key 时，不发送 x-api-key 头（兼容无 key 的 Anthropic 兼容端点）
+  if (/^claude-/i.test(llm.model || '') && (body.thinking || /claude-(?:opus|sonnet)-(?:4-[78]|[5-9])|claude-(?:fable|mythos)-(?:[5-9]|preview)/.test(llm.model || ''))) {
+    body.thinking = { ...body.thinking, ...(body.thinking ? {} : { type: 'adaptive' }), display: llm.requestReasoningSummary === false ? 'omitted' : 'summarized' };
+  }
   const anthropicHeaders = {
     'anthropic-version': '2023-06-01',
     'Content-Type': 'application/json'
@@ -700,9 +741,7 @@ function convertMessagesToAnthropic(messages) {
     }
     if (m.role === 'assistant') {
       const content = [];
-      if (m.reasoning) {
-        content.push({ type: 'thinking', thinking: m.reasoning });
-      }
+      if (m.providerReasoning?.transport === 'anthropic') content.push(...m.providerReasoning.items);
       if (m.content) {
         content.push({ type: 'text', text: m.content });
       }
@@ -713,7 +752,7 @@ function convertMessagesToAnthropic(messages) {
           content.push({ type: 'tool_use', id: tc.id, name: tc.function?.name, input });
         }
       }
-      out.push({ role: 'assistant', content: content.length === 1 ? content[0] : content });
+      if (content.length) out.push({ role: 'assistant', content });
       continue;
     }
     // user — 支持 content 是字符串或数组（多模态 vision format）
@@ -745,7 +784,12 @@ function convertMessagesToAnthropic(messages) {
  * Parse a response from any provider into a unified OpenAI-compatible shape.
  * So downstream code (agent.js) doesn't need to know the provider type.
  */
-function parseLLMResponse(data, transport) {
+function parseLLMResponse(data, transport, llm) {
+  const result = parseProviderResponse(data, transport);
+  for (const choice of result?.choices || []) if (llm) stampReasoning(choice.message, llm);
+  return result;
+}
+function parseProviderResponse(data, transport) {
   if (transport === 'anthropic') {
     return parseAnthropicResponse(data);
   }
@@ -762,11 +806,7 @@ function parseLLMResponse(data, transport) {
     for (const choice of data.choices) {
       const msg = choice?.message;
       if (!msg) continue;
-      const reasoningContent = msg.reasoning_content || msg.reasoning;
-      // Expose reasoning for UI (streaming path already does this)
-      if (reasoningContent && !msg.reasoning) {
-        msg.reasoning = reasoningContent;
-      }
+      Object.assign(msg, ReasoningData.openai(msg));
     }
   }
   if (data?.usage) data.usage = TokenUsage.normalize(data.usage, 'openai');
@@ -792,7 +832,7 @@ function parseAnthropicResponse(data) {
       message: {
         role: 'assistant',
         content,
-        reasoning: reasoning || undefined,
+        ...ReasoningData.anthropic(data.content),
         tool_calls: toolCalls.length > 0 ? toolCalls : undefined
       },
       finish_reason: data.stop_reason === 'end_turn' ? 'stop' : (data.stop_reason || 'stop')
@@ -822,6 +862,7 @@ function parseAnthropicStreamChunk(raw) {
 }
 
 module.exports = {
+  stampReasoning,
   ZEN_BASE,
   OC_GO_BASE,
   REASONING_BUDGET_MAP,

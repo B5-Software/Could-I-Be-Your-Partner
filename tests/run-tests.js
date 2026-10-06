@@ -1514,18 +1514,8 @@ test('does NOT destroy content after tag (bug regression)', () => {
 // ---- Test parseLLMResponse does NOT merge reasoning into content ----
 console.log('\nparseLLMResponse (reasoning not leaked into content):');
 
-// Load parseLLMResponse from llm-providers.js
-const llmProvidersSrc = fs.readFileSync(path_.join(__dirname, '../src/main/llm-providers.js'), 'utf-8');
-const parseMatch = llmProvidersSrc.match(/function parseLLMResponse\(data, transport\)\s*\{[\s\S]*?^}/m);
-assert.ok(parseMatch, 'parseLLMResponse function not found');
-// Also need parseAnthropicResponse (it's called inside)
-const anthropicMatch = llmProvidersSrc.match(/function parseAnthropicResponse\(data\)\s*\{[\s\S]*?^}/m);
-const parseLLMResponse = new Function(
-  'parseAnthropicResponse',
-  parseMatch[0] + '\nreturn parseLLMResponse;'
-)(
-  anthropicMatch ? new Function(anthropicMatch[0] + '\nreturn parseAnthropicResponse;')() : () => {}
-);
+// Exercise the real parser and its shared reasoning adapter.
+const { parseLLMResponse } = require('../src/main/llm-providers.js');
 
 test('does NOT copy reasoning_content into content when content is empty', () => {
   const data = {
@@ -1577,7 +1567,7 @@ test('handles missing reasoning_content gracefully', () => {
   };
   const result = parseLLMResponse(data, 'openai');
   assert.strictEqual(result.choices[0].message.content, 'Just an answer.');
-  assert.strictEqual(result.choices[0].message.reasoning, undefined);
+  assert.ok(!result.choices[0].message.reasoning, 'missing reasoning must remain empty');
 });
 
 test('handles reasoning field (not reasoning_content)', () => {
@@ -1965,7 +1955,8 @@ test('buildResponsesRequest: reasoning.effort 仅注入 gpt-5/o 系列且非 off
   const off = llmProvidersMod.buildResponsesRequest(
     { provider: 'openai-responses', apiUrl: 'u', apiKey: '', model: 'gpt-5.2', temperature: 0.5 },
     { messages: [{ role: 'user', content: 'hi' }] }, 'off');
-  assert.strictEqual(off.body.reasoning, undefined);
+  assert.strictEqual(off.body.reasoning?.effort, undefined);
+  assert.strictEqual(off.body.reasoning.summary, 'auto');
 });
 
 test('buildResponsesRequest: response_format → text.format（json_object 与 json_schema）', () => {
@@ -2096,12 +2087,13 @@ test('buildAnthropicRequest: adaptive 用 effort / legacy 用 budget_tokens', ()
   const adaptive = llmProvidersMod.buildLLMRequest(
     { provider: 'anthropic-compat', apiUrl: 'u', apiKey: '', model: 'claude-opus-4-6', maxResponseTokens: 8192 },
     { messages: [{ role: 'user', content: 'hi' }], stream: false, max_tokens: 8192, reasoningEffort: 'high' });
-  assert.deepStrictEqual(adaptive.body.thinking, { type: 'adaptive', effort: 'high' });
+  assert.deepStrictEqual(adaptive.body.thinking, { type: 'adaptive', display: 'summarized' });
+  assert.strictEqual(adaptive.body.output_config.effort, 'high');
 
   const legacy = llmProvidersMod.buildLLMRequest(
     { provider: 'anthropic-compat', apiUrl: 'u', apiKey: '', model: 'claude-sonnet-4-5', maxResponseTokens: 8192 },
     { messages: [{ role: 'user', content: 'hi' }], stream: false, max_tokens: 8192, reasoningEffort: 'medium' });
-  assert.deepStrictEqual(legacy.body.thinking, { type: 'enabled', budget_tokens: 6144 });
+  assert.deepStrictEqual(legacy.body.thinking, { type: 'enabled', budget_tokens: 6144, display: 'summarized' });
   assert.strictEqual(legacy.body.max_tokens, 8192);
 });
 

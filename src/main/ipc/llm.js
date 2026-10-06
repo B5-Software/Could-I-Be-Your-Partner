@@ -41,6 +41,10 @@ module.exports = function registerLlmIpc({
     }
   });
   async function adaptConnection(llm) {
+    if (llm.provider === 'chatgpt-codex') {
+      if (!chatGPTAccounts) throw new Error('ChatGPT login service is unavailable');
+      return { ...llm, accountId: (await chatGPTAccounts.status()).activeId };
+    }
     if (llm.provider !== 'auto') return llm;
     const result = await formatDetector.detect(llm);
     if (!result.ok) throw new Error(result.error);
@@ -51,7 +55,7 @@ module.exports = function registerLlmIpc({
     await fetchModelsDevData();
     if (!req.credentialProvider) return fetchLLMWithRetry(config);
     if (!chatGPTAccounts) throw new Error('ChatGPT login service is unavailable');
-    let lease = await chatGPTAccounts.lease();
+    let lease = await chatGPTAccounts.lease(false, req.credentialAccountId);
     try {
       const request = () =>
         fetchLLMWithRetry({
@@ -584,7 +588,7 @@ module.exports = function registerLlmIpc({
           error: rawData.error.message || JSON.stringify(rawData.error),
         };
       }
-      const data = LLMProviders.parseLLMResponse(rawData, req.transport);
+      const data = LLMProviders.parseLLMResponse(rawData, req.transport, llmForRequest);
       let usage = data.usage || {};
       // API 未返回 usage 时估算并标记（前端用 ~ 前缀显示）
       if (!usage.total_tokens && !usage.prompt_tokens && !usage.completion_tokens) {
@@ -747,6 +751,7 @@ module.exports = function registerLlmIpc({
                 publishEvent('llm:stream-chunk', {
                   content: chunk.content || '',
                   reasoning: chunk.reasoning || '',
+                  reasoningKind: chunk.reasoningKind || 'provider',
                   streamTimeout: chunk.streamTimeout || false,
                   requestId: options.requestId,
                   sessionKey: options.sessionKey || null,
@@ -796,6 +801,7 @@ module.exports = function registerLlmIpc({
       );
       persistSettings();
       broadcastUsageChanged();
+      LLMProviders.stampReasoning(streamResult, llmForRequest);
       return {
         ok: true,
         data: {
@@ -805,6 +811,8 @@ module.exports = function registerLlmIpc({
                 role: 'assistant',
                 content: streamResult.content,
                 reasoning: streamResult.reasoning || undefined,
+                reasoningKind: streamResult.reasoningKind,
+                providerReasoning: streamResult.providerReasoning,
                 tool_calls: streamResult.toolCalls,
               },
               finish_reason: streamResult.finishReason,

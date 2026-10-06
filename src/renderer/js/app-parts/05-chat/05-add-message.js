@@ -1,4 +1,5 @@
   function addMessageToChat(role, content, attachments = []) {
+    const reasoningDisplay = ReasoningData.presentation(content);
     const messageId = typeof content === 'object' && content ? (content.metadata?.messageId || content.id) : '';
     if (content && typeof content === 'object') {
       const display = AttachmentData.presentation({ role, ...content });
@@ -48,6 +49,7 @@
     }
 
     renderMessageAttachments(msg.querySelector('.message-body'), attachments);
+    if (role === 'assistant') renderMessageReasoning(msg.querySelector('.message-body'), reasoningDisplay);
     // Add right-click context menu for deletion
     msg.addEventListener('contextmenu', (e) => {
       e.preventDefault();
@@ -55,6 +57,20 @@
     });
   }
 
+  function setReasoningLabel(section, data) {
+    const title = section?.querySelector('.reasoning-header span');
+    if (title && data?.reasoningKind) title.textContent = ReasoningData.label(data.reasoningKind, t);
+  }
+  function renderMessageReasoning(body, data) {
+    if (!body || !data.reasoning) return;
+    const section = document.createElement('div');
+    section.className = 'reasoning-section collapsed';
+    section.innerHTML = '<div class="reasoning-header"><i class="fa-solid fa-brain"></i><span></span><i class="fa-solid fa-chevron-down reasoning-toggle-icon"></i></div><div class="reasoning-content markdown-body"></div>';
+    setReasoningLabel(section, data);
+    section.querySelector('.reasoning-content').innerHTML = renderMarkdown(data.reasoning);
+    section.querySelector('.reasoning-header').addEventListener('click', () => section.classList.toggle('collapsed'));
+    body.prepend(section);
+  }
   function renderMessageAttachments(body, attachments) {
     const files = AttachmentData.normalize(attachments);
     if (!body || !files.length) return;

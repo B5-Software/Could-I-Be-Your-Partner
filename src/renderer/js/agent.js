@@ -2586,7 +2586,7 @@ ${affectionDesc}
               if (this.onMessage) this.onMessage('affection-change', { delta, value: this.babeAffection });
             }
           }
-          if (this.onMessage) this.onMessage('stream-end', { requestId: reqId, content: fullContent, reasoning: fullReasoning });
+          if (this.onMessage) this.onMessage('stream-end', { requestId: reqId, content: fullContent, reasoning: fullReasoning, reasoningKind: result?.data?.choices?.[0]?.message?.reasoningKind });
         }
       } else {
         // Non-streaming path (existing behavior).
@@ -2726,7 +2726,7 @@ ${affectionDesc}
           categories: this._getPrivacyCategories()
         });
       }
-      this.contextManager.addAssistantMessage(assistantMsg.content, assistantToolCallsForCtx, assistantMsg.reasoning);
+      this.contextManager.addAssistantMessage(assistantMsg.content, assistantToolCallsForCtx, assistantMsg.reasoning, assistantMsg);
 
       // 实时保存：AI 回复入上下文后立即持久化
       this.saveToHistory();
@@ -2736,9 +2736,10 @@ ${affectionDesc}
       if (!usedStreaming) {
         // 推理内容（reasoning_content/thinking）单独成事件：前端可折叠展示
         if (assistantMsg.reasoning && this.onMessage) {
-          this.onMessage('assistant-reasoning', assistantMsg.reasoning);
+          this.onMessage('stream-start', { requestId: reqId });
+          this.onMessage('stream-end', { requestId: reqId, content: assistantMsg.content || '', reasoning: assistantMsg.reasoning, reasoningKind: assistantMsg.reasoningKind });
         }
-        if (assistantMsg.content && this.onMessage) this.onMessage('assistant', assistantMsg.content);
+        else if (assistantMsg.content && this.onMessage) this.onMessage('assistant', assistantMsg.content);
       }
 
       // Handle tool calls
@@ -5090,7 +5091,7 @@ ${tarotLine}
             categories: this._getPrivacyCategories()
           });
         }
-        subAgent.contextManager.addAssistantMessage(assistantMsg.content, subToolCallsForCtx);
+        subAgent.contextManager.addAssistantMessage(assistantMsg.content, subToolCallsForCtx, assistantMsg.reasoning, assistantMsg);
 
         if (assistantMsg.content) {
           finalContent = assistantMsg.content;

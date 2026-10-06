@@ -194,7 +194,7 @@
           filters: [{ name: 'JSON', extensions: ['json'] }]
         });
         if (!result.ok || !result.path) return;
-        const content = JSON.stringify(conv, null, 2);
+        const content = JSON.stringify(ReasoningData.retention(conv, (await readSettings()).llm?.preserveEncryptedReasoning === true), null, 2);
         const saveResult = await window.api.writeFile(result.path, content);
         if (saveResult.ok) {
           showMessageModal(`已导出：${result.path}`, '导出成功', 'success');
@@ -215,7 +215,7 @@
           filters: [{ name: 'Markdown', extensions: ['md'] }]
         });
         if (!result.ok || !result.path) return;
-        const content = buildMarkdown(conv);
+        const content = buildHistoryMarkdown(ReasoningData.retention(conv, (await readSettings()).llm?.preserveEncryptedReasoning === true));
         const saveResult = await window.api.writeFile(result.path, content);
         if (saveResult.ok) {
           showMessageModal(`已导出：${result.path}`, '导出成功', 'success');

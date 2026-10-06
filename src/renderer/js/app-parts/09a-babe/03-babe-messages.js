@@ -40,6 +40,7 @@
   }
 
   function addBabeMessage(role, content, attachments = []) {
+    const reasoningDisplay = ReasoningData.presentation(content);
     if (content && typeof content === 'object') {
       const display = AttachmentData.presentation({ role, ...content });
       content = display.content; attachments = display.attachments;
@@ -74,6 +75,7 @@
       </div>`;
     msgsEl.appendChild(msg);
     renderMessageAttachments(msg.querySelector('.babe-msg-body'), attachments);
+    if (role === 'assistant') renderMessageReasoning(msg.querySelector('.babe-msg-body'), reasoningDisplay);
     // 增量推送：Babe 消息追加到 WebUI
     WebUIMirror.pushDomEvent({ type: 'dom_append', container: '#babe-chat-messages', html: msg.outerHTML });
     scrollChatToBottom(msgsEl);

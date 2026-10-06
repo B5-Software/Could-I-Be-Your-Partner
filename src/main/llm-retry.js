@@ -13,6 +13,7 @@
 
 const { ts, maskUrl, lastUserSnippet, bodyMeta } = require('./req-log');
 const TokenUsage = require('../shared/token-usage');
+const ReasoningData = require('../shared/reasoning');
 
 // ---- Constants ----
 const DEFAULT_MAX_RETRIES = 10;
@@ -339,9 +340,17 @@ function processResponsesEvent(state, parsed) {
   if (type === 'response.output_text.delta' && parsed.delta) {
     state.fullContent += parsed.delta;
     if (state.onChunk) state.onChunk({ content: parsed.delta, parsed, requestId: state.requestId });
-  } else if (type === 'response.reasoning_summary_text.delta' && parsed.delta) {
+  } else if (['response.reasoning_summary_text.delta', 'response.reasoning_text.delta'].includes(type) && parsed.delta) {
     state.fullReasoning += parsed.delta;
-    if (state.onChunk) state.onChunk({ reasoning: parsed.delta, parsed, requestId: state.requestId });
+    state.reasoningKind = type === 'response.reasoning_summary_text.delta' ? 'summary' : 'full';
+    if (state.onChunk) state.onChunk({ reasoning: parsed.delta, reasoningKind: state.reasoningKind, parsed, requestId: state.requestId });
+  } else if (type === 'response.output_item.done' && parsed.item?.type === 'reasoning') {
+    const items = state.reasoningItems || (state.reasoningItems = []);
+    const index = parsed.item.id ? items.findIndex((item) => item.id === parsed.item.id) : -1;
+    if (index >= 0) items[index] = parsed.item;
+    else items.push(parsed.item);
+  } else if (type === 'response.output_item.done' && parsed.item?.type === 'message') {
+    if (!state.fullContent) state.fullContent = (parsed.item.content || []).filter((part) => part.type === 'output_text').map((part) => part.text || '').join('');
   } else if (type === 'response.function_call_arguments.delta') {
     const id = parsed.item_id;
     if (!state.responsesToolBuffer[id]) state.responsesToolBuffer[id] = { call_id: '', name: '', argsBuffer: '' };
@@ -366,6 +375,10 @@ function processResponsesEvent(state, parsed) {
     }
   } else if (type === 'response.completed') {
     const resp = parsed.response || {};
+    const completedItems = (resp.output || []).filter((item) => item?.type === 'reasoning');
+    if (completedItems.length) state.reasoningItems = completedItems;
+    if (!state.fullContent) state.fullContent = (resp.output || []).filter((item) => item?.type === 'message').flatMap((item) => item.content || []).filter((part) => part.type === 'output_text').map((part) => part.text || '').join('');
+    for (const item of resp.output || []) if (item.type === 'function_call') processResponsesEvent(state, { type: 'response.output_item.done', item });
     if (resp.status === 'incomplete') state.finishReason = 'length';
     else if (resp.status === 'failed') state.finishReason = 'error';
     else if (resp.status) state.finishReason = 'stop';
@@ -404,6 +417,9 @@ async function consumeSSEStream(bodyStream, onChunk, requestId, transport = 'ope
   const decoder = new TextDecoder();
   let fullContent = '';
   let fullReasoning = '';
+  let reasoningKind = 'provider';
+  let reasoningItems = [];
+  const openaiReasoningItems = new Map();
   let toolCalls = [];
   let finishReason = null;
   let usage = null;
@@ -437,7 +453,7 @@ async function consumeSSEStream(bodyStream, onChunk, requestId, transport = 'ope
       if (['response.failed', 'response.incomplete', 'error'].includes(parsed.type)) responseError = parsed.response?.error?.message || parsed.error?.message || parsed.message || parsed.response?.incomplete_details?.reason || 'Response did not complete';
       const state = {
         fullContent, fullReasoning, toolCalls, finishReason, usage,
-        responsesToolBuffer, finalizedToolIds, onChunk, requestId
+        responsesToolBuffer, finalizedToolIds, onChunk, requestId, reasoningItems, reasoningKind
       };
       processResponsesEvent(state, parsed);
       // processResponsesEvent 就地修改 state 的字符串字段（fullContent/fullReasoning/
@@ -446,6 +462,8 @@ async function consumeSSEStream(bodyStream, onChunk, requestId, transport = 'ope
       // 不回写会导致 finishReason 恒为 null → agentLoop 永远等不到 'stop' 而无限循环。
       fullContent = state.fullContent;
       fullReasoning = state.fullReasoning;
+      reasoningItems = state.reasoningItems || [];
+      reasoningKind = state.reasoningKind || reasoningKind;
       finishReason = state.finishReason;
       usage = state.usage;
     } else {
@@ -456,13 +474,18 @@ async function consumeSSEStream(bodyStream, onChunk, requestId, transport = 'ope
   function processOpenAIEvent(parsed) {
     const choice = parsed.choices?.[0];
     const delta = choice?.delta;
-    if (delta?.reasoning_content) {
-      fullReasoning += delta.reasoning_content;
-      if (onChunk) onChunk({ reasoning: delta.reasoning_content, parsed, requestId });
+    const readableDelta = ReasoningData.openai(delta || {});
+    if (readableDelta.reasoning) {
+      fullReasoning += readableDelta.reasoning;
+      reasoningKind = readableDelta.reasoningKind;
+      if (onChunk) onChunk({ reasoning: readableDelta.reasoning, reasoningKind, parsed, requestId });
     }
-    if (delta?.reasoning && typeof delta.reasoning === 'string') {
-      fullReasoning += delta.reasoning;
-      if (onChunk) onChunk({ reasoning: delta.reasoning, parsed, requestId });
+    for (const item of delta?.reasoning_details || []) {
+      const key = item.index ?? item.id ?? item.type;
+      const prior = openaiReasoningItems.get(key) || {};
+      const next = { ...prior, ...item };
+      for (const field of ['text', 'summary', 'data']) if (typeof item[field] === 'string') next[field] = (prior[field] || '') + item[field];
+      openaiReasoningItems.set(key, next);
     }
     if (delta?.content) {
       fullContent += delta.content;
@@ -491,6 +514,11 @@ async function consumeSSEStream(bodyStream, onChunk, requestId, transport = 'ope
       const idx = parsed.index;
       const block = parsed.content_block || {};
       anthropicToolBlocks[idx] = { id: block.id, name: block.name, argsBuffer: '', type: block.type };
+      if (['thinking', 'redacted_thinking'].includes(block.type)) anthropicToolBlocks[idx].reasoningBlock = { ...block };
+      if (block.type === 'thinking' && block.thinking) {
+        fullReasoning += block.thinking;
+        if (onChunk) onChunk({ reasoning: block.thinking, reasoningKind: 'provider', requestId });
+      }
       if (block.type === 'tool_use') {
         while (toolCalls.length <= idx) {
           toolCalls.push({ id: '', type: 'function', function: { name: '', arguments: '' } });
@@ -504,8 +532,13 @@ async function consumeSSEStream(bodyStream, onChunk, requestId, transport = 'ope
         fullContent += d.text;
         if (onChunk) onChunk({ content: d.text, parsed, requestId });
       } else if (d.type === 'thinking_delta' && d.thinking) {
+        const block = anthropicToolBlocks[parsed.index]?.reasoningBlock;
+        if (block) block.thinking = (block.thinking || '') + d.thinking;
         fullReasoning += d.thinking;
         if (onChunk) onChunk({ reasoning: d.thinking, parsed, requestId });
+      } else if (d.type === 'signature_delta' && d.signature) {
+        const block = anthropicToolBlocks[parsed.index]?.reasoningBlock;
+        if (block) block.signature = (block.signature || '') + d.signature;
       } else if (d.type === 'input_json_delta' && d.partial_json) {
         const idx = parsed.index;
         if (anthropicToolBlocks[idx]) {
@@ -567,10 +600,15 @@ async function consumeSSEStream(bodyStream, onChunk, requestId, transport = 'ope
     const dr = durMs != null ? ` (${durMs}ms)` : '';
     console.log(`[${info.label} ${ts()}] ✓ stream${dr} model=${info.model || ''} finish=${finishReason} content=${fullContent.length}chars reasoning=${fullReasoning.length}chars tools=${toolCalls.length} usage=in:${inTok}/out:${outTok}`);
   }
+  const normalizedReasoning = transport === 'responses' ? ReasoningData.responses(reasoningItems)
+    : transport === 'anthropic' ? ReasoningData.anthropic(Object.values(anthropicToolBlocks).map((b) => b.reasoningBlock).filter(Boolean), info.model)
+    : { reasoning: fullReasoning, reasoningKind, ...(openaiReasoningItems.size ? { providerReasoning: { transport: 'openai', items: [...openaiReasoningItems.values()] } } : {}) };
   return {
     content: fullContent,
     ...(responseError || (info.requiresCompleted && !responseCompleted) ? { error: responseError || 'OpenAI stream ended before response.completed' } : {}),
-    reasoning: fullReasoning,
+    ...normalizedReasoning,
+    reasoning: normalizedReasoning.reasoning || fullReasoning,
+    reasoningKind: normalizedReasoning.reasoning ? normalizedReasoning.reasoningKind : reasoningKind,
     toolCalls: toolCalls.length ? toolCalls : undefined,
     finishReason,
     usage
@@ -635,17 +673,21 @@ function aggregateSSEToJSON(text, transport = 'openai', requiresCompleted = fals
       }
     }
     if (requiresCompleted) return { error: { message: 'OpenAI stream ended before response.completed' } };
-    let out = '';
+    const state = { fullContent: '', fullReasoning: '', reasoningKind: 'provider', reasoningItems: [], toolCalls: [], responsesToolBuffer: {}, finalizedToolIds: new Set() };
     let usage = null;
     let model = null;
     for (const ev of events) {
-      if (ev && ev.type === 'response.output_text.delta' && typeof ev.delta === 'string') out += ev.delta;
+      processResponsesEvent(state, ev);
       if (ev && ev.response && ev.response.usage) usage = ev.response.usage;
       if (ev && ev.response && ev.response.model) model = ev.response.model;
     }
+    const output = [...state.reasoningItems];
+    if (!output.length && state.fullReasoning) output.push({ type: 'reasoning', ...(state.reasoningKind === 'summary' ? { summary: [{ type: 'summary_text', text: state.fullReasoning }] } : { content: [{ type: 'reasoning_text', text: state.fullReasoning }] }) });
+    if (state.fullContent) output.push({ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: state.fullContent }] });
+    output.push(...state.toolCalls.map((tool) => ({ type: 'function_call', call_id: tool.id, name: tool.function.name, arguments: tool.function.arguments })));
     return {
       id: 'sse_aggregated', object: 'response', status: 'completed', model,
-      output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: out }] }],
+      output,
       usage: usage || {}
     };
   }
@@ -663,10 +705,13 @@ function aggregateSSEToJSON(text, transport = 'openai', requiresCompleted = fals
         id = ev.message.id || id;
         model = ev.message.model || model;
         usage = ev.message.usage || usage;
-      } else if (ev.type === 'content_block_start' && ev.content_block && ev.content_block.type === 'tool_use') {
-        blocks[ev.index] = { type: 'tool_use', id: ev.content_block.id, name: ev.content_block.name, input: '' };
+      } else if (ev.type === 'content_block_start' && ev.content_block) {
+        blocks[ev.index] = ev.content_block.type === 'tool_use' ? { ...ev.content_block, input: '' } : { ...ev.content_block };
+        if (ev.content_block.type === 'text') text += ev.content_block.text || '';
       } else if (ev.type === 'content_block_delta' && ev.delta) {
         if (ev.delta.type === 'text_delta') text += ev.delta.text || '';
+        else if (ev.delta.type === 'thinking_delta' && blocks[ev.index]) blocks[ev.index].thinking = (blocks[ev.index].thinking || '') + (ev.delta.thinking || '');
+        else if (ev.delta.type === 'signature_delta' && blocks[ev.index]) blocks[ev.index].signature = (blocks[ev.index].signature || '') + (ev.delta.signature || '');
         else if (ev.delta.type === 'input_json_delta') {
           if (!blocks[ev.index]) blocks[ev.index] = { type: 'tool_use', id: '', name: '', input: '' };
           blocks[ev.index].input += ev.delta.partial_json || '';
@@ -679,7 +724,9 @@ function aggregateSSEToJSON(text, transport = 'openai', requiresCompleted = fals
     const content = [];
     if (text) content.push({ type: 'text', text });
     for (const b of blocks) {
-      if (!b || b.type !== 'tool_use') continue;
+      if (!b) continue;
+      if (['thinking', 'redacted_thinking'].includes(b.type)) { content.push(b); continue; }
+      if (b.type !== 'tool_use') continue;
       let input = {};
       try { input = JSON.parse(b.input || '{}'); } catch (_) { /* keep empty */ }
       content.push({ type: 'tool_use', id: b.id, name: b.name, input });
@@ -694,6 +741,7 @@ function aggregateSSEToJSON(text, transport = 'openai', requiresCompleted = fals
   let finishReason = null;
   let content = '';
   let reasoning = '';
+  const reasoningDetails = new Map();
   const toolAcc = new Map();
   for (const ev of events) {
     if (!ev || typeof ev !== 'object') continue;
@@ -707,6 +755,13 @@ function aggregateSSEToJSON(text, transport = 'openai', requiresCompleted = fals
     if (typeof d.content === 'string') content += d.content;
     if (typeof d.reasoning === 'string') reasoning += d.reasoning;
     else if (typeof d.reasoning_content === 'string') reasoning += d.reasoning_content;
+    for (const item of d.reasoning_details || []) {
+      const key = item.index ?? item.id ?? item.type;
+      const prior = reasoningDetails.get(key) || {};
+      const next = { ...prior, ...item };
+      for (const field of ['text', 'summary', 'data']) if (typeof item[field] === 'string') next[field] = (prior[field] || '') + item[field];
+      reasoningDetails.set(key, next);
+    }
     for (const tc of d.tool_calls || []) {
       const idx = tc.index ?? 0;
       const cur = toolAcc.get(idx) || { id: '', type: 'function', function: { name: '', arguments: '' } };
@@ -721,6 +776,7 @@ function aggregateSSEToJSON(text, transport = 'openai', requiresCompleted = fals
     : undefined;
   const message = { role: 'assistant', content };
   if (reasoning) message.reasoning = reasoning;
+  if (reasoningDetails.size) message.reasoning_details = [...reasoningDetails.values()];
   if (toolCalls) message.tool_calls = toolCalls;
   return {
     id: id || 'sse_aggregated',

@@ -382,10 +382,12 @@ class ContextManager {
     this.addMessage({ role: 'user', content, ...(metadata ? { metadata } : {}) });
   }
 
-  addAssistantMessage(content, toolCalls, reasoning) {
+  addAssistantMessage(content, toolCalls, reasoning, reasoningState) {
     const msg = { role: 'assistant', content: content || '' };
     if (toolCalls && toolCalls.length > 0) msg.tool_calls = toolCalls;
     if (reasoning) msg.reasoning = reasoning;
+    if (reasoningState?.reasoningKind) msg.reasoningKind = reasoningState.reasoningKind;
+    if (reasoningState?.providerReasoning) msg.providerReasoning = reasoningState.providerReasoning;
     this.addMessage(msg);
   }
 

@@ -264,7 +264,14 @@ module.exports = function createHistoryService({
     const timer = setTimeout(() => {
       pendingHistorySaves.delete(key);
       try {
-        saveJSON(filePath, data, false);
+        saveJSON(
+          filePath,
+          require('../../shared/reasoning').retention(
+            data,
+            getSettings().llm?.preserveEncryptedReasoning === true,
+          ),
+          false,
+        );
       } catch (e) {
         console.error('queueHistorySave write failed:', e);
       }
@@ -277,7 +284,14 @@ module.exports = function createHistoryService({
     for (const [key, { timer, filePath, data }] of pendingHistorySaves) {
       clearTimeout(timer);
       try {
-        saveJSON(filePath, data, false);
+        saveJSON(
+          filePath,
+          require('../../shared/reasoning').retention(
+            data,
+            getSettings().llm?.preserveEncryptedReasoning === true,
+          ),
+          false,
+        );
       } catch (e) {
         console.error('flushPendingHistorySaves write failed:', e);
       }

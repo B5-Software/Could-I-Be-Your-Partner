@@ -90,6 +90,7 @@
             bubble.contentEl.innerHTML = renderMarkdown(bubble.rawContent) + '<span class="streaming-cursor"></span>';
             if (bubble.rawReasoning) bubble.reasoningEl.innerHTML = renderMarkdown(bubble.rawReasoning);
           }
+          setReasoningLabel(bubble.reasoningSection, data);
           if (data.reasoning) {
             bubble.rawReasoning += data.reasoning;
             bubble.reasoningSection.style.display = 'block';
@@ -123,6 +124,7 @@
           }
           if (!isAuthoritativeFinal) return;
           if (bubble.renderTimer) { clearTimeout(bubble.renderTimer); bubble.renderTimer = null; }
+          setReasoningLabel(bubble.reasoningSection, data);
           const hasReasoning = !!(data.reasoning || bubble.rawReasoning);
           const finalContent = String(data.content || bubble.rawContent).trimEnd();
           const hasContent = !!(finalContent && finalContent.trim());

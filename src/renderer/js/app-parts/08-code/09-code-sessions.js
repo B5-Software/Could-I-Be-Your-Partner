@@ -107,7 +107,7 @@
             addCodeMessage('user', msg, false);
           } else if (msg.role === 'assistant') {
             const textContent = extractTextContent(msg.content);
-            if (textContent) addCodeMessage('assistant', textContent, false);
+            if (textContent || ReasoningData.presentation(msg).reasoning) addCodeMessage('assistant', { ...msg, content: textContent }, false);
             if (msg.tool_calls && msg.tool_calls.length > 0) {
               for (const tc of msg.tool_calls) {
                 const toolName = tc.function?.name || 'tool';

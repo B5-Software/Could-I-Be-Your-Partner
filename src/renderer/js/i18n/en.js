@@ -10,6 +10,14 @@
 const EN_DICT = {
   // ── UI Strings ──
   ui: {
+    reasoning: {
+  "summary": "Reasoning summary",
+  "text": "Reasoning",
+  "requestSummary": "Request reasoning summaries",
+  "preserve": "Keep encrypted reasoning",
+  "summaryHelp": "Request readable provider summaries without an extra model call. Turning this off does not eliminate internal reasoning token charges. Compatibility providers may not support this option.",
+  "preserveHelp": "Off by default. When enabled, encrypted reasoning and signatures are saved with chat records and included in JSON / Markdown exports. When off, these fields are no longer saved or exported; existing files are not immediately erased. Active tool turns retain required continuation state in memory. Opaque data is never displayed as reasoning text."
+},
     titlebar: {
       chatMode: 'Chat Mode',
       codeMode: 'Code Mode',
@@ -4027,3 +4035,12 @@ EN_DICT.ui.attachment = { unavailable: 'Attachment unavailable' };
 Object.assign(EN_DICT.ui.history ||= {}, { deleteWait: 'Wait for the current task to finish before deleting messages', deleteTurn: 'Delete turn', deleteTurnConfirm: 'Delete this turn and its raw context? Content already merged into a summary will remain.' });
 
 Object.assign(EN_DICT.ui.update ||= {}, { newReady: 'New version ready', verified: 'SHA-256 verified', restartHint: 'The download is ready. Restart the app when you are ready to install.', launcherHint: 'Safely downloaded. Exit the backend, then run your original command to use the new version.' });
+
+EN_DICT['ui.reasoning.requestSummary'] = EN_DICT.ui.reasoning.requestSummary;
+EN_DICT._textMap["请求推理摘要"] = EN_DICT.ui.reasoning.requestSummary;
+EN_DICT['ui.reasoning.preserve'] = EN_DICT.ui.reasoning.preserve;
+EN_DICT._textMap["保留加密推理"] = EN_DICT.ui.reasoning.preserve;
+EN_DICT['ui.reasoning.summaryHelp'] = EN_DICT.ui.reasoning.summaryHelp;
+EN_DICT._textMap["请求服务商提供的可读摘要，不额外调用模型。关闭不代表免除内部推理 Token 费用；兼容服务可能不支持此选项。"] = EN_DICT.ui.reasoning.summaryHelp;
+EN_DICT['ui.reasoning.preserveHelp'] = EN_DICT.ui.reasoning.preserveHelp;
+EN_DICT._textMap["默认关闭。开启后将服务商的加密推理与签名保存到聊天记录，并随 JSON / Markdown 导出。关闭后不再保存或导出这些数据；已有文件不会立即清除。当前工具轮次仍在内存中保留续接所需数据。加密数据不会显示为推理文本。"] = EN_DICT.ui.reasoning.preserveHelp;

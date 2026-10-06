@@ -49,6 +49,7 @@
   }
 
   function addCodeMessage(role, content, track = true, attachments = []) {
+    const reasoningDisplay = ReasoningData.presentation(content);
     if (content && typeof content === 'object') {
       const display = AttachmentData.presentation({ role, ...content });
       content = display.content; attachments = display.attachments;
@@ -76,6 +77,7 @@
       </div>`;
     msgsEl.appendChild(msg);
     renderMessageAttachments(msg.querySelector('.message-body'), attachments);
+    if (role === 'assistant') renderMessageReasoning(msg.querySelector('.message-body'), reasoningDisplay);
     // 增量推送：Code 消息追加到 WebUI
     WebUIMirror.pushDomEvent({ type: 'dom_append', container: '#code-chat-messages', html: msg.outerHTML });
     scrollChatToBottom(msgsEl);

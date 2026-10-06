@@ -60,7 +60,8 @@
     const bubble = streamingBubbles.get(requestId);
     if (!bubble) return;
     const chunkContent = typeof chunk === 'string' ? chunk : (chunk?.content || '');
-    const chunkReasoning = typeof chunk === 'object' ? (chunk?.reasoning || '') : '';
+    const chunkReasoning = typeof chunk === 'object' ? ReasoningData.presentation(chunk).reasoning : '';
+    setReasoningLabel(bubble.reasoningEl, chunk);
     if (!chunkContent && !chunkReasoning) return;
 
     if (chunkReasoning) {
@@ -130,9 +131,12 @@
       bubble.renderTimer = null;
     }
     const fullContent = typeof data === 'object' ? (data?.content || '') : (typeof data === 'string' ? data : '');
-    const fullReasoning = typeof data === 'object' ? (data?.reasoning || '') : '';
+    const fullReasoning = typeof data === 'object' ? ReasoningData.presentation(data).reasoning : '';
+    setReasoningLabel(bubble.reasoningEl, data);
     const content = fullContent || bubble.rawContent;
     const reasoning = fullReasoning || bubble.rawReasoning;
+    // Non-streaming and completed-only providers may never send a delta.
+    if (content || reasoning) { bubble.el.style.display = ''; bubble.shown = true; removeThinkingIndicator(); }
 
     if (!content || !content.trim()) {
       if (!reasoning || !reasoning.trim()) {
