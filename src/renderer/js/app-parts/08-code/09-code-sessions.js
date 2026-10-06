@@ -104,7 +104,7 @@
           if (!msg || msg.metadata?.kind === 'context-update') continue;
           if (msg.metadata?.kind === 'context-update') continue;
           if (msg.role === 'user') {
-            addCodeMessage('user', msg.metadata?.displayContent || extractTextContent(msg.content), false);
+            addCodeMessage('user', msg, false);
           } else if (msg.role === 'assistant') {
             const textContent = extractTextContent(msg.content);
             if (textContent) addCodeMessage('assistant', textContent, false);

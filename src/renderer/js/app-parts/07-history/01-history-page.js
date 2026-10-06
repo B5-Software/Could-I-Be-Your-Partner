@@ -232,7 +232,7 @@
         const titleForConfirm = conv?.title || '此对话';
         const confirmed = await window.confirmDialog(`确定删除"${String(titleForConfirm).slice(0, 40)}"吗？此操作不可恢复。`, '删除确认');
         if (!confirmed) return;
-        await window.api.historyDelete(btn.dataset.id);
+        await (window.CibypBackendViews?.request('deleteHistory', 'chat', btn.dataset.id) || window.api.historyDelete(btn.dataset.id));
         if (agent.conversationId === btn.dataset.id) {
           agent.newConversation();
           clearChatMessagesUI();

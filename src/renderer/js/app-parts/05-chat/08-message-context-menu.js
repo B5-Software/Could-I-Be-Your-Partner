@@ -160,102 +160,32 @@
     menuItem.addEventListener('click', async () => {
       menu.remove();
 
-      // 查找完整的对话轮次：user -> (system/tool-call)* -> assistant
+      const activeAgent = sessionManager?.getActive('chat')?.agent || agent;
       const allElements = Array.from(chatMessages.children);
-      const currentIndex = allElements.indexOf(messageElement);
-
-      if (currentIndex === -1) return;
-
-      let userMsg = null;
-      let assistantMsg = null;
-      const middleElements = []; // system messages and tool calls
-
-      if (role === 'user') {
-        // 从 user 开始，向后找 assistant
-        userMsg = messageElement;
-        for (let i = currentIndex + 1; i < allElements.length; i++) {
-          const el = allElements[i];
-          if (el.classList.contains('assistant')) {
-            assistantMsg = el;
-            break;
-          } else if (el.classList.contains('system') || el.classList.contains('tool-call')) {
-            middleElements.push(el);
-          } else if (el.classList.contains('user')) {
-            // 遇到下一个 user，停止
-            break;
-          }
-        }
-      } else if (role === 'assistant') {
-        // 从 assistant 开始，向前找 user
-        assistantMsg = messageElement;
-        for (let i = currentIndex - 1; i >= 0; i--) {
-          const el = allElements[i];
-          if (el.classList.contains('user')) {
-            userMsg = el;
-            break;
-          } else if (el.classList.contains('system') || el.classList.contains('tool-call')) {
-            middleElements.unshift(el);
-          } else if (el.classList.contains('assistant')) {
-            // 遇到上一个 assistant，停止
-            break;
-          }
-        }
-      } else {
-        // 从 system/tool-call 开始，找前后的 user 和 assistant
-        // 向前找 user
-        for (let i = currentIndex - 1; i >= 0; i--) {
-          const el = allElements[i];
-          if (el.classList.contains('user')) {
-            userMsg = el;
-            break;
-          } else if (el.classList.contains('system') || el.classList.contains('tool-call')) {
-            middleElements.unshift(el);
-          } else if (el.classList.contains('assistant')) {
-            break;
-          }
-        }
-        // 向后找 assistant
-        middleElements.push(messageElement); // 当前元素
-        for (let i = currentIndex + 1; i < allElements.length; i++) {
-          const el = allElements[i];
-          if (el.classList.contains('assistant')) {
-            assistantMsg = el;
-            break;
-          } else if (el.classList.contains('system') || el.classList.contains('tool-call')) {
-            middleElements.push(el);
-          } else if (el.classList.contains('user')) {
-            break;
-          }
-        }
-      }
-
-      if (!userMsg && !assistantMsg) return;
-
-      const pending = [];
-      if (userMsg) pending.push(userMsg);
-      pending.push(...middleElements);
-      if (assistantMsg) pending.push(assistantMsg);
-
+      let start = allElements.indexOf(messageElement);
+      while (start >= 0 && !allElements[start].classList.contains('user')) start--;
+      if (start < 0) return;
+      const userMsg = allElements[start];
+      let end = start + 1;
+      while (end < allElements.length && !allElements[end].classList.contains('user')) end++;
+      const pending = allElements.slice(start, end);
       pending.forEach(el => el.classList.add('pending-delete'));
-
-      // Confirm deletion
-      const delParts = [];
-      if (userMsg) delParts.push('用户消息');
-      if (middleElements.length > 0) delParts.push('工具调用');
-      if (assistantMsg) delParts.push('AI回复');
-      let delDetail = '';
-      if (delParts.length === 1) delDetail = '包括' + delParts[0];
-      else if (delParts.length > 1) delDetail = '包括' + delParts.slice(0, -1).join('、') + '和' + delParts[delParts.length - 1];
-      const confirmed = await window.confirmDialog(
-        `确定要删除这轮对话吗？\n${delDetail}`,
-        '删除对话'
-      );
-
-      if (confirmed) {
+      try {
+        const view = await window.CibypBackendViews.request('getView', activeAgent.backendKey);
+        const users = view.messages.filter(message => message.role === 'user' && message.metadata?.kind !== 'context-update');
+        const ordinal = allElements.slice(0, start).filter(el => el.classList.contains('user')).length;
+        const messageId = userMsg.dataset.messageId || users[ordinal]?.metadata?.messageId;
+        if (!messageId || view.session.busy) throw new Error(t('ui.history.deleteWait', '请等待当前任务完成后再删除消息'));
+        const confirmed = await window.confirmDialog(t('ui.history.deleteTurnConfirm', '确定要删除这轮对话吗？将同时删除对应的原始上下文，已合并的摘要会保留。'), t('ui.history.deleteTurn', '删除对话'));
+        if (!confirmed) return;
+        const result = await window.CibypBackendViews.request('deleteTurn', activeAgent.backendKey, messageId);
+        if (!result.ok) throw new Error(result.error);
+        window.CibypBackendViews.hydrate(activeAgent, result.view);
         pending.forEach(el => el.remove());
-      } else {
-        pending.forEach(el => el.classList.remove('pending-delete'));
-      }
+        updateContextProgress();
+      } catch (error) { showToast(error.message, 'error'); }
+      finally { pending.forEach(el => el.classList.remove('pending-delete')); }
+
     });
 
     menu.append(speakItem, menuItem);

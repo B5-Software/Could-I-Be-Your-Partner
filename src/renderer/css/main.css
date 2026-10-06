@@ -1135,5 +1135,18 @@ html[data-animations="off"] #sidebar, html[data-animations="off"] #main-content 
   .geogebra-open #main-content { padding-right: 0; }
 }
 /* Update reminders must remain visible before the lazy settings stylesheet loads. */
-.app-update-notice { position: fixed; bottom: 20px; right: 20px; z-index: 120000; display: flex; align-items: center; gap: 12px; max-width: calc(100vw - 40px); padding: 14px 18px; border: 1px solid var(--border); border-radius: 14px; background: var(--bg-secondary); color: var(--text-primary); box-shadow: 0 6px 30px rgba(0,0,0,.15); }
-.app-update-notice button { padding: 7px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-primary); color: var(--text-primary); cursor: pointer; }
+/* A compact, themed update card above every workspace surface. */
+.app-update-notice { position: fixed; bottom: 20px; right: 20px; z-index: 120000; width: 350px; max-width: calc(100vw - 40px); padding: 18px; box-sizing: border-box; border: 1px solid var(--border); border-radius: 18px; background: var(--bg-primary); color: var(--text-primary); box-shadow: 0 12px 44px rgba(0,0,0,.13); }
+.app-update-top { display: flex; align-items: center; gap: 12px; }
+.app-update-symbol { width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center; flex: 0 0 auto; font-size: 17px; background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); }
+.app-update-heading { display: flex; flex: 1; flex-direction: column; gap: 3px; min-width: 0; }
+.app-update-heading strong { font-size: 14px; font-weight: 600; }
+.app-update-version { color: var(--text-secondary); font-size: 11px; font-variant-numeric: tabular-nums; }
+.app-update-notice .app-update-close { background: transparent; color: var(--text-tertiary); border: 0; width: 28px; height: 28px; display: grid; place-items: center; border-radius: 8px; cursor: pointer; }
+.app-update-close:hover { background: var(--bg-secondary); color: var(--text-primary); }
+.app-update-label { margin: 14px 0 16px; color: var(--text-secondary); font-size: 12px; line-height: 1.65; }
+.app-update-footer { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.app-update-verified { display: inline-flex; align-items: center; gap: 5px; color: var(--text-secondary); font-size: 10px; }
+.app-update-verified i { color: var(--accent); }
+.app-update-notice .app-update-install { padding: 8px 13px; border: 1px solid transparent; border-radius: 9px; background: var(--accent); color: var(--accent-text, #fff); font-size: 12px; font-weight: 500; cursor: pointer; }
+.app-update-install:disabled { opacity: .55; cursor: wait; }

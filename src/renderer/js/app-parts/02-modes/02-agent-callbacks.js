@@ -7,6 +7,9 @@
 
     ag.onMessage = (type, data) => {
     switch (type) {
+      case 'conversation-replaced':
+        if (isActive()) rebuildChatUIFromHistory(data);
+        break;
       case 'tarot':
         if (data) {
           // 后端逻辑：始终推送 tarot 到 WebUI（保持子代理/对话上下文一致）

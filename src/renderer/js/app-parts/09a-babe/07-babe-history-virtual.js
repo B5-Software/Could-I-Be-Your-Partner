@@ -104,7 +104,7 @@
       await exportConversationToFile(conv, action === 'export-json' ? 'json' : 'md');
     } else if (action === 'delete') {
       if (!await window.confirmDialog('确定删除这段和 TA 的回忆吗？', '删除确认')) return;
-      const result = await window.api.babeHistoryDelete(id);
+      const result = await (window.CibypBackendViews?.request('deleteHistory', 'babe', id) || window.api.babeHistoryDelete(id));
       if (result.ok) loadBabeHistoryPage();
     }
   }

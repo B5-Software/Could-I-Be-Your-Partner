@@ -48,7 +48,11 @@
     };
   }
 
-  function addCodeMessage(role, content, track = true) {
+  function addCodeMessage(role, content, track = true, attachments = []) {
+    if (content && typeof content === 'object') {
+      const display = AttachmentData.presentation({ role, ...content });
+      content = display.content; attachments = display.attachments;
+    }
     const msgsEl = document.getElementById('code-chat-messages');
     if (!msgsEl) return;
     const welcome = msgsEl.querySelector('.welcome-message');
@@ -71,12 +75,13 @@
         <div class="message-time">${new Date().toLocaleTimeString('zh-CN', {hour12: false})}</div>
       </div>`;
     msgsEl.appendChild(msg);
+    renderMessageAttachments(msg.querySelector('.message-body'), attachments);
     // 增量推送：Code 消息追加到 WebUI
     WebUIMirror.pushDomEvent({ type: 'dom_append', container: '#code-chat-messages', html: msg.outerHTML });
     scrollChatToBottom(msgsEl);
 
     // Track for history
-    if (track) codeMessages.push({ role, content });
+    if (track) codeMessages.push({ role, content, attachments: AttachmentData.normalize(attachments) });
   }
 
   function addCodeToolCall(data) {

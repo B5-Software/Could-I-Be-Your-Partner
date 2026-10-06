@@ -219,9 +219,12 @@ function createAgentRuntime({
       usage: Object.assign({}, agent.sessionUsage || {}),
       usageByModel: Object.assign({}, agent.sessionUsageByModel || {}),
       context: {
+        ...breakdown,
         used,
         max,
         reserve,
+        totalUsed: used + reserve,
+        detail: breakdown?.detail || {},
         // 与 GUI 圆环一致：占比含输出预留
         pct: max ? Math.min(100, ((used + reserve) / max) * 100) : 0,
         inputPct: max ? Math.min(100, (used / max) * 100) : 0,
@@ -231,6 +234,7 @@ function createAgentRuntime({
       subscriptionUsage: subscription?.value || null,
       affection: typeof agent.babeAffection === 'number' ? agent.babeAffection : null,
       workingMs: agent.workingMs || 0,
+      compaction: agent.contextManager?.compactionState || null,
     };
   }
 
@@ -597,15 +601,27 @@ function createAgentRuntime({
     for (const message of (conversation && conversation.messages) || []) {
       if (!message || typeof message !== 'object') continue;
       if (message.role === 'user' || message.role === 'assistant') {
+        const display = require('../shared/attachments').presentation(message);
         out.push({
+          id: message.metadata?.messageId || '',
           role: message.role,
-          content: message.content || '',
+          content: display.content,
+          attachments: display.attachments,
           reasoning: message.reasoning || message.reasoning_content || '',
         });
       } else if (message.role === 'tool') {
-        out.push({ role: 'tool', name: message.name || 'tool', content: message.content || '' });
+        out.push({
+          id: message.metadata?.messageId || '',
+          role: 'tool',
+          name: message.name || 'tool',
+          content: message.content || '',
+        });
       } else if (message.role === 'system') {
-        out.push({ role: 'system', content: message.content || '' });
+        out.push({
+          id: message.metadata?.messageId || '',
+          role: 'system',
+          content: message.content || '',
+        });
       }
     }
     return out;
@@ -760,7 +776,13 @@ function createAgentRuntime({
       const session = sessions.get(key);
       if (!session) return null;
       return {
-        messages: flattenMessages({ messages: session.agent.contextManager?.messages || [] }),
+        compaction: session.agent.contextManager?.compactionState || null,
+        messages: flattenMessages({
+          messages:
+            session.agent.contextManager?.getHistoryMessages?.() ||
+            session.agent.contextManager?.messages ||
+            [],
+        }),
         pendingInteraction: session.pendingInteraction
           ? { kind: session.pendingInteraction.kind, payload: session.pendingInteraction.payload }
           : null,
@@ -778,7 +800,10 @@ function createAgentRuntime({
         runtimeOverride: session.runtimeOverride || null,
         stats: getStats(key),
         messages: a.contextManager?.getHistoryMessages() || [],
-        displayMessages: flattenMessages({ messages: a.contextManager?.messages || [] }),
+        workingMessages: a.contextManager?.messages || [],
+        displayMessages: flattenMessages({
+          messages: a.contextManager?.getHistoryMessages() || [],
+        }),
         llmOverride: a.llmOverride,
         systemPrompt: a.contextManager?.systemPrompt || '',
         tarotCard: a.tarotCard,
@@ -867,15 +892,24 @@ function createAgentRuntime({
         'proactiveSend',
         'setModelOverride',
         'clearModelOverride',
+        'compactNow',
       ]);
-      if (action === 'executeTool') {
+      if (action === 'executeTool' || action === 'compactNow') {
         if (session.busy) throw new Error('The session is busy');
         session.busy = true;
+        session.compacting = action === 'compactNow';
+        session.finished = new Promise((resolve) => {
+          session.finish = resolve;
+        });
         try {
-          const result = await a.executeTool(...args);
+          const result = await a[action](...args);
           return { result, view: this.getView(key) };
         } finally {
           session.busy = false;
+          session.compacting = false;
+          session.finish?.();
+          this.emitUsageStats(key);
+          emit({ type: 'view-changed', key });
         }
       }
       if (!allowed.has(action) || typeof a[action] !== 'function')
@@ -911,13 +945,67 @@ function createAgentRuntime({
      * 发送用户消息并跑完整个 Agent 循环（阻塞到本轮结束）。
      * 会话忙时自动降级为热消息注入（工作中追加指令）。
      */
+    async uploadAttachment(key, file = {}) {
+      const session = sessions.get(key);
+      if (!session) throw new Error('Choose a conversation first');
+      const name = String(file.name || '')
+        .split(/[\\/]/)
+        .pop()
+        .replace(/[\x00-\x1f:*?"<>|]/g, '_');
+      if (!name || name === '.' || name === '..' || name.length > 240)
+        throw new Error('Invalid attachment name');
+      if (
+        typeof file.data !== 'string' ||
+        file.data.length > 12 * 1024 * 1024 ||
+        !/^[A-Za-z0-9+/]*={0,2}$/.test(file.data)
+      )
+        throw new Error('Attachment must be base64 and at most 8 MiB');
+      const bytes = Buffer.from(file.data, 'base64');
+      if (bytes.length > 8 * 1024 * 1024) throw new Error('Attachment exceeds 8 MiB');
+      await ensureInitialized(session);
+      const uploaded = await api.saveUploadedFile(
+        name,
+        'data:application/octet-stream;base64,' + file.data,
+      );
+      if (!uploaded?.ok) throw new Error(uploaded?.error || 'Attachment upload failed');
+      const workspace = session.agent.workspacePath;
+      let target = uploaded.path;
+      if (workspace) {
+        target =
+          workspace.replace(/[\\/]$/, '') +
+          '/' +
+          require('node:crypto').randomUUID().slice(0, 8) +
+          '_' +
+          name;
+        const copy = await api.copyFile(uploaded.path, target);
+        if (!copy?.ok)
+          throw new Error(copy?.error || 'Attachment could not be copied to the workspace');
+      }
+      return {
+        name,
+        path: target,
+        type: String(file.type || ''),
+        size: bytes.length,
+        isImage: uploaded.isImage,
+      };
+    },
+
     async sendMessage(key, message, attachments = []) {
       const session = createSession({ key, mode: 'chat' });
       if (session.rewinding) return { ok: false, error: 'Conversation is being rewound' };
       if (session.loadingHistory) return { ok: false, error: 'Conversation is still loading' };
+      if (session.compacting)
+        return { ok: false, error: 'Context is being compacted; please retry when it finishes' };
       if (session.busy) {
         session.agent.injectHotMessage(message, attachments || []);
-        emit({ type: 'message', key: session.key, role: 'user', content: message, injected: true });
+        emit({
+          type: 'message',
+          key: session.key,
+          role: 'user',
+          content: message,
+          attachments: require('../shared/attachments').normalize(attachments),
+          injected: true,
+        });
         return { ok: true, injected: true };
       }
       const maximum = Math.max(1, Number(getSettings?.()?.sessions?.maxConcurrent) || 10);
@@ -933,7 +1021,13 @@ function createAgentRuntime({
       });
       session.stopRequested = false;
       session.status = 'running';
-      emit({ type: 'message', key: session.key, role: 'user', content: message });
+      emit({
+        type: 'message',
+        key: session.key,
+        role: 'user',
+        content: message,
+        attachments: require('../shared/attachments').normalize(attachments),
+      });
       emit({ type: 'status', key: session.key, status: 'running' });
       try {
         await ensureInitialized(session);
@@ -1023,6 +1117,46 @@ function createAgentRuntime({
       return { ok: true };
     },
 
+    /** Delete one complete user turn from the transcript and uncompressed context. */
+    async deleteTurn(key, messageId) {
+      const session = sessions.get(key);
+      if (!session) return { ok: false, error: 'Unknown session' };
+      if (session.busy || session.loadingHistory || session.rewinding)
+        return { ok: false, error: 'Wait for the current task to finish before deleting messages' };
+      const context = session.agent.contextManager;
+      const history = context.getHistoryMessages();
+      const isUserTurn = (message) =>
+        message.role === 'user' && message.metadata?.kind !== 'context-update';
+      const start = history.findIndex(
+        (message) => isUserTurn(message) && message.metadata?.messageId === messageId,
+      );
+      if (start < 0)
+        return { ok: false, error: 'Message no longer exists; refresh the conversation' };
+      let end = start + 1;
+      while (end < history.length && !isUserTurn(history[end])) end++;
+      const removedIds = history.slice(start, end).map((message) => message.metadata?.messageId);
+      session.rewinding = true;
+      try {
+        const removed = context.removeHistoryMessages(removedIds);
+        await session.agent.saveToHistory();
+        this.emitUsageStats(key);
+        emit({
+          type: 'messages-deleted',
+          key,
+          ids: removedIds,
+          retainedInSummary: removed.retainedInSummary,
+        });
+        return {
+          ok: true,
+          ids: removedIds,
+          retainedInSummary: removed.retainedInSummary,
+          view: this.getView(key),
+        };
+      } finally {
+        session.rewinding = false;
+      }
+    },
+
     async undo(key) {
       const session = sessions.get(key);
       if (!session) return { ok: false, error: 'Unknown session' };
@@ -1040,10 +1174,18 @@ function createAgentRuntime({
           return { ok: true, text };
         }
         if (pending.length) {
-          for (const message of pending.slice(0, -1)) context.addUserMessage(message);
+          for (const message of pending.slice(0, -1))
+            context.addUserMessage(
+              typeof message === 'object' ? message.content : message,
+              message?.metadata,
+            );
           await session.agent.saveToHistory();
           this.emitUsageStats(key);
-          return { ok: true, text: pending.at(-1) };
+          const last = pending.at(-1);
+          return {
+            ok: true,
+            text: typeof last === 'object' ? (last.metadata?.displayContent ?? last.content) : last,
+          };
         }
         const history = context.getHistoryMessages();
         const index = history.findLastIndex(
@@ -1060,10 +1202,12 @@ function createAgentRuntime({
                   .map((part) => part.text)
                   .join('\n')
               : '';
-        context.loadFromHistory(history.slice(0, index));
+        const removed = context.removeHistoryMessages(
+          history.slice(index).map((m) => m.metadata?.messageId),
+        );
         await session.agent.saveToHistory();
         this.emitUsageStats(key);
-        return { ok: true, text };
+        return { ok: true, text, retainedInSummary: removed.retainedInSummary };
       } finally {
         session.rewinding = false;
       }
@@ -1102,6 +1246,7 @@ function createAgentRuntime({
         usage: stats.usage,
         context: stats.context,
         costUSD: stats.costUSD,
+        compaction: stats.compaction,
       });
     },
     async setTitle(key, title) {
@@ -1172,7 +1317,19 @@ function createAgentRuntime({
 
     listHistory: (mode, workspacePath) => historyList(mode || 'chat', workspacePath),
     getHistory: (mode, id, workspacePath) => historyGet(mode || 'chat', id, workspacePath),
-    deleteHistory: (mode, id, workspacePath) => historyDelete(mode || 'chat', id, workspacePath),
+    async deleteHistory(mode, id, workspacePath) {
+      mode ||= 'chat';
+      for (const session of [...sessions.values()]) {
+        if (session.mode !== mode || session.agent.conversationId !== id) continue;
+        if (mode === 'code' && workspacePath && session.agent.workspacePath !== workspacePath)
+          continue;
+        this.stop(session.key);
+        if (session.busy) await session.finished;
+        session.agent.contextManager.clear();
+        this.close(session.key);
+      }
+      return historyDelete(mode, id, workspacePath);
+    },
     renameHistory: (mode, id, title, workspacePath) =>
       historyRename(mode || 'chat', id, title, workspacePath),
 

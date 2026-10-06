@@ -113,7 +113,7 @@
       const titleForConfirm = item.title || '此对话';
       const confirmed = await window.confirmDialog(`确定删除"${String(titleForConfirm).slice(0, 40)}"吗？此操作不可恢复。`, '删除确认');
       if (!confirmed) return;
-      await window.api.codeDeleteHistory(codeWorkspacePath, id);
+      await (window.CibypBackendViews?.request('deleteHistory', 'code', id, codeWorkspacePath) || window.api.codeDeleteHistory(codeWorkspacePath, id));
       loadCodeHistoryPage();
     }
   }

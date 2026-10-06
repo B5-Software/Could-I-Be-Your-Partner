@@ -68,7 +68,7 @@
             const titleForConfirm = btn.closest('.history-item')?.querySelector('.history-title')?.textContent?.trim() || '此对话';
             const confirmed = await window.confirmDialog(`确定删除"${String(titleForConfirm).slice(0, 40)}"吗？此操作不可恢复。`, '删除确认');
             if (!confirmed) return;
-            await window.api.codeDeleteHistory(codeWorkspacePath, btn.dataset.id);
+            await (window.CibypBackendViews?.request('deleteHistory', 'code', btn.dataset.id, codeWorkspacePath) || window.api.codeDeleteHistory(codeWorkspacePath, btn.dataset.id));
             loadCodeHistoryPage();
           });
         });

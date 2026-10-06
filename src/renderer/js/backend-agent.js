@@ -21,11 +21,13 @@
     a.minimalMode = s.minimalMode; a.babeAffection = s.affection;
     a.running = s.busy; a.sessionStatus = s.status === 'running' ? 'working' : s.status;
     a.contextManager.loadFromHistory(view.messages || []);
+    if (view.workingMessages) a.contextManager.messages = view.workingMessages;
     if (view.systemPrompt) a.contextManager.setSystemPrompt(view.systemPrompt);
     for (const property of ['tarotCard', 'sessionUsage', 'sessionUsageByModel', 'skills', 'skillsCatalog', 'optimizedToolNames', 'optimizedToolReason', 'subAgents', 'cachedWorkspaceTree']) if (view[property] !== undefined) a[property] = view[property];
     a._backendToolSchemas = view.runtimeToolSchemas;
     a.llmOverride = view.llmOverride || a.llmOverride;
     a._backendStats = view.stats;
+    a._compactionState = view.stats?.compaction || null;
   }
   proto._ensureBackend = async function (attachLatest = false) {
     if (this._backendReady) return this._backendReady;
@@ -62,7 +64,7 @@
   proto.resolveApproval = function (response) { return request('respond', this.backendKey, response); };
   proto.resolveToolAuth = function (response) { return request('respond', this.backendKey, response); };
   proto.setMinimalMode = async function (enabled) { await this._ensureBackend(); const result = await request('setMinimalMode', this.backendKey, enabled); hydrate(this, await request('getView', this.backendKey)); return result; };
-  for (const method of ['saveToHistory', 'loadFromHistory', 'optimizeToolsForConversation', 'resetOptimizedTools', 'refreshSkillsCatalog', 'proactiveSend', 'executeTool']) {
+  for (const method of ['saveToHistory', 'loadFromHistory', 'optimizeToolsForConversation', 'resetOptimizedTools', 'refreshSkillsCatalog', 'proactiveSend', 'executeTool', 'compactNow']) {
     proto[method] = async function (...args) {
       await this._ensureBackend();
       const value = await request('agentAction', this.backendKey, method, args);
@@ -81,6 +83,10 @@
     for (const a of views) {
       if (event.key !== a.backendKey) continue;
       if (event.type === 'agent-message') {
+        if (event.messageType === 'context-compaction') {
+          a._compactionState = event.data;
+          window.CibypCompactionUI?.refresh();
+        }
         a.onMessage?.(event.messageType, event.data);
         const session = window.__sessionManager?.getByAgent(a);
         if (window.VoiceUI && (!session || session.active)) {
@@ -88,14 +94,17 @@
           if (event.messageType === 'stream-end') window.VoiceUI.feedStreamEnd(event.data?.content || null);
         }
       }
-      else if (event.type === 'message' && event.role === 'user' && !a._sending) a.onMessage?.('user', event.content);
+      else if (event.type === 'message' && event.role === 'user' && !a._sending) a.onMessage?.('user', { content: event.content, attachments: event.attachments });
       else if (event.type === 'tool-call') {
         let result = event.result; try { result = JSON.parse(result); } catch { /* Plain text result. */ }
         a.onToolCall?.(event.name, event.args, event.status === 'running' ? 'calling' : event.status, result, event.callId);
       } else if (event.type === 'title') { a.conversationTitle = event.title; a.onTitleChange?.(event.title); }
       else if (event.type === 'status') { a.running = event.status === 'running'; a.onStatusChange?.(a.running ? 'working' : event.status); }
       else if (event.type === 'notification' && event.notificationType === 'toast') window.showToast?.(event.payload?.message, event.payload?.type, event.payload?.duration);
-      if (['status', 'usage', 'view-changed', 'stream-end'].includes(event.type)) request('getView', a.backendKey).then(view => hydrate(a, view)).catch(console.error);
+      if (['status', 'usage', 'view-changed', 'stream-end', 'context-compaction', 'messages-deleted'].includes(event.type)) request('getView', a.backendKey).then(view => {
+        hydrate(a, view); window.CibypCompactionUI?.refresh();
+        if (event.type === 'messages-deleted') a.onMessage?.('conversation-replaced', view);
+      }).catch(console.error);
     }
   });
   window.CibypBackendViews = { hydrate, request, views };

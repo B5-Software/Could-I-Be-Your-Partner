@@ -62,6 +62,7 @@ async function createBackendRuntime(client) {
         ? {
             messages: view.displayMessages || view.messages || [],
             pendingInteraction: view.pendingInteraction,
+            compaction: view.stats?.compaction || null,
           }
         : null;
     },
@@ -89,9 +90,11 @@ async function createBackendRuntime(client) {
     'getSubscriptionUsage',
     'setTitle',
     'sendMessage',
+    'agentAction',
     'inject',
     'stop',
     'undo',
+    'deleteTurn',
     'close',
     'respond',
     'answerQuestions',
@@ -129,7 +132,7 @@ async function createBackendRuntime(client) {
       .catch(client.onError);
   }, 400);
   bootTimer.unref();
-  client.onEvent((event) => {
+  client.onEvent(async (event) => {
     if (event.type === 'snapshot') {
       runtime.boot = event.snapshot.boot;
       sessions = new Map(event.snapshot.sessions.map((s) => [s.key, s]));
@@ -155,6 +158,13 @@ async function createBackendRuntime(client) {
         busy: data.status === 'running',
       });
     if (data.type === 'title' && sessions.has(data.key)) sessions.get(data.key).title = data.title;
+    if (data.type === 'messages-deleted') {
+      try {
+        await refresh();
+      } catch (error) {
+        client.onError(error);
+      }
+    }
     if (['usage', 'view-changed', 'stream-end'].includes(data.type))
       refresh().catch(client.onError);
     for (const listener of listeners) listener(data);

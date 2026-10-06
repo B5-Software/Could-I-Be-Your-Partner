@@ -1023,6 +1023,7 @@ ipcMain.handle('avatar-frames:list', async () => {
 // 读取单个 SVG 头像框内容
 ipcMain.handle('avatar-frames:get', async (_, id) => {
   try {
+    if (typeof id !== 'string' || !/^[\w-]+(?:\.svg)?$/.test(id)) return { ok: false, error: 'Invalid avatar frame' };
     const file = id.endsWith('.svg') ? id : `${id}.svg`;
     const filePath = path.join(__dirname, '..', 'renderer', 'assets', 'avatar-frames', file);
     const content = await fs.promises.readFile(filePath, 'utf8');

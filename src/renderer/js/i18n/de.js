@@ -4052,3 +4052,9 @@ Object.assign(DE_DICT._textMap, {
   "ui.update.launcherReady": "Update heruntergeladen und geprüft. Mit /update install beenden und danach den bisherigen Startbefehl ausführen, um die neue Version zu nutzen.",
   "ui.update.launcherConfirm": "Das gemeinsame Backend beenden? Danach den bisherigen Startbefehl ausführen, um das heruntergeladene Update zu nutzen."
 });
+
+DE_DICT.ui.compaction = { running: 'Kontext wird komprimiert', done: 'Kontext komprimiert', error: 'Komprimierung fehlgeschlagen · Kontext erhalten', skipped: 'Keine Komprimierung erforderlich', estimate: 'Tokenzahlen sind Schätzungen; der gesamte Chatverlauf bleibt erhalten' };
+DE_DICT.ui.attachment = { unavailable: 'Anhang nicht verfügbar' };
+Object.assign(DE_DICT.ui.history ||= {}, { deleteWait: 'Vor dem Löschen das Ende der aktuellen Aufgabe abwarten', deleteTurn: 'Dialogrunde löschen', deleteTurnConfirm: 'Diese Dialogrunde und ihren ursprünglichen Kontext löschen? Bereits zusammengefasste Inhalte bleiben erhalten.' });
+
+Object.assign(DE_DICT.ui.update ||= {}, { newReady: 'Neue Version bereit', verified: 'SHA-256 geprüft', restartHint: 'Der Download ist bereit. Starte die App neu, um die neue Version zu installieren.', launcherHint: 'Sicher heruntergeladen. Beende das Backend und starte es erneut mit dem ursprünglichen Befehl.' });

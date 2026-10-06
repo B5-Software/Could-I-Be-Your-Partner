@@ -34,6 +34,9 @@
         return;
       }
       switch (type) {
+        case 'conversation-replaced':
+          replayBabeSession(sessionManager?.getByAgent(ag) || { agent: ag });
+          break;
         case 'user': addBabeMessage('user', data); break;
         case 'assistant':
           addBabeMessage('assistant', data);

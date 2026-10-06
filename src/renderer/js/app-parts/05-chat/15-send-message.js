@@ -40,12 +40,7 @@
       const attachments = [...currentAttachments];
       clearAttachments();
 
-      let displayText = text;
-      if (attachments.length > 0) {
-        const names = attachments.map(a => a.name).join(', ');
-        displayText += `\n[附件: ${names}]`;
-      }
-      addMessageToChat('user', displayText);
+      addMessageToChat('user', text, attachments);
 
       await copyAttachmentsToWorkspace(attachments);
 
@@ -94,12 +89,7 @@
     if (chatSession && !agent.running && !sessionManager.requestStart(chatSession)) {
       const queuedAttachments = [...currentAttachments];
       clearAttachments();
-      let queuedText = text;
-      if (queuedAttachments.length > 0) {
-        const names = queuedAttachments.map(a => a.name).join(', ');
-        queuedText += `\n[附件: ${names}]`;
-      }
-      addMessageToChat('user', queuedText);
+      addMessageToChat('user', text, queuedAttachments);
       sessionManager.queue(chatSession, { text, attachments: queuedAttachments });
       addSystemMessage('当前并发会话较多，本消息已排队，有空闲槽位后会自动开始。', { persist: false });
       return;
@@ -126,14 +116,9 @@
     clearAttachments();
 
     // Show message with attachment indicators
-    let displayText = text;
-    if (attachments.length > 0) {
-      const names = attachments.map(a => a.name).join(', ');
-      displayText += `\n[附件: ${names}]`;
-    }
-    addMessageToChat('user', displayText);
+    addMessageToChat('user', text, attachments);
     addThinkingIndicator();
-    window.api.webControlPushMessage('user', displayText);
+    window.api.webControlPushMessage('user', text);
 
     await copyAttachmentsToWorkspace(attachments);
 

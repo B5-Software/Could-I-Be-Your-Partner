@@ -52,9 +52,9 @@
           const msg = list[i];
           if (!msg || msg.metadata?.kind === 'context-update') continue;
           if (msg.role === 'user') {
-            addMessageToChat('user', extractTextContent(msg.content));
+            addMessageToChat('user', msg);
           } else if (msg.role === 'assistant') {
-            if (msg.content) addMessageToChat('assistant', extractTextContent(msg.content));
+            if (msg.content) addMessageToChat('assistant', msg);
             if (msg.tool_calls && msg.tool_calls.length > 0) {
               for (const tc of msg.tool_calls) {
                 const toolName = tc.function?.name || 'tool';

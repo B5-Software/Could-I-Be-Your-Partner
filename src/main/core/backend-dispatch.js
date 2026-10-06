@@ -37,6 +37,7 @@ function createBackendDispatch({ runtime, ipcMain, eventBus, desktop, bootState 
     'inject',
     'stop',
     'undo',
+    'deleteTurn',
     'close',
     'respond',
     'answerQuestions',
@@ -54,6 +55,7 @@ function createBackendDispatch({ runtime, ipcMain, eventBus, desktop, bootState 
     'agentAction',
     'configureSession',
     'prepareWorkspace',
+    'uploadAttachment',
   ]);
   return async function dispatch({ method, args = [] } = {}) {
     if (!Array.isArray(args) || args.length > 30) throw new Error('Invalid arguments');
@@ -69,6 +71,25 @@ function createBackendDispatch({ runtime, ipcMain, eventBus, desktop, bootState 
       };
     if (method === 'settings:catalog')
       return require('./settings-catalog').settingsCatalog(await runtime.getSettings());
+    if (method === 'chat:appearance') {
+      const settings = await runtime.getSettings();
+      const encode = async (profile = {}) => {
+        const avatar = profile.avatar
+          ? (await ipc.invoke('avatar:encodeFile', profile.avatar))?.dataUrl || ''
+          : '';
+        const frame =
+          profile.avatarFrame && /^[\w-]+$/.test(profile.avatarFrame)
+            ? (await ipc.invoke('avatar-frames:get', profile.avatarFrame))?.content || ''
+            : '';
+        return { name: profile.name || '', avatar, frame };
+      };
+      const [user, ai, babe] = await Promise.all([
+        encode(settings.userProfile),
+        encode(settings.aiPersona),
+        encode(settings.babe),
+      ]);
+      return { user, ai, babe, theme: settings.theme, animations: settings.animations !== false };
+    }
     if (method === 'boot:state') return bootState?.() || { ready: true };
     if (method === 'desktop:open')
       return desktop ? desktop() : { ok: false, error: 'No graphical environment available' };

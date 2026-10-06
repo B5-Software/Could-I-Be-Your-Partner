@@ -36,6 +36,7 @@ function loadAgentCore() {
   const { BUNDLED_SKILLS } = require('../data/bundled-skills.js');
   const TokenUsage = require('../shared/token-usage.js');
   const TokenPolicy = require('../shared/token-policy.js');
+  const AttachmentData = require('../shared/attachments.js');
 
   const globals = {
     ContextManager,
@@ -45,6 +46,7 @@ function loadAgentCore() {
     BUNDLED_SKILLS,
     TokenUsage,
     TokenPolicy,
+    AttachmentData,
     titleUtils,
     // tools-def 的工具目录与注册函数（agent.js 以自由标识符调用）
     TOOL_DEFINITIONS: toolsDef.TOOL_DEFINITIONS,

@@ -100,6 +100,52 @@ function llmScript(responses) {
   return handler;
 }
 
+test('uploaded attachment reaches the selected workspace, survives history and never replaces the display caption with a path', async () => {
+  const chat = llmScript([{ role: 'assistant', content: 'Reviewed' }]);
+  const handlers = baseHandlers({ llmChat: chat });
+  let uploadedBytes;
+  handlers.set('fs:saveUploadedFile', (_event, name, data) => {
+    uploadedBytes = Buffer.from(data.split(',')[1], 'base64').toString();
+    return { ok: true, path: '/uploads/' + name, isImage: false };
+  });
+  handlers.set('fs:copyFile', (_event, source, target) => {
+    assert.equal(source, '/uploads/notes.md');
+    assert.match(target, /cibyp-test-ws\/[^/]+_notes\.md$/);
+    return { ok: true };
+  });
+  const runtime = createAgentRuntime({
+    ipcMain: createFakeIpcMain(handlers),
+    eventBus: createEventBus(),
+  });
+  try {
+    runtime.createSession({ key: 'attachment' });
+    await assert.rejects(
+      runtime.uploadAttachment('attachment', { name: 'bad', data: '*' }),
+      /base64/,
+    );
+    const file = await runtime.uploadAttachment('attachment', {
+      name: '../notes.md',
+      type: 'text/markdown',
+      data: Buffer.from('Hello').toString('base64'),
+    });
+    assert.equal(uploadedBytes, 'Hello');
+    await runtime.sendMessage('attachment', 'Please review', [file]);
+    const message = runtime.getSessionDetails('attachment').messages.find((m) => m.role === 'user');
+    assert.equal(message.content, 'Please review');
+    assert.equal(message.attachments[0].name, 'notes.md');
+    assert.ok(
+      chat.calls.some((call) => call.messages.some((m) => String(m.content).includes(file.path))),
+    );
+    assert.equal(
+      runtime.getView('attachment').messages.find((m) => m.role === 'user').metadata.attachments[0]
+        .path,
+      file.path,
+    );
+  } finally {
+    runtime.dispose();
+  }
+});
+
 test('subscription usage is requested on demand, coalesced per session and discarded after close', async () => {
   const handlers = baseHandlers();
   let requests = 0,
@@ -711,7 +757,7 @@ test('/undo immediately after submission restores a message before Agent initial
   );
 });
 
-test('/undo prunes the last user turn, removes obsolete summaries and rebuilds hot context after rewinding', async () => {
+test('/undo removes the last raw turn from both stores while retaining independent summaries', async () => {
   const handlers = baseHandlers({ llmChat: llmScript([{ content: 'done' }]) });
   let saved;
   handlers.set('history:save', (_event, value) => {
@@ -736,12 +782,63 @@ test('/undo prunes the last user turn, removes obsolete summaries and rebuilds h
   assert.equal(result.text, 'second');
   assert.equal(context.getHistoryMessages().filter((m) => m.role === 'user').length, 1);
   assert.equal(context.getHistoryMessages().find((m) => m.role === 'user').content, 'first');
-  assert.deepEqual(context.summaries, []);
-  assert.deepEqual(context.pinnedMessages, []);
+  assert.deepEqual(context.summaries, ['obsolete']);
+  assert.deepEqual(context.pinnedMessages, [1]);
   assert.equal(context._admittedSources, null);
   assert.ok(!JSON.stringify(saved).includes('second'));
   await runtime.sendMessage('undo', 'replacement');
   assert.ok(context.getHistoryMessages().some((m) => m.content === 'replacement'));
+});
+
+test('deleting a turn removes matching raw history and working messages, retains checkpoints and survives reload', async () => {
+  const handlers = baseHandlers({ llmChat: llmScript([{ content: 'done' }]) });
+  let saved;
+  handlers.set('history:save', (_event, value) => {
+    saved = value;
+    return { ok: true };
+  });
+  const runtime = createAgentRuntime({
+    ipcMain: createFakeIpcMain(handlers),
+    eventBus: createEventBus(),
+  });
+  await runtime.sendMessage('delete-turn', 'first');
+  await runtime.sendMessage('delete-turn', 'second');
+  const context = runtime.sessions.get('delete-turn').agent.contextManager;
+  const first = context.getHistoryMessages().find((m) => m.role === 'user');
+  context.messages = [
+    {
+      role: 'assistant',
+      content: 'A preserved checkpoint',
+      metadata: { kind: 'checkpoint', compactedIds: [first.metadata.messageId] },
+    },
+    ...context.messages.slice(2),
+  ];
+  const checkpoint = context.messages[0];
+  const deleted = [];
+  runtime.onEvent((event) => {
+    if (event.type === 'messages-deleted') deleted.push(event);
+  });
+  assert.equal((await runtime.deleteTurn('delete-turn', 'unknown')).ok, false);
+  const session = runtime.sessions.get('delete-turn');
+  session.busy = true;
+  assert.equal((await runtime.deleteTurn('delete-turn', first.metadata.messageId)).ok, false);
+  session.busy = false;
+  const result = await runtime.deleteTurn('delete-turn', first.metadata.messageId);
+  assert.equal(result.ok, true);
+  assert.equal(result.retainedInSummary, true);
+  assert.equal(context.messages[0], checkpoint);
+  assert.ok(!context.getHistoryMessages().some((m) => m.content === 'first'));
+  assert.ok(context.getHistoryMessages().some((m) => m.content === 'second'));
+  assert.equal(deleted.length, 1);
+  assert.ok(result.view.displayMessages.every((m) => m.id));
+  context.loadFromHistory(saved.messages, saved.workingContext);
+  assert.equal(context.messages[0].content, 'A preserved checkpoint');
+  assert.ok(!context.getHistoryMessages().some((m) => m.content === 'first'));
+  const second = context.getHistoryMessages().find((m) => m.role === 'user');
+  const raw = await runtime.deleteTurn('delete-turn', second.metadata.messageId);
+  assert.equal(raw.retainedInSummary, false);
+  assert.equal(context.messages.length, 1);
+  assert.equal(context.getHistoryMessages().length, 0);
 });
 
 test('/undo stops an active turn and withdraws an unconsumed hot message without deleting the preceding turn', async () => {

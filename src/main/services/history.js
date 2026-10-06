@@ -129,7 +129,10 @@ module.exports = function createHistoryService({
     if (!conversation || !Array.isArray(conversation.messages)) return conversation;
     const dir = dataPath(historyImagesDir, String(conversation.id || 'unknown'));
     let counter = 0;
-    for (const msg of conversation.messages) {
+    for (const msg of [
+      ...conversation.messages,
+      ...(conversation.workingContext?.entries || []).map((entry) => entry.message).filter(Boolean),
+    ]) {
       if (!Array.isArray(msg && msg.content)) continue;
       for (const part of msg.content) {
         const url = part && part.image_url && part.image_url.url;
@@ -156,7 +159,10 @@ module.exports = function createHistoryService({
   function _rehydrateHistoryImages(conversation) {
     if (!conversation || !Array.isArray(conversation.messages)) return conversation;
     const { fileURLToPath } = require('url');
-    for (const msg of conversation.messages) {
+    for (const msg of [
+      ...conversation.messages,
+      ...(conversation.workingContext?.entries || []).map((entry) => entry.message).filter(Boolean),
+    ]) {
       if (!Array.isArray(msg && msg.content)) continue;
       for (const part of msg.content) {
         const iu = part && part.image_url;

@@ -477,6 +477,11 @@ function normalizeMessagesForThinking(messages) {
   if (!Array.isArray(messages) || messages.length === 0) return messages;
   let changed = false;
   const out = messages.map((m) => {
+    if (m?.metadata) {
+      changed = true;
+      m = { ...m };
+      delete m.metadata;
+    }
     if (m && m.role === 'assistant' && (m.reasoning !== undefined && m.reasoning !== null)
         && m.reasoning_content === undefined) {
       changed = true;
@@ -2099,7 +2104,7 @@ function broadcastThemeChanged() {
 }
 function broadcastSettingsChanged() {
   codeOSSService.syncPersonalization();
-  const payload = { language: settings.language, theme: settings.theme, ime: settings.ime, voice: settings.voice, tarotVisible: settings.tarotVisible };
+  const payload = { language: settings.language, theme: settings.theme, ime: settings.ime, voice: settings.voice, tarotVisible: settings.tarotVisible, animations: settings.animations !== false, modalAnimations: settings.modalAnimations !== false };
   publishEvent('settings:changed', payload);
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) win.webContents.send('settings:changed', payload);
@@ -3848,6 +3853,8 @@ ipcMain.handle('fs:readFileBase64', (_, filePath) => {
 // ---- IPC: Save uploaded file ----
 ipcMain.handle('fs:saveUploadedFile', (_, fileName, data) => {
   try {
+    fileName = String(fileName || '').split(/[\\/]/).pop().replace(/[\x00-\x1f:*?"<>|]/g, '_');
+    if (!fileName || fileName === '.' || fileName === '..') return { ok: false, error: 'Invalid attachment name' };
     const ext = path.extname(fileName).toLowerCase();
     const isImage = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg'].includes(ext);
     const targetDir = isImage ? imagesDir : path.join(userDataPath, 'uploads');

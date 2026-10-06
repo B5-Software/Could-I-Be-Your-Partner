@@ -38,7 +38,8 @@ const realFetch = global.fetch;
 require('undici').fetch = async (url, options) => {
   if (String(url).includes('stub.local')) {
     calls++;
-    await new Promise((resolve) => setTimeout(resolve, 160));
+    const compacting = String(options?.body || '').includes('压缩引擎');
+    await new Promise((resolve) => setTimeout(resolve, compacting ? 1800 : 160));
     return {
       ok: true,
       status: 200,
@@ -139,6 +140,9 @@ app.on('web-contents-created', (_event, contents) => {
         partition: 'webui-integration',
       },
     });
+    web.setOpacity(0.01);
+    web.setSkipTaskbar(true);
+    web.showInactive();
     await web.loadURL(status.url + '/login');
     await web.webContents.executeJavaScript(
       `document.querySelector('#password').value='shared-backend-test';document.querySelector('form').requestSubmit();`,
@@ -211,6 +215,114 @@ app.on('web-contents-created', (_event, contents) => {
       path.join(screenshots, 'update-ready-webui.png'),
       (await web.webContents.capturePage()).toPNG(),
     );
+    // Exercise the real owner, GUI and browser indicator with a delayed summary.
+    const attachment = await client.request('uploadAttachment', key, {
+      name: 'project-notes.md',
+      type: 'text/markdown',
+      data: Buffer.from('Attachment preview fixture').toString('base64'),
+    });
+    await runtime.sendMessage(key, 'Review the attached project notes.', [attachment]);
+    await until(
+      () =>
+        web.webContents.executeJavaScript('!!document.querySelector(".message-attachment-card")'),
+      'structured attachment card',
+    );
+    assert.equal(
+      await web.webContents.executeJavaScript(
+        'document.querySelector(".message-attachment-card").textContent.includes("project-notes.md")',
+      ),
+      true,
+    );
+    assert.equal(
+      await web.webContents.executeJavaScript(
+        'document.querySelector(".message-attachment-card").textContent.includes("/workspace")',
+      ),
+      false,
+    );
+    const owner = main.getAgentRuntime().sessions.get(key).agent;
+    owner.contextManager.addUserMessage('Confirmed project requirement. '.repeat(1800), {
+      displayContent: 'Earlier project requirements',
+      attachments: [],
+    });
+    owner.contextManager.addAssistantMessage(
+      'Keep the project constraints and the attachment path.',
+    );
+    owner.contextManager.addUserMessage('Continue implementing the current task.');
+    const originalTranscript = JSON.stringify(owner.contextManager.getHistoryMessages());
+    const compactEvents = [];
+    const stopCompactEvents = runtime.onEvent((event) => {
+      if (event.type === 'context-compaction') compactEvents.push(event.data);
+    });
+    const compacting = client.request('agentAction', key, 'compactNow', []);
+    await until(
+      () =>
+        web.webContents.executeJavaScript(
+          'document.querySelector("#chat-context-indicator-compaction")?.dataset.phase === "running"',
+        ),
+      'live browser compaction status',
+    );
+    await until(
+      () =>
+        gui.webContents.executeJavaScript(
+          'document.querySelector("#chat-context-indicator-compaction")?.dataset.phase === "running"',
+        ),
+      'live GUI compaction status',
+    );
+    await pause(100);
+    fs.writeFileSync(
+      path.join(screenshots, 'context-compacting.png'),
+      (await web.webContents.capturePage()).toPNG(),
+    );
+    assert.equal(
+      (await client.request('sendMessage', key, 'Do not lose this message')).ok,
+      false,
+      'manual compaction cannot silently enqueue a message',
+    );
+    const compactResult = await compacting;
+    assert.equal(compactResult.result.ok, true);
+    await until(
+      () =>
+        web.webContents.executeJavaScript(
+          'document.querySelector("#chat-context-indicator-compaction")?.dataset.phase === "done"',
+        ),
+      'completed browser compaction status',
+    );
+    assert.ok(compactEvents.some((state) => state.phase === 'running'));
+    assert.equal(compactEvents.at(-1).phase, 'done');
+    assert.ok(compactEvents.at(-1).afterTokens < compactEvents.at(-1).beforeTokens);
+    assert.equal(JSON.stringify(owner.contextManager.getHistoryMessages()), originalTranscript);
+    assert.equal(
+      (await client.request('getSessionDetails', key)).messages.some(
+        (m) => m.attachments?.[0]?.name === 'project-notes.md',
+      ),
+      true,
+    );
+    await pause(300);
+    fs.writeFileSync(
+      path.join(screenshots, 'context-compacted.png'),
+      (await web.webContents.capturePage()).toPNG(),
+    );
+    stopCompactEvents();
+    await runtime.saveSettings({ animations: false });
+    await until(
+      () =>
+        web.webContents.executeJavaScript('document.documentElement.dataset.animations === "off"'),
+      'global motion preference',
+    );
+    assert.equal(
+      await web.webContents.executeJavaScript(
+        'document.body.animate([{opacity:0},{opacity:1}], {duration:900}).effect.getTiming().duration',
+      ),
+      0,
+      'all Web Animations follow the global switch',
+    );
+    await until(
+      () =>
+        web.webContents.executeJavaScript(
+          'document.querySelector("#chat-context-indicator-compaction")?.hidden',
+        ),
+      'completion indicator expires',
+    );
     assert.equal((await runtime.api.updatesStatus()).phase, 'ready');
     const restored = new AppUpdates({ app, settings: () => ({}), publish() {} });
     await restored.restore();
@@ -256,6 +368,33 @@ app.on('web-contents-created', (_event, contents) => {
       BrowserWindow.getAllWindows().length,
       count,
       'picker does not create a native window',
+    );
+    const originalUser = owner.contextManager
+      .getHistoryMessages()
+      .find((m) => m.role === 'user' && m.metadata?.attachments?.length);
+    assert.ok(originalUser?.metadata.messageId);
+    await web.webContents.executeJavaScript(
+      `window.confirmDialog = async () => true; document.querySelector('.message-attachment-card').closest('.message.user').dispatchEvent(new MouseEvent('contextmenu', {bubbles:true,clientX:250,clientY:230})); document.querySelector('.message-context-menu').lastElementChild.click();`,
+    );
+    await until(
+      () =>
+        !owner.contextManager
+          .getHistoryMessages()
+          .some((m) => m.metadata?.messageId === originalUser.metadata.messageId),
+      'message deletion reaches backend history',
+    );
+    await until(
+      () =>
+        web.webContents.executeJavaScript(
+          `!document.querySelector('#chat-messages').textContent.includes('Review the attached project notes.')`,
+        ),
+      'deletion replay',
+    );
+    assert.ok(
+      owner.contextManager.messages.some((m) =>
+        m.metadata?.compactedIds?.includes(originalUser.metadata.messageId),
+      ),
+      'existing checkpoint remains after deleting its original turn',
     );
     console.log(
       '[shared-backend] Shared runtime, one verified update and client-owned centered file picker passed.',

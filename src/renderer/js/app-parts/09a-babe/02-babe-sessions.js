@@ -87,7 +87,7 @@
           const m = messages[i];
           if (m.metadata?.kind === 'context-update') continue;
           if (m.role === 'user') {
-            addBabeMessage('user', extractTextContent(m.content) || '[多模态内容]');
+            addBabeMessage('user', m);
           } else if (m.role === 'assistant') {
             const textContent = extractTextContent(m.content);
             if (textContent) addBabeMessage('assistant', textContent);

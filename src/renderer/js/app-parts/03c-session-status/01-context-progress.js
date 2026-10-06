@@ -22,8 +22,9 @@
     const progressText = document.getElementById(textId);
     if (!progressFill || !progressText) return;
     const indicator = progressFill.closest('.context-indicator');
+    window.CibypCompactionUI?.update(agentInstance, indicator?.id);
 
-    let bd = (typeof cm.getUsageBreakdown === 'function') ? cm.getUsageBreakdown() : null;
+    let bd = agentInstance._backendStats?.context || ((typeof cm.getUsageBreakdown === 'function') ? cm.getUsageBreakdown() : null);
     if (!bd) {
       // 兜底（理论不达）：无 getUsageBreakdown 的旧实例按本地估算
       const stats = cm.getStats ? cm.getStats() : null;

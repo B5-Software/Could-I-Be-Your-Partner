@@ -4021,3 +4021,9 @@ Object.assign(EN_DICT._textMap, {
   "ui.update.launcherReady": "Update downloaded and verified. Run /update install to exit, then run your original launch command to use the new version.",
   "ui.update.launcherConfirm": "Exit the shared backend? Run your original launch command again to use the downloaded update."
 });
+
+EN_DICT.ui.compaction = { running: 'Compacting context', done: 'Context compacted', error: 'Compaction failed · context preserved', skipped: 'No compaction needed', estimate: 'Token counts are estimates; the complete chat history is retained' };
+EN_DICT.ui.attachment = { unavailable: 'Attachment unavailable' };
+Object.assign(EN_DICT.ui.history ||= {}, { deleteWait: 'Wait for the current task to finish before deleting messages', deleteTurn: 'Delete turn', deleteTurnConfirm: 'Delete this turn and its raw context? Content already merged into a summary will remain.' });
+
+Object.assign(EN_DICT.ui.update ||= {}, { newReady: 'New version ready', verified: 'SHA-256 verified', restartHint: 'The download is ready. Restart the app when you are ready to install.', launcherHint: 'Safely downloaded. Exit the backend, then run your original command to use the new version.' });

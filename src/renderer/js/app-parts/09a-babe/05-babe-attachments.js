@@ -110,7 +110,7 @@
         path: att.path,
         isImage: att.isImage
       }));
-      addBabeMessage('user', text);
+      addBabeMessage('user', text, queued);
       input.value = '';
       babeAttachments = [];
       renderBabeAttachments();
@@ -141,12 +141,7 @@
       }
     }
     // 显示用户消息（含附件标记）
-    let displayText = text;
-    if (attachments.length > 0) {
-      const names = attachments.map(a => a.name).join(', ');
-      displayText += `\n[附件: ${names}]`;
-    }
-    addBabeMessage('user', displayText);
+    addBabeMessage('user', text, attachments);
     input.value = '';
     input.style.height = 'auto';
     // 推送输入框清空到 WebUI

@@ -67,6 +67,9 @@
         return;
       }
       switch (type) {
+        case 'conversation-replaced':
+          replayCodeSession(sessionManager?.getByAgent(ag) || { agent: ag });
+          break;
         case 'user':
           addCodeMessage('user', data);
           break;

@@ -163,6 +163,16 @@ function renderEntry(theme, entry, width, opts) {
     case 'user': {
       const indent = '  ';
       const lines = layoutText(theme, entry.text, width - 4, indent);
+      for (const file of entry.attachments || []) {
+        lines.push(
+          indent +
+            paint(
+              theme,
+              accentFor(state.mode),
+              '▣ ' + truncate(file.name || 'attachment', width - 8),
+            ),
+        );
+      }
       const mark = paint(theme, 'subtle', FIGURES.pointer + ' ');
       return lines.map((line, index) => {
         const content = index === 0 ? mark + line : '  ' + line;
@@ -357,6 +367,38 @@ function renderStatusLine(theme, state, width) {
   }
   if (state.workspace && state.mode === 'code') {
     parts.push(truncate(state.workspace, 24));
+  }
+  const compact = state.compaction;
+  if (
+    compact &&
+    (!compact.finishedAt ||
+      (state.now || Date.now()) - compact.finishedAt < (compact.phase === 'error' ? 12000 : 7000))
+  ) {
+    const label =
+      compact.phase === 'running'
+        ? t('ui.compaction.running', '正在压缩上下文')
+        : compact.phase === 'done'
+          ? t('ui.compaction.done', '上下文已压缩')
+          : compact.phase === 'error'
+            ? t('ui.compaction.error', '压缩失败 · 上下文已保留')
+            : '';
+    if (label)
+      parts.push(
+        paint(
+          theme,
+          compact.phase === 'error' ? 'error' : accent,
+          (compact.phase === 'running'
+            ? FIGURES.spinner[(state.spinnerFrame || 0) % FIGURES.spinner.length] + ' '
+            : '') +
+            label +
+            (compact.phase === 'done'
+              ? ' ' +
+                fmtTokenCount(compact.beforeTokens) +
+                ' → ' +
+                fmtTokenCount(compact.afterTokens)
+              : ''),
+        ),
+      );
   }
   const sep = paint(theme, 'subtle', ' │ ', { dim: true });
   const left = parts.join(sep);

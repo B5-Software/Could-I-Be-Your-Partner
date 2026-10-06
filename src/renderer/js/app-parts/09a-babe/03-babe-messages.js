@@ -39,7 +39,11 @@
     };
   }
 
-  function addBabeMessage(role, content) {
+  function addBabeMessage(role, content, attachments = []) {
+    if (content && typeof content === 'object') {
+      const display = AttachmentData.presentation({ role, ...content });
+      content = display.content; attachments = display.attachments;
+    }
     const msgsEl = document.getElementById('babe-chat-messages');
     if (!msgsEl) return;
     const welcome = msgsEl.querySelector('.babe-welcome');
@@ -69,10 +73,11 @@
         <div class="babe-msg-time">${new Date().toLocaleTimeString('zh-CN', {hour12: false})}</div>
       </div>`;
     msgsEl.appendChild(msg);
+    renderMessageAttachments(msg.querySelector('.babe-msg-body'), attachments);
     // 增量推送：Babe 消息追加到 WebUI
     WebUIMirror.pushDomEvent({ type: 'dom_append', container: '#babe-chat-messages', html: msg.outerHTML });
     scrollChatToBottom(msgsEl);
-    babeMessages.push({ role, content });
+    babeMessages.push({ role, content, attachments: AttachmentData.normalize(attachments) });
   }
 
   function addBabeToolCall(data) {

@@ -1950,10 +1950,10 @@ ${affectionDesc}
           }
         }
       }
-      this.contextManager.addUserMessage(contentParts);
+      this.contextManager.addUserMessage(contentParts, attachments.length ? { displayContent: userMessage, attachments: AttachmentData.normalize(attachments) } : undefined);
     // 非视觉模型：图片附件不处理（外置视觉仅通过 readImageFile 工具按需调用）
     } else {
-      this.contextManager.addUserMessage(fullMessage);
+      this.contextManager.addUserMessage(fullMessage, attachments.length ? { displayContent: userMessage, attachments: AttachmentData.normalize(attachments) } : undefined);
     }
 
     // Save immediately after user message so history exists even before agent finishes
@@ -2003,6 +2003,7 @@ ${affectionDesc}
         updatedAt: new Date().toISOString(),
         schemaVersion: 2, // 历史格式版本：新版持久化完整 transcript（historyMessages）到 messages
         messages: this.contextManager.getHistoryMessages(),
+        workingContext: this.contextManager.exportWorkingState(),
         todoItems: this.todoItems.map(item => ({ ...item })),
         todoIdCounter: this.todoIdCounter,
         summaries: this.contextManager.summaries,
@@ -2108,7 +2109,8 @@ ${affectionDesc}
     // 上下文管理器与历史记录解耦：
     // - historyMessages: 完整 transcript（永不破坏）
     // - messages: 工作上下文（可被压缩/清理，独立于 historyMessages）
-    // 不恢复 summaries：避免完整 transcript + 旧摘要导致上下文溢出。
+    // Restore the independent working snapshot when present. The transcript remains
+    // complete for display; checkpoint summaries must never be appended to it.
     // 上下文管理器会在下次 agentLoop 中按需重新压缩。
     let historyMsgs = Array.isArray(conversation.messages) ? conversation.messages : [];
     // 新版上下文模式 → 旧版历史自动迁移：
@@ -2118,7 +2120,7 @@ ${affectionDesc}
     if (conversation.schemaVersion !== 2) {
       historyMsgs = this._migrateLegacyHistory(conversation, historyMsgs);
     }
-    this.contextManager.loadFromHistory(historyMsgs);
+    this.contextManager.loadFromHistory(historyMsgs, conversation.workingContext);
     const todoIds = new Set();
     this.todoItems = (Array.isArray(conversation.todoItems) ? conversation.todoItems : [])
       .filter(item => item && Number.isSafeInteger(item.id) && item.id > 0 && typeof item.text === 'string' && item.text.trim() && !todoIds.has(item.id) && todoIds.add(item.id))
@@ -2284,7 +2286,7 @@ ${affectionDesc}
       }).join('\n');
       fullMessage = userMessage + '\n\n' + attachInfo;
     }
-    this.hotMessages.push(fullMessage);
+    this.hotMessages.push(attachments.length ? { content: fullMessage, metadata: { displayContent: userMessage, attachments: AttachmentData.normalize(attachments) } } : fullMessage);
   }
 
   /**
@@ -2439,7 +2441,8 @@ ${affectionDesc}
     let newUsage1 = usageOf(readStats());
     if (newUsage1 > thresholdPct && this.autoCompactFailures < maxFailures) {
       try {
-        const sumRes = await ctx.summarizeWithLLM({
+        const sumRes = await this._summarizeContext(ctx, {
+          source: isSub ? 'sub-agent' : 'auto',
           policy,
           sessionKey: this.sessionKey || null,
           tools: this.getRuntimeToolSchemas(), // 会话回放：复用暖前缀缓存
@@ -2447,7 +2450,9 @@ ${affectionDesc}
           maxTokens: this.getTokenLimits().summaryTokens || 2048,
           ...this._llmOptions()
         });
-        if (sumRes.ok && !sumRes.skipped) {
+        if (sumRes.skipped) {
+          action = 'summary_skipped';
+        } else if (sumRes.ok) {
           this.autoCompactFailures = 0;
           action = action === 'prune' ? 'prune_summary' : 'summary';
           if (notify) notify(`${prefix}已自动压缩上下文（${sumRes.message}），当前 ${usageOf(readStats()).toFixed(1)}%（含输出预留）`);
@@ -2505,7 +2510,7 @@ ${affectionDesc}
       // 热对话：注入用户在Agent工作期间发送的新消息
       while (this.hotMessages.length > 0) {
         const hotMsg = this.hotMessages.shift();
-        this.contextManager.addUserMessage(`【用户追加消息】${hotMsg}`);
+        this.contextManager.addUserMessage(`【用户追加消息】${typeof hotMsg === 'string' ? hotMsg : hotMsg.content}`, typeof hotMsg === 'object' ? hotMsg.metadata : undefined);
         if (this.onMessage) this.onMessage('system', '已将新消息注入当前对话');
       }
 
@@ -3737,7 +3742,11 @@ ${affectionDesc}
         case 'manageContext': return this.contextManager.manage(args.action, args);
         case 'autoSummarizeContext': {
           // Use the new LLM summary path; falls back to mechanical on failure.
-          const sumRes = await this.contextManager.summarizeWithLLM({
+          const sumRes = await this._summarizeContext(this.contextManager, {
+            ...this._llmOptions(),
+            source: 'tool',
+            maxRetries: this.settings?.contextCompaction?.compactionRetries ?? 1,
+            maxTokens: this.getTokenLimits().summaryTokens || 2048,
             keepLast: args.keepLast || 6, // 向后兼容参数，新引擎按 token 预算忽略
             sessionKey: this.sessionKey || null,
             tools: this.getRuntimeToolSchemas()
@@ -5372,20 +5381,32 @@ ${tarotLine}
    * /compact [focus]：立即压缩当前会话上下文。
    * 上下文未达水位线时返回 skipped（提示无需压缩）。
    */
+  async _summarizeContext(ctx, options) {
+    const result = await ctx.summarizeWithLLM({
+      ...options,
+      onProgress: state => {
+        // Sub-agent summaries have their own manager and must not replace the main indicator.
+        if (ctx === this.contextManager) this.onMessage?.('context-compaction', state);
+      }
+    });
+    if (ctx === this.contextManager && result.ok && !result.skipped) await this.saveToHistory();
+    return result;
+  }
+
   async compactNow(focus) {
     if (this.running) {
       return { ok: false, skipped: false, message: 'Agent 正在运行，请稍后再压缩' };
     }
     try {
-      return await this.contextManager.summarizeWithLLM({
+      return await this._summarizeContext(this.contextManager, {
+        ...this._llmOptions(),
+        source: 'manual',
         sessionKey: this.sessionKey || null,
         tools: this.getRuntimeToolSchemas(),
         focus: focus || null,
         force: true, // /compact 语义：无视当前使用率，强制压缩
         maxRetries: this.settings?.contextCompaction?.compactionRetries ?? 1,
-        maxTokens: this.settings?.contextCompaction?.summarizeMaxTokens || 2048,
-        model: this.llmOverride?.model || null,
-        reasoningEffort: this.getActiveReasoningEffort()
+        maxTokens: this.getTokenLimits().summaryTokens || 2048
       });
     } catch (e) {
       return { ok: false, skipped: false, message: e && e.message ? e.message : String(e) };

@@ -77,14 +77,7 @@
     btn.disabled = true;
     if (statusEl) statusEl.textContent = '正在压缩…';
     try {
-      const res = await cm.summarizeWithLLM({
-        ...targetAgent._llmOptions(),
-        force: true,
-        maxRetries: targetAgent.settings?.contextCompaction?.compactionRetries ?? 1,
-        maxTokens: TokenPolicy.resolve(targetAgent.settings, targetAgent.llmOverride || {}).summaryTokens,
-        sessionKey: targetAgent.sessionKey || null,
-        tools: targetAgent.getRuntimeToolSchemas?.() || null
-      });
+      const res = await targetAgent.compactNow();
       if (statusEl) {
         const stats = cm.getStats();
         statusEl.textContent = res.skipped

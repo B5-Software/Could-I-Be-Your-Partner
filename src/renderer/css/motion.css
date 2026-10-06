@@ -20,7 +20,7 @@
 @keyframes cibyp-fade-in { from { opacity: 0; } to { opacity: 1; } }
 
 html[data-animations="off"] *, html[data-animations="off"] *::before,
-html[data-animations="off"] *::after { animation: none !important; transition: none !important; }
+html[data-animations="off"] *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after { animation: none !important; transition: none !important; }
+  *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 }

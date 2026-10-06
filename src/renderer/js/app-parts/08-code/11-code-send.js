@@ -18,8 +18,7 @@
     const session = sessionManager?.getByAgent(ag);
     const canStart = !session || sessionManager.requestStart(session);
     if (!canStart && !allowQueue) throw new Error('当前并发会话已达上限，请稍后重试。');
-    const display = text + (attachments.length ? '\n[附件: ' + attachments.map(item => item.name).join(', ') + ']' : '');
-    addCodeMessage('user', display);
+    addCodeMessage('user', text, true, attachments);
     clearCodeAttachments();
     const input = document.getElementById('code-chat-input');
     input.value = '';

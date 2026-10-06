@@ -69,6 +69,7 @@ class TuiApp {
       usage: null,
       costUSD: 0,
       context: null,
+      compaction: null,
       boot: null, // VM 启动中：{ progress, detail }；就绪/失败后置 null
       thinkingExpanded: true, // TUI-only persisted /thinking preference
       todos: [],
@@ -222,8 +223,9 @@ class TuiApp {
     for (const view of this._sessionViews.values()) {
       if (view.state.toast?.expiresAt <= this.clock()) view.state.toast = null;
     }
-    this.state.spinnerFrame = (this.state.spinnerFrame + 1) % 12;
-    this.state.blink = !this.state.blink;
+    this.state.spinnerFrame =
+      this.state.settings?.animations === false ? 0 : (this.state.spinnerFrame + 1) % 12;
+    this.state.blink = this.state.settings?.animations === false ? false : !this.state.blink;
     const selection = this.state.selection;
     if (selection?.dragging && selection.moved) {
       const transcript = this.frame().transcript;
@@ -909,6 +911,21 @@ class TuiApp {
   handleRuntimeEvent(event) {
     if (!event || !event.type) return;
     if (event.type === 'settingsChanged') return this.refreshSettings();
+    if (event.type === 'messages-deleted') {
+      this._sessionViews.delete(event.key);
+      if (event.key !== this.activeKey) return;
+      const editor = this.editor,
+        attachments = this.attachments;
+      this._switchSession(this.activeKey, { reload: true })
+        .then(() => {
+          this.editor = editor;
+          this.attachments = attachments;
+        })
+        .catch((error) => {
+          this.state.toast = { text: error.message };
+        });
+      return;
+    }
     if (event.type === 'reconnected') {
       const editor = this.editor,
         attachments = this.attachments;
@@ -990,7 +1007,7 @@ class TuiApp {
       }
       case 'message': {
         if (event.role === 'user') {
-          this.pushEntry({ kind: 'user', text: event.content });
+          this.pushEntry({ kind: 'user', text: event.content, attachments: event.attachments });
           break;
         }
         if (this._streamEntry && event.role === 'assistant') {
@@ -1189,6 +1206,7 @@ class TuiApp {
           (event.data && event.data.context) ||
           (event.data && event.data.max ? event.data : null);
         if (context) this.state.context = context;
+        if (Object.hasOwn(event, 'compaction')) this.state.compaction = event.compaction;
         const cost = event.costUSD != null ? event.costUSD : event.data && event.data.costUSD;
         if (typeof cost === 'number') this.state.costUSD = cost;
         else if (cost === null) this.state.costUSD = 0;
@@ -1196,6 +1214,9 @@ class TuiApp {
       }
       case 'context-progress':
         this.state.context = event.data || null;
+        break;
+      case 'context-compaction':
+        this.state.compaction = event.data;
         break;
       case 'optimize-tools-start':
         this.state.spinnerLabel = t('ui.tui.spinnerOptimizing', '优化工具选择');
@@ -1288,6 +1309,7 @@ class TuiApp {
       toast: null,
       usage: null,
       context: null,
+      compaction: null,
       costUSD: 0,
       elapsedMs: 0,
       selection: null,
@@ -1359,6 +1381,7 @@ class TuiApp {
       running: session.busy === true,
       usage: null,
       context: null,
+      compaction: null,
       costUSD: 0,
       elapsedMs: 0,
       workspaceError: '',
@@ -1390,6 +1413,7 @@ class TuiApp {
         Object.assign(this.state, {
           usage: stats.usage,
           context: stats.context,
+          compaction: stats.compaction,
           costUSD: stats.costUSD,
           subscriptionUsage: stats.subscriptionUsage,
         });
@@ -1793,6 +1817,18 @@ class TuiApp {
         return;
       }
       case 'compact': {
+        if (typeof this.runtime.agentAction === 'function') {
+          const result = await this.runtime.agentAction(this.activeKey, 'compactNow', [
+            argText.trim(),
+          ]);
+          if (!result.result?.ok)
+            this.state.toast = {
+              text: result.result?.message || t('ui.compaction.error', '压缩失败 · 上下文已保留'),
+              type: 'error',
+              expiresAt: this.clock() + 7000,
+            };
+          return;
+        }
         await this._send(
           t(
             'ui.tui.compactHint',
@@ -2204,11 +2240,12 @@ class TuiApp {
             .filter(Boolean)
             .join('\n')
         : message.content;
-      if (content || message.reasoning)
+      if (content || message.reasoning || message.attachments?.length)
         state.messages.push({
           kind: message.role,
           text: content || '',
           reasoning: message.reasoning || '',
+          attachments: message.attachments || [],
         });
     }
   }

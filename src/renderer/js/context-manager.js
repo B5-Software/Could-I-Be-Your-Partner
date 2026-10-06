@@ -103,6 +103,7 @@ class ContextManager {
     // 压缩事务锁：{ id, start, end, inProgress }。内存 + 会话状态持久化，
     // 崩溃后孤儿锁可检测（借鉴 dsh compaction/start…end 括号）。
     this.compactionLock = null;
+    this.compactionState = null;
     this.checkpointCount = 0;
     this.checkpointIndexes = new Set(); // messages 中 checkpoint 消息的下标（字节冻结）
     this.prunedIndexes = new Set(); // 已被 Tier0 剪枝的消息下标（不再二次改写，保证字节稳定）
@@ -288,6 +289,7 @@ class ContextManager {
   }
 
   addMessage(msg) {
+    msg = { ...msg, metadata: { ...msg.metadata, messageId: msg.metadata?.messageId || `msg-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}` } };
     // 同时追加到上下文与历史记录（共享引用）。
     // 历史记录不会被任何压缩/清理操作破坏（参见 lightTrim/microCompact/sanitize
     // 均采用 replace-not-mutate 模式）。
@@ -308,9 +310,9 @@ class ContextManager {
    * "完整 transcript + 旧摘要" 导致上下文溢出。
    * @param {Array} messages 历史消息数组
    */
-  loadFromHistory(messages) {
+  loadFromHistory(messages, workingState) {
     this.invalidateRealBasis();
-    const arr = Array.isArray(messages) ? messages : [];
+    const arr = Array.isArray(messages) ? messages.map(msg => ({ ...msg, metadata: { ...msg.metadata, messageId: msg.metadata?.messageId || `msg-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}` } })) : [];
     this.messages = arr.filter(msg => msg?.metadata?.kind !== 'context-update');
     this._admittedSources = null;
     this.historyMessages = arr.slice(); // 历史记录独立持有一份引用
@@ -321,8 +323,51 @@ class ContextManager {
     this.prunedIndexes = new Set();
     this.checkpointCount = 0;
     this.compactionLock = null;
+    this.compactionState = null;
     this._compactionInProgress = false;
     this.toolSchemaTokens = 0;
+    if (workingState?.version === 1 && Array.isArray(workingState.entries)) {
+      const history = new Map(arr.map(m => [m.metadata.messageId, m]));
+      this.messages = workingState.entries.map(entry => entry.historyId ? history.get(entry.historyId) : entry.message).filter(m => m && typeof m.role === 'string');
+      this.summaries = Array.isArray(workingState.summaries) ? workingState.summaries : [];
+      this.compactBoundaries = Array.isArray(workingState.boundaries) ? workingState.boundaries : [];
+      this.checkpointCount = Number(workingState.checkpointCount) || 0;
+      this.checkpointIndexes = new Set(this.messages.flatMap((m, i) => m.metadata?.kind === 'compaction-checkpoint' ? [i] : []));
+      this.prunedIndexes = new Set((workingState.prunedIndexes || []).filter(i => Number.isInteger(i) && i >= 0 && i < this.messages.length));
+      this.pinnedMessages = (workingState.pinnedMessages || []).filter(i => Number.isInteger(i) && i >= 0 && i < this.messages.length);
+      this.compactionState = workingState.compaction?.phase === 'running' ? null : workingState.compaction || null;
+      if (workingState.systemPrompt?.role === 'system') this.systemPrompt = workingState.systemPrompt;
+      this._admittedSources = Array.isArray(workingState.admittedSources) ? new Map(workingState.admittedSources) : null;
+      this._epochCheckpoint = this.checkpointCount;
+    }
+  }
+
+  exportWorkingState() {
+    const history = new Map(this.historyMessages.map(m => [m.metadata?.messageId, m]));
+    return {
+      version: 1,
+      // Unmodified tails reference the transcript; summaries and pruned results are separate.
+      entries: this.messages.map(m => history.get(m.metadata?.messageId) === m ? { historyId: m.metadata.messageId } : { message: m }),
+      summaries: this.summaries.slice(), boundaries: this.compactBoundaries.slice(),
+      checkpointCount: this.checkpointCount, prunedIndexes: [...this.prunedIndexes], pinnedMessages: this.pinnedMessages.slice(),
+      systemPrompt: this.systemPrompt, admittedSources: this._admittedSources ? [...this._admittedSources] : null,
+      compaction: this.compactionState
+    };
+  }
+
+  removeHistoryMessages(ids) {
+    const removed = new Set(ids);
+    const inSummary = this.messages.some(m => m.metadata?.compactedIds?.some(id => removed.has(id)));
+    this.historyMessages = this.historyMessages.filter(m => !removed.has(m.metadata?.messageId));
+    const retained = this.messages.filter(m => !removed.has(m.metadata?.messageId));
+    const remap = indices => new Set([...indices].map(i => retained.indexOf(this.messages[i])).filter(i => i >= 0));
+    this.checkpointIndexes = remap(this.checkpointIndexes);
+    this.prunedIndexes = remap(this.prunedIndexes);
+    this.pinnedMessages = [...remap(this.pinnedMessages)];
+    this.messages = retained;
+    if (!this.messages.some(m => m.metadata?.kind === 'context-update')) this._admittedSources = null;
+    this.invalidateRealBasis();
+    return { ok: true, removedFromSummary: false, retainedInSummary: inSummary };
   }
 
   /**
@@ -333,8 +378,8 @@ class ContextManager {
     return this.historyMessages.slice();
   }
 
-  addUserMessage(content) {
-    this.addMessage({ role: 'user', content });
+  addUserMessage(content, metadata) {
+    this.addMessage({ role: 'user', content, ...(metadata ? { metadata } : {}) });
   }
 
   addAssistantMessage(content, toolCalls, reasoning) {
@@ -644,7 +689,7 @@ class ContextManager {
    * 2. 摘要请求"会话回放"：system + 摘要块 + 被压缩区消息逐字节原样 + 末尾压缩指令，
    *    并携带当前 tools → 命中暖前缀缓存。
    * 3. 输出强制八段式 Markdown；只取 content。
-   * 4. 摘要必须短于源（shrink 验证），否则重试；重试耗尽则机械降级且不改坏表面。
+   * 4. 摘要（含包装）必须短于源，否则重试；失败保留完整工作上下文。
    * 5. 成功后 checkpoint 替换 head 范围并字节冻结。
    *
    * @returns {Promise<{ok, message, summary?, fallback?, skipped?, checkpoint?}>}
@@ -655,6 +700,25 @@ class ContextManager {
       return { ok: false, message: '已有压缩进行中', skipped: true };
     }
     this._compactionInProgress = true;
+    const transaction = { id: `${Date.now()}-${Math.random().toString(36).slice(2)}`, inProgress: true };
+    this.compactionLock = transaction;
+    const beforeTokens = this.getTotalTokens();
+    const report = (phase, extra = {}) => {
+      if (this.compactionLock !== transaction) return;
+      this.compactionState = {
+        id: transaction.id, phase, source: options.source || 'manual',
+        beforeTokens, afterTokens: this.getTotalTokens(), startedAt: transaction.startedAt,
+        ...extra
+      };
+      try { options.onProgress?.({ ...this.compactionState }); } catch { /* Display errors cannot affect a checkpoint. */ }
+    };
+    transaction.startedAt = Date.now();
+    const finish = (result) => {
+      report(result.skipped ? 'skipped' : result.ok ? 'done' : 'error', {
+        message: result.message, fallback: !!result.fallback, finishedAt: Date.now()
+      });
+      return result;
+    };
     try {
       const policy = this.resolvePolicy(options.policy);
       let range = this.findCompactRange(policy);
@@ -664,13 +728,17 @@ class ContextManager {
         range = this.findForcedCompactRange();
       }
       if (!range) {
-        return { ok: true, message: '无可安全压缩的范围（消息不足或工具调用未闭合）', skipped: true };
+        return finish({ ok: true, message: '无可安全压缩的范围（消息不足或工具调用未闭合）', skipped: true });
       }
       const { start, end } = range;
       const head = this.messages.slice(start, end);
       if (!head.some(m => m && (typeof m.content === 'string' ? m.content.trim() : true))) {
-        return { ok: true, message: '头部无实质内容可摘要', skipped: true };
+        return finish({ ok: true, message: '头部无实质内容可摘要', skipped: true });
       }
+      // Appends are safe; a reset, undo, prune or another checkpoint invalidates this prefix.
+      const prefix = this.messages.slice(0, end);
+      const valid = () => this.compactionLock === transaction && prefix.every((m, i) => this.messages[i] === m);
+      report('running', { summarizedCount: end - start, attempt: 1 });
 
       // 合并旧 checkpoint：若头部已含此前压缩检查点，提醒摘要器它们是既定背景
       const priorCheckpoints = [];
@@ -703,11 +771,13 @@ class ContextManager {
       ].join('\n');
 
       const headTokens = head.reduce((sum, m) => sum + this.estimateMessageTokens(m), 0);
-      const maxRetries = Math.max(0, Number(options.maxRetries ?? 1));
+      const maxRetries = Math.min(5, Math.max(0, Math.floor(Number(options.maxRetries ?? 1) || 0)));
       let summary = '';
       let lastError = null;
 
       for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        if (!valid()) return finish({ ok: false, skipped: true, message: '上下文已变更，已取消旧压缩结果' });
+        report('running', { summarizedCount: end - start, attempt: attempt + 1 });
         let instructionForAttempt = instruction;
         if (attempt > 0) {
           instructionForAttempt += '\n\n（上一版过长。请压缩到原来一半以下，用最精简的要点，只保留接续任务所必需的事实。）';
@@ -734,7 +804,8 @@ class ContextManager {
           lastError = e;
           result = null;
         }
-        const content = (result && result.ok ? (result.content || '') : '').trim();
+        if (!valid()) return finish({ ok: false, skipped: true, message: '上下文已变更，已取消旧压缩结果' });
+        const content = (result && result.ok && typeof result.content === 'string' ? result.content : '').trim();
         if (!content) {
           lastError = lastError || new Error(result && result.error ? result.error : '摘要内容为空');
           continue;
@@ -742,22 +813,16 @@ class ContextManager {
         summary = content;
         // shrink 验证：摘要必须明显短于源（留 15% 余量防估算抖动）
         const summaryTokens = this.estimateTokens(summary);
-        if (summaryTokens < headTokens * 0.85) break;
+        const wrappedTokens = this.estimateMessageTokens({ role: 'user', content: `${COMPACT_CHECKPOINT_PREAMBLE}\n\n<compacted-summary>\n${summary}\n</compacted-summary>` });
+        if (summaryTokens < headTokens * 0.85 && wrappedTokens < headTokens) break;
+        lastError = new Error('检查点未缩小上下文');
         summary = '';
       }
 
       if (!summary) {
-        // 重试耗尽：机械降级，保持消息表面不变（不删不切）
-        const fb = this.generateSummary([head.map((_, i) => start + i)]);
-        if (fb) {
-          this.applyCheckpoint(start, end, fb.replace(/^\[历史摘要\]\n?/, ''), { mechanical: true });
-          this.compactBoundaries.push({
-            timestamp: Date.now(), type: 'fallback_checkpoint',
-            summarizedCount: end - start, error: lastError ? lastError.message : '摘要为空'
-          });
-          return { ok: true, message: 'LLM 摘要未收敛，已用机械检查点替换', fallback: true, summary: fb };
-        }
-        return { ok: false, message: 'LLM 摘要失败：' + (lastError ? lastError.message : '摘要为空'), fallback: false, error: lastError ? lastError.message : '摘要为空' };
+        // A failed summary must retain the working context. Hard truncation is reserved
+        // for an actual provider overflow, rather than silently discarding task details.
+        return finish({ ok: false, message: 'LLM 摘要失败：' + (lastError ? lastError.message : '摘要为空'), fallback: false, error: lastError ? lastError.message : '摘要为空' });
       }
 
       const applied = this.applyCheckpoint(start, end, summary, { mechanical: false });
@@ -766,9 +831,16 @@ class ContextManager {
         summarizedCount: end - start,
         headTokens, summaryTokens: this.estimateTokens(summary)
       });
-      return { ok: true, message: `已生成结构化检查点（压缩 ${end - start} 条消息）`, summary, checkpoint: applied };
+      return finish({ ok: true, message: `已生成结构化检查点（压缩 ${end - start} 条消息）`, summary, checkpoint: applied });
+    } catch (error) {
+      report('error', { message: error.message || String(error), finishedAt: Date.now() });
+      throw error;
     } finally {
-      this._compactionInProgress = false;
+      // A late response from a discarded session must not release a newer lock.
+      if (this.compactionLock === transaction) {
+        this.compactionLock = null;
+        this._compactionInProgress = false;
+      }
     }
   }
 
@@ -800,12 +872,19 @@ class ContextManager {
     const checkpointMsg = {
       role: 'user',
       content: `${COMPACT_CHECKPOINT_PREAMBLE}\n\n<compacted-summary>\n${text}\n</compacted-summary>`,
-      metadata: { kind: 'compaction-checkpoint', mechanical: !!meta.mechanical, at: Date.now() }
+      metadata: {
+        kind: 'compaction-checkpoint', mechanical: !!meta.mechanical, at: Date.now(),
+        compactedIds: [...new Set(this.messages.slice(start, end).flatMap(m => m.metadata?.compactedIds || (m.metadata?.messageId ? [m.metadata.messageId] : [])))]
+      }
     };
+    const shift = indices => new Set([...indices].filter(i => i < start || i >= end).map(i => i >= end ? i - (end - start) + 1 : i));
+    this.checkpointIndexes = shift(this.checkpointIndexes);
+    this.checkpointIndexes.add(start);
+    this.prunedIndexes = shift(this.prunedIndexes);
+    const headPinned = this.pinnedMessages.some(i => i >= start && i < end);
+    this.pinnedMessages = [...shift(this.pinnedMessages)];
+    if (headPinned) this.pinnedMessages.push(start);
     this.messages.splice(start, end - start, checkpointMsg);
-    // 下标重建（数组被 splice，旧下标作废）
-    this.checkpointIndexes = new Set([start]);
-    this.prunedIndexes = new Set();
     this.checkpointCount++;
     this.compactBoundaries.push({
       timestamp: Date.now(), type: 'checkpoint',
@@ -926,6 +1005,7 @@ class ContextManager {
       toolSchemaTokens: this.toolSchemaTokens,
       tokenCalibration: Number(this.tokenCalibration.toFixed(3)),
       checkpoints: this.checkpointCount,
+      compaction: this.compactionState,
       basis: this.isRealBasisValid() ? 'api' : 'estimate',
       exact: this.isRealBasisValid(),
       realPromptTokens: this.realBasis ? this.realBasis.promptTokens : null
@@ -1005,6 +1085,7 @@ class ContextManager {
     this.prunedIndexes = new Set();
     this.checkpointCount = 0;
     this.compactionLock = null;
+    this.compactionState = null;
     this._compactionInProgress = false;
     this.toolSchemaTokens = 0;
   }
@@ -1024,6 +1105,7 @@ class ContextManager {
     this.prunedIndexes = new Set();
     this.checkpointCount = 0;
     this.compactionLock = null;
+    this.compactionState = null;
     this._compactionInProgress = false;
     this.toolSchemaTokens = 0;
   }
