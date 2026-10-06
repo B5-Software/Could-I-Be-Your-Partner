@@ -25,7 +25,7 @@ class TorRemote {
   }
   async start() {
     if (this.operation || this.child) return this.status();
-    this.change({ phase: 'preparing', progress: 0, error: '', onion: '' });
+    this.change({ phase: 'preparing', progress: 0, error: '', onion: '', detail: '' });
     const generation = (this.generation = (this.generation || 0) + 1);
     this.operation = this.startServer(generation)
       .catch((error) => {
@@ -165,7 +165,10 @@ class TorRemote {
                 output.replace(/Bridge[^\r\n]*/g, 'Bridge [redacted]'),
             ),
           );
-        } else if (generation === this.generation && this.state.phase !== 'stopped')
+        } else if (
+          generation === this.generation &&
+          !['stopped', 'error'].includes(this.state.phase)
+        )
           this.change({ phase: 'error', error: 'Tor connection closed (' + code + ')' });
       });
     });
@@ -178,7 +181,7 @@ class TorRemote {
   }
   stop() {
     this.generation = (this.generation || 0) + 1;
-    this.change({ phase: 'stopped', progress: 0, onion: '' });
+    this.change({ phase: 'stopped', progress: 0, onion: '', error: '', detail: '' });
     this.child?.kill();
     this.child = null;
     this.transport?.stop();
