@@ -37,6 +37,8 @@ jobs:
         run: npm ci
       - name: 静态检查、类型检查与回归测试
         run: npm run check
+      - name: 验证 Release 日志和发布重跑
+        run: python3 tests/release-publisher.test.py
       - name: 检查高危依赖
         run: npm audit --audit-level=high
 
@@ -206,7 +208,7 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: '24'
-      - name: Publish verified installers and runtime assets
+      - name: Publish verified installers, runtime assets and commit changelog
         env:
           GH_TOKEN: ${{ github.token }}
           BUILD_RUN_ID: ${{ inputs.publish_run_id || github.run_id }}

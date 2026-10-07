@@ -79,4 +79,15 @@ npm run build:linux:arm64
 
 桌面运行时发布到 GitHub；npm 包下载匹配系统和架构的运行时并校验 SHA-256。不要将六个平台的二进制分别上传为 npm 包。启动器的版本只在启动器本身改变时更新。
 
+Release / Prerelease 发布时，`scripts/publish-runtime-assets.py` 从 GitHub 获取已公开版本，选择当前构建祖先中版本号最大的较早版本，收集两者之间的全部提交。日志包含分类后的提交标题、完整提交正文与 Compare 链接，同时写入发布说明并上传 `CHANGELOG.md`，最后才上传运行时清单。直接提交和合并提交都会收录，未发布的标签会跳过；重跑只替换标记范围内的自动日志，保留手写说明，并拒绝覆盖内容不同的已有附件。
+
+本地预览指定版本的提交日志：
+
+```sh
+git fetch --tags
+node scripts/generate-release-notes.cjs --repo B5-Software/Could-I-Be-Your-Partner --version 1.9.0-alpha.25 --output CHANGELOG.preview.md
+```
+
+本地默认依据 Git 标签选取上一版本；可用 `--from v<版本>` 显式指定范围，或用 `--published-tags <JSON文件>` 传入已发布标签数组以复现 CI。`--to <提交SHA>` 可固定待发布构建，避免分支继续推进改变日志。发布流程回归测试运行 `python3 tests/release-publisher.test.py`。
+
 修改版本、提交和标签前，应完成相应离线及集成验证。已公开的版本和标签应保持不可变。npm 使用 Trusted Publishing，配置方法见 [npm 发布指南](npm-publishing.md)。

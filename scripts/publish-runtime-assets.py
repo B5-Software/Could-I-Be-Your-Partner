@@ -31,18 +31,44 @@ for platform in platforms:
 source = api('contents/package.json?ref=' + run['head_sha'])
 version = json.loads(base64.b64decode(source['content']))['version']
 tag = 'v' + version
+destination = pathlib.Path('runtime-assets')
+destination.mkdir(exist_ok=False)
+notes_file = destination / 'CHANGELOG.md'
+notes_args = ['node', 'scripts/generate-release-notes.cjs', '--repo', repo,
+              '--version', version, '--to', run['head_sha']]
+if not runtime_only:
+    published_tags = []
+    page = 1
+    while True:
+        batch = api(f'releases?per_page=100&page={page}')
+        published_tags.extend(item['tag_name'] for item in batch if not item['draft'])
+        if len(batch) < 100:
+            break
+        page += 1
+    tags_file = destination / 'published-tags.txt'
+    tags_file.write_text(json.dumps(published_tags), encoding='utf-8')
+    notes_args.extend(['--published-tags', str(tags_file)])
+    subprocess.run(notes_args + ['--output', str(notes_file)], check=True)
 try:
     release = api('releases/tags/' + tag)
 except subprocess.CalledProcessError:
     if runtime_only:
         raise RuntimeError('Runtime-only publication requires an existing GitHub Release')
-    args = ['gh', 'release', 'create', tag, '--verify-tag', '--title', tag, '--generate-notes']
+    args = ['gh', 'release', 'create', tag, '--verify-tag', '--title', tag,
+            '--notes-file', str(notes_file)]
     if '-' in version:
         args.append('--prerelease')
     subprocess.run(args, check=True)
     release = api('releases/tags/' + tag)
 if release['draft']:
     raise RuntimeError('Cannot use a draft release')
+if not runtime_only:
+    body_file = destination / 'existing-body.txt'
+    body_file.write_text(release.get('body') or '', encoding='utf-8')
+    merged_file = destination / 'release-body.md'
+    subprocess.run(notes_args + ['--existing-body', str(body_file), '--output', str(merged_file)], check=True)
+    if merged_file.read_text(encoding='utf-8').strip() != (release.get('body') or '').strip():
+        subprocess.run(['gh', 'release', 'edit', tag, '--notes-file', str(merged_file)], check=True)
 
 def digest(file):
     h = hashlib.sha256()
@@ -62,8 +88,6 @@ def upload(file):
     subprocess.run(['gh', 'release', 'upload', tag, str(file)], check=True)
 
 artifacts = api(f'actions/runs/{run_id}/artifacts?per_page=100')['artifacts']
-destination = pathlib.Path('runtime-assets')
-destination.mkdir(exist_ok=False)
 for platform in platforms:
     selected = [a for a in artifacts if a['name'] == 'npm-' + platform]
     legacy = not selected
@@ -125,6 +149,8 @@ for platform in platforms:
                         upload(file)
 
 subprocess.run(['node', 'scripts/prepare-npm.cjs', '--manifest', '--assets', str(destination), '--revision', run['head_sha']], check=True)
+if not runtime_only:
+    upload(notes_file)
 # The manifest is uploaded last: launchers cannot select a partially uploaded release.
 upload(destination / 'cibyp-runtime.json')
 print('Published six verified GitHub runtimes for ' + tag, flush=True)
