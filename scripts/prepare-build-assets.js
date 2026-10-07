@@ -26,7 +26,7 @@ const projectRoot = path.resolve(__dirname, '..');
 
 function run(cmd, args) {
   console.log(`[prepare-build-assets] 执行: ${cmd} ${args.join(' ')}`);
-  const r = spawnSync(cmd, args, { stdio: 'inherit', cwd: projectRoot, shell: false });
+  const r = spawnSync(cmd, args, { stdio: 'inherit', cwd: projectRoot, shell: false, windowsHide: true });
   if (r.error) {
     console.error(`[prepare-build-assets] 启动失败: ${r.error.message}`);
     process.exit(1);
@@ -49,11 +49,13 @@ run(process.execPath, [path.join(__dirname, 'download-aria2.js'), '--all']);
 if (process.platform === 'win32') {
   const pwsh = 'pwsh';
   const args = [
-    '-NoProfile', '-ExecutionPolicy', 'Bypass',
+    '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
     '-File', path.join(__dirname, 'fetch-assets.ps1'),
     '-SkipGeoGebra',
   ];
-  const r = spawnSync(pwsh, args, { stdio: 'inherit', cwd: projectRoot, shell: false });
+  // Hide the child window: PowerShell then skips Windows taskbar COM initialization,
+  // which can crash the CLR on ARM64 runners before the asset script starts.
+  const r = spawnSync(pwsh, args, { stdio: 'inherit', cwd: projectRoot, shell: false, windowsHide: true });
   if (r.error) {
     // 老环境无 pwsh：退回 Windows PowerShell 5.1（脚本已带 UTF-8 BOM，可正确解析）
     run('powershell', args);
