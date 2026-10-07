@@ -300,19 +300,29 @@ class WorkspaceSync extends EventEmitter {
     sizes = sizes || await this.scanHost();
     let files = 0, bytes = 0;
     for (const batch of WorkspaceSync.batches(rels, sizes)) {
-      const entries = [...dirEntriesFor(batch)];
+      const entries = [];
+      const transferred = [];
       for (const rel of batch) {
         const abs = await this.safeHostPath(rel);
         let data = null;
-        data = await fs.promises.readFile(abs);
+        for (let attempt = 0; ; attempt++) {
+          try { data = await fs.promises.readFile(abs); break; }
+          catch (error) {
+            if (!['EBUSY', 'EAGAIN', 'EPERM', 'EACCES', 'ENOENT'].includes(error.code)) throw error;
+            if (attempt >= 2) { this._stats.skipped.push({ rel, reason: 'unavailable-file', code: error.code }); break; }
+            await new Promise(resolve => setTimeout(resolve, 40 * (attempt + 1)));
+          }
+        }
+        if (data === null) continue;
         if (sizes[rel]?.hash && require('crypto').createHash('sha256').update(data).digest('hex') !== sizes[rel].hash)
           throw new Error('推送期间宿主文件发生变化: ' + rel);
         entries.push({ name: rel, data, mtime: Math.floor((sizes[rel] || {}).mtimeMs / 1000) });
+        transferred.push(rel);
         files++; bytes += data.length;
       }
       if (!entries.length) continue;
-      const tar = writeTar(entries);
-      if (expectedVm) await this.checkVm(batch, Object.fromEntries(batch.map(rel => [rel, expectedVm[rel] || null])));
+      const tar = writeTar([...dirEntriesFor(transferred), ...entries]);
+      if (expectedVm) await this.checkVm(transferred, Object.fromEntries(transferred.map(rel => [rel, expectedVm[rel] || null])));
       await this._execWithStdin(inst, `tar -x -f - -C ${shellQuote(this.vmMount)} --no-same-owner --no-same-permissions`, tar, 300000);
       this.emit('progress', { direction: 'push', files, bytes });
     }
@@ -467,7 +477,8 @@ class WorkspaceSync extends EventEmitter {
       // A directional sync must retain the last consensus for changes awaiting
       // the other direction. Dropping it turns the next legitimate edit into a conflict.
       const files = Object.assign(Object.create(null), this.baseline.files);
-      for (const rel of Object.keys(files)) if (!hostAfter[rel] && !vmAfter[rel]) delete files[rel];
+      const blocked = [...Object.entries(hostAfter), ...Object.entries(vmAfter)].filter(([, entry]) => entry.skipped).map(([rel]) => rel);
+      for (const rel of Object.keys(files)) if (!hostAfter[rel] && !vmAfter[rel] && !blocked.some(prefix => rel === prefix || rel.startsWith(prefix + '/'))) delete files[rel];
       for (const rel of Object.keys(hostAfter)) {
         if (vmAfter[rel] && WorkspaceSync.sameEntry(hostAfter[rel], vmAfter[rel])) {
           files[rel] = { host: hostAfter[rel], vm: vmAfter[rel] };

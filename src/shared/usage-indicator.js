@@ -3,6 +3,8 @@
 const LABELS = {
   'zh-CN': {
     unavailable: '额度不可用',
+    managePlan:
+      '当前登录方式未提供可读取的订阅额度；请在 ChatGPT 用量管理中查看和调整。这不影响使用模型。',
     remaining: '剩余',
     reset: '重置时间',
     '5hour': '5 小时',
@@ -16,6 +18,8 @@ const LABELS = {
   },
   en: {
     unavailable: 'Usage unavailable',
+    managePlan:
+      'This login does not provide readable subscription limits. View and manage usage in ChatGPT; you can still use the models.',
     remaining: 'remaining',
     reset: 'Resets',
     '5hour': '5-hour',
@@ -29,6 +33,8 @@ const LABELS = {
   },
   de: {
     unavailable: 'Kontingent nicht verfügbar',
+    managePlan:
+      'Diese Anmeldung stellt keine lesbaren Abonnementlimits bereit. Nutzung in ChatGPT ansehen und verwalten; die Modelle bleiben nutzbar.',
     remaining: 'verbleibend',
     reset: 'Zurücksetzung',
     '5hour': '5 Stunden',
@@ -82,7 +88,7 @@ function formatUsage(data, language = 'zh-CN') {
         : '');
   } else {
     text = labels.unavailable;
-    title = data.error || labels.unavailable;
+    title = data.unavailable ? labels.managePlan : data.error || labels.unavailable;
   }
   return {
     text,

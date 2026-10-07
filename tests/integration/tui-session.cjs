@@ -102,11 +102,8 @@ const fakeFetch = async (url, opts) => {
       : llmQueue.length > 0
         ? llmQueue.shift()
         : { content: '（无脚本回复）' };
-    return {
-      ok: true,
-      status: 200,
-      headers: { get: () => 'application/json' },
-      json: async () => ({
+    return new Response(
+      JSON.stringify({
         id: 'stub-1',
         model: 'stub-model',
         choices: [
@@ -118,8 +115,8 @@ const fakeFetch = async (url, opts) => {
         ],
         usage: { prompt_tokens: 20, completion_tokens: 10, total_tokens: 30 },
       }),
-      text: async () => '',
-    };
+      { headers: { 'Content-Type': 'application/json' } },
+    );
   }
   if (target.startsWith('http://127.0.0.1:') || target.startsWith('http://localhost:')) {
     return realFetch(url, opts);

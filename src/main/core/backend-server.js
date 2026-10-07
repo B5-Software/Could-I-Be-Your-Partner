@@ -8,6 +8,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const bcrypt = require('bcryptjs');
 const { TOTP, Secret } = require('otpauth');
+const wire = require('../../shared/wire-values');
 
 const ROOT = path.resolve(__dirname, '../../..');
 
@@ -68,12 +69,14 @@ class BackendServer {
     if (/^llm:/.test(channel)) return;
     let encoded;
     try {
-      encoded = JSON.stringify({ sequence: ++this.sequence, channel, payload });
+      encoded = JSON.stringify({ sequence: ++this.sequence, channel, payload }, wire.replacer);
     } catch {
       return;
     }
-    this.events.push({ sequence: this.sequence, encoded });
-    this.eventBytes += Buffer.byteLength(encoded);
+    if (!/^voice:tts-/.test(channel)) {
+      this.events.push({ sequence: this.sequence, encoded });
+      this.eventBytes += Buffer.byteLength(encoded);
+    }
     while (this.events.length > 2048 || this.eventBytes > 4 * 1024 * 1024)
       this.eventBytes -= Buffer.byteLength(this.events.shift().encoded);
     for (const ws of this.clients) {
@@ -93,7 +96,8 @@ class BackendServer {
         req.url = req.originalUrl;
         this.codeoss.proxy(req, res);
       });
-    app.use(express.json({ limit: '16mb' }));
+    app.set('json replacer', wire.replacer);
+    app.use(express.json({ limit: '16mb', reviver: wire.reviver }));
     app.use((req, res, next) => {
       res.setHeader('X-Content-Type-Options', 'nosniff');
       res.setHeader('Referrer-Policy', 'no-referrer');
@@ -102,6 +106,57 @@ class BackendServer {
     });
     app.get('/api/health', (_req, res) =>
       res.json({ ok: true, service: 'cibyp-backend', protocol: 1 }),
+    );
+    app.get('/api/files/download', async (req, res, next) => {
+      if (!this.authorized(req)) return res.status(401).end();
+      if (typeof req.query.path !== 'string' || !req.query.path || req.query.path.length > 4096)
+        return res.status(400).end();
+      try {
+        const result = await this.dispatch({
+          method: 'ipc:invoke',
+          args: ['filePicker:download', req.query.path],
+        });
+        if (!result?.ok) return res.status(400).json({ error: result?.error || 'Download failed' });
+        res.setHeader(
+          'Content-Disposition',
+          "attachment; filename*=UTF-8''" +
+            encodeURIComponent(result.name).replace(
+              /['()*]/g,
+              (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase(),
+            ),
+        );
+        res.setHeader('Cache-Control', 'private, no-store');
+        res.type('application/octet-stream').send(Buffer.from(result.bytes));
+      } catch (error) {
+        next(error);
+      }
+    });
+    app.post(
+      '/api/upload',
+      (req, res, next) => {
+        if (!this.authorized(req))
+          return res.status(401).json({ error: 'Authentication required' });
+        if (req.headers['x-cibyp-client'] !== '1') return res.status(403).end();
+        next();
+      },
+      express.raw({ type: 'application/octet-stream', limit: '100mb' }),
+      async (req, res, next) => {
+        try {
+          if (!Buffer.isBuffer(req.body) || typeof req.query.name !== 'string')
+            return res.status(400).json({ error: 'File bytes and name required' });
+          const bytes = req.body.buffer.slice(
+            req.body.byteOffset,
+            req.body.byteOffset + req.body.byteLength,
+          );
+          const result = await this.dispatch({
+            method: 'ipc:invoke',
+            args: ['fs:saveUploadedFile', req.query.name, bytes],
+          });
+          res.status(result?.ok ? 200 : 400).json(result);
+        } catch (error) {
+          next(error);
+        }
+      },
     );
     app.post('/api/login', async (req, res) => {
       const ip = req.socket.remoteAddress;
@@ -155,16 +210,45 @@ class BackendServer {
       res.setHeader('Set-Cookie', 'cibyp_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0');
       res.json({ ok: true });
     });
+    app.get('/api/avatar', async (req, res, next) => {
+      if (!this.authorized(req)) return res.status(401).end();
+      try {
+        const source = req.query.source;
+        if (typeof source !== 'string' || !source || source.length > 4096)
+          return res.status(400).end();
+        const settings = await this.dispatch({ method: 'getSettings' });
+        // Serve configured portraits only, never an arbitrary host file.
+        if (!['aiPersona', 'userProfile', 'babe'].some((key) => settings[key]?.avatar === source))
+          return res.status(404).end();
+        const result = await this.dispatch({
+          method: 'ipc:invoke',
+          args: ['avatar:encodeFile', source],
+        });
+        const match = /^data:(image\/(?:png|jpeg|gif|webp));base64,([A-Za-z0-9+/=]+)$/.exec(
+          result?.dataUrl || '',
+        );
+        if (!result?.ok || !match) return res.status(404).end();
+        res.setHeader('Cache-Control', 'private, no-cache');
+        res.type(match[1]).send(Buffer.from(match[2], 'base64'));
+      } catch (error) {
+        next(error);
+      }
+    });
     app.post('/api/rpc', async (req, res) => {
       if (!this.authorized(req)) return res.status(401).json({ error: 'Authentication required' });
       if (req.headers['x-cibyp-client'] !== '1')
         return res.status(403).json({ error: 'Client header required' });
       const body = req.body || {};
+      if (body.method === 'backend:shutdown' && !this.token)
+        return res.status(403).json({ error: 'Use the local launcher or system tray to quit' });
       if (typeof body.id !== 'string' || body.id.length > 160)
         return res.status(400).json({ error: 'Request ID required' });
       // Include the payload in the identity check. A reused ID must not silently
       // turn a different command into the result of an earlier command.
-      const signature = JSON.stringify([body.method, body.args]);
+      const signature = crypto
+        .createHash('sha256')
+        .update(JSON.stringify([body.method, body.args], wire.replacer))
+        .digest('hex');
       const prior = this.requests.get(body.id);
       if (prior && prior.signature !== signature)
         return res.status(409).json({ error: 'Request ID reused with different arguments' });
@@ -193,6 +277,9 @@ class BackendServer {
     app.ws('/api/events', (socket, req) => {
       if (!this.validOrigin(req)) return socket.close(1008, 'Untrusted origin');
       let authenticated = false;
+      let audioQueue = Promise.resolve(),
+        queuedAudio = 0;
+      const voiceSessions = new Set();
       const authenticate = () => {
         if (authenticated || !this.authorized(req)) return;
         authenticated = true;
@@ -215,7 +302,80 @@ class BackendServer {
       expiryTimer.unref();
       authenticate();
       socket.on('message', (data) => {
-        if (authenticated || data.length > 4096) return;
+        if (authenticated) {
+          if (data.length > 65536) return socket.close(1009, 'Audio frame too large');
+          try {
+            const value = JSON.parse(String(data), wire.reviver);
+            if (
+              value.type === 'voice-control' &&
+              ['stop', 'cancel'].includes(value.action) &&
+              typeof value.id === 'string' &&
+              value.id.length <= 160 &&
+              typeof value.sessionId === 'string' &&
+              value.sessionId.length <= 160
+            ) {
+              audioQueue = audioQueue
+                .then(() =>
+                  this.dispatch({
+                    method: 'ipc:invoke',
+                    args: ['voice:stt:' + value.action, value.sessionId],
+                  }),
+                )
+                .then((result) => {
+                  if (socket.readyState === 1)
+                    socket.send(
+                      JSON.stringify({ type: 'voice-control-result', id: value.id, result }),
+                    );
+                })
+                .catch((error) => {
+                  if (socket.readyState === 1)
+                    socket.send(
+                      JSON.stringify({
+                        type: 'voice-control-result',
+                        id: value.id,
+                        error: error.message,
+                      }),
+                    );
+                });
+              voiceSessions.delete(value.sessionId);
+              return;
+            }
+            if (
+              value.type === 'voice-audio' &&
+              typeof value.sessionId === 'string' &&
+              value.sessionId.length <= 160 &&
+              value.samples instanceof ArrayBuffer &&
+              value.samples.byteLength <= 32000 &&
+              value.samples.byteLength % 2 === 0
+            ) {
+              if (
+                queuedAudio >= 128 ||
+                (voiceSessions.size >= 64 && !voiceSessions.has(value.sessionId))
+              )
+                return socket.close(1009, 'Audio queue full');
+              queuedAudio++;
+              voiceSessions.add(value.sessionId);
+              audioQueue = audioQueue
+                .then(
+                  () =>
+                    socket.readyState === 1 &&
+                    this.dispatch({
+                      method: 'ipc:send',
+                      args: [
+                        'voice:audio',
+                        { target: 'stt', sessionId: value.sessionId, samples: value.samples },
+                      ],
+                    }),
+                )
+                .catch(() => socket.close(1011, 'Audio dispatch failed'))
+                .finally(() => queuedAudio--);
+            }
+          } catch {
+            socket.close(1007, 'Invalid audio frame');
+          }
+          return;
+        }
+        if (data.length > 4096) return;
         try {
           const value = JSON.parse(String(data));
           if (value.type === 'auth') {
@@ -230,15 +390,42 @@ class BackendServer {
         clearTimeout(timer);
         clearInterval(expiryTimer);
         this.clients.delete(socket);
+        for (const sessionId of voiceSessions)
+          Promise.resolve(
+            this.dispatch({ method: 'ipc:invoke', args: ['voice:stt:cancel', sessionId] }),
+          ).catch(() => {});
       });
     });
     if (this.ui) {
       app.get('/src/renderer/css/motion.css', (_req, res) =>
         res.sendFile(path.join(ROOT, 'src/renderer/css/motion.css')),
       );
-      app.get('/login', (_req, res) =>
-        res.sendFile(path.join(ROOT, 'src/renderer/pages/backend-login.html')),
+      app.get('/assets/icons/icon.png', (_req, res) =>
+        res.sendFile(path.join(ROOT, 'assets/icons/icon.png')),
       );
+      app.get('/login', async (_req, res, next) => {
+        try {
+          const settings = await this.dispatch({ method: 'getSettings' });
+          const preferences = {
+            theme: settings.theme,
+            language: settings.language,
+            animations: settings.animations !== false,
+            enable2FA: !!this.config.enable2FA,
+          };
+          const html = fs
+            .readFileSync(path.join(ROOT, 'src/renderer/pages/webui-login.html'), 'utf8')
+            .replace(
+              '/* CIBYP_LOGIN_PREFERENCES */',
+              'window.cibypLoginPreferences=' +
+                JSON.stringify(preferences).replace(/</g, '\\u003c') +
+                ';',
+            );
+          res.setHeader('Cache-Control', 'no-store');
+          res.type('html').send(html);
+        } catch (error) {
+          next(error);
+        }
+      });
       app.get('/', (_req, res) => res.redirect('/src/renderer/pages/index.html'));
       app.use((req, res, next) => (this.authorized(req) ? next() : res.redirect('/login')));
       app.get('/src/renderer/pages/index.html', (_req, res) => {
@@ -252,6 +439,26 @@ class BackendServer {
           );
         res.type('html').send(html);
       });
+      for (const page of Object.values(require('../../shared/browser-pages'))) {
+        app.get('/src/renderer/pages/' + page + '.html', (_req, res) => {
+          const template =
+            fs
+              .readFileSync(path.join(ROOT, 'src/renderer/pages/index.html'), 'utf8')
+              .match(/<template id="vm-file-dialog-template">[\s\S]*?<\/template>/)?.[0] || '';
+          const html = fs
+            .readFileSync(path.join(ROOT, 'src/renderer/pages/' + page + '.html'), 'utf8')
+            .replace(
+              '<head>',
+              '<head><script>window.cibypPlatform=' +
+                JSON.stringify(process.platform) +
+                ';</script><script src="/src/preload/generated/browser-' +
+                page +
+                '-preload.js"></script><script defer src="/src/preload/generated/browser-child-dialog.js"></script><link rel="stylesheet" href="/src/renderer/css/components.css"><script src="/src/renderer/js/vm-file-dialog.js"></script>',
+            )
+            .replace('</body>', template + '</body>');
+          res.type('html').send(html);
+        });
+      }
       for (const directory of [
         'src/renderer',
         'src/shared',
@@ -263,6 +470,7 @@ class BackendServer {
         'assets/webfonts',
         'assets/icons',
         'assets/geogebra',
+        'assets/lib/three',
       ])
         app.use('/' + directory, express.static(path.join(ROOT, directory), { dotfiles: 'deny' }));
       // Only browser dependencies, never the backend source or native modules.

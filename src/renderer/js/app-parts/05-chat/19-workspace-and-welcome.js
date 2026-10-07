@@ -1,12 +1,18 @@
   // ---- Open Workspace ----
   if (btnOpenWorkspace) {
     btnOpenWorkspace.addEventListener('click', async () => {
+      try {
+      let result;
       if (agent.workspacePath) {
-        await window.api.workspaceOpenInExplorer(agent.workspacePath);
+        result = await window.api.workspaceOpenInExplorer(agent.workspacePath);
       } else {
         const base = await window.api.workspaceGetBase();
-        if (base.ok) await window.api.openFileExplorer(base.path);
+        const directory = typeof base === 'string' ? base : base?.path;
+        if (!directory) throw new Error(base?.error || t('ui.workspace.unavailable', '工作目录不可用'));
+        result = await window.api.openFileExplorer(directory);
       }
+      if (result?.ok === false) throw new Error(result.error);
+      } catch (error) { showToast(error.message, 'error'); }
     });
   }
 

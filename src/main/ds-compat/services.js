@@ -298,7 +298,7 @@ class CibypLlmService extends Service {
     const settings = await this.getSettings();
     const llm = (settings && settings.llm) || {};
     const isOcProvider = llm.provider === 'opencode-zen' || llm.provider === 'opencode-go';
-    if (isOcProvider && !llm.zenApiKey) throw new Error('CIBYP: 尚未配置 OpenCode API Key（设置 → LLM）');
+    if (llm.provider === 'opencode-go' && !llm.zenApiKey) throw new Error('CIBYP: 尚未配置 OpenCode API Key（设置 → LLM）');
     if (!isOcProvider && !llm.apiUrl) throw new Error('CIBYP: 尚未配置 LLM API（设置 → LLM）');
     const messages = Array.isArray(request.messages) ? request.messages : [];
     // 统一走 buildLLMRequest：自定义请求头 + OpenCode 官方头组与各 provider 一起生效
@@ -314,6 +314,7 @@ class CibypLlmService extends Service {
     const result = await llmRetry.fetchLLMWithRetry({
       label: 'LLM:ds-plugin',
       apiUrl: req.url,
+      transport: req.transport,
       apiKey: req.headers['x-api-key'] || llm.apiKey || llm.zenApiKey || '',
       headers: req.headers,
       body: req.body,

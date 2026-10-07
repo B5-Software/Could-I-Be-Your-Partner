@@ -346,6 +346,17 @@ module.exports = function registerResourcesIpc({
       return { ok: false, error: e.message };
     }
   });
+  ipcMain.handle('shell:openHostBrowser', async (_, value) => {
+    try {
+      const url = new URL(String(value));
+      if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password)
+        throw new Error('Only HTTP(S) browser links are supported');
+      await shell.openExternal(url.href);
+      return { ok: true, location: 'host' };
+    } catch (error) {
+      return { ok: false, error: error.message };
+    }
+  });
   ipcMain.handle('vm:openDesktop', async () => {
     await openVmDesktopWindow();
     return { ok: true };

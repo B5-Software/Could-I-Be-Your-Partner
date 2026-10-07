@@ -1,10 +1,10 @@
   // ---- Code 模式文件选择按钮 ----
   document.getElementById('btn-code-attach-file')?.addEventListener('click', async () => {
     try {
-      const result = await window.api.openFileDialog({ multiple: true, title: '添加文件到上下文' });
+      const result = await chooseAttachmentFiles(document.getElementById('btn-code-attach-file'), { multiple: true, title: '添加文件到上下文' });
       if (result.ok && result.paths) {
         for (const p of result.paths) {
-          const name = p.split(/[\\/]/).pop();
+          const name = result.files?.find(file => file.path === p)?.name || p.split(/[\\/]/).pop();
           await addFileToCodeContext({ path: p, name: name, type: 'file' });
         }
       }

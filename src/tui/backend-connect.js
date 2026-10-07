@@ -76,12 +76,27 @@ async function ensureBackend(args = [], { spawnProcess = spawn } = {}) {
 }
 
 async function launchClient(args, webOnly = false) {
+  if (webOnly && args.includes('--stop')) {
+    const existing = await existingBackend(createAppPaths().userData);
+    if (!existing) {
+      console.log('CIBYP backend is not running.');
+      return;
+    }
+    try {
+      await existing.request('backend:shutdown');
+      console.log('CIBYP backend is stopping.');
+    } finally {
+      existing.close();
+    }
+    return;
+  }
   const client = await ensureBackend(args);
   if (webOnly || args.includes('--headless')) {
     const result = await client.request('ipc:invoke', 'webControl:start');
     client.close();
     if (!result.ok) throw new Error(result.error);
     console.log('CIBYP WebUI: ' + result.url);
+    console.log('Quit from the system tray, or run cibyp-webui --stop (stops the shared backend).');
     return;
   }
   const runtime = await require('./backend-runtime').createBackendRuntime(client);

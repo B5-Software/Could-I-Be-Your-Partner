@@ -9,7 +9,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 const { createChannelSubscriptions } = require('./channel-subscriptions');
 const { subscribe: onChannel, dispose: disposeSubscriptions } = createChannelSubscriptions(ipcRenderer);
-window.addEventListener('unload', disposeSubscriptions, { once: true });
+window.addEventListener('pagehide', disposeSubscriptions, { once: true });
 
 contextBridge.exposeInMainWorld('api', {
   backendRequest: (method, ...args) => ipcRenderer.invoke('backend:request', method, ...args),
@@ -133,6 +133,7 @@ contextBridge.exposeInMainWorld('api', {
   sendTerminalText: (id, text) => ipcRenderer.invoke('terminal:sendText', id, text),
   pressTerminalKey: (id, keyName) => ipcRenderer.invoke('terminal:pressKey', id, keyName),
   onTerminalData: (cb) => onChannel('terminal:data', cb),
+  onTerminalCreated: (cb) => onChannel('terminal:created', cb),
   onTerminalExit: (cb) => onChannel('terminal:exit', cb),
 
   // Clipboard
@@ -149,6 +150,7 @@ contextBridge.exposeInMainWorld('api', {
 
   // Shell
   openBrowser: (url) => ipcRenderer.invoke('shell:openBrowser', url),
+  openHostBrowser: (url) => ipcRenderer.invoke('shell:openHostBrowser', url),
   openFileExplorer: (p) => ipcRenderer.invoke('shell:openFileExplorer', p),
 
   // Calculator
@@ -335,13 +337,14 @@ contextBridge.exposeInMainWorld('api', {
   voiceModelsSetMirror: (mirror) => ipcRenderer.invoke('resources:voiceModels:setMirror', mirror),
   onVoiceModelsProgress: (cb) => onChannel('resources:voiceModels:progress', cb),
 
-  // ---- 决策模型（Jev / System One）----
+  // ---- 决策模型（System One）----
   decisionCall: (payload) => ipcRenderer.invoke('decision:call', payload),
   decisionNoul: (payload) => ipcRenderer.invoke('decision:noul', payload),
   decisionChoice: (payload) => ipcRenderer.invoke('decision:choice', payload),
   decisionScore: (payload) => ipcRenderer.invoke('decision:score', payload),
   decisionTest: () => ipcRenderer.invoke('decision:test'),
   decisionStatus: () => ipcRenderer.invoke('decision:status'),
+  decisionModels: () => ipcRenderer.invoke('decision:models'),
 
   // ---- 运行位置（本机 / 虚拟机）----
   runtime: {
@@ -402,8 +405,11 @@ contextBridge.exposeInMainWorld('api', {
   // Dialog
   confirmSensitive: (msg) => ipcRenderer.invoke('dialog:confirm', msg),
   openFileDialog: (opts) => ipcRenderer.invoke('dialog:openFile', opts),
+  pickLocalFiles: (opts) => ipcRenderer.invoke('dialog:pickLocalFiles', opts),
   filePickerPrepare: (save, options) => ipcRenderer.invoke('filePicker:prepare', save, options),
   filePickerBrowse: (directory) => ipcRenderer.invoke('filePicker:browse', directory),
+  filePickerDownload: (file) => ipcRenderer.invoke('filePicker:download', file),
+  filePickerWrite: (file, content) => ipcRenderer.invoke('filePicker:write', file, content),
   filePickerMkdir: (directory) => ipcRenderer.invoke('filePicker:mkdir', directory),
   filePickerValidate: (file, config, overwrite) => ipcRenderer.invoke('filePicker:validate', file, config, overwrite),
   saveFileDialog: (opts) => ipcRenderer.invoke('dialog:saveFile', opts),
@@ -569,6 +575,7 @@ contextBridge.exposeInMainWorld('api', {
   automationUpdateSettings: (cfg) => ipcRenderer.invoke('automation:updateSettings', cfg),
   automationGenerateTokenValue: () => ipcRenderer.invoke('automation:generateTokenValue'),
   automationSave: (task) => ipcRenderer.invoke('automation:save', task),
+  onAutomationChanged: (cb) => onChannel('automation:changed', cb),
   automationDelete: (id) => ipcRenderer.invoke('automation:delete', id),
   automationSetEnabled: (id, enabled) => ipcRenderer.invoke('automation:setEnabled', id, enabled),
   automationRun: (id, params) => ipcRenderer.invoke('automation:run', id, params),

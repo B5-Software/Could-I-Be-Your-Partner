@@ -13,8 +13,10 @@
 'use strict';
 
 (function () {
-  const DICTATION_SESSION = 'main-dictation';
-  const TTS_REQ_PREFIX = 'main-tts';
+  const browserClient = /^https?:$/.test(location.protocol);
+  const voiceClientId = browserClient ? crypto.randomUUID() : 'main';
+  const DICTATION_SESSION = voiceClientId + '-dictation';
+  const TTS_REQ_PREFIX = voiceClientId + '-tts';
 
   let settings = null;
   let mic = null;
@@ -114,10 +116,12 @@
       stopSpeaking();
       const r = await window.api.voiceSttStart({ sessionId: DICTATION_SESSION });
       if (!r || !r.ok) throw new Error(r && r.error ? r.error : 'stt start failed');
-      if (!mic) mic = new VoiceMic();
-      mic.onChunk = (buf) => window.api.voiceSendAudio('stt', DICTATION_SESSION, buf);
-      mic.onLevel = null;
-      await mic.start();
+      if (!r.browserRecognition) {
+        if (!mic) mic = new VoiceMic();
+        mic.onChunk = (buf) => window.api.voiceSendAudio('stt', DICTATION_SESSION, buf);
+        mic.onLevel = null;
+        await mic.start();
+      }
       dictating = true;
       dictationInput = getChatInput();
       const input = dictationInput;
@@ -129,6 +133,7 @@
       }
       updateMicButton(true);
     } catch (e) {
+      try { await mic?.stop(); await window.api.voiceSttCancel(DICTATION_SESSION); } catch (_) {}
       dictating = false;
       updateMicButton(false);
       if (typeof window.showToast === 'function') {
@@ -271,6 +276,7 @@
     if (window.api.onVoiceSttFinal) {
       window.api.onVoiceSttFinal((msg) => {
         if (!msg || msg.sessionId !== DICTATION_SESSION) return;
+        if (msg.browserRecognition && dictating) void stopDictation(false);
         // 优先用本次听写固定的目标框；停止后可能已置空，回退到当前激活输入框
         const input = dictationInput || getChatInput();
         if (!input) return;
@@ -332,6 +338,7 @@
     }
     if (window.api.onVoiceError) {
       window.api.onVoiceError((msg) => {
+        if (msg?.sessionId === DICTATION_SESSION && dictating) void stopDictation(true);
         if (typeof window.showToast === 'function' && msg && msg.error) {
           window.showToast('语音引擎：' + msg.error, 'warn', 4000);
         }
@@ -395,8 +402,9 @@
     refreshMicVisibility,
     isSpeaking: () => {
       const p = player ? (player.playing || false) : false;
-      return p || ttsPending;
+      return p || ttsPending || (browserClient && !!(window.speechSynthesis?.speaking || window.speechSynthesis?.pending));
     },
     get dictating() { return dictating; },
   };
+  window.addEventListener('pagehide', () => { dictating = false; mic?.stop().catch(() => {}); stopSpeaking(); });
 })();

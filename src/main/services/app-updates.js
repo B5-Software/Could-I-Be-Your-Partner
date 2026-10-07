@@ -75,7 +75,41 @@ class AppUpdates {
   }
   status() {
     const { file, runtime, ...publicState } = this.state;
-    return publicState;
+    return {
+      ...publicState,
+      currentVersion: this.app.getVersion(),
+      installation: this.installation(),
+    };
+  }
+  installation() {
+    const appPath = this.app.getAppPath?.() || '';
+    const relative = appPath && path.relative(cacheDirectory(this.env, this.platform), appPath);
+    const managed = !!relative && !relative.startsWith('..') && !path.isAbsolute(relative);
+    return {
+      source: managed ? 'launcher' : this.app.isPackaged === false ? 'development' : 'release',
+      platform: this.platform,
+      arch: this.arch,
+      format: managed
+        ? 'runtime'
+        : this.platform === 'win32'
+          ? 'exe'
+          : this.platform === 'darwin'
+            ? 'pkg'
+            : this.env.APPIMAGE
+              ? 'AppImage'
+              : 'deb',
+    };
+  }
+  async startAutomatic() {
+    const preferences = this.settings().updates || {};
+    if (
+      preferences.autoCheckEnabled === false ||
+      preferences.autoDownload !== true ||
+      this.busy() ||
+      this.installation().source === 'development'
+    )
+      return this.status();
+    return this.start();
   }
   change(value) {
     this.state = { ...this.state, ...value };
@@ -84,6 +118,11 @@ class AppUpdates {
     return state;
   }
   async start() {
+    if (this.installation().source === 'development')
+      return this.change({
+        phase: 'error',
+        error: 'Development builds cannot install release updates',
+      });
     if (this.operation) return this.status();
     if (['ready', 'installing'].includes(this.state.phase)) return this.change({});
     this.state = { phase: 'idle' };
@@ -118,9 +157,7 @@ class AppUpdates {
       return this.change({ phase: 'current', version });
     this.change({ phase: 'downloading', version });
     // A verified npm-managed runtime is staged in the launcher's existing cache.
-    const base = cacheDirectory(this.env, this.platform);
-    const relative = path.relative(base, this.app.getAppPath?.() || '');
-    const managed = relative && !relative.startsWith('..') && !path.isAbsolute(relative);
+    const managed = this.installation().source === 'launcher';
     if (managed) {
       if (!latest.assets?.some((asset) => asset.name === 'cibyp-runtime.json'))
         throw new Error(

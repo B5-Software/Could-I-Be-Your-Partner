@@ -165,11 +165,14 @@
     const upd = s.updates || {};
     const updAutoEl = document.getElementById('setting-updates-auto');
     if (updAutoEl) updAutoEl.checked = upd.autoCheckEnabled !== false;
+    const updDownloadEl = document.getElementById('setting-updates-download');
+    if (updDownloadEl) updDownloadEl.checked = upd.autoDownload === true;
     const updIntervalEl = document.getElementById('setting-updates-interval');
     if (updIntervalEl) updIntervalEl.value = String([6, 12, 24].includes(Number(upd.intervalHours)) ? Number(upd.intervalHours) : 6);
     const updChannelEl = document.getElementById('setting-updates-channel');
     if (updChannelEl) updChannelEl.value = (upd.channel === 'all') ? 'all' : 'stable';
     renderUpdateCheckResult(upd);
+    window.api.updatesStatus().then(displayDownloadState).catch(console.error);
     // Language setting
     const langSelect = document.getElementById('setting-language');
     if (langSelect) langSelect.value = s.language || 'zh-CN';

@@ -569,12 +569,23 @@ class ChatGPTAccounts {
     const lease = await this.lease();
     try {
       const account = this.data.accounts.find((a) => a.id === id);
-      const result = await this.quotaReader({
-        token: lease.token,
-        accountId: account.codexAccountId,
-        planType: account.planType,
-        signal: lease.signal,
-      });
+      // SIWC's direct plan grant carries opaque auth metadata, not a Codex
+      // account ID. It cannot be passed to Codex's external-token quota RPC.
+      const result = !account.codexAccountId
+        ? {
+            ok: true,
+            unavailable: true,
+            source: 'chatgpt-usage',
+            message:
+              'This login provides no readable subscription limits; view and manage usage in ChatGPT',
+            manageUrl: 'https://chatgpt.com/settings/usage',
+          }
+        : await this.quotaReader({
+            token: lease.token,
+            accountId: account.codexAccountId,
+            planType: account.planType,
+            signal: lease.signal,
+          });
       if (lease.signal.aborted || this.data.activeId !== id)
         throw new Error('ChatGPT account changed');
       this.limitCache = { id, at: Date.now(), value: result };

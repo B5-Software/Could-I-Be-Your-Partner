@@ -21,7 +21,7 @@ function registerFrontendFilePicker({ ipcMain, vmService, getSettings }) {
       fs: {
         stat: async (raw) => {
           const s = await fs.stat(raw);
-          return { isDirectory: s.isDirectory(), isFile: s.isFile() };
+          return { isDirectory: s.isDirectory(), isFile: s.isFile(), size: s.size };
         },
         listDirectory: async (raw) => ({
           ok: true,
@@ -60,6 +60,36 @@ function registerFrontendFilePicker({ ipcMain, vmService, getSettings }) {
       const target = io(),
         directory = target.normalize(raw);
       return { ...(await target.fs.listDirectory(directory)), path: directory.replace(/\\/g, '/') };
+    } catch (error) {
+      return { ok: false, error: error.message };
+    }
+  });
+  ipcMain.handle('filePicker:download', async (_event, raw) => {
+    try {
+      const target = io(),
+        file = target.normalize(raw);
+      const stat = await target.fs.stat(file);
+      if (!stat?.isFile) throw new Error('Choose a regular file');
+      if (stat.size > 100 * 1024 * 1024) throw new Error('Download exceeds 100 MiB');
+      const bytes = target.vm ? await target.fs.readBuffer(file) : await fs.readFile(file);
+      if (bytes.byteLength > 100 * 1024 * 1024) throw new Error('Download exceeds 100 MiB');
+      return { ok: true, name: target.path.basename(file), bytes };
+    } catch (error) {
+      return { ok: false, error: error.message };
+    }
+  });
+  ipcMain.handle('filePicker:write', async (_event, raw, content) => {
+    try {
+      if (typeof content !== 'string' && !(content instanceof ArrayBuffer))
+        throw new Error('Expected text or file bytes');
+      const target = io(),
+        file = target.normalize(raw);
+      const bytes =
+        typeof content === 'string' ? Buffer.from(content, 'utf-8') : Buffer.from(content);
+      if (bytes.byteLength > 100 * 1024 * 1024) throw new Error('File exceeds 100 MiB');
+      if (target.vm) await target.fs.writeBuffer(file, bytes);
+      else await fs.writeFile(file, bytes);
+      return { ok: true, path: file };
     } catch (error) {
       return { ok: false, error: error.message };
     }

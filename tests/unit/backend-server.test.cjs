@@ -5,6 +5,114 @@ const { BackendServer } = require('../../src/main/core/backend-server');
 const { BackendClient } = require('../../src/shared/backend-client');
 const { createEventBus } = require('../../src/main/core/event-bus');
 const WS = require('ws');
+const wire = require('../../src/shared/wire-values');
+
+test('speech stop is acknowledged after the last audio frame has been consumed', async (t) => {
+  const order = [],
+    token = 'd'.repeat(64);
+  const server = new BackendServer({
+    eventBus: createEventBus(),
+    token,
+    dispatch: async ({ args }) => {
+      if (args[0] === 'voice:audio') {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        assert.deepEqual([...new Int16Array(args[1].samples)], [100, -100]);
+        order.push('audio');
+      } else {
+        order.push(args[0]);
+        return { ok: true };
+      }
+    },
+  });
+  const address = await server.start();
+  t.after(() => server.stop());
+  const socket = new WS(address.url.replace('http:', 'ws:') + '/api/events', {
+    headers: { Authorization: 'Bearer ' + token },
+  });
+  t.after(() => socket.close());
+  await new Promise((resolve) => socket.once('open', resolve));
+  const ack = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('Missing speech acknowledgement')), 3000);
+    socket.on('message', (bytes) => {
+      const message = JSON.parse(String(bytes));
+      if (message.type === 'voice-control-result') {
+        clearTimeout(timer);
+        resolve(message);
+      }
+    });
+  });
+  socket.send(
+    JSON.stringify(
+      { type: 'voice-audio', sessionId: 'browser-test', samples: Int16Array.of(100, -100).buffer },
+      wire.replacer,
+    ),
+  );
+  socket.send(
+    JSON.stringify({
+      type: 'voice-control',
+      id: 'stop-last-frame',
+      sessionId: 'browser-test',
+      action: 'stop',
+    }),
+  );
+  assert.equal((await ack).result.ok, true);
+  assert.deepEqual(order, ['audio', 'voice:stt:stop']);
+});
+
+test('binary RPC values survive serialization and cannot reuse an id with different bytes', async (t) => {
+  const token = 'b'.repeat(64);
+  const server = new BackendServer({
+    eventBus: createEventBus(),
+    token,
+    dispatch: ({ args }) => args[0],
+  });
+  const address = await server.start();
+  t.after(() => server.stop());
+  const client = new BackendClient({ ...address, token });
+  const body = { id: 'binary-repeat', method: 'test', args: [Uint8Array.of(0, 255, 20).buffer] };
+  const result = await client.http('/api/rpc', body);
+  assert.deepEqual([...new Uint8Array(result.result)], [0, 255, 20]);
+  await assert.rejects(
+    client.http('/api/rpc', { ...body, args: [Uint8Array.of(1, 2, 3).buffer] }),
+    /reused/,
+  );
+  assert.throws(
+    () => JSON.parse('{"$cibypBinary":"bad=" , "extra":1}', wire.reviver),
+    /Invalid binary/,
+  );
+});
+
+test('workspace downloads require authentication and dispatch through the selected filesystem', async (t) => {
+  const token = 'c'.repeat(64),
+    received = [];
+  const server = new BackendServer({
+    eventBus: createEventBus(),
+    token,
+    dispatch: ({ args }) => {
+      received.push(args);
+      return args[1] === '/workspace/missing'
+        ? { ok: false, error: 'File missing' }
+        : { ok: true, name: "note's (1).txt", bytes: Buffer.from('workspace file') };
+    },
+  });
+  const address = await server.start();
+  t.after(() => server.stop());
+  const url = address.url + '/api/files/download?path=' + encodeURIComponent('/workspace/note.txt');
+  assert.equal((await fetch(url)).status, 401);
+  const response = await fetch(url, { headers: { Authorization: 'Bearer ' + token } });
+  assert.equal(response.status, 200);
+  assert.equal(await response.text(), 'workspace file');
+  assert.deepEqual(received, [['filePicker:download', '/workspace/note.txt']]);
+  assert.match(response.headers.get('content-disposition'), /note%27s%20%281%29.txt/);
+  assert.equal(
+    (
+      await fetch(address.url + '/api/files/download?path=/workspace/missing', {
+        headers: { Authorization: 'Bearer ' + token },
+      })
+    ).status,
+    400,
+  );
+});
 
 test('one backend accepts independent clients, authenticates, replays and deduplicates commands', async (t) => {
   const bus = createEventBus();

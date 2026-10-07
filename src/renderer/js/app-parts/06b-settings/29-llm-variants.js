@@ -6,7 +6,7 @@
   const zenAuthLink = document.getElementById('link-zen-auth');
   if (zenAuthLink) zenAuthLink.addEventListener('click', (e) => {
     e.preventDefault();
-    window.api.openBrowser('https://opencode.ai/auth');
+    window.api.openHostBrowser('https://opencode.ai/auth');
   });
 
   // Reasoning effort

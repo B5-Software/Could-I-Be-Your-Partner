@@ -67,11 +67,8 @@ const fakeFetch = async (url, opts) => {
     target.includes('/completions')
   ) {
     llmCalls.push({ url: target, body: opts && opts.body ? JSON.parse(opts.body) : null });
-    return {
-      ok: true,
-      status: 200,
-      headers: { get: () => 'application/json' },
-      json: async () => ({
+    return new Response(
+      JSON.stringify({
         id: 'stub-1',
         model: 'stub-model',
         choices: [
@@ -83,8 +80,8 @@ const fakeFetch = async (url, opts) => {
         ],
         usage: { prompt_tokens: 12, completion_tokens: 6, total_tokens: 18 },
       }),
-      text: async () => '',
-    };
+      { headers: { 'content-type': 'application/json' } },
+    );
   }
   // 测试自身与本机 WebUI 通信走真实网络（仅回环），其余一律禁网
   if (target.startsWith('http://127.0.0.1:') || target.startsWith('http://localhost:')) {

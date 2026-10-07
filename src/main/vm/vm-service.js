@@ -186,7 +186,7 @@ class VmService extends EventEmitter {
       const git = await fs.promises.stat(path.join(hostRoot, '.git')).catch(() => null);
       if (git && !git.isDirectory()) return { ok: false, error: 'Host Git worktree references cannot be imported. Clone the repository in the VM instead.' };
     }
-    if (this._externMounts.has(hostRoot) && !refresh && this.runtime.workspaceMode !== 'shared') return { ok: true, hostRoot, vmRoot, reused: true };
+    if (this._externMounts.has(hostRoot) && !this._pendingExternMounts?.has(hostRoot) && !refresh && this.runtime.workspaceMode !== 'shared') return { ok: true, hostRoot, vmRoot, reused: true };
     const { VmFs } = require('./vm-fs');
     const io = new VmFs({ vmService: this });
     let exists, previous;
@@ -235,16 +235,23 @@ class VmService extends EventEmitter {
     const pairIdentity = require('node:crypto').createHash('sha256').update(hostRoot + '\0' + vmRoot).digest('hex');
     const existingPair = this._pairSyncs?.has(pairIdentity);
     let completed = false;
+    let skipped = [];
     try {
       const sync = this.workspacePair(hostRoot, vmRoot, { syncGit: preserveGit || !!this.runtime.vm.syncGit });
       if (!exists || refresh || previous?.status === 'pending' || this.runtime.workspaceMode === 'shared') {
         const result = await sync.sync({ direction: 'both', reason: exists ? 'external-refresh' : 'external-import' });
         if (!result.ok) return result;
+        skipped = result.skipped || [];
+        if (skipped.length) this.emit('sync-warn', 'Some workspace files are unavailable and will be retried: ' + skipped.map(item => item.rel).join(', '));
       }
-      await writeMarker('ready');
+      const pending = skipped.some(item => /^unavailable-/.test(item.reason));
+      await writeMarker(pending ? 'pending' : 'ready');
+      this._pendingExternMounts ||= new Set();
+      if (pending) this._pendingExternMounts.add(hostRoot);
+      else this._pendingExternMounts.delete(hostRoot);
       completed = true;
       if (preserved.length) this.emit('sync-warn', 'Unverified VM import directories were preserved; using ' + vmRoot + ': ' + preserved.join(', '));
-      return { ok: true, hostRoot, vmRoot, reused: exists, preserved };
+      return { ok: true, hostRoot, vmRoot, reused: exists, preserved, skipped };
     } finally {
       if (!completed) {
         this._externMounts.delete(hostRoot);

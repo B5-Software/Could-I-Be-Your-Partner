@@ -29,8 +29,8 @@ module.exports = function createDefaultSettings({ DEFAULT_DECISION_SETTINGS }) {
       // ---- 模型池（单层：每条自带 provider/URL/Key，可自由组合 Zen/Go/OpenAI 兼容等）----
       // entry: { id,label,provider,apiUrl,apiKey,model,effort,intelligence,priority,vision,contextLength,enabled }
       pool: [],
-      // 路由策略：模型选择（priority=手动优先级 / intelligence=Jev 智慧分数）；
-      // Reasoning Effort（manual=条目手动值 / jev=会话创建时由 Jev 决策一次）
+      // 路由策略：模型选择（priority=手动优先级 / intelligence=System One 智慧分数）；
+      // Reasoning Effort（manual=条目手动值 / jev=会话创建时由 System One 决策一次）
       routing: { modelStrategy: 'priority', effortStrategy: 'manual' },
       // 默认条目（非 Agent 调用如游戏/标题使用的全局投影来源）
       activeEntryId: '',
@@ -132,7 +132,7 @@ module.exports = function createDefaultSettings({ DEFAULT_DECISION_SETTINGS }) {
       mirror: 'cn',
       voiceModelDir: '',
     },
-    // 决策模型（System One / Jev）：OpenCode Zen 免费 Jev / TypeSafe 直连
+    // 决策模型（System One）：OpenCode Zen 免费 System One / TypeSafe 直连
     decision: { ...DEFAULT_DECISION_SETTINGS },
     theme: {
       mode: 'system',
@@ -282,6 +282,7 @@ module.exports = function createDefaultSettings({ DEFAULT_DECISION_SETTINGS }) {
     // - lastResult       : 上次检查结果快照（渲染器设置页展示）
     updates: {
       autoCheckEnabled: true,
+      autoDownload: false,
       intervalHours: 6,
       channel: 'stable',
       lastCheckedAt: '',

@@ -28,7 +28,14 @@ function normalizeCodex(result) {
         resetsAt: Number.isFinite(item.resetsAt) ? item.resetsAt * 1000 : null,
       });
     }
-  return { ok: true, windows, fetchedAt: result.fetchedAt };
+  return {
+    ok: true,
+    windows,
+    fetchedAt: result.fetchedAt,
+    ...(result.unavailable
+      ? { unavailable: true, error: result.message, manageUrl: result.manageUrl }
+      : {}),
+  };
 }
 function selectWindow(windows, mode) {
   const list = windows.filter(

@@ -152,6 +152,17 @@
   <script>
     // 主题参数由主进程经 query 传入（跟随设置中的深浅色/强调色/背景色/自定义字体）
     const q = new URLSearchParams(location.search);
+    const webStartup = q.get('web') === '1';
+    const webCopy = {
+      en: ['Preparing WebUI', 'Waiting for the virtual machine before opening the server', 'Cancel startup', 'Startup failed. Close and retry after correcting the error.', 'Virtual machine ready, opening WebUI…'],
+      de: ['WebUI vorbereiten', 'Der Server startet, sobald die virtuelle Maschine bereit ist', 'Start abbrechen', 'Start fehlgeschlagen. Fehler beheben und erneut starten.', 'Virtuelle Maschine bereit, WebUI startet…'],
+      zh: ['正在准备 WebUI', '虚拟机就绪后才会开放服务器', '取消启动', '启动失败。请关闭后排除错误，再重新启动。', '虚拟机已就绪，正在开放 WebUI…']
+    }[String(q.get('language') || 'zh').split('-')[0]] || ['正在准备 WebUI', '虚拟机就绪后才会开放服务器', '取消启动', '启动失败。请关闭后排除错误，再重新启动。', '虚拟机已就绪，正在开放 WebUI…'];
+    if (webStartup) {
+      document.getElementById('vmTitle').textContent = webCopy[0];
+      document.getElementById('vmNote').textContent = webCopy[1];
+      document.getElementById('vmFallback').textContent = webCopy[2];
+    }
     const dark = q.get('dark') !== '0';
     const accent = q.get('accent') || '4f8cff';
     const bg = q.get('bg') || (dark ? '17181d' : 'f5f7fa');
@@ -214,6 +225,7 @@
         spinner.style.display = 'none';
         detail.textContent = '已停止等待 —— 可切回本机，或稍后重试';
         setProgress(0);
+        if (webStartup) { detail.textContent = webCopy[3]; noteEl.textContent = webCopy[1]; return; }
         // 自动回退倒计时（主进程也会兜底，这里只做提示）
         let left = 20;
         noteEl.textContent = `${left}s 后自动以本机模式启动`;
@@ -245,13 +257,13 @@
             const st = (data && data.state) || '';
             if (!errEl.hidden && st !== 'failed') errEl.hidden = true;
             detail.textContent = (data && data.detail) || LABELS[st] || '';
-            if (st === 'ready') { detail.textContent = '虚拟机就绪，正在完成应用初始化…'; setProgress(100); }
+            if (st === 'ready') { detail.textContent = webStartup ? webCopy[4] : '虚拟机就绪，正在完成应用初始化…'; setProgress(100); }
             break;
           }
           case 'vm:serial': appendLog(data || ''); break;
           case 'vm:boot-begin': if (vmMode) detail.textContent = '正在启动虚拟机环境…'; break;
           case 'vm:boot-failed': fail(data && data.message, data && data.serialTail); break;
-          case 'vm:boot-ready': setProgress(100); detail.textContent = '虚拟机就绪，正在完成应用初始化…'; break;
+          case 'vm:boot-ready': setProgress(100); detail.textContent = webStartup ? webCopy[4] : '虚拟机就绪，正在完成应用初始化…'; break;
           case 'app:startup-ready': noteEl.textContent = '应用已预加载'; break;
           case 'vm:error': if (vmMode) appendLog('[error] ' + ((data && data.message) || '')); break;
           default: break;
@@ -259,6 +271,7 @@
       }
 
       btnFallback.addEventListener('click', async () => {
+        if (webStartup) { await window.vmSplash.cancelWebStartup(); return; }
         if (fallbackTimer) { clearInterval(fallbackTimer); fallbackTimer = null; }
         noteEl.textContent = '正在以本机模式启动…';
         try { await window.vmSplash.emergencyHostMode(); } catch (_) { /* ignore */ }

@@ -75,19 +75,19 @@ Search does not make a separate selection-model request. The primary agent may
 need a tool-search turn; this does not make reasoning/output tokens free. Model
 costs still depend on actual usage, provider cache behavior and the task.
 
-The existing **automatic tool selection (Jev)** preference remains independent
-of **on-demand loading**. When enabled, Jev makes one category-relevance decision
+The existing **automatic tool selection (System One)** preference remains independent
+of **on-demand loading**. When enabled, System One makes one category-relevance decision
 at the first task boundary and warms likely tools in priority order within the
-same schema envelope. Code mode also supports this preloading. Jev receives a
+same schema envelope. Code mode also supports this preloading. System One receives a
 short category/task description, not full tool schemas. Missing/low-confidence
 decisions fall back to local candidates in adaptive mode, never a second
-full-catalog LLM call. `searchTools` supplies capabilities Jev missed. The manual
-reoptimization button remains available; settings do not silently turn Jev off.
+full-catalog LLM call. `searchTools` supplies capabilities System One missed. The manual
+reoptimization button remains available; settings do not silently turn System One off.
 
 Tool preferences and grants are persisted as field patches, so changes do not
-overwrite concurrently edited Jev/loading/budget preferences with old snapshots.
+overwrite concurrently edited System One/loading/budget preferences with old snapshots.
 Changing optimization settings invalidates outstanding selection results for all
-live agents; a stale Jev reply cannot reinstate the previous selection.
+live agents; a stale System One reply cannot reinstate the previous selection.
 
 Stable insertion order is retained while schemas fit. Under budget pressure the
 least recently used definitions are evicted; capabilities remain discoverable.
@@ -110,7 +110,7 @@ Use/Playwright grants, sensitive-tool approval and dangerous commands. It does
 not grant privileges. Each sub-agent's registry is restricted to its enabled
 whitelist, including generic invocation. An enabled but deferred tool can be
 delegated; a disabled tool cannot. Legacy selection-model optimization remains
-compatible; adaptive mode uses its Jev/local prediction as bounded preloading.
+compatible; adaptive mode uses its System One/local prediction as bounded preloading.
 
 The discovery design follows the general pattern described in
 [Anthropic's tool-search engineering article](https://www.anthropic.com/engineering/advanced-tool-use).

@@ -87,7 +87,7 @@ const CATEGORY_META = {
   '电脑控制': { icon: 'fa-computer-mouse', desc: 'Computer Use 桌面控制' },
   '游戏': { icon: 'fa-gamepad', desc: '多人互动游戏' },
   '交互工具': { icon: 'fa-comments', desc: '提问澄清等交互工具' },
-  '决策': { icon: 'fa-scale-balanced', desc: '决策模型（Jev）：选择/打分/是否判断' },
+  '决策': { icon: 'fa-scale-balanced', desc: '决策模型（System One）：选择/打分/是否判断' },
   'FediKitten': { icon: 'fa-cat', desc: 'FediKitten 联邦宇宙社交（发帖/时间线/私信/关注）' },
   'MCP': { icon: 'fa-plug-circle-bolt', desc: 'MCP 协议接入的外部工具' }
 };
@@ -511,7 +511,7 @@ const CODE_TOOLS = new Set([
   'sleep',
   // 询问用户（复杂任务需澄清需求）
   'askQuestions',
-  // 决策模型（Jev）：分类/路由/是否判断等快速结构化决策
+  // 决策模型（System One）：分类/路由/是否判断等快速结构化决策
   'decisionModel',
 ]);
 
@@ -535,7 +535,7 @@ const BABE_ALLOWED_TOOLS = new Set([
   'manageContext', 'autoSummarizeContext',
   // 主题外观（Chat/Babe 共用，LLM 可主动调节深浅色/强调色/配色）
   'adjustAppearance',
-  // 决策模型（Jev）：快速结构化决策
+  // 决策模型（System One）：快速结构化决策
   'decisionModel'
 ]);
 
@@ -553,7 +553,7 @@ const TOOL_DEFINITIONS = [
   { name: 'codeIDE', desc: '调用 Code-OSS 扩展与语言服务（LSP）', icon: 'fa-code', category: '编程', sensitive: false },
   { name: 'runSubAgent', desc: '运行子代理', icon: 'fa-users', category: '代理', sensitive: false },
   { name: 'generateImage', desc: '生成图片（配置生图 API 后自动启用）', icon: 'fa-image', category: '创作', sensitive: false },
-  { name: 'decisionModel', desc: '调用决策模型（Jev）做选择/打分/是否判断（启用决策模型后自动启用）', icon: 'fa-scale-balanced', category: '决策', sensitive: false },
+  { name: 'decisionModel', desc: '调用决策模型（System One）做选择/打分/是否判断（启用决策模型后自动启用）', icon: 'fa-scale-balanced', category: '决策', sensitive: false },
   { name: 'calculator', desc: '精确计算表达式（本地）', icon: 'fa-calculator', category: '计算', sensitive: false },
   { name: 'factorInteger', desc: '整数质因数分解', icon: 'fa-divide', category: '计算', sensitive: false },
   { name: 'gcdLcm', desc: '计算最大公约数/最小公倍数', icon: 'fa-superscript', category: '计算', sensitive: false },
@@ -896,7 +896,7 @@ function getToolSchemas(enabledTools, mode, imOwner) {
     todoList: { type: 'function', function: { name: 'todoList', description: '管理全局持久化待办，跨会话共享且清空聊天不会清空待办。先 list 获取实际 ID，仅修改本任务相关条目，不要删除其他任务待办。收到含 3 个以上步骤或多个子目标的复杂任务时，必须先调用本工具拆分任务并写入待办列表；支持一次批量写入/删除/勾选多项（operations 数组，推荐），每完成子步骤立即批量 toggle 标记，防止上下文过长遗忘目标。', parameters: { type: 'object', properties: { action: { type: 'string', enum: ['add', 'update', 'remove', 'toggle', 'list', 'batch'], description: '操作类型；batch=按 operations 批量执行（单条操作也可直接用 add/remove/toggle）' }, text: { type: 'string', description: '待办事项内容（单条 add/update 时使用）' }, id: { type: 'number', description: '待办事项ID（单条 remove/toggle 时使用）' }, operations: { type: 'array', items: { type: 'object', properties: { action: { type: 'string', enum: ['add', 'update', 'remove', 'toggle'], description: '子操作类型' }, text: { type: 'string', description: 'add/update 的内容' }, id: { type: 'number', description: 'remove/toggle 的目标ID' } }, required: ['action'] }, description: '批量操作列表：一次添加/删除/勾选多项（action=batch 或直接提供 operations 时生效）' } }, required: [] } } },
     runSubAgent: { type: 'function', function: { name: 'runSubAgent', description: '运行一个独立子代理完成特定任务。子代理拥有自己的 agent loop（可多轮调用工具）、隔离上下文和工具白名单，完成后返回结果报告。适用于并行/分解任务、独立调查、批处理等场景。', parameters: { type: 'object', properties: { task: { type: 'string', description: '子代理要完成的任务（含目标、约束、验收标准）' }, context: { type: 'string', description: '给子代理的额外上下文信息（如相关文件路径、已有发现）' }, tools: { type: 'array', items: { type: 'string' }, description: '允许子代理使用的工具名称白名单。省略则使用默认安全集：readFile/listDirectory/localSearch/createFile/editFile/copyFile/makeDirectory/getSystemInfo/calculator/webSearch/webFetch/runJavaScriptCode。危险工具（deleteFile/runTerminalCommand 等）默认禁用，必须显式列出才会授予。' }, maxIterations: { type: 'number', description: '子代理最大循环轮数，默认 10，上限 30' } }, required: ['task'] } } },
     generateImage: { type: 'function', function: { name: 'generateImage', description: '根据文本提示生成图片', parameters: { type: 'object', properties: { prompt: { type: 'string', description: '图片描述(英文)' } }, required: ['prompt'] } } },
-    decisionModel: { type: 'function', function: { name: 'decisionModel', description: '调用外部决策模型（Jev，System One）做一次快速结构化决策。适合：分类/路由（type=choice，从候选里选一个）、按档位打分（type=score）、是/否判断（type=noul，返回成立概率）。返回决策值 + 概率分布 + 置信度；低置信时 value 为 null，需要你自行决策或补充上下文后重试。一次只问一个明确的问题：多维度评估请拆成多次调用（每次一个指标），不要把多个维度塞进一条 instructions。', parameters: { type: 'object', properties: { type: { type: 'string', enum: ['choice', 'score', 'noul'], description: '决策类型：choice=从选项中选择；score=按有序档位打分；noul=是否判断' }, instructions: { type: 'string', description: '决策问题（单一、明确）。choice 写清各选项含义；score 写清量表含义（如"1-5分，5分最支持请假"）。' }, state: { type: 'string', description: '决策依据的上下文/材料；省略时使用最近的用户消息' }, criteria: { type: 'array', items: { type: 'string' }, description: 'choice: 候选选项列表，如 ["711","罗森"]（省略时会从 instructions 的"A还是B"推断）；score: 有序档位，如 ["低","中","高"]（省略时按 scale 或 instructions 的"1-5分"推断，仍无则 1-5）。也兼容 {"选项":"说明"} 对象格式。' }, scale: { type: 'string', description: 'score 专用：量表，如 "1-5"、"0-10"。仅当未传 criteria 时生效。' }, threshold: { type: 'number', description: '可选：判定/置信阈值（0~1，越大越保守；默认 choice/score=0.25，noul=0.6；低于阈值仍会返回 suggested 倾向值）' } }, required: ['type', 'instructions'] } } },
+    decisionModel: { type: 'function', function: { name: 'decisionModel', description: '调用外部决策模型（System One）做一次快速结构化决策。适合：分类/路由（type=choice，从候选里选一个）、按档位打分（type=score）、是/否判断（type=noul，返回成立概率）。返回决策值 + 概率分布 + 置信度；低置信时 value 为 null，需要你自行决策或补充上下文后重试。一次只问一个明确的问题：多维度评估请拆成多次调用（每次一个指标），不要把多个维度塞进一条 instructions。', parameters: { type: 'object', properties: { type: { type: 'string', enum: ['choice', 'score', 'noul'], description: '决策类型：choice=从选项中选择；score=按有序档位打分；noul=是否判断' }, instructions: { type: 'string', description: '决策问题（单一、明确）。choice 写清各选项含义；score 写清量表含义（如"1-5分，5分最支持请假"）。' }, state: { type: 'string', description: '决策依据的上下文/材料；省略时使用最近的用户消息' }, criteria: { type: 'array', items: { type: 'string' }, description: 'choice: 候选选项列表，如 ["711","罗森"]（省略时会从 instructions 的"A还是B"推断）；score: 有序档位，如 ["低","中","高"]（省略时按 scale 或 instructions 的"1-5分"推断，仍无则 1-5）。也兼容 {"选项":"说明"} 对象格式。' }, scale: { type: 'string', description: 'score 专用：量表，如 "1-5"、"0-10"。仅当未传 criteria 时生效。' }, threshold: { type: 'number', description: '可选：判定/置信阈值（0~1，越大越保守；默认 choice/score=0.25，noul=0.6；低于阈值仍会返回 suggested 倾向值）' } }, required: ['type', 'instructions'] } } },
     calculator: { type: 'function', function: { name: 'calculator', description: '精确计算数学表达式（本地执行，支持常见中英文/全角符号与百分号写法）。任何涉及算式求值都应优先使用此工具，避免模型口算误差。', parameters: { type: 'object', properties: { expression: { type: 'string', description: '表达式，例如：(1+2.5)×3^2、50%+1、10 mod 3' } }, required: ['expression'] } } },
     factorInteger: { type: 'function', function: { name: 'factorInteger', description: '对整数做质因数分解，返回每个质因子的指数。适合约分、数论、分解验证等。', parameters: { type: 'object', properties: { value: { type: 'string', description: '要分解的整数，可为字符串/数字，如 "360" 或 "-84"' } }, required: ['value'] } } },
     gcdLcm: { type: 'function', function: { name: 'gcdLcm', description: '计算多个整数的最大公约数(gcd)和最小公倍数(lcm)。', parameters: { type: 'object', properties: { values: { type: 'array', items: { type: 'string' }, description: '整数数组，至少2个元素，如 ["12","18","30"]' } }, required: ['values'] } } },

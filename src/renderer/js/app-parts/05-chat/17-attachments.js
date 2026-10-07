@@ -1,4 +1,21 @@
   // ---- Attachment Handling ----
+  async function chooseAttachmentFiles(button, options = { multiple: true }) {
+    const browser = /^https?:$/.test(location.protocol);
+    const vm = (await window.api.runtime.getLocation()).location === 'vm';
+    if (!browser && !vm) return window.api.openFileDialog(options);
+    const local = await new Promise(resolve => {
+      const menu = document.createElement('dialog'); menu.className = 'attachment-source-menu';
+      const language = (agent.settings?.language || 'zh').split('-')[0];
+      const labels = language === 'de' ? ['Dateien auf diesem Gerät', 'Dateien im Arbeitsbereich', 'Abbrechen'] : language === 'en' ? ['Files on this device', 'Workspace files', 'Cancel'] : ['本机文件', '工作区文件', '取消'];
+      labels.forEach((label, index) => { const item = document.createElement('button'); item.textContent = label; item.className = 'btn-secondary'; item.onclick = () => { menu.close(); menu.remove(); resolve(index === 2 ? null : index === 0); }; menu.append(item); });
+      menu.addEventListener('cancel', () => { menu.remove(); resolve(null); }); document.body.append(menu); menu.showModal();
+      menu.addEventListener('close', () => button?.focus());
+    });
+    if (local === null) return { ok: false, canceled: true };
+    const result = local ? await window.api.pickLocalFiles(options) : await window.api.openFileDialog(options);
+    if (!result.ok && result.error) showToast(result.error, 'error');
+    return result;
+  }
   function addAttachment(file) {
     const isImage = file.type?.startsWith('image/') || /\.(png|jpg|jpeg|gif|bmp|webp|svg)$/i.test(file.name);
     const att = { name: file.name, size: file.size, type: file.type, isImage, path: file.path || null, pendingSave: null };
@@ -7,9 +24,10 @@
     if (file.arrayBuffer) {
       att.pendingSave = file.arrayBuffer().then(buf => {
         return window.api.saveUploadedFile(file.name, buf).then(result => {
-          if (result.ok) att.path = result.path;
+          if (!result.ok) throw new Error(result.error || 'Attachment import failed');
+          att.path = result.path;
         });
-      });
+      }).catch(error => { att.error = error.message; showToast(error.message, 'error'); renderAttachments(); });
     }
 
     currentAttachments.push(att);
@@ -66,9 +84,10 @@
     }
     attachmentsPreview.classList.remove('hidden');
     attachmentsPreview.innerHTML = currentAttachments.map((att, i) => `
-      <div class="attachment-item">
+      <div class="attachment-item" ${att.error ? 'data-failed="true"' : ''}>
         <i class="fa-solid ${att.isImage ? 'fa-image' : 'fa-file'}"></i>
         <span class="attachment-name">${escapeHtml(att.name)}</span>
+        ${att.error ? `<span class="attachment-error" title="${escapeHtml(att.error)}"><i class="fa-solid fa-triangle-exclamation"></i></span>` : ''}
         <button class="btn-icon attachment-remove" data-index="${i}"><i class="fa-solid fa-xmark"></i></button>
       </div>
     `).join('');
@@ -80,10 +99,10 @@
   // Attach file button
   if (btnAttachFile) {
     btnAttachFile.addEventListener('click', async () => {
-      const result = await window.api.openFileDialog({ multiple: true });
+      const result = await chooseAttachmentFiles(btnAttachFile, { multiple: true });
       if (result.ok && result.paths) {
         for (const p of result.paths) {
-          const name = p.split(/[\\/]/).pop();
+          const name = result.files?.find(file => file.path === p)?.name || p.split(/[\\/]/).pop();
           const isImage = /\.(png|jpg|jpeg|gif|bmp|webp|svg)$/i.test(name);
           // 运行位置=虚拟机：路径翻译为 VM 内路径（hostPath 保留宿主原路径）
           const vmPath = (typeof window.api?.runtimeToVmPath === 'function')
@@ -126,6 +145,40 @@
         addAttachment(file);
       }
     }
+  });
+
+  function bindLocalFileDrop(element, attach) {
+    if (!element) return;
+    element.addEventListener('dragover', event => {
+      if (!event.dataTransfer?.types.includes('Files')) return;
+      event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; element.classList.add('drag-over');
+    });
+    element.addEventListener('dragleave', event => { if (!element.contains(event.relatedTarget)) element.classList.remove('drag-over'); });
+    element.addEventListener('drop', async event => {
+      if (!event.dataTransfer?.files.length) return;
+      event.preventDefault(); element.classList.remove('drag-over');
+      try { await attach([...event.dataTransfer.files]); } catch (error) { showToast(error.message, 'error'); }
+    });
+  }
+  bindLocalFileDrop(document.querySelector('.chat-input-area'), files => files.forEach(addAttachment));
+  for (const selector of ['#code-chat-messages', '.code-agent-composer']) bindLocalFileDrop(document.querySelector(selector), async files => {
+    const owner = codeAgent, workspace = codeWorkspacePath;
+    for (const file of files) {
+      const result = await window.api.saveUploadedFile(file.name, await file.arrayBuffer());
+      if (!result.ok) throw new Error(result.error || 'Attachment import failed');
+      if (owner !== codeAgent || workspace !== codeWorkspacePath) return;
+      await addFileToCodeContext({ path: result.path, name: file.name, type: 'file' });
+    }
+  });
+  for (const selector of ['#babe-chat-messages', '.babe-chat-input']) bindLocalFileDrop(document.querySelector(selector), async files => {
+    const owner = babeAgent;
+    for (const file of files) {
+      const result = await window.api.saveUploadedFile(file.name, await file.arrayBuffer());
+      if (!result.ok) throw new Error(result.error || 'Attachment import failed');
+      if (owner !== babeAgent) return;
+      babeAttachments.push({ name: file.name, path: result.path, size: file.size, type: file.type, isImage: file.type.startsWith('image/') });
+    }
+    renderBabeAttachments();
   });
 
   // Paste image

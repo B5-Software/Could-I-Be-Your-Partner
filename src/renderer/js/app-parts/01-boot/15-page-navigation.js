@@ -2,13 +2,9 @@
   installMotionPreferences();
   const navigationLoads = new Map();
   const primaryPages = new Set(['chat', 'code', 'babe']);
-  function navigatePage(name, toggle = false) {
+  function navigatePage(name) {
     let page = document.getElementById('page-' + name);
     if (!page) return false;
-    if (toggle && !primaryPages.has(name) && page.classList.contains('active')) {
-      name = currentMode;
-      page = document.getElementById('page-' + name);
-    }
     const pages = [...document.querySelectorAll('#main-content > .page')];
     const changed = !page.classList.contains('active');
     if (changed) {
@@ -62,7 +58,7 @@
   window.navigatePage = name => navigatePage(name);
   document.querySelectorAll('.nav-item[data-page]').forEach(button => {
     button.setAttribute('aria-controls', 'page-' + button.dataset.page);
-    button.addEventListener('click', () => navigatePage(button.dataset.page, true));
+    button.addEventListener('click', () => navigatePage(button.dataset.page));
   });
   document.querySelectorAll('#main-content > .page').forEach(page => {
     page.inert = !page.classList.contains('active');

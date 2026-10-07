@@ -45,7 +45,7 @@ electron . --headless
 
 启动后：
 
-- 不创建任何 `BrowserWindow`（含启动画面、托盘、崩溃报告窗口）；
+- 不创建主界面窗口；有桌面环境的 WebUI 启动可以显示 VM 准备进度并创建托盘；
 - 主进程承载 Agent 运行时（`src/main/agent-runtime.js`）；
 - WebUI 服务自动启动并直连运行时。
 
@@ -75,7 +75,7 @@ WebUI 与 GUI 共用同一套数据（`userData/data/` 下的设置、历史、�
 运行时事件 → WebUI 既有 push 协议（`message` / `status` / `toolCall` / `approval` /
 `title` / `messagesSync` …），WebUI 前端无需改动。
 
-GUI 在线时仍走原来的"遥控"路径（命令转发给窗口），两种模式互不影响。
+GUI、TUI 与 WebUI 都连接主进程的共享后台，复用同一份 Agent 会话和服务。WebUI 使用与 GUI 相同的渲染页面，通过浏览器预加载适配 HTTP / WebSocket、文件选择和设备能力；关闭 GUI 不会停止浏览器中的会话。
 
 ## 4. 交互请求（审批 / 工具授权 / 提问）
 

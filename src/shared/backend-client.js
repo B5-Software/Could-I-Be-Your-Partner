@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 'use strict';
+const wire = require('./wire-values');
 
 class BackendClient {
   constructor({ url, token = '', fetchImpl = globalThis.fetch, socketFactory, onError = () => {} }) {
@@ -30,12 +31,12 @@ class BackendClient {
       method: body === undefined ? 'GET' : 'POST',
       credentials: 'include',
       headers: { ...(body !== undefined ? { 'Content-Type': 'application/json', 'X-CIBYP-Client': '1' } : {}), ...(this.token ? { Authorization: 'Bearer ' + this.token } : {}) },
-      body: body === undefined ? undefined : JSON.stringify(body),
+      body: body === undefined ? undefined : JSON.stringify(body, wire.replacer),
       // An Agent turn may be awaiting a person or a persistent tool job. It
       // continues in the backend; an HTTP timer must not abort its UI contract.
       signal: ['sendMessage', 'inject', 'agentAction'].includes(body?.method) ? undefined : AbortSignal.timeout(120000),
     });
-    const value = await response.json();
+    const value = typeof response.text === 'function' ? JSON.parse(await response.text(), wire.reviver) : await response.json();
     if (!response.ok) {
       const error = new Error(value.error || 'Backend request failed: ' + response.status);
       error.status = response.status;
@@ -76,11 +77,13 @@ class BackendClient {
     };
     socket.onmessage = event => {
       try {
-        const value = JSON.parse(String(event.data));
+        const value = JSON.parse(String(event.data), wire.reviver);
         if (value.type === 'reset') {
           this.request('snapshot').then(snapshot => { this.sequence = snapshot.sequence; this.snapshot = snapshot; this.emit({ type: 'snapshot', snapshot }); socket.close(); }).catch(this.onError);
         } else if (value.type === 'connected') {
           this.emit({ type: 'connection', connected: true });
+        } else if (value.type === 'voice-control-result') {
+          this.emit(value);
         } else if (value.sequence > this.sequence) {
           this.sequence = value.sequence;
           this.emit(value);

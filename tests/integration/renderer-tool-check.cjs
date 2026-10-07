@@ -26,7 +26,7 @@ module.exports = async function checkTools(webContents) {
     while (!document.querySelector('[data-computer-recheck]') && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 20));
     check(!!document.querySelector('[data-computer-recheck]'), 'permission setup card did not render');
     check(!!document.querySelector('#tool-schema-budget'), 'schema budget preference missing');
-    check(!!document.querySelector('#toggle-auto-optimize-tools') && !!document.querySelector('#toggle-tool-discovery'), 'Jev optimization and discovery must have independent preferences');
+    check(!!document.querySelector('#toggle-auto-optimize-tools') && !!document.querySelector('#toggle-tool-discovery'), 'System One optimization and discovery must have independent preferences');
     const optimizer = document.querySelector('#toggle-auto-optimize-tools');
     const discovery = document.querySelector('#toggle-tool-discovery');
     const waitSetting = async (label, predicate) => {
@@ -39,7 +39,7 @@ module.exports = async function checkTools(webContents) {
       throw new Error('Tool preference did not persist: ' + label + ' ' + JSON.stringify(last));
     };
     optimizer.checked = true; optimizer.dispatchEvent(new Event('change', { bubbles: true }));
-    await waitSetting('enable Jev', current => current.autoOptimizeToolSelection === true && current.toolExposure.mode === 'adaptive');
+    await waitSetting('enable System One', current => current.autoOptimizeToolSelection === true && current.toolExposure.mode === 'adaptive');
     discovery.checked = false; discovery.dispatchEvent(new Event('change', { bubbles: true }));
     await waitSetting('disable discovery', current => current.toolExposure.mode === 'all' && current.autoOptimizeToolSelection === true);
     discovery.checked = true; discovery.dispatchEvent(new Event('change', { bubbles: true }));
@@ -57,7 +57,7 @@ module.exports = async function checkTools(webContents) {
     await waitSetting('restore a tool', current => current.tools.readFile === true && current.autoOptimizeToolSelection === true && current.toolExposure.mode === 'adaptive');
     document.querySelector('#tools-modal-close').click();
     optimizer.checked = false; optimizer.dispatchEvent(new Event('change', { bubbles: true }));
-    await waitSetting('disable Jev', current => current.autoOptimizeToolSelection === false && current.toolExposure.mode === 'adaptive');
+    await waitSetting('disable System One', current => current.autoOptimizeToolSelection === false && current.toolExposure.mode === 'adaptive');
     check(document.querySelector('#tools-stats').textContent.includes('本轮已加载'), 'tools stats did not show actual loaded schemas');
     document.querySelector('[data-computer-recheck]').click();
     await new Promise(resolve => setTimeout(resolve, 50));

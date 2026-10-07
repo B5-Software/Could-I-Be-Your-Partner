@@ -89,6 +89,7 @@ function createAgentRuntime({
       mode: session.mode,
       profile: session.profile,
       status: session.status,
+      lastError: session.lastError || null,
       busy: session.busy,
       title: session.title,
       model: session.agent?.getActiveModelId() || '',
@@ -295,6 +296,8 @@ function createAgentRuntime({
       case 'assistant':
       case 'system':
       case 'error':
+        if (type === 'error')
+          session.lastError = typeof data === 'string' ? data : data?.message || String(data);
         emit({
           type: 'message',
           key: session.key,
@@ -776,6 +779,7 @@ function createAgentRuntime({
       const session = sessions.get(key);
       if (!session) return null;
       return {
+        session: sessionSnapshot(session),
         compaction: session.agent.contextManager?.compactionState || null,
         messages: flattenMessages({
           messages:
@@ -990,7 +994,10 @@ function createAgentRuntime({
       };
     },
 
-    async sendMessage(key, message, attachments = []) {
+    async submitMessage(key, message, attachments = []) {
+      return this.sendMessage(key, message, attachments, { background: true });
+    },
+    async sendMessage(key, message, attachments = [], options = {}) {
       const session = createSession({ key, mode: 'chat' });
       if (session.rewinding) return { ok: false, error: 'Conversation is being rewound' };
       if (session.loadingHistory) return { ok: false, error: 'Conversation is still loading' };
@@ -1012,6 +1019,7 @@ function createAgentRuntime({
       if ([...sessions.values()].filter((value) => value.busy).length >= maximum)
         return { ok: false, error: 'Maximum concurrent sessions reached' };
       session.busy = true;
+      session.lastError = null;
       session.unadmittedInput = {
         text: message,
         start: session.agent.contextManager.getHistoryMessages().length,
@@ -1029,65 +1037,73 @@ function createAgentRuntime({
         attachments: require('../shared/attachments').normalize(attachments),
       });
       emit({ type: 'status', key: session.key, status: 'running' });
-      try {
-        await ensureInitialized(session);
-        if (session.stopRequested) return { ok: true, stopped: true };
-        await session.agent.sendMessage(message, attachments || []);
-        if (
-          session.mode === 'code' &&
-          session.hostWorkspacePath &&
-          session.agent.settings.runtime?.workspaceMode !== 'isolated'
-        ) {
-          // Exports use the sync queue, without keeping the conversation busy
-          // after the Agent has stopped accepting hot messages.
-          const reportSyncError = (error) =>
-            emit({
-              type: 'message',
-              key,
-              role: 'system',
-              content: 'Workspace synchronization failed: ' + error,
-            });
-          api
-            .workspaceSync(session.agent.workspacePath, session.hostWorkspacePath)
-            .then((sync) => {
-              if (sync?.ok === false) reportSyncError(sync.error);
-            })
-            .catch((error) => reportSyncError(error.message));
-        }
-        return {
-          ok: true,
-          conversationId: session.agent.conversationId,
-          title: session.title,
-          workspacePath: session.agent.workspacePath,
-        };
-      } catch (error) {
-        emit({
-          type: 'message',
-          key: session.key,
-          role: 'system',
-          content: `[错误] ${error.message}`,
-        });
-        return { ok: false, error: error.message };
-      } finally {
-        if (
-          session.unadmittedInput &&
-          session.agent.contextManager
-            .getHistoryMessages()
-            .slice(session.unadmittedInput.start)
-            .some((m) => m.role === 'user' && m.metadata?.kind !== 'context-update')
-        )
-          session.unadmittedInput = null;
-        session.busy = false;
-        session.finish?.();
-        session.status = 'idle';
-        // 每轮结束推送用量/成本/上下文统计 → 前端状态栏
+      const execute = async () => {
         try {
-          this.emitUsageStats(session.key);
-        } catch {
-          /* 统计推送失败不影响主流程 */
+          await ensureInitialized(session);
+          if (session.stopRequested) return { ok: true, stopped: true };
+          await session.agent.sendMessage(message, attachments || []);
+          if (
+            session.mode === 'code' &&
+            session.hostWorkspacePath &&
+            session.agent.settings.runtime?.workspaceMode !== 'isolated'
+          ) {
+            // Exports use the sync queue, without keeping the conversation busy
+            // after the Agent has stopped accepting hot messages.
+            const reportSyncError = (error) =>
+              emit({
+                type: 'message',
+                key,
+                role: 'system',
+                content: 'Workspace synchronization failed: ' + error,
+              });
+            api
+              .workspaceSync(session.agent.workspacePath, session.hostWorkspacePath)
+              .then((sync) => {
+                if (sync?.ok === false) reportSyncError(sync.error);
+              })
+              .catch((error) => reportSyncError(error.message));
+          }
+          return {
+            ok: true,
+            conversationId: session.agent.conversationId,
+            title: session.title,
+            workspacePath: session.agent.workspacePath,
+          };
+        } catch (error) {
+          session.lastError = error.message;
+          emit({
+            type: 'message',
+            key: session.key,
+            role: 'system',
+            content: `[错误] ${error.message}`,
+          });
+          return { ok: false, error: error.message };
+        } finally {
+          if (
+            session.unadmittedInput &&
+            session.agent.contextManager
+              .getHistoryMessages()
+              .slice(session.unadmittedInput.start)
+              .some((m) => m.role === 'user' && m.metadata?.kind !== 'context-update')
+          )
+            session.unadmittedInput = null;
+          session.busy = false;
+          session.finish?.();
+          session.status = session.lastError ? 'error' : 'idle';
+          // 每轮结束推送用量/成本/上下文统计 → 前端状态栏
+          try {
+            this.emitUsageStats(session.key);
+          } catch {
+            /* 统计推送失败不影响主流程 */
+          }
+          emit({ type: 'status', key: session.key, status: session.status });
         }
-        emit({ type: 'status', key: session.key, status: 'idle' });
+      };
+      if (options.background === true) {
+        void execute();
+        return { ok: true, accepted: true, key: session.key };
       }
+      return execute();
     },
 
     /** 热消息注入（工作中追加指令）；会话空闲时等价 sendMessage */

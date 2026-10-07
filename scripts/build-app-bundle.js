@@ -75,6 +75,14 @@ async function buildApp() {
   });
   const preloadDirectory = path.join(root, 'src/preload');
   await esbuild.build({
+    entryPoints: [path.join(root, 'src/renderer/core/browser-child-dialog.ts')],
+    outfile: path.join(preloadDirectory, 'generated/browser-child-dialog.js'),
+    bundle: true,
+    platform: 'browser',
+    format: 'iife',
+    target: 'chrome120',
+  });
+  await esbuild.build({
     entryPoints: [path.join(preloadDirectory, 'preload.js')],
     outfile: path.join(preloadDirectory, 'generated/browser-preload.js'),
     bundle: true,
@@ -87,6 +95,21 @@ async function buildApp() {
   const preloads = fs
     .readdirSync(preloadDirectory)
     .filter((file) => file === 'preload.js' || file.endsWith('-preload.js'));
+  for (const page of Object.values(require('../src/shared/browser-pages'))) {
+    await esbuild.build({
+      stdin: {
+        contents: "require('./preload.js'); require('./" + page + "-preload.js');",
+        resolveDir: preloadDirectory,
+      },
+      outfile: path.join(preloadDirectory, 'generated/browser-' + page + '-preload.js'),
+      bundle: true,
+      platform: 'browser',
+      format: 'iife',
+      target: 'chrome120',
+      alias: { electron: path.join(preloadDirectory, 'browser-electron.js') },
+      define: { 'process.platform': 'window.cibypPlatform' },
+    });
+  }
   await esbuild.build({
     entryPoints: preloads.map((file) => path.join(preloadDirectory, file)),
     outdir: path.join(preloadDirectory, 'generated'),

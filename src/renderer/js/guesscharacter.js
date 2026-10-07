@@ -54,8 +54,11 @@
 
   function makeAvatarHTML(avatarData, isAI) {
     if (avatarData) {
-      const src = avatarData.startsWith('data:') ? avatarData : 'file://' + avatarData.replace(/\\/g, '/');
-      return `<img src="${src}" style="width:100%;height:100%;border-radius:50%;object-fit:cover" alt="">`;
+      const image = document.createElement('img');
+      image.src = window.CibypAvatarSource.resolve(avatarData);
+      image.style.cssText = 'width:100%;height:100%;border-radius:50%;object-fit:cover';
+      image.alt = '';
+      return image.outerHTML;
     }
     return isAI ? '<i class="fa-solid fa-robot"></i>' : '<i class="fa-solid fa-user"></i>';
   }

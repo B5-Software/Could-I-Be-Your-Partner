@@ -429,6 +429,7 @@
               <textarea id="code-chat-input" rows="3" placeholder="描述编程任务… Enter 发送，Shift+Enter 换行" aria-label="编程任务"></textarea>
               <div class="code-agent-composer-actions">
                 <button class="btn-icon" id="btn-code-attach-file" title="添加文件到上下文" aria-label="添加文件到上下文"><i class="fa-solid fa-paperclip"></i></button>
+                <button class="btn-icon" id="btn-code-camera" title="拍照" aria-label="拍照"><i class="fa-solid fa-camera"></i></button>
                 <span>使用当前模型与工具</span>
                 <button class="btn-primary" id="btn-code-send" title="发送任务"><i class="fa-solid fa-arrow-up"></i> 发送</button>
                 <button class="btn-secondary hidden" id="btn-code-stop" title="停止任务"><i class="fa-solid fa-stop"></i> 停止</button>
@@ -518,6 +519,7 @@
           <button class="btn-icon" id="btn-babe-attach-file" title="附加文件">
             <i class="fa-solid fa-paperclip"></i>
           </button>
+          <button class="btn-icon" id="btn-babe-camera" title="拍照" aria-label="拍照"><i class="fa-solid fa-camera"></i></button>
           <button class="btn-primary btn-send" id="btn-babe-send">
             <i class="fa-solid fa-paper-plane"></i>
           </button>
@@ -701,7 +703,7 @@
             <button class="settings-tab" data-tab="user"><i class="fa-solid fa-user"></i> 个人资料</button>
             <div class="settings-tab-group" data-i18n="ui.settings.groups.model">模型与智能</div>
             <button class="settings-tab" data-tab="llm"><i class="fa-solid fa-microchip"></i> 模型与连接</button>
-            <button class="settings-tab" data-tab="decision"><i class="fa-solid fa-scale-balanced"></i> Jev 决策模型</button>
+            <button class="settings-tab" data-tab="decision"><i class="fa-solid fa-scale-balanced"></i> System One 决策模型</button>
             <button class="settings-tab" data-tab="context"><i class="fa-solid fa-compress"></i> Token 与上下文</button>
             <button class="settings-tab" data-tab="image"><i class="fa-solid fa-image"></i> 生图</button>
             <div class="settings-tab-group" data-i18n="ui.settings.groups.usage">用量与成本</div>
@@ -742,7 +744,7 @@
             <button class="settings-tab" data-tab="updates"><i class="fa-solid fa-arrows-rotate"></i> 更新</button>
           </div>
           <div class="settings-panels">
-            <div class="settings-panel active" data-tab="overview"><div class="settings-group"><h3>常用设置</h3><p class="setting-hint">从这里查看配置状态，或搜索具体设置。普通字段修改后自动保存；连接、安装和维护操作使用各页按钮。</p><div id="settings-overview-cards" class="settings-overview-grid"></div></div><div class="settings-group"><h3>限额分别控制什么</h3><div class="settings-limit-guide"><p><strong>Token 与上下文</strong><br>单次请求容量、输出预留、工具加载和历史压缩。</p><p><strong>消费与用量上限</strong><br>每天累计 Token、生成图片张数、Jev 调用次数，以及按价格表估算的日／周／月 LLM 费用。</p><p><strong>任务目标预算</strong><br>只作用于当前目标任务，在任务界面设置，保留独立的任务范围。</p></div><button class="btn-secondary" type="button" data-settings-open="context">调整 Token 分配</button> <button class="btn-secondary" type="button" data-settings-open="budget">调整累计限额</button></div></div>
+            <div class="settings-panel active" data-tab="overview"><div class="settings-group"><h3>常用设置</h3><p class="setting-hint">从这里查看配置状态，或搜索具体设置。普通字段修改后自动保存；连接、安装和维护操作使用各页按钮。</p><div id="settings-overview-cards" class="settings-overview-grid"></div></div><div class="settings-group"><h3>限额分别控制什么</h3><div class="settings-limit-guide"><p><strong>Token 与上下文</strong><br>单次请求容量、输出预留、工具加载和历史压缩。</p><p><strong>消费与用量上限</strong><br>每天累计 Token、生成图片张数、System One 调用次数，以及按价格表估算的日／周／月 LLM 费用。</p><p><strong>任务目标预算</strong><br>只作用于当前目标任务，在任务界面设置，保留独立的任务范围。</p></div><button class="btn-secondary" type="button" data-settings-open="context">调整 Token 分配</button> <button class="btn-secondary" type="button" data-settings-open="budget">调整累计限额</button></div></div>
             <div class="settings-panel" data-tab="ai">
 
               <div class="settings-group">
@@ -907,16 +909,41 @@
 
             <div class="settings-panel" data-tab="llm">
               <!-- 模型池：会话创建时选定并锁定模型，之后不再自动切换（保护提示词缓存） -->
+              <div class="settings-group" id="llm-pool-group">
+                <h3><i class="fa-solid fa-layer-group"></i> 模型池</h3>
+                <p class="setting-hint" style="margin-bottom:10px">会话创建时按下方策略选定一个模型并锁定到该会话，之后不再自动切换（保护提示词缓存）；仅可用 <code>/model</code> 手动切换。</p>
+                <div class="setting-item">
+                  <label>模型选择策略</label>
+                  <select id="setting-llm-model-strategy" style="width:280px">
+                    <option value="priority">手动优先级（按优先级取第一个可用）</option>
+                    <option value="intelligence">System One 智慧分数（按消息难度选）</option>
+                  </select>
+                </div>
+                <div class="setting-item">
+                  <label>Reasoning Effort 策略</label>
+                  <select id="setting-llm-effort-strategy" style="width:280px">
+                    <option value="manual">按模型条目手动设置</option>
+                    <option value="jev">System One 决策（会话创建时一次）</option>
+                  </select>
+                  <div class="setting-hint">System One 决策需先在「决策模型」标签页启用；失败时回退到条目手动值</div>
+                </div>
+                <div id="llm-pool-list" class="llm-pool-list"></div>
+                <div style="display:flex;gap:8px;align-items:center;margin-top:8px">
+                  <button class="btn-secondary btn-sm" id="btn-pool-add" type="button"><i class="fa-solid fa-plus"></i> 添加模型</button>
+                  <span class="setting-hint" id="llm-pool-hint"></span>
+                </div>
+              </div>
               <div class="settings-group" id="chatgpt-account-group">
   <h3><i class="fa-solid fa-user-shield"></i> ChatGPT / Codex 账号</h3>
   <p class="setting-hint">登录自己的 ChatGPT 账号，授权使用订阅额度。账号凭据单独保存在本机，GUI 与 TUI 共用。</p>
   <div class="setting-item"><label for="chatgpt-account-select">已保存账号</label><select id="chatgpt-account-select"><option value="">尚未登录</option></select></div>
-  <div class="setting-item"><label for="chatgpt-model-select">订阅模型</label><select id="chatgpt-model-select"><option value="">登录后获取</option></select></div>
+  <div class="setting-item"><label for="chatgpt-model-select">添加到模型池的 ChatGPT 模型</label><select id="chatgpt-model-select"><option value="">登录后获取</option></select></div>
+  <p class="setting-hint">从当前账号的可用模型中选择，点击「添加并设为默认」加入模型池，供新会话使用；已有会话可用 /model 切换。</p>
   <div class="setting-buttons" style="display:flex;gap:8px;flex-wrap:wrap">
     <button class="btn-primary" id="btn-chatgpt-login">Continue with ChatGPT</button>
     <button class="btn-secondary" id="btn-chatgpt-reauth">重新授权</button>
     <button class="btn-secondary" id="btn-chatgpt-cancel" hidden>取消登录</button>
-    <button class="btn-secondary" id="btn-chatgpt-use">使用此模型</button>
+    <button class="btn-secondary" id="btn-chatgpt-use">添加并设为默认</button>
     <button class="btn-secondary" id="btn-chatgpt-logout">注销账号</button>
     <button class="btn-secondary" id="btn-chatgpt-limits">刷新订阅额度</button>
     <button class="btn-secondary" id="btn-chatgpt-usage">ChatGPT 用量管理</button>
@@ -925,30 +952,6 @@
   <div id="chatgpt-quota-windows"></div>
   <p class="setting-hint">订阅请求按账号额度计量；API 参考单价不会作为订阅实际消费。该渠道目前不支持服务端输出 Token 上限。</p>
 </div>
-              <div class="settings-group" id="llm-pool-group">
-                <h3><i class="fa-solid fa-layer-group"></i> 模型池</h3>
-                <p class="setting-hint" style="margin-bottom:10px">会话创建时按下方策略选定一个模型并锁定到该会话，之后不再自动切换（保护提示词缓存）；仅可用 <code>/model</code> 手动切换。</p>
-                <div class="setting-item">
-                  <label>模型选择策略</label>
-                  <select id="setting-llm-model-strategy" style="width:280px">
-                    <option value="priority">手动优先级（按优先级取第一个可用）</option>
-                    <option value="intelligence">Jev 智慧分数（按消息难度选）</option>
-                  </select>
-                </div>
-                <div class="setting-item">
-                  <label>Reasoning Effort 策略</label>
-                  <select id="setting-llm-effort-strategy" style="width:280px">
-                    <option value="manual">按模型条目手动设置</option>
-                    <option value="jev">Jev 决策（会话创建时一次）</option>
-                  </select>
-                  <div class="setting-hint">Jev 决策需先在「决策模型」标签页启用；失败时回退到条目手动值</div>
-                </div>
-                <div id="llm-pool-list" class="llm-pool-list"></div>
-                <div style="display:flex;gap:8px;align-items:center;margin-top:8px">
-                  <button class="btn-secondary btn-sm" id="btn-pool-add" type="button"><i class="fa-solid fa-plus"></i> 添加模型</button>
-                  <span class="setting-hint" id="llm-pool-hint"></span>
-                </div>
-              </div>
               <div class="settings-group">
                 <h3><i class="fa-solid fa-microchip"></i> LLM 配置</h3>
                 <div id="llm-legacy-config" class="hidden">
@@ -1100,8 +1103,8 @@
 
             <div class="settings-panel" data-tab="decision">
               <div class="settings-group">
-                <h3><i class="fa-solid fa-scale-balanced"></i> 决策模型（System One / Jev）</h3>
-                <p class="setting-hint" style="margin-bottom:12px">Jev 不生成文本，只做「选择 / 打分 / 是否」类快速决策（70–500ms），用于模型池选型、工具选择、命令护栏、游戏决策等。低置信一律回退原有逻辑，不会阻塞主流程。</p>
+                <h3><i class="fa-solid fa-scale-balanced"></i> 决策模型（System One）</h3>
+                <p class="setting-hint" style="margin-bottom:12px" data-i18n="ui.systemOne.help">用「是否 / 选择 / 打分」决策模型处理路由、工具选择和护栏。支持兼容 System One 协议的云服务与本地服务；低置信、超时或能力不支持时回退原有逻辑。</p>
                 <div class="setting-item">
                   <label class="setting-label">启用决策模型</label>
                   <div class="toggle-switch"><input type="checkbox" id="setting-decision-enabled"><span class="toggle-slider"></span></div>
@@ -1109,8 +1112,13 @@
                 <div class="setting-item">
                   <label>服务源</label>
                   <select id="setting-decision-provider" style="width:300px">
-                    <option value="zen">OpenCode Zen（免费 Jev 1.13）</option>
+                    <option value="zen">OpenCode Zen</option>
                     <option value="typesafe">TypeSafe 直连（自备 Key）</option>
+                    <option value="openrouter">OpenRouter</option>
+                    <option value="perplexity">Perplexity</option>
+                    <option value="fastino">Fastino</option>
+                    <option value="cloudflare">Cloudflare Workers AI</option>
+                    <option value="compatible" data-i18n="ui.systemOne.custom">自定义 / 本地兼容服务</option>
                   </select>
                 </div>
                 <div class="setting-item">
@@ -1119,11 +1127,27 @@
                 </div>
                 <div class="setting-item">
                   <label>API Key</label>
-                  <input type="password" id="setting-decision-key" placeholder="Zen 免费可留空（public）；TypeSafe 必填" autocomplete="off">
+                  <input type="password" id="setting-decision-key" placeholder="服务商的 API Key；本地服务可留空" data-i18n-placeholder="ui.systemOne.keyHint" autocomplete="off">
                 </div>
                 <div class="setting-item">
                   <label>模型</label>
-                  <input type="text" id="setting-decision-model" placeholder="默认 jev-1.13-free（Zen）/ jev-latest（TypeSafe）" autocomplete="off">
+                  <input type="text" id="setting-decision-model" list="system-one-models" placeholder="选择或输入决策模型 ID" data-i18n-placeholder="ui.systemOne.modelHint" autocomplete="off">
+                  <datalist id="system-one-models"></datalist>
+                </div>
+                <div class="setting-item">
+                  <label data-i18n="ui.systemOne.modelsUrl">模型列表 URL（可选）</label>
+                  <input type="text" id="setting-decision-models-url" data-setting="decision.modelsUrl" placeholder="留空自动使用服务商的模型列表" data-i18n-placeholder="ui.systemOne.modelsHint" autocomplete="off">
+                </div>
+                <div class="settings-actions">
+                  <button class="btn-secondary" id="btn-decision-models" type="button" data-i18n="ui.systemOne.fetchModels">获取决策模型</button>
+                  <span class="setting-hint" id="decision-models-status" role="status" aria-live="polite"></span>
+                </div>
+                <p class="setting-hint" data-i18n="ui.systemOne.endpointHelp">API URL 填完整的决策接口地址。Cloudflare 需包含 Account ID 和模型路径；自定义服务可不填模型。获取列表只发送 GET 请求，不调用模型。</p>
+                <div class="setting-item"><label data-i18n="ui.systemOne.noul">支持是否判断（noul）</label><div class="toggle-switch"><input type="checkbox" id="setting-decision-cap-noul" data-setting="decision.capabilities.noul"><span class="toggle-slider"></span></div></div>
+                <div class="setting-item"><label data-i18n="ui.systemOne.choice">支持选项选择（choice）</label><div class="toggle-switch"><input type="checkbox" id="setting-decision-cap-choice" data-setting="decision.capabilities.choice"><span class="toggle-slider"></span></div></div>
+                <div class="setting-item"><label data-i18n="ui.systemOne.score">支持档位打分（score）</label><div class="toggle-switch"><input type="checkbox" id="setting-decision-cap-score" data-setting="decision.capabilities.score"><span class="toggle-slider"></span></div></div>
+                <div class="setting-item">
+                  <p class="setting-hint" data-i18n="ui.systemOne.capHelp">按模型文档关闭不支持的类型，避免发送无效请求。不同模型的置信度并不等价，换模型后请重新评估阈值。</p>
                 </div>
                 <div class="setting-item">
                   <label>置信阈值</label>
@@ -1175,7 +1199,7 @@
               <div class="settings-group">
                 <h3><i class="fa-solid fa-toolbox"></i> 工具上下文</h3>
                 <div class="setting-item"><label for="toggle-tool-discovery">按需加载工具</label><div class="toggle-switch"><input type="checkbox" id="toggle-tool-discovery"><span class="toggle-slider"></span></div><p class="setting-hint">常用工具保持加载，其余工具通过本地搜索补充，内置、MCP 和插件能力均可发现。</p></div>
-                <div class="setting-item"><label for="toggle-auto-optimize-tools">自动选择预加载工具（Jev 优先）</label><div class="toggle-switch"><input type="checkbox" id="toggle-auto-optimize-tools"><span class="toggle-slider"></span></div><p class="setting-hint" id="tool-selection-settings-hint">Jev 根据任务选择工具；未启用 Jev 的工具选择或服务不可用时使用本地候选。与按需加载可同时开启。</p></div>
+                <div class="setting-item"><label for="toggle-auto-optimize-tools">自动选择预加载工具（System One 优先）</label><div class="toggle-switch"><input type="checkbox" id="toggle-auto-optimize-tools"><span class="toggle-slider"></span></div><p class="setting-hint" id="tool-selection-settings-hint">System One 根据任务选择工具；未启用 System One 的工具选择或服务不可用时使用本地候选。与按需加载可同时开启。</p></div>
                 <div class="setting-item"><label for="tool-schema-budget">工具定义占用上限（估算 tokens）</label><input id="tool-schema-budget" type="number" min="1000" max="16000" step="1" value="4000"><p class="setting-hint">属于上下文的一部分，默认最多 4000；小窗口还会按可用输入空间收敛。完整加载模式不使用该上限。</p></div>
                 <button class="btn-secondary" type="button" data-settings-page="tools">管理启用的工具</button>
               </div>
@@ -1332,10 +1356,10 @@
                   <input type="number" id="setting-img-daily-limit" min="0" step="1" placeholder="例如 50">
                   <div class="setting-hint" id="setting-img-usage">今日已用: 0</div>
                 </div><div class="setting-item">
-                  <label>每日 Jev 决策调用上限（0 为不限制）</label>
+                  <label>每日 System One 决策调用上限（0 为不限制）</label>
                   <input type="number" id="setting-decision-limit" min="0" step="1" value="0" style="width:120px">
                   <div class="setting-hint" id="decision-usage">今日已调用: 0</div>
-                <p class="setting-hint">Jev 返回选择、评分或判断，按调用次数单独统计，达到后使用本地回退逻辑。</p></div><p class="setting-hint">Token 限额覆盖文本、外置视觉及压缩摘要；生图和 Jev 分别按张数、调用次数统计。API 不返回用量时按文本估算；已发出的请求可能在结束后超过限额。</p></div>
+                <p class="setting-hint">System One 返回选择、评分或判断，按调用次数单独统计，达到后使用本地回退逻辑。</p></div><p class="setting-hint">Token 限额覆盖文本、外置视觉及压缩摘要；生图和 System One 分别按张数、调用次数统计。API 不返回用量时按文本估算；已发出的请求可能在结束后超过限额。</p></div>
               <div class="settings-group">
                 <h3><i class="fa-solid fa-chart-line"></i> 今日计数管理</h3>
                 <div class="setting-item">
@@ -3169,15 +3193,41 @@
             </div>
 
             <div class="settings-panel" data-tab="updates">
+              <div class="settings-group update-management">
+                <div class="update-management-header">
+                  <span class="update-management-symbol"><i class="fa-solid fa-arrows-rotate" aria-hidden="true"></i></span>
+                  <div><h3>版本与更新</h3><p id="updates-current-version">正在读取版本…</p></div>
+                  <span class="update-source-badge" id="updates-install-source"></span>
+                </div>
+                <p class="setting-hint" id="updates-install-hint"></p>
+                <div class="update-management-status" role="status" aria-live="polite">
+                  <strong id="updates-check-status">尚未检查</strong>
+                  <span id="updates-progress-detail"></span>
+                  <progress id="updates-download-progress" max="100" hidden></progress>
+                  <span id="updates-last-checked"></span>
+                </div>
+                <div class="update-management-actions">
+                  <button class="btn-secondary" id="btn-updates-check"><i class="fa-solid fa-rotate"></i> 立即检查</button>
+                  <button class="btn-primary" id="btn-updates-download" hidden><i class="fa-solid fa-download"></i> 下载更新</button>
+                  <button class="btn-primary" id="btn-updates-install" hidden><i class="fa-solid fa-arrow-rotate-right"></i> 重启安装</button>
+                  <button class="btn-secondary" id="btn-updates-open-release"><i class="fa-solid fa-arrow-up-right-from-square"></i> 发行说明</button>
+                </div>
+                <details id="updates-result-wrap" hidden><summary>此版本的新内容</summary><div id="updates-result-body" class="update-release-notes"></div></details>
+              </div>
               <div class="settings-group">
-                <h3><i class="fa-solid fa-arrows-rotate"></i> 自动更新检查</h3>
+                <h3><i class="fa-solid fa-sliders"></i> 更新偏好</h3>
                 <div class="setting-item">
                   <label class="setting-label">自动检查更新</label>
                   <div class="toggle-switch">
                     <input type="checkbox" id="setting-updates-auto">
                     <span class="toggle-slider"></span>
                   </div>
-                  <p class="setting-hint">启动后延迟检查一次，之后按下方间隔定时检查 GitHub Releases。发现新版本时通过系统通知提醒（可在「通知」中关闭）。检查失败不会打扰你。</p>
+                  <p class="setting-hint">只检查版本信息，不自动安装。关闭后仍可手动检查。</p>
+                </div>
+                <div class="setting-item">
+                  <label class="setting-label">后台下载更新</label>
+                  <div class="toggle-switch"><input type="checkbox" id="setting-updates-download"><span class="toggle-slider"></span></div>
+                  <p class="setting-hint">默认关闭。启用后，在自动检查发现新版且后台任务空闲时下载；安装前仍需手动确认。下载可能使用较多流量。</p>
                 </div>
                 <div class="setting-item">
                   <label class="setting-label">检查间隔</label>
@@ -3194,18 +3244,6 @@
                     <option value="all">全部版本</option>
                   </select>
                   <p class="setting-hint">仅稳定版只获取正式发布版本；全部版本同时包含 alpha/beta 等预发布版本。默认仅稳定版。</p>
-                </div>
-              </div>
-              <div class="settings-group">
-                <h3><i class="fa-solid fa-magnifying-glass"></i> 检查更新</h3>
-                <div class="setting-item">
-                  <button class="btn-secondary btn-sm" id="btn-updates-check"><i class="fa-solid fa-rotate"></i> 立即检查</button>
-                  <span id="updates-check-status" style="font-size:12px;color:var(--text-secondary)">尚未检查</span>
-                </div>
-                <div class="setting-item" id="updates-result-wrap" style="display:none;flex-direction:column;gap:8px">
-                  <p id="updates-current-version" style="font-size:12px;color:var(--text-secondary)"></p>
-                  <div id="updates-result-body" style="font-size:13px;line-height:1.6;max-height:220px;overflow:auto;background:var(--bg-secondary);border:1px solid var(--border);border-radius:8px;padding:12px"></div>
-                  <button class="btn-secondary btn-sm" id="btn-updates-open-release"><i class="fa-solid fa-arrow-up-right-from-square"></i> 打开 Releases 页</button>
                 </div>
               </div>
             </div>
@@ -3413,7 +3451,7 @@
           <div class="setting-hint" id="pool-edit-opencode-note">SessionID 和 OpenCode UA 自动配置；免费模型是否可用由上游决定。</div>
         </div>
         <div class="setting-item"><label>上下文长度</label><input type="number" id="pool-edit-ctx" min="1024" max="2000000" step="1024" placeholder="默认 131072"></div>
-        <div class="setting-item"><label>智慧分数 (0-100，模型选择策略=Jev 时使用)</label><input type="number" id="pool-edit-intelligence" min="0" max="100" step="1" placeholder="50"></div>
+        <div class="setting-item"><label>智慧分数 (0-100，模型选择策略=System One 时使用)</label><input type="number" id="pool-edit-intelligence" min="0" max="100" step="1" placeholder="50"></div>
         <div class="setting-item"><label>优先级 (越小越优先)</label><input type="number" id="pool-edit-priority" min="0" step="1" placeholder="0"></div>
         <div class="setting-item">
           <label>Reasoning Effort</label>
@@ -3424,7 +3462,7 @@
             <option value="medium">中 (medium)</option>
             <option value="high">高 (high)</option>
           </select>
-          <div class="setting-hint">全局策略为「Jev 决策」时此项作为回退值</div>
+          <div class="setting-hint">全局策略为「System One 决策」时此项作为回退值</div>
         </div>
         <div class="setting-item"><label>支持视觉（图片直接注入）</label><div class="toggle-switch"><input type="checkbox" id="pool-edit-vision"><span class="toggle-slider"></span></div></div>
         <div class="setting-item"><label>启用</label><div class="toggle-switch"><input type="checkbox" id="pool-edit-enabled" checked><span class="toggle-slider"></span></div></div>
@@ -3722,20 +3760,27 @@
 
   <!-- Camera Modal -->
   <div class="modal-overlay hidden" id="camera-modal">
-    <div class="modal camera-modal">
+    <div class="modal camera-modal" role="dialog" aria-modal="true" aria-labelledby="camera-title">
       <div class="modal-header">
-        <h3><i class="fa-solid fa-camera"></i> 拍照</h3>
-        <button class="btn-icon" id="btn-close-camera">
+        <div><h3 id="camera-title"><i class="fa-solid fa-camera"></i> <span data-i18n="ui.camera.title">拍照</span></h3><p class="camera-subtitle" data-i18n="ui.camera.subtitle">使用当前设备的摄像头，将照片添加到对话</p></div>
+        <button class="btn-icon" id="btn-close-camera" aria-label="关闭" title="关闭">
           <i class="fa-solid fa-xmark"></i>
         </button>
       </div>
       <div class="modal-body camera-modal-body">
-        <video id="camera-video" autoplay playsinline></video>
+        <video id="camera-video" autoplay playsinline muted></video>
+        <img id="camera-photo" alt="照片预览" hidden>
+        <div class="camera-status" id="camera-status" role="status" aria-live="polite"></div>
+        <div class="camera-guides" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+        <span class="camera-resolution" id="camera-resolution"></span>
         <canvas id="camera-canvas" style="display:none"></canvas>
       </div>
+      <div class="camera-device-row"><i class="fa-solid fa-video" aria-hidden="true"></i><label for="camera-device" data-i18n="ui.camera.device">摄像头</label><select id="camera-device"></select><button class="btn-icon" id="btn-switch-camera" title="切换摄像头" aria-label="切换摄像头"><i class="fa-solid fa-camera-rotate"></i></button></div>
       <div class="modal-footer">
-        <button class="btn-secondary" id="btn-cancel-camera">取消</button>
-        <button class="btn-primary" id="btn-capture-photo">
+        <button class="btn-secondary" id="btn-cancel-camera" data-i18n="ui.camera.cancel">取消</button>
+        <button class="btn-secondary" id="btn-retake-photo" hidden data-i18n="ui.camera.retake">重拍</button>
+        <button class="btn-primary" id="btn-use-photo" hidden data-i18n="ui.camera.use">使用照片</button>
+        <button class="btn-primary" id="btn-capture-photo" disabled>
           <i class="fa-solid fa-camera"></i> 拍照
         </button>
       </div>
@@ -3866,6 +3911,7 @@
   <script src="../../shared/token-policy.js"></script>
   <script src="../../shared/token-usage.js"></script>
   <script src="../../shared/attachments.js"></script>
+  <script src="../../shared/avatar-source.js"></script>
   <script src="../../shared/reasoning.js"></script>
   <script src="../../shared/tor-bridges.js"></script>
   <script src="../js/settings-client.js"></script>

@@ -36,7 +36,7 @@
     return true;
   }
 
-  async function createCodeSession(forkConv = null) {
+  async function createCodeSession(forkConv = null, activate = true) {
     const ag = new Agent();
     ag.mode = 'code';
     ag.workspacePath = codeWorkspacePath || '';
@@ -59,7 +59,9 @@
     });
     // /fork N 语义：分支后把该条用户消息恢复到输入框供编辑重发
     if (forkConv && forkConv._restorePrompt) session.draft = forkConv._restorePrompt;
-    activateSession('code', session.key);
+    // Initial page loading may finish after the user has switched modes.
+    // Explicit New/Fork actions still activate their newly created session.
+    if (activate || currentMode === 'code') activateSession('code', session.key);
     return session;
   }
 
@@ -78,7 +80,7 @@
         if (wsPathEl) wsPathEl.textContent = codeWorkspacePath;
       }
     }
-    return createCodeSession();
+    return createCodeSession(null, false);
   }
 
   async function replayCodeSession(session) {

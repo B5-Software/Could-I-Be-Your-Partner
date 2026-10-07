@@ -1322,21 +1322,40 @@ html[data-modal-animations="off"] .modal-fade-out {
 }
 
 /* Camera Modal */
-.camera-modal { width: 560px; }
+.camera-modal { width: min(680px,calc(100vw - 32px)); max-height:calc(100dvh - 32px); overflow:auto; padding:0; }
+.camera-modal .modal-header { padding:22px 24px 18px; align-items:flex-start; }
+.camera-subtitle { margin:8px 0 0; font-size:12px;line-height:1.6;color:var(--text-secondary); }
+.camera-device-row { display:flex;align-items:center;gap:10px;padding:16px 24px;color:var(--text-secondary);font-size:12px; }
+.camera-device-row select { min-width:0;flex:1;padding:9px 12px;border-radius:9px;border:1px solid var(--border-color);background:var(--bg-secondary);color:var(--text-primary); }
+.camera-modal .modal-footer { padding:16px 24px 22px;gap:10px; }
+.camera-modal [hidden] { display:none!important; }
+.camera-status { position:absolute;inset:0;display:grid;place-items:center;padding:36px;text-align:center;color:#e8edf4;background:#171c25;font-size:14px;line-height:1.8; }
+.camera-guides { position:absolute;inset:22px;pointer-events:none;display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr; }
+.camera-guides i { width:22px;height:22px;border:2px solid #ffffff80; }
+.camera-guides i:nth-child(1) { border-right:0;border-bottom:0;border-radius:6px 0 0 0; }
+.camera-guides i:nth-child(2) { justify-self:end;border-left:0;border-bottom:0;border-radius:0 6px 0 0; }
+.camera-guides i:nth-child(3) { align-self:end;border-right:0;border-top:0;border-radius:0 0 0 6px; }
+.camera-guides i:nth-child(4) { align-self:end;justify-self:end;border-left:0;border-top:0;border-radius:0 0 6px 0; }
+.camera-resolution { position:absolute;bottom:14px;left:24px;border-radius:6px;background:#0008;color:#fff;padding:5px 8px;font:11px ui-monospace,monospace; }
+.attachment-source-menu { border:1px solid var(--border-color);border-radius:16px;background:var(--bg-primary);color:var(--text-primary);padding:18px;display:flex;flex-direction:column;gap:10px;width:min(320px,calc(100vw - 32px)); }
+.attachment-source-menu:not([open]) { display:none; }
 
 .camera-modal-body {
+  position:relative;
+  margin:0 24px;
+  aspect-ratio:16/10;
   display: flex;
   align-items: center;
   justify-content: center;
   background: #000;
-  border-radius: var(--radius-sm);
+  border-radius:12px;
   overflow: hidden;
 }
 
-.camera-modal-body video {
+.camera-modal-body video, .camera-modal-body img {
   width: 100%;
-  max-height: 400px;
-  object-fit: cover;
+  height:100%;
+  object-fit: contain;
 }
 
 /* Attachments Preview */
@@ -2322,3 +2341,34 @@ html[data-modal-animations="off"] .modal-fade-out {
 }
 .image-modal-body.dragging #image-modal-frame { transition: none; }
 #image-preview-img { user-select: none; -webkit-user-drag: none; }
+.workspace-browser { width: min(840px, calc(100vw - 32px)); height: min(660px, calc(100dvh - 32px)); max-width: none; max-height: none; padding: 0; color: var(--text-primary); background: var(--bg-primary); border: 1px solid var(--border); border-radius: 18px; box-shadow: 0 24px 80px #0004; }
+.workspace-browser[open] { display: flex; flex-direction: column; }
+.workspace-browser::backdrop { background: #0005; }
+.workspace-browser header { display: flex; justify-content: space-between; align-items: center; padding: 20px 24px 14px; gap: 12px; }
+.workspace-browser h2 { margin: 0 0 6px; font-size: 18px; }
+.workspace-browser p { margin: 0; font-size: 13px; color: var(--text-secondary); }
+.workspace-browser form { display: flex; gap: 8px; padding: 0 24px 16px; }
+.workspace-browser input { flex: 1; min-width: 0; }
+.workspace-browser-list { flex: 1; min-height: 0; overflow: auto; margin: 0 24px; padding: 6px; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 12px; }
+.workspace-browser-list[aria-busy="true"] { opacity: .6; pointer-events: none; }
+.workspace-browser-file { display: grid; grid-template-columns: 22px minmax(0, 1fr) 20px; gap: 12px; align-items: center; width: 100%; padding: 12px; text-align: left; border: 0; border-radius: 8px; background: transparent; color: var(--text-primary); font: inherit; cursor: pointer; }
+.workspace-browser-file:hover { background: var(--bg-tertiary); }
+.workspace-browser-file span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.workspace-browser-file i { color: var(--accent); }
+.workspace-browser footer { padding: 14px 24px; min-height: 48px; color: var(--text-secondary); font-size: 13px; }
+/* Update management belongs to the shared backend, including browser clients. */
+.update-management-header { display:flex; align-items:center; gap:14px; flex-wrap:wrap; }
+.update-management-header h3 { margin:0 0 6px; }
+.update-management-header p { margin:0; color:var(--text-secondary); font-size:13px; }
+.update-management-symbol { width:44px; height:44px; display:grid; place-items:center; border-radius:14px; background:var(--bg-tertiary); color:var(--accent); font-size:20px; }
+.update-source-badge { margin-left:auto; padding:6px 10px; border:1px solid var(--border); border-radius:20px; font-size:12px; color:var(--text-secondary); }
+.update-management-status { display:flex; flex-direction:column; gap:8px; padding:16px; margin:18px 0; border:1px solid var(--border); border-radius:12px; background:var(--bg-secondary); }
+.update-management-status span { color:var(--text-secondary); font-size:12px; overflow-wrap:anywhere; }
+.update-management-actions { display:flex; gap:10px; flex-wrap:wrap; }
+.update-management-actions [hidden], .update-management-status [hidden] { display:none; }
+.update-management-status progress { appearance:none; width:100%; height:6px; overflow:hidden; border:0; border-radius:6px; accent-color:var(--accent); background:var(--bg-tertiary); }
+.update-management-status progress::-webkit-progress-bar { background:var(--bg-tertiary); }
+.update-management-status progress::-webkit-progress-value { background:var(--accent); border-radius:6px; }
+.update-management details { margin-top:18px; }
+.update-management summary { cursor:pointer; color:var(--text-secondary); font-size:13px; }
+.update-release-notes { margin-top:12px; max-height:260px; overflow:auto; line-height:1.7; overflow-wrap:anywhere; }

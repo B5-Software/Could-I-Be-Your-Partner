@@ -13,6 +13,31 @@ const jwk = {
   alg: 'RS256',
   use: 'sig',
 };
+
+test('direct ChatGPT plan grants remain usable without a legacy Codex account identifier', async (t) => {
+  const f = fixture({
+    service: {
+      quotaReader: async () => {
+        throw new Error('Must not invoke legacy quota RPC');
+      },
+    },
+  });
+  t.after(() => f.service.dispose());
+  await f.service.login();
+  await f.complete();
+  const limits = await f.service.limits();
+  assert.equal(limits.ok, true);
+  assert.equal(limits.unavailable, true);
+  assert.equal(limits.manageUrl, 'https://chatgpt.com/settings/usage');
+  assert.doesNotMatch(limits.message, /account identifier/);
+  assert.equal((await f.service.models()).models[0].id, 'visible-model');
+  const lease = await f.service.lease();
+  try {
+    assert.equal(lease.token, 'fixture-access');
+  } finally {
+    lease.release();
+  }
+});
 const claims = {
   iss: 'https://auth.openai.com',
   aud: 'oaiapp_fixture',

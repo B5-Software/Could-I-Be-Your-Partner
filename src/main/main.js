@@ -126,7 +126,8 @@ const { registerGeogebraProtocol } = require('./geogebra-protocol');
 const { VoiceModelManager } = require('./voice-model-manager');
 const { VmService } = require('./vm/vm-service');
 const { aria2Manager } = require('./aria2-manager');
-const { DecisionService, DEFAULT_DECISION_SETTINGS, normalizeDecisionSettings } = require('./decision-service');
+const { DecisionService, DEFAULT_DECISION_SETTINGS, normalizeDecisionSettings, prepareDecisionPatch, DEFAULT_MODEL } = require('./decision-service');
+const { PROVIDERS: SYSTEM_ONE_PROVIDERS } = require('./services/system-one-protocol');
 const { ts: logTs, maskUrl: maskLogUrl, snippet: logSnippet } = require('./req-log');
 
 const { createIpcRouter } = require('./core/ipc-router');
@@ -243,7 +244,7 @@ vmService.on('graphics-log', (l) => broadcastVm('vm:graphics-log', String(l)));
 vmService.on('graphics-progress', (p) => broadcastVm('vm:graphics-progress', p));
 vmService.on('forward-added', (f) => broadcastVm('vm:forward-added', f));
 vmService.on('forward-removed', (f) => broadcastVm('vm:forward-removed', f));
-// 决策模型（System One / Jev）服务
+// 决策模型（System One）服务
 const decisionService = new DecisionService({
   getSettings: () => settings,
   getDayKey: () => getTodayKeyTZ(settings.budget?.timezone || 'UTC'),
@@ -833,6 +834,8 @@ function getGitShortHash() {
 // ---- 运行位置门控：location=vm 时主窗口必须等 VM 就绪（或紧急回退/超时）----
 // 设计约束：门控与判据全部在主进程、零 VM 依赖 —— VM 挂了也一定能进主界面。
 const vmRuntimeGate = { required: false, ready: true, failed: false, reason: null };
+let backgroundWebReady = false;
+let webStartupSplash = false;
 let mainRendererReady = false;
 const startupRuntimeWaiters = new Set();
 ipcMain.handle('app:startup-runtime', () => {
@@ -886,6 +889,7 @@ async function startVmBootForSplash() {
       code: e.code || null,
       serialTail: String((vmService.status().inst || {}).serialTail || '').slice(-8192)
     });
+    if (HEADLESS) return;
     const delay = Math.max(5000, Number(settings.runtime?.vm?.autoFallbackMs) || 20000);
     setTimeout(() => {
       if (!mainWindowShownOnce) {
@@ -897,9 +901,10 @@ async function startVmBootForSplash() {
   }
 }
 
-function createSplashWindow() {
-  if (splashCreated || !mainWindow || mainWindow.isDestroyed()) return;
+function createSplashWindow(forWeb = false) {
+  if ((forWeb ? splashWindow && !splashWindow.isDestroyed() : splashCreated) || (!forWeb && (!mainWindow || mainWindow.isDestroyed()))) return;
   splashCreated = true;
+  webStartupSplash = forWeb;
   const vmMode = !!(settings.runtime && settings.runtime.location === 'vm');
   splashWindow = new BrowserWindow({
     width: vmMode ? 540 : 420,
@@ -940,6 +945,7 @@ function createSplashWindow() {
     // 启动画面不加载体积巨大的自定义字体，避免与主窗口重复解析（主窗口仍正常应用）
     font: ''
   };
+  if (forWeb) { params.web = '1'; params.language = settings.language || 'zh'; }
   splashWindow.loadFile(path.join(__dirname, '../renderer/pages/splash.html'), { query: params });
   splashWindow.webContents.once('did-finish-load', () => {
     try {
@@ -951,7 +957,7 @@ function createSplashWindow() {
     splashWindow.center();
     splashWindow.show();
   });
-  splashWindow.on('closed', () => { splashWindow = null; });
+  splashWindow.on('closed', () => { splashWindow = null; webStartupSplash = false; });
 }
 
 function closeSplash() {
@@ -962,6 +968,12 @@ function closeSplash() {
   splashWindow.once('closed', createAppTray);
   splashWindow.close();
 }
+
+ipcMain.handle('vm:splashCancelWeb', event => {
+  if (!webStartupSplash || event.sender !== splashWindow?.webContents) return { ok: false };
+  setTimeout(() => app.quit(), 0);
+  return { ok: true };
+});
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -1327,7 +1339,8 @@ function showWindowFromTray() {
  */
 function createAppTray() {
   if (appTray) return;
-  if (!settings.trayEnabled || HEADLESS || isQuitting || !mainWindowShownOnce) return;
+  const webOnly = HEADLESS && backgroundWebReady && !!process.versions.electron;
+  if (isQuitting || (!webOnly && (!settings.trayEnabled || HEADLESS || !mainWindowShownOnce))) return;
   if (splashWindow && !splashWindow.isDestroyed()) return;
   // 托盘图标：按 Electron/macOS 官方规范处理尺寸。
   // macOS 菜单栏图标必须是 Template Image：纯 alpha 通道（黑+透明），系统按深浅色自动着色。
@@ -1372,7 +1385,7 @@ function createAppTray() {
 
   // 单击托盘图标：切换窗口可见性
   appTray.on('click', () => {
-    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (!mainWindow || mainWindow.isDestroyed()) { openDesktopView(); return; }
     if (mainWindow.isVisible() && mainWindow.isFocused()) {
       hideWindowToTray();
     } else {
@@ -1382,10 +1395,12 @@ function createAppTray() {
 }
 
 function buildTrayMenu() {
+  const labels = settings.language === 'de' ? ['GUI öffnen', 'WebUI öffnen', 'Sprachaktivierung', 'Beenden'] : settings.language === 'en' ? ['Open GUI', 'Open WebUI', 'Voice wake-up', 'Quit'] : ['打开 GUI', '打开 WebUI', '语音唤醒', '退出'];
   return Menu.buildFromTemplate([
-    { label: '显示主窗口', click: () => showWindowFromTray() },
+    { label: labels[0], click: () => openDesktopView() },
+    { label: labels[1], enabled: webControlService.running, click: () => { const status = webControlService.status(); if (status.running) shell.openExternal(status.url.replace('0.0.0.0', '127.0.0.1').replace('[::]', '127.0.0.1')).catch(console.error); } },
     {
-      label: '语音唤醒',
+      label: labels[2],
       type: 'checkbox',
       checked: !!(settings.voice && settings.voice.wakeEnabled),
       click: (item) => {
@@ -1401,13 +1416,21 @@ function buildTrayMenu() {
     },
     { type: 'separator' },
     {
-      label: '退出',
+      label: labels[3],
       click: () => {
         isQuitting = true;
         app.quit();
       }
     }
   ]);
+}
+
+function openDesktopView() {
+  if (!process.versions.electron || isQuitting) return { ok: false, error: 'No graphical environment available' };
+  HEADLESS = false;
+  if (!mainWindow || mainWindow.isDestroyed()) { createWindow(); createSplashWindow(); }
+  else showWindowFromTray();
+  return { ok: true };
 }
 
 function rebuildTrayMenu() {
@@ -1766,7 +1789,9 @@ function updateAppSettings(newSettings) {
   const previousTorConfig = JSON.stringify(settings.remote?.tor || {});
   const tokenPolicy = require('../shared/token-policy');
   const patch = tokenPolicy.migratePatch(newSettings);
+  if (patch.decision) patch.decision = prepareDecisionPatch(settings.decision, patch.decision);
   settings = tokenPolicy.normalize(mergeSettings(settings, patch));
+  settings.decision = normalizeDecisionSettings(settings.decision);
   tokenPolicy.syncActiveEntry(settings, patch);
   if (settings.runtime?.location !== previousLocation) {
     require('./vm/tool-location').withRuntimeLocation(() => vmService, () => pluginManager.refreshAll()).catch(error => console.warn('[DS Plugins] location change:', error.message));
@@ -2005,12 +2030,13 @@ ipcMain.handle('automation:guide', (_, topic) => {
   catch (e) { return { ok: false, error: e.message }; }
 });
 ipcMain.handle('automation:save', (_, task) => {
-  try { return { ok: true, task: automationManager.upsert(task) }; }
+  try { const saved = automationManager.upsert(task); publishEvent('automation:changed', {}); return { ok: true, task: saved }; }
   catch (e) { return { ok: false, error: e.message }; }
 });
-ipcMain.handle('automation:delete', (_, id) => ({ ok: automationManager.remove(id) }));
+ipcMain.handle('automation:delete', (_, id) => { const ok = automationManager.remove(id); if (ok) publishEvent('automation:changed', {}); return { ok }; });
 ipcMain.handle('automation:setEnabled', (_, id, enabled) => {
   const task = automationManager.setEnabled(id, !!enabled);
+  if (task) publishEvent('automation:changed', {});
   return task ? { ok: true, task } : { ok: false, error: '任务不存在' };
 });
 ipcMain.handle('automation:run', async (_, id, params) => {
@@ -2201,6 +2227,7 @@ require('./ipc/files')({
 // 实现已拆分到 ./terminal-service.js，这里注入窗口与设置访问器。
 registerTerminalIpc({
   ipcMain,
+  publishEvent,
   getMainWindow: () => mainWindow,
   getSettings: () => settings,
   // 运行位置=虚拟机时，终端改由 VM 内 PTY 承载（vm-pty 适配器）
@@ -2768,7 +2795,7 @@ require('./ipc/resources')({
   getVoiceIpc: () => voiceIpc
 });
 
-// ---- IPC: 决策模型（Jev / System One）----
+// ---- IPC: 决策模型（System One）----
 ipcMain.handle('decision:call', async (_, payload = {}) => {
   try {
     if (payload.usage && !decisionService.enabledFor(payload.usage)) return { ok: false, error: '该用途未启用' };
@@ -2797,6 +2824,7 @@ ipcMain.handle('decision:test', async () => {
   try { return await decisionService.test(); }
   catch (e) { return { ok: false, error: e.message }; }
 });
+ipcMain.handle('decision:models', async () => decisionService.models());
 ipcMain.handle('decision:status', () => {
   const cfg = normalizeDecisionSettings(settings.decision);
   const stamp = getTodayKeyTZ(settings.budget?.timezone || 'UTC');
@@ -2805,7 +2833,9 @@ ipcMain.handle('decision:status', () => {
     ok: true,
     enabled: cfg.enabled,
     provider: cfg.provider,
-    model: cfg.model || (cfg.provider === 'typesafe' ? 'jev-latest' : 'jev-1.13-free'),
+    model: cfg.model || DEFAULT_MODEL[cfg.provider] || '',
+    capabilities: cfg.capabilities,
+    providers: SYSTEM_ONE_PROVIDERS,
     usages: cfg.usages,
     callsToday: usage.date === stamp ? usage.calls : 0,
     dailyMaxCalls: cfg.dailyMaxCalls,
@@ -3123,6 +3153,7 @@ ipcMain.handle('game:trngGetSeed', async () => {
 
 // ---- IPC: Skills ----
 function broadcastSkillsChanged() {
+  publishEvent('skills:changed', {});
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) win.webContents.send('skills:changed');
   }
@@ -3477,6 +3508,23 @@ ipcMain.handle('avatar:encodeFile', async (_, filePath) => {
   } catch (e) { return { ok: false, error: e.message }; }
 });
 
+ipcMain.handle('dialog:pickLocalFiles', async (event, options = {}) => {
+  try {
+    const selection = await dialog.showOpenDialog(mainWindow || undefined, { title: options.title || '选择本机文件', filters: options.filters, properties: ['openFile', ...(options.multiple ? ['multiSelections'] : [])] });
+    if (selection.canceled) return { ok: false, canceled: true, paths: [] };
+    const files = [];
+    for (const source of selection.filePaths) {
+      const stat = await fs.promises.stat(source);
+      if (!stat.isFile() || stat.size > 100 * 1024 * 1024) throw new Error('Attachment exceeds 100 MiB');
+      const buffer = await fs.promises.readFile(source);
+      const result = await ipcMain.invokeLocal('fs:saveUploadedFile', event, path.basename(source), buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength));
+      if (!result.ok) throw new Error(result.error || 'Attachment import failed');
+      files.push({ ...result, name: path.basename(source), size: stat.size });
+    }
+    return { ok: true, files, paths: files.map(file => file.path) };
+  } catch (error) { return { ok: false, error: error.message }; }
+});
+
 ipcMain.handle('dialog:openFile', async (_, options = {}) => {
   try {
     const properties = ['openFile'];
@@ -3648,6 +3696,7 @@ ipcMain.handle('updates:check', async () => {
 ipcMain.handle('updates:save', (_, cfg = {}) => {
   const u = settings.updates || {};
   if (typeof cfg.autoCheckEnabled === 'boolean') u.autoCheckEnabled = cfg.autoCheckEnabled;
+  if (typeof cfg.autoDownload === 'boolean') u.autoDownload = cfg.autoDownload;
   if ([6, 12, 24].includes(Number(cfg.intervalHours))) u.intervalHours = Number(cfg.intervalHours);
   if (cfg.channel === 'stable' || cfg.channel === 'all') u.channel = cfg.channel;
   settings.updates = u;
@@ -3693,6 +3742,7 @@ async function runAutoUpdateCheck() {
   try {
     const res = await performUpdateCheck();
     if (!res.ok || !res.updateAvailable) return;
+    await appUpdates.startAutomatic();
     if (!shouldNotifyUpdate() || !Notification.isSupported()) return;
     const latest = res.latest;
     const notif = new Notification({
@@ -4376,19 +4426,27 @@ app.whenReady().then(async () => {
     return { required: !!vmRuntimeGate.required, ready: !!vmRuntimeGate.ready, failed: !!vmRuntimeGate.failed, progress: Number(inst.progress) || 0, detail: inst.detail || inst.state || '' };
   };
   backendDispatch = require('./core/backend-dispatch').createBackendDispatch({ runtime: agentRuntime, ipcMain, eventBus, bootState,
-    desktop: async () => {
-      if (!process.versions.electron) return { ok: false, error: 'No graphical environment available' };
-      HEADLESS = false;
-      if (!mainWindow || mainWindow.isDestroyed()) createWindow();
-      else showWindowFromTray();
-      return { ok: true };
-    } });
+    desktop: openDesktopView,
+    shutdown: () => { setTimeout(() => app.quit(), 100); return { ok: true }; } });
   ipcMain.handle('backend:request', (_, method, ...args) => backendDispatch({ method, args }));
   const token = require('node:crypto').randomBytes(32).toString('hex');
   backendServer = new (require('./core/backend-server').BackendServer)({ dispatch: backendDispatch, eventBus, token, codeoss: codeOSSWeb });
   const address = await backendServer.start();
   removeBackendDiscovery = require('./core/backend-discovery').publishBackend(app.getPath('userData'), address, token);
-  webControlService.attach(backendDispatch, eventBus, codeOSSWeb);
+  webControlService.attach(backendDispatch, eventBus, codeOSSWeb, {
+    bootState,
+    onStarting: () => { if (HEADLESS && process.versions.electron && vmRuntimeGate.required && !vmRuntimeGate.ready) createSplashWindow(true); },
+    waitUntilReady: async signal => {
+      while (vmRuntimeGate.required && !vmRuntimeGate.ready) {
+        signal.throwIfAborted();
+        if (vmRuntimeGate.failed) throw new Error(vmRuntimeGate.reason || 'Virtual machine startup failed');
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+    },
+    onStarted: () => { backgroundWebReady = true; if (webStartupSplash) closeSplash(); createAppTray(); rebuildTrayMenu(); },
+    onFailed: error => { if (webStartupSplash) broadcastVm('vm:boot-failed', { message: error.message }); },
+    onStopped: () => { backgroundWebReady = false; rebuildTrayMenu(); if (HEADLESS && appTray) { appTray.destroy(); appTray = null; } if (webStartupSplash) closeSplash(); }
+  });
   const webCfg = { ...settings.webControl };
   if (process.env.CIBYP_WEB_PASSWORD) webCfg.password = process.env.CIBYP_WEB_PASSWORD;
   if (process.env.CIBYP_WEB_PORT) webCfg.port = Number(process.env.CIBYP_WEB_PORT);
@@ -4483,6 +4541,7 @@ app.on('before-quit', (event) => {
     closeSplash();
     removeBackendDiscovery?.();
     remoteBackend.close();
+    await webControlService.stop();
     await backendServer?.stop();
     // 将防抖队列中的历史保存立即落盘，避免退出时丢失
     flushPendingHistorySaves();

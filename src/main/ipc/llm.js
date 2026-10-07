@@ -52,7 +52,8 @@ module.exports = function registerLlmIpc({
   }
   async function fetchRequest(req, config) {
     config.transport = req.transport;
-    await fetchModelsDevData();
+    // Public pricing/catalog refresh must never block an inference request.
+    fetchModelsDevData().catch(() => {});
     if (!req.credentialProvider) return fetchLLMWithRetry(config);
     if (!chatGPTAccounts) throw new Error('ChatGPT login service is unavailable');
     let lease = await chatGPTAccounts.lease(false, req.credentialAccountId);
@@ -497,7 +498,7 @@ module.exports = function registerLlmIpc({
       }
       const llm = await adaptConnection(applySessionModelOverrides(getSettings().llm, options));
       if (llm.provider === 'opencode-zen' || llm.provider === 'opencode-go') {
-        if (!llm.zenApiKey || !llm.model)
+        if (!llm.model || (llm.provider === 'opencode-go' && !llm.zenApiKey))
           return { ok: false, error: '请先在设置中配置OpenCode API Key和模型' };
       } else if (!llm.apiUrl || !llm.model) {
         return { ok: false, error: '请先在设置中配置LLM API' };
@@ -665,7 +666,7 @@ module.exports = function registerLlmIpc({
       }
       const llm = await adaptConnection(applySessionModelOverrides(getSettings().llm, options));
       if (llm.provider === 'opencode-zen' || llm.provider === 'opencode-go') {
-        if (!llm.zenApiKey || !llm.model)
+        if (!llm.model || (llm.provider === 'opencode-go' && !llm.zenApiKey))
           return { ok: false, error: '请先在设置中配置OpenCode API Key和模型' };
       } else if (!llm.apiUrl || !llm.model) {
         return { ok: false, error: '请先在设置中配置LLM API' };
@@ -735,7 +736,6 @@ module.exports = function registerLlmIpc({
       if (!result.ok) return { ok: false, error: result.error, kind: result.kind };
 
       let streamResult;
-      let lastChunkKey = null;
       const streamStartedAt = Date.now();
       try {
         streamResult = await consumeSSEStream(
@@ -743,11 +743,6 @@ module.exports = function registerLlmIpc({
           (chunk) => {
             try {
               if (chunk.content || chunk.reasoning) {
-                const chunkKey =
-                  String(chunk.content || '') + '\u0000' + String(chunk.reasoning || '');
-                // 丢弃与上一 chunk 完全相同的连续重复（防御流式传输双发导致的逐字/逐词重复）
-                if (chunkKey === lastChunkKey) return;
-                lastChunkKey = chunkKey;
                 publishEvent('llm:stream-chunk', {
                   content: chunk.content || '',
                   reasoning: chunk.reasoning || '',
@@ -773,12 +768,11 @@ module.exports = function registerLlmIpc({
       } finally {
         // 流读取结束（正常完成或被 abort）后释放 controller
         if (typeof result.releaseController === 'function') result.releaseController();
+        publishEvent('llm:stream-end', {
+          requestId: options.requestId,
+          sessionKey: options.sessionKey || null,
+        });
       }
-
-      publishEvent('llm:stream-end', {
-        requestId: options.requestId,
-        sessionKey: options.sessionKey || null,
-      });
       if (streamResult.error) return { ok: false, error: streamResult.error };
       let usage = streamResult.usage || {};
       let estimated = false;
@@ -842,7 +836,8 @@ module.exports = function registerLlmIpc({
       }
       const llm = await adaptConnection(applySessionModelOverrides(getSettings().llm, options));
       if (llm.provider === 'opencode-zen' || llm.provider === 'opencode-go') {
-        if (!llm.zenApiKey || !llm.model) return { ok: false, error: '请先配置OpenCode' };
+        if (!llm.model || (llm.provider === 'opencode-go' && !llm.zenApiKey))
+          return { ok: false, error: '请先配置OpenCode' };
       } else if (!llm.apiUrl || !llm.model) {
         return { ok: false, error: '请先在设置中配置LLM API' };
       }

@@ -216,3 +216,52 @@ test('npm-managed updates pin the selected version, persist a usable runtime and
   assert.equal(mismatch.status().phase, 'error');
   assert.match(mismatch.status().error, /requested version/);
 });
+test('automatic downloads are opt-in, idle-only, source-aware and never install', async (t) => {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'cibyp-auto-update-'));
+  t.after(() => fs.rm(directory, { recursive: true, force: true }));
+  const preferences = { autoCheckEnabled: true, autoDownload: false };
+  let busy = false,
+    downloads = 0;
+  const options = {
+    app: {
+      getVersion: () => '1.0.0',
+      getPath: () => directory,
+      getAppPath: () => directory,
+      isPackaged: true,
+    },
+    settings: () => ({ updates: preferences }),
+    publish() {},
+    busy: () => busy,
+    platform: 'win32',
+    arch: 'x64',
+    env: { CIBYP_CACHE_DIR: path.join(directory, 'cache') },
+    json: async () => [{ tag_name: 'v2.0.0', assets: [asset] }],
+    download: async (_asset, file) => {
+      downloads++;
+      await fs.writeFile(file, bytes);
+    },
+    launch: () => assert.fail('Automatic checks cannot install'),
+  };
+  const updater = new AppUpdates(options);
+  assert.equal(updater.status().installation.source, 'release');
+  assert.equal(updater.status().currentVersion, '1.0.0');
+  await updater.startAutomatic();
+  assert.equal(downloads, 0);
+  preferences.autoDownload = true;
+  busy = true;
+  await updater.startAutomatic();
+  assert.equal(downloads, 0);
+  busy = false;
+  preferences.autoCheckEnabled = false;
+  await updater.startAutomatic();
+  assert.equal(downloads, 0);
+  preferences.autoCheckEnabled = true;
+  await updater.startAutomatic();
+  await updater.operation;
+  assert.equal(downloads, 1);
+  assert.equal(updater.status().phase, 'ready');
+  const dev = new AppUpdates({ ...options, app: { ...options.app, isPackaged: false } });
+  await dev.startAutomatic();
+  assert.equal(dev.status().phase, 'idle');
+  assert.match((await dev.start()).error, /Development/);
+});

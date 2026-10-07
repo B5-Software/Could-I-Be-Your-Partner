@@ -29,8 +29,8 @@
     box.append(source);
     const hint = document.getElementById('tool-selection-settings-hint');
     hint.textContent = s.autoOptimizeToolSelection && s.decision?.enabled && s.decision?.usages?.toolSelection !== false
-      ? 'Jev 工具选择已启用：根据任务预加载；失败时使用本地候选。按需搜索继续补充遗漏。'
-      : s.autoOptimizeToolSelection ? '当前使用本地候选预加载。要使用 Jev，请在「Jev 决策模型」中开启服务及工具选择；两项加载开关可以同时启用。' : '任务预加载已关闭；按需发现仍可搜索工具。开启自动工具选择后，可使用 Jev 或本地候选预加载。';
+      ? 'System One 工具选择已启用：根据任务预加载；失败时使用本地候选。按需搜索继续补充遗漏。'
+      : s.autoOptimizeToolSelection ? '当前使用本地候选预加载。要使用 System One，请在「System One 决策模型」中开启服务及工具选择；两项加载开关可以同时启用。' : '任务预加载已关闭；按需发现仍可搜索工具。开启自动工具选择后，可使用 System One 或本地候选预加载。';
   }
   window.refreshTokenSettings = refreshTokenSettings;
 

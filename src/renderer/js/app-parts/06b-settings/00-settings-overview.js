@@ -1,9 +1,9 @@
   const settingsHelp = {
     overview: ['设置概览', '查看配置状态和常用入口', '入门 常用 快速'],
     llm: ['模型与连接', '默认模型用于新会话；已锁定的会话保持所选模型。连接字段自动保存。', 'LLM API 模型池 provider key'],
-    context: ['Token 与上下文', '设置单次请求的容量、输出、工具加载及历史压缩。', 'token tokens 上限 预算 长度 压缩 Jev 工具'],
+    context: ['Token 与上下文', '设置单次请求的容量、输出、工具加载及历史压缩。', 'token tokens 上限 预算 长度 压缩 System One 工具'],
     budget: ['消费与用量上限', '累计限额与单次输出分开配置；美元费用按价格表估算。', '费用 花费 日 周 月 余额 token 图片 限额'],
-    decision: ['Jev 决策模型', '配置轻量决策服务，并单独选择模型路由、工具选择等使用场景。', 'Jev 自动选择 智慧 reasoning'],
+    decision: ['System One 决策模型', '配置轻量决策服务，并单独选择模型路由、工具选择等使用场景。', 'System One 自动选择 智慧 reasoning'],
     image: ['图像生成', '配置生图服务与参数；每日张数在消费与用量上限中统一设置。', '图片 生图 image'],
     usage: ['用量统计', '查看已记录的 Token、模型和消费趋势。', '统计 tokens 账单 历史'],
     ai: ['AI 形象', '形象和提示词修改后即时生效。', '头像 名称 人设 prompt'],
@@ -43,14 +43,14 @@
     const budget = s.budget || {};
     const budgetSummary = [budget.dailyTokenLimit > 0 ? `每日 ${budget.dailyTokenLimit.toLocaleString()} Token` : '',
       budget.dailyLimitUSD > 0 ? `日 $${budget.dailyLimitUSD}` : '', budget.weeklyLimitUSD > 0 ? `周 $${budget.weeklyLimitUSD}` : '',
-      budget.monthlyLimitUSD > 0 ? `月 $${budget.monthlyLimitUSD}` : '', s.imageGen?.dailyMaxImages > 0 ? `每日 ${s.imageGen.dailyMaxImages} 张图` : '', s.decision?.dailyMaxCalls > 0 ? `每日 Jev ${s.decision.dailyMaxCalls} 次` : ''].filter(Boolean).join(' · ');
+      budget.monthlyLimitUSD > 0 ? `月 $${budget.monthlyLimitUSD}` : '', s.imageGen?.dailyMaxImages > 0 ? `每日 ${s.imageGen.dailyMaxImages} 张图` : '', s.decision?.dailyMaxCalls > 0 ? `每日 System One ${s.decision.dailyMaxCalls} 次` : ''].filter(Boolean).join(' · ');
     const cards = [
       ['llm', 'fa-microchip', '模型与连接', s.llm.model || '尚未配置模型'],
       ['context', 'fa-sliders', 'Token 与上下文', `${limits.contextTokens.toLocaleString()} 容量 · ${limits.outputTokens.toLocaleString()} 输出`],
       ['budget', 'fa-wallet', '消费与用量上限', budgetSummary || '未设置累计限额'],
       ['runtime', 'fa-server', '执行位置', s.runtime?.location === 'vm' ? '虚拟机' : '本机'],
       ['theme', 'fa-palette', '个性化', ({ light: '浅色', dark: '深色', system: '跟随系统' })[s.theme?.mode] || '跟随系统'],
-      ['decision', 'fa-scale-balanced', 'Jev 决策模型', s.decision?.enabled ? '已启用 · 选择使用场景' : '未启用 · 可使用本地工具选择'],
+      ['decision', 'fa-scale-balanced', 'System One 决策模型', s.decision?.enabled ? '已启用 · 选择使用场景' : '未启用 · 可使用本地工具选择'],
     ];
     grid.replaceChildren(...cards.map(([tab, icon, title, value]) => {
       const button = document.createElement('button'); button.type = 'button'; button.dataset.settingsOpen = tab;

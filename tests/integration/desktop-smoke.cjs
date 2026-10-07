@@ -35,6 +35,9 @@ let startupNavigationChecked = false;
 const originalHandle = ipcMain.handle.bind(ipcMain);
 ipcMain.handle = (channel, handler) =>
   originalHandle(channel, async (event, ...args) => {
+    // Native IDE startup is covered separately; this check exercises navigation.
+    if (channel === 'codeoss:open' || channel === 'codeoss:open-web')
+      return { ok: false, error: 'IDE disabled in navigation fixture' };
     if (
       channel === 'settings:get' &&
       !startupNavigationChecked &&
@@ -137,6 +140,7 @@ ipcMain.once('app:renderer-ready', (event) => {
       console.log('[desktop-smoke] Workspace interactions:', workspace);
       const settingsCheck = await require('./renderer-settings-check.cjs')(event.sender);
       await require('./renderer-controls-check.cjs')(event.sender);
+      await require('./renderer-system-one-check.cjs')(event.sender);
       console.log('[desktop-smoke] Settings interactions:', settingsCheck);
       console.log(
         '[desktop-smoke] Custom Shell:',

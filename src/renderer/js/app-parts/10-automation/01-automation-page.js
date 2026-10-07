@@ -101,6 +101,9 @@
   }
 
   document.getElementById('btn-automation-new')?.addEventListener('click', () => openAutomationEditor(null));
+  window.api.onAutomationChanged?.(() => {
+    if (document.getElementById('page-automation')?.classList.contains('active')) loadAutomationPage().catch(console.error);
+  });
   // 编辑器窗口保存/删除后，主页面回到前台时刷新列表
   window.addEventListener('focus', () => {
     if (document.getElementById('page-automation')?.classList.contains('active')) loadAutomationPage();

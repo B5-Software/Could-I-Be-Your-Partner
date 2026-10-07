@@ -263,10 +263,11 @@ function registerVmFileManager({ ipcMain, BrowserWindow, vmService, getSettings,
   for (const action of ['list', 'mkdir', 'transfer', 'cancel', 'window', 'initial']) {
     ipcMain.handle('vm-files:' + action, async (event, payload = {}) => {
       if (
-        !win ||
-        win.isDestroyed() ||
-        event.sender !== win.webContents ||
-        event.senderFrame !== win.webContents.mainFrame
+        !(event.sender?.id === -1 && event.frameId === -1) &&
+        (!win ||
+          win.isDestroyed() ||
+          event.sender !== win.webContents ||
+          event.senderFrame !== win.webContents.mainFrame)
       )
         return { ok: false, error: 'Unauthorized file manager request' };
       try {
@@ -291,6 +292,7 @@ function registerVmFileManager({ ipcMain, BrowserWindow, vmService, getSettings,
           return await manager.mkdir(payload.side, payload.path, payload.name);
         if (action === 'cancel') return manager.cancel();
         return await manager.transfer(payload, (progress) => {
+          if (event.sender?.id === -1) event.sender.send('vm-files:progress', progress);
           if (win && !win.isDestroyed()) win.webContents.send('vm-files:progress', progress);
         });
       } catch (error) {

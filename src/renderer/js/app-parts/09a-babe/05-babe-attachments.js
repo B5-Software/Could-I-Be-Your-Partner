@@ -53,10 +53,10 @@
 
   // Babe 附件按钮
   document.getElementById('btn-babe-attach-file')?.addEventListener('click', async () => {
-    const result = await window.api.openFileDialog({ multiple: true });
+    const result = await chooseAttachmentFiles(document.getElementById('btn-babe-attach-file'), { multiple: true });
     if (result.ok && result.paths) {
       for (const p of result.paths) {
-        const name = p.split(/[\\/]/).pop();
+        const name = result.files?.find(file => file.path === p)?.name || p.split(/[\\/]/).pop();
         const isImage = /\.(png|jpg|jpeg|gif|bmp|webp|svg)$/i.test(name);
         babeAttachments.push({ name, path: p, isImage });
       }

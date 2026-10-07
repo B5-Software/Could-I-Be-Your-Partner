@@ -11,6 +11,13 @@ const DE_DICT = {
 
 // ── UI Strings ──────────────────────────────────────────────────────────────
 ui: {
+  terminal: { error: 'Terminalaktion fehlgeschlagen: {error}' },
+  camera: {
+    title: 'Foto aufnehmen', subtitle: 'Ein Foto mit der Kamera dieses Geräts zum Gespräch hinzufügen',
+    device: 'Kamera', starting: 'Kamera wird verbunden…', secure: 'Kamerazugriff erfordert HTTPS oder localhost. Zuerst eine sichere Verbindung verwenden.',
+    denied: 'Kamerazugriff wurde verweigert. In den Browser- oder Systemeinstellungen erlauben und erneut versuchen.', missing: 'Keine Kamera verfügbar.',
+    retry: 'Erneut versuchen', retake: 'Neu aufnehmen', cancel: 'Abbrechen', use: 'Foto verwenden', capture: 'Aufnehmen', switch: 'Kamera wechseln',
+  },
     reasoning: {
   "summary": "Denkzusammenfassung",
   "text": "Denkprozess",
@@ -319,7 +326,7 @@ _tools: {
   automationRun: 'Automatisierungsaufgabe sofort auslösen',
   automationTest: 'Automatisierungs-DSL rendern/testen (ohne Ausführung)',
   automationDelete: 'Automatisierungsaufgabe löschen',
-  decisionModel: 'Entscheidungsmodell (Jev) für Auswahl/Bewertung/Ja-Nein aufrufen (automatisch aktiv, sobald konfiguriert)',
+  decisionModel: 'Entscheidungsmodell (System One) für Auswahl/Bewertung/Ja-Nein aufrufen (automatisch aktiv, sobald konfiguriert)',
   readImageFile: 'Bilddatei lesen (multimodal: direkt in den Kontext injiziert)',
   getFileEncodingInfo: 'Dateikodierung und Zeilenende-Modus ermitteln',
   convertFileEncoding: 'Dateikodierung und Zeilenenden konvertieren',
@@ -1289,10 +1296,10 @@ _textMap: {
   '模型池': 'Modellpool',
   '模型选择策略': 'Modellauswahl-Strategie',
   '手动优先级（按优先级取第一个可用）': 'Manuelle Priorität (erster verfügbarer nach Priorität)',
-  'Jev 智慧分数（按消息难度选）': 'Jev-Intelligenzwert (nach Aufgabenkomplexität)',
+  'System One 智慧分数（按消息难度选）': 'System One-Intelligenzwert (nach Aufgabenkomplexität)',
   'Reasoning Effort 策略': 'Reasoning-Effort-Strategie',
   '按模型条目手动设置': 'Manuell pro Modelleintrag',
-  'Jev 决策（会话创建时一次）': 'Jev entscheidet (einmalig bei Sitzungserstellung)',
+  'System One 决策（会话创建时一次）': 'System One entscheidet (einmalig bei Sitzungserstellung)',
   '添加模型': 'Modell hinzufügen',
   '编辑模型': 'Modell bearbeiten',
   '设为默认': 'Als Standard',
@@ -1303,10 +1310,10 @@ _textMap: {
   '名称': 'Name',
   '接入方式': 'Anbieter',
   '上下文长度': 'Kontextlänge',
-  '智慧分数 (0-100，模型选择策略=Jev 时使用)': 'Intelligenzwert (0–100, genutzt bei Strategie = Jev)',
+  '智慧分数 (0-100，模型选择策略=System One 时使用)': 'Intelligenzwert (0–100, genutzt bei Strategie = System One)',
   '优先级 (越小越优先)': 'Priorität (kleiner = bevorzugt)',
   '支持视觉（图片直接注入）': 'Vision-Unterstützung (Bilder direkt einfügen)',
-  '决策模型（System One / Jev）': 'Entscheidungsmodell (System One / Jev)',
+  '决策模型（System One）': 'Entscheidungsmodell (System One)',
   '接入点开关': 'Integrations-Schalter',
   '模型池选型（会话创建时）': 'Modellpool-Auswahl (bei Sitzungserstellung)',
   'Reasoning Effort 决策（会话创建时）': 'Reasoning-Effort-Entscheidung (bei Sitzungserstellung)',
@@ -3127,7 +3134,7 @@ Object.assign(DE_DICT._textMap, {
   "设置分类": "Kategorien festlegen",
   "助手与个性化": "Assistenten und Personalisierung",
   "模型与智能": "Modelle und Intelligenz",
-  "Jev 决策模型": "Jev-Entscheidungsmodell",
+  "System One 决策模型": "System One-Entscheidungsmodell",
   "模型与连接": "Modelle und Verbindungen",
   "Token 与上下文": "Token und Kontext",
   "用量与成本": "Nutzung und Kosten",
@@ -3148,7 +3155,7 @@ Object.assign(DE_DICT._textMap, {
   "单次请求容量、输出预留、工具加载和历史压缩。": "Einzelanforderungskapazität, Ausgabereservierung, Werkzeugladen und Verlaufskomprimierung.",
   "限额分别控制什么": "Was steuern die Limits?",
   "从这里查看配置状态，或搜索具体设置。普通字段修改后自动保存；连接、安装和维护操作使用各页按钮。": "Sehen Sie sich hier den Konfigurationsstatus an oder suchen Sie nach bestimmten Einstellungen. Normale Felder werden nach der Änderung automatisch gespeichert; Verwenden Sie die Schaltflächen auf jeder Seite für Anschluss-, Installations- und Wartungsvorgänge.",
-  "每天累计 Token、生成图片张数、Jev 调用次数，以及按价格表估算的日／周／月 LLM 费用。": "Die täglich angesammelten Token, die Anzahl der generierten Bilder, die Anzahl der Jev-Anrufe und die geschätzten täglichen/wöchentlichen/monatlichen LLM-Gebühren basierend auf der Preisliste.",
+  "每天累计 Token、生成图片张数、System One 调用次数，以及按价格表估算的日／周／月 LLM 费用。": "Die täglich angesammelten Token, die Anzahl der generierten Bilder, die Anzahl der System One-Anrufe und die geschätzten täglichen/wöchentlichen/monatlichen LLM-Gebühren basierend auf der Preisliste.",
   "任务目标预算": "Missionszielbudget",
   "只作用于当前目标任务，在任务界面设置，保留独立的任务范围。": "Es wirkt sich nur auf die aktuelle Zielaufgabe aus und wird in der Aufgabenschnittstelle festgelegt, wobei ein unabhängiger Aufgabenbereich erhalten bleibt.",
   "调整 Token 分配": "Passen Sie die Token-Zuteilung an",
@@ -3162,7 +3169,7 @@ Object.assign(DE_DICT._textMap, {
   "TA 会定时主动找你聊天（应用打开时即生效，无需停留在 Babe 模式）": "TA wird die Initiative ergreifen, regelmäßig mit Ihnen zu chatten (dies wird wirksam, wenn die App geöffnet wird, es ist nicht erforderlich, im Babe-Modus zu bleiben).",
   "OpenAI Responses（新版）": "OpenAI-Antworten (neue Version)",
   "OpenCode Go (订阅)": "OpenCode Go (Abonnement)",
-  "Jev 决策需先在「决策模型」标签页启用；失败时回退到条目手动值": "Jev-Entscheidungsfindung muss zuerst auf der Registerkarte „Entscheidungsmodell“ aktiviert werden; Wenn dies fehlschlägt, wird auf den manuellen Wert des Eintrags zurückgegriffen.",
+  "System One 决策需先在「决策模型」标签页启用；失败时回退到条目手动值": "System One-Entscheidungsfindung muss zuerst auf der Registerkarte „Entscheidungsmodell“ aktiviert werden; Wenn dies fehlschlägt, wird auf den manuellen Wert des Eintrags zurückgegriffen.",
   "搜索模型…": "Nach Modellen suchen…",
   "OpenCode API Key（Zen / Go 通用）": "OpenCode-API-Schlüssel (gemeinsam für Zen/Go)",
   "OpenAI兼容：标准 chat/completions；OpenAI Responses：新版 /v1/responses；Anthropic兼容：messages API；OpenCode Zen：免费/按量；OpenCode Go：$10/月订阅，按模型自动路由端点": "OpenAI-kompatibel: Standard-Chat/-Abschlüsse; OpenAI Responses: neue Version /v1/responses; Anthropic-kompatibel: Nachrichten-API; OpenCode Zen: frei/gemessen; OpenCode Go: Abonnement für 10 $/Monat, automatisches Routing von Endpunkten nach Modell",
@@ -3190,8 +3197,8 @@ Object.assign(DE_DICT._textMap, {
   "自定义请求头 (对所有文本/VLM 请求生效)": "Benutzerdefinierte Anforderungsheader (wirksam für alle Text-/VLM-Anfragen)",
   "URL 命中 opencode.ai 时自动发送 x-opencode-session/request/project 等身份头（官方 ID 形状：ses_/msg_ + 12 位十六进制 + 14 位 base62；Go 订阅与免费模型池均会校验）。免费模型所需的 User-Agent 不会自动注入——见下方免费模型说明，由你决定是否添加": "Wenn die URL auf opencode.ai trifft, werden Identitätsheader wie x-opencode-session/request/project automatisch gesendet (offizielle ID-Form: ses_/msg_ + 12-stelliges Hexadezimal + 14-stelliges Base62; sowohl das Go-Abonnement als auch der kostenlose Modellpool werden überprüft). Der für das kostenlose Modell erforderliche User-Agent wird nicht automatisch eingefügt. Sehen Sie sich die Beschreibung des kostenlosen Modells unten an. Es liegt an Ihnen, ihn hinzuzufügen",
   "添加请求头": "Anforderungsheader hinzufügen",
-  "Jev 不生成文本，只做「选择 / 打分 / 是否」类快速决策（70–500ms），用于模型池选型、工具选择、命令护栏、游戏决策等。低置信一律回退原有逻辑，不会阻塞主流程。": "Jev generiert keinen Text, sondern trifft nur schnelle Entscheidungen (70–500 ms), wie z. B. „Auswählen/Scoren/Ob“, die für die Modellpoolauswahl, Werkzeugauswahl, Befehlsleitplanken, Spielentscheidungen usw. verwendet werden. Bei geringem Vertrauen wird immer auf die ursprüngliche Logik zurückgegriffen und der Hauptprozess wird nicht blockiert.",
-  "OpenCode Zen（免费 Jev 1.13）": "OpenCode Zen (Kostenloses Jev 1.13)",
+  "System One 不生成文本，只做「选择 / 打分 / 是否」类快速决策（70–500ms），用于模型池选型、工具选择、命令护栏、游戏决策等。低置信一律回退原有逻辑，不会阻塞主流程。": "System One generiert keinen Text, sondern trifft nur schnelle Entscheidungen (70–500 ms), wie z. B. „Auswählen/Scoren/Ob“, die für die Modellpoolauswahl, Werkzeugauswahl, Befehlsleitplanken, Spielentscheidungen usw. verwendet werden. Bei geringem Vertrauen wird immer auf die ursprüngliche Logik zurückgegriffen und der Hauptprozess wird nicht blockiert.",
+  "OpenCode Zen（免费 System One 1.13）": "OpenCode Zen (Kostenloses System One 1.13)",
   "自定义头优先级最高，可覆盖自动头（如手动指定 User-Agent）。保存后立即对下次请求生效": "Benutzerdefinierte Header haben die höchste Priorität und können automatische Header außer Kraft setzen (z. B. manuelle Angabe von User-Agent). Nach dem Speichern wird es sofort für die nächste Anfrage wirksam.",
   "留空使用默认地址": "Lassen Sie das Feld leer, um die Standardadresse zu verwenden",
   "TypeSafe 直连（自备 Key）": "TypeSafe-Direktverbindung (bringen Sie Ihren eigenen Schlüssel mit)",
@@ -3208,9 +3215,9 @@ Object.assign(DE_DICT._textMap, {
   "单次输出上限（tokens）": "Obergrenze für die Einzelausgabe (Tokens)",
   "控制每次请求最多生成多少 token，支持时包含思考 token。输出空间会从上下文中预留，实际上限以当前模型容量为准。": "Steuert die maximale Anzahl der für jede Anfrage generierten Token, einschließlich Think-Tokens, sofern unterstützt. Der Ausgaberaum wird vom Kontext reserviert und die tatsächliche Obergrenze basiert auf der aktuellen Modellkapazität.",
   "按需加载工具": "Laden Sie Werkzeuge nach Bedarf",
-  "自动选择预加载工具（Jev 优先）": "Automatische Auswahl von Vorspannwerkzeugen (Jev bevorzugt)",
+  "自动选择预加载工具（System One 优先）": "Automatische Auswahl von Vorspannwerkzeugen (System One bevorzugt)",
   "常用工具保持加载，其余工具通过本地搜索补充，内置、MCP 和插件能力均可发现。": "Häufig verwendete Tools bleiben geladen, und der Rest wird durch lokale Suchvorgänge ergänzt, die in integrierten, MCP- und Plug-in-Funktionen auffindbar sind.",
-  "Jev 根据任务选择工具；未启用 Jev 的工具选择或服务不可用时使用本地候选。与按需加载可同时开启。": "Jev wählt Werkzeuge entsprechend der Aufgabe aus; Lokale Kandidaten werden verwendet, wenn die Jev-fähige Werkzeugauswahl nicht verfügbar ist oder der Dienst nicht verfügbar ist. Kann gleichzeitig mit dem On-Demand-Laden aktiviert werden.",
+  "System One 根据任务选择工具；未启用 System One 的工具选择或服务不可用时使用本地候选。与按需加载可同时开启。": "System One wählt Werkzeuge entsprechend der Aufgabe aus; Lokale Kandidaten werden verwendet, wenn die System One-fähige Werkzeugauswahl nicht verfügbar ist oder der Dienst nicht verfügbar ist. Kann gleichzeitig mit dem On-Demand-Laden aktiviert werden.",
   "属于上下文的一部分，默认最多 4000；小窗口还会按可用输入空间收敛。完整加载模式不使用该上限。": "Teil des Kontexts, standardmäßig bis zu 4000; Auch kleine Fenster passen sich dem verfügbaren Eingaberaum an. Im Volllastmodus wird diese Obergrenze nicht verwendet.",
   "工具定义占用上限（估算 tokens）": "Obergrenze der Werkzeugdefinitionsbelegung (geschätzte Token)",
   "管理启用的工具": "Verwalten Sie aktivierte Tools",
@@ -3257,9 +3264,9 @@ Object.assign(DE_DICT._textMap, {
   "每日 LLM Token 用量上限": "Tägliches LLM-Token-Nutzungslimit",
   "这些是每日累计限额，与单次回复长度无关。0 表示不限制；达到限额后停止相应的新请求。按下方预算时区每天重置。": "Hierbei handelt es sich um kumulative Tageslimits, unabhängig von der Länge einer einzelnen Antwort. 0 bedeutet keine Begrenzung; Bei Erreichen des Limits werden entsprechende neue Anfragen gestoppt. Drücken Sie unten auf die Budgetzeitzone, um sie täglich zurückzusetzen.",
   "今日已调用: 0": "Heute angerufen: 0",
-  "每日 Jev 决策调用上限（0 为不限制）": "Tägliches Jev-Entscheidungsaufruflimit (0 bedeutet kein Limit)",
-  "Jev 返回选择、评分或判断，按调用次数单独统计，达到后使用本地回退逻辑。": "Jev gibt eine Auswahl, Bewertung oder Beurteilung zurück, die je nach Anzahl der Anrufe separat gezählt wird, und verwendet bei Erreichen eine lokale Fallback-Logik.",
-  "Token 限额覆盖文本、外置视觉及压缩摘要；生图和 Jev 分别按张数、调用次数统计。API 不返回用量时按文本估算；已发出的请求可能在结束后超过限额。": "Das Token-Limit umfasst Text, externe Bilder und komprimierte Zusammenfassungen; Rohbilder und Jev werden basierend auf der Anzahl der Bilder bzw. der Anzahl der Aufrufe gezählt. Die API gibt Nutzungsschätzungen nicht als Text zurück. Gestellte Anfragen können nach Abschluss das Limit überschreiten.",
+  "每日 System One 决策调用上限（0 为不限制）": "Tägliches System One-Entscheidungsaufruflimit (0 bedeutet kein Limit)",
+  "System One 返回选择、评分或判断，按调用次数单独统计，达到后使用本地回退逻辑。": "System One gibt eine Auswahl, Bewertung oder Beurteilung zurück, die je nach Anzahl der Anrufe separat gezählt wird, und verwendet bei Erreichen eine lokale Fallback-Logik.",
+  "Token 限额覆盖文本、外置视觉及压缩摘要；生图和 System One 分别按张数、调用次数统计。API 不返回用量时按文本估算；已发出的请求可能在结束后超过限额。": "Das Token-Limit umfasst Text, externe Bilder und komprimierte Zusammenfassungen; Rohbilder und System One werden basierend auf der Anzahl der Bilder bzw. der Anzahl der Aufrufe gezählt. Die API gibt Nutzungsschätzungen nicht als Text zurück. Gestellte Anfragen können nach Abschluss das Limit überschreiten.",
   "清零今日用量计数": "Löschen Sie die heutige Nutzungsanzahl",
   "今日计数管理": "Die heutige Grafenverwaltung",
   "只清零今日 Token 和图片张数计数；费用历史、日／周／月美元消费不会删除。": "Nur der heutige Token- und Bildzähler wird gelöscht; Der Ausgabenverlauf und der tägliche/wöchentliche/monatliche Dollarverbrauch werden nicht gelöscht.",
@@ -3608,7 +3615,7 @@ Object.assign(DE_DICT._textMap, {
   "允许": "Erlauben",
   "工具：plugin": "Tool: plugin",
   "工具授权": "Tool-Berechtigung",
-  "全局策略为「Jev 决策」时此项作为回退值": "Bei globaler Richtlinie „Jev-Entscheidung“ dient diese Einstellung als Rückfallwert",
+  "全局策略为「System One 决策」时此项作为回退值": "Bei globaler Richtlinie „System One-Entscheidung“ dient diese Einstellung als Rückfallwert",
   "授权后将不再每次询问；可随时在设置 → 工具中撤销。": "Nach der Freigabe wird nicht erneut gefragt. Unter Einstellungen → Tools jederzeit widerrufbar.",
   "仅本次": "Nur dieses Mal",
   "关闭时后台运行？": "Nach dem Schließen im Hintergrund laufen?",
@@ -4087,3 +4094,90 @@ Object.assign(DE_DICT._textMap, {
   "已应用 meek 网桥，点击“连接 Tor”启动": DE_DICT['ui.tor.meekSelected']
 });
 DE_DICT._textMap["默认关闭。开启后将服务商的加密推理与签名保存到聊天记录，并随 JSON / Markdown 导出。关闭后不再保存或导出这些数据；已有文件不会立即清除。当前工具轮次仍在内存中保留续接所需数据。加密数据不会显示为推理文本。"] = DE_DICT.ui.reasoning.preserveHelp;
+
+Object.assign(DE_DICT, {
+  "ui.systemOne.help": "Ja/Nein-, Auswahl- und Bewertungsmodelle für Routing, Werkzeugauswahl und Schutzregeln. Kompatible System-One-Dienste können lokal oder in der Cloud laufen; unsichere, abgelaufene oder nicht unterstützte Entscheidungen verwenden die bisherige Logik.",
+  "ui.systemOne.custom": "Eigener / kompatibler lokaler Dienst",
+  "ui.systemOne.keyHint": "API-Schlüssel des Anbieters; bei lokalen Diensten optional",
+  "ui.systemOne.modelHint": "Entscheidungsmodell-ID auswählen oder eingeben",
+  "ui.systemOne.modelsUrl": "Modelllisten-URL (optional)",
+  "ui.systemOne.modelsHint": "Leer lassen für die Modellliste des Anbieters",
+  "ui.systemOne.fetchModels": "Entscheidungsmodelle abrufen",
+  "ui.systemOne.endpointHelp": "Vollständige Entscheidungs-URL eingeben. Cloudflare benötigt Konto-ID und Modellpfad; eigene Dienste können das Modell weglassen. Die Liste wird nur per GET abgerufen, ohne Modellaufruf.",
+  "ui.systemOne.noul": "Unterstützt Ja/Nein-Entscheidungen (noul)",
+  "ui.systemOne.choice": "Unterstützt Optionsauswahl (choice)",
+  "ui.systemOne.score": "Unterstützt geordnete Bewertung (score)",
+  "ui.systemOne.capHelp": "Nicht unterstützte Typen gemäß Modelldokumentation ausschalten. Konfidenzwerte verschiedener Modelle sind nicht gleichwertig; Schwellen nach einem Modellwechsel neu bewerten.",
+  "ui.systemOne.usage": "Heutige Aufrufe: {calls}{limit} · Modell {model}",
+  "ui.systemOne.serverDefault": "Server-Standard",
+  "ui.systemOne.loadingModels": "Entscheidungsmodelle werden abgerufen…",
+  "ui.systemOne.noModels": "Keine Modellliste verfügbar; Modell-ID manuell eingeben",
+  "ui.systemOne.modelsFound": "{count} Entscheidungsmodelle gefunden; im Modellfeld auswählen",
+  "ui.systemOne.failure": "Fehlgeschlagen: {error}",
+  "ui.systemOne.testing": "Wird getestet…",
+  "ui.systemOne.connected": "Verbindung erfolgreich",
+  "ui.systemOne.noResponse": "Keine Antwort"
+});
+Object.assign(DE_DICT._textMap, {
+  "用「是否 / 选择 / 打分」决策模型处理路由、工具选择和护栏。支持兼容 System One 协议的云服务与本地服务；低置信、超时或能力不支持时回退原有逻辑。": "Ja/Nein-, Auswahl- und Bewertungsmodelle für Routing, Werkzeugauswahl und Schutzregeln. Kompatible System-One-Dienste können lokal oder in der Cloud laufen; unsichere, abgelaufene oder nicht unterstützte Entscheidungen verwenden die bisherige Logik.",
+  "自定义 / 本地兼容服务": "Eigener / kompatibler lokaler Dienst",
+  "服务商的 API Key；本地服务可留空": "API-Schlüssel des Anbieters; bei lokalen Diensten optional",
+  "选择或输入决策模型 ID": "Entscheidungsmodell-ID auswählen oder eingeben",
+  "模型列表 URL（可选）": "Modelllisten-URL (optional)",
+  "留空自动使用服务商的模型列表": "Leer lassen für die Modellliste des Anbieters",
+  "获取决策模型": "Entscheidungsmodelle abrufen",
+  "API URL 填完整的决策接口地址。Cloudflare 需包含 Account ID 和模型路径；自定义服务可不填模型。获取列表只发送 GET 请求，不调用模型。": "Vollständige Entscheidungs-URL eingeben. Cloudflare benötigt Konto-ID und Modellpfad; eigene Dienste können das Modell weglassen. Die Liste wird nur per GET abgerufen, ohne Modellaufruf.",
+  "支持是否判断（noul）": "Unterstützt Ja/Nein-Entscheidungen (noul)",
+  "支持选项选择（choice）": "Unterstützt Optionsauswahl (choice)",
+  "支持档位打分（score）": "Unterstützt geordnete Bewertung (score)",
+  "按模型文档关闭不支持的类型，避免发送无效请求。不同模型的置信度并不等价，换模型后请重新评估阈值。": "Nicht unterstützte Typen gemäß Modelldokumentation ausschalten. Konfidenzwerte verschiedener Modelle sind nicht gleichwertig; Schwellen nach einem Modellwechsel neu bewerten.",
+  "今日已调用: {calls}{limit} · 模型 {model}": "Heutige Aufrufe: {calls}{limit} · Modell {model}",
+  "服务端默认": "Server-Standard",
+  "正在获取决策模型…": "Entscheidungsmodelle werden abgerufen…",
+  "服务商未提供模型列表，可手动输入模型 ID": "Keine Modellliste verfügbar; Modell-ID manuell eingeben",
+  "找到 {count} 个决策模型，可在模型框中选择": "{count} Entscheidungsmodelle gefunden; im Modellfeld auswählen",
+  "失败: {error}": "Fehlgeschlagen: {error}",
+  "测试中…": "Wird getestet…",
+  "连通正常": "Verbindung erfolgreich",
+  "无响应": "Keine Antwort"
+});
+
+Object.assign(DE_DICT._textMap, {
+  "添加到模型池的 ChatGPT 模型": "ChatGPT-Modell zum Modellpool hinzufügen",
+  "添加并设为默认": "Hinzufügen und als Standard setzen",
+  "从当前账号的可用模型中选择，点击「添加并设为默认」加入模型池，供新会话使用；已有会话可用 /model 切换。": "Ein verfügbares Modell dieses Kontos wählen und „Hinzufügen und als Standard setzen“ anklicken, um es in neuen Chats zu verwenden. Bestehende Chats können mit /model wechseln.",
+  "已添加到模型池并设为默认；新会话将使用此模型": "Zum Modellpool hinzugefügt und als Standard für neue Chats gesetzt",
+  "当前登录方式未提供可读取的订阅额度；请在 ChatGPT 用量管理中查看和调整。这不影响使用模型。": "Diese Anmeldung stellt keine lesbaren Abonnementlimits bereit. Nutzung in ChatGPT ansehen und verwalten; die Modelle bleiben nutzbar.",
+  "This login provides no readable subscription limits; view and manage usage in ChatGPT": "Diese Anmeldung stellt keine lesbaren Abonnementlimits bereit. Nutzung in ChatGPT ansehen und verwalten; die Modelle bleiben nutzbar."
+});
+for (const [key, value] of Object.entries(DE_DICT.ui.camera)) DE_DICT['ui.camera.' + key] = value;
+DE_DICT['ui.attachments.failed'] = 'Anhang konnte nicht importiert werden. Entfernen und erneut auswählen.';
+DE_DICT['ui.workspace.unavailable'] = 'Der Arbeitsbereich ist nicht verfügbar';
+Object.assign(DE_DICT._textMap, {
+  '使用当前设备的摄像头，将照片添加到对话': DE_DICT.ui.camera.subtitle,
+  '摄像头': DE_DICT.ui.camera.device, '切换摄像头': DE_DICT.ui.camera.switch,
+  '重拍': DE_DICT.ui.camera.retake, '使用照片': DE_DICT.ui.camera.use,
+});
+Object.assign(DE_DICT._textMap, {
+  "版本与更新": "Version und Updates",
+  "正在读取版本…": "Version wird gelesen…",
+  "发行说明": "Versionshinweise",
+  "此版本的新内容": "Neuerungen",
+  "更新偏好": "Update-Einstellungen",
+  "只检查版本信息，不自动安装。关闭后仍可手动检查。": "Prüft Versionsinformationen ohne Installation. Manuelle Prüfungen bleiben möglich.",
+  "后台下载更新": "Updates im Hintergrund herunterladen",
+  "默认关闭。启用后，在自动检查发现新版且后台任务空闲时下载；安装前仍需手动确认。下载可能使用较多流量。": "Standardmäßig aus. Neue Versionen werden nach automatischen Prüfungen bei inaktiven Aufgaben heruntergeladen. Die Installation erfordert immer eine Bestätigung. Downloads können viel Datenvolumen verbrauchen.",
+  "下载更新": "Update herunterladen",
+  "重启安装": "Neu starten und installieren"
+});
+Object.assign(DE_DICT, {
+  "ui.update.sourceLauncher": "npm-Starter",
+  "ui.update.sourceRelease": "Release-Installation",
+  "ui.update.sourceDev": "Entwicklungsumgebung",
+  "ui.update.available": "Update verfügbar",
+  "ui.update.managedHint": "Aktualisiert die Anwendung ohne Neuinstallation des npm-Pakets. Nach der Prüfung das Backend beenden und den ursprünglichen Befehl erneut ausführen.",
+  "ui.update.directHint": "Lädt das offizielle Installationspaket mit SHA-256-Prüfung herunter. Installation bei Bereitschaft bestätigen; npm ist nicht erforderlich. Browser-Aktionen aktualisieren das verbundene Desktop-Backend.",
+  "ui.update.devHint": "Entwicklungsversionen prüfen nur Versionen. Quellcode aktualisieren oder ein Installationspaket herunterladen.",
+  "ui.update.exitActivate": "Beenden und Update aktivieren",
+  "ui.update.lastChecked": "Zuletzt geprüft: {time}"
+});

@@ -25,8 +25,24 @@ async function scanDirectory(root, options = {}, cache = {}) {
   };
   const sameStat = (a, b) =>
     a.size === b.size && a.mtimeMs === b.mtimeMs && a.ctimeMs === b.ctimeMs;
+  const transient = error => ['EBUSY', 'EAGAIN', 'EPERM', 'EACCES', 'ENOENT', 'FILE_CHANGED'].includes(error.code);
+  const retry = async operation => {
+    for (let attempt = 0; ; attempt++) {
+      try { return await operation(); }
+      catch (error) {
+        if (!transient(error) || attempt >= 2) throw error;
+        await new Promise(resolve => setTimeout(resolve, 40 * (attempt + 1)));
+      }
+    }
+  };
   const walk = async (directory, prefix) => {
-    const entries = await fs.promises.readdir(directory, { withFileTypes: true });
+    let entries;
+    try { entries = await retry(() => fs.promises.readdir(directory, { withFileTypes: true })); }
+    catch (error) {
+      if (!prefix || !transient(error)) throw error;
+      files[prefix] = { skipped: 'unavailable-directory', code: error.code };
+      return;
+    }
     for (const entry of entries) {
       const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
       if (excluded(rel)) continue;
@@ -37,21 +53,28 @@ async function scanDirectory(root, options = {}, cache = {}) {
         continue;
       }
       if (!entry.isFile()) { files[rel] = { skipped: 'unsupported-type' }; continue; }
-      const before = await fs.promises.lstat(abs);
-      if (!before.isFile() || before.isSymbolicLink() || before.size > options.maxBytes) {
-        files[rel] = { skipped: before.size > options.maxBytes ? 'size-limit' : 'unsupported-type', size: before.size };
-        continue;
+      try {
+        files[rel] = await retry(async () => {
+          const before = await fs.promises.lstat(abs);
+          if (!before.isFile() || before.isSymbolicLink() || before.size > options.maxBytes)
+            return { skipped: before.size > options.maxBytes ? 'size-limit' : 'unsupported-type', size: before.size };
+          const previous = cache[rel];
+          let hash = previous?.hash;
+          if (!hash || !sameStat(before, previous)) {
+            const digest = crypto.createHash('sha256');
+            for await (const chunk of fs.createReadStream(abs)) digest.update(chunk);
+            hash = digest.digest('hex');
+          }
+          const after = await fs.promises.lstat(abs);
+          if (!sameStat(before, after)) throw Object.assign(new Error('File changed during scan: ' + rel), { code: 'FILE_CHANGED' });
+          return { size: after.size, mtimeMs: after.mtimeMs, ctimeMs: after.ctimeMs, hash };
+        });
+      } catch (error) {
+        if (!transient(error)) throw error;
+        // An explicit marker blocks both transfer and deletion, including all
+        // descendants, until a later scan can establish a valid snapshot.
+        files[rel] = { skipped: 'unavailable-file', code: error.code };
       }
-      const previous = cache[rel];
-      let hash = previous?.hash;
-      if (!hash || !sameStat(before, previous)) {
-        const digest = crypto.createHash('sha256');
-        for await (const chunk of fs.createReadStream(abs)) digest.update(chunk);
-        hash = digest.digest('hex');
-      }
-      const after = await fs.promises.lstat(abs);
-      if (!sameStat(before, after)) throw new Error(`同步扫描期间文件发生变化: ${rel}`);
-      files[rel] = { size: after.size, mtimeMs: after.mtimeMs, ctimeMs: after.ctimeMs, hash };
     }
   };
   await walk(root, '');

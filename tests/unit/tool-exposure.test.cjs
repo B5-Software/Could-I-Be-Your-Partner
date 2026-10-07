@@ -252,7 +252,7 @@ test('generic calls go through the actual Computer Use grant and sensitive-comma
   }
 });
 
-test('Jev automatic selection preloads tools in Chat and Code, respects budget, and makes no second selection-model call', async () => {
+test('System One automatic selection preloads tools in Chat and Code, respects budget, and makes no second selection-model call', async () => {
   for (const mode of ['chat', 'code']) {
     const scope = catalog(mode);
     const decisionCalls = [];
@@ -287,9 +287,9 @@ test('Jev automatic selection preloads tools in Chat and Code, respects budget, 
       agent.optimizeToolsForConversation('搜索网站并下载文件'),
       agent.optimizeToolsForConversation('搜索网站并下载文件'),
     ]);
-    assert.equal(decisionCalls.length, 1, 'concurrent requests share one Jev decision');
+    assert.equal(decisionCalls.length, 1, 'concurrent requests share one System One decision');
     assert.equal(llmCalls, 0);
-    assert.match(agent.optimizedToolReason, /Jev/);
+    assert.match(agent.optimizedToolReason, /System One/);
     assert.equal(
       agent.hasUsableOptimizedSelection(),
       true,
@@ -300,16 +300,16 @@ test('Jev automatic selection preloads tools in Chat and Code, respects budget, 
     assert.ok(JSON.stringify(decisionCalls[0]).length < 15000);
     assert.ok(
       !JSON.stringify(decisionCalls[0]).includes('parameters'),
-      'Jev sees categories, not full schemas',
+      'System One sees categories, not full schemas',
     );
     assert.ok(
       (await agent.executeTool('searchTools', { names: ['downloadFile'] })).tools.length,
-      'Jev omissions remain searchable',
+      'System One omissions remain searchable',
     );
   }
 });
 
-test('Jev failure falls back locally, and resetting settings cancels stale decisions', async () => {
+test('System One failure falls back locally, and resetting settings cancels stale decisions', async () => {
   const scope = catalog('code');
   let finish;
   let llmCalls = 0;

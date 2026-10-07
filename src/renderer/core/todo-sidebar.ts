@@ -183,8 +183,8 @@ export class TodoSidebar {
         return element;
       };
       const toggle = button('toggle', item.done ? '标记为未完成' : '标记为完成', 'fa-check');
-      toggle.classList.add('todo-checkbox', 'cibyp-switch');
-      toggle.setAttribute('role', 'switch');
+      toggle.classList.add('todo-checkbox');
+      toggle.setAttribute('role', 'checkbox');
       toggle.setAttribute('aria-checked', String(item.done));
       row.appendChild(toggle);
       if (this.editing === item.id) {

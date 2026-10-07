@@ -177,7 +177,7 @@ test('text, streaming, visual and compaction IPC all reject a reached daily limi
   }
 });
 
-test('Jev accounting and its gate use the same injected budget day boundary', () => {
+test('System One accounting and its gate use the same injected budget day boundary', () => {
   const { DecisionService } = require('../../src/main/decision-service');
   const settings = { decision: { dailyMaxCalls: 1 } };
   let day = '2026-09-30';

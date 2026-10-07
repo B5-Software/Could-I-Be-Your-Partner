@@ -5,7 +5,7 @@
     'No usage-limit reset credits are available': '没有可用的额度重置卡', 'ChatGPT account changed': 'ChatGPT 账号已变更',
     'This reset credit is unavailable or expired': '此重置卡不可用或已过期', 'A reset request is already pending': '正在处理另一个重置请求',
     'Codex quota reader is unavailable. Install the official Codex CLI or set CIBYP_CODEX_BINARY to its executable': '额度读取器不可用；请安装官方 Codex CLI，或配置 CIBYP_CODEX_BINARY',
-    'This ChatGPT account did not provide a Codex account identifier; check ChatGPT Usage for plan limits': '此账号未提供 Codex 账号标识，请在 ChatGPT 用量页查看订阅额度',
+    'This login provides no readable subscription limits; view and manage usage in ChatGPT': '当前登录方式未提供可读取的订阅额度；请在 ChatGPT 用量管理中查看和调整。这不影响使用模型。',
     'Add your OpenCode Go API key in Model & connection settings': '请在模型与连接设置中添加 OpenCode Go API Key',
     'OpenCode Go key is invalid': 'OpenCode Go Key 无效', 'OpenCode Go subscription is required': '需要 OpenCode Go 订阅',
   };
@@ -79,10 +79,10 @@
       if (!entry) { entry = { id: 'pool-' + crypto.randomUUID(), provider: 'chatgpt-codex', model: model.id, label: model.name, apiUrl: 'https://api.openai.com/v1/responses', apiKey: '', contextLength: model.contextLength || 131072, vision: !!model.vision, effort: 'auto', intelligence: 80, priority: 0, enabled: true }; pool.push(entry); }
       await savePool(pool, { activeEntryId: entry.id });
       document.getElementById('setting-llm-provider').value = 'chatgpt-codex'; updateLLMProviderFields('chatgpt-codex');
-      chatGPTStatusText('已使用此订阅模型'); return { ok: true };
+      chatGPTStatusText('已添加到模型池并设为默认；新会话将使用此模型'); return { ok: true };
     });
   });
-  document.getElementById('btn-chatgpt-usage')?.addEventListener('click', () => window.api.openBrowser('https://chatgpt.com/settings/usage'));
+  document.getElementById('btn-chatgpt-usage')?.addEventListener('click', () => chatGPTAction(() => window.api.openHostBrowser('https://chatgpt.com/settings/usage')));
   async function refreshChatGPTLimits() {
     const button = document.getElementById('btn-chatgpt-limits'); button.disabled = true;
     const active = chatGPTState?.activeId;
@@ -91,6 +91,7 @@
       if (active !== chatGPTState?.activeId) return;
       const container = document.getElementById('chatgpt-quota-windows'); container.replaceChildren();
       if (!result.ok) { container.textContent = chatGPTText(result.error); return; }
+      if (result.unavailable) { container.textContent = chatGPTText(result.message); container.classList.add('setting-hint'); return; }
       const buckets = Object.values(result.rateLimitsByLimitId || (result.rateLimits ? { codex: result.rateLimits } : {}));
       for (const bucket of buckets) for (const window of [bucket.primary, bucket.secondary].filter(Boolean)) {
         const row = document.createElement('div'); row.className = 'chatgpt-quota-row';

@@ -310,6 +310,52 @@ function getSessionLiveState(mode, item) {
   return { status: live.status, attention, lastError: live.lastError || fallback.lastError };
 }
 
+// Place transient notices inside the visible conversation, above its composer.
+// Observe layout rather than using a fixed offset: inputs, attachments, Todo,
+// Code AI resizing and immersive mode all change the available rectangle.
+window.CibypNoticeDock = {
+  mount(element) {
+    let dock = document.getElementById('chat-notice-dock');
+    if (!dock) {
+      dock = document.createElement('div'); dock.id = 'chat-notice-dock'; document.body.append(dock);
+      this.watch(dock);
+    }
+    dock.append(element);
+    return () => {};
+  },
+  watch(element) {
+    let frame = 0;
+    const layout = () => {
+      frame = 0;
+      const page = document.querySelector('#page-chat.active, #page-code.active, #page-babe.active');
+      const messages = page?.querySelector('#chat-messages, #code-chat-messages, #babe-chat-messages');
+      const composer = page?.querySelector('.chat-input-area, .code-agent-composer, .babe-chat-input');
+      const bounds = messages?.getBoundingClientRect(), input = composer?.getBoundingClientRect();
+      const available = bounds?.width > 0 && input?.height > 0;
+      const bottom = available ? innerHeight - Math.min(bounds.bottom, input.top) + 12 : 20;
+      const maxHeight = available ? innerHeight - bottom - bounds.top - 12 : innerHeight - bottom - 24;
+      element.style.bottom = bottom + 'px';
+      element.style.right = (available ? Math.max(12, innerWidth - bounds.right + 12) : 20) + 'px';
+      element.style.maxWidth = (available ? Math.max(0, bounds.width - 24) : Math.max(0, innerWidth - 40)) + 'px';
+      element.style.maxHeight = Math.max(0, maxHeight) + 'px';
+      element.style.overflowY = element.scrollHeight > Math.max(0, maxHeight) + 1 ? 'auto' : 'visible';
+      element.style.visibility = maxHeight < 48 ? 'hidden' : '';
+    };
+    const schedule = () => { if (!frame) frame = requestAnimationFrame(layout); };
+    const resize = new ResizeObserver(schedule);
+    const changes = new MutationObserver(schedule);
+    resize.observe(element);
+    for (const node of document.querySelectorAll('#page-chat, #page-code, #page-babe, #code-agent-panel, #chat-messages, #code-chat-messages, #babe-chat-messages, .chat-input-area, .code-agent-composer, .babe-chat-input')) {
+      resize.observe(node); changes.observe(node, { attributes: true, attributeFilter: ['class', 'style'] });
+    }
+    changes.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'style'] });
+    window.addEventListener('resize', schedule);
+    window.visualViewport?.addEventListener('resize', schedule);
+    layout();
+    return () => { resize.disconnect(); changes.disconnect(); cancelAnimationFrame(frame); window.removeEventListener('resize', schedule); window.visualViewport?.removeEventListener('resize', schedule); };
+  }
+};
+let stopToastDock;
 function showToast(message, type = 'info', duration = 5000) {
   const container = document.getElementById('toast-container');
   if (!container) return;
@@ -324,6 +370,7 @@ function showToast(message, type = 'info', duration = 5000) {
   el.className = `toast-item toast-${kind}`;
   el.innerHTML = `<i class="fa-solid ${icons[kind]} toast-icon"></i><span class="toast-text">${escapeHtml(String(message))}</span>`;
   container.appendChild(el);
+  if (!stopToastDock) stopToastDock = window.CibypNoticeDock.mount(container);
   // 渐显：双 rAF 确保初始样式先落地，再触发过渡
   requestAnimationFrame(() => requestAnimationFrame(() => el.classList.add('toast-visible')));
   let removed = false;
@@ -332,7 +379,7 @@ function showToast(message, type = 'info', duration = 5000) {
     removed = true;
     el.classList.remove('toast-visible');
     el.classList.add('toast-leave');
-    setTimeout(() => el.remove(), 320);
+    setTimeout(() => { el.remove(); if (!container.childElementCount) { stopToastDock?.(); stopToastDock = null; } }, 320);
   };
   const removeTimer = setTimeout(dismiss, duration);
   el.addEventListener('click', () => { clearTimeout(removeTimer); dismiss(); });

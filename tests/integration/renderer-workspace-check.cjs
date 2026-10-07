@@ -11,7 +11,7 @@ module.exports = async function checkWorkspace(webContents) {
         await new Promise(resolve => setTimeout(resolve, 0));
       }
     };
-    const until = async check => { for (let n = 0; n < 100; n++) { if (check()) return; await wait(20); } throw new Error('Todo persistence did not reach the UI'); };
+    const until = async (check, label='Todo persistence did not reach the UI') => { for (let n = 0; n < 100; n++) { if (check()) return; await wait(20); } throw new Error(label); };
     const click = selector => { const element = document.querySelector(selector); check(element, selector); element.click(); };
     const root = document.getElementById('todo-panel');
     const input = document.getElementById('todo-input');
@@ -142,7 +142,16 @@ module.exports = async function checkWorkspace(webContents) {
     check(document.querySelectorAll('#main-content > .page.active').length === 1, 'navigation has one active page');
     check(document.getElementById('page-chat').inert, 'inactive pages cannot receive focus');
     click('.nav-item[data-page="about"]');
-    check(document.getElementById('page-chat').classList.contains('active'), 'clicking an expanded auxiliary app returns to the session');
+    check(about.classList.contains('active'), 'repeated sidebar clicks keep the selected page');
+    for (const mode of ['code','babe','chat']) {
+      click('.mode-btn[data-mode="'+mode+'"]');
+      await until(() => window.getCurrentMode() === mode, 'Mode did not switch to '+mode+' (current '+window.getCurrentMode()+', disabled '+document.querySelector('.mode-btn[data-mode="'+mode+'"]').disabled+')');
+      for (const destination of ['tools','skills','knowledge','memory','automation','settings','about']) {
+        const selector='.nav-item[data-page="'+destination+'"]';
+        click(selector);click(selector);
+        check(document.getElementById('page-'+destination).classList.contains('active'), mode+': repeated clicks unexpectedly leave '+destination);
+      }
+    }
     for (const page of ['tools','skills','knowledge','memory','automation','history','settings','about']) window.navigatePage(page);
     window.navigatePage('chat');
     await wait(400);

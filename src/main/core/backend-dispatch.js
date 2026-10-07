@@ -7,8 +7,12 @@ const { createIpcDispatch } = require('./ipc-dispatch');
 
 // The preload is the single capability declaration for every frontend. Never
 // expose arbitrary properties of the runtime, Electron, or the IPC registry.
-function createBackendDispatch({ runtime, ipcMain, eventBus, desktop, bootState }) {
-  const source = fs.readFileSync(path.join(__dirname, '../../preload/preload.js'), 'utf8');
+function createBackendDispatch({ runtime, ipcMain, eventBus, desktop, shutdown, bootState }) {
+  const source = fs
+    .readdirSync(path.join(__dirname, '../../preload'))
+    .filter((file) => file === 'preload.js' || file.endsWith('-preload.js'))
+    .map((file) => fs.readFileSync(path.join(__dirname, '../../preload', file), 'utf8'))
+    .join('\n');
   const channels = new Set(
     [...source.matchAll(/ipcRenderer\.(?:invoke|send)\(['"]([^'"]+)['"]/g)].map((m) => m[1]),
   );
@@ -34,6 +38,7 @@ function createBackendDispatch({ runtime, ipcMain, eventBus, desktop, bootState 
     'openVmDesktop',
     'setTitle',
     'sendMessage',
+    'submitMessage',
     'inject',
     'stop',
     'undo',
@@ -93,6 +98,7 @@ function createBackendDispatch({ runtime, ipcMain, eventBus, desktop, bootState 
     if (method === 'boot:state') return bootState?.() || { ready: true };
     if (method === 'desktop:open')
       return desktop ? desktop() : { ok: false, error: 'No graphical environment available' };
+    if (method === 'backend:shutdown') return shutdown?.() || { ok: false };
     if (method === 'createSession') {
       const session = runtime.createSession(args[0]);
       return runtime.getSession(session.key);

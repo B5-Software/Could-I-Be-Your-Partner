@@ -39,7 +39,7 @@
     btnImportKnowledge.addEventListener('click', async () => {
       try {
         // 先选择文件
-        const selectResult = await window.api.openFileDialog();
+        const selectResult = await chooseAttachmentFiles(btnImportKnowledge, { multiple: true });
         if (!selectResult.ok || !selectResult.paths || selectResult.paths.length === 0) return;
 
         // 对每个文件进行导入
@@ -68,6 +68,7 @@
         loadKnowledgePage();
       } catch (e) {
         console.error('Import knowledge error:', e);
+        showToast(e.message, 'error');
       }
     });
   }

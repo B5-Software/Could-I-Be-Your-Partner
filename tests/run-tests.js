@@ -2404,7 +2404,7 @@ testAsync('aggregateSSEToJSON: OpenAI / Anthropic / Responses 聚合', async () 
     'data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"t1","function":{"name":"bash","arguments":"{\\"command\\""}}]}}]}',
     'data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":":\\"ls\\"}"}}]},"finish_reason":"tool_calls"}],"usage":{"total_tokens":7}}',
     'data: [DONE]'
-  ].join('\n');
+  ].join('\n\n');
   const o = llmRetryMod.aggregateSSEToJSON(openai, 'openai');
   assert.strictEqual(o.choices[0].message.content, 'Hello');
   assert.strictEqual(o.choices[0].message.tool_calls[0].function.name, 'bash');
@@ -2416,7 +2416,7 @@ testAsync('aggregateSSEToJSON: OpenAI / Anthropic / Responses 聚合', async () 
     'data: {"type":"message_start","message":{"id":"m1","model":"claude","usage":{"input_tokens":3,"output_tokens":0}}}',
     'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"喵"}}',
     'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":2}}'
-  ].join('\n');
+  ].join('\n\n');
   const a = llmRetryMod.aggregateSSEToJSON(anthropic, 'anthropic');
   assert.strictEqual(a.content[0].text, '喵');
   assert.strictEqual(a.stop_reason, 'end_turn');
@@ -2425,7 +2425,7 @@ testAsync('aggregateSSEToJSON: OpenAI / Anthropic / Responses 聚合', async () 
   const responses = [
     'data: {"type":"response.output_text.delta","delta":"Hey"}',
     'data: {"type":"response.completed","response":{"id":"r1","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"Hey"}]}],"usage":{"total_tokens":1}}}'
-  ].join('\n');
+  ].join('\n\n');
   const r = llmRetryMod.aggregateSSEToJSON(responses, 'responses');
   assert.strictEqual(r.id, 'r1');
   assert.strictEqual(r.output[0].content[0].text, 'Hey');
@@ -2603,7 +2603,7 @@ testAsync('decision-service: choice/score/noul 置信回退与解析', async () 
   assert.strictEqual(n1.value, true);
   const n2 = await svc.noul('s', 'q', { key: 'r2', threshold: 0.85 });
   assert.strictEqual(n2.value, null, '0.6 概率在 0.85 阈值下应弃权');
-  const sc = await svc.score('s', 'q', ['l1', 'l2'], { key: 's' });
+  const sc = await svc.score('s', 'q', ['l1', 'l2', 'l3'], { key: 's' });
   assert.strictEqual(sc.value, 1.2);
   assert.strictEqual(lastBody.model, 'jev-1.13-free');
   assert.ok(lastBody.state);
@@ -4042,7 +4042,7 @@ function runVmSandboxTests() {
     assert.ok(/tools:\s*\{[\s\S]{0,200}type:\s*'array'/.test(src), '内部工具 schema 应支持点名 tools 数组');
     assert.ok(/requestedValid/.test(src), '应处理点名工具');
     assert.ok(!/slice\(0,\s*24\)/.test(src), '决策模型不应再截断类别（ffmpeg 类别曾被裁掉）');
-    assert.ok(/本次需要补充工具的原因/.test(src), 'Jev 决策模型的 state 应包含触发原因');
+    assert.ok(/本次需要补充工具的原因/.test(src), 'System One 决策模型的 state 应包含触发原因');
     assert.ok(/FFmpeg 媒体/.test(src) && /ffmpegInfo/.test(src), '启发式应包含媒体类别/明确示例');
     assert.ok(/eslintLint/.test(src), '选择提示应包含 eslint 示例');
   });

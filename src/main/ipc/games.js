@@ -86,6 +86,7 @@ module.exports = function registerGamesIpc({
       const result = await fetchLLMWithRetry({
         label: 'LLM:sanguosha',
         apiUrl: req.url,
+        transport: req.transport,
         apiKey: req.headers['x-api-key'] || llm.apiKey || llm.zenApiKey,
         headers: req.headers,
         body: req.body,
@@ -95,7 +96,12 @@ module.exports = function registerGamesIpc({
         },
       });
       if (!result.ok) return { ok: true, action: 'auto' };
-      const rawData = await result.response.json();
+      let rawData;
+      try {
+        rawData = await result.response.json();
+      } finally {
+        result.releaseController?.();
+      }
       if (rawData.error) return { ok: true, action: 'auto' };
       const data = LLMProviders.parseLLMResponse(rawData, req.transport);
       const content = data.choices?.[0]?.message?.content?.trim();

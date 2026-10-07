@@ -26,6 +26,7 @@ contextBridge.exposeInMainWorld('vmSplash', {
   },
   /** 紧急切回本机（本次运行生效） */
   emergencyHostMode: () => ipcRenderer.invoke('vm:emergencyHostMode'),
+  cancelWebStartup: () => ipcRenderer.invoke('vm:splashCancelWeb'),
   /** 读取当前运行位置与 VM 状态 */
   getRuntime: () => ipcRenderer.invoke('runtime:getLocation'),
   getTheme: () => ipcRenderer.invoke('theme:get'),

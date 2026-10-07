@@ -1,8 +1,8 @@
   function makeAvatarHTML(avatarData, isAI, style) {
     const sz = style || 'width:100%;height:100%;border-radius:50%;object-fit:cover';
     if (avatarData) {
-      const src = avatarData.startsWith('data:') ? avatarData : 'file://' + avatarData.replace(/\\/g, '/');
-      return `<img src="${src}" style="${sz}" alt="">`;
+      const src = window.CibypAvatarSource.resolve(avatarData);
+      return `<img src="${escapeHtml(src)}" style="${sz}" alt="">`;
     }
     return isAI ? '<i class="fa-solid fa-robot"></i>' : '<i class="fa-solid fa-user"></i>';
   }
@@ -62,8 +62,8 @@
     const sz = style || 'width:100%;height:100%;border-radius:50%;object-fit:cover';
     let inner;
     if (avatarData) {
-      const src = avatarData.startsWith('data:') ? avatarData : 'file://' + avatarData.replace(/\\/g, '/');
-      inner = `<img src="${src}" style="${sz}" alt="">`;
+      const src = window.CibypAvatarSource.resolve(avatarData);
+      inner = `<img src="${escapeHtml(src)}" style="${sz}" alt="">`;
     } else {
       inner = role === 'babe' ? '<i class="fa-solid fa-heart"></i>' : '<i class="fa-solid fa-user"></i>';
     }

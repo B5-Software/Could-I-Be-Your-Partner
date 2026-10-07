@@ -2,6 +2,12 @@
   async function sendMessage() {
     const text = chatInput.value.trim();
     if (!text && currentAttachments.length === 0) return;
+    const pendingAttachments = [...currentAttachments];
+    await Promise.all(pendingAttachments.map(att => att.pendingSave).filter(Boolean));
+    if (pendingAttachments.some(att => att.error)) {
+      showToast(t('ui.attachments.failed', '附件导入失败，请移除后重新选择。'), 'error');
+      return;
+    }
 
     // Remote 模式：转发到远程 WS，不在本地执行 Agent
     if (isRemoteMode && remoteWs && remoteWs.readyState === WebSocket.OPEN) {

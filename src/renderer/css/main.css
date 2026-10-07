@@ -1136,7 +1136,7 @@ html[data-animations="off"] #sidebar, html[data-animations="off"] #main-content 
 }
 /* Update reminders must remain visible before the lazy settings stylesheet loads. */
 /* A compact, themed update card above every workspace surface. */
-.app-update-notice { position: fixed; bottom: 20px; right: 20px; z-index: 120000; width: 350px; max-width: calc(100vw - 40px); padding: 18px; box-sizing: border-box; border: 1px solid var(--border); border-radius: 18px; background: var(--bg-primary); color: var(--text-primary); box-shadow: 0 12px 44px rgba(0,0,0,.13); }
+.app-update-notice { position: fixed; bottom: 20px; right: 20px; z-index: 900; width: 350px; max-width: calc(100vw - 40px); padding: 18px; box-sizing: border-box; overflow-y: auto; border: 1px solid var(--border); border-radius: 18px; background: var(--bg-primary); color: var(--text-primary); box-shadow: 0 12px 44px rgba(0,0,0,.13); }
 .app-update-top { display: flex; align-items: center; gap: 12px; }
 .app-update-symbol { width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center; flex: 0 0 auto; font-size: 17px; background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); }
 .app-update-heading { display: flex; flex: 1; flex-direction: column; gap: 3px; min-width: 0; }
@@ -1150,3 +1150,8 @@ html[data-animations="off"] #sidebar, html[data-animations="off"] #main-content 
 .app-update-verified i { color: var(--accent); }
 .app-update-notice .app-update-install { padding: 8px 13px; border: 1px solid transparent; border-radius: 9px; background: var(--accent); color: var(--accent-text, #fff); font-size: 12px; font-weight: 500; cursor: pointer; }
 .app-update-install:disabled { opacity: .55; cursor: wait; }
+#chat-notice-dock { position: fixed; bottom: 20px; right: 20px; z-index: 95; display: flex; flex-direction: column; align-items: flex-end; gap: 10px; width: max-content; pointer-events: none; }
+#chat-notice-dock:empty { display: none; }
+#chat-notice-dock .app-update-notice { position: relative; bottom: auto; right: auto; max-width: 100%; flex-shrink: 0; pointer-events: auto; }
+body:not(:has(#page-chat.active, #page-code.active, #page-babe.active)) #chat-notice-dock .app-update-notice { display: none; }
+#chat-notice-dock #toast-container { position: relative; inset: auto; width: auto; max-width: 100%; flex-shrink: 0; order: -1; }

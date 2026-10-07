@@ -31,14 +31,14 @@
     const mcpCount = MCP_DYNAMIC_TOOLS.length;
     const mcpBadge = mcpCount > 0 ? `<span class="tools-stat-sep">·</span><span class="tools-stat"><i class="fa-solid fa-plug-circle-bolt"></i> MCP动态 <strong>${mcpCount}</strong></span>` : '';
     const optimizedInfo = adaptive
-      ? `<span class="tools-stat-sep">·</span><span class="tools-stat">本轮已加载 <strong>${runtimeAgent.toolExposure.lastStats.loaded}</strong>，实际工具上下文 <strong>~${activeTokens.toLocaleString()}</strong> tokens，预算 ${runtimeAgent.toolExposure.budget.toLocaleString()}（节省 ~${Math.max(0, estTokens - activeTokens).toLocaleString()}；本地检索不调用选择模型）</span>`
+      ? `<span class="tools-stat-sep">·</span><span class="tools-stat">本轮已加载 <strong>${runtimeAgent.toolExposure?.lastStats?.loaded ?? activeSchemas.length}</strong>，实际工具上下文 <strong>~${activeTokens.toLocaleString()}</strong> tokens，预算 ${Number(runtimeAgent.toolExposure?.budget || runtimeAgent.settings?.toolContextBudget || 4000).toLocaleString()}（节省 ~${Math.max(0, estTokens - activeTokens).toLocaleString()}；本地检索不调用选择模型）</span>`
       : agent.settings.autoOptimizeToolSelection
       ? (hasOptimized
         ? `<span class="tools-stat-sep">·</span><span class="tools-stat"><i class="fa-solid fa-wand-magic-sparkles"></i> 当前优化: <strong>${activeTools.length}</strong> / ${enabledCount}</span><span class="tools-stat"><i class="fa-solid fa-compress"></i> 优化后 <strong>~${activeTokens.toLocaleString()}</strong> tokens（节省 ~${savedTokens.toLocaleString()}）</span><span class="tools-stat" title="${escapeHtml(agent.optimizedToolReason || '')}"><i class="fa-solid fa-circle-info"></i> ${escapeHtml(agent.optimizedToolReason || '已优化')}</span>`
         : `<span class="tools-stat-sep">·</span><span class="tools-stat"><i class="fa-solid fa-wand-magic-sparkles"></i> 当前优化: <strong>未执行</strong></span>`)
       : '';
     const selectionInfo = adaptive && runtimeAgent.settings.autoOptimizeToolSelection
-      ? `<span class="tools-stat-sep">·</span><span class="tools-stat">自动选择：${escapeHtml(runtimeAgent.optimizedToolReason || '待首次任务执行（Jev 优先）')}</span>` : '';
+      ? `<span class="tools-stat-sep">·</span><span class="tools-stat">自动选择：${escapeHtml(runtimeAgent.optimizedToolReason || '待首次任务执行（System One 优先）')}</span>` : '';
     const statsEl = document.getElementById('tools-stats');
     if (statsEl) {
       statsEl.innerHTML = `<span class="tools-stat"><i class="fa-solid fa-toggle-on"></i> 已启用 <strong>${enabledCount}</strong> / ${total} 个工具</span><span class="tools-stat-sep">·</span><span class="tools-stat"><i class="fa-solid fa-layer-group"></i> 全部定义 <strong>~${estTokens.toLocaleString()}</strong> tokens</span>${mcpBadge}${optimizedInfo}${selectionInfo}`;

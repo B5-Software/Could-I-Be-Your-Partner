@@ -429,6 +429,8 @@ async function consumeSSEStream(bodyStream, onChunk, requestId, transport = 'ope
   let finalizedToolIds = new Set();
   let responseCompleted = false;
   let responseError = null;
+  let wireFormat = null;
+  let eventCount = 0;
 
   async function readWithTimeout() {
     return new Promise((resolve, reject) => {
@@ -446,6 +448,8 @@ async function consumeSSEStream(bodyStream, onChunk, requestId, transport = 'ope
   function processEvent(jsonStr) {
     if (!jsonStr || jsonStr === '[DONE]') return;
     const parsed = JSON.parse(jsonStr);
+    eventCount++;
+    if (parsed.error || parsed.type === 'error') responseError = parsed.error?.message || parsed.message || 'Provider returned an error';
     if (transport === 'anthropic') {
       processAnthropicEvent(parsed);
     } else if (transport === 'responses') {
@@ -560,32 +564,48 @@ async function consumeSSEStream(bodyStream, onChunk, requestId, transport = 'ope
     }
   }
 
+  function processBlock(block) {
+    const payload = sseData(block);
+    if (!payload || payload === '[DONE]') return;
+    try { processEvent(payload); }
+    catch (error) { responseError = 'Invalid provider event: ' + error.message; }
+  }
   while (true) {
     const { done, value, timedOut } = await readWithTimeout();
     if (timedOut) {
       if (onChunk) onChunk({ reasoning: '', content: '', parsed: null, requestId, streamTimeout: true });
+      responseError = 'Provider stream timed out';
       break;
     }
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
-    let idx;
-    while ((idx = buffer.indexOf('\n\n')) !== -1) {
-      const eventBlock = buffer.slice(0, idx);
-      buffer = buffer.slice(idx + 2);
-      const lines = eventBlock.split('\n').filter(l => l.startsWith('data: '));
-      for (const line of lines) {
-        const jsonStr = line.slice(6).trim();
-        try { processEvent(jsonStr); } catch { /* ignore malformed SSE line */ }
-      }
+    if (!wireFormat && buffer.trim()) wireFormat = /^(?:\{|\[)/.test(buffer.trimStart()) ? 'json' : 'sse';
+    if (wireFormat === 'json') continue;
+    let separator;
+    while ((separator = /\r?\n\r?\n|\r\r/.exec(buffer))) {
+      processBlock(buffer.slice(0, separator.index));
+      buffer = buffer.slice(separator.index + separator[0].length);
     }
   }
-  if (buffer.trim()) {
-    const lines = buffer.split('\n').filter(l => l.startsWith('data: '));
-    for (const line of lines) {
-      const jsonStr = line.slice(6).trim();
-      try { processEvent(jsonStr); } catch { /* ignore */ }
+  buffer += decoder.decode();
+  if (wireFormat === 'json') {
+    try {
+      const raw = JSON.parse(buffer);
+      if (raw.error) throw new Error(raw.error.message || 'Provider returned an error');
+      if (info.requiresCompleted && raw.status !== 'completed') throw new Error('OpenAI response did not complete');
+      if (responseError) throw new Error(responseError);
+      const data = require('./llm-providers').parseLLMResponse(raw, transport);
+      const choice = data?.choices?.[0];
+      if (!choice?.message) throw new Error('Provider returned no assistant response');
+      const message = choice.message;
+      if (onChunk) onChunk({ content: message.content || '', reasoning: message.reasoning || '', reasoningKind: message.reasoningKind, parsed: raw, requestId });
+      return { content: message.content || '', reasoning: message.reasoning || '', reasoningKind: message.reasoningKind, providerReasoning: message.providerReasoning, toolCalls: message.tool_calls, finishReason: choice.finish_reason || (message.tool_calls?.length ? 'tool_calls' : 'stop'), usage: data.usage };
+    } catch (error) {
+      return { content: '', reasoning: '', finishReason: 'stop', error: error.message };
     }
   }
+  if (buffer.trim()) processBlock(buffer);
+  if (!eventCount && !responseError) responseError = 'Provider returned no usable response events';
   // 兜底：某些网关正常关流却不发 response.completed（finishReason 仍为 null），
   // 此时按"有工具调用→tool_calls，否则→stop"收敛，绝不把 null 抛给 agentLoop。
   if (!finishReason) {
@@ -654,13 +674,14 @@ function abortRequests(filter = {}) {
 // 流式调用方照常使用 .body，不受影响。
 function aggregateSSEToJSON(text, transport = 'openai', requiresCompleted = false) {
   const events = [];
-  for (const line of String(text || '').split(/\r?\n/)) {
-    const m = /^data:\s?(.*)$/.exec(line);
-    if (!m) continue;
-    const payload = m[1].trim();
+  for (const block of String(text || '').split(/\r?\n\r?\n|\r\r/)) {
+    const payload = sseData(block);
     if (!payload || payload === '[DONE]') continue;
-    try { events.push(JSON.parse(payload)); } catch (_) { /* skip */ }
+    try { events.push(JSON.parse(payload)); } catch (error) { return { error: { message: 'Invalid provider event: ' + error.message } }; }
   }
+  if (!events.length) return { error: { message: 'Provider returned no usable response events' } };
+  const explicitError = events.find(event => event.error || event.type === 'error');
+  if (explicitError) return { error: { message: explicitError.error?.message || explicitError.message || 'Provider returned an error' } };
 
   if (transport === 'responses') {
     const failed = events.find(ev => ['response.failed', 'response.incomplete', 'error'].includes(ev.type));
@@ -789,22 +810,29 @@ function aggregateSSEToJSON(text, transport = 'openai', requiresCompleted = fals
 
 function augmentSSEResponse(resp, transport, requiresCompleted = false) {
   try {
-    const ct = resp && resp.headers && typeof resp.headers.get === 'function'
-      ? (resp.headers.get('content-type') || '')
-      : '';
-    if (!ct.includes('text/event-stream')) return resp;
+    if (typeof resp?.text !== 'function') return resp;
     let cached = null;
     Object.defineProperty(resp, 'json', {
       configurable: true,
-      value: async () => {
-        if (cached) return cached;
-        const text = await resp.text();
-        cached = aggregateSSEToJSON(text, transport, requiresCompleted);
+      value: () => {
+        // Some gateways lose Content-Type. Inspect the actual body, and share
+        // one read between callers without consuming streaming callers' .body.
+        if (!cached) cached = resp.text().then(text => {
+          if (/^(?:event:|data:|:)/.test(text.trimStart())) return aggregateSSEToJSON(text, transport, requiresCompleted);
+          const data = JSON.parse(text);
+          if (requiresCompleted && !data.error && data.status !== 'completed') return { error: { message: 'OpenAI response did not complete' } };
+          return data;
+        });
         return cached;
       }
     });
   } catch (_) { /* 保持原始 Response */ }
   return resp;
+}
+
+function sseData(block) {
+  return String(block).split(/\r\n|\n|\r/).filter(line => line.startsWith('data:'))
+    .map(line => line.slice(5).replace(/^ /, '')).join('\n').trim();
 }
 
 module.exports = {

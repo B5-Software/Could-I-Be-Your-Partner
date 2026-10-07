@@ -916,3 +916,54 @@ test('shared approval explicitly denies string responses and missing decisions',
   assert.equal(await pending, 'allowed-once');
   runtime.dispose();
 });
+test('mobile submissions acknowledge admission before inference, preserve task state and expose errors', async () => {
+  let reject;
+  const inference = new Promise((_resolve, failed) => {
+    reject = failed;
+  });
+  const runtime = createAgentRuntime({
+    ipcMain: createFakeIpcMain(baseHandlers({ llmChat: () => inference })),
+    eventBus: createEventBus(),
+    interactionPolicy: INTERACTION_POLICY.AUTO_APPROVE,
+  });
+  runtime.createSession({ key: 'mobile-admission', minimalMode: true });
+  const accepted = await runtime.submitMessage('mobile-admission', 'Run the task');
+  assert.equal(accepted.accepted, true);
+  assert.equal(runtime.getSessionDetails(accepted.key).session.busy, true);
+  reject(new Error('Fixture inference failed'));
+  for (
+    let attempt = 0;
+    runtime.getSessionDetails(accepted.key).session.busy && attempt < 100;
+    attempt++
+  )
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  const state = runtime.getSessionDetails(accepted.key).session;
+  assert.equal(state.busy, false);
+  assert.equal(state.status, 'error');
+  assert.match(state.lastError, /Fixture inference failed/);
+  runtime.dispose();
+});
+
+test('reported provider failures remain visible after the Agent returns normally', async () => {
+  const runtime = createAgentRuntime({
+    ipcMain: createFakeIpcMain(
+      baseHandlers({
+        llmChat: async () => ({
+          ok: false,
+          error: 'Fixture unauthorized',
+          kind: 'auth',
+          status: 401,
+        }),
+      }),
+    ),
+    eventBus: createEventBus(),
+    interactionPolicy: INTERACTION_POLICY.AUTO_APPROVE,
+  });
+  const session = runtime.createSession({ key: 'mobile-provider-error', minimalMode: true });
+  await runtime.sendMessage(session.key, 'Run the task');
+  const state = runtime.getSessionDetails(session.key).session;
+  assert.equal(state.busy, false);
+  assert.equal(state.status, 'error');
+  assert.match(state.lastError, /Fixture unauthorized/);
+  runtime.dispose();
+});

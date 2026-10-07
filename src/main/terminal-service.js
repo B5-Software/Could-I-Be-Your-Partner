@@ -16,7 +16,7 @@ const { abortAllRequests, abortRequests } = require('./llm-retry');
 const { TerminalCommand } = require('./services/terminal-command');
 const { resolveTerminalShell } = require('./core/terminal-shell');
 
-module.exports = function registerTerminalIpc({ ipcMain, getMainWindow, getSettings, getVmService, selectShellBinary }) {
+module.exports = function registerTerminalIpc({ ipcMain, getMainWindow, getSettings, getVmService, selectShellBinary, publishEvent }) {
 const terminals = new Map();
 let terminalIdCounter = 0;
 const TERMINAL_HISTORY_MAX = 100000; // 100KB
@@ -78,6 +78,7 @@ const TERMINAL_KEY_SEQUENCES = {
 };
 
 function _broadcastTerminalEvent(channel, payload) {
+  if (publishEvent) { publishEvent(channel, payload); return; }
   const win = getMainWindow();
   if (!win || win.isDestroyed()) return;
   try { win.webContents.send(channel, payload); } catch { /* ignore */ }
@@ -87,11 +88,12 @@ function _appendTerminalData(id, entry, data) {
   entry.commandTracker?.append(data);
   entry.agentBuffer += data;
   entry.fullHistory += data;
+  entry.totalChars = (entry.totalChars || 0) + data.length;
   if (entry.fullHistory.length > TERMINAL_HISTORY_MAX) {
     // 保留尾部一半，丢弃头部
     entry.fullHistory = entry.fullHistory.slice(-TERMINAL_HISTORY_MAX / 2);
   }
-  _broadcastTerminalEvent('terminal:data', { id, data });
+  _broadcastTerminalEvent('terminal:data', { id, data, endOffset: entry.totalChars });
 }
 
 ipcMain.handle('terminal:shellInfo', async (_, location) => {
@@ -139,6 +141,7 @@ ipcMain.handle('terminal:make', async (_, cwd, opts = {}) => {
       term.onExit(({ exitCode }) => { entry.commandTracker.end(); terminals.delete(id); _broadcastTerminalEvent('terminal:exit', { id, exitCode }); });
       await term.ready();
       terminals.set(id, entry);
+      _broadcastTerminalEvent('terminal:created', { id });
       return { ok: true, terminalId: id, cwd: vmCwd, createdAt: entry.createdAt, location: 'vm', shell: shell.file, args: shell.args };
     }
     const pty = require('node-pty');
@@ -213,6 +216,7 @@ ipcMain.handle('terminal:make', async (_, cwd, opts = {}) => {
       _broadcastTerminalEvent('terminal:exit', { id, exitCode });
     });
     terminals.set(id, entry);
+    _broadcastTerminalEvent('terminal:created', { id });
     return { ok: true, terminalId: id, cwd: effectiveCwd, createdAt: entry.createdAt, location: 'host', shell: shell.file, args: shell.args };
   } catch (e) {
     // 捕获详细错误信息，便于诊断
@@ -245,7 +249,7 @@ ipcMain.handle('terminal:write', (_, id, data) => {
   try {
     // \n → \r：pty 终端只认 \r 作为回车，TUI/menuconfig 交互时按 \n 不会提交
     let payload = String(data);
-    if (payload.includes('\n')) payload = payload.replace(/\n/g, '\r');
+    if (payload.includes('\n')) payload = payload.replace(/\r\n|\n/g, '\r');
     t.term.write(payload);
     // 简单识别命令行：以 \r 结尾的输入视为命令（用于标签页标题展示）
     if (payload.endsWith('\r')) {
@@ -264,7 +268,7 @@ ipcMain.handle('terminal:sendText', (_, id, text) => {
   if (!t) return { ok: false, error: '终端不存在' };
   try {
     let payload = String(text || '');
-    if (payload.includes('\n')) payload = payload.replace(/\n/g, '\r');
+    if (payload.includes('\n')) payload = payload.replace(/\r\n|\n/g, '\r');
     t.term.write(payload);
     return { ok: true, sent: payload };
   } catch (e) {
@@ -317,7 +321,7 @@ ipcMain.handle('terminal:resize', (_, id, cols, rows) => {
 ipcMain.handle('terminal:getHistory', (_, id) => {
   const t = terminals.get(id);
   if (!t) return { ok: false, error: '终端不存在' };
-  return { ok: true, history: t.fullHistory };
+  return { ok: true, history: t.fullHistory, endOffset: t.totalChars || 0 };
 });
 
 ipcMain.handle('terminal:run', (_, id, command) => {

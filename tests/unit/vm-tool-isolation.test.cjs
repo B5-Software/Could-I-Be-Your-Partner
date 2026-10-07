@@ -6,6 +6,36 @@ const { createToolFiles } = require('../../src/main/vm/tool-files');
 const { withToolLocation } = require('../../src/main/vm/tool-location');
 const { createRoutedHandler, GUEST_ROUTES } = require('../../src/main/vm/vm-tools');
 
+test('model inference and authentication always use host handlers in VM mode', async () => {
+  for (const channel of [
+    'llm:chat',
+    'llm:chatStream',
+    'llm:summarize',
+    'vision:describeImage',
+    'image:generate',
+    'decision:call',
+    'decision:models',
+    'chatgpt:login',
+    'chatgpt:models',
+    'shell:openHostBrowser',
+  ]) {
+    let hostCalls = 0;
+    const original = async (_, value) => {
+      hostCalls++;
+      return { ok: true, value, location: 'host' };
+    };
+    const handler = createRoutedHandler(channel, original, {
+      isLocationVm: () => true,
+      getVmService() {
+        throw new Error('Inference must not enter the guest');
+      },
+    });
+    assert.equal((await handler(null, 'request')).value, 'request');
+    assert.equal(hostCalls, 1, channel);
+    assert.equal(GUEST_ROUTES[channel], undefined);
+  }
+});
+
 function fixture() {
   const contents = new Map();
   const service = {

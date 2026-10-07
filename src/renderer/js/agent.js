@@ -276,7 +276,7 @@ class Agent {
    * 会话创建时锁定模型 + Reasoning Effort（模型池策略）。
    * 必须在会话首条消息发出前调用；一旦锁定，任何自动逻辑都不再切换模型
    * （保护提示词缓存）。返回是否本次完成锁定。
-   * @param {string} userMessage 首条用户消息（供 Jev 判断任务难度）
+   * @param {string} userMessage 首条用户消息（供 System One 判断任务难度）
    */
   async ensureSessionModel(userMessage) {
     try {
@@ -1113,7 +1113,7 @@ ${affectionDesc}
   hasUsableOptimizedSelection() {
     // 极简模式不参与自动工具优化
     if (this.minimalMode) return true;
-    // Code 的完整加载模式维持原行为；按需模式可接受 Jev 预加载。
+    // Code 的完整加载模式维持原行为；按需模式可接受 System One 预加载。
     if (this.mode === 'code' && !this.usesToolDiscovery()) return false;
     if (!this.settings?.autoOptimizeToolSelection) return false;
     if (this.sessionAutoOptimizeDisabled) return false; // LLM 在本 session 内禁用了自动优化
@@ -1610,7 +1610,7 @@ ${affectionDesc}
               let finalSelection = compacted.length > 0 ? compacted : fallback;
               if (finalSelection.length === 0) finalSelection = enabledDefs.slice(0, 12).map(t => t.name);
               this._mergeOptimizedSelection(finalSelection);
-              this.optimizedToolReason = '决策模型选择（Jev）';
+              this.optimizedToolReason = '决策模型选择（System One）';
               this.contextManager.setSystemPrompt(this.getSystemPrompt());
               return { ok: true, selected: this.optimizedToolNames, reason: this.optimizedToolReason };
             }
@@ -1620,12 +1620,12 @@ ${affectionDesc}
         }
       }
       // Discovery already provides a complete safety net. Do not send a second,
-      // expensive full-catalog selection request when Jev is disabled/unavailable.
+      // expensive full-catalog selection request when System One is disabled/unavailable.
       if (revision !== (this._toolOptimizationRevision || 0)) return { ok: true, cancelled: true };
       if (this.usesToolDiscovery()) {
         this._mergeOptimizedSelection([...requestedValid, ...fallback]);
         this.optimizedToolReason = dcfg.enabled && dcfg.usages?.toolSelection !== false
-          ? 'Jev 不可用或未给出有效选择，使用本地候选预加载' : '本地候选预加载（Jev 工具选择未启用）';
+          ? 'System One 不可用或未给出有效选择，使用本地候选预加载' : '本地候选预加载（System One 工具选择未启用）';
         return { ok: true, selected: this.optimizedToolNames, reason: this.optimizedToolReason, localFallback: true };
       }
       const candidates = enabledDefs.map(t => `${t.name} | ${t.category || '其他'} | ${t.desc}`).join('\n');
@@ -2916,7 +2916,7 @@ ${affectionDesc}
             const text = permissionArgs.text || permissionArgs.answer || '';
             if (this.isDangerousCommand(text)) needsApproval = true;
           }
-          // 决策模型护栏（Jev noul）：与黑名单 OR；只有高概率判定为危险才拦截，低置信不拦截
+          // 决策模型护栏（System One noul）：与黑名单 OR；只有高概率判定为危险才拦截，低置信不拦截
           if (!needsApproval) {
             const cmdTools = ['runTerminalCommand', 'awaitTerminalCommand', 'runShellScriptCode', 'bash', 'terminalSendInput', 'terminalAnswerPrompt'];
             if (cmdTools.includes(permissionToolName)) {

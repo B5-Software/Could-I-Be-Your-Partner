@@ -139,7 +139,7 @@ module.exports = async function checkSettings(webContents) {
     await pause(); await pause();
     check(field('setting-llm-daily-limit').closest('.settings-panel').dataset.tab === 'budget', 'daily Token limit still split across panels');
     check(field('setting-img-daily-limit').closest('.settings-panel').dataset.tab === 'budget', 'image limit still split across panels');
-    check(field('setting-decision-limit').closest('.settings-panel').dataset.tab === 'budget', 'Jev daily limit still split across panels');
+    check(field('setting-decision-limit').closest('.settings-panel').dataset.tab === 'budget', 'System One daily limit still split across panels');
     check(![...field('setting-budget-action').options].some(option => option.value === 'fallback'), 'unimplemented fallback action exposed');
     change('setting-llm-daily-limit', '1200');
     change('setting-decision-limit', '25');

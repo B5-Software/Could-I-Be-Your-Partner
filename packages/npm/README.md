@@ -7,6 +7,8 @@ npm install -g cibyp
 cibyp              # GUI; TUI when no graphical desktop is available
 cibyp-tui          # terminal Agent
 cibyp-code         # Code TUI using the current terminal directory
+cibyp-webui        # background WebUI using the shared backend
+cibyp-webui --stop # stop the shared backend and disconnect its clients
 npx cibyp          # no global installation
 npx --package=cibyp cibyp-code
 cibyp update       # explicitly update the App runtime
@@ -42,6 +44,7 @@ cibyp alias add kamisato
 kamisato            # GUI, or TUI without a desktop
 kamisato-code       # Code TUI in the current terminal directory
 kamisato-tui        # TUI
+kamisato-webui      # WebUI
 cibyp alias list
 cibyp alias remove kamisato
 ```

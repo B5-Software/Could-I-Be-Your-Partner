@@ -16,6 +16,22 @@
     const instances = new Map();
     let activeId = null;
     let dataListenerBound = false;
+    let refreshing = null;
+    function terminalError(error) {
+      const message = t('ui.terminal.error', '终端操作失败：{error}', { error: error?.message || String(error) });
+      if (window.showMessageModal) window.showMessageModal(message, t('ui.error', '错误'), 'error');
+      else showToast(message, 'error');
+    }
+    function writeOutput(inst, event) {
+      if (!inst.loaded) { inst.pending.push(event); return; }
+      let data = event.data;
+      if (Number.isInteger(event.endOffset)) {
+        if (event.endOffset <= inst.endOffset) return;
+        data = data.slice(Math.max(0, inst.endOffset - (event.endOffset - data.length)));
+        inst.endOffset = event.endOffset;
+      }
+      inst.term.write(data);
+    }
 
     // 获取当前主题（强调色 + 深浅色）
     function getXtermTheme() {
@@ -77,27 +93,37 @@
       }
 
       term.open(panel);
+      const inst = { term, fit, panel, exited: false, loaded: false, pending: [], endOffset: 0 };
+      instances.set(id, inst);
 
       // 用户输入回写到 pty
       term.onData(data => {
-        window.api.writeTerminal?.(id, data).catch(() => {});
+        window.api.writeTerminal(id, data).then(result => { if (!result?.ok) throw new Error(result?.error || 'Terminal input failed'); }).catch(terminalError);
       });
       // 调整大小时通知 pty
       term.onResize(({ cols, rows }) => {
-        window.api.resizeTerminal?.(id, cols, rows).catch(() => {});
+        window.api.resizeTerminal(id, cols, rows).catch(terminalError);
       });
 
       // 异步加载历史并 fit
-      setTimeout(() => {
+      setTimeout(async () => {
         if (fit) { try { fit.fit(); } catch {} }
-        window.api.getTerminalHistory?.(id).then(result => {
-          if (result && result.ok && result.history) {
-            try { term.write(result.history); } catch {}
-          }
-        }).catch(() => {});
+        try {
+          const result = await window.api.getTerminalHistory(id);
+          if (!result?.ok) throw new Error(result?.error || 'Terminal history unavailable');
+          if (result.history) term.write(result.history);
+          inst.endOffset = result.endOffset || 0;
+          inst.loaded = true;
+          for (const event of inst.pending) writeOutput(inst, event);
+          inst.pending.length = 0;
+        } catch (error) {
+          inst.loaded = true;
+          for (const event of inst.pending) writeOutput(inst, event);
+          inst.pending.length = 0;
+          terminalError(error);
+        }
       }, 50);
 
-      instances.set(id, { term, fit, panel, exited: false });
       return instances.get(id);
     }
 
@@ -121,7 +147,7 @@
       if (closeBtn) {
         closeBtn.addEventListener('click', async (e) => {
           e.stopPropagation();
-          await window.api.killTerminal(meta.id);
+          try { await window.api.killTerminal(meta.id); } catch (error) { terminalError(error); }
           // onTerminalExit 会触发 refreshTerminalList
         });
       }
@@ -161,9 +187,14 @@
     }
 
     async function refreshTerminalList() {
+      if (refreshing) return refreshing;
+      refreshing = updateTerminalList().finally(() => { refreshing = null; });
+      return refreshing;
+    }
+    async function updateTerminalList() {
       if (typeof window.api.listTerminals !== 'function') return;
       const result = await window.api.listTerminals();
-      if (!result || !result.ok) return;
+      if (!result?.ok) throw new Error(result?.error || 'Terminal list unavailable');
       const existingTabs = new Set(Array.from(tabsEl.querySelectorAll('.terminal-tab')).map(t => t.dataset.terminalId));
       const currentIds = new Set(result.terminals.map(t => String(t.id)));
 
@@ -215,7 +246,7 @@
 
     async function openTerminalModal() {
       modal.classList.remove('hidden');
-      await refreshTerminalList();
+      try { await refreshTerminalList(); } catch (error) { terminalError(error); }
       setTimeout(() => {
         const inst = instances.get(activeId);
         if (inst) {
@@ -233,6 +264,12 @@
     document.getElementById('btn-close-terminal-modal')?.addEventListener('click', closeTerminalModal);
 
     document.getElementById('btn-terminal-new')?.addEventListener('click', async () => {
+      const button = document.getElementById('btn-terminal-new');
+      if (button.disabled) return;
+      button.disabled = true;
+      button.setAttribute('aria-busy', 'true');
+      button.querySelector('i').className = 'fa-solid fa-spinner fa-spin';
+      try {
       // Open in the visible session, so another mode's project never steals cwd.
       const activeAgent = currentMode === 'code' ? codeAgent : currentMode === 'babe' ? babeAgent : agent;
       const cwd = (currentMode === 'code' && codeWorkspacePath) || activeAgent?.workspacePath || null;
@@ -241,22 +278,28 @@
         await refreshTerminalList();
         switchToTerminal(result.terminalId);
       } else {
-        const msg = '创建终端失败：' + (result?.error || '未知错误');
-        if (window.showMessageModal) window.showMessageModal(msg, '错误', 'error');
-        else console.error('[Terminal]', msg);
+        throw new Error(result?.error || 'Terminal creation failed');
       }
+      } catch (error) { terminalError(error); }
+      finally { button.disabled = false; button.removeAttribute('aria-busy'); button.querySelector('i').className = 'fa-solid fa-plus'; }
     });
 
-    // 实时数据推送：仅当模态框打开时才写入 xterm（数据已在主进程的 fullHistory 中累积）
+    // Keep existing panels current even while the modal is closed.
     function bindDataListener() {
       if (dataListenerBound) return;
       dataListenerBound = true;
-      window.api.onTerminalData?.(({ id, data }) => {
-        if (modal.classList.contains('hidden')) return; // 模态框关闭时不渲染（节省性能）
+      window.api.onTerminalData?.(event => {
+        const { id } = event;
         const inst = instances.get(id);
         if (inst && inst.term) {
-          try { inst.term.write(data); } catch {}
+          try { writeOutput(inst, event); } catch (error) { terminalError(error); }
         }
+      });
+      window.api.onTerminalCreated?.(() => { if (!modal.classList.contains('hidden')) refreshTerminalList().catch(terminalError); });
+      window.api.onBackendReconnected?.(() => {
+        for (const inst of instances.values()) { inst.term.dispose(); inst.panel.remove(); }
+        instances.clear(); tabsEl.replaceChildren(); activeId = null;
+        if (!modal.classList.contains('hidden')) refreshTerminalList().catch(terminalError);
       });
       window.api.onTerminalExit?.(({ id }) => {
         const inst = instances.get(id);
@@ -266,7 +309,7 @@
           const tab = tabsEl.querySelector(`.terminal-tab[data-terminal-id="${id}"]`);
           if (tab) tab.classList.add('terminal-tab-exited');
         }
-        setTimeout(refreshTerminalList, 200);
+        setTimeout(() => refreshTerminalList().catch(terminalError), 200);
       });
     }
     bindDataListener();
