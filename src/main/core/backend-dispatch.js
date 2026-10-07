@@ -110,7 +110,11 @@ function createBackendDispatch({ runtime, ipcMain, eventBus, desktop, shutdown, 
       if (/^backend:remote/.test(channel))
         throw new Error('Remote connections belong to the client');
       // Browser window chrome belongs to the client, not to the server's GUI.
-      if (/^(window:|tray:|app:renderer-ready|webControl:push|webControl:mirror)/.test(channel))
+      if (
+        /^(window:|tray:|app:renderer-(?:ready|failed)|app:startup-(?:retry|close)|webControl:push|webControl:mirror)/.test(
+          channel,
+        )
+      )
         return null;
       return method === 'ipc:invoke'
         ? ipc.invoke(channel, ...values)

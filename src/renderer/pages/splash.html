@@ -143,6 +143,8 @@
       <div class="vm-error" id="vmError" hidden></div>
       <div class="vm-actions">
         <button class="vm-btn" id="vmFallback">以本机模式启动（本次）</button>
+        <button class="vm-btn" id="startupRetry" hidden>重试</button>
+        <button class="vm-btn" id="startupClose" hidden>关闭</button>
         <span class="vm-note" id="vmNote"></span>
       </div>
     </div>
@@ -152,6 +154,13 @@
   <script>
     // 主题参数由主进程经 query 传入（跟随设置中的深浅色/强调色/背景色/自定义字体）
     const q = new URLSearchParams(location.search);
+    const startupCopy = {
+      en: ['Application initialization failed', 'Your settings have not finished loading. Retry before opening the application.', 'Retry', 'Close', 'Loading settings and application…'],
+      de: ['Anwendungsinitialisierung fehlgeschlagen', 'Die Einstellungen sind noch nicht geladen. Vor dem Öffnen erneut versuchen.', 'Erneut versuchen', 'Schließen', 'Einstellungen und Anwendung werden geladen…'],
+      zh: ['应用初始化失败', '设置和界面尚未加载完成，请重试后再进入。', '重试', '关闭', '正在加载设置和应用…']
+    }[String(q.get('language') || 'zh').split('-')[0]] || ['Application initialization failed', 'Settings have not finished loading.', 'Retry', 'Close', 'Loading settings and application…'];
+    document.getElementById('startupRetry').textContent = startupCopy[2];
+    document.getElementById('startupClose').textContent = startupCopy[3];
     const webStartup = q.get('web') === '1';
     const webCopy = {
       en: ['Preparing WebUI', 'Waiting for the virtual machine before opening the server', 'Cancel startup', 'Startup failed. Close and retry after correcting the error.', 'Virtual machine ready, opening WebUI…'],
@@ -265,6 +274,19 @@
           case 'vm:boot-failed': fail(data && data.message, data && data.serialTail); break;
           case 'vm:boot-ready': setProgress(100); detail.textContent = webStartup ? webCopy[4] : '虚拟机就绪，正在完成应用初始化…'; break;
           case 'app:startup-ready': noteEl.textContent = '应用已预加载'; break;
+          case 'app:startup-failed':
+            panel.hidden = false;
+            document.getElementById('vmTitle').textContent = startupCopy[0];
+            detail.textContent = startupCopy[1];
+            errEl.hidden = false;
+            errEl.textContent = data?.message || '';
+            spinner.style.display = 'none';
+            btnFallback.hidden = true;
+            document.getElementById('startupRetry').hidden = false;
+            document.getElementById('startupClose').hidden = false;
+            if (fallbackTimer) { clearInterval(fallbackTimer); fallbackTimer = null; }
+            noteEl.textContent = '';
+            break;
           case 'vm:error': if (vmMode) appendLog('[error] ' + ((data && data.message) || '')); break;
           default: break;
         }
@@ -276,6 +298,14 @@
         noteEl.textContent = '正在以本机模式启动…';
         try { await window.vmSplash.emergencyHostMode(); } catch (_) { /* ignore */ }
       });
+      document.getElementById('startupRetry').addEventListener('click', async () => {
+        errEl.hidden = true;
+        spinner.style.display = '';
+        detail.textContent = startupCopy[4];
+        document.getElementById('startupRetry').hidden = true;
+        try { await window.vmSplash.retryStartup(); } catch (error) { onEvent('app:startup-failed', { message: error.message }); }
+      });
+      document.getElementById('startupClose').addEventListener('click', () => window.vmSplash.closeStartup());
 
       if (window.vmSplash && typeof window.vmSplash.onEvent === 'function') {
         window.vmSplash.onEvent(({ channel, data }) => { try { onEvent(channel, data); } catch (_) { /* ignore */ } });

@@ -12,7 +12,7 @@
 
 const { contextBridge, ipcRenderer } = require('electron');
 
-const CHANNELS = ['vm:init', 'vm:state', 'vm:progress', 'vm:serial', 'vm:boot-begin', 'vm:boot-ready', 'vm:boot-failed', 'vm:error', 'app:startup-ready'];
+const CHANNELS = ['vm:init', 'vm:state', 'vm:progress', 'vm:serial', 'vm:boot-begin', 'vm:boot-ready', 'vm:boot-failed', 'vm:error', 'app:startup-ready', 'app:startup-failed'];
 
 contextBridge.exposeInMainWorld('vmSplash', {
   /** 订阅 VM 启动相关事件；返回取消订阅函数 */
@@ -27,6 +27,8 @@ contextBridge.exposeInMainWorld('vmSplash', {
   /** 紧急切回本机（本次运行生效） */
   emergencyHostMode: () => ipcRenderer.invoke('vm:emergencyHostMode'),
   cancelWebStartup: () => ipcRenderer.invoke('vm:splashCancelWeb'),
+  retryStartup: () => ipcRenderer.invoke('app:startup-retry'),
+  closeStartup: () => ipcRenderer.invoke('app:startup-close'),
   /** 读取当前运行位置与 VM 状态 */
   getRuntime: () => ipcRenderer.invoke('runtime:getLocation'),
   getTheme: () => ipcRenderer.invoke('theme:get'),

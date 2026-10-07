@@ -4150,3 +4150,5 @@ Object.assign(EN_DICT, {
   "ui.update.exitActivate": "Exit and activate update",
   "ui.update.lastChecked": "Last checked: {time}"
 });
+Object.assign(EN_DICT, { 'ui.settings.trayAlways': 'On a desktop, GUI, TUI and WebUI show one shared tray after initialization. Open a frontend or quit the shared backend from its menu.' });
+Object.assign(EN_DICT._textMap, { '桌面环境中，GUI、TUI 和 WebUI 初始化完成后均显示托盘。可从托盘打开界面或退出共享后台。': EN_DICT['ui.settings.trayAlways'] });

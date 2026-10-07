@@ -404,6 +404,8 @@ test('free-text questions show the answer buffer and allow cancellation and inte
   await app.handleKey({ name: 'paste', text: 'typed answer' });
   assert.ok(frameText(app).includes('typed answer'));
   await app.handleKey({ name: 'escape' });
+  assert.equal(app.state.modal.phase, 'cancel');
+  await app._chooseModalOption(1);
   assert.equal(app.state.modal, null);
   assert.ok(runtime.calls.some((c) => c[0] === 'respond'));
   app.state.running = true;
@@ -711,6 +713,9 @@ test('tui：提问（选项式与自由文本）返回 answers 数组', async ()
   assert.equal(app.state.modal.kind, 'ask');
   assert.equal(app.state.modal.inputMode, true);
   for (const char of '没问题') app.state.modal.editor.insert(char);
+  await app.handleKey({ name: 'enter' });
+  assert.equal(app.state.modal.phase, 'review');
+  assert.equal(runtime.calls.filter((c) => c[0] === 'respond').length, 0);
   await app.handleKey({ name: 'enter' });
   assert.equal(app.state.modal, null);
   const answered = runtime.calls.at(-1);

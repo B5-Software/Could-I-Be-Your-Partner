@@ -50,23 +50,6 @@
     document.getElementById(id).addEventListener('change', () => savePrivacySettings());
   });
 
-  // 后台托盘：启用托盘图标
-  document.getElementById('setting-tray-enabled')?.addEventListener('change', async (e) => {
-    const enabled = e.target.checked;
-    try {
-      const r = await window.api.traySetEnabled(enabled);
-      if (r && r.ok) {
-        // 同步本地 settings 缓存
-        try { agent.settings = r.settings; } catch {}
-      } else {
-        e.target.checked = !enabled; // 回滚
-      }
-    } catch (err) {
-      console.error('[Tray] set enabled failed:', err);
-      e.target.checked = !enabled;
-    }
-  });
-
   // 后台托盘：关闭窗口行为
   document.getElementById('setting-close-to-tray')?.addEventListener('change', async (e) => {
     const mode = e.target.value;

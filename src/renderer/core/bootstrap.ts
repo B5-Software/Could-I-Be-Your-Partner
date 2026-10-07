@@ -13,6 +13,8 @@ export async function waitForDependency(ready: () => boolean, timeoutMs = 5000):
 
 export function reportBootstrapFailure(error: unknown): void {
   console.error('[renderer] Initialization failed:', error);
+  const api = (window as unknown as { api?: { rendererFailed?: (message: string) => void } }).api;
+  api?.rendererFailed?.(error instanceof Error ? error.message : String(error));
   const notice = document.createElement('div');
   notice.setAttribute('role', 'alert');
   notice.style.cssText =

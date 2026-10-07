@@ -20,6 +20,7 @@ function publishBackend(userData, address, token) {
     pid: process.pid,
     protocol: 1,
     native: !!process.versions.electron,
+    desktopCapable: !!process.versions.electron,
   });
   const temporary = file + '.' + process.pid + '.tmp';
   fs.writeFileSync(temporary, content, { mode: 0o600 });

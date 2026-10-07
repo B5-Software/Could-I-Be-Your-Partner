@@ -70,6 +70,7 @@ contextBridge.exposeInMainWorld('api', {
   windowIsMaximized: () => ipcRenderer.invoke('window:isMaximized'),
   // 预渲染完成通知（boot 就绪后主进程才显示窗口）
   rendererReady: () => ipcRenderer.send('app:renderer-ready'),
+  rendererFailed: message => ipcRenderer.send('app:renderer-failed', message),
 
   // Tray Mode (后台托盘模式)
   // 监听主进程发出的"关闭时询问"事件 → 渲染器弹模态框

@@ -657,19 +657,49 @@ class TuiApp {
   async _handleModalKey(key) {
     const modal = this.state.modal;
     if (!key) return true;
+    if (modal.kind === 'ask' && modal.questionnaire) {
+      if (modal.busy) return true;
+      const questionnaire = modal.questionnaire;
+      if (key.name === 'char' && key.ctrl && ['c', 'd'].includes(key.char)) {
+        this.state.modal = null;
+        return this._armQuitOrStop();
+      }
+      if (key.name === 'escape') {
+        this.state.modal = questionnaire.escape(modal);
+        return true;
+      }
+      if (
+        key.name === 'tab' ||
+        ((!modal.inputMode || key.alt) && ['left', 'right'].includes(key.name))
+      ) {
+        this.state.modal = questionnaire.move(modal, key.name === 'left' || key.shift ? -1 : 1);
+        return true;
+      }
+      if (modal.inputMode) {
+        if (key.name === 'enter' && !key.alt && !key.shift)
+          await this._applyQuestionAction(questionnaire.answerInput(modal), modal);
+        else modal.editor.handleKey(key);
+        return true;
+      }
+      if (key.name === 'char' && !key.ctrl && !key.alt && key.char === ' ') {
+        await this._chooseModalOption(modal.selected || 0);
+        return true;
+      }
+    }
     if (
       ['pageup', 'pagedown'].includes(key.name) ||
       (key.name === 'wheel' && (modal.options?.length || 0) <= 1)
     ) {
       // Clamp before applying navigation, just like the message viewport.
       this.frame();
+      if (modal.kind === 'ask') modal.manualScroll = true;
       modal.scrollOffset = Math.max(
         0,
         (modal.scrollOffset || 0) +
           (key.name === 'pageup' || key.direction === 'up' ? -1 : 1) *
             (key.name === 'wheel' ? 3 : Math.max(1, Math.floor(this.state.height / 2))),
       );
-      if ((modal.options?.length || 0) > 1) {
+      if ((modal.options?.length || 0) > 1 && modal.kind !== 'ask') {
         const count = modal.options.length;
         modal.selected = Math.max(
           0,
@@ -714,6 +744,8 @@ class TuiApp {
     }
 
     const options = modal.options || [];
+    if (modal.kind === 'ask' && ['up', 'down', 'wheel'].includes(key.name))
+      modal.manualScroll = false;
     const isChar = key.name === 'char';
     const plainChar = isChar && !key.ctrl && !key.alt;
     if (key.name === 'wheel') {
@@ -762,6 +794,11 @@ class TuiApp {
     if (!modal) return;
     const option = (modal.options || [])[index];
     if (!option) return;
+    if (modal.kind === 'ask' && modal.questionnaire) {
+      if (modal.busy) return;
+      await this._applyQuestionAction(modal.questionnaire.choose(modal, index), modal);
+      return;
+    }
     if (modal.kind === 'todo' && option.value !== 'close') {
       if (modal.busy) return;
       modal.busy = true;
@@ -847,6 +884,10 @@ class TuiApp {
 
   _cancelModal() {
     const modal = this.state.modal;
+    if (modal?.kind === 'ask' && modal.questionnaire) {
+      this.state.modal = modal.questionnaire.escape(modal);
+      return;
+    }
     this.state.modal = null;
     if (!modal) return;
     if (modal.kind === 'approval') {
@@ -874,36 +915,28 @@ class TuiApp {
   }
 
   _buildAskModal(questions, index, answers) {
-    const question = questions[index] || {};
-    const text =
-      question.label || question.title || question.question || t('ui.tui.askDefault', '请回答');
-    const options = Array.isArray(question.options)
-      ? question.options.map((option) => ({
-          label: typeof option === 'string' ? option : option.label || option.value,
-          value: typeof option === 'string' ? option : option.value || option.label,
-        }))
-      : null;
-    const modal = {
-      kind: 'ask',
-      colorKey: 'permission',
-      title: t('ui.tui.askTitle', '回答提问（{index}/{total}）', {
-        index: index + 1,
-        total: questions.length,
-      }),
-      subtitle: String(text),
-      questionIndex: index,
-      questions,
-      answers,
-    };
-    if (options && options.length > 0) {
-      modal.options = options;
-      modal.selected = 0;
-    } else {
-      modal.inputMode = true;
-      modal.editor = new LineEditor();
-      modal.footer = t('ui.tui.askFooter', '输入回答后 Enter 确认 · Esc 跳过');
+    const { Questionnaire } = require('./questionnaire');
+    const questionnaire = new Questionnaire(questions, this.activeKey);
+    if (answers) questionnaire.answers = questions.map((_question, i) => answers[i] || null);
+    return questionnaire.build(index);
+  }
+
+  async _applyQuestionAction(action, previous) {
+    if (!action.submit) {
+      this.state.modal = action;
+      return;
     }
-    return modal;
+    previous.busy = true;
+    try {
+      const result = await this.runtime.respond(previous.sessionKey, { answers: action.answers });
+      if (result?.ok === false)
+        throw new Error(result.error || t('ui.tui.askSendFailed', '回答发送失败，请重试'));
+      if (this.state.modal === previous) this.state.modal = null;
+    } catch (error) {
+      previous.error = error.message;
+    } finally {
+      previous.busy = false;
+    }
   }
 
   // ---------------------------------------------------------------- 运行时事件

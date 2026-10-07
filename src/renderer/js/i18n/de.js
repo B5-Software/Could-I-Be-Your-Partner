@@ -4181,3 +4181,5 @@ Object.assign(DE_DICT, {
   "ui.update.exitActivate": "Beenden und Update aktivieren",
   "ui.update.lastChecked": "Zuletzt geprüft: {time}"
 });
+Object.assign(DE_DICT, { 'ui.settings.trayAlways': 'Auf dem Desktop zeigen GUI, TUI und WebUI nach der Initialisierung ein gemeinsames Taskleistensymbol. Das Menü öffnet eine Oberfläche oder beendet das gemeinsame Backend.' });
+Object.assign(DE_DICT._textMap, { '桌面环境中，GUI、TUI 和 WebUI 初始化完成后均显示托盘。可从托盘打开界面或退出共享后台。': DE_DICT['ui.settings.trayAlways'] });

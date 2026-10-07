@@ -37,7 +37,11 @@ async function ensureBackend(args = [], { spawnProcess = spawn } = {}) {
   const log = fs.openSync(path.join(userData, 'logs/backend.log'), 'a');
   const graphical = await require('../main/core/graphical-environment').hasGraphicalEnvironment();
   const electron = graphical ? process.env.CIBYP_ELECTRON_EXECUTABLE || require('electron') : null;
-  const flags = ['--headless', '--backend-owner', ...args.filter((a) => a === '--web')];
+  const flags = [
+    electron ? '--cibyp-headless' : '--headless',
+    '--backend-owner',
+    ...args.filter((a) => a === '--web'),
+  ];
   const executable = electron || process.execPath;
   const command = electron
     ? process.env.CIBYP_PACKAGED_RESOURCES

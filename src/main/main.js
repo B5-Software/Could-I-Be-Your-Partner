@@ -9,14 +9,18 @@
 
 const { app, BrowserWindow, ipcMain: electronIpcMain, nativeTheme, dialog, clipboard, screen, shell, Notification, Tray, Menu, nativeImage, protocol, net, safeStorage, crashReporter } = require('electron');
 if (process.env.CIBYP_USER_DATA) app.setPath('userData', process.env.CIBYP_USER_DATA);
+const backgroundMode = process.argv.includes('--cibyp-headless') || process.argv.includes('--headless');
+// --headless is also a Chromium switch. Keep the public legacy CLI spelling,
+// but never let Chromium suppress windows subsequently opened by a TUI owner.
+if (process.versions.electron && backgroundMode) app.commandLine.removeSwitch('headless');
 // Packaged TUI companions use this executable only as a private window host.
 if (process.argv.includes('--cibyp-vm-desktop') && process.send) {
   require('../tui/vm-desktop-entry').startDesktopHost();
   return;
 }
-if (process.versions.electron && !process.argv.includes('--headless') && !process.argv.includes('--tui')) {
+if (process.versions.electron && !backgroundMode && !process.argv.includes('--tui')) {
   const existing = require('./core/backend-discovery').readBackend(app.getPath('userData'));
-  if (existing && existing.native === false) {
+  if (existing && (existing.native === false || existing.desktopCapable !== true)) {
     require('./frontend-window').startFrontend(existing).catch(error => { console.error('[frontend]',error.message); app.exit(1); });
     return;
   }
@@ -26,7 +30,7 @@ if (!app.requestSingleInstanceLock()) {
   app.quit();
   process.exit(0);
 }
-const instanceMode = process.argv.includes('--tui') ? 'TUI' : process.argv.includes('--headless') ? 'headless' : 'GUI';
+const instanceMode = process.argv.includes('--tui') ? 'TUI' : backgroundMode ? 'headless' : 'GUI';
 let activeInstanceLease;
 app.on('will-quit', () => activeInstanceLease?.release?.());
 const startupAllowed = require('./core/instance-lock')
@@ -48,7 +52,7 @@ const startupAllowed = require('./core/instance-lock')
     return false;
   });
 const appLog = require('./app-log');
-if (!process.argv.includes('--tui') && !process.argv.includes('--headless')) {
+if (!process.argv.includes('--tui') && !backgroundMode) {
   require('./core/terminal-brand').printStartupBrand();
 }
 
@@ -165,7 +169,7 @@ ipcMain.handle('backend:remote-status', event => remoteBackend.status(event.send
 // 环境变量：CIBYP_WEB_PASSWORD / CIBYP_WEB_PORT / CIBYP_AUTO_APPROVE=1
 const TUI = process.argv.includes('--tui');
 const WEB_FORCED = process.argv.includes('--web');
-let HEADLESS = process.argv.includes('--headless') || TUI;
+let HEADLESS = backgroundMode || TUI;
 // 无头模式下的 Agent 运行时（GUI 模式为 null：会话由渲染进程承载）
 let agentRuntime = null;
 let backendServer, backendDispatch, removeBackendDiscovery;
@@ -253,11 +257,13 @@ const decisionService = new DecisionService({
 const APP_VERSION = app.getVersion();
 
 // Single instance lock — quit immediately if another instance is already running
+let desktopActivationPending = false;
 app.on('second-instance', (_event, argv) => {
-  if (!argv?.includes('--headless') && !mainWindow && backendDispatch) backendDispatch({ method: 'desktop:open' }).catch(console.error);
-  if (mainWindow) {
-    if (mainWindow.isMinimized()) mainWindow.restore();
-    mainWindow.focus();
+  if (argv?.some(arg => ['--headless', '--cibyp-headless', '--tui'].includes(arg))) return;
+  desktopActivationPending = true;
+  if (backendDispatch) {
+    desktopActivationPending = false;
+    openDesktopView();
   }
 });
 
@@ -745,7 +751,7 @@ if (!settings.closeToTray || !['ask', 'always', 'never', 'once'].includes(settin
   settings.closeToTray = 'ask';
   needsSettingsWrite = true;
 }
-if (typeof settings.trayEnabled !== 'boolean') { settings.trayEnabled = true; needsSettingsWrite = true; }
+if (settings.trayEnabled !== true) { settings.trayEnabled = true; needsSettingsWrite = true; }
 if (!settings.budget.peakHours) { settings.budget.peakHours = { enabled: false, start: 9, end: 18, inputMul: 1.5, cacheReadMul: 1.5, outputMul: 1.5, cacheWriteMul: 1.5 }; needsSettingsWrite = true; }
 if (needsSettingsWrite || !fs.existsSync(settingsPath)) {
   try { saveJSON(settingsPath, settings, false); } catch (e) { console.warn('[settings] initial write failed:', e && e.message); }
@@ -796,9 +802,9 @@ let voiceIpc = null;
 let _pendingCloseToTrayResolve = null;
 
 // 主窗口"预渲染完成后再显示"：渲染器 boot 完成（主题/设置/字体/i18n 等
-// 全部就绪）后经 IPC 通知再 show；超时兜底避免窗口永久隐藏。
+// 全部就绪）后经 IPC 通知再 show；加载失败保留 Splash，允许显式重试。
 let mainWindowShownOnce = false;
-const MAIN_WINDOW_SHOW_FALLBACK_MS = 6000;
+const MAIN_WINDOW_SHOW_FALLBACK_MS = 30000;
 
 // ---- Splash 启动画面 ----
 // 主窗口就绪前展示品牌画面（预渲染 ~2s），避免"无窗口"空白等待；
@@ -834,9 +840,10 @@ function getGitShortHash() {
 // ---- 运行位置门控：location=vm 时主窗口必须等 VM 就绪（或紧急回退/超时）----
 // 设计约束：门控与判据全部在主进程、零 VM 依赖 —— VM 挂了也一定能进主界面。
 const vmRuntimeGate = { required: false, ready: true, failed: false, reason: null };
-let backgroundWebReady = false;
+let backendReady = false;
 let webStartupSplash = false;
 let mainRendererReady = false;
+let mainStartupFailure = null;
 const startupRuntimeWaiters = new Set();
 ipcMain.handle('app:startup-runtime', () => {
   if (!vmRuntimeGate.required || vmRuntimeGate.ready) return { location: vmService.emergencyHost ? 'host' : settings.runtime.location };
@@ -849,6 +856,7 @@ function tryShowMainWindow() {
     for (const resolve of startupRuntimeWaiters) resolve({ location: vmService.emergencyHost ? 'host' : settings.runtime.location });
     startupRuntimeWaiters.clear();
   }
+  if (HEADLESS) createAppTray();
   if (!mainWindow || mainWindow.isDestroyed() || mainWindowShownOnce) return false;
   if (!mainRendererReady) return false;
   if (vmRuntimeGate.required && !vmRuntimeGate.ready) return false;
@@ -889,7 +897,7 @@ async function startVmBootForSplash() {
       code: e.code || null,
       serialTail: String((vmService.status().inst || {}).serialTail || '').slice(-8192)
     });
-    if (HEADLESS) return;
+    if (HEADLESS) { createAppTray(); return; }
     const delay = Math.max(5000, Number(settings.runtime?.vm?.autoFallbackMs) || 20000);
     setTimeout(() => {
       if (!mainWindowShownOnce) {
@@ -942,6 +950,7 @@ function createSplashWindow(forWeb = false) {
     bg: bg.slice(1),
     version: app.getVersion(),
     gitHash: getGitShortHash(),
+    language: settings.language || 'zh',
     // 启动画面不加载体积巨大的自定义字体，避免与主窗口重复解析（主窗口仍正常应用）
     font: ''
   };
@@ -950,6 +959,7 @@ function createSplashWindow(forWeb = false) {
   splashWindow.webContents.once('did-finish-load', () => {
     try {
       splashWindow.webContents.send('vm:init', { vmMode, status: vmService.status() });
+      if (mainStartupFailure) splashWindow.webContents.send('app:startup-failed', { message: mainStartupFailure });
     } catch { /* ignore */ }
   });
   splashWindow.once('ready-to-show', () => {
@@ -996,28 +1006,53 @@ function createWindow() {
   });
   mainWindowShownOnce = false;
   mainRendererReady = false;
-  // 兜底：渲染器 boot 异常/超时时也必须显示窗口。
-  // 运行位置=虚拟机时，兜底时间放宽到「VM 启动超时 + 15s」，避免抢在 VM 就绪前弹出空界面。
+  mainStartupFailure = null;
+  // 超时保留 Splash 和显式重试入口，不能伪造 renderer-ready 放行空界面。
   const vmMode = settings.runtime && settings.runtime.location === 'vm';
   const fallbackMs = vmMode
     ? Math.max(MAIN_WINDOW_SHOW_FALLBACK_MS, (Number(settings.runtime?.vm?.bootTimeoutMs) || 180000) + 15000)
     : MAIN_WINDOW_SHOW_FALLBACK_MS;
-  setTimeout(() => {
-    if (!mainWindowShownOnce && mainWindow && !mainWindow.isDestroyed()) {
-      if (vmRuntimeGate.required && !vmRuntimeGate.ready) {
-        vmService.emergencyHostMode();
-        vmRuntimeGate.required = false;
-        vmRuntimeGate.ready = true;
-        tryShowMainWindow();
-        return; // Initialize host workspace before revealing the App.
+  const loadingWindow = mainWindow;
+  let startupTimer;
+  const reportStartupFailure = message => {
+    if (loadingWindow.isDestroyed() || mainWindow !== loadingWindow || mainWindowShownOnce) return;
+    console.error('[startup] Renderer initialization failed:', message);
+    mainStartupFailure = message;
+    broadcastVm('app:startup-failed', { message });
+  };
+  loadingWindow.reportStartupFailure = reportStartupFailure;
+  const armStartupTimer = () => {
+    clearTimeout(startupTimer);
+    startupTimer = setTimeout(() => {
+      if (!mainWindowShownOnce && mainWindow === loadingWindow && !loadingWindow.isDestroyed()) {
+        if (vmRuntimeGate.required && !vmRuntimeGate.ready) {
+          vmService.emergencyHostMode();
+          vmRuntimeGate.required = false;
+          vmRuntimeGate.ready = true;
+          tryShowMainWindow();
+          if (!mainWindowShownOnce) armStartupTimer();
+          return; // Initialize host workspace before revealing the App.
+        }
+        reportStartupFailure('The application did not finish loading. Retry initialization or close the window.');
       }
-      mainRendererReady = true;
-      tryShowMainWindow();
-    }
-  }, fallbackMs);
+    }, fallbackMs);
+  };
+  loadingWindow.retryStartup = () => {
+    mainRendererReady = false;
+    mainStartupFailure = null;
+    armStartupTimer();
+    loadingWindow.reload();
+  };
+  armStartupTimer();
+  loadingWindow.once('closed', () => clearTimeout(startupTimer));
+  loadingWindow.once('show', () => clearTimeout(startupTimer));
+  loadingWindow.webContents.on('did-fail-load', (_event, code, description, _url, isMainFrame) => {
+    if (isMainFrame && code !== -3) reportStartupFailure(description);
+  });
+  loadingWindow.webContents.on('render-process-gone', (_event, detail) => reportStartupFailure(detail.reason));
   registerRendererReadyListener();
-  mainWindow.loadFile(path.join(__dirname, '../renderer/pages/index.html'));
-  // 主窗口一旦显示（渲染器就绪或超时兜底）即关闭 Splash，并解除后台节流
+  mainWindow.loadFile(path.join(__dirname, '../renderer/pages/index.html')).catch(error => reportStartupFailure(error.message));
+  // 主窗口预加载就绪后关闭 Splash，并解除后台节流。
   mainWindow.on('show', () => {
     closeSplash();
     try { mainWindow.webContents.setBackgroundThrottling(false); } catch { /* ignore */ }
@@ -1058,6 +1093,22 @@ function createWindow() {
     }
   });
 }
+
+ipcMain.handle('app:startup-retry', event => {
+  if (event.sender !== splashWindow?.webContents || !mainWindow || mainWindowShownOnce) return { ok: false };
+  mainWindow.retryStartup?.();
+  return { ok: true };
+});
+ipcMain.on('app:renderer-failed', (event, message) => {
+  if (event.sender === mainWindow?.webContents) mainWindow.reportStartupFailure?.(String(message).slice(0, 4000));
+});
+ipcMain.handle('app:startup-close', event => {
+  if (event.sender !== splashWindow?.webContents) return { ok: false };
+  // A background owner keeps other clients and tasks alive when this view closes.
+  if (backendReady && appTray) { mainWindow?.destroy(); closeSplash(); }
+  else { isQuitting = true; app.quit(); }
+  return { ok: true };
+});
 
 // ---- 崩溃报告窗口：上轮异常退出时本次启动自动弹出 ----
 let crashReportWindow = null;
@@ -1313,7 +1364,7 @@ function showWindowFromTray() {
   if (!mainWindow || mainWindow.isDestroyed()) {
     // 窗口可能被销毁（异常退出到托盘后）→ 重建，避免三入口全部静默失效
     if (isQuitting) return;
-    createWindow();
+    openDesktopView();
     return;
   }
   // Activation and voice wake-up must not bypass the startup gate.
@@ -1333,14 +1384,14 @@ function showWindowFromTray() {
 }
 
 /**
- * 创建应用托盘图标（仅在 trayEnabled=true 时）。
+ * 初始化完成后创建应用托盘；每个共享后台只创建一份。
  * 单击托盘图标：显示/隐藏主窗口
  * 右键菜单：显示主窗口 / 退出
  */
 function createAppTray() {
   if (appTray) return;
-  const webOnly = HEADLESS && backgroundWebReady && !!process.versions.electron;
-  if (isQuitting || (!webOnly && (!settings.trayEnabled || HEADLESS || !mainWindowShownOnce))) return;
+  if (!process.versions.electron || isQuitting) return;
+  if (HEADLESS ? !backendReady || (vmRuntimeGate.required && !vmRuntimeGate.ready && !vmRuntimeGate.failed) : !mainWindowShownOnce) return;
   if (splashWindow && !splashWindow.isDestroyed()) return;
   // 托盘图标：按 Electron/macOS 官方规范处理尺寸。
   // macOS 菜单栏图标必须是 Template Image：纯 alpha 通道（黑+透明），系统按深浅色自动着色。
@@ -1711,14 +1762,8 @@ app.on('window-all-closed', (event) => {
   event.preventDefault();
 });
 app.on('activate', () => {
-  // 无头模式没有可恢复的窗口
-  if (HEADLESS) return;
-  // macOS dock 点击：如果窗口被隐藏，重新显示
-  if (!mainWindow || mainWindow.isDestroyed()) {
-    createWindow();
-  } else {
-    showWindowFromTray();
-  }
+  if (!backendReady) { desktopActivationPending = true; return; }
+  openDesktopView();
 });
 
 // ---- IPC: Window Controls ----
@@ -1755,15 +1800,10 @@ ipcMain.handle('tray:set-close-to-tray', async (_, mode) => {
 });
 
 ipcMain.handle('tray:set-enabled', async (_, enabled) => {
-  settings.trayEnabled = !!enabled;
+  // Retain the legacy capability, but every desktop owner needs an exit affordance.
+  settings.trayEnabled = true;
   try { saveJSON(settingsPath, settings); } catch (e) { return { ok: false, error: e.message }; }
-  // 实时创建/销毁托盘
-  if (settings.trayEnabled && !appTray) {
-    createAppTray();
-  } else if (!settings.trayEnabled && appTray) {
-    try { appTray.destroy(); } catch {}
-    appTray = null;
-  }
+  createAppTray();
   return { ok: true, settings };
 });
 
@@ -4443,9 +4483,9 @@ app.whenReady().then(async () => {
         await new Promise(resolve => setTimeout(resolve, 100));
       }
     },
-    onStarted: () => { backgroundWebReady = true; if (webStartupSplash) closeSplash(); createAppTray(); rebuildTrayMenu(); },
+    onStarted: () => { if (webStartupSplash) closeSplash(); createAppTray(); rebuildTrayMenu(); },
     onFailed: error => { if (webStartupSplash) broadcastVm('vm:boot-failed', { message: error.message }); },
-    onStopped: () => { backgroundWebReady = false; rebuildTrayMenu(); if (HEADLESS && appTray) { appTray.destroy(); appTray = null; } if (webStartupSplash) closeSplash(); }
+    onStopped: () => { rebuildTrayMenu(); if (webStartupSplash) closeSplash(); createAppTray(); }
   });
   const webCfg = { ...settings.webControl };
   if (process.env.CIBYP_WEB_PASSWORD) webCfg.password = process.env.CIBYP_WEB_PASSWORD;
@@ -4457,6 +4497,9 @@ app.whenReady().then(async () => {
     catch (error) { console.error('[backend] WebUI startup failed:', error.message); }
   }
   console.log('[backend] Shared runtime ready:', address.url);
+  backendReady = true;
+  if (desktopActivationPending) { desktopActivationPending = false; openDesktopView(); }
+  createAppTray();
 
   // Auto-start email if configured
   if (settings.email.enabled && settings.email.emailUser && settings.email.totpSecret) {

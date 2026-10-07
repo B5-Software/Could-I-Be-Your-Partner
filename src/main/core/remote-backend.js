@@ -5,7 +5,9 @@ const { BackendClient } = require('../../shared/backend-client');
 function createRemoteBackend() {
   const clients = new Map();
   const localChannel = (channel) =>
-    /^(window:|tray:|app:renderer-ready|backend:remote|codeoss:layout)/.test(channel);
+    /^(window:|tray:|app:renderer-(?:ready|failed)|app:startup-(?:retry|close)|backend:remote|codeoss:layout)/.test(
+      channel,
+    );
   return {
     has(sender) {
       return clients.has(sender?.id);
@@ -67,7 +69,7 @@ function createRemoteBackend() {
       const entry = clients.get(sender.id);
       return { connected: !!entry, url: entry?.client.url || '' };
     },
-    route(channel, handler) {
+    route(channel, handler, { send = false } = {}) {
       return (event, ...args) => {
         const remote = clients.get(event.sender?.id)?.client;
         if (!remote || localChannel(channel)) return handler(event, ...args);
@@ -80,7 +82,7 @@ function createRemoteBackend() {
           }));
         return channel === 'backend:request'
           ? remote.request(...args)
-          : remote.request('ipc:invoke', channel, ...args);
+          : remote.request(send ? 'ipc:send' : 'ipc:invoke', channel, ...args);
       };
     },
     close() {

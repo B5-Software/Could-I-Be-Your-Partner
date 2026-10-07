@@ -121,27 +121,7 @@ async function buildApp() {
     sourcemap: true,
   });
   require('./build-info')();
-  await esbuild.build({
-    entryPoints: [path.join(root, 'src/main/vm/guest-tool-worker.js')],
-    outfile: path.join(root, 'src/main/vm/generated/guest-tool-worker.cjs'),
-    bundle: true,
-    platform: 'node',
-    format: 'cjs',
-    target: 'node22',
-    external: [
-      'pdf-parse',
-      'pdfjs-dist/*',
-      'tesseract.js',
-      'puppeteer',
-      '@napi-rs/canvas',
-      'ffmpeg-static',
-      'ffprobe-static',
-      'electron',
-      'eslint',
-      'eslint/*',
-    ],
-    logLevel: 'warning',
-  });
+  await require('./lib/guest-tool-bundle.cjs').buildGuestToolWorker(root);
   console.log(
     '[build] Built renderer, shared TypeScript and ' +
       preloads.length +

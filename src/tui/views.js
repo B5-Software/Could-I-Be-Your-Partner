@@ -551,8 +551,14 @@ function renderModal(theme, modal, width, maxHeight, hitRows = []) {
     lines.push(pad + style(modal.title, { bold: true, fg: color }));
   }
   if (modal.subtitle) {
-    lines.push(pad + paint(theme, 'subtle', truncate(modal.subtitle, width - 4), { dim: true }));
+    for (const line of modal.kind === 'ask'
+      ? wrapText(modal.subtitle, width - 4)
+      : [truncate(modal.subtitle, width - 4)])
+      lines.push(pad + paint(theme, 'subtle', line));
   }
+  if (modal.error)
+    for (const line of wrapText(modal.error, width - 4))
+      lines.push(pad + paint(theme, 'error', line));
   if (modal.body) {
     for (const line of wrapText(String(modal.body), width - 4)) {
       lines.push(pad + paint(theme, 'inactive', line, { dim: true }));
@@ -578,18 +584,32 @@ function renderModal(theme, modal, width, maxHeight, hitRows = []) {
       if (selected) selectedRow = lines.length;
       optionRows.set(lines.length, index);
       const pointer = selected ? paint(theme, 'suggestion', FIGURES.pointer + ' ') : '  ';
+      const labelLines =
+        modal.kind === 'ask'
+          ? wrapText(option.label, width - 6)
+          : [truncate(option.label, width - 6)];
       const label = selected
-        ? style(truncate(option.label, width - 6), { bold: true, fg: theme.suggestion })
-        : paint(theme, 'inactive', truncate(option.label, width - 6));
+        ? style(labelLines[0], { bold: true, fg: theme.suggestion })
+        : paint(theme, 'inactive', labelLines[0]);
       const tag = option.hint ? paint(theme, 'subtle', '  ' + option.hint, { dim: true }) : '';
       lines.push(pad + pointer + label + tag);
+      for (const line of labelLines.slice(1)) {
+        optionRows.set(lines.length, index);
+        lines.push(pad + '  ' + paint(theme, selected ? 'text' : 'inactive', line));
+      }
+      if (modal.kind === 'ask' && option.description) {
+        for (const line of wrapText(String(option.description), width - 6)) {
+          optionRows.set(lines.length, index);
+          lines.push(pad + '  ' + paint(theme, 'subtle', line));
+        }
+      }
     });
     lines.push(
       pad +
         paint(
           theme,
           'subtle',
-          modal.kind === 'todo' && modal.footer
+          ['todo', 'ask'].includes(modal.kind) && modal.footer
             ? modal.footer
             : t('ui.tui.modalNav', '↑↓ 选择 · Enter 确认 · Esc 取消'),
           {
@@ -598,7 +618,7 @@ function renderModal(theme, modal, width, maxHeight, hitRows = []) {
         ),
     );
   }
-  if (modal.footer && modal.kind !== 'todo') {
+  if (modal.footer && (!['todo', 'ask'].includes(modal.kind) || modal.inputMode)) {
     lines.push(pad + paint(theme, 'subtle', modal.footer, { dim: true, italic: true }));
   }
   const finish = (indices) => {
@@ -614,7 +634,7 @@ function renderModal(theme, modal, width, maxHeight, hitRows = []) {
   const content = lines.slice(2, -1);
   const maxOffset = Math.max(0, content.length - available);
   let offset = Math.max(0, Math.min(maxOffset, modal.scrollOffset || 0));
-  if (modal.options?.length > 1) {
+  if (modal.options?.length > 1 && !modal.manualScroll) {
     const selected = selectedRow - 2;
     if (selected < offset) offset = Math.max(0, selected);
     else if (selected >= offset + available) offset = Math.min(maxOffset, selected - available + 1);

@@ -135,10 +135,10 @@ ipcMain.once('app:renderer-ready', async (event) => {
       await new Promise((resolve) => setTimeout(resolve, 20));
     assert.equal(trays.length, 1, 'Startup must create exactly one tray after Splash');
     await event.sender.executeJavaScript('window.api.traySetEnabled(false)');
-    assert(trays[0].destroyed, 'Disabling the tray must destroy the icon');
+    assert(!trays[0].destroyed, 'Every initialized desktop backend keeps an exit affordance');
     await event.sender.executeJavaScript('window.api.traySetEnabled(true)');
     await event.sender.executeJavaScript('window.api.traySetEnabled(true)');
-    assert.equal(trays.length, 2, 'Enabling the tray must not create duplicate icons');
+    assert.equal(trays.length, 1, 'Legacy tray settings must not create duplicate icons');
     const workspace = await event.sender.executeJavaScript('window.api.workspaceCreate()');
     assert.equal(workspace.ok, true, 'Workspace operations are available after the startup gate');
     assert(workspaceCalls > 0);

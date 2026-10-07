@@ -255,3 +255,44 @@ Object.assign(module.exports.de, {
   'ui.update.launcherConfirm':
     'Das gemeinsame Backend beenden? Danach den bisherigen Startbefehl ausführen, um das heruntergeladene Update zu nutzen.',
 });
+Object.assign(module.exports.en, {
+  'ui.tui.askNav': '↑↓ select · Enter confirm · ←→/Tab switch question · Esc cancel',
+  'ui.tui.askMultiNav':
+    '↑↓ select · Space/Enter toggle · Tab next · ←→ switch question · Esc cancel',
+  'ui.tui.askInputNav': 'Enter confirm · Shift+Enter newline · Esc back · Alt+←→ switch question',
+  'ui.tui.askCustom': 'Type your own answer',
+  'ui.tui.askContinue': 'Finish this question',
+  'ui.tui.askRequired': 'Answer this question first',
+  'ui.tui.askReview': 'Review and submit answers',
+  'ui.tui.askReviewHint':
+    'Select a question to edit it. The Agent continues only after submission.',
+  'ui.tui.askUnanswered': 'Unanswered',
+  'ui.tui.askSubmit': 'Submit answers',
+  'ui.tui.askCancelTitle': 'Cancel the questionnaire?',
+  'ui.tui.askCancelBody':
+    'The Agent will receive no answers. Partial responses will not be submitted as complete.',
+  'ui.tui.askResume': 'Continue answering',
+  'ui.tui.askDiscard': 'Cancel and notify the Agent',
+  'ui.tui.askSendFailed': 'Could not send answers. Please retry.',
+});
+Object.assign(module.exports.de, {
+  'ui.tui.askNav': '↑↓ wählen · Enter bestätigen · ←→/Tab Frage wechseln · Esc abbrechen',
+  'ui.tui.askMultiNav':
+    '↑↓ wählen · Space/Enter umschalten · Tab weiter · ←→ Frage wechseln · Esc abbrechen',
+  'ui.tui.askInputNav':
+    'Enter bestätigen · Shift+Enter neue Zeile · Esc zurück · Alt+←→ Frage wechseln',
+  'ui.tui.askCustom': 'Eigene Antwort eingeben',
+  'ui.tui.askContinue': 'Diese Frage abschließen',
+  'ui.tui.askRequired': 'Bitte zuerst diese Frage beantworten',
+  'ui.tui.askReview': 'Antworten prüfen und senden',
+  'ui.tui.askReviewHint':
+    'Eine Frage zum Bearbeiten auswählen. Der Agent fährt erst nach dem Senden fort.',
+  'ui.tui.askUnanswered': 'Unbeantwortet',
+  'ui.tui.askSubmit': 'Antworten senden',
+  'ui.tui.askCancelTitle': 'Fragebogen abbrechen?',
+  'ui.tui.askCancelBody':
+    'Der Agent erhält keine Antworten. Teilantworten werden nicht als vollständige Antworten gesendet.',
+  'ui.tui.askResume': 'Weiter beantworten',
+  'ui.tui.askDiscard': 'Abbrechen und Agent benachrichtigen',
+  'ui.tui.askSendFailed': 'Antworten konnten nicht gesendet werden. Bitte erneut versuchen.',
+});

@@ -119,9 +119,7 @@
     updatePrivacyTriggerState(priv.enabled === true);
 
     // 后台托盘模式
-    const trayEnabledEl = document.getElementById('setting-tray-enabled');
     const closeToTrayEl = document.getElementById('setting-close-to-tray');
-    if (trayEnabledEl) trayEnabledEl.checked = s.trayEnabled !== false;
     if (closeToTrayEl) closeToTrayEl.value = ['ask', 'always', 'never'].includes(s.closeToTray) ? s.closeToTray : 'ask';
 
     // Theme mode
