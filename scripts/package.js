@@ -85,7 +85,12 @@ async function main() {
     pkg,
     run: (builderArgs) =>
       new Promise((resolve, reject) => {
-        const args = [cli, ...builderArgs];
+        const args = [
+          '--require',
+          path.join(__dirname, 'lib/build-fetch.cjs'),
+          cli,
+          ...builderArgs,
+        ];
         console.log(`[package] 执行: ${process.execPath} ${args.join(' ')}`);
         const child = spawn(process.execPath, args, {
           cwd: projectRoot,
