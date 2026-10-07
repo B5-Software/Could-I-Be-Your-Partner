@@ -17,6 +17,8 @@
   跳过 Font Awesome 下载
 .PARAMETER SkipGeoGebra
   跳过 GeoGebra deployggb.js 下载
+.PARAMETER GeoGebraLoaderOnly
+  仅下载 GeoGebra 浏览器加载器，跳过离线应用和参考源码（集成测试用）
 .PARAMETER SkipThree
   跳过 Three.js 下载
 .PARAMETER TessdataVariant
@@ -31,6 +33,7 @@ param(
   [switch]$SkipOCR,
   [switch]$SkipFontAwesome,
   [switch]$SkipGeoGebra,
+  [switch]$GeoGebraLoaderOnly,
   [switch]$SkipThree,
   [ValidateSet("standard","fast","best")][string]$TessdataVariant = "standard"
 )
@@ -66,6 +69,8 @@ function Download-File($url, $dest) {
         Write-Err "Direct download also failed: $($_.Exception.Message)"
         return $false
       }
+    } else {
+      return $false
     }
   }
   return $true
@@ -187,9 +192,10 @@ if (-not $SkipGeoGebra) {
   } else {
     # GeoGebra 不在 GitHub，直连即可
     $url = "https://www.geogebra.org/apps/deployggb.js"
-    Download-File $url $ggbFile | Out-Null
+    if (-not (Download-File $url $ggbFile)) { throw "GeoGebra browser loader download failed" }
   }
 
+  if (-not $GeoGebraLoaderOnly) {
   # ---- GeoGebra Math Apps Bundle 离线包（完整 web3d/webSimple/web 编译产物）----
   Write-Step "GeoGebra Math Apps Bundle（离线包，运行时经 ggb:// 本地加载）"
   $ggbAppDir = Join-Path $repoRoot "assets\geogebra-app"
@@ -247,6 +253,7 @@ if (-not $SkipGeoGebra) {
   }
   # 说明：geogebra/geogebra 是 Gradle 源码工程，仅作参考，不参与运行。
   # 运行时加载的是上方 Math Apps Bundle 的本地编译产物（完整离线，不依赖 www.geogebra.org CDN）。
+  }
 }
 
 # ---- Three.js 0.160.0 (PCB-EDA 3D 预览用) ----
@@ -275,8 +282,17 @@ if (-not $SkipThree) {
       Download-File $url2 $threeFile | Out-Null
     }
   }
+  if (-not (Test-Path $threeFile) -or (Get-Item $threeFile).Length -le 100KB) {
+    throw "Three.js browser runtime download failed"
+  }
   # 注：Three.js 0.160.0 已移除 UMD 版的 OrbitControls（仅保留 ESM 模块版本）
   # 因此 pcb-3d.js 内部自带了一个轻量 OrbitControls 实现（旋转/缩放/平移），无需下载额外文件。
+}
+
+# Fail before launching Electron if an asset is missing or an HTTP error page was cached.
+if ($GeoGebraLoaderOnly) {
+  node -e 'const fs=require("node:fs"),vm=require("node:vm");for(const file of ["assets/geogebra/deployggb.js","assets/lib/three/three.min.js"]){const code=fs.readFileSync(file,"utf8");new vm.Script(code,{filename:file});if(code.length<10000)throw new Error("Incomplete browser asset: "+file);console.log("Verified browser asset: "+file)}'
+  if ($LASTEXITCODE -ne 0) { throw "Browser asset validation failed" }
 }
 
 Write-Host "`n========================================" -ForegroundColor Cyan

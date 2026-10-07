@@ -28,8 +28,8 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run check
-      - name: Prepare desktop icons
-        run: pwsh -NoProfile -File scripts/fetch-assets.ps1 -SkipOCR -SkipGeoGebra -SkipThree
+      - name: Prepare desktop browser assets
+        run: pwsh -NoProfile -File scripts/fetch-assets.ps1 -SkipOCR -GeoGebraLoaderOnly
         if: runner.os == 'Windows' && matrix.node == '24'
       - run: npm run test:desktop
         if: runner.os == 'Windows' && matrix.node == '24'

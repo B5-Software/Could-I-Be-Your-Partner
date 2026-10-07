@@ -20,8 +20,6 @@ const fs = require('fs');
 const path = require('path');
 const { spawn } = require('child_process');
 
-require('./build-info')();
-
 const projectRoot = path.resolve(__dirname, '..');
 
 function getGitHash() {
@@ -56,7 +54,7 @@ function dropUnbuildableOptionalDeps() {
   }
 }
 
-function main() {
+async function main() {
   require('./prepare-cli').prepareLinuxInstallers();
   const pkg = JSON.parse(fs.readFileSync(path.join(projectRoot, 'package.json'), 'utf-8'));
   const gitHash = getGitHash();
@@ -81,20 +79,34 @@ function main() {
 
   // 直接调用本地 electron-builder CLI（跨平台，避免 Windows 下 spawn .cmd 的 EINVAL 问题）
   const cli = path.join(projectRoot, 'node_modules', 'electron-builder', 'cli.js');
-  const args = [cli, ...ebArgs];
-  console.log(`[package] 执行: ${process.execPath} ${args.join(' ')}`);
-
-  const child = spawn(process.execPath, args, { cwd: projectRoot, stdio: 'inherit', shell: false });
-  child.on('error', (err) => {
-    console.error('[package] 启动 electron-builder 失败:', err.message);
-    process.exit(1);
-  });
-  child.on('exit', (code) => {
-    process.exit(code === null ? 1 : code);
+  process.exitCode = await require('./lib/package-retry.cjs').packageWithRetry({
+    args: ebArgs,
+    projectRoot,
+    pkg,
+    run: (builderArgs) =>
+      new Promise((resolve, reject) => {
+        const args = [cli, ...builderArgs];
+        console.log(`[package] 执行: ${process.execPath} ${args.join(' ')}`);
+        const child = spawn(process.execPath, args, {
+          cwd: projectRoot,
+          stdio: ['inherit', 'pipe', 'pipe'],
+          shell: false,
+        });
+        let output = '';
+        const forward = (stream) => (chunk) => {
+          stream.write(chunk);
+          output = (output + chunk.toString()).slice(-128 * 1024);
+        };
+        child.stdout.on('data', forward(process.stdout));
+        child.stderr.on('data', forward(process.stderr));
+        child.once('error', reject);
+        child.once('close', (code, signal) => resolve({ code: code ?? 1, signal, output }));
+      }),
   });
 }
 
 if (require.main === module) {
+  require('./build-info')();
   require('./build-app-bundle')
     .buildApp()
     .then(main)
