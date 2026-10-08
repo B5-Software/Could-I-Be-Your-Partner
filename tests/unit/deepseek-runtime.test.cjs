@@ -54,7 +54,7 @@ test('real plugin dispatch runs pre/around/post/finalize/result hooks and unload
   assert.deepEqual(loaded.issues, []);
   assert.equal(loaded.tools[0].name, 'increment');
   assert.equal((await host.callTool('modern', 'increment', { n: 4 })).content, 'final:5');
-  assert.equal((await host.callTool('modern', 'increment', { n: -1 })).code, 'TOOL_DENIED');
+  assert.match((await host.callTool('modern', 'increment', { n: -1 })).error, /negative/);
   assert.equal((await host.callTool('modern', 'increment', { n: 'x' })).invalidArgs, true);
   assert.equal(globalThis.__cibypDshResult.isError, true);
   delete globalThis.__cibypDshResult;
@@ -72,7 +72,7 @@ test('concurrent async plugin loads keep ownership and guards are removed on unl
   assert.equal(a.tools[0].name, 'one');
   assert.equal(b.tools[0].name, 'two');
   assert.equal((await host.callTool('one', 'one', {})).content, 'one');
-  assert.equal((await host.callTool('two', 'two', { deny: true })).code, 'TOOL_DENIED');
+  assert.match((await host.callTool('two', 'two', { deny: true })).error, /blocked/);
   await host.unloadPlugin('one');
   await host.unloadPlugin('two');
   assert.equal(host.toolsService.guards.size, 0);
@@ -117,4 +117,70 @@ test('an ESM plugin resolves modern subpaths and public helpers with asynchronou
   const loaded = await host.loadPlugin('esm', entry);
   assert.deepEqual(loaded.issues, []);
   assert.equal((await host.callTool('esm', 'esm', {})).content, 'hello');
+});
+
+test('a failed CommonJS import executes its module side effects only once', async (t) => {
+  const { host, dir } = await hostFixture(t);
+  const counter = path.join(dir, 'counter.txt'),
+    entry = path.join(dir, 'throw.cjs');
+  await fs.writeFile(
+    entry,
+    `const fs=require('node:fs');const p=${JSON.stringify(counter)};fs.appendFileSync(p,'once\\n');throw new Error('Expected import failure');`,
+  );
+  const result = await host.loadPlugin('throw', entry);
+  assert.match(result.issues.join('\n'), /Expected import failure/);
+  assert.equal(await fs.readFile(counter, 'utf8'), 'once\n');
+});
+
+test('startup inspection does not import disabled plugins', async (t) => {
+  const { dir } = await hostFixture(t);
+  const { PluginManager } = require('../../src/main/ds-compat/plugin-manager');
+  const manager = new PluginManager(dir).init();
+  t.after(() => manager.dispose());
+  const entry = path.join(dir, 'disabled.cjs'),
+    marker = path.join(dir, 'must-not-exist');
+  await fs.writeFile(
+    entry,
+    `require('node:fs').writeFileSync(${JSON.stringify(marker)},'executed');module.exports=()=>{};`,
+  );
+  await fs.writeFile(path.join(dir, 'package.json'), JSON.stringify({ name: 'reviewed-fixture' }));
+  manager.plugins = [
+    {
+      id: 'disabled',
+      enabled: false,
+      entry,
+      installDir: dir,
+      name: 'reviewed-fixture',
+      compatIssues: [],
+    },
+  ];
+  await manager.refreshAll();
+  assert.equal(manager.host.initialized, false);
+  await assert.rejects(fs.stat(marker), { code: 'ENOENT' });
+});
+
+test('VM plugin paths translate Git directories without modifying command or file content', () => {
+  const { translatePaths } = require('../../src/main/vm/plugin-runtime-client');
+  const io = {
+    resolveVmPath: (value) => ({ ok: true, vm: '/workspace/' + path.win32.basename(value) }),
+  };
+  const input = {
+    workDir: 'C:\\temp\\repo',
+    repoDir: 'C:\\temp\\repo',
+    nested: { file_path: 'C:\\temp\\file' },
+    paths: ['C:\\temp\\one'],
+    command: '/bin/echo C:\\temp\\repo',
+    content: '/keep this text',
+  };
+  const output = translatePaths(io, input);
+  assert.equal(output.repoDir, '/workspace/repo');
+  assert.equal(output.workDir, output.repoDir);
+  assert.equal(output.command, input.command);
+  assert.equal(output.content, input.content);
+  assert.equal(output.paths[0], '/workspace/one');
+  assert.throws(
+    () =>
+      translatePaths({ resolveVmPath: () => ({ ok: false, error: 'Unmapped host path' }) }, input),
+    /Unmapped host path/,
+  );
 });

@@ -114,7 +114,7 @@ async function runGuestTool(service, channel, args, route) {
   }
 }
 
-async function runGuestPlugin(service, record, name, args, context) {
+async function runGuestPlugin(service, record, name, args, context = {}, options = {}) {
   const working = await service.prepareTerminalDirectory(context.cwd || '/workspace');
   const { root, remote } = await deploy(service.instance);
   const io = new VmFs({ vmService: service });
@@ -133,7 +133,22 @@ async function runGuestPlugin(service, record, name, args, context) {
       const { stream, done } = await service.instance.ssh.execStream(
         `tar -xf - -C ${shellQuote(pluginRoot)}`,
       );
-      const source = require('tar').c({ cwd: record.installDir, follow: false }, ['.']);
+      const sdkNames = Object.keys(require('../ds-compat/sdk-catalog'));
+      const source = require('tar').c(
+        {
+          cwd: record.installDir,
+          follow: false,
+          filter: (file) =>
+            !sdkNames.some((name) =>
+              file
+                .replaceAll('\\', '/')
+                .split('node_modules/@deepseek-ai/' + name)
+                .slice(1)
+                .some((tail) => !tail || tail.startsWith('/')),
+            ),
+        },
+        ['.'],
+      );
       source.on('error', (error) => stream.destroy(error));
       stream.resume();
       source.pipe(stream);
@@ -154,75 +169,64 @@ async function runGuestPlugin(service, record, name, args, context) {
     transferring.catch(() => cache.delete(key));
   }
   await cache.get(key);
-  const shims = {
-    cordis: ['vmShimCordis', require('@deepseek-ai/cordis')],
-    'dsh-tools': ['vmShimTools', require('../ds-compat/shims/dsh-tools')],
-    schemastery: ['vmShimSchema', require('@deepseek-ai/schemastery')],
-    'dsh-llm': ['vmShimLlm', require('@deepseek-ai/dsh-llm')],
-    'dsh-util-values': ['vmShimValues', require('@deepseek-ai/dsh-util-values')],
-    'dsh-brand': ['vmShimBrand', require('@deepseek-ai/dsh-brand')],
-    'dsh-scope': ['vmShimScope', require('@deepseek-ai/dsh-scope')],
-  };
-  for (const [moduleName, [exportName, exports]] of Object.entries(shims)) {
-    const directory = `${pluginRoot}/node_modules/@deepseek-ai/${moduleName}`;
-    await io.makeDirectory(directory);
-    await io.writeBuffer(
-      `${directory}/package.json`,
-      Buffer.from(
-        JSON.stringify({
-          name: '@deepseek-ai/' + moduleName,
-          main: 'index.js',
-          type: 'commonjs',
-          ...(moduleName === 'dsh-tools'
-            ? {
-                exports: {
-                  '.': './index.js',
-                  './schema': './index.js',
-                  './json-schema': './index.js',
-                  './testing': './index.js',
-                  './types': './types.js',
-                  './presentation': './types.js',
-                  './src/schema.ts': './index.js',
-                  './src/json-schema.ts': './index.js',
-                  './src/ts-types.ts': './index.js',
-                  './src/py-types.ts': './index.js',
-                  './src/types.ts': './types.js',
-                  './src/presentation.ts': './types.js',
-                  './package.json': './package.json',
-                },
-              }
-            : {}),
-        }),
-      ),
-    );
-    const bridge =
-      `const shim=require(${JSON.stringify(remote)})[${JSON.stringify(exportName)}];module.exports=shim;\n` +
-      Object.keys(exports)
-        .filter((key) => /^[A-Za-z_$][\w$]*$/.test(key))
-        .map((key) => `exports.${key}=shim.${key};`)
-        .join('\n');
-    await io.writeBuffer(`${directory}/index.js`, Buffer.from(bridge));
-    if (moduleName === 'dsh-tools')
-      await io.writeBuffer(`${directory}/types.js`, Buffer.from('module.exports = {};\n'));
+  const bridgeKey = key + ':sdk';
+  if (!cache.has(bridgeKey)) {
+    const bridged = (async () => {
+      for (const [moduleName, exports] of Object.entries(require('../ds-compat/sdk-catalog'))) {
+        const directory = pluginRoot + '/node_modules/@deepseek-ai/' + moduleName;
+        await io.makeDirectory(directory);
+        await io.writeBuffer(
+          directory + '/package.json',
+          Buffer.from(
+            JSON.stringify({
+              name: '@deepseek-ai/' + moduleName,
+              type: 'commonjs',
+              main: 'index.cjs',
+              exports: {
+                '.': { require: './index.cjs', import: './index.mjs' },
+                './package.json': './package.json',
+                './*': { require: './index.cjs', import: './index.mjs' },
+              },
+            }),
+          ),
+        );
+        const files = require('./plugin-sdk-files').sdkFiles(remote, moduleName, exports);
+        await io.writeBuffer(directory + '/index.cjs', Buffer.from(files.commonjs));
+        await io.writeBuffer(directory + '/index.mjs', Buffer.from(files.esm));
+      }
+    })();
+    cache.set(bridgeKey, bridged);
+    bridged.catch(() => cache.delete(bridgeKey));
   }
+  await cache.get(bridgeKey);
   const entryRelative = path.relative(record.installDir, record.entry);
   if (entryRelative.startsWith('..') || path.isAbsolute(entryRelative))
     throw new Error('插件入口不在安装目录内');
-  return runGuestTool(
-    service,
-    'ds:toolCall',
-    [
-      {
+  const client = require('./plugin-runtime-client');
+  const runtime = await client.connect(service, remote, options);
+  const config = client.translatePaths(io, record.config);
+  const response = await runtime.peer.ask(
+    'call',
+    {
+      plugin: {
         id: record.id,
         name: record.name,
-        config: record.config,
-        entry: `${pluginRoot}/${entryRelative.split(path.sep).join('/')}`,
+        config,
+        entry: pluginRoot + '/' + entryRelative.split(path.sep).join('/'),
       },
       name,
-      args,
-      { ...context, cwd: working },
-    ],
-    { deep: [2] },
+      arguments: client.translatePaths(io, args),
+      context: { ...context, cwd: working, signal: undefined },
+      version: key + ':' + JSON.stringify(config),
+      settings: client.guestSettings(await options.getSettings?.()),
+      agents: client.agents(options, service),
+    },
+    { signal: context.signal, timeoutMs: 0 },
   );
+  if (service.runtime.workspaceMode === 'shared' && response.ok !== false) {
+    await service.pullExternalDir(context.cwd || '/workspace');
+    await service.syncWorkspace({ direction: 'pull', reason: 'plugin-tool' });
+  }
+  return { ...response, location: 'vm' };
 }
 module.exports = { runGuestTool, runGuestPlugin };

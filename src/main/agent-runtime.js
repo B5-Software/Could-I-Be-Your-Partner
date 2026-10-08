@@ -377,6 +377,8 @@ function createAgentRuntime({
     session.agent.onMessage = (type, data) => handleAgentMessage(session, type, data);
     session.agent.onToolCall = (name, args, status, result, callId) =>
       handleToolCall(session, name, args, status, result, callId);
+    session.agent.onModelResponse = (data) =>
+      emit({ type: 'model-response', key: sessionKey, ...data });
     session.agent.onTodoUpdate = (items) =>
       emit({ type: 'todo', key: sessionKey, items: Array.isArray(items) ? items : [] });
     session.agent.onStatusChange = (status) => {
@@ -738,6 +740,28 @@ function createAgentRuntime({
       return session ? sessionSnapshot(session) : null;
     },
 
+    async requestPluginQuestions(payload, signal) {
+      const session = sessions.get(payload.sessionKey);
+      if (!session) throw new Error('Conversation does not exist');
+      if (session.pendingInteraction)
+        throw new Error('A decision is already pending in this conversation');
+      signal?.throwIfAborted();
+      const pending = requestInteraction(session, 'questions', { questions: payload.questions });
+      const interaction = session.pendingInteraction;
+      const cancel = () => {
+        if (session.pendingInteraction === interaction)
+          respondInteraction(session, { answers: [] });
+      };
+      signal?.addEventListener('abort', cancel, { once: true });
+      try {
+        const answers = await pending;
+        signal?.throwIfAborted();
+        return { answers };
+      } finally {
+        signal?.removeEventListener('abort', cancel);
+      }
+    },
+
     async requestPluginApproval(payload, signal) {
       const session =
         [...sessions.values()].find(
@@ -849,6 +873,11 @@ function createAgentRuntime({
       if (session.busy) throw new Error('Stop the task before changing session configuration');
       await ensureInitialized(session);
       const a = session.agent;
+      if (values.pluginSeed) {
+        if (a.contextManager.getHistoryMessages().length)
+          throw new Error('Cannot seed an existing conversation');
+        a.contextManager.loadFromHistory(values.pluginSeed);
+      }
       if (session.profile === 'default' && values.llmOverride) {
         const allowed = [
           'model',

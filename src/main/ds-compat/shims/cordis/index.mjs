@@ -25,8 +25,15 @@ while (true) {
   const candidate = path.join(dir, 'node_modules', '@deepseek-ai', 'cordis');
   if (existsSync(candidate)) {
     let real = candidate;
-    try { real = realpathSync(candidate); } catch { /* keep */ }
-    if (real !== selfDir) { realEntry = candidate; break; }
+    try {
+      real = realpathSync(candidate);
+    } catch {
+      /* keep */
+    }
+    if (real !== selfDir) {
+      realEntry = candidate;
+      break;
+    }
   }
   const parent = path.dirname(dir);
   if (parent === dir) break;
@@ -62,7 +69,7 @@ export const {
   joinPrototype,
   resolveConfig,
   symbols,
-  withProps
+  withProps,
 } = cordis;
 
 export default cordis;

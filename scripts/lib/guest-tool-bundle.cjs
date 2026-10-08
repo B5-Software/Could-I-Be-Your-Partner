@@ -12,6 +12,14 @@ function sdkMetadataPlugin() {
     setup(build) {
       build.onLoad({ filter: /[\\/]@deepseek-ai[\\/].*\.[cm]?js$/ }, async (args) => {
         let source = await fs.readFile(args.path, 'utf8');
+        // The PTY backend lazily requires its pure JS terminal emulator. Its
+        // caller-relative loader otherwise survives bundling and looks for an
+        // absent guest node_modules. Keep native node-pty external, but embed
+        // this reviewed dependency with a static, still lazy require.
+        source = source.replace(
+          /createLazyRequire\(\s*(['"])@xterm\/headless\1\s*,\s*import\.meta\.url\s*\)/g,
+          '(() => require("@xterm/headless"))',
+        );
         const pattern =
           /createRequire\(import\.meta\.url\)\(\s*(["'])(\.\.?\/[^"']+\.json)\1\s*\)/g;
         const matches = [...source.matchAll(pattern)];
@@ -39,7 +47,7 @@ async function buildGuestToolWorker(root) {
     // Other ESM dependencies may need a require rooted in the deployed worker.
     define: { 'import.meta.url': '__cibypGuestModuleUrl' },
     banner: {
-      js: 'const __cibypGuestModuleUrl = require("node:url").pathToFileURL(__filename).href;',
+      js: 'const __cibypGuestModuleUrl = require("node:url").pathToFileURL(__filename).href; if (!Promise.withResolvers) Promise.withResolvers = function () { let resolve, reject; const promise = new Promise((a,b) => {resolve=a;reject=b;}); return {promise,resolve,reject}; };',
     },
     external: [
       'pdf-parse',
@@ -50,10 +58,12 @@ async function buildGuestToolWorker(root) {
       'ffmpeg-static',
       'ffprobe-static',
       'electron',
+      'node-pty',
+      'sharp',
       'eslint',
       'eslint/*',
     ],
     logLevel: 'warning',
   });
 }
-module.exports = { buildGuestToolWorker };
+module.exports = { buildGuestToolWorker, sdkMetadataPlugin };

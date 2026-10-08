@@ -2550,6 +2550,7 @@ ${affectionDesc}
         if (this.onMessage) this.onMessage('stream-start', { requestId: reqId });
         try {
           result = await this.host.api.chatLLMStream(messages, this._llmOptions({
+            cibypAgentStep: true,
             tools: tools.length > 0 ? tools : undefined,
             requestId: reqId,
             sessionKey: this.sessionKey || null
@@ -2565,6 +2566,7 @@ ${affectionDesc}
           if (this.onMessage) this.onMessage('stream-end', { requestId: reqId, content: '', fallback: true });
           if (this.onMessage) this.onMessage('system', `流式请求失败，回退到普通模式：${streamErr.message || streamErr}`);
           result = await this.host.api.chatLLM(messages, this._llmOptions({
+            cibypAgentStep: true,
             tools: tools.length > 0 ? tools : undefined,
             requestId: reqId + '-retry',
             sessionKey: this.sessionKey || null
@@ -2592,6 +2594,7 @@ ${affectionDesc}
         // Non-streaming path (existing behavior).
         result = await this.host.api.chatLLM(messages, {
           ...this._llmOptions(),
+          cibypAgentStep: true,
           tools: tools.length > 0 ? tools : undefined,
           requestId: reqId,
           sessionKey: this.sessionKey || null
@@ -2614,7 +2617,6 @@ ${affectionDesc}
           result.status === 400 || result.status === 402 ||
           /tool_calls?|tool_call_id|insufficient tool messages|following tool_calls|400|402|invalid|bad request|不合法|messages.*context|reasoning_content|thinking mode|must be passed back/i.test(errText);
         // auth 类错误（401/403）属于配置问题，重试无意义，直接报错
-        const isAuthError = kind === 'auth';
         // provider 明确报上下文溢出：旁路容量元数据，直接做最大 head 缩减后重试
         const isOverflow = /context.{0,24}(length|window|overflow|exceed|too (long|large))|maximum context|too many tokens|input.{0,12}too long|prompt.{0,12}too long|400.{0,24}(context|tokens|length)/i.test(errText)
           || (result.status === 400 && /(context|tokens|length)/i.test(errText));
@@ -2628,7 +2630,7 @@ ${affectionDesc}
         }
 
         let retryCount = 0;
-        while (!result.ok && !isAuthError && retryCount < MAX_PROVIDER_RETRIES
+        while (!result.ok && !['auth', 'plugin-policy'].includes(result.kind) && retryCount < MAX_PROVIDER_RETRIES
                && this.running && !this.stopped && runId === this.runId) {
           retryCount++;
           let fixedNote = '';
@@ -2656,6 +2658,7 @@ ${affectionDesc}
           const retryTools = this.getRuntimeToolSchemas();
           try {
             result = await this.host.api.chatLLM(retryMessages, this._llmOptions({
+              cibypAgentStep: true,
               tools: retryTools.length > 0 ? retryTools : undefined,
               requestId: reqId + '-retry-' + retryCount,
               sessionKey: this.sessionKey || null
@@ -2727,6 +2730,7 @@ ${affectionDesc}
         });
       }
       this.contextManager.addAssistantMessage(assistantMsg.content, assistantToolCallsForCtx, assistantMsg.reasoning, assistantMsg);
+      if (this.onModelResponse) this.onModelResponse({message:{...assistantMsg,tool_calls:assistantToolCallsForCtx},usage:result.data.usage,model:result.data?._meta?.model});
 
       // 实时保存：AI 回复入上下文后立即持久化
       this.saveToHistory();
@@ -2744,6 +2748,7 @@ ${affectionDesc}
 
       // Handle tool calls
       if (assistantMsg.tool_calls && assistantMsg.tool_calls.length > 0) {
+        let pluginConcludesTurn = false;
         for (let i = 0; i < assistantMsg.tool_calls.length; i++) {
           if (this.stopped || runId !== this.runId) break;
 
@@ -2965,7 +2970,12 @@ ${affectionDesc}
             }
           }
 
-          const toolResult = await this.executeTool(toolName, args);
+          const toolResult = await this.executeTool(toolName, args, {callId:tc.id});
+          if (toolResult?.concludesTurn) pluginConcludesTurn = true;
+          for (const context of toolResult?.additionalContexts || []) {
+            const text = (context.content || []).filter(block => block.type === 'text').map(block => block.text).join('\n');
+            if (text) this.hotMessages.push({ content: text });
+          }
           if (this.stopped || runId !== this.runId) break;
 
           // 隐私信息保护：UI 展示副本过滤隐私信息（真实 toolResult 仍保留完整结构）
@@ -3033,6 +3043,7 @@ ${affectionDesc}
         this.saveToHistory();
 
         if (this.stopped || runId !== this.runId) break;
+        if (pluginConcludesTurn && !this.hotMessages.length) break;
         // Continue the loop to let the agent process tool results
         continue;
       }
@@ -3044,6 +3055,10 @@ ${affectionDesc}
       const fr = choice.finish_reason;
       const hasContent = typeof assistantMsg.content === 'string' && assistantMsg.content.length > 0;
       if (fr === 'stop' || fr === 'length' || fr === 'error' || (!fr && hasContent)) {
+        if (fr !== 'length' && fr !== 'error' && this.host.api.dsPluginTurnStopping) {
+          const continuation = await this.host.api.dsPluginTurnStopping(this.sessionKey);
+          for (const text of continuation.contexts || []) this.hotMessages.push(text);
+        }
         // 热对话修复：stop后检查是否有待处理的热消息，有则继续循环
         if (fr !== 'length' && fr !== 'error' && this.hotMessages.length > 0) {
           continue; // 回到循环顶部，热消息将在下一轮注入
@@ -3190,7 +3205,7 @@ ${affectionDesc}
     return { ...base, ...item };
   }
 
-  async executeTool(name, args) {
+  async executeTool(name, args, invocation = {}) {
     if (this.minimalMode) {
       try { return await this.executeMinimalTool(name, args); }
       catch (error) { return { ok: false, error: error.message }; }
@@ -3242,8 +3257,9 @@ ${affectionDesc}
       }
       // DeepSeek 插件导入工具：ds__<pluginId>__<tool> 路由到插件宿主执行
       if (typeof name === 'string' && name.startsWith('ds__') && typeof this.host.api.dsPluginToolCall === 'function') {
-        const [pluginId, toolName] = name.slice(4).split('__');
-        const result = await this.host.api.dsPluginToolCall(pluginId, toolName, args || {}, this._scriptCwd(), this._sandboxMode(), this.sessionKey || null);
+        const definition = DS_PLUGIN_TOOLS.find(tool => tool.name === name);
+        const {pluginId, dsToolName:toolName} = definition || {pluginId:null,dsToolName:name};
+        const result = await this.host.api.dsPluginToolCall(pluginId, toolName, args || {}, this._scriptCwd(), this._sandboxMode(), this.sessionKey || null, invocation.callId);
         if (result && typeof result === 'object' && result.ok !== undefined) return result;
         return { ok: true, result };
       }
@@ -5020,11 +5036,10 @@ ${tarotLine}
           const isFixableClient = kind === 'client' || kind === 'payment' ||
             result.status === 400 || result.status === 402 ||
             /tool_calls?|tool_call_id|insufficient tool messages|following tool_calls|400|402|invalid|bad request|不合法|messages.*context|context.*length|too long|maximum context|token limit|exceed|reasoning_content|thinking mode|must be passed back/i.test(errText);
-          const isAuthError = kind === 'auth';
           const SUB_MAX_RETRIES = 3;
 
           let subRetryCount = 0;
-          while (!result.ok && !isAuthError && subRetryCount < SUB_MAX_RETRIES
+          while (!result.ok && !['auth', 'plugin-policy'].includes(result.kind) && subRetryCount < SUB_MAX_RETRIES
                  && subAgent.running && !subAgent.stopped) {
             subRetryCount++;
             let fixedNote = '';

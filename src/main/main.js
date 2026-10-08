@@ -430,7 +430,7 @@ const pluginSkillsProvider = () => {
 const dsRequestPending = new Map();
 const ownerTransport = require('./services/backend-transport').createBackendTransport({ getRuntime: () => agentRuntime, publish: publishEvent, getSettings: () => settings });
 const dsTransportSend = (channel, payload) => {
-  ownerTransport.send(channel, payload).catch(error => console.warn('[plugin-transport]', error.message));
+  return ownerTransport.send(channel, payload);
 };
 const dsTransportRequest = (channel, payload, timeoutMs, signal) => {
   if (ownerTransport.handles(channel)) return ownerTransport.request(channel, payload, timeoutMs, signal);
@@ -461,6 +461,12 @@ const pluginManager = new PluginManager(dataDir, {
   getVmService: () => vmService,
   skills: pluginSkillsProvider,
   transport: { send: dsTransportSend, request: dsTransportRequest },
+  invoke: (channel, ...args) => {
+    const event = require('./core/ipc-dispatch').createLocalIpcEvent({ publishEvent });
+    return ipcMain.invokeLocal(channel, event, ...args);
+  },
+  subscribe: (channel, listener) => eventBus.subscribe(channel, listener),
+  cancelRequest: filter => abortRequests(filter),
   getSettings: async () => readSanitizedSettingsFile()
 }).init();
 // 自动化任务管理器（定时 / 系统通知 / HTTP 信号服务器 → 新 Chat 会话）
@@ -1962,16 +1968,12 @@ ipcMain.handle('plugins:setConfig', async (_, id, patch) => {
 });
 ipcMain.handle('ds:toolCall', async (_, pluginId, toolName, args, execCtx = {}) => {
   try {
-    if (vmLocationActive()) {
-      const record = pluginManager.plugins.find((plugin) => plugin.id === pluginId && plugin.enabled);
-      if (!record) return { ok: false, error: '插件未启用', location: 'vm' };
-      return await require('./vm/vm-tool-runtime').runGuestPlugin(vmService, record, toolName, args || {}, execCtx);
-    }
     return await pluginManager.callTool(pluginId, toolName, args, execCtx);
   } catch (e) {
     return { ok: false, error: e.message };
   }
 });
+ipcMain.handle('ds:turnStopping', (_, sessionKey) => pluginManager.turnStopping(sessionKey));
 ipcMain.handle('ds:listTools', () => ({
   ok: true,
   plugins: pluginManager.list().filter(p => p.enabled && p.toolCount > 0)
@@ -3320,6 +3322,7 @@ ipcMain.handle('subscription:usage', async (_, options) => {
   const result = await getSubscriptionUsage(options); return { ...result, indicator: require('../shared/usage-indicator').formatUsage(result, settings.language) };
 });
 const { fetchModelsDevData } = require('./ipc/llm')({
+  augmentRequest: (messages, options) => pluginManager.augmentRequest(messages, options),
   chatGPTAccounts,
   path,
   dataDir,
@@ -4458,6 +4461,8 @@ app.whenReady().then(async () => {
   agentRuntime = createAgentRuntime({ ipcMain, eventBus, getSettings: () => settings,
     interactionPolicy: process.env.CIBYP_AUTO_APPROVE === '1' ? INTERACTION_POLICY.AUTO_APPROVE : INTERACTION_POLICY.PROMPT });
   agentRuntime.onEvent(event => {
+    try { pluginManager.consumeRuntimeEvent(event); }
+    catch (error) { console.warn('[plugin-session-event]', error.message); }
     if (['session-created', 'session-closed', 'status', 'title', 'view-changed'].includes(event.type)) syncOwnerAgents().catch(error => console.warn('[plugin-agents]', error.message));
   });
   await syncOwnerAgents();

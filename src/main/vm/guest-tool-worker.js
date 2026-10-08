@@ -129,21 +129,35 @@ async function run(request) {
 }
 
 if (require.main === module) {
-  (async () => {
-    const request = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
-    let result;
-    try {
-      result = await run(request);
-    } catch (error) {
-      result = { ok: false, error: error.message };
-    }
-    fs.writeFileSync(process.argv[3], JSON.stringify({ ...result, location: 'vm' }), {
-      mode: 0o600,
+  if (process.argv[2] === '--plugin-daemon') {
+    const protocolOutput = {
+      write: process.stdout.write.bind(process.stdout),
+      on: process.stdout.on.bind(process.stdout),
+    };
+    process.stdout.write = process.stderr.write.bind(process.stderr);
+    require('../ds-compat/guest-daemon')
+      .serve(process.stdin, protocolOutput)
+      .catch((error) => {
+        console.error(error);
+        process.exitCode = 1;
+      });
+  } else {
+    (async () => {
+      const request = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+      let result;
+      try {
+        result = await run(request);
+      } catch (error) {
+        result = { ok: false, error: error.message };
+      }
+      fs.writeFileSync(process.argv[3], JSON.stringify({ ...result, location: 'vm' }), {
+        mode: 0o600,
+      });
+    })().catch((error) => {
+      console.error(error.message);
+      process.exitCode = 1;
     });
-  })().catch((error) => {
-    console.error(error.message);
-    process.exitCode = 1;
-  });
+  }
 }
 module.exports = {
   run,
@@ -154,4 +168,5 @@ module.exports = {
   vmShimValues: require('@deepseek-ai/dsh-util-values'),
   vmShimBrand: require('@deepseek-ai/dsh-brand'),
   vmShimScope: require('@deepseek-ai/dsh-scope'),
+  vmSdk: require('../ds-compat/sdk-catalog'),
 };

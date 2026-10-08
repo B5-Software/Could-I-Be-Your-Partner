@@ -26,6 +26,7 @@ module.exports = function registerLlmIpc({
   consumeSSEStream,
   ocHeaders,
   chatGPTAccounts,
+  augmentRequest = async (messages, options) => ({ messages, options }),
 }) {
   const formatDetector = new (require('../services/api-format').ApiFormatDetector)({
     providers: LLMProviders,
@@ -492,6 +493,7 @@ module.exports = function registerLlmIpc({
 
   ipcMain.handle('llm:chat', async (event, messages, options = {}) => {
     try {
+      ({ messages, options } = await augmentRequest(messages, options));
       if (getSettings().llm.provider === 'auto' || options.provider === 'auto') {
         const gate = budgetFailure();
         if (gate) return gate;
@@ -540,6 +542,7 @@ module.exports = function registerLlmIpc({
       });
 
       const retryOpts = {
+        signal: options.signal,
         maxRetries: options.maxRetries ?? llm.maxRetries ?? undefined,
         timeoutMs: options.timeoutMs ?? llm.timeoutMs ?? undefined,
         requestId: options.requestId || null,
@@ -653,13 +656,18 @@ module.exports = function registerLlmIpc({
       };
       return { ok: true, data };
     } catch (e) {
-      return { ok: false, error: e.message };
+      return {
+        ok: false,
+        error: e.message,
+        ...(e.code?.startsWith('PLUGIN_') ? { kind: 'plugin-policy', code: e.code } : {}),
+      };
     }
   });
 
   // ---- IPC: LLM Streaming (with retry/backoff/timeout) ----
   ipcMain.handle('llm:chatStream', async (_, messages, options = {}) => {
     try {
+      ({ messages, options } = await augmentRequest(messages, options));
       if (getSettings().llm.provider === 'auto' || options.provider === 'auto') {
         const gate = budgetFailure();
         if (gate) return gate;
@@ -821,7 +829,11 @@ module.exports = function registerLlmIpc({
         },
       };
     } catch (e) {
-      return { ok: false, error: e.message };
+      return {
+        ok: false,
+        error: e.message,
+        ...(e.code?.startsWith('PLUGIN_') ? { kind: 'plugin-policy', code: e.code } : {}),
+      };
     }
   });
 

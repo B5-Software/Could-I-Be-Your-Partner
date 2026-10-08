@@ -18,8 +18,15 @@ while (true) {
   const candidate = path.join(dir, 'node_modules', '@deepseek-ai', 'cordis');
   if (fs.existsSync(candidate)) {
     let real = candidate;
-    try { real = fs.realpathSync(candidate); } catch { /* keep */ }
-    if (real !== selfDir) { realEntry = candidate; break; }
+    try {
+      real = fs.realpathSync(candidate);
+    } catch {
+      /* keep */
+    }
+    if (real !== selfDir) {
+      realEntry = candidate;
+      break;
+    }
   }
   const parent = path.dirname(dir);
   if (parent === dir) break;

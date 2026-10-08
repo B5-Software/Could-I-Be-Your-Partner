@@ -6,8 +6,8 @@
  *
  * - 插件跑在真实的 @deepseek-ai/cordis Context 上（inject/effect/事件/HMR 语义原生可用）。
  * - `ctx.tools` 由 CIBYP 自己的 CibypToolsService 提供：register(defineTool(...)) 被捕获。
- * - 其余 seams（skills/settings/sandbox/llm/fs/shell/jobs/subagent）注册最小桥接，
- *   插件 inject 解析成功；未实现的能力在调用时给出明确错误（部分兼容）。
+ * - SDK capability contracts are translated to CIBYP's services. CIBYP owns
+ *   Agent driving, credentials, settings, history and frontend lifecycles.
  * - 插件 apply 异常被捕获记录为 compatIssues，不拖垮宿主。
  */
 
@@ -17,16 +17,10 @@ const { Context, Service, symbols } = require('@deepseek-ai/cordis');
 const { pathToFileURL } = require('url');
 const nodePath = require('path');
 const fsp = require('fs/promises');
-const { spawn } = require('child_process');
-const sandboxRunner = require('../sandbox-runner');
-const { validateArgs, validateJsonSchemaValue } = require('./shims/dsh-tools');
-const {
-  CibypAgentsService,
-  CibypSessionsService,
-  CibypLlmService,
-  CibypSandboxPolicyService,
-  CibypApprovalService
-} = require('./services');
+const { execution } = require('./execution-context');
+const { validateArgs } = require('./shims/dsh-tools');
+const { ToolRuntime } = require('@deepseek-ai/dsh-tools');
+const { scopeOf } = require('@deepseek-ai/dsh-scope');
 
 /** Schemastery Config（模块级导出）校验：Schema 可调用，失败抛 ValidationError。 */
 async function validatePluginConfig(schema, config) {
@@ -37,61 +31,67 @@ async function validatePluginConfig(schema, config) {
     if (res && Array.isArray(res.issues) && res.issues.length) {
       throw new Error(res.issues.map((i) => i.message || String(i)).join('; '));
     }
-    return (res && res.value !== undefined) ? res.value : (config || {});
+    return res && res.value !== undefined ? res.value : config || {};
   }
   return config || {};
 }
 
 // 当前正在挂载的插件身份（注册期同步标记，供 CibypToolsService.register 归属工具）
 const hostContext = { pluginId: null, pluginName: null };
-const PLUGIN_OWNER = Symbol('cibyp.plugin.owner');
+const PLUGIN_OWNER = Symbol.for('cibyp.plugin.owner');
 
-class CibypToolsService extends Service {
+class CibypToolsService extends ToolRuntime {
   constructor(ctx) {
-    super(ctx, 'tools');
-    this.tools = new Map(); // name → definition
+    super(ctx, { mode: 'native' });
+    this.tools = new Map();
+    this.registrations = new Set();
+    this.registrationDisposers = new Map();
     this.guards = new Map();
   }
-
-  /** DSH 工具面板/审计插件读取工具面的形状（dsh-context-doctor 等会调用）。 */
-  schemas() {
-    const out = [];
-    for (const def of this.tools.values()) {
-      out.push({
-        name: def.name,
-        description: def.description || '',
-        parameters: def.parameters || { type: 'object', properties: {} }
-      });
-    }
-    return out;
-  }
-
   register(definition) {
-    if (!definition || typeof definition.name !== 'string') {
-      throw new Error('tool definition requires a name');
-    }
-    if (this.tools.has(definition.name)) {
-      throw new Error(`duplicate tool registration: ${definition.name}`);
-    }
     const owner = this.ctx[PLUGIN_OWNER] || hostContext;
-    const registered = { ...definition, pluginId: owner.pluginId || null, pluginName: owner.pluginName || null };
-    return this.ctx.effect(() => {
-      this.tools.set(registered.name, registered);
-      this.ctx.emit('tools/change');
+    const registered = {
+      ...definition,
+      pluginId: owner.pluginId || null,
+      pluginName: owner.pluginName || null,
+      execute: (args, call) =>
+        definition.execute(args, {
+          ...call,
+          cwd: execution.getStore()?.cwd,
+          sessionKey: execution.getStore()?.agent?.id,
+        }),
+      output: {
+        schema: {},
+        render: (_, value) => [
+          { type: 'text', text: typeof value === 'string' ? value : safeStringify(value) },
+        ],
+        ...definition.output,
+      },
+    };
+    const dispose = super.register(registered);
+    const scope = scopeOf(this.ctx);
+    const remove = this.ctx.effect(() => {
+      this.registrations.add(registered);
+      if (!scope) this.tools.set(registered.name, registered);
       return () => {
+        this.registrations.delete(registered);
+        this.registrationDisposers.delete(registered);
         if (this.tools.get(registered.name) === registered) this.tools.delete(registered.name);
-        this.ctx.emit('tools/change');
       };
     });
+    const cleanup = () => {
+      dispose();
+      remove();
+    };
+    this.registrationDisposers.set(registered, cleanup);
+    return cleanup;
   }
-
+  clearPlugin(id) {
+    for (const [def, dispose] of [...this.registrationDisposers])
+      if (def.pluginId === id) dispose();
+  }
   registerGuard(guard) {
-    if (typeof guard !== 'function') throw new TypeError('tools.registerGuard requires a function');
-    const owner = this.ctx[PLUGIN_OWNER] || hostContext;
-    return this.ctx.effect(() => {
-      this.guards.set(guard, owner.pluginId);
-      return () => this.guards.delete(guard);
-    });
+    return this.guard(guard);
   }
 }
 
@@ -111,7 +111,13 @@ class PluginHost {
   _serialize(pluginId, run) {
     const prev = this._opLock.get(pluginId) || Promise.resolve();
     const next = prev.then(run, run);
-    this._opLock.set(pluginId, next.then(() => {}, () => {}));
+    this._opLock.set(
+      pluginId,
+      next.then(
+        () => {},
+        () => {},
+      ),
+    );
     return next;
   }
 
@@ -127,258 +133,50 @@ class PluginHost {
   }
 
   async _init() {
-    await this.ctx.plugin(CibypToolsService);
-    this.toolsService = this.ctx.tools;
-    // 桥接 seams：skills / settings / sandbox 提供可用实现，其余 stub
-    // skills 桥：由宿主注入真实技能清单 provider（惰性求值），
-    // 未注入时返回空列表，保证插件可加载。
-    const skillsProvider = this.options.skills || null;
-    await this.ctx.plugin(class SkillsBridge extends Service {
-      constructor(c) {
-        super(c, 'skills');
-        this.provider = skillsProvider;
-        this.list = async (opts = {}) => {
-          if (!this.provider) return [];
-          try {
-            const s = this.provider();
-            return await s.list(opts || {});
-          } catch { return []; }
-        };
-        this.get = async (name, opts = {}) => {
-          if (!this.provider) throw new Error('skills 未在 CIBYP 桥接');
-          return await this.provider().get(name, opts || {});
-        };
-        this.register = () => () => {};
-      }
-    });
-    // 只读 fs seam：resolve/stat/readText/listDir/processPath（dsh-context-doctor、
-    // dsh-test-runner 等插件运行时依赖）。插件本就在主进程内运行，可自行 require('fs')，
-    // 这里提供 DSH 形状的便捷 API，行为等价、不额外扩大权限面。
-    await this.ctx.plugin(class FsBridge extends Service {
-      constructor(c) {
-        super(c, 'fs');
-      }
-      assertNotAborted(signal) {
-        if (signal && signal.aborted) throw new Error('aborted');
-      }
-      async resolve(target, opts = {}) {
-        const p = String(target || '.');
-        return nodePath.isAbsolute(p)
-          ? nodePath.normalize(p)
-          : nodePath.resolve(opts && opts.cwd ? opts.cwd : process.cwd(), p);
-      }
-      async stat(target, signal) {
-        this.assertNotAborted(signal);
-        const st = await fsp.stat(target);
-        return {
-          size: st.size,
-          isFile: st.isFile(),
-          isDirectory: st.isDirectory(),
-          mtimeMs: st.mtimeMs
-        };
-      }
-      async readText(target, signal) {
-        this.assertNotAborted(signal);
-        return await fsp.readFile(target, 'utf8');
-      }
-      async listDir(target, signal) {
-        this.assertNotAborted(signal);
-        const entries = await fsp.readdir(target, { withFileTypes: true });
-        return entries.map((e) => ({
-          name: e.name,
-          type: e.isDirectory() ? 'directory' : e.isFile() ? 'file' : 'other'
-        }));
-      }
-      processPath(target) {
-        const rel = nodePath.relative(process.cwd(), target);
-        return rel && !rel.startsWith('..') && !nodePath.isAbsolute(rel) ? rel : target;
-      }
-    });
-    // 一次性 shell seam：resolve(request) → run(spec)，供 dsh-test-runner 等
-    // 结构化命令插件使用（带超时/取消/输出上限）。
-    await this.ctx.plugin(class ShellBridge extends Service {
-      constructor(c) {
-        super(c, 'shell');
-      }
-      resolve(request) {
-        const req = request || {};
-        return {
-          command: String(req.command || ''),
-          cwd: req.workdir || process.cwd(),
-          timeoutMs: Math.max(1000, Math.min(Number(req.timeoutMs) || 120000, 600000)),
-          stdoutMaxBytes: Math.max(1024, Number(req.stdoutMaxBytes) || 1048576),
-          signal: req.signal || null
-        };
-      }
-      async run(spec) {
-        const out = {
-          exitCode: null,
-          stdout: { text: '' },
-          stderr: { text: '' },
-          timedOut: false,
-          aborted: false
-        };
-        const command = String(spec && spec.command ? spec.command : '');
-        if (!command) return out;
-        const cwd = (spec && spec.cwd) || process.cwd();
-        const timeoutMs = Math.max(1000, Math.min(Number(spec && spec.timeoutMs) || 120000, 600000));
-        const maxBytes = Math.max(1024, Number(spec && spec.stdoutMaxBytes) || 1048576);
-        const signal = spec && spec.signal;
-        const isWin = process.platform === 'win32';
-        const child = spawn(isWin ? (process.env.ComSpec || 'cmd.exe') : '/bin/sh', isWin ? ['/d', '/s', '/c', command] : ['-c', command], {
-          cwd,
-          env: process.env,
-          stdio: ['ignore', 'pipe', 'pipe']
-        });
-        let stdout = '';
-        let stderr = '';
-        let killed = false;
-        const kill = () => {
-          if (killed) return;
-          killed = true;
-          try { child.kill('SIGKILL'); } catch { /* ignore */ }
-        };
-        const onAbort = () => {
-          out.aborted = true;
-          kill();
-        };
-        if (signal) {
-          if (signal.aborted) onAbort();
-          else signal.addEventListener('abort', onAbort, { once: true });
-        }
-        const timer = setTimeout(() => {
-          out.timedOut = true;
-          kill();
-        }, timeoutMs);
-        try {
-          await new Promise((resolvePromise) => {
-            let settled = false;
-            const finish = () => {
-              if (settled) return;
-              settled = true;
-              clearTimeout(timer);
-              if (signal) signal.removeEventListener('abort', onAbort);
-              resolvePromise();
-            };
-            child.stdout.on('data', (d) => {
-              if (stdout.length < maxBytes) stdout += d.toString('utf8');
-            });
-            child.stderr.on('data', (d) => {
-              if (stderr.length < maxBytes) stderr += d.toString('utf8');
-            });
-            child.on('error', (e) => {
-              if (stderr.length < maxBytes) stderr += String(e.message || e);
-              out.exitCode = 1;
-              finish();
-            });
-            child.on('close', (code) => {
-              out.exitCode = code;
-              finish();
-            });
-          });
-        } catch (e) {
-          out.exitCode = 1;
-          if (!out.stderr.text) out.stderr.text = String(e.message || e);
-        }
-        out.stdout.text = stdout.slice(0, maxBytes);
-        out.stderr.text = stderr.slice(0, maxBytes);
-        return out;
-      }
-    });
-    await this.ctx.plugin(class SettingsBridge extends Service {
-      constructor(c) {
-        super(c, 'settings');
-        this.get = async () => ({});
-        this.update = async () => { throw new Error('settings 能力暂未在 CIBYP 桥接'); };
-      }
-    });
-    // systemPrompt：收集插件追加的提示词节（尚未接入渲染层提示词装配，
-    // 提供该 seam 使 dsh-monitor 等插件能正常加载；工具 schema 已含使用说明）。
-    await this.ctx.plugin(class SystemPromptBridge extends Service {
-      constructor(c) {
-        super(c, 'systemPrompt');
-        this.sections = [];
-      }
-      section(entry) {
-        if (entry && typeof entry === 'object') this.sections.push(entry);
-      }
-    });
-    // agents / sessions / llm / sandboxPolicy / approval：
-    // DeepSeek 服务 API → CIBYP 功能翻译层（见 ./services.js）。
-    const serviceConfig = {
-      transport: this.options.transport || null,
-      getSettings: this.options.getSettings || (async () => ({}))
-    };
-    await this.ctx.plugin(class AgentsBridge extends CibypAgentsService {
-      constructor(c) { super(c, serviceConfig); }
-    });
-    this.agentsService = this.ctx.agents;
-    const agentsServiceRef = this.agentsService;
-    await this.ctx.plugin(class SessionsBridge extends CibypSessionsService {
-      constructor(c) { super(c, { agents: agentsServiceRef }); }
-    });
-    await this.ctx.plugin(class LlmBridge extends CibypLlmService {
-      constructor(c) { super(c, serviceConfig); }
-    });
-    await this.ctx.plugin(class SandboxPolicyBridge extends CibypSandboxPolicyService {
-      constructor(c) { super(c, serviceConfig); }
-    });
-    await this.ctx.plugin(class ApprovalBridge extends CibypApprovalService {
-      constructor(c) { super(c, serviceConfig); }
-    });
-    // webServer：插件自带 HTTP 面板暂不接入 CIBYP WebUI。
-    await this.ctx.plugin(class WebServerBridge extends Service {
-      constructor(c) {
-        super(c, 'webServer');
-        this.register = () => () => {};
-      }
-    });
-    await this.ctx.plugin(class SandboxBridge extends Service {
-      constructor(c) {
-        super(c, 'sandbox');
-        this.confine = (argv, policy) => sandboxRunner.confine(argv, policy);
-      }
-    });
-    for (const name of ['subprocess', 'jobs', 'subagent', 'session', 'storage', 'compaction']) {
-      const serviceKey = name;
-      await this.ctx.plugin(class Bridge extends Service {
-        constructor(c) {
-          super(c, serviceKey);
-        }
-      });
-    }
+    await require('./service-setup').setupServices(this, CibypToolsService);
     this.initialized = true;
   }
 
   async _importEntry(entryPath) {
     const resolved = nodePath.resolve(entryPath);
+    // ESM 模块缓存按 URL 缓存：插件更新后同一路径会命中旧模块。
+    // 追加文件 mtime 作为 query，强制重新加载最新代码。
+    let mtime = Date.now();
     try {
-      // ESM 模块缓存按 URL 缓存：插件更新后同一路径会命中旧模块。
-      // 追加文件 mtime 作为 query，强制重新加载最新代码。
-      let mtime = Date.now();
-      try { mtime = (await fsp.stat(resolved)).mtimeMs; } catch { /* ignore */ }
-      return await import(`${pathToFileURL(resolved).href}?t=${Math.floor(mtime)}`);
-    } catch (e) {
-      // 回退 CJS require（部分插件发布为 commonjs）
-      try { delete require.cache[require.resolve(resolved)]; } catch { /* ignore */ }
-      try { return require(resolved); }
-      catch { throw e; }
+      mtime = (await fsp.stat(resolved)).mtimeMs;
+    } catch {
+      /* ignore */
     }
+    // Node imports CommonJS directly. Never retry a failed import via require:
+    // doing so would execute a throwing module's startup side effects twice.
+    try {
+      delete require.cache[require.resolve(resolved)];
+    } catch {
+      /* ignore */
+    }
+    return import(`${pathToFileURL(resolved).href}?t=${Math.floor(mtime)}`);
   }
 
   _toPlugin(mod, pluginId) {
-    const isServiceClass = (fn) => fn && typeof fn === 'function' && fn.prototype instanceof Service;
+    const isServiceClass = (fn) =>
+      fn && typeof fn === 'function' && fn.prototype instanceof Service;
     const attachMeta = (fn, name, inject) => {
       try {
         Object.defineProperty(fn, 'name', { value: name || pluginId, configurable: true });
         if (inject) Object.defineProperty(fn, 'inject', { value: inject, configurable: true });
-      } catch { /* 元数据附加失败不影响加载 */ }
+      } catch {
+        /* 元数据附加失败不影响加载 */
+      }
       return fn;
     };
     if (mod && typeof mod === 'object') {
       const def = mod.default;
       if (typeof def === 'function' && !isServiceClass(def)) {
-        return attachMeta((ctx, config) => def(ctx, config), (mod && typeof mod.name === 'string' ? mod.name : def.name), mod.inject);
+        return attachMeta(
+          (ctx, config) => def(ctx, config),
+          mod && typeof mod.name === 'string' ? mod.name : def.name,
+          mod.inject,
+        );
       }
       if (def && typeof def === 'object' && typeof def.apply === 'function') return def;
       if (isServiceClass(def)) return def;
@@ -408,6 +206,11 @@ class PluginHost {
       throw new Error(`plugin "${pluginId}" is already loaded`);
     }
     this.issues.set(pluginId, []);
+    const refusal = await require('./compatibility-policy').entryRefusal(entryPath, meta);
+    if (refusal) {
+      this.issues.get(pluginId).push(refusal);
+      return { tools: [], issues: [refusal] };
+    }
     let mod;
     try {
       mod = await this._importEntry(entryPath);
@@ -416,20 +219,36 @@ class PluginHost {
       return { tools: [], issues: this.issues.get(pluginId).slice() };
     }
     let plugin;
-    try { plugin = this._toPlugin(mod, pluginId); }
-    catch (error) { this.issues.get(pluginId).push(error.message); return { tools: [], issues: this.issues.get(pluginId).slice() }; }
+    try {
+      plugin = this._toPlugin(mod, pluginId);
+    } catch (error) {
+      this.issues.get(pluginId).push(error.message);
+      return { tools: [], issues: this.issues.get(pluginId).slice() };
+    }
     // Context ownership survives delayed registration and dependency activation.
     // Do not mutate the plugin's definition or rely on a global async identity.
     const identity = { pluginId, pluginName: meta.name || pluginId };
     const original = plugin;
     if (typeof original === 'function' && original.prototype instanceof Service) {
       plugin = class extends original {
-        constructor(ctx, config) { ctx[PLUGIN_OWNER] = identity; super(ctx, config); }
+        constructor(ctx, config) {
+          ctx[PLUGIN_OWNER] = identity;
+          super(ctx, config);
+        }
       };
     } else if (typeof original === 'function') {
-      plugin = (ctx, config) => { ctx[PLUGIN_OWNER] = identity; return original(ctx, config); };
+      plugin = (ctx, config) => {
+        ctx[PLUGIN_OWNER] = identity;
+        return original(ctx, config);
+      };
     } else {
-      plugin = { ...original, apply(ctx, config) { ctx[PLUGIN_OWNER] = identity; return original.apply(ctx, config); } };
+      plugin = {
+        ...original,
+        apply(ctx, config) {
+          ctx[PLUGIN_OWNER] = identity;
+          return original.apply(ctx, config);
+        },
+      };
     }
     const declaredInject = original.inject;
     if (Array.isArray(declaredInject)) plugin.inject = declaredInject;
@@ -444,9 +263,23 @@ class PluginHost {
       }
     } else {
       // Legacy plugins omitted inject and relied on direct service access.
-      plugin.inject = ['tools', 'skills', 'fs', 'shell', 'settings', 'agents', 'sessions',
-        'llm', 'sandboxPolicy', 'approval', 'sandbox', 'webServer', 'jobs', 'storage', 'compaction']
-        .filter(name => this.ctx.reflect._getImpl(name, true));
+      plugin.inject = [
+        'tools',
+        'skills',
+        'fs',
+        'shell',
+        'settings',
+        'agents',
+        'sessions',
+        'llm',
+        'sandboxPolicy',
+        'approval',
+        'sandbox',
+        'webServer',
+        'jobs',
+        'storage',
+        'compaction',
+      ].filter((name) => this.ctx.reflect._getImpl(name, true));
     }
     if (original.Config) plugin.Config = original.Config;
     // 模块级 Config（Schemastery）：真实 DSH 宿主在 apply 前完成校验并合并默认值，
@@ -460,9 +293,9 @@ class PluginHost {
         return { tools: [], issues: this.issues.get(pluginId).slice() };
       }
     }
+    this.ctx.settings.registerPlugin(pluginId, mod.Config || original.Config, config);
     hostContext.pluginId = pluginId;
     hostContext.pluginName = meta.name || pluginId;
-    const before = new Set(this.toolsService.tools.keys());
     let fiber = null;
     try {
       // 预清理：移除该插件历史纤维（disposed/error 态）残留的服务注册。
@@ -481,7 +314,9 @@ class PluginHost {
             }
           }
         }
-      } catch { /* ignore */ }
+      } catch {
+        /* ignore */
+      }
       // apply 挂起保护：交互式 TUI 类插件（如 dsh-cc-tui）可能永不返回，
       // 超时后强制卸载纤维，避免阻塞启动/启用流程
       const applyTimeout = meta.applyTimeoutMs || this.options.applyTimeoutMs || 30000;
@@ -489,9 +324,17 @@ class PluginHost {
       try {
         fiber = await Promise.race([
           this.ctx.plugin(plugin, config),
-          new Promise((_, reject) => { applyTimer = setTimeout(() => reject(new Error('apply 挂起超时（可能为交互式 TUI 插件）')), applyTimeout); applyTimer.unref(); })
+          new Promise((_, reject) => {
+            applyTimer = setTimeout(
+              () => reject(new Error('apply 挂起超时（可能为交互式 TUI 插件）')),
+              applyTimeout,
+            );
+            applyTimer.unref();
+          }),
         ]);
-      } finally { clearTimeout(applyTimer); }
+      } finally {
+        clearTimeout(applyTimer);
+      }
       this.fibers.set(pluginId, fiber);
     } catch (e) {
       // 强制卸载可能已注册的纤维：挂起的 apply 不能被 await，否则会卡死宿主
@@ -504,14 +347,15 @@ class PluginHost {
             if (f && typeof f.dispose === 'function' && !candidates.includes(f)) candidates.push(f);
           }
         }
-      } catch { /* ignore */ }
+      } catch {
+        /* ignore */
+      }
       for (const f of candidates) {
         try {
-          await Promise.race([
-            f.dispose(),
-            new Promise((r) => setTimeout(r, 1200).unref())
-          ]);
-        } catch { /* ignore */ }
+          await Promise.race([f.dispose(), new Promise((r) => setTimeout(r, 1200).unref())]);
+        } catch {
+          /* ignore */
+        }
         // 挂起的 apply 会让 fiber.dispose() 永久等待 teardown，
         // 这里直接清空该纤维注册过的服务，避免下一次加载报
         // "service ... has been registered"。
@@ -522,9 +366,12 @@ class PluginHost {
             const key = this.ctx.root[symbols.isolate] && this.ctx.root[symbols.isolate][name];
             if (key) delete this.ctx.reflect.store[key];
           }
-        } catch { /* ignore */ }
+        } catch {
+          /* ignore */
+        }
       }
       // 失败后彻底移除该插件可能残留的工具注册
+      this.toolsService.clearPlugin(pluginId);
       for (const [name, def] of [...this.toolsService.tools.entries()]) {
         if (def.pluginId === pluginId) this.toolsService.tools.delete(name);
       }
@@ -539,179 +386,207 @@ class PluginHost {
     // 注入依赖缺口诊断：Cordis 对缺失服务不抛错，而是让插件纤维永远休眠
     // （表现为“零工具、零报错”）。这里把缺口显式记录为兼容问题。
     const inject = plugin.inject;
-    const injectNames = Array.isArray(inject) ? inject : (inject && typeof inject === 'object' ? Object.keys(inject) : []);
+    const injectNames = Array.isArray(inject)
+      ? inject
+      : inject && typeof inject === 'object'
+        ? Object.keys(inject)
+        : [];
     const missing = injectNames.filter((name) => !this.ctx.reflect._getImpl(name, true));
     if (missing.length) {
-      this.issues.get(pluginId).push(`缺少宿主服务注入: ${missing.join(', ')}（插件保持休眠，未注册工具）`);
+      this.issues
+        .get(pluginId)
+        .push(`缺少宿主服务注入: ${missing.join(', ')}（插件保持休眠，未注册工具）`);
     }
-    const tools = [];
-    for (const [name, def] of this.toolsService.tools.entries()) {
-      if (before.has(name) || def.pluginId !== pluginId) continue;
-      tools.push({
-        name,
-        description: def.description,
-        schema: def.parameters || { type: 'object', properties: {} },
-        compatTier: 'native'
-      });
-    }
+    const tools = this.toolsForPlugin(pluginId);
     return { tools, issues: this.issues.get(pluginId).slice() };
   }
 
   unloadPlugin(pluginId) {
     return this._serialize(pluginId, async () => {
-      for (const jobs of this._activeTools.values()) for (const job of jobs) if (job.pluginId === pluginId) job.controller.abort(new Error('Plugin unloaded'));
+      for (const jobs of this._activeTools.values())
+        for (const job of jobs)
+          if (job.pluginId === pluginId) job.controller.abort(new Error('Plugin unloaded'));
       const fiber = this.fibers.get(pluginId);
       if (fiber) {
-        await Promise.race([
-          fiber.dispose(),
-          new Promise((r) => setTimeout(r, 1500).unref())
-        ]);
+        await Promise.race([fiber.dispose(), new Promise((r) => setTimeout(r, 1500).unref())]);
         this.fibers.delete(pluginId);
       }
       // 清除该插件注册的工具：更新/重装后旧工具定义不得残留在工具注册表
       if (this.toolsService) {
+        this.toolsService.clearPlugin(pluginId);
         for (const [name, def] of [...this.toolsService.tools.entries()]) {
           if (def.pluginId === pluginId) this.toolsService.tools.delete(name);
         }
-        for (const [guard, owner] of this.toolsService.guards) if (owner === pluginId) this.toolsService.guards.delete(guard);
+        for (const [guard, owner] of this.toolsService.guards)
+          if (owner === pluginId) this.toolsService.guards.delete(guard);
       }
       return true;
     });
   }
 
+  toolsForPlugin(pluginId) {
+    return [...this.toolsService.registrations]
+      .filter((def) => def.pluginId === pluginId)
+      .map((def) => ({
+        name: def.name,
+        description: def.description,
+        schema: def.parameters,
+        compatTier: 'native',
+      }));
+  }
+
+  surfaceTool(wire, sessionKey) {
+    const agent = this.agentsService.get(sessionKey);
+    for (const def of this.toolsService.registrations) {
+      if (
+        `ds__${def.pluginId}__${def.name}` === wire &&
+        this.toolsService.get(def.name, agent)?.pluginId === def.pluginId
+      )
+        return { pluginId: def.pluginId, name: def.name };
+    }
+  }
+
+  callSurfaceTool(wire, args, context) {
+    const tool = this.surfaceTool(wire, context?.sessionKey);
+    return tool
+      ? this.callTool(tool.pluginId, tool.name, args, context)
+      : { ok: false, error: 'Plugin tool unavailable: ' + wire };
+  }
+
   async dispose() {
-    for (const jobs of this._activeTools.values()) for (const job of jobs) job.controller.abort(new Error('Plugin host disposed'));
+    for (const jobs of this._activeTools.values())
+      for (const job of jobs) job.controller.abort(new Error('Plugin host disposed'));
     for (const fiber of this.fibers.values()) {
       try {
-        await Promise.race([
-          fiber.dispose(),
-          new Promise((r) => setTimeout(r, 1500).unref())
-        ]);
-      } catch { /* ignore */ }
+        await Promise.race([fiber.dispose(), new Promise((r) => setTimeout(r, 1500).unref())]);
+      } catch {
+        /* ignore */
+      }
     }
     this.fibers.clear();
     try {
       await Promise.race([
         this.ctx.fiber.dispose(),
-        new Promise((r) => setTimeout(r, 1500).unref())
+        new Promise((r) => setTimeout(r, 1500).unref()),
       ]);
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
   }
 
   /**
    * 执行插件工具（CIBYP executeTool 的 ds__ 路由落点）。
    */
   async callTool(pluginId, toolName, args, execCtx = {}) {
-    const def = this.toolsService?.tools.get(toolName);
-    if (!def || def.pluginId !== pluginId) return { ok: false, error: 'Plugin tool unavailable: ' + toolName };
-    const key = pluginId + ':' + toolName;
+    const sessionKey = execCtx.sessionKey || execCtx.sessionId;
+    const agent = sessionKey ? this.agentsService.get(sessionKey) : undefined;
+    const def = this.toolsService?.get(toolName, agent);
+    if (!def || def.pluginId !== pluginId)
+      return { ok: false, error: 'Plugin tool unavailable: ' + toolName };
     const controller = new AbortController();
-    const signal = execCtx.signal ? AbortSignal.any([controller.signal, execCtx.signal]) : controller.signal;
+    const signal = execCtx.signal
+      ? AbortSignal.any([controller.signal, execCtx.signal])
+      : controller.signal;
+    const key = pluginId + ':' + toolName;
     const timeoutMs = Math.max(1, Math.min(def.timeoutMs || 120000, 600000));
-    const timer = setTimeout(() => controller.abort(Object.assign(new Error('Plugin tool timed out'), { code: 'TIMEOUT' })), timeoutMs);
-    const sessionKey = execCtx.sessionKey || execCtx.sessionId || null;
-    const liveAgent = this.agentsService && sessionKey && this.agentsService.has(sessionKey) ? this.agentsService.get(sessionKey) : null;
-    const exec = { signal };
-    const identity = {
-      name: toolName, arguments: args ?? {}, token: Symbol(key),
-      callId: execCtx.callId || key + ':' + Math.random().toString(36).slice(2),
-      sessionId: sessionKey, cwd: execCtx.cwd || null,
-      sandboxMode: execCtx.sandboxMode || 'danger-full-access',
-      agent: liveAgent || { inject: async () => { throw new Error('Agent session is not synchronized'); } },
-    };
-    for (const [name, value] of Object.entries(identity)) Object.defineProperty(exec, name, { value, enumerable: true });
-    const failure = (error, code = error?.code || 'TOOL_ERROR') => ({
-      isError: true, content: [{ type: 'text', text: error?.message || String(error) }],
-      error: { code, message: error?.message || String(error) },
+    const timer = setTimeout(
+      () =>
+        controller.abort(Object.assign(new Error('Plugin tool timed out'), { code: 'TIMEOUT' })),
+      timeoutMs,
+    );
+    const callId = execCtx.callId || key + ':' + Math.random().toString(36).slice(2);
+    const failure = (error) => ({
+      isError: true,
+      content: [{ type: 'text', text: error?.message || String(error) }],
+      error: { code: error?.code || 'TOOL_ERROR', message: error?.message || String(error) },
     });
-    const render = async (value) => {
-      if (def.output?.schema) {
-        const errors = validateJsonSchemaValue(def.output.schema, value, 'output');
-        if (errors.length) throw Object.assign(new Error(errors.join('; ')), { code: 'INVALID_OUTPUT' });
-      }
-      const content = def.output?.render ? await def.output.render(exec.arguments, value)
-        : [{ type: 'text', text: typeof value === 'string' ? value : safeStringify(value) }];
-      if (!Array.isArray(content)) throw new TypeError('Tool output.render must return content blocks');
-      return content;
-    };
     let outcome;
     try {
       signal.throwIfAborted();
-      validateArgs(def, exec.arguments);
-      if (this._activeTools.has(key) && !def.isConcurrencySafe?.(exec.arguments))
-        throw Object.assign(new Error('The previous invocation is still running'), { code: 'TOOL_BUSY' });
-      const task = (async () => {
-        const decision = await this.ctx.waterfall('tools/pre-execute', exec, async () => ({ kind: 'allow' }));
-        if (!decision || !['allow', 'deny', 'cancel', 'ask'].includes(decision.kind)) throw new Error('Invalid tools/pre-execute decision');
-        if (decision.kind === 'deny') return failure(new Error(decision.reason || 'Tool denied'), 'TOOL_DENIED');
-        if (decision.kind === 'cancel') return failure(new Error('Tool cancelled'), 'CANCELLED');
-        if (decision.kind === 'ask') {
-          const answer = await this.ctx.approval.request({ ...decision, agent: exec.agent, toolName, callId: exec.callId, signal });
-          if (answer !== true && answer?.approved !== true) return failure(new Error('Tool approval declined'), 'TOOL_DENIED');
-        }
-        for (const guard of this.toolsService.guards.keys()) {
-          const reason = guard(exec);
-          if (reason) return failure(new Error(String(reason)), 'TOOL_DENIED');
-        }
-        signal.throwIfAborted();
-        let result = await this.ctx.waterfall('tools/execute', exec, async () => {
-          try {
-            const fusedSignal = AbortSignal.any([signal, exec.signal]);
-            const value = await def.execute(exec.arguments, { ...exec, signal: fusedSignal });
-            signal.throwIfAborted();
-            return { isError: false, value, content: await render(value),
-              ...(def.output?.presentationMeta ? { meta: await def.output.presentationMeta(exec.arguments, value) } : {}) };
-          } catch (error) { return failure(error); }
+      validateArgs(def, args ?? {});
+      if (this._activeTools.has(key) && !def.isConcurrencySafe?.(args ?? {}))
+        throw Object.assign(new Error('The previous invocation is still running'), {
+          code: 'TOOL_BUSY',
         });
-        if (!result || typeof result.isError !== 'boolean') throw new Error('Invalid tools/execute result');
-        signal.throwIfAborted();
-        const post = await this.ctx.waterfall('tools/post-execute', exec, Object.freeze(result), async () => ({ kind: 'accept' }));
-        if (post?.kind === 'block') result = { isError: true, content: post.feedback || [], error: { code: 'TOOL_BLOCKED', message: 'Tool result blocked' } };
-        else if (post?.kind === 'accept') {
-          if ('value' in post && 'content' in post) throw new Error('Cannot replace both value and content');
-          if ('value' in post) {
-            if (result.isError) throw new Error('Cannot replace the value of a failed result');
-            result = { ...result, value: post.value, content: await render(post.value) };
-          } else if ('content' in post) result = { ...result, content: post.content };
-          if (post.additionalContexts) result = { ...result, additionalContexts: post.additionalContexts };
-        } else throw new Error('Invalid tools/post-execute decision');
-        if (def.finalizeContent) {
-          const content = await def.finalizeContent(Object.freeze({ ...exec, signal }), Object.freeze(result));
-          if (content !== undefined) result = { ...result, content };
-        }
-        signal.throwIfAborted();
-        return result;
-      })();
+      await this.ctx.sandboxPolicy.refresh();
+      const task = execution.run(
+        {
+          ...execCtx,
+          agent,
+          cwd: execCtx.cwd || agent?.session.header.cwd,
+          mode: agent?.mode,
+          signal,
+        },
+        () =>
+          this.toolsService.execute({
+            name: toolName,
+            arguments: args ?? {},
+            callId,
+            signal,
+            ...(agent ? { agent } : {}),
+          }),
+      );
       const job = { pluginId, controller };
       const jobs = this._activeTools.get(key) || new Set();
       jobs.add(job);
       this._activeTools.set(key, jobs);
-      task.finally(() => { jobs.delete(job); if (!jobs.size) this._activeTools.delete(key); }).catch(() => {});
+      task
+        .finally(() => {
+          jobs.delete(job);
+          if (!jobs.size) this._activeTools.delete(key);
+        })
+        .catch(() => {});
       outcome = await abortable(task, signal);
-    } catch (error) { outcome = failure(error, signal.aborted ? signal.reason?.code || 'CANCELLED' : error?.code); }
-    finally { clearTimeout(timer); }
-    // Observers cannot turn a successful execution into a failure.
-    try { await abortable(this.ctx.parallel('tools/result', Object.freeze({ ...exec, signal }), Object.freeze(outcome)), AbortSignal.timeout(1000)); }
-    catch (error) { this.ctx.logger.warn('tools/result observer failed: ' + error.message); }
+    } catch (error) {
+      outcome = failure(
+        signal.aborted
+          ? Object.assign(new Error(signal.reason?.message || 'Plugin tool cancelled'), {
+              code: signal.reason?.code || 'CANCELLED',
+            })
+          : error,
+      );
+    } finally {
+      clearTimeout(timer);
+    }
     const blocks = Array.isArray(outcome.content) ? outcome.content : [];
     return {
-      ok: !outcome.isError, content: blocks.filter((block) => block?.type === 'text').map((block) => block.text).join('\n'),
-      contentBlocks: blocks, value: outcome.value, callId: exec.callId, meta: outcome.meta,
-      ...(outcome.isError ? { error: outcome.error?.message || 'Plugin tool failed', code: outcome.error?.code,
-        invalidArgs: outcome.error?.code === 'INVALID_ARGS' } : {}),
+      ok: !outcome.isError,
+      content: blocks
+        .filter((block) => block?.type === 'text')
+        .map((block) => block.text)
+        .join('\n'),
+      contentBlocks: blocks,
+      value: outcome.value,
+      callId,
+      meta: outcome.meta,
+      ...(outcome.isError
+        ? {
+            error: outcome.error?.message || 'Plugin tool failed',
+            code: outcome.error?.code || outcome.error?.info?.code || 'TOOL_ERROR',
+            invalidArgs: (outcome.error?.code || outcome.error?.info?.code) === 'INVALID_ARGS',
+          }
+        : {}),
       ...(outcome.additionalContexts ? { additionalContexts: outcome.additionalContexts } : {}),
+      ...(outcome.concludesTurn ? { concludesTurn: true } : {}),
     };
   }
 }
 
 function safeStringify(value) {
-  try { return JSON.stringify(value); } catch { return String(value); }
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
 }
 
 function abortable(task, signal) {
   return new Promise((resolve, reject) => {
     const abort = () => reject(signal.reason || new Error('Plugin tool cancelled'));
-    if (signal.aborted) { abort(); return; }
+    if (signal.aborted) {
+      abort();
+      return;
+    }
     signal.addEventListener('abort', abort, { once: true });
     task.then(resolve, reject).finally(() => signal.removeEventListener('abort', abort));
   });

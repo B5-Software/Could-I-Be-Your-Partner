@@ -1,55 +1,44 @@
 # DeepSeek 插件兼容运行时
 
-CIBYP 使用真实 Cordis 服务内核，并为部分插件能力提供自己的 Agent、会话、审批、文件与 Shell 适配器。
-当前锁定 `@deepseek-ai/cordis 4.0.5-alpha.1`、`schemastery 3.18.5-alpha.1`，
-以及 Harness `0.2.1-alpha.1` 的工具定义、参数校验、SDK 生成和公共辅助包。
-这些是当前预览版本，锁定精确版本以避免上游更新静默改变插件行为。
+CIBYP 使用真实 Cordis 内核和 DeepSeek Harness 的能力 SDK，将插件接口转换为自己的后台服务。插件可以提供工具、技能、提示词、任务和会话能力；Agent 循环、模型账号与消费控制、应用启动和各前端继续由 CIBYP 管理，不加载 Harness 的应用或 AgentLoop。
 
-工具 API 复用上游 MIT 实现的纯逻辑；原始许可证和来源记录保留在
-`src/main/ds-compat/shims/dsh-tools/upstream`。同时接受旧版工具参数定义。
-支持嵌套结构、必填参数、整数、枚举、联合类型和 JSON 值，工具输出也按定义进行校验。
+当前锁定 Cordis `4.0.5-alpha.1`、Schemastery `3.18.5-alpha.1` 和能力 SDK `0.2.1-alpha.1`。合约核查对应上游提交 [`5badb150`](https://github.com/deepseek-ai/deepseek-harness/tree/5badb15009ae1756c3afe0ae0cef1faafc290ccc)。工具定义、校验和生成器保留 MIT 上游实现与来源记录，位于 `src/main/ds-compat/shims/dsh-tools/upstream`。上游变化需要重新测试，不按包名或“安装成功”判断兼容性。
 
-工具执行支持 `tools/pre-execute`、`tools/execute`、`tools/post-execute`、
-`tools/result`、注册的 guard、输出渲染及 `finalizeContent`。
-插件生命周期清理自己的工具和 guard；异步加载不会把工具归属到另一个插件。
-工具超时、调用取消和卸载会触发 AbortSignal。即使插件忽略取消，调用方也会及时收到失败，
-非并发工具在上一轮实际结束前拒绝重复执行；观察者挂起也不会阻塞返回。
+## 已实现的能力
 
-宿主和 VM 部署使用同一组工具 SDK 与公共辅助包，并暴露工具 schema、testing 和类型子路径。
-依赖缺失、配置不合法和加载失败会显示为兼容性问题。
-这不等于运行完整 Harness：自带 TUI、Web 服务或要求未桥接服务的插件仍可能不兼容。
-插件调用本机文件或 Shell 的能力在 VM 模式下由 VM 中的运行时执行。
+| 能力                  | 实现与边界                                                                                                                                                                                                             |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 加载、配置与生命周期  | ESM / CJS、真实依赖注入、Schema 配置校验、异步注册归属、卸载与失败清理。禁用插件不在启动重审时执行；未知服务明确报错。                                                                                                 |
+| 工具                  | 上游参数与输出合约，旧版定义兼容，pre / around / post / result 钩子、guard、渲染与 finalizeContent、并发限制、取消与超时。模型边界使用插件命名空间，SDK 内保持原工具名。非协作任务仍运行时不会重复启动同一非并发工具。 |
+| 文件                  | 目标路径解析、版本检查、文本与字节范围读取、目录、监听、写入与编辑、CRLF 保留。写入遵守 CIBYP 的沙箱策略，插件传入的策略不能放宽它。                                                                                   |
+| Shell、进程与终端     | 原生 execute 合约、后台句柄、stdin、状态与取消、输出尾部与溢出文件、持久 PTY；Shell 设置在创建终端时读取。持久终端支持 Bash 系 Shell 与 PowerShell，其他方言明确拒绝。                                                 |
+| Agent 与会话          | 原生 Registry / SessionStore 接口，事件日志与重放、inbox、followup / steer / stop、等待空闲、带继承切点的 fork、创建与恢复。只清理插件拥有的子会话；创建失败回滚，不认领现有前端会话。CIBYP 驱动实际模型循环。         |
+| 提示词与技能          | 原生 SystemPrompt / SkillRegistry、section 与上下文装配、技能 provider 和插件注册。动态贡献仅作用于请求，不覆盖聊天历史；标题等辅助请求不消费 Agent inbox。                                                            |
+| LLM                   | 原生流式合约、文本 / 推理 / 工具调用事件、用量与取消。请求转发 CIBYP 主机的 Provider 路由，复用账号、预算、重试和订阅适配；不启动第二套账号或模型后台。                                                                |
+| 设置与存储            | 插件配置命名空间、秘密字段默认脱敏、版本冲突检测、校验后持久化、变更通知；真实 Storage / JSON / Domain 存储。插件设置接口不开放任意全局设置写入。                                                                      |
+| 任务、子 Agent 与压缩 | 原生 Jobs、Commands 与子 Agent provider；子 Agent 使用共享后台。压缩委托 CIBYP，生成 SDK checkpoint，保留 CIBYP 的聊天记录。任意 DS 消息范围压缩不支持。                                                               |
+| 审批与问卷            | 连接 CIBYP 后台，复用前端交互和沙箱策略，支持多选与自定义答案、取消。                                                                                                                                                  |
+| 其他能力              | SessionQuery / projections、附件本地存储、TokenMeter、Workspace Registry、LSP 转发到 CIBYP 的编辑器桥。能力未连接时明确失败，不返回伪成功。                                                                            |
+| 插件 HTTP 路由        | 原生 WebServer 挂载路由，使用单独的 loopback 载体，生命周期跟随插件宿主；旧版 webRuntime 只暴露只读部署信息。不能替换共享后台监听器。                                                                                  |
+| VM                    | 常驻 worker 保留跨调用状态、服务与生命周期；复用同一 SDK 身份。文件 / Shell 留在 VM，LLM 与网络能力转发主机。转换明确的目录参数与配置，不改写命令或正文。                                                              |
 
-## 2026-10-08 兼容性核查
+## 仍有边界
 
-结论：目前适合主要通过 `ctx.tools` 注册工具的插件，不能宣称兼容全部 Harness 插件。依赖注入成功、插件安装成功或工具标签显示 `native`，都不代表所依赖的服务已完整实现。没有覆盖插件生态的测试样本，因此不提供“兼容百分比”。
+- Harness 自带 TUI、React / Web 客户端组件、完整应用入口、私有 UI store 没有自动转换为 CIBYP 界面。它们的后端能力可单独适配，不能直接接管界面。会话导出插件的 HTTP 导出已测试，其 Harness 顶栏按钮没有迁移。
+- 子 Agent provider 不支持 DS 的 persona、toolFilter、outputSchema 和跨调用 continuation；不能把这些选项当作已实现。浏览器 / computer-use 等未挂载的 DS 服务需要额外适配。
+- 部分 SDK 深层子路径、插件自带原生模块、平台专用依赖和自定义 Provider 需要具体测试；包根入口可用不代表所有内部模块可用。
+- Commands 注册与调用已提供，插件命令尚未自动加入各前端的斜杠菜单。仅在运行时创建的动态工具还需要补齐前端目录刷新。
+- 工具 guard 的验证覆盖 DS 工具链，不表示同一个钩子已经保护 CIBYP 所有内置工具。第三方 Git 插件的 amend 拦截通过测试，不构成所有破坏性 Git 操作的安全保证。
+- SDK 事件日志是 CIBYP 对话的适配视图。完整时序 chunk、全部加密推理扩展及 CIBYP 自动压缩后的投影仍需要进一步对齐。它不是用于覆盖聊天记录的权威副本。
+- 同进程 JavaScript 插件属于可信代码扩展。接口权限与入口限制不是恶意代码隔离沙箱，插件仍可能直接使用 Node.js API。来源审查、固定版本和独立测试不能证明代码绝对无恶意。
+- Windows 持久终端优先使用 node-pty 自带 ConPTY DLL；缺少 DLL 的重编译安装回退系统后端。本机回退测试能正常关闭进程，但上游控制台清理助手仍可能打印 `AttachConsole failed`。这条兼容诊断尚未完全消除。
 
-核查基线是本仓库 `1.9.0-alpha.25` 的实现、锁定的 npm 预览 SDK，以及上游源码提交 [`5badb150`](https://github.com/deepseek-ai/deepseek-harness/tree/5badb15009ae1756c3afe0ae0cef1faafc290ccc)。npm 的 `alpha` 通道为 `0.2.1-alpha.1`，`@deepseek-ai/dsh` 的 `latest` / `next` 为 `0.2.0-rc.2`；不能仅根据 `latest` 标签判断是否已使用最新预览 API。后续上游修改仍需重新核查。
+因此不宣称“全部插件完美兼容”，也不根据少量样本给出兼容百分比。可用范围由服务合约与具体插件测试决定。
 
-| 能力 | 当前实现与限制 |
-| --- | --- |
-| Cordis、插件加载与工具链 | 使用真实服务内核；支持 ESM / CJS、配置校验、工具注册、参数与输出校验、执行钩子、guard、卸载清理、超时与取消。已有自动回归覆盖。 |
-| 文件与 Shell | 提供基础读取和一次性命令执行，但不等同于上游文件目标、版本、写入、监听及 Shell 进程句柄。上游 Shell 合约要求 `execute()`，当前桥主要是 `run()`，依赖新接口的插件会失败。 |
-| Agent 与会话 | 创建、恢复、发送、停止已连接共享后台；Agent 列表和状态形状仍不同。会话事件与 inbox 是局部对象，缺少权威事件重放和完整队列语义；`sessions.fork()` 只做浅拷贝，`whenIdle` 超时后仍会返回。 |
-| LLM | 提供非流式 `chat()` 桥；没有上游 `stream()`、完整分块事件、适配器注册与取消语义，不能替代完整 LLM 服务。订阅等 Provider 路径也需要单独验证。 |
-| 提示词与技能 | 插件提示词 section 只收集到数组，尚未接入实际 Agent 提示词装配；技能清单与读取可桥接，插件 `skills.register()` 当前不生效。 |
-| 设置、任务与持久化服务 | `settings.get()` 返回空对象，更新会报未桥接；`subprocess`、`jobs`、`subagent`、`session`、`storage`、`compaction` 只有服务名称，没有功能实现。 |
-| 插件界面与 HTTP 面板 | `webServer.register()` 不挂载路由；依赖 Harness 自带 TUI / Web 界面的插件没有对应界面适配。 |
-| VM 插件宿主 | 每次工具调用新建并销毁 PluginHost，未注入主机的 Agent transport、设置与技能 provider。纯工具可执行，但服务访问和跨调用状态不能等同于主机宿主。 |
+## 验证与复现
 
-证据入口：[`plugin-host.js`](../src/main/ds-compat/plugin-host.js)、[`services.js`](../src/main/ds-compat/services.js)、[`guest-tool-worker.js`](../src/main/vm/guest-tool-worker.js)。上游以独立的服务定义、Provider 和 Consumer 组成运行时，完整插件支持需要匹配这些合约，见 [上游包与服务说明](https://github.com/deepseek-ai/deepseek-harness/blob/5badb15009ae1756c3afe0ae0cef1faafc290ccc/packages/README.md)。
+运行 `npm run test:unit`、`npm run test:legacy`。DeepSeek 专项覆盖原生工具与钩子、文件版本和沙箱、Shell 取消、持久终端、配置脱敏、模型流、队列 / fork / 日志、官方文件 / Bash / Jobs / 问卷 / Todo / 会话查询 / LSP 插件，以及部署后的常驻 worker。
 
-## 距离完整支持的主要工作
+第三方测试见 [固定版本插件实测报告](deepseek-plugin-tests.md)。`npm run test:ds-thirdparty` 是显式启用的本地测试，不自动下载插件、不运行第三方安装脚本、不读取真实账号或聊天记录。另提供 `npm run test:ds-vm -- "<VM 资源目录>" "<完整镜像版本>"`：使用独立覆盖磁盘测试生产 SSH 部署和 VM 路由。已在完整镜像 `2026.10.01`、Linux / Node.js `20.19.2` 上通过 12 项，包括第三方插件、官方文件 / Bash / Jobs、持久 PTY 与取消、主机模型桥及 HTTP 卸载；不涉及真实 Provider 账号验证。
 
-1. 建立服务合约测试和真实插件测试矩阵。未实现的方法应明确拒绝，避免空返回或 no-op 让插件看似正常却没有效果。
-2. 将 Agent、会话、事件重放、inbox、fork 与后台持久化对齐；实现任务、子 Agent、存储及压缩服务。
-3. 对齐文件目标与修改语义、Shell 执行与进程生命周期、LLM 流式事件和 Provider 接口。
-4. 将插件提示词、技能注册、设置与审批接入真实能力，保持设置隐私与 CIBYP 权限边界。
-5. 为 VM 提供明确的服务转发和可持续的插件生命周期；为 TUI / HTTP 面板插件提供单独的前端适配。
-
-这几项包含后台服务和前端适配工作，仅升级 SDK 或补充包名别名无法解决。即使工具插件支持完善，也不能保证能够直接替换 Harness 的整个 Agent 循环或界面。
-
-本次离线验证中，`tests/unit/deepseek-runtime.test.cjs` 的 5 项测试全部通过，覆盖工具定义与生命周期、异步归属、超时取消、非协作插件及 SDK 子路径。这些是运行时测试，并非所有第三方插件的认证。VM worker 构建另有 `tests/unit/guest-tool-worker.test.cjs` 回归；应与具体插件的主机 / VM 端到端测试一起执行。
-
-验证入口：`tests/unit/deepseek-runtime.test.cjs`。
-上游项目：[deepseek-ai/deepseek-harness](https://github.com/deepseek-ai/deepseek-harness)。
+主要实现入口：`src/main/ds-compat/plugin-host.js`、`service-setup.js`、`agents.js`、`src/main/vm/plugin-runtime-client.js`。上游服务组织见 [包与服务说明](https://github.com/deepseek-ai/deepseek-harness/blob/5badb15009ae1756c3afe0ae0cef1faafc290ccc/packages/README.md)。

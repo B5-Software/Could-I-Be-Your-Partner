@@ -4601,8 +4601,8 @@ async function runDsPluginTests() {
       "    name: 'probe_seams', description: 'probe', parameters: {},",
       "    async execute() {",
       "      const agent = agents.get('chat:t1');",
-      "      const session = sessions.get('t1');",
-      "      const policy = await sandboxPolicy.resolve({ session: { mode: 'chat' } });",
+      "      const session = sessions.get('chat:t1');",
+      "      const policy = await sandboxPolicy.resolve({ session });",
       "      const outcome = await approval.request({ toolName: 'probe', reason: '测试授权', agent });",
       "      return { status: agent.status, cwd: session.header.cwd, mode: policy.mode, outcome };",
       "    },",
@@ -4629,15 +4629,17 @@ async function runDsPluginTests() {
       const installed = await pm.install({ type: 'local', ref: srcDir });
       const enabled = await pm.setEnabled(installed.id, true);
       assert.strictEqual(enabled.ok, true, enabled.error || '');
+      pm.host.ctx.agents.get('chat:t1').session.append('turn/start',{turn:1});
       const call = await pm.callTool(installed.id, 'probe_seams', {}, { cwd: process.cwd(), sessionKey: 'chat:t1' });
       assert.strictEqual(call.ok, true, call.error || '');
       assert.strictEqual(call.value.status, 'idle');
       assert.strictEqual(call.value.cwd, '/tmp/t1-workspace');
       assert.strictEqual(call.value.mode, 'read-only');
-      assert.strictEqual(call.value.outcome, 'denied');
+      assert.strictEqual(call.value.outcome, 'rejected');
       // followup 经 transport 送回渲染进程
       pm.host.ctx.agents.get('chat:t1').followup({ content: [{ type: 'text', text: 'wake up' }] });
-      const followup = sentMessages.find(m => m.channel === 'ds:pluginAgentMessage' && m.payload.kind === 'followup');
+      await pm.host.ctx.agents.get('chat:t1').whenIdle();
+      const followup = sentMessages.find(m => m.channel === 'ds:pluginAgentMessage' && m.payload.kind === 'plugin-turn');
       assert.ok(followup, 'followup 应经 transport 送达');
       assert.strictEqual(followup.payload.text, 'wake up');
       assert.ok(sentMessages.some(m => m.channel === 'ds:approvalRequest' && m.payload.toolName === 'probe'), 'approval 应经 transport 请求');
@@ -4670,31 +4672,36 @@ async function runDsPluginTests() {
       assert.strictEqual(created.session.header.cwd, '/tmp/n1');
       assert.strictEqual(created.agent, created, 'DSH 契约：create 结果应含 .agent（= 句柄自身）');
       assert.strictEqual(created.agent.id, 'chat:n1');
-      // 会话事件日志 / seq / fork / 控制面
-      assert.ok(Array.isArray(created.session.events), 'session.events 应为可迭代数组');
-      created.session.append('turn/start', {});
-      assert.strictEqual(created.session.events.length, 1);
-      assert.strictEqual(created.session.seq, 1);
-      assert.strictEqual(pm.host.ctx.sessions.fork(created.session).events.length, 1, 'sessions.fork 应共享事件日志');
+      await created.whenIdle();
+      const before = created.session.snapshotEvents().length;
+      created.session.append('custom/probe', { ok:true });
+      assert.strictEqual(created.session.snapshotEvents().length, before + 1);
+      const fork = pm.host.ctx.sessions.fork(created.session);
+      assert.notStrictEqual(fork.id,created.session.id);
+      assert.deepStrictEqual(fork.deriveMessages(),created.session.deriveMessages());
+      fork.append('custom/child',{});
+      assert.notStrictEqual(fork.seq,created.session.seq);
       created.steer('用户消息');
-      assert.ok(requests.some(r => r.channel === 'ds:pluginAgentMessage' && r.payload.kind === 'steer' && r.payload.text === '用户消息'), 'steer 应下发');
-      created.cancel();
-      assert.ok(requests.some(r => r.channel === 'ds:pluginAgentMessage' && r.payload.kind === 'stop'), 'cancel 应下发 stop');
-      assert.ok(created.inbox && typeof created.inbox.remove === 'function', '应有 inbox');
-      assert.strictEqual(created.inbox.remove('x'), false, 'inbox.remove 无撤回语义应返回 false');
-      await created.whenIdle;
-      assert.ok(created.ctx && typeof created.ctx.get === 'function', 'agent.ctx 应可解析宿主服务');
-      assert.ok(requests.some(r => r.channel === 'ds:agentCreate' && r.payload.instructions === '做点事'), 'create 应携带 instructions');
-      const resumed = await pm.host.ctx.agents.resume({ sessionId: 'e1' });
-      assert.strictEqual(resumed.session.header.title, '旧会话');
-      assert.strictEqual(resumed.session.header.cwd, '/tmp/e1');
-      const dispose = pm.host.ctx.agents.register({ status: 'idle', session: { header: { id: 'chat:r1', title: 'R', cwd: '/tmp/r', mode: 'chat' } } });
-      assert.strictEqual(pm.host.ctx.agents.has('chat:r1'), true);
-      dispose();
-      assert.strictEqual(pm.host.ctx.agents.has('chat:r1'), false);
-      const err = await pm.host.ctx.agents.create({}).catch(e => e);
-      // 无 transport request 时应明确报错（本用例 request 存在，走 unknown channel 错误）
-      assert.ok(err, '异常通道应报错');
+      await created.whenIdle();
+      assert.ok(requests.some(r => r.channel === 'ds:pluginAgentMessage' && r.payload.kind === 'plugin-turn' && r.payload.text === '用户消息'));
+      await created.cancel({kind:'user'});
+      assert.ok(requests.some(r => r.payload.kind === 'stop'));
+      assert.strictEqual(created.inbox.remove('x'),false);
+      assert.ok(created.ctx && typeof created.ctx.get === 'function');
+      assert.ok(requests.some(r => r.channel === 'ds:pluginAgentMessage' && r.payload.text === '做点事'));
+      const resumed = await pm.host.ctx.agents.resume({ resumeSessionId:'e1' });
+      assert.strictEqual(resumed.title,'旧会话');
+      assert.strictEqual(resumed.session.header.cwd,'/tmp/e1');
+      const {createScope}=require('@deepseek-ai/dsh-scope');
+      const external={id:'chat:r1',status:'idle',options:{},session:pm.host.ctx.sessions.prepare('chat:r1',{meta:{cwd:'/tmp/r'}})};
+      const scope=createScope(pm.host.ctx,external);external.ctx=scope.ctx;
+      const dispose=pm.host.ctx.agents.register(external);
+      await dispose;
+      assert.strictEqual(pm.host.ctx.agents.has('chat:r1'),true);
+      await dispose();
+      assert.strictEqual(pm.host.ctx.agents.has('chat:r1'),false);
+      await scope.dispose();
+      await assert.rejects(pm.host.ctx.agents.create({}),/already live/);
     } finally {
       try { await pm.dispose(); } catch { /* ignore */ }
       try { fsLocal.rmSync(dataDir, { recursive: true, force: true }); } catch { /* ignore */ }
@@ -5839,15 +5846,14 @@ test('界面动效：主标签页切换动画可选 + 打包版本注入 git 哈
   assert.ok(noTarot.includes('package.js'), 'build-no-tarot 应经 package.js 打包');
 });
 
-test('插件启动全量重审：清除旧版本遗留 compatIssues', () => {
+test('插件启动兼容性重审：后台加载与卸载入口', () => {
   const pmContent = fs.readFileSync(require('path').join(__dirname, '../src/main/ds-compat/plugin-manager.js'), 'utf-8');
   const mainContent = readMainSource();
   assert.ok(pmContent.includes('async refreshAll()'), '应有 refreshAll 全量重审');
-  assert.ok(pmContent.includes('unloadPlugin'), '禁用插件应探测后立即卸载');
+  assert.ok(pmContent.includes('unloadPlugin'), '禁用插件应清理已加载的注册');
   assert.ok(mainContent.includes('pluginManager.refreshAll()'), '启动时应全量重审插件兼容性');
   assert.ok(mainContent.includes('pluginManager.refreshAll().catch('), '启动重审应后台执行，不阻塞后续 IPC 注册');
   assert.ok(pmContent.includes('repairReactRuntime'), '应有 react 版本漂移自修复');
-  assert.ok(pmContent.includes('applyTimeoutMs: 6000'), '禁用插件探测应短超时（避免交互式插件深探测挂 30s）');
   assert.ok(pmContent.includes('_serialize') || require('fs').readFileSync(require('path').join(__dirname, '../src/main/ds-compat/plugin-host.js'), 'utf-8').includes('_serialize'), '插件加载应串行化');
 });
 

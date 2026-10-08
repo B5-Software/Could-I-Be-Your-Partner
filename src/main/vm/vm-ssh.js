@@ -149,14 +149,14 @@ class VmSsh extends EventEmitter {
   }
 
   /** 流式执行：返回 { stream, stdin, stdout, stderr, done }，用于 tar 管道等大数据传输 */
-  execStream(command) {
+  execStream(command, {maxStderrBytes = 1024 * 1024} = {}) {
     return new Promise((resolve, reject) => {
       if (!this.client || !this.connected) return reject(new Error('SSH 未连接'));
       this.client.exec(command, (err, stream) => {
         if (err) return reject(err);
-        let stderr = '';
-        stream.stderr.on('data', (d) => { stderr += d.toString('utf8'); });
-        const done = new Promise((res) => stream.on('close', (code) => res({ code, stderr })));
+        let stderr = Buffer.alloc(0);
+        stream.stderr.on('data', (d) => { stderr = Buffer.concat([stderr,d]); if(stderr.length > maxStderrBytes) stderr = stderr.subarray(stderr.length-maxStderrBytes); });
+        const done = new Promise((res) => stream.on('close', (code) => res({ code, stderr:stderr.toString('utf8') })));
         resolve({ stream, done });
       });
     });

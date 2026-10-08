@@ -21,10 +21,23 @@ const { PluginHost } = require('./plugin-host');
 const SHIMS = {
   '@deepseek-ai/dsh-tools': path.join(__dirname, 'shims', 'dsh-tools'),
   '@deepseek-ai/cordis': path.join(__dirname, 'shims', 'cordis'),
-  ...Object.fromEntries(['dsh-llm', 'dsh-util-values', 'dsh-brand', 'dsh-scope'].map(name => [
-    '@deepseek-ai/' + name, path.join(__dirname, '..', '..', '..', 'node_modules', '@deepseek-ai', name)
-  ])),
-  '@deepseek-ai/schemastery': path.join(__dirname, '..', '..', '..', 'node_modules', '@deepseek-ai', 'schemastery')
+  ...Object.fromEntries(
+    Object.keys(require('./sdk-catalog'))
+      .filter((name) => !['cordis', 'schemastery', 'dsh-tools'].includes(name))
+      .map((name) => [
+        '@deepseek-ai/' + name,
+        path.join(__dirname, '..', '..', '..', 'node_modules', '@deepseek-ai', name),
+      ]),
+  ),
+  '@deepseek-ai/schemastery': path.join(
+    __dirname,
+    '..',
+    '..',
+    '..',
+    'node_modules',
+    '@deepseek-ai',
+    'schemastery',
+  ),
 };
 
 // ---- workspace:* 协议清理 ----
@@ -35,7 +48,12 @@ const SHIMS = {
 //    强行改成 registry 版本只会 E404；删除后若插件运行时 import 会在加载阶段给出明确的模块缺失错误）
 function sanitizeWorkspaceSpecs(pkg) {
   const removed = [];
-  for (const field of ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies']) {
+  for (const field of [
+    'dependencies',
+    'devDependencies',
+    'optionalDependencies',
+    'peerDependencies',
+  ]) {
     const deps = pkg && typeof pkg === 'object' ? pkg[field] : undefined;
     if (deps && typeof deps === 'object') {
       for (const key of Object.keys(deps)) {
@@ -55,7 +73,9 @@ function sanitizeWorkspaceSpecs(pkg) {
 function evalJsPatchExpr(src) {
   const s = String(src).trim();
   let i = 0;
-  const skipWs = () => { while (i < s.length && /\s/.test(s[i])) i++; };
+  const skipWs = () => {
+    while (i < s.length && /\s/.test(s[i])) i++;
+  };
   const parsePrimary = () => {
     skipWs();
     if (s.startsWith('process.env.', i)) {
@@ -64,17 +84,38 @@ function evalJsPatchExpr(src) {
       while (i < s.length && /[A-Za-z0-9_]/.test(s[i])) name += s[i++];
       return process.env[name];
     }
-    if (s.startsWith('process.platform', i)) { i += 'process.platform'.length; return process.platform; }
-    if (s.startsWith('process.cwd()', i)) { i += 'process.cwd()'.length; return process.cwd(); }
-    if (s.startsWith('undefined', i)) { i += 9; return undefined; }
-    if (s.startsWith('null', i)) { i += 4; return null; }
-    if (s.startsWith('true', i)) { i += 4; return true; }
-    if (s.startsWith('false', i)) { i += 5; return false; }
+    if (s.startsWith('process.platform', i)) {
+      i += 'process.platform'.length;
+      return process.platform;
+    }
+    if (s.startsWith('process.cwd()', i)) {
+      i += 'process.cwd()'.length;
+      return process.cwd();
+    }
+    if (s.startsWith('undefined', i)) {
+      i += 9;
+      return undefined;
+    }
+    if (s.startsWith('null', i)) {
+      i += 4;
+      return null;
+    }
+    if (s.startsWith('true', i)) {
+      i += 4;
+      return true;
+    }
+    if (s.startsWith('false', i)) {
+      i += 5;
+      return false;
+    }
     if (s[i] === '"' || s[i] === "'") {
       const q = s[i++];
       let out = '';
       while (i < s.length && s[i] !== q) {
-        if (s[i] === '\\' && s[i + 1] === q) { out += q; i += 2; } else out += s[i++];
+        if (s[i] === '\\' && s[i + 1] === q) {
+          out += q;
+          i += 2;
+        } else out += s[i++];
       }
       i++;
       return out;
@@ -144,12 +185,16 @@ function evalJsPatchExpr(src) {
 const JS_EXPR_TYPE = new yaml.Type('tag:yaml.org,2002:js', {
   kind: 'scalar',
   resolve: () => true,
-  construct: (data) => ({ __jsExpr: data })
+  construct: (data) => ({ __jsExpr: data }),
 });
 const BUNDLE_YAML_SCHEMA = yaml.DEFAULT_SCHEMA.extend([JS_EXPR_TYPE]);
 
 function evaluatePatchValue(value) {
-  if (value && typeof value === 'object' && Object.prototype.hasOwnProperty.call(value, '__jsExpr')) {
+  if (
+    value &&
+    typeof value === 'object' &&
+    Object.prototype.hasOwnProperty.call(value, '__jsExpr')
+  ) {
     return evalJsPatchExpr(value.__jsExpr);
   }
   if (Array.isArray(value)) return value.map(evaluatePatchValue);
@@ -173,19 +218,20 @@ function readBundlePatch(installDir, pkg) {
     if (!item || typeof item !== 'object') continue;
     if (Array.isArray(item.insert)) {
       for (const row of item.insert) {
-        if (row && row.id) rows.push({
-          id: row.id,
-          name: row.name || row.id,
-          config: evaluatePatchValue(row.config || {}),
-          disabled: false
-        });
+        if (row && row.id)
+          rows.push({
+            id: row.id,
+            name: row.name || row.id,
+            config: evaluatePatchValue(row.config || {}),
+            disabled: false,
+          });
       }
     } else if (item.id) {
       rows.push({
         id: item.id,
         name: item.name || item.id,
         config: evaluatePatchValue(item.config || {}),
-        disabled: !!item.disabled
+        disabled: !!item.disabled,
       });
     }
   }
@@ -203,7 +249,11 @@ function repairReactRuntime(installDir, pkg) {
   const reactJson = path.join(reactDir, 'package.json');
   if (!fs.existsSync(reactJson)) return false;
   let reactPkg;
-  try { reactPkg = JSON.parse(fs.readFileSync(reactJson, 'utf8')); } catch { return false; }
+  try {
+    reactPkg = JSON.parse(fs.readFileSync(reactJson, 'utf8'));
+  } catch {
+    return false;
+  }
   const hasCompilerRuntime = reactPkg.exports && reactPkg.exports['./compiler-runtime'];
   if (hasCompilerRuntime) return false;
   const want = pkg && pkg.dependencies && pkg.dependencies.react;
@@ -211,7 +261,10 @@ function repairReactRuntime(installDir, pkg) {
   const packDir = fs.mkdtempSync(path.join(installDir, '.react-repair-'));
   try {
     const r = spawnSync('npm', ['pack', 'react@' + want, '--pack-destination', packDir], {
-      encoding: 'utf8', timeout: 120000, shell: process.platform === 'win32', windowsHide: true
+      encoding: 'utf8',
+      timeout: 120000,
+      shell: process.platform === 'win32',
+      windowsHide: true,
     });
     const m = String(r.stdout || '').match(/react-\d+\.\d+\.\d+\.tgz/);
     if (r.status !== 0 || !m) return false;
@@ -219,7 +272,9 @@ function repairReactRuntime(installDir, pkg) {
     fs.rmSync(reactDir, { recursive: true, force: true });
     fs.mkdirSync(reactDir, { recursive: true });
     const x = spawnSync('tar', ['-xzf', tgz, '-C', reactDir, '--strip-components=1'], {
-      encoding: 'utf8', timeout: 60000, windowsHide: true
+      encoding: 'utf8',
+      timeout: 60000,
+      windowsHide: true,
     });
     if (x.status !== 0) return false;
     const fixed = JSON.parse(fs.readFileSync(reactJson, 'utf8'));
@@ -228,7 +283,11 @@ function repairReactRuntime(installDir, pkg) {
     console.warn('[DS Plugins] react repair failed:', e.message);
     return false;
   } finally {
-    try { fs.rmSync(packDir, { recursive: true, force: true }); } catch { /* ignore */ }
+    try {
+      fs.rmSync(packDir, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
   }
 }
 
@@ -249,7 +308,11 @@ function isInteractiveTuiPlugin(dir) {
         if (name === 'node_modules' || name === '.git') continue;
         const p = path.join(d, name);
         let st;
-        try { st = fs.statSync(p); } catch { continue; }
+        try {
+          st = fs.statSync(p);
+        } catch {
+          continue;
+        }
         if (st.isDirectory()) walk(p, depth + 1);
         else if (/\.(js|mjs|cjs)$/.test(name)) {
           const s = fs.readFileSync(p, 'utf8');
@@ -268,7 +331,9 @@ function isInteractiveTuiPlugin(dir) {
 /** 抓取文本（curl 遵循系统代理配置）。 */
 function fetchText(url) {
   const r = spawnSync('curl', ['-fsSL', '--connect-timeout', '15', '--max-time', '30', url], {
-    encoding: 'utf8', windowsHide: true, maxBuffer: 8 * 1024 * 1024
+    encoding: 'utf8',
+    windowsHide: true,
+    maxBuffer: 8 * 1024 * 1024,
   });
   return r.status === 0 ? String(r.stdout || '') : '';
 }
@@ -277,7 +342,23 @@ function fetchText(url) {
 function extractCatalogRepos(text, self) {
   const seen = new Set();
   const out = [];
-  const blockedOwners = new Set(['topics', 'features', 'orgs', 'github', 'sponsors', 'settings', 'about', 'login', 'signup', 'marketplace', 'explore', 'notifications', 'collections', 'events', 'discussions']);
+  const blockedOwners = new Set([
+    'topics',
+    'features',
+    'orgs',
+    'github',
+    'sponsors',
+    'settings',
+    'about',
+    'login',
+    'signup',
+    'marketplace',
+    'explore',
+    'notifications',
+    'collections',
+    'events',
+    'discussions',
+  ]);
   const blockedRepos = new Set(['hub', 'issues', 'discussions', 'topics']);
   const re = /github\.com\/([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)/g;
   let m;
@@ -297,7 +378,9 @@ function extractCatalogRepos(text, self) {
 
 /** 分类无法 npm 安装的 GitHub 仓库：awesome 目录 / 普通非插件仓库。 */
 function classifyGithubRepo(spec) {
-  const repo = String(spec).replace(/^github:/, '').replace(/\.git(#.*)?$/, (_, h) => h || '');
+  const repo = String(spec)
+    .replace(/^github:/, '')
+    .replace(/\.git(#.*)?$/, (_, h) => h || '');
   for (const file of ['CATALOG.md', 'README.md', 'README.zh-CN.md']) {
     for (const branch of ['HEAD', 'main', 'master']) {
       const text = fetchText(`https://raw.githubusercontent.com/${repo}/${branch}/${file}`);
@@ -322,14 +405,15 @@ function runNpmAsync(args, opts = {}) {
       env: opts.env || process.env,
       shell: process.platform === 'win32',
       stdio: ['ignore', 'pipe', 'pipe'],
-      windowsHide: true
+      windowsHide: true,
     });
     let stdout = '';
     let stderr = '';
     let timedOut = false;
     const emit = (chunk, isErr) => {
       const text = String(chunk || '');
-      if (isErr) stderr += text; else stdout += text;
+      if (isErr) stderr += text;
+      else stdout += text;
       if (typeof opts.onOutput === 'function') {
         const line = text.replace(/\r?\n$/, '').trim();
         if (line) opts.onOutput({ type: 'npm', line });
@@ -337,10 +421,17 @@ function runNpmAsync(args, opts = {}) {
     };
     child.stdout.on('data', (c) => emit(c, false));
     child.stderr.on('data', (c) => emit(c, true));
-    const timer = setTimeout(() => {
-      timedOut = true;
-      try { child.kill('SIGKILL'); } catch { /* ignore */ }
-    }, Math.max(5000, opts.timeout || 300000));
+    const timer = setTimeout(
+      () => {
+        timedOut = true;
+        try {
+          child.kill('SIGKILL');
+        } catch {
+          /* ignore */
+        }
+      },
+      Math.max(5000, opts.timeout || 300000),
+    );
     child.on('error', (e) => {
       clearTimeout(timer);
       resolve({ status: null, error: e, stdout, stderr, timedOut });
@@ -359,46 +450,105 @@ class PluginManager {
     this.pluginsDir = path.join(dataDir, 'plugins');
     this.manifestPath = path.join(dataDir, 'plugins.json');
     this.host = new PluginHost({
+      ...options,
+      dataDir,
+      manifestPath: this.manifestPath,
+      setPluginConfig: async (id, value) => {
+        const record = this.plugins.find((p) => p.id === id);
+        if (!record) throw new Error('Unknown plugin: ' + id);
+        record.config = value;
+        this.save();
+        // Persist before acknowledgement. Reload after the requesting tool returns,
+        // rather than disposing the caller while it is waiting for this write.
+        const reload = async () => {
+          if (this.disposed) return;
+          const active = [...this.host._activeTools.values()].some((jobs) =>
+            [...jobs].some((job) => job.pluginId === id),
+          );
+          const guestActive = await require('../vm/plugin-runtime-client')
+            .busy(this.getVmService?.(), id)
+            .catch(() => false);
+          if (this.disposed) return;
+          if (active || guestActive) {
+            this.configReloads.set(id, setTimeout(reload, 100));
+            return;
+          }
+          this.configReloads.delete(id);
+          this.refreshPlugin(id).catch((error) =>
+            console.warn('[DS Plugins] config reload failed:', error.message),
+          );
+        };
+        clearTimeout(this.configReloads.get(id));
+        this.configReloads.set(id, setTimeout(reload, 100));
+      },
       skills: options.skills || null,
       transport: options.transport || null,
       getSettings: options.getSettings || null,
-      applyTimeoutMs: options.applyTimeoutMs || null
+      applyTimeoutMs: options.applyTimeoutMs || null,
     });
     this.plugins = [];
+    this.vmOptions = { ...this.host.options, agentsService: this.host.agentsService };
+    this.configReloads = new Map();
   }
 
   /** 渲染进程会话元数据同步到宿主 agents/sessions seam。 */
   async syncAgents(entries) {
     await this.host.init();
+    this.vmOptions.agentsService = this.host.agentsService;
+    const service = this.getVmService?.();
+    await require('../vm/plugin-runtime-client').notify(
+      service,
+      'agents',
+      require('../vm/plugin-runtime-client').agents(
+        {
+          agentsService: { metadata: new Map((entries || []).map((entry) => [entry.key, entry])) },
+        },
+        service,
+      ),
+    );
     if (this.host.agentsService) {
-      this.host.agentsService.sync(Array.isArray(entries) ? entries : []);
+      await this.host.agentsService.sync(Array.isArray(entries) ? entries : []);
     }
   }
 
   init() {
-    try { fs.mkdirSync(this.pluginsDir, { recursive: true }); } catch { /* ignore */ }
+    try {
+      fs.mkdirSync(this.pluginsDir, { recursive: true });
+    } catch {
+      /* ignore */
+    }
     let raw = {};
-    try { raw = JSON.parse(fs.readFileSync(this.manifestPath, 'utf-8')); } catch { /* ignore */ }
+    try {
+      raw = JSON.parse(fs.readFileSync(this.manifestPath, 'utf-8'));
+    } catch {
+      /* ignore */
+    }
     this.plugins = Array.isArray(raw.plugins) ? raw.plugins : [];
     return this;
   }
 
   save() {
     try {
-      fs.writeFileSync(this.manifestPath, JSON.stringify({ plugins: this.plugins }, null, 2), 'utf-8');
+      fs.writeFileSync(
+        this.manifestPath,
+        JSON.stringify({ plugins: this.plugins }, null, 2),
+        'utf-8',
+      );
     } catch (e) {
       throw new Error(`保存插件清单失败: ${e.message}`);
     }
   }
 
   _slug(name) {
-    return String(name || 'plugin')
-      .toLowerCase()
-      .replace(/^@/, '')
-      .replace(/[/\\]+/g, '-')
-      .replace(/[^a-z0-9._-]+/g, '-')
-      .replace(/^-+|-+$/g, '')
-      .slice(0, 80) || 'plugin';
+    return (
+      String(name || 'plugin')
+        .toLowerCase()
+        .replace(/^@/, '')
+        .replace(/[/\\]+/g, '-')
+        .replace(/[^a-z0-9._-]+/g, '-')
+        .replace(/^-+|-+$/g, '')
+        .slice(0, 80) || 'plugin'
+    );
   }
 
   _readPackage(dir) {
@@ -415,7 +565,12 @@ class PluginManager {
     if (pkg.exports && typeof pkg.exports === 'object' && pkg.exports['.']) {
       const exp = pkg.exports['.'];
       if (typeof exp === 'string') candidates.push(exp);
-      else if (exp && (typeof exp.import === 'string' || typeof exp.default === 'string' || typeof exp.require === 'string')) {
+      else if (
+        exp &&
+        (typeof exp.import === 'string' ||
+          typeof exp.default === 'string' ||
+          typeof exp.require === 'string')
+      ) {
         candidates.push(exp.import || exp.default || exp.require);
       }
     }
@@ -430,7 +585,11 @@ class PluginManager {
   _ensureShims(installDir) {
     const nm = path.join(installDir, 'node_modules');
     const scope = path.join(nm, '@deepseek-ai');
-    try { fs.mkdirSync(scope, { recursive: true }); } catch { /* ignore */ }
+    try {
+      fs.mkdirSync(scope, { recursive: true });
+    } catch {
+      /* ignore */
+    }
     for (const [name, target] of Object.entries(SHIMS)) {
       const dest = path.join(scope, name.replace('@deepseek-ai/', ''));
       try {
@@ -438,11 +597,17 @@ class PluginManager {
         // 若任其存在，插件的 Context/Service 会与宿主不同实例，class extends Service
         // 的 instanceof 判断即失效。其余包（dsh-tools/schemastery）优先用真实实现，
         // 覆盖范围更广。
-        if (name === '@deepseek-ai/cordis' && fs.existsSync(dest)) {
+        // Service definitions and scope symbols must share the host's SDK instance.
+        if (fs.existsSync(dest) && fs.realpathSync(dest) !== fs.realpathSync(target)) {
+          const relative = path.relative(path.resolve(nm), path.resolve(dest));
+          if (relative.startsWith('..') || path.isAbsolute(relative))
+            throw new Error('Invalid SDK shim target');
           fs.rmSync(dest, { recursive: true, force: true });
         }
         if (!fs.existsSync(dest)) this._linkOrCopy(target, dest);
-      } catch { /* ignore：权限或平台限制 */ }
+      } catch {
+        /* ignore：权限或平台限制 */
+      }
     }
   }
 
@@ -450,15 +615,20 @@ class PluginManager {
     try {
       fs.symlinkSync(target, dest, process.platform === 'win32' ? 'junction' : 'dir');
       return;
-    } catch { /* Windows 无 symlink 权限时回退复制 */ }
+    } catch {
+      /* Windows 无 symlink 权限时回退复制 */
+    }
     try {
       fs.cpSync(target, dest, { recursive: true, dereference: true });
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
   }
 
   /** 从安装 spec 中提取包名（npm/github/tgz/git URL 均适用）。 */
   _parseSpecName(spec) {
-    let s = String(spec || '').trim()
+    let s = String(spec || '')
+      .trim()
       .replace(/^npm:/, '')
       .replace(/^github:/, '')
       .replace(/^git\+?/, '')
@@ -485,9 +655,16 @@ class PluginManager {
       for (const name of fs.readdirSync(dir)) {
         const full = path.join(dir, name);
         let st;
-        try { st = fs.statSync(full); } catch { continue; }
+        try {
+          st = fs.statSync(full);
+        } catch {
+          continue;
+        }
         if (!st.isDirectory()) continue;
-        if (name.startsWith('@')) { walk(full); continue; }
+        if (name.startsWith('@')) {
+          walk(full);
+          continue;
+        }
         if (name === '.bin') continue;
         if (fs.existsSync(path.join(full, 'package.json'))) candidates.push(full);
       }
@@ -499,7 +676,9 @@ class PluginManager {
       try {
         const p = JSON.parse(fs.readFileSync(path.join(c, 'package.json'), 'utf8'));
         if (p && p.name) byName.set(p.name, c);
-      } catch { /* ignore */ }
+      } catch {
+        /* ignore */
+      }
     }
     try {
       const rootPkg = JSON.parse(fs.readFileSync(path.join(tmpDir, 'package.json'), 'utf8'));
@@ -507,12 +686,20 @@ class PluginManager {
       for (const key of Object.keys(deps)) {
         if (byName.has(key)) return byName.get(key);
       }
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
     const wanted = this._parseSpecName(spec);
     const named = candidates.filter((c) => {
       try {
-        return String(JSON.parse(fs.readFileSync(path.join(c, 'package.json'), 'utf8')).name || '').toLowerCase() === wanted.toLowerCase();
-      } catch { return false; }
+        return (
+          String(
+            JSON.parse(fs.readFileSync(path.join(c, 'package.json'), 'utf8')).name || '',
+          ).toLowerCase() === wanted.toLowerCase()
+        );
+      } catch {
+        return false;
+      }
     });
     if (named.length) return named[0];
     return candidates.length === 1 ? candidates[0] : null;
@@ -527,7 +714,11 @@ class PluginManager {
     if (!ref) throw new Error('缺少安装来源');
     const progress = (payload) => {
       if (typeof hooks.onProgress === 'function') {
-        try { hooks.onProgress(payload); } catch { /* ignore */ }
+        try {
+          hooks.onProgress(payload);
+        } catch {
+          /* ignore */
+        }
       }
     };
     progress({ stage: 'start', source: type, ref });
@@ -537,10 +728,11 @@ class PluginManager {
     if (type === 'local') {
       progress({ stage: 'copy', source: type });
       const srcDir = path.resolve(ref);
-      if (!fs.existsSync(srcDir) || !fs.statSync(srcDir).isDirectory()) throw new Error('本地插件目录不存在');
+      if (!fs.existsSync(srcDir) || !fs.statSync(srcDir).isDirectory())
+        throw new Error('本地插件目录不存在');
       pkg = this._readPackage(srcDir);
       const id = this._slug(pkg.name);
-      if (this.plugins.some(p => p.id === id)) throw new Error(`插件已安装：${id}`);
+      if (this.plugins.some((p) => p.id === id)) throw new Error(`插件已安装：${id}`);
       installDir = path.join(this.pluginsDir, id);
       fs.mkdirSync(installDir, { recursive: true });
       this._copyDir(srcDir, installDir);
@@ -563,28 +755,57 @@ class PluginManager {
         const ghSrc = path.join(tmpDir, 'gh-src');
         fs.mkdirSync(ghSrc, { recursive: true });
         const tgz = path.join(tmpDir, 'src.tgz');
-        const dl = spawnSync('curl', ['-fsSL', '--connect-timeout', '20', '--max-time', '300', '-o', tgz, `https://codeload.github.com/${repo}/tar.gz/HEAD`], {
-          encoding: 'utf8', windowsHide: true
-        });
+        const dl = spawnSync(
+          'curl',
+          [
+            '-fsSL',
+            '--connect-timeout',
+            '20',
+            '--max-time',
+            '300',
+            '-o',
+            tgz,
+            `https://codeload.github.com/${repo}/tar.gz/HEAD`,
+          ],
+          {
+            encoding: 'utf8',
+            windowsHide: true,
+          },
+        );
         if (dl.status !== 0 || !fs.existsSync(tgz) || fs.statSync(tgz).size === 0) {
           const cls = classifyGithubRepo(`github:${repo}`);
-          const e = new Error(cls.kind === 'catalog'
-            ? '该 GitHub 仓库是插件目录（awesome 列表），不是可安装的插件包'
-            : `无法从 GitHub 下载仓库源码（网络/代理问题）：${repo}`);
+          const e = new Error(
+            cls.kind === 'catalog'
+              ? '该 GitHub 仓库是插件目录（awesome 列表），不是可安装的插件包'
+              : `无法从 GitHub 下载仓库源码（网络/代理问题）：${repo}`,
+          );
           e.catalog = cls.repos || [];
           e.catalogKind = cls.kind;
-          try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
+          try {
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+          } catch {
+            /* ignore */
+          }
           throw e;
         }
-        const ex = spawnSync('tar', ['-xzf', tgz, '-C', ghSrc, '--strip-components=1'], { encoding: 'utf8', windowsHide: true });
+        const ex = spawnSync('tar', ['-xzf', tgz, '-C', ghSrc, '--strip-components=1'], {
+          encoding: 'utf8',
+          windowsHide: true,
+        });
         if (ex.status !== 0 || !fs.existsSync(path.join(ghSrc, 'package.json'))) {
           const cls = classifyGithubRepo(`github:${repo}`);
-          const e = new Error(cls.kind === 'catalog'
-            ? '该 GitHub 仓库是插件目录（awesome 列表），不是可安装的插件包'
-            : `该 GitHub 仓库缺少 package.json，不是可安装的插件包：${repo}`);
+          const e = new Error(
+            cls.kind === 'catalog'
+              ? '该 GitHub 仓库是插件目录（awesome 列表），不是可安装的插件包'
+              : `该 GitHub 仓库缺少 package.json，不是可安装的插件包：${repo}`,
+          );
           e.catalog = cls.repos || [];
           e.catalogKind = cls.kind;
-          try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
+          try {
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+          } catch {
+            /* ignore */
+          }
           throw e;
         }
         // 清理 monorepo 的 workspace:* 协议（npm EUNSUPPORTEDPROTOCOL），devDependencies 不安装
@@ -596,21 +817,42 @@ class PluginManager {
             fs.writeFileSync(pkgPath, JSON.stringify(rawPkg, null, 2) + '\n', 'utf8');
             const runtime = removed.filter((r) => !r.startsWith('devDependencies.'));
             progress({
-              stage: 'npm', source: type,
-              line: `清理 ${removed.length} 个 workspace:* 依赖（npm 不支持）`
-                + (runtime.length ? `；其中 ${runtime.length} 个运行时依赖缺失，插件加载时若引用将报模块不存在` : '')
+              stage: 'npm',
+              source: type,
+              line:
+                `清理 ${removed.length} 个 workspace:* 依赖（npm 不支持）` +
+                (runtime.length
+                  ? `；其中 ${runtime.length} 个运行时依赖缺失，插件加载时若引用将报模块不存在`
+                  : ''),
             });
           }
         } catch (e) {
           progress({ stage: 'npm', source: type, line: `workspace:* 清理跳过: ${e.message}` });
         }
         progress({ stage: 'npm', source: type, line: '安装依赖…' });
-        const dep = await runNpmAsync(['install', '--prefix', ghSrc, '--ignore-scripts', '--no-audit', '--no-fund', '--omit=dev'], {
-          env: npmEnv, timeout: 300000, onOutput: (p) => progress({ stage: 'npm-line', source: type, ...p })
-        });
+        const dep = await runNpmAsync(
+          [
+            'install',
+            '--prefix',
+            ghSrc,
+            '--ignore-scripts',
+            '--no-audit',
+            '--no-fund',
+            '--omit=dev',
+          ],
+          {
+            env: npmEnv,
+            timeout: 300000,
+            onOutput: (p) => progress({ stage: 'npm-line', source: type, ...p }),
+          },
+        );
         if (dep.status !== 0) {
           const detail = dep.error ? dep.error.message : String(dep.stderr || dep.stdout || '');
-          try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
+          try {
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+          } catch {
+            /* ignore */
+          }
           throw new Error(`依赖安装失败: ${detail.slice(-600)}`);
         }
         found = ghSrc;
@@ -618,44 +860,74 @@ class PluginManager {
         const spec = type === 'npm' ? ref : ref;
         // 使用默认 --save：npm 会把根依赖名写入 tmpDir/package.json，
         // 供 _findInstalledPkg 精确定位（GitHub 仓库名 ≠ 包名时同样可靠）。
-        const baseArgs = ['install', '--prefix', tmpDir, '--ignore-scripts', '--no-audit', '--no-fund'];
-        const runNpm = (extra) => runNpmAsync([...baseArgs, ...extra, spec], {
-          env: npmEnv, timeout: 300000, onOutput: (p) => progress({ stage: 'npm-line', source: type, ...p })
-        });
+        const baseArgs = [
+          'install',
+          '--prefix',
+          tmpDir,
+          '--ignore-scripts',
+          '--no-audit',
+          '--no-fund',
+        ];
+        const runNpm = (extra) =>
+          runNpmAsync([...baseArgs, ...extra, spec], {
+            env: npmEnv,
+            timeout: 300000,
+            onOutput: (p) => progress({ stage: 'npm-line', source: type, ...p }),
+          });
         let r = runNpm([]);
         r = await r;
         if (r.status !== 0 && /EALLOWGIT/.test(String(r.stderr || r.stdout || ''))) {
-          progress({ stage: 'npm', source: type, line: 'npm ≥12 默认禁用 git 依赖，放开根依赖后重试…' });
+          progress({
+            stage: 'npm',
+            source: type,
+            line: 'npm ≥12 默认禁用 git 依赖，放开根依赖后重试…',
+          });
           r = await runNpm(['--allow-git=root']);
         }
         if (r.status !== 0) {
-          try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
+          try {
+            fs.rmSync(tmpDir, { recursive: true, force: true });
+          } catch {
+            /* ignore */
+          }
           const errText = String(r.stderr || r.stdout || '');
           if (/ENOENT/.test(errText) && /package\.json/.test(errText)) {
             const cls = classifyGithubRepo(spec);
-            const e = new Error(cls.kind === 'catalog'
-              ? '该 GitHub 仓库是插件目录（awesome 列表），不是可安装的插件包'
-              : '该 GitHub 仓库不是可安装的插件包（缺少 package.json）');
+            const e = new Error(
+              cls.kind === 'catalog'
+                ? '该 GitHub 仓库是插件目录（awesome 列表），不是可安装的插件包'
+                : '该 GitHub 仓库不是可安装的插件包（缺少 package.json）',
+            );
             e.catalog = cls.repos || [];
             e.catalogKind = cls.kind;
             throw e;
           }
           const detail = r.error
             ? `${r.error.message}${r.timedOut ? '（超时）' : ''}`
-            : (r.timedOut ? '安装超时' : String(r.stderr || r.stdout || ''));
+            : r.timedOut
+              ? '安装超时'
+              : String(r.stderr || r.stdout || '');
           throw new Error(`npm 安装失败: ${detail.slice(-600)}`);
         }
         progress({ stage: 'locate', source: type });
         found = this._findInstalledPkg(tmpDir, spec);
       }
       if (!found || !fs.existsSync(path.join(found, 'package.json'))) {
-        try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
+        try {
+          fs.rmSync(tmpDir, { recursive: true, force: true });
+        } catch {
+          /* ignore */
+        }
         throw new Error('npm 安装后未找到插件包');
       }
       pkg = this._readPackage(found);
       const id = this._slug(pkg.name);
-      if (this.plugins.some(p => p.id === id)) {
-        try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
+      if (this.plugins.some((p) => p.id === id)) {
+        try {
+          fs.rmSync(tmpDir, { recursive: true, force: true });
+        } catch {
+          /* ignore */
+        }
         throw new Error(`插件已安装：${id}`);
       }
       installDir = path.join(this.pluginsDir, id);
@@ -671,14 +943,23 @@ class PluginManager {
         const destNm = path.join(installDir, 'node_modules');
         fs.mkdirSync(destNm, { recursive: true });
         const moveIn = (src, dest) => {
-          try { fs.renameSync(src, dest); }
-          catch { try { fs.cpSync(src, dest, { recursive: true }); } catch { /* ignore */ } }
+          try {
+            fs.renameSync(src, dest);
+          } catch {
+            try {
+              fs.cpSync(src, dest, { recursive: true });
+            } catch {
+              /* ignore */
+            }
+          }
         };
         for (const name of fs.readdirSync(tmpNm)) {
           const s = path.join(tmpNm, name);
           const d = path.join(destNm, name);
           if (name === '@deepseek-ai') {
-            if (!fs.existsSync(d)) { fs.mkdirSync(d, { recursive: true }); }
+            if (!fs.existsSync(d)) {
+              fs.mkdirSync(d, { recursive: true });
+            }
             for (const inner of fs.readdirSync(s)) {
               const si = path.join(s, inner);
               const di = path.join(d, inner);
@@ -689,7 +970,11 @@ class PluginManager {
           if (!fs.existsSync(d)) moveIn(s, d);
         }
       }
-      try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
+      try {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      } catch {
+        /* ignore */
+      }
     }
 
     const entry = this._resolveEntry(installDir, pkg);
@@ -700,11 +985,17 @@ class PluginManager {
     const bundlePatch = readBundlePatch(installDir, pkg);
     // 自修复旧安装器覆盖 react 的坏状态（compiler-runtime 子路径丢失）
     if (repairReactRuntime(installDir, pkg)) {
-      progress({ stage: 'finalize', source: type, line: '已修复 react 版本漂移（compiler-runtime）' });
+      progress({
+        stage: 'finalize',
+        source: type,
+        line: '已修复 react 版本漂移（compiler-runtime）',
+      });
     }
     // 补丁中属于本插件自身的行 → 作为默认配置种子
     let config = {};
-    const selfRow = bundlePatch.rows.find(r => r.name === pkg.name || r.id === this._slug(pkg.name));
+    const selfRow = bundlePatch.rows.find(
+      (r) => r.name === pkg.name || r.id === this._slug(pkg.name),
+    );
     if (selfRow && selfRow.config && typeof selfRow.config === 'object') config = selfRow.config;
     const record = {
       id: this._slug(pkg.name),
@@ -719,7 +1010,7 @@ class PluginManager {
       enabled: false, // 默认禁用，需用户显式启用（安全）
       compatTier: 'native',
       compatIssues: [],
-      toolCount: 0
+      toolCount: 0,
     };
     this.plugins.push(record);
     this.save();
@@ -742,7 +1033,7 @@ class PluginManager {
   }
 
   async refreshPlugin(id) {
-    const rec = this.plugins.find(p => p.id === id);
+    const rec = this.plugins.find((p) => p.id === id);
     if (!rec) return { ok: false, error: `插件不存在：${id}` };
     try {
       if (isInteractiveTuiPlugin(rec.installDir)) {
@@ -756,15 +1047,24 @@ class PluginManager {
       if (rec.enabled) {
         const service = this.getVmService?.();
         const inVm = require('../vm/tool-location').isVmOperation(() => service);
-        if (inVm) await this.host.unloadPlugin(id);
+        await this.host.unloadPlugin(id);
+        if (!inVm) await require('../vm/plugin-runtime-client').unload(service, id);
         const res = inVm
-          ? await require('../vm/vm-tool-runtime').runGuestPlugin(service, rec, null, {}, {})
+          ? await require('../vm/vm-tool-runtime').runGuestPlugin(
+              service,
+              rec,
+              null,
+              {},
+              {},
+              this.vmOptions,
+            )
           : await this.host.loadPlugin(id, rec.entry, { name: rec.name, config: rec.config });
         if (res.ok === false) throw new Error(res.error);
         rec.tools = res.tools;
         rec.toolCount = res.tools.length;
         rec.compatIssues = res.issues || [];
       } else {
+        await require('../vm/plugin-runtime-client').unload(this.getVmService?.(), id);
         await this.host.unloadPlugin(id);
         rec.tools = [];
         rec.toolCount = 0;
@@ -777,18 +1077,23 @@ class PluginManager {
   }
 
   async setEnabled(id, enabled) {
-    const rec = this.plugins.find(p => p.id === id);
+    const rec = this.plugins.find((p) => p.id === id);
     if (!rec) return { ok: false, error: `插件不存在：${id}` };
     rec.enabled = !!enabled;
     return await this.refreshPlugin(id);
   }
 
   async uninstall(id) {
-    const rec = this.plugins.find(p => p.id === id);
+    const rec = this.plugins.find((p) => p.id === id);
     if (!rec) return { ok: false, error: `插件不存在：${id}` };
+    await require('../vm/plugin-runtime-client').unload(this.getVmService?.(), id);
     await this.host.unloadPlugin(id);
-    this.plugins = this.plugins.filter(p => p.id !== id);
-    try { fs.rmSync(rec.installDir, { recursive: true, force: true }); } catch { /* ignore */ }
+    this.plugins = this.plugins.filter((p) => p.id !== id);
+    try {
+      fs.rmSync(rec.installDir, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
     this.save();
     return { ok: true };
   }
@@ -799,7 +1104,7 @@ class PluginManager {
    * 失败时回滚旧版本（目录备份 + 清单记录），成功则保留用户配置与启用状态。
    */
   async update(id, options = {}) {
-    const rec = this.plugins.find(p => p.id === id);
+    const rec = this.plugins.find((p) => p.id === id);
     if (!rec) return { ok: false, error: `插件不存在：${id}` };
     const source = rec.source || {};
     const type = source.type || 'local';
@@ -807,7 +1112,7 @@ class PluginManager {
     if (!ref) {
       return {
         ok: false,
-        error: type === 'local' ? '本地插件更新需要选择插件目录' : '缺少更新来源'
+        error: type === 'local' ? '本地插件更新需要选择插件目录' : '缺少更新来源',
       };
     }
     const wasEnabled = !!rec.enabled;
@@ -815,7 +1120,11 @@ class PluginManager {
     const oldDir = rec.installDir;
 
     // 先卸载运行实例
-    try { await this.host.unloadPlugin(id); } catch { /* ignore */ }
+    try {
+      await this.host.unloadPlugin(id);
+    } catch {
+      /* ignore */
+    }
 
     // 旧目录改名备份，安装失败时回滚
     const backupDir = oldDir ? `${oldDir}.old-${Date.now()}` : null;
@@ -826,12 +1135,12 @@ class PluginManager {
         return { ok: false, error: `备份旧版本失败: ${e.message}` };
       }
     }
-    this.plugins = this.plugins.filter(p => p.id !== id);
+    this.plugins = this.plugins.filter((p) => p.id !== id);
     this.save();
 
     try {
       const fresh = await this.install({ type, ref }, { onProgress: options.onProgress });
-      const newRec = this.plugins.find(p => p.id === fresh.id);
+      const newRec = this.plugins.find((p) => p.id === fresh.id);
       if (newRec) {
         // 保留用户配置；新版本新增的默认键并入
         newRec.config = { ...(newRec.config || {}), ...prevConfig };
@@ -839,24 +1148,52 @@ class PluginManager {
         if (wasEnabled) await this.setEnabled(newRec.id, true);
       }
       if (backupDir) {
-        try { fs.rmSync(backupDir, { recursive: true, force: true }); } catch { /* ignore */ }
+        try {
+          fs.rmSync(backupDir, { recursive: true, force: true });
+        } catch {
+          /* ignore */
+        }
       }
       return { ok: true, plugin: this._public(newRec) };
     } catch (e) {
       // 回滚：恢复旧目录与清单记录
       if (backupDir && oldDir) {
-        try { fs.renameSync(backupDir, oldDir); } catch { /* ignore */ }
+        try {
+          fs.renameSync(backupDir, oldDir);
+        } catch {
+          /* ignore */
+        }
       }
-      if (rec && !this.plugins.some(p => p.id === rec.id)) {
+      if (rec && !this.plugins.some((p) => p.id === rec.id)) {
         this.plugins.push(rec);
-        try { this.save(); } catch { /* ignore */ }
+        try {
+          this.save();
+        } catch {
+          /* ignore */
+        }
       }
       return { ok: false, error: e.message };
     }
   }
 
+  async augmentRequest(messages, options) {
+    if (require('../vm/tool-location').isVmOperation(this.getVmService))
+      return require('../vm/plugin-runtime-client').augment(this.getVmService(), messages, options);
+    return require('./service-setup').augmentRequest(this.host, messages, options);
+  }
+  async turnStopping(id) {
+    if (require('../vm/tool-location').isVmOperation(this.getVmService))
+      return require('../vm/plugin-runtime-client').turnStopping(this.getVmService(), id);
+    return this.host.agentsService?.turnStopping(id) || { contexts: [] };
+  }
+  consumeRuntimeEvent(event) {
+    this.host.agentsService?.consumeRuntimeEvent(event);
+    require('../vm/plugin-runtime-client')
+      .notify(this.getVmService?.(), 'runtime', event)
+      .catch((error) => console.warn('[DS VM events]', error.message));
+  }
   async setConfig(id, patch) {
-    const rec = this.plugins.find(p => p.id === id);
+    const rec = this.plugins.find((p) => p.id === id);
     if (!rec) return { ok: false, error: `插件不存在：${id}` };
     rec.config = { ...(rec.config || {}), ...(patch || {}) };
     this.save();
@@ -864,16 +1201,37 @@ class PluginManager {
   }
 
   async callTool(pluginId, toolName, args, execCtx = {}) {
+    if (!pluginId) {
+      const tool = require('../vm/tool-location').isVmOperation(this.getVmService)
+        ? await require('../vm/plugin-runtime-client').surfaceTool(
+            this.getVmService(),
+            toolName,
+            execCtx.sessionKey,
+          )
+        : this.host.surfaceTool(toolName, execCtx.sessionKey);
+      if (!tool) return { ok: false, error: 'Plugin tool unavailable: ' + toolName };
+      pluginId = tool.pluginId;
+      toolName = tool.name;
+    }
+    if (!this.plugins.some((plugin) => plugin.id === pluginId && plugin.enabled))
+      return { ok: false, error: 'Plugin is disabled' };
     if (require('../vm/tool-location').isVmOperation(this.getVmService)) {
-      const record = this.plugins.find(plugin => plugin.id === pluginId && plugin.enabled);
-      if (!record) return {ok:false,location:'vm',error:'插件未启用'};
-      return require('../vm/vm-tool-runtime').runGuestPlugin(this.getVmService(),record,toolName,args || {},execCtx);
+      const record = this.plugins.find((plugin) => plugin.id === pluginId && plugin.enabled);
+      if (!record) return { ok: false, location: 'vm', error: '插件未启用' };
+      return require('../vm/vm-tool-runtime').runGuestPlugin(
+        this.getVmService(),
+        record,
+        toolName,
+        args || {},
+        execCtx,
+        this.vmOptions,
+      );
     }
     return await this.host.callTool(pluginId, toolName, args || {}, execCtx);
   }
 
   list() {
-    return this.plugins.map(p => this._public(p));
+    return this.plugins.map((p) => this._public(p));
   }
 
   /** 启动时加载所有已启用插件（失败仅记录，不阻断应用启动） */
@@ -891,9 +1249,8 @@ class PluginManager {
   }
 
   /**
-   * 启动时全量兼容性重审：已启用的正常加载；禁用的做一次“加载→记录→立即卸载”
-   * 探测，清除旧版本遗留的 compatIssues（如早期缺少 agents seam 的记录），
-   * 让插件卡显示当前宿主能力的真实结论。
+   * 启动时兼容性重审：已启用的正常加载；禁用的只检查包元数据，
+   * 不导入或执行插件代码。实际运行时检查留到用户启用时进行。
    */
   async refreshAll() {
     const service = this.getVmService?.();
@@ -901,12 +1258,18 @@ class PluginManager {
     for (const rec of this.plugins) {
       try {
         let pkg = null;
-        try { pkg = this._readPackage(rec.installDir); } catch { /* ignore */ }
+        try {
+          pkg = this._readPackage(rec.installDir);
+        } catch {
+          /* ignore */
+        }
         if (pkg && repairReactRuntime(rec.installDir, pkg)) {
           console.log(`[DS Plugins] fixed react version drift for ${rec.name}`);
         }
         if (isInteractiveTuiPlugin(rec.installDir)) {
-          rec.compatIssues = ['交互式终端插件（TUI 前端门）：CIBYP GUI 不渲染其终端界面，已跳过加载'];
+          rec.compatIssues = [
+            '交互式终端插件（TUI 前端门）：CIBYP GUI 不渲染其终端界面，已跳过加载',
+          ];
           rec.tools = [];
           rec.toolCount = 0;
           await this.host.unloadPlugin(rec.id);
@@ -916,21 +1279,17 @@ class PluginManager {
           await this.refreshPlugin(rec.id);
           continue;
         }
-        // 禁用插件的重审探测用短超时（交互式 TUI 类插件深探测会挂 30s）
-        const res = await this.host.loadPlugin(rec.id, rec.entry, {
-          name: rec.name,
-          config: rec.config || {},
-          probe: true,
-          applyTimeoutMs: 6000
-        });
-        rec.compatIssues = res.issues || [];
+        // Disabled means no execution, including startup compatibility probes.
+        // Inspect package metadata only; perform runtime checks when enabled.
+        const refusal = await require('./compatibility-policy').entryRefusal(rec.entry, rec);
+        if (refusal) rec.compatIssues = [refusal];
         rec.tools = [];
         rec.toolCount = 0;
         await this.host.unloadPlugin(rec.id);
       } catch (e) {
         rec.compatIssues = [...(rec.compatIssues || []), `启动重审失败: ${e.message}`];
+      }
     }
-  }
     this.save();
     return this.list();
   }
@@ -948,13 +1307,33 @@ class PluginManager {
       compatTier: rec.compatTier,
       compatIssues: rec.compatIssues || [],
       toolCount: rec.toolCount || 0,
-      tools: (rec.tools || []).map(t => ({ name: t.name, description: t.description, schema: t.schema, compatTier: t.compatTier }))
+      tools: (rec.tools || []).map((t) => ({
+        name: t.name,
+        description: t.description,
+        schema: t.schema,
+        compatTier: t.compatTier,
+      })),
     };
   }
 
   async dispose() {
-    try { await this.host.dispose(); } catch { /* ignore */ }
+    this.disposed = true;
+    for (const timer of this.configReloads.values()) clearTimeout(timer);
+    await require('../vm/plugin-runtime-client').dispose(this.getVmService?.());
+    try {
+      await this.host.dispose();
+    } catch {
+      /* ignore */
+    }
   }
 }
 
-module.exports = { PluginManager, readBundlePatch, repairReactRuntime, isInteractiveTuiPlugin, classifyGithubRepo, extractCatalogRepos, sanitizeWorkspaceSpecs };
+module.exports = {
+  PluginManager,
+  readBundlePatch,
+  repairReactRuntime,
+  isInteractiveTuiPlugin,
+  classifyGithubRepo,
+  extractCatalogRepos,
+  sanitizeWorkspaceSpecs,
+};

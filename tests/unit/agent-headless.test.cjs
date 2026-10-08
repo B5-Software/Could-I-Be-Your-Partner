@@ -967,3 +967,33 @@ test('reported provider failures remain visible after the Agent returns normally
   assert.match(state.lastError, /Fixture unauthorized/);
   runtime.dispose();
 });
+
+test(
+  'a plugin policy refusal encountered during retry stops further model attempts',
+  { timeout: 5000 },
+  async (t) => {
+    let attempts = 0;
+    const runtime = createAgentRuntime({
+      ipcMain: createFakeIpcMain(
+        baseHandlers({
+          llmChat: async (_, __, options) => {
+            if (!options.cibypAgentStep)
+              return { ok: true, data: { choices: [{ message: { content: 'Fixture title' } }] } };
+            attempts++;
+            return attempts === 1
+              ? { ok: false, error: 'Temporary provider fixture failure', kind: 'server' }
+              : { ok: false, error: 'Plugin rejected fixture step', kind: 'plugin-policy' };
+          },
+        }),
+      ),
+      eventBus: createEventBus(),
+      interactionPolicy: INTERACTION_POLICY.AUTO_APPROVE,
+    });
+    t.after(() => runtime.dispose());
+    const session = runtime.createSession({ key: 'plugin-refusal', minimalMode: true });
+    await runtime.sendMessage(session.key, 'Fixture task');
+    assert.equal(attempts, 2);
+    assert.equal(runtime.getSessionDetails(session.key).session.status, 'error');
+    assert.match(runtime.getSessionDetails(session.key).session.lastError, /Plugin rejected/);
+  },
+);
