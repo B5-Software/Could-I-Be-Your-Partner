@@ -62,6 +62,7 @@
     if (btn.dataset.tab === 'budget') loadBudgetSettings().catch(() => {});
     if (btn.dataset.tab === 'context') refreshTokenSettings(agent.settings);
     if (btn.dataset.tab === 'overview') refreshSettingsOverview(agent.settings);
+    if (btn.dataset.tab === 'automatic-memory') refreshAutomaticMemory();
     // 推送设置选项卡和面板的 active 状态到 WebUI/Remote
     document.querySelectorAll('.settings-tab').forEach(b => {
       WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '.settings-tab[data-tab="' + b.dataset.tab + '"]', attr: 'class', value: b.className });

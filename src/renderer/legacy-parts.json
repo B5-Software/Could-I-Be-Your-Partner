@@ -115,6 +115,7 @@
   "06b-settings/46-web-research-settings.js",
   "06b-settings/47-chatgpt-accounts.js",
   "06b-settings/48-settings-assistant.js",
+  "06b-settings/49-automatic-memory.js",
   "06b-settings/47-tui-preferences.js",
   "07-history/00-app-panels.js",
   "07-history/01-history-page.js",

@@ -31,6 +31,24 @@
 @media (max-width:650px) { .settings-workspace.assistant-open > .settings-shell { display:none; } .assistant-open .settings-assistant { width:100%; padding:0; } .assistant-open .settings-assistant-inner { width:100%; } }
 @media (prefers-reduced-motion:reduce) { .settings-assistant, .settings-assistant-inner { transition:none; } }
 html[data-animations="false"] .settings-assistant, html[data-animations="false"] .settings-assistant-inner { transition:none; }
+.automatic-memory-heading, .automatic-memory-toolbar, .automatic-memory-item footer { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; }
+.automatic-memory-heading h3 { margin:0; }
+#automatic-memory-status { color:var(--text-secondary); font-size:12px; }
+.automatic-memory-toolbar { margin:18px 0 12px; }
+.automatic-memory-toolbar input { flex:1; min-width:160px; padding:10px 14px; border:1px solid var(--border); border-radius:10px; background:var(--bg-primary); color:var(--text-primary); font:inherit; }
+.automatic-memory-toolbar input::placeholder { color:var(--text-secondary); }
+.automatic-memory-list { display:grid; gap:12px; margin-top:20px; }
+.automatic-memory-item { padding:18px; border:1px solid var(--border); border-radius:14px; background:var(--bg-primary); }
+.automatic-memory-item p { white-space:pre-wrap; overflow-wrap:anywhere; line-height:1.7; margin:14px 0; color:var(--text-primary); }
+.automatic-memory-badge { font-size:11px; color:var(--accent); background:color-mix(in srgb, var(--accent) 9%, transparent); border-radius:20px; padding:4px 9px; }
+.automatic-memory-item footer { color:var(--text-secondary); font-size:12px; }
+.automatic-memory-item footer > div { display:flex; gap:8px; }
+.automatic-memory-item textarea { display:block; width:100%; box-sizing:border-box; margin:16px 0; padding:12px; border:1px solid var(--border); border-radius:10px; background:var(--bg-secondary); color:var(--text-primary); font:inherit; line-height:1.6; resize:vertical; }
+.automatic-memory-empty { display:flex; align-items:center; flex-direction:column; text-align:center; padding:36px 20px; color:var(--text-secondary); gap:14px; }
+.automatic-memory-empty i { color:var(--accent); font-size:28px; }
+.automatic-memory-empty p { margin:0; line-height:1.7; max-width:400px; }
+.automatic-memory-modes { padding:4px 16px; margin:16px 0; border-radius:12px; background:var(--bg-secondary); }
+.automatic-memory-modes .setting-item:last-child { margin-bottom:8px; }
 .settings-shell {
   display: grid;
   grid-template-columns: 200px 1fr;

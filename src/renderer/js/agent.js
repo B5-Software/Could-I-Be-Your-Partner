@@ -1150,6 +1150,14 @@ ${affectionDesc}
 
   async observeRuntimeContext() {
     // This is a safe provider boundary: no model stream or unsettled tool batch is active.
+    let automaticMemory = '';
+    if (!this.ephemeral && typeof this.host.api.automaticMemoryRecall === 'function') {
+      try {
+        const recalled = await this.host.api.automaticMemoryRecall({ ...this.automaticMemoryScope(), query: this._automaticMemoryQuery || '', budgetChars: Math.floor(this.getTokenLimits().contextTokens * 0.05) });
+        automaticMemory = recalled?.content || '';
+      } catch { /* memory availability must not prevent a conversation */ }
+    }
+    this.contextManager.setTransientContextSource('自动记忆', automaticMemory);
     if (!this.minimalMode && this.workspacePath && typeof this.host.api.workspaceGetFileTree === 'function') {
       try {
         const tree = await this.host.api.workspaceGetFileTree(this.workspacePath);
@@ -1849,7 +1857,7 @@ ${affectionDesc}
     }
   }
 
-  async sendMessage(userMessage, attachments = []) {
+  async sendMessage(userMessage, attachments = [], inputOptions = {}) {
     // OpenAI/Anthropic 兼容端点允许无 API Key（llama.cpp 等本地推理场景）；
     // OpenCode Zen/Go 使用内置端点，无需 apiUrl；模型池有启用条目也可继续。
     const llmCfg0 = this.settings?.llm || {};
@@ -1959,6 +1967,7 @@ ${affectionDesc}
     // Save immediately after user message so history exists even before agent finishes
     this.saveToHistory();
 
+    if (!inputOptions.origin || inputOptions.origin === 'user') this.observeAutomaticMemory(userMessage);
     await this.agentLoop(runId);
 
     // Send conversation summary via email if enabled and can send
@@ -2266,7 +2275,8 @@ ${affectionDesc}
    * 热对话：在Agent工作期间注入新消息
    * 消息会在下一次LLM调用前加入上下文
    */
-  injectHotMessage(userMessage, attachments = []) {
+  injectHotMessage(userMessage, attachments = [], inputOptions = {}) {
+    if (!inputOptions.origin || inputOptions.origin === 'user') this.observeAutomaticMemory(userMessage);
     let fullMessage = userMessage;
     if (attachments.length > 0) {
       const attachInfo = attachments.map(a => {
@@ -2287,6 +2297,21 @@ ${affectionDesc}
       fullMessage = userMessage + '\n\n' + attachInfo;
     }
     this.hotMessages.push(attachments.length ? { content: fullMessage, metadata: { displayContent: userMessage, attachments: AttachmentData.normalize(attachments) } } : fullMessage);
+  }
+
+  automaticMemoryScope() {
+    return { mode: this.mode || 'chat', ephemeral: this.ephemeral, workspace: this.codeWorkspacePath || this.workspacePath || '' };
+  }
+
+  observeAutomaticMemory(text) {
+    this._automaticMemoryQuery = String(text || '').slice(-4000);
+    if (this.ephemeral || typeof this.host.api.automaticMemoryObserve !== 'function') return;
+    // Only explicit human input enters the extractor. Attachment text, tool results,
+    // plugin continuations and generated proactive messages are deliberately absent.
+    Promise.resolve(this.host.api.automaticMemoryObserve({ ...this.automaticMemoryScope(),
+      conversationId: this.conversationId, turnId: String(this.runId) + '-' + Date.now(), text,
+      llm: this._llmOptions()
+    })).catch(() => {});
   }
 
   /**

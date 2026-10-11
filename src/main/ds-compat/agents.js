@@ -2,6 +2,7 @@
 'use strict';
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
+const { symbols } = require('@deepseek-ai/cordis');
 const { AgentRegistry, agentEvents } = require('@deepseek-ai/dsh-agent');
 const { SessionStore } = require('@deepseek-ai/dsh-session');
 const { createScope } = require('@deepseek-ai/dsh-scope');
@@ -254,6 +255,9 @@ class CibypAgentsService extends AgentRegistry {
     let pumping,
       disposed = false,
       working = false,
+      suspended = false,
+      wakeRequested = false,
+      deliveryGeneration = 0,
       maintenance,
       maintenanceController,
       lastStatus,
@@ -363,7 +367,11 @@ class CibypAgentsService extends AgentRegistry {
       },
       send(message, target = 'next-turn', wakeup = true) {
         inbox.append(target, message);
-        if (wakeup) void pump();
+        if (wakeup) {
+          suspended = false;
+          wakeRequested = true;
+          void pump();
+        }
       },
       followup(message) {
         agent.send(message);
@@ -375,6 +383,11 @@ class CibypAgentsService extends AgentRegistry {
         inbox.append('next-step', message);
       },
       async cancel(cause, { keepInbox } = {}) {
+        // Cancellation parks accepted, unclaimed work. Only an explicit waking
+        // delivery may resume it; status/whenIdle observers must not do so.
+        suspended = true;
+        wakeRequested = false;
+        deliveryGeneration++;
         maintenanceController?.abort(cause);
         if (!keepInbox) inbox.clear();
         await service.options.transport.send('ds:pluginAgentMessage', {
@@ -431,16 +444,26 @@ class CibypAgentsService extends AgentRegistry {
     const pump = () => {
       if (
         disposed ||
+        suspended ||
+        !wakeRequested ||
         pumping ||
         maintenance ||
         agent.status !== 'idle' ||
         (!pending['next-turn'].length && !pending['next-step'].length)
       )
         return pumping;
+      const generation = deliveryGeneration;
       pumping = (async () => {
         working = true;
         changed();
-        while (!disposed && (pending['next-turn'].length || pending['next-step'].length)) {
+        while (
+          !disposed &&
+          !suspended &&
+          generation === deliveryGeneration &&
+          (wakeRequested || pending['next-turn'].length) &&
+          (pending['next-turn'].length || pending['next-step'].length)
+        ) {
+          wakeRequested = false;
           const messages = [
             ...inbox.splice('next-step', 0, pending['next-step'].length, [], true),
             ...inbox.splice('next-turn', 0, 1, [], true),
@@ -536,6 +559,7 @@ class CibypAgentsService extends AgentRegistry {
         modelResponse = false;
         const signal = options.signal || AbortSignal.timeout(30000);
         const queued = inbox.splice('next-step', 0, pending['next-step'].length, [], true);
+        if (!pending['next-turn'].length && !pending['next-step'].length) wakeRequested = false;
         const incoming =
           requested === 0
             ? messages
@@ -751,8 +775,19 @@ class CibypAgentsService extends AgentRegistry {
       },
     };
     try {
-      const commit = await config.setup?.(agent.ctx, agent);
-      commit?.commit();
+      if (config.setup) {
+        // A factory's setup context must expose the scoped composition services.
+        // createScope inherits the caller's dependency API; the continuation
+        // manager itself does not inject systemPrompt/tools for its factory.
+        await scope.ctx.inject(['systemPrompt', 'tools'], async (creationCtx) => {
+          // Factory setup belongs to this new fiber, not the service method's
+          // shadow receiver (Context.extend intentionally preserves shadows).
+          creationCtx = Object.create(creationCtx, { [symbols.shadow]: { value: undefined } });
+          agent.ctx = creationCtx;
+          const commit = await config.setup(creationCtx, agent);
+          commit?.commit();
+        });
+      }
       if (!store.get(key)) {
         detachSession = store.enter(session);
         store.announce(session);

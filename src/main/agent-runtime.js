@@ -345,6 +345,7 @@ function createAgentRuntime({
     codeWorkspacePath = null,
     minimalMode = false,
     profile = 'default',
+    conversationId = null,
   } = {}) {
     const sessionMode = MODES.includes(mode) ? mode : 'chat';
     const sessionKey =
@@ -365,10 +366,12 @@ function createAgentRuntime({
       createdAt: Date.now(),
       pendingInteraction: null,
       profile: profile === 'settings-assistant' ? profile : 'default',
+      durableConversationId: conversationId,
     };
     sessions.set(sessionKey, session);
 
     session.agent = createRuntimeAgent(session, minimalMode);
+    if (conversationId) session.agent.conversationId = conversationId;
     // Code 模式：以工作区为中心的纯 Agent（不接 CodeOSS/IDE）
     if (sessionMode === 'code') {
       session.agent.workspacePath = workspacePath || null;
@@ -515,6 +518,7 @@ function createAgentRuntime({
       /* 语言读取失败沿用当前语言 */
     }
     await session.agent.init();
+    if (session.durableConversationId) session.agent.conversationId = session.durableConversationId;
     if (session.runtimeOverride)
       session.agent.applySettings({
         ...session.agent.settings,
@@ -1033,7 +1037,7 @@ function createAgentRuntime({
       if (session.compacting)
         return { ok: false, error: 'Context is being compacted; please retry when it finishes' };
       if (session.busy) {
-        session.agent.injectHotMessage(message, attachments || []);
+        session.agent.injectHotMessage(message, attachments || [], options);
         emit({
           type: 'message',
           key: session.key,
@@ -1070,7 +1074,7 @@ function createAgentRuntime({
         try {
           await ensureInitialized(session);
           if (session.stopRequested) return { ok: true, stopped: true };
-          await session.agent.sendMessage(message, attachments || []);
+          await session.agent.sendMessage(message, attachments || [], options);
           if (
             session.mode === 'code' &&
             session.hostWorkspacePath &&

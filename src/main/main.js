@@ -2171,6 +2171,7 @@ function broadcastThemeChanged() {
   }
 }
 function broadcastSettingsChanged() {
+  automaticMemory.settingsChanged();
   codeOSSService.syncPersonalization();
   const payload = { language: settings.language, theme: settings.theme, ime: settings.ime, voice: settings.voice, tarotVisible: settings.tarotVisible, animations: settings.animations !== false, modalAnimations: settings.modalAnimations !== false };
   publishEvent('settings:changed', payload);
@@ -2203,6 +2204,18 @@ function broadcastUsageChanged() {
 nativeTheme.on('updated', () => broadcastThemeChanged());
 
 // ---- IPC: Memory ----
+const automaticMemory = new (require('./services/automatic-memory').AutomaticMemory)({
+  file: path.join(dataDir, 'automatic-memory.json'),
+  getSettings: () => settings,
+  resolveWorkspace: value => vmLocationActive() && value?.startsWith('/') ? vmService?.toHostPath(value) || value : value,
+  chat: (messages, options) => ipcMain.invokeLocal('llm:chat', require('./core/ipc-dispatch').createLocalIpcEvent({ publishEvent }), messages, options),
+  publish: publishEvent
+});
+ipcMain.handle('automatic-memory:list', (_, query) => automaticMemory.snapshot(query));
+ipcMain.handle('automatic-memory:edit', (_, input) => automaticMemory.edit(input));
+ipcMain.handle('automatic-memory:remove', (_, input) => automaticMemory.remove(input));
+ipcMain.handle('automatic-memory:recall', (_, input) => automaticMemory.recall(input));
+ipcMain.handle('automatic-memory:observe', (_, input) => automaticMemory.observe(input));
 ipcMain.handle('memory:search', (_, query) => {
   const q = (query || '').toLowerCase();
   return memory.filter(m => (m.content || '').toLowerCase().includes(q) || (m.tags || []).some(t => t.toLowerCase().includes(q)));

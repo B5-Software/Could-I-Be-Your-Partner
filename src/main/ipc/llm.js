@@ -482,6 +482,8 @@ module.exports = function registerLlmIpc({
     if (options.provider) out.provider = options.provider;
     if (typeof options.autoOpencodeHeaders === 'boolean')
       out.autoOpencodeHeaders = options.autoOpencodeHeaders;
+    if (typeof options.requestReasoningSummary === 'boolean')
+      out.requestReasoningSummary = options.requestReasoningSummary;
     if (options.apiUrl) out.apiUrl = options.apiUrl;
     if (options.apiKey !== undefined && options.apiKey !== null && options.apiKey !== '') {
       out.apiKey = options.apiKey;

@@ -100,6 +100,35 @@ function llmScript(responses) {
   return handler;
 }
 
+test('plugin mail wakes the shared Agent without becoming human automatic-memory input', async () => {
+  const handlers = baseHandlers({ llmChat: llmScript([{ content: 'Done' }]) });
+  const observed = [];
+  handlers.set('automatic-memory:observe', (_, input) => {
+    observed.push(input.text);
+    return { ok: true };
+  });
+  handlers.set('automatic-memory:recall', () => ({ content: '' }));
+  const runtime = createAgentRuntime({
+    ipcMain: createFakeIpcMain(handlers),
+    eventBus: createEventBus(),
+  });
+  try {
+    runtime.createSession({ key: 'child', conversationId: 'stable-child' });
+    await runtime.sendMessage('child', '用户喜欢某种风格：这是另一个 Agent 的推测。', [], {
+      origin: 'plugin',
+    });
+    assert.deepEqual(observed, []);
+    assert.equal(runtime.getSession('child').conversationId, 'stable-child');
+    await runtime.sendMessage('child', '我喜欢先给结论，然后简短说明。');
+    assert.deepEqual(observed, ['我喜欢先给结论，然后简短说明。']);
+    const agent = runtime.sessions.get('child').agent;
+    agent.injectHotMessage('Another agent finding', [], { origin: 'plugin' });
+    assert.equal(observed.length, 1);
+  } finally {
+    runtime.dispose();
+  }
+});
+
 test('uploaded attachment reaches the selected workspace, survives history and never replaces the display caption with a path', async () => {
   const chat = llmScript([{ role: 'assistant', content: 'Reviewed' }]);
   const handlers = baseHandlers({ llmChat: chat });

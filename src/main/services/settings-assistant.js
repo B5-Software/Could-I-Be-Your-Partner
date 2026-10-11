@@ -2,6 +2,41 @@
 'use strict';
 // An explicit leaf allowlist prevents nested patches and prototype paths from escaping the scope.
 const FIELDS = [
+  [
+    'automaticMemory.enabled',
+    'automatic-memory',
+    'setting-auto-memory-enabled',
+    '自动记忆',
+    'boolean',
+  ],
+  [
+    'automaticMemory.capture',
+    'automatic-memory',
+    'setting-auto-memory-capture',
+    '自动记住新信息',
+    'boolean',
+  ],
+  [
+    'automaticMemory.chat',
+    'automatic-memory',
+    'setting-auto-memory-chat',
+    'Chat 模式自动记忆',
+    'boolean',
+  ],
+  [
+    'automaticMemory.code',
+    'automatic-memory',
+    'setting-auto-memory-code',
+    'Code 模式自动记忆',
+    'boolean',
+  ],
+  [
+    'automaticMemory.babe',
+    'automatic-memory',
+    'setting-auto-memory-babe',
+    'Babe 模式自动记忆',
+    'boolean',
+  ],
   ['language', 'language', 'setting-language', 'Language', ['zh-CN', 'en', 'de']],
   ['theme.mode', 'theme', null, 'Appearance mode', ['system', 'light', 'dark']],
   ['theme.accentColor', 'theme', 'setting-accent-color', 'Accent color', 'color'],

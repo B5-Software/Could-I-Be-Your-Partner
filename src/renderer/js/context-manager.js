@@ -83,6 +83,7 @@ class ContextManager {
     this.systemPrompt = null;
     this._latestSystemPrompt = '';
     this._contextSources = new Map();
+    this._transientSources = new Map(); // Recall is never persisted or summarized.
     this._admittedSources = null;
     this._epochCheckpoint = -1;
     this.summaries = []; // Compressed history summaries
@@ -134,6 +135,19 @@ class ContextManager {
   // Observe now; admit only between complete provider/tool turns. Empty strings revoke a source.
   setContextSource(name, content) {
     if (typeof content === 'string') this._contextSources.set(name, content);
+  }
+
+  setTransientContextSource(name, content) {
+    if (typeof content !== 'string' || this._transientSources.get(name) === content) return;
+    this._transientSources.set(name, content);
+    this.invalidateRealBasis();
+  }
+
+  getRequestSystemPrompt() {
+    const extra = [...this._transientSources].filter(([, text]) => text)
+      .map(([name, text]) => `【${name}】\n${text}`).join('\n\n');
+    if (!extra) return this.systemPrompt;
+    return { role: 'system', content: (this.systemPrompt?.content || '') + '\n\n' + extra };
   }
 
   resetContextSources() {
@@ -233,7 +247,8 @@ class ContextManager {
   // 未乘校准因子的原始估算（供校准器使用；校准因子按 raw 与实际值之比更新）
   getRawTotalTokens() {
     let total = 0;
-    if (this.systemPrompt) total += this.estimateMessageTokens(this.systemPrompt);
+    const requestSystem = this.getRequestSystemPrompt();
+    if (requestSystem) total += this.estimateMessageTokens(requestSystem);
     // 摘要在 getMessages() 中作为 system 消息前置，估算必须计入
     if (Array.isArray(this.summaries) && this.summaries.length) {
       total += this.estimateTokens(JSON.stringify(this.summaries));
@@ -248,7 +263,7 @@ class ContextManager {
   // 输入包络指纹：系统提示词/工具 schema/摘要长度变化会让真实基线失效
   _envelopeHash() {
     const summaryLen = Array.isArray(this.summaries) ? JSON.stringify(this.summaries).length : 0;
-    const systemLen = this.systemPrompt ? String(this.systemPrompt.content || '').length : 0;
+    const systemLen = String(this.getRequestSystemPrompt()?.content || '').length;
     return `${systemLen}|${this.toolSchemaTokens}|${summaryLen}|${this.checkpointCount || 0}`;
   }
 
@@ -311,6 +326,7 @@ class ContextManager {
    * @param {Array} messages 历史消息数组
    */
   loadFromHistory(messages, workingState) {
+    this._transientSources.clear();
     this.invalidateRealBasis();
     const arr = Array.isArray(messages) ? messages.map(msg => ({ ...msg, metadata: { ...msg.metadata, messageId: msg.metadata?.messageId || `msg-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}` } })) : [];
     this.messages = arr.filter(msg => msg?.metadata?.kind !== 'context-update');
@@ -966,7 +982,8 @@ class ContextManager {
   // Get messages for API call
   getMessages() {
     const result = [];
-    if (this.systemPrompt) result.push(this.systemPrompt);
+    const requestSystem = this.getRequestSystemPrompt();
+    if (requestSystem) result.push(requestSystem);
 
     // Add summaries as system context
     if (this.summaries.length > 0) {
@@ -1021,7 +1038,8 @@ class ContextManager {
   getUsageBreakdown() {
     const stats = this.getStats();
     const estimateMsg = (m) => this.estimateMessageTokens(m);
-    const system = this.systemPrompt ? estimateMsg(this.systemPrompt) : 0;
+    const requestSystem = this.getRequestSystemPrompt();
+    const system = requestSystem ? estimateMsg(requestSystem) : 0;
     const tools = this.toolSchemaTokens || 0;
     let chat = 0;
     let tool = 0;
@@ -1075,6 +1093,7 @@ class ContextManager {
   }
 
   clear() {
+    this._transientSources.clear();
     this._admittedSources = null;
     this._contextSources.clear();
     this.invalidateRealBasis();

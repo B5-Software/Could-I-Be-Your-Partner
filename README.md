@@ -178,7 +178,7 @@ VM 模式的文件工具、Shell、终端及工作区扩展在 VM 执行；**LLM
 
 - **执行任务**：文件、Shell、网页搜索、网页读取、浏览器、Computer Use、OCR、生图、文档、数学和串口等工具；可控制工具暴露、审批与预算。
 - **搜索**：Bing、Exa、Parallel、TinyFish 或 Fusion；支持自定义 Provider / Key，以及通过引用、偏移和分页控制结果上下文，见 [搜索文档](docs/web-search.md)。
-- **知识与记忆**：持久化知识库、长期记忆、技能与跨会话待办。
+- **知识与记忆**：持久化知识库、长期记忆、技能与跨会话待办。另有独立的[自动记忆](docs/AUTOMATIC_MEMORY.md)：从聊天中提取长期偏好与持续事项，跨会话按需引用；设置 → 自动记忆中可暂停、搜索、编辑或删除。GUI、TUI 与 WebUI 共享数据，Code 项目与 Babe 记忆分别隔离。
 - **MCP 与插件**：管理连接、修改配置及连接状态；DeepSeek Harness 能力 SDK 通过 CIBYP 后台运行，见 [MCP](docs/mcp-connections.md)、[插件兼容说明](docs/deepseek-compatibility.md) 和 [第三方插件实测](docs/deepseek-plugin-tests.md)。
 - **自动化**：定时或事件触发任务，连接共享 Agent 后台，见 [自动化文档](docs/automation.md)。
 - **设置助手**：临时会话中查找、定位和调整设置，敏感字段引导用户自行配置。

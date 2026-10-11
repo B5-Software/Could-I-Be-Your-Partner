@@ -15,6 +15,7 @@ function fixture() {
         mode: 'chat',
         profile: 'default',
         status: 'idle',
+        conversationId: options.conversationId,
       };
       sessions.set(session.key, session);
       return session;
@@ -52,6 +53,21 @@ test('automation admission completes before the LLM turn, without a GUI', async 
   assert.equal(runtime.getSession('1').busy, true);
   assert.deepEqual(calls, [['1', 'work']]);
   runtime.stop('1');
+});
+
+test('a plugin child keeps its durable identity across backend disposal and cold resume', async () => {
+  const { runtime, transport } = fixture();
+  const created = await transport.request('ds:agentCreate', { sessionId: 'durable-child' });
+  assert.equal(runtime.getSession(created.sessionKey).conversationId, 'durable-child');
+  await runtime.close(created.sessionKey);
+  runtime.getHistory = async (_, id) => ({ ok: true, id });
+  runtime.openHistory = async (key, id) => {
+    runtime.sessions.get(key).conversationId = id;
+    return { ok: true };
+  };
+  const resumed = await transport.request('ds:agentResume', { sessionId: 'durable-child' });
+  assert.equal(resumed.sessionKey, 'durable-child');
+  assert.equal(resumed.id, 'durable-child');
 });
 test('plugin followups wait for the current turn and stop cancels queued messages', async () => {
   const { calls, transport } = fixture();

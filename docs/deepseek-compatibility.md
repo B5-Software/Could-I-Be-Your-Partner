@@ -25,7 +25,7 @@ CIBYP 使用真实 Cordis 内核和 DeepSeek Harness 的能力 SDK，将插件�
 ## 仍有边界
 
 - Harness 自带 TUI、React / Web 客户端组件、完整应用入口、私有 UI store 没有自动转换为 CIBYP 界面。它们的后端能力可单独适配，不能直接接管界面。会话导出插件的 HTTP 导出已测试，其 Harness 顶栏按钮没有迁移。
-- 子 Agent provider 不支持 DS 的 persona、toolFilter、outputSchema 和跨调用 continuation；不能把这些选项当作已实现。浏览器 / computer-use 等未挂载的 DS 服务需要额外适配。
+- 一次性子 Agent provider 不支持 DS 的 persona、toolFilter 和 outputSchema。SDK 的可继续子 Agent 已补测双向消息、中断、唤醒与恢复；它与 CIBYP 自带的 `runSubAgent` 是不同入口，具体边界见[主 / 子 Agent 消息机制](agent-messaging.md)。浏览器 / computer-use 等未挂载的 DS 服务需要额外适配。
 - 部分 SDK 深层子路径、插件自带原生模块、平台专用依赖和自定义 Provider 需要具体测试；包根入口可用不代表所有内部模块可用。
 - Commands 注册与调用已提供，插件命令尚未自动加入各前端的斜杠菜单。仅在运行时创建的动态工具还需要补齐前端目录刷新。
 - 工具 guard 的验证覆盖 DS 工具链，不表示同一个钩子已经保护 CIBYP 所有内置工具。第三方 Git 插件的 amend 拦截通过测试，不构成所有破坏性 Git 操作的安全保证。

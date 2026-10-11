@@ -701,6 +701,7 @@
             <button class="settings-tab" data-tab="ai"><i class="fa-solid fa-user-astronaut"></i> AI 形象</button>
             <button class="settings-tab" data-tab="babe"><i class="fa-solid fa-heart"></i> Babe 模式</button>
             <button class="settings-tab" data-tab="user"><i class="fa-solid fa-user"></i> 个人资料</button>
+            <button class="settings-tab" data-tab="automatic-memory"><i class="fa-solid fa-brain"></i> 自动记忆</button>
             <div class="settings-tab-group" data-i18n="ui.settings.groups.model">模型与智能</div>
             <button class="settings-tab" data-tab="llm"><i class="fa-solid fa-microchip"></i> 模型与连接</button>
             <button class="settings-tab" data-tab="decision"><i class="fa-solid fa-scale-balanced"></i> System One 决策模型</button>
@@ -745,6 +746,26 @@
           </div>
           <div class="settings-panels">
             <div class="settings-panel active" data-tab="overview"><div class="settings-group"><h3>常用设置</h3><p class="setting-hint">从这里查看配置状态，或搜索具体设置。普通字段修改后自动保存；连接、安装和维护操作使用各页按钮。</p><div id="settings-overview-cards" class="settings-overview-grid"></div></div><div class="settings-group"><h3>限额分别控制什么</h3><div class="settings-limit-guide"><p><strong>Token 与上下文</strong><br>单次请求容量、输出预留、工具加载和历史压缩。</p><p><strong>消费与用量上限</strong><br>每天累计 Token、生成图片张数、System One 调用次数，以及按价格表估算的日／周／月 LLM 费用。</p><p><strong>任务目标预算</strong><br>只作用于当前目标任务，在任务界面设置，保留独立的任务范围。</p></div><button class="btn-secondary" type="button" data-settings-open="context">调整 Token 分配</button> <button class="btn-secondary" type="button" data-settings-open="budget">调整累计限额</button></div></div>
+            <div class="settings-panel automatic-memory-settings" data-tab="automatic-memory">
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-brain"></i> 自动记忆</h3>
+                <p class="setting-hint">自然聊天，延续了解。自动记住长期偏好与持续事项，在相关的新会话中引用。</p>
+                <div class="setting-item"><label for="setting-auto-memory-enabled">启用自动记忆</label><input type="checkbox" id="setting-auto-memory-enabled" data-setting="automaticMemory.enabled" data-auto-memory="enabled" role="switch"></div>
+                <div class="setting-item"><label for="setting-auto-memory-capture">自动记住新信息</label><input type="checkbox" id="setting-auto-memory-capture" data-setting="automaticMemory.capture" data-auto-memory="capture" role="switch"><p class="setting-hint">关闭后仅引用已有记忆。提取使用当前会话模型，产生少量额外用量，计入消费上限。</p></div>
+                <div class="automatic-memory-modes">
+                  <div class="setting-item"><label for="setting-auto-memory-chat">Chat 模式自动记忆</label><input type="checkbox" id="setting-auto-memory-chat" data-setting="automaticMemory.chat" data-auto-memory="chat" role="switch"></div>
+                  <div class="setting-item"><label for="setting-auto-memory-code">Code 模式自动记忆</label><input type="checkbox" id="setting-auto-memory-code" data-setting="automaticMemory.code" data-auto-memory="code" role="switch"></div>
+                  <div class="setting-item"><label for="setting-auto-memory-babe">Babe 模式自动记忆</label><input type="checkbox" id="setting-auto-memory-babe" data-setting="automaticMemory.babe" data-auto-memory="babe" role="switch"></div>
+                </div>
+                <p class="setting-hint">个人偏好可在 Chat 与 Code 间共享；项目事项仅用于相同工作区；Babe 记忆独立。临时会话、附件正文、工具输出和密钥不参与提取。</p>
+              </div>
+              <div class="settings-group">
+                <div class="automatic-memory-heading"><h3>记住的事</h3><span id="automatic-memory-status" role="status" aria-live="polite"></span></div>
+                <div class="automatic-memory-toolbar"><input id="automatic-memory-search" type="search" placeholder="搜索自动记忆…" aria-label="搜索自动记忆"><button id="automatic-memory-refresh" class="btn-secondary" type="button"><i class="fa-solid fa-arrows-rotate"></i> 刷新</button><button id="automatic-memory-clear" class="btn-secondary" type="button">清空自动记忆</button></div>
+                <p class="setting-hint">与长期记忆和聊天记录分别保存。删除聊天不会自动删除这里的记忆；手动编辑的内容不会被自动覆盖。</p>
+                <div id="automatic-memory-list" class="automatic-memory-list" aria-live="polite"></div>
+              </div>
+            </div>
             <div class="settings-panel" data-tab="ai">
 
               <div class="settings-group">

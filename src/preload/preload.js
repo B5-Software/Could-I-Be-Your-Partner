@@ -86,6 +86,12 @@ contextBridge.exposeInMainWorld('api', {
 
   // Memory
   memorySearch: (q) => ipcRenderer.invoke('memory:search', q),
+  automaticMemoryList: (query) => ipcRenderer.invoke('automatic-memory:list', query),
+  automaticMemoryEdit: (input) => ipcRenderer.invoke('automatic-memory:edit', input),
+  automaticMemoryRemove: (input) => ipcRenderer.invoke('automatic-memory:remove', input),
+  automaticMemoryRecall: (input) => ipcRenderer.invoke('automatic-memory:recall', input),
+  automaticMemoryObserve: (input) => ipcRenderer.invoke('automatic-memory:observe', input),
+  onAutomaticMemoryChanged: (callback) => onChannel('automatic-memory:changed', callback),
   memoryAdd: (item) => ipcRenderer.invoke('memory:add', item),
   memoryDelete: (id) => ipcRenderer.invoke('memory:delete', id),
   memoryUpdate: (id, data) => ipcRenderer.invoke('memory:update', { id, data }),

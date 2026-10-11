@@ -3,6 +3,7 @@
     refreshChatGPTAccounts();
     loadWebResearchSettings(s);
     loadTuiPreferences(s);
+    loadAutomaticMemorySettings(s);
     refreshSettingsOverview(s);
     refreshTokenSettings(s);
     populateFontSelects(s);

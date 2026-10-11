@@ -4,6 +4,7 @@ const catalog = require('../../shared/generated/settings-catalog.json');
 const { FIELDS } = require('../services/settings-assistant');
 const rootCategories = {
   aiPersona: 'ai',
+  automaticMemory: 'automatic-memory',
   userProfile: 'user',
   llm: 'llm',
   decision: 'decision',

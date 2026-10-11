@@ -39,7 +39,7 @@ function createBackendTransport({ getRuntime, publish, getSettings = () => ({}) 
     )
       throw new Error('Maximum concurrent sessions reached');
     owner
-      .sendMessage(key, String(text || ''))
+      .sendMessage(key, String(text || ''), [], { origin: 'plugin' })
       .then((result) => {
         if (!result.ok) publish('notifications:toast', { type: 'error', message: result.error });
       })
@@ -63,7 +63,7 @@ function createBackendTransport({ getRuntime, publish, getSettings = () => ({}) 
       if (!session) {
         const history = await owner.getHistory('chat', payload.sessionId);
         if (!history || history.ok === false) throw new Error('Conversation does not exist');
-        session = owner.createSession({ mode: 'chat' });
+        session = owner.createSession({ mode: 'chat', key: payload.sessionId });
         try {
           const result = await owner.openHistory(session.key, payload.sessionId);
           if (!result.ok) throw new Error(result.error);
@@ -89,7 +89,9 @@ function createBackendTransport({ getRuntime, publish, getSettings = () => ({}) 
         throw new Error('Session already exists');
       session = owner.createSession({
         mode: 'chat',
-        ...(channel === 'ds:agentCreate' && payload.sessionId ? { key: payload.sessionId } : {}),
+        ...(channel === 'ds:agentCreate' && payload.sessionId
+          ? { key: payload.sessionId, conversationId: payload.sessionId }
+          : {}),
       });
     }
     try {
@@ -179,7 +181,9 @@ function createBackendTransport({ getRuntime, publish, getSettings = () => ({}) 
         const maximum = Math.max(1, Number(getSettings().sessions?.maxConcurrent) || 10);
         if (owner.listSessions().filter((s) => s.busy).length >= maximum)
           throw new Error('Maximum concurrent sessions reached');
-        const result = await owner.sendMessage(key, String(payload.text || ''));
+        const result = await owner.sendMessage(key, String(payload.text || ''), [], {
+          origin: 'plugin',
+        });
         if (result?.ok === false) throw new Error(result.error || 'Agent turn failed');
         return result;
       });

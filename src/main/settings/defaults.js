@@ -3,6 +3,7 @@
 
 module.exports = function createDefaultSettings({ DEFAULT_DECISION_SETTINGS }) {
   const DEFAULT_SETTINGS = {
+    automaticMemory: { enabled: true, capture: true, chat: true, code: true, babe: true },
     llm: {
       provider: 'openai-compat',
       apiUrl: '',
