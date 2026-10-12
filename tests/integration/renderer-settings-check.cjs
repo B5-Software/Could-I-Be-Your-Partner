@@ -21,7 +21,13 @@ module.exports = async function checkSettings(webContents) {
       .filter(input => input.value !== '' && !input.disabled && !input.checkValidity()).map(input => input.id);
     check(!invalidDefaults.length, 'invalid default settings: ' + invalidDefaults.join(', '));
     const allTabs = [...document.querySelectorAll('.settings-tab')];
-    check(allTabs.length === 37, 'settings category missing: ' + allTabs.length);
+    const tabIds = allTabs.map(tab => tab.dataset.tab);
+    const panelIds = [...document.querySelectorAll('.settings-panel')].map(panel => panel.dataset.tab);
+    check(new Set(tabIds).size === tabIds.length, 'duplicate settings category');
+    check(panelIds.length === tabIds.length && panelIds.every(id => tabIds.includes(id)), 'settings navigation and panels differ');
+    for (const id of ['overview', 'llm', 'context', 'budget', 'babe', 'automatic-memory', 'devices', 'tui', 'updates']) {
+      check(tabIds.includes(id), 'settings category missing: ' + id);
+    }
     let visited = 0, labelled = 0, spaced = 0;
     for (const tab of allTabs.filter(tab => !tab.hidden && tab.style.display !== 'none')) {
       check(window.activateSettingsTab(tab.dataset.tab), 'cannot open ' + tab.dataset.tab);
@@ -46,7 +52,7 @@ module.exports = async function checkSettings(webContents) {
       check(document.querySelectorAll('.settings-panel.active').length === 1, 'multiple active panels');
       check(tab.getAttribute('aria-selected') === 'true', 'tab selection not accessible');
       check([...document.querySelectorAll('.settings-panel:not(.active)')].every(p => p.inert), 'hidden panels are focusable');
-      check(panel.querySelector('.settings-section-intro') || tab.dataset.tab === 'overview', 'category has no guidance');
+      check(panel.querySelector('.settings-section-intro') || tab.dataset.tab === 'overview', 'category has no guidance: ' + tab.dataset.tab);
       for (const control of panel.querySelectorAll('input[id], select[id], textarea[id]')) {
         if (control.type === 'hidden' || control.type === 'file') continue;
         check(control.labels?.length || control.getAttribute('aria-label'), 'control has no accessible label: ' + control.id);

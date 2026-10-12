@@ -23,6 +23,7 @@
     fedikitten: ['FediKitten', '使用登录按钮连接账号。', '社交 登录'],
     cibypim: ['CIBYP-IM', '使用登录按钮连接账号与消息服务。', '聊天 即时消息 登录'],
     webcontrol: ['Web 控制', '配置访问方式、密码与连接状态。', '远程 浏览器 remote'],
+    devices: ['Remote 设备', 'Micro 主动连接当前后台。设备仅获得下方明确授予的工具和资源权限。', '远程 硬件 Mini Micro GPIO ESP32 设备 授权'],
     playwright: ['浏览器自动化', '保存后下一次浏览器启动使用新配置。', 'Playwright 浏览器 headless'],
     automation: ['自动化', '配置本地 HTTP 信号服务及访问令牌。', '触发 定时 token HTTP'],
     plugins: ['插件', '安装和管理插件及其配置。', '扩展 DeepSeek MCP'],

@@ -7,7 +7,7 @@
  *
  *   Chat  ：对话一轮 → 流式/工具事件 → 历史落盘
  *   审批  ：危险命令 → TUI 审批弹窗 → y 允许 → 工具执行 → 继续对话
- *   Babe  ：好感度标记解析 → 好感度变化 → babe 历史落盘
+ *   Babe  ：拒绝任意加分 → 有证据的关系变化 → 共享记忆与 babe 历史落盘
  *   Code  ：工作区设置 → 代码工具 → 工作区代码历史落盘
  *
  * LLM 通过 undici fetch stub 伪造（net-proxy 会包装 global.fetch）。
@@ -283,9 +283,26 @@ async function run() {
   typeText(tuiApp, '在吗');
   await tuiApp.handleKey({ name: 'enter' });
   await tuiApp.settled();
-  assert.equal(tuiApp.state.affection, 43, '好感度应随标记 +3');
+  assert.equal(tuiApp.state.affection, 40, '旧式任意加分标记不得修改共享关系');
   text = frameText(tuiApp);
   assert.ok(text.includes('今天也要加油哦'), '好感度标记应从正文剥离后渲染');
+  assert.ok(!text.includes('【好感度'), '旧式好感度标记不得出现在正文');
+
+  pushReply(
+    '下次我们一起聊海边的风吧。<cibyp-relationship>{"kind":"connection","evidence":"我喜欢海边散步","memory":{"kind":"preference","content":"用户喜欢海边散步。"}}</cibyp-relationship>',
+  );
+  typeText(tuiApp, '我喜欢海边散步');
+  await tuiApp.handleKey({ name: 'enter' });
+  await tuiApp.settled();
+  assert.ok(
+    tuiApp.state.affection > 40 && tuiApp.state.affection < 43,
+    '真实关系事件应更新 TUI，任意加分不得生效',
+  );
+  assert.ok(
+    tuiApp.state.relationship.memories.some((memory) => memory.content.includes('海边散步')),
+    'TUI 应收到持久关系记忆',
+  );
+  assert.ok(!frameText(tuiApp).includes('cibyp-relationship'), '隐藏关系元数据不得出现在正文');
 
   const babeHistory = await runtime.listHistory('babe');
   assert.ok(Array.isArray(babeHistory), 'babe 历史可读');
