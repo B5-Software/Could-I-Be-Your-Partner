@@ -1,9 +1,10 @@
 {
   "repository": "https://github.com/B5-Software/CIBYP-Remote",
   "version": "0.1.0-alpha.1",
+  "lineEndings": "LF",
   "files": {
     "package.json": "316a02d46bfe45256caec0306b59fdf82ec53eed3212d0a46909c1d0b761a466",
-    "LICENSE": "81cbae84a29ce7e770bf2bc7b178e50bda0ce8de6067aba661b0bc7b05b562f8",
+    "LICENSE": "8b1ba204bb69a0ade2bfcf65ef294a920f6bb361b317dba43c7ef29d96332b9b",
     "src/client.js": "2b698430b0890589725e30d120b4beb19da40531e1e8f9eff8186cde813c5fd4",
     "src/contract.js": "613209b3fe20f3adb595fbf355d3e1635408f3a42269c7659f45cfc8b661ad71",
     "src/credentials.js": "5b6957208fb72c9528c306ef241fac25b39347e7f5f7747fbc667b5fbda67888",

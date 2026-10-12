@@ -32,10 +32,15 @@ if (process.argv.includes('--check')) {
   const lock = {
     repository: 'https://github.com/B5-Software/CIBYP-Remote',
     version: JSON.parse(fs.readFileSync(path.join(source, 'package.json'), 'utf8')).version,
+    lineEndings: 'LF',
     files: {},
   };
   for (const name of files) {
-    const data = fs.readFileSync(path.join(source, name));
+    // These inputs are UTF-8 text. Match .gitattributes before hashing so a
+    // Windows import and a fresh Linux/Windows checkout have identical bytes.
+    const data = Buffer.from(
+      fs.readFileSync(path.join(source, name), 'utf8').replace(/\r\n/g, '\n'),
+    );
     const target = path.join(destination, name);
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.writeFileSync(target, data);
