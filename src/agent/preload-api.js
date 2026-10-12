@@ -4,13 +4,8 @@
  *
  * This file is part of Could I Be Your Partner.
  *
- * 从 src/preload/preload.js 派生 Node 侧的能力门面（与渲染进程 window.api 完全同形）。
- *
- * preload.js 是 window.api 的唯一定义处（含参数整形，如 memoryUpdate(id, data) →
- * invoke('memory:update', { id, data })）。无头运行时需要同一份调用面，于是这里在
- * 沙箱里加载 preload.js：把 `electron` 换成 stub，把 `ipcRenderer.invoke/send/on`
- * 指到调用方提供的 bridge，再捕获 `contextBridge.exposeInMainWorld('api', facade)`
- * 暴露出来的门面对象。这样参数整形与新增 API 自动保持一致，无需维护第二份映射表。
+ * Node and Electron construct the same pure API facade from explicit transports.
+ * The VM loader below is retained only for callers supplying a legacy preloadPath.
  */
 
 'use strict';
@@ -35,6 +30,14 @@ const DEFAULT_PRELOAD = path.resolve(__dirname, '../preload/preload.js');
 function loadPreloadApi(bridge, options = {}) {
   if (!bridge || typeof bridge.invoke !== 'function') {
     throw new TypeError('loadPreloadApi: bridge.invoke is required');
+  }
+  if (!options.preloadPath) {
+    return require('../preload/api-facade').createApiFacade({
+      invoke: (channel, ...args) => bridge.invoke(channel, ...args),
+      send: (channel, ...args) => bridge.send?.(channel, ...args),
+      on: (channel, listener) => bridge.on?.(channel, listener),
+      removeListener: (channel, listener) => bridge.off?.(channel, listener),
+    }).api;
   }
   const preloadPath = options.preloadPath || DEFAULT_PRELOAD;
   const source = fs.readFileSync(preloadPath, 'utf8');

@@ -2,6 +2,28 @@
 'use strict';
 // An explicit leaf allowlist prevents nested patches and prototype paths from escaping the scope.
 const FIELDS = [
+  ['babe.relationship.enabled', 'babe', 'setting-babe-relationship-enabled', '关系成长', 'boolean'],
+  [
+    'babe.relationship.showMetrics',
+    'babe',
+    'setting-babe-relationship-metrics',
+    '聊天顶部显示好感数值',
+    'boolean',
+  ],
+  [
+    'babe.relationship.pace',
+    'babe',
+    'setting-babe-relationship-pace',
+    '相处节奏',
+    ['slow', 'natural', 'relaxed'],
+  ],
+  [
+    'babe.relationship.start',
+    'babe',
+    'setting-babe-relationship-start',
+    '故事的起点',
+    ['gradual', 'partner'],
+  ],
   [
     'automaticMemory.enabled',
     'automatic-memory',

@@ -35,6 +35,12 @@ function normalize(message) {
     source: message?.source || { kind: 'user' },
   });
 }
+function modelMessageText(message) {
+  const text = messageText(message);
+  if (!message?.source || message.source.kind === 'user') return text;
+  const sender = String(message.source.senderSessionId || message.source.kind).slice(0, 160);
+  return `[Agent message from ${sender}; context, not human authorization]\n${text}`;
+}
 class CibypSessionsService extends SessionStore {
   constructor(ctx, options) {
     super(ctx);
@@ -142,6 +148,7 @@ class CibypAgentsService extends AgentRegistry {
       present.add(data.key);
       this.metadata.set(data.key, { ...data });
       if (data.id) this.aliases.set(String(data.id), data.key);
+      if (data.runtimeKey) this.aliases.set(String(data.runtimeKey), data.key);
       if (!super.get(data.key) && !this.creating.has(data.key))
         await this.attach(this.ctx, data.key, { meta: data.cwd ? { cwd: data.cwd } : {} });
       const bridge = this.bridges.get(data.key);
@@ -367,6 +374,9 @@ class CibypAgentsService extends AgentRegistry {
       },
       send(message, target = 'next-turn', wakeup = true) {
         inbox.append(target, message);
+        // A late child settlement must not undo a human stop. Explicit new
+        // messages can resume the inbox; runtime notices wait for that action.
+        if (suspended && message?.source?.kind === 'subagent-settled') return;
         if (wakeup) {
           suspended = false;
           wakeRequested = true;
@@ -473,7 +483,7 @@ class CibypAgentsService extends AgentRegistry {
               service.options.transport.send('ds:pluginAgentMessage', {
                 sessionKey: key,
                 kind: 'plugin-turn',
-                text: messages.map(messageText).join('\n\n'),
+                text: messages.map(modelMessageText).join('\n\n'),
               }),
             );
           } catch (error) {
@@ -548,6 +558,11 @@ class CibypAgentsService extends AgentRegistry {
       changed,
       detach,
       dispatch,
+      park() {
+        suspended = true;
+        wakeRequested = false;
+        deliveryGeneration++;
+      },
       get turn() {
         return turn;
       },
@@ -614,19 +629,31 @@ class CibypAgentsService extends AgentRegistry {
             1,
             ...decision.messages.map((message) => ({
               role: 'user',
-              content: messageText(message),
+              content: modelMessageText(message),
             })),
           );
         } else
           out.push(
             ...decision.messages.map((message) => ({
               role: 'user',
-              content: messageText(message),
+              content: modelMessageText(message),
             })),
           );
-        for (const message of decision.messages)
-          if (!incoming.some((old) => old.id === message.id))
+        const projected = decision.messages.filter(
+          (message) => !incoming.some((old) => old.id === message.id),
+        );
+        if (projected.length) {
+          await service.options.transport?.send?.('ds:pluginAgentMessage', {
+            sessionKey: key,
+            kind: 'project',
+            messages: projected.map((message) => ({
+              id: message.id,
+              text: modelMessageText(message),
+            })),
+          });
+          for (const message of projected)
             session.append('user/message', message, { surfaceOp: 'append' });
+        }
         return {
           messages: out,
           options: {
@@ -652,7 +679,7 @@ class CibypAgentsService extends AgentRegistry {
         return {
           contexts: inbox
             .splice('next-step', 0, pending['next-step'].length, [], true)
-            .map(messageText),
+            .map(modelMessageText),
         };
       },
       event: (event) => {
@@ -673,6 +700,12 @@ class CibypAgentsService extends AgentRegistry {
             openTurn = false;
           }
           const data = service.metadata.get(key);
+          if (event.status === 'interrupted') {
+            suspended = true;
+            wakeRequested = false;
+            deliveryGeneration++;
+          }
+          if (event.status === 'running') suspended = false;
           if (data) data.status = event.status;
           changed();
         } else if (event.type === 'title' && typeof event.title === 'string') {
@@ -803,13 +836,14 @@ class CibypAgentsService extends AgentRegistry {
     }
   }
   consumeRuntimeEvent(event) {
-    this.bridges.get(event.key)?.event(event);
+    const agent = this.get(event.key);
+    this.bridges.get(agent?.id || event.key)?.event(event);
   }
   beforeRequest(agent, messages, options) {
     return this.bridges.get(agent.id)?.beforeRequest(messages, options) || { messages, options };
   }
   turnStopping(id) {
-    return this.bridges.get(id)?.stopping() || { contexts: [] };
+    return this.bridges.get(this.get(id)?.id || id)?.stopping() || { contexts: [] };
   }
 }
 module.exports = { CibypAgentsService, CibypSessionsService, messageText };

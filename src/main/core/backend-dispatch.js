@@ -1,26 +1,29 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 'use strict';
 
-const fs = require('node:fs');
-const path = require('node:path');
 const { createIpcDispatch } = require('./ipc-dispatch');
 
 // The preload is the single capability declaration for every frontend. Never
 // expose arbitrary properties of the runtime, Electron, or the IPC registry.
-function createBackendDispatch({ runtime, ipcMain, eventBus, desktop, shutdown, bootState }) {
-  const source = fs
-    .readdirSync(path.join(__dirname, '../../preload'))
-    .filter((file) => file === 'preload.js' || file.endsWith('-preload.js'))
-    .map((file) => fs.readFileSync(path.join(__dirname, '../../preload', file), 'utf8'))
-    .join('\n');
-  const channels = new Set(
-    [...source.matchAll(/ipcRenderer\.(?:invoke|send)\(['"]([^'"]+)['"]/g)].map((m) => m[1]),
-  );
-  const ipc = createIpcDispatch({
-    ipcMain,
-    publishEvent: (c, p) => eventBus.publish(c, p),
-    subscribe: (c, f) => eventBus.subscribe(c, f),
-  });
+function createBackendDispatch({
+  runtime,
+  ipcMain,
+  bridge,
+  eventBus,
+  desktop,
+  shutdown,
+  bootState,
+  storageDir,
+  product,
+}) {
+  const channels = new Set(require('../../shared/ipc-capabilities.json'));
+  const ipc =
+    bridge ||
+    createIpcDispatch({
+      ipcMain,
+      publishEvent: (c, p) => eventBus.publish(c, p),
+      subscribe: (c, f) => eventBus.subscribe(c, f),
+    });
   const methods = new Set([
     'getSettings',
     'saveSettings',
@@ -62,7 +65,7 @@ function createBackendDispatch({ runtime, ipcMain, eventBus, desktop, shutdown, 
     'prepareWorkspace',
     'uploadAttachment',
   ]);
-  return async function dispatch({ method, args = [] } = {}) {
+  const dispatch = async function dispatch({ method, args = [] } = {}) {
     if (!Array.isArray(args) || args.length > 30) throw new Error('Invalid arguments');
     if (method === 'snapshot')
       return {
@@ -124,6 +127,14 @@ function createBackendDispatch({ runtime, ipcMain, eventBus, desktop, shutdown, 
       throw new Error('Unknown backend method');
     return runtime[method](...args);
   };
+  dispatch.remote = require('../services/remote-control').createRemoteControl({
+    runtime,
+    eventBus,
+    bootState,
+    storageDir,
+    product,
+  });
+  return dispatch;
 }
 
 module.exports = { createBackendDispatch };

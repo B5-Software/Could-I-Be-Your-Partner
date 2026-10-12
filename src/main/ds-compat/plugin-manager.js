@@ -1177,14 +1177,31 @@ class PluginManager {
   }
 
   async augmentRequest(messages, options) {
-    if (require('../vm/tool-location').isVmOperation(this.getVmService))
-      return require('../vm/plugin-runtime-client').augment(this.getVmService(), messages, options);
+    if (require('../vm/tool-location').isVmOperation(this.getVmService)) {
+      const admitted =
+        this.host.agentsService?.get(options.sessionKey) && options.cibypAgentStep
+          ? await this.host.agentsService.beforeRequest(
+              this.host.agentsService.get(options.sessionKey),
+              messages,
+              options,
+            )
+          : { messages, options };
+      return require('../vm/plugin-runtime-client').augment(
+        this.getVmService(),
+        admitted.messages,
+        admitted.options,
+      );
+    }
     return require('./service-setup').augmentRequest(this.host, messages, options);
   }
   async turnStopping(id) {
-    if (require('../vm/tool-location').isVmOperation(this.getVmService))
-      return require('../vm/plugin-runtime-client').turnStopping(this.getVmService(), id);
-    return this.host.agentsService?.turnStopping(id) || { contexts: [] };
+    const host = (await this.host.agentsService?.turnStopping(id)) || { contexts: [] };
+    if (!require('../vm/tool-location').isVmOperation(this.getVmService)) return host;
+    const guest = await require('../vm/plugin-runtime-client').turnStopping(
+      this.getVmService(),
+      id,
+    );
+    return { contexts: [...new Set([...(host.contexts || []), ...(guest.contexts || [])])] };
   }
   consumeRuntimeEvent(event) {
     this.host.agentsService?.consumeRuntimeEvent(event);

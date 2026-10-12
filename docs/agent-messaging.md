@@ -22,20 +22,25 @@
 3. CIBYP 初始化重置聊天 ID，导致 SDK 子会话 ID 和聊天记录 ID 分离。插件创建采用稳定 ID，初始化保留该 ID；冷恢复使用同一个后台 key。
 4. 插件消息经过共享后台时会走人类 sendMessage 入口。现在携带内部 origin，仍可驱动 Agent，但不会触发人类自动记忆提取；普通人类输入保持原行为。
 
-## 当前边界
+## 统一原生 `runSubAgent`
 
-DS 插件可以使用 `ctx.subagents.startContinuable`、`sendMessage` 和 interrupt 等原生合约。测试覆盖了真实 SDK continuation manager 与 CIBYP provider，另覆盖共享后台的身份恢复和输入来源。
+DS 插件和原生工具现在共用 `ctx.subagents.startContinuable`、`sendMessage`、interrupt、持久化收件箱与同一个 CIBYP 后台 Agent 循环。GUI、TUI、WebUI 不再各自运行一次性子循环。
 
-CIBYP 自带的 `runSubAgent` 仍是独立的前台一次性子循环，完成后返回报告；其 `sub-agent-message` 回调主要用于界面展示。它还没有变成上述可继续的消息工具，不应宣称所有原生子 Agent 已支持双向协作。
+- `runSubAgent({task,context,tools,wait,maxIterations})`：默认同步返回报告；`wait:false` 返回持久子会话 ID 与已接受的消息 ID。
+- `sendAgentMessage({targetId,message})`：直接父子双向通信。工作时在安全步骤边界接收；空闲时唤醒；实例释放后从同一会话恢复。
+- `listSubAgents()`：返回自身、直接父 Agent 和子 Agent 的 ID、状态和用量摘要。
+- `interruptSubAgent({targetId})`：停止直接子 Agent，保留待处理收件箱；再次发消息继续。停止父 Agent 同时停止其正在运行的原生子 Agent；迟到的完成通知不会撤销用户的停止操作。
 
-原生工具迁移时应复用同一共享后台与消息合约，并保留 `runSubAgent` 的同步兼容入口；异步启动返回子会话 ID，发信返回消息 ID，列表展示运行状态，停止与删除分开。还需要把工具白名单、权限、Code 工作区、模型锁定和结果展示一起接入。不要只增加 `send_message` schema，或在各前端各自维护子 Agent。
+子 Agent 继承父 Agent 的模型路由与工作区，使用隔离上下文及经过父工具白名单交集的授权范围，审批回到父视图。完成报告、进度和用量继续走原来的前端事件。委派目录不重复保存完整聊天或 API 密钥；完整上下文仍由聊天存储和 SDK journal 各司其职。恢复时必须打开原父会话，缺失委派策略则拒绝执行。Agent 消息带来源提示，不成为人类自动记忆或关系成长的证据。
 
-当前回归测试没有证明所有 Provider、进程崩溃恢复、所有插件和长时间并发场景都兼容。DS 请求步骤中的 steering 与 CIBYP 长期上下文投影仍需进一步统一，避免消息只在一次请求中可见。
+步骤 steering 会按消息 ID 去重投影到 CIBYP 长期上下文和聊天记录，后续请求继续保留。VM 模式先在宿主处理共享收件箱，再交给 VM 插件增强请求。两端分别处理各自收件箱，VM 插件的请求和停止钩子继续生效。模型请求仍在宿主。
+
+当前回归测试没有证明所有 Provider、断电恢复、所有插件和长时间并发场景都兼容；没有自动恢复正在进行的外部工具副作用。
 
 ## 验证
 
 ```sh
-node --test tests/unit/deepseek-messaging.test.cjs tests/unit/deepseek-services.test.cjs tests/unit/backend-transport.test.cjs tests/unit/agent-headless.test.cjs
+node --test tests/unit/native-subagents.test.cjs tests/unit/deepseek-messaging.test.cjs tests/unit/deepseek-services.test.cjs tests/unit/backend-transport.test.cjs tests/unit/agent-headless.test.cjs
 ```
 
 测试使用隔离目录和确定性的模型 / 后台替身，不读取用户账号、不请求付费模型。包含双向回执、运行中 steering、未知目标拒绝、跨父子关系拒绝、中断与唤醒、释放后恢复、上下文保留、共享后台稳定身份及自动记忆输入来源。

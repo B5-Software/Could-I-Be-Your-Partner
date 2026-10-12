@@ -86,7 +86,8 @@ function loadI18n() {
   sandbox.removeEventListener = () => {};
 
   const run = (file) => {
-    const source = fs.readFileSync(file, 'utf8');
+    const embedded = typeof CIBYP_I18N_SOURCES === 'undefined' ? null : CIBYP_I18N_SOURCES;
+    const source = embedded?.[path.basename(file)] ?? fs.readFileSync(file, 'utf8');
     vm.runInNewContext(source, sandbox, { filename: file });
   };
 
@@ -94,7 +95,7 @@ function loadI18n() {
   // 语言包：en / de（zh-CN 是源文，不需要包）
   for (const name of ['en.js', 'de.js']) {
     const file = path.join(I18N_DIR, name);
-    if (fs.existsSync(file)) {
+    if (typeof CIBYP_I18N_SOURCES !== 'undefined' || fs.existsSync(file)) {
       try {
         run(file);
       } catch (error) {

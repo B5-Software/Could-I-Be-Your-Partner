@@ -3,6 +3,11 @@
 
 module.exports = function createDefaultSettings({ DEFAULT_DECISION_SETTINGS }) {
   const DEFAULT_SETTINGS = {
+    babe: {
+      relationship: { enabled: true, pace: 'natural', start: 'gradual', showMetrics: true },
+      interests: '',
+      boundaries: '',
+    },
     automaticMemory: { enabled: true, capture: true, chat: true, code: true, babe: true },
     llm: {
       provider: 'openai-compat',

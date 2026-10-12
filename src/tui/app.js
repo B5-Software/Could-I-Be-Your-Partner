@@ -101,6 +101,20 @@ class TuiApp {
         .then(() => this.handleRuntimeEvent(event))
         .catch(() => {});
     });
+    this._unsubscribeRelationship = this.runtime.api?.onBabeRelationshipChanged?.(
+      (relationship) => {
+        if (!relationship?.metrics) return;
+        for (const state of new Set([
+          this.state,
+          ...[...this._sessionViews.values()].map((view) => view.state),
+        ])) {
+          if (state.mode === 'babe') {
+            state.relationship = relationship;
+            state.affection = Math.round(relationship.metrics.affection);
+          }
+        }
+      },
+    );
 
     try {
       this._systemDark = (await this.runtime.getSystemTheme?.())?.shouldUseDarkColors;
@@ -130,7 +144,9 @@ class TuiApp {
       !opts.workspacePath &&
       this.runtime
         .listSessions?.()
-        .filter((session) => session.mode === mode && session.profile !== 'settings-assistant')
+        .filter(
+          (session) => session.mode === mode && (!session.profile || session.profile === 'default'),
+        )
         .at(-1);
     if (existing) await this._switchSession(existing.key);
     else await this.newSession(mode, opts.workspacePath, { local: opts.workspaceLocal });
@@ -196,6 +212,7 @@ class TuiApp {
   dispose() {
     this._disposed = true;
     if (this._unsubscribe) this._unsubscribe();
+    this._unsubscribeRelationship?.();
     this._unsubscribe = null;
     for (const key of this._sessionViews.keys()) this.runtime.stop(key);
   }
@@ -1185,6 +1202,12 @@ class TuiApp {
       case 'subscription-usage':
         this.state.subscriptionUsage = event.data;
         break;
+      case 'relationship-change':
+        if (event.data?.metrics) {
+          this.state.relationship = event.data;
+          this.state.affection = Math.round(event.data.metrics.affection);
+        }
+        break;
       case 'title':
         this.state.title = event.title || '';
         break;
@@ -1365,6 +1388,13 @@ class TuiApp {
           ? this.state.initialAffection
           : 30
         : null;
+    if (mode === 'babe') {
+      const relationship = await this.runtime.api?.babeRelationshipGet?.();
+      if (relationship?.ok) {
+        this.state.relationship = relationship;
+        this.state.affection = Math.round(relationship.metrics.affection);
+      }
+    }
     this.state.messages = [];
     this.pushEntry({ kind: 'brand' });
     this.state.scrollOffset = 0;
@@ -1406,6 +1436,13 @@ class TuiApp {
       const todos = this.state.todos;
       this._restoreView(key);
       this.state.todos = todos;
+      if (session.mode === 'babe') {
+        const relationship = await this.runtime.api?.babeRelationshipGet?.();
+        if (relationship?.ok) {
+          this.state.relationship = relationship;
+          this.state.affection = Math.round(relationship.metrics.affection);
+        }
+      }
       this._reloadCustomCommands();
       return;
     }
@@ -1451,6 +1488,8 @@ class TuiApp {
           compaction: stats.compaction,
           costUSD: stats.costUSD,
           subscriptionUsage: stats.subscriptionUsage,
+          relationship: stats.relationship,
+          affection: stats.affection == null ? null : Math.round(stats.affection),
         });
     }
     this._reloadCustomCommands();
@@ -1626,7 +1665,9 @@ class TuiApp {
         return;
       }
       case 'sessions': {
-        const list = this.runtime.listSessions();
+        const list = this.runtime
+          .listSessions()
+          .filter((s) => !s.profile || s.profile === 'default');
         if (!list || list.length === 0) {
           this.pushEntry({ kind: 'system', text: '暂无其它会话' });
           return;
@@ -1702,6 +1743,46 @@ class TuiApp {
       case 'config':
         await this.configBrowser.open(argText.trim());
         return;
+      case 'devices':
+      case 'hardware': {
+        const call = async (method, params) => {
+          const reply = await this.runtime.api.remoteCall(method, params);
+          if (!reply?.ok)
+            throw new Error(
+              reply?.error || t('ui.remoteDevices.unavailable', '当前后台不支持 Remote 设备'),
+            );
+          return reply.result;
+        };
+        const items = [];
+        let offset = 0;
+        if (name === 'devices' && argText.trim())
+          items.push(await call('device.get', { deviceId: argText.trim() }));
+        else
+          do {
+            const page = await call(name === 'devices' ? 'device.page' : 'tool.list', {
+              offset,
+              limit: 32,
+            });
+            items.push(...page.items);
+            offset = page.nextOffset;
+          } while (offset !== null && items.length < 4096);
+        const text = items.length
+          ? items
+              .map((item) =>
+                name === 'devices'
+                  ? `${item.label || item.id} (${item.id}) · ${item.online ? t('ui.remoteDevices.online', '在线') : t('ui.remoteDevices.offline', '离线')}\n` +
+                    (item.policy
+                      ? Object.entries(item.policy?.tools || {})
+                          .map(([tool, grant]) => `  ${tool} · ${grant.resources.join(', ')}`)
+                          .join('\n')
+                      : `${item.toolCount} · ${t('ui.remoteDevices.authorizedTools', '授权工具')} · /devices ${item.id}`)
+                  : `${item.name} · ${item.description || ''}`,
+              )
+              .join('\n\n')
+          : t('ui.remoteDevices.empty', '尚未配对设备');
+        this.state.messages.push({ role: 'system', text });
+        return;
+      }
       case 'update': {
         if (argText.trim() && argText.trim() !== 'install') throw new Error('/update [install]');
         if (argText.trim() === 'install') {
@@ -1797,6 +1878,41 @@ class TuiApp {
       }
       case 'usage': {
         await this._openUsage();
+        return;
+      }
+      case 'relationship': {
+        const value = await this.runtime.api?.babeRelationshipGet?.();
+        if (!value?.ok) throw new Error(t('ui.tui.relationshipUnavailable', '关系暂不可用'));
+        const names = {
+          strangers: '初识',
+          acquaintance: '渐渐熟悉',
+          friends: '知心朋友',
+          close: '心意渐近',
+          dating: '约会中',
+          partner: '彼此承诺',
+        };
+        this.state.modal = {
+          kind: 'relationship',
+          title: t('ui.tui.relationshipTitle', '你们的故事'),
+          subtitle: t('ui.tui.relationshipStage.' + value.stage, names[value.stage]),
+          body:
+            t(
+              'ui.tui.relationshipMetrics',
+              '好感 {affection} · 信任 {trust} · 熟悉 {familiarity} · 相处 {days} 天',
+              {
+                ...Object.fromEntries(
+                  Object.entries(value.metrics).map(([k, v]) => [k, Math.round(v)]),
+                ),
+                days: value.daysTogether,
+              },
+            ) +
+            '\n\n' +
+            (value.memories.length
+              ? value.memories.map((m) => '• ' + m.content).join('\n')
+              : t('ui.tui.relationshipEmpty', '共同经历与约定会留在这里。')),
+          options: [{ label: t('ui.tui.helpClose', '关闭'), value: 'close' }],
+          selected: 0,
+        };
         return;
       }
       case 'model': {
@@ -2117,7 +2233,9 @@ class TuiApp {
     const workspace = state.workspace || undefined;
     const live = (this.runtime.listSessions() || []).filter(
       (session) =>
-        session.mode === mode && (mode !== 'code' || session.workspacePath === workspace),
+        session.mode === mode &&
+        (!session.profile || session.profile === 'default') &&
+        (mode !== 'code' || session.workspacePath === workspace),
     );
     let list = [];
     try {
@@ -2233,6 +2351,7 @@ class TuiApp {
       state.title = loaded?.title || '';
       state.minimalMode = loaded?.minimalMode === true;
       state.affection = loaded?.affection ?? state.affection;
+      state.relationship = loaded?.relationship || state.relationship;
       state.messages = [];
       state.scrollOffset = 0;
       const view = this._sessionViews.get(key);

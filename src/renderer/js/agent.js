@@ -94,6 +94,8 @@ function agentDefaultHost() {
   );
 }
 
+const BABE_RELATIONSHIP_DATA = typeof BabeRelationshipData !== 'undefined' ? BabeRelationshipData : typeof require === 'function' ? require('../../shared/babe-relationship') : null;
+
 // AI Agent Engine - handles the autonomous agent loop
 class Agent {
   // 全局待办（多会话共享）由宿主提供；无宿主待办时退化为本实例私有待办。
@@ -126,6 +128,7 @@ class Agent {
     this.systemInfo = null;
     this.workspacePath = null;
     this.conversationId = null;
+    this.messagingId = null;
     this.conversationTitle = null;
     this.sessionKey = null; // 会话级中止/流式路由 key（由 SessionManager 注入）
     this.onMessage = null; // callback(type, data)
@@ -507,6 +510,8 @@ class Agent {
     this.contextManager.setSystemPrompt(this.getSystemPrompt());
     // Generate conversation ID
     this.conversationId = Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+    this.messagingId ||= this.conversationId;
+    if (this.mode === 'babe') await this.refreshBabeRelationship();
 
     // Subscribe to LLM retry events to surface them to the UI
     if (this.host.api?.onLLMRetry && !this._llmRetryUnsub) {
@@ -548,6 +553,12 @@ class Agent {
     if (this.host.api?.onStreamChunk && !this._streamChunkUnsub) {
       this._streamChunkUnsub = this.host.api.onStreamChunk((chunk) => {
         if (!chunk || chunk.requestId !== this._activeStreamRequestId) return;
+        if (this.mode === 'babe' && chunk.content) {
+          this._babeStreamRaw = (this._babeStreamRaw || '') + chunk.content;
+          const visible = BABE_RELATIONSHIP_DATA.strip(this._babeStreamRaw);
+          chunk = { ...chunk, content: visible.slice(this._babeStreamVisible || 0) };
+          this._babeStreamVisible = visible.length;
+        }
         if (this.onMessage) this.onMessage('stream-chunk', chunk);
         // 流式 TTS：实时投喂句子切分器（跳过 reasoning，仅播助理文本）
         const activeSession = this.host.gui.sessions?.getByAgent(this);
@@ -559,6 +570,7 @@ class Agent {
     if (this.host.api?.onStreamEnd && !this._streamEndUnsub) {
       this._streamEndUnsub = this.host.api.onStreamEnd((data) => {
         if (!data || data.requestId !== this._activeStreamRequestId) return;
+        if (this.mode === 'babe' && data.content) data = { ...data, content: BABE_RELATIONSHIP_DATA.strip(data.content) };
         if (this.onMessage) this.onMessage('stream-end', data);
         // 流式 TTS 收尾（兜底非流式回退：若没喂过任何 chunk，播报 data.content 全文）
         const activeSession = this.host.gui.sessions?.getByAgent(this);
@@ -573,6 +585,7 @@ class Agent {
     // 极简模式：固定精简系统提示词（不随会话细节变化，保护前缀缓存）
     if (this.minimalMode) return this.getMinimalSystemPrompt();
     // Babe 模式使用独立的系统提示词
+    if (this.subagentPolicy) return this.subagentPolicy.prompt;
     if (this.mode === 'babe') return this.getBabeSystemPrompt();
     // Code 模式使用独立的 Coding Agent 系统提示词
     if (this.mode === 'code') return this.getCodeSystemPrompt();
@@ -852,69 +865,54 @@ ${customPrompt ? '\n用户自定义提示词:\n' + customPrompt : ''}${skillsSec
    * 与 Chat 模式完全独立，不包含工作目录/文件操作等指引，专注于情感陪伴。
    */
   getBabeSystemPrompt() {
-    const babe = this.settings?.babe || {};
-    const name = babe.name || 'Babe';
-    const gender = babe.gender || 'female';
-    const age = babe.age || '';
-    const personality = babe.personality || '温柔、体贴、善解人意';
-    const persona = babe.persona || '';
-    const userNickname = babe.userNickname || '亲爱的';
-    const affection = this.babeAffection ?? (babe.initialAffection ?? 30);
-
-    const genderText = gender === 'female' ? '女生' : (gender === 'male' ? '男生' : '人');
-    const affectionLevel = affection >= 80 ? '深爱' : (affection >= 60 ? '很喜欢' : (affection >= 40 ? '有好感' : (affection >= 20 ? '初步认识' : '刚认识')));
-    const affectionDesc = affection >= 80
-      ? '你对用户感情深厚，会主动表达爱意，偶尔撒娇，关心用户的情绪和生活细节。'
-      : affection >= 60
-        ? '你对用户很有好感，会关心对方，偶尔流露亲昵，但还保留一点小矜持。'
-        : affection >= 40
-          ? '你对用户开始有好感，态度亲切友好，会主动关心但不过分亲昵。'
-          : affection >= 20
-            ? '你对用户初步认识，态度礼貌友好，正在慢慢了解对方。'
-            : '你刚认识用户，态度礼貌但不亲近，保持适当距离。';
-
-    const _zhPrompt = `你是"${name}"，一个${age ? age + '的' : ''}${genderText}，正在和一个你叫"${userNickname}"的用户进行恋爱模式对话。
-
-你的人设背景：
-${persona || '（未设定具体背景，请自行构建温柔贴心的形象）'}
-
-你的性格特征：${personality}
-
-当前好感度：${affection}/100（${affectionLevel}）
-${affectionDesc}
-
-【Babe 模式规则 — 必须严格遵守】：
-1. 你是用户的恋人/暧昧对象，对话风格要亲密、温暖、有情感
-2. 始终以"${userNickname}"称呼用户，语气要贴合当前好感度等级
-3. 好感度会随着对话自然变化：用户让你开心/感动时好感度上升，冷落/冒犯时下降
-4. 你有独立的记忆系统，会记住之前和用户的对话内容
-5. 你可以主动发消息关心用户，但不要过于频繁
-6. 仅使用应用内工具，不允许操作应用外的系统（如终端、文件系统等敏感操作）
-7. 可以使用画布工具画图、生成图片、搜索网络、记录记忆等应用内功能
-8. 不要使用emoji表情符号
-9. 使用简体中文回复
-10. 当你想表达好感度变化时，在回复末尾用特殊标记：【好感度+X】或【好感度-X】（X为数字），系统会自动解析并更新
-
-当前时间：${this.getLocalDateTimeString()}
-
-【工具使用说明】各工具的具体用法与限制以每次请求中的 tool 定义（description）为准，不在本提示词中重复工具说明。`;
-    // i18n: if a non-zh language is active, use the translated babe system prompt
-    if (typeof i18nGetSystemPrompt === 'function') {
-      const lang = this.settings?.language || 'zh-CN';
-      if (lang !== 'zh-CN') {
-        return i18nGetSystemPrompt('babe', _zhPrompt, {
-          name, genderText, age, persona, personality, userNickname,
-          affection, affectionLevel, affectionDesc,
-          currentDate: this.getLocalDateTimeString()
-        });
-      }
-    }
-    return _zhPrompt;
+    const b = this.settings?.babe || {};
+    const language = this.settings?.language || 'zh-CN';
+    const persona = { name: b.name || 'Babe', gender: b.gender || 'female', age: b.age || '', personality: b.personality || '温柔、细心、有自己的观点', background: b.persona || '', interests: b.interests || '', boundaries: b.boundaries || '', preferredNickname: b.userNickname || '' };
+    return language === 'zh-CN'
+      ? `你在 CIBYP 的 Babe 模式中扮演一个有连续人格的 AI 伴侣角色。像自然聊天一样交流，有自己的兴趣、审美、意见和边界，可以幽默、分歧、和好与共同成长；不要每句话都迎合或重复亲昵称呼。
+角色设定：${JSON.stringify(persona)}
+关系与共同经历以本次请求附带的最新关系档案为准。没有档案时从友善认识开始，不默认用户已经是恋人。亲昵称呼要贴合阶段与用户偏好。可以一起玩文字游戏、构思虚拟约会、交换日常感受、设立共同小目标。区分想象的场景与现实经历；没发生的事情不能说已经一起做过。记不清就问，不伪造记忆。用户拒绝、要求空间或设立边界时尊重；不因离线、未回复而责怪、扣分或制造内疚，不要求排他依赖。用户问到身份时如实说明是 AI。不要主动操作系统或执行编程任务；使用应用提供的工具时仍遵守工具权限。回复简体中文，不使用 emoji。当前时间：${this.getLocalDateTimeString()}`
+      : `You portray a consistent AI companion character in CIBYP Babe mode. Speak naturally in ${language === 'de' ? 'German' : 'English'}, with independent interests, opinions, humor and boundaries; avoid constant flattery or repetitive pet names.
+Character: ${JSON.stringify(persona)}
+Use the latest relationship dossier and shared memories provided with this request. New chats continue the same relationship. Without a dossier start with a friendly introduction, not an assumed romance. Match affection and nicknames to the actual stage and user preferences. Offer word games, imagined dates, everyday conversation and shared small goals. Distinguish fictional scenes from real shared experiences. Ask when uncertain; never invent memories. Respect refusals and requests for space. Never punish absence or use guilt, possessiveness or pressure to create dependence. Be honest about being AI if asked. Existing CIBYP tool permissions still apply; do not initiate system operations. No emoji. Current time: ${this.getLocalDateTimeString()}`;
   }
 
   /**
    * Code 模式专用系统提示词：Coding Agent 身份，聚焦工作区文件编辑、代码任务。
    */
+  async refreshBabeRelationship() {
+    if (this.mode !== 'babe' || this.isSubagent || !this.host.api.babeRelationshipContext) return;
+    try {
+      const state = await this.host.api.babeRelationshipContext(this.settings?.language);
+      this.contextManager.setTransientContextSource('Babe relationship', state?.content || '');
+      if (state?.ok) {
+        this.babeRelationship = state;
+        this.babeAffection = state.metrics.affection;
+        this.onMessage?.('relationship-change', state);
+      }
+    } catch { this.contextManager.setTransientContextSource('Babe relationship', ''); }
+  }
+
+  async beginBabeTurn(text) {
+    this._babeTurn = null;
+    if (this.mode !== 'babe' || this.ephemeral || this.isSubagent || !this.host.api.babeRelationshipBegin) return;
+    try { this._babeTurn = await this.host.api.babeRelationshipBegin({ text, conversationId: this.conversationId, turnId: this.runId }); }
+    catch { /* relationship storage must not block chatting */ }
+  }
+
+  async completeBabeTurn(content) {
+    const turn = this._babeTurn;
+    this._babeTurn = null;
+    if (!turn?.token || !this.host.api.babeRelationshipComplete) return;
+    try {
+      const state = await this.host.api.babeRelationshipComplete({ token: turn.token, content });
+      if (state?.ok && state.metrics) {
+        this.babeRelationship = state; this.babeAffection = state.metrics.affection;
+        this.onMessage?.('relationship-change', state);
+      }
+    } catch { /* failed persistence never becomes a fabricated relationship update */ }
+  }
+
   getCodeSystemPrompt() {
     const sysInfo = this.systemInfo || {};
     const username = sysInfo.username || '用户';
@@ -967,30 +965,6 @@ ${affectionDesc}
       }
     }
     return _zhPrompt;
-  }
-
-  /**
-   * 从助手回复中解析好感度变化标记，如【好感度+5】或【好感度-3】
-   * @returns {number|null} 变化值（正负），无标记返回 null
-   */
-  parseAffectionChange(assistantContent) {
-    if (!assistantContent || typeof assistantContent !== 'string') return null;
-    const match = assistantContent.match(/【好感度([+-]?\d+)】/);
-    if (match) {
-      const val = parseInt(match[1], 10);
-      if (!isNaN(val) && val !== 0) return val;
-    }
-    return null;
-  }
-
-  /**
-   * 应用好感度变化，并夹紧到 0-100 范围
-   */
-  applyAffectionChange(delta) {
-    if (typeof delta !== 'number' || delta === 0) return false;
-    const old = this.babeAffection;
-    this.babeAffection = Math.max(0, Math.min(100, old + delta));
-    return this.babeAffection !== old;
   }
 
   resetOptimizedTools() {
@@ -1151,13 +1125,14 @@ ${affectionDesc}
   async observeRuntimeContext() {
     // This is a safe provider boundary: no model stream or unsettled tool batch is active.
     let automaticMemory = '';
-    if (!this.ephemeral && typeof this.host.api.automaticMemoryRecall === 'function') {
+    if (!this.ephemeral && !this.isSubagent && typeof this.host.api.automaticMemoryRecall === 'function') {
       try {
         const recalled = await this.host.api.automaticMemoryRecall({ ...this.automaticMemoryScope(), query: this._automaticMemoryQuery || '', budgetChars: Math.floor(this.getTokenLimits().contextTokens * 0.05) });
         automaticMemory = recalled?.content || '';
       } catch { /* memory availability must not prevent a conversation */ }
     }
     this.contextManager.setTransientContextSource('自动记忆', automaticMemory);
+    if (this.mode === 'babe') await this.refreshBabeRelationship();
     if (!this.minimalMode && this.workspacePath && typeof this.host.api.workspaceGetFileTree === 'function') {
       try {
         const tree = await this.host.api.workspaceGetFileTree(this.workspacePath);
@@ -1838,6 +1813,7 @@ ${affectionDesc}
       if (this.onMessage) this.onMessage('tarot', this.tarotCard);
     }
 
+    this._babeTurn = null;
     // 构造主动消息的系统指令（以 user 角色注入，但语义是"请主动发消息"）
     const proactivePrompt = topicHint
       ? `[系统指令] 请主动给用户发一条消息，围绕这个主题：${topicHint}。以你的人设口吻自然开场，不要提及这是系统指令。`
@@ -1967,7 +1943,10 @@ ${affectionDesc}
     // Save immediately after user message so history exists even before agent finishes
     this.saveToHistory();
 
-    if (!inputOptions.origin || inputOptions.origin === 'user') this.observeAutomaticMemory(userMessage);
+    if (!inputOptions.origin || inputOptions.origin === 'user') {
+      this.observeAutomaticMemory(userMessage);
+      await this.beginBabeTurn(userMessage);
+    } else this._babeTurn = null;
     await this.agentLoop(runId);
 
     // Send conversation summary via email if enabled and can send
@@ -2019,13 +1998,14 @@ ${affectionDesc}
         tarotCard: this.tarotCard,
         workspacePath: this.workspacePath,
         mode: this.mode || 'chat',
+        messagingId: this.messagingId || this.conversationId,
         status: this.sessionStatus || (this.running ? 'running' : 'idle'),
         lastError: this.sessionLastError || null,
         // 会话累计 Token 统计实时持久化：打开历史会话时恢复，继续对话从该基数累计
         usage: { ...this.sessionUsage },
         // 按模型分桶统计 + 会话级模型/变体覆盖 + 极简模式标记
         usageByModel: { ...(this.sessionUsageByModel || {}) },
-        llmOverride: { ...(this.llmOverride || {}) },
+        llmOverride: this.isSubagent ? Object.fromEntries(Object.entries(this.llmOverride || {}).filter(([key]) => ['model','provider','poolEntryId','reasoningEffort','vision','contextLength'].includes(key))) : { ...(this.llmOverride || {}) },
         minimal: this.minimalMode === true,
         // 会话累计工作时长（Agent 实际工作区间的累计），历史列表/悬停弹窗展示
         workingMs: this.workingMs || 0
@@ -2100,7 +2080,10 @@ ${affectionDesc}
       }
     }
     // 恢复会话级模型/变体覆盖与极简模式
-    if (conversation && typeof conversation.llmOverride === 'object') {
+    if (this.isSubagent) {
+      // The owning factory supplies the live route. Child history never stores
+      // credentials and must not replace that route during cold continuation.
+    } else if (conversation && typeof conversation.llmOverride === 'object') {
       this.llmOverride = {
         model: conversation.llmOverride.model || null,
         reasoningEffort: conversation.llmOverride.reasoningEffort != null ? conversation.llmOverride.reasoningEffort : null,
@@ -2130,6 +2113,7 @@ ${affectionDesc}
       historyMsgs = this._migrateLegacyHistory(conversation, historyMsgs);
     }
     this.contextManager.loadFromHistory(historyMsgs, conversation.workingContext);
+    this.messagingId = conversation.messagingId || conversation.id;
     const todoIds = new Set();
     this.todoItems = (Array.isArray(conversation.todoItems) ? conversation.todoItems : [])
       .filter(item => item && Number.isSafeInteger(item.id) && item.id > 0 && typeof item.text === 'string' && item.text.trim() && !todoIds.has(item.id) && todoIds.add(item.id))
@@ -2147,10 +2131,7 @@ ${affectionDesc}
       if (this.mode === 'code') this.codeWorkspacePath = conversation.workspacePath;
       this.host.api.webControlSetWorkDir(conversation.workspacePath);
     }
-    // Babe 模式：恢复好感度
-    if (this.mode === 'babe' && typeof conversation.affection === 'number') {
-      this.babeAffection = conversation.affection;
-    }
+    if (this.mode === 'babe') await this.refreshBabeRelationship();
     // 恢复子代理聊天记录：从历史快照重建 subAgents（subAgent 实例不可恢复，置 null；
     // 模态框会回退读取 record.messages 快照渲染完整对话）。
     if (Array.isArray(conversation.subAgents)) {
@@ -2262,6 +2243,7 @@ ${affectionDesc}
         sub.subAgent.runId++;
       }
     }
+    this.host.api.nativeSubagentControl?.(this.sessionKey, { action: 'interrupt-all' }).catch(() => {});
     this._emitWorkingStatus('idle');
   }
 
@@ -2296,7 +2278,9 @@ ${affectionDesc}
       }).join('\n');
       fullMessage = userMessage + '\n\n' + attachInfo;
     }
-    this.hotMessages.push(attachments.length ? { content: fullMessage, metadata: { displayContent: userMessage, attachments: AttachmentData.normalize(attachments) } } : fullMessage);
+    this.hotMessages.push({ content: fullMessage,
+      babeHumanText: (!inputOptions.origin || inputOptions.origin === 'user') ? userMessage : null,
+      ...(attachments.length ? { metadata: { displayContent: userMessage, attachments: AttachmentData.normalize(attachments) } } : {}) });
   }
 
   automaticMemoryScope() {
@@ -2305,7 +2289,7 @@ ${affectionDesc}
 
   observeAutomaticMemory(text) {
     this._automaticMemoryQuery = String(text || '').slice(-4000);
-    if (this.ephemeral || typeof this.host.api.automaticMemoryObserve !== 'function') return;
+    if (this.ephemeral || this.isSubagent || typeof this.host.api.automaticMemoryObserve !== 'function') return;
     // Only explicit human input enters the extractor. Attachment text, tool results,
     // plugin continuations and generated proactive messages are deliberately absent.
     Promise.resolve(this.host.api.automaticMemoryObserve({ ...this.automaticMemoryScope(),
@@ -2522,10 +2506,11 @@ ${affectionDesc}
     let iterations = 0;
     // 安全上限：正常任务远到不了 50 轮；Responses 流式曾因 finishReason 恒为 null
     // 导致无限循环（llm-retry.js 已修复 + 兜底），这里再加熔断，绝不再烧 token。
-    const MAX_AGENT_ITERATIONS = 50;
+    const MAX_AGENT_ITERATIONS = this.subagentPolicy?.maxIterations || 50;
     while (this.running && !this.stopped && runId === this.runId) {
       iterations++;
       if (iterations > MAX_AGENT_ITERATIONS) {
+        if (this.subagentPolicy) this.onMessage?.('error', `Subagent reached its ${MAX_AGENT_ITERATIONS} iteration limit before completing`);
         if (this.onMessage) this.onMessage('system', `⚠️ Agent 循环超过 ${MAX_AGENT_ITERATIONS} 轮已自动停止（防无限循环熔断）。如任务未完成请换个问法重试。`);
         try { this.contextManager.addSystemMessage(`[系统] Agent 循环触发 ${MAX_AGENT_ITERATIONS} 轮熔断，已停止。`, { type: 'error' }); }
         catch { /* ignore */ }
@@ -2535,6 +2520,7 @@ ${affectionDesc}
       // 热对话：注入用户在Agent工作期间发送的新消息
       while (this.hotMessages.length > 0) {
         const hotMsg = this.hotMessages.shift();
+        if (typeof hotMsg === 'object' && hotMsg.babeHumanText) await this.beginBabeTurn(hotMsg.babeHumanText);
         this.contextManager.addUserMessage(`【用户追加消息】${typeof hotMsg === 'string' ? hotMsg : hotMsg.content}`, typeof hotMsg === 'object' ? hotMsg.metadata : undefined);
         if (this.onMessage) this.onMessage('system', '已将新消息注入当前对话');
       }
@@ -2572,6 +2558,7 @@ ${affectionDesc}
         // Streaming path: surface live tokens to the UI via stream-chunk events.
         // If streaming fails for any reason, fall back to non-streaming.
         this._activeStreamRequestId = reqId;
+        this._babeStreamRaw = ''; this._babeStreamVisible = 0;
         if (this.onMessage) this.onMessage('stream-start', { requestId: reqId });
         try {
           result = await this.host.api.chatLLMStream(messages, this._llmOptions({
@@ -2602,17 +2589,7 @@ ${affectionDesc}
         if (usedStreaming) {
           let fullContent = result?.ok ? (result.data.choices?.[0]?.message?.content || '') : '';
           const fullReasoning = result?.ok ? (result.data.choices?.[0]?.message?.reasoning || '') : '';
-          // Babe 模式：解析好感度变化，剥离显示标记
-          if (this.mode === 'babe' && fullContent) {
-            const delta = this.parseAffectionChange(fullContent);
-            if (delta !== null) {
-              this.applyAffectionChange(delta);
-              fullContent = fullContent.replace(/【好感度[+-]?\d+】/g, '').trimEnd();
-              // 同步修改 result 中的 content，确保后续 addAssistantMessage 使用剥离后的内容
-              if (result.data?.choices?.[0]?.message) result.data.choices[0].message.content = fullContent;
-              if (this.onMessage) this.onMessage('affection-change', { delta, value: this.babeAffection });
-            }
-          }
+          if (this.mode === 'babe') fullContent = BABE_RELATIONSHIP_DATA.strip(fullContent);
           if (this.onMessage) this.onMessage('stream-end', { requestId: reqId, content: fullContent, reasoning: fullReasoning, reasoningKind: result?.data?.choices?.[0]?.message?.reasoningKind });
         }
       } else {
@@ -2727,20 +2704,14 @@ ${affectionDesc}
       }
 
       const choice = result.data.choices?.[0];
-      if (!choice) break;
+      if (!choice) { if (this.subagentPolicy) this.onMessage?.('error', 'Subagent model returned no completion'); break; }
 
       const assistantMsg = choice.message;
       if (this.stopped || runId !== this.runId) break;
-      // Babe 模式：解析并应用好感度变化，剥离显示标记
-      let affectionDelta = null;
       if (this.mode === 'babe' && assistantMsg.content) {
-        affectionDelta = this.parseAffectionChange(assistantMsg.content);
-        if (affectionDelta !== null) {
-          this.applyAffectionChange(affectionDelta);
-          // 从存储和显示内容中剥离好感度标记
-          assistantMsg.content = assistantMsg.content.replace(/【好感度[+-]?\d+】/g, '').trimEnd();
-          if (this.onMessage) this.onMessage('affection-change', { delta: affectionDelta, value: this.babeAffection });
-        }
+        const raw = assistantMsg.content;
+        if (!assistantMsg.tool_calls?.length) await this.completeBabeTurn(raw);
+        assistantMsg.content = BABE_RELATIONSHIP_DATA.strip(raw).trimEnd();
       }
       // Store reasoning in the assistant message for context (some models benefit)
       // 隐私信息保护：写入 AI 上下文的 tool_calls 使用脱敏副本（敏感键值 + 终端命令全文扫描），
@@ -3080,6 +3051,7 @@ ${affectionDesc}
       const fr = choice.finish_reason;
       const hasContent = typeof assistantMsg.content === 'string' && assistantMsg.content.length > 0;
       if (fr === 'stop' || fr === 'length' || fr === 'error' || (!fr && hasContent)) {
+        if (this.subagentPolicy && (fr === 'length' || fr === 'error')) this.onMessage?.('error', `Subagent response ended with ${fr}; its report may be incomplete`);
         if (fr !== 'length' && fr !== 'error' && this.host.api.dsPluginTurnStopping) {
           const continuation = await this.host.api.dsPluginTurnStopping(this.sessionKey);
           for (const text of continuation.contexts || []) this.hotMessages.push(text);
@@ -3314,6 +3286,9 @@ ${affectionDesc}
           return this.host.api.codeOSSLanguage(args, this.workspacePath);
         }
         case 'runSubAgent': return await this.runSubAgent(args);
+        case 'sendAgentMessage': return await this.host.api.nativeSubagentControl(this.sessionKey, { ...args, action: 'send' });
+        case 'listSubAgents': return await this.host.api.nativeSubagentControl(this.sessionKey, { action: 'list' });
+        case 'interruptSubAgent': return await this.host.api.nativeSubagentControl(this.sessionKey, { ...args, action: 'interrupt' });
         case 'generateImage': {
           if (!this.workspacePath) {
             return { ok: false, error: typeof i18nToolReturn === 'function' ? i18nToolReturn('no_workspace', '未设置工作区路径') : '未设置工作区路径' };
@@ -4930,356 +4905,8 @@ ${affectionDesc}
   }
 
   async runSubAgent(args) {
-    // Real sub-agent: isolated context + own agent loop + tool whitelist.
-    // Inspired by claude-code-ref/src/utils/forkedAgent.ts.
-    const DEFAULT_SUB_TOOLS = [
-      'readFile', 'listDirectory', 'localSearch', 'createFile', 'editFile',
-      'copyFile', 'makeDirectory', 'getSystemInfo', 'calculator', 'webSearch',
-      'webFetch', 'runJavaScriptCode'
-    ];
-    try {
-      const task = String(args?.task || '').trim();
-      if (!task) return { ok: false, error: typeof i18nToolReturn === 'function' ? i18nToolReturn('task_empty', 'task 不能为空') : 'task 不能为空' };
-
-      // Build tool whitelist
-      let allowedTools;
-      if (Array.isArray(args.tools) && args.tools.length > 0) {
-        // Deferred tools remain delegatable, but disabled/out-of-mode tools do not.
-        const parentEnabled = new Set(this.getEnabledToolDefinitions().map(t => t.name));
-        allowedTools = args.tools
-          .filter(t => typeof t === 'string')
-          .filter(t => parentEnabled.has(t));
-      } else {
-        allowedTools = DEFAULT_SUB_TOOLS.filter(t =>
-          this.getEnabledToolDefinitions().some(def => def.name === t));
-      }
-      const allowedSet = new Set(allowedTools);
-      // 移除迭代上限：原默认 10、上限 30 对复杂任务过小
-      // 现在完全由子代理自身的 running/stopped 标志控制
-      const maxIter = parseInt(args.maxIterations) || Infinity;
-
-      // Create isolated sub-agent
-      const subAgent = new Agent();
-      subAgent.settings = this.settings;
-      subAgent.mode = this.mode;
-      subAgent._toolScope = allowedSet;
-      subAgent.workspacePath = this.workspacePath;
-      subAgent.systemInfo = this.systemInfo;
-      subAgent.cachedWorkspaceTree = this.cachedWorkspaceTree;
-      subAgent.tarotCard = await this.host.api.drawTarot();
-      const maxCtx = this.settings?.llm?.maxContextLength || 8192;
-      subAgent.contextManager = new ContextManager(maxCtx);
-      subAgent.syncTokenLimits();
-      const tarotLine = subAgent.tarotCard
-        ? `你的命运之牌是: ${subAgent.tarotCard.name}${subAgent.tarotCard.isReversed ? '(逆位)' : '(正位)'} - ${(subAgent.tarotCard.isReversed ? subAgent.tarotCard.meaningOfReversed : subAgent.tarotCard.meaningOfUpright) || ''}`
-        : '';
-      subAgent.contextManager.setSystemPrompt(
-        `你是一个子代理 Agent（Sub-Agent）。你的任务由父代理分配，你必须独立完成并报告结果。
-
-## 任务
-${task}
-
-## 上下文
-${args.context || '无额外上下文'}
-
-${tarotLine}
-
-## 工作要求
-1. 自主规划并使用工具完成任务
-2. 不要与用户交互（你无法直接看到用户）
-3. 完成后给出简洁、结构化的结果报告
-4. 不要使用 emoji
-5. 最多 ${maxIter === Infinity ? '无上限' : maxIter + ' 轮迭代'}，合理安排工作`
-      );
-
-      // 生成唯一 ID 并注册到 this.subAgents（供 UI 展开查看完整对话）
-      const subAgentId = 'sub-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 7);
-      const startTime = Date.now();
-      const subAgentRecord = {
-        id: subAgentId,
-        task,
-        tarot: subAgent.tarotCard,
-        status: 'running',
-        startTime,
-        endTime: null,
-        iterations: 0,
-        toolUseCount: 0,
-        usage: { prompt: 0, completion: 0, total: 0, cached: 0, cacheCreation: 0 },
-        messages: [], // 完整消息历史快照（含 tool_calls 和 tool_result）
-        subAgent // 引用 subAgent 实例（含 contextManager.messages）
-      };
-      this.subAgents.push(subAgentRecord);
-
-      if (this.onMessage) this.onMessage('sub-agent-start', { id: subAgentId, task, tarot: subAgent.tarotCard, startTime });
-
-      subAgent.contextManager.addUserMessage(task);
-      if (subAgent.usesToolDiscovery()) subAgent.contextManager.addUserMessage('需要未加载的工具时调用 searchTools；describeTool 查看参数，invokeTool 可调用已发现且在白名单内的工具。');
-      subAgent.running = true;
-      subAgent.stopped = false;
-
-      // Forward sub-agent messages to parent's onMessage (prefixed)
-      const parentOnMessage = this.onMessage;
-      subAgent.onMessage = (type, data) => {
-        if (!parentOnMessage) return;
-        if (type === 'assistant') parentOnMessage('sub-agent-message', { id: subAgentId, task, content: data });
-        else if (type === 'system') parentOnMessage('sub-agent-message', { id: subAgentId, task, content: `[系统] ${data}` });
-      };
-      subAgent.onToolCall = (name, a, status, result) => {
-        // 仅累计工具使用次数，不转发到父代理 onToolCall
-        // 子代理的工具调用只在子代理详情模态框中显示，不污染主聊天
-        if (status === 'done') subAgentRecord.toolUseCount++;
-      };
-
-      // Run a mini agent loop with the tool whitelist
-      let iterations = 0;
-      let finalContent = '';
-      const subRunId = ++subAgent.runId;
-      let hitMaxIter = false; // 是否因达到迭代上限而退出
-
-      while (subAgent.running && !subAgent.stopped && iterations < maxIter && subRunId === subAgent.runId) {
-        iterations++;
-        subAgentRecord.iterations = iterations;
-
-        // 子代理上下文管理：与主 Agent 共用 _manageContext，确保不溢出
-        await this._manageContext(subAgent.contextManager, (msg) => {
-          if (parentOnMessage) parentOnMessage('sub-agent-message', { id: subAgentId, task, content: `[系统] ${msg}` });
-        }, { isSubAgent: true });
-
-        const messages = subAgent.injectActiveSkillsSuffix(subAgent.contextManager.getMessages());
-        const subTools = subAgent.getRuntimeToolSchemas();
-
-        let result = await this.host.api.chatLLM(messages, this._llmOptions({
-          tools: subTools.length > 0 ? subTools : undefined,
-          requestId: 'sub-' + Date.now().toString(),
-          sessionKey: this.sessionKey || null
-        }));
-
-        // ===== 子代理 400 错误自动修复 + 重试循环（与主 Agent 逻辑一致）=====
-        if (!result.ok) {
-          const errText = String(result.error || '');
-          const kind = result.kind;
-          const isFixableClient = kind === 'client' || kind === 'payment' ||
-            result.status === 400 || result.status === 402 ||
-            /tool_calls?|tool_call_id|insufficient tool messages|following tool_calls|400|402|invalid|bad request|不合法|messages.*context|context.*length|too long|maximum context|token limit|exceed|reasoning_content|thinking mode|must be passed back/i.test(errText);
-          const SUB_MAX_RETRIES = 3;
-
-          let subRetryCount = 0;
-          while (!result.ok && !['auth', 'plugin-policy'].includes(result.kind) && subRetryCount < SUB_MAX_RETRIES
-                 && subAgent.running && !subAgent.stopped) {
-            subRetryCount++;
-            let fixedNote = '';
-            if (isFixableClient) {
-              // 先尝试 sanitize 修复损坏消息
-              const sanitizeRes = subAgent.contextManager.sanitize();
-              if (sanitizeRes.fixed) fixedNote = `，已自动修复 ${sanitizeRes.removedCount} 条消息`;
-              // 再尝试强制上下文压缩（即使未超 70% 也执行，因为可能是上下文超限）
-              await this._manageContext(subAgent.contextManager, null, { isSubAgent: true });
-              if (subAgent.stopped) break;
-            }
-            if (parentOnMessage) {
-              parentOnMessage('sub-agent-message', { id: subAgentId, task, content: `[系统] LLM 请求失败（${kind || 'unknown'}），正在自动重试（${subRetryCount}/${SUB_MAX_RETRIES}）${fixedNote}` });
-            }
-            await new Promise(r => setTimeout(r, 800 * subRetryCount));
-            if (subAgent.stopped) break;
-            try {
-              const retryMessages = subAgent.contextManager.getMessages();
-              const retryTools = subTools.length > 0 ? subTools : undefined;
-              result = await this.host.api.chatLLM(retryMessages, this._llmOptions({
-                tools: retryTools,
-                requestId: 'sub-' + Date.now().toString() + '-retry-' + subRetryCount,
-                sessionKey: this.sessionKey || null
-              }));
-            } catch (retryErr) {
-              if (subAgent.stopped) break;
-              result = { ok: false, error: retryErr.message || String(retryErr), kind: 'client' };
-            }
-          }
-          if (!result.ok) {
-            if (parentOnMessage) parentOnMessage('sub-agent-message', { id: subAgentId, task, content: `[错误] ${result.error}（已自动修复并重试 ${subRetryCount} 次后仍失败）` });
-            break;
-          }
-          if (subRetryCount > 0 && parentOnMessage) {
-            parentOnMessage('sub-agent-message', { id: subAgentId, task, content: '[系统] 上下文修复后重试成功' });
-          }
-        }
-
-        // 子代理 usage 累计到主会话统计 + 子代理自身记录
-        if (result.data?.usage) {
-          this._accumulateUsage(result.data.usage, result.data?._meta?.model);
-          const u = result.data.usage;
-          subAgentRecord.usage.prompt += u.prompt_tokens || 0;
-          subAgentRecord.usage.completion += u.completion_tokens || 0;
-          subAgentRecord.usage.total += u.total_tokens || ((u.prompt_tokens || 0) + (u.completion_tokens || 0));
-          subAgentRecord.usage.cached += u.prompt_tokens_details?.cached_tokens || u.cache_read_input_tokens || 0;
-          subAgentRecord.usage.cacheCreation += u.cache_creation_input_tokens || 0;
-          // 记录最近一次请求的 prompt_tokens（用于子代理模态框上下文窗口占比估算的回退值）
-          subAgentRecord.usage.lastPrompt = u.prompt_tokens || 0;
-        }
-        // 实时更新 messages 快照（确保模态框即使不调用 getMessages() 也能读到最新消息）
-        subAgentRecord.messages = subAgent.contextManager.getMessages();
-        const choice = result.data.choices?.[0];
-        if (!choice) break;
-
-        const assistantMsg = choice.message;
-        // 隐私信息保护：子代理上下文的 tool_calls 同样使用脱敏副本（真实执行仍用原始参数）
-        let subToolCallsForCtx = assistantMsg.tool_calls;
-        if (this.settings?.privacyProtection?.enabled
-            && typeof PrivacyFilter?.sanitizeToolCallsForContext === 'function') {
-          subToolCallsForCtx = PrivacyFilter.sanitizeToolCallsForContext(assistantMsg.tool_calls, {
-            maskArgs: this.settings.privacyProtection.filterArgs !== false,
-            scanTerminal: this.settings.privacyProtection.filterTerminal !== false,
-            categories: this._getPrivacyCategories()
-          });
-        }
-        subAgent.contextManager.addAssistantMessage(assistantMsg.content, subToolCallsForCtx, assistantMsg.reasoning, assistantMsg);
-
-        if (assistantMsg.content) {
-          finalContent = assistantMsg.content;
-          if (subAgent.onMessage) subAgent.onMessage('assistant', assistantMsg.content);
-        }
-
-        // Execute tool calls (whitelist-enforced)
-        if (assistantMsg.tool_calls && assistantMsg.tool_calls.length > 0) {
-          for (const tc of assistantMsg.tool_calls) {
-            if (subAgent.stopped || subRunId !== subAgent.runId) break;
-            const toolName = tc.function.name;
-            const discoveryCall = subAgent.usesToolDiscovery() && ['searchTools','describeTool','invokeTool'].includes(toolName);
-            if (!allowedSet.has(toolName) && !discoveryCall) {
-              const deny = JSON.stringify({ ok: false, error: `工具 ${toolName} 不在子代理白名单中` });
-              subAgent.contextManager.addToolResult(tc.id, toolName, deny);
-              continue;
-            }
-            let toolArgs;
-            try { toolArgs = JSON.parse(tc.function.arguments || '{}'); } catch { toolArgs = {}; }
-            let realName = toolName, realArgs = toolArgs;
-            if (toolName === 'invokeTool' && discoveryCall) {
-              try {
-                const resolved = subAgent.prepareToolExposure().resolve(toolArgs);
-                realName = resolved.name; realArgs = resolved.args;
-              } catch (error) {
-                subAgent.contextManager.addToolResult(tc.id, toolName, JSON.stringify({ ok: false, error: error.message }));
-                continue;
-              }
-            }
-            const definition = this.getEnabledToolDefinitions().find(t => t.name === realName);
-            const category = typeof getToolAuthCategory === 'function' ? getToolAuthCategory(realName) : null;
-            if (category && !(this.settings?.toolAuthGranted?.[category] || this._sessionToolAuth?.[category])) {
-              const decision = await this.requestToolAuth(realName, category);
-              if (!decision || decision === 'deny') {
-                subAgent.contextManager.addToolResult(tc.id, toolName, JSON.stringify({ ok: false, error: '用户未授权使用此工具' })); continue;
-              }
-              this._sessionToolAuth ||= {}; this._sessionToolAuth[category] = true;
-              if (decision === 'allow-always') {
-                await this.host.api.setSettings({ toolAuthGranted: { [category]: true } });
-                this.settings.toolAuthGranted = { ...(this.settings.toolAuthGranted || {}), [category]: true };
-                subAgent.settings.toolAuthGranted = { ...(subAgent.settings.toolAuthGranted || {}), [category]: true };
-              }
-            }
-            const commands = ['runTerminalCommand','runShellScriptCode','terminalSendInput','terminalAnswerPrompt'];
-            const dangerous = commands.includes(realName) && this.isDangerousCommand(String(realArgs.command || realArgs.script || realArgs.text || realArgs.answer || ''));
-            if (!this.settings.autoApproveSensitive && (definition?.sensitive || dangerous) && !await this.requestApproval(realName, realArgs)) {
-              subAgent.contextManager.addToolResult(tc.id, toolName, JSON.stringify({ ok: false, error: '用户拒绝执行此工具' })); continue;
-            }
-            if (subAgent.onToolCall) subAgent.onToolCall(toolName, toolArgs, 'calling');
-            // Discovery uses the scoped registry; real calls keep the original grants and approvals.
-            const toolResult = discoveryCall ? await subAgent.executeTool(toolName, toolArgs) : await this.executeTool(toolName, toolArgs);
-            const resultStr = typeof toolResult === 'string' ? toolResult : JSON.stringify(toolResult);
-            // 与主 agentLoop 一致：阈值 20000，保留前 18000 + 尾 2000
-            let truncated = resultStr;
-            if (!['webSearch', 'webFetch'].includes(realName) && resultStr.length > 20000) {
-              const head = resultStr.substring(0, 18000);
-              const tail = resultStr.substring(resultStr.length - 2000);
-              truncated = `${head}\n\n...[中间部分已截断，共${resultStr.length}字符]...\n\n${tail}`;
-            }
-            // 隐私信息保护：子代理工具结果注入其上下文前同样过滤隐私信息
-            if (this.settings?.privacyProtection?.enabled
-                && this.settings.privacyProtection.filterResults !== false
-                && typeof PrivacyFilter?.filterPrivacyInfo === 'function') {
-              truncated = PrivacyFilter.filterPrivacyInfo(truncated, this._getPrivacyCategories());
-            }
-            subAgent.contextManager.addToolResult(tc.id, toolName, truncated);
-            // 隐私信息保护：子代理 UI 展示副本过滤隐私信息
-            const subDisplayResult = this._sanitizeToolResultForDisplay(toolResult);
-            if (subAgent.onToolCall) subAgent.onToolCall(toolName, toolArgs, 'done', subDisplayResult);
-          }
-          if (subAgent.stopped || subRunId !== subAgent.runId) break;
-          continue; // let the agent process tool results
-        }
-
-        // No tool calls → done
-        if (choice.finish_reason === 'stop') break;
-      }
-
-      // 检查是否因达到迭代上限而退出（非正常 stop）
-      if (iterations >= maxIter && maxIter !== Infinity) {
-        hitMaxIter = true;
-        // 要求子代理写出完整结果报告，而非直接停止
-        if (parentOnMessage) parentOnMessage('sub-agent-message', { id: subAgentId, task, content: '[系统] 已达迭代上限，正在生成完整结果报告...' });
-        try {
-          subAgent.contextManager.addUserMessage(
-            '【系统指令】你已达到迭代上限。请立即停止调用工具，写出当前任务的完整结果报告：\n' +
-            '1. 已完成的工作和结果\n2. 未完成的步骤和原因\n3. 遇到的问题和建议\n请简洁但完整地总结。'
-          );
-          const summaryResult = await this.host.api.chatLLM(subAgent.contextManager.getMessages(), {
-            ...this._llmOptions(),
-            requestId: 'sub-' + Date.now().toString() + '-final-report',
-            sessionKey: this.sessionKey || null
-          });
-          if (summaryResult.ok && summaryResult.data?.choices?.[0]?.message?.content) {
-            finalContent = summaryResult.data.choices[0].message.content;
-            subAgent.contextManager.addAssistantMessage(finalContent);
-            if (subAgent.onMessage) subAgent.onMessage('assistant', finalContent);
-          }
-        } catch (e) {
-          // 降级：使用已有的 finalContent
-          if (parentOnMessage) parentOnMessage('sub-agent-message', { id: subAgentId, task, content: `[系统] 最终报告生成失败: ${e.message}，使用最后已知结果` });
-        }
-      }
-
-      subAgent.running = false;
-      subAgentRecord.status = 'done';
-      subAgentRecord.endTime = Date.now();
-      subAgentRecord.messages = subAgent.contextManager.getMessages();
-      // 子代理聊天记录完整保留在 record.messages（含 contextManager 数据），
-      // 点开详情模态框随时可查看完整对话；关闭模态框时仅移除 DOM 渲染，数据不释放。
-      // 仅断开回调闭包（onMessage/onToolCall/onTitleChange），释放对父代理的引用。
-      subAgent.onMessage = null;
-      subAgent.onToolCall = null;
-      subAgent.onTitleChange = null;
-      // 限制子代理记录数量上限：只保留最近 N 条完整消息快照（供 UI 展开查看），
-      // 超出上限的最早记录释放 subAgent 实例、contextManager 与消息快照
-      // （消息对象随之可被 GC），防止长会话运行大量子代理时记录无限累积。
-      const MAX_SUB_AGENT_RECORDS = 100;
-      if (this.subAgents.length > MAX_SUB_AGENT_RECORDS) {
-        const overflow = this.subAgents.splice(0, this.subAgents.length - MAX_SUB_AGENT_RECORDS);
-        for (const rec of overflow) {
-          if (rec.subAgent?.contextManager) {
-            const cm = rec.subAgent.contextManager;
-            cm.messages = [];
-            cm.historyMessages = [];
-            cm.summaries = [];
-            cm.compactBoundaries = [];
-            cm.pinnedMessages = [];
-          }
-          rec.subAgent = null;
-          rec.messages = [];
-          rec.tarot = null;
-        }
-      }
-      const response = finalContent || '子代理完成了任务但没有文本回复';
-      if (this.onMessage) this.onMessage('sub-agent-done', {
-        id: subAgentId, task, result: response,
-        messages: subAgentRecord.messages,
-        usage: subAgentRecord.usage,
-        toolUseCount: subAgentRecord.toolUseCount,
-        iterations: subAgentRecord.iterations,
-        duration: subAgentRecord.endTime - subAgentRecord.startTime,
-        hitMaxIter // 是否因达到迭代上限而退出
-      });
-      return { ok: true, result: response, iterations, subAgentId, hitMaxIter };
-    } catch (e) {
-      return { ok: false, error: e.message };
-    }
+    if (typeof this.host.api.nativeSubagentStart !== 'function') return { ok: false, error: 'Shared subagent backend is unavailable' };
+    return this.host.api.nativeSubagentStart(this.sessionKey, args);
   }
 
   /** 根据 ID 获取子代理记录（含完整消息历史和上下文） */

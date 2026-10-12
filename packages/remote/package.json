@@ -1,0 +1,26 @@
+{
+  "name": "@cibyp/remote",
+  "version": "0.1.0-alpha.1",
+  "description": "CIBYP Remote contracts, authenticated RPC, bounded events and device tools",
+  "license": "GPL-3.0-or-later",
+  "main": "src/index.js",
+  "types": "src/index.d.ts",
+  "private": true,
+  "exports": {
+    ".": {
+      "types": "./src/index.d.ts",
+      "default": "./src/index.js"
+    },
+    "./client": "./src/client.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.cjs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/B5-Software/CIBYP-Remote.git"
+  }
+}

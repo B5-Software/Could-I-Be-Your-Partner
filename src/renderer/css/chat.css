@@ -3026,3 +3026,45 @@ html[data-animations="off"] .code-eslint-panel { transition: none; }
 .context-compaction-status[data-phase="error"] i { color: var(--danger); }
 .compaction-token-change { font-variant-numeric: tabular-nums; white-space: nowrap; color: var(--text-primary); }
 .code-agent-usage { flex-wrap: wrap; row-gap: 6px; }
+
+/* Shared Babe relationship views: inline details never cover the composer. */
+.babe-relationship-status { display:flex; align-items:center; gap:8px; width:fit-content; max-width:100%; padding:2px 0 8px; border:0; background:none; color:var(--text-secondary); font:inherit; font-size:12px; cursor:pointer; }
+.babe-relationship-status > :first-child { color:var(--accent); font-weight:600; }
+.babe-relationship-status i { font-size:10px; }
+.babe-relationship-panel { position:relative; flex:0 1 auto; max-height:45vh; overflow:auto; padding:22px 28px; border-bottom:1px solid var(--border); background:var(--bg-primary); scrollbar-gutter:stable; }
+.babe-relationship-panel[hidden] { display:none; }
+.babe-relationship-panel .babe-relationship-close { position:absolute; right:14px; top:12px; }
+.babe-mode .babe-info .babe-affection-bar { max-width:260px; }
+.babe-relationship-summary { display:flex; align-items:center; justify-content:space-between; gap:20px; padding-right:28px; }
+.babe-relationship-summary h3 { margin:5px 0; color:var(--text-primary); font-size:20px; }
+.babe-relationship-summary > i { color:var(--accent); font-size:30px; opacity:.7; }
+.babe-relationship-eyebrow { color:var(--text-secondary); font-size:11px; letter-spacing:.04em; }
+.babe-relationship-metrics { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; margin:16px 0; }
+.babe-relationship-metric { padding:12px 14px; border:1px solid var(--border); border-radius:12px; background:var(--bg-secondary); }
+.babe-relationship-metric > div { display:flex; justify-content:space-between; gap:12px; font-size:12px; margin-bottom:9px; color:var(--text-secondary); }
+.babe-relationship-metric strong { font-variant-numeric:tabular-nums; color:var(--text-primary); }
+.babe-relationship-metric progress { display:block; appearance:none; width:100%; height:5px; border:0; border-radius:8px; overflow:hidden; background:var(--bg-primary); accent-color:var(--accent); }
+.babe-relationship-metric progress::-webkit-progress-bar { background:var(--bg-primary); border-radius:8px; }
+.babe-relationship-metric progress::-webkit-progress-value { background:var(--accent); border-radius:8px; }
+.babe-relationship-next { padding:4px 0 10px; }
+.babe-relationship-next strong { font-size:13px; color:var(--text-primary); }
+.babe-relationship-next p { margin:6px 0; line-height:1.7; }
+.babe-relationship-milestones,.babe-relationship-activities { display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; }
+.babe-relationship-chip { padding:5px 10px; border:1px solid var(--border); border-radius:20px; color:var(--accent); font-size:12px; }
+.babe-relationship-memory { position:relative; padding:14px 84px 14px 14px; margin:8px 0; border:1px solid var(--border); border-radius:12px; background:var(--bg-secondary); }
+.babe-relationship-memory p { margin:6px 0 0; color:var(--text-primary); font-size:13px; line-height:1.7; overflow-wrap:anywhere; white-space:pre-wrap; }
+.babe-relationship-memory-actions { display:flex; gap:6px; position:absolute; right:10px; top:12px; }
+.babe-relationship-memory:has(textarea) { padding-right:14px; }
+.babe-relationship-memory:has(textarea) .babe-relationship-memory-actions { position:static; justify-content:flex-end; margin-top:8px; }
+.babe-relationship-memory textarea { width:100%; box-sizing:border-box; padding:10px; margin-top:8px; border:1px solid var(--border); border-radius:8px; background:var(--bg-primary); color:var(--text-primary); font:inherit; resize:vertical; }
+.babe-relationship-activities .btn-secondary { border-radius:20px; font-size:12px; padding:7px 14px; }
+.babe-relationship-settings-detail { margin:20px 0; }
+@media(max-width:680px) { .babe-relationship-panel { padding:16px; } .babe-relationship-metrics { gap:6px; } .babe-relationship-metric { padding:10px; } .babe-relationship-status { gap:5px; font-size:11px; } }
+/* Remote device permissions share the application appearance. */
+.remote-device-card { margin-top: 16px; padding: 16px; border: 1px solid var(--border-color); border-radius: 14px; }
+.remote-device-state { float: right; color: var(--text-secondary); }
+.remote-device-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
+.remote-device-grant { display: grid; grid-template-columns: minmax(140px, 1fr) minmax(180px, 2fr); gap: 10px; margin-top: 12px; }
+.remote-device-write { display: flex; align-items: center; gap: 8px; }
+#remote-device-credentials { box-sizing: border-box; width: 100%; margin-top: 12px; font-family: monospace; }
+@media (max-width: 640px) { .remote-device-grant { grid-template-columns: 1fr; } }

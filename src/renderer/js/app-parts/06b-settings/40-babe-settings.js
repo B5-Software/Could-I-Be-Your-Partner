@@ -20,11 +20,6 @@
         if (!s.babe) s.babe = {};
         s.babe[key] = val;
         await saveSettings(s);
-        // 如果修改了初始好感度，且当前没有活跃 Babe 会话，更新 babeAgent 的好感度
-        if (key === 'initialAffection' && babeAgent && !babeCurrentHistoryId) {
-          babeAgent.babeAffection = val;
-          updateBabeAffection(val);
-        }
         // 主动消息频率变更时重启定时器
         if (key === 'proactiveInterval') {
           restartBabeProactiveTimer(val);

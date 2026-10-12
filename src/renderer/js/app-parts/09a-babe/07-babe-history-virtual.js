@@ -87,7 +87,6 @@
         babeAgent = existing.agent;
         const conversation = await window.api.babeHistoryGet(id);
         if (conversation) {
-          babeAgent.babeAffection = conversation.affection ?? babeAgent.settings?.babe?.initialAffection ?? 30;
           await babeAgent.loadFromHistory(conversation);
           sessionManager.retag(existing, id);
         }
@@ -143,7 +142,6 @@
     babeAgent = session.agent;
     babeCurrentHistoryId = id;
     babeMessages = conversation.messages || [];
-    babeAgent.babeAffection = conversation.affection ?? babeAgent.settings?.babe?.initialAffection ?? 30;
     await babeAgent.loadFromHistory(conversation);
     sessionManager.retag(session, id);
     activateSession('babe', session.key);

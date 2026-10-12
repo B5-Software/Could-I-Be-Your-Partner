@@ -63,7 +63,7 @@ async function startFrontend(address) {
     client.request('boot:state').then(state => { bootReady = !!state.ready; showWhenReady(); }).catch(client.onError);
   }, 400);
   bootTimer.unref();
-  const source = ['preload.js', 'splash-preload.js'].map(file => fs.readFileSync(path.join(__dirname, '../preload', file), 'utf8')).join('\n');
+  const source = ['api-facade.js', 'splash-preload.js'].map(file => fs.readFileSync(path.join(__dirname, '../preload', file), 'utf8')).join('\n');
   const channels = new Set([...source.matchAll(/ipcRenderer\.(?:invoke|send)\(['"]([^'"]+)['"]/g)].map(m => m[1]));
   const invokeChannels = new Set([...source.matchAll(/ipcRenderer\.invoke\(['"]([^'"]+)['"]/g)].map(m => m[1]));
   async function local(event, channel, args) {

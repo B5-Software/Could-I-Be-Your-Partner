@@ -92,7 +92,7 @@ cibyp --runtime-version     # 缓存中的 App 版本
 | --- | --- |
 | **Chat** | 通用对话、文件处理、搜索及工具任务 |
 | **Code** | 项目编程、编辑器上下文、终端、修改审阅 |
-| **Babe** | 使用独立人设与关系状态的陪伴对话 |
+| **Babe** | 连续人格与跨会话关系：好感、信任、熟悉、共同经历和逐步确认的关系阶段，支持虚拟约会、文字游戏与共同小目标（[说明](docs/babe-relationship.md)） |
 
 桌面 Code 模式内嵌 Code-OSS 工作台，包含文件浏览、Git、终端、调试与扩展管理。CIBYP AI 侧栏与 IDE 并排显示，支持选区和诊断上下文、AI 修改差异、接受与撤销，以及沉浸模式。功能和扩展兼容范围见 [Code-OSS 工作台](docs/codeoss-workbench.md)。
 
@@ -269,6 +269,10 @@ npm run test:codeoss        # Code-OSS 工作台检查
 
 [checks-badge]: https://img.shields.io/github/actions/workflow/status/B5-Software/Could-I-Be-Your-Partner/check.yml?branch=main&label=checks&logo=githubactions&logoColor=white&style=flat-square
 [checks-url]: https://github.com/B5-Software/Could-I-Be-Your-Partner/actions/workflows/check.yml
+## Remote / SBC / MCU
+
+[CIBYP Remote](https://github.com/B5-Software/CIBYP-Remote) 提供 v2 协议和 SDK；[CIBYP Mini](https://github.com/B5-Software/CIBYP-Mini) 在 Node 24 中复用本项目 Agent 内核；[CIBYP Micro](https://github.com/B5-Software/CIBYP-Micro) 提供 C11 设备工具和 ESP32-S3 参考固件。原有远程客户端继续使用兼容接口。板级能力仍需实机验证，详见 [实施记录](docs/remote-mini-micro-implementation.md)。
+
 [build-badge]: https://img.shields.io/github/actions/workflow/status/B5-Software/Could-I-Be-Your-Partner/release.yml?branch=main&label=build&logo=githubactions&logoColor=white&style=flat-square
 [build-url]: https://github.com/B5-Software/Could-I-Be-Your-Partner/actions/workflows/release.yml
 [source-version-badge]: https://img.shields.io/github/package-json/v/B5-Software/Could-I-Be-Your-Partner/main?label=main&logo=github&style=flat-square

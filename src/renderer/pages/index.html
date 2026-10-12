@@ -469,6 +469,9 @@
           <div class="babe-avatar" id="babe-avatar"><i class="fa-solid fa-heart"></i></div>
           <div class="babe-info">
             <h2 id="babe-name-display">Babe</h2>
+            <button class="babe-relationship-status" id="btn-babe-relationship" type="button" aria-expanded="false" aria-controls="babe-relationship-panel">
+              <span id="babe-relationship-stage">初识</span><span class="babe-relationship-dot">·</span><span id="babe-relationship-mood">平静自在</span><i class="fa-solid fa-chevron-down" aria-hidden="true"></i>
+            </button>
             <div class="babe-affection-bar">
               <div class="babe-affection-label">
                 <span><i class="fa-solid fa-heart"></i> 好感度</span>
@@ -501,6 +504,11 @@
             <button class="btn-secondary" id="btn-babe-proactive" title="让TA主动发消息"><i class="fa-solid fa-wand-magic-sparkles"></i></button>
           </div>
         </div>
+        <aside id="babe-relationship-panel" class="babe-relationship-panel" aria-label="你们的故事" hidden>
+          <button id="btn-babe-relationship-close" class="btn-icon babe-relationship-close" type="button" aria-label="关闭"><i class="fa-solid fa-xmark"></i></button>
+          <div id="babe-relationship-detail"></div>
+          <div class="babe-relationship-activities"><button class="btn-secondary" data-babe-activity="date">虚拟约会</button><button class="btn-secondary" data-babe-activity="game">文字小游戏</button><button class="btn-secondary" data-babe-activity="goal">共同小目标</button></div>
+        </aside>
         <div class="babe-chat-messages" id="babe-chat-messages">
           <div class="babe-welcome">
             <div class="babe-welcome-icon"><i class="fa-solid fa-heart"></i></div>
@@ -727,6 +735,7 @@
             <button class="settings-tab" data-tab="fedikitten"><i class="fa-solid fa-cat"></i> FediKitten</button>
             <button class="settings-tab" data-tab="cibypim"><i class="fa-solid fa-comments"></i> CIBYP-IM</button>
             <button class="settings-tab" data-tab="webcontrol"><i class="fa-solid fa-globe"></i> Web控制</button>
+            <button class="settings-tab" data-tab="devices"><i class="fa-solid fa-microchip"></i> <span data-i18n="ui.remoteDevices.title">Remote 设备</span></button>
             <button class="settings-tab" data-tab="playwright"><i class="fa-solid fa-window-restore"></i> Playwright</button>
             <div class="settings-tab-group" data-i18n="ui.settings.groups.automation">自动化与执行</div>
             <button class="settings-tab" data-tab="automation"><i class="fa-solid fa-bolt"></i> 自动化</button>
@@ -823,6 +832,17 @@
             <!-- Babe Mode Settings -->
             <div class="settings-panel" data-tab="babe">
               <div class="settings-group">
+                <h3><i class="fa-solid fa-seedling"></i> 关系与共同经历</h3>
+                <p class="setting-hint">同一个 TA，跨对话延续关系。好感、信任与熟悉慢慢积累，新的聊天不会重新认识。</p>
+                <div class="setting-item"><label for="setting-babe-relationship-enabled">关系成长</label><label class="toggle-switch"><input type="checkbox" id="setting-babe-relationship-enabled" data-babe-relationship="enabled" checked><span class="toggle-slider"></span></label></div>
+                <div class="setting-item"><label for="setting-babe-relationship-pace">相处节奏</label><select id="setting-babe-relationship-pace" data-babe-relationship="pace"><option value="slow">慢慢来</option><option value="natural">自然发展</option><option value="relaxed">轻松体验</option></select></div>
+                <div class="setting-item"><label for="setting-babe-relationship-start">故事的起点</label><select id="setting-babe-relationship-start" data-babe-relationship="start"><option value="gradual">从认识开始</option><option value="partner">已经是伴侣</option></select><div class="setting-hint">仅首次建立或重新开始关系时生效。</div></div>
+                <div class="setting-item"><label for="setting-babe-relationship-metrics">聊天顶部显示好感数值</label><label class="toggle-switch"><input type="checkbox" id="setting-babe-relationship-metrics" data-babe-relationship="showMetrics" checked><span class="toggle-slider"></span></label></div>
+                <div id="setting-babe-relationship-detail" class="babe-relationship-settings-detail"></div>
+                <p class="setting-hint">关系档案独立保存。删除聊天不会清空关系；可以在这里编辑共同记忆或重新开始。关系整理随回复完成，不另外请求模型。</p>
+                <button class="btn-secondary" id="btn-babe-relationship-reset" type="button"><i class="fa-solid fa-rotate-left"></i> 重新开始关系</button>
+              </div>
+              <div class="settings-group">
                 <h3><i class="fa-solid fa-heart"></i> Babe 模式形象</h3>
                 <p class="setting-hint" style="margin-bottom:12px">配置恋爱模式的 AI 形象。TA 会有独立的历史记录、好感度和记忆。</p>
                 <div class="setting-item">
@@ -849,6 +869,11 @@
                   <label>Persona / 背景</label>
                   <textarea id="setting-babe-persona" rows="4" placeholder="描述TA的背景故事、说话风格、喜好等..."></textarea>
                 </div>
+                <div class="setting-item">
+                  <label for="setting-babe-interests">兴趣与生活设定</label>
+                  <textarea id="setting-babe-interests" rows="2" maxlength="1200" placeholder="TA喜欢什么、有什么自己的小习惯…"></textarea>
+                </div>
+                <div class="setting-item"><label for="setting-babe-boundaries">相处偏好与边界</label><textarea id="setting-babe-boundaries" rows="2" maxlength="1200" placeholder="喜欢怎样的相处，不喜欢什么…"></textarea></div>
                 <div class="setting-item">
                   <label>称呼用户的方式</label>
                   <input type="text" id="setting-babe-user-nickname" placeholder="TA怎么称呼你？如：亲爱的、宝宝">
@@ -887,7 +912,7 @@
                 <div class="setting-item">
                   <label>初始好感度</label>
                   <input type="number" id="setting-babe-initial-affection" min="0" max="100" value="30" placeholder="0-100">
-                  <div class="setting-hint">每个新对话的起始好感度（0-100）</div>
+                  <div class="setting-hint">首次建立或重置关系时使用；新对话会继承当前关系</div>
                 </div>
               </div>
             </div>
@@ -2478,6 +2503,26 @@
 
 
             <!-- Playwright Panel -->
+            <div class="settings-panel" data-tab="devices">
+              <div class="settings-group">
+                <h3><i class="fa-solid fa-microchip"></i> <span data-i18n="ui.remoteDevices.title">Remote 设备</span></h3>
+                <p class="setting-hint" data-i18n="ui.remoteDevices.hint">Micro 主动连接当前后台。设备仅获得下方明确授予的工具和资源权限。</p>
+                <button class="btn-secondary" id="remote-devices-refresh" data-i18n="ui.remoteDevices.refresh">刷新设备</button>
+                <div id="remote-devices-list" aria-live="polite"></div>
+              </div>
+              <form class="settings-group" id="remote-device-form">
+                <h3 data-i18n="ui.remoteDevices.pair">配对 / 修改权限</h3>
+                <div class="setting-item"><label for="remote-device-id" data-i18n="ui.remoteDevices.id">设备 ID</label><input id="remote-device-id" maxlength="80" pattern="[A-Za-z0-9_-]+" required autocomplete="off"></div>
+                <div id="remote-device-grants"></div>
+                <div class="remote-device-actions">
+                  <button type="button" class="btn-secondary" id="remote-device-add" data-i18n="ui.remoteDevices.add">添加工具授权</button>
+                  <button type="submit" class="btn-primary" data-i18n="ui.remoteDevices.save">保存设备</button>
+                </div>
+                <p class="setting-hint" id="remote-device-result" role="status"></p>
+                <textarea id="remote-device-credentials" readonly hidden rows="6" aria-label="Device credentials"></textarea>
+                <p class="setting-hint" data-i18n="ui.remoteDevices.private">新凭据仅在当前启动期间可取回。请通过可信 USB / 串口配置到设备，勿发送给 Agent。</p>
+              </form>
+            </div>
             <div class="settings-panel" data-tab="playwright">
               <div class="settings-group">
                 <h3><i class="fa-solid fa-window-restore"></i> Playwright 浏览器设置</h3>
@@ -3927,6 +3972,7 @@
   <script src="../../shared/attachments.js"></script>
   <script src="../../shared/avatar-source.js"></script>
   <script src="../../shared/reasoning.js"></script>
+  <script src="../../shared/babe-relationship.js"></script>
   <script src="../../shared/tor-bridges.js"></script>
   <script src="../js/settings-client.js"></script>
   <script src="../../agent/host.js"></script>

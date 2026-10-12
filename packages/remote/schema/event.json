@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CIBYP Remote v2 event",
+  "type": "object",
+  "required": ["type", "streamId", "sequence", "channel", "payload"],
+  "properties": {
+    "type": { "const": "event" },
+    "streamId": { "type": "string", "maxLength": 160 },
+    "sequence": { "type": "integer", "minimum": 1 },
+    "channel": { "type": "string", "maxLength": 100 },
+    "payload": {}
+  },
+  "additionalProperties": false
+}

@@ -13,6 +13,24 @@ const { createKeyDecoder } = require('../../src/tui/keys.js');
 const { stripAnsi, visibleWidth } = require('../../src/tui/ansi.js');
 const { themeFromEnv } = require('../../src/tui/theme.js');
 
+test('/relationship reads the shared relationship instead of conversation snapshots', async () => {
+  const runtime = makeFakeRuntime();
+  runtime.api = {
+    babeRelationshipGet: async () => ({
+      ok: true,
+      stage: 'friends',
+      daysTogether: 5,
+      metrics: { affection: 55.6, trust: 40, familiarity: 30 },
+      memories: [{ content: 'Shared promise' }],
+    }),
+  };
+  const app = new TuiApp({ runtime });
+  await app._runCommand('relationship', '');
+  assert.equal(app.state.modal.kind, 'relationship');
+  assert.match(app.state.modal.body, /56/);
+  assert.match(app.state.modal.body, /Shared promise/);
+});
+
 test('/update downloads in the background and installation requires an explicit selection', async () => {
   const runtime = makeFakeRuntime();
   let downloads = 0,

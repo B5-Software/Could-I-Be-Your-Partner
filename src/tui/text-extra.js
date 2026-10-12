@@ -2,6 +2,9 @@
 'use strict';
 module.exports = {
   en: {
+    'ui.tui.args.devices': '[ID]',
+    'ui.tui.cmd.devices': 'List paired Remote devices and resource grants',
+    'ui.tui.cmd.hardware': 'List available hardware tools',
     'ui.tui.cmd.usage': 'Show tokens, spending and subscription quotas',
     'ui.tui.cmd.mouse': 'Toggle mouse capture (saved)',
     'ui.tui.args.mouse': '[on|off]',
@@ -71,6 +74,9 @@ module.exports = {
     'ui.tui.configGroup.language': 'Language',
   },
   de: {
+    'ui.tui.args.devices': '[ID]',
+    'ui.tui.cmd.devices': 'Gekoppelte Remote-Geräte und Freigaben anzeigen',
+    'ui.tui.cmd.hardware': 'Verfügbare Hardware-Werkzeuge anzeigen',
     'ui.tui.cmd.usage': 'Tokens, Kosten und Abonnementkontingente anzeigen',
     'ui.tui.cmd.mouse': 'Maussteuerung umschalten (gespeichert)',
     'ui.tui.args.mouse': '[on|off]',
@@ -295,4 +301,34 @@ Object.assign(module.exports.de, {
   'ui.tui.askResume': 'Weiter beantworten',
   'ui.tui.askDiscard': 'Abbrechen und Agent benachrichtigen',
   'ui.tui.askSendFailed': 'Antworten konnten nicht gesendet werden. Bitte erneut versuchen.',
+});
+
+Object.assign(module.exports.en, {
+  'ui.tui.cmd.relationship': 'Show the shared Babe relationship and memories',
+  'ui.tui.relationshipTitle': 'Your story together',
+  'ui.tui.relationshipUnavailable': 'Relationship unavailable',
+  'ui.tui.relationshipMetrics':
+    'Affection {affection} · Trust {trust} · Familiarity {familiarity} · {days} days together',
+  'ui.tui.relationshipEmpty': 'Shared moments and promises will be remembered here.',
+  'ui.tui.relationshipStage.strangers': 'First meeting',
+  'ui.tui.relationshipStage.acquaintance': 'Getting acquainted',
+  'ui.tui.relationshipStage.friends': 'Close friends',
+  'ui.tui.relationshipStage.close': 'Growing closer',
+  'ui.tui.relationshipStage.dating': 'Dating',
+  'ui.tui.relationshipStage.partner': 'Committed partners',
+});
+
+Object.assign(module.exports.de, {
+  'ui.tui.cmd.relationship': 'Gemeinsame Babe-Beziehung und Erinnerungen anzeigen',
+  'ui.tui.relationshipTitle': 'Eure gemeinsame Geschichte',
+  'ui.tui.relationshipUnavailable': 'Beziehung nicht verfügbar',
+  'ui.tui.relationshipMetrics':
+    'Zuneigung {affection} · Vertrauen {trust} · Vertrautheit {familiarity} · {days} gemeinsame Tage',
+  'ui.tui.relationshipEmpty': 'Gemeinsame Erlebnisse und Vereinbarungen werden hier bewahrt.',
+  'ui.tui.relationshipStage.strangers': 'Erstes Kennenlernen',
+  'ui.tui.relationshipStage.acquaintance': 'Vertrauter werden',
+  'ui.tui.relationshipStage.friends': 'Enge Freunde',
+  'ui.tui.relationshipStage.close': 'Einander näherkommen',
+  'ui.tui.relationshipStage.dating': 'Dating',
+  'ui.tui.relationshipStage.partner': 'Feste Partnerschaft',
 });

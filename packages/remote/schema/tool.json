@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CIBYP tool manifest",
+  "type": "object",
+  "required": ["name", "inputSchema"],
+  "properties": {
+    "name": { "type": "string", "pattern": "^[A-Za-z0-9_.:@/-]{1,160}$" },
+    "description": { "type": "string", "maxLength": 500 },
+    "inputSchema": {
+      "type": "object",
+      "properties": { "type": { "const": "object" } },
+      "required": ["type"]
+    },
+    "execution": {
+      "type": "object",
+      "properties": {
+        "requiresLease": { "type": "boolean" },
+        "timeoutMs": { "type": "integer", "minimum": 1, "maximum": 60000 }
+      }
+    }
+  }
+}

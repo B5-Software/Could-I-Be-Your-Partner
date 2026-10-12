@@ -373,7 +373,11 @@ function renderStatusLine(theme, state, width) {
     ),
   );
   if (state.model) parts.push(truncate(state.model, 28));
-  if (state.mode === 'babe' && state.affection != null) {
+  if (
+    state.mode === 'babe' &&
+    state.affection != null &&
+    state.settings?.babe?.relationship?.showMetrics !== false
+  ) {
     parts.push(
       paint(theme, accentFor('babe'), FIGURES.heart + ' ' + state.affection, { bold: true }),
     );

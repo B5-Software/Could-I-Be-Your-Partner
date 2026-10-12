@@ -172,6 +172,7 @@ const WEB_FORCED = process.argv.includes('--web');
 let HEADLESS = backgroundMode || TUI;
 // 无头模式下的 Agent 运行时（GUI 模式为 null：会话由渲染进程承载）
 let agentRuntime = null;
+let nativeSubagents = null;
 let backendServer, backendDispatch, removeBackendDiscovery;
 let tuiHandle = null;
 
@@ -428,7 +429,7 @@ const pluginSkillsProvider = () => {
 // DeepSeek 插件管理器（Cordis 内核 lib + CIBYP 自研 Provider）
 // 服务翻译层 transport：agent 消息/授权请求经 IPC 往返渲染进程
 const dsRequestPending = new Map();
-const ownerTransport = require('./services/backend-transport').createBackendTransport({ getRuntime: () => agentRuntime, publish: publishEvent, getSettings: () => settings });
+const ownerTransport = require('./services/backend-transport').createBackendTransport({ getRuntime: () => agentRuntime, publish: publishEvent, getSettings: () => settings, getSubagentConfig: id => nativeSubagents?.config(id) });
 const dsTransportSend = (channel, payload) => {
   return ownerTransport.send(channel, payload);
 };
@@ -1973,6 +1974,12 @@ ipcMain.handle('ds:toolCall', async (_, pluginId, toolName, args, execCtx = {}) 
     return { ok: false, error: e.message };
   }
 });
+ipcMain.handle('native-subagent:start', async (_, key, args) => {
+  try { return await nativeSubagents.start(key, args); } catch (error) { return { ok: false, error: error.message }; }
+});
+ipcMain.handle('native-subagent:control', async (_, key, args) => {
+  try { return await nativeSubagents.control(key, args); } catch (error) { return { ok: false, error: error.message }; }
+});
 ipcMain.handle('ds:turnStopping', (_, sessionKey) => pluginManager.turnStopping(sessionKey));
 ipcMain.handle('ds:listTools', () => ({
   ok: true,
@@ -1982,7 +1989,7 @@ ipcMain.handle('ds:listTools', () => ({
 // 渲染进程会话注册表同步 → 插件宿主的 agents/sessions seam
 async function syncOwnerAgents() {
   if (!agentRuntime) return;
-  await pluginManager.syncAgents(agentRuntime.listSessions().map(s => ({ key: s.key, id: s.conversationId || s.key, mode: s.mode, title: s.title, cwd: s.workspacePath, status: s.status })));
+  await pluginManager.syncAgents(agentRuntime.listSessions().map(s => ({ key: agentRuntime.sessions.get(s.key)?.agent.messagingId || s.key, runtimeKey: s.key, id: s.conversationId || s.key, mode: s.mode, title: s.title, cwd: s.workspacePath, status: s.status })));
 }
 ipcMain.handle('ds:agentsSync', async (_, entries) => {
   try {
@@ -2172,6 +2179,7 @@ function broadcastThemeChanged() {
 }
 function broadcastSettingsChanged() {
   automaticMemory.settingsChanged();
+  babeRelationship.settingsChanged();
   codeOSSService.syncPersonalization();
   const payload = { language: settings.language, theme: settings.theme, ime: settings.ime, voice: settings.voice, tarotVisible: settings.tarotVisible, animations: settings.animations !== false, modalAnimations: settings.modalAnimations !== false };
   publishEvent('settings:changed', payload);
@@ -2211,6 +2219,22 @@ const automaticMemory = new (require('./services/automatic-memory').AutomaticMem
   chat: (messages, options) => ipcMain.invokeLocal('llm:chat', require('./core/ipc-dispatch').createLocalIpcEvent({ publishEvent }), messages, options),
   publish: publishEvent
 });
+const babeRelationship = new (require('./services/babe-relationship').BabeRelationship)({
+  file: path.join(dataDir, 'babe-relationship.json'), getSettings: () => settings, publish: publishEvent,
+  legacy: () => {
+    let latest = null;
+    try { for (const name of fs.readdirSync(babeHistoryDir).filter(name => name.endsWith('.json')).slice(-500)) {
+      const value = loadJSON(path.join(babeHistoryDir, name), null);
+      if (Number.isFinite(value?.affection) && (!latest || (Date.parse(value.updatedAt) || Number(value.updatedAt) || 0) > (Date.parse(latest.updatedAt) || Number(latest.updatedAt) || 0))) latest = value;
+    } } catch { /* no previous Babe history */ }
+    return latest;
+  }
+});
+ipcMain.handle('babe-relationship:get', () => babeRelationship.snapshot());
+ipcMain.handle('babe-relationship:context', (_, language) => babeRelationship.context(language));
+ipcMain.handle('babe-relationship:begin', (_, input) => babeRelationship.begin(input));
+ipcMain.handle('babe-relationship:complete', (_, input) => babeRelationship.complete(input));
+ipcMain.handle('babe-relationship:edit', (_, input) => babeRelationship.edit(input));
 ipcMain.handle('automatic-memory:list', (_, query) => automaticMemory.snapshot(query));
 ipcMain.handle('automatic-memory:edit', (_, input) => automaticMemory.edit(input));
 ipcMain.handle('automatic-memory:remove', (_, input) => automaticMemory.remove(input));
@@ -3214,28 +3238,10 @@ function broadcastSkillsChanged() {
   }
 }
 
-ipcMain.handle('skills:list', () => {
-  try {
-    const files = fs.readdirSync(skillsDir).filter(f => f.endsWith('.json'));
-    return files.map(f => loadJSON(path.join(skillsDir, f), {}));
-  } catch { return []; }
-});
-ipcMain.handle('skills:create', (_, skill) => {
-  skill.id = Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
-  skill.createdAt = new Date().toISOString();
-  saveJSON(dataPath(skillsDir, skill.id, '.json'), skill);
-  broadcastSkillsChanged();
-  return skill;
-});
-ipcMain.handle('skills:delete', (_, id) => {
-  try {
-    fs.unlinkSync(dataPath(skillsDir, id, '.json'));
-    broadcastSkillsChanged();
-    return true;
-  } catch {
-    return false;
-  }
-});
+const skillStore = require('./services/skill-store').createSkillStore({directory: skillsDir, load: loadJSON, save: saveJSON, changed: broadcastSkillsChanged});
+ipcMain.handle('skills:list', () => skillStore.list());
+ipcMain.handle('skills:create', (_, skill) => skillStore.create(skill));
+ipcMain.handle('skills:delete', (_, id) => skillStore.remove(id));
 
 ipcMain.handle('skill-editor:open', (_, payload = {}) => {
   if (skillEditorWindow && !skillEditorWindow.isDestroyed()) {
@@ -3989,17 +3995,7 @@ require('./ipc/geogebra')({
 });
 
 // ---- IPC: Skills Update ----
-ipcMain.handle('skills:update', (_, id, data) => {
-  const p = dataPath(skillsDir, id, '.json');
-  const skill = loadJSON(p, null);
-  if (skill) {
-    const updated = { ...skill, ...data, updatedAt: new Date().toISOString() };
-    saveJSON(p, updated);
-    broadcastSkillsChanged();
-    return { ok: true, skill: updated };
-  }
-  return { ok: false, error: '技能不存在' };
-});
+ipcMain.handle('skills:update', (_, id, data) => skillStore.update(id, data));
 
 // ---- IPC: OCR (tesseract.js) ----
 ipcMain.handle('ocr:recognize', async (_, imagePath) => {
@@ -4473,7 +4469,9 @@ app.whenReady().then(async () => {
   const { createAgentRuntime, INTERACTION_POLICY } = require('./agent-runtime');
   agentRuntime = createAgentRuntime({ ipcMain, eventBus, getSettings: () => settings,
     interactionPolicy: process.env.CIBYP_AUTO_APPROVE === '1' ? INTERACTION_POLICY.AUTO_APPROVE : INTERACTION_POLICY.PROMPT });
+  nativeSubagents = new (require('./services/native-subagents').NativeSubagents)({ file: path.join(dataDir, 'native-subagents.json'), host: pluginManager.host, getRuntime: () => agentRuntime, sync: syncOwnerAgents });
   agentRuntime.onEvent(event => {
+    nativeSubagents.event(event);
     try { pluginManager.consumeRuntimeEvent(event); }
     catch (error) { console.warn('[plugin-session-event]', error.message); }
     if (['session-created', 'session-closed', 'status', 'title', 'view-changed'].includes(event.type)) syncOwnerAgents().catch(error => console.warn('[plugin-agents]', error.message));
@@ -4483,10 +4481,15 @@ app.whenReady().then(async () => {
     const inst = vmService.status().inst || {};
     return { required: !!vmRuntimeGate.required, ready: !!vmRuntimeGate.ready, failed: !!vmRuntimeGate.failed, progress: Number(inst.progress) || 0, detail: inst.detail || inst.state || '' };
   };
-  backendDispatch = require('./core/backend-dispatch').createBackendDispatch({ runtime: agentRuntime, ipcMain, eventBus, bootState,
+  backendDispatch = require('./core/backend-dispatch').createBackendDispatch({ runtime: agentRuntime, ipcMain, eventBus, bootState, storageDir: app.getPath('userData'),
     desktop: openDesktopView,
     shutdown: () => { setTimeout(() => app.quit(), 100); return { ok: true }; } });
   ipcMain.handle('backend:request', (_, method, ...args) => backendDispatch({ method, args }));
+  ipcMain.handle('remote:invoke', async (_, method, params) => {
+    const result = await backendDispatch.remote.handle({jsonrpc: '2.0', id: require('node:crypto').randomUUID(), method, params}, {id: 'local-owner', scopes: ['*']});
+    if (result.error) return {ok: false, error: result.error.message, reason: result.error.data?.reason};
+    return {ok: true, result: result.result};
+  });
   const token = require('node:crypto').randomBytes(32).toString('hex');
   backendServer = new (require('./core/backend-server').BackendServer)({ dispatch: backendDispatch, eventBus, token, codeoss: codeOSSWeb });
   const address = await backendServer.start();

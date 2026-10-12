@@ -1,0 +1,24 @@
+{
+  "repository": "https://github.com/B5-Software/CIBYP-Remote",
+  "version": "0.1.0-alpha.1",
+  "files": {
+    "package.json": "316a02d46bfe45256caec0306b59fdf82ec53eed3212d0a46909c1d0b761a466",
+    "LICENSE": "81cbae84a29ce7e770bf2bc7b178e50bda0ce8de6067aba661b0bc7b05b562f8",
+    "src/client.js": "2b698430b0890589725e30d120b4beb19da40531e1e8f9eff8186cde813c5fd4",
+    "src/contract.js": "613209b3fe20f3adb595fbf355d3e1635408f3a42269c7659f45cfc8b661ad71",
+    "src/credentials.js": "5b6957208fb72c9528c306ef241fac25b39347e7f5f7747fbc667b5fbda67888",
+    "src/devices.js": "bf9dc623c81ca288de16c6cdc569acf557b2f98c839ce0b824cdf04f1616686e",
+    "src/events.js": "765361ba8a54920271e615dbbc80ca1d61024386357efc5b11e1863f94849185",
+    "src/express.js": "35a3a38faf68f6c5849345c8955a8268aaa901e7dc612ae4305247121b6a942e",
+    "src/frame.js": "0d8ff5c3f686c6e0bcf901f03d7362406d0e547df25fed958a35e9bd4e3a03f4",
+    "src/index.d.ts": "d87c4660c981037ac4806d4fcd83fc36e37977eb97dec9997a8c37b072711ef0",
+    "src/index.js": "07802c56c4ce373aad58ac553736d3a6ff2cc712fa3b1cfb9c0cecfe5c0a14dc",
+    "src/service.js": "3aae1a4fe7d6522f111f269255fdf890e27fe0538afa0fb363f98e66c2f78933",
+    "src/store.js": "175a2094cb22c4471a60ea30890d989e9031ccc57854cf5c676bdc28f9d666d5",
+    "src/tools.js": "3867552b744d3ede0875abcf255cb3c05b8c7c3acfd5bd1608f416030ae37f60",
+    "schema/device-hello.json": "63f74f57a755c816611f1f8012c4b41ef0837577178ea98ef20bf59a01bdb786",
+    "schema/event.json": "daf26807bcd58956ffab08e7023710a31c64c0c46dc61d66bdd8f1042b4dc697",
+    "schema/request.json": "095a7d97784b9ccbe2cc5ccac0793c51a518e32186887bdaffd053993086fc60",
+    "schema/tool.json": "387a146be4cc77d7b57d9a628b06710a36d666066a13d9ad136508fa6f9410d8"
+  }
+}

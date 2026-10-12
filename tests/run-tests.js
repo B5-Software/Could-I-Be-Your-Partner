@@ -21,6 +21,10 @@ function readMainSource() {
   return fs.readFileSync(path.join(root, 'main.js'), 'utf8') + '\n' + dirs.flatMap(dir =>
     fs.readdirSync(path.join(root, dir)).filter(file => file.endsWith('.js')).sort().map(file => fs.readFileSync(path.join(root, dir, file), 'utf8'))).join('\n');
 }
+function readPreloadSource() {
+  const fs = require('node:fs'), path = require('node:path');
+  return ['preload.js', 'api-facade.js'].map(file => fs.readFileSync(path.join(__dirname, '../src/preload', file), 'utf8')).join('\n');
+}
 
 let passed = 0;
 let failed = 0;
@@ -352,7 +356,8 @@ test('sub-agent records are persisted in history and restored', () => {
   assert.ok(agentContent.includes('payload.subAgents'), 'saveToHistory should persist subAgents');
   assert.ok(agentContent.includes('this.subAgents = conversation.subAgents.map'), 'loadFromHistory should restore subAgents');
   assert.ok(agentContent.includes('subAgent: null'), 'restored records should have subAgent null');
-  assert.ok(agentContent.includes('MAX_SUB_AGENT_RECORDS = 100'), 'sub-agent record cap should be 100');
+  const owner = fs.readFileSync(require('path').join(__dirname, '../src/main/services/native-subagents.js'), 'utf-8');
+  assert.ok(owner.includes('MAX_SUB_AGENT_RECORDS = 100'), 'shared owner should cap sub-agent display records at 100');
 });
 
 test('session cumulative token usage is persisted in history and restored', () => {
@@ -508,9 +513,9 @@ test('sanitizeToolCallsForContext scans terminal commands when enabled', () => {
 });
 
 test('sub-agent chat history should be preserved on completion', () => {
-  const agentContent = fs.readFileSync(require('path').join(__dirname, '../src/renderer/js/agent.js'), 'utf-8');
-  const doneBlock = agentContent.slice(agentContent.indexOf('subAgentRecord.status = \'done\''));
+  const doneBlock = fs.readFileSync(require('path').join(__dirname, '../src/main/services/native-subagents.js'), 'utf-8');
   assert.ok(!doneBlock.includes('subCm.messages = []'), 'sub-agent context messages must NOT be cleared on completion');
+  assert.ok(doneBlock.includes('getHistoryMessages()'), 'shared owner retains the child transcript snapshot');
   assert.ok(doneBlock.includes('MAX_SUB_AGENT_RECORDS = 100'), 'sub-agent record cap should be 100');
 });
 
@@ -534,7 +539,7 @@ console.log('\nMain Process:');
 
 const mainContent = readMainSource();
 const llmRetry = require('../src/main/llm-retry');
-const sessionPreloadContent = fs.readFileSync(require('path').join(__dirname, '../src/preload/preload.js'), 'utf-8');
+const sessionPreloadContent = readPreloadSource();
 const sessionIndexContent = fs.readFileSync(require('path').join(__dirname, '../src/renderer/pages/index.html'), 'utf-8');
 
 test('scoped abort helpers should be exported and wired', () => {
@@ -688,7 +693,7 @@ test('ocr handler should disable gzip for local traineddata files', () => {
 // ---- Test Preload ----
 console.log('\nPreload:');
 
-const preloadContent = fs.readFileSync(require('path').join(__dirname, '../src/preload/preload.js'), 'utf-8');
+const preloadContent = readPreloadSource();
 
 test('preload should use contextBridge', () => {
   assert.ok(preloadContent.includes('contextBridge'));
@@ -819,7 +824,7 @@ test('GeoGebra full-API wrappers should be exposed on window', () => {
 test('GeoGebra new tools are registered with schemas and agent routing', () => {
   const toolsDef = fs.readFileSync(require('path').join(__dirname, '../src/renderer/js/tools-def.js'), 'utf-8');
   const agentLocal = fs.readFileSync(require('path').join(__dirname, '../src/renderer/js/agent.js'), 'utf-8');
-  const preloadLocal = fs.readFileSync(require('path').join(__dirname, '../src/preload/preload.js'), 'utf-8');
+  const preloadLocal = readPreloadSource();
   const newTools = ['geogebraEvalCAS', 'geogebraGetObject', 'geogebraGetXML', 'geogebraSetXML',
     'geogebraSetStyle', 'geogebraGetError', 'geogebraScreenshot', 'geogebraSave', 'geogebraLoad', 'geogebraGuide'];
   for (const t of newTools) {
@@ -2769,7 +2774,7 @@ test('applyEnv: manual 模式注入子进程代理环境变量 / none 清除', (
 console.log('\n更新检查 / 通知 / 模态框 UI 接线:');
 const readSrc = (rel) => rel === 'main/main.js' ? readMainSource() : fs.readFileSync(path_.join(__dirname, '../src/' + rel), 'utf-8');
 const mainJsContent = readSrc('main/main.js');
-const preloadContent2 = readSrc('preload/preload.js');
+const preloadContent2 = readPreloadSource();
 const indexHtmlContent = readSrc('renderer/pages/index.html');
 const settingsPartContent = readAppParts('06b-settings');
 const appUtilsContent = readSrc('renderer/js/app-utils.js');
@@ -4778,7 +4783,7 @@ async function runDsPluginTests() {
   }, 10000);
 
 test('DS 服务翻译层 IPC 接线（preload / main / renderer / 授权模态框）', () => {
-    const preloadContent = fsLocal.readFileSync(pathLocal.join(__dirname, '../src/preload/preload.js'), 'utf-8');
+    const preloadContent = readPreloadSource();
     const mainContent = readMainSource();
     const htmlContent = fsLocal.readFileSync(pathLocal.join(__dirname, '../src/renderer/pages/index.html'), 'utf-8');
     const appContent = readRendererSource();
@@ -4813,7 +4818,7 @@ test('main.js 注册 env:detect 并检测 Python/Node/npm/Bun/Git', () => {
 });
 
 test('preload 暴露 detectEnvironment API', () => {
-  const preloadContent = fs.readFileSync(require('path').join(__dirname, '../src/preload/preload.js'), 'utf-8');
+  const preloadContent = readPreloadSource();
   assert.ok(preloadContent.includes('detectEnvironment'), 'preload 应暴露 detectEnvironment');
   assert.ok(preloadContent.includes("invoke('env:detect')"), '应调用 env:detect');
 });
@@ -5754,7 +5759,7 @@ test('自动化 UI/IPC 接线（nav/页面/Monaco 编辑器/分发回执）', ()
   const htmlContent = fs.readFileSync(require('path').join(__dirname, '../src/renderer/pages/index.html'), 'utf-8');
   const editorHtml = fs.readFileSync(require('path').join(__dirname, '../src/renderer/pages/automation-editor.html'), 'utf-8');
   const editorCss = fs.readFileSync(require('path').join(__dirname, '../src/renderer/css/automation-editor.css'), 'utf-8');
-  const preloadContent = fs.readFileSync(require('path').join(__dirname, '../src/preload/preload.js'), 'utf-8');
+  const preloadContent = readPreloadSource();
   const editorPreload = fs.readFileSync(require('path').join(__dirname, '../src/preload/automation-editor-preload.js'), 'utf-8');
   const mainContent = readMainSource();
   const appContent = readRendererSource();
@@ -5861,7 +5866,7 @@ test('Agent 自动化工具集：定义/路由/指导按需获取（不注入系
   const toolsDef = fs.readFileSync(require('path').join(__dirname, '../src/renderer/js/tools-def.js'), 'utf-8');
   const agentJs = fs.readFileSync(require('path').join(__dirname, '../src/renderer/js/agent.js'), 'utf-8');
   const mainContent = readMainSource();
-  const preloadContent = fs.readFileSync(require('path').join(__dirname, '../src/preload/preload.js'), 'utf-8');
+  const preloadContent = readPreloadSource();
   const guideJs = fs.readFileSync(require('path').join(__dirname, '../src/main/automation/guide.js'), 'utf-8');
   for (const name of ['automationList', 'automationGetGuide', 'automationCreate', 'automationToggle', 'automationRun', 'automationTest', 'automationDelete']) {
     assert.ok(toolsDef.includes(`name: '${name}'`), `tools-def 应有 ${name}`);

@@ -28,12 +28,16 @@ class BackendServer {
     this.sessions = new Map();
     this.requests = new Map();
     this.attempts = new Map();
+    this.remote = dispatch?.remote || null;
   }
 
   authorized(req) {
     const bearer = String(req.headers.authorization || '').replace(/^Bearer /, '');
     const cookie = /(?:^|;\s*)cibyp_session=([^;]+)/.exec(req.headers.cookie || '')?.[1];
     const candidate = bearer || cookie || '';
+    // Scoped v2 credentials must never gain access to the unrestricted v1 bridge.
+    if (req.path?.startsWith('/remote/v2/') && this.remote?.credentials.authenticate(candidate))
+      return true;
     if (
       this.token &&
       candidate.length === this.token.length &&
@@ -97,6 +101,7 @@ class BackendServer {
         this.codeoss.proxy(req, res);
       });
     app.set('json replacer', wire.replacer);
+    app.use('/remote/v2/rpc', express.json({ limit: '256kb' }));
     app.use(express.json({ limit: '16mb', reviver: wire.reviver }));
     app.use((req, res, next) => {
       res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -158,7 +163,27 @@ class BackendServer {
         }
       },
     );
-    app.post('/api/login', async (req, res) => {
+    if (this.remote)
+      require('../../../packages/remote').mountRemote(app, {
+        service: this.remote,
+        devices: this.remote.devices,
+        authenticate: (req) => {
+          if (!this.authorized(req)) return null;
+          const token =
+            String(req.headers.authorization || '').replace(/^Bearer /, '') ||
+            /(?:^|;\s*)cibyp_session=([^;]+)/.exec(req.headers.cookie || '')?.[1] ||
+            '';
+          return (
+            this.remote.credentials?.authenticate(token) || {
+              id: crypto.createHash('sha256').update(token).digest('hex'),
+              scopes: this.sessions.get(token)?.scopes || ['*'],
+            }
+          );
+        },
+        validOrigin: (req) => this.validOrigin(req),
+        parseBinary: express.raw({ type: 'application/octet-stream', limit: '8mb' }),
+      });
+    app.post(['/api/login', '/remote/v2/auth/login'], async (req, res) => {
       const ip = req.socket.remoteAddress;
       const attempt = this.attempts.get(ip) || { count: 0, until: Date.now() + 60000 };
       if (attempt.until < Date.now()) {
@@ -202,7 +227,7 @@ class BackendServer {
       );
       res.json({ ok: true, token });
     });
-    app.post('/api/logout', (req, res) => {
+    app.post(['/api/logout', '/remote/v2/auth/logout'], (req, res) => {
       const token =
         String(req.headers.authorization || '').replace(/^Bearer /, '') ||
         /cibyp_session=([^;]+)/.exec(req.headers.cookie || '')?.[1];

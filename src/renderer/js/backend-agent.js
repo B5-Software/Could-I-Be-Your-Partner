@@ -27,6 +27,7 @@
     a._backendToolSchemas = view.runtimeToolSchemas;
     a.llmOverride = view.llmOverride || a.llmOverride;
     a._backendStats = view.stats;
+    a.babeRelationship = view.stats?.relationship || null;
     a._compactionState = view.stats?.compaction || null;
   }
   proto._ensureBackend = async function (attachLatest = false) {
@@ -35,7 +36,7 @@
     this._backendReady = (async () => {
       if (attachLatest && !this.ephemeral && !this.backendKey) {
         const sessions = await request('listSessions');
-        this.backendKey = sessions.filter(s => s.mode === this.mode).at(-1)?.key;
+        this.backendKey = sessions.filter(s => s.mode === this.mode && (!s.profile || s.profile === 'default')).at(-1)?.key;
       }
       const options = { key: this.backendKey || this.sessionKey || 'session:' + this.mode + ':' + crypto.randomUUID(), mode: this.mode, workspacePath: this.codeWorkspacePath || this.workspacePath, minimalMode: this.minimalMode, profile: this.ephemeral ? 'settings-assistant' : 'default' };
       this.backendKey = options.key;

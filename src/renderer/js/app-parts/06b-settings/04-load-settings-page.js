@@ -185,6 +185,8 @@
 
     // Babe Mode settings
     const babe = s.babe || {};
+    loadBabeRelationshipSettings(s);
+    refreshBabeRelationshipPanel();
     const babeNameEl = document.getElementById('setting-babe-name');
     const babeGenderEl = document.getElementById('setting-babe-gender');
     const babeAgeEl = document.getElementById('setting-babe-age');

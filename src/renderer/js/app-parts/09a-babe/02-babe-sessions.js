@@ -18,8 +18,7 @@
       babeAgent.contextManager.setMaxTokens(maxCtx);
       babeAgent.contextManager.setOutputReserve(babeAgent.settings.llm?.maxResponseTokens || 8192);
       babeAgent.conversationId = Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
-      // 初始好感度
-      babeAgent.babeAffection = babeAgent.settings.babe?.initialAffection ?? 30;
+      await babeAgent.refreshBabeRelationship();
       await babeAgent.refreshSkillsCatalog();
       babeAgent.contextManager.setSystemPrompt(babeAgent.getSystemPrompt());
       setupAgentStreamSubscriptions(babeAgent, 'babe');
@@ -53,7 +52,7 @@
     ag.contextManager.setMaxTokens(maxCtx);
     ag.contextManager.setOutputReserve(ag.settings.llm?.maxResponseTokens || 8192);
     ag.conversationId = Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
-    ag.babeAffection = ag.settings.babe?.initialAffection ?? 30;
+    await ag.refreshBabeRelationship();
     await ag.refreshSkillsCatalog();
     ag.contextManager.setSystemPrompt(ag.getSystemPrompt());
     wireBabeAgent(ag);

@@ -10,6 +10,7 @@
 const EN_DICT = {
   // ── UI Strings ──
   ui: {
+    remoteDevices: {title: 'Remote devices', hint: 'Micro connects to this backend. Devices receive only the tools and resources explicitly granted here.', refresh: 'Refresh devices', pair: 'Pair / edit permissions', id: 'Device ID', add: 'Add tool grant', save: 'Save device', private: 'New credentials can only be recovered during this backend boot. Provision over trusted USB / serial; do not send them to an Agent.', tool: 'Tool name, e.g. gpio_write', resources: 'Resources, e.g. gpio:17 (comma separated)', write: 'Allow writes (approval and lease required)', remove: 'Remove', empty: 'No paired devices', online: 'Online', offline: 'Offline', writable: 'Writable', edit: 'Edit permissions', revoke: 'Revoke device', confirmRevoke: 'Click again to confirm revocation', duplicate: 'Tool names must be unique', saved: 'Saved. Configure the device with a WSS gateway URL and the new credentials.', unavailable: 'This backend does not support Remote devices'},
     terminal: { error: 'Terminal operation failed: {error}' },
     camera: {
       title: 'Take a photo', subtitle: 'Use this device’s camera to add a photo to the conversation',
@@ -396,6 +397,9 @@ const EN_DICT = {
     getTarot: 'Draw a tarot card',
     todoList: 'Manage todo items',
     runSubAgent: 'Run a sub-agent',
+    sendAgentMessage: 'Send an Agent message',
+    listSubAgents: 'View collaborating Agents',
+    interruptSubAgent: 'Interrupt a subagent',
     generateImage: 'Generate an image',
     calculator: 'Calculate expression precisely (local)',
     factorInteger: 'Integer prime factorization',
@@ -4185,3 +4189,69 @@ Object.assign(EN_DICT._textMap, {
   '删除这条自动记忆？聊天记录将保留。': 'Delete this automatic memory? Chat history will be kept.',
   '清空所有自动记忆？长期记忆和聊天记录将保留。': 'Clear all automatic memories? Long-term memory and chat history will be kept.',
 });
+
+Object.assign(EN_DICT._textMap, {
+  "关系与共同经历": "Relationship and shared moments",
+  "同一个 TA，跨对话延续关系。好感、信任与熟悉慢慢积累，新的聊天不会重新认识。": "The same companion across conversations. Affection, trust and familiarity grow together; new chats continue your story.",
+  "关系成长": "Relationship growth",
+  "相处节奏": "Relationship pace",
+  "慢慢来": "Take it slowly",
+  "自然发展": "Natural development",
+  "轻松体验": "Relaxed experience",
+  "故事的起点": "Where your story starts",
+  "从认识开始": "Start by getting acquainted",
+  "已经是伴侣": "Already partners",
+  "仅首次建立或重新开始关系时生效。": "Applies only when starting or resetting the relationship.",
+  "聊天顶部显示好感数值": "Show affection in the chat header",
+  "关系档案独立保存。删除聊天不会清空关系；可以在这里编辑共同记忆或重新开始。关系整理随回复完成，不另外请求模型。": "The relationship is stored separately from chats. Edit shared memories or start over here. Updates accompany replies without a separate model request.",
+  "重新开始关系": "Start a new relationship story",
+  "首次建立或重置关系时使用；新对话会继承当前关系": "Used when starting or resetting; new chats inherit the current relationship",
+  "兴趣与喜好": "Interests and preferences",
+  "相处边界": "Relationship boundaries",
+  "初识": "First meeting",
+  "渐渐熟悉": "Getting acquainted",
+  "知心朋友": "Close friends",
+  "心意渐近": "Growing closer",
+  "约会中": "Dating",
+  "彼此承诺": "Committed partners",
+  "平静自在": "Calm and at ease",
+  "有点开心": "Feeling cheerful",
+  "心里暖暖的": "Feeling touched",
+  "需要一点理解": "Needs understanding",
+  "关系暂不可用": "Relationship unavailable",
+  "关系成长已暂停": "Relationship growth paused",
+  "你们的故事": "Your story together",
+  "相处天数": "Days together",
+  "好感": "Affection",
+  "信任": "Trust",
+  "熟悉": "Familiarity",
+  "可以聊聊彼此的心意了": "Ready to talk about your feelings",
+  "慢慢了解，一起靠近": "Get to know each other, one step at a time",
+  "亲近来自真诚交流、信任与共同经历；关系升级需要彼此明确确认。": "Closeness grows through honest conversation, trust and shared moments. Each new commitment requires mutual agreement.",
+  "共同记住的事": "Shared memories",
+  "从一段真诚的对话开始，值得珍惜的经历和约定会留在这里。": "Start with an honest conversation. Meaningful moments and promises will be remembered here.",
+  "共同经历": "Shared moments",
+  "小小约定": "Promises",
+  "彼此偏好": "Preferences",
+  "关系已在其他界面更新，请刷新后重试": "The relationship changed in another frontend. Refresh and try again.",
+  "无法保存这条共同记忆": "Cannot save this shared memory",
+  "删除这条共同记忆？聊天记录将保留。": "Delete this shared memory? Chat history will be kept.",
+  "重新开始这段关系？关系进度、里程碑和共同记忆将清空，聊天记录与自动记忆保留。": "Start over? Relationship progress, milestones and shared memories will be cleared. Chats and automatic memories will be kept.",
+  "虚拟约会": "Imagined date",
+  "文字小游戏": "Word game",
+  "共同小目标": "Shared goal",
+  "我们一起构思一次虚拟约会吧，选一个你也喜欢的地点。": "Let’s imagine a date together, somewhere you would enjoy too.",
+  "一起玩一个你喜欢的文字小游戏吧，你先介绍规则。": "Let’s play a word game you enjoy. Tell me the rules.",
+  "我们来定一个这周可以一起坚持的小目标吧。": "Let’s choose a small goal to work on together this week.",
+  "编辑共同记忆": "Edit shared memory",
+  "发送 Agent 消息": "Send Agent message",
+  "列出子代理": "List subagents",
+  "停止子代理": "Interrupt subagent"
+});
+
+Object.assign(EN_DICT._textMap, {"查看协作 Agent": "View collaborating Agents", "中断子代理": "Interrupt subagent", "兴趣与生活设定": "Interests and everyday life", "相处偏好与边界": "Relationship preferences and boundaries", "TA喜欢什么、有什么自己的小习惯…": "Interests and personal habits…", "喜欢怎样的相处，不喜欢什么…": "Preferred ways of interacting and things to avoid…"});
+
+Object.assign(EN_DICT, Object.fromEntries(Object.entries(EN_DICT.ui.remoteDevices).map(([key, value]) => ['ui.remoteDevices.' + key, value])));
+Object.assign(EN_DICT._textMap, Object.fromEntries(Object.entries({"title":"Remote 设备","hint":"Micro 主动连接当前后台。设备仅获得下方明确授予的工具和资源权限。","refresh":"刷新设备","pair":"配对 / 修改权限","id":"设备 ID","add":"添加工具授权","save":"保存设备","private":"新凭据仅在当前启动期间可取回。请通过可信 USB / 串口配置到设备，勿发送给 Agent。"}).map(([key, source]) => [source, EN_DICT.ui.remoteDevices[key]])));
+
+EN_DICT['ui.remoteDevices.authorizedTools'] = "Authorized tools";

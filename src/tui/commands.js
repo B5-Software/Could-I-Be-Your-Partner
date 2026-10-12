@@ -36,6 +36,8 @@ function localizeCommand(cmd) {
 
 /** 内置命令表 */
 const COMMANDS = [
+  { name: 'devices', args: '[ID]', desc: '查看已配对 Remote 设备与资源权限', group: 'general' },
+  { name: 'hardware', args: '', desc: '查看当前可用的硬件工具', group: 'general' },
   { name: 'undo', args: '', desc: '停止并撤回最近一条用户消息及对应回复', group: 'message' },
   { name: 'cwd', args: '', desc: '用系统文件管理器打开当前工作区', group: 'general' },
   { name: 'config', args: '[搜索]', desc: '搜索和编辑共享设置', group: 'general' },
@@ -69,6 +71,7 @@ const COMMANDS = [
   },
   { name: 'todo', args: '', desc: '查看待办清单', group: 'info' },
   { name: 'usage', args: '', desc: '查看 Token、消费与订阅额度', group: 'info' },
+  { name: 'relationship', args: '', desc: '查看 Babe 跨会话关系与共同记忆', group: 'info' },
   { name: 'mouse', args: '[on|off]', desc: '切换鼠标捕获（持久保存）', group: 'general' },
   { name: 'model', args: '', desc: '查看当前模型与模型池', group: 'info' },
   { name: 'status', args: '', desc: '查看运行状态', group: 'info' },

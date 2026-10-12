@@ -132,7 +132,7 @@
 
   // 更新好感度显示
   function updateBabeAffection(value) {
-    const v = Math.max(0, Math.min(100, value || 0));
+    const v = Math.max(0, Math.min(100, Math.round(value || 0)));
     const valueEl = document.getElementById('babe-affection-value');
     const fillEl = document.getElementById('babe-affection-fill');
     if (valueEl) valueEl.textContent = v;

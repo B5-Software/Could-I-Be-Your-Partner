@@ -136,6 +136,9 @@
           addFilePresentCard(data);
           sendAppNotification('present', 'Agent 向您呈递文件', data?.title || data?.filename || '请查看文件内容');
           break;
+        case 'relationship-change':
+          renderBabeRelationship(data);
+          break;
         case 'affection-change':
           showBabeAffectionChange(data.delta, data.value);
           updateBabeAffection(data.value);

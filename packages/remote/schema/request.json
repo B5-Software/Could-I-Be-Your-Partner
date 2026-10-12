@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/B5-Software/CIBYP-Remote/schema/request.json",
+  "title": "CIBYP Remote v2 confirmable request",
+  "type": "object",
+  "required": ["jsonrpc", "id", "method"],
+  "additionalProperties": false,
+  "properties": {
+    "jsonrpc": { "const": "2.0" },
+    "id": { "type": "string", "pattern": "^[A-Za-z0-9_.:@/-]{1,160}$" },
+    "method": { "type": "string", "maxLength": 100, "pattern": "^[a-zA-Z][A-Za-z0-9_.-]*$" },
+    "params": { "type": "object" }
+  }
+}

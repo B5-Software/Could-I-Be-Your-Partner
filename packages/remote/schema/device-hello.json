@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "CIBYP Remote v2 Device hello params",
+  "type": "object",
+  "required": ["deviceId", "bootId", "tools"],
+  "properties": {
+    "deviceId": { "type": "string", "maxLength": 80 },
+    "bootId": { "type": "string", "maxLength": 160 },
+    "tools": { "type": "array", "maxItems": 16, "items": { "$ref": "tool.json" } }
+  },
+  "additionalProperties": false
+}

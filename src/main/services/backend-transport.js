@@ -1,7 +1,12 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 'use strict';
 // Plugins and automations use the same owner whether or not a GUI is attached.
-function createBackendTransport({ getRuntime, publish, getSettings = () => ({}) }) {
+function createBackendTransport({
+  getRuntime,
+  publish,
+  getSettings = () => ({}),
+  getSubagentConfig = () => null,
+}) {
   const queued = new Map(),
     generations = new Map();
   const handles = (channel) =>
@@ -20,6 +25,16 @@ function createBackendTransport({ getRuntime, publish, getSettings = () => ({}) 
     if (!value) throw new Error('Shared backend is not ready');
     return value;
   }
+  function find(owner, identity) {
+    return owner
+      .listSessions()
+      .find(
+        (s) =>
+          s.key === identity ||
+          s.conversationId === identity ||
+          owner.sessions?.get(s.key)?.agent.messagingId === identity,
+      );
+  }
   function metadata(owner, key) {
     const s = owner.getSession(key);
     return {
@@ -33,9 +48,14 @@ function createBackendTransport({ getRuntime, publish, getSettings = () => ({}) 
   }
   function admit(owner, key, text) {
     const maximum = Math.max(1, Number(getSettings().sessions?.maxConcurrent) || 10);
+    const child = owner.getSession(key)?.profile === 'subagent';
+    const limit = child
+      ? Math.max(1, Math.min(16, Number(getSettings().sessions?.maxSubagents) || 4))
+      : maximum;
     if (
       !owner.getSession(key)?.busy &&
-      owner.listSessions().filter((s) => s.busy).length >= maximum
+      owner.listSessions().filter((s) => s.busy && (s.profile === 'subagent') === child).length >=
+        limit
     )
       throw new Error('Maximum concurrent sessions reached');
     owner
@@ -50,7 +70,11 @@ function createBackendTransport({ getRuntime, publish, getSettings = () => ({}) 
     const owner = runtime();
     if (channel === 'ds:approvalRequest') return owner.requestPluginApproval(payload, signal);
     if (channel === 'ds:questionsRequest') return owner.requestPluginQuestions(payload, signal);
-    if (channel === 'ds:agentClose') return owner.close(payload.sessionKey);
+    if (channel === 'ds:agentClose')
+      return owner.close(find(owner, payload.sessionKey)?.key || payload.sessionKey);
+    const childConfig = getSubagentConfig(payload.sessionId);
+    if (payload.sessionId?.startsWith('native-sub-') && !childConfig)
+      throw new Error('Native subagent delegation policy is unavailable');
     if (channel === 'ds:compact')
       return (await owner.agentAction(payload.sessionKey, 'compactNow', [payload.focus])).result;
     if (channel === 'ds:agentResume') {
@@ -61,9 +85,20 @@ function createBackendTransport({ getRuntime, publish, getSettings = () => ({}) 
             s.key === payload.sessionId || String(s.conversationId) === String(payload.sessionId),
         );
       if (!session) {
-        const history = await owner.getHistory('chat', payload.sessionId);
+        const history = await owner.getHistory(
+          childConfig?.mode || 'chat',
+          payload.sessionId,
+          childConfig?.workspacePath,
+        );
         if (!history || history.ok === false) throw new Error('Conversation does not exist');
-        session = owner.createSession({ mode: 'chat', key: payload.sessionId });
+        session = owner.createSession({
+          mode: childConfig?.mode || 'chat',
+          key: payload.sessionId,
+          conversationId: payload.sessionId,
+          workspacePath: childConfig?.workspacePath,
+          profile: childConfig ? 'subagent' : 'default',
+        });
+        if (childConfig) owner.configureNativeSubagent(session.key, childConfig);
         try {
           const result = await owner.openHistory(session.key, payload.sessionId);
           if (!result.ok) throw new Error(result.error);
@@ -88,14 +123,17 @@ function createBackendTransport({ getRuntime, publish, getSettings = () => ({}) 
       if (channel === 'ds:agentCreate' && payload.sessionId && owner.getSession(payload.sessionId))
         throw new Error('Session already exists');
       session = owner.createSession({
-        mode: 'chat',
+        mode: childConfig?.mode || 'chat',
+        workspacePath: childConfig?.workspacePath,
+        profile: childConfig ? 'subagent' : 'default',
         ...(channel === 'ds:agentCreate' && payload.sessionId
           ? { key: payload.sessionId, conversationId: payload.sessionId }
           : {}),
       });
     }
     try {
-      if (payload.cwd) {
+      if (childConfig) owner.configureNativeSubagent(session.key, childConfig);
+      if (payload.cwd && !childConfig) {
         const result = await owner.setWorkspace(session.key, payload.cwd);
         if (!result.ok) throw new Error(result.error);
       }
@@ -159,18 +197,14 @@ function createBackendTransport({ getRuntime, publish, getSettings = () => ({}) 
       return;
     }
     const owner = runtime();
-    const session = owner
-      .listSessions()
-      .find(
-        (s) =>
-          s.key === payload.sessionKey || String(s.conversationId) === String(payload.sessionKey),
-      );
+    const session = find(owner, payload.sessionKey);
     if (!session) throw new Error('Conversation does not exist');
     const key = session.key;
     if (payload.kind === 'stop') {
       generations.set(key, (generations.get(key) || 0) + 1);
       return owner.stop(key);
     }
+    if (payload.kind === 'project') return owner.projectAgentMessages(key, payload.messages || []);
     if (payload.kind === 'inject') return owner.inject(key, String(payload.text || ''));
     const generation = generations.get(key) || 0;
     const operation = (queued.get(key) || Promise.resolve())
@@ -178,8 +212,14 @@ function createBackendTransport({ getRuntime, publish, getSettings = () => ({}) 
       .then(async () => {
         while (owner.sessions.get(key)?.busy) await owner.sessions.get(key).finished;
         if ((generations.get(key) || 0) !== generation || !owner.getSession(key)) return;
-        const maximum = Math.max(1, Number(getSettings().sessions?.maxConcurrent) || 10);
-        if (owner.listSessions().filter((s) => s.busy).length >= maximum)
+        const child = owner.getSession(key)?.profile === 'subagent';
+        const maximum = child
+          ? Math.max(1, Math.min(16, Number(getSettings().sessions?.maxSubagents) || 4))
+          : Math.max(1, Number(getSettings().sessions?.maxConcurrent) || 10);
+        if (
+          owner.listSessions().filter((s) => s.busy && (s.profile === 'subagent') === child)
+            .length >= maximum
+        )
           throw new Error('Maximum concurrent sessions reached');
         const result = await owner.sendMessage(key, String(payload.text || ''), [], {
           origin: 'plugin',

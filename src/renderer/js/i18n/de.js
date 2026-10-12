@@ -11,6 +11,7 @@ const DE_DICT = {
 
 // ── UI Strings ──────────────────────────────────────────────────────────────
 ui: {
+  remoteDevices: {title: 'Remote-Geräte', hint: 'Micro verbindet sich mit diesem Backend. Nur ausdrücklich freigegebene Werkzeuge und Ressourcen sind erlaubt.', refresh: 'Geräte aktualisieren', pair: 'Koppeln / Berechtigungen ändern', id: 'Geräte-ID', add: 'Werkzeug freigeben', save: 'Gerät speichern', private: 'Neue Zugangsdaten sind nur während dieses Backend-Starts abrufbar. Über vertrauenswürdiges USB / seriell übertragen, nicht an einen Agent senden.', tool: 'Werkzeugname, z. B. gpio_write', resources: 'Ressourcen, z. B. gpio:17 (kommagetrennt)', write: 'Schreiben erlauben (Genehmigung und Lease erforderlich)', remove: 'Entfernen', empty: 'Keine gekoppelten Geräte', online: 'Online', offline: 'Offline', writable: 'Schreibbar', edit: 'Berechtigungen ändern', revoke: 'Gerät widerrufen', confirmRevoke: 'Zum Bestätigen erneut klicken', duplicate: 'Werkzeugnamen müssen eindeutig sein', saved: 'Gespeichert. WSS-Gateway und neue Zugangsdaten am Gerät konfigurieren.', unavailable: 'Dieses Backend unterstützt keine Remote-Geräte'},
   terminal: { error: 'Terminalaktion fehlgeschlagen: {error}' },
   camera: {
     title: 'Foto aufnehmen', subtitle: 'Ein Foto mit der Kamera dieses Geräts zum Gespräch hinzufügen',
@@ -426,6 +427,9 @@ _tools: {
   getTarot: 'Eine Tarotkarte ziehen',
   todoList: 'Aufgabenliste verwalten',
   runSubAgent: 'Unter-Agent ausführen',
+  sendAgentMessage: 'Agent-Nachricht senden',
+  listSubAgents: 'Zusammenarbeitende Agenten anzeigen',
+  interruptSubAgent: 'Unteragenten unterbrechen',
   generateImage: 'Bild generieren',
   calculator: 'Ausdruck präzise berechnen (lokal)',
   factorInteger: 'Primfaktorzerlegung ganzer Zahlen',
@@ -4216,3 +4220,69 @@ Object.assign(DE_DICT._textMap, {
   '删除这条自动记忆？聊天记录将保留。': 'Diese automatische Erinnerung löschen? Der Chatverlauf bleibt erhalten.',
   '清空所有自动记忆？长期记忆和聊天记录将保留。': 'Alle automatischen Erinnerungen löschen? Langzeitgedächtnis und Chatverlauf bleiben erhalten.',
 });
+
+Object.assign(DE_DICT._textMap, {
+  "关系与共同经历": "Beziehung und gemeinsame Erlebnisse",
+  "同一个 TA，跨对话延续关系。好感、信任与熟悉慢慢积累，新的聊天不会重新认识。": "Dieselbe Begleitung über Gespräche hinweg. Zuneigung, Vertrauen und Vertrautheit wachsen gemeinsam; neue Chats setzen eure Geschichte fort.",
+  "关系成长": "Beziehungsentwicklung",
+  "相处节奏": "Beziehungstempo",
+  "慢慢来": "Langsam angehen",
+  "自然发展": "Natürlich entwickeln",
+  "轻松体验": "Entspannt erleben",
+  "故事的起点": "Beginn eurer Geschichte",
+  "从认识开始": "Mit dem Kennenlernen beginnen",
+  "已经是伴侣": "Bereits ein Paar",
+  "仅首次建立或重新开始关系时生效。": "Gilt nur beim Beginn oder Neustart der Beziehung.",
+  "聊天顶部显示好感数值": "Zuneigung im Chat-Kopf anzeigen",
+  "关系档案独立保存。删除聊天不会清空关系；可以在这里编辑共同记忆或重新开始。关系整理随回复完成，不另外请求模型。": "Die Beziehung wird getrennt von Chats gespeichert. Gemeinsame Erinnerungen hier bearbeiten oder neu beginnen. Aktualisierungen erfolgen mit Antworten ohne zusätzliche Modellanfrage.",
+  "重新开始关系": "Beziehung neu beginnen",
+  "首次建立或重置关系时使用；新对话会继承当前关系": "Beim Beginn oder Neustart verwendet; neue Chats übernehmen die aktuelle Beziehung",
+  "兴趣与喜好": "Interessen und Vorlieben",
+  "相处边界": "Grenzen im Umgang",
+  "初识": "Erstes Kennenlernen",
+  "渐渐熟悉": "Vertrauter werden",
+  "知心朋友": "Enge Freunde",
+  "心意渐近": "Einander näherkommen",
+  "约会中": "Dating",
+  "彼此承诺": "Feste Partnerschaft",
+  "平静自在": "Ruhig und entspannt",
+  "有点开心": "Gut gelaunt",
+  "心里暖暖的": "Berührt",
+  "需要一点理解": "Braucht Verständnis",
+  "关系暂不可用": "Beziehung nicht verfügbar",
+  "关系成长已暂停": "Beziehungsentwicklung pausiert",
+  "你们的故事": "Eure gemeinsame Geschichte",
+  "相处天数": "Gemeinsame Tage",
+  "好感": "Zuneigung",
+  "信任": "Vertrauen",
+  "熟悉": "Vertrautheit",
+  "可以聊聊彼此的心意了": "Bereit, über eure Gefühle zu sprechen",
+  "慢慢了解，一起靠近": "Schritt für Schritt näherkommen",
+  "亲近来自真诚交流、信任与共同经历；关系升级需要彼此明确确认。": "Nähe entsteht durch ehrliche Gespräche, Vertrauen und gemeinsame Erlebnisse. Ein neuer Beziehungsschritt erfordert gegenseitige Zustimmung.",
+  "共同记住的事": "Gemeinsame Erinnerungen",
+  "从一段真诚的对话开始，值得珍惜的经历和约定会留在这里。": "Beginnt mit einem ehrlichen Gespräch. Bedeutungsvolle Erlebnisse und Vereinbarungen werden hier bewahrt.",
+  "共同经历": "Gemeinsame Erlebnisse",
+  "小小约定": "Vereinbarungen",
+  "彼此偏好": "Vorlieben",
+  "关系已在其他界面更新，请刷新后重试": "Die Beziehung wurde in einer anderen Oberfläche geändert. Aktualisieren und erneut versuchen.",
+  "无法保存这条共同记忆": "Diese Erinnerung konnte nicht gespeichert werden",
+  "删除这条共同记忆？聊天记录将保留。": "Diese gemeinsame Erinnerung löschen? Der Chatverlauf bleibt erhalten.",
+  "重新开始这段关系？关系进度、里程碑和共同记忆将清空，聊天记录与自动记忆保留。": "Neu beginnen? Beziehungsfortschritt, Meilensteine und gemeinsame Erinnerungen werden gelöscht. Chats und automatische Erinnerungen bleiben erhalten.",
+  "虚拟约会": "Virtuelles Date",
+  "文字小游戏": "Wortspiel",
+  "共同小目标": "Gemeinsames Ziel",
+  "我们一起构思一次虚拟约会吧，选一个你也喜欢的地点。": "Lass uns ein virtuelles Date planen, an einem Ort, den du auch magst.",
+  "一起玩一个你喜欢的文字小游戏吧，你先介绍规则。": "Lass uns ein Wortspiel spielen, das du magst. Erkläre mir die Regeln.",
+  "我们来定一个这周可以一起坚持的小目标吧。": "Lass uns ein kleines gemeinsames Ziel für diese Woche wählen.",
+  "编辑共同记忆": "Gemeinsame Erinnerung bearbeiten",
+  "发送 Agent 消息": "Agent-Nachricht senden",
+  "列出子代理": "Unteragenten auflisten",
+  "停止子代理": "Unteragenten unterbrechen"
+});
+
+Object.assign(DE_DICT._textMap, {"查看协作 Agent": "Zusammenarbeitende Agenten anzeigen", "中断子代理": "Unteragenten unterbrechen", "兴趣与生活设定": "Interessen und Alltag", "相处偏好与边界": "Umgang und persönliche Grenzen", "TA喜欢什么、有什么自己的小习惯…": "Interessen und persönliche Gewohnheiten…", "喜欢怎样的相处，不喜欢什么…": "Bevorzugter Umgang und was vermieden werden soll…"});
+
+Object.assign(DE_DICT, Object.fromEntries(Object.entries(DE_DICT.ui.remoteDevices).map(([key, value]) => ['ui.remoteDevices.' + key, value])));
+Object.assign(DE_DICT._textMap, Object.fromEntries(Object.entries({"title":"Remote 设备","hint":"Micro 主动连接当前后台。设备仅获得下方明确授予的工具和资源权限。","refresh":"刷新设备","pair":"配对 / 修改权限","id":"设备 ID","add":"添加工具授权","save":"保存设备","private":"新凭据仅在当前启动期间可取回。请通过可信 USB / 串口配置到设备，勿发送给 Agent。"}).map(([key, source]) => [source, DE_DICT.ui.remoteDevices[key]])));
+
+DE_DICT['ui.remoteDevices.authorizedTools'] = "Autorisierte Werkzeuge";
