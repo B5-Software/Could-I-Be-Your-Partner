@@ -9,6 +9,7 @@ const { randomUUID } = require('node:crypto');
 const { SubprocessRuntime, scrubbedParentEnv } = require('@deepseek-ai/dsh-subprocess');
 const { ShellExecutor } = require('@deepseek-ai/dsh-shell');
 const { resolveHostShell, hostExecutable } = require('../core/terminal-shell');
+const { releaseExitedPty } = require('../core/terminal-pty-cleanup');
 const sandbox = require('../sandbox-runner');
 const { currentExecution, execution } = require('./execution-context');
 
@@ -389,6 +390,7 @@ class CibypSubprocess extends SubprocessRuntime {
     });
     const exit = pty.onExit(({ exitCode, signal }) => {
       ended = true;
+      releaseExitedPty(pty);
       output.end();
       resolveDone({ exitCode, signal: signal || null });
       data.dispose();
@@ -433,13 +435,11 @@ class CibypSubprocess extends SubprocessRuntime {
       },
       terminate: () =>
         (cleanup ||= (async () => {
-          if (process.platform === 'win32') {
+          if (process.platform === 'win32' && !ended) {
             // Closing ConPTY also releases node-pty's pipe worker. taskkill alone
             // leaves those handles alive even after the shell has exited.
             pty.kill();
-            try {
-              await waitBounded(done, AbortSignal.timeout(3000));
-            } catch {
+            if (!(await waitBounded(done, AbortSignal.timeout(3000)))) {
               if (!ended) await killTree(pty.pid, 'SIGKILL');
             }
           } else if (!ended) {

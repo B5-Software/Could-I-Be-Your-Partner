@@ -15,6 +15,7 @@ const os = require('os');
 const { abortAllRequests, abortRequests } = require('./llm-retry');
 const { TerminalCommand } = require('./services/terminal-command');
 const { resolveTerminalShell } = require('./core/terminal-shell');
+const { releaseExitedPty } = require('./core/terminal-pty-cleanup');
 
 module.exports = function registerTerminalIpc({ ipcMain, getMainWindow, getSettings, getVmService, selectShellBinary, publishEvent }) {
 const terminals = new Map();
@@ -211,6 +212,7 @@ ipcMain.handle('terminal:make', async (_, cwd, opts = {}) => {
     entry.commandTracker = new TerminalCommand(term, entry.shellName);
     term.onData(data => _appendTerminalData(id, entry, data));
     term.onExit(({ exitCode }) => {
+      releaseExitedPty(term);
       entry.commandTracker.end();
       terminals.delete(id);
       _broadcastTerminalEvent('terminal:exit', { id, exitCode });

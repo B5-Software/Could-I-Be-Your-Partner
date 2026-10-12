@@ -8,7 +8,7 @@
 | --- | --- |
 | [CIBYP-Remote](https://github.com/B5-Software/CIBYP-Remote) | JSON-RPC 2.0、服务权限、持久动作日志、事件游标 / 重放、JS SDK、设备网关、资源租约和结果分页 |
 | [CIBYP-Mini](https://github.com/B5-Software/CIBYP-Mini) | Node 24 无头后台、同源 Agent 内核、服务 CLI、Linux GPIO 助手、SHA-256 更新 / 回退、x64 / ARM64 CI |
-| [CIBYP-Micro](https://github.com/B5-Software/CIBYP-Micro) | 可移植 C11 Device profile、持久防重放、定制工具注册、模拟器、ESP-IDF / ESP32-S3 网络与存储适配 |
+| [CIBYP-Micro](https://github.com/B5-Software/CIBYP-Micro) | 可移植 C11 Device profile、持久防重放、定制工具注册、模拟器、ESP-IDF / ESP32-S3、C6、S31 网络与存储适配 |
 
 Mini 的 `core/` 是桌面源码构建的固定产物，带依赖审计、来源提交、dirty 标记、源码映射、第三方许可证和 SHA-256。修改业务应回到桌面源码，重新导入产物；不得另养一套 Agent 实现。开发快照的 dirty 标记如实保留。Remote 源码通过 `scripts/sync-remote.cjs` 锁定并校验，不需要发布 npm 包。
 
@@ -39,12 +39,14 @@ Mini 的 6 项本机测试全部通过，包含真实 HTTP fixture provider 的�
 | 仓库 / 提交 | CI |
 | --- | --- |
 | Remote `a7b4bd4` | [Node 22 / 24 · Linux / Windows](https://github.com/B5-Software/CIBYP-Remote/actions/runs/38304318120) |
-| Mini `8840526` | [Node 24 · Linux x64 / ARM64 / Windows](https://github.com/B5-Software/CIBYP-Mini/actions/runs/38305248082) |
-| Micro `cc5483b` | [C host / Sanitizer / ESP32-S3](https://github.com/B5-Software/CIBYP-Micro/actions/runs/38253439115) |
+| Mini `36b0812` | [Node 24 · Linux x64 / ARM64 / Windows](https://github.com/B5-Software/CIBYP-Mini/actions/runs/38315299517) |
+| Micro `166c459` | [C host / Sanitizer / ESP32-S3、C6、S31 完整网络固件](https://github.com/B5-Software/CIBYP-Micro/actions/runs/38316010187) |
 | Mobile `8a5bc04` | [Android / Wear OS 构建、测试、lint](https://github.com/B5-Software/CIBYP-Mobile/actions/runs/38304351578) |
 | IDE `fc85ed0` | [VS Code / JetBrains / Desktop 契约](https://github.com/B5-Software/CIBYP-IDE/actions/runs/38304366769) |
 
 新仓库、原生客户端与本轮桌面源码改动一并提交上传，桌面版本不变。Mini 内核由对应桌面提交重新构建并记录来源信息。未创建新的产品 Release 或 npm 发布。
+
+Micro 新增 C6 和 S31；S31 使用独立 `esp32s31` target 及固定摘要的官方预览 SDK，按[官方要求](https://esp32-s31.espressif.com/en/docs)使用 master / 6.1+。CI 为三个芯片实际链接 Wi-Fi / WSS，测试有效 GPIO 与默认禁用配置，提供固件、烧录偏移、SDK 来源和 SHA-256。分区最少需要 2 MiB Flash，给完整网络固件和持久动作日志保留空间，启动时拒绝容量不足的 NVS。仍未进行实板验证；旧分区需明确迁移，不能直接只覆盖应用。
 
 ## 常用检查
 
