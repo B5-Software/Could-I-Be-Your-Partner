@@ -117,6 +117,7 @@
   "06b-settings/48-settings-assistant.js",
   "06b-settings/49-automatic-memory.js",
   "06b-settings/50-remote-devices.js",
+  "06b-settings/51-claude-accounts.js",
   "06b-settings/47-tui-preferences.js",
   "07-history/00-app-panels.js",
   "07-history/01-history-page.js",

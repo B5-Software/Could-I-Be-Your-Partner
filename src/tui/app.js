@@ -115,6 +115,18 @@ class TuiApp {
         }
       },
     );
+    this._unsubscribeClaude = this.runtime.api?.onClaudeChanged?.((state) => {
+      if (state.pending?.url && this._claudeLoginUrl !== state.pending.url) {
+        this._claudeLoginUrl = state.pending.url;
+        this.pushEntry({ kind: 'notice', text: state.pending.url });
+      }
+      if (!state.pending && state.activeId)
+        this.pushEntry({
+          kind: 'notice',
+          text: t('ui.tui.claudeReady', 'Claude 登录完成；使用 /claude model 选择模型。'),
+        });
+      if (state.error) this.pushEntry({ kind: 'notice', text: state.error });
+    });
 
     try {
       this._systemDark = (await this.runtime.getSystemTheme?.())?.shouldUseDarkColors;
@@ -213,6 +225,7 @@ class TuiApp {
     this._disposed = true;
     if (this._unsubscribe) this._unsubscribe();
     this._unsubscribeRelationship?.();
+    this._unsubscribeClaude?.();
     this._unsubscribe = null;
     for (const key of this._sessionViews.keys()) this.runtime.stop(key);
   }
@@ -849,6 +862,48 @@ class TuiApp {
       this.runtime.respond(this.activeKey, option.value);
     } else if (modal.kind === 'ask') {
       this._answerQuestion(option.value, modal);
+    } else if (modal.kind === 'claudeAccount') {
+      const result = await this.runtime.api.claudeSwitch(option.value);
+      if (result?.ok === false) throw new Error(result.error);
+    } else if (modal.kind === 'claudeModel') {
+      const model = modal.models.find((m) => m.id === option.value);
+      const settings = await this.runtime.getSettings();
+      const pool = settings.llm.pool?.slice() || [];
+      let entry = pool.find((e) => e.provider === 'claude-subscription' && e.model === model.id);
+      if (!entry) {
+        entry = {
+          id: 'pool-' + require('node:crypto').randomUUID(),
+          label: model.name,
+          provider: 'claude-subscription',
+          model: model.id,
+          apiUrl: 'claude-sdk://subscription',
+          apiKey: '',
+          contextLength: model.contextLength || 200000,
+          vision: true,
+          effort: 'auto',
+          intelligence: 80,
+          priority: 0,
+          enabled: true,
+        };
+        pool.push(entry);
+      }
+      await this.runtime.api.setSettings({
+        ...settings,
+        llm: { ...settings.llm, ...entry, pool, activeEntryId: entry.id },
+      });
+      if (this.runtime.configureSession && !this.runtime.getSession(this.activeKey)?.busy)
+        await this.runtime.configureSession(this.activeKey, {
+          llmOverride: {
+            model: entry.model,
+            provider: entry.provider,
+            poolEntryId: entry.id,
+            apiUrl: 'claude-sdk://subscription',
+            apiKey: '',
+            vision: entry.vision,
+            reasoningEffort: entry.effort || 'auto',
+            maxContextLength: entry.contextLength || 200000,
+          },
+        });
     } else if (modal.kind === 'sessions') {
       await this._switchSession(option.value);
     } else if (modal.kind === 'mode') {
@@ -1878,6 +1933,52 @@ class TuiApp {
       }
       case 'usage': {
         await this._openUsage();
+        return;
+      }
+      case 'claude': {
+        const [action, ...rest] = (argText || '').trim().split(/\s+/);
+        if (action === 'code')
+          this.editor.history = this.editor.history.filter(
+            (line) => !/^\/claude\s+code\b/.test(line),
+          );
+        const api = this.runtime.api;
+        const state = await api.claudeStatus();
+        if (state.ok === false) throw new Error(state.error);
+        let result;
+        if (action === 'login') result = await api.claudeLogin();
+        else if (action === 'code') result = await api.claudeCode(rest.join(' '));
+        else if (action === 'cancel') result = await api.claudeCancel();
+        else if (action === 'logout') result = await api.claudeLogout(state.activeId);
+        else if (action === 'model') {
+          result = await api.claudeModels();
+          if (result.ok)
+            this.state.modal = {
+              kind: 'claudeModel',
+              title: 'Claude Pro / Max',
+              body: t('ui.tui.claudeChooseModel', '选择模型并设为默认'),
+              models: result.models,
+              options: result.models.map((m) => ({ label: m.name, value: m.id })),
+              selected: 0,
+            };
+        } else {
+          this.state.modal = {
+            kind: 'claudeAccount',
+            title: 'Claude Pro / Max',
+            body:
+              state.pending?.url || state.error || '/claude login · /claude model · /claude logout',
+            options: state.accounts.map((a) => ({ label: a.label + ' · ' + a.plan, value: a.id })),
+            selected: 0,
+          };
+        }
+        if (result?.ok === false) throw new Error(result.error);
+        if (result?.pending)
+          this.pushEntry({
+            kind: 'notice',
+            text: t(
+              'ui.tui.claudeLoginPending',
+              '请在主机浏览器中完成 Claude 登录；完成后使用 /claude model 选择模型。',
+            ),
+          });
         return;
       }
       case 'relationship': {

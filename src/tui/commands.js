@@ -36,6 +36,12 @@ function localizeCommand(cmd) {
 
 /** 内置命令表 */
 const COMMANDS = [
+  {
+    name: 'claude',
+    args: '[login|code|cancel|logout|model]',
+    desc: '管理 Claude Pro / Max 登录和模型',
+    group: 'general',
+  },
   { name: 'devices', args: '[ID]', desc: '查看已配对 Remote 设备与资源权限', group: 'general' },
   { name: 'hardware', args: '', desc: '查看当前可用的硬件工具', group: 'general' },
   { name: 'undo', args: '', desc: '停止并撤回最近一条用户消息及对应回复', group: 'message' },

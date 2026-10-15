@@ -3289,6 +3289,10 @@ ipcMain.handle('skill-editor:getSkill', (_, id) => {
 });
 
 // llm: explicit dependencies; mutable app state is read through getters.
+const claudeAccounts = require('./ipc/claude')({ ipcMain, dataDir, publishEvent });
+const pluginModels = require('./ds-compat/model-transport').createPluginModels(() => pluginManager.host);
+ipcMain.handle('llm:pluginProviders', async () => ({ ok: true, providers: await pluginModels.providers() }));
+app.on('before-quit', () => claudeAccounts.dispose());
 const chatGPTAccounts = new (require('./services/chatgpt-accounts').ChatGPTAccounts)({
   file: path.join(dataDir, 'chatgpt-accounts.vault'),
   openExternal: url => shell.openExternal(url),
@@ -3327,13 +3331,13 @@ async function getSubscriptionUsage(options = {}) {
     const llm = entry || settings.llm;
     const provider = options.provider || llm.provider;
     const mode = subscriptionUsage.MODES.includes(settings.budget?.subscriptionDisplay) ? settings.budget.subscriptionDisplay : 'urgent';
-    if (!['chatgpt-codex', 'opencode-go'].includes(provider)) {
+    if (!['chatgpt-codex', 'claude-subscription', 'opencode-go'].includes(provider) && !(provider?.startsWith('dsh:') && (await pluginModels.providers()).find(p => p.id === provider)?.billingMode === 'subscription')) {
       const keys = getBudgetPeriodKeys('daily', settings.budget); const costUSD = aggregateUsage(keys.startKey, keys.endKey).costUSD || 0;
       return { ok: true, subscription: false, mode, daily: { costUSD, limitUSD: Number(settings.budget?.dailyLimitUSD) || 0 } };
     }
     const today = settings.llm.usageHistory?.[getTodayKeyTZ(settings.budget?.timezone || 'UTC')]?.subscriptionEquivalent?.[provider];
     const equivalent = today || { costUSD: 0, pricedRequests: 0, unknownRequests: 0 };
-    const result = mode === 'api-equivalent' && !options.includeWindows ? { ok: true, windows: [] } : provider === 'chatgpt-codex' ? subscriptionUsage.normalizeCodex(await chatGPTAccounts.limits(options.force === true)) : await goUsage.read(llm.provider === 'opencode-go' ? llm.apiKey : '', options.force === true);
+    const result = mode === 'api-equivalent' && !options.includeWindows ? { ok: true, windows: [] } : provider?.startsWith('dsh:') ? await pluginModels.usage(provider, { force: options.force === true }) : provider === 'claude-subscription' ? claudeAccounts.limits() : provider === 'chatgpt-codex' ? subscriptionUsage.normalizeCodex(await chatGPTAccounts.limits(options.force === true)) : await goUsage.read(llm.provider === 'opencode-go' ? llm.apiKey : '', options.force === true);
     return { ...result, subscription: true, provider, mode, equivalent, equivalentLimitUSD: Number(settings.budget?.dailyLimitUSD) || 0, selected: subscriptionUsage.selectWindow(result.windows, mode) };
   } catch (error) { return { ok: false, subscription: true, error: error.message, windows: [] }; }
 }
@@ -3341,8 +3345,10 @@ ipcMain.handle('subscription:usage', async (_, options) => {
   const result = await getSubscriptionUsage(options); return { ...result, indicator: require('../shared/usage-indicator').formatUsage(result, settings.language) };
 });
 const { fetchModelsDevData } = require('./ipc/llm')({
+  pluginModels,
   augmentRequest: (messages, options) => pluginManager.augmentRequest(messages, options),
   chatGPTAccounts,
+  claudeAccounts,
   path,
   dataDir,
   loadJSON,

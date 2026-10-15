@@ -26,6 +26,8 @@ module.exports = function registerLlmIpc({
   consumeSSEStream,
   ocHeaders,
   chatGPTAccounts,
+  claudeAccounts,
+  pluginModels,
   augmentRequest = async (messages, options) => ({ messages, options }),
 }) {
   const formatDetector = new (require('../services/api-format').ApiFormatDetector)({
@@ -42,6 +44,25 @@ module.exports = function registerLlmIpc({
     }
   });
   async function adaptConnection(llm) {
+    if (llm.provider?.startsWith('dsh:')) {
+      const provider = (await pluginModels?.providers())?.find((p) => p.id === llm.provider);
+      if (!provider) throw new Error('Enable the model provider plugin first');
+      return {
+        ...llm,
+        apiUrl: 'dsh-plugin://model',
+        apiKey: '',
+        pluginBillingMode: provider.billingMode,
+      };
+    }
+    if (llm.provider === 'claude-subscription') {
+      if (!claudeAccounts) throw new Error('Claude login service is unavailable');
+      return {
+        ...llm,
+        apiUrl: 'claude-sdk://subscription',
+        apiKey: '',
+        accountId: (await claudeAccounts.status()).activeId,
+      };
+    }
     if (llm.provider === 'chatgpt-codex') {
       if (!chatGPTAccounts) throw new Error('ChatGPT login service is unavailable');
       return { ...llm, accountId: (await chatGPTAccounts.status()).activeId };
@@ -52,6 +73,16 @@ module.exports = function registerLlmIpc({
     return { ...llm, provider: result.provider, apiUrl: result.apiUrl };
   }
   async function fetchRequest(req, config) {
+    if (req.pluginProvider) return pluginModels.fetch(req.body, config.options);
+    if (req.credentialProvider === 'claude-subscription') {
+      if (!claudeAccounts) throw new Error('Claude login service is unavailable');
+      return require('../services/claude-transport').fetchClaude(
+        claudeAccounts,
+        req.body,
+        config.options,
+        config.onRetry,
+      );
+    }
     config.transport = req.transport;
     // Public pricing/catalog refresh must never block an inference request.
     fetchModelsDevData().catch(() => {});
@@ -341,6 +372,23 @@ module.exports = function registerLlmIpc({
     try {
       const effectiveProvider = provider || getSettings().llm.provider || 'openai-compat';
       const effectiveModel = model || getSettings().llm.model || '';
+      if (effectiveProvider.startsWith('dsh:')) {
+        const info = await pluginModels.info(effectiveProvider, effectiveModel);
+        return {
+          ok: true,
+          model: effectiveModel,
+          provider: effectiveProvider,
+          contextLength: info.context?.contextWindow || null,
+          variants: (info.reasoning?.efforts || []).map((e) => ({
+            id: e.id,
+            label: e.name || e.id,
+            wire: e.id,
+          })),
+          defaultId: info.reasoning?.defaultEffort || 'auto',
+          metadata: null,
+          capabilities: null,
+        };
+      }
       const effectiveUrl = apiUrl || getSettings().llm.apiUrl || '';
       const effectiveKey =
         apiKey !== undefined
@@ -627,7 +675,14 @@ module.exports = function registerLlmIpc({
       }
       // 按实际请求模型归属（含会话级覆盖）
       recordTokenUsage(
-        { ...usage, ...(req.credentialProvider ? { billingMode: 'subscription' } : {}) },
+        {
+          ...usage,
+          ...(req.billingMode
+            ? { billingMode: req.billingMode }
+            : req.credentialProvider
+              ? { billingMode: 'subscription' }
+              : {}),
+        },
         llmForRequest.model,
         llmForRequest.provider,
       );
@@ -770,7 +825,7 @@ module.exports = function registerLlmIpc({
           req.transport,
           120000,
           {
-            requiresCompleted: !!req.credentialProvider,
+            requiresCompleted: req.credentialProvider === 'chatgpt-codex',
             label: 'LLM:stream',
             model: llmForRequest.model,
           },
@@ -799,7 +854,14 @@ module.exports = function registerLlmIpc({
         estimated = true;
       }
       recordTokenUsage(
-        { ...usage, ...(req.credentialProvider ? { billingMode: 'subscription' } : {}) },
+        {
+          ...usage,
+          ...(req.billingMode
+            ? { billingMode: req.billingMode }
+            : req.credentialProvider
+              ? { billingMode: 'subscription' }
+              : {}),
+        },
         llmForRequest.model,
         llmForRequest.provider,
       );
@@ -932,7 +994,14 @@ module.exports = function registerLlmIpc({
         `[LLM:summarize ${logTs()}] ✓ ${llmForRequest.model} tokens:${usage.prompt_tokens || 0}+${usage.completion_tokens || 0}=${usage.total_tokens || 0}${usage._estimated ? '(est)' : ''} summary=${content.length}chars`,
       );
       recordTokenUsage(
-        { ...usage, ...(req.credentialProvider ? { billingMode: 'subscription' } : {}) },
+        {
+          ...usage,
+          ...(req.billingMode
+            ? { billingMode: req.billingMode }
+            : req.credentialProvider
+              ? { billingMode: 'subscription' }
+              : {}),
+        },
         llmForRequest.model,
         llmForRequest.provider,
       );
@@ -1075,7 +1144,7 @@ module.exports = function registerLlmIpc({
               'probe-' + Date.now(),
               req.transport,
               20000,
-              { requiresCompleted: !!req.credentialProvider },
+              { requiresCompleted: req.credentialProvider === 'chatgpt-codex' },
             )
           : LLMProviders.parseLLMResponse(await response.json(), req.transport);
         if (
@@ -1091,7 +1160,14 @@ module.exports = function registerLlmIpc({
           return { ok: false, error: result.error || '模型未返回有效响应' };
         if (result.usage)
           recordTokenUsage(
-            { ...result.usage, ...(req.credentialProvider ? { billingMode: 'subscription' } : {}) },
+            {
+              ...result.usage,
+              ...(req.billingMode
+                ? { billingMode: req.billingMode }
+                : req.credentialProvider
+                  ? { billingMode: 'subscription' }
+                  : {}),
+            },
             config.model,
             config.provider,
           );
@@ -1173,6 +1249,8 @@ module.exports = function registerLlmIpc({
   ipcMain.handle('llm:fetchModels', async (_, provider, apiUrl, apiKey) => {
     try {
       if (provider === 'chatgpt-codex') return chatGPTAccounts.models();
+      if (provider === 'claude-subscription') return claudeAccounts.models();
+      if (provider?.startsWith('dsh:')) return pluginModels.models(provider);
       if (!provider || !apiUrl) return { ok: false, error: '缺少 provider 或 apiUrl' };
       let modelsUrl = '';
       const headers = { 'Content-Type': 'application/json' };

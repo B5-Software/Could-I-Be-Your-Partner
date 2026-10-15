@@ -37,6 +37,10 @@ jobs:
         if: runner.os == 'Windows' && matrix.node == '24'
       - run: npm run test:babe
         if: runner.os == 'Windows' && matrix.node == '24'
+      - run: npm run test:claude
+        if: runner.os == 'Windows' && matrix.node == '24'
+      - run: npm run test:plugin-model
+        if: runner.os == 'Windows' && matrix.node == '24'
       - run: npm run test:backend
         if: runner.os == 'Windows' && matrix.node == '24'
       - run: npm audit --audit-level=high

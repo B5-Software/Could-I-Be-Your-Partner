@@ -1,0 +1,10 @@
+{
+  "name": "cibyp-model-provider-fixture",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "index.mjs",
+  "dsh": {
+    "runtime": "host"
+  }
+}

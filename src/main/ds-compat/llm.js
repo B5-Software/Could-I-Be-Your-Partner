@@ -258,6 +258,27 @@ class CibypLlmAdapter extends LlmAdapter {
   }
 }
 class CibypLlmService extends LlmRuntime {
+  registerAdapter(providers, adapter) {
+    const handle = super.registerAdapter(providers, adapter);
+    this.adapterRegistrations ||= new Set();
+    const record = { providers: providers.slice(), adapter };
+    this.adapterRegistrations.add(record);
+    this.ctx.effect(() => () => this.adapterRegistrations.delete(record));
+    const dispose = () => {
+      this.adapterRegistrations.delete(record);
+      handle();
+    };
+    dispose.replace = (routes) => {
+      handle.replace(routes);
+      record.providers = routes.slice();
+    };
+    return dispose;
+  }
+  pluginAdapter(provider) {
+    return [...(this.adapterRegistrations || [])].find(
+      (record) => record.adapter !== this.adapter && record.providers.includes(provider),
+    )?.adapter;
+  }
   constructor(ctx, options = {}) {
     super(ctx);
     this.options = options;
@@ -274,7 +295,11 @@ class CibypLlmService extends LlmRuntime {
       settings.llm?.provider,
       ...(settings.llm?.pool || []).filter((e) => e.enabled !== false).map((e) => e.provider),
     ]);
-    this.routeRegistration.replace([...routes].filter(Boolean));
+    this.routeRegistration.replace(
+      [...routes].filter(
+        (route) => route && !route.startsWith('dsh:') && !this.pluginAdapter(route),
+      ),
+    );
   }
   async *stream(options) {
     await this.refreshRoutes();

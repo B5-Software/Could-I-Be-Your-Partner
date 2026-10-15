@@ -27,6 +27,14 @@ const JITTER_RATIO = 0.25;
 // 全局活跃请求控制器集合：停止按钮可一次性 abort 所有正在进行的 LLM 请求
 const _activeControllers = new Set();
 
+// SDK transports share the same Stop / session cancellation registry as HTTP.
+function registerExternalRequest(controller, options = {}) {
+  controller._requestId = options.requestId || null;
+  controller._sessionKey = options.sessionKey || null;
+  _activeControllers.add(controller);
+  return () => _activeControllers.delete(controller);
+}
+
 // Error kinds: 'rate_limit' | 'overloaded' | 'server' | 'payment' | 'timeout' | 'network' | 'auth' | 'client' | 'unknown'
 
 class LLMError extends Error {
@@ -836,6 +844,7 @@ function sseData(block) {
 }
 
 module.exports = {
+  registerExternalRequest,
   LLMError,
   fetchLLMWithRetry,
   consumeSSEStream,

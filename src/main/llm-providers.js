@@ -136,6 +136,7 @@ function resolveReasoningVariants(model, provider, capabilities, metadata) {
       : pt === 'openai-responses' ? 'openai-responses'
       : 'openai-compat';
   }
+  if (p === 'claude-subscription') return makeVariantTable(['off', 'auto', 'low', 'medium', 'high', 'max'], 'auto');
 
   // Anthropic：capabilities（thinking 模式）优先判不支持；支持时 metadata.effort 优先，其次硬编码
   if (p === 'anthropic-compat') {
@@ -292,7 +293,13 @@ function buildLLMRequest(llm, opts) {
     : opts;
 
   let req;
-  if (provider === 'opencode-zen') {
+  if (provider.startsWith('dsh:')) {
+    req = { url: 'dsh-plugin://model', headers: {}, transport: 'openai', pluginProvider: provider, billingMode: llm.pluginBillingMode,
+      body: { ...buildOpenAIRequest({ ...llm, apiKey: '' }, buildOpts, reasoningEffort).body, pluginProvider: provider, reasoningEffort } };
+  } else if (provider === 'claude-subscription') {
+    req = { url: 'claude-sdk://subscription', headers: {}, transport: 'openai', credentialProvider: 'claude-subscription',
+      body: { ...buildOpenAIRequest({ ...llm, apiKey: '' }, buildOpts, reasoningEffort).body, accountId: llm.accountId, reasoningEffort } };
+  } else if (provider === 'opencode-zen') {
     req = buildZenRequest(llm, buildOpts, reasoningEffort);
   } else if (provider === 'opencode-go') {
     req = buildOpencodeGoRequest(llm, buildOpts, reasoningEffort);
@@ -332,7 +339,7 @@ function buildLLMRequest(llm, opts) {
   req.headers = ocHeaders.applyProviderHeaders({
     url: req.url,
     headers: req.headers,
-    llm: provider === 'chatgpt-codex' ? {} : llm,
+    llm: ['chatgpt-codex', 'claude-subscription'].includes(provider) || provider.startsWith('dsh:') ? {} : llm,
     sessionKey: opts.sessionKey || null,
     requestId: opts.requestId || null
   });

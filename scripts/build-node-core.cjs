@@ -30,7 +30,16 @@ require('esbuild')
     platform: 'node',
     target: 'node24',
     format: 'cjs',
-    external: ['express', 'express-ws', 'ws', 'bcryptjs', 'otpauth', 'node-pty'],
+    external: [
+      'express',
+      'express-ws',
+      'ws',
+      'bcryptjs',
+      'otpauth',
+      'node-pty',
+      '@anthropic-ai/claude-agent-sdk',
+      'zod',
+    ],
     plugins: [require('./lib/guest-tool-bundle.cjs').sdkMetadataPlugin()],
     define: {
       CIBYP_I18N_SOURCES: JSON.stringify(sources),
@@ -78,10 +87,15 @@ require('esbuild')
         sourceMap: 'core.cjs.map',
       },
       dependencies: Object.fromEntries(
-        ['express', 'express-ws', 'ws', 'bcryptjs', 'otpauth'].map((name) => [
-          name,
-          require('../package.json').dependencies[name],
-        ]),
+        [
+          'express',
+          'express-ws',
+          'ws',
+          'bcryptjs',
+          'otpauth',
+          '@anthropic-ai/claude-agent-sdk',
+          'zod',
+        ].map((name) => [name, require('../package.json').dependencies[name]]),
       ),
     };
     fs.writeFileSync(path.join(out, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n');

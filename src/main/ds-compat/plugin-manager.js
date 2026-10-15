@@ -1007,6 +1007,7 @@ class PluginManager {
       entry,
       config,
       bundlePatch: { file: bundlePatch.file || null, rows: bundlePatch.rows },
+      runtime: pkg.dsh?.runtime === 'host' ? 'host' : 'auto',
       enabled: false, // 默认禁用，需用户显式启用（安全）
       compatTier: 'native',
       compatIssues: [],
@@ -1046,7 +1047,9 @@ class PluginManager {
       }
       if (rec.enabled) {
         const service = this.getVmService?.();
-        const inVm = require('../vm/tool-location').isVmOperation(() => service);
+        rec.runtime = this._readPackage(rec.installDir).dsh?.runtime === 'host' ? 'host' : 'auto';
+        const inVm =
+          rec.runtime !== 'host' && require('../vm/tool-location').isVmOperation(() => service);
         await this.host.unloadPlugin(id);
         if (!inVm) await require('../vm/plugin-runtime-client').unload(service, id);
         const res = inVm
@@ -1219,20 +1222,25 @@ class PluginManager {
 
   async callTool(pluginId, toolName, args, execCtx = {}) {
     if (!pluginId) {
-      const tool = require('../vm/tool-location').isVmOperation(this.getVmService)
-        ? await require('../vm/plugin-runtime-client').surfaceTool(
-            this.getVmService(),
-            toolName,
-            execCtx.sessionKey,
-          )
-        : this.host.surfaceTool(toolName, execCtx.sessionKey);
+      const tool =
+        this.host.surfaceTool(toolName, execCtx.sessionKey) ||
+        (require('../vm/tool-location').isVmOperation(this.getVmService)
+          ? await require('../vm/plugin-runtime-client').surfaceTool(
+              this.getVmService(),
+              toolName,
+              execCtx.sessionKey,
+            )
+          : null);
       if (!tool) return { ok: false, error: 'Plugin tool unavailable: ' + toolName };
       pluginId = tool.pluginId;
       toolName = tool.name;
     }
     if (!this.plugins.some((plugin) => plugin.id === pluginId && plugin.enabled))
       return { ok: false, error: 'Plugin is disabled' };
-    if (require('../vm/tool-location').isVmOperation(this.getVmService)) {
+    if (
+      this.plugins.find((plugin) => plugin.id === pluginId)?.runtime !== 'host' &&
+      require('../vm/tool-location').isVmOperation(this.getVmService)
+    ) {
       const record = this.plugins.find((plugin) => plugin.id === pluginId && plugin.enabled);
       if (!record) return { ok: false, location: 'vm', error: '插件未启用' };
       return require('../vm/vm-tool-runtime').runGuestPlugin(
@@ -1319,6 +1327,7 @@ class PluginManager {
       description: rec.description,
       source: rec.source,
       enabled: !!rec.enabled,
+      runtime: rec.runtime || 'auto',
       config: rec.config || {},
       bundlePatch: rec.bundlePatch || { file: null, rows: [] },
       compatTier: rec.compatTier,

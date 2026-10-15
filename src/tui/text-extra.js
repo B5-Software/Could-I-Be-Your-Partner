@@ -332,3 +332,21 @@ Object.assign(module.exports.de, {
   'ui.tui.relationshipStage.dating': 'Dating',
   'ui.tui.relationshipStage.partner': 'Feste Partnerschaft',
 });
+
+Object.assign(module.exports.en, {
+  'ui.tui.cmd.claude': 'Manage Claude Pro / Max login and models',
+  'ui.tui.args.claude': '[login|code|cancel|logout|model]',
+  'ui.tui.claudeChooseModel': 'Choose a model and make it the default',
+  'ui.tui.claudeLoginPending':
+    'Complete Claude sign-in in the host browser, then use /claude model.',
+  'ui.tui.claudeReady': 'Signed in to Claude; choose a model with /claude model.',
+});
+
+Object.assign(module.exports.de, {
+  'ui.tui.cmd.claude': 'Claude-Pro-/Max-Anmeldung und Modelle verwalten',
+  'ui.tui.args.claude': '[login|code|cancel|logout|model]',
+  'ui.tui.claudeChooseModel': 'Modell wählen und als Standard festlegen',
+  'ui.tui.claudeLoginPending':
+    'Claude-Anmeldung im Host-Browser abschließen, dann /claude model verwenden.',
+  'ui.tui.claudeReady': 'Bei Claude angemeldet; Modell mit /claude model wählen.',
+});

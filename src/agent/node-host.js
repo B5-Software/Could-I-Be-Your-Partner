@@ -370,6 +370,54 @@ async function createNodeRuntime({
       openExternal: async (url) => publish('account:login-url', { url }),
       onChange: (value) => publish('account:changed', value),
     });
+    const claudeAccounts = require('../main/ipc/claude')({
+      ipcMain: registry,
+      dataDir,
+      publishEvent: publish,
+    });
+    bind('llm:pluginProviders', async () => ({
+      ok: true,
+      providers: await extensions.models.providers(),
+    }));
+    const subscriptionUsage = require('../main/services/subscription-usage');
+    const goUsage = new subscriptionUsage.GoUsage();
+    bind('subscription:usage', async (options = {}) => {
+      const settings = getSettings();
+      const entry = settings.llm.pool?.find((e) => e.id === options.poolEntryId) || settings.llm;
+      const provider = options.provider || entry.provider;
+      const mode = subscriptionUsage.MODES.includes(settings.budget?.subscriptionDisplay)
+        ? settings.budget.subscriptionDisplay
+        : 'urgent';
+      let result;
+      const plugin = provider?.startsWith('dsh:')
+        ? (await extensions.models.providers()).find((p) => p.id === provider)
+        : null;
+      const isSubscription =
+        ['claude-subscription', 'chatgpt-codex', 'opencode-go'].includes(provider) ||
+        plugin?.billingMode === 'subscription';
+      if (!isSubscription) result = { ok: true, subscription: false, windows: [] };
+      else if (mode === 'api-equivalent' && !options.includeWindows)
+        result = { ok: true, windows: [] };
+      else if (provider?.startsWith('dsh:'))
+        result = await extensions.models.usage(provider, { force: options.force === true });
+      else if (provider === 'claude-subscription') result = claudeAccounts.limits();
+      else if (provider === 'chatgpt-codex')
+        result = subscriptionUsage.normalizeCodex(await accounts.limits(options.force === true));
+      else if (provider === 'opencode-go')
+        result = await goUsage.read(entry.apiKey || '', options.force === true);
+      else result = { ok: true, subscription: false, windows: [] };
+      const value = {
+        ...result,
+        provider,
+        mode,
+        subscription: result.subscription !== false,
+        selected: subscriptionUsage.selectWindow(result.windows || [], mode),
+      };
+      return {
+        ...value,
+        indicator: require('../shared/usage-indicator').formatUsage(value, settings.language),
+      };
+    });
     for (const [action, handler] of Object.entries({
       status: () => accounts.status(),
       login: (id) => accounts.login(id),
@@ -409,6 +457,8 @@ async function createNodeRuntime({
       broadcastUsageChanged: () => publish('usage:changed', {}),
       ocHeaders: require('../main/opencode-headers'),
       chatGPTAccounts: accounts,
+      claudeAccounts,
+      pluginModels: extensions.models,
     });
     const memory = new (require('../main/services/automatic-memory').AutomaticMemory)({
       file: file('automatic-memory'),
@@ -615,6 +665,7 @@ async function createNodeRuntime({
         clearTimeout(decision._persistTimer);
         persistSettings();
         accounts.dispose();
+        claudeAccounts.dispose();
         terminals.abortTerminalsForSession('', true);
         offMcp();
         await mcp.stopAllMcpServers();

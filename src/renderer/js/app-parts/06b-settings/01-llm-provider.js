@@ -3,6 +3,8 @@
     const openaiFields = document.getElementById('llm-openai-fields');
     const zenFields = document.getElementById('llm-zen-fields');
     if (!openaiFields || !zenFields) return;
+    if (provider?.startsWith('dsh:')) { openaiFields.classList.add('hidden'); zenFields.classList.add('hidden'); return; }
+    if (provider === 'claude-subscription') { openaiFields.classList.add('hidden'); zenFields.classList.add('hidden'); refreshClaudeAccounts(); return; }
     if (provider === 'chatgpt-codex') { openaiFields.classList.add('hidden'); zenFields.classList.add('hidden'); refreshChatGPTAccounts(); return; }
     if (provider === 'opencode-zen' || provider === 'opencode-go') {
       openaiFields.classList.add('hidden');

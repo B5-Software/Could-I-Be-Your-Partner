@@ -13,6 +13,41 @@ const { createKeyDecoder } = require('../../src/tui/keys.js');
 const { stripAnsi, visibleWidth } = require('../../src/tui/ansi.js');
 const { themeFromEnv } = require('../../src/tui/theme.js');
 
+test('/claude chooses a subscription model for the current session and defaults, and keeps manual OAuth codes out of input history', async () => {
+  const runtime = makeFakeRuntime();
+  const saved = [],
+    configured = [],
+    codes = [];
+  runtime.api = {
+    claudeStatus: async () => ({ ok: true, accounts: [], activeId: 'fixture' }),
+    claudeModels: async () => ({
+      ok: true,
+      models: [{ id: 'sonnet', name: 'Claude Sonnet', contextLength: 200000 }],
+    }),
+    claudeCode: async (code) => {
+      codes.push(code);
+      return { ok: true };
+    },
+    setSettings: async (settings) => saved.push(settings),
+  };
+  runtime.configureSession = async (key, values) => configured.push({ key, values });
+  const app = new TuiApp({ runtime });
+  await app.start();
+  await app._runCommand('claude', 'model');
+  assert.equal(app.state.modal.kind, 'claudeModel');
+  await app._chooseModalOption(0);
+  assert.equal(saved[0].llm.provider, 'claude-subscription');
+  assert.equal(configured[0].key, app.activeKey);
+  assert.equal(configured[0].values.llmOverride.provider, 'claude-subscription');
+  assert.equal(configured[0].values.llmOverride.model, 'sonnet');
+  assert.equal(configured[0].values.llmOverride.apiKey, '');
+  app.editor.history = ['/help', '/claude code secret-fixture'];
+  await app._runCommand('claude', 'code secret-fixture');
+  assert.deepEqual(codes, ['secret-fixture']);
+  assert.deepEqual(app.editor.history, ['/help']);
+  app.dispose();
+});
+
 test('/relationship reads the shared relationship instead of conversation snapshots', async () => {
   const runtime = makeFakeRuntime();
   runtime.api = {

@@ -137,6 +137,7 @@ function createNodeExtensions({
       sync().catch((error) => publish('host:error', { message: error.message }));
   });
   return {
+    models: require('../main/ds-compat/model-transport').createPluginModels(ensure),
     async start() {
       if (plugins.length) await ensure();
       automation.start();

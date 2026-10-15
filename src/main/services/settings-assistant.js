@@ -186,6 +186,7 @@ const PRIVATE = {
   tools: ['tools', null],
   resources: ['resources', null],
   chatgpt: ['llm', 'chatgpt-account-select'],
+  claude: ['llm', 'claude-account-select'],
   notifications: ['notifications', null],
 };
 const valueAt = (object, path) => path.split('.').reduce((value, key) => value?.[key], object);

@@ -979,6 +979,28 @@
                   <span class="setting-hint" id="llm-pool-hint"></span>
                 </div>
               </div>
+              <div class="settings-group" id="claude-account-group">
+                <h3><i class="fa-solid fa-user-shield"></i> <span data-i18n="ui.claudeSubscription.title">Claude Pro / Max 账号</span></h3>
+                <p class="setting-hint" data-i18n="ui.claudeSubscription.hint">通过官方 Claude 客户端登录，使用自己的 Pro / Max 订阅。账号独立保存，所有前端共享。</p>
+                <div class="setting-item"><label for="claude-account-select" data-i18n="ui.claudeSubscription.account">已保存账号</label><select id="claude-account-select"></select></div>
+                <div class="setting-item"><label for="claude-model-select" data-i18n="ui.claudeSubscription.model">添加到模型池的 Claude 模型</label><select id="claude-model-select"></select></div>
+                <div class="setting-buttons" style="display:flex;gap:8px;flex-wrap:wrap">
+                  <button class="btn-primary" id="btn-claude-login" data-i18n="ui.claudeSubscription.login">使用 Claude 登录</button>
+                  <button class="btn-secondary" id="btn-claude-reauth" data-i18n="ui.claudeSubscription.reauth">重新授权</button>
+                  <button class="btn-secondary" id="btn-claude-cancel" hidden data-i18n="ui.claudeSubscription.cancel">取消登录</button>
+                  <button class="btn-secondary" id="btn-claude-use" data-i18n="ui.claudeSubscription.use">添加并设为默认</button>
+                  <button class="btn-secondary" id="btn-claude-refresh" data-i18n="ui.claudeSubscription.refresh">刷新模型</button>
+                  <button class="btn-secondary" id="btn-claude-logout" data-i18n="ui.claudeSubscription.logout">注销账号</button>
+                  <button class="btn-secondary" id="btn-claude-usage" data-i18n="ui.claudeSubscription.usage">Claude 用量管理</button>
+                </div>
+                <p class="setting-hint" id="claude-account-status" role="status" aria-live="polite"></p>
+                <a id="claude-login-url" hidden target="_blank" rel="noopener noreferrer" data-i18n="ui.claudeSubscription.openLogin">打开登录网页</a>
+                <details id="claude-login-manual" hidden><summary data-i18n="ui.claudeSubscription.manual">手动完成登录</summary>
+                  <div class="setting-item"><label for="claude-login-code" data-i18n="ui.claudeSubscription.code">浏览器返回的授权码</label><input type="password" id="claude-login-code" autocomplete="off"></div>
+                  <button class="btn-secondary" id="btn-claude-code" data-i18n="ui.claudeSubscription.submit">完成授权</button>
+                </details>
+                <p class="setting-hint" data-i18n="ui.claudeSubscription.billing">此通道不使用 API Key，不主动开启额外用量；实际额度及账号已有的额外用量设置以 Claude 服务端为准。</p>
+              </div>
               <div class="settings-group" id="chatgpt-account-group">
   <h3><i class="fa-solid fa-user-shield"></i> ChatGPT / Codex 账号</h3>
   <p class="setting-hint">登录自己的 ChatGPT 账号，授权使用订阅额度。账号凭据单独保存在本机，GUI 与 TUI 共用。</p>
@@ -1005,6 +1027,7 @@
                   <label>接入方式</label>
                   <select id="setting-llm-provider">
                     <option value="auto">自动识别 API 格式</option>
+                    <option value="claude-subscription">Claude Pro / Max</option>
                     <option value="openai-compat">OpenAI 兼容</option>
                     <option value="openai-responses">OpenAI Responses（新版）</option>
                     <option value="anthropic-compat">Anthropic 兼容</option>
@@ -3486,7 +3509,7 @@
             <option value="opencode-go">OpenCode Go (订阅)</option>
             <option value="auto">自动识别 API 格式</option>
             <option value="openai-compat">OpenAI 兼容</option>
-            <option value="openai-responses">OpenAI Responses</option><option value="chatgpt-codex">ChatGPT / Codex 订阅</option>
+            <option value="openai-responses">OpenAI Responses</option><option value="chatgpt-codex">ChatGPT / Codex 订阅</option><option value="claude-subscription">Claude Pro / Max</option>
             <option value="anthropic-compat">Anthropic 兼容</option>
           </select>
         </div>

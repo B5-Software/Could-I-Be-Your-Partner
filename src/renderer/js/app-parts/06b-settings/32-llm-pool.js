@@ -2,6 +2,7 @@
   const POOL_PROVIDER_LABELS = {
     auto: '自动识别 API 格式',
     'chatgpt-codex': 'ChatGPT / Codex',
+    'claude-subscription': 'Claude Pro / Max',
     'opencode-zen': 'OpenCode Zen',
     'opencode-go': 'OpenCode Go',
     'openai-compat': 'OpenAI 兼容',
@@ -54,7 +55,7 @@
     document.getElementById('pool-edit-model-select').classList.add('hidden');
     status.textContent = '正在识别模型…';
     try {
-      if (!zen && provider !== 'chatgpt-codex' && !apiUrl) throw new Error('填写 API 地址后自动识别模型');
+      if (!zen && !['chatgpt-codex', 'claude-subscription'].includes(provider) && !provider.startsWith('dsh:') && !apiUrl) throw new Error('填写 API 地址后自动识别模型');
       const result = zen ? await window.api.zenFetchModels(provider === 'opencode-go' ? 'go' : 'zen', { apiKey: apiKey || 'public', verifyFree: true })
         : await window.api.llmFetchModels(provider, apiUrl, apiKey);
       if (generation !== _poolModelsGeneration) return;
@@ -95,7 +96,7 @@
                 ${e.vision ? '<span class="pool-badge vision">视觉</span>' : ''}
                 ${enabled ? '' : '<span class="pool-badge off">已禁用</span>'}
               </div>
-              <div class="llm-pool-meta">${poolEsc(e.model || '')} · 智慧 ${Number(e.intelligence) || 0} · 优先级 ${Number(e.priority) || 0} · Effort ${poolEsc(POOL_EFFORT_LABELS[e.effort] || e.effort || '关闭')}${e.provider === 'chatgpt-codex' ? ' · 订阅账号' : e.apiKey ? ' · 已配 Key' : ' · 无 Key'}</div>
+              <div class="llm-pool-meta">${poolEsc(e.model || '')} · 智慧 ${Number(e.intelligence) || 0} · 优先级 ${Number(e.priority) || 0} · Effort ${poolEsc(POOL_EFFORT_LABELS[e.effort] || e.effort || '关闭')}${['chatgpt-codex', 'claude-subscription'].includes(e.provider) ? ' · 订阅账号' : e.apiKey ? ' · 已配 Key' : ' · 无 Key'}</div>
             </div>
             <div class="llm-pool-actions">
               ${active ? '' : '<button class="btn-secondary btn-sm" data-pool-act="default">设为默认</button>'}
@@ -118,8 +119,27 @@
   }
 
   async function refreshPoolUI(s) {
+    await refreshPluginModelProviders();
     if (!s) s = await readSettings();
     renderPoolList(s);
+  }
+
+  async function refreshPluginModelProviders() {
+    try {
+      const result = await window.api.llmPluginProviders?.();
+      if (!result?.ok) return;
+      for (const id of ['pool-edit-provider', 'setting-llm-provider']) {
+        const select = document.getElementById(id);
+        if (!select) continue;
+        const current = select.value;
+        select.querySelectorAll('option[data-plugin-model]').forEach(option => option.remove());
+        for (const provider of result.providers) {
+          POOL_PROVIDER_LABELS[provider.id] = provider.name;
+          const option = new Option(provider.name, provider.id); option.dataset.pluginModel = 'true'; select.add(option);
+        }
+        if ([...select.options].some(option => option.value === current)) select.value = current;
+      }
+    } catch { /* An older remote backend may not expose plugin models yet. */ }
   }
 
   async function savePool(pool, extra = {}) {
@@ -154,7 +174,8 @@
   }
 
   function updatePoolAccountFields() {
-    const account = document.getElementById('pool-edit-provider').value === 'chatgpt-codex';
+    const provider = document.getElementById('pool-edit-provider').value;
+    const account = ['chatgpt-codex', 'claude-subscription'].includes(provider) || provider.startsWith('dsh:');
     for (const id of ['pool-edit-url', 'pool-edit-key']) document.getElementById(id)?.closest('.setting-item')?.classList.toggle('hidden', account);
   }
 
@@ -191,7 +212,8 @@
     }
   }
 
-  function openPoolEditor(entry) {
+  async function openPoolEditor(entry) {
+    await refreshPluginModelProviders();
     _poolEditingId = entry ? entry.id : null;
     _poolCtxTouched = false;
     const title = document.getElementById('llm-pool-editor-title');
@@ -220,8 +242,8 @@
       id: _poolEditingId || ('pool-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6)),
       label: val('pool-edit-label') || model,
       provider,
-      apiUrl: provider === 'chatgpt-codex' ? 'https://api.openai.com/v1/responses' : val('pool-edit-url'),
-      apiKey: provider === 'chatgpt-codex' ? '' : val('pool-edit-key') || (provider.startsWith('opencode') ? 'public' : ''),
+      apiUrl: provider.startsWith('dsh:') ? 'dsh-plugin://model' : provider === 'claude-subscription' ? 'claude-sdk://subscription' : provider === 'chatgpt-codex' ? 'https://api.openai.com/v1/responses' : val('pool-edit-url'),
+      apiKey: ['chatgpt-codex', 'claude-subscription'].includes(provider) || provider.startsWith('dsh:') ? '' : val('pool-edit-key') || (provider.startsWith('opencode') ? 'public' : ''),
       ...(provider.startsWith('opencode') ? { autoOpencodeHeaders: true } : {}),
       model,
       providerLimits: _poolModels.find(model => model.id === val('pool-edit-model'))?.providerLimits || null,

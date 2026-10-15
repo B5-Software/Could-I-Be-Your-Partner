@@ -13,9 +13,11 @@ function resolve(model, provider, overrides = {}, billingMode, apiUrl) {
       ? ['opencode']
       : provider === 'opencode-go'
         ? ['opencode-go']
-        : provider === 'chatgpt-codex'
-          ? ['openai']
-          : [];
+        : provider === 'claude-subscription'
+          ? ['anthropic']
+          : provider === 'chatgpt-codex'
+            ? ['openai']
+            : [];
   if (!keys.length && apiUrl) {
     let hostname;
     try {
@@ -66,8 +68,10 @@ function resolve(model, provider, overrides = {}, billingMode, apiUrl) {
     price,
     source: Object.keys(manual).length ? 'override' : cost ? 'models.dev' : 'unknown',
     fetchedAt,
-    billingMode: billingMode || (provider === 'chatgpt-codex' ? 'subscription' : 'api'),
-    apiReference: provider === 'chatgpt-codex',
+    billingMode:
+      billingMode ||
+      (['chatgpt-codex', 'claude-subscription'].includes(provider) ? 'subscription' : 'api'),
+    apiReference: ['chatgpt-codex', 'claude-subscription'].includes(provider),
   };
 }
 module.exports = { update, resolve };
