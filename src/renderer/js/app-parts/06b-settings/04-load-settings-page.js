@@ -89,6 +89,7 @@
     loadDecisionSettings(s);
 
     document.getElementById('setting-accent-color').value = s.theme.accentColor;
+    document.getElementById('setting-frontend').value = s.theme.frontend === 'v2' ? 'v2' : 'v1';
     document.getElementById('setting-bg-color').value = s.theme.backgroundColor;
     document.getElementById('setting-ui-animations').checked = s.animations !== false;
     document.getElementById('setting-focus-outlines').checked = s.theme?.focusOutlines !== false;

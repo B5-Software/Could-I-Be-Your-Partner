@@ -43,8 +43,8 @@
     container.innerHTML = codeCurrentAttachments.map((att, i) =>
       '<div class="attachment-item">' +
         '<i class="fa-solid ' + (att.isImage ? 'fa-image' : 'fa-file') + '"></i>' +
-        '<span class="attachment-name">' + escapeHtml(att.name) + '</span>' +
-        '<button class="btn-icon attachment-remove" data-index="' + i + '" title="从上下文移除"><i class="fa-solid fa-xmark"></i></button>' +
+        attachmentPreviewCopy(att) +
+        '<button type="button" class="btn-icon attachment-remove" data-index="' + i + '" aria-label="' + escapeHtml(t('ui.attachments.remove', '移除附件')) + '"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>' +
       '</div>'
     ).join('');
     container.querySelectorAll('.attachment-remove').forEach(btn => {

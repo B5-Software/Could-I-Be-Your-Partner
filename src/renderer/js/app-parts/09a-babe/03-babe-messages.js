@@ -41,6 +41,8 @@
 
   function addBabeMessage(role, content, attachments = []) {
     const reasoningDisplay = ReasoningData.presentation(content);
+    const messageId = content?.metadata?.messageId || content?.id;
+    const contextExcluded = content?.metadata?.contextExcluded === true;
     if (content && typeof content === 'object') {
       const display = AttachmentData.presentation({ role, ...content });
       content = display.content; attachments = display.attachments;
@@ -52,6 +54,8 @@
 
     const msg = document.createElement('div');
     msg.className = 'babe-message ' + role;
+    if (messageId) msg.dataset.messageId = messageId;
+    if (contextExcluded) msg.dataset.contextExcluded = 'true';
     const rendered = (role === 'assistant' || role === 'system') ? renderMarkdown(content) : escapeHtml(content);
     // 懒渲染用：保留原始内容与角色，离屏折叠后滚回时重新渲染
     msg.dataset.lazyRaw = content;
@@ -75,7 +79,9 @@
       </div>`;
     msgsEl.appendChild(msg);
     renderMessageAttachments(msg.querySelector('.babe-msg-body'), attachments);
+    if (contextExcluded) { const badge = document.createElement('small'); badge.className = 'message-context-excluded'; badge.textContent = t('ui.messageEdit.excluded','已移出上下文'); msg.querySelector('.babe-msg-body').append(badge); }
     if (role === 'assistant') renderMessageReasoning(msg.querySelector('.babe-msg-body'), reasoningDisplay);
+    window.CibypMessages?.bind(msg, {mode:'babe', role, content});
     // 增量推送：Babe 消息追加到 WebUI
     WebUIMirror.pushDomEvent({ type: 'dom_append', container: '#babe-chat-messages', html: msg.outerHTML });
     scrollChatToBottom(msgsEl);

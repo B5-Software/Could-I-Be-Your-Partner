@@ -1,6 +1,7 @@
   function addMessageToChat(role, content, attachments = []) {
     const reasoningDisplay = ReasoningData.presentation(content);
     const messageId = typeof content === 'object' && content ? (content.metadata?.messageId || content.id) : '';
+    const contextExcluded = content?.metadata?.contextExcluded === true;
     if (content && typeof content === 'object') {
       const display = AttachmentData.presentation({ role, ...content });
       content = display.content; attachments = display.attachments;
@@ -12,6 +13,7 @@
     const msg = document.createElement('div');
     msg.className = `message ${role}`;
     if (messageId) msg.dataset.messageId = messageId;
+    if (contextExcluded) msg.dataset.contextExcluded = 'true';
     const time = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
 
     // Avatar handling（Remote 模式优先使用远端头像）
@@ -49,12 +51,9 @@
     }
 
     renderMessageAttachments(msg.querySelector('.message-body'), attachments);
+    if (contextExcluded) { const badge = document.createElement('small'); badge.className = 'message-context-excluded'; badge.textContent = t('ui.messageEdit.excluded','已移出上下文'); msg.querySelector('.message-body').append(badge); }
     if (role === 'assistant') renderMessageReasoning(msg.querySelector('.message-body'), reasoningDisplay);
-    // Add right-click context menu for deletion
-    msg.addEventListener('contextmenu', (e) => {
-      e.preventDefault();
-      showMessageContextMenu(e, msg, role);
-    });
+    window.CibypMessages?.bind(msg, {mode:'chat', role, content});
   }
 
   function setReasoningLabel(section, data) {

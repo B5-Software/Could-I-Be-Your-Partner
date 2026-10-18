@@ -339,7 +339,8 @@
 
     close(session, options = {}) {
       if (!session) return;
-      this.stop(session);
+      if (!options.backendClosed) this.stop(session);
+      if (session.agent) session.agent._backendClosed = true;
       // 退订该会话 Agent 的 LLM IPC 监听器，避免会话关闭后监听器累积
       if (session.agent && typeof session.agent.unsubscribeStreams === 'function') {
         try { session.agent.unsubscribeStreams(); } catch { /* ignore */ }
@@ -354,7 +355,7 @@
         this.lastActiveByMode.delete(session.mode);
       }
       this.sessions.delete(session.key);
-      if (session.agent?.backendKey && window.api?.backendRequest) window.api.backendRequest('close', session.agent.backendKey).catch(console.error);
+      if (!options.backendClosed && session.agent?.backendKey && window.api?.backendRequest) window.api.backendRequest('close', session.agent.backendKey).catch(console.error);
       this.bus.emit('session-closed', { session });
     }
 

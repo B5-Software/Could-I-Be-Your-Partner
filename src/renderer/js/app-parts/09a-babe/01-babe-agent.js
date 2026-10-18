@@ -115,7 +115,8 @@
             babeStreamBubble = null;
             break;
           }
-          bubble.el.classList.remove('streaming');
+          window.CibypMessages?.bind(bubble.el, {mode:'babe', role:'assistant', content:finalContent});
+      bubble.el.classList.remove('streaming');
           if (bubble.el.id) WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#' + bubble.el.id, html: bubble.el.outerHTML });
           babeStreamBubble = null;
           break;

@@ -16,6 +16,20 @@
       if (currentMode === 'babe') return document.getElementById('babe-chat-messages');
       return chatMessages;
     }
+    function positionSearch() {
+      if (!isOpen()) return;
+      const container = getContainer(), host = overlay.offsetParent;
+      if (!container || !host) return;
+      const area = container.getBoundingClientRect(), bounds = host.getBoundingClientRect();
+      overlay.style.top = Math.max(8, area.top - bounds.top + 8) + 'px';
+      overlay.style.left = Math.max(0, area.left - bounds.left) + 'px';
+      overlay.style.right = Math.max(0, bounds.right - area.right) + 'px';
+    }
+    const searchGeometry = new ResizeObserver(positionSearch);
+    for (const element of [document.getElementById('main-content'), chatMessages, document.getElementById('code-chat-messages'), document.getElementById('babe-chat-messages')]) if (element) searchGeometry.observe(element);
+    window.addEventListener('resize', positionSearch);
+    window.addEventListener('cibyp:appearance-changed', positionSearch);
+    window.addEventListener('cibyp:page-changed', () => { if (isOpen()) close(); });
 
     // 清理所有高亮标记
     function clearMarks() {
@@ -182,6 +196,7 @@
     function open() {
       const wasOpen = !overlay.classList.contains('hidden');
       overlay.classList.remove('hidden');
+      positionSearch();
       if (wasOpen) {
         focusInput(true);
         return;

@@ -117,6 +117,7 @@
     }).then(finished => {
       if (typeof VirtualScroller !== 'undefined') VirtualScroller.markBatchEnd();
       if (!finished) return;
+      if (!conv?.messages?.length && !conv?.subAgents?.length) renderChatWelcome();
       // 重建子代理卡片：子代理聊天记录已持久化到历史，
       // 恢复会话后仍可打开详情模态框查看完整对话。
       if (conv?.subAgents && Array.isArray(conv.subAgents) && conv.subAgents.length > 0) {

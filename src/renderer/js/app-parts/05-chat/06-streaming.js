@@ -156,11 +156,8 @@
         bubble.reasoningEl.classList.remove('collapsed'); // reasoning-only 时默认展开
         bubble.reasoningContentEl.innerHTML = renderMarkdown(reasoning);
       }
+      window.CibypMessages?.bind(bubble.el, {mode:'chat', role:'assistant', content:content});
       bubble.el.classList.remove('streaming');
-      bubble.el.addEventListener('contextmenu', (e) => {
-        e.preventDefault();
-        showMessageContextMenu(e, bubble.el, 'assistant');
-      });
       scrollChatToBottom();
       // 增量推送：更新流式气泡为最终状态
       if (bubble.el.id) {
@@ -180,12 +177,9 @@
       // 即使折叠，也滚到底部，方便用户展开后看到最新内容
       try { bubble.reasoningContentEl.scrollTop = bubble.reasoningContentEl.scrollHeight; } catch (_) {}
     }
-    bubble.el.classList.remove('streaming');
+    window.CibypMessages?.bind(bubble.el, {mode:'chat', role:'assistant', content:content});
+      bubble.el.classList.remove('streaming');
     // Attach context menu like a normal assistant message
-    bubble.el.addEventListener('contextmenu', (e) => {
-      e.preventDefault();
-      showMessageContextMenu(e, bubble.el, 'assistant');
-    });
     scrollChatToBottom();
     // 增量推送：更新流式气泡为最终状态
     if (bubble.el.id) {

@@ -1,4 +1,10 @@
   // ---- Attachment Handling ----
+  function attachmentPreviewCopy(att) {
+    const extension = String(att.name || '').split('.').slice(1).pop()?.slice(0, 12).toUpperCase();
+    const size = Number(att.size);
+    const detail = [extension || t('ui.attachments.file', '文件'), Number.isFinite(size) && size > 0 ? (size >= 1048576 ? (size / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(size / 1024)) + ' KB') : ''].filter(Boolean).join(' · ');
+    return `<span class="attachment-copy"><span class="attachment-name" title="${escapeHtml(att.name)}">${escapeHtml(att.name)}</span><small>${escapeHtml(detail)}</small></span>`;
+  }
   async function chooseAttachmentFiles(button, options = { multiple: true }) {
     const browser = /^https?:$/.test(location.protocol);
     const vm = (await window.api.runtime.getLocation()).location === 'vm';
@@ -86,9 +92,9 @@
     attachmentsPreview.innerHTML = currentAttachments.map((att, i) => `
       <div class="attachment-item" ${att.error ? 'data-failed="true"' : ''}>
         <i class="fa-solid ${att.isImage ? 'fa-image' : 'fa-file'}"></i>
-        <span class="attachment-name">${escapeHtml(att.name)}</span>
+        ${attachmentPreviewCopy(att)}
         ${att.error ? `<span class="attachment-error" title="${escapeHtml(att.error)}"><i class="fa-solid fa-triangle-exclamation"></i></span>` : ''}
-        <button class="btn-icon attachment-remove" data-index="${i}"><i class="fa-solid fa-xmark"></i></button>
+        <button type="button" class="btn-icon attachment-remove" data-index="${i}" aria-label="${escapeHtml(t('ui.attachments.remove', '移除附件'))}"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
       </div>
     `).join('');
     attachmentsPreview.querySelectorAll('.attachment-remove').forEach(btn => {

@@ -24,7 +24,8 @@ function stampReasoning(message, llm) {
   return message;
 }
 
-const ZEN_BASE = 'https://opencode.ai/zen/v1';
+const ZEN_BASE = 'https://opencode.ai/inference/v1';
+const ZEN_INFERENCE_BASE = 'https://opencode.ai/inference';
 const OC_GO_BASE = 'https://opencode.ai/zen/go/v1';
 
 // ---- Reasoning intensity → provider-specific params ----
@@ -222,18 +223,16 @@ function zenModelProviderType(modelId) {
   return 'openai-compat';
 }
 
-// ---- OpenCode Zen 匿名免费池适配（2026-09-19 实测）----
-// 匿名请求（Authorization: Bearer public）只接受“agent 形状”：stream:true + 工具名包含
-// bash/edit/glob/grep/read 五个（仅名字参与校验，schema/描述可用最小占位）。缺任一项均返回
-// 403 FreeTierError。仅对 Zen 免费模型补齐，不以 API Key 判断是否免费。
-const FREE_TIER_CORE_TOOLS = ['bash', 'edit', 'glob', 'grep', 'read'];
-
+// OpenCode v2 core profile (packages/core/src/tool/plugin), verified 2026-10-16.
+// Only Zen free models use these aliases; CIBYP retains execution and permissions.
+const FREE_TIER_CORE_TOOLS = ['shell', 'write', 'read', 'edit', 'glob', 'grep'];
 const FREE_TIER_AGENT_TOOLS = {
-  bash: { type: 'function', function: { name: 'bash', description: '执行 shell 命令；长命令或服务器返回 jobId 后继续运行。用 jobId 查询输出，action=stop 停止，action=list 列出当前会话任务。等待结束不会杀进程，服务器可直接前台启动。', parameters: { type: 'object', properties: { command: { type: 'string', description: '新任务命令，查询时省略' }, jobId: { type: 'string' }, action: { type: 'string', enum: ['poll', 'stop', 'list'] }, yieldMs: { type: 'number', description: '等待毫秒数，上限10000' } } } } },
-  read: { type: 'function', function: { name: 'read', description: '读取文件内容', parameters: { type: 'object', properties: { filePath: { type: 'string' }, offset: { type: 'number' }, limit: { type: 'number' } }, required: ['filePath'] } } },
-  edit: { type: 'function', function: { name: 'edit', description: '按字符串替换编辑文件', parameters: { type: 'object', properties: { filePath: { type: 'string' }, oldString: { type: 'string' }, newString: { type: 'string' }, replaceAll: { type: 'boolean' } }, required: ['filePath', 'oldString', 'newString'] } } },
-  glob: { type: 'function', function: { name: 'glob', description: '按通配符查找文件', parameters: { type: 'object', properties: { pattern: { type: 'string' }, path: { type: 'string' } }, required: ['pattern'] } } },
-  grep: { type: 'function', function: { name: 'grep', description: '在文件内容中检索', parameters: { type: 'object', properties: { pattern: { type: 'string' }, path: { type: 'string' }, include: { type: 'string' } }, required: ['pattern'] } } },
+  shell: { type: 'function', function: { name: 'shell', description: 'Execute a shell command in the workspace. Long commands return a job ID and keep running; use the native CIBYP shell tool to poll or stop. timeout controls the initial wait, capped at 10 seconds; background returns immediately.', parameters: { type: 'object', properties: { command: { type: 'string' }, workdir: { type: 'string' }, timeout: { type: 'integer', minimum: 0 }, background: { type: 'boolean' } }, required: ['command'] } } },
+  write: { type: 'function', function: { name: 'write', description: 'Write a UTF-8 text file. Read existing files before overwriting. CIBYP file permissions apply.', parameters: { type: 'object', properties: { path: { type: 'string' }, content: { type: 'string' } }, required: ['path', 'content'] } } },
+  read: { type: 'function', function: { name: 'read', description: 'Read a text file through CIBYP.', parameters: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] } } },
+  edit: { type: 'function', function: { name: 'edit', description: 'Replace an exact string in a text file.', parameters: { type: 'object', properties: { path: { type: 'string' }, oldString: { type: 'string' }, newString: { type: 'string' }, replaceAll: { type: 'boolean' } }, required: ['path', 'oldString', 'newString'] } } },
+  glob: { type: 'function', function: { name: 'glob', description: 'Find files by glob pattern.', parameters: { type: 'object', properties: { pattern: { type: 'string' }, path: { type: 'string' } }, required: ['pattern'] } } },
+  grep: { type: 'function', function: { name: 'grep', description: 'Search file contents.', parameters: { type: 'object', properties: { pattern: { type: 'string' }, path: { type: 'string' }, include: { type: 'string' } }, required: ['pattern'] } } },
 };
 
 const FREE_TIER_STUB_TOOLS = (() => {
@@ -251,8 +250,8 @@ function isAnonymousZen(llm) {
 }
 
 /**
- * 合并免费池要求的核心工具：调用方已有工具 → 补全缺失项（真实描述）；
- * 无工具的辅助调用（标题/游戏/描述等）→ 注入占位定义，避免模型误用。
+ * 合并免费池 v2 核心工具：调用方已有工具 → 补全缺失项（真实描述）；
+ * 无工具的辅助调用或 Minimal → 注入精简占位定义，避免模型误用。
  */
 function mergeFreeTierTools(tools, minimalMode = false) {
   const list = Array.isArray(tools) ? tools.slice() : [];
@@ -322,20 +321,21 @@ function buildLLMRequest(llm, opts) {
     req = buildOpenAIRequest(llm, buildOpts, reasoningEffort);
   }
 
-  // Free models require streaming with the five compatible core tool names.
+  // Free models use the v2 six-tool profile and streaming.
   if (zenFree) {
     req.body.stream = true;
     if (req.transport === 'openai' && !req.body.stream_options) {
       req.body.stream_options = { include_usage: true };
     }
     req.zenFree = true;
+    req.zenAutoHeaders = llm.autoOpencodeHeaders !== false && !Object.keys(ocHeaders.normalizeHeaderList(llm.customHeaders).headers).some(name => name.toLowerCase() === 'user-agent');
     if (isAnonymousZen(llm)) req.zenAnonymous = true;
   }
 
   // 统一请求头应用（所有种类 API 生效）：
   // 1) 自定义请求头（用户配置，可覆盖任何自动头）；
   // 2) OpenCode 官方头组（URL 命中 opencode.ai 时自动补齐并规范化为官方 ID 形状：
-  //    免费模型 UA 门控、x-opencode-session 格式校验、无 key 时 Authorization: Bearer public）。
+  //    免费模型 UA 门控、x-opencode-session 格式校验、新 inference 匿名时不发送鉴权头）。
   req.headers = ocHeaders.applyProviderHeaders({
     url: req.url,
     headers: req.headers,
@@ -655,13 +655,13 @@ function buildZenRequest(llm, opts, reasoningEffort) {
   const modelId = llm.model;
   const ptype = zenModelProviderType(modelId);
   // Zen uses a shared API key (Bearer). We clone llm and override apiUrl.
-  const zenLlm = { ...llm, apiKey: llm.zenApiKey || llm.apiKey };
+  const zenLlm = { ...llm, apiKey: isAnonymousZen(llm) ? '' : (llm.zenApiKey || llm.apiKey) };
 
   if (ptype === 'anthropic') {
     // Claude / Qwen3.x on Zen use the Anthropic messages API format
     // but with Bearer auth (not x-api-key).
     const req = buildAnthropicRequest(zenLlm, opts, reasoningEffort);
-    req.url = `${ZEN_BASE}/messages`;
+    req.url = `${ZEN_INFERENCE_BASE}/anthropic/v1/messages`;
     // Zen uses Bearer auth even for Anthropic-style endpoints
     req.headers = {
       'anthropic-version': '2023-06-01',
@@ -675,9 +675,9 @@ function buildZenRequest(llm, opts, reasoningEffort) {
     // 注意：Zen /chat/completions 对这类模型返回无意义的 500，
     // 而 /responses 要求 input 为规范 item 数组（见 convertMessagesToResponses）。
     const req = buildResponsesRequest(zenLlm, opts, reasoningEffort);
-    req.url = `${ZEN_BASE}/responses`;
+    req.url = `${ZEN_INFERENCE_BASE}/openai/v1/responses`;
     req.headers = {
-      'Authorization': `Bearer ${zenLlm.apiKey}`,
+      ...(zenLlm.apiKey ? { 'Authorization': `Bearer ${zenLlm.apiKey}` } : {}),
       'Content-Type': 'application/json'
     };
     return req;
@@ -685,7 +685,7 @@ function buildZenRequest(llm, opts, reasoningEffort) {
   // google, openai-compat → use Zen's chat/completions for compatibility
   // (Zen exposes /chat/completions that handles routing internally for non-Anthropic models)
   const req = buildOpenAIRequest(zenLlm, opts, reasoningEffort);
-  req.url = `${ZEN_BASE}/chat/completions`;
+  req.url = `${ZEN_INFERENCE_BASE}/openai/v1/chat/completions`;
   req.headers = { 'Content-Type': 'application/json' };
   if (zenLlm.apiKey) req.headers['Authorization'] = `Bearer ${zenLlm.apiKey}`;
   return req;

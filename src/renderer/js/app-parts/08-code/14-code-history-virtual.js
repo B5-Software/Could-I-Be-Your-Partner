@@ -170,5 +170,5 @@
       window.showMessageModal('请先打开工作区', '提示', 'warning');
       return;
     }
-    window.api.openFileExplorer?.(codeWorkspacePath);
+    window.api.workspaceOpenInExplorer?.(codeWorkspacePath);
   });

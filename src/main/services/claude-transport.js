@@ -78,14 +78,28 @@ async function fetchClaude(accounts, body, options = {}, onRetry = () => {}) {
   let lease,
     query,
     released = false;
+  let releasePromise;
   const release = () => {
+    if (releasePromise) return releasePromise;
     if (released) return;
     released = true;
     clearTimeout(timer);
     options.signal?.removeEventListener('abort', abort);
     releaseRequest();
-    lease?.release();
     query?.close();
+    releasePromise = (async () => {
+      try {
+        await query?.return?.();
+      } finally {
+        await lease?.release();
+      }
+    })().catch(() => {
+      // Never expose token-bearing helper output through the stream error path.
+      accounts.publish?.('claude:credential-error', {
+        message: 'Cannot encrypt Claude credentials; keep the app open and retry',
+      });
+    });
+    return releasePromise;
   };
   try {
     lease = await accounts.lease(body.accountId, controller);
@@ -245,7 +259,7 @@ async function fetchClaude(accounts, body, options = {}, onRetry = () => {}) {
           releaseController: release,
         };
       } finally {
-        release();
+        await release();
       }
     }
     const encoder = new TextEncoder();
@@ -284,7 +298,7 @@ async function fetchClaude(accounts, body, options = {}, onRetry = () => {}) {
       releaseController: release,
     };
   } catch (error) {
-    release();
+    await release();
     return {
       ok: false,
       error: error.message,

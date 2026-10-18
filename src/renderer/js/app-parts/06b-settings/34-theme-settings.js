@@ -14,6 +14,22 @@
     return operation;
   }
 
+  document.getElementById('setting-frontend').addEventListener('change', e => {
+    updateAppearance({ frontend: e.target.value === 'v2' ? 'v2' : 'v1' })
+      .catch(error => { console.error('Appearance:', error); showToast('保存失败', 'error'); });
+  });
+  document.getElementById('setting-content-width').addEventListener('input', e => {
+    const contentWidth = Math.max(720, Math.min(1920, Number(e.target.value) || 1280));
+    document.documentElement.style.setProperty('--chat-content-width', contentWidth + 'px');
+    document.getElementById('setting-content-width-value').textContent = contentWidth + ' px';
+  });
+  document.getElementById('setting-content-width').addEventListener('change', e => {
+    updateAppearance({contentWidth: Number(e.target.value)}).catch(error => showToast(error.message, 'error'));
+  });
+  document.getElementById('setting-ui-density').addEventListener('change', e => {
+    updateAppearance({density: e.target.value}).catch(error => showToast(error.message, 'error'));
+  });
+
   document.querySelectorAll('.theme-mode-btn').forEach(btn => {
     btn.addEventListener('click', async () => {
       const mode = btn.dataset.mode;

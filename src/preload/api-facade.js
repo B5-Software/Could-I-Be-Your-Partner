@@ -242,7 +242,8 @@ function createApiFacade(ipcRenderer) {
     codeSetLastWorkspace: (wsPath) => ipcRenderer.invoke('code:setLastWorkspace', wsPath),
     codeListHistory: (ws) => ipcRenderer.invoke('code:listHistory', ws),
     codeLoadHistory: (ws, id) => ipcRenderer.invoke('code:loadHistory', ws, id),
-    codeSaveHistory: (ws, id, data) => ipcRenderer.invoke('code:saveHistory', ws, id, data),
+    codeSaveHistory: (ws, id, data, options) =>
+      ipcRenderer.invoke('code:saveHistory', ws, id, data, options),
     codeDeleteHistory: (ws, id) => ipcRenderer.invoke('code:deleteHistory', ws, id),
     codeGetFileTree: (dir) => ipcRenderer.invoke('code:getFileTree', dir),
 
@@ -338,6 +339,8 @@ function createApiFacade(ipcRenderer) {
     chatGPTLogout: (id) => ipcRenderer.invoke('chatgpt:logout', id),
     chatGPTModels: () => ipcRenderer.invoke('chatgpt:models'),
     chatGPTLimits: () => ipcRenderer.invoke('chatgpt:limits'),
+    chatGPTImportCodexQuota: () => ipcRenderer.invoke('chatgpt:import-codex-quota'),
+    chatGPTLoginQuota: () => ipcRenderer.invoke('chatgpt:login-quota'),
     chatGPTConsumeReset: (request) => ipcRenderer.invoke('chatgpt:consume-reset', request),
     subscriptionUsage: (options) => ipcRenderer.invoke('subscription:usage', options),
     onChatGPTChanged: (callback) => onChannel('chatgpt:changed', callback),
@@ -482,19 +485,23 @@ function createApiFacade(ipcRenderer) {
     // Chat History
     historyList: () => ipcRenderer.invoke('history:list'),
     historyGet: (id) => ipcRenderer.invoke('history:get', id),
-    historySave: (conv) => ipcRenderer.invoke('history:save', conv),
+    historySave: (conv, options) => ipcRenderer.invoke('history:save', conv, options),
     historyDelete: (id) => ipcRenderer.invoke('history:delete', id),
     historyRename: (id, title) => ipcRenderer.invoke('history:rename', id, title),
 
     // Babe History (独立持久化，含好感度等会话属性)
     babeHistoryList: () => ipcRenderer.invoke('babeHistory:list'),
     babeHistoryGet: (id) => ipcRenderer.invoke('babeHistory:get', id),
-    babeHistorySave: (conv) => ipcRenderer.invoke('babeHistory:save', conv),
+    babeHistorySave: (conv, options) => ipcRenderer.invoke('babeHistory:save', conv, options),
     babeHistoryDelete: (id) => ipcRenderer.invoke('babeHistory:delete', id),
     babeHistoryRename: (id, title) => ipcRenderer.invoke('babeHistory:rename', id, title),
 
     // Workspace
     workspaceCreate: (options) => ipcRenderer.invoke('workspace:create', options),
+    workspaceInspect: (directory) => ipcRenderer.invoke('workspace:inspect', directory),
+    workspaceRename: (directory, name) => ipcRenderer.invoke('workspace:rename', directory, name),
+    workspaceRetain: (directory, hasChat) =>
+      ipcRenderer.invoke('workspace:retain', directory, hasChat),
     workspaceResolve: (directory, options) =>
       ipcRenderer.invoke('workspace:resolve', directory, options),
     workspaceListLocalDirectories: (directory) =>

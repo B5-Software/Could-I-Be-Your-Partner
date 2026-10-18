@@ -6,6 +6,7 @@ const { AccountVault } = require('./account-vault');
 const ISSUER = 'https://auth.openai.com';
 const RESOURCE = 'https://api.openai.com/v1';
 const SCOPES = 'openid profile email offline_access resource.invoke chatgpt.tokens.use.direct';
+const CODEX_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann';
 const random = () => crypto.randomBytes(32).toString('base64url');
 const scopes = (value) =>
   Array.isArray(value)
@@ -20,6 +21,7 @@ const publicAccount = (account) => ({
   label: account.label,
   signedIn: !!account.accessToken,
   planEnabled: scopes(account.scope).includes('chatgpt.tokens.use.direct'),
+  quotaConnected: !!account.codexQuota?.accessToken || !!account.codexAccountId,
 });
 
 async function validateIdToken(token, { clientId, nonce, subject, keys, now = Date.now() }) {
@@ -68,6 +70,7 @@ class ChatGPTAccounts {
     fetchImpl,
     openExternal,
     quotaReader = require('./codex-limits').readCodexLimits,
+    quotaHttpReader = require('./codex-usage-http').readCodexUsageHttp,
     onChange = () => {},
     loginTimeoutMs = 5 * 60 * 1000,
   }) {
@@ -77,6 +80,7 @@ class ChatGPTAccounts {
     this.onChange = onChange;
     this.loginTimeoutMs = loginTimeoutMs;
     this.quotaReader = quotaReader;
+    this.quotaHttpReader = quotaHttpReader;
     this.refreshes = new Map();
     this.controllers = new Map();
     this.pending = null;
@@ -93,6 +97,18 @@ class ChatGPTAccounts {
         };
         if (this.data.version !== 1 || !Array.isArray(this.data.accounts))
           throw new Error('Invalid ChatGPT account store');
+        let migrated = false;
+        for (const account of this.data.accounts) {
+          if (
+            account.codexQuota &&
+            !account.codexQuota.ownedGrant &&
+            account.codexQuota.refreshToken
+          ) {
+            delete account.codexQuota.refreshToken;
+            migrated = true;
+          }
+        }
+        if (migrated) await this.vault.save(this.data);
       })();
     return this.loading;
   }
@@ -188,7 +204,7 @@ class ChatGPTAccounts {
     const jwks = await (await this.request(d.jwks_uri)).json();
     return validateIdToken(token, { ...expected, keys: jwks.keys || [] });
   }
-  async login(accountId) {
+  async login(accountId, { quota = false } = {}) {
     if (this.disposed || this.startingLogin)
       throw new Error('A ChatGPT login is already starting or the application is closing');
     this.startingLogin = true;
@@ -199,12 +215,15 @@ class ChatGPTAccounts {
       this.error = null;
       const selected = accountId ? this.data.accounts.find((a) => a.id === accountId) : null;
       if (accountId && !selected) throw new Error('ChatGPT account not found');
+      if (quota && (!selected?.accessToken || this.data.activeId !== selected.id))
+        throw new Error('Sign in with ChatGPT first');
       const d = await this.discovery();
       await this.vault.save(this.data);
       if (this.disposed || this.loginGeneration !== generation) throw new Error('Login cancelled');
       const pending = {
         id: crypto.randomUUID(),
         selected,
+        quota,
         state: random(),
         nonce: random(),
         verifier: random(),
@@ -213,10 +232,31 @@ class ChatGPTAccounts {
       };
       const server = http.createServer((req, res) => this.callback(req, res, pending));
       pending.server = server;
-      await new Promise((resolve, reject) => {
-        server.once('error', reject);
-        server.listen(0, '127.0.0.1', resolve);
-      });
+      const listen = (port) =>
+        new Promise((resolve, reject) => {
+          const onError = (error) => {
+            server.removeListener('listening', onListening);
+            reject(error);
+          };
+          const onListening = () => {
+            server.removeListener('error', onError);
+            resolve();
+          };
+          server.once('error', onError);
+          server.once('listening', onListening);
+          server.listen(port, '127.0.0.1');
+        });
+      try {
+        await listen(quota ? 1455 : 0);
+      } catch (error) {
+        if (!quota || error.code !== 'EADDRINUSE') throw error;
+        // These are the two loopback redirect ports allowed by Codex OAuth.
+        try {
+          await listen(1457);
+        } catch {
+          throw new Error('Codex login callback ports are busy; finish other logins and retry');
+        }
+      }
       if (this.disposed || this.loginGeneration !== generation) {
         server.close();
         throw new Error('Login cancelled');
@@ -231,24 +271,33 @@ class ChatGPTAccounts {
       );
       pending.timer.unref();
       this.pending = pending;
-      const url = new URL(d.authorization_endpoint);
+      const url = new URL(quota ? ISSUER + '/oauth/authorize' : d.authorization_endpoint);
       const params = {
-        client_id: selected?.clientId || 'dynamic_agent_client',
-        ext_agent_host_id: this.data.hostId,
+        client_id: quota ? CODEX_CLIENT_ID : selected?.clientId || 'dynamic_agent_client',
         response_type: 'code',
         redirect_uri: pending.redirectUri,
-        scope: SCOPES,
-        resource: RESOURCE,
+        scope: quota ? 'openid profile email offline_access' : SCOPES,
         state: pending.state,
-        nonce: pending.nonce,
         code_challenge_method: 'S256',
         code_challenge: crypto.createHash('sha256').update(pending.verifier).digest('base64url'),
       };
-      if (!selected) params.agent_name_hint = 'Could I Be Your Partner';
-      if (selected?.idToken) params.id_token_hint = selected.idToken;
+      if (quota)
+        Object.assign(params, {
+          id_token_add_organizations: 'true',
+          codex_cli_simplified_flow: 'true',
+          originator: 'cibyp',
+        });
+      else
+        Object.assign(params, {
+          ext_agent_host_id: this.data.hostId,
+          resource: RESOURCE,
+          nonce: pending.nonce,
+        });
+      if (!selected && !quota) params.agent_name_hint = 'Could I Be Your Partner';
+      if (selected?.idToken && !quota) params.id_token_hint = selected.idToken;
       if (selected?.email) params.login_hint = selected.email;
       // Missing plan consent can be granted from settings during explicit reauthorization.
-      if (selected && !publicAccount(selected).planEnabled) params.prompt = 'consent';
+      if (selected && !quota && !publicAccount(selected).planEnabled) params.prompt = 'consent';
       url.search = new URLSearchParams(params).toString();
       this.changed();
       try {
@@ -307,18 +356,23 @@ class ChatGPTAccounts {
     pending.stage = 'verifying';
     this.changed();
     try {
-      const clientId = u.searchParams.get('client_id') || pending.selected?.clientId;
+      const callbackClientId = u.searchParams.get('client_id');
+      const clientId = pending.quota
+        ? CODEX_CLIENT_ID
+        : callbackClientId || pending.selected?.clientId;
       const code = u.searchParams.get('code');
       if (
         !code ||
         !clientId ||
         clientId === 'dynamic_agent_client' ||
-        (pending.selected && clientId !== pending.selected.clientId)
+        (pending.quota
+          ? callbackClientId && callbackClientId !== CODEX_CLIENT_ID
+          : pending.selected && clientId !== pending.selected.clientId)
       )
         throw new Error('Incomplete or mismatched ChatGPT registration');
       const d = await this.discovery();
       const tokens = await (
-        await this.request(d.token_endpoint, {
+        await this.request(pending.quota ? ISSUER + '/oauth/token' : d.token_endpoint, {
           method: 'POST',
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
           body: new URLSearchParams({
@@ -327,14 +381,14 @@ class ChatGPTAccounts {
             code,
             code_verifier: pending.verifier,
             redirect_uri: pending.redirectUri,
-            resource: RESOURCE,
+            ...(!pending.quota ? { resource: RESOURCE } : {}),
           }),
           signal: AbortSignal.any([pending.controller.signal, AbortSignal.timeout(20000)]),
         })
       ).json();
       const claims = await this.identity(tokens.id_token, {
         clientId,
-        nonce: pending.nonce,
+        ...(!pending.quota ? { nonce: pending.nonce } : {}),
         subject: pending.selected?.subject,
       });
       if (
@@ -344,6 +398,13 @@ class ChatGPTAccounts {
         tokens.token_type?.toLowerCase() !== 'bearer'
       )
         throw new Error('Invalid ChatGPT credential response');
+      if (pending.quota) {
+        if (!tokens.refresh_token) throw new Error('Invalid Codex quota credential response');
+        await this.storeCodexQuota(tokens, claims, pending.selected.id, true, pending);
+        reply(200, 'Codex usage connected. You can close this page and return to CIBYP.');
+        this.cancelLogin();
+        return;
+      }
       await this.mutate(() => {
         if (this.pending !== pending) throw new Error('Login cancelled');
         const id = crypto
@@ -400,17 +461,23 @@ class ChatGPTAccounts {
     const account = this.data.accounts.find((a) => a.id === (id || this.data.activeId));
     if (!account) return { ok: true, revoked: true };
     this.stopRequests(account.id);
-    const token = account.refreshToken;
-    let revoked = !token;
+    const tokens = [
+      { token: account.refreshToken, clientId: account.clientId },
+      ...(account.codexQuota?.ownedGrant
+        ? [{ token: account.codexQuota.refreshToken, clientId: CODEX_CLIENT_ID }]
+        : []),
+    ].filter((row) => row.token);
+    let revoked = true;
     // Clear credentials before network I/O, so no new inference/refresh can start.
     await this.mutate(() => {
       delete account.accessToken;
       delete account.refreshToken;
       delete account.idToken;
+      delete account.codexQuota;
       account.scope = [];
       if (this.data.activeId === account.id) this.data.activeId = null;
     });
-    if (token) {
+    for (const { token, clientId } of tokens) {
       try {
         const d = await this.discovery();
         if (d.revocation_endpoint) {
@@ -420,12 +487,12 @@ class ChatGPTAccounts {
             body: new URLSearchParams({
               token,
               token_type_hint: 'refresh_token',
-              client_id: account.clientId,
+              client_id: clientId,
             }),
           });
-          revoked = true;
-        }
+        } else revoked = false;
       } catch {
+        revoked = false;
         /* local logout remains effective */
       }
     }
@@ -571,27 +638,143 @@ class ChatGPTAccounts {
       const account = this.data.accounts.find((a) => a.id === id);
       // SIWC's direct plan grant carries opaque auth metadata, not a Codex
       // account ID. It cannot be passed to Codex's external-token quota RPC.
-      const result = !account.codexAccountId
-        ? {
-            ok: true,
-            unavailable: true,
-            source: 'chatgpt-usage',
-            message:
-              'This login provides no readable subscription limits; view and manage usage in ChatGPT',
-            manageUrl: 'https://chatgpt.com/settings/usage',
-          }
-        : await this.quotaReader({
-            token: lease.token,
-            accountId: account.codexAccountId,
-            planType: account.planType,
-            signal: lease.signal,
-          });
+      const result = account.codexQuota?.accessToken
+        ? await this.readConnectedQuota(account, lease.signal)
+        : !account.codexAccountId
+          ? {
+              ok: true,
+              unavailable: true,
+              source: 'chatgpt-usage',
+              message:
+                'This login provides no readable subscription limits; view and manage usage in ChatGPT',
+              manageUrl: 'https://chatgpt.com/settings/usage',
+              connectCodex: true,
+            }
+          : await this.quotaReader({
+              token: lease.token,
+              accountId: account.codexAccountId,
+              planType: account.planType,
+              signal: lease.signal,
+            });
       if (lease.signal.aborted || this.data.activeId !== id)
         throw new Error('ChatGPT account changed');
       this.limitCache = { id, at: Date.now(), value: result };
       return result;
     } finally {
       lease.release();
+    }
+  }
+
+  /** Explicit native file-picker import; never scans another app's credentials. */
+  async importCodexQuota(input, expectedId) {
+    await this.init();
+    const account = this.data.accounts.find((row) => row.id === (expectedId || this.data.activeId));
+    if (!account || account.id !== this.data.activeId) throw new Error('ChatGPT account changed');
+    const tokens = input?.tokens;
+    if (!tokens?.access_token || !tokens.id_token)
+      throw new Error('Select a Codex auth.json created by ChatGPT login');
+    let hint;
+    try {
+      hint = JSON.parse(Buffer.from(tokens.id_token.split('.')[1], 'base64url'));
+    } catch {
+      throw new Error('Invalid Codex identity token');
+    }
+    const clientId = [hint.aud].flat().find((value) => value === CODEX_CLIENT_ID);
+    if (!clientId) throw new Error('This file is not a supported Codex subscription login');
+    const claims = await this.identity(tokens.id_token, { clientId, subject: account.subject });
+    return this.storeCodexQuota(tokens, claims, account.id);
+  }
+
+  async storeCodexQuota(tokens, claims, expectedId, ownedGrant = false, pending) {
+    const auth = claims['https://api.openai.com/auth'];
+    const accountId = auth?.chatgpt_account_id;
+    if (!accountId || (tokens.account_id && tokens.account_id !== accountId))
+      throw new Error('Invalid Codex account identifier');
+    let expiresAt;
+    try {
+      expiresAt =
+        JSON.parse(Buffer.from(tokens.access_token.split('.')[1], 'base64url')).exp * 1000;
+    } catch {}
+    if (!Number.isFinite(expiresAt)) expiresAt = 0;
+    if (ownedGrant && Number.isFinite(tokens.expires_in))
+      expiresAt = Date.now() + tokens.expires_in * 1000;
+    await this.mutate(() => {
+      const account = this.data.accounts.find((row) => row.id === expectedId);
+      if (
+        !account?.accessToken ||
+        account.id !== this.data.activeId ||
+        (pending && this.pending !== pending)
+      )
+        throw new Error('ChatGPT account changed');
+      account.codexQuota = {
+        accessToken: tokens.access_token,
+        ...(ownedGrant ? { refreshToken: tokens.refresh_token } : {}),
+        idToken: tokens.id_token,
+        clientId: CODEX_CLIENT_ID,
+        accountId,
+        expiresAt,
+        ownedGrant,
+      };
+      this.limitCache = null;
+    });
+    return { ok: true };
+  }
+
+  async readConnectedQuota(account, signal, consume) {
+    let connection = account.codexQuota;
+    const renew = async () => {
+      const previous = connection;
+      if (!previous.ownedGrant || !previous.refreshToken)
+        throw new Error('Codex quota authorization expired; reconnect it in account settings');
+      const response = await this.request(ISSUER + '/oauth/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          grant_type: 'refresh_token',
+          client_id: previous.clientId,
+          refresh_token: previous.refreshToken,
+        }),
+        signal,
+      });
+      const tokens = await response.json();
+      if (
+        !tokens.access_token ||
+        !Number.isFinite(tokens.expires_in) ||
+        tokens.expires_in <= 0 ||
+        (tokens.token_type && tokens.token_type.toLowerCase() !== 'bearer')
+      )
+        throw new Error('Invalid renewed Codex quota credentials');
+      if (tokens.id_token)
+        await this.identity(tokens.id_token, {
+          clientId: previous.clientId,
+          subject: account.subject,
+        });
+      await this.mutate(() => {
+        if (account.id !== this.data.activeId || account.codexQuota !== previous)
+          throw new Error('ChatGPT account changed');
+        connection = account.codexQuota = {
+          ...previous,
+          accessToken: tokens.access_token,
+          refreshToken: tokens.refresh_token || previous.refreshToken,
+          idToken: tokens.id_token || previous.idToken,
+          expiresAt: Date.now() + tokens.expires_in * 1000,
+        };
+      });
+    };
+    if (connection.expiresAt < Date.now() + 60000) await renew();
+    const read = () =>
+      this.quotaHttpReader({
+        token: connection.accessToken,
+        accountId: connection.accountId,
+        signal,
+        consume,
+      });
+    try {
+      return await read();
+    } catch (error) {
+      if (error.status !== 401 || consume) throw error;
+      await renew();
+      return read();
     }
   }
   async consumeReset({ accountId, creditId } = {}, confirm) {
@@ -628,13 +811,15 @@ class ChatGPTAccounts {
         const key = accountId + ':' + (creditId || 'next');
         const idempotencyKey = this.resetKeys.get(key) || crypto.randomUUID();
         this.resetKeys.set(key, idempotencyKey);
-        const response = await this.quotaReader({
-          token: lease.token,
-          accountId: account.codexAccountId,
-          planType: account.planType,
-          signal: lease.signal,
-          consume: { idempotencyKey, creditId },
-        });
+        const response = account.codexQuota
+          ? await this.readConnectedQuota(account, lease.signal, { idempotencyKey, creditId })
+          : await this.quotaReader({
+              token: lease.token,
+              accountId: account.codexAccountId,
+              planType: account.planType,
+              signal: lease.signal,
+              consume: { idempotencyKey, creditId },
+            });
         this.limitCache = null;
         if (response.ok && response.redemption) this.resetKeys.delete(key);
         if (lease.signal.aborted || this.data.activeId !== accountId)

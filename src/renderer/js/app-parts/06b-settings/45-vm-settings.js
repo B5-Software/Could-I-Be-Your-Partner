@@ -45,7 +45,7 @@
       const inst = (st && st.inst) || {};
       const label = {
         idle: '未运行', checking: '检查资源', booting: '启动中', preparing: '等待就绪',
-        ready: '已就绪', stopping: '正在关闭', failed: '启动失败'
+        ready: '已就绪', restoring: '正在恢复状态', saving: '正在保存状态', stopping: '正在关闭', failed: '启动失败'
       }[inst.state] || inst.state || '未知';
       const accel = inst.accel ? ` · 加速：${inst.accel}` : '';
       _vmSetText('vm-runtime-status',
@@ -189,6 +189,8 @@
       const wsEl = document.getElementById('setting-runtime-workspace-mode');
       if (locEl) locEl.value = (rt && rt.location) || 'host';
       if (wsEl) wsEl.value = (rt && rt.workspaceMode) || 'shared';
+      const quickResume = document.getElementById('setting-vm-quick-resume');
+      if (quickResume) quickResume.checked = (await readSettings()).runtime?.vm?.quickResume !== false;
 
       const variants = await window.api.vm.variants();
       const sel = document.getElementById('setting-vm-variant');
@@ -254,6 +256,15 @@
 
   document.getElementById('btn-runtime-relaunch')?.addEventListener('click', () => {
     window.api.runtime.relaunch();
+  });
+
+  document.getElementById('setting-vm-quick-resume')?.addEventListener('change', async (event) => {
+    try {
+      await saveSettings({ runtime: { vm: { quickResume: event.target.checked } } });
+    } catch (error) {
+      event.target.checked = !event.target.checked;
+      window.showToast?.(error.message || String(error), 'error');
+    }
   });
 
   document.getElementById('setting-vm-variant')?.addEventListener('change', async (e) => {

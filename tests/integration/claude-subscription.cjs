@@ -180,7 +180,7 @@ ipcMain.once('app:renderer-ready', (event) =>
       const logout = await event.sender.executeJavaScript(
         `window.api.claudeLogout(${JSON.stringify(status.activeId)})`,
       );
-      assert.equal(logout.ok, true);
+      assert.equal(logout.ok, true, logout.error);
       assert.equal(
         (await event.sender.executeJavaScript('window.api.claudeStatus()')).accounts.length,
         0,

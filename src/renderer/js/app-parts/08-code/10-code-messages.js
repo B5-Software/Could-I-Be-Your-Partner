@@ -50,6 +50,8 @@
 
   function addCodeMessage(role, content, track = true, attachments = []) {
     const reasoningDisplay = ReasoningData.presentation(content);
+    const messageId = content?.metadata?.messageId || content?.id;
+    const contextExcluded = content?.metadata?.contextExcluded === true;
     if (content && typeof content === 'object') {
       const display = AttachmentData.presentation({ role, ...content });
       content = display.content; attachments = display.attachments;
@@ -61,6 +63,8 @@
 
     const msg = document.createElement('div');
     msg.className = 'message ' + role;
+    if (messageId) msg.dataset.messageId = messageId;
+    if (contextExcluded) msg.dataset.contextExcluded = 'true';
     const avatarIcon = role === 'assistant' ? 'fa-robot' : (role === 'system' ? 'fa-info-circle' : 'fa-user');
     const avatarHTML = role === 'system' ? `<i class="fa-solid ${avatarIcon}"></i>` : makeFramedAvatarHTML(
       isRemoteMode ? (role === 'assistant' ? remoteAvatars?.ai : remoteAvatars?.user) :
@@ -77,7 +81,9 @@
       </div>`;
     msgsEl.appendChild(msg);
     renderMessageAttachments(msg.querySelector('.message-body'), attachments);
+    if (contextExcluded) { const badge = document.createElement('small'); badge.className = 'message-context-excluded'; badge.textContent = t('ui.messageEdit.excluded','已移出上下文'); msg.querySelector('.message-body').append(badge); }
     if (role === 'assistant') renderMessageReasoning(msg.querySelector('.message-body'), reasoningDisplay);
+    window.CibypMessages?.bind(msg, {mode:'code', role, content});
     // 增量推送：Code 消息追加到 WebUI
     WebUIMirror.pushDomEvent({ type: 'dom_append', container: '#code-chat-messages', html: msg.outerHTML });
     scrollChatToBottom(msgsEl);

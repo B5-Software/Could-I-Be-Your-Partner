@@ -2362,13 +2362,13 @@ test('buildLLMRequest opencode-zen: free 模型 public key + 会话头（UA 由�
     { provider: 'opencode-zen', zenApiKey: 'public', model: 'deepseek-v4-flash-free', temperature: 0.5,
       customHeaders: [{ name: 'User-Agent', value: 'opencode/1.18.31' }] },
     { messages: [{ role: 'user', content: 'hi' }], sessionKey: 'sess_z' });
-  assert.strictEqual(req.url, 'https://opencode.ai/zen/v1/chat/completions');
-  assert.strictEqual(req.headers['Authorization'], 'Bearer public');
+  assert.strictEqual(req.url, 'https://opencode.ai/inference/openai/v1/chat/completions');
+  assert.strictEqual(req.headers['Authorization'], undefined);
   assert.strictEqual(req.headers['User-Agent'], 'opencode/1.18.31');
   assert.strictEqual(req.headers['x-opencode-session'], ocHeadersMod.canonicalizeSessionId('sess_z'));
 });
 
-test('buildLLMRequest opencode-zen: 匿名 public 强制 agent 形状（stream + 5 核心工具名）', () => {
+test('buildLLMRequest opencode-zen: 匿名 public 强制 agent 形状（stream + v2 六核心工具名）', () => {
   const req = llmProvidersMod.buildLLMRequest(
     { provider: 'opencode-zen', zenApiKey: 'public', model: 'big-pickle' },
     { messages: [{ role: 'user', content: 'hi' }], stream: false, sessionKey: 'sess_a' });
@@ -2443,14 +2443,14 @@ testAsync('refreshOpenCodeVersion: 成功缓存 / 非法响应回退默认', asy
     loadFn: async () => saved,
     saveFn: async (version, fetchedAt) => { saved = { version, fetchedAt }; }
   });
-  const okResp = { ok: true, json: async () => ({ version: '9.9.9-test' }) };
+  const okResp = { ok: true, json: async () => ({ version: '2.9.9-test' }) };
   const v = await ocHeadersMod.refreshOpenCodeVersion(() => okResp);
-  assert.strictEqual(v, '9.9.9-test');
-  assert.strictEqual(ocHeadersMod.getOpenCodeVersion(), '9.9.9-test');
+  assert.strictEqual(v, '2.9.9-test');
+  assert.strictEqual(ocHeadersMod.getOpenCodeVersion(), '2.9.9-test');
   // 非法响应 → 不更新（缓存新鲜直接跳过）
   const v2 = await ocHeadersMod.refreshOpenCodeVersion(() => ({ ok: true, json: async () => ({}) }));
   assert.strictEqual(v2, null);
-  assert.strictEqual(ocHeadersMod.getOpenCodeVersion(), '9.9.9-test');
+  assert.strictEqual(ocHeadersMod.getOpenCodeVersion(), '2.9.9-test');
 });
 
 // ---- 生图多厂商适配（image-gen）----
@@ -2886,7 +2886,7 @@ test('消息右键菜单：朗读（清空当前朗读队列并朗读）', () =>
   assert.ok(chatUiContent.includes("function getMessagePlainText(messageElement)"), '缺消息正文提取 helper');
   assert.ok(chatUiContent.includes("function makeMenuEntry(icon, label, color)"), '缺右键菜单条目 helper');
   assert.ok(chatUiContent.includes("makeMenuEntry('fa-volume-high', '朗读')"), '右键菜单缺「朗读」项');
-  assert.ok(chatUiContent.includes("menu.append(speakItem, menuItem)"), '朗读项未加入菜单');
+  assert.ok(/menu\.append\(speakItem\s*,/.test(chatUiContent), '朗读项未加入菜单');
   assert.ok(/window\.VoiceUI\.speakText\(text\)/.test(chatUiContent), '朗读未调用 VoiceUI.speakText');
   assert.ok(/ttsEnabled === false[\s\S]*?showToast/.test(chatUiContent), 'TTS 关闭时缺提示');
   assert.ok(/reasoning-section, \.tool-call, \.message-time/.test(chatUiContent), '提取文本未排除推理/工具调用/时间戳');

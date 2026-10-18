@@ -217,6 +217,7 @@ const vmService = new VmService({
   getSystemDark: () => nativeTheme.shouldUseDarkColors,
   persistSettings: () => { try { saveJSON(settingsPath, settings); } catch (_) {} },
   aria2: aria2Manager,
+  safeStorage,
 });
 const toolDialog = require('./vm/vm-file-dialog').createVmFileDialog({ ipcMain, dialog, getVmService: () => vmService, getTheme: () => settings.theme, getMainWindow: () => mainWindow });
 const toolFiles = require('./vm/tool-files').createToolFiles({ fs, getVmService: () => vmService });
@@ -1666,6 +1667,7 @@ app.whenReady().then(async () => {
   // 同步 FediKitten 服务代理（主进程 fetch 使用 undici dispatcher）
   try { fedikittenService.refreshProxy(settings.proxy); } catch (e) { /* 直连回退 */ }
   // OpenCode UA 版本：注入 settings 缓存读写器并后台刷新（走代理，失败静默）
+  ocHeaders.setOpenCodeSessionStore(path.join(dataDir, 'opencode-sessions.json'));
   ocHeaders.setOpenCodeVersionStore({
     loadFn: async () => {
       const v = settings.llm.opencodeVersion;
@@ -2983,9 +2985,7 @@ const webResearch = new (require('./services/web-research').WebResearch)({
   getSettings: () => settings, vmService, vmActive: vmLocationActive,
   bingSearch: async (query, options) => {
     const url = `https://www.bing.com/search?q=${encodeURIComponent(query)}&setlang=${encodeURIComponent(settings.language || 'zh-CN')}&count=30`;
-    let result;
-    if (vmLocationActive()) result = await pwService.renderVm({ url, waitMs: 2000, captureScreenshot: false });
-    else result = await withOffscreenWindow({ width: 1200, height: 800, show: false,
+    const result = await withOffscreenWindow({ width: 1200, height: 800, show: false,
       webPreferences: { offscreen: true, contextIsolation: true, sandbox: true, nodeIntegration: false } }, async win => {
       await win.webContents.loadURL(url, { userAgent: OFFSCREEN_UA });
       return win.webContents.executeJavaScript(`Array.from(document.querySelectorAll('li.b_algo')).map(node => ({ title: node.querySelector('h2 a')?.textContent?.trim() || '', url: node.querySelector('h2 a')?.href || '', snippet: node.querySelector('.b_caption p, p')?.textContent?.trim() || '' }))`);
@@ -3292,13 +3292,15 @@ ipcMain.handle('skill-editor:getSkill', (_, id) => {
 const claudeAccounts = require('./ipc/claude')({ ipcMain, dataDir, publishEvent });
 const pluginModels = require('./ds-compat/model-transport').createPluginModels(() => pluginManager.host);
 ipcMain.handle('llm:pluginProviders', async () => ({ ok: true, providers: await pluginModels.providers() }));
-app.on('before-quit', () => claudeAccounts.dispose());
+app.whenReady().then(() => claudeAccounts.init()).catch(error => console.error('[claude] Credential migration failed:', error.message));
+app.on('before-quit', () => { claudeAccounts.dispose().catch(error => console.error('[claude] Credential cleanup failed:', error.message)); });
 const chatGPTAccounts = new (require('./services/chatgpt-accounts').ChatGPTAccounts)({
   file: path.join(dataDir, 'chatgpt-accounts.vault'),
   openExternal: url => shell.openExternal(url),
   onChange: state => publishEvent('chatgpt:changed', state),
 });
 app.on('before-quit', () => chatGPTAccounts.dispose());
+app.whenReady().then(() => chatGPTAccounts.init()).catch(error => console.error('[chatgpt] Credential migration failed:', error.message));
 for (const [operation, handler] of Object.entries({
   status: () => chatGPTAccounts.status(), login: id => chatGPTAccounts.login(id),
   cancel: () => { chatGPTAccounts.cancelLogin(); return { ok: true }; },
@@ -3308,6 +3310,35 @@ for (const [operation, handler] of Object.entries({
   try { return await handler(arg); } catch (error) { return { ok: false, error: error.message }; }
 });
 // Reset credits are deliberately absent from Agent tools and remote APIs.
+ipcMain.handle('chatgpt:login-quota', async event => {
+  if (!mainWindow || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents)
+    return { ok: false, error: 'Import Codex quota credentials from the desktop app' };
+  try {
+    const accountId = (await chatGPTAccounts.status()).activeId;
+    if (!accountId) throw new Error('Sign in with ChatGPT first');
+    return await chatGPTAccounts.login(accountId, { quota: true });
+  } catch (error) { return { ok: false, error: error.message }; }
+});
+ipcMain.handle('chatgpt:import-codex-quota', async (event) => {
+  if (!mainWindow || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents)
+    return { ok: false, error: 'Import Codex quota credentials from the desktop app' };
+  try {
+    const accountId = (await chatGPTAccounts.status()).activeId;
+    if (!accountId) throw new Error('Sign in with ChatGPT first');
+    const chosen = await dialog.showOpenDialog(mainWindow, {
+      title: '选择同一 ChatGPT 账号的 Codex auth.json（仅用于读取订阅用量）',
+      properties: ['openFile'], filters: [{ name: 'Codex auth.json', extensions: ['json'] }],
+      defaultPath: path.join(app.getPath('home'), '.codex', 'auth.json'),
+    });
+    if (chosen.canceled || !chosen.filePaths[0]) return { ok: true, cancelled: true };
+    const stat = await fs.promises.stat(chosen.filePaths[0]);
+    if (!stat.isFile() || stat.size > 1024 * 1024) throw new Error('Invalid Codex credential file');
+    let input;
+    try { input = JSON.parse(await fs.promises.readFile(chosen.filePaths[0], 'utf8')); }
+    catch { throw new Error('Invalid Codex credential file'); }
+    return await chatGPTAccounts.importCodexQuota(input, accountId);
+  } catch (error) { return { ok: false, error: error.message }; }
+});
 ipcMain.handle('chatgpt:consume-reset', async (event, request) => {
   if (!mainWindow || mainWindow.isDestroyed() || event.sender !== mainWindow.webContents) return { ok: false, error: 'Open account settings in the desktop app to use a reset credit' };
   try {
@@ -3861,12 +3892,12 @@ ipcMain.handle('babeHistory:get', (_, id) => {
   return _rehydrateHistoryImages(loadJSON(p, null));
 });
 
-ipcMain.handle('babeHistory:save', (_, conversation) => {
+ipcMain.handle('babeHistory:save', (_, conversation, options) => {
   if (!conversation || !conversation.id) return { ok: false, error: 'invalid conversation' };
   conversation.updatedAt = new Date().toISOString();
   if (!conversation.createdAt) conversation.createdAt = new Date().toISOString();
   _externalizeHistoryImages(conversation);
-  queueHistorySave('babe:' + conversation.id, dataPath(babeHistoryDir, conversation.id, '.json'), conversation);
+  queueHistorySave('babe:' + conversation.id, dataPath(babeHistoryDir, conversation.id, '.json'), conversation, options);
   _putHistoryIndexEntry(_historyIndexFile('babe', babeHistoryDir), conversation.id, _babeHistoryMeta(conversation.id, conversation));
   return { ok: true, queued: true };
 });
@@ -3895,7 +3926,7 @@ ipcMain.handle('babeHistory:rename', (_, id, title) => {
   return { ok: false };
 });
 
-const { getCodeHistoryDir } = require('./ipc/workspaces')({
+const { getCodeHistoryDir, workspaceLifecycle } = require('./ipc/workspaces')({
   ipcMain,
   dialog,
   getMainWindow: () => mainWindow,
@@ -3905,6 +3936,8 @@ const { getCodeHistoryDir } = require('./ipc/workspaces')({
   getSettings: () => settings,
   vmService,
   workspacesBaseDir,
+  activeWorkspaces: () => agentRuntime?.listSessions().map(session => session.workspacePath).filter(Boolean) || [],
+  busyWorkspaces: () => agentRuntime?.listSessions().filter(session => session.busy).map(session => session.workspacePath).filter(Boolean) || [],
   scheduleSettingsPersist,
   shell,
   persistSettings,
@@ -4630,11 +4663,13 @@ app.on('before-quit', (event) => {
     try { saveCibypImState(true); } catch { /* ignore */ }
     try { await shellJobs.dispose(); } catch (error) { console.error('[shell] Exit cleanup failed:', error); }
     try { await mcpService.stopAllMcpServers(); } catch (error) { console.error('[mcp] Exit cleanup failed:', error); }
-    // 虚拟机沙盒：退出时优雅关机（默认开启；上限 10s 避免拖住退出）
+    try { await workspaceLifecycle.cleanup({ shutdown: true }); } catch (error) { console.error('[workspaces] Exit cleanup failed:', error); }
+    try { await claudeAccounts.dispose(); } catch (error) { console.error('[claude] Credential cleanup failed:', error.message); }
+    // 等待状态保存完成；正常关机的兜底等待为 10s。
     try {
       const vmCfg = (settings.runtime || {}).vm || {};
       if (vmService.instance && vmCfg.shutdownOnExit !== false) {
-        await vmService.instance.stop({ timeoutMs: 10000 }).catch(() => {});
+        await vmService.stop({ timeoutMs: 10000 }).catch(error => console.error('[vm] Exit cleanup failed:', error));
       }
     } catch { /* ignore */ }
     if (webControlService.running) {

@@ -891,18 +891,13 @@ ipcMain.handle('shell:openBrowser', async (_, url) => {
     return { ok: false, error: e.message };
   }
 });
-ipcMain.handle('shell:openFileExplorer', async (_, p) => {
+ipcMain.handle('shell:openFileExplorer', async (event, p) => {
   try {
     if (!p) return { ok: false, error: '路径为空' };
     // VM 模式：先把 VM 内的最新改动拉回宿主镜像，再打开宿主镜像（资源管理器无法直接浏览 VM 文件）
     const g = vmComputer();
     if (g) {
-      const svc = typeof getVmService === 'function' ? getVmService() : null;
-      const io = new (require('./vm/vm-fs').VmFs)({ vmService: svc });
-      const target = io.resolveVmPath(p);
-      if (!target.ok) return target;
-      await g.start();
-      return svc.instance.exec(`${g._wlEnv()} cibyp-files ${require('./vm/vm-paths').shellQuote(target.vm)} >/dev/null 2>&1 &`);
+      return await originalIpc.invokeLocal('workspace:openInExplorer', event, p);
     }
     // 区分文件和目录：文件用 showItemInFolder 在资源管理器中定位并选中，
     // 目录用 openPath 直接打开。
@@ -917,7 +912,7 @@ ipcMain.handle('shell:openFileExplorer', async (_, p) => {
     if (isFile) {
       shell.showItemInFolder(p);
     } else {
-      shell.openPath(p);
+      return await require('./services/open-directory').openDirectory(p);
     }
     return { ok: true };
   } catch (e) {

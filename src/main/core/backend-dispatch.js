@@ -46,6 +46,8 @@ function createBackendDispatch({
     'stop',
     'undo',
     'deleteTurn',
+    'getMessageEditPlan',
+    'editMessages',
     'close',
     'respond',
     'answerQuestions',
@@ -62,6 +64,9 @@ function createBackendDispatch({
     'initialize',
     'agentAction',
     'configureSession',
+    'getSessionModels',
+    'selectSessionModel',
+    'setSessionReasoning',
     'prepareWorkspace',
     'uploadAttachment',
   ]);

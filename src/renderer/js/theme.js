@@ -137,6 +137,21 @@ const ThemeManager = {
 
   apply(theme) {
     const { mode, accentColor, backgroundColor } = theme;
+    const frontend = theme.frontend === 'v2' ? 'v2' : 'v1';
+    document.documentElement.dataset.frontend = frontend;
+    const contentWidth = Math.max(720, Math.min(1920, Number(theme.contentWidth) || 1280));
+    document.documentElement.style.setProperty('--chat-content-width', contentWidth + 'px');
+    document.documentElement.dataset.density = ['compact', 'comfortable', 'spacious'].includes(theme.density) ? theme.density : 'compact';
+    const widthControl = document.getElementById('setting-content-width');
+    if (widthControl && document.activeElement !== widthControl) widthControl.value = contentWidth;
+    const widthOutput = document.getElementById('setting-content-width-value');
+    if (widthOutput) widthOutput.textContent = contentWidth + ' px';
+    const densityControl = document.getElementById('setting-ui-density');
+    if (densityControl) densityControl.value = document.documentElement.dataset.density;
+    try { localStorage.setItem('cibyp.frontend', frontend); } catch {}
+    const selector = document.getElementById('setting-frontend');
+    if (selector) selector.value = frontend;
+    window.dispatchEvent(new CustomEvent('cibyp:appearance-changed', { detail: { frontend } }));
     document.documentElement.dataset.focusOutlines = theme.focusOutlines === false ? 'off' : 'on';
     
     // Set theme mode

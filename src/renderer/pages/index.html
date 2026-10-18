@@ -40,6 +40,11 @@
   <link rel="stylesheet" href="../css/motion.css">
   <link rel="stylesheet" href="../css/focus.css">
   <script defer src="../js/motion-policy.js"></script>
+  <link rel="stylesheet" href="../css/frontend-v2.css">
+  <script>
+    // A paint hint only; shared backend settings are authoritative after bootstrap.
+    try { document.documentElement.dataset.frontend = localStorage.getItem('cibyp.frontend') === 'v2' ? 'v2' : 'v1'; } catch {}
+  </script>
 </head>
 <body>
   <!-- Custom Titlebar -->
@@ -1014,6 +1019,8 @@
     <button class="btn-secondary" id="btn-chatgpt-use">添加并设为默认</button>
     <button class="btn-secondary" id="btn-chatgpt-logout">注销账号</button>
     <button class="btn-secondary" id="btn-chatgpt-limits">刷新订阅额度</button>
+    <button class="btn-secondary" id="btn-chatgpt-codex-quota">连接 Codex 用量…</button>
+    <button class="btn-secondary" id="btn-chatgpt-import-quota">导入 Codex 用量…</button>
     <button class="btn-secondary" id="btn-chatgpt-usage">ChatGPT 用量管理</button>
   </div>
   <p class="setting-hint" id="chatgpt-account-status" role="status" aria-live="polite"></p>
@@ -1615,6 +1622,23 @@
             <div class="settings-panel" data-tab="theme">
               <div class="settings-group">
                 <h3><i class="fa-solid fa-palette"></i> 外观</h3>
+                <div class="setting-item">
+                  <label for="setting-frontend" data-i18n="ui.frontend.interface">界面风格</label>
+                  <select id="setting-frontend" data-setting="theme.frontend">
+                    <option value="v1" data-i18n="ui.frontend.v1">青春</option>
+                    <option value="v2" data-i18n="ui.frontend.v2">专业</option>
+                  </select>
+                  <p class="setting-hint" data-i18n="ui.frontend.hint">立即切换布局，保留当前会话、任务、草稿与工作区。两套界面共用全部功能和设置。</p>
+                </div>
+                <div class="setting-item">
+                  <label for="setting-content-width" data-i18n="ui.frontend.contentWidth">聊天内容宽度</label>
+                  <div class="appearance-width-control"><input id="setting-content-width" type="range" min="720" max="1920" step="40" value="1280" data-setting="theme.contentWidth"><output id="setting-content-width-value" for="setting-content-width">1280 px</output></div>
+                  <p class="setting-hint" data-i18n="ui.frontend.widthHint">专业布局的消息、工具卡片和输入区共用此宽度；小窗口自动适配。</p>
+                </div>
+                <div class="setting-item">
+                  <label for="setting-ui-density" data-i18n="ui.frontend.density">信息密度</label>
+                  <select id="setting-ui-density" data-setting="theme.density"><option value="compact" data-i18n="ui.frontend.compact">紧凑</option><option value="comfortable" data-i18n="ui.frontend.comfortable">舒适</option><option value="spacious" data-i18n="ui.frontend.spacious">宽松</option></select>
+                </div>
                 <div class="setting-item">
                   <label for="setting-focus-outlines">全局焦点描边</label>
                   <div class="toggle-switch"><input type="checkbox" id="setting-focus-outlines" checked><span class="toggle-slider"></span></div>
@@ -2855,6 +2879,11 @@
                     <button class="btn-secondary btn-sm" id="btn-vm-file-manager"><i class="fa-solid fa-folder-tree"></i> <span data-i18n="ui.vmFiles.title">虚拟机文件管理器</span></button>
                   </div>
                   <pre id="vm-serial-tail" style="display:none;margin-top:8px;max-height:140px;overflow:auto;font-size:10.5px;line-height:1.4;background:var(--bg-tertiary,#111);padding:8px;border-radius:6px;color:var(--text-tertiary)"></pre>
+                </div>
+                <div class="setting-item">
+                  <label class="setting-label" for="setting-vm-quick-resume">VM 快速启停</label>
+                  <div class="toggle-switch"><input type="checkbox" id="setting-vm-quick-resume" data-setting="runtime.vm.quickResume" checked><span class="toggle-slider"></span></div>
+                  <p class="setting-hint">默认开启。停止或退出时保存内存与设备状态，下次直接恢复；首次启动、配置变化或恢复失败时正常开机。保存状态占用额外磁盘空间，所需时间取决于内存大小与磁盘速度。</p>
                 </div>
                 <div class="setting-item">
                   <label class="setting-label">镜像变体</label>

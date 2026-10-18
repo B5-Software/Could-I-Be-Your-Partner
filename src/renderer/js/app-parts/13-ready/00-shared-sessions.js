@@ -30,7 +30,14 @@
       if (event.type === 'session-created' && event.session?.profile !== 'settings-assistant') synchronizeBackendSessions().catch(console.error);
       if (event.type === 'session-closed') {
         const local = sessionManager.get(event.key);
-        if (local) sessionManager.close(local);
+        if (local) {
+          const wasActive = sessionManager.getActive(local.mode) === local;
+          sessionManager.close(local, { backendClosed: true });
+          if (wasActive) {
+            const next = sessionManager.list(local.mode).at(-1);
+            (next ? activateSession(local.mode, next.key) : createNewSession(local.mode)).catch(console.error);
+          }
+        }
       }
     });
   }

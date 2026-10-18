@@ -329,7 +329,7 @@ class ContextManager {
     this._transientSources.clear();
     this.invalidateRealBasis();
     const arr = Array.isArray(messages) ? messages.map(msg => ({ ...msg, metadata: { ...msg.metadata, messageId: msg.metadata?.messageId || `msg-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}` } })) : [];
-    this.messages = arr.filter(msg => msg?.metadata?.kind !== 'context-update');
+    this.messages = arr.filter(msg => msg?.metadata?.kind !== 'context-update' && msg?.metadata?.contextExcluded !== true);
     this._admittedSources = null;
     this.historyMessages = arr.slice(); // 历史记录独立持有一份引用
     this.pinnedMessages = [];
@@ -344,7 +344,7 @@ class ContextManager {
     this.toolSchemaTokens = 0;
     if (workingState?.version === 1 && Array.isArray(workingState.entries)) {
       const history = new Map(arr.map(m => [m.metadata.messageId, m]));
-      this.messages = workingState.entries.map(entry => entry.historyId ? history.get(entry.historyId) : entry.message).filter(m => m && typeof m.role === 'string');
+      this.messages = workingState.entries.map(entry => entry.historyId ? history.get(entry.historyId) : entry.message).filter(m => m && typeof m.role === 'string' && m.metadata?.contextExcluded !== true);
       this.summaries = Array.isArray(workingState.summaries) ? workingState.summaries : [];
       this.compactBoundaries = Array.isArray(workingState.boundaries) ? workingState.boundaries : [];
       this.checkpointCount = Number(workingState.checkpointCount) || 0;
@@ -371,18 +371,25 @@ class ContextManager {
     };
   }
 
-  removeHistoryMessages(ids) {
+  removeHistoryMessages(ids, { keepHistory = false } = {}) {
     const removed = new Set(ids);
     const inSummary = this.messages.some(m => m.metadata?.compactedIds?.some(id => removed.has(id)));
-    this.historyMessages = this.historyMessages.filter(m => !removed.has(m.metadata?.messageId));
-    const retained = this.messages.filter(m => !removed.has(m.metadata?.messageId));
-    const remap = indices => new Set([...indices].map(i => retained.indexOf(this.messages[i])).filter(i => i >= 0));
+    this.historyMessages = keepHistory
+      ? this.historyMessages.map(m => removed.has(m.metadata?.messageId) ? {...m, metadata: {...m.metadata, contextExcluded: true}} : m)
+      : this.historyMessages.filter(m => !removed.has(m.metadata?.messageId));
+    const old = this.messages, retained = [], positions = new Map();
+    let removedUpdate = false;
+    old.forEach((message, index) => {
+      if (removed.has(message.metadata?.messageId)) { if (message.metadata?.kind === 'context-update') removedUpdate = true; return; }
+      positions.set(index, retained.length); retained.push(message);
+    });
+    const remap = indices => new Set([...indices].filter(i => positions.has(i)).map(i => positions.get(i)));
     this.checkpointIndexes = remap(this.checkpointIndexes);
     this.prunedIndexes = remap(this.prunedIndexes);
     this.pinnedMessages = [...remap(this.pinnedMessages)];
     this.messages = retained;
-    if (!this.messages.some(m => m.metadata?.kind === 'context-update')) this._admittedSources = null;
-    this.invalidateRealBasis();
+    if (removedUpdate) this._admittedSources = null;
+    if (old.length !== retained.length) this.invalidateRealBasis();
     return { ok: true, removedFromSummary: false, retainedInSummary: inSummary };
   }
 

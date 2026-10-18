@@ -59,9 +59,15 @@ class AccountVault {
       if (saved.protection === 'dpapi')
         return JSON.parse((await dpapi(Buffer.from(saved.data, 'base64'), true)).toString('utf8'));
       if (this.codec) return this.codec.decode(saved);
+      if (saved.protection === 'safe-storage') {
+        const storage = secureStorage();
+        return JSON.parse(storage.decryptString(Buffer.from(saved.data, 'base64')));
+      }
       if (saved.protection !== 'owner-only' || process.platform === 'win32')
         throw new Error('Invalid credential vault');
       await fs.chmod(this.file, 0o600);
+      // Upgrade older POSIX owner-only stores. Never keep plaintext as a fallback.
+      await this.save(saved.data);
       return saved.data;
     } catch (error) {
       if (error.code === 'ENOENT') return null;
@@ -80,7 +86,10 @@ class AccountVault {
             protection: 'dpapi',
             data: (await dpapi(Buffer.from(JSON.stringify(data)))).toString('base64'),
           }
-        : { protection: 'owner-only', data };
+        : {
+            protection: 'safe-storage',
+            data: secureStorage().encryptString(JSON.stringify(data)).toString('base64'),
+          };
     const temporary = this.file + '.' + crypto.randomUUID() + '.tmp';
     try {
       await fs.writeFile(temporary, JSON.stringify(saved), { flag: 'wx', mode: 0o600 });
@@ -89,5 +98,19 @@ class AccountVault {
       await fs.rm(temporary, { force: true });
     }
   }
+}
+
+function secureStorage() {
+  let storage;
+  try {
+    storage = require('electron').safeStorage;
+  } catch {
+    /* Node-only host */
+  }
+  if (!storage?.isEncryptionAvailable() || storage.getSelectedStorageBackend?.() === 'basic_text')
+    throw new Error(
+      'OS credential encryption is unavailable. Enable the system keyring and sign in from the desktop app',
+    );
+  return storage;
 }
 module.exports = { AccountVault, dpapi };

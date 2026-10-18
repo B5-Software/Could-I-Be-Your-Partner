@@ -1,6 +1,6 @@
 {
   "name": "could-i-be-your-partner",
-  "version": "1.9.0-alpha.25",
+  "version": "1.9.0-alpha.26",
   "description": "全自动AI Agent，帮助完成一切任务",
   "license": "GPL-3.0-or-later",
   "main": "src/main/main.js",
@@ -59,7 +59,11 @@
     "webui": "node bin/cibyp-webui.js",
     "test:backend": "npm run build-app-bundle && node --test tests/unit/backend-server.test.cjs && electron tests/integration/shared-backend.cjs",
     "test:ds-thirdparty": "npm run build-app-bundle && node scripts/test-ds-thirdparty.cjs",
-    "test:ds-vm": "npm run build-app-bundle && node tests/integration/deepseek-vm.cjs"
+    "test:ds-vm": "npm run build-app-bundle && node tests/integration/deepseek-vm.cjs",
+    "test:zen": "node scripts/test-opencode-free.cjs",
+    "test:frontend": "npm run build-app-bundle && electron tests/integration/frontend-shell.cjs",
+    "test:frontend:native": "npm run prepare:codeoss && npm run build-app-bundle && electron tests/integration/frontend-shell.cjs --native-codeoss",
+    "test:backend:v2": "npm run build-app-bundle && electron tests/integration/shared-backend.cjs --v2"
   },
   "author": {
     "name": "B5-Software",

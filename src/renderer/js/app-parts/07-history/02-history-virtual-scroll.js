@@ -198,7 +198,7 @@
     } else if (action === 'open-workspace') {
       const conv = await window.api.historyGet(id);
       if (conv?.workspacePath) {
-        window.api.openFileExplorer(conv.workspacePath);
+        window.api.workspaceOpenInExplorer(conv.workspacePath);
       } else {
         alert('该对话没有记录工作目录');
       }
@@ -212,7 +212,7 @@
       const confirmed = await window.confirmDialog(`确定删除"${String(titleForConfirm).slice(0, 40)}"吗？此操作不可恢复。`, '删除确认');
       if (!confirmed) return;
       await (window.CibypBackendViews?.request('deleteHistory', 'chat', id) || window.api.historyDelete(id));
-      if (agent.conversationId === id) {
+        if (!window.CibypBackendViews && agent.conversationId === id) {
         agent.newConversation();
         clearChatMessagesUI();
         setTitlebarTitle('未命名对话');

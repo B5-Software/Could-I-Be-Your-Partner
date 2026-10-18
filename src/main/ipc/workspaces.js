@@ -28,9 +28,47 @@ module.exports = function registerWorkspacesIpc({
   _deleteHistoryImages,
   hasDesktop = () => require('../core/graphical-environment').hasGraphicalEnvironment(),
   openDirectory = (directory) => require('../services/open-directory').openDirectory(directory),
+  activeWorkspaces = () => [],
+  busyWorkspaces = () => [],
+  lifecycleFile,
+  historyDirectories,
 }) {
+  const { WorkspaceLifecycle } = require('../services/workspace-lifecycle');
+  const workspaceLifecycle = new WorkspaceLifecycle({
+    root: workspacesBaseDir,
+    file:
+      lifecycleFile || (app ? path.join(app.getPath('userData'), 'data', 'workspaces.json') : null),
+    vmService,
+    activePaths: activeWorkspaces,
+    busyPaths: busyWorkspaces,
+  });
+  const startupCleanup = (async () => {
+    const data = app ? path.join(app.getPath('userData'), 'data') : null;
+    if (historyDirectories || data)
+      await workspaceLifecycle.adoptLegacy(
+        historyDirectories ||
+          ['history', 'babe-history', 'code-history'].map((name) => path.join(data, name)),
+      );
+    await workspaceLifecycle.cleanup();
+  })().catch((error) => console.warn('[workspaces] cleanup:', error.message));
+  let vmCleaned = false;
+  for (const [channel, action] of [
+    ['workspace:inspect', 'inspect'],
+    ['workspace:rename', 'rename'],
+    ['workspace:retain', 'retain'],
+  ]) {
+    ipcMain.handle(channel, async (_, ...args) => {
+      try {
+        return await workspaceLifecycle[action](...args);
+      } catch (error) {
+        return { ok: false, error: error.message };
+      }
+    });
+  }
   ipcMain.handle('workspace:resolve', async (_, directory, options = {}) => {
     try {
+      await startupCleanup;
+      let created = false;
       if (!directory) {
         directory = path.join(
           workspacesBaseDir,
@@ -38,6 +76,7 @@ module.exports = function registerWorkspacesIpc({
         );
         await fs.promises.mkdir(directory, { recursive: true });
         options = { local: true };
+        created = true;
       }
       const target = await require('../services/workspace-target').resolveWorkspaceTarget(
         vmService,
@@ -47,6 +86,7 @@ module.exports = function registerWorkspacesIpc({
       if (target.location === 'vm') {
         await vmService.prepareTerminalDirectory(target.hostPath || target.path);
       }
+      if (created) workspaceLifecycle.register(target.path, target.location, target.hostPath);
       return { ok: true, ...target };
     } catch (error) {
       return { ok: false, error: error.message };
@@ -159,10 +199,15 @@ module.exports = function registerWorkspacesIpc({
 
   // ---- IPC: Workspace (Agent Working Directory) ----
   ipcMain.handle('workspace:create', async (_, options = {}) => {
+    await startupCleanup;
     const inVm = require('../vm/tool-location').isVmOperation(() => vmService);
     if (inVm) {
       try {
         if (!vmService.instance || vmService.instance.state !== 'ready') await vmService.start();
+        if (!vmCleaned) {
+          vmCleaned = true;
+          await workspaceLifecycle.cleanup();
+        }
         const { VmFs } = require('../vm/vm-fs');
         const io = new VmFs({ vmService });
         const last = getSettings().workspace?.lastWorkspace;
@@ -172,6 +217,7 @@ module.exports = function registerWorkspacesIpc({
         const directory = io.mountRoot() + '/' + name;
         const created = await io.makeDirectory(directory);
         if (!created.ok) return created;
+        workspaceLifecycle.register(directory, 'vm');
         getSettings().workspace = { ...getSettings().workspace, lastWorkspace: directory };
         scheduleSettingsPersist();
         return { ok: true, path: directory, createdInVm: true, location: 'vm' };
@@ -233,6 +279,7 @@ module.exports = function registerWorkspacesIpc({
     const ts = Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6);
     const dir = path.join(workspacesBaseDir, ts);
     fs.mkdirSync(dir, { recursive: true });
+    workspaceLifecycle.register(dir, 'host');
     getSettings().workspace = {
       ...(getSettings().workspace || {}),
       lastWorkspace: dir,
@@ -247,11 +294,13 @@ module.exports = function registerWorkspacesIpc({
       : workspacesBaseDir,
   );
 
-  ipcMain.handle('workspace:cwd', async (_, directory) => {
+  async function openWorkspaceDirectory(_, directory) {
     try {
       if (!(await hasDesktop()))
         return { ok: false, code: 'NO_DESKTOP', error: 'No usable graphical desktop is available' };
       let local = directory || workspacesBaseDir;
+      const record = workspaceLifecycle.record(local);
+      if (record && record.location === 'vm') local = record.displayPath || record.actual;
       if (require('../vm/tool-location').isVmOperation(() => vmService)) {
         const io = new (require('../vm/vm-fs').VmFs)({ vmService });
         const target = io.resolveVmPath(local);
@@ -281,31 +330,16 @@ module.exports = function registerWorkspacesIpc({
               .sync({ direction: 'pull', reason: 'cwd-export' });
         if (!result.ok) return result;
       }
+      if (record?.location === 'host') local = record.displayPath || record.actual;
       return await openDirectory(local);
     } catch (error) {
       return { ok: false, error: error.message };
     }
-  });
-
-  ipcMain.handle('workspace:openInExplorer', async (_, dirPath) => {
-    if (require('../vm/tool-location').isVmOperation(() => vmService)) {
-      try {
-        const { VmFs } = require('../vm/vm-fs');
-        const io = new VmFs({ vmService });
-        const target = io.resolveVmPath(dirPath || '/workspace');
-        if (!target.ok) return target;
-        const graphics = vmService.graphicsController();
-        await graphics.start();
-        return await vmService.instance.exec(
-          `${graphics._wlEnv()} cibyp-files ${require('../vm/vm-paths').shellQuote(target.vm)} >/dev/null 2>&1 &`,
-        );
-      } catch (error) {
-        return { ok: false, location: 'vm', error: error.message };
-      }
-    }
-    await shell.openPath(dirPath || workspacesBaseDir);
-    return { ok: true };
-  });
+  }
+  ipcMain.handle('workspace:cwd', openWorkspaceDirectory);
+  // A VM process alone does not create a visible window. Export/sync the mapped
+  // directory and use the same checked host file-manager path as /cwd.
+  ipcMain.handle('workspace:openInExplorer', openWorkspaceDirectory);
 
   ipcMain.handle('workspace:getFileTree', async (_, dirPath) => {
     try {
@@ -530,7 +564,7 @@ module.exports = function registerWorkspacesIpc({
     }
   });
 
-  ipcMain.handle('code:saveHistory', (_, workspacePath, id, data) => {
+  ipcMain.handle('code:saveHistory', (_, workspacePath, id, data, options) => {
     const histDir = getCodeHistoryDir(workspacePath);
     if (!histDir) return { ok: false, error: 'no workspace' };
     try {
@@ -540,7 +574,7 @@ module.exports = function registerWorkspacesIpc({
           (getSettings().runtime && getSettings().runtime.location) === 'vm' ? 'vm' : 'host';
         _externalizeHistoryImages(data);
       }
-      queueHistorySave('code:' + id, dataPath(histDir, id, '.json'), data);
+      queueHistorySave('code:' + id, dataPath(histDir, id, '.json'), data, options);
       if (data && typeof data === 'object') {
         _putHistoryIndexEntry(
           _historyIndexFile('code', histDir),
@@ -593,5 +627,5 @@ module.exports = function registerWorkspacesIpc({
     }
   });
 
-  return { getCodeHistoryDir };
+  return { getCodeHistoryDir, workspaceLifecycle };
 };

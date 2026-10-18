@@ -129,7 +129,8 @@ function fixture(overrides = {}) {
       url.search = new URLSearchParams({
         state: opened.searchParams.get('state'),
         code: 'fixture-code',
-        client_id: claims.aud,
+        client_id:
+          opened.pathname === '/oauth/authorize' ? 'app_EMoamEEZ73f0CkXaXp7hrann' : claims.aud,
         ...params,
       });
       return fetch(url);
@@ -149,6 +150,140 @@ test('identity validation rejects wrong nonce, audience, subject, expiry and sig
     await assert.rejects(validateIdToken(jwt({ ...claims, ...bad }), expected));
   const token = jwt(claims);
   await assert.rejects(validateIdToken(token.slice(0, -20) + 'x'.repeat(20), expected));
+});
+
+test('explicit Codex quota connection verifies the same identity and never replaces direct-plan inference credentials', async (t) => {
+  let seen;
+  const f = fixture({
+    service: {
+      quotaHttpReader: async (options) => {
+        seen = options;
+        return {
+          ok: true,
+          rateLimitsByLimitId: { codex: { primary: { usedPercent: 20, windowDurationMins: 300 } } },
+        };
+      },
+    },
+  });
+  t.after(() => f.service.dispose());
+  await f.service.login();
+  await f.complete();
+  const signed = jwt({
+    ...claims,
+    aud: 'app_EMoamEEZ73f0CkXaXp7hrann',
+    'https://api.openai.com/auth': { chatgpt_account_id: 'selected-account' },
+  });
+  const input = {
+    tokens: {
+      id_token: signed,
+      access_token: signed,
+      refresh_token: 'quota-refresh',
+      account_id: 'selected-account',
+    },
+  };
+  await f.service.importCodexQuota(input);
+  assert.equal(f.stored.accounts[0].codexQuota.refreshToken, undefined);
+  assert.equal(f.stored.accounts[0].codexQuota.ownedGrant, false);
+  const result = await f.service.limits(true);
+  assert.equal(result.rateLimitsByLimitId.codex.primary.usedPercent, 20);
+  assert.equal(seen.accountId, 'selected-account');
+  assert.equal(seen.token, signed);
+  const lease = await f.service.lease();
+  assert.equal(lease.token, 'fixture-access');
+  lease.release();
+  assert.ok(!JSON.stringify(await f.service.status()).includes('quota-refresh'));
+  await assert.rejects(
+    f.service.importCodexQuota({
+      tokens: {
+        ...input.tokens,
+        id_token: jwt({ ...claims, aud: 'app_EMoamEEZ73f0CkXaXp7hrann', sub: 'other-person' }),
+      },
+    }),
+    /identity validation/,
+  );
+  f.service.data.accounts[0].codexQuota.expiresAt = 0;
+  await assert.rejects(f.service.limits(true), /reconnect/);
+  // The read-only import must never rotate the original client's refresh token.
+  assert.equal(f.stored.accounts[0].refreshToken, 'fixture-refresh');
+  await f.service.logout();
+  assert.ok(!f.stored.accounts[0].codexQuota);
+});
+test('independent quota OAuth owns its refresh grant, preserves inference login and rejects a different identity', async (t) => {
+  const codexId = 'app_EMoamEEZ73f0CkXaXp7hrann';
+  let otherIdentity = false;
+  let refreshed = 0;
+  let seen;
+  const f = fixture({
+    token: async (options) => {
+      const client = options.body.get('client_id');
+      if (options.body.get('grant_type') === 'refresh_token') {
+        assert.equal(client, codexId);
+        assert.equal(options.body.get('refresh_token'), 'owned-quota-refresh');
+        ++refreshed;
+        return Response.json({
+          access_token: 'quota-rotated',
+          refresh_token: 'owned-quota-rotated',
+          expires_in: 3600,
+        });
+      }
+      assert.equal(
+        crypto.createHash('sha256').update(options.body.get('code_verifier')).digest('base64url'),
+        f.opened.searchParams.get('code_challenge'),
+      );
+      const quota = client === codexId;
+      assert.equal(options.body.has('resource'), !quota);
+      return Response.json({
+        access_token: quota ? 'quota-access' : 'fixture-access',
+        refresh_token: quota ? 'owned-quota-refresh' : 'fixture-refresh',
+        id_token: jwt({
+          ...claims,
+          aud: client,
+          sub: otherIdentity ? 'other-person' : claims.sub,
+          nonce: f.opened.searchParams.get('nonce'),
+          ...(quota
+            ? { 'https://api.openai.com/auth': { chatgpt_account_id: 'quota-account' } }
+            : {}),
+        }),
+        token_type: 'Bearer',
+        expires_in: 3600,
+        scope: 'chatgpt.tokens.use.direct',
+      });
+    },
+    service: {
+      quotaHttpReader: async (options) => {
+        seen = options;
+        return { ok: true, windows: [] };
+      },
+    },
+  });
+  t.after(() => f.service.dispose());
+  await f.service.login();
+  await f.complete();
+  const accountId = f.service.data.activeId;
+  await f.service.login(accountId, { quota: true });
+  assert.equal(f.opened.origin + f.opened.pathname, claims.iss + '/oauth/authorize');
+  assert.equal(f.opened.searchParams.get('originator'), 'cibyp');
+  assert.equal(f.opened.searchParams.get('client_id'), codexId);
+  assert.equal(f.opened.searchParams.has('id_token_hint'), false);
+  assert.equal(f.opened.searchParams.has('resource'), false);
+  assert.ok([1455, 1457].includes(Number(new URL(f.opened.searchParams.get('redirect_uri')).port)));
+  assert.equal((await f.complete()).status, 200);
+  assert.equal(f.stored.accounts[0].codexQuota.ownedGrant, true);
+  assert.equal(f.stored.accounts[0].accessToken, 'fixture-access');
+  f.service.data.accounts[0].codexQuota.expiresAt = 0;
+  await f.service.limits(true);
+  assert.equal(refreshed, 1);
+  assert.equal(seen.token, 'quota-rotated');
+  assert.equal(seen.accountId, 'quota-account');
+  assert.equal(f.stored.accounts[0].codexQuota.refreshToken, 'owned-quota-rotated');
+  assert.doesNotMatch(
+    JSON.stringify(await f.service.status()),
+    /owned-quota|quota-access|fixture-access/,
+  );
+  otherIdentity = true;
+  await f.service.login(accountId, { quota: true });
+  assert.equal((await f.complete()).status, 400);
+  assert.equal(f.stored.accounts[0].codexQuota.refreshToken, 'owned-quota-rotated');
 });
 test('loopback sign-in validates PKCE and state, keeps credentials out of public state, filters models', async (t) => {
   const f = fixture();
@@ -292,6 +427,11 @@ test('real platform vault round trips and Windows never stores plaintext tokens'
     const vault = new AccountVault(file);
     assert.equal(await vault.load(), null);
     const value = { version: 1, accounts: [{ accessToken: 'test-secret-value' }] };
+    if (process.platform !== 'win32' && !process.versions.electron) {
+      await assert.rejects(vault.save(value), /OS credential encryption is unavailable/);
+      await assert.rejects(fs.stat(file), { code: 'ENOENT' });
+      return;
+    }
     await vault.save(value);
     assert.deepEqual(await vault.load(), value);
     if (process.platform === 'win32')

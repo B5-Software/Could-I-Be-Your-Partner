@@ -101,6 +101,7 @@ function createAgentRuntime({
       model: session.agent?.getActiveModelId() || '',
       minimalMode: session.agent?.minimalMode === true,
       workspacePath: session.agent ? session.agent.workspacePath : null,
+      workspaceName: session.agent?.workspaceName || '',
       hostWorkspacePath: session.hostWorkspacePath || null,
       conversationId: session.agent ? session.agent.conversationId : null,
       affection: session.agent ? session.agent.babeAffection : null,
@@ -876,6 +877,7 @@ function createAgentRuntime({
           messages: a.contextManager?.getHistoryMessages() || [],
         }),
         llmOverride: a.llmOverride,
+        modelRevision: session.modelRevision || 0,
         systemPrompt: a.contextManager?.systemPrompt || '',
         tarotCard: a.tarotCard,
         sessionUsage: a.sessionUsage,
@@ -1028,6 +1030,121 @@ function createAgentRuntime({
       return { ok: true };
     },
 
+    async getSessionModels(key) {
+      const session = sessions.get(key);
+      if (!session) throw new Error('Unknown session');
+      const settings = await api.getSettings();
+      const options = session.agent._llmOptions();
+      const capabilities = await api.llmCapabilities(
+        options.provider,
+        session.agent.getActiveModelId(),
+        options.apiUrl,
+        options.apiKey,
+      );
+      if (capabilities?.ok === false) throw new Error(capabilities.error);
+      return {
+        busy: !!(session.busy || session.rewinding),
+        selected: session.agent.llmOverride?.poolEntryId || '',
+        model: session.agent.getActiveModelId(),
+        effort: session.agent.getActiveReasoningEffort(),
+        variants: capabilities?.variants || [],
+        defaultEffort: (capabilities?.variants || []).some(
+          (variant) =>
+            variant.id ===
+            (settings.llm?.pool?.find(
+              (entry) => entry.id === session.agent.llmOverride?.poolEntryId,
+            )?.effort || settings.llm?.reasoningEffort),
+        )
+          ? settings.llm?.pool?.find((entry) => entry.id === session.agent.llmOverride?.poolEntryId)
+              ?.effort || settings.llm?.reasoningEffort
+          : capabilities?.defaultId || 'off',
+        entries: (settings.llm?.pool || [])
+          .filter((entry) => entry && entry.model && entry.enabled !== false)
+          .sort((a, b) => (Number(a.priority) || 0) - (Number(b.priority) || 0))
+          .map((entry) => ({
+            id: entry.id,
+            label: entry.label || entry.model,
+            model: entry.model,
+            provider: entry.provider || 'openai-compat',
+            default: entry.id === settings.llm.activeEntryId,
+          })),
+      };
+    },
+
+    async selectSessionModel(key, entryId) {
+      const session = sessions.get(key);
+      if (!session || session.profile !== 'default') throw new Error('Unknown conversation');
+      if (session.busy || session.rewinding || session.loadingHistory)
+        throw new Error('Wait for the current task to finish before switching models');
+      session.rewinding = true;
+      try {
+        await ensureInitialized(session);
+        const settings = await api.getSettings();
+        const entry = settings.llm?.pool?.find(
+          (row) => row.id === entryId && row.enabled !== false && row.model,
+        );
+        if (!entry) throw new Error('This model is no longer available in the model pool');
+        const agent = session.agent;
+        const old = agent.llmOverride;
+        const oldBasis = agent.contextManager.realBasis;
+        const capabilities = await api.llmCapabilities(
+          entry.provider,
+          entry.model,
+          entry.apiUrl,
+          entry.apiKey,
+        );
+        if (capabilities?.ok === false) throw new Error(capabilities.error);
+        const effort = capabilities?.variants?.some((variant) => variant.id === entry.effort)
+          ? entry.effort
+          : capabilities?.defaultId || entry.effort || 'off';
+        agent.llmOverride = { ...entry, poolEntryId: entry.id, reasoningEffort: effort };
+        agent.applySettings(settings);
+        agent.contextManager.invalidateRealBasis();
+        try {
+          await agent.saveToHistory({ strict: true });
+        } catch (error) {
+          agent.llmOverride = old;
+          agent.applySettings(settings);
+          agent.contextManager.realBasis = oldBasis;
+          throw error;
+        }
+        session.modelRevision = (session.modelRevision || 0) + 1;
+        emit({ type: 'view-changed', key });
+        return { ok: true, view: this.getView(key) };
+      } finally {
+        session.rewinding = false;
+      }
+    },
+
+    async setSessionReasoning(key, effort) {
+      const session = sessions.get(key);
+      if (!session || session.profile !== 'default') throw new Error('Unknown conversation');
+      if (session.busy || session.rewinding || session.loadingHistory)
+        throw new Error('Wait for the current task to finish before changing reasoning');
+      session.rewinding = true;
+      try {
+        await ensureInitialized(session);
+        const state = await this.getSessionModels(key);
+        const target = effort === null ? state.defaultEffort : effort;
+        if (!state.variants.some((variant) => variant.id === target))
+          throw new Error('This reasoning level is not supported by the selected model');
+        const agent = session.agent,
+          old = agent.llmOverride;
+        agent.llmOverride = { ...old, reasoningEffort: target };
+        try {
+          await agent.saveToHistory({ strict: true });
+        } catch (error) {
+          agent.llmOverride = old;
+          throw error;
+        }
+        session.modelRevision = (session.modelRevision || 0) + 1;
+        emit({ type: 'view-changed', key });
+        return { ok: true, view: this.getView(key) };
+      } finally {
+        session.rewinding = false;
+      }
+    },
+
     async configureSession(key, values = {}) {
       const session = sessions.get(key);
       if (!session) throw new Error('Unknown session');
@@ -1039,7 +1156,12 @@ function createAgentRuntime({
           throw new Error('Cannot seed an existing conversation');
         a.contextManager.loadFromHistory(values.pluginSeed);
       }
-      if (session.profile === 'default' && values.llmOverride) {
+      if (
+        session.profile === 'default' &&
+        values.llmOverride &&
+        (values.modelRevision === undefined ||
+          values.modelRevision === (session.modelRevision || 0))
+      ) {
         const allowed = [
           'model',
           'reasoningEffort',
@@ -1054,10 +1176,16 @@ function createAgentRuntime({
           'providerLimits',
           'maxContextLength',
           'maxResponseTokens',
+          'autoOpencodeHeaders',
+          'contextLength',
         ];
-        a.llmOverride = Object.fromEntries(
+        const override = Object.fromEntries(
           Object.entries(values.llmOverride).filter(([name]) => allowed.includes(name)),
         );
+        if (JSON.stringify(a.llmOverride) !== JSON.stringify(override)) {
+          a.llmOverride = override;
+          session.modelRevision = (session.modelRevision || 0) + 1;
+        }
       }
       if (
         session.mode === 'code' &&
@@ -1074,7 +1202,11 @@ function createAgentRuntime({
 
     async agentAction(key, action, args = []) {
       const session = sessions.get(key);
-      if (!session) throw new Error('Unknown session');
+      if (!session) {
+        if (['saveToHistory', 'resetOptimizedTools', 'refreshSkillsCatalog'].includes(action))
+          return { result: null, closed: true };
+        throw new Error('Unknown session');
+      }
       const a = session.agent;
       await ensureInitialized(session);
       const allowed = new Set([
@@ -1345,7 +1477,66 @@ function createAgentRuntime({
       return { ok: true };
     },
 
-    /** Delete one complete user turn from the transcript and uncompressed context. */
+    getMessageEditPlan(key, ids, scope = 'both') {
+      const session = sessions.get(key);
+      if (!session) throw new Error('Unknown session');
+      if (session.busy || session.loadingHistory || session.rewinding || session.compacting)
+        throw new Error('Wait for the current task to finish before editing messages');
+      return require('./services/message-edit').planMessageEdit(
+        session.agent.contextManager,
+        ids,
+        scope,
+      );
+    },
+
+    async editMessages(key, ids, scope = 'both') {
+      const session = sessions.get(key);
+      const plan = this.getMessageEditPlan(key, ids, scope);
+      const context = session.agent.contextManager;
+      const fields = [
+        'historyMessages',
+        'messages',
+        'checkpointIndexes',
+        'prunedIndexes',
+        'pinnedMessages',
+        '_admittedSources',
+        'realBasis',
+      ];
+      const before = Object.fromEntries(fields.map((name) => [name, context[name]]));
+      session.rewinding = true;
+      try {
+        try {
+          context.removeHistoryMessages(plan.ids, { keepHistory: scope === 'context' });
+          await session.agent.saveToHistory({ strict: true });
+        } catch (error) {
+          Object.assign(context, before);
+          throw error;
+        }
+        if (scope === 'both' && session.agent.workspacePath && api.workspaceRetain) {
+          try {
+            await api.workspaceRetain(
+              session.agent.workspacePath,
+              context
+                .getHistoryMessages()
+                .some(
+                  (message) =>
+                    message.role === 'user' && message.metadata?.kind !== 'context-update',
+                ),
+            );
+          } catch {
+            // The transcript is committed. An unavailable cleanup catalog may
+            // conservatively retain an empty workspace, but must not undo it.
+          }
+        }
+        this.emitUsageStats(key);
+        emit({ type: 'messages-deleted', key, ...plan });
+        return { ok: true, ...plan, view: this.getView(key) };
+      } finally {
+        session.rewinding = false;
+      }
+    },
+
+    /** Compatibility wrapper; all mutations use the shared dependency planner. */
     async deleteTurn(key, messageId) {
       const session = sessions.get(key);
       if (!session) return { ok: false, error: 'Unknown session' };
@@ -1360,29 +1551,7 @@ function createAgentRuntime({
       );
       if (start < 0)
         return { ok: false, error: 'Message no longer exists; refresh the conversation' };
-      let end = start + 1;
-      while (end < history.length && !isUserTurn(history[end])) end++;
-      const removedIds = history.slice(start, end).map((message) => message.metadata?.messageId);
-      session.rewinding = true;
-      try {
-        const removed = context.removeHistoryMessages(removedIds);
-        await session.agent.saveToHistory();
-        this.emitUsageStats(key);
-        emit({
-          type: 'messages-deleted',
-          key,
-          ids: removedIds,
-          retainedInSummary: removed.retainedInSummary,
-        });
-        return {
-          ok: true,
-          ids: removedIds,
-          retainedInSummary: removed.retainedInSummary,
-          view: this.getView(key),
-        };
-      } finally {
-        session.rewinding = false;
-      }
+      return this.editMessages(key, [messageId], 'both');
     },
 
     async undo(key) {

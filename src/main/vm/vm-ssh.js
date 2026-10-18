@@ -213,6 +213,7 @@ class VmSsh extends EventEmitter {
       mkdir: wrap('mkdir'),
       rmdir: wrap('rmdir'),
       rename: wrap('rename'),
+      symlink: wrap('symlink'),
       realpath: wrap('realpath'),
       fastPut: wrap('fastPut'),
       fastGet: wrap('fastGet'),

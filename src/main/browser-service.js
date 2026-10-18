@@ -439,7 +439,9 @@ async function _launchPwBrowser(overrideSettings = null) {
 // 显示条件：headed 模式 + 用户启用 banner（settings.playwright.bannerEnabled）
 // 无头模式始终不显示
 let _pwBannerWindow = null;
+let _pwHeaded = false;
 function _onPwBrowserLaunched(headed) {
+  _pwHeaded = headed;
   if (headed && _getPwSettings().bannerEnabled) {
     _showPwBanner();
   } else {
@@ -462,6 +464,7 @@ function _attachPwDisconnectListener(browser) {
   browser.on('disconnected', browser._cibypDisconnectListener);
 }
 function _showPwBanner() {
+  if (!_pwHeaded || !_getPwSettings().bannerEnabled) return;
   if (_pwBannerWindow && !_pwBannerWindow.isDestroyed()) return;
   try {
     const { width: sw } = screen.getPrimaryDisplay().workAreaSize;
@@ -536,6 +539,8 @@ function _hidePwBanner() {
 }
 
 async function _closePwBrowserInternal() {
+  _pwHeaded = false;
+  _hidePwBanner();
   for (const [, ws] of _pwWorkspaces) {
     await ws.context.close().catch(() => {});
   }

@@ -11,10 +11,17 @@ const partsDirectory = path.join(root, 'src/renderer/js/app-parts');
 
 async function buildApp() {
   require('./lib/settings-catalog.cjs').buildSettingsCatalog(root);
+  require('./generate-interface-icons.cjs');
   const files = JSON.parse(
     fs.readFileSync(path.join(root, 'src/renderer/legacy-parts.json'), 'utf8'),
   );
   const header = [
+    'import { FrontendShell } from ' +
+      JSON.stringify(path.join(root, 'src/renderer/core/frontend-shell.ts')) +
+      ';',
+    'import { openMessageManager, confirmMessageRemoval } from ' +
+      JSON.stringify(path.join(root, 'src/renderer/core/message-manager.ts')) +
+      ';',
     'import { TodoStore } from ' +
       JSON.stringify(path.join(root, 'src/renderer/core/todo-store.ts')) +
       ';',

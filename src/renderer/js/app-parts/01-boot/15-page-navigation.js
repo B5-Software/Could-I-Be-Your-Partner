@@ -53,6 +53,7 @@
       }).finally(() => navigationLoads.delete(destination));
       navigationLoads.set(name, task);
     }
+    window.dispatchEvent(new CustomEvent('cibyp:page-changed', { detail: { page: name } }));
     return true;
   }
   window.navigatePage = name => navigatePage(name);

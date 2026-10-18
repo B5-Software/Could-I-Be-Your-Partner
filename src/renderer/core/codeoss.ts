@@ -162,7 +162,7 @@ export class CodeOSSController {
     const bounds = this.viewport.getBoundingClientRect();
     const visibleModal = [
       ...document.querySelectorAll<HTMLElement>(
-        '.modal-overlay, .modal, [role="dialog"], .dock-panel, .app-update-notice',
+        '.modal-overlay, .modal, [role="dialog"], .dock-panel, .app-update-notice, .v2-sidebar-backdrop',
       ),
     ].some(
       (element) =>

@@ -41,7 +41,11 @@ jobs:
         if: runner.os == 'Windows' && matrix.node == '24'
       - run: npm run test:plugin-model
         if: runner.os == 'Windows' && matrix.node == '24'
+      - run: npm run test:frontend
+        if: runner.os == 'Windows' && matrix.node == '24'
       - run: npm run test:backend
+        if: runner.os == 'Windows' && matrix.node == '24'
+      - run: npm run test:backend:v2
         if: runner.os == 'Windows' && matrix.node == '24'
       - run: npm audit --audit-level=high
   macos-computer:

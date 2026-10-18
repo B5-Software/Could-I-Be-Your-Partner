@@ -49,6 +49,15 @@ async function accountFixture(t) {
   const accounts = new ClaudeAccounts({
     root,
     executablePath: () => '/official/claude',
+    credentialVaultFactory: () => {
+      let value = null;
+      return {
+        load: async () => value,
+        save: async (data) => {
+          value = structuredClone(data);
+        },
+      };
+    },
     publish: (...event) => events.push(event),
     spawnImpl: (file, args, options) => {
       const proc = new EventEmitter();
@@ -70,7 +79,7 @@ async function accountFixture(t) {
     },
   });
   t.after(async () => {
-    accounts.dispose();
+    await accounts.dispose();
     await fs.rm(root, { recursive: true, force: true });
   });
   const until = async (predicate) => {
@@ -122,6 +131,44 @@ test('official login persists isolated Pro/Max metadata, switches cancel request
   assert.equal(await fs.readFile(path.join(sibling, 'keep'), 'utf8'), 'keep');
   assert.equal((await accounts.status()).accounts.length, 0);
 });
+test('logout drains SDK credentials and blocks new leases before deleting the account profile', async (t) => {
+  const f = await accountFixture(t);
+  const login = await f.accounts.login();
+  f.processes[0].proc.emit('close', 0);
+  await f.until(() => f.processes.length === 2);
+  f.finishStatus('pro');
+  await f.until(() => !f.accounts.pending);
+  const controller = new AbortController();
+  const release = await f.accounts.credentials.acquire(login.id);
+  f.accounts.requests.add(controller);
+  let finish;
+  const mayFinish = new Promise((resolve) => {
+    finish = resolve;
+  });
+  const sdkFinished = (async () => {
+    await mayFinish;
+    await fs.writeFile(
+      path.join(f.root, login.id, '.credentials.json'),
+      JSON.stringify({ accessToken: 'late-sdk-refresh' }),
+    );
+    await release();
+    f.accounts.requests.delete(controller);
+  })();
+  const logout = f.accounts.logout(login.id);
+  try {
+    await f.until(() => controller.signal.aborted);
+    assert.ok(f.accounts.closingProfiles.has(login.id));
+    await assert.rejects(f.accounts.lease(login.id, new AbortController()), /account changed/);
+    assert.ok(!f.processes.some((process) => process.args[1] === 'logout'));
+  } finally {
+    finish();
+    await sdkFinished;
+  }
+  await logout;
+  await assert.rejects(fs.stat(path.join(f.root, login.id)), { code: 'ENOENT' });
+  assert.equal(f.accounts.snapshot().accounts.length, 0);
+});
+
 test('API/Console and unsupported subscription logins are rejected, cancellation prevents a late login commit', async (t) => {
   const f = await accountFixture(t);
   const login = await f.accounts.login();
@@ -149,6 +196,31 @@ test('API/Console and unsupported subscription logins are rejected, cancellation
     f.accounts.snapshot().accounts.some((a) => a.id === login.id),
     false,
   );
+});
+
+test('shutdown during credential preparation cannot start a late OAuth process', async (t) => {
+  const f = await accountFixture(t);
+  let finish,
+    entered = false,
+    released = false;
+  const preparing = new Promise((resolve) => {
+    finish = resolve;
+  });
+  f.accounts.credentials.acquire = async () => {
+    entered = true;
+    await preparing;
+    return async () => {
+      released = true;
+    };
+  };
+  const login = f.accounts.login();
+  await f.until(() => entered);
+  await f.accounts.dispose();
+  finish();
+  await assert.rejects(login, /shutting down/);
+  assert.equal(f.processes.length, 0);
+  assert.equal(released, true);
+  assert.equal(f.accounts.snapshot().pending, null);
 });
 
 test('cancel during account verification cannot activate or persist the completed OAuth login', async (t) => {

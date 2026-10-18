@@ -85,7 +85,7 @@
     const root = body || messageElement;
     if (!root) return '';
     const clone = root.cloneNode(true);
-    clone.querySelectorAll('.reasoning-section, .tool-call, .message-time, .message-avatar, .msg-actions, .message-actions').forEach((n) => n.remove());
+    clone.querySelectorAll('.reasoning-section, .tool-call, .message-time, .message-avatar, .msg-actions, .message-actions, .message-edit-actions').forEach((n) => n.remove());
     let text = clone.innerText || '';
     text = text.replace(/<reasoning[\s\S]*?<\/reasoning>/gi, '').replace(/<thinking[\s\S]*?<\/thinking>/gi, '');
     return text.trim();
@@ -93,7 +93,7 @@
 
   // 右键菜单条目
   function makeMenuEntry(icon, label, color) {
-    const item = document.createElement('div');
+    const item = document.createElement('button'); item.type = 'button'; item.className = 'message-context-action';
     item.style.cssText = `
       padding: 8px 16px;
       cursor: pointer;
@@ -155,49 +155,31 @@
       window.VoiceUI.speakText(text);
     });
 
-    const menuItem = makeMenuEntry('fa-trash', '删除对话', '#e74c3c');
-
-    menuItem.addEventListener('click', async () => {
-      menu.remove();
-
-      const activeAgent = sessionManager?.getActive('chat')?.agent || agent;
-      const allElements = Array.from(chatMessages.children);
-      let start = allElements.indexOf(messageElement);
-      while (start >= 0 && !allElements[start].classList.contains('user')) start--;
-      if (start < 0) return;
-      const userMsg = allElements[start];
-      let end = start + 1;
-      while (end < allElements.length && !allElements[end].classList.contains('user')) end++;
-      const pending = allElements.slice(start, end);
-      pending.forEach(el => el.classList.add('pending-delete'));
-      try {
-        const view = await window.CibypBackendViews.request('getView', activeAgent.backendKey);
-        const users = view.messages.filter(message => message.role === 'user' && message.metadata?.kind !== 'context-update');
-        const ordinal = allElements.slice(0, start).filter(el => el.classList.contains('user')).length;
-        const messageId = userMsg.dataset.messageId || users[ordinal]?.metadata?.messageId;
-        if (!messageId || view.session.busy) throw new Error(t('ui.history.deleteWait', '请等待当前任务完成后再删除消息'));
-        const confirmed = await window.confirmDialog(t('ui.history.deleteTurnConfirm', '确定要删除这轮对话吗？将同时删除对应的原始上下文，已合并的摘要会保留。'), t('ui.history.deleteTurn', '删除对话'));
-        if (!confirmed) return;
-        const result = await window.CibypBackendViews.request('deleteTurn', activeAgent.backendKey, messageId);
-        if (!result.ok) throw new Error(result.error);
-        window.CibypBackendViews.hydrate(activeAgent, result.view);
-        pending.forEach(el => el.remove());
-        updateContextProgress();
-      } catch (error) { showToast(error.message, 'error'); }
-      finally { pending.forEach(el => el.classList.remove('pending-delete')); }
-
+    const mode = messageElement.closest('#page-babe') ? 'babe' : messageElement.closest('#page-code') ? 'code' : 'chat';
+    const ids = messageElement.dataset.messageId ? [messageElement.dataset.messageId] : [];
+    const deleteItem = makeMenuEntry('fa-trash-can', t(role === 'user' ? 'ui.messageEdit.deleteTurn' : 'ui.messageEdit.deleteMessage', role === 'user' ? '删除本轮对话' : '删除消息'), 'var(--danger)');
+    deleteItem.dataset.messageAction = 'delete'; deleteItem.disabled = !ids.length;
+    deleteItem.onclick = () => { closeMenu(); window.CibypMessages.remove({mode, ids}).catch(error => showToast(error.message,'error')); };
+    const deleteAfter = makeMenuEntry('fa-clock-rotate-left', t('ui.messageEdit.deleteFromHere', '删除此处及之后的消息'));
+    deleteAfter.dataset.messageAction = 'delete-after'; deleteAfter.disabled = !ids.length;
+    deleteAfter.onclick = () => { closeMenu(); window.CibypMessages.remove({mode, ids, fromHere:true}).catch(error => showToast(error.message,'error')); };
+    const menuItem = makeMenuEntry('fa-comments', t('ui.messageEdit.title', '管理消息'));
+    menuItem.dataset.messageAction = 'manage';
+    menuItem.addEventListener('click', () => {
+      closeMenu();
+      window.CibypMessages.open({mode, ids}).catch(error => showToast(error.message, 'error'));
     });
 
-    menu.append(speakItem, menuItem);
+    menu.append(speakItem, deleteItem, deleteAfter, menuItem);
     document.body.appendChild(menu);
+    const bounds = menu.getBoundingClientRect();
+    menu.style.left = Math.max(8, Math.min(e.clientX, innerWidth - bounds.width - 8)) + 'px';
+    menu.style.top = Math.max(8, Math.min(e.clientY, innerHeight - bounds.height - 8)) + 'px';
 
-    const closeMenu = () => {
-      if (menu && menu.parentNode) {
-        menu.remove();
-        document.removeEventListener('click', closeMenu);
-      }
-    };
-    setTimeout(() => document.addEventListener('click', closeMenu), 100);
+    function closeMenu() { menu.remove(); document.removeEventListener('pointerdown', outside, true); document.removeEventListener('keydown', escape, true); }
+    function outside(event) { if (!menu.contains(event.target)) closeMenu(); }
+    function escape(event) { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeMenu(); } }
+    document.addEventListener('pointerdown', outside, true); document.addEventListener('keydown', escape, true);
   }
 
   // ---- 图片预览灯箱：缩放 / 拖拽 / 下载 / 复制 / 打开位置 / Esc ----

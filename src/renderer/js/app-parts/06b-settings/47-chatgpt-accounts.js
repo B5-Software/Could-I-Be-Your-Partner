@@ -5,7 +5,15 @@
     'No usage-limit reset credits are available': '没有可用的额度重置卡', 'ChatGPT account changed': 'ChatGPT 账号已变更',
     'This reset credit is unavailable or expired': '此重置卡不可用或已过期', 'A reset request is already pending': '正在处理另一个重置请求',
     'Codex quota reader is unavailable. Install the official Codex CLI or set CIBYP_CODEX_BINARY to its executable': '额度读取器不可用；请安装官方 Codex CLI，或配置 CIBYP_CODEX_BINARY',
-    'This login provides no readable subscription limits; view and manage usage in ChatGPT': '当前登录方式未提供可读取的订阅额度；请在 ChatGPT 用量管理中查看和调整。这不影响使用模型。',
+    'This login provides no readable subscription limits; view and manage usage in ChatGPT': '当前 ChatGPT 登录授权不开放 Codex 用量读取。可在桌面点击“连接 Codex 用量”，另行授权同一账号，显示 5 小时、每周等实际额度。模型调用不受影响。',
+    'Import Codex quota credentials from the desktop app': '请在桌面应用中连接 Codex 用量，连接后各前端共享显示。',
+    'Select a Codex auth.json created by ChatGPT login': '请选择通过 ChatGPT 登录生成的 Codex auth.json。',
+    'This file is not a supported Codex subscription login': '这个文件不是支持的 Codex 订阅登录记录。',
+    'Codex quota authorization expired; reconnect it in account settings': 'Codex 用量授权已失效，请在账号设置中重新连接。',
+    'Codex login callback ports are busy; finish other logins and retry': 'Codex 登录回调端口被占用，请结束其他登录后重试。',
+    'Sign in with ChatGPT first': '请先登录 ChatGPT。',
+    'Invalid Codex account identifier': 'Codex 账号标识无效。',
+    'OpenAI identity validation failed': '账号验证失败，请使用同一个 ChatGPT 账号。',
     'Add your OpenCode Go API key in Model & connection settings': '请在模型与连接设置中添加 OpenCode Go API Key',
     'OpenCode Go key is invalid': 'OpenCode Go Key 无效', 'OpenCode Go subscription is required': '需要 OpenCode Go 订阅',
   };
@@ -31,6 +39,8 @@
     document.getElementById('btn-chatgpt-reauth').disabled = !select.value || !!state.pending;
     document.getElementById('btn-chatgpt-use').disabled = !state.activeId || !!state.pending;
     document.getElementById('btn-chatgpt-limits').disabled = !state.activeId || !!state.pending;
+    document.getElementById('btn-chatgpt-codex-quota').disabled = !state.activeId || !!state.pending;
+    document.getElementById('btn-chatgpt-import-quota').disabled = !state.activeId || !!state.pending;
     const active = state.accounts.find(account => account.id === state.activeId);
     chatGPTStatusText(state.error || (state.pending ? state.pending.stage === 'verifying' ? '正在验证账号…' : '请在浏览器中完成 ChatGPT 登录…' : active ? active.planEnabled ? '已登录，订阅授权已启用' : '已登录，但未授权订阅额度；请重新授权' : '尚未登录 ChatGPT'));
     if (!active) { chatGPTModels = []; document.getElementById('chatgpt-model-select').replaceChildren(new Option(chatGPTText('登录后获取'), '')); document.getElementById('chatgpt-quota-windows').replaceChildren(); }
@@ -124,6 +134,13 @@
     } catch (error) { if (active === chatGPTState?.activeId) document.getElementById('chatgpt-quota-windows').textContent = error.message; } finally { button.disabled = !chatGPTState?.activeId || !!chatGPTState?.pending; }
   }
   document.getElementById('btn-chatgpt-limits')?.addEventListener('click', refreshChatGPTLimits);
+  document.getElementById('btn-chatgpt-codex-quota')?.addEventListener('click', async () => {
+    await chatGPTAction(() => window.api.chatGPTLoginQuota());
+  });
+  document.getElementById('btn-chatgpt-import-quota')?.addEventListener('click', async () => {
+    const result = await chatGPTAction(() => window.api.chatGPTImportCodexQuota());
+    if (result?.ok && !result.cancelled) await refreshChatGPTLimits();
+  });
   let subscriptionWindowsGeneration = 0;
   async function refreshSubscriptionWindows(force = false) {
     const generation = ++subscriptionWindowsGeneration;

@@ -126,7 +126,7 @@ async function createNodeRuntime({
       imagesDir = path.join(dataDir, 'images');
     for (const directory of [historyDir, babeHistoryDir, imagesDir])
       fs.mkdirSync(directory, { recursive: true });
-    let getCodeHistoryDir;
+    let getCodeHistoryDir, workspaceLifecycle;
     const history = require('../main/services/history')({
       path,
       fs,
@@ -142,12 +142,25 @@ async function createNodeRuntime({
       getCodeHistoryDir: (...args) => getCodeHistoryDir(...args),
     });
     // Register the shared workspace/history services with explicit platform capabilities.
-    ({ getCodeHistoryDir } = require('../main/ipc/workspaces')({
+    ({ getCodeHistoryDir, workspaceLifecycle } = require('../main/ipc/workspaces')({
       ipcMain: registry,
       path,
       fs,
       getSettings,
       workspacesBaseDir: workspaceBase,
+      lifecycleFile: path.join(dataDir, 'workspaces.json'),
+      historyDirectories: [historyDir, babeHistoryDir, path.join(dataDir, 'code-history')],
+      activeWorkspaces: () =>
+        runtime
+          ?.listSessions()
+          .map((session) => session.workspacePath)
+          .filter(Boolean) || [],
+      busyWorkspaces: () =>
+        runtime
+          ?.listSessions()
+          .filter((session) => session.busy)
+          .map((session) => session.workspacePath)
+          .filter(Boolean) || [],
       app: { getPath: () => workspaceBase },
       vmService: { runtime: { location: 'host' } },
       dialog: {
@@ -363,6 +376,9 @@ async function createNodeRuntime({
         dailyMaxCalls: config.dailyMaxCalls,
       };
     });
+    const ocHeaders = require('../main/opencode-headers');
+    ocHeaders.setOpenCodeSessionStore(file('opencode-sessions'));
+    ocHeaders.refreshOpenCodeVersion().catch(() => {});
     const llmRetry = require('../main/llm-retry'),
       reqLog = require('../main/req-log');
     const accounts = new (require('../main/services/chatgpt-accounts').ChatGPTAccounts)({
@@ -673,6 +689,7 @@ async function createNodeRuntime({
         await jobs.dispose();
         await memory.drain();
         history.flushPendingHistorySaves();
+        await workspaceLifecycle.cleanup({ shutdown: true });
         disposeFacade?.();
         unpublish?.();
         ownership?.release();

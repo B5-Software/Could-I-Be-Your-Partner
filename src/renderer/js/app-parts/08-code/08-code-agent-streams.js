@@ -146,7 +146,8 @@
             codeStreamBubble = null;
             break;
           }
-          bubble.el.classList.remove('streaming');
+          window.CibypMessages?.bind(bubble.el, {mode:'code', role:'assistant', content:finalContent});
+      bubble.el.classList.remove('streaming');
           if (bubble.el.id) WebUIMirror.pushDomEvent({ type: 'dom_update', selector: '#' + bubble.el.id, html: bubble.el.outerHTML });
           codeStreamBubble = null;
           break;

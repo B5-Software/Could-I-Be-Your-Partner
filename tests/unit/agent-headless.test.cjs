@@ -100,6 +100,96 @@ function llmScript(responses) {
   return handler;
 }
 
+test('OpenCode v2 shell/write aliases use native routing, disabled settings and delegated scope', async () => {
+  const handlers = baseHandlers({ llmChat: llmScript([{ content: 'ready' }]) });
+  handlers.set('settings:get', () => structuredClone(SETTINGS));
+  const calls = [];
+  handlers.set('fs:readFile', () => ({ ok: true, content: 'old', encoding: 'utf-8', eol: 'lf' }));
+  handlers.set('fs:writeFile', (_event, file, content) => {
+    calls.push({ file, content });
+    return { ok: true };
+  });
+  handlers.set('code:runShell', (_event, script, cwd, mode, options) => {
+    calls.push({ script, cwd, mode, options });
+    return { ok: true, output: 'done' };
+  });
+  const runtime = createAgentRuntime({
+    ipcMain: createFakeIpcMain(handlers),
+    eventBus: createEventBus(),
+    interactionPolicy: INTERACTION_POLICY.AUTO_APPROVE,
+  });
+  runtime.createSession({
+    key: 'oc-alias',
+    mode: 'code',
+    workspacePath: path.join(os.tmpdir(), 'cibyp-oc-workspace'),
+  });
+  await runtime.sendMessage('oc-alias', 'ready');
+  const agent = runtime.sessions.get('oc-alias').agent;
+  assert.equal((await agent.executeTool('write', { path: 'a.txt', content: 'new' })).ok, true);
+  assert.equal(calls[0].content, 'new');
+  agent._toolScope = new Set(['runShellScriptCode']);
+  assert.equal(
+    (
+      await agent.executeTool('shell', {
+        command: 'echo test',
+        workdir: 'subfolder',
+        background: true,
+      })
+    ).ok,
+    true,
+  );
+  assert.equal(calls[1].script, 'echo test');
+  assert.equal(calls[1].cwd, agent._resolveWorkspacePath('subfolder'));
+  assert.equal(calls[1].options.sessionKey, 'oc-alias');
+  assert.equal(
+    (await agent.executeTool('write', { path: 'a.txt', content: 'forbidden' })).ok,
+    false,
+  );
+  agent.settings.tools.runShellScriptCode = false;
+  assert.equal((await agent.executeTool('shell', { command: 'forbidden' })).ok, false);
+  assert.equal(calls.length, 2);
+});
+
+test('OpenCode shell/write aliases require the same approval as native shell and file editing', async () => {
+  for (const name of ['shell', 'write']) {
+    const llm = llmScript([
+      {
+        content: '',
+        tool_calls: [
+          {
+            id: 'alias-call',
+            type: 'function',
+            function: {
+              name,
+              arguments: JSON.stringify(
+                name === 'shell' ? { command: 'echo approved' } : { path: 'a.txt', content: 'new' },
+              ),
+            },
+          },
+        ],
+      },
+      { content: 'done' },
+    ]);
+    const handlers = baseHandlers({ llmChat: llm });
+    handlers.set('code:runShell', () => assert.fail('Unapproved alias executed'));
+    handlers.set('fs:writeFile', () => assert.fail('Unapproved alias executed'));
+    const runtime = createAgentRuntime({
+      ipcMain: createFakeIpcMain(handlers),
+      eventBus: createEventBus(),
+      interactionPolicy: INTERACTION_POLICY.PROMPT,
+    });
+    let approval;
+    runtime.onEvent((event) => {
+      if (event.type === 'interaction' && event.kind === 'approval') {
+        approval = event;
+        queueMicrotask(() => runtime.respond('alias-' + name, false));
+      }
+    });
+    await runtime.sendMessage('alias-' + name, 'try alias');
+    assert.equal(approval.payload.toolName, name === 'shell' ? 'runShellScriptCode' : 'editFile');
+  }
+});
+
 test('plugin mail wakes the shared Agent without becoming human automatic-memory input', async () => {
   const handlers = baseHandlers({ llmChat: llmScript([{ content: 'Done' }]) });
   const observed = [];
@@ -208,7 +298,7 @@ test('subscription usage is requested on demand, coalesced per session and disca
   assert.equal(runtime.getStats('quota'), null);
 });
 
-test('Minimal uses only two tools and a fixed prompt; file edits and shell polling preserve shared routing', async () => {
+test('Minimal uses editing, shell and workspace naming with a fixed prompt; shared routing remains intact', async () => {
   const llm = llmScript([{ content: 'done' }]);
   const handlers = baseHandlers({ llmChat: llm });
   handlers.set('settings:get', () => ({
@@ -245,10 +335,11 @@ test('Minimal uses only two tools and a fixed prompt; file edits and shell polli
   assert.equal((await runtime.sendMessage('minimal', 'hello minimal')).ok, true);
   assert.equal(llm.calls.length, 1, 'No title or tool-selection LLM calls');
   const call = llm.calls[0];
-  assert.equal(call.messages[0].content, 'You are a helpful software engineer assistant.');
+  assert.match(call.messages[0].content, /^You are a helpful software engineer assistant\./);
+  assert.match(call.messages[0].content, /call renameWorkspace/);
   assert.deepEqual(
     call.options.tools.map((tool) => tool.function.name),
-    ['bash', 'str_replace_editor'],
+    ['bash', 'str_replace_editor', 'renameWorkspace'],
   );
   const agent = runtime.sessions.get('minimal').agent;
   let contents = 'one\r\ntwo\r\n';
@@ -312,10 +403,7 @@ test('Minimal uses only two tools and a fixed prompt; file edits and shell polli
   await agent.observeRuntimeContext();
   assert.ok(JSON.stringify(agent.contextManager.systemPrompt).includes('shared todo'));
   assert.equal((await runtime.setMinimalMode('minimal', true)).ok, true);
-  assert.equal(
-    agent.contextManager.systemPrompt.content,
-    'You are a helpful software engineer assistant.',
-  );
+  assert.equal(agent.contextManager.systemPrompt.content, call.messages[0].content);
   assert.ok(JSON.stringify(agent.contextManager.getHistoryMessages()).includes('hello minimal'));
   assert.ok(transcript.includes('hello minimal'));
   runtime.sessions.get('minimal').busy = true;
@@ -1026,3 +1114,218 @@ test(
     assert.match(runtime.getSessionDetails(session.key).session.lastError, /Plugin rejected/);
   },
 );
+
+test('session model and reasoning selectors validate capabilities, persist overrides and keep global defaults unchanged', async () => {
+  const settings = structuredClone(SETTINGS);
+  settings.llm.pool = [
+    {
+      id: 'one',
+      model: 'stub-model',
+      provider: 'openai',
+      apiUrl: settings.llm.apiUrl,
+      apiKey: 'private',
+      effort: 'low',
+      enabled: true,
+    },
+    {
+      id: 'two',
+      model: 'reasoner',
+      provider: 'openai',
+      apiUrl: settings.llm.apiUrl,
+      apiKey: 'secret',
+      effort: 'high',
+      enabled: true,
+    },
+  ];
+  const handlers = baseHandlers({ llmChat: llmScript([{ content: 'done' }]) });
+  handlers.set('settings:get', () => settings);
+  handlers.set('llm:capabilities', () => ({
+    ok: true,
+    variants: [{ id: 'low' }, { id: 'high' }],
+    defaultId: 'low',
+  }));
+  const runtime = createAgentRuntime({
+    ipcMain: createFakeIpcMain(handlers),
+    eventBus: createEventBus(),
+  });
+  runtime.createSession({ key: 'model-controls', minimalMode: true });
+  await runtime.sendMessage('model-controls', 'hello');
+  const agent = runtime.sessions.get('model-controls').agent,
+    prefix = agent.contextManager.systemPrompt;
+  const choices = await runtime.getSessionModels('model-controls');
+  assert.ok(
+    !JSON.stringify(choices).includes('private') && !JSON.stringify(choices).includes('secret'),
+  );
+  await runtime.selectSessionModel('model-controls', 'two');
+  assert.equal(agent.getActiveModelId(), 'reasoner');
+  assert.equal(agent.getActiveReasoningEffort(), 'high');
+  assert.equal(settings.llm.model, 'stub-model');
+  const revision = runtime.getView('model-controls').modelRevision;
+  await runtime.configureSession('model-controls', {
+    modelRevision: revision - 1,
+    llmOverride: { model: 'stub-model', poolEntryId: 'one' },
+  });
+  assert.equal(
+    agent.getActiveModelId(),
+    'reasoner',
+    'A delayed view must not revert a newer selection',
+  );
+  await runtime.setSessionReasoning('model-controls', 'low');
+  assert.equal(agent.getActiveReasoningEffort(), 'low');
+  await runtime.setSessionReasoning('model-controls', null);
+  assert.equal(agent.getActiveReasoningEffort(), 'high');
+  await assert.rejects(runtime.setSessionReasoning('model-controls', 'ultra'), /not supported/);
+  assert.equal(
+    agent.contextManager.systemPrompt,
+    prefix,
+    'Reasoning changes must not rewrite the prompt',
+  );
+  runtime.sessions.get('model-controls').busy = true;
+  await assert.rejects(runtime.selectSessionModel('model-controls', 'one'), /current task/);
+  runtime.sessions.get('model-controls').busy = false;
+  const before = agent.llmOverride;
+  handlers.set('history:save', () => ({ ok: false, error: 'write failed' }));
+  await assert.rejects(runtime.selectSessionModel('model-controls', 'one'), /write failed/);
+  assert.equal(agent.llmOverride, before);
+  runtime.dispose();
+});
+
+test('late cleanup after a conversation closes is idempotent and cannot recreate deleted history', async () => {
+  const handlers = baseHandlers({ llmChat: llmScript([{ content: 'done' }]) });
+  let writes = 0;
+  handlers.set('history:save', () => {
+    writes++;
+    return { ok: true };
+  });
+  const runtime = createAgentRuntime({
+    ipcMain: createFakeIpcMain(handlers),
+    eventBus: createEventBus(),
+  });
+  runtime.createSession({ key: 'closed-view', minimalMode: true });
+  await runtime.sendMessage('closed-view', 'hello');
+  runtime.close('closed-view');
+  const before = writes;
+  assert.equal((await runtime.agentAction('closed-view', 'resetOptimizedTools')).closed, true);
+  assert.equal((await runtime.agentAction('closed-view', 'saveToHistory')).closed, true);
+  assert.equal(writes, before);
+  assert.equal(runtime.getView('closed-view'), null);
+  await assert.rejects(runtime.agentAction('closed-view', 'executeTool', []), /Unknown session/);
+  runtime.dispose();
+});
+
+test('context-only removal persists exclusions and a failed save rolls the shared context back', async () => {
+  const handlers = baseHandlers({ llmChat: llmScript([{ content: 'done' }]) });
+  let saved;
+  handlers.set('history:save', (_event, value) => {
+    saved = value;
+    return { ok: true };
+  });
+  const runtime = createAgentRuntime({
+    ipcMain: createFakeIpcMain(handlers),
+    eventBus: createEventBus(),
+  });
+  runtime.createSession({ key: 'exclusions', minimalMode: true });
+  await runtime.sendMessage('exclusions', 'keep');
+  await runtime.sendMessage('exclusions', 'exclude');
+  const agent = runtime.sessions.get('exclusions').agent,
+    context = agent.contextManager;
+  const id = context
+    .getHistoryMessages()
+    .findLast((m) => m.role === 'user' && m.metadata.kind !== 'context-update').metadata.messageId;
+  const before = context.messages,
+    history = context.historyMessages,
+    system = context.systemPrompt;
+  runtime.sessions.get('exclusions').compacting = true;
+  assert.throws(() => runtime.getMessageEditPlan('exclusions', [id]), /current task/);
+  await assert.rejects(runtime.editMessages('exclusions', [id]), /current task/);
+  assert.equal(context.messages, before);
+  assert.equal(context.historyMessages, history);
+  runtime.sessions.get('exclusions').compacting = false;
+  handlers.set('history:save', () => ({ ok: false, error: 'disk full' }));
+  await assert.rejects(runtime.editMessages('exclusions', [id], 'context'), /disk full/);
+  assert.equal(context.messages, before);
+  assert.equal(context.historyMessages, history);
+  handlers.set('history:save', (_event, value) => {
+    saved = structuredClone(value);
+    return { ok: true };
+  });
+  await runtime.editMessages('exclusions', [id], 'context');
+  assert.ok(
+    context
+      .getHistoryMessages()
+      .some((m) => m.metadata.messageId === id && m.metadata.contextExcluded),
+  );
+  assert.ok(!context.messages.some((m) => m.metadata.messageId === id));
+  assert.equal(context.systemPrompt, system);
+  await agent.loadFromHistory(saved);
+  assert.ok(!context.messages.some((m) => m.metadata.messageId === id));
+  runtime.dispose();
+});
+
+test('a cleanup-catalog failure after deleting messages cannot roll back the committed transcript', async () => {
+  const handlers = baseHandlers({ llmChat: llmScript([{ content: 'done' }]) });
+  let saved;
+  handlers.set('history:save', (_event, value) => {
+    saved = structuredClone(value);
+    return { ok: true };
+  });
+  const runtime = createAgentRuntime({
+    ipcMain: createFakeIpcMain(handlers),
+    eventBus: createEventBus(),
+  });
+  try {
+    runtime.createSession({ key: 'committed-delete', minimalMode: true });
+    await runtime.sendMessage('committed-delete', 'delete this turn');
+    const agent = runtime.sessions.get('committed-delete').agent;
+    const id = agent.contextManager
+      .getHistoryMessages()
+      .find((m) => m.role === 'user' && m.metadata.kind !== 'context-update').metadata.messageId;
+    assert.ok(agent.workspacePath);
+    let retentionAttempts = 0;
+    handlers.set('workspace:retain', () => {
+      ++retentionAttempts;
+      throw new Error('Cleanup catalog unavailable');
+    });
+    const result = await runtime.editMessages('committed-delete', [id], 'both');
+    assert.equal(result.ok, true);
+    assert.equal(retentionAttempts, 1);
+    assert.ok(!saved.messages.some((m) => m.metadata?.messageId === id));
+    assert.ok(!agent.contextManager.getHistoryMessages().some((m) => m.metadata?.messageId === id));
+  } finally {
+    runtime.dispose();
+  }
+});
+
+test('live message admission emits authoritative IDs for repeated text without adding transcript content', async () => {
+  const handlers = baseHandlers({ llmChat: llmScript([{ content: 'same reply' }]) });
+  const runtime = createAgentRuntime({
+    ipcMain: createFakeIpcMain(handlers),
+    eventBus: createEventBus(),
+  });
+  runtime.createSession({ key: 'stable-live-ids', minimalMode: true });
+  const admitted = [];
+  runtime.onEvent((event) => {
+    if (event.type === 'agent-message' && event.messageType === 'message-stored')
+      admitted.push(event.data);
+  });
+  await runtime.sendMessage('stable-live-ids', 'same input');
+  await runtime.sendMessage('stable-live-ids', 'same input');
+  const history = runtime.sessions
+    .get('stable-live-ids')
+    .agent.contextManager.getHistoryMessages()
+    .filter(
+      (message) =>
+        ['user', 'assistant'].includes(message.role) && message.metadata?.kind !== 'context-update',
+    );
+  assert.equal(admitted.length, 4);
+  assert.deepEqual(
+    admitted.map((message) => message.messageId),
+    history.map((message) => message.metadata.messageId),
+  );
+  assert.equal(new Set(admitted.map((message) => message.messageId)).size, 4);
+  assert.deepEqual(
+    admitted.map((message) => message.content),
+    ['same input', 'same reply', 'same input', 'same reply'],
+  );
+  runtime.dispose();
+});

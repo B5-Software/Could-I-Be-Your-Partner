@@ -85,6 +85,7 @@ module.exports = function createDefaultSettings({ DEFAULT_DECISION_SETTINGS }) {
         memMB: 4096,
         netMode: 'nat',
         shutdownOnExit: true,
+        quickResume: true,
       },
     },
     // 自动化触发（HTTP 信号服务器）
@@ -141,6 +142,9 @@ module.exports = function createDefaultSettings({ DEFAULT_DECISION_SETTINGS }) {
     // 决策模型（System One）：OpenCode Zen 免费 System One / TypeSafe 直连
     decision: { ...DEFAULT_DECISION_SETTINGS },
     theme: {
+      frontend: 'v1',
+      contentWidth: 1280,
+      density: 'compact',
       mode: 'system',
       accentColor: '#4f8cff',
       backgroundColor: '#f5f7fa',

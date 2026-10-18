@@ -17,6 +17,7 @@ fs.writeFileSync(
   path.join(profile, 'data/settings.json'),
   JSON.stringify({
     onboardingCompleted: true,
+    theme: { frontend: process.argv.includes('--v2') ? 'v2' : 'v1' },
     aiPersona: { name: 'CIBYP', avatar: avatarFile },
     runtime: { location: 'host' },
     trayEnabled: false,
@@ -783,7 +784,7 @@ app.on('web-contents-created', (_event, contents) => {
       .find((m) => m.role === 'user' && m.metadata?.attachments?.length);
     assert.ok(originalUser?.metadata.messageId);
     await web.webContents.executeJavaScript(
-      `window.confirmDialog = async () => true; document.querySelector('.message-attachment-card').closest('.message.user').dispatchEvent(new MouseEvent('contextmenu', {bubbles:true,clientX:250,clientY:230})); document.querySelector('.message-context-menu').lastElementChild.click();`,
+      `(async()=>{ document.querySelector('.message-attachment-card').closest('.message.user').dispatchEvent(new MouseEvent('contextmenu', {bubbles:true,clientX:250,clientY:230})); document.querySelector('.message-context-menu').lastElementChild.click(); const deadline=Date.now()+10000; while(!document.querySelector('.message-manager-row')) {if(Date.now()>deadline)throw Error('Message manager not ready');await new Promise(r=>setTimeout(r,30));} const row=document.querySelector('.message-manager-row[data-message-id="${originalUser.metadata.messageId}"]');if(!row)throw Error('Original message missing from manager');if(row.getAttribute('aria-selected')!=='true')row.click();const scope=document.querySelector('.message-manager-scope');scope.value='both';scope.dispatchEvent(new Event('change'));while(document.querySelector('.message-manager .btn-danger').disabled){if(Date.now()>deadline)throw Error('Deletion preview not ready');await new Promise(r=>setTimeout(r,30));}document.querySelector('.message-manager .btn-danger').click();})()`,
     );
     await until(
       () =>

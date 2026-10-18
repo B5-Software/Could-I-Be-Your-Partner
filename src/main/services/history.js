@@ -258,8 +258,31 @@ module.exports = function createHistoryService({
   const pendingHistorySaves = new Map(); // key -> { timer, filePath, data }
   const HISTORY_SAVE_DEBOUNCE_MS = 1200;
 
-  function queueHistorySave(key, filePath, data) {
+  function queueHistorySave(key, filePath, data, options = {}) {
     const existing = pendingHistorySaves.get(key);
+    if (options.immediate === true) {
+      // Destructive edits must be acknowledged after an atomic write, not a
+      // debounce timer. Keep the old pending snapshot if this write fails.
+      const temporary = filePath + '.' + require('node:crypto').randomUUID() + '.tmp';
+      try {
+        const retained = require('../../shared/reasoning').retention(
+          data,
+          getSettings().llm?.preserveEncryptedReasoning === true,
+        );
+        fs.writeFileSync(temporary, JSON.stringify(retained, null, 2));
+        fs.renameSync(temporary, filePath);
+      } catch (error) {
+        try {
+          fs.unlinkSync(temporary);
+        } catch {
+          /* absent */
+        }
+        throw error;
+      }
+      if (existing) clearTimeout(existing.timer);
+      pendingHistorySaves.delete(key);
+      return;
+    }
     if (existing) clearTimeout(existing.timer);
     const timer = setTimeout(() => {
       pendingHistorySaves.delete(key);
@@ -454,7 +477,7 @@ module.exports = function createHistoryService({
     return _rehydrateHistoryImages(loadJSON(p, null));
   });
 
-  ipcMain.handle('history:save', (_, conversation) => {
+  ipcMain.handle('history:save', (_, conversation, options) => {
     if (!conversation || !conversation.id) return { ok: false, error: 'invalid conversation' };
     conversation.updatedAt = new Date().toISOString();
     if (!conversation.createdAt) conversation.createdAt = new Date().toISOString();
@@ -463,6 +486,7 @@ module.exports = function createHistoryService({
       'history:' + conversation.id,
       dataPath(historyDir, conversation.id, '.json'),
       conversation,
+      options,
     );
     _putHistoryIndexEntry(
       _historyIndexFile('chat', historyDir),

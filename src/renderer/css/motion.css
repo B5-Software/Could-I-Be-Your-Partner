@@ -7,6 +7,8 @@
 }
 .code-agent-panel { transition-property: width !important; }
 .code-agent-inner { transition-property: transform !important; }
+.reasoning-picker-thumb { transition-property: left !important; }
+.reasoning-picker-fill { transition-property: width !important; }
 #main-content { transition-property: padding-right !important; }
 
 @keyframes cibyp-opacity-pulse {

@@ -679,6 +679,14 @@
 
   async function applyPoolEntry(ag, entryId) {
     if (!ag || !entryId) return;
+    if (window.CibypBackendViews) {
+      await ag._ensureBackend();
+      const result = await window.CibypBackendViews.request('selectSessionModel', ag.backendKey, entryId);
+      if (!result.ok) throw new Error(result.error);
+      window.CibypBackendViews.hydrate(ag, result.view);
+      window.CibypFrontendShell?.refresh();
+      return;
+    }
     const s = ag.settings || {};
     const pool = Array.isArray(s.llm?.pool) ? s.llm.pool : [];
     const entry = pool.find(e => e && e.id === entryId);

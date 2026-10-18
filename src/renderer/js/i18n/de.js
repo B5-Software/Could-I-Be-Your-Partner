@@ -11,6 +11,11 @@ const DE_DICT = {
 
 // ── UI Strings ──────────────────────────────────────────────────────────────
 ui: {
+    frontend: {contentWidth:"Chat-Inhaltsbreite",widthHint:"Nachrichten, Werkzeugkarten und Eingaben teilen diese Breite im professionellen Stil. Kleine Fenster passen sich automatisch an.",density:"Informationsdichte",compact:"Kompakt",comfortable:"Komfortabel",spacious:"Großzügig",
+      interface: 'Oberflächenstil', v1: 'Jugendlich', v2: 'Professionell',
+      hint: 'Sofort wechseln und Sitzungen, Aufgaben, Entwürfe und Arbeitsbereiche behalten. Beide Oberflächen teilen alle Funktionen und Einstellungen.',
+      toggle: 'Sitzungsleiste umschalten', close: 'Seitenleiste einklappen', new: 'Neue Unterhaltung', search: 'Sitzungen suchen', open: 'Sitzungen', recent: 'Frühere Unterhaltungen', all: 'Gesamter Verlauf', empty: 'Noch keine Unterhaltungen', noMatches: 'Keine passenden Sitzungen', loading: 'Wird geladen…', failed: 'Verlauf nicht verfügbar. Zum Wiederholen klicken', untitled: 'Unbenannte Unterhaltung', workspace: 'Arbeitsverzeichnis', chooseWorkspace: 'Arbeitsbereich öffnen', model: 'Modelleinstellungen', resize: 'Breite der Sitzungsleiste ändern', host: 'Dieser Computer', vm: 'Virtuelle Maschine', welcomeHint: 'Alles beginnt mit einer Idee.', inputHint: 'Enter zum Senden · Shift+Enter für eine neue Zeile', actionFailed: 'Aktion fehlgeschlagen. Bitte erneut versuchen',
+    },
   remoteDevices: {title: 'Remote-Geräte', hint: 'Micro verbindet sich mit diesem Backend. Nur ausdrücklich freigegebene Werkzeuge und Ressourcen sind erlaubt.', refresh: 'Geräte aktualisieren', pair: 'Koppeln / Berechtigungen ändern', id: 'Geräte-ID', add: 'Werkzeug freigeben', save: 'Gerät speichern', private: 'Neue Zugangsdaten sind nur während dieses Backend-Starts abrufbar. Über vertrauenswürdiges USB / seriell übertragen, nicht an einen Agent senden.', tool: 'Werkzeugname, z. B. gpio_write', resources: 'Ressourcen, z. B. gpio:17 (kommagetrennt)', write: 'Schreiben erlauben (Genehmigung und Lease erforderlich)', remove: 'Entfernen', empty: 'Keine gekoppelten Geräte', online: 'Online', offline: 'Offline', writable: 'Schreibbar', edit: 'Berechtigungen ändern', revoke: 'Gerät widerrufen', confirmRevoke: 'Zum Bestätigen erneut klicken', duplicate: 'Werkzeugnamen müssen eindeutig sein', saved: 'Gespeichert. WSS-Gateway und neue Zugangsdaten am Gerät konfigurieren.', unavailable: 'Dieses Backend unterstützt keine Remote-Geräte'},
   terminal: { error: 'Terminalaktion fehlgeschlagen: {error}' },
   camera: {
@@ -875,6 +880,10 @@ _toolReturns: {
 
 // ── Text Map (Chinese → German hardcoded UI text) ───────────────────────────
 _textMap: {
+    '界面版本': 'Oberfläche',
+    'V1 · 经典界面': 'V1 · Klassisch',
+    'V2 · 工作台': 'V2 · Arbeitsbereich',
+    '立即切换布局，保留当前会话、任务、草稿与工作区。两套界面共用全部功能和设置。': 'Sofort wechseln und Sitzungen, Aufgaben, Entwürfe und Arbeitsbereiche behalten. Beide Oberflächen teilen alle Funktionen und Einstellungen.',
   '已使用免登录公共 Key（public），仅可调用限时免费模型': 'Öffentlicher Key (public) aktiv – nur zeitlich begrenzt kostenlose Modelle verfügbar',
   // ── Common UI ──
   '未命名对话': 'Unbenannte Unterhaltung',
@@ -3990,6 +3999,7 @@ Object.assign(DE_DICT._textMap, {
   '鼠标交互': DE_DICT['ui.settings.tui.mouse'],
   '点击菜单、定位输入光标、滚轮翻页和拖选复制。关闭后使用终端原生鼠标行为；也可使用 /mouse on 或 /mouse off。': DE_DICT['ui.settings.tui.mouseHint'],
 });
+Object.assign(DE_DICT, Object.fromEntries(Object.entries(DE_DICT.ui.frontend).map(([key, value]) => ['ui.frontend.' + key, value])));
 i18nRegister('de', DE_DICT);
 
 Object.assign(DE_DICT, {
@@ -4290,3 +4300,33 @@ DE_DICT['ui.remoteDevices.authorizedTools'] = "Autorisierte Werkzeuge";
 DE_DICT.ui.claudeSubscription = {"title":"Claude Pro / Max Konten","hint":"Über den offiziellen Claude-Client mit deinem Pro-/Max-Abo anmelden. Getrennte Kontoprofile werden von allen CIBYP-Oberflächen verwendet.","account":"Gespeichertes Konto","model":"Claude-Modell zum Modellpool hinzufügen","login":"Mit Claude anmelden","reauth":"Erneut autorisieren","cancel":"Anmeldung abbrechen","use":"Hinzufügen und als Standard festlegen","refresh":"Modelle aktualisieren","logout":"Abmelden","usage":"Claude-Nutzung verwalten","openLogin":"Anmeldeseite öffnen","manual":"Anmeldung manuell abschließen","code":"Autorisierungscode aus dem Browser","submit":"Autorisierung abschließen","billing":"Diese Verbindung verwendet keinen API-Schlüssel und aktiviert keine zusätzliche Nutzung. Limits und bestehende Einstellungen für zusätzliche Nutzung bestimmt Claude.","notLoggedIn":"Nicht bei Claude angemeldet","pending":"Claude-Anmeldung im Browser abschließen…","ready":"Mit einem Claude-Abo angemeldet","added":"Zum Pool hinzugefügt; neue Gespräche verwenden dieses Modell"};
 Object.assign(DE_DICT, Object.fromEntries(Object.entries(DE_DICT.ui.claudeSubscription).map(([key,value]) => ["ui.claudeSubscription."+key,value])));
 Object.assign(DE_DICT._textMap,Object.fromEntries(Object.entries({"title":"Claude Pro / Max 账号","hint":"通过官方 Claude 客户端登录，使用自己的 Pro / Max 订阅。账号独立保存，所有前端共享。","account":"已保存账号","model":"添加到模型池的 Claude 模型","login":"使用 Claude 登录","reauth":"重新授权","cancel":"取消登录","use":"添加并设为默认","refresh":"刷新模型","logout":"注销账号","usage":"Claude 用量管理","openLogin":"打开登录网页","manual":"手动完成登录","code":"浏览器返回的授权码","submit":"完成授权","billing":"此通道不使用 API Key，不主动开启额外用量；实际额度及账号已有的额外用量设置以 Claude 服务端为准。","notLoggedIn":"尚未登录 Claude","pending":"请在浏览器中完成 Claude 登录…","ready":"已登录 Claude 订阅账号","added":"已添加到模型池；新会话将使用此模型"}).map(([key,source]) => [source,DE_DICT.ui.claudeSubscription[key]])));
+
+Object.assign(DE_DICT.ui, {models: {"title":"Sitzungsmodell wählen","search":"Modelle oder Anbieter suchen…","default":"Standard","manage":"Modellpool verwalten","switching":"Wird gewechselt…","busy":"Beenden Sie die aktuelle Aufgabe vor dem Modellwechsel.","empty":"Der Modellpool ist leer. Fügen Sie ein Modell hinzu.","noMatches":"Keine passenden Modelle","sessionOnly":"Gilt nur für diese Unterhaltung. Der globale Standard bleibt unverändert.","loading":"Modellpool wird geladen…"}});
+
+Object.assign(DE_DICT.ui, {"messageEdit":{"title":"Nachrichten verwalten","close":"Schließen","intro":"Nachrichten auswählen. Nutzernachrichten schließen Antworten ein; Werkzeugaufrufe und Ergebnisse bleiben zusammen, damit Modellanfragen gültig bleiben.","search":"Nachrichten suchen…","selectAll":"Gefilterte Nachrichten wählen","clear":"Auswahl aufheben","refresh":"Aktualisieren","messages":"Chatnachrichten","scope":"Entfernungsumfang","contextOnly":"Aus dem Modellkontext entfernen, Chatverlauf behalten","both":"Aus Chatverlauf und ursprünglichem Kontext löschen","cancel":"Abbrechen","removeContext":"Aus Kontext entfernen","delete":"Ausgewählte Nachrichten löschen","choose":"Nachrichten auswählen, um den betroffenen Kontext zu prüfen.","busy":"Die Aufgabe läuft noch. Danach aktualisieren und bearbeiten.","counts":"{selected} ausgewählt; mit zugehörigen Einträgen {affected}. {raw} ursprüngliche Kontexteinträge werden entfernt.","prefix":"Die ersten {count} Kontexteinträge und der ursprüngliche Systemprompt bleiben erhalten. Weitere Cache-Einträge berechnet der Anbieter neu.","summary":"Einige Inhalte sind bereits zusammengefasst und lassen sich nicht gezielt entfernen. Die Zusammenfassung bleibt erhalten; für vollständiges Entfernen den Kontext leeren.","user":"Du","assistant":"KI","tool":"Werkzeug","excluded":"Aus Kontext entfernt","emptyMessage":"(Anhang, Denk- oder Werkzeugnachricht)","more":"Mehr anzeigen","empty":"Keine Nachrichten vorhanden","loading":"Nachrichten werden geladen…","saving":"Wird gespeichert…","failed":"Nachrichten konnten nicht aktualisiert werden"},"attachments":{"file":"Datei","remove":"Anhang entfernen"}});
+Object.assign(DE_DICT.ui.models, {"reasoning":"Denkaufwand","reset":"Standard-Denkaufwand wiederherstellen","fixedReasoning":"Dieses Modell bietet keinen einstellbaren Denkaufwand.","sessionEffort":"Gilt nur für diese Unterhaltung","modelDefault":"Modellstandard","savingEffort":"Wird gespeichert…","effort":{"off":"Aus","none":"Aus","auto":"Auto","minimal":"Minimal","low":"Niedrig","medium":"Mittel","high":"Hoch","xhigh":"Sehr hoch","max":"Maximum","ultra":"Ultra"}});
+
+
+Object.assign(DE_DICT._textMap, Object.fromEntries(Object.entries({"interface":"界面风格","v1":"青春","v2":"专业","contentWidth":"聊天内容宽度","widthHint":"专业布局的消息、工具卡片和输入区共用此宽度；小窗口自动适配。","density":"信息密度","compact":"紧凑","comfortable":"舒适","spacious":"宽松"}).map(([key,source]) => [source,DE_DICT.ui.frontend[key]])));
+DE_DICT.ui.frontend.model = "Modell und Denkaufwand wählen";
+DE_DICT['ui.frontend.model'] = DE_DICT.ui.frontend.model;
+DE_DICT._tools.renameWorkspace = "Automatisch erstellten Arbeitsbereich benennen";
+
+DE_DICT.ui.models.sessionChanged = "Die Unterhaltung hat gewechselt. Modellauswahl erneut öffnen.";
+Object.assign(DE_DICT._textMap, {
+  "VM 快速启停": "VM-Schnellstart",
+  "默认开启。停止或退出时保存内存与设备状态，下次直接恢复；首次启动、配置变化或恢复失败时正常开机。保存状态占用额外磁盘空间，所需时间取决于内存大小与磁盘速度。": "Standardmäßig aktiv. Beim Beenden werden Arbeitsspeicher und Gerätezustand gespeichert und beim nächsten Start wiederhergestellt. Beim ersten Start, nach Änderungen oder Fehlern erfolgt ein normaler Start. Benötigt zusätzlichen Speicherplatz; die Geschwindigkeit hängt von RAM und Datenträger ab.",
+  "正在恢复状态": "Zustand wird wiederhergestellt", "正在保存状态": "Zustand wird gespeichert",
+  "连接 Codex 用量…": "Codex-Nutzung verbinden…",
+  "导入 Codex 用量…": "Codex-Nutzung importieren…",
+  "当前 ChatGPT 登录授权不开放 Codex 用量读取。可在桌面点击“连接 Codex 用量”，另行授权同一账号，显示 5 小时、每周等实际额度。模型调用不受影响。": "Diese ChatGPT-Anmeldung kann die Codex-Nutzung nicht lesen. Wähle auf dem Desktop Codex-Nutzung verbinden und autorisiere dasselbe Konto separat, um die tatsächlichen Kontingente anzuzeigen. Modellanfragen bleiben verfügbar.",
+  "Codex 登录回调端口被占用，请结束其他登录后重试。": "Die Codex-Anmeldeports sind belegt. Beende andere Anmeldungen und versuche es erneut.",
+  "请先登录 ChatGPT。": "Melde dich zuerst bei ChatGPT an.",
+  "Codex 账号标识无效。": "Ungültige Codex-Kontokennung.",
+  "账号验证失败，请使用同一个 ChatGPT 账号。": "Identitätsprüfung fehlgeschlagen. Verwende dasselbe ChatGPT-Konto.",
+  "请在桌面应用中连接 Codex 用量，连接后各前端共享显示。": "Verbinde die Codex-Nutzung in der Desktop-App. Alle Oberflächen teilen die Anzeige.",
+  "请选择通过 ChatGPT 登录生成的 Codex auth.json。": "Wähle eine Codex-auth.json aus einer ChatGPT-Anmeldung.",
+  "这个文件不是支持的 Codex 订阅登录记录。": "Diese Datei enthält keine unterstützte Codex-Abonnementanmeldung.",
+  "Codex 用量授权已失效，请在账号设置中重新连接。": "Die Codex-Nutzungsautorisierung ist abgelaufen. Verbinde sie in den Kontoeinstellungen erneut."
+});
+Object.assign(DE_DICT.ui.messageEdit, {"clearConversation":"Chatverlauf leeren","deleteMessage":"Nachricht löschen","deleteTurn":"Diese Gesprächsrunde löschen","deleteFromHere":"Diese und spätere Nachrichten löschen","deleteScope":"Chatnachrichten und ihren ursprünglichen Modellkontext löschen. Das Löschen deiner Nachricht entfernt auch die zugehörigen Antworten.","stale":"Diese Nachricht existiert nicht mehr. Erneut auswählen.","busyDelete":"Die Aufgabe läuft noch. Vor dem Bestätigen anhalten.","stopBeforeDelete":"Aufgabe zuerst anhalten","confirmDelete":"Löschen bestätigen","deleteCount":"{count} Nachrichten und ihren ursprünglichen Kontext löschen.","stopTimeout":"Die Aufgabe wurde noch nicht angehalten. Bitte erneut versuchen."});

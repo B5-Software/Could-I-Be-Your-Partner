@@ -621,10 +621,14 @@ except (OSError, ValueError, KeyError): pass
   }
 
   /** 停止图形环境（保留 VM 运行） */
-  async stop() {
-    const inst = this.vmService && this.vmService.instance;
+  disconnect() {
     this.state = { x: false, vnc: false, chromium: false, vncForward: null, cdpForward: null, vncHostPort: null, cdpHostPort: null, vncWsPort: null };
     try { this._vncWs && this._vncWs.stop(); } catch { /* ignore */ }
+  }
+
+  async stop() {
+    const inst = this.vmService && this.vmService.instance;
+    this.disconnect();
     if (!inst || inst.state !== 'ready') return { ok: true };
     const owned = this._ownedProcesses.splice(0);
     const data = Buffer.from(JSON.stringify({ owned, root: this.desktopRoot || '', runtime: this.runtimeDir })).toString('base64');

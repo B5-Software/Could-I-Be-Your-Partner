@@ -106,6 +106,28 @@ test('stop closes graphics and forwarded ports before shutting down the instance
   assert.deepEqual(vm.listForwards(), []);
 });
 
+test('stop drains in-flight workspace transfers and rejects imports while saving', async (t) => {
+  const { vm, root } = fixture(t);
+  let release;
+  const transfer = new Promise((resolve) => {
+    release = resolve;
+  });
+  let stopped = false;
+  vm.instance = {
+    stop: async () => {
+      stopped = true;
+    },
+  };
+  vm._pairSyncs = new Map([['active', { _chain: transfer }]]);
+  t.mock.method(vm, 'graphicsStop', async () => {});
+  const stopping = vm.stop();
+  assert.equal(stopped, false);
+  assert.equal((await vm.mountExternalDir(root)).ok, false);
+  release();
+  await stopping;
+  assert.equal(stopped, true);
+});
+
 test('combined runtime downloads retain the same cancellation task through image installation', async (t) => {
   const { vm } = fixture(t);
   t.mock.method(vm, 'qemuPackInstalled', () => ({ dir: 'ready' }));

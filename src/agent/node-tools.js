@@ -67,6 +67,7 @@ function registerNodeTools({ bind, getSettings }) {
     });
   }
   return new Set([
+    'renameWorkspace',
     'webSearch',
     'webFetch',
     'calculator',

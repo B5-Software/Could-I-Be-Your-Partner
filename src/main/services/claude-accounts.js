@@ -4,6 +4,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const { spawn } = require('node:child_process');
+const { ClaudeCredentials } = require('./claude-credentials');
 
 function subscriptionEnvironment(directory, parent = process.env) {
   const env = { ...parent };
@@ -37,12 +38,14 @@ class ClaudeAccounts {
     spawnImpl = spawn,
     sdkLoader = () => import('@anthropic-ai/claude-agent-sdk'),
     executablePath = executable,
+    credentialVaultFactory,
   }) {
     this.root = root;
     this.publish = publish;
     this.spawn = spawnImpl;
     this.sdkLoader = sdkLoader;
     this.executablePath = executablePath;
+    this.credentials = new ClaudeCredentials(root, credentialVaultFactory);
     this.requests = new Set();
     this.usage = new Map();
     this.queue = Promise.resolve();
@@ -62,6 +65,7 @@ class ClaudeAccounts {
           this.data.accounts.some((a) => !/^[a-f0-9-]{36}$/.test(a.id))
         )
           throw new Error('Invalid Claude account index');
+        for (const account of this.data.accounts) await this.credentials.migrate(account.id);
       })();
     return this.loading;
   }
@@ -100,34 +104,39 @@ class ClaudeAccounts {
   async run(id, args, signal, raw = false) {
     const directory = this.directory(id);
     await fs.mkdir(directory, { recursive: true, mode: 0o700 });
-    return new Promise((resolve, reject) => {
-      const child = this.spawn(this.executablePath(), args, {
-        cwd: directory,
-        env: subscriptionEnvironment(directory),
-        windowsHide: true,
-        stdio: ['ignore', 'pipe', 'pipe'],
-        signal,
+    const release = await this.credentials.acquire(id);
+    try {
+      return await new Promise((resolve, reject) => {
+        const child = this.spawn(this.executablePath(), args, {
+          cwd: directory,
+          env: subscriptionEnvironment(directory),
+          windowsHide: true,
+          stdio: ['ignore', 'pipe', 'pipe'],
+          signal,
+        });
+        let output = '';
+        child.stdout.on('data', (chunk) => {
+          output += chunk;
+          if (output.length > 65536) child.kill();
+        });
+        child.stderr.on('data', () => {});
+        child.once('error', reject);
+        child.once('close', (code) => {
+          if (output.length > 65536)
+            return reject(new Error('Claude authentication output is too large'));
+          if (code !== 0)
+            return reject(new Error('Claude subscription login is unavailable or expired'));
+          if (raw) return resolve(output.trim());
+          try {
+            resolve(JSON.parse(output));
+          } catch {
+            reject(new Error('Invalid Claude authentication status'));
+          }
+        });
       });
-      let output = '';
-      child.stdout.on('data', (chunk) => {
-        output += chunk;
-        if (output.length > 65536) child.kill();
-      });
-      child.stderr.on('data', () => {});
-      child.once('error', reject);
-      child.once('close', (code) => {
-        if (output.length > 65536)
-          return reject(new Error('Claude authentication output is too large'));
-        if (code !== 0)
-          return reject(new Error('Claude subscription login is unavailable or expired'));
-        if (raw) return resolve(output.trim());
-        try {
-          resolve(JSON.parse(output));
-        } catch {
-          reject(new Error('Invalid Claude authentication status'));
-        }
-      });
-    });
+    } finally {
+      await release();
+    }
   }
   async verify(id, signal = AbortSignal.timeout(15000)) {
     const status = await this.run(id, ['auth', 'status'], signal);
@@ -139,6 +148,7 @@ class ClaudeAccounts {
   }
   async login(id) {
     return this.serial(async () => {
+      if (this.disposed) throw new Error('Claude is shutting down');
       if (this.pending) throw new Error('A Claude login is already in progress');
       const existing = id && this.data.accounts.find((a) => a.id === id);
       if (id && !existing) throw new Error('Unknown Claude account');
@@ -146,14 +156,22 @@ class ClaudeAccounts {
       const directory = this.directory(id);
       await fs.mkdir(directory, { recursive: true, mode: 0o700 });
       const controller = new AbortController();
-      const child = this.spawn(this.executablePath(), ['auth', 'login', '--claudeai'], {
-        cwd: directory,
-        env: subscriptionEnvironment(directory),
-        windowsHide: true,
-        stdio: ['pipe', 'pipe', 'pipe'],
-        signal: controller.signal,
-      });
-      const pending = (this.pending = { id, child, controller });
+      const releaseCredentials = await this.credentials.acquire(id);
+      let child;
+      try {
+        if (this.disposed) throw new Error('Claude is shutting down');
+        child = this.spawn(this.executablePath(), ['auth', 'login', '--claudeai'], {
+          cwd: directory,
+          env: subscriptionEnvironment(directory),
+          windowsHide: true,
+          stdio: ['pipe', 'pipe', 'pipe'],
+          signal: controller.signal,
+        });
+      } catch (error) {
+        await releaseCredentials();
+        throw error;
+      }
+      const pending = (this.pending = { id, child, controller, releaseCredentials });
       this.error = null;
       let output = '';
       child.stdout.on('data', (chunk) => {
@@ -172,8 +190,17 @@ class ClaudeAccounts {
       const timer = setTimeout(() => controller.abort(), 5 * 60 * 1000);
       const complete = async (error) => {
         clearTimeout(timer);
-        if (this.pending !== pending || pending.completing) return;
+        if (pending.completing) return;
         pending.completing = true;
+        if (this.pending !== pending) {
+          try {
+            await releaseCredentials();
+          } catch {
+            this.error = 'Cannot encrypt Claude credentials; keep the app open and retry';
+            this.changed();
+          }
+          return;
+        }
         await this.serial(async () => {
           try {
             if (error) throw error;
@@ -204,6 +231,11 @@ class ClaudeAccounts {
           } catch (error) {
             if (this.pending === pending) this.error = error.message;
           } finally {
+            try {
+              await releaseCredentials();
+            } catch {
+              this.error = 'Cannot encrypt Claude credentials; keep the app open and retry';
+            }
             if (this.pending === pending) {
               this.pending = null;
               this.changed();
@@ -242,6 +274,7 @@ class ClaudeAccounts {
   }
   async switchAccount(id) {
     return this.serial(async () => {
+      if (this.disposed) throw new Error('Claude is shutting down');
       if (this.pending) throw new Error('Finish or cancel the pending Claude login');
       const account = this.data.accounts.find((a) => a.id === id);
       if (!account) throw new Error('Unknown Claude account');
@@ -257,19 +290,28 @@ class ClaudeAccounts {
     return this.serial(async () => {
       if (this.pending?.id === id) this.cancel();
       if (!this.data.accounts.some((a) => a.id === id)) throw new Error('Unknown Claude account');
-      this.abortRequests();
-      // Only CIBYP's private profile is removed. Other Claude installs stay signed in.
-      await this.run(id, ['auth', 'logout'], AbortSignal.timeout(15000), true).catch(() => {});
-      const target = path.resolve(this.directory(id));
-      if (path.dirname(target) !== path.resolve(this.root))
-        throw new Error('Invalid Claude account directory');
-      await fs.rm(target, { recursive: true, force: true });
-      this.usage.delete(id);
-      this.data.accounts = this.data.accounts.filter((a) => a.id !== id);
-      if (this.data.activeId === id) this.data.activeId = null;
-      await this.save();
-      this.changed();
-      return this.snapshot();
+      this.closingProfiles ||= new Set();
+      this.closingProfiles.add(id);
+      try {
+        this.abortRequests();
+        // The SDK can refresh credentials while winding down. Drain its leases
+        // before deleting the profile so a late release cannot recreate a vault.
+        await this.credentials.settle(id);
+        // Only CIBYP's private profile is removed. Other Claude installs stay signed in.
+        await this.run(id, ['auth', 'logout'], AbortSignal.timeout(15000), true).catch(() => {});
+        const target = path.resolve(this.directory(id));
+        if (path.dirname(target) !== path.resolve(this.root))
+          throw new Error('Invalid Claude account directory');
+        await fs.rm(target, { recursive: true, force: true });
+        this.usage.delete(id);
+        this.data.accounts = this.data.accounts.filter((a) => a.id !== id);
+        if (this.data.activeId === id) this.data.activeId = null;
+        await this.save();
+        this.changed();
+        return this.snapshot();
+      } finally {
+        this.closingProfiles.delete(id);
+      }
     });
   }
   abortRequests() {
@@ -313,24 +355,36 @@ class ClaudeAccounts {
   }
   async lease(id, controller) {
     await this.init();
+    if (this.disposed) throw new Error('Claude is shutting down');
     id ||= this.data.activeId;
     if (!id || !this.data.accounts.some((a) => a.id === id))
       throw new Error('Sign in with a Claude Pro or Max subscription');
+    if (this.closingProfiles?.has(id)) throw new Error('Claude account changed');
     this.requests.add(controller);
+    let releaseCredentials;
     try {
+      releaseCredentials = await this.credentials.acquire(id);
+      if (this.disposed) throw new Error('Claude is shutting down');
+      controller.signal.throwIfAborted();
+      if (this.closingProfiles?.has(id)) throw new Error('Claude account changed');
       const status = await this.verify(id, controller.signal);
       controller.signal.throwIfAborted();
-      if (id !== this.data.activeId) throw new Error('Claude account changed');
+      if (id !== this.data.activeId || this.closingProfiles?.has(id))
+        throw new Error('Claude account changed');
       return {
         id,
         status,
         directory: this.directory(id),
         env: subscriptionEnvironment(this.directory(id)),
         executable: this.executablePath(),
-        release: () => this.requests.delete(controller),
+        release: async () => {
+          this.requests.delete(controller);
+          await releaseCredentials();
+        },
       };
     } catch (error) {
       this.requests.delete(controller);
+      await releaseCredentials?.();
       throw error;
     }
   }
@@ -375,12 +429,19 @@ class ClaudeAccounts {
       clearTimeout(timer);
       controller.abort();
       query?.close();
-      lease?.release();
+      try {
+        await query?.return?.();
+      } finally {
+        await lease?.release();
+      }
     }
   }
   dispose() {
+    this.disposed = true;
     this.cancel();
     this.abortRequests();
+    this.disposing ||= this.credentials.settle();
+    return this.disposing;
   }
 }
 module.exports = { ClaudeAccounts, subscriptionEnvironment, executable };

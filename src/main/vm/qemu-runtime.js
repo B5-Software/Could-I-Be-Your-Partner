@@ -271,6 +271,8 @@ function buildArgv(o) {
   );
   const cpu = cpuModelFor(o.accel);
   if (cpu) argv.push('-cpu', cpu);
+  if (o.qmp) argv.push('-qmp', 'stdio');
+  if (o.paused) argv.push('-S');
   return argv;
 }
 

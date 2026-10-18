@@ -170,5 +170,7 @@
   "11-command-palette/01-command-palette.js",
   "12-selection-menu/01-selection-menu.js",
   "13-ready/00-shared-sessions.js",
+  "13-ready/00-frontend-shell.js",
+  "13-ready/00-message-manager.js",
   "13-ready/01-bootstrap-complete.js"
 ]

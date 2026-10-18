@@ -72,6 +72,7 @@ module.exports = function registerLlmIpc({
     if (!result.ok) throw new Error(result.error);
     return { ...llm, provider: result.provider, apiUrl: result.apiUrl };
   }
+  let zenVersionRefreshAt = 0;
   async function fetchRequest(req, config) {
     if (req.pluginProvider) return pluginModels.fetch(req.body, config.options);
     if (req.credentialProvider === 'claude-subscription') {
@@ -86,7 +87,29 @@ module.exports = function registerLlmIpc({
     config.transport = req.transport;
     // Public pricing/catalog refresh must never block an inference request.
     fetchModelsDevData().catch(() => {});
-    if (!req.credentialProvider) return fetchLLMWithRetry(config);
+    if (!req.credentialProvider) {
+      const result = await fetchLLMWithRetry(config);
+      const uaKey = Object.keys(config.headers || {}).find((k) => k.toLowerCase() === 'user-agent');
+      // Refresh a stale automatic v2 version once, without changing credentials,
+      // model, caller-owned UA overrides, or retrying unrelated 403 restrictions.
+      if (
+        req.zenFree &&
+        req.zenAutoHeaders &&
+        Date.now() - zenVersionRefreshAt >= 60000 &&
+        result.status === 403 &&
+        /free tier can only be used from within OpenCode/i.test(result.error || '') &&
+        uaKey &&
+        config.headers[uaKey] === ocHeaders.getOpenCodeUserAgent()
+      ) {
+        zenVersionRefreshAt = Date.now();
+        const before = config.headers[uaKey];
+        await ocHeaders.refreshOpenCodeVersion(undefined, { force: true });
+        const after = ocHeaders.getOpenCodeUserAgent();
+        if (after !== before)
+          return fetchLLMWithRetry({ ...config, headers: { ...config.headers, [uaKey]: after } });
+      }
+      return result;
+    }
     if (!chatGPTAccounts) throw new Error('ChatGPT login service is unavailable');
     let lease = await chatGPTAccounts.lease(false, req.credentialAccountId);
     try {
@@ -525,19 +548,33 @@ module.exports = function registerLlmIpc({
   // 会话级模型覆盖：模型池条目在会话创建时锁定，随每次请求携带 provider/apiUrl/apiKey
   function applySessionModelOverrides(baseLlm, options) {
     if (!options || typeof options !== 'object') return baseLlm;
-    const out = { ...baseLlm };
+    const entry = baseLlm.pool?.find(
+      (row) => row.id === options.poolEntryId && row.enabled !== false,
+    );
+    const out = {
+      ...baseLlm,
+      ...(entry || {}),
+      model: entry?.model || options.model || baseLlm.model,
+    };
     if (options.contextLength) out.maxContextLength = options.contextLength;
-    if (options.provider) out.provider = options.provider;
+    if (!entry && options.provider) out.provider = options.provider;
     if (typeof options.autoOpencodeHeaders === 'boolean')
       out.autoOpencodeHeaders = options.autoOpencodeHeaders;
     if (typeof options.requestReasoningSummary === 'boolean')
       out.requestReasoningSummary = options.requestReasoningSummary;
-    if (options.apiUrl) out.apiUrl = options.apiUrl;
-    if (options.apiKey !== undefined && options.apiKey !== null && options.apiKey !== '') {
+    if (!entry && options.apiUrl) out.apiUrl = options.apiUrl;
+    if (
+      !entry &&
+      options.apiKey !== undefined &&
+      options.apiKey !== null &&
+      options.apiKey !== ''
+    ) {
       out.apiKey = options.apiKey;
       if (out.provider === 'opencode-zen' || out.provider === 'opencode-go')
         out.zenApiKey = options.apiKey;
     }
+    if (entry && ['opencode-zen', 'opencode-go'].includes(out.provider))
+      out.zenApiKey = entry.apiKey || '';
     return out;
   }
 
@@ -560,7 +597,7 @@ module.exports = function registerLlmIpc({
       if (blocked) return blocked;
 
       // 会话级覆盖优先：/model 或会话锁定的模型池条目（options.model/provider/apiUrl/apiKey）
-      const requestModel = options.model || llm.model;
+      const requestModel = llm.model || options.model;
       const requestEffort =
         options.reasoningEffort !== undefined
           ? options.reasoningEffort
@@ -740,7 +777,7 @@ module.exports = function registerLlmIpc({
       const blocked = budgetFailure();
       if (blocked) return blocked;
       // 会话级覆盖优先：/model 或会话锁定的模型池条目
-      const requestModel = options.model || llm.model;
+      const requestModel = llm.model || options.model;
       const requestEffort =
         options.reasoningEffort !== undefined
           ? options.reasoningEffort
@@ -919,7 +956,7 @@ module.exports = function registerLlmIpc({
       }
 
       // 会话级覆盖：压缩摘要与主请求同模型/同变体，复用暖前缀缓存
-      const requestModel = options.model || llm.model;
+      const requestModel = llm.model || options.model;
       const requestEffort =
         options.reasoningEffort !== undefined
           ? options.reasoningEffort

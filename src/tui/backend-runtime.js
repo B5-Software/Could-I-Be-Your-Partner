@@ -95,6 +95,8 @@ async function createBackendRuntime(client) {
     'stop',
     'undo',
     'deleteTurn',
+    'getMessageEditPlan',
+    'editMessages',
     'close',
     'respond',
     'answerQuestions',

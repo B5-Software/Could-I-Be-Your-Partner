@@ -485,6 +485,7 @@ const CODE_TOOLS = new Set([
   'terminalReadOutput', 'terminalSendInput', 'terminalPressKey', 'terminalAnswerPrompt', 'terminalListSessions',
   // 网络（代码任务常需搜索文档/获取依赖信息）
   'webSearch', 'webFetch', 'downloadFile', 'getDownloadStatus', 'pauseDownload', 'resumeDownload', 'cancelDownload', 'httpRequest',
+  'renameWorkspace',
   // 知识库（代码片段/项目知识）
   'knowledgeBaseSearch', 'knowledgeBaseAdd',
   // 记忆（跨会话记住项目约定）
@@ -522,6 +523,7 @@ const BABE_ALLOWED_TOOLS = new Set([
   'saveMemory', 'readMemory', 'listMemories', 'deleteMemory',
   // 网络
   'webSearch', 'webFetch',
+  'renameWorkspace',
   // 知识
   'searchKnowledge', 'addKnowledge',
   // 文件（基础）
@@ -573,6 +575,7 @@ const TOOL_DEFINITIONS = [
   { name: 'combinatorics', desc: '排列组合计算', icon: 'fa-shuffle', category: '计算', sensitive: false },
   { name: 'fractionBaseConvert', desc: '分数（非整数）进制转换', icon: 'fa-repeat', category: '计算', sensitive: false },
   { name: 'webSearch', desc: '网络搜索（Bing / Exa / Parallel / TinyFish / Fusion）', icon: 'fa-magnifying-glass', category: '网络', sensitive: false },
+  { name: 'renameWorkspace', desc: '为自动创建的工作目录命名', icon: 'fa-folder', category: '文件', sensitive: false },
   { name: 'webFetch', desc: '获取网页数据', icon: 'fa-download', category: '网络', sensitive: true },
   { name: 'offscreenRenderOCR', desc: '离屏打开URL渲染并OCR', icon: 'fa-camera-retro', category: '网络', sensitive: false },
   { name: 'offscreenRenderContent', desc: '离屏打开URL渲染并提取页面内容（不OCR）', icon: 'fa-file-lines', category: '网络', sensitive: false },
@@ -888,6 +891,7 @@ const DANGEROUS_COMMANDS = {
 // imOwner: 可选，CIBYP-IM 主人用户名，非空时注入到 cibypim* 工具描述中
 function getToolSchemas(enabledTools, mode, imOwner) {
   const schemas = {
+    renameWorkspace: { type: 'function', function: { name: 'renameWorkspace', description: 'Give the automatically created workspace a concise descriptive name based on its saved artifacts, independent of the conversation title. Physically renames owned storage when possible and keeps a stable old-path alias. Always keep using the returned stable path for tools. User-selected projects are never renamed. Call before finishing a turn that saved files in an unnamed managed workspace.', parameters: { type: 'object', properties: { name: { type: 'string', description: 'Short meaningful directory name, not a path (maximum 64 characters)' } }, required: ['name'] } } },
     codeIDE: { type: 'function', function: { name: 'codeIDE', description: 'Code 模式：调用当前 Code-OSS 工作区已安装扩展的语言服务或公开扩展命令。支持诊断、悬停、定义、类型定义、实现、引用、符号、补全、代码修复和格式化/重命名预览；使用编辑器当前未保存的内容。行列从 1 开始。rename/format/codeActions 返回建议编辑，不自动改文件；通过文件编辑工具应用修改。extensions/commands 按 query 搜索，command 执行已发现的公开扩展命令。结果有数量/体积上限及 truncated 标志。', parameters: { type: 'object', properties: { action: { type: 'string', enum: ['extensions', 'commands', 'command', 'diagnostics', 'hover', 'definition', 'typeDefinition', 'implementation', 'references', 'symbols', 'workspaceSymbols', 'completion', 'codeActions', 'rename', 'format'] }, path: { type: 'string', description: '工作区文件的相对或绝对路径；不传时使用当前编辑器' }, line: { type: 'integer', minimum: 1 }, column: { type: 'integer', minimum: 1 }, query: { type: 'string', description: '扩展/命令搜索词或工作区符号名' }, newName: { type: 'string' }, command: { type: 'string', description: '从 commands 获取的扩展命令 ID' }, arguments: { type: 'array', items: {}, description: '公开命令参数；按扩展文档填写' }, limit: { type: 'integer', minimum: 1, maximum: 100, description: '最多返回的条目数，默认 30' } }, required: ['action'] } } },
     automationList: { type: 'function', function: { name: 'automationList', description: '列出所有自动化触发任务（名称、启用状态、触发器摘要、运行次数、上次运行时间与错误）。', parameters: { type: 'object', properties: {}, required: [] } } },
     automationGetGuide: { type: 'function', function: { name: 'automationGetGuide', description: '按需获取自动化任务的完整指导文档。编写自动化任务（尤其 DSL 提示词构造）前必须先调用本工具获取完整语法；该文档不注入系统提示，topic 可选 all（全部，默认）/trigger（触发器）/dsl（DSL 语法与标准库）/examples（示例）。', parameters: { type: 'object', properties: { topic: { type: 'string', enum: ['all', 'trigger', 'dsl', 'examples'], description: '获取的指导主题，默认 all' } }, required: [] } } },

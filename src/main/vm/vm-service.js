@@ -55,6 +55,7 @@ class VmService extends EventEmitter {
     this.getSettings = opts.getSettings || (() => ({}));
     this.persistSettings = opts.persistSettings || (() => {});
     this.aria2 = opts.aria2 || null;
+    this.safeStorage = opts.safeStorage || null;
     this.instance = null;
     this.appearanceSync = new VmAppearanceSync({
       getInstance: () => this.instance,
@@ -85,7 +86,7 @@ class VmService extends EventEmitter {
       workspaceMode: r.workspaceMode === 'isolated' ? 'isolated' : 'shared',
       vm: Object.assign({
         variant: 'base', imageVersion: null, assetsDir: '', mirror: 'cn',
-        accel: 'auto', allowTcg: true, smp: 4, memMB: 4096, netMode: 'nat', shutdownOnExit: true,
+        accel: 'auto', allowTcg: true, smp: 4, memMB: 4096, netMode: 'nat', shutdownOnExit: true, quickResume: true,
       }, r.vm || {}),
     };
   }
@@ -130,10 +131,11 @@ class VmService extends EventEmitter {
     this._pairSyncs.set(identity, sync);
     if (!this._syncTimer) {
       this._syncTimer = setInterval(() => {
-        if (this._pollingSync || this._manualTransfers || this._externMountTasks?.size || this.instance?.state !== 'ready' || this.runtime.workspaceMode !== 'shared') return;
+        if (this._stopping || this._pollingSync || this._manualTransfers || this._externMountTasks?.size || this.instance?.state !== 'ready' || this.runtime.workspaceMode !== 'shared') return;
         this._pollingSync = true;
         (async () => {
           for (const pair of this._pairSyncs.values()) {
+            if (this._stopping) break;
             this.workspacePair(pair.hostRoot, pair.vmMount, pair._explicitOptions);
             const result = await pair.sync({ direction: 'both', reason: 'background' });
             if (!result.ok) this.emit('sync-warn', result.error);
@@ -157,6 +159,7 @@ class VmService extends EventEmitter {
    * 跳过生成文件，单文件默认上限 20MB；IDE 导入保留 Git 并持久识别宿主来源。
    */
   async mountExternalDir(hostDir, { refresh = false, preserveGit = false } = {}) {
+    if (this._stopping) return { ok: false, error: '虚拟机正在保存或关闭，请稍后重试' };
     if (!String(hostDir || '').trim()) return { ok: false, error: 'Workspace directory is required' };
     const hostRoot = path.resolve(String(hostDir || ''));
     const key = process.platform === 'win32' ? hostRoot.toLowerCase() : hostRoot;
@@ -337,6 +340,7 @@ class VmService extends EventEmitter {
    * @param {object} opts { direction: 'both'|'push'|'pull', reason }
    */
   async syncWorkspace(opts = {}) {
+    if (this._stopping) return { ok: false, error: '虚拟机正在保存或关闭，请稍后重试' };
     if (this.runtime.workspaceMode !== 'shared') {
       return { ok: false, error: '当前为独立工作区模式（不自动同步）', mode: 'isolated' };
     }
@@ -472,12 +476,14 @@ class VmService extends EventEmitter {
       version: selected.version,
       appPath: this.app.getAppPath(),
       instanceName,
+      safeStorage: this.safeStorage,
       config: {
         smp: this.runtime.vm.smp,
         memMB: this.runtime.vm.memMB,
         netMode: this.runtime.vm.netMode,
         tcg: this.runtime.vm.allowTcg !== false,
         shutdownOnExit: this.runtime.vm.shutdownOnExit !== false,
+        quickResume: this.runtime.vm.quickResume !== false,
         kernelCmdline: this.runtime.vm.kernelCmdline || null,
       },
     });
@@ -497,7 +503,17 @@ class VmService extends EventEmitter {
   }
 
   async start() {
+    if (this._stopping) await this._stopping;
     const inst = this._ensureInstance();
+    if (['idle', 'failed'].includes(inst.state)) {
+      Object.assign(inst.config, {
+        smp: this.runtime.vm.smp, memMB: this.runtime.vm.memMB,
+        netMode: this.runtime.vm.netMode, tcg: this.runtime.vm.allowTcg !== false,
+        kernelCmdline: this.runtime.vm.kernelCmdline || null,
+        quickResume: this.runtime.vm.quickResume !== false,
+      });
+      inst._accelCache = null;
+    }
     return inst.start();
   }
 
@@ -505,12 +521,26 @@ class VmService extends EventEmitter {
     return this.appearanceSync.sync(options);
   }
 
-  async stop() {
-    if (!this.instance) return { ok: true };
-    await this.graphicsStop();
-    for (const port of [...(this._forwards || new Map()).keys()]) this.unforwardPort(port);
-    await this.instance.stop();
-    return { ok: true };
+  stop(options = {}) {
+    if (this._stopping) return this._stopping;
+    this._stopping = (async () => {
+      if (!this.instance) return { ok: true };
+      // Keep the VM desktop processes in saved RAM; only release host tunnels.
+      // A normal shutdown still tears down the graphics service as before.
+      const quickResume = this.runtime.vm.quickResume !== false && !options.force;
+      if (this.instance.config) this.instance.config.quickResume = quickResume;
+      await Promise.all([
+        ...[...(this._pairSyncs?.values() || [])].map(pair => pair._chain?.catch(() => {})),
+        ...[...(this._externMountTasks?.values() || [])].map(task => task.catch(() => {})),
+      ]);
+      if (this._graphics?._startingPromise) await this._graphics._startingPromise.catch(() => {});
+      if (quickResume && this.instance._savedState?.available) this._graphics?.disconnect();
+      else await this.graphicsStop();
+      for (const port of [...(this._forwards || new Map()).keys()]) this.unforwardPort(port);
+      await this.instance.stop({ ...options, quickResume });
+      return { ok: true };
+    })().finally(() => { this._stopping = null; });
+    return this._stopping;
   }
 
   async reset() {

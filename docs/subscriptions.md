@@ -1,5 +1,17 @@
 # 订阅账号与用量
 
+## 安全存储与 Codex 用量连接
+
+ChatGPT 登录凭据和附加的 Codex 用量凭据保存在加密账号库：Windows 使用当前用户 DPAPI；macOS/Linux 桌面使用 Electron 的系统安全存储，拒绝 `basic_text` 后端。旧的 POSIX 明文账号库在读取时迁移；系统钥匙串不可用时不再退回明文保存。
+
+Claude 官方运行时需要在使用时读取其凭据文件。CIBYP 在后台空闲时将 `.credentials.json` 加密为账号内的 `credentials.vault`，仅在登录、状态查询或 SDK 运行期间租用当前账号的私有凭据文件；最后一个使用者结束后保存刷新结果并移除明文副本。启动时迁移旧文件，退出时等待清理。macOS 上由官方客户端直接使用的系统钥匙串仍由其管理。
+
+新版 Sign in with ChatGPT 授权可正常推理，但当前令牌不具有旧 Codex `/wham/usage` 的访问权限。桌面设置提供“连接 Codex 用量…”：通过浏览器单独授权同一账号，验证身份签名与账号一致性后，加密保存 CIBYP 自己的用量授权，可独立刷新。此连接使用 Codex 公开客户端的 PKCE 流程和允许的 1455/1457 本地回调端口，以 CIBYP 自身标识发起请求；不代表官方已单独批准第三方产品，实际授权与可读窗口取决于服务端。该授权用于查询实际的 5 小时、每周等窗口，不替换当前模型调用授权；各前端共享读取结果。没有连接时显示原因和 ChatGPT 用量管理入口，不显示虚构百分比。
+
+“导入 Codex 用量…”是可选的只读兼容入口：用户明确选择同一账号的 Codex `auth.json`，不会自动扫描、写回或修改其他应用的凭据，也不复制或刷新其 refresh token。导入的 access token 到期后需要重新导入或使用独立授权连接。额度重置卡仍只允许用户在桌面手动点击并二次确认。
+
+参考：[OpenAI 授权与会话文档](https://developers.openai.com/siwc/token-sharing-open-source/profiles-and-sessions)、[Codex 用量读取实现](https://github.com/openai/codex/blob/main/codex-rs/backend-client/src/client/rate_limit_resets.rs)。
+
 ## Claude Pro / Max
 
 设置 → 模型与连接 → Claude Pro / Max 账号，点击“使用 Claude 登录”，在主机浏览器中完成官方授权，然后选择模型并点击“添加并设为默认”。可以保存多个独立账号、切换、重新授权和注销。TUI 使用 `/claude login`，完成后 `/claude model` 选择模型；`/claude` 选择账号，`/claude logout` 注销。无本机浏览器时，登录地址会显示在 TUI，必要时使用 `/claude code 授权码` 完成官方客户端的手动流程，授权码不进入输入历史。
@@ -16,7 +28,7 @@
 
 ## ChatGPT / Codex
 
-在设置 → 模型与连接登录自己的 ChatGPT 账号。授权采用官方 Sign in with ChatGPT 流程：浏览器登录、PKCE、本地回调和身份签名验证；账号可切换、注销。账号凭据保存在独立本地存储，Windows 使用当前用户 DPAPI，Unix 使用仅当前用户可读的文件。不会导入其他应用的登录凭据。
+在设置 → 模型与连接登录自己的 ChatGPT 账号。授权采用官方 Sign in with ChatGPT 流程：浏览器登录、PKCE、本地回调和身份签名验证；账号可切换、注销。账号凭据保存在独立加密存储，Windows 使用当前用户 DPAPI，macOS/Linux 使用系统安全存储；没有可用加密后端时拒绝保存。模型调用不会自动导入其他应用的登录凭据。
 
 订阅模型使用官方固定 Responses 地址，流式请求且不保存服务端记录。模型池的其他 Provider 可选择自动识别 API 格式；连接测试只在明确的协议不兼容响应下尝试其他格式，鉴权、额度和连接错误不会反复切换协议。格式测试会产生少量 Token 用量。
 
@@ -30,7 +42,7 @@ ChatGPT/Codex、OpenCode Go 按订阅额度计量；API 等效消费只是参考
 
 OpenCode Go 从其已发布的 `/zen/go/v1/usage` 接口读取 5 小时、周和月窗口。需要实际 Go Key；Zen 免费访问不能提供 Go 订阅额度。
 
-Codex 额度通过官方 Codex CLI 的 `app-server` 读取，采用独立临时配置目录与当前授权账号。需安装官方 CLI，或设置 `CIBYP_CODEX_BINARY`。官方登录若没有返回可验证的 Codex 账号标识，则不能读取原生额度：界面会提示不可用，并提供 ChatGPT 用量页面入口。不会从邮箱、用户 ID 或其他应用的授权数据猜测账号标识。
+已连接的 Codex 用量授权直接读取 Codex 后端的实际窗口，不依赖安装 CLI。旧版授权本身包含可验证的 Codex 账号标识时，仍可通过官方 CLI 的 `app-server` 兼容读取（需安装 CLI 或设置 `CIBYP_CODEX_BINARY`）。没有合适授权时提示原因并提供用量页面入口，不会从邮箱或用户 ID 猜测账号标识。
 
 ## 额度重置卡
 
@@ -41,5 +53,11 @@ Codex 额度通过官方 Codex CLI 的 `app-server` 读取，采用独立临时�
 登录、安全存储、模型解析、额度协议、取消、账号切换、手动确认和价格覆盖已通过隔离配置及模拟服务验证。没有使用用户的真实付费账号消耗额度或重置卡；真实订阅登录与卡片操作仍需由账号持有人执行。SIWC 通道目前不支持服务端输出 Token 上限，界面会明确说明。
 
 Zen 免费模型采用渠道元数据和保守安全窗口，而不直接套用模型的上游最大上下文。安全窗口不是所有免费模型的官方统一承诺。模型列表可能包含已下线条目，连接测试会识别不可用模型，支持重试和重新选择。
+
+Zen 兼容层已对齐 OpenCode v2（2026-10-16，源码 `e89206d`）：模型列表使用 `/inference/v1/models`，推理按 OpenAI Chat / Responses / Anthropic Messages 分别路由。匿名请求不向新推理服务发送 `public` 假 Key。UA 版本从当前 `@opencode/cli` 发布线更新，旧 `opencode-ai` v1 版本缓存会自动迁移；用户显式配置的请求头仍优先。
+
+会话 ID 使用带倒序时间戳的原生格式，保存在后端数据目录的 `opencode-sessions.json`，GUI、TUI、WebUI 共享后端即可共享映射，重启也保持稳定。文件只包含哈希后的本地会话标识与公开路由 ID，不包含标题或凭据。仅 Zen 免费模型附加 v2 六项核心工具定义；`shell`、`write` 等别名仍调用 CIBYP 自身工具，并遵守工具禁用、子 Agent 白名单、敏感操作审批和宿主 / VM 路由。无工具辅助请求使用精简占位定义，避免无关工具占用大量上下文。
+
+只在免费客户端校验拒绝且 UA 由自动配置管理时，兼容层刷新版本并在版本变化后重试一次。地区、账号和额度错误不会触发该适配，也不会自动换 Key 或模型。在线验证可手动执行 `npm run test:zen`（默认免费 MiMo），或 `npm run test:zen -- space-bunny-free`；此测试不读取用户账号，不运行模型返回的工具，不进入常规 CI。
 
 参考：[OpenAI SIWC](https://developers.openai.com/siwc/)、[OpenCode Go](https://opencode.ai/docs/go/)、[Go 用量接口源码](https://github.com/anomalyco/opencode/blob/dev/packages/console/app/src/routes/zen/go/v1/usage.ts)。

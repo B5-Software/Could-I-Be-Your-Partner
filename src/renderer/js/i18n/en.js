@@ -10,6 +10,11 @@
 const EN_DICT = {
   // ── UI Strings ──
   ui: {
+    frontend: {contentWidth:"Chat content width",widthHint:"Messages, tool cards and composers share this width in Professional. Smaller windows adapt automatically.",density:"Information density",compact:"Compact",comfortable:"Comfortable",spacious:"Spacious",
+      interface: 'Interface style', v1: 'Youth', v2: 'Professional',
+      hint: 'Switch immediately while keeping sessions, tasks, drafts and workspaces. Both interfaces share all features and settings.',
+      toggle: 'Toggle session sidebar', close: 'Collapse sidebar', new: 'New conversation', search: 'Search sessions', open: 'Sessions', recent: 'Earlier conversations', all: 'All history', empty: 'No conversation history yet', noMatches: 'No matching sessions', loading: 'Loading…', failed: 'History unavailable. Click to retry', untitled: 'Untitled conversation', workspace: 'Working directory', chooseWorkspace: 'Open workspace', model: 'Model settings', resize: 'Resize session sidebar', host: 'This computer', vm: 'Virtual machine', welcomeHint: 'Start with an idea.', inputHint: 'Enter to send · Shift+Enter for a new line', actionFailed: 'Action failed. Please try again',
+    },
     remoteDevices: {title: 'Remote devices', hint: 'Micro connects to this backend. Devices receive only the tools and resources explicitly granted here.', refresh: 'Refresh devices', pair: 'Pair / edit permissions', id: 'Device ID', add: 'Add tool grant', save: 'Save device', private: 'New credentials can only be recovered during this backend boot. Provision over trusted USB / serial; do not send them to an Agent.', tool: 'Tool name, e.g. gpio_write', resources: 'Resources, e.g. gpio:17 (comma separated)', write: 'Allow writes (approval and lease required)', remove: 'Remove', empty: 'No paired devices', online: 'Online', offline: 'Offline', writable: 'Writable', edit: 'Edit permissions', revoke: 'Revoke device', confirmRevoke: 'Click again to confirm revocation', duplicate: 'Tool names must be unique', saved: 'Saved. Configure the device with a WSS gateway URL and the new credentials.', unavailable: 'This backend does not support Remote devices'},
     terminal: { error: 'Terminal operation failed: {error}' },
     camera: {
@@ -845,6 +850,10 @@ ${p.toolListSection}`;
 
   // ── Hardcoded UI text mappings (Chinese → English) ──
   _textMap: {
+    '界面版本': 'Interface',
+    'V1 · 经典界面': 'V1 · Classic',
+    'V2 · 工作台': 'V2 · Workbench',
+    '立即切换布局，保留当前会话、任务、草稿与工作区。两套界面共用全部功能和设置。': 'Switch immediately while keeping sessions, tasks, drafts and workspaces. Both interfaces share all features and settings.',
     // ── Common UI ──
     '未命名对话': 'Untitled conversation',
     '单击编辑': 'Click to edit',
@@ -3959,6 +3968,7 @@ Object.assign(EN_DICT._textMap, {
   '鼠标交互': EN_DICT['ui.settings.tui.mouse'],
   '点击菜单、定位输入光标、滚轮翻页和拖选复制。关闭后使用终端原生鼠标行为；也可使用 /mouse on 或 /mouse off。': EN_DICT['ui.settings.tui.mouseHint'],
 });
+Object.assign(EN_DICT, Object.fromEntries(Object.entries(EN_DICT.ui.frontend).map(([key, value]) => ['ui.frontend.' + key, value])));
 i18nRegister('en', EN_DICT);
 
 Object.assign(EN_DICT, {
@@ -4259,3 +4269,33 @@ EN_DICT['ui.remoteDevices.authorizedTools'] = "Authorized tools";
 EN_DICT.ui.claudeSubscription = {"title":"Claude Pro / Max accounts","hint":"Sign in through the official Claude client using your Pro / Max plan. Profiles are isolated and shared across CIBYP frontends.","account":"Saved account","model":"Claude model to add to the pool","login":"Sign in with Claude","reauth":"Reauthorize","cancel":"Cancel sign-in","use":"Add and set as default","refresh":"Refresh models","logout":"Sign out","usage":"Claude usage settings","openLogin":"Open sign-in page","manual":"Complete sign-in manually","code":"Authorization code returned by the browser","submit":"Complete authorization","billing":"This connection uses no API key and does not enable extra usage. Limits and any existing extra-usage settings are determined by Claude.","notLoggedIn":"Not signed in to Claude","pending":"Complete Claude sign-in in your browser…","ready":"Signed in with a Claude subscription","added":"Added to the pool; new conversations will use this model"};
 Object.assign(EN_DICT, Object.fromEntries(Object.entries(EN_DICT.ui.claudeSubscription).map(([key,value]) => ["ui.claudeSubscription."+key,value])));
 Object.assign(EN_DICT._textMap,Object.fromEntries(Object.entries({"title":"Claude Pro / Max 账号","hint":"通过官方 Claude 客户端登录，使用自己的 Pro / Max 订阅。账号独立保存，所有前端共享。","account":"已保存账号","model":"添加到模型池的 Claude 模型","login":"使用 Claude 登录","reauth":"重新授权","cancel":"取消登录","use":"添加并设为默认","refresh":"刷新模型","logout":"注销账号","usage":"Claude 用量管理","openLogin":"打开登录网页","manual":"手动完成登录","code":"浏览器返回的授权码","submit":"完成授权","billing":"此通道不使用 API Key，不主动开启额外用量；实际额度及账号已有的额外用量设置以 Claude 服务端为准。","notLoggedIn":"尚未登录 Claude","pending":"请在浏览器中完成 Claude 登录…","ready":"已登录 Claude 订阅账号","added":"已添加到模型池；新会话将使用此模型"}).map(([key,source]) => [source,EN_DICT.ui.claudeSubscription[key]])));
+
+Object.assign(EN_DICT.ui, {models: {"title":"Choose a session model","search":"Search models or providers…","default":"Default","manage":"Manage model pool","switching":"Switching…","busy":"Finish the current task before switching models.","empty":"The model pool is empty. Add a model first.","noMatches":"No matching models","sessionOnly":"Applies to this conversation only. The global default stays unchanged.","loading":"Loading model pool…"}});
+
+Object.assign(EN_DICT.ui, {"messageEdit":{"title":"Manage messages","close":"Close","intro":"Select messages to remove. User messages include their replies; tool calls and results stay together to keep model requests valid.","search":"Search messages…","selectAll":"Select filtered messages","clear":"Clear selection","refresh":"Refresh","messages":"Chat messages","scope":"Removal scope","contextOnly":"Remove from model context, keep chat history","both":"Delete from chat history and original context","cancel":"Cancel","removeContext":"Remove from context","delete":"Delete selected messages","choose":"Select messages to preview the affected context.","busy":"The task is still running. Finish it, then refresh before editing.","counts":"Selected {selected}; {affected} messages including related items. Removing {raw} original context messages.","prefix":"Keep the first {count} context messages and original system prompt. The provider recalculates subsequent cache entries.","summary":"Some content is already in a summary and cannot be removed precisely. The summary will be kept; clear the context for a full removal.","user":"You","assistant":"AI","tool":"Tool","excluded":"Removed from context","emptyMessage":"(Attachment, reasoning or tool message)","more":"Show more","empty":"No messages to manage","loading":"Loading messages…","saving":"Saving…","failed":"Unable to update messages"},"attachments":{"file":"File","remove":"Remove attachment"}});
+Object.assign(EN_DICT.ui.models, {"reasoning":"Reasoning effort","reset":"Reset reasoning effort","fixedReasoning":"This model does not offer adjustable reasoning.","sessionEffort":"Applies to this conversation only","modelDefault":"Model default","savingEffort":"Saving…","effort":{"off":"Off","none":"Off","auto":"Auto","minimal":"Minimal","low":"Low","medium":"Medium","high":"High","xhigh":"Extra high","max":"Maximum","ultra":"Ultra"}});
+
+
+Object.assign(EN_DICT._textMap, Object.fromEntries(Object.entries({"interface":"界面风格","v1":"青春","v2":"专业","contentWidth":"聊天内容宽度","widthHint":"专业布局的消息、工具卡片和输入区共用此宽度；小窗口自动适配。","density":"信息密度","compact":"紧凑","comfortable":"舒适","spacious":"宽松"}).map(([key,source]) => [source,EN_DICT.ui.frontend[key]])));
+EN_DICT.ui.frontend.model = "Choose model and reasoning effort";
+EN_DICT['ui.frontend.model'] = EN_DICT.ui.frontend.model;
+EN_DICT._tools.renameWorkspace = "Name the automatically created workspace";
+
+EN_DICT.ui.models.sessionChanged = "The conversation changed. Reopen the model picker.";
+Object.assign(EN_DICT._textMap, {
+  "VM 快速启停": "VM quick resume",
+  "默认开启。停止或退出时保存内存与设备状态，下次直接恢复；首次启动、配置变化或恢复失败时正常开机。保存状态占用额外磁盘空间，所需时间取决于内存大小与磁盘速度。": "Enabled by default. Save memory and device state when stopping or exiting, then restore it on the next start. First startup, configuration changes and failed restores use a normal boot. Saving needs extra disk space; speed depends on memory and storage.",
+  "正在恢复状态": "Restoring state", "正在保存状态": "Saving state",
+  "连接 Codex 用量…": "Connect Codex usage…",
+  "导入 Codex 用量…": "Import Codex usage…",
+  "当前 ChatGPT 登录授权不开放 Codex 用量读取。可在桌面点击“连接 Codex 用量”，另行授权同一账号，显示 5 小时、每周等实际额度。模型调用不受影响。": "This ChatGPT authorization cannot read Codex usage. On desktop, choose Connect Codex usage and authorize the same account separately to display actual quota windows. Model requests are unaffected.",
+  "Codex 登录回调端口被占用，请结束其他登录后重试。": "Codex login callback ports are busy. Finish other logins and try again.",
+  "请先登录 ChatGPT。": "Sign in with ChatGPT first.",
+  "Codex 账号标识无效。": "Invalid Codex account identifier.",
+  "账号验证失败，请使用同一个 ChatGPT 账号。": "Identity verification failed. Use the same ChatGPT account.",
+  "请在桌面应用中连接 Codex 用量，连接后各前端共享显示。": "Connect Codex usage in the desktop app; all frontends share the result.",
+  "请选择通过 ChatGPT 登录生成的 Codex auth.json。": "Select a Codex auth.json created by signing in with ChatGPT.",
+  "这个文件不是支持的 Codex 订阅登录记录。": "This file is not a supported Codex subscription login.",
+  "Codex 用量授权已失效，请在账号设置中重新连接。": "Codex usage authorization expired. Reconnect it in account settings."
+});
+Object.assign(EN_DICT.ui.messageEdit, {"clearConversation":"Clear chat history","deleteMessage":"Delete message","deleteTurn":"Delete this turn","deleteFromHere":"Delete this and later messages","deleteScope":"Delete the chat records and their original model context. Deleting your message also deletes its replies.","stale":"This message no longer exists. Select it again.","busyDelete":"The task is running. Stop it before confirming deletion.","stopBeforeDelete":"Stop task to continue","confirmDelete":"Confirm deletion","deleteCount":"Delete {count} messages and their original context.","stopTimeout":"The task has not stopped yet. Try again shortly."});

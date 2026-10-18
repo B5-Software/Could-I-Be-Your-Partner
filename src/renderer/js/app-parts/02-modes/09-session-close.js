@@ -59,7 +59,7 @@
         icon: 'fa-folder-open',
         label: '打开工作目录',
         disabled: !workspacePath,
-        action: () => { if (workspacePath) window.api.openFileExplorer(workspacePath); }
+        action: () => { if (workspacePath) window.api.workspaceOpenInExplorer(workspacePath); }
       },
       {
         icon: 'fa-xmark',

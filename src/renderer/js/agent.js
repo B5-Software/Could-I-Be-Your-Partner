@@ -96,6 +96,9 @@ function agentDefaultHost() {
 
 const BABE_RELATIONSHIP_DATA = typeof BabeRelationshipData !== 'undefined' ? BabeRelationshipData : typeof require === 'function' ? require('../../shared/babe-relationship') : null;
 
+// Wire aliases are resolved before permission and delegated-scope checks.
+const OPENCODE_TOOL_ALIASES = { bash: 'runShellScriptCode', shell: 'runShellScriptCode', write: 'editFile', read: 'readFile', edit: 'editFile', glob: 'localSearch', grep: 'searchInFiles' };
+
 // AI Agent Engine - handles the autonomous agent loop
 class Agent {
   // 全局待办（多会话共享）由宿主提供；无宿主待办时退化为本实例私有待办。
@@ -582,6 +585,10 @@ class Agent {
   }
 
   getSystemPrompt() {
+    return this._buildSystemPrompt() + '\n\nWorkspace naming: If you save artifacts in an automatically created workspace, call renameWorkspace with a concise semantic name before finishing. This name is independent of the conversation title. Keep using the stable workspace path after naming. Do not rename user-selected projects. If naming fails, report it honestly; do not retry indefinitely.';
+  }
+
+  _buildSystemPrompt() {
     // 极简模式：固定精简系统提示词（不随会话细节变化，保护前缀缓存）
     if (this.minimalMode) return this.getMinimalSystemPrompt();
     // Babe 模式使用独立的系统提示词
@@ -743,6 +750,10 @@ ${customPrompt ? '\n用户自定义提示词:\n' + customPrompt : ''}${skillsSec
   }
 
   async executeMinimalTool(name, args = {}) {
+    if (name === 'shell') {
+      if (args.workdir && this._resolveWorkspacePath(args.workdir) !== this._scriptCwd()) return { ok: false, error: 'Use cd in the persistent Minimal shell to change directories' };
+      name = 'bash';
+    }
     if (name === 'bash') {
       if (this.settings?.tools?.runShellScriptCode === false || this.settings?.tools?.makeTerminal === false || this.settings?.tools?.awaitTerminalCommand === false)
         return { ok: false, error: 'Shell tools are disabled' };
@@ -1200,6 +1211,10 @@ Use the latest relationship dossier and shared memories provided with this reque
       const tools = MINIMAL_TOOL_SCHEMAS.filter(tool => tool.function.name === 'bash'
         ? this.settings?.tools?.runShellScriptCode !== false && this.settings?.tools?.makeTerminal !== false && this.settings?.tools?.awaitTerminalCommand !== false
         : this.settings?.tools?.readFile !== false);
+      if (this.settings?.tools?.renameWorkspace !== false) {
+        const naming = getToolSchemas(null, this.mode).find(tool => tool.function.name === 'renameWorkspace');
+        if (naming) tools.push(naming);
+      }
       this.contextManager.setToolSchemaTokens(Math.ceil(JSON.stringify(tools).length / 4));
       return tools;
     }
@@ -1834,6 +1849,7 @@ Use the latest relationship dossier and shared memories provided with this reque
   }
 
   async sendMessage(userMessage, attachments = [], inputOptions = {}) {
+    if (!this.ephemeral && this.workspacePath && this.host.api.workspaceRetain) await this.host.api.workspaceRetain(this.workspacePath, true);
     // OpenAI/Anthropic 兼容端点允许无 API Key（llama.cpp 等本地推理场景）；
     // OpenCode Zen/Go 使用内置端点，无需 apiUrl；模型池有启用条目也可继续。
     const llmCfg0 = this.settings?.llm || {};
@@ -1941,6 +1957,7 @@ Use the latest relationship dossier and shared memories provided with this reque
     }
 
     // Save immediately after user message so history exists even before agent finishes
+    this._notifyStoredMessage(userMessage);
     this.saveToHistory();
 
     if (!inputOptions.origin || inputOptions.origin === 'user') {
@@ -1977,7 +1994,7 @@ Use the latest relationship dossier and shared memories provided with this reque
     } catch { /* ignore goal tracking failures */ }
   }
 
-  async saveToHistory() {
+  async saveToHistory({ strict = false } = {}) {
     if (this.ephemeral) return;
     if (!this.conversationId) return;
     try {
@@ -1997,6 +2014,7 @@ Use the latest relationship dossier and shared memories provided with this reque
         summaries: this.contextManager.summaries,
         tarotCard: this.tarotCard,
         workspacePath: this.workspacePath,
+        workspaceName: this.workspaceName || '',
         mode: this.mode || 'chat',
         messagingId: this.messagingId || this.conversationId,
         status: this.sessionStatus || (this.running ? 'running' : 'idle'),
@@ -2026,23 +2044,26 @@ Use the latest relationship dossier and shared memories provided with this reque
           messages: Array.isArray(r.messages) ? r.messages : []
         }));
       }
+      let saved;
       if (this.mode === 'babe') {
         payload.affection = this.babeAffection;
-        await this.host.api.babeHistorySave(payload);
+        saved = await this.host.api.babeHistorySave(payload, { immediate: strict });
       } else if (this.mode === 'code') {
         // Code 模式：保存到独立的工作区历史，避免逃逸到 Chat 历史
         // codeSaveHistory 签名：(workspacePath, id, data)
-        await this.host.api.codeSaveHistory(this.codeWorkspacePath || this.workspacePath, this.conversationId, payload);
+        saved = await this.host.api.codeSaveHistory(this.codeWorkspacePath || this.workspacePath, this.conversationId, payload, { immediate: strict });
       } else {
-        await this.host.api.historySave(payload);
+        saved = await this.host.api.historySave(payload, { immediate: strict });
       }
-    } catch (e) { console.error('保存历史失败', e); }
+      if (strict && saved?.ok === false) throw new Error(saved.error || 'Unable to save conversation');
+    } catch (e) { if (strict) throw e; console.error('保存历史失败', e); }
   }
 
   async loadFromHistory(conversation) {
     await this.resetMinimalShell();
     this.conversationId = conversation.id;
     this.conversationTitle = conversation.title;
+    this.workspaceName = conversation.workspaceName || '';
     this.resetOptimizedTools();
     this.resetSessionUsage();
     // 恢复持久化的会话累计 Token 统计：打开历史会话后从该基数继续累计，
@@ -2504,6 +2525,7 @@ Use the latest relationship dossier and shared memories provided with this reque
 
   async agentLoop(runId) {
     let iterations = 0;
+    let namingReminder = false;
     // 安全上限：正常任务远到不了 50 轮；Responses 流式曾因 finishReason 恒为 null
     // 导致无限循环（llm-retry.js 已修复 + 兜底），这里再加熔断，绝不再烧 token。
     const MAX_AGENT_ITERATIONS = this.subagentPolicy?.maxIterations || 50;
@@ -2522,6 +2544,7 @@ Use the latest relationship dossier and shared memories provided with this reque
         const hotMsg = this.hotMessages.shift();
         if (typeof hotMsg === 'object' && hotMsg.babeHumanText) await this.beginBabeTurn(hotMsg.babeHumanText);
         this.contextManager.addUserMessage(`【用户追加消息】${typeof hotMsg === 'string' ? hotMsg : hotMsg.content}`, typeof hotMsg === 'object' ? hotMsg.metadata : undefined);
+        this._notifyStoredMessage(typeof hotMsg === 'string' ? hotMsg : hotMsg.metadata?.displayContent || hotMsg.content);
         if (this.onMessage) this.onMessage('system', '已将新消息注入当前对话');
       }
 
@@ -2743,6 +2766,7 @@ Use the latest relationship dossier and shared memories provided with this reque
       }
 
       // Handle tool calls
+      this._notifyStoredMessage(assistantMsg.content || '');
       if (assistantMsg.tool_calls && assistantMsg.tool_calls.length > 0) {
         let pluginConcludesTurn = false;
         for (let i = 0; i < assistantMsg.tool_calls.length; i++) {
@@ -2876,8 +2900,9 @@ Use the latest relationship dossier and shared memories provided with this reque
               continue;
             }
           }
-          // OpenCode 免费池 agent 工具别名（bash/edit）按敏感工具处理
-          const FREE_TIER_SENSITIVE = permissionToolName === 'bash' || permissionToolName === 'edit' || (permissionToolName === 'str_replace_editor' && args.command !== 'view');
+          // OpenCode 工具别名复用规范工具的审批与禁用设置
+          permissionToolName = OPENCODE_TOOL_ALIASES[permissionToolName] || permissionToolName;
+          const FREE_TIER_SENSITIVE = (permissionToolName === 'str_replace_editor' && args.command !== 'view');
           const toolDef = getAllToolDefinitions(this.mode || 'chat').find(t => t.name === permissionToolName);
           const isSensitive = (toolDef?.sensitive || FREE_TIER_SENSITIVE) && !this.settings.autoApproveSensitive;
 
@@ -3051,6 +3076,15 @@ Use the latest relationship dossier and shared memories provided with this reque
       const fr = choice.finish_reason;
       const hasContent = typeof assistantMsg.content === 'string' && assistantMsg.content.length > 0;
       if (fr === 'stop' || fr === 'length' || fr === 'error' || (!fr && hasContent)) {
+        if (!namingReminder && fr !== 'length' && fr !== 'error' && !this.ephemeral && !this.isSubagent && this.workspacePath && this.host.api.workspaceInspect && this.settings?.tools?.renameWorkspace !== false) {
+          namingReminder = true;
+          const workspace = await this.host.api.workspaceInspect(this.workspacePath).catch(() => null);
+          if (workspace?.ok && workspace.needsNaming) {
+            this._mergeOptimizedSelection(['renameWorkspace']);
+            this.contextManager.addMessage({ role: 'user', content: 'System workspace check: saved files exist in this unnamed automatically created workspace. Call renameWorkspace now with a meaningful artifact-based name before completing. Keep the stable tool path; conversation title is unrelated.', metadata: { kind: 'context-update' } });
+            continue;
+          }
+        }
         if (this.subagentPolicy && (fr === 'length' || fr === 'error')) this.onMessage?.('error', `Subagent response ended with ${fr}; its report may be incomplete`);
         if (fr !== 'length' && fr !== 'error' && this.host.api.dsPluginTurnStopping) {
           const continuation = await this.host.api.dsPluginTurnStopping(this.sessionKey);
@@ -3072,6 +3106,11 @@ Use the latest relationship dossier and shared memories provided with this reque
     const cmdLower = cmd.toLowerCase();
     const allDangerous = [...DANGEROUS_COMMANDS.common, ...DANGEROUS_COMMANDS.windows, ...DANGEROUS_COMMANDS.linux, ...DANGEROUS_COMMANDS.macos];
     return allDangerous.some(d => cmdLower.includes(d.toLowerCase()));
+  }
+
+  _notifyStoredMessage(content) {
+    const message = this.contextManager.getHistoryMessages().at(-1);
+    if (message?.metadata?.messageId) this.onMessage?.('message-stored', { role: message.role, messageId: message.metadata.messageId, content });
   }
 
   async requestApproval(toolName, args) {
@@ -3216,17 +3255,18 @@ Use the latest relationship dossier and shared memories provided with this reque
         return await this.executeTool(resolved.name, resolved.args);
       } catch (error) { return { ok: false, error: error.message }; }
     }
-    if (this._toolScope && !this._toolScope.has(name)) return { ok: false, error: 'Tool is outside this agent scope' };
+    if (this._toolScope && !this._toolScope.has(OPENCODE_TOOL_ALIASES[name] || name)) return { ok: false, error: 'Tool is outside this agent scope' };
     if (this.toolExposure) this.toolExposure.touch(name);
     if (this.settings?.tools?.[name] === false) return { ok: false, error: '该工具已禁用' };
     try {
-      // OpenCode 免费池 agent 工具别名（bash/read/edit/glob/grep）→ CIBYP 本地实现
+      // OpenCode v1/v2 免费工具别名（bash/shell/write/read/edit/glob/grep）→ CIBYP 本地实现
       // 这些工具名由主进程按免费池要求注入请求（见 llm-providers.js mergeFreeTierTools），
       // 模型调用时需要翻译成 App 现有工具与参数形状。
-      const FT_ALIAS = { bash: 'runShellScriptCode', read: 'readFile', edit: 'editFile', glob: 'localSearch', grep: 'searchInFiles' };
+      const FT_ALIAS = OPENCODE_TOOL_ALIASES;
       if (FT_ALIAS[name]) {
         const a = args || {};
-        if (name === 'bash') args = { ...a, script: String(a.command || a.script || '') };
+        if (name === 'bash' || name === 'shell') args = { ...a, script: String(a.command || a.script || ''), ...(name === 'shell' ? { cwd: a.workdir || null, yieldMs: a.background ? 1 : Math.max(1, Math.min(10000, Number(a.timeout) || 1000)) } : {}) };
+        else if (name === 'write') args = { path: a.path || a.filePath, content: a.content };
         else if (name === 'read') args = { path: a.filePath || a.path, ...(a.encoding ? { encoding: a.encoding } : {}) };
         else if (name === 'edit') {
           args = {
@@ -3393,6 +3433,12 @@ Use the latest relationship dossier and shared memories provided with this reque
         }
         case 'fractionBaseConvert': {
           return await this.host.api.calcFractionBaseConvert(args.value, args.fromBase, args.toBase, args.precision);
+        }
+        case 'renameWorkspace': {
+          if (!this.workspacePath) return { ok: false, error: 'No workspace is available' };
+          const result = await this.host.api.workspaceRename(this.workspacePath, args.name);
+          if (result.ok) { this.workspaceName = result.name; await this.saveToHistory(); }
+          return result;
         }
         case 'webSearch': return await this.host.api.webSearch({ ...args, workspacePath: this.workspacePath });
         case 'webFetch': return await this.host.api.webFetch(args);
@@ -3663,7 +3709,7 @@ Use the latest relationship dossier and shared memories provided with this reque
         }
         case 'runShellScriptCode': {
           return await this._execWithSandboxEscalation('runShellScriptCode', (mode) =>
-            this.host.api.runShell(args.script, this._scriptCwd(), mode, {
+            this.host.api.runShell(args.script, args.cwd ? this._resolveWorkspacePath(args.cwd) : this._scriptCwd(), mode, {
               jobId: args.jobId, action: args.action, yieldMs: args.yieldMs, sessionKey: this.sessionKey
             }));
         }

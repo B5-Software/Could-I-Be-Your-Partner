@@ -11,13 +11,14 @@
   };
   let first = true;
   function hydrate(a, view) {
-    if (!view) return;
+    if (!view || a._backendClosed) return;
     const s = view.session;
     a._runtimeOverride = view.runtimeOverride;
     if (a._runtimeOverride && a.settings) a.applySettings(a.settings);
     a.backendKey = s.key; a.sessionKey = s.key; a.mode = s.mode;
     a.conversationId = s.conversationId; a.conversationTitle = s.title;
     a.workspacePath = s.workspacePath; a.codeWorkspacePath = s.mode === 'code' ? s.workspacePath : null;
+    a.workspaceName = s.workspaceName || '';
     a.minimalMode = s.minimalMode; a.babeAffection = s.affection;
     a.running = s.busy; a.sessionStatus = s.status === 'running' ? 'working' : s.status;
     a.contextManager.loadFromHistory(view.messages || []);
@@ -25,14 +26,18 @@
     if (view.systemPrompt) a.contextManager.setSystemPrompt(view.systemPrompt);
     for (const property of ['tarotCard', 'sessionUsage', 'sessionUsageByModel', 'skills', 'skillsCatalog', 'optimizedToolNames', 'optimizedToolReason', 'subAgents', 'cachedWorkspaceTree']) if (view[property] !== undefined) a[property] = view[property];
     a._backendToolSchemas = view.runtimeToolSchemas;
-    a.llmOverride = view.llmOverride || a.llmOverride;
+    if ((view.modelRevision || 0) >= (a._backendModelRevision || 0)) {
+      a.llmOverride = view.llmOverride || a.llmOverride;
+      a._backendModelRevision = view.modelRevision || 0;
+    }
     a._backendStats = view.stats;
     a.babeRelationship = view.stats?.relationship || null;
     a._compactionState = view.stats?.compaction || null;
   }
   proto._ensureBackend = async function (attachLatest = false) {
-    if (this._backendReady) return this._backendReady;
+    if (this._backendClosed) throw new Error('This conversation has been closed');
     views.add(this);
+    if (this._backendReady) return this._backendReady;
     this._backendReady = (async () => {
       if (attachLatest && !this.ephemeral && !this.backendKey) {
         const sessions = await request('listSessions');
@@ -50,23 +55,24 @@
   proto.setSessionKey = function (key) { this.sessionKey = this.backendKey || key; };
   proto.sendMessage = async function (text, attachments = []) {
     await this._ensureBackend();
-    const values = { llmOverride: this.llmOverride, workspacePath: this.codeWorkspacePath, editorContext: this.contextManager._contextSources?.get('当前编辑器') || '' };
+    const values = { llmOverride: this.llmOverride, modelRevision: this._backendModelRevision || 0, workspacePath: this.codeWorkspacePath, editorContext: this.contextManager._contextSources?.get('当前编辑器') || '' };
     hydrate(this, await request('configureSession', this.backendKey, values));
     this.running = true; this.stopped = false; this._sending = true;
     try { const result = await request('sendMessage', this.backendKey, text, attachments); if (!result.ok) throw new Error(result.error); return result; }
-    finally { this._sending = false; hydrate(this, await request('getView', this.backendKey)); }
+    finally { this._sending = false; if (!this._backendClosed) hydrate(this, await request('getView', this.backendKey)); }
   };
   proto.injectHotMessage = async function (text, attachments = []) {
     await this._ensureBackend(); this._sending = true;
     try { return await request('inject', this.backendKey, text, attachments); }
     finally { this._sending = false; }
   };
-  proto.stop = function () { this.stopped = true; return this._ensureBackend().then(() => request('stop', this.backendKey)); };
+  proto.stop = function () { this.stopped = true; if (this._backendClosed) return Promise.resolve({ ok: true }); return this._ensureBackend().then(() => this._backendClosed ? { ok: true } : request('stop', this.backendKey)); };
   proto.resolveApproval = function (response) { return request('respond', this.backendKey, response); };
   proto.resolveToolAuth = function (response) { return request('respond', this.backendKey, response); };
   proto.setMinimalMode = async function (enabled) { await this._ensureBackend(); const result = await request('setMinimalMode', this.backendKey, enabled); hydrate(this, await request('getView', this.backendKey)); return result; };
   for (const method of ['saveToHistory', 'loadFromHistory', 'optimizeToolsForConversation', 'resetOptimizedTools', 'refreshSkillsCatalog', 'proactiveSend', 'executeTool', 'compactNow']) {
     proto[method] = async function (...args) {
+      if (this._backendClosed && ['saveToHistory', 'resetOptimizedTools', 'refreshSkillsCatalog'].includes(method)) return null;
       await this._ensureBackend();
       const value = await request('agentAction', this.backendKey, method, args);
       if (value?.view) { hydrate(this, value.view); return value.result; }
@@ -83,7 +89,9 @@
   window.api.onBackendEvent(event => {
     for (const a of views) {
       if (event.key !== a.backendKey) continue;
+      if (event.type === 'session-closed') { a._backendClosed = true; a.running = false; views.delete(a); continue; }
       if (event.type === 'agent-message') {
+        if (event.messageType === 'message-stored') { window.CibypMessages?.admitted(a, event.data); continue; }
         if (event.messageType === 'context-compaction') {
           a._compactionState = event.data;
           window.CibypCompactionUI?.refresh();
