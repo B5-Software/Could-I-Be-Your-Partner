@@ -27,3 +27,14 @@
 - 本机验证平台为 Windows；macOS/Linux 的平台行为仍须由 CI 和相应设备确认。macOS HVF 的来宾休眠路径没有在本机实测。
 
 凭据和实际账号信息不进入本报告、测试截图或提交。测试日志及截图位于被 Git 忽略的 `.cache` 中。
+
+## CI 后续修复（alpha.27）
+
+alpha.26 的固定标签保持原提交。CI 揭示的修复通过 alpha.27 发布：
+
+- 凭据模块改为由桌面宿主注入系统加密适配器，移除共享 Node core 对 Electron 的静态依赖；无系统加密后端时仍拒绝明文回退。Node core 实际打包通过。
+- 重新生成 IPC 能力清单，并在 `npm run check` 增加清单一致性检查。
+- 界面测试通过 Chromium 媒体偏好模拟，分别验证动画开启、应用全局关闭及操作系统减弱动画，避免 Windows runner 的系统设置改变断言前提。
+- Tor 固定包增加[官方归档站](https://archive.torproject.org/tor-package-archive/torbrowser/)回退，继续校验原锁定版本、大小与 SHA-256。已实测 Windows x64、macOS x64/arm64、Linux x64/arm64 的下载校验与解包；Windows ARM64 共用锁定的 Windows x64 包。
+
+alpha.27 本地验证：566 项单元测试通过、3 项平台相关测试跳过，388 项旧回归通过；Node core 打包及直接加载、GUI/WebUI（含强制系统减弱动画）和 Claude 登录注销集成通过。

@@ -4,6 +4,21 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const lock = require('../../integrations/tor/runtime-lock.json');
 const { downloadVerified } = require('../../packages/npm/lib/download.cjs');
+function torSources(asset) {
+  const url = new URL(asset.url);
+  if (
+    url.origin !== 'https://dist.torproject.org' ||
+    url.username ||
+    url.password ||
+    url.search ||
+    url.hash ||
+    !/^\/torbrowser\/[\w.-]+\/tor-expert-bundle-[\w.-]+\.tar\.gz$/.test(url.pathname)
+  )
+    throw new Error('Invalid official Tor runtime URL');
+  // dist only keeps recent releases. The official archive preserves identical
+  // pinned bytes after rotation; the same trusted size and SHA-256 apply.
+  return [url.href, 'https://archive.torproject.org/tor-package-archive' + url.pathname];
+}
 async function prepareTor(platform = process.platform, arch = process.arch, destination) {
   const key = platform + '-' + arch,
     asset = lock.targets[key];
@@ -24,11 +39,9 @@ async function prepareTor(platform = process.platform, arch = process.arch, dest
     return directory;
   await fs.mkdir(directory, { recursive: true });
   const archive = path.join(directory, 'bundle.tar.gz');
-  const url = new URL(asset.url);
-  if (url.origin !== 'https://dist.torproject.org' || !/^\/[\w./-]+\.tar\.gz$/.test(url.pathname))
-    throw new Error('Invalid official Tor runtime URL');
+  const candidates = torSources(asset);
   try {
-    await downloadVerified(asset, archive, { candidates: [asset.url], concurrency: 4 });
+    await downloadVerified(asset, archive, { candidates, concurrency: 4 });
     await require('tar').x({
       file: archive,
       cwd: directory,
@@ -42,4 +55,4 @@ async function prepareTor(platform = process.platform, arch = process.arch, dest
     await fs.rm(archive, { force: true });
   }
 }
-module.exports = { prepareTor };
+module.exports = { prepareTor, torSources };

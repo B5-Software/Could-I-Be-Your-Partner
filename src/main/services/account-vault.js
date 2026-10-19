@@ -4,6 +4,12 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { spawn } = require('node:child_process');
+let osStorage;
+// The desktop host supplies its OS keychain adapter. Node core must stay free
+// of an Electron import and still refuse an unavailable/plaintext backend.
+function setAccountStorage(storage) {
+  osStorage = storage;
+}
 
 // Windows DPAPI works in both Electron and the Node TUI, under the current user.
 // Credentials travel over stdin/stdout, never process arguments or shell commands.
@@ -101,16 +107,11 @@ class AccountVault {
 }
 
 function secureStorage() {
-  let storage;
-  try {
-    storage = require('electron').safeStorage;
-  } catch {
-    /* Node-only host */
-  }
+  const storage = osStorage;
   if (!storage?.isEncryptionAvailable() || storage.getSelectedStorageBackend?.() === 'basic_text')
     throw new Error(
       'OS credential encryption is unavailable. Enable the system keyring and sign in from the desktop app',
     );
   return storage;
 }
-module.exports = { AccountVault, dpapi };
+module.exports = { AccountVault, dpapi, setAccountStorage };

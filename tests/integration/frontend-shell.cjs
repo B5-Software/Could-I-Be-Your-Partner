@@ -126,6 +126,12 @@ ipcMain.once('app:renderer-ready', (event) =>
   setTimeout(async () => {
     const contents = event.sender;
     const win = BrowserWindow.fromWebContents(contents);
+    // Windows runners can request reduced motion globally. Control it explicitly
+    // so both enabled transitions and reduced-motion behavior are exercised.
+    const motionPreference = (value) =>
+      contents.debugger.sendCommand('Emulation.setEmulatedMedia', {
+        features: [{ name: 'prefers-reduced-motion', value }],
+      });
     const screenshot = async (name) => {
       const destination = path.resolve(
         __dirname,
@@ -136,6 +142,8 @@ ipcMain.once('app:renderer-ready', (event) =>
       console.log('[frontend-shell] screenshot', name);
     };
     try {
+      contents.debugger.attach('1.3');
+      await motionPreference('no-preference');
       win.setContentSize(1440, 940);
       await contents.executeJavaScript(`(async () => { ${checkHelpers}
       await until(()=>window.CibypFrontendShell && window.__sessionManager);
@@ -200,7 +208,7 @@ ipcMain.once('app:renderer-ready', (event) =>
         document.querySelector('.reasoning-picker-reset').click();
         await until(()=>!document.querySelector('.reasoning-picker')?.hasAttribute('aria-busy') && window.__sharedAgent.getActiveReasoningEffort()==='high');
         window.__effortPanel=document.querySelector('.reasoning-picker');
-        await window.api.setSettings({animations:true}); await paint();
+        await window.api.setSettings({animations:true}); await until(()=>document.documentElement.dataset.animations!=='off'); await paint();
         check(document.querySelector('.reasoning-picker')===window.__effortPanel,'Repeated appearance notification closed slider');
         check(parseFloat(getComputedStyle(document.querySelector('.reasoning-picker-thumb')).transitionDuration)>0,'Slider has no step transition');
         const request=window.CibypBackendViews.request;
@@ -219,6 +227,19 @@ ipcMain.once('app:renderer-ready', (event) =>
         check(Math.abs(fill.getBoundingClientRect().right-(thumb.getBoundingClientRect().left+thumb.getBoundingClientRect().width/2))<1,'Slider fill does not reach the thumb center');
         await paint();
       })()`);
+      await contents.executeJavaScript(
+        `(async()=>{${checkHelpers} await window.api.setSettings({animations:true}); await until(()=>document.documentElement.dataset.animations!=='off');})()`,
+      );
+      await motionPreference('reduce');
+      await contents.executeJavaScript(`(async()=>{${checkHelpers}
+        await paint();
+        check(matchMedia('(prefers-reduced-motion: reduce)').matches,'Reduced-motion emulation failed');
+        check(getComputedStyle(document.querySelector('.reasoning-picker-thumb')).transitionDuration==='0s','System reduced-motion preference ignored');
+      })()`);
+      await motionPreference('no-preference');
+      await contents.executeJavaScript(
+        `(async()=>{${checkHelpers} await window.api.setSettings({animations:false}); await until(()=>document.documentElement.dataset.animations==='off'); await paint();})()`,
+      );
       await screenshot('v2-reasoning');
       const drag = await contents.executeJavaScript(
         `(()=>{const input=document.querySelector('.reasoning-picker input'),r=input.getBoundingClientRect();return{x:r.left+16+(r.width-32)*Number(input.value)/Number(input.max),target:r.left+16+(r.width-32)*.44,y:r.top+r.height/2};})()`,

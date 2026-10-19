@@ -8,6 +8,7 @@
 'use strict';
 
 const { app, BrowserWindow, ipcMain: electronIpcMain, nativeTheme, dialog, clipboard, screen, shell, Notification, Tray, Menu, nativeImage, protocol, net, safeStorage, crashReporter } = require('electron');
+require('./services/account-vault').setAccountStorage(safeStorage);
 if (process.env.CIBYP_USER_DATA) app.setPath('userData', process.env.CIBYP_USER_DATA);
 const backgroundMode = process.argv.includes('--cibyp-headless') || process.argv.includes('--headless');
 // --headless is also a Chromium switch. Keep the public legacy CLI spelling,
