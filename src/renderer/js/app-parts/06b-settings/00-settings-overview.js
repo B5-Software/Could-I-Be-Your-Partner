@@ -32,6 +32,7 @@
     runtime: ['本机与虚拟机', '选择执行位置和 VM 资源；已有终端仍属于创建时的位置。', 'VM QEMU OS workspace 工作目录'],
     security: ['安全', '工具授权、隐私保护及后台托盘行为。', '隐私 审批 托盘 密钥'],
     network: ['网络', '配置代理，保存后重新应用网络设置。', '代理 proxy 网络'],
+    'network-privacy': ['网络隐私', '内置 Tor、网桥和主机 HTTP 请求保护。', 'Tor SOCKS 隐私 privacy meek 网桥'],
     entropy: ['熵源', '选择随机数来源及硬件连接方式。', 'TRNG 随机数'],
     firmware: ['TRNG 固件', '导出硬件固件与连接说明。', 'Arduino 硬件'],
     resources: ['资源下载', '按需下载语音等资源，下载按钮启动操作。', '下载 模型 镜像'],

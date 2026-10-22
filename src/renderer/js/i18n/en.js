@@ -4299,3 +4299,33 @@ Object.assign(EN_DICT._textMap, {
   "Codex 用量授权已失效，请在账号设置中重新连接。": "Codex usage authorization expired. Reconnect it in account settings."
 });
 Object.assign(EN_DICT.ui.messageEdit, {"clearConversation":"Clear chat history","deleteMessage":"Delete message","deleteTurn":"Delete this turn","deleteFromHere":"Delete this and later messages","deleteScope":"Delete the chat records and their original model context. Deleting your message also deletes its replies.","stale":"This message no longer exists. Select it again.","busyDelete":"The task is running. Stop it before confirming deletion.","stopBeforeDelete":"Stop task to continue","confirmDelete":"Confirm deletion","deleteCount":"Delete {count} messages and their original context.","stopTimeout":"The task has not stopped yet. Try again shortly."});
+Object.assign(EN_DICT, {
+  'ui.networkPrivacy.title': 'Network privacy',
+  'ui.networkPrivacy.scope': 'Use bundled Tor for host HTTP/HTTPS requests, including AI, model catalogs and web tools. Local backend connections remain direct. External browsers, terminal subprocesses and raw network probes are outside this scope.',
+  'ui.networkPrivacy.enabled': 'Send host network requests through Tor',
+  'ui.networkPrivacy.auto': 'Connect automatically when the backend starts',
+  'ui.networkPrivacy.failClosed': 'While enabled, protected requests are blocked until Tor is connected, and if it disconnects. There is no automatic direct fallback. Stop and reconnect after changing bridges.',
+  'ui.networkPrivacy.identity': 'Tor hides your network origin; it does not hide accounts, API keys or code included in requests.',
+  'ui.networkPrivacy.stopped': 'Disconnected',
+  'ui.networkPrivacy.preparing': 'Preparing Tor…',
+  'ui.networkPrivacy.connecting': 'Connecting to Tor…',
+  'ui.networkPrivacy.ready': 'Tor connected',
+  'ui.networkPrivacy.error': 'Tor connection failed',
+  'ui.networkPrivacy.privacyStart': 'Connect privacy Tor',
+  'ui.networkPrivacy.privacyStop': 'Stop privacy Tor',
+  'ui.networkPrivacy.privacyStatus': 'Privacy Tor status',
+  'ui.openCodeSdk.transport': 'OpenCode request engine',
+  'ui.openCodeSdk.hint': 'The SDK provides official request handling and stream parsing. CIBYP still controls tools and permissions. Availability is determined by the provider.',
+  'ui.openCodeSdk.active': 'Using the official OpenCode AI SDK request layer',
+});
+Object.assign(EN_DICT._textMap, {
+  '网络隐私': 'Network privacy',
+  '通过 Tor 发送主机网络请求': 'Send host network requests through Tor',
+  '后台启动时自动连接': 'Connect automatically when the backend starts',
+  'OpenCode 请求引擎': 'OpenCode request engine',
+  'SDK 复用官方请求与流式解析；工具和权限仍由 CIBYP 管理。服务可用性由提供商决定。': EN_DICT['ui.openCodeSdk.hint'],
+  '通过内置 Tor 代理主机的 HTTP/HTTPS 请求，包括 AI、模型目录与网页工具。本地后台保持直连。外部浏览器、终端子进程与原始网络探测不在此范围内。': EN_DICT['ui.networkPrivacy.scope'],
+  '启用后，Tor 未就绪或断开时会阻止范围内的请求，不会自动回退直连。修改网桥后请停止并重新连接。': EN_DICT['ui.networkPrivacy.failClosed'],
+  'Tor 隐藏网络出口，不会隐藏请求中的登录账号、API Key 或代码内容。': EN_DICT['ui.networkPrivacy.identity'],
+  '服务可用性由提供商决定。': 'Availability is determined by the provider.',
+});

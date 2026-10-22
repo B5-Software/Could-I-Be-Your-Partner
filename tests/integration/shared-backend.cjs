@@ -159,6 +159,9 @@ app.on('web-contents-created', (_event, contents) => {
       'window.__sessionManager.getActive("chat").agent.backendKey',
     );
     assert.ok(runtime.getSession(key));
+    const privacy = await runtime.api.privacyTorStatus();
+    assert.equal(privacy.phase, 'stopped');
+    assert.equal(privacy.enabled, false);
     const status = await client.request('ipc:invoke', 'webControl:getStatus');
     assert.equal(status.backendPid, process.pid);
     assert.ok(status.running);
@@ -205,6 +208,22 @@ app.on('web-contents-created', (_event, contents) => {
       () => web.webContents.executeJavaScript('!!window.__sessionManager?.list("chat").length'),
       'WebUI ready',
     );
+    assert.equal(
+      (await web.webContents.executeJavaScript('window.api.privacyTorStatus()')).phase,
+      'stopped',
+    );
+    await runtime.saveSettings({ networkPrivacy: { tor: { autoStart: true } } });
+    assert.equal(
+      (await web.webContents.executeJavaScript('window.api.getSettings()')).networkPrivacy.tor
+        .autoStart,
+      true,
+    );
+    assert.equal(
+      (await gui.webContents.executeJavaScript('window.api.getSettings()')).networkPrivacy.tor
+        .autoStart,
+      true,
+    );
+    await runtime.saveSettings({ networkPrivacy: { tor: { autoStart: false } } });
     assert.equal(
       await web.webContents.executeJavaScript(
         'window.__sessionManager.getActive("chat").agent.backendKey',

@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 'use strict';
+require('../main/services/tls-trust').enforceNodeTrust();
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
@@ -103,6 +104,22 @@ async function createNodeRuntime({
     }).DEFAULT_SETTINGS;
     let settings = merge(merge(defaults, read(file('settings'), {})), initial);
     settings.runtime = { ...settings.runtime, location: 'host' };
+    const netProxy = require('../main/net-proxy');
+    const networkPrivacy = new (require('../main/services/network-privacy').NetworkPrivacy)({
+      app: { getPath: () => dataDir },
+      settings: () => settings,
+      publish,
+      proxy: netProxy,
+    });
+    async function applyNetworkPrivacy() {
+      networkPrivacy.configure();
+      netProxy.install();
+      await netProxy.setConfig(settings.proxy);
+    }
+    await applyNetworkPrivacy();
+    bind('privacyTor:start', () => networkPrivacy.start());
+    bind('privacyTor:stop', () => networkPrivacy.stop());
+    bind('privacyTor:status', () => networkPrivacy.status());
     if (!initial.sessions?.maxConcurrent && !read(file('settings'), {}).sessions?.maxConcurrent)
       settings.sessions = { ...settings.sessions, maxConcurrent: 1 };
     const getSettings = () => settings;
@@ -236,6 +253,7 @@ async function createNodeRuntime({
         throw new RemoteError('CAPABILITY_UNAVAILABLE', 'Mini executes on its host');
       atomic(file('settings'), next);
       settings = next;
+      applyNetworkPrivacy().catch((error) => publish('host:error', { message: error.message }));
       publish('settings:changed', settings);
       return { ok: true };
     });
@@ -674,6 +692,7 @@ async function createNodeRuntime({
     let closing;
     function close() {
       return (closing ||= (async () => {
+        networkPrivacy.stop();
         await server?.stop();
         dispatch.remote.close();
         llmRetry.abortAllRequests();
@@ -695,6 +714,7 @@ async function createNodeRuntime({
         ownership?.release();
       })());
     }
+    networkPrivacy.autoStart();
     return {
       runtime,
       api,

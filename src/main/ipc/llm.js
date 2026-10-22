@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later; Copyright (c) 2026 B5-Software */
 'use strict';
 const TokenPolicy = require('../../shared/token-policy');
+const { providerFailure } = require('../services/provider-failure');
 
 module.exports = function registerLlmIpc({
   path,
@@ -74,6 +75,9 @@ module.exports = function registerLlmIpc({
   }
   let zenVersionRefreshAt = 0;
   async function fetchRequest(req, config) {
+    if (req.opencodeSdk) fetchModelsDevData().catch(() => {});
+    if (req.opencodeSdk)
+      return require('../services/opencode-ai-transport').fetchOpenCode(req, config.options);
     if (req.pluginProvider) return pluginModels.fetch(req.body, config.options);
     if (req.credentialProvider === 'claude-subscription') {
       if (!claudeAccounts) throw new Error('Claude login service is unavailable');
@@ -95,6 +99,8 @@ module.exports = function registerLlmIpc({
       if (
         req.zenFree &&
         req.zenAutoHeaders &&
+        result.kind !== 'provider-policy' &&
+        result.retryable !== false &&
         Date.now() - zenVersionRefreshAt >= 60000 &&
         result.status === 403 &&
         /free tier can only be used from within OpenCode/i.test(result.error || '') &&
@@ -558,6 +564,8 @@ module.exports = function registerLlmIpc({
     };
     if (options.contextLength) out.maxContextLength = options.contextLength;
     if (!entry && options.provider) out.provider = options.provider;
+    if (!entry && ['sdk', 'cibyp'].includes(options.opencodeTransport))
+      out.opencodeTransport = options.opencodeTransport;
     if (typeof options.autoOpencodeHeaders === 'boolean')
       out.autoOpencodeHeaders = options.autoOpencodeHeaders;
     if (typeof options.requestReasoningSummary === 'boolean')
@@ -660,7 +668,7 @@ module.exports = function registerLlmIpc({
         console.error(
           `[LLM:chat ${logTs()}] ✗ ${llmForRequest.model} ← ${maskLogUrl(req.url)}: ${result.error}`,
         );
-        return { ok: false, error: result.error, kind: result.kind };
+        return result;
       }
 
       let rawData;
@@ -674,10 +682,7 @@ module.exports = function registerLlmIpc({
           `[LLM] ${llmForRequest.model} API error:`,
           JSON.stringify(rawData.error).slice(0, 200),
         );
-        return {
-          ok: false,
-          error: rawData.error.message || JSON.stringify(rawData.error),
-        };
+        return providerFailure(rawData);
       }
       const data = LLMProviders.parseLLMResponse(rawData, req.transport, llmForRequest);
       let usage = data.usage || {};
@@ -835,7 +840,7 @@ module.exports = function registerLlmIpc({
         options: retryOpts,
         onRetry,
       });
-      if (!result.ok) return { ok: false, error: result.error, kind: result.kind };
+      if (!result.ok) return result;
 
       let streamResult;
       const streamStartedAt = Date.now();
@@ -875,7 +880,11 @@ module.exports = function registerLlmIpc({
           sessionKey: options.sessionKey || null,
         });
       }
-      if (streamResult.error) return { ok: false, error: streamResult.error };
+      if (streamResult.error)
+        return providerFailure(streamResult, {
+          kind: streamResult.kind,
+          status: streamResult.status,
+        });
       let usage = streamResult.usage || {};
       let estimated = false;
       // API 未返回 usage 时估算并标记
@@ -1002,18 +1011,14 @@ module.exports = function registerLlmIpc({
         body: req.body,
         options: retryOpts,
       });
-      if (!result.ok) return { ok: false, error: result.error, kind: result.kind };
+      if (!result.ok) return result;
       let rawData;
       try {
         rawData = await result.response.json();
       } finally {
         if (typeof result.releaseController === 'function') result.releaseController();
       }
-      if (rawData.error)
-        return {
-          ok: false,
-          error: rawData.error.message || JSON.stringify(rawData.error),
-        };
+      if (rawData.error) return providerFailure(rawData);
       const data = LLMProviders.parseLLMResponse(rawData, req.transport);
       const content = data.choices?.[0]?.message?.content || '';
       let usage = data.usage || {};
@@ -1159,7 +1164,7 @@ module.exports = function registerLlmIpc({
         options: { maxRetries: 1, timeoutMs: 20000 },
       });
       if (!resultRequest.ok) {
-        const failure = { ok: false, status: resultRequest.status, error: resultRequest.error };
+        const failure = resultRequest;
         if (config.provider === 'opencode-zen')
           require('../opencode-models').markOpenCodeAvailability(config.model, failure);
         return failure;
@@ -1168,11 +1173,7 @@ module.exports = function registerLlmIpc({
       try {
         if (!response.ok) {
           const data = await response.json().catch(() => ({}));
-          return {
-            ok: false,
-            status: response.status,
-            error: data?.error?.message || `HTTP ${response.status}`,
-          };
+          return providerFailure(data, { status: response.status });
         }
         const result = req.body.stream
           ? await consumeSSEStream(
@@ -1194,7 +1195,11 @@ module.exports = function registerLlmIpc({
             !(result.toolCalls || result.tool_calls || result.choices?.[0]?.message?.tool_calls)
               ?.length)
         )
-          return { ok: false, error: result.error || '模型未返回有效响应' };
+          return providerFailure(result, {
+            kind: result.kind,
+            status: result.status,
+            error: '模型未返回有效响应',
+          });
         if (result.usage)
           recordTokenUsage(
             {

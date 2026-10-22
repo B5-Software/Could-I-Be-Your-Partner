@@ -286,6 +286,19 @@ function buildLLMRequest(llm, opts) {
   // 允许调用方（如游戏）通过 opts.reasoningEffort 覆盖全局设置，
   // 避免思考模型把所有 token 都花在 reasoning 上导致 content 为空。
   const reasoningEffort = opts.reasoningEffort || llm.reasoningEffort || 'off';
+  if (llm.opencodeTransport === 'sdk' && ['opencode-zen', 'opencode-go'].includes(provider)) {
+    const wire = provider === 'opencode-go' ? buildOpencodeGoRequest(llm, opts, reasoningEffort) : buildZenRequest(llm, opts, reasoningEffort);
+    const headers = { ...wire.headers, 'User-Agent': 'cibyp/' + require('../../package.json').version + ' opencode-ai/2.1.0' };
+    for (const [name, value] of Object.entries(ocHeaders.normalizeHeaderList(llm.customHeaders).headers)) {
+      for (const existing of Object.keys(headers)) if (existing.toLowerCase() === name.toLowerCase()) delete headers[existing];
+      headers[name] = value;
+    }
+    return {
+      url: wire.url, headers, transport: 'openai',
+      opencodeSdk: { protocol: wire.transport, body: wire.body },
+      body: { model, messages: opts.messages, tools: opts.tools, tool_choice: opts.tool_choice, max_tokens: opts.max_tokens, temperature: opts.temperature, stream: !!opts.stream },
+    };
+  }
   const zenFree = require('./opencode-models').isOpenCodeFreeModel(llm);
   const buildOpts = zenFree
     ? { ...opts, stream: true, tools: mergeFreeTierTools(opts.tools, opts.minimalMode === true) }

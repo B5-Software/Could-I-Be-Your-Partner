@@ -187,6 +187,35 @@ ipcMain.once('app:renderer-ready', (event) =>
       );
       await screenshot('v2-chat-light');
       await contents.executeJavaScript(`(async()=>{${checkHelpers}
+        window.navigatePage('settings'); window.activateSettingsTab('network-privacy');
+        await until(()=>document.querySelector('.settings-panel[data-tab="network-privacy"]').classList.contains('active'));
+        const settings=await window.api.getSettings();
+        check(settings.networkPrivacy.tor.enabled===false,'Network privacy must be opt-in');
+        const initial=await window.api.privacyTorStatus(); check(initial.phase==='stopped','Tor must not start by visiting settings');
+        const catalog=await window.api.backendRequest('settings:catalog');
+        check(catalog.fields.some(field=>field.path==='networkPrivacy.tor.enabled' && field.category==='network-privacy'),'Shared settings catalog is missing privacy');
+        check(document.getElementById('setting-privacy-tor-enabled').closest('.toggle-switch'),'Privacy checkbox was not styled as a switch');
+        const bridgeInput=document.getElementById('setting-privacy-tor-bridges');
+        bridgeInput.value='invalid transport bridge';
+        bridgeInput.dispatchEvent(new Event('change',{bubbles:true}));
+        await until(()=>document.getElementById('privacy-tor-status').textContent.includes(' · '));
+        check((await window.api.getSettings()).networkPrivacy.tor.bridges===settings.networkPrivacy.tor.bridges,'Invalid bridge was saved');
+        bridgeInput.value=settings.networkPrivacy.tor.bridges||'';
+        bridgeInput.dispatchEvent(new Event('change',{bubbles:true}));
+        await until(()=>!document.getElementById('privacy-tor-status').textContent.includes(' · '));
+        await paint();
+      })()`);
+      await screenshot('network-privacy');
+      await contents.executeJavaScript(`(async()=>{${checkHelpers}
+        window.activateSettingsTab('llm');
+        check(document.querySelector('#setting-opencode-transport option[value="sdk"]'),'SDK request engine is missing');
+        const select=document.getElementById('setting-opencode-transport'); select.value='sdk'; select.dispatchEvent(new Event('change',{bubbles:true}));
+        await until(async()=>(await window.api.getSettings()).llm.opencodeTransport==='sdk');
+        select.value='cibyp';select.dispatchEvent(new Event('change',{bubbles:true}));
+        await until(async()=>(await window.api.getSettings()).llm.opencodeTransport==='cibyp');
+        window.navigatePage('chat');await paint();
+      })()`);
+      await contents.executeJavaScript(`(async()=>{${checkHelpers}
         check(getComputedStyle(document.querySelector('.titlebar-center')).webkitAppRegion==='drag','Titlebar blank center is not draggable');
         check(getComputedStyle(document.getElementById('btn-close')).webkitAppRegion==='no-drag','Window button lost click target');
         const idle=document.querySelector('.session-status-dot.idle'); if(idle) check(getComputedStyle(idle).display==='none','Idle session dot still visible');

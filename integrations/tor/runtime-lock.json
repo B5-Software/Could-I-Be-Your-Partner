@@ -2,40 +2,40 @@
   "source": "https://download.torproject.org/tor/",
   "targets": {
     "win32-x64": {
-      "version": "15.0.24",
-      "url": "https://dist.torproject.org/torbrowser/15.0.24/tor-expert-bundle-windows-x86_64-15.0.24.tar.gz",
-      "sha256": "e9dc6ccc93cd6afa507193f4de284d6424233ff5102155cd2c94b259e8a22b65",
-      "size": 22440870
+      "version": "15.0.26",
+      "url": "https://dist.torproject.org/torbrowser/15.0.26/tor-expert-bundle-windows-x86_64-15.0.26.tar.gz",
+      "sha256": "c1988c701de2f24f7d098d1d6d7f507b58f27740d097f29c246e0524d639b252",
+      "size": 22507599
     },
     "win32-arm64": {
-      "version": "15.0.24",
-      "url": "https://dist.torproject.org/torbrowser/15.0.24/tor-expert-bundle-windows-x86_64-15.0.24.tar.gz",
-      "sha256": "e9dc6ccc93cd6afa507193f4de284d6424233ff5102155cd2c94b259e8a22b65",
-      "size": 22440870
+      "version": "15.0.26",
+      "url": "https://dist.torproject.org/torbrowser/15.0.26/tor-expert-bundle-windows-x86_64-15.0.26.tar.gz",
+      "sha256": "c1988c701de2f24f7d098d1d6d7f507b58f27740d097f29c246e0524d639b252",
+      "size": 22507599
     },
     "darwin-x64": {
-      "version": "15.0.24",
-      "url": "https://dist.torproject.org/torbrowser/15.0.24/tor-expert-bundle-macos-x86_64-15.0.24.tar.gz",
-      "sha256": "8acb0b590f6be34084dcb6d84009ac0c61cc7c5261b7a19d2ab94845aa9bd5b6",
-      "size": 19356806
+      "version": "15.0.26",
+      "url": "https://dist.torproject.org/torbrowser/15.0.26/tor-expert-bundle-macos-x86_64-15.0.26.tar.gz",
+      "sha256": "e1ae4d4a734d28bb590839188511deb3cebc26fcbce9df66d01b2c452060fe95",
+      "size": 19422031
     },
     "darwin-arm64": {
-      "version": "15.0.24",
-      "url": "https://dist.torproject.org/torbrowser/15.0.24/tor-expert-bundle-macos-aarch64-15.0.24.tar.gz",
-      "sha256": "d47afd04b6c751129978390ad003d74ac8b88adfbb939350f0f89999e6570644",
-      "size": 18724201
+      "version": "15.0.26",
+      "url": "https://dist.torproject.org/torbrowser/15.0.26/tor-expert-bundle-macos-aarch64-15.0.26.tar.gz",
+      "sha256": "a3febb6179152b0b4f56a0f5cc57bf5cc8ecef7db35e7c3e9d5a044c8158c26c",
+      "size": 18793521
     },
     "linux-x64": {
-      "version": "15.0.24",
-      "url": "https://dist.torproject.org/torbrowser/15.0.24/tor-expert-bundle-linux-x86_64-15.0.24.tar.gz",
-      "sha256": "8e012ec6815d7899cb64011582e2dade88e74119c6661068a2a3252de0ccd7f2",
-      "size": 32348376
+      "version": "15.0.26",
+      "url": "https://dist.torproject.org/torbrowser/15.0.26/tor-expert-bundle-linux-x86_64-15.0.26.tar.gz",
+      "sha256": "19cf18726eecb362e0f21d27afa9ea9efe5da928bfdfbb1ceb5fe54519e87f4a",
+      "size": 32448097
     },
     "linux-arm64": {
-      "version": "16.0a13",
-      "url": "https://dist.torproject.org/torbrowser/16.0a13/tor-expert-bundle-linux-aarch64-16.0a13.tar.gz",
-      "sha256": "e1685ff7a531e7b50b77ce231e8be397c835dd2dcb96b2fd8feb02c638acc517",
-      "size": 33058581
+      "version": "16.0a14",
+      "url": "https://dist.torproject.org/torbrowser/16.0a14/tor-expert-bundle-linux-aarch64-16.0a14.tar.gz",
+      "sha256": "6c2da4c58b50fb9554f1b1f4f5b23fbdeaf36207baddcd9f90785a854cc04bd2",
+      "size": 33242920
     }
   }
 }

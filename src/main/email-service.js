@@ -56,7 +56,7 @@ class EmailService {
           port: parseInt(emailSettings.imapPort) || 993,
           tls: emailSettings.imapTls !== false,
           authTimeout: 10000,
-          tlsOptions: { rejectUnauthorized: false },
+          tlsOptions: { rejectUnauthorized: true },
         },
       },
       fromAddress: emailSettings.emailUser,

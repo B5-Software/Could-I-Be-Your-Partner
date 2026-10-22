@@ -104,7 +104,7 @@ test('a free-client rejection refreshes an automatic UA once; regional errors an
     fs.rmSync(directory, { recursive: true, force: true });
   });
   global.fetch = async () => Response.json({});
-  for (const scenario of ['automatic', 'region', 'override']) {
+  for (const scenario of ['automatic', 'region', 'override', 'policy']) {
     const handlers = new Map(),
       requests = [];
     let version = headers.getOpenCodeVersion(),
@@ -139,6 +139,7 @@ test('a free-client rejection refreshes an automatic UA once; regional errors an
               ok: false,
               status: 403,
               kind: 'auth',
+              ...(scenario === 'policy' ? { kind: 'provider-policy', retryable: false } : {}),
               error:
                 scenario === 'region'
                   ? 'This model is not available in your country'

@@ -751,6 +751,7 @@
             <div class="settings-tab-group" data-i18n="ui.settings.groups.system">系统与安全</div>
             <button class="settings-tab" data-tab="security"><i class="fa-solid fa-shield-halved"></i> 安全</button>
             <button class="settings-tab" data-tab="network"><i class="fa-solid fa-network-wired"></i> 网络</button>
+            <button class="settings-tab" data-tab="network-privacy"><i class="fa-solid fa-user-shield"></i> <span data-i18n="ui.networkPrivacy.title">网络隐私</span></button>
             <button class="settings-tab" data-tab="entropy"><i class="fa-solid fa-dice"></i> 熵源</button>
             <button class="settings-tab" data-tab="firmware"><i class="fa-solid fa-microchip"></i> TRNG固件</button>
             <div class="settings-tab-group" data-i18n="ui.settings.groups.maintenance">维护</div>
@@ -1073,6 +1074,7 @@
                   </div>
                 </div>
                 <div id="llm-zen-fields" class="hidden">
+                  <div class="setting-item"><label for="setting-opencode-transport" data-i18n="ui.openCodeSdk.transport">OpenCode 请求引擎</label><select id="setting-opencode-transport" data-setting="llm.opencodeTransport"><option value="cibyp">CIBYP</option><option value="sdk">OpenCode AI SDK</option></select><p class="setting-hint" data-i18n="ui.openCodeSdk.hint">SDK 复用官方请求与流式解析；工具和权限仍由 CIBYP 管理。服务可用性由提供商决定。</p></div>
                   <div class="setting-item">
                     <label>OpenCode API Key（Zen / Go 通用）</label>
                     <div class="input-with-toggle">
@@ -3087,6 +3089,22 @@
             </div>
 
 
+            <div class="settings-panel" data-tab="network-privacy">
+              <div class="settings-group tor-remote-settings">
+                <h3><i class="fa-solid fa-user-shield"></i> <span data-i18n="ui.networkPrivacy.title">网络隐私</span></h3>
+                <p class="setting-hint" data-i18n="ui.networkPrivacy.scope">通过内置 Tor 代理主机的 HTTP/HTTPS 请求，包括 AI、模型目录与网页工具。本地后台保持直连。外部浏览器、终端子进程与原始网络探测不在此范围内。</p>
+                <div class="setting-item"><label for="setting-privacy-tor-enabled" data-i18n="ui.networkPrivacy.enabled">通过 Tor 发送主机网络请求</label><div class="toggle-switch"><input type="checkbox" id="setting-privacy-tor-enabled" data-setting="networkPrivacy.tor.enabled"><span class="toggle-slider"></span></div></div>
+                <div class="setting-item"><label for="setting-privacy-tor-auto" data-i18n="ui.networkPrivacy.auto">后台启动时自动连接</label><div class="toggle-switch"><input type="checkbox" id="setting-privacy-tor-auto" data-setting="networkPrivacy.tor.autoStart"><span class="toggle-slider"></span></div></div>
+                <div class="setting-item"><label for="setting-privacy-tor-bridges-enabled" data-i18n="ui.tor.useBridges">使用网桥</label><div class="toggle-switch"><input type="checkbox" id="setting-privacy-tor-bridges-enabled" data-setting="networkPrivacy.tor.useBridges"><span class="toggle-slider"></span></div></div>
+                <div class="setting-item"><label for="setting-privacy-tor-bridges" data-i18n="ui.tor.bridges">网桥配置（每行一条）</label><textarea rows="3" id="setting-privacy-tor-bridges" data-setting="networkPrivacy.tor.bridges" spellcheck="false" placeholder="obfs4 / snowflake / webtunnel / meek"></textarea></div>
+                <p class="setting-hint" data-i18n="ui.networkPrivacy.failClosed">启用后，Tor 未就绪或断开时会阻止范围内的请求，不会自动回退直连。修改网桥后请停止并重新连接。</p>
+                <div class="settings-actions tor-bridge-actions"><button class="btn-secondary" id="btn-privacy-tor-meek" data-i18n="ui.tor.useMeek">使用内置 meek 网桥</button></div>
+                <div class="settings-actions tor-connect-actions"><button class="btn-primary" id="btn-privacy-tor-start" data-i18n="ui.tor.start">连接 Tor</button><button class="btn-secondary" id="btn-privacy-tor-stop" data-i18n="ui.tor.stop">停止 Tor</button></div>
+                <div class="tor-connection-status"><progress id="privacy-tor-progress" max="100" value="0" aria-label="Tor connection progress"></progress><p id="privacy-tor-status" class="setting-hint" role="status" aria-live="polite"></p></div>
+                <p class="setting-hint" data-i18n="ui.networkPrivacy.identity">Tor 隐藏网络出口，不会隐藏请求中的登录账号、API Key 或代码内容。</p>
+              </div>
+            </div>
+
             <div class="settings-panel" data-tab="entropy">
               <div class="settings-group">
                 <h3><i class="fa-solid fa-dice"></i> 熵源设定</h3>
@@ -3559,8 +3577,9 @@
           <select id="pool-edit-model-select" class="hidden" style="margin-top:6px"></select>
           <label id="pool-edit-free-filter" class="setting-hint"><input type="checkbox" id="pool-edit-free-only" checked> 只显示免费模型</label>
           <div class="setting-hint" id="pool-edit-model-status" role="status"></div>
-          <div class="setting-hint" id="pool-edit-opencode-note">SessionID 和 OpenCode UA 自动配置；免费模型是否可用由上游决定。</div>
+          <div class="setting-hint" id="pool-edit-opencode-note">服务可用性由提供商决定。</div>
         </div>
+        <div class="setting-item" id="pool-edit-opencode-transport-row"><label for="pool-edit-opencode-transport" data-i18n="ui.openCodeSdk.transport">OpenCode 请求引擎</label><select id="pool-edit-opencode-transport"><option value="cibyp">CIBYP</option><option value="sdk">OpenCode AI SDK</option></select></div>
         <div class="setting-item"><label>上下文长度</label><input type="number" id="pool-edit-ctx" min="1024" max="2000000" step="1024" placeholder="默认 131072"></div>
         <div class="setting-item"><label>智慧分数 (0-100，模型选择策略=System One 时使用)</label><input type="number" id="pool-edit-intelligence" min="0" max="100" step="1" placeholder="50"></div>
         <div class="setting-item"><label>优先级 (越小越优先)</label><input type="number" id="pool-edit-priority" min="0" step="1" placeholder="0"></div>

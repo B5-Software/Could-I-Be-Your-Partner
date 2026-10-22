@@ -96,8 +96,15 @@ function generateReleaseNotes({
     ['其他变更 / Other changes', /.*/],
   ];
   const url = 'https://github.com/' + repo;
+  // Read the overview from the release revision, never from a newer checkout.
+  const overview = spawnSync('git', ['show', revision + ':docs/releases/' + version + '.md'], {
+    cwd,
+    encoding: 'utf8',
+    windowsHide: true,
+  });
   const lines = [
     START,
+    ...(overview.status === 0 && overview.stdout.trim() ? [overview.stdout.trim(), ''] : []),
     '## 更新日志 / Changelog',
     '',
     `**v${version}** · ${commits.length} 项提交 / commits`,

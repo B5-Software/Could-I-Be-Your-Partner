@@ -8,6 +8,8 @@
 'use strict';
 
 const { app, BrowserWindow, ipcMain: electronIpcMain, nativeTheme, dialog, clipboard, screen, shell, Notification, Tray, Menu, nativeImage, protocol, net, safeStorage, crashReporter } = require('electron');
+require('./services/tls-trust').enforceNodeTrust();
+require('./services/tls-trust').enforceElectronTrust(app);
 require('./services/account-vault').setAccountStorage(safeStorage);
 if (process.env.CIBYP_USER_DATA) app.setPath('userData', process.env.CIBYP_USER_DATA);
 const backgroundMode = process.argv.includes('--cibyp-headless') || process.argv.includes('--headless');
@@ -103,6 +105,7 @@ const { fetchLLMWithRetry, consumeSSEStream, abortAllRequests, abortRequests, DE
 const LLMProviders = require('./llm-providers');
 const ocHeaders = require('./opencode-headers');
 const netProxy = require('./net-proxy');
+netProxy.setSystemProxyResolver(url => require('electron').session.defaultSession.resolveProxy(url));
 const updateChecker = require('./update-checker');
 const ESLintService = require('./eslint-service');
 const { BUNDLED_SKILLS } = require('../data/bundled-skills');
@@ -620,6 +623,8 @@ const { DEFAULT_SETTINGS } = require('./settings/defaults')({
 });
 
 let settings = loadSettings(DEFAULT_SETTINGS, loadJSON(settingsPath, {}), loadJSON(path.join(path.dirname(settingsPath), 'tui-preferences.json'), {}));
+netProxy.setPrivacy({ enabled: settings.networkPrivacy?.tor?.enabled === true });
+netProxy.install();
 // Migrate: if provider field missing, default to openai-compat (preserves existing config).
 if (!settings.llm.provider) settings.llm.provider = 'openai-compat';
 if (!settings.llm.reasoningEffort) settings.llm.reasoningEffort = 'off';
@@ -690,6 +695,7 @@ function projectActivePoolEntry() {
     llm.activeEntryId = entry.id;
     if (entry.provider) llm.provider = entry.provider;
     if (typeof entry.autoOpencodeHeaders === 'boolean') llm.autoOpencodeHeaders = entry.autoOpencodeHeaders;
+    if (['sdk', 'cibyp'].includes(entry.opencodeTransport)) llm.opencodeTransport = entry.opencodeTransport;
     llm.apiUrl = entry.apiUrl || '';
     llm.model = entry.model || '';
     llm.providerLimits = entry.providerLimits || null;
@@ -1869,6 +1875,7 @@ function updateAppSettings(newSettings) {
   }
   // 托盘菜单勾选状态与设置保持联动（语音唤醒开关）
   rebuildTrayMenu();
+  networkPrivacy.configure();
   // P2：语音能力状态同步到 WebUI
   try {
     if (voiceIpc && webControlService) {
@@ -3766,6 +3773,10 @@ ipcMain.handle('updates:status', () => appUpdates.status());
 ipcMain.handle('updates:install', () => appUpdates.install());
 appUpdates.restore().catch(error => console.warn('[updates]', error.message));
 const torRemote = new (require('./services/tor-remote').TorRemote)({ app, web: webControlService, settings: () => settings, publish: publishEvent });
+const networkPrivacy = new (require('./services/network-privacy').NetworkPrivacy)({ app, settings: () => settings, publish: publishEvent });
+ipcMain.handle('privacyTor:start', () => networkPrivacy.start());
+ipcMain.handle('privacyTor:stop', () => networkPrivacy.stop());
+ipcMain.handle('privacyTor:status', () => networkPrivacy.status());
 ipcMain.handle('remoteTor:start', () => torRemote.start());
 ipcMain.handle('remoteTor:stop', () => torRemote.stop());
 ipcMain.handle('remoteTor:status', () => torRemote.status());
@@ -4553,6 +4564,7 @@ app.whenReady().then(async () => {
   if (process.env.CIBYP_WEB_PORT) webCfg.port = Number(process.env.CIBYP_WEB_PORT);
   webControlService.configure(webCfg);
   if (settings.remote?.tor?.autoStart) torRemote.start();
+  networkPrivacy.autoStart();
   if (WEB_FORCED || (webCfg.enabled && webCfg.autoStartOnOpen)) {
     try { await webControlService.start(); }
     catch (error) { console.error('[backend] WebUI startup failed:', error.message); }
@@ -4642,6 +4654,7 @@ app.on('before-quit', (event) => {
   quitPreparation = (async () => {
     agentRuntime?.dispose();
     torRemote.stop();
+    networkPrivacy.stop();
     closeSplash();
     removeBackendDiscovery?.();
     remoteBackend.close();

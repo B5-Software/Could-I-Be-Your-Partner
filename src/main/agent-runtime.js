@@ -1177,6 +1177,7 @@ function createAgentRuntime({
           'maxContextLength',
           'maxResponseTokens',
           'autoOpencodeHeaders',
+          'opencodeTransport',
           'contextLength',
         ];
         const override = Object.fromEntries(

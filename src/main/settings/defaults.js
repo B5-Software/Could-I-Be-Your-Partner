@@ -32,6 +32,7 @@ module.exports = function createDefaultSettings({ DEFAULT_DECISION_SETTINGS }) {
       autoOpencodeHeaders: true,
       // OpenCode UA 版本缓存（refreshOpenCodeVersion 写入 { version, fetchedAt }）
       opencodeVersion: null,
+      opencodeTransport: 'cibyp',
       // ---- 模型池（单层：每条自带 provider/URL/Key，可自由组合 Zen/Go/OpenAI 兼容等）----
       // entry: { id,label,provider,apiUrl,apiKey,model,effort,intelligence,priority,vision,contextLength,enabled }
       pool: [],
@@ -218,6 +219,7 @@ module.exports = function createDefaultSettings({ DEFAULT_DECISION_SETTINGS }) {
     },
     tarotVisible: true,
     remote: { tor: { autoStart: false, useBridges: false, bridges: '' } },
+    networkPrivacy: { tor: { enabled: false, autoStart: false, useBridges: false, bridges: '' } },
     userProfile: { name: '', avatar: '', avatarFrame: '', bio: '' },
     entropy: {
       source: 'csprng',

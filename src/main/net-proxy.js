@@ -28,10 +28,29 @@ const _sysCache = new Map();
 const SYS_CACHE_TTL = 60 * 1000;
 // 最近的系统代理解析结果（代表性 URL），供 aria2/env/SMTP 同步读取
 let _resolvedSystemProxyUrl = null;
+let _systemProxyResolver = null;
+function setSystemProxyResolver(resolve) { _systemProxyResolver = typeof resolve === 'function' ? resolve : null; }
 // 归一化代理 URL -> undici dispatcher 实例缓存
 const _agentCache = new Map();
 // fetch 是否已包装
 let _installed = false;
+let _privacy = { enabled: false, phase: 'stopped', socksUrl: '' };
+
+class NetworkPrivacyError extends Error {
+  constructor() {
+    super('Network privacy is enabled but Tor is not connected. Connect Tor in Settings > Network privacy, or turn this mode off.');
+    this.code = 'CIBYP_PRIVACY_UNAVAILABLE';
+  }
+}
+
+function setPrivacy(value = {}) {
+  _privacy = { enabled: value.enabled === true, phase: value.phase || 'stopped', socksUrl: value.socksUrl || '' };
+}
+
+function privacyProtected(urlStr) {
+  const url = new URL(urlStr);
+  return ['http:', 'https:'].includes(url.protocol) && !LOOPBACK_RE.test(url.hostname);
+}
 
 const LOOPBACK_RE = /^(localhost|127\.\d+\.\d+\.\d+|\[::1\]|::1|0\.0\.0\.0)$/i;
 
@@ -43,6 +62,7 @@ function resetForTest() {
   _sysCache.clear();
   _resolvedSystemProxyUrl = null;
   _agentCache.clear();
+  setPrivacy();
 }
 
 // ---- 归一化 ----
@@ -185,11 +205,8 @@ async function systemProxyFor(urlStr) {
   if (hit && Date.now() - hit.at < SYS_CACHE_TTL) return hit.value;
   let pac = null;
   try {
-    const { session } = require('electron');
-    if (session?.defaultSession?.resolveProxy) {
-      pac = await session.defaultSession.resolveProxy(urlStr);
-    }
-  } catch { /* electron 不可用（测试环境） */ }
+    if (_systemProxyResolver) pac = await _systemProxyResolver(urlStr);
+  } catch { /* OS proxy resolution may be unavailable on a headless host. */ }
   const value = parsePacResult(pac);
   _sysCache.set(origin, { value, at: Date.now() });
   if (value) {
@@ -201,7 +218,13 @@ async function systemProxyFor(urlStr) {
 /**
  * 为目标 URL 解析 dispatcher（bypass/none → undefined 直连）。
  */
-async function getDispatcher(urlStr) {
+async function getDispatcher(urlStr, { privacy = true } = {}) {
+  if (privacy && _privacy.enabled && privacyProtected(urlStr)) {
+    if (_privacy.phase !== 'ready' || !/^socks5:\/\/127\.0\.0\.1:\d+$/.test(_privacy.socksUrl)) throw new NetworkPrivacyError();
+    const dispatcher = getAgent(_privacy.socksUrl);
+    if (!dispatcher) throw new NetworkPrivacyError();
+    return dispatcher;
+  }
   if (!_config || _config.mode === 'none') return undefined;
   if (isBypassed(urlStr)) return undefined;
   let proxyUrl = null;
@@ -212,6 +235,18 @@ async function getDispatcher(urlStr) {
   }
   if (!proxyUrl) return undefined;
   return getAgent(proxyUrl);
+}
+
+// Tor must be bootstrapped before it can carry protected requests. This narrowly
+// scoped downloader only reaches official, pinned Tor archives; AI/API requests
+// cannot opt out of the privacy gate through a fetch option or bypass entry.
+async function fetchTorRuntime(urlStr, init = {}) {
+  const url = new URL(urlStr);
+  if (url.username || url.password || url.search || url.hash || !/^https:\/\/(?:dist\.torproject\.org\/torbrowser|archive\.torproject\.org\/tor-package-archive\/torbrowser)\/[\w.-]+\/tor-expert-bundle-[\w.-]+\.tar\.gz$/.test(url.href))
+    throw new Error('Unexpected Tor runtime download URL');
+  if (!undici) throw new Error('Tor runtime download transport is unavailable');
+  const dispatcher = await getDispatcher(url.href, { privacy: false });
+  return undici.fetch(url.href, { ...init, redirect: 'error', ...(dispatcher ? { dispatcher } : {}) });
 }
 
 /**
@@ -242,11 +277,21 @@ async function getProxyUrlForUrl(urlStr) {
 function install() {
   if (_installed) return;
   _installed = true;
-  if (!undici || typeof undici.fetch !== 'function') {
-    console.warn('[Proxy] undici unavailable, main-process fetch proxy wrapper disabled');
-    return;
-  }
-  const undiciFetch = undici.fetch.bind(undici);
+  const undiciFetch = undici?.fetch?.bind(undici) || globalThis.fetch.bind(globalThis);
+  // Redirects are dispatched independently by Undici. Recheck every origin so
+  // a loopback redirect cannot leak an external request, and a protected URL
+  // redirecting to the local backend does not send loopback through Tor.
+  const directDispatcher = undici?.getGlobalDispatcher();
+  const privacyDispatcher = undici && new class extends undici.Dispatcher {
+    dispatch(options, handler) {
+      Promise.resolve().then(async () => {
+        const target = new URL(options.path, options.origin).href;
+        const dispatcher = await getDispatcher(target);
+        (dispatcher || directDispatcher).dispatch(options, handler);
+      }).catch(error => handler.onError(error));
+      return true;
+    }
+  }();
   const wrapped = async (input, init = {}) => {
     let target = null;
     if (typeof input === 'string') target = input;
@@ -255,7 +300,18 @@ function install() {
     let dispatcher;
     try {
       dispatcher = target ? await getDispatcher(target) : undefined;
-    } catch { dispatcher = undefined; }
+    } catch (error) {
+      if (_privacy.enabled || error.code === 'CIBYP_PRIVACY_UNAVAILABLE') throw error;
+      dispatcher = undefined;
+    }
+    if (_privacy.enabled) {
+      try {
+        return await undiciFetch(input, { ...init, ...(privacyDispatcher ? { dispatcher: privacyDispatcher } : { redirect: 'error' }) });
+      } catch (error) {
+        if (error.cause?.code === 'CIBYP_PRIVACY_UNAVAILABLE') throw error.cause;
+        throw error;
+      }
+    }
     if (dispatcher) {
       return undiciFetch(input, { ...init, dispatcher: init?.dispatcher || dispatcher });
     }
@@ -346,5 +402,9 @@ module.exports = {
   getResolvedSystemProxyUrl,
   normalizeProxyUrl,
   applyEnv,
+  setPrivacy,
+  NetworkPrivacyError,
+  fetchTorRuntime,
+  setSystemProxyResolver,
   _test
 };

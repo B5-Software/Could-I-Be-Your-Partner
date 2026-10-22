@@ -19,7 +19,12 @@ function torSources(asset) {
   // pinned bytes after rotation; the same trusted size and SHA-256 apply.
   return [url.href, 'https://archive.torproject.org/tor-package-archive' + url.pathname];
 }
-async function prepareTor(platform = process.platform, arch = process.arch, destination) {
+async function prepareTor(
+  platform = process.platform,
+  arch = process.arch,
+  destination,
+  options = {},
+) {
   const key = platform + '-' + arch,
     asset = lock.targets[key];
   if (!asset) throw new Error('Tor runtime is unavailable for ' + key);
@@ -41,7 +46,11 @@ async function prepareTor(platform = process.platform, arch = process.arch, dest
   const archive = path.join(directory, 'bundle.tar.gz');
   const candidates = torSources(asset);
   try {
-    await downloadVerified(asset, archive, { candidates, concurrency: 4 });
+    await downloadVerified(asset, archive, {
+      candidates,
+      concurrency: 4,
+      ...(options.fetchFile ? { fetchFile: options.fetchFile } : {}),
+    });
     await require('tar').x({
       file: archive,
       cwd: directory,

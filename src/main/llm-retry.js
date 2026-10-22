@@ -14,6 +14,7 @@
 const { ts, maskUrl, lastUserSnippet, bodyMeta } = require('./req-log');
 const TokenUsage = require('../shared/token-usage');
 const ReasoningData = require('../shared/reasoning');
+const { providerFailure } = require('./services/provider-failure');
 
 // ---- Constants ----
 const DEFAULT_MAX_RETRIES = 10;
@@ -80,6 +81,7 @@ function classifyHttpResponse(resp) {
 
 function classifyThrownError(err) {
   if (!err) return { kind: 'unknown', retry: false };
+  if (err.code === 'CIBYP_PRIVACY_UNAVAILABLE') return { kind: 'privacy', retry: false };
   const msg = String(err.message || err);
   const code = err.code;
   if (err.name === 'AbortError' || /timeout/i.test(msg)) return { kind: 'timeout', retry: true };
@@ -216,6 +218,14 @@ async function fetchLLMWithRetry(cfg) {
       const dur = Date.now() - startedAt;
 
       const cls = classifyHttpResponse(resp);
+      // Read an HTTP failure once, retaining plain-text gateway diagnostics.
+      // A policy refusal remains terminal even if a gateway labels it 429/5xx.
+      const failureText = resp.ok ? '' : await resp.text().catch(() => '');
+      const failure = resp.ok ? null : providerFailure(failureText, { status: resp.status, kind: cls.kind });
+      if (failure?.kind === 'provider-policy') {
+        console.error(`[${label} ${ts()}] ✗ ${resp.status} (${dur}ms) model=${currentModel} kind=${failure.kind}: ${failure.error.slice(0, 300)}`);
+        return failure;
+      }
 
       if (!cls.retry) {
         if (resp.ok) {
@@ -234,8 +244,6 @@ async function fetchLLMWithRetry(cfg) {
         if (resp.status === 404 && endpointIdx + 1 < endpointCandidates.length) {
           endpointIdx++;
           currentEndpoint = endpointCandidates[endpointIdx];
-          // 消费响应体避免连接泄漏
-          try { await resp.text(); } catch { /* ignore */ }
           onRetry({
             attempt, status: 404, kind: 'client', delayMs: 0, requestId,
             reason: '探索端点: ' + currentEndpoint
@@ -243,22 +251,9 @@ async function fetchLLMWithRetry(cfg) {
           continue; // 尝试下一个候选端点
         }
         // Non-retryable client/auth error — read body for message.
-        let errBody = null;
-        try { errBody = await resp.json(); } catch { /* ignore */ }
-        // 兼容多种 OpenAI-compat 错误格式，避免只显示 "HTTP 400"
-        const errMsg = errBody?.error?.message || errBody?.message ||
-          (typeof errBody?.error === 'string' ? errBody.error : null) ||
-          (typeof errBody?.detail === 'string' ? errBody.detail : null) ||
-          (Array.isArray(errBody?.detail) && errBody.detail[0]?.msg) ||
-          errBody?.error?.code ||
-          `HTTP ${resp.status}`;
+        const errMsg = failure.error;
         console.error(`[${label} ${ts()}] ✗ ${resp.status} (${dur}ms) model=${currentModel} kind=${cls.kind}: ${String(errMsg).slice(0, 300)}`);
-        return {
-          ok: false,
-          error: errMsg,
-          status: resp.status,
-          kind: cls.kind
-        };
+        return failure;
       }
 
       // Retryable HTTP status.
@@ -269,7 +264,7 @@ async function fetchLLMWithRetry(cfg) {
         // 402 计费不足：仅重试有限次数（用户可能中途充值/切换模型），超过上限则终止
         consecutivePayment++;
         if (consecutivePayment >= MAX_PAYMENT_RETRIES) {
-          const errText = await resp.text().catch(() => '');
+          const errText = failureText;
           lastError = new LLMError(
             `HTTP ${resp.status}: ${errText.slice(0, 200)}`,
             { status: resp.status, retryAfter: cls.retryAfter, kind: cls.kind }
@@ -282,7 +277,7 @@ async function fetchLLMWithRetry(cfg) {
         consecutivePayment = 0;
       }
 
-      const errText = await resp.text().catch(() => '');
+      const errText = failureText;
       lastError = new LLMError(
         `HTTP ${resp.status}: ${errText.slice(0, 200)}`,
         { status: resp.status, retryAfter: cls.retryAfter, kind: cls.kind }
@@ -437,6 +432,7 @@ async function consumeSSEStream(bodyStream, onChunk, requestId, transport = 'ope
   let finalizedToolIds = new Set();
   let responseCompleted = false;
   let responseError = null;
+  let responseFailure = null;
   let wireFormat = null;
   let eventCount = 0;
 
@@ -457,12 +453,18 @@ async function consumeSSEStream(bodyStream, onChunk, requestId, transport = 'ope
     if (!jsonStr || jsonStr === '[DONE]') return;
     const parsed = JSON.parse(jsonStr);
     eventCount++;
-    if (parsed.error || parsed.type === 'error') responseError = parsed.error?.message || parsed.message || 'Provider returned an error';
+    if (parsed.error || parsed.type === 'error') {
+      responseFailure = providerFailure(parsed, { error: 'Provider returned an error' });
+      responseError = responseFailure.error;
+    }
     if (transport === 'anthropic') {
       processAnthropicEvent(parsed);
     } else if (transport === 'responses') {
       if (parsed.type === 'response.completed' && (!parsed.response?.status || parsed.response.status === 'completed')) responseCompleted = true;
-      if (['response.failed', 'response.incomplete', 'error'].includes(parsed.type)) responseError = parsed.response?.error?.message || parsed.error?.message || parsed.message || parsed.response?.incomplete_details?.reason || 'Response did not complete';
+      if (['response.failed', 'response.incomplete', 'error'].includes(parsed.type)) {
+        responseFailure = providerFailure(parsed, { error: parsed.response?.incomplete_details?.reason || 'Response did not complete' });
+        responseError = responseFailure.error;
+      }
       const state = {
         fullContent, fullReasoning, toolCalls, finishReason, usage,
         responsesToolBuffer, finalizedToolIds, onChunk, requestId, reasoningItems, reasoningKind
@@ -599,7 +601,7 @@ async function consumeSSEStream(bodyStream, onChunk, requestId, transport = 'ope
   if (wireFormat === 'json') {
     try {
       const raw = JSON.parse(buffer);
-      if (raw.error) throw new Error(raw.error.message || 'Provider returned an error');
+      if (raw.error) return { content: '', reasoning: '', finishReason: 'stop', ...providerFailure(raw) };
       if (info.requiresCompleted && raw.status !== 'completed') throw new Error('OpenAI response did not complete');
       if (responseError) throw new Error(responseError);
       const data = require('./llm-providers').parseLLMResponse(raw, transport);
@@ -633,7 +635,7 @@ async function consumeSSEStream(bodyStream, onChunk, requestId, transport = 'ope
     : { reasoning: fullReasoning, reasoningKind, ...(openaiReasoningItems.size ? { providerReasoning: { transport: 'openai', items: [...openaiReasoningItems.values()] } } : {}) };
   return {
     content: fullContent,
-    ...(responseError || (info.requiresCompleted && !responseCompleted) ? { error: responseError || 'OpenAI stream ended before response.completed' } : {}),
+    ...(responseError || (info.requiresCompleted && !responseCompleted) ? { ...responseFailure, error: responseError || 'OpenAI stream ended before response.completed' } : {}),
     ...normalizedReasoning,
     reasoning: normalizedReasoning.reasoning || fullReasoning,
     reasoningKind: normalizedReasoning.reasoning ? normalizedReasoning.reasoningKind : reasoningKind,
@@ -689,11 +691,11 @@ function aggregateSSEToJSON(text, transport = 'openai', requiresCompleted = fals
   }
   if (!events.length) return { error: { message: 'Provider returned no usable response events' } };
   const explicitError = events.find(event => event.error || event.type === 'error');
-  if (explicitError) return { error: { message: explicitError.error?.message || explicitError.message || 'Provider returned an error' } };
+  if (explicitError) return { error: { ...(typeof explicitError.error === 'object' ? explicitError.error : {}), message: providerFailure(explicitError).error } };
 
   if (transport === 'responses') {
     const failed = events.find(ev => ['response.failed', 'response.incomplete', 'error'].includes(ev.type));
-    if (failed) return { error: { message: failed.response?.error?.message || failed.error?.message || failed.message || 'OpenAI response did not complete' } };
+    if (failed) return { error: { ...(failed.response?.error || {}), message: providerFailure(failed, { error: 'OpenAI response did not complete' }).error } };
     for (let i = events.length - 1; i >= 0; i--) {
       const ev = events[i];
       if (ev && ev.type === 'response.completed' && ev.response) {

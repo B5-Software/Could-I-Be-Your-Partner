@@ -1156,3 +1156,17 @@ input[id^="setting-budget-peak-"][type="text"]:focus {
   margin-top: 12px;
   overflow-wrap: anywhere;
 }
+.settings-panel[data-tab="network-privacy"] .setting-item:has(.toggle-switch) {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 20px;
+  margin: 0;
+  padding: 12px 0;
+}
+.settings-panel[data-tab="network-privacy"] .setting-item:has(.toggle-switch) > label {
+  margin: 0;
+}
+.settings-panel[data-tab="network-privacy"] .toggle-switch {
+  margin: 0;
+}

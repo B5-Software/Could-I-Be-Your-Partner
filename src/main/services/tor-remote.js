@@ -5,15 +5,37 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { parse: parseBridges } = require('../../shared/tor-bridges');
 const { startTransport } = require('./tor-transport');
+async function allocateLoopbackPort() {
+  const server = require('node:net').createServer();
+  return new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      const port = server.address().port;
+      server.close((error) => (error ? reject(error) : resolve(port)));
+    });
+  });
+}
 const quoted = (value) => '"' + String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
 function bridgeLines(text) {
   return parseBridges(text).map((bridge) => 'Bridge ' + bridge.line);
 }
 class TorRemote {
-  constructor({ app, web, settings, publish, prepare }) {
-    Object.assign(this, { app, web, settings, publish });
+  constructor({
+    app,
+    web,
+    settings,
+    publish,
+    prepare,
+    purpose = 'remote',
+    onState,
+    allocatePort = allocateLoopbackPort,
+  }) {
+    Object.assign(this, { app, web, settings, publish, purpose, onState, allocatePort });
     this.prepare = prepare;
-    this.directory = path.join(app.getPath('userData'), 'remote-tor');
+    this.directory = path.join(
+      app.getPath('userData'),
+      purpose === 'privacy' ? 'privacy-tor' : 'remote-tor',
+    );
     this.state = { phase: 'stopped', progress: 0 };
   }
   status() {
@@ -21,11 +43,22 @@ class TorRemote {
   }
   change(value) {
     Object.assign(this.state, value);
-    this.publish('remoteTor:state', this.status());
+    this.publish(
+      this.purpose === 'privacy' ? 'privacyTor:state' : 'remoteTor:state',
+      this.status(),
+    );
+    this.onState?.(this.status());
   }
   async start() {
     if (this.operation || this.child) return this.status();
-    this.change({ phase: 'preparing', progress: 0, error: '', onion: '', detail: '' });
+    this.change({
+      phase: 'preparing',
+      progress: 0,
+      error: '',
+      onion: '',
+      socksUrl: '',
+      detail: '',
+    });
     const generation = (this.generation = (this.generation || 0) + 1);
     this.operation = this.startServer(generation)
       .catch((error) => {
@@ -34,7 +67,7 @@ class TorRemote {
         this.child = null;
         this.transport?.stop();
         this.transport = null;
-        this.change({ phase: 'error', error: error.message });
+        this.change({ phase: 'error', error: error.message, socksUrl: '' });
       })
       .finally(() => {
         this.operation = null;
@@ -42,11 +75,12 @@ class TorRemote {
     return this.status();
   }
   async startServer(generation) {
-    const cfg = this.settings().remote?.tor || {};
+    const privacy = this.purpose === 'privacy';
+    const cfg = (privacy ? this.settings().networkPrivacy?.tor : this.settings().remote?.tor) || {};
     const bridges = cfg.useBridges ? bridgeLines(cfg.bridges) : [];
-    if (!this.web.config?.passwordHash && !this.web.config?.password)
+    if (!privacy && !this.web.config?.passwordHash && !this.web.config?.password)
       throw new Error('Set a WebUI password before enabling remote access');
-    if (!this.web.running) await this.web.start();
+    if (!privacy && !this.web.running) await this.web.start();
     const bundled = path.join(process.resourcesPath || '', 'tor');
     const name = process.platform === 'win32' ? 'tor.exe' : 'tor';
     let runtime;
@@ -58,20 +92,26 @@ class TorRemote {
         path.join(this.directory, 'runtime'),
       );
     await fs.mkdir(path.join(this.directory, 'data'), { recursive: true, mode: 0o700 });
-    await fs.mkdir(path.join(this.directory, 'onion'), { recursive: true, mode: 0o700 });
+    if (!privacy)
+      await fs.mkdir(path.join(this.directory, 'onion'), { recursive: true, mode: 0o700 });
     const transport = path.join(
       runtime,
       'tor/pluggable_transports',
       process.platform === 'win32' ? 'lyrebird.exe' : 'lyrebird',
     );
+    const port = privacy ? await this.allocatePort() : 0;
     const torrc = [
-      'SocksPort 0',
+      privacy ? 'SocksPort 127.0.0.1:' + port + ' IsolateSOCKSAuth' : 'SocksPort 0',
       'RunAsDaemon 0',
       'Log notice stdout',
       'DataDirectory ' + quoted(path.join(this.directory, 'data')),
-      'HiddenServiceDir ' + quoted(path.join(this.directory, 'onion')),
-      'HiddenServiceVersion 3',
-      'HiddenServicePort 80 127.0.0.1:' + this.web.port,
+      ...(privacy
+        ? ['ClientOnly 1']
+        : [
+            'HiddenServiceDir ' + quoted(path.join(this.directory, 'onion')),
+            'HiddenServiceVersion 3',
+            'HiddenServicePort 80 127.0.0.1:' + this.web.port,
+          ]),
     ];
     if (bridges.length) {
       const requested = parseBridges(cfg.bridges)
@@ -169,10 +209,18 @@ class TorRemote {
           generation === this.generation &&
           !['stopped', 'error'].includes(this.state.phase)
         )
-          this.change({ phase: 'error', error: 'Tor connection closed (' + code + ')' });
+          this.change({
+            phase: 'error',
+            error: 'Tor connection closed (' + code + ')',
+            socksUrl: '',
+          });
       });
     });
     if (this.generation !== generation) return;
+    if (privacy) {
+      this.change({ phase: 'ready', progress: 100, socksUrl: 'socks5://127.0.0.1:' + port });
+      return;
+    }
     const hostname = (
       await fs.readFile(path.join(this.directory, 'onion/hostname'), 'utf8')
     ).trim();
@@ -181,7 +229,7 @@ class TorRemote {
   }
   stop() {
     this.generation = (this.generation || 0) + 1;
-    this.change({ phase: 'stopped', progress: 0, onion: '', error: '', detail: '' });
+    this.change({ phase: 'stopped', progress: 0, onion: '', socksUrl: '', error: '', detail: '' });
     this.child?.kill();
     this.child = null;
     this.transport?.stop();

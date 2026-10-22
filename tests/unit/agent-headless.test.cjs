@@ -1115,6 +1115,40 @@ test(
   },
 );
 
+test('provider policy refusals stop the shared Agent without repairing or retrying its context', async (t) => {
+  const { providerFailure } = require('../../src/main/services/provider-failure');
+  const error =
+    "OpenCode's free models aren't available because we've detected abusive traffic from this IP address.";
+  let attempts = 0;
+  const runtime = createAgentRuntime({
+    ipcMain: createFakeIpcMain(
+      baseHandlers({
+        llmChat: async (_, __, options) => {
+          if (!options.cibypAgentStep)
+            return { ok: true, data: { choices: [{ message: { content: 'Fixture title' } }] } };
+          attempts++;
+          return providerFailure(error);
+        },
+      }),
+    ),
+    eventBus: createEventBus(),
+    interactionPolicy: INTERACTION_POLICY.AUTO_APPROVE,
+  });
+  t.after(() => runtime.dispose());
+  const session = runtime.createSession({ key: 'provider-refusal', minimalMode: true });
+  await runtime.sendMessage(session.key, 'Keep this draft');
+  assert.equal(attempts, 1);
+  const state = runtime.getSessionDetails(session.key).session;
+  assert.equal(state.busy, false);
+  assert.equal(state.status, 'error');
+  assert.equal(state.lastError, error);
+  const history = runtime.sessions.get(session.key).agent.contextManager.getHistoryMessages();
+  assert.ok(
+    history.some((message) => message.role === 'user' && message.content === 'Keep this draft'),
+  );
+  assert.ok(!JSON.stringify(history).includes('正在自动重试'));
+});
+
 test('session model and reasoning selectors validate capabilities, persist overrides and keep global defaults unchanged', async () => {
   const settings = structuredClone(SETTINGS);
   settings.llm.pool = [

@@ -78,7 +78,7 @@ async function runGuestTool(service, channel, args, route) {
   if (channel === 'eslint:lint' || channel === 'eslint:lintFile') {
     const version = require('eslint/package.json').version;
     const prepared = await instance.exec(
-      `test -f ${shellQuote(root + '/node_modules/eslint/package.json')} || npm install --prefix ${shellQuote(root)} --ignore-scripts --no-audit --no-fund ${shellQuote('eslint@' + version)}`,
+      `test -f ${shellQuote(root + '/node_modules/eslint/package.json')} || NODE_OPTIONS=--use-openssl-ca npm install --prefix ${shellQuote(root)} --ignore-scripts --no-audit --no-fund ${shellQuote('eslint@' + version)}`,
       { timeoutMs: 300000 },
     );
     if (!prepared.ok) throw new Error('VM ESLint 不可用: ' + prepared.stderr);
@@ -98,7 +98,7 @@ async function runGuestTool(service, channel, args, route) {
       }),
     );
     const result = await instance.exec(
-      `LANG=C.UTF-8 LC_ALL=C.UTF-8 node ${shellQuote(remote)} ${shellQuote(input)} ${shellQuote(output)}`,
+      `LANG=C.UTF-8 LC_ALL=C.UTF-8 NODE_OPTIONS=--use-openssl-ca node ${shellQuote(remote)} ${shellQuote(input)} ${shellQuote(output)}`,
       { timeoutMs: 300000 },
     );
     if (!result.ok) throw new Error(result.stderr || result.stdout || 'VM tool process failed');

@@ -35,6 +35,23 @@ function fixture(t) {
   };
 }
 
+test('release overview is included from the tagged revision rather than a newer checkout', (t) => {
+  const f = fixture(t);
+  const file = path.join(f.cwd, 'docs/releases/1.9.0.md');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, '# Stable release\n\nKnown runtime limitations.\n');
+  f.git(['add', 'docs/releases/1.9.0.md']);
+  f.commit('chore: release 1.9.0');
+  f.git(['tag', 'v1.9.0']);
+  fs.writeFileSync(file, '# Unreleased changes\n');
+  f.git(['add', 'docs/releases/1.9.0.md']);
+  f.commit('docs: future overview');
+  const notes = f.notes({ version: '1.9.0' });
+  assert.match(notes.markdown, /# Stable release/);
+  assert.match(notes.markdown, /Known runtime limitations/);
+  assert.doesNotMatch(notes.markdown, /Unreleased changes/);
+});
+
 test('notes include every commit and full bodies, use published versions, and stay pinned when HEAD advances', (t) => {
   const f = fixture(t);
   f.commit('initial');

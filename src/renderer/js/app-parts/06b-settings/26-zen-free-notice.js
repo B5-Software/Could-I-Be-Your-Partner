@@ -4,7 +4,7 @@
     notice.classList.toggle('hidden', !['opencode-zen', 'opencode-go'].includes(document.getElementById('setting-llm-provider')?.value));
     const status = document.getElementById('zen-ua-status');
     const s = await readSettings();
-    if (status) status.textContent = s.llm.autoOpencodeHeaders === false ? '自动配置已关闭，可在下方开启' : 'SessionID 与 OpenCode UA 已自动配置';
+    if (status) status.textContent = s.llm.opencodeTransport === 'sdk' ? t('ui.openCodeSdk.active', '正在使用官方 OpenCode AI SDK 请求层') : s.llm.autoOpencodeHeaders === false ? '自动配置已关闭，可在下方开启' : 'SessionID 与 OpenCode UA 已自动配置';
   }
 
   // LLM settings

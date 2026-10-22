@@ -246,7 +246,7 @@ class Agent {
       const pool = Array.isArray(this.settings?.llm?.pool) ? this.settings.llm.pool : [];
       const hit = pool.find(e => e && e.model === ov.model);
       if (hit) {
-        ov = { ...ov, provider: hit.provider, apiUrl: hit.apiUrl, apiKey: hit.apiKey, autoOpencodeHeaders: hit.autoOpencodeHeaders, vision: hit.vision === true, poolEntryId: hit.id };
+        ov = { ...ov, provider: hit.provider, apiUrl: hit.apiUrl, apiKey: hit.apiKey, autoOpencodeHeaders: hit.autoOpencodeHeaders, opencodeTransport: hit.opencodeTransport, vision: hit.vision === true, poolEntryId: hit.id };
       }
     }
     const base = {
@@ -257,6 +257,7 @@ class Agent {
       reasoningEffort: this.getActiveReasoningEffort(),
       ...(ov.provider ? { provider: ov.provider } : {}),
       ...(ov.apiUrl ? { apiUrl: ov.apiUrl } : {}),
+      ...(ov.opencodeTransport ? { opencodeTransport: ov.opencodeTransport } : {}),
       ...(ov.apiKey !== undefined && ov.apiKey !== null && ov.apiKey !== '' ? { apiKey: ov.apiKey } : {}),
       ...(typeof ov.autoOpencodeHeaders === 'boolean' ? { autoOpencodeHeaders: ov.autoOpencodeHeaders } : {})
     };
@@ -363,6 +364,7 @@ class Agent {
         apiUrl: entry.apiUrl || null,
         apiKey: entry.apiKey || null,
         autoOpencodeHeaders: entry.autoOpencodeHeaders,
+        opencodeTransport: entry.opencodeTransport,
         vision: entry.vision === true,
         contextLength: entry.contextLength || null,
         reasoningEffort: effort
@@ -2113,6 +2115,7 @@ Use the latest relationship dossier and shared memories provided with this reque
         apiUrl: conversation.llmOverride.apiUrl || null,
         apiKey: conversation.llmOverride.apiKey || null,
         autoOpencodeHeaders: conversation.llmOverride.autoOpencodeHeaders,
+        opencodeTransport: conversation.llmOverride.opencodeTransport,
         vision: conversation.llmOverride.vision === true
       };
     } else {
@@ -2629,10 +2632,11 @@ Use the latest relationship dossier and shared memories provided with this reque
       if (this.stopped || runId !== this.runId) break;
 
       if (!result.ok) {
-        // ===== 自动修复 + 重试循环：所有提供商返回的错误（invalid_request_error、402、
-        // rate_limit、5xx、网络错误等）都先尝试自动修复并重试，重试用尽后才报错停止 =====
+        // Repair transient/request errors only. Provider access restrictions
+        // are terminal, including refusals delivered inside an HTTP 200 stream.
         const errText = String(result.error || '');
         const kind = result.kind;
+        const terminalFailure = result.retryable === false || ['auth', 'plugin-policy', 'provider-policy', 'privacy', 'aborted'].includes(kind);
         const MAX_PROVIDER_RETRIES = 3;
         // 可修复/可重试的客户端类错误：
         //   - HTTP 400 / client / payment(402) 类型
@@ -2645,7 +2649,7 @@ Use the latest relationship dossier and shared memories provided with this reque
         // provider 明确报上下文溢出：旁路容量元数据，直接做最大 head 缩减后重试
         const isOverflow = /context.{0,24}(length|window|overflow|exceed|too (long|large))|maximum context|too many tokens|input.{0,12}too long|prompt.{0,12}too long|400.{0,24}(context|tokens|length)/i.test(errText)
           || (result.status === 400 && /(context|tokens|length)/i.test(errText));
-        if (isOverflow) {
+        if (isOverflow && !terminalFailure) {
           const removed = this.contextManager.hardTruncate(
             this.contextManager.resolvePolicy({ retainRatio: 0.06 })
           );
@@ -2655,7 +2659,7 @@ Use the latest relationship dossier and shared memories provided with this reque
         }
 
         let retryCount = 0;
-        while (!result.ok && !['auth', 'plugin-policy'].includes(result.kind) && retryCount < MAX_PROVIDER_RETRIES
+        while (!result.ok && result.retryable !== false && !['auth', 'plugin-policy', 'provider-policy', 'privacy', 'aborted'].includes(result.kind) && retryCount < MAX_PROVIDER_RETRIES
                && this.running && !this.stopped && runId === this.runId) {
           retryCount++;
           let fixedNote = '';

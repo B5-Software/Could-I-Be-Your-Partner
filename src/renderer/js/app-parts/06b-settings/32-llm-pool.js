@@ -47,6 +47,7 @@
     const apiKey = document.getElementById('pool-edit-key').value.trim();
     const zen = provider.startsWith('opencode');
     document.getElementById('pool-edit-opencode-note').classList.toggle('hidden', !zen);
+    document.getElementById('pool-edit-opencode-transport-row').classList.toggle('hidden', !zen);
     document.getElementById('pool-edit-free-filter').classList.toggle('hidden', provider !== 'opencode-zen');
     const button = document.getElementById('btn-pool-edit-fetch');
     const status = document.getElementById('pool-edit-model-status');
@@ -56,7 +57,7 @@
     status.textContent = '正在识别模型…';
     try {
       if (!zen && !['chatgpt-codex', 'claude-subscription'].includes(provider) && !provider.startsWith('dsh:') && !apiUrl) throw new Error('填写 API 地址后自动识别模型');
-      const result = zen ? await window.api.zenFetchModels(provider === 'opencode-go' ? 'go' : 'zen', { apiKey: apiKey || 'public', verifyFree: true })
+      const result = zen ? await window.api.zenFetchModels(provider === 'opencode-go' ? 'go' : 'zen', { apiKey: apiKey || 'public', verifyFree: document.getElementById('pool-edit-opencode-transport').value !== 'sdk' })
         : await window.api.llmFetchModels(provider, apiUrl, apiKey);
       if (generation !== _poolModelsGeneration) return;
       if (!result?.ok || !Array.isArray(result.models)) throw new Error(result?.error || '模型列表格式无效');
@@ -159,6 +160,7 @@
     const e = entry || {};
     v('pool-edit-label', e.label || '');
     v('pool-edit-provider', e.provider || 'opencode-zen');
+    v('pool-edit-opencode-transport', e.opencodeTransport || 'cibyp');
     updatePoolAccountFields();
     v('pool-edit-url', e.apiUrl || '');
     v('pool-edit-key', e.apiKey || '');
@@ -244,7 +246,7 @@
       provider,
       apiUrl: provider.startsWith('dsh:') ? 'dsh-plugin://model' : provider === 'claude-subscription' ? 'claude-sdk://subscription' : provider === 'chatgpt-codex' ? 'https://api.openai.com/v1/responses' : val('pool-edit-url'),
       apiKey: ['chatgpt-codex', 'claude-subscription'].includes(provider) || provider.startsWith('dsh:') ? '' : val('pool-edit-key') || (provider.startsWith('opencode') ? 'public' : ''),
-      ...(provider.startsWith('opencode') ? { autoOpencodeHeaders: true } : {}),
+      ...(provider.startsWith('opencode') ? { autoOpencodeHeaders: true, opencodeTransport: val('pool-edit-opencode-transport') || 'cibyp' } : {}),
       model,
       providerLimits: _poolModels.find(model => model.id === val('pool-edit-model'))?.providerLimits || null,
       contextLength: parseInt(val('pool-edit-ctx'), 10) || 131072,

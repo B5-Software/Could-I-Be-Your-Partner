@@ -254,6 +254,9 @@
 
     // Proxy settings
     const proxy = s.proxy || {};
+    loadNetworkPrivacySettings(s);
+    const sdkTransport = document.getElementById('setting-opencode-transport');
+    if (sdkTransport) sdkTransport.value = s.llm.opencodeTransport || 'cibyp';
     document.querySelectorAll('.proxy-mode-btn').forEach(btn => {
       btn.classList.toggle('active', btn.dataset.mode === (proxy.mode || 'system'));
     });

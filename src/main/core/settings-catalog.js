@@ -22,6 +22,7 @@ const rootCategories = {
   imageGen: 'image',
   email: 'email',
   proxy: 'proxy',
+  networkPrivacy: 'network-privacy',
   mcp: 'mcp',
   updates: 'updates',
   privacyProtection: 'privacy',

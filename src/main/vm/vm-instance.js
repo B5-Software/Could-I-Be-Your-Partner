@@ -30,6 +30,7 @@ const { VmSsh } = require('./vm-ssh');
 const { QmpClient } = require('./qmp-client');
 const { VmSavedState, compatibility, discardSnapshot, TAG } = require('./vm-saved-state');
 const { prepareHibernate } = require('./vm-hibernate');
+const { updateGuestTrust } = require('./vm-security');
 
 const SERIAL_RING_BYTES = 64 * 1024;
 const STATES = ['idle', 'checking', 'booting', 'restoring', 'preparing', 'ready', 'saving', 'stopping', 'failed'];
@@ -111,6 +112,7 @@ class VmInstance extends EventEmitter {
       overlay: this.overlayPath,
       sshReady: !!(this.ssh && this.ssh.connected),
       lastError: this.lastError,
+      security: this.security || null,
       quickResume: {
         enabled: this.config.quickResume !== false,
         saved: !!this.dir && fs.existsSync(path.join(this.dir, 'saved-state.json')),
@@ -216,7 +218,7 @@ class VmInstance extends EventEmitter {
       if (saved) {
         try {
           await this._restore(qemu, saved);
-          return this._markReady('虚拟机状态已恢复');
+          return await this._markReady('虚拟机状态已恢复');
         } catch (error) {
           this._resumeDetail = '状态恢复失败，已改为正常启动：' + error.message;
           this.emit('serial', '[host] ' + this._resumeDetail);
@@ -281,7 +283,7 @@ class VmInstance extends EventEmitter {
       if (!ready) this.emit('serial', '[host] 警告: /workspace 就绪标记未出现（继续启动）');
 
       // 8) 就绪
-      return this._markReady('虚拟机就绪');
+      return await this._markReady('虚拟机就绪');
     } catch (e) {
       this.lastError = e.message;
       this._setState('failed', e.message, 0);
@@ -291,7 +293,12 @@ class VmInstance extends EventEmitter {
     }
   }
 
-  _markReady(detail) {
+  async _markReady(detail) {
+    // Runs after both cold boot and snapshot restore, before tools can execute.
+    this._setState('preparing', '检查并更新虚拟机证书信任库', 92);
+    this.security = await updateGuestTrust(this.ssh);
+    this.emit('serial', '[host] VM certificates: ' + JSON.stringify(this.security));
+    if (!this.security.updated) detail += '（证书信任已加固，软件包更新待重试）';
     this._setState('ready', detail, 100);
     this.emit('ready', this.status());
     return this.status();
@@ -488,7 +495,7 @@ class VmInstance extends EventEmitter {
       this.child = { pid: info.pid };
       this.accel = { backend: info.accel, hardware: info.accel !== 'tcg', detail: '复用已运行实例' };
       this.startedAt = info.startedAt || Date.now();
-      this._setState('ready', '已复用运行中的虚拟机', 100);
+      await this._markReady('已复用运行中的虚拟机');
       return true;
     } catch {
       return false;

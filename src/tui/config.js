@@ -10,6 +10,7 @@ const ENUMS = {
   'runtime.location': ['host', 'vm'],
   'runtime.workspaceMode': ['shared', 'isolated'],
   'webResearch.engine': ['fusion', 'bing', 'exa', 'parallel', 'tinyfish'],
+  'llm.opencodeTransport': ['cibyp', 'sdk'],
 };
 const secret = (path) =>
   /(?:api.?key|password|secret|token|credential|private.?key|authorization|cookie|passphrase)$/i.test(
@@ -232,6 +233,20 @@ class ConfigBrowser {
             ),
           })),
         );
+      if (this.category === 'network-privacy' && !words.length)
+        modal.options.push(
+          ...['privacyStart', 'privacyStop', 'privacyStatus'].map((action) => ({
+            action,
+            label: t(
+              'ui.networkPrivacy.' + action,
+              {
+                privacyStart: '连接隐私 Tor',
+                privacyStop: '停止隐私 Tor',
+                privacyStatus: '隐私 Tor 状态',
+              }[action],
+            ),
+          })),
+        );
     }
     modal.selected = Math.min(modal.selected || 0, Math.max(0, modal.options.length - 1));
     modal.subtitle = t('ui.tui.configShared', '与 GUI / WebUI 共享设置，修改后即时保存');
@@ -333,9 +348,12 @@ class ConfigBrowser {
               torStart: 'remoteTorStart',
               torStop: 'remoteTorStop',
               torStatus: 'remoteTorStatus',
+              privacyStart: 'privacyTorStart',
+              privacyStop: 'privacyTorStop',
+              privacyStatus: 'privacyTorStatus',
             }[option.action];
             const result = await this.app.runtime.api[method]();
-            if (result.ok === false) throw new Error(result.error);
+            if (result.ok === false || result.error) throw new Error(result.error);
             modal.subtitle =
               result.onion || result.url || result.phase || t('ui.tui.configSaved', '已保存');
           } else if (option.category) {

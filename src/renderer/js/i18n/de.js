@@ -4330,3 +4330,33 @@ Object.assign(DE_DICT._textMap, {
   "Codex 用量授权已失效，请在账号设置中重新连接。": "Die Codex-Nutzungsautorisierung ist abgelaufen. Verbinde sie in den Kontoeinstellungen erneut."
 });
 Object.assign(DE_DICT.ui.messageEdit, {"clearConversation":"Chatverlauf leeren","deleteMessage":"Nachricht löschen","deleteTurn":"Diese Gesprächsrunde löschen","deleteFromHere":"Diese und spätere Nachrichten löschen","deleteScope":"Chatnachrichten und ihren ursprünglichen Modellkontext löschen. Das Löschen deiner Nachricht entfernt auch die zugehörigen Antworten.","stale":"Diese Nachricht existiert nicht mehr. Erneut auswählen.","busyDelete":"Die Aufgabe läuft noch. Vor dem Bestätigen anhalten.","stopBeforeDelete":"Aufgabe zuerst anhalten","confirmDelete":"Löschen bestätigen","deleteCount":"{count} Nachrichten und ihren ursprünglichen Kontext löschen.","stopTimeout":"Die Aufgabe wurde noch nicht angehalten. Bitte erneut versuchen."});
+Object.assign(DE_DICT, {
+  'ui.networkPrivacy.title': 'Netzwerk-Datenschutz',
+  'ui.networkPrivacy.scope': 'Host-HTTP/HTTPS-Anfragen über das integrierte Tor senden, einschließlich KI, Modellkataloge und Webwerkzeuge. Lokale Backend-Verbindungen bleiben direkt. Externe Browser, Terminal-Unterprozesse und direkte Netzwerkdiagnosen sind nicht abgedeckt.',
+  'ui.networkPrivacy.enabled': 'Host-Netzwerkanfragen über Tor senden',
+  'ui.networkPrivacy.auto': 'Beim Start des Backends automatisch verbinden',
+  'ui.networkPrivacy.failClosed': 'Bei aktivem Schutz werden Anfragen blockiert, solange Tor nicht verbunden ist oder die Verbindung abbricht. Kein automatischer Direktzugriff. Nach Änderungen der Bridges stoppen und erneut verbinden.',
+  'ui.networkPrivacy.identity': 'Tor verbirgt deinen Netzwerkursprung, aber keine Konten, API-Schlüssel oder in Anfragen enthaltenen Code.',
+  'ui.networkPrivacy.stopped': 'Nicht verbunden',
+  'ui.networkPrivacy.preparing': 'Tor wird vorbereitet…',
+  'ui.networkPrivacy.connecting': 'Verbindung zu Tor wird hergestellt…',
+  'ui.networkPrivacy.ready': 'Tor verbunden',
+  'ui.networkPrivacy.error': 'Tor-Verbindung fehlgeschlagen',
+  'ui.networkPrivacy.privacyStart': 'Datenschutz-Tor verbinden',
+  'ui.networkPrivacy.privacyStop': 'Datenschutz-Tor stoppen',
+  'ui.networkPrivacy.privacyStatus': 'Status des Datenschutz-Tor',
+  'ui.openCodeSdk.transport': 'OpenCode-Anfrage-Engine',
+  'ui.openCodeSdk.hint': 'Das SDK übernimmt offizielle Anfragen und die Stream-Verarbeitung. CIBYP verwaltet weiterhin Werkzeuge und Berechtigungen. Die Verfügbarkeit bestimmt der Anbieter.',
+  'ui.openCodeSdk.active': 'Offizielle OpenCode-AI-SDK-Anfrageschicht aktiv',
+});
+Object.assign(DE_DICT._textMap, {
+  '网络隐私': 'Netzwerk-Datenschutz',
+  '通过 Tor 发送主机网络请求': 'Host-Netzwerkanfragen über Tor senden',
+  '后台启动时自动连接': 'Beim Start des Backends automatisch verbinden',
+  'OpenCode 请求引擎': 'OpenCode-Anfrage-Engine',
+  'SDK 复用官方请求与流式解析；工具和权限仍由 CIBYP 管理。服务可用性由提供商决定。': DE_DICT['ui.openCodeSdk.hint'],
+  '通过内置 Tor 代理主机的 HTTP/HTTPS 请求，包括 AI、模型目录与网页工具。本地后台保持直连。外部浏览器、终端子进程与原始网络探测不在此范围内。': DE_DICT['ui.networkPrivacy.scope'],
+  '启用后，Tor 未就绪或断开时会阻止范围内的请求，不会自动回退直连。修改网桥后请停止并重新连接。': DE_DICT['ui.networkPrivacy.failClosed'],
+  'Tor 隐藏网络出口，不会隐藏请求中的登录账号、API Key 或代码内容。': DE_DICT['ui.networkPrivacy.identity'],
+  '服务可用性由提供商决定。': 'Die Verfügbarkeit bestimmt der Anbieter.',
+});

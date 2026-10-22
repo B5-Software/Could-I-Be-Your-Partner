@@ -49,7 +49,7 @@ async function connect(service, remote, options) {
   residents.set(instance, slot);
   slot.pending = (async () => {
     const { stream, done } = await instance.ssh.execStream(
-      `LANG=C.UTF-8 LC_ALL=C.UTF-8 node ${shellQuote(remote)} --plugin-daemon`,
+      `LANG=C.UTF-8 LC_ALL=C.UTF-8 NODE_OPTIONS=--use-openssl-ca node ${shellQuote(remote)} --plugin-daemon`,
       { maxStderrBytes: 65536 },
     );
     const unsub = [];

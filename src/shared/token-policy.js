@@ -137,6 +137,7 @@
       zenApiKey: 'apiKey',
       model: 'model',
       providerLimits: 'providerLimits',
+      opencodeTransport: 'opencodeTransport',
       reasoningEffort: 'effort',
       maxContextLength: 'contextLength',
     })) {
