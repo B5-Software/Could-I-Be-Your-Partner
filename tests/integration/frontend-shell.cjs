@@ -286,7 +286,9 @@ ipcMain.once('app:renderer-ready', (event) =>
         y: Math.round(drag.y),
       });
       await contents.executeJavaScript(`(async()=>{${checkHelpers}
-        await until(()=>document.querySelector('.reasoning-picker-track')?.dataset.dragging==='true');
+        // sendInputEvent queues native events; pointerdown can finish before the
+        // following mousemove. Wait for its fractional value, not only the down flag.
+        await until(()=>document.querySelector('.reasoning-picker-track')?.dataset.dragging==='true' && !Number.isInteger(Number(document.querySelector('.reasoning-picker input').value)),'Pointer drag did not produce a continuous value');
         const slider=document.querySelector('.reasoning-picker input');
         check(!Number.isInteger(Number(slider.value)),'Pointer drag still jumps between discrete values');
         await window.api.setSettings({animations:true});await paint();
