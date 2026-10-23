@@ -65,8 +65,10 @@ module.exports = async function checkControls(contents) {
       for(let i=1; i<buttons.length; i++) {
         const previous = buttons[i-1].getBoundingClientRect();
         const current = buttons[i].getBoundingClientRect();
-        const sameLine = Math.abs(current.top - previous.top) < 1;
-        if(sameLine ? current.left - previous.right < 8 : current.top - previous.bottom < 8) throw new Error('Privacy Tor actions touch');
+        // Center-aligned buttons may have different heights with fallback fonts.
+        // Vertical overlap identifies the same flex line without assuming equal tops.
+        const sameLine = current.top < previous.bottom && previous.top < current.bottom;
+        if(sameLine ? current.left - previous.right < 8 : current.top - previous.bottom < 8) throw new Error('Privacy Tor actions touch: '+JSON.stringify({previous,current}));
       }
     }
     window.activateSettingsTab('webcontrol');
