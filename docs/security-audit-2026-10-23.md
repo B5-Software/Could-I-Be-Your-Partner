@@ -45,7 +45,9 @@ Tor 新包的 OpenSSL 升级包含额外安全修复；不能将上游 DTLS/QUIC
 
 ## 验证记录
 
-- `npm run check`：588 项 Node tests，585 通过、3 项平台跳过；388 项 legacy 全通过；lint、format、类型及 API 能力检查通过。
+- `npm run check`：592 项 Node tests，589 通过、3 项平台跳过；388 项 legacy 全通过；lint、format、类型及 API 能力检查通过。
+- `npm run test:desktop` 完整通过，包括启动预加载、共享后台、设置开关、TUI 真终端交互；修正布局检查将隐藏设置页也计入的问题，并分别检查两个 Tor 设置页。
+- GeoGebra 离线包固定为 5.4.933.1，由官方版本地址下载并校验 SHA-256；CI 在 Linux 下载后供六平台共用，各平台再次验哈希。损坏缓存、摘要不匹配、缺失文件回归通过，实际 Electron 离线绘图及 3D 切换通过。
 - 实际 GUI 前端冒烟通过：共享组件、设置、模式、输入框、键盘和响应式布局；验证新 Electron 与 KaTeX 资源仍可用。
 - 真实 Windows WHPX / QEMU：使用临时 overlay，旧镜像 CA 升级到 `20250419+deb13u1`；重新注入真实被撤销公有根，检查拒绝放行；移除测试根后恢复正常。
 - 真实 VM 快照保存、全新宿主对象恢复、进程存活、无效状态回退冷启动通过；三个就绪路径均报告已验证证书基线。

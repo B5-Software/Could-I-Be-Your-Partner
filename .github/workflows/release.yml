@@ -94,9 +94,32 @@ jobs:
               -f "ref=refs/tags/$TAG" -f "sha=$GITHUB_SHA"
           fi
 
+  # GeoGebra is platform-independent. Download once on Linux, verify its pinned
+  # hash, and share the archive so Windows runners need no upstream connection.
+  geogebra:
+    needs: [test, detect]
+    if: needs.detect.outputs.changed == 'true' && inputs.publish_run_id == '' && inputs.runtime_run_id == ''
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - uses: actions/cache@v6
+        with:
+          path: .cache/geogebra
+          key: geogebra-${{ hashFiles('build/geogebra-runtime.json') }}
+      - name: Download and verify official GeoGebra archive
+        run: node scripts/lib/geogebra-bundle.cjs --archive-only
+      - uses: actions/upload-artifact@v7
+        with:
+          name: geogebra-archive
+          path: .cache/geogebra/*.zip
+          if-no-files-found: error
+
   # ---- 六平台打包（版本递增或手动 npm 首次发布时） ----
   build:
-    needs: [test, detect]
+    needs: [test, detect, geogebra]
     if: needs.detect.outputs.changed == 'true' && inputs.publish_run_id == '' && inputs.runtime_run_id == ''
     strategy:
       fail-fast: false
@@ -148,6 +171,12 @@ jobs:
             assets/aria2
             assets/node
           key: assets-${{ matrix.name }}-${{ hashFiles('scripts/download-voice-models.js', 'scripts/download-ocr-paddle.js', 'scripts/fetch-assets.sh', 'scripts/fetch-assets.ps1', 'scripts/download-aria2.js', 'scripts/build-ime-dicts.js', 'build/cli/node-runtime.json') }}
+
+      - name: Receive verified GeoGebra archive
+        uses: actions/download-artifact@v8
+        with:
+          name: geogebra-archive
+          path: .cache/geogebra
 
       - name: Build (${{ matrix.name }})
         run: npm run ${{ matrix.script }}

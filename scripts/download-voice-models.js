@@ -164,54 +164,9 @@ function writeFontLicenses() {
 // scientific/notes/evaluator/suite 全部 appName）、字体与 CSS，运行时经 ggb:// 协议从本地加载，
 // 完全不再依赖 www.geogebra.org。许可：GeoGebra Non-Commercial License（保留包内 README.txt）。
 const GGB_OUT = path.resolve(__dirname, '..', 'assets', 'geogebra-app');
-const GGB_LEGACY_LOADER = path.resolve(__dirname, '..', 'assets', 'geogebra', 'deployggb.js');
-const GGB_BUNDLE_URL = 'https://download.geogebra.org/package/geogebra-math-apps-bundle';
-const GGB_WEB3D_NOCACHE = path.join(GGB_OUT, 'GeoGebra', 'HTML5', '5.0', 'web3d', 'web3d.nocache.js');
-const GGB_BUNDLE_DEPLOY = path.join(GGB_OUT, 'GeoGebra', 'deployggb.js');
-
-function writeGeogebraLicenseNote() {
-  const lines = [
-    '# GeoGebra Math Apps（离线包）许可',
-    '',
-    '本目录内容来自官方 GeoGebra Math Apps Bundle（https://download.geogebra.org/package/geogebra-math-apps-bundle）。',
-    '',
-    '- 版权：© International GeoGebra Institute',
-    '- 许可：GeoGebra Non-Commercial License（非商业用途可自由复制、分发与传输）',
-    '- 完整条款：见同目录 GeoGebra/README.txt 与 https://www.geogebra.org/license',
-    '',
-    '此离线包由 scripts/download-voice-models.js 在构建期下载并解压，仅用于随应用离线分发，不修改上游内容。',
-    ''
-  ];
-  fs.writeFileSync(path.join(GGB_OUT, 'LICENSES.md'), lines.join('\n'), 'utf8');
-}
 
 function downloadGeogebraBundle() {
-  if (fs.existsSync(GGB_WEB3D_NOCACHE) && fs.existsSync(GGB_BUNDLE_DEPLOY)) {
-    console.log('[geogebra] 离线包已存在，跳过:', GGB_OUT);
-    return;
-  }
-  const zipPath = path.join(os.tmpdir(), `geogebra-math-apps-bundle-${Date.now()}.zip`);
-  try {
-    downloadFile(GGB_BUNDLE_URL, zipPath, '[geogebra] 离线包');
-    console.log('[geogebra] 解压:', zipPath, '→', GGB_OUT);
-    ensureDir(GGB_OUT);
-    // adm-zip 为项目既有依赖（package.json），纯 JS 跨平台，避免依赖系统 unzip。
-    const AdmZip = require('adm-zip');
-    const zip = new AdmZip(zipPath);
-    zip.extractAllTo(GGB_OUT, true);
-    if (!fs.existsSync(GGB_WEB3D_NOCACHE) || !fs.existsSync(GGB_BUNDLE_DEPLOY)) {
-      throw new Error('离线包解压后缺少关键文件（web3d/web3d.nocache.js 或 deployggb.js）');
-    }
-    // 同步包内 deployggb.js 到 assets/geogebra/（index.html 现有引用路径），
-    // 保证 loader 的 web3d/webSimple 排列哈希与 927 离线产物一致。
-    // 注意：fetch-assets 以 --skip-geogebra 调用时该目录不会预先存在，需确保创建
-    ensureDir(path.dirname(GGB_LEGACY_LOADER));
-    fs.copyFileSync(GGB_BUNDLE_DEPLOY, GGB_LEGACY_LOADER);
-    writeGeogebraLicenseNote();
-    console.log('[geogebra] 离线包就绪');
-  } finally {
-    try { fs.unlinkSync(zipPath); } catch {}
-  }
+  require('./lib/geogebra-bundle.cjs').ensureBundle();
 }
 
 // ========== 工具函数 ==========

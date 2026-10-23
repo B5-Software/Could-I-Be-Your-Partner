@@ -13,7 +13,8 @@ module.exports = async function checkControls(contents) {
     if(getComputedStyle(input).opacity !== '1') throw new Error('Switch input is invisible');
     const progress = document.getElementById('tor-progress');
     if(getComputedStyle(progress).appearance !== 'none' || progress.clientHeight !== 6) throw new Error('Tor progress uses native styling');
-    const rows = [...document.querySelectorAll('.tor-remote-settings .settings-actions')];
+    const rows = [...document.querySelectorAll('.settings-panel[data-tab="webcontrol"] .tor-remote-settings .settings-actions')];
+    if(rows.length !== 2) throw new Error('Tor remote action rows are missing');
     if(rows[1].getBoundingClientRect().top - rows[0].getBoundingClientRect().bottom < 14) throw new Error('Tor actions touch vertically');
     for(const row of rows) {
       const buttons=[...row.children];
@@ -51,6 +52,25 @@ module.exports = async function checkControls(contents) {
   contents.sendInputEvent({ type: 'keyDown', keyCode: 'Space' });
   contents.sendInputEvent({ type: 'keyUp', keyCode: 'Space' });
   await waitFor(point.initial);
+  await contents.executeJavaScript(`(async () => {
+    window.activateSettingsTab('network-privacy');
+    const group = document.querySelector('.settings-panel[data-tab="network-privacy"] .tor-remote-settings');
+    group.scrollIntoView({block:'center', behavior:'instant'});
+    await new Promise(resolve=>setTimeout(resolve,40));
+    const rows = [...group.querySelectorAll('.settings-actions')];
+    if(rows.length !== 2 || group.querySelectorAll('.settings-actions button').length !== 3 || !group.getBoundingClientRect().height) throw new Error('Privacy Tor actions are missing or hidden');
+    if(rows[1].getBoundingClientRect().top - rows[0].getBoundingClientRect().bottom < 14) throw new Error('Privacy Tor actions touch vertically');
+    for(const row of rows) {
+      const buttons = [...row.children];
+      for(let i=1; i<buttons.length; i++) {
+        const previous = buttons[i-1].getBoundingClientRect();
+        const current = buttons[i].getBoundingClientRect();
+        const sameLine = Math.abs(current.top - previous.top) < 1;
+        if(sameLine ? current.left - previous.right < 8 : current.top - previous.bottom < 8) throw new Error('Privacy Tor actions touch');
+      }
+    }
+    window.activateSettingsTab('webcontrol');
+  })()`);
   console.log(
     '[desktop-smoke] Shared switches: pointer, Space, persistence and Tor layout passed.',
   );
