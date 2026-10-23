@@ -499,8 +499,10 @@ test(
             afterSaved(true, child, USER_TEXT);
           } else if (stage.on && !stage.reply && plain.includes(REPLY)) {
             stage.reply = true;
-            child.write(CTRL_C);
-            setTimeout(() => child.write(CTRL_C), 300);
+            // Rendering the final reply precedes the Agent's idle event. Ctrl+C
+            // can still mean "stop" here; this case tests theme/retry rendering.
+            // The separate interaction case above verifies double Ctrl+C exit.
+            child.write('/quit' + CR);
           }
         },
       });
