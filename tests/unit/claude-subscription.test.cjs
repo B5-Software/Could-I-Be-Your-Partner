@@ -421,7 +421,8 @@ test(
       clearTimeout(timer);
       controller.abort();
       run?.close();
-      await fs.rm(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+      // SDK shutdown lets the native process drain before force-killing it.
+      await fs.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
     });
     run = sdk.query({
       prompt: (async function* () {

@@ -19,6 +19,9 @@
   ];
 
   const COMMAND_DEFS = [
+    { cmd: '/super', icon: 'fa-diagram-project', desc: 'SuperAgent' },
+    { cmd: '/goal', icon: 'fa-bullseye', desc: '设置持续推进的目标；支持 status / pause / resume / clear' },
+    { cmd: '/quant', icon: 'fa-chart-line', desc: '打开量化工作台' },
     { cmd: '/update', icon: 'fa-download', desc: '下载新版；完成后提醒重启安装' },
     { cmd: '/cwd', icon: 'fa-folder-open', desc: '用系统文件管理器打开当前工作区' },
     { cmd: '/model', icon: 'fa-robot', desc: '切换模型（仅本会话生效）' },
@@ -169,7 +172,7 @@
     // 顶层命令菜单（含模糊过滤）
     if (!cmd || cmd === '/' || !COMMAND_DEFS.some(c => c.cmd === cmd)) {
       const q = (cmd === '/' ? '' : (cmd || '').slice(1)).toLowerCase();
-      const defs = COMMAND_DEFS.filter(c => !q || c.cmd.includes(q) || c.desc.toLowerCase().includes(q));
+      const defs = COMMAND_DEFS.filter(c => (c.cmd !== '/quant' || quantEnabled(agent?.settings)) && (!q || c.cmd.includes(q) || c.desc.toLowerCase().includes(q)));
       renderItems(defs.map(c => ({ ...c, label: c.cmd, badge: null })));
       showPanel();
       return;
@@ -177,7 +180,7 @@
 
     const def = COMMAND_DEFS.find(c => c.cmd === cmd);
     if (cmd === '/help') {
-      renderItems(COMMAND_DEFS.map(c => ({ ...c, label: c.cmd })));
+      renderItems(COMMAND_DEFS.filter(c => c.cmd !== '/quant' || quantEnabled(agent?.settings)).map(c => ({ ...c, label: c.cmd })));
       showPanel();
       return;
     }
@@ -324,6 +327,18 @@
         { label: t('ui.update.install', '重启安装'), icon: 'fa-rotate', action: 'update-install' }];
       renderItems(query.toLowerCase() === 'install' ? items.slice(1) : items);
       showPanel(); return;
+    }
+    if (cmd === '/goal') {
+      const value = query.trim();
+      const action = !value ? 'status' : ['status', 'pause', 'resume', 'clear'].includes(value) ? value : 'set';
+      renderItems([{ label: action === 'set' ? value : t('ui.goal.' + action, action), icon: 'fa-bullseye', action: 'goal', goalAction: action, objective: action === 'set' ? value : '' }]); showPanel(); return;
+    }
+    if (cmd === '/quant') {
+      if (!quantEnabled(agent?.settings)) { showToast(t('ui.quant.disabled', '量化功能暂未开放'), 'info'); return; }
+      renderItems([{ label: t('ui.quant.title', '量化工作台'), icon: 'fa-chart-line', action: 'quant' }]); showPanel(); return;
+    }
+    if (cmd === '/super') {
+      renderItems([{ label: 'SuperAgent', icon: 'fa-diagram-project', action: 'superagent' }]); showPanel(); return;
     }
     if (cmd === '/cwd') {
       renderItems([{ label: typeof t === 'function' ? t('ui.cwd.open', '打开当前工作区') : '打开当前工作区', icon: 'fa-folder-open', action: 'cwd' }]);
@@ -506,6 +521,14 @@
   async function runAction(action, item, input, ag) {
     const mode = getModeForInput(input);
     switch (action) {
+      case 'goal': {
+        await ag._ensureBackend();
+        const goal = await window.api.backendRequest('goalCommand', ag.backendKey, item.goalAction, item.objective);
+        window.showToast?.(goal ? goal.status + ' · ' + goal.objective : t('ui.goal.none', '当前没有目标'));
+        break;
+      }
+      case 'quant': navigatePage('quant'); break;
+      case 'superagent': navigatePage('superagent'); break;
       case 'update': await window.api.updatesStart(); window.showToast?.(t('ui.update.started', '正在检查并下载新版；完成后会提醒重启安装')); break;
       case 'update-install': {
         const state = await window.api.updatesStatus();

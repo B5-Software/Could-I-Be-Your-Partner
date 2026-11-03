@@ -1,0 +1,32 @@
+{
+  "zh-CN": {
+    "replacementWarning": "此 nonce 已签过交易。你正在明确批准另一笔交易占用同一 nonce；先前交易也可能已广播，链上最终只会接受其中一笔。请核对内容及原交易哈希。",
+    "replacementApprove": "确认替换并签名",
+    "changePassword": "修改密码 / 升级加密",
+    "currentPassword": "当前钱包密码",
+    "newPassword": "新密码（至少 12 个字符）",
+    "repeatPassword": "再次输入新密码",
+    "passwordMismatch": "两次输入的新密码不一致。",
+    "changePasswordHint": "使用 Argon2id 与 XChaCha20-Poly1305 重新加密。钱包会锁定并撤销本地自动实盘权限；已有链上授权保持不变。请保存新密码并重新导出加密备份。"
+  },
+  "en": {
+    "replacementWarning": "This nonce already has a signed transaction. You are explicitly approving another transaction for the same nonce. The earlier transaction may have been broadcast; only one can settle. Review the contents and previous hash.",
+    "replacementApprove": "Confirm replacement and sign",
+    "changePassword": "Change password / upgrade encryption",
+    "currentPassword": "Current wallet password",
+    "newPassword": "New password (at least 12 characters)",
+    "repeatPassword": "Repeat new password",
+    "passwordMismatch": "The new passwords do not match.",
+    "changePasswordHint": "Re-encrypt with Argon2id and XChaCha20-Poly1305. The wallet locks and local autonomous live authority is revoked; existing on-chain approvals remain. Keep the new password and export a new encrypted backup."
+  },
+  "de": {
+    "replacementWarning": "Für diese Nonce wurde bereits signiert. Sie bestätigen ausdrücklich eine andere Transaktion mit derselben Nonce. Die frühere könnte bereits gesendet sein; nur eine kann bestätigt werden. Inhalt und bisherigen Hash prüfen.",
+    "replacementApprove": "Ersetzung bestätigen und signieren",
+    "changePassword": "Passwort ändern / Verschlüsselung aktualisieren",
+    "currentPassword": "Aktuelles Wallet-Passwort",
+    "newPassword": "Neues Passwort (mindestens 12 Zeichen)",
+    "repeatPassword": "Neues Passwort wiederholen",
+    "passwordMismatch": "Die neuen Passwörter stimmen nicht überein.",
+    "changePasswordHint": "Mit Argon2id und XChaCha20-Poly1305 neu verschlüsseln. Die Wallet wird gesperrt, die lokale autonome Live-Berechtigung widerrufen; bestehende Onchain-Freigaben bleiben bestehen. Neues Passwort sichern und eine neue verschlüsselte Sicherung exportieren."
+  }
+}

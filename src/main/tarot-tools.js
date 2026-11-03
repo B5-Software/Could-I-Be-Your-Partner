@@ -29,7 +29,7 @@ function drawTarotCSPRNG() {
     orientation: isReversed ? 'reversed' : 'upright',
     meaningOfUpright: card.meaningOfUpright,
     meaningOfReversed: card.meaningOfReversed,
-    entropySource: 'CSPRNG'
+    entropySource: 'CSPRNG',
   };
 }
 
@@ -44,7 +44,7 @@ async function drawTarotTRNG(entropy = {}) {
     orientation: isReversed ? 'reversed' : 'upright',
     meaningOfUpright: card.meaningOfUpright,
     meaningOfReversed: card.meaningOfReversed,
-    entropySource: 'TRNG'
+    entropySource: 'TRNG',
   };
 }
 
@@ -71,7 +71,7 @@ function drawTarotSpreadCSPRNG(count) {
       orientation: isReversed ? 'reversed' : 'upright',
       meaningOfUpright: card.meaningOfUpright,
       meaningOfReversed: card.meaningOfReversed,
-      entropySource: 'CSPRNG'
+      entropySource: 'CSPRNG',
     });
   }
   return cards;
@@ -87,7 +87,10 @@ async function drawTarotSpreadTRNG(count, entropy = {}) {
     if (mode === 'serial') {
       raw = await getTRNGFromSerial(entropy.trngSerialPort, entropy.trngSerialBaud || 115200);
     } else {
-      raw = await getTRNGFromNetwork(entropy.trngNetworkHost || '192.168.4.1', entropy.trngNetworkPort || 80);
+      raw = await getTRNGFromNetwork(
+        entropy.trngNetworkHost || '192.168.4.1',
+        entropy.trngNetworkPort || 80,
+      );
     }
     let idx = raw.cardIndex % tarotCards.length;
     // Avoid duplicates (try a few times)
@@ -96,7 +99,10 @@ async function drawTarotSpreadTRNG(count, entropy = {}) {
       if (mode === 'serial') {
         raw = await getTRNGFromSerial(entropy.trngSerialPort, entropy.trngSerialBaud || 115200);
       } else {
-        raw = await getTRNGFromNetwork(entropy.trngNetworkHost || '192.168.4.1', entropy.trngNetworkPort || 80);
+        raw = await getTRNGFromNetwork(
+          entropy.trngNetworkHost || '192.168.4.1',
+          entropy.trngNetworkPort || 80,
+        );
       }
       idx = raw.cardIndex % tarotCards.length;
       attempts++;
@@ -110,7 +116,7 @@ async function drawTarotSpreadTRNG(count, entropy = {}) {
       orientation: isReversed ? 'reversed' : 'upright',
       meaningOfUpright: card.meaningOfUpright,
       meaningOfReversed: card.meaningOfReversed,
-      entropySource: 'TRNG'
+      entropySource: 'TRNG',
     });
   }
   return cards;
@@ -122,104 +128,80 @@ async function getTrngDraw(entropy = {}) {
   if (mode === 'serial') {
     return getTRNGFromSerial(entropy.trngSerialPort, entropy.trngSerialBaud || 115200);
   }
-  return getTRNGFromNetwork(entropy.trngNetworkHost || '192.168.4.1', entropy.trngNetworkPort || 80);
+  return getTRNGFromNetwork(
+    entropy.trngNetworkHost || '192.168.4.1',
+    entropy.trngNetworkPort || 80,
+  );
 }
 
 async function getTRNGFromSerial(portPath, baud) {
-  return new Promise((resolve, reject) => {
-    if (!portPath) return reject(new Error('未配置TRNG串口'));
-    let { SerialPort } = {};
-    try { ({ SerialPort } = require('serialport')); } catch {
-      return reject(new Error('serialport 模块未安装，请运行 npm install serialport'));
-    }
-
-    const port = new SerialPort({ path: portPath, baudRate: baud });
-    let responded = false;
-
-    function safeClose() {
-      try { if (port.isOpen) port.close(); } catch {}
-    }
-
-    const globalTimeout = setTimeout(() => {
-      safeClose();
-      if (!responded) { responded = true; reject(new Error('TRNG串口超时')); }
-    }, 12000);
-
-    port.on('error', (e) => {
-      clearTimeout(globalTimeout);
-      if (!responded) { responded = true; reject(e); }
-    });
-
-    port.once('open', () => {
-      // --- Phase 1: flush phase ---
-      // Discard ALL data received in the first 600 ms.
-      // This eliminates the ESP32/Arduino bootloader startup log that sits in
-      // the OS USB-CDC buffer and would otherwise cause a parse failure.
-      let flushing = true;
-      let responseBuf = '';
-
-      port.on('data', (chunk) => {
-        if (flushing) return; // silently discard startup-log bytes
-
-        responseBuf += chunk.toString();
-        // Look for complete JSON line (device sends one JSON object per line)
-        const lines = responseBuf.split('\n');
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (trimmed.startsWith('{') && trimmed.endsWith('}')) {
-            clearTimeout(globalTimeout);
-            safeClose();
-            try {
-              const json = JSON.parse(trimmed);
-              if (!responded) {
-                responded = true;
-                resolve({ cardIndex: json.cardIndex, isReversed: json.isReversed });
-              }
-            } catch (e) {
-              if (!responded) {
-                responded = true;
-                reject(new Error('TRNG串口JSON解析失败: ' + trimmed));
-              }
-            }
-            return;
-          }
-        }
-      });
-
-      // --- Phase 2: after flush window, send command ---
-      setTimeout(() => {
-        flushing = false;
-        responseBuf = '';
-        port.write('DRAW\n', (err) => {
-          if (err && !responded) {
-            clearTimeout(globalTimeout);
-            responded = true;
-            safeClose();
-            reject(new Error('TRNG串口写入失败: ' + err.message));
-          }
-        });
-      }, 600); // 600 ms is enough for typical ESP32 boot log to drain
-    });
+  if (!portPath) throw new Error('未配置 TRNG 串口');
+  const { readDeviceCommand, isDraw } = require('./services/firmware/device-protocol');
+  const reply = await readDeviceCommand({
+    path: portPath,
+    baudRate: baud,
+    command: 'DRAW',
+    accept: isDraw,
   });
+  return { cardIndex: reply.cardIndex, isReversed: reply.isReversed };
 }
 
 async function getTRNGFromNetwork(host, port) {
-  const http = require('http');
+  const http = require('node:http');
+  const { isDraw } = require('./services/firmware/device-protocol');
+  if (
+    typeof host !== 'string' ||
+    !host.trim() ||
+    !Number.isInteger(Number(port)) ||
+    Number(port) < 1 ||
+    Number(port) > 65535
+  )
+    throw new Error('TRNG 网络地址或端口无效');
   return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error('TRNG网络超时')), 10000);
-    const req = http.get(`http://${host}:${port}/api/draw`, (res) => {
-      let data = '';
-      res.on('data', (chunk) => data += chunk);
-      res.on('end', () => {
-        clearTimeout(timeout);
-        try {
-          const json = JSON.parse(data);
-          resolve({ cardIndex: json.cardIndex, isReversed: json.isReversed });
-        } catch (e) { reject(new Error('TRNG网络数据解析失败: ' + data)); }
+    let settled = false,
+      req;
+    const finish = (error, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (error) reject(error);
+      else resolve(value);
+    };
+    const timer = setTimeout(() => {
+      req?.destroy();
+      finish(new Error('TRNG 网络超时'));
+    }, 10000);
+    try {
+      req = http.get({ hostname: host, port, path: '/api/draw' }, (res) => {
+        if (res.statusCode !== 200) {
+          res.destroy();
+          finish(new Error('TRNG 网络状态异常: ' + res.statusCode));
+          return;
+        }
+        let data = '',
+          size = 0;
+        res.on('data', (chunk) => {
+          size += chunk.length;
+          if (size > 8192) {
+            req.destroy();
+            finish(new Error('TRNG 网络响应过大'));
+          } else data += chunk;
+        });
+        res.on('error', () => finish(new Error('TRNG 网络连接中断')));
+        res.on('end', () => {
+          try {
+            const value = JSON.parse(data);
+            if (!isDraw(value)) throw new Error();
+            finish(null, { cardIndex: value.cardIndex, isReversed: value.isReversed });
+          } catch {
+            finish(new Error('TRNG 网络返回了无效牌面'));
+          }
+        });
       });
-    });
-    req.on('error', (e) => { clearTimeout(timeout); reject(e); });
-    req.setTimeout(10000, () => { req.destroy(); reject(new Error('TRNG网络请求超时')); });
+      req.on('error', () => finish(new Error('TRNG 网络请求失败')));
+    } catch {
+      finish(new Error('TRNG 网络地址或请求无效'));
+    }
   });
 }
 
@@ -232,5 +214,5 @@ module.exports = {
   drawTarotSpreadTRNG,
   getTrngDraw,
   getTRNGFromSerial,
-  getTRNGFromNetwork
+  getTRNGFromNetwork,
 };

@@ -127,9 +127,12 @@
       const _isZh2 = (_lang2 === 'zh-CN');
       const _cardName2 = _isZh2 ? c.name : (c.nameEn || c.name);
       const _orientation2 = c.isReversed ? (_isZh2 ? '逆位' : 'Reversed') : (_isZh2 ? '正位' : 'Upright');
+      const cardId=Number(c.id??c.cardIndex);
+      const picture=Number.isInteger(cardId)&&cardId>=0&&cardId<78
+        ? '<div class="card-artwork"><img src="../assets/tarot/'+String(cardId).padStart(2,'0')+'.webp" alt="'+escapeHtml(_cardName2)+'" width="512" height="768" loading="lazy" decoding="async"></div>' : '';
       return '<div class="tarot-spread-card' + (c.isReversed ? ' reversed' : '') + '">' +
         '<div class="card-position">' + escapeHtml(position) + '</div>' +
-        '<div class="card-icon"><i class="fa-solid ' + (c.icon || 'fa-star') + '"></i></div>' +
+        picture +
         '<div class="card-name">' + escapeHtml(_cardName2) + '</div>' +
         '<div class="card-orientation">' + _orientation2 + '</div>' +
         '<div class="card-meaning">' + escapeHtml(meaning || '') + '</div>' +

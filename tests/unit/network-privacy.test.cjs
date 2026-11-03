@@ -3,6 +3,24 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const net = require('node:net');
 const proxy = require('../../src/main/net-proxy');
+test('owned WebSocket transports respect privacy gating and observe network policy changes without owning shared HTTP clients', async (t) => {
+  t.after(() => proxy._test.resetForTest());
+  let changes = 0;
+  const unsubscribe = proxy.onPolicyChange(() => changes++);
+  t.after(unsubscribe);
+  await proxy.setConfig({ mode: 'none' });
+  proxy.setPrivacy({ enabled: true, phase: 'stopped' });
+  await assert.rejects(proxy.createWebSocketDispatcher('wss://advanced-trade-ws.coinbase.com'), {
+    code: 'CIBYP_PRIVACY_UNAVAILABLE',
+  });
+  proxy.setPrivacy({ enabled: false });
+  const first = await proxy.createWebSocketDispatcher('wss://advanced-trade-ws.coinbase.com'),
+    second = await proxy.createWebSocketDispatcher('wss://advanced-trade-ws.coinbase.com');
+  assert.notEqual(first, second);
+  await first.destroy();
+  await second.destroy();
+  assert.ok(changes >= 2);
+});
 
 test('privacy fails closed, ignores ordinary bypass rules and preserves local backend access', async (t) => {
   t.after(() => proxy._test.resetForTest());

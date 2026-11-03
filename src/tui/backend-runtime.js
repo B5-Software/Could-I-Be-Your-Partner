@@ -54,6 +54,7 @@ async function createBackendRuntime(client) {
       return () => listeners.delete(fn);
     },
     listSessions: () => [...sessions.values()],
+    refresh,
     getSession: (key) => sessions.get(key),
     getStats: (key) => views.get(key)?.stats,
     getSessionDetails: (key) => {
@@ -79,6 +80,7 @@ async function createBackendRuntime(client) {
   };
   for (const method of [
     'getSettings',
+    'goalCommand',
     'saveSettings',
     'getSystemTheme',
     'getLanguage',

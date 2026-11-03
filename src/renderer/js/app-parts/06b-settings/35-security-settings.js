@@ -89,22 +89,3 @@
     window.showToast('今日用量计数已清零，费用历史仍保留', 'success');
     await refreshBudgetStatus();
   });
-
-  // Firmware export button
-  document.getElementById('btn-export-firmware')?.addEventListener('click', async () => {
-    const result = await window.api.firmwareExport();
-    if (result.ok) {
-      showMessageModal(`固件源码已导出到：<br>${result.path}<br><br>请在 Arduino IDE 中打开 CIBYP-TRNG.ino 文件。`, '导出成功', 'success');
-      window.api.openFileExplorer(result.path);
-    } else {
-      showMessageModal(`导出失败：${result.error || '未知错误'}`, '导出失败', 'error');
-    }
-  });
-
-  // Arduino download link
-  document.querySelectorAll('.link-arduino-download').forEach(link => {
-    link.addEventListener('click', (e) => {
-      e.preventDefault();
-      window.api.openBrowser('https://www.arduino.cc/en/software');
-    });
-  });

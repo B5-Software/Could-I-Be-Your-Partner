@@ -8,6 +8,12 @@
  */
 
 const EN_DICT = {
+  'ui.quant.title': 'Quant workbench',
+  'ui.quant.disabled': 'Quant features are not enabled',
+  'ui.wallet.title': 'Wallet',
+  'ui.tui.cmd.goal': 'Set and manage an Agent goal',
+  'ui.tui.args.goal': '<objective | status | pause | resume | clear>',
+  'ui.tui.cmd.quant': 'Open the quant workbench summary',
   // ── UI Strings ──
   ui: {
     frontend: {contentWidth:"Chat content width",widthHint:"Messages, tool cards and composers share this width in Professional. Smaller windows adapt automatically.",density:"Information density",compact:"Compact",comfortable:"Comfortable",spacious:"Spacious",
@@ -850,6 +856,7 @@ ${p.toolListSection}`;
 
   // ── Hardcoded UI text mappings (Chinese → English) ──
   _textMap: {
+    '量化工作台': 'Quant workbench', '量化': 'Quant', '钱包': 'Wallet',
     '界面版本': 'Interface',
     'V1 · 经典界面': 'V1 · Classic',
     'V2 · 工作台': 'V2 · Workbench',
@@ -2935,6 +2942,7 @@ ${p.toolListSection}`;
 };
 
 Object.assign(EN_DICT._textMap, {
+  '安装已校验的固件，管理 Wi-Fi 抽牌服务器。': 'Install verified firmware and manage the Wi-Fi tarot server.',
   "未保存": "not saved",
   "自动化任务": "Automate tasks",
   "自动化任务编辑器": "Automation task editor",

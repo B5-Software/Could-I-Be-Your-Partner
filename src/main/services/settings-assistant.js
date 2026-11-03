@@ -177,6 +177,7 @@ const FIELDS = [
   ],
 ];
 const PRIVATE = {
+  wallet: ['wallet', null],
   llm: ['llm', 'setting-llm-key'],
   imageGen: ['image', 'setting-image-key'],
   decision: ['decision', 'setting-decision-key'],

@@ -275,7 +275,7 @@ Content-Type: application/json
       name: ($('ae-name')?.value || '').trim() || '未命名任务',
       enabled: $('ae-enabled')?.checked !== false,
       trigger: { type, config },
-      delivery: { mode: $('ae-delivery-mode')?.value === 'continue' ? 'continue' : 'new' },
+      delivery: { mode: ['continue', 'superagent'].includes($('ae-delivery-mode')?.value) ? $('ae-delivery-mode').value : 'new' },
       dsl: monacoEditor ? monacoEditor.getValue() : '',
       runCount: currentTask?.runCount || 0,
       lastRunAt: currentTask?.lastRunAt || null,
@@ -380,7 +380,7 @@ Content-Type: application/json
     $('ae-trigger-type').value = currentTask.trigger?.type || 'schedule';
     renderTriggerConfig(currentTask.trigger?.type || 'schedule');
     const deliverySel = $('ae-delivery-mode');
-    if (deliverySel) deliverySel.value = (currentTask.delivery && currentTask.delivery.mode === 'continue') ? 'continue' : 'new';
+    if (deliverySel) deliverySel.value = ['continue', 'superagent'].includes(currentTask.delivery?.mode) ? currentTask.delivery.mode : 'new';
     if (monacoEditor) monacoEditor.setValue(currentTask.dsl || '');
     refreshMeta();
   }

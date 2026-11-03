@@ -15,6 +15,15 @@
 const buildInfo = require('./build-info');
 
 exports.beforePack = async (context) => {
+  require('./check-trng-firmware.cjs').verify();
+  await require('./lib/quant-engine-runtime.cjs').prepareQuantEngine(
+    context.electronPlatformName,
+    require('builder-util').Arch[context.arch],
+  );
+  await require('./lib/wallet-signer-runtime.cjs').prepareWalletSigner(
+    context.electronPlatformName,
+    require('builder-util').Arch[context.arch],
+  );
   await require('./lib/tor-runtime.cjs').prepareTor(
     context.electronPlatformName,
     require('builder-util').Arch[context.arch],

@@ -8,6 +8,12 @@
  */
 
 const DE_DICT = {
+  'ui.quant.title': 'Quant-Arbeitsbereich',
+  'ui.quant.disabled': 'Quant-Funktionen sind nicht aktiviert',
+  'ui.wallet.title': 'Wallet',
+  'ui.tui.cmd.goal': 'Ein Agent-Ziel festlegen und verwalten',
+  'ui.tui.args.goal': '<Ziel | status | pause | resume | clear>',
+  'ui.tui.cmd.quant': 'Übersicht des Quant-Arbeitsbereichs öffnen',
 
 // ── UI Strings ──────────────────────────────────────────────────────────────
 ui: {
@@ -880,6 +886,7 @@ _toolReturns: {
 
 // ── Text Map (Chinese → German hardcoded UI text) ───────────────────────────
 _textMap: {
+    '量化工作台': 'Quant-Arbeitsbereich', '量化': 'Quant', '钱包': 'Wallet',
     '界面版本': 'Oberfläche',
     'V1 · 经典界面': 'V1 · Klassisch',
     'V2 · 工作台': 'V2 · Arbeitsbereich',
@@ -2965,6 +2972,7 @@ _textMap: {
 };
 
 Object.assign(DE_DICT._textMap, {
+  '安装已校验的固件，管理 Wi-Fi 抽牌服务器。': 'Geprüfte Firmware installieren und den WLAN-Tarot-Server verwalten.',
   "自动化任务": "Automatisieren Sie Aufgaben",
   "自动化任务编辑器": "Editor für Automatisierungsaufgaben",
   "运行": "laufen",

@@ -64,6 +64,24 @@
     reportError: error => { console.error('[frontend]', error); showToast(error?.message || t('ui.frontend.actionFailed', '操作失败，请重试'), 'error'); },
   });
   window.CibypFrontendShell = frontendShell;
+  window.CibypWallet = new WalletPanel({
+    request: (action, input) => window.api.backendRequest('wallet:request', action, input),
+    subscribe: listener => window.api.onBackendEvent(listener), language: () => i18nGetLanguage(),
+  });
+  window.addEventListener('cibyp:quant-open-wallet', () => { navigatePage('settings'); window.activateSettingsTab('wallet'); });
+  const quantAllowed = quantEnabled(await window.api.getSettings());
+  document.querySelectorAll('.nav-item[data-page="quant"]').forEach(n => { n.hidden = !quantAllowed; });
+  if (quantAllowed) window.CibypQuant = new QuantWorkbench({
+    request: (action, input) => window.api.backendRequest('quant:request', action, input),
+    backend: (method, ...args) => window.api.backendRequest(method, ...args),
+    subscribe: listener => window.api.onBackendEvent(listener),
+    language: () => i18nGetLanguage(), markdown: text => renderMarkdown(text),
+  });
+  window.CibypSuperAgent = new SuperAgentPanel({
+    request: (action, input) => window.api.backendRequest('superagent:request', action, input),
+    settings: () => window.api.getSettings(), language: () => i18nGetLanguage(),
+    subscribe: listener => window.api.onBackendEvent(listener),
+  });
   for (const event of ['session-created', 'session-closed', 'session-title']) {
     AppBus.on(event, () => { frontendShell.invalidateHistory(); frontendShell.refresh(); });
   }
@@ -71,3 +89,8 @@
     if (['done', 'idle', 'error'].includes(event.detail?.status)) frontendShell.invalidateHistory();
   });
   window.api.onSettingsChanged?.(() => { frontendShell.refresh(); });
+  new FirmwarePanel({
+    request: (action,input) => window.api.backendRequest('firmware:request',action,input),
+    language: () => i18nGetLanguage(),
+    confirm: message => window.api.confirmSensitive(message),
+  });

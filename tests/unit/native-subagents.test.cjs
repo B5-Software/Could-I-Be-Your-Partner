@@ -10,21 +10,22 @@ const { createBackendTransport } = require('../../src/main/services/backend-tran
 const { PluginHost } = require('../../src/main/ds-compat/plugin-host');
 const { NativeSubagents } = require('../../src/main/services/native-subagents');
 const { augmentRequest } = require('../../src/main/ds-compat/service-setup');
-const tick = () => new Promise((r) => setImmediate(r));
 async function until(fn) {
-  for (let i = 0; i < 500; i++) {
+  const end = Date.now() + 15000;
+  while (Date.now() < end) {
     if (fn()) return;
-    await tick();
+    await new Promise((r) => setTimeout(r, 2));
   }
   assert.fail('Subagent condition timed out');
 }
-async function fixture(t, responder) {
+async function fixture(t, responder, quantService) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cibyp-native-agents-'));
   const histories = new Map(),
     calls = [],
     events = [],
     observations = [];
   const settings = {
+    features: { quant: true },
     language: 'en',
     llm: {
       provider: 'openai',
@@ -103,6 +104,7 @@ async function fixture(t, responder) {
     eventBus: createEventBus(),
     getSettings: () => settings,
   });
+  if (quantService) runtime.quantService = quantService;
   coordinator = new NativeSubagents({
     file: path.join(dir, 'native-subagents.json'),
     host,
@@ -115,14 +117,14 @@ async function fixture(t, responder) {
     host.agentsService.consumeRuntimeEvent(event);
     coordinator.event(event);
   });
-  await runtime.initialize({ key: 'parent' });
-  await sync();
   t.after(async () => {
     for (const s of runtime.listSessions()) runtime.stop(s.key);
     await host.dispose();
     runtime.dispose();
     fs.rmSync(dir, { recursive: true, force: true });
   });
+  await runtime.initialize({ key: 'parent', ...(quantService ? { profile: 'quant' } : {}) });
+  await sync();
   return { runtime, coordinator, host, calls, histories, events, observations, sync, dir };
 }
 
@@ -167,6 +169,154 @@ test('native runSubAgent uses the real SDK and shared loop, preserves model/tool
   assert.ok(next.messages.some((m) => m.content === 'Investigation complete'));
   assert.ok(next.messages.some((m) => String(m.content).includes('Check one more thing')));
   await until(() => !f.runtime.sessions.has(answer.subAgentId));
+});
+
+test('quant native child uses isolated history, trusted identity and actual native signing limits after cold continuation', async (t) => {
+  const { WalletService } = require('../../src/main/services/wallet');
+  const { QuantService } = require('../../src/main/services/quant');
+  const { keccak256 } = require('ethers');
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'cibyp-quant-child-signing-'));
+  let nonce = 0,
+    writes = 0;
+  const walletService = new WalletService({
+    directory,
+    fetcher: async (_url, options) => {
+      const body = JSON.parse(options.body);
+      let result;
+      if (body.method === 'eth_sendRawTransaction') {
+        writes++;
+        nonce++;
+        result = keccak256(body.params[0]);
+      } else
+        result = {
+          eth_chainId: '0x2105',
+          eth_getTransactionCount: '0x' + nonce.toString(16),
+          eth_gasPrice: '0x989680',
+          eth_maxPriorityFeePerGas: '0xf4240',
+          eth_getBalance: '0x8ac7230489e80000',
+          eth_estimateGas: '0x5208',
+          eth_call: '0x' + '0'.repeat(64),
+          eth_getTransactionReceipt: null,
+          eth_getBlockByNumber: {
+            number: '0x100',
+            hash: '0x' + 'a'.repeat(64),
+            timestamp: '0x' + Math.floor(Date.now() / 1000).toString(16),
+          },
+        }[body.method];
+      assert.notEqual(result, undefined, body.method);
+      return new Response(JSON.stringify({ jsonrpc: '2.0', id: 1, result }));
+    },
+  });
+  t.after(async () => {
+    await walletService.dispose();
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+  const password = 'public-sdk-child-fixture-password';
+  const wallet = await walletService.request('import', {
+    kind: 'privateKey',
+    secret: '0x' + '01'.padStart(64, '0'),
+    password,
+  });
+  await walletService.request('unlock', { id: wallet.id, password, minutes: 0 });
+  const c = await walletService.request('policy.challenge', { id: wallet.id, chains: [8453] });
+  await walletService.request('policy.grant', {
+    challengeId: c.id,
+    ack: 'ALLOW LIVE',
+    confirmed: true,
+  });
+  const rootHistories = [],
+    steps = new Map();
+  const service = {
+    getWallet: () => walletService,
+    workspace: () => ({ market: { venue: 'base' } }),
+    saveConversation: async (_id, payload) => rootHistories.push(payload),
+    dispose() {},
+    liveTransaction: QuantService.prototype.liveTransaction,
+  };
+  const f = await fixture(
+    t,
+    async (_messages, options) => {
+      if (options.sessionKey === 'parent') return { content: 'Child report received' };
+      const step = (steps.get(options.sessionKey) || 0) + 1;
+      steps.set(options.sessionKey, step);
+      if (step % 2 === 0) return { content: 'Checked result' };
+      return {
+        content: null,
+        tool_calls: [
+          {
+            id: 'payment-' + step,
+            type: 'function',
+            function: {
+              name: 'quant_live_transaction',
+              arguments: JSON.stringify({
+                walletId: wallet.id,
+                operationId: 'transfer-' + step,
+                to: '0x' + '2'.repeat(40),
+                value: step === 1 ? '0.001' : '0.0005',
+                agentScopeId: 'forged',
+              }),
+            },
+          },
+        ],
+      };
+    },
+    service,
+  );
+  const a = f.runtime.sessions.get('parent').agent;
+  assert.ok(
+    a.getEnabledToolDefinitions().find((t) => t.name === 'runSubAgent').parameters.properties
+      .walletScope,
+  );
+  const result = await a.executeTool('runSubAgent', {
+    task: 'Transfer exactly once within delegated scope',
+    tools: ['quant_live_transaction', 'quant_agent_scopes', 'runJavaScriptCode'],
+    walletScope: {
+      walletIds: [wallet.id],
+      chains: [8453],
+      limits: { maxTransactions: 1, maxTotalValueEth: '0.001' },
+    },
+  });
+  assert.equal(result.ok, true);
+  assert.equal(writes, 1);
+  await until(() => !f.runtime.sessions.has(result.subAgentId));
+  const policy = f.coordinator.config(result.subAgentId);
+  assert.equal(policy.quantContext.nodes.at(-1).subject, result.subAgentId);
+  assert.equal(policy.tools.includes('runJavaScriptCode'), false);
+  assert.ok(f.histories.has(result.subAgentId));
+  assert.ok(rootHistories.every((h) => h.id !== result.subAgentId));
+  await f.coordinator.control('parent', {
+    action: 'send',
+    targetId: result.subAgentId,
+    message: 'Continue and report the remaining budget',
+  });
+  await until(
+    () => steps.get(result.subAgentId) >= 4 && !f.runtime.sessions.has(result.subAgentId),
+  );
+  assert.equal(writes, 1);
+  assert.match(
+    f.histories
+      .get(result.subAgentId)
+      .messages.filter((m) => m.role === 'tool')
+      .at(-1).content,
+    /WALLET_AGENT_SCOPE_LIMIT/,
+  );
+  const scope = (await walletService.agentScopes.ensure(policy.quantContext, 8453)).snapshot;
+  assert.equal(scope.usage.transactions, 1);
+  assert.ok(
+    f.calls
+      .filter((call) => call.options.sessionKey === result.subAgentId)
+      .every((call) =>
+        call.options.tools.every((t) =>
+          [
+            'quant_live_transaction',
+            'quant_agent_scopes',
+            'sendAgentMessage',
+            'listSubAgents',
+            'interruptSubAgent',
+          ].includes(t.function.name),
+        ),
+      ),
+  );
 });
 
 test('stopping a parent parks late child settlement; explicit continuation resumes the mailbox', async (t) => {

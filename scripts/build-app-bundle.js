@@ -16,6 +16,21 @@ async function buildApp() {
     fs.readFileSync(path.join(root, 'src/renderer/legacy-parts.json'), 'utf8'),
   );
   const header = [
+    'import { SuperAgentPanel } from ' +
+      JSON.stringify(path.join(root, 'src/renderer/core/super-agent.ts')) +
+      ';',
+    'import { quantEnabled } from ' +
+      JSON.stringify(path.join(root, 'src/shared/feature-gates.js')) +
+      ';',
+    'import { FirmwarePanel } from ' +
+      JSON.stringify(path.join(root, 'src/renderer/core/firmware-panel.ts')) +
+      ';',
+    'import { WalletPanel } from ' +
+      JSON.stringify(path.join(root, 'src/renderer/core/wallet-panel.ts')) +
+      ';',
+    'import { QuantWorkbench } from ' +
+      JSON.stringify(path.join(root, 'src/renderer/core/quant-workbench.ts')) +
+      ';',
     'import { FrontendShell } from ' +
       JSON.stringify(path.join(root, 'src/renderer/core/frontend-shell.ts')) +
       ';',

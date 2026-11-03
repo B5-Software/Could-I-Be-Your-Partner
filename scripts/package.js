@@ -55,6 +55,7 @@ function dropUnbuildableOptionalDeps() {
 }
 
 async function main() {
+  await require('./check-runtime-deps.cjs').main(projectRoot);
   require('./prepare-cli').prepareLinuxInstallers();
   const pkg = JSON.parse(fs.readFileSync(path.join(projectRoot, 'package.json'), 'utf-8'));
   const gitHash = getGitHash();

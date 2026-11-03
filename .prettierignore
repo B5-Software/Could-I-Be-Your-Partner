@@ -5,3 +5,5 @@ src/shared/generated/
 src/renderer/js/app.js
 src/renderer/js/app-parts/
 src/main/ds-compat/shims/dsh-tools/upstream/
+IoT-Firmware/CIBYP-TRNG/rust/target/
+native/wallet-signer/target/

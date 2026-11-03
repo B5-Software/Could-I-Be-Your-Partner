@@ -1,0 +1,12 @@
+[
+  { "name": "chainId", "kind": "chain", "initial": 8453 },
+  { "name": "address", "kind": "address", "initial": "" },
+  { "name": "symbol", "kind": "text", "initial": "" },
+  { "name": "decimals", "kind": "count", "initial": 18 },
+  { "name": "maxAmount", "kind": "amount", "initial": "0" },
+  { "name": "maxSignedAmount", "kind": "amount", "initial": "0" },
+  { "name": "maxApprovalAmount", "kind": "amount", "initial": "0" },
+  { "name": "allowApprovals", "kind": "toggle", "initial": true },
+  { "name": "recipients", "kind": "list", "initial": [] },
+  { "name": "spenders", "kind": "list", "initial": [] }
+]

@@ -21,6 +21,7 @@
 
   function activateSettingsTabCore(btn) {
     if (!btn || !btn.dataset || !btn.dataset.tab) return;
+    window.dispatchEvent(new CustomEvent('cibyp:settings-tab', { detail: { tab: btn.dataset.tab } }));
     document.querySelectorAll('.settings-tab').forEach(b => { b.classList.remove('active'); b.setAttribute('aria-selected', 'false'); b.tabIndex = -1; });
     document.querySelectorAll('.settings-panel').forEach(p => {
       p.classList.remove('active');

@@ -34,7 +34,7 @@
     network: ['网络', '配置代理，保存后重新应用网络设置。', '代理 proxy 网络'],
     'network-privacy': ['网络隐私', '内置 Tor、网桥和主机 HTTP 请求保护。', 'Tor SOCKS 隐私 privacy meek 网桥'],
     entropy: ['熵源', '选择随机数来源及硬件连接方式。', 'TRNG 随机数'],
-    firmware: ['TRNG 固件', '导出硬件固件与连接说明。', 'Arduino 硬件'],
+      firmware: ['TRNG 固件', '安装已校验的固件，管理 Wi-Fi 抽牌服务器。', 'Rust ESP-IDF 硬件 烧录 Wi-Fi WebSocket'],
     resources: ['资源下载', '按需下载语音等资源，下载按钮启动操作。', '下载 模型 镜像'],
     environment: ['环境检测', '运行检测查看工具和运行环境是否就绪。', '诊断 状态 修复'],
     updates: ['更新', '配置更新频道与检查频率，使用检查按钮获取结果。', '版本 更新 release'],

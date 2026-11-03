@@ -68,6 +68,16 @@ function createBackendTransport({
   async function request(channel, payload = {}, _timeoutMs, signal) {
     signal?.throwIfAborted();
     const owner = runtime();
+    if (channel === 'automation:dispatch' && payload.delivery?.mode === 'superagent') {
+      if (!owner.superAgentService) throw Error('SuperAgent is unavailable');
+      const accepted = await owner.superAgentService.request('submit', {
+        text: String(payload.prompt || ''),
+        mode: 'chat',
+        operationId: payload.requestId,
+        threadId: 'automation:' + payload.taskId,
+      });
+      return { sessionKey: 'superagent:' + accepted.id, eventId: accepted.id, accepted: true };
+    }
     if (channel === 'ds:approvalRequest') return owner.requestPluginApproval(payload, signal);
     if (channel === 'ds:questionsRequest') return owner.requestPluginQuestions(payload, signal);
     if (channel === 'ds:agentClose')

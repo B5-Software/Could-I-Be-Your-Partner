@@ -44,7 +44,11 @@ async function packageWithRetry({
 }) {
   let currentArgs = args;
   for (let attempt = 0; attempt < 3; attempt++) {
-    const result = await run(currentArgs);
+    let result = await run(currentArgs);
+    // Some builder CLI error paths have reported a zero exit code. A declared
+    // failed build must never proceed to upload artifacts or create a release.
+    if (result.code === 0 && /\bfailedTask=build\b/.test(result.output || ''))
+      result = { ...result, code: 1 };
     if (result.code === 0 || result.signal || attempt === 2) return result.code;
     if (platform !== 'darwin' || !isTransientDiskImageError(result.output)) return result.code;
     const retryArgs = prepackagedMacArgs(args, projectRoot, pkg);

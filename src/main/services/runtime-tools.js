@@ -3,7 +3,8 @@
 const { createHash, randomUUID } = require('node:crypto');
 const { RemoteError } = require('../../../packages/remote');
 function decorateRuntimeTools(agent, getService, profile) {
-  if (profile === 'settings-assistant') return;
+  if (profile === 'settings-assistant' || profile === 'quant' || profile?.startsWith('superagent-'))
+    return;
   const permitted = (name) => !agent._toolScope || agent._toolScope.has(name);
   const selected = new Set();
   const discovery = [

@@ -35,6 +35,9 @@ const _agentCache = new Map();
 // fetch 是否已包装
 let _installed = false;
 let _privacy = { enabled: false, phase: 'stopped', socksUrl: '' };
+const policyListeners = new Set();
+function policyChanged() { for (const listener of policyListeners) { try { listener(); } catch { /* Views cannot interrupt network policy. */ } } }
+function onPolicyChange(listener) { policyListeners.add(listener); return () => policyListeners.delete(listener); }
 
 class NetworkPrivacyError extends Error {
   constructor() {
@@ -44,7 +47,10 @@ class NetworkPrivacyError extends Error {
 }
 
 function setPrivacy(value = {}) {
-  _privacy = { enabled: value.enabled === true, phase: value.phase || 'stopped', socksUrl: value.socksUrl || '' };
+  const next = { enabled: value.enabled === true, phase: value.phase || 'stopped', socksUrl: value.socksUrl || '' };
+  const changed = JSON.stringify(next) !== JSON.stringify(_privacy);
+  _privacy = next;
+  if (changed) policyChanged();
 }
 
 function privacyProtected(urlStr) {
@@ -219,11 +225,16 @@ async function systemProxyFor(urlStr) {
  * 为目标 URL 解析 dispatcher（bypass/none → undefined 直连）。
  */
 async function getDispatcher(urlStr, { privacy = true } = {}) {
+  const proxyUrl = await proxyForRequest(urlStr, privacy);
+  if (!proxyUrl) return undefined;
+  const dispatcher = getAgent(proxyUrl);
+  if (!dispatcher && privacy && _privacy.enabled && privacyProtected(urlStr)) throw new NetworkPrivacyError();
+  return dispatcher;
+}
+async function proxyForRequest(urlStr, privacy = true) {
   if (privacy && _privacy.enabled && privacyProtected(urlStr)) {
     if (_privacy.phase !== 'ready' || !/^socks5:\/\/127\.0\.0\.1:\d+$/.test(_privacy.socksUrl)) throw new NetworkPrivacyError();
-    const dispatcher = getAgent(_privacy.socksUrl);
-    if (!dispatcher) throw new NetworkPrivacyError();
-    return dispatcher;
+    return _privacy.socksUrl;
   }
   if (!_config || _config.mode === 'none') return undefined;
   if (isBypassed(urlStr)) return undefined;
@@ -234,7 +245,19 @@ async function getDispatcher(urlStr, { privacy = true } = {}) {
     proxyUrl = await systemProxyFor(urlStr);
   }
   if (!proxyUrl) return undefined;
-  return getAgent(proxyUrl);
+  return proxyUrl;
+}
+
+// A stream owns its transport so a policy change can abort that connection
+// immediately without destroying the shared HTTP dispatcher or falling direct.
+async function createWebSocketDispatcher(urlStr, { maxPayloadSize = 16 * 1024 * 1024 } = {}) {
+  const url = new URL(urlStr);
+  if (!['ws:', 'wss:'].includes(url.protocol)) throw new Error('Unexpected WebSocket protocol');
+  url.protocol = url.protocol === 'wss:' ? 'https:' : 'http:';
+  const proxyUrl = await proxyForRequest(url.href);
+  if (!undici) throw new Error('WebSocket transport unavailable');
+  const options = { webSocketOptions: { maxPayloadSize, maxFragments: 8192 } };
+  return proxyUrl ? new undici.ProxyAgent({ ...options, uri: proxyUrl }) : new undici.Agent(options);
 }
 
 // Tor must be bootstrapped before it can carry protected requests. This narrowly
@@ -380,6 +403,7 @@ async function setConfig(proxy, hooks = {}) {
   };
   _sysCache.clear();
   _agentCache.clear();
+  policyChanged();
   _resolvedSystemProxyUrl = null;
   // 预解析一次代表性 URL，填充 _resolvedSystemProxyUrl（供 env/aria2/SMTP 同步读取）
   if (_config.mode === 'system') {
@@ -398,6 +422,8 @@ module.exports = {
   isInstalled,
   setConfig,
   getDispatcher,
+  createWebSocketDispatcher,
+  onPolicyChange,
   getProxyUrlForUrl,
   getResolvedSystemProxyUrl,
   normalizeProxyUrl,

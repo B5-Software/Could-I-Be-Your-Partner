@@ -76,7 +76,7 @@ class AutomationManager {
     if (!task || typeof task !== 'object') throw new Error('任务数据无效');
     const trigger = task.trigger || {};
     if (!TRIGGER_TYPES.includes(trigger.type)) throw new Error(`未知触发类型: ${trigger.type}`);
-    const deliveryMode = task.delivery && task.delivery.mode === 'continue' ? 'continue' : 'new';
+    const deliveryMode = ['continue', 'superagent'].includes(task.delivery?.mode) ? task.delivery.mode : 'new';
     return {
       id: String(task.id || `task-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`),
       name: String(task.name || '未命名任务').slice(0, 80),

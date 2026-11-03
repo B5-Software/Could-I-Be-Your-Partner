@@ -1,0 +1,413 @@
+{
+  "version": 1,
+  "tool": "built-in image_gen",
+  "reference": "originals/63-king-of-swords.png",
+  "referenceInstruction": "Input image role: style reference only. Create a NEW scene for <nameEn>, not another king or a repetition of the reference composition. Match the reference painting craftsmanship, paper and restrained colors.",
+  "images": [
+    {
+      "id": 63,
+      "file": "originals/63-king-of-swords.png",
+      "source": "C:/Users/32109/.codex/generated_images/01a0ef73-197b-7e83-9425-9943b93f514e/exec-b2752534-da04-4966-9590-a0513a5c3d4e.png",
+      "prompt": "Initial King of Swords art direction; full prompt preserved in this conversation."
+    },
+    {
+      "id": 0,
+      "file": "originals/00-the-fool.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-2b8c98ae-81b9-4982-a221-e7bd48f25634.png"
+    },
+    {
+      "id": 1,
+      "file": "originals/01-the-magician.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-171ad783-da4e-43a8-9e63-1e6df873eb66.png"
+    },
+    {
+      "id": 2,
+      "file": "originals/02-the-high-priestess.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-0e8690c3-1169-4b2a-a96f-04c8e6252e7f.png"
+    },
+    {
+      "id": 3,
+      "file": "originals/03-the-empress.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-95611b32-7b5c-4ca9-ad3b-cf3348e92e4a.png"
+    },
+    {
+      "id": 4,
+      "file": "originals/04-the-emperor.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-3adce007-5f47-4b34-8b23-2f715fe31b29.png"
+    },
+    {
+      "id": 5,
+      "file": "originals/05-the-hierophant.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-62fc7060-9275-4ef0-aed7-49db844f6bf1.png"
+    },
+    {
+      "id": 6,
+      "file": "originals/06-the-lovers.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-5a2139b9-2ab8-4111-ad89-e20aec60e594.png"
+    },
+    {
+      "id": 7,
+      "file": "originals/07-the-chariot.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-f0aaf25b-1b5b-4e07-b4c2-6d279e3cb9d9.png"
+    },
+    {
+      "id": 8,
+      "file": "originals/08-strength.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-6aa63d29-bd90-4f17-944f-a25c3e31fb43.png"
+    },
+    {
+      "id": 9,
+      "file": "originals/09-the-hermit.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-c003df6a-d0c4-4953-a197-667ce202c881.png"
+    },
+    {
+      "id": 10,
+      "file": "originals/10-wheel-of-fortune.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-967a4e6f-5136-469c-a1fe-29db5c1eb4fd.png"
+    },
+    {
+      "id": 11,
+      "file": "originals/11-justice.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-38467404-77b9-4c37-81d8-84ec63ad2f07.png"
+    },
+    {
+      "id": 12,
+      "file": "originals/12-the-hanged-man.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-da2c2a54-dc92-4a6e-b006-5bbeffa990f5.png"
+    },
+    {
+      "id": 13,
+      "file": "originals/13-death.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-3e516234-0afd-42fc-a7e9-f4f25e493929.png"
+    },
+    {
+      "id": 64,
+      "file": "originals/64-ace-of-pentacles.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-64cbf437-feb4-4aa8-a0a2-f384f9a494bb.png"
+    },
+    {
+      "id": 65,
+      "file": "originals/65-two-of-pentacles.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-b69ef0f5-d101-474d-8265-f581b0671a1a.png"
+    },
+    {
+      "id": 14,
+      "file": "originals/14-temperance.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-69e21226-a742-4915-9b3e-53751c230309.png"
+    },
+    {
+      "id": 15,
+      "file": "originals/15-the-devil.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-ba9c4e90-ab50-48bc-8f5d-fd026da32f71.png"
+    },
+    {
+      "id": 16,
+      "file": "originals/16-the-tower.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-177ecb95-ea9e-43c2-a411-2b4699e6c1df.png"
+    },
+    {
+      "id": 17,
+      "file": "originals/17-the-star.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-11066939-90a9-4697-a48a-f6d2d9a71dda.png"
+    },
+    {
+      "id": 18,
+      "file": "originals/18-the-moon.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-484bdc14-067a-4b9e-bd25-2bd514a28f33.png"
+    },
+    {
+      "id": 19,
+      "file": "originals/19-the-sun.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-5b12d949-0722-4da1-834f-80ae17b75fab.png"
+    },
+    {
+      "id": 20,
+      "file": "originals/20-judgement.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-4c4535d4-4e3b-413c-ade7-39be8a54f243.png"
+    },
+    {
+      "id": 21,
+      "file": "originals/21-the-world.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-6f282b26-e4c3-4529-a6cc-5a57b7262351.png"
+    },
+    {
+      "id": 22,
+      "file": "originals/22-ace-of-wands.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-090b57af-84c9-4aef-b858-9c5f8635af44.png"
+    },
+    {
+      "id": 23,
+      "file": "originals/23-two-of-wands.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-6f243010-9275-44a1-8141-21f98c33b408.png"
+    },
+    {
+      "id": 24,
+      "file": "originals/24-three-of-wands.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-abe5a2eb-b8ee-4eb0-8a16-939e5dbb577a.png"
+    },
+    {
+      "id": 25,
+      "file": "originals/25-four-of-wands.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-ee993ac3-1053-41f8-954d-b7970d4d86fd.png"
+    },
+    {
+      "id": 26,
+      "file": "originals/26-five-of-wands.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-5d90eff9-977b-4a76-90c5-04130d9e7b02.png"
+    },
+    {
+      "id": 27,
+      "file": "originals/27-six-of-wands.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-9dc983d3-c3aa-4366-ac15-a7913075be80.png"
+    },
+    {
+      "id": 28,
+      "file": "originals/28-seven-of-wands.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-c489ec92-3668-4c6c-862f-4e16be7d8e4c.png"
+    },
+    {
+      "id": 29,
+      "file": "originals/29-eight-of-wands.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-00d3bf65-28be-4157-bd86-2f3bc757b52b.png"
+    },
+    {
+      "id": 30,
+      "file": "originals/30-nine-of-wands.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-99a9bc33-0d58-4ab4-b0cf-9606aeb8377e.png",
+      "revisions": [
+        {
+          "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-6ea43027-e08b-49c4-b461-3b3f1ba72619.png",
+          "reason": "Fix tarot symbol count"
+        }
+      ],
+      "editPrompt": "Edit target: the attached Nine of Wands tarot painting. Change ONLY the number and arrangement of the wooden wands. There must be exactly NINE wands total: the ONE wand under the man's hand stays unchanged, with exactly FOUR upright wands in the background on his left, and exactly FOUR upright wands in the background on his right. Remove the extra background wands cleanly, restoring sky and landscape in their place. Leave clear gaps so all eight background wands can be counted. Do not add any other sticks or staff-like shapes. Keep this same man, pose, face, headband, indigo embroidered clothes, painterly detail, cottage valley, lighting, 2:3 portrait canvas and full composition. No text, numbers, borders or watermark."
+    },
+    {
+      "id": 31,
+      "file": "originals/31-ten-of-wands.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-10f0b035-8236-4d82-a5b0-a347ecb1bf93.png"
+    },
+    {
+      "id": 32,
+      "file": "originals/32-page-of-wands.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-686b3476-739e-4617-86c2-2418595e9b37.png"
+    },
+    {
+      "id": 33,
+      "file": "originals/33-knight-of-wands.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-61610756-e332-4eef-86d7-e27b5ee0b449.png"
+    },
+    {
+      "id": 34,
+      "file": "originals/34-queen-of-wands.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-48b610a0-ed76-45ef-b510-90beb303c51b.png"
+    },
+    {
+      "id": 35,
+      "file": "originals/35-king-of-wands.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-250fa2a1-b3e2-4a6b-b3b3-ffc101634f5f.png"
+    },
+    {
+      "id": 36,
+      "file": "originals/36-ace-of-cups.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-4209ec19-0b60-40ae-a4dd-90461b865dca.png"
+    },
+    {
+      "id": 37,
+      "file": "originals/37-two-of-cups.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-3626e632-3429-490e-a05a-15f1d81ec9e8.png"
+    },
+    {
+      "id": 38,
+      "file": "originals/38-three-of-cups.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-782c4c64-6336-45c9-926a-8b0531b01f71.png"
+    },
+    {
+      "id": 39,
+      "file": "originals/39-four-of-cups.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-5d7e9a16-8158-42f6-acb6-7096dfaf8a22.png"
+    },
+    {
+      "id": 40,
+      "file": "originals/40-five-of-cups.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-dc117f20-b06a-49e7-aa11-3a2735de0fb5.png"
+    },
+    {
+      "id": 41,
+      "file": "originals/41-six-of-cups.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-1386881a-a054-4014-83c9-f1679a0e15e4.png"
+    },
+    {
+      "id": 42,
+      "file": "originals/42-seven-of-cups.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-19513443-ca34-49ca-8c2e-128efa602fdc.png"
+    },
+    {
+      "id": 43,
+      "file": "originals/43-eight-of-cups.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-aca61eaa-d3ff-4831-8ad6-3227ad915c30.png"
+    },
+    {
+      "id": 44,
+      "file": "originals/44-nine-of-cups.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-cc074f0b-b735-4133-bc0e-2e3f785a7f3d.png"
+    },
+    {
+      "id": 45,
+      "file": "originals/45-ten-of-cups.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-83a96330-4491-4d3d-8a13-c8cdbfcc202f.png"
+    },
+    {
+      "id": 46,
+      "file": "originals/46-page-of-cups.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-22a3a2a9-8bfc-426e-99d9-cbe84be9278e.png"
+    },
+    {
+      "id": 47,
+      "file": "originals/47-knight-of-cups.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-109157b1-4be6-4385-a0d6-88d73e0eb773.png"
+    },
+    {
+      "id": 48,
+      "file": "originals/48-queen-of-cups.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-6a9fa8b9-7062-4222-97b8-9b31e0bde968.png"
+    },
+    {
+      "id": 49,
+      "file": "originals/49-king-of-cups.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-424da7bd-620b-4ab1-8067-3e2c62fca367.png"
+    },
+    {
+      "id": 50,
+      "file": "originals/50-ace-of-swords.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-4dd4d557-968b-4754-8a82-0b76cace2983.png"
+    },
+    {
+      "id": 51,
+      "file": "originals/51-two-of-swords.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-7a71ebd3-6f38-4ad4-9df0-844b6ac6d6ab.png"
+    },
+    {
+      "id": 52,
+      "file": "originals/52-three-of-swords.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-24335235-1c75-4d1e-8063-d82a7f4060f1.png"
+    },
+    {
+      "id": 53,
+      "file": "originals/53-four-of-swords.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-7eb7e6b9-6c21-44dd-8350-87b663587953.png"
+    },
+    {
+      "id": 54,
+      "file": "originals/54-five-of-swords.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-ea15edc7-b708-4c36-a4db-810d1d717937.png"
+    },
+    {
+      "id": 55,
+      "file": "originals/55-six-of-swords.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-25eeaf5e-1916-4763-8abe-17ec048768cb.png"
+    },
+    {
+      "id": 56,
+      "file": "originals/56-seven-of-swords.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-079b1d22-32f5-4dba-90f6-80e7b64f087d.png"
+    },
+    {
+      "id": 57,
+      "file": "originals/57-eight-of-swords.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-607aa86b-5ee5-413d-9cf6-35556374f844.png"
+    },
+    {
+      "id": 58,
+      "file": "originals/58-nine-of-swords.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-63055773-e837-416a-861e-12a6cede75eb.png"
+    },
+    {
+      "id": 59,
+      "file": "originals/59-ten-of-swords.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-e3d98acd-199f-42bc-9dac-372c81757a7c.png"
+    },
+    {
+      "id": 60,
+      "file": "originals/60-page-of-swords.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-74789a1b-fddf-4d05-837f-65ebe2fc5e89.png"
+    },
+    {
+      "id": 61,
+      "file": "originals/61-knight-of-swords.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-abb82373-f597-4050-bc0a-793993c09ecb.png"
+    },
+    {
+      "id": 62,
+      "file": "originals/62-queen-of-swords.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-a006cccb-5289-4d34-8939-6989ee13d0a2.png"
+    },
+    {
+      "id": 66,
+      "file": "originals/66-three-of-pentacles.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-066029ec-7fa0-4d9c-bd0f-d04b7d57bd76.png"
+    },
+    {
+      "id": 67,
+      "file": "originals/67-four-of-pentacles.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-afc50748-ff5d-47a8-a762-adc5f7d67bae.png"
+    },
+    {
+      "id": 68,
+      "file": "originals/68-five-of-pentacles.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-072c500f-7283-4b60-9651-1997f8cdbef4.png"
+    },
+    {
+      "id": 69,
+      "file": "originals/69-six-of-pentacles.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-10912b0d-2195-459b-897a-736c773c7686.png",
+      "revisions": [
+        {
+          "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-305be29e-7ee3-45cb-86db-3369be542717.png",
+          "reason": "Fix tarot symbol count"
+        }
+      ],
+      "editPrompt": "Edit target: the attached Six of Pentacles tarot painting. Change ONLY the symbolic large gold pentacles floating in the sky above the merchant. Currently there are five, which is incorrect. Replace them with exactly SIX large gold pentacle discs, arranged clearly as TWO horizontal rows of THREE each in the upper sky, not overlapping the man's face. All six must be fully visible, separately countable and contain the same five-pointed star design. Preserve the merchant's face, pose, balanced scales, ordinary small coins, the two kneeling adult neighbors, town square, painting style, lighting and portrait 2:3 composition. Keep the ordinary small coins without stars. No text, card titles, border or watermark."
+    },
+    {
+      "id": 70,
+      "file": "originals/70-seven-of-pentacles.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-be7f1c1e-c78d-4a02-81e1-ab09917713f6.png"
+    },
+    {
+      "id": 71,
+      "file": "originals/71-eight-of-pentacles.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-efb52823-54f3-49f8-a63f-69ea00b4a392.png"
+    },
+    {
+      "id": 72,
+      "file": "originals/72-nine-of-pentacles.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-88bf4b58-9edd-44b8-8f76-eacb6ba3aa50.png"
+    },
+    {
+      "id": 73,
+      "file": "originals/73-ten-of-pentacles.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-b57f6879-f14a-4c1e-a8fd-caba14b829fc.png"
+    },
+    {
+      "id": 74,
+      "file": "originals/74-page-of-pentacles.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-aaa7cfa0-2382-4158-b9dd-e74ef83f8691.png"
+    },
+    {
+      "id": 75,
+      "file": "originals/75-knight-of-pentacles.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-0a3daa68-1d30-41de-a4d9-dc3a05315b7b.png"
+    },
+    {
+      "id": 76,
+      "file": "originals/76-queen-of-pentacles.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-33662d56-07b8-49b4-84c7-15e495eb5bac.png"
+    },
+    {
+      "id": 77,
+      "file": "originals/77-king-of-pentacles.png",
+      "source": "C:\\Users\\32109\\.codex\\generated_images\\01a0ef73-197b-7e83-9425-9943b93f514e\\exec-07efa321-5c12-4961-8777-0d878e57b1da.png"
+    }
+  ]
+}

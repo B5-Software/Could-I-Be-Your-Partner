@@ -1,0 +1,10 @@
+[
+  { "name": "maxValueEth", "kind": "eth", "initial": "0" },
+  { "name": "maxTotalValueEth", "kind": "eth", "initial": "0" },
+  { "name": "maxTotalFeeEth", "kind": "eth", "initial": "0" },
+  { "name": "maxTransactions", "kind": "count", "initial": 0 },
+  { "name": "targets", "kind": "list", "initial": [] },
+  { "name": "selectors", "kind": "list", "initial": [] },
+  { "name": "allowCalldata", "kind": "toggle", "initial": true },
+  { "name": "allowReplacement", "kind": "toggle", "initial": false }
+]

@@ -35,8 +35,37 @@ jobs:
           node-version: '24'
       - name: 安装依赖
         run: npm ci
+      - name: 验证生产依赖与脱离开发依赖的启动加载
+        run: npm run check:runtime-deps
+      - name: 构建和验证原生钱包签名器
+        run: |
+          sudo apt-get update && sudo apt-get install -y musl-tools
+          node scripts/lib/wallet-signer-runtime.cjs --install-toolchain
+          npm run prepare:wallet-signer
+          npm run test:wallet-signer
       - name: 静态检查、类型检查与回归测试
         run: npm run check
+      - name: 原生钱包和 Agent 本地 EVM 端到端验收
+        run: npm run test:quant:chain
+      - name: 打包后的 Node 后台和独立签名器端到端验收
+        run: npm run test:quant:bundle
+      - name: 打包后的 SuperAgent 持久化与量化门控验收
+        run: node tests/integration/super-agent-backend.cjs --bundled
+      - name: 原生量化基础库的精度、行情恢复与持久化验收
+        run: |
+          rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy
+          cargo +1.99.1 fmt --manifest-path native/quant-engine/Cargo.toml --check
+          cargo +1.99.1 test --manifest-path native/quant-engine/Cargo.toml --locked
+          cargo +1.99.1 clippy --manifest-path native/quant-engine/Cargo.toml --all-targets --locked -- -D warnings
+          cargo +1.99.1 build --manifest-path native/quant-engine/Cargo.toml --release --locked
+          cargo +1.99.1 fmt --manifest-path native/wallet-signer/Cargo.toml --check
+          cargo +1.99.1 test --manifest-path native/wallet-signer/Cargo.toml --locked
+          cargo +1.99.1 clippy --manifest-path native/wallet-signer/Cargo.toml --all-targets --locked -- -D warnings
+          node --test tests/integration/quant-native-engine.test.cjs tests/integration/quant-strategies.test.cjs tests/integration/quant-event-replay.test.cjs tests/integration/quant-native-safety.test.cjs tests/integration/quant-execution-outbox.test.cjs
+          node tests/integration/quant-native-backend.cjs --bundled
+          node tests/integration/quant-event-replay.test.cjs --bundled
+          node scripts/test-quant-chain.cjs --execution
+          node scripts/test-quant-chain.cjs --execution --bundled
       - name: 验证 Release 日志和发布重跑
         run: python3 tests/release-publisher.test.py
       - name: 检查高危依赖
@@ -154,6 +183,21 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Install pinned native quant toolchain and target
+        run: node scripts/lib/quant-engine-runtime.cjs --install-toolchain
+
+      - name: Install native musl linker
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Build and verify native quant resource
+        run: npm run prepare:quant-engine
+      - name: Build and verify native wallet signer
+        run: npm run test:wallet-signer
+
+      - name: Test the actual managed native executable
+        run: node tests/integration/quant-native-resource.cjs
 
       - name: Cache downloaded assets
         uses: actions/cache@v6

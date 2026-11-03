@@ -36,14 +36,38 @@ function _newState(objective) {
 }
 
 function setGoal(sessionId, objective, tokenBudget = 0) {
+  if (typeof objective !== 'string' || !objective.trim() || objective.length > 12000) throw new Error('Invalid goal objective');
+  if (!Number.isSafeInteger(tokenBudget) || tokenBudget < 0) throw new Error('Invalid goal token budget');
   const sid = sessionId || _defaultSession();
-  _goals.set(sid, _newState(objective));
+  _goals.set(sid, _newState(objective.trim()));
   if (tokenBudget > 0) _goals.get(sid).tokenBudget = tokenBudget;
   return _goals.get(sid);
 }
 
 function getGoal(sessionId) {
   return _goals.get(sessionId || _defaultSession()) || null;
+}
+
+function exportGoal(sessionId) {
+  const g = getGoal(sessionId);
+  return g ? JSON.parse(JSON.stringify(g)) : null;
+}
+
+function restoreGoal(sessionId, saved) {
+  clearGoal(sessionId);
+  if (!saved || typeof saved.objective !== 'string' || !saved.objective.trim() || saved.objective.length > 12000) return null;
+  const g = _newState(saved.objective);
+  if (!['active', 'paused', 'complete', 'blocked', 'budget_limited', 'max_turns'].includes(saved.status)) throw new Error('Invalid saved goal');
+  for (const field of ['turnsExecuted', 'tokensUsed', 'tokenBudget', 'blockedAttempts', 'startedAt', 'accumulatedActiveMs']) {
+    if (Number.isSafeInteger(saved[field]) && saved[field] >= 0) g[field] = saved[field];
+  }
+  g.status = saved.status;
+  g.lastBlockedReason = typeof saved.lastBlockedReason === 'string' ? saved.lastBlockedReason : null;
+  g.completionSummary = typeof saved.completionSummary === 'string' ? saved.completionSummary : null;
+  g.maxTurnsReached = saved.maxTurnsReached === true;
+  if (g.status === 'active') { g.status = 'paused'; g.recoveryReason = 'history-restored'; g.pausedAt = Date.now(); }
+  _goals.set(sessionId || _defaultSession(), g);
+  return g;
 }
 
 function pauseGoal(sessionId) {
@@ -65,12 +89,15 @@ function resumeGoal(sessionId) {
   }
   g.status = 'active';
   g.blockedAttempts = 0; // reset on resume
+  g.lastBlockedTurn = null;
+  g.lastBlockedReason = null;
   return g;
 }
 
 function completeGoal(sessionId, summary) {
   const g = getGoal(sessionId);
   if (!g) return null;
+  if (typeof summary !== 'string' || !summary.trim()) throw new Error('Goal completion requires evidence');
   g.status = 'complete';
   g.completionSummary = summary || null;
   return g;
@@ -120,7 +147,8 @@ function updateGoalTokens(sessionId, deltaTokens) {
 function recordBlockedAttempt(sessionId, reason) {
   const g = getGoal(sessionId);
   if (!g) return null;
-  if (reason && reason === g.lastBlockedReason) {
+  if (g.lastBlockedTurn === g.turnsExecuted) return g;
+  if (reason && reason === g.lastBlockedReason && g.lastBlockedTurn === g.turnsExecuted - 1) {
     g.blockedAttempts++;
     if (g.blockedAttempts >= BLOCKED_CONSECUTIVE_THRESHOLD && g.status === 'active') {
       g.status = 'blocked';
@@ -129,6 +157,7 @@ function recordBlockedAttempt(sessionId, reason) {
     g.blockedAttempts = 1;
     g.lastBlockedReason = reason || null;
   }
+  g.lastBlockedTurn = g.turnsExecuted;
   return g;
 }
 
@@ -145,7 +174,9 @@ function continuationPrompt(g) {
   return `<goal-steering>
 The agent is working toward this objective: ${g.objective}
 
-Status: ${g.status}, turn ${g.turnsExecuted}/${MAX_GOAL_TURNS}, tokens ${g.tokensUsed}${g.tokenBudget ? '/' + g.tokenBudget : ''}
+Continue autonomously after an ordinary reply. A message ending is not task completion.
+Use goalStatus for progress/budget. Call goalComplete with concrete evidence ONLY when every requirement is fulfilled.
+User stop, pause, budget limits and terminal errors remain authoritative. A goal never expands permissions or authorizes funds.
 
 <completion-audit>
 Before responding, audit whether the objective is FULLY achieved:
@@ -194,7 +225,7 @@ function getSteeringPrompt(sessionId) {
   if (g.status === 'budget_limited') return budgetLimitPrompt(g);
   if (g.status === 'max_turns') {
     return `<goal-steering>
-Max turns (${MAX_GOAL_TURNS}) reached for this goal. The goal will auto-continue with reset turn count.
+Max turns (${MAX_GOAL_TURNS}) reached for this goal. Stop and report progress. The user may explicitly resume with /goal resume.
 Objective: ${g.objective}
 Review your progress and continue from where you left off.
 </goal-steering>`;
@@ -213,7 +244,7 @@ if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
     MAX_GOAL_TURNS,
     BLOCKED_CONSECUTIVE_THRESHOLD,
-    setGoal, getGoal, pauseGoal, resumeGoal, completeGoal, clearGoal,
+    setGoal, getGoal, exportGoal, restoreGoal, pauseGoal, resumeGoal, completeGoal, clearGoal,
     markGoalMaxTurnsReached, continueGoalFromMaxTurns,
     recordGoalTurn, updateGoalTokens, recordBlockedAttempt,
     isGoalActive, getSteeringPrompt,
@@ -226,7 +257,7 @@ if (typeof window !== 'undefined') {
   window.GoalState = {
     MAX_GOAL_TURNS,
     BLOCKED_CONSECUTIVE_THRESHOLD,
-    setGoal, getGoal, pauseGoal, resumeGoal, completeGoal, clearGoal,
+    setGoal, getGoal, exportGoal, restoreGoal, pauseGoal, resumeGoal, completeGoal, clearGoal,
     markGoalMaxTurnsReached, continueGoalFromMaxTurns,
     recordGoalTurn, updateGoalTokens, recordBlockedAttempt,
     isGoalActive, getSteeringPrompt,
@@ -237,7 +268,7 @@ if (typeof window !== 'undefined') {
 if (typeof globalThis !== 'undefined') {
   globalThis.GoalState = (typeof window !== 'undefined' ? window.GoalState : null) || {
     MAX_GOAL_TURNS, BLOCKED_CONSECUTIVE_THRESHOLD,
-    setGoal, getGoal, pauseGoal, resumeGoal, completeGoal, clearGoal,
+    setGoal, getGoal, exportGoal, restoreGoal, pauseGoal, resumeGoal, completeGoal, clearGoal,
     markGoalMaxTurnsReached, continueGoalFromMaxTurns,
     recordGoalTurn, updateGoalTokens, recordBlockedAttempt,
     isGoalActive, getSteeringPrompt,

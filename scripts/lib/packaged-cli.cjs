@@ -132,12 +132,16 @@ async function preparePackagedCLI(context) {
           ...process.env,
           CIBYP_USER_DATA: profile,
           CIBYP_DOCUMENTS: path.join(profile, 'documents'),
+          NODE_PATH: '',
+          NODE_OPTIONS: '',
         },
       });
       if (
         runtime.error ||
         runtime.status !== 0 ||
-        !runtime.stdout.includes('PACKAGED_RUNTIME_READY')
+        !runtime.stdout.includes('PACKAGED_RUNTIME_READY') ||
+        !runtime.stdout.includes('PACKAGED_QUANT_READY') ||
+        !runtime.stdout.includes('PACKAGED_WALLET_READY')
       )
         throw new Error(
           `Packaged Agent bootstrap failed: ${runtime.stderr || runtime.error || runtime.stdout}`,

@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark"><title>CIBYP · Tarot</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Cpath fill='%23897ac4' d='M16 1 21 11 31 16 21 21 16 31 11 21 1 16 11 11Z'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/app.css"><script src="/question-seed.js" defer></script><script src="/app.js" defer></script>
+</head>
+<body>
+  <section id="setup" class="setup-shell" hidden>
+    <div class="setup-story"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 40 40"><path d="M20 4 24.5 15.5 36 20 24.5 24.5 20 36 15.5 24.5 4 20 15.5 15.5Z"/></svg></span><span class="eyebrow">CIBYP · TAROT STUDIO</span><h1 data-i="setupTitle">先为你的设备，设置一把钥匙。</h1><p data-i="setupIntro">欢迎。首次连接不需要密码，请先设置自己的 Wi-Fi 密码，再开始抽牌。</p><small data-i="setupPrivate">设置完成前，仅开放初始化页面，抽牌和随机数服务均已锁定。</small></div>
+    <form id="setup-form" class="panel setup-card"><span class="eyebrow" data-i="firstUse">首次设置</span><h2 data-i="wifiTitle">Wi-Fi 热点设置</h2><label><span data-i="ssid">热点名称</span><input id="setup-ssid" maxlength="32" required autocomplete="off"></label><label><span data-i="wifiPassword">新热点密码</span><input id="setup-password" type="password" minlength="8" maxlength="63" required autocomplete="new-password"></label><label><span data-i="confirmPassword">再次输入密码</span><input id="setup-confirm" type="password" minlength="8" maxlength="63" required autocomplete="new-password"></label><p class="help" data-i="passwordHelp">8–63 个英文字母、数字或符号。请保存好密码，之后也用它管理热点设置。</p><button class="primary" id="setup-submit" type="submit" data-i="setupAction">保存并启用设备 →</button><p id="setup-status" class="help" role="status"></p></form>
+  </section>
+  <aside class="rail">
+    <a class="brand" href="/" aria-label="CIBYP Tarot"><span class="brand-mark" aria-hidden="true"><svg viewBox="0 0 40 40"><path d="M20 4 24.5 15.5 36 20 24.5 24.5 20 36 15.5 24.5 4 20 15.5 15.5Z"/></svg></span><span>CIBYP <small>TAROT STUDIO</small></span></a>
+    <nav aria-label="Navigation">
+      <button class="nav active" data-view="draw" aria-current="page"><span>✦</span><span data-i="drawNav">抽牌空间</span></button>
+      <button class="nav" data-view="history"><span>◷</span><span data-i="historyNav">抽牌记录</span><span class="count" id="history-count">0</span></button>
+      <button class="nav" data-view="network"><span>⌁</span><span data-i="networkNav">设备与连接</span></button>
+    </nav>
+    <div class="rail-note"><span class="tiny-star">✧</span><p data-i="railNote">留一点时间，听听内心的声音。</p><small>HARDWARE RANDOMNESS<br>78 CARDS · 9 SPREADS</small></div>
+    <div class="rail-bottom"><button id="theme" class="icon-btn" aria-label="Theme">◐</button><select id="language" aria-label="Language"><option value="zh">简体中文</option><option value="en">English</option><option value="de">Deutsch</option></select></div>
+  </aside>
+  <main>
+    <header class="topbar"><span id="page-title" data-i="drawNav">抽牌空间</span><div class="connection" role="status"><span id="connection-dot" class="dot"></span><span id="connection-label">…</span><button id="reconnect" class="text-btn" data-i="reconnect" hidden>重连</button></div></header>
+    <section id="view-draw" class="view">
+      <div class="intro"><span class="eyebrow">A MOMENT FOR YOURSELF</span><h1 data-i="title">从一张牌，开始新的思考。</h1><p data-i="subtitle">真实硬件随机，让每一次相遇都独一无二。</p></div>
+      <form id="draw-form" class="draw-controls">
+        <label class="question"><span data-i="question">此刻，你在想什么？</span><input id="question" maxlength="200" data-placeholder="questionHint" placeholder="一个问题，或只是今天的心情（可选）" autocomplete="off"><small data-i="questionPrivacy">仅保存在此浏览器，不发送到设备。</small></label>
+        <div class="spread-control"><label for="spread" data-i="spreadLabel">选择牌阵</label><div class="draw-actions"><select id="spread"></select><button id="draw" class="primary" type="submit" disabled><span>✦</span><span id="draw-label" data-i="drawAction">开始抽牌</span></button></div></div>
+      </form>
+      <div id="notice" role="status" class="notice" hidden></div>
+      <div class="reading-bar"><span id="reading-label" data-i="readyTitle">为你的问题，留一点空间</span><span id="reading-time"></span></div>
+      <div id="cards" class="cards" aria-live="polite"></div>
+      <div class="reading-footer"><span class="dot small"></span><span data-i="footer">ESP32 硬件随机 · 不重复抽取 · 正逆位独立采样</span><button id="export" class="text-btn" data-i="export" hidden>导出这次记录 ↗</button></div>
+      <p class="disclaimer" data-i="disclaimer">牌面是自我探索的灵感，不替代医疗、法律或财务建议。</p>
+    </section>
+    <section id="view-history" class="view" hidden>
+      <div class="section-heading"><div><span class="eyebrow">YOUR MOMENTS</span><h1 data-i="historyNav">抽牌记录</h1><p data-i="historyPrivacy">最多保留 50 次，仅存于此浏览器。设备不保存你的问题。</p></div><button id="clear-history" class="secondary" data-i="clearHistory">清空记录</button></div>
+      <div id="history-list" class="history-list"></div>
+    </section>
+    <section id="view-network" class="view" hidden>
+      <div class="section-heading"><div><span class="eyebrow">YOUR LITTLE DEVICE</span><h1 data-i="networkNav">设备与连接</h1><p data-i="networkIntro">抽牌可以离线于互联网进行，WebSocket 与 REST 共用同一抽牌核心。</p></div></div>
+      <div class="settings-grid"><article class="panel"><h2 data-i="deviceTitle">当前设备</h2><dl><div><dt data-i="deviceId">设备标识</dt><dd id="device-id">—</dd></div><div><dt data-i="version">固件</dt><dd id="firmware">—</dd></div><div><dt data-i="channel">连接通道</dt><dd id="channel">—</dd></div><div><dt data-i="address">地址</dt><dd>192.168.4.1</dd></div></dl><p class="help" data-i="entropyBoundary">网络抽牌不提供钱包配对或受保护熵源。钱包能力需独立的 USB 安全流程。</p></article>
+      <article class="panel"><h2 data-i="wifiTitle">Wi-Fi 热点设置</h2><p class="help" data-i="wifiHelp">通过 USB 发送 NETWORK 获取独立热点密码和管理码。保存后手动重启设备，再连接新热点。</p>
+        <form id="network-form"><label><span data-i="admin">当前热点密码或管理码</span><input id="admin" type="password" maxlength="63" required autocomplete="current-password" spellcheck="false"></label><label><span data-i="ssid">热点名称</span><input id="ssid" maxlength="32" required autocomplete="off"></label><label><span data-i="wifiPassword">新热点密码</span><input id="wifi-password" type="password" minlength="8" maxlength="63" required autocomplete="new-password"></label><button class="secondary" type="submit" data-i="saveNetwork">保存热点设置</button><p id="network-status" role="status" class="help"></p></form></article>
+      <article class="panel wide"><h2 data-i="integration">连接应用</h2><p class="help" data-i="apiHelp">在 CIBYP 设置中选择网络 TRNG，填写地址和端口 80。开发者也可以使用以下接口：</p><div class="endpoints"><code>GET /api/draw</code><code>GET /api/spread?type=three</code><code>GET /api/info</code><code>GET /api/random</code><code>ws://192.168.4.1/ws</code></div><p class="help" data-i="updateHelp">升级固件：在 CIBYP 的「IoT 固件」中通过 USB 识别设备、校验镜像并烧录。</p></article></div>
+    </section>
+  </main>
+</body></html>

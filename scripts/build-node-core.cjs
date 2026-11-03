@@ -4,6 +4,19 @@ const fs = require('node:fs'),
   path = require('node:path'),
   crypto = require('node:crypto');
 const { execFileSync } = require('node:child_process');
+const esbuild = require('esbuild');
+const workerBuilds = ['quant/research-worker.js'].map((name) =>
+  esbuild.buildSync({
+    entryPoints: [path.resolve(__dirname, '../src/main/services', name)],
+    bundle: true,
+    platform: 'node',
+    target: 'node24',
+    format: 'cjs',
+    write: false,
+    metafile: true,
+    legalComments: 'eof',
+  }),
+);
 const root = path.resolve(__dirname, '..'),
   out = path.resolve(process.argv[2] || path.join(root, 'dist/node-core'));
 const sources = Object.fromEntries(
@@ -37,12 +50,14 @@ require('esbuild')
       'bcryptjs',
       'otpauth',
       'node-pty',
+      'serialport',
       '@anthropic-ai/claude-agent-sdk',
       '@opencode/ai',
       'zod',
     ],
     plugins: [require('./lib/guest-tool-bundle.cjs').sdkMetadataPlugin()],
     define: {
+      CIBYP_QUANT_WORKER_SOURCE: JSON.stringify(workerBuilds[0].outputFiles[0].text),
       CIBYP_I18N_SOURCES: JSON.stringify(sources),
       CIBYP_AVATAR_FRAMES: JSON.stringify(frames),
       'import.meta.url': '__cibypNodeModuleUrl',
@@ -55,6 +70,8 @@ require('esbuild')
     legalComments: 'eof',
   })
   .then((result) => {
+    for (const worker of workerBuilds)
+      Object.assign(result.metafile.inputs, worker.metafile.inputs);
     const forbidden = Object.keys(result.metafile.inputs).filter((name) =>
       /(?:^|\/)electron(?:\/|$)|src\/main\/main\.js|src\/renderer\/(?:pages|css)\//.test(
         name.replace(/\\/g, '/'),
@@ -94,6 +111,7 @@ require('esbuild')
           'ws',
           'bcryptjs',
           'otpauth',
+          'serialport',
           '@anthropic-ai/claude-agent-sdk',
           '@opencode/ai',
           'zod',

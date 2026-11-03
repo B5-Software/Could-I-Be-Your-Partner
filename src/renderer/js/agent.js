@@ -1016,6 +1016,8 @@ Use the latest relationship dossier and shared memories provided with this reque
       this.sessionUsage.prompt += pt;
       this.sessionUsage.completion += ct;
       this.sessionUsage.total += tt;
+      if (typeof GoalState !== 'undefined' && GoalState.getGoal(this.conversationId || this.sessionKey))
+        GoalState.updateGoalTokens(this.conversationId || this.sessionKey, Math.max(0, Math.floor(tt)));
       this.sessionUsage.cached += cached;
       this.sessionUsage.cacheCreation += cacheCreation;
       const cacheKnown = usage._cacheReported ?? (usage.prompt_tokens_details?.cached_tokens != null || usage.cache_read_input_tokens != null);
@@ -1058,12 +1060,16 @@ Use the latest relationship dossier and shared memories provided with this reque
   getGoalSteeringSection() {
     if (typeof GoalState === 'undefined' || !GoalState) return '';
     try {
-      const sid = this.conversationId || 'main';
+      const sid = this.conversationId || this.sessionKey;
       const g = GoalState.getGoal(sid);
       if (!g) return '';
       const steering = GoalState.getSteeringPrompt(sid);
       return steering ? '\n\n' + steering : '';
     } catch { return ''; }
+  }
+
+  getGoalSnapshot() {
+    return typeof GoalState === 'undefined' ? null : GoalState.exportGoal(this.conversationId || this.sessionKey);
   }
 
   getEnabledToolDefinitions() {
@@ -1078,6 +1084,14 @@ Use the latest relationship dossier and shared memories provided with this reque
     return !this.minimalMode && typeof ToolExposure !== 'undefined'
       && this.settings?.toolExposure?.mode !== 'all'
       && !(this.settings?.autoOptimizeToolSelection && !this.settings?.toolExposure);
+  }
+
+  _withGoalToolSchemas(tools) {
+    if (!['chat', 'code'].includes(this.mode || 'chat') || typeof GoalState === 'undefined' ||
+        !GoalState.isGoalActive(this.conversationId || this.sessionKey)) return tools;
+    const names = new Set(tools.map(tool => tool.function?.name));
+    return [...tools, ...getToolSchemas(null, this.mode || 'chat').filter(tool =>
+      ['goalStatus', 'goalComplete'].includes(tool.function?.name) && !names.has(tool.function.name))];
   }
 
   prepareToolExposure() {
@@ -1205,7 +1219,7 @@ Use the latest relationship dossier and shared memories provided with this reque
   getRuntimeToolSchemas() {
     this.syncTokenLimits();
     if (this.usesToolDiscovery()) {
-      const tools = this.prepareToolExposure().schemas();
+      const tools = this._withGoalToolSchemas(this.prepareToolExposure().schemas());
       this.contextManager?.setToolSchemaTokens(Math.ceil(JSON.stringify(tools).length / 4));
       return tools;
     }
@@ -1217,8 +1231,9 @@ Use the latest relationship dossier and shared memories provided with this reque
         const naming = getToolSchemas(null, this.mode).find(tool => tool.function.name === 'renameWorkspace');
         if (naming) tools.push(naming);
       }
-      this.contextManager.setToolSchemaTokens(Math.ceil(JSON.stringify(tools).length / 4));
-      return tools;
+      const goalTools = this._withGoalToolSchemas(tools);
+      this.contextManager.setToolSchemaTokens(Math.ceil(JSON.stringify(goalTools).length / 4));
+      return goalTools;
     }
     const activeNames = this._orderedActiveToolNames();
     const activeSet = new Set(activeNames);
@@ -1247,6 +1262,7 @@ Use the latest relationship dossier and shared memories provided with this reque
       if (schema) ordered.push(schema);
     }
     tools = ordered;
+    tools = this._withGoalToolSchemas(tools);
     if (!this.minimalMode && this.settings?.autoOptimizeToolSelection && !this.sessionAutoOptimizeDisabled && this.mode !== 'code') {
       tools.push(INTERNAL_REOPTIMIZE_TOOL_SCHEMA);
       tools.push(INTERNAL_DISABLE_AUTO_OPTIMIZE_SCHEMA);
@@ -1983,17 +1999,6 @@ Use the latest relationship dossier and shared memories provided with this reque
     // Save to history
     this.saveToHistory();
 
-    // Goal turn recording: track turns for max-turns detection.
-    try {
-      if (typeof GoalState !== 'undefined' && GoalState) {
-        const sid = this.conversationId || 'main';
-        if (GoalState.getGoal(sid)) {
-          GoalState.recordGoalTurn(sid);
-          // Refresh system prompt to include updated steering info
-          this.contextManager.setSystemPrompt(this.getSystemPrompt());
-        }
-      }
-    } catch { /* ignore goal tracking failures */ }
   }
 
   async saveToHistory({ strict = false } = {}) {
@@ -2011,6 +2016,7 @@ Use the latest relationship dossier and shared memories provided with this reque
         schemaVersion: 2, // 历史格式版本：新版持久化完整 transcript（historyMessages）到 messages
         messages: this.contextManager.getHistoryMessages(),
         workingContext: this.contextManager.exportWorkingState(),
+        goal: typeof GoalState !== 'undefined' ? GoalState.exportGoal(this.conversationId || this.sessionKey) : null,
         todoItems: this.todoItems.map(item => ({ ...item })),
         todoIdCounter: this.todoIdCounter,
         summaries: this.contextManager.summaries,
@@ -2064,6 +2070,7 @@ Use the latest relationship dossier and shared memories provided with this reque
   async loadFromHistory(conversation) {
     await this.resetMinimalShell();
     this.conversationId = conversation.id;
+    if (typeof GoalState !== 'undefined') GoalState.restoreGoal(this.conversationId, conversation.goal);
     this.conversationTitle = conversation.title;
     this.workspaceName = conversation.workspaceName || '';
     this.resetOptimizedTools();
@@ -2246,6 +2253,10 @@ Use the latest relationship dossier and shared memories provided with this reque
   }
 
   stop() {
+    if (typeof GoalState !== 'undefined' && GoalState.isGoalActive(this.conversationId || this.sessionKey)) {
+      GoalState.pauseGoal(this.conversationId || this.sessionKey);
+      this.onMessage?.('goal-changed', GoalState.exportGoal(this.conversationId || this.sessionKey));
+    }
     this.stopped = true;
     this.running = false;
     this.runId++;
@@ -2531,8 +2542,10 @@ Use the latest relationship dossier and shared memories provided with this reque
     let namingReminder = false;
     // 安全上限：正常任务远到不了 50 轮；Responses 流式曾因 finishReason 恒为 null
     // 导致无限循环（llm-retry.js 已修复 + 兜底），这里再加熔断，绝不再烧 token。
-    const MAX_AGENT_ITERATIONS = this.subagentPolicy?.maxIterations || 50;
+    const hasGoal = () => ['chat', 'code'].includes(this.mode || 'chat') && typeof GoalState !== 'undefined' && GoalState.isGoalActive(this.conversationId || this.sessionKey);
+    let MAX_AGENT_ITERATIONS = this.subagentPolicy?.maxIterations || (hasGoal() ? GoalState.MAX_GOAL_TURNS : 50);
     while (this.running && !this.stopped && runId === this.runId) {
+      if (hasGoal() && !this.subagentPolicy) MAX_AGENT_ITERATIONS = GoalState.MAX_GOAL_TURNS;
       iterations++;
       if (iterations > MAX_AGENT_ITERATIONS) {
         if (this.subagentPolicy) this.onMessage?.('error', `Subagent reached its ${MAX_AGENT_ITERATIONS} iteration limit before completing`);
@@ -2577,6 +2590,10 @@ Use the latest relationship dossier and shared memories provided with this reque
       // requestId 必须全局唯一：并发会话可能在同一毫秒启动同一轮循环，
       // 若只靠时间戳+轮次会撞车，导致流式 chunk 串到别的会话。
       const reqId = 'agent-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 8) + '-' + iterations;
+      if (hasGoal()) {
+        GoalState.recordGoalTurn(this.conversationId || this.sessionKey);
+        this.onMessage?.('goal-changed', GoalState.exportGoal(this.conversationId || this.sessionKey));
+      }
 
       let result;
       let usedStreaming = false;
@@ -3068,7 +3085,7 @@ Use the latest relationship dossier and shared memories provided with this reque
         this.saveToHistory();
 
         if (this.stopped || runId !== this.runId) break;
-        if (pluginConcludesTurn && !this.hotMessages.length) break;
+        if (pluginConcludesTurn && !this.hotMessages.length && !hasGoal()) break;
         // Continue the loop to let the agent process tool results
         continue;
       }
@@ -3097,6 +3114,15 @@ Use the latest relationship dossier and shared memories provided with this reque
         // 热对话修复：stop后检查是否有待处理的热消息，有则继续循环
         if (fr !== 'length' && fr !== 'error' && this.hotMessages.length > 0) {
           continue; // 回到循环顶部，热消息将在下一轮注入
+        }
+        if (fr !== 'error' && hasGoal()) {
+          const g = GoalState.getGoal(this.conversationId || this.sessionKey);
+          this.contextManager.addMessage({ role: 'user', content:
+            `System goal continuation ${g.turnsExecuted}: the user's goal is still active. Continue from the work already done. A normal response ending does not complete the task. Use goalStatus for the objective and remaining limits. Only call goalComplete after verifying all deliverables. If blocked, report the concrete blocker; never broaden permissions or invent authorization.`,
+            metadata: { kind: 'context-update', source: 'goal-continuation' } });
+          await this.saveToHistory({ strict: true });
+          await new Promise(resolve => setTimeout(resolve, 0));
+          continue;
         }
         break;
       }
@@ -3246,7 +3272,8 @@ Use the latest relationship dossier and shared memories provided with this reque
   }
 
   async executeTool(name, args, invocation = {}) {
-    if (this.minimalMode) {
+    const goalControl = ['goalSet', 'goalStatus', 'goalComplete'].includes(name);
+    if (this.minimalMode && !goalControl) {
       try { return await this.executeMinimalTool(name, args); }
       catch (error) { return { ok: false, error: error.message }; }
     }
@@ -3261,7 +3288,7 @@ Use the latest relationship dossier and shared memories provided with this reque
     }
     if (this._toolScope && !this._toolScope.has(OPENCODE_TOOL_ALIASES[name] || name)) return { ok: false, error: 'Tool is outside this agent scope' };
     if (this.toolExposure) this.toolExposure.touch(name);
-    if (this.settings?.tools?.[name] === false) return { ok: false, error: '该工具已禁用' };
+    if (this.settings?.tools?.[name] === false && !(goalControl && typeof GoalState !== 'undefined' && GoalState.isGoalActive(this.conversationId || this.sessionKey))) return { ok: false, error: '该工具已禁用' };
     try {
       // OpenCode v1/v2 免费工具别名（bash/shell/write/read/edit/glob/grep）→ CIBYP 本地实现
       // 这些工具名由主进程按免费池要求注入请求（见 llm-providers.js mergeFreeTierTools），
@@ -4634,20 +4661,33 @@ Use the latest relationship dossier and shared memories provided with this reque
         // ---- Goal / 长任务跟踪 ----
         case 'goalSet': {
           if (typeof GoalState === 'undefined') return { ok: false, error: 'GoalState模块未加载' };
-          GoalState.setGoal(this.conversationId || 'main', args.objective, args.tokenBudget || 0);
+          const sid = this.conversationId || this.sessionKey;
+          const existing = GoalState.getGoal(sid);
+          if (existing?.status === 'active' && existing.objective !== args.objective) return { ok: false, error: 'Only the user can replace an active objective with /goal' };
+          if (!existing || existing.status !== 'active') GoalState.setGoal(sid, args.objective, args.tokenBudget || 0);
           this.contextManager.setSystemPrompt(this.getSystemPrompt());
+          this.onMessage?.('goal-changed', GoalState.exportGoal(this.conversationId || this.sessionKey));
+          await this.saveToHistory({ strict: true });
           return { ok: true, message: `目标已设置: ${args.objective}`, maxTurns: GoalState.MAX_GOAL_TURNS };
         }
         case 'goalStatus': {
           if (typeof GoalState === 'undefined') return { ok: false, error: 'GoalState模块未加载' };
-          const g = GoalState.getGoal(this.conversationId || 'main');
+          const g = GoalState.getGoal(this.conversationId || this.sessionKey);
           if (!g) return { ok: true, message: '当前没有活跃目标' };
+          if (args.blockedReason && g.status === 'active' && g.lastBlockedTurn !== g.turnsExecuted) {
+            if (typeof args.blockedReason !== 'string' || args.blockedReason.length > 2000) return { ok: false, error: 'Invalid blocked reason' };
+            GoalState.recordBlockedAttempt(this.conversationId || this.sessionKey, args.blockedReason);
+            await this.saveToHistory({ strict: true });
+          }
           return { ok: true, goal: g };
         }
         case 'goalComplete': {
           if (typeof GoalState === 'undefined') return { ok: false, error: 'GoalState模块未加载' };
-          GoalState.completeGoal(this.conversationId || 'main', args.summary);
+          const goal = GoalState.completeGoal(this.conversationId || this.sessionKey, args.summary);
+          if (!goal) return { ok: false, error: 'No goal is set' };
           this.contextManager.setSystemPrompt(this.getSystemPrompt());
+          this.onMessage?.('goal-changed', GoalState.exportGoal(this.conversationId || this.sessionKey));
+          await this.saveToHistory({ strict: true });
           return { ok: true, message: '目标已完成: ' + (args.summary || '') };
         }
         case 'sleep': {

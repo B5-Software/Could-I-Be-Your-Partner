@@ -8,12 +8,20 @@ const { shellQuote } = require('../vm/vm-paths');
 // Network response limits protect the process, not the model's reading window.
 // Retain complete extracted documents; callers can page through every character.
 async function requestText(url, options = {}) {
+  if (options.publicOnly) publicNewsUrl(url);
   const response = await fetch(url, {
     method: options.method || 'GET',
     headers: options.headers || {},
     body: options.body,
     signal: AbortSignal.timeout(options.timeoutMs || 30000),
+    ...(options.publicOnly ? { redirect: 'manual' } : {}),
   });
+  if (options.publicOnly && [301, 302, 303, 307, 308].includes(response.status)) {
+    await response.body?.cancel();
+    if ((options.redirects || 0) >= 5) throw new Error('NEWS_REDIRECT_LIMIT');
+    const target = publicNewsUrl(new URL(response.headers.get('location'), url).href);
+    return requestText(target, { ...options, redirects: (options.redirects || 0) + 1 });
+  }
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   const chunks = [];
   let size = 0;
@@ -31,6 +39,47 @@ async function requestText(url, options = {}) {
     url: response.url,
     contentType: response.headers.get('content-type') || '',
   };
+}
+
+// News reads use HTTPS domains, no caller-supplied headers/cookies and no local
+// URLs. This is URL validation, not a general DNS-rebinding firewall.
+function publicNewsUrl(value) {
+  const url = new URL(value),
+    host = url.hostname.replace(/\.$/, '').toLowerCase();
+  if (
+    url.protocol !== 'https:' ||
+    url.username ||
+    url.password ||
+    (url.port && url.port !== '443') ||
+    require('node:net').isIP(host.replace(/^\[|\]$/g, '')) ||
+    !host.includes('.') ||
+    /(?:^|\.)(?:localhost|local|internal|lan|home|invalid|test)$/.test(host)
+  )
+    throw new Error('PUBLIC_HTTPS_NEWS_URL_REQUIRED');
+  return url.href;
+}
+
+async function bingHttpSearch(query) {
+  const { text } = await requestText('https://www.bing.com/search?q=' + encodeURIComponent(query), {
+    maxBytes: 2 * 1024 * 1024,
+  });
+  const dom = parseDocument(text);
+  const rows = DomUtils.findAll(
+    (n) => n.name === 'li' && /(?:^|\s)b_algo(?:\s|$)/.test(n.attribs?.class || ''),
+    dom.children,
+  ).map((node) => {
+    const heading = DomUtils.findOne((n) => n.name === 'h2', node.children);
+    const anchor = heading && DomUtils.findOne((n) => n.name === 'a', heading.children);
+    const paragraph = DomUtils.findOne((n) => n.name === 'p', node.children);
+    return {
+      title: anchor ? DomUtils.textContent(anchor) : '',
+      url: anchor?.attribs?.href || '',
+      snippet: paragraph ? DomUtils.textContent(paragraph) : '',
+    };
+  });
+  const results = normalizeResults(rows, 'bing');
+  if (!results.length) throw new Error('Bing returned no results; use another engine');
+  return results;
 }
 
 function extractHtml(html, format = 'text') {
@@ -68,6 +117,19 @@ function extractHtml(html, format = 'text') {
   const article = DomUtils.findOne((n) => n.name === 'main' || n.name === 'article', dom.children);
   return {
     title: title ? DomUtils.textContent(title).trim() : '',
+    ...(() => {
+      const meta = DomUtils.findOne(
+        (n) =>
+          n.name === 'meta' &&
+          ['article:published_time', 'datepublished', 'pubdate', 'dcterms.created'].includes(
+            String(n.attribs?.property || n.attribs?.name || '').toLowerCase(),
+          ),
+        dom.children,
+      );
+      return meta?.attribs?.content
+        ? { publishedAtReported: meta.attribs.content.slice(0, 200) }
+        : {};
+    })(),
     content: walk(article || dom)
       .replace(/[ \t]+/g, ' ')
       .replace(/\n[ \t]+/g, '\n')
@@ -135,6 +197,16 @@ function normalizeResults(payload, engine) {
       .map((row) => ({
         title: String(row.title || row.name || ''),
         url: canonicalUrl(row.url || row.link),
+        publishedAtReported:
+          String(
+            row.publishedDate ||
+              row.published_at ||
+              row.publishedAt ||
+              row.datePublished ||
+              row.publish_date ||
+              row.publication_date ||
+              '',
+          ).slice(0, 200) || null,
         snippet: String(
           row.snippet || row.description || row.text || (row.excerpts || []).join('\n') || '',
         ),
@@ -255,6 +327,7 @@ class WebResearch {
     const out = {
       ...value,
       ref,
+      retrievedAt: new Date(entry.at).toISOString(),
       content: content.slice(offset, nextOffset),
       offset,
       totalChars: content.length,
@@ -447,7 +520,7 @@ class WebResearch {
     const format = options.format || 'markdown';
     if (!['markdown', 'text', 'html'].includes(format))
       throw new Error('format must be markdown, text, or html');
-    const key = JSON.stringify([this.vmActive(), options.url, format]);
+    const key = JSON.stringify([this.vmActive(), options.url, format, options.publicOnly === true]);
     if (!options.refresh) {
       for (const [ref, entry] of this.cache)
         if (entry.key === key && Date.now() - entry.at < 5 * 60000)
@@ -463,6 +536,7 @@ class WebResearch {
         Accept: 'text/markdown, text/plain, text/html;q=0.9',
         'User-Agent': 'CIBYP/' + require('../../../package.json').version,
       },
+      publicOnly: options.publicOnly === true,
     });
     const extracted =
       /html/i.test(response.contentType) && format !== 'html'
@@ -490,4 +564,6 @@ module.exports = {
   normalizeResults,
   fuseResults,
   canonicalUrl,
+  publicNewsUrl,
+  bingHttpSearch,
 };

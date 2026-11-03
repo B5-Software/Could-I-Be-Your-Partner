@@ -1,0 +1,289 @@
+{
+  "version": 1,
+  "firmwareVersion": "2.0.0",
+  "protocol": 2,
+  "images": [
+    {
+      "id": "esp32c3-uart",
+      "chip": "esp32c3",
+      "console": "uart",
+      "profile": "development",
+      "walletEntropy": false,
+      "experimental": false,
+      "idf": {
+        "tag": "v6.1",
+        "revision": "fff9895c82d744c7237be8847347bdd1b07c6643"
+      },
+      "rust": "1.99.1",
+      "sourceSha256": "855852089c4467079090b1a5d7fe591b590a3d3cd7574c112024d6885ed9e5f3",
+      "flashSize": "4MB",
+      "segments": [
+        {
+          "file": "esp32c3-uart/bootloader.bin",
+          "address": 0,
+          "size": 21152,
+          "sha256": "7b981d7268070e4797cb52060e6de932dc33737b5426b71f395607684ebff3c6"
+        },
+        {
+          "file": "esp32c3-uart/partition-table.bin",
+          "address": 65536,
+          "size": 3072,
+          "sha256": "1ddfbebf4701502f7e3256a233f98aa6d49e74fbbc76bcd38f5f6d9c5822c9e4"
+        },
+        {
+          "file": "esp32c3-uart/ota_data_initial.bin",
+          "address": 86016,
+          "size": 8192,
+          "sha256": "7d2c7ac4888bfd75cd5f56e8d61f69595121183afc81556c876732fd3782c62f"
+        },
+        {
+          "file": "esp32c3-uart/tarot-art.bin",
+          "address": 2228224,
+          "size": 1966080,
+          "sha256": "b75a02fe2d11b9eb5581eabb9fc2b3b088804913e4e6ac9e5b13d7c098a2ff1d"
+        },
+        {
+          "file": "esp32c3-uart/cibyp_trng.bin",
+          "address": 131072,
+          "size": 899504,
+          "sha256": "a60758d8eda14ceeea73c26090ca471e844cb5a28258e511e9989f3a15481ac3"
+        }
+      ]
+    },
+    {
+      "id": "esp32c3-usb",
+      "chip": "esp32c3",
+      "console": "usb",
+      "profile": "development",
+      "walletEntropy": false,
+      "experimental": false,
+      "idf": {
+        "tag": "v6.1",
+        "revision": "fff9895c82d744c7237be8847347bdd1b07c6643"
+      },
+      "rust": "1.99.1",
+      "sourceSha256": "855852089c4467079090b1a5d7fe591b590a3d3cd7574c112024d6885ed9e5f3",
+      "flashSize": "4MB",
+      "segments": [
+        {
+          "file": "esp32c3-usb/bootloader.bin",
+          "address": 0,
+          "size": 21232,
+          "sha256": "2cb439c424f2c75766db676b029cda871ed88ffa7efb0271507e05341fa20142"
+        },
+        {
+          "file": "esp32c3-usb/partition-table.bin",
+          "address": 65536,
+          "size": 3072,
+          "sha256": "1ddfbebf4701502f7e3256a233f98aa6d49e74fbbc76bcd38f5f6d9c5822c9e4"
+        },
+        {
+          "file": "esp32c3-usb/ota_data_initial.bin",
+          "address": 86016,
+          "size": 8192,
+          "sha256": "7d2c7ac4888bfd75cd5f56e8d61f69595121183afc81556c876732fd3782c62f"
+        },
+        {
+          "file": "esp32c3-usb/tarot-art.bin",
+          "address": 2228224,
+          "size": 1966080,
+          "sha256": "b75a02fe2d11b9eb5581eabb9fc2b3b088804913e4e6ac9e5b13d7c098a2ff1d"
+        },
+        {
+          "file": "esp32c3-usb/cibyp_trng.bin",
+          "address": 131072,
+          "size": 895648,
+          "sha256": "0dd9a419f637ef3e339bc217336d7cc51fc4ad1552e81771a3f27ae89ad46ef5"
+        }
+      ]
+    },
+    {
+      "id": "esp32c6-uart",
+      "chip": "esp32c6",
+      "console": "uart",
+      "profile": "development",
+      "walletEntropy": false,
+      "experimental": false,
+      "idf": {
+        "tag": "v6.1",
+        "revision": "fff9895c82d744c7237be8847347bdd1b07c6643"
+      },
+      "rust": "1.99.1",
+      "sourceSha256": "855852089c4467079090b1a5d7fe591b590a3d3cd7574c112024d6885ed9e5f3",
+      "flashSize": "4MB",
+      "segments": [
+        {
+          "file": "esp32c6-uart/bootloader.bin",
+          "address": 0,
+          "size": 22096,
+          "sha256": "6e836b7e9e2d7545ffe3e81d0eeca93eaf95a94e505f1e3c0063ed1db569fe0d"
+        },
+        {
+          "file": "esp32c6-uart/partition-table.bin",
+          "address": 65536,
+          "size": 3072,
+          "sha256": "1ddfbebf4701502f7e3256a233f98aa6d49e74fbbc76bcd38f5f6d9c5822c9e4"
+        },
+        {
+          "file": "esp32c6-uart/ota_data_initial.bin",
+          "address": 86016,
+          "size": 8192,
+          "sha256": "7d2c7ac4888bfd75cd5f56e8d61f69595121183afc81556c876732fd3782c62f"
+        },
+        {
+          "file": "esp32c6-uart/tarot-art.bin",
+          "address": 2228224,
+          "size": 1966080,
+          "sha256": "b75a02fe2d11b9eb5581eabb9fc2b3b088804913e4e6ac9e5b13d7c098a2ff1d"
+        },
+        {
+          "file": "esp32c6-uart/cibyp_trng.bin",
+          "address": 131072,
+          "size": 980256,
+          "sha256": "30322d9fd848391dbdb1e34a69ae5ecf570953b867fdb67b284198a386ea1802"
+        }
+      ]
+    },
+    {
+      "id": "esp32c6-usb",
+      "chip": "esp32c6",
+      "console": "usb",
+      "profile": "development",
+      "walletEntropy": false,
+      "experimental": false,
+      "idf": {
+        "tag": "v6.1",
+        "revision": "fff9895c82d744c7237be8847347bdd1b07c6643"
+      },
+      "rust": "1.99.1",
+      "sourceSha256": "855852089c4467079090b1a5d7fe591b590a3d3cd7574c112024d6885ed9e5f3",
+      "flashSize": "4MB",
+      "segments": [
+        {
+          "file": "esp32c6-usb/bootloader.bin",
+          "address": 0,
+          "size": 22128,
+          "sha256": "fda3c45207bd581c10f3d62961285e42f28900ddc007a07b5645021b23c7e6e6"
+        },
+        {
+          "file": "esp32c6-usb/partition-table.bin",
+          "address": 65536,
+          "size": 3072,
+          "sha256": "1ddfbebf4701502f7e3256a233f98aa6d49e74fbbc76bcd38f5f6d9c5822c9e4"
+        },
+        {
+          "file": "esp32c6-usb/ota_data_initial.bin",
+          "address": 86016,
+          "size": 8192,
+          "sha256": "7d2c7ac4888bfd75cd5f56e8d61f69595121183afc81556c876732fd3782c62f"
+        },
+        {
+          "file": "esp32c6-usb/tarot-art.bin",
+          "address": 2228224,
+          "size": 1966080,
+          "sha256": "b75a02fe2d11b9eb5581eabb9fc2b3b088804913e4e6ac9e5b13d7c098a2ff1d"
+        },
+        {
+          "file": "esp32c6-usb/cibyp_trng.bin",
+          "address": 131072,
+          "size": 976192,
+          "sha256": "07029a081390587c6fccdd2765b34a7821680c92355ce17d77621b89818c73ff"
+        }
+      ]
+    },
+    {
+      "id": "esp32s31-uart",
+      "chip": "esp32s31",
+      "console": "uart",
+      "profile": "development",
+      "walletEntropy": false,
+      "experimental": true,
+      "idf": {
+        "tag": "v6.1",
+        "revision": "fff9895c82d744c7237be8847347bdd1b07c6643"
+      },
+      "rust": "1.99.1",
+      "sourceSha256": "855852089c4467079090b1a5d7fe591b590a3d3cd7574c112024d6885ed9e5f3",
+      "flashSize": "4MB",
+      "segments": [
+        {
+          "file": "esp32s31-uart/bootloader.bin",
+          "address": 8192,
+          "size": 22224,
+          "sha256": "97ee3f66bfb83819c16c0a1b4b8443ebb6e07a7eecee8f8c7db783ade56ccfc8"
+        },
+        {
+          "file": "esp32s31-uart/partition-table.bin",
+          "address": 65536,
+          "size": 3072,
+          "sha256": "1ddfbebf4701502f7e3256a233f98aa6d49e74fbbc76bcd38f5f6d9c5822c9e4"
+        },
+        {
+          "file": "esp32s31-uart/ota_data_initial.bin",
+          "address": 86016,
+          "size": 8192,
+          "sha256": "7d2c7ac4888bfd75cd5f56e8d61f69595121183afc81556c876732fd3782c62f"
+        },
+        {
+          "file": "esp32s31-uart/tarot-art.bin",
+          "address": 2228224,
+          "size": 1966080,
+          "sha256": "b75a02fe2d11b9eb5581eabb9fc2b3b088804913e4e6ac9e5b13d7c098a2ff1d"
+        },
+        {
+          "file": "esp32s31-uart/cibyp_trng.bin",
+          "address": 131072,
+          "size": 944496,
+          "sha256": "ad2e595a7d3cf89005ddf2b8d88ec10480b67f23e8c9c0a9133acc55f3e29eee"
+        }
+      ]
+    },
+    {
+      "id": "esp32s31-usb",
+      "chip": "esp32s31",
+      "console": "usb",
+      "profile": "development",
+      "walletEntropy": false,
+      "experimental": true,
+      "idf": {
+        "tag": "v6.1",
+        "revision": "fff9895c82d744c7237be8847347bdd1b07c6643"
+      },
+      "rust": "1.99.1",
+      "sourceSha256": "855852089c4467079090b1a5d7fe591b590a3d3cd7574c112024d6885ed9e5f3",
+      "flashSize": "4MB",
+      "segments": [
+        {
+          "file": "esp32s31-usb/bootloader.bin",
+          "address": 8192,
+          "size": 22304,
+          "sha256": "d7e6c7c1b9d065e0f1b85131a52e8b9c044c5663cfc70044f4f5636b212c86a9"
+        },
+        {
+          "file": "esp32s31-usb/partition-table.bin",
+          "address": 65536,
+          "size": 3072,
+          "sha256": "1ddfbebf4701502f7e3256a233f98aa6d49e74fbbc76bcd38f5f6d9c5822c9e4"
+        },
+        {
+          "file": "esp32s31-usb/ota_data_initial.bin",
+          "address": 86016,
+          "size": 8192,
+          "sha256": "7d2c7ac4888bfd75cd5f56e8d61f69595121183afc81556c876732fd3782c62f"
+        },
+        {
+          "file": "esp32s31-usb/tarot-art.bin",
+          "address": 2228224,
+          "size": 1966080,
+          "sha256": "b75a02fe2d11b9eb5581eabb9fc2b3b088804913e4e6ac9e5b13d7c098a2ff1d"
+        },
+        {
+          "file": "esp32s31-usb/cibyp_trng.bin",
+          "address": 131072,
+          "size": 939824,
+          "sha256": "d9ebdb1df85e55c7aec802d979bdf590ba0e6d0e66022c06cf4104ce9690706c"
+        }
+      ]
+    }
+  ]
+}

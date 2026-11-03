@@ -374,7 +374,8 @@ ipcMain.once('app:renderer-ready', (event) =>
       await until(()=>document.documentElement.dataset.frontend==='v2');
       search.value=''; search.dispatchEvent(new Event('input'));
       const pages=[...document.querySelectorAll('#main-content > .page')].map(page=>page.id.slice(5));
-      for(const page of pages.filter(p=>!['code','babe','code-history','babe-history'].includes(p))) {
+      check(document.querySelector('.nav-item[data-page="quant"]').hidden,'Quant gate did not hide navigation');
+      for(const page of pages.filter(p=>!['quant','code','babe','code-history','babe-history'].includes(p))) {
         window.navigatePage(page); await paint();
         check(document.getElementById('page-'+page).classList.contains('active'),page+' cannot open');
         check(!document.getElementById('page-'+page).inert,page+' remains inert');
@@ -393,6 +394,20 @@ ipcMain.once('app:renderer-ready', (event) =>
     })()`);
       await screenshot('v2-settings');
       console.log('[frontend-shell] All shared page and settings destinations passed');
+      await contents.executeJavaScript(`(async()=>{${checkHelpers}
+        window.navigatePage('superagent');
+        await until(()=>document.querySelector('#page-superagent .super-composer'));
+        check(window.CibypSuperAgent,'Shared SuperAgent component missing');
+        check(document.querySelector('.nav-item[data-page="superagent"] .v2-icon').innerHTML !== document.querySelector('.nav-item[data-page="automation"] .v2-icon').innerHTML,'SuperAgent and automation icons are indistinguishable');
+        check(document.querySelector('#page-superagent .super-shell').getBoundingClientRect().width > document.querySelector('#page-superagent').clientWidth * .85,'SuperAgent content is too narrow');
+        check(document.querySelectorAll('#page-superagent .super-error:not([hidden])').length===0,'SuperAgent backend unavailable');
+        await paint();
+      })()`);
+      await screenshot('superagent-full-app');
+      if (process.argv.includes('--superagent-preview')) {
+        finish();
+        return;
+      }
       await contents.executeJavaScript(`(async()=>{${checkHelpers}
       document.getElementById('mode-btn-babe').click();
       await until(()=>window.getCurrentMode()==='babe' && window.__sessionManager.getActive('babe'));

@@ -45,6 +45,11 @@ function fill(template, params) {
 /** TUI 文案词典：键 = ui.tui.*；值 = 译文（{name} 可作占位符） */
 const DICT = {
   en: {
+    'ui.tui.cmd.super': 'Open SuperAgent tasks and run preferences',
+    'ui.tui.cmd.wallet': 'Manage native wallets, unlock, live approvals and history',
+    'ui.tui.cmd.goal': 'Set or manage an Agent goal',
+    'ui.tui.args.goal': '<objective | status | pause | resume | clear>',
+    'ui.tui.cmd.quant': 'View the quant workbench summary',
     'ui.tui.brand': 'CIBYP · your all-round AI partner · terminal mode (/help for commands)',
     'ui.tui.mode.chat': 'Switched to Chat mode',
     'ui.tui.mode.babe': 'Switched to Babe mode (affection {value})',
@@ -216,6 +221,11 @@ const DICT = {
     'ui.tui.vmdeskFailed': 'failed to open the VM desktop: {error}',
   },
   de: {
+    'ui.tui.cmd.super': 'SuperAgent-Aufgaben und Ausführungseinstellungen öffnen',
+    'ui.tui.cmd.wallet': 'Native Wallets, Entsperrung, Live-Freigaben und Verlauf verwalten',
+    'ui.tui.cmd.goal': 'Agent-Ziel festlegen oder verwalten',
+    'ui.tui.args.goal': '<Ziel | status | pause | resume | clear>',
+    'ui.tui.cmd.quant': 'Übersicht des Quant-Arbeitsbereichs anzeigen',
     'ui.tui.workspaceFailed':
       'Arbeitsbereich konnte nicht initialisiert werden: {error}\nMit /workspace ein Verzeichnis wählen oder mit /config die Einstellungen ändern. Der Entwurf bleibt erhalten; Senden erfordert einen bereiten Arbeitsbereich.',
     'ui.tui.brand': 'CIBYP · dein Allround-KI-Partner · Terminalmodus (/help für Befehle)',

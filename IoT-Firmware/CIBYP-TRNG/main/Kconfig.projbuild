@@ -1,0 +1,12 @@
+menu "CIBYP TRNG"
+config CIBYP_CONFIRM_GPIO
+    int "Physical confirmation button GPIO (-1 disables pairing)"
+    range -1 54
+    default 9 if IDF_TARGET_ESP32C6 || IDF_TARGET_ESP32C3
+    default 0 if IDF_TARGET_ESP32 || IDF_TARGET_ESP32S3
+    default -1
+    help
+        Verify the actual BOARD schematic before changing this value. Never
+        guess a pin for an experimental target such as ESP32-S31. Pairing
+        additionally requires provisioned security and a two-second press.
+endmenu

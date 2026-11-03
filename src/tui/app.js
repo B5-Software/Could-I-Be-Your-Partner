@@ -29,6 +29,9 @@ const { t, setLanguage } = require('./text.js');
 const { pointAt, selectedText } = require('./selection');
 const { ConfigBrowser } = require('./config');
 const { TranscriptSearch } = require('./transcript-search');
+const { WalletBrowser } = require('./wallet');
+const { QuantBrowser } = require('./quant');
+const { SuperAgentBrowser } = require('./super-agent');
 
 const MODES = ['chat', 'babe', 'code'];
 
@@ -78,6 +81,9 @@ class TuiApp {
     };
 
     this.configBrowser = new ConfigBrowser(this);
+    this.walletBrowser = new WalletBrowser(this);
+    this.quantBrowser = new QuantBrowser(this);
+    this.superAgentBrowser = new SuperAgentBrowser(this);
     this.transcriptSearch = new TranscriptSearch(this);
     this.activeKey = null;
     this.quitArmedAt = null;
@@ -97,6 +103,7 @@ class TuiApp {
     const mode = MODES.includes(opts.mode) ? opts.mode : 'chat';
     this.state.mode = mode;
     this._unsubscribe = this.runtime.onEvent((event) => {
+      if (event.type === 'wallet-changed') void this.walletBrowser.changed().catch(() => {});
       this._eventQueue = this._eventQueue
         .then(() => this.handleRuntimeEvent(event))
         .catch(() => {});
@@ -178,6 +185,7 @@ class TuiApp {
    */
   _applySettings(settings) {
     if (!settings) return;
+    this.quantAllowed = require('../shared/feature-gates').quantEnabled(settings);
     this.theme = themeFromSettings(settings, this.env, this._systemDark);
     if (settings.tui) this._thinkingExpanded = settings.tui.thinkingExpanded !== false;
     this.state.thinkingExpanded = this._thinkingExpanded;
@@ -222,6 +230,7 @@ class TuiApp {
   }
 
   dispose() {
+    this.walletBrowser.disposeSensitive();
     this._disposed = true;
     if (this._unsubscribe) this._unsubscribe();
     this._unsubscribeRelationship?.();
@@ -323,7 +332,10 @@ class TuiApp {
     if (!trimmed.startsWith('/')) return null;
     const hasSpace = /\s/.test(trimmed);
     if (!hasSpace) {
-      const items = suggestCommands(trimmed, { customCommands: this.customCommands });
+      const items = suggestCommands(trimmed, {
+        customCommands: this.customCommands,
+        quantEnabled: this.quantAllowed === true,
+      });
       if (items.length === 0) return null;
       return {
         kind: 'command',
@@ -755,6 +767,10 @@ class TuiApp {
     if (modal.inputMode) {
       // 问答的自由文本输入
       if (key.name === 'enter' && !key.alt) {
+        if (modal.onSubmit) {
+          await modal.onSubmit();
+          return true;
+        }
         const value = modal.editor.value.trim();
         if (modal.kind === 'renameInput') {
           if (!value) {
@@ -824,6 +840,12 @@ class TuiApp {
     if (!modal) return;
     const option = (modal.options || [])[index];
     if (!option) return;
+    if (modal.onChoose) {
+      modal.onDispose?.();
+      this.state.modal = null;
+      await modal.onChoose(option.value);
+      return;
+    }
     if (modal.kind === 'ask' && modal.questionnaire) {
       if (modal.busy) return;
       await this._applyQuestionAction(modal.questionnaire.choose(modal, index), modal);
@@ -962,6 +984,13 @@ class TuiApp {
     }
     this.state.modal = null;
     if (!modal) return;
+    modal.onDispose?.();
+    if (modal.onCancel) {
+      void Promise.resolve(modal.onCancel()).catch((error) => {
+        this.state.toast = { type: 'error', text: error.message, expiresAt: this.clock() + 6000 };
+      });
+      return;
+    }
     if (modal.kind === 'approval') {
       this.runtime.respond(this.activeKey, false);
     } else if (modal.kind === 'toolAuth') {
@@ -1483,6 +1512,7 @@ class TuiApp {
   async _switchSession(key, { reload = false } = {}) {
     const session = this.runtime.getSession(key);
     if (!session) return;
+    this.walletBrowser.disposeSensitive();
     if (!reload) this._saveView();
     else this._sessionViews.delete(key);
     this._completionSelected = 0;
@@ -1655,7 +1685,9 @@ class TuiApp {
           kind: 'help',
           colorKey: 'permission',
           title: t('ui.tui.helpTitle', '命令表'),
-          body: helpLines(this.customCommands).join('\n'),
+          body: helpLines(this.customCommands, { quantEnabled: this.quantAllowed === true }).join(
+            '\n',
+          ),
           options: [{ label: t('ui.tui.helpClose', '关闭'), value: 'close' }],
           selected: 0,
         };
@@ -1798,6 +1830,37 @@ class TuiApp {
       case 'config':
         await this.configBrowser.open(argText.trim());
         return;
+      case 'goal': {
+        const text = argText.trim();
+        const action = !text
+          ? 'status'
+          : ['status', 'pause', 'resume', 'clear'].includes(text)
+            ? text
+            : 'set';
+        const key = this.activeKey;
+        const goal = await this.runtime.goalCommand(key, action, action === 'set' ? text : '');
+        this.pushEntry({
+          kind: 'notice',
+          text: goal
+            ? `${goal.status} · ${goal.objective}\n${goal.turnsExecuted} turns · ${goal.tokensUsed} tokens`
+            : t('ui.goal.none', '当前没有目标'),
+        });
+        return;
+      }
+      case 'quant': {
+        if (!require('../shared/feature-gates').quantEnabled(await this.runtime.getSettings()))
+          throw Error('QUANT_DISABLED');
+        await this.quantBrowser.open();
+        return;
+      }
+      case 'super': {
+        await this.superAgentBrowser.open();
+        return;
+      }
+      case 'wallet': {
+        await this.walletBrowser.open();
+        return;
+      }
       case 'devices':
       case 'hardware': {
         const call = async (method, params) => {

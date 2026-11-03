@@ -36,6 +36,15 @@ function localizeCommand(cmd) {
 
 /** 内置命令表 */
 const COMMANDS = [
+  { name: 'super', args: '', desc: 'SuperAgent', group: 'general' },
+  {
+    name: 'goal',
+    args: '[目标|status|pause|resume|clear]',
+    desc: '设置持续推进的目标，直至 Agent 标记完成',
+    group: 'session',
+  },
+  { name: 'quant', args: '', desc: '查看量化项目和模拟执行状态', group: 'general' },
+  { name: 'wallet', args: '', desc: '管理原生钱包、解锁、实盘授权与交易历史', group: 'general' },
   {
     name: 'claude',
     args: '[login|code|cancel|logout|model]',
@@ -205,6 +214,7 @@ function suggestCommands(partial, options = {}) {
   const query = text.slice(1).split(/\s/)[0].toLowerCase();
   const items = [];
   for (const cmd of COMMANDS) {
+    if (cmd.name === 'quant' && options.quantEnabled !== true) continue;
     if (!cmd.name.startsWith(query)) continue;
     const localized = localizeCommand(cmd);
     items.push({
@@ -273,14 +283,14 @@ function expandCustomCommand(command, argText) {
 }
 
 /** /help 内容行（按分组） */
-function helpLines(customCommands) {
+function helpLines(customCommands, options = {}) {
   const groups = new Map();
   const push = (cmd) => {
     const key = cmd.group || 'general';
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(cmd);
   };
-  COMMANDS.forEach(push);
+  COMMANDS.filter((c) => c.name !== 'quant' || options.quantEnabled === true).forEach(push);
   if (customCommands) for (const cmd of customCommands.values()) push(cmd);
 
   const titles = {

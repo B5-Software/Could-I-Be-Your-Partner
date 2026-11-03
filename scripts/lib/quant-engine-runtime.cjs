@@ -1,0 +1,206 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later */
+'use strict';
+const fs = require('node:fs'),
+  path = require('node:path'),
+  { spawnSync } = require('node:child_process'),
+  { gzipSync } = require('node:zlib');
+const runtime = require('../../src/main/services/quant/native-binary');
+const { lock, target, sha256, readRegular, executable, decode, MAX_BINARY } = runtime;
+const root = path.resolve(__dirname, '../..'),
+  preparing = new Map();
+function sourceHash(project = root) {
+  const inputs = ['Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml'];
+  const visit = (folder) => {
+    for (const item of fs.readdirSync(path.join(project, 'native/quant-engine', folder), {
+      withFileTypes: true,
+    })) {
+      if (item.isSymbolicLink()) throw Error('NATIVE_SOURCE_SYMLINK');
+      const relative = folder + '/' + item.name;
+      if (item.isDirectory()) visit(relative);
+      else if (item.isFile() && item.name.endsWith('.rs')) inputs.push(relative);
+    }
+  };
+  visit('src');
+  if (fs.existsSync(path.join(project, 'native/quant-engine/build.rs'))) inputs.push('build.rs');
+  if (fs.existsSync(path.join(project, 'native/quant-engine/.cargo/config.toml')))
+    inputs.push('.cargo/config.toml');
+  const files = inputs
+    .sort()
+    .map((file) => [
+      file,
+      fs
+        .readFileSync(path.join(project, 'native/quant-engine', file), 'utf8')
+        .replace(/\r\n/g, '\n'),
+    ]);
+  files.push([
+    'runtime-lock.json',
+    fs
+      .readFileSync(path.join(project, 'integrations/quant/runtime-lock.json'), 'utf8')
+      .replace(/\r\n/g, '\n'),
+  ]);
+  for (const file of [
+    'scripts/lib/quant-engine-runtime.cjs',
+    'src/main/services/quant/native-binary.js',
+    'src/main/services/native-resource.js',
+    'LICENSE',
+  ])
+    files.push([file, fs.readFileSync(path.join(project, file), 'utf8').replace(/\r\n/g, '\n')]);
+  return sha256(Buffer.from(JSON.stringify(files)));
+}
+function execute(program, args, options = {}) {
+  const result = spawnSync(program, args, {
+    windowsHide: true,
+    stdio: 'inherit',
+    shell: false,
+    ...options,
+  });
+  if (result.error || result.status !== 0)
+    throw Error(
+      'Native quant build failed: ' + program + ' ' + (result.error?.message || result.status),
+    );
+  return result;
+}
+function stage(
+  binary,
+  destination,
+  platform = process.platform,
+  arch = process.arch,
+  metadata = {},
+) {
+  const spec = target(platform, arch),
+    bytes = readRegular(binary, MAX_BINARY);
+  executable(bytes, platform, arch);
+  const compressed = gzipSync(bytes, { level: 9 });
+  const value = {
+    schemaVersion: 1,
+    format: lock.format,
+    protocol: lock.protocol,
+    engineVersion: lock.engineVersion,
+    toolchain: lock.toolchain,
+    target: spec.key,
+    rustTarget: spec.rust,
+    binary: spec.binary,
+    archive: 'engine.gz',
+    size: bytes.length,
+    archiveSize: compressed.length,
+    sha256: sha256(bytes),
+    archiveSha256: sha256(compressed),
+    sourceHash: metadata.sourceHash || sourceHash(),
+    signing: metadata.signing || 'none',
+  };
+  runtime.manifest(value, platform, arch);
+  fs.mkdirSync(destination, { recursive: true });
+  const archive = path.join(destination, 'engine.gz'),
+    manifest = path.join(destination, 'manifest.json');
+  fs.writeFileSync(archive + '.tmp', compressed);
+  fs.renameSync(archive + '.tmp', archive);
+  fs.writeFileSync(manifest + '.tmp', JSON.stringify(value, null, 2) + '\n');
+  fs.renameSync(manifest + '.tmp', manifest);
+  fs.copyFileSync(path.join(root, 'LICENSE'), path.join(destination, 'LICENSE'));
+  return { directory: destination, manifest: value };
+}
+async function prepareQuantEngine(platform = process.platform, arch = process.arch, options = {}) {
+  const spec = target(platform, arch),
+    directory = options.destination || path.join(root, 'assets/quant-engine', spec.asset),
+    fingerprint = sourceHash();
+  const expectedSigning =
+    platform === 'darwin'
+      ? process.env.CIBYP_QUANT_SIGN_IDENTITY
+        ? 'identity:' + sha256(Buffer.from(process.env.CIBYP_QUANT_SIGN_IDENTITY))
+        : 'adhoc'
+      : 'none';
+  const key = directory + ':' + fingerprint + ':' + expectedSigning;
+  if (preparing.has(key)) return preparing.get(key);
+  const task = Promise.resolve()
+    .then(() => {
+      try {
+        const value = decode(directory, platform, arch).manifest;
+        if (
+          !options.rebuild &&
+          value.sourceHash === fingerprint &&
+          value.signing === expectedSigning
+        )
+          return { directory, manifest: value };
+      } catch {}
+      if (platform !== process.platform || arch !== process.arch)
+        throw Error(
+          'Native quant engine must be built on its target host or supplied as a verified prepared asset: ' +
+            spec.key,
+        );
+      const crate = path.join(root, 'native/quant-engine');
+      if (
+        fs
+          .readFileSync(path.join(crate, 'Cargo.toml'), 'utf8')
+          .match(/^version\s*=\s*"([^"]+)"/m)?.[1] !== lock.engineVersion ||
+        fs
+          .readFileSync(path.join(crate, 'rust-toolchain.toml'), 'utf8')
+          .match(/^channel\s*=\s*"([^"]+)"/m)?.[1] !== lock.toolchain
+      )
+        throw Error('Native engine version/toolchain differs from its runtime lock');
+      const env = { ...process.env };
+      for (const key of Object.keys(env))
+        if (
+          /RUSTFLAGS$/.test(key) ||
+          ['RUSTC', 'RUSTC_WRAPPER', 'RUSTC_WORKSPACE_WRAPPER', 'CARGO_BUILD_RUSTC'].includes(key)
+        )
+          delete env[key];
+      env.CARGO_TARGET_DIR = path.join(crate, 'target');
+      env.CARGO_INCREMENTAL = '0';
+      if (spec.staticCrt) env.RUSTFLAGS = '-C target-feature=+crt-static';
+      if (platform === 'linux')
+        env['CARGO_TARGET_' + spec.rust.toUpperCase().replace(/-/g, '_') + '_LINKER'] = 'musl-gcc';
+      execute(
+        'cargo',
+        ['+' + lock.toolchain, 'build', '--release', '--locked', '--target', spec.rust],
+        { cwd: crate, env },
+      );
+      const binary = path.join(crate, 'target', spec.rust, 'release', spec.binary);
+      let signing = 'none';
+      if (platform === 'darwin') {
+        const identity = process.env.CIBYP_QUANT_SIGN_IDENTITY || '-';
+        execute('/usr/bin/codesign', [
+          '--force',
+          '--sign',
+          identity,
+          ...(identity === '-' ? ['--timestamp=none'] : ['--timestamp']),
+          '--options',
+          'runtime',
+          binary,
+        ]);
+        execute('/usr/bin/codesign', ['--verify', '--strict', binary]);
+        signing = expectedSigning;
+      }
+      if (sourceHash() !== fingerprint)
+        throw Error('Native sources changed during compilation; rebuild the runtime');
+      const result = stage(binary, directory, platform, arch, { sourceHash: fingerprint, signing });
+      console.log(
+        '[quant-engine] Prepared verified native resource ' +
+          spec.key +
+          ' ' +
+          result.manifest.sha256,
+      );
+      return result;
+    })
+    .finally(() => preparing.delete(key));
+  preparing.set(key, task);
+  return task;
+}
+module.exports = { prepareQuantEngine, sourceHash, stage };
+if (require.main === module) {
+  const args = process.argv.slice(2),
+    value = (name) => {
+      const i = args.indexOf(name);
+      return i < 0 ? undefined : args[i + 1];
+    };
+  if (args.includes('--install-toolchain')) {
+    const spec = target(value('--platform'), value('--arch'));
+    execute('rustup', ['toolchain', 'install', lock.toolchain, '--profile', 'minimal']);
+    execute('rustup', ['target', 'add', '--toolchain', lock.toolchain, spec.rust]);
+  } else
+    prepareQuantEngine(value('--platform'), value('--arch'), {
+      rebuild: args.includes('--rebuild'),
+    }).catch((error) => {
+      console.error('[quant-engine]', error.message);
+      process.exitCode = 1;
+    });
+}

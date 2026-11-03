@@ -1,0 +1,53 @@
+{
+  "zh": {
+    "esRetry": "重试保存 / 暂停",
+    "esTitle": "实盘安全",
+    "esReady": "实盘停止锁未启用",
+    "esHalt": "停止所有实盘",
+    "esStopped": "所有钱包的实盘发送已停止",
+    "esScope": "当前停止锁覆盖所有钱包和工作区；签名与新广播仍被阻止，仿真账户不受影响。",
+    "esResidual": "已广播交易可能继续成交，链上代币授权仍存在。请继续核对交易状态。",
+    "esReset": "解除实盘停止锁",
+    "esResetHint": "解除后，钱包保持锁定、权限恢复逐笔人工确认，策略不会自动重启。之后需单独解锁、授权及启动。",
+    "esRead": "我已了解，继续",
+    "esConfirm": "确认解除停止锁",
+    "esAck": "输入 RESET LIVE 进行第二次确认",
+    "esPending": "原生计划正在暂停，尚未确认完成。",
+    "esReconcile": "待核实的交易",
+    "esBlocked": "此意图已被实盘停止锁阻止，不能继续批准或发送。"
+  },
+  "en": {
+    "esRetry": "Retry saving / pausing",
+    "esTitle": "Live execution safety",
+    "esReady": "Global live stop is not engaged",
+    "esHalt": "Stop all live execution",
+    "esStopped": "Live sending is stopped for every wallet",
+    "esScope": "The current live stop covers every wallet and workspace. Signing and new broadcasts remain blocked; PAPER accounts are unaffected.",
+    "esResidual": "Accepted transactions can still execute and on-chain token approvals remain. Continue reconciling their status.",
+    "esReset": "Clear live stop latch",
+    "esResetHint": "Wallets stay locked, permissions return to per-operation human approval and strategies do not restart. Unlock, authorize and start separately.",
+    "esRead": "I understand; continue",
+    "esConfirm": "Confirm clearing the stop",
+    "esAck": "Type RESET LIVE for the second confirmation",
+    "esPending": "Native plans are being paused. Completion is not confirmed yet.",
+    "esReconcile": "Transactions requiring reconciliation",
+    "esBlocked": "The live stop blocks this intent. It cannot be approved or sent."
+  },
+  "de": {
+    "esRetry": "Speichern / Pausieren erneut versuchen",
+    "esTitle": "Sicherheit der Live-Ausführung",
+    "esReady": "Der globale Live-Stopp ist nicht aktiv",
+    "esHalt": "Alle Live-Ausführungen stoppen",
+    "esStopped": "Live-Senden ist für alle Wallets gestoppt",
+    "esScope": "Der aktuelle Live-Stopp gilt für alle Wallets und Arbeitsbereiche. Signaturen und neue Übertragungen bleiben blockiert; PAPER-Konten bleiben unberührt.",
+    "esResidual": "Akzeptierte Transaktionen können noch ausgeführt werden; Token-Freigaben auf der Blockchain bleiben bestehen. Ergebnisse weiter abgleichen.",
+    "esReset": "Live-Stopp-Sperre aufheben",
+    "esResetHint": "Wallets bleiben gesperrt, einzelne Vorgänge benötigen wieder menschliche Freigabe und Strategien starten nicht neu. Entsperren, autorisieren und starten Sie separat.",
+    "esRead": "Verstanden; weiter",
+    "esConfirm": "Aufheben der Sperre bestätigen",
+    "esAck": "Zur zweiten Bestätigung RESET LIVE eingeben",
+    "esPending": "Native Pläne werden pausiert. Der Abschluss ist noch nicht bestätigt.",
+    "esReconcile": "Abzugleichende Transaktionen",
+    "esBlocked": "Der Live-Stopp blockiert diesen Vorgang. Er kann weder freigegeben noch gesendet werden."
+  }
+}

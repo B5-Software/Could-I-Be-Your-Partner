@@ -696,6 +696,7 @@ async function createNodeRuntime({
         await server?.stop();
         dispatch.remote.close();
         llmRetry.abortAllRequests();
+        await runtime.dispose();
         await extensions.close();
         clearTimeout(decision._persistTimer);
         persistSettings();

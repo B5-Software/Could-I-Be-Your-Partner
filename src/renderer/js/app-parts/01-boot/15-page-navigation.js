@@ -3,6 +3,7 @@
   const navigationLoads = new Map();
   const primaryPages = new Set(['chat', 'code', 'babe']);
   function navigatePage(name) {
+    if (name === 'quant' && !quantEnabled(agent?.settings)) return false;
     let page = document.getElementById('page-' + name);
     if (!page) return false;
     const pages = [...document.querySelectorAll('#main-content > .page')];

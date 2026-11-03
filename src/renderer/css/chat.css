@@ -2415,6 +2415,9 @@ body.code-immersive .code-toolbar button { -webkit-app-region: no-drag; }
 .tarot-spread-card.reversed .card-icon {
   transform: rotate(180deg);
 }
+.tarot-spread-card .card-artwork { aspect-ratio: 2 / 3; margin: 8px 0 10px; overflow: hidden; border-radius: 8px; background: var(--bg-primary); }
+.tarot-spread-card .card-artwork img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.tarot-spread-card.reversed .card-artwork img { transform: rotate(180deg); }
 .tarot-spread-card .card-meaning {
   font-size: 0.75em;
   color: var(--text-secondary);

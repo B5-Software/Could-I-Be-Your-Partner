@@ -169,28 +169,23 @@ module.exports = function registerWorkspacesIpc({
         properties: ['openDirectory', 'createDirectory'],
       });
       if (result.canceled || !result.filePaths.length) return { ok: false, error: '用户取消' };
-      const destDir = path.join(result.filePaths[0], 'CIBYP-TRNG');
+      const destDir = path.join(result.filePaths[0], 'CIBYP-TRNG-Rust-IDF-' + Date.now());
       const srcDir = path.join(app.getAppPath(), 'IoT-Firmware', 'CIBYP-TRNG');
 
-      // 创建目标目录
-      if (!fs.existsSync(destDir)) fs.mkdirSync(destDir, { recursive: true });
-
-      // 复制所有文件
-      function copyDir(src, dest) {
-        if (!fs.existsSync(dest)) fs.mkdirSync(dest, { recursive: true });
-        const entries = fs.readdirSync(src, { withFileTypes: true });
-        for (const entry of entries) {
-          const srcPath = path.join(src, entry.name);
-          const destPath = path.join(dest, entry.name);
-          if (entry.isDirectory()) {
-            copyDir(srcPath, destPath);
-          } else {
-            fs.copyFileSync(srcPath, destPath);
-          }
-        }
+      for (const relative of require('../services/firmware/source-files.json')) {
+        const source = path.join(srcDir, relative),
+          target = path.join(destDir, relative);
+        if (!fs.lstatSync(source).isFile() || fs.lstatSync(source).isSymbolicLink())
+          throw new Error('Invalid firmware source');
+        fs.mkdirSync(path.dirname(target), { recursive: true });
+        fs.copyFileSync(source, target);
       }
-
-      copyDir(srcDir, destDir);
+      const artDirectory = path.join(app.getAppPath(), 'assets/trng-firmware');
+      const firmware = require('../services/firmware');
+      const manifest = new firmware.FirmwareService({ directory: artDirectory }).manifest();
+      const archive = firmware.readArtArchive(artDirectory, manifest);
+      fs.mkdirSync(path.join(destDir, 'resources'), { recursive: true });
+      fs.writeFileSync(path.join(destDir, 'resources/tarot-art.bin'), archive);
       return { ok: true, path: destDir };
     } catch (e) {
       return { ok: false, error: e.message };

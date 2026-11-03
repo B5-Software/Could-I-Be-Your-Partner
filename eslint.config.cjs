@@ -22,6 +22,7 @@ module.exports = [
       '.cache/**',
       'dist*/**',
       'assets/**',
+      '**/target/**',
       'claude-code-ref/**',
       '.cibyp-test-fixtures-*/**',
       'src/renderer/js/app.js',

@@ -1,0 +1,50 @@
+{
+  "zh-CN": {
+    "limitsTitle": "授权范围与签名预算",
+    "limitsHint": "预算在本次授权有效期内累计，数值 0 / 空名单表示不限。签名后即占用预算，停止或未广播不会退还。ETH 金额仅限制交易 value，不限制代币或合约的其他支出；地址和方法仅检查最外层调用。填写名单可用空格、逗号或换行分隔。开启自动替换后也会继续计入预算，不绕过停止锁或计划权限。",
+    "maxValueEth": "单笔 ETH 金额上限",
+    "maxTotalValueEth": "累计签名 ETH 金额上限",
+    "maxTotalFeeEth": "累计费用预留上限（ETH）",
+    "maxTransactions": "最多签名笔数",
+    "targets": "交易目标地址 / 合约白名单",
+    "selectors": "最外层方法白名单（如 0xa9059cbb）",
+    "allowCalldata": "允许携带调用数据（含代币操作 / 兑换）",
+    "allowReplacement": "允许按原签名哈希自动替换同一 nonce",
+    "limitsNone": "不限",
+    "limitsOn": "开启",
+    "limitsOff": "关闭",
+    "limitsNext": "检查范围并继续"
+  },
+  "en": {
+    "limitsTitle": "Authority scope and signing budgets",
+    "limitsHint": "Budgets accumulate over this grant; 0 or an empty list means unlimited. Signed operations consume budget even if stopped or never broadcast. ETH limits cover transaction value, not token or other contract spending. Targets and methods apply only to the outer call. Separate lists with spaces, commas or newlines. Automatic nonce replacement also consumes budget and cannot bypass a stop or plan authority.",
+    "maxValueEth": "Maximum ETH value per signature",
+    "maxTotalValueEth": "Total signed ETH value budget",
+    "maxTotalFeeEth": "Total fee reserve budget (ETH)",
+    "maxTransactions": "Maximum signatures",
+    "targets": "Allowed outer destination addresses / contracts",
+    "selectors": "Allowed outer method selectors (e.g. 0xa9059cbb)",
+    "allowCalldata": "Allow call data, including token operations / swaps",
+    "allowReplacement": "Allow automatic nonce replacement bound to the previous hash",
+    "limitsNone": "Unlimited",
+    "limitsOn": "On",
+    "limitsOff": "Off",
+    "limitsNext": "Review scope and continue"
+  },
+  "de": {
+    "limitsTitle": "Berechtigungsumfang und Signaturbudgets",
+    "limitsHint": "Budgets gelten kumulativ für diese Berechtigung; 0 oder eine leere Liste bedeutet unbegrenzt. Signierte Vorgänge verbrauchen Budget auch ohne Versand. ETH-Grenzen betreffen den Transaktionswert, keine Token oder sonstigen Vertragsausgaben. Ziele und Methoden prüfen nur den äußeren Aufruf. Listen mit Leerzeichen, Kommas oder Zeilenumbrüchen trennen. Automatische Ersetzungen verbrauchen ebenfalls Budget und umgehen weder Stopp noch Planberechtigung.",
+    "maxValueEth": "ETH-Höchstwert pro Signatur",
+    "maxTotalValueEth": "Gesamtbudget signierter ETH-Werte",
+    "maxTotalFeeEth": "Gesamtbudget der Gebührenreserve (ETH)",
+    "maxTransactions": "Maximale Signaturanzahl",
+    "targets": "Erlaubte äußere Zieladressen / Verträge",
+    "selectors": "Erlaubte äußere Methodenselektoren (z. B. 0xa9059cbb)",
+    "allowCalldata": "Aufrufdaten zulassen, einschließlich Token / Tausch",
+    "allowReplacement": "Automatische Nonce-Ersetzung anhand des bisherigen Hashs zulassen",
+    "limitsNone": "Unbegrenzt",
+    "limitsOn": "Ein",
+    "limitsOff": "Aus",
+    "limitsNext": "Umfang prüfen und weiter"
+  }
+}

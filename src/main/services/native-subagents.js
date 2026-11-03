@@ -3,6 +3,17 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
+const { deriveChild, validateContext } = require('./wallet/agent-scopes');
+const QUANT_DEFAULT_TOOLS = [
+  'quant_inspect',
+  'quant_history',
+  'quant_news_search',
+  'quant_news_fetch',
+  'quant_base_inspect',
+  'quant_contract',
+  'quant_wallets',
+  'quant_agent_scopes',
+];
 
 const DEFAULT_TOOLS = [
   'readFile',
@@ -44,6 +55,7 @@ class NativeSubagents {
           !Number.isSafeInteger(row.maxIterations)
         )
           throw new Error('Invalid subagent delegation policy');
+        if (row.quantContext) validateContext(row.quantContext);
         this.children[row.id] = row;
       }
     } catch (error) {
@@ -92,13 +104,19 @@ class NativeSubagents {
     if (!task) throw new Error('task is required');
     const { session, agent: parent } = await this.sender(key);
     const enabled = new Set(session.agent.getEnabledToolDefinitions().map((t) => t.name));
-    const tools = (Array.isArray(args.tools) ? args.tools : DEFAULT_TOOLS).filter((name) =>
-      enabled.has(name),
-    );
+    const quantContext = session.agent.quantScopeContext;
+    if (!quantContext && args.walletScope !== undefined)
+      throw Error('WALLET_AGENT_SCOPE_FORBIDDEN');
+    const tools = (
+      Array.isArray(args.tools) ? args.tools : quantContext ? QUANT_DEFAULT_TOOLS : DEFAULT_TOOLS
+    ).filter((name) => enabled.has(name));
     const id = 'native-sub-' + randomUUID();
     const row = {
       id,
       parentId: parent.id,
+      ...(quantContext
+        ? { quantContext: deriveChild(quantContext, id, args.walletScope, task) }
+        : {}),
       task,
       context: String(args.context || '').slice(0, 16000),
       tools: [...new Set(tools)],

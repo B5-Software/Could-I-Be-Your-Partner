@@ -12,8 +12,24 @@ module.exports = async function afterPack(context) {
   const path = require('path');
   const asar = require('@electron/asar');
   const archive = path.join(context.packager.getResourcesDir(context.appOutDir), 'app.asar');
+  require('../src/main/services/quant/native-binary').decode(
+    path.join(context.packager.getResourcesDir(context.appOutDir), 'quant-engine'),
+    context.electronPlatformName,
+    require('builder-util').Arch[context.arch],
+  );
+  require('../src/main/services/wallet/native-binary').decode(
+    path.join(context.packager.getResourcesDir(context.appOutDir), 'wallet-signer'),
+    context.electronPlatformName,
+    require('builder-util').Arch[context.arch],
+  );
   await require('./lib/packaged-cli.cjs').preparePackagedCLI(context);
   const entries = new Set(asar.listPackage(archive).map((file) => file.split(path.sep).join('/')));
+  const dependencyAudit = require('./lib/runtime-dependencies.cjs');
+  dependencyAudit.assertNoIssues(
+    dependencyAudit.auditArchiveDependencies(entries, (file) =>
+      asar.extractFile(archive, file.slice(1).split('/').join(path.sep)).toString('utf8'),
+    ),
+  );
   const preloads = fs
     .readdirSync(path.join(__dirname, '../src/preload'))
     .filter((file) => file === 'preload.js' || file.endsWith('-preload.js'))
@@ -53,6 +69,13 @@ module.exports = async function afterPack(context) {
     '/bin/cibyp-tui.js',
     '/bin/cibyp-code.js',
     '/src/main/main.js',
+    '/src/main/services/quant/native-engine.js',
+    '/src/main/services/quant/native-binary.js',
+    '/src/main/services/native-resource.js',
+    '/src/main/services/wallet/native-signer.js',
+    '/src/main/services/wallet/native-binary.js',
+    '/integrations/wallet/runtime-lock.json',
+    '/integrations/quant/runtime-lock.json',
     '/src/renderer/js/app.js',
     '/src/shared/generated/pricing.cjs',
     '/src/main/vm/generated/guest-tool-worker.cjs',
@@ -75,10 +98,33 @@ module.exports = async function afterPack(context) {
     '/assets/voice-models',
     '/assets/geogebra-src',
     '/assets/aria2',
+    '/assets/quant-engine',
+    '/native/quant-engine',
+    '/assets/wallet-signer',
+    '/native/wallet-signer',
   ];
   for (const entry of entries) {
     if (forbidden.some((prefix) => entry === prefix || entry.startsWith(`${prefix}/`)))
       throw new Error(`Unexpected file in app package: ${entry}`);
   }
   console.log('[after-pack] Runtime files and package boundaries verified');
+  if (
+    context.electronPlatformName === 'win32' &&
+    process.platform === 'win32' &&
+    require('builder-util').Arch[context.arch] === process.arch
+  ) {
+    const result = require('node:child_process').spawnSync(
+      process.execPath,
+      [
+        path.resolve(__dirname, '../tests/integration/packaged-startup.cjs'),
+        path.join(context.appOutDir, context.packager.appInfo.productFilename + '.exe'),
+      ],
+      { encoding: 'utf8', windowsHide: true, timeout: 75000 },
+    );
+    if (result.error || result.status !== 0)
+      throw new Error(
+        'Packaged GUI startup failed: ' + (result.stderr || result.error || result.stdout),
+      );
+    process.stdout.write(result.stdout);
+  }
 };

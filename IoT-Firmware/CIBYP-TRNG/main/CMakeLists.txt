@@ -1,0 +1,15 @@
+idf_component_register(SRCS "port.c" "network.c"
+    REQUIRES esp_driver_gpio nvs_flash bootloader_support esp_hw_support efuse esp_http_server esp_wifi esp_event esp_netif esp_timer esp_partition
+    EMBED_FILES "../web/index.html" "../web/app.css" "../web/app.js" "../web/catalog.json" "../web/deck.json" "../web/question-seed.js")
+if(NOT CIBYP_TAROT_ARCHIVE)
+    set(CIBYP_TAROT_ARCHIVE "${CMAKE_CURRENT_LIST_DIR}/../resources/tarot-art.bin")
+endif()
+if(NOT EXISTS "${CIBYP_TAROT_ARCHIVE}")
+    message(FATAL_ERROR "The complete 78-card artwork archive is required; run scripts/build-tarot-art.cjs first")
+endif()
+esptool_py_flash_to_partition(flash "tarot_art" "${CIBYP_TAROT_ARCHIVE}")
+if(NOT CIBYP_RUST_LIBRARY OR NOT EXISTS "${CIBYP_RUST_LIBRARY}")
+    message(FATAL_ERROR "Build the locked Rust static library with scripts/build-trng-firmware.cjs first")
+endif()
+add_prebuilt_library(cibyp_rust "${CIBYP_RUST_LIBRARY}")
+target_link_libraries(${COMPONENT_LIB} PUBLIC cibyp_rust)

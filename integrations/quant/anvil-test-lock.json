@@ -1,0 +1,31 @@
+{
+  "version": "1.8.6",
+  "repository": "foundry-rs/foundry",
+  "targets": {
+    "win32-x64": {
+      "file": "foundry_v1.8.6_win32_amd64.zip",
+      "size": 119259859,
+      "sha256": "924d6395786af438e7cb315f6835185f99d727ed6127dbbc4e6a62eb14edcfff"
+    },
+    "linux-x64": {
+      "file": "foundry_v1.8.6_linux_amd64.tar.gz",
+      "size": 117705045,
+      "sha256": "58850106984038f3a7200f38a4182c8cb423d3a4f4c7848eacbc2453e6bc35fc"
+    },
+    "linux-arm64": {
+      "file": "foundry_v1.8.6_linux_arm64.tar.gz",
+      "size": 130224836,
+      "sha256": "ca61f3f6e7d635f34e3e174409964d29126fa135794cd84cead8919dd50e0930"
+    },
+    "darwin-x64": {
+      "file": "foundry_v1.8.6_darwin_amd64.tar.gz",
+      "size": 133143747,
+      "sha256": "c0b032cdfda5fdce75ab6b782785f3f28aaf431bd55daecfb6437d01369f235e"
+    },
+    "darwin-arm64": {
+      "file": "foundry_v1.8.6_darwin_arm64.tar.gz",
+      "size": 121256801,
+      "sha256": "d6bc05ee937b4308bded496068728c8ba140abe49dd7527f37e025bc335b91ec"
+    }
+  }
+}

@@ -20,6 +20,18 @@ const args = [
   'never',
   '--config.extraMetadata.version=1.9.0-alpha.24+abc1234',
 ];
+test('an explicitly failed builder task cannot be published even when its exit code is zero', async () => {
+  assert.equal(
+    await packageWithRetry({
+      args: ['--win'],
+      pkg,
+      projectRoot: process.cwd(),
+      platform: 'win32',
+      run: async () => ({ code: 0, output: 'error failedTask=build' }),
+    }),
+    1,
+  );
+});
 
 function fixture(t, arch = 'x64') {
   const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cibyp-package-retry-'));

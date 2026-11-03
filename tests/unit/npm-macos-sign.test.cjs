@@ -178,6 +178,45 @@ test('a failed local signature never publishes a usable cache and temporary sign
   );
 });
 
+test('local App re-signing preserves the exact compressed quant executable and its hash', async (t) => {
+  const { root, app, asset } = await fixture(t);
+  const { gzipSync } = require('node:zlib');
+  const directory = path.join(app, 'Contents/Resources/quant-engine');
+  const executable = Buffer.from([0xcf, 0xfa, 0xed, 0xfe, 0, 0, 0, 0]);
+  const compressed = gzipSync(executable);
+  const archive = path.join(directory, 'engine.gz');
+  await fs.mkdir(directory);
+  await fs.writeFile(archive, compressed);
+  const expected = await checksum(archive);
+  await fs.writeFile(
+    path.join(directory, 'manifest.json'),
+    JSON.stringify({ archiveSha256: expected }),
+  );
+  const targets = await signingTargets(app);
+  assert.ok(!targets.binaries.includes(archive));
+  let verifies = 0,
+    signed = 0;
+  await prepareMacRuntime(root, asset, {
+    log: () => {},
+    run: async (file, args) => {
+      if (args.includes('--verify') && ++verifies === 1) throw Error('unsigned fixture');
+      if (args.includes('--display')) return { stdout: '' };
+      if (args.includes('--sign') && targets.binaries.includes(args.at(-1))) {
+        await fs.appendFile(args.at(-1), 'simulated signature mutation');
+        signed++;
+      }
+      return { stdout: '' };
+    },
+  });
+  assert.equal(signed, 5);
+  assert.equal(await checksum(archive), expected);
+  assert.deepEqual(require('node:zlib').gunzipSync(await fs.readFile(archive)), executable);
+  assert.equal(
+    JSON.parse(await fs.readFile(path.join(directory, 'manifest.json'), 'utf8')).archiveSha256,
+    expected,
+  );
+});
+
 test(
   'native signing discovery never follows symlinks outside its App',
   { skip: process.platform === 'win32' },

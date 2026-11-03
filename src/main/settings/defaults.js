@@ -3,6 +3,19 @@
 
 module.exports = function createDefaultSettings({ DEFAULT_DECISION_SETTINGS }) {
   const DEFAULT_SETTINGS = {
+    features: { quant: false },
+    superAgent: {
+      enabled: true,
+      maxWorkers: 2,
+      maxAttempts: 12,
+      maxTokens: 100000,
+      routerModel: '',
+      workerModel: '',
+      watchdog: true,
+      proactive: false,
+      rules: '',
+      sources: [],
+    },
     babe: {
       relationship: { enabled: true, pace: 'natural', start: 'gradual', showMetrics: true },
       interests: '',

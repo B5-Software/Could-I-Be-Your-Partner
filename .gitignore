@@ -112,3 +112,11 @@ last-crash.json
 src/main/vm/generated/
 src/main/native/macos-computer/build/
 src/main/native/macos-computer/*.node
+native/quant-engine/target/
+native/wallet-signer/target/
+assets/wallet-signer/
+assets/quant-engine/
+IoT-Firmware/CIBYP-TRNG/rust/target/
+IoT-Firmware/CIBYP-TRNG/build/
+IoT-Firmware/CIBYP-TRNG/sdkconfig
+IoT-Firmware/CIBYP-TRNG/sdkconfig.old

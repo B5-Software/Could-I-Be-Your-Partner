@@ -1,10 +1,19 @@
 {
   "name": "could-i-be-your-partner",
-  "version": "1.9.0",
+  "version": "1.10.0-alpha.1",
   "description": "全自动AI Agent，帮助完成一切任务",
   "license": "GPL-3.0-or-later",
   "main": "src/main/main.js",
   "scripts": {
+    "test:superagent": "npm run build-app-bundle && node --test tests/unit/super-agent.test.cjs && node tests/integration/super-agent-backend.cjs && electron tests/integration/super-agent-ui.cjs",
+    "test:superagent:bundle": "npm run build:node-core && node tests/integration/super-agent-backend.cjs --bundled",
+    "check:runtime-deps": "node scripts/check-runtime-deps.cjs",
+    "test:quant:chain": "node scripts/test-quant-chain.cjs",
+    "test:quant:execution": "npm run build:quant-engine && node scripts/test-quant-chain.cjs --execution",
+    "test:quant:bundle": "npm run build:node-core && node scripts/test-quant-chain.cjs --bundled",
+    "build:quant-engine": "node scripts/lib/quant-engine-runtime.cjs --rebuild",
+    "test:quant:native": "npm run build:quant-engine && node --test tests/integration/quant-native-engine.test.cjs tests/integration/quant-strategies.test.cjs tests/integration/quant-event-replay.test.cjs tests/integration/quant-native-safety.test.cjs tests/integration/quant-execution-outbox.test.cjs && node tests/integration/quant-native-backend.cjs",
+    "test:quant:native:bundle": "npm run build:quant-engine && npm run build:node-core && node tests/integration/quant-native-backend.cjs --bundled && node tests/integration/quant-event-replay.test.cjs --bundled",
     "start": "node scripts/prepare-codeoss.js && node scripts/build-macos-computer.js && node scripts/build-app-bundle.js && electron .",
     "prepare:codeoss": "node scripts/prepare-codeoss.js",
     "test:codeoss": "npm run prepare:codeoss && npm run build-app-bundle && electron tests/integration/codeoss-desktop.cjs",
@@ -63,7 +72,11 @@
     "test:zen": "node scripts/test-opencode-free.cjs",
     "test:frontend": "npm run build-app-bundle && electron tests/integration/frontend-shell.cjs",
     "test:frontend:native": "npm run prepare:codeoss && npm run build-app-bundle && electron tests/integration/frontend-shell.cjs --native-codeoss",
-    "test:backend:v2": "npm run build-app-bundle && electron tests/integration/shared-backend.cjs --v2"
+    "test:backend:v2": "npm run build-app-bundle && electron tests/integration/shared-backend.cjs --v2",
+    "prepare:quant-engine": "node scripts/lib/quant-engine-runtime.cjs",
+    "prepare:wallet-signer": "node scripts/lib/wallet-signer-runtime.cjs",
+    "test:wallet-signer": "npm run prepare:wallet-signer && cargo +1.99.1 test --manifest-path native/wallet-signer/Cargo.toml --locked && node tests/integration/wallet-native-signer.cjs && node tests/integration/wallet-native-signer.cjs --managed && node --test tests/integration/wallet-signing-recovery.test.cjs",
+    "test:wallet-ui": "electron tests/integration/wallet-approval-ui.cjs && electron tests/integration/wallet-portfolio-ui.cjs && electron tests/integration/wallet-agent-scope-ui.cjs && electron tests/integration/wallet-period-ui.cjs"
   },
   "author": {
     "name": "B5-Software",
@@ -90,6 +103,8 @@
       "scripts/lib/tor-runtime.cjs",
       "integrations/codeoss/theme.cjs",
       "IoT-Firmware/**/*",
+      "!IoT-Firmware/**/target{,/**/*}",
+      "!IoT-Firmware/**/build{,/**/*}",
       "package.json",
       "LICENSE",
       "build-info.json",
@@ -101,12 +116,35 @@
       "!**/assets/geogebra-src{,/**/*}",
       "!**/assets/aria2{,/**/*}",
       "!**/src/renderer/js/app-parts{,/**/*}",
-      "!assets/node{,/**/*}"
+      "!assets/node{,/**/*}",
+      "integrations/quant/runtime-lock.json",
+      "!assets/quant-engine{,/**/*}",
+      "integrations/wallet/runtime-lock.json",
+      "!assets/wallet-signer{,/**/*}"
     ],
     "asarUnpack": [
       "**/*"
     ],
     "extraResources": [
+      {
+        "from": "assets/wallet-signer/${os}-${arch}",
+        "to": "wallet-signer",
+        "filter": [
+          "engine.gz",
+          "manifest.json",
+          "LICENSE",
+          "THIRD-PARTY.txt"
+        ]
+      },
+      {
+        "from": "assets/quant-engine/${os}-${arch}",
+        "to": "quant-engine",
+        "filter": [
+          "engine.gz",
+          "manifest.json",
+          "LICENSE"
+        ]
+      },
       {
         "from": "assets/tor/${os}-${arch}",
         "to": "tor",
@@ -231,6 +269,9 @@
     "app-builder-lib": {
       "@electron/get": "^5.1.0"
     },
+    "express": {
+      "body-parser": "^2.4.0"
+    },
     "semver": "^7.6.3",
     "tmp": "^0.2.4",
     "tar": "^7.5.22",
@@ -243,9 +284,9 @@
     "ip-address": "^10.1.0",
     "brace-expansion": "^5.0.9",
     "dompurify": "^3.4.17",
-    "follow-redirects": "^1.16.1",
+    "follow-redirects": "^1.16.2",
     "@xmldom/xmldom": "^0.8.15",
-    "sharp": "^0.35.5",
+    "sharp": "0.35.5",
     "image-size": "^2.0.4",
     "uuid": "^11.1.1",
     "fast-uri": "^3.1.7",
@@ -263,39 +304,50 @@
     "@deepseek-ai/dsh-tool-jobs": "0.2.1-alpha.1",
     "@deepseek-ai/dsh-tool-lsp": "0.2.1-alpha.1",
     "@deepseek-ai/dsh-tool-session-query": "0.2.1-alpha.1",
-    "@deepseek-ai/dsh-tool-todo": "0.2.1-alpha.1",
     "@electron/asar": "^4.3.1",
     "@electron/rebuild": "^4.1.0",
     "@jridgewell/gen-mapping": "^0.3.13",
+    "@noble/hashes": "2.2.0",
     "@serialport/bindings-cpp": "^13.0.1",
     "@types/node": "^24.0.0",
     "acorn": "^8.17.0",
-    "build-undici": "npm:undici@8.11.2",
+    "build-undici": "npm:undici@8.12.3",
     "electron": "^43.8.3",
     "electron-builder": "^26.15.3",
     "esbuild": "^0.28.2",
     "globals": "^17.12.0",
     "node-gyp": "^12.4.0",
     "prettier": "^3.9.9",
+    "sharp": "0.35.5",
     "typescript": "^7.0.2"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.3.300",
+    "@anthropic-ai/sdk": "0.134.0",
     "@deepseek-ai/cordis": "4.0.5-alpha.1",
+    "@deepseek-ai/cordis-plugin-group": "1.0.5-alpha.1",
+    "@deepseek-ai/cordis-plugin-include": "1.0.10-alpha.1",
+    "@deepseek-ai/cordis-plugin-loader": "1.0.6-alpha.1",
     "@deepseek-ai/dsh-agent": "0.2.1-alpha.1",
     "@deepseek-ai/dsh-agent-default-model": "0.2.1-alpha.1",
+    "@deepseek-ai/dsh-app-boot": "0.2.1-alpha.1",
     "@deepseek-ai/dsh-attachment": "0.2.1-alpha.1",
     "@deepseek-ai/dsh-attachment-local": "0.2.1-alpha.1",
     "@deepseek-ai/dsh-brand": "0.2.1-alpha.1",
     "@deepseek-ai/dsh-commands": "0.2.1-alpha.1",
     "@deepseek-ai/dsh-compaction": "0.2.1-alpha.1",
     "@deepseek-ai/dsh-fs": "0.2.1-alpha.1",
+    "@deepseek-ai/dsh-home-paths": "0.2.1-alpha.1",
     "@deepseek-ai/dsh-host-webserver": "0.2.1-alpha.1",
+    "@deepseek-ai/dsh-http-proxy": "0.2.1-alpha.1",
     "@deepseek-ai/dsh-jobs": "0.2.1-alpha.1",
     "@deepseek-ai/dsh-jobs-local": "0.2.1-alpha.1",
+    "@deepseek-ai/dsh-launch-environment": "0.2.1-alpha.1",
     "@deepseek-ai/dsh-llm": "0.2.1-alpha.1",
+    "@deepseek-ai/dsh-llm-retry": "0.2.1-alpha.1",
     "@deepseek-ai/dsh-lsp": "0.2.1-alpha.1",
     "@deepseek-ai/dsh-persona": "0.2.1-alpha.1",
+    "@deepseek-ai/dsh-ptc-runtime": "0.2.1-alpha.1",
     "@deepseek-ai/dsh-sandbox": "0.2.1-alpha.1",
     "@deepseek-ai/dsh-sandbox-policy": "0.2.1-alpha.1",
     "@deepseek-ai/dsh-scope": "0.2.1-alpha.1",
@@ -303,6 +355,7 @@
     "@deepseek-ai/dsh-session-persistence": "0.2.1-alpha.1",
     "@deepseek-ai/dsh-session-projection": "0.2.1-alpha.1",
     "@deepseek-ai/dsh-session-query": "0.2.1-alpha.1",
+    "@deepseek-ai/dsh-session-title": "0.2.1-alpha.1",
     "@deepseek-ai/dsh-shell": "0.2.1-alpha.1",
     "@deepseek-ai/dsh-shell-env": "0.2.1-alpha.1",
     "@deepseek-ai/dsh-skill": "0.2.1-alpha.1",
@@ -315,14 +368,17 @@
     "@deepseek-ai/dsh-terminal": "0.2.1-alpha.1",
     "@deepseek-ai/dsh-terminal-bash": "0.2.1-alpha.1",
     "@deepseek-ai/dsh-token-meter": "0.2.1-alpha.1",
+    "@deepseek-ai/dsh-tool-todo": "0.2.1-alpha.1",
     "@deepseek-ai/dsh-tools": "0.2.1-alpha.1",
     "@deepseek-ai/dsh-user-approval": "0.2.1-alpha.1",
     "@deepseek-ai/dsh-user-questions": "0.2.1-alpha.1",
+    "@deepseek-ai/dsh-util-time": "0.2.1-alpha.1",
     "@deepseek-ai/dsh-util-values": "0.2.1-alpha.1",
     "@deepseek-ai/dsh-web": "0.2.1-alpha.1",
     "@deepseek-ai/dsh-workspace": "0.2.1-alpha.1",
     "@deepseek-ai/schemastery": "3.18.5-alpha.1",
     "@eslint/js": "^10.0.1",
+    "@modelcontextprotocol/sdk": "1.32.1",
     "@novnc/novnc": "^1.7.0",
     "@nut-tree-fork/nut-js": "^4.2.6",
     "@opencode/ai": "2.1.0",
@@ -335,6 +391,8 @@
     "docx": "^9.7.1",
     "docxtemplater": "^3.69.3",
     "eslint": "^10.7.0",
+    "esptool-js": "0.7.0",
+    "ethers": "6.17.0",
     "exceljs": "^4.4.0",
     "express": "^5.2.1",
     "express-session": "^1.19.0",
@@ -366,7 +424,7 @@
     "tesseract.js": "^6.0.1",
     "undici": "^7.30.1",
     "ws": "^8.18.0",
-    "zod": "4.3.6"
+    "zod": "4.6.7"
   },
   "allowScripts": {
     "node-pty@1.1.0": true,
