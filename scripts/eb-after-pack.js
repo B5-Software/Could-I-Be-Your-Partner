@@ -119,7 +119,7 @@ module.exports = async function afterPack(context) {
         path.resolve(__dirname, '../tests/integration/packaged-startup.cjs'),
         path.join(context.appOutDir, context.packager.appInfo.productFilename + '.exe'),
       ],
-      { encoding: 'utf8', windowsHide: true, timeout: 75000 },
+      { encoding: 'utf8', windowsHide: true, timeout: 150000 },
     );
     if (result.error || result.status !== 0)
       throw new Error(

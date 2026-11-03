@@ -41,7 +41,12 @@ async function main() {
   delete childEnvironment.ELECTRON_RUN_AS_NODE;
   child = spawn(
     executable,
-    ['--remote-debugging-port=' + port, '--remote-debugging-address=127.0.0.1'],
+    [
+      '--remote-debugging-port=' + port,
+      '--remote-debugging-address=127.0.0.1',
+      // Use software rendering for the Windows ARM64 CI startup probe.
+      ...(process.platform === 'win32' && process.arch === 'arm64' ? ['--disable-gpu'] : []),
+    ],
     {
       windowsHide: true,
       env: {
@@ -61,7 +66,7 @@ async function main() {
     stream.on('data', (bytes) => {
       logs = (logs + bytes).slice(-256000);
     });
-  const deadline = Date.now() + 60000;
+  const deadline = Date.now() + 120000;
   let page;
   while (Date.now() < deadline) {
     assert.equal(child.exitCode, null, 'Packaged app exited during startup: ' + logs.slice(-6000));
@@ -69,17 +74,23 @@ async function main() {
       const targets = await fetch('http://127.0.0.1:' + port + '/json/list', {
         signal: AbortSignal.timeout(1000),
       }).then((r) => r.json());
-      splashSeen ||= targets.some((t) => t.url.includes('/splash.html'));
-      page = targets.find(
+      const splashPresent = targets.some((t) => t.url.includes('/splash.html'));
+      splashSeen ||= splashPresent;
+      const mainPage = targets.find(
         (t) => t.type === 'page' && t.url.includes('/src/renderer/pages/index.html'),
       );
-      if (page) break;
+      // CDP advertises a target as soon as navigation starts. Wait for the
+      // app's own renderer-ready signal to close Splash before evaluating it.
+      if (splashSeen && !splashPresent && mainPage) {
+        page = mainPage;
+        break;
+      }
     } catch {
       /* The debugging endpoint is not ready yet. */
     }
     await pause(50);
   }
-  assert.ok(page, 'No packaged main renderer: ' + logs.slice(-6000));
+  assert.ok(page, 'Packaged main renderer did not finish Splash: ' + logs.slice(-6000));
   socket = new WebSocket(page.webSocketDebuggerUrl);
   await new Promise((resolve, reject) => {
     socket.addEventListener('open', resolve, { once: true });
@@ -100,7 +111,7 @@ async function main() {
         timer = setTimeout(() => {
           pending.delete(id);
           reject(Error('CDP timeout: ' + method));
-        }, 10000);
+        }, 15000);
       pending.set(id, (result) => {
         clearTimeout(timer);
         result.error ? reject(Error(result.error.message)) : resolve(result.result);
