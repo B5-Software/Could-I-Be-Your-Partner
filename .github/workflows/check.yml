@@ -28,6 +28,10 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: npm
       - run: npm ci
+      - name: Install the wallet signer's pinned Rust toolchain
+        run: rustup toolchain install 1.99.1 --profile minimal
+      - name: Build native wallet signer for integration checks
+        run: cargo +1.99.1 build --manifest-path native/wallet-signer/Cargo.toml --release --locked
       - run: npm run check
         timeout-minutes: 10
       - name: Prepare desktop browser assets

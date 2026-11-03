@@ -69,6 +69,12 @@ async function main() {
     }
     throw Error('Local-chain condition timed out: ' + fixtureLogs);
   };
+  const waitForReceipt = async (hash) => {
+    assert.match(hash || '', /^0x[a-f0-9]{64}$/i, 'Expected a submitted transaction hash');
+    let receipt;
+    await until(async () => (receipt = await rpc('eth_getTransactionReceipt', [hash])));
+    assert.equal(receipt.status, '0x1');
+  };
   await until(() => rpc('eth_chainId').then((id) => id === '0x2105'));
   // A local chain has no L1 fee; this development-only oracle returns zero.
   await rpc('anvil_setCode', [
@@ -83,11 +89,19 @@ async function main() {
     counter,
     '0x60003560e01c63' + selector + '14601957600054600101600055005b60005460005260206000f3',
   ]);
-  const respond = (request) => {
+  const respond = async (request) => {
     let message = { role: 'assistant', content: 'Local chain transaction' },
       finish = 'stop';
     if (request.tools?.length) {
       steps++;
+      // The fixture requests dependent reads and transactions only after mining.
+      if (steps === 5 || steps === 9) {
+        const destination = steps === 5 ? recipient : counter;
+        const intent = host.runtime.walletService.state.intents.find(
+          (item) => item.transaction.to.toLowerCase() === destination,
+        );
+        await waitForReceipt(intent?.hash);
+      }
       const operation = {
         operationId: 'requested-transfer',
         walletId: wallet.id,
@@ -171,7 +185,7 @@ async function main() {
         if (size > 1024 * 1024) throw Error('Fixture request limit');
         chunks.push(chunk);
       }
-      const body = respond(JSON.parse(Buffer.concat(chunks).toString('utf8')));
+      const body = await respond(JSON.parse(Buffer.concat(chunks).toString('utf8')));
       outgoing.writeHead(200, { 'content-type': 'application/json' });
       outgoing.end(JSON.stringify(body));
     } catch (error) {
@@ -363,11 +377,11 @@ async function main() {
   assert.match(uncertain.hash, /^0x[a-f0-9]{64}$/);
   await walletService.transact(config, uncertainInput, executionContext);
   assert.equal(dispatched, 1);
+  await waitForReceipt(uncertain.hash);
   assert.equal(BigInt(await rpc('eth_getTransactionCount', [wallet.address, 'latest'])), 3n);
   assert.equal(BigInt(await rpc('eth_getBalance', [recipient, 'latest'])), 1200000000000000n);
   const reconciled = await walletService.reconcile(uncertain.id);
   assert.ok(['included', 'safe', 'finalized'].includes(reconciled.status));
-  assert.equal((await rpc('eth_getTransactionReceipt', [uncertain.hash])).status, '0x1');
   walletService.market.rpc = networkRpc;
   await host.close();
   host = null;
