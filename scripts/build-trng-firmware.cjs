@@ -8,7 +8,7 @@ const sha=(bytes)=>crypto.createHash('sha256').update(bytes).digest('hex');
 function sources() {
   require('./build-trng-catalog.cjs').catalog(true);
   const files=['CMakeLists.txt','sdkconfig.defaults','sdkconfig.usb','partitions.csv','main/CMakeLists.txt','main/Kconfig.projbuild','main/port.c','main/network.c','main/network.h','main/tarot_art_digest.h','web/index.html','web/app.css','web/app.js','web/catalog.json','web/deck.json','web/question-seed-source.js','web/question-seed.js','web/question-seed.LICENSE','rust/Cargo.toml','rust/Cargo.lock','rust/core/Cargo.toml','rust/core/src/lib.rs','rust/core/src/catalog.rs','rust/ffi/Cargo.toml','rust/ffi/src/lib.rs'];
-  return sha(files.map(file=>file+'\0'+fs.readFileSync(path.join(project,file))).join('\0'));
+  return sha(files.map(file=>file+'\0'+fs.readFileSync(path.join(project,file),'utf8').replace(/\r\n/g,'\n')).join('\0'));
 }
 function run(binary,args,options={}) {const result=spawnSync(binary,args,{stdio:'inherit',windowsHide:true,...options});if(result.status!==0) throw Error('TRNG_BUILD_FAILED: '+path.basename(binary));}
 function build(chip,consoleMode='uart') {

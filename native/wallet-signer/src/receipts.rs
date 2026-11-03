@@ -149,6 +149,14 @@ impl Store {
         if !directory.is_absolute() {
             return Err(FAILED);
         }
+        // macOS exposes its temporary directory through /var -> /private/var.
+        // Resolve the parent without accepting a symlink at the store itself.
+        #[cfg(unix)]
+        let canonical_directory = fs::canonicalize(directory.parent().ok_or(FAILED)?)
+            .map_err(|_| FAILED)?
+            .join(directory.file_name().ok_or(FAILED)?);
+        #[cfg(unix)]
+        let directory = canonical_directory.as_path();
         let mut builder = fs::DirBuilder::new();
         builder.recursive(false);
         #[cfg(unix)]

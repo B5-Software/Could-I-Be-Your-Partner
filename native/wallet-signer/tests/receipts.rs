@@ -33,6 +33,30 @@ fn receipt() -> Receipt {
     record.seal(&[1u8; 32], "fixture-store", "0x02").unwrap();
     record
 }
+#[cfg(unix)]
+#[test]
+fn a_parent_alias_is_supported_but_the_store_cannot_be_a_symlink() {
+    use std::os::unix::fs::symlink;
+
+    let root = Directory::new();
+    fs::create_dir(&root.0).unwrap();
+    let real = root.0.join("real");
+    let alias = root.0.join("alias");
+    fs::create_dir(&real).unwrap();
+    symlink(&real, &alias).unwrap();
+    let store = Store::open(&alias.join("store")).unwrap();
+    assert_eq!(
+        Store::open(&real.join("store")).err(),
+        Some("WALLET_RECEIPT_STORE_BUSY")
+    );
+    drop(store);
+    let linked_store = root.0.join("linked-store");
+    symlink(real.join("store"), &linked_store).unwrap();
+    assert_eq!(
+        Store::open(&linked_store).err(),
+        Some("WALLET_RECEIPT_STORE_FAILED")
+    );
+}
 #[test]
 fn receipts_are_exclusive_durable_and_identity_bound() {
     let directory = Directory::new();

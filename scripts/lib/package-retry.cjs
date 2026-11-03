@@ -3,6 +3,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { stripVTControlCharacters } = require('node:util');
 
 function isTransientDiskImageError(output) {
   return /hdiutil:\s*(?:create|attach|detach|convert) failed\s*-\s*Resource busy\b/i.test(output);
@@ -47,7 +48,10 @@ async function packageWithRetry({
     let result = await run(currentArgs);
     // Some builder CLI error paths have reported a zero exit code. A declared
     // failed build must never proceed to upload artifacts or create a release.
-    if (result.code === 0 && /\bfailedTask=build\b/.test(result.output || ''))
+    if (
+      result.code === 0 &&
+      /\bfailedTask=build\b/.test(stripVTControlCharacters(result.output || ''))
+    )
       result = { ...result, code: 1 };
     if (result.code === 0 || result.signal || attempt === 2) return result.code;
     if (platform !== 'darwin' || !isTransientDiskImageError(result.output)) return result.code;

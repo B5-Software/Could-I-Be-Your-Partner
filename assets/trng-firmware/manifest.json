@@ -15,7 +15,7 @@
         "revision": "fff9895c82d744c7237be8847347bdd1b07c6643"
       },
       "rust": "1.99.1",
-      "sourceSha256": "855852089c4467079090b1a5d7fe591b590a3d3cd7574c112024d6885ed9e5f3",
+      "sourceSha256": "89646118754b0eefed53797a8a5fa9a6ec1da7631f78a8132cef15d6e6573589",
       "flashSize": "4MB",
       "segments": [
         {
@@ -45,8 +45,8 @@
         {
           "file": "esp32c3-uart/cibyp_trng.bin",
           "address": 131072,
-          "size": 899504,
-          "sha256": "a60758d8eda14ceeea73c26090ca471e844cb5a28258e511e9989f3a15481ac3"
+          "size": 899296,
+          "sha256": "76c9787957c0e476c2a0af26f1c3b2d9a80d7bbde9bd923a13464ef51eb25e3b"
         }
       ]
     },
@@ -62,7 +62,7 @@
         "revision": "fff9895c82d744c7237be8847347bdd1b07c6643"
       },
       "rust": "1.99.1",
-      "sourceSha256": "855852089c4467079090b1a5d7fe591b590a3d3cd7574c112024d6885ed9e5f3",
+      "sourceSha256": "89646118754b0eefed53797a8a5fa9a6ec1da7631f78a8132cef15d6e6573589",
       "flashSize": "4MB",
       "segments": [
         {
@@ -92,8 +92,8 @@
         {
           "file": "esp32c3-usb/cibyp_trng.bin",
           "address": 131072,
-          "size": 895648,
-          "sha256": "0dd9a419f637ef3e339bc217336d7cc51fc4ad1552e81771a3f27ae89ad46ef5"
+          "size": 895440,
+          "sha256": "8829780e3525d346793c4830ff6adace28cbc0b31bf5aba7f03dac9b78b0e8a1"
         }
       ]
     },
@@ -109,7 +109,7 @@
         "revision": "fff9895c82d744c7237be8847347bdd1b07c6643"
       },
       "rust": "1.99.1",
-      "sourceSha256": "855852089c4467079090b1a5d7fe591b590a3d3cd7574c112024d6885ed9e5f3",
+      "sourceSha256": "89646118754b0eefed53797a8a5fa9a6ec1da7631f78a8132cef15d6e6573589",
       "flashSize": "4MB",
       "segments": [
         {
@@ -139,8 +139,8 @@
         {
           "file": "esp32c6-uart/cibyp_trng.bin",
           "address": 131072,
-          "size": 980256,
-          "sha256": "30322d9fd848391dbdb1e34a69ae5ecf570953b867fdb67b284198a386ea1802"
+          "size": 980048,
+          "sha256": "0485734f73e26646c12188357e1bde017db20a6fda939123fd3f05326e4d4fd9"
         }
       ]
     },
@@ -156,7 +156,7 @@
         "revision": "fff9895c82d744c7237be8847347bdd1b07c6643"
       },
       "rust": "1.99.1",
-      "sourceSha256": "855852089c4467079090b1a5d7fe591b590a3d3cd7574c112024d6885ed9e5f3",
+      "sourceSha256": "89646118754b0eefed53797a8a5fa9a6ec1da7631f78a8132cef15d6e6573589",
       "flashSize": "4MB",
       "segments": [
         {
@@ -186,8 +186,8 @@
         {
           "file": "esp32c6-usb/cibyp_trng.bin",
           "address": 131072,
-          "size": 976192,
-          "sha256": "07029a081390587c6fccdd2765b34a7821680c92355ce17d77621b89818c73ff"
+          "size": 975984,
+          "sha256": "5a115329f8fcc0d033c64534c42b94348743d8a69bc73d1bdae92a1f96b01021"
         }
       ]
     },
@@ -203,7 +203,7 @@
         "revision": "fff9895c82d744c7237be8847347bdd1b07c6643"
       },
       "rust": "1.99.1",
-      "sourceSha256": "855852089c4467079090b1a5d7fe591b590a3d3cd7574c112024d6885ed9e5f3",
+      "sourceSha256": "89646118754b0eefed53797a8a5fa9a6ec1da7631f78a8132cef15d6e6573589",
       "flashSize": "4MB",
       "segments": [
         {
@@ -233,8 +233,8 @@
         {
           "file": "esp32s31-uart/cibyp_trng.bin",
           "address": 131072,
-          "size": 944496,
-          "sha256": "ad2e595a7d3cf89005ddf2b8d88ec10480b67f23e8c9c0a9133acc55f3e29eee"
+          "size": 944304,
+          "sha256": "bd71597029a8835fb57fa70a8d30673bfabd32d907dd7ee764acd0de6584f374"
         }
       ]
     },
@@ -250,7 +250,7 @@
         "revision": "fff9895c82d744c7237be8847347bdd1b07c6643"
       },
       "rust": "1.99.1",
-      "sourceSha256": "855852089c4467079090b1a5d7fe591b590a3d3cd7574c112024d6885ed9e5f3",
+      "sourceSha256": "89646118754b0eefed53797a8a5fa9a6ec1da7631f78a8132cef15d6e6573589",
       "flashSize": "4MB",
       "segments": [
         {
@@ -280,8 +280,8 @@
         {
           "file": "esp32s31-usb/cibyp_trng.bin",
           "address": 131072,
-          "size": 939824,
-          "sha256": "d9ebdb1df85e55c7aec802d979bdf590ba0e6d0e66022c06cf4104ce9690706c"
+          "size": 939616,
+          "sha256": "1da471c10f2fa8f0d0cbad119065555a7a400928dc21cf00b7880abdbd8693df"
         }
       ]
     }

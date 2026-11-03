@@ -27,7 +27,7 @@ test('an explicitly failed builder task cannot be published even when its exit c
       pkg,
       projectRoot: process.cwd(),
       platform: 'win32',
-      run: async () => ({ code: 0, output: 'error failedTask=build' }),
+      run: async () => ({ code: 0, output: 'error failedTask=\x1b[31mbuild\x1b[0m' }),
     }),
     1,
   );

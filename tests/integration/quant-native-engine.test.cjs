@@ -529,7 +529,10 @@ test('authentication and protocol mismatch exit without creating a journal or ec
     child.stdout.on('data', (b) => (output += b));
     child.stderr.on('data', (b) => (output += b));
     child.stdin.on('error', () => {});
-    const exited = new Promise((resolve) => child.once('exit', resolve));
+    const closed = new Promise((resolve, reject) => {
+      child.once('error', reject);
+      child.once('close', resolve);
+    });
     child.stdin.end(
       JSON.stringify({
         id: 'bad-auth',
@@ -537,7 +540,7 @@ test('authentication and protocol mismatch exit without creating a journal or ec
         params,
       }) + '\n',
     );
-    assert.equal(await exited, 1);
+    assert.equal(await closed, 1);
     assert.ok(!output.includes(secret));
     assert.match(output, /AUTHENTICATION_OR_VERSION_FAILED/);
     assert.equal(fs.existsSync(directory), false);

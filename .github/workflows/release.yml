@@ -37,6 +37,8 @@ jobs:
         run: npm ci
       - name: 验证生产依赖与脱离开发依赖的启动加载
         run: npm run check:runtime-deps
+      - name: 验证随包固件与源码指纹
+        run: node scripts/check-trng-firmware.cjs
       - name: 构建和验证原生钱包签名器
         run: |
           sudo apt-get update && sudo apt-get install -y musl-tools
