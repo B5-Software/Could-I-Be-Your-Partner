@@ -277,6 +277,15 @@ test('privacy filter masks phone numbers', () => {
   assert.ok(!PrivacyFilter.filterPrivacyInfo('tel +8613812345678').includes('8613812345678'));
 });
 
+test('privacy filter preserves numeric fragments inside tool hashes', () => {
+  const callId = 'ac0882d8d09f7a7e336acdb7d1b98b10d28f13812345678f281f1c3710b6e774';
+  const txHash = '0x' + 'abcdef0123456789' + '110105199003071230' + 'ab'.repeat(15);
+  const result = JSON.stringify({ callId, txHash });
+  assert.equal(PrivacyFilter.filterPrivacyInfo(result), result);
+  assert.equal(PrivacyFilter.filterPrivacyInfo(result, { evasion: true }), result);
+  assert.ok(!PrivacyFilter.filterPrivacyInfo('private_key: ' + callId).includes(callId));
+});
+
 test('privacy filter masks SSH private keys', () => {
   const key = '-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA1ABC\n-----END RSA PRIVATE KEY-----';
   assert.ok(!PrivacyFilter.filterPrivacyInfo(key).includes('MIIEowIBAAKCAQEA1ABC'));
