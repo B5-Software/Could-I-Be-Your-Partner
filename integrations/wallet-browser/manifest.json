@@ -1,0 +1,32 @@
+{
+  "manifest_version": 3,
+  "name": "Could I Be Your Partner · Wallet",
+  "description": "Connect websites to your local CIBYP wallet with explicit pairing and native approvals.",
+  "version": "0.1.0",
+  "minimum_chrome_version": "121",
+  "permissions": ["storage", "webNavigation"],
+  "host_permissions": ["http://127.0.0.1/*"],
+  "background": { "service_worker": "background.js", "scripts": ["background.js"] },
+  "action": { "default_popup": "popup.html", "default_title": "Could I Be Your Partner · Wallet" },
+  "content_scripts": [
+    {
+      "matches": ["https://*/*", "http://127.0.0.1/*", "http://localhost/*"],
+      "js": ["content.js"],
+      "run_at": "document_start",
+      "all_frames": false
+    },
+    {
+      "matches": ["https://*/*", "http://127.0.0.1/*", "http://localhost/*"],
+      "js": ["provider.js"],
+      "run_at": "document_start",
+      "all_frames": false,
+      "world": "MAIN"
+    }
+  ],
+  "browser_specific_settings": {
+    "gecko": { "id": "wallet@cibyp.b5.software", "strict_min_version": "128.0" }
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'none'; connect-src ws://127.0.0.1:*"
+  }
+}

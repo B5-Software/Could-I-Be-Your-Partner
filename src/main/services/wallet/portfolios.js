@@ -5,12 +5,19 @@ const fs = require('node:fs'),
 const { randomUUID } = require('node:crypto');
 const { parseEther } = require('ethers');
 const rules = require('./policy');
+const { portfolioCapital, fingerprint } = require('./capital');
+const { equityFloor, assessEquity } = require('./portfolio-equity');
+const { PortfolioAllowances } = require('./portfolio-allowances');
+const { PortfolioAllowanceMonitor } = require('./portfolio-allowance-monitor');
+const { ceilingFromSnapshot } = require('./portfolio-allowance-ceiling');
 const fail = (code) => {
   throw Error(code);
 };
 class WalletPortfolios {
   constructor(wallet, writeAtomic) {
     this.wallet = wallet;
+    this.allowances = new PortfolioAllowances(this);
+    this.allowanceMonitor = new PortfolioAllowanceMonitor(this);
     this.write = writeAtomic;
     this.file = path.join(wallet.directory, 'portfolio-fences.json');
     this.fences = new Map();
@@ -56,7 +63,7 @@ class WalletPortfolios {
     const previousFences = new Map(this.fences);
     let awaitingNative = false;
     for (const id of ids) {
-      this.wallet.wallet(id);
+      this.wallet.signingWallet(id);
       this.fences.set(id, epoch);
       this.epochs.set(id, epoch);
       this.wallet.abortWallet(id, 'WALLET_PORTFOLIO_CHANGED');
@@ -103,6 +110,7 @@ class WalletPortfolios {
         ['portfolio.create', 'portfolio.update'].includes(action) &&
         [
           'WALLET_PORTFOLIO_INVALID',
+          'WALLET_PORTFOLIO_EQUITY_INVALID',
           'WALLET_PORTFOLIO_MEMBER_BUSY',
           'WALLET_NATIVE_AUTH_INVALID',
           'WALLET_NATIVE_AUTH_LIMIT',
@@ -136,7 +144,11 @@ class WalletPortfolios {
     );
     return value;
   }
-  async request(action, input) {
+  async request(action, input, context = {}) {
+    if (action.startsWith('allowanceMonitor.'))
+      return this.allowanceMonitor.request(action.slice('allowanceMonitor.'.length), input);
+    if (action.startsWith('allowances.'))
+      return this.allowances.request(action.slice(11), input, context);
     if (action === 'list') {
       const offset = input.offset ?? 0;
       if (!Number.isInteger(offset) || offset < 0 || offset > 1000)
@@ -150,6 +162,94 @@ class WalletPortfolios {
       return result;
     }
     if (action === 'get') return this.get(input.id);
+    if (action === 'equity') {
+      context.signal?.throwIfAborted();
+      const initial = await this.get(input.id),
+        p = initial.portfolio;
+      const floor = p.equityFloorUsdAtomic;
+      if (!floor || initial.state === 'removed') return { status: 'disabled', portfolioId: p.id };
+      const network = this.wallet.networks.byId(p.chainId, true);
+      const intents = this.wallet.state.intents;
+      const version = fingerprint(intents, p.members, p.chainId);
+      let result;
+      try {
+        result = await assessEquity(
+          this.wallet.market,
+          { venue: network.key },
+          {
+            id: p.id,
+            revision: initial.revision,
+            members: p.members,
+            floorUsdAtomic: floor,
+          },
+          intents,
+          context.signal,
+        );
+      } catch (error) {
+        context.signal?.throwIfAborted();
+        result = {
+          status: 'unavailable',
+          portfolioId: p.id,
+          floorUsdAtomic: floor,
+          error: error.message,
+        };
+      }
+      const current = await this.get(p.id);
+      context.signal?.throwIfAborted();
+      if (current.revision !== initial.revision || current.state !== initial.state)
+        fail('WALLET_PORTFOLIO_CHANGED');
+      this.wallet.networks.assert(network.key, network.revision);
+      if (fingerprint(this.wallet.state.intents, p.members, p.chainId) !== version)
+        fail('WALLET_CAPITAL_CHANGED');
+      return { ...result, portfolioState: current.state };
+    }
+    if (action === 'holdings') {
+      context.signal?.throwIfAborted();
+      const initial = await this.get(input.id),
+        p = initial.portfolio;
+      const network = this.wallet.networks.byId(p.chainId),
+        venue = network.key;
+      const tokens = [
+        ...new Set(
+          [...(p.limits.tokens ?? []), ...(p.limits.period?.tokens ?? [])].map(
+            (token) => token.address,
+          ),
+        ),
+      ];
+      const members = p.members.map((member) => ({
+        ...member,
+        name:
+          this.wallet.state.wallets.find((w) => w.id === member.walletId)?.name ?? member.walletId,
+      }));
+      const intents = this.wallet.state.intents;
+      const capitalVersion = fingerprint(intents, members, p.chainId);
+      let holdings;
+      try {
+        holdings = await this.wallet.market.portfolioHoldings(
+          { venue },
+          { members, tokens, valuation: input.valuation === true },
+          { signal: context.signal },
+        );
+      } catch (error) {
+        if (error.name === 'TimeoutError') fail('WALLET_ASSET_TIMEOUT');
+        throw error;
+      }
+      const current = await this.get(input.id);
+      context.signal?.throwIfAborted();
+      if (current.revision !== initial.revision || current.state !== initial.state)
+        fail('WALLET_PORTFOLIO_CHANGED');
+      if (this.wallet.networks.profile(venue).revision !== network.revision)
+        fail('WALLET_NETWORK_CHANGED');
+      if (fingerprint(this.wallet.state.intents, members, p.chainId) !== capitalVersion)
+        fail('WALLET_CAPITAL_CHANGED');
+      return {
+        ...portfolioCapital(holdings, intents),
+        portfolioId: p.id,
+        name: p.name,
+        revision: initial.revision,
+        state: initial.state,
+      };
+    }
     if (action === 'revisions' || action === 'revision') {
       await this.get(input.id);
       const offset = input.offset ?? 0;
@@ -187,13 +287,14 @@ class WalletPortfolios {
           !input.name.trim() ||
           input.name.length > 80 ||
           /[\x00-\x1f\x7f]/.test(input.name) ||
-          ![8453, 84532].includes(input.chainId) ||
           !Array.isArray(input.walletIds) ||
           !input.walletIds.length ||
           input.walletIds.length > 16 ||
           new Set(input.walletIds).size !== input.walletIds.length
         )
           fail('WALLET_PORTFOLIO_INVALID');
+        const network = this.wallet.networks.byId(input.chainId, true);
+        if (!network.supportsType2) fail('WALLET_NETWORK_TYPE');
         const limits = rules.limits(input.limits),
           hours = input.hours ?? 24,
           maxFeeEth = input.maxFeeEth ?? '0.01';
@@ -209,18 +310,20 @@ class WalletPortfolios {
         )
           fail('WALLET_PORTFOLIO_INVALID');
         ids = input.walletIds.slice();
+        const floor = equityFloor(input.equityFloorUsd ?? null, input.chainId);
         const id = randomUUID(),
           portfolio = {
             id,
             name: input.name.trim(),
             chainId: input.chainId,
             members: ids.map((id) => {
-              const w = this.wallet.wallet(id);
+              const w = this.wallet.signingWallet(id);
               return { walletId: w.id, address: w.address };
             }),
             limits: rules.nativeLimits(limits),
             maxFeeWei: parseEther(maxFeeEth).toString(),
             expiresAt: hours ? Date.now() + hours * 3600000 : 0,
+            ...(floor && { equityFloorUsdAtomic: floor }),
           };
         command = { action: 'portfolio.create', input: { id, portfolio } };
       } else if (input.operation === 'edit') {
@@ -257,6 +360,27 @@ class WalletPortfolios {
                 ? Date.now() + hours * 3600000
                 : 0,
         };
+        if (input.equityFloorUsd !== undefined) {
+          const floor = equityFloor(input.equityFloorUsd, portfolio.chainId);
+          if (floor) portfolio.equityFloorUsdAtomic = floor;
+          else delete portfolio.equityFloorUsdAtomic;
+        }
+        command = {
+          action: 'portfolio.update',
+          input: { id: input.id, portfolio, expectedRevision: current.revision },
+        };
+      } else if (input.operation === 'allowance-ceiling') {
+        const current = await this.get(input.id);
+        if (current.state === 'removed' || current.revision !== input.revision)
+          fail('WALLET_PORTFOLIO_CHANGED');
+        const portfolio = { ...current.portfolio };
+        ids = portfolio.members.map((m) => m.walletId);
+        if (input.ceiling === null) delete portfolio.allowanceCeiling;
+        else {
+          if (!input.ceiling) fail('WALLET_PORTFOLIO_ALLOWANCE_INVALID');
+          const report = this.allowances.load(portfolio.id, input.ceiling.reportId);
+          portfolio.allowanceCeiling = ceilingFromSnapshot(input.ceiling, report, current);
+        }
         command = {
           action: 'portfolio.update',
           input: { id: input.id, portfolio, expectedRevision: current.revision },
@@ -282,11 +406,22 @@ class WalletPortfolios {
           input: { id: input.id, kind: input.operation, expectedRevision: current.revision },
         };
       } else fail('WALLET_PORTFOLIO_INVALID');
+      let network;
+      if (
+        ['portfolio.create', 'portfolio.update'].includes(command.action) ||
+        input.operation === 'active'
+      ) {
+        const chainId =
+          command.input.portfolio?.chainId ?? (await this.get(input.id)).portfolio.chainId;
+        const profile = this.wallet.networks.byId(chainId, true);
+        if (!profile.supportsType2) fail('WALLET_NETWORK_TYPE');
+        network = { key: profile.key, revision: profile.revision };
+      }
       const id = randomUUID();
       for (const [key, value] of this.challenges)
         if (value.expiresAt <= Date.now()) this.challenges.delete(key);
       if (this.challenges.size >= 64) fail('WALLET_NATIVE_AUTH_LIMIT');
-      this.challenges.set(id, { command, ids, expiresAt: Date.now() + 120000 });
+      this.challenges.set(id, { command, ids, network, expiresAt: Date.now() + 120000 });
       return {
         id,
         expiresAt: Date.now() + 120000,
@@ -314,6 +449,8 @@ class WalletPortfolios {
       )
         fail('WALLET_CONFIRMATION_REQUIRED');
       this.wallet.emergency.assert();
+      if (challenge.network)
+        this.wallet.networks.assert(challenge.network.key, challenge.network.revision);
       return this.change(challenge.ids, challenge.command.action, challenge.command.input);
     }
     fail('UNKNOWN_WALLET_ACTION');

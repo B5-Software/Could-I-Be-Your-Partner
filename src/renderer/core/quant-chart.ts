@@ -11,6 +11,7 @@ export class QuantChart {
   private cursor = -1;
   private drag?: { x: number; offset: number };
   private frame = 0;
+  private interval?: number;
   constructor(
     private readonly host: HTMLElement,
     private readonly readout: HTMLElement,
@@ -85,8 +86,9 @@ export class QuantChart {
   private clamp(offset: number): number {
     return Math.max(0, Math.min(Math.max(0, this.bars.length - 10), offset));
   }
-  setData(bars: Candle[]): void {
+  setData(bars: Candle[], interval?: number): void {
     this.bars = bars;
+    this.interval = interval;
     this.offset = this.clamp(this.offset);
     this.averages = [9, 21].map((period) => {
       let sum = 0;
@@ -171,6 +173,23 @@ export class QuantChart {
       ctx.fillText(this.format(max - ((max - min) * i) / gridLines), right + 9, py);
     }
     const maxVolume = Math.max(1, ...visible.map((bar) => bar.volume));
+    const gaps = new Set<number>();
+    if (this.interval) {
+      const interval = this.interval;
+      ctx.strokeStyle = muted;
+      ctx.setLineDash([2, 4]);
+      ctx.beginPath();
+      visible.forEach((bar, i) => {
+        const previous = this.bars[start + i - 1];
+        if (previous && bar.time - previous.time > interval) {
+          gaps.add(i);
+          ctx.moveTo(x(i) - step / 2, top);
+          ctx.lineTo(x(i) - step / 2, bottom);
+        }
+      });
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
     visible.forEach((bar, i) => {
       const cx = x(i),
         body = Math.max(1, Math.min(12, step * 0.6));
@@ -203,7 +222,7 @@ export class QuantChart {
       visible.forEach((_bar, i) => {
         const value = this.averages[series]![start + i];
         if (!Number.isFinite(value)) return;
-        if (!started) {
+        if (!started || gaps.has(i)) {
           ctx.moveTo(x(i), y(value!));
           started = true;
         } else ctx.lineTo(x(i), y(value!));

@@ -48,7 +48,19 @@
     "qeDetails": "明细",
     "qeNoMark": "末尾报价无效，未计算估值",
     "qeAccount": "账户与行情",
-    "qeView": "查看"
+    "qeView": "查看",
+    "qeValidation": "盘口滚动样本外验证",
+    "qeValidationHint": "每轮用较早的窗口比较版本，再在随后的窗口验证。每次都从相同虚拟资金起跑。",
+    "qeRevisions": "候选版本（逗号分隔）",
+    "qeStartMs": "起点（距录制开始的毫秒）",
+    "qeTrainMs": "训练窗口（毫秒）",
+    "qeTestMs": "验证窗口（毫秒）",
+    "qeFolds": "轮数",
+    "qeFold": "第 {n} 轮",
+    "qeTraining": "训练排名",
+    "qeTest": "样本外结果",
+    "qeStageProgress": "已完成回放",
+    "qeDurationMs": "录制时长（毫秒）"
   },
   "en": {
     "qeTitle": "Market recordings and event replay",
@@ -99,7 +111,19 @@
     "qeDetails": "Details",
     "qeNoMark": "No eligible final quote; valuation unavailable",
     "qeAccount": "Account and market data",
-    "qeView": "View"
+    "qeView": "View",
+    "qeValidation": "Order-book walk-forward validation",
+    "qeValidationHint": "Rank revisions on earlier windows and evaluate the winner in the following window. Each replay starts with the same virtual balances.",
+    "qeRevisions": "Candidate revisions (comma-separated)",
+    "qeStartMs": "Start offset (milliseconds)",
+    "qeTrainMs": "Training window (milliseconds)",
+    "qeTestMs": "Test window (milliseconds)",
+    "qeFolds": "Folds",
+    "qeFold": "Fold {n}",
+    "qeTraining": "Training ranking",
+    "qeTest": "Out-of-sample result",
+    "qeStageProgress": "Replays completed",
+    "qeDurationMs": "Recording duration (milliseconds)"
   },
   "de": {
     "qeTitle": "Marktaufzeichnung und Ereigniswiedergabe",
@@ -150,6 +174,18 @@
     "qeDetails": "Details",
     "qeNoMark": "Kein gültiger Schlusskurs; Bewertung nicht verfügbar",
     "qeAccount": "Konto und Marktdaten",
-    "qeView": "Anzeigen"
+    "qeView": "Anzeigen",
+    "qeValidation": "Walk-Forward-Validierung des Orderbuchs",
+    "qeValidationHint": "Versionen werden in früheren Fenstern verglichen und der Sieger wird im folgenden Fenster getestet. Jede Wiedergabe startet mit demselben virtuellen Guthaben.",
+    "qeRevisions": "Kandidatenversionen (kommagetrennt)",
+    "qeStartMs": "Startversatz (Millisekunden)",
+    "qeTrainMs": "Trainingsfenster (Millisekunden)",
+    "qeTestMs": "Testfenster (Millisekunden)",
+    "qeFolds": "Abschnitte",
+    "qeFold": "Abschnitt {n}",
+    "qeTraining": "Trainingsrangliste",
+    "qeTest": "Ergebnis außerhalb der Trainingsdaten",
+    "qeStageProgress": "Abgeschlossene Wiedergaben",
+    "qeDurationMs": "Aufzeichnungsdauer (Millisekunden)"
   }
 }

@@ -81,6 +81,7 @@ struct Id {
 struct ExecutionStart {
     id: String,
     policy_id: String,
+    arrival: Option<cibyp_quant_engine::ledger::execution::Arrival>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -314,10 +315,11 @@ impl Engine {
             }
             "execution.start" => {
                 let input = params::<ExecutionStart>(value)?;
-                serde_json::to_value(self.execution.start(
+                serde_json::to_value(self.execution.start_with_arrival(
                     &mut self.ledger,
                     &input.id,
                     &input.policy_id,
+                    input.arrival,
                 )?)
                 .map_err(|_| "ENCODING_ERROR".into())
             }
@@ -336,9 +338,14 @@ impl Engine {
             }
             "execution.claim" => {
                 let input = params::<ExecutionClaim>(value)?;
-                let command = self.ledger.execution_claim(&input.id, &input.lease)?;
-                self.execution.generation = self.execution.generation.saturating_add(1);
-                serde_json::to_value(command).map_err(|_| "ENCODING_ERROR".into())
+                let (command, remaining_ms) =
+                    self.execution
+                        .claim(&mut self.ledger, &input.id, &input.lease)?;
+                let mut value = serde_json::to_value(command).map_err(|_| "ENCODING_ERROR")?;
+                if let Some(ms) = remaining_ms {
+                    value["window_remaining_ms"] = json!(ms);
+                }
+                Ok(value)
             }
             "execution.report" => serde_json::to_value(
                 self.execution
@@ -991,7 +998,7 @@ fn run() -> io::Result<()> {
         &mut output,
         &request.id,
         Ok(
-            json!({"protocol":PROTOCOL,"version":env!("CARGO_PKG_VERSION"),"mode":if replay{"replay"}else{"paper"},"liveExecution":false,"executionOutbox":2,"executionHalt":1,"pid":std::process::id()}),
+            json!({"protocol":PROTOCOL,"version":env!("CARGO_PKG_VERSION"),"mode":if replay{"replay"}else{"paper"},"liveExecution":false,"executionOutbox":2,"executionHalt":1,"executionPriceLimit":1,"executionFixedWindows":1,"executionVwap":1,"executionArrival":1,"executionArrivalLimit":1,"pid":std::process::id()}),
         ),
     )?;
     let mut generation = 0;

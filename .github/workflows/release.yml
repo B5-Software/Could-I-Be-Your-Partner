@@ -51,7 +51,7 @@ jobs:
         run: npm run test:quant:chain
       - name: 打包后的 Node 后台和独立签名器端到端验收
         run: npm run test:quant:bundle
-      - name: 打包后的 SuperAgent 持久化与量化门控验收
+      - name: 打包后的 SuperAgent 持久化与默认量化入口验收
         run: node tests/integration/super-agent-backend.cjs --bundled
       - name: 原生量化基础库的精度、行情恢复与持久化验收
         run: |
@@ -68,6 +68,8 @@ jobs:
           node tests/integration/quant-event-replay.test.cjs --bundled
           node scripts/test-quant-chain.cjs --execution
           node scripts/test-quant-chain.cjs --execution --bundled
+          node scripts/test-quant-chain.cjs --networks
+          node scripts/test-quant-chain.cjs --networks --bundled
       - name: 验证 Release 日志和发布重跑
         run: python3 tests/release-publisher.test.py
       - name: 检查高危依赖

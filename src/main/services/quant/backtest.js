@@ -51,20 +51,20 @@ function parameters(input = {}) {
   };
 }
 
-function runBacktest(raw, input = {}) {
-  const candles = validateCandles(raw),
-    config = parameters(input);
-  if (candles.length < (config.strategy === 'sma-cross' ? config.slow + 2 : 3))
-    throw new Error('MORE_CANDLES_REQUIRED');
-  let cash = atoms(config.initialCash),
-    position = 0n,
+function simulate(candles, config, { start = 0, account, trace = true } = {}) {
+  const firstClose = start ? atoms(candles[start - 1].close.toFixed(8), true) : 0n;
+  let cash = account?.cash ?? atoms(config.initialCash),
+    position = account?.position ?? 0n,
     totalFees = 0n;
   let pending = null,
     fastSum = 0,
     slowSum = 0,
-    lastSignal = false,
-    peak = cash,
-    worstDrawdown = 0;
+    lastSignal = position > 0n;
+  const openingEquity = cash + (position * firstClose) / SCALE;
+  let peak = openingEquity,
+    mark = openingEquity,
+    worstDrawdown = 0n,
+    fills = 0;
   const trades = [],
     equity = [];
   for (let i = 0; i < candles.length; i++) {
@@ -88,58 +88,76 @@ function runBacktest(raw, input = {}) {
           cash += buying ? -value - costs : value - costs;
           position += buying ? quantity : -quantity;
           totalFees += costs;
-          trades.push({
-            time: bar.time,
-            signalTime: candles[i - 1].time,
-            side: pending,
-            price: decimal(price),
-            quantity: decimal(quantity),
-            fee: decimal(costs),
-          });
+          fills++;
+          if (trace)
+            trades.push({
+              time: bar.time,
+              signalTime: candles[i - 1].time,
+              side: pending,
+              price: decimal(price),
+              quantity: decimal(quantity),
+              fee: decimal(costs),
+            });
         }
       }
       pending = null;
     }
-    const close = atoms(bar.close.toFixed(8), true);
-    const value = cash + (position * close) / SCALE;
-    if (value > peak) peak = value;
-    worstDrawdown = Math.max(worstDrawdown, Number(((peak - value) * 1000000n) / peak) / 10000);
-    equity.push({ time: bar.time, value: Number(decimal(value)) });
+    if (i >= start) {
+      const close = atoms(bar.close.toFixed(8), true);
+      mark = cash + (position * close) / SCALE;
+      if (mark > peak) peak = mark;
+      const drawdown = ((peak - mark) * 1000000n) / peak;
+      if (drawdown > worstDrawdown) worstDrawdown = drawdown;
+      if (trace) equity.push({ time: bar.time, value: Number(decimal(mark)) });
+    }
     fastSum += bar.close;
     slowSum += bar.close;
     if (i >= config.fast) fastSum -= candles[i - config.fast].close;
     if (i >= config.slow) slowSum -= candles[i - config.slow].close;
     if (config.strategy === 'buy-hold' && i === 0) pending = 'buy';
-    if (config.strategy === 'sma-cross' && i >= config.slow - 1) {
+    if (config.strategy === 'sma-cross' && i >= Math.max(start - 1, config.slow - 1)) {
       const signal = fastSum / config.fast > slowSum / config.slow;
       if (signal && !lastSignal && position === 0n) pending = 'buy';
       if (!signal && lastSignal && position > 0n) pending = 'sell';
       lastSignal = signal;
     }
   }
-  const finalEquity = equity.at(-1).value;
+  const finalEquity = Number(decimal(mark));
   return {
-    config,
+    account: { cash, position },
+    mark,
+    worstDrawdown,
+    totalFees,
     trades,
     equity,
     metrics: {
       finalEquity,
       cash: decimal(cash),
       position: decimal(position),
-      returnPct: (finalEquity / Number(config.initialCash) - 1) * 100,
-      maxDrawdownPct: worstDrawdown,
+      returnPct: (finalEquity / Number(decimal(openingEquity)) - 1) * 100,
+      maxDrawdownPct: Number(worstDrawdown) / 10000,
       fees: decimal(totalFees),
-      fills: trades.length,
-      bars: candles.length,
+      fills,
+      bars: candles.length - start,
     },
-    assumptions: [
-      'candle-next-open',
-      'spot-long-only',
-      'no-orderbook-or-queue',
-      'fixed-fee-and-slippage',
-      'unrealized-inventory-marked-at-last-close',
-      'not-a-high-frequency-execution-validation',
-    ],
   };
 }
-module.exports = { validateCandles, parameters, runBacktest };
+
+const assumptions = [
+  'candle-next-open',
+  'spot-long-only',
+  'no-orderbook-or-queue',
+  'fixed-fee-and-slippage',
+  'unrealized-inventory-marked-at-last-close',
+  'not-a-high-frequency-execution-validation',
+];
+
+function runBacktest(raw, input = {}) {
+  const candles = validateCandles(raw),
+    config = parameters(input);
+  if (candles.length < (config.strategy === 'sma-cross' ? config.slow + 2 : 3))
+    throw new Error('MORE_CANDLES_REQUIRED');
+  const { trades, equity, metrics } = simulate(candles, config);
+  return { config, trades, equity, metrics, assumptions };
+}
+module.exports = { validateCandles, parameters, runBacktest, simulate, assumptions };

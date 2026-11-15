@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 import fields from '../../shared/wallet-token-fields.json';
 import presets from '../../shared/wallet-token-presets.json';
+import { chainLabel } from '../../shared/wallet-chain';
+export type WalletChainOption = { id: number; name: string };
 type Token = Record<string, unknown>;
 const esc = (v: unknown) =>
   String(v ?? '').replace(
@@ -9,7 +11,17 @@ const esc = (v: unknown) =>
   );
 export class WalletTokenEditor {
   root: HTMLElement;
-  constructor(t: (key: string) => string, initial: unknown) {
+  constructor(t: (key: string) => string, initial: unknown, networks: WalletChainOption[] = []) {
+    const chains = new Map<number, WalletChainOption>(
+      [{ id: 8453, name: 'Base' }, { id: 84532, name: 'Base Sepolia' }, ...networks].map((p) => [
+        p.id,
+        p,
+      ]),
+    );
+    if (Array.isArray(initial))
+      for (const token of initial)
+        if (!chains.has(token.chainId))
+          chains.set(token.chainId, { id: token.chainId, name: chainLabel(token.chainId) });
     this.root = document.createElement('section');
     this.root.className = 'wallet-token-editor';
     this.root.innerHTML = `<h4>${esc(t('tokensTitle'))}</h4><p>${esc(t('tokensHint'))}</p><div data-token-list></div><div class="wallet-token-add"><select aria-label="${esc(t('tokenPreset'))}"><option value="">${esc(t('tokenPreset'))}</option>${presets.map((p, i) => `<option value="${i}">${p.symbol} · ${p.chainId === 8453 ? 'Base' : 'Base Sepolia'}</option>`).join('')}</select><button type="button" data-token-add>${esc(t('tokenCustom'))}</button></div>`;
@@ -26,7 +38,7 @@ export class WalletTokenEditor {
             return `<label class="wallet-scope-toggle"><span>${esc(t(f.name))}</span><input type="checkbox" role="switch" ${attr} ${valueForField ? 'checked' : ''}></label>`;
           let control: string;
           if (f.kind === 'chain')
-            control = `<select ${attr}><option value="8453" ${valueForField === 8453 ? 'selected' : ''}>Base · 8453</option><option value="84532" ${valueForField === 84532 ? 'selected' : ''}>Base Sepolia · 84532</option></select>`;
+            control = `<select ${attr}>${[...chains.values()].map((p) => `<option value="${p.id}" ${valueForField === p.id ? 'selected' : ''}>${esc(p.name)} · ${p.id}</option>`).join('')}</select>`;
           else if (f.kind === 'list')
             control = `<textarea ${attr} rows="2" spellcheck="false">${esc(Array.isArray(valueForField) ? valueForField.join('\n') : valueForField)}</textarea>`;
           else

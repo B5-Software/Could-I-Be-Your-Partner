@@ -137,13 +137,106 @@ async function worker(directory) {
   );
   throw Error('fixture never reached signature');
 }
-if (process.argv.includes('--host-worker')) {
-  worker(process.argv.at(-1)).catch((error) => {
+async function messageWorker(directory) {
+  const service = new WalletService({ directory, fetcher });
+  const wallet = await service.request('import', { kind: 'privateKey', secret: key, password });
+  await service.request('unlock', { id: wallet.id, password, minutes: 0 });
+  const session = service.apps.createSession({ url: 'https://crash.example', valid: () => true });
+  const connecting = session.request({ method: 'eth_requestAccounts' }),
+    request = service.apps.list().pending[0];
+  await service.request('app.allow', {
+    id: request.id,
+    walletId: wallet.id,
+    chain: 'base',
+    confirmed: true,
+  });
+  await connecting;
+  const original = service.signer.bind(service);
+  service.signer = async (action, input) => {
+    const result = await original(action, input);
+    if (action === 'message.sign') {
+      const exited = once(service.child.process, 'exit');
+      service.child.kill();
+      await exited;
+      // Exit after the native receipt commit, before the message owner receives
+      // the reply or records signed status. No dispose/host recovery runs here.
+      process.exit(0);
+    }
+    return result;
+  };
+  const signing = session.request({
+    id: 'message-crash',
+    method: 'personal_sign',
+    params: ['0x68656c6c6f', wallet.address],
+  });
+  for (let n = 0; n < 100; n++) {
+    const pending = service.messages.items.find((r) => r.status === 'approval-required');
+    if (pending) {
+      await service.request('message.approve', {
+        id: pending.id,
+        digest: pending.reviewDigest,
+        confirmed: true,
+      });
+      break;
+    }
+    await new Promise((r) => setTimeout(r, 10));
+  }
+  await signing;
+  throw Error('Expected an abrupt message-owner exit');
+}
+if (process.argv.includes('--host-worker') || process.argv.includes('--message-host-worker')) {
+  (process.argv.includes('--message-host-worker') ? messageWorker : worker)(
+    process.argv.at(-1),
+  ).catch((error) => {
     console.error(error);
     process.exit(1);
   });
 } else {
   const test = require('node:test');
+  test('abrupt message-owner exit preserves the native signature and recovers metadata while locked without releasing bytes', async (t) => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'cibyp-message-crash-'));
+    let service, child;
+    t.after(async () => {
+      if (child && child.exitCode === null && child.signalCode === null) {
+        const exited = once(child, 'exit');
+        child.kill();
+        await exited;
+      }
+      await service?.dispose();
+      assert.equal(path.dirname(directory), path.resolve(os.tmpdir()));
+      assert.ok(path.basename(directory).startsWith('cibyp-message-crash-'));
+      fs.rmSync(directory, { recursive: true, force: true });
+    });
+    child = fork(__filename, ['--message-host-worker', directory], {
+      stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+      windowsHide: true,
+    });
+    child.stdout.resume();
+    let errors = '';
+    child.stderr.on('data', (b) => {
+      if (errors.length < 8192) errors += b;
+    });
+    const timeout = setTimeout(() => child.kill(), 15000);
+    const [code] = await once(child, 'exit');
+    clearTimeout(timeout);
+    assert.equal(code, 0, errors);
+    const stored = JSON.parse(fs.readFileSync(path.join(directory, 'messages.json'), 'utf8'))
+      .items[0];
+    assert.equal(stored.status, 'signing');
+    assert.equal(stored.signatureHash, undefined);
+    service = new WalletService({ directory, fetcher });
+    assert.equal(service.isUnlocked(stored.walletId), false);
+    assert.equal(
+      (await service.request('message.get', { id: stored.id })).status,
+      'signing-unknown',
+    );
+    const recovered = await service.request('message.reconcile', { id: stored.id });
+    assert.equal(recovered.status, 'signed-withheld');
+    assert.equal(recovered.message.origin, 'https://crash.example');
+    assert.match(recovered.signatureHash, /^0x[\da-f]{64}$/);
+    assert.equal(recovered.signature, undefined);
+    assert.equal(service.isUnlocked(stored.walletId), false);
+  });
   test('actual signer commits before an unreadable reply, restarts locked and rejects ID reuse', async (t) => {
     let client;
     const directory = temporary(t, () => client?.close());
@@ -458,6 +551,33 @@ if (process.argv.includes('--host-worker')) {
       /CALLDATA_LIMIT/,
     );
     await client.call('sign', { ...input, transaction: { ...transaction, data: '0xa9059cbb' } });
+  });
+  test('Permit2 nonce maintenance rejects unrestricted native automation including noncanonical calldata', async (t) => {
+    const { PERMIT2, permit2 } = require('../../src/main/services/quant/permit2');
+    let client;
+    const directory = temporary(t, () => client?.close());
+    client = new Client(directory);
+    const store = await account(client);
+    const grant = await permission(client, store);
+    const input = { ...signing(store), policyId: grant.policyId };
+    const token = '0x' + '3'.repeat(40),
+      spender = '0x' + '4'.repeat(40);
+    const ordered = permit2.encodeFunctionData('invalidateNonces', [token, spender, 1]);
+    const unordered = permit2.encodeFunctionData('invalidateUnorderedNonces', [2, 1]);
+    for (const data of [ordered, unordered, unordered + '00']) {
+      await assert.rejects(
+        client.call('sign', {
+          ...input,
+          transaction: { ...input.transaction, value: '0', to: PERMIT2, data },
+        }),
+        /WALLET_PERMIT2_MANUAL_REQUIRED/,
+      );
+    }
+    const inspected = await client.call('authority.inspect', {
+      storeId: store.storeId,
+      policyId: grant.policyId,
+    });
+    assert.equal(inspected.usage.transactions, 0);
   });
   test('explicit automatic replacement permission still requires the latest hash and consumes the shared budget', async (t) => {
     let client;

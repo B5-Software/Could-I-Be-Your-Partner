@@ -61,7 +61,7 @@ fn main() {
             return;
         }
     };
-    if send(json!({"type":"ready","protocol":7,"version":"0.1.0","vault":"CIBYP-WALLET/1","receipts":1,"authority":2,"portfolios":1,"agentScopes":1,"periodBudgets":1}))
+    if send(json!({"type":"ready","protocol":10,"version":"0.1.0","vault":"CIBYP-WALLET/1","receipts":1,"authority":2,"portfolios":1,"agentScopes":1,"periodBudgets":1,"messages":1,"portfolioEquity":1,"portfolioAllowance":1}))
         .is_err()
     {
         return;
@@ -78,7 +78,7 @@ fn main() {
                     Ok(value) => value,
                     Err(_) => return,
                 };
-                if request.protocol != 7
+                if request.protocol != 10
                     || request.id.is_empty()
                     || request.id.len() > 80
                     || !request

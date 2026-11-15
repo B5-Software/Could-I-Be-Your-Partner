@@ -68,6 +68,13 @@ module.exports = [
     languageOptions: { globals: { ...globals.browser, acquireVsCodeApi: 'readonly' } },
   },
   {
+    files: ['integrations/wallet-browser/*.js'],
+    languageOptions: {
+      globals: { ...globals.browser, ...globals.es2025, chrome: 'readonly' },
+    },
+    rules: correctness,
+  },
+  {
     files: ['src/renderer/js/**/*.js'],
     languageOptions: {
       ecmaVersion: 'latest',

@@ -56,6 +56,7 @@ async function open() {
     workspaceRoot: path.join(profile, 'workspaces'),
     settings: {
       onboardingCompleted: true,
+      features: { quant: false },
       language: 'en',
       runtime: { location: 'host' },
       automaticMemory: { enabled: false },
@@ -130,19 +131,16 @@ async function open() {
 }
 (async () => {
   await open();
-  assert.equal((await host.dispatch({ method: 'snapshot' })).features.quant, false);
-  await assert.rejects(
-    host.dispatch({ method: 'quant:request', args: ['native.start', {}] }),
-    /QUANT_DISABLED/,
-  );
   assert.equal(host.runtime.quantService, undefined);
-  const denied = host.runtime.createSession({ key: 'gated-quant', profile: 'quant' });
-  await assert.rejects(host.runtime.initialize({ key: denied.key }), /QUANT_DISABLED/);
-  await assert.rejects(
-    host.runtime.agentAction(denied.key, 'executeTool', ['quant_native', { action: 'start' }]),
-    /QUANT_DISABLED/,
+  assert.equal((await host.dispatch({ method: 'snapshot' })).features.quant, true);
+  assert.deepEqual(
+    await host.dispatch({ method: 'quant:request', args: ['workspace.list', {}] }),
+    [],
   );
-  await host.runtime.close(denied.key);
+  assert.notEqual(
+    (await host.dispatch({ method: 'quant:request', args: ['native.status', {}] })).state,
+    'connected',
+  );
   const event = await request('submit', {
     text: 'Create result.txt with the public fixture text and verify it.',
     operationId: 'real-runtime-test',
@@ -199,7 +197,7 @@ async function open() {
   assert.equal((await request('list')).total, 1);
   assert.ok(calls >= 6);
   console.log(
-    'PASS: actual shared Agent loop -> restricted Router -> real isolated file tool -> explicit report -> durable task/delivery -> locked-down quant entry -> backend restart -> history restore and direct follow-up. No external model or chain traffic.',
+    'PASS: actual shared Agent loop, restricted Router, isolated file tool, explicit reports, durable delivery, default quant entry and restart recovery. All model replies were fixtures.',
   );
 })()
   .catch((e) => {

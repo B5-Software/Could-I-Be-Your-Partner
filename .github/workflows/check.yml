@@ -54,6 +54,23 @@ jobs:
         if: runner.os == 'Windows' && matrix.node == '24'
       - run: npm run test:backend:v2
         if: runner.os == 'Windows' && matrix.node == '24'
+      - run: npm run test:wallet-ui
+        if: runner.os == 'Windows' && matrix.node == '24'
+      - name: Prepare Chromium for local wallet site acceptance
+        run: npx playwright install chromium
+        if: runner.os == 'Windows' && matrix.node == '24'
+      - name: Verify wallet sites, the browser extension and native payments
+        run: |
+          node scripts/test-quant-chain.cjs --apps
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/test-quant-chain.cjs --apps --extension
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          npm run build:node-core
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/test-quant-chain.cjs --apps --bundled
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/test-quant-chain.cjs --apps --extension --bundled
+        if: runner.os == 'Windows' && matrix.node == '24'
       - run: npm audit --audit-level=high
   macos-computer:
     strategy:

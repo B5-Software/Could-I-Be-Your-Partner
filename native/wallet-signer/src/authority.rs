@@ -52,8 +52,14 @@ impl Grant {
             || !self.address.starts_with("0x")
             || !self.address[2..].bytes().all(|b| b.is_ascii_hexdigit())
             || self.chains.is_empty()
-            || self.chains.len() > 2
-            || self.chains.iter().any(|c| ![8453, 84532].contains(c))
+            || self.chains.len() > 18
+            || self.chains.iter().any(|c| !crate::evm::valid_chain_id(*c))
+            || self
+                .chains
+                .iter()
+                .collect::<std::collections::BTreeSet<_>>()
+                .len()
+                != self.chains.len()
             || (self.expires_at != 0 && self.expires_at <= now()?)
         {
             return Err("WALLET_NATIVE_AUTH_INVALID");
@@ -132,7 +138,7 @@ pub fn initialize(connection: &mut Connection) -> Result<()> {
     let version: u32 = connection
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .map_err(|_| STORE)?;
-    if version > 7 {
+    if version > 8 {
         return Err(STORE);
     }
     if version == 0 {
@@ -184,6 +190,10 @@ pub fn initialize(connection: &mut Connection) -> Result<()> {
     }
     crate::periods::validate(connection)?;
     crate::portfolio_history::validate(connection)?;
+    if version <= 7 {
+        crate::messages::initialize(connection)?;
+    }
+    crate::messages::validate(connection)?;
     Ok(())
 }
 fn usage(connection: &Connection, id: &str) -> Result<crate::scope::Usage> {
@@ -362,6 +372,11 @@ pub(crate) fn record_nonce(connection: &Connection, receipt: &Receipt) -> Result
     Ok(())
 }
 pub fn check(connection: &Connection, request: &Check<'_>) -> Result<()> {
+    if (request.policy_id.is_some() || request.execution.is_some())
+        && crate::tokens::permit2_nonce_maintenance(request.transaction)
+    {
+        return Err("WALLET_PERMIT2_MANUAL_REQUIRED");
+    }
     crate::agent_scopes::check(connection, request)?;
     crate::portfolio::check(connection, request)?;
     if request.expires_at <= now()? {

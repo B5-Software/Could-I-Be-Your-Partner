@@ -55,6 +55,15 @@ const realFetch = global.fetch,
 let agentSteps = 0;
 const word = (value) => '0x' + BigInt(value).toString(16).padStart(64, '0');
 const { CHAINS } = require('../../src/main/services/quant/market-data');
+const { deployments, routerAbi } = require('../../src/main/services/quant/base-swap');
+const { Interface } = require('ethers');
+const feeOracle = new Interface(['function getL1Fee(bytes)', 'function getOperatorFee(uint256)']);
+const swapEvent = new Interface([
+  'event Swap(address indexed sender,address indexed recipient,int256 amount0,int256 amount1,uint160 sqrtPriceX96,uint128 liquidity,int24 tick)',
+]);
+const profileHead = 4080;
+const profileTime = Math.floor(Date.now() / 1000);
+const profilePool = '0x' + 'b'.repeat(40);
 let sqrt = (2n ** 192n * 10n ** 12n) / 3100n,
   x = (sqrt + 1n) / 2n;
 while (x < sqrt) {
@@ -169,20 +178,102 @@ global.fetch = async (url, options = {}) => {
     const { method, params } = JSON.parse(options.body);
     let result;
     if (method === 'eth_chainId') result = '0x2105';
-    else if (method === 'eth_getBlockByNumber')
+    else if (method === 'eth_getBlockByNumber') {
+      const number =
+        params[0] === 'latest' ? 4096 : params[0] === 'finalized' ? profileHead : Number(params[0]);
+      const timestamp =
+        number === 4096 ? Math.floor(Date.now() / 1000) : profileTime - (profileHead - number) * 2;
       result = {
-        number: '0x1000',
-        hash: '0x' + 'a'.repeat(64),
-        timestamp: '0x' + Math.floor(Date.now() / 1000).toString(16),
+        number: '0x' + number.toString(16),
+        hash: number === 4096 ? '0x' + 'a'.repeat(64) : word(number),
+        timestamp: '0x' + timestamp.toString(16),
+        baseFeePerGas: '0x10000',
+        gasLimit: '0x200000',
       };
-    else if (method === 'eth_getBalance') result = '0x0';
+    } else if (method === 'eth_getLogs') {
+      const { fromBlock, toBlock } = params[0];
+      result = [
+        [profileHead - 350, 10n ** 18n],
+        [profileHead - 200, 2n * 10n ** 18n],
+        [profileHead - 40, 10n ** 18n],
+        [profileHead - 10, 3n * 10n ** 18n],
+      ]
+        .filter(([block]) => Number(fromBlock) <= block && block <= Number(toBlock))
+        .map(([block, amount]) => ({
+          ...swapEvent.encodeEventLog('Swap', [
+            profilePool,
+            profilePool,
+            -1000000n,
+            amount,
+            sqrt,
+            1n,
+            0n,
+          ]),
+          address: profilePool,
+          blockNumber: '0x' + block.toString(16),
+          blockHash: word(block),
+          transactionHash: word(block + 10000),
+          logIndex: '0x0',
+          removed: false,
+        }));
+    } else if (method === 'eth_simulateV1') {
+      const anchor = Number(params[1]);
+      const blocks = params[0].blockStateCalls;
+      assert.equal(blocks.length, 2);
+      let weth = BigInt(blocks[0].calls[2].value),
+        usdc = 0n;
+      const response = (returnData, gasUsed = '0x5208') => ({ status: '0x1', returnData, gasUsed });
+      const balance = (amount) => response(word(amount));
+      const spot = (mark) => response(word(mark) + '0'.repeat(6 * 64));
+      const initial = [
+        balance(0),
+        balance(0),
+        response('0x'),
+        balance(1),
+        balance(1),
+        balance(weth),
+        balance(0),
+      ];
+      result = blocks.map(({ calls, blockOverrides }, i) => {
+        const swap = calls.at(-4);
+        assert.equal(swap.to, deployments.base.router);
+        const [leg] = routerAbi.decodeFunctionData('exactInputSingle', swap.input);
+        assert.equal(leg.amountIn, 100000000000000000n);
+        const output = 2000000n - BigInt(i) * 100000n;
+        weth -= leg.amountIn;
+        usdc += output;
+        const timestamp =
+          '0x' + (profileTime - (profileHead - anchor) * 2 + (i + 1) * 2).toString(16);
+        assert.equal(blockOverrides.timestamp, timestamp);
+        return {
+          number: '0x' + (anchor + i + 1).toString(16),
+          hash: word(100000 + anchor + i + 1),
+          parentHash: word(i ? 100000 + anchor + i : anchor),
+          timestamp,
+          calls: [
+            ...(i ? [] : initial),
+            spot(sqrt - BigInt(i)),
+            response(word(output), '0x20000'),
+            spot(sqrt - BigInt(i + 1)),
+            balance(weth),
+            balance(usdc),
+          ],
+        };
+      });
+    } else if (method === 'eth_getBalance') result = '0x0';
     else if (method === 'eth_call') {
       const { to, data } = params[0];
       if (to === CHAINS.base.factory) result = word('0x' + 'b'.repeat(40));
-      else if (data === '0x0dfe1681') result = word(CHAINS.base.usdc);
+      else if (to === '0x420000000000000000000000000000000000000f') {
+        assert.ok(params[1].requireCanonical && params[1].blockHash);
+        result = word(feeOracle.parseTransaction({ data }).name === 'getL1Fee' ? 50000n : 1000n);
+      } else if (data === '0x0dfe1681') result = word(CHAINS.base.usdc);
       else if (data === '0xd21220a7') result = word(CHAINS.base.weth);
-      else if (data === '0x3850c7bd') result = word(sqrt);
-      else if (data === '0x1a686502') result = word(1000000000000n);
+      else if (data === '0x3850c7bd') result = word(sqrt) + '0'.repeat(6 * 64);
+      else if (to === deployments.base.quoter) {
+        assert.ok(params[1].requireCanonical && params[1].blockHash);
+        result = word(10n ** 18n) + [sqrt, 2n, 123456n].map((part) => word(part).slice(2)).join('');
+      } else if (data === '0x1a686502') result = word(1000000000000n);
       else if (data === '0x313ce567') result = word(to === CHAINS.base.usdc ? 6 : 18);
     }
     if (result === undefined) throw new Error('Unexpected fixture RPC ' + method);
@@ -356,7 +447,18 @@ ipcMain.once('app:renderer-ready', (event) =>
           "';document.querySelector('.quant-event-dialog form').requestSubmit()",
       );
       await until("!!document.querySelector('.quant-event-dialog [data-qe-stop]')");
-      await js('new Promise(resolve=>setTimeout(resolve,700))');
+      const refreshBook = () =>
+        marketSocket.frame('l2_data', [
+          {
+            type: 'update',
+            product_id: 'ETH-USD',
+            updates: [{ side: 'bid', price_level: '2333', new_quantity: '0.25' }],
+          },
+        ]);
+      refreshBook();
+      await pause(650);
+      refreshBook();
+      await pause(450);
       await js("document.querySelector('.quant-event-dialog [data-qe-stop]').click()");
       await until("!!document.querySelector('.quant-event-dialog [data-qe=run]:not(:disabled)')");
       await js("document.querySelector('.quant-event-dialog [data-qe=run]').click()");
@@ -379,6 +481,32 @@ ipcMain.once('app:renderer-ready', (event) =>
         "document.querySelector('.quant-event-dialog [data-qe-result]').scrollIntoView({block:'start'})",
       );
       await shot('quant-event-replay-report-' + theme + '.png');
+      await until(
+        "!!document.querySelector('.quant-event-dialog [data-qe=validate]:not(:disabled)')",
+      );
+      await js(`(() => {
+        const dialog = document.querySelector('.quant-event-dialog');
+        dialog.querySelector('[data-qe-train]').value = '500';
+        dialog.querySelector('[data-qe-test]').value = '500';
+        dialog.querySelector('[data-qe-folds]').value = '1';
+        dialog.querySelector('[data-qe=validate]').click();
+      })()`);
+      await until(
+        "document.querySelector('.quant-event-dialog .qe-validation-result')?.textContent.includes('样本外结果')",
+      );
+      await until(
+        "document.querySelector('.quant-event-dialog [data-qe-history-context]').textContent.includes('样本外结果')",
+      );
+      await js(
+        "document.querySelector('.quant-event-dialog [data-qe-ranking] summary').click();document.querySelector('.quant-event-dialog [data-qe-training]').click()",
+      );
+      await until(
+        "document.querySelector('.quant-event-dialog [data-qe-history-context]').textContent.includes('训练排名')",
+      );
+      await js(
+        "document.querySelector('.quant-event-dialog .qe-validation-result').scrollIntoView({block:'start'})",
+      );
+      await shot('quant-native-validation-' + theme + '.png');
       await js("document.querySelector('.quant-event-dialog [data-qe=close]').click()");
     };
     const nativePaperUi = async (theme) => {
@@ -495,12 +623,82 @@ ipcMain.once('app:renderer-ready', (event) =>
           volume: 5 + Math.abs(Math.sin(i)) * 35,
         };
       });
-      await js(
+      const imported = await js(
         `window.api.backendRequest('quant:request','dataset.import',{id:window.__quantTestId,label:'UI TEST FIXTURE · OHLC',text:${JSON.stringify(JSON.stringify(candles))}})`,
       );
       await js("window.navigatePage('quant')");
       await until("document.querySelector('[data-product]').textContent==='WETH-USDC'");
       await until("!!document.querySelector('[data-chart-canvas] canvas').width");
+      await js("document.querySelector('[data-action=base-history]').click()");
+      await until("!!document.querySelector('.quant-amm-dialog[open]')");
+      await js("document.querySelector('.quant-amm-dialog button[value=recent]').click()");
+      await until("!document.querySelector('.quant-amm-dialog[open]')");
+      await until("document.querySelector('[data-source]').textContent.includes('Uniswap v3')");
+      await js("document.querySelector('[data-action=base-history]').click()");
+      await until("!!document.querySelector('.quant-amm-dialog [data-trades] tbody tr')");
+      await js("document.querySelector('.quant-amm-dialog button[value=continue]').click()");
+      await until("document.querySelector('.quant-amm-dialog [role=alert]:not([hidden])')");
+      await js("document.querySelector('.quant-amm-dialog [data-record=Selected]').click()");
+      await until("!!document.querySelector('.quant-amm-dialog [data-record=Stop]:not([hidden])')");
+      await js("document.querySelector('.quant-amm-dialog [data-record=Stop]').click()");
+      await until(
+        "!!document.querySelector('.quant-amm-dialog [data-record=Resume]:not([hidden])')",
+      );
+      assert.equal(
+        await js(
+          "!!document.querySelector('.quant-amm-dialog [data-record=Latest]:not([hidden])')",
+        ),
+        true,
+      );
+      await js("document.querySelector('.quant-amm-dialog [data-series-form] button').click()");
+      await until("!document.querySelector('.quant-amm-dialog[open]')");
+      await until(
+        "(async()=>{const w=await window.api.backendRequest('quant:request','workspace.get',{id:window.__quantTestId});return !!w.datasets.find(d=>d.id===w.preferences.datasetId)?.series;})()",
+      );
+      await until("!!document.querySelector('[data-action=amm-replay]:not([hidden])')");
+      await js("document.querySelector('[data-action=amm-replay]').click()");
+      await until("!!document.querySelector('.quant-amm-replay-dialog[open]')");
+      await js(
+        "(()=>{const select=document.querySelector('.quant-amm-replay-dialog [name=feeMode]');select.value='historical';select.dispatchEvent(new Event('change'));})()",
+      );
+      await until(
+        "!document.querySelector('.quant-amm-replay-dialog [name=networkFeeCapUsdc]').disabled",
+      );
+      await js("document.querySelector('.quant-amm-replay-dialog button[type=submit]').click()");
+      await until("!document.querySelector('.quant-amm-replay-dialog[open]')");
+      await until("!!document.querySelector('[data-run-report] details table tr')");
+      await until(
+        "document.querySelector('[data-run-report] details table tr small')?.textContent.includes('运营商费')",
+      );
+      await js("document.querySelector('[data-action=amm-scenario]').click()");
+      await until("!!document.querySelector('.quant-amm-scenario-dialog[open]')");
+      await js(`(() => {
+        const dialog = document.querySelector('.quant-amm-scenario-dialog');
+        dialog.querySelector('[data-add]').click();
+        dialog.querySelectorAll('[name=amountIn]')[1].value = '0.1';
+        dialog.querySelector('button[type=submit]').click();
+      })()`);
+      await until("!document.querySelector('.quant-amm-scenario-dialog[open]')");
+      await until("document.querySelectorAll('[data-run-report] table tbody tr').length === 2");
+      assert.match(
+        await js(
+          "document.querySelector('[data-run-report] table tbody tr:last-child').textContent",
+        ),
+        /1\.9 USDC/,
+      );
+      const scenario = await js(
+        "(async()=>{const id=window.__quantTestId;const w=await window.api.backendRequest('quant:request','workspace.get',{id});const summary=w.runs.find(run=>run.codeVersion==='base-amm-scenario-1');return window.api.backendRequest('quant:request','run.get',{id,runId:summary.id});})()",
+      );
+      assert.equal(
+        scenario.ammScenario.legs[1].sqrtBeforeX96,
+        scenario.ammScenario.legs[0].sqrtAfterX96,
+      );
+      await js(
+        `window.api.backendRequest('quant:request','workspace.update',{id:window.__quantTestId,preferences:{datasetId:${JSON.stringify(imported.id)}}})`,
+      );
+      await until(
+        `document.querySelector('[data-dataset]').value === ${JSON.stringify(imported.id)}`,
+      );
       await js(
         "window.api.backendRequest('quant:request','chat.send',{id:window.__quantTestId,message:'Inspect the data, run and verify an SMA experiment.',autonomous:true})",
       );
@@ -520,10 +718,42 @@ ipcMain.once('app:renderer-ready', (event) =>
           await js(
             "window.api.backendRequest('quant:request','workspace.get',{id:window.__quantTestId})",
           )
-        ).runs.length,
+        ).runs.filter((run) => !run.codeVersion?.startsWith('base-amm-')).length,
         1,
       );
       await shot('quant-professional-dark.png');
+      await js("document.querySelector('[data-action=walk-forward]').click()");
+      await until("!!document.querySelector('.quant-walk-forward-dialog[open]')");
+      await js("document.querySelector('.quant-walk-forward-dialog [type=submit]').click()");
+      await until("!document.querySelector('.quant-walk-forward-dialog[open]')");
+      await until(
+        "document.querySelectorAll('[data-walk-forward-report] > div table tbody tr').length === 3",
+      );
+      await js("document.querySelector('[data-walk-forward-report] details summary').click()");
+      assert.equal(
+        await js(
+          "document.querySelectorAll('[data-walk-forward-report] details[open] tbody tr').length",
+        ),
+        9,
+      );
+      await js(`(() => {
+        document.querySelector('[data-walk-forward-report] details[open]').dataset.testMarker = 'open';
+        return window.api.backendRequest('quant:request','workspace.update',{id:window.__quantTestId,preferences:{datasetId:${JSON.stringify(imported.id)}}});
+      })()`);
+      await until("!document.querySelector('[data-test-marker=open]')");
+      assert.equal(
+        await js(
+          'document.querySelector(\'[data-walk-forward-report] details[data-fold="1"]\').open',
+        ),
+        true,
+      );
+      const walkRun = await js(
+        "(async()=>{const id=window.__quantTestId;const w=await window.api.backendRequest('quant:request','workspace.get',{id});const row=w.runs.find(run=>run.codeVersion==='candle-walk-forward-1');return window.api.backendRequest('quant:request','run.get',{id,runId:row.id});})()",
+      );
+      assert.equal(walkRun.datasetId, imported.id);
+      assert.equal(walkRun.metrics.bars, 90);
+      assert.equal(walkRun.walkForward.windows[0].training.bars, 120);
+      await shot('quant-walk-forward.png');
       if (
         fs.existsSync(
           require('../../src/main/services/quant/native-binary').developmentBinary(
@@ -598,11 +828,8 @@ ipcMain.once('app:renderer-ready', (event) =>
         "document.querySelector('.quant-evidence-dialog [data-close]').click();document.querySelector('[data-action=\"tab:experiments\"]').click()",
       );
       await js("document.querySelector('[data-action=fullscreen]').click()");
-      await pause(250);
-      assert.ok(
-        await js(
-          "!!document.fullscreenElement || document.querySelector('[data-chart-card]').classList.contains('quant-focus-fullscreen')",
-        ),
+      await until(
+        "!!document.fullscreenElement || document.querySelector('[data-chart-card]').classList.contains('quant-focus-fullscreen')",
       );
       await shot('quant-fullscreen.png');
       await js("document.querySelector('[data-action=fullscreen]').click()");
@@ -691,9 +918,9 @@ ipcMain.once('app:renderer-ready', (event) =>
       const rotated = await js("window.api.backendRequest('wallet:request','list')");
       assert.equal(rotated.wallets[0].unlocked, false);
       assert.equal(rotated.wallets[0].policy.mode, 'manual');
-      await js(
-        "document.querySelector('[data-wallet-action=enable]').click();document.querySelector('.wallet-dialog [data-continue]').click()",
-      );
+      await js("document.querySelector('[data-wallet-action=enable]').click()");
+      await until("!!document.querySelector('.wallet-dialog [data-continue]')");
+      await js("document.querySelector('.wallet-dialog [data-continue]').click()");
       await until("!document.querySelector('.wallet-dialog [data-second]').hidden");
       const before = await js("window.api.backendRequest('wallet:request','list')");
       assert.equal(before.wallets[0].policy.mode, 'manual');
@@ -714,7 +941,7 @@ ipcMain.once('app:renderer-ready', (event) =>
       await js("document.querySelector('[data-action=live-execution]').click()");
       await until("!!document.querySelector('.le-dialog [data-le=new]:not(:disabled)')");
       await js(
-        "document.querySelector('.le-dialog [data-le=new]').click();const input=document.querySelector('.le-dialog [name=totalInput]');input.value='12.50';input.focus()",
+        "document.querySelector('.le-dialog [data-le=new]').click();const schedule=document.querySelector('.le-dialog [name=schedule]');schedule.value='vwap';schedule.dispatchEvent(new Event('change'));document.querySelector('.le-dialog [name=minimumTotalOutput]').value='0.006200000000000001';document.querySelector('.le-dialog [name=maxArrivalCostBps]').value='125';const input=document.querySelector('.le-dialog [name=totalInput]');input.value='12.50';input.focus()",
       );
       await pause(3300);
       assert.equal(
@@ -724,6 +951,8 @@ ipcMain.once('app:renderer-ready', (event) =>
         true,
         'polling must not replace an active financial input',
       );
+      await js("document.querySelector('.le-dialog [data-le=capture]').click()");
+      await until("document.querySelector('[data-vwap-preview]').textContent.includes('75%')");
       await js("document.querySelector('.le-dialog form').requestSubmit()");
       await until("!!document.querySelector('.le-dialog [data-le=start]')");
       assert.equal(
@@ -758,6 +987,14 @@ ipcMain.once('app:renderer-ready', (event) =>
       );
       assert.equal(plans.items.length, 1);
       assert.equal(plans.items[0].phase, 'paused');
+      assert.equal(plans.items[0].plan.min_total_output_atoms, '6200000000000001');
+      assert.equal(plans.items[0].plan.template, 'base-vwap-fixed-v1');
+      assert.equal(plans.items[0].plan.max_arrival_cost_bps, 125);
+      assert.deepEqual(plans.items[0].plan.vwap.weth_volume_atoms, [
+        '1000000000000000000',
+        '3000000000000000000',
+      ]);
+      assert.equal(plans.items[0].fixed, undefined);
       assert.equal(plans.items[0].commands_created, 0);
       await js("document.querySelector('.le-dialog').close()");
       const stillPaused = await js(

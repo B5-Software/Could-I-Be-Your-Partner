@@ -4,6 +4,7 @@ pub mod agent_scopes;
 pub mod authority;
 pub mod evm;
 pub mod legacy;
+pub mod messages;
 pub mod periods;
 pub mod portfolio;
 pub mod portfolio_history;
@@ -52,6 +53,12 @@ pub struct Input {
     #[zeroize(skip)]
     pub portfolio: Option<portfolio::Portfolio>,
     #[zeroize(skip)]
+    pub portfolio_equity: Option<portfolio::EquityEvidence>,
+    #[zeroize(skip)]
+    pub portfolio_allowance: Option<portfolio::AllowanceEvidence>,
+    #[zeroize(skip)]
+    pub chain_id: Option<u64>,
+    #[zeroize(skip)]
     pub scope: Option<agent_scopes::Scope>,
     #[zeroize(skip)]
     pub offset: Option<u32>,
@@ -65,6 +72,8 @@ pub struct Input {
     pub minutes: Option<u16>,
     #[zeroize(skip)]
     pub transaction: Option<evm::Transaction>,
+    #[zeroize(skip)]
+    pub message: Option<messages::Message>,
 }
 struct Unlocked {
     key: Zeroizing<Vec<u8>>,
@@ -134,6 +143,68 @@ impl Signer {
             return Err("WALLET_ID");
         }
         match action {
+            "message.status" => {
+                messages::validate(&self.store.connection)?;
+                let count: i64 = self
+                    .store
+                    .connection
+                    .query_row(
+                        "SELECT receipts FROM message_metadata WHERE id=1",
+                        [],
+                        |r| r.get(0),
+                    )
+                    .map_err(|_| "WALLET_RECEIPT_STORE_FAILED")?;
+                Ok(json!({"version":1,"storeId":self.store.id,"count":count}))
+            }
+            "message.inspect" => {
+                let message = input.message.as_ref().ok_or("WALLET_MESSAGE_INVALID")?;
+                Ok(json!({"digest":message.digest()?,"binding":message.binding()?}))
+            }
+            "message.receipt" => {
+                self.store
+                    .check(input.store_id.as_deref().ok_or("WALLET_RECEIPT_REQUIRED")?)?;
+                let result = messages::summary(
+                    &self.store.connection,
+                    &self.store.id,
+                    operation_id(input)?,
+                )?;
+                if result.get("found").and_then(Value::as_bool) == Some(true)
+                    && result["walletId"] != input.id
+                {
+                    return Err("WALLET_RECEIPT_CONFLICT");
+                }
+                Ok(result)
+            }
+            "message.approve" | "message.sign" => {
+                if input.policy_id.is_some()
+                    || input.execution.is_some()
+                    || input.agent_scope_id.is_some()
+                {
+                    return Err("WALLET_MESSAGE_APPROVAL");
+                }
+                self.store
+                    .check(input.store_id.as_deref().ok_or("WALLET_RECEIPT_REQUIRED")?)?;
+                let entry = self.unlocked.get(&input.id).ok_or("WALLET_LOCKED")?;
+                let message = input.message.as_ref().ok_or("WALLET_MESSAGE_INVALID")?;
+                let approval = messages::Approval {
+                    wallet_id: input.id.clone(),
+                    address: evm::address(&entry.key)?,
+                    binding: message.binding()?,
+                    digest: message.digest()?,
+                    session: entry.session.clone(),
+                    expires_at: input.expires_at.ok_or("WALLET_MESSAGE_APPROVAL")?,
+                };
+                let operation = operation_id(input)?;
+                if action == "message.approve" {
+                    self.store
+                        .edit(|c| messages::approve(c, operation, &approval))?;
+                    Ok(json!({"ok":true,"storeId":self.store.id}))
+                } else {
+                    let store = self.store.id.clone();
+                    self.store
+                        .edit(|c| messages::sign(c, &store, operation, &approval, &entry.key))
+                }
+            }
             "scope.ensure" => {
                 let scope = input.scope.as_ref().ok_or("WALLET_AGENT_SCOPE_INVALID")?;
                 if scope.id != input.id {
@@ -161,6 +232,20 @@ impl Signer {
             }),
             "portfolio.list" => portfolio::list(&self.store.connection, input.offset.unwrap_or(0)),
             "portfolio.get" => portfolio::get(&self.store.connection, &input.id),
+            "portfolio.equity.guard" => portfolio::equity_guard(
+                &self.store.connection,
+                &input.id,
+                input
+                    .expected_address
+                    .as_deref()
+                    .ok_or("WALLET_PORTFOLIO_INVALID")?,
+            ),
+            "portfolio.allowance.guard" => portfolio::allowance_guard(
+                &self.store.connection,
+                &input.id,
+                input.expected_address.as_deref().ok_or("WALLET_ID")?,
+                input.chain_id.ok_or("WALLET_TRANSACTION_FORMAT")?,
+            ),
             "portfolio.revisions" => portfolio_history::list(
                 &self.store.connection,
                 &input.id,
@@ -455,6 +540,16 @@ impl Signer {
                     agent_subject: input.agent_subject.as_deref(),
                 };
                 authority::check(&self.store.connection, &check)?;
+                portfolio::check_equity(
+                    &self.store.connection,
+                    &check,
+                    input.portfolio_equity.as_ref(),
+                )?;
+                portfolio::check_allowance(
+                    &self.store.connection,
+                    &check,
+                    input.portfolio_allowance.as_ref(),
+                )?;
                 if let Some(receipt) = existing {
                     if receipt.wallet_id != input.id
                         || receipt.address != address

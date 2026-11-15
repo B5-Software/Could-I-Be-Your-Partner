@@ -4,6 +4,14 @@ const test = require('node:test'),
 const { TuiApp } = require('../../src/tui/app');
 const { stripAnsi } = require('../../src/tui/ansi');
 const { setLanguage } = require('../../src/tui/text');
+const evmNetworks = {
+  items: [8453, 84532, 1337].map((id) => ({
+    id,
+    name: String(id),
+    archived: false,
+    capabilities: { autonomous: true, signType2: true },
+  })),
+};
 function fixture(handler) {
   const requests = [];
   const app = new TuiApp({
@@ -21,6 +29,405 @@ function fixture(handler) {
   });
   return { app, requests };
 }
+
+for (const protocol of ['erc20', 'permit2']) {
+  test(`TUI ${protocol} allowance review keeps the observed pair and opens manual intent approval`, async (t) => {
+    setLanguage('en');
+    const token = '0x' + '1'.repeat(40);
+    const spender = '0x' + '2'.repeat(40);
+    const { app, requests } = fixture((_method, action) => {
+      if (action === 'allowance.inspect')
+        return {
+          token,
+          spender,
+          amount: '2.5',
+          amountAtomic: '2500000',
+          symbol: 'USDC',
+          network: 'Base Sepolia',
+          block: '123',
+          observedAt: 0,
+          commandId: 'review-allowance',
+          ...(protocol === 'permit2'
+            ? {
+                permit2: {
+                  tokenAllowance: '1.5',
+                  tokenAllowanceAtomic: '1500000',
+                  effectiveAmount: '1.5',
+                  effectiveAmountAtomic: '1500000',
+                  expiration: 1779000000,
+                  nonce: '7',
+                },
+              }
+            : {}),
+        };
+      if (action === 'allowance.revoke.prepare') return { id: 'revoke-intent' };
+      if (action === 'intent.inspect')
+        return {
+          id: 'revoke-intent',
+          status: 'approval-required',
+          digest: 'fixture-digest',
+          transaction: { to: token, data: '0x00' },
+          description: {
+            kind: protocol === 'permit2' ? 'permit2-lockdown' : 'approve',
+            recipient: spender,
+            rawTokenAmount: '0',
+          },
+        };
+      throw new Error(action);
+    });
+    t.after(() => app.dispose());
+    app.walletBrowser.allowances({ id: 'wallet', unlocked: true });
+    await app._chooseModalOption(1);
+    if (protocol === 'permit2') await app._chooseModalOption(3);
+    await app._chooseModalOption(1);
+    for (const value of [token, spender]) {
+      app.state.modal.editor.setValue(value);
+      await app.state.modal.onSubmit();
+    }
+    assert.match(app.state.modal.body, /2\.5 USDC/);
+    assert.match(app.state.modal.body, /Observed block #123/);
+    if (protocol === 'permit2')
+      assert.match(app.state.modal.body, /Current allowance upper bound 1\.5 USDC/);
+    await app._chooseModalOption(1);
+    assert.deepEqual(
+      requests.map(({ action }) => action),
+      ['allowance.inspect', 'allowance.revoke.prepare', 'intent.inspect'],
+    );
+    assert.deepEqual(requests[1].input, {
+      id: 'wallet',
+      chain: 'base-sepolia',
+      token,
+      spender,
+      commandId: 'review-allowance',
+      ...(protocol === 'permit2' ? { protocol } : {}),
+    });
+    if (protocol === 'permit2') assert.match(app.state.modal.body, /previously signed/);
+    assert.ok(app.state.modal.options.some((option) => option.value === 'approve'));
+  });
+}
+
+for (const operation of ['ordered', 'signature']) {
+  test(`TUI Permit2 ${operation} revocation preserves the observed nonce for manual review`, async (t) => {
+    setLanguage('en');
+    const token = '0x' + '1'.repeat(40),
+      spender = '0x' + '2'.repeat(40);
+    const { app, requests } = fixture((_method, action) => {
+      if (action === 'allowance.inspect')
+        return {
+          token,
+          spender,
+          network: 'Base',
+          amountAtomic: '0',
+          block: '123',
+          observedAt: 0,
+          commandId: 'pair-read',
+          permit2: {
+            nonce: '7',
+            nextNonce: '8',
+            expiration: 1779000000,
+            effectiveAmountAtomic: '0',
+            tokenAllowanceAtomic: '0',
+          },
+        };
+      if (action === 'permit2.signature.inspect')
+        return {
+          nonce: '511',
+          unavailable: false,
+          block: '123',
+          network: 'Base',
+          commandId: 'signature-read',
+        };
+      if (action === `permit2.${operation}.prepare`) return { id: 'review-nonce' };
+      if (action === 'intent.inspect')
+        return {
+          id: 'review-nonce',
+          status: 'approval-required',
+          transaction: { to: token, data: '0x00' },
+          description: {
+            kind:
+              operation === 'ordered'
+                ? 'permit2-allowance-invalidate'
+                : 'permit2-signature-invalidate',
+            nextNonce: '8',
+            permitNonce: '511',
+          },
+        };
+      throw new Error(action);
+    });
+    t.after(() => app.dispose());
+    const choose = async (value) =>
+      app._chooseModalOption(app.state.modal.options.findIndex((option) => option.value === value));
+    const input = async (value) => {
+      app.state.modal.editor.setValue(value);
+      await app.state.modal.onSubmit();
+    };
+    app.walletBrowser.allowances({ id: 'wallet', unlocked: true });
+    await choose('base');
+    await choose('switch');
+    if (operation === 'ordered') {
+      await choose('read');
+      await input(token);
+      await input(spender);
+      assert.ok(!app.state.modal.options.some((option) => option.value === 'revoke'));
+      await choose('ordered');
+      assert.deepEqual(requests[1].input, {
+        id: 'wallet',
+        chain: 'base',
+        token,
+        spender,
+        nonce: '7',
+        commandId: 'pair-read:nonce',
+      });
+    } else {
+      await choose('signature');
+      await input('0x1ff');
+      await choose('prepare');
+      assert.deepEqual(requests[1].input, {
+        id: 'wallet',
+        chain: 'base',
+        nonce: '511',
+        commandId: 'signature-read',
+      });
+    }
+    assert.ok(app.state.modal.options.some((option) => option.value === 'approve'));
+    assert.ok(!requests.some(({ action }) => action === 'intent.approve'));
+  });
+}
+
+test('TUI watch accounts expose holdings and token tracking without signing controls', async (t) => {
+  setLanguage('en');
+  const custom = '0x' + '3'.repeat(40);
+  let tracked = [];
+  const { app, requests } = fixture((_method, action, input) => {
+    if (action === 'network.list')
+      return {
+        items: [
+          { key: 'base', id: 8453, name: 'Base', nativeSymbol: 'ETH' },
+          { key: 'base-sepolia', id: 84532, name: 'Base Sepolia', nativeSymbol: 'ETH' },
+        ],
+      };
+    if (action === 'assets')
+      return {
+        network: 'Base Sepolia',
+        block: '123',
+        trackedTokens: tracked,
+        assets: [
+          { symbol: 'ETH', amount: '1' },
+          { symbol: null, address: custom, amountAtomic: '123', metadataError: 'missing decimals' },
+        ],
+      };
+    if (action === 'asset.track') {
+      tracked = [input.token];
+      return {};
+    }
+    if (action === 'asset.untrack') {
+      tracked = [];
+      return {};
+    }
+    throw new Error(action);
+  });
+  t.after(() => app.dispose());
+  const choose = async (value) =>
+    app._chooseModalOption(app.state.modal.options.findIndex((option) => option.value === value));
+  app.walletBrowser.account({
+    id: 'watch',
+    name: 'Public account',
+    address: '0x' + '2'.repeat(40),
+    kind: 'watch',
+    unlocked: false,
+    policy: { mode: 'manual', chains: [] },
+  });
+  assert.deepEqual(
+    app.state.modal.options.map((option) => option.value),
+    ['back', 'balance', 'allowances', 'watch-import', 'watch-remove'],
+  );
+  await choose('balance');
+  await choose('base-sepolia');
+  assert.match(app.state.modal.body, /ETH · 1/);
+  assert.match(app.state.modal.body, /123 atomic units/);
+  await choose('track');
+  app.state.modal.editor.setValue(custom);
+  await app.state.modal.onSubmit();
+  assert.deepEqual(requests.find(({ action }) => action === 'asset.track').input, {
+    id: 'watch',
+    chain: 'base-sepolia',
+    token: custom,
+  });
+  await choose(custom);
+  assert.deepEqual(requests.find(({ action }) => action === 'asset.untrack').input, {
+    id: 'watch',
+    chain: 'base-sepolia',
+    token: custom,
+  });
+});
+
+test('TUI watch import binds the selected account and uses the masked credential flow', async (t) => {
+  setLanguage('en');
+  const { app, requests } = fixture((_method, action) => {
+    if (action === 'watch.import') return { id: 'watch', kind: 'local' };
+    if (action === 'list') return { wallets: [], intents: [] };
+    throw new Error(action);
+  });
+  t.after(() => app.dispose());
+  const choose = async (value) =>
+    app._chooseModalOption(app.state.modal.options.findIndex((option) => option.value === value));
+  const submit = async (value) => {
+    app.state.modal.editor.setValue(value);
+    await app.state.modal.onSubmit();
+  };
+  app.walletBrowser.account({
+    id: 'watch',
+    name: 'Original watch',
+    address: '0x' + '2'.repeat(40),
+    kind: 'watch',
+    unlocked: false,
+    policy: { mode: 'manual', chains: [] },
+  });
+  await choose('watch-import');
+  assert.equal(app.state.modal.masked, true);
+  await submit('test-watch-import-password');
+  await choose('privateKey');
+  assert.equal(app.state.modal.masked, true);
+  await submit('public-fixture-placeholder');
+  const request = requests.find(({ action }) => action === 'watch.import');
+  assert.equal(request.input.id, 'watch');
+  assert.equal(request.input.name, 'Original watch');
+  assert.ok(!requests.some(({ action }) => action === 'unlock'));
+});
+
+test('TUI portfolio holdings page totals and members from one snapshot and refresh only on request', async (t) => {
+  setLanguage('en');
+  let reads = 0;
+  const { app, requests } = fixture((_method, action, input) => {
+    assert.equal(action, 'portfolio.holdings');
+    reads++;
+    return {
+      name: 'Shared portfolio',
+      capital: { pendingCount: 2, approvalCount: 1, unknownCount: 1 },
+      network: 'Base',
+      block: String(100 + reads),
+      complete: false,
+      ...(input.valuation
+        ? {
+            valuation: {
+              complete: false,
+              knownValue: '2000',
+              source: 'Chainlink',
+              sequencer: { status: 'up' },
+              prices: {
+                eth: {
+                  pair: 'ETH/USD',
+                  status: 'available',
+                  price: '2000',
+                  address: '0x' + '7'.repeat(40),
+                  updatedAt: 1793836800,
+                  ageSeconds: 30,
+                },
+              },
+            },
+          }
+        : {}),
+      assets: Array.from({ length: 7 }, (_, index) => ({
+        symbol: 'ASSET-' + index,
+        complete: index !== 0,
+        amount: index === 0 ? null : String(index),
+        amountAtomic: index === 0 ? null : String(index),
+        knownAmountAtomic: '1250',
+        capital: {
+          complete: false,
+          reservedAtomic: '100',
+          reserved: '0.1',
+          availableAtomic: null,
+          available: null,
+          shortfallAtomic: null,
+        },
+      })),
+      members: [
+        {
+          walletId: 'one',
+          name: 'First wallet',
+          capital: { pendingCount: 0, approvalCount: 0, unknownCount: 0 },
+          address: '0x' + '1'.repeat(40),
+          assets: [{ symbol: 'ETH', amount: '1', amountAtomic: '1000000000000000000' }],
+        },
+      ],
+    };
+  });
+  t.after(() => app.dispose());
+  const { TuiWalletPortfolios } = require('../../src/tui/wallet-portfolios');
+  const panel = new TuiWalletPortfolios(app.walletBrowser);
+  const choose = (value) =>
+    app._chooseModalOption(app.state.modal.options.findIndex((option) => option.value === value));
+  await panel.holdings('portfolio');
+  assert.match(app.state.modal.body, /Known amount 1250 atomic units/);
+  assert.match(app.state.modal.body, /Known local reserve · 0\.1/);
+  assert.match(app.state.modal.body, /After local reserves · Unknown/);
+  assert.match(app.state.modal.body, /Unfinished operations · 2/);
+  await choose('next');
+  assert.match(app.state.modal.body, /ASSET-6/);
+  await choose('members');
+  await choose('one');
+  assert.match(app.state.modal.body, /First wallet/);
+  assert.match(app.state.modal.body, /Unfinished operations · 0/);
+  assert.match(app.state.modal.body, /ETH · 1/);
+  assert.equal(reads, 1);
+  await choose('refresh');
+  assert.match(app.state.modal.body, /#102/);
+  assert.equal(requests.length, 2);
+  assert.deepEqual(requests[0].input, { id: 'portfolio' });
+  await choose('valuation');
+  assert.deepEqual(requests.at(-1).input, { id: 'portfolio', valuation: true });
+  assert.match(app.state.modal.body, /Known partial value · 2000 USD/);
+  await choose('sources');
+  assert.match(app.state.modal.body, /ETH\/USD · 2000 USD/);
+  assert.match(app.state.modal.body, /Price age 30 s/);
+  await choose('back');
+  await choose('next');
+  assert.equal(reads, 3);
+  await choose('refresh');
+  assert.deepEqual(requests.at(-1).input, { id: 'portfolio', valuation: true });
+  assert.equal(reads, 4);
+});
+
+test('TUI discovers past approvals and checks the selected pair even with the wallet locked', async (t) => {
+  setLanguage('en');
+  const token = '0x' + '1'.repeat(40);
+  const spender = '0x' + '2'.repeat(40);
+  const { app, requests } = fixture((_method, action) => {
+    if (action === 'allowance.discover')
+      return {
+        fromBlock: '101',
+        toBlock: '120',
+        total: 1,
+        nextOffset: null,
+        nextEndBlock: '100',
+        items: [{ token, spender, block: '118', eventAmountAtomic: '9500' }],
+      };
+    if (action === 'allowance.inspect')
+      return { token, spender, network: 'Base', block: '125', observedAt: 0, amountAtomic: '0' };
+    throw new Error(action);
+  });
+  t.after(() => app.dispose());
+  app.walletBrowser.allowances({ id: 'wallet', unlocked: false });
+  await app._chooseModalOption(0);
+  await app._chooseModalOption(2);
+  for (const value of ['120', '20']) {
+    app.state.modal.editor.setValue(value);
+    await app.state.modal.onSubmit();
+  }
+  assert.match(app.state.modal.body, /101–120/);
+  assert.deepEqual(requests[0].input, {
+    id: 'wallet',
+    chain: 'base',
+    blocks: 20,
+    limit: 8,
+    endBlock: '120',
+  });
+  await app._chooseModalOption(1);
+  assert.deepEqual(requests[1].input, { id: 'wallet', chain: 'base', token, spender });
+  assert.match(app.state.modal.body, /0 atomic units/);
+  assert.ok(!app.state.modal.options.some((option) => option.value === 'revoke'));
+});
 
 test('TUI periodic budgets keep lifetime counters separate, show archived dates and preserve the schedule during a reviewed edit', async (t) => {
   setLanguage('en');
@@ -349,6 +756,17 @@ function liveFixture() {
     if (action === 'workspace.get') return { market: { venue: 'base' } };
     if (action === 'execution.list') return { items: [run], next: null, total: 1 };
     if (action === 'execution.commands') return { items: [], next: null, total: 0 };
+    if (action === 'execution.profile')
+      return {
+        id: 'a'.repeat(64),
+        pool: '0x' + 'b'.repeat(40),
+        finalizedBlock: 900,
+        finalizedBlockHash: '0x' + 'c'.repeat(64),
+        startTime: 1700000000,
+        endTime: 1700000360,
+        swapCount: 5,
+        wethVolumeAtoms: ['1000000000000000000', '3000000000000000000'],
+      };
     if (action === 'execution.create') {
       if (failCreate) {
         failCreate = false;
@@ -380,6 +798,195 @@ async function chooseLive(app, value) {
   assert.ok(index >= 0, value);
   await app._chooseModalOption(index);
 }
+
+test('TUI site network approval verifies an owner-entered RPC before enabling save', async (t) => {
+  setLanguage('en');
+  let pending = [
+    {
+      id: 'site-network',
+      origin: 'https://dex.example',
+      network: {
+        id: 1337,
+        name: 'Research chain',
+        nativeSymbol: 'TEST',
+        rpcOrigins: ['https://suggested.invalid'],
+      },
+    },
+  ];
+  const { app, requests } = fixture((_method, action) => {
+    if (action === 'list') return { wallets: [], intents: [] };
+    if (action === 'app.list') return { pending, connections: [] };
+    if (action === 'app.probeNetwork')
+      return {
+        id: 'verified-node',
+        profile: {
+          ...pending[0].network,
+          rpcOrigin: 'http://127.0.0.1:8545',
+          genesisHash: '0x' + 'a'.repeat(64),
+          additionalFeeNative: '0',
+          capabilities: { signType2: true },
+        },
+      };
+    if (action === 'app.addNetwork') {
+      pending = [];
+      return {};
+    }
+    throw Error(action);
+  });
+  t.after(() => app.dispose());
+  await app.walletBrowser.open();
+  await chooseLive(app, 'apps');
+  await chooseLive(app, 'pending:site-network');
+  assert.match(app.state.modal.body, /suggested\.invalid/);
+  await chooseLive(app, true);
+  assert.equal(app.state.modal.editor.value, '');
+  app.state.modal.editor.setValue('http://127.0.0.1:8545');
+  await app.state.modal.onSubmit();
+  await app.state.modal.onSubmit();
+  assert.match(app.state.modal.body, /127\.0\.0\.1:8545/);
+  assert.equal(
+    requests.some((r) => r.action === 'app.addNetwork'),
+    false,
+  );
+  await chooseLive(app, true);
+  assert.deepEqual(requests.find((r) => r.action === 'app.addNetwork').input, {
+    id: 'site-network',
+    reviewId: 'verified-node',
+    confirmed: true,
+  });
+});
+
+test('TUI wallet shows browser identity and binds a separate human pairing confirmation', async (t) => {
+  setLanguage('en');
+  const pending = {
+    id: 'pair-fixture',
+    name: 'Research Chromium',
+    origin: 'chrome-extension://' + 'a'.repeat(32),
+    fingerprint: 'f00d'.repeat(16),
+    digest: 'frozen-pairing',
+    expiresAt: Date.now() + 30000,
+  };
+  let waiting = [pending];
+  const { app, requests } = fixture((_method, action) => {
+    if (action === 'list') return { wallets: [], intents: [] };
+    if (action === 'browser.status')
+      return { state: 'listening', enabled: true, pending: waiting, clients: [] };
+    if (action === 'browser.confirm') {
+      waiting = [];
+      return {};
+    }
+    throw Error(action);
+  });
+  t.after(() => app.dispose());
+  await app.walletBrowser.open();
+  await chooseLive(app, 'browser');
+  await chooseLive(app, 'pending:pair-fixture');
+  assert.match(app.state.modal.body, /Research Chromium/);
+  assert.ok(app.state.modal.body.includes(pending.fingerprint));
+  assert.equal(app.state.modal.options[0].value, false);
+  assert.equal(
+    requests.some((r) => r.action === 'browser.confirm'),
+    false,
+  );
+  await chooseLive(app, true);
+  assert.deepEqual(requests.find((r) => r.action === 'browser.confirm').input, {
+    id: pending.id,
+    digest: pending.digest,
+    confirmed: true,
+  });
+});
+
+test('TUI site connections select named account/network and require a separate origin review', async () => {
+  setLanguage('en');
+  const { TuiWalletApps } = require('../../src/tui/wallet-apps');
+  let connected = false;
+  const { app, requests } = fixture((_method, action) => {
+    if (action === 'app.list')
+      return {
+        pending: connected ? [] : [{ id: 'request', origin: 'https://dex.example' }],
+        connections: [],
+      };
+    if (action === 'list')
+      return {
+        wallets: [{ id: 'chosen-wallet', name: 'Trading wallet', address: '0x' + '1'.repeat(40) }],
+      };
+    if (action === 'network.list')
+      return { items: [{ key: 'evm-1337', id: 1337, name: 'Local EVM' }] };
+    if (action === 'app.allow') {
+      connected = true;
+      return { ok: true };
+    }
+    throw Error('Unexpected ' + action);
+  });
+  await new TuiWalletApps(app.walletBrowser).open();
+  await chooseLive(app, 'pending:request');
+  await chooseLive(app, 'chosen-wallet');
+  await chooseLive(app, 'evm-1337');
+  assert.ok(app.state.modal.body.includes('https://dex.example'));
+  assert.ok(app.state.modal.body.includes('Trading wallet'));
+  assert.equal(
+    requests.some((r) => r.action === 'app.allow'),
+    false,
+  );
+  assert.equal(app.state.modal.selected, 0);
+  await chooseLive(app, true);
+  assert.deepEqual(requests.find((r) => r.action === 'app.allow').input, {
+    id: 'request',
+    walletId: 'chosen-wallet',
+    chain: 'evm-1337',
+    confirmed: true,
+  });
+  assert.equal(
+    requests.some((r) => r.action === 'intent.approve'),
+    false,
+  );
+  app.dispose();
+});
+test('TUI message signing pages full content and requires a separate frozen confirmation with reject selected', async () => {
+  setLanguage('en');
+  const { TuiWalletMessages } = require('../../src/tui/wallet-messages');
+  const message = {
+    id: 'message',
+    reviewDigest: 'frozen-message',
+    status: 'approval-required',
+    address: '0x' + '1'.repeat(40),
+    expiresAt: Date.now() + 300000,
+    digest: '0x' + 'a'.repeat(64),
+    message: {
+      kind: 'personal',
+      origin: 'https://dex.example',
+      chainId: 1337,
+      payload: '0x' + '61'.repeat(2000),
+    },
+    preview: 'visible\u202e' + '.'.repeat(2200),
+  };
+  const { app, requests } = fixture((_method, action) => {
+    if (action === 'message.get') return structuredClone(message);
+    if (action === 'message.list') return { items: [], total: 0, next: null };
+    if (action === 'message.approve') return { ok: true };
+    throw Error('Unexpected ' + action);
+  });
+  await new TuiWalletMessages(app.walletBrowser).inspect('message');
+  assert.ok(app.state.modal.body.includes('https://dex.example'));
+  assert.equal(app.state.modal.body.includes('\u202e'), false);
+  await chooseLive(app, 'next');
+  await chooseLive(app, 'approve');
+  assert.equal(app.state.modal.selected, 0);
+  assert.ok(app.state.modal.body.includes('https://dex.example'));
+  assert.equal(
+    requests.some((r) => r.action === 'message.approve'),
+    false,
+  );
+  message.reviewDigest = 'changed-after-review';
+  await chooseLive(app, true);
+  assert.deepEqual(requests.find((r) => r.action === 'message.approve').input, {
+    id: 'message',
+    digest: 'frozen-message',
+    confirmed: true,
+  });
+  app.dispose();
+});
+
 test('TUI portfolio creation selects named wallets and uses the shared scope plus a separate human confirmation', async () => {
   setLanguage('en');
   const { TuiWalletPortfolios } = require('../../src/tui/wallet-portfolios');
@@ -390,11 +997,13 @@ test('TUI portfolio creation selects named wallets and uses the shared scope plu
   const { app, requests } = fixture((_method, action) =>
     action === 'list'
       ? { wallets, intents: [] }
-      : action === 'portfolio.challenge'
-        ? { id: 'challenge' }
-        : action === 'portfolio.list'
-          ? { items: [], total: 0, next: null }
-          : {},
+      : action === 'network.list'
+        ? evmNetworks
+        : action === 'portfolio.challenge'
+          ? { id: 'challenge' }
+          : action === 'portfolio.list'
+            ? { items: [], total: 0, next: null }
+            : {},
   );
   const browser = new TuiWalletPortfolios(app.walletBrowser);
   await browser.create();
@@ -422,6 +1031,202 @@ test('TUI portfolio creation selects named wallets and uses the shared scope plu
   assert.equal(requests.find((r) => r.action === 'portfolio.confirm').input.ack, 'ALLOW PORTFOLIO');
   assert.ok(!requests.some((r) => ['unlock', 'policy.grant', 'intent.approve'].includes(r.action)));
   app.dispose();
+});
+test('TUI Base portfolio equity displays the configured floor and current assessed value', async () => {
+  setLanguage('en');
+  const { app, requests } = fixture((_method, action) => {
+    if (action === 'list') return { wallets: [] };
+    if (action === 'portfolio.get')
+      return {
+        state: 'active',
+        revision: 1,
+        usage: {},
+        portfolio: {
+          id: 'group',
+          name: 'Base floor',
+          chainId: 8453,
+          equityFloorUsdAtomic: '50000000000',
+          members: [],
+          limits: {},
+        },
+      };
+    if (action === 'portfolio.equity')
+      return {
+        status: 'below',
+        availableUsd: '490',
+        floorUsd: '500',
+        block: '123',
+        blockHash: '0x' + 'a'.repeat(64),
+      };
+    throw Error(action);
+  });
+  const { TuiWalletPortfolios } = require('../../src/tui/wallet-portfolios');
+  await new TuiWalletPortfolios(app.walletBrowser).detail('group');
+  const option = app.state.modal.options.findIndex((row) => row.value === 'equity');
+  assert.ok(option >= 0);
+  await app._chooseModalOption(option);
+  assert.match(app.state.modal.body, /Below floor/);
+  assert.match(app.state.modal.body, /490 USD/);
+  assert.match(app.state.modal.body, /500 USD/);
+  assert.deepEqual(requests.find((row) => row.action === 'portfolio.equity').input, {
+    id: 'group',
+  });
+});
+test('TUI portfolio allowance review rereads a locked wallet pair and keeps it read-only', async () => {
+  setLanguage('en');
+  const address = '0x' + '1'.repeat(40),
+    token = '0x' + '2'.repeat(40),
+    spender = '0x' + '3'.repeat(40);
+  const pair = {
+    walletId: 'one',
+    walletName: 'Locked wallet',
+    token,
+    spender,
+    protocol: 'permit2',
+    status: 'active',
+    symbol: 'USDC',
+    spendable: { amount: '2' },
+  };
+  const { app, requests } = fixture((_method, action) => {
+    if (action === 'list')
+      return { wallets: [{ id: 'one', name: 'Locked wallet', address, unlocked: false }] };
+    if (action === 'portfolio.get')
+      return {
+        state: 'active',
+        usage: {},
+        portfolio: {
+          id: 'group',
+          name: 'Allowances',
+          chainId: 8453,
+          members: [{ walletId: 'one', address }],
+          limits: {},
+        },
+      };
+    if (action === 'portfolio.allowances.list')
+      return { items: [{ reportId: 'snapshot', block: '123', observedAt: 1 }], next: null };
+    if (action === 'portfolio.allowances.get')
+      return {
+        reportId: 'snapshot',
+        block: '123',
+        observedAt: 1,
+        next: null,
+        items: [pair],
+        coverage: {
+          tokens: [token],
+          nextEndBlock: '100',
+          scannedRanges: [{ fromBlock: '101', toBlock: '123' }],
+        },
+        totals: [
+          {
+            token,
+            symbol: 'USDC',
+            balance: { amount: '8' },
+            measured: { amount: '2' },
+            includingPermit2: { amount: '5' },
+          },
+        ],
+      };
+    if (action === 'allowance.inspect')
+      return {
+        token,
+        spender,
+        network: 'Base',
+        amountAtomic: '2000000',
+        amount: '2',
+        symbol: 'USDC',
+        block: '125',
+        observedAt: 2,
+      };
+    throw Error(action);
+  });
+  const { TuiWalletPortfolios } = require('../../src/tui/wallet-portfolios');
+  const select = async (match) => {
+    const index = app.state.modal.options.findIndex((row) => match(row.value));
+    assert.ok(index >= 0);
+    await app._chooseModalOption(index);
+  };
+  await new TuiWalletPortfolios(app.walletBrowser).detail('group');
+  for (const value of ['exposure', 'history', 'snapshot'])
+    await select((option) => option === value);
+  assert.match(app.state.modal.body, /Measured spendable amount 2/);
+  await select((value) => value?.spender === spender);
+  assert.deepEqual(requests.at(-1), {
+    method: 'wallet:request',
+    action: 'allowance.inspect',
+    input: { id: 'one', chain: 'base', token, spender, protocol: 'permit2' },
+  });
+  assert.match(app.state.modal.body, /#125/);
+  assert.ok(!app.state.modal.options.some((row) => row.value === 'revoke'));
+  await select((value) => value === 'back');
+  assert.match(app.state.modal.body, /#123/);
+});
+test('TUI continuous allowance monitoring uses the selected baseline and interval, and shows saved changes', async () => {
+  setLanguage('en');
+  const notice = {
+    block: '9',
+    blockHash: '0x' + 'a'.repeat(64),
+    observedAt: 1,
+    pairCount: 0,
+    increaseCount: 1,
+    pairs: [],
+    increases: [
+      { symbol: 'USDC', metric: 'measured', before: { amount: '2' }, after: { amount: '4' } },
+    ],
+  };
+  let enabled = false,
+    revision = 0;
+  const { app, requests } = fixture((_method, action) => {
+    if (action === 'portfolio.allowanceMonitor.get')
+      return {
+        revision,
+        enabled,
+        status: enabled ? 'watching' : 'off',
+        lastBlock: enabled ? '9' : null,
+        notices: enabled ? [notice] : [],
+        next: null,
+      };
+    if (
+      action === 'portfolio.allowanceMonitor.start' ||
+      action === 'portfolio.allowanceMonitor.stop'
+    ) {
+      enabled = action.endsWith('.start');
+      revision++;
+      return {};
+    }
+    throw Error(action);
+  });
+  const { TuiWalletPortfolios } = require('../../src/tui/wallet-portfolios');
+  await new TuiWalletPortfolios(app.walletBrowser).allowanceMonitor(
+    'group',
+    'base',
+    { reportId: 'baseline', block: '8', coverage: { mode: 'recent' } },
+    () => {},
+  );
+  const choose = async (value) => {
+    const index = app.state.modal.options.findIndex((option) => option.value === value);
+    assert.ok(index >= 0);
+    await app._chooseModalOption(index);
+  };
+  await choose('start');
+  await choose(60);
+  assert.deepEqual(
+    requests.find((row) => row.action === 'portfolio.allowanceMonitor.start').input,
+    {
+      id: 'group',
+      reportId: 'baseline',
+      intervalSeconds: 60,
+      expectedRevision: 0,
+    },
+  );
+  await choose(notice);
+  assert.match(app.state.modal.body, /USDC.*2 → 4/);
+  await choose('back');
+  await choose('stop');
+  assert.match(app.state.modal.body, /Off/);
+  assert.deepEqual(requests.find((row) => row.action === 'portfolio.allowanceMonitor.stop').input, {
+    id: 'group',
+    expectedRevision: 1,
+  });
 });
 test('TUI portfolio detail separates scope and paged usage while a paused group cannot offer another pause', async () => {
   setLanguage('en');
@@ -474,14 +1279,18 @@ test('TUI portfolio detail separates scope and paged usage while a paused group 
 });
 test('TUI token editor uses named preset and amount fields, and native usage remains readable while locked', async () => {
   setLanguage('en');
-  const { app, requests } = fixture(() => ({
-    limits: { maxTotalValueWei: '0', maxTotalFeeWei: '0', maxTransactions: 5, tokens: [] },
-    usage: { valueWei: '0', feeWei: '0', transactions: 2, tokens: {} },
-  }));
+  const { app, requests } = fixture((_method, action) =>
+    action === 'network.list'
+      ? evmNetworks
+      : {
+          limits: { maxTotalValueWei: '0', maxTotalFeeWei: '0', maxTransactions: 5, tokens: [] },
+          usage: { valueWei: '0', feeWei: '0', transactions: 2, tokens: {} },
+        },
+  );
   const browser = app.walletBrowser,
     limits = { tokens: [] };
   let returned = false;
-  browser.tokenScope(limits, () => {
+  await browser.tokenScope(limits, () => {
     returned = true;
   });
   await chooseLive(app, 'add');
@@ -492,6 +1301,9 @@ test('TUI token editor uses named preset and amount fields, and native usage rem
   assert.equal(limits.tokens[0].symbol, 'USDC');
   assert.equal(limits.tokens[0].decimals, 6);
   assert.equal(limits.tokens[0].maxSignedAmount, '12.000001');
+  await chooseLive(app, 'chainId');
+  await chooseLive(app, 1337);
+  assert.equal(limits.tokens[0].chainId, 1337);
   await chooseLive(app, 'back');
   await chooseLive(app, 'back');
   assert.equal(returned, true);
@@ -505,7 +1317,7 @@ test('TUI token editor uses named preset and amount fields, and native usage rem
   assert.ok(app.state.modal.body.includes('2 / 5'));
   assert.deepEqual(
     requests.map((r) => r.action),
-    ['policy.usage'],
+    ['network.list', 'policy.usage'],
   );
   app.dispose();
 });
@@ -515,6 +1327,10 @@ test('TUI live plans create paused drafts with exact decimal input and preserve 
   await browser.editor('project');
   browser.draft.side = 'sell';
   browser.draft.totalInput = '0.123456789012345678';
+  browser.draft.minimumTotalOutput = '99.123456';
+  browser.draft.maxArrivalCostBps = '0';
+  await chooseLive(app, 'leSchedule');
+  await chooseLive(app, 'leFixed');
   fail();
   await chooseLive(app, 'leSave');
   assert.match(app.state.modal.body, /ACK lost/);
@@ -523,6 +1339,9 @@ test('TUI live plans create paused drafts with exact decimal input and preserve 
   assert.equal(creates.length, 2);
   assert.equal(creates[0].input.operationId, creates[1].input.operationId);
   assert.equal(creates[0].input.totalInput, '0.123456789012345678');
+  assert.equal(creates[1].input.minimumTotalOutput, '99.123456');
+  assert.equal(creates[1].input.maxArrivalCostBps, 0);
+  assert.equal(creates[1].input.schedule, 'fixed-window');
   assert.equal(creates[0].input.walletId, 'wallet:one');
   assert.equal(creates[0].input.id, 'project');
   assert.equal(
@@ -533,6 +1352,26 @@ test('TUI live plans create paused drafts with exact decimal input and preserve 
     app.state.modal.options.some((option) => option.value === 'leStart'),
     false,
   );
+});
+test('TUI previews historical VWAP evidence and uses its archived ID when creating', async () => {
+  setLanguage('en');
+  const { app, browser, requests } = liveFixture();
+  await browser.editor('project');
+  await chooseLive(app, 'leSchedule');
+  await chooseLive(app, 'leVwap');
+  await chooseLive(app, 'leSave');
+  assert.match(app.state.modal.body, /valid volume profile/);
+  await chooseLive(app, 'leProfileCapture');
+  assert.match(app.state.modal.body, /75% · 3 WETH/);
+  assert.match(app.state.modal.body, /Finalized block · 900/);
+  await chooseLive(app, 'leBack');
+  await chooseLive(app, 'leSave');
+  const capture = requests.find((r) => r.action === 'execution.profile');
+  const create = requests.find((r) => r.action === 'execution.create');
+  assert.deepEqual(capture.input, { id: 'project', slices: 2, intervalMs: 60000 });
+  assert.equal(create.input.profileId, 'a'.repeat(64));
+  assert.equal(create.input.schedule, 'vwap');
+  app.dispose();
 });
 test('TUI live start respects wallet authority and stop targets the displayed scoped plan', async () => {
   setLanguage('en');
@@ -586,6 +1425,85 @@ test('TUI recorded-event replay selects a named strategy and explicit revision t
   assert.equal(call.input.recordingId, 'recording');
   assert.ok(call.input.operationId);
   assert.match(app.state.modal.title, /Experiment/);
+});
+test('TUI native validation picks explicit revisions and opens the chosen training evidence', async () => {
+  setLanguage('en');
+  const stage = {
+    revision: 1,
+    tradeContribution: '1.25',
+    quoteCurrency: 'USD',
+    fees: '0.05',
+    counts: { executions: 1 },
+  };
+  const { app, requests } = fixture((_method, action) => {
+    if (action === 'recording.get')
+      return { name: 'Tape', status: 'complete', endedMonoNs: '3000000000' };
+    if (action === 'native.strategy.list')
+      return {
+        items: [{ definition: { id: 'strategy', name: 'Maker', revision: 2 } }],
+        next: null,
+      };
+    if (action === 'replay.validate') return { replayId: 'report' };
+    if (action === 'replay.get')
+      return {
+        name: 'Experiment',
+        status: 'complete',
+        validationProgress: { completed: 3, total: 3 },
+        validation: {
+          folds: [
+            {
+              fold: 1,
+              training: { startMs: 0, endMs: 1000 },
+              test: { startMs: 1000, endMs: 1500 },
+              result: stage,
+              ranking: [stage],
+            },
+          ],
+        },
+      };
+    if (action === 'replay.history') return { items: [], next: null };
+    throw Error(action);
+  });
+  const { EventDataBrowser } = require('../../src/tui/quant-events');
+  await new EventDataBrowser(app.quantBrowser).detail('project', 'recording', 'tape');
+  const choose = async (value) => {
+    const i = app.state.modal.options.findIndex((option) => option.value === value);
+    assert.ok(i >= 0);
+    await app._chooseModalOption(i);
+  };
+  await choose('qeValidation');
+  await choose('strategy');
+  for (const value of ['1, 2', '0', '1000', '500', '1']) {
+    app.state.modal.editor.setValue(value);
+    await app._handleModalKey({ name: 'enter' });
+  }
+  const { operationId, ...input } = requests.find(
+    (request) => request.action === 'replay.validate',
+  ).input;
+  assert.ok(operationId);
+  assert.deepEqual(input, {
+    id: 'project',
+    recordingId: 'tape',
+    strategyId: 'strategy',
+    revisions: [1, 2],
+    startMs: 0,
+    trainMs: 1000,
+    testMs: 500,
+    folds: 1,
+  });
+  await choose(1);
+  assert.match(app.state.modal.body, /1\.25 USD/);
+  await choose(1);
+  await choose('qeExecutions');
+  assert.deepEqual(requests.find((request) => request.action === 'replay.history').input, {
+    id: 'project',
+    replayId: 'report',
+    kind: 'executions',
+    fold: 1,
+    trainingRevision: 1,
+    offset: 0,
+    limit: 15,
+  });
 });
 test('TUI native paper orders use human menus, preserve decimal text and route through the scoped shared backend', async () => {
   setLanguage('en');
@@ -720,6 +1638,7 @@ test('TUI scope settings use editable named fields and keep automatic replacemen
 test('TUI autonomous permission requires warning, a dedicated challenge and exact second confirmation', async () => {
   const calls = [];
   const { app } = fixture((_method, action, input) => {
+    if (action === 'network.list') return evmNetworks;
     calls.push({ action, input });
     if (action === 'policy.challenge') return { id: 'challenge' };
     if (action === 'policy.grant') {
@@ -728,18 +1647,23 @@ test('TUI autonomous permission requires warning, a dedicated challenge and exac
     }
     return { wallets: [], intents: [] };
   });
-  app.walletBrowser.authorization({ id: 'one', name: 'Wallet', address: '0x' + '1'.repeat(40) });
-  await app._chooseModalOption(0);
+  await app.walletBrowser.authorization({
+    id: 'one',
+    name: 'Wallet',
+    address: '0x' + '1'.repeat(40),
+  });
+  await app._chooseModalOption(app.state.modal.options.findIndex((o) => o.value[0] === 1337));
   await app._chooseModalOption(0);
   app.state.modal.editor.setValue('0.01');
   await app._handleModalKey({ name: 'enter' });
-  assert.ok(app.state.modal.body.includes('ETH limits cover transaction value'));
+  assert.ok(app.state.modal.body.includes('native coin limits cover transaction value'));
   await app._chooseModalOption(1);
   assert.match(app.state.modal.body, /continuous transfers/);
   assert.equal(calls.length, 0);
   assert.equal(app.state.modal.selected, 0, 'Cancel must be the default');
   await app._chooseModalOption(1);
   assert.equal(calls[0].action, 'policy.challenge');
+  assert.deepEqual(calls[0].input.chains, [1337]);
   assert.equal(calls.filter((c) => c.action === 'policy.grant').length, 0);
   app.state.modal.editor.setValue('ALLOW LIVE');
   await app._handleModalKey({ name: 'enter' });
@@ -847,6 +1771,221 @@ test('TUI research history offers named sources and reads archived pages without
     requests.every((request) => ['history.list', 'research.read'].includes(request.action)),
   );
 });
+test('TUI Base trade history pages exact amounts and continues the selected dataset', async () => {
+  setLanguage('en');
+  const source = {
+    id: 'dataset-a',
+    start: 1700000040,
+    end: 1700000160,
+    amm: { chainId: 8453, fee: 500, interval: 60, swapCount: 11 },
+  };
+  const project = {
+    id: 'project',
+    name: 'Base fixture',
+    network: {
+      id: 8453,
+      historyWindow: { maxCount: 360, defaultCount: 15 },
+      recorder: { phase: 'paused', canResume: true, datasetId: source.id },
+    },
+    market: { venue: 'base', product: 'WETH-USDC', interval: 60, poolFee: 500 },
+    paper: { status: 'paused', cash: '10000', position: '0' },
+    datasets: [source],
+    preferences: { datasetId: source.id },
+  };
+  const { app, requests } = fixture((_method, action, input) => {
+    if (action === 'workspace.get') return project;
+    if (action === 'base.history.record.start') {
+      project.network.recorder.phase = 'waiting';
+      return project.network.recorder;
+    }
+    if (action === 'base.history.record.stop') {
+      project.network.recorder.phase = 'paused';
+      return project.network.recorder;
+    }
+    if (action === 'base.history.trades')
+      return {
+        total: 11,
+        items: Array.from({ length: input.offset ? 1 : 10 }, (_, i) => ({
+          block: 10 + input.offset + i,
+          logIndex: 0,
+          wethDeltaAtoms: '1000000000000000001',
+          usdcDeltaAtoms: '-1000000',
+        })),
+      };
+    if (action === 'run.amm')
+      return { metrics: { fills: 1 }, ammReplay: { attempts: [{}], pendingAtEnd: null } };
+    if (action === 'run.amm.scenario')
+      return {
+        ammScenario: {
+          anchor: { block: 20 },
+          totalSwapGas: '120000',
+          legs: [
+            {
+              index: 1,
+              side: 'sell',
+              status: 'filled',
+              amountOutAtoms: '1900000',
+              deltaOutAtoms: '-100000',
+            },
+          ],
+        },
+      };
+    assert.ok(['base.history.capture', 'base.history.series'].includes(action));
+    return source;
+  });
+  const choose = async (value) => {
+    const index = app.state.modal.options.findIndex((option) => option.value === value);
+    assert.ok(index >= 0);
+    await app._chooseModalOption(index);
+  };
+  await app.quantBrowser.project(project.id);
+  await choose('ammHistory');
+  assert.match(app.state.modal.body, /\+1\.000000000000000001 \/ −1/);
+  await choose(10);
+  assert.match(app.state.modal.body, /#20\/0/);
+  await choose('continue');
+  app.state.modal.editor.setValue('4');
+  await app._handleModalKey({ name: 'enter' });
+  assert.deepEqual(requests.find((r) => r.action === 'base.history.capture').input, {
+    id: project.id,
+    count: 4,
+    afterDatasetId: source.id,
+    select: true,
+  });
+  await choose('record-resume');
+  assert.equal(requests.find((r) => r.action === 'base.history.record.start').input.resume, true);
+  await choose('record-stop');
+  assert.equal(requests.find((r) => r.action === 'base.history.record.stop').input.id, project.id);
+  await choose('series');
+  app.state.modal.editor.setValue('240');
+  await app._handleModalKey({ name: 'enter' });
+  assert.deepEqual(requests.find((r) => r.action === 'base.history.series').input, {
+    id: project.id,
+    datasetId: source.id,
+    windows: 240,
+    select: true,
+  });
+  await choose('ammReplay');
+  await choose('buy-hold');
+  await choose('fixed');
+  for (const value of ['100', '0.5', '2000', '2', '4', '80']) {
+    app.state.modal.editor.setValue(value);
+    await app._handleModalKey({ name: 'enter' });
+  }
+  const replay = requests.find((r) => r.action === 'run.amm').input;
+  assert.equal(replay.datasetId, source.id);
+  assert.equal(replay.config.fixedFeeUsdc, '0.5');
+  assert.equal(replay.config.maxAdverseBps, 80);
+  assert.match(app.state.modal.body, /"fills": 1/);
+  await choose('back');
+  await choose('ammReplay');
+  await choose('buy-hold');
+  await choose('historical');
+  for (const value of ['100', '0.75', '0.025', '60000', '2000', '2', '4', '']) {
+    app.state.modal.editor.setValue(value);
+    await app._handleModalKey({ name: 'enter' });
+  }
+  const historical = requests.filter((r) => r.action === 'run.amm').at(-1).input.config;
+  assert.equal(historical.networkFeeCapUsdc, '0.75');
+  assert.equal(historical.tipGwei, '0.025');
+  assert.equal(historical.routerOverheadGas, 60000);
+  assert.equal(historical.fixedFeeUsdc, undefined);
+  await choose('back');
+  await choose('ammScenario');
+  for (const value of ['1', '20']) {
+    app.state.modal.editor.setValue(value);
+    await app._handleModalKey({ name: 'enter' });
+  }
+  await choose('sell');
+  for (const value of ['0.1', '1.5']) {
+    app.state.modal.editor.setValue(value);
+    await app._handleModalKey({ name: 'enter' });
+  }
+  await choose('run');
+  const scenario = requests.find((r) => r.action === 'run.amm.scenario').input;
+  assert.deepEqual(scenario, {
+    id: project.id,
+    datasetId: source.id,
+    config: {
+      initialWeth: '1',
+      anchorBlock: 20,
+      legs: [{ side: 'sell', amountIn: '0.1', minimumOut: '1.5' }],
+    },
+  });
+  assert.match(app.state.modal.body, /#20.*120000/);
+  assert.match(app.state.modal.body, /\+1\.9 USDC.*−0\.1/);
+});
+test('TUI walk-forward configures periods and opens saved holdout and paged training evidence', async () => {
+  setLanguage('en');
+  const project = {
+    id: 'research',
+    name: 'Walk fixture',
+    market: { venue: 'base', product: 'WETH-USDC' },
+    paper: { status: 'paused', cash: '10000', position: '0' },
+    risk: { feeBps: 10, slippageBps: 5 },
+    preferences: { datasetId: 'dataset' },
+    datasets: [],
+  };
+  const metrics = { returnPct: 0.25, maxDrawdownPct: 0.1, fills: 2 };
+  const fold = {
+    index: 1,
+    selected: { fast: 2, slow: 21 },
+    metrics,
+    training: { start: 60, end: 240 },
+    testing: { start: 300, end: 360 },
+    trainingScores: Array.from({ length: 7 }, (_, i) => ({ fast: i + 2, slow: 21, ...metrics })),
+  };
+  const run = {
+    id: 'saved-run',
+    createdAt: Date.now(),
+    codeVersion: 'candle-walk-forward-1',
+    metrics,
+    walkForward: { windows: [fold], candidateCount: 7 },
+  };
+  const { app, requests } = fixture((_method, action) => {
+    if (action === 'workspace.get') return project;
+    if (action === 'run.walk-forward' || action === 'run.get') return run;
+    if (action === 'run.walk-forward.fold') return fold;
+    if (action === 'history.list') return { items: [run], nextOffset: null };
+    throw Error(action);
+  });
+  const choose = async (value) => {
+    const index = app.state.modal.options.findIndex((option) => option.value === value);
+    assert.ok(index >= 0);
+    await app._chooseModalOption(index);
+  };
+  await app.quantBrowser.project(project.id);
+  await choose('walkForward');
+  for (const value of ['50', '5', '1', '2，3', '21,34', '5000', '10', '5', '1500']) {
+    app.state.modal.editor.setValue(value);
+    await app._handleModalKey({ name: 'enter' });
+  }
+  assert.deepEqual(requests.find(({ action }) => action === 'run.walk-forward').input, {
+    id: 'research',
+    datasetId: 'dataset',
+    config: {
+      trainBars: 50,
+      testBars: 5,
+      folds: 1,
+      fastPeriods: [2, 3],
+      slowPeriods: [21, 34],
+      initialCash: '5000',
+      feeBps: 10,
+      slippageBps: 5,
+      allocationBps: 1500,
+    },
+  });
+  assert.match(app.state.modal.body, /0\.25%/);
+  await choose(1);
+  assert.match(app.state.modal.body, /Out-of-sample window/);
+  await choose('next');
+  assert.match(app.state.modal.body, /7\. 8 \/ 21/);
+  await choose('back');
+  await choose('back');
+  await choose('runs');
+  await choose('walk:saved-run');
+  assert.equal(requests.find(({ action }) => action === 'run.get').input.runId, run.id);
+});
 test('TUI continuous books use the shared source service and a human-readable menu without enabling execution', async () => {
   setLanguage('en');
   const { app, requests } = fixture((_method, action) =>
@@ -913,4 +2052,115 @@ test('TUI exposes native process start and stop as a human menu while an Agent i
   await app._chooseModalOption(app.state.modal.options.findIndex((o) => o.value === 'stop'));
   assert.ok(app.state.modal.body.includes(app.quantBrowser.text('nativeStopped')));
   assert.ok(!requests.some((r) => r.action === 'native.control'));
+});
+
+test('TUI network setup freezes a named review and saves only after a separate confirmation', async (t) => {
+  setLanguage('en');
+  const profile = {
+    key: 'evm-1337',
+    id: 1337,
+    name: 'Local fixture',
+    nativeSymbol: 'TEST',
+    rpcOrigin: 'https://rpc.example',
+    genesisHash: '0x' + 'a'.repeat(64),
+    capabilities: { signType2: true },
+    revision: 0,
+  };
+  const { app, requests } = fixture((_method, action) => {
+    if (action === 'network.challenge') return { id: 'network-review', profile };
+    if (action === 'network.confirm') return { ...profile, revision: 1 };
+    if (action === 'network.list') return { items: [profile] };
+    if (action === 'list') return { wallets: [], intents: [] };
+    throw Error(action);
+  });
+  t.after(() => app.dispose());
+  const { TuiWalletNetworks } = require('../../src/tui/wallet-networks');
+  await new TuiWalletNetworks(app.walletBrowser).edit();
+  for (const value of ['Local fixture', '1337', 'TEST', 'https://rpc.example', '0.0001']) {
+    app.state.modal.editor.setValue(value);
+    await app.state.modal.onSubmit();
+  }
+  assert.equal(requests.length, 0);
+  const choose = (value) =>
+    app._chooseModalOption(app.state.modal.options.findIndex((o) => o.value === value));
+  await choose(true);
+  assert.equal(requests[0].action, 'network.challenge');
+  assert.equal(requests[0].input.id, 1337);
+  assert.match(app.state.modal.body, /Local fixture · 1337 · TEST/);
+  assert.equal(
+    requests.some((r) => r.action === 'network.confirm'),
+    false,
+  );
+  await choose(true);
+  assert.deepEqual(requests.find((r) => r.action === 'network.confirm').input, {
+    challengeId: 'network-review',
+    ack: 'SAVE NETWORK',
+    confirmed: true,
+  });
+});
+
+test('TUI native transfer selects a registered network and opens exact manual approval without auto-signing', async (t) => {
+  setLanguage('en');
+  const intent = {
+    id: 'network-intent',
+    status: 'approval-required',
+    chainId: 1337,
+    network: 'Local EVM',
+    nativeSymbol: 'TEST',
+    valueEth: '0.1',
+    digest: 'digest',
+    description: { kind: 'native-transfer' },
+    transaction: { to: '0x' + '2'.repeat(40), data: '0x', nonce: 0 },
+    executionFeeMaxWei: '1',
+    l1FeeEstimateWei: '0',
+    additionalFeeReserveWei: '2',
+  };
+  const { app, requests } = fixture((_method, action) => {
+    if (action === 'network.list')
+      return {
+        items: [
+          {
+            key: 'evm-1337',
+            id: 1337,
+            name: 'Local EVM',
+            nativeSymbol: 'TEST',
+            archived: false,
+            capabilities: { signType2: true },
+          },
+        ],
+      };
+    if (action === 'transaction.prepare' || action === 'intent.inspect') return intent;
+    throw Error(action);
+  });
+  t.after(() => app.dispose());
+  const { TuiWalletNetworks } = require('../../src/tui/wallet-networks');
+  await new TuiWalletNetworks(app.walletBrowser).send({
+    id: 'wallet',
+    name: 'Fixture wallet',
+    unlocked: true,
+  });
+  await app._chooseModalOption(1);
+  for (const value of ['0x' + '2'.repeat(40), '0.1']) {
+    app.state.modal.editor.setValue(value);
+    await app.state.modal.onSubmit();
+  }
+  assert.deepEqual(requests.find((r) => r.action === 'transaction.prepare').input, {
+    id: 'wallet',
+    chain: 'evm-1337',
+    to: '0x' + '2'.repeat(40),
+    value: '0.1',
+  });
+  assert.match(app.state.modal.body, /TEST/);
+  assert.match(app.state.modal.body, /1337/);
+  assert.ok(app.state.modal.options.some((o) => o.value === 'approve'));
+  assert.equal(
+    requests.some((r) => r.action === 'intent.approve'),
+    false,
+  );
+  intent.networkBlocked = true;
+  await app.walletBrowser.inspect(intent.id);
+  assert.equal(
+    app.state.modal.options.some((o) => o.value === 'approve'),
+    false,
+  );
 });

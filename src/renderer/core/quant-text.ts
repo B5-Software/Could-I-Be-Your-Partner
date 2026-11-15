@@ -4,7 +4,11 @@ import nativePaperLabels from '../../shared/quant-native-paper-labels.json';
 import strategyLabels from '../../shared/quant-strategy-labels.json';
 import eventLabels from '../../shared/quant-event-labels.json';
 import executionLabels from '../../shared/quant-execution-labels.json';
+import baseHistoryLabels from '../../shared/quant-base-history-labels.json';
+import validationLabels from '../../shared/quant-validation-labels.json';
 const zh = {
+  ...baseHistoryLabels.zh,
+  ...validationLabels.zh,
   ...eventLabels.zh,
   ...executionLabels.zh,
   ...strategyLabels.zh,
@@ -166,6 +170,8 @@ const zh = {
 } as const;
 type Key = keyof typeof zh;
 const en: Record<Key, string> = {
+  ...baseHistoryLabels.en,
+  ...validationLabels.en,
   ...eventLabels.en,
   ...executionLabels.en,
   ...strategyLabels.en,
@@ -335,6 +341,8 @@ const en: Record<Key, string> = {
 };
 const de: Record<Key, string> = {
   ...en,
+  ...baseHistoryLabels.de,
+  ...validationLabels.de,
   ...eventLabels.de,
   ...executionLabels.de,
   ...strategyLabels.de,

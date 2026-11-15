@@ -1,10 +1,21 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 'use strict';
+const { chainLabel } = require('../shared/wallet-chain');
 const { LineEditor } = require('./editor');
+const networkLabels = require('../shared/wallet-network-labels.json');
+const appLabels = require('../shared/wallet-app-labels.json');
+const browserLabels = require('../shared/wallet-browser-labels.json');
+const messageLabels = require('../shared/wallet-message-labels.json');
+const { TuiWalletMessages } = require('./wallet-messages');
+const { TuiWalletApps } = require('./wallet-apps');
+const { TuiWalletBrowser } = require('./wallet-browser');
+const { TuiWalletNetworks } = require('./wallet-networks');
 const { getLanguage } = require('./text');
 const statuses = require('../shared/wallet-status.json');
 const emergencyLabels = require('../shared/wallet-emergency-labels.json');
 const securityLabels = require('../shared/wallet-security-labels.json');
+const allowanceLabels = require('../shared/wallet-allowance-labels.json');
+const assetLabels = require('../shared/wallet-assets-labels.json');
 const policyLabels = require('../shared/wallet-policy-labels.json');
 const policyFields = require('../shared/wallet-policy-fields.json');
 const tokenLabels = require('../shared/wallet-token-labels.json');
@@ -19,7 +30,13 @@ const agentScopeLabels = require('../shared/wallet-agent-scope-labels.json');
 const { TuiWalletAgentScopes } = require('./wallet-agent-scopes');
 const labels = {
   zh: {
+    ...networkLabels['zh-CN'],
+    ...appLabels['zh-CN'],
+    ...browserLabels['zh-CN'],
+    ...messageLabels['zh-CN'],
     ...securityLabels['zh-CN'],
+    ...allowanceLabels['zh-CN'],
+    ...assetLabels['zh-CN'],
     ...policyLabels['zh-CN'],
     ...tokenLabels['zh-CN'],
     ...portfolioLabels['zh-CN'],
@@ -55,7 +72,7 @@ const labels = {
     day: '24 小时',
     session: '直到关闭后台',
     forever: '直到手动撤销',
-    fee: '每笔估算费用上限（ETH，0 表示不限）',
+    fee: '每笔估算费用上限（原生币，0 表示不限）',
     warning:
       '允许 Agent 在所选钱包和网络连续转账、兑换和调用合约，无需逐笔确认。可能损失全部资产，链上操作通常无法撤回。撤销本应用权限不会撤回已广播交易或链上代币授权。L1 费用只是估算。此权限不会自动解锁钱包。',
     read: '已阅读，继续',
@@ -80,6 +97,12 @@ const labels = {
     choose: '↑↓ 选择 · Enter 打开 · Esc 返回',
   },
   en: {
+    ...networkLabels.en,
+    ...appLabels.en,
+    ...browserLabels.en,
+    ...messageLabels.en,
+    ...allowanceLabels.en,
+    ...assetLabels.en,
     ...securityLabels.en,
     ...policyLabels.en,
     ...tokenLabels.en,
@@ -116,7 +139,7 @@ const labels = {
     day: '24 hours',
     session: 'Until the backend closes',
     forever: 'Until manually revoked',
-    fee: 'Estimated fee cap per transaction (ETH; 0 is unlimited)',
+    fee: 'Estimated fee cap per transaction (native coin; 0 is unlimited)',
     warning:
       'Allows continuous transfers, swaps and contract calls from the selected wallet/network without individual approval. All assets may be lost; onchain actions are usually irreversible. Revoking app permission cannot undo broadcasts or onchain token allowances. L1 fees are estimates. This permission does not unlock the wallet.',
     read: 'I have read this; continue',
@@ -142,6 +165,12 @@ const labels = {
     choose: '↑↓ select · Enter open · Esc back',
   },
   de: {
+    ...networkLabels.de,
+    ...appLabels.de,
+    ...browserLabels.de,
+    ...messageLabels.de,
+    ...allowanceLabels.de,
+    ...assetLabels.de,
     ...securityLabels.de,
     ...policyLabels.de,
     ...tokenLabels.de,
@@ -178,7 +207,7 @@ const labels = {
     day: '24 Stunden',
     session: 'Bis das Backend geschlossen wird',
     forever: 'Bis zum manuellen Widerruf',
-    fee: 'Geschätztes Gebührenlimit je Transaktion (ETH; 0 unbegrenzt)',
+    fee: 'Geschätztes Gebührenlimit je Transaktion (native coin; 0 unbegrenzt)',
     warning:
       'Erlaubt fortlaufende Transfers, Swaps und Vertragsaufrufe im gewählten Wallet/Netzwerk ohne Einzelbestätigung. Alle Vermögenswerte können verloren gehen; Onchain-Aktionen sind meist unumkehrbar. Ein Widerruf macht Übertragungen und Token-Freigaben nicht rückgängig. L1-Gebühren sind Schätzwerte. Das Wallet wird dadurch nicht entsperrt.',
     read: 'Gelesen; weiter',
@@ -268,6 +297,15 @@ class WalletBrowser {
   }
   async changed() {
     const data = await this.call('list');
+    const appRequests = data.appRequests ?? [];
+    if (appRequests.some((id) => !this.seenApps?.has(id))) this.notify(this.text('appsWaiting'));
+    this.seenApps = new Set(appRequests);
+    const browsers = data.browserRequests ?? [];
+    if (browsers.some((id) => !this.seenBrowsers?.has(id))) this.notify(this.text('wbWaiting'));
+    this.seenBrowsers = new Set(browsers);
+    const messages = data.messageRequests ?? [];
+    if (messages.some((id) => !this.seenMessages?.has(id))) this.notify(this.text('msgWaiting'));
+    this.seenMessages = new Set(messages);
     if (data.emergency?.halted && !this.emergency?.halted) {
       this.disposeSensitive();
       this.notify(this.text('esStopped'));
@@ -293,7 +331,7 @@ class WalletBrowser {
     const options = [
       { label: this.text('close'), value: 'close' },
       ...data.wallets.map((wallet) => ({
-        label: `${wallet.name} · ${this.text(wallet.unlocked ? 'unlocked' : 'locked')} · ${wallet.address.slice(0, 8)}…`,
+        label: `${wallet.name} · ${this.text(wallet.kind === 'watch' ? 'watchAccount' : wallet.unlocked ? 'unlocked' : 'locked')} · ${wallet.address.slice(0, 8)}…`,
         value: wallet,
       })),
       {
@@ -301,6 +339,10 @@ class WalletBrowser {
         value: 'pending',
       },
       { label: this.text('history'), value: 'history' },
+      { label: this.text('networks'), value: 'networks' },
+      { label: this.text('appsTitle'), value: 'apps' },
+      { label: this.text('wbTitle'), value: 'browser' },
+      { label: this.text('msgTitle'), value: 'messages' },
       { label: this.text('portfolioTitle'), value: 'portfolios' },
       { label: this.text('agentScopesTitle'), value: 'agent-scopes' },
       ...(data.wallets.some((w) => w.portfolioBlocked)
@@ -308,6 +350,7 @@ class WalletBrowser {
         : []),
       { label: this.text('create'), value: 'create' },
       { label: this.text('import'), value: 'import' },
+      { label: this.text('watchAdd'), value: 'watch-add' },
       {
         label: this.text(
           data.emergency?.halted
@@ -331,6 +374,10 @@ class WalletBrowser {
       options,
       async (value) => {
         if (value === 'close') return;
+        if (value === 'networks') return new TuiWalletNetworks(this).open();
+        if (value === 'apps') return new TuiWalletApps(this).open();
+        if (value === 'browser') return new TuiWalletBrowser(this).open();
+        if (value === 'messages') return new TuiWalletMessages(this).open();
         if (value === 'portfolios') return new TuiWalletPortfolios(this).open();
         if (value === 'agent-scopes') return new TuiWalletAgentScopes(this).open();
         if (value === 'portfolio-recover') return new TuiWalletPortfolios(this).recover();
@@ -346,6 +393,7 @@ class WalletBrowser {
         if (value === 'emergency-reset') return this.resetEmergency();
         if (value === 'pending' || value === 'history') return this.history(0, value === 'pending');
         if (value === 'create' || value === 'import') return this.credentials(value);
+        if (value === 'watch-add') return this.watchAccount();
         return this.account(value);
       },
       data.emergency?.halted
@@ -371,20 +419,59 @@ class WalletBrowser {
           label: this.text(wallet.unlocked ? 'lock' : 'unlock'),
           value: wallet.unlocked ? 'lock' : 'unlock',
         },
-        { label: this.text('balance'), value: 'balance' },
+        { label: this.text('assetsTitle'), value: 'balance' },
+        ...(wallet.unlocked && wallet.kind !== 'watch'
+          ? [{ label: this.text('networkSend'), value: 'send' }]
+          : []),
+        { label: this.text('allowances'), value: 'allowances' },
         { label: this.text('usageTitle'), value: 'usage' },
         { label: this.text('changePassword'), value: 'password-change' },
         {
           label: this.text(wallet.policy.mode === 'autonomous' ? 'revoke' : 'automatic'),
           value: wallet.policy.mode === 'autonomous' ? 'revoke' : 'automatic',
         },
+        ...(wallet.kind === 'watch'
+          ? [
+              { label: this.text('watchImport'), value: 'watch-import' },
+              { label: this.text('watchRemove'), value: 'watch-remove' },
+            ]
+          : []),
       ].filter(
         (option) =>
-          !this.emergency?.halted ||
-          ['back', 'balance', 'password-change', 'usage'].includes(option.value),
+          (wallet.kind !== 'watch' ||
+            ['back', 'balance', 'allowances', 'watch-import', 'watch-remove'].includes(
+              option.value,
+            )) &&
+          (!this.emergency?.halted ||
+            [
+              'back',
+              'balance',
+              'allowances',
+              'password-change',
+              'usage',
+              'watch-import',
+              'watch-remove',
+            ].includes(option.value)),
       ),
       async (action) => {
         if (action === 'back') return this.open();
+        if (action === 'send') return new TuiWalletNetworks(this).send(wallet);
+        if (action === 'watch-import') return this.credentials('import', wallet);
+        if (action === 'watch-remove')
+          return this.menu(
+            this.text('watchRemove'),
+            [
+              { label: this.text('back'), value: false },
+              { label: this.text('watchRemove'), value: true },
+            ],
+            async (remove) => {
+              if (!remove) return this.account(wallet);
+              await this.call('watch.remove', { id: wallet.id });
+              return this.open();
+            },
+            `${wallet.name}\n${wallet.address}\n${this.text('watchRemoveHint')}`,
+            () => this.account(wallet),
+          );
         if (action === 'usage') {
           const snapshot = await this.call('policy.usage', { id: wallet.id });
           if (snapshot?.period)
@@ -438,27 +525,304 @@ class WalletBrowser {
             this.text('changePasswordHint'),
             () => this.account(wallet),
           );
-        if (action === 'balance')
-          return this.menu(
-            this.text('network'),
-            [
-              { label: this.text('mainnet'), value: 'base' },
-              { label: this.text('testnet'), value: 'base-sepolia' },
-            ],
-            async (chain) => {
-              const result = await this.call('balance', { id: wallet.id, chain });
-              this.menu(
-                this.text('balance'),
-                [{ label: this.text('back'), value: 0 }],
-                () => this.account(wallet),
-                JSON.stringify(result, null, 2),
-              );
-            },
-          );
+        if (action === 'allowances') return this.allowances(wallet);
+        if (action === 'balance') return this.assets(wallet);
         if (action === 'automatic') return this.authorization(wallet);
       },
-      wallet.address,
+      wallet.address +
+        (wallet.policy.inactiveNetworks?.length
+          ? '\n\n' +
+            this.text('networkGrantStale') +
+            ' ' +
+            wallet.policy.inactiveNetworks.join(' / ')
+          : ''),
     );
+  }
+  watchAccount() {
+    return this.input(
+      this.text('name'),
+      (name) =>
+        this.input(
+          this.text('walletAddress'),
+          async (address) => {
+            await this.call('watch.add', { name: name.trim(), address: address.trim() });
+            return this.open();
+          },
+          { back: () => this.open() },
+        ),
+      { back: () => this.open() },
+    );
+  }
+  assets(wallet) {
+    const networks = async () => {
+      const { items } = await this.call('network.list');
+      return this.menu(
+        this.text('network'),
+        items.map((p) => ({ label: `${p.name} · ${p.id} · ${p.nativeSymbol}`, value: p.key })),
+        (chain) => load(chain),
+        this.text('assetsHint'),
+        () => this.account(wallet),
+      );
+    };
+    const load = async (chain) => {
+      const snapshot = await this.call('assets', { id: wallet.id, chain });
+      const back = () => load(chain);
+      const rows = snapshot.assets.map((asset) =>
+        [
+          `${asset.symbol || this.text('assetUnknown')} · ${asset.error ? this.text('assetFailed') : (asset.amount ?? `${asset.amountAtomic} ${this.text('assetAtomic')}`)}`,
+          asset.address,
+          asset.metadataError ? this.text('assetMetadata') : '',
+        ]
+          .filter(Boolean)
+          .join('\n'),
+      );
+      return this.menu(
+        this.text('assetsTitle'),
+        [
+          { label: this.text('back'), value: 'back' },
+          { label: this.text('assetRefresh'), value: 'refresh' },
+          { label: this.text('assetTrack'), value: 'track' },
+          ...snapshot.trackedTokens.map((token) => ({
+            label: `${this.text('assetUntrack')} · ${token}`,
+            value: token,
+          })),
+        ],
+        async (action) => {
+          if (action === 'back') return networks();
+          if (action === 'refresh') return back();
+          if (action === 'track')
+            return this.input(
+              this.text('allowanceToken'),
+              async (token) => {
+                await this.call('asset.track', { id: wallet.id, chain, token: token.trim() });
+                return back();
+              },
+              { back },
+            );
+          await this.call('asset.untrack', { id: wallet.id, chain, token: action });
+          return back();
+        },
+        `${snapshot.network} · ${this.text('assetBlock')} #${snapshot.block}\n${rows.join('\n\n')}`,
+        networks,
+      );
+    };
+    return networks();
+  }
+  allowances(wallet, selection, onBack) {
+    const back = onBack || (() => this.account(wallet));
+    const protocolInput = (layered) => (layered ? { protocol: 'permit2' } : {});
+    const check = async (chain, layered, token, spender, onBack) => {
+      const result = await this.call('allowance.inspect', {
+        id: wallet.id,
+        chain,
+        token: token.trim(),
+        spender: spender.trim(),
+        ...protocolInput(layered),
+      });
+      const display = (value, atomic) =>
+        result.symbol ? `${value} ${result.symbol}` : `${atomic} ${this.text('allowanceAtomic')}`;
+      const amount = display(result.amount, result.amountAtomic);
+      const layers = result.permit2;
+      const expiry = layers ? new Date(layers.expiration * 1000) : null;
+      const summary = [
+        result.network,
+        result.token,
+        result.spender,
+        result.unlimited ? `${this.text('allowanceUnlimited')} (${amount})` : amount,
+        ...(layers
+          ? [
+              `${this.text('allowancePermit2Outer')} ${display(layers.tokenAllowance, layers.tokenAllowanceAtomic)}`,
+              `${this.text('allowancePermit2Effective')} ${display(layers.effectiveAmount, layers.effectiveAmountAtomic)}`,
+              `${this.text('allowancePermit2Expiry')} ${Number.isNaN(expiry.getTime()) ? layers.expiration + ' (Unix)' : expiry.toLocaleString()}${layers.expired ? ` · ${this.text('allowancePermit2Expired')}` : ''} · Nonce ${layers.nonce}`,
+            ]
+          : []),
+        `${this.text('allowanceBlock')} #${result.block} · ${new Date(result.observedAt).toLocaleString()}`,
+      ].join('\n');
+      return this.menu(
+        this.text('allowances'),
+        [
+          { label: this.text('back'), value: 'back' },
+          ...(wallet.unlocked && !this.emergency?.halted && result.amountAtomic !== '0'
+            ? [{ label: this.text('allowancePrepare'), value: 'revoke' }]
+            : []),
+          ...(wallet.unlocked && !this.emergency?.halted && layers?.nextNonce
+            ? [{ label: this.text('permit2OrderedPrepare'), value: 'ordered' }]
+            : []),
+        ],
+        async (action) => {
+          if (action === 'back') return onBack();
+          const intent = await this.call(
+            action === 'ordered' ? 'permit2.ordered.prepare' : 'allowance.revoke.prepare',
+            {
+              id: wallet.id,
+              chain,
+              token: result.token,
+              spender: result.spender,
+              ...(action === 'ordered'
+                ? { commandId: result.commandId + ':nonce', nonce: layers.nonce }
+                : { commandId: result.commandId, ...protocolInput(layered) }),
+            },
+          );
+          return this.inspect(intent.id, 0, onBack);
+        },
+        summary,
+        onBack,
+      );
+    };
+    const scan = async (chain, layered, blocks, cursor) => {
+      const page = await this.call('allowance.discover', {
+        id: wallet.id,
+        chain,
+        blocks,
+        limit: 8,
+        ...protocolInput(layered),
+        ...cursor,
+      });
+      const render = () =>
+        this.menu(
+          this.text('allowanceDiscover'),
+          [
+            { label: this.text('back'), value: 'back' },
+            ...page.items.map((pair) => ({
+              label: `${pair.token} → ${pair.spender} · #${pair.block}`,
+              value: pair,
+            })),
+            ...(page.nextOffset !== null ? [{ label: this.text('next'), value: 'next' }] : []),
+            ...(page.nextOffset === null && page.nextEndBlock !== null
+              ? [{ label: this.text('allowanceHistoryOlder'), value: 'older' }]
+              : []),
+          ],
+          (selection) => {
+            if (selection === 'back') return actions(chain, layered);
+            if (selection === 'next')
+              return scan(chain, layered, blocks, {
+                endBlock: page.toBlock,
+                anchorHash: page.anchorHash,
+                offset: page.nextOffset,
+              });
+            if (selection === 'older')
+              return scan(chain, layered, blocks, { endBlock: page.nextEndBlock });
+            return check(chain, layered, selection.token, selection.spender, render);
+          },
+          [
+            `${this.text('allowanceHistoryRange')} ${page.fromBlock}–${page.toBlock} · ${page.total}`,
+            page.items.length
+              ? this.text(layered ? 'allowancePermit2History' : 'allowanceHistoryHint')
+              : this.text('allowanceHistoryEmpty'),
+          ].join('\n'),
+          () => actions(chain, layered),
+        );
+      return render();
+    };
+    const actions = (chain, layered = false) =>
+      this.menu(
+        `${this.text('allowances')} · ${layered ? 'Permit2' : 'ERC-20'}`,
+        [
+          { label: this.text('back'), value: 'back' },
+          { label: this.text('allowanceRead'), value: 'read' },
+          { label: this.text('allowanceDiscover'), value: 'history' },
+          {
+            label: `${this.text('allowanceProtocol')} → ${layered ? 'ERC-20' : 'Permit2'}`,
+            value: 'switch',
+          },
+          ...(layered ? [{ label: this.text('permit2SignatureTitle'), value: 'signature' }] : []),
+        ],
+        (action) => {
+          const returnHere = () => actions(chain, layered);
+          if (action === 'back') return back();
+          if (action === 'switch') return actions(chain, !layered);
+          if (action === 'signature') return this.permit2Signatures(wallet, chain, returnHere);
+          if (action === 'history')
+            return this.input(
+              this.text('allowanceHistoryEnd'),
+              (end) =>
+                this.input(
+                  this.text('allowanceHistoryBlocks'),
+                  (count) =>
+                    scan(
+                      chain,
+                      layered,
+                      Number(count.trim()),
+                      end.trim() ? { endBlock: end.trim() } : {},
+                    ),
+                  { value: '1000', back: returnHere },
+                ),
+              { back: returnHere },
+            );
+          return this.input(
+            this.text('allowanceToken'),
+            (token) =>
+              this.input(
+                this.text('allowanceSpender'),
+                (spender) => check(chain, layered, token, spender, returnHere),
+                { back: returnHere },
+              ),
+            { back: returnHere },
+          );
+        },
+        this.text('allowanceHint'),
+        back,
+      );
+    if (selection)
+      return check(
+        selection.chain,
+        selection.protocol === 'permit2',
+        selection.token,
+        selection.spender,
+        back,
+      );
+    return this.menu(
+      this.text('network'),
+      [
+        { label: this.text('mainnet'), value: 'base' },
+        { label: this.text('testnet'), value: 'base-sepolia' },
+      ],
+      (chain) => actions(chain),
+      this.text('allowanceHint'),
+      back,
+    );
+  }
+  permit2Signatures(wallet, chain, back) {
+    const enter = (value = '') =>
+      this.input(
+        this.text('permit2NonceInput'),
+        async (input) => {
+          const observation = await this.call('permit2.signature.inspect', {
+            id: wallet.id,
+            chain,
+            nonce: input.trim(),
+          });
+          const retry = () => enter(input);
+          return this.menu(
+            this.text('permit2SignatureTitle'),
+            [
+              { label: this.text('back'), value: 'back' },
+              ...(!observation.unavailable && wallet.unlocked && !this.emergency?.halted
+                ? [{ label: this.text('permit2SignaturePrepare'), value: 'prepare' }]
+                : []),
+            ],
+            async (action) => {
+              if (action === 'back') return retry();
+              const intent = await this.call('permit2.signature.prepare', {
+                id: wallet.id,
+                chain,
+                nonce: observation.nonce,
+                commandId: observation.commandId,
+              });
+              return this.inspect(intent.id, 0, retry);
+            },
+            [
+              observation.network,
+              `Nonce ${observation.nonce} · ${this.text('allowanceBlock')} #${observation.block}`,
+              this.text(observation.unavailable ? 'permit2NonceUnavailable' : 'permit2NonceUnused'),
+              this.text('permit2SignatureHint'),
+            ].join('\n'),
+            retry,
+          );
+        },
+        { back, value },
+      );
+    return enter();
   }
   resetEmergency() {
     return this.menu(
@@ -527,7 +891,7 @@ class WalletBrowser {
       { masked: true, back: cancel },
     );
   }
-  credentials(kind) {
+  credentials(kind, watch) {
     const generation = ++this.generation;
     let name = '',
       password = '',
@@ -548,13 +912,17 @@ class WalletBrowser {
     };
     const commit = async () => {
       try {
-        const result = await this.call(kind === 'create' ? 'create' : 'import', {
-          name,
-          password,
-          secret,
-          kind: format,
-          sourcePassword,
-        });
+        const result = await this.call(
+          watch ? 'watch.import' : kind === 'create' ? 'create' : 'import',
+          {
+            name,
+            password,
+            secret,
+            kind: format,
+            sourcePassword,
+            ...(watch ? { id: watch.id } : {}),
+          },
+        );
         if (this.app._disposed || generation !== this.generation) return;
         if (result.mnemonic) {
           let phrase = result.mnemonic;
@@ -599,41 +967,40 @@ class WalletBrowser {
         },
         { masked: true, back: cancel },
       );
-    this.input(
-      this.text('name'),
-      (value) => {
-        name = value.trim();
-        this.input(
-          this.text('password'),
-          async (value) => {
-            password = value;
-            if (kind === 'create') return commit();
-            this.menu(
-              this.text('import'),
-              ['privateKey', 'mnemonic', 'keystore'].map((value, index) => ({
-                label: this.text(['key', 'phrase', 'keystore'][index]),
-                value,
-              })),
-              (value) => {
-                format = value;
-                return readSecret();
-              },
-              '',
-              cancel,
-            );
-          },
-          { masked: true, back: cancel },
-        );
-      },
-      { back: cancel },
-    );
+    const readPassword = (value) => {
+      name = value.trim();
+      this.input(
+        this.text('password'),
+        async (value) => {
+          password = value;
+          if (kind === 'create') return commit();
+          this.menu(
+            this.text('import'),
+            ['privateKey', 'mnemonic', 'keystore'].map((value, index) => ({
+              label: this.text(['key', 'phrase', 'keystore'][index]),
+              value,
+            })),
+            (value) => {
+              format = value;
+              return readSecret();
+            },
+            '',
+            cancel,
+          );
+        },
+        { masked: true, back: cancel },
+      );
+    };
+    if (watch) return readPassword(watch.name);
+    this.input(this.text('name'), readPassword, { back: cancel });
   }
-  authorization(wallet) {
+  async authorization(wallet) {
+    const { items } = await this.call('network.list');
+    const networks = items.filter((p) => !p.archived && p.capabilities.autonomous);
     this.menu(
       this.text('network'),
       [
-        { label: this.text('mainnet'), value: [8453] },
-        { label: this.text('testnet'), value: [84532] },
+        ...networks.map((p) => ({ label: `${p.name} · ${p.id}`, value: [p.id] })),
         { label: this.text('both'), value: [8453, 84532] },
       ],
       (chains) => {
@@ -683,7 +1050,9 @@ class WalletBrowser {
                       hours +
                       'h · ' +
                       maxFeeEth +
-                      ' ETH\n\n' +
+                      ' ' +
+                      this.text('nativeQuantity') +
+                      '\n\n' +
                       this.policySummary(limits),
                   );
                 });
@@ -801,7 +1170,8 @@ class WalletBrowser {
       );
     show();
   }
-  tokenScope(limits, back) {
+  async tokenScope(limits, back) {
+    const { items } = await this.call('network.list');
     const show = () =>
       this.menu(
         this.text('tokensTitle'),
@@ -809,7 +1179,7 @@ class WalletBrowser {
           { label: this.text('back'), value: 'back' },
           ...(limits.tokens.length < 16 ? [{ label: this.text('tokenAdd'), value: 'add' }] : []),
           ...limits.tokens.map((token, index) => ({
-            label: `${token.symbol || token.address} · ${token.chainId === 8453 ? 'Base' : 'Base Sepolia'}`,
+            label: `${token.symbol || token.address} · ${chainLabel(token.chainId)}`,
             value: index,
           })),
         ],
@@ -821,7 +1191,7 @@ class WalletBrowser {
               [
                 { label: this.text('back'), value: 'back' },
                 ...tokenPresets.map((p, i) => ({
-                  label: `${p.symbol} · ${p.chainId === 8453 ? 'Base' : 'Base Sepolia'}`,
+                  label: `${p.symbol} · ${chainLabel(p.chainId)}`,
                   value: i,
                 })),
                 { label: this.text('tokenCustom'), value: 'custom' },
@@ -870,8 +1240,9 @@ class WalletBrowser {
             return this.menu(
               this.text('chainId'),
               [
-                { label: 'Base · 8453', value: 8453 },
-                { label: 'Base Sepolia · 84532', value: 84532 },
+                ...items
+                  .filter((p) => !p.archived)
+                  .map((p) => ({ label: `${p.name} · ${p.id}`, value: p.id })),
               ],
               (value) => {
                 token[choice] = value;
@@ -909,7 +1280,7 @@ class WalletBrowser {
     const options = [
       { label: this.text('back'), value: 'back' },
       ...result.items.map((intent) => ({
-        label: `${intent.network} · ${intent.valueEth} ETH · ${this.status(intent.status)} · ${intent.transaction.to.slice(0, 10)}…`,
+        label: `${intent.network} · ${intent.valueEth} ${intent.nativeSymbol || 'ETH'} · ${this.status(intent.status)} · ${intent.transaction.to.slice(0, 10)}…`,
         value: intent.id,
       })),
     ];
@@ -930,9 +1301,17 @@ class WalletBrowser {
   async inspect(id, offset = 0, back = () => this.open(), raw = false) {
     const intent = await this.call('intent.inspect', { id });
     const { calldata, ...description } = intent.description;
+    const permitScope = {
+      'permit2-lockdown': 'allowancePermit2Scope',
+      'permit2-allowance-invalidate': 'permit2OrderedScope',
+      'permit2-signature-invalidate': 'permit2SignatureScope',
+    }[description.kind];
     const details = JSON.stringify(
       {
         network: intent.network,
+        ...(intent.sourceApp ? { sourceApp: intent.sourceApp } : {}),
+        chainId: intent.chainId,
+        nativeSymbol: intent.nativeSymbol || 'ETH',
         address: intent.address,
         to: intent.transaction.to,
         valueEth: intent.valueEth,
@@ -943,8 +1322,11 @@ class WalletBrowser {
         expiresAt: intent.expiresAt ? new Date(intent.expiresAt).toLocaleString() : undefined,
         executionFeeMaxWei: intent.executionFeeMaxWei,
         l1FeeEstimateWei: intent.l1FeeEstimateWei,
+        operatorFeeEstimateWei: intent.operatorFeeEstimateWei || '0',
+        additionalFeeReserveWei: intent.additionalFeeReserveWei || '0',
         status: this.status(intent.status),
         error: intent.error ? this.status(intent.error) : undefined,
+        allowanceCeiling: intent.portfolioAllowanceRisk,
         broadcast:
           intent.submissionMayHaveOccurred === false
             ? this.status('broadcast-not-sent')
@@ -952,6 +1334,7 @@ class WalletBrowser {
               ? this.status('broadcast-unknown')
               : undefined,
         description: { ...description, kind: this.status(String(description.kind)) },
+        ...(permitScope ? { allowance: this.text(permitScope) } : {}),
         hash: intent.hash,
         ...(intent.replacementOf
           ? { warning: this.text('replacementWarning'), previousHash: intent.replacementOf }
@@ -970,7 +1353,7 @@ class WalletBrowser {
     if (intent.status === 'approval-required')
       options.push(
         { label: this.text('deny'), value: 'deny' },
-        ...(!intent.emergencyBlocked
+        ...(!intent.emergencyBlocked && !intent.networkBlocked
           ? [
               {
                 label: this.text(intent.replacementOf ? 'replacementApprove' : 'approved'),

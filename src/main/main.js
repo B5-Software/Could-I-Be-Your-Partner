@@ -4179,7 +4179,13 @@ const pwService = registerPlaywrightIpc({
   getSettings: () => settings,
   getMainWindow: () => mainWindow,
   getImagesDir: () => imagesDir,
-  getUserDataPath: () => app.getPath('userData')
+  getUserDataPath: () => app.getPath('userData'),
+  getWallet: async () => {
+    if (!backendDispatch || !agentRuntime) throw Error('WALLET_APP_OWNER_UNAVAILABLE');
+    await backendDispatch({method: 'wallet:request', args: ['list']});
+    if (!agentRuntime.walletService) throw Error('WALLET_APP_OWNER_UNAVAILABLE');
+    return agentRuntime.walletService;
+  }
 });
 
 // Auto-connect configured MCP servers on startup

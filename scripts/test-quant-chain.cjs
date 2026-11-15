@@ -68,9 +68,13 @@ async function main() {
       [
         path.join(
           root,
-          process.argv.includes('--execution')
-            ? 'tests/integration/quant-live-execution.cjs'
-            : 'tests/integration/quant-local-chain.cjs',
+          process.argv.includes('--apps')
+            ? 'tests/integration/wallet-apps-browser.cjs'
+            : process.argv.includes('--networks')
+              ? 'tests/integration/wallet-networks-chain.cjs'
+              : process.argv.includes('--execution')
+                ? 'tests/integration/quant-live-execution.cjs'
+                : 'tests/integration/quant-local-chain.cjs',
         ),
       ],
       {
@@ -79,6 +83,7 @@ async function main() {
         env: {
           ...process.env,
           CIBYP_TEST_ANVIL: binary,
+          ...(process.argv.includes('--extension') ? { CIBYP_TEST_WALLET_EXTENSION: '1' } : {}),
           ...(bundled ? { CIBYP_TEST_NODE_BACKEND: core } : {}),
         },
       },

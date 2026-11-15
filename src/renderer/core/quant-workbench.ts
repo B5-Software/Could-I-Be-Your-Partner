@@ -2,6 +2,8 @@
 import type {
   Candle,
   QuantChatView,
+  QuantBaseTrade,
+  QuantBaseRecorder,
   QuantDataset,
   QuantRun,
   QuantSummary,
@@ -16,6 +18,7 @@ import { openStrategies } from './quant-strategies';
 import { openEventData } from './quant-events';
 import { openLiveExecution } from './quant-execution';
 import { quantText, type QuantLabel } from './quant-text';
+import { executionAmount, signedAmount } from '../../shared/quant-execution-format';
 import { approvalCard, type WalletIntent } from './wallet-panel';
 
 type Options = {
@@ -179,7 +182,7 @@ export class QuantWorkbench {
             <div class="quant-research-controls"><label><span data-q="strategy"></span><select data-param="strategy"><option value="sma-cross" data-q="sma"></option><option value="buy-hold" data-q="hold"></option></select></label>
               <label><span data-q="fast"></span><input data-param="fast" type="number" min="2" max="200" value="9"></label><label><span data-q="slow"></span><input data-param="slow" type="number" min="3" max="500" value="21"></label>
               <label><span data-q="feeBps"></span><input data-param="feeBps" type="number" min="0" max="1000" value="10"></label><label><span data-q="slippageBps"></span><input data-param="slippageBps" type="number" min="0" max="1000" value="5"></label>
-              ${this.button('backtest', 'backtest', 'chart', 'class="quant-primary"')}${this.button('export', 'export', 'download')}</div>
+              ${this.button('backtest', 'backtest', 'chart', 'class="quant-primary"')}${this.button('walkForward', 'walk-forward', 'chart')}${this.button('ammReplay', 'amm-replay', 'history', 'hidden')}${this.button('ammScenario', 'amm-scenario', 'chart', 'hidden')}${this.button('export', 'export', 'download')}</div>
             <p class="quant-hint" data-q="candleHint"></p><div data-run-report></div><div data-run-list></div></div>
             <div data-orders hidden><div class="quant-order-entry"><select data-order="side" aria-label="${escape(this.text('side'))}"><option value="buy" data-q="buy"></option><option value="sell" data-q="sell"></option></select>
               <select data-order="type" aria-label="${escape(this.text('strategy'))}"><option value="market" data-q="market"></option><option value="limit" data-q="limit"></option></select>
@@ -199,7 +202,7 @@ export class QuantWorkbench {
       </div><input data-file type="file" accept=".csv,.json" hidden>
       <section class="quant-chart-card" data-chart-card><div class="quant-market-head"><div><span class="quant-venue" data-venue></span><h2 data-product></h2><span class="quant-price" data-price>—</span></div>
         <div class="quant-health"><span data-health></span><time data-updated></time></div><div class="quant-chart-actions">
-          ${this.button('refresh', 'refresh', 'refresh')}${this.button('import', 'import', 'upload')}${this.button('fullscreen', 'fullscreen', 'expand', 'class="quant-icon-button"')}</div></div>
+          ${this.button('refresh', 'refresh', 'refresh')}${this.button('ammHistory', 'base-history', 'history', 'hidden')}${this.button('import', 'import', 'upload')}${this.button('fullscreen', 'fullscreen', 'expand', 'class="quant-icon-button"')}</div></div>
         <div class="quant-kpis">${(['equity', 'cash', 'position', 'fees'] as QuantLabel[]).map((key) => `<div><span data-q="${key}"></span><strong data-kpi="${key}">—</strong></div>`).join('')}<div class="quant-paper-actions">${this.button('start', 'start')}${this.button('pause', 'pause')}</div></div>
         <div class="quant-chart-toolbar"><select data-interval aria-label="${escape(this.text('interval'))}">${[
           [60, '1m'],
@@ -337,6 +340,7 @@ export class QuantWorkbench {
     this.el('.quant-mode-badge').textContent =
       this.text('paper') + ' · ' + this.text(w.paper.status === 'running' ? 'running' : 'paused');
     this.el<HTMLSelectElement>('[data-interval]').value = String(w.market.interval);
+    this.el('[data-action="base-history"]').hidden = !w.network;
     const dataset = this.el<HTMLSelectElement>('[data-dataset]');
     dataset.innerHTML =
       `<option value="">${escape(this.text('liveData'))}</option>` +
@@ -357,23 +361,34 @@ export class QuantWorkbench {
       if (this.workspace?.id !== w.id || this.workspace.preferences.datasetId !== id) return;
       bars = this.chartData.get(id)!;
     }
-    this.chart.setData(bars);
+    const selectedDataset = w.datasets.find((dataset) => dataset.id === w.preferences.datasetId);
+    this.el('[data-action="amm-replay"]').hidden =
+      !selectedDataset?.amm && !selectedDataset?.series;
+    this.el('[data-action="amm-scenario"]').hidden =
+      !selectedDataset?.amm && !selectedDataset?.series;
+    const series = selectedDataset?.series;
+    this.chart.setData(bars, series?.interval);
     this.el('[data-chart-empty]').hidden = bars.length > 0;
-    const datasetSource = w.datasets.find(
-      (dataset) => dataset.id === w.preferences.datasetId,
-    )?.source;
     this.el('[data-source]').textContent =
       this.text('source') +
       ' · ' +
       (w.preferences.datasetId
-        ? datasetSource === 'user-import-unverified'
+        ? selectedDataset?.source === 'user-import-unverified'
           ? this.text('imported')
-          : this.text('history')
+          : selectedDataset?.amm || series
+            ? this.text('ammSource')
+            : this.text('history')
         : this.text(w.market.venue === 'coinbase' ? 'exchange' : 'sampled')) +
-      (w.quote?.block ? ' · #' + w.quote.block : '');
-    this.el('.quant-chart-source > span:last-child').textContent = this.text(
-      !w.preferences.datasetId && w.market.venue !== 'coinbase' ? 'sampleHint' : 'candleHint',
-    );
+      (!w.preferences.datasetId && w.quote?.block ? ' · #' + w.quote.block : '');
+    this.el('.quant-chart-source > span:last-child').textContent = series
+      ? `${this.text('ammSeriesSegments')} ${series.segmentCount} · ${this.text('ammSeriesGaps')} ${series.gaps} / ${series.slots}${(selectedDataset?.start ?? series.requestedStart) > series.requestedStart ? ' · ' + this.text('ammSeriesShort') : ''}`
+      : this.text(
+          selectedDataset?.amm
+            ? 'ammHint'
+            : !w.preferences.datasetId && w.market.venue !== 'coinbase'
+              ? 'sampleHint'
+              : 'candleHint',
+        );
     for (const key of ['experiments', 'orders', 'research', 'risk', 'audit', 'book'])
       this.el(`[data-${key}]`).hidden = this.tab !== key;
     this.root.querySelectorAll<HTMLElement>('.quant-tabs button').forEach((b) => {
@@ -412,10 +427,20 @@ export class QuantWorkbench {
   private renderRuns(): void {
     const w = this.workspace!;
     this.el('[data-run-list]').innerHTML = w.runs.length
-      ? `<table><thead><tr><th>${escape(this.text('time'))}</th><th>${escape(this.text('strategy'))}</th><th>${escape(this.text('return'))}</th><th>${escape(this.text('drawdown'))}</th><th>${escape(this.text('fills'))}</th></tr></thead><tbody>${w.runs.map((run) => `<tr data-action="run:${run.id}" tabindex="0"><td><button type="button" data-action="run:${run.id}">${escape(new Date(run.createdAt).toLocaleString())}</button></td><td>${escape(run.config.strategy)}</td><td class="${run.metrics.returnPct >= 0 ? 'quant-positive' : 'quant-negative'}">${this.number(run.metrics.returnPct)}%</td><td>${this.number(run.metrics.maxDrawdownPct)}%</td><td>${run.metrics.fills}</td></tr>`).join('')}</tbody></table>`
+      ? `<table><thead><tr><th>${escape(this.text('time'))}</th><th>${escape(this.text('strategy'))}</th><th>${escape(this.text('return'))}</th><th>${escape(this.text('drawdown'))}</th><th>${escape(this.text('fills'))}</th></tr></thead><tbody>${w.runs.map((run) => `<tr data-action="run:${run.id}" tabindex="0"><td><button type="button" data-action="run:${run.id}">${escape(new Date(run.createdAt).toLocaleString())}</button></td><td>${escape(run.config.strategy === 'sma-walk-forward' ? this.text('walkForward') : run.config.strategy)}</td><td class="${run.metrics.returnPct >= 0 ? 'quant-positive' : 'quant-negative'}">${this.number(run.metrics.returnPct)}%</td><td>${this.number(run.metrics.maxDrawdownPct)}%</td><td>${run.metrics.fills}</td></tr>`).join('')}</tbody></table>`
       : `<p class="quant-empty-inline">${escape(this.text('noRuns'))}</p>`;
     const run = this.selectedRun || w.runs[0];
-    this.el('[data-run-report]').innerHTML = run
+    const container = this.el('[data-run-report]');
+    const expanded =
+      container.dataset.runId === run?.id
+        ? new Set(
+            [...container.querySelectorAll<HTMLDetailsElement>('details[data-fold][open]')].map(
+              (detail) => detail.dataset.fold,
+            ),
+          )
+        : new Set<string>();
+    container.dataset.runId = run?.id || '';
+    container.innerHTML = run
       ? `<div class="quant-report-kpis">${[
           ['return', run.metrics.returnPct.toFixed(2) + '%'],
           ['drawdown', run.metrics.maxDrawdownPct.toFixed(2) + '%'],
@@ -426,8 +451,73 @@ export class QuantWorkbench {
             ([key, value]) =>
               `<div><span>${escape(this.text(key as QuantLabel))}</span><strong>${escape(value)}</strong></div>`,
           )
-          .join('')}</div>${run.equity?.length ? this.sparkline(run.equity) : ''}`
+          .join(
+            '',
+          )}</div>${run.equity?.length ? this.sparkline(run.equity) : ''}${run.dataSeries ? `<p class="quant-hint">${escape(new Date(run.dataSeries.startTime * 1000).toLocaleString())} – ${escape(new Date(run.dataSeries.endTime * 1000).toLocaleString())} · ${escape(this.text('ammSeriesSegments'))} ${run.dataSeries.segments.length} · ${escape(this.text('ammSeriesGaps'))} ${run.dataSeries.gaps} / ${run.dataSeries.slots}</p>` : ''}${run.walkForward ? this.walkForwardReport(run.walkForward) : run.ammScenario ? this.ammScenarioReport(run.ammScenario) : run.ammReplay ? this.ammReplayReport(run.ammReplay) : run.dataSeries ? `<p class="quant-hint">${escape(this.text('ammSeriesExecution'))}</p>` : ''}`
       : '';
+    for (const detail of container.querySelectorAll<HTMLDetailsElement>('details[data-fold]'))
+      detail.open = expanded.has(detail.dataset.fold!);
+  }
+  private walkForwardReport(report: NonNullable<QuantRun['walkForward']>): string {
+    const range = ({ start, end }: { start: number; end: number }) =>
+      `${new Date(start * 1000).toLocaleString()} – ${new Date(end * 1000).toLocaleString()}`;
+    const header = (keys: QuantLabel[]) =>
+      `<thead><tr>${keys.map((key) => `<th scope="col">${escape(this.text(key))}</th>`).join('')}</tr></thead>`;
+    const percentage = (value: number) => escape(this.number(value)) + '%';
+    const rows = report.windows.map(
+      (window) =>
+        `<tr><th scope="row">${window.index}</th><td>${escape(range(window.training))}</td><td>${escape(range(window.testing))}</td><td>${window.selected.fast} / ${window.selected.slow}</td><td>${percentage(window.metrics.returnPct)}</td><td>${percentage(window.metrics.maxDrawdownPct)}</td><td>${window.metrics.fills}</td></tr>`,
+    );
+    const rankings = report.windows.map(
+      (window) =>
+        `<details class="quant-amm-trades" data-fold="${window.index}"><summary>${escape(this.text('wfRound').replace('{n}', String(window.index)))} · ${escape(this.text('wfRanking'))}</summary><div data-trades><table>${header(['fast', 'slow', 'return', 'drawdown', 'fills'])}<tbody>${window.trainingScores.map((candidate) => `<tr><td>${candidate.fast}</td><td>${candidate.slow}</td><td>${percentage(candidate.returnPct)}</td><td>${percentage(candidate.maxDrawdownPct)}</td><td>${candidate.fills}</td></tr>`).join('')}</tbody></table></div></details>`,
+    );
+    return `<section data-walk-forward-report><p class="quant-hint">${escape(this.text('wfHint'))}</p><p class="quant-hint">${escape(this.text('wfCandidates'))} ${report.candidateCount}${report.discardedPrefixBars ? ` · ${escape(this.text('wfPrefix'))} ${report.discardedPrefixBars}` : ''}</p><div class="quant-amm-trades"><div data-trades><table>${header(['wfFolds', 'wfTraining', 'wfTesting', 'wfSelected', 'return', 'drawdown', 'fills'])}<tbody>${rows.join('')}</tbody></table></div></div>${rankings.join('')}</section>`;
+  }
+  private ammReplayReport(replay: NonNullable<QuantRun['ammReplay']>): string {
+    const rows = replay.attempts
+      .map((quote) => {
+        const buy = quote.side === 'buy';
+        const from = executionAmount(quote.amountInAtoms, buy ? 6 : 18) + (buy ? ' USDC' : ' WETH');
+        const to = executionAmount(quote.amountOutAtoms, buy ? 18 : 6) + (buy ? ' WETH' : ' USDC');
+        const labels = {
+          filled: 'ammReplayFilled',
+          'adverse-price': 'ammReplayRejected',
+          'network-cost-limit': 'ammFeeRejected',
+        } as const;
+        const fee = quote.networkFee;
+        const cost = fee
+          ? `<small>${escape(executionAmount(fee.usdcAtoms, 6))} USDC<br>L2 ${escape(fee.l2Wei)} · L1 ${escape(fee.l1Wei)} · ${escape(this.text('ammFeeOperator'))} ${escape(fee.operatorWei)} wei</small>`
+          : '';
+        return `<tr title="${escape(quote.execution.blockHash)}"><td>#${quote.signal.block}/${quote.signal.logIndex} → #${quote.execution.block}</td><td>${escape(from)} → ${escape(to)}</td><td>${escape(this.text(labels[quote.status]))}${cost}</td></tr>`;
+      })
+      .join('');
+    const network = replay.networkFees;
+    const total = network
+      ? `<p class="quant-hint">${escape(this.text(network.mode === 'historical' ? 'ammFeeEvidence' : 'ammFeeFixed'))} · ${escape(executionAmount(network.usdcAtoms, 6))} USDC${network.totalWei === undefined ? '' : ` · ${escape(executionAmount(network.totalWei, 18))} ETH`}</p>`
+      : '';
+    return `<p class="quant-hint">${escape(this.text('ammReplayModel'))}</p>${total}<details class="quant-amm-trades"><summary>${escape(this.text('ammReplayQuotes'))} · ${replay.attempts.length}</summary><div data-trades><table><tbody>${rows}</tbody></table></div></details>`;
+  }
+  private ammScenarioReport(scenario: NonNullable<QuantRun['ammScenario']>): string {
+    const rows = scenario.legs
+      .map((leg) => {
+        const buy = leg.side === 'buy';
+        const output =
+          leg.amountOutAtoms === undefined
+            ? '—'
+            : `${executionAmount(leg.amountOutAtoms, buy ? 18 : 6)} ${buy ? 'WETH' : 'USDC'}`;
+        const delta =
+          leg.deltaOutAtoms === undefined ? '—' : signedAmount(leg.deltaOutAtoms, buy ? 18 : 6);
+        const state =
+          leg.status === 'reverted'
+            ? 'ammScenarioRevert'
+            : leg.status === 'partial-input'
+              ? 'ammScenarioPartial'
+              : 'ammReplayFilled';
+        return `<tr title="${escape(`${leg.sqrtBeforeX96} → ${leg.sqrtAfterX96}`)}"><td>${leg.index} · ${escape(this.text(buy ? 'buy' : 'sell'))}</td><td>${escape(output)}</td><td>${escape(delta)}</td><td>${escape(this.text(state))}</td></tr>`;
+      })
+      .join('');
+    return `<p class="quant-hint">${escape(this.text('ammScenarioModel'))}</p><p class="quant-hint" title="${escape(scenario.anchor.blockHash)}">#${scenario.anchor.block} · ${escape(this.text('ammScenarioGas'))} ${escape(scenario.totalSwapGas)}</p><div class="quant-amm-trades"><div data-trades><table><thead><tr><th>${escape(this.text('side'))}</th><th>${escape(this.text('amount'))}</th><th>${escape(this.text('ammScenarioBaseline'))}</th><th>${escape(this.text('state'))}</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
   }
   private sparkline(equity: { time: number; value: number }[]): string {
     const min = Math.min(...equity.map((p) => p.value)),
@@ -732,11 +822,15 @@ export class QuantWorkbench {
       return;
     }
     if (action.startsWith('run:')) {
-      this.selectedRun = await this.call<QuantRun>('run.get', {
-        id: this.currentId,
+      const id = this.currentId;
+      const run = await this.call<QuantRun>('run.get', {
+        id,
         runId: action.slice(4),
       });
+      if (this.currentId !== id) return;
+      this.selectedRun = run;
       this.renderRuns();
+      if (run.walkForward) this.el('[data-run-report]').scrollIntoView({ block: 'start' });
       return;
     }
     if (action.startsWith('cancel:')) {
@@ -801,6 +895,19 @@ export class QuantWorkbench {
         return;
       case 'refresh':
         return this.refreshMarket();
+      case 'base-history':
+        if (this.workspace) this.baseHistoryDialog(this.workspace);
+        return;
+      case 'amm-replay':
+      case 'amm-scenario': {
+        const w = this.workspace;
+        const dataset = w?.datasets.find((item) => item.id === w.preferences.datasetId);
+        if (w && dataset && (dataset.amm || dataset.series)) {
+          if (action === 'amm-scenario') this.ammScenarioDialog(w.id, dataset);
+          else this.ammReplayDialog(w.id, dataset);
+        }
+        return;
+      }
       case 'fullscreen':
         return this.expandChart();
       case 'fit':
@@ -814,6 +921,9 @@ export class QuantWorkbench {
         return;
       case 'import':
         this.el<HTMLInputElement>('[data-file]').click();
+        return;
+      case 'walk-forward':
+        if (this.workspace) this.walkForwardDialog(this.workspace);
         return;
       case 'backtest': {
         button.setAttribute('disabled', '');
@@ -1095,6 +1205,456 @@ export class QuantWorkbench {
           this.text('nativeFailed');
     }
   }
+  private walkForwardDialog(workspace: QuantWorkspace): void {
+    const dialog = document.createElement('dialog');
+    dialog.className = 'quant-dialog quant-amm-dialog quant-walk-forward-dialog';
+    const field = (label: QuantLabel, name: string, attrs: string) =>
+      `<label>${escape(this.text(label))}<input name="${name}" ${attrs} required></label>`;
+    dialog.innerHTML = `<header><h2>${escape(this.text('walkForward'))}</h2><button type="button" data-close aria-label="${escape(this.text('close'))}">${icon('close')}</button></header>
+      <p class="quant-hint">${escape(this.text('wfHint'))}</p>
+      <form><div class="quant-amm-grid">
+      ${field('wfTrainBars', 'trainBars', 'type="number" min="5" max="5000" value="120"')}
+      ${field('wfTestBars', 'testBars', 'type="number" min="2" max="2500" value="30"')}
+      ${field('wfFolds', 'folds', 'type="number" min="1" max="8" value="3"')}
+      ${field('wfFast', 'fastPeriods', 'inputmode="text" value="5, 9, 15" maxlength="40"')}
+      ${field('wfSlow', 'slowPeriods', 'inputmode="text" value="21, 34, 55" maxlength="40"')}
+      ${field('initialCash', 'initialCash', 'inputmode="decimal" value="10000"')}
+      ${field('feeBps', 'feeBps', `type="number" min="0" max="1000" value="${escape(workspace.risk.feeBps)}"`)}
+      ${field('slippageBps', 'slippageBps', `type="number" min="0" max="1000" value="${escape(workspace.risk.slippageBps)}"`)}
+      ${field('ammReplayAllocation', 'allocationBps', 'type="number" min="1" max="9500" value="2500"')}</div>
+      <p role="alert" class="quant-dialog-error" hidden></p><footer><span role="status"></span><button type="submit" class="quant-primary">${escape(this.text('walkForward'))}</button></footer></form>`;
+    const form = dialog.querySelector('form')!;
+    const submit = form.querySelector<HTMLButtonElement>('button[type="submit"]')!;
+    const alert = form.querySelector<HTMLElement>('[role="alert"]')!;
+    const status = form.querySelector<HTMLElement>('[role="status"]')!;
+    dialog.querySelector('[data-close]')!.addEventListener('click', () => dialog.close());
+    dialog.addEventListener('close', () => dialog.remove(), { once: true });
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const config = Object.fromEntries(
+        [...new FormData(form)].map(([key, value]) => [
+          key,
+          key.endsWith('Periods')
+            ? String(value)
+                .split(/[,，]/)
+                .map((period) => Number(period.trim()))
+            : key === 'initialCash'
+              ? value
+              : Number(value),
+        ]),
+      );
+      submit.disabled = true;
+      alert.hidden = true;
+      status.textContent = this.text('loading');
+      try {
+        const run = await this.call<QuantRun>('run.walk-forward', {
+          id: workspace.id,
+          datasetId: workspace.preferences.datasetId ?? undefined,
+          config,
+        });
+        if (dialog.open) dialog.close();
+        if (this.currentId === workspace.id) {
+          this.selectedRun = run;
+          await this.pull();
+          if (this.currentId === workspace.id)
+            this.el('[data-run-report]').scrollIntoView({ block: 'start' });
+        }
+      } catch (error) {
+        alert.textContent = this.errorText(error);
+        alert.hidden = false;
+      } finally {
+        submit.disabled = false;
+        status.textContent = '';
+      }
+    });
+    document.body.append(dialog);
+    dialog.showModal();
+  }
+  private ammScenarioDialog(id: string, dataset: QuantDataset): void {
+    const dialog = document.createElement('dialog');
+    dialog.className = 'quant-dialog quant-amm-dialog quant-amm-scenario-dialog';
+    dialog.innerHTML = `<header><h2>${escape(this.text('ammScenario'))}</h2><button type="button" data-close aria-label="${escape(this.text('close'))}">${icon('close')}</button></header><p class="quant-hint">${escape(dataset.label)}</p><p class="quant-hint">${escape(this.text('ammScenarioHint'))}</p>
+      <form><div class="quant-amm-grid"><label>${escape(this.text('ammScenarioFunds'))}<input name="initialWeth" inputmode="decimal" value="1" required></label><label>${escape(this.text('ammScenarioAnchor'))}<input name="anchorBlock" type="number" min="0"></label></div>
+      <div data-scenario-legs></div><button type="button" data-add>${escape(this.text('ammScenarioAdd'))}</button><p role="alert" class="quant-dialog-error" hidden></p><footer><span role="status"></span><button type="submit" class="quant-primary">${escape(this.text('ammScenario'))}</button></footer></form>`;
+    const form = dialog.querySelector('form')!;
+    const rows = form.querySelector<HTMLElement>('[data-scenario-legs]')!;
+    const add = form.querySelector<HTMLButtonElement>('[data-add]')!;
+    const submit = form.querySelector<HTMLButtonElement>('button[type="submit"]')!;
+    const alert = form.querySelector<HTMLElement>('[role="alert"]')!;
+    const status = form.querySelector<HTMLElement>('[role="status"]')!;
+    const controls = (busy: boolean) => {
+      submit.disabled = busy || rows.children.length === 0;
+      add.disabled = busy || rows.children.length >= 8;
+      for (const button of rows.querySelectorAll('button'))
+        button.disabled = busy || rows.children.length === 1;
+    };
+    const addLeg = () => {
+      const row = document.createElement('div');
+      row.className = 'quant-amm-scenario-leg';
+      row.innerHTML = `<label>${escape(this.text('side'))}<select name="side"><option value="sell">${escape(this.text('sell'))} WETH</option><option value="buy">${escape(this.text('buy'))} WETH</option></select></label><label><span data-amount></span><input name="amountIn" inputmode="decimal" required></label><label><span data-minimum></span><input name="minimumOut" inputmode="decimal"></label><button type="button" aria-label="${escape(this.text('ammScenarioRemove'))}">${icon('close')}</button>`;
+      const side = row.querySelector('select')!;
+      const units = () => {
+        const buy = side.value === 'buy';
+        row.querySelector('[data-amount]')!.textContent =
+          `${this.text('ammScenarioAmount')} · ${buy ? 'USDC' : 'WETH'}`;
+        row.querySelector('[data-minimum]')!.textContent =
+          `${this.text('ammScenarioMinimum')} · ${buy ? 'WETH' : 'USDC'}`;
+      };
+      side.addEventListener('change', units);
+      row.querySelector('button')!.addEventListener('click', () => {
+        row.remove();
+        controls(false);
+      });
+      if (!rows.children.length)
+        row.querySelector<HTMLInputElement>('[name="amountIn"]')!.value = '0.1';
+      rows.append(row);
+      units();
+      controls(false);
+    };
+    add.addEventListener('click', addLeg);
+    addLeg();
+    dialog.querySelector('[data-close]')!.addEventListener('click', () => dialog.close());
+    dialog.addEventListener('close', () => dialog.remove(), { once: true });
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const data = new FormData(form);
+      const minimums = data.getAll('minimumOut');
+      const inputs = data.getAll('amountIn');
+      const legs = data
+        .getAll('side')
+        .map((side, i) => ({ side, amountIn: inputs[i], minimumOut: minimums[i] || undefined }));
+      const anchor = data.get('anchorBlock');
+      controls(true);
+      alert.hidden = true;
+      status.textContent = this.text('loading');
+      try {
+        const run = await this.call<QuantRun>('run.amm.scenario', {
+          id,
+          datasetId: dataset.id,
+          config: {
+            legs,
+            initialWeth: data.get('initialWeth'),
+            anchorBlock: anchor ? Number(anchor) : undefined,
+          },
+        });
+        if (dialog.open) dialog.close();
+        if (this.currentId === id) {
+          this.selectedRun = run;
+          await this.pull();
+          this.renderRuns();
+        }
+      } catch (error) {
+        if (dialog.open) {
+          alert.textContent = this.errorText(error);
+          alert.hidden = false;
+        }
+      } finally {
+        controls(false);
+        status.textContent = '';
+      }
+    });
+    document.body.append(dialog);
+    dialog.showModal();
+  }
+  private ammReplayDialog(id: string, dataset: QuantDataset): void {
+    const dialog = document.createElement('dialog');
+    dialog.className = 'quant-dialog quant-amm-dialog quant-amm-replay-dialog';
+    const field = (label: QuantLabel, name: string, attrs: string) =>
+      `<label>${escape(this.text(label))}<input name="${name}" ${attrs}></label>`;
+    dialog.innerHTML = `<header><h2>${escape(this.text('ammReplay'))}</h2><button type="button" data-close aria-label="${escape(this.text('close'))}">${icon('close')}</button></header><p>${escape(dataset.label)}</p><p class="quant-hint">${escape(this.text('ammReplayHint'))}</p>
+      <form><div class="quant-amm-grid"><label>${escape(this.text('strategy'))}<select name="strategy"><option value="buy-hold">${escape(this.text('hold'))}</option><option value="sma-cross">${escape(this.text('sma'))}</option></select></label>
+      ${field('ammReplayCash', 'initialCash', 'inputmode="decimal" value="10000" required')}${field('fast', 'fast', 'type="number" min="2" max="200" value="9" required')}${field('slow', 'slow', 'type="number" min="3" max="500" value="21" required')}
+      ${field('ammReplayAllocation', 'allocationBps', 'type="number" min="1" max="10000" value="2500" required')}${field('ammReplayDelay', 'delayBlocks', 'type="number" min="1" max="10000" value="1" required')}${field('ammReplayLimit', 'maxQuotes', 'type="number" min="1" max="32" value="16" required')}${field('ammReplayAdverse', 'maxAdverseBps', 'type="number" min="0" max="10000"')}
+      <label>${escape(this.text('ammFeeMode'))}<select name="feeMode"><option value="fixed">${escape(this.text('ammFeeFixed'))}</option><option value="historical">${escape(this.text('ammFeeHistorical'))}</option></select></label>
+      ${field('ammReplayFee', 'fixedFeeUsdc', 'data-fee-mode="fixed" inputmode="decimal" value="0" required')}${field('ammFeeCap', 'networkFeeCapUsdc', 'data-fee-mode="historical" inputmode="decimal" value="1" required')}${field('ammFeeTip', 'tipGwei', 'data-fee-mode="historical" inputmode="decimal" value="0" required')}${field('ammFeeOverhead', 'routerOverheadGas', 'data-fee-mode="historical" type="number" min="21000" max="500000" value="55000" required')}</div>
+      <p role="alert" class="quant-dialog-error" hidden></p><footer><span role="status"></span><button type="submit" class="quant-primary">${escape(this.text('ammReplay'))}</button></footer></form>`;
+    const form = dialog.querySelector('form')!;
+    const submit = form.querySelector<HTMLButtonElement>('button[type="submit"]')!;
+    const alert = form.querySelector<HTMLElement>('[role="alert"]')!;
+    const status = form.querySelector<HTMLElement>('[role="status"]')!;
+    const strategy = form.querySelector<HTMLSelectElement>('[name="strategy"]')!;
+    const updatePeriods = () => {
+      for (const input of form.querySelectorAll<HTMLInputElement>('[name="fast"], [name="slow"]')) {
+        input.disabled = strategy.value !== 'sma-cross';
+        input.closest('label')!.hidden = input.disabled;
+      }
+    };
+    strategy.addEventListener('change', updatePeriods);
+    updatePeriods();
+    const feeMode = form.querySelector<HTMLSelectElement>('[name="feeMode"]')!;
+    const updateFeeMode = () => {
+      for (const input of form.querySelectorAll<HTMLInputElement>('[data-fee-mode]')) {
+        input.disabled = input.dataset.feeMode !== feeMode.value;
+        input.closest('label')!.hidden = input.disabled;
+      }
+    };
+    feeMode.addEventListener('change', updateFeeMode);
+    updateFeeMode();
+    dialog.querySelector('[data-close]')!.addEventListener('click', () => dialog.close());
+    dialog.addEventListener('close', () => dialog.remove(), { once: true });
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const config = Object.fromEntries(
+        [...new FormData(form)]
+          .filter(([, value]) => value !== '')
+          .map(([key, value]) => [
+            key,
+            [
+              'strategy',
+              'feeMode',
+              'initialCash',
+              'fixedFeeUsdc',
+              'networkFeeCapUsdc',
+              'tipGwei',
+            ].includes(key)
+              ? value
+              : Number(value),
+          ]),
+      );
+      submit.disabled = true;
+      alert.hidden = true;
+      status.textContent = this.text('loading');
+      try {
+        const run = await this.call<QuantRun>('run.amm', { id, datasetId: dataset.id, config });
+        if (dialog.open) dialog.close();
+        if (this.currentId === id) {
+          this.selectedRun = run;
+          await this.pull();
+          this.renderRuns();
+        }
+      } catch (error) {
+        if (dialog.open) {
+          alert.textContent = this.errorText(error);
+          alert.hidden = false;
+        }
+      } finally {
+        submit.disabled = false;
+        status.textContent = '';
+      }
+    });
+    document.body.append(dialog);
+    dialog.showModal();
+  }
+  private baseHistoryDialog(w: QuantWorkspace): void {
+    if (!w.network) return;
+    const dialog = document.createElement('dialog');
+    dialog.className = 'quant-dialog quant-amm-dialog';
+    const selected = w.datasets.find((d) => d.id === w.preferences.datasetId && d.amm);
+    const { maxCount, defaultCount } = w.network.historyWindow;
+    const canContinue =
+      selected?.amm?.chainId === w.network?.id &&
+      selected?.amm?.fee === w.market.poolFee &&
+      selected?.amm?.interval === w.market.interval;
+    dialog.innerHTML = `<header><h2>${escape(this.text('ammHistory'))}</h2><button type="button" data-close aria-label="${escape(this.text('close'))}">${icon('close')}</button></header>
+      <p class="quant-hint">${escape(this.text('ammHint'))}</p>
+      <section class="quant-amm-recorder"><h3>${escape(this.text('ammRecord'))}</h3><p data-record-status role="status"></p><p data-record-detail></p><div class="quant-amm-record-actions">${(['Start', 'Selected', 'Resume', 'Stop', 'Latest'] as const).map((key) => `<button type="button" data-record="${key}" hidden>${escape(this.text(`ammRecord${key}`))}</button>`).join('')}</div></section>
+      ${selected ? `<div class="quant-amm-trades"><p>${escape(new Date(selected.start * 1000).toLocaleString())} – ${escape(new Date(selected.end * 1000).toLocaleString())}</p><div data-trades role="region" aria-label="${escape(this.text('ammDeltas'))}"></div><div class="quant-amm-pagination"><button type="button" data-prev>${escape(this.text('previous'))}</button><span data-trade-page aria-live="polite"></span><button type="button" data-next>${escape(this.text('next'))}</button></div></div>` : ''}
+      ${selected?.amm ? `<form class="quant-amm-series" data-series-form><label>${escape(this.text('ammSeriesWindow'))}<input name="windows" type="number" min="1" max="10000" value="${Math.ceil(86400 / selected.amm.interval)}" required></label><button type="submit">${escape(this.text('ammSeriesCreate'))}</button></form>` : ''}
+      <form data-capture-form>${maxCount ? `<label>${escape(this.text('ammWindow'))}<input name="count" type="number" min="1" max="${maxCount}" value="${defaultCount}" required></label>` : `<p>${escape(this.text('ammTooWide'))}</p>`}
+      <footer><span class="quant-hint" data-capture-progress role="status"></span>${canContinue && maxCount ? `<button type="submit" value="continue">${escape(this.text('ammContinue'))}</button>` : ''}${maxCount ? `<button class="quant-primary" type="submit" value="recent">${escape(this.text('ammCapture'))}</button>` : ''}</footer></form><p class="quant-dialog-error" role="alert" hidden></p>`;
+    const alert = dialog.querySelector<HTMLElement>('[role="alert"]')!;
+    const showError = (error: unknown) => {
+      alert.textContent = /BASE_HISTORY_UP_TO_DATE/.test(String(error))
+        ? this.text('ammUpToDate')
+        : /BASE_HISTORY_TIMEOUT|EXECUTION_PROFILE_LIMIT|EXECUTION_PROFILE_RATE_LIMIT/.test(
+              String(error),
+            )
+          ? this.text('ammRetryShorter')
+          : /BASE_SERIES_READ_LIMIT/.test(String(error))
+            ? this.text('ammSeriesLimit')
+            : this.errorText(error);
+      alert.hidden = false;
+    };
+    dialog.querySelector('[data-close]')!.addEventListener('click', () => dialog.close());
+    dialog.addEventListener('close', () => dialog.remove(), { once: true });
+    document.body.append(dialog);
+    dialog.showModal();
+    this.bindBaseRecorder(dialog, w, canContinue ? selected?.id : undefined, showError);
+    const seriesForm = dialog.querySelector<HTMLFormElement>('[data-series-form]');
+    seriesForm?.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const button = seriesForm.querySelector('button')!;
+      button.disabled = true;
+      alert.hidden = true;
+      try {
+        await this.call<QuantDataset>('base.history.series', {
+          id: w.id,
+          datasetId: selected?.id,
+          windows: Number(new FormData(seriesForm).get('windows')),
+          select: true,
+        });
+        if (dialog.open) dialog.close();
+        await this.pull();
+      } catch (error) {
+        if (dialog.open) showError(error);
+      } finally {
+        button.disabled = false;
+      }
+    });
+    const form = dialog.querySelector<HTMLFormElement>('[data-capture-form]')!;
+    const progress = form.querySelector<HTMLElement>('[data-capture-progress]')!;
+    form.addEventListener('submit', (event) => {
+      event.preventDefault();
+      const buttons = [...form.querySelectorAll<HTMLButtonElement>('button')];
+      buttons.forEach((button) => (button.disabled = true));
+      progress.textContent = this.text('loading');
+      alert.hidden = true;
+      const next = (event.submitter as HTMLButtonElement | null)?.value === 'continue';
+      void this.call('base.history.capture', {
+        id: w.id,
+        count: Number(new FormData(form).get('count')),
+        afterDatasetId: next ? selected?.id : undefined,
+        select: true,
+      })
+        .then(async () => {
+          if (dialog.open) dialog.close();
+          await this.pull();
+        })
+        .catch(showError)
+        .finally(() => {
+          progress.textContent = '';
+          buttons.forEach((button) => (button.disabled = false));
+        });
+    });
+    if (!selected) return;
+    const previous = dialog.querySelector<HTMLButtonElement>('[data-prev]')!;
+    const next = dialog.querySelector<HTMLButtonElement>('[data-next]')!;
+    let offset = 0;
+    const limit = 12;
+    const render = async (at: number) => {
+      previous.disabled = next.disabled = true;
+      try {
+        const { items, total } = await this.call<{ items: QuantBaseTrade[]; total: number }>(
+          'base.history.trades',
+          { id: w.id, datasetId: selected.id, offset: at, limit },
+        );
+        if (!dialog.open) return;
+        offset = at;
+        dialog.querySelector('[data-trade-page]')!.textContent = total
+          ? `${offset + 1}–${offset + items.length} / ${total}`
+          : '0';
+        const headers = ['WETH', 'USDC', this.text('ammBlockLog')];
+        dialog.querySelector('[data-trades]')!.innerHTML = items.length
+          ? `<table><caption>${escape(this.text('ammDeltas'))}</caption><thead><tr>${headers.map((label) => `<th scope="col">${escape(label)}</th>`).join('')}</tr></thead><tbody>${items.map((trade) => `<tr title="${escape(new Date(trade.time * 1000).toLocaleString() + ' · ' + trade.transactionHash)}"><td>${escape(signedAmount(trade.wethDeltaAtoms, 18))}</td><td>${escape(signedAmount(trade.usdcDeltaAtoms, 6))}</td><td>${trade.block} / ${trade.logIndex}</td></tr>`).join('')}</tbody></table>`
+          : `<p>${escape(this.text('ammEmpty'))}</p>`;
+        previous.disabled = offset === 0;
+        next.disabled = offset + items.length >= total;
+      } catch (error) {
+        showError(error);
+      }
+    };
+    previous.addEventListener('click', () => void render(Math.max(0, offset - limit)));
+    next.addEventListener('click', () => void render(offset + limit));
+    void render(0);
+  }
+  private bindBaseRecorder(
+    dialog: HTMLDialogElement,
+    workspace: QuantWorkspace,
+    selectedId: string | undefined,
+    showError: (error: unknown) => void,
+  ): void {
+    const { id } = workspace;
+    const { recorder, historyWindow } = workspace.network!;
+    const statusNode = dialog.querySelector<HTMLElement>('[data-record-status]')!;
+    const detail = dialog.querySelector<HTMLElement>('[data-record-detail]')!;
+    const buttons = Array.from(dialog.querySelectorAll<HTMLButtonElement>('[data-record]'));
+    let current = recorder,
+      busy = false,
+      reading = false,
+      requestVersion = 0;
+    const labels = {
+      idle: 'ammRecordIdle',
+      waiting: 'ammRecordWaiting',
+      capturing: 'ammRecordCapturing',
+      retrying: 'ammRecordRetrying',
+      paused: 'ammRecordPaused',
+    } as const;
+    const render = (status: QuantBaseRecorder) => {
+      if (!dialog.open) return;
+      current = status;
+      const statusText = this.text(labels[status.phase]);
+      if (statusText !== statusNode.textContent) statusNode.textContent = statusText;
+      const details: string[] = [];
+      if (status.startTime != null && status.endTime != null)
+        details.push(
+          `${new Date(status.startTime * 1000).toLocaleString()} – ${new Date(status.endTime * 1000).toLocaleString()}`,
+        );
+      if (status.lastError) details.push(status.lastError);
+      if (status.pauseReason === 'market-changed')
+        details.push(this.text('ammRecordMarketChanged'));
+      if (status.pauseReason === 'review') details.push(this.text('ammRecordReview'));
+      if (status.nextAt && status.phase !== 'capturing')
+        details.push(
+          `${this.text('ammRecordNext')} ${new Date(status.nextAt).toLocaleTimeString()}`,
+        );
+      detail.textContent = details.join(' · ');
+      detail.hidden = !details.length;
+      const inactive = status.phase === 'paused' || status.phase === 'idle';
+      const visible = {
+        Start: inactive && historyWindow.maxCount > 0,
+        Selected: inactive && historyWindow.maxCount > 0 && Boolean(selectedId),
+        Resume: inactive && status.canResume === true,
+        Stop: !inactive,
+        Latest: Boolean(status.datasetId),
+      };
+      for (const button of buttons)
+        button.hidden = !visible[button.dataset.record as keyof typeof visible];
+    };
+    const read = async () => {
+      if (busy || reading || !dialog.open) return;
+      reading = true;
+      const version = requestVersion;
+      try {
+        const status = await this.call<QuantBaseRecorder>('base.history.record.status', { id });
+        if (version === requestVersion) render(status);
+      } catch (error) {
+        if (dialog.open && version === requestVersion) showError(error);
+      } finally {
+        reading = false;
+      }
+    };
+    render(recorder);
+    const timer = setInterval(() => void read(), 2500);
+    dialog.addEventListener('close', () => clearInterval(timer), { once: true });
+    for (const button of buttons)
+      button.addEventListener('click', async () => {
+        if (busy) return;
+        busy = true;
+        requestVersion++;
+        buttons.forEach((control) => (control.disabled = true));
+        try {
+          const action = button.dataset.record;
+          if (action === 'Latest') {
+            const next = await this.call<QuantWorkspace>('workspace.update', {
+              id,
+              preferences: { datasetId: current.datasetId },
+            });
+            if (!dialog.open) return;
+            dialog.close();
+            if (this.currentId === id) {
+              await this.pull();
+              this.baseHistoryDialog(next);
+            }
+          } else {
+            render(
+              await this.call<QuantBaseRecorder>(
+                action === 'Stop' ? 'base.history.record.stop' : 'base.history.record.start',
+                {
+                  id,
+                  resume: action === 'Resume',
+                  afterDatasetId: action === 'Selected' ? selectedId : undefined,
+                },
+              ),
+            );
+          }
+        } catch (error) {
+          if (dialog.open) showError(error);
+        } finally {
+          busy = false;
+          buttons.forEach((control) => (control.disabled = false));
+        }
+      });
+  }
   private sourceBookDialog(product: string): void {
     const dialog = document.createElement('dialog');
     dialog.className = 'quant-dialog quant-source-book-dialog';
@@ -1196,6 +1756,8 @@ export class QuantWorkbench {
   }
   private errorText(error: unknown): string {
     const code = error instanceof Error ? error.message : String(error);
+    if (/WALK_FORWARD_MORE_CANDLES/.test(code)) return this.text('wfMore');
+    if (/WALK_FORWARD_GRID|WALK_FORWARD_PARAMETERS/.test(code)) return this.text('wfInvalid');
     const key: QuantLabel | undefined = /FRESH_MARKET/.test(code)
       ? 'errorFresh'
       : /INSUFFICIENT/.test(code)

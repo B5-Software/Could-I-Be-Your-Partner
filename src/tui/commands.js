@@ -214,7 +214,6 @@ function suggestCommands(partial, options = {}) {
   const query = text.slice(1).split(/\s/)[0].toLowerCase();
   const items = [];
   for (const cmd of COMMANDS) {
-    if (cmd.name === 'quant' && options.quantEnabled !== true) continue;
     if (!cmd.name.startsWith(query)) continue;
     const localized = localizeCommand(cmd);
     items.push({
@@ -283,14 +282,14 @@ function expandCustomCommand(command, argText) {
 }
 
 /** /help 内容行（按分组） */
-function helpLines(customCommands, options = {}) {
+function helpLines(customCommands) {
   const groups = new Map();
   const push = (cmd) => {
     const key = cmd.group || 'general';
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(cmd);
   };
-  COMMANDS.filter((c) => c.name !== 'quant' || options.quantEnabled === true).forEach(push);
+  COMMANDS.forEach(push);
   if (customCommands) for (const cmd of customCommands.values()) push(cmd);
 
   const titles = {

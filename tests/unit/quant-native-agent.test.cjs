@@ -32,6 +32,177 @@ test('live execution tools pin workspace/operation scope and cannot fabricate fi
   assert.equal(rejected.ok, false);
   assert.equal(calls.length, 2);
 });
+test('Base history passes only scoped read and recording arguments', async () => {
+  const calls = [];
+  const worker = agent({
+    request: async (action, input, context) => {
+      calls.push({ action, input, context });
+      return { id: 'dataset-a' };
+    },
+  });
+  await worker.executeTool('quant_base_history', {
+    action: 'capture',
+    count: 4,
+    id: 'foreign',
+    select: true,
+  });
+  await worker.executeTool('quant_base_history', {
+    action: 'trades',
+    datasetId: 'dataset-a',
+    offset: 10,
+    limit: 5,
+  });
+  await worker.executeTool('quant_base_history', {
+    action: 'record_start',
+    resume: true,
+    id: 'foreign',
+  });
+  await worker.executeTool('quant_base_history', { action: 'record_status' });
+  await worker.executeTool('quant_base_history', { action: 'record_stop' });
+  await worker.executeTool('quant_base_history', {
+    action: 'series',
+    datasetId: 'dataset-a',
+    windows: 300,
+    id: 'foreign',
+  });
+  assert.deepEqual(
+    calls.map(({ action, input }) => [action, input.id, input.select]),
+    [
+      ['base.history.capture', 'project-a', undefined],
+      ['base.history.trades', 'project-a', undefined],
+      ['base.history.record.start', 'project-a', undefined],
+      ['base.history.record.status', 'project-a', undefined],
+      ['base.history.record.stop', 'project-a', undefined],
+      ['base.history.series', 'project-a', undefined],
+    ],
+  );
+  assert.ok(calls[0].context.signal instanceof AbortSignal);
+  assert.equal(calls[1].input.offset, 10);
+  assert.equal(calls[2].input.resume, true);
+  assert.equal(calls[5].input.windows, 300);
+});
+test('AMM replay tool pins its project and returns a compact report with paged evidence', async () => {
+  const calls = [];
+  const worker = agent({
+    request: async (action, input, context) => {
+      calls.push({ action, input, context });
+      return action === 'run.amm'
+        ? {
+            id: 'amm-run',
+            datasetId: 'dataset-a',
+            metrics: { fills: 1 },
+            ammReplay: {
+              attempts: [{ amountInAtoms: '1' }],
+              pendingAtEnd: null,
+              networkFees: { mode: 'historical', usdcAtoms: '44' },
+            },
+          }
+        : { items: [] };
+    },
+  });
+  const run = await worker.executeTool('quant_amm_replay', {
+    action: 'run',
+    id: 'foreign',
+    datasetId: 'dataset-a',
+    initialCash: '100',
+    delayBlocks: 3,
+    feeMode: 'historical',
+    tipGwei: '0.01',
+    networkFeeCapUsdc: '0.5',
+  });
+  assert.equal(calls[0].input.id, 'project-a');
+  assert.equal(calls[0].input.config.delayBlocks, 3);
+  assert.equal(calls[0].input.config.tipGwei, '0.01');
+  assert.equal(calls[0].input.config.networkFeeCapUsdc, '0.5');
+  assert.ok(calls[0].context.signal instanceof AbortSignal);
+  assert.equal(run.quotes, 1);
+  assert.equal(run.networkFees.usdcAtoms, '44');
+  assert.equal(run.ammReplay, undefined);
+  await worker.executeTool('quant_amm_replay', {
+    action: 'attempts',
+    runId: 'amm-run',
+    offset: 1,
+    limit: 5,
+  });
+  assert.deepEqual(calls[1].input, { id: 'project-a', runId: 'amm-run', offset: 1, limit: 5 });
+});
+test('walk-forward Agent sees compact out-of-sample results and can read individual training rankings', async () => {
+  const calls = [];
+  const fold = {
+    index: 1,
+    selected: { fast: 5, slow: 21 },
+    trainingScores: [{ fast: 5, slow: 21 }],
+  };
+  const worker = agent({
+    request: async (action, input, context) => {
+      calls.push({ action, input, context });
+      return action === 'run.walk-forward'
+        ? {
+            id: 'walk-run',
+            datasetId: 'tape',
+            metrics: { bars: 30 },
+            walkForward: { candidateCount: 2, windows: [fold] },
+          }
+        : fold;
+    },
+  });
+  const run = await worker.executeTool('quant_walk_forward', {
+    action: 'run',
+    id: 'other',
+    datasetId: 'tape',
+    trainBars: 120,
+  });
+  assert.equal(calls[0].input.id, 'project-a');
+  assert.equal(calls[0].input.datasetId, 'tape');
+  assert.ok(calls[0].context.signal instanceof AbortSignal);
+  assert.equal(run.candidateCount, 2);
+  assert.equal(run.windows[0].trainingScores, undefined);
+  assert.deepEqual(
+    await worker.executeTool('quant_walk_forward', {
+      action: 'fold',
+      id: 'other',
+      runId: run.id,
+      fold: 1,
+    }),
+    fold,
+  );
+  assert.deepEqual(calls[1].input, { id: 'project-a', runId: 'walk-run', fold: 1 });
+});
+test('AMM scenario tool runs and reads evidence only in the current workspace', async () => {
+  const calls = [];
+  const report = { legs: [{ index: 1, status: 'filled', deltaOutAtoms: '0' }] };
+  const worker = agent({
+    request: async (action, input, context) => {
+      calls.push({ action, input, context });
+      return action === 'run.amm.scenario' ? { id: 'run-a', ammScenario: report } : report;
+    },
+  });
+  const legs = [{ side: 'sell', amountIn: '0.25' }];
+  const run = await worker.executeTool('quant_amm_scenario', {
+    action: 'run',
+    id: 'foreign',
+    datasetId: 'tape-a',
+    initialWeth: '1',
+    anchorBlock: 123,
+    legs,
+  });
+  assert.equal(calls[0].action, 'run.amm.scenario');
+  assert.deepEqual(calls[0].input, {
+    id: 'project-a',
+    datasetId: 'tape-a',
+    config: { initialWeth: '1', anchorBlock: 123, legs },
+  });
+  assert.ok(calls[0].context.signal instanceof AbortSignal);
+  assert.deepEqual(run.legs, report.legs);
+  const saved = await worker.executeTool('quant_amm_scenario', {
+    action: 'get',
+    id: 'foreign',
+    runId: run.id,
+  });
+  assert.deepEqual(calls[1].input, { id: 'project-a', runId: 'run-a' });
+  assert.equal(calls[1].action, 'run.amm.scenario.get');
+  assert.deepEqual(saved, report);
+});
 test('event recording and replay commands preserve operation identity across Agent recovery and force the project scope', async () => {
   const calls = [];
   let saved;
@@ -59,6 +230,32 @@ test('event recording and replay commands preserve operation identity across Age
   await second.executeTool('quant_event_data', input, { callId: 'b' });
   assert.equal(calls[0].input.operationId, calls[1].input.operationId);
   assert.ok(calls.every((c) => c.action === 'replay.start' && c.input.id === 'project-a'));
+  const validation = {
+    ...input,
+    action: 'replay_validate',
+    operationId: 'validation',
+    revisions: [1, 2],
+    trainMs: 2000,
+    testMs: 1000,
+    folds: 2,
+  };
+  await first.executeTool('quant_event_data', validation, { callId: 'c' });
+  await second.executeTool('quant_event_data', validation, { callId: 'd' });
+  assert.equal(calls[2].action, 'replay.validate');
+  assert.equal(calls[2].input.id, 'project-a');
+  assert.equal(calls[2].input.operationId, calls[3].input.operationId);
+  assert.notEqual(calls[2].input.operationId, calls[0].input.operationId);
+  await second.executeTool('quant_event_data', {
+    action: 'replay_history',
+    id: 'foreign',
+    replayId: 'report',
+    kind: 'executions',
+    fold: 2,
+    trainingRevision: 1,
+  });
+  assert.equal(calls[4].input.id, 'project-a');
+  assert.equal(calls[4].input.fold, 2);
+  assert.equal(calls[4].input.trainingRevision, 1);
   assert.equal(second.allowedToolNames.has('replay.step'), false);
   assert.equal(second.allowedToolNames.has('native.control'), false);
 });
@@ -125,6 +322,14 @@ test('Agent portfolio tool is paged/readable and can pause but cannot create, re
       getWallet: () => ({
         request: async (action, input) => {
           calls.push({ action, input });
+          if (action.startsWith('portfolio.allowances.'))
+            return { items: [], block: '123', reportId: 'saved-report', next: null };
+          if (action === 'portfolio.holdings')
+            return {
+              complete: true,
+              assets: [{ symbol: 'ETH', amountAtomic: '1' }],
+              members: [{ walletId: 'one' }, { walletId: 'two' }],
+            };
           return action === 'portfolio.list'
             ? {
                 items: Array.from({ length: 8 }, (_, i) => ({ id: 'p' + i })),
@@ -139,13 +344,77 @@ test('Agent portfolio tool is paged/readable and can pause but cannot create, re
   const page = await worker.executeTool('quant_portfolios', { action: 'list' });
   assert.equal(page.items.length, 5);
   assert.equal(page.next, 5);
+  const totals = await worker.executeTool('quant_portfolios', {
+    action: 'holdings',
+    portfolioId: 'p1',
+  });
+  assert.equal(totals.memberCount, 2);
+  assert.equal(totals.members, undefined);
+  const details = await worker.executeTool('quant_portfolios', {
+    action: 'holdings',
+    portfolioId: 'p1',
+    includeMembers: true,
+    valuation: true,
+  });
+  assert.equal(details.members.length, 2);
+  assert.deepEqual(calls.at(-1).input, { id: 'p1', valuation: true });
+  const scanned = await worker.executeTool('quant_portfolios', {
+    action: 'allowances_scan',
+    portfolioId: 'p1',
+    mode: 'older',
+    previousReportId: 'prior',
+    blocks: 20,
+  });
+  assert.equal(scanned.reportId, 'saved-report');
+  assert.equal(calls.at(-1).action, 'portfolio.allowances.scan');
+  assert.equal(calls.at(-1).input.previousReportId, 'prior');
+  assert.equal(calls.at(-1).input.limit, 5);
+  await worker.executeTool('quant_portfolios', {
+    action: 'allowances_get',
+    portfolioId: 'p1',
+    reportId: scanned.reportId,
+    filter: 'review',
+    offset: 5,
+  });
+  assert.equal(calls.at(-1).action, 'portfolio.allowances.get');
+  assert.equal(calls.at(-1).input.offset, 5);
+  await worker.executeTool('quant_portfolios', { action: 'allowances_list', portfolioId: 'p1' });
+  assert.equal(calls.at(-1).action, 'portfolio.allowances.list');
+  await worker.executeTool('quant_portfolios', {
+    action: 'allowance_monitor',
+    portfolioId: 'p1',
+    offset: 4,
+  });
+  assert.deepEqual(calls.at(-1), {
+    action: 'portfolio.allowanceMonitor.get',
+    input: { id: 'p1', offset: 4, limit: 5 },
+  });
   await worker.executeTool('quant_portfolios', { action: 'pause', portfolioId: 'p1', revision: 3 });
   assert.equal(calls.at(-1).action, 'portfolio.pause');
   assert.equal(calls.at(-1).input.revision, 3);
-  for (const action of ['create', 'active', 'removed', 'recover', 'confirm'])
+  for (const action of [
+    'create',
+    'active',
+    'removed',
+    'recover',
+    'confirm',
+    'allowances_revoke',
+    'allowance_monitor_stop',
+  ])
     assert.equal((await worker.executeTool('quant_portfolios', { action })).ok, false);
   assert.ok(
-    calls.every((c) => ['portfolio.list', 'portfolio.get', 'portfolio.pause'].includes(c.action)),
+    calls.every((c) =>
+      [
+        'portfolio.list',
+        'portfolio.get',
+        'portfolio.holdings',
+        'portfolio.pause',
+        'portfolio.allowances.scan',
+        'portfolio.allowances.get',
+        'portfolio.allowances.list',
+        'portfolio.allowanceMonitor.get',
+      ].includes(c.action),
+    ),
   );
 });
 

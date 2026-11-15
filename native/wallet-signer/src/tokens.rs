@@ -11,10 +11,15 @@ use ethnum::U256;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 const UNKNOWN: &str = "WALLET_NATIVE_TOKEN_UNCLASSIFIED";
+const PERMIT2: &str = "0x000000000022d473030f116ddee9f6b43ac78ba3";
 sol! {
     function transfer(address to,uint256 amount) external returns(bool);
     function approve(address spender,uint256 amount) external returns(bool);
     function transferFrom(address from,address to,uint256 amount) external returns(bool);
+    struct TokenSpenderPair { address token; address spender; }
+    function lockdown(TokenSpenderPair[] approvals) external;
+    function invalidateNonces(address token,address spender,uint48 newNonce) external;
+    function invalidateUnorderedNonces(uint256 wordPos,uint256 mask) external;
     struct ExactInputSingleParams {address tokenIn;address tokenOut;uint24 fee;address recipient;uint256 amountIn;uint256 amountOutMinimum;uint160 sqrtPriceLimitX96;}
     function exactInputSingle(ExactInputSingleParams params) external payable returns(uint256);
     function multicall(uint256 deadline,bytes[] data) external payable returns(bytes[]);
@@ -49,7 +54,7 @@ fn address(text: &str) -> bool {
 }
 impl Rule {
     pub fn validate(&self) -> Result<()> {
-        if ![8453, 84532].contains(&self.chain_id)
+        if !crate::evm::valid_chain_id(self.chain_id)
             || !address(&self.address)
             || self.symbol.chars().count() > 24
             || self.recipients.len() > 16
@@ -106,6 +111,19 @@ fn router(chain: u64) -> Option<&'static str> {
         84532 => Some("0x94cc0aac535ccdb3c01d6787d6413c739ae12bc4"),
         _ => None,
     }
+}
+fn is_permit2(tx: &Transaction) -> bool {
+    matches!(tx.chain_id, 8453 | 84532) && tx.to.eq_ignore_ascii_case(PERMIT2)
+}
+pub fn permit2_nonce_maintenance(tx: &Transaction) -> bool {
+    if !is_permit2(tx) {
+        return false;
+    }
+    let Some(selector) = tx.data.get(2..10).and_then(|value| hex::decode(value).ok()) else {
+        return false;
+    };
+    selector == invalidateNoncesCall::SELECTOR
+        || selector == invalidateUnorderedNoncesCall::SELECTOR
 }
 fn swap(tx: &Transaction, sender: &str, data: &[u8]) -> Result<Effect> {
     let call = decode::<exactInputSingleCall>(data)?.params;
@@ -186,6 +204,53 @@ fn inspect(tx: &Transaction, sender: &str, data: &[u8]) -> Result<Analysis> {
             call.to.to_string().to_ascii_lowercase(),
             Some(sender.into()),
         ));
+    }
+    if is_permit2(tx) {
+        let (token, spender) = if selector == lockdownCall::SELECTOR {
+            if data.len() != 132 || small_word(data, 4)? != 32 || small_word(data, 36)? != 1 {
+                return Err(UNKNOWN);
+            }
+            let call = decode::<lockdownCall>(data)?;
+            let [pair] = call.approvals.as_slice() else {
+                return Err(UNKNOWN);
+            };
+            (pair.token, pair.spender)
+        } else if selector == invalidateNoncesCall::SELECTOR {
+            let call = decode::<invalidateNoncesCall>(data)?;
+            if call.newNonce.is_zero() {
+                return Err(UNKNOWN);
+            }
+            (call.token, call.spender)
+        } else if selector == invalidateUnorderedNoncesCall::SELECTOR {
+            let call = decode::<invalidateUnorderedNoncesCall>(data)?;
+            if call.wordPos.bit_len() > 248 || call.mask.count_ones() != 1 {
+                return Err(UNKNOWN);
+            }
+            // One owner-wide nonce bit has no token or spender budget effect.
+            return Ok(Analysis {
+                classified: true,
+                adapter: "uniswap-permit2-signature-nonce",
+                effects: vec![],
+            });
+        } else {
+            return Err(UNKNOWN);
+        };
+        if token.is_zero() || spender.is_zero() {
+            return Err(UNKNOWN);
+        }
+        return Ok(Analysis {
+            classified: true,
+            adapter: "uniswap-permit2",
+            effects: vec![Effect {
+                chain_id: tx.chain_id,
+                token: token.to_string().to_ascii_lowercase(),
+                kind: "approval".into(),
+                amount_atoms: "0".into(),
+                recipient: sender.into(),
+                spender: Some(spender.to_string().to_ascii_lowercase()),
+                token_out: None,
+            }],
+        });
     }
     if !router(tx.chain_id).is_some_and(|r| r.eq_ignore_ascii_case(&tx.to)) {
         return Err(UNKNOWN);

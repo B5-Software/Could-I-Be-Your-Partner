@@ -29,7 +29,6 @@ const errors = {
   SUPER_OPERATION_CONFLICT: ['操作标识已用于其他内容，请刷新重试。','Operation ID belongs to different content. Refresh and retry.','Vorgangs-ID gehört zu anderen Inhalten. Aktualisieren und erneut versuchen.'],
   SUPER_SCOPE_FORBIDDEN: ['信息不属于当前任务范围。','Information is outside this task scope.','Information liegt außerhalb dieses Aufgabenbereichs.'],
   SUPER_EVIDENCE_REQUIRED: ['完成报告需要具体的交付和验证依据。','Completion requires deliverables and verification evidence.','Abschluss benötigt Ergebnisse und Prüfnachweise.'],
-  QUANT_DISABLED: ['量化功能暂未开放。','Quant features are not enabled.','Quant-Funktionen sind nicht aktiviert.'],
 };
 function superText(language, key) {
   const l = language?.startsWith('en') ? 'en' : language?.startsWith('de') ? 'de' : 'zh';

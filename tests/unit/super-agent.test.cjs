@@ -304,6 +304,7 @@ test('TUI SuperAgent uses named task controls and shared model labels while quan
           if (action === 'status') return { config, paused: false, pending: 0 };
           if (action === 'list') return { items: [task], next: null };
           if (action === 'get') return { task, events: [], view: null };
+          if (action === 'workspace.list') return [];
           return { ok: true };
         },
       },
@@ -315,8 +316,8 @@ test('TUI SuperAgent uses named task controls and shared model labels while quan
     assert.ok(i >= 0, 'Missing option ' + value);
     return app._chooseModalOption(i);
   };
-  await assert.rejects(app._runCommand('quant', ''), /QUANT_DISABLED/);
-  assert.equal(calls.length, 0);
+  await app._runCommand('quant', '');
+  assert.equal(calls.shift().method, 'quant:request');
   await app._runCommand('super', '');
   assert.equal(app.state.modal.title, 'SuperAgent');
   await choose('settings');

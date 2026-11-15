@@ -3,6 +3,7 @@
 const { parseEther, formatEther, getAddress } = require('ethers');
 const { tokenAtoms, tokenAmount } = require('../../../shared/wallet-token-format');
 const tokenFields = require('../../../shared/wallet-token-fields.json');
+const { validEvmChainId } = require('../../../shared/wallet-chain');
 const invalid = () => {
   throw Error('WALLET_POLICY_SCOPE_INVALID');
 };
@@ -131,7 +132,7 @@ function tokens(rows) {
     )
       invalid();
     if (
-      ![8453, 84532].includes(row.chainId) ||
+      !validEvmChainId(row.chainId) ||
       !Number.isInteger(row.decimals) ||
       row.decimals < 0 ||
       row.decimals > 255 ||

@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
+import { chainLabel } from '../../shared/wallet-chain';
 import labels from '../../shared/wallet-agent-scope-labels.json';
 import periodLabels from '../../shared/wallet-period-labels.json';
 import { periodNote, openPeriodHistory } from './wallet-periods';
@@ -97,7 +98,7 @@ export class WalletAgentScopePanel {
     }>('list', { offset });
     const d = this.dialog(
       this.t('agentScopesTitle'),
-      `<p class="wallet-private-hint">${esc(this.t('agentScopesHint'))}</p><div class="wallet-portfolio-list">${page.items.length ? page.items.map((s) => `<button type="button" data-scope="${esc(s.id)}" class="wallet-portfolio-summary"><span><strong>${esc(s.label)}</strong><small>${s.chainId === 8453 ? 'Base' : 'Base Sepolia'} · ${esc(this.t(s.state === 'active' ? 'portfolioActive' : 'portfolioPaused'))}</small></span><small>${esc(s.subject)}</small></button>`).join('') : `<p>${esc(this.t('agentScopesEmpty'))}</p>`}</div><footer><button type="button" data-prev ${offset ? '' : 'disabled'}>${esc(this.t('portfolioPrevious'))}</button><button type="button" data-refresh>${esc(this.t('agentScopesRefresh'))}</button><span>${page.total}</span><button type="button" data-next ${page.next === null ? 'disabled' : ''}>${esc(this.t('portfolioPageNext'))}</button></footer>`,
+      `<p class="wallet-private-hint">${esc(this.t('agentScopesHint'))}</p><div class="wallet-portfolio-list">${page.items.length ? page.items.map((s) => `<button type="button" data-scope="${esc(s.id)}" class="wallet-portfolio-summary"><span><strong>${esc(s.label)}</strong><small>${chainLabel(s.chainId)} · ${esc(this.t(s.state === 'active' ? 'portfolioActive' : 'portfolioPaused'))}</small></span><small>${esc(s.subject)}</small></button>`).join('') : `<p>${esc(this.t('agentScopesEmpty'))}</p>`}</div><footer><button type="button" data-prev ${offset ? '' : 'disabled'}>${esc(this.t('portfolioPrevious'))}</button><button type="button" data-refresh>${esc(this.t('agentScopesRefresh'))}</button><span>${page.total}</span><button type="button" data-next ${page.next === null ? 'disabled' : ''}>${esc(this.t('portfolioPageNext'))}</button></footer>`,
     );
     const open = (next: number) =>
       this.run(d, async () => {
@@ -128,7 +129,7 @@ export class WalletAgentScopePanel {
       });
     const d = this.dialog(
       p.label,
-      `<p class="wallet-private-hint">${esc(this.t('agentScopesHint'))}</p><p>${p.chainId === 8453 ? 'Base' : 'Base Sepolia'} · ${esc(this.t(s.ready && !s.locallyBlocked ? 'agentScopesReady' : 'agentScopesRestricted'))}${s.reason ? ' · ' + esc(walletStatus(this.options.language(), s.reason)) : ''}</p><dl class="wallet-portfolio-member-list"><dt>${esc(this.t('agentScopesSubject'))}</dt><dd><code>${esc(p.subject)}</code></dd><dt>${esc(this.t('agentScopesExpiry'))}</dt><dd>${esc(p.expiresAt ? new Date(p.expiresAt).toLocaleString(this.options.language()) : this.t('agentScopesNoExpiry'))}</dd><dt>${esc(this.t('agentScopesWallets'))}</dt><dd>${esc(p.walletIds.join(' · ') || '—')}</dd></dl><div data-editor></div><div class="wallet-budget-list">${rows.map((r) => `<article class="wallet-budget-row"><header><strong>${esc(this.t(r.label))}</strong><small>${esc(r.asset)}</small></header><p>${esc(r.usedText)}${r.breakdown ? '' : ' / ' + esc(r.limitText ?? this.t('usageUnlimited'))}</p>${r.limitText !== null ? `<progress max="100" value="${executionPercent(r.used, r.limit)}"></progress>` : ''}</article>`).join('')}</div><div class="wallet-portfolio-list">${s.path
+      `<p class="wallet-private-hint">${esc(this.t('agentScopesHint'))}</p><p>${chainLabel(p.chainId)} · ${esc(this.t(s.ready && !s.locallyBlocked ? 'agentScopesReady' : 'agentScopesRestricted'))}${s.reason ? ' · ' + esc(walletStatus(this.options.language(), s.reason)) : ''}</p><dl class="wallet-portfolio-member-list"><dt>${esc(this.t('agentScopesSubject'))}</dt><dd><code>${esc(p.subject)}</code></dd><dt>${esc(this.t('agentScopesExpiry'))}</dt><dd>${esc(p.expiresAt ? new Date(p.expiresAt).toLocaleString(this.options.language()) : this.t('agentScopesNoExpiry'))}</dd><dt>${esc(this.t('agentScopesWallets'))}</dt><dd>${esc(p.walletIds.join(' · ') || '—')}</dd></dl><div data-editor></div><div class="wallet-budget-list">${rows.map((r) => `<article class="wallet-budget-row"><header><strong>${esc(this.t(r.label))}</strong><small>${esc(r.asset)}</small></header><p>${esc(r.usedText)}${r.breakdown ? '' : ' / ' + esc(r.limitText ?? this.t('usageUnlimited'))}</p>${r.limitText !== null ? `<progress max="100" value="${executionPercent(r.used, r.limit)}"></progress>` : ''}</article>`).join('')}</div><div class="wallet-portfolio-list">${s.path
         .slice(1)
         .map(
           (a, i) =>

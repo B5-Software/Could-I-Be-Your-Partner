@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 import fields from '../../shared/wallet-policy-fields.json';
-import { WalletTokenEditor } from './wallet-token-editor';
+import { WalletTokenEditor, type WalletChainOption } from './wallet-token-editor';
 import { WalletPeriodEditor } from './wallet-periods';
 const esc = (value: unknown) =>
   String(value ?? '').replace(
@@ -15,6 +15,7 @@ export class WalletScopeEditor {
     t: (key: string) => string,
     initial: Record<string, unknown> = {},
     periodLocked = false,
+    networks: WalletChainOption[] = [],
   ) {
     this.root = document.createElement('details');
     this.root.className = 'wallet-policy-limits';
@@ -29,9 +30,9 @@ export class WalletScopeEditor {
         return `<label>${label}<input name="limit-${f.name}" inputmode="${f.kind === 'count' ? 'numeric' : 'decimal'}" value="${esc(value)}" required maxlength="49"></label>`;
       })
       .join('')}</div>`;
-    this.tokens = new WalletTokenEditor(t, initial.tokens);
+    this.tokens = new WalletTokenEditor(t, initial.tokens, networks);
     this.root.append(this.tokens.root);
-    this.period = new WalletPeriodEditor(t, initial.period, periodLocked);
+    this.period = new WalletPeriodEditor(t, initial.period, periodLocked, networks);
     this.root.append(this.period.root);
   }
   read(): Record<string, unknown> {

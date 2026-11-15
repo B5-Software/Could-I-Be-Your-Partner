@@ -3,7 +3,6 @@
 
 module.exports = function createDefaultSettings({ DEFAULT_DECISION_SETTINGS }) {
   const DEFAULT_SETTINGS = {
-    features: { quant: false },
     superAgent: {
       enabled: true,
       maxWorkers: 2,

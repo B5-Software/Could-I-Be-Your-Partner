@@ -1,6 +1,6 @@
 {
   "name": "could-i-be-your-partner",
-  "version": "1.10.0-alpha.1",
+  "version": "1.10.0-alpha.2",
   "description": "全自动AI Agent，帮助完成一切任务",
   "license": "GPL-3.0-or-later",
   "main": "src/main/main.js",
@@ -9,6 +9,10 @@
     "test:superagent:bundle": "npm run build:node-core && node tests/integration/super-agent-backend.cjs --bundled",
     "check:runtime-deps": "node scripts/check-runtime-deps.cjs",
     "test:quant:chain": "node scripts/test-quant-chain.cjs",
+    "test:wallet:networks": "npm run prepare:wallet-signer && node scripts/test-quant-chain.cjs --networks",
+    "test:wallet:apps": "npm run prepare:wallet-signer && node scripts/test-quant-chain.cjs --apps",
+    "build:wallet-browser": "node scripts/build-wallet-browser.cjs",
+    "test:wallet:browser-extension": "node scripts/test-quant-chain.cjs --apps --extension",
     "test:quant:execution": "npm run build:quant-engine && node scripts/test-quant-chain.cjs --execution",
     "test:quant:bundle": "npm run build:node-core && node scripts/test-quant-chain.cjs --bundled",
     "build:quant-engine": "node scripts/lib/quant-engine-runtime.cjs --rebuild",
@@ -56,8 +60,8 @@
     "test:plugin-model": "npm run build-app-bundle && electron tests/integration/model-provider-plugin.cjs",
     "test:tui": "npm run build-app-bundle && electron tests/integration/tui-session.cjs",
     "test:tui:tty": "node --test --test-force-exit tests/integration/tui-tty.test.cjs",
-    "format": "prettier --write src/main/core src/main/ds-compat src/agent src/tui src/main/agent-runtime.js src/main/webui-agent-driver.js src/main/ipc src/main/services src/main/settings src/shared/pricing.ts src/renderer/core src/preload/channel-subscriptions.js scripts/build-app-bundle.js scripts/lib scripts/package.js scripts/eb-before-pack.js scripts/eb-after-pack.js tests/unit tests/integration eslint.config.cjs tsconfig.json src/main/vm/{guest-tool-worker,tool-files,tool-location,vm-download-manager,vm-file-dialog,vm-process,plugin-runtime-client,plugin-sdk-files,vm-tool-runtime,vm-tools,vm-theme}.js src/renderer/js/vm-file-dialog.js integrations/codeoss scripts/prepare-codeoss.js tests/fixtures/codeoss packages/npm scripts/prepare-npm.cjs scripts/publish-npm.cjs scripts/test-ds-thirdparty.cjs",
-    "format:check": "prettier --check src/main/core src/main/ds-compat src/agent src/tui src/main/agent-runtime.js src/main/webui-agent-driver.js src/main/ipc src/main/services src/main/settings src/shared/pricing.ts src/renderer/core src/preload/channel-subscriptions.js scripts/build-app-bundle.js scripts/lib scripts/package.js scripts/eb-before-pack.js scripts/eb-after-pack.js tests/unit tests/integration eslint.config.cjs tsconfig.json src/main/vm/{guest-tool-worker,tool-files,tool-location,vm-download-manager,vm-file-dialog,vm-process,plugin-runtime-client,plugin-sdk-files,vm-tool-runtime,vm-tools,vm-theme}.js src/renderer/js/vm-file-dialog.js integrations/codeoss scripts/prepare-codeoss.js tests/fixtures/codeoss packages/npm scripts/prepare-npm.cjs scripts/publish-npm.cjs scripts/test-ds-thirdparty.cjs",
+    "format": "prettier --write src/main/core src/main/ds-compat src/agent src/tui src/main/agent-runtime.js src/main/webui-agent-driver.js src/main/ipc src/main/services src/main/settings src/shared/pricing.ts src/renderer/core src/preload/channel-subscriptions.js scripts/build-app-bundle.js scripts/lib scripts/package.js scripts/eb-before-pack.js scripts/eb-after-pack.js tests/unit tests/integration eslint.config.cjs tsconfig.json src/main/vm/{guest-tool-worker,tool-files,tool-location,vm-download-manager,vm-file-dialog,vm-process,plugin-runtime-client,plugin-sdk-files,vm-tool-runtime,vm-tools,vm-theme}.js src/renderer/js/vm-file-dialog.js integrations/codeoss integrations/wallet-browser src/shared/wallet-browser-labels.json scripts/build-wallet-browser.cjs scripts/prepare-codeoss.js tests/fixtures/codeoss packages/npm scripts/prepare-npm.cjs scripts/publish-npm.cjs scripts/test-ds-thirdparty.cjs",
+    "format:check": "prettier --check src/main/core src/main/ds-compat src/agent src/tui src/main/agent-runtime.js src/main/webui-agent-driver.js src/main/ipc src/main/services src/main/settings src/shared/pricing.ts src/renderer/core src/preload/channel-subscriptions.js scripts/build-app-bundle.js scripts/lib scripts/package.js scripts/eb-before-pack.js scripts/eb-after-pack.js tests/unit tests/integration eslint.config.cjs tsconfig.json src/main/vm/{guest-tool-worker,tool-files,tool-location,vm-download-manager,vm-file-dialog,vm-process,plugin-runtime-client,plugin-sdk-files,vm-tool-runtime,vm-tools,vm-theme}.js src/renderer/js/vm-file-dialog.js integrations/codeoss integrations/wallet-browser src/shared/wallet-browser-labels.json scripts/build-wallet-browser.cjs scripts/prepare-codeoss.js tests/fixtures/codeoss packages/npm scripts/prepare-npm.cjs scripts/publish-npm.cjs scripts/test-ds-thirdparty.cjs",
     "test:vm-picker": "npm run build-app-bundle && electron tests/integration/vm-file-picker-smoke.cjs",
     "test:codeoss:vm": "npm run prepare:codeoss && electron tests/integration/codeoss-vm.cjs",
     "tui": "node bin/cibyp-tui.js",
@@ -76,7 +80,7 @@
     "prepare:quant-engine": "node scripts/lib/quant-engine-runtime.cjs",
     "prepare:wallet-signer": "node scripts/lib/wallet-signer-runtime.cjs",
     "test:wallet-signer": "npm run prepare:wallet-signer && cargo +1.99.1 test --manifest-path native/wallet-signer/Cargo.toml --locked && node tests/integration/wallet-native-signer.cjs && node tests/integration/wallet-native-signer.cjs --managed && node --test tests/integration/wallet-signing-recovery.test.cjs",
-    "test:wallet-ui": "electron tests/integration/wallet-approval-ui.cjs && electron tests/integration/wallet-portfolio-ui.cjs && electron tests/integration/wallet-agent-scope-ui.cjs && electron tests/integration/wallet-period-ui.cjs"
+    "test:wallet-ui": "electron tests/integration/wallet-approval-ui.cjs && electron tests/integration/wallet-portfolio-ui.cjs && electron tests/integration/wallet-agent-scope-ui.cjs && electron tests/integration/wallet-period-ui.cjs && electron tests/integration/wallet-networks-ui.cjs && electron tests/integration/wallet-apps-ui.cjs && electron tests/integration/wallet-messages-ui.cjs && electron tests/integration/wallet-browser-ui.cjs"
   },
   "author": {
     "name": "B5-Software",

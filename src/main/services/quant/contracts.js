@@ -4,8 +4,58 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { createHash } = require('node:crypto');
 const { Interface, getAddress, keccak256, parseEther } = require('ethers');
-const { CHAINS } = require('./market-data');
 const digest = (value) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+const RESULT_BYTES = 2 * 1024 * 1024;
+function resultDirectory(service) {
+  const directory = path.join(service.directory, 'contract-results');
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const stat = fs.lstatSync(directory);
+  if (!stat.isDirectory() || stat.isSymbolicLink()) fail('CONTRACT_ARCHIVE_UNAVAILABLE');
+  return directory;
+}
+function storeResult(service, result, writeAtomic) {
+  const directory = resultDirectory(service),
+    ref = digest(result);
+  if (Buffer.byteLength(JSON.stringify(result)) > RESULT_BYTES) fail('CONTRACT_RESULT_LIMIT');
+  const files = fs.readdirSync(directory).filter((name) => /^[a-f\d]{64}\.json$/.test(name));
+  let bytes = 0;
+  for (const name of files) {
+    const stat = fs.lstatSync(path.join(directory, name));
+    if (!stat.isFile() || stat.isSymbolicLink() || stat.size > RESULT_BYTES)
+      fail('CONTRACT_ARCHIVE_UNAVAILABLE');
+    bytes += stat.size;
+  }
+  if (files.length >= 512 || bytes + Buffer.byteLength(JSON.stringify(result)) > 128 * 1024 * 1024)
+    fail('CONTRACT_ARCHIVE_LIMIT');
+  writeAtomic(path.join(directory, ref + '.json'), result);
+  return ref;
+}
+function loadResult(service, workspaceId, ref) {
+  if (typeof ref !== 'string' || !/^[a-f\d]{64}$/.test(ref)) fail('CONTRACT_RESULT_REF');
+  const file = path.join(resultDirectory(service), ref + '.json');
+  let stat;
+  try {
+    stat = fs.lstatSync(file);
+  } catch (error) {
+    fail(error.code === 'ENOENT' ? 'CONTRACT_RESULT_NOT_FOUND' : 'CONTRACT_ARCHIVE_UNAVAILABLE');
+  }
+  if (!stat.isFile() || stat.isSymbolicLink() || stat.size > RESULT_BYTES)
+    fail('CONTRACT_ARCHIVE_UNAVAILABLE');
+  let result;
+  try {
+    result = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch {
+    fail('CONTRACT_RESULT_FORMAT');
+  }
+  if (digest(result) !== ref) fail('CONTRACT_RESULT_HASH_MISMATCH');
+  if (result.version !== 1 || typeof result.text !== 'string') fail('CONTRACT_RESULT_FORMAT');
+  if (result.workspaceId !== workspaceId) fail('CONTRACT_RESULT_NOT_IN_WORKSPACE');
+  return result;
+}
+function resultPage(result, ref, input) {
+  const { text, workspaceId: _workspaceId, version: _version, ...metadata } = result;
+  return { ...metadata, ref, ...page(text, input) };
+}
 function fail(code) {
   throw new Error(code);
 }
@@ -37,10 +87,19 @@ function loadCall(service, workspaceId, callId) {
   if (call.workspaceId !== workspaceId) fail('CONTRACT_CALL_NOT_IN_WORKSPACE');
   return call;
 }
-async function contractRequest(service, workspaceId, input, writeAtomic) {
-  const workspace = service.workspace(workspaceId),
-    chain = CHAINS[workspace.market.venue];
-  if (!chain) fail('CONTRACT_NETWORK_UNAVAILABLE');
+async function contractRequest(service, workspaceId, input, writeAtomic, options = {}) {
+  const signal = options.signal
+    ? AbortSignal.any([options.signal, AbortSignal.timeout(30000)])
+    : AbortSignal.timeout(30000);
+  const check = () => {
+    signal.throwIfAborted();
+    if (service.disposed) fail('QUANT_STOPPED');
+  };
+  check();
+  page('', input);
+  service.workspace(workspaceId);
+  if (input.action === 'result')
+    return resultPage(loadResult(service, workspaceId, input.ref), input.ref, input);
   if (input.action === 'get') {
     const call = loadCall(service, workspaceId, input.callId);
     return {
@@ -53,6 +112,8 @@ async function contractRequest(service, workspaceId, input, writeAtomic) {
       ...page(call.data, input),
     };
   }
+  const { market, config, chain } = service.evmContext(workspaceId, input.chainId);
+  if (!chain) fail('CONTRACT_NETWORK_UNAVAILABLE');
   if (!['read', 'simulate', 'encode'].includes(input.action)) fail('CONTRACT_ACTION');
   if (
     !Array.isArray(input.abi) ||
@@ -101,11 +162,26 @@ async function contractRequest(service, workspaceId, input, writeAtomic) {
   if (input.action === 'read' && !['view', 'pure'].includes(fragment.stateMutability))
     fail('CONTRACT_VIEW_REQUIRED');
   const block = input.block ?? 'latest';
-  if (!['latest', 'safe', 'finalized'].includes(block) && !/^0x[\da-f]{1,16}$/i.test(block))
+  if (
+    typeof block !== 'string' ||
+    (!['latest', 'safe', 'finalized'].includes(block) && !/^0x[\da-f]{1,16}$/i.test(block))
+  )
     fail('CONTRACT_BLOCK');
-  const rpc = (method, params) =>
-    service.market.rpc(workspace.market.venue, workspace.market.rpcUrl, method, params);
-  if (BigInt(await rpc('eth_chainId', [])) !== BigInt(chain.id)) fail('CHAIN_ID_MISMATCH');
+  const context = await market.connect(config, { signal });
+  check();
+  const selected =
+    block === 'latest' ? context.block : await context.rpc('eth_getBlockByNumber', [block, false]);
+  if (
+    !selected ||
+    !/^0x[\da-f]{64}$/i.test(selected.hash || '') ||
+    !/^0x[\da-f]{1,64}$/i.test(selected.number || '') ||
+    !/^0x[\da-f]{1,64}$/i.test(selected.timestamp || '') ||
+    BigInt(selected.number) > context.height ||
+    (block.startsWith('0x') && BigInt(selected.number) !== BigInt(block))
+  )
+    fail('CONTRACT_BLOCK');
+  if (BigInt(selected.timestamp) > BigInt(Math.floor(Date.now() / 1000) + 120))
+    fail('BLOCK_CLOCK_SKEW');
   const call = { to, data };
   if (input.from) call.from = getAddress(input.from);
   if (input.action === 'simulate' && input.value !== undefined) {
@@ -113,19 +189,50 @@ async function contractRequest(service, workspaceId, input, writeAtomic) {
     if (value < 0n) fail('CONTRACT_VALUE');
     call.value = '0x' + value.toString(16);
   }
-  const raw = await rpc('eth_call', [call, block]);
+  const raw = await context.rpc('eth_call', [
+    call,
+    { blockHash: selected.hash, requireCanonical: true },
+  ]);
+  check();
+  const canonical = await context.rpc('eth_getBlockByNumber', [selected.number, false]);
+  check();
+  if (canonical?.hash?.toLowerCase() !== selected.hash.toLowerCase()) fail('BLOCK_REORG');
+  if (
+    chain.revision !== undefined &&
+    service.getWallet().networks.profile(config.venue).revision !== chain.revision
+  )
+    fail('WALLET_NETWORK_CHANGED');
   const decoded = abi.decodeFunctionResult(fragment, raw);
-  const text = JSON.stringify([...decoded], (_key, value) =>
-    typeof value === 'bigint' ? value.toString() : value,
-  );
-  return {
+  let decodedBytes = 0;
+  const text = JSON.stringify([...decoded], (_key, value) => {
+    if (typeof value === 'bigint') value = value.toString();
+    if (typeof value === 'string') {
+      decodedBytes += Buffer.byteLength(value);
+      if (decodedBytes > RESULT_BYTES) fail('CONTRACT_RESULT_LIMIT');
+    }
+    return value;
+  });
+  const result = {
+    version: 1,
+    workspaceId,
     chainId: chain.id,
     to,
     function: fragment.format('sighash'),
+    dataHash: keccak256(data),
+    abiVerified: false,
+    from: call.from ?? null,
+    valueWei: call.value ? BigInt(call.value).toString() : '0',
     block,
+    blockNumber: BigInt(selected.number).toString(),
+    blockHash: selected.hash,
+    blockTimestamp: Number(BigInt(selected.timestamp)),
+    observedAt: Date.now(),
+    ...(chain.genesisHash ? { genesisHash: chain.genesisHash } : {}),
     readOnly: true,
     simulated: input.action === 'simulate',
-    ...page(text, input),
+    text,
   };
+  check();
+  return resultPage(result, storeResult(service, result, writeAtomic), input);
 }
 module.exports = { contractRequest, loadCall, page };

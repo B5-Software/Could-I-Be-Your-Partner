@@ -19,9 +19,6 @@ async function buildApp() {
     'import { SuperAgentPanel } from ' +
       JSON.stringify(path.join(root, 'src/renderer/core/super-agent.ts')) +
       ';',
-    'import { quantEnabled } from ' +
-      JSON.stringify(path.join(root, 'src/shared/feature-gates.js')) +
-      ';',
     'import { FirmwarePanel } from ' +
       JSON.stringify(path.join(root, 'src/renderer/core/firmware-panel.ts')) +
       ';',

@@ -101,6 +101,9 @@ class NativeSigner extends EventEmitter {
             value.portfolios !== 1 ||
             value.agentScopes !== 1 ||
             value.periodBudgets !== 1 ||
+            value.messages !== 1 ||
+            value.portfolioEquity !== 1 ||
+            value.portfolioAllowance !== 1 ||
             value.vault !== 'CIBYP-WALLET/1'
           ) {
             this.kill();

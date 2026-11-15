@@ -4,7 +4,7 @@ const test = require('node:test'),
   fs = require('node:fs'),
   path = require('node:path'),
   os = require('node:os');
-const { Wallet, keccak256, Transaction } = require('ethers');
+const { Wallet, keccak256, Transaction, id } = require('ethers');
 const { WalletService } = require('../../src/main/services/wallet');
 async function fixture(t, { realSigner = false } = {}) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'cibyp-wallet-'));
@@ -38,14 +38,29 @@ async function fixture(t, { realSigner = false } = {}) {
       case 'eth_estimateGas':
         result = '0x5208';
         break;
-      case 'eth_call':
-        result = word(1000000000000n);
+      case 'eth_call': {
+        const selector = body.params[0].data?.slice(0, 10);
+        if (selector === id('getL1Fee(bytes)').slice(0, 10)) {
+          assert.deepEqual(body.params[1], {
+            blockHash: '0x' + 'a'.repeat(64),
+            requireCanonical: true,
+          });
+          result = mode.badFeeQuote ? '0x' : word(mode.l1Fee ?? 1000000000000n);
+        } else if (selector === id('getOperatorFee(uint256)').slice(0, 10)) {
+          assert.deepEqual(body.params[1], {
+            blockHash: '0x' + 'a'.repeat(64),
+            requireCanonical: true,
+          });
+          result = word(mode.operatorFee ?? 1000000000000n);
+        } else result = word(1000000000000n);
         break;
+      }
       case 'eth_getBlockByNumber':
         result = {
           number: body.params[0] === 'finalized' ? '0x80' : '0x100',
           hash: '0x' + 'a'.repeat(64),
-          timestamp: '0x' + Math.floor(Date.now() / 1000).toString(16),
+          timestamp:
+            '0x' + (Math.floor(Date.now() / 1000) - (mode.staleFeeQuote ? 180 : 0)).toString(16),
         };
         break;
       case 'eth_getTransactionReceipt':
@@ -80,6 +95,8 @@ async function fixture(t, { realSigner = false } = {}) {
         if (action === 'authority.grant') return { ok: true, storeId };
         if (action === 'operation.approve' || action === 'operation.deny') return { ok: true };
         if (action === 'nonce.inspect') return { hash: null };
+        if (['portfolio.equity.guard', 'portfolio.allowance.guard'].includes(action))
+          return { guard: null };
         if (action === 'scope.ensure')
           return {
             scope: input.scope,
@@ -1058,6 +1075,47 @@ test('denying an already approved intent never triggers a broadcast', async (t) 
   );
   assert.equal((await service.transact({ venue: 'base' }, input)).status, 'denied');
   assert.equal(calls.filter((call) => call.method === 'eth_sendRawTransaction').length, 0);
+});
+test('a manual approval cannot sign with an excessive, malformed or stale fee quote', async (t) => {
+  const { service, input, mode, calls } = await fixture(t);
+  const signer = service.signerOverride;
+  let signatures = 0;
+  service.signerOverride = async (action, args) => {
+    if (action === 'sign') signatures++;
+    return signer(action, args);
+  };
+  for (const failure of ['excessive', 'malformed', 'stale']) {
+    const draft = await service.prepare(
+      { venue: 'base' },
+      { ...input, commandId: 'manual-fee-' + failure },
+    );
+    mode.badFeeQuote = failure === 'malformed';
+    mode.staleFeeQuote = failure === 'stale';
+    mode.l1Fee = 13000000000000n;
+    const result = await service.request('intent.approve', { id: draft.id, digest: draft.digest });
+    assert.equal(result.status, 'failed');
+    assert.equal(
+      result.error,
+      failure === 'excessive' ? 'WALLET_FEE_RESERVE_EXCEEDED' : 'WALLET_FEE_QUOTE_UNAVAILABLE',
+    );
+    assert.equal(result.submissionMayHaveOccurred, false);
+    assert.equal(result.nativeSigning, undefined);
+    delete mode.badFeeQuote;
+    delete mode.staleFeeQuote;
+    delete mode.l1Fee;
+  }
+  assert.equal(signatures, 0);
+  assert.ok(!calls.some((call) => call.method === 'eth_sendRawTransaction'));
+});
+
+test('a changed fee that fits the original reserve can still use the original approval', async (t) => {
+  const { service, input, mode } = await fixture(t);
+  const draft = await service.prepare({ venue: 'base' }, input);
+  mode.l1Fee = 12000000000000n;
+  const result = await service.request('intent.approve', { id: draft.id, digest: draft.digest });
+  assert.equal(result.status, 'submitted');
+  assert.equal(result.feeReserveWei, draft.feeReserveWei);
+  assert.equal(result.digest, draft.digest);
 });
 test('native execution binds the original grant and enforces one cumulative estimated fee budget', async (t) => {
   const { service, wallet, input } = await fixture(t);

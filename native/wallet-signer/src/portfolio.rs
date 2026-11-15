@@ -26,6 +26,70 @@ pub struct Portfolio {
     pub limits: Rules,
     pub max_fee_wei: String,
     pub expires_at: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub equity_floor_usd_atomic: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub allowance_ceiling: Option<AllowanceCeiling>,
+}
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AllowanceCeiling {
+    pub token: String,
+    pub atoms: String,
+    pub decimals: u8,
+    pub baseline_report_id: String,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AllowanceEvidence {
+    pub portfolio_id: String,
+    pub revision: u64,
+    pub operation_id: String,
+    pub unsigned_hash: String,
+    pub block_hash: String,
+    pub checked_at: u64,
+    pub previous_pair_atoms: String,
+    pub projected_atoms: String,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EquityEvidence {
+    pub portfolio_id: String,
+    pub revision: u64,
+    pub operation_id: String,
+    pub unsigned_hash: String,
+    pub block_hash: String,
+    pub checked_at: u64,
+    pub available_usd_atomic: String,
+}
+fn validate_equity_floor(p: &Portfolio) -> Result<()> {
+    if let Some(floor) = &p.equity_floor_usd_atomic
+        && (p.chain_id != 8453 || floor.len() > 24 || quantity(floor)? == ethnum::U256::ZERO)
+    {
+        return Err("WALLET_PORTFOLIO_EQUITY_INVALID");
+    }
+    if let Some(rule) = &p.allowance_ceiling {
+        let valid_report = rule
+            .baseline_report_id
+            .split_once('-')
+            .is_some_and(|(time, hash)| {
+                time.len() == 13
+                    && time.bytes().all(|b| b.is_ascii_digit())
+                    && hash.len() == 64
+                    && hash.bytes().all(|b| b.is_ascii_hexdigit())
+            });
+        if !matches!(p.chain_id, 8453 | 84532)
+            || !valid_report
+            || rule.token.len() != 42
+            || !rule.token.starts_with("0x")
+            || !rule.token[2..].bytes().all(|b| b.is_ascii_hexdigit())
+            || rule.token[2..].bytes().all(|b| b == b'0')
+            || quantity(&rule.atoms)? == ethnum::U256::MAX
+        {
+            return Err("WALLET_PORTFOLIO_ALLOWANCE_INVALID");
+        }
+    }
+    Ok(())
 }
 fn digest(body: &str) -> String {
     hex::encode(Sha256::digest(body.as_bytes()))
@@ -206,7 +270,7 @@ pub fn create(connection: &Connection, value: &Portfolio) -> Result<Value> {
         || value.name.trim().is_empty()
         || value.name.chars().count() > 80
         || value.name.chars().any(char::is_control)
-        || ![8453, 84532].contains(&value.chain_id)
+        || !crate::evm::valid_chain_id(value.chain_id)
         || value.members.is_empty()
         || value.members.len() > 16
         || body.len() > 65536
@@ -215,6 +279,7 @@ pub fn create(connection: &Connection, value: &Portfolio) -> Result<Value> {
         return Err("WALLET_PORTFOLIO_INVALID");
     }
     value.limits.validate()?;
+    validate_equity_floor(value)?;
     quantity(&value.max_fee_wei)?;
     if value
         .limits
@@ -350,6 +415,7 @@ pub fn update(c: &Connection, p: &Portfolio, expected: u64) -> Result<Value> {
         return Err("WALLET_PORTFOLIO_INVALID");
     }
     p.limits.validate()?;
+    validate_equity_floor(p)?;
     quantity(&p.max_fee_wei)?;
     if p.limits
         .tokens
@@ -399,25 +465,29 @@ pub fn update(c: &Connection, p: &Portfolio, expected: u64) -> Result<Value> {
     crate::portfolio_history::record(c, p, &state, rev + 1, "edit")?;
     get(c, &p.id)
 }
-fn bound(connection: &Connection, request: &Check<'_>) -> Result<Option<Portfolio>> {
+fn bound(
+    connection: &Connection,
+    wallet_id: &str,
+    signer: &str,
+    chain_id: u64,
+) -> Result<Option<(Portfolio, u64)>> {
     member_count(connection)?;
-    let chain =
-        i64::try_from(request.transaction.chain_id).map_err(|_| "WALLET_PORTFOLIO_INVALID")?;
-    let row:Option<(String,String,String)>=connection.query_row("SELECT portfolio_id,wallet_id,address FROM portfolio_members WHERE chain=?1 AND (wallet_id=?2 OR address=?3)",params![chain,request.wallet_id,request.address.to_ascii_lowercase()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional().map_err(|_|STORE)?;
+    let chain = i64::try_from(chain_id).map_err(|_| "WALLET_PORTFOLIO_INVALID")?;
+    let row:Option<(String,String,String)>=connection.query_row("SELECT portfolio_id,wallet_id,address FROM portfolio_members WHERE chain=?1 AND (wallet_id=?2 OR address=?3)",params![chain,wallet_id,signer.to_ascii_lowercase()],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional().map_err(|_|STORE)?;
     let Some((id, wallet, address)) = row else {
         return Ok(None);
     };
-    if wallet != request.wallet_id || !address.eq_ignore_ascii_case(request.address) {
+    if wallet != wallet_id || !address.eq_ignore_ascii_case(signer) {
         return Err("WALLET_PORTFOLIO_MEMBER_CHANGED");
     }
-    let (p, state, _) = load(connection, &id)?;
+    let (p, state, revision) = load(connection, &id)?;
     if state != "active" {
         return Err("WALLET_PORTFOLIO_PAUSED");
     }
     if p.expires_at != 0 && p.expires_at <= now()? {
         return Err("WALLET_PORTFOLIO_EXPIRED");
     }
-    if p.chain_id != request.transaction.chain_id
+    if p.chain_id != chain_id
         || !p
             .members
             .iter()
@@ -425,7 +495,113 @@ fn bound(connection: &Connection, request: &Check<'_>) -> Result<Option<Portfoli
     {
         return Err(STORE);
     }
-    Ok(Some(p))
+    Ok(Some((p, revision)))
+}
+pub fn equity_guard(connection: &Connection, wallet_id: &str, address: &str) -> Result<Value> {
+    let guard = bound(connection, wallet_id, address, 8453)?.and_then(|(p, revision)| {
+        p.equity_floor_usd_atomic.map(|floor|
+            json!({"id":p.id,"revision":revision,"members":p.members,"floorUsdAtomic":floor}))
+    });
+    Ok(json!({"guard":guard}))
+}
+pub fn allowance_guard(
+    connection: &Connection,
+    wallet_id: &str,
+    address: &str,
+    chain: u64,
+) -> Result<Value> {
+    let guard = bound(connection, wallet_id, address, chain)?.and_then(|(p, revision)| {
+        p.allowance_ceiling
+            .map(|rule| json!({"id":p.id,"revision":revision,"members":p.members,"rule":rule}))
+    });
+    Ok(json!({"guard":guard}))
+}
+pub fn check_allowance(
+    connection: &Connection,
+    check: &Check<'_>,
+    evidence: Option<&AllowanceEvidence>,
+) -> Result<()> {
+    if !matches!(check.transaction.chain_id, 8453 | 84532) {
+        return Ok(());
+    }
+    let analysis = crate::tokens::analyze(check.transaction, check.address);
+    let [effect] = analysis.effects.as_slice() else {
+        return Ok(());
+    };
+    if analysis.adapter != "erc20" || effect.kind != "approval" || effect.amount_atoms == "0" {
+        return Ok(());
+    }
+    let Some((p, revision)) = bound(
+        connection,
+        check.wallet_id,
+        check.address,
+        check.transaction.chain_id,
+    )?
+    else {
+        return Ok(());
+    };
+    let Some(rule) = p
+        .allowance_ceiling
+        .filter(|rule| rule.token.eq_ignore_ascii_case(&effect.token))
+    else {
+        return Ok(());
+    };
+    let required = "WALLET_PORTFOLIO_ALLOWANCE_REQUIRED";
+    let e = evidence.ok_or(required)?;
+    if e.portfolio_id != p.id
+        || e.revision != revision
+        || e.operation_id != check.operation_id
+        || e.unsigned_hash != check.unsigned_hash
+        || e.checked_at > check.checked_at_ms
+        || check.checked_at_ms - e.checked_at > 20_000
+        || e.block_hash.len() != 66
+        || !e.block_hash.starts_with("0x")
+        || !e.block_hash[2..].bytes().all(|b| b.is_ascii_hexdigit())
+    {
+        return Err(required);
+    }
+    let requested = quantity(&effect.amount_atoms)?;
+    let projected = quantity(&e.projected_atoms).map_err(|_| required)?;
+    let previous = quantity(&e.previous_pair_atoms).map_err(|_| required)?;
+    if projected < requested {
+        return Err(required);
+    }
+    if requested > previous && projected > quantity(&rule.atoms)? {
+        return Err("WALLET_PORTFOLIO_ALLOWANCE_EXCEEDED");
+    }
+    Ok(())
+}
+pub fn check_equity(
+    connection: &Connection,
+    check: &Check<'_>,
+    evidence: Option<&EquityEvidence>,
+) -> Result<()> {
+    if check.transaction.chain_id != 8453 {
+        return Ok(());
+    }
+    let Some((p, revision)) = bound(connection, check.wallet_id, check.address, 8453)? else {
+        return Ok(());
+    };
+    let Some(floor) = &p.equity_floor_usd_atomic else {
+        return Ok(());
+    };
+    let e = evidence.ok_or("WALLET_PORTFOLIO_EQUITY_REQUIRED")?;
+    if e.portfolio_id != p.id
+        || e.revision != revision
+        || e.operation_id != check.operation_id
+        || e.unsigned_hash != check.unsigned_hash
+        || e.checked_at > check.checked_at_ms
+        || check.checked_at_ms - e.checked_at > 20_000
+        || e.block_hash.len() != 66
+        || !e.block_hash.starts_with("0x")
+        || !e.block_hash[2..].bytes().all(|b| b.is_ascii_hexdigit())
+    {
+        return Err("WALLET_PORTFOLIO_EQUITY_REQUIRED");
+    }
+    if quantity(&e.available_usd_atomic)? < quantity(floor)? {
+        return Err("WALLET_PORTFOLIO_EQUITY_LOW");
+    }
+    Ok(())
 }
 fn next_usage(connection: &Connection, p: &Portfolio, request: &Check<'_>) -> Result<Usage> {
     if !request.replay
@@ -474,7 +650,13 @@ fn next_usage(connection: &Connection, p: &Portfolio, request: &Check<'_>) -> Re
     Ok(used)
 }
 pub fn check(connection: &Connection, request: &Check<'_>) -> Result<()> {
-    let Some(p) = bound(connection, request)? else {
+    let Some((p, _)) = bound(
+        connection,
+        request.wallet_id,
+        request.address,
+        request.transaction.chain_id,
+    )?
+    else {
         return Ok(());
     };
     if request.replay {
@@ -509,7 +691,13 @@ pub fn check(connection: &Connection, request: &Check<'_>) -> Result<()> {
     Ok(())
 }
 pub fn consume(connection: &Connection, request: &Check<'_>) -> Result<()> {
-    let Some(p) = bound(connection, request)? else {
+    let Some((p, _)) = bound(
+        connection,
+        request.wallet_id,
+        request.address,
+        request.transaction.chain_id,
+    )?
+    else {
         return Ok(());
     };
     let used = next_usage(connection, &p, request)?;

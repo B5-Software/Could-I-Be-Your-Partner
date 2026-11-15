@@ -1,12 +1,24 @@
 //! Wallet execution plans and outbox share the durable engine WAL. This module
 //! owns allocated input budgets, not wallet balances, keys or broker authority.
 use super::*;
+use crate::clock;
+
+const FIXED_TEMPLATE: &str = "base-twap-fixed-v1";
+const VWAP_TEMPLATE: &str = "base-vwap-fixed-v1";
+pub const WINDOW_EXPIRED: &str = "EXECUTION_WINDOW_EXPIRED";
 
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct AgentScope {
     pub id: String,
     pub subject: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct VwapProfile {
+    pub profile_id: String,
+    pub weth_volume_atoms: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
@@ -30,6 +42,13 @@ pub struct Plan {
     /// Legacy, non-broadcasting prototype plans had no fee budget.
     #[serde(default)]
     pub max_fee_reserve_wei: Option<String>,
+    /// Minimum output at the planned input size, in WETH (buy) or USDC (sell) atoms.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_total_output_atoms: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_arrival_cost_bps: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vwap: Option<VwapProfile>,
 }
 impl Plan {
     fn total(&self) -> Result<u128> {
@@ -60,12 +79,19 @@ impl Plan {
                 "EXECUTION_FEE_BUDGET_REQUIRED",
             )?;
         }
+        self.minimum_output()?;
+        check(
+            self.max_arrival_cost_bps.is_none_or(|bps| bps < 10_000),
+            "EXECUTION_ARRIVAL_LIMIT_RANGE",
+        )?;
         id(&self.id)?;
         id(&self.owner)?;
         id(&self.wallet)?;
         check(
-            self.template == "base-twap-v1"
-                && matches!(self.chain_id, 8453 | 84532)
+            matches!(
+                self.template.as_str(),
+                "base-twap-v1" | FIXED_TEMPLATE | VWAP_TEMPLATE
+            ) && matches!(self.chain_id, 8453 | 84532)
                 && (1..=1000).contains(&self.slices)
                 && self.total()? >= u128::from(self.slices)
                 && (1000..=86400000).contains(&self.interval_ms)
@@ -77,14 +103,102 @@ impl Plan {
                     .bytes()
                     .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c)),
             "INVALID_EXECUTION_PLAN",
-        )
+        )?;
+        check(
+            (self.template == VWAP_TEMPLATE) == self.vwap.is_some(),
+            "EXECUTION_PROFILE_INVALID",
+        )?;
+        if let Some(profile) = &self.vwap {
+            check(
+                profile.profile_id.len() == 64
+                    && profile
+                        .profile_id
+                        .bytes()
+                        .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+                    && (2..=96).contains(&self.slices)
+                    && self.interval_ms.is_multiple_of(1000)
+                    && self.interval_ms * u64::from(self.slices) <= 7_200_000
+                    && profile.weth_volume_atoms.len() == self.slices as usize,
+                "EXECUTION_PROFILE_INVALID",
+            )?;
+            self.weighted_range(profile, 0, self.slices)?;
+        }
+        Ok(())
+    }
+    pub fn fixed(&self) -> bool {
+        matches!(self.template.as_str(), FIXED_TEMPLATE | VWAP_TEMPLATE)
+    }
+    pub fn interval_ns(&self) -> u128 {
+        u128::from(self.interval_ms) * 1_000_000
     }
     fn slice(&self, completed: u32) -> Result<String> {
         check(completed < self.slices, "EXECUTION_COMPLETE")?;
+        let input = self.range_input(completed, completed + 1)?;
+        check(input > 0, "EXECUTION_NO_ALLOCATED_INPUT")?;
+        Ok(input.to_string())
+    }
+    pub fn range_input(&self, start: u32, end: u32) -> Result<u128> {
+        check(start <= end && end <= self.slices, "EXECUTION_WINDOW_RANGE")?;
+        if let Some(profile) = &self.vwap {
+            return self.weighted_range(profile, start, end);
+        }
         let total = self.total()?;
-        Ok((total / u128::from(self.slices)
-            + u128::from(u128::from(completed) < total % u128::from(self.slices)))
-        .to_string())
+        let slices = u128::from(self.slices);
+        let remainder = total % slices;
+        Ok(
+            total / slices * u128::from(end - start) + u128::from(end).min(remainder)
+                - u128::from(start).min(remainder),
+        )
+    }
+    fn weighted_range(&self, profile: &VwapProfile, start: u32, end: u32) -> Result<u128> {
+        let mut sum = 0u128;
+        let mut before = 0u128;
+        let mut through = 0u128;
+        for (index, text) in profile.weth_volume_atoms.iter().enumerate() {
+            let weight = text
+                .parse::<u128>()
+                .map_err(|_| "EXECUTION_PROFILE_INVALID")?;
+            check(weight.to_string() == *text, "EXECUTION_PROFILE_INVALID")?;
+            sum = sum.checked_add(weight).ok_or("EXECUTION_PROFILE_INVALID")?;
+            if index < start as usize {
+                before = sum;
+            }
+            if index < end as usize {
+                through = sum;
+            }
+        }
+        check(sum > 0, "EXECUTION_PROFILE_INVALID")?;
+        let total = U256::from(self.total()?);
+        let allocated = |weight| total * U256::from(weight) / U256::from(sum);
+        // Each cumulative allocation is at most total, which already fits in u128.
+        Ok((allocated(through) - allocated(before)).as_u128())
+    }
+    fn minimum_output(&self) -> Result<Option<u128>> {
+        self.min_total_output_atoms
+            .as_ref()
+            .map(|amount| {
+                let value = amount
+                    .parse::<u128>()
+                    .map_err(|_| "EXECUTION_PRICE_LIMIT_RANGE")?;
+                check(
+                    value > 0 && value.to_string() == *amount,
+                    "EXECUTION_PRICE_LIMIT_RANGE",
+                )?;
+                Ok(value)
+            })
+            .transpose()
+    }
+    fn slice_minimum(&self, input: &str) -> Result<Option<String>> {
+        let Some(floor) = self.minimum_output()? else {
+            return Ok(None);
+        };
+        let input = input
+            .parse::<u128>()
+            .map_err(|_| "EXECUTION_AMOUNT_RANGE")?;
+        let numerator = U256::from(floor) * U256::from(input);
+        let total = U256::from(self.total()?);
+        let floor = numerator / total + U256::from(u8::from(numerator % total != U256::ZERO));
+        Ok(Some(floor.to_string()))
     }
 }
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, Eq, PartialEq)]
@@ -94,6 +208,7 @@ pub enum Phase {
     Paused,
     Stopped,
     Completed,
+    Expired,
 }
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "kebab-case")]
@@ -131,6 +246,137 @@ pub struct Run {
     pub pending: Option<String>,
     pub policy_id: Option<String>,
     pub updated_at_ns: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fixed: Option<FixedSchedule>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub arrival: Option<Arrival>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct Arrival {
+    pub pool: String,
+    pub block: String,
+    pub block_hash: String,
+    pub block_time: u64,
+    pub sqrt_price_x96: String,
+    pub weth_is_token0: bool,
+}
+impl Arrival {
+    fn validate(&self, started: u128) -> Result<()> {
+        let hex = |value: &str, len| {
+            value.len() == len
+                && value.starts_with("0x")
+                && value[2..]
+                    .bytes()
+                    .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+        };
+        let block = self
+            .block
+            .parse::<u64>()
+            .map_err(|_| "EXECUTION_ARRIVAL_INVALID")?;
+        let price = self
+            .sqrt_price_x96
+            .parse::<U256>()
+            .map_err(|_| "EXECUTION_ARRIVAL_INVALID")?;
+        check(
+            hex(&self.pool, 42)
+                && hex(&self.block_hash, 66)
+                && block.to_string() == self.block
+                && price > U256::ZERO
+                && price < (U256::ONE << 160u32)
+                && price.to_string() == self.sqrt_price_x96
+                && started.abs_diff(u128::from(self.block_time) * 1_000_000_000) <= 30_000_000_000,
+            "EXECUTION_ARRIVAL_INVALID",
+        )
+    }
+}
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct FixedSchedule {
+    pub start_at_ns: String,
+    pub end_at_ns: String,
+    pub next_slot: u32,
+    pub skipped_slices: u32,
+    pub skipped_input_atoms: String,
+    pub observed_at_ns: String,
+}
+impl Run {
+    pub fn window(&self, slot: u32) -> Result<DispatchWindow> {
+        let schedule = self.fixed.as_ref().ok_or("EXECUTION_WINDOW_REQUIRED")?;
+        check(slot < self.plan.slices, "EXECUTION_WINDOW_RANGE")?;
+        let start = execution_time(&schedule.start_at_ns)?;
+        let interval = self.plan.interval_ns();
+        let opens = start + interval * u128::from(slot);
+        Ok(DispatchWindow {
+            opens_at_ns: opens.to_string(),
+            closes_at_ns: (opens + interval).to_string(),
+        })
+    }
+    pub fn closed_windows(&self, now: u128) -> Result<u32> {
+        let schedule = self.fixed.as_ref().ok_or("EXECUTION_WINDOW_REQUIRED")?;
+        let start = execution_time(&schedule.start_at_ns)?;
+        Ok(
+            (now.saturating_sub(start) / self.plan.interval_ns()).min(u128::from(self.plan.slices))
+                as u32,
+        )
+    }
+    fn observe(&mut self, now: u128) -> Result<()> {
+        if let Some(schedule) = &mut self.fixed {
+            check(
+                now >= execution_time(&schedule.observed_at_ns)?,
+                "EXECUTION_CLOCK_REGRESSED",
+            )?;
+            schedule.observed_at_ns = now.to_string();
+        }
+        Ok(())
+    }
+    fn skip(&mut self, start: u32, end: u32) -> Result<()> {
+        let amount = self.plan.range_input(start, end)?;
+        let schedule = self.fixed.as_mut().ok_or("EXECUTION_WINDOW_REQUIRED")?;
+        schedule.skipped_slices += end - start;
+        schedule.skipped_input_atoms =
+            (execution_time(&schedule.skipped_input_atoms)? + amount).to_string();
+        Ok(())
+    }
+    fn finish_windows(&mut self) {
+        if self.pending.is_none()
+            && self
+                .fixed
+                .as_ref()
+                .is_some_and(|s| s.next_slot == self.plan.slices)
+        {
+            if self.allocated_input_atoms == self.plan.total_input_atoms {
+                self.phase = Phase::Completed;
+                self.reason = "COMPLETED".into();
+            } else {
+                self.phase = Phase::Expired;
+                if matches!(
+                    self.reason.as_str(),
+                    "STARTED" | "EXECUTION_WINDOW_MISSED" | "EXECUTION_NO_ALLOCATED_INPUT"
+                ) {
+                    self.reason = "EXECUTION_WINDOW_ENDED".into();
+                }
+            }
+        }
+    }
+}
+fn execution_time(value: &str) -> Result<u128> {
+    value.parse().map_err(|_| "INVALID_EXECUTION_TIME".into())
+}
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct DispatchWindow {
+    pub opens_at_ns: String,
+    pub closes_at_ns: String,
+}
+impl DispatchWindow {
+    pub fn remaining(&self, now: u128) -> Result<u128> {
+        check(
+            now >= execution_time(&self.opens_at_ns)?,
+            "EXECUTION_WINDOW_NOT_OPEN",
+        )?;
+        Ok(execution_time(&self.closes_at_ns)?.saturating_sub(now))
+    }
 }
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -140,6 +386,10 @@ pub struct Command {
     pub ordinal: u32,
     pub generation: u32,
     pub input_atoms: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_output_atoms: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window: Option<DispatchWindow>,
     pub stage: Stage,
     pub lease: Option<String>,
     pub intent_ids: Vec<String>,
@@ -169,6 +419,8 @@ pub(super) enum Change {
         run: String,
         policy: String,
         time: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        arrival: Option<Arrival>,
     },
     Stop {
         run: String,
@@ -180,6 +432,14 @@ pub(super) enum Change {
         reason: String,
     },
     Plan {
+        run: String,
+        time: String,
+    },
+    SkipWindows {
+        run: String,
+        time: String,
+    },
+    SkipEmptyWindow {
         run: String,
         time: String,
     },
@@ -224,6 +484,8 @@ impl Store {
                         pending: None,
                         policy_id: None,
                         updated_at_ns: time.clone(),
+                        fixed: None,
+                        arrival: None,
                     },
                     command: None,
                 });
@@ -231,6 +493,8 @@ impl Store {
             Change::Start { run, time, .. }
             | Change::Stop { run, time }
             | Change::Recover { run, time, .. }
+            | Change::SkipWindows { run, time }
+            | Change::SkipEmptyWindow { run, time }
             | Change::Plan { run, time } => (run, time),
             Change::Claim { command, time, .. } => (
                 &self
@@ -256,15 +520,42 @@ impl Store {
             .and_then(|id| self.commands.get(id))
             .cloned();
         match change {
-            Change::Start { policy, .. } => {
+            Change::Start {
+                policy, arrival, ..
+            } => {
                 id(policy)?;
                 check(
                     run.completed_slices < run.plan.slices
                         && run.pending.is_none()
-                        && run.phase != Phase::Running
+                        && !matches!(run.phase, Phase::Running | Phase::Expired)
                         && run.generation < 1000,
                     "EXECUTION_CANNOT_START",
                 )?;
+                if let Some(snapshot) = arrival {
+                    check(run.generation == 0, "EXECUTION_ARRIVAL_IMMUTABLE")?;
+                    snapshot.validate(execution_time(time)?)?;
+                    run.arrival = Some(snapshot.clone());
+                }
+                check(
+                    run.plan.max_arrival_cost_bps.is_none() || run.arrival.is_some(),
+                    "EXECUTION_ARRIVAL_REQUIRED",
+                )?;
+                if run.plan.fixed() {
+                    let now = execution_time(time)?;
+                    if run.fixed.is_none() {
+                        run.fixed = Some(FixedSchedule {
+                            start_at_ns: time.clone(),
+                            end_at_ns: (now + run.plan.interval_ns() * u128::from(run.plan.slices))
+                                .to_string(),
+                            next_slot: 0,
+                            skipped_slices: 0,
+                            skipped_input_atoms: "0".into(),
+                            observed_at_ns: time.clone(),
+                        });
+                    } else {
+                        run.observe(now)?;
+                    }
+                }
                 check(
                     !self.runs.values().any(|other| {
                         other.plan.id != run.plan.id
@@ -305,6 +596,9 @@ impl Store {
                         value.stage = Stage::Unsent;
                         value.reason = "NOT_DISPATCHED".into();
                         run.pending = None;
+                        if value.window.is_some() {
+                            run.skip(value.ordinal - 1, value.ordinal)?;
+                        }
                     } else if value.stage == Stage::Claimed {
                         value.stage = Stage::Uncertain;
                         value.reason = "RECONCILE_REQUIRED".into();
@@ -318,19 +612,37 @@ impl Store {
                         && self.commands.len() < 100000,
                     "EXECUTION_NOT_READY",
                 )?;
-                let ordinal = run.completed_slices + 1;
+                let slot = run
+                    .fixed
+                    .as_ref()
+                    .map_or(run.completed_slices, |s| s.next_slot);
+                let ordinal = slot + 1;
+                let window = if run.fixed.is_some() {
+                    let now = execution_time(time)?;
+                    run.observe(now)?;
+                    let window = run.window(slot)?;
+                    check(window.remaining(now)? > 0, WINDOW_EXPIRED)?;
+                    run.fixed.as_mut().unwrap().next_slot = ordinal;
+                    Some(window)
+                } else {
+                    None
+                };
                 let digest = fingerprint(&(&run.plan.id, ordinal, run.generation))?;
                 let command_id = format!("live:{digest}");
                 check(
                     !self.commands.contains_key(&command_id),
                     "EXECUTION_COMMAND_CONFLICT",
                 )?;
+                let input_atoms = run.plan.slice(slot)?;
+                let min_output_atoms = run.plan.slice_minimum(&input_atoms)?;
                 command = Some(Command {
                     id: command_id.clone(),
                     run: run.plan.id.clone(),
                     ordinal,
                     generation: run.generation,
-                    input_atoms: run.plan.slice(run.completed_slices)?,
+                    input_atoms,
+                    min_output_atoms,
+                    window,
                     stage: Stage::Ready,
                     lease: None,
                     intent_ids: Vec::new(),
@@ -342,6 +654,56 @@ impl Store {
                 run.pending = Some(command_id);
                 run.commands_created += 1;
             }
+            Change::SkipWindows { .. } => {
+                check(run.phase == Phase::Running, "EXECUTION_NOT_READY")?;
+                let now = execution_time(time)?;
+                run.observe(now)?;
+                let closed = run.closed_windows(now)?;
+                let next = run.fixed.as_ref().unwrap().next_slot;
+                let expired_ready = command
+                    .as_ref()
+                    .is_some_and(|c| c.stage == Stage::Ready && c.ordinal <= closed);
+                check(
+                    closed > next || expired_ready,
+                    "EXECUTION_WINDOW_NOT_CLOSED",
+                )?;
+                if expired_ready {
+                    let value = command.as_mut().unwrap();
+                    value.stage = Stage::Unsent;
+                    value.reason = "EXECUTION_WINDOW_MISSED".into();
+                    run.skip(value.ordinal - 1, value.ordinal)?;
+                    run.pending = None;
+                } else {
+                    // A claimed or submitted command keeps its existing evidence.
+                    command = None;
+                }
+                if closed > next {
+                    run.skip(next, closed)?;
+                    run.fixed.as_mut().unwrap().next_slot = closed;
+                }
+                run.reason = "EXECUTION_WINDOW_MISSED".into();
+            }
+            Change::SkipEmptyWindow { .. } => {
+                check(
+                    run.phase == Phase::Running && command.is_none(),
+                    "EXECUTION_NOT_READY",
+                )?;
+                let now = execution_time(time)?;
+                run.observe(now)?;
+                let slot = run
+                    .fixed
+                    .as_ref()
+                    .ok_or("EXECUTION_WINDOW_REQUIRED")?
+                    .next_slot;
+                check(run.window(slot)?.remaining(now)? > 0, WINDOW_EXPIRED)?;
+                check(
+                    run.plan.range_input(slot, slot + 1)? == 0,
+                    "EXECUTION_PROFILE_INVALID",
+                )?;
+                run.skip(slot, slot + 1)?;
+                run.fixed.as_mut().unwrap().next_slot += 1;
+                run.reason = "EXECUTION_NO_ALLOCATED_INPUT".into();
+            }
             Change::Claim {
                 command: id, lease, ..
             } => {
@@ -351,6 +713,11 @@ impl Store {
                     run.phase == Phase::Running && value.id == *id && value.stage == Stage::Ready,
                     "EXECUTION_COMMAND_ALREADY_CLAIMED",
                 )?;
+                if let Some(window) = &value.window {
+                    let now = execution_time(time)?;
+                    run.observe(now)?;
+                    check(window.remaining(now)? > 0, WINDOW_EXPIRED)?;
+                }
                 value.stage = Stage::Claimed;
                 value.lease = Some(lease.clone());
                 value.reason = "DISPATCH_RESERVED".into();
@@ -437,7 +804,12 @@ impl Store {
                     if report.stage.terminal() {
                         run.pending = None;
                     }
-                    if run.phase == Phase::Running {
+                    let expired_unsent = value.window.is_some()
+                        && report.reason == WINDOW_EXPIRED
+                        && matches!(report.stage, Stage::Unsent | Stage::Aborted);
+                    if expired_unsent {
+                        run.skip(value.ordinal - 1, value.ordinal)?;
+                    } else if run.phase == Phase::Running {
                         run.phase = Phase::Paused;
                     }
                     run.reason = report.reason.clone();
@@ -445,6 +817,7 @@ impl Store {
             }
             Change::Create { .. } => unreachable!(),
         }
+        run.finish_windows();
         run.updated_at_ns = time.clone();
         if let Some(value) = command.as_mut() {
             value.updated_at_ns = time.clone();
@@ -501,23 +874,39 @@ impl Ledger {
         Ok(self.execution_run(&id).unwrap().clone())
     }
     pub fn execution_start(&mut self, run: &str, policy: &str) -> Result<Run> {
+        self.execution_start_with_arrival(run, policy, None)
+    }
+    pub fn execution_start_with_arrival(
+        &mut self,
+        run: &str,
+        policy: &str,
+        arrival: Option<Arrival>,
+    ) -> Result<Run> {
         check(!self.faulted, "LEDGER_RESTART_REQUIRED")?;
         if let Some(value) = self.execution_run(run)
             && value.phase == Phase::Running
             && value.policy_id.as_deref() == Some(policy)
         {
+            check(
+                arrival.is_none() || value.arrival == arrival,
+                "EXECUTION_ARRIVAL_IMMUTABLE",
+            )?;
             return Ok(value.clone());
         }
         self.execution_commit(Change::Start {
             run: run.into(),
             policy: policy.into(),
             time: utc_ns(),
+            arrival,
         })?;
         Ok(self.execution_run(run).unwrap().clone())
     }
     pub fn execution_stop(&mut self, run: &str) -> Result<Run> {
         let old = self.execution_run(run).ok_or("EXECUTION_NOT_FOUND")?;
-        if matches!(old.phase, Phase::Stopped | Phase::Completed) {
+        if matches!(
+            old.phase,
+            Phase::Stopped | Phase::Completed | Phase::Expired
+        ) {
             return Ok(old.clone());
         }
         self.execution_commit(Change::Stop {
@@ -527,21 +916,42 @@ impl Ledger {
         Ok(self.execution_run(run).unwrap().clone())
     }
     pub fn execution_plan(&mut self, run: &str) -> Result<Command> {
+        self.execution_plan_at(run, clock::now_ns())
+    }
+    pub fn execution_plan_at(&mut self, run: &str, now: u128) -> Result<Command> {
         self.execution_commit(Change::Plan {
             run: run.into(),
-            time: utc_ns(),
+            time: now.to_string(),
         })?;
         Ok(self
             .execution_command(self.execution_run(run).unwrap().pending.as_ref().unwrap())
             .unwrap()
             .clone())
     }
+    pub fn execution_skip_windows(&mut self, run: &str, now: u128) -> Result<()> {
+        self.execution_commit(Change::SkipWindows {
+            run: run.into(),
+            time: now.to_string(),
+        })
+    }
+    pub fn execution_skip_empty_window(&mut self, run: &str, now: u128) -> Result<()> {
+        self.execution_commit(Change::SkipEmptyWindow {
+            run: run.into(),
+            time: now.to_string(),
+        })
+    }
     pub fn execution_claim(&mut self, command: &str, lease: &str) -> Result<Command> {
+        self.execution_claim_at(command, lease, clock::now_ns())
+    }
+    pub fn execution_claim_at(&mut self, command: &str, lease: &str, now: u128) -> Result<Command> {
         check(!self.faulted, "LEDGER_RESTART_REQUIRED")?;
         let old = self
             .execution_command(command)
             .ok_or("EXECUTION_COMMAND_NOT_FOUND")?;
         let run = self.execution_run(&old.run).ok_or("EXECUTION_NOT_FOUND")?;
+        if let Some(window) = &old.window {
+            check(window.remaining(now)? > 0, WINDOW_EXPIRED)?;
+        }
         if old.stage == Stage::Claimed
             && old.lease.as_deref() == Some(lease)
             && run.phase == Phase::Running
@@ -551,7 +961,7 @@ impl Ledger {
         self.execution_commit(Change::Claim {
             command: command.into(),
             lease: lease.into(),
-            time: utc_ns(),
+            time: now.to_string(),
         })?;
         Ok(self.execution_command(command).unwrap().clone())
     }

@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
-import { WalletTokenEditor } from './wallet-token-editor';
+import { WalletTokenEditor, type WalletChainOption } from './wallet-token-editor';
 import { walletBudget, type WalletPeriodSnapshot } from '../../shared/wallet-budget';
 import { executionPercent } from '../../shared/quant-execution-format';
 import { walletStatus } from './wallet-panel';
@@ -11,14 +11,19 @@ const esc = (v: unknown) =>
 export class WalletPeriodEditor {
   root: HTMLDetailsElement;
   private tokens: WalletTokenEditor;
-  constructor(t: (key: string) => string, initial: unknown, locked = false) {
+  constructor(
+    t: (key: string) => string,
+    initial: unknown,
+    locked = false,
+    networks: WalletChainOption[] = [],
+  ) {
     const p = (initial || {}) as Record<string, unknown>,
       seconds = Number(p.seconds || 3600),
       presets = [3600, 86400, 604800, 2592000];
     this.root = document.createElement('details');
     this.root.className = 'wallet-policy-limits wallet-period-editor';
     this.root.innerHTML = `<summary>${esc(t('periodTitle'))}</summary><p>${esc(t('periodHint'))}</p><label class="wallet-scope-toggle"><span>${esc(t('periodEnable'))}</span><input type="checkbox" role="switch" name="period-enabled" ${initial ? 'checked' : ''} ${locked ? 'disabled' : ''}></label><div data-period-fields><div class="wallet-policy-grid"><label>${esc(t('periodSeconds'))}<select name="period-preset" ${locked ? 'disabled' : ''}>${presets.map((s, i) => `<option value="${s}" ${seconds === s ? 'selected' : ''}>${esc(t(['periodHour', 'periodDay', 'periodWeek', 'periodMonth'][i]!))}</option>`).join('')}<option value="custom" ${presets.includes(seconds) ? '' : 'selected'}>${esc(t('periodCustom'))}</option></select></label><label data-custom-seconds>${esc(t('periodCustom'))}<input name="period-custom" type="number" min="1" max="2592000" step="1" value="${seconds}" ${locked ? 'disabled' : ''}></label>${['maxTotalValueEth', 'maxTotalFeeEth', 'maxTransactions'].map((k) => `<label>${esc(t(k))}<input name="period-${k}" inputmode="${k === 'maxTransactions' ? 'numeric' : 'decimal'}" value="${esc(p[k] ?? '0')}" maxlength="49" required></label>`).join('')}</div><div data-period-tokens></div></div>${locked ? `<p>${esc(t('periodLocked'))}</p>` : ''}`;
-    this.tokens = new WalletTokenEditor(t, p.tokens);
+    this.tokens = new WalletTokenEditor(t, p.tokens, networks);
     this.root.querySelector('[data-period-tokens]')!.append(this.tokens.root);
     const enabled = this.root.querySelector<HTMLInputElement>('[name=period-enabled]')!,
       preset = this.root.querySelector<HTMLSelectElement>('[name=period-preset]')!,

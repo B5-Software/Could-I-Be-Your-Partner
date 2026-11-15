@@ -7,10 +7,15 @@ const nativePaperLabels = require('../shared/quant-native-paper-labels.json');
 const strategyLabels = require('../shared/quant-strategy-labels.json');
 const eventLabels = require('../shared/quant-event-labels.json');
 const executionLabels = require('../shared/quant-execution-labels.json');
+const baseHistoryLabels = require('../shared/quant-base-history-labels.json');
+const validationLabels = require('../shared/quant-validation-labels.json');
+const { signedAmount } = require('../shared/quant-execution-format');
 const fs = require('node:fs/promises'),
   path = require('node:path');
 const labels = {
   zh: {
+    ...baseHistoryLabels.zh,
+    ...validationLabels.zh,
     ...strategyLabels.zh,
     ...eventLabels.zh,
     ...executionLabels.zh,
@@ -51,6 +56,9 @@ const labels = {
     unknown: '未提供',
     partial: '这是原文片段的归档，并非全文。',
     run: '运行回测',
+    return: '收益',
+    drawdown: '最大回撤',
+    fills: '成交',
     risk: '仿真风控',
     cash: '初始模拟资金',
     fast: '快均线周期',
@@ -68,6 +76,8 @@ const labels = {
     empty: '暂无记录',
   },
   en: {
+    ...baseHistoryLabels.en,
+    ...validationLabels.en,
     ...strategyLabels.en,
     ...eventLabels.en,
     ...executionLabels.en,
@@ -108,6 +118,9 @@ const labels = {
     unknown: 'Not provided',
     partial: 'This archive is a slice, not the whole article.',
     run: 'Run backtest',
+    return: 'Return',
+    drawdown: 'Maximum drawdown',
+    fills: 'Fills',
     risk: 'Paper risk',
     cash: 'Initial simulated cash',
     fast: 'Fast moving-average period',
@@ -125,6 +138,8 @@ const labels = {
     empty: 'No records',
   },
   de: {
+    ...baseHistoryLabels.de,
+    ...validationLabels.de,
     ...strategyLabels.de,
     ...eventLabels.de,
     ...executionLabels.de,
@@ -165,6 +180,9 @@ const labels = {
     unknown: 'Nicht angegeben',
     partial: 'Dieses Archiv ist ein Ausschnitt, nicht der vollständige Artikel.',
     run: 'Backtest ausführen',
+    return: 'Rendite',
+    drawdown: 'Maximaler Drawdown',
+    fills: 'Ausführungen',
     risk: 'Simulationsrisiko',
     cash: 'Anfängliches Simulationskapital',
     fast: 'Kurzer gleitender Durchschnitt',
@@ -657,6 +675,9 @@ class QuantBrowser {
   }
   async project(id) {
     const project = await this.call('workspace.get', { id });
+    const replayDataset = project.datasets?.find(
+      (dataset) => dataset.id === project.preferences?.datasetId && (dataset.amm || dataset.series),
+    );
     const actions = [
       'back',
       'chat',
@@ -667,6 +688,8 @@ class QuantBrowser {
       'nsTitle',
       'qeTitle',
       'refresh',
+      ...(project.network ? ['ammHistory'] : []),
+      ...(replayDataset ? ['ammReplay', 'ammScenario'] : []),
       'import',
       project.paper.status === 'running' ? 'paperPause' : 'paperStart',
       'orders',
@@ -674,6 +697,7 @@ class QuantBrowser {
       'audit',
       'research',
       'run',
+      'walkForward',
       'dataset',
       'risk',
     ];
@@ -704,6 +728,10 @@ class QuantBrowser {
         if (action === 'orders' || action === 'runs' || action === 'audit' || action === 'research')
           return this.history(id, action);
         if (action === 'import') return this.importFile(id);
+        if (action === 'ammHistory') return this.baseHistory(project);
+        if (action === 'ammReplay') return this.ammReplay(project, replayDataset);
+        if (action === 'ammScenario') return this.ammScenario(project, replayDataset);
+        if (action === 'walkForward') return this.walkForward(project);
         if (action === 'dataset')
           return this.menu(
             this.text('dataset'),
@@ -758,7 +786,18 @@ class QuantBrowser {
                 [{ label: this.text('back'), value: 0 }],
                 () => this.project(id),
                 JSON.stringify(
-                  { metrics: result.metrics, assumptions: result.assumptions },
+                  {
+                    metrics: result.metrics,
+                    assumptions: result.assumptions,
+                    ...(result.dataSeries && {
+                      coverage: {
+                        start: new Date(result.dataSeries.startTime * 1000).toISOString(),
+                        end: new Date(result.dataSeries.endTime * 1000).toISOString(),
+                        segments: result.dataSeries.segments.length,
+                        emptyIntervals: result.dataSeries.gaps,
+                      },
+                    }),
+                  },
                   null,
                   2,
                 ),
@@ -777,6 +816,416 @@ class QuantBrowser {
         return this.project(id);
       },
       details,
+    );
+  }
+  walkForward(project) {
+    const back = () => this.project(project.id);
+    const defaults = {
+      wfTrainBars: 120,
+      wfTestBars: 30,
+      wfFolds: 3,
+      wfFast: '5, 9, 15',
+      wfSlow: '21, 34, 55',
+      cash: '10000',
+      feeBps: project.risk.feeBps,
+      slippageBps: project.risk.slippageBps,
+      ammReplayAllocation: 2500,
+    };
+    return this.fields(
+      Object.keys(defaults),
+      defaults,
+      async (values) => {
+        const periods = (value) => value.split(/[,，]/).map((item) => Number(item.trim()));
+        try {
+          const run = await this.call('run.walk-forward', {
+            id: project.id,
+            datasetId: project.preferences.datasetId ?? undefined,
+            config: {
+              trainBars: Number(values.wfTrainBars),
+              testBars: Number(values.wfTestBars),
+              folds: Number(values.wfFolds),
+              fastPeriods: periods(values.wfFast),
+              slowPeriods: periods(values.wfSlow),
+              initialCash: values.cash,
+              feeBps: values.feeBps,
+              slippageBps: values.slippageBps,
+              allocationBps: Number(values.ammReplayAllocation),
+            },
+          });
+          return this.walkForwardReport(project.id, run, back);
+        } catch (error) {
+          if (/WALK_FORWARD_MORE_CANDLES/.test(error.message)) throw Error(this.text('wfMore'));
+          if (/WALK_FORWARD_GRID|WALK_FORWARD_PARAMETERS/.test(error.message))
+            throw Error(this.text('wfInvalid'));
+          throw error;
+        }
+      },
+      back,
+    );
+  }
+  walkForwardReport(id, run, back) {
+    const report = () => this.walkForwardReport(id, run, back);
+    const name = (index) => this.text('wfRound').replace('{n}', String(index));
+    const date = (time) => new Date(time * 1000).toLocaleString();
+    const stats = (metrics) =>
+      `${this.text('return')} ${metrics.returnPct.toFixed(2)}% · ${this.text('drawdown')} ${metrics.maxDrawdownPct.toFixed(2)}% · ${this.text('fills')} ${metrics.fills}`;
+    this.menu(
+      this.text('walkForward'),
+      [
+        { label: this.text('back'), value: 'back' },
+        ...run.walkForward.windows.map((window) => ({
+          label: `${name(window.index)} · ${window.selected.fast} / ${window.selected.slow}`,
+          value: window.index,
+        })),
+      ],
+      async (index) => {
+        if (index === 'back') return back();
+        const fold = await this.call('run.walk-forward.fold', { id, runId: run.id, fold: index });
+        const ranking = (offset = 0) => {
+          const options = [{ label: this.text('back'), value: 'back' }];
+          if (offset) options.push({ label: this.text('previous'), value: 'previous' });
+          if (offset + 6 < fold.trainingScores.length)
+            options.push({ label: this.text('next'), value: 'next' });
+          return this.menu(
+            name(index),
+            options,
+            (choice) =>
+              choice === 'back' ? report() : ranking(offset + (choice === 'next' ? 6 : -6)),
+            [
+              `${this.text('wfTraining')} ${date(fold.training.start)} – ${date(fold.training.end)}`,
+              `${this.text('wfTesting')} ${date(fold.testing.start)} – ${date(fold.testing.end)}`,
+              stats(fold.metrics),
+              `\n${this.text('wfRanking')}`,
+              ...fold.trainingScores
+                .slice(offset, offset + 6)
+                .map((row, i) => `${offset + i + 1}. ${row.fast} / ${row.slow} · ${stats(row)}`),
+            ].join('\n'),
+            report,
+          );
+        };
+        return ranking();
+      },
+      `${this.text('wfHint')}\n${this.text('wfCandidates')} ${run.walkForward.candidateCount}\n${stats(run.metrics)}`,
+      back,
+    );
+  }
+  ammScenario(project, dataset) {
+    const back = () => this.project(project.id);
+    const config = { initialWeth: '1', legs: [] };
+    const editor = () => {
+      const options = [{ label: this.text('back'), value: 'back' }];
+      if (config.legs.length < 8)
+        options.push(
+          { label: `${this.text('sell')} WETH`, value: 'sell' },
+          { label: `${this.text('buy')} WETH`, value: 'buy' },
+        );
+      if (config.legs.length)
+        options.push(
+          { label: this.text('ammScenarioRemove'), value: 'remove' },
+          { label: this.text('run'), value: 'run' },
+        );
+      const body = config.legs
+        .map(
+          (leg, index) =>
+            `${index + 1}. ${this.text(leg.side)} ${leg.amountIn} ${leg.side === 'buy' ? 'USDC' : 'WETH'}`,
+        )
+        .join('\n');
+      this.menu(
+        this.text('ammScenario'),
+        options,
+        async (action) => {
+          if (action === 'back') return back();
+          if (action === 'remove') {
+            config.legs.pop();
+            return editor();
+          }
+          if (action === 'run') {
+            const run = await this.call('run.amm.scenario', {
+              id: project.id,
+              datasetId: dataset.id,
+              config,
+            });
+            const result = run.ammScenario;
+            const rows = result.legs
+              .map((leg) => {
+                const buy = leg.side === 'buy';
+                const outcome =
+                  leg.status === 'reverted'
+                    ? this.text('ammScenarioRevert')
+                    : `${signedAmount(leg.amountOutAtoms, buy ? 18 : 6)} ${buy ? 'WETH' : 'USDC'}`;
+                return `${leg.index}. ${outcome}${leg.deltaOutAtoms === undefined ? '' : ` · ${this.text('ammScenarioBaseline')} ${signedAmount(leg.deltaOutAtoms, buy ? 18 : 6)}`}`;
+              })
+              .join('\n');
+            return this.menu(
+              this.text('ammScenario'),
+              [{ label: this.text('back'), value: 'back' }],
+              editor,
+              `#${result.anchor.block} · ${this.text('ammScenarioGas')} ${result.totalSwapGas}\n${rows}\n${this.text('ammScenarioModel')}`,
+              editor,
+            );
+          }
+          const buy = action === 'buy';
+          return this.ui.input(
+            `${this.text('ammScenarioAmount')} · ${buy ? 'USDC' : 'WETH'}`,
+            (amountIn) =>
+              this.ui.input(
+                `${this.text('ammScenarioMinimum')} · ${buy ? 'WETH' : 'USDC'}`,
+                (minimumOut) => {
+                  config.legs.push({ side: action, amountIn, minimumOut: minimumOut || undefined });
+                  editor();
+                },
+                { back: editor },
+              ),
+            { back: editor },
+          );
+        },
+        `${dataset.label}\n${this.text('ammScenarioHint')}\n${body}`,
+        back,
+      );
+    };
+    return this.ui.input(
+      this.text('ammScenarioFunds'),
+      (initialWeth) => {
+        config.initialWeth = initialWeth;
+        return this.ui.input(
+          this.text('ammScenarioAnchor'),
+          (anchor) => {
+            config.anchorBlock = anchor.trim() ? Number(anchor) : undefined;
+            editor();
+          },
+          { back },
+        );
+      },
+      { value: config.initialWeth, back },
+    );
+  }
+  ammReplay(project, dataset) {
+    const back = () => this.project(project.id);
+    const defaults = {
+      fast: 9,
+      slow: 21,
+      ammReplayCash: '10000',
+      ammReplayFee: '0',
+      ammFeeCap: '1',
+      ammFeeTip: '0',
+      ammFeeOverhead: 55000,
+      ammReplayAllocation: 2500,
+      ammReplayDelay: 1,
+      ammReplayLimit: 16,
+      ammReplayAdverse: '',
+    };
+    this.menu(
+      this.text('ammReplay'),
+      [
+        { label: this.text('back'), value: 'back' },
+        { label: this.text('ammReplayHold'), value: 'buy-hold' },
+        { label: 'SMA', value: 'sma-cross' },
+      ],
+      async (strategy) => {
+        if (strategy === 'back') return back();
+        const fees = (feeMode) => {
+          if (feeMode === 'back') return back();
+          const hidden =
+            feeMode === 'historical'
+              ? ['ammReplayFee']
+              : ['ammFeeCap', 'ammFeeTip', 'ammFeeOverhead'];
+          if (strategy !== 'sma-cross') hidden.push('fast', 'slow');
+          const names = Object.keys(defaults).filter((field) => !hidden.includes(field));
+          return this.fields(
+            names,
+            defaults,
+            async (values) => {
+              const result = await this.call('run.amm', {
+                id: project.id,
+                datasetId: dataset.id,
+                config: {
+                  strategy,
+                  fast: values.fast,
+                  slow: values.slow,
+                  initialCash: values.ammReplayCash,
+                  feeMode,
+                  ...(feeMode === 'historical'
+                    ? {
+                        networkFeeCapUsdc: values.ammFeeCap,
+                        tipGwei: values.ammFeeTip,
+                        routerOverheadGas: Number(values.ammFeeOverhead),
+                      }
+                    : { fixedFeeUsdc: values.ammReplayFee }),
+                  allocationBps: Number(values.ammReplayAllocation),
+                  delayBlocks: Number(values.ammReplayDelay),
+                  maxQuotes: Number(values.ammReplayLimit),
+                  maxAdverseBps:
+                    values.ammReplayAdverse === '' ? undefined : Number(values.ammReplayAdverse),
+                },
+              });
+              this.menu(
+                this.text('ammReplay'),
+                [{ label: this.text('back'), value: 'back' }],
+                back,
+                this.text('ammReplayModel') +
+                  '\n' +
+                  JSON.stringify(
+                    {
+                      metrics: result.metrics,
+                      quotes: result.ammReplay.attempts.length,
+                      pendingAtEnd: result.ammReplay.pendingAtEnd,
+                      networkFees: result.ammReplay.networkFees,
+                    },
+                    null,
+                    2,
+                  ),
+                back,
+              );
+            },
+            back,
+          );
+        };
+        return this.menu(
+          this.text('ammFeeMode'),
+          [
+            { label: this.text('ammFeeFixed'), value: 'fixed' },
+            { label: this.text('ammFeeHistorical'), value: 'historical' },
+            { label: this.text('back'), value: 'back' },
+          ],
+          fees,
+          '',
+          back,
+        );
+      },
+      `${dataset.label}\n${this.text('ammReplayHint')}`,
+      back,
+    );
+  }
+  async baseHistory(project, offset = 0) {
+    const { id, market } = project;
+    const selected = project.datasets.find((d) => d.id === project.preferences.datasetId && d.amm);
+    const canContinue =
+      selected?.amm?.chainId === project.network.id &&
+      selected.amm.fee === market.poolFee &&
+      selected.amm.interval === market.interval;
+    const { maxCount, defaultCount } = project.network.historyWindow;
+    const options = [{ label: this.text('back'), value: 'back' }];
+    if (maxCount) options.push({ label: this.text('ammCapture'), value: 'capture' });
+    if (maxCount && canContinue)
+      options.push({ label: this.text('ammContinue'), value: 'continue' });
+    let body = this.text(maxCount ? 'ammHint' : 'ammTooWide');
+    const recorder = project.network.recorder;
+    if (recorder) {
+      const phase = this.text(
+        'ammRecord' + recorder.phase[0].toUpperCase() + recorder.phase.slice(1),
+      );
+      body += `\n${this.text('ammRecord')} · ${phase}`;
+      if (recorder.startTime != null && recorder.endTime != null)
+        body += `\n${new Date(recorder.startTime * 1000).toLocaleString()} – ${new Date(recorder.endTime * 1000).toLocaleString()}`;
+      if (recorder.lastError) body += '\n' + recorder.lastError;
+      if (recorder.pauseReason === 'market-changed')
+        body += '\n' + this.text('ammRecordMarketChanged');
+      if (recorder.pauseReason === 'review') body += '\n' + this.text('ammRecordReview');
+      if (recorder.nextAt && recorder.phase !== 'capturing')
+        body += `\n${this.text('ammRecordNext')} ${new Date(recorder.nextAt).toLocaleTimeString()}`;
+      if (['idle', 'paused'].includes(recorder.phase)) {
+        if (maxCount) options.push({ label: this.text('ammRecordStart'), value: 'record-start' });
+        if (maxCount && canContinue)
+          options.push({ label: this.text('ammRecordSelected'), value: 'record-selected' });
+        if (recorder.canResume)
+          options.push({ label: this.text('ammRecordResume'), value: 'record-resume' });
+      } else options.push({ label: this.text('ammRecordStop'), value: 'record-stop' });
+      if (recorder.datasetId)
+        options.push({ label: this.text('ammRecordLatest'), value: 'record-latest' });
+      options.push({ label: this.text('refresh'), value: 'record-refresh' });
+    }
+    if (selected) {
+      options.push({ label: this.text('ammSeriesCreate'), value: 'series' });
+      const limit = 10;
+      const { items, total } = await this.call('base.history.trades', {
+        id,
+        datasetId: selected.id,
+        offset,
+        limit,
+      });
+      body += `\n${new Date(selected.start * 1000).toLocaleString()} – ${new Date(selected.end * 1000).toLocaleString()}`;
+      body += items.length
+        ? `\n${offset + 1}–${offset + items.length} / ${total} · ${this.text('ammDeltas')} · WETH / USDC\n${items.map((trade) => `#${trade.block}/${trade.logIndex}  ${signedAmount(trade.wethDeltaAtoms, 18)} / ${signedAmount(trade.usdcDeltaAtoms, 6)}`).join('\n')}`
+        : '\n' + this.text('ammEmpty');
+      if (offset) options.push({ label: this.text('previous'), value: offset - limit });
+      if (offset + items.length < total)
+        options.push({ label: this.text('next'), value: offset + limit });
+    }
+    this.menu(
+      this.text('ammHistory'),
+      options,
+      async (action) => {
+        if (action === 'back') return this.project(id);
+        if (typeof action === 'number') return this.baseHistory(project, action);
+        if (action === 'series')
+          return this.ui.input(
+            this.text('ammSeriesWindow'),
+            async (windows) => {
+              try {
+                await this.call('base.history.series', {
+                  id,
+                  datasetId: selected.id,
+                  windows: Number(windows),
+                  select: true,
+                });
+              } catch (error) {
+                if (/BASE_SERIES_READ_LIMIT/.test(String(error)))
+                  throw Error(this.text('ammSeriesLimit'));
+                throw error;
+              }
+              return this.project(id);
+            },
+            {
+              value: String(Math.ceil(86400 / selected.amm.interval)),
+              back: () => this.baseHistory(project),
+            },
+          );
+        if (action.startsWith('record-')) {
+          if (action === 'record-latest') {
+            await this.call('workspace.update', {
+              id,
+              preferences: { datasetId: recorder.datasetId },
+            });
+          } else if (action !== 'record-refresh') {
+            await this.call(
+              action === 'record-stop' ? 'base.history.record.stop' : 'base.history.record.start',
+              {
+                id,
+                resume: action === 'record-resume',
+                afterDatasetId: action === 'record-selected' ? selected.id : undefined,
+              },
+            );
+          }
+          return this.baseHistory(await this.call('workspace.get', { id }));
+        }
+        return this.ui.input(
+          this.text('ammWindow'),
+          async (count) => {
+            try {
+              await this.call('base.history.capture', {
+                id,
+                count: Number(count),
+                afterDatasetId: action === 'continue' ? selected.id : undefined,
+                select: true,
+              });
+            } catch (error) {
+              if (/BASE_HISTORY_UP_TO_DATE/.test(String(error)))
+                throw Error(this.text('ammUpToDate'));
+              if (
+                /BASE_HISTORY_TIMEOUT|EXECUTION_PROFILE_LIMIT|EXECUTION_PROFILE_RATE_LIMIT/.test(
+                  String(error),
+                )
+              )
+                throw Error(this.text('ammRetryShorter'));
+              throw error;
+            }
+            return this.baseHistory(await this.call('workspace.get', { id }));
+          },
+          { value: String(defaultCount), back: () => this.baseHistory(project) },
+        );
+      },
+      body,
+      () => this.project(id),
     );
   }
   fields(names, initial, done, back, values = {}) {
@@ -879,13 +1328,31 @@ class QuantBrowser {
         () => this.project(id),
       );
     }
+    if (kind === 'runs') {
+      options.push(
+        ...result.items
+          .filter((row) => row.codeVersion === 'candle-walk-forward-1')
+          .map((row) => ({
+            label: `${this.text('walkForward')} · ${new Date(row.createdAt).toLocaleString()}`,
+            value: 'walk:' + row.id,
+          })),
+      );
+    }
     this.menu(
       this.text(kind),
       options,
-      (value) =>
-        value === 'back'
-          ? this.project(id)
-          : this.history(id, kind, value === 'next' ? result.nextOffset : Math.max(0, offset - 15)),
+      async (value) => {
+        if (value === 'back') return this.project(id);
+        if (value.startsWith('walk:')) {
+          const run = await this.call('run.get', { id, runId: value.slice(5) });
+          return this.walkForwardReport(id, run, () => this.history(id, kind, offset));
+        }
+        return this.history(
+          id,
+          kind,
+          value === 'next' ? result.nextOffset : Math.max(0, offset - 15),
+        );
+      },
       JSON.stringify(result.items, null, 2),
       () => this.project(id),
     );

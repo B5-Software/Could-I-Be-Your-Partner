@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 'use strict';
 const { tokenAmount } = require('./wallet-token-format');
+const { chainLabel } = require('./wallet-chain');
 function walletBudget(snapshot) {
   if (!snapshot) return [];
   const { limits, usage } = snapshot;
@@ -10,14 +11,14 @@ function walletBudget(snapshot) {
       used: usage.valueWei,
       limit: limits.maxTotalValueWei,
       decimals: 18,
-      asset: 'ETH',
+      asset: '',
     },
     {
       label: 'usedFee',
       used: usage.feeWei,
       limit: limits.maxTotalFeeWei,
       decimals: 18,
-      asset: 'ETH',
+      asset: '',
     },
     {
       label: 'usedCount',
@@ -30,7 +31,7 @@ function walletBudget(snapshot) {
   for (const token of limits.tokens ?? []) {
     const id = `eip155:${token.chainId}/erc20:${token.address.toLowerCase()}`,
       used = usage.tokens?.[id] ?? { transferAtoms: '0', approvalAtoms: '0' };
-    const asset = `${token.symbol || token.address} · ${token.chainId === 8453 ? 'Base' : 'Base Sepolia'}`;
+    const asset = `${token.symbol || token.address} · ${chainLabel(token.chainId)}`;
     for (const [label, amount] of [
       ['usedTotal', String(BigInt(used.transferAtoms) + BigInt(used.approvalAtoms))],
       ['usedTransfer', used.transferAtoms],

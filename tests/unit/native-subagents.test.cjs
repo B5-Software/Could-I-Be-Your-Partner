@@ -232,6 +232,7 @@ test('quant native child uses isolated history, trusted identity and actual nati
     saveConversation: async (_id, payload) => rootHistories.push(payload),
     dispose() {},
     liveTransaction: QuantService.prototype.liveTransaction,
+    evmContext: QuantService.prototype.evmContext,
   };
   const f = await fixture(
     t,

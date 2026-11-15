@@ -1,7 +1,14 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 'use strict';
 const { randomUUID } = require('node:crypto');
-const { executionAmount } = require('../shared/quant-execution-format');
+const {
+  executionAmount,
+  executionPercent,
+  executionSettlementRows,
+  executionBenchmarkRows,
+  executionArrivalRows,
+} = require('../shared/quant-execution-format');
+const schedules = { settlement: 'leAfterFinality', 'fixed-window': 'leFixed', vwap: 'leVwap' };
 class LiveExecutionBrowser {
   constructor(parent) {
     this.parent = parent;
@@ -77,7 +84,7 @@ class LiveExecutionBrowser {
       () => this.parent.project(id),
     );
   }
-  async detail(id, runId, offset = 0) {
+  async detail(id, runId, offset = 0, error = '') {
     const [view, history, { wallets }] = await Promise.all([
       this.call('get', { id, runId }),
       this.call('commands', { id, runId, offset, limit: 20 }),
@@ -86,18 +93,32 @@ class LiveExecutionBrowser {
     const run = view.run,
       plan = run.plan,
       wallet = wallets.find((w) => w.id === plan.wallet);
+    const fixed = plan.template === 'base-twap-fixed-v1' || Boolean(plan.vwap);
+    const time = (ns) => new Date(Number(BigInt(ns) / 1000000n)).toLocaleString();
     const unit = plan.side === 'buy' ? 'USDC' : 'WETH',
       amount = (value) => executionAmount(value, plan.side === 'buy' ? 6 : 18);
+    const output = (value) =>
+      plan.side === 'buy'
+        ? executionAmount(value, 18) + ' WETH'
+        : executionAmount(value, 6) + ' USDC';
     const authorized =
       wallet?.unlocked &&
       wallet.policy.mode === 'autonomous' &&
       wallet.policy.chains.includes(plan.chain_id) &&
       (!wallet.policy.expiresAt || wallet.policy.expiresAt > Date.now());
     const options = ['leBack', 'leWallet', 'leRefresh'];
+    if (view.profile) options.push('leProfileWeights');
+    if (view.benchmarkReady && !view.benchmark) options.push('leBenchmark');
     if (['paused', 'stopped'].includes(run.phase) && !run.pending && authorized)
       options.push('leStart');
-    if (!['completed', 'stopped'].includes(run.phase)) options.push('leStop');
-    if (run.pending) options.push('leReconcile');
+    if (!['completed', 'stopped', 'expired'].includes(run.phase)) options.push('leStop');
+    if (
+      run.pending ||
+      view.settlement?.receiptsMissing ||
+      (view.settlement &&
+        view.settlement.fees.operatorReceipts < view.settlement.fees.finalizedTransactions)
+    )
+      options.push('leReconcile');
     if (offset) options.push('lePrevious');
     if (history.next !== null) options.push('leNext');
     const body = [
@@ -119,12 +140,60 @@ class LiveExecutionBrowser {
         (view.feeUsage.budgetWei ? executionAmount(view.feeUsage.budgetWei, 18) : '—') +
         ' ETH',
       this.text('leFeeHint'),
+      ...executionSettlementRows(plan.side, view.settlement, (key) => this.text(key)).map(
+        ([label, value]) => label + ' · ' + value,
+      ),
+      ...(run.arrival && view.arrivalComparison
+        ? [
+            this.text('leArrival'),
+            this.text('leArrivalScope'),
+            ...executionArrivalRows(run.arrival, view.arrivalComparison, (key) =>
+              this.text(key),
+            ).map(([label, value]) => label + ' · ' + value),
+            run.arrival.block_hash,
+          ]
+        : []),
+      ...(view.benchmark
+        ? [
+            this.text('leBenchmark'),
+            this.text('leBenchmarkScope'),
+            ...executionBenchmarkRows(view.benchmark, (key) => this.text(key)).map(
+              ([label, value]) => label + ' · ' + value,
+            ),
+          ]
+        : []),
+      error,
       this.text('leSlices') + ': ' + run.completed_slices + ' / ' + plan.slices,
+      this.text(plan.vwap ? 'leVwap' : fixed ? 'leFixed' : 'leAfterFinality'),
       this.text('leInterval') + ': ' + plan.interval_ms / 1000,
+      fixed
+        ? this.text('leWindow') +
+          ' · ' +
+          (run.fixed
+            ? time(run.fixed.start_at_ns) + ' → ' + time(run.fixed.end_at_ns)
+            : this.text('leFirstStart'))
+        : '',
+      run.fixed
+        ? this.text('leSkipped') +
+          ' · ' +
+          run.fixed.skipped_slices +
+          ' · ' +
+          amount(run.fixed.skipped_input_atoms) +
+          ' ' +
+          unit
+        : '',
       this.text('leSlippage') + ': ' + plan.slippage_bps / 100 + '%',
+      this.text('leMinimumTotal') +
+        ' · ' +
+        (plan.min_total_output_atoms
+          ? output(plan.min_total_output_atoms)
+          : this.text('leQuoteOnly')),
+      plan.max_arrival_cost_bps === undefined
+        ? ''
+        : this.text('leArrivalLimit') + ' · ' + plan.max_arrival_cost_bps + ' bp',
       this.text(!wallet?.unlocked ? 'leLocked' : authorized ? 'leGranted' : 'leAutoRequired'),
       run.pending ? this.text(run.phase === 'running' ? 'leFinality' : 'lePending') : '',
-      view.lastError ? this.status(view.lastError) : '',
+      view.lastError || run.phase === 'expired' ? this.status(view.lastError || run.reason) : '',
       this.text('leHistory') + ': ' + history.total,
       ...history.items.map((command) =>
         [
@@ -137,6 +206,24 @@ class LiveExecutionBrowser {
             unit +
             ' · ' +
             this.status(command.stage),
+          ...(command.window
+            ? [
+                this.text('leWindow') +
+                  ' · ' +
+                  time(command.window.opens_at_ns) +
+                  ' → ' +
+                  time(command.window.closes_at_ns),
+              ]
+            : []),
+          ...(command.min_output_atoms
+            ? [this.text('leMinimumSlice') + ' · ' + output(command.min_output_atoms)]
+            : []),
+          ...(command.min_arrival_output_atoms
+            ? [this.text('leArrivalMinimum') + ' · ' + output(command.min_arrival_output_atoms)]
+            : []),
+          ...executionSettlementRows(plan.side, command.settlement, (key) => this.text(key)).map(
+            ([label, value]) => label + ' · ' + value,
+          ),
           ...command.hashes,
         ].join('\n'),
       ),
@@ -149,6 +236,8 @@ class LiveExecutionBrowser {
       async (value) => {
         if (value === 'leBack') return this.open(id);
         if (value === 'leWallet') return this.parent.ui.open();
+        if (value === 'leProfileWeights')
+          return this.profile(view.profile, () => this.detail(id, runId, offset));
         if (value === 'leNext' || value === 'lePrevious')
           return this.detail(
             id,
@@ -158,10 +247,59 @@ class LiveExecutionBrowser {
         if (value === 'leStart') await this.call('start', { id, runId });
         if (value === 'leStop') await this.call('stop', { id, runId });
         if (value === 'leReconcile') await this.call('reconcile', { id, runId });
+        if (value === 'leBenchmark') {
+          try {
+            await this.call('benchmark', { id, runId });
+          } catch (failure) {
+            return this.detail(id, runId, offset, this.status(failure.message));
+          }
+        }
         return this.detail(id, runId, offset);
       },
       body,
       () => this.open(id),
+    );
+  }
+  profile(profile, back, offset = 0) {
+    const pageSize = 5;
+    const volumes = profile.wethVolumeAtoms;
+    const total = volumes.reduce((sum, value) => sum + BigInt(value), 0n).toString();
+    const options = ['leBack'];
+    if (offset > 0) options.push('lePrevious');
+    if (offset + pageSize < volumes.length) options.push('leNext');
+    const lines = [
+      this.text('leProfilePool') + ' · ' + profile.pool,
+      this.text('leProfileBlock') + ' · ' + profile.finalizedBlock,
+      profile.finalizedBlockHash,
+      new Date(profile.startTime * 1000).toLocaleString() +
+        ' → ' +
+        new Date(profile.endTime * 1000).toLocaleString(),
+      profile.swapCount + ' ' + this.text('leProfileSwaps'),
+      ...volumes
+        .slice(offset, offset + pageSize)
+        .map(
+          (value, index) =>
+            offset +
+            index +
+            1 +
+            '/' +
+            volumes.length +
+            ' · ' +
+            executionPercent(value, total) +
+            '% · ' +
+            executionAmount(value, 18) +
+            ' WETH',
+        ),
+    ];
+    return this.menu(
+      this.text('leProfileWeights'),
+      options,
+      (value) =>
+        value === 'leBack'
+          ? back()
+          : this.profile(profile, back, offset + (value === 'leNext' ? pageSize : -pageSize)),
+      lines.join('\n'),
+      back,
     );
   }
   async editor(id, error = '') {
@@ -178,7 +316,10 @@ class LiveExecutionBrowser {
       operationId: randomUUID(),
       walletId: wallets[0].id,
       side: 'buy',
+      schedule: 'settlement',
       totalInput: '100',
+      minimumTotalOutput: '',
+      maxArrivalCostBps: '',
       slices: '2',
       seconds: '60',
       slippage: '0.50',
@@ -187,6 +328,8 @@ class LiveExecutionBrowser {
     const d = this.draft;
     const fields = [
       ['totalInput', 'leInput'],
+      ['minimumTotalOutput', 'leMinimumTotal'],
+      ['maxArrivalCostBps', 'leArrivalLimit'],
       ['slices', 'leSlices'],
       ['seconds', 'leInterval'],
       ['slippage', 'leSlippage'],
@@ -196,7 +339,14 @@ class LiveExecutionBrowser {
       'leCancel',
       'leChooseWallet',
       'leSide',
+      {
+        label: this.text('leSchedule') + ' · ' + this.text(schedules[d.schedule]),
+        value: 'leSchedule',
+      },
       ...fields.map(([key, label]) => ({ label: this.text(label) + ': ' + d[key], value: key })),
+      ...(d.schedule === 'vwap'
+        ? ['leProfileCapture', ...(d.profile ? ['leProfileWeights'] : [])]
+        : []),
       'leSave',
     ];
     return this.menu(
@@ -229,6 +379,31 @@ class LiveExecutionBrowser {
             '',
             () => this.editor(id),
           );
+        if (value === 'leSchedule')
+          return this.menu(
+            this.text(value),
+            Object.values(schedules),
+            (schedule) => {
+              d.schedule = Object.keys(schedules).find((key) => schedules[key] === schedule);
+              delete d.profile;
+              return this.editor(id);
+            },
+            this.text('leFixedScope'),
+            () => this.editor(id),
+          );
+        if (value === 'leProfileWeights') return this.profile(d.profile, () => this.editor(id));
+        if (value === 'leProfileCapture') {
+          try {
+            d.profile = await this.call('profile', {
+              id,
+              slices: Number(d.slices),
+              intervalMs: Number(d.seconds) * 1000,
+            });
+            return this.profile(d.profile, () => this.editor(id));
+          } catch (failure) {
+            return this.editor(id, this.status(failure.message));
+          }
+        }
         if (value === 'leSave') {
           try {
             if (
@@ -237,14 +412,24 @@ class LiveExecutionBrowser {
               !/^\d(?:\.\d{1,2})?$/.test(d.slippage)
             )
               throw Error(this.text('leInvalid'));
+            if (d.schedule === 'vwap' && !d.profile) throw Error('EXECUTION_PROFILE_REQUIRED');
+            const arrivalLimit = d.maxArrivalCostBps.trim();
+            if (arrivalLimit && !/^\d{1,4}$/.test(arrivalLimit))
+              throw Error('EXECUTION_ARRIVAL_LIMIT_RANGE');
             const result = await this.call('create', {
               id,
               operationId: d.operationId,
               walletId: d.walletId,
               side: d.side,
               totalInput: d.totalInput,
+              ...(d.minimumTotalOutput.trim()
+                ? { minimumTotalOutput: d.minimumTotalOutput.trim() }
+                : {}),
+              ...(arrivalLimit ? { maxArrivalCostBps: Number(arrivalLimit) } : {}),
               slices: Number(d.slices),
               intervalMs: Number(d.seconds) * 1000,
+              schedule: d.schedule,
+              ...(d.schedule === 'vwap' ? { profileId: d.profile.id } : {}),
               slippageBps: Math.round(Number(d.slippage) * 100),
               maxEstimatedFeeEth: d.maxEstimatedFeeEth,
             });
@@ -260,6 +445,7 @@ class LiveExecutionBrowser {
             this.text(field[1]),
             (entry) => {
               d[value] = entry;
+              if (value === 'slices' || value === 'seconds') delete d.profile;
               return this.editor(id);
             },
             { value: d[value], back: () => this.editor(id) },
@@ -268,6 +454,9 @@ class LiveExecutionBrowser {
       [
         this.text('leDraftHint'),
         this.text('leFeeHint'),
+        this.text('leMinimumHint'),
+        d.schedule !== 'settlement' ? this.text('leFixedScope') : '',
+        d.schedule === 'vwap' ? this.text('leVwapScope') : '',
         wallets.find((w) => w.id === d.walletId)?.name,
         this.text(d.side === 'buy' ? 'leBuy' : 'leSell'),
         error,

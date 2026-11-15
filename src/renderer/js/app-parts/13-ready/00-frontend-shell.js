@@ -65,13 +65,12 @@
   });
   window.CibypFrontendShell = frontendShell;
   window.CibypWallet = new WalletPanel({
+    notify: message => showToast(message, 'info'),
     request: (action, input) => window.api.backendRequest('wallet:request', action, input),
     subscribe: listener => window.api.onBackendEvent(listener), language: () => i18nGetLanguage(),
   });
   window.addEventListener('cibyp:quant-open-wallet', () => { navigatePage('settings'); window.activateSettingsTab('wallet'); });
-  const quantAllowed = quantEnabled(await window.api.getSettings());
-  document.querySelectorAll('.nav-item[data-page="quant"]').forEach(n => { n.hidden = !quantAllowed; });
-  if (quantAllowed) window.CibypQuant = new QuantWorkbench({
+  window.CibypQuant = new QuantWorkbench({
     request: (action, input) => window.api.backendRequest('quant:request', action, input),
     backend: (method, ...args) => window.api.backendRequest(method, ...args),
     subscribe: listener => window.api.onBackendEvent(listener),

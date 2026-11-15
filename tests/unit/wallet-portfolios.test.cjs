@@ -35,6 +35,11 @@ async function fixture(t, { allowWrites = false } = {}) {
       eth_maxPriorityFeePerGas: '0xf4240',
       eth_getBalance: '0x8ac7230489e80000',
       eth_estimateGas: '0x5208',
+      eth_getBlockByNumber: {
+        number: '0x100',
+        hash: '0x' + 'a'.repeat(64),
+        timestamp: '0x' + Math.floor(Date.now() / 1000).toString(16),
+      },
       eth_call: '0x' + '0'.repeat(64),
     }[request.method];
     assert.notEqual(value, undefined, request.method);
@@ -81,6 +86,38 @@ async function create(service, input) {
     confirmed: true,
   });
 }
+test('a portfolio revision change during a holdings read rejects the stale scope snapshot', async (t) => {
+  const f = await fixture(t),
+    s = f.service;
+  const group = await create(s, f.groupInput);
+  const cancelled = new AbortController();
+  cancelled.abort(Error('fixture stopped holdings query'));
+  await assert.rejects(
+    s.request('portfolio.holdings', { id: group.portfolio.id }, { signal: cancelled.signal }),
+    /fixture stopped holdings query/,
+  );
+  let entered, release;
+  const started = new Promise((resolve) => {
+    entered = resolve;
+  });
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  s.market.portfolioHoldings = async (config, input) => {
+    assert.equal(config.venue, 'base');
+    assert.equal(input.members[0].address.toLowerCase(), f.wallet.address.toLowerCase());
+    entered();
+    await gate;
+    return { complete: true, assets: [], members: [] };
+  };
+  const pending = s.request('portfolio.holdings', { id: group.portfolio.id });
+  const rejected = assert.rejects(pending, /WALLET_PORTFOLIO_CHANGED/);
+  await started;
+  await s.request('portfolio.pause', { id: group.portfolio.id, revision: group.revision });
+  release();
+  await rejected;
+  assert.ok(!f.writes.includes('eth_sendRawTransaction'));
+});
 test('portfolio controls require their own frozen human challenge; direct private commands are not public', async (t) => {
   const f = await fixture(t),
     s = f.service;
@@ -132,6 +169,38 @@ test('portfolio controls require their own frozen human challenge; direct privat
   });
   assert.equal((await s.request('list')).wallets[0].portfolioBlocked, false);
   assert.equal((await s.request('portfolio.get', { id: group.portfolio.id })).state, 'paused');
+});
+
+test('a concurrent member transaction change rejects the old capital snapshot even when the portfolio revision is unchanged', async (t) => {
+  const f = await fixture(t),
+    s = f.service,
+    group = await create(s, f.groupInput);
+  let entered, release;
+  const started = new Promise((r) => {
+      entered = r;
+    }),
+    gate = new Promise((r) => {
+      release = r;
+    });
+  s.market.portfolioHoldings = async () => {
+    entered();
+    await gate;
+    return { chainId: 8453, assets: [], members: [] };
+  };
+  const pending = s.request('portfolio.holdings', { id: group.portfolio.id });
+  const rejected = assert.rejects(pending, /WALLET_CAPITAL_CHANGED/);
+  await started;
+  await s.mutate((state) => {
+    state.intents.push({
+      id: 'capital-change-fixture',
+      walletId: f.wallet.id,
+      chainId: 8453,
+      status: 'expired',
+    });
+  });
+  release();
+  await rejected;
+  assert.ok(!f.writes.includes('eth_sendRawTransaction'));
 });
 
 test('human budget edits retain lifetime and periodic consumption, freeze the proposal and preserve revision history after restart', async (t) => {

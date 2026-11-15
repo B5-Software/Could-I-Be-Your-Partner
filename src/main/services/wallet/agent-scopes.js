@@ -5,6 +5,7 @@ const fs = require('node:fs'),
 const { createHash, randomUUID } = require('node:crypto');
 const { parseEther } = require('ethers');
 const policy = require('./policy');
+const { validEvmChainId } = require('../../../shared/wallet-chain');
 const fail = (code) => {
   throw Error(code);
 };
@@ -18,7 +19,7 @@ const frozen = (value) => {
   for (const item of Object.values(value)) if (item && typeof item === 'object') frozen(item);
   return Object.freeze(value);
 };
-function rootContext(workspaceId, label) {
+function rootContext(workspaceId, label, chains = [8453, 84532]) {
   const subject = workspaceId ? 'quant:' + workspaceId : 'service:wallet';
   if (!validSubject(subject)) fail('WALLET_AGENT_SCOPE_INVALID');
   return frozen({
@@ -29,7 +30,7 @@ function rootContext(workspaceId, label) {
         subject,
         label: cleanLabel(label || subject),
         walletIds: [],
-        chains: [8453, 84532],
+        chains: chains.slice(),
         limits: policy.limits({ allowReplacement: true }),
         maxFeeEth: '0',
         expiresAt: 0,
@@ -142,9 +143,9 @@ function validateContext(context) {
       n.walletIds.some((id) => !validId(id)) ||
       !Array.isArray(n.chains) ||
       !n.chains.length ||
-      n.chains.length > 2 ||
+      n.chains.length > 18 ||
       new Set(n.chains).size !== n.chains.length ||
-      n.chains.some((id) => ![8453, 84532].includes(id)) ||
+      n.chains.some((id) => !validEvmChainId(id)) ||
       !Number.isSafeInteger(n.expiresAt) ||
       n.expiresAt < 0 ||
       typeof n.maxFeeEth !== 'string' ||
@@ -214,7 +215,7 @@ class WalletAgentScopes {
   }
   async ensure(context, chainId, allowInactive = false) {
     validateContext(context);
-    if (![8453, 84532].includes(chainId)) fail('WALLET_CHAIN_UNAVAILABLE');
+    this.wallet.networks.byId(chainId, true);
     let parentId = null,
       snapshot;
     for (const node of context.nodes) {

@@ -172,7 +172,7 @@
     // 顶层命令菜单（含模糊过滤）
     if (!cmd || cmd === '/' || !COMMAND_DEFS.some(c => c.cmd === cmd)) {
       const q = (cmd === '/' ? '' : (cmd || '').slice(1)).toLowerCase();
-      const defs = COMMAND_DEFS.filter(c => (c.cmd !== '/quant' || quantEnabled(agent?.settings)) && (!q || c.cmd.includes(q) || c.desc.toLowerCase().includes(q)));
+      const defs = COMMAND_DEFS.filter(c => !q || c.cmd.includes(q) || c.desc.toLowerCase().includes(q));
       renderItems(defs.map(c => ({ ...c, label: c.cmd, badge: null })));
       showPanel();
       return;
@@ -180,7 +180,7 @@
 
     const def = COMMAND_DEFS.find(c => c.cmd === cmd);
     if (cmd === '/help') {
-      renderItems(COMMAND_DEFS.filter(c => c.cmd !== '/quant' || quantEnabled(agent?.settings)).map(c => ({ ...c, label: c.cmd })));
+      renderItems(COMMAND_DEFS.map(c => ({ ...c, label: c.cmd })));
       showPanel();
       return;
     }
@@ -334,7 +334,6 @@
       renderItems([{ label: action === 'set' ? value : t('ui.goal.' + action, action), icon: 'fa-bullseye', action: 'goal', goalAction: action, objective: action === 'set' ? value : '' }]); showPanel(); return;
     }
     if (cmd === '/quant') {
-      if (!quantEnabled(agent?.settings)) { showToast(t('ui.quant.disabled', '量化功能暂未开放'), 'info'); return; }
       renderItems([{ label: t('ui.quant.title', '量化工作台'), icon: 'fa-chart-line', action: 'quant' }]); showPanel(); return;
     }
     if (cmd === '/super') {

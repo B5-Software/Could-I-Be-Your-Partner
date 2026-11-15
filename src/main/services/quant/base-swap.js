@@ -25,6 +25,36 @@ const routerAbi = new Interface([
   'function exactInputSingle((address tokenIn,address tokenOut,uint24 fee,address recipient,uint256 amountIn,uint256 amountOutMinimum,uint160 sqrtPriceLimitX96)) payable returns(uint256)',
   'function multicall(uint256,bytes[]) payable returns(bytes[])',
 ]);
+function minimumOutputAtoms(value, buying) {
+  if (value === undefined) return null;
+  if (typeof value !== 'string' || !/^\d{1,20}(?:\.\d{1,18})?$/.test(value))
+    throw Error('EXECUTION_PRICE_LIMIT_RANGE');
+  let atoms;
+  try {
+    atoms = parseUnits(value, buying ? 18 : 6);
+  } catch {
+    throw Error('EXECUTION_PRICE_LIMIT_RANGE');
+  }
+  if (atoms <= 0n) throw Error('EXECUTION_PRICE_LIMIT_RANGE');
+  return atoms;
+}
+async function simulateBaseSwap(rpc, address, tx, minimum) {
+  try {
+    const encoded = await rpc('eth_call', [
+      { from: address, to: tx.to, data: tx.data, value: '0x' + BigInt(tx.value).toString(16) },
+      'latest',
+    ]);
+    const outer = routerAbi.parseTransaction({ data: tx.data });
+    const [result] = routerAbi.decodeFunctionResult(outer.name, encoded);
+    const amount =
+      outer.name === 'multicall'
+        ? routerAbi.decodeFunctionResult('exactInputSingle', result[0])[0]
+        : result;
+    if (amount < minimum) throw Error();
+  } catch {
+    throw Error('WALLET_SWAP_SIMULATION_FAILED');
+  }
+}
 async function executeBaseSwap({
   market,
   walletService,
@@ -38,6 +68,8 @@ async function executeBaseSwap({
   expectedPolicyId,
   execution,
   checkAuthority,
+  windowEndsAt,
+  arrivalLimit,
 }) {
   const chain = CHAINS[config.venue],
     deployment = deployments[config.venue];
@@ -52,6 +84,13 @@ async function executeBaseSwap({
   const wallet = walletService.wallet(input.walletId);
   const buying = input.side === 'buy',
     amountIn = parseUnits(input.amountIn, buying ? 6 : 18);
+  const absolute = minimumOutputAtoms(input.minimumAmountOut, buying);
+  const relative = arrivalLimit?.minimumAtoms ?? null;
+  if (relative !== null && (relative <= 0n || relative >= 2n ** 256n))
+    throw Error('EXECUTION_ARRIVAL_LIMIT');
+  const arrivalIsStricter = relative !== null && (absolute === null || relative >= absolute);
+  const priceFloor = arrivalIsStricter ? relative : absolute;
+  const priceFloorError = arrivalIsStricter ? 'EXECUTION_ARRIVAL_LIMIT' : 'SWAP_PRICE_LIMIT';
   if (amountIn <= 0n) throw new Error('POSITIVE_AMOUNT_REQUIRED');
   const workflowDigest = createHash('sha256')
     .update(
@@ -62,6 +101,8 @@ async function executeBaseSwap({
         amountIn: amountIn.toString(),
         slippage,
         fee,
+        ...(priceFloor === null ? {} : { minimumAmountOutAtoms: String(priceFloor) }),
+        ...(arrivalLimit ? { arrivalPool: arrivalLimit.pool } : {}),
         ...(agentScopeBinding
           ? { agentScope: { id: agentScopeBinding.id, subject: agentScopeBinding.subject } }
           : agentContext
@@ -122,15 +163,21 @@ async function executeBaseSwap({
   ]);
   // Validate the intended deployment BEFORE requesting any token authorization.
   const initialPool = await market.base(config, { signal });
-  if (canonicalPool.toLowerCase() !== initialPool.pool.toLowerCase())
+  if (
+    canonicalPool.toLowerCase() !== initialPool.pool.toLowerCase() ||
+    (arrivalLimit && arrivalLimit.pool !== canonicalPool.toLowerCase())
+  )
     throw new Error('SWAP_POOL_NOT_CANONICAL');
   if (Date.now() - initialPool.time * 1000 > 30000) throw new Error('FRESH_MARKET_REQUIRED');
+  if (windowEndsAt !== undefined && initialPool.time * 1000 >= windowEndsAt)
+    throw Error('EXECUTION_WINDOW_EXPIRED');
   const quote = async () => {
     const [amount] = await call(deployment.quoter, quoteAbi, 'quoteExactInputSingle', [
       [tokenIn, tokenOut, amountIn, fee, 0],
     ]);
     if (amount <= 0n) throw new Error('SWAP_NO_QUOTE');
-    if ((amount * BigInt(10000 - slippage)) / 10000n <= 0n)
+    if (priceFloor !== null && amount < priceFloor) throw Error(priceFloorError);
+    if (priceFloor === null && (amount * BigInt(10000 - slippage)) / 10000n <= 0n)
       throw new Error('SWAP_AMOUNT_TOO_SMALL_FOR_PROTECTION');
     return amount;
   };
@@ -144,6 +191,7 @@ async function executeBaseSwap({
         to: tokenIn,
         value: '0',
         data: erc20.encodeFunctionData('approve', [deployment.router, amountIn]),
+        ...(windowEndsAt === undefined ? {} : { validUntil: windowEndsAt }),
       },
       context,
     );
@@ -163,11 +211,30 @@ async function executeBaseSwap({
   if (Date.now() - pool.time * 1000 > 30000) throw new Error('FRESH_MARKET_REQUIRED');
   if (canonicalPool.toLowerCase() !== pool.pool.toLowerCase())
     throw new Error('SWAP_POOL_NOT_CANONICAL');
-  const amountOut = allowance < amountIn ? await quote() : initialQuote;
+  let amountOut = initialQuote;
+  if (allowance < amountIn) {
+    try {
+      amountOut = await quote();
+    } catch (error) {
+      if (error.message !== priceFloorError) throw error;
+      return {
+        complete: false,
+        error: error.message,
+        steps,
+        note: 'The quote fell below the minimum after approval. The approval remains on chain.',
+      };
+    }
+  }
   if (amountOut <= 0n) throw new Error('SWAP_NO_QUOTE');
-  const minimum = (amountOut * BigInt(10000 - slippage)) / 10000n;
+  const slippageFloor = (amountOut * BigInt(10000 - slippage)) / 10000n;
+  const minimum = priceFloor !== null && priceFloor > slippageFloor ? priceFloor : slippageFloor;
   if (minimum <= 0n) throw new Error('SWAP_AMOUNT_TOO_SMALL_FOR_PROTECTION');
-  const deadline = Math.floor(Date.now() / 1000) + 120;
+  const deadline = Math.min(
+    Math.floor(Date.now() / 1000) + 120,
+    windowEndsAt === undefined ? Infinity : Math.floor((windowEndsAt - 1) / 1000),
+  );
+  if (windowEndsAt !== undefined && (Date.now() >= windowEndsAt || pool.time > deadline))
+    throw Error('EXECUTION_WINDOW_EXPIRED');
   const swap = routerAbi.encodeFunctionData('exactInputSingle', [
     [tokenIn, tokenOut, fee, wallet.address, amountIn, minimum, 0],
   ]);
@@ -179,7 +246,10 @@ async function executeBaseSwap({
       to: deployment.router,
       value: '0',
       data: routerAbi.encodeFunctionData('multicall', [deadline, [swap]]),
-      validUntil: deadline * 1000,
+      validUntil:
+        windowEndsAt === undefined
+          ? deadline * 1000
+          : Math.min(windowEndsAt, (deadline + 1) * 1000),
     },
     context,
   );
@@ -198,4 +268,11 @@ async function executeBaseSwap({
     note: 'Submission is not a fill. Reconcile receipts and token balance changes. Existing ERC20 approvals survive application permission revocation.',
   };
 }
-module.exports = { executeBaseSwap, deployments, routerAbi };
+module.exports = {
+  executeBaseSwap,
+  deployments,
+  quoteAbi,
+  routerAbi,
+  minimumOutputAtoms,
+  simulateBaseSwap,
+};

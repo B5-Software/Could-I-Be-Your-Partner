@@ -68,6 +68,19 @@
   background: var(--bg-secondary);
   border-radius: 12px;
 }
+.qe-validation-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 9rem), 1fr));
+  gap: 0.55rem;
+  margin-block: 0.7rem;
+}
+.qe-validation-result {
+  margin-block: 0.75rem;
+  overflow-x: auto;
+}
+.qe-validation-result h4 {
+  margin-block: 0 0.35rem;
+}
 .quant-event-dialog code {
   display: block;
   overflow-wrap: anywhere;
@@ -1288,6 +1301,97 @@
   font-size: 12px;
   overflow-wrap: anywhere;
 }
+.quant-amm-dialog {
+  width: min(620px, calc(100vw - 32px));
+}
+.quant-amm-recorder {
+  margin: 12px 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-size: 12px;
+}
+.quant-amm-recorder h3,
+.quant-amm-recorder p {
+  margin: 0 0 6px;
+}
+.quant-amm-recorder [data-record-detail] {
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+.quant-amm-record-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.quant-amm-series {
+  display: flex;
+  align-items: end;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 12px 0;
+}
+.quant-amm-series label {
+  margin: 0;
+  flex: 1 1 160px;
+}
+.quant-amm-series button {
+  min-height: 38px;
+}
+.quant-amm-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(155px, 1fr));
+  gap: 10px;
+}
+.quant-amm-grid label {
+  margin: 0;
+}
+.quant-amm-scenario-leg {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(125px, 1fr));
+  align-items: end;
+  gap: 8px;
+  margin: 12px 0;
+}
+.quant-amm-scenario-leg label {
+  margin: 0;
+}
+.quant-amm-scenario-leg button {
+  justify-self: start;
+  min-height: 38px;
+}
+.quant-amm-trades td small {
+  display: block;
+  color: var(--text-secondary);
+}
+.quant-amm-trades {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.quant-amm-trades [data-trades] {
+  overflow-x: auto;
+}
+.quant-amm-trades table {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+.quant-amm-trades :is(th, td) {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+}
+.quant-amm-trades caption {
+  text-align: left;
+}
+.quant-amm-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 8px;
+}
 .le-dialog {
   width: min(1060px, calc(100vw - 48px));
   padding: 24px;
@@ -1357,6 +1461,27 @@
   box-sizing: border-box;
   font: inherit;
   border-radius: 9px;
+}
+.le-profile-pool code {
+  overflow-wrap: anywhere;
+}
+.le-profile-weights {
+  margin: 12px 0;
+  padding: 10px 14px;
+  border: 1px solid var(--border-light);
+  border-radius: 9px;
+  font-size: 12px;
+}
+.le-profile-weights summary {
+  cursor: pointer;
+}
+.le-profile-weights ol {
+  max-block-size: 12rem;
+  overflow: auto;
+  margin-block: 8px 0;
+  padding-inline-start: 2.5em;
+  line-height: 1.7;
+  font-variant-numeric: tabular-nums;
 }
 .le-shell {
   display: grid;
@@ -1490,6 +1615,12 @@
 .le-facts dd {
   margin: 0;
   font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.le-arrival-hash {
+  color: var(--text-secondary);
+  font-size: 11px;
+  overflow-wrap: anywhere;
 }
 .le-authority {
   font-size: 12px;

@@ -147,11 +147,14 @@ async function main() {
   assert.ok(state.sessions.length, 'Packaged Agent was not initialized');
   assert.ok(splashSeen, 'Splash must remain part of packaged GUI startup');
   const features = await evaluate("window.api.backendRequest('snapshot').then(s => s.features)");
-  assert.equal(features.quant, false, 'Packaged GUI starts with quant disabled');
-  const quantError = await evaluate(
-    "window.api.backendRequest('quant:request','native.start').then(() => null, error => error.message)",
+  assert.equal(features.quant, true, 'Packaged GUI exposes quant');
+  assert.deepEqual(
+    await evaluate("window.api.backendRequest('quant:request','workspace.list')"),
+    [],
   );
-  assert.match(quantError, /QUANT_DISABLED/);
+  assert.equal(await evaluate("document.querySelector('[data-page=quant]').hidden"), false);
+  const status = await evaluate("window.api.backendRequest('quant:request','native.status')");
+  assert.notEqual(status.state, 'connected', 'Opening the app does not start the native executor');
   const superAgent = await evaluate("window.api.backendRequest('superagent:request','status')");
   assert.equal(superAgent.paused, false, 'Packaged backend can open a fresh SuperAgent store');
   const windows = await fetch('http://127.0.0.1:' + port + '/json/list').then((r) => r.json());
@@ -161,7 +164,7 @@ async function main() {
   );
   assert.doesNotMatch(logs, /Cannot find module|ERR_MODULE_NOT_FOUND|PACKAGED_RUNTIME_ESCAPE/);
   console.log(
-    '[packaged-startup] PASS: actual executable, Splash, main renderer, preload bridge, Agent session, SuperAgent and default quant gate',
+    '[packaged-startup] PASS: actual executable, Splash, main renderer, preload bridge, Agent session, SuperAgent and quant availability',
   );
   try {
     await evaluate("window.api.backendRequest('backend:shutdown')");

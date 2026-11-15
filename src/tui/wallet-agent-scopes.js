@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 'use strict';
+const { chainLabel } = require('../shared/wallet-chain');
 const { walletBudget, walletScopeValues } = require('../shared/wallet-budget');
 const { getLanguage } = require('./text');
 const { TuiWalletPeriods } = require('./wallet-periods');
@@ -14,7 +15,7 @@ class TuiWalletAgentScopes {
       [
         { label: this.w.text('portfolioBack'), value: 'back' },
         ...p.items.map((s) => ({
-          label: `${s.label} · ${s.chainId === 8453 ? 'Base' : 'Base Sepolia'} · ${this.w.text(s.state === 'active' ? 'portfolioActive' : 'portfolioPaused')}`,
+          label: `${s.label} · ${chainLabel(s.chainId)} · ${this.w.text(s.state === 'active' ? 'portfolioActive' : 'portfolioPaused')}`,
           value: s.id,
         })),
         ...(offset ? [{ label: this.w.text('portfolioPrevious'), value: 'previous' }] : []),

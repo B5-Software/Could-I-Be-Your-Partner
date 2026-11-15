@@ -32,11 +32,76 @@ export interface QuantRun {
   id: string;
   createdAt: number;
   datasetId: string;
-  config: Record<string, string | number>;
+  config: Record<string, string | number | null | number[] | QuantAmmScenarioLeg[]>;
   metrics: QuantMetrics;
   equity?: { time: number; value: number }[];
   assumptions?: string[];
   dataSource?: string;
+  dataSeries?: QuantBaseSeries;
+  codeVersion?: string;
+  walkForward?: {
+    candidateCount: number;
+    discardedPrefixBars: number;
+    windows: {
+      index: number;
+      training: { start: number; end: number; bars: number };
+      testing: { start: number; end: number; bars: number };
+      selected: { fast: number; slow: number };
+      metrics: QuantMetrics;
+      trainingScores: {
+        fast: number;
+        slow: number;
+        returnPct: number;
+        maxDrawdownPct: number;
+        fills: number;
+      }[];
+    }[];
+  };
+  ammScenario?: {
+    anchor: { block: number; blockHash: string; time: number };
+    status: 'completed' | 'stopped-on-revert';
+    totalSwapGas: string;
+    legs: {
+      index: number;
+      side: 'buy' | 'sell';
+      status: 'reverted' | 'filled' | 'partial-input';
+      spentAtoms?: string;
+      amountOutAtoms?: string;
+      deltaOutAtoms?: string;
+      baselineOutAtoms?: string;
+      sqrtBeforeX96: string;
+      sqrtAfterX96: string;
+      gasUsed: string;
+    }[];
+  };
+  ammReplay?: {
+    eventCount: number;
+    canceledSignals: number;
+    pendingAtEnd: 'buy' | 'sell' | null;
+    attempts: {
+      side: 'buy' | 'sell';
+      signal: { block: number; logIndex: number };
+      execution: { block: number; blockHash: string };
+      amountInAtoms: string;
+      amountOutAtoms: string;
+      initializedTicksCrossed: number;
+      quoteGasEstimate: string;
+      status: 'adverse-price' | 'network-cost-limit' | 'filled';
+      networkFee?: {
+        l2Wei: string;
+        l1Wei: string;
+        operatorWei: string;
+        usdcAtoms: string;
+        totalWei: string;
+      };
+    }[];
+    networkFees?: { mode: 'fixed' | 'historical'; usdcAtoms: string; totalWei?: string };
+  };
+}
+export interface QuantAmmScenarioLeg {
+  side: 'buy' | 'sell';
+  amountIn: string;
+  minimumOut?: string;
 }
 export interface QuantDataset {
   id: string;
@@ -45,6 +110,50 @@ export interface QuantDataset {
   count: number;
   start: number;
   end: number;
+  amm?: { chainId: number; fee: number; interval: number; swapCount: number };
+  series?: {
+    interval: number;
+    segmentCount: number;
+    slots: number;
+    gaps: number;
+    requestedStart: number;
+  };
+}
+
+export interface QuantBaseSeries {
+  chainId: number;
+  pool: string;
+  fee: number;
+  interval: number;
+  requestedStart: number;
+  startTime: number;
+  endTime: number;
+  slots: number;
+  gaps: number;
+  emptyRanges: { startTime: number; endTime: number }[];
+  segments: { id: string; startTime: number; endTime: number }[];
+}
+
+export interface QuantBaseTrade {
+  block: number;
+  logIndex: number;
+  time: number;
+  transactionHash: string;
+  wethDeltaAtoms: string;
+  usdcDeltaAtoms: string;
+  side: 'buy' | 'sell' | null;
+}
+export interface QuantBaseRecorder {
+  phase: 'idle' | 'waiting' | 'capturing' | 'retrying' | 'paused';
+  canResume?: boolean;
+  datasetId?: string | null;
+  startTime?: number | null;
+  endTime?: number | null;
+  nextAt?: number | null;
+  batches?: number;
+  count?: number;
+  lastError?: string | null;
+  pauseReason?: 'manual' | 'market-changed' | 'review' | null;
 }
 export interface QuantSummary {
   id: string;
@@ -55,6 +164,13 @@ export interface QuantSummary {
   updatedAt: number;
 }
 export interface QuantWorkspace extends QuantSummary {
+  network?: {
+    id: number;
+    name: string;
+    explorer: string;
+    historyWindow: { maxCount: number; defaultCount: number };
+    recorder: QuantBaseRecorder;
+  };
   nativePaper?: { accountId: string; pendingOrder?: { orderId: string } };
   researchCount?: number;
   research?: {

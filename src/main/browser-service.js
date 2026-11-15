@@ -16,7 +16,7 @@ const fs = require('fs');
 const path = require('path');
 const { BrowserWindow, dialog, screen } = require('electron');
 
-module.exports = function registerPlaywrightIpc({ getVmService, ipcMain, getSettings, getMainWindow, getImagesDir, getUserDataPath }) {
+module.exports = function registerPlaywrightIpc({ getVmService, ipcMain, getSettings, getMainWindow, getImagesDir, getUserDataPath, getWallet }) {
   _getVmService = typeof getVmService === 'function' ? getVmService : null;
 let _pwBrowser = null; // shared browser instance (chromium.launch 或 launchPersistentContext)
 let _pwDataMode = 'isolated'; // 当前浏览器实例的数据模式（isolated/persistent/profile-copy）
@@ -590,6 +590,13 @@ async function ensureBrowser(workspacePath) {
     if (_pwDataMode !== 'isolated' && _pwBrowser) await _closePwBrowserInternal();
     const browser = await _launchPwBrowser();
     context = await browser.newContext(contextOptions);
+  }
+  if (!context._cibypWalletApplied && _pwLocation === 'host' && typeof getWallet === 'function') {
+    await require('./services/wallet/browser-provider').attachWalletProvider(context, {
+      getWallet,
+      enabled: () => _pwLocation === 'host',
+    });
+    context._cibypWalletApplied = true;
   }
   // 注入反自动化检测脚本（在页面脚本执行前覆盖 navigator.webdriver 等属性）
   // 注意：launch 参数 --disable-blink-features=AutomationControlled 已经隐藏了大部分检测，

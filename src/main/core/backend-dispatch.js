@@ -71,14 +71,13 @@ function createBackendDispatch({
     'prepareWorkspace',
     'uploadAttachment',
   ]);
+  const quantDirectory = storageDir && require('node:path').join(storageDir, 'quant');
   // Lazily create ONE owner for every attached frontend, outside chat/workspace cleanup.
-  const getQuant = async () => {
-    if (!require('../../shared/feature-gates').quantEnabled(await runtime.getSettings()))
-      throw Error('QUANT_DISABLED');
+  const getQuant = () => {
     if (!runtime.quantService) {
-      if (!storageDir) throw new Error('QUANT_STORAGE_UNAVAILABLE');
+      if (!quantDirectory) throw new Error('QUANT_STORAGE_UNAVAILABLE');
       runtime.quantService = new (require('../services/quant').QuantService)({
-        directory: require('node:path').join(storageDir, 'quant'),
+        directory: quantDirectory,
         runtime,
         getWallet: () => getWallet(),
         publish: (event) => eventBus.publish('agent:session-event', event),
@@ -97,6 +96,30 @@ function createBackendDispatch({
     }
     return runtime.walletService;
   };
+  if (
+    storageDir &&
+    require('../services/wallet/portfolio-allowance-monitor').PortfolioAllowanceMonitor.shouldStart(
+      require('node:path').join(storageDir, 'wallet'),
+    )
+  ) {
+    try {
+      getWallet();
+    } catch {
+      /* Wallet initialization errors are surfaced on the next wallet request. */
+    }
+  }
+  if (
+    storageDir &&
+    require('../services/wallet/browser-connector').WalletBrowserConnector.shouldStart(
+      require('node:path').join(storageDir, 'wallet'),
+    )
+  ) {
+    void Promise.resolve()
+      .then(() => getWallet().browser.start(true))
+      .catch(() => {
+        /* The connector exposes its startup error through the Wallet panel. */
+      });
+  }
   const getSuperAgent = () => {
     if (!runtime.superAgentService) {
       if (!storageDir) throw Error('SUPER_STORAGE_UNAVAILABLE');
@@ -128,13 +151,18 @@ function createBackendDispatch({
       runtime.superAgentError = error.message;
     }
   }
-  runtime.quantGateOff?.();
-  runtime.quantGateOff = eventBus.subscribe('settings:changed', (settings) => {
-    if (!require('../../shared/feature-gates').quantEnabled(settings)) {
-      runtime.quantService?.dispose();
-      runtime.quantService = undefined;
+  if (
+    quantDirectory &&
+    require('../services/quant/base-history-recorder').BaseHistoryRecorder.shouldStart(
+      quantDirectory,
+    )
+  ) {
+    try {
+      getQuant();
+    } catch {
+      /* Initialization errors surface on the next request. */
     }
-  });
+  }
   const dispatch = async function dispatch({ method, args = [] } = {}) {
     if (!Array.isArray(args) || args.length > 30) throw new Error('Invalid arguments');
     if (method === 'firmware:request') {
@@ -144,7 +172,7 @@ function createBackendDispatch({
       return runtime.firmwareService.request(args[0], args[1]);
     }
     if (method === 'superagent:request') return getSuperAgent().request(args[0], args[1]);
-    if (method === 'quant:request') return (await getQuant()).request(args[0], args[1]);
+    if (method === 'quant:request') return getQuant().request(args[0], args[1]);
     if (method === 'wallet:request') return getWallet().request(args[0], args[1]);
     if (method === 'snapshot')
       return {
@@ -155,9 +183,7 @@ function createBackendDispatch({
         boot: bootState?.() || { ready: true },
         platform: process.platform,
         pid: process.pid,
-        features: {
-          quant: require('../../shared/feature-gates').quantEnabled(await runtime.getSettings()),
-        },
+        features: { quant: true },
       };
     if (method === 'settings:catalog')
       return require('./settings-catalog').settingsCatalog(await runtime.getSettings());

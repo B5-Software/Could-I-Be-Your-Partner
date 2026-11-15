@@ -537,12 +537,6 @@ function createAgentRuntime({
         () => runtime.quantService,
         session.key.replace(/^quant:/, ''),
       );
-      const execute = agent.executeTool.bind(agent);
-      agent.executeTool = async (...args) => {
-        if (!require('../shared/feature-gates').quantEnabled(await api.getSettings()))
-          throw Error('QUANT_DISABLED');
-        return execute(...args);
-      };
     }
     if (superAgent)
       require('./services/super-agent/profiles').decorateSuperAgent(
@@ -563,11 +557,6 @@ function createAgentRuntime({
   }
 
   async function initializeSession(session) {
-    if (
-      session.profile === 'quant' &&
-      !require('../shared/feature-gates').quantEnabled(await api.getSettings())
-    )
-      throw Error('QUANT_DISABLED');
     await api.startupRuntime();
     const location = await api.runtime.getLocation();
     if (location?.emergencyHost) session.runtimeOverride = 'host';
@@ -1909,7 +1898,6 @@ function createAgentRuntime({
   scheduleProactive();
   runtime.dispose = () => {
     clearInterval(proactiveTimer);
-    runtime.quantGateOff?.();
     const superStopped = runtime.superAgentService?.dispose();
     runtime.quantService?.dispose();
     const walletStopped = runtime.walletService?.dispose();

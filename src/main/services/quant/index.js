@@ -7,8 +7,23 @@ const { randomUUID, createHash } = require('node:crypto');
 const { Worker } = require('node:worker_threads');
 const { MarketData, CHAINS, INTERVALS, endpoint } = require('./market-data');
 const { validateCandles, parameters } = require('./backtest');
+const { VERSION: WALK_FORWARD_VERSION, walkForwardParameters } = require('./walk-forward');
 const { SCALE, atoms, decimal, notional, fee } = require('./decimal');
 const { NativeEngine } = require('./native-engine');
+const { SOURCE: BASE_HISTORY_SOURCE, captureHistory, captureWindow } = require('./base-history');
+const { BaseHistoryRecorder } = require('./base-history-recorder');
+const { SERIES_SOURCE, MAX_BYTES, buildSeries } = require('./base-history-series');
+const {
+  CODE_VERSION: AMM_REPLAY_VERSION,
+  HISTORICAL_COST_VERSION,
+  replayParameters,
+  replayAmm,
+} = require('./amm-replay');
+const {
+  CODE_VERSION: AMM_SCENARIO_VERSION,
+  scenarioParameters,
+  runScenario,
+} = require('./amm-scenario');
 const hash = (value) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const idPattern = /^[a-z\d-]{1,80}$/i;
 const copy = (value) => structuredClone(value);
@@ -154,6 +169,8 @@ class QuantService {
     this.replays = new (require('./event-replay').EventReplay)(this);
     this.queue = Promise.resolve();
     this.refreshing = new Map();
+    this.baseCaptures = new Map();
+    this.baseSeriesReads = new Set();
     this.chatOpening = new Map();
     this.workers = new Set();
     this.runningTests = new Set();
@@ -194,6 +211,8 @@ class QuantService {
         writeAtomic(this.file, this.state);
       }
     }
+    this.baseRecorder = new BaseHistoryRecorder(this, event);
+    this.baseRecorder.arm();
   }
   execution() {
     return (this.liveExecution ??= new (require('./live-execution').LiveExecution)(this));
@@ -223,12 +242,15 @@ class QuantService {
     value.market.customRpc = Boolean(value.market.rpcUrl);
     delete value.market.rpcUrl;
     delete value.commands;
+    delete value.baseRecorder;
     const chain = CHAINS[w.market.venue];
     if (chain)
       value.network = {
         id: chain.id,
         name: chain.name,
         explorer: chain.explorer,
+        historyWindow: captureWindow(w.market.interval),
+        recorder: this.baseRecorder.status(w),
         tokens: {
           WETH: { address: chain.weth, decimals: 18 },
           USDC: { address: chain.usdc, decimals: 6 },
@@ -280,6 +302,7 @@ class QuantService {
         /* Observers cannot roll back a durable commit. */
       }
       this.arm();
+      this.baseRecorder.arm();
       return copy(value);
     });
     this.queue = task.catch(() => {});
@@ -382,12 +405,15 @@ class QuantService {
     this.refreshing.set(id, task);
     return task;
   }
-  storeDataset(w, candles, source, label) {
+  storeDataset(w, candles, source, label, { amm, series, market = w.market } = {}) {
+    const coverage = amm || series;
     const data = {
       version: 1,
-      market: { venue: w.market.venue, product: w.market.product, interval: w.market.interval },
+      market: { venue: market.venue, product: market.product, interval: market.interval },
       source,
-      candles: validateCandles(candles),
+      candles: coverage && !candles.length ? [] : validateCandles(candles),
+      ...(amm && { amm }),
+      ...(series && { series }),
     };
     const id = hash(data);
     const file = path.join(this.directory, 'datasets', id + '.json');
@@ -397,91 +423,334 @@ class QuantService {
       label: String(label || source).slice(0, 120),
       source,
       count: data.candles.length,
-      start: data.candles[0].time,
-      end: data.candles.at(-1).time,
+      start: coverage?.startTime ?? data.candles[0].time,
+      end: coverage?.endTime ?? data.candles.at(-1).time,
       createdAt: Date.now(),
+      ...(amm && {
+        amm: {
+          chainId: amm.chainId,
+          fee: amm.fee,
+          interval: amm.interval,
+          swapCount: amm.swapCount,
+        },
+      }),
+      ...(series && {
+        series: {
+          interval: series.interval,
+          segmentCount: series.segments.length,
+          gaps: series.gaps,
+          slots: series.slots,
+          requestedStart: series.requestedStart,
+        },
+      }),
     };
   }
-  dataset(id) {
+  datasetFile(id) {
     if (!/^[a-f\d]{64}$/.test(String(id))) problem('INVALID_DATASET');
-    const data = JSON.parse(
-      fs.readFileSync(path.join(this.directory, 'datasets', id + '.json'), 'utf8'),
-    );
+    return path.join(this.directory, 'datasets', id + '.json');
+  }
+  decodeDataset(id, bytes) {
+    const data = JSON.parse(bytes.toString('utf8'));
     if (hash(data) !== id) problem('DATASET_HASH_MISMATCH');
     return data;
   }
-  async backtest(id, input) {
-    if (this.runningTests.size >= 2) problem('RESEARCH_BUSY');
-    const w = this.workspace(id),
-      config = parameters(input.config);
-    let datasetId = input.datasetId || w.preferences.datasetId;
-    if (!datasetId) {
-      const closed = w.candles.filter((bar) => (bar.time + w.market.interval) * 1000 <= Date.now());
-      const meta = this.storeDataset(w, closed, w.quote?.quality || 'unknown', 'Market snapshot');
-      await this.mutate((state) => {
-        const current = this.workspace(id, state);
-        if (!current.datasets.some((d) => d.id === meta.id)) current.datasets.push(meta);
+  dataset(id) {
+    return this.decodeDataset(id, fs.readFileSync(this.datasetFile(id)));
+  }
+  workspaceDataset(w, id) {
+    if (!w.datasets.some((dataset) => dataset.id === id)) problem('DATASET_NOT_IN_WORKSPACE');
+    return this.dataset(id);
+  }
+  archiveReader(w, signal) {
+    const owned = new Set(w.datasets.map((dataset) => dataset.id));
+    return async (id, remaining) => {
+      signal.throwIfAborted();
+      if (!owned.has(id)) problem('DATASET_NOT_IN_WORKSPACE');
+      const file = this.datasetFile(id);
+      try {
+        if ((await fs.promises.stat(file)).size > Math.min(remaining, 32 * 1024 * 1024))
+          problem('BASE_SERIES_READ_LIMIT');
+        const buffer = await fs.promises.readFile(file, { signal });
+        if (buffer.length > remaining) problem('BASE_SERIES_READ_LIMIT');
+        return { data: this.decodeDataset(id, buffer), bytes: buffer.length };
+      } catch (error) {
+        if (error.code === 'ENOENT') problem('BASE_SERIES_MISSING_SEGMENT');
+        throw error;
+      }
+    };
+  }
+  async createBaseSeries(input, externalSignal) {
+    const w = this.workspace(input.id);
+    if (this.baseSeriesReads.size >= 2) problem('RESEARCH_BUSY');
+    const anchorId = input.datasetId ?? w.preferences.datasetId;
+    if (!anchorId) problem('BASE_SERIES_REQUIRES_SEGMENT');
+    const controller = new AbortController();
+    const signal = externalSignal
+      ? AbortSignal.any([controller.signal, externalSignal])
+      : controller.signal;
+    this.baseSeriesReads.add(controller);
+    try {
+      const { candles, series, market } = await buildSeries(
+        anchorId,
+        input.windows,
+        this.archiveReader(w, signal),
+      );
+      return await this.mutate((state) => {
+        signal.throwIfAborted();
+        const current = this.workspace(w.id, state);
+        const meta = this.storeDataset(
+          current,
+          candles,
+          SERIES_SOURCE,
+          `${CHAINS[market.venue].name} · Uniswap v3 · ${new Date(series.startTime * 1000).toISOString()} – ${new Date(series.endTime * 1000).toISOString()}`,
+          { series, market },
+        );
+        const existing = current.datasets.find((dataset) => dataset.id === meta.id);
+        if (!existing) {
+          current.datasets.push(meta);
+          event(current, 'base-history-series-created', {
+            datasetId: meta.id,
+            segmentCount: series.segments.length,
+          });
+        }
+        if (input.select === true) current.preferences.datasetId = meta.id;
+        return existing ?? meta;
       });
-      datasetId = meta.id;
+    } finally {
+      this.baseSeriesReads.delete(controller);
     }
-    if (!this.workspace(id).datasets.some((d) => d.id === datasetId))
-      problem('DATASET_NOT_IN_WORKSPACE');
-    const dataset = this.dataset(datasetId),
-      token = randomUUID();
+  }
+  async captureBaseHistory(input, externalSignal, recording) {
+    const w = this.workspace(input.id);
+    if (this.baseCaptures.has(w.id) || this.baseCaptures.size >= 2) problem('BASE_HISTORY_BUSY');
+    const config = copy(w.market),
+      revision = w.marketRevision;
+    const previous =
+      input.afterDatasetId === undefined
+        ? null
+        : this.workspaceDataset(w, input.afterDatasetId).amm;
+    if (previous === undefined) problem('BASE_HISTORY_SOURCE_CHANGED');
+    const controller = new AbortController();
+    const signal = externalSignal
+      ? AbortSignal.any([controller.signal, externalSignal])
+      : controller.signal;
+    this.baseCaptures.set(w.id, controller);
+    try {
+      const { candles, amm } = await captureHistory(
+        this.market,
+        config,
+        { ...input, completeWindow: Boolean(recording), recordingStartedAt: recording?.startedAt },
+        previous,
+        signal,
+      );
+      return await this.mutate((state) => {
+        signal.throwIfAborted();
+        const current = this.workspace(w.id, state);
+        if (current.marketRevision !== revision) problem('MARKET_CHANGED');
+        const record = recording && this.baseRecorder.check(current, recording);
+        const meta = this.storeDataset(
+          current,
+          candles,
+          BASE_HISTORY_SOURCE,
+          `${CHAINS[config.venue].name} · Uniswap v3 · ${new Date(amm.startTime * 1000).toISOString()}`,
+          { amm },
+        );
+        const stored = current.datasets.find((dataset) => dataset.id === meta.id);
+        if (!stored) {
+          current.datasets.push(meta);
+          event(current, 'base-history-captured', { datasetId: meta.id, swapCount: amm.swapCount });
+        }
+        if (input.select === true) current.preferences.datasetId = meta.id;
+        if (record) this.baseRecorder.advance(record, stored ?? meta);
+        return stored ?? meta;
+      });
+    } catch (error) {
+      if (error.name === 'TimeoutError' && !signal.aborted) problem('BASE_HISTORY_TIMEOUT');
+      throw error;
+    } finally {
+      this.baseCaptures.delete(w.id);
+    }
+  }
+  async backtest(id, input, signal, walkForward = false) {
+    if (this.runningTests.size >= 2) problem('RESEARCH_BUSY');
+    signal?.throwIfAborted();
+    const w = this.workspace(id);
+    const config = walkForward ? walkForwardParameters(input.config) : parameters(input.config);
+    const token = randomUUID();
     this.runningTests.add(token);
     try {
+      let datasetId = input.datasetId || w.preferences.datasetId;
+      if (!datasetId) {
+        const now = Date.now();
+        const closed = w.candles.filter((bar) => (bar.time + w.market.interval) * 1000 <= now);
+        const meta = this.storeDataset(w, closed, w.quote?.quality || 'unknown', 'Market snapshot');
+        await this.mutate((state) => {
+          signal?.throwIfAborted();
+          const current = this.workspace(id, state);
+          if (!current.datasets.some((d) => d.id === meta.id)) current.datasets.push(meta);
+        });
+        datasetId = meta.id;
+      }
+      signal?.throwIfAborted();
+      if (!this.workspace(id).datasets.some((d) => d.id === datasetId))
+        problem('DATASET_NOT_IN_WORKSPACE');
+      const dataset = this.dataset(datasetId);
       const result = await new Promise((resolve, reject) => {
         const bundled = typeof CIBYP_QUANT_WORKER_SOURCE !== 'undefined';
         const worker = new Worker(
           bundled ? CIBYP_QUANT_WORKER_SOURCE : path.join(__dirname, 'research-worker.js'),
           {
             eval: bundled,
-            workerData: { candles: dataset.candles, config },
+            workerData: { candles: dataset.candles, config, walkForward },
             resourceLimits: { maxOldGenerationSizeMb: 128 },
           },
         );
         this.workers.add(worker);
+        const abort = () => {
+          reject(signal.reason);
+          void worker.terminate();
+        };
+        signal?.addEventListener('abort', abort, { once: true });
         const timeout = setTimeout(() => {
-          worker.terminate();
           reject(new Error('BACKTEST_TIMEOUT'));
+          void worker.terminate();
         }, 20000);
         worker.once('message', (reply) =>
           reply.error ? reject(new Error(reply.error)) : resolve(reply.result),
         );
         worker.once('error', reject);
-        worker.once('exit', (code) => {
+        worker.once('exit', () => {
           clearTimeout(timeout);
+          signal?.removeEventListener('abort', abort);
           this.workers.delete(worker);
-          if (code !== 0) reject(new Error('BACKTEST_WORKER_EXIT'));
+          reject(new Error('BACKTEST_WORKER_EXIT'));
         });
       });
+      const evidence = dataset.amm || dataset.series;
       const run = {
         id: randomUUID(),
         workspaceId: id,
         datasetId,
-        codeVersion: 'candle-engine-1',
+        codeVersion: walkForward ? WALK_FORWARD_VERSION : 'candle-engine-1',
         createdAt: Date.now(),
         ...result,
-        provenance: dataset.market,
+        provenance: evidence
+          ? {
+              ...dataset.market,
+              chainId: evidence.chainId,
+              pool: evidence.pool,
+              fee: evidence.fee,
+            }
+          : dataset.market,
         dataSource: dataset.source,
+        ...(dataset.series && {
+          dataSeries: dataset.series,
+          trades: result.trades.map((trade) => ({
+            ...trade,
+            emptyIntervalsBeforeFill: (trade.time - trade.signalTime) / dataset.series.interval - 1,
+          })),
+          assumptions: [
+            ...result.assumptions,
+            'signals-fill-at-next-observed-open-across-empty-intervals',
+            'indicators-use-observed-candles',
+          ],
+        }),
       };
-      run.integrity = hash(run);
-      writeAtomic(path.join(this.directory, 'runs', run.id + '.json'), run);
-      await this.mutate((state) => {
-        const current = this.workspace(id, state);
-        current.runs.push({
-          id: run.id,
-          createdAt: run.createdAt,
-          datasetId,
-          config,
-          metrics: run.metrics,
-        });
-        event(current, 'backtest-completed', { runId: run.id });
-      });
-      return run;
+      return await this.saveRun(
+        run,
+        walkForward ? 'walk-forward-completed' : 'backtest-completed',
+        signal,
+      );
     } finally {
       this.runningTests.delete(token);
     }
+  }
+  async saveRun(run, type, signal) {
+    run.integrity = hash(run);
+    return this.mutate((state) => {
+      signal?.throwIfAborted();
+      const current = this.workspace(run.workspaceId, state);
+      writeAtomic(path.join(this.directory, 'runs', run.id + '.json'), run);
+      const { id, createdAt, datasetId, config, metrics } = run;
+      current.runs.push({
+        id,
+        createdAt,
+        datasetId,
+        config,
+        metrics,
+        ...((run.ammReplay || run.ammScenario || run.walkForward) && {
+          codeVersion: run.codeVersion,
+        }),
+      });
+      event(current, type, { runId: id });
+      return run;
+    });
+  }
+  async runAmmExperiment(input, externalSignal, scenario = false) {
+    if (this.runningTests.size >= 2 || this.ammReplayAbort) problem('RESEARCH_BUSY');
+    const w = this.workspace(input.id);
+    const datasetId = input.datasetId ?? w.preferences.datasetId;
+    if (!datasetId) problem('AMM_REPLAY_DATASET');
+    const config = scenario ? scenarioParameters(input.config) : replayParameters(input.config);
+    const controller = new AbortController();
+    this.ammReplayAbort = controller;
+    this.runningTests.add(controller);
+    const signal = externalSignal
+      ? AbortSignal.any([externalSignal, controller.signal])
+      : controller.signal;
+    try {
+      const load = this.archiveReader(w, signal);
+      const { data: dataset } = await load(datasetId, MAX_BYTES);
+      const evidence = dataset.amm || dataset.series;
+      if (!evidence || dataset.market.venue !== w.market.venue) problem('AMM_REPLAY_DATASET');
+      const execute = scenario ? runScenario : replayAmm;
+      const result = await execute({
+        dataset,
+        datasetId,
+        load,
+        market: this.market,
+        marketConfig: copy(w.market),
+        config,
+        signal,
+      });
+      return await this.saveRun(
+        {
+          id: randomUUID(),
+          workspaceId: w.id,
+          datasetId,
+          createdAt: Date.now(),
+          codeVersion: scenario
+            ? AMM_SCENARIO_VERSION
+            : config.feeMode === 'historical'
+              ? HISTORICAL_COST_VERSION
+              : AMM_REPLAY_VERSION,
+          ...result,
+          provenance: {
+            ...dataset.market,
+            chainId: evidence.chainId,
+            pool: evidence.pool,
+            fee: evidence.fee,
+          },
+          dataSource: dataset.source,
+          ...(dataset.series && { dataSeries: dataset.series }),
+        },
+        scenario ? 'amm-scenario-saved' : 'amm-replay-completed',
+        signal,
+      );
+    } finally {
+      this.runningTests.delete(controller);
+      this.ammReplayAbort = undefined;
+    }
+  }
+  getRun(id, runId) {
+    const w = this.workspace(id);
+    if (!w.runs.some((run) => run.id === runId)) problem('RUN_NOT_IN_WORKSPACE');
+    const run = JSON.parse(
+      fs.readFileSync(path.join(this.directory, 'runs', runId + '.json'), 'utf8'),
+    );
+    const { integrity, ...data } = run;
+    if (hash(data) !== integrity) problem('RUN_HASH_MISMATCH');
+    return run;
   }
   async openChat(id) {
     if (!this.runtime) problem('CHAT_UNAVAILABLE');
@@ -563,13 +832,14 @@ class QuantService {
         version: 1,
         venues: ['base', 'base-sepolia', 'coinbase'],
         chains: Object.values(CHAINS).map(({ id, name, explorer }) => ({ id, name, explorer })),
+        walletNetworks: this.getWallet?.().networks.list().items ?? [],
         live: Boolean(this.getWallet),
         nativeHftEngine: false,
         intervals: INTERVALS,
       };
     if (action === 'workspace.list') return this.state.workspaces.map((w) => this.summary(w));
     if (action === 'contract')
-      return require('./contracts').contractRequest(this, input.id, input, writeAtomic);
+      return require('./contracts').contractRequest(this, input.id, input, writeAtomic, context);
     if (action === 'workspace.create')
       return this.mutate((state) => {
         if (state.workspaces.length >= 200) problem('WORKSPACE_LIMIT');
@@ -642,6 +912,7 @@ class QuantService {
             problem('PAUSE_AND_CANCEL_BEFORE_CONFIGURING');
           if (input.risk) w.risk = riskConfig({ ...w.risk, ...input.risk });
           if (input.market) {
+            const before = JSON.stringify(w.market);
             if (input.market.interval !== undefined && !INTERVALS.includes(input.market.interval))
               problem('INTERVAL_UNAVAILABLE');
             if (input.market.rpcUrl !== undefined)
@@ -661,10 +932,13 @@ class QuantService {
               w.market.poolFee = input.market.poolFee;
             }
             if (input.market.interval !== undefined) w.market.interval = input.market.interval;
-            w.marketRevision++;
-            w.candles = [];
-            w.quote = null;
-            w.lastError = null;
+            if (JSON.stringify(w.market) !== before) {
+              this.baseRecorder.pause(w, 'market-changed');
+              w.marketRevision++;
+              w.candles = [];
+              w.quote = null;
+              w.lastError = null;
+            }
           }
           event(w, 'configuration-updated');
         }
@@ -672,8 +946,49 @@ class QuantService {
         return this.snapshot(w);
       });
     if (action === 'market.refresh') return this.refresh(input.id);
-    if (action === 'base.inspect')
-      return this.market.chainStatus(this.workspace(input.id).market, input);
+    if (action === 'base.history.record.status')
+      return this.baseRecorder.status(this.workspace(input.id));
+    if (action === 'base.history.record.start') return this.baseRecorder.start(input);
+    if (action === 'base.history.record.stop') return this.baseRecorder.stop(input.id);
+    if (action === 'base.history.capture') return this.captureBaseHistory(input, context.signal);
+    if (action === 'base.history.series') return this.createBaseSeries(input, context.signal);
+    if (action === 'base.history.trades') {
+      const { amm } = this.workspaceDataset(this.workspace(input.id), input.datasetId);
+      if (!amm) problem('BASE_HISTORY_SOURCE_CHANGED');
+      const offset = input.offset ?? 0,
+        limit = input.limit ?? 50;
+      if (
+        !Number.isSafeInteger(offset) ||
+        offset < 0 ||
+        !Number.isSafeInteger(limit) ||
+        limit < 1 ||
+        limit > 100
+      )
+        problem('HISTORY_PAGE');
+      return { items: amm.trades.slice(offset, offset + limit), offset, total: amm.swapCount };
+    }
+    if (action === 'base.inspect') {
+      const { market, config, chain } = this.evmContext(input.id, input.chainId);
+      if (!chain.builtin && (input.signatureNonce !== undefined || input.protocol === 'permit2'))
+        problem('WALLET_CHAIN_UNAVAILABLE');
+      if (input.assets === true)
+        return market.tokenHoldings(config, input, { signal: context.signal });
+      if (input.signatureNonce !== undefined)
+        return market.permit2SignatureNonce(
+          config,
+          { address: input.address, nonce: input.signatureNonce },
+          { signal: context.signal },
+        );
+      if (input.approvalHistory === true)
+        return market.discoverTokenApprovals(
+          config,
+          { ...input, limit: input.limit ?? 8 },
+          { signal: context.signal },
+        );
+      if (input.token !== undefined || input.spender !== undefined)
+        return market.tokenAllowance(config, input, { signal: context.signal });
+      return market.chainStatus(config, input, { signal: context.signal });
+    }
     if (action === 'dataset.import') {
       const w = this.workspace(input.id),
         candles = parseImport(input.text);
@@ -692,20 +1007,54 @@ class QuantService {
       });
     }
     if (action === 'dataset.get') {
-      const w = this.workspace(input.id);
-      if (!w.datasets.some((d) => d.id === input.datasetId)) problem('DATASET_NOT_IN_WORKSPACE');
-      return this.dataset(input.datasetId);
+      const data = this.workspaceDataset(this.workspace(input.id), input.datasetId);
+      if (data.amm) delete data.amm.trades;
+      return data;
     }
-    if (action === 'run.backtest') return this.backtest(input.id, input);
-    if (action === 'run.get') {
-      const w = this.workspace(input.id);
-      if (!w.runs.some((run) => run.id === input.runId)) problem('RUN_NOT_IN_WORKSPACE');
-      const run = JSON.parse(
-        fs.readFileSync(path.join(this.directory, 'runs', input.runId + '.json'), 'utf8'),
-      );
-      const { integrity, ...data } = run;
-      if (hash(data) !== integrity) problem('RUN_HASH_MISMATCH');
-      return run;
+    if (action === 'run.backtest') return this.backtest(input.id, input, context.signal);
+    if (action === 'run.walk-forward') return this.backtest(input.id, input, context.signal, true);
+    if (action === 'run.walk-forward.fold') {
+      const run = this.getRun(input.id, input.runId);
+      const fold = input.fold;
+      if (!run.walkForward || !Number.isInteger(fold) || !run.walkForward.windows[fold - 1])
+        problem('WALK_FORWARD_FOLD');
+      return run.walkForward.windows[fold - 1];
+    }
+    if (action === 'run.amm') return this.runAmmExperiment(input, context.signal);
+    if (action === 'run.amm.scenario') return this.runAmmExperiment(input, context.signal, true);
+    if (action === 'run.amm.scenario.get') {
+      const run = this.getRun(input.id, input.runId);
+      if (!run.ammScenario) problem('AMM_SCENARIO_RUN_REQUIRED');
+      return {
+        id: run.id,
+        datasetId: run.datasetId,
+        config: run.config,
+        provenance: run.provenance,
+        metrics: run.metrics,
+        assumptions: run.assumptions,
+        ...run.ammScenario,
+      };
+    }
+    if (action === 'run.get') return this.getRun(input.id, input.runId);
+    if (action === 'run.amm.attempts') {
+      const run = this.getRun(input.id, input.runId);
+      if (!run.ammReplay) problem('AMM_REPLAY_RUN_REQUIRED');
+      const offset = input.offset ?? 0,
+        limit = input.limit ?? 10;
+      if (
+        !Number.isSafeInteger(offset) ||
+        offset < 0 ||
+        !Number.isInteger(limit) ||
+        limit < 1 ||
+        limit > 20
+      )
+        problem('INVALID_PAGINATION');
+      return {
+        items: run.ammReplay.attempts.slice(offset, offset + limit),
+        offset,
+        total: run.ammReplay.attempts.length,
+        finalMark: run.ammReplay.finalMark,
+      };
     }
     if (action === 'history.list') {
       const w = this.workspace(input.id),
@@ -845,18 +1194,29 @@ class QuantService {
       problem('LIVE_SIGNER_NOT_IMPLEMENTED');
     problem('UNKNOWN_QUANT_ACTION');
   }
+  evmContext(id, chainId) {
+    const workspace = this.workspace(id);
+    if (chainId === undefined) {
+      const chain = CHAINS[workspace.market.venue];
+      if (!chain) problem('WALLET_CHAIN_UNAVAILABLE');
+      return { market: this.market, config: workspace.market, chain: { ...chain, builtin: true } };
+    }
+    if (!this.getWallet) problem('LIVE_SIGNER_NOT_IMPLEMENTED');
+    const wallet = this.getWallet(),
+      chain = wallet.networks.byId(chainId);
+    return { market: wallet.market, config: { venue: chain.key }, chain };
+  }
   async liveTransaction(id, input, commandId, signal, agentContext) {
+    const { config, chain } = this.evmContext(id, input.chainId);
     if (input.callId) {
       const call = require('./contracts').loadCall(this, id, input.callId);
-      if (call.chainId !== CHAINS[this.workspace(id).market.venue]?.id)
-        problem('CONTRACT_NETWORK_CHANGED');
+      if (call.chainId !== chain.id) problem('CONTRACT_NETWORK_CHANGED');
       if (input.to || input.data) problem('CONTRACT_CALL_OVERRIDE');
       input = { ...input, to: call.to, data: call.data, value: input.value || '0' };
     }
     if (!this.getWallet) problem('LIVE_SIGNER_NOT_IMPLEMENTED');
-    const w = this.workspace(id);
     return this.getWallet().transact(
-      w.market,
+      config,
       { ...input, commandId },
       { actor: 'agent', workspaceId: id, signal, agentContext },
     );
@@ -877,6 +1237,10 @@ class QuantService {
   }
   dispose() {
     this.disposed = true;
+    this.baseRecorder.dispose();
+    for (const controller of this.baseCaptures.values()) controller.abort();
+    for (const controller of this.baseSeriesReads) controller.abort();
+    this.ammReplayAbort?.abort();
     this.liveExecution?.dispose();
     this.recordings.dispose();
     this.replays.dispose();

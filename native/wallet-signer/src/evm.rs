@@ -50,8 +50,11 @@ fn fields(tx: &Transaction, stream: &mut RlpStream, to: &[u8], data: &[u8]) -> R
     stream.begin_list(0);
     Ok(())
 }
+pub fn valid_chain_id(id: u64) -> bool {
+    id > 0 && id <= 9007199254740991
+}
 fn validated(tx: &Transaction) -> Result<(Vec<u8>, Vec<u8>)> {
-    if ![8453, 84532].contains(&tx.chain_id) || tx.r#type != 2 {
+    if !valid_chain_id(tx.chain_id) || tx.r#type != 2 {
         return Err("WALLET_CHAIN_UNAVAILABLE");
     }
     if tx.nonce > 9007199254740991

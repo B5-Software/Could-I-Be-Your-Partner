@@ -3,10 +3,14 @@ import labels from '../../shared/quant-execution-labels.json';
 import {
   executionAmount,
   executionPercent,
+  executionSettlementRows,
+  executionBenchmarkRows,
+  executionArrivalRows,
   type ExecutionRun,
   type ExecutionCommand,
   type ExecutionPage,
   type ExecutionView,
+  type ExecutionVwapProfile,
   type ExecutionWallet,
 } from '../../shared/quant-execution-types';
 import { walletStatus } from './wallet-panel';
@@ -75,11 +79,31 @@ export function openLiveExecution(options: Options): HTMLDialogElement {
     esc(t('leSell')) +
     '</option></select></label>' +
     field('leInput', 'totalInput', '100', 'inputmode="decimal" required') +
+    field('leMinimumTotal', 'minimumTotalOutput', '', 'inputmode="decimal" maxlength="39"') +
+    field('leArrivalLimit', 'maxArrivalCostBps', '', 'type="number" min="0" max="9999" step="1"') +
     field('leSlices', 'slices', '2', 'type="number" min="1" max="1000" required') +
+    '<label>' +
+    esc(t('leSchedule')) +
+    '<select name="schedule"><option value="settlement">' +
+    esc(t('leAfterFinality')) +
+    '</option><option value="fixed-window">' +
+    esc(t('leFixed')) +
+    '</option><option value="vwap">' +
+    esc(t('leVwap')) +
+    '</option></select></label>' +
     field('leInterval', 'seconds', '60', 'type="number" min="1" max="86400" required') +
     field('leSlippage', 'slippage', '0.50', 'inputmode="decimal" required') +
     field('leFeeBudget', 'maxEstimatedFeeEth', '0.01', 'inputmode="decimal" required') +
     '</div><p class="le-subtle">' +
+    esc(t('leMinimumHint')) +
+    '</p><p class="le-subtle" data-fixed-hint hidden>' +
+    esc(t('leFixedScope')) +
+    '</p><div data-vwap-fields hidden><p class="le-subtle">' +
+    esc(t('leVwapScope')) +
+    '</p>' +
+    button('leProfileCapture', 'capture') +
+    '<p role="status" data-vwap-status hidden></p><div data-vwap-preview></div></div>' +
+    '<p class="le-subtle">' +
     esc(t('leFeeHint')) +
     '</p><p class="le-subtle">' +
     esc(t('leDraftHint')) +
@@ -103,6 +127,64 @@ export function openLiveExecution(options: Options): HTMLDialogElement {
     dialog.querySelector<T>(selector)!;
   const form = q<HTMLFormElement>('[data-le-form]');
   const select = form.elements.namedItem('walletId') as HTMLSelectElement;
+  const schedule = form.elements.namedItem('schedule') as HTMLSelectElement;
+  let profile: ExecutionVwapProfile | undefined;
+  const clearProfile = () => {
+    profile = undefined;
+    q('[data-vwap-status]').hidden = true;
+    q('[data-vwap-preview]').replaceChildren();
+  };
+  const refreshSchedule = () => {
+    q('[data-fixed-hint]').hidden = schedule.value === 'settlement';
+    q('[data-vwap-fields]').hidden = schedule.value !== 'vwap';
+    clearProfile();
+  };
+  schedule.addEventListener('change', refreshSchedule);
+  for (const name of ['slices', 'seconds'])
+    q<HTMLInputElement>('[name=' + name + ']').addEventListener('input', clearProfile);
+  const weights = (volumes: string[], open = false) => {
+    const sum = volumes.reduce((total, value) => total + BigInt(value), 0n).toString();
+    return (
+      '<details class="le-profile-weights"' +
+      (open ? ' open' : '') +
+      '><summary>' +
+      esc(t('leProfileWeights')) +
+      '</summary><ol>' +
+      volumes
+        .map(
+          (value) =>
+            '<li>' +
+            esc(String(executionPercent(value, sum))) +
+            '% · ' +
+            esc(executionAmount(value, 18)) +
+            ' WETH</li>',
+        )
+        .join('') +
+      '</ol></details>'
+    );
+  };
+  const profileEvidence = (profile: ExecutionVwapProfile) =>
+    '<p class="le-subtle">' +
+    esc(
+      new Date(profile.startTime * 1000).toLocaleString() +
+        ' → ' +
+        new Date(profile.endTime * 1000).toLocaleString(),
+    ) +
+    '</p><p class="le-subtle"><span title="' +
+    esc(profile.finalizedBlockHash) +
+    '">' +
+    esc(t('leProfileBlock')) +
+    ' ' +
+    esc(profile.finalizedBlock) +
+    '</span> · ' +
+    esc(profile.swapCount) +
+    ' ' +
+    esc(t('leProfileSwaps')) +
+    '</p><p class="le-subtle le-profile-pool">' +
+    esc(t('leProfilePool')) +
+    ' <code>' +
+    esc(profile.pool) +
+    '</code></p>';
   let wallets: ExecutionWallet[] = [],
     items: ExecutionRun[] = [],
     selected = '',
@@ -128,6 +210,10 @@ export function openLiveExecution(options: Options): HTMLDialogElement {
   const amount = (run: ExecutionRun, value = run.plan.total_input_atoms) =>
     executionAmount(value, run.plan.side === 'buy' ? 6 : 18);
   const unit = (run: ExecutionRun) => (run.plan.side === 'buy' ? 'USDC' : 'WETH');
+  const output = (run: ExecutionRun, value: string) =>
+    run.plan.side === 'buy'
+      ? executionAmount(value, 18) + ' WETH'
+      : executionAmount(value, 6) + ' USDC';
   const walletName = (id: string) => wallets.find((w) => w.id === id)?.name || '—';
   const title = (run: ExecutionRun) =>
     (run.plan.side === 'buy' ? t('leBuy') : t('leSell')) + ' · ' + amount(run) + ' ' + unit(run);
@@ -208,6 +294,8 @@ export function openLiveExecution(options: Options): HTMLDialogElement {
         (!wallet.policy.expiresAt || wallet.policy.expiresAt > Date.now());
     const permitted = wallet?.unlocked && auto;
     const state = !wallet?.unlocked ? t('leLocked') : !auto ? t('leAutoRequired') : t('leGranted');
+    const weighted = run.plan.vwap;
+    const fixed = run.plan.template === 'base-twap-fixed-v1' || Boolean(weighted);
     const canStart =
       supported &&
       permitted &&
@@ -234,7 +322,7 @@ export function openLiveExecution(options: Options): HTMLDialogElement {
       esc(status(run.phase)) +
       '</span></header>' +
       '<p class="le-subtle">' +
-      esc(t('leScope')) +
+      esc(t(fixed ? 'leFixedScope' : 'leScope')) +
       '</p><div class="le-metrics">' +
       metric(
         t('leProgress'),
@@ -255,9 +343,72 @@ export function openLiveExecution(options: Options): HTMLDialogElement {
       esc(t('leFeeHint')) +
       '</p><dl class="le-facts">' +
       row(t('leSlices'), String(run.plan.slices)) +
+      row(t('leSchedule'), t(weighted ? 'leVwap' : fixed ? 'leFixed' : 'leAfterFinality')) +
       row(t('leInterval'), String(run.plan.interval_ms / 1000)) +
+      (fixed
+        ? row(
+            t('leWindow'),
+            run.fixed
+              ? time(run.fixed.start_at_ns) + ' → ' + time(run.fixed.end_at_ns)
+              : t('leFirstStart'),
+          )
+        : '') +
+      (run.fixed
+        ? row(
+            t('leSkipped'),
+            run.fixed.skipped_slices +
+              ' · ' +
+              amount(run, run.fixed.skipped_input_atoms) +
+              ' ' +
+              unit(run),
+          )
+        : '') +
       row(t('leSlippage'), String(run.plan.slippage_bps / 100) + '%') +
+      row(
+        t('leMinimumTotal'),
+        run.plan.min_total_output_atoms
+          ? output(run, run.plan.min_total_output_atoms)
+          : t('leQuoteOnly'),
+      ) +
+      (run.plan.max_arrival_cost_bps === undefined
+        ? ''
+        : row(t('leArrivalLimit'), run.plan.max_arrival_cost_bps + ' bp')) +
+      executionSettlementRows(run.plan.side, view.settlement, t)
+        .map(([label, value]) => row(label, value))
+        .join('') +
       '</dl>' +
+      (run.arrival && view.arrivalComparison
+        ? '<section class="le-history"><header><h3>' +
+          esc(t('leArrival')) +
+          '</h3></header>' +
+          '<p class="le-subtle">' +
+          esc(t('leArrivalScope')) +
+          '</p><dl class="le-facts">' +
+          executionArrivalRows(run.arrival, view.arrivalComparison, t, options.language())
+            .map(([label, value]) => row(label, value))
+            .join('') +
+          '</dl><code class="le-arrival-hash">' +
+          esc(run.arrival.block_hash) +
+          '</code></section>'
+        : '') +
+      (view.benchmark
+        ? '<section class="le-history"><header><h3>' +
+          esc(t('leBenchmark')) +
+          '</h3></header>' +
+          '<p class="le-subtle">' +
+          esc(t('leBenchmarkScope')) +
+          '</p><dl class="le-facts">' +
+          executionBenchmarkRows(view.benchmark, t, options.language())
+            .map(([label, value]) => row(label, value))
+            .join('') +
+          '</dl></section>'
+        : '') +
+      (weighted
+        ? (view.profile
+            ? profileEvidence(view.profile)
+            : '<p class="le-subtle">' + esc(status('EXECUTION_PROFILE_REQUIRED')) + '</p>') +
+          weights(weighted.weth_volume_atoms)
+        : '') +
       (run.pending
         ? '<p class="le-notice">' +
           esc(run.phase === 'running' ? t('leFinality') : t('lePending')) +
@@ -266,18 +417,28 @@ export function openLiveExecution(options: Options): HTMLDialogElement {
       '<p class="le-authority">' +
       esc(state) +
       '</p>' +
-      (view.lastError ? '<p class="le-error">' + esc(status(view.lastError)) + '</p>' : '') +
+      (view.lastError || run.phase === 'expired'
+        ? '<p class="le-error">' + esc(status(view.lastError || run.reason)) + '</p>'
+        : '') +
       '<div class="le-run-actions">' +
       button('leStart', 'start', 'class="quant-primary" ' + (!canStart ? 'disabled' : '')) +
       button(
         stopping.has(run.plan.id) ? 'leStopBusy' : 'leStop',
         'stop',
         'class="le-stop" ' +
-          (['completed', 'stopped'].includes(run.phase) || stopping.has(run.plan.id)
+          (['completed', 'stopped', 'expired'].includes(run.phase) || stopping.has(run.plan.id)
             ? 'disabled'
             : ''),
       ) +
-      (run.pending ? button('leReconcile', 'reconcile', busy ? 'disabled' : '') : '') +
+      (run.pending ||
+      view.settlement?.receiptsMissing ||
+      (view.settlement &&
+        view.settlement.fees.operatorReceipts < view.settlement.fees.finalizedTransactions)
+        ? button('leReconcile', 'reconcile', busy ? 'disabled' : '')
+        : '') +
+      (view.benchmarkReady && !view.benchmark
+        ? button('leBenchmark', 'benchmark', busy ? 'disabled' : '')
+        : '') +
       button('leWallet', 'wallet') +
       '</div>' +
       '<section class="le-history"><header><h3>' +
@@ -305,6 +466,32 @@ export function openLiveExecution(options: Options): HTMLDialogElement {
                 '</small><p>' +
                 esc(status(command.reason)) +
                 '</p>' +
+                (command.window
+                  ? '<p>' +
+                    esc(
+                      t('leWindow') +
+                        ' · ' +
+                        time(command.window.opens_at_ns) +
+                        ' → ' +
+                        time(command.window.closes_at_ns),
+                    ) +
+                    '</p>'
+                  : '') +
+                (command.min_output_atoms
+                  ? '<p>' +
+                    esc(t('leMinimumSlice') + ' · ' + output(run, command.min_output_atoms)) +
+                    '</p>'
+                  : '') +
+                (command.min_arrival_output_atoms
+                  ? '<p>' +
+                    esc(
+                      t('leArrivalMinimum') + ' · ' + output(run, command.min_arrival_output_atoms),
+                    ) +
+                    '</p>'
+                  : '') +
+                executionSettlementRows(run.plan.side, command.settlement, t)
+                  .map(([label, value]) => '<p>' + esc(label + ' · ' + value) + '</p>')
+                  .join('') +
                 command.hashes
                   .map((hash) => '<code title="' + esc(t('leHash')) + '">' + esc(hash) + '</code>')
                   .join('') +
@@ -427,6 +614,38 @@ export function openLiveExecution(options: Options): HTMLDialogElement {
       form.hidden = true;
       return;
     }
+    if (action === 'capture') {
+      if (busy) return;
+      clearProfile();
+      const data = new FormData(form);
+      const slices = Number(data.get('slices'));
+      const intervalMs = Number(data.get('seconds')) * 1000;
+      const indicator = q('[data-vwap-status]');
+      indicator.textContent = t('leProfileLoading');
+      indicator.hidden = false;
+      busy = true;
+      const fields = form.querySelector('fieldset')!;
+      fields.disabled = true;
+      render();
+      void options
+        .request('execution.profile', { id: options.id, slices, intervalMs })
+        .then((result) => {
+          if (closed) return;
+          profile = result as ExecutionVwapProfile;
+          q('[data-vwap-preview]').innerHTML =
+            profileEvidence(profile) + weights(profile.wethVolumeAtoms, true);
+          q('[data-le-error]').hidden = true;
+        })
+        .catch(error)
+        .finally(() => {
+          indicator.hidden = true;
+          busy = false;
+          fields.disabled = false;
+          renderKey = '';
+          render();
+        });
+      return;
+    }
     if (action === 'refresh') {
       void refresh();
       return;
@@ -445,7 +664,7 @@ export function openLiveExecution(options: Options): HTMLDialogElement {
       void refresh();
       return;
     }
-    if (!selected || !['start', 'stop', 'reconcile'].includes(action || '')) return;
+    if (!selected || !['start', 'stop', 'reconcile', 'benchmark'].includes(action || '')) return;
     const id = view?.run.plan.id;
     if (!id) return;
     if (action === 'stop') stopping.add(id);
@@ -470,6 +689,10 @@ export function openLiveExecution(options: Options): HTMLDialogElement {
     if (busy) return;
     const data = new FormData(form),
       value = (name: string) => String(data.get(name) || '');
+    if (schedule.value === 'vwap' && !profile) {
+      error('EXECUTION_PROFILE_REQUIRED');
+      return;
+    }
     const slip = /^(\d)(?:\.(\d{0,2}))?$/.exec(value('slippage'));
     const slippageBps = slip ? Number(slip[1]) * 100 + Number((slip[2] || '').padEnd(2, '0')) : NaN;
     if (!Number.isInteger(slippageBps) || slippageBps > 500) {
@@ -485,8 +708,16 @@ export function openLiveExecution(options: Options): HTMLDialogElement {
         walletId: value('walletId'),
         side: value('side'),
         totalInput: value('totalInput'),
+        ...(value('minimumTotalOutput').trim()
+          ? { minimumTotalOutput: value('minimumTotalOutput').trim() }
+          : {}),
+        ...(value('maxArrivalCostBps') === ''
+          ? {}
+          : { maxArrivalCostBps: Number(value('maxArrivalCostBps')) }),
         slices: Number(value('slices')),
         intervalMs: Number(value('seconds')) * 1000,
+        schedule: value('schedule'),
+        ...(schedule.value === 'vwap' && profile ? { profileId: profile.id } : {}),
         slippageBps,
         maxEstimatedFeeEth: value('maxEstimatedFeeEth'),
       })
@@ -497,6 +728,7 @@ export function openLiveExecution(options: Options): HTMLDialogElement {
         commandOffset = 0;
         operationId = crypto.randomUUID();
         form.hidden = true;
+        clearProfile();
         q('[data-le-error]').hidden = true;
       })
       .catch(error)

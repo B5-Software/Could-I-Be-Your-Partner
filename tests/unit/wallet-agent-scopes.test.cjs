@@ -25,7 +25,11 @@ async function fixture(t) {
       writes.push(b);
       nonce++;
       result = keccak256(b.params[0]);
-    } else
+    } else if (b.method === 'eth_call' && b.params[0].data.startsWith('0x70a08231'))
+      result = '0x' + 1000000000n.toString(16).padStart(64, '0');
+    else if (b.method === 'eth_call' && b.params[0].data === '0x313ce567')
+      result = '0x' + '6'.padStart(64, '0');
+    else
       result = {
         eth_chainId: '0x2105',
         eth_getTransactionCount: '0x' + nonce.toString(16),

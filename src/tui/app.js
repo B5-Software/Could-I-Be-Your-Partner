@@ -104,6 +104,14 @@ class TuiApp {
     this.state.mode = mode;
     this._unsubscribe = this.runtime.onEvent((event) => {
       if (event.type === 'wallet-changed') void this.walletBrowser.changed().catch(() => {});
+      if (event.type === 'wallet-allowance-monitor')
+        this.walletBrowser.notify(
+          this.walletBrowser.text(
+            event.reason === 'attention'
+              ? 'portfolioMonitorAttentionNotice'
+              : 'portfolioMonitorIncreaseNotice',
+          ),
+        );
       this._eventQueue = this._eventQueue
         .then(() => this.handleRuntimeEvent(event))
         .catch(() => {});
@@ -185,7 +193,6 @@ class TuiApp {
    */
   _applySettings(settings) {
     if (!settings) return;
-    this.quantAllowed = require('../shared/feature-gates').quantEnabled(settings);
     this.theme = themeFromSettings(settings, this.env, this._systemDark);
     if (settings.tui) this._thinkingExpanded = settings.tui.thinkingExpanded !== false;
     this.state.thinkingExpanded = this._thinkingExpanded;
@@ -334,7 +341,6 @@ class TuiApp {
     if (!hasSpace) {
       const items = suggestCommands(trimmed, {
         customCommands: this.customCommands,
-        quantEnabled: this.quantAllowed === true,
       });
       if (items.length === 0) return null;
       return {
@@ -1685,9 +1691,7 @@ class TuiApp {
           kind: 'help',
           colorKey: 'permission',
           title: t('ui.tui.helpTitle', '命令表'),
-          body: helpLines(this.customCommands, { quantEnabled: this.quantAllowed === true }).join(
-            '\n',
-          ),
+          body: helpLines(this.customCommands).join('\n'),
           options: [{ label: t('ui.tui.helpClose', '关闭'), value: 'close' }],
           selected: 0,
         };
@@ -1848,8 +1852,6 @@ class TuiApp {
         return;
       }
       case 'quant': {
-        if (!require('../shared/feature-gates').quantEnabled(await this.runtime.getSettings()))
-          throw Error('QUANT_DISABLED');
         await this.quantBrowser.open();
         return;
       }

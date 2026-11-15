@@ -138,16 +138,21 @@ function sendRequest(action, input) {
     assert.equal(Transaction.from(signed.raw).from, reference.address);
     for (const variant of [
       { ...transaction, chainId: 84532, nonce: 9007199254740991, value: '0', data: '0x00ff' },
+      { ...transaction, chainId: 1 },
+      { ...transaction, chainId: 1337 },
+      { ...transaction, chainId: Number.MAX_SAFE_INTEGER },
       { ...transaction, value: ((1n << 256n) - 1n).toString() },
     ])
       assert.equal(
         (await request('sign', { transaction: variant })).raw,
         await reference.signTransaction(variant),
       );
-    await assert.rejects(
-      request('sign', { transaction: { ...transaction, chainId: 1 } }),
-      /CHAIN_UNAVAILABLE/,
-    );
+    for (const variant of [
+      { ...transaction, chainId: 0 },
+      { ...transaction, chainId: Number.MAX_SAFE_INTEGER + 1 },
+      { ...transaction, type: 0 },
+    ])
+      await assert.rejects(request('sign', { transaction: variant }), /CHAIN_UNAVAILABLE/);
     await assert.rejects(
       request('sign', { transaction: { ...transaction, maxPriorityFeePerGas: '1000000001' } }),
       /TRANSACTION_FORMAT/,

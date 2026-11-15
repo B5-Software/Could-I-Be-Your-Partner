@@ -5,7 +5,10 @@
 const { createHash, randomUUID } = require('node:crypto');
 const { parseUnits, formatUnits, Interface } = require('ethers');
 const { CHAINS } = require('./market-data');
-const { executeBaseSwap, deployments } = require('./base-swap');
+const { executeBaseSwap, deployments, minimumOutputAtoms } = require('./base-swap');
+const vwap = require('./vwap-profile');
+const benchmark = require('./execution-benchmark');
+const executionReceipt = require('./execution-receipt');
 const fail = (code) => {
   throw Error(code);
 };
@@ -18,6 +21,26 @@ const code = (error) =>
 const terminalUnsent = (record) =>
   (!record.hash && ['failed', 'denied', 'expired', 'cancelled'].includes(record.status)) ||
   record.submissionMayHaveOccurred === false;
+const marketStopped = (reason) =>
+  [
+    'SWAP_PRICE_LIMIT',
+    'EXECUTION_ARRIVAL_LIMIT',
+    'WALLET_SWAP_SIMULATION_FAILED',
+    'WALLET_FEE_RESERVE_EXCEEDED',
+    'WALLET_FEE_QUOTE_UNAVAILABLE',
+    'WALLET_PORTFOLIO_EQUITY_LOW',
+    'WALLET_PORTFOLIO_EQUITY_UNKNOWN',
+    'WALLET_PORTFOLIO_EQUITY_UNAVAILABLE',
+    'WALLET_PORTFOLIO_EQUITY_REQUIRED',
+  ].includes(reason);
+const WINDOW_EXPIRED = 'EXECUTION_WINDOW_EXPIRED';
+const TEMPLATES = Object.freeze({
+  settlement: 'base-twap-v1',
+  'fixed-window': 'base-twap-fixed-v1',
+  vwap: 'base-vwap-fixed-v1',
+});
+const fixedTemplate = (template) =>
+  template === TEMPLATES['fixed-window'] || template === TEMPLATES.vwap;
 const erc20 = new Interface(['function approve(address,uint256) returns(bool)']);
 function configOf(workspace) {
   const market = workspace.market;
@@ -42,6 +65,45 @@ function page(input) {
     fail('INVALID_PAGINATION');
   return { offset, limit };
 }
+function sliceMinimum(plan, command) {
+  if (plan.min_total_output_atoms === undefined && command.min_output_atoms === undefined)
+    return null;
+  if (
+    !/^[1-9]\d{0,38}$/.test(plan.min_total_output_atoms) ||
+    !/^[1-9]\d{0,38}$/.test(command.min_output_atoms)
+  )
+    fail('EXECUTION_PRICE_LIMIT_MISMATCH');
+  const total = BigInt(plan.total_input_atoms);
+  const required =
+    (BigInt(plan.min_total_output_atoms) * BigInt(command.input_atoms) + total - 1n) / total;
+  if (BigInt(command.min_output_atoms) !== required) fail('EXECUTION_PRICE_LIMIT_MISMATCH');
+  return required;
+}
+function windowEnd(run, command) {
+  const { plan } = run;
+  if (!fixedTemplate(plan.template) && !command.window) return undefined;
+  if (
+    !fixedTemplate(plan.template) ||
+    !/^\d{1,24}$/.test(run.fixed?.start_at_ns) ||
+    !Number.isInteger(command.ordinal) ||
+    command.ordinal < 1 ||
+    command.ordinal > plan.slices ||
+    !Number.isSafeInteger(plan.interval_ms)
+  )
+    fail('EXECUTION_WINDOW_REQUIRED');
+  const interval = BigInt(plan.interval_ms) * 1000000n;
+  const open = BigInt(run.fixed.start_at_ns) + interval * BigInt(command.ordinal - 1);
+  const close = open + interval;
+  if (
+    command.window?.opens_at_ns !== String(open) ||
+    command.window?.closes_at_ns !== String(close)
+  )
+    fail('EXECUTION_WINDOW_REQUIRED');
+  if (plan.template === TEMPLATES.vwap) vwap.assertAllocation(plan, command);
+  const end = Number(close / 1000000n);
+  if (!Number.isSafeInteger(end) || end <= 0) fail('EXECUTION_WINDOW_REQUIRED');
+  return end;
+}
 class LiveExecution {
   constructor(service) {
     this.service = service;
@@ -53,6 +115,7 @@ class LiveExecution {
     this.owners = new Map();
     this.authorityEpoch = 0;
     this.runEpochs = new Map();
+    this.profileReads = new Set();
     this.disposed = false;
     this.cursor = 0;
   }
@@ -116,6 +179,7 @@ class LiveExecution {
     const run = await this.service.native.execution('get', { id: runId });
     if (run.plan.owner !== owner(workspaceId)) fail('EXECUTION_SCOPE_MISMATCH');
     this.owners.set(run.plan.id, workspaceId);
+    if (run.phase === 'expired') this.activated.delete(run.plan.id);
     return run;
   }
   request(action, input, context = {}) {
@@ -135,12 +199,32 @@ class LiveExecution {
     return this.execute(action, input, context);
   }
   async execute(action, input = {}, context = {}) {
-    const workspace = this.service.workspace(input.id),
-      native = await this.native();
+    const workspace = this.service.workspace(input.id);
     if (context.agentContext) {
       require('../wallet/agent-scopes').validateContext(context.agentContext);
       if (context.agentContext.workspaceId !== workspace.id) fail('WALLET_AGENT_SCOPE_FORBIDDEN');
     }
+    if (action === 'profile.get')
+      return vwap.load(this.service.directory, input.profileId, owner(workspace.id));
+    if (action === 'profile') {
+      if (this.profileReads.has(workspace.id) || this.profileReads.size >= 4)
+        fail('EXECUTION_PROFILE_BUSY');
+      this.profileReads.add(workspace.id);
+      try {
+        const profile = await vwap.capture(
+          this.service.market,
+          configOf(workspace),
+          owner(workspace.id),
+          input.slices,
+          input.intervalMs,
+          context.signal,
+        );
+        return vwap.archive(this.service.directory, profile, require('./index').writeAtomic);
+      } finally {
+        this.profileReads.delete(workspace.id);
+      }
+    }
+    const native = await this.native();
     if (action === 'list') {
       const result = await native.execution('list', { owner: owner(workspace.id), ...page(input) });
       if (context.agentContext?.nodes.length > 1) {
@@ -180,6 +264,32 @@ class LiveExecution {
       }
       if (total <= 0n || budget <= 0n || typeof (input.maxEstimatedFeeEth ?? '0.01') !== 'string')
         fail('INVALID_EXECUTION_PLAN');
+      const priceFloor = minimumOutputAtoms(input.minimumTotalOutput, input.side === 'buy');
+      if (priceFloor !== null && native.handshake.executionPriceLimit !== 1)
+        fail('EXECUTION_PRICE_LIMIT_REQUIRED');
+      const arrivalBps = input.maxArrivalCostBps;
+      if (arrivalBps !== undefined) {
+        if (!Number.isInteger(arrivalBps) || arrivalBps < 0 || arrivalBps >= 10000)
+          fail('EXECUTION_ARRIVAL_LIMIT_RANGE');
+        if (native.handshake.executionArrivalLimit !== 1 || native.handshake.executionArrival !== 1)
+          fail('EXECUTION_ARRIVAL_REQUIRED');
+      }
+      const schedule = input.schedule ?? 'settlement';
+      if (typeof schedule !== 'string' || !Object.hasOwn(TEMPLATES, schedule))
+        fail('INVALID_EXECUTION_PLAN');
+      if (fixedTemplate(TEMPLATES[schedule]) && native.handshake.executionFixedWindows !== 1)
+        fail('EXECUTION_WINDOW_REQUIRED');
+      let profile;
+      if (schedule === 'vwap') {
+        if (native.handshake.executionVwap !== 1) fail('EXECUTION_PROFILE_UNAVAILABLE');
+        profile = vwap.load(this.service.directory, input.profileId, owner(workspace.id));
+        if (
+          profile.configHash !== hash(config) ||
+          profile.slices !== input.slices ||
+          profile.intervalMs !== input.intervalMs
+        )
+          fail('EXECUTION_PROFILE_INVALID');
+      }
       const agentScope = await this.wallet().agentScopes.binding(
         context.agentContext || require('../wallet/agent-scopes').rootContext(workspace.id),
         wallet.id,
@@ -187,7 +297,7 @@ class LiveExecution {
       );
       const result = await native.execution('create', {
         agent_scope: { id: agentScope.id, subject: agentScope.subject },
-        template: 'base-twap-v1',
+        template: TEMPLATES[schedule],
         id: 'execution:' + hash([owner(workspace.id), input.operationId]),
         owner: owner(workspace.id),
         wallet: wallet.id,
@@ -200,6 +310,11 @@ class LiveExecution {
         pool_fee: config.poolFee,
         config_hash: hash(config),
         max_fee_reserve_wei: String(budget),
+        ...(priceFloor === null ? {} : { min_total_output_atoms: String(priceFloor) }),
+        ...(arrivalBps === undefined ? {} : { max_arrival_cost_bps: arrivalBps }),
+        ...(profile
+          ? { vwap: { profile_id: profile.id, weth_volume_atoms: profile.wethVolumeAtoms } }
+          : {}),
       });
       this.changed(workspace.id);
       return result;
@@ -207,27 +322,92 @@ class LiveExecution {
     const run = await this.get(workspace.id, input.runId);
     if (context.agentContext && !(await this.agentAccess(run, context.agentContext)))
       fail('WALLET_AGENT_SCOPE_FORBIDDEN');
+    if (action === 'benchmark') {
+      const source = benchmark.basis(run, this.planRecords(run));
+      if (!source) fail('EXECUTION_BENCHMARK_NOT_READY');
+      const saved = benchmark.load(this.service.directory, run.plan.id, source.key);
+      if (saved) return saved;
+      if (this.profileReads.has(workspace.id) || this.profileReads.size >= 4)
+        fail('EXECUTION_PROFILE_BUSY');
+      this.profileReads.add(workspace.id);
+      try {
+        const report = await benchmark.capture(this.service.market, run, source, context.signal);
+        const current = await this.get(workspace.id, run.plan.id);
+        if (benchmark.basis(current, this.planRecords(current))?.key !== source.key)
+          fail('EXECUTION_BENCHMARK_NOT_READY');
+        const result = benchmark.archive(
+          this.service.directory,
+          run.plan.id,
+          report,
+          require('./index').writeAtomic,
+        );
+        this.changed(workspace.id);
+        return result;
+      } finally {
+        this.profileReads.delete(workspace.id);
+      }
+    }
     if (action === 'get') {
-      const records = this.wallet().state.intents.filter(
-        (i) => i.execution?.planId === run.plan.id,
-      );
+      const records = this.planRecords(run);
       const estimate = records.reduce((sum, i) => sum + BigInt(i.feeReserveWei), 0n);
+      const settlement = executionReceipt.summarize(records);
+      settlement.fill.finalized = Math.max(settlement.fill.finalized, run.completed_slices);
+      const arrivalComparison = benchmark.arrivalComparison(run, settlement.fill);
+      const source = benchmark.basis(run, records);
+      const comparison = source && benchmark.load(this.service.directory, run.plan.id, source.key);
+      let profile;
+      if (run.plan.vwap) {
+        try {
+          profile = vwap.load(this.service.directory, run.plan.vwap.profile_id, run.plan.owner);
+        } catch (error) {
+          if (error.message !== 'EXECUTION_PROFILE_REQUIRED') throw error;
+        }
+      }
       return {
         run,
+        settlement,
+        ...(arrivalComparison ? { arrivalComparison } : {}),
+        benchmarkReady: Boolean(source),
+        ...(comparison ? { benchmark: comparison } : {}),
+        ...(profile ? { profile } : {}),
         feeUsage: {
           reservedEstimateWei: String(estimate),
           budgetWei: run.plan.max_fee_reserve_wei,
           chainEnforced: false,
         },
-        lastError: this.errors.get(run.plan.id) || null,
+        lastError:
+          this.errors.get(run.plan.id) ||
+          (marketStopped(run.reason) || run.reason === WINDOW_EXPIRED ? run.reason : null),
       };
     }
-    if (action === 'commands')
-      return native.execution('commands', {
+    if (action === 'commands') {
+      const result = await native.execution('commands', {
         id: run.plan.id,
         owner: owner(workspace.id),
         ...page(input),
       });
+      const records = new Map(this.planRecords(run).map((intent) => [intent.id, intent]));
+      return {
+        ...result,
+        items: result.items.map((command) => {
+          const linked = command.intent_ids
+            .map((id) => records.get(id))
+            .filter(
+              (intent) =>
+                intent?.execution.commandId === command.id && command.hashes.includes(intent.hash),
+            );
+          const settlement = executionReceipt.summarize(linked);
+          const arrival = benchmark.arrivalMinimum(run, command.input_atoms);
+          if (command.stage === 'finalized')
+            settlement.fill.finalized = Math.max(1, settlement.fill.finalized);
+          return {
+            ...command,
+            settlement,
+            ...(arrival === null ? {} : { min_arrival_output_atoms: String(arrival) }),
+          };
+        }),
+      };
+    }
     if (action === 'stop') {
       this.abortRun(run.plan.id);
       const result = await native.execution('stop', { id: run.plan.id });
@@ -236,7 +416,18 @@ class LiveExecution {
       return result;
     }
     if (action === 'start') {
-      this.assertPlan(run);
+      const config = this.assertPlan(run);
+      if (run.plan.vwap) {
+        const profile = vwap.load(this.service.directory, run.plan.vwap.profile_id, run.plan.owner);
+        if (
+          profile.configHash !== run.plan.config_hash ||
+          profile.slices !== run.plan.slices ||
+          profile.intervalMs !== run.plan.interval_ms ||
+          JSON.stringify(profile.wethVolumeAtoms) !==
+            JSON.stringify(run.plan.vwap.weth_volume_atoms)
+        )
+          fail('EXECUTION_PROFILE_INVALID');
+      }
       if (run.plan.agent_scope)
         await this.wallet().agentScopes.fromBinding(
           run.plan.agent_scope,
@@ -244,7 +435,7 @@ class LiveExecution {
           workspace.id,
         );
       const wallet = this.wallet(),
-        policy = wallet.policy(wallet.wallet(run.plan.wallet), configOf(workspace).venue);
+        policy = wallet.policy(wallet.wallet(run.plan.wallet), config.venue);
       if (!wallet.isUnlocked(run.plan.wallet)) fail('WALLET_LOCKED');
       if (!policy) fail('EXECUTION_AUTONOMOUS_AUTH_REQUIRED');
       if (run.phase === 'running') {
@@ -254,12 +445,48 @@ class LiveExecution {
       }
       const epoch = this.authorityEpoch,
         runEpoch = this.runEpochs.get(run.plan.id) || 0;
-      const result = await native.execution('start', { id: run.plan.id, policy_id: policy.id });
-      if (
+      const stopped = () =>
         this.disposed ||
         epoch !== this.authorityEpoch ||
-        runEpoch !== (this.runEpochs.get(run.plan.id) || 0)
-      ) {
+        runEpoch !== (this.runEpochs.get(run.plan.id) || 0);
+      let arrival;
+      if (run.generation === 0 && native.handshake.executionArrival === 1) {
+        const snapshot = await this.service.market.base(config, {
+          signal: context.signal,
+          priceEvidence: true,
+        });
+        if (
+          !Number.isSafeInteger(snapshot.time) ||
+          Math.abs(Date.now() - snapshot.time * 1000) > 30000
+        )
+          fail('EXECUTION_ARRIVAL_INVALID');
+        arrival = {
+          pool: snapshot.pool.toLowerCase(),
+          block: snapshot.block,
+          block_hash: snapshot.blockHash.toLowerCase(),
+          block_time: snapshot.time,
+          sqrt_price_x96: snapshot.sqrtPriceX96,
+          weth_is_token0: snapshot.wethIsToken0,
+        };
+        if (run.plan.agent_scope)
+          await wallet.agentScopes.fromBinding(
+            run.plan.agent_scope,
+            run.plan.chain_id,
+            workspace.id,
+          );
+        this.assertPlan(run);
+        if (!wallet.isUnlocked(run.plan.wallet)) fail('WALLET_LOCKED');
+        if (wallet.policy(wallet.wallet(run.plan.wallet), config.venue)?.id !== policy.id)
+          fail('WALLET_AUTHORIZATION_CHANGED');
+      }
+      context.signal?.throwIfAborted();
+      if (stopped()) fail('WALLET_EXECUTION_STOPPED');
+      const result = await native.execution('start', {
+        id: run.plan.id,
+        policy_id: policy.id,
+        ...(arrival ? { arrival } : {}),
+      });
+      if (stopped()) {
         try {
           await native.execution('stop', { id: run.plan.id });
         } catch {
@@ -267,7 +494,7 @@ class LiveExecution {
         }
         fail('WALLET_EXECUTION_STOPPED');
       }
-      this.activated.add(run.plan.id);
+      if (result.phase === 'running') this.activated.add(run.plan.id);
       this.errors.delete(run.plan.id);
       this.wake();
       this.changed(workspace.id);
@@ -281,6 +508,24 @@ class LiveExecution {
         pending.command.lease?.startsWith('bridge:')
       )
         await this.reconcile(pending, false);
+      if (!pending) {
+        const missing = this.planRecords(run)
+          .filter(
+            (intent) =>
+              executionReceipt.needsBackfill(intent) || executionReceipt.operatorFeeTarget(intent),
+          )
+          .sort((a, b) => (a.lastReconciledAt ?? 0) - (b.lastReconciledAt ?? 0));
+        context.signal?.throwIfAborted();
+        const wallet = this.wallet();
+        await Promise.all(
+          missing.slice(0, 4).map(async (intent) => {
+            // Reconfirm a missing/legacy receipt before looking up its gas at that block.
+            if (executionReceipt.needsBackfill(intent))
+              await wallet.reconcile(intent.id, context.signal);
+            await wallet.reconcileOperatorFee(intent.id, context.signal);
+          }),
+        );
+      }
       return this.get(workspace.id, run.plan.id);
     }
     fail('UNKNOWN_EXECUTION_ACTION');
@@ -296,10 +541,21 @@ class LiveExecution {
     if (!run.plan.owner.startsWith('workspace:')) fail('EXECUTION_SCOPE_MISMATCH');
     return this.service.workspace(run.plan.owner.slice(10));
   }
+  planRecords(run) {
+    const planHash = hash(run.plan);
+    return this.wallet().state.intents.filter(
+      (intent) =>
+        intent.execution?.planId === run.plan.id &&
+        intent.execution.scopeHash === planHash &&
+        intent.chainId === run.plan.chain_id &&
+        intent.walletId === run.plan.wallet &&
+        intent.workspaceId === run.plan.owner.slice(10),
+    );
+  }
   assertPlan(run) {
     const config = configOf(this.workspace(run));
     if (
-      run.plan.template !== 'base-twap-v1' ||
+      !Object.values(TEMPLATES).includes(run.plan.template) ||
       run.plan.chain_id !== CHAINS[config.venue].id ||
       run.plan.pool_fee !== config.poolFee ||
       run.plan.config_hash !== hash(config)
@@ -307,12 +563,35 @@ class LiveExecution {
       fail('WALLET_EXECUTION_CONFIG_CHANGED');
     if (!run.plan.max_fee_reserve_wei || !/^[1-9]\d{0,37}$/.test(run.plan.max_fee_reserve_wei))
       fail('WALLET_EXECUTION_FEE_BUDGET_REQUIRED');
+    if (
+      run.plan.min_total_output_atoms !== undefined &&
+      this.service.native.handshake?.executionPriceLimit !== 1
+    )
+      fail('EXECUTION_PRICE_LIMIT_REQUIRED');
+    if (
+      run.plan.max_arrival_cost_bps !== undefined &&
+      (this.service.native.handshake?.executionArrivalLimit !== 1 ||
+        this.service.native.handshake?.executionArrival !== 1)
+    )
+      fail('EXECUTION_ARRIVAL_REQUIRED');
+    if (
+      fixedTemplate(run.plan.template) &&
+      this.service.native.handshake?.executionFixedWindows !== 1
+    )
+      fail('EXECUTION_WINDOW_REQUIRED');
+    if (run.plan.template === TEMPLATES.vwap && this.service.native.handshake?.executionVwap !== 1)
+      fail('EXECUTION_PROFILE_UNAVAILABLE');
     this.wallet().wallet(run.plan.wallet);
     return config;
   }
   guard(row, controller, pid) {
-    if (this.disposed || controller.signal.aborted || !this.activated.has(row.run.plan.id))
-      fail('WALLET_EXECUTION_STOPPED');
+    if (this.disposed || !this.activated.has(row.run.plan.id)) fail('WALLET_EXECUTION_STOPPED');
+    if (controller.signal.aborted)
+      fail(
+        controller.signal.reason?.message === WINDOW_EXPIRED
+          ? WINDOW_EXPIRED
+          : 'WALLET_EXECUTION_STOPPED',
+      );
     if (
       this.service.native.state !== 'connected' ||
       this.service.native.child?.pid !== pid ||
@@ -397,20 +676,48 @@ class LiveExecution {
       pid = native.child?.pid,
       lease = 'bridge:' + randomUUID();
     let claimed = false;
+    let timer, ended;
     try {
       this.guard(row, controller, pid);
+      const sentAt = performance.now();
       row.command = await native.execution('claim', { id: row.command.id, lease });
       claimed = true;
-      this.guard(row, controller, pid);
+      this.errors.delete(row.run.plan.id);
+      const endsAt = windowEnd(row.run, row.command);
+      if (endsAt !== undefined) {
+        const remaining = row.command.window_remaining_ms;
+        if (
+          !Number.isSafeInteger(remaining) ||
+          remaining < 0 ||
+          remaining > row.run.plan.interval_ms
+        )
+          fail('EXECUTION_WINDOW_REQUIRED');
+        const monoEnd = sentAt + remaining;
+        ended = () => performance.now() >= monoEnd || Date.now() >= endsAt;
+        timer = setTimeout(
+          () => controller.abort(Error(WINDOW_EXPIRED)),
+          Math.max(0, Math.min(monoEnd - performance.now(), endsAt - Date.now())),
+        );
+        timer.unref?.();
+      }
+      const checkAuthority = () => {
+        this.guard(row, controller, pid);
+        if (ended?.()) fail(WINDOW_EXPIRED);
+      };
+      checkAuthority();
       const config = this.assertPlan(row.run);
-      await executeBaseSwap({
+      const buying = row.run.plan.side === 'buy';
+      const minimum = sliceMinimum(row.run.plan, row.command);
+      const relative = benchmark.arrivalMinimum(row.run, row.command.input_atoms);
+      const result = await executeBaseSwap({
         market: this.service.market,
         walletService: this.wallet(),
         config,
         input: {
           walletId: row.run.plan.wallet,
           side: row.run.plan.side,
-          amountIn: formatUnits(row.command.input_atoms, row.run.plan.side === 'buy' ? 6 : 18),
+          amountIn: formatUnits(row.command.input_atoms, buying ? 6 : 18),
+          ...(minimum === null ? {} : { minimumAmountOut: formatUnits(minimum, buying ? 18 : 6) }),
           slippageBps: row.run.plan.slippage_bps,
         },
         commandId: row.command.id,
@@ -418,16 +725,36 @@ class LiveExecution {
         ...(row.run.plan.agent_scope ? { agentScopeBinding: row.run.plan.agent_scope } : {}),
         signal: controller.signal,
         expectedPolicyId: row.run.policy_id,
+        windowEndsAt: endsAt,
         execution: {
           planId: row.run.plan.id,
           commandId: row.command.id,
           scopeHash: hash(row.run.plan),
           feeBudgetWei: row.run.plan.max_fee_reserve_wei,
         },
-        checkAuthority: () => this.guard(row, controller, pid),
+        checkAuthority,
+        ...(relative === null
+          ? {}
+          : {
+              arrivalLimit: { pool: row.run.arrival.pool, minimumAtoms: relative },
+            }),
       });
+      const last = result.steps.at(-1);
+      const reason = result.error || last?.error;
+      if (reason)
+        this.errors.set(
+          row.run.plan.id,
+          ended?.() && /^WALLET_(?:INTENT_EXPIRED|OPERATION_CANCELLED)$/.test(reason)
+            ? WINDOW_EXPIRED
+            : code(Error(reason)),
+        );
     } catch (error) {
-      this.errors.set(row.run.plan.id, code(error));
+      const reason = code(error);
+      if (!claimed && reason === WINDOW_EXPIRED) return;
+      this.errors.set(
+        row.run.plan.id,
+        controller.signal.reason?.message === WINDOW_EXPIRED ? WINDOW_EXPIRED : reason,
+      );
       if (!claimed) {
         this.abortRun(row.run.plan.id);
         // A lost claim acknowledgement is not permission to retry the claim or send.
@@ -438,6 +765,8 @@ class LiveExecution {
         }
         throw error;
       }
+    } finally {
+      clearTimeout(timer);
     }
     if (claimed) await this.reconcile(row, true);
   }
@@ -446,6 +775,10 @@ class LiveExecution {
     const venue = Object.keys(CHAINS).find((key) => CHAINS[key].id === row.run.plan.chain_id);
     if (!venue) fail('EXECUTION_BASE_REQUIRED');
     const config = { venue };
+    const buying = row.run.plan.side === 'buy';
+    const minimum = sliceMinimum(row.run.plan, row.command);
+    const relative = benchmark.arrivalMinimum(row.run, row.command.input_atoms);
+    const endsAt = windowEnd(row.run, row.command);
     const records = wallet.state.intents.filter((i) =>
       [row.command.id + ':approve', row.command.id + ':swap'].includes(i.commandId),
     );
@@ -462,16 +795,29 @@ class LiveExecution {
       )
         fail('EXECUTION_WALLET_SCOPE_MISMATCH');
       if (record.commandId.endsWith(':swap')) {
-        const description = record.description;
+        const { decodeCall } = require('../wallet');
+        const description = decodeCall(
+          record.transaction.to,
+          record.transaction.data,
+          BigInt(record.transaction.value),
+          record.chainId,
+        );
         if (
           record.transaction.to.toLowerCase() !== deployments[config.venue].router ||
           description.kind !== 'uniswap-v3-swap' ||
           description.recipient.toLowerCase() !==
             wallet.wallet(row.run.plan.wallet).address.toLowerCase() ||
           description.poolFee !== row.run.plan.pool_fee ||
-          description.tokenIn !== (row.run.plan.side === 'buy' ? 'USDC' : 'WETH') ||
-          parseUnits(description.amountIn, row.run.plan.side === 'buy' ? 6 : 18) !==
-            BigInt(row.command.input_atoms)
+          description.tokenIn !== (buying ? 'USDC' : 'WETH') ||
+          description.tokenOut !== (buying ? 'WETH' : 'USDC') ||
+          parseUnits(description.amountIn, buying ? 6 : 18) !== BigInt(row.command.input_atoms) ||
+          (endsAt !== undefined &&
+            (!description.deadline || BigInt(description.deadline) * 1000n >= BigInt(endsAt))) ||
+          ((minimum !== null || relative !== null) &&
+            [minimum, relative].some(
+              (floor) =>
+                floor !== null && parseUnits(description.minimumAmountOut, buying ? 18 : 6) < floor,
+            ))
         )
           fail('EXECUTION_WALLET_SCOPE_MISMATCH');
       } else {
@@ -504,8 +850,13 @@ class LiveExecution {
     }
     records = this.records(row);
     const swap = records.find((i) => i.commandId.endsWith(':swap'));
+    const knownReason =
+      this.errors.get(row.run.plan.id) ||
+      (row.command.reason === WINDOW_EXPIRED ? WINDOW_EXPIRED : null) ||
+      swap?.error ||
+      (marketStopped(row.command.reason) ? row.command.reason : null);
     let stage = 'uncertain',
-      reason = this.errors.get(row.run.plan.id) || 'EXECUTION_RECONCILE_REQUIRED';
+      reason = knownReason || 'EXECUTION_RECONCILE_REQUIRED';
     if (swap?.status === 'finalized') {
       stage = 'finalized';
       reason = 'SWAP_FINALIZED';
@@ -518,7 +869,7 @@ class LiveExecution {
     } else if (records.every((i) => terminalUnsent(i))) {
       if (records.length || owned) {
         stage = 'unsent';
-        reason = this.errors.get(row.run.plan.id) || 'NOT_DISPATCHED';
+        reason = knownReason || 'NOT_DISPATCHED';
       }
     } else if (
       (!swap || terminalUnsent(swap)) &&
@@ -530,12 +881,17 @@ class LiveExecution {
       )
     ) {
       stage = 'aborted';
-      reason = 'APPROVAL_SETTLED_SWAP_NOT_SENT';
+      reason =
+        marketStopped(knownReason) || knownReason === WINDOW_EXPIRED
+          ? knownReason
+          : 'APPROVAL_SETTLED_SWAP_NOT_SENT';
     }
-    if (stage === 'uncertain' || ['unsent', 'reverted', 'aborted'].includes(stage))
+    const skipped =
+      row.command.window && reason === WINDOW_EXPIRED && ['unsent', 'aborted'].includes(stage);
+    if (!skipped && ['uncertain', 'unsent', 'reverted', 'aborted'].includes(stage))
       this.abortRun(row.run.plan.id);
     if (stage === 'unsent' && row.command.hashes.length) stage = 'aborted';
-    await this.service.native.execution('report', {
+    const current = await this.service.native.execution('report', {
       command: row.command.id,
       lease: row.command.lease,
       stage,
@@ -543,11 +899,8 @@ class LiveExecution {
       hashes: records.filter((i) => i.hash).map((i) => i.hash),
       reason,
     });
+    if (current.phase !== 'running') this.activated.delete(current.plan.id);
     if (stage === 'finalized') {
-      // A completion can remove authority, never recreate authority cleared by
-      // a concurrent stop/pause/disconnect.
-      const current = await this.service.native.execution('get', { id: row.run.plan.id });
-      if (current.phase !== 'running') this.activated.delete(current.plan.id);
       this.errors.delete(row.run.plan.id);
     }
     this.changed(row.run.plan.owner.slice(10));

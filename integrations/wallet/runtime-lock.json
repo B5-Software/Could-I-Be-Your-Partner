@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "protocol": 7,
+  "protocol": 10,
   "engineVersion": "0.1.0",
   "toolchain": "1.99.1",
   "format": "gzip-native-v1",

@@ -239,7 +239,7 @@ pub fn ensure(connection: &Connection, s: &Scope) -> Result<Value> {
         || !subject(&s.subject)
         || s.label.chars().count() > 80
         || s.label.chars().any(char::is_control)
-        || ![8453, 84532].contains(&s.chain_id)
+        || !crate::evm::valid_chain_id(s.chain_id)
         || s.wallet_ids.len() > 16
         || s.wallet_ids.iter().any(|v| !id(v))
     {

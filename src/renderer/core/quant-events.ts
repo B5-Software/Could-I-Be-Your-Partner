@@ -16,8 +16,24 @@ type Recording = {
   product: string;
   status: string;
   events: number;
+  endedMonoNs?: string;
   sha256: string | null;
   error: string | null;
+};
+type ValidationStage = {
+  revision: number;
+  tradeContribution: string;
+  quoteCurrency: string;
+  fees: string;
+  counts: { executions: number };
+  journalSha256: string;
+};
+type ValidationFold = {
+  fold: number;
+  training: { startMs: number; endMs: number };
+  test: { startMs: number; endMs: number };
+  ranking: ValidationStage[];
+  result: ValidationStage;
 };
 type Replay = {
   replayId: string;
@@ -28,6 +44,14 @@ type Replay = {
   error: string | null;
   planHash: string;
   configuration: { revision: number; recordingId: string; events: number };
+  validationProgress?: {
+    completed: number;
+    total: number;
+    phase?: 'training' | 'test';
+    fold?: number;
+    revision?: number;
+  };
+  validation?: { folds: ValidationFold[] };
   result?: {
     counts: Record<string, number>;
     run: { stats: { fees: string }; reason: string };
@@ -103,6 +127,12 @@ export function openEventData(options: Options): void {
     esc(t('qeInitial')) +
     '</p>' +
     b('qeReplay', 'run') +
+    `<details><summary>${esc(t('qeValidation'))}</summary><p class="quant-hint">${esc(t('qeValidationHint'))}</p><p data-qe-duration></p>
+      <div class="qe-validation-fields"><label>${esc(t('qeRevisions'))}<input data-qe-revisions value="1, 2" maxlength="24" required></label>
+      <label>${esc(t('qeStartMs'))}<input type="number" data-qe-start min="0" value="0" required></label>
+      <label>${esc(t('qeTrainMs'))}<input type="number" data-qe-train min="500" value="60000" required></label>
+      <label>${esc(t('qeTestMs'))}<input type="number" data-qe-test min="500" value="30000" required></label>
+      <label>${esc(t('qeFolds'))}<input type="number" data-qe-folds min="1" max="4" value="2" required></label></div>${b('qeValidation', 'validate')}</details>` +
     '<div data-qe-replays></div>' +
     b('qePrevious', 'replay-prev') +
     b('qeNext', 'replay-next') +
@@ -110,7 +140,7 @@ export function openEventData(options: Options): void {
     esc(t('qeModel')) +
     '</p><section data-qe-result></section><section><h3>' +
     esc(t('qeHistory')) +
-    '</h3><select data-qe-kind>' +
+    '</h3><p data-qe-history-context hidden></p><select data-qe-kind>' +
     (['executions', 'orders', 'decisions'] as const)
       .map(
         (kind, i) =>
@@ -166,8 +196,12 @@ export function openEventData(options: Options): void {
     historyNext: number | null = null,
     selectedRecord = '',
     selectedReplay = '',
+    historyFold: number | undefined,
+    trainingRevision: number | undefined,
+    historyReady = false,
     recordOp = crypto.randomUUID(),
-    replayOp = crypto.randomUUID();
+    replayOp = crypto.randomUUID(),
+    validationOp = crypto.randomUUID();
   let records: Recording[] = [],
     replays: Replay[] = [],
     versions: NativeStrategyVersion[] = [];
@@ -175,14 +209,28 @@ export function openEventData(options: Options): void {
     el('[data-qe-error]').hidden = false;
     el('[data-qe-error]').textContent = e instanceof Error ? e.message : String(e);
   };
+  const foldName = (index: number) => t('qeFold').replace('{n}', String(index));
+  const validationReport = (folds: ValidationFold[]) =>
+    folds
+      .map((fold) => {
+        const stage = (value: ValidationStage, training: boolean) =>
+          `<tr><td>v${value.revision}</td><td>${esc(value.tradeContribution)} ${esc(value.quoteCurrency)}</td><td>${esc(value.fees)}</td><td>${value.counts.executions}</td><td><button type="button" data-qe-stage="${fold.fold}" ${training ? `data-qe-training="${value.revision}"` : ''} title="${esc(value.journalSha256)}">${esc(t('qeView'))}</button></td></tr>`;
+        const headings = `<thead><tr>${(['qeRevision', 'qeContribution', 'qeFees', 'qeExecutions', 'qeHistory'] as const).map((key) => `<th scope="col">${esc(t(key))}</th>`).join('')}</tr></thead>`;
+        return `<section class="qe-validation-result"><h4>${esc(foldName(fold.fold))}</h4><div>${esc(t('qeTest'))} · ${fold.test.startMs}–${fold.test.endMs} ms</div><table>${headings}<tbody>${stage(fold.result, false)}</tbody></table><details data-qe-ranking="${fold.fold}"><summary>${esc(t('qeTraining'))} · ${fold.training.startMs}–${fold.training.endMs} ms</summary><table>${headings}<tbody>${fold.ranking.map((row) => stage(row, true)).join('')}</tbody></table></details></section>`;
+      })
+      .join('');
   const history = async () => {
-    if (!selectedReplay) return;
+    if (!selectedReplay || !historyReady) return;
     const kind = el<HTMLSelectElement>('[data-qe-kind]').value;
     const requestedReplay = selectedReplay,
-      requestedOffset = historyOffset;
+      requestedOffset = historyOffset,
+      requestedFold = historyFold,
+      requestedTraining = trainingRevision;
     const page = await call<Page<History>>('replay.history', {
       replayId: selectedReplay,
       kind,
+      fold: historyFold,
+      trainingRevision,
       offset: historyOffset,
       limit: 20,
     });
@@ -190,10 +238,18 @@ export function openEventData(options: Options): void {
       closed ||
       requestedReplay !== selectedReplay ||
       requestedOffset !== historyOffset ||
+      requestedFold !== historyFold ||
+      requestedTraining !== trainingRevision ||
       kind !== el<HTMLSelectElement>('[data-qe-kind]').value
     )
       return;
     historyNext = page.next;
+    const context = el('[data-qe-history-context]');
+    context.hidden = historyFold === undefined;
+    context.textContent =
+      historyFold === undefined
+        ? ''
+        : `${foldName(historyFold)} · ${trainingRevision ? `${t('qeTraining')} v${trainingRevision}` : t('qeTest')}`;
     el('[data-qe-history]').innerHTML =
       '<table><thead><tr><th>' +
       esc(t('qeTime')) +
@@ -241,14 +297,15 @@ export function openEventData(options: Options): void {
     const viewKey = () => [recordOffset, replayOffset, selectedRecord, selectedReplay].join(':');
     const requestedView = viewKey();
     try {
-      const [r, j, v] = await Promise.all([
+      const [r, j, v, job] = await Promise.all([
         call<Page<Recording>>('recording.list', { offset: recordOffset }),
         call<Page<Replay>>('replay.list', { offset: replayOffset }),
         call<Page<NativeStrategyVersion>>('native.strategy.list', { limit: 100 }),
+        selectedReplay ? call<Replay>('replay.get', { replayId: selectedReplay }) : null,
       ]);
       if (closed || viewKey() !== requestedView) return;
       records = r.items;
-      replays = j.items;
+      replays = j.items.map((row) => (row.replayId === job?.replayId ? job : row));
       versions = v.items;
       recordNext = r.next;
       replayNext = j.next;
@@ -256,6 +313,9 @@ export function openEventData(options: Options): void {
       el('[data-qe-selected]').textContent = selected
         ? selected.name + ' · ' + selected.product
         : t('qeSelect');
+      el('[data-qe-duration]').textContent = selected?.endedMonoNs
+        ? `${t('qeDurationMs')} · ${Number(BigInt(selected.endedMonoNs) / 1000000n).toLocaleString()}`
+        : '';
       el('[data-qe-recordings]').innerHTML =
         records
           .map(
@@ -313,6 +373,10 @@ export function openEventData(options: Options): void {
         if (revisionInput.dataset.strategy !== chosen.definition.id) {
           revisionInput.dataset.strategy = chosen.definition.id;
           revisionInput.value = String(chosen.definition.revision);
+          el<HTMLInputElement>('[data-qe-revisions]').value =
+            chosen.definition.revision > 1
+              ? `${chosen.definition.revision - 1}, ${chosen.definition.revision}`
+              : '';
         }
       }
       el<HTMLButtonElement>('[data-qe=run]').disabled =
@@ -321,6 +385,10 @@ export function openEventData(options: Options): void {
         !versions.length ||
         replays.some((j) => j.status === 'running') ||
         busy;
+      el<HTMLButtonElement>('[data-qe=validate]').disabled =
+        el<HTMLButtonElement>('[data-qe=run]').disabled ||
+        !selected?.endedMonoNs ||
+        (chosen?.definition.revision ?? 0) < 2;
       el('[data-qe-replays]').innerHTML =
         replays
           .map(
@@ -332,9 +400,11 @@ export function openEventData(options: Options): void {
               '</strong><small>' +
               esc(state(j.status)) +
               ' · ' +
-              esc(j.processed) +
-              ' ' +
-              esc(t('qeEvents')) +
+              esc(
+                j.validationProgress
+                  ? `${t('qeValidation')} · ${j.validationProgress.completed}/${j.validationProgress.total}`
+                  : `${j.processed} ${t('qeEvents')}`,
+              ) +
               '</small></button>' +
               (j.status === 'running'
                 ? '<button type="button" data-qe-cancel="' +
@@ -350,24 +420,38 @@ export function openEventData(options: Options): void {
       el<HTMLButtonElement>('[data-qe=record-next]').disabled = recordNext === null;
       el<HTMLButtonElement>('[data-qe=replay-prev]').disabled = replayOffset === 0;
       el<HTMLButtonElement>('[data-qe=replay-next]').disabled = replayNext === null;
-      if (selectedReplay) {
-        const job = await call<Replay>('replay.get', { replayId: selectedReplay });
-        if (closed || viewKey() !== requestedView) return;
+      if (job) {
         const result = job.result;
-        el('[data-qe-result]').innerHTML =
+        const progress = job.validationProgress;
+        const container = el('[data-qe-result]');
+        const open = new Set(
+          container.dataset.job === job.replayId
+            ? [...container.querySelectorAll<HTMLDetailsElement>('[data-qe-ranking][open]')].map(
+                (detail) => detail.dataset.qeRanking,
+              )
+            : [],
+        );
+        container.dataset.job = job.replayId;
+        container.innerHTML =
           '<h3>' +
           esc(job.name) +
           '</h3><p>' +
           esc(state(job.status)) +
           (job.error ? ' · ' + esc(job.error) : '') +
           '</p><label>' +
-          esc(t('qeEvents')) +
+          esc(t(progress ? 'qeStageProgress' : 'qeEvents')) +
           ' ' +
-          esc(job.processed) +
+          esc(progress ? `${progress.completed}/${progress.total}` : job.processed) +
+          (job.status === 'running' && progress?.fold && progress.phase
+            ? ' · ' +
+              esc(
+                `${foldName(progress.fold)} · ${t(progress.phase === 'training' ? 'qeTraining' : 'qeTest')} · v${progress.revision}`,
+              )
+            : '') +
           '<progress value="' +
-          esc(job.processed) +
+          esc(progress?.completed ?? job.processed) +
           '" max="' +
-          Math.max(1, job.configuration.events) +
+          Math.max(1, progress?.total ?? job.configuration.events) +
           '"></progress></label><div class="qe-metrics">' +
           (result
             ? [
@@ -415,9 +499,18 @@ export function openEventData(options: Options): void {
               esc(result.journalSha256) +
               '</code></p>'
             : '') +
-          '</details>';
-        if (job.status === 'complete') await history();
-        else el('[data-qe-history]').textContent = '';
+          '</details>' +
+          (job.validation ? validationReport(job.validation.folds) : '');
+        for (const detail of container.querySelectorAll<HTMLDetailsElement>('[data-qe-ranking]'))
+          detail.open = open.has(detail.dataset.qeRanking);
+        historyReady = job.validation ? job.validation.folds.length > 0 : job.status === 'complete';
+        if (job.validation && historyFold === undefined)
+          historyFold = job.validation.folds[0]?.fold;
+        if (historyReady) await history();
+        else {
+          el('[data-qe-history]').textContent = '';
+          el('[data-qe-history-context]').hidden = true;
+        }
       }
     } catch (e) {
       error(e);
@@ -464,8 +557,19 @@ export function openEventData(options: Options): void {
     }
     if (button.dataset.qeReplay) {
       selectedReplay = button.dataset.qeReplay;
+      historyFold = trainingRevision = undefined;
+      historyReady = false;
       historyOffset = 0;
       void refresh();
+      return;
+    }
+    if (button.dataset.qeStage) {
+      historyFold = Number(button.dataset.qeStage);
+      trainingRevision = button.dataset.qeTraining ? Number(button.dataset.qeTraining) : undefined;
+      historyOffset = 0;
+      void history()
+        .then(() => el('[data-qe-history-context]').scrollIntoView({ block: 'nearest' }))
+        .catch(error);
       return;
     }
     if (button.dataset.qeStop) {
@@ -485,22 +589,42 @@ export function openEventData(options: Options): void {
       openNativePaper(options);
       return;
     }
-    if (action === 'run') {
+    if (action === 'run' || action === 'validate') {
       void work(async () => {
         const version = versions.find(
           (v) => v.definition.id === el<HTMLSelectElement>('[data-qe-strategy]').value,
         );
         if (!version) return;
-        const revision = el<HTMLInputElement>('[data-qe-revision]');
-        if (!revision.reportValidity()) return;
-        const job = await call<Replay>('replay.start', {
+        let config: Record<string, unknown>;
+        if (action === 'validate') {
+          const fields = ['revisions', 'start', 'train', 'test', 'folds'].map((name) =>
+            el<HTMLInputElement>(`[data-qe-${name}]`),
+          );
+          if (!fields.every((field) => field.reportValidity())) return;
+          const [revisions, startMs, trainMs, testMs, folds] = fields.map((field) => field.value);
+          config = {
+            revisions: revisions!.split(/[,，]/).map((n) => Number(n.trim())),
+            startMs: Number(startMs),
+            trainMs: Number(trainMs),
+            testMs: Number(testMs),
+            folds: Number(folds),
+            operationId: validationOp,
+          };
+        } else {
+          const revision = el<HTMLInputElement>('[data-qe-revision]');
+          if (!revision.reportValidity()) return;
+          config = { revision: Number(revision.value), operationId: replayOp };
+        }
+        const job = await call<Replay>(action === 'validate' ? 'replay.validate' : 'replay.start', {
           recordingId: selectedRecord,
           strategyId: version.definition.id,
-          revision: Number(revision.value),
-          operationId: replayOp,
+          ...config,
         });
-        replayOp = crypto.randomUUID();
+        if (action === 'validate') validationOp = crypto.randomUUID();
+        else replayOp = crypto.randomUUID();
         selectedReplay = job.replayId;
+        historyFold = trainingRevision = undefined;
+        historyReady = false;
         replayOffset = 0;
         historyOffset = 0;
       });

@@ -3,7 +3,7 @@ use cibyp_quant_engine::{
     execution_runner::ExecutionRunner,
     ledger::{
         Ledger, Side,
-        execution::{Command, Phase, Plan, Report, Stage},
+        execution::{Arrival, Command, Phase, Plan, Report, Stage, VwapProfile},
     },
 };
 use std::{
@@ -39,6 +39,8 @@ fn fixture() -> (Folder, Ledger, ExecutionRunner) {
 }
 fn plan() -> Plan {
     Plan {
+        max_arrival_cost_bps: None,
+        vwap: None,
         agent_scope: None,
         template: "base-twap-v1".into(),
         id: "twap:test".into(),
@@ -53,6 +55,7 @@ fn plan() -> Plan {
         pool_fee: 500,
         config_hash: "a".repeat(64),
         max_fee_reserve_wei: Some("10000000000000000".into()),
+        min_total_output_atoms: None,
     }
 }
 fn pending(ledger: &Ledger) -> Command {
@@ -86,6 +89,9 @@ fn exact_budget_slices_and_finality_gate_no_catchup_or_duplicate_postponement() 
         let (_folder, mut ledger, mut runner) = fixture();
         let mut definition = plan();
         definition.total_input_atoms = total.into();
+        if total == "10" {
+            definition.min_total_output_atoms = Some("11".into());
+        }
         ledger.execution_create(definition).unwrap();
         runner.start(&mut ledger, "twap:test", "policy:1").unwrap();
         let mut sum = 0u128;
@@ -93,6 +99,19 @@ fn exact_budget_slices_and_finality_gate_no_catchup_or_duplicate_postponement() 
             runner.drive(&mut ledger).unwrap();
             let command = pending(&ledger);
             assert_eq!(command.ordinal, ordinal);
+            if total == "10" {
+                assert_eq!(
+                    command.min_output_atoms.as_deref(),
+                    Some(if ordinal == 1 { "5" } else { "4" })
+                );
+            } else {
+                assert!(
+                    serde_json::to_value(&command)
+                        .unwrap()
+                        .get("min_output_atoms")
+                        .is_none()
+                );
+            }
             sum += command.input_atoms.parse::<u128>().unwrap();
             let claimed = ledger.execution_claim(&command.id, "lease:1").unwrap();
             runner
@@ -128,6 +147,258 @@ fn exact_budget_slices_and_finality_gate_no_catchup_or_duplicate_postponement() 
         runner.drive(&mut ledger).unwrap();
         assert_eq!(ledger.execution_history("twap:test").len(), 3);
     }
+}
+#[test]
+fn protected_plan_keeps_its_floor_and_exact_wide_product_after_reopening() {
+    let (folder, mut ledger, mut runner) = fixture();
+    let mut definition = plan();
+    definition.slices = 1;
+    definition.total_input_atoms = u128::MAX.to_string();
+    definition.min_total_output_atoms = Some(u128::MAX.to_string());
+    ledger.execution_create(definition.clone()).unwrap();
+    let mut changed = definition.clone();
+    changed.min_total_output_atoms = Some("1".into());
+    assert!(ledger.execution_create(changed).is_err());
+    runner
+        .start(&mut ledger, &definition.id, "policy:1")
+        .unwrap();
+    runner.drive(&mut ledger).unwrap();
+    let command = pending(&ledger);
+    assert_eq!(command.min_output_atoms, definition.min_total_output_atoms);
+    drop(ledger);
+    let replay = Ledger::open(&folder.0, 8 * 1024 * 1024).unwrap();
+    assert_eq!(
+        replay.execution_run(&definition.id).unwrap().plan,
+        definition
+    );
+    assert_eq!(
+        replay
+            .execution_command(&command.id)
+            .unwrap()
+            .min_output_atoms,
+        command.min_output_atoms
+    );
+}
+#[test]
+fn fixed_windows_skip_missed_budget_without_sliding_after_finality() {
+    let clock = ReplayClock::enter().unwrap();
+    let start = 1_700_000_000_000_000_000;
+    let second = 1_000_000_000;
+    clock.advance(start, 0).unwrap();
+    let (folder, mut ledger, mut runner) = fixture();
+    let mut definition = plan();
+    definition.template = "base-twap-fixed-v1".into();
+    definition.slices = 4;
+    definition.total_input_atoms = "11".into();
+    definition.min_total_output_atoms = Some("10".into());
+    let id = definition.id.clone();
+    ledger.execution_create(definition).unwrap();
+    runner.start(&mut ledger, &id, "policy:1").unwrap();
+    runner.drive(&mut ledger).unwrap();
+    let first = pending(&ledger);
+    assert_eq!(first.ordinal, 1);
+    assert_eq!(first.input_atoms, "3");
+    let (first, remaining) = runner.claim(&mut ledger, &first.id, "lease:1").unwrap();
+    assert_eq!(remaining, Some(1000));
+    runner
+        .report(&mut ledger, report(&first, Stage::Submitted))
+        .unwrap();
+
+    // Finality has not arrived at the opening of the second slot.
+    // Moving wall time backwards cannot reopen it.
+    clock.advance(start - second, 2 * second).unwrap();
+    runner.drive(&mut ledger).unwrap();
+    let active = ledger.execution_run(&id).unwrap();
+    assert_eq!(active.pending.as_deref(), Some(first.id.as_str()));
+    assert_eq!(active.fixed.as_ref().unwrap().skipped_input_atoms, "3");
+    runner
+        .report(&mut ledger, report(&first, Stage::Finalized))
+        .unwrap();
+    runner.drive(&mut ledger).unwrap();
+    let third = pending(&ledger);
+    assert_eq!(third.ordinal, 3);
+    assert_eq!(third.input_atoms, "3");
+    assert_eq!(third.min_output_atoms.as_deref(), Some("3"));
+    assert_eq!(
+        third.window.as_ref().unwrap().closes_at_ns,
+        (start + 3 * second).to_string()
+    );
+
+    clock.advance(start - second, 3 * second).unwrap();
+    assert_eq!(
+        runner
+            .claim(&mut ledger, &third.id, "lease:late")
+            .unwrap_err(),
+        "EXECUTION_WINDOW_EXPIRED"
+    );
+    runner.drive(&mut ledger).unwrap();
+    let fourth = pending(&ledger);
+    assert_eq!(fourth.ordinal, 4);
+    assert_eq!(fourth.input_atoms, "2");
+    assert_eq!(
+        ledger.execution_command(&third.id).unwrap().stage,
+        Stage::Unsent
+    );
+    clock.advance(start + 4 * second, 4 * second).unwrap();
+    runner.drive(&mut ledger).unwrap();
+    let expired = ledger.execution_run(&id).unwrap().clone();
+    assert_eq!(expired.phase, Phase::Expired);
+    assert_eq!(expired.completed_slices, 1);
+    assert_eq!(expired.allocated_input_atoms, "3");
+    assert_eq!(expired.fixed.as_ref().unwrap().skipped_input_atoms, "8");
+    assert!(runner.start(&mut ledger, &id, "policy:1").is_err());
+    drop(ledger);
+    let replay = Ledger::open(&folder.0, 8 * 1024 * 1024).unwrap();
+    assert_eq!(replay.execution_run(&id).unwrap(), &expired);
+}
+
+#[test]
+fn historical_vwap_conserves_input_and_skips_unfunded_windows() {
+    let clock = ReplayClock::enter().unwrap();
+    let start = 1_700_000_000_000_000_000;
+    let second = 1_000_000_000;
+    clock.advance(start, 0).unwrap();
+    let (folder, mut ledger, mut runner) = fixture();
+    let mut definition = plan();
+    definition.template = "base-vwap-fixed-v1".into();
+    definition.total_input_atoms = u128::MAX.to_string();
+    definition.vwap = Some(VwapProfile {
+        profile_id: "a".repeat(64),
+        weth_volume_atoms: vec![(u128::MAX - 3).to_string(), "0".into(), "3".into()],
+    });
+    let id = definition.id.clone();
+    ledger.execution_create(definition.clone()).unwrap();
+    runner.start(&mut ledger, &id, "policy:1").unwrap();
+    runner.drive(&mut ledger).unwrap();
+    let first = pending(&ledger);
+    assert_eq!(first.input_atoms, (u128::MAX - 3).to_string());
+    let (first, _) = runner.claim(&mut ledger, &first.id, "lease:1").unwrap();
+    runner
+        .report(&mut ledger, report(&first, Stage::Finalized))
+        .unwrap();
+    clock.advance(start + second, second).unwrap();
+    runner.drive(&mut ledger).unwrap();
+    let between = ledger.execution_run(&id).unwrap();
+    assert_eq!(between.phase, Phase::Running);
+    assert!(between.pending.is_none());
+    assert_eq!(between.fixed.as_ref().unwrap().skipped_slices, 1);
+    clock.advance(start + 2 * second, 2 * second).unwrap();
+    runner.drive(&mut ledger).unwrap();
+    let third = pending(&ledger);
+    assert_eq!(third.ordinal, 3);
+    assert_eq!(third.input_atoms, "3");
+    let (third, _) = runner.claim(&mut ledger, &third.id, "lease:2").unwrap();
+    runner
+        .report(&mut ledger, report(&third, Stage::Finalized))
+        .unwrap();
+    let run = ledger.execution_run(&id).unwrap().clone();
+    assert_eq!(run.phase, Phase::Completed);
+    assert_eq!(run.allocated_input_atoms, definition.total_input_atoms);
+    assert_eq!(run.fixed.as_ref().unwrap().skipped_input_atoms, "0");
+    assert_eq!(run.commands_created, 2);
+    drop(ledger);
+    let replay = Ledger::open(&folder.0, 8 * 1024 * 1024).unwrap();
+    assert_eq!(replay.execution_run(&id).unwrap(), &run);
+}
+
+#[test]
+fn arrival_price_is_bound_to_the_first_start_and_survives_restart() {
+    let clock = ReplayClock::enter().unwrap();
+    let second = 1_000_000_000;
+    let start = 1_700_000_000;
+    clock.advance(start * second, 0).unwrap();
+    let (folder, mut ledger, mut runner) = fixture();
+    let mut definition = plan();
+    definition.max_arrival_cost_bps = Some(10_000);
+    assert_eq!(
+        ledger.execution_create(definition.clone()).unwrap_err(),
+        "EXECUTION_ARRIVAL_LIMIT_RANGE",
+    );
+    definition.max_arrival_cost_bps = Some(0);
+    let id = definition.id.clone();
+    ledger.execution_create(definition).unwrap();
+    assert_eq!(
+        runner.start(&mut ledger, &id, "policy:1").unwrap_err(),
+        "EXECUTION_ARRIVAL_REQUIRED",
+    );
+    let arrival = Arrival {
+        pool: format!("0x{}", "1".repeat(40)),
+        block: "12345".into(),
+        block_hash: format!("0x{}", "2".repeat(64)),
+        block_time: start as u64,
+        sqrt_price_x96: "3520976558767282464819376".into(),
+        weth_is_token0: true,
+    };
+    let mut stale = arrival.clone();
+    stale.block_time -= 31;
+    assert_eq!(
+        runner
+            .start_with_arrival(&mut ledger, &id, "policy:1", Some(stale))
+            .unwrap_err(),
+        "EXECUTION_ARRIVAL_INVALID",
+    );
+    assert_eq!(ledger.execution_run(&id).unwrap().generation, 0);
+    runner
+        .start_with_arrival(&mut ledger, &id, "policy:1", Some(arrival.clone()))
+        .unwrap();
+    runner.stop(&mut ledger, &id).unwrap();
+    drop(ledger);
+    let mut ledger = Ledger::open(&folder.0, 8 * 1024 * 1024).unwrap();
+    let mut runner = ExecutionRunner::default();
+    clock.advance((start + 60) * second, 60 * second).unwrap();
+    let mut replacement = arrival.clone();
+    replacement.block_time += 60;
+    assert_eq!(
+        runner
+            .start_with_arrival(&mut ledger, &id, "policy:2", Some(replacement))
+            .unwrap_err(),
+        "EXECUTION_ARRIVAL_IMMUTABLE",
+    );
+    assert_eq!(
+        runner.start(&mut ledger, &id, "policy:2").unwrap().arrival,
+        Some(arrival)
+    );
+}
+
+#[test]
+fn fixed_window_recovery_keeps_the_original_anchor_and_requires_an_explicit_start() {
+    let clock = ReplayClock::enter().unwrap();
+    let start = 1_700_000_000_000_000_000;
+    let second = 1_000_000_000;
+    clock.advance(start, 0).unwrap();
+    let (folder, mut ledger, mut runner) = fixture();
+    let mut definition = plan();
+    definition.template = "base-twap-fixed-v1".into();
+    let id = definition.id.clone();
+    ledger.execution_create(definition).unwrap();
+    runner.start(&mut ledger, &id, "policy:1").unwrap();
+    runner.drive(&mut ledger).unwrap();
+    let first = pending(&ledger);
+    drop(ledger);
+    let mut ledger = Ledger::open(&folder.0, 8 * 1024 * 1024).unwrap();
+    ledger.recover_executions().unwrap();
+    let mut runner = ExecutionRunner::default();
+    clock.advance(start + 2 * second, 2 * second).unwrap();
+    runner.drive(&mut ledger).unwrap();
+    assert_eq!(ledger.execution_run(&id).unwrap().phase, Phase::Paused);
+    assert_eq!(ledger.execution_history(&id).len(), 1);
+    assert_eq!(
+        ledger.execution_command(&first.id).unwrap().stage,
+        Stage::Unsent
+    );
+    clock.advance(start - second, 2 * second).unwrap();
+    assert_eq!(
+        runner.start(&mut ledger, &id, "policy:2").unwrap_err(),
+        "EXECUTION_CLOCK_REGRESSED"
+    );
+    clock.advance(start + 2 * second, 2 * second).unwrap();
+    runner.start(&mut ledger, &id, "policy:2").unwrap();
+    runner.drive(&mut ledger).unwrap();
+    let third = pending(&ledger);
+    assert_eq!(third.ordinal, 3);
+    let fixed = ledger.execution_run(&id).unwrap().fixed.as_ref().unwrap();
+    assert_eq!(fixed.start_at_ns, start.to_string());
+    assert_eq!(fixed.skipped_slices, 2);
 }
 #[test]
 fn claim_leases_stop_races_and_late_reports_preserve_financial_evidence() {
