@@ -374,8 +374,8 @@ ipcMain.once('app:renderer-ready', (event) =>
       await until(()=>document.documentElement.dataset.frontend==='v2');
       search.value=''; search.dispatchEvent(new Event('input'));
       const pages=[...document.querySelectorAll('#main-content > .page')].map(page=>page.id.slice(5));
-      check(document.querySelector('.nav-item[data-page="quant"]').hidden,'Quant gate did not hide navigation');
-      for(const page of pages.filter(p=>!['quant','code','babe','code-history','babe-history'].includes(p))) {
+      check(!document.querySelector('.nav-item[data-page="quant"]').hidden,'Quant navigation is hidden');
+      for(const page of pages.filter(p=>!['code','babe','code-history','babe-history'].includes(p))) {
         window.navigatePage(page); await paint();
         check(document.getElementById('page-'+page).classList.contains('active'),page+' cannot open');
         check(!document.getElementById('page-'+page).inert,page+' remains inert');

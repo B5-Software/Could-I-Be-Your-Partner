@@ -349,10 +349,16 @@ test('TUI Code startup workspace failure still accepts real keyboard input and w
         } else if (stage === 'recovering workspace' && screen.includes('工作区已设置为')) {
           stage = 'sending after recovery';
           child.write(USER_TEXT + CR);
-        } else if (stage === 'sending after recovery' && screen.includes(REPLY)) {
+        } else if (
+          stage === 'sending after recovery' &&
+          screen.includes(REPLY) &&
+          !screen.includes('esc 停止')
+        ) {
+          // Ctrl+C only stops a running task. Wait for the idle footer before
+          // quitting, otherwise the two presses can leave the PTY alive.
           stage = 'quitting';
           child.write(CTRL_C);
-          setTimeout(() => child.write(CTRL_C), 120);
+          setTimeout(() => child.write(CTRL_C), 250);
         }
       },
     });
