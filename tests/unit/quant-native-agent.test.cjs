@@ -389,6 +389,27 @@ test('Agent portfolio tool is paged/readable and can pause but cannot create, re
     action: 'portfolio.allowanceMonitor.get',
     input: { id: 'p1', offset: 4, limit: 5 },
   });
+  await worker.executeTool('quant_portfolios', {
+    action: 'performance',
+    portfolioId: 'p1',
+    walletId: 'one',
+    snapshotId: 'saved-view',
+    offset: 2,
+  });
+  assert.deepEqual(calls.at(-1), {
+    action: 'portfolio.performance',
+    input: { id: 'p1', walletId: 'one', snapshotId: 'saved-view', offset: 2, limit: 5 },
+  });
+  await worker.executeTool('quant_portfolios', {
+    action: 'performance_price_fees',
+    portfolioId: 'p1',
+    walletId: 'one',
+    offset: 2,
+  });
+  assert.deepEqual(calls.at(-1), {
+    action: 'portfolio.performance.priceFees',
+    input: { id: 'p1', walletId: 'one', offset: 2, limit: 5 },
+  });
   await worker.executeTool('quant_portfolios', { action: 'pause', portfolioId: 'p1', revision: 3 });
   assert.equal(calls.at(-1).action, 'portfolio.pause');
   assert.equal(calls.at(-1).input.revision, 3);
@@ -413,6 +434,8 @@ test('Agent portfolio tool is paged/readable and can pause but cannot create, re
         'portfolio.allowances.get',
         'portfolio.allowances.list',
         'portfolio.allowanceMonitor.get',
+        'portfolio.performance',
+        'portfolio.performance.priceFees',
       ].includes(c.action),
     ),
   );

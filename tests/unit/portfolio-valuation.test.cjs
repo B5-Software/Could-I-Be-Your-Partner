@@ -8,8 +8,7 @@ const {
 } = require('../../src/main/services/quant/portfolio-valuation');
 const { CHAINS, MarketData } = require('../../src/main/services/quant/market-data');
 
-function fixture() {
-  const now = Math.floor(Date.now() / 1000);
+function fixture(now = Math.floor(Date.now() / 1000)) {
   const state = {
     ethAnswer: 200000000000n,
     ethAge: 30,
@@ -78,6 +77,40 @@ function fixture() {
     read: () => valuePortfolio(context, assets, members),
   };
 }
+
+test('historical fee pricing fixes the block, checks finality and rejects stale rounds or a reorg', async () => {
+  const f = fixture(Math.floor(Date.now() / 1000) - 86400);
+  const block = { ...f.context.block, number: '0x14', timestamp: '0x' + f.now.toString(16) };
+  const market = new MarketData();
+  let finalized = block,
+    canonicalReads = 0,
+    reorg = false;
+  market.rpc = async (_venue, _url, method, params) => {
+    if (method === 'eth_chainId') return '0x2105';
+    if (method === 'eth_call') return f.context.rpc(method, params);
+    assert.equal(method, 'eth_getBlockByNumber');
+    if (params[0] === 'finalized') return finalized;
+    assert.deepEqual(params, ['0x14', false]);
+    canonicalReads++;
+    if (reorg && canonicalReads === 2) return { ...block, hash: '0x' + 'b'.repeat(64) };
+    return block;
+  };
+  const quote = () => market.baseFeeQuote({ venue: 'base' }, '20', block.hash);
+  const result = await quote();
+  assert.equal(result.blockHash, block.hash);
+  assert.equal(result.timestamp, f.now);
+  assert.equal(result.eth.roundId, '1');
+  assert.equal(result.usdc.price, '0.98');
+  assert.equal(f.calls.length, 5);
+  finalized = { ...block, number: '0x13' };
+  await assert.rejects(quote(), /WALLET_PRICE_BLOCK_UNFINALIZED/);
+  finalized = block;
+  f.state.ethAge = 1501;
+  await assert.rejects(quote(), /WALLET_PRICE_STALE/);
+  canonicalReads = 0;
+  reorg = true;
+  await assert.rejects(quote(), /BLOCK_REORG/);
+});
 
 test('USD reference values preserve decimal math, depeg pricing, partial coverage and the member-to-total sum', async () => {
   const f = fixture(),

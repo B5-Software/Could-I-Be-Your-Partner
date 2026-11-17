@@ -446,7 +446,7 @@ const TOOLS = [
   {
     name: 'quant_portfolios',
     description:
-      'Read cross-wallet budgets and Base equity controls. Use holdings for pinned balances and optional USD values, and equity for the configured signing/broadcast floor. allowances_scan saves a read-only Base or Base Sepolia exposure report for tracked tokens or one explicit token. recent discovers candidates in the last blocks; older continues the saved previousReportId; refresh rereads saved candidates at the latest pinned block. Explicit candidates can include walletId, token, spender and erc20 or permit2 protocol. allowances_get pages a report; allowances_list opens saved history. allowance_monitor reads the status and paged notices of the user-configured monitor. Measured exposure is limited to discovered or supplied spenders, each owner balance and the shared Permit2 outer allowance. Including-Permit2 expresses conditional capacity. Unsubmitted permits cannot be enumerated from chain data. Only pause for an explicit stop/risk mandate. Configuration, revocation, resumption and release require human confirmation.',
+      'Read cross-wallet budgets and Base equity controls. Use holdings for pinned balances and optional USD values, and equity for the configured signing/broadcast floor. performance uses confirmed local fills for per-wallet FIFO WETH/USDC PnL and reports ETH fees. Pass walletId to filter and snapshotId when paging. On Base, performance_price_fees saves historical Chainlink quotes from the finalized receipt blocks; use limit up to 8 and follow next. Then read performance again. PnL after matched swap fees requires full pricing coverage of the matched trades. Approval and reverted transaction fees are summarized separately. allowances_scan saves a read-only Base or Base Sepolia exposure report for tracked tokens or one explicit token. recent discovers candidates in the last blocks; older continues the saved previousReportId; refresh rereads saved candidates at the latest pinned block. Explicit candidates can include walletId, token, spender and erc20 or permit2 protocol. allowances_get pages a report; allowances_list opens saved history. allowance_monitor reads the status and paged notices of the user-configured monitor. Measured exposure is limited to discovered or supplied spenders, each owner balance and the shared Permit2 outer allowance. Including-Permit2 expresses conditional capacity. Unsubmitted permits cannot be enumerated from chain data. Only pause for an explicit stop/risk mandate. Configuration, revocation, resumption and release require human confirmation.',
     parameters: schema(
       {
         action: {
@@ -455,6 +455,8 @@ const TOOLS = [
             'get',
             'holdings',
             'equity',
+            'performance',
+            'performance_price_fees',
             'allowances_scan',
             'allowances_get',
             'allowances_list',
@@ -468,6 +470,8 @@ const TOOLS = [
         includeMembers: { type: 'boolean' },
         valuation: { type: 'boolean' },
         portfolioId: string,
+        walletId: string,
+        snapshotId: string,
         reportId: string,
         previousReportId: string,
         mode: { enum: ['recent', 'older', 'refresh'] },
@@ -1087,6 +1091,24 @@ function decorateQuantTools(agent, getService, workspaceId, options = {}) {
       if (name === 'quant_portfolios') {
         if (!service.getWallet) throw Error('LIVE_SIGNER_NOT_IMPLEMENTED');
         const wallet = service.getWallet();
+        if (input.action === 'performance') {
+          const { portfolioId: id, walletId, snapshotId, offset, limit = 5 } = input;
+          return wallet.request(
+            'portfolio.performance',
+            { id, walletId, snapshotId, offset, limit },
+            { signal: abort.signal },
+          );
+        }
+        if (input.action === 'performance_price_fees') {
+          const { portfolioId: id, walletId, offset, limit = 5 } = input;
+          return wallet.request(
+            'portfolio.performance.priceFees',
+            { id, walletId, offset, limit },
+            {
+              signal: abort.signal,
+            },
+          );
+        }
         if (input.action === 'allowance_monitor') {
           return wallet.request('portfolio.allowanceMonitor.get', {
             id: input.portfolioId,

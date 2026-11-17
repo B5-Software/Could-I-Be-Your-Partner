@@ -1228,6 +1228,75 @@ test('TUI continuous allowance monitoring uses the selected baseline and interva
     expectedRevision: 1,
   });
 });
+test('TUI performance keeps the same snapshot when paging and resets it when filtering by wallet', async () => {
+  setLanguage('en');
+  const value = (amount) => ({ amount });
+  let priced = false;
+  const { app, requests } = fixture((_method, action, input) => {
+    if (action === 'portfolio.performance.priceFees') {
+      priced = true;
+      return { saved: 1, unavailable: 0, next: null };
+    }
+    assert.equal(action, 'portfolio.performance');
+    return {
+      snapshotId: 'performance-a',
+      next: input.offset === 0 && !input.walletId ? 5 : null,
+      items: [],
+      totals: {
+        realizedGrossUsdc: value('-8'),
+        matchedWeth: value('2'),
+        openWeth: value('1'),
+        openCostUsdc: value('100'),
+        unmatchedSaleWeth: value('3'),
+        missingCount: 0,
+        matchedSaleCount: 1,
+        pricedSaleCount: priced ? 1 : 0,
+        realizedAfterSwapFeesUsdc: priced ? value('-9') : null,
+      },
+      fees: {
+        totalWei: null,
+        l2GasWei: '1000000000000000',
+        l1DataFeeWei: null,
+        operatorFeeWei: null,
+        l2Receipts: 1,
+        l1Receipts: 0,
+        operatorReceipts: 0,
+        finalizedTransactions: 1,
+      },
+      historicalFees: { available: true, priced: priced ? 1 : 0, transactions: 1 },
+    };
+  });
+  const { TuiWalletPortfolios } = require('../../src/tui/wallet-portfolios');
+  const panel = new TuiWalletPortfolios(app.walletBrowser);
+  await panel.performance(
+    { id: 'group', members: [{ walletId: 'first', address: '0x1' }] },
+    new Map([['first', 'Wallet one']]),
+  );
+  const choose = async (value) => {
+    const index = app.state.modal.options.findIndex((option) => option.value === value);
+    assert.ok(index >= 0);
+    await app._chooseModalOption(index);
+  };
+  assert.match(app.state.modal.body, /Realized gross P&L.*-8 USDC/);
+  await choose('next');
+  assert.equal(requests.at(-1).input.snapshotId, 'performance-a');
+  assert.equal(requests.at(-1).input.offset, 5);
+  await choose('wallet');
+  await choose('first');
+  assert.equal(requests.at(-1).input.walletId, 'first');
+  assert.equal(requests.at(-1).input.snapshotId, undefined);
+  assert.match(app.state.modal.body, /Wallet one/);
+  await choose('price');
+  assert.deepEqual(requests.find((row) => row.action === 'portfolio.performance.priceFees').input, {
+    id: 'group',
+    walletId: 'first',
+    offset: 0,
+    limit: 5,
+  });
+  assert.match(app.state.modal.body, /Realized P&L after matched swap fees.*-9 USDC/);
+  await choose('fees');
+  assert.match(app.state.modal.body, /L2 execution fee.*0.001 ETH.*1\/1/);
+});
 test('TUI portfolio detail separates scope and paged usage while a paused group cannot offer another pause', async () => {
   setLanguage('en');
   const { TuiWalletPortfolios } = require('../../src/tui/wallet-portfolios');

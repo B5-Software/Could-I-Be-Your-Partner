@@ -386,8 +386,66 @@ app
         amount: '10.5',
         token: '0x' + '3'.repeat(40),
       });
+      const performance = await win.webContents.executeJavaScript(`(async()=>{
+        document.querySelectorAll('dialog[open]').forEach(d=>d.close());
+        const amount=(value)=>({amount:value});
+        const original=panel.options.request;
+        let priced=false;
+        panel.options.request=async(action,input)=>{
+          if(action==='portfolio.performance.priceFees'){
+            calls.push({action,input});
+            priced=true;
+            return {saved:2,unavailable:0,next:null,errors:[]};
+          }
+          if(action!=='portfolio.performance')return original(action,input);
+          calls.push({action,input});
+          return {snapshotId:'fixture-performance',next:null,total:1,totals:{
+            realizedGrossUsdc:amount(input.walletId ? '-8' : '125.35'), matchedWeth:amount('0.57'), openWeth:amount('0.45'), openCostUsdc:amount('1080'),
+            matchedCostUsdc:amount('1180'),matchedProceedsUsdc:amount('1305.35'),unmatchedSaleWeth:amount('0.12'),
+            missingCount:1,interruptedBasisWeth:amount('0.02'),matchedSaleCount:1,pricedSaleCount:priced?1:0,
+            realizedAfterSwapFeesUsdc:priced?amount('124.70'):null
+          },fees:{totalWei:null,l2GasWei:'15000000000',l1DataFeeWei:'23000000000',operatorFeeWei:null,l2Receipts:2,l1Receipts:2,operatorReceipts:1,finalizedTransactions:2},
+          historicalFees:{available:true,priced:priced?2:0,transactions:2,knownUsdc:priced?amount('0.65'):null,totalUsdc:priced?amount('0.65'):null},
+          items:[{side:'sell',walletId:'one',block:'128',txHash:'0x'+'4'.repeat(64),realizedGrossUsdc:amount('125.35'),matchedWeth:amount('0.57'),unmatchedSaleWeth:amount('0.12'),matchedCostUsdc:amount('1180'),matchedProceedsUsdc:amount('1305.35')}]};
+        };
+        await panel.detail('fixture-group');
+        document.querySelector('[data-performance]').click();
+        const wait=()=>new Promise(resolve=>setTimeout(resolve,30));
+        await wait();
+        const summary=document.querySelector('[data-performance-summary]');
+        const all=summary.textContent;
+        const select=document.querySelector('[data-performance-wallet]');
+        select.value='one';
+        select.dispatchEvent(new Event('change'));
+        await wait();
+        const member=summary.textContent;
+        select.value='';
+        select.dispatchEvent(new Event('change'));
+        await wait();
+        document.querySelector('[data-performance-price]').click();
+        await wait();
+        return {all,member,priced:summary.textContent,priceStatus:document.querySelector('[data-performance-price-status]').textContent,
+          price:calls.find(c=>c.action==='portfolio.performance.priceFees').input,
+          filter:calls.find(c=>c.action==='portfolio.performance'&&c.input.walletId).input.walletId};
+      })()`);
+      assert.match(performance.all, /125\.35 USDC/);
+      assert.match(performance.all, /成交证据缺失/);
+      assert.match(performance.member, /-8 USDC/);
+      assert.equal(performance.filter, 'one');
+      assert.match(performance.priced, /124\.70 USDC/);
+      assert.match(performance.priceStatus, /已保存报价 2/);
+      assert.deepEqual(performance.price, {
+        id: 'fixture-group',
+        walletId: undefined,
+        offset: 0,
+        limit: 6,
+      });
+      for (const name of ['light', 'dark']) {
+        await theme(name);
+        await shot('performance-' + name);
+      }
       console.log(
-        'PASS: shared portfolio creation, frozen confirmation, pause/resume, holdings, USD valuation, allowance exposure and opt-in monitoring; light/dark screenshots use synthetic public data.',
+        'PASS: shared portfolio creation, authorization controls, monitoring, holdings, valuation and wallet-filtered trade performance.',
       );
     } finally {
       win.destroy();

@@ -108,6 +108,62 @@ export type AllowanceReview = {
   spender: string;
 };
 type AllowanceAmount = { atomic: string | null; amount: string | null };
+type PerformanceAmount = { atomic: string; amount: string };
+type PerformanceReport = {
+  snapshotId: string;
+  next: number | null;
+  total: number;
+  totals: {
+    buyCount: number;
+    sellCount: number;
+    missingCount: number;
+    matchedWeth: PerformanceAmount;
+    unmatchedSaleWeth: PerformanceAmount;
+    interruptedBasisWeth: PerformanceAmount;
+    openWeth: PerformanceAmount;
+    openCostUsdc: PerformanceAmount;
+    matchedCostUsdc: PerformanceAmount;
+    matchedProceedsUsdc: PerformanceAmount;
+    realizedGrossUsdc: PerformanceAmount | null;
+    matchedSaleCount: number;
+    pricedSaleCount: number;
+    matchedSwapFeesUsdc: PerformanceAmount | null;
+    realizedAfterSwapFeesUsdc: PerformanceAmount | null;
+  };
+  fees: {
+    l2GasWei: string | null;
+    l1DataFeeWei: string | null;
+    operatorFeeWei: string | null;
+    totalWei: string | null;
+    l2Receipts: number;
+    l1Receipts: number;
+    operatorReceipts: number;
+    finalizedTransactions: number;
+  };
+  historicalFees?: {
+    available: boolean;
+    priced: number;
+    transactions: number;
+    knownUsdc: PerformanceAmount | null;
+    totalUsdc: PerformanceAmount | null;
+  };
+  items: {
+    walletId: string;
+    block: string | null;
+    txHash: string;
+    side: 'buy' | 'sell' | 'unknown';
+    boughtWeth?: PerformanceAmount;
+    paidUsdc?: PerformanceAmount;
+    matchedWeth?: PerformanceAmount;
+    unmatchedSaleWeth?: PerformanceAmount;
+    matchedCostUsdc?: PerformanceAmount;
+    matchedProceedsUsdc?: PerformanceAmount;
+    realizedGrossUsdc?: PerformanceAmount | null;
+    transactionFeeUsdc?: PerformanceAmount | null;
+    realizedAfterSwapFeesUsdc?: PerformanceAmount | null;
+    feeQuote?: { eth: { roundId: string }; usdc: { roundId: string } };
+  }[];
+};
 type AllowanceReport = {
   reportId: string;
   observedAt: number;
@@ -435,11 +491,17 @@ export class WalletPortfolioPanel {
       }
       d.querySelector('footer')!.insertAdjacentHTML(
         'beforeend',
-        `<button type="button" data-exposure>${esc(this.t('portfolioExposure'))}</button>`,
+        `<button type="button" data-exposure>${esc(this.t('portfolioExposure'))}</button><button type="button" data-performance>${esc(this.t('portfolioPerformance'))}</button>`,
       );
       d.querySelector('[data-exposure]')!.addEventListener('click', () =>
         this.run(d, async () => {
           await this.allowanceExposure(id, p.chainId === 8453 ? 'base' : 'base-sepolia');
+          d.close();
+        }),
+      );
+      d.querySelector('[data-performance]')!.addEventListener('click', () =>
+        this.run(d, async () => {
+          await this.performance(p);
           d.close();
         }),
       );
@@ -819,6 +881,154 @@ export class WalletPortfolioPanel {
       await load();
       if (state?.intervalSeconds) interval.value = String(state.intervalSeconds);
     });
+  }
+  private async performance(portfolio: Portfolio): Promise<void> {
+    const names = new Map(this.options.wallets().map(({ id, name }) => [id, name]));
+    const d = this.dialog(
+      this.t('portfolioPerformance'),
+      `
+      <p class="wallet-private-hint">${esc(this.t('portfolioPerformanceHint'))}</p>
+      <div class="wallet-allowance-history"><label>${esc(this.t('portfolioMembers'))}<select data-performance-wallet><option value="">${esc(this.t('portfolioPerformanceAll'))}</option>${portfolio.members.map((m) => `<option value="${esc(m.walletId)}">${esc(names.get(m.walletId) ?? m.address)}</option>`).join('')}</select></label><button type="button" data-performance-refresh>${esc(this.t('periodRefresh'))}</button><button type="button" data-performance-price hidden>${esc(this.t('portfolioPerformancePrice'))}</button></div>
+      <p data-performance-price-status role="status" hidden></p>
+      <section data-performance-summary aria-live="polite"></section>
+      <section data-performance-rows></section>
+      <footer><button type="button" data-performance-back>${esc(this.t('portfolioBack'))}</button><button type="button" data-performance-prev disabled>${esc(this.t('portfolioPrevious'))}</button><span data-performance-page></span><button type="button" data-performance-next disabled>${esc(this.t('portfolioPageNext'))}</button></footer>`,
+    );
+    const select = d.querySelector<HTMLSelectElement>('[data-performance-wallet]')!;
+    const previous = d.querySelector<HTMLButtonElement>('[data-performance-prev]')!;
+    const next = d.querySelector<HTMLButtonElement>('[data-performance-next]')!;
+    const price = d.querySelector<HTMLButtonElement>('[data-performance-price]')!;
+    const priceStatus = d.querySelector<HTMLElement>('[data-performance-price-status]')!;
+    const limit = 6;
+    let report: PerformanceReport | undefined,
+      offset = 0,
+      displayedWallet = '',
+      pricingOffset = 0;
+    const missing = '—';
+    const display = (value: PerformanceAmount | undefined | null, units: string) =>
+      value ? `${value.amount} ${units}` : missing;
+    const render = () => {
+      const { totals, fees, historicalFees, items, total } = report!;
+      const cards = [
+        ['portfolioPerformanceGross', display(totals.realizedGrossUsdc, 'USDC')],
+        ['portfolioPerformanceMatched', display(totals.matchedWeth, 'WETH')],
+        [
+          'portfolioPerformanceOpen',
+          display(totals.openWeth, 'WETH') + ' · ' + display(totals.openCostUsdc, 'USDC'),
+        ],
+        ['portfolioPerformanceCost', display(totals.matchedCostUsdc, 'USDC')],
+        ['portfolioPerformanceProceeds', display(totals.matchedProceedsUsdc, 'USDC')],
+        ['portfolioPerformanceUnmatched', display(totals.unmatchedSaleWeth, 'WETH')],
+      ];
+      if (historicalFees?.available && totals.matchedSaleCount)
+        cards.splice(1, 0, [
+          'portfolioPerformanceNet',
+          `${display(totals.realizedAfterSwapFeesUsdc, 'USDC')} · ${totals.pricedSaleCount}/${totals.matchedSaleCount}`,
+        ]);
+      const feeRows = [
+        ['portfolioPerformanceFeeL2', fees.l2GasWei, fees.l2Receipts],
+        ['portfolioPerformanceFeeL1', fees.l1DataFeeWei, fees.l1Receipts],
+        ['portfolioPerformanceFeeOperator', fees.operatorFeeWei, fees.operatorReceipts],
+      ] as const;
+      const fee = (wei: string | null) => (wei === null ? missing : `${tokenAmount(wei, 18)} ETH`);
+      d.querySelector('[data-performance-summary]')!.innerHTML =
+        `<dl class="wallet-performance-grid">${cards.map(([key, value]) => `<div class="wallet-budget-row"><dt>${esc(this.t(key!))}</dt><dd>${esc(value)}</dd></div>`).join('')}</dl>
+        ${totals.missingCount ? `<p class="wallet-warning">${esc(this.t('portfolioPerformanceMissing'))} · ${totals.missingCount} · ${esc(this.t('portfolioPerformanceInterrupted'))} ${esc(display(totals.interruptedBasisWeth, 'WETH'))}</p>` : ''}
+        <details><summary>${esc(this.t('portfolioPerformanceFees'))} · ${esc(fee(fees.totalWei))}</summary><dl class="wallet-performance-fees">${feeRows.map(([label, wei, count]) => `<div><dt>${esc(this.t(label))}</dt><dd>${esc(fee(wei))} · ${count}/${fees.finalizedTransactions}</dd></div>`).join('')}
+        ${historicalFees?.available ? `<div><dt>${esc(this.t('portfolioPerformanceHistoricalFees'))}</dt><dd>${esc(display(historicalFees.totalUsdc ?? historicalFees.knownUsdc, 'USDC'))} · ${historicalFees.priced}/${historicalFees.transactions}</dd></div>` : ''}
+        ${totals.matchedSwapFeesUsdc ? `<div><dt>${esc(this.t('portfolioPerformanceMatchedFees'))}</dt><dd>${esc(display(totals.matchedSwapFeesUsdc, 'USDC'))}</dd></div>` : ''}</dl></details>`;
+      d.querySelector('[data-performance-rows]')!.innerHTML = items.length
+        ? `<div class="wallet-portfolio-list">${items
+            .map(
+              (
+                row,
+              ) => `<article class="wallet-budget-row"><header><strong>${esc(names.get(row.walletId) ?? row.walletId)}</strong><small>${row.block ? '#' + esc(row.block) : ''}</small></header><code>${esc(row.txHash)}</code>
+           ${row.side === 'unknown' ? `<p>${esc(this.t('portfolioPerformanceMissing'))}</p>` : row.side === 'buy' ? `<p>${esc(this.t('portfolioPerformanceBuy'))} · ${esc(display(row.boughtWeth, 'WETH'))} · ${esc(display(row.paidUsdc, 'USDC'))}</p>` : `<p>${esc(this.t('portfolioPerformanceGross'))} · ${esc(display(row.realizedGrossUsdc, 'USDC'))}</p><small>${esc(this.t('portfolioPerformanceCost'))} ${esc(display(row.matchedCostUsdc, 'USDC'))} · ${esc(this.t('portfolioPerformanceProceeds'))} ${esc(display(row.matchedProceedsUsdc, 'USDC'))}</small><p><small>${esc(this.t('portfolioPerformanceMatched'))} ${esc(display(row.matchedWeth, 'WETH'))} · ${esc(this.t('portfolioPerformanceUnmatched'))} ${esc(display(row.unmatchedSaleWeth, 'WETH'))}</small></p>`}
+           ${row.realizedAfterSwapFeesUsdc ? `<p>${esc(this.t('portfolioPerformanceNet'))} · ${esc(display(row.realizedAfterSwapFeesUsdc, 'USDC'))}</p>` : ''}
+           ${row.feeQuote ? `<details><summary>${esc(this.t('portfolioPerformanceHistoricalFees'))} · ${esc(display(row.transactionFeeUsdc, 'USDC'))}</summary><p>${esc(this.t('portfolioPerformanceQuote'))} · ETH/USD #${esc(row.feeQuote.eth.roundId)} · USDC/USD #${esc(row.feeQuote.usdc.roundId)}</p></details>` : ''}</article>`,
+            )
+            .join('')}</div>`
+        : `<p>${esc(this.t('portfolioPerformanceEmpty'))}</p>`;
+      previous.disabled = offset === 0;
+      next.disabled = report!.next === null;
+      price.hidden = !historicalFees?.available || !historicalFees.transactions;
+      price.textContent = this.t(
+        pricingOffset ? 'portfolioPerformancePriceNext' : 'portfolioPerformancePrice',
+      );
+      d.querySelector('[data-performance-page]')!.textContent = total
+        ? `${offset + 1}–${offset + items.length} / ${total}`
+        : '';
+    };
+    const load = async (start = 0, snapshotId?: string, walletId = select.value) => {
+      select.disabled = true;
+      try {
+        report = await this.call<PerformanceReport>('performance', {
+          id: portfolio.id,
+          walletId: walletId || undefined,
+          offset: start,
+          limit,
+          snapshotId,
+        });
+        offset = start;
+        displayedWallet = walletId;
+        render();
+      } finally {
+        select.value = displayedWallet;
+        select.disabled = false;
+      }
+    };
+    select.addEventListener('change', () =>
+      this.run(d, async () => {
+        pricingOffset = 0;
+        priceStatus.hidden = true;
+        await load();
+      }),
+    );
+    price.addEventListener('click', () =>
+      this.run(d, async () => {
+        priceStatus.hidden = true;
+        price.disabled = select.disabled = true;
+        try {
+          const result = await this.call<{
+            next: number | null;
+            saved: number;
+            unavailable: number;
+            errors: string[];
+          }>('performance.priceFees', {
+            id: portfolio.id,
+            walletId: displayedWallet || undefined,
+            offset: pricingOffset,
+            limit,
+          });
+          pricingOffset = result.next ?? 0;
+          priceStatus.textContent = [
+            `${this.t('portfolioPerformancePriceSaved')} ${result.saved}`,
+            `${this.t('portfolioPerformancePriceUnavailable')} ${result.unavailable}`,
+            ...result.errors.map((error) => walletStatus(this.options.language(), error)),
+          ].join(' · ');
+          priceStatus.hidden = false;
+          await load();
+        } finally {
+          price.disabled = select.disabled = false;
+        }
+      }),
+    );
+    previous.addEventListener('click', () =>
+      this.run(d, () => load(Math.max(0, offset - limit), report?.snapshotId)),
+    );
+    next.addEventListener('click', () =>
+      this.run(d, () => load(report?.next ?? offset, report?.snapshotId)),
+    );
+    d.querySelector('[data-performance-refresh]')!.addEventListener('click', () =>
+      this.run(d, () => load()),
+    );
+    d.querySelector('[data-performance-back]')!.addEventListener('click', () =>
+      this.run(d, async () => {
+        await this.detail(portfolio.id);
+        d.close();
+      }),
+    );
+    this.run(d, () => load());
   }
   private holdings(id: string): void {
     const d = this.dialog(

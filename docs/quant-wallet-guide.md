@@ -191,6 +191,14 @@ Permit2 的「准备作废当前许可签名」将选定代币与 spender 的已
 
 上限的统计范围以快照、后续日志、组合规则、本地在途交易和本次授权对象为准。钱包外部签发或广播的交易、未提交的许可签名和任意合约中的授权副作用不受这项控制。既有钱包审批、交易预算和实盘自动授权分别执行。
 
+### 组合成交损益
+
+在 Base 或 Base Sepolia 的组合详情打开「成交损益」。报告使用当前成员钱包已有的实盘计划成交记录，按各钱包的交易 nonce 顺序做先进先出配对。页面可筛选成员，查看买入、卖出、已分配成本、成交收入和 USDC 毛损益。费用以 ETH 单列，显示 L2 执行费、L1 数据费及运营费的回执覆盖率。
+
+已确认的成交缺少证据时，后续计算会从下一笔有证据的买入重新建立配对。无法配对的卖出单独显示数量。成本按代币最小单位分配，数据涵盖本应用实盘计划的 WETH / USDC 成交。Agent 可用 `quant_portfolios(action="performance")` 查询同一视图，翻页时可用 `snapshotId` 核对数据版本。[链上交易回执字段](https://ethereum.org/developers/docs/apis/json-rpc/#eth_gettransactionreceipt)
+
+Base 主网可点「折算历史费用」，按交易最终确认的区块读取并保存 Chainlink ETH/USD 与 USDC/USD 报价轮次。折算以 USDC 最小单位向下取整，按配对数量分摊买入和卖出费用。全部配对成交的费用都有证据时显示扣除兑换费用后的已实现损益。授权和失败交易的费用计入单独的计划费用汇总。报价过期、排序器不可用或节点缺少历史状态时保留缺口。Agent 可用 `quant_portfolios(action="performance_price_fees")` 分批折算。[Chainlink 数据接口](https://docs.chain.link/data-feeds/api-reference) · [区块哈希查询](https://eips.ethereum.org/EIPS/eip-1898)
+
 ## 新闻研究与决策建议
 
 研究 Agent 现在可以通过 `quant_news_search` 使用已配置的搜索引擎，通过 `quant_news_fetch` 阅读公开 HTTPS 来源。请求在主机执行，复用应用网络 / 代理配置，不启动 VM 或浏览器，也不携带钱包凭据。默认检索返回少量摘要，正文按需分页；`maxChars=0` 可读取网络大小上限内的完整内容。引擎选择、自己的 Provider 和 Key 沿用现有网络研究设置。

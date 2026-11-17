@@ -50,7 +50,10 @@ class TuiWalletPortfolios {
         { label: this.w.text('usageTitle'), value: 'usage' },
         { label: this.w.text('portfolioHoldings'), value: 'holdings' },
         ...([8453, 84532].includes(p.chainId)
-          ? [{ label: this.w.text('portfolioExposure'), value: 'exposure' }]
+          ? [
+              { label: this.w.text('portfolioExposure'), value: 'exposure' },
+              { label: this.w.text('portfolioPerformance'), value: 'performance' },
+            ]
           : []),
         ...(p.equityFloorUsdAtomic && result.state !== 'removed'
           ? [{ label: this.w.text('portfolioEquityCheck'), value: 'equity' }]
@@ -72,6 +75,7 @@ class TuiWalletPortfolios {
         if (value === 'back') return this.open();
         if (value === 'usage') return this.usage(result, rows);
         if (value === 'holdings') return this.holdings(id);
+        if (value === 'performance') return this.performance(p, names);
         if (value === 'exposure')
           return this.exposure(id, p.chainId === 8453 ? 'base' : 'base-sepolia');
         if (value === 'equity') return this.equity(id);
@@ -120,6 +124,175 @@ class TuiWalletPortfolios {
           ? `\n${this.w.text('portfolioAllowanceCeiling')} · ${tokenAmount(p.allowanceCeiling.atoms, p.allowanceCeiling.decimals)} ${p.allowanceCeiling.token}`
           : ''),
       () => this.open(),
+    );
+  }
+  async performance(portfolio, names, walletId, offset = 0, snapshotId, pricingOffset = 0) {
+    const limit = 5;
+    const report = await this.w.call('portfolio.performance', {
+      id: portfolio.id,
+      walletId,
+      offset,
+      limit,
+      snapshotId,
+    });
+    const { totals, fees, historicalFees } = report;
+    const t = (key) => this.w.text(key);
+    const back = () => this.detail(portfolio.id);
+    const view = () =>
+      this.performance(portfolio, names, walletId, offset, undefined, pricingOffset);
+    const amount = (value, unit) => (value ? value.amount + ' ' + unit : '—');
+    const fee = (wei) => (wei === null ? '—' : tokenAmount(wei, 18) + ' ETH');
+    const historical = historicalFees?.available
+      ? `${t('portfolioPerformanceHistoricalFees')} · ${amount(historicalFees.totalUsdc ?? historicalFees.knownUsdc, 'USDC')} · ${historicalFees.priced}/${historicalFees.transactions}`
+      : '';
+    const pickWallet = () =>
+      this.w.menu(
+        t('portfolioMembers'),
+        [
+          { label: t('portfolioPerformanceAll'), value: '' },
+          ...portfolio.members.map((member) => ({
+            label: names.get(member.walletId) ?? member.address,
+            value: member.walletId,
+          })),
+        ],
+        (nextWallet) => this.performance(portfolio, names, nextWallet || undefined),
+        '',
+        view,
+      );
+    return this.w.menu(
+      t('portfolioPerformance'),
+      [
+        { label: t('portfolioBack'), value: 'back' },
+        { label: t('portfolioMembers'), value: 'wallet' },
+        { label: t('portfolioPerformanceFees'), value: 'fees' },
+        ...(historicalFees?.available && historicalFees.transactions
+          ? [
+              {
+                label: t(
+                  pricingOffset ? 'portfolioPerformancePriceNext' : 'portfolioPerformancePrice',
+                ),
+                value: 'price',
+              },
+            ]
+          : []),
+        { label: t('periodRefresh'), value: 'refresh' },
+        ...report.items.map((row) => ({
+          label:
+            (names.get(row.walletId) ?? row.walletId) +
+            ' · ' +
+            (row.block ? '#' + row.block + ' · ' : '') +
+            (row.side === 'unknown'
+              ? t('portfolioPerformanceMissing')
+              : row.side === 'buy'
+                ? t('portfolioPerformanceBuy') + ' · ' + amount(row.boughtWeth, 'WETH')
+                : amount(row.realizedGrossUsdc, 'USDC')),
+          value: row,
+        })),
+        ...(offset > 0 ? [{ label: t('portfolioPrevious'), value: 'previous' }] : []),
+        ...(report.next !== null ? [{ label: t('portfolioPageNext'), value: 'next' }] : []),
+      ],
+      async (value) => {
+        if (value === 'back') return back();
+        if (value === 'wallet') return pickWallet();
+        if (value === 'fees') {
+          const parts = [
+            ['portfolioPerformanceFeeL2', fees.l2GasWei, fees.l2Receipts],
+            ['portfolioPerformanceFeeL1', fees.l1DataFeeWei, fees.l1Receipts],
+            ['portfolioPerformanceFeeOperator', fees.operatorFeeWei, fees.operatorReceipts],
+          ];
+          return this.w.menu(
+            t('portfolioPerformanceFees'),
+            [{ label: t('portfolioBack'), value: 'back' }],
+            view,
+            [
+              ...parts.map(
+                ([label, wei, count]) =>
+                  `${t(label)} · ${fee(wei)} · ${count}/${fees.finalizedTransactions}`,
+              ),
+              historical,
+              totals.matchedSwapFeesUsdc
+                ? `${t('portfolioPerformanceMatchedFees')} · ${amount(totals.matchedSwapFeesUsdc, 'USDC')}`
+                : '',
+            ]
+              .filter(Boolean)
+              .join('\n'),
+            view,
+          );
+        }
+        if (value === 'price') {
+          const result = await this.w.call('portfolio.performance.priceFees', {
+            id: portfolio.id,
+            walletId,
+            offset: pricingOffset,
+            limit,
+          });
+          this.w.notify(
+            `${t('portfolioPerformancePriceSaved')} ${result.saved} · ${t('portfolioPerformancePriceUnavailable')} ${result.unavailable}`,
+          );
+          return this.performance(portfolio, names, walletId, 0, undefined, result.next ?? 0);
+        }
+        if (value === 'refresh') return this.performance(portfolio, names, walletId);
+        if (value === 'previous' || value === 'next')
+          return this.performance(
+            portfolio,
+            names,
+            walletId,
+            value === 'previous' ? Math.max(0, offset - limit) : report.next,
+            report.snapshotId,
+            pricingOffset,
+          );
+        return this.w.menu(
+          t('portfolioPerformance'),
+          [
+            { label: t('portfolioBack'), value: 'back' },
+            { label: t('details'), value: 'inspect' },
+          ],
+          (operation) => (operation === 'back' ? view() : this.w.inspect(value.intentId, 0, view)),
+          [
+            value.txHash,
+            value.side === 'unknown'
+              ? t('portfolioPerformanceMissing')
+              : value.side === 'buy'
+                ? `${t('portfolioPerformanceBuy')} · ${amount(value.boughtWeth, 'WETH')} · ${amount(value.paidUsdc, 'USDC')}`
+                : [
+                    `${t('portfolioPerformanceGross')} · ${amount(value.realizedGrossUsdc, 'USDC')}`,
+                    ...(value.realizedAfterSwapFeesUsdc
+                      ? [
+                          `${t('portfolioPerformanceNet')} · ${amount(value.realizedAfterSwapFeesUsdc, 'USDC')}`,
+                        ]
+                      : []),
+                    `${t('portfolioPerformanceCost')} · ${amount(value.matchedCostUsdc, 'USDC')}`,
+                    `${t('portfolioPerformanceProceeds')} · ${amount(value.matchedProceedsUsdc, 'USDC')}`,
+                    `${t('portfolioPerformanceMatched')} · ${amount(value.matchedWeth, 'WETH')}`,
+                    `${t('portfolioPerformanceUnmatched')} · ${amount(value.unmatchedSaleWeth, 'WETH')}`,
+                  ].join('\n'),
+            value.feeQuote
+              ? `${t('portfolioPerformanceQuote')} · ETH/USD #${value.feeQuote.eth.roundId} · USDC/USD #${value.feeQuote.usdc.roundId}`
+              : '',
+          ]
+            .filter(Boolean)
+            .join('\n'),
+          view,
+        );
+      },
+      [
+        walletId ? (names.get(walletId) ?? walletId) : t('portfolioPerformanceAll'),
+        `${t('portfolioPerformanceGross')} · ${amount(totals.realizedGrossUsdc, 'USDC')}`,
+        historical && totals.matchedSaleCount
+          ? `${t('portfolioPerformanceNet')} · ${amount(totals.realizedAfterSwapFeesUsdc, 'USDC')} · ${totals.pricedSaleCount}/${totals.matchedSaleCount}`
+          : '',
+        `${t('portfolioPerformanceMatched')} · ${amount(totals.matchedWeth, 'WETH')}`,
+        `${t('portfolioPerformanceOpen')} · ${amount(totals.openWeth, 'WETH')} · ${amount(totals.openCostUsdc, 'USDC')}`,
+        `${t('portfolioPerformanceUnmatched')} · ${amount(totals.unmatchedSaleWeth, 'WETH')}`,
+        totals.missingCount
+          ? `${t('portfolioPerformanceMissing')} · ${totals.missingCount} · ${t('portfolioPerformanceInterrupted')} ${amount(totals.interruptedBasisWeth, 'WETH')}`
+          : '',
+        `${t('portfolioPerformanceFees')} · ${fee(fees.totalWei)}`,
+        t('portfolioPerformanceHint'),
+      ]
+        .filter(Boolean)
+        .join('\n'),
+      back,
     );
   }
   async exposure(id, chain, report, offset = 0, filter = 'review') {

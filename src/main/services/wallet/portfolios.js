@@ -10,6 +10,13 @@ const { equityFloor, assessEquity } = require('./portfolio-equity');
 const { PortfolioAllowances } = require('./portfolio-allowances');
 const { PortfolioAllowanceMonitor } = require('./portfolio-allowance-monitor');
 const { ceilingFromSnapshot } = require('./portfolio-allowance-ceiling');
+const {
+  portfolioPerformance,
+  performanceRecords,
+  feeEvidence,
+  feeQuote,
+} = require('./portfolio-performance');
+const { page } = require('../quant/event-files');
 const fail = (code) => {
   throw Error(code);
 };
@@ -18,6 +25,7 @@ class WalletPortfolios {
     this.wallet = wallet;
     this.allowances = new PortfolioAllowances(this);
     this.allowanceMonitor = new PortfolioAllowanceMonitor(this);
+    this.pricingFees = false;
     this.write = writeAtomic;
     this.file = path.join(wallet.directory, 'portfolio-fences.json');
     this.fences = new Map();
@@ -162,6 +170,13 @@ class WalletPortfolios {
       return result;
     }
     if (action === 'get') return this.get(input.id);
+    if (action === 'performance') {
+      context.signal?.throwIfAborted();
+      const { portfolio, revision } = await this.get(input.id);
+      context.signal?.throwIfAborted();
+      return portfolioPerformance(portfolio, revision, this.wallet.state.intents, input);
+    }
+    if (action === 'performance.priceFees') return this.pricePerformanceFees(input, context.signal);
     if (action === 'equity') {
       context.signal?.throwIfAborted();
       const initial = await this.get(input.id),
@@ -454,6 +469,96 @@ class WalletPortfolios {
       return this.change(challenge.ids, challenge.command.action, challenge.command.input);
     }
     fail('UNKNOWN_WALLET_ACTION');
+  }
+  async pricePerformanceFees(input, signal) {
+    signal?.throwIfAborted();
+    if (this.pricingFees) fail('WALLET_FEE_PRICE_BUSY');
+    this.pricingFees = true;
+    try {
+      const { portfolio, revision } = await this.get(input.id);
+      if (portfolio.chainId !== 8453) fail('WALLET_PRICE_NETWORK');
+      const byWallet = performanceRecords(portfolio, this.wallet.state.intents, input);
+      const records = [...byWallet.values()].flatMap(({ records }) => records.filter(feeEvidence));
+      const network = this.wallet.networks.byId(8453, true);
+      const limit = input.limit ?? 6;
+      if (!Number.isInteger(limit) || limit > 8) fail('INVALID_PAGINATION');
+      const { items, next, total } = page(records, { offset: input.offset, limit });
+      const verifiedBlocks = new Map(),
+        refreshed = new Map(),
+        errors = new Set();
+      let unavailable = 0;
+      for (const intent of items) {
+        signal?.throwIfAborted();
+        if (feeQuote(intent)) continue;
+        const evidence = feeEvidence(intent);
+        const key = `${intent.block}:${evidence.blockHash}`;
+        if (!verifiedBlocks.has(key)) {
+          const timeout = AbortSignal.timeout(5000);
+          const quoteSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
+          try {
+            const value = await this.wallet.market.baseFeeQuote(
+              { venue: network.key },
+              intent.block,
+              evidence.blockHash,
+              quoteSignal,
+            );
+            verifiedBlocks.set(key, { value });
+          } catch (error) {
+            signal?.throwIfAborted();
+            const code = /^(WALLET_PRICE_[A-Z_]+|BLOCK_REORG|CHAIN_ID_MISMATCH)$/.test(
+              error?.message,
+            )
+              ? error.message
+              : 'WALLET_PRICE_UNAVAILABLE';
+            verifiedBlocks.set(key, { code });
+          }
+        }
+        const { code, value } = verifiedBlocks.get(key);
+        if (code) {
+          errors.add(code);
+          unavailable++;
+        } else refreshed.set(intent.id, { txHash: evidence.txHash, quote: value });
+      }
+      const current = await this.get(input.id);
+      if (current.revision !== revision || current.portfolio.chainId !== portfolio.chainId)
+        fail('WALLET_PORTFOLIO_CHANGED');
+      const guard = () => {
+        signal?.throwIfAborted();
+        this.wallet.networks.assert(network.key, network.revision);
+      };
+      guard();
+      const saved = refreshed.size
+        ? await this.wallet.mutate((state) => {
+            let applied = 0;
+            for (const intent of state.intents) {
+              const entry = refreshed.get(intent.id);
+              if (!entry) continue;
+              const evidence = feeEvidence(intent);
+              if (
+                !evidence ||
+                evidence.txHash !== entry.txHash ||
+                evidence.blockHash !== entry.quote.blockHash ||
+                intent.block !== entry.quote.blockNumber
+              )
+                continue;
+              if (!feeQuote(intent)) {
+                evidence.feeQuote = entry.quote;
+                applied++;
+              }
+            }
+            return applied;
+          }, guard)
+        : 0;
+      return {
+        next,
+        total,
+        saved,
+        unavailable: unavailable + refreshed.size - saved,
+        errors: [...errors],
+      };
+    } finally {
+      this.pricingFees = false;
+    }
   }
 }
 module.exports = { WalletPortfolios };

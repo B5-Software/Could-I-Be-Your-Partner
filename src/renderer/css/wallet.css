@@ -191,6 +191,31 @@
 .wallet-portfolio-dialog footer {
   flex-wrap: wrap;
 }
+.wallet-performance-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 175px), 1fr));
+  gap: 10px;
+  margin: 0 0 16px;
+}
+.wallet-performance-grid dt,
+.wallet-performance-fees dt {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.wallet-performance-grid dd,
+.wallet-performance-fees dd {
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
+}
+.wallet-performance-fees {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 24px;
+}
+[data-performance-rows] code {
+  overflow-wrap: anywhere;
+}
 .wallet-allowance-actions {
   display: flex;
   flex-wrap: wrap;

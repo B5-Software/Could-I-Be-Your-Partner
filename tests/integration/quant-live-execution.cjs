@@ -523,7 +523,6 @@ async function main() {
     dataDir: profile,
     workspaceRoot: path.join(profile, 'workspaces'),
     settings: {
-      features: { quant: true },
       onboardingCompleted: true,
       language: 'en',
       runtime: { location: 'host' },
@@ -963,6 +962,18 @@ async function main() {
   assert.equal(portfolioUsage.usage.transactions, 5);
   assert.equal(portfolioUsage.usage.valueWei, '1000000000000000');
   assert.ok(BigInt(portfolioUsage.usage.feeWei) > BigInt(nativeUsage.usage.feeWei));
+  const performance = await walletCall('portfolio.performance', {
+    id: portfolio.portfolio.id,
+    walletId: wallet.id,
+  });
+  assert.equal(performance.totals.buyCount, 2);
+  assert.equal(performance.totals.openWeth.atomic, '1250000000000000');
+  assert.equal(performance.totals.openCostUsdc.atomic, '2500000');
+  assert.equal(performance.totals.missingCount, 0);
+  assert.equal(performance.fees.finalizedTransactions, 4);
+  assert.ok(
+    performance.items.every((item) => records.some((record) => item.txHash === record.hash)),
+  );
   const nonce = BigInt(await rpc('eth_getTransactionCount', [wallet.address, 'latest']));
   const memberMarket = host.runtime.walletService.market;
   const originalMemberRpc = memberMarket.rpc;
@@ -995,6 +1006,27 @@ async function main() {
     assert.equal(valued.valuation.prices.eth.address, BASE_FEEDS.eth.address);
     assert.equal(valued.valuation.prices.usdc.price, '0.98');
     assert.equal(valued.valuation.prices.eth.ageSeconds, 30);
+    const feeInput = { id: portfolio.portfolio.id, walletId: wallet.id };
+    const prices = await walletCall('portfolio.performance.priceFees', { ...feeInput, limit: 2 });
+    assert.deepEqual(prices, { total: 4, next: 2, saved: 2, unavailable: 0, errors: [] });
+    const remainingPrices = await walletCall('portfolio.performance.priceFees', {
+      ...feeInput,
+      offset: prices.next,
+      limit: 2,
+    });
+    assert.deepEqual(remainingPrices, {
+      total: 4,
+      next: null,
+      saved: 2,
+      unavailable: 0,
+      errors: [],
+    });
+    const priced = await walletCall('portfolio.performance', feeInput);
+    assert.notEqual(priced.snapshotId, performance.snapshotId);
+    assert.ok(priced.items.every((row) => row.feeQuote?.blockHash === row.blockHash));
+    assert.ok(priced.items.every((row) => row.feeQuote?.usdc.price === '0.98'));
+    assert.equal((await walletCall('portfolio.performance.priceFees', feeInput)).saved, 0);
+    assert.equal(BigInt(await rpc('eth_getTransactionCount', [wallet.address, 'latest'])), nonce);
     const expected = valued.members.reduce(
       (sum, member) =>
         sum + (BigInt(member.assets[0].amountAtomic) * 200000000000n) / 1000000000000000000n,
@@ -1503,7 +1535,6 @@ async function main() {
     dataDir: profile,
     workspaceRoot: path.join(profile, 'workspaces'),
     settings: {
-      features: { quant: true },
       onboardingCompleted: true,
       language: 'en',
       runtime: { location: 'host' },
@@ -1511,6 +1542,15 @@ async function main() {
       decision: { enabled: false },
     },
   });
+  const restoredPerformance = await walletCall('portfolio.performance', {
+    id: portfolio.portfolio.id,
+    walletId: wallet.id,
+  });
+  const restoredQuotes = restoredPerformance.items.filter((row) =>
+    performance.items.some((original) => original.txHash === row.txHash),
+  );
+  assert.equal(restoredQuotes.length, 2);
+  assert.ok(restoredQuotes.every((row) => row.feeQuote?.blockHash === row.blockHash));
   const recorded = await until(() => {
     const service = host.runtime.quantService;
     const state = service?.workspace(recordingId).baseRecorder;

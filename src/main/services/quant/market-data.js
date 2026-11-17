@@ -2,7 +2,7 @@
 'use strict';
 const { decimal, SCALE } = require('./decimal');
 const { validateCandles } = require('./backtest');
-const { valuePortfolio } = require('./portfolio-valuation');
+const { valuePortfolio, prices } = require('./portfolio-valuation');
 const { Interface, getAddress, ZeroAddress, MaxUint256, zeroPadValue } = require('ethers');
 const {
   PERMIT2,
@@ -729,6 +729,45 @@ class MarketData {
       this.rpc(config.venue, config.rpcUrl, method, params, { signal });
     if (uint(await rpc('eth_chainId', [])) !== BigInt(chainId)) throw Error('CHAIN_ID_MISMATCH');
     return readOperatorFee(rpc, gasUsed, { blockHash, requireCanonical: true });
+  }
+  async baseFeeQuote(config, height, blockHash, signal) {
+    const chain = CHAINS[config.venue];
+    if (chain?.id !== 8453 || !hashPattern.test(blockHash) || !/^\d{1,20}$/.test(height))
+      throw Error('WALLET_PRICE_NETWORK');
+    const rpc = boundedRpc((method, params) =>
+      this.rpc(config.venue, config.rpcUrl, method, params, { signal }),
+    );
+    if (uint(await rpc('eth_chainId', [])) !== 8453n) throw Error('CHAIN_ID_MISMATCH');
+    const number = '0x' + BigInt(height).toString(16);
+    const [block, finalized] = await Promise.all([
+      rpc('eth_getBlockByNumber', [number, false]),
+      rpc('eth_getBlockByNumber', ['finalized', false]),
+    ]);
+    if (block?.hash !== blockHash || uint(block.number) !== BigInt(height))
+      throw Error('BLOCK_REORG');
+    if (!finalized || !hashPattern.test(finalized.hash) || uint(finalized.number) < BigInt(height))
+      throw Error('WALLET_PRICE_BLOCK_UNFINALIZED');
+    if (uint(finalized.number) === BigInt(height) && finalized.hash !== blockHash)
+      throw Error('BLOCK_REORG');
+    const timestamp = uint(block.timestamp);
+    if (!timestamp || timestamp > BigInt(Math.floor(Date.now() / 1000)))
+      throw Error('WALLET_PRICE_INVALID');
+    const source = await prices({ chain, rpc, block, timestamp }, { historical: true });
+    const canonical = await rpc('eth_getBlockByNumber', [number, false]);
+    if (canonical?.hash !== blockHash) throw Error('BLOCK_REORG');
+    if (source.sequencer.status !== 'up') throw Error(source.sequencer.error);
+    const { eth, usdc } = source.prices;
+    if (eth?.status !== 'available' || usdc?.status !== 'available')
+      throw Error(eth?.error || usdc?.error || 'WALLET_PRICE_UNAVAILABLE');
+    return {
+      version: 1,
+      blockHash,
+      blockNumber: height,
+      timestamp: Number(timestamp),
+      source: source.source,
+      eth,
+      usdc,
+    };
   }
   async basePool(config, chain, call) {
     const fee = config.poolFee ?? 500;

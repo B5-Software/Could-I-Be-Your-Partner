@@ -39,7 +39,7 @@ function round(result) {
   return decoded;
 }
 
-async function prices(context) {
+async function prices(context, { historical = false } = {}) {
   const unavailable = (error) => ({ status: 'unavailable', error });
   const result = {
     source: 'Chainlink',
@@ -47,7 +47,7 @@ async function prices(context) {
     sequencer: unavailable('WALLET_PRICE_NETWORK'),
   };
   if (context.chain.id !== 8453) return result;
-  if (Math.floor(Date.now() / 1000) - Number(context.timestamp) > 300) {
+  if (!historical && Math.floor(Date.now() / 1000) - Number(context.timestamp) > 300) {
     result.sequencer = {
       address: BASE_FEEDS.sequencer,
       ...unavailable('WALLET_PRICE_BLOCK_STALE'),
@@ -226,4 +226,4 @@ async function valuePortfolio(context, assets, members) {
   };
 }
 
-module.exports = { BASE_FEEDS, feedAbi, valuePortfolio };
+module.exports = { BASE_FEEDS, feedAbi, valuePortfolio, prices };

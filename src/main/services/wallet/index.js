@@ -1648,6 +1648,7 @@ class WalletService {
                 l2GasWei: result.evidence.l2GasWei ?? previous.l2GasWei,
                 l1DataFeeWei: result.evidence.l1DataFeeWei ?? previous.l1DataFeeWei,
                 gasUsed: result.evidence.gasUsed ?? previous.gasUsed,
+                feeQuote: previous.feeQuote,
                 operatorFeeWei:
                   (result.evidence.gasUsed ?? previous.gasUsed) === previous.gasUsed
                     ? (previous.operatorFeeWei ?? null)

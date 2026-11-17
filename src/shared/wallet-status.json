@@ -1,5 +1,7 @@
 {
   "zh-CN": {
+    "WALLET_PORTFOLIO_PERFORMANCE_CHAIN": "成交损益支持 Base 和 Base Sepolia。",
+    "WALLET_PORTFOLIO_PERFORMANCE_CHANGED": "成交记录刚刚更新，请刷新后重新翻页。",
     "WALLET_PORTFOLIO_ALLOWANCE_INVALID": "授权上限或代币数量无效。",
     "WALLET_PORTFOLIO_ALLOWANCE_BASELINE": "请选择一份当前组合的完整近期快照。",
     "WALLET_PORTFOLIO_ALLOWANCE_STALE": "授权快照距最新区块太远。启用基于同一快照的监控补齐区块，或重新设置基准。",
@@ -162,6 +164,8 @@
     "WALLET_ASSET_RANGE": "每个网络最多追踪 16 个额外代币。",
     "WALLET_PRICE_NETWORK": "当前网络尚未接入参考估值。",
     "WALLET_PRICE_BLOCK_STALE": "区块时间过旧，参考估值不可用。",
+    "WALLET_PRICE_BLOCK_UNFINALIZED": "区块尚未最终确认，暂时无法折算费用。",
+    "WALLET_FEE_PRICE_BUSY": "已有费用折算正在运行。",
     "WALLET_PRICE_INVALID": "价格馈送数据无效。",
     "WALLET_PRICE_STALE": "价格数据已过期。",
     "WALLET_PRICE_UNAVAILABLE": "价格馈送暂时不可用。",
@@ -247,6 +251,8 @@
     "rejected": "已拒绝签名"
   },
   "en": {
+    "WALLET_PORTFOLIO_PERFORMANCE_CHAIN": "Trade performance supports Base and Base Sepolia.",
+    "WALLET_PORTFOLIO_PERFORMANCE_CHANGED": "Trade records changed. Refresh before paging again.",
     "WALLET_PORTFOLIO_ALLOWANCE_INVALID": "The allowance ceiling or token amount is invalid.",
     "WALLET_PORTFOLIO_ALLOWANCE_BASELINE": "Select a complete recent snapshot for this portfolio.",
     "WALLET_PORTFOLIO_ALLOWANCE_STALE": "The allowance baseline is too far behind. Let monitoring with the same baseline catch up or select a new baseline.",
@@ -409,6 +415,8 @@
     "WALLET_ASSET_RANGE": "Track up to 16 additional tokens per network.",
     "WALLET_PRICE_NETWORK": "Reference valuation is not configured for this network.",
     "WALLET_PRICE_BLOCK_STALE": "The block timestamp is too old for reference valuation.",
+    "WALLET_PRICE_BLOCK_UNFINALIZED": "The block is not yet finalized, so its fees cannot be priced.",
+    "WALLET_FEE_PRICE_BUSY": "A fee pricing request is already running.",
     "WALLET_PRICE_INVALID": "The price feed returned invalid data.",
     "WALLET_PRICE_STALE": "The price data is stale.",
     "WALLET_PRICE_UNAVAILABLE": "The price feed is temporarily unavailable.",
@@ -494,6 +502,8 @@
     "rejected": "Signature rejected"
   },
   "de": {
+    "WALLET_PORTFOLIO_PERFORMANCE_CHAIN": "Das Handelsergebnis ist für Base und Base Sepolia verfügbar.",
+    "WALLET_PORTFOLIO_PERFORMANCE_CHANGED": "Handelsdaten wurden aktualisiert. Lade die Ansicht vor dem Blättern neu.",
     "WALLET_PORTFOLIO_ALLOWANCE_INVALID": "Die Obergrenze oder die Token-Menge ist ungültig.",
     "WALLET_PORTFOLIO_ALLOWANCE_BASELINE": "Wähle einen vollständigen aktuellen Snapshot für dieses Portfolio.",
     "WALLET_PORTFOLIO_ALLOWANCE_STALE": "Der Ausgangsblock liegt zu weit zurück. Lasse die Überwachung ab demselben Snapshot aufholen oder wähle einen neuen Ausgangspunkt.",
@@ -656,6 +666,8 @@
     "WALLET_ASSET_RANGE": "Pro Netzwerk können bis zu 16 zusätzliche Tokens beobachtet werden.",
     "WALLET_PRICE_NETWORK": "Für dieses Netzwerk ist keine Referenzbewertung konfiguriert.",
     "WALLET_PRICE_BLOCK_STALE": "Der Block-Zeitstempel ist zu alt für eine Referenzbewertung.",
+    "WALLET_PRICE_BLOCK_UNFINALIZED": "Der Block ist noch nicht finalisiert. Seine Gebühren sind noch nicht bewertbar.",
+    "WALLET_FEE_PRICE_BUSY": "Eine Gebührenbewertung läuft bereits.",
     "WALLET_PRICE_INVALID": "Der Preis-Feed hat ungültige Daten geliefert.",
     "WALLET_PRICE_STALE": "Die Preisdaten sind veraltet.",
     "WALLET_PRICE_UNAVAILABLE": "Der Preis-Feed ist derzeit nicht verfügbar.",
