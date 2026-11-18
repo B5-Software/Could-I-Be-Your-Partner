@@ -850,6 +850,7 @@ export class QuantWorkbench {
     });
     form.querySelector('[data-question-skip]')!.addEventListener('click', () => void submit([]));
     form.addEventListener('input', (event) => {
+      alert.hidden = true;
       const control = event.target as HTMLInputElement | HTMLTextAreaElement;
       if (control instanceof HTMLInputElement && control.type === 'radio') {
         const custom = form.elements.namedItem(control.name.replace('choice-', 'text-'));

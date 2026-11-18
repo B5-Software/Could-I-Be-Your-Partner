@@ -354,15 +354,40 @@
   padding: 0 5px;
   overflow-wrap: anywhere;
 }
-.quant-question-option {
+.quant-question-dialog .quant-question-option {
   display: flex;
-  align-items: baseline;
-  gap: 8px;
+  flex-direction: row;
+  align-items: center;
+  gap: 10px;
+  min-height: 36px;
+  margin: 0;
+  padding: 6px 9px;
+  border: 1px solid var(--border-light);
+  border-radius: 7px;
+  background: var(--bg-secondary);
+  color: var(--text-primary);
+  font-size: 13px;
+  cursor: pointer;
   overflow-wrap: anywhere;
 }
-.quant-question-answer {
+.quant-question-dialog .quant-question-option:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--accent-bg);
+}
+.quant-question-dialog .quant-question-option input[type='radio'] {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+.quant-question-dialog .quant-question-answer {
   display: grid;
-  gap: 4px;
+  gap: 6px;
+  margin: 0;
 }
 .quant-question-answer textarea {
   width: 100%;

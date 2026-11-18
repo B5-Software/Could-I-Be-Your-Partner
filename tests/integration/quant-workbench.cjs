@@ -123,7 +123,7 @@ global.fetch = async (url, options = {}) => {
       if (answer) {
         assert.deepEqual(JSON.parse(answer.content), {
           ok: true,
-          answers: ['一周'],
+          answers: ['一周', ['WETH', 'USDC']],
           authority: 'none',
         });
         message.content = '已按一周的研究周期继续。';
@@ -138,6 +138,12 @@ global.fetch = async (url, options = {}) => {
               arguments: JSON.stringify({
                 questions: [
                   { question: '研究周期选多久？', options: ['一天', '一周'], custom: false },
+                  {
+                    question: '关注哪些资产？',
+                    options: ['WETH', 'USDC'],
+                    multiSelect: true,
+                    custom: false,
+                  },
                 ],
               }),
             },
@@ -1142,10 +1148,21 @@ ipcMain.once('app:renderer-ready', (event) =>
       await until("!!document.querySelector('.quant-question-dialog[open] input[value=一周]')");
       await js("document.querySelector('.quant-question-dialog form').requestSubmit()");
       await until("!!document.querySelector('.quant-question-dialog [role=alert]:not([hidden])')");
-      await shot('quant-research-question.png');
-      await js(
-        "document.querySelector('.quant-question-dialog input[value=一周]').click();document.querySelector('.quant-question-dialog form').requestSubmit()",
+      assert.equal(
+        await js(`Array.from(document.querySelectorAll('.quant-question-option')).every(label => {
+        const input = label.querySelector('input').getBoundingClientRect();
+        const text = label.querySelector('span').getBoundingClientRect();
+        return input.right < text.left && Math.abs(input.top + input.height / 2 - text.top - text.height / 2) < 2 && input.width <= 45;
+      })`),
+        true,
+        'choice controls must sit alongside their labels',
       );
+      await js(
+        "document.querySelector('.quant-question-dialog input[value=一周]').click();document.querySelector('.quant-question-dialog input[value=WETH]').click();document.querySelector('.quant-question-dialog input[value=USDC]').click()",
+      );
+      await until("document.querySelector('.quant-question-dialog [role=alert]').hidden");
+      await shot('quant-research-question.png');
+      await js("document.querySelector('.quant-question-dialog form').requestSubmit()");
       await until(
         "!document.querySelector('.quant-question-dialog[open]') && document.querySelector('#page-quant').textContent.includes('已按一周的研究周期继续。')",
       );
