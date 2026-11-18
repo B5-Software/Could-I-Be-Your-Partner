@@ -40,6 +40,7 @@ fn a_bounded_snapshot_does_not_turn_unknown_depth_into_an_empty_queue() {
         price: n("94"),
         quantity: n("1"),
         post_only: true,
+        time_in_force: Default::default(),
     };
     let matcher = Matcher::default();
     assert!(

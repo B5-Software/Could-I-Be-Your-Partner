@@ -383,6 +383,7 @@ impl Runner {
                 price,
                 quantity: config.quantity,
                 post_only: true,
+                time_in_force: Default::default(),
             });
         }
         let shadow = proposals

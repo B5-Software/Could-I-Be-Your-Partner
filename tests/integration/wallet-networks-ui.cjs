@@ -11,7 +11,7 @@ app
     const result = await require('esbuild').build({
       stdin: {
         contents:
-          "export {WalletNetworkPanel} from './src/renderer/core/wallet-networks';export {approvalCard} from './src/renderer/core/wallet-panel';",
+          "export {WalletNetworkPanel} from './src/renderer/core/wallet-networks';export {approvalCard,WalletPanel} from './src/renderer/core/wallet-panel';",
         resolveDir: path.resolve('.'),
         loader: 'ts',
       },
@@ -156,8 +156,52 @@ app
       assert.match(card.text, /0\.000021/);
       assert.doesNotMatch(card.blocked, /data-wallet-decision="approve"/);
       assert.deepEqual(await win.webContents.executeJavaScript('errors'), []);
+      const discovery = await win.webContents.executeJavaScript(`(async()=>{
+        document.querySelectorAll('dialog[open]').forEach(d=>d.close());
+        const root=document.querySelector('#settings-wallet');
+        root.innerHTML='<button data-wallet-action="balance" data-wallet-id="watch">资产总览</button>';
+        const token='0x'+'7'.repeat(40);
+        let tracked=false;
+        new NetworkPreview.WalletPanel({language:()=>lang,subscribe:()=>{},request:async(action,input)=>{
+          calls.push({action,input});
+          if(action==='network.list')return {items:[{...profile,rpc:undefined}]};
+          if(action==='assets')return {network:profile.name,block:'1440',blockHash:'0x'+'4'.repeat(64),observedAt:0,trackedTokens:tracked?[token]:[],assets:[]};
+          if(action==='asset.track'){tracked=true;return {};}
+          if(action==='asset.discover')return {anchorBlock:'1420',anchorHash:'0x'+'4'.repeat(64),fromBlock:input.endBlock?'909':'1165',toBlock:input.endBlock??'1420',nextEndBlock:'1164',snapshotId:'fixture-snapshot',networkRevision:profile.revision,next:null,total:1,items:[
+            {token,symbol:'EXAMPLE',block:input.endBlock?'1010':'1200',amount:'10.5',amountAtomic:'105',received:2,sent:1,tracked},
+          ]};
+          throw Error(action);
+        }});
+        const wait=()=>new Promise(r=>setTimeout(r,30));
+        root.querySelector('button').click();
+        await wait();
+        document.querySelector('[data-asset-discover]').click();
+        await wait();
+        const dialog=document.querySelector('[data-discovery-older]').closest('dialog');
+        const initial=dialog.textContent;
+        dialog.querySelector('[data-discovery-track]').click();
+        await wait();
+        const after=dialog.textContent;
+        dialog.querySelector('[data-discovery-older]').click();
+        await wait();
+        return {initial,after,track:calls.find(c=>c.action==='asset.track').input,older:calls.filter(c=>c.action==='asset.discover').at(-1).input};
+      })()`);
+      assert.match(discovery.initial, /EXAMPLE\s*10\.5/);
+      assert.match(discovery.after, /已追踪/);
+      assert.deepEqual(discovery.track, {
+        id: 'watch',
+        chain: 'evm-1337',
+        token: '0x' + '7'.repeat(40),
+        expectedNetworkRevision: 2,
+      });
+      assert.equal(discovery.older.endBlock, '1164');
+      assert.equal(discovery.older.anchorBlock, '1420');
+      for (const dark of [false, true]) {
+        await theme(dark);
+        await shot(dark ? 'discovery-dark' : 'discovery-light');
+      }
       console.log(
-        'PASS: shared EVM network list and frozen review, explicit save, manual transaction preparation without approval, native currency/fee labels, stale-network approval blocking; light/dark screenshots with synthetic profiles.',
+        'PASS: shared EVM network review, manual transaction preparation, native currency/fee labels, stale-network approval blocking and token discovery with explicit tracking.',
       );
     } finally {
       win.destroy();

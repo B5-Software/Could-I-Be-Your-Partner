@@ -581,6 +581,7 @@ class WalletBrowser {
         [
           { label: this.text('back'), value: 'back' },
           { label: this.text('assetRefresh'), value: 'refresh' },
+          { label: this.text('assetDiscover'), value: 'discover' },
           { label: this.text('assetTrack'), value: 'track' },
           ...snapshot.trackedTokens.map((token) => ({
             label: `${this.text('assetUntrack')} · ${token}`,
@@ -590,6 +591,7 @@ class WalletBrowser {
         async (action) => {
           if (action === 'back') return networks();
           if (action === 'refresh') return back();
+          if (action === 'discover') return this.discoverAssets(wallet.id, chain, back);
           if (action === 'track')
             return this.input(
               this.text('allowanceToken'),
@@ -607,6 +609,114 @@ class WalletBrowser {
       );
     };
     return networks();
+  }
+  async discoverAssets(id, chain, back, blocks = 256, cursor = {}, offset = 0) {
+    const t = (key) => this.text(key);
+    const title = t('assetDiscover');
+    const limit = 8;
+    const changeWindow = (onBack, range) =>
+      this.input(
+        t('assetDiscoverWindow'),
+        (value) => {
+          const size = Number(value);
+          if (!Number.isInteger(size) || size < 1 || size > 2000)
+            throw Error('WALLET_DISCOVERY_RANGE');
+          return this.discoverAssets(id, chain, back, size, range);
+        },
+        { value: String(blocks), back: onBack },
+      );
+    let report;
+    try {
+      report = await this.call('asset.discover', { id, chain, blocks, limit, offset, ...cursor });
+    } catch (error) {
+      return this.menu(
+        title,
+        [
+          { label: t('assetDiscoverWindow'), value: 'window' },
+          { label: t('assetDiscoverScan'), value: 'latest' },
+          { label: t('back'), value: 'back' },
+        ],
+        (action) =>
+          action === 'window'
+            ? changeWindow(back, {
+                anchorBlock: cursor.anchorBlock,
+                anchorHash: cursor.anchorHash,
+                endBlock: cursor.endBlock,
+              })
+            : action === 'latest'
+              ? this.discoverAssets(id, chain, back, blocks)
+              : back(),
+        this.status(error.message),
+        back,
+      );
+    }
+    const anchor = { anchorBlock: report.anchorBlock, anchorHash: report.anchorHash };
+    const current = { ...anchor, endBlock: report.toBlock, snapshotId: report.snapshotId };
+    const page = (start = offset) => this.discoverAssets(id, chain, back, blocks, current, start);
+    const balance = (row) =>
+      row.error ? t('assetFailed') : (row.amount ?? `${row.amountAtomic} ${t('assetAtomic')}`);
+    const rowView = (row) =>
+      this.menu(
+        row.symbol || t('assetUnknown'),
+        [
+          { label: t('back'), value: 'back' },
+          ...(!row.tracked && !row.error && row.amountAtomic !== '0'
+            ? [{ label: t('assetTrack'), value: 'track' }]
+            : []),
+        ],
+        async (operation) => {
+          if (operation === 'track')
+            await this.call('asset.track', {
+              id,
+              chain,
+              token: row.token,
+              expectedNetworkRevision: report.networkRevision,
+            });
+          return page();
+        },
+        [
+          row.token,
+          balance(row),
+          `#${row.block} · ${t('assetDiscoverReceived')} ${row.received} · ${t('assetDiscoverSent')} ${row.sent}`,
+          row.tracked ? t('assetDiscoverTracked') : '',
+        ]
+          .filter(Boolean)
+          .join('\n'),
+        page,
+      );
+    return this.menu(
+      title,
+      [
+        { label: t('back'), value: 'back' },
+        { label: t('assetDiscoverWindow'), value: 'window' },
+        { label: t('assetDiscoverScan'), value: 'latest' },
+        ...report.items.map((row) => ({
+          label: `${row.symbol || row.token} · ${balance(row)}`,
+          value: row,
+        })),
+        ...(offset ? [{ label: t('previous'), value: 'previous' }] : []),
+        ...(report.next !== null ? [{ label: t('next'), value: 'next' }] : []),
+        ...(report.nextEndBlock !== null
+          ? [{ label: t('assetDiscoverOlder'), value: 'older' }]
+          : []),
+      ],
+      (value) => {
+        if (value === 'back') return back();
+        if (value === 'window')
+          return changeWindow(() => page(), { ...anchor, endBlock: report.toBlock });
+        if (value === 'latest') return this.discoverAssets(id, chain, back, blocks);
+        if (value === 'previous') return page(Math.max(0, offset - limit));
+        if (value === 'next') return page(report.next);
+        if (value === 'older')
+          return this.discoverAssets(id, chain, back, blocks, {
+            ...anchor,
+            endBlock: report.nextEndBlock,
+          });
+        return rowView(value);
+      },
+      `${t('assetDiscoverRange')} #${report.fromBlock}–#${report.toBlock} · ${t('assetBlock')} #${report.anchorBlock}\n${report.items.length ? `${offset + 1}–${offset + report.items.length} / ${report.total}` : t('assetDiscoverEmpty')}`,
+      back,
+    );
   }
   allowances(wallet, selection, onBack) {
     const back = onBack || (() => this.account(wallet));

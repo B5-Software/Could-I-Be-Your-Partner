@@ -316,6 +316,58 @@
 .quant-native-paper .np-balances {
   margin: 16px 0 22px;
 }
+.quant-native-paper [data-np-order] .np-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 10rem), 1fr));
+}
+.quant-question-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  margin: 8px 12px 0;
+  padding: 8px 12px;
+  border: 1px solid var(--border-light);
+  border-radius: 10px;
+  background: var(--bg-secondary);
+}
+.quant-question-notice[hidden] {
+  display: none;
+}
+.quant-question-dialog {
+  width: min(580px, calc(100vw - 32px));
+}
+.quant-question-fields {
+  display: grid;
+  gap: 12px;
+}
+.quant-question-fields fieldset {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--border-light);
+  border-radius: 8px;
+}
+.quant-question-fields legend {
+  max-width: 100%;
+  padding: 0 5px;
+  overflow-wrap: anywhere;
+}
+.quant-question-option {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  overflow-wrap: anywhere;
+}
+.quant-question-answer {
+  display: grid;
+  gap: 4px;
+}
+.quant-question-answer textarea {
+  width: 100%;
+  resize: vertical;
+}
 .quant-native-paper .np-balances article {
   border: 1px solid var(--border-light);
   background: var(--bg-secondary);

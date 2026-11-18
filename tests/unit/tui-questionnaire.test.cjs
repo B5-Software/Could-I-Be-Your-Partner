@@ -7,6 +7,7 @@ const { stripAnsi } = require('../../src/tui/ansi');
 function fixture(questions) {
   const replies = [];
   const runtime = {
+    stop: () => {},
     respond: async (key, answer) => {
       replies.push({ key, answer });
       return { ok: true };
@@ -129,4 +130,40 @@ test('long questions and descriptions are scrollable and mouse hits choose the s
   await key({ name: 'mouse', button: 'left', press: false, x: 5, y: hit.row });
   assert.equal(app.state.modal.phase, 'review');
   assert.equal(app.state.modal.questionnaire.answers[0], 'B');
+});
+
+test('quant research answers retain the questionnaire identity and resume only after confirmation', async () => {
+  const { app, replies, key } = fixture([{ question: 'Which horizon?' }]);
+  const interaction = {
+    type: 'interaction',
+    key: app.activeKey,
+    kind: 'questions',
+    scope: 'quant-questionnaire',
+    id: 'research-fixture',
+    revision: 1,
+    payload: {
+      phase: 'pending',
+      recovered: true,
+      questions: [{ question: 'Which horizon?', options: ['Week'], custom: false }],
+    },
+  };
+  app.handleRuntimeEvent(interaction);
+  app.handleRuntimeEvent({ ...interaction, type: 'interaction-resolved', id: 'other-question' });
+  assert.equal(app.state.modal.kind, 'ask');
+  await key({ name: 'enter' });
+  await key({ name: 'enter' });
+  assert.deepEqual(replies[0].answer, {
+    answers: ['Week'],
+    questionnaireId: interaction.id,
+    revision: 1,
+  });
+  app.handleRuntimeEvent({ ...interaction, payload: { ...interaction.payload, phase: 'resume' } });
+  assert.equal(replies.length, 1);
+  await app._chooseModalOption(0);
+  assert.deepEqual(replies[1].answer, {
+    questionnaireId: interaction.id,
+    revision: 1,
+    action: 'resume',
+  });
+  app.dispose();
 });

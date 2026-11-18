@@ -1,7 +1,7 @@
 use cibyp_quant_engine::{
-    book::Book,
+    book::{Book, Side as BookSide, Update},
     decimal::Fixed,
-    ledger::{Fill, Instrument, Ledger, Risk, Side, Status, Submit},
+    ledger::{Fill, Instrument, Ledger, Risk, Side, Status, Submit, TimeInForce},
 };
 use std::{
     collections::BTreeMap,
@@ -52,6 +52,16 @@ fn order(id: &str, side: Side, quantity: &str) -> Submit {
         price: n("100"),
         quantity: n(quantity),
         post_only: true,
+        time_in_force: Default::default(),
+    }
+}
+fn immediate(id: &str, mode: TimeInForce, side: Side, price: &str, quantity: &str) -> Submit {
+    Submit {
+        strategy: "workspace:fixture".into(),
+        price: n(price),
+        post_only: false,
+        time_in_force: mode,
+        ..order(id, side, quantity)
     }
 }
 fn fill(id: &str, order: &str, price: &str, quantity: &str) -> Fill {
@@ -126,6 +136,162 @@ fn account_creation_retries_do_not_reset_funds_and_each_fill_survives_recovery()
         assert_eq!(restored.executions().count(), 2);
         assert_eq!(restored.account_view("paper").unwrap()["active"], false);
         assert_eq!(restored.balance("paper", "ETH").total, n("3.5"));
+    });
+}
+
+#[test]
+fn ioc_sweeps_best_prices_once_and_fok_needs_full_available_depth() {
+    run(|mut ledger, path| {
+        let mut depth = Book::default();
+        depth
+            .snapshot(
+                "test".into(),
+                1,
+                vec![[n("99"), n("2")]],
+                vec![[n("101"), n("0.5")], [n("102"), n("0.75")]],
+            )
+            .unwrap();
+        let buy = immediate("ioc", TimeInForce::Ioc, Side::Buy, "102", "2");
+        let settled = ledger
+            .submit_immediate(buy.clone(), &mut depth)
+            .unwrap()
+            .order;
+        assert_eq!(settled.status, Status::Cancelled);
+        assert_eq!(settled.filled, n("1.25"));
+        assert_eq!(settled.notional, n("127"));
+        assert_eq!(settled.fees, n("1.27"));
+        assert_eq!(settled.reserved, n("0"));
+        assert_eq!(ledger.balance("paper", "ETH").total, n("4.25"));
+        assert_eq!(ledger.balance("paper", "USD").total, n("871.73"));
+        assert_eq!(ledger.balance("paper", "USD").reserved, n("0"));
+        assert_eq!(ledger.executions().count(), 2);
+        assert_eq!(depth.asks[&n("101")], n("0.5"));
+        assert!(
+            ledger
+                .submit_immediate(buy.clone(), &mut depth)
+                .unwrap()
+                .duplicate
+        );
+
+        // Updating another level does not replenish quantity already consumed in this epoch.
+        depth
+            .delta(
+                "test",
+                2,
+                vec![Update {
+                    side: BookSide::Bid,
+                    price: n("99"),
+                    quantity: n("3"),
+                }],
+            )
+            .unwrap();
+        let rejected = ledger
+            .submit_immediate(
+                immediate("fok-miss", TimeInForce::Fok, Side::Buy, "102", "0.25"),
+                &mut depth,
+            )
+            .unwrap()
+            .order;
+        assert_eq!(
+            (rejected.status, rejected.filled),
+            (Status::Cancelled, n("0"))
+        );
+        depth
+            .delta(
+                "test",
+                3,
+                vec![Update {
+                    side: BookSide::Ask,
+                    price: n("102"),
+                    quantity: n("1"),
+                }],
+            )
+            .unwrap();
+        let incomplete = ledger
+            .submit_immediate(
+                immediate("fok-too-large", TimeInForce::Fok, Side::Buy, "102", "0.5"),
+                &mut depth,
+            )
+            .unwrap()
+            .order;
+        assert_eq!(incomplete.filled, n("0"));
+        let exact = ledger
+            .submit_immediate(
+                immediate("fok-exact", TimeInForce::Fok, Side::Buy, "102", "0.25"),
+                &mut depth,
+            )
+            .unwrap()
+            .order;
+        assert_eq!((exact.status, exact.filled), (Status::Filled, n("0.25")));
+        drop(ledger);
+        let mut restored = Ledger::open(path, 8 * 1024 * 1024).unwrap();
+        assert_eq!(restored.balance("paper", "ETH").total, n("4.5"));
+        assert_eq!(restored.executions().count(), 3);
+        assert!(
+            restored
+                .submit_immediate(buy.clone(), &mut Book::default())
+                .unwrap()
+                .duplicate
+        );
+        assert_eq!(
+            restored
+                .submit_immediate(
+                    Submit {
+                        time_in_force: TimeInForce::Fok,
+                        ..buy
+                    },
+                    &mut Book::default()
+                )
+                .err()
+                .as_deref(),
+            Some("COMMAND_CONFLICT")
+        );
+    });
+}
+
+#[test]
+fn invalid_later_level_rolls_back_entire_immediate_order_and_sell_uses_best_bid_first() {
+    run(|mut ledger, _| {
+        let mut depth = Book::default();
+        depth
+            .snapshot(
+                "test".into(),
+                1,
+                vec![[n("98"), n("1")], [n("99"), n("1")]],
+                vec![[n("101"), n("1")], [n("101.25"), n("1")]],
+            )
+            .unwrap();
+        assert_eq!(
+            ledger
+                .submit_immediate(
+                    immediate("bad-level", TimeInForce::Ioc, Side::Buy, "102", "2"),
+                    &mut depth
+                )
+                .err()
+                .as_deref(),
+            Some("FILL_PRICE_TICK_MISMATCH")
+        );
+        assert!(ledger.order("bad-level").is_none());
+        assert_eq!(ledger.executions().count(), 0);
+        assert_eq!(ledger.balance("paper", "USD").total, n("1000"));
+        let buy = ledger
+            .submit_immediate(
+                immediate("sweep-buy", TimeInForce::Fok, Side::Buy, "101", "1"),
+                &mut depth,
+            )
+            .unwrap()
+            .order;
+        assert_eq!(buy.filled, n("1"));
+        let sell = ledger
+            .submit_immediate(
+                immediate("sweep-sell", TimeInForce::Ioc, Side::Sell, "98.5", "2"),
+                &mut depth,
+            )
+            .unwrap()
+            .order;
+        assert_eq!(sell.last_execution.unwrap().price, n("99"));
+        assert_eq!(sell.filled, n("1"));
+        assert_eq!(ledger.balance("paper", "ETH").reserved, n("0"));
     });
 }
 

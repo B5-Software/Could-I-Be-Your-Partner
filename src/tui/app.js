@@ -25,12 +25,13 @@ const {
   defaultCommandDirs,
 } = require('./commands.js');
 const views = require('./views.js');
-const { t, setLanguage } = require('./text.js');
+const { t, setLanguage, getLanguage } = require('./text.js');
 const { pointAt, selectedText } = require('./selection');
 const { ConfigBrowser } = require('./config');
 const { TranscriptSearch } = require('./transcript-search');
 const { WalletBrowser } = require('./wallet');
 const { QuantBrowser } = require('./quant');
+const questionnaireLabels = require('../shared/quant-questionnaire-labels.json');
 const { SuperAgentBrowser } = require('./super-agent');
 
 const MODES = ['chat', 'babe', 'code'];
@@ -1021,9 +1022,10 @@ class TuiApp {
     this.runtime.respond(this.activeKey, { answers });
   }
 
-  _buildAskModal(questions, index, answers) {
+  _buildAskModal(questions, index, answers, interaction) {
     const { Questionnaire } = require('./questionnaire');
     const questionnaire = new Questionnaire(questions, this.activeKey);
+    questionnaire.interaction = interaction;
     if (answers) questionnaire.answers = questions.map((_question, i) => answers[i] || null);
     return questionnaire.build(index);
   }
@@ -1035,15 +1037,51 @@ class TuiApp {
     }
     previous.busy = true;
     try {
-      const result = await this.runtime.respond(previous.sessionKey, { answers: action.answers });
+      const interaction = previous.questionnaire.interaction;
+      const result = await this.runtime.respond(previous.sessionKey, {
+        answers: action.answers,
+        ...(interaction && { questionnaireId: interaction.id, revision: interaction.revision }),
+      });
       if (result?.ok === false)
         throw new Error(result.error || t('ui.tui.askSendFailed', '回答发送失败，请重试'));
       if (this.state.modal === previous) this.state.modal = null;
     } catch (error) {
-      previous.error = error.message;
+      previous.error = this._questionText(error.message);
     } finally {
       previous.busy = false;
     }
+  }
+
+  _questionText(key) {
+    return (questionnaireLabels[getLanguage()] || questionnaireLabels.zh)[key] || key;
+  }
+
+  _showResearchQuestion(event) {
+    const existing =
+      this.state.modal?.questionnaire?.interaction || this.state.modal?.researchQuestion;
+    if (existing?.id === event.id && existing.payload.phase === event.payload.phase) return;
+    if (event.payload.phase === 'resume') {
+      this.quantBrowser.menu(
+        this._questionText('resumeTitle'),
+        ['resume', 'dismiss'].map((value) => ({ value, label: this._questionText(value) })),
+        async (action) => {
+          const result = await this.runtime.respond(event.key, {
+            questionnaireId: event.id,
+            revision: event.revision,
+            action,
+          });
+          if (!result?.ok) {
+            this._showResearchQuestion(event);
+            if (this.state.modal) this.state.modal.error = this._questionText(result.error);
+          }
+        },
+        '',
+        () => this._showResearchQuestion(event),
+      );
+      this.state.modal.researchQuestion = event;
+      return;
+    }
+    this.state.modal = this._buildAskModal(event.payload.questions, 0, null, event);
   }
 
   // ---------------------------------------------------------------- 运行时事件
@@ -1243,6 +1281,10 @@ class TuiApp {
         } else if (event.kind === 'tool-auth') {
           this._openToolAuthModal(event.payload);
         } else if (event.kind === 'questions') {
+          if (event.scope === 'quant-questionnaire') {
+            this._showResearchQuestion(event);
+            break;
+          }
           const questions = (event.payload && event.payload.questions) || [];
           if (questions.length > 0) {
             this.state.modal = this._buildAskModal(
@@ -1257,6 +1299,14 @@ class TuiApp {
         break;
       }
       case 'interaction-resolved':
+        if (event.scope === 'quant-questionnaire') {
+          const current =
+            this.state.modal?.questionnaire?.interaction || this.state.modal?.researchQuestion;
+          if (current?.id === event.id && current.revision === event.revision)
+            this.state.modal = null;
+          break;
+        }
+        if (this.state.modal?.questionnaire?.interaction) break;
         if (this.state.modal && ['approval', 'toolAuth', 'ask'].includes(this.state.modal.kind)) {
           this.state.modal = null;
         }

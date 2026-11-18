@@ -2,6 +2,7 @@
 //! Strategies share one balance/reservation authority per account and asset.
 //! Matching is deliberately separate: only the native matcher may supply fills.
 pub mod execution;
+mod immediate;
 mod safety;
 mod strategies;
 use crate::{
@@ -158,6 +159,19 @@ pub enum Status {
     Filled,
     Cancelled,
 }
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "lowercase")]
+pub enum TimeInForce {
+    #[default]
+    Gtc,
+    Ioc,
+    Fok,
+}
+impl TimeInForce {
+    pub fn is_resting(&self) -> bool {
+        *self == Self::Gtc
+    }
+}
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Submit {
@@ -169,6 +183,8 @@ pub struct Submit {
     pub price: Fixed,
     pub quantity: Fixed,
     pub post_only: bool,
+    #[serde(default, skip_serializing_if = "TimeInForce::is_resting")]
+    pub time_in_force: TimeInForce,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
@@ -714,6 +730,19 @@ impl Ledger {
         book: &Book,
         stale_ms: u64,
     ) -> Result<Outcome> {
+        check(
+            request.time_in_force.is_resting(),
+            "PAPER_IMMEDIATE_REQUIRED",
+        )?;
+        self.place(request, market_instrument, book, stale_ms)
+    }
+    fn place(
+        &mut self,
+        request: Submit,
+        market_instrument: &str,
+        book: &Book,
+        stale_ms: u64,
+    ) -> Result<Outcome> {
         for value in [
             &request.id,
             &request.account,
@@ -1067,20 +1096,23 @@ impl Ledger {
                 overlay.receipts.insert(receipt, previous.clone());
             }
         }
+        self.stage(overlay, |ledger| {
+            fills.into_iter().map(|fill| ledger.fill(fill)).collect()
+        })
+    }
+    fn stage<T>(&mut self, overlay: State, run: impl FnOnce(&mut Self) -> Result<T>) -> Result<T> {
+        check(self.staging.is_none(), "STAGING_INVARIANT")?;
         let original = std::mem::replace(&mut self.state, overlay);
         self.staging = Some(Vec::new());
-        let outcome = fills
-            .into_iter()
-            .map(|fill| self.fill(fill))
-            .collect::<Result<Vec<_>>>();
+        let outcome = run(self);
         let events = self.staging.take();
         self.state = original;
         let events = events.ok_or("STAGING_INVARIANT")?;
-        let outcomes = outcome?;
+        let outcome = outcome?;
         if !events.is_empty() {
             self.commit(Event::Batch { events })?;
         }
-        Ok(outcomes)
+        Ok(outcome)
     }
     pub fn cancel(&mut self, order_id: &str) -> Result<Order> {
         let mut order = self

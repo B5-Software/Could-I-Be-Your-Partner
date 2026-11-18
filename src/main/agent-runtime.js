@@ -89,6 +89,32 @@ function createAgentRuntime({
     }
   }
 
+  function quantQuestionService(session) {
+    const quant = runtime.quantService;
+    if (session.profile !== 'quant' || !quant?.questions || !session.key.startsWith('quant:'))
+      return null;
+    const id = session.key.slice('quant:'.length);
+    return quant.state.workspaces.some((project) => project.id === id)
+      ? { id, questions: quant.questions }
+      : null;
+  }
+
+  function pendingView(session) {
+    const live = session.pendingInteraction;
+    if (live) {
+      const { id, revision, kind, payload } = live;
+      return { id, revision, kind, payload };
+    }
+    const quant = quantQuestionService(session);
+    return (
+      quant?.questions.view(
+        quant.id,
+        session.agent.contextManager.getHistoryMessages(),
+        session.busy,
+      ) ?? null
+    );
+  }
+
   function sessionSnapshot(session) {
     return {
       key: session.key,
@@ -105,7 +131,7 @@ function createAgentRuntime({
       hostWorkspacePath: session.hostWorkspacePath || null,
       conversationId: session.agent ? session.agent.conversationId : null,
       affection: session.agent ? session.agent.babeAffection : null,
-      pendingInteraction: session.pendingInteraction ? session.pendingInteraction.kind : null,
+      pendingInteraction: pendingView(session)?.kind ?? null,
       createdAt: session.createdAt,
       goal: core.GoalState.exportGoal(session.agent?.conversationId || session.key),
     };
@@ -880,14 +906,7 @@ function createAgentRuntime({
             session.agent.contextManager?.messages ||
             [],
         }),
-        pendingInteraction: session.pendingInteraction
-          ? {
-              id: session.pendingInteraction.id,
-              revision: session.pendingInteraction.revision,
-              kind: session.pendingInteraction.kind,
-              payload: session.pendingInteraction.payload,
-            }
-          : null,
+        pendingInteraction: pendingView(session),
       };
     },
 
@@ -903,6 +922,11 @@ function createAgentRuntime({
       await ensureInitialized(session);
       const sid = session.agent.conversationId || session.key;
       if (action === 'status') return core.GoalState.exportGoal(sid);
+      if (
+        ['set', 'resume'].includes(action) &&
+        pendingView(session)?.scope === 'quant-questionnaire'
+      )
+        throw Error('QUANT_QUESTIONNAIRE_PENDING');
       if (action === 'set') core.GoalState.setGoal(sid, objective);
       else if (action === 'pause') {
         this.stop(key);
@@ -970,14 +994,7 @@ function createAgentRuntime({
           messages: r.messages || [],
         })),
         cachedWorkspaceTree: a.cachedWorkspaceTree,
-        pendingInteraction: session.pendingInteraction
-          ? {
-              id: session.pendingInteraction.id,
-              revision: session.pendingInteraction.revision,
-              kind: session.pendingInteraction.kind,
-              payload: session.pendingInteraction.payload,
-            }
-          : null,
+        pendingInteraction: pendingView(session),
       };
     },
 
@@ -1433,6 +1450,8 @@ function createAgentRuntime({
     },
     async sendMessage(key, message, attachments = [], options = {}) {
       const session = createSession({ key, mode: 'chat' });
+      if (pendingView(session)?.scope === 'quant-questionnaire')
+        return { ok: false, error: 'QUANT_QUESTIONNAIRE_PENDING' };
       if (session.rewinding) return { ok: false, error: 'Conversation is being rewound' };
       if (session.loadingHistory) return { ok: false, error: 'Conversation is still loading' };
       if (session.compacting)
@@ -1563,6 +1582,30 @@ function createAgentRuntime({
     respond(key, response) {
       const session = sessions.get(key);
       if (!session) return { ok: false, error: `unknown session: ${key}` };
+      if (response?.questionnaireId !== undefined) {
+        const quant = quantQuestionService(session);
+        if (!quant) return { ok: false, error: 'QUANT_QUESTIONNAIRE_STALE' };
+        try {
+          const decision = quant.questions.respond(
+            quant.id,
+            response,
+            session.agent.contextManager.getHistoryMessages(),
+            session.busy,
+          );
+          if (!decision.resume) return decision;
+          const resumed = resumeQuantQuestion(session, decision.resume);
+          if (resumed.ok)
+            quant.questions.publish(quant.id, 'interaction-resolved', {
+              id: response.questionnaireId,
+              revision: response.revision,
+            });
+          return resumed;
+        } catch (error) {
+          return { ok: false, error: error.message };
+        }
+      }
+      if (pendingView(session)?.scope === 'quant-questionnaire')
+        return { ok: false, error: 'QUANT_QUESTIONNAIRE_STALE' };
       return { ok: respondInteraction(session, response) };
     },
 
@@ -1581,6 +1624,12 @@ function createAgentRuntime({
         respondInteraction(delegated.parent, false);
       session.agent.stop();
       respondInteraction(session, false);
+      const quant = quantQuestionService(session);
+      try {
+        quant?.questions.interrupt(quant.id);
+      } catch {
+        return { ok: false, error: 'QUANT_QUESTIONNAIRE_STORAGE' };
+      }
       return { ok: true };
     },
 
@@ -1870,6 +1919,55 @@ function createAgentRuntime({
       }
     },
   };
+  function resumeQuantQuestion(session, { callId, result, recorded }) {
+    if (session.busy || session.loadingHistory || session.rewinding || session.compacting)
+      return { ok: false, error: 'QUANT_QUESTIONNAIRE_STALE' };
+    const maximum = Math.max(1, Number(getSettings?.()?.sessions?.maxConcurrent) || 10);
+    if (
+      [...sessions.values()].filter(
+        (s) => s.busy && !['subagent', 'superagent-worker'].includes(s.profile),
+      ).length >= maximum
+    )
+      return { ok: false, error: 'Maximum concurrent sessions reached' };
+    const a = session.agent;
+    session.busy = true;
+    session.stopRequested = false;
+    session.lastError = null;
+    session.status = 'running';
+    session.finished = new Promise((resolve) => {
+      session.finish = resolve;
+    });
+    const runId = ++a.runId;
+    a.stopped = false;
+    a.running = true;
+    a._emitWorkingStatus('working');
+    const run = async () => {
+      try {
+        if (!recorded) a.contextManager.addToolResult(callId, 'quant_ask_user', result);
+        await a.saveToHistory({ strict: true });
+        if (session.stopRequested || a.runId !== runId) return;
+        a.contextManager.setSystemPrompt(a.getSystemPrompt());
+        await a.agentLoop(runId);
+        await a.saveToHistory({ strict: true });
+      } catch (error) {
+        session.lastError = error.message;
+        emit({ type: 'message', key: session.key, role: 'system', content: error.message });
+      } finally {
+        a.running = false;
+        a._emitWorkingStatus('idle');
+        session.busy = false;
+        session.finish?.();
+        session.status = session.lastError
+          ? 'error'
+          : session.stopRequested
+            ? 'interrupted'
+            : 'idle';
+        emit({ type: 'status', key: session.key, status: session.status });
+      }
+    };
+    void run();
+    return { ok: true, accepted: true };
+  }
   // One owner schedules proactive Babe messages for every attached frontend.
   // Creating a second window or disconnecting a browser never doubles the timer.
   let proactiveTimer;

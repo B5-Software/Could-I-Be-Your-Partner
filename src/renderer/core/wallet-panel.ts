@@ -137,6 +137,24 @@ type AssetSnapshot = {
     metadataError?: string;
   }[];
 };
+type AssetDiscovery = {
+  anchorBlock: string;
+  anchorHash: string;
+  fromBlock: string;
+  toBlock: string;
+  snapshotId: string;
+  networkRevision: number;
+  nextEndBlock: string | null;
+  next: number | null;
+  total: number;
+  items: (AssetSnapshot['assets'][number] & {
+    token: string;
+    received: number;
+    sent: number;
+    block: string;
+    tracked: boolean;
+  })[];
+};
 const zh = {
   ...networkLabels['zh-CN'],
   ...appLabels['zh-CN'],
@@ -922,7 +940,7 @@ export class WalletPanel {
     }>('network.list');
     const dialog = this.dialog(
       this.t('assetsTitle'),
-      `<p>${esc(this.t('assetsHint'))}</p><form><label>${esc(this.t('network'))}<select name="chain">${networks.map((p) => `<option value="${esc(p.key)}">${esc(p.name)} · ${p.id} · ${esc(p.nativeSymbol)}</option>`).join('')}</select></label><output aria-live="polite"></output><p role="alert" hidden></p><div class="wallet-assets"></div><label>${esc(this.t('allowanceToken'))}<input name="token" required pattern="0x[0-9a-fA-F]{40}" maxlength="42" placeholder="0x…" spellcheck="false"></label><footer><button type="button" data-refresh>${esc(this.t('assetRefresh'))}</button><button type="submit">${esc(this.t('assetTrack'))}</button></footer></form>`,
+      `<p>${esc(this.t('assetsHint'))}</p><form><label>${esc(this.t('network'))}<select name="chain">${networks.map((p) => `<option value="${esc(p.key)}">${esc(p.name)} · ${p.id} · ${esc(p.nativeSymbol)}</option>`).join('')}</select></label><output aria-live="polite"></output><p role="alert" hidden></p><div class="wallet-assets"></div><label>${esc(this.t('allowanceToken'))}<input name="token" required pattern="0x[0-9a-fA-F]{40}" maxlength="42" placeholder="0x…" spellcheck="false"></label><footer><button type="button" data-refresh>${esc(this.t('assetRefresh'))}</button><button type="button" data-asset-discover>${esc(this.t('assetDiscover'))}</button><button type="submit">${esc(this.t('assetTrack'))}</button></footer></form>`,
     );
     const form = dialog.querySelector('form')!;
     const chain = form.querySelector<HTMLSelectElement>('[name="chain"]')!;
@@ -984,12 +1002,157 @@ export class WalletPanel {
     };
     chain.addEventListener('change', () => void load());
     form.querySelector('[data-refresh]')!.addEventListener('click', () => void load());
+    form
+      .querySelector('[data-asset-discover]')!
+      .addEventListener('click', () =>
+        this.assetDiscovery(id, chain.value, () => dialog.open && void load()),
+      );
     form.addEventListener('submit', (event) => {
       event.preventDefault();
       void load('asset.track', token.value.trim());
     });
     dialog.showModal();
     void load();
+  }
+  private assetDiscovery(id: string, chain: string, refresh: () => void): void {
+    const d = this.dialog(
+      this.t('assetDiscover'),
+      `<p>${esc(this.t('assetDiscoverHint'))}</p><form><label>${esc(this.t('assetDiscoverWindow'))}<input name="blocks" type="number" min="1" max="2000" value="256" required></label><button type="submit">${esc(this.t('assetDiscoverRescan'))}</button><button type="button" data-discovery-latest>${esc(this.t('assetDiscoverScan'))}</button></form>
+      <output aria-live="polite"></output><p role="alert" hidden></p><div class="wallet-assets"></div>
+      <footer><button type="button" data-discovery-prev disabled>${esc(this.t('previous'))}</button><button type="button" data-discovery-next disabled>${esc(this.t('next'))}</button><button type="button" data-discovery-older disabled>${esc(this.t('assetDiscoverOlder'))}</button></footer>`,
+    );
+    const form = d.querySelector('form')!;
+    const window = form.querySelector<HTMLInputElement>('input')!;
+    const output = d.querySelector('output')!;
+    const alert = d.querySelector<HTMLElement>('[role="alert"]')!;
+    const list = d.querySelector('.wallet-assets')!;
+    const previous = d.querySelector<HTMLButtonElement>('[data-discovery-prev]')!;
+    const next = d.querySelector<HTMLButtonElement>('[data-discovery-next]')!;
+    const older = d.querySelector<HTMLButtonElement>('[data-discovery-older]')!;
+    const latest = d.querySelector<HTMLButtonElement>('[data-discovery-latest]')!;
+    const limit = 8;
+    let report: AssetDiscovery | undefined,
+      blocks = 256,
+      offset = 0,
+      scanRange: Record<string, unknown> = {},
+      busy = false;
+    const render = () => {
+      previous.disabled = !report || offset === 0;
+      next.disabled = report?.next == null;
+      older.disabled = report?.nextEndBlock == null;
+      if (!report) return;
+      const { fromBlock, toBlock, anchorBlock, anchorHash, total, items } = report;
+      output.textContent = `${this.t('assetDiscoverRange')} #${fromBlock}–#${toBlock} · ${this.t('assetBlock')} #${anchorBlock} · ${items.length ? `${offset + 1}–${offset + items.length} / ${total}` : this.t('assetDiscoverEmpty')}`;
+      output.title = anchorHash;
+      list.innerHTML = items
+        .map((row, i) => {
+          const balance = row.error
+            ? this.t('assetFailed')
+            : (row.amount ?? `${row.amountAtomic} ${this.t('assetAtomic')}`);
+          return `<article><header><strong>${esc(row.symbol || this.t('assetUnknown'))}</strong><span>${esc(balance)}</span></header>
+          <code>${esc(row.token)}</code><small>#${esc(row.block)} · ${esc(this.t('assetDiscoverReceived'))} ${row.received} · ${esc(this.t('assetDiscoverSent'))} ${row.sent}</small>
+          ${
+            row.tracked
+              ? `<small>${esc(this.t('assetDiscoverTracked'))}</small>`
+              : row.error || row.amountAtomic === '0'
+                ? ''
+                : `<button type="button" data-discovery-track="${i}">${esc(this.t('assetTrack'))}</button>`
+          }</article>`;
+        })
+        .join('');
+    };
+    const load = async (
+      cursor: Record<string, unknown>,
+      start: number,
+      size: number,
+      token?: string,
+    ) => {
+      if (busy) return;
+      busy = true;
+      const { anchorBlock, anchorHash, endBlock } = cursor;
+      scanRange = anchorHash ? { anchorBlock, anchorHash, endBlock } : {};
+      alert.hidden = true;
+      d.setAttribute('aria-busy', 'true');
+      for (const control of d.querySelectorAll<HTMLInputElement | HTMLButtonElement>(
+        'form input, form button, footer button, [data-discovery-track]',
+      ))
+        control.disabled = true;
+      output.textContent = this.t('assetDiscoverLoading');
+      try {
+        if (token) {
+          await this.call('asset.track', {
+            id,
+            chain,
+            token,
+            expectedNetworkRevision: report!.networkRevision,
+          });
+          refresh();
+        }
+        report = await this.call<AssetDiscovery>('asset.discover', {
+          id,
+          chain,
+          blocks: size,
+          offset: start,
+          limit,
+          ...cursor,
+        });
+        blocks = size;
+        offset = start;
+      } catch (error) {
+        alert.textContent = walletStatus(
+          this.options.language(),
+          error instanceof Error ? error.message : String(error),
+        );
+        alert.hidden = false;
+        if (!report) output.textContent = '';
+      } finally {
+        busy = false;
+        if (d.open) {
+          window.disabled = latest.disabled = form.querySelector('button')!.disabled = false;
+          d.removeAttribute('aria-busy');
+          render();
+        }
+      }
+    };
+    const current = () => ({
+      anchorBlock: report!.anchorBlock,
+      anchorHash: report!.anchorHash,
+      endBlock: report!.toBlock,
+      snapshotId: report!.snapshotId,
+    });
+    form.addEventListener('submit', (event) => {
+      event.preventDefault();
+      void load(scanRange, 0, window.valueAsNumber);
+    });
+    latest.addEventListener('click', () => {
+      if (form.reportValidity()) void load({}, 0, window.valueAsNumber);
+    });
+    previous.addEventListener(
+      'click',
+      () => void load(current(), Math.max(0, offset - limit), blocks),
+    );
+    next.addEventListener('click', () => void load(current(), report!.next!, blocks));
+    older.addEventListener('click', () => {
+      if (!report) return;
+      void load(
+        {
+          anchorBlock: report.anchorBlock,
+          anchorHash: report.anchorHash,
+          endBlock: report.nextEndBlock,
+        },
+        0,
+        blocks,
+      );
+    });
+    list.addEventListener('click', (event) => {
+      const button = (event.target as HTMLElement).closest<HTMLButtonElement>(
+        '[data-discovery-track]',
+      );
+      const row = button && report?.items[Number(button.dataset.discoveryTrack)];
+      if (row && !row.tracked) void load(current(), offset, blocks, row.token);
+    });
+    d.showModal();
+    void load({}, 0, blocks);
   }
   private allowances(id: string, selection?: AllowanceReview): void {
     const dialog = this.dialog(

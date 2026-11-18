@@ -157,7 +157,9 @@ Base 主网的组合可在创建或编辑时设置「组合权益下限」，单
 
 钱包页可添加观察账户，填写名称与公开地址即可持久保存，支持资产和授权查询。本地密钥钱包使用创建或导入入口。观察账户显示独立状态，可移除其本地记录。可从观察账户的「导入密钥」入口绑定目标地址，普通导入同一地址也会自动升级。升级保留账户 ID、名称、创建时间和代币追踪列表，完成后需手动解锁。地址不匹配或观察记录在导入期间被移除时拒绝升级。账户状态保存失败会在串行写入队列内恢复密钥文件。
 
-「资产总览」可切换已保存网络，按一个区块哈希读取原生币及每个网络最多 16 个额外代币。Base / Base Sepolia 另含 USDC、WETH 预设；自定义链不套用 Base 合约地址。追踪列表跨前端、跨重启共享。读取失败显示为不可用，自定义代币精度不可用时显示最小单位整数。此列表覆盖内置及手动追踪的代币，自动资产发现待接入。Agent 可用 `quant_base_inspect` 在 Base 项目下传入 `address`、`assets: true` 与可选 `tokens` 取得同样的只读快照；指定 chainId 时也可读取已登记自定义 EVM 网络。[ERC-20 余额与可选元数据](https://eips.ethereum.org/EIPS/eip-20)
+「资产总览」可切换已保存网络，按一个区块哈希读取原生币及每个网络最多 16 个额外代币。Base / Base Sepolia 另含 USDC、WETH 预设；自定义链不套用 Base 合约地址。追踪列表跨前端、跨重启共享。读取失败显示为不可用，自定义代币精度不可用时显示最小单位整数。Agent 可用 `quant_base_inspect` 传入 `address`、`assets: true` 与可选 `tokens` 查询快照；指定 `chainId` 可读取已登记的自定义 EVM 网络。[ERC-20 余额与可选元数据](https://eips.ethereum.org/EIPS/eip-20)
+
+在 GUI、WebUI 或 TUI 的资产总览点「发现代币」，默认扫描 256 个已最终确认的区块，可调至 1 至 2000。扫描双向 ERC-20 转账并在固定区块核对候选资产余额。按合约地址区分资产，用户可选择将有余额的候选加入追踪列表。扫描仅覆盖所选区间内的标准转账，持有但未在区间活动的资产可通过继续扫描历史或手动输入合约添加。Agent 用 `quant_base_inspect(discoverAssets=true)` 查询同一数据。按页传入 `anchorBlock`、`anchorHash`、`snapshotId`、`offset` 及原窗口。向前扫描用 `nextEndBlock` 作为 `endBlock`，沿用锚点并省略 `snapshotId` 和 `offset`。[JSON-RPC 转账日志](https://ethereum.org/developers/docs/apis/json-rpc/#eth_getlogs) · [固定区块状态读取](https://eips.ethereum.org/EIPS/eip-1898)
 
 在钱包账户里打开「链上授权」，选择 Base 或 Base Sepolia，填入 ERC-20 代币合约和获准支出的地址。锁定时也能查询。结果显示观测区块和原始额度，USDC、WETH 按该网络内置的代币精度显示。量化 Agent 可用 `quant_base_inspect`，同时传入 `address`、`token`、`spender`。查询使用区块哈希固定的 `allowance(owner, spender)`，需要支持该参数的 RPC。[ERC-20](https://eips.ethereum.org/EIPS/eip-20) · [EIP-1898](https://eips.ethereum.org/EIPS/eip-1898)
 
@@ -213,6 +215,8 @@ Base 主网可点「折算历史费用」，按交易最终确认的区块读取
 
 研究流程参考 [CFTC 关于 AI 交易机器人的提示](https://www.cftc.gov/LearnAndProtect/AdvisoriesAndArticles/AITradingBots.html)及 [Investor.gov 关于核验社交媒体来源的提示](https://www.investor.gov/introduction-investing/general-resources/news-alerts/alerts-bulletins/investor-alerts/social-media-and-investment-fraud-investor-alert)。工具链、来源保护、分页、重启与 GUI 交互已验收；这不证明所有真实模型都能给出高质量市场判断，后续需按[研究评估清单](quant-research-evals.md)持续验证。
 
+研究缺少关键条件时，Agent 可以通过 `quant_ask_user` 提问。GUI、WebUI 和 TUI 可回答或跳过，其他界面会同步处理结果。若后台重启，答复后可选择「继续研究」恢复此前的任务。问卷答复只提供研究上下文。交易签名使用独立的钱包授权流程。
+
 ## Goal
 
 Chat / Code 可输入 `/goal <目标>`，或使用 `/goal status`、`/goal pause`、`/goal resume`、`/goal clear`。Agent 只有调用完成工具并提供完成说明后，才将目标标为完成。用户停止、额度用尽、错误或轮数限制会中止继续执行，不会伪装成完成。
@@ -229,7 +233,9 @@ Chat / Code 可输入 `/goal <目标>`，或使用 `/goal status`、`/goal pause
 
 ## 原生仿真账户与订单
 
-GUI / WebUI 在量化工作台选择项目后点击「原生仿真账户」；TUI 入口为 `/quant` → 项目 → 原生仿真账户。连接内核与行情，创建带名称、初始虚拟资产和明确风险上限的账户，或选择已有共享账户。账户默认暂停，启用后才能提交 Post-only 限价单。500 毫秒延迟和保守队列只是仿真假设。
+GUI / WebUI 在量化工作台选择项目后点击「原生仿真账户」；TUI 入口为 `/quant` → 项目 → 原生仿真账户。连接内核与行情，创建带名称、初始虚拟资产和明确风险上限的账户，或选择已有共享账户。账户默认暂停，启用后可提交三种限价单。默认 GTC 仅挂单，使用 500 毫秒模拟延迟和同价保守队列。IOC 依次按最佳可成交价撮合，撤销余量。FOK 在限价范围内有足够盘口深度时才全部成交。
+
+IOC 和 FOK 以当前已观测且有效的公开 L2 盘口为输入，模拟立即吃单。单次最多扫过 64 个成交价位，保留虚拟账户的资金、持仓和订单限额。成交、费用及余量释放在同一次账本提交中持久化，重复请求沿用原结果。一次行情连接内，同一价位已模拟消耗的深度会计入后续立即成交请求，直至该档消失或行情进入新的序列代次。账本中的成交会标记快照序列和模拟来源。模型未计入交易所到达延迟、隐藏流动性或真实市场冲击。Agent 在 `quant_native_paper` 的 `submit` 动作中设置 `timeInForce`。[Coinbase 委托有效期语义](https://docs.cdp.coinbase.com/coinbase-app/advanced-trade-apis/guides/orders)
 
 资金、预留、订单、每一笔部分成交及本笔费用由同一原生账本管理。账户可供多个项目共享，账户暂停影响其全部策略；订单和成交历史按项目过滤，切换账户不会隐藏旧记录。暂停 / 断线 / 重启留下的挂单保持预留并标为挂起，恢复不会重新排队；先撤销旧挂单，再按需创建新意图。
 

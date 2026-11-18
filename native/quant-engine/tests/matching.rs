@@ -74,6 +74,7 @@ fn request(id: &str) -> Submit {
         price: n("100"),
         quantity: n("1"),
         post_only: true,
+        time_in_force: Default::default(),
     }
 }
 fn trade(id: u64, quantity: &str) -> Trade {

@@ -19,6 +19,7 @@ const erc20Allowance = new Interface([
 const erc20Balance = new Interface([
   'function balanceOf(address) view returns(uint256)',
   'function decimals() view returns(uint8)',
+  'function symbol() view returns(string)',
 ]);
 const approvalTopic = erc20Allowance.getEvent('Approval').topicHash;
 const hashPattern = /^0x[\da-f]{64}$/i;
@@ -152,6 +153,58 @@ function boundedRpc(rpc) {
     });
 }
 
+async function readTokenBalance(rpc, tag, owner, token, preset, readSymbol = false) {
+  const asset = {
+    kind: 'erc20',
+    address: getAddress(token),
+    symbol: preset?.symbol ?? null,
+    decimals: preset?.decimals ?? null,
+  };
+  const call = (method) =>
+    rpc('eth_call', [
+      {
+        to: token,
+        data: erc20Balance.encodeFunctionData(method, method === 'balanceOf' ? [owner] : []),
+      },
+      tag,
+    ]);
+  let balance;
+  try {
+    const result = await call('balanceOf');
+    if (typeof result !== 'string' || !hashPattern.test(result))
+      throw Error('INVALID_CONTRACT_RESPONSE');
+    balance = BigInt(result);
+  } catch {
+    return { ...asset, amountAtomic: null, amount: null, error: 'WALLET_ASSET_UNAVAILABLE' };
+  }
+  if (!preset) {
+    try {
+      const result = await call('decimals');
+      if (typeof result !== 'string' || !hashPattern.test(result) || BigInt(result) > 255n)
+        throw Error('INVALID_CONTRACT_RESPONSE');
+      asset.decimals = Number(BigInt(result));
+    } catch {
+      asset.metadataError = 'WALLET_ASSET_DECIMALS_UNAVAILABLE';
+    }
+    if (readSymbol) {
+      try {
+        const raw = await call('symbol');
+        if (typeof raw === 'string' && raw.length <= 258) {
+          const [symbol] = erc20Balance.decodeFunctionResult('symbol', raw);
+          if (/^[\p{L}\p{N}][\p{L}\p{N}._-]{0,19}$/u.test(symbol)) asset.symbol = symbol;
+        }
+      } catch {
+        // Symbol is optional. The verified contract address remains the identifier.
+      }
+    }
+  }
+  return {
+    ...asset,
+    amountAtomic: String(balance),
+    amount: asset.decimals === null ? null : formatUnits(balance, asset.decimals),
+  };
+}
+
 class MarketData {
   constructor(fetcher = (...args) => global.fetch(...args), resolveChain = (key) => CHAINS[key]) {
     this.fetch = fetcher;
@@ -196,7 +249,7 @@ class MarketData {
       )
         throw Error('WALLET_NETWORK_GENESIS');
     }
-    const block = await rpc('eth_getBlockByNumber', ['latest', false]);
+    const block = await rpc('eth_getBlockByNumber', [options.blockTag ?? 'latest', false]);
     if (!block || !hashPattern.test(block.hash || '')) throw new Error('INVALID_BLOCK');
     const height = uint(block.number),
       timestamp = uint(block.timestamp);
@@ -321,54 +374,7 @@ class MarketData {
               : token === chain.weth
                 ? { symbol: 'WETH', decimals: 18 }
                 : null;
-          const asset = {
-            kind: 'erc20',
-            address: getAddress(token),
-            symbol: preset?.symbol ?? null,
-            decimals: preset?.decimals ?? null,
-          };
-          const call = (method) =>
-            rpc('eth_call', [
-              {
-                to: token,
-                data: erc20Balance.encodeFunctionData(
-                  method,
-                  method === 'balanceOf' ? [owner] : [],
-                ),
-              },
-              tag,
-            ]);
-          try {
-            const result = await call('balanceOf');
-            if (typeof result !== 'string' || !hashPattern.test(result))
-              throw new Error('INVALID_CONTRACT_RESPONSE');
-            if (!preset) {
-              try {
-                const result = await call('decimals');
-                if (
-                  typeof result !== 'string' ||
-                  !hashPattern.test(result) ||
-                  BigInt(result) > 255n
-                )
-                  throw new Error('INVALID_CONTRACT_RESPONSE');
-                asset.decimals = Number(BigInt(result));
-              } catch {
-                asset.metadataError = 'WALLET_ASSET_DECIMALS_UNAVAILABLE';
-              }
-            }
-            return {
-              ...asset,
-              amountAtomic: String(BigInt(result)),
-              amount: asset.decimals === null ? null : formatUnits(BigInt(result), asset.decimals),
-            };
-          } catch {
-            return {
-              ...asset,
-              amountAtomic: null,
-              amount: null,
-              error: 'WALLET_ASSET_UNAVAILABLE',
-            };
-          }
+          return readTokenBalance(rpc, tag, owner, token, preset, options.readSymbols);
         }),
       ),
       options.includeNonce
@@ -927,4 +933,5 @@ module.exports = {
   formatUnits,
   baseGasOracle,
   readOperatorFee,
+  readTokenBalance,
 };

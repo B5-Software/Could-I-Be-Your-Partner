@@ -9,7 +9,6 @@
 
 const DE_DICT = {
   'ui.quant.title': 'Quant-Arbeitsbereich',
-  'ui.quant.disabled': 'Quant-Funktionen sind nicht aktiviert',
   'ui.wallet.title': 'Wallet',
   'ui.tui.cmd.goal': 'Ein Agent-Ziel festlegen und verwalten',
   'ui.tui.args.goal': '<Ziel | status | pause | resume | clear>',

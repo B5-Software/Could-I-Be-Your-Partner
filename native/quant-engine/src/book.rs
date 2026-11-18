@@ -47,10 +47,23 @@ pub struct Book {
     source_time: Option<u128>,
     pub provider_time: Option<String>,
     pub source_clock: Option<SourceClock>,
+    simulated_takes: BTreeMap<(Side, Fixed), Fixed>,
 }
 impl Book {
     pub fn price_known(&self, side: Side, price: Fixed) -> bool {
         self.coverage.contains(side, price)
+    }
+    pub(crate) fn simulated_available(&self, side: Side, price: Fixed, size: Fixed) -> Fixed {
+        let spent = self
+            .simulated_takes
+            .get(&(side, price))
+            .copied()
+            .unwrap_or_default();
+        Fixed((size.0 - spent.0).max(0))
+    }
+    pub(crate) fn record_simulated_take(&mut self, side: Side, price: Fixed, quantity: Fixed) {
+        // The caller owns this book through selection and commit; a take never exceeds its level.
+        self.simulated_takes.entry((side, price)).or_default().0 += quantity.0;
     }
     pub fn source_time(&mut self, time: Option<u128>) {
         self.source_time = time;
@@ -151,6 +164,14 @@ impl Book {
                 self.invalidate("CONFLICTING_DUPLICATE_SNAPSHOT")
             };
         }
+        if self.epoch == epoch {
+            self.simulated_takes.retain(|(side, price), _| match side {
+                Side::Bid => buy.contains_key(price),
+                Side::Ask => sell.contains_key(price),
+            });
+        } else {
+            self.simulated_takes.clear();
+        }
         self.bids = buy;
         self.asks = sell;
         self.coverage = coverage;
@@ -213,6 +234,16 @@ impl Book {
             };
             if let Err(e) = Self::level(map, u.price, u.quantity) {
                 return self.invalidate(e).map(|_| false);
+            }
+        }
+        for u in &updates {
+            if u.quantity.0 == 0
+                && !match u.side {
+                    Side::Bid => self.bids.contains_key(&u.price),
+                    Side::Ask => self.asks.contains_key(&u.price),
+                }
+            {
+                self.simulated_takes.remove(&(u.side, u.price));
             }
         }
         if !Self::coherent(&self.bids, &self.asks) {

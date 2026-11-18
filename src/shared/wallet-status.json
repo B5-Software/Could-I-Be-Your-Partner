@@ -1,5 +1,8 @@
 {
   "zh-CN": {
+    "WALLET_DISCOVERY_RANGE": "扫描范围无效，请填写 1 到 2000 个区块。",
+    "WALLET_DISCOVERY_DENSE": "该区间转账过多，请减少每次扫描的区块数。",
+    "WALLET_DISCOVERY_CHANGED": "区间结果发生变化，请重新扫描。",
     "WALLET_PORTFOLIO_PERFORMANCE_CHAIN": "成交损益支持 Base 和 Base Sepolia。",
     "WALLET_PORTFOLIO_PERFORMANCE_CHANGED": "成交记录刚刚更新，请刷新后重新翻页。",
     "WALLET_PORTFOLIO_ALLOWANCE_INVALID": "授权上限或代币数量无效。",
@@ -251,6 +254,9 @@
     "rejected": "已拒绝签名"
   },
   "en": {
+    "WALLET_DISCOVERY_RANGE": "Invalid scan range. Enter between 1 and 2000 blocks.",
+    "WALLET_DISCOVERY_DENSE": "This range contains too many transfers. Reduce the scan window.",
+    "WALLET_DISCOVERY_CHANGED": "The scan results changed. Scan the range again.",
     "WALLET_PORTFOLIO_PERFORMANCE_CHAIN": "Trade performance supports Base and Base Sepolia.",
     "WALLET_PORTFOLIO_PERFORMANCE_CHANGED": "Trade records changed. Refresh before paging again.",
     "WALLET_PORTFOLIO_ALLOWANCE_INVALID": "The allowance ceiling or token amount is invalid.",
@@ -502,6 +508,9 @@
     "rejected": "Signature rejected"
   },
   "de": {
+    "WALLET_DISCOVERY_RANGE": "Ungültiger Suchbereich. 1 bis 2000 Blöcke eingeben.",
+    "WALLET_DISCOVERY_DENSE": "Zu viele Transfers im Bereich. Das Suchfenster verkleinern.",
+    "WALLET_DISCOVERY_CHANGED": "Die Ergebnisse haben sich geändert. Den Bereich erneut durchsuchen.",
     "WALLET_PORTFOLIO_PERFORMANCE_CHAIN": "Das Handelsergebnis ist für Base und Base Sepolia verfügbar.",
     "WALLET_PORTFOLIO_PERFORMANCE_CHANGED": "Handelsdaten wurden aktualisiert. Lade die Ansicht vor dem Blättern neu.",
     "WALLET_PORTFOLIO_ALLOWANCE_INVALID": "Die Obergrenze oder die Token-Menge ist ungültig.",

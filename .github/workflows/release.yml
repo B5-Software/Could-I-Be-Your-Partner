@@ -53,6 +53,8 @@ jobs:
         run: npm run test:quant:bundle
       - name: 打包后的 SuperAgent 持久化与默认量化入口验收
         run: node tests/integration/super-agent-backend.cjs --bundled
+      - name: 验证量化研究问卷跨端答复与重启恢复
+        run: node tests/integration/quant-questionnaire.cjs --bundled
       - name: 原生量化基础库的精度、行情恢复与持久化验收
         run: |
           rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy

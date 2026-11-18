@@ -175,6 +175,26 @@ async function main() {
     'latest',
   ]);
   assert.equal(token.decodeFunctionResult('balanceOf', recipientTokens)[0], 500000n);
+  const scan = { id: wallet.id, chain: network.key };
+  const walletNonce = await rpc('eth_getTransactionCount', [wallet.address, 'latest']);
+  await rpc('anvil_mine', ['0x41', '0x0']);
+  await call('asset.untrack', { ...scan, token: contract });
+  const discovery = await call('asset.discover', scan);
+  assert.equal(discovery.chainId, 1337);
+  assert.equal(discovery.total, 1);
+  assert.equal(discovery.items[0].token.toLowerCase(), contract);
+  assert.equal(discovery.items[0].sent, 1);
+  assert.equal(discovery.items[0].amountAtomic, '500000');
+  assert.equal(discovery.items[0].tracked, false);
+  assert.equal(discovery.items[0].transactionHash, transferred.hash);
+  assert.equal((await call('assets', scan)).trackedTokens.length, 0);
+  await call('asset.track', {
+    ...scan,
+    token: contract,
+    expectedNetworkRevision: discovery.networkRevision,
+  });
+  assert.equal((await call('assets', scan)).assets[1].amountAtomic, '500000');
+  assert.equal(await rpc('eth_getTransactionCount', [wallet.address, 'latest']), walletNonce);
   const project = await host.dispatch({
     method: 'quant:request',
     args: ['workspace.create', { name: 'Registered EVM Agent fixture', venue: 'base' }],
@@ -220,6 +240,13 @@ async function main() {
   });
   assert.equal(observed.chainId, 1337);
   assert.equal(observed.assets[1].amountAtomic, '500000');
+  const incoming = await nativeAgent.executeTool('quant_base_inspect', {
+    chainId: 1337,
+    address: recipient,
+    discoverAssets: true,
+  });
+  assert.equal(incoming.items[0].received, 1);
+  assert.equal(incoming.items[0].amountAtomic, '500000');
   const list = await nativeAgent.executeTool('quant_wallets');
   assert.equal(list.networks.find((n) => n.id === 1337).rpc, undefined);
   assert.equal(list.networks.find((n) => n.id === 1337).capabilities.autonomous, true);

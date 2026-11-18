@@ -514,6 +514,7 @@ test('native paper logical operation identity persists across tool retries and r
       operationId: 'buy-one',
       product: 'ETH-USD',
       side: 'buy',
+      timeInForce: 'fok',
       price: '100',
       quantity: '0.123456789012345678',
       id: 'foreign',
@@ -529,6 +530,7 @@ test('native paper logical operation identity persists across tool retries and r
       (r) =>
         r.action === 'native.paper.submit' &&
         r.input.id === 'project-a' &&
+        r.input.timeInForce === input.timeInForce &&
         r.input.quantity === input.quantity,
     ),
   );

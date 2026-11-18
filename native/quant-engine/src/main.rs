@@ -832,6 +832,15 @@ impl Engine {
             }
             "order.submit" => {
                 let submit = params::<Submit>(value)?;
+                if !submit.time_in_force.is_resting() {
+                    let mut empty = Book::default();
+                    let book = self.books.get_mut(&submit.instrument).unwrap_or(&mut empty);
+                    let result = self.ledger.submit_immediate(submit, book)?;
+                    let mut response =
+                        serde_json::to_value(&result).map_err(|_| "ENCODING_ERROR")?;
+                    response["execution"] = self.matcher.runtime(&result.order);
+                    return Ok(response);
+                }
                 let empty = Book::default();
                 if !self.books.contains_key(&submit.instrument)
                     && self.ledger.order(&submit.id).is_none()

@@ -111,7 +111,41 @@ global.fetch = async (url, options = {}) => {
     const body = JSON.parse(options.body);
     let message = { role: 'assistant', content: 'Base research' },
       finish = 'stop';
-    if (body.tools?.some((tool) => tool.function?.name === 'quant_backtest')) {
+    if (
+      body.tools?.some((tool) => tool.function?.name === 'quant_ask_user') &&
+      body.messages.some(
+        (item) => item.role === 'user' && item.content === 'Ask my research horizon.',
+      )
+    ) {
+      const answer = body.messages.find(
+        (item) => item.name === 'quant_ask_user' && item.role === 'tool',
+      );
+      if (answer) {
+        assert.deepEqual(JSON.parse(answer.content), {
+          ok: true,
+          answers: ['一周'],
+          authority: 'none',
+        });
+        message.content = '已按一周的研究周期继续。';
+      } else {
+        message.content = '';
+        message.tool_calls = [
+          {
+            id: 'quant-fixture-question',
+            type: 'function',
+            function: {
+              name: 'quant_ask_user',
+              arguments: JSON.stringify({
+                questions: [
+                  { question: '研究周期选多久？', options: ['一天', '一周'], custom: false },
+                ],
+              }),
+            },
+          },
+        ];
+        finish = 'tool_calls';
+      }
+    } else if (body.tools?.some((tool) => tool.function?.name === 'quant_backtest')) {
       agentSteps++;
       assert.ok(
         body.messages.some(
@@ -561,9 +595,32 @@ ipcMain.once('app:renderer-ready', (event) =>
       await until(
         "document.querySelector('.quant-native-paper [data-np-history]').textContent.includes('0.15')",
       );
+      marketSocket.frame('l2_data', [
+        {
+          type: 'update',
+          product_id: 'ETH-USD',
+          updates: [{ side: 'offer', price_level: '2334', new_quantity: '0.3' }],
+        },
+      ]);
+      await until(
+        `(async()=>{const b=await window.api.backendRequest('quant:request','native.source.book',{product:'ETH-USD',limit:1});return b?.eligible;})()`,
+      );
+      await js(`(() => {
+        const form = document.querySelector('.quant-native-paper [data-np-order]');
+        form.elements.timeInForce.value = 'fok';
+        form.elements.price.value = '2334';
+        form.elements.quantity.value = '0.1';
+        form.requestSubmit();
+      })()`);
+      await until(
+        `(async()=>{const p=await window.api.backendRequest('quant:request','native.paper.orders',{id:window.__quantTestId});return p.items.some(o=>o.request.time_in_force==='fok'&&o.status==='filled'&&o.filled==='0.1');})()`,
+      );
+      await until(
+        `document.querySelector('.quant-native-paper [data-np-history]').textContent.includes('FOK')`,
+      );
       await shot('quant-native-paper-orders-' + theme + '.png');
       await js("document.querySelector('.quant-native-paper [data-np=executions]').click()");
-      await until("document.querySelectorAll('.quant-native-paper tbody tr').length>=2");
+      await until("document.querySelectorAll('.quant-native-paper tbody tr').length>=3");
       await shot('quant-native-paper-fills-' + theme + '.png');
       await js(
         "document.querySelector('.quant-native-paper [data-np=pause]').click();document.querySelector('.quant-native-paper [data-np=orders]').click()",
@@ -1071,6 +1128,27 @@ ipcMain.once('app:renderer-ready', (event) =>
       );
       assert.equal(stoppedPlans.items[0].phase, 'paused');
       assert.equal(stoppedPlans.items[0].commands_created, 0);
+      await js("window.navigatePage('quant')");
+      assert.equal(
+        (
+          await js(
+            "window.api.backendRequest('quant:request','chat.send',{id:window.__quantTestId,message:'Ask my research horizon.'})",
+          )
+        ).ok,
+        true,
+      );
+      await until("!!document.querySelector('[data-quant-question]:not([hidden]) button')");
+      await js("document.querySelector('[data-quant-question] button').click()");
+      await until("!!document.querySelector('.quant-question-dialog[open] input[value=一周]')");
+      await js("document.querySelector('.quant-question-dialog form').requestSubmit()");
+      await until("!!document.querySelector('.quant-question-dialog [role=alert]:not([hidden])')");
+      await shot('quant-research-question.png');
+      await js(
+        "document.querySelector('.quant-question-dialog input[value=一周]').click();document.querySelector('.quant-question-dialog form').requestSubmit()",
+      );
+      await until(
+        "!document.querySelector('.quant-question-dialog[open]') && document.querySelector('#page-quant').textContent.includes('已按一周的研究周期继续。')",
+      );
       assert.deepEqual(errors, []);
       console.log(
         '[quant] PASS: shared backend, Base RPC, persistent datasets/experiments/goal/chat, professional/immersive/fullscreen charts, wallet confirmation gate and screenshots.',

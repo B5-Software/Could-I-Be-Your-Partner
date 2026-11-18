@@ -70,6 +70,49 @@ async function close() {
     assert.equal(view.historyPage.total, 0);
     assert.equal((await call('native.start')).pid, pid, 'frontends reuse the owned process');
     const outbox = host.runtime.quantService.native;
+    const instrument = 'coinbase:ETH-USD:fixture';
+    await outbox.call('instrument.register', {
+      id: instrument,
+      base: 'ETH',
+      quote: 'USD',
+      tick: '0.5',
+      lot: '0.001',
+      min_notional: '1',
+      fee_bps: 100,
+    });
+    await outbox.feed('market.snapshot', {
+      instrument,
+      epoch: 'paper-fixture',
+      sequence: '1',
+      bids: [['99', '5']],
+      asks: [
+        ['101', '0.5'],
+        ['102', '0.25'],
+      ],
+    });
+    host.runtime.quantService.nativeMarkets.inspect = () => ({
+      sources: [{ product: 'ETH-USD', instrument, phase: 'ready' }],
+    });
+    const immediate = {
+      id: project.id,
+      operationId: 'ioc-fixture',
+      product: 'ETH-USD',
+      timeInForce: 'ioc',
+      side: 'buy',
+      price: '102',
+      quantity: '1',
+    };
+    const filled = await call('native.paper.submit', immediate);
+    assert.equal(filled.order.request.time_in_force, 'ioc');
+    assert.equal(filled.order.status, 'cancelled');
+    assert.equal(filled.order.filled, '0.75');
+    assert.equal(filled.order.fees, '0.76');
+    assert.equal(filled.order.reserved, '0');
+    assert.equal((await call('native.paper.executions', { id: project.id })).total, 2);
+    await assert.rejects(
+      call('native.paper.submit', { ...immediate, timeInForce: 'fok' }),
+      /COMMAND_CONFLICT/,
+    );
     await outbox.execution('create', {
       template: 'base-twap-v1',
       id: 'backend:execution',
@@ -99,7 +142,10 @@ async function close() {
     const restored = await call('native.paper.view', { id: project.id, kind: 'executions' });
     assert.equal(restored.account.id, created.id);
     assert.equal(restored.account.active, false);
-    assert.equal(restored.account.assets.ETH.total, '1');
+    assert.equal(restored.account.assets.ETH.total, '1.75');
+    assert.equal(restored.historyPage.total, 2);
+    assert.ok(restored.historyPage.items.every((e) => e.fill.source.venue === 'paper-l2-sweep'));
+    assert.equal((await call('native.paper.submit', immediate)).duplicate, true);
     const recovery = await host.runtime.quantService.native.execution('pending', {
       id: 'backend:execution',
     });
@@ -111,7 +157,7 @@ async function close() {
     console.log(
       '[quant-native-backend] PASS: ' +
         (process.argv.includes('--bundled') ? 'bundled' : 'source') +
-        ' shared Node backend, atomic paper views, persisted account binding, private execution outbox recovery and owned process cleanup',
+        ' shared Node backend, atomic paper views, IOC settlement and restart deduplication, private execution outbox recovery and owned process cleanup',
     );
   } finally {
     await close();

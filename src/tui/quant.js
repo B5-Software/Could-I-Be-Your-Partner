@@ -351,20 +351,32 @@ class QuantBrowser {
                   value,
                 })),
                 (side) =>
-                  this.fields(
-                    ['npPrice', 'npQuantity'],
-                    { npPrice: '', npQuantity: '' },
-                    async (values) => {
-                      await this.call('native.paper.submit', {
-                        id,
-                        operationId: require('node:crypto').randomUUID(),
-                        product,
-                        side,
-                        price: values.npPrice,
-                        quantity: values.npQuantity,
-                      });
-                      return this.nativePaper(id);
-                    },
+                  this.menu(
+                    this.text('npTimeInForce'),
+                    [
+                      { value: 'gtc', label: this.text('npGtc') },
+                      { value: 'ioc', label: this.text('npIoc') },
+                      { value: 'fok', label: this.text('npFok') },
+                    ],
+                    (timeInForce) =>
+                      this.fields(
+                        ['npPrice', 'npQuantity'],
+                        { npPrice: '', npQuantity: '' },
+                        async (values) => {
+                          await this.call('native.paper.submit', {
+                            id,
+                            operationId: require('node:crypto').randomUUID(),
+                            product,
+                            side,
+                            timeInForce,
+                            price: values.npPrice,
+                            quantity: values.npQuantity,
+                          });
+                          return this.nativePaper(id);
+                        },
+                        () => this.nativePaper(id),
+                      ),
+                    this.text('npLimitHint'),
                     () => this.nativePaper(id),
                   ),
                 this.text('npLimitHint'),
@@ -478,7 +490,7 @@ class QuantBrowser {
       ...page.items.map((item, index) => ({
         label:
           kind === 'orders'
-            ? `${this.text(item.request.side === 'buy' ? 'npBuy' : 'npSell')} ${item.request.quantity} @ ${item.request.price} · ${item.filled} · ${orderStatus(item)}`
+            ? `${this.text(item.request.side === 'buy' ? 'npBuy' : 'npSell')} ${item.request.quantity} @ ${item.request.price} · ${(item.request.time_in_force ?? 'gtc').toUpperCase()} · ${item.filled} · ${orderStatus(item)}`
             : `${this.text(item.side === 'buy' ? 'npBuy' : 'npSell')} ${item.fill.quantity} @ ${item.fill.price}`,
         value: index,
       })),
@@ -502,7 +514,7 @@ class QuantBrowser {
           actions.push({ label: this.text('npCancel'), value: 'cancel' });
         const body =
           kind === 'orders'
-            ? `${item.request.id}\n${this.text('npAccount')}: ${item.request.account}\n${this.text('npFilled')}: ${item.filled}\n${this.text('npFees')}: ${item.fees}\n${this.text('npReserved')}: ${item.reserved} ${item.reserved_asset}\n${orderStatus(item)}`
+            ? `${item.request.id}\n${this.text('npAccount')}: ${item.request.account}\n${this.text('npTimeInForce')}: ${(item.request.time_in_force ?? 'gtc').toUpperCase()}\n${this.text('npFilled')}: ${item.filled}\n${this.text('npFees')}: ${item.fees}\n${this.text('npReserved')}: ${item.reserved} ${item.reserved_asset}\n${orderStatus(item)}`
             : `${this.text('npPrice')}: ${item.fill.price}\n${this.text('npQuantity')}: ${item.fill.quantity}\n${this.text('npFillFee')}: ${item.fees}\n${this.text('npSource')}: ${item.fill.source?.venue ?? '—'} / ${item.fill.source?.event_id ?? item.fill.id}\n${this.text('npTime')}: ${new Date(Number(BigInt(item.recorded_at_ns) / 1000000n)).toLocaleString()}`;
         return this.menu(
           this.text(kind === 'orders' ? 'npOrders' : 'npFills'),

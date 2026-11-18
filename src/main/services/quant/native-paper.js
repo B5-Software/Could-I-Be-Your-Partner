@@ -237,6 +237,8 @@ class NativePaper {
       const orderId = identity(id, input.operationId);
       if (!PRODUCTS.includes(input.product)) fail('SOURCE_MARKET_INVALID');
       if (!['buy', 'sell'].includes(input.side)) fail('INVALID_SIDE');
+      const timeInForce = input.timeInForce ?? 'gtc';
+      if (!['gtc', 'ioc', 'fok'].includes(timeInForce)) fail('PAPER_TIME_IN_FORCE_INVALID');
       const price = value(input.price, true),
         quantity = value(input.quantity, true);
       let prior;
@@ -253,6 +255,7 @@ class NativePaper {
           r.side !== input.side ||
           r.price !== price ||
           r.quantity !== quantity ||
+          (r.time_in_force ?? 'gtc') !== timeInForce ||
           !r.instrument.startsWith('coinbase:' + input.product + ':')
         )
           fail('COMMAND_CONFLICT');
@@ -273,7 +276,8 @@ class NativePaper {
         side: input.side,
         price,
         quantity,
-        post_only: true,
+        post_only: timeInForce === 'gtc',
+        ...(timeInForce !== 'gtc' && { time_in_force: timeInForce }),
       };
       await service.mutate((state) => {
         const project = service.workspace(id, state);

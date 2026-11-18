@@ -254,6 +254,7 @@ export interface NativePaperOrder {
     side: string;
     price: string;
     quantity: string;
+    time_in_force?: 'gtc' | 'ioc' | 'fok';
   };
   status: string;
   filled: string;
@@ -299,6 +300,17 @@ export interface NativePaperStatus {
     total: number;
   } | null;
 }
+export interface QuantQuestionnaire {
+  kind: 'questions';
+  scope: 'quant-questionnaire';
+  id: string;
+  revision: number;
+  payload: {
+    phase: 'pending' | 'resume';
+    recovered: boolean;
+    questions: { question: string; options: string[]; multiSelect: boolean; custom: boolean }[];
+  };
+}
 export interface QuantChatView {
   session: { key: string; busy: boolean; model: string; lastError?: string };
   displayMessages: {
@@ -310,6 +322,7 @@ export interface QuantChatView {
     reasoningSummary?: string;
   }[];
   messages?: { metadata?: { messageId?: string; kind?: string } }[];
+  pendingInteraction?: QuantQuestionnaire | null;
 }
 export interface QuantNativeStatus {
   available: boolean;

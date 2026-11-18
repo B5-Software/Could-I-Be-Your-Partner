@@ -6,6 +6,7 @@ const path = require('node:path');
 const { randomUUID, createHash } = require('node:crypto');
 const { Worker } = require('node:worker_threads');
 const { MarketData, CHAINS, INTERVALS, endpoint } = require('./market-data');
+const { discoverTokens } = require('./token-discovery');
 const { validateCandles, parameters } = require('./backtest');
 const { VERSION: WALK_FORWARD_VERSION, walkForwardParameters } = require('./walk-forward');
 const { SCALE, atoms, decimal, notional, fee } = require('./decimal');
@@ -163,6 +164,7 @@ class QuantService {
       sourceOptions,
     });
     this.research = new (require('./research').QuantResearch)(this, researchOptions);
+    this.questions = new (require('./questions').QuantQuestions)(this, writeAtomic);
     this.nativePaper = new (require('./native-paper').NativePaper)(this);
     this.nativeStrategies = new (require('./native-strategies').NativeStrategies)(this);
     this.recordings = new (require('./event-recordings').EventRecordings)(this);
@@ -754,11 +756,11 @@ class QuantService {
   }
   async openChat(id) {
     if (!this.runtime) problem('CHAT_UNAVAILABLE');
+    const w = this.workspace(id);
+    if (this.chatOpening.has(id)) return this.chatOpening.get(id);
     const key = 'quant:' + id,
       existing = this.runtime.getSession(key);
     if (existing) return this.runtime.getView(key);
-    if (this.chatOpening.has(id)) return this.chatOpening.get(id);
-    const w = this.workspace(id);
     const task = (async () => {
       const view = await this.runtime.initialize({
         key,
@@ -969,6 +971,18 @@ class QuantService {
     }
     if (action === 'base.inspect') {
       const { market, config, chain } = this.evmContext(input.id, input.chainId);
+      if (input.discoverAssets === true) {
+        if (chain.archived) problem('WALLET_CHAIN_UNAVAILABLE');
+        const result = await discoverTokens(
+          market,
+          { ...config, rpcUrl: config.rpcUrl || chain.rpc },
+          input,
+          context.signal,
+        );
+        if (input.chainId !== undefined)
+          this.getWallet().networks.assert(chain.key, chain.revision);
+        return result;
+      }
       if (!chain.builtin && (input.signatureNonce !== undefined || input.protocol === 'permit2'))
         problem('WALLET_CHAIN_UNAVAILABLE');
       if (input.assets === true)
@@ -1173,6 +1187,15 @@ class QuantService {
         return order;
       });
     if (action === 'chat.open') return this.openChat(input.id);
+    if (action === 'chat.questionnaire.respond') {
+      await this.openChat(input.id);
+      return this.runtime.respond('quant:' + input.id, {
+        questionnaireId: input.questionnaireId ?? null,
+        revision: input.revision,
+        action: input.action,
+        answers: input.answers,
+      });
+    }
     if (action === 'chat.send') {
       if (
         typeof input.message !== 'string' ||

@@ -220,6 +220,30 @@ test('TUI watch accounts expose holdings and token tracking without signing cont
       tracked = [input.token];
       return {};
     }
+    if (action === 'asset.discover')
+      return {
+        anchorBlock: '123',
+        anchorHash: '0x' + '4'.repeat(64),
+        fromBlock: '100',
+        toBlock: '123',
+        nextEndBlock: '99',
+        next: null,
+        snapshotId: 'view-id',
+        networkRevision: 3,
+        total: 1,
+        items: [
+          {
+            token: custom,
+            block: '112',
+            symbol: 'TOKEN',
+            amount: '1.23',
+            amountAtomic: '123',
+            received: 1,
+            sent: 0,
+            tracked: tracked.includes(custom),
+          },
+        ],
+      };
     if (action === 'asset.untrack') {
       tracked = [];
       return {};
@@ -258,6 +282,18 @@ test('TUI watch accounts expose holdings and token tracking without signing cont
     id: 'watch',
     chain: 'base-sepolia',
     token: custom,
+  });
+  await choose('discover');
+  const row = app.state.modal.options.find((option) => option.value.token === custom);
+  assert.match(row.label, /TOKEN.*1\.23/);
+  await choose(row.value);
+  assert.match(app.state.modal.body, /Received 1/);
+  await choose('track');
+  assert.deepEqual(requests.filter(({ action }) => action === 'asset.track').at(-1).input, {
+    id: 'watch',
+    chain: 'base-sepolia',
+    token: custom,
+    expectedNetworkRevision: 3,
   });
 });
 
@@ -1595,6 +1631,7 @@ test('TUI native paper orders use human menus, preserve decimal text and route t
   await choose('submit');
   await choose('ETH-USD');
   await choose('buy');
+  await choose('ioc');
   app.state.modal.editor.setValue('100.5');
   await app._handleModalKey({ name: 'enter' });
   app.state.modal.editor.setValue('0.123456789012345678');
@@ -1602,6 +1639,7 @@ test('TUI native paper orders use human menus, preserve decimal text and route t
   const submitted = requests.find((r) => r.action === 'native.paper.submit');
   assert.equal(submitted.input.id, 'project');
   assert.equal(submitted.input.price, '100.5');
+  assert.equal(submitted.input.timeInForce, 'ioc');
   assert.equal(submitted.input.quantity, '0.123456789012345678');
   assert.equal(
     requests.some((r) => r.action === 'native.control'),

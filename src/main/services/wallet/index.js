@@ -24,6 +24,7 @@ const {
 const { writeAtomic } = require('../quant');
 const { MarketData, CHAINS, baseGasOracle, readOperatorFee } = require('../quant/market-data');
 const executionReceipt = require('../quant/execution-receipt');
+const { discoverTokens } = require('../quant/token-discovery');
 const {
   PERMIT2,
   MAX_ORDERED_NONCE,
@@ -1906,6 +1907,35 @@ class WalletService {
         return { removed: true };
       });
     }
+    if (action === 'asset.discover') {
+      const network = this.networks.profile(input.chain, true);
+      const wallet = this.wallet(input.id);
+      const report = await discoverTokens(
+        this.market,
+        { venue: network.key, rpcUrl: network.rpc },
+        {
+          ...input,
+          address: wallet.address,
+        },
+        context.signal,
+      );
+      this.networks.assert(network.key, network.revision);
+      const current = this.wallet(input.id);
+      if (current.address !== wallet.address) fail('WALLET_NOT_FOUND');
+      const tracked = new Set(
+        [network.usdc, network.weth, ...(current.trackedTokens?.[network.key] ?? [])]
+          .filter(Boolean)
+          .map((address) => address.toLowerCase()),
+      );
+      return {
+        ...report,
+        networkRevision: network.revision,
+        items: report.items.map((row) => ({
+          ...row,
+          tracked: tracked.has(row.token.toLowerCase()),
+        })),
+      };
+    }
     if (['assets', 'asset.track', 'asset.untrack'].includes(action)) {
       const network = this.networks.profile(input.chain);
       const wallet = this.wallet(input.id);
@@ -1915,23 +1945,32 @@ class WalletService {
           ...(await this.market.tokenHoldings(
             { venue: input.chain },
             { address: wallet.address, tokens },
+            { readSymbols: true },
           )),
           trackedTokens: tokens,
         };
       }
       const token = getAddress(input.token);
       if (token === ZeroAddress) fail('INVALID_ADDRESS');
-      return this.mutate((state) => {
-        const wallet = this.wallet(input.id, state);
-        const tokens = (wallet.trackedTokens?.[input.chain] ?? []).filter(
-          (value) => value.toLowerCase() !== token.toLowerCase(),
-        );
-        if (action === 'asset.track' && ![network.usdc, network.weth].includes(token.toLowerCase()))
-          tokens.push(token);
-        if (tokens.length > 16) fail('WALLET_ASSET_RANGE');
-        wallet.trackedTokens = { ...wallet.trackedTokens, [input.chain]: tokens };
-        return this.publicWallet(wallet);
-      });
+      return this.mutate(
+        (state) => {
+          const wallet = this.wallet(input.id, state);
+          const tokens = (wallet.trackedTokens?.[input.chain] ?? []).filter(
+            (value) => value.toLowerCase() !== token.toLowerCase(),
+          );
+          if (
+            action === 'asset.track' &&
+            ![network.usdc, network.weth].includes(token.toLowerCase())
+          )
+            tokens.push(token);
+          if (tokens.length > 16) fail('WALLET_ASSET_RANGE');
+          wallet.trackedTokens = { ...wallet.trackedTokens, [input.chain]: tokens };
+          return this.publicWallet(wallet);
+        },
+        input.expectedNetworkRevision === undefined
+          ? undefined
+          : () => this.networks.assert(input.chain, input.expectedNetworkRevision),
+      );
     }
     if (action === 'policy.usage') {
       const wallet = this.wallet(input.id),

@@ -2,6 +2,7 @@
 import type {
   Candle,
   QuantChatView,
+  QuantQuestionnaire,
   QuantBaseTrade,
   QuantBaseRecorder,
   QuantDataset,
@@ -20,6 +21,7 @@ import { openLiveExecution } from './quant-execution';
 import { quantText, type QuantLabel } from './quant-text';
 import { executionAmount, signedAmount } from '../../shared/quant-execution-format';
 import { approvalCard, type WalletIntent } from './wallet-panel';
+import questionnaireLabels from '../../shared/quant-questionnaire-labels.json';
 
 type Options = {
   request: (action: string, input?: Record<string, unknown>) => Promise<unknown>;
@@ -64,6 +66,8 @@ export class QuantWorkbench {
   private active = false;
   private refreshBusy = false;
   private chatBusy = false;
+  private chatGeneration = 0;
+  private questionDialog?: HTMLDialogElement;
   private marketLoading = false;
   private nativeGeneration = 0;
   private chartData = new Map<string, Candle[]>();
@@ -142,7 +146,10 @@ export class QuantWorkbench {
       this.active = page === 'quant';
       document.body.classList.toggle('quant-open', this.active);
       if (this.active) void this.open().catch((error) => this.error(error));
-      else this.exitChart();
+      else {
+        this.exitChart();
+        this.questionDialog?.close();
+      }
     });
     window.addEventListener('languagechange', () => {
       this.localize();
@@ -197,6 +204,7 @@ export class QuantWorkbench {
         <section class="quant-conversation"><header><div>${icon('chat')}<strong data-q="assistant"></strong></div><select data-model aria-label="${escape(this.text('model'))}" disabled><option data-q="model"></option></select>${this.button('exportChat', 'export-chat', 'download', 'class="quant-icon-button"')}</header>
           <div data-immersive-chart></div><div class="quant-chat-messages" data-chat-messages role="log" aria-live="polite"></div>
           <div class="quant-chat-working" data-chat-working hidden></div>
+          <section class="quant-question-notice" data-quant-question hidden aria-live="polite"></section>
           <div class="quant-live-approvals" data-live-approvals></div><form class="quant-composer" data-chat-form><textarea data-chat-input rows="3" aria-label="${escape(this.text('message'))}"></textarea><footer><button type="button" data-action="autonomous" data-autonomous aria-pressed="true">Agent · Goal</button><span data-q="assistantHint"></span><button type="submit" data-send title="${escape(this.text('send'))}">${icon('send')}</button><button type="button" data-action="stop" data-stop title="${escape(this.text('stop'))}" hidden>${icon('stop')}</button></footer></form>
         </section>
       </div><input data-file type="file" accept=".csv,.json" hidden>
@@ -642,8 +650,9 @@ export class QuantWorkbench {
   }
   private async loadChat(): Promise<void> {
     const id = this.currentId;
+    const generation = ++this.chatGeneration;
     const view = await this.call<QuantChatView>('chat.open', { id });
-    if (this.currentId !== id) return;
+    if (this.currentId !== id || this.chatGeneration !== generation) return;
     this.chat = view;
     this.stream = '';
     this.renderChat();
@@ -652,7 +661,7 @@ export class QuantWorkbench {
         entries?: { id: string; label: string; model: string; default?: boolean }[];
         selected?: string;
       };
-      if (this.currentId !== id) return;
+      if (this.currentId !== id || this.chatGeneration !== generation) return;
       const select = this.el<HTMLSelectElement>('[data-model]');
       select.innerHTML = (models.entries || [])
         .map(
@@ -663,6 +672,7 @@ export class QuantWorkbench {
       select.value = models.selected || models.entries?.find((entry) => entry.default)?.id || '';
       select.disabled = !models.entries?.length || view.session.busy;
     } catch {
+      if (this.currentId !== id || this.chatGeneration !== generation) return;
       this.el<HTMLSelectElement>('[data-model]').innerHTML =
         `<option>${escape(view.session.model || this.text('model'))}</option>`;
     }
@@ -711,10 +721,165 @@ export class QuantWorkbench {
     }
     if (atBottom) host.scrollTop = host.scrollHeight;
     const busy = Boolean(this.chatBusy || this.chat?.session.busy);
-    this.el('[data-send]').hidden = busy;
+    const question =
+      this.chat?.session.key === 'quant:' + this.currentId &&
+      this.chat.pendingInteraction?.scope === 'quant-questionnaire'
+        ? this.chat.pendingInteraction
+        : undefined;
+    this.el('[data-send]').hidden = busy || Boolean(question);
     this.el('[data-stop]').hidden = !busy;
-    this.el('[data-chat-working]').hidden = !busy;
+    this.el('[data-chat-working]').hidden = !busy || Boolean(question);
     this.el('[data-chat-working]').textContent = this.text('thinking');
+    this.renderQuestion(question);
+  }
+  private questionText(key: string): string {
+    const lang = this.options.language().toLowerCase();
+    const table =
+      questionnaireLabels[lang.startsWith('de') ? 'de' : lang.startsWith('en') ? 'en' : 'zh'];
+    return table[key as keyof typeof table] || key;
+  }
+  private renderQuestion(view?: QuantQuestionnaire): void {
+    const panel = this.el('[data-quant-question]');
+    const signature = view ? `${view.id}:${view.revision}:${view.payload.phase}` : '';
+    if (this.questionDialog && this.questionDialog.dataset.question !== signature) {
+      this.questionDialog.close();
+      this.questionDialog.remove();
+      this.questionDialog = undefined;
+    }
+    panel.hidden = !view;
+    if (panel.dataset.question === signature) return;
+    panel.dataset.question = signature;
+    if (!view) {
+      panel.replaceChildren();
+      return;
+    }
+    const label = (key: string) => escape(this.questionText(key));
+    if (view.payload.phase === 'pending') {
+      panel.innerHTML = `<strong>${label('waiting')}</strong><button type="button" class="quant-primary">${label('open')}</button>`;
+      panel.querySelector('button')!.onclick = () => this.openQuestion(view, signature);
+      return;
+    }
+    panel.innerHTML = `<strong>${label('resumeTitle')}</strong><div><button type="button" data-question-dismiss>${label('dismiss')}</button><button type="button" class="quant-primary" data-question-resume>${label('resume')}</button></div>`;
+    const id = this.currentId;
+    for (const action of ['resume', 'dismiss']) {
+      panel.querySelector<HTMLButtonElement>(`[data-question-${action}]`)!.onclick = async () => {
+        const buttons = [...panel.querySelectorAll('button')];
+        buttons.forEach((button) => {
+          button.disabled = true;
+        });
+        try {
+          await this.respondQuestion(id, view, { action });
+        } catch (error) {
+          this.error(
+            Error(this.questionText(error instanceof Error ? error.message : String(error))),
+          );
+        } finally {
+          buttons.forEach((button) => {
+            button.disabled = false;
+          });
+        }
+      };
+    }
+  }
+  private openQuestion(view: QuantQuestionnaire, signature: string): void {
+    if (this.questionDialog?.dataset.question === signature) {
+      if (!this.questionDialog.open) this.questionDialog.showModal();
+      return;
+    }
+    const id = this.currentId;
+    const label = (key: string) => escape(this.questionText(key));
+    const d = document.createElement('dialog');
+    d.className = 'quant-dialog quant-question-dialog';
+    d.dataset.question = signature;
+    d.setAttribute('aria-label', this.questionText('title'));
+    const questions = view.payload.questions;
+    d.innerHTML = `<header><h2>${label('title')}</h2><button type="button" data-question-close aria-label="${label('close')}">${icon('close')}</button></header>
+      ${view.payload.recovered ? `<p class="quant-hint">${label('recovered')}</p>` : ''}
+      <form><div class="quant-question-fields">${questions
+        .map(
+          (q, index) => `<fieldset>
+        <legend>${escape(q.question)}</legend>
+        ${q.options.map((option) => `<label class="quant-question-option"><input name="choice-${index}" type="${q.multiSelect ? 'checkbox' : 'radio'}" value="${escape(option)}"><span>${escape(option)}</span></label>`).join('')}
+        ${q.custom ? `<label class="quant-question-answer"><span>${label(q.options.length ? 'custom' : 'answer')}</span><textarea rows="2" maxlength="600" name="text-${index}"></textarea></label>` : ''}
+      </fieldset>`,
+        )
+        .join('')}</div><p role="alert" hidden></p>
+      <footer><button type="button" data-question-skip>${label('skip')}</button><button type="submit" class="quant-primary">${label('submit')}</button></footer></form>`;
+    d.querySelector('[data-question-close]')!.addEventListener('click', () => d.close());
+    const form = d.querySelector('form')!;
+    const alert = form.querySelector<HTMLElement>('[role="alert"]')!;
+    const submit = async (answers: (string | string[])[]) => {
+      if (form.hasAttribute('aria-busy')) return;
+      form.setAttribute('aria-busy', 'true');
+      alert.hidden = true;
+      const buttons = [...form.querySelectorAll('button')];
+      buttons.forEach((button) => {
+        button.disabled = true;
+      });
+      try {
+        await this.respondQuestion(id, view, { answers });
+        d.close();
+      } catch (error) {
+        alert.textContent = this.questionText(
+          error instanceof Error ? error.message : String(error),
+        );
+        alert.hidden = false;
+      } finally {
+        form.removeAttribute('aria-busy');
+        buttons.forEach((button) => {
+          button.disabled = false;
+        });
+      }
+    };
+    form.addEventListener('submit', (event) => {
+      event.preventDefault();
+      const fields = new FormData(form);
+      const answers = questions.map((q, index) => {
+        const selected = fields.getAll('choice-' + index).map(String);
+        const custom = String(fields.get('text-' + index) ?? '').trim();
+        return q.multiSelect
+          ? [...new Set([...selected, ...(custom ? [custom] : [])])]
+          : custom || selected[0] || '';
+      });
+      if (answers.some((answer) => !answer.length)) {
+        alert.textContent = this.questionText('QUANT_QUESTIONNAIRE_ANSWER');
+        alert.hidden = false;
+        return;
+      }
+      void submit(answers);
+    });
+    form.querySelector('[data-question-skip]')!.addEventListener('click', () => void submit([]));
+    form.addEventListener('input', (event) => {
+      const control = event.target as HTMLInputElement | HTMLTextAreaElement;
+      if (control instanceof HTMLInputElement && control.type === 'radio') {
+        const custom = form.elements.namedItem(control.name.replace('choice-', 'text-'));
+        if (custom instanceof HTMLTextAreaElement) custom.value = '';
+      } else if (control instanceof HTMLTextAreaElement && control.value) {
+        const group = form.querySelectorAll<HTMLInputElement>(
+          `[type="radio"][name="${control.name.replace('text-', 'choice-')}"]`,
+        );
+        group.forEach((radio) => {
+          radio.checked = false;
+        });
+      }
+    });
+    document.body.append(d);
+    this.questionDialog = d;
+    d.showModal();
+  }
+  private async respondQuestion(
+    id: string,
+    view: QuantQuestionnaire,
+    response: Record<string, unknown>,
+  ): Promise<void> {
+    const result = await this.call<{ ok: boolean; error?: string }>('chat.questionnaire.respond', {
+      id,
+      questionnaireId: view.id,
+      revision: view.revision,
+      ...response,
+    });
+    if (this.currentId === id) await this.loadChat();
+    if (!result.ok) throw Error(result.error || 'QUANT_QUESTIONNAIRE_STALE');
   }
   private safeMarkdown(text: string): string {
     const template = document.createElement('template');
@@ -743,6 +908,8 @@ export class QuantWorkbench {
     const input = this.el<HTMLTextAreaElement>('[data-chat-input]'),
       message = input.value.trim();
     if (!message || this.chatBusy) return;
+    if (this.chat?.pendingInteraction?.scope === 'quant-questionnaire')
+      throw Error(this.questionText('QUANT_QUESTIONNAIRE_PENDING'));
     this.chatBusy = true;
     this.renderChat();
     try {

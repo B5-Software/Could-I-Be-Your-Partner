@@ -9,7 +9,6 @@
 
 const EN_DICT = {
   'ui.quant.title': 'Quant workbench',
-  'ui.quant.disabled': 'Quant features are not enabled',
   'ui.wallet.title': 'Wallet',
   'ui.tui.cmd.goal': 'Set and manage an Agent goal',
   'ui.tui.args.goal': '<objective | status | pause | resume | clear>',
