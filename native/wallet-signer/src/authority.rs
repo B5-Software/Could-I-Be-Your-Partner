@@ -138,7 +138,7 @@ pub fn initialize(connection: &mut Connection) -> Result<()> {
     let version: u32 = connection
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .map_err(|_| STORE)?;
-    if version > 8 {
+    if version > 9 {
         return Err(STORE);
     }
     if version == 0 {
@@ -194,6 +194,10 @@ pub fn initialize(connection: &mut Connection) -> Result<()> {
         crate::messages::initialize(connection)?;
     }
     crate::messages::validate(connection)?;
+    if version <= 8 {
+        crate::portfolio_rate::initialize(connection)?;
+    }
+    crate::portfolio_rate::validate(connection)?;
     Ok(())
 }
 fn usage(connection: &Connection, id: &str) -> Result<crate::scope::Usage> {

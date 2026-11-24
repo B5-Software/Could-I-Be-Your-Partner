@@ -5,9 +5,11 @@ import strategyLabels from '../../shared/quant-strategy-labels.json';
 import eventLabels from '../../shared/quant-event-labels.json';
 import executionLabels from '../../shared/quant-execution-labels.json';
 import baseHistoryLabels from '../../shared/quant-base-history-labels.json';
+import krakenArchive from '../../shared/quant-kraken-archive-labels.json';
 import validationLabels from '../../shared/quant-validation-labels.json';
 const zh = {
   ...baseHistoryLabels.zh,
+  ...krakenArchive.zh,
   ...validationLabels.zh,
   ...eventLabels.zh,
   ...executionLabels.zh,
@@ -21,6 +23,13 @@ const zh = {
   wallet: '钱包与实盘授权',
   professional: '专业面板',
   immersive: '沉浸对话',
+  layoutMode: '工作台布局',
+  focusDetails: '研究数据',
+  resizeProjects: '调节项目栏宽度',
+  resizeChart: '调节图表和数据区高度',
+  resizeAssistant: '调节行情和对话区大小',
+  resizeHint: '拖动或用方向键调节，双击恢复默认',
+  you: '你',
   refresh: '刷新行情',
   import: '导入 K 线',
   export: '导出实验',
@@ -56,7 +65,7 @@ const zh = {
   zoomIn: '放大',
   zoomOut: '缩小',
   noData: '还没有行情数据',
-  noDataHint: '刷新链上行情，或导入自己的历史 K 线。所有数据均标明来源。',
+  noDataHint: '刷新行情，或导入自己的历史 K 线。所有数据均标明来源。',
   noProjects: '开启一个量化研究项目',
   noProjectsHint: '连接 Base 原生 RPC，或读取交易所公开行情。实验和研究对话独立保存。',
   noOrders: '尚无模拟订单',
@@ -72,6 +81,7 @@ const zh = {
   chatHint: '让助手检查数据、比较策略、保存实验，或解释模拟订单。',
   promptCompare: '比较 9/21 均线与买入持有，保存实验并解释费用和数据限制。',
   promptBase: '检查当前 Base 网络状态与数据精度，说明是否适合当前研究。',
+  promptMarket: '检查最近成交时间、已收盘 K 线和数据空缺，说明当前数据是否适合回测。',
   model: '模型',
   importHint:
     'CSV：time,open,high,low,close,volume；也支持同字段的 JSON 数组。时间为秒或 ISO 格式。',
@@ -80,6 +90,13 @@ const zh = {
   imported: '导入历史 · 来源未经验证',
   sampled: '链上价格采样 · 无成交量',
   exchange: '交易所公开 K 线',
+  krakenCandles: 'Kraken Spot · 已收盘 K 线',
+  krakenCandleHint: '公开历史按交易所周期更新，空缺时段保留。右上角价格来自最新一笔公开成交。',
+  staleTrade: '最近成交已过期',
+  latestTrade: '最近成交',
+  candleSnapshot: 'K 线快照',
+  captureCandles: '保存 K 线快照',
+  errorNoClosedCandles: '还没有可保存的已收盘 K 线。',
   cached: '缓存行情',
   offline: '连接失败 · 已保留历史',
   loading: '正在连接…',
@@ -171,6 +188,7 @@ const zh = {
 type Key = keyof typeof zh;
 const en: Record<Key, string> = {
   ...baseHistoryLabels.en,
+  ...krakenArchive.en,
   ...validationLabels.en,
   ...eventLabels.en,
   ...executionLabels.en,
@@ -184,6 +202,13 @@ const en: Record<Key, string> = {
   wallet: 'Wallet & live permissions',
   professional: 'Professional',
   immersive: 'Immersive chat',
+  layoutMode: 'Workbench layout',
+  focusDetails: 'Research data',
+  resizeProjects: 'Resize project list',
+  resizeChart: 'Resize chart and data',
+  resizeAssistant: 'Resize market and chat panels',
+  resizeHint: 'Drag or use arrow keys. Double-click to reset.',
+  you: 'You',
   refresh: 'Refresh market',
   import: 'Import candles',
   export: 'Export experiment',
@@ -221,7 +246,7 @@ const en: Record<Key, string> = {
   zoomOut: 'Zoom out',
   noData: 'No market data yet',
   noDataHint:
-    'Refresh onchain prices or import your historical candles. Every dataset shows its source.',
+    'Refresh market data or import your historical candles. Every dataset shows its source.',
   noProjects: 'Start a quant research project',
   noProjectsHint:
     'Connect directly to Base RPC or public exchange data. Experiments and research conversations are saved separately.',
@@ -240,6 +265,8 @@ const en: Record<Key, string> = {
     'Compare 9/21 SMA with buy and hold. Save the experiments and explain fees and data limitations.',
   promptBase:
     'Inspect this Base network and data quality. Explain its suitability for this research.',
+  promptMarket:
+    'Check the latest trade time, closed candles, and missing intervals before backtesting.',
   model: 'Model',
   importHint:
     'CSV: time,open,high,low,close,volume; JSON arrays with the same fields are supported. Time: Unix seconds or ISO.',
@@ -248,6 +275,14 @@ const en: Record<Key, string> = {
   imported: 'Imported history · unverified source',
   sampled: 'Sampled onchain price · no traded volume',
   exchange: 'Public exchange candles',
+  krakenCandles: 'Kraken Spot · Closed candles',
+  krakenCandleHint:
+    'History updates on exchange intervals and preserves gaps. The header price is the latest public trade.',
+  staleTrade: 'Last trade is stale',
+  latestTrade: 'Last trade',
+  candleSnapshot: 'Candle snapshot',
+  captureCandles: 'Save candle snapshot',
+  errorNoClosedCandles: 'No closed candles are available to save yet.',
   cached: 'Cached market',
   offline: 'Connection failed · history retained',
   loading: 'Connecting…',
@@ -342,6 +377,7 @@ const en: Record<Key, string> = {
 const de: Record<Key, string> = {
   ...en,
   ...baseHistoryLabels.de,
+  ...krakenArchive.de,
   ...validationLabels.de,
   ...eventLabels.de,
   ...executionLabels.de,
@@ -355,6 +391,13 @@ const de: Record<Key, string> = {
   new: 'Neues Projekt',
   professional: 'Professionell',
   immersive: 'Immersiver Chat',
+  layoutMode: 'Arbeitsbereich-Layout',
+  focusDetails: 'Forschungsdaten',
+  resizeProjects: 'Projektliste skalieren',
+  resizeChart: 'Diagramm und Datenbereich skalieren',
+  resizeAssistant: 'Markt- und Chatbereich skalieren',
+  resizeHint: 'Ziehen oder Pfeiltasten verwenden. Doppelklick setzt die Größe zurück.',
+  you: 'Du',
   refresh: 'Marktdaten aktualisieren',
   import: 'Kerzen importieren',
   export: 'Experiment exportieren',
@@ -392,7 +435,7 @@ const de: Record<Key, string> = {
   zoomOut: 'Verkleinern',
   noData: 'Noch keine Marktdaten',
   noDataHint:
-    'Onchain-Preise aktualisieren oder historische Kerzen importieren. Jede Quelle wird ausgewiesen.',
+    'Marktdaten aktualisieren oder historische Kerzen importieren. Jede Quelle wird ausgewiesen.',
   noProjects: 'Ein Quant-Projekt beginnen',
   noProjectsHint:
     'Direkte Base-RPC-Verbindung oder öffentliche Börsendaten. Experimente und Chats werden separat gespeichert.',
@@ -412,12 +455,22 @@ const de: Record<Key, string> = {
   promptCompare:
     'Vergleiche SMA 9/21 mit Kaufen und Halten. Speichere die Experimente und erkläre Gebühren sowie Datenlimits.',
   promptBase: 'Prüfe das Base-Netzwerk und die Datenqualität für diese Forschung.',
+  promptMarket:
+    'Prüfe den letzten Abschluss, abgeschlossene Kerzen und Datenlücken vor dem Backtest.',
   model: 'Modell',
   source: 'Quelle',
   liveData: 'Aktuelle Marktdaten',
   imported: 'Importierter Verlauf · Quelle ungeprüft',
   sampled: 'Abgetasteter Onchain-Preis · kein Handelsvolumen',
   exchange: 'Öffentliche Börsenkerzen',
+  krakenCandles: 'Kraken Spot · Abgeschlossene Kerzen',
+  krakenCandleHint:
+    'Die Historie folgt den Börsenintervallen und behält Lücken bei. Oben steht der letzte öffentliche Abschlusskurs.',
+  staleTrade: 'Letzter Abschluss ist veraltet',
+  latestTrade: 'Letzter Abschluss',
+  candleSnapshot: 'Kerzen-Snapshot',
+  captureCandles: 'Kerzen-Snapshot speichern',
+  errorNoClosedCandles: 'Es gibt noch keine abgeschlossenen Kerzen zum Speichern.',
   cached: 'Gespeicherte Marktdaten',
   offline: 'Verbindung fehlgeschlagen · Verlauf erhalten',
   loading: 'Verbindung wird hergestellt…',

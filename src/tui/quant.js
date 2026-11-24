@@ -2,12 +2,18 @@
 'use strict';
 const { getLanguage } = require('./text');
 const { stripAnsi } = require('./ansi');
+const {
+  venues: nativeVenues,
+  products: spotProducts,
+} = require('../shared/quant-native-venues.json');
+const { kraken: krakenIntervals } = require('../shared/quant-market-intervals.json');
 const sourceLabels = require('../shared/quant-source-labels.json');
 const nativePaperLabels = require('../shared/quant-native-paper-labels.json');
 const strategyLabels = require('../shared/quant-strategy-labels.json');
 const eventLabels = require('../shared/quant-event-labels.json');
 const executionLabels = require('../shared/quant-execution-labels.json');
 const baseHistoryLabels = require('../shared/quant-base-history-labels.json');
+const archiveLabels = require('../shared/quant-kraken-archive-labels.json');
 const validationLabels = require('../shared/quant-validation-labels.json');
 const { signedAmount } = require('../shared/quant-execution-format');
 const fs = require('node:fs/promises'),
@@ -15,6 +21,7 @@ const fs = require('node:fs/promises'),
 const labels = {
   zh: {
     ...baseHistoryLabels.zh,
+    ...archiveLabels.zh,
     ...validationLabels.zh,
     ...strategyLabels.zh,
     ...eventLabels.zh,
@@ -70,6 +77,10 @@ const labels = {
     maxPosition: '持仓数量上限',
     dataset: '选择数据集',
     current: '当前市场快照',
+    candleHistory: '已收盘 K 线',
+    candleInterval: 'K 线周期',
+    candleSave: '保存 K 线快照',
+    candleColumns: '开盘 / 最高 / 最低 / 收盘 / 成交量',
     next: '下一页',
     previous: '上一页',
     saved: '已保存',
@@ -77,6 +88,7 @@ const labels = {
   },
   en: {
     ...baseHistoryLabels.en,
+    ...archiveLabels.en,
     ...validationLabels.en,
     ...strategyLabels.en,
     ...eventLabels.en,
@@ -132,6 +144,10 @@ const labels = {
     maxPosition: 'Maximum position quantity',
     dataset: 'Choose dataset',
     current: 'Current market snapshot',
+    candleHistory: 'Closed candles',
+    candleInterval: 'Candle interval',
+    candleSave: 'Save candle snapshot',
+    candleColumns: 'Open / High / Low / Close / Volume',
     next: 'Next page',
     previous: 'Previous page',
     saved: 'Saved',
@@ -139,6 +155,7 @@ const labels = {
   },
   de: {
     ...baseHistoryLabels.de,
+    ...archiveLabels.de,
     ...validationLabels.de,
     ...strategyLabels.de,
     ...eventLabels.de,
@@ -194,12 +211,22 @@ const labels = {
     maxPosition: 'Maximale Positionsmenge',
     dataset: 'Datensatz auswählen',
     current: 'Aktueller Marktschnappschuss',
+    candleHistory: 'Abgeschlossene Kerzen',
+    candleInterval: 'Kerzenintervall',
+    candleSave: 'Kerzen-Snapshot speichern',
+    candleColumns: 'Eröffnung / Hoch / Tief / Schluss / Volumen',
     next: 'Nächste Seite',
     previous: 'Vorherige Seite',
     saved: 'Gespeichert',
     empty: 'Keine Einträge',
   },
 };
+const period = (seconds) =>
+  seconds % 86400 === 0
+    ? seconds / 86400 + 'd'
+    : seconds % 3600 === 0
+      ? seconds / 3600 + 'h'
+      : seconds / 60 + 'm';
 class QuantBrowser {
   constructor(app) {
     this.app = app;
@@ -336,12 +363,11 @@ class QuantBrowser {
         if (action === 'create') return this.nativePaperCreate(id);
         if (action === 'select') return this.nativePaperAccounts(id);
         if (action === 'source' || action === 'submit')
-          return this.menu(
-            this.text('npProduct'),
-            ['ETH-USD', 'BTC-USD', 'SOL-USD'].map((value) => ({ label: value, value })),
-            async (product) => {
+          return this.chooseNativeMarket(
+            'npProduct',
+            async ({ product, venue }) => {
               if (action === 'source') {
-                await this.call('native.source.start', { product });
+                await this.call('native.source.start', { product, venue });
                 return this.nativePaper(id);
               }
               return this.menu(
@@ -367,6 +393,7 @@ class QuantBrowser {
                             id,
                             operationId: require('node:crypto').randomUUID(),
                             product,
+                            venue,
                             side,
                             timeInForce,
                             price: values.npPrice,
@@ -532,22 +559,39 @@ class QuantBrowser {
       () => this.nativePaper(id),
     );
   }
-  async sources() {
-    const status = await this.call('native.source.status');
+  nativeVenueLabel(venue) {
+    return nativeVenues.find((value) => value.id === (venue || 'coinbase'))?.label || '';
+  }
+  chooseNativeMarket(title, choose, hint, back, choices = nativeVenues) {
+    const options = choices.flatMap(({ id, label, products = ['ETH-USD', 'BTC-USD', 'SOL-USD'] }) =>
+      products.map((product) => ({
+        label: label + ' · ' + product,
+        value: { venue: id, product },
+      })),
+    );
     this.menu(
-      this.text('sourceTitle'),
-      [
-        { label: this.text('back'), value: 'back' },
-        ...(status.products || []).map((product) => ({ label: product, value: product })),
-      ],
-      (product) => (product === 'back' ? this.native() : this.source(product)),
-      this.text('sourceHint'),
-      () => this.native(),
+      this.text(title),
+      [{ label: this.text('back'), value: null }, ...options],
+      (value) => (value ? choose(value) : back()),
+      hint,
+      back,
     );
   }
-  async source(product) {
+  async sources() {
+    const status = await this.call('native.source.status');
+    return this.chooseNativeMarket(
+      'sourceTitle',
+      ({ venue, product }) => this.source(product, venue),
+      this.text('sourceHint'),
+      () => this.native(),
+      status.venues || [{ ...nativeVenues[0], products: status.products }],
+    );
+  }
+  async source(product, venue = 'coinbase') {
     const status = await this.call('native.source.status'),
-      source = status.sources.find((s) => s.product === product);
+      source = status.sources.find(
+        (s) => s.product === product && (s.venue || 'coinbase') === venue,
+      );
     const labels = {
       stopped: 'nativeStopped',
       resolving: 'sourceResolving',
@@ -569,22 +613,25 @@ class QuantBrowser {
     });
     if (source?.instrument) options.push({ label: this.text('sourceBook'), value: 'book' });
     this.menu(
-      product,
+      this.nativeVenueLabel(venue) + ' · ' + product,
       options,
       async (action) => {
         if (action === 'back') return this.sources();
-        if (action === 'book') return this.sourceBook(product);
+        if (action === 'book') return this.sourceBook(product, venue);
         if (action === 'start')
           return this.ui.input(
             this.text('sourceFee'),
             async (value) => {
-              await this.call('native.source.start', { product, feeBps: Number(value) });
-              return this.source(product);
+              await this.call('native.source.start', { product, venue, feeBps: Number(value) });
+              return this.source(product, venue);
             },
-            { value: String(source?.assumptions?.feeBps ?? 10), back: () => this.source(product) },
+            {
+              value: String(source?.assumptions?.feeBps ?? 10),
+              back: () => this.source(product, venue),
+            },
           );
-        if (action === 'stop') await this.call('native.source.stop', { product });
-        return this.source(product);
+        if (action === 'stop') await this.call('native.source.stop', { product, venue });
+        return this.source(product, venue);
       },
       this.text(labels[source?.phase || 'stopped']) +
         (source?.lastError ? ' · ' + source.lastError : '') +
@@ -593,8 +640,8 @@ class QuantBrowser {
       () => this.sources(),
     );
   }
-  async sourceBook(product) {
-    const book = await this.call('native.source.book', { product });
+  async sourceBook(product, venue = 'coinbase') {
+    const book = await this.call('native.source.book', { product, venue });
     const side = (rows, key) =>
       this.text(key) +
       ' · ' +
@@ -608,6 +655,9 @@ class QuantBrowser {
     const details = [
       this.text(book.eligible ? 'sourceEligible' : 'sourceIneligible'),
       this.text('sourceFee') + ': ' + book.assumptions.feeBps,
+      book.assumptions.minQuantity
+        ? this.text('sourceMinQuantity') + ': ' + book.assumptions.minQuantity
+        : '',
       clock
         ? this.text('sourceClock') +
           ': ' +
@@ -622,14 +672,15 @@ class QuantBrowser {
       .filter(Boolean)
       .join('\n\n');
     return this.menu(
-      product,
+      this.nativeVenueLabel(venue) + ' · ' + product,
       [
         { label: this.text('back'), value: 'back' },
         { label: this.text('refresh'), value: 'refresh' },
       ],
-      (action) => (action === 'back' ? this.source(product) : this.sourceBook(product)),
+      (action) =>
+        action === 'back' ? this.source(product, venue) : this.sourceBook(product, venue),
       details,
-      () => this.source(product),
+      () => this.source(product, venue),
     );
   }
   async open() {
@@ -656,18 +707,26 @@ class QuantBrowser {
             (name) =>
               this.menu(
                 this.text('market'),
-                ['base', 'base-sepolia', 'coinbase'].map((venue) => ({
-                  label:
-                    venue === 'coinbase'
-                      ? 'Coinbase · ETH-USD'
-                      : venue === 'base'
-                        ? 'Base · WETH-USDC'
-                        : 'Base Sepolia · WETH-USDC',
-                  value: venue,
-                })),
+                [
+                  { label: 'Base · WETH-USDC', value: 'base' },
+                  { label: 'Base Sepolia · WETH-USDC', value: 'base-sepolia' },
+                  ...nativeVenues.map(({ id, label }) => ({ label, value: id })),
+                ],
                 async (venue) => {
-                  const project = await this.call('workspace.create', { name, venue });
-                  return this.project(project.id);
+                  const create = async (product) => {
+                    const project = await this.call('workspace.create', { name, venue, product });
+                    if (venue === 'kraken')
+                      await this.call('market.refresh', { id: project.id }).catch(() => {});
+                    return this.project(project.id);
+                  };
+                  if (venue === 'base' || venue === 'base-sepolia') return create();
+                  return this.menu(
+                    this.text('sourceProduct'),
+                    spotProducts.map((product) => ({ label: product, value: product })),
+                    create,
+                    this.nativeVenueLabel(venue),
+                    () => this.open(),
+                  );
                 },
               ),
             { back: () => this.open() },
@@ -687,6 +746,7 @@ class QuantBrowser {
   }
   async project(id) {
     const project = await this.call('workspace.get', { id });
+    const kraken = project.market.venue === 'kraken';
     const replayDataset = project.datasets?.find(
       (dataset) => dataset.id === project.preferences?.datasetId && (dataset.amm || dataset.series),
     );
@@ -695,11 +755,12 @@ class QuantBrowser {
       'chat',
       'goal',
       'wallet',
-      'leTitle',
+      ...(!kraken ? ['leTitle'] : []),
       'npTitle',
       'nsTitle',
       'qeTitle',
       'refresh',
+      ...(kraken ? ['candleHistory', 'candleInterval', 'krakenArchive'] : []),
       ...(project.network ? ['ammHistory'] : []),
       ...(replayDataset ? ['ammReplay', 'ammScenario'] : []),
       'import',
@@ -713,7 +774,7 @@ class QuantBrowser {
       'dataset',
       'risk',
     ];
-    const details = `${project.market.venue} · ${project.market.product}\n${project.quote?.price || '—'} · ${project.paper.status}\n${project.paper.cash} / ${project.paper.position}`;
+    const details = `${this.nativeVenueLabel(project.market.venue) || project.market.venue} · ${project.market.product}${kraken ? ' · ' + period(project.market.interval) : ''}\n${project.quote?.price || '—'} · ${project.paper.status}\n${project.paper.cash} / ${project.paper.position}`;
     this.menu(
       project.name,
       actions.map((value) => ({ label: this.text(value), value })),
@@ -721,7 +782,9 @@ class QuantBrowser {
         if (action === 'back') return this.open();
         if (action === 'wallet') return this.ui.open();
         if (action === 'leTitle')
-          return new (require('./quant-execution').LiveExecutionBrowser)(this).open(id);
+          return project.market.venue === 'coinbase'
+            ? new (require('./quant-exchange').ExchangeBrowser)(this).open(id)
+            : new (require('./quant-execution').LiveExecutionBrowser)(this).open(id);
         if (action === 'npTitle') return this.nativePaper(id);
         if (action === 'nsTitle') return this.strategiesBrowser.open(id);
         if (action === 'qeTitle')
@@ -740,6 +803,24 @@ class QuantBrowser {
         if (action === 'orders' || action === 'runs' || action === 'audit' || action === 'research')
           return this.history(id, action);
         if (action === 'import') return this.importFile(id);
+        if (action === 'candleHistory')
+          return this.candleHistory(id, project.preferences?.datasetId);
+        if (action === 'krakenArchive') return this.krakenArchive(project);
+        if (action === 'candleInterval')
+          return this.menu(
+            this.text('candleInterval'),
+            (project.market.intervals || krakenIntervals).map((value) => ({
+              label: period(value),
+              value,
+            })),
+            async (interval) => {
+              await this.call('workspace.update', { id, market: { interval } });
+              await this.call('market.refresh', { id });
+              return this.project(id);
+            },
+            period(project.market.interval),
+            () => this.project(id),
+          );
         if (action === 'ammHistory') return this.baseHistory(project);
         if (action === 'ammReplay') return this.ammReplay(project, replayDataset);
         if (action === 'ammScenario') return this.ammScenario(project, replayDataset);
@@ -828,6 +909,104 @@ class QuantBrowser {
         return this.project(id);
       },
       details,
+    );
+  }
+  krakenArchive(project) {
+    const { id } = project;
+    const back = () => this.project(id);
+    const capture = async (from, to) => {
+      try {
+        const dataset = await this.call('market.kraken.archive', { id, from, to, select: true });
+        return await this.candleHistory(id, dataset.id);
+      } catch (error) {
+        const code = String(error);
+        if (/KRAKEN_ARCHIVE_(MEMBER_)?UNAVAILABLE|KRAKEN_ARCHIVE_NO_CANDLES/.test(code))
+          throw Error(this.text('archiveUnavailable'));
+        if (/KRAKEN_ARCHIVE_(RANGE\b|QUARTER_LIMIT)|CANDLES_LIMIT/.test(code))
+          throw Error(this.text('archiveBadDates'));
+        throw error;
+      }
+    };
+    this.menu(
+      this.text('krakenArchive'),
+      [
+        { label: this.text('back'), value: 'back' },
+        { label: this.text('archiveLatest'), value: 'latest' },
+        { label: this.text('archiveCustom'), value: 'custom' },
+      ],
+      (action) => {
+        if (action === 'back') return back();
+        if (action === 'latest') return capture();
+        return this.fields(
+          ['archiveFrom', 'archiveTo'],
+          { archiveFrom: '', archiveTo: '' },
+          ({ archiveFrom, archiveTo }) => capture(archiveFrom, archiveTo),
+          () => this.krakenArchive(project),
+        );
+      },
+      this.text('archiveHint') + '\n' + this.text('archiveDates'),
+      back,
+    );
+  }
+  async candleHistory(id, datasetId, offset = 0) {
+    const limit = 6;
+    const { items, total, next, market, source, archive } = await this.call('market.candles', {
+      id,
+      datasetId,
+      offset,
+      limit,
+    });
+    const options = [{ label: this.text('back'), value: 'back' }];
+    if (!datasetId) {
+      options.push({ label: this.text('refresh'), value: 'refresh' });
+      if (total) options.push({ label: this.text('candleSave'), value: 'save' });
+    }
+    if (offset) options.push({ label: this.text('previous'), value: 'previous' });
+    if (next !== null) options.push({ label: this.text('next'), value: 'next' });
+    const rows = items.map(
+      (bar) =>
+        new Date(bar.time * 1000).toISOString().slice(0, 16).replace('T', ' ') +
+        '  ' +
+        [bar.open, bar.high, bar.low, bar.close, bar.volume]
+          .map((value) => String(value).padStart(9))
+          .join(' '),
+    );
+    return this.menu(
+      this.nativeVenueLabel(market.venue) +
+        ' · ' +
+        market.product +
+        ' · ' +
+        period(market.interval),
+      options,
+      async (value) => {
+        if (value === 'back') return this.project(id);
+        if (value === 'save') {
+          const captured = await this.call('dataset.capture', { id, select: true });
+          return this.candleHistory(id, captured.id);
+        }
+        if (value === 'refresh') {
+          await this.call('market.refresh', { id });
+          return this.candleHistory(id);
+        }
+        return this.candleHistory(
+          id,
+          datasetId,
+          value === 'next' ? next : Math.max(0, offset - limit),
+        );
+      },
+      [
+        archive
+          ? `${this.text('krakenArchive')} · ${archive.entries.map((entry) => entry.quarter).join(' / ')} · ${this.text('archiveGaps')} ${archive.gaps}/${archive.slots}`
+          : source === 'kraken-spot-committed-ohlc'
+            ? this.text('candleHistory')
+            : source,
+        this.text('candleColumns') + ' · UTC',
+        ...rows,
+        `${Math.min(offset + items.length, total)}/${total}`,
+      ]
+        .filter(Boolean)
+        .join('\n'),
+      () => this.project(id),
     );
   }
   walkForward(project) {

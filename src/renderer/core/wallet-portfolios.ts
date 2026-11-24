@@ -14,6 +14,13 @@ import { executionPercent } from '../../shared/quant-execution-format';
 import { WalletScopeEditor } from './wallet-scope-editor';
 import { walletStatus } from './wallet-panel';
 type Wallet = { id: string; name: string; address: string; portfolioBlocked?: boolean };
+type RatePolicy = { windowSeconds: number; maxSignatures: number };
+type RateObservation = RatePolicy & {
+  status: 'ready' | 'limited' | 'settling' | 'clock-rollback';
+  used: number;
+  remaining: number;
+  nextEligibleAt: number | null;
+};
 type Portfolio = {
   id: string;
   name: string;
@@ -23,6 +30,7 @@ type Portfolio = {
   expiresAt: number;
   maxFeeWei: string;
   equityFloorUsdAtomic?: string;
+  signatureRate?: RatePolicy;
   allowanceCeiling?: { token: string; atoms: string; decimals: number; baselineReportId: string };
 };
 type Equity = {
@@ -34,6 +42,7 @@ type Equity = {
 };
 type Snapshot = {
   period?: WalletPeriodSnapshot | null;
+  signatureRate?: RateObservation | null;
   portfolio: Portfolio;
   state: string;
   revision: number;
@@ -363,6 +372,10 @@ export class WalletPortfolioPanel {
       'beforebegin',
       `<div data-equity-field><label>${esc(this.t('portfolioEquityFloor'))}<input name="portfolio-equity" inputmode="decimal" maxlength="25"></label><p class="wallet-private-hint">${esc(this.t('portfolioEquityHelp'))}</p></div>`,
     );
+    scopeNode.insertAdjacentHTML(
+      'beforebegin',
+      `<fieldset class="wallet-portfolio-members"><legend>${esc(this.t('portfolioRate'))}</legend><div class="wallet-policy-grid"><label>${esc(this.t('portfolioRateWindow'))}<input type="number" name="rate-window" min="1" max="300" value="${esc(snapshot?.portfolio.signatureRate?.windowSeconds ?? '')}"></label><label>${esc(this.t('portfolioRateLimit'))}<input type="number" name="rate-limit" min="1" max="1000" value="${esc(snapshot?.portfolio.signatureRate?.maxSignatures ?? '')}"></label></div><p class="wallet-private-hint">${esc(this.t('portfolioRateHint'))}</p></fieldset>`,
+    );
     const chainField = d.querySelector<HTMLSelectElement>('[name=portfolio-chain]')!;
     const equityInput = d.querySelector<HTMLInputElement>('[name=portfolio-equity]')!;
     if (snapshot?.portfolio.equityFloorUsdAtomic)
@@ -394,6 +407,8 @@ export class WalletPortfolioPanel {
                 (n) => n.dataset.member!,
               );
             const hours = Number(values.get('portfolio-hours'));
+            const windowSeconds = values.get('rate-window'),
+              maxSignatures = values.get('rate-limit');
             const result = await this.call<{ id: string }>('challenge', {
               operation: snapshot ? 'edit' : 'create',
               ...(snapshot ? { id: snapshot.portfolio.id, revision: snapshot.revision } : {}),
@@ -404,6 +419,10 @@ export class WalletPortfolioPanel {
               maxFeeEth: values.get('portfolio-fee'),
               limits: scope.read(),
               ...(!equityInput.disabled && { equityFloorUsd: equityInput.value.trim() }),
+              signatureRate:
+                windowSeconds || maxSignatures
+                  ? { windowSeconds: Number(windowSeconds), maxSignatures: Number(maxSignatures) }
+                  : null,
             });
             challenge = result.id;
             scope.freeze();
@@ -448,6 +467,47 @@ export class WalletPortfolioPanel {
       `<p class="wallet-private-hint">${esc(this.t('portfolioHint'))}</p><p>${chainLabel(p.chainId)} · ${esc(this.t('portfolio' + snapshot.state[0]!.toUpperCase() + snapshot.state.slice(1)))} · ${esc(this.t('portfolioFee'))}: ${tokenAmount(p.maxFeeWei, 18)}</p><ul class="wallet-portfolio-member-list">${p.members.map((m) => `<li><strong>${esc(this.options.wallets().find((w) => w.id === m.walletId)?.name ?? m.walletId)}</strong><code>${esc(m.address)}</code></li>`).join('')}</ul><div data-scope></div><div class="wallet-budget-list">${rows.map((row) => `<article class="wallet-budget-row"><header><strong>${esc(this.t(row.label))}</strong><small>${esc(row.asset)}</small></header><p>${esc(row.usedText)}${row.breakdown ? '' : ' / ' + esc(row.limitText ?? this.t('usageUnlimited'))}</p>${row.limitText !== null ? `<progress max="100" value="${executionPercent(row.used, row.limit)}"></progress>` : ''}</article>`).join('')}</div><p class="wallet-private-hint">${esc(this.t('portfolioMore'))}</p><footer>${snapshot.state !== 'removed' ? `<button type="button" data-pause>${esc(this.t('portfolioPause'))}</button><button type="button" data-resume>${esc(this.t('portfolioResume'))}</button><button type="button" data-remove>${esc(this.t('portfolioRemove'))}</button>` : ''}</footer>`,
     );
     d.classList.add('wallet-budget-dialog');
+    if (snapshot.signatureRate && snapshot.state !== 'removed') {
+      d.querySelector('[data-scope]')!.insertAdjacentHTML(
+        'beforebegin',
+        `<section class="wallet-budget-row" data-portfolio-rate><header><strong>${esc(this.t('portfolioRate'))}</strong><button type="button">${esc(this.t('portfolioRateRefresh'))}</button></header><p role="status"></p><progress></progress></section>`,
+      );
+      const panel = d.querySelector('[data-portfolio-rate]')!;
+      const progress = panel.querySelector('progress')!;
+      const status = panel.querySelector('[role=status]')!;
+      const show = (rate?: RateObservation | null) => {
+        progress.hidden = !rate;
+        if (!rate) {
+          status.textContent = this.t('portfolioRateDisabled');
+          return;
+        }
+        const message =
+          rate.status === 'clock-rollback'
+            ? walletStatus(this.options.language(), 'WALLET_PORTFOLIO_RATE_CLOCK_ROLLBACK')
+            : this.t(
+                {
+                  ready: 'portfolioRateReady',
+                  limited: 'portfolioRateLimited',
+                  settling: 'portfolioRateSettling',
+                }[rate.status],
+              );
+        status.textContent = `${rate.used} / ${rate.maxSignatures} · ${rate.windowSeconds} s · ${message}${rate.nextEligibleAt ? ' · ' + this.t('portfolioRateNext') + ' ' + new Date(rate.nextEligibleAt).toLocaleString() : ''}`;
+        progress.max = rate.maxSignatures;
+        progress.value = Math.min(rate.used, progress.max);
+        progress.setAttribute('aria-label', this.t('portfolioRate'));
+      };
+      show(snapshot.signatureRate);
+      const refresh = panel.querySelector('button')!;
+      refresh.onclick = () =>
+        this.run(d, async () => {
+          refresh.disabled = true;
+          try {
+            show((await this.call<Snapshot>('get', { id })).signatureRate);
+          } finally {
+            refresh.disabled = false;
+          }
+        });
+    }
     if (p.equityFloorUsdAtomic && snapshot.state !== 'removed') {
       d.querySelector('[data-scope]')!.insertAdjacentHTML(
         'beforebegin',

@@ -8,6 +8,7 @@ pub mod messages;
 pub mod periods;
 pub mod portfolio;
 pub mod portfolio_history;
+mod portfolio_rate;
 pub mod receipts;
 pub mod scope;
 pub mod tokens;

@@ -1,0 +1,44 @@
+{
+  "zh": {
+    "krakenArchive": "Kraken 季度历史",
+    "archiveFetch": "下载并固定数据集",
+    "archiveHint": "仅下载当前交易对和周期的数据。留空使用上一完整季度，最多 10,000 根；较大周期只纳入完整的 UTC 区间。",
+    "archiveDates": "也可指定起止日期（YYYY-MM-DD，UTC，结束日不含）",
+    "archiveLatest": "下载上一完整季度",
+    "archiveCustom": "指定日期范围",
+    "archiveFrom": "开始日期（UTC）",
+    "archiveTo": "结束日期（UTC，不含）",
+    "archiveGaps": "空缺区间",
+    "archiveSourceInterval": "源周期",
+    "archiveUnavailable": "Kraken 尚未提供所选季度或交易对的数据。",
+    "archiveBadDates": "请选择 2026 年起已结束季度中的有效日期范围，每次最多 8 个季度和 10,000 个周期。"
+  },
+  "en": {
+    "krakenArchive": "Kraken quarterly history",
+    "archiveFetch": "Download and pin dataset",
+    "archiveHint": "Fetches only the selected pair and interval. Leave dates empty for up to 10,000 bars from the last completed quarter. Larger bars use complete UTC intervals.",
+    "archiveDates": "Optional date range (YYYY-MM-DD in UTC, end excluded)",
+    "archiveLatest": "Download last completed quarter",
+    "archiveCustom": "Choose date range",
+    "archiveFrom": "Start date (UTC)",
+    "archiveTo": "End date (UTC, excluded)",
+    "archiveGaps": "Empty intervals",
+    "archiveSourceInterval": "Source interval",
+    "archiveUnavailable": "Kraken has no archive data for the selected quarter or pair.",
+    "archiveBadDates": "Choose dates in completed quarters from 2026 onward, up to 8 quarters and 10,000 intervals."
+  },
+  "de": {
+    "krakenArchive": "Kraken-Quartalshistorie",
+    "archiveFetch": "Datensatz herunterladen und auswählen",
+    "archiveHint": "Lädt nur das gewählte Handelspaar und Intervall. Ohne Datumsangaben werden bis zu 10.000 Kerzen aus dem letzten abgeschlossenen Quartal geladen. Größere Kerzen nutzen vollständige UTC-Intervalle.",
+    "archiveDates": "Optionaler Zeitraum (JJJJ-MM-TT in UTC, Ende exklusiv)",
+    "archiveLatest": "Letztes abgeschlossenes Quartal laden",
+    "archiveCustom": "Zeitraum auswählen",
+    "archiveFrom": "Startdatum (UTC)",
+    "archiveTo": "Enddatum (UTC, exklusiv)",
+    "archiveGaps": "Leere Intervalle",
+    "archiveSourceInterval": "Quellintervall",
+    "archiveUnavailable": "Kraken hat keine Archivdaten für das gewählte Quartal oder Handelspaar.",
+    "archiveBadDates": "Wähle Daten in abgeschlossenen Quartalen ab 2026, bis zu 8 Quartale und 10.000 Intervalle."
+  }
+}

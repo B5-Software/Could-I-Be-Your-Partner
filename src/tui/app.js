@@ -35,6 +35,7 @@ const questionnaireLabels = require('../shared/quant-questionnaire-labels.json')
 const { SuperAgentBrowser } = require('./super-agent');
 
 const MODES = ['chat', 'babe', 'code'];
+const isAgentRunning = (status) => status === 'running' || status === 'working';
 
 class TuiApp {
   constructor(options = {}) {
@@ -105,6 +106,8 @@ class TuiApp {
     this.state.mode = mode;
     this._unsubscribe = this.runtime.onEvent((event) => {
       if (event.type === 'wallet-changed') void this.walletBrowser.changed().catch(() => {});
+      if (event.type === 'quant-exchange-changed' && this.state.modal?.exchangeEnv === event.env)
+        void this.state.modal.refreshExchange?.().catch(() => {});
       if (event.type === 'wallet-allowance-monitor')
         this.walletBrowser.notify(
           this.walletBrowser.text(
@@ -1312,7 +1315,7 @@ class TuiApp {
         }
         break;
       case 'status':
-        this.state.running = event.status === 'running' || event.status === 'working';
+        this.state.running = isAgentRunning(event.status);
         if (this.state.running && !this._startedAt) this._startedAt = this.clock();
         if (!this.state.running) {
           if (this.state.toast?.retry) this.state.toast = null;
@@ -1591,7 +1594,7 @@ class TuiApp {
     this.state = {
       ...this.state,
       modal: null,
-      running: session.busy === true,
+      running: isAgentRunning(session.status),
       usage: null,
       context: null,
       compaction: null,
@@ -1603,7 +1606,7 @@ class TuiApp {
     this.attachments = [];
     this._toolEntries = new Map();
     this._streamEntry = null;
-    this._startedAt = session.busy ? this.clock() : 0;
+    this._startedAt = this.state.running ? this.clock() : 0;
     this.state.mode = session.mode || 'chat';
     this.state.minimalMode = session.minimalMode === true;
     this.state.title = session.title || '';
@@ -1692,19 +1695,21 @@ class TuiApp {
           (error && error.message ? error.message : String(error)),
       });
     } finally {
-      state.running = this.runtime.getSession(key)?.busy === true;
-      if (this.activeKey === key && !state.running) this._startedAt = 0;
+      // A terminal event can arrive while the send acknowledgement is in flight.
+      await this._eventQueue;
+      const status = this.runtime.getSession(key)?.status || 'idle';
+      if (state.running && !isAgentRunning(status) && this._sessionViews.get(key)?.state === state)
+        this.handleRuntimeEvent({ type: 'status', key, status });
     }
   }
 
   _stop() {
     try {
-      this.runtime.stop(this.activeKey);
+      Promise.resolve(this.runtime.stop(this.activeKey)).catch(() => {});
     } catch {
       /* ignore */
     }
-    this.state.running = false;
-    this._startedAt = 0;
+    this.handleRuntimeEvent({ type: 'status', key: this.activeKey, status: 'interrupted' });
     this.state.toast = { text: t('ui.tui.stopRequested', '已请求停止当前任务') };
   }
 

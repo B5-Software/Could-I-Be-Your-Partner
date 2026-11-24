@@ -99,7 +99,7 @@ app
         `document.querySelector('[data-create]').click();new Promise(r=>setTimeout(r,20))`,
       );
       await win.webContents.executeJavaScript(
-        `document.querySelector('[name=portfolio-name]').value='新的双钱包预算';document.querySelectorAll('[data-member]').forEach(n=>n.checked=true);document.querySelector('[name=limit-maxTransactions]').value='6';document.querySelector('[name=portfolio-equity]').value='500.25';`,
+        `document.querySelector('[name=portfolio-name]').value='新的双钱包预算';document.querySelectorAll('[data-member]').forEach(n=>n.checked=true);document.querySelector('[name=limit-maxTransactions]').value='6';document.querySelector('[name=portfolio-equity]').value='500.25';document.querySelector('[name=rate-window]').value='30';document.querySelector('[name=rate-limit]').value='4';`,
       );
       await shot('create-dark');
       await win.webContents.executeJavaScript(
@@ -112,6 +112,7 @@ app
       assert.deepEqual(challenge.input.walletIds, ['one', 'two']);
       assert.equal(challenge.input.limits.maxTransactions, '6');
       assert.equal(challenge.input.equityFloorUsd, '500.25');
+      assert.deepEqual(challenge.input.signatureRate, { windowSeconds: 30, maxSignatures: 4 });
       assert.equal(
         await win.webContents.executeJavaScript(
           `Array.from(document.querySelectorAll('form input,form select,form textarea')).filter(n=>n.name!=='portfolio-ack').every(n=>n.disabled)`,
@@ -152,6 +153,8 @@ app
       const equity = await win.webContents.executeJavaScript(`(async()=>{
         document.querySelector('dialog[open]').close();
         group.portfolio.equityFloorUsdAtomic='50025000000';
+        group.portfolio.signatureRate={windowSeconds:30,maxSignatures:4};
+        group.signatureRate={...group.portfolio.signatureRate,status:'limited',used:4,remaining:0,nextEligibleAt:Date.now()+30000};
         const original=panel.options.request;
         panel.options.request=async(action,input)=>{
           if(action!=='portfolio.equity')return original(action,input);
@@ -164,6 +167,19 @@ app
         return document.querySelector('[data-equity-status]').textContent;
       })()`);
       assert.match(equity, /低于下限.*490 USD.*#123/);
+      assert.match(
+        await win.webContents.executeJavaScript(
+          `document.querySelector('[data-portfolio-rate]').textContent`,
+        ),
+        /4 \/ 4.*窗口已满.*最早复核时间/,
+      );
+      const refreshed = await win.webContents.executeJavaScript(`(async()=>{
+        group.signatureRate={...group.signatureRate,status:'ready',used:2,remaining:2,nextEligibleAt:null};
+        document.querySelector('[data-portfolio-rate] button').click();
+        await new Promise(resolve=>setTimeout(resolve,20));
+        return document.querySelector('[data-portfolio-rate] [role=status]').textContent;
+      })()`);
+      assert.match(refreshed, /2 \/ 4.*窗口有余量/);
       await shot('equity-floor-light');
       await win.webContents.executeJavaScript(`document.querySelector('[data-pause]').click()`);
       await new Promise((r) => setTimeout(r, 30));

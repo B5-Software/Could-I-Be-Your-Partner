@@ -8,6 +8,26 @@ const { DEFAULT_SETTINGS } = require('../../src/main/settings/defaults')({
 const { create } = require('../../src/renderer/js/settings-client');
 const LLM = require('../../src/main/llm-providers');
 
+test('Agent iteration settings replace the old default and preserve explicit limits', () => {
+  assert.equal(loadSettings(DEFAULT_SETTINGS, {}).agent.iterationLimit, 1024);
+  assert.equal(
+    loadSettings(DEFAULT_SETTINGS, { agent: { maxIterations: 50 } }).agent.iterationLimit,
+    1024,
+  );
+  assert.equal(
+    loadSettings(DEFAULT_SETTINGS, { agent: { maxIterations: 73 } }).agent.iterationLimit,
+    73,
+  );
+  assert.equal(
+    loadSettings(DEFAULT_SETTINGS, { agent: { iterationLimit: -1 } }).agent.iterationLimit,
+    1024,
+  );
+  let settings = mergeSettings(DEFAULT_SETTINGS, { agent: { iterationLimit: 0 } });
+  assert.equal(loadSettings(DEFAULT_SETTINGS, settings).agent.iterationLimit, 0);
+  settings = mergeSettings(settings, { agent: { iterationLimit: 50 } });
+  assert.equal(loadSettings(DEFAULT_SETTINGS, settings).agent.iterationLimit, 50);
+});
+
 test('legacy limits migrate once without losing preferences or the previous stop behavior', () => {
   const old = {
     llm: { dailyMaxTokens: 12345 },

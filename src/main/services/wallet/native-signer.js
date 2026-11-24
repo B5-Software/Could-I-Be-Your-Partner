@@ -103,6 +103,7 @@ class NativeSigner extends EventEmitter {
             value.periodBudgets !== 1 ||
             value.messages !== 1 ||
             value.portfolioEquity !== 1 ||
+            value.portfolioSignatureRate !== 1 ||
             value.portfolioAllowance !== 1 ||
             value.vault !== 'CIBYP-WALLET/1'
           ) {

@@ -28,6 +28,7 @@ fn instrument() -> Instrument {
         tick: n("0.5"),
         lot: n("0.000000000000000001"),
         min_notional: n("0.000000000000000001"),
+        min_quantity: None,
         fee_bps: 100,
     }
 }

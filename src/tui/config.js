@@ -2,6 +2,7 @@
 'use strict';
 const { LineEditor } = require('./editor');
 const { t, getLanguage } = require('./text');
+const AgentIterations = require('../shared/agent-iterations');
 
 const ENUMS = {
   'budget.subscriptionDisplay': ['api-equivalent', '5hour', 'weekly', 'monthly', 'urgent'],
@@ -81,6 +82,8 @@ function parseValue(field, value) {
     parsed = Number(value);
     if (!value.trim() || !Number.isFinite(parsed))
       throw new Error(t('ui.tui.configNumber', '请输入有效数字'));
+    if (field.path === 'agent.iterationLimit' && !AgentIterations.valid(parsed))
+      throw new Error(t('ui.tui.configRange', '数值超出允许范围'));
   } else if (field.type === 'json') parsed = restoreSecrets(JSON.parse(value), field.value);
   if (ENUMS[field.path] && !ENUMS[field.path].includes(parsed))
     throw new Error(ENUMS[field.path].join(' | '));
@@ -134,6 +137,8 @@ class ConfigBrowser {
     );
   }
   readable(field) {
+    if (field.path === 'agent.iterationLimit' && field.value === 0)
+      return t('ui.tui.configAgentUnlimited', '无上限');
     if (field.secret) return field.value ? MASK : '—';
     if (field.type === 'boolean')
       return field.value ? t('ui.tui.configOn', '开启') : t('ui.tui.configOff', '关闭');
@@ -282,9 +287,11 @@ class ConfigBrowser {
       kind: 'configEdit',
       title: this.label(field),
       subtitle:
-        field.type === 'number'
-          ? [field.min, field.max].filter((value) => value !== undefined).join(' – ')
-          : '',
+        field.path === 'agent.iterationLimit'
+          ? t('ui.tui.configAgentIterations', '每次执行默认 1024 轮 · 0 表示无上限')
+          : field.type === 'number'
+            ? [field.min, field.max].filter((value) => value !== undefined).join(' – ')
+            : '',
       inputMode: true,
       masked: field.secret,
       editor,

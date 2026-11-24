@@ -37,6 +37,10 @@ fn sweep(request: &Submit, lot: Fixed, book: &Book, side: BookSide) -> Result<Ve
     if request.time_in_force == TimeInForce::Fok && remaining.0 > 0 {
         fills.clear();
     }
+    check(
+        book.can_track_simulated_takes(side, &fills),
+        "PAPER_SWEEP_TRACKING_LIMIT",
+    )?;
     Ok(fills)
 }
 

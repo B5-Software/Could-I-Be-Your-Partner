@@ -1,7 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 'use strict';
 const { createHash } = require('node:crypto');
-const { PRODUCTS, amount, decimal } = require('./coinbase-stream');
+const { amount, decimal } = require('./market-stream');
+const { nativeSourceKey, selectNativeSource } = require('./native-markets');
 const fail = (code) => {
   throw Error(code);
 };
@@ -235,7 +236,8 @@ class NativePaper {
     }
     if (action === 'submit') {
       const orderId = identity(id, input.operationId);
-      if (!PRODUCTS.includes(input.product)) fail('SOURCE_MARKET_INVALID');
+      const venue = input.venue ?? 'coinbase';
+      nativeSourceKey(input.product, venue);
       if (!['buy', 'sell'].includes(input.side)) fail('INVALID_SIDE');
       const timeInForce = input.timeInForce ?? 'gtc';
       if (!['gtc', 'ioc', 'fok'].includes(timeInForce)) fail('PAPER_TIME_IN_FORCE_INVALID');
@@ -256,7 +258,7 @@ class NativePaper {
           r.price !== price ||
           r.quantity !== quantity ||
           (r.time_in_force ?? 'gtc') !== timeInForce ||
-          !r.instrument.startsWith('coinbase:' + input.product + ':')
+          !r.instrument.startsWith(venue + ':' + input.product + ':')
         )
           fail('COMMAND_CONFLICT');
         if (service.workspace(id).nativePaper?.pendingOrder?.orderId === orderId)
@@ -264,9 +266,11 @@ class NativePaper {
         return { duplicate: true, order: prior };
       }
       if (service.workspace(id).nativePaper?.pendingOrder) fail('NATIVE_RECONCILE_REQUIRED');
-      const source = service.nativeMarkets
-        .inspect()
-        .sources.find((s) => s.product === input.product);
+      const source = selectNativeSource(
+        service.nativeMarkets.inspect().sources,
+        input.product,
+        venue,
+      );
       if (source?.phase !== 'ready' || !source.instrument) fail('FRESH_BOOK_REQUIRED');
       const request = {
         id: orderId,

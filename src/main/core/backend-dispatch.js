@@ -2,6 +2,8 @@
 'use strict';
 
 const { createIpcDispatch } = require('./ipc-dispatch');
+const { existsSync } = require('node:fs');
+const { join } = require('node:path');
 
 // The preload is the single capability declaration for every frontend. Never
 // expose arbitrary properties of the runtime, Electron, or the IPC registry.
@@ -71,7 +73,10 @@ function createBackendDispatch({
     'prepareWorkspace',
     'uploadAttachment',
   ]);
-  const quantDirectory = storageDir && require('node:path').join(storageDir, 'quant');
+  const quantDirectory = storageDir && join(storageDir, 'quant');
+  const walletDirectory = storageDir && join(storageDir, 'wallet');
+  const hasExchangeLedger = () =>
+    quantDirectory && existsSync(join(quantDirectory, 'coinbase-orders.json'));
   // Lazily create ONE owner for every attached frontend, outside chat/workspace cleanup.
   const getQuant = () => {
     if (!runtime.quantService) {
@@ -89,13 +94,38 @@ function createBackendDispatch({
     if (!runtime.walletService) {
       if (!storageDir) throw new Error('WALLET_STORAGE_UNAVAILABLE');
       runtime.walletService = new (require('../services/wallet').WalletService)({
-        directory: require('node:path').join(storageDir, 'wallet'),
+        directory: walletDirectory,
         publish: (event) => eventBus.publish('agent:session-event', event),
-        onEmergencyHalt: () => runtime.quantService?.liveExecution?.emergencyHalt(),
+        onEmergencyHalt: () => {
+          runtime.quantService?.exchangeOrders?.emergencyHalt();
+          return runtime.quantService?.liveExecution?.emergencyHalt();
+        },
+        onExchangeCancel: (latchId, options) => {
+          if (hasExchangeLedger())
+            getQuant().exchange().emergencyCancellation.start(latchId, options);
+        },
+        exchangeCancelStatus: (latchId) =>
+          runtime.quantService?.exchangeOrders?.emergencyCancellation.status(latchId) ||
+          (!hasExchangeLedger()
+            ? { phase: 'complete', targeted: 0, canceled: 0, remaining: 0 }
+            : null),
       });
+      if (runtime.walletService.emergency.status().cancelExchangeOrders)
+        queueMicrotask(() => runtime.walletService?.startExchangeCancellation());
     }
     return runtime.walletService;
   };
+  if (
+    hasExchangeLedger() &&
+    walletDirectory &&
+    existsSync(join(walletDirectory, 'live-emergency-stop.json'))
+  ) {
+    try {
+      getWallet();
+    } catch {
+      /* Report a damaged or inaccessible latch through the Wallet request path. */
+    }
+  }
   if (
     storageDir &&
     require('../services/wallet/portfolio-allowance-monitor').PortfolioAllowanceMonitor.shouldStart(
@@ -149,6 +179,18 @@ function createBackendDispatch({
       getSuperAgent();
     } catch (error) {
       runtime.superAgentError = error.message;
+    }
+  }
+  if (
+    quantDirectory &&
+    existsSync(
+      require('../services/quant/exchange-order-watch').ExchangeOrderWatch.file(quantDirectory),
+    )
+  ) {
+    try {
+      getQuant().exchange();
+    } catch {
+      /* The exchange panel surfaces inaccessible order records. */
     }
   }
   if (

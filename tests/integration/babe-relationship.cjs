@@ -31,11 +31,15 @@ fs.writeFileSync(
       relationship: { enabled: true, pace: 'natural', start: 'gradual', showMetrics: true },
     },
     llm: {
-      provider: 'openai-compat',
-      apiUrl: 'http://memory.fixture/v1',
+      provider: 'opencode-go',
+      apiUrl: '',
       model: 'fixture',
-      apiKey: 'fixture',
-      pool: [],
+      apiKey: '',
+      opencodeTransport: 'cibyp',
+      activeEntryId: 'babe-go-fixture',
+      pool: [
+        { id: 'babe-go-fixture', provider: 'opencode-go', model: 'fixture', apiKey: 'fixture' },
+      ],
       streamResponses: false,
       maxRetries: 1,
     },
@@ -47,12 +51,15 @@ const errors = [];
 const localFetch = global.fetch;
 const fakeFetch = async (url, options = {}) => {
   if (String(url).startsWith('http://127.0.0.1:')) return localFetch(url, options);
-  if (String(url).startsWith('http://memory.fixture/')) {
+  if (String(url) === 'https://opencode.ai/zen/go/v1/chat/completions') {
+    assert.equal(new Headers(options.headers).get('authorization'), 'Bearer fixture');
     const body = JSON.parse(options.body);
     requests.push(body);
-    const content =
-      '记住了。下次想散步时，我们就聊聊海边的风，再挑一本喜欢的小说。' +
-      '<cibyp-relationship>{"kind":"connection","evidence":"我喜欢海边散步","memory":{"kind":"preference","content":"用户喜欢海边散步，想一起聊推理小说。"}}</cibyp-relationship>';
+    const guiMessage = body.messages?.some((message) => message.content === '从 GUI 发送这条消息');
+    const content = guiMessage
+      ? '这条 GUI 消息已经收到。'
+      : '记住了。下次想散步时，我们就聊聊海边的风，再挑一本喜欢的小说。' +
+        '<cibyp-relationship>{"kind":"connection","evidence":"我喜欢海边散步","memory":{"kind":"preference","content":"用户喜欢海边散步，想一起聊推理小说。"}}</cibyp-relationship>';
     return new Response(
       JSON.stringify({
         choices: [{ message: { role: 'assistant', content }, finish_reason: 'stop' }],
@@ -184,8 +191,28 @@ ipcMain.once('app:renderer-ready', (event) =>
         ),
       );
       assert.deepEqual((await js('window.api.babeRelationshipGet()')).metrics, beforeChild);
+      await js("window.navigatePage('settings');window.activateSettingsTab('context')");
+      await until("document.getElementById('setting-agent-iteration-limit').value === '1024'");
+      await js(`(() => {
+        const input = document.getElementById('setting-agent-iteration-limit');
+        input.value = '0';
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+      })()`);
+      await until('(async()=>(await window.api.getSettings()).agent.iterationLimit === 0)()');
+      await js("window.navigatePage('babe')");
+      await until("document.getElementById('page-babe').classList.contains('active')");
+      await js(`(() => {
+        const input = document.getElementById('babe-chat-input');
+        input.value = '从 GUI 发送这条消息';
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        document.getElementById('btn-babe-send').click();
+      })()`);
+      await until(
+        "document.getElementById('babe-chat-messages').textContent.includes('这条 GUI 消息已经收到')",
+      );
+      assert.ok(requests.some((r) => r.messages?.some((m) => m.content === '从 GUI 发送这条消息')));
       console.log(
-        '[babe] PASS: real host Agent, shared relationship across new/old chats, hidden protocol, settings/i18n and themed screenshots.',
+        '[babe] PASS: GUI sends with a model-pool built-in endpoint, shared relationship, settings/i18n and themed screenshots.',
       );
       finish();
     } catch (error) {

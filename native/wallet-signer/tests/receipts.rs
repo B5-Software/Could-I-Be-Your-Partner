@@ -154,7 +154,7 @@ fn upgrading_a_receipt_only_database_preserves_receipts_and_recovers_nonce_locks
     store.commit(&receipt()).unwrap();
     drop(store);
     let connection = rusqlite::Connection::open(directory.0.join("receipts.sqlite")).unwrap();
-    connection.execute_batch("DROP TABLE message_approvals;DROP TABLE message_receipts;DROP TABLE message_metadata;DROP TABLE portfolio_revisions;DROP TABLE portfolio_revision_metadata;ALTER TABLE portfolio_signatures DROP COLUMN policy_hash;DROP TABLE period_charges;DROP TABLE period_windows;DROP TABLE period_accounts;DROP TABLE period_metadata;DROP TABLE agent_scope_charges;DROP TABLE agent_scope_signatures;DROP TABLE agent_scope_usage;DROP TABLE agent_scope_metadata;DROP TABLE agent_scopes;DROP TABLE portfolio_metadata;DROP TABLE portfolio_signatures;DROP TABLE portfolio_usage;DROP TABLE portfolio_members;DROP TABLE portfolios;DROP TABLE grant_usage;DROP TABLE authorization_usage;DROP TABLE nonce_locks;DROP TABLE plans;DROP TABLE approvals;DROP TABLE grants;DROP TABLE authority_fences;DROP TABLE denials;PRAGMA user_version=0;").unwrap();
+    connection.execute_batch("DROP TABLE portfolio_rate_migration;DROP TABLE message_approvals;DROP TABLE message_receipts;DROP TABLE message_metadata;DROP TABLE portfolio_revisions;DROP TABLE portfolio_revision_metadata;ALTER TABLE portfolio_signatures DROP COLUMN policy_hash;DROP TABLE period_charges;DROP TABLE period_windows;DROP TABLE period_accounts;DROP TABLE period_metadata;DROP TABLE agent_scope_charges;DROP TABLE agent_scope_signatures;DROP TABLE agent_scope_usage;DROP TABLE agent_scope_metadata;DROP TABLE agent_scopes;DROP TABLE portfolio_metadata;DROP TABLE portfolio_signatures;DROP TABLE portfolio_usage;DROP TABLE portfolio_members;DROP TABLE portfolios;DROP TABLE grant_usage;DROP TABLE authorization_usage;DROP TABLE nonce_locks;DROP TABLE plans;DROP TABLE approvals;DROP TABLE grants;DROP TABLE authority_fences;DROP TABLE denials;PRAGMA user_version=0;").unwrap();
     drop(connection);
     let store = Store::open(&directory.0).unwrap();
     assert_eq!(
@@ -173,5 +173,5 @@ fn upgrading_a_receipt_only_database_preserves_receipts_and_recovers_nonce_locks
     let version: u32 = connection
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 8);
+    assert_eq!(version, 9);
 }

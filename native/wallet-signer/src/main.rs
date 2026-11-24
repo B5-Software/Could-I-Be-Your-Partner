@@ -61,7 +61,7 @@ fn main() {
             return;
         }
     };
-    if send(json!({"type":"ready","protocol":10,"version":"0.1.0","vault":"CIBYP-WALLET/1","receipts":1,"authority":2,"portfolios":1,"agentScopes":1,"periodBudgets":1,"messages":1,"portfolioEquity":1,"portfolioAllowance":1}))
+    if send(json!({"type":"ready","protocol":10,"version":"0.1.0","vault":"CIBYP-WALLET/1","receipts":1,"authority":2,"portfolios":1,"agentScopes":1,"periodBudgets":1,"messages":1,"portfolioEquity":1,"portfolioAllowance":1,"portfolioSignatureRate":1}))
         .is_err()
     {
         return;

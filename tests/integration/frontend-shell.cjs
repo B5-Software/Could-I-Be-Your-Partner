@@ -604,6 +604,29 @@ ipcMain.once('app:renderer-ready', (event) =>
           path.resolve(__dirname, '../../.cache/screenshots/frontend-v2-webui.png'),
           (await web.webContents.capturePage({ stayAwake: true })).toPNG(),
         );
+        const browserQuant = await web.webContents.executeJavaScript(`(async()=>{${checkHelpers}
+        const workspace = await window.api.backendRequest('quant:request','workspace.create',{name:'Browser quant layout fixture',venue:'coinbase'});
+        window.navigatePage('quant');
+        await until(()=>!document.querySelector('[data-layout]').hidden);
+        const mode = document.querySelector('[data-action=immersive]');
+        mode.click();
+        await until(()=>document.querySelector('[data-layout]').dataset.layout==='immersive');
+        const bar = document.querySelector('[data-quant-split=assistant]');
+        const key = bar.getAttribute('aria-orientation') === 'horizontal' ? 'ArrowDown' : 'ArrowRight';
+        const setting = key === 'ArrowDown' ? 'focusStackMarketHeight' : 'focusMarketShare';
+        bar.dispatchEvent(new KeyboardEvent('keydown',{key}));
+        let value;
+        await until(async()=>{
+          value = (await window.api.backendRequest('quant:request','workspace.get',{id:workspace.id})).preferences[setting];
+          return Number.isInteger(value);
+        });
+        check(document.querySelector('[data-chart-card]').getBoundingClientRect().height>300, 'Browser chart clipped in immersive layout');
+        return {id:workspace.id,setting,value};
+      })()`);
+        const fromDesktop = await contents.executeJavaScript(
+          `window.api.backendRequest('quant:request','workspace.get',{id:${JSON.stringify(browserQuant.id)}})`,
+        );
+        assert.equal(fromDesktop.preferences[browserQuant.setting], browserQuant.value);
         web.destroy();
         console.log(
           '[frontend-shell] Authenticated WebUI, shared preference and browser draft passed',

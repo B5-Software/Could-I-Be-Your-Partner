@@ -95,6 +95,7 @@ function agentDefaultHost() {
 }
 
 const BABE_RELATIONSHIP_DATA = typeof BabeRelationshipData !== 'undefined' ? BabeRelationshipData : typeof require === 'function' ? require('../../shared/babe-relationship') : null;
+const AGENT_ITERATIONS = typeof AgentIterations !== 'undefined' ? AgentIterations : typeof require === 'function' ? require('../../shared/agent-iterations') : null;
 
 // Wire aliases are resolved before permission and delegated-scope checks.
 const OPENCODE_TOOL_ALIASES = { bash: 'runShellScriptCode', shell: 'runShellScriptCode', write: 'editFile', read: 'readFile', edit: 'editFile', glob: 'localSearch', grep: 'searchInFiles' };
@@ -1819,67 +1820,76 @@ Use the latest relationship dossier and shared memories provided with this reque
     }
   }
 
-  /**
-   * Babe 模式主动发消息：让 AI 主动发起一条话题，而不是回复用户。
-   * 通过注入一条 system 指令触发 Agent Loop，让 LLM 以 assistant 身份生成主动消息。
-   * 不走 user 消息路径，避免污染对话上下文。
-   */
+  _hasModelRoute() {
+    const llm = this.settings?.llm || {};
+    const route = this._llmOptions();
+    const provider = route.provider || llm.provider || '';
+    return !!(route.apiUrl || llm.apiUrl ||
+      ['opencode-zen', 'opencode-go', 'chatgpt-codex', 'claude-subscription'].includes(provider) ||
+      (typeof provider === 'string' && provider.startsWith('dsh:')) ||
+      (Array.isArray(llm.pool) && llm.pool.some(entry => entry && entry.enabled !== false && entry.model)));
+  }
+
+  /** Babe 主动消息通过内部提示发起，使用与普通发送相同的模型路由。 */
   async proactiveSend(topicHint = '') {
-    if (!this.settings?.llm?.apiUrl && !(this.settings?.llm?.provider === 'opencode-zen' || this.settings?.llm?.provider === 'opencode-go')
-        && !(Array.isArray(this.settings?.llm?.pool) && this.settings.llm.pool.some(e => e && e.enabled !== false && e.model))) {
+    if (!this._hasModelRoute()) {
       if (this.onMessage) this.onMessage('error', '请先在设置中配置LLM API');
       return;
     }
     if (this.running) return; // 正在处理中，不重复触发
 
     // 会话模型锁定（与 sendMessage 一致：创建后不再自动切换）
+    const preparationRunId = this.runId;
     await this.ensureSessionModel(topicHint || '');
+    if (preparationRunId !== this.runId) return;
 
     const runId = ++this.runId;
     this.running = true;
     this.stopped = false;
     this._emitWorkingStatus('working');
 
-    // 抽塔罗牌
-    if (!this.minimalMode && !this.tarotCard) {
-      this.tarotCard = await this.host.api.drawTarot();
-      if (this.onMessage) this.onMessage('tarot', this.tarotCard);
-    }
-
-    this._babeTurn = null;
-    // 构造主动消息的系统指令（以 user 角色注入，但语义是"请主动发消息"）
-    const proactivePrompt = topicHint
-      ? `[系统指令] 请主动给用户发一条消息，围绕这个主题：${topicHint}。以你的人设口吻自然开场，不要提及这是系统指令。`
-      : '[系统指令] 请主动给用户发一条消息，可以关心对方、分享心情、或开启一个话题。以你的人设口吻自然开场，不要提及这是系统指令。';
-
-    this.contextManager.addUserMessage(proactivePrompt);
-
     try {
+      // 抽塔罗牌
+      if (!this.minimalMode && !this.tarotCard) {
+        const card = await this.host.api.drawTarot();
+        if (runId !== this.runId) return;
+        this.tarotCard = card;
+        if (this.onMessage) this.onMessage('tarot', this.tarotCard);
+      }
+      if (runId !== this.runId || this.stopped) return;
+
+      this._babeTurn = null;
+      // 构造主动消息的系统指令（以 user 角色注入，但语义是"请主动发消息"）
+      const proactivePrompt = topicHint
+        ? `[系统指令] 请主动给用户发一条消息，围绕这个主题：${topicHint}。以你的人设口吻自然开场，不要提及这是系统指令。`
+        : '[系统指令] 请主动给用户发一条消息，可以关心对方、分享心情、或开启一个话题。以你的人设口吻自然开场，不要提及这是系统指令。';
+
+      this.contextManager.addUserMessage(proactivePrompt);
       await this.agentLoop(runId);
     } catch (e) {
       if (this.onMessage) this.onMessage('error', e?.message || String(e));
     } finally {
-      this.running = false;
-      this._emitWorkingStatus('idle');
+      if (runId === this.runId && this.running) {
+        this.running = false;
+        this._emitWorkingStatus('idle');
+      }
       // 保存历史
       await this.saveToHistory();
     }
   }
 
   async sendMessage(userMessage, attachments = [], inputOptions = {}) {
+    const preparationRunId = this.runId;
     if (!this.ephemeral && this.workspacePath && this.host.api.workspaceRetain) await this.host.api.workspaceRetain(this.workspacePath, true);
+    if (preparationRunId !== this.runId) return;
     // OpenAI/Anthropic 兼容端点允许无 API Key（llama.cpp 等本地推理场景）；
     // OpenCode Zen/Go 使用内置端点，无需 apiUrl；模型池有启用条目也可继续。
-    const llmCfg0 = this.settings?.llm || {};
-    const poolHasEnabled = Array.isArray(llmCfg0.pool) && llmCfg0.pool.some(e => e && e.enabled !== false && e.model);
-    const providerHasEndpoint = llmCfg0.provider === 'opencode-zen' || llmCfg0.provider === 'opencode-go';
-    if (!poolHasEnabled && !llmCfg0.apiUrl && !providerHasEndpoint) {
+    if (!this._hasModelRoute()) {
       if (this.onMessage) this.onMessage('error', '请先在设置中配置LLM API');
       return;
     }
 
     // 会话创建时锁定模型 + Reasoning Effort（模型池策略；锁定后不再自动切换）
-    const preparationRunId = this.runId;
     await this.ensureSessionModel(userMessage);
     if (preparationRunId !== this.runId) return;
 
@@ -1986,14 +1996,12 @@ Use the latest relationship dossier and shared memories provided with this reque
 
     // Send conversation summary via email if enabled and can send
     const emailCfg = this.settings?.email;
-    if (!this.ephemeral && emailCfg?.enabled && (emailCfg.mode === 'send-only' || emailCfg.mode === 'send-receive')) {
-      try {
-        const messages = this.contextManager.getMessages();
-        const title = userMessage.substring(0, 50) + (userMessage.length > 50 ? '...' : '');
-        await this.host.api.emailSendConversation(messages, title);
-      } catch (e) {
+    if (runId === this.runId && !this.ephemeral && emailCfg?.enabled && (emailCfg.mode === 'send-only' || emailCfg.mode === 'send-receive')) {
+      const messages = structuredClone(this.contextManager.getMessages());
+      const title = userMessage.substring(0, 50) + (userMessage.length > 50 ? '...' : '');
+      void Promise.resolve().then(() => this.host.api.emailSendConversation(messages, title)).catch(e => {
         console.error('[Email] Failed to send conversation summary:', e);
-      }
+      });
     }
 
     // Save to history
@@ -2537,23 +2545,42 @@ Use the latest relationship dossier and shared memories provided with this reque
     return changed;
   }
 
+  getIterationLimit() {
+    const globalLimit = AGENT_ITERATIONS?.limit(this.settings?.agent?.iterationLimit) ?? 1024;
+    const delegated = this.subagentPolicy?.maxIterations;
+    if (!Number.isSafeInteger(delegated) || delegated <= 0) return globalLimit;
+    return globalLimit === 0 ? delegated : Math.min(globalLimit, delegated);
+  }
+
   async agentLoop(runId) {
+    try {
+      return await this.runIterations(runId);
+    } finally {
+      if (runId === this.runId) {
+        this.running = false;
+        this._emitWorkingStatus('idle');
+      }
+    }
+  }
+
+  async runIterations(runId) {
     let iterations = 0;
     let namingReminder = false;
-    // 安全上限：正常任务远到不了 50 轮；Responses 流式曾因 finishReason 恒为 null
-    // 导致无限循环（llm-retry.js 已修复 + 兜底），这里再加熔断，绝不再烧 token。
     const hasGoal = () => ['chat', 'code'].includes(this.mode || 'chat') && typeof GoalState !== 'undefined' && GoalState.isGoalActive(this.conversationId || this.sessionKey);
-    let MAX_AGENT_ITERATIONS = this.subagentPolicy?.maxIterations || (hasGoal() ? GoalState.MAX_GOAL_TURNS : 50);
     while (this.running && !this.stopped && runId === this.runId) {
-      if (hasGoal() && !this.subagentPolicy) MAX_AGENT_ITERATIONS = GoalState.MAX_GOAL_TURNS;
-      iterations++;
-      if (iterations > MAX_AGENT_ITERATIONS) {
-        if (this.subagentPolicy) this.onMessage?.('error', `Subagent reached its ${MAX_AGENT_ITERATIONS} iteration limit before completing`);
-        if (this.onMessage) this.onMessage('system', `⚠️ Agent 循环超过 ${MAX_AGENT_ITERATIONS} 轮已自动停止（防无限循环熔断）。如任务未完成请换个问法重试。`);
-        try { this.contextManager.addSystemMessage(`[系统] Agent 循环触发 ${MAX_AGENT_ITERATIONS} 轮熔断，已停止。`, { type: 'error' }); }
-        catch { /* ignore */ }
+      const limit = this.getIterationLimit();
+      if (limit > 0 && iterations >= limit) {
+        if (hasGoal()) {
+          const goalKey = this.conversationId || this.sessionKey;
+          GoalState.markGoalMaxTurnsReached(goalKey);
+          this.onMessage?.('goal-changed', GoalState.exportGoal(goalKey));
+        }
+        const text = globalThis.t?.('ui.agent.iterationLimitReached', 'Agent 循环已达到 {limit} 轮上限。', { limit })
+          ?? `Agent reached its configured ${limit} iteration limit.`;
+        this.onMessage?.(this.subagentPolicy ? 'error' : 'system', text);
         break;
       }
+      iterations++;
 
       // 热对话：注入用户在Agent工作期间发送的新消息
       while (this.hotMessages.length > 0) {
@@ -2615,7 +2642,7 @@ Use the latest relationship dossier and shared memories provided with this reque
           // 用户主动停止时不再回退到非流式（否则会重新发起请求）
           if (this.stopped || runId !== this.runId) {
             if (this.onMessage) this.onMessage('stream-end', { requestId: reqId, content: '', aborted: true });
-            throw streamErr;
+            break;
           }
           // Streaming failed — fall back to non-streaming
           if (this.onMessage) this.onMessage('stream-end', { requestId: reqId, content: '', fallback: true });
@@ -3095,7 +3122,7 @@ Use the latest relationship dossier and shared memories provided with this reque
       // （不能继续循环，否则截断回复会被再次送回模型造成死循环）。
       // finish_reason 缺失但已有正文时同样视为结束（防御网关省略字段）。
       const fr = choice.finish_reason;
-      const hasContent = typeof assistantMsg.content === 'string' && assistantMsg.content.length > 0;
+      const hasContent = typeof assistantMsg.content === 'string' && assistantMsg.content.trim().length > 0;
       if (fr === 'stop' || fr === 'length' || fr === 'error' || (!fr && hasContent)) {
         if (!namingReminder && fr !== 'length' && fr !== 'error' && !this.ephemeral && !this.isSubagent && this.workspacePath && this.host.api.workspaceInspect && this.settings?.tools?.renameWorkspace !== false) {
           namingReminder = true;
@@ -3115,7 +3142,11 @@ Use the latest relationship dossier and shared memories provided with this reque
         if (fr !== 'length' && fr !== 'error' && this.hotMessages.length > 0) {
           continue; // 回到循环顶部，热消息将在下一轮注入
         }
-        if (fr !== 'error' && hasGoal()) {
+        if (fr !== 'length' && fr !== 'error' && hasGoal()) {
+          if (!hasContent) {
+            this.onMessage?.('error', 'The model ended without a usable response or tool call.');
+            break;
+          }
           const g = GoalState.getGoal(this.conversationId || this.sessionKey);
           this.contextManager.addMessage({ role: 'user', content:
             `System goal continuation ${g.turnsExecuted}: the user's goal is still active. Continue from the work already done. A normal response ending does not complete the task. Use goalStatus for the objective and remaining limits. Only call goalComplete after verifying all deliverables. If blocked, report the concrete blocker; never broaden permissions or invent authorization.`,
@@ -3126,10 +3157,9 @@ Use the latest relationship dossier and shared memories provided with this reque
         }
         break;
       }
+      this.onMessage?.('error', 'The model ended without a usable response or tool call.');
+      break;
     }
-
-    this.running = false;
-    this._emitWorkingStatus('idle');
   }
 
   isDangerousCommand(cmd) {
@@ -4668,7 +4698,7 @@ Use the latest relationship dossier and shared memories provided with this reque
           this.contextManager.setSystemPrompt(this.getSystemPrompt());
           this.onMessage?.('goal-changed', GoalState.exportGoal(this.conversationId || this.sessionKey));
           await this.saveToHistory({ strict: true });
-          return { ok: true, message: `目标已设置: ${args.objective}`, maxTurns: GoalState.MAX_GOAL_TURNS };
+          return { ok: true, message: `目标已设置: ${args.objective}`, maxTurns: this.getIterationLimit() };
         }
         case 'goalStatus': {
           if (typeof GoalState === 'undefined') return { ok: false, error: 'GoalState模块未加载' };

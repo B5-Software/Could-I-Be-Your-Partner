@@ -103,6 +103,7 @@ fn missing_members_never_remove_a_wallet_budget_silently() {
         expires_at: 0,
         equity_floor_usd_atomic: None,
         allowance_ceiling: None,
+        signature_rate: None,
     };
     let input: cibyp_wallet_signer::Input =
         serde_json::from_value(serde_json::json!({"id":portfolio.id,"portfolio":portfolio}))
@@ -130,7 +131,7 @@ fn previous_portfolio_schema_upgrade_preserves_members_and_refuses_a_damaged_bin
         signer.request("portfolio.create", &input).unwrap();
         drop(signer);
         let db = rusqlite::Connection::open(path.join("receipts.sqlite")).unwrap();
-        db.execute_batch("DROP TABLE message_approvals;DROP TABLE message_receipts;DROP TABLE message_metadata;DROP TABLE portfolio_revisions;DROP TABLE portfolio_revision_metadata;ALTER TABLE portfolio_signatures DROP COLUMN policy_hash;DROP TABLE period_charges;DROP TABLE period_windows;DROP TABLE period_accounts;DROP TABLE period_metadata;DROP TABLE agent_scope_charges;DROP TABLE agent_scope_signatures;DROP TABLE agent_scope_usage;DROP TABLE agent_scope_metadata;DROP TABLE agent_scopes;DROP TABLE portfolio_metadata;PRAGMA user_version=4;")
+        db.execute_batch("DROP TABLE portfolio_rate_migration;DROP INDEX portfolio_signatures_time;ALTER TABLE portfolio_signatures DROP COLUMN signed_ms;DROP TABLE message_approvals;DROP TABLE message_receipts;DROP TABLE message_metadata;DROP TABLE portfolio_revisions;DROP TABLE portfolio_revision_metadata;ALTER TABLE portfolio_signatures DROP COLUMN policy_hash;DROP TABLE period_charges;DROP TABLE period_windows;DROP TABLE period_accounts;DROP TABLE period_metadata;DROP TABLE agent_scope_charges;DROP TABLE agent_scope_signatures;DROP TABLE agent_scope_usage;DROP TABLE agent_scope_metadata;DROP TABLE agent_scopes;DROP TABLE portfolio_metadata;PRAGMA user_version=4;")
             .unwrap();
         if damaged {
             db.execute("DELETE FROM portfolio_members", []).unwrap();

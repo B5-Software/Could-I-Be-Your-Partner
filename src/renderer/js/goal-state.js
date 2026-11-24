@@ -9,7 +9,6 @@
 'use strict';
 
 // ---- Constants ----
-const MAX_GOAL_TURNS = 150;
 const BLOCKED_CONSECUTIVE_THRESHOLD = 3;
 
 // ---- State ----
@@ -88,6 +87,7 @@ function resumeGoal(sessionId) {
     g.pausedAt = null;
   }
   g.status = 'active';
+  g.maxTurnsReached = false;
   g.blockedAttempts = 0; // reset on resume
   g.lastBlockedTurn = null;
   g.lastBlockedReason = null;
@@ -128,9 +128,6 @@ function recordGoalTurn(sessionId) {
   const g = getGoal(sessionId);
   if (!g) return null;
   g.turnsExecuted++;
-  if (g.turnsExecuted >= MAX_GOAL_TURNS && g.status === 'active') {
-    markGoalMaxTurnsReached(sessionId);
-  }
   return g;
 }
 
@@ -225,7 +222,7 @@ function getSteeringPrompt(sessionId) {
   if (g.status === 'budget_limited') return budgetLimitPrompt(g);
   if (g.status === 'max_turns') {
     return `<goal-steering>
-Max turns (${MAX_GOAL_TURNS}) reached for this goal. Stop and report progress. The user may explicitly resume with /goal resume.
+The configured Agent loop limit was reached. Report progress. The user may explicitly resume with /goal resume.
 Objective: ${g.objective}
 Review your progress and continue from where you left off.
 </goal-steering>`;
@@ -242,7 +239,6 @@ Report the blocker to the user and suggest workarounds. Do not retry the same ap
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = {
-    MAX_GOAL_TURNS,
     BLOCKED_CONSECUTIVE_THRESHOLD,
     setGoal, getGoal, exportGoal, restoreGoal, pauseGoal, resumeGoal, completeGoal, clearGoal,
     markGoalMaxTurnsReached, continueGoalFromMaxTurns,
@@ -255,7 +251,6 @@ if (typeof module !== 'undefined' && module.exports) {
 // Expose as global for browser/script-tag loading (no module system)
 if (typeof window !== 'undefined') {
   window.GoalState = {
-    MAX_GOAL_TURNS,
     BLOCKED_CONSECUTIVE_THRESHOLD,
     setGoal, getGoal, exportGoal, restoreGoal, pauseGoal, resumeGoal, completeGoal, clearGoal,
     markGoalMaxTurnsReached, continueGoalFromMaxTurns,
@@ -267,7 +262,7 @@ if (typeof window !== 'undefined') {
 // Also expose as bare GoalState for agent.js typeof checks
 if (typeof globalThis !== 'undefined') {
   globalThis.GoalState = (typeof window !== 'undefined' ? window.GoalState : null) || {
-    MAX_GOAL_TURNS, BLOCKED_CONSECUTIVE_THRESHOLD,
+    BLOCKED_CONSECUTIVE_THRESHOLD,
     setGoal, getGoal, exportGoal, restoreGoal, pauseGoal, resumeGoal, completeGoal, clearGoal,
     markGoalMaxTurnsReached, continueGoalFromMaxTurns,
     recordGoalTurn, updateGoalTokens, recordBlockedAttempt,

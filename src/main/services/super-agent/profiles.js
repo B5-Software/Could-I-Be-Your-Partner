@@ -91,7 +91,6 @@ function decorateSuperAgent(agent, session, service) {
         ...settings,
         decision: { enabled: false },
         autoOptimizeToolSelection: false,
-        agent: { ...settings.agent, maxIterations: role === 'worker' ? 40 : 12 },
       };
     },
     ...(role !== 'worker'

@@ -16,6 +16,7 @@ const os = require('node:os');
 const { loadPreloadApi } = require('../../src/agent/preload-api.js');
 const { createEventBus } = require('../../src/main/core/event-bus.js');
 const { createAgentRuntime, INTERACTION_POLICY } = require('../../src/main/agent-runtime.js');
+const { loadAgentCore } = require('../../src/agent');
 
 const SETTINGS = {
   llm: {
@@ -99,6 +100,140 @@ function llmScript(responses) {
   handler.calls = calls;
   return handler;
 }
+
+test('Agent goals honor the revised default, a local limit, and unlimited runs', async () => {
+  const { GoalState } = loadAgentCore();
+  for (const [label, iterationLimit, expected] of [
+    ['default', undefined, 52],
+    ['custom', 2, 2],
+    ['unlimited', 0, 52],
+  ]) {
+    let calls = 0;
+    const llmChat = async () => ({
+      ok: true,
+      data: {
+        choices: [
+          { finish_reason: 'stop', message: { content: ++calls === 52 ? '' : 'Progress' } },
+        ],
+      },
+    });
+    const handlers = baseHandlers({ llmChat });
+    handlers.set('settings:get', () => ({
+      ...structuredClone(SETTINGS),
+      agent: { iterationLimit },
+    }));
+    const runtime = createAgentRuntime({
+      ipcMain: createFakeIpcMain(handlers),
+      eventBus: createEventBus(),
+    });
+    const key = 'iterations-' + label;
+    const { agent } = runtime.createSession({ key, minimalMode: true });
+    await runtime.initialize({ key });
+    assert.equal(agent.getIterationLimit(), iterationLimit ?? 1024);
+    const sid = agent.conversationId || key;
+    GoalState.setGoal(sid, 'Complete the iteration fixture.');
+    const result = await runtime.sendMessage(key, 'Continue the fixture.');
+    assert.equal(calls, expected, label);
+    assert.equal(runtime.getSession(key).busy, false);
+    assert.equal(agent.running, false);
+    if (label === 'custom') {
+      assert.equal(result.ok, true);
+      assert.equal(GoalState.getGoal(sid).status, 'max_turns');
+    }
+    GoalState.clearGoal(sid);
+    await runtime.close(key);
+  }
+});
+
+test(
+  'Agent completion publishes its final status while the optional email is still pending',
+  { timeout: 3000 },
+  async (t) => {
+    const handlers = baseHandlers({ llmChat: llmScript([{ content: 'Done.' }]) });
+    const delivery = Promise.withResolvers();
+    const deliveredMessages = Promise.withResolvers();
+    t.after(() => delivery.resolve({ ok: true }));
+    handlers.set('email:sendConversation', (_event, messages) => {
+      deliveredMessages.resolve(messages);
+      return delivery.promise;
+    });
+    handlers.set('settings:get', () => ({
+      ...structuredClone(SETTINGS),
+      email: { enabled: true, mode: 'send-only' },
+    }));
+    const runtime = createAgentRuntime({
+      ipcMain: createFakeIpcMain(handlers),
+      eventBus: createEventBus(),
+    });
+    const { key } = runtime.createSession({ minimalMode: true });
+    const statuses = [];
+    runtime.onEvent((event) => {
+      if (event.type === 'status' && event.key === key) statuses.push(event.status);
+    });
+    assert.equal((await runtime.sendMessage(key, 'Send a reply.')).ok, true);
+    assert.equal(runtime.getSession(key).busy, false);
+    assert.equal(statuses.at(-1), 'idle');
+    assert.ok((await deliveredMessages.promise).some((message) => message.content === 'Done.'));
+    await runtime.close(key);
+  },
+);
+
+test('stopping a proactive Babe run during model selection prevents it from starting', async (t) => {
+  const llmChat = llmScript([{ content: 'Unexpected reply' }]);
+  const runtime = createAgentRuntime({
+    ipcMain: createFakeIpcMain(baseHandlers({ llmChat })),
+    eventBus: createEventBus(),
+  });
+  const { key, agent } = runtime.createSession({ mode: 'babe', minimalMode: true });
+  const selecting = Promise.withResolvers();
+  const selected = Promise.withResolvers();
+  t.after(() => selected.resolve());
+  agent.ensureSessionModel = () => {
+    selecting.resolve();
+    return selected.promise;
+  };
+  const run = runtime.agentAction(key, 'proactiveSend', ['Start a conversation']);
+  await selecting.promise;
+  assert.equal(runtime.stop(key).ok, true);
+  selected.resolve();
+  const { view } = await run;
+  assert.equal(view.session.status, 'interrupted');
+  assert.equal(view.session.busy, false);
+  assert.equal(llmChat.calls.length, 0);
+  await runtime.close(key);
+});
+
+test('an aborted stream ends as interrupted without restarting inference', async (t) => {
+  const started = Promise.withResolvers();
+  const stream = Promise.withResolvers();
+  t.after(() => stream.resolve());
+  const llmChat = llmScript([{ content: 'Unexpected fallback' }]);
+  const handlers = baseHandlers({ llmChat });
+  handlers.set('settings:get', () => ({
+    ...SETTINGS,
+    llm: { ...SETTINGS.llm, streamResponses: true },
+  }));
+  handlers.set('llm:chatStream', () => {
+    started.resolve();
+    return stream.promise;
+  });
+  const runtime = createAgentRuntime({
+    ipcMain: createFakeIpcMain(handlers),
+    eventBus: createEventBus(),
+  });
+  const { key } = runtime.createSession({ minimalMode: true });
+  const events = [];
+  runtime.onEvent((event) => events.push(event));
+  const pending = runtime.sendMessage(key, 'Start a streamed reply.');
+  await started.promise;
+  assert.equal(runtime.stop(key).ok, true);
+  stream.reject(new Error('Request aborted'));
+  assert.equal((await pending).ok, true);
+  assert.equal(llmChat.calls.length, 0);
+  assert.equal(runtime.getSession(key).status, 'interrupted');
+  assert.equal(events.filter((event) => event.type === 'status').at(-1).status, 'interrupted');
+  await runtime.close(key);
+});
 
 test('OpenCode v2 shell/write aliases use native routing, disabled settings and delegated scope', async () => {
   const handlers = baseHandlers({ llmChat: llmScript([{ content: 'ready' }]) });
@@ -568,6 +703,32 @@ test('stopping during initialization prevents the first LLM request', async () =
   assert.equal((await pending).stopped, true);
   assert.equal(requests, 0);
   assert.equal(runtime.getSession('stop-init').busy, false);
+});
+
+test('stopping while retaining the workspace does not let a late acknowledgement start inference', async (t) => {
+  const llmChat = llmScript([{ content: 'Unexpected reply' }]);
+  const handlers = baseHandlers({ llmChat });
+  const retaining = Promise.withResolvers();
+  const retained = Promise.withResolvers();
+  t.after(() => retained.resolve({ ok: true }));
+  handlers.set('workspace:retain', () => {
+    retaining.resolve();
+    return retained.promise;
+  });
+  const runtime = createAgentRuntime({
+    ipcMain: createFakeIpcMain(handlers),
+    eventBus: createEventBus(),
+  });
+  const { key } = runtime.createSession({ key: 'stop-retain', minimalMode: true });
+  const pending = runtime.sendMessage(key, 'Do not send.');
+  await retaining.promise;
+  assert.equal(runtime.stop(key).ok, true);
+  retained.resolve({ ok: true });
+  await pending;
+  assert.equal(runtime.getSession(key).status, 'interrupted');
+  assert.equal(runtime.getSession(key).busy, false);
+  assert.equal(llmChat.calls.length, 0);
+  await runtime.close(key);
 });
 
 // ---- 1. preload 门面派生 ----

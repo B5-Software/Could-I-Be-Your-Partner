@@ -219,6 +219,16 @@ impl Matcher {
     }
     pub fn observe(&mut self, instrument: &str, book: &Book) -> Result<()> {
         if let Some(market) = self.markets.get_mut(instrument) {
+            market.levels.retain(|(side, price), rows| {
+                if book.price_known(*side, *price) {
+                    return true;
+                }
+                for row in rows {
+                    self.index.remove(&row.id);
+                    self.queued -= 1;
+                }
+                false
+            });
             for ((side, price), rows) in &mut market.levels {
                 let mut ahead = if *side == BookSide::Bid {
                     book.bids.get(price)

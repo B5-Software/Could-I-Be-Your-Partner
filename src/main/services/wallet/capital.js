@@ -301,6 +301,7 @@ async function checkCapital(market, config, intent, intents, signal) {
 module.exports = {
   captureCapital,
   checkCapital,
+  memberCapital,
   portfolioCapital,
   fingerprint,
   requiresRecovery,

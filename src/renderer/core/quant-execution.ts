@@ -6,6 +6,9 @@ import {
   executionSettlementRows,
   executionBenchmarkRows,
   executionArrivalRows,
+  executionEntryCondition,
+  executionEntryRows,
+  executionExitConditions,
   type ExecutionRun,
   type ExecutionCommand,
   type ExecutionPage,
@@ -94,7 +97,30 @@ export function openLiveExecution(options: Options): HTMLDialogElement {
     field('leInterval', 'seconds', '60', 'type="number" min="1" max="86400" required') +
     field('leSlippage', 'slippage', '0.50', 'inputmode="decimal" required') +
     field('leFeeBudget', 'maxEstimatedFeeEth', '0.01', 'inputmode="decimal" required') +
-    '</div><p class="le-subtle">' +
+    '<label>' +
+    esc(t('lePriceMode')) +
+    '<select name="entryRelation" aria-describedby="le-entry-hint"><option value="">' +
+    esc(t('leEntryImmediate')) +
+    '</option><option value="at-or-below">' +
+    esc(t('leEntryBelow')) +
+    '</option><option value="at-or-above">' +
+    esc(t('leEntryAbove')) +
+    '</option><option value="protective-exit">' +
+    esc(t('leProtectiveExit')) +
+    '</option></select></label>' +
+    field('leEntryPrice', 'entryPrice', '', 'inputmode="decimal" maxlength="19" disabled') +
+    field('leStopLossPrice', 'stopLossPrice', '', 'inputmode="decimal" maxlength="19" disabled') +
+    field(
+      'leTakeProfitPrice',
+      'takeProfitPrice',
+      '',
+      'inputmode="decimal" maxlength="19" disabled',
+    ) +
+    '</div><p class="le-subtle" id="le-entry-hint">' +
+    esc(t('leEntryHint')) +
+    '</p><p class="le-subtle" id="le-exit-hint" hidden>' +
+    esc(t('leExitHint')) +
+    '</p><p class="le-subtle">' +
     esc(t('leMinimumHint')) +
     '</p><p class="le-subtle" data-fixed-hint hidden>' +
     esc(t('leFixedScope')) +
@@ -128,6 +154,27 @@ export function openLiveExecution(options: Options): HTMLDialogElement {
   const form = q<HTMLFormElement>('[data-le-form]');
   const select = form.elements.namedItem('walletId') as HTMLSelectElement;
   const schedule = form.elements.namedItem('schedule') as HTMLSelectElement;
+  const entryRelation = q<HTMLSelectElement>('[name=entryRelation]');
+  const entryPrice = q<HTMLInputElement>('[name=entryPrice]');
+  const stopLoss = q<HTMLInputElement>('[name=stopLossPrice]');
+  const takeProfit = q<HTMLInputElement>('[name=takeProfitPrice]');
+  const syncPriceMode = () => {
+    const protective = entryRelation.value === 'protective-exit';
+    const entry = !protective && Boolean(entryRelation.value);
+    entryPrice.required = entry;
+    entryPrice.disabled = !entry;
+    entryPrice.closest('label')!.hidden = protective;
+    stopLoss.required = protective;
+    for (const input of [stopLoss, takeProfit]) {
+      input.disabled = !protective;
+      input.closest('label')!.hidden = !protective;
+    }
+    entryRelation.setAttribute('aria-describedby', protective ? 'le-exit-hint' : 'le-entry-hint');
+    q('#le-entry-hint').hidden = protective;
+    q('#le-exit-hint').hidden = !protective;
+  };
+  entryRelation.addEventListener('change', syncPriceMode);
+  syncPriceMode();
   let profile: ExecutionVwapProfile | undefined;
   const clearProfile = () => {
     profile = undefined;
@@ -309,6 +356,7 @@ export function openLiveExecution(options: Options): HTMLDialogElement {
       reserved = fee.reservedEstimateWei;
     const row = (label: string, value: string) =>
       '<div><dt>' + esc(label) + '</dt><dd>' + esc(value) + '</dd></div>';
+    const priceStatus = view.exitStatus || view.entryStatus;
     node.innerHTML =
       '<header class="le-detail-head"><div><small>Base' +
       (run.plan.chain_id === 84532 ? ' Sepolia' : '') +
@@ -373,6 +421,14 @@ export function openLiveExecution(options: Options): HTMLDialogElement {
       (run.plan.max_arrival_cost_bps === undefined
         ? ''
         : row(t('leArrivalLimit'), run.plan.max_arrival_cost_bps + ' bp')) +
+      (run.plan.entry_trigger
+        ? row(t('leEntry'), executionEntryCondition(run.plan.entry_trigger))
+        : '') +
+      (run.plan.protective_exit
+        ? executionExitConditions(run.plan.protective_exit, t)
+            .map(([label, value]) => row(label, value))
+            .join('')
+        : '') +
       executionSettlementRows(run.plan.side, view.settlement, t)
         .map(([label, value]) => row(label, value))
         .join('') +
@@ -409,9 +465,13 @@ export function openLiveExecution(options: Options): HTMLDialogElement {
             : '<p class="le-subtle">' + esc(status('EXECUTION_PROFILE_REQUIRED')) + '</p>') +
           weights(weighted.weth_volume_atoms)
         : '') +
-      (run.pending
+      (run.pending || priceStatus
         ? '<p class="le-notice">' +
-          esc(run.phase === 'running' ? t('leFinality') : t('lePending')) +
+          esc(
+            priceStatus
+              ? status(priceStatus)
+              : t(run.phase === 'running' ? 'leFinality' : 'lePending'),
+          ) +
           '</p>'
         : '') +
       '<p class="le-authority">' +
@@ -448,8 +508,10 @@ export function openLiveExecution(options: Options): HTMLDialogElement {
       '</span></header>' +
       (history?.items.length
         ? history.items
-            .map(
-              (command) =>
+            .map((command) => {
+              const exit = command.exit_trigger;
+              const observation = exit?.observation || command.entry_observation;
+              return (
                 '<details data-command="' +
                 esc(command.id) +
                 '"><summary><span>' +
@@ -489,14 +551,34 @@ export function openLiveExecution(options: Options): HTMLDialogElement {
                     ) +
                     '</p>'
                   : '') +
+                (exit
+                  ? '<p>' +
+                    esc(
+                      t('leExitCause') +
+                        ' · ' +
+                        t(exit.cause === 'stop-loss' ? 'leStopLoss' : 'leTakeProfit'),
+                    ) +
+                    '</p>'
+                  : '') +
+                (observation
+                  ? executionEntryRows(observation, t, options.language())
+                      .map(([label, value]) => '<p>' + esc(label + ' · ' + value) + '</p>')
+                      .join('') +
+                    '<code title="' +
+                    esc(t('leEntryBlock')) +
+                    '">' +
+                    esc(observation.block_hash) +
+                    '</code>'
+                  : '') +
                 executionSettlementRows(run.plan.side, command.settlement, t)
                   .map(([label, value]) => '<p>' + esc(label + ' · ' + value) + '</p>')
                   .join('') +
                 command.hashes
                   .map((hash) => '<code title="' + esc(t('leHash')) + '">' + esc(hash) + '</code>')
                   .join('') +
-                '</div></details>',
-            )
+                '</div></details>'
+              );
+            })
             .join('')
         : '<p class="le-subtle">' + esc(t('leNoHistory')) + '</p>') +
       '<footer>' +
@@ -693,6 +775,18 @@ export function openLiveExecution(options: Options): HTMLDialogElement {
       error('EXECUTION_PROFILE_REQUIRED');
       return;
     }
+    const protective = entryRelation.value === 'protective-exit';
+    if (
+      protective &&
+      (value('side') !== 'sell' || Number(value('slices')) !== 1 || schedule.value !== 'settlement')
+    ) {
+      error('EXECUTION_EXIT_INVALID');
+      return;
+    }
+    if (entryRelation.value && schedule.value !== 'settlement') {
+      error('EXECUTION_ENTRY_INVALID');
+      return;
+    }
     const slip = /^(\d)(?:\.(\d{0,2}))?$/.exec(value('slippage'));
     const slippageBps = slip ? Number(slip[1]) * 100 + Number((slip[2] || '').padEnd(2, '0')) : NaN;
     if (!Number.isInteger(slippageBps) || slippageBps > 500) {
@@ -714,6 +808,18 @@ export function openLiveExecution(options: Options): HTMLDialogElement {
         ...(value('maxArrivalCostBps') === ''
           ? {}
           : { maxArrivalCostBps: Number(value('maxArrivalCostBps')) }),
+        ...(protective
+          ? {
+              protectiveExit: {
+                stopLossPrice: value('stopLossPrice').trim(),
+                ...(value('takeProfitPrice').trim() && {
+                  takeProfitPrice: value('takeProfitPrice').trim(),
+                }),
+              },
+            }
+          : entryRelation.value && {
+              entryTrigger: { relation: entryRelation.value, price: value('entryPrice').trim() },
+            }),
         slices: Number(value('slices')),
         intervalMs: Number(value('seconds')) * 1000,
         schedule: value('schedule'),

@@ -120,11 +120,55 @@ class TuiWalletPortfolios {
         (p.equityFloorUsdAtomic && result.state !== 'removed'
           ? `\n${this.w.text('portfolioEquityFloor')} · ${tokenAmount(p.equityFloorUsdAtomic, 8)} USD`
           : '') +
+        (result.signatureRate && result.state !== 'removed'
+          ? `\n${this.w.text('portfolioRate')} · ${this.rateStatus(result.signatureRate)}`
+          : '') +
         (p.allowanceCeiling && result.state !== 'removed'
           ? `\n${this.w.text('portfolioAllowanceCeiling')} · ${tokenAmount(p.allowanceCeiling.atoms, p.allowanceCeiling.decimals)} ${p.allowanceCeiling.token}`
           : ''),
       () => this.open(),
     );
+  }
+  rateLabel(rate) {
+    return rate
+      ? `${rate.maxSignatures} / ${rate.windowSeconds} s`
+      : this.w.text('portfolioRateDisabled');
+  }
+  rateStatus(rate) {
+    const message =
+      rate.status === 'clock-rollback'
+        ? this.w.status('WALLET_PORTFOLIO_RATE_CLOCK_ROLLBACK')
+        : this.w.text(
+            {
+              ready: 'portfolioRateReady',
+              limited: 'portfolioRateLimited',
+              settling: 'portfolioRateSettling',
+            }[rate.status],
+          );
+    return `${rate.used} / ${rate.maxSignatures} · ${rate.windowSeconds} s · ${message}${rate.nextEligibleAt ? ' · ' + this.w.text('portfolioRateNext') + ' ' + new Date(rate.nextEligibleAt).toLocaleString() : ''}`;
+  }
+  editRate(current, save, back) {
+    const read = (text, max) => {
+      const value = Number(text);
+      if (!/^\d+$/.test(text) || !Number.isInteger(value) || value < 1 || value > max)
+        throw Error('WALLET_PORTFOLIO_RATE_INVALID');
+      return value;
+    };
+    const window = () =>
+      this.w.input(
+        this.w.text('portfolioRateWindow'),
+        (text) => {
+          if (!text.trim()) return save(null);
+          const windowSeconds = read(text.trim(), 300);
+          return this.w.input(
+            this.w.text('portfolioRateLimit'),
+            (value) => save({ windowSeconds, maxSignatures: read(value.trim(), 1000) }),
+            { value: current ? String(current.maxSignatures) : '', back: window },
+          );
+        },
+        { value: current ? String(current.windowSeconds) : '', back },
+      );
+    return window();
   }
   async performance(portfolio, names, walletId, offset = 0, snapshotId, pricingOffset = 0) {
     const limit = 5;
@@ -859,6 +903,7 @@ class TuiWalletPortfolios {
           equityFloorUsd: p.equityFloorUsdAtomic ? tokenAmount(p.equityFloorUsdAtomic, 8) : '',
         }),
         limits: walletScopeValues(p.limits),
+        signatureRate: p.signatureRate ?? null,
       };
     const back = () => this.detail(p.id);
     const show = () =>
@@ -868,6 +913,10 @@ class TuiWalletPortfolios {
           { label: this.w.text('back'), value: 'back' },
           { label: this.w.text('portfolioName') + ' · ' + draft.name, value: 'name' },
           { label: this.w.text('portfolioFee') + ' · ' + draft.maxFeeEth, value: 'fee' },
+          {
+            label: `${this.w.text('portfolioRate')} · ${this.rateLabel(draft.signatureRate)}`,
+            value: 'signature-rate',
+          },
           ...(p.chainId === 8453
             ? [
                 {
@@ -882,6 +931,15 @@ class TuiWalletPortfolios {
         ],
         (value) => {
           if (value === 'back') return back();
+          if (value === 'signature-rate')
+            return this.editRate(
+              draft.signatureRate,
+              (rate) => {
+                draft.signatureRate = rate;
+                return show();
+              },
+              show,
+            );
           if (value === 'equity')
             return this.w.input(
               this.w.text('portfolioEquityFloor'),
@@ -1087,12 +1145,26 @@ class TuiWalletPortfolios {
       [
         { label: this.w.text('portfolioCancel'), value: false },
         { label: this.w.text('portfolioReview'), value: true },
+        ...(input.operation === 'create'
+          ? [
+              {
+                label: `${this.w.text('portfolioRate')} · ${this.rateLabel(input.signatureRate)}`,
+                value: 'signature-rate',
+              },
+            ]
+          : []),
         ...(configureEquity
           ? [{ label: this.w.text('portfolioEquityFloor'), value: 'equity' }]
           : []),
       ],
       async (ready) => {
         if (!ready) return back();
+        if (ready === 'signature-rate')
+          return this.editRate(
+            input.signatureRate,
+            (rate) => this.confirm({ ...input, signatureRate: rate }, back, summary),
+            () => this.confirm(input, back, summary),
+          );
         if (ready === 'equity')
           return this.w.input(
             this.w.text('portfolioEquityFloor'),
@@ -1116,6 +1188,9 @@ class TuiWalletPortfolios {
       this.w.text('portfolioWarning') +
         '\n\n' +
         summary +
+        (input.signatureRate !== undefined
+          ? `\n\n${this.w.text('portfolioRate')} · ${this.rateLabel(input.signatureRate)}\n${this.w.text('portfolioRateHint')}`
+          : '') +
         (input.equityFloorUsd !== undefined
           ? `\n\n${this.w.text('portfolioEquityFloor')} · ${input.equityFloorUsd || this.w.text('portfolioEquityDisabled')}\n${this.w.text('portfolioEquityHelp')}`
           : ''),

@@ -3,6 +3,7 @@
 
 const forbidden = new Set(['__proto__', 'prototype', 'constructor']);
 const TokenPolicy = require('../../shared/token-policy');
+const AgentIterations = require('../../shared/agent-iterations');
 function isRecord(value) {
   return (
     value !== null &&
@@ -32,7 +33,7 @@ function mergeSettings(defaults, saved) {
     }
     return result;
   }
-  return merge(defaults, saved, 0);
+  return merge(defaults, AgentIterations.migrate(saved), 0);
 }
 
 function loadSettings(defaults, saved, legacyTuiPreferences = {}) {

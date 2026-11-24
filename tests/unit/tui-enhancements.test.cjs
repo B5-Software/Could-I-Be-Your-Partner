@@ -25,6 +25,7 @@ test('terminal tables preserve CJK text, align cells and fall back without losin
 test('settings browser exposes scalar, empty and JSON settings, masks keys and validates value types', async () => {
   const settings = {
     language: 'en',
+    agent: { iterationLimit: 1024 },
     tarotVisible: true,
     theme: { mode: 'dark' },
     webResearch: { engine: 'fusion', providers: { exa: { apiKey: 'secret' } } },
@@ -68,6 +69,15 @@ test('settings browser exposes scalar, empty and JSON settings, masks keys and v
   await app._dispatchKey({ name: 'enter' });
   await app._dispatchKey({ name: 'char', char: 'new-secret' });
   assert.ok(!app.frame().lines.join('').includes('new-secret'));
+  await app.configBrowser.open('agent.iterationLimit');
+  await app._dispatchKey({ name: 'enter' });
+  assert.equal(app.state.modal.field.value, 1024);
+  app.state.modal.editor.setValue('1.5');
+  await app._dispatchKey({ name: 'enter' });
+  assert.deepEqual(patch, { tarotVisible: false });
+  app.state.modal.editor.setValue('0');
+  await app._dispatchKey({ name: 'enter' });
+  assert.deepEqual(patch, { agent: { iterationLimit: 0 } });
   text.setLanguage('zh-CN');
 });
 

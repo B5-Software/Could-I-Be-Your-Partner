@@ -2,6 +2,7 @@
 //! owns allocated input budgets, not wallet balances, keys or broker authority.
 use super::*;
 use crate::clock;
+use std::cmp::Ordering;
 
 const FIXED_TEMPLATE: &str = "base-twap-fixed-v1";
 const VWAP_TEMPLATE: &str = "base-vwap-fixed-v1";
@@ -48,6 +49,10 @@ pub struct Plan {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_arrival_cost_bps: Option<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entry_trigger: Option<EntryTrigger>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub protective_exit: Option<ProtectiveExit>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vwap: Option<VwapProfile>,
 }
 impl Plan {
@@ -80,6 +85,20 @@ impl Plan {
             )?;
         }
         self.minimum_output()?;
+        if let Some(trigger) = &self.entry_trigger {
+            check(self.template == "base-twap-v1", "EXECUTION_ENTRY_INVALID")?;
+            trigger_price(&trigger.price_atoms, "EXECUTION_ENTRY_INVALID")?;
+        }
+        if let Some(exit) = &self.protective_exit {
+            check(
+                self.template == "base-twap-v1"
+                    && self.side == Side::Sell
+                    && self.slices == 1
+                    && self.entry_trigger.is_none(),
+                "EXECUTION_EXIT_INVALID",
+            )?;
+            exit.thresholds()?;
+        }
         check(
             self.max_arrival_cost_bps.is_none_or(|bps| bps < 10_000),
             "EXECUTION_ARRIVAL_LIMIT_RANGE",
@@ -290,6 +309,132 @@ impl Arrival {
         )
     }
 }
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub enum EntryRelation {
+    AtOrBelow,
+    AtOrAbove,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct EntryTrigger {
+    pub relation: EntryRelation,
+    /// USDC atoms per one WETH.
+    pub price_atoms: String,
+}
+impl EntryTrigger {
+    fn verify(&self, observed: &Arrival, arrival: &Arrival, claimed: u128) -> Result<()> {
+        observed.validate_trigger(arrival, claimed, "EXECUTION_ENTRY_UNAVAILABLE")?;
+        let order =
+            observed.price_order(trigger_price(&self.price_atoms, "EXECUTION_ENTRY_INVALID")?)?;
+        check(
+            match self.relation {
+                EntryRelation::AtOrBelow => order != Ordering::Greater,
+                EntryRelation::AtOrAbove => order != Ordering::Less,
+            },
+            "EXECUTION_ENTRY_WAIT",
+        )
+    }
+}
+
+fn trigger_price(value: &str, invalid: &str) -> Result<U256> {
+    let price = value.parse::<u64>().map_err(|_| invalid)?;
+    check(
+        (1..10u64.pow(18)).contains(&price) && price.to_string() == value,
+        invalid,
+    )?;
+    Ok(U256::from(price))
+}
+
+impl Arrival {
+    fn validate_trigger(&self, arrival: &Arrival, claimed: u128, invalid: &str) -> Result<()> {
+        self.validate(claimed).map_err(|_| invalid)?;
+        check(
+            self.pool == arrival.pool && self.weth_is_token0 == arrival.weth_is_token0,
+            invalid,
+        )
+    }
+    fn price_order(&self, price: U256) -> Result<Ordering> {
+        let sqrt = self
+            .sqrt_price_x96
+            .parse::<U256>()
+            .map_err(|_| "EXECUTION_ARRIVAL_INVALID")?;
+        let q192 = U256::ONE << 192u32;
+        let weth_unit = U256::from(10u64.pow(18));
+        // Divide before comparing so the square and price product need no 512-bit type.
+        // The remainder distinguishes an exact boundary from a rounded display value.
+        let (numerator, denominator) = if self.weth_is_token0 {
+            (price * q192, weth_unit)
+        } else {
+            (q192 * weth_unit, price)
+        };
+        let order = match sqrt
+            .checked_mul(sqrt)
+            .map(|square| square.cmp(&(numerator / denominator)))
+        {
+            Some(Ordering::Equal) if numerator % denominator != U256::ZERO => Ordering::Less,
+            Some(value) => value,
+            None => Ordering::Greater,
+        };
+        Ok(if self.weth_is_token0 {
+            order
+        } else {
+            order.reverse()
+        })
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ProtectiveExit {
+    pub stop_loss_price_atoms: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub take_profit_price_atoms: Option<String>,
+}
+impl ProtectiveExit {
+    fn thresholds(&self) -> Result<(U256, Option<U256>)> {
+        let stop = trigger_price(&self.stop_loss_price_atoms, "EXECUTION_EXIT_INVALID")?;
+        let profit = self
+            .take_profit_price_atoms
+            .as_ref()
+            .map(|price| trigger_price(price, "EXECUTION_EXIT_INVALID"))
+            .transpose()?;
+        check(
+            profit.is_none_or(|price| price > stop),
+            "EXECUTION_EXIT_INVALID",
+        )?;
+        Ok((stop, profit))
+    }
+    fn verify(&self, observed: &Arrival, arrival: &Arrival, claimed: u128) -> Result<ExitCause> {
+        observed.validate_trigger(arrival, claimed, "EXECUTION_EXIT_UNAVAILABLE")?;
+        let (stop, profit) = self.thresholds()?;
+        if observed.price_order(stop)? != Ordering::Greater {
+            return Ok(ExitCause::StopLoss);
+        }
+        if let Some(profit) = profit
+            && observed.price_order(profit)? != Ordering::Less
+        {
+            return Ok(ExitCause::TakeProfit);
+        }
+        Err("EXECUTION_EXIT_WAIT".into())
+    }
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ExitCause {
+    StopLoss,
+    TakeProfit,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct ExitTrigger {
+    pub cause: ExitCause,
+    pub observation: Arrival,
+}
 #[derive(Clone, Debug, Serialize, Deserialize, Eq, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct FixedSchedule {
@@ -392,6 +537,10 @@ pub struct Command {
     pub window: Option<DispatchWindow>,
     pub stage: Stage,
     pub lease: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entry_observation: Option<Arrival>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_trigger: Option<ExitTrigger>,
     pub intent_ids: Vec<String>,
     pub hashes: Vec<String>,
     pub reason: String,
@@ -412,7 +561,7 @@ pub struct Report {
 #[serde(tag = "event", rename_all = "kebab-case", deny_unknown_fields)]
 pub(super) enum Change {
     Create {
-        plan: Plan,
+        plan: Box<Plan>,
         time: String,
     },
     Start {
@@ -447,6 +596,8 @@ pub(super) enum Change {
         command: String,
         lease: String,
         time: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        entry_observation: Option<Arrival>,
     },
     Report {
         report: Report,
@@ -474,7 +625,7 @@ impl Store {
                 )?;
                 return Ok(Mutation {
                     run: Run {
-                        plan: plan.clone(),
+                        plan: plan.as_ref().clone(),
                         phase: Phase::Paused,
                         reason: "CREATED".into(),
                         generation: 0,
@@ -537,7 +688,10 @@ impl Store {
                     run.arrival = Some(snapshot.clone());
                 }
                 check(
-                    run.plan.max_arrival_cost_bps.is_none() || run.arrival.is_some(),
+                    (run.plan.max_arrival_cost_bps.is_none()
+                        && run.plan.entry_trigger.is_none()
+                        && run.plan.protective_exit.is_none())
+                        || run.arrival.is_some(),
                     "EXECUTION_ARRIVAL_REQUIRED",
                 )?;
                 if run.plan.fixed() {
@@ -645,6 +799,8 @@ impl Store {
                     window,
                     stage: Stage::Ready,
                     lease: None,
+                    entry_observation: None,
+                    exit_trigger: None,
                     intent_ids: Vec::new(),
                     hashes: Vec::new(),
                     reason: "PLANNED".into(),
@@ -705,7 +861,10 @@ impl Store {
                 run.reason = "EXECUTION_NO_ALLOCATED_INPUT".into();
             }
             Change::Claim {
-                command: id, lease, ..
+                command: id,
+                lease,
+                entry_observation,
+                ..
             } => {
                 super::id(lease)?;
                 let value = command.as_mut().ok_or("EXECUTION_COMMAND_NOT_PENDING")?;
@@ -717,6 +876,31 @@ impl Store {
                     let now = execution_time(time)?;
                     run.observe(now)?;
                     check(window.remaining(now)? > 0, WINDOW_EXPIRED)?;
+                }
+                if let Some(exit) = &run.plan.protective_exit {
+                    let observation = entry_observation
+                        .as_ref()
+                        .ok_or("EXECUTION_EXIT_REQUIRED")?;
+                    let arrival = run.arrival.as_ref().ok_or("EXECUTION_ARRIVAL_REQUIRED")?;
+                    let cause = exit.verify(observation, arrival, execution_time(time)?)?;
+                    value.exit_trigger = Some(ExitTrigger {
+                        cause,
+                        observation: observation.clone(),
+                    });
+                } else if let Some(trigger) = run
+                    .plan
+                    .entry_trigger
+                    .as_ref()
+                    .filter(|_| value.ordinal == 1)
+                {
+                    let observed = entry_observation
+                        .as_ref()
+                        .ok_or("EXECUTION_ENTRY_REQUIRED")?;
+                    let arrival = run.arrival.as_ref().ok_or("EXECUTION_ARRIVAL_REQUIRED")?;
+                    trigger.verify(observed, arrival, execution_time(time)?)?;
+                    value.entry_observation = Some(observed.clone());
+                } else {
+                    check(entry_observation.is_none(), "EXECUTION_ENTRY_INVALID")?;
                 }
                 value.stage = Stage::Claimed;
                 value.lease = Some(lease.clone());
@@ -868,7 +1052,7 @@ impl Ledger {
         }
         let id = plan.id.clone();
         self.execution_commit(Change::Create {
-            plan,
+            plan: Box::new(plan),
             time: utc_ns(),
         })?;
         Ok(self.execution_run(&id).unwrap().clone())
@@ -941,9 +1125,15 @@ impl Ledger {
         })
     }
     pub fn execution_claim(&mut self, command: &str, lease: &str) -> Result<Command> {
-        self.execution_claim_at(command, lease, clock::now_ns())
+        self.execution_claim_at(command, lease, clock::now_ns(), None)
     }
-    pub fn execution_claim_at(&mut self, command: &str, lease: &str, now: u128) -> Result<Command> {
+    pub fn execution_claim_at(
+        &mut self,
+        command: &str,
+        lease: &str,
+        now: u128,
+        entry_observation: Option<Arrival>,
+    ) -> Result<Command> {
         check(!self.faulted, "LEDGER_RESTART_REQUIRED")?;
         let old = self
             .execution_command(command)
@@ -956,12 +1146,25 @@ impl Ledger {
             && old.lease.as_deref() == Some(lease)
             && run.phase == Phase::Running
         {
+            check(
+                old.entry_observation.as_ref().or(old
+                    .exit_trigger
+                    .as_ref()
+                    .map(|trigger| &trigger.observation))
+                    == entry_observation.as_ref(),
+                if old.exit_trigger.is_some() {
+                    "EXECUTION_EXIT_INVALID"
+                } else {
+                    "EXECUTION_ENTRY_INVALID"
+                },
+            )?;
             return Ok(old.clone());
         }
         self.execution_commit(Change::Claim {
             command: command.into(),
             lease: lease.into(),
             time: now.to_string(),
+            entry_observation,
         })?;
         Ok(self.execution_command(command).unwrap().clone())
     }

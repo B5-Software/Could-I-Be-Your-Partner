@@ -1,12 +1,28 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 /* global CIBYP_QUANT_WORKER_SOURCE */
 'use strict';
+const panelLimits = require('../../../shared/quant-layout-preferences.json');
+const {
+  venues: spotVenues,
+  products: spotProducts,
+} = require('../../../shared/quant-native-venues.json');
 const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID, createHash } = require('node:crypto');
 const { Worker } = require('node:worker_threads');
-const { MarketData, CHAINS, INTERVALS, endpoint } = require('./market-data');
+const {
+  MarketData,
+  CHAINS,
+  INTERVALS,
+  intervalsForVenue,
+  KRAKEN_OHLC_SOURCE,
+  endpoint,
+} = require('./market-data');
 const { discoverTokens } = require('./token-discovery');
+const {
+  readArchive: readKrakenArchive,
+  SOURCE: KRAKEN_ARCHIVE_SOURCE,
+} = require('./kraken-archive');
 const { validateCandles, parameters } = require('./backtest');
 const { VERSION: WALK_FORWARD_VERSION, walkForwardParameters } = require('./walk-forward');
 const { SCALE, atoms, decimal, notional, fee } = require('./decimal');
@@ -30,6 +46,11 @@ const idPattern = /^[a-z\d-]{1,80}$/i;
 const copy = (value) => structuredClone(value);
 const problem = (message) => {
   throw new Error(message);
+};
+const venues = [...Object.keys(CHAINS), ...spotVenues.map(({ id }) => id)];
+const freshSample = (quote, now) => {
+  const age = now - quote.time * 1000;
+  return age >= -2000 && age < 30000 && now - quote.observedAt < 30000;
 };
 
 function writeAtomic(file, value) {
@@ -176,6 +197,7 @@ class QuantService {
     this.chatOpening = new Map();
     this.workers = new Set();
     this.runningTests = new Set();
+    this.krakenArchiveFlights = new Map();
     this.disposed = false;
     this.file = path.join(directory, 'state.json');
     this.state = { version: 1, revision: 0, workspaces: [] };
@@ -219,6 +241,12 @@ class QuantService {
   execution() {
     return (this.liveExecution ??= new (require('./live-execution').LiveExecution)(this));
   }
+  exchange() {
+    return (this.exchangeOrders ??= new (require('./exchange-orders').ExchangeOrders)(
+      this,
+      writeAtomic,
+    ));
+  }
   workspace(id, state = this.state) {
     if (typeof id !== 'string' || !idPattern.test(id)) problem('INVALID_WORKSPACE');
     return state.workspaces.find((w) => w.id === id) || problem('QUANT_WORKSPACE_NOT_FOUND');
@@ -242,6 +270,7 @@ class QuantService {
     const value = copy(w),
       reserves = reserved(w);
     value.market.customRpc = Boolean(value.market.rpcUrl);
+    value.market.intervals = intervalsForVenue(w.market.venue);
     delete value.market.rpcUrl;
     delete value.commands;
     delete value.baseRecorder;
@@ -277,9 +306,10 @@ class QuantService {
       ? decimal(atoms(w.paper.cash) + (atoms(w.paper.position) * atoms(w.quote.price)) / SCALE)
       : w.paper.cash;
     value.capabilities = {
-      live: Boolean(this.getWallet),
+      live: Boolean(this.getWallet) && w.market.venue !== 'kraken',
       walletSigning: Boolean(this.getWallet),
       candleBacktest: true,
+      krakenArchive: w.market.venue === 'kraken',
       paper: true,
       baseRpc: Boolean(CHAINS[w.market.venue]),
       newsResearch: true,
@@ -330,16 +360,32 @@ class QuantService {
   }
   async refresh(id) {
     const w = this.workspace(id);
-    if (this.refreshing.has(id)) return this.refreshing.get(id);
+    const previous = this.refreshing.get(id);
+    if (previous && previous.revision === w.marketRevision) return previous.task;
+    previous?.controller.abort(new Error('MARKET_CHANGED'));
     if (w.quote && !w.lastError && Date.now() - w.quote.observedAt < 4000) return this.snapshot(w);
     const config = copy(w.market),
       revision = w.marketRevision;
-    const task = (async () => {
+    const controller = new AbortController();
+    const flight = { controller, revision, task: null };
+    const kraken = config.venue === 'kraken';
+    const now = Date.now(),
+      intervalMs = config.interval * 1000,
+      fetchedAt = w.historyFetchedAt || 0;
+    const history = kraken
+      ? !fetchedAt ||
+        !Number.isSafeInteger(w.historyOpenTime) ||
+        (now - fetchedAt >= 10000 &&
+          Math.floor(Math.max(now, (w.quote?.time || 0) * 1000) / intervalMs) * config.interval >
+            w.historyOpenTime)
+      : !w.candles.length || now - fetchedAt > intervalMs;
+    flight.task = (async () => {
       try {
-        const quote = await this.market.quote(
-          config,
-          !w.candles.length || Date.now() - (w.historyFetchedAt || 0) > config.interval * 1000,
-        );
+        const quote = await this.market.quote(config, history, {
+          since: kraken ? w.candles.at(-1)?.time : undefined,
+          signal: controller.signal,
+        });
+        controller.signal.throwIfAborted();
         return await this.mutate((state) => {
           const current = this.workspace(id, state);
           if (current.marketRevision !== revision) problem('MARKET_CHANGED');
@@ -348,18 +394,35 @@ class QuantService {
           const historical = quote.candles.length > 0;
           const bars = new Map(current.candles.map((bar) => [bar.time, bar]));
           for (const bar of quote.candles) bars.set(bar.time, bar);
-          const time = Math.floor(quote.time / config.interval) * config.interval;
-          const price = Number(quote.price),
-            last = bars.get(time);
-          if (!last)
-            bars.set(time, { time, open: price, high: price, low: price, close: price, volume: 0 });
-          else if (!historical)
-            bars.set(time, {
-              ...last,
-              high: Math.max(last.high, price),
-              low: Math.min(last.low, price),
-              close: price,
-            });
+          if (kraken) {
+            if (history) {
+              if (quote.openCandleTime < (current.historyOpenTime || 0))
+                problem('MARKET_TIME_REGRESSED');
+              current.historyOpenTime = quote.openCandleTime;
+              current.historyFetchedAt = quote.observedAt;
+            }
+          } else {
+            const time = Math.floor(quote.time / config.interval) * config.interval;
+            const price = Number(quote.price),
+              last = bars.get(time);
+            if (!last)
+              bars.set(time, {
+                time,
+                open: price,
+                high: price,
+                low: price,
+                close: price,
+                volume: 0,
+              });
+            else if (!historical)
+              bars.set(time, {
+                ...last,
+                high: Math.max(last.high, price),
+                low: Math.min(last.low, price),
+                close: price,
+              });
+            if (historical) current.historyFetchedAt = Date.now();
+          }
           let ordered = [...bars.values()].sort((a, b) => a.time - b.time);
           if (ordered.length > 2000) {
             const archive = this.storeDataset(
@@ -375,13 +438,16 @@ class QuantService {
           }
           current.candles = ordered;
           delete quote.candles;
+          delete quote.openCandleTime;
           current.quote = quote;
           current.lastError = null;
-          if (historical) current.historyFetchedAt = Date.now();
-          const fresh = Date.now() - quote.time * 1000 < 30000;
-          if (fresh)
+          if (freshSample(quote, Date.now()))
             for (const order of openOrders(current)) {
-              if (quote.time * 1000 <= order.createdAt) continue;
+              if (
+                quote.time * 1000 <= order.createdAt ||
+                quote.time <= (order.submittedQuoteTime ?? 0)
+              )
+                continue;
               const limit = atoms(order.limitPrice),
                 mark = atoms(quote.price);
               if (
@@ -395,6 +461,8 @@ class QuantService {
           return this.snapshot(current);
         });
       } catch (error) {
+        if (controller.signal.aborted || this.workspace(id).marketRevision !== revision)
+          problem(controller.signal.aborted ? controller.signal.reason.message : 'MARKET_CHANGED');
         // Keep cached history visible, but a transport failure invalidates trading freshness.
         await this.mutate((state) => {
           const current = this.workspace(id, state);
@@ -403,11 +471,13 @@ class QuantService {
         });
         throw new Error(safeError(error));
       }
-    })().finally(() => this.refreshing.delete(id));
-    this.refreshing.set(id, task);
-    return task;
+    })().finally(() => {
+      if (this.refreshing.get(id) === flight) this.refreshing.delete(id);
+    });
+    this.refreshing.set(id, flight);
+    return flight.task;
   }
-  storeDataset(w, candles, source, label, { amm, series, market = w.market } = {}) {
+  storeDataset(w, candles, source, label, { amm, series, archive, market = w.market } = {}) {
     const coverage = amm || series;
     const data = {
       version: 1,
@@ -416,6 +486,7 @@ class QuantService {
       candles: coverage && !candles.length ? [] : validateCandles(candles),
       ...(amm && { amm }),
       ...(series && { series }),
+      ...(archive && { archive }),
     };
     const id = hash(data);
     const file = path.join(this.directory, 'datasets', id + '.json');
@@ -424,10 +495,12 @@ class QuantService {
       id,
       label: String(label || source).slice(0, 120),
       source,
+      market: data.market,
       count: data.candles.length,
       start: coverage?.startTime ?? data.candles[0].time,
       end: coverage?.endTime ?? data.candles.at(-1).time,
       createdAt: Date.now(),
+      ...(archive && { archive }),
       ...(amm && {
         amm: {
           chainId: amm.chainId,
@@ -458,6 +531,83 @@ class QuantService {
   }
   dataset(id) {
     return this.decodeDataset(id, fs.readFileSync(this.datasetFile(id)));
+  }
+  async captureKrakenArchive({ id, from, to, select }, signal) {
+    const w = this.workspace(id);
+    if (w.market.venue !== 'kraken') problem('KRAKEN_ARCHIVE_MARKET');
+    if (this.krakenArchiveFlights.has(id) || this.krakenArchiveFlights.size >= 2)
+      problem('RESEARCH_BUSY');
+    const controller = new AbortController();
+    const scopes = [controller.signal, AbortSignal.timeout(120000)];
+    if (signal) scopes.push(signal);
+    const combined = AbortSignal.any(scopes);
+    const revision = w.marketRevision;
+    this.krakenArchiveFlights.set(id, controller);
+    try {
+      const { candles, archive } = await readKrakenArchive(
+        this.market.fetch,
+        w.market,
+        { from, to },
+        combined,
+      );
+      return await this.mutate((state) => {
+        combined.throwIfAborted();
+        const current = this.workspace(id, state);
+        if (current.marketRevision !== revision) problem('MARKET_CHANGED');
+        const meta = this.storeDataset(
+          current,
+          candles,
+          KRAKEN_ARCHIVE_SOURCE,
+          'Kraken · ' + archive.entries.map((item) => item.quarter).join(' / '),
+          { archive },
+        );
+        const existing = current.datasets.find((dataset) => dataset.id === meta.id);
+        if (!existing) {
+          current.datasets.push(meta);
+          event(current, 'kraken-archive-captured', { datasetId: meta.id });
+        }
+        if (select === true) current.preferences.datasetId = meta.id;
+        return existing || meta;
+      });
+    } finally {
+      this.krakenArchiveFlights.delete(id);
+    }
+  }
+  captureCandles(id, { label, select = false, signal } = {}) {
+    return this.mutate((state) => {
+      signal?.throwIfAborted();
+      const w = this.workspace(id, state);
+      const closed =
+        w.market.venue === 'kraken'
+          ? w.candles
+          : w.candles.filter((bar) => (bar.time + w.market.interval) * 1000 <= Date.now());
+      if (!closed.length) problem('NO_CLOSED_CANDLES');
+      const source =
+        w.market.venue === 'kraken' ? KRAKEN_OHLC_SOURCE : w.quote?.quality || 'unknown';
+      const meta = this.storeDataset(w, closed, source, label || 'Market snapshot');
+      const existing = w.datasets.find((item) => item.id === meta.id);
+      if (!existing) w.datasets.push(meta);
+      if (select) w.preferences.datasetId = meta.id;
+      return existing || meta;
+    });
+  }
+  switchKrakenCandles(w, previousMarket) {
+    if (w.candles.length) {
+      const label = 'Recorded · ' + new Date(w.candles[0].time * 1000).toISOString();
+      const archive = this.storeDataset(w, w.candles, KRAKEN_OHLC_SOURCE, label, {
+        market: previousMarket,
+      });
+      if (!w.datasets.some((dataset) => dataset.id === archive.id)) w.datasets.push(archive);
+    }
+    const latest = w.datasets
+      .filter(
+        (dataset) =>
+          dataset.source === KRAKEN_OHLC_SOURCE &&
+          dataset.market?.product === w.market.product &&
+          dataset.market.interval === w.market.interval,
+      )
+      .sort((a, b) => b.end - a.end || b.createdAt - a.createdAt)[0];
+    return latest ? this.dataset(latest.id).candles : [];
   }
   workspaceDataset(w, id) {
     if (!w.datasets.some((dataset) => dataset.id === id)) problem('DATASET_NOT_IN_WORKSPACE');
@@ -582,17 +732,7 @@ class QuantService {
     this.runningTests.add(token);
     try {
       let datasetId = input.datasetId || w.preferences.datasetId;
-      if (!datasetId) {
-        const now = Date.now();
-        const closed = w.candles.filter((bar) => (bar.time + w.market.interval) * 1000 <= now);
-        const meta = this.storeDataset(w, closed, w.quote?.quality || 'unknown', 'Market snapshot');
-        await this.mutate((state) => {
-          signal?.throwIfAborted();
-          const current = this.workspace(id, state);
-          if (!current.datasets.some((d) => d.id === meta.id)) current.datasets.push(meta);
-        });
-        datasetId = meta.id;
-      }
+      if (!datasetId) datasetId = (await this.captureCandles(id, { signal })).id;
       signal?.throwIfAborted();
       if (!this.workspace(id).datasets.some((d) => d.id === datasetId))
         problem('DATASET_NOT_IN_WORKSPACE');
@@ -629,6 +769,8 @@ class QuantService {
         });
       });
       const evidence = dataset.amm || dataset.series;
+      const observedIntervals =
+        dataset.series || dataset.archive || dataset.source === KRAKEN_OHLC_SOURCE;
       const run = {
         id: randomUUID(),
         workspaceId: id,
@@ -645,11 +787,12 @@ class QuantService {
             }
           : dataset.market,
         dataSource: dataset.source,
-        ...(dataset.series && {
-          dataSeries: dataset.series,
+        ...(dataset.series && { dataSeries: dataset.series }),
+        ...(dataset.archive && { archive: dataset.archive }),
+        ...(observedIntervals && {
           trades: result.trades.map((trade) => ({
             ...trade,
-            emptyIntervalsBeforeFill: (trade.time - trade.signalTime) / dataset.series.interval - 1,
+            emptyIntervalsBeforeFill: (trade.time - trade.signalTime) / dataset.market.interval - 1,
           })),
           assumptions: [
             ...result.assumptions,
@@ -800,6 +943,8 @@ class QuantService {
     if (!input || typeof input !== 'object' || Array.isArray(input)) problem('INVALID_PARAMS');
     if (action.startsWith('execution.'))
       return this.execution().request(action.slice(10), input, context);
+    if (action.startsWith('exchange.'))
+      return this.exchange().request(action.slice(9), input, context);
     if (action.startsWith('recording.')) return this.recordings.request(action.slice(10), input);
     if (action.startsWith('replay.')) return this.replays.request(action.slice(7), input);
     if (action === 'research.search' || action === 'research.read')
@@ -823,8 +968,8 @@ class QuantService {
     }
     if (action === 'native.source.status') return this.nativeMarkets.inspect();
     if (action === 'native.source.start') return this.nativeMarkets.start(input);
-    if (action === 'native.source.stop') return this.nativeMarkets.stop(input.product);
-    if (action === 'native.source.book') return this.nativeMarkets.book(input.product);
+    if (action === 'native.source.stop') return this.nativeMarkets.stop(input.product, input.venue);
+    if (action === 'native.source.book') return this.nativeMarkets.book(input.product, input.venue);
     if (action === 'native.control') {
       if (input.method === 'pause') this.liveExecution?.abortAll();
       return this.native.call(input.method, input.params);
@@ -832,12 +977,21 @@ class QuantService {
     if (action === 'capabilities')
       return {
         version: 1,
-        venues: ['base', 'base-sepolia', 'coinbase'],
+        venues,
         chains: Object.values(CHAINS).map(({ id, name, explorer }) => ({ id, name, explorer })),
         walletNetworks: this.getWallet?.().networks.list().items ?? [],
         live: Boolean(this.getWallet),
         nativeHftEngine: false,
+        exchange: {
+          venue: 'coinbase-exchange',
+          environments: ['sandbox', 'live'],
+          orderTypes: ['limit-gtc'],
+          manualSubmit: true,
+        },
         intervals: INTERVALS,
+        venueIntervals: Object.fromEntries(
+          venues.map((venue) => [venue, intervalsForVenue(venue)]),
+        ),
       };
     if (action === 'workspace.list') return this.state.workspaces.map((w) => this.summary(w));
     if (action === 'contract')
@@ -846,21 +1000,23 @@ class QuantService {
       return this.mutate((state) => {
         if (state.workspaces.length >= 200) problem('WORKSPACE_LIMIT');
         const venue = input.venue || 'base';
-        if (!['base', 'base-sepolia', 'coinbase'].includes(venue)) problem('VENUE_UNAVAILABLE');
-        const product = venue === 'coinbase' ? input.product || 'ETH-USD' : 'WETH-USDC';
-        if (venue === 'coinbase' && !['ETH-USD', 'BTC-USD', 'SOL-USD'].includes(product))
-          problem('PRODUCT_UNAVAILABLE');
+        if (!venues.includes(venue)) problem('VENUE_UNAVAILABLE');
+        const spot = spotVenues.find(({ id }) => id === venue);
+        const product = spot ? input.product || 'ETH-USD' : 'WETH-USDC';
+        if (spot && !spotProducts.includes(product)) problem('PRODUCT_UNAVAILABLE');
+        const interval = input.interval ?? 300;
+        if (!intervalsForVenue(venue).includes(interval)) problem('INTERVAL_UNAVAILABLE');
         const id = randomUUID(),
           now = Date.now();
         const w = {
           id,
-          name: String(input.name || (CHAINS[venue]?.name || 'Coinbase') + ' · ' + product)
+          name: String(input.name || (CHAINS[venue]?.name || spot.label) + ' · ' + product)
             .trim()
             .slice(0, 100),
           createdAt: now,
           updatedAt: now,
           conversationId: 'quant-' + id,
-          market: { venue, product, interval: 300, poolFee: 500 },
+          market: { venue, product, interval, ...(venue !== 'kraken' && { poolFee: 500 }) },
           marketRevision: 1,
           risk: riskConfig(),
           paper: {
@@ -870,7 +1026,11 @@ class QuantService {
             position: '0',
             fees: '0',
           },
-          preferences: { layout: 'professional', chatWidth: 360, datasetId: null },
+          preferences: {
+            layout: 'professional',
+            chatWidth: panelLimits.chatWidth.default,
+            datasetId: null,
+          },
           quote: null,
           candles: [],
           datasets: [],
@@ -898,10 +1058,16 @@ class QuantService {
             if (!['professional', 'immersive'].includes(p.layout)) problem('INVALID_LAYOUT');
             w.preferences.layout = p.layout;
           }
-          if (p.chatWidth !== undefined) {
-            if (!Number.isInteger(p.chatWidth) || p.chatWidth < 280 || p.chatWidth > 600)
+          for (const [key, bounds] of Object.entries(panelLimits)) {
+            const value = p[key];
+            if (value === undefined) continue;
+            if (!Number.isInteger(value) || value < bounds.min || value > bounds.max)
               problem('INVALID_LAYOUT');
-            w.preferences.chatWidth = p.chatWidth;
+            w.preferences[key] = value;
+          }
+          if (p.focusDetails !== undefined) {
+            if (typeof p.focusDetails !== 'boolean') problem('INVALID_LAYOUT');
+            w.preferences.focusDetails = p.focusDetails;
           }
           if (p.datasetId !== undefined) {
             if (p.datasetId !== null && !w.datasets.some((d) => d.id === p.datasetId))
@@ -914,9 +1080,18 @@ class QuantService {
             problem('PAUSE_AND_CANCEL_BEFORE_CONFIGURING');
           if (input.risk) w.risk = riskConfig({ ...w.risk, ...input.risk });
           if (input.market) {
+            const previousMarket = { ...w.market };
             const before = JSON.stringify(w.market);
-            if (input.market.interval !== undefined && !INTERVALS.includes(input.market.interval))
+            if (
+              input.market.interval !== undefined &&
+              !intervalsForVenue(w.market.venue).includes(input.market.interval)
+            )
               problem('INTERVAL_UNAVAILABLE');
+            if (
+              w.market.venue === 'kraken' &&
+              ['rpcUrl', 'pool', 'poolFee'].some((key) => Object.hasOwn(input.market, key))
+            )
+              problem('CHAIN_UNAVAILABLE');
             if (input.market.rpcUrl !== undefined)
               w.market.rpcUrl = input.market.rpcUrl ? endpoint(input.market.rpcUrl) : '';
             if (input.market.pool !== undefined) {
@@ -935,11 +1110,15 @@ class QuantService {
             }
             if (input.market.interval !== undefined) w.market.interval = input.market.interval;
             if (JSON.stringify(w.market) !== before) {
+              const candles =
+                w.market.venue === 'kraken' ? this.switchKrakenCandles(w, previousMarket) : [];
               this.baseRecorder.pause(w, 'market-changed');
-              w.marketRevision++;
-              w.candles = [];
+              w.marketRevision = (w.marketRevision ?? 0) + 1;
+              w.candles = candles;
               w.quote = null;
               w.lastError = null;
+              delete w.historyFetchedAt;
+              delete w.historyOpenTime;
             }
           }
           event(w, 'configuration-updated');
@@ -948,6 +1127,39 @@ class QuantService {
         return this.snapshot(w);
       });
     if (action === 'market.refresh') return this.refresh(input.id);
+    if (action === 'market.kraken.archive') return this.captureKrakenArchive(input, context.signal);
+    if (action === 'market.candles') {
+      const w = this.workspace(input.id);
+      const dataset = input.datasetId ? this.workspaceDataset(w, input.datasetId) : null;
+      const candles = dataset?.candles || w.candles;
+      const offset = input.offset ?? 0,
+        limit = input.limit ?? 10;
+      if (
+        !Number.isSafeInteger(offset) ||
+        offset < 0 ||
+        !Number.isInteger(limit) ||
+        limit < 1 ||
+        limit > 100
+      )
+        problem('INVALID_PAGINATION');
+      const end = Math.max(0, candles.length - offset);
+      const items = candles.slice(Math.max(0, end - limit), end).reverse();
+      return {
+        items,
+        total: candles.length,
+        offset,
+        next: offset + items.length < candles.length ? offset + items.length : null,
+        source: dataset?.source ?? w.quote?.quality ?? null,
+        ...(dataset?.archive && { archive: dataset.archive }),
+        market: copy(
+          dataset?.market ?? {
+            venue: w.market.venue,
+            product: w.market.product,
+            interval: w.market.interval,
+          },
+        ),
+      };
+    }
     if (action === 'base.history.record.status')
       return this.baseRecorder.status(this.workspace(input.id));
     if (action === 'base.history.record.start') return this.baseRecorder.start(input);
@@ -1024,6 +1236,18 @@ class QuantService {
       const data = this.workspaceDataset(this.workspace(input.id), input.datasetId);
       if (data.amm) delete data.amm.trades;
       return data;
+    }
+    if (action === 'dataset.capture') {
+      if (
+        input.label !== undefined &&
+        (typeof input.label !== 'string' || !input.label.trim() || input.label.length > 120)
+      )
+        problem('INVALID_NAME');
+      return this.captureCandles(input.id, {
+        label: input.label?.trim(),
+        select: input.select === true,
+        signal: context.signal,
+      });
     }
     if (action === 'run.backtest') return this.backtest(input.id, input, context.signal);
     if (action === 'run.walk-forward') return this.backtest(input.id, input, context.signal, true);
@@ -1133,12 +1357,7 @@ class QuantService {
         }
         if (w.paper.status !== 'running') problem('PAPER_PAUSED');
         const quote = w.quote;
-        if (
-          !quote ||
-          w.lastError ||
-          Date.now() - quote.observedAt > 30000 ||
-          Date.now() - quote.time * 1000 > 30000
-        )
+        if (!quote || w.lastError || !freshSample(quote, Date.now()))
           problem('FRESH_MARKET_REQUIRED');
         if (w.orders.filter((order) => order.createdAt > Date.now() - 60000).length >= 60)
           problem('PAPER_ORDER_RATE_LIMIT');
@@ -1177,6 +1396,7 @@ class QuantService {
           ...intent,
           status: 'open',
           createdAt: Date.now(),
+          submittedQuoteTime: quote.time,
           reserved: buying ? decimal(value + costs) : '0',
           fillModel: 'snapshot-crossing-full-fill-no-queue',
         };
@@ -1260,8 +1480,12 @@ class QuantService {
   }
   dispose() {
     this.disposed = true;
+    for (const flight of this.refreshing.values())
+      flight.controller.abort(new Error('QUANT_STOPPED'));
+    this.exchangeOrders?.dispose();
     this.baseRecorder.dispose();
     for (const controller of this.baseCaptures.values()) controller.abort();
+    for (const controller of this.krakenArchiveFlights.values()) controller.abort();
     for (const controller of this.baseSeriesReads) controller.abort();
     this.ammReplayAbort?.abort();
     this.liveExecution?.dispose();

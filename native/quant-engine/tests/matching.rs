@@ -119,6 +119,7 @@ fn run(test: impl FnOnce(&mut Ledger, &mut Matcher, &mut Book)) {
                 tick: n("0.5"),
                 lot: n("1"),
                 min_notional: n("1"),
+                min_quantity: None,
                 fee_bps: 100,
             })
             .unwrap();

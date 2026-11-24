@@ -1,0 +1,8 @@
+{
+  "projectWidth": { "min": 150, "max": 360, "default": 216, "unit": "px" },
+  "chatWidth": { "min": 280, "max": 600, "default": 382, "unit": "px" },
+  "chartShare": { "min": 30, "max": 86, "default": 63, "unit": "%" },
+  "focusMarketShare": { "min": 30, "max": 68, "default": 49, "unit": "%" },
+  "stackMarketHeight": { "min": 440, "max": 710, "default": 604, "unit": "px" },
+  "focusStackMarketHeight": { "min": 310, "max": 580, "default": 420, "unit": "px" }
+}

@@ -7,4 +7,11 @@ export type WalletEmergency = {
   nativePausePending: boolean;
   nativePauseError: string | null;
   needsReconciliation: number;
+  exchangeCancel?: {
+    phase: 'running' | 'complete' | 'attention';
+    targeted?: number;
+    canceled?: number;
+    remaining?: number;
+    error?: string | null;
+  };
 };

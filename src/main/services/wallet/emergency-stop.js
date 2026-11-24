@@ -29,6 +29,8 @@ class EmergencyStop {
             record.halt.id !== record.generation ||
             !Number.isSafeInteger(record.halt.at) ||
             record.halt.at < 0 ||
+            (record.halt.cancelExchangeOrders !== undefined &&
+              typeof record.halt.cancelExchangeOrders !== 'boolean') ||
             !(record.halt.before === 'initial' || uuid(record.halt.before))))
       )
         throw Error();
@@ -66,13 +68,14 @@ class EmergencyStop {
       fail('WALLET_EMERGENCY_STORAGE_FAILED');
     }
   }
-  halt(expected) {
-    if (this.halted && this.record.halt.before === expected) {
-      if (this.storageError) this.save();
-      return;
-    }
-    if (expected !== this.generation) fail('WALLET_EMERGENCY_CHANGED');
+  halt(expected, cancelExchangeOrders = false) {
+    if (expected !== this.generation && !(this.halted && this.record.halt.before === expected))
+      fail('WALLET_EMERGENCY_CHANGED');
     if (this.halted) {
+      if (cancelExchangeOrders && !this.record.halt.cancelExchangeOrders) {
+        this.record = { ...this.record, halt: { ...this.record.halt, cancelExchangeOrders: true } };
+        this.save();
+      }
       if (this.storageError) this.save();
       return;
     }
@@ -80,7 +83,12 @@ class EmergencyStop {
     this.record = {
       version: 1,
       generation: id,
-      halt: { id, at: Date.now(), before: expected },
+      halt: {
+        id,
+        at: Date.now(),
+        before: expected,
+        ...(cancelExchangeOrders && { cancelExchangeOrders: true }),
+      },
     };
     // Install the in-memory barrier before I/O. A storage failure never re-enables signing.
     this.save();
@@ -103,6 +111,7 @@ class EmergencyStop {
       generation: this.generation,
       latchId: this.record.halt?.id || null,
       stoppedAt: this.record.halt?.at || null,
+      cancelExchangeOrders: this.record.halt?.cancelExchangeOrders === true,
       storageError: this.storageError ? 'WALLET_EMERGENCY_STORAGE_FAILED' : null,
     };
   }

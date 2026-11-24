@@ -14,6 +14,7 @@ const {
   page,
   digest,
 } = require('./event-files');
+const { nativeSourceKey } = require('./native-markets');
 class EventRecordings {
   constructor(service) {
     this.service = service;
@@ -74,17 +75,23 @@ class EventRecordings {
     return task;
   }
   async start(input) {
+    const venue = input.venue ?? 'coinbase';
+    const key = nativeSourceKey(input.product, venue);
     const recordingId = identity(input.id, input.operationId),
       folder = this.folder(recordingId),
       file = path.join(folder, 'manifest.json');
     if (fs.existsSync(file)) {
       const old = this.get(recordingId, input.id);
-      if (old.product !== input.product || (input.name && old.name !== String(input.name).trim()))
+      if (
+        old.product !== input.product ||
+        (old.venue ?? 'coinbase') !== venue ||
+        (input.name && old.name !== String(input.name).trim())
+      )
         fail('RECORDING_OPERATION_CONFLICT');
       return old;
     }
     if (this.active.size >= 4) fail('RECORDING_LIMIT');
-    const entry = this.service.nativeMarkets.sources.get(input.product);
+    const entry = this.service.nativeMarkets.sources.get(key);
     if (!entry?.instrument || !entry.source.desired) fail('SOURCE_NOT_READY');
     const name = String(input.name || input.product).trim();
     if (!name || name.length > 80 || /[\u0000-\u001f\u007f]/.test(name))
@@ -96,6 +103,7 @@ class EventRecordings {
         owner: input.id,
         name,
         product: input.product,
+        venue,
         instrument: entry.instrument,
         assumptions: entry.assumptions,
         captureEngineSha256: this.service.native.inspect().sha256,

@@ -142,6 +142,7 @@ const otherAnswers = ['Day', ['ETH'], 'Use a shorter horizon.'];
     { ok: true, duplicate: true },
   );
   await host.runtime.sessions.get(live.key).finished;
+  assert.equal(host.runtime.getSession(live.key).status, 'idle');
   assert.deepEqual(received, [{ ok: true, answers: firstAnswers, authority: 'none' }]);
   assert.equal((await request('chat.open', { id: live.id })).pendingInteraction, null);
 
@@ -191,6 +192,9 @@ const otherAnswers = ['Day', ['ETH'], 'Use a shorter horizon.'];
   );
   const session = host.runtime.sessions.get(cold.key);
   await session.finished;
+  assert.equal(host.runtime.getSession(cold.key).status, 'idle');
+  assert.equal(host.runtime.getSession(cold.key).busy, false);
+  assert.equal(session.agent.running, false);
   assert.deepEqual(received.at(-1), { ok: true, answers: otherAnswers, authority: 'none' });
   assert.equal(received.length, 2);
   const history = session.agent.contextManager.getHistoryMessages();

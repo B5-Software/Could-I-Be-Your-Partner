@@ -137,6 +137,22 @@ function createAgentRuntime({
     };
   }
 
+  function finishAgentRun(session) {
+    if (session.agent.running) {
+      session.agent.running = false;
+      session.agent._emitWorkingStatus('idle');
+    }
+    session.busy = false;
+    session.status = session.lastError ? 'error' : session.stopRequested ? 'interrupted' : 'idle';
+    session.finish?.();
+    emit({ type: 'status', key: session.key, status: session.status });
+    try {
+      runtime.emitUsageStats(session.key);
+    } catch (error) {
+      log.warn?.('[agent-runtime] Usage refresh failed: ' + error.message);
+    }
+  }
+
   /** 会话成本：按 settings.budget.models 定价（未配置返回 null → 前端不显示 $） */
   function computeSessionCost(agent, settings) {
     const models = (settings && settings.budget && settings.budget.models) || {};
@@ -449,6 +465,7 @@ function createAgentRuntime({
     session.agent.onStatusChange = (status) => {
       // The Agent core calls active work "working"; frontends use "running".
       // Normalize here so the first tarot draw cannot clear the TUI spinner.
+      if (session.busy && status === 'idle') return;
       session.status = status === 'working' ? 'running' : status;
       emit({ type: 'status', key: sessionKey, status: session.status });
     };
@@ -538,7 +555,7 @@ function createAgentRuntime({
           return {
             language: settings.language,
             llm: settings.llm,
-            agent: { maxIterations: 12 },
+            agent: settings.agent,
             email: { enabled: false },
             decision: { enabled: false },
             autoOptimizeToolSelection: false,
@@ -1366,21 +1383,24 @@ function createAgentRuntime({
         throw new Error('The session is busy');
       if (action === 'proactiveSend') {
         session.busy = true;
+        session.status = 'running';
         session.stopRequested = false;
+        session.lastError = null;
         session.finished = new Promise((resolve) => {
           session.finish = resolve;
         });
+        emit({ type: 'status', key, status: session.status });
+        let result;
         try {
-          const result = await a[action](...args);
-          emit({ type: 'view-changed', key });
-          return { result, view: this.getView(key) };
+          result = await a[action](...args);
+        } catch (error) {
+          session.lastError = error.message;
+          throw error;
         } finally {
-          session.busy = false;
-          session.status = 'idle';
-          session.finish?.();
-          this.emitUsageStats(key);
-          emit({ type: 'status', key, status: 'idle' });
+          finishAgentRun(session);
         }
+        emit({ type: 'view-changed', key });
+        return { result, view: this.getView(key) };
       }
       const result = await a[action](...args);
       emit({ type: 'view-changed', key });
@@ -1550,20 +1570,7 @@ function createAgentRuntime({
               .some((m) => m.role === 'user' && m.metadata?.kind !== 'context-update')
           )
             session.unadmittedInput = null;
-          session.busy = false;
-          session.finish?.();
-          session.status = session.lastError
-            ? 'error'
-            : session.stopRequested
-              ? 'interrupted'
-              : 'idle';
-          // 每轮结束推送用量/成本/上下文统计 → 前端状态栏
-          try {
-            this.emitUsageStats(session.key);
-          } catch {
-            /* 统计推送失败不影响主流程 */
-          }
-          emit({ type: 'status', key: session.key, status: session.status });
+          finishAgentRun(session);
         }
       };
       if (options.background === true) {
@@ -1953,16 +1960,7 @@ function createAgentRuntime({
         session.lastError = error.message;
         emit({ type: 'message', key: session.key, role: 'system', content: error.message });
       } finally {
-        a.running = false;
-        a._emitWorkingStatus('idle');
-        session.busy = false;
-        session.finish?.();
-        session.status = session.lastError
-          ? 'error'
-          : session.stopRequested
-            ? 'interrupted'
-            : 'idle';
-        emit({ type: 'status', key: session.key, status: session.status });
+        finishAgentRun(session);
       }
     };
     void run();

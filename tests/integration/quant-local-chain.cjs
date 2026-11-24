@@ -383,6 +383,70 @@ async function main() {
   const reconciled = await walletService.reconcile(uncertain.id);
   assert.ok(['included', 'safe', 'finalized'].includes(reconciled.status));
   walletService.market.rpc = networkRpc;
+
+  const ratePassword = 'public-local-rate-fixture';
+  const rateWallets = [];
+  for (const suffix of ['15', '16']) {
+    const entry = await request('wallet:request', 'import', {
+      kind: 'privateKey',
+      name: `Rate fixture ${suffix}`,
+      secret: '0x' + suffix.padStart(64, '0'),
+      password: ratePassword,
+    });
+    await rpc('anvil_setBalance', [entry.address, '0xde0b6b3a7640000']);
+    await request('wallet:request', 'unlock', { id: entry.id, password: ratePassword, minutes: 0 });
+    rateWallets.push(entry);
+  }
+  const rateChallenge = await request('wallet:request', 'portfolio.challenge', {
+    operation: 'create',
+    name: 'Local rolling limit',
+    chainId: 8453,
+    walletIds: rateWallets.map((entry) => entry.id),
+    limits: { maxTransactions: 2 },
+    signatureRate: { windowSeconds: 120, maxSignatures: 1 },
+  });
+  const rateGroup = await request('wallet:request', 'portfolio.confirm', {
+    challengeId: rateChallenge.id,
+    ack: 'ALLOW PORTFOLIO',
+    confirmed: true,
+  });
+  const signedWithRate = async (entry, commandId) => {
+    const intent = await walletService.prepare(config, {
+      walletId: entry.id,
+      commandId,
+      to: recipient,
+      value: '0.0001',
+    });
+    await walletService.decide(intent.id, true, intent.digest);
+    return walletService.broadcast(intent.id);
+  };
+  const acceptedRate = await signedWithRate(rateWallets[0], 'rate-accepted');
+  await waitForReceipt(acceptedRate.hash);
+  const deniedRate = await signedWithRate(rateWallets[1], 'rate-denied');
+  assert.equal(deniedRate.error, 'WALLET_PORTFOLIO_RATE_LIMIT');
+  assert.equal(deniedRate.nativeSignatureAbsent, true);
+  assert.equal(
+    BigInt(await rpc('eth_getTransactionCount', [rateWallets[1].address, 'latest'])),
+    0n,
+  );
+  assert.equal(BigInt(await rpc('eth_getBalance', [recipient, 'latest'])), 1300000000000000n);
+  const research = host.runtime.sessions.get('quant:' + project.id).agent;
+  const observedRate = await research.executeTool('quant_portfolios', {
+    action: 'get',
+    portfolioId: rateGroup.portfolio.id,
+  });
+  assert.equal(observedRate.signatureRate.status, 'limited');
+  const waitedRate = await research.executeTool('quant_wait_budget', {
+    kind: 'portfolio-rate',
+    id: rateGroup.portfolio.id,
+    maxWaitMs: 30,
+  });
+  assert.equal(waitedRate.timedOut, true);
+  assert.equal(
+    BigInt(await rpc('eth_getTransactionCount', [rateWallets[1].address, 'latest'])),
+    0n,
+  );
+
   await host.close();
   host = null;
   const restored = new (require('../../src/main/services/wallet').WalletService)({
@@ -394,11 +458,14 @@ async function main() {
     assert.ok(read.items.some((item) => item.hash === records[0].hash));
     assert.ok(read.items.some((item) => item.hash === uncertain.hash));
     assert.equal(read.items.find((item) => item.id === fenced.id).submissionMayHaveOccurred, false);
+    const rate = await restored.request('portfolio.get', { id: rateGroup.portfolio.id });
+    assert.equal(rate.signatureRate.used, 1);
+    assert.equal(rate.signatureRate.status, 'limited');
   } finally {
-    restored.dispose();
+    await restored.dispose();
   }
   console.log(
-    '[quant-local-chain] PASS: encrypted signer, real transfer and custom contract call, read-only simulation, paged reads, Agent Goal, stable retries, authority revocation before/after real dispatch and restart recovery',
+    '[quant-local-chain] PASS: encrypted signer, real transfer and custom contract call, Agent Goal, stable retries, authority revocation and persisted rolling signature limits',
   );
 }
 main()

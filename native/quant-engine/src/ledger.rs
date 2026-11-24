@@ -84,6 +84,8 @@ pub struct Instrument {
     pub tick: Fixed,
     pub lot: Fixed,
     pub min_notional: Fixed,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min_quantity: Option<Fixed>,
     pub fee_bps: u16,
 }
 impl Instrument {
@@ -96,6 +98,9 @@ impl Instrument {
                 && self.tick.0 > 0
                 && self.lot.0 > 0
                 && self.min_notional.0 > 0
+                && self
+                    .min_quantity
+                    .is_none_or(|minimum| minimum.0 > 0 && minimum.multiple_of(self.lot))
                 && self.fee_bps <= 10000,
             "INVALID_INSTRUMENT",
         )
@@ -789,6 +794,12 @@ impl Ledger {
         )?;
         let notional = request.price.multiply(request.quantity, true)?;
         check(notional >= instrument.min_notional, "MINIMUM_NOTIONAL")?;
+        check(
+            instrument
+                .min_quantity
+                .is_none_or(|minimum| request.quantity >= minimum),
+            "MINIMUM_QUANTITY",
+        )?;
         check(
             notional
                 <= *risk

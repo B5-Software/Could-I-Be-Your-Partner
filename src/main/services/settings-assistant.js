@@ -83,6 +83,13 @@ const FIELDS = [
   ['llm.temperature', 'llm', 'setting-llm-temp', 'Temperature', [0, 2]],
   ['llm.maxContextLength', 'context', 'setting-llm-ctx', 'Context tokens', [1024, 2000000]],
   ['llm.maxResponseTokens', 'context', 'setting-llm-max-response', 'Output tokens', [256, 128000]],
+  [
+    'agent.iterationLimit',
+    'context',
+    'setting-agent-iteration-limit',
+    'Agent loop limit (0 = unlimited)',
+    [0, Number.MAX_SAFE_INTEGER],
+  ],
   ['llm.maxRetries', 'llm', 'setting-llm-retries', 'Request retries', [0, 20]],
   [
     'contextCompaction.enabled',

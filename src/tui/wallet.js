@@ -13,6 +13,7 @@ const { TuiWalletNetworks } = require('./wallet-networks');
 const { getLanguage } = require('./text');
 const statuses = require('../shared/wallet-status.json');
 const emergencyLabels = require('../shared/wallet-emergency-labels.json');
+const exchangeLabels = require('../shared/quant-exchange-labels.json');
 const securityLabels = require('../shared/wallet-security-labels.json');
 const allowanceLabels = require('../shared/wallet-allowance-labels.json');
 const assetLabels = require('../shared/wallet-assets-labels.json');
@@ -243,7 +244,12 @@ class WalletBrowser {
     return (labels[getLanguage()] || labels.zh)[key] || labels.en[key] || key;
   }
   status(value) {
-    return (statuses[getLanguage()] || statuses['zh-CN'])[value] || value;
+    const language = getLanguage();
+    return (
+      (statuses[language] || statuses['zh-CN'])[value] ||
+      (exchangeLabels[language] || exchangeLabels.zh)[value] ||
+      value
+    );
   }
   call(action, input = {}) {
     return this.app.runtime.api.backendRequest('wallet:request', action, input).catch((error) => {
@@ -297,6 +303,11 @@ class WalletBrowser {
   }
   async changed() {
     const data = await this.call('list');
+    if (this.app._disposed) return;
+    const overview = this.app.state.modal?.walletOverview ? this.app.state.modal : null;
+    const exchangeChanged =
+      JSON.stringify(data.emergency?.exchangeCancel) !==
+      JSON.stringify(this.emergency?.exchangeCancel);
     const appRequests = data.appRequests ?? [];
     if (appRequests.some((id) => !this.seenApps?.has(id))) this.notify(this.text('appsWaiting'));
     this.seenApps = new Set(appRequests);
@@ -314,6 +325,14 @@ class WalletBrowser {
     const pending = data.intents.filter((intent) => intent.status === 'approval-required');
     if (pending.some((intent) => !this.seen.has(intent.id))) this.notify(this.text('waiting'));
     this.seen = new Set(pending.map((intent) => intent.id));
+    if (overview && exchangeChanged) {
+      const value = overview.options[overview.selected]?.value;
+      this.showOverview(data);
+      const selected = this.app.state.modal.options.findIndex(
+        (option) => option.value === value || (value?.id && option.value?.id === value.id),
+      );
+      if (selected >= 0) this.app.state.modal.selected = selected;
+    }
   }
   disposeSensitive() {
     this.generation++;
@@ -327,7 +346,26 @@ class WalletBrowser {
   async open() {
     if (this.app._disposed) return;
     const data = await this.call('list');
+    if (!this.app._disposed) this.showOverview(data);
+  }
+  showOverview(data) {
     this.emergency = data.emergency;
+    const exchange = data.emergency?.exchangeCancel;
+    const exchangeTitle =
+      exchange &&
+      this.text(
+        exchange.phase === 'running'
+          ? 'esExchangeRunning'
+          : exchange.phase === 'complete'
+            ? 'esExchangeComplete'
+            : 'esExchangeAttention',
+      );
+    const exchangeCounts =
+      exchange?.targeted !== undefined &&
+      this.text('esExchangeCounts')
+        .replace('{canceled}', String(exchange.canceled))
+        .replace('{targeted}', String(exchange.targeted))
+        .replace('{remaining}', String(exchange.remaining));
     const options = [
       { label: this.text('close'), value: 'close' },
       ...data.wallets.map((wallet) => ({
@@ -358,16 +396,29 @@ class WalletBrowser {
               ? 'esRetry'
               : data.emergency.nativePausePending
                 ? 'esPending'
-                : 'esReset'
-            : 'esHalt',
+                : exchange?.phase === 'running'
+                  ? 'esExchangeRunning'
+                  : 'esReset'
+            : 'esHaltWithExchange',
         ),
         value:
           data.emergency?.halted && !data.emergency.storageError && !data.emergency.nativePauseError
-            ? data.emergency.nativePausePending
+            ? data.emergency.nativePausePending || exchange?.phase === 'running'
               ? 'emergency-refresh'
               : 'emergency-reset'
             : 'emergency-stop',
       },
+      ...(data.emergency?.halted &&
+      !data.emergency.storageError &&
+      exchange?.phase !== 'running' &&
+      exchange?.phase !== 'complete'
+        ? [
+            {
+              label: this.text(exchange ? 'esExchangeRetry' : 'esExchangeCancel'),
+              value: 'emergency-cancel-exchange',
+            },
+          ]
+        : []),
     ];
     this.menu(
       this.text('title'),
@@ -384,11 +435,20 @@ class WalletBrowser {
         if (value === 'emergency-refresh') return this.open();
         if (value === 'emergency-stop') {
           try {
-            await this.call('emergency.halt', { expectedGeneration: data.emergency?.generation });
+            await this.call('emergency.halt', {
+              expectedGeneration: data.emergency?.generation,
+              cancelExchangeOrders: true,
+            });
           } finally {
             await this.open();
           }
           return;
+        }
+        if (value === 'emergency-cancel-exchange') {
+          await this.call('emergency.cancelExchange', {
+            expectedGeneration: data.emergency?.generation,
+          });
+          return this.open();
         }
         if (value === 'emergency-reset') return this.resetEmergency();
         if (value === 'pending' || value === 'history') return this.history(0, value === 'pending');
@@ -402,13 +462,17 @@ class WalletBrowser {
             this.text('esResidual'),
             this.text('esReconcile') + ': ' + data.emergency.needsReconciliation,
             data.emergency.nativePausePending ? this.text('esPending') : '',
+            exchangeTitle,
+            exchangeCounts,
+            exchange?.error && this.status(exchange.error),
             this.status(data.emergency.storageError || data.emergency.nativePauseError || ''),
           ]
             .filter(Boolean)
             .join('\n')
-        : '',
+        : this.text('esExchangeHint'),
       () => {},
     );
+    this.app.state.modal.walletOverview = true;
   }
   account(wallet) {
     this.menu(
@@ -953,7 +1017,16 @@ class WalletBrowser {
           { back: () => this.open() },
         );
       },
-      [this.text('esScope'), this.text('esResetHint'), this.text('esResidual')].join('\n'),
+      [
+        this.text('esScope'),
+        this.text('esResetHint'),
+        this.text('esResidual'),
+        this.emergency?.exchangeCancel?.phase === 'attention'
+          ? this.text('esExchangeResidual')
+          : '',
+      ]
+        .filter(Boolean)
+        .join('\n'),
       () => this.open(),
     );
   }

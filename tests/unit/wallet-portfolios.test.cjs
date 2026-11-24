@@ -86,6 +86,114 @@ async function create(service, input) {
     confirmed: true,
   });
 }
+
+test('native rolling signature capacity follows a portfolio across wallets, edits and restarts', async (t) => {
+  const f = await fixture(t, { allowWrites: true }),
+    service = f.service;
+  const other = await service.request('import', {
+    name: 'Second public wallet',
+    kind: 'privateKey',
+    secret: '0x' + '09'.padStart(64, '0'),
+    password,
+  });
+  const { portfolio } = await create(service, {
+    ...f.groupInput,
+    walletIds: [f.wallet.id, other.id],
+  });
+  const input = (walletId, commandId) => ({
+    walletId,
+    commandId,
+    to: '0x' + '2'.repeat(40),
+    value: '0.001',
+  });
+  const prepare = async (host, walletId, commandId) => {
+    const intent = await host.prepare({ venue: 'base' }, input(walletId, commandId));
+    await host.decide(intent.id, true, intent.digest);
+    return intent;
+  };
+  const transfers = () => f.writes.filter((method) => method === 'eth_sendRawTransaction').length;
+  await service.request('unlock', { id: f.wallet.id, password, minutes: 0 });
+  const first = await prepare(service, f.wallet.id, 'before-rate-enabled');
+  assert.equal((await service.broadcast(first.id)).status, 'submitted');
+  const id = portfolio.id;
+  const revision = (await service.request('portfolio.get', { id })).revision;
+  const edit = { operation: 'edit', id, revision, limits: f.groupInput.limits };
+  await assert.rejects(
+    create(service, { ...edit, signatureRate: { windowSeconds: 301, maxSignatures: 1 } }),
+    /PORTFOLIO_RATE_INVALID/,
+  );
+  const challenge = await service.request('portfolio.challenge', {
+    ...edit,
+    signatureRate: { windowSeconds: 120, maxSignatures: 1 },
+  });
+  assert.deepEqual(challenge.portfolio.signatureRate, { windowSeconds: 120, maxSignatures: 1 });
+  await service.request('portfolio.confirm', {
+    challengeId: challenge.id,
+    ack: 'ALLOW PORTFOLIO',
+    confirmed: true,
+  });
+  const capped = await service.request('portfolio.get', { id });
+  assert.equal(capped.signatureRate.used, 1);
+  assert.equal(capped.signatureRate.status, 'limited');
+  assert.ok(capped.signatureRate.nextEligibleAt > Date.now());
+
+  const restarted = await f.reopen();
+  assert.equal(
+    (await restarted.request('portfolio.get', { id })).signatureRate.nextEligibleAt,
+    capped.signatureRate.nextEligibleAt,
+  );
+  await restarted.request('unlock', { id: other.id, password, minutes: 0 });
+  const denied = await prepare(restarted, other.id, 'other-wallet-same-window');
+  const result = await restarted.broadcast(denied.id);
+  assert.equal(result.status, 'failed');
+  assert.equal(result.error, 'WALLET_PORTFOLIO_RATE_LIMIT');
+  assert.equal(result.nativeSignatureAbsent, true);
+  assert.equal(result.submissionMayHaveOccurred, false);
+  const row = restarted.state.intents.find((item) => item.id === denied.id);
+  const receipt = await restarted.signer('receipt.get', {
+    id: other.id,
+    operationId: denied.id,
+    storeId: row.nativeSigning.storeId,
+  });
+  assert.equal(receipt.found, false);
+  assert.equal(transfers(), 1);
+
+  const { waitPeriod } = require('../../src/main/services/wallet/budget-wait');
+  const { rootContext } = require('../../src/main/services/wallet/agent-scopes');
+  const context = rootContext('rate-fixture');
+  const wait = { kind: 'portfolio-rate', id, maxWaitMs: 80 };
+  const parked = await waitPeriod(restarted, context, wait, new AbortController().signal);
+  assert.equal(parked.timedOut, true);
+  assert.equal(parked.signatureRate.status, 'limited');
+  await create(restarted, {
+    ...edit,
+    revision: capped.revision,
+    signatureRate: { windowSeconds: 120, maxSignatures: 2 },
+  });
+  assert.equal((await waitPeriod(restarted, context, wait)).ready, true);
+  assert.equal((await restarted.request('portfolio.get', { id })).signatureRate.remaining, 1);
+  const second = await prepare(restarted, other.id, 'other-wallet-after-human-budget-edit');
+  assert.equal((await restarted.broadcast(second.id)).status, 'submitted');
+  const settlement = await restarted.request('portfolio.get', { id });
+  assert.equal(settlement.usage.transactions, 2);
+  assert.equal(settlement.signatureRate.status, 'limited');
+  assert.equal(transfers(), 2);
+  const controller = new AbortController();
+  const stopped = waitPeriod(restarted, context, { ...wait, maxWaitMs: 5000 }, controller.signal);
+  controller.abort(Error('stopped rolling wait'));
+  await assert.rejects(stopped, /stopped rolling wait/);
+  assert.equal(restarted.budgetWake.size, 0);
+
+  await create(restarted, {
+    ...edit,
+    revision: settlement.revision,
+    signatureRate: { windowSeconds: 2, maxSignatures: 1 },
+  });
+  const timed = await waitPeriod(restarted, context, { ...wait, maxWaitMs: 6000 });
+  assert.equal(timed.ready, true);
+  assert.equal(timed.signatureRate.used, 0);
+  assert.equal(transfers(), 2, 'waiting for capacity never submits an intent');
+});
 test('a portfolio revision change during a holdings read rejects the stale scope snapshot', async (t) => {
   const f = await fixture(t),
     s = f.service;

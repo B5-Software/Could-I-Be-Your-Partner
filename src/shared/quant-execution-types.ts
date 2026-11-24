@@ -1,4 +1,12 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
+export type ExecutionEntryTrigger = {
+  relation: 'at-or-below' | 'at-or-above';
+  price_atoms: string;
+};
+export type ExecutionProtectiveExit = {
+  stop_loss_price_atoms: string;
+  take_profit_price_atoms?: string;
+};
 export type ExecutionPlan = {
   agent_scope?: { id: string; subject: string };
   template: string;
@@ -10,6 +18,8 @@ export type ExecutionPlan = {
   total_input_atoms: string;
   min_total_output_atoms?: string;
   max_arrival_cost_bps?: number;
+  entry_trigger?: ExecutionEntryTrigger;
+  protective_exit?: ExecutionProtectiveExit;
   slices: number;
   interval_ms: number;
   slippage_bps: number;
@@ -76,6 +86,8 @@ export type ExecutionCommand = {
   window?: { opens_at_ns: string; closes_at_ns: string };
   stage: string;
   lease: string | null;
+  entry_observation?: ExecutionArrival;
+  exit_trigger?: { cause: 'stop-loss' | 'take-profit'; observation: ExecutionArrival };
   intent_ids: string[];
   hashes: string[];
   reason: string;
@@ -125,6 +137,8 @@ export type ExecutionView = {
   profile?: ExecutionVwapProfile;
   settlement?: ExecutionSettlement;
   arrivalComparison?: ExecutionArrivalComparison;
+  entryStatus?: 'EXECUTION_ENTRY_WAIT' | 'EXECUTION_ENTRY_UNAVAILABLE';
+  exitStatus?: 'EXECUTION_EXIT_WAIT' | 'EXECUTION_EXIT_UNAVAILABLE';
   feeUsage: { reservedEstimateWei: string; budgetWei: string | null; chainEnforced: false };
   lastError: string | null;
 };
@@ -141,4 +155,7 @@ export {
   executionSettlementRows,
   executionBenchmarkRows,
   executionArrivalRows,
+  executionEntryCondition,
+  executionEntryRows,
+  executionExitConditions,
 } from './quant-execution-format';

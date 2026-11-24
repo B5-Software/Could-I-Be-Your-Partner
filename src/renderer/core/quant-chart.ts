@@ -151,11 +151,14 @@ export class QuantChart {
     const spread = Math.max(max - min, max * 0.001);
     min -= spread * 0.12;
     max += spread * 0.12;
-    const volumeVisible = height >= 220 && visible.some((bar) => bar.volume > 0);
+    const volumeHeight =
+      height >= 195 && visible.some((bar) => bar.volume > 0)
+        ? Math.min(50, Math.round(height * 0.16))
+        : 0;
     const left = 12,
       right = width - 78,
       top = 18,
-      bottom = height - (volumeVisible ? 92 : 34);
+      bottom = height - (volumeHeight ? volumeHeight + 43 : 34);
     if (bottom <= top || right <= left) return;
     const step = (right - left) / this.count,
       x = (i: number) => left + (i + 0.5) * step;
@@ -205,12 +208,12 @@ export class QuantChart {
         Math.max(1.5, Math.abs(y(bar.open) - y(bar.close))),
       );
       ctx.globalAlpha = 0.3;
-      if (volumeVisible)
+      if (volumeHeight)
         ctx.fillRect(
           cx - body / 2,
-          height - 30 - (bar.volume / maxVolume) * 43,
+          height - 30 - (bar.volume / maxVolume) * volumeHeight,
           body,
-          (bar.volume / maxVolume) * 43,
+          (bar.volume / maxVolume) * volumeHeight,
         );
       ctx.globalAlpha = 1;
     });
@@ -231,20 +234,33 @@ export class QuantChart {
     });
     ctx.lineWidth = 1;
     ctx.fillStyle = muted;
-    for (let i = 0; i < 4; i++) {
-      const index = Math.floor(((visible.length - 1) * i) / 3),
-        bar = visible[index]!;
-      ctx.fillText(
-        new Date(bar.time * 1000).toLocaleString(document.documentElement.lang, {
-          month: '2-digit',
-          day: '2-digit',
-          hour: '2-digit',
-          minute: '2-digit',
-          hour12: false,
-        }),
-        Math.min(right - 82, x(index)),
-        height - 13,
-      );
+    const dateFormat = new Intl.DateTimeFormat(document.documentElement.lang || undefined, {
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    });
+    const label = (index: number) => dateFormat.format(visible[index]!.time * 1000);
+    const labelWidth = Math.max(
+      ctx.measureText(label(0)).width,
+      ctx.measureText(label(visible.length - 1)).width,
+    );
+    const ticks = Math.min(
+      visible.length,
+      5,
+      Math.max(1, Math.floor((right - left) / (labelWidth + 14))),
+    );
+    let lastLabelEnd = -Infinity;
+    for (let i = 0; i < ticks; i++) {
+      const index =
+        ticks === 1 ? visible.length - 1 : Math.round(((visible.length - 1) * i) / (ticks - 1));
+      const text = label(index),
+        width = ctx.measureText(text).width;
+      const at = Math.max(left, Math.min(right - width, x(index) - width / 2));
+      if (at < lastLabelEnd + 12 || at + width > right) continue;
+      ctx.fillText(text, at, height - 13);
+      lastLabelEnd = at + width;
     }
     const last = visible.at(-1)!;
     ctx.setLineDash([3, 4]);

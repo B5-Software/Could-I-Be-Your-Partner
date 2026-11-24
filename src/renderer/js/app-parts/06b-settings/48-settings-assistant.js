@@ -32,7 +32,7 @@
     if (generation !== settingsHelperGeneration) return;
     const api = {};
     for (const key of ['chatLLM', 'chatLLMStream', 'summarizeText', 'budgetCheck', 'agentAbort', 'onLLMRetry', 'onStreamChunk', 'onStreamEnd']) if (typeof window.api[key] === 'function') api[key] = (...args) => window.api[key](...args);
-    api.getSettings = async () => ({ ...settings, llm: { ...settings.llm }, email: { enabled: false }, decision: { enabled: false }, agent: { maxIterations: 12 }, autoOptimizeToolSelection: false, tools: {}, privacyProtection: { enabled: true, filterResults: true, filterArgs: true } });
+    api.getSettings = async () => ({ ...settings, llm: { ...settings.llm }, email: { enabled: false }, decision: { enabled: false }, autoOptimizeToolSelection: false, tools: {}, privacyProtection: { enabled: true, filterResults: true, filterArgs: true } });
     api.getFullSystemInfo = async () => ({}); api.workspaceCreate = async () => ({ ok: false });
     const helper = new Agent({ host: AgentHostKit.createHeadlessHost({ api }), ephemeral: true, allowedToolNames: settingsAssistantTools.map(tool => tool.function.name) });
     helper.minimalMode = true; helper.setSessionKey('settings-' + crypto.randomUUID());

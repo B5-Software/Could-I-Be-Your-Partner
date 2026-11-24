@@ -7,6 +7,7 @@
     };
     set('setting-llm-ctx', s.llm.maxContextLength);
     set('setting-llm-max-response', s.llm.maxResponseTokens);
+    set('setting-agent-iteration-limit', AgentIterations.limit(s.agent?.iterationLimit));
     set('setting-llm-daily-limit', s.budget?.dailyTokenLimit || 0);
     set('toggle-tool-discovery', s.toolExposure?.mode !== 'all', true);
     set('toggle-auto-optimize-tools', s.autoOptimizeToolSelection, true);

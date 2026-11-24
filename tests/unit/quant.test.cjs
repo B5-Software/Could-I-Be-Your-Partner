@@ -43,6 +43,184 @@ test('fixed-point paper amounts reject exponent/negative/precision overflow', ()
     assert.throws(() => atoms(invalid));
   assert.throws(() => atoms('0', true));
 });
+
+test('Kraken workspaces pin only committed OHLC, update incrementally, and preserve provenance through restart and backtest', async (t) => {
+  const { service, directory } = fixture(t);
+  const interval = 300;
+  const open = Math.floor(Date.now() / 1000 / interval) * interval - interval;
+  let now = (open + interval + 5) * 1000,
+    tradeAt = now / 1000 - 1;
+  t.mock.method(Date, 'now', () => now);
+  const candle = (time, close = '201') => [time, '200', '203', '198', close, '200', '3.125', 10];
+  let rows = Array.from({ length: 44 }, (_, index) =>
+    candle(open - (44 - index) * interval),
+  ).filter((_, index) => index !== 10);
+  rows.push(candle(open, '202'));
+  const queries = [];
+  delete service.market.quote;
+  service.market.fetch = async (input) => {
+    const url = new URL(input);
+    assert.equal(url.origin, 'https://api.kraken.com');
+    assert.equal(url.searchParams.get('pair'), 'XBTUSD');
+    const route = url.pathname.split('/').at(-1);
+    let reply;
+    if (route === 'OHLC') {
+      assert.equal(url.searchParams.get('interval'), '5');
+      queries.push(url.searchParams.get('since'));
+      reply = rows;
+    } else if (route === 'Trades') {
+      assert.equal(url.searchParams.get('count'), '1');
+      reply = [['201.25', '0.01', tradeAt, 's', 'l', '', 123]];
+    } else {
+      assert.equal(route, 'Depth');
+      reply = { bids: [['200', '2']], asks: [['202', '1']] };
+    }
+    return Response.json({ error: [], result: { XXBTZUSD: reply } });
+  };
+  const project = await service.request('workspace.create', {
+    venue: 'kraken',
+    product: 'BTC-USD',
+  });
+  const { id } = project;
+  assert.equal(project.name, 'Kraken Spot · BTC-USD');
+  assert.equal(project.network, undefined);
+  assert.equal(project.capabilities.live, false);
+  assert.ok(project.market.intervals.includes(14400));
+  assert.ok(!project.market.intervals.includes(21600));
+  await assert.rejects(
+    service.request('workspace.update', { id, market: { interval: 21600 } }),
+    /INTERVAL_UNAVAILABLE/,
+  );
+  await assert.rejects(service.request('dataset.capture', { id }), /NO_CLOSED_CANDLES/);
+  const snapshot = await service.request('market.refresh', { id });
+  assert.equal(snapshot.quote.time, tradeAt);
+  assert.equal(snapshot.quote.price, '201.25');
+  assert.equal(snapshot.quote.book.sequence, null);
+  assert.equal(snapshot.candles.length, 43);
+  assert.equal(snapshot.candles.at(-1).time, open - interval);
+  assert.equal(snapshot.candles[10].time - snapshot.candles[9].time, interval * 2);
+  assert.equal(snapshot.candles[0].volume, 3.125);
+  const before = await service.request('dataset.capture', { id, select: true });
+  const firstPage = await service.request('market.candles', { id, datasetId: before.id, limit: 2 });
+  assert.deepEqual(
+    firstPage.items.map((item) => item.time),
+    [open - interval, open - 2 * interval],
+  );
+  assert.equal(firstPage.next, 2);
+  assert.deepEqual(firstPage.market, { venue: 'kraken', product: 'BTC-USD', interval });
+  now += 12000;
+  rows = [candle(open - interval), candle(open, '201.5'), candle(open + interval)];
+  const updated = await service.request('market.refresh', { id });
+  assert.deepEqual(queries, [null, String(open - interval)]);
+  assert.equal(updated.candles.length, 44);
+  assert.equal(updated.candles.at(-1).close, 201.5);
+  assert.equal(updated.preferences.datasetId, before.id);
+  const backtest = await service.request('run.backtest', { id, config: { strategy: 'buy-hold' } });
+  assert.equal(backtest.datasetId, before.id);
+  assert.equal(backtest.metrics.bars, 43);
+  assert.equal(backtest.dataSource, 'kraken-spot-committed-ohlc');
+  assert.equal(backtest.provenance.interval, interval);
+  assert.ok(
+    backtest.assumptions.includes('signals-fill-at-next-observed-open-across-empty-intervals'),
+  );
+  now += 31000; // A fresh HTTP receipt of an old trade still cannot fill paper orders.
+  const stale = await service.request('market.refresh', { id });
+  assert.equal(stale.quote.time, tradeAt);
+  assert.equal(stale.quote.observedAt, now);
+  assert.equal(queries.length, 2);
+  await service.request('paper.start', { id });
+  await assert.rejects(
+    service.request('paper.order', {
+      id,
+      commandId: 'stale-kraken',
+      side: 'buy',
+      quantity: '0.01',
+    }),
+    /FRESH_MARKET_REQUIRED/,
+  );
+  await service.request('paper.pause', { id });
+  await service.request('workspace.update', { id, market: { interval: 14400 } });
+  const changed = await service.request('workspace.get', { id });
+  assert.equal(changed.candles.length, 0);
+  assert.equal(changed.preferences.datasetId, before.id);
+  assert.ok(
+    changed.datasets.some(
+      (dataset) => dataset.market.interval === interval && dataset.count === 44,
+    ),
+  );
+  const restoredInterval = await service.request('workspace.update', { id, market: { interval } });
+  assert.equal(restoredInterval.candles.at(-1).time, open);
+  assert.equal(restoredInterval.quote, null);
+  service.dispose();
+  const reopened = new QuantService({ directory });
+  t.after(() => reopened.dispose());
+  const saved = await reopened.request('dataset.get', { id, datasetId: before.id });
+  assert.equal(saved.candles.at(-1).time, open - interval);
+  assert.equal(
+    (await reopened.request('run.get', { id, runId: backtest.id })).datasetId,
+    before.id,
+  );
+});
+
+test('Kraken REST rejects a mismatched symbol and malformed candle payloads', async () => {
+  const config = { venue: 'kraken', product: 'ETH-USD', interval: 1800 };
+  const slot = Math.floor(Date.now() / 1000 / config.interval) * config.interval;
+  let wrongPair = true,
+    rateLimited = false;
+  const data = new MarketData(async (input) => {
+    const url = new URL(input);
+    const route = url.pathname.split('/').at(-1);
+    if (route === 'OHLC' && rateLimited)
+      return Response.json({ error: ['EAPI:Rate limit exceeded'] });
+    const result =
+      route === 'Trades'
+        ? [['201', '0.01', Date.now() / 1000, 's']]
+        : route === 'Depth'
+          ? { bids: [['200', '1']], asks: [['202', '1']] }
+          : [[slot - 42, '200', '204', '199', '201', '200', '0.1', 1], [slot]];
+    return Response.json({ error: [], result: { [wrongPair ? 'SOLUSD' : 'XETHZUSD']: result } });
+  });
+  await assert.rejects(data.quote(config), /KRAKEN_PAIR_MISMATCH/);
+  wrongPair = false;
+  await assert.rejects(data.quote(config), /KRAKEN_OHLC_INVALID/);
+  rateLimited = true;
+  await assert.rejects(data.quote(config), /KRAKEN_RATE_LIMIT/);
+});
+
+test('an interval change supersedes an in-flight Kraken quote and does not publish stale data or an error', async (t) => {
+  const { service } = fixture(t);
+  const initial = Promise.withResolvers();
+  const requested = [];
+  service.market.quote = async ({ interval }, _history, { signal }) => {
+    requested.push(interval);
+    if (interval === 300) {
+      initial.resolve(signal);
+      await new Promise((_, reject) =>
+        signal.addEventListener('abort', () => reject(signal.reason), { once: true }),
+      );
+    }
+    const openCandleTime = Math.floor(Date.now() / 1000 / interval) * interval;
+    return {
+      price: '200',
+      time: Date.now() / 1000,
+      observedAt: Date.now(),
+      quality: 'kraken-spot-committed-ohlc',
+      openCandleTime,
+      candles: [bar(openCandleTime - interval, 200)],
+    };
+  };
+  const { id } = await service.request('workspace.create', { venue: 'kraken' });
+  const losing = assert.rejects(service.request('market.refresh', { id }), /MARKET_CHANGED/);
+  const signal = await initial.promise;
+  await service.request('workspace.update', { id, market: { interval: 14400 } });
+  const winner = await service.request('market.refresh', { id });
+  await losing;
+  assert.equal(signal.aborted, true);
+  assert.deepEqual(requested, [300, 14400]);
+  assert.equal(winner.market.interval, 14400);
+  assert.equal(winner.candles.length, 1);
+  assert.equal(winner.lastError, null);
+});
 test('backtest uses next open, fees and mark-to-market; OHLC alone is not HFT validation', () => {
   const result = runBacktest([bar(60, 100), bar(120, 200), bar(180, 300)], {
     strategy: 'buy-hold',

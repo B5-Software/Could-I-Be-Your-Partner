@@ -105,6 +105,8 @@ class WalletService {
     fetcher,
     signer,
     onEmergencyHalt = () => {},
+    onExchangeCancel = () => {},
+    exchangeCancelStatus = () => null,
     browserVault,
   } = {}) {
     if (!directory) fail('WALLET_STORAGE_UNAVAILABLE');
@@ -115,6 +117,8 @@ class WalletService {
     this.directory = directory;
     this.publish = publish;
     this.onEmergencyHalt = onEmergencyHalt;
+    this.onExchangeCancel = onExchangeCancel;
+    this.exchangeCancelStatus = exchangeCancelStatus;
     this.networks = new WalletNetworks(this, writeAtomic, fetcher);
     this.market = new MarketData(fetcher, (key) => this.networks.profile(key));
     this.signerOverride = signer;
@@ -369,8 +373,13 @@ class WalletService {
     return wallet;
   }
   emergencyStatus() {
+    const status = this.emergency.status();
+    const exchangeCancel = status.cancelExchangeOrders
+      ? this.exchangeCancelError || this.exchangeCancelStatus(status.latchId)
+      : null;
     return {
-      ...this.emergency.status(),
+      ...status,
+      ...(exchangeCancel && { exchangeCancel }),
       nativePausePending: Boolean(this.emergencyPausePending),
       nativePauseError: this.emergencyPauseError || null,
       needsReconciliation: this.state.intents.filter(
@@ -395,10 +404,11 @@ class WalletService {
     this.pending.clear();
     this.unlocked.clear();
   }
-  haltLive(expectedGeneration) {
+  haltLive(expectedGeneration, cancelExchangeOrders = false) {
+    if (this.emergencyResetting) fail('WALLET_EMERGENCY_CHANGED');
     const before = this.emergency.generation;
     try {
-      this.emergency.halt(expectedGeneration);
+      this.emergency.halt(expectedGeneration, cancelExchangeOrders);
     } finally {
       if (before !== this.emergency.generation) {
         this.messages.abort();
@@ -447,7 +457,22 @@ class WalletService {
       (this.emergencyPauseError || this.emergencyPausePending === undefined)
     )
       this.pauseLiveNative();
+    this.startExchangeCancellation();
     return this.emergencyStatus();
+  }
+  startExchangeCancellation(retry = false) {
+    const { latchId, cancelExchangeOrders, storageError } = this.emergency.status();
+    if (!cancelExchangeOrders || storageError) return;
+    this.exchangeCancelError = null;
+    try {
+      this.onExchangeCancel(latchId, { retry });
+    } catch (error) {
+      this.exchangeCancelError = {
+        phase: 'attention',
+        error: error.message === 'EXCHANGE_STORE' ? error.message : 'EXCHANGE_EMERGENCY_STORAGE',
+      };
+    }
+    this.emit();
   }
   pauseLiveNative() {
     this.emergencyPausePending = true;
@@ -474,6 +499,10 @@ class WalletService {
   assertNativeStopped() {
     if (this.emergencyPausePending) fail('WALLET_EMERGENCY_NATIVE_PAUSE_PENDING');
     if (this.emergencyPauseError) fail('WALLET_EMERGENCY_NATIVE_PAUSE_FAILED');
+  }
+  assertExchangeCancellationStopped() {
+    if (this.emergencyStatus().exchangeCancel?.phase === 'running')
+      fail('EXCHANGE_EMERGENCY_RUNNING');
   }
   policy(wallet, chain) {
     if (wallet.kind === 'watch') return null;
@@ -1510,9 +1539,16 @@ class WalletService {
         const code = safeError(reason);
         if (portfolioRisk) intent.portfolioRisk = portfolioRisk;
         if (portfolioAllowanceRisk) intent.portfolioAllowanceRisk = portfolioAllowanceRisk;
+        // These replies come from the native receipt transaction before any signed bytes are released.
+        const rateRejected =
+          signingInvoked &&
+          !signatureReturned &&
+          ['WALLET_PORTFOLIO_RATE_LIMIT', 'WALLET_PORTFOLIO_RATE_CLOCK_ROLLBACK'].includes(code);
+        if (rateRejected) intent.nativeSignatureAbsent = true;
         const uncertain =
           signingInvoked &&
           !signatureReturned &&
+          !rateRejected &&
           !/^WALLET_(?:UNLOCK_CHANGED|AUTHORIZATION_CHANGED|OPERATION_CANCELLED|EMERGENCY_STOPPED|EMERGENCY_CHANGED)$/.test(
             code,
           );
@@ -1769,9 +1805,26 @@ class WalletService {
     if (action.startsWith('portfolio.'))
       return this.portfolios.request(action.slice(10), input, context);
     if (action === 'emergency.status') return this.emergencyStatus();
-    if (action === 'emergency.halt') return this.haltLive(input.expectedGeneration);
+    if (action === 'emergency.halt') {
+      if (context.agentContext && input.cancelExchangeOrders === true)
+        fail('WALLET_CONFIRMATION_REQUIRED');
+      return this.haltLive(input.expectedGeneration, input.cancelExchangeOrders === true);
+    }
+    if (action === 'emergency.cancelExchange') {
+      if (context.agentContext) fail('WALLET_CONFIRMATION_REQUIRED');
+      if (
+        !this.emergency.halted ||
+        this.emergency.generation !== input.expectedGeneration ||
+        this.emergencyResetting
+      )
+        fail('WALLET_EMERGENCY_CHANGED');
+      this.emergency.halt(input.expectedGeneration, true);
+      this.startExchangeCancellation(true);
+      return this.emergencyStatus();
+    }
     if (action === 'emergency.challenge') {
       this.assertNativeStopped();
+      this.assertExchangeCancellationStopped();
       if (!this.emergency.halted || this.emergency.storageError) fail('WALLET_EMERGENCY_CHANGED');
       const challenge = {
         id: randomUUID(),
@@ -1783,6 +1836,7 @@ class WalletService {
     }
     if (action === 'emergency.reset') {
       this.assertNativeStopped();
+      this.assertExchangeCancellationStopped();
       const challenge = this.emergencyChallenges.get(input.challengeId);
       this.emergencyChallenges.delete(input.challengeId);
       if (
@@ -1794,27 +1848,33 @@ class WalletService {
         fail('WALLET_CONFIRMATION_REQUIRED');
       if (!this.emergency.halted || challenge.latchId !== this.emergency.status().latchId)
         fail('WALLET_EMERGENCY_CHANGED');
-      await this.mutate((state) => {
-        this.assertNativeStopped();
-        if (!this.emergency.halted || challenge.latchId !== this.emergency.status().latchId)
-          fail('WALLET_EMERGENCY_CHANGED');
-        for (const wallet of state.wallets) wallet.policy = { mode: 'manual', chains: [] };
-        for (const intent of state.intents)
-          if (
-            !intent.hash &&
-            ['approval-required', 'approved', 'signing'].includes(intent.status)
-          ) {
-            intent.status = 'cancelled';
-            intent.error = 'WALLET_EMERGENCY_STOPPED';
-            intent.submissionMayHaveOccurred = false;
-          }
-        state.audit.push({
-          time: Date.now(),
-          type: 'live-emergency-reset',
-          latchId: challenge.latchId,
+      if (this.emergencyResetting) fail('WALLET_EMERGENCY_CHANGED');
+      this.emergencyResetting = true;
+      try {
+        await this.mutate((state) => {
+          this.assertNativeStopped();
+          if (!this.emergency.halted || challenge.latchId !== this.emergency.status().latchId)
+            fail('WALLET_EMERGENCY_CHANGED');
+          for (const wallet of state.wallets) wallet.policy = { mode: 'manual', chains: [] };
+          for (const intent of state.intents)
+            if (
+              !intent.hash &&
+              ['approval-required', 'approved', 'signing'].includes(intent.status)
+            ) {
+              intent.status = 'cancelled';
+              intent.error = 'WALLET_EMERGENCY_STOPPED';
+              intent.submissionMayHaveOccurred = false;
+            }
+          state.audit.push({
+            time: Date.now(),
+            type: 'live-emergency-reset',
+            latchId: challenge.latchId,
+          });
         });
-      });
-      this.emergency.reset(challenge.latchId);
+        this.emergency.reset(challenge.latchId);
+      } finally {
+        this.emergencyResetting = false;
+      }
       this.emit();
       return this.emergencyStatus();
     }

@@ -99,10 +99,6 @@
       window.showMessageModal('TA 还在回复中，请稍等...', '提示', 'warning');
       return;
     }
-    if (!babeAgent.settings?.llm?.apiUrl) {
-      window.showMessageModal('请先在设置中配置 LLM API', '提示', 'warning');
-      return;
-    }
     const babeSession = sessionManager?.getByAgent(babeAgent);
     if (babeSession && !babeAgent.running && !sessionManager.requestStart(babeSession)) {
       const queued = babeAttachments.map(att => ({

@@ -41,6 +41,14 @@
   }
   bindRangeIndicator('setting-context-threshold', 'setting-context-threshold-val', 60, 95);
   bindRangeIndicator('setting-context-retain', 'setting-context-retain-val', 5, 40);
+  document.getElementById('setting-agent-iteration-limit')?.addEventListener('change', async (e) => {
+    const value = e.target.valueAsNumber;
+    if (!AgentIterations.valid(value)) {
+      e.target.value = String(AgentIterations.limit((await window.api.getSettings()).agent?.iterationLimit));
+      return;
+    }
+    await saveSettings({ agent: { iterationLimit: value } });
+  });
   document.getElementById('setting-context-auto')?.addEventListener('change', async (e) => {
     await updateContextCompactionSettings({ enabled: !!e.target.checked }, '上下文自动压缩已' + (e.target.checked ? '开启' : '关闭'));
   });

@@ -16,7 +16,7 @@
 
 ## 当前已实现
 
-- 量化入口：项目、K 线、全屏、盘口快照、实验、订单、风险、审计与研究对话；支持专业面板和沉浸式对话布局，布局按项目保存。
+- 量化入口：项目、K 线、全屏、盘口快照、实验、订单、风险、审计与研究对话。专业面板可拖动项目栏、聊天区和图表下方的分隔条。沉浸对话并排显示图表和聊天，窄窗口上下排列，并可从工具栏跳到图表或输入框。分隔条支持方向键和双击复位，布局和尺寸按项目保存。
 - 原生钱包：本地创建、导入助记词 / 私钥 / 加密密钥库、解锁、锁定与加密备份。签名在独立进程中完成，Agent 工具不接收密码、助记词或私钥。
 - 签名回执在返回签名前持久化，签名字节单独加密保存；重启后可在锁定状态只读恢复交易哈希。“签名结果待核实”仍占用 nonce 和预算，可在交易详情中对账；不会自动重新签名或广播。原回执缺失、损坏或被替换时保持未知，不能靠换操作 ID 再次付款。请将钱包状态与签名回执一同备份，不能用一致性校验防止管理员回滚整份旧备份。
 - Base 主网与 Base Sepolia：校验 RPC 链标识，读取余额与交易状态，执行 EIP-1559 原生币转账或合约调用；提供 Uniswap V3 原生 WETH / USDC 兑换工具。新增共享自定义 EVM 网络配置和逐笔 type-2 签名，具体范围见下文。
@@ -151,6 +151,10 @@ GUI / WebUI 与 TUI 共用相同估值后端及三语状态。Agent 通过 `quan
 
 这里的剩余量仅覆盖本应用已知操作；不计其他应用、链外订单、既有 allowance 的潜在支出和任意合约内部行为。原生签名预算仍独立执行。
 
+开发版的组合可设置「组合签名频率」，窗口为 1 至 300 秒，窗口内上限为 1 至 1000 笔。GUI、WebUI 和 TUI 的创建、编辑均走 `ALLOW PORTFOLIO` 人工确认。组合成员共用新交易签名计数，包含人工交易、Agent、授权和替换交易。原生签名器在提交签名回执时一并记录签名时间。重启、修改上限、临时停用再开启均保留已有计数。原样重取已存在的签名沿用原样重放检查。
+
+触顶时，组合详情可刷新计数和最早复核时间。Agent 可用 `quant_portfolios` 的 `get` 读取 `signatureRate`，也可用 `quant_wait_budget(kind="portfolio-rate", id=...)` 等待。恢复余量后仍按当时的授权及其他风控检查。窗口采用宿主时间。检测到时间早于已有签名时暂停新签名。若升级前有缺少时间戳的组合回执，先等待一个完整窗口。该上限约束本应用的新签名，外部签名、链上撮合及已存在签名的广播节奏由各自的流程管理。
+
 Base 主网的组合可在创建或编辑时设置「组合权益下限」，单位为 USD，留空停用，提交仍需 `ALLOW PORTFOLIO`。该项保存到原生组合修订，重启后继续生效。系统对同一区块的 ETH、WETH 和 USDC 扣除应用内待结算输入和费用预留，再按 Chainlink 价格估值。同 nonce 的替换按各资产较大的预留计算，转入、内部划转及兑换输出在链上到账后计入。现有授权的外部支出、其他资产、外部客户端及链外订单不在测算范围。
 
 下限覆盖经应用发起的人工与 Agent 交易。余额、排序器、报价、nonce 或调用效果无法核实，或扣除预留后的估值低于下限时，阻止签名或广播。原生签名器核对复核记录所绑定的组合修订、交易、操作 ID 和时间；宿主在广播前用新快照再核对。已签名后被拦截的交易保留原生回执及已消耗预算，可从交易详情核对。可在组合详情检查当前估值，或让 Agent 用 `quant_portfolios` 的 `equity` 读取。该估值下限按检查时点执行，跨时点损益、链上强制限制和完整净敞口仍需单独处理。
@@ -279,13 +283,23 @@ GUI / WebUI 的项目工具栏选择「行情记录与事件回放」，TUI 在�
 
 ## 原生连续行情
 
-在量化项目设置中先连接原生进程，再选择「公开连续行情」中的交易对和模拟 Maker 费率，连接后可查看连续盘口。GUI 与 WebUI 使用同一界面；TUI 入口为 `/quant` → 原生执行进程 → 公开连续行情。当前支持 ETH-USD、BTC-USD、SOL-USD；这是交易所公共现货数据，不是 Base AMM 的可执行报价，也不会创建账户或开启真实交易。
+在量化项目设置中先连接原生进程，再在「公开连续行情」选择交易场所、交易对和模拟 Maker 费率。GUI 与 WebUI 使用同一界面。TUI 入口为 `/quant` → 原生执行进程 → 公开连续行情。Coinbase 和 Kraken Spot 均可选择 ETH-USD、BTC-USD、SOL-USD。同一交易对可同时连接两个场所，盘口、委托、策略版本和录制各自绑定到所选场所。旧版接口省略 `venue` 时继续使用 Coinbase。
 
 连接器订阅 [Coinbase 官方公开频道](https://docs.cdp.coinbase.com/coinbase-app/advanced-trade-apis/websocket/websocket-endpoints)，核对整条连接的消息序列，再分别生成内核盘口与成交序列。它使用价位的绝对数量，并区分成交的 maker 方向；初始历史成交快照不会用来撮合。只有盘口、成交与心跳初始化完成并追平当前数据后，盘口才可执行。丢失消息、无效数据、积压或网络政策变更会失效当前盘口；恢复快照不会自动重建或重新激活旧委托队列。
 
+Kraken Spot 订阅 WebSocket v2 十档盘口和实时成交。更新按连接顺序应用，十档 CRC32 校验通过后才转交内核。档位移出已知范围时，受影响的纸面挂单保留预留并进入挂起。档位重回可见范围后仍需显式处理挂起委托。成交方向使用公开的 taker 方向反推 maker 方。交易规则含最小数量和最小金额，均由原生账本校验。Kraken 的接入范围是公开行情、PAPER / SHADOW 和录制回放。[Kraken 盘口校验](https://docs.kraken.com/exchange/guides/websockets/book-checksum-v2) · [Kraken 逐笔成交](https://docs.kraken.com/exchange/api-reference/spot-websocket-v2/trade) · [Kraken 交易规则](https://docs.kraken.com/api-reference/market-data/get-tradable-asset-pairs)
+
+Agent 可在 `quant_native_paper` 的 `source`、`book`、`submit` 动作、`quant_strategy` 的 `define` 和 `quant_event_data` 的 `recording_start` 中传 `venue: "kraken"`。原生仿真使用场所的公开现货盘口，Base 报价及实盘授权使用各自的入口。
+
+### Kraken Spot 项目与历史 K 线
+
+在量化工作台新建项目时选择 Kraken Spot 和交易对。图表支持 1、5、15、30 分钟，1、4 小时，以及 1、7、15 天。TUI 可在项目菜单里切换周期、分页查看和保存已收盘 K 线。桌面与 WebUI 在图表上提供「保存 K 线快照」，保存后选中不可变数据集，供后续回测或滚动验证使用。
+
+首次读取 Kraken REST 的近期 OHLC 窗口，之后从最后已保存的区间增量同步。交易所响应最后一条属于当前区间，始终排除。缺少区间时保留空缺，回测按下一根实际出现的 K 线开盘模拟成交。切换周期会归档当前数据，并在回到旧周期时恢复可用的归档。更早的历史可用工作台的 CSV 或 JSON 导入。报价时间取自最新公开成交，HTTP 收到旧成交时，过期报价无法触发纸面成交。[Kraken OHLC 规范](https://docs.kraken.com/api-reference/market-data/get-ohlc-data) · [Kraken 最近成交规范](https://docs.kraken.com/api-reference/market-data/get-recent-trades)
+
 大型初始快照可能落后于实时流，因此先完整追平，不把接收时间冒充行情发生时间。原生盘口只保存明确覆盖范围内的价位，范围外不假定为空队列。延迟数据和心跳失效不能继续下单；暂停或断线后原生未完成意图保持挂起及资金预留，需要后续显式处理。
 
-连接器通过公开的交易所时间接口估算时钟差异及请求往返误差，保守地把事件投影到主机时钟，不修改系统时间。内部 `sourceTimeNs` / 成交 `time_ns` 是保守映射时间；`providerTimeNs` / `provider_time_ns` 保留原始交易所纳秒时间，`sourceClock` / `source_clock` 记录映射、误差范围及校准时刻。内核校验映射一致性和校准时效；本机时钟跳变会停止当前流。这是带假设的纸面撮合模型，不是经过认证的时钟或 HFT 性能保证。
+Coinbase 使用公开时间接口，Kraken 使用同一条 WebSocket 的 Ping/Pong 估算时钟差异及往返误差。内部 `sourceTimeNs` / 成交 `time_ns` 是保守映射时间，`providerTimeNs` / `provider_time_ns` 保留交易所提供的纳秒时间，`sourceClock` / `source_clock` 记录映射、误差范围及校准时刻。Kraken 初始快照缺少交易所时间时记录实际接收时间。内核校验映射和校准时效，本机时钟跳变会使当前流失效。[Kraken Ping/Pong](https://docs.kraken.com/exchange/api-reference/spot-websocket-v2/ping)
 
 HTTP 和 WebSocket 均在主机使用应用的网络 / 隐私配置。每条流拥有自己的传输实例，网络设置变化会立即断开旧连接；隐私通道未连接时不回退直连。停止原生进程会停止全部数据源，进程故障不自动重启交易或重复金融命令。三端共享连接状态，不因多开前端创建多份原生进程。
 
@@ -315,6 +329,44 @@ GUI / WebUI 在「设置 → 钱包」使用「停止所有实盘」；TUI 在 `
 
 Agent 的 `quant_live_control` 只有 `status` / `halt`，没有解除、解锁或授予权限的动作。单个计划停止仍用 `quant_live_execution stop`；全局动作应符合用户的全局停止指令或明确风控授权。此控制不取消交易所订单、不撤回其他钱包客户端的操作，也不保证极端行情损失。
 
+## Coinbase Exchange
+
+新建 Coinbase 项目后打开「实盘计划」，即可在共享后台连接交易所。面板默认选择沙盒，每个环境单独保存 API Key、Secret 和 Passphrase。凭据使用系统加密存储。Windows 的独立后台使用 DPAPI，macOS 和 Linux 需要使用可访问系统钥匙串的桌面后台。下单和撤单使用交易所的 Trade 权限。[交易所 REST 认证](https://docs.cdp.coinbase.com/exchange/rest-api/authentication) · [沙盒凭据与模拟资金](https://docs.cdp.coinbase.com/exchange/introduction/sandbox)
+
+现货 GTC 限价单支持 Post only。预览会检查市场状态、步长、最小金额、预计费用和可用余额。GUI、WebUI 和 TUI 都能准备订单、人工确认、对账和逐笔撤单。写入本地订单号后才提交。如果回执丢失，用原客户端订单号查询并保留部分成交证据。交易所返回 404 时会保留原有记录和未知状态。[下单协议](https://docs.cdp.coinbase.com/api-reference/exchange-api/rest-api/orders/create-new-order) · [订单查询协议](https://docs.cdp.coinbase.com/api-reference/exchange-api/rest-api/orders/get-single-order)
+
+在订单历史展开挂单并选择「撤单并替换」，填入新限价和新单数量。确认页显示原单成交量和新单的费用估算，输入 `REPLACE ORDER` 执行。后台保存复核记录，向交易所核实原单已撤和最终成交量，重新检查可用余额和费用，才以独立订单号发出新单。替换会失去原单的排队位置，两个订单保留关联。此流程使用 Exchange REST 的撤单、查询和下单接口。交易所原生改单走 FIX 5.0 的独立接口。[单笔撤单协议](https://docs.cdp.coinbase.com/api-reference/exchange-api/rest-api/orders/cancel-an-order) · [FIX 原生改单](https://docs.cdp.coinbase.com/exchange/fix-api/order-entry-messages/order-entry-messages5#ordercancelreplacerequest-35g)
+
+撤单期间有新成交、原单查询返回 404、或者新单检查失败时，流程会保留原订单和已确认的替换参数，等待人工核对。查明原单状态后可重新核对替换，在新单提交结果未知时按独立订单号对账。后台重启会保留两条记录和成交证据，恢复下单需要重新核对和确认。交易所可能对已撤且没有成交的订单返回 404，此时先在交易所查明结果，再决定是否独立下新单。[订单查询的 404 行为](https://docs.cdp.coinbase.com/api-reference/exchange-api/rest-api/orders/get-single-order)
+
+默认逐笔人工确认。要允许主 Agent 自动提交，在「实盘计划 → Agent 自动下单」选择环境、方向和 REST 或 FIX 通道，填写单笔额度、累计额度、操作次数和期限，核对所选账户、产品及 Post only 规则，再输入 `ALLOW EXCHANGE AGENT`。买入额度以计价币计量，包含限价名义金额和预计费用；卖出额度以基础币数量计量。生产订单使用真实资金，预计费用用于本地额度估算。
+
+如需让 Agent 撤销同一授权发出的挂单，可在复核前填写独立的「撤单次数上限」。默认 `0` 关闭。下单次数耗尽后，剩余撤单次数仍可使用。每次派发前记录操作 ID 和撤单次数，撤单不返还已花费的授权额度或下单次数。REST 按账户、交易对及交易所订单号撤单。FIX 使用 F 消息，优先沿用原连接，断线恢复后使用同账户连接和当前有效客户端订单号。回执不明时，历史保留已用次数并等待终态核对，也可人工按原交易所订单号撤单。[REST 单笔撤单](https://docs.cdp.coinbase.com/api-reference/exchange-api/rest-api/orders/cancel-an-order) · [FIX 5.0 撤单](https://docs.cdp.coinbase.com/exchange/fix-api/order-entry-messages/order-entry-messages5#ordercancelrequest-35f)
+
+主 Agent 通过 `quant_exchange` 的 `list` 读取授权和剩余量，再用 `submit_authorized` 携带对应的 `grantId` 和稳定 `operationId` 提交。授权与工作区、交易产品、凭据版本、方向和环境绑定。重新连接交易所账户后，需要重新授予权限。已发送的请求占用额度和笔数，包括交易所拒绝、传输中断和结果未知的请求。收到未知结果时需先核对原订单。
+
+选用 FIX 授权时，Agent 可以为新单自动连接。开启「允许修改此授权发出的 FIX 订单」后，主 Agent 可用 `amend_authorized`，提交原订单的 CIBYP `clientId`、新限价、含成交的总量和独立的稳定操作号。后台核对原连接、同一份授权、订单方向和已成交量。每次已发送的改单计一次操作，买入按加量和单位限价成本上升分别计入增加的敞口，卖出按新增基础币量计算。历史开销继续计入单笔和累计额度，减量不返还额度。人工改单生效后，该订单由人工接管。既有 REST 授权继续使用 REST，换通道需撤回并重新复核。[FIX 的原连接与成交结转要求](https://docs.cdp.coinbase.com/exchange/fix-api/order-entry-messages/order-entry-messages5#ordercancelreplacerequest-35g)
+
+在交易所面板点「启用实时订单」，后台会跟踪当前环境和账户在各量化工作区中记录的 CIBYP 订单。这个开关跟随当前凭据版本保存，重启会恢复。更换凭据后可重新选择是否启用。面板显示认证订单流的连接状态和最近一次 REST 核对时间。[Coinbase 认证订单流](https://docs.cdp.coinbase.com/exchange/websocket-feed/authentication)
+
+私有订单事件触发同一订单的合并核对，成交数量、成交金额、费用和最终状态来自 REST 查询。连接成功、断线重连及运行期间会复查挂单和结果未知的订单。近期已结束但尚未结算的订单会继续短期核对。后台核对和人工操作并行时，旧读取不能覆盖更新的订单结果。[Coinbase User 频道](https://docs.cdp.coinbase.com/exchange/websocket-feed/channels#user-channel) · [订单查询](https://docs.cdp.coinbase.com/api-reference/exchange-api/rest-api/orders/get-single-order)
+
+「FIX 订单核对」使用当前环境的同一组加密凭据，经应用网络策略连接固定的交易所 TLS 端点。一个 API Key 只能建立一条 FIX 会话，请为应用使用独立的 Key。展开已知订单后选择「通过 FIX 核对」，可查看交易所报告的状态、累计成交和剩余量。FIX 结果独立显示，REST 订单历史继续作为本地账本证据。网络设置改变时会关闭旧连接，下次连接从已保存的序号补查。可在面板随时断开。[FIX 5.0 会话及订单核对](https://docs.cdp.coinbase.com/exchange/fix-api/order-entry-messages/order-entry-messages5#orderstatusrequest-35h)
+
+连接 FIX 后，现货 GTC 下单可选「FIX 5.0」通道。输入 `PLACE ORDER` 提交复核过的订单。保持原连接时，订单历史提供「FIX 原生改单」。修改后的总量包含已成交量，确认页按剩余量估算名义金额和费用。输入 `AMEND ORDER` 后通过同一连接改价或改量，记录沿用同一交易所订单号，保存每次改单的客户端编号及结果。单独减量保留排队位置，改价或加量会重新排队。[FIX 下单与原生改单](https://docs.cdp.coinbase.com/exchange/fix-api/order-entry-messages/order-entry-messages5#ordercancelreplacerequest-35g)
+
+在 FIX 下单表单可选「触发限价单」，分别填写执行限价、触发价和向上／向下方向，再人工确认。交易所按成交价触发，触发后按限价执行，可能继续挂单。历史显示触发状态。未触发订单可在原连接上改变触发价，方向沿用原值。触发价改变会重排触发队列，已触发订单只能核对或撤销剩余量。回执不明时保留原订单号和待核对的触发参数。Agent 提交此类订单需要单独打开「允许提交 FIX 触发限价单」，金额预算仍按执行限价和费用计算。撤销本地 Agent 授权后，已在交易所等待的订单需要另行撤销。[FIX 下单字段与触发规则](https://docs.cdp.coinbase.com/exchange/fix-api/order-entry-messages/order-entry-messages5#newordersingle-35d) · [FIX 原生改单](https://docs.cdp.coinbase.com/exchange/fix-api/order-entry-messages/order-entry-messages5#ordercancelreplacerequest-35g)
+
+选择「双腿止盈止损」后填写止盈限价、止损触发价和止损限价。卖单的三个价格严格递减，买单严格递增。交易所先挂出止盈腿。尚未成交时触发止损，交易所把同一订单改挂到止损限价。历史会保留三项复核参数和收到的当前执行限价。任一腿触发后，该订单仍可核对或撤销剩余量。双腿订单允许吃单。Agent 需单独启用「允许提交 FIX 双腿止盈止损」，买单按两条腿中较高的限价加预计费用占用额度。未触发的订单可沿用原 FIX 连接修改，改单回执丢失后按订单 ID 和可区分两版的参数核对。[Coinbase 双腿止盈止损规范](https://docs.cdp.coinbase.com/exchange/fix-api/order-entry-messages/tpsl-orders)
+
+下单和改单参数发出前会写入订单历史。断线后可按原订单编号继续对账，状态待核对时不会重复发出请求。原连接关闭后可使用历史中的 REST 撤单或撤单并替换。生产环境的全局急停也适用于 FIX 订单。
+
+「立即撤权」可在请求进行中执行，读写同一份持久授权记录。撤权后可以在订单历史核对或撤销交易所已接收订单的剩余数量。需要更换同一方向的授权时，先撤销该方向的当前授权，再复核新额度。
+
+在钱包页选择「停止实盘并撤单」会阻止新的生产订单、中断在途提交，并对 CIBYP 留档的 Coinbase 生产订单发起批量撤单。每笔请求绑定原订单号和产品。只知道客户端订单号时，后台先查询，再按相同客户端订单号请求撤单。撤单期间钱包页显示批次进度，并暂时禁用解除停止锁。[Coinbase 单笔撤单协议](https://docs.cdp.coinbase.com/api-reference/exchange-api/rest-api/orders/cancel-an-order)
+
+批次和每笔订单结果均持久保存。应用重启后会继续中断的批次，对已发出但缺少回执的订单先核对状态。钱包页显示已撤和待核实数，可重试剩余订单。查询返回 404 会保留待核实状态，先前记录的成交和费用继续保留。解除停止锁前可在交易所核对剩余订单，之后需按新的停止代次重新授权。沙盒和应用内部 PAPER 各有独立账本。账户配置、下单和撤单流程使用隔离 HTTP 夹具验证，官方沙盒与生产账户联调需要对应凭据。
+
 ## 可复现验证
 
 GUI / WebUI 在量化项目工具栏选择「实盘计划」，TUI 从项目菜单进入同名页面。选择钱包、买卖方向和调度方式，再填写输入金额、段数、间隔、滑点和累计预估费用预算。计划创建后默认暂停。启动需要手动授予的自动实盘范围和已解锁的钱包。面板显示最终确认进度、费用预留、执行记录与哈希，并提供停止和只读对账。Agent 使用 `quant_live_execution`。关闭面板后后台继续调度。
@@ -326,6 +378,10 @@ GUI / WebUI 在量化项目工具栏选择「实盘计划」，TUI 从项目菜�
 计划和逐段历史按最终确认回执中的 WETH、USDC 净转账显示实际支出、到账和成交均价。未核对的段体现在成交覆盖率里。L2 执行 Gas、L1 数据费和运营费分别显示已覆盖的交易数，其中包括批准和最终确认失败的交易。运营费使用原成交区块的 GasPriceOracle 和实际 Gas 用量。三项费用均覆盖时显示已最终确认的总费用。签名前的费用预算使用按 Gas 上限计算的运营费估算。旧计划可用「核对链上结果」分批补取回执，操作可在钱包锁定时完成。[ERC-20 转账事件](https://eips.ethereum.org/EIPS/eip-20) [GasPriceOracle 接口](https://specs.optimism.io/protocol/isthmus/predeploys.html#gaspriceoracle) [Base Jovian 费用规则](https://docs.base.org/upgrades/jovian/exec-engine#operator-fee)
 
 调度默认采用「最终确认后计时」(`schedule: "settlement"`)。选择「固定时间窗」(`schedule: "fixed-window"`) 后，第一次启动固定全部窗口。每段按原计划的输入份额在对应窗口内派发，上一段仍待最终确认时会等待。错过的窗口和输入金额单独记录，后续窗口沿用各自的原份额。到期时，部分执行的计划显示过期，仍可核对已提交的交易。后台重启后需要重新启动计划，仍沿用最初的时间表。[TWAP 调度参考](https://www.interactivebrokers.com/docs/general/order-types/algorithmic-orders/ib-algorithms/twap)
+
+在「最终确认后计时」的计划中，可以设置入场价格条件。阈值以 USDC/WETH 计，选「池价低于或等于阈值」或「池价高于或等于阈值」。启动后共享后台检查该池的近期链上报价。首段达到阈值前不创建授权或兑换交易，临时读取失败时继续等待。触发时原生账本保存区块、哈希、时间及池价，GUI、WebUI、TUI 都能在逐段记录中查看。首段最终确认后，后续段按原间隔执行。触发用采样池价，成交仍受滑点、最低输出和钱包权限保护。Agent 通过 `entryTrigger: { relation: "at-or-below", price: "1980" }` 配置。重启后需显式继续。[Uniswap v3 池状态接口](https://github.com/Uniswap/v3-core/blob/main/contracts/interfaces/pool/IUniswapV3PoolState.sol) · [按区块哈希读取状态](https://eips.ethereum.org/EIPS/eip-1898)
+
+持有 WETH 时，可在单段卖出计划的「价格条件」选择「保护性退出」。填写止损阈值，并可填一个更高的止盈阈值。两个阈值共用一次固定数量卖出。计划启动前会从链上余额扣除本机未完成交易的预留来检查可用 WETH，触发后在签名流程中再次校验资金、授权、报价和最低输出。等待期间余额仍可由其他交易改变，阈值以共享后台采样价格为准。逐段记录显示触发原因和区块，后台重启后需显式恢复。Agent 通过 `protectiveExit: { stopLossPrice, takeProfitPrice }` 设置，并可读取 `exitStatus` 与 `exit_trigger`。
 
 「历史成交量加权」(`schedule: "vwap"`) 沿用固定时间窗，按所选 Base 或 Base Sepolia Uniswap v3 WETH/USDC 池的实际成交量分配输入。先选择 2–96 段、最多两小时的计划，再获取并预览权重。系统从最终确认区块往前取三个与计划等长的时段，按相对窗口汇总 WETH 成交量。预览记录池地址、区块、时间范围和各窗权重。创建计划后权重固定，零分配窗口跳过，错过的输入保留。成交历史依赖项目配置的 RPC，限流或历史不足会提示错误。历史权重无法保证未来流动性或成交均价。[VWAP 调度参考](https://help.coinbase.com/en/prime/trading-and-funding/vwap-order-type) [Base 成交日志接口](https://docs.base.org/base-chain/api-reference/ethereum-json-rpc-api/eth_getLogs)
 

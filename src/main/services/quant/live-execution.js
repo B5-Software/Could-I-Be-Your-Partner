@@ -9,6 +9,7 @@ const { executeBaseSwap, deployments, minimumOutputAtoms } = require('./base-swa
 const vwap = require('./vwap-profile');
 const benchmark = require('./execution-benchmark');
 const executionReceipt = require('./execution-receipt');
+const { memberCapital } = require('../wallet/capital');
 const fail = (code) => {
   throw Error(code);
 };
@@ -42,6 +43,92 @@ const TEMPLATES = Object.freeze({
 const fixedTemplate = (template) =>
   template === TEMPLATES['fixed-window'] || template === TEMPLATES.vwap;
 const erc20 = new Interface(['function approve(address,uint256) returns(bool)']);
+const ENTRY = { wait: 'EXECUTION_ENTRY_WAIT', unavailable: 'EXECUTION_ENTRY_UNAVAILABLE' };
+const EXIT = { wait: 'EXECUTION_EXIT_WAIT', unavailable: 'EXECUTION_EXIT_UNAVAILABLE' };
+const priceWaiting = new Set([...Object.values(ENTRY), ...Object.values(EXIT)]);
+function priceCondition({ run, command }) {
+  if (command.ordinal !== 1) return null;
+  if (run.plan.protective_exit) return EXIT;
+  return run.plan.entry_trigger ? ENTRY : null;
+}
+function thresholdAtoms(value, invalid) {
+  if (typeof value !== 'string' || !/^\d{1,12}(?:\.\d{1,6})?$/.test(value)) fail(invalid);
+  const amount = parseUnits(value, 6);
+  if (amount <= 0n) fail(invalid);
+  return amount;
+}
+function parseEntryTrigger(value, schedule, native) {
+  if (value === undefined) return undefined;
+  if (schedule !== 'settlement' || !['at-or-below', 'at-or-above'].includes(value?.relation))
+    fail('EXECUTION_ENTRY_INVALID');
+  const price = thresholdAtoms(value.price, 'EXECUTION_ENTRY_INVALID');
+  if (native.handshake.executionEntryTrigger !== 1 || native.handshake.executionArrival !== 1)
+    fail('EXECUTION_ENTRY_REQUIRED');
+  return { relation: value.relation, price_atoms: String(price) };
+}
+function parseProtectiveExit(input, schedule, native) {
+  if (input.protectiveExit === undefined) return undefined;
+  if (
+    schedule !== 'settlement' ||
+    input.side !== 'sell' ||
+    (input.slices ?? 1) !== 1 ||
+    input.entryTrigger !== undefined
+  )
+    fail('EXECUTION_EXIT_INVALID');
+  const { stopLossPrice, takeProfitPrice } = input.protectiveExit || {};
+  const stop = thresholdAtoms(stopLossPrice, 'EXECUTION_EXIT_INVALID');
+  const profit =
+    takeProfitPrice === undefined
+      ? null
+      : thresholdAtoms(takeProfitPrice, 'EXECUTION_EXIT_INVALID');
+  if (profit !== null && profit <= stop) fail('EXECUTION_EXIT_INVALID');
+  if (native.handshake.executionProtectiveExit !== 1 || native.handshake.executionArrival !== 1)
+    fail('EXECUTION_EXIT_REQUIRED');
+  return {
+    stop_loss_price_atoms: String(stop),
+    ...(profit !== null && { take_profit_price_atoms: String(profit) }),
+  };
+}
+async function poolEvidence(market, config, signal, invalid) {
+  const snapshot = await market.base(config, { signal, priceEvidence: true });
+  if (!Number.isSafeInteger(snapshot.time) || Math.abs(Date.now() - snapshot.time * 1000) > 30000)
+    fail(invalid);
+  return {
+    pool: snapshot.pool.toLowerCase(),
+    block: snapshot.block,
+    block_hash: snapshot.blockHash.toLowerCase(),
+    block_time: snapshot.time,
+    sqrt_price_x96: snapshot.sqrtPriceX96,
+    weth_is_token0: snapshot.wethIsToken0,
+  };
+}
+async function verifyExitCapital(market, walletService, run, config, signal) {
+  const { wallet: walletId, chain_id: chainId, total_input_atoms: input } = run.plan;
+  const { address } = walletService.wallet(walletId);
+  const timeout = AbortSignal.timeout(10000);
+  const snapshot = await market.tokenHoldings(
+    config,
+    { address },
+    {
+      signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
+      includeNonce: true,
+    },
+  );
+  const now = Date.now();
+  if (Math.abs(now - snapshot.blockTimestamp * 1000) > 30000) fail('WALLET_CAPITAL_STALE');
+  if (snapshot.minedNonce === null) fail('WALLET_CAPITAL_UNAVAILABLE');
+  const member = memberCapital(
+    { ...snapshot, walletId },
+    walletService.state.intents,
+    chainId,
+    now,
+  );
+  const available = member.assets.find(
+    (asset) => asset.address?.toLowerCase() === CHAINS[config.venue].weth,
+  )?.capital;
+  if (!available?.complete) fail('WALLET_CAPITAL_UNAVAILABLE');
+  if (BigInt(available.availableAtomic) < BigInt(input)) fail('WALLET_TOKEN_CAPITAL_RESERVED');
+}
 function configOf(workspace) {
   const market = workspace.market;
   if (!['base', 'base-sepolia'].includes(market.venue)) fail('EXECUTION_BASE_REQUIRED');
@@ -277,6 +364,8 @@ class LiveExecution {
       const schedule = input.schedule ?? 'settlement';
       if (typeof schedule !== 'string' || !Object.hasOwn(TEMPLATES, schedule))
         fail('INVALID_EXECUTION_PLAN');
+      const entryTrigger = parseEntryTrigger(input.entryTrigger, schedule, native);
+      const protectiveExit = parseProtectiveExit(input, schedule, native);
       if (fixedTemplate(TEMPLATES[schedule]) && native.handshake.executionFixedWindows !== 1)
         fail('EXECUTION_WINDOW_REQUIRED');
       let profile;
@@ -312,6 +401,8 @@ class LiveExecution {
         max_fee_reserve_wei: String(budget),
         ...(priceFloor === null ? {} : { min_total_output_atoms: String(priceFloor) }),
         ...(arrivalBps === undefined ? {} : { max_arrival_cost_bps: arrivalBps }),
+        ...(entryTrigger && { entry_trigger: entryTrigger }),
+        ...(protectiveExit && { protective_exit: protectiveExit }),
         ...(profile
           ? { vwap: { profile_id: profile.id, weth_volume_atoms: profile.wethVolumeAtoms } }
           : {}),
@@ -363,6 +454,9 @@ class LiveExecution {
           if (error.message !== 'EXECUTION_PROFILE_REQUIRED') throw error;
         }
       }
+      const error = this.errors.get(run.plan.id);
+      const waiting = priceWaiting.has(error);
+      const conditionStatus = run.plan.protective_exit ? 'exitStatus' : 'entryStatus';
       return {
         run,
         settlement,
@@ -376,8 +470,9 @@ class LiveExecution {
           chainEnforced: false,
         },
         lastError:
-          this.errors.get(run.plan.id) ||
+          (waiting ? null : error) ||
           (marketStopped(run.reason) || run.reason === WINDOW_EXPIRED ? run.reason : null),
+        ...(run.phase === 'running' && waiting && { [conditionStatus]: error }),
       };
     }
     if (action === 'commands') {
@@ -450,24 +545,17 @@ class LiveExecution {
         epoch !== this.authorityEpoch ||
         runEpoch !== (this.runEpochs.get(run.plan.id) || 0);
       let arrival;
+      if (run.plan.protective_exit)
+        await verifyExitCapital(this.service.market, wallet, run, config, context.signal);
       if (run.generation === 0 && native.handshake.executionArrival === 1) {
-        const snapshot = await this.service.market.base(config, {
-          signal: context.signal,
-          priceEvidence: true,
-        });
-        if (
-          !Number.isSafeInteger(snapshot.time) ||
-          Math.abs(Date.now() - snapshot.time * 1000) > 30000
-        )
-          fail('EXECUTION_ARRIVAL_INVALID');
-        arrival = {
-          pool: snapshot.pool.toLowerCase(),
-          block: snapshot.block,
-          block_hash: snapshot.blockHash.toLowerCase(),
-          block_time: snapshot.time,
-          sqrt_price_x96: snapshot.sqrtPriceX96,
-          weth_is_token0: snapshot.wethIsToken0,
-        };
+        arrival = await poolEvidence(
+          this.service.market,
+          config,
+          context.signal,
+          'EXECUTION_ARRIVAL_INVALID',
+        );
+      }
+      if (arrival || run.plan.protective_exit) {
         if (run.plan.agent_scope)
           await wallet.agentScopes.fromBinding(
             run.plan.agent_scope,
@@ -496,6 +584,10 @@ class LiveExecution {
       }
       if (result.phase === 'running') this.activated.add(run.plan.id);
       this.errors.delete(run.plan.id);
+      if (result.phase === 'running' && run.completed_slices === 0) {
+        if (run.plan.protective_exit) this.errors.set(run.plan.id, EXIT.wait);
+        else if (run.plan.entry_trigger) this.errors.set(run.plan.id, ENTRY.wait);
+      }
       this.wake();
       this.changed(workspace.id);
       return result;
@@ -575,6 +667,18 @@ class LiveExecution {
     )
       fail('EXECUTION_ARRIVAL_REQUIRED');
     if (
+      run.plan.entry_trigger &&
+      (this.service.native.handshake?.executionEntryTrigger !== 1 ||
+        this.service.native.handshake?.executionArrival !== 1)
+    )
+      fail('EXECUTION_ENTRY_REQUIRED');
+    if (
+      run.plan.protective_exit &&
+      (this.service.native.handshake?.executionProtectiveExit !== 1 ||
+        this.service.native.handshake?.executionArrival !== 1)
+    )
+      fail('EXECUTION_EXIT_REQUIRED');
+    if (
       fixedTemplate(run.plan.template) &&
       this.service.native.handshake?.executionFixedWindows !== 1
     )
@@ -616,10 +720,14 @@ class LiveExecution {
         if (this.disposed) break;
         const id = row.command.id;
         if (this.active.has(id) || Date.now() < (this.nextCheck.get(id) || 0)) continue;
-        this.nextCheck.set(id, Date.now() + 2000);
+        this.nextCheck.set(
+          id,
+          Date.now() + (row.dispatch_allowed && priceCondition(row) ? 5000 : 2000),
+        );
         if (row.dispatch_allowed && this.activated.has(row.run.plan.id)) {
           const controller = new AbortController(),
             value = { run: row.run.plan.id, controller };
+          const previous = this.errors.get(value.run);
           this.active.set(id, value);
           value.promise = this.dispatch(row, controller)
             .catch(async (error) => {
@@ -628,7 +736,8 @@ class LiveExecution {
             })
             .finally(() => {
               if (this.active.get(id) === value) this.active.delete(id);
-              this.changed(row.run.plan.owner.slice(10));
+              if (!priceWaiting.has(previous) || this.errors.get(value.run) !== previous)
+                this.changed(row.run.plan.owner.slice(10));
             });
         } else if (row.command.lease?.startsWith('bridge:')) {
           try {
@@ -679,8 +788,42 @@ class LiveExecution {
     let timer, ended;
     try {
       this.guard(row, controller, pid);
+      let observation;
+      const condition = priceCondition(row);
+      if (condition) {
+        if (!this.wallet().isUnlocked(row.run.plan.wallet)) fail('WALLET_LOCKED');
+        const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(10000)]);
+        observation = await poolEvidence(
+          this.service.market,
+          this.assertPlan(row.run),
+          signal,
+          condition.unavailable,
+        ).catch(() => null);
+        this.guard(row, controller, pid);
+        if (!this.wallet().isUnlocked(row.run.plan.wallet)) fail('WALLET_LOCKED');
+        if (!observation) {
+          this.errors.set(row.run.plan.id, condition.unavailable);
+          return;
+        }
+      }
       const sentAt = performance.now();
-      row.command = await native.execution('claim', { id: row.command.id, lease });
+      try {
+        row.command = await native.execution('claim', {
+          id: row.command.id,
+          lease,
+          ...(observation && { entry_observation: observation }),
+        });
+      } catch (error) {
+        const reason = code(error);
+        if (
+          !condition ||
+          error.definitive !== true ||
+          ![condition.wait, condition.unavailable].includes(reason)
+        )
+          throw error;
+        this.errors.set(row.run.plan.id, reason);
+        return;
+      }
       claimed = true;
       this.errors.delete(row.run.plan.id);
       const endsAt = windowEnd(row.run, row.command);

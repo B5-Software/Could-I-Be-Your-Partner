@@ -59,10 +59,9 @@ class EventDataBrowser {
   }
   create(id) {
     const operationId = randomUUID();
-    this.parent.menu(
-      this.t('qeProduct'),
-      ['ETH-USD', 'BTC-USD', 'SOL-USD'].map((value) => ({ label: value, value })),
-      (product) =>
+    this.parent.chooseNativeMarket(
+      'qeProduct',
+      ({ product, venue }) =>
         this.parent.ui.input(
           this.t('qeName'),
           async (name) => {
@@ -70,6 +69,7 @@ class EventDataBrowser {
               id,
               operationId,
               product,
+              venue,
               name,
             });
             return this.detail(id, 'recording', result.recordingId);
@@ -95,6 +95,7 @@ class EventDataBrowser {
       actions.push('qeExecutions', 'qeOrders', 'qeDecisions');
     const folds = v.validation?.folds || [];
     const body = [
+      ...(v.product ? [this.parent.nativeVenueLabel(v.venue) + ' / ' + v.product] : []),
       this.status(v.status),
       v.validationProgress
         ? `${this.t('qeStageProgress')} ${v.validationProgress.completed}/${v.validationProgress.total}`

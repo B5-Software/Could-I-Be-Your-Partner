@@ -23,12 +23,16 @@ import { executionPercent } from '../../shared/quant-execution-format';
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 import rawStatuses from '../../shared/wallet-status.json';
 import emergencyLabels from '../../shared/wallet-emergency-labels.json';
+import exchangeLabels from '../../shared/quant-exchange-labels.json';
 import type { WalletEmergency } from '../../shared/wallet-emergency-types';
 import { executionAmount } from '../../shared/quant-execution-format';
 const statuses: Record<string, Record<string, string>> = rawStatuses;
+const exchangeStatuses: Record<string, Record<string, string>> = exchangeLabels;
 export function walletStatus(language: string, status: string): string {
   const key = language.startsWith('de') ? 'de' : language.startsWith('en') ? 'en' : 'zh-CN';
-  return statuses[key]![status] || status;
+  return (
+    statuses[key]![status] || exchangeStatuses[key === 'zh-CN' ? 'zh' : key]![status] || status
+  );
 }
 export type WalletIntent = {
   emergencyBlocked?: boolean;
@@ -702,6 +706,22 @@ export class WalletPanel {
         );
     if (this.emergency) {
       const state = this.emergency;
+      const exchange = state.exchangeCancel;
+      const exchangeTitle =
+        exchange &&
+        this.t(
+          exchange.phase === 'running'
+            ? 'esExchangeRunning'
+            : exchange.phase === 'complete'
+              ? 'esExchangeComplete'
+              : 'esExchangeAttention',
+        );
+      const exchangeCounts =
+        exchange?.targeted !== undefined &&
+        this.t('esExchangeCounts')
+          .replace('{canceled}', String(exchange.canceled))
+          .replace('{targeted}', String(exchange.targeted))
+          .replace('{remaining}', String(exchange.remaining));
       this.root.insertAdjacentHTML(
         'afterbegin',
         '<section class="wallet-emergency ' +
@@ -715,6 +735,17 @@ export class WalletPanel {
             ? '<p>' + esc(this.t('esReconcile')) + ': ' + state.needsReconciliation + '</p>'
             : '') +
           (state.nativePausePending ? '<p>' + esc(this.t('esPending')) + '</p>' : '') +
+          (!state.halted ? '<p>' + esc(this.t('esExchangeHint')) + '</p>' : '') +
+          (exchangeTitle
+            ? '<p data-exchange-cancel>' +
+              esc([exchangeTitle, exchangeCounts].filter(Boolean).join(' · ')) +
+              '</p>'
+            : '') +
+          (exchange?.error
+            ? '<p class="wallet-error">' +
+              esc(walletStatus(this.options.language(), exchange.error)) +
+              '</p>'
+            : '') +
           (state.storageError || state.nativePauseError
             ? '<p class="wallet-error">' +
               esc(
@@ -725,23 +756,32 @@ export class WalletPanel {
               ) +
               '</p>'
             : '') +
-          '</div>' +
+          '</div><div class="wallet-emergency-actions">' +
           this.btn(
             state.halted
               ? state.storageError || state.nativePauseError
                 ? 'esRetry'
                 : 'esReset'
-              : 'esHalt',
+              : 'esHaltWithExchange',
             state.halted && !state.storageError && !state.nativePauseError
               ? 'emergency-reset'
               : 'emergency-stop',
           ) +
-          '</section>',
+          (state.halted &&
+          !state.storageError &&
+          exchange?.phase !== 'running' &&
+          exchange?.phase !== 'complete'
+            ? this.btn(
+                exchange ? 'esExchangeRetry' : 'esExchangeCancel',
+                'emergency-cancel-exchange',
+              )
+            : '') +
+          '</div></section>',
       );
       const reset = this.root.querySelector<HTMLButtonElement>(
         '[data-wallet-action=emergency-reset]',
       );
-      if (reset) reset.disabled = state.nativePausePending;
+      if (reset) reset.disabled = state.nativePausePending || exchange?.phase === 'running';
       if (state.halted)
         for (const action of this.root.querySelectorAll<HTMLButtonElement>(
           '[data-wallet-action=unlock],[data-wallet-action=enable]',
@@ -767,7 +807,20 @@ export class WalletPanel {
     }
     if (action === 'emergency-stop') {
       try {
-        await this.call('emergency.halt', { expectedGeneration: this.emergency?.generation });
+        await this.call('emergency.halt', {
+          expectedGeneration: this.emergency?.generation,
+          cancelExchangeOrders: true,
+        });
+      } finally {
+        await this.refresh();
+      }
+      return;
+    }
+    if (action === 'emergency-cancel-exchange') {
+      try {
+        await this.call('emergency.cancelExchange', {
+          expectedGeneration: this.emergency?.generation,
+        });
       } finally {
         await this.refresh();
       }
@@ -1485,6 +1538,9 @@ export class WalletPanel {
         esc(this.t('esResetHint')) +
         '</p><p>' +
         esc(this.t('esResidual')) +
+        (this.emergency?.exchangeCancel?.phase === 'attention'
+          ? '</p><p>' + esc(this.t('esExchangeResidual'))
+          : '') +
         '</p><label data-second hidden>' +
         esc(this.t('esAck')) +
         '<input name="ack" autocomplete="off" spellcheck="false" placeholder="RESET LIVE"></label><p data-error role="alert" hidden></p><footer><button type="button" data-close>' +

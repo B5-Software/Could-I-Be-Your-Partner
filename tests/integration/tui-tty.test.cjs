@@ -200,7 +200,7 @@ function runInPty({ args, env, onOutput, onScreen, watchdogMs = 25000, describe,
     }, watchdogMs);
     child.onData((data) => {
       out += data;
-      terminal?.write(data, () => onScreen(terminal));
+      terminal?.write(data, () => onScreen(terminal, child));
       if (onOutput) onOutput(data, out, child);
     });
     child.onExit(({ exitCode }) => {
@@ -445,7 +445,7 @@ test(
 );
 
 test(
-  'TUI real terminal inherits GUI colors, toggles native colors, and displays an actual 429 retry at top-right',
+  'TUI real terminal follows GUI colors, shows a 429 retry, and clears thinking after the reply',
   async () => {
     const stub = await startStubLlm({ retryOnce: true });
     const profile = makeProfile(stub.port);
@@ -454,7 +454,14 @@ test(
     settings.theme = { mode: 'light', backgroundColor: '#f5f7fa', accentColor: '#3355aa' };
     settings.tui = { followGuiTheme: true, thinkingExpanded: true };
     fs.writeFileSync(settingsFile, JSON.stringify(settings));
-    const stage = { ready: false, off: false, on: false, retry: false, reply: false };
+    const stage = {
+      ready: false,
+      off: false,
+      on: false,
+      retry: false,
+      running: false,
+      idle: false,
+    };
     let retryRow = '';
     let retryDetail = '';
     let persistenceError;
@@ -477,7 +484,7 @@ test(
         env: { CIBYP_USER_DATA: profile, CIBYP_AUTO_APPROVE: '1' },
         watchdogMs: 30000,
         describe: () => JSON.stringify(stage),
-        onScreen: (terminal) => {
+        onScreen: (terminal, child) => {
           const row = terminal.buffer.active.getLine(2)?.translateToString(true) || '';
           if (row.includes('LLM 重试 #1')) {
             stage.retry = true;
@@ -491,6 +498,18 @@ test(
               .replace(/[│╭╮╰╯─]/g, ' ')
               .replace(/\s+/g, ' ');
           }
+          if (stage.on && !stage.idle) {
+            const screen = Array.from(
+              { length: terminal.rows },
+              (_, index) => terminal.buffer.active.getLine(index)?.translateToString(true) || '',
+            ).join('\n');
+            const thinking = screen.includes('思考中');
+            stage.running ||= thinking;
+            if (stage.running && screen.includes(REPLY) && !thinking) {
+              stage.idle = true;
+              child.write('/quit' + CR);
+            }
+          }
         },
         onOutput: (_data, all, child) => {
           const plain = stripAnsi(all);
@@ -503,18 +522,15 @@ test(
           } else if (stage.off && !stage.on && plain.includes('TUI 主题：沿用 GUI 色系')) {
             stage.on = true;
             afterSaved(true, child, USER_TEXT);
-          } else if (stage.on && !stage.reply && plain.includes(REPLY)) {
-            stage.reply = true;
-            // Rendering the final reply precedes the Agent's idle event. Ctrl+C
-            // can still mean "stop" here; this case tests theme/retry rendering.
-            // The separate interaction case above verifies double Ctrl+C exit.
-            child.write('/quit' + CR);
           }
         },
       });
       if (persistenceError) throw persistenceError;
       assert.equal(result.exitCode, 0);
-      assert.ok(stage.off && stage.on && stage.retry && stage.reply, JSON.stringify(stage));
+      assert.ok(
+        stage.off && stage.on && stage.retry && stage.running && stage.idle,
+        JSON.stringify(stage),
+      );
       assert.ok(retryRow.indexOf('LLM 重试') >= 48, retryRow);
       assert.ok(
         result.output.includes('48;2;245;247;250'),

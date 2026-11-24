@@ -3,7 +3,10 @@ use cibyp_quant_engine::{
     execution_runner::ExecutionRunner,
     ledger::{
         Ledger, Side,
-        execution::{Arrival, Command, Phase, Plan, Report, Stage, VwapProfile},
+        execution::{
+            Arrival, Command, EntryRelation, EntryTrigger, ExitCause, Phase, Plan, ProtectiveExit,
+            Report, Stage, VwapProfile,
+        },
     },
 };
 use std::{
@@ -40,6 +43,8 @@ fn fixture() -> (Folder, Ledger, ExecutionRunner) {
 fn plan() -> Plan {
     Plan {
         max_arrival_cost_bps: None,
+        entry_trigger: None,
+        protective_exit: None,
         vwap: None,
         agent_scope: None,
         template: "base-twap-v1".into(),
@@ -198,7 +203,9 @@ fn fixed_windows_skip_missed_budget_without_sliding_after_finality() {
     let first = pending(&ledger);
     assert_eq!(first.ordinal, 1);
     assert_eq!(first.input_atoms, "3");
-    let (first, remaining) = runner.claim(&mut ledger, &first.id, "lease:1").unwrap();
+    let (first, remaining) = runner
+        .claim(&mut ledger, &first.id, "lease:1", None)
+        .unwrap();
     assert_eq!(remaining, Some(1000));
     runner
         .report(&mut ledger, report(&first, Stage::Submitted))
@@ -227,7 +234,7 @@ fn fixed_windows_skip_missed_budget_without_sliding_after_finality() {
     clock.advance(start - second, 3 * second).unwrap();
     assert_eq!(
         runner
-            .claim(&mut ledger, &third.id, "lease:late")
+            .claim(&mut ledger, &third.id, "lease:late", None)
             .unwrap_err(),
         "EXECUTION_WINDOW_EXPIRED"
     );
@@ -272,7 +279,9 @@ fn historical_vwap_conserves_input_and_skips_unfunded_windows() {
     runner.drive(&mut ledger).unwrap();
     let first = pending(&ledger);
     assert_eq!(first.input_atoms, (u128::MAX - 3).to_string());
-    let (first, _) = runner.claim(&mut ledger, &first.id, "lease:1").unwrap();
+    let (first, _) = runner
+        .claim(&mut ledger, &first.id, "lease:1", None)
+        .unwrap();
     runner
         .report(&mut ledger, report(&first, Stage::Finalized))
         .unwrap();
@@ -287,7 +296,9 @@ fn historical_vwap_conserves_input_and_skips_unfunded_windows() {
     let third = pending(&ledger);
     assert_eq!(third.ordinal, 3);
     assert_eq!(third.input_atoms, "3");
-    let (third, _) = runner.claim(&mut ledger, &third.id, "lease:2").unwrap();
+    let (third, _) = runner
+        .claim(&mut ledger, &third.id, "lease:2", None)
+        .unwrap();
     runner
         .report(&mut ledger, report(&third, Stage::Finalized))
         .unwrap();
@@ -358,6 +369,195 @@ fn arrival_price_is_bound_to_the_first_start_and_survives_restart() {
         runner.start(&mut ledger, &id, "policy:2").unwrap().arrival,
         Some(arrival)
     );
+}
+
+#[test]
+fn entry_claim_requires_a_fresh_same_pool_price_and_keeps_the_exact_boundary() {
+    use ethnum::U256;
+    let clock = ReplayClock::enter().unwrap();
+    let start = 1_700_000_000u128;
+    clock.advance(start * 1_000_000_000, 0).unwrap();
+    for weth_is_token0 in [true, false] {
+        let (folder, mut ledger, mut runner) = fixture();
+        let boundary = U256::ONE << if weth_is_token0 { 95u32 } else { 97u32 };
+        let above = if weth_is_token0 {
+            boundary + U256::ONE
+        } else {
+            boundary - U256::ONE
+        };
+        let mut definition = plan();
+        definition.entry_trigger = Some(EntryTrigger {
+            relation: EntryRelation::AtOrBelow,
+            price_atoms: "250000000000000000".into(),
+        });
+        let mut incompatible = definition.clone();
+        incompatible.template = "base-twap-fixed-v1".into();
+        assert_eq!(
+            ledger.execution_create(incompatible).unwrap_err(),
+            "EXECUTION_ENTRY_INVALID"
+        );
+        let id = definition.id.clone();
+        ledger.execution_create(definition.clone()).unwrap();
+        let at_threshold = Arrival {
+            pool: format!("0x{}", "1".repeat(40)),
+            block: "12345".into(),
+            block_hash: format!("0x{}", "2".repeat(64)),
+            block_time: start as u64,
+            sqrt_price_x96: boundary.to_string(),
+            weth_is_token0,
+        };
+        let mut before = at_threshold.clone();
+        before.sqrt_price_x96 = above.to_string();
+        runner
+            .start_with_arrival(&mut ledger, &id, "policy:1", Some(before.clone()))
+            .unwrap();
+        runner.drive(&mut ledger).unwrap();
+        let first = pending(&ledger);
+        let mut stale = at_threshold.clone();
+        stale.block_time -= 31;
+        let mut other_pool = at_threshold.clone();
+        other_pool.pool = format!("0x{}", "3".repeat(40));
+        let length = fs::metadata(folder.0.join("events.jsonl")).unwrap().len();
+        for (evidence, reason) in [
+            (None, "EXECUTION_ENTRY_REQUIRED"),
+            (Some(stale), "EXECUTION_ENTRY_UNAVAILABLE"),
+            (Some(other_pool), "EXECUTION_ENTRY_UNAVAILABLE"),
+            (Some(before), "EXECUTION_ENTRY_WAIT"),
+        ] {
+            assert_eq!(
+                runner
+                    .claim(&mut ledger, &first.id, "lease:1", evidence)
+                    .unwrap_err(),
+                reason
+            );
+            assert_eq!(pending(&ledger), first);
+        }
+        assert_eq!(
+            fs::metadata(folder.0.join("events.jsonl")).unwrap().len(),
+            length
+        );
+        let (claimed, _) = runner
+            .claim(
+                &mut ledger,
+                &first.id,
+                "lease:1",
+                Some(at_threshold.clone()),
+            )
+            .unwrap();
+        assert_eq!(claimed.entry_observation, Some(at_threshold.clone()));
+        assert_eq!(claimed.stage, Stage::Claimed);
+        assert!(
+            runner
+                .claim(&mut ledger, &first.id, "lease:1", None)
+                .is_err()
+        );
+        drop(ledger);
+        let mut reloaded = Ledger::open(&folder.0, 8 * 1024 * 1024).unwrap();
+        reloaded.recover_executions().unwrap();
+        assert_eq!(reloaded.execution_run(&id).unwrap().plan, definition);
+        assert_eq!(
+            reloaded
+                .execution_command(&first.id)
+                .unwrap()
+                .entry_observation,
+            Some(at_threshold)
+        );
+    }
+}
+
+#[test]
+fn protective_exit_claims_exactly_one_sell_and_persists_its_cause() {
+    use ethnum::U256;
+    let clock = ReplayClock::enter().unwrap();
+    let start = 1_700_000_000u128;
+    clock.advance(start * 1_000_000_000, 0).unwrap();
+    let stop_price = U256::ONE << 94u32;
+    let profit_price = U256::ONE << 95u32;
+    for (cause, observed_price, opposite) in [
+        (ExitCause::StopLoss, stop_price, profit_price),
+        (ExitCause::TakeProfit, profit_price, stop_price),
+    ] {
+        let (folder, mut ledger, mut runner) = fixture();
+        let mut definition = plan();
+        definition.protective_exit = Some(ProtectiveExit {
+            stop_loss_price_atoms: "62500000000000000".into(),
+            take_profit_price_atoms: Some("250000000000000000".into()),
+        });
+        assert_eq!(
+            ledger.execution_create(definition.clone()).unwrap_err(),
+            "EXECUTION_EXIT_INVALID"
+        );
+        definition.side = Side::Sell;
+        definition.slices = 1;
+        let mut invalid = definition.clone();
+        let thresholds = invalid.protective_exit.as_mut().unwrap();
+        thresholds.take_profit_price_atoms = Some(thresholds.stop_loss_price_atoms.clone());
+        assert_eq!(
+            ledger.execution_create(invalid).unwrap_err(),
+            "EXECUTION_EXIT_INVALID"
+        );
+        let id = definition.id.clone();
+        ledger.execution_create(definition.clone()).unwrap();
+        let middle = Arrival {
+            pool: format!("0x{}", "1".repeat(40)),
+            block: "12345".into(),
+            block_hash: format!("0x{}", "2".repeat(64)),
+            block_time: start as u64,
+            sqrt_price_x96: (stop_price + (U256::ONE << 93u32)).to_string(),
+            weth_is_token0: true,
+        };
+        assert!(runner.start(&mut ledger, &id, "policy:1").is_err());
+        runner
+            .start_with_arrival(&mut ledger, &id, "policy:1", Some(middle.clone()))
+            .unwrap();
+        runner.drive(&mut ledger).unwrap();
+        let command = pending(&ledger);
+        assert_eq!(
+            runner
+                .claim(&mut ledger, &command.id, "lease:1", Some(middle.clone()))
+                .unwrap_err(),
+            "EXECUTION_EXIT_WAIT"
+        );
+        let mut observed = middle.clone();
+        observed.sqrt_price_x96 = observed_price.to_string();
+        let mut other = middle;
+        other.sqrt_price_x96 = opposite.to_string();
+        let (claimed, _) = runner
+            .claim(&mut ledger, &command.id, "lease:1", Some(observed.clone()))
+            .unwrap();
+        let receipt = claimed.exit_trigger.as_ref().unwrap();
+        assert_eq!(receipt.cause, cause);
+        assert_eq!(receipt.observation, observed);
+        assert_eq!(
+            runner
+                .claim(&mut ledger, &command.id, "lease:1", Some(other.clone()))
+                .unwrap_err(),
+            "EXECUTION_EXIT_INVALID"
+        );
+        assert!(
+            runner
+                .claim(&mut ledger, &command.id, "lease:other", Some(other))
+                .is_err()
+        );
+        runner
+            .report(&mut ledger, report(&claimed, Stage::Finalized))
+            .unwrap();
+        drop(ledger);
+        let mut ledger = Ledger::open(&folder.0, 8 * 1024 * 1024).unwrap();
+        ledger.recover_executions().unwrap();
+        let run = ledger.execution_run(&id).unwrap();
+        assert_eq!(run.phase, Phase::Completed);
+        assert_eq!(run.completed_slices, 1);
+        assert_eq!(ledger.execution_history(&id).len(), 1);
+        assert_eq!(
+            ledger
+                .execution_command(&command.id)
+                .unwrap()
+                .exit_trigger
+                .as_ref(),
+            Some(receipt)
+        );
+    }
 }
 
 #[test]

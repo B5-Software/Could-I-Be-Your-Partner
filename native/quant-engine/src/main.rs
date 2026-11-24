@@ -88,6 +88,7 @@ struct ExecutionStart {
 struct ExecutionClaim {
     id: String,
     lease: String,
+    entry_observation: Option<cibyp_quant_engine::ledger::execution::Arrival>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -159,6 +160,7 @@ struct Delta {
     epoch: String,
     sequence: String,
     updates: Vec<Update>,
+    coverage: Option<Coverage>,
     source_time_ns: Option<String>,
     provider_time_ns: Option<String>,
     source_clock: Option<SourceClock>,
@@ -338,9 +340,12 @@ impl Engine {
             }
             "execution.claim" => {
                 let input = params::<ExecutionClaim>(value)?;
-                let (command, remaining_ms) =
-                    self.execution
-                        .claim(&mut self.ledger, &input.id, &input.lease)?;
+                let (command, remaining_ms) = self.execution.claim(
+                    &mut self.ledger,
+                    &input.id,
+                    &input.lease,
+                    input.entry_observation,
+                )?;
                 let mut value = serde_json::to_value(command).map_err(|_| "ENCODING_ERROR")?;
                 if let Some(ms) = remaining_ms {
                     value["window_remaining_ms"] = json!(ms);
@@ -598,7 +603,7 @@ impl Engine {
                 )
             }
             "status" => Ok(
-                json!({"protocol":PROTOCOL,"version":env!("CARGO_PKG_VERSION"),"mode":if self.replay_clock.is_some(){"replay"}else{"paper"},"liveExecution":false,"ledger":self.ledger.summary(),"books":self.books.len(),"matching":{"model":"conservative-l2-fifo","latencyMs":500},"feed":{"version":1,"boundedDepth":true,"sourceClock":true,"clockNormalization":true,"tradeSide":"maker"}}),
+                json!({"protocol":PROTOCOL,"version":env!("CARGO_PKG_VERSION"),"mode":if self.replay_clock.is_some(){"replay"}else{"paper"},"liveExecution":false,"ledger":self.ledger.summary(),"books":self.books.len(),"matching":{"model":"conservative-l2-fifo","latencyMs":500},"feed":{"version":1,"boundedDepth":true,"movingCoverage":true,"sourceClock":true,"clockNormalization":true,"tradeSide":"maker"}}),
             ),
             "instrument.register" => {
                 self.ledger.instrument(params::<Instrument>(value)?)?;
@@ -764,14 +769,18 @@ impl Engine {
                     .books
                     .get_mut(&frame.instrument)
                     .ok_or("BOOK_SNAPSHOT_REQUIRED")?;
-                let applied =
-                    match book.delta(&frame.epoch, sequence(&frame.sequence)?, frame.updates) {
-                        Ok(value) => value,
-                        Err(error) => {
-                            self.matcher.detach(&frame.instrument);
-                            return Err(error.into());
-                        }
-                    };
+                let applied = match book.delta_bounded(
+                    &frame.epoch,
+                    sequence(&frame.sequence)?,
+                    frame.updates,
+                    frame.coverage,
+                ) {
+                    Ok(value) => value,
+                    Err(error) => {
+                        self.matcher.detach(&frame.instrument);
+                        return Err(error.into());
+                    }
+                };
                 if applied && let Err(error) = self.matcher.observe(&frame.instrument, book) {
                     book.suspend();
                     self.matcher.detach(&frame.instrument);
@@ -1007,7 +1016,7 @@ fn run() -> io::Result<()> {
         &mut output,
         &request.id,
         Ok(
-            json!({"protocol":PROTOCOL,"version":env!("CARGO_PKG_VERSION"),"mode":if replay{"replay"}else{"paper"},"liveExecution":false,"executionOutbox":2,"executionHalt":1,"executionPriceLimit":1,"executionFixedWindows":1,"executionVwap":1,"executionArrival":1,"executionArrivalLimit":1,"pid":std::process::id()}),
+            json!({"protocol":PROTOCOL,"version":env!("CARGO_PKG_VERSION"),"mode":if replay{"replay"}else{"paper"},"liveExecution":false,"executionOutbox":2,"executionHalt":1,"executionPriceLimit":1,"executionFixedWindows":1,"executionVwap":1,"executionArrival":1,"executionArrivalLimit":1,"executionEntryTrigger":1,"executionProtectiveExit":1,"pid":std::process::id()}),
         ),
     )?;
     let mut generation = 0;

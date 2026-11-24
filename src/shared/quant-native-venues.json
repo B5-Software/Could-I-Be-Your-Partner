@@ -1,0 +1,7 @@
+{
+  "products": ["ETH-USD", "BTC-USD", "SOL-USD"],
+  "venues": [
+    { "id": "coinbase", "label": "Coinbase" },
+    { "id": "kraken", "label": "Kraken Spot" }
+  ]
+}

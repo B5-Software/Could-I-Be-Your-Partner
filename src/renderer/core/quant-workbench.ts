@@ -1,4 +1,7 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
+import marketIntervals from '../../shared/quant-market-intervals.json';
+import { products as spotProducts } from '../../shared/quant-native-venues.json';
+import { nativeVenueLabel, nativeVenueOptions, nativeSourceMatches } from './quant-native-venue';
 import type {
   Candle,
   QuantChatView,
@@ -6,6 +9,7 @@ import type {
   QuantBaseTrade,
   QuantBaseRecorder,
   QuantDataset,
+  QuantKrakenArchive,
   QuantRun,
   QuantSummary,
   QuantWorkspace,
@@ -14,10 +18,12 @@ import type {
   QuantNativeBook,
 } from '../../shared/quant-types';
 import { QuantChart } from './quant-chart';
+import { QuantLayout } from './quant-layout';
 import { openNativePaper } from './quant-native-paper';
 import { openStrategies } from './quant-strategies';
 import { openEventData } from './quant-events';
 import { openLiveExecution } from './quant-execution';
+import { openExchange } from './quant-exchange';
 import { quantText, type QuantLabel } from './quant-text';
 import { executionAmount, signedAmount } from '../../shared/quant-execution-format';
 import { approvalCard, type WalletIntent } from './wallet-panel';
@@ -35,6 +41,12 @@ const escape = (value: unknown) =>
     /[&<>"']/g,
     (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!,
   );
+const periodLabel = (seconds: number) =>
+  seconds % 86400 === 0
+    ? seconds / 86400 + 'd'
+    : seconds % 3600 === 0
+      ? seconds / 3600 + 'h'
+      : seconds / 60 + 'm';
 const paths: Record<string, string> = {
   chart: '<path d="M4 3v17h17M8 12v4m4-9v6m4-9v12m4-8v3"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
@@ -49,6 +61,11 @@ const paths: Record<string, string> = {
   stop: '<rect x="6" y="6" width="12" height="12" rx="2"/>',
   close: '<path d="m6 6 12 12M6 18 18 6"/>',
   history: '<path d="M3 11a9 9 0 1 1 2 7M3 4v7h7m2-4v5l3 2"/>',
+  panels: '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 14h18M9 4v10"/>',
+  wallet:
+    '<path d="M20 8V6a2 2 0 0 0-2-2H6a3 3 0 0 0 0 6h14a1 1 0 0 1 1 1v7a2 2 0 0 1-2 2H6a3 3 0 0 1-3-3V7m18 6h-5a2 2 0 1 0 0 4h5"/>',
+  activity: '<path d="M3 12h4l3-7 4 14 3-7h4"/>',
+  orders: '<path d="M4 7h16l-4-4m4 14H4l4 4"/>',
 };
 const icon = (name: string) =>
   `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name] || paths.chart}</svg>`;
@@ -68,22 +85,21 @@ export class QuantWorkbench {
   private chatBusy = false;
   private chatGeneration = 0;
   private questionDialog?: HTMLDialogElement;
-  private marketLoading = false;
+  private marketLoading?: { id: string; revision?: number };
   private nativeGeneration = 0;
-  private chartData = new Map<string, Candle[]>();
+  private chartData = new Map<string, { candles: Candle[]; market?: QuantDataset['market'] }>();
   private eventTimer?: ReturnType<typeof setTimeout>;
   private chatTimer?: ReturnType<typeof setTimeout>;
   private readonly chart: QuantChart;
   private readonly root: HTMLElement;
   private readonly chartCard: HTMLElement;
+  private readonly layout: QuantLayout;
   private focusExpanded = false;
   constructor(private readonly options: Options) {
     this.root = document.getElementById('page-quant')!;
     this.root.innerHTML = this.template();
-    this.root
-      .querySelector('.quant-top-actions')!
-      .insertAdjacentHTML('afterbegin', this.button('leTitle', 'live-execution', 'chart'));
     this.chartCard = this.el('[data-chart-card]');
+    this.el('[data-chart-home]').append(this.chartCard);
     this.chart = new QuantChart(
       this.el('[data-chart-canvas]'),
       this.el('[data-chart-readout]'),
@@ -91,8 +107,10 @@ export class QuantWorkbench {
     );
     this.root.addEventListener('click', (event) => {
       const button = (event.target as HTMLElement).closest<HTMLElement>('[data-action]');
-      if (button && !button.hasAttribute('disabled'))
+      if (button && !button.hasAttribute('disabled')) {
+        if (button.closest('.quant-tools-group')) this.closeTools();
         void this.action(button).catch((error) => this.error(error));
+      }
     });
     this.root.addEventListener('change', (event) => {
       const target = event.target as HTMLSelectElement;
@@ -138,7 +156,15 @@ export class QuantWorkbench {
       this.chart.schedule();
     });
     document.addEventListener('keydown', (event) => {
-      if (event.key === 'Escape' && this.focusExpanded) this.exitChart();
+      if (event.key !== 'Escape') return;
+      if (this.focusExpanded) this.exitChart();
+      if (this.el('[data-action="tools-menu"]').getAttribute('aria-expanded') === 'true') {
+        this.closeTools();
+        this.el('[data-action="tools-menu"]').focus();
+      }
+    });
+    document.addEventListener('click', (event) => {
+      if (!(event.target as Element)?.closest?.('.quant-tools-dock')) this.closeTools();
     });
     options.subscribe((event) => this.onEvent(event));
     window.addEventListener('cibyp:page-changed', (event) => {
@@ -148,6 +174,8 @@ export class QuantWorkbench {
       if (this.active) void this.open().catch((error) => this.error(error));
       else {
         this.exitChart();
+        this.layout.cancel();
+        this.closeTools();
         this.questionDialog?.close();
       }
     });
@@ -159,7 +187,11 @@ export class QuantWorkbench {
       if (this.active && !document.hidden && this.workspace)
         void this.refreshMarket().catch(() => {});
     }, 10000);
-    this.installResize();
+    this.layout = new QuantLayout(
+      this.el('[data-layout]'),
+      (preferences) => this.update({ preferences }),
+      (error) => this.error(error),
+    );
     this.localize();
   }
   private text(key: QuantLabel): string {
@@ -174,16 +206,25 @@ export class QuantWorkbench {
   private button(key: QuantLabel, action: string, glyph = '', extra = ''): string {
     return `<button type="button" data-action="${action}" ${extra} title="${escape(this.text(key))}">${glyph ? icon(glyph) : ''}<span data-q="${key}">${escape(this.text(key))}</span></button>`;
   }
+  private splitter(
+    split: string,
+    label: QuantLabel,
+    controls: string,
+    orientation: 'horizontal' | 'vertical',
+  ): string {
+    return `<div class="quant-splitter" data-quant-split="${split}" data-split-label="${label}" role="separator" aria-controls="${controls}" aria-orientation="${orientation}" tabindex="0"></div>`;
+  }
   private template(): string {
-    return `<div class="quant-topbar"><div class="quant-brand">${icon('chart')}<div><h1 data-q="title"></h1><span data-q="subtitle"></span></div></div>
-      <select data-project-select aria-label="${escape(this.text('projects'))}"></select><span class="quant-mode-badge" data-q="paper"></span>
-        <div class="quant-top-actions">${this.button('professional', 'professional', 'chart')}${this.button('immersive', 'immersive', 'chat')}${this.button('qeTitle', 'event-data', 'chart') + this.button('nsTitle', 'strategies', 'chart') + this.button('npTitle', 'native-paper', 'chart')}${this.button('wallet', 'wallet', 'settings')}${this.button('new', 'new', 'plus')}${this.button('settings', 'settings', 'settings')}</div></div>
+    return `<header class="quant-topbar"><div class="quant-top-main"><div class="quant-brand"><div class="quant-brand-icon">${icon('chart')}</div><h1 data-q="title"></h1></div>
+      <div class="quant-project-controls"><select data-project-select aria-label="${escape(this.text('projects'))}"></select><span class="quant-mode-badge" data-q="paper"></span>${this.button('new', 'new', 'plus', 'class="quant-primary"')}</div></div>
+      <div class="quant-top-actions"><div class="quant-mode-group" role="group" aria-label="${escape(this.text('layoutMode'))}">${this.button('professional', 'professional', 'panels')}${this.button('immersive', 'immersive', 'chat')}</div><div class="quant-jump-actions">${this.button('chart', 'jump-market', 'chart')}${this.button('assistant', 'jump-chat', 'chat')}</div>
+      <div class="quant-tools-dock">${this.button('more', 'tools-menu', 'settings', 'class="quant-tools-overflow" aria-expanded="false" aria-controls="quant-workbench-tools"')}<div class="quant-tools-group" id="quant-workbench-tools">${this.button('focusDetails', 'focus-details', 'panels', 'hidden aria-pressed="false" aria-controls="quant-research-data"')}${this.button('qeTitle', 'event-data', 'history')}${this.button('nsTitle', 'strategies', 'activity')}${this.button('npTitle', 'native-paper', 'orders')}${this.button('leTitle', 'live-execution', 'orders')}${this.button('wallet', 'wallet', 'wallet')}${this.button('settings', 'settings', 'settings', 'class="quant-icon-button"')}</div></div></div></header>
       <div class="quant-notice" data-notice role="status" hidden></div>
       <div class="quant-welcome" data-welcome><div class="quant-welcome-mark">${icon('chart')}</div><h2 data-q="noProjects"></h2><p data-q="noProjectsHint"></p>${this.button('new', 'new', 'plus')}</div>
       <div class="quant-layout" data-layout="professional" hidden>
-        <aside class="quant-projects"><div class="quant-section-label"><span data-q="projects"></span>${this.button('new', 'new', 'plus', 'class="quant-icon-button"')}</div><div data-projects></div>
-          <div class="quant-project-note">Base · 8453<br>Base Sepolia · 84532<hr><span data-q="liveUnavailable"></span></div></aside>
-        <div class="quant-center"><div data-chart-home></div><section class="quant-bottom">
+        <aside class="quant-projects" id="quant-project-list"><div class="quant-section-label"><span data-q="projects"></span>${this.button('new', 'new', 'plus', 'class="quant-icon-button"')}</div><div data-projects></div></aside>
+        ${this.splitter('projects', 'resizeProjects', 'quant-project-list', 'vertical')}
+        <div class="quant-center" id="quant-market-panel"><div data-chart-home id="quant-chart-panel"></div>${this.splitter('chart', 'resizeChart', 'quant-chart-panel', 'horizontal')}<section class="quant-bottom" id="quant-research-data">
           <div class="quant-tabs" role="tablist">${(['experiments', 'orders', 'research', 'risk', 'audit', 'book'] as QuantLabel[]).map((key) => this.button(key, 'tab:' + key)).join('')}</div>
           <div class="quant-bottom-content"><div data-experiments>
             <div class="quant-research-controls"><label><span data-q="strategy"></span><select data-param="strategy"><option value="sma-cross" data-q="sma"></option><option value="buy-hold" data-q="hold"></option></select></label>
@@ -200,9 +241,9 @@ export class QuantWorkbench {
             <div data-audit hidden></div><div data-book hidden></div><div data-research hidden></div>
           </div><div class="quant-pagination" data-pagination hidden>${this.button('previous', 'previous')}<span data-page-count></span>${this.button('next', 'next')}</div>
         </section></div>
-        <div class="quant-chat-resizer" role="separator" aria-orientation="vertical" tabindex="0" aria-label="${escape(this.text('assistant'))}"></div>
-        <section class="quant-conversation"><header><div>${icon('chat')}<strong data-q="assistant"></strong></div><select data-model aria-label="${escape(this.text('model'))}" disabled><option data-q="model"></option></select>${this.button('exportChat', 'export-chat', 'download', 'class="quant-icon-button"')}</header>
-          <div data-immersive-chart></div><div class="quant-chat-messages" data-chat-messages role="log" aria-live="polite"></div>
+        ${this.splitter('assistant', 'resizeAssistant', 'quant-research-assistant', 'vertical')}
+        <section class="quant-conversation" id="quant-research-assistant"><header><div>${icon('chat')}<strong data-q="assistant"></strong></div><select data-model aria-label="${escape(this.text('model'))}" disabled><option data-q="model"></option></select>${this.button('exportChat', 'export-chat', 'download', 'class="quant-icon-button"')}</header>
+          <div class="quant-chat-messages" data-chat-messages role="log" aria-live="polite"></div>
           <div class="quant-chat-working" data-chat-working hidden></div>
           <section class="quant-question-notice" data-quant-question hidden aria-live="polite"></section>
           <div class="quant-live-approvals" data-live-approvals></div><form class="quant-composer" data-chat-form><textarea data-chat-input rows="3" aria-label="${escape(this.text('message'))}"></textarea><footer><button type="button" data-action="autonomous" data-autonomous aria-pressed="true">Agent · Goal</button><span data-q="assistantHint"></span><button type="submit" data-send title="${escape(this.text('send'))}">${icon('send')}</button><button type="button" data-action="stop" data-stop title="${escape(this.text('stop'))}" hidden>${icon('stop')}</button></footer></form>
@@ -210,19 +251,10 @@ export class QuantWorkbench {
       </div><input data-file type="file" accept=".csv,.json" hidden>
       <section class="quant-chart-card" data-chart-card><div class="quant-market-head"><div><span class="quant-venue" data-venue></span><h2 data-product></h2><span class="quant-price" data-price>—</span></div>
         <div class="quant-health"><span data-health></span><time data-updated></time></div><div class="quant-chart-actions">
-          ${this.button('refresh', 'refresh', 'refresh')}${this.button('ammHistory', 'base-history', 'history', 'hidden')}${this.button('import', 'import', 'upload')}${this.button('fullscreen', 'fullscreen', 'expand', 'class="quant-icon-button"')}</div></div>
+          ${this.button('refresh', 'refresh', 'refresh')}${this.button('ammHistory', 'base-history', 'history', 'hidden')}${this.button('krakenArchive', 'kraken-archive', 'history', 'hidden')}${this.button('import', 'import', 'upload')}${this.button('fullscreen', 'fullscreen', 'expand', 'class="quant-icon-button"')}</div></div>
         <div class="quant-kpis">${(['equity', 'cash', 'position', 'fees'] as QuantLabel[]).map((key) => `<div><span data-q="${key}"></span><strong data-kpi="${key}">—</strong></div>`).join('')}<div class="quant-paper-actions">${this.button('start', 'start')}${this.button('pause', 'pause')}</div></div>
-        <div class="quant-chart-toolbar"><select data-interval aria-label="${escape(this.text('interval'))}">${[
-          [60, '1m'],
-          [300, '5m'],
-          [900, '15m'],
-          [3600, '1h'],
-          [21600, '6h'],
-          [86400, '1d'],
-        ]
-          .map(([value, label]) => `<option value="${value}">${label}</option>`)
-          .join('')}</select>
-          <select data-dataset aria-label="${escape(this.text('source'))}"></select><div class="quant-chart-tools">${this.button('zoomOut', 'zoom-out', '', 'class="quant-icon-button" aria-label="Zoom out"')}${this.button('zoomIn', 'zoom-in', '', 'class="quant-icon-button" aria-label="Zoom in"')}${this.button('fit', 'fit')}</div></div>
+        <div class="quant-chart-toolbar"><select data-interval aria-label="${escape(this.text('interval'))}"></select>
+          <select data-dataset aria-label="${escape(this.text('source'))}"></select>${this.button('captureCandles', 'capture-candles', '', 'hidden')}<div class="quant-chart-tools">${this.button('zoomOut', 'zoom-out', '', 'class="quant-icon-button" aria-label="Zoom out"')}${this.button('zoomIn', 'zoom-in', '', 'class="quant-icon-button" aria-label="Zoom in"')}${this.button('fit', 'fit')}</div></div>
         <div class="quant-chart-readout" data-chart-readout></div><div class="quant-chart-surface"><div data-chart-canvas></div><div class="quant-chart-empty" data-chart-empty><strong data-q="noData"></strong><p data-q="noDataHint"></p></div></div>
         <footer class="quant-chart-source"><span data-source></span><span data-q="sampleHint"></span></footer></section>`;
   }
@@ -233,9 +265,14 @@ export class QuantWorkbench {
     this.el<HTMLTextAreaElement>('[data-chat-input]').placeholder = this.text('message');
     this.el('[data-action="zoom-out"]').textContent = '−';
     this.el('[data-action="zoom-in"]').textContent = '+';
-    this.el('[data-chart-home]').append(this.chartCard);
-    if (this.workspace?.preferences.layout === 'immersive')
-      this.el('[data-immersive-chart]').append(this.chartCard);
+    this.root.querySelectorAll<HTMLElement>('[data-split-label]').forEach((bar) => {
+      const label = this.text(bar.dataset.splitLabel as QuantLabel);
+      bar.setAttribute('aria-label', label);
+      bar.title = `${label} · ${this.text('resizeHint')}`;
+    });
+  }
+  private closeTools(): void {
+    this.el('[data-action="tools-menu"]').setAttribute('aria-expanded', 'false');
   }
   async open(): Promise<void> {
     this.projects = await this.call<QuantSummary[]>('workspace.list');
@@ -291,7 +328,7 @@ export class QuantWorkbench {
     this.el('[data-projects]').innerHTML = this.projects
       .map(
         (p) =>
-          `<button type="button" class="quant-project ${p.id === this.currentId ? 'active' : ''}" data-action="project:${escape(p.id)}"><span class="quant-project-network">${escape(p.venue === 'coinbase' ? 'C' : 'B')}</span><span><strong>${escape(p.name)}</strong><small>${escape(p.product)} · ${escape(p.venue)}</small></span></button>`,
+          `<button type="button" class="quant-project ${p.id === this.currentId ? 'active' : ''}" aria-current="${p.id === this.currentId}" data-action="project:${escape(p.id)}"><span class="quant-project-network">${escape(p.venue === 'kraken' ? 'K' : p.venue === 'coinbase' ? 'C' : 'B')}</span><span><strong>${escape(p.name)}</strong><small>${escape(p.product)} · ${escape(p.venue)}</small></span></button>`,
       )
       .join('');
     const select = this.el<HTMLSelectElement>('[data-project-select]');
@@ -307,37 +344,47 @@ export class QuantWorkbench {
     if (!w) return;
     this.el('[data-welcome]').hidden = true;
     this.el('[data-layout]').hidden = false;
-    this.el('[data-layout]').dataset.layout = w.preferences.layout;
-    this.el('[data-layout]').style.setProperty(
-      '--quant-chat-width',
-      w.preferences.chatWidth + 'px',
-    );
-    this.el(
-      w.preferences.layout === 'immersive' ? '[data-immersive-chart]' : '[data-chart-home]',
-    ).append(this.chartCard);
+    this.layout.render(w.id, w.preferences);
+    const focusDetails = this.el('[data-action="focus-details"]');
+    focusDetails.hidden = w.preferences.layout !== 'immersive';
+    focusDetails.setAttribute('aria-pressed', String(w.preferences.focusDetails === true));
     for (const mode of ['professional', 'immersive'])
       this.el(`[data-action="${mode}"]`).setAttribute(
         'aria-pressed',
         String(w.preferences.layout === mode),
       );
+    const kraken = w.market.venue === 'kraken';
+    const stale =
+      kraken &&
+      w.quote &&
+      (Date.now() - w.quote.time * 1000 > 30000 || w.quote.time * 1000 - Date.now() > 2000);
     this.el('[data-product]').textContent = w.market.product;
-    this.el('[data-venue]').textContent =
-      w.market.venue === 'coinbase'
+    this.el('[data-venue]').textContent = kraken
+      ? 'KRAKEN SPOT · PUBLIC REST'
+      : w.market.venue === 'coinbase'
         ? 'COINBASE · PUBLIC REST'
         : w.market.venue === 'base'
           ? 'BASE · 8453 · UNISWAP V3'
           : 'BASE SEPOLIA · 84532 · TESTNET';
+    this.el('[data-action="live-execution"]').hidden = kraken;
+    this.el('[data-action="kraken-archive"]').hidden = !kraken;
+    const capture = this.el<HTMLButtonElement>('[data-action="capture-candles"]');
+    capture.hidden = !kraken;
+    capture.disabled = !w.candles.length || !!w.preferences.datasetId;
     this.el('[data-price]').textContent = w.quote ? this.number(w.quote.price) : '—';
-    this.el('[data-health]').textContent = this.marketLoading
-      ? this.text('loading')
-      : w.lastError
-        ? this.text('offline')
-        : w.quote
-          ? this.text('ready')
-          : this.text('noData');
-    this.el('[data-health]').className = w.lastError ? 'quant-negative' : '';
+    this.el('[data-health]').textContent =
+      this.marketLoading?.id === w.id && this.marketLoading.revision === w.marketRevision
+        ? this.text('loading')
+        : w.lastError
+          ? this.text('offline')
+          : stale
+            ? this.text('staleTrade')
+            : w.quote
+              ? this.text(kraken ? 'latestTrade' : 'ready')
+              : this.text('noData');
+    this.el('[data-health]').className = w.lastError || stale ? 'quant-negative' : '';
     this.el('[data-updated]').textContent = w.quote
-      ? new Date(w.quote.observedAt).toLocaleTimeString()
+      ? new Date(kraken ? w.quote.time * 1000 : w.quote.observedAt).toLocaleTimeString()
       : '';
     for (const key of ['equity', 'cash', 'position', 'fees'])
       this.el(`[data-kpi="${key}"]`).textContent = this.number(
@@ -345,29 +392,41 @@ export class QuantWorkbench {
       );
     this.el('[data-action="start"]').toggleAttribute('disabled', w.paper.status === 'running');
     this.el('[data-action="pause"]').toggleAttribute('disabled', w.paper.status !== 'running');
-    this.el('.quant-mode-badge').textContent =
-      this.text('paper') + ' · ' + this.text(w.paper.status === 'running' ? 'running' : 'paused');
-    this.el<HTMLSelectElement>('[data-interval]').value = String(w.market.interval);
+    const badge = this.el('.quant-mode-badge');
+    badge.dataset.status = w.paper.status;
+    badge.textContent = `${this.text('paper')} · ${this.text(w.paper.status === 'running' ? 'running' : 'paused')}`;
     this.el('[data-action="base-history"]').hidden = !w.network;
     const dataset = this.el<HTMLSelectElement>('[data-dataset]');
     dataset.innerHTML =
       `<option value="">${escape(this.text('liveData'))}</option>` +
       w.datasets
-        .map((d) => `<option value="${d.id}">${escape(d.label)} · ${d.count}</option>`)
+        .map((d) => {
+          const label =
+            d.source === 'kraken-spot-committed-ohlc' && d.label === 'Market snapshot'
+              ? this.text('candleSnapshot')
+              : d.label;
+          return `<option value="${d.id}">${escape(label)}${d.market ? ' · ' + periodLabel(d.market.interval) : ''} · ${d.count}</option>`;
+        })
         .join('');
     dataset.value = w.preferences.datasetId || '';
-    let bars = w.candles;
+    let bars = w.candles,
+      barInterval = w.market.interval;
     if (w.preferences.datasetId) {
       const id = w.preferences.datasetId;
       if (!this.chartData.has(id)) {
-        const data = await this.call<{ candles: Candle[] }>('dataset.get', {
-          id: w.id,
-          datasetId: id,
-        });
-        this.chartData.set(id, data.candles);
+        const data = await this.call<{ candles: Candle[]; market?: QuantDataset['market'] }>(
+          'dataset.get',
+          {
+            id: w.id,
+            datasetId: id,
+          },
+        );
+        this.chartData.set(id, data);
       }
       if (this.workspace?.id !== w.id || this.workspace.preferences.datasetId !== id) return;
-      bars = this.chartData.get(id)!;
+      const data = this.chartData.get(id)!;
+      bars = data.candles;
+      barInterval = data.market?.interval ?? barInterval;
     }
     const selectedDataset = w.datasets.find((dataset) => dataset.id === w.preferences.datasetId);
     this.el('[data-action="amm-replay"]').hidden =
@@ -375,7 +434,17 @@ export class QuantWorkbench {
     this.el('[data-action="amm-scenario"]').hidden =
       !selectedDataset?.amm && !selectedDataset?.series;
     const series = selectedDataset?.series;
-    this.chart.setData(bars, series?.interval);
+    const interval = this.el<HTMLSelectElement>('[data-interval]');
+    const periods = w.preferences.datasetId
+      ? [barInterval]
+      : w.market.intervals || marketIntervals.standard;
+    const choices = periods
+      .map((value) => `<option value="${value}">${periodLabel(value)}</option>`)
+      .join('');
+    if (interval.innerHTML !== choices) interval.innerHTML = choices;
+    interval.value = String(barInterval);
+    interval.disabled = Boolean(w.preferences.datasetId);
+    this.chart.setData(bars, series?.interval ?? (kraken ? barInterval : undefined));
     this.el('[data-chart-empty]').hidden = bars.length > 0;
     this.el('[data-source]').textContent =
       this.text('source') +
@@ -385,17 +454,23 @@ export class QuantWorkbench {
           ? this.text('imported')
           : selectedDataset?.amm || series
             ? this.text('ammSource')
-            : this.text('history')
-        : this.text(w.market.venue === 'coinbase' ? 'exchange' : 'sampled')) +
+            : selectedDataset?.archive
+              ? this.text('krakenArchive')
+              : selectedDataset?.source === 'kraken-spot-committed-ohlc'
+                ? this.text('krakenCandles')
+                : this.text('history')
+        : this.text(kraken ? 'krakenCandles' : w.network ? 'sampled' : 'exchange')) +
       (!w.preferences.datasetId && w.quote?.block ? ' · #' + w.quote.block : '');
     this.el('.quant-chart-source > span:last-child').textContent = series
       ? `${this.text('ammSeriesSegments')} ${series.segmentCount} · ${this.text('ammSeriesGaps')} ${series.gaps} / ${series.slots}${(selectedDataset?.start ?? series.requestedStart) > series.requestedStart ? ' · ' + this.text('ammSeriesShort') : ''}`
       : this.text(
           selectedDataset?.amm
             ? 'ammHint'
-            : !w.preferences.datasetId && w.market.venue !== 'coinbase'
+            : !w.preferences.datasetId && w.network
               ? 'sampleHint'
-              : 'candleHint',
+              : !w.preferences.datasetId && kraken
+                ? 'krakenCandleHint'
+                : 'candleHint',
         );
     for (const key of ['experiments', 'orders', 'research', 'risk', 'audit', 'book'])
       this.el(`[data-${key}]`).hidden = this.tab !== key;
@@ -419,17 +494,21 @@ export class QuantWorkbench {
     await this.render();
   }
   private async refreshMarket(): Promise<void> {
-    if (!this.currentId || this.marketLoading) return;
-    this.marketLoading = true;
     const id = this.currentId;
+    const revision = this.workspace?.marketRevision;
+    if (!id || (this.marketLoading?.id === id && this.marketLoading.revision === revision)) return;
+    const request = { id, revision };
+    this.marketLoading = request;
     this.el('[data-health]').textContent = this.text('loading');
     try {
       await this.call('market.refresh', { id });
     } catch (error) {
-      if (this.active && id === this.currentId) this.error(error);
+      if (this.active && id === this.currentId && this.marketLoading === request) this.error(error);
     } finally {
-      this.marketLoading = false;
-      if (id === this.currentId) await this.pull();
+      if (this.marketLoading === request) {
+        this.marketLoading = undefined;
+        if (id === this.currentId) await this.pull();
+      }
     }
   }
   private renderRuns(): void {
@@ -463,6 +542,8 @@ export class QuantWorkbench {
             '',
           )}</div>${run.equity?.length ? this.sparkline(run.equity) : ''}${run.dataSeries ? `<p class="quant-hint">${escape(new Date(run.dataSeries.startTime * 1000).toLocaleString())} – ${escape(new Date(run.dataSeries.endTime * 1000).toLocaleString())} · ${escape(this.text('ammSeriesSegments'))} ${run.dataSeries.segments.length} · ${escape(this.text('ammSeriesGaps'))} ${run.dataSeries.gaps} / ${run.dataSeries.slots}</p>` : ''}${run.walkForward ? this.walkForwardReport(run.walkForward) : run.ammScenario ? this.ammScenarioReport(run.ammScenario) : run.ammReplay ? this.ammReplayReport(run.ammReplay) : run.dataSeries ? `<p class="quant-hint">${escape(this.text('ammSeriesExecution'))}</p>` : ''}`
       : '';
+    if (run?.archive)
+      container.insertAdjacentHTML('beforeend', this.krakenArchiveDetails(run.archive));
     for (const detail of container.querySelectorAll<HTMLDetailsElement>('details[data-fold]'))
       detail.open = expanded.has(detail.dataset.fold!);
   }
@@ -709,10 +790,10 @@ export class QuantWorkbench {
           .map((message) => {
             if (message.role === 'tool')
               return `<details class="quant-tool-record"><summary>${icon('settings')}${escape(message.name || 'Tool')}</summary><pre>${escape(content(message.content).slice(0, 12000))}</pre></details>`;
-            return `<article class="quant-chat-message ${message.role}"><span class="quant-chat-author">${message.role === 'user' ? 'You' : escape(this.text('assistant'))}</span><div>${this.safeMarkdown(content(message.content))}</div></article>`;
+            return `<article class="quant-chat-message ${message.role}"><span class="quant-chat-author">${escape(this.text(message.role === 'user' ? 'you' : 'assistant'))}</span><div>${this.safeMarkdown(content(message.content))}</div></article>`;
           })
           .join('')
-      : `<div class="quant-chat-empty">${icon('chat')}<h3>${escape(this.text('chatEmpty'))}</h3><p>${escape(this.text('chatHint'))}</p>${this.button('promptCompare', 'prompt-compare', 'chart')}${this.button('promptBase', 'prompt-base', 'settings')}</div>`;
+      : `<div class="quant-chat-empty">${icon('chat')}<h3>${escape(this.text('chatEmpty'))}</h3><p>${escape(this.text('chatHint'))}</p>${this.button('promptCompare', 'prompt-compare', 'chart')}${this.workspace?.network ? this.button('promptBase', 'prompt-base', 'settings') : this.button('promptMarket', 'prompt-market', 'settings')}</div>`;
     if (this.stream) {
       const draft = document.createElement('article');
       draft.className = 'quant-chat-message assistant quant-stream';
@@ -1017,7 +1098,16 @@ export class QuantWorkbench {
           });
         return;
       case 'live-execution':
-        if (this.currentId && this.workspace)
+        if (this.currentId && this.workspace?.market.venue === 'coinbase') {
+          openExchange({
+            id: this.currentId,
+            language: this.options.language,
+            request: this.options.request,
+            subscribe: this.options.subscribe,
+          });
+          return;
+        }
+        if (this.currentId && this.workspace?.network)
           openLiveExecution({
             id: this.currentId,
             venue: this.workspace.market.venue,
@@ -1045,6 +1135,21 @@ export class QuantWorkbench {
             subscribe: this.options.subscribe,
           });
         return;
+      case 'capture-candles': {
+        const id = this.currentId;
+        button.setAttribute('disabled', '');
+        try {
+          await this.call('dataset.capture', { id, select: true });
+          if (this.currentId === id) await this.pull();
+        } finally {
+          if (this.currentId === id && !this.workspace?.preferences.datasetId)
+            button.removeAttribute('disabled');
+        }
+        return;
+      }
+      case 'kraken-archive':
+        if (this.workspace) this.krakenArchiveDialog(this.workspace);
+        return;
       case 'wallet':
         window.dispatchEvent(new CustomEvent('cibyp:quant-open-wallet'));
         return;
@@ -1060,6 +1165,25 @@ export class QuantWorkbench {
       case 'professional':
       case 'immersive':
         if (this.workspace) await this.update({ preferences: { layout: action } });
+        return;
+      case 'focus-details':
+        if (this.workspace)
+          await this.update({
+            preferences: { focusDetails: !this.workspace.preferences.focusDetails },
+          });
+        return;
+      case 'tools-menu':
+        button.setAttribute(
+          'aria-expanded',
+          String(button.getAttribute('aria-expanded') !== 'true'),
+        );
+        return;
+      case 'jump-market':
+        this.el('[data-layout]').scrollTop = 0;
+        return;
+      case 'jump-chat':
+        this.el('.quant-conversation').scrollIntoView({ block: 'start' });
+        this.el<HTMLTextAreaElement>('[data-chat-input]').focus({ preventScroll: true });
         return;
       case 'refresh':
         return this.refreshMarket();
@@ -1165,9 +1289,14 @@ export class QuantWorkbench {
         await this.loadChat();
         return;
       case 'prompt-base':
+      case 'prompt-market':
       case 'prompt-compare':
         this.el<HTMLTextAreaElement>('[data-chat-input]').value = this.text(
-          action === 'prompt-base' ? 'promptBase' : 'promptCompare',
+          action === 'prompt-base'
+            ? 'promptBase'
+            : action === 'prompt-market'
+              ? 'promptMarket'
+              : 'promptCompare',
         );
         this.el('[data-chat-input]').focus();
         return;
@@ -1218,29 +1347,34 @@ export class QuantWorkbench {
       <label>${escape(this.text('name'))}<input name="name" maxlength="100" value="${escape(settings ? w?.name : '')}"></label>
       ${
         settings
-          ? `<p class="quant-hint">${escape(this.text('configHint'))}</p><label>${escape(this.text('rpc'))}<input name="rpc" type="url" autocomplete="off" placeholder="${w?.market.customRpc ? 'Custom RPC configured' : 'https://mainnet.base.org'}"></label><p class="quant-hint">${escape(this.text('rpcHint'))}</p><label>${escape(this.text('pool'))}<input name="pool" value="${escape(w?.market.pool || '')}" autocomplete="off"></label><p class="quant-hint">${escape(this.text('poolHint'))}</p><label>${escape(this.text('poolFee'))}<input name="poolFee" type="number" min="1" max="999999" step="1" required value="${w?.market.poolFee ?? 500}"></label>${this.button('network', 'inspect', 'settings')}`
-          : `<label>${escape(this.text('venue'))}<select name="venue"><option value="base">Base · 8453</option><option value="base-sepolia">Base Sepolia · 84532</option><option value="coinbase">Coinbase · Public REST</option></select></label><label>${escape(this.text('product'))}<select name="product"><option>ETH-USD</option><option>BTC-USD</option><option>SOL-USD</option></select></label>`
+          ? w?.network
+            ? `<p class="quant-hint">${escape(this.text('configHint'))}</p><label>${escape(this.text('rpc'))}<input name="rpc" type="url" autocomplete="off" placeholder="${w?.market.customRpc ? 'Custom RPC configured' : 'https://mainnet.base.org'}"></label><p class="quant-hint">${escape(this.text('rpcHint'))}</p><label>${escape(this.text('pool'))}<input name="pool" value="${escape(w?.market.pool || '')}" autocomplete="off"></label><p class="quant-hint">${escape(this.text('poolHint'))}</p><label>${escape(this.text('poolFee'))}<input name="poolFee" type="number" min="1" max="999999" step="1" required value="${w?.market.poolFee ?? 500}"></label>${this.button('network', 'inspect', 'settings')}`
+            : ''
+          : `<label>${escape(this.text('venue'))}<select name="venue"><option value="base">Base · 8453</option><option value="base-sepolia">Base Sepolia · 84532</option>${nativeVenueOptions('')}</select></label><label>${escape(this.text('product'))}<select name="product">${spotProducts.map((p) => `<option>${p}</option>`).join('')}</select></label>`
       }
-      ${settings ? `<section class="quant-native-engine" data-native-engine><strong>${escape(this.text('nativeTitle'))}</strong><p>${escape(this.text('nativeHint'))}</p><span data-native-status role="status"></span><div><button type="button" data-native="start">${escape(this.text('nativeStart'))}</button><button type="button" data-native="stop">${escape(this.text('nativeStop'))}</button></div><section class="quant-source-controls"><strong>${escape(this.text('sourceTitle'))}</strong><p>${escape(this.text('sourceHint'))}</p><div><label>${escape(this.text('sourceProduct'))}<select data-source-product><option>ETH-USD</option><option>BTC-USD</option><option>SOL-USD</option></select></label><label>${escape(this.text('sourceFee'))}<input data-source-fee type="number" min="0" max="1000" step="1" value="10"></label></div><span data-source-status role="status" aria-live="polite"></span><div><button type="button" data-source="start">${escape(this.text('sourceConnect'))}</button><button type="button" data-source="stop">${escape(this.text('sourceStop'))}</button><button type="button" data-source="book">${escape(this.text('sourceBook'))}</button></div></section></section>` : ''}
+      ${settings ? `<section class="quant-native-engine" data-native-engine><strong>${escape(this.text('nativeTitle'))}</strong><p>${escape(this.text('nativeHint'))}</p><span data-native-status role="status"></span><div><button type="button" data-native="start">${escape(this.text('nativeStart'))}</button><button type="button" data-native="stop">${escape(this.text('nativeStop'))}</button></div><section class="quant-source-controls"><strong>${escape(this.text('sourceTitle'))}</strong><p>${escape(this.text('sourceHint'))}</p><div><label>${escape(this.text('sourceVenue'))}<select data-source-venue>${nativeVenueOptions(w?.market.venue)}</select></label><label>${escape(this.text('sourceProduct'))}<select data-source-product>${spotProducts.map((p) => `<option${w?.market.product === p ? ' selected' : ''}>${p}</option>`).join('')}</select></label><label>${escape(this.text('sourceFee'))}<input data-source-fee type="number" min="0" max="1000" step="1" value="10"></label></div><span data-source-status role="status" aria-live="polite"></span><div><button type="button" data-source="start">${escape(this.text('sourceConnect'))}</button><button type="button" data-source="stop">${escape(this.text('sourceStop'))}</button><button type="button" data-source="book">${escape(this.text('sourceBook'))}</button></div></section></section>` : ''}
       <pre class="quant-network-result" hidden></pre><p class="quant-dialog-error" role="alert" hidden></p><footer><button type="button" data-close>${escape(this.text('cancel'))}</button><button type="submit" class="quant-primary">${escape(this.text(settings ? 'save' : 'create'))}</button></footer></form>`;
     document.body.append(dialog);
     dialog.showModal();
     if (settings) {
       void this.renderNativeStatus();
-      dialog.querySelector('[data-source-product]')!.addEventListener('change', () => {
-        delete dialog.querySelector<HTMLInputElement>('[data-source-fee]')!.dataset.loaded;
-        void this.renderNativeStatus();
-      });
+      for (const field of dialog.querySelectorAll('[data-source-product], [data-source-venue]'))
+        field.addEventListener('change', () => {
+          delete dialog.querySelector<HTMLInputElement>('[data-source-fee]')!.dataset.loaded;
+          void this.renderNativeStatus();
+        });
       dialog.querySelectorAll<HTMLButtonElement>('[data-source]').forEach((button) =>
         button.addEventListener('click', () => {
           const product = dialog.querySelector<HTMLSelectElement>('[data-source-product]')!.value;
+          const venue = dialog.querySelector<HTMLSelectElement>('[data-source-venue]')!.value;
           if (button.dataset.source === 'book') {
-            this.sourceBookDialog(product);
+            this.sourceBookDialog(product, venue);
             return;
           }
           button.disabled = true;
           void this.call('native.source.' + button.dataset.source, {
             product,
+            venue,
             feeBps: Number(dialog.querySelector<HTMLInputElement>('[data-source-fee]')!.value),
           })
             .catch((error) => this.error(error))
@@ -1263,7 +1397,17 @@ export class QuantWorkbench {
       .forEach((button) => button.addEventListener('click', () => dialog.close()));
     dialog.addEventListener('close', () => dialog.remove(), { once: true });
     const form = dialog.querySelector('form')!;
-    const field = (name: string) => (form.elements.namedItem(name) as HTMLInputElement).value;
+    const field = (name: string) =>
+      (form.elements.namedItem(name) as HTMLInputElement | null)?.value || '';
+    if (!settings) {
+      const select = form.elements.namedItem('venue') as HTMLSelectElement;
+      const product = form.elements.namedItem('product') as HTMLSelectElement;
+      const syncProduct = () => {
+        product.closest('label')!.hidden = select.value.startsWith('base');
+      };
+      select.addEventListener('change', syncProduct);
+      syncProduct();
+    }
     const fail = (error: unknown) => {
       const node = dialog.querySelector<HTMLElement>('[role="alert"]')!;
       node.hidden = false;
@@ -1286,11 +1430,13 @@ export class QuantWorkbench {
       submit.disabled = true;
       void (async () => {
         if (settings) {
-          const market: Record<string, string | number> = {
-            pool: field('pool'),
-            poolFee: Number(field('poolFee')),
-          };
-          if (field('rpc')) market.rpcUrl = field('rpc');
+          const market = w?.network
+            ? {
+                pool: field('pool'),
+                poolFee: Number(field('poolFee')),
+                ...(field('rpc') && { rpcUrl: field('rpc') }),
+              }
+            : undefined;
           await this.update({ name: field('name'), market });
         } else {
           const created = await this.call<QuantWorkspace>('workspace.create', {
@@ -1339,7 +1485,8 @@ export class QuantWorkbench {
       const data = await this.call<{ sources: QuantNativeSource[] }>('native.source.status');
       if (generation !== this.nativeGeneration || !card.isConnected) return;
       const product = card.querySelector<HTMLSelectElement>('[data-source-product]')!.value;
-      const source = data.sources.find((s) => s.product === product);
+      const venue = card.querySelector<HTMLSelectElement>('[data-source-venue]')!.value;
+      const source = data.sources.find((s) => nativeSourceMatches(s, product, venue));
       const labels: Record<QuantNativeSource['phase'], QuantLabel> = {
         stopped: 'nativeStopped',
         resolving: 'sourceResolving',
@@ -1603,6 +1750,62 @@ export class QuantWorkbench {
     document.body.append(dialog);
     dialog.showModal();
   }
+  private krakenArchiveDetails(archive: QuantKrakenArchive): string {
+    const date = (time: number) => new Date(time * 1000).toISOString().slice(0, 10);
+    return `<details class="quant-amm-trades" data-kraken-provenance><summary>${escape(this.text('krakenArchive'))} · ${date(archive.start)} → ${date(archive.end)} UTC · ${escape(this.text('archiveGaps'))} ${archive.gaps}/${archive.slots}</summary><p class="quant-hint">${escape(this.text('archiveSourceInterval'))} ${periodLabel(archive.sourceInterval)}</p><ul>${archive.entries.map((entry) => `<li>${escape(entry.quarter)} · ${escape(entry.member)}<br><code>SHA-256 ${escape(entry.sha256)}</code></li>`).join('')}</ul></details>`;
+  }
+  private krakenArchiveDialog(w: QuantWorkspace): void {
+    const dialog = document.createElement('dialog');
+    dialog.className = 'quant-dialog quant-amm-dialog';
+    dialog.innerHTML = `<header><h2>${escape(this.text('krakenArchive'))}</h2><button type="button" data-close aria-label="${escape(this.text('close'))}">${icon('close')}</button></header>
+      <p class="quant-hint">${escape(w.market.product)} · ${periodLabel(w.market.interval)}</p>
+      <p class="quant-hint">${escape(this.text('archiveHint'))}</p>
+      <form class="quant-form" data-archive-form>
+        <label>${escape(this.text('archiveFrom'))}<input name="from" type="date" min="2026-01-01"></label>
+        <label>${escape(this.text('archiveTo'))}<input name="to" type="date" min="2026-01-02"></label>
+        <button class="quant-button" type="submit">${escape(this.text('archiveFetch'))}</button>
+      </form><p role="status" class="quant-hint"></p><p role="alert" class="quant-negative" hidden></p>`;
+    dialog.querySelector('[data-close]')!.addEventListener('click', () => dialog.close());
+    dialog.addEventListener('close', () => dialog.remove(), { once: true });
+    const form = dialog.querySelector<HTMLFormElement>('form')!;
+    const status = dialog.querySelector<HTMLElement>('[role="status"]')!;
+    const alert = dialog.querySelector<HTMLElement>('[role="alert"]')!;
+    form.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const dates = new FormData(form);
+      const button = form.querySelector('button')!;
+      button.disabled = true;
+      status.textContent = this.text('loading');
+      alert.hidden = true;
+      try {
+        await this.call('market.kraken.archive', {
+          id: w.id,
+          from: dates.get('from') || undefined,
+          to: dates.get('to') || undefined,
+          select: true,
+        });
+        if (dialog.open) dialog.close();
+        if (this.currentId === w.id) await this.pull();
+      } catch (error) {
+        if (dialog.open) {
+          const code = String(error);
+          alert.textContent = /KRAKEN_ARCHIVE_(MEMBER_)?UNAVAILABLE|KRAKEN_ARCHIVE_NO_CANDLES/.test(
+            code,
+          )
+            ? this.text('archiveUnavailable')
+            : /KRAKEN_ARCHIVE_(RANGE\b|QUARTER_LIMIT)|CANDLES_LIMIT/.test(code)
+              ? this.text('archiveBadDates')
+              : this.errorText(error);
+          alert.hidden = false;
+        }
+      } finally {
+        button.disabled = false;
+        status.textContent = '';
+      }
+    });
+    document.body.append(dialog);
+    dialog.showModal();
+  }
   private baseHistoryDialog(w: QuantWorkspace): void {
     if (!w.network) return;
     const dialog = document.createElement('dialog');
@@ -1823,11 +2026,12 @@ export class QuantWorkbench {
         }
       });
   }
-  private sourceBookDialog(product: string): void {
+  private sourceBookDialog(product: string, venue: string): void {
     const dialog = document.createElement('dialog');
     dialog.className = 'quant-dialog quant-source-book-dialog';
     dialog.dataset.product = product;
-    dialog.innerHTML = `<header><h2>${escape(this.text('sourceBook'))} · ${escape(product)}</h2><button type="button" data-close aria-label="${escape(this.text('close'))}">${icon('close')}</button></header><p class="quant-hint">${escape(this.text('sourceHint'))}</p><div data-source-book role="status">${escape(this.text('nativeStarting'))}</div>`;
+    dialog.dataset.venue = venue;
+    dialog.innerHTML = `<header><h2>${escape(this.text('sourceBook'))} · ${escape(nativeVenueLabel(venue))} · ${escape(product)}</h2><button type="button" data-close aria-label="${escape(this.text('close'))}">${icon('close')}</button></header><p class="quant-hint">${escape(this.text('sourceHint'))}</p><div data-source-book role="status">${escape(this.text('nativeStarting'))}</div>`;
     document.body.append(dialog);
     dialog.querySelector('[data-close]')!.addEventListener('click', () => dialog.close());
     dialog.addEventListener('close', () => dialog.remove(), { once: true });
@@ -1838,6 +2042,7 @@ export class QuantWorkbench {
     try {
       const book = await this.call<QuantNativeBook>('native.source.book', {
         product: dialog.dataset.product,
+        venue: dialog.dataset.venue,
       });
       if (!dialog.isConnected) return;
       const levels = (items: [string, string][], key: QuantLabel) =>
@@ -1846,7 +2051,7 @@ export class QuantWorkbench {
           .map(([price, size]) => `<tr><td>${escape(price)}</td><td>${escape(size)}</td></tr>`)
           .join('')}</tbody></table></section>`;
       dialog.querySelector('[data-source-book]')!.innerHTML =
-        `<p>${escape(this.text(book.eligible ? 'sourceEligible' : 'sourceIneligible'))} · ${escape(book.assumptions.feeBps)} bps</p>${book.source.clock ? `<p class="quant-hint">${escape(this.text('sourceClock'))} ${Math.round(book.source.clock.estimatedOffsetMs)} ms · ±${Math.ceil(book.source.clock.uncertaintyMs)} ms</p>` : ''}<div class="quant-source-book-columns">${levels(book.bids, 'sourceBid')}${levels(book.asks, 'sourceAsk')}</div>`;
+        `<p>${escape(this.text(book.eligible ? 'sourceEligible' : 'sourceIneligible'))} · ${escape(book.assumptions.feeBps)} bps</p>${book.assumptions.minQuantity ? `<p class="quant-hint">${escape(this.text('sourceMinQuantity'))} · ${escape(book.assumptions.minQuantity)}</p>` : ''}${book.source.clock ? `<p class="quant-hint">${escape(this.text('sourceClock'))} ${Math.round(book.source.clock.estimatedOffsetMs)} ms · ±${Math.ceil(book.source.clock.uncertaintyMs)} ms</p>` : ''}<div class="quant-source-book-columns">${levels(book.bids, 'sourceBid')}${levels(book.asks, 'sourceAsk')}</div>`;
     } catch (error) {
       if (dialog.isConnected)
         dialog.querySelector('[data-source-book]')!.textContent = String(error);
@@ -1875,47 +2080,6 @@ export class QuantWorkbench {
     this.chartCard.classList.remove('quant-focus-fullscreen');
     this.chart.schedule();
   }
-  private installResize(): void {
-    const bar = this.el('.quant-chat-resizer');
-    let drag = false,
-      width = 360;
-    bar.addEventListener('pointerdown', (event) => {
-      drag = true;
-      width = this.workspace?.preferences.chatWidth || 360;
-      bar.setPointerCapture(event.pointerId);
-    });
-    bar.addEventListener('pointermove', (event) => {
-      if (!drag) return;
-      width = Math.max(280, Math.min(600, this.root.getBoundingClientRect().right - event.clientX));
-      this.el('[data-layout]').style.setProperty('--quant-chat-width', width + 'px');
-    });
-    bar.addEventListener('pointerup', () => {
-      if (!drag) return;
-      drag = false;
-      void this.update({ preferences: { chatWidth: Math.round(width) } }).catch((error) =>
-        this.error(error),
-      );
-    });
-    bar.addEventListener('pointercancel', () => {
-      drag = false;
-    });
-    bar.addEventListener('keydown', (event) => {
-      if (!['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
-      event.preventDefault();
-      void this.update({
-        preferences: {
-          chatWidth: Math.max(
-            280,
-            Math.min(
-              600,
-              (this.workspace?.preferences.chatWidth || 360) +
-                (event.key === 'ArrowLeft' ? 20 : -20),
-            ),
-          ),
-        },
-      }).catch((error) => this.error(error));
-    });
-  }
   private number(value: unknown): string {
     const n = Number(value);
     return Number.isFinite(n)
@@ -1924,6 +2088,7 @@ export class QuantWorkbench {
   }
   private errorText(error: unknown): string {
     const code = error instanceof Error ? error.message : String(error);
+    if (/\bNO_CLOSED_CANDLES\b/.test(code)) return this.text('errorNoClosedCandles');
     if (/WALK_FORWARD_MORE_CANDLES/.test(code)) return this.text('wfMore');
     if (/WALK_FORWARD_GRID|WALK_FORWARD_PARAMETERS/.test(code)) return this.text('wfInvalid');
     const key: QuantLabel | undefined = /FRESH_MARKET/.test(code)

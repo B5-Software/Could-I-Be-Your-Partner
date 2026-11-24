@@ -423,6 +423,7 @@ module.exports = {
   setConfig,
   getDispatcher,
   createWebSocketDispatcher,
+  resolveStreamProxy: (url) => proxyForRequest(url),
   onPolicyChange,
   getProxyUrlForUrl,
   getResolvedSystemProxyUrl,

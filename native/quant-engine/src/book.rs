@@ -42,6 +42,7 @@ pub struct Book {
     valid: bool,
     observed: Option<u128>,
     last: Vec<Update>,
+    last_coverage: Option<Coverage>,
     reason: Option<&'static str>,
     coverage: Coverage,
     source_time: Option<u128>,
@@ -64,6 +65,14 @@ impl Book {
     pub(crate) fn record_simulated_take(&mut self, side: Side, price: Fixed, quantity: Fixed) {
         // The caller owns this book through selection and commit; a take never exceeds its level.
         self.simulated_takes.entry((side, price)).or_default().0 += quantity.0;
+    }
+    pub(crate) fn can_track_simulated_takes(&self, side: Side, levels: &[(Fixed, Fixed)]) -> bool {
+        self.simulated_takes.len()
+            + levels
+                .iter()
+                .filter(|(price, _)| !self.simulated_takes.contains_key(&(side, *price)))
+                .count()
+            <= 10000
     }
     pub fn source_time(&mut self, time: Option<u128>) {
         self.source_time = time;
@@ -184,6 +193,7 @@ impl Book {
         self.valid = true;
         self.observed = Some(clock::mono_ns());
         self.last.clear();
+        self.last_coverage = None;
         self.reason = None;
         Ok(())
     }
@@ -192,6 +202,15 @@ impl Book {
         epoch: &str,
         sequence: u64,
         updates: Vec<Update>,
+    ) -> Result<bool, &'static str> {
+        self.delta_bounded(epoch, sequence, updates, None)
+    }
+    pub fn delta_bounded(
+        &mut self,
+        epoch: &str,
+        sequence: u64,
+        updates: Vec<Update>,
+        coverage: Option<Coverage>,
     ) -> Result<bool, &'static str> {
         if !self.valid {
             return Err("BOOK_SNAPSHOT_REQUIRED");
@@ -204,7 +223,7 @@ impl Book {
             return Ok(false);
         }
         if sequence == self.sequence {
-            if updates == self.last {
+            if updates == self.last && coverage == self.last_coverage {
                 return Ok(false);
             }
             return self
@@ -217,15 +236,32 @@ impl Book {
         if updates.len() > 8000 {
             return self.invalidate("BOOK_DELTA_LIMIT").map(|_| false);
         }
+        if coverage.as_ref().is_some_and(|bounds| {
+            bounds.bid_floor.is_none_or(|p| p.0 <= 0) || bounds.ask_ceiling.is_none_or(|p| p.0 <= 0)
+        }) {
+            return self.invalidate("INVALID_BOOK_COVERAGE").map(|_| false);
+        }
         // Validate all updates before applying any. Invalidation prevents trading
         // if the source leaves an empty/crossed book; no partial state is eligible.
         for u in &updates {
             if u.price.0 <= 0 || u.quantity.0 < 0 {
                 return self.invalidate("INVALID_BOOK_LEVEL").map(|_| false);
             }
-            if !self.coverage.contains(u.side, u.price) {
+            if !coverage
+                .as_ref()
+                .unwrap_or(&self.coverage)
+                .contains(u.side, u.price)
+                && !(u.quantity.0 == 0 && self.coverage.contains(u.side, u.price))
+            {
                 return self.invalidate("LEVEL_OUTSIDE_KNOWN_DEPTH").map(|_| false);
             }
+        }
+        if let Some(bounds) = &coverage {
+            self.bids.retain(|p, _| bounds.contains(Side::Bid, *p));
+            self.asks.retain(|p, _| bounds.contains(Side::Ask, *p));
+            // Levels falling out of view have unknown size. Keep depletion
+            // evidence in case they reappear during this epoch.
+            self.coverage = bounds.clone();
         }
         for u in &updates {
             let map = match u.side {
@@ -251,6 +287,7 @@ impl Book {
         }
         self.sequence = sequence;
         self.last = updates;
+        self.last_coverage = coverage;
         self.observed = Some(clock::mono_ns());
         self.reason = None;
         Ok(true)
@@ -348,6 +385,42 @@ mod tests {
         let mut b = book();
         b.observed = None;
         assert!(!b.eligible(1000));
+    }
+    #[test]
+    fn moving_depth_preserves_simulated_depletion_for_returning_levels() {
+        let mut b = book();
+        let bounds = |floor| Coverage {
+            bid_floor: Some(n(floor)),
+            ask_ceiling: Some(n("101")),
+        };
+        b.delta_bounded(
+            "one",
+            6,
+            vec![Update {
+                side: Side::Bid,
+                price: n("98"),
+                quantity: n("2"),
+            }],
+            Some(bounds("98")),
+        )
+        .unwrap();
+        b.record_simulated_take(Side::Bid, n("98"), n("1"));
+        b.delta_bounded("one", 7, vec![], Some(bounds("99")))
+            .unwrap();
+        assert!(!b.price_known(Side::Bid, n("98")));
+        assert!(!b.bids.contains_key(&n("98")));
+        b.delta_bounded(
+            "one",
+            8,
+            vec![Update {
+                side: Side::Bid,
+                price: n("98"),
+                quantity: n("2"),
+            }],
+            Some(bounds("98")),
+        )
+        .unwrap();
+        assert_eq!(b.simulated_available(Side::Bid, n("98"), n("2")), n("1"));
     }
     #[test]
     fn resync_cannot_restore_an_older_snapshot_or_refresh_replayed_data() {

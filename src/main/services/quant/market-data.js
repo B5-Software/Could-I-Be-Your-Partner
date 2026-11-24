@@ -1,7 +1,12 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 'use strict';
-const { decimal, SCALE } = require('./decimal');
+const { atoms, decimal, SCALE } = require('./decimal');
 const { validateCandles } = require('./backtest');
+const { products: SPOT_PRODUCTS } = require('../../../shared/quant-native-venues.json');
+const {
+  standard: INTERVALS,
+  kraken: KRAKEN_INTERVALS,
+} = require('../../../shared/quant-market-intervals.json');
 const { valuePortfolio, prices } = require('./portfolio-valuation');
 const { Interface, getAddress, ZeroAddress, MaxUint256, zeroPadValue } = require('ethers');
 const {
@@ -60,7 +65,13 @@ const CHAINS = Object.freeze({
     usdc: '0x036cbd53842c5426634e7929541ec2318f3dcf7e',
   },
 });
-const INTERVALS = [60, 300, 900, 3600, 21600, 86400];
+const intervalsForVenue = (venue) => (venue === 'kraken' ? KRAKEN_INTERVALS : INTERVALS);
+const KRAKEN_OHLC_SOURCE = 'kraken-spot-committed-ohlc';
+const KRAKEN_PAIRS = {
+  'ETH-USD': { query: 'ETHUSD', result: 'XETHZUSD' },
+  'BTC-USD': { query: 'XBTUSD', result: 'XXBTZUSD' },
+  'SOL-USD': { query: 'SOLUSD', result: 'SOLUSD' },
+};
 const address = (input) => {
   if (!/^0x[\da-f]{40}$/i.test(String(input))) throw new Error('INVALID_ADDRESS');
   return String(input).toLowerCase();
@@ -211,14 +222,31 @@ class MarketData {
     this.resolveChain = resolveChain;
   }
   async publicProduct(product) {
-    if (!['ETH-USD', 'BTC-USD', 'SOL-USD'].includes(product))
-      throw new Error('SOURCE_MARKET_INVALID');
+    if (!SPOT_PRODUCTS.includes(product)) throw new Error('SOURCE_MARKET_INVALID');
     return json(this.fetch, 'https://api.coinbase.com/api/v3/brokerage/market/products/' + product);
   }
   async publicTime() {
     return json(this.fetch, 'https://api.coinbase.com/api/v3/brokerage/time', {
       headers: { 'Cache-Control': 'no-cache' },
     });
+  }
+  async krakenProduct(product) {
+    if (!SPOT_PRODUCTS.includes(product)) throw Error('SOURCE_MARKET_INVALID');
+    return this.krakenPublic('AssetPairs', product);
+  }
+  async krakenPublic(route, product, query = {}, signal) {
+    const pair = KRAKEN_PAIRS[product];
+    const url = new URL('https://api.kraken.com/0/public/' + route);
+    url.search = new URLSearchParams({ pair: pair.query, ...query });
+    const data = await json(this.fetch, url.href, { signal });
+    if (!Array.isArray(data?.error)) throw Error('KRAKEN_RESPONSE_INVALID');
+    if (data.error.length) {
+      if (data.error.some((error) => typeof error === 'string' && /rate limit/i.test(error)))
+        throw Error('KRAKEN_RATE_LIMIT');
+      throw Error('KRAKEN_PUBLIC_DATA_UNAVAILABLE');
+    }
+    if (!Object.hasOwn(data.result ?? {}, pair.result)) throw Error('KRAKEN_PAIR_MISMATCH');
+    return data.result[pair.result];
   }
   async rpc(chain, rpcUrl, method, params = [], options = {}) {
     const profile = this.resolveChain(chain);
@@ -854,17 +882,16 @@ class MarketData {
       finality: 'included',
     };
   }
-  async coinbase(config, history = true) {
+  async coinbase(config, history = true, signal) {
     const product = config.product;
-    if (!['BTC-USD', 'ETH-USD', 'SOL-USD'].includes(product))
-      throw new Error('PRODUCT_UNAVAILABLE');
+    if (!SPOT_PRODUCTS.includes(product)) throw new Error('PRODUCT_UNAVAILABLE');
     if (!INTERVALS.includes(config.interval)) throw new Error('INTERVAL_UNAVAILABLE');
     const root = `https://api.exchange.coinbase.com/products/${product}`;
     const results = await Promise.all([
-      json(this.fetch, root + '/ticker'),
-      json(this.fetch, root + '/book?level=2'),
+      json(this.fetch, root + '/ticker', { signal }),
+      json(this.fetch, root + '/book?level=2', { signal }),
       history
-        ? json(this.fetch, root + '/candles?granularity=' + config.interval)
+        ? json(this.fetch, root + '/candles?granularity=' + config.interval, { signal })
         : Promise.resolve([]),
     ]);
     const ticker = results[0],
@@ -912,8 +939,107 @@ class MarketData {
       quality: 'exchange-candles',
     };
   }
-  async quote(config, history) {
-    return CHAINS[config.venue] ? this.base(config) : this.coinbase(config, history);
+  async kraken({ product, interval }, history = true, { since, signal } = {}) {
+    if (!SPOT_PRODUCTS.includes(product)) throw Error('PRODUCT_UNAVAILABLE');
+    if (!KRAKEN_INTERVALS.includes(interval)) throw Error('INTERVAL_UNAVAILABLE');
+    const [trades, depth, rows] = await Promise.all([
+      this.krakenPublic('Trades', product, { count: 1 }, signal),
+      this.krakenPublic('Depth', product, { count: 20 }, signal),
+      history
+        ? this.krakenPublic(
+            'OHLC',
+            product,
+            { interval: interval / 60, ...(since && { since }) },
+            signal,
+          )
+        : null,
+    ]);
+    // The trade endpoint carries exchange event time. A receipt timestamp cannot make an old trade current.
+    const trade = Array.isArray(trades) && trades.length === 1 ? trades[0] : null;
+    if (
+      !Array.isArray(trade) ||
+      typeof trade[0] !== 'string' ||
+      typeof trade[2] !== 'number' ||
+      !Number.isFinite(trade[2]) ||
+      trade[2] <= 0
+    )
+      throw Error('INVALID_TICKER');
+    const price = decimal(atoms(trade[0], true));
+    const parseSide = (rows, direction) => {
+      if (!Array.isArray(rows) || !rows.length || rows.length > 20)
+        throw Error('INVALID_ORDERBOOK');
+      let previous;
+      return rows.map((row) => {
+        if (!Array.isArray(row) || typeof row[0] !== 'string' || typeof row[1] !== 'string')
+          throw Error('INVALID_ORDERBOOK');
+        const price = atoms(row[0], true),
+          quantity = atoms(row[1], true);
+        if (previous !== undefined && (direction === 'bid' ? price >= previous : price <= previous))
+          throw Error('INVALID_ORDERBOOK');
+        previous = price;
+        return { price: decimal(price), quantity: decimal(quantity) };
+      });
+    };
+    const bids = parseSide(depth?.bids, 'bid'),
+      asks = parseSide(depth?.asks, 'ask');
+    if (atoms(bids[0].price) >= atoms(asks[0].price)) throw Error('INVALID_ORDERBOOK');
+    const observedAt = Date.now();
+    let candles = [],
+      openCandleTime;
+    if (history) {
+      if (!Array.isArray(rows) || !rows.length || rows.length > 721)
+        throw Error('KRAKEN_OHLC_INVALID');
+      openCandleTime = rows.at(-1)?.[0];
+      if (
+        !Number.isSafeInteger(openCandleTime) ||
+        openCandleTime < 0 ||
+        openCandleTime % interval ||
+        openCandleTime > observedAt / 1000 + 120
+      )
+        throw Error('KRAKEN_OHLC_INVALID');
+      // The final row is the exchange's uncommitted interval, even if the host clock has moved ahead.
+      if (rows.length > 1)
+        candles = validateCandles(
+          rows.slice(0, -1).map((row) => {
+            if (
+              !Array.isArray(row) ||
+              row.length !== 8 ||
+              !Number.isSafeInteger(row[0]) ||
+              row[0] % interval ||
+              row[0] >= openCandleTime ||
+              [1, 2, 3, 4, 6].some(
+                (i) => typeof row[i] !== 'string' || !/^\d+(?:\.\d+)?$/.test(row[i]),
+              )
+            )
+              throw Error('KRAKEN_OHLC_INVALID');
+            return {
+              time: row[0],
+              open: row[1],
+              high: row[2],
+              low: row[3],
+              close: row[4],
+              volume: row[6],
+            };
+          }),
+        );
+    }
+    return {
+      source: 'kraken-spot-public-rest',
+      product,
+      price,
+      time: trade[2],
+      observedAt,
+      candles,
+      openCandleTime,
+      book: { bids, asks, sequence: null, kind: 'rest-snapshot-not-streaming' },
+      quality: KRAKEN_OHLC_SOURCE,
+    };
+  }
+  async quote(config, history, options = {}) {
+    if (Object.hasOwn(CHAINS, config.venue)) return this.base(config);
+    if (config.venue === 'kraken') return this.kraken(config, history, options);
+    if (config.venue === 'coinbase') return this.coinbase(config, history, options.signal);
+    throw Error('VENUE_UNAVAILABLE');
   }
 }
 function formatUnits(value, places) {
@@ -928,6 +1054,8 @@ module.exports = {
   boundedRpc,
   CHAINS,
   INTERVALS,
+  intervalsForVenue,
+  KRAKEN_OHLC_SOURCE,
   address,
   endpoint,
   formatUnits,

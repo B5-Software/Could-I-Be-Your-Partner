@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
+import { nativeVenueLabel, nativeSourceLanguage, nativeVenueOptions } from './quant-native-venue';
 import labels from '../../shared/quant-event-labels.json';
 import { openNativePaper } from './quant-native-paper';
 import type { NativeStrategyVersion } from '../../shared/quant-strategy-types';
@@ -14,6 +15,7 @@ type Recording = {
   recordingId: string;
   name: string;
   product: string;
+  venue?: string;
   status: string;
   events: number;
   endedMonoNs?: string;
@@ -107,6 +109,10 @@ export function openEventData(options: Options): void {
     '</h3><form data-qe-form><label>' +
     esc(t('qeName')) +
     '<input name="name" maxlength="80"></label><label>' +
+    esc(nativeSourceLanguage(options.language()).sourceVenue) +
+    '<select name="venue">' +
+    nativeVenueOptions() +
+    '</select></label><label>' +
     esc(t('qeProduct')) +
     '<select name="product">' +
     ['ETH-USD', 'BTC-USD', 'SOL-USD'].map((p) => '<option>' + p + '</option>').join('') +
@@ -327,7 +333,7 @@ export function openEventData(options: Options): void {
               '"><strong>' +
               esc(r.name) +
               '</strong><small>' +
-              esc(r.product) +
+              esc(nativeVenueLabel(r.venue) + ' · ' + r.product) +
               ' · ' +
               esc(state(r.status)) +
               ' · ' +
@@ -540,6 +546,7 @@ export function openEventData(options: Options): void {
       const result = await call<Recording>('recording.start', {
         name: data.get('name'),
         product: data.get('product'),
+        venue: data.get('venue'),
         operationId: recordOp,
       });
       recordOp = crypto.randomUUID();

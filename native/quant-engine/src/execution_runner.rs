@@ -109,6 +109,7 @@ impl ExecutionRunner {
         ledger: &mut Ledger,
         id: &str,
         lease: &str,
+        entry_observation: Option<Arrival>,
     ) -> Result<(Command, Option<u64>)> {
         let command = ledger
             .execution_command(id)
@@ -117,7 +118,7 @@ impl ExecutionRunner {
         let now = timing
             .as_deref_mut()
             .map_or_else(clock::now_ns, Timing::now);
-        let command = ledger.execution_claim_at(id, lease, now)?;
+        let command = ledger.execution_claim_at(id, lease, now, entry_observation)?;
         let remaining = if let Some(window) = &command.window {
             let now = timing.map_or_else(clock::now_ns, Timing::now);
             Some((window.remaining(now)? / 1_000_000) as u64)

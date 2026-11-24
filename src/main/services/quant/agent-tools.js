@@ -21,7 +21,45 @@ function toolIntent(intent) {
     dataBytes: transaction?.data ? (transaction.data.length - 2) / 2 : transaction?.dataBytes || 0,
   };
 }
+const EXCHANGE_ACTIONS = {
+  list: 'list',
+  preview: 'preview',
+  reconcile: 'reconcile',
+  submit_authorized: 'submitAuthorized',
+  amend_authorized: 'amendAuthorized',
+  cancel_authorized: 'cancelAuthorized',
+};
+const EXCHANGE_COMMANDS = new Set([
+  'preview',
+  'submit_authorized',
+  'amend_authorized',
+  'cancel_authorized',
+]);
 const TOOLS = [
+  {
+    name: 'quant_exchange',
+    description:
+      'List or reconcile scoped Coinbase Exchange orders, or preview a spot GTC order for human approval. FIX stop-limit uses price as the execution limit, stopPrice and an explicit triggerDirection. FIX TPSL uses price as the take-profit limit, stopPrice and stopLimitPrice, omits triggerDirection, and requires postOnly=false. submit_authorized requires permission for the selected type. amend_authorized changes prices or total quantity on an eligible same-grant FIX order over its original connection. Supply every approved price field for the order type. cancel_authorized cancels remaining quantity with a separate allowance. orderId is the original CIBYP clientId. Authorized actions require grantId and a stable operationId. Reconcile uncertainty before adding exposure.',
+    parameters: schema(
+      {
+        action: { enum: Object.keys(EXCHANGE_ACTIONS) },
+        env: { enum: ['sandbox', 'live'] },
+        operationId: string,
+        side: { enum: ['buy', 'sell'] },
+        price: string,
+        size: string,
+        transport: { enum: ['rest', 'fix'] },
+        stopPrice: string,
+        stopLimitPrice: string,
+        triggerDirection: { enum: ['up', 'down'] },
+        postOnly: { type: 'boolean' },
+        orderId: string,
+        grantId: string,
+        offset: { type: 'integer', minimum: 0 },
+      },
+      ['action', 'env'],
+    ),
+  },
   {
     name: 'quant_ask_user',
     description:
@@ -52,9 +90,9 @@ const TOOLS = [
   {
     name: 'quant_wait_budget',
     description:
-      'Wait in the backend for the next signing-quota window, a scope change, cancellation or timeout, without repeated LLM calls. Read the applicable quota first and reconcile unknown signatures before waiting. This never signs, grants authority or starts a plan. A reset preserves lifetime limits and never authorizes a duplicate payment. kind defaults to own scope; id selects an accessible scope, portfolio or wallet. maxWaitMs defaults to one day and accepts 1..86400000.',
+      'Wait in the backend for a signing quota, authority change, cancellation or timeout. Read the applicable quota and reconcile unknown signatures first. This never signs or starts a plan. kind defaults to scope. Use portfolio-rate with a portfolio id for a rolling signature limit. maxWaitMs defaults to one day and accepts 1..86400000.',
     parameters: schema({
-      kind: { type: 'string', enum: ['scope', 'portfolio', 'wallet'] },
+      kind: { type: 'string', enum: ['scope', 'portfolio', 'portfolio-rate', 'wallet'] },
       id: string,
       chainId: evmChain,
       maxWaitMs: { type: 'integer', minimum: 1, maximum: 86400000 },
@@ -76,6 +114,16 @@ const TOOLS = [
       },
       ['action'],
     ),
+  },
+  {
+    name: 'quant_kraken_history',
+    description:
+      'Download closed Kraken Spot quarterly OHLCVT for this project and return a pinned candle dataset with coverage, empty slots, source interval and CSV hashes. Use UTC dates YYYY-MM-DD with an exclusive end date, or omit both for up to 10,000 candles from the last completed quarter. Only complete aligned bars are included. Available quarterly files start in 2026 and may lag the end of a quarter. Use the returned dataset ID for quant_backtest or quant_walk_forward. select=true also makes it the workspace selection. This does not supply a historical order book or maker queue.',
+    parameters: schema({
+      from: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$' },
+      to: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$' },
+      select: { type: 'boolean' },
+    }),
   },
   {
     name: 'quant_base_history',
@@ -124,6 +172,10 @@ const TOOLS = [
         recordingId: string,
         replayId: string,
         name: string,
+        venue: {
+          enum: ['coinbase', 'kraken'],
+          description: 'Continuous data venue. Defaults to Coinbase.',
+        },
         product: { enum: ['ETH-USD', 'BTC-USD', 'SOL-USD'] },
         strategyId: string,
         revision: { type: 'integer', minimum: 1, maximum: 1000 },
@@ -164,6 +216,10 @@ const TOOLS = [
         name: string,
         revision: { type: 'integer', minimum: 1, maximum: 1000 },
         mode: { enum: ['paper', 'shadow'] },
+        venue: {
+          enum: ['coinbase', 'kraken'],
+          description: 'Continuous data venue. Defaults to Coinbase.',
+        },
         product: { enum: ['ETH-USD', 'BTC-USD', 'SOL-USD'] },
         cancelOrders: { type: 'boolean' },
         config: schema({
@@ -189,7 +245,7 @@ const TOOLS = [
   {
     name: 'quant_native_paper',
     description:
-      'Control this workspace’s continuous orderbook PAPER simulation. No real funds. inspect shows the bound account and source state; start starts the shared kernel; source connects a public product. create makes and binds a named funded virtual account with explicit risk caps; bind selects a human-requested existing shared account. enable/pause affect the bound account across all its strategies. Pause/reconnect/restart leave prior maker orders held with reservations: cancel them explicitly before replacing. submit requires a limit price and quantity. timeInForce defaults to gtc (post-only, conservative FIFO with 500 ms simulated latency). ioc walks the currently observed L2 depth at the limit or better and cancels the rest; fok requires the entire size. IOC/FOK use the observed snapshot immediately, with no exchange arrival latency. Keep operationId unchanged for retries of create/submit; change it only for a genuinely distinct operation, reconcile unknown outcomes first. order/orders/executions show durable scoped history with individual fills, source clock and held/attached status.',
+      'Control this workspace’s continuous orderbook PAPER simulation. No real funds. inspect shows the bound account and source state; start starts the shared kernel; source connects a public product on Coinbase or Kraken Spot. Pass the same venue and product to book and submit; those books and orders are independent. create makes and binds a named funded virtual account with explicit risk caps; bind selects a human-requested existing shared account. enable/pause affect the bound account across all its strategies. Pause/reconnect/restart leave prior maker orders held with reservations: cancel them explicitly before replacing. submit requires a limit price and quantity. timeInForce defaults to gtc (post-only, conservative FIFO with 500 ms simulated latency). ioc walks the currently observed L2 depth at the limit or better and cancels the rest; fok requires the entire size. IOC/FOK use the observed snapshot immediately, with no exchange arrival latency. Keep operationId unchanged for retries of create/submit; change it only for a genuinely distinct operation, reconcile unknown outcomes first. order/orders/executions show durable scoped history with individual fills, source clock and held/attached status.',
     parameters: schema(
       {
         action: {
@@ -215,6 +271,10 @@ const TOOLS = [
         name: string,
         accountId: string,
         orderId: string,
+        venue: {
+          enum: ['coinbase', 'kraken'],
+          description: 'Continuous data venue. Defaults to Coinbase.',
+        },
         product: { enum: ['ETH-USD', 'BTC-USD', 'SOL-USD'] },
         feeBps: { type: 'integer', minimum: 0, maximum: 1000 },
         side: { enum: ['buy', 'sell'] },
@@ -286,7 +346,7 @@ const TOOLS = [
   {
     name: 'quant_inspect',
     description:
-      'Read this workspace, provenance, sampled-PAPER balances/risk, actual live capabilities and market samples. Workspace PAPER risk fields are not live loss limits or authorization. refresh=true requests the latest market sample; inspect lastError, quality and quote observation/event times. asOfUTC is the inspection clock, not the quote clock or a freshness guarantee. Prices are observations, never executable instructions. Paginate candles as needed.',
+      'Read this workspace, provenance, sampled-PAPER balances/risk, actual live capabilities and market samples. Workspace PAPER risk fields are not live loss limits or authorization. refresh=true requests the latest market sample; inspect lastError, quality and quote observation/event times. asOfUTC is the inspection clock, not the quote clock or a freshness guarantee. Prices are observations, never executable instructions. Paginate candles as needed. Kraken Spot candle history contains only committed OHLC with gaps preserved.',
     parameters: schema({
       refresh: { type: 'boolean' },
       offset: { type: 'integer', minimum: 0 },
@@ -578,7 +638,7 @@ const TOOLS = [
   {
     name: 'quant_live_execution',
     description:
-      'Manage real Base WETH/USDC plans. Create pins wallet, input, slippage, fee budget, schedule and optional minimumTotalOutput. When the user sets an adverse move limit relative to first start, pass maxArrivalCostBps (100 bp equals 1%). Each swap enforces the stricter output floor. For historical VWAP, first use profile, review the weights, then create with the same slices, intervalMs and profileId. Start requires an unlocked wallet and human-granted autonomous authority. Preserve limits and operationId across retries. get and commands show verified fills and fees. benchmark compares terminal reconciled fills with same-pool market VWAP excluding the plan’s transactions. Positive cost means worse execution. ETH fees and unfilled size are separate. Reconcile uncertain outcomes before reporting totals.',
+      'Manage real Base WETH/USDC plans. Create pins wallet, input, slippage, fee budget, schedule and optional minimumTotalOutput. For settlement schedules, entryTrigger waits for a sampled pool price before the first slice. For a single sell of an existing WETH amount, protectiveExit pairs a stop-loss with optional take-profit. Both share one sell command. Use the user’s thresholds and inspect get.entryStatus/get.exitStatus and commands.entry_observation/commands.exit_trigger. Minimum output and arrival limits are separate execution limits. For historical VWAP, use profile then create with the same slices, intervalMs and profileId. Start requires an unlocked wallet and human-granted autonomous authority. Preserve limits and operationId across retries. get and commands show verified fills and fees. benchmark compares terminal reconciled fills with same-pool market VWAP excluding the plan’s transactions. Reconcile uncertain outcomes before reporting totals.',
     parameters: schema(
       {
         action: {
@@ -602,6 +662,26 @@ const TOOLS = [
         totalInput: string,
         minimumTotalOutput: string,
         maxArrivalCostBps: { type: 'integer', minimum: 0, maximum: 9999 },
+        entryTrigger: schema(
+          {
+            relation: { enum: ['at-or-below', 'at-or-above'] },
+            price: { type: 'string', description: 'Positive USDC per WETH, up to six decimals.' },
+          },
+          ['relation', 'price'],
+        ),
+        protectiveExit: schema(
+          {
+            stopLossPrice: {
+              type: 'string',
+              description: 'Trigger the sell at or below this positive pool price in USDC/WETH.',
+            },
+            takeProfitPrice: {
+              type: 'string',
+              description: 'Optional upper threshold in USDC/WETH, strictly above stopLossPrice.',
+            },
+          },
+          ['stopLossPrice'],
+        ),
         slices: { type: 'integer', minimum: 1, maximum: 1000 },
         intervalMs: { type: 'integer', minimum: 1000, maximum: 86400000 },
         schedule: { enum: ['settlement', 'fixed-window', 'vwap'] },
@@ -785,6 +865,14 @@ function decorateQuantTools(agent, getService, workspaceId, options = {}) {
         return await service.request('research.search', { ...input, id });
       if (name === 'quant_news_fetch')
         return await service.request('research.read', { ...input, id });
+      if (name === 'quant_kraken_history') {
+        const { from, to, select } = input;
+        return await service.request(
+          'market.kraken.archive',
+          { id, from, to, select },
+          { signal: abort.signal },
+        );
+      }
       if (name === 'quant_base_history') {
         if (
           !['capture', 'trades', 'series', 'record_start', 'record_status', 'record_stop'].includes(
@@ -816,6 +904,7 @@ function decorateQuantTools(agent, getService, workspaceId, options = {}) {
         name === 'quant_live_transaction' ||
         name === 'quant_live_swap' ||
         (name === 'quant_live_execution' && input.action === 'create') ||
+        (name === 'quant_exchange' && EXCHANGE_COMMANDS.has(input.action)) ||
         (name === 'quant_native_paper' && ['create', 'submit', 'halt'].includes(input.action)) ||
         (name === 'quant_strategy' &&
           (input.action === 'start' || (input.action === 'define' && !input.strategyId)))
@@ -826,12 +915,16 @@ function decorateQuantTools(agent, getService, workspaceId, options = {}) {
               ? 'NATIVE_OPERATION_ID_REQUIRED'
               : 'LIVE_OPERATION_ID_REQUIRED',
           );
-        const goal = agent.getGoalSnapshot();
-        operationNamespace ||= options.isSubagent
-          ? 'agent:' + agentContext.nodes.at(-1).subject
-          : goal && ['active', 'paused'].includes(goal.status)
-            ? 'goal:' + goal.startedAt
-            : 'request:' + requestId;
+        let namespace = 'exchange';
+        if (name !== 'quant_exchange') {
+          const goal = agent.getGoalSnapshot();
+          operationNamespace ||= options.isSubagent
+            ? 'agent:' + agentContext.nodes.at(-1).subject
+            : goal && ['active', 'paused'].includes(goal.status)
+              ? 'goal:' + goal.startedAt
+              : 'request:' + requestId;
+          namespace = operationNamespace;
+        }
         await agent.saveToHistory({ strict: true });
         commandId =
           'quant:' +
@@ -840,7 +933,7 @@ function decorateQuantTools(agent, getService, workspaceId, options = {}) {
               workspaceId +
                 '\0' +
                 (options.isSubagent ? agentContext.nodes.at(-1).subject + '\0' : '') +
-                operationNamespace +
+                namespace +
                 '\0' +
                 name +
                 '\0' +
@@ -897,13 +990,17 @@ function decorateQuantTools(agent, getService, workspaceId, options = {}) {
         if (input.action === 'source')
           return await service.request('native.source.start', {
             product: input.product,
+            venue: input.venue,
             feeBps: input.feeBps,
           });
         if (input.action === 'book') {
           const depth = input.limit ?? 10;
           if (!Number.isInteger(depth) || depth < 1 || depth > 50)
             throw Error('INVALID_BOOK_DEPTH');
-          const book = await service.request('native.source.book', { product: input.product });
+          const book = await service.request('native.source.book', {
+            product: input.product,
+            venue: input.venue,
+          });
           return {
             ...book,
             bids: book.bids.slice(0, depth),
@@ -1041,6 +1138,7 @@ function decorateQuantTools(agent, getService, workspaceId, options = {}) {
           assumptions: run.assumptions,
           dataSource: run.dataSource,
           provenance: run.provenance,
+          ...(run.archive && { archive: run.archive }),
           ...(run.dataSeries && {
             coverage: {
               startTime: run.dataSeries.startTime,
@@ -1253,6 +1351,18 @@ function decorateQuantTools(agent, getService, workspaceId, options = {}) {
         return toolIntent(
           await service.liveTransaction(id, input, commandId, abort.signal, agentContext),
         );
+      if (name === 'quant_exchange') {
+        if (!Object.hasOwn(EXCHANGE_ACTIONS, input.action)) throw Error('UNKNOWN_QUANT_ACTION');
+        return await service.request(
+          'exchange.' + EXCHANGE_ACTIONS[input.action],
+          {
+            ...input,
+            id,
+            ...(EXCHANGE_COMMANDS.has(input.action) && { operationId: commandId }),
+          },
+          { agentContext, signal: abort.signal },
+        );
+      }
       if (name === 'quant_live_swap') {
         const result = await service.liveSwap(id, input, commandId, abort.signal, agentContext);
         return { ...result, steps: result.steps?.map(toolIntent) };
@@ -1334,8 +1444,10 @@ function decorateQuantTools(agent, getService, workspaceId, options = {}) {
       'Your signing identity and inherited scope come from the trusted backend, never tool arguments. Descendant signatures consume all ancestor budgets. Continuations and scheduled plans retain that scope across restart. Inspect quant_agent_scopes for current limits; pause is allowed but only a human may resume. Do not create replacement children, IDs or plans to evade a cap or stop.',
       'For EVM operations inspect quant_wallets networks and use the exact registered chainId consistently in inspection, ABI encoding and live execution. Network saving is not authority. A node edit invalidates prior automatic permission and pending approvals; let the human review it rather than switching networks or IDs. Native-coin budgets across chains add quantities without exchange-rate conversion. Only Base has the built-in swap/Permit2/price adapters; custom EVM support does not imply any DApp or transaction format is compatible. New networks require reopening the research session before delegating their chain to children.',
       'Periodic signing quotas and lifetime limits apply together. Read the blocking wallet/portfolio/scope period, reconcile any unknown signature, then use quant_wait_budget to wait without spending LLM calls in a polling loop. Stop/expiry/clock rollback is not a quota reset. After waiting recheck authority and operation evidence; do not replay an old signature across windows or create a duplicate payment. Delegate quant_wait_budget explicitly to financial children that need it.',
+      'A portfolio can also limit signatures over a rolling window. Use quant_portfolios get to read signatureRate. When limited, use quant_wait_budget with kind portfolio-rate and the portfolio ID. A ready result only reports capacity at that instant. Review the previous intent and use a new operation only when its failure is definitively unsigned and the requested execution remains authorized.',
       'Use quant_inspect first to read the workspace, immutable dataset references, data precision and capabilities.',
       'Use quant_base_history to capture Base WETH/USDC swaps and closed candles. For longer research, use series from the latest relevant segment and use the returned pinned dataset ID with quant_backtest. Report actual coverage and empty intervals; simulated fills use the next observed open. An AMM swap tape has no maker queue.',
+      'Use quant_kraken_history to pin official Kraken Spot quarterly candles beyond the rolling REST window. Report date coverage and empty intervals. Do not use candle data to infer historical queue position.',
       'When selecting SMA parameters, use quant_walk_forward and report only its out-of-sample results as evaluation. Treat repeated tuning against the same holdout as research and reserve later unseen data for independent validation.',
       'Use quant_amm_replay for historical swap-event strategy signals and canonical block-end AMM quotes. Report block latency, cost model, rejected quotes and the unmodified historical pool assumption. Historical costs are modeled estimates; cite the fee breakdown and assumptions. Treat this as a counterfactual simulation.',
       'Use quant_amm_scenario to measure how ordered virtual trades change subsequent fills at one finalized pool state. Report the anchor, independent baseline difference, reverted legs and whether a baseline was available. Treat simulated gas separately from capital and returns.',
@@ -1346,6 +1458,9 @@ function decorateQuantTools(agent, getService, workspaceId, options = {}) {
         : 'Use quant_ask_user on its own when a user decision materially affects the task and the answer cannot be inferred. Treat answers as research context. Actual wallet approval and signing permissions remain separate.',
       'Follow the user’s environment choice. If REAL/live execution was explicitly requested and the native wallet permissions and prerequisites are ready, use the real execution tools; do not repeatedly simulate or require extra backtests without a concrete technical reason.',
       'Default live transactions require dedicated human approval. Human-configured autonomous-live permissions can allow continuous execution within their wallet/network/expiry/fee scope. Neither a goal, another Agent, nor generic auto-approve creates this permission.',
+      'For Coinbase Exchange, use quant_exchange list in the requested environment. The root Agent can submit_authorized with a matching human grant. With an amendment-enabled FIX grant, amend_authorized takes the original CIBYP clientId, new limit price, and total base quantity including fills. With a cancellation-enabled grant, cancel_authorized takes the original clientId and can use separate cancellation slots after the placement limit is reached. Canceling releases remaining exchange exposure after confirmation; allocated grant limits are cumulative. Preserve operationId across retries and reconcile uncertain outcomes before taking further trading actions.',
+      'For a Coinbase FIX stop-limit use an explicit up/down trigger, a positive stopPrice, and a separate executable limit price. Agent execution needs a grant that explicitly permits stop limits; for amendments it also needs amendment permission. A triggered stop cannot be amended, and reaching the trigger does not guarantee a fill. Keep the trigger direction when amending. Revoking local authority does not automatically cancel venue orders, so use a separately authorized cancellation or ask for human review when the workflow requires it.',
+      'For Coinbase FIX TPSL the price is the take-profit limit and goes live immediately, stopPrice triggers an unfilled order to reprice to stopLimitPrice. Use three strictly decreasing prices for sells and increasing prices for buys. Omit triggerDirection and set postOnly=false. The grant needs explicit TPSL permission. Amendments require all three prices and terminate once the stop triggers or the take-profit has any fill. Quote exposure reserves the higher of the two limits plus fees.',
       'If locked, missing authorization, insufficient funds, wrong chain or unavailable liquidity prevents execution, state that exact prerequisite and direct the user to Settings > Wallet. Never ask for secrets in chat, pretend a paper result is real, or work around the authorization gate.',
       'The tools provide candle research, sampled paper execution, continuous native orderbook paper accounts, independent PAPER/SHADOW strategies and onchain wallet execution. Use quant_native_paper for continuous book/queue simulation; its account is distinct from the sampled account and Base AMM execution. Establish virtual funding and explicit risk caps within the user’s mandate, enable the account and connect its source before submitting. A connected subscription is not a tradable book: read action=book and honor eligible, market rules and known depth; do not restart a source merely because its initial snapshot is catching up. Book limit defaults to 10 and accepts up to 50 levels per side. Report partial fills and held orders; enabling an account does not reattach old queues. Inspect pendingOrder after an uncertain submission. Restore the process if needed, then reconcile: found returns the committed order, absent proves no recorded order after healthy recovery. Neither reconciliation nor a restored account resumes trading automatically. Accounts may be shared: pausing affects all bound projects. Matching, a deployed independent strategy and live wallet execution are different capabilities; inspect their actual state and do not claim unmeasured latency or profitability.',
       'Base pool candles are sampled prices with no traded volume; candle backtests cannot establish orderbook queue fills, market impact or HFT performance.',

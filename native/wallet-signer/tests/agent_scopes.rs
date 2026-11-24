@@ -33,7 +33,7 @@ fn version_five_upgrades_without_inventing_agent_authority() {
     ));
     drop(Store::open(&path).unwrap());
     let db = rusqlite::Connection::open(path.join("receipts.sqlite")).unwrap();
-    db.execute_batch("DROP TABLE message_approvals;DROP TABLE message_receipts;DROP TABLE message_metadata;DROP TABLE portfolio_revisions;DROP TABLE portfolio_revision_metadata;ALTER TABLE portfolio_signatures DROP COLUMN policy_hash;DROP TABLE period_charges;DROP TABLE period_windows;DROP TABLE period_accounts;DROP TABLE period_metadata;DROP TABLE agent_scope_charges;DROP TABLE agent_scope_signatures;DROP TABLE agent_scope_usage;DROP TABLE agent_scope_metadata;DROP TABLE agent_scopes;PRAGMA user_version=5;").unwrap();
+    db.execute_batch("DROP TABLE portfolio_rate_migration;DROP INDEX portfolio_signatures_time;ALTER TABLE portfolio_signatures DROP COLUMN signed_ms;DROP TABLE message_approvals;DROP TABLE message_receipts;DROP TABLE message_metadata;DROP TABLE portfolio_revisions;DROP TABLE portfolio_revision_metadata;ALTER TABLE portfolio_signatures DROP COLUMN policy_hash;DROP TABLE period_charges;DROP TABLE period_windows;DROP TABLE period_accounts;DROP TABLE period_metadata;DROP TABLE agent_scope_charges;DROP TABLE agent_scope_signatures;DROP TABLE agent_scope_usage;DROP TABLE agent_scope_metadata;DROP TABLE agent_scopes;PRAGMA user_version=5;").unwrap();
     drop(db);
     let mut signer = Signer::open(&path).unwrap();
     let result = signer
@@ -48,7 +48,7 @@ fn version_five_upgrades_without_inventing_agent_authority() {
     assert_eq!(
         db.query_row("PRAGMA user_version", [], |r| r.get::<_, u32>(0))
             .unwrap(),
-        8
+        9
     );
     drop(db);
     std::fs::remove_dir_all(path).unwrap();

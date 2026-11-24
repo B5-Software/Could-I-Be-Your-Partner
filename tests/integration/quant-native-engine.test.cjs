@@ -411,6 +411,219 @@ test('actual private native process negotiates PAPER-only capability and reserve
   await engine.call('order.cancel', { id: 'one' });
   assert.equal((await engine.call('account.get', { id: 'paper' })).assets.USD.reserved, '0');
 });
+
+test('Kraken CRC-verified depth moves through native PAPER and recordings without cross-venue reuse', async (t) => {
+  const { directory, engines } = await fixture(t);
+  const { QuantService } = require('../../src/main/services/quant');
+  const { crc32 } = require('node:zlib');
+  const frames = [];
+  let socket;
+  class Socket extends EventTarget {
+    send(text) {
+      frames.push(JSON.parse(text));
+    }
+    close() {
+      this.dispatchEvent(new Event('close'));
+    }
+  }
+  const service = new QuantService({
+    directory: path.join(directory, 'kraken'),
+    nativeOptions: { binaryPath: binary },
+    fetcher: async (url) => {
+      assert.equal(url, 'https://api.kraken.com/0/public/AssetPairs?pair=ETHUSD');
+      return Response.json({
+        error: [],
+        result: {
+          XETHZUSD: {
+            wsname: 'ETH/USD',
+            altname: 'ETHUSD',
+            aclass_base: 'currency',
+            aclass_quote: 'currency',
+            status: 'online',
+            lot_decimals: 3,
+            lot_multiplier: 1,
+            tick_size: '0.5',
+            ordermin: '0.002',
+            costmin: '0.01',
+          },
+        },
+      });
+    },
+    sourceOptions: {
+      createDispatcher: async (url) => {
+        assert.equal(url, 'wss://ws.kraken.com/v2');
+        return { async destroy() {} };
+      },
+      socketFactory: () => (socket = new Socket()),
+      onPolicyChange: () => () => {},
+      subscribe: (send) => send(),
+    },
+  });
+  engines.push(service.native);
+  t.after(() => service.dispose());
+  const call = (action, input) => service.request(action, input);
+  const { id } = await call('workspace.create', {
+    name: 'Kraken PAPER fixture',
+    venue: 'coinbase',
+  });
+  await call('native.start');
+  const market = { venue: 'kraken', product: 'ETH-USD' };
+  const opened = await call('native.source.start', market);
+  assert.match(opened.instrument, /^kraken:ETH-USD:/);
+  assert.equal(opened.assumptions.minQuantity, '0.002');
+  const syncing = await call('native.source.book', market);
+  assert.equal(syncing.eligible, false);
+  assert.equal(syncing.reason, 'SOURCE_NOT_READY');
+  const { source } = service.nativeMarkets.sources.get('kraken:ETH-USD');
+  const send = async (frame) => {
+    const session = source.session;
+    socket.dispatchEvent(new MessageEvent('message', { data: JSON.stringify(frame) }));
+    await session.chain;
+  };
+  socket.dispatchEvent(new Event('open'));
+  await send({ channel: 'status', data: [{ system: 'online' }] });
+  const now = () => new Date().toISOString();
+  await send({ method: 'pong', req_id: frames[0].req_id, time_in: now(), time_out: now() });
+  for (const request of frames.slice(1))
+    await send({
+      method: 'subscribe',
+      req_id: request.req_id,
+      success: true,
+      result: { ...request.params, symbol: 'ETH/USD' },
+    });
+  const book = (type, bids, asks, checksum) =>
+    send({
+      channel: 'book',
+      type,
+      data: [
+        {
+          symbol: 'ETH/USD',
+          bids,
+          asks,
+          checksum,
+          ...(type === 'update' && { timestamp: now() }),
+        },
+      ],
+    });
+  const level = (price, qty) => ({ price: JSON.rawJSON(price), qty: JSON.rawJSON(qty) });
+  await book(
+    'snapshot',
+    [level('99.0', '1.000'), level('98.0', '2.000')],
+    [level('101.0', '2.000')],
+    crc32('1010200099010009802000'),
+  );
+  const initial = await call('native.source.book', market);
+  assert.equal(initial.eligible, true);
+  assert.deepEqual(initial.bids, [
+    ['99', '1'],
+    ['98', '2'],
+  ]);
+  await assert.rejects(
+    call('native.source.book', { product: market.product }),
+    /SOURCE_NOT_STARTED/,
+  );
+  const { recordingId } = await call('recording.start', { ...market, id, operationId: 'capture' });
+  await assert.rejects(
+    call('recording.start', { id, product: market.product, operationId: 'capture' }),
+    /RECORDING_OPERATION_CONFLICT/,
+  );
+  await call('native.paper.create', {
+    id,
+    operationId: 'fund',
+    name: 'Virtual funds',
+    assets: { USD: '1000', ETH: '0' },
+    maxOrderNotional: { USD: '1000' },
+    maxAssetPosition: { ETH: '10' },
+  });
+  await call('native.paper.enable', { id });
+  const strategy = (
+    await call('native.strategy.define', {
+      ...market,
+      id,
+      operationId: 'maker',
+      name: 'Kraken maker fixture',
+      config: { quantity: '0.1', refreshMs: 100, ttlMs: 15000 },
+    })
+  ).definition;
+  assert.equal(strategy.instrument, opened.instrument);
+  const submit = (operationId, price, quantity, venue = 'kraken') =>
+    call('native.paper.submit', {
+      ...market,
+      id,
+      operationId,
+      side: 'buy',
+      price,
+      quantity,
+      venue,
+    });
+  await assert.rejects(submit('too-small', '99.5', '0.001'), /MINIMUM_QUANTITY/);
+  const held = (await submit('held', '98', '0.1')).order.request.id;
+  const stays = (await submit('stays', '99.5', '0.1')).order.request.id;
+  await assert.rejects(submit('stays', '99.5', '0.1', 'coinbase'), /COMMAND_CONFLICT/);
+  await book(
+    'update',
+    [level('98.0', '0.000'), level('100.0', '3.000')],
+    [],
+    crc32('10102000100030009901000'),
+  );
+  assert.deepEqual((await call('native.source.book', market)).bids, [
+    ['100', '3'],
+    ['99', '1'],
+  ]);
+  const status = (id) => service.native.call('order.get', { id });
+  assert.equal((await status(held)).execution.held, true);
+  assert.equal((await status(stays)).execution.attached, true);
+  await sleep(565);
+  await book('update', [], [], crc32('10102000100030009901000'));
+  const trade = {
+    symbol: 'ETH/USD',
+    price: 99.5,
+    qty: 0.05,
+    side: 'sell',
+    trade_id: JSON.rawJSON('9007199254740993'),
+    timestamp: now(),
+  };
+  await send({ channel: 'trade', type: 'update', data: [trade] });
+  await send({ channel: 'trade', type: 'update', data: [trade] });
+  assert.equal((await status(stays)).filled, '0.05');
+  assert.equal((await status(held)).filled, '0');
+  assert.equal(source.metrics.duplicateTrades, 1);
+  await book('update', [level('99.0', '9.000')], [], 1);
+  assert.equal(source.lastError, 'SOURCE_CHECKSUM_MISMATCH');
+  assert.equal((await call('native.source.book', market)).eligible, false);
+  assert.equal((await status(stays)).execution.held, true);
+  const recording = await call('recording.stop', { id, recordingId });
+  assert.equal(recording.venue, 'kraken');
+  const archived = await call('recording.events', { id, recordingId, offset: 0 });
+  assert.ok(
+    archived.items.some(
+      (row) => row.method === 'market.delta' && row.params.coverage?.bid_floor === '99',
+    ),
+  );
+  assert.ok(
+    archived.items.some(
+      (row) =>
+        row.method === 'market.trade' &&
+        row.params.event_id === '9007199254740993' &&
+        row.params.maker_side === 'bid',
+    ),
+  );
+  assert.equal(archived.items.at(-1).method, 'market.invalidate');
+  const { replayId } = await call('replay.start', {
+    id,
+    recordingId,
+    strategyId: strategy.id,
+    revision: strategy.revision,
+    assets: { USD: '1000', ETH: '1' },
+    operationId: 'replay-kraken',
+  });
+  const replay = await call('replay.get', { id, replayId, waitMs: 30000 });
+  assert.equal(replay.status, 'complete', JSON.stringify(replay));
+  assert.equal(replay.eventErrors, 0);
+  assert.equal(replay.configuration.recordingHash, recording.sha256);
+  await call('native.source.stop', market);
+  await call('native.stop');
+});
 test('restart is paused, preserves reservations, and deduplicates before a new market snapshot', async (t) => {
   const { engine, create } = await fixture(t);
   await setup(engine);

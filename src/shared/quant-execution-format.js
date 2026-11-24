@@ -22,6 +22,47 @@ function signedAmount(value, decimals) {
     executionAmount(value.replace(/^-/, ''), decimals)
   );
 }
+function poolPriceRatio(snapshot) {
+  const sqrt = BigInt(snapshot.sqrt_price_x96);
+  const squared = sqrt * sqrt;
+  const q192 = 1n << 192n;
+  // USDC atoms per WETH atom.
+  return snapshot.weth_is_token0 ? [squared, q192] : [q192, squared];
+}
+function executionEntryCondition(trigger) {
+  const relation = trigger.relation === 'at-or-below' ? '≤' : '≥';
+  return relation + ' ' + executionAmount(trigger.price_atoms, 6) + ' USDC/WETH';
+}
+function executionEntryRows(observation, label, locale) {
+  const [num, den] = poolPriceRatio(observation);
+  return [
+    [label('leEntryObserved'), executionAmount(String((num * 10n ** 18n) / den), 6) + ' USDC/WETH'],
+    [
+      label('leEntryBlock'),
+      observation.block + ' · ' + new Date(observation.block_time * 1000).toLocaleString(locale),
+    ],
+  ];
+}
+function executionExitConditions(exit, label) {
+  const rows = [
+    [
+      label('leStopLoss'),
+      executionEntryCondition({
+        relation: 'at-or-below',
+        price_atoms: exit.stop_loss_price_atoms,
+      }),
+    ],
+  ];
+  if (exit.take_profit_price_atoms)
+    rows.push([
+      label('leTakeProfit'),
+      executionEntryCondition({
+        relation: 'at-or-above',
+        price_atoms: exit.take_profit_price_atoms,
+      }),
+    ]);
+  return rows;
+}
 function executionSettlementRows(side, settlement, label) {
   if (!settlement) return [];
   const rows = [];
@@ -112,4 +153,8 @@ module.exports = {
   executionSettlementRows,
   executionBenchmarkRows,
   executionArrivalRows,
+  executionEntryCondition,
+  executionEntryRows,
+  executionExitConditions,
+  poolPriceRatio,
 };

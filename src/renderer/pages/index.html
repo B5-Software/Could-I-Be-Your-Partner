@@ -1273,6 +1273,10 @@
             </div>
 
             <div class="settings-panel" data-tab="context">
+              <div class="settings-group">
+                <h3>Agent 执行</h3>
+                <div class="setting-item"><label for="setting-agent-iteration-limit">Agent 循环轮数上限</label><input id="setting-agent-iteration-limit" type="number" min="0" max="9007199254740991" step="1" value="1024"><p class="setting-hint">每次执行默认最多 1024 轮。填 0 表示无上限。适用于聊天、编程、Babe、任务目标及子 Agent。</p></div>
+              </div>
               <div class="settings-group" id="token-limits-group">
                 <h3><i class="fa-solid fa-sliders"></i> Token 分配</h3>
                 <p class="setting-hint">上下文是单次请求的总容量；输出、工具定义和对话共用这份空间。每日累计用量与美元限额请到「消费与用量上限」。</p>
@@ -3964,6 +3968,7 @@
   <script src="../js/privacy-filter.js"></script>
   <script src="../js/context-manager.js"></script>
   <script src="../js/fork-utils.js"></script>
+  <script src="../../shared/agent-iterations.js"></script>
   <script src="../js/goal-state.js"></script>
   <script src="../../data/bundled-skills.js"></script>
   <script src="../js/title-utils.js"></script>

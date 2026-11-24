@@ -135,11 +135,12 @@ class NativeStrategyBrowser {
     ];
     const step = (index) => {
       if (index === steps.length) {
-        const { name, product, ...config } = values;
+        const { name, product, venue, ...config } = values;
         return this.call('define', {
           id,
           name,
           product,
+          venue,
           config,
           operationId,
           ...(version
@@ -164,11 +165,11 @@ class NativeStrategyBrowser {
         },
       );
     };
-    this.menu(
-      this.text('nsProduct'),
-      ['ETH-USD', 'BTC-USD', 'SOL-USD'].map((value) => ({ label: value, value })),
-      (product) => {
+    this.parent.chooseNativeMarket(
+      'nsProduct',
+      ({ product, venue }) => {
         values.product = product;
+        values.venue = venue;
         return this.menu(
           this.text('nsSides'),
           ['both', 'buy', 'sell'].map((value) => ({

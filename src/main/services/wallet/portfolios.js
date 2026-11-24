@@ -20,6 +20,21 @@ const { page } = require('../quant/event-files');
 const fail = (code) => {
   throw Error(code);
 };
+function signatureRate(input) {
+  if (input === undefined || input === null) return null;
+  if (typeof input !== 'object' || Array.isArray(input)) fail('WALLET_PORTFOLIO_RATE_INVALID');
+  const { windowSeconds, maxSignatures } = input;
+  if (
+    !Number.isInteger(windowSeconds) ||
+    windowSeconds < 1 ||
+    windowSeconds > 300 ||
+    !Number.isInteger(maxSignatures) ||
+    maxSignatures < 1 ||
+    maxSignatures > 1000
+  )
+    fail('WALLET_PORTFOLIO_RATE_INVALID');
+  return { windowSeconds, maxSignatures };
+}
 class WalletPortfolios {
   constructor(wallet, writeAtomic) {
     this.wallet = wallet;
@@ -119,6 +134,7 @@ class WalletPortfolios {
         [
           'WALLET_PORTFOLIO_INVALID',
           'WALLET_PORTFOLIO_EQUITY_INVALID',
+          'WALLET_PORTFOLIO_RATE_INVALID',
           'WALLET_PORTFOLIO_MEMBER_BUSY',
           'WALLET_NATIVE_AUTH_INVALID',
           'WALLET_NATIVE_AUTH_LIMIT',
@@ -326,6 +342,7 @@ class WalletPortfolios {
           fail('WALLET_PORTFOLIO_INVALID');
         ids = input.walletIds.slice();
         const floor = equityFloor(input.equityFloorUsd ?? null, input.chainId);
+        const rate = signatureRate(input.signatureRate);
         const id = randomUUID(),
           portfolio = {
             id,
@@ -339,6 +356,7 @@ class WalletPortfolios {
             maxFeeWei: parseEther(maxFeeEth).toString(),
             expiresAt: hours ? Date.now() + hours * 3600000 : 0,
             ...(floor && { equityFloorUsdAtomic: floor }),
+            ...(rate && { signatureRate: rate }),
           };
         command = { action: 'portfolio.create', input: { id, portfolio } };
       } else if (input.operation === 'edit') {
@@ -379,6 +397,11 @@ class WalletPortfolios {
           const floor = equityFloor(input.equityFloorUsd, portfolio.chainId);
           if (floor) portfolio.equityFloorUsdAtomic = floor;
           else delete portfolio.equityFloorUsdAtomic;
+        }
+        if (input.signatureRate !== undefined) {
+          const rate = signatureRate(input.signatureRate);
+          if (rate) portfolio.signatureRate = rate;
+          else delete portfolio.signatureRate;
         }
         command = {
           action: 'portfolio.update',

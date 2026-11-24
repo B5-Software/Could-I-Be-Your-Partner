@@ -613,6 +613,12 @@
   padding: 9px 12px;
   background: transparent;
 }
+.wallet-emergency-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
 .wallet-emergency.is-stopped {
   border-color: color-mix(in srgb, var(--danger) 32%, var(--border));
 }
@@ -620,6 +626,9 @@
   .wallet-emergency {
     align-items: flex-start;
     flex-direction: column;
+  }
+  .wallet-emergency-actions {
+    justify-content: flex-start;
   }
 }
 [data-emergency-reset] form > p:not(.wallet-warning) {

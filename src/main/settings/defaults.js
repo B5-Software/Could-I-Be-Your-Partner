@@ -55,7 +55,7 @@ module.exports = function createDefaultSettings({ DEFAULT_DECISION_SETTINGS }) {
       activeEntryId: '',
     },
     agent: {
-      maxIterations: 50,
+      iterationLimit: require('../../shared/agent-iterations').DEFAULT_ITERATIONS,
       autoCompactMaxFailures: 3,
     },
     // 上下文压缩（水位线策略，借鉴 DeepSeek Harness compaction-basic）

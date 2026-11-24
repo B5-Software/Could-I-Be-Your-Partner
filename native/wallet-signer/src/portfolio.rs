@@ -30,6 +30,8 @@ pub struct Portfolio {
     pub equity_floor_usd_atomic: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub allowance_ceiling: Option<AllowanceCeiling>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signature_rate: Option<crate::portfolio_rate::Policy>,
 }
 #[derive(Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -62,7 +64,10 @@ pub struct EquityEvidence {
     pub checked_at: u64,
     pub available_usd_atomic: String,
 }
-fn validate_equity_floor(p: &Portfolio) -> Result<()> {
+fn validate_risk_controls(p: &Portfolio) -> Result<()> {
+    if let Some(policy) = &p.signature_rate {
+        policy.validate()?;
+    }
     if let Some(floor) = &p.equity_floor_usd_atomic
         && (p.chain_id != 8453 || floor.len() > 24 || quantity(floor)? == ethnum::U256::ZERO)
     {
@@ -223,8 +228,19 @@ fn usage(connection: &Connection, id: &str) -> Result<Usage> {
 }
 pub fn get(connection: &Connection, id: &str) -> Result<Value> {
     let (portfolio, state, revision) = load(connection, id)?;
+    let period = crate::periods::snapshot(
+        connection,
+        "portfolio",
+        id,
+        portfolio.limits.period.as_ref(),
+    )?;
+    let signature_rate = portfolio
+        .signature_rate
+        .as_ref()
+        .map(|policy| crate::portfolio_rate::snapshot(connection, id, policy, now()?))
+        .transpose()?;
     Ok(
-        json!({"portfolio":portfolio,"state":state,"revision":revision,"usage":usage(connection,id)?,"period":crate::periods::snapshot(connection,"portfolio",id,portfolio.limits.period.as_ref())?}),
+        json!({"portfolio":portfolio,"state":state,"revision":revision,"usage":usage(connection,id)?,"period":period,"signatureRate":signature_rate}),
     )
 }
 pub fn list(connection: &Connection, offset: u32) -> Result<Value> {
@@ -279,7 +295,7 @@ pub fn create(connection: &Connection, value: &Portfolio) -> Result<Value> {
         return Err("WALLET_PORTFOLIO_INVALID");
     }
     value.limits.validate()?;
-    validate_equity_floor(value)?;
+    validate_risk_controls(value)?;
     quantity(&value.max_fee_wei)?;
     if value
         .limits
@@ -415,7 +431,7 @@ pub fn update(c: &Connection, p: &Portfolio, expected: u64) -> Result<Value> {
         return Err("WALLET_PORTFOLIO_INVALID");
     }
     p.limits.validate()?;
-    validate_equity_floor(p)?;
+    validate_risk_controls(p)?;
     quantity(&p.max_fee_wei)?;
     if p.limits
         .tokens
@@ -612,6 +628,11 @@ fn next_usage(connection: &Connection, p: &Portfolio, request: &Check<'_>) -> Re
         return Err("WALLET_PORTFOLIO_LIMIT");
     }
     let mut used = usage(connection, &p.id)?;
+    if !request.replay
+        && let Some(policy) = &p.signature_rate
+    {
+        crate::portfolio_rate::check(connection, &p.id, policy, request.checked_at_ms)?;
+    }
     crate::periods::check(
         connection,
         "portfolio",
@@ -715,11 +736,12 @@ pub fn consume(connection: &Connection, request: &Check<'_>) -> Result<()> {
     connection.execute("INSERT INTO portfolio_usage VALUES(?1,?2,?3) ON CONFLICT(id) DO UPDATE SET body=excluded.body,checksum=excluded.checksum",params![p.id,body,digest(&body)]).map_err(|_|STORE)?;
     connection
         .execute(
-            "INSERT INTO portfolio_signatures VALUES(?1,?2,?3)",
+            "INSERT INTO portfolio_signatures(operation_id,portfolio_id,policy_hash,signed_ms) VALUES(?1,?2,?3,?4)",
             params![
                 request.operation_id,
                 p.id,
-                crate::portfolio_history::financial_hash(&p)?
+                crate::portfolio_history::financial_hash(&p)?,
+                i64::try_from(request.checked_at_ms).map_err(|_| STORE)?,
             ],
         )
         .map_err(|_| STORE)?;

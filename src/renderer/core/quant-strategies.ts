@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
+import { nativeSourceLanguage, nativeVenueOptions } from './quant-native-venue';
 import labels from '../../shared/quant-strategy-labels.json';
 import type {
   NativeStrategyVersion,
@@ -376,6 +377,10 @@ export function openStrategies(options: Options): void {
       '<input name="name" maxlength="80" value="' +
       escape(d?.name || 'Maker') +
       '" required></label><label>' +
+      escape(nativeSourceLanguage(options.language()).sourceVenue) +
+      '<select name="venue">' +
+      nativeVenueOptions(d?.instrument.split(':')[0]) +
+      '</select></label><label>' +
       escape(t('nsProduct')) +
       '<select name="product">' +
       ['ETH-USD', 'BTC-USD', 'SOL-USD']
@@ -440,6 +445,7 @@ export function openStrategies(options: Options): void {
       const result = await call<NativeStrategyVersion>('define', {
         name: v('name'),
         product: v('product'),
+        venue: v('venue'),
         config,
         operationId: operation,
         ...(editVersion

@@ -1653,6 +1653,147 @@ async function main() {
     ack: 'RESET LIVE',
     confirmed: true,
   });
+  await walletCall('unlock', {
+    id: wallet.id,
+    password: 'local-execution-fixture-password',
+    minutes: 0,
+  });
+  await grant();
+  const setPoolPrice = async (sqrt) => {
+    const hash = await rpc('eth_sendTransaction', [
+      {
+        from: funded,
+        to: addresses.Pool[0],
+        data: pool.encodeFunctionData('setSqrtPrice', [sqrt]),
+        gas: '0x100000',
+      },
+    ]);
+    const receipt = await until(() => rpc('eth_getTransactionReceipt', [hash]));
+    assert.equal(receipt.status, '0x1');
+    return receipt;
+  };
+  await setPoolPrice(3543191142285914205922034n);
+  const entryTrigger = { relation: 'at-or-below', price: '1980' };
+  await assert.rejects(
+    create('entry-invalid-schedule', { schedule: 'fixed-window', entryTrigger }),
+    /EXECUTION_ENTRY_INVALID/,
+  );
+  const conditional = await create('conditional-entry', {
+    entryTrigger,
+    slices: 1,
+    totalInput: '1',
+  });
+  const triggerId = conditional.plan.id;
+  const triggerNonce = await rpc('eth_getTransactionCount', [wallet.address, 'pending']);
+  const triggerCommands = () => call('execution.commands', { id: project.id, runId: triggerId });
+  const triggerMarket = host.runtime.quantService.market;
+  const originalBase = triggerMarket.base.bind(triggerMarket);
+  let priceReads = 0;
+  triggerMarket.base = async (config, options) => {
+    const result = await originalBase(config, options);
+    if (options?.priceEvidence && ++priceReads === 2) return { ...result, time: result.time - 60 };
+    return result;
+  };
+  try {
+    await call('execution.start', { id: project.id, runId: triggerId });
+    await until(
+      async () => (await inspect(triggerId)).entryStatus === 'EXECUTION_ENTRY_UNAVAILABLE',
+    );
+    await until(async () => (await inspect(triggerId)).entryStatus === 'EXECUTION_ENTRY_WAIT');
+    assert.equal((await triggerCommands()).items[0].stage, 'ready');
+    assert.equal(await rpc('eth_getTransactionCount', [wallet.address, 'pending']), triggerNonce);
+    assert.equal(
+      host.runtime.walletService.state.intents.some(
+        (intent) => intent.execution?.planId === triggerId,
+      ),
+      false,
+    );
+    const thresholdBlock = await setPoolPrice(3520976558767282464819376n);
+    await until(async () => (await inspect(triggerId)).run.phase === 'completed', { mine: true });
+    const commands = await triggerCommands();
+    assert.equal(commands.total, 1);
+    assert.equal(commands.items[0].stage, 'finalized');
+    assert.ok(
+      BigInt(commands.items[0].entry_observation.block) >= BigInt(thresholdBlock.blockNumber),
+    );
+    assert.equal(commands.items[0].entry_observation.sqrt_price_x96, '3520976558767282464819376');
+    assert.equal(
+      (
+        await rpc('eth_getBlockByNumber', [
+          '0x' + BigInt(commands.items[0].entry_observation.block).toString(16),
+          false,
+        ])
+      ).hash,
+      commands.items[0].entry_observation.block_hash,
+    );
+    assert.equal((await inspect(triggerId)).settlement.fill.inputAtoms, '1000000');
+  } finally {
+    triggerMarket.base = originalBase;
+  }
+  const protectiveExit = { stopLossPrice: '1970', takeProfitPrice: '1990' };
+  const exitDraft = { side: 'sell', slices: 1, totalInput: '0.0001', protectiveExit };
+  await assert.rejects(
+    create('bad-protective-buy', { ...exitDraft, side: 'buy' }),
+    /EXECUTION_EXIT_INVALID/,
+  );
+  const unfunded = await create('unfunded-protective-exit', { ...exitDraft, totalInput: '100' });
+  await assert.rejects(
+    call('execution.start', { id: project.id, runId: unfunded.plan.id }),
+    /WALLET_TOKEN_CAPITAL_RESERVED/,
+  );
+  assert.equal((await inspect(unfunded.plan.id)).run.commands_created, 0);
+  const testExit = async (cause, triggerPrice, oppositePrice) => {
+    await setPoolPrice(3520976558767282464819376n);
+    const plan = await create('protective-' + cause, exitDraft);
+    const runId = plan.plan.id;
+    const nonce = () => rpc('eth_getTransactionCount', [wallet.address, 'pending']);
+    const before = await nonce();
+    const swaps = await executed();
+    const weth = await balance(chainInfo.weth, wallet.address);
+    let observed = 0;
+    triggerMarket.base = async (config, options) => {
+      const snapshot = await originalBase(config, options);
+      if (options?.priceEvidence) observed++;
+      return snapshot;
+    };
+    try {
+      await call('execution.start', { id: project.id, runId });
+      await until(
+        async () =>
+          observed >= 2 &&
+          host.runtime.quantService.liveExecution.active.size === 0 &&
+          (await inspect(runId)).exitStatus === 'EXECUTION_EXIT_WAIT',
+      );
+      assert.equal(await nonce(), before);
+      assert.equal(await executed(), swaps);
+      await setPoolPrice(triggerPrice);
+      await until(async () => (await inspect(runId)).run.phase === 'completed', { mine: true });
+      const sent = await nonce();
+      assert.equal(await executed(), swaps + 1n);
+      assert.equal(await balance(chainInfo.weth, wallet.address), weth - 100000000000000n);
+      const commands = await call('execution.commands', { id: project.id, runId });
+      assert.equal(commands.total, 1);
+      const settled = commands.items[0];
+      assert.equal(settled.stage, 'finalized');
+      assert.equal(settled.exit_trigger.cause, cause);
+      assert.equal(settled.exit_trigger.observation.sqrt_price_x96, String(triggerPrice));
+      assert.equal(settled.entry_observation, undefined);
+      await setPoolPrice(oppositePrice);
+      await pause(1200);
+      assert.equal(await nonce(), sent);
+      assert.equal(await executed(), swaps + 1n);
+      const after = await call('execution.commands', { id: project.id, runId });
+      assert.equal(after.total, 1);
+      assert.equal(after.items[0].id, settled.id);
+      assert.equal(after.items[0].stage, 'finalized');
+      assert.deepEqual(after.items[0].exit_trigger, settled.exit_trigger);
+      assert.deepEqual(after.items[0].hashes, settled.hashes);
+    } finally {
+      triggerMarket.base = originalBase;
+    }
+  };
+  await testExit('stop-loss', 3500000000000000000000000n, 3543191142285914205922034n);
+  await testExit('take-profit', 3543191142285914205922034n, 3500000000000000000000000n);
   const equityPassword = 'isolated-equity-fixture-password';
   const riskWallet = await walletCall('import', {
     name: 'Isolated equity control',
@@ -2012,7 +2153,7 @@ async function main() {
   assert.equal(failedScenario.ammScenario.legs[1].status, 'reverted');
   assert.equal(await canonicalPool(), beforeScenario);
   console.log(
-    '[quant-live-execution] PASS: native scheduling and signing, execution benchmarks and reconciliation, stateful AMM simulation and canonical isolation',
+    '[quant-live-execution] PASS: conditional entry, protective stop-loss/take-profit, signing, benchmarks, reconciliation and isolated AMM simulation',
   );
 }
 main()

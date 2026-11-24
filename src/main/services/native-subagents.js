@@ -43,7 +43,7 @@ class NativeSubagents {
       if (fs.statSync(file).size > 32 * 1024 * 1024)
         throw new Error('Subagent catalog is too large');
       const data = JSON.parse(fs.readFileSync(file, 'utf8'));
-      if (data.version !== 1 || !Array.isArray(data.children))
+      if (![1, 2].includes(data.version) || !Array.isArray(data.children))
         throw new Error('Invalid subagent catalog');
       for (const row of data.children) {
         if (
@@ -52,10 +52,12 @@ class NativeSubagents {
           !Array.isArray(row.tools) ||
           !row.model ||
           !['chat', 'code', 'babe'].includes(row.mode) ||
-          !Number.isSafeInteger(row.maxIterations)
+          (row.maxIterations !== undefined &&
+            (!Number.isSafeInteger(row.maxIterations) || row.maxIterations < 0))
         )
           throw new Error('Invalid subagent delegation policy');
         if (row.quantContext) validateContext(row.quantContext);
+        if (data.version === 1 && row.maxIterations === 30) delete row.maxIterations;
         this.children[row.id] = row;
       }
     } catch (error) {
@@ -68,7 +70,7 @@ class NativeSubagents {
     fs.writeFileSync(
       temp,
       JSON.stringify({
-        version: 1,
+        version: 2,
         children: Object.values(this.children).map(({ messages, ...row }) => row),
       }),
     );
@@ -102,6 +104,11 @@ class NativeSubagents {
       .trim()
       .slice(0, 16000);
     if (!task) throw new Error('task is required');
+    if (
+      args.maxIterations !== undefined &&
+      (!Number.isSafeInteger(args.maxIterations) || args.maxIterations < 0)
+    )
+      throw new Error('Invalid subagent iteration limit');
     const { session, agent: parent } = await this.sender(key);
     const enabled = new Set(session.agent.getEnabledToolDefinitions().map((t) => t.name));
     const quantContext = session.agent.quantScopeContext;
@@ -129,7 +136,7 @@ class NativeSubagents {
       mode: session.mode,
       workspacePath: session.agent.codeWorkspacePath || session.agent.workspacePath,
       hostWorkspacePath: session.hostWorkspacePath || null,
-      maxIterations: Math.max(1, Math.min(200, Math.floor(Number(args.maxIterations) || 30))),
+      ...(args.maxIterations !== undefined && { maxIterations: args.maxIterations }),
       status: 'queued',
       startTime: Date.now(),
       endTime: null,

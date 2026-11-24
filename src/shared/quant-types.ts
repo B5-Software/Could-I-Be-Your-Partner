@@ -38,6 +38,7 @@ export interface QuantRun {
   assumptions?: string[];
   dataSource?: string;
   dataSeries?: QuantBaseSeries;
+  archive?: QuantKrakenArchive;
   codeVersion?: string;
   walkForward?: {
     candidateCount: number;
@@ -107,10 +108,12 @@ export interface QuantDataset {
   id: string;
   label: string;
   source: string;
+  market?: { venue: string; product: string; interval: number };
   count: number;
   start: number;
   end: number;
   amm?: { chainId: number; fee: number; interval: number; swapCount: number };
+  archive?: QuantKrakenArchive;
   series?: {
     interval: number;
     segmentCount: number;
@@ -118,6 +121,22 @@ export interface QuantDataset {
     gaps: number;
     requestedStart: number;
   };
+}
+
+export interface QuantKrakenArchive {
+  start: number;
+  end: number;
+  sourceInterval: number;
+  slots: number;
+  gaps: number;
+  entries: {
+    quarter: string;
+    url: string;
+    member: string;
+    etag: string;
+    crc32: string;
+    sha256: string;
+  }[];
 }
 
 export interface QuantBaseSeries {
@@ -164,6 +183,7 @@ export interface QuantSummary {
   updatedAt: number;
 }
 export interface QuantWorkspace extends QuantSummary {
+  marketRevision?: number;
   network?: {
     id: number;
     name: string;
@@ -187,6 +207,7 @@ export interface QuantWorkspace extends QuantSummary {
     venue: string;
     product: string;
     interval: number;
+    intervals?: number[];
     pool?: string;
     poolFee?: number;
     customRpc?: boolean;
@@ -194,6 +215,12 @@ export interface QuantWorkspace extends QuantSummary {
   preferences: {
     layout: 'professional' | 'immersive';
     chatWidth: number;
+    projectWidth?: number;
+    chartShare?: number;
+    focusMarketShare?: number;
+    stackMarketHeight?: number;
+    focusStackMarketHeight?: number;
+    focusDetails?: boolean;
     datasetId: string | null;
   };
   risk: {
@@ -344,6 +371,7 @@ export interface QuantNativeStatus {
 }
 export interface QuantNativeSource {
   product: string;
+  venue?: string;
   instrument?: string;
   phase:
     | 'stopped'
@@ -366,6 +394,7 @@ export interface QuantNativeSource {
     tick: string;
     lot: string;
     minNotional: string;
+    minQuantity?: string;
     quoteCurrency: string;
   };
 }

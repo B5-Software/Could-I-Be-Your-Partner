@@ -7,6 +7,7 @@ const rootCategories = {
   automaticMemory: 'automatic-memory',
   userProfile: 'user',
   llm: 'llm',
+  agent: 'context',
   decision: 'decision',
   contextCompaction: 'context',
   toolExposure: 'context',

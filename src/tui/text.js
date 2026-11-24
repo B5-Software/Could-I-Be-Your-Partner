@@ -45,6 +45,8 @@ function fill(template, params) {
 /** TUI 文案词典：键 = ui.tui.*；值 = 译文（{name} 可作占位符） */
 const DICT = {
   en: {
+    'ui.tui.configAgentIterations': '1,024 iterations per run by default · 0 means unlimited',
+    'ui.tui.configAgentUnlimited': 'Unlimited',
     'ui.tui.cmd.super': 'Open SuperAgent tasks and run preferences',
     'ui.tui.cmd.wallet': 'Manage native wallets, unlock, live approvals and history',
     'ui.tui.cmd.goal': 'Set or manage an Agent goal',
@@ -221,6 +223,8 @@ const DICT = {
     'ui.tui.vmdeskFailed': 'failed to open the VM desktop: {error}',
   },
   de: {
+    'ui.tui.configAgentIterations': 'Standardmäßig 1.024 Schritte pro Lauf · 0 bedeutet unbegrenzt',
+    'ui.tui.configAgentUnlimited': 'Unbegrenzt',
     'ui.tui.cmd.super': 'SuperAgent-Aufgaben und Ausführungseinstellungen öffnen',
     'ui.tui.cmd.wallet': 'Native Wallets, Entsperrung, Live-Freigaben und Verlauf verwalten',
     'ui.tui.cmd.goal': 'Agent-Ziel festlegen oder verwalten',

@@ -12,6 +12,7 @@ async function createBackendRuntime(client) {
   const snapshot = await client.connect();
   let sessions = new Map(snapshot.sessions.map((session) => [session.key, session]));
   let views = new Map(Object.entries(snapshot.views));
+  let snapshotSequence = snapshot.sequence;
   const listeners = new Set();
   const channels = new Map();
   const api = loadPreloadApi({
@@ -28,17 +29,54 @@ async function createBackendRuntime(client) {
     off: (channel, listener) => channels.get(channel)?.delete(listener),
   });
   let refreshing;
-  const refresh = () =>
-    (refreshing ||= client
+  const applySessionEvent = (event) => {
+    const session = sessions.get(event.key);
+    if (event.type === 'session-created') sessions.set(event.key, { ...event.session });
+    else if (event.type === 'session-closed') {
+      sessions.delete(event.key);
+      views.delete(event.key);
+    } else if (event.type === 'status' && session) {
+      session.status = event.status;
+      session.busy = event.status === 'running' || event.status === 'working';
+    } else if (event.type === 'title' && session) session.title = event.title;
+  };
+  const setSnapshot = (value) => {
+    runtime.boot = value.boot;
+    snapshotSequence = value.sequence;
+    sessions = new Map(value.sessions.map((s) => [s.key, s]));
+    views = new Map(Object.entries(value.views));
+  };
+  const refresh = () => {
+    if (refreshing) return refreshing.promise;
+    const flight = { events: [] };
+    refreshing = flight;
+    flight.promise = client
       .request('snapshot')
       .then((value) => {
-        runtime.boot = value.boot;
-        sessions = new Map(value.sessions.map((s) => [s.key, s]));
-        views = new Map(Object.entries(value.views));
+        if (refreshing !== flight) return;
+        const previous = sessions;
+        setSnapshot(value);
+        // The snapshot could have been collected before a terminal event arrived.
+        for (const event of flight.events) {
+          if (event.sequence > snapshotSequence) applySessionEvent(event.payload);
+        }
+        // HTTP can see the end of a run before the event socket catches up.
+        for (const session of sessions.values()) {
+          const before = previous.get(session.key);
+          if (before?.status === session.status) continue;
+          const status = {
+            type: 'status',
+            key: session.key,
+            status: session.status,
+          };
+          for (const fn of listeners) fn(status);
+        }
       })
       .finally(() => {
-        refreshing = null;
-      }));
+        if (refreshing === flight) refreshing = null;
+      });
+    return flight.promise;
+  };
   const runtime = {
     api,
     boot: snapshot.boot,
@@ -138,9 +176,8 @@ async function createBackendRuntime(client) {
   bootTimer.unref();
   client.onEvent(async (event) => {
     if (event.type === 'snapshot') {
-      runtime.boot = event.snapshot.boot;
-      sessions = new Map(event.snapshot.sessions.map((s) => [s.key, s]));
-      views = new Map(Object.entries(event.snapshot.views));
+      refreshing = null;
+      setSnapshot(event.snapshot);
       for (const fn of listeners) fn({ type: 'reconnected' });
       return;
     }
@@ -151,17 +188,13 @@ async function createBackendRuntime(client) {
     }
     if (event.channel !== 'agent:session-event') return;
     const data = event.payload;
-    if (data.type === 'session-created') sessions.set(data.key, data.session);
-    if (data.type === 'session-closed') {
-      sessions.delete(data.key);
-      views.delete(data.key);
+    if (['session-created', 'session-closed', 'status', 'title'].includes(data.type)) {
+      const coveredBySnapshot = event.sequence <= snapshotSequence;
+      if (!coveredBySnapshot) {
+        applySessionEvent(data);
+        refreshing?.events.push(event);
+      } else if (data.type === 'status') return;
     }
-    if (data.type === 'status' && sessions.has(data.key))
-      Object.assign(sessions.get(data.key), {
-        status: data.status,
-        busy: data.status === 'running',
-      });
-    if (data.type === 'title' && sessions.has(data.key)) sessions.get(data.key).title = data.title;
     if (data.type === 'messages-deleted') {
       try {
         await refresh();

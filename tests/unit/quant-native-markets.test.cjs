@@ -45,7 +45,15 @@ function fixture(t, publicProduct = async () => metadata) {
     state: 'connected',
     call: async (method, params) => {
       calls.push({ method, params });
-      return { feed: { version: 1, boundedDepth: true, sourceClock: true } };
+      return {
+        feed: {
+          version: 1,
+          boundedDepth: true,
+          sourceClock: true,
+          clockNormalization: true,
+          movingCoverage: true,
+        },
+      };
     },
     feed: async (method, params) => {
       calls.push({ method, params });
@@ -107,6 +115,31 @@ test('stop during metadata discovery prevents stale startup from creating a sour
   await pending;
   assert.equal(manager.inspect().sources.length, 0);
   assert.equal(calls.length, 0);
+});
+test('same product on two venues has separate rules, start and stop state', async (t) => {
+  const { manager } = fixture(t);
+  manager.market.krakenProduct = async () => ({
+    wsname: 'ETH/USD',
+    altname: 'ETHUSD',
+    aclass_base: 'currency',
+    aclass_quote: 'currency',
+    status: 'online',
+    lot_decimals: 8,
+    lot_multiplier: 1,
+    tick_size: '0.05',
+    ordermin: '0.002',
+    costmin: '0.5',
+  });
+  const [coinbase, kraken] = await Promise.all([
+    manager.start({ product: 'ETH-USD' }),
+    manager.start({ product: 'ETH-USD', venue: 'kraken' }),
+  ]);
+  assert.match(coinbase.instrument, /^coinbase:ETH-USD:/);
+  assert.match(kraken.instrument, /^kraken:ETH-USD:/);
+  assert.equal(kraken.assumptions.tick, '0.05');
+  const stopped = await manager.stop('ETH-USD', 'kraken');
+  assert.equal(stopped.sources.find((s) => s.venue === 'kraken').desired, false);
+  assert.equal(stopped.sources.find((s) => s.venue === 'coinbase').desired, true);
 });
 test('wrong product metadata fails without registration; a native exit stops every source', async (t) => {
   const bad = fixture(t, async () => ({ ...metadata, product_id: 'BTC-USD' }));

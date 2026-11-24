@@ -12,6 +12,85 @@ const { TuiApp } = require('../../src/tui/app.js');
 const { createKeyDecoder } = require('../../src/tui/keys.js');
 const { stripAnsi, visibleWidth } = require('../../src/tui/ansi.js');
 const { themeFromEnv } = require('../../src/tui/theme.js');
+const { createBackendRuntime } = require('../../src/tui/backend-runtime.js');
+
+test('an older session snapshot cannot revive the TUI spinner after a run ends', async () => {
+  const snapshot = (busy, sequence) => ({
+    boot: { ready: true },
+    sequence,
+    sessions: [{ key: 'race', mode: 'chat', busy, status: busy ? 'running' : 'idle' }],
+    views: {},
+  });
+  let onEvent;
+  let replySnapshot;
+  let nextSnapshot = snapshot(false, 0);
+  let deferSnapshot = false;
+  const runtime = await createBackendRuntime({
+    connect: async () => snapshot(false, 0),
+    request: async (method) => {
+      if (method === 'snapshot')
+        return deferSnapshot ? new Promise((resolve) => (replySnapshot = resolve)) : nextSnapshot;
+      if (method === 'getTodos') return [];
+    },
+    onEvent: (fn) => (onEvent = fn),
+    onError: (error) => assert.fail(error),
+    close() {},
+  });
+  const app = new TuiApp({ runtime });
+  try {
+    await app.start();
+    const status = (value, sequence) =>
+      onEvent({
+        sequence,
+        channel: 'agent:session-event',
+        payload: { key: 'race', type: 'status', status: value },
+      });
+    await status('running', 1);
+    await app.settled();
+    assert.equal(app.state.running, true);
+    deferSnapshot = true;
+    const refresh = runtime.refresh();
+    await status('idle', 2);
+    replySnapshot(snapshot(true, 1));
+    await refresh;
+    await app.settled();
+    assert.equal(runtime.getSession('race').busy, false);
+    assert.equal(app.state.running, false);
+    assert.doesNotMatch(stripAnsi(app.frame().lines.join('\n')), /思考中/);
+
+    deferSnapshot = false;
+    await status('running', 3);
+    await app.settled();
+    assert.equal(app.state.running, true);
+    nextSnapshot = snapshot(false, 5);
+    await runtime.refresh();
+    await app.settled();
+    assert.equal(app.state.running, false);
+    await status('running', 4);
+    await app.settled();
+    assert.equal(runtime.getSession('race').busy, false);
+    assert.equal(app.state.running, false);
+
+    // Loading history and other session maintenance can hold the busy lock while idle.
+    nextSnapshot = snapshot(true, 6);
+    nextSnapshot.sessions[0].status = 'idle';
+    await runtime.refresh();
+    await app.settled();
+    assert.equal(runtime.getSession('race').busy, true);
+    assert.equal(app.state.running, false);
+    await app._switchSession('race', { reload: true });
+    assert.equal(app.state.running, false);
+    nextSnapshot = snapshot(false, 7);
+    await runtime.refresh();
+    await app.settled();
+    assert.equal(app.state.running, false);
+  } finally {
+    deferSnapshot = false;
+    replySnapshot?.(snapshot(false, 2));
+    app.dispose();
+    runtime.dispose();
+  }
+});
 
 test('/claude chooses a subscription model for the current session and defaults, and keeps manual OAuth codes out of input history', async () => {
   const runtime = makeFakeRuntime();
@@ -448,6 +527,7 @@ test('late send failures do not change the active session or its running state',
   assert.equal(app.state.running, true);
   assert.ok(!frameText(app).includes('first failed'));
   await app._switchSession(first);
+  assert.equal(app.state.running, false);
   assert.ok(frameText(app).includes('first failed'));
 });
 

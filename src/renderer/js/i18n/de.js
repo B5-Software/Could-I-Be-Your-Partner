@@ -4007,6 +4007,12 @@ Object.assign(DE_DICT._textMap, {
   '点击菜单、定位输入光标、滚轮翻页和拖选复制。关闭后使用终端原生鼠标行为；也可使用 /mouse on 或 /mouse off。': DE_DICT['ui.settings.tui.mouseHint'],
 });
 Object.assign(DE_DICT, Object.fromEntries(Object.entries(DE_DICT.ui.frontend).map(([key, value]) => ['ui.frontend.' + key, value])));
+DE_DICT['ui.agent.iterationLimitReached'] = 'Der Agent hat sein Limit von {limit} Schritten erreicht.';
+Object.assign(DE_DICT._textMap, {
+  'Agent 执行': 'Agent-Ausführung',
+  'Agent 循环轮数上限': 'Maximale Anzahl an Agent-Schritten',
+  '每次执行默认最多 1024 轮。填 0 表示无上限。适用于聊天、编程、Babe、任务目标及子 Agent。': 'Pro Ausführung sind standardmäßig 1.024 Schritte möglich. 0 hebt das Limit auf. Gilt für Chat, Code, Babe, Ziele und Unteragenten.',
+});
 i18nRegister('de', DE_DICT);
 
 Object.assign(DE_DICT, {

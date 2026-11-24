@@ -67,6 +67,7 @@ fn fixture(test: impl FnOnce(Ledger, BTreeMap<String, Book>, Matcher, Runner, &s
             tick: n("1"),
             lot: n("0.1"),
             min_notional: n("1"),
+            min_quantity: None,
             fee_bps: 10,
         })
         .unwrap();

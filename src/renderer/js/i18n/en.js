@@ -3976,6 +3976,12 @@ Object.assign(EN_DICT._textMap, {
   '点击菜单、定位输入光标、滚轮翻页和拖选复制。关闭后使用终端原生鼠标行为；也可使用 /mouse on 或 /mouse off。': EN_DICT['ui.settings.tui.mouseHint'],
 });
 Object.assign(EN_DICT, Object.fromEntries(Object.entries(EN_DICT.ui.frontend).map(([key, value]) => ['ui.frontend.' + key, value])));
+EN_DICT['ui.agent.iterationLimitReached'] = 'Agent reached its configured {limit} iteration limit.';
+Object.assign(EN_DICT._textMap, {
+  'Agent 执行': 'Agent execution',
+  'Agent 循环轮数上限': 'Agent loop limit',
+  '每次执行默认最多 1024 轮。填 0 表示无上限。适用于聊天、编程、Babe、任务目标及子 Agent。': 'Each run defaults to 1,024 iterations. Enter 0 for unlimited. Applies to Chat, Code, Babe, goals, and subagents.',
+});
 i18nRegister('en', EN_DICT);
 
 Object.assign(EN_DICT, {

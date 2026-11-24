@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 import labels from '../../shared/quant-native-paper-labels.json';
+import { nativeVenueLabel, nativeVenueOptions, nativeSourceMatches } from './quant-native-venue';
 import sourceLabels from '../../shared/quant-source-labels.json';
 import type {
   NativePaperStatus,
@@ -29,7 +30,7 @@ export function openNativePaper(options: Options): void {
   const field = (key: Key, name: string, value = '', extra = '') =>
     `<label>${escape(t(key))}<input name="${name}" value="${escape(value)}" ${extra}></label>`;
   const timeInForce = { gtc: 'npGtc', ioc: 'npIoc', fok: 'npFok' } as const;
-  dialog.innerHTML = `<header><div><h2>${escape(t('npTitle'))}</h2><p>${escape(t('npHint'))}</p></div>${button('npClose', 'close')}</header><p class="quant-hint">${escape(t('npShare'))}</p><p data-np-error role="alert" hidden></p><section class="np-toolbar">${button('npStart', 'start')}<label>${escape(t('npSelect'))}<select data-np-accounts><option value="">${escape(t('npNone'))}</option></select></label>${button('npCreate', 'create')}${button('npRefresh', 'refresh')}</section><section data-np-account aria-live="polite"></section><form data-np-create hidden><h3>${escape(t('npCreate'))}</h3><div class="np-grid">${field('npName', 'name', 'Paper')}${field('npCash', 'cash', '10000', 'inputmode="decimal"')}${field('npMaxOrder', 'maxOrder', '1000', 'inputmode="decimal"')}${field('npMaxOrders', 'maxOrders', '20', 'type="number" min="1" max="10000"')}</div><details><summary>${escape(t('npAdvanced'))}</summary><div class="np-grid">${['ETH', 'BTC', 'SOL'].map((asset, i) => `<label>${escape(t('npInitial'))} · ${asset}<input name="fund${asset}" value="0" inputmode="decimal"></label><label>${escape(t('npPositionLimit'))} · ${asset}<input name="cap${asset}" value="${[10, 1, 100][i]}" inputmode="decimal"></label>`).join('')}</div></details><footer><button type="submit" class="quant-primary">${escape(t('npCreate'))}</button>${button('npBack', 'create-back')}</footer></form><form data-np-order><div class="np-grid"><label>${escape(t('npProduct'))}<select name="product"><option>ETH-USD</option><option>BTC-USD</option><option>SOL-USD</option></select></label><label>${escape(t('npSide'))}<select name="side"><option value="buy">${escape(t('npBuy'))}</option><option value="sell">${escape(t('npSell'))}</option></select></label>${field('npPrice', 'price', '', 'inputmode="decimal" required')}<label>${escape(t('npTimeInForce'))}<select name="timeInForce">${Object.entries(
+  dialog.innerHTML = `<header><div><h2>${escape(t('npTitle'))}</h2><p>${escape(t('npHint'))}</p></div>${button('npClose', 'close')}</header><p class="quant-hint">${escape(t('npShare'))}</p><p data-np-error role="alert" hidden></p><section class="np-toolbar">${button('npStart', 'start')}<label>${escape(t('npSelect'))}<select data-np-accounts><option value="">${escape(t('npNone'))}</option></select></label>${button('npCreate', 'create')}${button('npRefresh', 'refresh')}</section><section data-np-account aria-live="polite"></section><form data-np-create hidden><h3>${escape(t('npCreate'))}</h3><div class="np-grid">${field('npName', 'name', 'Paper')}${field('npCash', 'cash', '10000', 'inputmode="decimal"')}${field('npMaxOrder', 'maxOrder', '1000', 'inputmode="decimal"')}${field('npMaxOrders', 'maxOrders', '20', 'type="number" min="1" max="10000"')}</div><details><summary>${escape(t('npAdvanced'))}</summary><div class="np-grid">${['ETH', 'BTC', 'SOL'].map((asset, i) => `<label>${escape(t('npInitial'))} · ${asset}<input name="fund${asset}" value="0" inputmode="decimal"></label><label>${escape(t('npPositionLimit'))} · ${asset}<input name="cap${asset}" value="${[10, 1, 100][i]}" inputmode="decimal"></label>`).join('')}</div></details><footer><button type="submit" class="quant-primary">${escape(t('npCreate'))}</button>${button('npBack', 'create-back')}</footer></form><form data-np-order><div class="np-grid"><label>${escape(sourceLabels[language()].sourceVenue)}<select name="venue">${nativeVenueOptions()}</select></label><label>${escape(t('npProduct'))}<select name="product"><option>ETH-USD</option><option>BTC-USD</option><option>SOL-USD</option></select></label><label>${escape(t('npSide'))}<select name="side"><option value="buy">${escape(t('npBuy'))}</option><option value="sell">${escape(t('npSell'))}</option></select></label>${field('npPrice', 'price', '', 'inputmode="decimal" required')}<label>${escape(t('npTimeInForce'))}<select name="timeInForce">${Object.entries(
     timeInForce,
   )
     .map(([value, key]) => `<option value="${value}">${escape(t(key))}</option>`)
@@ -206,7 +207,8 @@ export function openNativePaper(options: Options): void {
           .querySelector<HTMLButtonElement>('[data-np=enable]')
           ?.setAttribute('disabled', '');
       const product = el<HTMLSelectElement>('[data-np-order] [name=product]').value,
-        source = status.sources.find((s) => s.product === product);
+        venue = el<HTMLSelectElement>('[data-np-order] [name=venue]').value,
+        source = status.sources.find((s) => nativeSourceMatches(s, product, venue));
       const phase = source?.phase,
         key =
           phase === 'ready'
@@ -221,7 +223,7 @@ export function openNativePaper(options: Options): void {
                     ? 'sourceStop'
                     : 'sourceResolving';
       el('[data-np-source]').textContent = source
-        ? `${product} · ${sourceLabels[language()][key]} · ${source.assumptions?.feeBps ?? '—'} bps${source.lastError ? ' · ' + source.lastError : ''}`
+        ? `${nativeVenueLabel(venue)} · ${product} · ${sourceLabels[language()][key]} · ${source.assumptions?.feeBps ?? '—'} bps${source.lastError ? ' · ' + source.lastError : ''}`
         : '';
       el<HTMLButtonElement>('[data-np-order] [type=submit]').disabled =
         !a?.active || phase !== 'ready' || busy || !!status.pendingOrder;
@@ -296,10 +298,8 @@ export function openNativePaper(options: Options): void {
     const accountId = el<HTMLSelectElement>('[data-np-accounts]').value;
     if (accountId) void run(() => call('bind', { accountId }));
   });
-  el<HTMLSelectElement>('[data-np-order] [name=product]').addEventListener(
-    'change',
-    () => void refresh(),
-  );
+  for (const field of dialog.querySelectorAll('[data-np-order] :is([name=product], [name=venue])'))
+    field.addEventListener('change', () => void refresh());
   dialog.addEventListener('click', (event) => {
     const node = (event.target as HTMLElement).closest<HTMLButtonElement>('button');
     if (!node || node.disabled) return;
@@ -374,13 +374,11 @@ export function openNativePaper(options: Options): void {
       return;
     }
     if (action === 'source') {
+      const product = el<HTMLSelectElement>('[data-np-order] [name=product]').value;
+      const venue = el<HTMLSelectElement>('[data-np-order] [name=venue]').value;
+      const source = status?.sources.find((s) => nativeSourceMatches(s, product, venue));
       void run(() =>
-        call('native.source.start', {
-          product: el<HTMLSelectElement>('[data-np-order] [name=product]').value,
-          feeBps: status?.sources.find(
-            (s) => s.product === el<HTMLSelectElement>('[data-np-order] [name=product]').value,
-          )?.assumptions?.feeBps,
-        }),
+        call('native.source.start', { product, venue, feeBps: source?.assumptions?.feeBps }),
       );
       return;
     }
@@ -411,7 +409,7 @@ export function openNativePaper(options: Options): void {
     event.preventDefault();
     const form = new FormData(event.target as HTMLFormElement),
       data = Object.fromEntries(
-        ['product', 'side', 'timeInForce', 'price', 'quantity'].map((k) => [
+        ['venue', 'product', 'side', 'timeInForce', 'price', 'quantity'].map((k) => [
           k,
           String(form.get(k) || ''),
         ]),

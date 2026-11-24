@@ -16,13 +16,7 @@ const abs = (value) => (value < 0n ? -value : value);
 const file = (directory, runId) =>
   path.join(directory, 'execution-benchmarks', digest(runId) + '.json');
 
-function arrivalRatio(arrival) {
-  const sqrt = BigInt(arrival.sqrt_price_x96);
-  const squared = sqrt * sqrt;
-  const q192 = 1n << 192n;
-  // Reference ratio is USDC atoms per WETH atom, before the pool fee.
-  return arrival.weth_is_token0 ? [squared, q192] : [q192, squared];
-}
+const { poolPriceRatio } = require('../../../shared/quant-execution-format');
 
 function arrivalMinimum(run, inputAtoms) {
   const bps = run.plan.max_arrival_cost_bps;
@@ -30,7 +24,7 @@ function arrivalMinimum(run, inputAtoms) {
   if (!Number.isInteger(bps) || bps < 0 || bps >= 10000)
     throw Error('EXECUTION_ARRIVAL_LIMIT_RANGE');
   if (!run.arrival) throw Error('EXECUTION_ARRIVAL_REQUIRED');
-  const [num, den] = arrivalRatio(run.arrival);
+  const [num, den] = poolPriceRatio(run.arrival);
   const input = BigInt(inputAtoms);
   const buying = run.plan.side === 'buy';
   const numerator = buying ? input * den * 10000n : input * num * BigInt(10000 - bps);
@@ -40,7 +34,7 @@ function arrivalMinimum(run, inputAtoms) {
 
 function arrivalComparison(run, fill) {
   if (!run.arrival) return null;
-  const [num, den] = arrivalRatio(run.arrival);
+  const [num, den] = poolPriceRatio(run.arrival);
   const referencePriceAtoms = String((num * 10n ** 18n) / den);
   if (!fill.observed) return { referencePriceAtoms, costUsdcAtoms: null, costBpsHundredths: null };
   const buying = run.plan.side === 'buy';

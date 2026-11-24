@@ -102,7 +102,11 @@ async function createNodeRuntime({
     const defaults = require('../main/settings/defaults')({
       DEFAULT_DECISION_SETTINGS: require('../main/decision-service').DEFAULT_DECISION_SETTINGS,
     }).DEFAULT_SETTINGS;
-    let settings = merge(merge(defaults, read(file('settings'), {})), initial);
+    const iterationSettings = require('../shared/agent-iterations');
+    let settings = merge(
+      merge(defaults, iterationSettings.migrate(read(file('settings'), {}))),
+      iterationSettings.migrate(initial),
+    );
     settings.runtime = { ...settings.runtime, location: 'host' };
     const netProxy = require('../main/net-proxy');
     const networkPrivacy = new (require('../main/services/network-privacy').NetworkPrivacy)({
@@ -248,7 +252,7 @@ async function createNodeRuntime({
     });
     bind('settings:get', () => structuredClone(settings));
     bind('settings:set', (changes) => {
-      const next = merge(structuredClone(settings), changes);
+      const next = merge(structuredClone(settings), iterationSettings.migrate(changes));
       if (next.runtime?.location !== 'host')
         throw new RemoteError('CAPABILITY_UNAVAILABLE', 'Mini executes on its host');
       atomic(file('settings'), next);

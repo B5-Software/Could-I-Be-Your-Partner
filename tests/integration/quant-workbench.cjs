@@ -6,6 +6,213 @@ const fs = require('node:fs'),
   path = require('node:path'),
   os = require('node:os'),
   assert = require('node:assert/strict');
+const { createConnection } = require('node:net');
+const { once } = require('node:events');
+const { duplexPair } = require('node:stream');
+const { randomUUID } = require('node:crypto');
+const { crc32 } = require('node:zlib');
+const { Agent, WebSocket: RuntimeWebSocket } = require('undici');
+const { WebSocketServer } = require('ws');
+const orderFeedServer = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+const listening = once(orderFeedServer, 'listening');
+let orderFeedSocket;
+orderFeedServer.on('connection', (socket) => {
+  socket.once('message', (data) => {
+    const subscription = JSON.parse(data.toString());
+    assert.equal(subscription.type, 'subscribe');
+    assert.equal(subscription.key, 'fixture-key');
+    assert.equal(subscription.passphrase, 'fixture-passphrase');
+    assert.deepEqual(
+      subscription.channels,
+      ['user', 'heartbeat'].map((name) => ({ name, product_ids: ['ETH-USD'] })),
+    );
+    orderFeedSocket = socket;
+    socket.send(JSON.stringify({ type: 'subscriptions', channels: subscription.channels }));
+  });
+});
+const network = require('../../src/main/net-proxy');
+const fixNetwork = require('../../src/main/services/quant/coinbase-fix-network');
+const { FixFramer, encode: fixEncode } = require('../../src/main/services/quant/coinbase-fix-wire');
+const fixRequests = [];
+let nativeFixOrder, stopFixOrder, tpslFixOrder, repriceTpsl;
+fixNetwork.connectFix = async (env) => {
+  assert.equal(env, 'sandbox');
+  const [client, venue] = duplexPair();
+  const framer = new FixFramer();
+  let sequence = 1;
+  const send = (type, fields = []) =>
+    venue.write(
+      fixEncode(
+        {
+          type,
+          from: 'Coinbase',
+          to: 'fixture-key',
+          sequence: sequence++,
+        },
+        fields,
+      ),
+    );
+  venue.on('data', (data) =>
+    framer.push(data, (fields) => {
+      const type = fields.get(35);
+      fixRequests.push(type);
+      if (type === 'A') {
+        assert.equal(fields.get(553), 'fixture-key');
+        assert.equal(fields.get(8013), undefined);
+        send('A', [
+          [108, '10'],
+          [141, 'Y'],
+        ]);
+      } else if (type === 'H') {
+        assert.equal(fields.get(11), sandboxOrder.client_oid);
+        assert.equal(fields.get(55), sandboxOrder.product_id);
+        send('8', [
+          [11, sandboxOrder.client_oid],
+          [37, sandboxOrder.id],
+          [150, 'I'],
+          [39, '1'],
+          [55, sandboxOrder.product_id],
+          [54, '1'],
+          [14, '0.025'],
+          [151, '0.075'],
+        ]);
+      } else if (type === 'D' && fields.get(40) === '4') {
+        assert.equal(fields.get(99), '1925');
+        assert.equal(fields.get(1109), 'D');
+        assert.equal(fields.get(44), '1900');
+        stopFixOrder = {
+          ...nativeFixOrder,
+          client_oid: fields.get(11),
+          id: '55555555-2222-3333-4444-555555555555',
+          type: 'stop',
+          stop: 'loss',
+          stop_price: fields.get(99),
+          price: fields.get(44),
+          size: fields.get(38),
+          status: 'active',
+          filled_size: '0',
+          executed_value: '0',
+          fill_fees: '0',
+        };
+        send('8', [
+          [11, stopFixOrder.client_oid],
+          [37, stopFixOrder.id],
+          [17, randomUUID()],
+          [150, '0'],
+          [39, 'A'],
+          [55, 'ETH-USD'],
+          [40, '4'],
+          [99, '1925'],
+          [1109, 'D'],
+          [44, '1900'],
+          [14, '0'],
+          [151, '0.1'],
+        ]);
+      } else if (type === 'D' && fields.get(40) === 'O') {
+        assert.deepEqual(
+          [44, 99, 3040, 1109, 18].map((tag) => fields.get(tag)),
+          ['1880', '1920', '1940', undefined, undefined],
+        );
+        tpslFixOrder = {
+          ...nativeFixOrder,
+          id: '66666666-2222-3333-4444-555555555555',
+          client_oid: fields.get(11),
+          price: fields.get(44),
+          size: fields.get(38),
+          stop: 'entry',
+          stop_price: fields.get(99),
+          stop_limit_price: fields.get(3040),
+          post_only: false,
+          filled_size: '0',
+          executed_value: '0',
+          fill_fees: '0',
+        };
+        const identity = [
+          [11, tpslFixOrder.client_oid],
+          [37, tpslFixOrder.id],
+          [40, 'O'],
+          [55, 'ETH-USD'],
+          [39, '0'],
+        ];
+        send('8', [
+          ...identity,
+          [17, randomUUID()],
+          [150, '0'],
+          [44, tpslFixOrder.price],
+          [99, '1920'],
+          [3040, '1940'],
+          [14, '0'],
+          [151, '0.1'],
+        ]);
+        repriceTpsl = () => {
+          tpslFixOrder.price = tpslFixOrder.stop_limit_price;
+          send('8', [
+            ...identity,
+            [17, randomUUID()],
+            [150, 'D'],
+            [378, '3'],
+            [44, tpslFixOrder.price],
+          ]);
+        };
+      } else if (type === 'D' || type === 'G') {
+        const amended = type === 'G';
+        if (amended) {
+          assert.equal(fields.get(37), nativeFixOrder.id);
+          assert.equal(fields.get(41), nativeFixOrder.client_oid);
+        }
+        nativeFixOrder = {
+          id: '33333333-2222-3333-4444-555555555555',
+          profile_id: '11111111-2222-3333-4444-555555555555',
+          client_oid: fields.get(11),
+          product_id: fields.get(55),
+          side: 'buy',
+          type: 'limit',
+          time_in_force: 'GTC',
+          post_only: true,
+          status: 'open',
+          size: fields.get(38),
+          price: fields.get(44),
+          filled_size: '0.025',
+          executed_value: '50',
+          fill_fees: '0.2',
+        };
+        send('8', [
+          [11, nativeFixOrder.client_oid],
+          [37, nativeFixOrder.id],
+          [17, randomUUID()],
+          [150, amended ? '5' : 'F'],
+          [39, amended ? '5' : '1'],
+          [54, '1'],
+          [55, 'ETH-USD'],
+          [18, 'A'],
+          [14, '0.025'],
+          [151, amended ? '0.05' : '0.075'],
+          [44, nativeFixOrder.price],
+          [38, nativeFixOrder.size],
+          ...(amended ? [[41, fields.get(41)]] : []),
+        ]);
+      } else assert.equal(type, '0');
+    }),
+  );
+  return client;
+};
+const publicDispatcher = network.createWebSocketDispatcher;
+const privateFeedUrl = 'wss://ws-feed-public.sandbox.exchange.coinbase.com';
+network.createWebSocketDispatcher = async (url, options) => {
+  if (url !== privateFeedUrl) return publicDispatcher(url, options);
+  await listening;
+  return new Agent({
+    connect: (_options, callback) => {
+      const socket = createConnection(orderFeedServer.address().port, '127.0.0.1');
+      const report = (error) => callback(error);
+      socket.once('error', report);
+      socket.once('connect', () => {
+        socket.off('error', report);
+        callback(null, socket);
+      });
+    },
+  });
+};
 app.disableHardwareAcceleration();
 const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'cibyp-quant-ui-'));
 for (const name of ['data', 'documents']) fs.mkdirSync(path.join(profile, name));
@@ -53,6 +260,10 @@ require('../../src/main/net-proxy').install = () => {};
 const realFetch = global.fetch,
   errors = [];
 let agentSteps = 0;
+let productionOrder,
+  productionCancel,
+  productionCancelAttempts = 0;
+let sandboxOrder;
 const word = (value) => '0x' + BigInt(value).toString(16).padStart(64, '0');
 const { CHAINS } = require('../../src/main/services/quant/market-data');
 const { deployments, routerAbi } = require('../../src/main/services/quant/base-swap');
@@ -71,8 +282,173 @@ while (x < sqrt) {
   x = ((2n ** 192n * 10n ** 12n) / 3100n / x + x) / 2n;
 }
 global.fetch = async (url, options = {}) => {
+  if (String(url).startsWith('https://api.exchange.coinbase.com/products/ETH-USD/')) {
+    assert.equal(options.headers?.['CB-ACCESS-KEY'], undefined);
+    const target = new URL(url);
+    const reply = (value) => new Response(JSON.stringify(value));
+    if (target.pathname.endsWith('/ticker'))
+      return reply({ time: new Date().toISOString(), price: '2000' });
+    if (target.pathname.endsWith('/book'))
+      return reply({ bids: [['1999', '1', 1]], asks: [['2001', '1', 1]], sequence: 9 });
+    if (target.pathname.endsWith('/candles')) {
+      const interval = Number(target.searchParams.get('granularity'));
+      const end = Math.floor(Date.now() / 1000 / interval) * interval;
+      return reply(
+        Array.from({ length: 30 }, (_, index) => [
+          end - (index + 1) * interval,
+          1990,
+          2010,
+          1998,
+          2000,
+          33,
+        ]),
+      );
+    }
+    throw Error('Unexpected Coinbase public market fixture request');
+  }
+  const liveExchange = String(url).startsWith('https://api.exchange.coinbase.com/');
+  if (liveExchange || String(url).startsWith('https://api-public.sandbox.exchange.coinbase.com/')) {
+    const target = new URL(url);
+    const route = target.pathname;
+    const profile = liveExchange
+      ? '22222222-2222-3333-4444-555555555555'
+      : '11111111-2222-3333-4444-555555555555';
+    const json = (body, status = 200) =>
+      new Response(JSON.stringify(body), {
+        status,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    if (liveExchange && !route.startsWith('/products/'))
+      assert.equal(options.headers['CB-ACCESS-KEY'], 'fixture-live-key');
+    if (route === '/accounts')
+      return json(
+        ['ETH', 'USD'].map((currency) => ({
+          currency,
+          profile_id: profile,
+          available: '10000',
+          trading_enabled: true,
+        })),
+      );
+    if (route === '/fees') return json({ maker_fee_rate: '0.004', taker_fee_rate: '0.006' });
+    if (route === '/products/ETH-USD')
+      return json({
+        id: 'ETH-USD',
+        base_currency: 'ETH',
+        quote_currency: 'USD',
+        status: 'online',
+        cancel_only: false,
+        auction_mode: false,
+        quote_increment: '0.01',
+        base_increment: '0.00000001',
+        min_market_funds: '10',
+      });
+    if (route === '/orders' && options.method === 'POST') {
+      if (!liveExchange && sandboxOrder) assert.equal(sandboxOrder.done_reason, 'canceled');
+      const result = {
+        ...JSON.parse(options.body),
+        id:
+          !liveExchange && sandboxOrder
+            ? '77777777-2222-3333-4444-555555555555'
+            : '99999999-2222-3333-4444-555555555555',
+        profile_id: profile,
+        status: 'open',
+        filled_size: '0',
+        executed_value: '0',
+        fill_fees: '0',
+        settled: false,
+      };
+      if (liveExchange) productionOrder = result;
+      else sandboxOrder = result;
+      return json(result);
+    }
+    if (liveExchange && productionOrder && route === '/orders/' + productionOrder.id) {
+      if (options.method === 'GET') return json(productionOrder);
+      assert.equal(options.method, 'DELETE');
+      assert.equal(target.searchParams.get('product_id'), 'ETH-USD');
+      productionCancelAttempts++;
+      if (productionCancelAttempts === 1)
+        return new Promise((resolve) => {
+          productionCancel = () => resolve(json({}, 503));
+        });
+      return json(productionOrder.id);
+    }
+    if (
+      !liveExchange &&
+      nativeFixOrder &&
+      route === '/orders/' + nativeFixOrder.id &&
+      options.method === 'GET'
+    )
+      return json(nativeFixOrder);
+    if (
+      !liveExchange &&
+      stopFixOrder &&
+      route === '/orders/' + stopFixOrder.id &&
+      options.method === 'GET'
+    )
+      return json(stopFixOrder);
+    if (
+      !liveExchange &&
+      tpslFixOrder &&
+      route === '/orders/' + tpslFixOrder.id &&
+      options.method === 'GET'
+    )
+      return json(tpslFixOrder);
+    if (!liveExchange && sandboxOrder && route === '/orders/' + sandboxOrder.id) {
+      if (options.method === 'GET') return json(sandboxOrder);
+      assert.equal(options.method, 'DELETE');
+      assert.equal(target.searchParams.get('product_id'), 'ETH-USD');
+      Object.assign(sandboxOrder, { status: 'done', done_reason: 'canceled', settled: true });
+      return json(sandboxOrder.id);
+    }
+    throw Error('Unexpected Coinbase fixture request');
+  }
   if (String(url) === 'https://api.coinbase.com/api/v3/brokerage/time')
     return new Response(JSON.stringify({ epochMillis: String(Date.now()) }));
+  if (String(url) === 'https://api.kraken.com/0/public/AssetPairs?pair=ETHUSD')
+    return Response.json({
+      error: [],
+      result: {
+        XETHZUSD: {
+          wsname: 'ETH/USD',
+          altname: 'ETHUSD',
+          aclass_base: 'currency',
+          aclass_quote: 'currency',
+          status: 'online',
+          lot_decimals: 8,
+          lot_multiplier: 1,
+          tick_size: '0.01',
+          ordermin: '0.002',
+          costmin: '0.5',
+        },
+      },
+    });
+  if (/^https:\/\/api\.kraken\.com\/0\/public\/(?:Trades|Depth|OHLC)\?/.test(String(url))) {
+    const target = new URL(url);
+    assert.equal(target.searchParams.get('pair'), 'ETHUSD');
+    const route = target.pathname.split('/').at(-1);
+    const interval = Number(target.searchParams.get('interval')) * 60;
+    const now = Date.now() / 1000;
+    const start = Math.floor(now / interval) * interval;
+    const result =
+      route === 'Trades'
+        ? [['2340.25', '0.002', now, 's', 'l', '', 1]]
+        : route === 'Depth'
+          ? { bids: [['2339.95', '1']], asks: [['2340.26', '2']] }
+          : Array.from({ length: 130 }, (_, i) => {
+              const open = 2300 + Math.round(i * 0.3 + Math.sin(i / 4) * 7);
+              return [
+                start - (129 - i) * interval,
+                String(open),
+                String(open + 4),
+                String(open - 3),
+                String(open + (i % 3) - 1),
+                String(open),
+                String(0.5 + (i % 7)),
+                i,
+              ];
+            });
+    return Response.json({ error: [], result: { XETHZUSD: result } });
+  }
   if (String(url) === 'https://api.coinbase.com/api/v3/brokerage/market/products/ETH-USD')
     return new Response(
       JSON.stringify({
@@ -374,7 +750,71 @@ class FixtureMarketSocket extends EventTarget {
     this.dispatchEvent(new Event('close'));
   }
 }
-require('undici').WebSocket = FixtureMarketSocket;
+class FixtureKrakenSocket extends EventTarget {
+  constructor() {
+    super();
+    setImmediate(() => {
+      this.dispatchEvent(new Event('open'));
+      this.frame({ channel: 'status', data: [{ system: 'online' }] });
+    });
+  }
+  frame(value) {
+    this.dispatchEvent(new MessageEvent('message', { data: JSON.stringify(value) }));
+  }
+  send(text) {
+    const { method, req_id, params } = JSON.parse(text);
+    if (method === 'ping') {
+      const timestamp = new Date().toISOString();
+      this.frame({ method: 'pong', req_id, time_in: timestamp, time_out: timestamp });
+      return;
+    }
+    assert.deepEqual(params.symbol, ['ETH/USD']);
+    this.frame({ method, req_id, success: true, result: { ...params, symbol: 'ETH/USD' } });
+    if (params.channel !== 'book') return;
+    const checksum = crc32('2339223311');
+    this.frame({
+      channel: 'book',
+      type: 'snapshot',
+      data: [
+        {
+          symbol: 'ETH/USD',
+          checksum,
+          bids: [{ price: 2331, qty: 1 }],
+          asks: [{ price: 2339, qty: 2 }],
+        },
+      ],
+    });
+    this.timer = setInterval(
+      () =>
+        this.frame({
+          channel: 'book',
+          type: 'update',
+          data: [
+            {
+              symbol: 'ETH/USD',
+              checksum,
+              bids: [],
+              asks: [],
+              timestamp: new Date().toISOString(),
+            },
+          ],
+        }),
+      200,
+    );
+    this.timer.unref();
+  }
+  close() {
+    clearInterval(this.timer);
+    this.dispatchEvent(new Event('close'));
+  }
+}
+require('undici').WebSocket = class FixtureSocket {
+  constructor(url, ...options) {
+    if (url === privateFeedUrl) return new RuntimeWebSocket(url, ...options);
+    if (url === 'wss://ws.kraken.com/v2') return new FixtureKrakenSocket();
+    return new FixtureMarketSocket(url, ...options);
+  }
+};
 app.on('browser-window-created', (_event, win) => {
   win.setOpacity(0);
   win.setSkipTaskbar(true);
@@ -412,6 +852,39 @@ ipcMain.once('app:renderer-ready', (event) =>
     const shot = async (name) => {
       await pause(250);
       fs.writeFileSync(path.join(preview, name), (await wc.capturePage()).toPNG());
+    };
+    const panelValue = (selector, property) =>
+      js(
+        `document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect()[${JSON.stringify(property)}]`,
+      );
+    const savedPanel = (key) =>
+      js(
+        `window.api.backendRequest('quant:request','workspace.get',{id:window.__quantTestId}).then(w=>w.preferences[${JSON.stringify(key)}])`,
+      );
+    const dragPanel = async (split, dx, dy) => {
+      const point = await js(`(() => {
+        const bar=document.querySelector('[data-quant-split=${split}]');
+        bar.scrollIntoView({block:'nearest'});
+        const r=bar.getBoundingClientRect();
+        return {x:Math.round((r.left+r.right)/2),y:Math.round((r.top+r.bottom)/2)};
+      })()`);
+      const send = (type, x, y, button, buttons) =>
+        wc.debugger.sendCommand('Input.dispatchMouseEvent', {
+          type,
+          x,
+          y,
+          button,
+          buttons,
+          clickCount: 1,
+        });
+      wc.debugger.attach('1.3');
+      try {
+        await send('mousePressed', point.x, point.y, 'left', 1);
+        await send('mouseMoved', point.x + dx, point.y + dy, 'left', 1);
+        await send('mouseReleased', point.x + dx, point.y + dy, 'left', 0);
+      } finally {
+        wc.debugger.detach();
+      }
     };
     const strategyUi = async (theme) => {
       await js("window.api.backendRequest('quant:request','native.start')");
@@ -785,6 +1258,35 @@ ipcMain.once('app:renderer-ready', (event) =>
         1,
       );
       await shot('quant-professional-dark.png');
+      const professionalChartHeight = await panelValue('[data-chart-home]', 'height');
+      for (const [split, dx, dy, selector, property, setting] of [
+        ['projects', 45, 0, '.quant-projects', 'width', 'projectWidth'],
+        ['assistant', -55, 0, '.quant-conversation', 'width', 'chatWidth'],
+        ['chart', 0, 42, '[data-chart-home]', 'height', 'chartShare'],
+      ]) {
+        const beforeSize = await panelValue(selector, property);
+        const beforeSetting = await savedPanel(setting);
+        await dragPanel(split, dx, dy);
+        await until(
+          `window.api.backendRequest('quant:request','workspace.get',{id:window.__quantTestId}).then(w=>Number.isInteger(w.preferences.${setting}) && w.preferences.${setting}!==${JSON.stringify(beforeSetting) ?? 'undefined'})`,
+        );
+        assert.ok(
+          (await panelValue(selector, property)) > beforeSize + 10,
+          `${split} expands by drag`,
+        );
+      }
+      await js(
+        "document.querySelector('[data-quant-split=projects]').dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowLeft'}))",
+      );
+      await until(
+        "window.api.backendRequest('quant:request','workspace.get',{id:window.__quantTestId}).then(w=>w.preferences.projectWidth<261)",
+      );
+      await js(
+        "document.querySelector('[data-quant-split=projects]').dispatchEvent(new MouseEvent('dblclick'))",
+      );
+      await until(
+        "window.api.backendRequest('quant:request','workspace.get',{id:window.__quantTestId}).then(w=>w.preferences.projectWidth===216)",
+      );
       await js("document.querySelector('[data-action=walk-forward]').click()");
       await until("!!document.querySelector('.quant-walk-forward-dialog[open]')");
       await js("document.querySelector('.quant-walk-forward-dialog [type=submit]').click()");
@@ -856,6 +1358,25 @@ ipcMain.once('app:renderer-ready', (event) =>
         await until(
           "document.querySelector('[data-source-status]').textContent.includes('已停止')",
         );
+        await js(`(() => {
+          const field = document.querySelector('[data-source-venue]');
+          field.value = 'kraken';
+          field.dispatchEvent(new Event('change', { bubbles: true }));
+        })()`);
+        await until("!document.querySelector('[data-source=start]').disabled");
+        await js("document.querySelector('[data-source=start]').click()");
+        await until(
+          "document.querySelector('[data-source-status]').textContent.includes('连续行情就绪')",
+        );
+        await js("document.querySelector('[data-source=book]').click()");
+        await until("document.querySelector('[data-source-book]').textContent.includes('2339')");
+        const krakenBook = await js(
+          "document.querySelector('.quant-source-book-dialog').textContent",
+        );
+        assert.match(krakenBook, /Kraken Spot/);
+        assert.match(krakenBook, /0\.002/);
+        await shot('quant-kraken-spot-book.png');
+        await js("document.querySelector('.quant-source-book-dialog [data-close]').click()");
         await js("document.querySelector('[data-native=stop]').click()");
         await until(
           "document.querySelector('[data-native-status]').textContent.includes('已停止')",
@@ -898,11 +1419,49 @@ ipcMain.once('app:renderer-ready', (event) =>
       await js("document.querySelector('[data-action=fullscreen]').click()");
       await js("document.querySelector('[data-action=immersive]').click()");
       await until("document.querySelector('[data-layout]').dataset.layout==='immersive'");
+      assert.ok((await panelValue('[data-chart-home]', 'height')) > professionalChartHeight + 100);
+      assert.ok((await panelValue('.quant-chart-surface', 'height')) > 350);
+      const marketBefore = await panelValue('.quant-center', 'width');
+      await dragPanel('assistant', 96, 0);
+      await until(
+        "window.api.backendRequest('quant:request','workspace.get',{id:window.__quantTestId}).then(w=>w.preferences.focusMarketShare>49)",
+      );
+      assert.ok((await panelValue('.quant-center', 'width')) > marketBefore + 30);
       await js(
         "window.api.setSettings({theme:{frontend:'v2',mode:'light',accentColor:'#527d76',backgroundColor:'#f7f8fa'}})",
       );
       await until("document.documentElement.dataset.theme==='light'");
       await shot('quant-immersive-light.png');
+      await js("document.querySelector('[data-action=focus-details]').click()");
+      await until(
+        "document.querySelector('[data-layout]').dataset.focusDetails==='true' && document.querySelector('.quant-bottom').getBoundingClientRect().height>100",
+      );
+      await js("document.querySelector('[data-action=focus-details]').click()");
+      await until("document.querySelector('[data-layout]').dataset.focusDetails==='false'");
+      win.setMinimumSize(440, 600);
+      win.setSize(560, 940);
+      await until(
+        "document.querySelector('[data-quant-split=assistant]').getAttribute('aria-orientation')==='horizontal'",
+      );
+      await js("document.querySelector('[data-action=tools-menu]').click()");
+      await until("document.querySelector('[data-action=wallet]').getClientRects().length>0");
+      await js("document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape'}))");
+      await until("document.querySelector('[data-action=wallet]').getClientRects().length===0");
+      const stackedHeight = await panelValue('[data-chart-home]', 'height');
+      await dragPanel('assistant', 0, 55);
+      await until(
+        "window.api.backendRequest('quant:request','workspace.get',{id:window.__quantTestId}).then(w=>w.preferences.focusStackMarketHeight>420)",
+      );
+      assert.ok((await panelValue('[data-chart-home]', 'height')) > stackedHeight + 30);
+      assert.ok((await panelValue('.quant-conversation', 'height')) >= 365);
+      await js("document.querySelector('[data-action=jump-chat]').click()");
+      await until(
+        "document.activeElement.matches('[data-chat-input]') && document.querySelector('[data-chat-form]').getBoundingClientRect().bottom <= document.querySelector('[data-layout]').getBoundingClientRect().bottom + 1",
+      );
+      await shot('quant-immersive-narrow-chat.png');
+      await js("document.querySelector('[data-action=jump-market]').click()");
+      await shot('quant-immersive-narrow.png');
+      win.setSize(1640, 1080);
       await js("document.querySelector('[data-action=professional]').click()");
       await until("document.querySelector('[data-layout]').dataset.layout==='professional'");
       await js('document.querySelector(\'[data-action="tab:research"]\').click()');
@@ -1059,6 +1618,58 @@ ipcMain.once('app:renderer-ready', (event) =>
       ]);
       assert.equal(plans.items[0].fixed, undefined);
       assert.equal(plans.items[0].commands_created, 0);
+      await js(`(() => {
+        document.querySelector('.le-dialog [data-le=new]').click();
+        const form = document.querySelector('.le-dialog form');
+        form.elements.schedule.value = 'settlement';
+        form.elements.schedule.dispatchEvent(new Event('change'));
+        form.elements.entryRelation.value = 'at-or-above';
+        form.elements.entryRelation.dispatchEvent(new Event('change'));
+        form.elements.entryPrice.value = '2000.123456';
+        form.requestSubmit();
+      })()`);
+      await until(
+        "document.querySelector('.le-dialog [data-le-detail]').textContent.includes('≥ 2000.123456 USDC/WETH')",
+      );
+      const conditionalEntry = await js(
+        "window.api.backendRequest('quant:request','execution.list',{id:window.__quantTestId}).then(p=>p.items.find(i=>i.plan.entry_trigger))",
+      );
+      assert.deepEqual(conditionalEntry.plan.entry_trigger, {
+        relation: 'at-or-above',
+        price_atoms: '2000123456',
+      });
+      assert.equal(conditionalEntry.phase, 'paused');
+      assert.equal(conditionalEntry.commands_created, 0);
+      assert.equal(await js("document.querySelector('.le-dialog [data-le=start]').disabled"), true);
+      await shot('quant-conditional-entry.png');
+      await js(`(() => {
+        document.querySelector('.le-dialog [data-le=new]').click();
+        const form = document.querySelector('.le-dialog form');
+        form.elements.side.value = 'sell';
+        form.elements.slices.value = '1';
+        form.elements.totalInput.value = '0.0001';
+        form.elements.minimumTotalOutput.value = '0.19';
+        form.elements.maxArrivalCostBps.value = '';
+        form.elements.entryRelation.value = 'protective-exit';
+        form.elements.entryRelation.dispatchEvent(new Event('change'));
+        form.elements.stopLossPrice.value = '1970';
+        form.elements.takeProfitPrice.value = '1990';
+        form.requestSubmit();
+      })()`);
+      await until(
+        "document.querySelector('.le-dialog [data-le-detail]').textContent.includes('≤ 1970 USDC/WETH')",
+      );
+      const protective = await js(
+        "window.api.backendRequest('quant:request','execution.list',{id:window.__quantTestId}).then(p=>p.items.find(i=>i.plan.protective_exit))",
+      );
+      assert.deepEqual(protective.plan.protective_exit, {
+        stop_loss_price_atoms: '1970000000',
+        take_profit_price_atoms: '1990000000',
+      });
+      assert.equal(protective.plan.side, 'sell');
+      assert.equal(protective.phase, 'paused');
+      assert.equal(protective.commands_created, 0);
+      await shot('quant-protective-exit.png');
       await js("document.querySelector('.le-dialog').close()");
       const stillPaused = await js(
         "window.api.backendRequest('quant:request','execution.list',{id:window.__quantTestId})",
@@ -1166,6 +1777,374 @@ ipcMain.once('app:renderer-ready', (event) =>
       await until(
         "!document.querySelector('.quant-question-dialog[open]') && document.querySelector('#page-quant').textContent.includes('已按一周的研究周期继续。')",
       );
+      if (process.platform === 'win32') {
+        await js("document.querySelector('.quant-project-controls [data-action=new]').click()");
+        await until("!!document.querySelector('.quant-dialog[open] select[name=venue]')");
+        await js(`(() => {
+          const form = document.querySelector('.quant-dialog[open] select[name=venue]').form;
+          form.elements.venue.value = 'coinbase';
+          form.elements.product.value = 'ETH-USD';
+          form.elements.name.value = 'Coinbase · UI TEST FIXTURE';
+          form.requestSubmit();
+        })()`);
+        await until(
+          "!document.querySelector('.quant-dialog[open] select[name=venue]') && document.querySelector('[data-project-select]').selectedOptions[0].textContent.includes('Coinbase')",
+        );
+        await js("document.querySelector('[data-action=live-execution]').click()");
+        await until("!!document.querySelector('[data-ex-env]')");
+        assert.equal(await js("document.querySelector('[data-ex-env]').value"), 'sandbox');
+        await js(`(() => {
+          const form = document.querySelector('[data-ex-credentials]');
+          form.closest('details').open = true;
+          form.elements.key.value = 'fixture-key';
+          form.elements.secret.value = ${JSON.stringify(Buffer.alloc(64, 22).toString('base64'))};
+          form.elements.passphrase.value = 'fixture-passphrase';
+          form.requestSubmit();
+        })()`);
+        await until("!!document.querySelector('[data-ex-order]:not([hidden])')");
+        assert.equal(
+          await js(`(() => {
+          const toggle = document.querySelector('[data-ex-order] [name=postOnly]');
+          const control = toggle.getBoundingClientRect();
+          const text = toggle.nextElementSibling.getBoundingClientRect();
+          return control.height === 24 && control.width === 44 && control.right < text.left &&
+            Math.abs(control.top + control.height / 2 - text.top - text.height / 2) < 2;
+        })()`),
+          true,
+        );
+        await js(`(() => {
+          const form = document.querySelector('[data-ex-order]');
+          form.elements.size.value = '0.1';
+          form.elements.price.value = '2000';
+          form.requestSubmit();
+        })()`);
+        await until("!!document.querySelector('[data-ex-submit]')");
+        await shot('quant-coinbase-exchange-review.png');
+        await js(
+          "document.querySelector('[data-ex-submit] [name=ack]').value='PLACE ORDER';document.querySelector('[data-ex-submit]').requestSubmit()",
+        );
+        await until(
+          "document.querySelector('[data-ex-history]').textContent.includes('99999999-2222-3333-4444-555555555555')",
+        );
+        await js(`(() => {
+          const row = document.querySelector('[data-ex-item]');
+          row.open = true;
+          row.querySelector('[name=ack]').value = 'CAN';
+          document.querySelector('[data-ex=watch]').click();
+        })()`);
+        await until(
+          "document.querySelector('[data-ex-watch-status]')?.textContent.includes('认证订单流已连接')",
+        );
+        await until(
+          "document.querySelector('[data-ex-watch-notice]')?.textContent.includes('最近核对')",
+        );
+        assert.ok(orderFeedSocket);
+        Object.assign(sandboxOrder, {
+          filled_size: '0.025',
+          executed_value: '50',
+          fill_fees: '0.2',
+        });
+        orderFeedSocket.send(
+          JSON.stringify({
+            type: 'match',
+            profile_id: sandboxOrder.profile_id,
+            product_id: 'ETH-USD',
+            maker_order_id: sandboxOrder.id,
+          }),
+        );
+        await until("document.querySelector('[data-ex-history]').textContent.includes('部分成交')");
+        await until(
+          "document.querySelector('[data-ex-history]').textContent.includes('成交手续费 · 0.2 USD')",
+        );
+        assert.equal(
+          await js("document.querySelector('[data-ex-item][open] [name=ack]').value"),
+          'CAN',
+        );
+        await shot('quant-coinbase-order-watch.png');
+        await js("document.querySelector('[data-ex=watch]').click()");
+        await until("document.querySelector('[data-ex-watch-status]').hidden");
+        await js("document.querySelector('[data-ex=fixQuery]').click()");
+        await until("!!document.querySelector('[data-ex-fix-report]:not([hidden])')");
+        assert.match(
+          await js("document.querySelector('[data-ex-fix-report]').textContent"),
+          /剩余数量 · 0\.075/,
+        );
+        assert.deepEqual(fixRequests.slice(0, 2), ['A', 'H']);
+        await shot('quant-coinbase-fix-verification.png');
+        await js("document.querySelector('[data-ex=fixToggle]').click()");
+        await until("document.querySelector('[data-ex-fix-status]').textContent === 'FIX 未连接'");
+        await js(`(() => {
+          document.querySelector('[data-ex=replace]').click();
+        })()`);
+        await until("!!document.querySelector('[data-ex-replacement-preview]')");
+        await js(`(() => {
+          const form = document.querySelector('[data-ex-replacement-preview]');
+          form.elements.size.value = '0.07';
+          form.elements.price.value = '2010';
+          form.requestSubmit();
+        })()`);
+        await until("!!document.querySelector('[data-ex-replacement-confirm]')");
+        assert.match(
+          await js("document.querySelector('[data-ex-replacement]').textContent"),
+          /已成交 · 0\.025/,
+        );
+        await shot('quant-coinbase-replacement.png');
+        await js(`(() => {
+          const form = document.querySelector('[data-ex-replacement-confirm]');
+          form.elements.ack.value = 'REPLACE ORDER';
+          form.requestSubmit();
+        })()`);
+        await until(
+          "document.querySelector('[data-ex-history]').textContent.includes('77777777-2222-3333-4444-555555555555')",
+        );
+        assert.match(await js("document.querySelector('[data-ex-history]').textContent"), /已撤单/);
+        await js("document.querySelector('[data-ex=fixToggle]').click()");
+        await until(
+          "!document.querySelector('[data-ex-order] [name=transport] option[value=fix]').disabled",
+        );
+        await js(`(() => {
+          const form = document.querySelector('[data-ex-order]');
+          form.elements.size.value = '0.1';
+          form.elements.price.value = '2000';
+          form.elements.postOnly.checked = true;
+          form.elements.transport.value = 'fix';
+          form.requestSubmit();
+        })()`);
+        await until("document.querySelector('[data-ex-submit]')?.textContent.includes('FIX 5.0')");
+        await js(`(() => {
+          const form = document.querySelector('[data-ex-submit]');
+          form.elements.ack.value = 'PLACE ORDER';
+          form.requestSubmit();
+        })()`);
+        await until("!!document.querySelector('[data-ex=amend]')");
+        await js(`(() => {
+          const button = document.querySelector('[data-ex=amend]');
+          button.closest('details').open = true;
+          button.click();
+        })()`);
+        await until("!!document.querySelector('[data-ex-amend]')");
+        await js(`(() => {
+          const form = document.querySelector('[data-ex-amend]');
+          form.elements.size.value = '0.075';
+          form.requestSubmit();
+        })()`);
+        await until(
+          "document.querySelector('[data-ex-replacement]')?.textContent.includes('保留排队位置')",
+        );
+        assert.match(
+          await js("document.querySelector('[data-ex-replacement]').textContent"),
+          /剩余名义金额 · 100 USD/,
+        );
+        assert.equal(await js("document.querySelector('[data-ex-fix-report]').hidden"), true);
+        await shot('quant-coinbase-fix-amendment.png');
+        await js(`(() => {
+          const form = document.querySelector('[data-ex-replacement-confirm]');
+          form.elements.ack.value = 'AMEND ORDER';
+          form.requestSubmit();
+        })()`);
+        await until(
+          "document.querySelector('[data-ex-history]')?.textContent.includes('改单已生效')",
+        );
+        assert.deepEqual(
+          fixRequests.filter((type) => type === 'D' || type === 'G'),
+          ['D', 'G'],
+        );
+        await js(`(() => {
+          const form = document.querySelector('[data-ex-order]');
+          const fields = form.elements;
+          fields.transport.value = 'fix';
+          fields.transport.dispatchEvent(new Event('change'));
+          fields.orderKind.value = 'stop-limit';
+          fields.orderKind.dispatchEvent(new Event('change'));
+          fields.price.value = '1900';
+          fields.size.value = '0.1';
+          fields.stopPrice.value = '1925';
+          fields.triggerDirection.value = 'down';
+          form.requestSubmit();
+        })()`);
+        await until(
+          "document.querySelector('[data-ex-submit]')?.textContent.includes('触发价 1925 USD')",
+        );
+        await shot('quant-coinbase-stop-limit-review.png');
+        await js(`(() => {
+          const form = document.querySelector('[data-ex-submit]');
+          form.elements.ack.value = 'PLACE ORDER';
+          form.requestSubmit();
+        })()`);
+        await until(
+          "document.querySelector('[data-ex-history]')?.textContent.includes('等待触发')",
+        );
+        assert.equal(fixRequests.filter((type) => type === 'D').length, 2);
+        await js(`(() => {
+          const form = document.querySelector('[data-ex-order]');
+          const fields = form.elements;
+          fields.orderKind.value = 'tpsl';
+          fields.orderKind.dispatchEvent(new Event('change'));
+          fields.price.value = '1880';
+          fields.stopPrice.value = '1920';
+          fields.stopLimitPrice.value = '1940';
+          form.requestSubmit();
+        })()`);
+        await until(
+          "document.querySelector('[data-ex-submit]')?.textContent.includes('最大订单名义金额 · 194 USD')",
+        );
+        await shot('quant-coinbase-tpsl-review.png');
+        await js(`(() => {
+          const form = document.querySelector('[data-ex-submit]');
+          form.elements.ack.value = 'PLACE ORDER';
+          form.requestSubmit();
+        })()`);
+        await until(
+          "document.querySelector('[data-ex-history]')?.textContent.includes('止盈已挂单，等待止损触发')",
+        );
+        assert.equal(fixRequests.filter((type) => type === 'D').length, 3);
+        repriceTpsl();
+        await until(
+          "document.querySelector('[data-ex-history]')?.textContent.includes('当前执行限价 1940 USD')",
+        );
+        assert.match(
+          await js("document.querySelector('[data-ex-history]').textContent"),
+          /止损已触发/,
+        );
+        await js(`(() => {
+          const form = document.querySelector('[data-ex-authority-form]');
+          form.closest('details').open = true;
+          form.elements.perOrder.value = '250';
+          form.elements.total.value = '500';
+          form.elements.maxOrders.value = '2';
+          form.requestSubmit();
+        })()`);
+        await until("!!document.querySelector('[data-ex-authority-confirm]')");
+        await shot('quant-coinbase-agent-review.png');
+        await js(`(() => {
+          const confirm = document.querySelector('[data-ex-authority-confirm]');
+          confirm.elements.ack.value = 'ALLOW EXCHANGE AGENT';
+          confirm.requestSubmit();
+        })()`);
+        await until(
+          "document.querySelector('[data-ex-grants]').textContent.includes('500 USD') && !!document.querySelector('[data-ex=revokeAuthority]')",
+        );
+        await js("document.querySelector('[data-ex=revokeAuthority]').click()");
+        await until(
+          "!!document.querySelector('[data-ex-grants] article') && !document.querySelector('[data-ex=revokeAuthority]')",
+        );
+        await js(`(() => {
+          const form = document.querySelector('[data-ex-authority-form]');
+          form.elements.transport.value = 'fix';
+          form.elements.transport.dispatchEvent(new Event('change'));
+          form.elements.allowAmend.click();
+          form.elements.allowStopLimit.click();
+          form.elements.allowTpsl.click();
+          form.elements.perOrder.value = '260';
+          form.elements.total.value = '500';
+          form.elements.maxOrders.value = '5';
+          form.elements.maxCancels.value = '3';
+          form.requestSubmit();
+        })()`);
+        await until(
+          "document.querySelector('[data-ex-authority-confirm]')?.textContent.includes('允许提交 FIX 触发限价单')",
+        );
+        assert.match(
+          await js("document.querySelector('[data-ex-authority-confirm]').textContent"),
+          /撤单次数上限（0 禁用）3/,
+        );
+        assert.match(
+          await js("document.querySelector('[data-ex-authority-confirm]').textContent"),
+          /允许提交 FIX 双腿止盈止损/,
+        );
+        await shot('quant-coinbase-fix-agent-authority.png');
+        await js(`(() => {
+          const form = document.querySelector('[data-ex-authority-confirm]');
+          form.elements.ack.value = 'ALLOW EXCHANGE AGENT';
+          form.requestSubmit();
+        })()`);
+        await until(
+          "document.querySelector('[data-ex-grants]')?.textContent.includes('剩余操作次数 5') && document.querySelector('[data-ex-grants]')?.textContent.includes('剩余撤单次数 · 3')",
+        );
+        await js("document.querySelector('[data-ex=close]').click()");
+        await js(`(async()=>{
+          const id = document.querySelector('[data-project-select]').value;
+          const request = (action, extra) => window.api.backendRequest('quant:request','exchange.'+action,{id,env:'live',...extra});
+          await request('connect',{key:'fixture-live-key',secret:${JSON.stringify(Buffer.alloc(64, 22).toString('base64'))},passphrase:'fixture-passphrase'});
+          const draft = await request('preview',{price:'2000',size:'0.1',side:'buy',postOnly:true,operationId:'gui-emergency-order'});
+          await request('confirm',{reviewId:draft.reviewId,specHash:draft.specHash,ack:'PLACE ORDER'});
+          window.navigatePage('settings');window.activateSettingsTab('wallet');
+        })()`);
+        await until("!!document.querySelector('[data-wallet-action=emergency-stop]')");
+        await js("document.querySelector('[data-wallet-action=emergency-stop]').click()");
+        await until(
+          "document.querySelector('[data-exchange-cancel]')?.textContent.includes('正在撤销 Coinbase')",
+        );
+        await until(
+          "document.querySelector('[data-wallet-action=emergency-reset]')?.disabled === true",
+        );
+        for (let i = 0; i < 60 && !productionCancel; i++) await pause(25);
+        assert.ok(productionCancel);
+        productionCancel();
+        await until("!!document.querySelector('[data-wallet-action=emergency-cancel-exchange]')");
+        await until(
+          "document.querySelector('[data-exchange-cancel]')?.textContent.includes('待核实 1 笔')",
+        );
+        await shot('wallet-coinbase-emergency.png');
+        await js(
+          "document.querySelector('[data-wallet-action=emergency-cancel-exchange]').click()",
+        );
+        await until(
+          "document.querySelector('[data-exchange-cancel]')?.textContent.includes('已撤 1 / 共 1 笔')",
+        );
+        assert.equal(productionCancelAttempts, 2);
+      }
+      await js("window.navigatePage('quant')");
+      await until("!!document.querySelector('#page-quant [data-action=new]')");
+      await js(`(() => {
+        document.querySelector('#page-quant [data-action=new]').click();
+        const form = document.querySelector('dialog[open].quant-dialog form');
+        form.elements.name.value = 'Kraken research fixture';
+        form.elements.venue.value = 'kraken';
+        form.elements.venue.dispatchEvent(new Event('change', { bubbles: true }));
+        form.elements.product.value = 'ETH-USD';
+        form.requestSubmit();
+      })()`);
+      await until(
+        "document.querySelector('#page-quant [data-venue]').textContent.includes('KRAKEN SPOT') && document.querySelector('#page-quant [data-chart-empty]').hidden",
+      );
+      await js(`(() => {
+        const select = document.querySelector('#page-quant [data-interval]');
+        select.value = '14400';
+        select.dispatchEvent(new Event('change', { bubbles: true }));
+      })()`);
+      await until(`(async () => {
+        const project = (await window.api.backendRequest('quant:request', 'workspace.list')).find(w => w.venue === 'kraken');
+        if (!project) return false;
+        window.__krakenUiId = project.id;
+        const w = await window.api.backendRequest('quant:request', 'workspace.get', { id: project.id });
+        return w.market.interval === 14400 && w.candles.length === 129;
+      })()`);
+      await until(
+        "document.querySelector('#page-quant [data-interval]').value === '14400' && !document.querySelector('#page-quant [data-action=capture-candles]').disabled",
+      );
+      await js("document.querySelector('#page-quant [data-action=capture-candles]').click()");
+      await until(
+        "document.querySelector('#page-quant [data-dataset]').value !== '' && document.querySelector('#page-quant [data-interval]').disabled",
+      );
+      assert.equal(
+        await js("document.querySelector('#page-quant [data-action=live-execution]').hidden"),
+        true,
+      );
+      assert.match(
+        await js("document.querySelector('#page-quant .quant-chart-source').textContent"),
+        /Kraken Spot/,
+      );
+      const result = await js(
+        "window.api.backendRequest('quant:request','run.backtest',{id:window.__krakenUiId,config:{strategy:'buy-hold'}})",
+      );
+      assert.equal(result.metrics.bars, 129);
+      assert.equal(result.dataSource, 'kraken-spot-committed-ohlc');
+      assert.equal(result.provenance.interval, 14400);
+      await until("!!document.querySelector('#page-quant [data-action=prompt-market]')");
+      await js('document.querySelector(\'#page-quant [data-action="tab:experiments"]\').click()');
+      await until(`!!document.querySelector('#page-quant [data-action="run:${result.id}"]')`);
+      await shot('quant-kraken-research.png');
       assert.deepEqual(errors, []);
       console.log(
         '[quant] PASS: shared backend, Base RPC, persistent datasets/experiments/goal/chat, professional/immersive/fullscreen charts, wallet confirmation gate and screenshots.',
@@ -1179,6 +2158,8 @@ ipcMain.once('app:renderer-ready', (event) =>
 );
 function finish(error) {
   clearTimeout(timeout);
+  for (const socket of orderFeedServer.clients) socket.terminate();
+  orderFeedServer.close();
   if (error) console.error(error.stack || error);
   app.exit(error ? 1 : 0);
 }

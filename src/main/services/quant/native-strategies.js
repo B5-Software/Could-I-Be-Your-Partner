@@ -1,7 +1,8 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 'use strict';
 const { createHash } = require('node:crypto');
-const { PRODUCTS, amount, decimal } = require('./coinbase-stream');
+const { amount, decimal } = require('./market-stream');
+const { selectNativeSource } = require('./native-markets');
 const fail = (code) => {
   throw Error(code);
 };
@@ -173,10 +174,11 @@ class NativeStrategies {
       if (input.strategyId) await get(strategyId);
       const revision = input.revision ?? 1;
       if (!Number.isInteger(revision) || revision < 1 || revision > 1000) fail('INVALID_STRATEGY');
-      if (!PRODUCTS.includes(input.product)) fail('SOURCE_MARKET_INVALID');
-      const source = service.nativeMarkets
-        .inspect()
-        .sources.find((s) => s.product === input.product);
+      const source = selectNativeSource(
+        service.nativeMarkets.inspect().sources,
+        input.product,
+        input.venue,
+      );
       if (!source?.instrument) fail('SOURCE_NOT_STARTED');
       const account = input.accountId ?? w.nativePaper?.accountId;
       if (!account) fail('NATIVE_ACCOUNT_REQUIRED');

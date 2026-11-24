@@ -30,6 +30,497 @@ function fixture(handler) {
   return { app, requests };
 }
 
+test('TUI opens sandbox by default and masks all Coinbase Exchange credentials', async () => {
+  setLanguage('en');
+  const { app, requests } = fixture((_method, action) => {
+    if (action === 'exchange.list')
+      return { product: 'ETH-USD', configured: false, drafts: [], items: [], next: null };
+    if (action === 'exchange.connect') return { configured: true };
+    throw Error(action);
+  });
+  const { ExchangeBrowser } = require('../../src/tui/quant-exchange');
+  const browser = new ExchangeBrowser({
+    ui: app.walletBrowser,
+    menu: app.walletBrowser.menu.bind(app.walletBrowser),
+    call: (action, input) => app.runtime.api.backendRequest('quant:request', action, input),
+    project: () => {},
+  });
+  await browser.open('fixture');
+  const connect = app.state.modal.options.find((option) => option.label === 'Connect account');
+  await app.state.modal.onChoose(connect.value);
+  for (const value of ['test-key', 'test-secret', 'test-passphrase']) {
+    assert.equal(app.state.modal.masked, true);
+    app.state.modal.editor.setValue(value);
+    assert.doesNotMatch(stripAnsi(app.frame().lines.join('\n')), new RegExp(value));
+    await app.state.modal.onSubmit();
+  }
+  assert.deepEqual(requests.find((request) => request.action === 'exchange.connect').input, {
+    id: 'fixture',
+    env: 'sandbox',
+    key: 'test-key',
+    secret: 'test-secret',
+    passphrase: 'test-passphrase',
+  });
+  app.dispose();
+});
+
+test('TUI exchanges watch controls refresh the order overview and preserve a nested input', async () => {
+  setLanguage('en');
+  let watch = { enabled: false, phase: 'off' };
+  const { app, requests } = fixture((_method, action, input) => {
+    if (action === 'exchange.list')
+      return { product: 'ETH-USD', configured: true, drafts: [], items: [], next: null, watch };
+    if (action === 'exchange.watch') {
+      watch = { enabled: input.enabled, phase: input.enabled ? 'connecting' : 'off' };
+      return watch;
+    }
+    throw Error(action);
+  });
+  const { ExchangeBrowser } = require('../../src/tui/quant-exchange');
+  const browser = new ExchangeBrowser({
+    ui: app.walletBrowser,
+    menu: app.walletBrowser.menu.bind(app.walletBrowser),
+    call: (action, input) => app.runtime.api.backendRequest('quant:request', action, input),
+    project: () => {},
+  });
+  const select = async (label) => {
+    const option = app.state.modal.options.find((row) => row.label === label);
+    assert.ok(option, label);
+    await app.state.modal.onChoose(option.value);
+  };
+  try {
+    await browser.open('fixture');
+    await select('Enable live orders');
+    assert.deepEqual(requests.find((row) => row.action === 'exchange.watch').input, {
+      id: 'fixture',
+      env: 'sandbox',
+      enabled: true,
+    });
+    watch = { enabled: true, phase: 'live', lastVerifiedAt: Date.now() };
+    await app.state.modal.refreshExchange();
+    assert.match(app.state.modal.body, /Authenticated order feed connected/);
+    const overview = app.state.modal;
+    await select('Connect account');
+    app.state.modal.editor.setValue('fixture-credential');
+    await overview.refreshExchange();
+    assert.equal(app.state.modal.editor.value, 'fixture-credential');
+  } finally {
+    app.dispose();
+  }
+});
+
+test('TUI connects the Coinbase FIX session and displays the exact order status report', async (t) => {
+  setLanguage('en');
+  const order = {
+    clientId: 'fix-client',
+    venueId: 'fix-venue',
+    product: 'ETH-USD',
+    side: 'buy',
+    size: '0.1',
+    price: '2000',
+    status: 'open',
+  };
+  let phase = 'idle';
+  const { app, requests } = fixture((_method, action) => {
+    if (action === 'exchange.list')
+      return {
+        product: order.product,
+        configured: true,
+        items: [order],
+        drafts: [],
+        next: null,
+        fix: { phase },
+      };
+    if (action === 'exchange.fixConnect') {
+      phase = 'ready';
+      return { phase };
+    }
+    if (action === 'exchange.fixDisconnect') {
+      phase = 'idle';
+      return { phase };
+    }
+    if (action === 'exchange.fixQuery')
+      return {
+        ...order,
+        status: 'partially-filled',
+        filledSize: '0.025',
+        remainingSize: '0.075',
+        checkedAt: Date.now(),
+      };
+    throw Error(action);
+  });
+  t.after(() => app.dispose());
+  const { ExchangeBrowser } = require('../../src/tui/quant-exchange');
+  const browser = new ExchangeBrowser({
+    ui: app.walletBrowser,
+    menu: app.walletBrowser.menu.bind(app.walletBrowser),
+    call: (action, input) => app.runtime.api.backendRequest('quant:request', action, input),
+    project: () => {},
+  });
+  const choose = async (label) => {
+    const option = app.state.modal.options.find((row) => row.label.includes(label));
+    assert.ok(option, label);
+    await app.state.modal.onChoose(option.value);
+  };
+  await browser.open('fixture');
+  await choose('FIX order verification');
+  await choose('Connect FIX');
+  assert.equal(phase, 'ready');
+  await choose(order.product);
+  await choose('Verify with FIX');
+  assert.match(app.state.modal.body, /Remaining quantity · 0\.075/);
+  assert.deepEqual(requests.find(({ action }) => action === 'exchange.fixQuery').input, {
+    id: 'fixture',
+    env: 'sandbox',
+    orderId: order.clientId,
+  });
+  await choose('Close');
+  await choose('FIX order verification');
+  await choose('Disconnect FIX');
+  assert.equal(phase, 'idle');
+});
+
+test('TUI confirms an atomic FIX amendment with the new total and reviewed priority', async (t) => {
+  setLanguage('en');
+  const order = {
+    clientId: 'fix-order',
+    venueId: 'fix-venue',
+    product: 'ETH-USD',
+    side: 'buy',
+    size: '0.1',
+    price: '2000',
+    status: 'partially-filled',
+    filledSize: '0.025',
+    amendmentAvailable: true,
+  };
+  const { app, requests } = fixture((_method, action, input) => {
+    if (action === 'exchange.list')
+      return {
+        product: order.product,
+        configured: true,
+        items: [order],
+        drafts: [],
+        next: null,
+        fix: { phase: 'ready' },
+      };
+    if (action === 'exchange.previewAmend')
+      return {
+        ...order,
+        ...input,
+        originalSize: order.size,
+        originalPrice: order.price,
+        reviewId: 'fix-review',
+        specHash: 'fix-terms',
+        estimatedFee: '0.6',
+        notional: '100',
+        remainingSize: '0.05',
+        keepsPriority: true,
+      };
+    if (action === 'exchange.confirmAmend') return order;
+    throw Error(action);
+  });
+  t.after(() => app.dispose());
+  const { ExchangeBrowser } = require('../../src/tui/quant-exchange');
+  const browser = new ExchangeBrowser({
+    ui: app.walletBrowser,
+    menu: app.walletBrowser.menu.bind(app.walletBrowser),
+    call: (action, input) => app.runtime.api.backendRequest('quant:request', action, input),
+    project() {},
+  });
+  const choose = async (label) => {
+    const option = app.state.modal.options.find((row) => row.label.includes(label));
+    assert.ok(option, label);
+    await app.state.modal.onChoose(option.value);
+  };
+  const type = async (value) => {
+    app.state.modal.editor.setValue(value);
+    await app.state.modal.onSubmit();
+  };
+  await browser.open('fixture');
+  await choose(order.product);
+  await choose('Native FIX amendment');
+  await type('0.075');
+  await type('2000');
+  assert.match(app.state.modal.body, /Remaining quantity · 0\.05/);
+  assert.match(app.state.modal.body, /Reducing size alone preserves queue priority/);
+  assert.equal(requests.at(-1).action, 'exchange.previewAmend');
+  await choose('Confirm FIX amendment');
+  await type('AMEND ORDER');
+  assert.deepEqual(requests.find(({ action }) => action === 'exchange.confirmAmend').input, {
+    id: 'fixture',
+    env: 'sandbox',
+    orderId: order.clientId,
+    reviewId: 'fix-review',
+    specHash: 'fix-terms',
+    ack: 'AMEND ORDER',
+  });
+});
+
+test('TUI previews the old fills and requires typed confirmation for a Coinbase replacement', async (t) => {
+  setLanguage('en');
+  const order = {
+    clientId: 'original-client',
+    venueId: 'original-venue',
+    product: 'ETH-USD',
+    side: 'buy',
+    price: '2000',
+    size: '0.1',
+    filledSize: '0.025',
+    status: 'partially-filled',
+    replacementAvailable: true,
+  };
+  const { app, requests } = fixture((_method, action, input) => {
+    if (action === 'exchange.list')
+      return { product: order.product, configured: true, drafts: [], items: [order], next: null };
+    if (action === 'exchange.previewReplacement')
+      return {
+        ...order,
+        ...input,
+        originalSize: order.size,
+        originalPrice: order.price,
+        reviewId: 'replacement-review',
+        specHash: 'replacement-terms',
+        estimatedFee: '0.84',
+        notional: '140.7',
+      };
+    if (action === 'exchange.confirmReplacement') return {};
+    throw Error(action);
+  });
+  t.after(() => app.dispose());
+  const { ExchangeBrowser } = require('../../src/tui/quant-exchange');
+  const browser = new ExchangeBrowser({
+    ui: app.walletBrowser,
+    menu: app.walletBrowser.menu.bind(app.walletBrowser),
+    call: (action, input) => app.runtime.api.backendRequest('quant:request', action, input),
+    project: () => {},
+  });
+  const select = async (label) => {
+    const option = app.state.modal.options.find((row) => row.label.includes(label));
+    assert.ok(option, label);
+    await app.state.modal.onChoose(option.value);
+  };
+  const fill = async (value) => {
+    app.state.modal.editor.setValue(value);
+    await app.state.modal.onSubmit();
+  };
+  await browser.open('fixture');
+  await select(order.product);
+  await select('Cancel and replace');
+  await fill('0.07');
+  await fill('2010');
+  assert.match(app.state.modal.body, /Filled quantity · 0\.025/);
+  assert.match(app.state.modal.body, /Replacement order · Buy 0\.07 ETH-USD · 2010 USD/);
+  assert.notEqual(requests.at(-1).action, 'exchange.confirmReplacement');
+  await select('Confirm replacement');
+  await fill('REPLACE ORDER');
+  assert.deepEqual(requests.find((r) => r.action === 'exchange.confirmReplacement').input, {
+    id: 'fixture',
+    env: 'sandbox',
+    orderId: order.clientId,
+    reviewId: 'replacement-review',
+    specHash: 'replacement-terms',
+    ack: 'REPLACE ORDER',
+  });
+});
+
+test('TUI reviews distinct FIX stop-limit and TPSL prices before confirmation', async (t) => {
+  setLanguage('en');
+  let draft;
+  const { app, requests } = fixture((_method, action, input) => {
+    if (action === 'exchange.list')
+      return {
+        product: 'ETH-USD',
+        configured: true,
+        drafts: draft ? [draft] : [],
+        items: [],
+        next: null,
+        fix: { phase: 'ready' },
+      };
+    if (action === 'exchange.preview') {
+      draft = {
+        ...input,
+        product: 'ETH-USD',
+        reviewId: 'fixture-stop',
+        specHash: 'fixture-digest',
+        fixConnectionId: 'fixture-fix',
+        notional: '190',
+        estimatedFee: '1.14',
+      };
+      return draft;
+    }
+    if (action === 'exchange.confirm') {
+      draft = null;
+      return {};
+    }
+    throw Error(action);
+  });
+  t.after(() => app.dispose());
+  const { ExchangeBrowser } = require('../../src/tui/quant-exchange');
+  const browser = new ExchangeBrowser({
+    ui: app.walletBrowser,
+    menu: app.walletBrowser.menu.bind(app.walletBrowser),
+    call: (action, input) => app.runtime.api.backendRequest('quant:request', action, input),
+    project: () => {},
+  });
+  const choose = async (label) => {
+    const option = app.state.modal.options.find((entry) => entry.label.includes(label));
+    assert.ok(option, label);
+    await app.state.modal.onChoose(option.value);
+  };
+  const fill = async (value) => {
+    app.state.modal.editor.setValue(value);
+    await app.state.modal.onSubmit();
+  };
+  await browser.open('fixture');
+  await choose('Review order');
+  await choose('Buy');
+  await fill('0.1');
+  await fill('1900');
+  await choose('Stop-limit order');
+  await fill('1925');
+  await choose('falls to or below');
+  await choose('Review order');
+  assert.equal(draft.transport, 'fix');
+  assert.equal(draft.price, '1900');
+  assert.equal(draft.stopPrice, '1925');
+  assert.equal(draft.triggerDirection, 'down');
+  await choose('Awaiting confirmation');
+  assert.match(app.state.modal.body, /Trigger price 1925 USD/);
+  assert.match(app.state.modal.body, /may remain unfilled/);
+  await choose('Confirm order');
+  await fill('PLACE ORDER');
+  assert.equal(
+    requests.find((row) => row.action === 'exchange.confirm').input.specHash,
+    'fixture-digest',
+  );
+  await choose('Take-profit / stop-loss');
+  await choose('Sell');
+  await fill('0.1');
+  await fill('2200');
+  await fill('2050');
+  await fill('1900');
+  assert.equal(draft.price, '2200');
+  assert.equal(draft.stopPrice, '2050');
+  assert.equal(draft.stopLimitPrice, '1900');
+  assert.equal(draft.postOnly, false);
+  assert.equal(draft.triggerDirection, undefined);
+  await choose('Awaiting confirmation');
+  assert.match(app.state.modal.body, /Take-profit limit 2200 USD/);
+  assert.match(app.state.modal.body, /Stop-loss limit 1900 USD/);
+  await choose('Confirm order');
+  await fill('PLACE ORDER');
+  assert.equal(requests.filter((row) => row.action === 'exchange.confirm').length, 2);
+});
+
+test('TUI freezes Coinbase authority for typed confirmation and supports immediate revocation', async () => {
+  setLanguage('en');
+  let current = [];
+  const { app, requests } = fixture((_method, action, input) => {
+    if (action === 'exchange.list')
+      return {
+        product: 'ETH-USD',
+        configured: true,
+        drafts: [],
+        grants: current,
+        items: [],
+        next: null,
+      };
+    if (action === 'exchange.prepareAuthority')
+      return {
+        ...input,
+        grantId: 'approved-fixture',
+        product: 'ETH-USD',
+        profileId: 'exchange-account',
+        specHash: 'terms-fingerprint',
+      };
+    if (action === 'exchange.confirmAuthority') {
+      current = [
+        {
+          ...requests.findLast((r) => r.action === 'exchange.prepareAuthority').input,
+          grantId: 'approved-fixture',
+          product: 'ETH-USD',
+          profileId: 'exchange-account',
+          status: 'authorityActive',
+          expiresAt: 1800000000000,
+          remaining: '300',
+          ordersRemaining: 3,
+          cancelsRemaining: requests.findLast((r) => r.action === 'exchange.prepareAuthority').input
+            .maxCancels,
+        },
+      ];
+      return current[0];
+    }
+    if (action === 'exchange.revokeAuthority') {
+      current[0].status = 'authorityRevoked';
+      return { ok: true };
+    }
+    throw Error(action);
+  });
+  const { ExchangeBrowser } = require('../../src/tui/quant-exchange');
+  const browser = new ExchangeBrowser({
+    ui: app.walletBrowser,
+    menu: app.walletBrowser.menu.bind(app.walletBrowser),
+    call: (action, input) => app.runtime.api.backendRequest('quant:request', action, input),
+    project: () => {},
+  });
+  const select = async (label) => {
+    const option = app.state.modal.options.find((row) => row.label === label);
+    assert.ok(option, label);
+    await app.state.modal.onChoose(option.value);
+  };
+  const fill = async (value) => {
+    app.state.modal.editor.setValue(value);
+    await app.state.modal.onSubmit();
+  };
+  try {
+    await browser.open('fixture');
+    await select('Agent order authority');
+    await select('Review authority · Buy');
+    for (const value of ['100', '300', '3', '0', '60']) await fill(value);
+    await select('Post only');
+    assert.ok(!requests.some(({ action }) => action === 'exchange.confirmAuthority'));
+    await select('Grant authority');
+    await fill('ALLOW EXCHANGE AGENT');
+    assert.deepEqual(requests.find((r) => r.action === 'exchange.confirmAuthority').input, {
+      id: 'fixture',
+      env: 'sandbox',
+      grantId: 'approved-fixture',
+      specHash: 'terms-fingerprint',
+      ack: 'ALLOW EXCHANGE AGENT',
+    });
+    await select('Agent order authority');
+    await select('Buy · Active');
+    await select('Revoke now');
+    assert.equal(current[0].status, 'authorityRevoked');
+    await select('Agent order authority');
+    await select('Review authority · Buy');
+    for (const value of ['100', '300', '3', '2', '60']) await fill(value);
+    await select('Post only · FIX 5.0');
+    await select('Allow FIX amendments and stop-limit submissions');
+    assert.match(app.state.modal.body, /Maximum operation count 3/);
+    assert.match(app.state.modal.body, /Cancellation limit \(0 disables\) 2/);
+    assert.equal(
+      requests.findLast((r) => r.action === 'exchange.prepareAuthority').input.transport,
+      'fix',
+    );
+    assert.equal(
+      requests.findLast((r) => r.action === 'exchange.prepareAuthority').input.allowAmend,
+      true,
+    );
+    await select('Grant authority');
+    await fill('ALLOW EXCHANGE AGENT');
+    assert.equal(current[0].transport, 'fix');
+    assert.equal(current[0].allowAmend, true);
+    assert.equal(current[0].allowStopLimit, true);
+    assert.equal(current[0].maxCancels, 2);
+    await select('Agent order authority');
+    await select('Buy · Active');
+    assert.match(app.state.modal.body, /Cancellations remaining 2/);
+  } finally {
+    app.dispose();
+  }
+});
+
 for (const protocol of ['erc20', 'permit2']) {
   test(`TUI ${protocol} allowance review keeps the observed pair and opens manual intent approval`, async (t) => {
     setLanguage('en');
@@ -717,8 +1208,15 @@ test('TUI global live stop is immediate while clearing requires a separate warni
     if (action === 'list') return { wallets: [wallet], intents: [], emergency: { ...state } };
     if (action === 'emergency.halt') {
       assert.equal(input.expectedGeneration, 'initial');
+      assert.equal(input.cancelExchangeOrders, true);
       state.halted = true;
       state.generation = 'latch';
+      state.exchangeCancel = { phase: 'running', targeted: 3, canceled: 1, remaining: 2 };
+      return { ...state };
+    }
+    if (action === 'emergency.cancelExchange') {
+      assert.equal(input.expectedGeneration, 'latch');
+      state.exchangeCancel = { phase: 'complete', targeted: 3, canceled: 3, remaining: 0 };
       return { ...state };
     }
     if (action === 'emergency.challenge') return { id: 'human:challenge' };
@@ -735,6 +1233,22 @@ test('TUI global live stop is immediate while clearing requires a separate warni
   await app.walletBrowser.open();
   await chooseLive(app, 'emergency-stop');
   assert.equal(state.halted, true);
+  assert.match(app.state.modal.body, /Canceling Coinbase orders/);
+  assert.equal(
+    app.state.modal.options.some((option) => option.value === 'emergency-reset'),
+    false,
+  );
+  state.exchangeCancel = {
+    phase: 'attention',
+    targeted: 3,
+    canceled: 2,
+    remaining: 1,
+    error: 'EXCHANGE_HTTP',
+  };
+  await app.walletBrowser.changed();
+  assert.match(app.state.modal.body, /2 canceled \/ 3 tracked · 1 unresolved/);
+  await chooseLive(app, 'emergency-cancel-exchange');
+  assert.match(app.state.modal.body, /Coinbase cancellation batch complete/);
   await app._chooseModalOption(
     app.state.modal.options.findIndex((option) => option.value?.id === wallet.id),
   );
@@ -1054,6 +1568,12 @@ test('TUI portfolio creation selects named wallets and uses the shared scope plu
   await app.state.modal.onSubmit();
   await chooseLive(app, 'continue');
   assert.ok(app.state.modal.body.includes('Research · Execution'));
+  await chooseLive(app, 'signature-rate');
+  app.state.modal.editor.setValue('30');
+  await app.state.modal.onSubmit();
+  app.state.modal.editor.setValue('4');
+  await app.state.modal.onSubmit();
+  assert.match(app.state.modal.body, /Portfolio signature rate.*4 \/ 30 s/);
   assert.equal(
     requests.some((r) => r.action === 'portfolio.confirm'),
     false,
@@ -1064,11 +1584,12 @@ test('TUI portfolio creation selects named wallets and uses the shared scope plu
   const challenge = requests.find((r) => r.action === 'portfolio.challenge');
   assert.deepEqual(challenge.input.walletIds, ['one', 'two']);
   assert.equal(challenge.input.chainId, 8453);
+  assert.deepEqual(challenge.input.signatureRate, { windowSeconds: 30, maxSignatures: 4 });
   assert.equal(requests.find((r) => r.action === 'portfolio.confirm').input.ack, 'ALLOW PORTFOLIO');
   assert.ok(!requests.some((r) => ['unlock', 'policy.grant', 'intent.approve'].includes(r.action)));
   app.dispose();
 });
-test('TUI Base portfolio equity displays the configured floor and current assessed value', async () => {
+test('TUI Base portfolio equity and rolling signature rate display native assessments', async () => {
   setLanguage('en');
   const { app, requests } = fixture((_method, action) => {
     if (action === 'list') return { wallets: [] };
@@ -1077,6 +1598,13 @@ test('TUI Base portfolio equity displays the configured floor and current assess
         state: 'active',
         revision: 1,
         usage: {},
+        signatureRate: {
+          status: 'limited',
+          used: 3,
+          windowSeconds: 30,
+          maxSignatures: 3,
+          nextEligibleAt: 1800000000000,
+        },
         portfolio: {
           id: 'group',
           name: 'Base floor',
@@ -1098,6 +1626,10 @@ test('TUI Base portfolio equity displays the configured floor and current assess
   });
   const { TuiWalletPortfolios } = require('../../src/tui/wallet-portfolios');
   await new TuiWalletPortfolios(app.walletBrowser).detail('group');
+  assert.match(
+    app.state.modal.body,
+    /Portfolio signature rate.*3 \/ 3 · 30 s.*Window limit reached.*Earliest recheck/,
+  );
   const option = app.state.modal.options.findIndex((row) => row.value === 'equity');
   assert.ok(option >= 0);
   await app._chooseModalOption(option);
@@ -1478,6 +2010,54 @@ test('TUI previews historical VWAP evidence and uses its archived ID when creati
   assert.equal(create.input.schedule, 'vwap');
   app.dispose();
 });
+test('TUI configures a precise conditional entry without starting the plan', async () => {
+  setLanguage('en');
+  const { app, browser, requests } = liveFixture();
+  await browser.editor('project');
+  await chooseLive(app, 'leEntry');
+  await chooseLive(app, 'at-or-below');
+  await chooseLive(app, 'entryPrice');
+  app.state.modal.editor.setValue('1980.125001');
+  await app.state.modal.onSubmit();
+  await chooseLive(app, 'leSave');
+  const create = requests.find((r) => r.action === 'execution.create');
+  assert.deepEqual(create.input.entryTrigger, { relation: 'at-or-below', price: '1980.125001' });
+  assert.equal(create.input.schedule, 'settlement');
+  assert.equal(
+    requests.some((r) => r.action === 'execution.start'),
+    false,
+  );
+  app.dispose();
+});
+test('TUI pairs a stop-loss and take-profit in one sell draft', async () => {
+  setLanguage('en');
+  const { app, browser, requests } = liveFixture();
+  await browser.editor('project');
+  await chooseLive(app, 'leSide');
+  await chooseLive(app, 'leSell');
+  await chooseLive(app, 'leEntry');
+  await chooseLive(app, 'protective-exit');
+  for (const [field, value] of [
+    ['slices', '1'],
+    ['stopLossPrice', '1970.000001'],
+    ['takeProfitPrice', '1990'],
+  ]) {
+    await chooseLive(app, field);
+    app.state.modal.editor.setValue(value);
+    await app.state.modal.onSubmit();
+  }
+  await chooseLive(app, 'leSave');
+  const create = requests.find((r) => r.action === 'execution.create');
+  assert.deepEqual(create.input.protectiveExit, {
+    stopLossPrice: '1970.000001',
+    takeProfitPrice: '1990',
+  });
+  assert.equal(create.input.side, 'sell');
+  assert.equal(create.input.slices, 1);
+  assert.equal(create.input.entryTrigger, undefined);
+  assert.ok(!requests.some((r) => r.action === 'execution.start'));
+  app.dispose();
+});
 test('TUI live start respects wallet authority and stop targets the displayed scoped plan', async () => {
   setLanguage('en');
   const { app, browser, requests, wallet } = liveFixture();
@@ -1629,7 +2209,11 @@ test('TUI native paper orders use human menus, preserve decimal text and route t
   };
   assert.match(app.state.modal.body, /Shared paper/);
   await choose('submit');
-  await choose('ETH-USD');
+  await app._chooseModalOption(
+    app.state.modal.options.findIndex(
+      (o) => o.value?.venue === 'kraken' && o.value.product === 'ETH-USD',
+    ),
+  );
   await choose('buy');
   await choose('ioc');
   app.state.modal.editor.setValue('100.5');
@@ -1638,6 +2222,7 @@ test('TUI native paper orders use human menus, preserve decimal text and route t
   await app._handleModalKey({ name: 'enter' });
   const submitted = requests.find((r) => r.action === 'native.paper.submit');
   assert.equal(submitted.input.id, 'project');
+  assert.equal(submitted.input.venue, 'kraken');
   assert.equal(submitted.input.price, '100.5');
   assert.equal(submitted.input.timeInForce, 'ioc');
   assert.equal(submitted.input.quantity, '0.123456789012345678');
@@ -2101,9 +2686,11 @@ test('TUI continuous books use the shared source service and a human-readable me
       : action === 'native.source.status'
         ? {
             products: ['ETH-USD'],
+            venues: [{ id: 'kraken', label: 'Kraken Spot', products: ['ETH-USD'] }],
             sources: [
               {
                 product: 'ETH-USD',
+                venue: 'kraken',
                 instrument: 'source',
                 phase: 'ready',
                 desired: true,
@@ -2126,12 +2713,16 @@ test('TUI continuous books use the shared source service and a human-readable me
     app.state.modal.options.findIndex((option) => option.value === 'sources'),
   );
   await app._chooseModalOption(
-    app.state.modal.options.findIndex((option) => option.value === 'ETH-USD'),
+    app.state.modal.options.findIndex(
+      (option) => option.value?.venue === 'kraken' && option.value.product === 'ETH-USD',
+    ),
   );
   await app._chooseModalOption(
     app.state.modal.options.findIndex((option) => option.value === 'book'),
   );
   const view = stripAnsi(app.frame().lines.join('\n'));
+  assert.match(view, /Kraken Spot/);
+  assert.equal(requests.find((r) => r.action === 'native.source.book').input.venue, 'kraken');
   assert.ok(view.includes('Bids'));
   assert.ok(view.includes('99'));
   assert.ok(view.includes('Asks'));
@@ -2140,6 +2731,71 @@ test('TUI continuous books use the shared source service and a human-readable me
       ['native.status', 'native.source.status', 'native.source.book'].includes(request.action),
     ),
   );
+});
+
+test('TUI creates a Kraken research project, pages closed candles, and pins a snapshot', async () => {
+  setLanguage('en');
+  const id = 'kraken-project';
+  const market = { venue: 'kraken', product: 'SOL-USD', interval: 300, intervals: [300, 14400] };
+  const project = {
+    id,
+    name: 'Kraken research',
+    market,
+    paper: { status: 'paused' },
+    datasets: [],
+    preferences: {},
+  };
+  const { app, requests } = fixture((_method, action, input) => {
+    if (action === 'workspace.list') return [];
+    if (action === 'workspace.create' || action === 'workspace.get') return project;
+    if (action === 'workspace.update') {
+      market.interval = input.market.interval;
+      return project;
+    }
+    if (action === 'market.candles')
+      return {
+        items: [
+          {
+            time: 1700000000 - input.offset * 300,
+            open: 100,
+            high: 102,
+            low: 96,
+            close: 99,
+            volume: 10,
+          },
+        ],
+        market,
+        total: 7,
+        next: input.offset ? null : 6,
+        source: 'kraken-spot-committed-ohlc',
+      };
+    if (action === 'dataset.capture') return { id: 'captured' };
+    return { ok: true };
+  });
+  const choose = async (value) => {
+    const index = app.state.modal.options.findIndex((option) => option.value === value);
+    assert.ok(index >= 0, String(value));
+    await app._chooseModalOption(index);
+  };
+  await app.quantBrowser.open();
+  await choose('create');
+  app.state.modal.editor.setValue('Kraken research');
+  await app._handleModalKey({ name: 'enter' });
+  await choose('kraken');
+  await choose('SOL-USD');
+  const create = requests.find((r) => r.action === 'workspace.create');
+  assert.deepEqual(create.input, { name: 'Kraken research', venue: 'kraken', product: 'SOL-USD' });
+  assert.ok(!app.state.modal.options.some((option) => option.value === 'leTitle'));
+  await choose('candleInterval');
+  await choose(14400);
+  await choose('candleHistory');
+  assert.match(app.state.modal.title, /Kraken Spot · SOL-USD · 4h/);
+  assert.match(app.state.modal.body, /Open \/ High \/ Low \/ Close \/ Volume · UTC/);
+  await choose('next');
+  assert.equal(requests.at(-1).input.offset, 6);
+  await choose('save');
+  assert.equal(requests.at(-1).input.datasetId, 'captured');
+  assert.ok(!app.state.modal.options.some((option) => option.value === 'save'));
 });
 test('TUI exposes native process start and stop as a human menu while an Agent is running', async () => {
   let state = 'stopped';

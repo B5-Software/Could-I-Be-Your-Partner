@@ -7,8 +7,17 @@ const {
   executionSettlementRows,
   executionBenchmarkRows,
   executionArrivalRows,
+  executionEntryCondition,
+  executionEntryRows,
+  executionExitConditions,
 } = require('../shared/quant-execution-format');
 const schedules = { settlement: 'leAfterFinality', 'fixed-window': 'leFixed', vwap: 'leVwap' };
+const entryRelations = {
+  immediate: 'leEntryImmediate',
+  'at-or-below': 'leEntryBelow',
+  'at-or-above': 'leEntryAbove',
+  'protective-exit': 'leProtectiveExit',
+};
 class LiveExecutionBrowser {
   constructor(parent) {
     this.parent = parent;
@@ -121,6 +130,7 @@ class LiveExecutionBrowser {
       options.push('leReconcile');
     if (offset) options.push('lePrevious');
     if (history.next !== null) options.push('leNext');
+    const priceStatus = view.exitStatus || view.entryStatus;
     const body = [
       this.text('leBackground'),
       this.text('leHint'),
@@ -191,12 +201,26 @@ class LiveExecutionBrowser {
       plan.max_arrival_cost_bps === undefined
         ? ''
         : this.text('leArrivalLimit') + ' · ' + plan.max_arrival_cost_bps + ' bp',
+      plan.entry_trigger
+        ? this.text('leEntry') + ' · ' + executionEntryCondition(plan.entry_trigger)
+        : '',
+      ...(plan.protective_exit
+        ? executionExitConditions(plan.protective_exit, (key) => this.text(key)).map(
+            ([label, value]) => label + ' · ' + value,
+          )
+        : []),
       this.text(!wallet?.unlocked ? 'leLocked' : authorized ? 'leGranted' : 'leAutoRequired'),
-      run.pending ? this.text(run.phase === 'running' ? 'leFinality' : 'lePending') : '',
+      priceStatus
+        ? this.status(priceStatus)
+        : run.pending
+          ? this.text(run.phase === 'running' ? 'leFinality' : 'lePending')
+          : '',
       view.lastError || run.phase === 'expired' ? this.status(view.lastError || run.reason) : '',
       this.text('leHistory') + ': ' + history.total,
-      ...history.items.map((command) =>
-        [
+      ...history.items.map((command) => {
+        const exit = command.exit_trigger;
+        const observation = exit?.observation || command.entry_observation;
+        return [
           command.ordinal +
             '/' +
             plan.slices +
@@ -221,12 +245,29 @@ class LiveExecutionBrowser {
           ...(command.min_arrival_output_atoms
             ? [this.text('leArrivalMinimum') + ' · ' + output(command.min_arrival_output_atoms)]
             : []),
+          ...(exit
+            ? [
+                this.text('leExitCause') +
+                  ' · ' +
+                  this.text(exit.cause === 'stop-loss' ? 'leStopLoss' : 'leTakeProfit'),
+              ]
+            : []),
+          ...(observation
+            ? [
+                ...executionEntryRows(
+                  observation,
+                  (key) => this.text(key),
+                  this.parent.app.state.language,
+                ).map(([label, value]) => label + ' · ' + value),
+                observation.block_hash,
+              ]
+            : []),
           ...executionSettlementRows(plan.side, command.settlement, (key) => this.text(key)).map(
             ([label, value]) => label + ' · ' + value,
           ),
           ...command.hashes,
-        ].join('\n'),
-      ),
+        ].join('\n');
+      }),
     ]
       .filter(Boolean)
       .join('\n');
@@ -317,6 +358,10 @@ class LiveExecutionBrowser {
       walletId: wallets[0].id,
       side: 'buy',
       schedule: 'settlement',
+      entryRelation: 'immediate',
+      entryPrice: '',
+      stopLossPrice: '',
+      takeProfitPrice: '',
       totalInput: '100',
       minimumTotalOutput: '',
       maxArrivalCostBps: '',
@@ -326,10 +371,19 @@ class LiveExecutionBrowser {
       maxEstimatedFeeEth: '0.01',
     };
     const d = this.draft;
+    const protective = d.entryRelation === 'protective-exit';
     const fields = [
       ['totalInput', 'leInput'],
       ['minimumTotalOutput', 'leMinimumTotal'],
       ['maxArrivalCostBps', 'leArrivalLimit'],
+      ...(protective
+        ? [
+            ['stopLossPrice', 'leStopLossPrice'],
+            ['takeProfitPrice', 'leTakeProfitPrice'],
+          ]
+        : d.entryRelation === 'immediate'
+          ? []
+          : [['entryPrice', 'leEntryPrice']]),
       ['slices', 'leSlices'],
       ['seconds', 'leInterval'],
       ['slippage', 'leSlippage'],
@@ -342,6 +396,10 @@ class LiveExecutionBrowser {
       {
         label: this.text('leSchedule') + ' · ' + this.text(schedules[d.schedule]),
         value: 'leSchedule',
+      },
+      {
+        label: this.text('lePriceMode') + ' · ' + this.text(entryRelations[d.entryRelation]),
+        value: 'leEntry',
       },
       ...fields.map(([key, label]) => ({ label: this.text(label) + ': ' + d[key], value: key })),
       ...(d.schedule === 'vwap'
@@ -392,6 +450,20 @@ class LiveExecutionBrowser {
             () => this.editor(id),
           );
         if (value === 'leProfileWeights') return this.profile(d.profile, () => this.editor(id));
+        if (value === 'leEntry')
+          return this.menu(
+            this.text('lePriceMode'),
+            Object.entries(entryRelations).map(([value, label]) => ({
+              label: this.text(label),
+              value,
+            })),
+            (relation) => {
+              d.entryRelation = relation;
+              return this.editor(id);
+            },
+            [this.text('leEntryHint'), this.text('leExitHint')].join('\n'),
+            () => this.editor(id),
+          );
         if (value === 'leProfileCapture') {
           try {
             d.profile = await this.call('profile', {
@@ -426,6 +498,18 @@ class LiveExecutionBrowser {
                 ? { minimumTotalOutput: d.minimumTotalOutput.trim() }
                 : {}),
               ...(arrivalLimit ? { maxArrivalCostBps: Number(arrivalLimit) } : {}),
+              ...(protective
+                ? {
+                    protectiveExit: {
+                      stopLossPrice: d.stopLossPrice.trim(),
+                      ...(d.takeProfitPrice.trim() && {
+                        takeProfitPrice: d.takeProfitPrice.trim(),
+                      }),
+                    },
+                  }
+                : d.entryRelation !== 'immediate' && {
+                    entryTrigger: { relation: d.entryRelation, price: d.entryPrice.trim() },
+                  }),
               slices: Number(d.slices),
               intervalMs: Number(d.seconds) * 1000,
               schedule: d.schedule,
@@ -455,6 +539,7 @@ class LiveExecutionBrowser {
         this.text('leDraftHint'),
         this.text('leFeeHint'),
         this.text('leMinimumHint'),
+        this.text(protective ? 'leExitHint' : 'leEntryHint'),
         d.schedule !== 'settlement' ? this.text('leFixedScope') : '',
         d.schedule === 'vwap' ? this.text('leVwapScope') : '',
         wallets.find((w) => w.id === d.walletId)?.name,

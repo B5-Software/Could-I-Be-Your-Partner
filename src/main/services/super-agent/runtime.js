@@ -26,10 +26,6 @@ class RuntimeAdapter {
           reasoningEffort: entry.effort || 'auto',
         }
       : null;
-    s.agent.settings.agent = {
-      ...s.agent.settings.agent,
-      maxIterations: role === 'worker' ? 40 : 12,
-    };
     return s;
   }
   async route(key, events, tasks, config) {
