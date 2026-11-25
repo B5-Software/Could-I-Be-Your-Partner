@@ -229,10 +229,15 @@ test('shared native paper controls persist per-project history, partial executio
       2,
       'absence reconciliation never submits an order',
     );
-    await assert.rejects(
-      call('submit', { ...input, operationId: 'rejected-crossing', price: '101' }),
-      /POST_ONLY_WOULD_CROSS/,
-    );
+    const crossing = await call('submit', {
+      ...input,
+      operationId: 'rejected-crossing',
+      price: '101',
+    });
+    assert.equal(crossing.ok, false);
+    assert.equal(crossing.error, 'POST_ONLY_WOULD_CROSS');
+    assert.equal(crossing.reconcileRequired, false);
+    assert.equal((await call('orders', { id: a.id })).total, 2);
     assert.equal(
       (await call('status', { id: a.id })).pendingOrder,
       null,
